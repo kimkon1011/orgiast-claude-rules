@@ -21,6 +21,7 @@ const [{ readToken }, { PROVIDERS, parseEnvText },
 ]);
 
 import { addItem as addKimInboxItem } from './kim-inbox.mjs';
+import { collectReadableContent } from './lib/autoreply-attachments.mjs';
 
 const HOUR = 3600000;
 export const DEFAULT_MAX_REPLY_AGE = 24 * HOUR;
@@ -193,7 +194,7 @@ export async function retryForbiddenAnswer(llm, decision, input) {
   });
   let retry;
   try { retry = replyJson(retryRaw); } catch { return null; }
-  if (retry && retry.answer?.trim() && !FORBIDDEN_REPLY_PTN.test(retry.answer)) {
+  if (retry && retry.answer?.trim() && !FORBIDDEN_REPLY_PTN.test(retry.answer) && !CANT_READ_REPLY_PTN.test(retry.answer)) {
     return retry;
   }
   return null;
@@ -259,13 +260,23 @@ export const REPLY_CHAIN = Object.freeze([
   { provider: 'kimi', model: 'kimi-k3' },
   { provider: 'genspark', model: 'gpt-5.6-luna' },
 ]);
+// 画像・添付がある場合の連鎖（deepseek は画像非対応のため除外）。
+export const IMAGE_REPLY_CHAIN = Object.freeze([
+  { provider: 'gemini', model: 'gemini-3.6-flash' },
+  { provider: 'kimi', model: 'kimi-k3' },
+  { provider: 'genspark', model: 'gpt-5.6-luna' },
+]);
+// 「読めない・閲覧できない」などの誤回答パターン（attachment/documents の存在に関わらず発話禁止）。
+export const CANT_READ_REPLY_PTN = /(閲覧|確認|参照|表示|開く|読む|読み取る|見る)(する)?(こと)?が?でき(ない|ません)|読め(ない|ません)|開け(ない|ません)|仕様となって/;
 export function createLlm({ home, fetchImpl, sleepImpl = sleep, env = process.env }) {
   return async ({ category, system, input }) => {
     const isReply = category === 'jp_reply';
+    const hasImages = Array.isArray(input?.images) && input.images.length > 0;
     const forced = env.DISCORD_AUTOREPLY_PROVIDER && LLM_PROVIDERS[env.DISCORD_AUTOREPLY_PROVIDER]
       ? { provider: env.DISCORD_AUTOREPLY_PROVIDER, model: LLM_PROVIDERS[env.DISCORD_AUTOREPLY_PROVIDER].model } : null;
-    const routed = isReply ? (forced || REPLY_CHAIN[0]) : preferredForCategory(category);
-    const chain = isReply ? REPLY_CHAIN : FALLBACK_CHAIN;
+    const replyChain = hasImages ? IMAGE_REPLY_CHAIN : REPLY_CHAIN;
+    const routed = hasImages ? IMAGE_REPLY_CHAIN[0] : isReply ? (forced || replyChain[0]) : preferredForCategory(category);
+    const chain = hasImages ? IMAGE_REPLY_CHAIN : isReply ? replyChain : FALLBACK_CHAIN;
     const start = routed && LLM_PROVIDERS[routed.provider] ? routed : chain[0];
     const result = await callWithFallback({
       start, chain, fetchImpl, sleepImpl,
@@ -274,13 +285,20 @@ export function createLlm({ home, fetchImpl, sleepImpl = sleep, env = process.en
       budgetFile: path.join(home, '.claude', 'provider-budget.json'),
       payloadFor(candidate) {
         const p = LLM_PROVIDERS[candidate.provider];
+        // The shared router canonicalizes the Kimi alias to OpenRouter.
+        const imageCapable = IMAGE_REPLY_CHAIN.some(x => x.provider === candidate.provider)
+          || (candidate.provider === 'openrouter' && /^moonshotai\/kimi-/.test(candidate.model || ''));
+        if (hasImages && !imageCapable) return null;
         if (!p || /claude|anthropic|fable/i.test(candidate.model || '')) return null;
         const files = [path.join(home, '.claude', p.file)];
         if (candidate.provider === 'gemini') files.unshift(path.join(home, '.gemini', '.env'));
         const key = process.env[p.env] || files.map(f => parseEnvText(read(f))[p.env]).find(Boolean);
         if (!key) return null;
         const body = { model: candidate.model || p.model, stream: false, max_tokens: 6000,
-          messages: [{ role: 'system', content: system }, { role: 'user', content: JSON.stringify(input) }] };
+          messages: [{ role: 'system', content: system }, { role: 'user', content: hasImages
+            ? [{ type: 'text', text: JSON.stringify({ ...input, images: undefined }) },
+              ...input.images.slice(0, 4).map(img => ({ type: 'image_url', image_url: { url: img.dataUrl } }))]
+            : JSON.stringify(input) }] };
         if (candidate.provider === 'deepseek' && body.model === 'deepseek-flash') body.thinking = { type: 'disabled' };
         if (p.special === 'kimi') Object.assign(body, { reasoning_effort: 'none', temperature: 0.6 });
         return { url: p.url, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...p.extraHeaders }, body: JSON.stringify(body), signal: AbortSignal.timeout(60000) } };
@@ -389,6 +407,7 @@ needs_reply: 質問・依頼・確認求め=true、報告・連絡のみ=false�
 needs_kim_decision: 承認・支払可否・金額・人事・契約・顧客対応方針などkimにしか決められないこと=true。
 needs_kim_decision=trueでもneeds_reply=trueとし、暫定回答（answer）を必ず書く。あなたはその場で決めて答えること。質問には会話・knowledge・rulesから最も妥当な具体的な答え（数量・可否・進め方・どの部屋か等）を暫定で書く。迷う時は安全側・小さく取り消せる案を具体的に示す（例: 「まず1個購入で進めてください」「〜は保留で、先に〜を進めてください」）。判断を先送りするだけの文は書かない。
 禁止表現: 「代表に確認します／確認いたします」「転送しました」「確認待ち」「確認でき次第ご連絡」「少々お待ちください」「個人DMへ」の類は一切使わない。
+添付・リンクの中身は input の attachments/documents（画像は images のマルチパート） に入っている。中身を読んだうえで答える。「閲覧できない」「読めない」「確認できない仕様」等と答えてはならない。
 暫定回答には分かる事実（締切・必要書類・過去の慣例）を添え、推測で決定事項を書かない。知らないことは未確認と明記し、相手が今できる具体的な次の一手を書く。数字・固有名詞をでっち上げない。
 	会話・knowledge に無い金額・単価・見積額を書かない。金額が必要なら「金額は kim が後で確定します」とだけ書く。
 knowledge、rules、corrections（質問→自動返信→kimの正解。confirmedは正解例）を参考にする。
@@ -573,19 +592,63 @@ export async function runOnce(options = {}) {
           const [context, channel] = await Promise.all([
             api(`/channels/${m.channel_id}/messages?before=${m.id}&limit=20`), api(`/channels/${m.channel_id}`),
           ]);
-          // Only the conversational fields go to the model: avatars, attachments and embeds cost tokens and add nothing.
+          // Only the conversational fields go to the model: avatars cost tokens and add nothing.
+          // Attachments now carry their URL (Discord CDN, no auth) for content extraction.
           const slim = x => ({ id: x.id, author: x.author?.global_name || x.author?.username || x.author?.id, bot: !!x.author?.bot,
-            ts: x.timestamp, content: x.content || '', ...(x.attachments?.length ? { attachments: x.attachments.length } : {}),
+            ts: x.timestamp, content: x.content || '', ...(x.attachments?.length ? { attachments: x.attachments.map(a => ({
+              url: a.url, name: a.filename || '', mimeType: a.content_type || '',
+            })) } : {}),
             ...(x.message_reference?.message_id ? { replyTo: x.message_reference.message_id } : {}) });
+          const contextMessages = [...context].reverse().map(slim);
+          const targetMessage = slim(m);
+          // Download attachments from the target message and context (limited scope)
+          const fetchForAttach = options.fetchImpl || fetch;
+          const discordDownload = async (attach) => {
+            const res = await fetchForAttach(attach.url, { signal: AbortSignal.timeout(15000) });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return Buffer.from(await res.arrayBuffer());
+          };
+          const collected = await collectReadableContent({
+            messages: [targetMessage, ...contextMessages], // target + recent context (slimmed, with mimeType)
+            downloadAttachment: discordDownload, fetchImpl: options.fetchImpl, readGoogleUrl: options.readGoogleUrl, home,
+            maxImages: 4, maxTextBytes: 30000,
+            targetIds: new Set([m.id]),
+          });
+          if (collected.failures.length) {
+            const reason = collected.failures.map(f => `${f.name}: ${f.reason}`).join('; ');
+            if (!dryRun) await recordDecisionPending(home, {
+              where: 'guild', senderName: m.author.global_name || m.author.username || m.author.id,
+              channelName: channel.name, channelId: m.channel_id, messageId: m.id,
+              question: `${m.content || ''}\n添付取得失敗: ${reason}`,
+              link: `https://discord.com/channels/${guildId}/${m.channel_id}/${m.id}`,
+            }, { addItemImpl: options.addItemImpl || addKimInboxItem });
+            handled(m, 'decision'); continue;
+          }
           const llmInput = {
             knowledge: knowledge(), rules: read(file('rules.md')), corrections: corrections().slice(-30),
-            channelName: channel.name, context: [...context].reverse().map(slim), message: slim(m),
+            channelName: channel.name, context: contextMessages, message: targetMessage,
+            ...(collected.images.length ? { images: collected.images } : {}),
+            ...(collected.documents.length ? { documents: collected.documents } : {}),
           };
           const raw = await llm({ category: 'jp_reply', system: REPLY_SYSTEM, input: llmInput });
           let decision;
           try { decision = replyJson(raw); }
           catch { handled(m, 'llm_parse_error'); result.errors.push(`llm_parse_error: ${m.id}`); continue; }
           if (!decision.needs_reply && !decision.needs_kim_decision) { handled(m, 'fyi'); skip('fyi'); continue; }
+          // 「読めない」系の誤回答ガード
+          if (decision.answer?.trim() && CANT_READ_REPLY_PTN.test(decision.answer)) {
+            if (!dryRun) await recordDecisionPending(home, {
+              where: 'guild',
+              senderName: m.author.global_name || m.author.username || m.author.id,
+              channelName: channel.name,
+              channelId: m.channel_id,
+              messageId: m.id,
+              question: m.content,
+              link: `https://discord.com/channels/${guildId}/${m.channel_id}/${m.id}`,
+            }, { addItemImpl: options.addItemImpl || addKimInboxItem });
+            handled(m, 'decision');
+            continue;
+          }
           // 禁止表現（代表への確認を約束する文/転送/確認待ち等）が含まれていたら1回だけ再生成
           if (decision.answer?.trim() && FORBIDDEN_REPLY_PTN.test(decision.answer)) {
             const origNeedsKim = decision.needs_kim_decision;
@@ -609,6 +672,7 @@ export async function runOnce(options = {}) {
               ...(llmInput.context || []).map(x => x.content || ''),
               llmInput.knowledge || '',
               llmInput.rules || '',
+              ...collected.documents.map(d => d.text),
             ].join('\n');
             const invented = inventedAmounts(decision.answer, sourceText);
             if (invented.length > 0) {
@@ -625,7 +689,7 @@ export async function runOnce(options = {}) {
               continue;
             }
           }
-          if (await checkReplies()) continue; // kim may have replied during LLM generation.
+          if (await checkReplies()) continue;
           if (fs.existsSync(file('PAUSE')) || await emergency()) { result.paused = true; break; }
           let finalAnswer = decision.answer;
           if (decision.needs_kim_decision) {

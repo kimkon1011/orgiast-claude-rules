@@ -9,10 +9,11 @@ import { isEntry } from './is-entry.mjs';
 import {
   DEFAULT_MAX_REPLY_AGE, classifyReply, contentFor, createLlm, ensureTaskPriority, decisionReport, sentReport,
   isWithinAllowedTimeWindow, recordSentReply, flushUnreportedSentLogs, recordDecisionPending, readSentLog,
-  retryForbiddenAnswer, FORBIDDEN_REPLY_PTN, inventedAmounts
+  retryForbiddenAnswer, FORBIDDEN_REPLY_PTN, inventedAmounts, CANT_READ_REPLY_PTN
 } from './discord-autoreply.mjs';
 import { addItem as addKimInboxItem } from './kim-inbox.mjs';
 import { resolveDiscordLink } from './discord-beeper-link.mjs';
+import { collectReadableContent } from './lib/autoreply-attachments.mjs';
 
 export const DISCORD_ACCOUNT = 'discordgo.715210673642012733';
 const HOUR = 3600000;
@@ -137,7 +138,7 @@ export async function runOnce(options = {}) {
           channelName: chat.title || chat.id,
           channelId: chat.id,
           messageId: latest?.id,
-          question: question || reason,
+          question: `${question || ''}\n判断理由: ${reason}`,
           link
         }, { addItemImpl });
       };
@@ -192,10 +193,6 @@ export async function runOnce(options = {}) {
         }).join('\n');
         if (prior?.status !== 'skipped' && (prior?.id === latest.id || (prior?.timestamp && compare(latest, prior) <= 0))) { result.skipped++; continue; }
         if (isMessageRequest(chat)) { await decide('メッセージリクエスト・未承認'); continue; }
-        if (!pending.some(m => plainText(m.text))) {
-          state.chats[chat.id] = { ...mark(latest), status: 'fyi' };
-          save(); result.skipped++; continue;
-        }
         if (!addressedToKim(chat, pending, all, selfIDs)) { result.skipped++; continue; }
         if (history.complete && chat.type === 'single' && !lastSelf) { await decide('初対面または会話履歴を確認できません'); continue; }
         if (chat.isReadOnly || chat.participants?.items?.some(p => p.isSelf && p.cannotMessage)) { await decide('送信不可の会話'); continue; }
@@ -205,13 +202,32 @@ export async function runOnce(options = {}) {
         state.hourlyByChat[chat.id] = (state.hourlyByChat[chat.id] || []).filter(t => t > now - HOUR);
         if (state.hourlyByChat[chat.id].length >= 3) { result.skipped++; continue; }
 
+        const targetIds = new Set(pending.map(m => m.id));
+        if (latest && !latest.isSender) targetIds.add(latest.id);
+        const collected = await collectReadableContent({
+          messages: [...new Map([latest, ...pending, ...all.slice(-25)].map(m => [m.id, m])).values()],
+          downloadAttachment: a => (api.downloadAttachment || beeper.downloadAttachment)(a, { fetchImpl: options.fetchImpl || fetch }),
+          fetchImpl: options.fetchImpl, readGoogleUrl: options.readGoogleUrl, home,
+          targetIds,
+        });
+        if (collected.failures.length) {
+          await decide(`添付取得失敗: ${collected.failures.map(f => `${f.name}: ${f.reason}`).join('; ')}`);
+          continue;
+        }
         const classifyInput = {
           channelName: chat.title, context: all.slice(-25).map(m => ({ author: m.senderName, content: plainText(m.text), isSelf: m.isSender })),
           message: { content: question },
           knowledge: read(path.join(home, '.claude', 'discord-autoreply', 'knowledge.md')),
           rules: read(path.join(home, '.claude', 'discord-autoreply', 'rules.md')),
+          ...(collected.images.length ? { images: collected.images } : {}),
+          ...(collected.documents.length ? { documents: collected.documents } : {}),
         };
         let decision = await classifyReply(llm, classifyInput);
+        // 「読めない」系の誤回答ガード
+        if (decision.answer?.trim() && CANT_READ_REPLY_PTN.test(decision.answer)) {
+          await decide('添付の中身を読まない回答のため kim の確認が必要');
+          continue;
+        }
         // 禁止表現（代表への確認を約束する文/転送/確認待ち等）が含まれていたら1回だけ再生成
         if (decision.answer?.trim() && FORBIDDEN_REPLY_PTN.test(decision.answer)) {
           const origNeedsKim = decision.needs_kim_decision;
@@ -235,6 +251,7 @@ export async function runOnce(options = {}) {
             ...(classifyInput.context || []).map(x => x.content || ''),
             classifyInput.knowledge || '',
             classifyInput.rules || '',
+            ...collected.documents.map(d => d.text),
           ].join('\n');
           const invented = inventedAmounts(decision.answer, sourceText);
           if (invented.length > 0) {

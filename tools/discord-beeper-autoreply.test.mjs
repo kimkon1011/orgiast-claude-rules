@@ -100,20 +100,23 @@ for (const complete of [true, false]) {
   });
 }
 
-test('添付のみは初対面でもFYI', async t => {
+test('添付のみの初対面は判断待ち', async t => {
   const f = fixture(t, { messages: [message({ text: '', attachments: [{ mimeType: 'image/png' }] })] });
   const result = await runOnce(f.options);
-  assert.equal(result.ok, true); assert.equal(result.decisions.length, 0);
-  assert.equal(f.state().chats.chat1.status, 'fyi');
-  assert.equal(f.sent.length, 0); assert.equal(f.inboxItems.length, 0);
+  assert.equal(result.ok, true); assert.equal(result.decisions.length, 1);
+  assert.equal(f.state().chats.chat1.status, 'decision');
+  assert.equal(f.sent.length, 0); assert.equal(f.inboxItems.length, 1);
 });
 
 test('別メッセージの本文と添付名・mimeTypeをまとめてLLMへ渡す', async t => {
   const f = fixture(t);
-  f.data.chat1.push(message({ id: 'image', sortKey: '3', text: '', attachments: [{ fileName: 'photo.png' }, { mimeType: 'application/pdf' }] }));
+  f.data.chat1.push(message({ id: 'image', sortKey: '3', text: '', attachments: [{ fileName: 'photo.png', mimeType: 'image/png', srcURL: 'mxc://test/photo' }, { fileName: 'notes.txt', mimeType: 'text/plain', srcURL: 'mxc://test/text' }] }));
+  f.api.downloadAttachment = async a => Buffer.from(a.mimeType.startsWith('text/') ? '本文テスト' : 'image');
   f.options.llm = async ({ input }) => {
+    assert.equal(input.images.length, 1);
+    assert.equal(input.documents[0].text, '本文テスト');
     assert.match(input.message.content, /マニュアルはどこですか/);
-    assert.match(input.message.content, /（画像\/ファイル添付あり: photo.png, application\/pdf）/);
+    assert.match(input.message.content, /（画像\/ファイル添付あり: photo.png, notes.txt）/);
     return JSON.stringify(reply);
   };
   const result = await runOnce(f.options);
@@ -363,19 +366,20 @@ test('判断が必要でanswerが欠落しても分類エラーにせずaskの�
 
 test('本文＋画像添付は回答対象になる', async t => {
   const own = message({ id: 'own', timestamp: new Date(NOW - 5000).toISOString(), sortKey: '1', isSender: true });
-  const msg = message({ attachments: [{ name: 'image.png', mimeType: 'image/png' }] });
+  const msg = message({ attachments: [{ name: 'image.png', mimeType: 'image/png', srcURL: 'mxc://test/image' }] });
   const f = fixture(t, { messages: [msg, own] });
+  f.api.downloadAttachment = async () => Buffer.from('image');
   const result = await runOnce(f.options);
   assert.equal(result.replied, 1); assert.equal(f.sent.length, 1);
 });
 
-test('添付のみ（本文なし）は FYI としてスキップ', async t => {
+test('添付のみ（本文なし）でURLなしは判断待ち', async t => {
   const own = message({ id: 'own', timestamp: new Date(NOW - 5000).toISOString(), sortKey: '1', isSender: true });
   const msg = message({ text: '', attachments: [{ name: 'file.pdf', mimeType: 'application/pdf' }] });
   const f = fixture(t, { messages: [msg, own] });
   const result = await runOnce(f.options);
   assert.equal(result.replied, 0); assert.equal(f.sent.length, 0);
-  assert.equal(f.inboxItems.length, 0);
+  assert.equal(f.inboxItems.length, 1);
 });
 
 test('dry-run は送信・kim-inbox・台帳・ロック作成なし', async t => {
@@ -415,4 +419,86 @@ test('質問文にある金額を回答で引用しても送信される', async
   assert.equal(result.replied, 1);
   assert.equal(f.sent.length, 1);
   assert.match(f.sent[0].content, /330,000円/);
+});
+
+import { downloadAttachment } from './beeper-api.mjs';
+test('Beeper mxc添付はassets/download→assets/serveを認証付きで取得', async () => {
+  const calls = [];
+  const bytes = await downloadAttachment({ srcURL: 'mxc://example/image' }, {
+    token: 'test-token', fetchImpl: async (url, init) => {
+      calls.push(String(url));
+      assert.equal(init.headers.Authorization, 'Bearer test-token');
+      if (String(url).endsWith('/assets/download')) {
+        assert.deepEqual(JSON.parse(init.body), { url: 'mxc://example/image' });
+        return new Response(JSON.stringify({ srcURL: 'file:///image.png' }));
+      }
+      assert.equal(new URL(url).searchParams.get('url'), 'file:///image.png');
+      return new Response(Buffer.from('image-bytes'));
+    },
+  });
+  assert.equal(bytes.toString(), 'image-bytes');
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every(url => url.startsWith('http://localhost:23373/v1/assets/')));
+});
+
+test('Beeper画像とGoogle本文をLLMへ渡すdry-runは送信も保存もしない', async t => {
+  const f = fixture(t);
+  f.data.chat1[0].text += ' https://docs.google.com/document/d/example/edit';
+  f.data.chat1[0].attachments = [{ name: 'photo.png', mimeType: 'image/png', srcURL: 'mxc://example/photo' }];
+  f.api.downloadAttachment = async () => Buffer.from('IMAGE_BYTES');
+  f.options.readGoogleUrl = async () => 'GOOGLE_DOCUMENT_TEXT';
+  let called = false;
+  f.options.llm = async ({ input, system }) => {
+    called = true;
+    assert.equal(input.images[0].dataUrl, 'data:image/png;base64,SU1BR0VfQllURVM=');
+    assert.equal(input.documents[0].text, 'GOOGLE_DOCUMENT_TEXT');
+    assert.match(system, /閲覧できない/);
+    return JSON.stringify(reply);
+  };
+  const result = await runOnce({ ...f.options, dryRun: true });
+  assert.equal(called, true);
+  assert.equal(result.wouldSend.length, 1);
+  assert.equal(f.sent.length, 0);
+  assert.equal(fs.existsSync(f.file), false);
+});
+
+test('Beeper添付失敗は名前と理由付きでkim-inboxへ送りLLM・送信を止める', async t => {
+  const f = fixture(t);
+  f.data.chat1[0].attachments = [{ name: 'broken.png', mimeType: 'image/png', srcURL: 'mxc://example/broken' }];
+  f.api.downloadAttachment = async () => { throw new Error('HTTP 404'); };
+  f.options.llm = async () => assert.fail('must not generate a reply');
+  const result = await runOnce(f.options);
+  assert.equal(result.replied, 0);
+  assert.equal(f.sent.length, 0);
+  assert.equal(f.inboxItems[0].kind, 'ask');
+  assert.match(f.inboxItems[0].text, /broken.png: HTTP 404/);
+});
+
+test('Beeperで閲覧できない仕様という回答はkim-inboxだけに回す', async t => {
+  const f = fixture(t, { decision: { ...reply, answer: '閲覧できない仕様です' } });
+  await runOnce(f.options);
+  assert.equal(f.sent.length, 0);
+  assert.equal(f.inboxItems[0].kind, 'ask');
+});
+
+test('beeper: 文脈メッセージに未対応添付(.xlsx)があっても、対象メッセージがテキストだけなら返信が送られる', async t => {
+  const f = fixture(t);
+  // Context message before own (self) message, so it's in history but not in pending.
+  f.data.chat1.push(message({ id: 'context-xlsx', sortKey: '0.5', timestamp: new Date(NOW - 10000).toISOString(), text: '会議資料です', attachments: [{ fileName: 'data.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', srcURL: 'mxc://test/xlsx' }] }));
+  const result = await runOnce(f.options);
+  assert.equal(result.replied, 1);
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.inboxItems.length, 1); // info (sent report) only, no ask
+});
+
+test('beeper: 対象メッセージの添付取得失敗は従来どおり kim-inbox', async t => {
+  const f = fixture(t);
+  f.data.chat1[0].attachments = [{ name: 'target-broken.png', mimeType: 'image/png', srcURL: 'mxc://example/target-broken' }];
+  f.api.downloadAttachment = async () => { throw new Error('HTTP 404'); };
+  f.options.llm = async () => assert.fail('must not generate a reply');
+  const result = await runOnce(f.options);
+  assert.equal(result.replied, 0);
+  assert.equal(f.sent.length, 0);
+  assert.equal(f.inboxItems[0].kind, 'ask');
+  assert.match(f.inboxItems[0].text, /target-broken.png: HTTP 404/);
 });

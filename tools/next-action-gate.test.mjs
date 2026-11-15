@@ -773,6 +773,35 @@ test('独立したnext-action違反を1回の差し戻しへまとめる', () =>
 });
 
 
+test('作業中は同一sessionのopenチェックが必須でdone/closedや過去の登録では通さない', () => {
+  withOpenCheck((input, file) => {
+    const registration = row('assistant', [{ type: 'tool_use', name: 'Bash', input: { command: addCheckCmd } }]);
+    const transcript = `${registration}\n${row('user', '追加の依頼')}\n${cronRow}`;
+    const entry = { sessionId: input.session_id, check: 'node check.mjs' };
+    const write = rows => fs.writeFileSync(file, rows.map(value => JSON.stringify(value)).join('\n') + '\n');
+    for (const text of [promiseText, promiseText.replace('私が毎時進捗を確認して変化時に報告します', 'なし')]) {
+      write([{ ...entry, status: 'open' }]);
+      assert.equal(judgeNextAction(text, transcript, input).decision, 'pass');
+      for (const status of ['done', 'closed']) {
+        write([{ ...entry, status }, { ...entry, sessionId: 'other', status: 'open' }]);
+        const result = judgeNextAction(text, transcript, input);
+        assert.equal(result.decision, 'block', status);
+        assert.equal(result.code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK', status);
+        assert.ok(result.reason.includes(`台帳の行は ${status} で閉じています。`));
+        assert.ok(result.reason.includes('`node tools/auto-progress.mjs --add-check ...` で登録し直してください'));
+        assert.ok(result.reason.includes('done の目印は kim の受け取り返答後にだけ作る'));
+      }
+      write([]);
+      const missing = judgeNextAction(text, transcript, input);
+      assert.equal(missing.decision, 'block');
+      assert.equal(missing.code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
+      assert.ok(!missing.reason.includes('で閉じています'));
+      write([{ ...entry, status: 'done' }, { ...entry, status: 'open' }]);
+      assert.equal(judgeNextAction(text, transcript, input).decision, 'pass');
+    }
+  });
+});
+
 test('複数手渡しでも見張り登録漏れ4コードを同時に返す', () => {
   const result = judgeNextAction(`次に kim がすること: 支払い、署名\nこの後の自動進行: 返信が届いたら結果を報告する\nこのセッション: まだ閉じない（作業中・2099-11-05 12:00 まで待つ）`);
   for (const code of ['NEXT-ACTION-MULTIPLE', 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK', 'SESSION-OPEN-NEEDS-IN-SESSION-CHECK', 'AUTOPILOT-NO-SESSION-WAKEUP']) {

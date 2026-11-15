@@ -18,7 +18,7 @@ export function classifyLead(lead, messages, now = new Date()) {
   const lastIn = unique.find(m => m.direction === 'inbound');
   const lastOut = unique.find(m => m.direction === 'outbound');
   const past = Boolean(lead.preferred_date && lead.preferred_date < dateKey(now));
-  const declined = /見送|改めてご連絡|必要な際は|今回は|辞退/.test(bodyLines(lastIn).join('\n'));
+  const declined = /見送|改めてご連絡|必要な際は|今回は|辞退|別社|他社(?!様)|他業者|別の業者|またの機会|次の機会|見合わせ|キャンセル/.test(bodyLines(lastIn).join('\n'));
   // 登録上の開催日が過ぎていても、直近14日以内に顧客から未回答の返信があれば進行中として扱う。
   const activeReply = Boolean(lastIn && (!lastOut || time(lastIn.received_at) > time(lastOut.received_at)) && time(now) - time(lastIn.received_at) < 14 * DAY);
   let category, nextAction;

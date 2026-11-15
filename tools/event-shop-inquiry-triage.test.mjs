@@ -37,6 +37,27 @@ test('5c: 抜粋は挨拶・お詫びの定型行を飛ばす', () => {
   const result = classifyLead(lead, [msg('outbound', '22'), msg('inbound', '26', 'オージャスト様\nお世話になっております。Cocoliveの五月女です。\nお待たせしてしまい恐れ入ります。\n先日ご依頼いただきました、4点について回答させていただきます。')], now);
   assert.equal(result.nextAction, '顧客の返信に未回答: 先日ご依頼いただきました、4点について回答させていただきます。');
 });
+test('3b: 別社・他社・またの機会の辞退を終了候補にする（2026-11-15 実害）', () => {
+  const body = `ご担当者様
+お世話になります。
+
+本件、こちらが大阪になるため関東への受け取り、ご返却が難しく、
+別社にて対応いただく予定となりました。
+
+お手数をおかけいたしました。
+またの機会がございましたらぜひよろしくお願いいたします。`;
+  const result = classifyLead(lead, [msg('inbound', '15', body)], now);
+  assert.equal(result.category, '⚪ 終了候補');
+  assert.match(result.nextAction, /辞退/);
+});
+test('3c: 他社様の事例は質問文であり誤爆しない', () => {
+  const body = `佐藤様
+
+お世話になっております。
+他社様の事例などあれば教えていただけますでしょうか。`;
+  const result = classifyLead(lead, [msg('inbound', '15', body)], now);
+  assert.equal(result.category, '🔴 要返信');
+});
 test('6: 同じemail/productの1日差は最新だけを残す', () => {
   const newer = { ...lead, id: 'new', created_at: '2026-10-22T03:00:00Z' };
   assert.deepEqual(deduplicateLeads([lead, newer]), { leads: [newer], duplicateCount: 1 });

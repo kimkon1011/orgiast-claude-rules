@@ -160,7 +160,8 @@ export function generateLlmsTxt(siteName, siteDescription, options = {}) {
     lines.push('');
   }
 
-  // Group content by category
+  // Group content by category (ordered: top, service, case, faq)
+  const categoryOrder = ['top', 'service', 'case', 'faq'];
   const byCategory = {};
   for (const page of contentRegistry) {
     const cat = page.category || 'other';
@@ -168,31 +169,47 @@ export function generateLlmsTxt(siteName, siteDescription, options = {}) {
     byCategory[cat].push(page);
   }
 
+  for (const cat of categoryOrder) {
+    const pages = byCategory[cat];
+    if (!pages || pages.length === 0) continue;
+    // Skip FAQ here — handled in its own section below
+    if (cat === 'faq') continue;
+    const catLabel = cat === 'top' ? '概要' : cat === 'service' ? 'サービス' : cat === 'case' ? '実績事例' : 'その他';
+    lines.push(`## ${catLabel}`);
+    lines.push('');
+    for (const page of pages) {
+      lines.push(`- [${page.title}](${page.url}) : ${page.description}`);
+      // Include condensed body content as blockquote for AI readability
+      const bodyLines = page.body.split('\n').filter(l => l.trim() !== '' && !l.startsWith('#'));
+      if (bodyLines.length > 0) {
+        const summary = bodyLines.slice(0, 6).join(' ').replace(/[*_]/g, '').substring(0, 400);
+        lines.push(`  > ${summary}`);
+      }
+      lines.push('');
+    }
+  }
+
+  // Remaining categories not in categoryOrder
   for (const [cat, pages] of Object.entries(byCategory)) {
+    if (categoryOrder.includes(cat)) continue;
+    if (cat === 'faq') continue;
     const catLabel = cat.charAt(0).toUpperCase() + cat.slice(1);
     lines.push(`## ${catLabel}`);
     lines.push('');
-    lines.push(`| Title | Description | Link |`);
-    lines.push(`|-------|-------------|------|`);
     for (const page of pages) {
-      // Escape pipe characters in description
-      const desc = page.description.replace(/\|/g, '\\|');
-      lines.push(`| [${page.title}](${page.url}) | ${desc} | ${page.url} |`);
+      lines.push(`- [${page.title}](${page.url}) : ${page.description}`);
+      lines.push('');
     }
-    lines.push('');
   }
-
-  // FAQ section
   const faqPages = contentRegistry.filter(p => p.category === 'faq');
   if (faqPages.length > 0) {
     lines.push(`## FAQ`);
     lines.push('');
     for (const faq of faqPages) {
-      lines.push(`### ${faq.title}`);
-      lines.push('');
-      lines.push(faq.description);
-      lines.push('');
-      lines.push(faq.body);
+      lines.push(`- [${faq.title}](${faq.url}) : ${faq.description}`);
+      const bodyLines = faq.body.split('\n').filter(l => l.trim() !== '' && !l.startsWith('#'));
+      const summary = bodyLines.join(' ').substring(0, 400);
+      lines.push(`  > ${summary}`);
       lines.push('');
     }
   }
@@ -205,7 +222,7 @@ export function generateLlmsTxt(siteName, siteDescription, options = {}) {
   }
 
   lines.push('---');
-  lines.push(`*最終更新: ${new Date().toISOString().split('T')[0]} | This file is for AI agents to efficiently discover site content.*`);
+  lines.push(`*最終更新: ${new Date().toISOString().split('T')[0]} | This llms.txt is for AI agents to efficiently discover site content.*`);
   lines.push('');
 
   return lines.join('\n');

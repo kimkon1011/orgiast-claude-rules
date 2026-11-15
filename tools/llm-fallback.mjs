@@ -164,17 +164,14 @@ export function parseQuotaResetTime(text, now = Date.now()) {
 }
 
 // lane-health.json に quota_wait を書き込む（上限中レーンを他からも避けさせる）。
-function saveQuotaWaitToLaneHealth(provider, until, detail) {
+function saveQuotaWaitToLaneHealth(provider, until, detail, hp, persist) {
+  if (!persist) return;
   try {
-    const hp = path.join(home, '.claude', 'lane-health.json');
-    const health = JSON.parse(fs.readFileSync(hp, 'utf8').replace(/^﻿/, ''));
-    if (!health?.lanes) return;
+    let health;
+    try { health = JSON.parse(fs.readFileSync(hp, 'utf8').replace(/^﻿/, '')); } catch { health = {}; }
+    if (!health.lanes) health.lanes = {};
     const p = String(provider).toLowerCase();
-    if (health.lanes[p]) {
-      health.lanes[p] = { ...health.lanes[p], alive: false, reason: 'quota_wait', until, error: (detail || '').slice(0, 500), probedAt: new Date().toISOString() };
-    } else {
-      health.lanes[p] = { alive: false, reason: 'quota_wait', until, error: (detail || '').slice(0, 500), probedAt: new Date().toISOString() };
-    }
+    health.lanes[p] = { alive: false, reason: 'quota_wait', until, error: (detail || '').slice(0, 500), probedAt: new Date().toISOString() };
     fs.mkdirSync(path.dirname(hp), { recursive: true });
     const tmp = `${hp}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
     try { fs.writeFileSync(tmp, JSON.stringify(health, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(tmp, hp); }
@@ -211,11 +208,12 @@ async function fetchBeforeDeadline(fetchImpl, request, deadline) {
   } finally { clearTimeout(timer); }
 }
 
-export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category = '', allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, persistState = true, perProviderTimeoutMs, now = () => Date.now() }) {
+export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category = '', allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, laneHealthFile, persistState = true, perProviderTimeoutMs, now = () => Date.now() }) {
   if (perProviderTimeoutMs != null && (!Number.isSafeInteger(perProviderTimeoutMs) || perProviderTimeoutMs <= 0 || perProviderTimeoutMs > 2147483647)) throw new Error('perProviderTimeoutMs must be a positive timer-safe integer');
   start = routeCandidate(start);
   chain = chain.map(routeCandidate);
   const home = process.env.ORGIAST_HOME || os.homedir();
+  const _laneHealthFile = laneHealthFile || (cooldownFile ? path.join(path.dirname(cooldownFile), 'lane-health.json') : path.join(home, '.claude', 'lane-health.json'));
   const timestamp = now();
   const cost = dailyCost(ledgerFile || path.join(home, '.claude', 'executor-usage.jsonl'), timestamp);
   const warn = threshold('ORGIAST_LLM_DAILY_WARN_USD', 1);
@@ -288,7 +286,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
   let quotaWaitProviders = [];
   if (useCooldown) {
     try {
-      laneHealth = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'lane-health.json'), 'utf8').replace(/^\uFEFF/, ''));
+      laneHealth = JSON.parse(fs.readFileSync(_laneHealthFile, 'utf8').replace(/^\uFEFF/, ''));
       quotaWaitProviders = Object.entries(laneHealth?.lanes || {})
         .filter(([, state]) => state?.reason === 'quota_wait' && Number(state?.until) > timestamp)
         .map(([provider]) => String(provider).toLowerCase());
@@ -343,7 +341,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
     // 429 で reset 時刻が本文から取れたら lane-health.json に quota_wait を書く
     if (status === 429 && parsedReset) {
       cooldowns[provider].until = Math.max(cooldowns[provider].until, parsedReset);
-      saveQuotaWaitToLaneHealth(provider, parsedReset, detail);
+      saveQuotaWaitToLaneHealth(provider, parsedReset, detail, _laneHealthFile, persistState);
       console.error(`[quota_wait] ${provider} の上限リセット時刻: ${new Date(parsedReset).toISOString()}（本文から解析）`);
     }
     cooldownDirty = true;

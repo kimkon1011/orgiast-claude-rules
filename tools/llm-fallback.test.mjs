@@ -142,7 +142,7 @@ test('3候補が連続失敗した場合は候補自身の理由で3ホップを
 function temporaryFiles(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-fallback-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return { cooldownFile: path.join(dir, 'cooldown.json'), ledgerFile: path.join(dir, 'ledger.jsonl'), budgetFile: path.join(dir, 'budget.json') };
+  return { cooldownFile: path.join(dir, 'cooldown.json'), ledgerFile: path.join(dir, 'ledger.jsonl'), budgetFile: path.join(dir, 'budget.json'), laneHealthFile: path.join(dir, 'lane-health.json') };
 }
 
 test('本文に billing を含むだけの通常429は日次上限と誤判定せず短時間クールダウンにする', async (t) => {
@@ -187,6 +187,33 @@ test('TPD の429も日次退避し、チェーン内の次候補へ回す（Clau
   assert.equal(state.groq.until, nextUtcMidnight(new Date(timestamp)));
 });
 
+test('lane-health.json の quota_wait 中のプロバイダは隔離ディレクトリで読み書きし実ホームを触らない', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000;
+  // 隔離ディレクトリの lane-health.json に groq を quota_wait として設定
+  fs.writeFileSync(files.laneHealthFile, JSON.stringify({ lanes: { groq: { alive: false, reason: 'quota_wait', until: timestamp + 300_000, probedAt: new Date(timestamp).toISOString() } } }));
+  let calls = 0;
+  const result = await callWithFallback({
+    start, chain: [second], payloadFor: requestFor, ...files, now: () => timestamp, sleepImpl: async () => {},
+    fetchImpl: async () => { calls++; return new Response('{}', { status: 200 }); },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.candidate.provider, 'openrouter');
+});
+
+test('429 で reset 時刻が本文から取れた場合 lane-health.json に quota_wait を書く', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000; let calls = 0;
+  await callWithFallback({
+    start, chain: [second], payloadFor: requestFor, ...files, now: () => timestamp, sleepImpl: async () => {},
+    fetchImpl: async () => ++calls === 1
+      ? new Response('Your limit will reset at 2026-11-19 19:53:29', { status: 429 })
+      : new Response('{}', { status: 200 }),
+  });
+  assert.ok(fs.existsSync(files.laneHealthFile), 'lane-health.json が隔離ディレクトリに作られる');
+  const health = JSON.parse(fs.readFileSync(files.laneHealthFile, 'utf8'));
+  assert.equal(health.lanes.groq.reason, 'quota_wait');
+  assert.equal(health.lanes.groq.alive, false);
+  assert.ok(health.lanes.groq.until > timestamp);
+});
 
 test('402 はプロバイダを24時間クールダウンに記録する', async (t) => {
   const files = temporaryFiles(t), timestamp = 1_700_000_000_000; let calls = 0;

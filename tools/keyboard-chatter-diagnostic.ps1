@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     キーボードチャタリング診断ツール v1.0
 .DESCRIPTION

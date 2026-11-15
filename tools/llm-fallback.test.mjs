@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { callWithFallback, FALLBACK_CHAIN } from './llm-fallback.mjs';
+import { nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
 
 const start = { provider: 'groq', model: 'model-a' };
 const second = { provider: 'openrouter', model: 'model-b' };
@@ -144,9 +145,9 @@ function temporaryFiles(t) {
   return { cooldownFile: path.join(dir, 'cooldown.json'), ledgerFile: path.join(dir, 'ledger.jsonl'), budgetFile: path.join(dir, 'budget.json') };
 }
 
-test('本文に billing を含むだけの通常429(groqのTPD)は24時間にしない', async (t) => {
+test('本文に billing を含むだけの通常429は日次上限と誤判定せず短時間クールダウンにする', async (t) => {
   const files = temporaryFiles(t), timestamp = 1_700_000_000_000; let calls = 0;
-  const body = 'Rate limit reached for model `openai/gpt-oss-120b` on tokens per day (TPD). Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing';
+  const body = 'Rate limit reached for model `openai/gpt-oss-120b`. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing';
   await callWithFallback({
     start, chain: [second], payloadFor: requestFor, ...files, now: () => timestamp, sleepImpl: async () => {},
     fetchImpl: async () => ++calls <= 3 ? new Response(body, { status: 429 }) : new Response('{}', { status: 200 }),
@@ -154,6 +155,38 @@ test('本文に billing を含むだけの通常429(groqのTPD)は24時間にし
   const state = JSON.parse(fs.readFileSync(files.cooldownFile, 'utf8'));
   assert.equal(state.groq.until, timestamp + 60_000, 'retry-after の無い通常の429は既定下限60秒');
 });
+
+test('日次回数上限(RPD/TPD)の429は同一候補をリトライせず次の安いAIへ回し、翌日UTC 0時まで退避する', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000; const seen = [];
+  const body = 'Rate limit reached for model `openai/gpt-oss-120b` service tier on_demand on requests per day (RPD): Limit 1000, Used 1000, Requested 1. Please try again in 1m26.4s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing';
+  const result = await callWithFallback({
+    start, chain: [second], payloadFor: requestFor, ...files, now: () => timestamp, sleepImpl: async () => { throw new Error('should not wait to retry the same provider'); },
+    fetchImpl: async () => {
+      seen.push(true);
+      return seen.length === 1 ? new Response(body, { status: 429 }) : new Response('{}', { status: 200 });
+    },
+  });
+  assert.equal(seen.length, 2, 'groq は1回だけで次候補へ');
+  assert.equal(result.candidate.provider, 'openrouter');
+  const state = JSON.parse(fs.readFileSync(files.cooldownFile, 'utf8'));
+  assert.equal(state.groq.reason, 'daily_limit');
+  assert.equal(state.groq.until, nextUtcMidnight(new Date(timestamp)));
+});
+
+test('TPD の429も日次退避し、チェーン内の次候補へ回す（Claude はチェーンに含めない）', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000; let calls = 0;
+  const body = 'Rate limit reached for model `openai/gpt-oss-120b` on tokens per day (TPD). Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing';
+  const result = await callWithFallback({
+    start, chain: [second], payloadFor: requestFor, ...files, now: () => timestamp, sleepImpl: async () => {},
+    fetchImpl: async () => ++calls === 1 ? new Response(body, { status: 429 }) : new Response('{}', { status: 200 }),
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.candidate.provider, 'openrouter');
+  const state = JSON.parse(fs.readFileSync(files.cooldownFile, 'utf8'));
+  assert.equal(state.groq.reason, 'daily_limit');
+  assert.equal(state.groq.until, nextUtcMidnight(new Date(timestamp)));
+});
+
 
 test('402 はプロバイダを24時間クールダウンに記録する', async (t) => {
   const files = temporaryFiles(t), timestamp = 1_700_000_000_000; let calls = 0;

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { budgetVerdict, estimateTokens, noteResponse, readBudget, writeBudget } from './rate-budget.mjs';
+import { isDailyQuotaResponse, nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
 
 export const FALLBACK_CHAIN = Object.freeze([
   { provider: 'groq', model: 'openai/gpt-oss-120b' },
@@ -208,7 +209,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
         .map(([provider]) => String(provider).toLowerCase());
     } catch {}
   }
-  // lanes-disabled.json（PC ごとの恒久無効化）に載った provider は start でも候補から外す。
+  // lanes-disabled.json に載った provider は start でも候補から外す。課金・回数制限は cooldown で一時退避し、回復後は自動で戻す。
   let disabled = new Set();
   if (cooldownFile != null || !process.env.NODE_TEST_CONTEXT) {
     try { disabled = new Set(Object.keys(JSON.parse(fs.readFileSync(cooldownFile ? path.join(path.dirname(cooldownFile), 'lanes-disabled.json') : path.join(home, '.claude', 'lanes-disabled.json'), 'utf8').replace(/^\uFEFF/, '')) || {}).map(p => p.toLowerCase())); } catch {}
@@ -262,14 +263,21 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
     }
   }
 
-  function setCooldown(provider, status, response, permanentBilling = false) {
+  function setCooldown(provider, status, response, permanentBilling = false, detail = '') {
     if (!useCooldown) return;
+    const at = now();
+    const retryMs = retryAfterMs(response, at) ?? 0;
+    if (status === 429 && !permanentBilling && isDailyQuotaResponse(status, detail)) {
+      cooldowns[provider] = { until: nextUtcMidnight(new Date(at)), reason: 'daily_limit', at };
+      cooldownDirty = true;
+      saveCooldowns();
+      return;
+    }
     let duration = 0;
     if (status === 402 || permanentBilling) duration = 24 * 60 * 60 * 1000;
-    else if (status === 429) duration = Math.min(cooldownMax, Math.max(cooldownMin, retryAfterMs(response, now()) ?? cooldownMin));
+    else if (status === 429) duration = Math.min(cooldownMax, Math.max(cooldownMin, retryMs || cooldownMin));
     else if ([401, 403].includes(status)) duration = 6 * 60 * 60 * 1000;
     if (!duration) return;
-    const at = now();
     cooldowns[provider] = { until: at + duration, reason: `http_${status}`, at, ...(permanentBilling ? { permanentBilling: true } : {}) };
     cooldownDirty = true;
     saveCooldowns();
@@ -361,11 +369,12 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
       // groq の通常429の本文には `https://console.groq.com/settings/billing` が含まれるため、
       // 素の `billing` で判定すると日次上限(TPD)を恒久障害と誤判定する。恒久障害の文面だけを拾う。
       const permanentBilling = status === 429 && isPermanentBillingDetail(detail);
-      setCooldown(candidate.provider, status, response, permanentBilling);
+      setCooldown(candidate.provider, status, response, permanentBilling, detail);
 
       if (timedOut) break; // A hung candidate must not consume three timeout windows.
       const kind = classifyFailure(status);
-      if (permanentBilling || kind !== 'retry' || attempt === 2) break;
+      const dailyQuota = status === 429 && isDailyQuotaResponse(status, detail);
+      if (permanentBilling || dailyQuota || kind !== 'retry' || attempt === 2) break;
       const specified = retryAfterMs(response);
       if (specified != null && specified > 60000) break;
       const delay = specified ?? 1000 * 2 ** attempt;

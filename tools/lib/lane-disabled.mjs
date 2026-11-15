@@ -1,5 +1,5 @@
-// PC ごとにレーンを恒久的に無効化する（~/.claude/lanes-disabled.json）。
-// 例: {"gemini": {"reason": "2026-11-15 kim 指示: 008 は Gemini をやめる", "since": "2026-11-15"}}
+// PC ごとにレーンを無効化する（~/.claude/lanes-disabled.json）。
+// 課金切れや回数制限には使わない。それらは provider-cooldown で一時退避し、ヘルスチェックで回復したら自動で戻す。
 // gemini を無効にすると gemini-cli（同じ GEMINI_API_KEY を使う）も無効になる。
 // 無効レーンは lane-doctor が probe せず alive=false/reason=disabled とし、codex-do と llm-fallback の候補から外す。
 import fs from 'node:fs';

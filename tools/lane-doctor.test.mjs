@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, needsNativeCodexProbe, nativeWriteProbeArgs, directGeminiCliState } from './lane-doctor.mjs';
+import { laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, needsNativeCodexProbe, nativeWriteProbeArgs, directGeminiCliState , shouldSkipLiveProbe } from './lane-doctor.mjs';
 import { classifyTaskKind } from './lib/task-kind.mjs';
+import { nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
 const now = Date.parse('2026-10-08T06:00:00Z');
 
 test('gemini-cli は Gemini の OpenRouter 代替表示を継承しない', () => {
@@ -136,13 +137,18 @@ test('failed notification is retried, while successful delivery is deduped',asyn
 });
 
 for (const filename of ['provider-limit-history.jsonl', 'codex-limit-history.jsonl']) {
-  test(`successful probe survives two stale quick runs with older ${filename}`, async t => {
-    const h = fixture(t), stamp = new Date(now).toISOString();
-    fs.writeFileSync(path.join(h, '.claude', filename), JSON.stringify({ provider: 'codex', t: now - 1000, until: now + 86400000, reason: 'usage_limit_no_fallback' }) + '\n');
-    const probed = await laneDoctorProbe({platform: 'linux', home: h, now, probe: async () => ({ code: 0, text: 'PONG' }) });
+  test(`active usage limit skips live probe; after until expires a successful probe survives two stale quick runs with older ${filename}`, async t => {
+    const h = fixture(t), until = now + 86400000;
+    fs.writeFileSync(path.join(h, '.claude', filename), JSON.stringify({ provider: 'codex', t: now - 1000, until, reason: 'usage_limit_no_fallback' }) + '\n');
+    const during = [];
+    const skipped = await laneDoctorProbe({ platform: 'linux', home: h, now, providers: ['codex'], probe: async (p) => { during.push(p); return { code: 0, text: 'PONG' }; }, notify: async () => ({ delivered: 'test' }) });
+    assert.deepEqual(during, []);
+    assert.equal(skipped.lanes.codex.alive, false);
+    const later = until + 1, stamp = new Date(later).toISOString();
+    const probed = await laneDoctorProbe({ platform: 'linux', home: h, now: later, providers: ['codex'], probe: async () => ({ code: 0, text: 'PONG' }), notify: async () => ({ delivered: 'test' }) });
     assert.equal(probed.lanes.codex.lastProbeOkAt, stamp);
     for (const minutes of [31, 49]) {
-      const result = laneDoctorQuick({ home: h, now: now + minutes * 60000 });
+      const result = laneDoctorQuick({ home: h, now: later + minutes * 60000 });
       assert.equal(result.lanes.codex.alive, true);
       assert.equal(result.lanes.codex.reason, 'probe_ok:stale');
       assert.equal(result.lanes.codex.probedAt, stamp);
@@ -402,4 +408,47 @@ test('codex dry failure with real 401 still classifies oauth_consent', async t =
     notify: async () => ({ delivered: 'test' }) });
   assert.equal(result.lanes.codex.alive, false);
   assert.equal(result.lanes.codex.reason, 'dead:oauth_consent');
+});
+
+test('shouldSkipLiveProbe: 回数制限・課金中は until まで実測しない', () => {
+  const now = 1_700_000_000_000;
+  assert.equal(shouldSkipLiveProbe({ reason: 'quota_wait', until: now + 1000 }, now), true);
+  assert.equal(shouldSkipLiveProbe({ reason: 'daily_limit', until: now + 1000 }, now), true);
+  assert.equal(shouldSkipLiveProbe({ reason: 'billing', until: now + 1000 }, now), true);
+  assert.equal(shouldSkipLiveProbe({ reason: 'quota_wait', until: now }, now), false);
+  assert.equal(shouldSkipLiveProbe({ reason: 'probe_ok' }, now), false);
+  assert.equal(shouldSkipLiveProbe({ reason: 'quota_wait', probedAt: new Date(now - 10 * 60 * 1000).toISOString() }, now), true);
+  assert.equal(shouldSkipLiveProbe({ reason: 'quota_wait', probedAt: new Date(now - 2 * 60 * 60 * 1000).toISOString() }, now), false);
+});
+
+test('quota_wait 中の groq は probe せず、期限後に自動で実測して復帰できる', async t => {
+  const h = fixture(t), now = Date.now();
+  const until = now + 3600_000;
+  write(h, 'provider-cooldown.json', { groq: { until, reason: 'daily_limit' } });
+  write(h, 'lane-health.json', { lanes: { groq: { alive: false, reason: 'quota_wait', until, probedAt: new Date(now - 1000).toISOString() } } });
+  const probed = [];
+  const skipped = await laneDoctorProbe({ platform: 'linux', home: h, now, providers: ['groq'], probe: async (p) => { probed.push(p); return { code: 1, text: 'should not run' }; }, notify: async () => ({ delivered: 'test' }) });
+  assert.deepEqual(probed, []);
+  assert.equal(skipped.lanes.groq.alive, false);
+  assert.match(String(skipped.lanes.groq.reason), /quota_wait|daily_limit|cooldown|usage_limit/);
+  const recovered = await laneDoctorProbe({ platform: 'linux', home: h, now: until + 1, providers: ['groq'], probe: async (p) => { probed.push(p); return { code: 0, text: 'PONG' }; }, notify: async () => ({ delivered: 'test' }) });
+  assert.deepEqual(probed, ['groq']);
+  assert.equal(recovered.lanes.groq.alive, true);
+});
+
+test('RPD の probe 失敗は翌日 UTC 0 時まで daily_limit にする', async t => {
+  const h = fixture(t), now = Date.now();
+  const text = 'HTTP429: Rate limit reached on requests per day (RPD): Limit 1000, Used 1000. Please try again in 1m26.4s.';
+  const r = await laneDoctorProbe({ platform: 'linux', home: h, now, providers: ['groq'], probe: async () => ({ code: 1, text }), notify: async () => ({ delivered: 'test' }) });
+  assert.equal(r.lanes.groq.alive, false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(h, '.claude', 'provider-cooldown.json'), 'utf8')).groq.reason, 'daily_limit');
+  assert.equal(r.lanes.groq.until, nextUtcMidnight(new Date(now)));
+});
+
+test('質問順は安いレーンが先で、Gemini は同列の受け皿として残る', t => {
+  const h = fixture(t), stamp = new Date(now).toISOString();
+  write(h, 'lane-health.json', { lanes: Object.fromEntries(['codex','gemini','deepseek','glm','groq','openrouter'].map(provider => [provider, { alive: true, reason: 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: 'probe_ok' }])) });
+  const r = laneDoctorQuick({ home: h, now, save: false });
+  assert.deepEqual(r.askOrder, ['groq', 'deepseek', 'openrouter', 'gemini']);
+  assert.ok(!r.askOrder.includes('claude'));
 });

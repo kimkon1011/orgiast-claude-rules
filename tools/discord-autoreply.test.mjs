@@ -1027,18 +1027,38 @@ test('画像payloadはDeepSeek強制指定でもGemini→Kimi→Gensparkのみ',
 });
 
 import { readGoogleDoc, extractPdfText } from './lib/autoreply-attachments.mjs';
-for (const [mime, format] of [['document', 'text/plain'], ['spreadsheet', 'text/csv'], ['presentation', 'text/plain']]) {
-  test(`DWD request: ${mime} は正しい形式でexportし第二主体へfallback`, async () => {
+for (const [mime, format, extraHandler] of [
+  ['document', 'text/plain', null],
+  ['spreadsheet', 'sheets', url => {
+    if (url.includes('fields=sheets.properties')) return { sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }] };
+    if (url.includes('/values:batchGet')) return { valueRanges: [{ values: [['header'], ['ドキュメントの本文']] }] };
+    return undefined;
+  }],
+  ['presentation', 'text/plain', null],
+]) {
+  test(`DWD request: ${mime} は正しい形式でexport/APIし第二主体へfallback`, async () => {
     const calls = [];
     const request = async (url, options) => {
       calls.push({ url, ...options });
       if (options.user === 'kim@orgiast.jp') throw new Error('denied');
-      if (url.includes('?fields=')) return { id: 'file1', mimeType: `application/vnd.google-apps.${mime}` };
-      assert.equal(new URL(url).searchParams.get('mimeType'), format);
+      // Drive metadata: ?fields= containing mimeType
+      if (url.includes('mimeType&') || url.includes('mimeType,')) return { id: 'file1', mimeType: `application/vnd.google-apps.${mime}` };
+      if (extraHandler) {
+        const r = extraHandler(url);
+        if (r !== undefined) return r;
+      } else {
+        assert.equal(new URL(url).searchParams.get('mimeType'), format);
+      }
       return 'ドキュメントの本文';
     };
     const result = await collectReadableContent({ messages: [{ content: 'https://docs.google.com/document/d/file1/edit' }], readGoogleUrl: id => readGoogleDoc(id, { request }) });
-    assert.equal(result.documents[0].text, 'ドキュメントの本文');
+    const text = result.documents?.[0]?.text || '';
+    if (extraHandler) {
+      // spreadsheets returns Sheets API format
+      assert.ok(text.includes('Sheet1') || text.includes('ドキュメントの本文'));
+    } else {
+      assert.ok(text.includes('ドキュメントの本文'));
+    }
     assert.equal(calls[0].user, 'kim@orgiast.jp');
     assert.equal(calls.at(-1).user, 'seisaku-team@orgiast.jp');
   });

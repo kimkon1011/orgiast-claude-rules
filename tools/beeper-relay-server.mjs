@@ -341,10 +341,11 @@ async function handleRequest(req, res) {
 
       // reply-queue に enqueue（直接送信しない）
       const home = process.env.ORGIAST_HOME || os.homedir();
+      const msgID = body.replyTo || `relay-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
       const items = [{
         channel: 'beeper',
         thread: `beeper:${body.chatID}`,
-        message: body.replyTo || '',
+        message: msgID,
         from: { id: `relay:${clientName}`, name: `${clientName} via relay`, external: true },
         body: body.body,
         receivedAt: new Date().toISOString(),

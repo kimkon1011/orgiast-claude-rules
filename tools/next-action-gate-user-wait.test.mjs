@@ -65,9 +65,9 @@ test('本人手渡しには同一 session の open 台帳行だけを認める',
   assert.equal(judgeNextAction(report(handoff), '', input).code, code);
 });
 
-test('本人手渡しマーカーがあってもチャット返信だけなら pass', t => {
+test('本人手渡しマーカーがあっても未定義ラベルだけの質問は block', t => {
   withLedger(t);
-  assert.equal(judgeNextAction(report('[手渡し判定]\nA案とB案のどちらか教えてください。')).decision, 'pass');
+  assert.equal(judgeNextAction(report('[手渡し判定]\nA案とB案のどちらか教えてください。')).code, 'NEXT-ACTION-LABEL-UNDEFINED');
 });
 
 test('手渡しマーカーは footer より前だけを検査する', t => {

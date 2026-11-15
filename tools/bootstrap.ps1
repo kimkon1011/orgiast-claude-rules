@@ -26,5 +26,12 @@ if (-not (Test-Path (Join-Path $Repo '.git'))) {
   git clone --depth 1 --quiet $Base $Repo
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $Repo 'tools'))) { throw 'repo clone failed' }
 }
-if (Have node) { & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $Repo 'tools\setup.mjs') --converge } else { throw 'node.js is required' }
+if (Have node) {
+  $nodeExe = if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }
+  # cmd.exe /c で CMD レベルの 2>&1 を使い、Node.js の stderr を stdout に統合する。
+  # PowerShell の *>&1 | Tee-Object パイプライン + $ErrorActionPreference Stop では
+  # NativeCommandError がスクリプトを終了させ、完了マーカーがログに書かれない問題がある。
+  # CMD レベルの 2>&1 なら PowerShell が stderr をエラーと認識しないため安全。
+  & cmd.exe /c "`"$nodeExe`" `"$(Join-Path $Repo 'tools\setup.mjs')`" --converge 2>&1"
+} else { throw 'node.js is required' }
 Write-Output '[ORGIAST-BOOTSTRAP-COMPLETE]'

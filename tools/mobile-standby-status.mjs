@@ -26,6 +26,11 @@ export const PLACEHOLDER_TITLE = /^\d{3}｜待機中$/;
 export const AUTO_TITLE = /^[a-z0-9]+(?:-[a-z0-9]+)*-[a-z]+-[a-z]+$/;
 
 function json(file, fallback = {}) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
+function localWaitingTabs(home = os.homedir(), now = Date.now()) {
+  const { waiting, updatedAt } = json(path.join(home, '.claude', 'mobile-sessions-state.json')) ?? {};
+  return Number.isFinite(waiting) && waiting >= 0 && Number.isFinite(updatedAt)
+    && updatedAt <= now && now - updatedAt <= 15 * 60_000 ? waiting : null;
+}
 function titleOf(session) { return String(session?.title ?? '').split('\n')[0]; }
 function stripId(id) { return String(id ?? '').replace(/^(cse_|session_)/, ''); }
 
@@ -156,25 +161,47 @@ export async function replenishStandby({
   if (before.error) return { action: 'skipped', reason: before.error, before };
   // 健全でも記録する。記録しないと purge-sessions --hook が SessionStart/Stop のたびに起動してしまう。
   // notifiedAt は引き継ぐ（DM の間引きに使う）。
-  if (stateFile) fs.writeFileSync(stateFile, JSON.stringify({ ...state, at: startedAt, standby: before.standby, goal }));
+  Object.assign(state, { at: startedAt, standby: before.standby, goal });
+  const saveState = () => { if (stateFile) fs.writeFileSync(stateFile, JSON.stringify(state)); };
+  if (!before.shortfall) delete state.failedOpenAt;
+  saveState();
   if (!before.shortfall) return { action: 'none', before };
+  const localWaiting = localWaitingTabs(home, startedAt);
+  const count = Math.max(0, goal - Math.max(before.standby, localWaiting ?? 0));
+  if (!count) {
+    if (startedAt - (Number(state.notifiedAt) || 0) >= NOTIFY_COOLDOWN) {
+      const message = `[mobile-standby] VS Code に待機タブが ${localWaiting} 本ありますが、スマホから見える待機セッションは ${before.standby} 本です（remote control 未接続）。新しいタブは開いていません。`;
+      await notify(message).catch(() => {});
+      state.notifiedAt = startedAt;
+      saveState();
+    }
+    return { action: 'skipped', reason: 'local-tabs-present', localWaiting, before };
+  }
+  if (Number.isFinite(state.failedOpenAt) && startedAt - state.failedOpenAt < NOTIFY_COOLDOWN) {
+    return { action: 'skipped', reason: 'backoff' };
+  }
   const cli = codeCli ?? resolveVscodeCli({ env: process.env, exists: fs.existsSync, homedir: home ?? os.homedir() });
   if (!cli) return { action: 'skipped', reason: 'no-vscode-cli', before };
   let opened;
-  try { opened = await open({ home, count: before.shortfall, codeCli: cli, spawnProcess }); }
+  try { opened = await open({ home, count, codeCli: cli, spawnProcess }); }
   catch (error) { return { action: 'failed', reason: `open failed: ${error.message}`, before }; }
   await sleep(waitMs);
   const after = await checkStandby({ home, fetchImpl, goal, localIds, freshHours, now: now() });
   if (after.shortfall) {
+    state.failedOpenAt = now();
+    saveState();
     // 開き直しても戻らない時だけ知らせる。同じ不足で毎時 DM しないよう 6 時間に 1 回まで。
     if (startedAt - (Number(state.notifiedAt) || 0) < NOTIFY_COOLDOWN) {
       return { action: 'shortfall', suppressed: true, opened, before, after };
     }
     const message = `[mobile-standby] 待機セッションが不足しています。目標 ${goal} 本 / 現在 ${after.standby} 本（${after.titles.join(', ') || 'なし'}）。${opened} 本を開きましたが 30 秒後も不足。`;
     const delivery = await notify(message).catch((error) => ({ delivered: 'none', reason: error.message }));
-    if (stateFile) fs.writeFileSync(stateFile, JSON.stringify({ ...state, at: startedAt, standby: before.standby, goal, notifiedAt: startedAt }));
+    state.notifiedAt = startedAt;
+    saveState();
     return { action: 'notified', opened, before, after, delivery };
   }
+  delete state.failedOpenAt;
+  saveState();
   return { action: 'replenished', opened, before, after };
 }
 

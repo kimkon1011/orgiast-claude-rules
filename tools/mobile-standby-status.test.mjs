@@ -389,3 +389,117 @@ test('replenishes stale standbys without mutating old, used, renamed or other-PC
   assert.equal(result.action, 'replenished');
   assert.deepEqual(sessions.slice(0, snapshot.length), snapshot);
 });
+
+function replenishFixture(t, { localState, state = {}, remoteCount = 0 } = {}) {
+  const home = tempHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const localFile = path.join(home, '.claude', 'mobile-sessions-state.json');
+  if (localState !== undefined) fs.writeFileSync(localFile, JSON.stringify(localState));
+  const stateFile = path.join(home, '.claude', 'mobile-standby-status-state.json');
+  fs.writeFileSync(stateFile, JSON.stringify(state));
+  const titles = ['remote-control-one-tab', 'remote-control-two-tab', 'remote-control-three-tab'];
+  const opened = [], messages = [], sleeps = [];
+  let time = NOW;
+  const options = {
+    home, stateFile, goal: 3, now: () => time, codeCli: 'C:/code.cmd',
+    localIds: new Set(titles),
+    fetchImpl: async () => response(titles.slice(0, remoteCount).map(title =>
+      standby(title, { created_at: new Date(time).toISOString() }))),
+    open: async ({ count }) => { opened.push(count); return count; },
+    notify: async message => { messages.push(message); return { delivered: 'dm' }; },
+    sleep: async ms => { sleeps.push(ms); time += ms; },
+  };
+  return {
+    options, opened, messages, sleeps,
+    readState: () => JSON.parse(fs.readFileSync(stateFile, 'utf8')),
+    advance: ms => { time += ms; },
+  };
+}
+
+test('local waiting tabs prevent opening and notify once per six hours', async t => {
+  const f = replenishFixture(t, { localState: { waiting: 7, updatedAt: NOW } });
+  const result = await replenishStandby(f.options);
+  assert.equal(result.action, 'skipped');
+  assert.equal(result.reason, 'local-tabs-present');
+  assert.equal(result.localWaiting, 7);
+  assert.equal(result.before.standby, 0);
+  await replenishStandby(f.options);
+  assert.deepEqual(f.opened, []);
+  assert.deepEqual(f.sleeps, []);
+  assert.deepEqual(f.messages, ['[mobile-standby] VS Code に待機タブが 7 本ありますが、スマホから見える待機セッションは 0 本です（remote control 未接続）。新しいタブは開いていません。']);
+  assert.deepEqual(f.readState(), { at: NOW, standby: 0, goal: 3, notifiedAt: NOW });
+  f.advance(6 * HOUR);
+  fs.writeFileSync(path.join(f.options.home, '.claude', 'mobile-sessions-state.json'),
+    JSON.stringify({ waiting: 7, updatedAt: NOW + 6 * HOUR }));
+  await replenishStandby(f.options);
+  assert.equal(f.messages.length, 2);
+  assert.deepEqual(f.opened, []);
+});
+
+for (const [name, localState, expected] of [
+  ['stale at sixteen minutes', { waiting: 7, updatedAt: NOW - 16 * 60_000 }, 3],
+  ['fresh at fifteen minutes', { waiting: 7, updatedAt: NOW - 15 * 60_000 }, 0],
+  ['one local tab', { waiting: 1, updatedAt: NOW }, 2],
+  ['missing local file', undefined, 3],
+  ['invalid waiting type', { waiting: '7', updatedAt: NOW }, 3],
+  ['invalid timestamp type', { waiting: 7, updatedAt: String(NOW) }, 3],
+  ['future timestamp', { waiting: 7, updatedAt: NOW + 1 }, 3],
+  ['null local state', null, 3],
+]) {
+  test(`local tab count: ${name}`, async t => {
+    const f = replenishFixture(t, { localState });
+    await replenishStandby(f.options);
+    assert.deepEqual(f.opened, expected ? [expected] : []);
+  });
+}
+
+test('uses the greater of remote and local counts rather than adding them', async t => {
+  const f = replenishFixture(t, { localState: { waiting: 1, updatedAt: NOW }, remoteCount: 2 });
+  await replenishStandby(f.options);
+  assert.deepEqual(f.opened, [1]);
+});
+
+test('a failure one hour ago backs off while recording the check', async t => {
+  const f = replenishFixture(t, { state: { failedOpenAt: NOW - HOUR } });
+  assert.deepEqual(await replenishStandby(f.options), { action: 'skipped', reason: 'backoff' });
+  assert.deepEqual(f.opened, []);
+  assert.deepEqual(f.sleeps, []);
+  assert.deepEqual(f.messages, []);
+  assert.deepEqual(f.readState(), { failedOpenAt: NOW - HOUR, at: NOW, standby: 0, goal: 3 });
+});
+
+test('failed verification persists backoff even when notification is suppressed', async t => {
+  const f = replenishFixture(t, { state: { notifiedAt: NOW - HOUR } });
+  assert.equal((await replenishStandby(f.options)).action, 'shortfall');
+  assert.equal(f.readState().failedOpenAt, NOW + 30_000);
+  f.advance(HOUR);
+  assert.equal((await replenishStandby(f.options)).reason, 'backoff');
+  assert.deepEqual(f.opened, [3]);
+  assert.deepEqual(f.messages, []);
+});
+
+test('failed verification persists backoff when it notifies', async t => {
+  const f = replenishFixture(t);
+  assert.equal((await replenishStandby(f.options)).action, 'notified');
+  assert.equal(f.readState().failedOpenAt, NOW + 30_000);
+  assert.equal(f.messages.length, 1);
+});
+
+test('healthy remote status clears a recent failure', async t => {
+  const f = replenishFixture(t, { state: { failedOpenAt: NOW - HOUR }, remoteCount: 3 });
+  assert.equal((await replenishStandby(f.options)).action, 'none');
+  assert.equal(Object.hasOwn(f.readState(), 'failedOpenAt'), false);
+  assert.deepEqual(f.opened, []);
+});
+
+test('backoff expires at six hours and successful replenishment clears failure', async t => {
+  const f = replenishFixture(t, { state: { failedOpenAt: NOW - 6 * HOUR } });
+  const fetchEmpty = f.options.fetchImpl;
+  let calls = 0;
+  f.options.fetchImpl = async () => ++calls === 1 ? fetchEmpty() : response(
+    [...f.options.localIds].map(title => standby(title, { created_at: new Date(NOW).toISOString() })));
+  assert.equal((await replenishStandby(f.options)).action, 'replenished');
+  assert.deepEqual(f.opened, [3]);
+  assert.equal(Object.hasOwn(f.readState(), 'failedOpenAt'), false);
+  assert.deepEqual(f.messages, []);
+});

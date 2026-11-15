@@ -77,6 +77,7 @@
     {"path": "config/kim-discord-allowlist.json", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/fleet-selfcheck-prompt.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
     {"path": "tools/fleet-task-runner.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
+    {"path": "tools/session-model-audit.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "各PCのセッションのモデル（Opus 混入）と kim 返事待ち停止を毎時の見回りから読み取り専用で点検する"},
     {"path": "tools/lib/automation-model.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "自動実行（fleet-agent・autopilot 等）のモデルを Sonnet に揃える実行時依存"},
 {"path": "tools/lib/lane-disabled.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "PC 単位のレーン無効化（lanes-disabled.json）を codex-do・lane-doctor・llm-fallback が読む実行時依存"},
 {"path": "tools/lib/auto-resume-policy.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "fleet-task-runner 等が参照する自動再開ポリシー。通常のconverge配布に含める"},

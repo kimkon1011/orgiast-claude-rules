@@ -247,11 +247,6 @@ if (converge) { const lock = acquireSetupConvergeLock({ home }); if (!lock.acqui
         settingsMigration = { item, status: 'NG', checked: true, repaired: false, reason: String(error?.message || error).split(/\r?\n/)[0] };
       }
     }
-n    // Ensure settingsMigration is always initialized for exit code calculation
-    if (!settingsMigration && converge) {
-      const item = { id: "classifier-settings", severity: "required", description: "hook登録・日次通知hook削除・allowルール同期" };
-      settingsMigration = { item, status: "NOTICE", checked: true, repaired: false };
-    }
     let results = inspect(manifest.items);
     if (converge) {
       const attemptedCommands = new Set();
@@ -325,15 +320,5 @@ n    // Ensure settingsMigration is always initialized for exit code calculation
       }
     }
     const requiredNg = results.some((r) => r.item.severity === 'required' && r.status === 'NG');
-    if (settingsMigration?.status === 'NG') {
-        process.exitCode = 1;
-    } else if (settingsMigration?.status === 'NOTICE') {
-        process.exitCode = 1;
-    } else if (converge     process.exitCode = settingsMigration?.status === 'NG' ? 1 : converge && !strict ? 0 : requiredNg ? 1 : 0;    process.exitCode = settingsMigration?.status === 'NG' ? 1 : converge && !strict ? 0 : requiredNg ? 1 : 0; !strict) {
-        process.exitCode = 0;
-    } else if (requiredNg) {
-        process.exitCode = 1;
-    } else {
-        process.exitCode = 0;
-    }
+    process.exitCode = settingsMigration?.status === 'NG' ? 1 : converge && !strict ? 0 : requiredNg ? 1 : 0;
   }

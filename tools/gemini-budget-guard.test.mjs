@@ -64,6 +64,7 @@ function sessionLogFs(projects, dirHome = home) {
     const parts = fp.replace(/\\/g, '/').split('/');
     let node = tree;
     for (const part of parts) {
+      if (!part) continue;
       if (!node[part]) node[part] = {};
       node = node[part];
     }

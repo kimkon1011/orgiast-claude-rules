@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { isUnattendedSession } from './unattended-session.mjs';
+import { displayPcNames } from './pc-display.mjs';
 
 export const revisionOf = item => createHash('sha256').update(JSON.stringify([item.kind, item.text, item.revision, item.progressVersion])).digest('hex');
 export const jstDay = now => new Date(now + 9 * 3600000).toISOString().slice(0, 10);
@@ -19,6 +20,70 @@ export function relayDue(item, sessionId, now = Date.now()) {
   if (item.kind === 'ask') return delivery.sessions?.[sessionId]?.day !== jstDay(now);
   return item.kind !== 'info';
 }
+const inboxHeaderPc = text => (String(text).match(/^【([^・】]+)/)?.[1] || '').trim();
+const inboxPurpose = text => {
+  const m = String(text).match(/セッションの目的:\s*([^\n]*?)(?:\s*[／]|\s*$)/);
+  return m ? m[1].trim() : '';
+};
+const inboxDecideLine = text => {
+  const lines = String(text).split(/\r?\n/);
+  // Prefer explicit action lines over passive progress-waiting notices.
+  const high = lines.find(line => /^(?:あなたの返事待ち:|答えてほしいこと:|判断してほしいこと:|承認待ち[:：]?|約束:|kim がすること:|あなたの作業待ち:)/.test(line.trim()));
+  if (high) return high;
+  return lines.find(line => /^自動進行が判断待ちです:/.test(line.trim())) || '';
+};
+const inboxFirstMeaningfulLine = text => {
+  const lines = String(text).split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  return lines.find(line => !/^(?:プロジェクト:|作業ID:|セッションの目的:|【.*?】|https?:\/\/)/.test(line) && !/^[🔴✅❌📌📲⚠📢📥📤📋🗂]*$/.test(line)) || '';
+};
+// Parse an inbox item into a structured brief for kim to make a decision.
+// Deterministic (no LLM). Every field is at most 120 characters unless noted.
+export function inboxBrief(item) {
+  const text = String(item.text);
+  const purpose = inboxPurpose(text);
+  const fromPc = /@/.test(String(item.from || '')) ? '' : item.from;
+  const pcFromSource = String(inboxHeaderPc(text) || fromPc || '').split('・')[0].trim();
+  // topic: セッションの目的（…で終わるならそのまま）。PC名を前置。プロジェクト名・アカウント・作業IDは出さない。
+  let topic = purpose || text.split(/\r?\n/)[0].slice(0, 80);
+  const displayPc = displayPcNames(pcFromSource);
+  if (displayPc && !topic.startsWith(displayPc)) topic = `${displayPc}: ${topic}`;
+  // happened: ヘッダー以外の最初の意味行。絵文字除去可。最大120字。
+  let happened = inboxFirstMeaningfulLine(text);
+  if (happened) happened = happened.replace(/[🔴✅❌📌📲⚠📢📥📤📋🗂]/g, '').trim().slice(0, 120);
+  // decide
+  let decide = '';
+  if (item.kind === 'info' && item.source === 'auto-progress-resume-failed') {
+    decide = '自動再開が止まっている。続けるか中止するか';
+  } else if (item.kind === 'info') {
+    decide = '判断不要（報告のみ）';
+  } else {
+    const dl = inboxDecideLine(text);
+    if (dl) {
+      const after = dl.replace(/^.*?[:：]\s*/, '');
+      decide = after.slice(0, 120) || '（指示行あり）';
+    } else {
+      decide = `返事内容の指定なし（原文確認: node tools/kim-inbox.mjs --show ${item.id}）`;
+    }
+  }
+  // reply
+  const reply = item.kind === 'deadline'
+    ? `${item.key || 'D-003'} 完了／延期 11/20／不要`
+    : item.kind === 'info'
+    ? (item.source === 'auto-progress-resume-failed' ? 'N 続けて／N 中止' : '返事不要')
+    : 'N 可／N 不要／N <指示>';
+  // links: full URLs from body
+  const links = [...text.matchAll(/https?:\/\/[^\s\r\n]+/g)].map(m => m[0]);
+  return { topic, happened, decide, reply, links };
+}
+export function formatInboxBrief(item, n) {
+  const brief = inboxBrief(item);
+  let result = `${n}. ${brief.topic}（${item.id}）\n   起きたこと: ${brief.happened}\n   判断してほしいこと: ${brief.decide}\n   返事の例: ${brief.reply}`;
+  for (const link of brief.links) {
+    result += `\n   開く: ${link}`;
+  }
+  return result;
+}
+
 export function interactiveInboxSession(input, { home, env = process.env, raw = '' } = {}) {
   if (input.agent_id || input.isSidechain || /(?:^|[\\/])subagents[\\/]/.test(input.transcript_path || '')) return false;
   if (isUnattendedSession({ ...input, entrypoint: input.entrypoint || input.entryPoint || env.CLAUDE_CODE_ENTRYPOINT }, { home, env })) return false;

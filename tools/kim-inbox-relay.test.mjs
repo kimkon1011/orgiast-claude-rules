@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { addItem, listItems, main, answerItem, markSeen, updateInboxItem, selectContext } from './kim-inbox.mjs';
 import { evaluateKimInboxRelay, commitKimInboxDelivery } from './kim-inbox-relay.mjs';
-import { inboxSummary, recordInjection, recordPromptAnswers, relayDue, interactiveInboxSession } from './lib/kim-inbox-relay-state.mjs';
+import { inboxSummary, formatInboxBrief, recordInjection, recordPromptAnswers, relayDue, interactiveInboxSession } from './lib/kim-inbox-relay-state.mjs';
 import { run } from './stop-gate-runner.mjs';
 const now = Date.parse('2026-11-12T10:00:00Z');
 function fixture(t) {
@@ -15,11 +15,11 @@ function fixture(t) {
   const input = { session_id: 'human-session', cwd: home };
   const f = { home, input, inject: items => recordInjection(home, input.session_id, items, { now }),
     judge: (text = '', extra = {}) => evaluateKimInboxRelay(input, { home, now, env: {}, text, ...extra }),
-    section: items => '【受信箱】\n' + items.map((i,n) => `${n+1}. ${i.id} ${inboxSummary(i)}`).join('\n') };
+    section: items => '【受信箱】\n' + items.map((i,n) => formatInboxBrief(i, n + 1)).join('\n') };
   // Fixtures are retained under /tmp; production inboxes are never modified.
   return f;
 }
-test('context injection is not delivery; final ID and summary are required, not thinking/history or ID alone', async t => {
+test('context injection is not delivery; final ID and structured lines are required', async t => {
   const f = fixture(t), item = await addItem(f.home, { kind: 'ask', text: '鍵付き化が完了。nacci0713 の扱いと PR #7 は承認待ち' });
   const output = [];
   await main(['--context'], { home: f.home, stdout: s => output.push(s), readStdin: async () => JSON.stringify({ ...f.input, hook_event_name: 'UserPromptSubmit' }) });
@@ -104,7 +104,8 @@ test('runner relay precedes retry/close bypasses, and another gate rejecting a d
   const result = await run({ ...f.input, last_assistant_message: f.section([a]) + '\nhttps://discord.com/oauth2/authorize?client_id=1511684767546871818&permissions=0' }, ctx);
   assert.equal(result.decision, 'block');
   assert.equal(listItems(f.home)[0].deliveredToKim, undefined);
-  const success = await run({ ...f.input, last_assistant_message: f.section([a]) + '\n次に kim がすること: なし' }, ctx);
+  const successText = f.section([a]) + '\n【最終まとめ】\n①報告: 受信箱を提示しました\n②kim の確認事項: 受信箱の判断\n③kim がやること: 返事の例から回答\n恒久策: 一回限り: このfixture固有の配達確認\n次に kim がすること: 受信箱へ回答\nこの後の自動進行: なし\nこのセッション: /session-close は不要なので、このセッションを閉じてよい';
+  const success = await run({ ...f.input, last_assistant_message: successText }, ctx);
   assert.notEqual(success.decision, 'block', JSON.stringify(success));
   assert.equal(listItems(f.home)[0].deliveredToKim.count, 1);
 });

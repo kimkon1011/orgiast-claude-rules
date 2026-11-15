@@ -21,6 +21,8 @@ const MULTIPLE_ACTIONS_PATTERN = /[、・](?!\s*(?:または|もしくは|ある
 const ACTION_LABEL_PATTERN = /[①-⑳]|[A-ZＡ-Ｚa-z0-9０-９一二三]案|案[A-ZＡ-Ｚ0-9０-９]|選択肢\s*[0-9０-９]+|(?:番号|記号)で(?:選|答|返)|(?:方法|プラン|パターン|手段|ルート|オプション)[A-ZＡ-Ｚa-z0-9０-９]/gu;
 const LABEL_ONLY_REASON = '[NEXT-ACTION-LABEL-ONLY] 「次に kim がすること」にラベル（①・B案・案A など）だけが書かれています。kim はそのラベルの中身を探しに遡る羽目になります（kim 2026-10-28）。(1) kim の過去の決定がある・支払いや同意が要らない・取り消せる判断なら、聞かずに Claude が決めて進め、結果を報告する。この行は「なし」にする (2) どうしても聞くなら、ラベルではなく中身をこの1行に書く（例:「1Password を月 $24.95 で契約するかを はい/いいえ で答える」）。例外は [NEXT-ACTION-LABEL-OK: <理由>]。';
 
+
+const LABEL_UNDEFINED_REASON = "[NEXT-ACTION-LABEL-UNDEFINED] 応答本文にラベル語（A案/案B/方法C/選択肢2等）がありますが、各ラベルの直後に8文字以上の説明がないか、英字ラベルのシーケンスが不完全です（Cを使うならAとBも全て説明が必要）。ラベルを使わず中身を書く、または A/B/C 全部の中身を同じ節に書いてください。例外は [NEXT-ACTION-LABEL-OK: <理由>]（5文字以上）。";
 function hasUnexplainedLabel(action) {
   for (const match of action.matchAll(ACTION_LABEL_PATTERN)) {
     const suffix = action.slice(match.index + match[0].length);
@@ -35,20 +37,20 @@ function hasUnexplainedLabel(action) {
 // ②英字ラベルの最大値より前の英字ラベル（Cを使うならAとB）が全て本文に存在すること
 // を要求する。違反なら true。
 function hasBodyLabelViolations(body) {
-  const re = /[①-⑳]|[A-Za-zＡ-Ｚａ-ｚ]案|案[A-Za-zＡ-Ｚ]|選択肢\s*\d+|(?:方法|プラン|パターン|手段|ルート|オプション)[A-Za-zＡ-Ｚａ-ｚ0-9]|(?:番号|記号)で(?:選|答|返)/g;
+  // ①-⑳ は番号付きリストでありラベル参照ではないので本文検査から除外
+  const re = /[A-Za-zＡ-Ｚａ-ｚ]案|案[A-Za-zＡ-Ｚ]|選択肢\s*\d+|(?:方法|プラン|パターン|手段|ルート|オプション)[A-Za-zＡ-Ｚａ-ｚ0-9]|(?:番号|記号)で(?:選|答|返)/g;
   let match;
   const letters = [];
   while ((match = re.exec(body)) !== null) {
     const label = match[0];
     // 「番号で選ぶ」などはアクション記述であって具体ラベルではないのでスキップ
     if (/^(?:番号|記号)で/.test(label)) continue;
-    // 同じ行でラベルの直後に説明（括弧内8文字以上）があるか
+    // 同じ行でラベルの直後に8文字以上の中身があるか（本文では括弧不要、自然文で良い）
     const bol = body.lastIndexOf('\n', match.index) + 1;
     const eol = body.indexOf('\n', match.index);
     const line = body.slice(bol, eol === -1 ? undefined : eol);
     const after = line.slice(match.index - bol + label.length).trim();
-    const paren = after.match(/^(?:（([^（）]*)）|\(([^()]*)\))/);
-    if (!paren || [...(paren[1] ?? paren[2]).trim()].length < 8) return true;
+    if ([...after].length < 8) return true;
     // 英字ラベルの文字を収集（シーケンス完全性検査用）
     const letter = label.match(/[A-Za-zＡ-Ｚａ-ｚ]/);
     if (letter) {
@@ -59,12 +61,14 @@ function hasBodyLabelViolations(body) {
       letters.push(upper);
     }
   }
-  // 英字ラベルシーケンス完全性: Cを使うならAとBも存在する
+  // 英字ラベルシーケンス完全性: C以上を使うならそれより前の英字ラベルが全て存在する
   if (letters.length > 0) {
-    const unique = [...new Set(letters)]; // Set preserves insertion order
+    const unique = [...new Set(letters)];
     const maxOrd = Math.max(...unique.map(l => l.charCodeAt(0) - 65));
-    for (let ord = 0; ord < maxOrd; ord++) {
-      if (!unique.includes(String.fromCharCode(65 + ord))) return true;
+    if (maxOrd >= 2) { // C(2) 以上を使う場合だけ検査
+      for (let ord = 0; ord < maxOrd; ord++) {
+        if (!unique.includes(String.fromCharCode(65 + ord))) return true;
+      }
     }
   }
   return false;
@@ -183,6 +187,13 @@ function permanentFixViolation(text, transcriptRaw) {
     return { decision: 'block', code: 'WAREHOUSE-DISPATCH-REQUIRED', reason: '倉庫の物理作業は倉庫担当へ Claude が依頼する（`node tools/discord-dm.mjs <倉庫担当> --body-file <本文>`）。依頼済みなら「倉庫担当へ依頼済み」と書き、次に kim がすることから外す。' };
   }
   return null;
+}
+
+
+// Shared helper to check override markers anywhere in the turn text.
+function overrideCheck(turnSource, name, minimum = 5) {
+  return [...turnSource.matchAll(new RegExp('\\[' + name + ':[ \\t]*([^\\]\\r\\n]*)\\]', 'g'))]
+    .some(([, reason]) => [...reason.trim()].length >= minimum);
 }
 
 function reportsSessionClose(text) {
@@ -438,6 +449,11 @@ function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {
   }
   const watchIssue = waitingCheckIssues(source, transcriptRaw, input, turnSource)[0];
   if (!permanentFix && watchIssue) return watchIssue;
+  // 本文ラベル違反（フッターより前の本文に説明不足のラベルや不完全なシーケンスがあるか）
+  const bodyLabelCheck = source.slice(0, source.lastIndexOf('次に kim がすること:'));
+  if (bodyLabelCheck && hasBodyLabelViolations(bodyLabelCheck) && !overrideCheck(turnSource, 'NEXT-ACTION-LABEL-OK', 5)) {
+    return { decision: 'block', code: 'NEXT-ACTION-LABEL-UNDEFINED', reason: LABEL_UNDEFINED_REASON };
+  }
   return permanentFix || { decision: 'pass', reason: 'valid-footer' };
 }
 
@@ -479,16 +495,66 @@ function checkNoDeadline(text, input) {
 export function judgeNextAction(text, transcriptRaw = '', input = {}, options = {}) {
   const sessionId = input?.session_id || input?.sessionId || '';
   if (input?.stop_hook_active) {
-    // stop_hook_active 中でも SESSION-OPEN-NO-DEADLINE だけは検査する
-    const noDeadline = checkNoDeadlineDuringStopHook(text, input);
-    if (noDeadline) return noDeadline;
-    return { decision: 'pass', reason: 'stop-hook-active' };
+    // stop_hook_active 中は LABEL-ONLY / APPROVAL-INLINE / APPROVAL-NOT-LAST /
+    // MULTIPLE / BACKREF / LABEL-UNDEFINED も検査する。
+    // 連続2回まで block、3回目以降は pass（無限ループ防止）。
+    const counter = readStopHookCounter();
+    const count = (counter[sessionId] || 0);
+    if (count >= 2) {
+      return { decision: 'pass', reason: 'stop-hook-active-max-retries' };
+    }
+    const source = String(text || '').trimEnd();
+    const turnSource = String(options.turnText || source).trimEnd();
+    const issues = [];
+    // 1) SESSION-OPEN-NO-DEADLINE
+    const noDeadline = checkNoDeadline(text, input);
+    if (noDeadline) issues.push(noDeadline);
+    const footer = footerValues(source);
+    if (footer) {
+// (using module-level overrideCheck)
+      // 2) LABEL-ONLY
+      if (hasUnexplainedLabel(footer.nextAction) && !overrideCheck(turnSource, 'NEXT-ACTION-LABEL-OK')) {
+        issues.push({ decision: 'block', code: 'NEXT-ACTION-LABEL-ONLY', reason: LABEL_ONLY_REASON });
+      }
+      // 3) MULTIPLE
+      if (footer.nextAction !== 'なし' && MULTIPLE_ACTIONS_PATTERN.test(footer.nextAction)) {
+        issues.push({ decision: 'block', code: 'NEXT-ACTION-MULTIPLE', reason: 'kim への手渡しが2件以上あります。§1.1 最上位原則に従い、まず自分で潰して1件以下にしてください。' });
+      }
+      // 4) BACKREF
+      if (BACKREF_PATTERN.test(footer.nextAction) && !overrideCheck(turnSource, 'NEXT-ACTION-BACKREF-OK')) {
+        issues.push({ decision: 'block', code: 'NEXT-ACTION-BACKREF', reason: BACKREF_REASON });
+      }
+      // 5) APPROVAL-INLINE / APPROVAL-NOT-LAST
+      const placement = approvalPlacement(turnSource);
+      if (footer.nextAction !== 'なし' && APPROVAL_PATTERN.test(footer.nextAction)) {
+        if (placement === 'missing' && !overrideCheck(turnSource, 'NEXT-ACTION-APPROVAL-INLINE-OK')) {
+          issues.push({ decision: 'block', code: 'NEXT-ACTION-APPROVAL-INLINE', reason: APPROVAL_INLINE_REASON });
+        }
+        if (placement === 'not-last' && !overrideCheck(turnSource, 'NEXT-ACTION-APPROVAL-NOT-LAST-OK')) {
+          issues.push({ decision: 'block', code: 'NEXT-ACTION-APPROVAL-NOT-LAST', reason: APPROVAL_NOT_LAST_REASON });
+        }
+      }
+    }
+    // 6) 本文ラベル違反
+    const body = source.slice(0, source.lastIndexOf('次に kim がすること:'));
+    if (body && hasBodyLabelViolations(body) && !overrideCheck(turnSource, 'NEXT-ACTION-LABEL-OK', 5)) {
+      issues.push({ decision: 'block', code: 'NEXT-ACTION-LABEL-UNDEFINED', reason: LABEL_UNDEFINED_REASON });
+    }
+    if (issues.length === 0) {
+      return { decision: 'pass', reason: 'stop-hook-active' };
+    }
+    counter[sessionId] = count + 1;
+    writeStopHookCounter(counter);
+    const primaryCode = issues[0].code;
+    const reasonCodes = issues.map(i => i.code);
+    const reason = issues.map(i => `[${i.code}] ${i.reason.replace(/^\[[A-Z-]+\]\s*/, '')}`).join('\n');
+    return { decision: 'block', code: primaryCode, reasonCodes, reason };
   } else {
     if (sessionId) {
-      const counter = readNoDeadlineCounter();
+      const counter = readStopHookCounter();
       if (counter[sessionId] !== undefined) {
         delete counter[sessionId];
-        writeNoDeadlineCounter(counter);
+        writeStopHookCounter(counter);
       }
     }
   }
@@ -519,6 +585,11 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}, options = 
   if (footer.nextAction !== 'なし' && APPROVAL_PATTERN.test(footer.nextAction) && placement === 'missing' && !override('NEXT-ACTION-APPROVAL-INLINE-OK')) add('NEXT-ACTION-APPROVAL-INLINE', APPROVAL_INLINE_REASON);
   if (footer.nextAction !== 'なし' && APPROVAL_PATTERN.test(footer.nextAction) && placement === 'not-last' && !override('NEXT-ACTION-APPROVAL-NOT-LAST-OK')) add('NEXT-ACTION-APPROVAL-NOT-LAST', APPROVAL_NOT_LAST_REASON);
   if (footer.nextAction !== 'なし' && OPEN_ACTION_PATTERN.test(footer.nextAction) && !HUMAN_ONLY_PATTERN.test(footer.nextAction) && !override('NEXT-ACTION-OPEN-OK')) add('NEXT-ACTION-OPEN', OPEN_ACTION_REASON);
+  // 本文ラベル違反
+  const bodyCheck = source.slice(0, source.lastIndexOf('次に kim がすること:'));
+  if (bodyCheck && hasBodyLabelViolations(bodyCheck) && !overrideCheck(turnSource, 'NEXT-ACTION-LABEL-OK', 5)) {
+    add('NEXT-ACTION-LABEL-UNDEFINED', LABEL_UNDEFINED_REASON);
+  }
   return combined();
 }
 

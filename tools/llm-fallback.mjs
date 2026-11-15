@@ -157,7 +157,10 @@ export function parseQuotaResetTime(text, now = Date.now()) {
   const m = raw.match(/(?:limit|quota|usage)\s+(?:will|shall)\s+(?:reset|be\s+reset)\s+(?:at|on)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?)/i)
     || raw.match(/(?:resets?|reset)\s+(?:at|on)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?)/i);
   if (m) {
-    const parsed = Date.parse(m[1].replace(' ', 'T') + (m[1].length <= 16 ? ':00' : ''));
+    // タイムゾーン表記が無い場合は +09:00（JST）として解釈。Z/オフセット付きはそのまま。
+    const dateStr = m[1].replace(' ', 'T') + (m[1].length <= 16 ? ':00' : '');
+    const hasTz = /[+-]\d{2}:\d{2}$/.test(dateStr) || dateStr.endsWith('Z');
+    const parsed = Date.parse(dateStr + (hasTz ? '' : '+09:00'));
     if (Number.isFinite(parsed) && parsed > now) return parsed;
   }
   return null;

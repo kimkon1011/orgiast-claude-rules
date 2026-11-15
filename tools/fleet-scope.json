@@ -1,6 +1,7 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/fleet-scope.json", "scope": "fleet", "step": "settings:setup-converge", "reason": "fleet scope 定義ファイル。setup --converge の配布対象判定に使われる"},
     {"path":"tools/register-secretary-uptime.ps1","scope":"kim-only","reason":"kim-PCの秘書ゲートウェイ3939と秘書3940を監視するタスク登録。他PCには登録しない"},
     {"path":"tools/secretary-uptime-registration.test.ps1","scope":"kim-only","reason":"秘書監視の登録結果をmockで検証するテスト。実タスクは作成しない"},
     {"path":"tools/lib/external-monitor-state.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"外部返信待ちの宛先照合・重複排除・永続再開キュー"},
@@ -30,6 +31,8 @@
     {"path": "tools/lib/deadline-sources.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
     {"path": "tools/setup-deadline-watch.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
     {"path": "tools/register-deadline-watch-tasks.ps1", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
+    {"path": "tools/delegation-ratio-watch.mjs", "scope": "fleet", "step": "task:delegation-ratio-watch", "reason": "委譲率ウォッチドッグ（毎日05:40実行）。Claudeの重み付き消費・安いAIの実作業件数・保留件数・quota_wait呼出を集計"},
+    {"path": "tools/delegation-ratio-watch-register.mjs", "scope": "fleet", "step": "task:delegation-ratio-watch", "reason": "委譲率ウォッチドッグのschtasks登録"},
     {"path": "tools/lib/fleet-chase-ledger.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "watchdogが未達通知をkimへ送らず追跡台帳へ保存する共通依存"},
 
     {"path": "tools/gh-accept-invites.mjs", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "全PC SessionStart の日次招待承諾。kim操作席だけ実行"},

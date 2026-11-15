@@ -28,9 +28,24 @@ test('context injection is not delivery; final ID and structured lines are requi
   assert.equal(f.judge('別作業は完了しました', { raw: f.section([item]) }).decision, 'block');
   assert.equal(f.judge(`【受信箱】\n${item.id}`).decision, 'block');
   assert.equal(f.judge(`${item.id} ${inboxSummary(item)}`).decision, 'block');
+  assert.equal(f.judge(`【受信箱】\n1. ${item.id} ${inboxSummary(item)}`).decision, 'block');
+  assert.equal(f.judge(f.section([item]).replaceAll(item.id, '')).decision, 'block');
   assert.equal(f.judge('```\n' + f.section([item]) + '\n```').decision, 'block');
   assert.equal(f.judge(f.section([item]).split('\n').map(l => '> ' + l).join('\n')).decision, 'block');
   assert.equal(f.judge(f.section([item])).decision, 'pass');
+});
+
+test('each item needs its own explanation; indented and bulleted numbering delimit items', async t => {
+  const f = fixture(t), a = await addItem(f.home, { kind: 'ask', text: '承認待ち: 資料の公開' });
+  const b = await addItem(f.home, { kind: 'ask', text: '承認待ち: 日程の変更' });
+  f.inject([a, b]);
+  for (const prefix of ['2.', '  2.', '- 2.']) {
+    assert.equal(f.judge(`【受信箱】\n1. ${a.id}\n${prefix} ${b.id}\n   返事: 可か不可`).decision, 'block');
+  }
+  assert.equal(f.judge(`【受信箱】\n1. ${a.id}-extra\n判断: 確認\n2. ${b.id}\n返事: 確認`).decision, 'block');
+  const result = f.judge(`【受信箱】\n1. 公開の件（${a.id}）\n   判断: 資料を公開するか\n2. 日程の件（${b.id}）\n   返事: 可または不要`);
+  assert.equal(result.decision, 'pass');
+  assert.equal(result.receipts[0].summary, formatInboxBrief(a, 1, { home: f.home }).split('\n')[0]);
 });
 test('receipts suppress same-session asks until next JST day, high info until refreshed, other sessions still see asks', async t => {
   const f = fixture(t);

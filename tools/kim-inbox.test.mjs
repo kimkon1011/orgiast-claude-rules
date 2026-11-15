@@ -8,6 +8,50 @@ import { notifyKim } from './notify-kim.mjs';
 import { loadAllowlist, discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { inboxDedupeKey, spoolItem, drainSpool } from './kim-inbox.mjs';
 import { redactSecrets } from './webhook-health.mjs';
+import { formatInboxBrief } from './lib/kim-inbox-relay-state.mjs';
+test('--show reads the complete original without changing delivery or inbox data', async t => {
+  const home = seat(t), item = await addItem(home, { kind: 'ask', text: '資料の確認\n' + '詳細'.repeat(500) + '\n末尾' });
+  const file = path.join(home, '.claude/kim-inbox', item.id + '.json');
+  const before = fs.readFileSync(file, 'utf8'), output = [];
+  assert.equal(await main(['--show', item.id], { home, stdout: value => output.push(value) }), 0);
+  assert.equal(output[0], item.text);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  assert.equal(await main(['--show', 'missing'], { home, stdout: () => assert.fail('missing item'), stderr: () => {} }), 1);
+});
+test('mixed context has unique numbers, complete briefs, accurate omitted count and shown-only bookkeeping', async t => {
+  const home = seat(t), base = await addItem(home, { text: '完了: 確認済み', priority: 'high' });
+  const sessionId = 'abcdef12-current';
+  const items = [
+    base,
+    { ...base, id: 'own', kind: 'ask', sessionId, text: '資料公開\n判断してほしいこと: 公開可否', priority: undefined },
+    ...Array.from({ length: 20 }, (_, n) => ({ ...base, id: 'urgent-' + n, kind: 'ask', urgent: true, text: '確認' + n, priority: undefined })),
+    { ...base, id: 'daily', dailyProgress: true, priority: undefined, text: '毎朝の進捗' },
+    { ...base, id: 'deadline', kind: 'deadline', key: 'D-004', priority: undefined },
+  ].map(item => ({ ...item, shownSessions: [], shownCount: 0 }));
+  const context = selectContext(items, { sessionId, home });
+  assert.ok(context.length <= CONTEXT_LIMIT);
+  assert.match(context, /^\[kim-inbox .*最後の【受信箱】節/);
+  const headers = [...context.matchAll(/^(\d+)\. .*（([^）]+)）$/gm)];
+  assert.deepEqual(headers.map(m => Number(m[1])), headers.map((_, n) => n + 1));
+  assert.match(context, new RegExp('ほか ' + (items.length - headers.length) + ' 件'));
+  for (const item of items) {
+    const header = headers.find(m => m[2] === item.id);
+    assert.equal(item.shownCount, header ? 1 : 0);
+    if (header) assert.ok(context.includes(formatInboxBrief(item, Number(header[1]), { home })));
+  }
+});
+
+test('oversized registration brief is omitted whole and is not marked shown or daily-delivered', async t => {
+  const home = seat(t), base = await addItem(home, { kind: 'ask', text: '登録してください' });
+  const item = { ...base, source: 'knowledge-lock-passkey-link', dailyProgress: true,
+    text: '鍵の登録\n登録リンク: https://example.com/register?register=' + 'x'.repeat(CONTEXT_LIMIT) };
+  const context = selectContext([item], { sessionId: 'long', home });
+  assert.ok(context.length <= CONTEXT_LIMIT);
+  assert.match(context, /ほか 1 件/);
+  assert.doesNotMatch(context, /https:\/\/example.com/);
+  assert.equal(item.shownCount, 0);
+  assert.equal(item.dailyShown, undefined);
+});
 function seat(t, label = 'kim-PC') {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ki-test-'));
   fs.mkdirSync(path.join(home, '.claude'));
@@ -212,7 +256,7 @@ test('hook の session_id と一致する作業IDの info を ask より先に�
   const context = output[0].hookSpecificOutput.additionalContext;
   assert.ok(context.includes(own.id), 'own item should appear in context');
 });
-test('100番目の現在セッション ask を別枠の先頭に1行要約で表示する', async t => {
+test('100番目の現在セッション ask を別枠の先頭に4行の判断形式で表示する', async t => {
   const home = seat(t);
   const base = await addItem(home, { kind: 'ask', text: '基準' });
   const old = Array.from({ length: 100 }, (_, n) => ({ ...base, id: `old-${n}`, text: `既表示 ${n}`, shownCount: 400,
@@ -265,12 +309,12 @@ test('3日超の未表示 ask を新しい未表示 ask より優先し、境界
   assert.ok(context.includes('stale'), 'stale (unshown for 3+ days) should appear first');
   assert.ok(context.indexOf('stale') < context.indexOf('recent') || !context.includes('recent'), 'stale before recent');
 });
-test('現在セッション ask は各形式で特定し、急ぎ・期限より先に1行要約を再提示する', async t => {
+test('現在セッション ask は各形式で特定し、急ぎ・期限より先に4行の判断形式を再提示する', async t => {
   const base = await addItem(seat(t), { kind: 'ask', text: '判断' });
   const own = [
-    { ...base, id: 'own-text', text: `作業ID: ABCDEF12\n${'詳'.repeat(700)}` },
+    { ...base, id: 'own-text', text: `作業ID: ABCDEF12\n資料確認\n${'詳'.repeat(700)}` },
     { ...base, id: 'own-session', text: `セッション abcdef12\n${'詳'.repeat(700)}` },
-    { ...base, id: 'own-field', sessionId: 'abcdef12-5678', urgent: true, text: '詳'.repeat(700) },
+    { ...base, id: 'own-field', sessionId: 'abcdef12-5678', urgent: true, text: '資料確認\n' + '詳'.repeat(700) },
   ].map(item => ({ ...item, createdAt: '2026-11-01T00:00:00Z', shownSessions: [] }));
   const urgent = { ...base, id: 'other-urgent', urgent: true };
   const deadline = { ...base, id: 'other-deadline', kind: 'deadline', text: '期限本文', remainingDays: -1 };
@@ -346,7 +390,10 @@ test('期限は残日数順に先頭5件、upsertは表示回数を増やさずc
   assert.ok(context.indexOf('期限-8 更新') < context.indexOf('期限0 '));
   assert.ok(context.indexOf('期限0 ') < context.indexOf('期限3 '));
   assert.doesNotMatch(context, /期限30 /); assert.ok(context.length <= CONTEXT_LIMIT);
-  assert.equal(items.filter(i => i.kind === 'deadline' && i.shownCount).length, 5);
+  const shownDeadlines = items.filter(i => i.kind === 'deadline' && i.shownCount);
+  assert.ok(shownDeadlines.length > 0 && shownDeadlines.length <= 5);
+  assert.match(context, /ほか \d+ 件/);
+  for (const item of shownDeadlines) assert.match(context, new RegExp(`返事の例: ${item.key} 完了／延期 11/20／不要`));
   assert.ok(context.indexOf('期限-8 更新') < context.indexOf('一覧:'), 'deadline before general info');
   assert.equal(await main(['--close-key', 'D-2'], { home, stdout: () => {} }), 0);
   assert.equal(listItems(home, { status: 'open' }).filter(i => i.key === 'D-2').length, 0);
@@ -482,7 +529,8 @@ test('急ぎは短い要約を保ち、未表示優先・最大5件・open限定
     assert.deepEqual(item.shownSessions, ['s']);
   }
   assert.match(context, /ほか \d+ 件/);
-  assert.doesNotMatch(context, /切り捨て部分|urgent-0|urgent-6|closed-urgent/);
+  assert.doesNotMatch(context, /urgent-0|urgent-6|closed-urgent/);
+  for (const item of displayed) assert.ok(context.includes(item.text), 'topic keeps the entire first line');
   assert.equal(urgent[0].shownCount, 0);
   assert.equal(urgent[6].shownCount, 1);
 });

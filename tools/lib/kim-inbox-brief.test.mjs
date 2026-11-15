@@ -30,6 +30,12 @@ test('resume-failed info: extracts topic/happened/decide/reply correctly', t => 
   assert.ok(brief.happened.includes('自動再開が連続失敗しています'), `happened: ${brief.happened}`);
   assert.match(brief.decide, /自動再開が止まっている/, `decide for resume-failed: ${brief.decide}`);
   assert.match(brief.reply, /続けて/, `reply: ${brief.reply}`);
+  assert.deepEqual(brief, {
+    topic: '作業用014: トーエネックにメールをおくって',
+    happened: '自動再開が連続失敗しています',
+    decide: '自動再開が止まっている。続けるか中止するか',
+    reply: 'N 続けて／N 中止', links: [],
+  });
 });
 
 test('ask with reply-waiting: extracts decide from あなたの返事待ち line', t => {
@@ -44,6 +50,39 @@ test('ask with reply-waiting: extracts decide from あなたの返事待ち line
   assert.match(brief.reply, /可/, `reply for ask should include options`);
   assert.ok(brief.links.length > 0, `should have at least one link`);
   assert.deepEqual(brief.links, ['https://docs.google.com/document/d/AAA/edit?authuser=kim@orgiast.jp']);
+  assert.equal(brief.topic, '作業用014: Bで。ただし、作り方などはこれまでの蓄積を完全に引き継いでいるかチェックして。引き継がれていないなら…');
+  assert.equal(brief.decide, 'kim@orgiast.jp で開いてください: https://docs.google.com/document/d/AAA/edit?authuser=kim@orgiast.jp');
+  assert.equal(brief.reply, 'N 可／N 不要／N <指示>');
+});
+
+test('long action and registration URLs remain complete; reply uses the displayed number', () => {
+  const url = 'https://example.com/register?authuser=kim@orgiast.jp&token=' + 'x'.repeat(250);
+  const item = makeItem({ kind: 'ask', source: 'knowledge-lock-passkey-link',
+    text: `鍵の登録\n判断してほしいこと: 登録してください: ${url}\n登録リンク: ${url}\nhttps://example.com/help` });
+  const brief = inboxBrief(item);
+  assert.equal(brief.decide, `登録してください: ${url}`);
+  assert.deepEqual(brief.links, [url, url, 'https://example.com/help']);
+  assert.ok(formatInboxBrief(item, 7).includes(`開く: ${url}`));
+  assert.match(formatInboxBrief(item, 7), /返事の例: 7 可／7 不要／7 <指示>/);
+});
+
+test('no inferred approval from passive waiting; explicit labels and deadlines are preserved', () => {
+  const passive = makeItem({ kind: 'ask', text: '自動進行が判断待ちです: 資料を監視する' });
+  assert.equal(inboxBrief(passive).decide, `返事内容の指定なし（原文確認: node tools/kim-inbox.mjs --show ${passive.id}）`);
+  for (const label of ['あなたの返事待ち', '答えてほしいこと', '判断してほしいこと', '承認待ち', '約束']) {
+    assert.equal(inboxBrief({ ...passive, text: `報告\n${label}： 資料を確認する` }).decide, '資料を確認する');
+  }
+  assert.equal(inboxBrief({ ...passive, kind: 'deadline', key: 'D-017' }).reply, 'D-017 完了／延期 11/20／不要');
+  assert.equal(inboxBrief({ ...passive, text: '完了\nkim の承認待ち 8 件:\n1. 外部公開' }).decide, 'kim の承認待ち 8 件:');
+});
+
+test('only happened is capped; headerless bracket headings and purpose slash are meaningful', () => {
+  const first = '【連絡】' + 'あ'.repeat(150);
+  const brief = inboxBrief(makeItem({ from: 'DELL', text: first }));
+  assert.equal(brief.topic, `作業用014: ${first}`);
+  assert.equal(Array.from(brief.happened).length, 120);
+  assert.equal(inboxBrief(makeItem({ text: '【DELL・user@example.com の Claude Code】プロジェクト: 配布 ／ セッションの目的: A／Bを比較… ／ 作業ID: 12345678\n確認が完了' })).topic, '作業用014: A／Bを比較…');
+  assert.equal(inboxBrief(makeItem({ text: '【DELL・user@example.com の Claude Code】プロジェクト: 配布 ／ 作業ID: 12345678\n確認が完了' })).topic, '作業用014: 確認が完了');
 });
 
 test('info without special source: decide is 判断不要（報告のみ）', t => {

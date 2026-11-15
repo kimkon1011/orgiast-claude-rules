@@ -18,7 +18,7 @@ const FOOTER_PATTERN = /(?:^|\n)次に kim がすること:[ \t]*([^\r\n]*)\r?\n
 // Match list/action separators; exclude digit-grouping commas (e.g. "7,920円")
 // and 「、または」「、もしくは」「、あるいは」disjunctive phrases (one choice, not two actions).
 const MULTIPLE_ACTIONS_PATTERN = /[、・](?!\s*(?:または|もしくは|あるいは))|(?<!\d)[,，](?!\d)/;
-const ACTION_LABEL_PATTERN = /[①-⑳]|[A-ZＡ-Ｚa-z0-9０-９一二三]案|案[A-ZＡ-Ｚ0-9０-９]|選択肢\s*[0-9０-９]+|(?:番号|記号)で(?:選|答|返)/gu;
+const ACTION_LABEL_PATTERN = /[①-⑳]|[A-ZＡ-Ｚa-z0-9０-９一二三]案|案[A-ZＡ-Ｚ0-9０-９]|選択肢\s*[0-9０-９]+|(?:番号|記号)で(?:選|答|返)|(?:方法|プラン|パターン|手段|ルート|オプション)[A-ZＡ-Ｚa-z0-9０-９]/gu;
 const LABEL_ONLY_REASON = '[NEXT-ACTION-LABEL-ONLY] 「次に kim がすること」にラベル（①・B案・案A など）だけが書かれています。kim はそのラベルの中身を探しに遡る羽目になります（kim 2026-10-28）。(1) kim の過去の決定がある・支払いや同意が要らない・取り消せる判断なら、聞かずに Claude が決めて進め、結果を報告する。この行は「なし」にする (2) どうしても聞くなら、ラベルではなく中身をこの1行に書く（例:「1Password を月 $24.95 で契約するかを はい/いいえ で答える」）。例外は [NEXT-ACTION-LABEL-OK: <理由>]。';
 
 function hasUnexplainedLabel(action) {
@@ -26,6 +26,46 @@ function hasUnexplainedLabel(action) {
     const suffix = action.slice(match.index + match[0].length);
     const explanation = suffix.match(/^(?:（([^（）\r\n]*)）|\(([^()\r\n]*)\))/u);
     if (!explanation || [...(explanation[1] ?? explanation[2]).trim()].length < 8) return true;
+  }
+  return false;
+}
+
+// 本文（フッターより前）にラベル語（A案/案B/方法C/選択肢2等）が出てくるとき、
+// ①各行でラベル直後に8文字以上の説明があること
+// ②英字ラベルの最大値より前の英字ラベル（Cを使うならAとB）が全て本文に存在すること
+// を要求する。違反なら true。
+function hasBodyLabelViolations(body) {
+  const re = /[①-⑳]|[A-Za-zＡ-Ｚａ-ｚ]案|案[A-Za-zＡ-Ｚ]|選択肢\s*\d+|(?:方法|プラン|パターン|手段|ルート|オプション)[A-Za-zＡ-Ｚａ-ｚ0-9]|(?:番号|記号)で(?:選|答|返)/g;
+  let match;
+  const letters = [];
+  while ((match = re.exec(body)) !== null) {
+    const label = match[0];
+    // 「番号で選ぶ」などはアクション記述であって具体ラベルではないのでスキップ
+    if (/^(?:番号|記号)で/.test(label)) continue;
+    // 同じ行でラベルの直後に説明（括弧内8文字以上）があるか
+    const bol = body.lastIndexOf('\n', match.index) + 1;
+    const eol = body.indexOf('\n', match.index);
+    const line = body.slice(bol, eol === -1 ? undefined : eol);
+    const after = line.slice(match.index - bol + label.length).trim();
+    const paren = after.match(/^(?:（([^（）]*)）|\(([^()]*)\))/);
+    if (!paren || [...(paren[1] ?? paren[2]).trim()].length < 8) return true;
+    // 英字ラベルの文字を収集（シーケンス完全性検査用）
+    const letter = label.match(/[A-Za-zＡ-Ｚａ-ｚ]/);
+    if (letter) {
+      const raw = letter[0];
+      const upper = raw >= 'ａ' && raw <= 'ｚ' ? String.fromCharCode(raw.charCodeAt(0) - 0x60)
+        : raw >= 'Ａ' && raw <= 'Ｚ' ? String.fromCharCode(raw.charCodeAt(0) - 0x20)
+        : raw.toUpperCase();
+      letters.push(upper);
+    }
+  }
+  // 英字ラベルシーケンス完全性: Cを使うならAとBも存在する
+  if (letters.length > 0) {
+    const unique = [...new Set(letters)]; // Set preserves insertion order
+    const maxOrd = Math.max(...unique.map(l => l.charCodeAt(0) - 65));
+    for (let ord = 0; ord < maxOrd; ord++) {
+      if (!unique.includes(String.fromCharCode(65 + ord))) return true;
+    }
   }
   return false;
 }
@@ -404,24 +444,23 @@ function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {
 // Report independent footer defects together. The single evaluator remains the source of truth
 // for ordered checks; the supplement reports waiting checks and independent footer
 // defects together, including launches hidden by a missing footer.
-// stop_hook_active 中の SESSION-OPEN-NO-DEADLINE 連続ブロック回数を管理する。
+// stop_hook_active 中の全ブロック回数を管理する。
 // 同じ session_id で連続2回まで block、3回目以降は pass する（無限ループ防止）。
-const NO_DEADLINE_COUNTER_FILE = () => path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'next-action-no-deadline-counter.json');
+const STOP_HOOK_BLOCK_COUNTER_FILE = () => path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'next-action-stop-hook-counter.json');
 
-function readNoDeadlineCounter() {
-  try { return JSON.parse(fs.readFileSync(NO_DEADLINE_COUNTER_FILE(), 'utf8')); } catch { return {}; }
+function readStopHookCounter() {
+  try { return JSON.parse(fs.readFileSync(STOP_HOOK_BLOCK_COUNTER_FILE(), 'utf8')); } catch { return {}; }
 }
 
-function writeNoDeadlineCounter(data) {
+function writeStopHookCounter(data) {
   try {
-    fs.mkdirSync(path.dirname(NO_DEADLINE_COUNTER_FILE()), { recursive: true });
-    fs.writeFileSync(NO_DEADLINE_COUNTER_FILE(), JSON.stringify(data));
+    fs.mkdirSync(path.dirname(STOP_HOOK_BLOCK_COUNTER_FILE()), { recursive: true });
+    fs.writeFileSync(STOP_HOOK_BLOCK_COUNTER_FILE(), JSON.stringify(data));
   } catch { /* fail-open */ }
 }
 
-// stop_hook_active 中でも SESSION-OPEN-NO-DEADLINE だけは検査する。
-// 連続2回まで block、3回目以降は pass。
-function checkNoDeadlineDuringStopHook(text, input) {
+// stop_hook_active 中でも SESSION-OPEN-NO-DEADLINE を検査する（カウンターは呼び出し元で管理）。
+function checkNoDeadline(text, input) {
   const source = String(text || '').trimEnd();
   const footer = footerValues(source);
   if (!footer) return null;
@@ -429,15 +468,6 @@ function checkNoDeadlineDuringStopHook(text, input) {
   if (sessionState) return null; // 有効な定型文（期限あり含む）なら pass
   if (!footer.session.startsWith('まだ閉じない（作業中') && !footer.session.startsWith('/session-close をして（まだ閉じない')) return null;
   // 期限なしの「まだ閉じない」
-  const sessionId = input?.session_id || input?.sessionId || '';
-  const counter = readNoDeadlineCounter();
-  const count = (counter[sessionId] || 0) + 1;
-  if (count >= 3) {
-    // 3回目以降は pass（カウンターをリセットしない）
-    return null;
-  }
-  counter[sessionId] = count;
-  writeNoDeadlineCounter(counter);
   const state = footer.session.startsWith('/session-close') ? 'pending' : 'open';
   return {
     decision: 'block',

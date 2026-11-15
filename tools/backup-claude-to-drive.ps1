@@ -186,7 +186,7 @@ function Find-GoogleDrive {
     if ($description -eq 'Google Drive') { return $drive.Root }
   }
   foreach ($drive in $candidates) {
-    if ((Test-Path -LiteralPath (Join-Path $drive.Root 'マイドライブ') -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath (Join-Path $drive.Root 'My Drive') -ErrorAction SilentlyContinue)) { return $drive.Root }
+    if ((Test-Path -LiteralPath ([IO.Path]::Combine($drive.Root, 'マイドライブ')) -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath ([IO.Path]::Combine($drive.Root, 'My Drive')) -ErrorAction SilentlyContinue)) { return $drive.Root }
   }
   if (Test-Path -LiteralPath 'H:\' -ErrorAction SilentlyContinue) { return 'H:\' }
   return $null
@@ -323,9 +323,9 @@ try {
   if (-not $DryRun -and (-not $driveProcess -or -not $driveRoot)) { Stop-DriveNotAvailable }
   if (-not $driveRoot) { throw 'Google Drive のマウントが見つかりません' }
 
-  $myDriveName = if (Test-Path -LiteralPath (Join-Path $driveRoot 'マイドライブ')) { 'マイドライブ' } elseif (Test-Path -LiteralPath (Join-Path $driveRoot 'My Drive')) { 'My Drive' } else { 'マイドライブ' }
-  $script:driveBackup = Join-Path (Join-Path (Join-Path $driveRoot $myDriveName) 'Claude-Backups') $hostname
-  $driveZip = Join-Path $script:driveBackup ('claude-{0}-{1}.zip' -f $hostname, (Get-Date).ToString('yyyy-MM-dd'))
+  $myDriveName = if (Test-Path -LiteralPath ([IO.Path]::Combine($driveRoot, 'マイドライブ')) -ErrorAction SilentlyContinue) { 'マイドライブ' } elseif (Test-Path -LiteralPath ([IO.Path]::Combine($driveRoot, 'My Drive')) -ErrorAction SilentlyContinue) { 'My Drive' } else { 'マイドライブ' }
+  $script:driveBackup = [IO.Path]::Combine([IO.Path]::Combine([IO.Path]::Combine($driveRoot, $myDriveName), 'Claude-Backups'), $hostname)
+  $driveZip = [IO.Path]::Combine($script:driveBackup, ('claude-{0}-{1}.zip' -f $hostname, (Get-Date).ToString('yyyy-MM-dd')))
   Write-Event ('plan staging={0} destination={1}' -f $stagingDir, $driveZip)
   Write-Event ('plan structure={0}<=~/.claude; {1}<=home files/directories/tasks/repo/npm/manifest; {2}<=~/.codex' -f $stagingClaudeDir, $stagingHomeDir, $stagingCodexDir)
 

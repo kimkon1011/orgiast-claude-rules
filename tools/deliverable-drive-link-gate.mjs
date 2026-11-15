@@ -12,7 +12,11 @@ const canonicalFile = file => file.replaceAll('\\', '/').replace(/^\/mnt\/c\//i,
 const deliverable = /PDF|書面|ファイル|資料|チラシ|フライヤー|画像|写真|初稿|第\d+稿|原稿|Doc|ドキュメント|スプレッドシート|シート|Excel|xlsx|見積|企画書|提案書|計画書|報告書|台本|デザイン|スライド|デッキ|リスト|一覧表|動画|告知|LP|ページ|印刷|FAX|送付|提出|添付/i;
 const reviewAction = /見て|見せ|確認|チェック|レビュー|開いて|目を通|直し|修正|OK|よいですか|いいですか|返信|承認|送って|印刷|提出|添付|してください|お願いします|していただ|してくださいませんか/i;
 const explicitNoUrl = /URLなし\s*[（(]\s*理由\s*[:：]\s*[^）)]+[）)]/i;
+// 承認コンテキストで成果物にURLが必要なことを検出するパターン
+const approvalWord = /承認|よいですか|いいですか|送ってよい|どれ[にでか]?[（(]|選ん[でだ]|確認してください|確認をお願い|OK[^)]*(?:です|でしょ|だ|で)/i;
+const deliverableApprovalItem = /[梅竹松]|案[1-9]|[A-D]案|パース|提案書|見積(?:もり)?[をはがの]?|スライド|メール本文|草案|案文|PDF[^/]|画像[をはがの]?|Doc[^s]|デザイン|プラン|図面|レイアウト|イメージ|チラシ|フライヤー|企画書|企画案/i;
 const reason = '成果物を Drive にアップし、最終メッセージの③の依頼と同じ箇所に URL（authuser=開く人のメール付き）を書いてください。② と ③ で見てもらう成果物は、その行に Drive の URL を書く（例: - チラシ初稿 PDF https://drive.google.com/file/d/…/view）。例: node tools/drive-upload.mjs --file <path> --folder <folderId> --authuser <開く人のメール>。鍵が無い PC は rclone copyto <file> <remote>:<name> --drive-root-folder-id <folderId>（drive リモート）、または Drive MCP。全部失敗したら [DRIVE-UPLOAD-FAILED: <エラー本文>] を書いてください。';
+const approvalReason = '承認を依頼する成果物（パース・提案書・画像等）ごとに、同じ行または直後2行以内にDrive/DocsのURL（authuser=開く人のメール付き）を書いてください。例: - 梅パース https://drive.google.com/file/d/…/view?authuser=kim@orgiast.jp。URLが無い場合は「URLなし（理由: …）」と明記してください。';
 
 function summaryUnits(text) {
   const start = text.indexOf('【最終まとめ】');
@@ -47,6 +51,26 @@ function summaryUnits(text) {
   return units;
 }
 
+/**
+ * 承認コンテキストのチェック:
+ * 承認・確認・選択を求める語と成果物語が同じ行にある場合、
+ * その行または直後2行以内に Drive/Docs URL があることを確認する。
+ */
+function judgeApprovalContext(text) {
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!approvalWord.test(line)) continue;
+    if (!deliverableApprovalItem.test(line)) continue;
+    // この行 + 直後2行に URL があるか
+    const context = lines.slice(i, Math.min(i + 3, lines.length)).join('\n');
+    if (!urls(context).length && !explicitNoUrl.test(context)) {
+      return 'block';
+    }
+  }
+  return 'pass';
+}
+
 export function judgeDeliverableDriveLink({ text = '', toolUses = [] } = {}) {
   const files = new Set();
   for (const tool of toolUses) {
@@ -61,6 +85,8 @@ export function judgeDeliverableDriveLink({ text = '', toolUses = [] } = {}) {
   const result = { decision: 'pass', code: 'DELIVERABLE-DRIVE-LINK', files: [...files] };
   if ([...text.matchAll(/\[DRIVE-UPLOAD-FAILED:([^\]]*)\]/g)].some(m => [...m[1].trim()].length >= 20)) return result;
   const scannable = stripQuoted(text);
+  // 承認コンテキストのチェック（引用外の全テキストを対象）
+  if (judgeApprovalContext(scannable) === 'block') return { ...result, decision: 'block', reason: approvalReason };
   const attachment = /端末[にへ]送りました|添付しました|添付のPDF|SendUserFile|チャットに送りました/i.test(scannable);
   const summary = scannable.indexOf('【最終まとめ】');
   const sections = summary < 0 ? [] : [...scannable.slice(summary).matchAll(/③[^\n]*(?:\n(?![ \t#*]*[①②③])[^\n]*)*/g)].map(m => m[0]);

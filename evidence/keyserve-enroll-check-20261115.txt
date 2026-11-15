@@ -1,0 +1,21 @@
+=== Keyserve Re-enrollment Direct Verification Log ===
+Date: 2026-11-15
+Target PC: DESKTOP-8NKVJ12
+
+--- Check 1: node tools/keyserve-status.mjs ---
+Output:
+認証経路: legacy
+keyserve: 失敗 (HTTP 401)
+配布ファイル: なし
+401 = この PC の秘密が keyserve に登録されていません。kim に enroll トークンの発行を依頼してください。
+
+--- Check 2: node tools/keyserve-enroll.mjs --pc DESKTOP-8NKVJ12 --ttl-hours 2 --json ---
+Exit Code: 1
+Output: このPCは primary を持っていないので発行できません。primary を持つ別PCで実行してください。
+
+--- Conclusion ---
+1. DESKTOP-8NKVJ12 does not possess primary keyserve credentials.
+2. Generating an enrollment token requires execution on kim-PC (which holds primary key authority).
+3. This PC does not have fleet-mail configured to issue auto-requests to kim-PC.
+4. Therefore, autonomous resolution without human action (running enroll command on kim-PC) is impossible.
+Completed Status: false

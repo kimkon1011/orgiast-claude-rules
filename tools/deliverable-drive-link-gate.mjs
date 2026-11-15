@@ -13,10 +13,27 @@ const deliverable = /PDF|書面|ファイル|資料|チラシ|フライヤー|�
 const reviewAction = /見て|見せ|確認|チェック|レビュー|開いて|目を通|直し|修正|OK|よいですか|いいですか|返信|承認|送って|印刷|提出|添付|してください|お願いします|していただ|してくださいませんか/i;
 const explicitNoUrl = /URLなし\s*[（(]\s*理由\s*[:：]\s*[^）)]+[）)]/i;
 // 承認コンテキストで成果物にURLが必要なことを検出するパターン
-const approvalWord = /承認|よいですか|いいですか|送ってよい|どれ|選ん[でだ]|確認してください|確認をお願い|OK[^)]*(?:です|でしょ|だ|で)/i;
+const approvalWord = /承認|よいですか|いいですか|送ってよい|どれ|選ん[でだ]|確認してください|確認をお願い|判断|OK[^)]*(?:です|でしょ|だ|で)/i;
 const deliverableApprovalItem = /[梅竹松]|案[1-9]|[A-D]案|パース|提案書|見積(?:もり)?[をはがの]?|スライド|メール本文|草案|案文|PDF[^/]|画像[をはがの]?|Doc[^s]|デザイン|プラン|図面|レイアウト|イメージ|チラシ|フライヤー|企画書|企画案/i;
 const reason = '成果物を Drive にアップし、最終メッセージの③の依頼と同じ箇所に URL（authuser=開く人のメール付き）を書いてください。② と ③ で見てもらう成果物は、その行に Drive の URL を書く（例: - チラシ初稿 PDF https://drive.google.com/file/d/…/view）。例: node tools/drive-upload.mjs --file <path> --folder <folderId> --authuser <開く人のメール>。鍵が無い PC は rclone copyto <file> <remote>:<name> --drive-root-folder-id <folderId>（drive リモート）、または Drive MCP。全部失敗したら [DRIVE-UPLOAD-FAILED: <エラー本文>] を書いてください。';
-const approvalReason = '承認を依頼する成果物（パース・提案書・画像等）ごとに、同じ行または直後2行以内にDrive/DocsのURL（authuser=開く人のメール付き）を書いてください。例: - 梅パース https://drive.google.com/file/d/…/view?authuser=kim@orgiast.jp。URLが無い場合は「URLなし（理由: …）」と明記してください。';
+const approvalReason = '成果物ごとの実物URL（Drive）を承認項目の同じ行（または直後2行以内）に書いてください。見つからなければ Drive へアップし直す。URLには authuser=<開く人のメール> を付け、近傍に「<メール> で開いてください」と書いてください。例外は「URLなし（理由: …）」と明記します。';
+
+function validApprovalUrls(text) {
+  return urls(text).filter(raw => {
+    try {
+      const account = new URL(raw).searchParams.get('authuser');
+      if (!account || !/^[^\s@]+@[^\s@]+$/.test(account)) return false;
+      const escaped = account.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`${escaped}\\s*で開いてください`, 'i').test(text);
+    } catch { return false; }
+  });
+}
+
+function requiredApprovalUrlCount(line) {
+  const specific = [...line.matchAll(/(?:梅|竹|松)|(?:[A-DＡ-Ｄ]\s*案)|(?:案\s*[1-9１-９])/gi)]
+    .map(match => match[0].replace(/\s/g, '').toUpperCase());
+  return Math.max(1, new Set(specific).size);
+}
 
 function summaryUnits(text) {
   const start = text.indexOf('【最終まとめ】');
@@ -57,14 +74,15 @@ function summaryUnits(text) {
  * その行または直後2行以内に Drive/Docs URL があることを確認する。
  */
 function judgeApprovalContext(text) {
+  if (!approvalWord.test(text) || !deliverableApprovalItem.test(text)) return 'pass';
   const lines = text.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (!approvalWord.test(line)) continue;
     if (!deliverableApprovalItem.test(line)) continue;
-    // この行 + 直後2行に URL があるか
+    // 成果物の行 + 直後2行に、成果物数以上の有効な URL があるか。
     const context = lines.slice(i, Math.min(i + 3, lines.length)).join('\n');
-    if (!urls(context).length && !explicitNoUrl.test(context)) {
+    if (explicitNoUrl.test(context)) continue;
+    if (validApprovalUrls(context).length < requiredApprovalUrlCount(line)) {
       return 'block';
     }
   }

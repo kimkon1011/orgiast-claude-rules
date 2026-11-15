@@ -54,7 +54,7 @@ test('②で確認してもらう成果物にも同じ単位のDrive URLが必�
 **③ kim がやること**
 - 上の2つの確認事項に返信する。`;
   assert.equal(judge({ text }).decision, 'block');
-  assert.equal(judge({ text: text.replace('見せてよいですか？', '見せてよいですか？ https://drive.google.com/file/d/example/view') }).decision, 'pass');
+  assert.equal(judge({ text: text.replace('見せてよいですか？', '見せてよいですか？ https://drive.google.com/file/d/example/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください') }).decision, 'pass');
 });
 
 test('対象外の報告と成果物を参照しない返信は通す', () => {
@@ -142,15 +142,18 @@ test('承認コンテキスト: 梅竹松プラン承認依頼にURLなし→blo
   assert.equal(judge({ text }).decision, 'block');
 });
 
-test('承認コンテキスト: 梅竹松プラン承認依頼にURLあり→pass', () => {
-  const text = '梅のパース https://drive.google.com/file/d/ume/view?authuser=kim@orgiast.jp、竹のパース https://drive.google.com/file/d/take/view?authuser=kim@orgiast.jp、どれを載せるか決めてください。';
+test('承認コンテキスト: 梅竹松プラン承認依頼に成果物ごとのURLと開き方があればpass', () => {
+  const text = `梅のパース https://drive.google.com/file/d/ume/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください
+竹のパース https://drive.google.com/file/d/take/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください
+松のパース https://drive.google.com/file/d/matsu/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください
+どれを載せるか決めてください。`;
   assert.equal(judge({ text }).decision, 'pass');
 });
 
-test('承認コンテキスト: 直後2行以内にURLがあればpass', () => {
+test('承認コンテキスト: 複数成果物にURLが1本だけならblock', () => {
   const text = `梅のパース、竹のパース、松のパース、どれがよいですか？
-https://drive.google.com/file/d/ume/view?authuser=kim@orgiast.jp`;
-  assert.equal(judge({ text }).decision, 'pass');
+https://drive.google.com/file/d/ume/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください`;
+  assert.equal(judge({ text }).decision, 'block');
 });
 
 test('承認コンテキスト: 3行以上離れたURLは不十分→block', () => {
@@ -182,7 +185,13 @@ test('承認コンテキスト: 提案書の確認依頼にURLなし→block', (
 });
 
 test('承認コンテキスト: 提案書の確認依頼にURLあり→pass', () => {
-  assert.equal(judge({ text: '提案書を確認してください。 https://docs.google.com/document/d/proposal/edit?authuser=kim@orgiast.jp' }).decision, 'pass');
+  assert.equal(judge({ text: '提案書を確認してください。 https://docs.google.com/document/d/proposal/edit?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください' }).decision, 'pass');
+});
+
+test('承認コンテキスト: authuser欠落または開くアカウント案内欠落→block', () => {
+  assert.equal(judge({ text: '提案書を確認してください。 https://docs.google.com/document/d/proposal/edit kim@orgiast.jp で開いてください' }).decision, 'block');
+  assert.equal(judge({ text: '提案書を確認してください。 https://docs.google.com/document/d/proposal/edit?authuser=kim@orgiast.jp' }).decision, 'block');
+  assert.equal(judge({ text: '提案書を確認してください。 https://docs.google.com/document/d/proposal/edit?authuser=other@orgiast.jp kim@orgiast.jp で開いてください' }).decision, 'block');
 });
 
 test('承認コンテキスト: メール本文の草案承認依頼→block', () => {
@@ -198,7 +207,7 @@ test('承認コンテキスト: A案B案の選択依頼にURLなし→block', ()
 });
 
 test('承認コンテキスト: A案B案の選択依頼にURLあり→pass', () => {
-  assert.equal(judge({ text: 'A案 https://drive.google.com/file/d/a/view?authuser=kim@orgiast.jp と B案 https://drive.google.com/file/d/b/view?authuser=kim@orgiast.jp、どちらがよいですか？' }).decision, 'pass');
+  assert.equal(judge({ text: 'A案 https://drive.google.com/file/d/a/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください\nB案 https://drive.google.com/file/d/b/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください\nどちらがよいですか？' }).decision, 'pass');
 });
 
 test('承認コンテキスト: コードブロック内は対象外', () => {

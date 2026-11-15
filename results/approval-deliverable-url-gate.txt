@@ -1,0 +1,33 @@
+# 承認依頼に成果物の実物URLを必須化（2026-11-15）
+
+## 変更ファイル一覧
+- `tools/deliverable-drive-link-gate.mjs`
+- `tools/deliverable-drive-link-gate.test.mjs`
+- `tools/gate-remedies.md`
+- `ONBOARDING.md`
+- `results/approval-deliverable-url-gate.txt`
+
+## テスト実行結果（実出力）
+実行コマンド:
+`node --test tools/deliverable-drive-link-gate.test.mjs tools/gate-contract.test.mjs tools/gate-runtime.test.mjs`
+
+```text
+ℹ tests 128
+ℹ suites 0
+ℹ pass 128
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7184.7472
+```
+
+全体確認として `node --test` も実行したが、多数の成功後に既存の
+`tools/gate-readonly.test.mjs` と `tools/rescue-review-scan.test.mjs` が終了せず、
+さらに共有作業ツリーを detached 状態へ変更したため中断した。
+対象ブランチを独立worktreeへ復元し、全体テスト成功とは記録しない。
+
+## PR URL
+https://github.com/kimkon1011/orgiast-claude-rules/pull/2090
+
+ゲート追加のため手動マージ必須。automerge ラベルは付けない。

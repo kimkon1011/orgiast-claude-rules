@@ -645,12 +645,13 @@ test('先行ゲートが全て降格された場合は第2段の監査で手渡�
   const text = [
     '本文です。結果をまとめました。',
     '',
-    '【kim 確認用の全文】',
-    'A案: 見積を据え置く。B案: 値引きする。',
-    '',
     '恒久策: 一回限り: この判断だけは kim に確認する。',
     '',
-    '次に kim がすること: 見積を据え置くか値引きするか教えてください。',
+    '【kim 確認用の全文】',
+    // 未作成の価格方針の選択。URL例外を明示し、reply-onlyの第2段監査を検証する。
+    'A案: 見積を据え置く。B案: 値引きする。 URLなし（理由: 価格方針の選択だけで未作成）',
+    '',
+    '次に kim がすること: 見積を据え置くか値引きするか教えてください。 URLなし（理由: 価格方針の選択だけで未作成）',
     'この後の自動進行: なし',
     'このセッション: /session-close は不要なので、このセッションを閉じてよい',
   ].join('\n');
@@ -664,7 +665,7 @@ test('先行ゲートが全て降格された場合は第2段の監査で手渡�
     { assistantText: text, humanText: '', raw: '' },
     { mode: 'block', ask, home, policyOptions: { notify: async () => ({ delivered: 'suppressed' }) } },
   );
-  assert.equal(asks.length, 1, '第2段の監査が1回だけ走る');
+  assert.equal(asks.length, 1, `第2段の監査が1回だけ走る: ${JSON.stringify(result.record)}`);
   assert.equal(result.record.verdict, 'block');
   assert.deepEqual(result.record.blockedBy, ['handoff-audit-gate']);
 });

@@ -1,0 +1,1701 @@
+# 承認依頼に成果物の実物URLを必須化（2026-11-15）
+
+PR: https://github.com/kimkon1011/orgiast-claude-rules/pull/2090
+ゲート追加のため手動マージ必須。レビュー必須。automergeラベルなし、pr-land未使用、マージ・配布未実施。
+
+同目的の既存PR #2090を確認し、重複PRを作らず追記。
+新規worktree: C:/Users/USER/.claude/approval-url-review-worktree
+作業ブランチ: fix/approval-url-gate-review-20261115
+開始SHA: 14aa35d3a84f9a11381dc0532a414c919aced340
+push先: feat/approval-deliverable-url-gate（既存PRのhead、通常のfast-forward push）
+
+## 変更ファイル一覧（PR全体）
+- tools/deliverable-drive-link-gate.mjs
+- tools/deliverable-drive-link-gate.test.mjs
+- tools/stop-gate-runner.test.mjs
+- tools/gate-remedies.md
+- ONBOARDING.md
+- CLAUDE.md.template（render-claude-template.mjsで正本から再生成）
+- results/approval-deliverable-url-gate.txt（本ファイル）
+
+## 変更と検証範囲
+- 最終まとめ見出しの有無にかかわらず、承認語と成果物語がある最終メッセージを検査。
+- 各成果物の同じ行または直後2行の継続行にDrive/Docs URLを要求。次項目のURL・例外を流用しない。
+- authuserのメールとURL前後1行の開くアカウント案内を照合。同一URLの繰り返し、行末PDF/Doc、単独OK、全角案名も検証。
+- 空でない理由付きURLなし・引用・コードは例外。引用の行数は保存し、URLの距離を変えない。
+- 既存のローカルファイル数検査とStop登録・GATE_CONTRACT・retry制御は維持。新規hook登録は不要。
+- Stopの第2段監査テストは未作成の価格方針という理由を明示し、承認ブロックをフッター直前へ配置。本来の第2段監査でblockする期待値は維持。
+- URLのファイル内容や編集権限そのものはテキスト検査では確認できない。既存の共有・読み戻し手順を維持。
+- Claude APIの追加・呼び出しなし。実行ツリー・settings.jsonへの編集なし。
+
+## テスト結果
+最終版: ゲート/契約/配布/Stop関連259件 + 正本/テンプレート関連13件 = 272件成功、失敗0、skip0。
+途中の検証では第2段監査fixtureが先行ゲートに止まり1件失敗したが、上記fixture修正後に再実行し成功。
+全リポジトリの無指定node --testは今回実行していない。既存PRには全体テスト中断の記録があり、全体成功とは扱わない。
+
+実行コマンド（exit 0）:
+node --test --test-reporter=tap tools/deliverable-drive-link-gate.test.mjs tools/gate-contract.test.mjs tools/gate-runtime.test.mjs tools/stop-gate-runner.test.mjs tools/distribution-coverage.test.mjs tools/handoff-info-guard.test.mjs tools/lib/stop-recheck.test.mjs
+
+以下は当該コマンドの実出力（省略なし）:
+TAP version 13
+# Subtest: 実害文と③にURLを追加した修正版
+ok 1 - 実害文と③にURLを追加した修正版
+  ---
+  duration_ms: 4.8083
+  type: 'test'
+  ...
+# Subtest: SendUserFileの異なる2ファイルには2本必要
+ok 2 - SendUserFileの異なる2ファイルには2本必要
+  ---
+  duration_ms: 0.7451
+  type: 'test'
+  ...
+# Subtest: コードブロックと引用内の絶対パスも対象
+ok 3 - コードブロックと引用内の絶対パスも対象
+  ---
+  duration_ms: 0.7655
+  type: 'test'
+  ...
+# Subtest: 通常報告・引用・アップロード失敗証拠
+ok 4 - 通常報告・引用・アップロード失敗証拠
+  ---
+  duration_ms: 0.3002
+  type: 'test'
+  ...
+# Subtest: ③だけでも発火し、次の見出しのURLは数えない
+ok 5 - ③だけでも発火し、次の見出しのURLは数えない
+  ---
+  duration_ms: 0.1903
+  type: 'test'
+  ...
+# Subtest: ②で確認してもらう成果物にも同じ単位のDrive URLが必要
+ok 6 - ②で確認してもらう成果物にも同じ単位のDrive URLが必要
+  ---
+  duration_ms: 1.2529
+  type: 'test'
+  ...
+# Subtest: 対象外の報告と成果物を参照しない返信は通す
+ok 7 - 対象外の報告と成果物を参照しない返信は通す
+  ---
+  duration_ms: 0.3387
+  type: 'test'
+  ...
+# Subtest: 確認用見出しと③後のClaude側予定は成果物単位にしない
+ok 8 - 確認用見出しと③後のClaude側予定は成果物単位にしない
+  ---
+  duration_ms: 0.5323
+  type: 'test'
+  ...
+# Subtest: ③後でも次にkimがする成果物確認はURL必須
+ok 9 - ③後でも次にkimがする成果物確認はURL必須
+  ---
+  duration_ms: 0.1717
+  type: 'test'
+  ...
+# Subtest: runner: reply-only・既存cap後でも同じターン2回までblockし、3回目は専用cap
+ok 10 - runner: reply-only・既存cap後でも同じターン2回までblockし、3回目は専用cap
+  ---
+  duration_ms: 50.0411
+  type: 'test'
+  ...
+# Subtest: 専用カウントは合格でリセットし、別セッションへ持ち越さない
+ok 11 - 専用カウントは合格でリセットし、別セッションへ持ち越さない
+  ---
+  duration_ms: 8.251
+  type: 'test'
+  ...
+# Subtest: 承認コンテキスト: 梅竹松プラン承認依頼にURLなし→block
+ok 12 - 承認コンテキスト: 梅竹松プラン承認依頼にURLなし→block
+  ---
+  duration_ms: 0.2805
+  type: 'test'
+  ...
+# Subtest: 承認コンテキスト: 梅竹松プラン承認依頼に成果物ごとのURLと開き方があればpass
+ok 13 - 承認コンテキスト: 梅竹松プラン承認依頼に成果物ごとのURLと開き方があればpass
+  ---
+  duration_ms: 0.2803
+  type: 'test'
+  ...
+# Subtest: 承認コンテキスト: 複数成果物にURLが1本だけならblock
+ok 14 - 承認コンテキスト: 複数成果物にURLが1本だけならblock
+  ---
+  duration_ms: 0.1729
+  type: 'test'
+  ...
+# Subtest: 承認コンテキスト: 3行以上離れたURLは不十分→block
+ok 15 - 承認コンテキスト: 3行以上離れたURLは不十分→block
+  ---
+  duration_ms: 0.3249
+  type: 'test'
+  ...
+# Subtest: 承認コンテキスト: 引用内の承認文は対象外
+ok 16 - 承認コンテキスト: 引用内の承認文は対象外
+  ---
+  duration_ms: 0.1391
+  type: 'test'
+  ...
+# Subtest: 承認コンテキスト: URLなし（理由: …）の明記でpass
+ok 17 - 承認コンテキスト: URLなし（理由: …）の明記でpass
+  ---
+  duration_ms: 0.1011
+  type: 'test'
+  ...
+# Subtest: 承認コンテキスト: 成果物語が無い承認質問は対象外
+ok 18 - 承認コンテキスト: 成果物語が無い承認質問は対象外
+  ---
+  duration_ms: 0.1053
+  type: 'test'
+  ...
+# Subtest: 承認コンテキスト: 提案書の確認依頼にURLなし→block
+ok 19 - 承認コンテキスト: 提案書の確認依頼にURLなし→block
+  ---
+  duration_ms: 0.098
+  type: 'test'
+  ...
+# Subtest: 承認コンテキスト: 提案書の確認依頼にURLあり→pass
+ok 20 - 承認コンテキスト: 提案書の確認依頼にURLあり→pass
+  ---
+  duration_ms: 0.375
+  type: 'test'
+  ...
+# Subtest: 承認コンテキスト: authuser欠落または開くアカウント案内欠落→block
+ok 21 - 承認コンテキスト: authuser欠落または開くアカウント案内欠落→block
+  ---
+  duration_ms: 0.5997
+  type: 'test'
+  ...
+# Subtest: 承認コンテキスト: メール本文の草案承認依頼→block
+ok 22 - 承認コンテキスト: メール本文の草案承認依頼→block
+  ---
+  duration_ms: 0.1673
+  type: 'test'
+  ...
+# Subtest: 承認コンテキスト: 見積の確認依頼にURLなし→block
+ok 23 - 承認コンテキスト: 見積の確認依頼にURLなし→block
+  ---
+  duration_ms: 0.1828
+  type: 'test'
+  ...
+# Subtest: 承認コンテキスト: A案B案の選択依頼にURLなし→block
+ok 24 - 承認コンテキスト: A案B案の選択依頼にURLなし→block
+  ---
+  duration_ms: 0.1499
+  type: 'test'
+  ...
+# Subtest: 承認コンテキスト: A案B案の選択依頼にURLあり→pass
+ok 25 - 承認コンテキスト: A案B案の選択依頼にURLあり→pass
+  ---
+  duration_ms: 0.2402
+  type: 'test'
+  ...
+# Subtest: 承認コンテキスト: コードブロック内は対象外
+ok 26 - 承認コンテキスト: コードブロック内は対象外
+  ---
+  duration_ms: 0.1875
+  type: 'test'
+  ...
+# Subtest: 承認コンテキスト: 既存の通すケースを壊さない
+ok 27 - 承認コンテキスト: 既存の通すケースを壊さない
+  ---
+  duration_ms: 0.1231
+  type: 'test'
+  ...
+# Subtest: GridBeyond: 草案Docだけでは梅竹松のパースと提案書PDFを承認できない
+ok 28 - GridBeyond: 草案Docだけでは梅竹松のパースと提案書PDFを承認できない
+  ---
+  duration_ms: 0.3116
+  type: 'test'
+  ...
+# Subtest: 全承認語・行末の成果物語・全角案名を検出する
+ok 29 - 全承認語・行末の成果物語・全角案名を検出する
+  ---
+  duration_ms: 1.1509
+  type: 'test'
+  ...
+# Subtest: 同じ行と直後1〜2行のURLを認め、3行後・引用で距離が縮むURLは拒否
+ok 30 - 同じ行と直後1〜2行のURLを認め、3行後・引用で距離が縮むURLは拒否
+  ---
+  duration_ms: 0.2995
+  type: 'test'
+  ...
+# Subtest: 次の成果物のURLや例外理由は流用できない
+ok 31 - 次の成果物のURLや例外理由は流用できない
+  ---
+  duration_ms: 0.2005
+  type: 'test'
+  ...
+# Subtest: 異なる種類の成果物にも別URLが必要で、複合名は1件として扱う
+ok 32 - 異なる種類の成果物にも別URLが必要で、複合名は1件として扱う
+  ---
+  duration_ms: 0.3906
+  type: 'test'
+  ...
+# Subtest: 引用ブロック・コード・日本語引用を承認検査から除外する
+ok 33 - 引用ブロック・コード・日本語引用を承認検査から除外する
+  ---
+  duration_ms: 0.4134
+  type: 'test'
+  ...
+# Subtest: URLなし例外は理由必須、アップロード失敗だけでは承認検査を免除しない
+ok 34 - URLなし例外は理由必須、アップロード失敗だけでは承認検査を免除しない
+  ---
+  duration_ms: 0.1801
+  type: 'test'
+  ...
+# Subtest: URLのauthuserはメール、開くアカウント案内と一致、URL内の文字列は成果物にしない
+ok 35 - URLのauthuserはメール、開くアカウント案内と一致、URL内の文字列は成果物にしない
+  ---
+  duration_ms: 0.4015
+  type: 'test'
+  ...
+# Subtest: runner: 最終まとめなしの承認依頼も既存Stop登録からblockする
+ok 36 - runner: 最終まとめなしの承認依頼も既存Stop登録からblockする
+  ---
+  duration_ms: 8.2309
+  type: 'test'
+  ...
+# Subtest: (a) manifest は JSON として読め dirs/files/notDistributed を持つ
+ok 37 - (a) manifest は JSON として読め dirs/files/notDistributed を持つ
+  ---
+  duration_ms: 2.3832
+  type: 'test'
+  ...
+# Subtest: (b) リポジトリ直下の全項目が dirs/files/notDistributed のどれかに分類されている
+ok 38 - (b) リポジトリ直下の全項目が dirs/files/notDistributed のどれかに分類されている
+  ---
+  duration_ms: 89.213
+  type: 'test'
+  ...
+# Subtest: (c) tools が参照する実在トップレベルディレクトリは dirs に含まれる
+ok 39 - (c) tools が参照する実在トップレベルディレクトリは dirs に含まれる
+  ---
+  duration_ms: 567.6489
+  type: 'test'
+  ...
+# Subtest: (d) ドキュメントが参照する実在トップレベルディレクトリは dirs に含まれる
+ok 40 - (d) ドキュメントが参照する実在トップレベルディレクトリは dirs に含まれる
+  ---
+  duration_ms: 4.8638
+  type: 'test'
+  ...
+# Subtest: (e) 配布スクリプトは manifest を読み、直書き配列を主定義にしていない
+ok 41 - (e) 配布スクリプトは manifest を読み、直書き配列を主定義にしていない
+  ---
+  duration_ms: 2.0741
+  type: 'test'
+  ...
+# Subtest: (f) ls-files の NUL 区切り出力から最上位項目名を取り出す
+ok 42 - (f) ls-files の NUL 区切り出力から最上位項目名を取り出す
+  ---
+  duration_ms: 0.3273
+  type: 'test'
+  ...
+# Subtest: (g) gitignore 済みの最上位項目は除外され、未追跡の新規項目は残る
+ok 43 - (g) gitignore 済みの最上位項目は除外され、未追跡の新規項目は残る
+  ---
+  duration_ms: 84.6765
+  type: 'test'
+  ...
+# Subtest: answer-canonical-gate: reachable remedy contract
+ok 44 - answer-canonical-gate: reachable remedy contract
+  ---
+  duration_ms: 5.5481
+  type: 'test'
+  ...
+# Subtest: api-billing-guard: reachable remedy contract
+ok 45 - api-billing-guard: reachable remedy contract
+  ---
+  duration_ms: 1.366
+  type: 'test'
+  ...
+# Subtest: app-llm-cost-gate: reachable remedy contract
+ok 46 - app-llm-cost-gate: reachable remedy contract
+  ---
+  duration_ms: 1.0748
+  type: 'test'
+  ...
+# Subtest: askuser-selfcheck-gate: reachable remedy contract
+ok 47 - askuser-selfcheck-gate: reachable remedy contract
+  ---
+  duration_ms: 1.3787
+  type: 'test'
+  ...
+# Subtest: bg-turn-report-gate: reachable remedy contract
+ok 48 - bg-turn-report-gate: reachable remedy contract
+  ---
+  duration_ms: 1.5941
+  type: 'test'
+  ...
+# Subtest: bihin-kcol-gate: reachable remedy contract
+ok 49 - bihin-kcol-gate: reachable remedy contract
+  ---
+  duration_ms: 1.5222
+  type: 'test'
+  ...
+# Subtest: claude-fallback-report-gate: reachable remedy contract
+ok 50 - claude-fallback-report-gate: reachable remedy contract
+  ---
+  duration_ms: 0.9205
+  type: 'test'
+  ...
+# Subtest: cmd-ascii-guard: reachable remedy contract
+ok 51 - cmd-ascii-guard: reachable remedy contract
+  ---
+  duration_ms: 0.859
+  type: 'test'
+  ...
+# Subtest: control-group-stop-gate: reachable remedy contract
+ok 52 - control-group-stop-gate: reachable remedy contract
+  ---
+  duration_ms: 1.4667
+  type: 'test'
+  ...
+# Subtest: course-correction-gate: reachable remedy contract
+ok 53 - course-correction-gate: reachable remedy contract
+  ---
+  duration_ms: 1.4402
+  type: 'test'
+  ...
+# Subtest: decision-research-gate: reachable remedy contract
+ok 54 - decision-research-gate: reachable remedy contract
+  ---
+  duration_ms: 1.7267
+  type: 'test'
+  ...
+# Subtest: deferral-wait-gate: reachable remedy contract
+ok 55 - deferral-wait-gate: reachable remedy contract
+  ---
+  duration_ms: 1.2172
+  type: 'test'
+  ...
+# Subtest: delete-approval-gate: reachable remedy contract
+ok 56 - delete-approval-gate: reachable remedy contract
+  ---
+  duration_ms: 1.6607
+  type: 'test'
+  ...
+# Subtest: deliverable-drive-link-gate: reachable remedy contract
+ok 57 - deliverable-drive-link-gate: reachable remedy contract
+  ---
+  duration_ms: 1.3266
+  type: 'test'
+  ...
+# Subtest: doc-link-drive-guard: reachable remedy contract
+ok 58 - doc-link-drive-guard: reachable remedy contract
+  ---
+  duration_ms: 1.2829
+  type: 'test'
+  ...
+# Subtest: exec-tree-edit-guard: reachable remedy contract
+ok 59 - exec-tree-edit-guard: reachable remedy contract
+  ---
+  duration_ms: 0.8077
+  type: 'test'
+  ...
+# Subtest: external-state-claim-gate: reachable remedy contract
+ok 60 - external-state-claim-gate: reachable remedy contract
+  ---
+  duration_ms: 1.2101
+  type: 'test'
+  ...
+# Subtest: feedback-form-gate: reachable remedy contract
+ok 61 - feedback-form-gate: reachable remedy contract
+  ---
+  duration_ms: 1.4109
+  type: 'test'
+  ...
+# Subtest: gh-handoff-gate: reachable remedy contract
+ok 62 - gh-handoff-gate: reachable remedy contract
+  ---
+  duration_ms: 1.2832
+  type: 'test'
+  ...
+# Subtest: gmail-connector-url-gate: reachable remedy contract
+ok 63 - gmail-connector-url-gate: reachable remedy contract
+  ---
+  duration_ms: 1.1847
+  type: 'test'
+  ...
+# Subtest: handoff-action-gate: reachable remedy contract
+ok 64 - handoff-action-gate: reachable remedy contract
+  ---
+  duration_ms: 1.0831
+  type: 'test'
+  ...
+# Subtest: handoff-audit-gate: reachable remedy contract
+ok 65 - handoff-audit-gate: reachable remedy contract
+  ---
+  duration_ms: 1.362
+  type: 'test'
+  ...
+# Subtest: handoff-branch-coverage-gate: reachable remedy contract
+ok 66 - handoff-branch-coverage-gate: reachable remedy contract
+  ---
+  duration_ms: 0.9885
+  type: 'test'
+  ...
+# Subtest: handoff-detail-guard: reachable remedy contract
+ok 67 - handoff-detail-guard: reachable remedy contract
+  ---
+  duration_ms: 1.1212
+  type: 'test'
+  ...
+# Subtest: handoff-info-guard: reachable remedy contract
+ok 68 - handoff-info-guard: reachable remedy contract
+  ---
+  duration_ms: 1.0313
+  type: 'test'
+  ...
+# Subtest: handoff-investigation-gate: reachable remedy contract
+ok 69 - handoff-investigation-gate: reachable remedy contract
+  ---
+  duration_ms: 1.4224
+  type: 'test'
+  ...
+# Subtest: handoff-quality-gate: reachable remedy contract
+ok 70 - handoff-quality-gate: reachable remedy contract
+  ---
+  duration_ms: 1.4956
+  type: 'test'
+  ...
+# Subtest: handoff-regret-gate: reachable remedy contract
+ok 71 - handoff-regret-gate: reachable remedy contract
+  ---
+  duration_ms: 1.1376
+  type: 'test'
+  ...
+# Subtest: handover-doc-gate: reachable remedy contract
+ok 72 - handover-doc-gate: reachable remedy contract
+  ---
+  duration_ms: 1.1434
+  type: 'test'
+  ...
+# Subtest: hooks/discord-invite-permission-gate: reachable remedy contract
+ok 73 - hooks/discord-invite-permission-gate: reachable remedy contract
+  ---
+  duration_ms: 0.8531
+  type: 'test'
+  ...
+# Subtest: internal-recipient-gmail-guard: reachable remedy contract
+ok 74 - internal-recipient-gmail-guard: reachable remedy contract
+  ---
+  duration_ms: 0.9681
+  type: 'test'
+  ...
+# Subtest: japanese-response-gate: reachable remedy contract
+ok 75 - japanese-response-gate: reachable remedy contract
+  ---
+  duration_ms: 1.0582
+  type: 'test'
+  ...
+# Subtest: kim-discord-report-gate: reachable remedy contract
+ok 76 - kim-discord-report-gate: reachable remedy contract
+  ---
+  duration_ms: 0.8869
+  type: 'test'
+  ...
+# Subtest: knowledge-guard: reachable remedy contract
+ok 77 - knowledge-guard: reachable remedy contract
+  ---
+  duration_ms: 1.8028
+  type: 'test'
+  ...
+# Subtest: lane-abandonment-gate: reachable remedy contract
+ok 78 - lane-abandonment-gate: reachable remedy contract
+  ---
+  duration_ms: 1.5485
+  type: 'test'
+  ...
+# Subtest: lane-repair-first-gate: reachable remedy contract
+ok 79 - lane-repair-first-gate: reachable remedy contract
+  ---
+  duration_ms: 0.9794
+  type: 'test'
+  ...
+# Subtest: live-artifact-read-gate: reachable remedy contract
+ok 80 - live-artifact-read-gate: reachable remedy contract
+  ---
+  duration_ms: 1.1045
+  type: 'test'
+  ...
+# Subtest: mail-consistency-gate: reachable remedy contract
+ok 81 - mail-consistency-gate: reachable remedy contract
+  ---
+  duration_ms: 1.1758
+  type: 'test'
+  ...
+# Subtest: mail-draft-account-gate: reachable remedy contract
+ok 82 - mail-draft-account-gate: reachable remedy contract
+  ---
+  duration_ms: 1.2655
+  type: 'test'
+  ...
+# Subtest: mail-send-approval-gate: reachable remedy contract
+ok 83 - mail-send-approval-gate: reachable remedy contract
+  ---
+  duration_ms: 1.6408
+  type: 'test'
+  ...
+# Subtest: manual-request-evidence-gate: reachable remedy contract
+ok 84 - manual-request-evidence-gate: reachable remedy contract
+  ---
+  duration_ms: 1.1797
+  type: 'test'
+  ...
+# Subtest: manual-request-fullsteps-gate: reachable remedy contract
+ok 85 - manual-request-fullsteps-gate: reachable remedy contract
+  ---
+  duration_ms: 1.0937
+  type: 'test'
+  ...
+# Subtest: merge-handoff-gate: reachable remedy contract
+ok 86 - merge-handoff-gate: reachable remedy contract
+  ---
+  duration_ms: 1.0415
+  type: 'test'
+  ...
+# Subtest: message-locator-gate: reachable remedy contract
+ok 87 - message-locator-gate: reachable remedy contract
+  ---
+  duration_ms: 1.2907
+  type: 'test'
+  ...
+# Subtest: model-agent-guard: reachable remedy contract
+ok 88 - model-agent-guard: reachable remedy contract
+  ---
+  duration_ms: 1.1204
+  type: 'test'
+  ...
+# Subtest: negative-claim-gate: reachable remedy contract
+ok 89 - negative-claim-gate: reachable remedy contract
+  ---
+  duration_ms: 1.0428
+  type: 'test'
+  ...
+# Subtest: next-action-gate: reachable remedy contract
+ok 90 - next-action-gate: reachable remedy contract
+  ---
+  duration_ms: 1.0012
+  type: 'test'
+  ...
+# Subtest: outbound-claim-evidence-gate: reachable remedy contract
+ok 91 - outbound-claim-evidence-gate: reachable remedy contract
+  ---
+  duration_ms: 1.063
+  type: 'test'
+  ...
+# Subtest: past-log-search-gate: reachable remedy contract
+ok 92 - past-log-search-gate: reachable remedy contract
+  ---
+  duration_ms: 2.9103
+  type: 'test'
+  ...
+# Subtest: pr-handoff-gate: reachable remedy contract
+ok 93 - pr-handoff-gate: reachable remedy contract
+  ---
+  duration_ms: 1.183
+  type: 'test'
+  ...
+# Subtest: pretooluse-bash-delegation: reachable remedy contract
+ok 94 - pretooluse-bash-delegation: reachable remedy contract
+  ---
+  duration_ms: 1.0891
+  type: 'test'
+  ...
+# Subtest: pretooluse-delegation-warn: reachable remedy contract
+ok 95 - pretooluse-delegation-warn: reachable remedy contract
+  ---
+  duration_ms: 1.3258
+  type: 'test'
+  ...
+# Subtest: pretooluse-headless-background: reachable remedy contract
+ok 96 - pretooluse-headless-background: reachable remedy contract
+  ---
+  duration_ms: 1.2477
+  type: 'test'
+  ...
+# Subtest: pretooluse-lane-guard: reachable remedy contract
+ok 97 - pretooluse-lane-guard: reachable remedy contract
+  ---
+  duration_ms: 1.2661
+  type: 'test'
+  ...
+# Subtest: pretooluse-line-broadcast-guard: reachable remedy contract
+ok 98 - pretooluse-line-broadcast-guard: reachable remedy contract
+  ---
+  duration_ms: 1.2136
+  type: 'test'
+  ...
+# Subtest: progress-cron-gate: reachable remedy contract
+ok 99 - progress-cron-gate: reachable remedy contract
+  ---
+  duration_ms: 1.2525
+  type: 'test'
+  ...
+# Subtest: recipient-domain-gate: reachable remedy contract
+ok 100 - recipient-domain-gate: reachable remedy contract
+  ---
+  duration_ms: 1.0546
+  type: 'test'
+  ...
+# Subtest: report-length-gate: reachable remedy contract
+ok 101 - report-length-gate: reachable remedy contract
+  ---
+  duration_ms: 1.2092
+  type: 'test'
+  ...
+# Subtest: reported-symptom-gate: reachable remedy contract
+ok 102 - reported-symptom-gate: reachable remedy contract
+  ---
+  duration_ms: 1.1782
+  type: 'test'
+  ...
+# Subtest: response-language-gate: reachable remedy contract
+ok 103 - response-language-gate: reachable remedy contract
+  ---
+  duration_ms: 0.9599
+  type: 'test'
+  ...
+# Subtest: seat-name-gate: reachable remedy contract
+ok 104 - seat-name-gate: reachable remedy contract
+  ---
+  duration_ms: 0.9962
+  type: 'test'
+  ...
+# Subtest: self-check-before-asking-guard: reachable remedy contract
+ok 105 - self-check-before-asking-guard: reachable remedy contract
+  ---
+  duration_ms: 1.6285
+  type: 'test'
+  ...
+# Subtest: session-close-target-gate: reachable remedy contract
+ok 106 - session-close-target-gate: reachable remedy contract
+  ---
+  duration_ms: 1.1602
+  type: 'test'
+  ...
+# Subtest: settings-quality-guard: reachable remedy contract
+ok 107 - settings-quality-guard: reachable remedy contract
+  ---
+  duration_ms: 1.0955
+  type: 'test'
+  ...
+# Subtest: shallow-answer-gate: reachable remedy contract
+ok 108 - shallow-answer-gate: reachable remedy contract
+  ---
+  duration_ms: 1.5071
+  type: 'test'
+  ...
+# Subtest: share-before-send-gate: reachable remedy contract
+ok 109 - share-before-send-gate: reachable remedy contract
+  ---
+  duration_ms: 1.1048
+  type: 'test'
+  ...
+# Subtest: side-effect-left-gate: reachable remedy contract
+ok 110 - side-effect-left-gate: reachable remedy contract
+  ---
+  duration_ms: 1.0351
+  type: 'test'
+  ...
+# Subtest: stop-gate: reachable remedy contract
+ok 111 - stop-gate: reachable remedy contract
+  ---
+  duration_ms: 0.9639
+  type: 'test'
+  ...
+# Subtest: stop-gate-runner: reachable remedy contract
+ok 112 - stop-gate-runner: reachable remedy contract
+  ---
+  duration_ms: 1.0678
+  type: 'test'
+  ...
+# Subtest: substitute-capability-gate: reachable remedy contract
+ok 113 - substitute-capability-gate: reachable remedy contract
+  ---
+  duration_ms: 1.1564
+  type: 'test'
+  ...
+# Subtest: third-party-nudge-gate: reachable remedy contract
+ok 114 - third-party-nudge-gate: reachable remedy contract
+  ---
+  duration_ms: 1.1252
+  type: 'test'
+  ...
+# Subtest: unattended-elevation-gate: reachable remedy contract
+ok 115 - unattended-elevation-gate: reachable remedy contract
+  ---
+  duration_ms: 1.0438
+  type: 'test'
+  ...
+# Subtest: unregistered-promise-gate: reachable remedy contract
+ok 116 - unregistered-promise-gate: reachable remedy contract
+  ---
+  duration_ms: 0.9764
+  type: 'test'
+  ...
+# Subtest: urgent-blocker-wait-gate: reachable remedy contract
+ok 117 - urgent-blocker-wait-gate: reachable remedy contract
+  ---
+  duration_ms: 1.1129
+  type: 'test'
+  ...
+# Subtest: url-account-gate: reachable remedy contract
+ok 118 - url-account-gate: reachable remedy contract
+  ---
+  duration_ms: 1.4458
+  type: 'test'
+  ...
+# Subtest: url-format-guard: reachable remedy contract
+ok 119 - url-format-guard: reachable remedy contract
+  ---
+  duration_ms: 1.3156
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: reachable remedy contract
+ok 120 - user-burden-gate: reachable remedy contract
+  ---
+  duration_ms: 1.3968
+  type: 'test'
+  ...
+# Subtest: verify-before-done-detector: reachable remedy contract
+ok 121 - verify-before-done-detector: reachable remedy contract
+  ---
+  duration_ms: 1.3068
+  type: 'test'
+  ...
+# Subtest: reject missing declaration, nonexistent repo file, undeployed key and unexplained consent
+ok 122 - reject missing declaration, nonexistent repo file, undeployed key and unexplained consent
+  ---
+  duration_ms: 4.9105
+  type: 'test'
+  ...
+# Subtest: new rollout entries must declare the seven day window; legacy inventory is frozen
+ok 123 - new rollout entries must declare the seven day window; legacy inventory is frozen
+  ---
+  duration_ms: 90.9102
+  type: 'test'
+  ...
+# Subtest: repo remedy sections accept Windows CRLF checkouts
+ok 124 - repo remedy sections accept Windows CRLF checkouts
+  ---
+  duration_ms: 3.1289
+  type: 'test'
+  ...
+# Subtest: rollout covers pilot, seven day boundary, late arrivals, missing manifest and legacy
+ok 125 - rollout covers pilot, seven day boundary, late arrivals, missing manifest and legacy
+  ---
+  duration_ms: 13.6935
+  type: 'test'
+  ...
+# Subtest: a declared key is fetched once, merged, rechecked, and actual success passes
+ok 126 - a declared key is fetched once, merged, rechecked, and actual success passes
+  ---
+  duration_ms: 3.1619
+  type: 'test'
+  ...
+# Subtest: fetch failure retains denial on legacy gates and reports only key names/status
+ok 127 - fetch failure retains denial on legacy gates and reports only key names/status
+  ---
+  duration_ms: 13.463
+  type: 'test'
+  ...
+# Subtest: retrieval alone does not bypass missing application setup
+ok 128 - retrieval alone does not bypass missing application setup
+  ---
+  duration_ms: 4.7583
+  type: 'test'
+  ...
+# Subtest: a retry that changes denial to a warning still reports the warning
+ok 129 - a retry that changes denial to a warning still reports the warning
+  ---
+  duration_ms: 4.268
+  type: 'test'
+  ...
+# Subtest: standalone Stop warnings stay visible and use the common reporting path
+ok 130 - standalone Stop warnings stay visible and use the common reporting path
+  ---
+  duration_ms: 182.6618
+  type: 'test'
+  ...
+# Subtest: report deduplication is atomic per PC/gate/day, values never transmitted
+ok 131 - report deduplication is atomic per PC/gate/day, values never transmitted
+  ---
+  duration_ms: 9.3899
+  type: 'test'
+  ...
+# Subtest: new and existing registration migrate to wrapper idempotently, unrelated hooks preserved
+ok 132 - new and existing registration migrate to wrapper idempotently, unrelated hooks preserved
+  ---
+  duration_ms: 1768.6995
+  type: 'test'
+  ...
+# Subtest: wrapper converts both PreToolUse and Stop blocks to visible warnings
+ok 133 - wrapper converts both PreToolUse and Stop blocks to visible warnings
+  ---
+  duration_ms: 146.9724
+  type: 'test'
+  ...
+# Subtest: real wrapper retries SessionStart key client once, preserves env keys, and then passes
+ok 134 - real wrapper retries SessionStart key client once, preserves env keys, and then passes
+  ---
+  duration_ms: 388.1298
+  type: 'test'
+  ...
+# Subtest: 旧許可カテゴリとcost webhookがあってもkim宛報告は台帳だけに保存する
+ok 135 - 旧許可カテゴリとcost webhookがあってもkim宛報告は台帳だけに保存する
+  ---
+  duration_ms: 12.2833
+  type: 'test'
+  ...
+# Subtest: Stop aggregate applies warning policy to each child and keeps its reason visible
+ok 136 - Stop aggregate applies warning policy to each child and keeps its reason visible
+  ---
+  duration_ms: 199.2236
+  type: 'test'
+  ...
+# Subtest: 他メンバーPCのgate報告はkim-inboxへ入れず統計だけに残す
+ok 137 - 他メンバーPCのgate報告はkim-inboxへ入れず統計だけに残す
+  ---
+  duration_ms: 6.0743
+  type: 'test'
+  ...
+# Subtest: pilotDenyはpilotだけ即denyとし他PCは観測期間を守る
+ok 138 - pilotDenyはpilotだけ即denyとし他PCは観測期間を守る
+  ---
+  duration_ms: 3.0122
+  type: 'test'
+  ...
+# Subtest: mail account policy denies immediately on a new non-pilot PC
+ok 139 - mail account policy denies immediately on a new non-pilot PC
+  ---
+  duration_ms: 1.3267
+  type: 'test'
+  ...
+# Subtest: gmail connector URL rewrite policy denies immediately on a new non-pilot PC
+ok 140 - gmail connector URL rewrite policy denies immediately on a new non-pilot PC
+  ---
+  duration_ms: 1.2162
+  type: 'test'
+  ...
+# Subtest: registered mail gate retains deny through the common runner
+ok 141 - registered mail gate retains deny through the common runner
+  ---
+  duration_ms: 83.7297
+  type: 'test'
+  ...
+# Subtest: kim 宛 Discord 停止は初受信の非 pilot PC でも即時拒否する
+ok 142 - kim 宛 Discord 停止は初受信の非 pilot PC でも即時拒否する
+  ---
+  duration_ms: 87.7902
+  type: 'test'
+  ...
+# Subtest: app-llm gates deny immediately on a first-seen non-pilot PC under the 2026-11-02 kim policy
+ok 143 - app-llm gates deny immediately on a first-seen non-pilot PC under the 2026-11-02 kim policy
+  ---
+  duration_ms: 1.7958
+  type: 'test'
+  ...
+# Subtest: 2026-11-05 mail/delete policies deny immediately through real runner on first-seen PCs
+ok 144 - 2026-11-05 mail/delete policies deny immediately through real runner on first-seen PCs
+  ---
+  duration_ms: 182.0825
+  type: 'test'
+  ...
+# Subtest: 過去参照だけでコマンドを再実行させる回帰ケースは tier A
+ok 145 - 過去参照だけでコマンドを再実行させる回帰ケースは tier A
+  ---
+  duration_ms: 3.6176
+  type: 'test'
+  ...
+# Subtest: 情報なしでリモートPCに実行を頼むと tier B
+ok 146 - 情報なしでリモートPCに実行を頼むと tier B
+  ---
+  duration_ms: 0.513
+  type: 'test'
+  ...
+# Subtest: 情報なしで Discord の設定作業を頼むと tier B
+ok 147 - 情報なしで Discord の設定作業を頼むと tier B
+  ---
+  duration_ms: 0.2137
+  type: 'test'
+  ...
+# Subtest: 名詞形の依頼語尾も tier B
+ok 148 - 名詞形の依頼語尾も tier B
+  ---
+  duration_ms: 0.2126
+  type: 'test'
+  ...
+# Subtest: 依頼と同じ本文に URL があれば違反にしない
+ok 149 - 依頼と同じ本文に URL があれば違反にしない
+  ---
+  duration_ms: 0.276
+  type: 'test'
+  ...
+# Subtest: 依頼と同じ本文にコマンド全文のコードブロックがあれば違反にしない
+ok 150 - 依頼と同じ本文にコマンド全文のコードブロックがあれば違反にしない
+  ---
+  duration_ms: 0.2722
+  type: 'test'
+  ...
+# Subtest: 完了報告のみは違反にしない
+ok 151 - 完了報告のみは違反にしない
+  ---
+  duration_ms: 0.199
+  type: 'test'
+  ...
+# Subtest: Claude 自身の行為は違反にしない
+ok 152 - Claude 自身の行為は違反にしない
+  ---
+  duration_ms: 0.1731
+  type: 'test'
+  ...
+# Subtest: HANDOFF-INFO-OK があれば常に違反にしない
+ok 153 - HANDOFF-INFO-OK があれば常に違反にしない
+  ---
+  duration_ms: 0.2466
+  type: 'test'
+  ...
+# Subtest: コードレビュー中の技術説明は違反にしない
+ok 154 - コードレビュー中の技術説明は違反にしない
+  ---
+  duration_ms: 1.4744
+  type: 'test'
+  ...
+# Subtest: 違反なしのメッセージは空文字
+ok 155 - 違反なしのメッセージは空文字
+  ---
+  duration_ms: 0.525
+  type: 'test'
+  ...
+# Subtest: tier A のメッセージは過去参照を指摘する
+ok 156 - tier A のメッセージは過去参照を指摘する
+  ---
+  duration_ms: 0.3969
+  type: 'test'
+  ...
+# Subtest: 実データ: 依頼ブロックに貼るコマンドが無い配布Doc案内は tier A
+ok 157 - 実データ: 依頼ブロックに貼るコマンドが無い配布Doc案内は tier A
+  ---
+  duration_ms: 0.294
+  type: 'test'
+  ...
+# Subtest: 実データ: 別件PRリンクしか無い完了報告中の依頼は tier B
+ok 158 - 実データ: 別件PRリンクしか無い完了報告中の依頼は tier B
+  ---
+  duration_ms: 0.146
+  type: 'test'
+  ...
+# Subtest: 無関係な URL が本文のどこかにあるだけでは違反を打ち消さない
+ok 159 - 無関係な URL が本文のどこかにあるだけでは違反を打ち消さない
+  ---
+  duration_ms: 0.0947
+  type: 'test'
+  ...
+# Subtest: 言い切り形の依頼(〜すれば通ります)も依頼として扱う
+ok 160 - 言い切り形の依頼(〜すれば通ります)も依頼として扱う
+  ---
+  duration_ms: 0.1008
+  type: 'test'
+  ...
+# Subtest: 依頼ブロック内に URL とコマンドがあれば違反にしない
+ok 161 - 依頼ブロック内に URL とコマンドがあれば違反にしない
+  ---
+  duration_ms: 0.1123
+  type: 'test'
+  ...
+# Subtest: 箇条書き手順に URL とコマンドを添えた依頼は違反にしない
+ok 162 - 箇条書き手順に URL とコマンドを添えた依頼は違反にしない
+  ---
+  duration_ms: 0.2112
+  type: 'test'
+  ...
+# Subtest: フェンス付きコードブロックは直前の依頼ブロックに属する
+ok 163 - フェンス付きコードブロックは直前の依頼ブロックに属する
+  ---
+  duration_ms: 0.163
+  type: 'test'
+  ...
+# Subtest: 誤爆回帰: 逃げ道の表にある「スクショを貼ってください」は違反にしない
+ok 164 - 誤爆回帰: 逃げ道の表にある「スクショを貼ってください」は違反にしない
+  ---
+  duration_ms: 1.6682
+  type: 'test'
+  ...
+# Subtest: 誤爆回帰: 引用した依頼文（検証結果の表）は違反にしない
+ok 165 - 誤爆回帰: 引用した依頼文（検証結果の表）は違反にしない
+  ---
+  duration_ms: 1.1162
+  type: 'test'
+  ...
+# Subtest: スクショを貼るだけの依頼は情報を要求しない
+ok 166 - スクショを貼るだけの依頼は情報を要求しない
+  ---
+  duration_ms: 0.1566
+  type: 'test'
+  ...
+# Subtest: 画面を開いてスクショを貼る依頼は URL が要るので違反のまま
+ok 167 - 画面を開いてスクショを貼る依頼は URL が要るので違反のまま
+  ---
+  duration_ms: 0.1317
+  type: 'test'
+  ...
+# Subtest: 鉤括弧はラベルとしても使うので、外に動詞が残る依頼は検出し続ける
+ok 168 - 鉤括弧はラベルとしても使うので、外に動詞が残る依頼は検出し続ける
+  ---
+  duration_ms: 0.1135
+  type: 'test'
+  ...
+# Subtest: 違反メッセージは表のヘッダではなく引っかかった文を出す
+ok 169 - 違反メッセージは表のヘッダではなく引っかかった文を出す
+  ---
+  duration_ms: 0.1444
+  type: 'test'
+  ...
+# Subtest: 同一応答は複数hookでも1 block、書き直し2回後はpass_after_cap
+ok 170 - 同一応答は複数hookでも1 block、書き直し2回後はpass_after_cap
+  ---
+  duration_ms: 14.1114
+  type: 'test'
+  ...
+# Subtest: 日次集計は旧skippedとpass_after_capを数える
+ok 171 - 日次集計は旧skippedとpass_after_capを数える
+  ---
+  duration_ms: 0.9781
+  type: 'test'
+  ...
+# Subtest: 差し戻しとtool_resultは同一ターン、新しい人の発言でリセット (promptId=true)
+ok 172 - 差し戻しとtool_resultは同一ターン、新しい人の発言でリセット (promptId=true)
+  ---
+  duration_ms: 18.0454
+  type: 'test'
+  ...
+# Subtest: 差し戻しとtool_resultは同一ターン、新しい人の発言でリセット (promptId=false)
+ok 173 - 差し戻しとtool_resultは同一ターン、新しい人の発言でリセット (promptId=false)
+  ---
+  duration_ms: 18.9619
+  type: 'test'
+  ...
+# Subtest: 旧形式ではisMeta単独・feedback文字列・tool_result配列をそれぞれ飛ばす
+ok 174 - 旧形式ではisMeta単独・feedback文字列・tool_result配列をそれぞれ飛ばす
+  ---
+  duration_ms: 11.9931
+  type: 'test'
+  ...
+# Subtest: promptIdはuser以外の末尾行からも優先し、不正JSONとID無しの行は飛ばす
+ok 175 - promptIdはuser以外の末尾行からも優先し、不正JSONとID無しの行は飛ばす
+  ---
+  duration_ms: 7.9366
+  type: 'test'
+  ...
+# Subtest: 旧形式で人の発言が末尾400行より前でもターン鍵を保持する
+ok 176 - 旧形式で人の発言が末尾400行より前でもターン鍵を保持する
+  ---
+  duration_ms: 9.3641
+  type: 'test'
+  ...
+# Subtest: 未登録の約束は初回から警告のみ（書き直し=false）
+ok 177 - 未登録の約束は初回から警告のみ（書き直し=false）
+  ---
+  duration_ms: 98.0814
+  type: 'test'
+  ...
+# Subtest: 未登録の約束は初回から警告のみ（書き直し=true）
+ok 178 - 未登録の約束は初回から警告のみ（書き直し=true）
+  ---
+  duration_ms: 43.3808
+  type: 'test'
+  ...
+# Subtest: 複数gateの理由を1つのblockへ合流する
+ok 179 - 複数gateの理由を1つのblockへ合流する
+  ---
+  duration_ms: 253.3059
+  type: 'test'
+  ...
+# Subtest: 同一ターンは既存上限の3回目からpass_after_capを台帳に残す
+ok 180 - 同一ターンは既存上限の3回目からpass_after_capを台帳に残す
+  ---
+  duration_ms: 1179.22
+  type: 'test'
+  ...
+# Subtest: 本文A・Bは同一ターンのblockとして累積
+ok 181 - 本文A・Bは同一ターンのblockとして累積
+  ---
+  duration_ms: 472.5291
+  type: 'test'
+  ...
+# Subtest: 本文変更を含め3回目は上限通過
+ok 182 - 本文変更を含め3回目は上限通過
+  ---
+  duration_ms: 749.0244
+  type: 'test'
+  ...
+# Subtest: block不要ならstateを作成・変更せず、sessionIdなしでも変更しない
+ok 183 - block不要ならstateを作成・変更せず、sessionIdなしでも変更しない
+  ---
+  duration_ms: 1077.0688
+  type: 'test'
+  ...
+# Subtest: 書き込み時に7日超・不正日時を削除し、旧形式の累計はリセットする
+ok 184 - 書き込み時に7日超・不正日時を削除し、旧形式の累計はリセットする
+  ---
+  duration_ms: 217.6612
+  type: 'test'
+  ...
+# Subtest: stop_hook_activeでも書き直しを再評価する
+ok 185 - stop_hook_activeでも書き直しを再評価する
+  ---
+  duration_ms: 207.1089
+  type: 'test'
+  ...
+# Subtest: 次の行があればピギーバック・ヒントを重ねない
+ok 186 - 次の行があればピギーバック・ヒントを重ねない
+  ---
+  duration_ms: 301.0009
+  type: 'test'
+  ...
+# Subtest: 他gateがpassでもnext-action-gate単独でblockする
+ok 187 - 他gateがpassでもnext-action-gate単独でblockする
+  ---
+  duration_ms: 205.2149
+  type: 'test'
+  ...
+# Subtest: 外部状態の否定断定を EXTERNAL-STATE で block する
+ok 188 - 外部状態の否定断定を EXTERNAL-STATE で block する
+  ---
+  duration_ms: 205.2993
+  type: 'test'
+  ...
+# Subtest: assistant_text と transcript_path の併用でも直接照会証拠を読む
+ok 189 - assistant_text と transcript_path の併用でも直接照会証拠を読む
+  ---
+  duration_ms: 396.5393
+  type: 'test'
+  ...
+# Subtest: stdin経由の2行・3行・バックグラウンド矛盾を他gateと分離して検証
+ok 190 - stdin経由の2行・3行・バックグラウンド矛盾を他gateと分離して検証
+  ---
+  duration_ms: 751.3244
+  type: 'test'
+  ...
+# Subtest: runnerと単体hookの両方が会話のsession-close証拠を評価する
+ok 191 - runnerと単体hookの両方が会話のsession-close証拠を評価する
+  ---
+  duration_ms: 1357.2461
+  type: 'test'
+  ...
+# Subtest: handoff-branch-coverage-gate: 初回決め打ちで既存分岐が無い手渡しを BRANCH-COVERAGE で block する
+ok 192 - handoff-branch-coverage-gate: 初回決め打ちで既存分岐が無い手渡しを BRANCH-COVERAGE で block する
+  ---
+  duration_ms: 215.699
+  type: 'test'
+  ...
+# Subtest: handoff-branch-coverage-gate: 本流に既存分岐があれば他gateの結果に関わらず自分は block しない
+ok 193 - handoff-branch-coverage-gate: 本流に既存分岐があれば他gateの結果に関わらず自分は block しない
+  ---
+  duration_ms: 212.5693
+  type: 'test'
+  ...
+# Subtest: handoff-branch-coverage-gate: 手作業依頼ではない完了報告では起動しない
+ok 194 - handoff-branch-coverage-gate: 手作業依頼ではない完了報告では起動しない
+  ---
+  duration_ms: 743.1519
+  type: 'test'
+  ...
+# Subtest: gh-handoff-gate: gh が未認証であることを理由に PR 作成などを人に頼むと block する
+ok 195 - gh-handoff-gate: gh が未認証であることを理由に PR 作成などを人に頼むと block する
+  ---
+  duration_ms: 214.0551
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: pwsh 単独は block
+ok 196 - user-burden-gate: pwsh 単独は block
+  ---
+  duration_ms: 243.7383
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: Desktop cmd と二経路の監査
+ok 197 - user-burden-gate: Desktop cmd と二経路の監査
+  ---
+  duration_ms: 428.8136
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: Desktop cmd だけは監査不足
+ok 198 - user-burden-gate: Desktop cmd だけは監査不足
+  ---
+  duration_ms: 293.7339
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: Claude 自身の実行説明
+ok 199 - user-burden-gate: Claude 自身の実行説明
+  ---
+  duration_ms: 317.719
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: 遡り参照の実例
+ok 200 - user-burden-gate: 遡り参照の実例
+  ---
+  duration_ms: 345.7213
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: コマンドと監査だけでは不可
+ok 201 - user-burden-gate: コマンドと監査だけでは不可
+  ---
+  duration_ms: 568.9401
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: 完成品なし
+ok 202 - user-burden-gate: 完成品なし
+  ---
+  duration_ms: 264.2267
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: 監査なし
+ok 203 - user-burden-gate: 監査なし
+  ---
+  duration_ms: 481.2319
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: 依頼なし
+ok 204 - user-burden-gate: 依頼なし
+  ---
+  duration_ms: 188.7709
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: 理由付き例外
+ok 205 - user-burden-gate: 理由付き例外
+  ---
+  duration_ms: 199.1004
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: 本文だけの依頼
+ok 206 - user-burden-gate: 本文だけの依頼
+  ---
+  duration_ms: 218.9839
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: なしでも本文に依頼
+ok 207 - user-burden-gate: なしでも本文に依頼
+  ---
+  duration_ms: 226.7462
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: 監査に根拠なし
+ok 208 - user-burden-gate: 監査に根拠なし
+  ---
+  duration_ms: 223.316
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: 監査に操作回数なし
+ok 209 - user-burden-gate: 監査に操作回数なし
+  ---
+  duration_ms: 301.7493
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: 根拠は同じ監査行に必要
+ok 210 - user-burden-gate: 根拠は同じ監査行に必要
+  ---
+  duration_ms: 329.1553
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: 理由なしの例外は無効
+ok 211 - user-burden-gate: 理由なしの例外は無効
+  ---
+  duration_ms: 209.13
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: URL同梱
+ok 212 - user-burden-gate: URL同梱
+  ---
+  duration_ms: 206.161
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: Desktopファイルパスは完成品でない
+ok 213 - user-burden-gate: Desktopファイルパスは完成品でない
+  ---
+  duration_ms: 195.1518
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: コード中の依頼では発火しない
+ok 214 - user-burden-gate: コード中の依頼では発火しない
+  ---
+  duration_ms: 183.8139
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: コード中の監査は無効
+ok 215 - user-burden-gate: コード中の監査は無効
+  ---
+  duration_ms: 205.6528
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: 通常報告の参照は対象外
+ok 216 - user-burden-gate: 通常報告の参照は対象外
+  ---
+  duration_ms: 198.2035
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: 前に送ったの参照
+ok 217 - user-burden-gate: 前に送ったの参照
+  ---
+  duration_ms: 211.1348
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: 先ほどのの参照
+ok 218 - user-burden-gate: 先ほどのの参照
+  ---
+  duration_ms: 379.8103
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: さっきのの参照
+ok 219 - user-burden-gate: さっきのの参照
+  ---
+  duration_ms: 208.1217
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: 上のの参照
+ok 220 - user-burden-gate: 上のの参照
+  ---
+  duration_ms: 365.6448
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: 前述のの参照
+ok 221 - user-burden-gate: 前述のの参照
+  ---
+  duration_ms: 219.1087
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: 以前のの参照
+ok 222 - user-burden-gate: 以前のの参照
+  ---
+  duration_ms: 208.5164
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: 前回のの参照
+ok 223 - user-burden-gate: 前回のの参照
+  ---
+  duration_ms: 216.8177
+  type: 'test'
+  ...
+# Subtest: manual-request-evidence-gate: 根拠なしの依頼 → block
+ok 224 - manual-request-evidence-gate: 根拠なしの依頼 → block
+  ---
+  duration_ms: 203.9474
+  type: 'test'
+  ...
+# Subtest: manual-request-evidence-gate: 確認済み: がある → pass
+ok 225 - manual-request-evidence-gate: 確認済み: がある → pass
+  ---
+  duration_ms: 197.6399
+  type: 'test'
+  ...
+# Subtest: manual-request-evidence-gate: 依頼でない普通の応答 → pass
+ok 226 - manual-request-evidence-gate: 依頼でない普通の応答 → pass
+  ---
+  duration_ms: 378.8114
+  type: 'test'
+  ...
+# Subtest: session-close-target-gate: close-session.mjs 実行＋--show-target 無し → block
+ok 227 - session-close-target-gate: close-session.mjs 実行＋--show-target 無し → block
+  ---
+  duration_ms: 216.6653
+  type: 'test'
+  ...
+# Subtest: session-close-target-gate: --show-target 実行済み → pass
+ok 228 - session-close-target-gate: --show-target 実行済み → pass
+  ---
+  duration_ms: 242.9834
+  type: 'test'
+  ...
+# Subtest: session-close-target-gate: close-session 未実行 → pass
+ok 229 - session-close-target-gate: close-session 未実行 → pass
+  ---
+  duration_ms: 198.5772
+  type: 'test'
+  ...
+# Subtest: session-close-target-gate: 逃がし弁 [LAUNCH-TARGET-OK] → pass
+ok 230 - session-close-target-gate: 逃がし弁 [LAUNCH-TARGET-OK] → pass
+  ---
+  duration_ms: 226.503
+  type: 'test'
+  ...
+# Subtest: user-burden-gate: transcript の最後の assistant だけを監査する
+ok 231 - user-burden-gate: transcript の最後の assistant だけを監査する
+  ---
+  duration_ms: 507.9567
+  type: 'test'
+  ...
+# Subtest: desktop handoff does not require the old three-step paste instructions
+ok 232 - desktop handoff does not require the old three-step paste instructions
+  ---
+  duration_ms: 213.2074
+  type: 'test'
+  ...
+# Subtest: user command request from transcript is passed to burden gate
+ok 233 - user command request from transcript is passed to burden gate
+  ---
+  duration_ms: 391.1884
+  type: 'test'
+  ...
+# Subtest: §7.1の閉じ際3行は手渡し系gateをすべて通す
+ok 234 - §7.1の閉じ際3行は手渡し系gateをすべて通す
+  ---
+  duration_ms: 155.3114
+  type: 'test'
+  ...
+# Subtest: §7.1の3語に言及しただけの番号無し長文は従来どおりblockする
+ok 235 - §7.1の3語に言及しただけの番号無し長文は従来どおりblockする
+  ---
+  duration_ms: 257.7178
+  type: 'test'
+  ...
+# Subtest: handoff-action-gate が stop-gate-runner 配線で動くことを確認
+ok 236 - handoff-action-gate が stop-gate-runner 配線で動くことを確認
+  ---
+  duration_ms: 202.7921
+  type: 'test'
+  ...
+# Subtest: 完了報告の引用に反応した形式gateは台帳だけに降格する
+ok 237 - 完了報告の引用に反応した形式gateは台帳だけに降格する
+  ---
+  duration_ms: 247.7193
+  type: 'test'
+  ...
+# Subtest: Sheets書き込み後に第三者へ再送を頼むとhandoff-action-gateでblockする
+ok 238 - Sheets書き込み後に第三者へ再送を頼むとhandoff-action-gateでblockする
+  ---
+  duration_ms: 218.4998
+  type: 'test'
+  ...
+# Subtest: 返信1回の依頼ではFULL-STEPSとUSER-BURDENを出さない
+ok 239 - 返信1回の依頼ではFULL-STEPSとUSER-BURDENを出さない
+  ---
+  duration_ms: 214.9825
+  type: 'test'
+  ...
+# Subtest: 恒久策必須は返信のみでも形式gateと一緒に降格しない
+ok 240 - 恒久策必須は返信のみでも形式gateと一緒に降格しない
+  ---
+  duration_ms: 453.4933
+  type: 'test'
+  ...
+# Subtest: MacroDroidの検索不足を先に示し形式は1セクションにまとめる
+ok 241 - MacroDroidの検索不足を先に示し形式は1セクションにまとめる
+  ---
+  duration_ms: 473.3282
+  type: 'test'
+  ...
+# Subtest: 副作用の告知だけならStopで差し戻し、直後に対処を書けば通る
+ok 242 - 副作用の告知だけならStopで差し戻し、直後に対処を書けば通る
+  ---
+  duration_ms: 443.8137
+  type: 'test'
+  ...
+# Subtest: 完了待ちと将来作業をStopで差し戻し、完了報告なら通す
+ok 243 - 完了待ちと将来作業をStopで差し戻し、完了報告なら通す
+  ---
+  duration_ms: 439.7165
+  type: 'test'
+  ...
+# Subtest: 作業中は起床予約・登録への言及・subagentでも実台帳を要求する
+ok 244 - 作業中は起床予約・登録への言及・subagentでも実台帳を要求する
+  ---
+  duration_ms: 1405.7791
+  type: 'test'
+  ...
+# Subtest: 先行ゲートが全て降格された場合は第2段の監査で手渡しを止める
+ok 245 - 先行ゲートが全て降格された場合は第2段の監査で手渡しを止める
+  ---
+  duration_ms: 87.688
+  type: 'test'
+  ...
+# Subtest: 単発回答をStopで差し戻し、正本化を記録すれば通す
+ok 246 - 単発回答をStopで差し戻し、正本化を記録すれば通す
+  ---
+  duration_ms: 443.8513
+  type: 'test'
+  ...
+# Subtest: 差し戻し理由の先頭で前文を繰り返さないよう指示する
+ok 247 - 差し戻し理由の先頭で前文を繰り返さないよう指示する
+  ---
+  duration_ms: 211.7551
+  type: 'test'
+  ...
+# Subtest: 自動進行の check は runner から現在ターンとセッションを照合する
+ok 248 - 自動進行の check は runner から現在ターンとセッションを照合する
+  ---
+  duration_ms: 32.2453
+  type: 'test'
+  ...
+# Subtest: retry preface and piggyback hint alone are advisory; actual violations remain blocking reasons
+ok 249 - retry preface and piggyback hint alone are advisory; actual violations remain blocking reasons
+  ---
+  duration_ms: 0.1862
+  type: 'test'
+  ...
+# Subtest: message-locator warns on first attempt without requiring a rewrite
+ok 250 - message-locator warns on first attempt without requiring a rewrite
+  ---
+  duration_ms: 11.3183
+  type: 'test'
+  ...
+# Subtest: autopilot fallback: cap
+ok 251 - autopilot fallback: cap
+  ---
+  duration_ms: 121.9217
+  type: 'test'
+  ...
+# Subtest: autopilot fallback: pass
+ok 252 - autopilot fallback: pass
+  ---
+  duration_ms: 160.007
+  type: 'test'
+  ...
+# Subtest: autopilot fallback: close-pass
+ok 253 - autopilot fallback: close-pass
+  ---
+  duration_ms: 24.1681
+  type: 'test'
+  ...
+# Subtest: autopilot fallback: close-failure
+ok 254 - autopilot fallback: close-failure
+  ---
+  duration_ms: 5.9916
+  type: 'test'
+  ...
+# Subtest: autopilot fallback: open
+ok 255 - autopilot fallback: open
+  ---
+  duration_ms: 96.1027
+  type: 'test'
+  ...
+# Subtest: autopilot fallback: cron
+ok 256 - autopilot fallback: cron
+  ---
+  duration_ms: 48.784
+  type: 'test'
+  ...
+# Subtest: autopilot fallback: scheduled
+ok 257 - autopilot fallback: scheduled
+  ---
+  duration_ms: 49.0397
+  type: 'test'
+  ...
+# Subtest: autopilot fallback: none
+ok 258 - autopilot fallback: none
+  ---
+  duration_ms: 227.938
+  type: 'test'
+  ...
+# Subtest: autopilot fallback: failure
+ok 259 - autopilot fallback: failure
+  ---
+  duration_ms: 62.8043
+  type: 'test'
+  ...
+1..259
+# tests 259
+# suites 0
+# pass 259
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 25733.9292
+
+実行コマンド（exit 0）:
+node --test --test-reporter=tap tools/rule-dedupe.test.mjs tools/rule-consistency.test.mjs tools/onboarding-sync-index.test.mjs
+
+以下は当該コマンドの実出力（省略なし）:
+TAP version 13
+# Subtest: 移管ルールの絶対ルール行と太字の節番号が実文書の索引に残る
+ok 1 - 移管ルールの絶対ルール行と太字の節番号が実文書の索引に残る
+  ---
+  duration_ms: 47.6995
+  type: 'test'
+  ...
+# Subtest: 索引は強調記号付きの絶対ルール行(**🛑 など)を落とさない
+ok 2 - 索引は強調記号付きの絶対ルール行(**🛑 など)を落とさない
+  ---
+  duration_ms: 419.4103
+  type: 'test'
+  ...
+# Subtest: ラベル形式が日付でない既存マーカーでも置換され、ブロックが二重にならない
+ok 3 - ラベル形式が日付でない既存マーカーでも置換され、ブロックが二重にならない
+  ---
+  duration_ms: 194.7431
+  type: 'test'
+  ...
+# Subtest: 管理ブロックが固定共有memoryを @ 参照する
+ok 4 - 管理ブロックが固定共有memoryを @ 参照する
+  ---
+  duration_ms: 0.4265
+  type: 'test'
+  ...
+# Subtest: メールの共有アカウント必須見出しを圧縮索引にも保持する
+ok 5 - メールの共有アカウント必須見出しを圧縮索引にも保持する
+  ---
+  duration_ms: 1.8034
+  type: 'test'
+  ...
+# Subtest: 最後のメッセージにまとめる絶対ルールが実文書の索引に残る
+ok 6 - 最後のメッセージにまとめる絶対ルールが実文書の索引に残る
+  ---
+  duration_ms: 1.9675
+  type: 'test'
+  ...
+# Subtest: rule consistency: prohibited expressions in rule files
+ok 7 - rule consistency: prohibited expressions in rule files
+  ---
+  duration_ms: 50.8581
+  type: 'test'
+  ...
+# Subtest: every migrated preference has its complete replacement in the real generated index
+ok 8 - every migrated preference has its complete replacement in the real generated index
+  ---
+  duration_ms: 3.6365
+  type: 'test'
+  ...
+# Subtest: locally modified sections, CRLF and content outside the managed block survive migration
+ok 9 - locally modified sections, CRLF and content outside the managed block survive migration
+  ---
+  duration_ms: 0.774
+  type: 'test'
+  ...
+# Subtest: a first-line absolute rule is emitted once in full, including later sentences
+ok 10 - a first-line absolute rule is emitted once in full, including later sentences
+  ---
+  duration_ms: 0.2343
+  type: 'test'
+  ...
+# Subtest: mandatory rules above the optional budget do not shorten optional previews within budget
+ok 11 - mandatory rules above the optional budget do not shorten optional previews within budget
+  ---
+  duration_ms: 0.1883
+  type: 'test'
+  ...
+# Subtest: template is reproducible and contains actionable rules, not just an ONBOARDING reference
+ok 12 - template is reproducible and contains actionable rules, not just an ONBOARDING reference
+  ---
+  duration_ms: 3.0941
+  type: 'test'
+  ...
+# Subtest: all pre-existing numbered section entry points remain valid for gate reasons and references
+ok 13 - all pre-existing numbered section entry points remain valid for gate reasons and references
+  ---
+  duration_ms: 1.3313
+  type: 'test'
+  ...
+1..13
+# tests 13
+# suites 0
+# pass 13
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 747.4337
+
+追加チェック:
+node tools/render-claude-template.mjs --check : exit 0、出力なし
+git diff --check : exit 0、出力なし
+node --check tools/deliverable-drive-link-gate.mjs : exit 0、出力なし

@@ -6,8 +6,7 @@
 //   - スキャン件数スパイク検出 (短時間に大量取得 → 429 エラー)
 //   - 総スキャン件数ガードレール (300万件超で停止)
 //
-// 使い方:
-//   import { createSupabaseGuard } from './supabase-guard.mjs';
+// 使い方 (createSupabaseGuard を取得して使う):
 //   const client = createSupabaseGuard({ url: secrets.SUPABASE_URL, key: secrets.SUPABASE_SERVICE_ROLE_KEY });
 //   const { rows, cached, scanCount } = await client.fetch('channel_messages', {
 //     select: 'id,body', channel: 'eq.line', limit: 500,

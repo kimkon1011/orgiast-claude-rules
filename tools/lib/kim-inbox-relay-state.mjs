@@ -23,6 +23,8 @@ const withoutEmoji = text => text.replace(/[\p{Extended_Pictographic}️‍]/gu,
 const metadataLine = /^(?:【[^】]*】\s*(?:プロジェクト|セッションの目的)|プロジェクト|作業ID|セッションの目的)[:：]/;
 const actionLabel = /^(?:あなたの返事待ち|答えてほしいこと|判断してほしいこと|あなたの作業待ち|kim がすること|kim がやること[^:：]*)[:：]/;
 const anyActionLabel = /^(?:あなたの返事待ち|答えてほしいこと|判断してほしいこと|あなたの作業待ち|kim がすること|kim がやること[^:：]*|承認待ち|約束)[:：]/;
+const linkGuideLine = /^(?:手順書[（(]|手順書[:：]|開く[:：]|成果物[:：]|以下のURL[:：]|参照[:：]|詳細[:：]|リンク[:：])/;
+const stripMarkdown = text => text.replace(/^[#\-*]+\s*/gm, '').replace(/\*\*/g, '').trim();
 const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const stripSubjectBrackets = text => text.replace(/^【([^】]+)】\s*/, '$1 ').trim();
 const cap = (text, length) => Array.from(text).slice(0, length).join('');
@@ -41,11 +43,12 @@ export function inboxBrief(item, options = {}) {
   const purpose = header?.match(/セッションの目的[:：]\s*(.*?)(?:\s*／\s*(?:作業ID|プロジェクト)[:：]|$)/)?.[1].trim();
   const pc = String(item.from || '').split('・')[0].trim();
   const displayPc = displayPcNames((pc && !pc.includes('@') ? pc : header?.match(/^【([^・】]+)/)?.[1]) || '', options);
-  const meaning = lines.map(withoutEmoji).find(line => line && !metadataLine.test(line) && !/^https?:\/\//.test(line)) || '';
+  const meaning = lines.map(withoutEmoji).find(line => line && !metadataLine.test(line) && !/^https?:\/\//.test(line) && !linkGuideLine.test(line)) || '';
   let topic = stripSubjectBrackets(purpose || (header ? meaning : lines[0]) || '件名なし');
+  topic = stripMarkdown(topic);
   topic = cap(topic, 80);
   if (displayPc && !topic.startsWith(displayPc)) topic = `${displayPc}: ${topic}`;
-  const happenedRaw = Array.from(meaning).slice(0, 120).join('');
+  const happenedRaw = meaning ? capWithoutSplittingUrl(meaning, 120) : '';
   // Compare the displayed subject and first meaningful line without subject brackets.
   const topicBody = topic.replace(new RegExp(`^${escapeRegex(displayPc ? displayPc + ': ' : '')}`), '');
   const normTopic = stripSubjectBrackets(topicBody);
@@ -55,10 +58,10 @@ export function inboxBrief(item, options = {}) {
   const happened = (!header && purpose === undefined && duplicatedMeaning)
     ? (() => {
         const meaningIndex = lines.map(withoutEmoji).findIndex(l => l === meaning);
-        const nextLine = lines.slice(meaningIndex + 1).map(withoutEmoji).find(l => l && !metadataLine.test(l) && !/^https?:\/\//.test(l) && !actionLabel.test(l));
-        return nextLine ? Array.from(nextLine).slice(0, 120).join('') : '';
+        const nextLine = lines.slice(meaningIndex + 1).map(withoutEmoji).find(l => l && !metadataLine.test(l) && !/^https?:\/\//.test(l) && !linkGuideLine.test(l) && !actionLabel.test(l));
+        return nextLine ? stripMarkdown(capWithoutSplittingUrl(nextLine, 120)) : '';
       })()
-    : happenedRaw;
+    : stripMarkdown(happenedRaw);
   const unspecified = `返事内容の指定なし（原文確認: node tools/kim-inbox.mjs --show ${item.id}）`;
   const actions = lines.map(withoutEmoji);
   const actionLineInfo = (() => {
@@ -110,9 +113,11 @@ export function inboxBrief(item, options = {}) {
   } else {
     decide = unspecified;
   }
+  decide = stripMarkdown(decide);
+  const hasRealDecide = decide && decide !== '判断不要（報告のみ）';
   const reply = item.kind === 'deadline' ? `${item.key || 'D-003'} 完了／延期 11/20／不要`
     : resumeFailed ? 'N 続けて／N 中止'
-    : item.kind === 'info' ? '返事不要' : 'N 可／N 不要／N <指示>';
+    : item.kind === 'info' && !hasRealDecide ? '返事不要' : 'N 可／N 不要／N <指示>';
   const rawLinks = [...text.matchAll(/https?:\/\/[^\s<>「」『』【】（）]+/g)].map(m => m[0]);
   const sanitized = rawLinks.map(url => url.replace(/[*)\]）。、.,]+$/, ''));
   const seenRefs = new Map(); // ref → index in links[]

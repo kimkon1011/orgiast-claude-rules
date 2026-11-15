@@ -184,3 +184,98 @@ test('topic and happened from same line use next meaningful line for happened', 
   }));
   assert.equal(contained.happened, '復旧作業を開始');
 });
+
+// --- Fix 1: info でも decide 抽出時は reply が選択肢になる ---
+test('info with extracted decide gets reply options instead of 返事不要', t => {
+  const item = makeItem({
+    kind: 'info',
+    text: '【[要望] アリババ、お支払いのみ】\n対応が遅れています。あなたの承認待ちで 8 日止まっています。PR を確認してください。\nhttps://github.com/kimkon1011/purchasing-management-app/pull/17'
+  });
+  const brief = inboxBrief(item);
+  assert.doesNotMatch(brief.reply, /返事不要/, 'info with action decide should not say 返事不要');
+  assert.match(brief.reply, /可/, 'info with action decide should offer reply options');
+  assert.match(brief.decide, /PR を確認/, 'decide should include PR check instruction');
+});
+
+test('info with 判断不要 keeps reply as 返事不要', t => {
+  const brief = inboxBrief(makeItem({ kind: 'info', text: '夜間処理が完了しました' }));
+  assert.match(brief.reply, /返事不要/, 'info without decide keywords keeps 返事不要');
+});
+
+// --- Fix 2: URL-guide lines excluded from happened/topic ---
+test('URL-guide lines are excluded from happened; URLs not truncated', t => {
+  const item = makeItem({
+    kind: 'ask',
+    text: 'バックアップが止まっています\nkim がやること: ログインする\n手順書（kim@orgiast.jp で開く）: https://docs.google.com/document/d/AAA/edit?authuser=kim@orgiast.jp'
+  });
+  const brief = inboxBrief(item);
+  assert.doesNotMatch(brief.happened, /手順書/, 'happened should not include URL-guide line');
+  assert.doesNotMatch(brief.happened, /docs\.google/, 'happened should not include URL-guide URL');
+  assert.ok(brief.links.some(l => l.includes('docs.google.com')), 'URL-guide URL should remain in links');
+});
+
+test('happened falls back past URL-guide line', t => {
+  const item = makeItem({
+    kind: 'ask',
+    text: '作業用014 の毎日のバックアップが止まっています\nkim がやること: ログインする\n手順書（kim@orgiast.jp で開く）: https://docs.google.com/document/d/AAA/edit?authuser=kim@orgiast.jp\n実際の操作: 画面右下のアイコンをクリック'
+  });
+  const brief = inboxBrief(item);
+  assert.doesNotMatch(brief.happened, /手順書/, 'happened skips URL-guide line');
+  assert.ok(brief.happened === '' || brief.happened.includes('実際の操作'), 'happened picks next meaningful line after URL-guide or is empty');
+});
+
+// --- Fix 3: Markdown symbols stripped from happened/topic/decide ---
+test('Markdown heading markers stripped from happened', t => {
+  const item = makeItem({
+    kind: 'info',
+    text: '毎日のお知らせ\n\n## Googleタスク: kim の操作・判断待ち（35件 / 最終更新 00:20）'
+  });
+  const brief = inboxBrief(item);
+  assert.doesNotMatch(brief.happened, /^##\s/, 'happened should not start with # heading markers');
+  assert.doesNotMatch(brief.happened, /\*\*/, 'happened should not contain bold markers');
+});
+
+test('Markdown bold markers stripped from decide', t => {
+  const item = makeItem({ kind: 'info', text: '連絡\nあなたの返事待ち: **緊急**の対応が必要です' });
+  const brief = inboxBrief(item);
+  assert.doesNotMatch(brief.decide, /\*\*/, 'decide should not contain bold markers');
+  assert.match(brief.decide, /緊急/, 'decide content preserved after stripping markers');
+});
+
+test('Markdown list markers stripped from happened', t => {
+  const item = makeItem({ kind: 'info', text: '報告\n\n- 項目1: 完了\n- 項目2: 進行中' });
+  const brief = inboxBrief(item);
+  assert.doesNotMatch(brief.happened, /^-\s+/, 'happened should not start with list marker');
+});
+
+// --- ki-20261112163232-f09d 形式: 標準ヘッダー＋複数リンク ---
+test('ask with あなたの返事待ち and multiple links works with standard header', t => {
+  const item = makeItem({
+    kind: 'ask',
+    text: '【DELL・seisaku-team@orgiast.jp の Claude Code】プロジェクト: CLAUDE.md配布 ／ セッションの目的: Bで。ただし、作り方などはこれまでの蓄積を完全に引き継いでいるかチェックして。引き継がれていないなら… ／ 作業ID: c8d99e2b\n自動進行が判断待ちです: 三共精機様の資料メール着信を監視し、届いたら過去写真・費用・ロゴを反映して差分共有する。\nあなたの返事待ち: kim@orgiast.jp で開いてください: https://docs.google.com/document/d/AAA/edit?authuser=kim@orgiast.jp 。添付予定の提案書v4(PDF): https://drive.google.com/file/d/BBB/view?authuser=kim@orgiast.jp 。本文と提案書を見て「送ってよい」か修正点を返してください。\n成果物: https://docs.google.com/document/d/AAA/edit'
+  });
+  const brief = inboxBrief(item);
+  assert.ok(brief.topic.startsWith('作業用014:'), 'topic starts with PC prefix');
+  assert.ok(brief.topic.includes('Bで。ただし'), 'topic includes purpose');
+  assert.match(brief.happened, /三共精機/, 'happened contains the waiting task');
+  assert.match(brief.decide, /送ってよい/, 'decide captures the approval ask');
+  assert.match(brief.reply, /可/, 'reply offers options');
+  assert.ok(brief.links.some(l => l.includes('docs.google.com')), 'links include doc URL');
+  assert.ok(brief.links.some(l => l.includes('drive.google.com')), 'links include drive URL');
+});
+
+// --- ki-20261113223019-b164 形式: auto-progress-resume-failed + ヘッダー ---
+test('resume-failed info with header extracts correctly', t => {
+  const item = makeItem({
+    kind: 'info',
+    source: 'auto-progress-resume-failed',
+    text: '【DELL・seisaku-team@orgiast.jp の Claude Code】プロジェクト: CLAUDE.md配布 ／ セッションの目的: トーエネックにメールをおくって ／ 作業ID: 7f14e87b\n🔴 自動再開が連続失敗しています\n約束: このセッションに kim の承認が届き次第、Gmail（seisaku-team@orgiast.jp）から送信前チェックを通して送信し、送信済みを読み戻して報告します\n失敗回数: 3回（上限 8回）\n最終結果: error: failure (claude exit 1):'
+  });
+  const brief = inboxBrief(item);
+  assert.ok(brief.topic.startsWith('作業用014:'), 'topic starts with PC prefix');
+  assert.ok(brief.topic.includes('トーエネックにメールをおくって'), 'topic includes purpose');
+  assert.equal(brief.happened, '自動再開が連続失敗しています');
+  assert.match(brief.decide, /自動再開が止まっている/, 'decide for resume-failed');
+  assert.match(brief.reply, /続けて/, 'reply offers continue options');
+  assert.doesNotMatch(brief.reply, /返事不要/, 'resume-failed reply is not 返事不要');
+});

@@ -47,7 +47,7 @@ export function main(input, { home = os.homedir(), env = process.env, now = Date
     if (!sessionId || isUnattendedSession(input, { home, env })) return { emitted: null, state: skipped };
     const state = tickCounter(counterFile(home, sessionId), resolveThreshold(env), now);
     const pushContext = mobilePushInstruction(home, {
-      now, sessionId, owner: resolveOwner({ home }),
+      now, owner: resolveOwner({ home }),
       cliPath: fileURLToPath(new URL('./mobile-push-queue.mjs', import.meta.url)),
     });
     return { emitted: state.fired ? dedupeContext(REMINDER, { home, sessionId, source: 'progress-reminder' }) || null : null, state, pushContext };
@@ -59,7 +59,12 @@ export function main(input, { home = os.homedir(), env = process.env, now = Date
 async function run() {
   try {
     const raw = await readStdinWithTimeout(1000);
-    const result = main(raw.trim() ? JSON.parse(raw) : {});
+    const input = raw.trim() ? JSON.parse(raw) : {};
+    const result = main(input);
+    // Reading/formatting the queue must not consume the hook's emission state.
+    result.pushContext = dedupeContext(result.pushContext, {
+      home: os.homedir(), sessionId: input.session_id || input.sessionId, source: 'mobile-push',
+    });
     if (result.pushContext) {
       process.stdout.write(JSON.stringify({ hookSpecificOutput: {
         hookEventName: 'PostToolUse',

@@ -5,7 +5,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { dedupeContext } from './context-dedupe.mjs';
 
 export const mobilePushQueueFile = home => path.join(home, '.claude', 'mobile-push-queue.jsonl');
 
@@ -69,7 +68,7 @@ const oneLine = (text, limit) => String(text || '').replace(/\s+/g, ' ').trim().
 const dayMs = 24 * 60 * 60 * 1000;
 
 // 個別表示は最新10件まで。それより古い未送信（24時間超を含む）は1件にまとめる。
-export function mobilePushInstruction(home, { now = Date.now(), owner, cliPath, individualLimit = 10, sessionId } = {}) {
+export function mobilePushInstruction(home, { now = Date.now(), owner, cliPath, individualLimit = 10 } = {}) {
   const pending = pendingMobilePush(home, owner ? { owners: [owner] } : {});
   if (!pending.length) return '';
   const staleCutoff = now - dayMs;
@@ -90,8 +89,8 @@ export function mobilePushInstruction(home, { now = Date.now(), owner, cliPath, 
       `  → PushNotification ツールで送信後、${command(overflow.map(row => row.id))} を実行`,
     ].join('\n'));
   }
-  return dedupeContext([
+  return [
     `【必須】スマホ通知の送信（未送信 ${pending.length} 件）: 以下の各項目を PushNotification ツールで ${owner || 'user'} のスマホへ送り、各送信直後に示す mark-sent コマンドでキューから消すこと（送信前に実行すると再送される）。PushNotification ツールがこのセッションで使えない場合は何もせず次の指示へ（未送信のまま残る）。`,
     ...items,
-  ].join('\n'), { home, sessionId, source: 'mobile-push' });
+  ].join('\n');
 }

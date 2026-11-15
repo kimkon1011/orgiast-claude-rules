@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { inboxBrief, formatInboxBrief } from './kim-inbox-relay-state.mjs';
+import { inboxBrief, formatInboxBrief, groupInboxItems } from './kim-inbox-relay-state.mjs';
 
 function makeItem(overrides) {
   return {
@@ -298,4 +298,62 @@ test('resume-failed info with header extracts correctly', t => {
   assert.match(brief.decide, /自動再開が止まっている/, 'decide for resume-failed');
   assert.match(brief.reply, /続けて/, 'reply offers continue options');
   assert.doesNotMatch(brief.reply, /返事不要/, 'resume-failed reply is not 返事不要');
+});
+
+// --- groupInboxItems ---
+function groupableItem(id, workId, decide, createdAt) {
+  return makeItem({
+    id: id || 'ki-20261112000000-0000',
+    kind: 'ask',
+    text: `【DELL・seisaku-team@orgiast.jp の Claude Code】プロジェクト: test ／ セッションの目的: test ／ 作業ID: ${workId || 'aabbccdd'}\nあなたの返事待ち: ${decide || '確認してください'}`,
+    createdAt: createdAt || '2026-11-12T00:00:00.000Z',
+    lastAt: createdAt || '2026-11-12T00:00:00.000Z',
+  });
+}
+
+test('groupInboxItems: same workId + same decide → one group, newest is representative', t => {
+  const a = groupableItem('ki-20261112000000-aaaa', 'c8d99e2b', '送ってよいですか', '2026-11-12T10:00:00.000Z');
+  const b = groupableItem('ki-20261112120000-bbbb', 'c8d99e2b', '送ってよいですか', '2026-11-12T12:00:00.000Z');
+  const groups = groupInboxItems([a, b]);
+  assert.equal(groups.length, 1, 'should be one group');
+  assert.equal(groups[0].representative.id, b.id, 'newest should be representative');
+  assert.equal(groups[0].duplicates.length, 1, 'oldest should be duplicate');
+  assert.equal(groups[0].duplicates[0], a.id);
+});
+
+test('groupInboxItems: different workId → separate groups', t => {
+  const a = groupableItem('ki-20261112000000-aaaa', 'c8d99e2b', '送ってよいですか', '2026-11-12T10:00:00.000Z');
+  const b = groupableItem('ki-20261112120000-bbbb', '7f14e87b', '送ってよいですか', '2026-11-12T12:00:00.000Z');
+  const groups = groupInboxItems([a, b]);
+  assert.equal(groups.length, 2, 'different work IDs → 2 groups');
+  assert.equal(groups[0].representative.id, a.id);
+  assert.equal(groups[0].duplicates.length, 0);
+  assert.equal(groups[1].representative.id, b.id);
+  assert.equal(groups[1].duplicates.length, 0);
+});
+
+test('groupInboxItems: same workId but different decide → separate groups', t => {
+  const a = groupableItem('ki-20261112000000-aaaa', 'c8d99e2b', '送ってよいですか', '2026-11-12T10:00:00.000Z');
+  const b = groupableItem('ki-20261112120000-bbbb', 'c8d99e2b', '別の判断をして', '2026-11-12T12:00:00.000Z');
+  const groups = groupInboxItems([a, b]);
+  assert.equal(groups.length, 2, 'different decide → 2 groups');
+});
+
+test('groupInboxItems: no workId → each item is its own group', t => {
+  const a = makeItem({ id: 'ki-20261112000000-aaaa', kind: 'ask', text: 'あなたの返事待ち: 確認してください' });
+  const b = makeItem({ id: 'ki-20261112120000-bbbb', kind: 'ask', text: 'あなたの返事待ち: 確認してください' });
+  const groups = groupInboxItems([a, b]);
+  assert.equal(groups.length, 2, 'no work ID → 2 separate groups');
+});
+
+test('groupInboxItems: three same → one group with two duplicates', t => {
+  const a = groupableItem('ki-20261112080000-aaaa', 'c8d99e2b', '送ってよいですか', '2026-11-12T08:00:00.000Z');
+  const b = groupableItem('ki-20261112100000-bbbb', 'c8d99e2b', '送ってよいですか', '2026-11-12T10:00:00.000Z');
+  const c = groupableItem('ki-20261112120000-cccc', 'c8d99e2b', '送ってよいですか', '2026-11-12T12:00:00.000Z');
+  const groups = groupInboxItems([a, b, c]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].representative.id, c.id, 'newest (c) is rep');
+  assert.equal(groups[0].duplicates.length, 2, 'two duplicates');
+  assert.ok(groups[0].duplicates.includes(a.id), 'a is duplicate');
+  assert.ok(groups[0].duplicates.includes(b.id), 'b is duplicate');
 });

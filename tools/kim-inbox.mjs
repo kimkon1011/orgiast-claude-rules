@@ -13,7 +13,7 @@ import { redactSecrets } from './webhook-health.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
-import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, interactiveInboxSession } from './lib/kim-inbox-relay-state.mjs';
+import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
 import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
 const exec = promisify(execFile);
 const directory = home => path.join(home, '.claude/kim-inbox');
@@ -490,14 +490,39 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   // Budget the final rendered text before marking an item shown. Never slice a brief.
   const omitted = count => count ? `ほか ${count} 件\n` : '';
   const selected = [];
-  for (const item of candidates) {
+  // Group duplicate items by work ID + decide for deduplicated display
+  const groups = groupInboxItems(candidates);
+  const groupedCandidates = groups.map(g => g.representative);
+  const duplicateMap = new Map();
+  for (const group of groups) {
+    if (group.duplicates.length > 0) duplicateMap.set(group.representative.id, group.duplicates);
+  }
+  for (const item of groupedCandidates) {
     if (otherInfos.includes(item) && [...sessionInfos, ...highInfos].some(i => !i.shownCount && !selected.includes(i))) continue;
-    const brief = redactSecrets(formatInboxBrief(item, selected.length + 1, { home })) + '\n';
+    let brief = redactSecrets(formatInboxBrief(item, selected.length + 1, { home }));
+    const extras = duplicateMap.get(item.id);
+    if (extras?.length) {
+      const lines = brief.split('\n');
+      const dupeDisplay = extras.slice(0, 5).join(', ');
+      lines[0] += `（同じ件: ${dupeDisplay}${extras.length > 5 ? '…' : ''}）`;
+      brief = lines.join('\n');
+    }
+    brief += '\n';
     if ((text + brief + omitted(eligible.length - selected.length - 1) + footer).length > CONTEXT_LIMIT) continue;
     text += brief;
     selected.push(item);
     item.shownSessions = [...new Set([...item.shownSessions, sessionId])];
     item.shownCount++; item.lastShownAt = new Date(now).toISOString();
+    // Mark duplicates as shown so they enter relay state and can be receipted
+    if (extras?.length) {
+      for (const dupId of extras) {
+        const dup = items.find(i => i.id === dupId);
+        if (dup) {
+          dup.shownSessions = [...new Set([...dup.shownSessions, sessionId])];
+          dup.shownCount++; dup.lastShownAt = new Date(now).toISOString();
+        }
+      }
+    }
     if (daily.includes(item)) {
       const previous = item.dailyShown?.[sessionId];
       item.dailyShown = { ...(item.dailyShown || {}), [sessionId]: {

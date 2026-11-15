@@ -43,6 +43,33 @@ const capWithoutSplittingUrl = (text, length) => {
   return crossingUrl ? text.slice(0, crossingUrl.index + crossingUrl[0].length) : text.slice(0, boundary) + '…';
 };
 
+function extractWorkId(text) {
+  const m = String(text).match(/作業ID:\s*([a-f0-9]{8})(?![a-f0-9])/i);
+  return m ? m[1] : null;
+}
+
+export function groupInboxItems(items) {
+  // Group by work ID + normalized decide. Items without a work ID are each their own group.
+  const groups = new Map();
+  for (const item of items) {
+    const workId = extractWorkId(item.text);
+    const decide = inboxBrief(item).decide;
+    const key = workId ? `${workId}::${decide}` : item.id;
+    if (groups.has(key)) {
+      const group = groups.get(key);
+      if (item.createdAt > group.representative.createdAt) {
+        group.duplicates.push(group.representative.id);
+        group.representative = item;
+      } else {
+        group.duplicates.push(item.id);
+      }
+    } else {
+      groups.set(key, { representative: item, duplicates: [] });
+    }
+  }
+  return Array.from(groups.values());
+}
+
 export function inboxBrief(item, options = {}) {
   const text = String(item.text || '');
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);

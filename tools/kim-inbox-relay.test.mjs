@@ -152,3 +152,35 @@ test('hundreds of reserved asks rotate in bounded batches without starving progr
   selectContext(items,{sessionId:f.input.session_id,now,home:f.home});
   assert.ok(items.some(i=>i.shownCount>0 && !initial.has(i.id)));
 });
+
+test('duplicate same workId+decide: only representative needs written; both are receipts', async t => {
+  const f = fixture(t);
+  const baseText = '【DELL・seisaku-team@orgiast.jp の Claude Code】プロジェクト: test ／ セッションの目的: 三共精機にメール送信 ／ 作業ID: c8d99e2b\n自動進行が判断待ちです: メールの送付可否\nあなたの返事待ち: 送ってよいですか';
+  const a = await addItem(f.home, { kind: 'ask', text: baseText });
+  const b = await addItem(f.home, { kind: 'ask', text: baseText });
+  f.inject([a, b]);
+
+  // Blocked if neither is shown
+  const blocked = f.judge('別の作業をしました');
+  assert.equal(blocked.decision, 'block');
+  assert.match(blocked.reason, /同じ件/);
+
+  // Both receipted when representative (newest = b) is shown
+  const section = '【受信箱】\n' + formatInboxBrief(b, 1);
+  const result = f.judge(section);
+  assert.equal(result.decision, 'pass', `${result.code}: ${result.reason?.slice(0, 100)}`);
+  assert.equal(result.receipts.length, 2);
+  assert.ok(result.receipts.some(r => r.id === a.id));
+  assert.ok(result.receipts.some(r => r.id === b.id));
+});
+
+test('duplicate different workId: each must appear individually', async t => {
+  const f = fixture(t);
+  const a = await addItem(f.home, { kind: 'ask', text: '【DELL・seisaku-team@orgiast.jp の Claude Code】プロジェクト: test ／ 作業ID: c8d99e2b\n自動進行が判断待ちです: メールの送付可否\nあなたの返事待ち: 送ってよいですか' });
+  const b = await addItem(f.home, { kind: 'ask', text: '【DELL・seisaku-team@orgiast.jp の Claude Code】プロジェクト: test ／ 作業ID: 7f14e87b\n自動進行が判断待ちです: メールの送付可否\nあなたの返事待ち: 送ってよいですか' });
+  f.inject([a, b]);
+
+  // Only one in section → blocked
+  const result = f.judge('【受信箱】\n' + formatInboxBrief(a, 1));
+  assert.equal(result.decision, 'block');
+});

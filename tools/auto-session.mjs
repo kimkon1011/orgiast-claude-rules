@@ -470,6 +470,19 @@ export function isTodoAlreadyDone(md, todoText) {
   // 印の形が増えるたびに再実行保護が片方だけ効かなくなるのを避ける。
   const lineRe = new RegExp(`^\\s*\\d+[.)、]\\s+(?:~~${escaped}~~|\\[完了[^\\]]*\\]\\s+${escaped})`, 'm');
   if (lineRe.test(source)) return true;
+  // 2026-11-16: notify-kim マーカーが一致すれば本文が微妙に違っても完了と判定する
+  // （実害: 「検証」vs「再検証」の1文字差で90%閾値を超えず、完了済みTODOに
+  //   セッションを1本丸ごと消費した。notify-kim は同一通知の一意IDなので最強の一致鍵）。
+  const notifyMarker = firstLine.match(/<!--\s*notify-kim:([a-f0-9]+)\s*-->/);
+  if (notifyMarker) {
+    const doneLines = source.split(/\r?\n/).filter(line => {
+      const body = line.replace(/^\s*\d+[a-z]?[.)、]\s*/i, '');
+      if (body === line) return false; // 番号なし行はスキップ
+      return /~~[^~]*~~/.test(body) || /^(?:\*\*)?\s*(?:\[完了|\[[xX]\]|✅)/.test(body);
+    });
+    const markerRe = new RegExp(`<!--\\s*notify-kim:${notifyMarker[1]}\\s*-->`);
+    if (doneLines.some(body => markerRe.test(body))) return true;
+  }
   // 2026-10-25 実測: バッチ選定（15:30Z）の後に別セッションが該当行の**行末**へ注記と
   // 「→ ✅ 完了」を足したため、原文の完全一致では完了を見失い、既に片付いた TODO に
   // セッションを1本消費した（runs/2026-10-25-manifest.json の selectedTodos[5]

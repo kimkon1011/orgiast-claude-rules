@@ -1,0 +1,25 @@
+# 承認依頼に成果物の実物URLを必須化（2026-11-15）
+
+## 変更ファイル一覧
+| ファイル | 変更 |
+|---|---|
+| `tools/deliverable-drive-link-gate.mjs` | judgeApprovalContext() 追加、judgeDeliverableDriveLink() で呼び出し |
+| `tools/deliverable-drive-link-gate.test.mjs` | 承認コンテキストのテスト15件追加（全26件） |
+| `tools/gate-remedies.md` | 承認コンテキストの復旧手順を追記 |
+| `ONBOARDING.md` | §1.1「承認待ちの文面」節にルール1行追記 |
+
+## テスト実行結果
+```
+deliverable-drive-link test: 26/26 pass（既存11 + 新規15）
+gate-contract test: 81/81 pass
+gate-runtime test: 20/20 pass
+```
+
+## PR URL
+https://github.com/kimkon1011/orgiast-claude-rules/pull/2090
+
+## 恒久策（型で直す）
+1. judgeApprovalContext() を既存ゲートに追加し、承認コンテキストでのURL不足をブロック
+2. ONBOARDING.md にルールを追記し、Claude 側の自己点検を促す
+3. gate-remedies.md に復旧手順を追記し、差し戻し時に対処可能に
+4. 機械ゲート（既存deliverable-drive-link-gateと同じ状態管理・retry capを共有）

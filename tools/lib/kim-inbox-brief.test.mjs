@@ -114,7 +114,7 @@ test('formatInboxBrief produces expected multi-line format', t => {
   const formatted = formatInboxBrief(item, 3);
   const lines = formatted.split('\n');
   assert.match(lines[0], /^3\..*ロゴ確認.*/, `line 1 should start with number and topic: ${lines[0]}`);
-  assert.ok(lines.some(l => l.includes('起きたこと')), `should contain 起きたこと line`);
+  assert.ok(!lines.some(l => l.includes('起きたこと')), `same happened/decide sentence should not be repeated`);
   assert.ok(lines.some(l => l.includes('判断してほしいこと')), `should contain 判断してほしいこと line`);
   assert.ok(lines.some(l => l.includes('返事の例')), `should contain 返事の例 line`);
   assert.ok(lines.some(l => l.includes('開く')), `should contain 開く line for link`);
@@ -193,8 +193,9 @@ test('info with extracted decide gets reply options instead of 返事不要', t 
   });
   const brief = inboxBrief(item);
   assert.doesNotMatch(brief.reply, /返事不要/, 'info with action decide should not say 返事不要');
-  assert.match(brief.reply, /可/, 'info with action decide should offer reply options');
+  assert.equal(brief.reply, 'N マージしてよい／N <修正点>');
   assert.match(brief.decide, /PR を確認/, 'decide should include PR check instruction');
+  assert.equal(brief.happened, '', 'the same sentence is not repeated as happened and decide');
 });
 
 test('info with 判断不要 keeps reply as 返事不要', t => {
@@ -212,6 +213,24 @@ test('URL-guide lines are excluded from happened; URLs not truncated', t => {
   assert.doesNotMatch(brief.happened, /手順書/, 'happened should not include URL-guide line');
   assert.doesNotMatch(brief.happened, /docs\.google/, 'happened should not include URL-guide URL');
   assert.ok(brief.links.some(l => l.includes('docs.google.com')), 'URL-guide URL should remain in links');
+});
+
+test('long topic is not cut inside full-width parentheses', () => {
+  const item = makeItem({
+    kind: 'ask',
+    from: 'DELL',
+    text: '作業用014 の毎日のバックアップ（ClaudeDailyDriveBackup）が、パソコン版ドライブ未ログインのため止まっています（インストールと起動は済み、期限ジョブ2本は 11/12 18:04 の実行で正常＝0x0）。\nkim がやること（作業用014 で1回だけ）: ログインする\n手順書（kim@orgiast.jp で開く）: https://docs.google.com/document/d/AAA/edit?authuser=kim@orgiast.jp'
+  });
+  const brief = inboxBrief(item);
+  assert.match(brief.topic, /パソコン版ドライブ未ログインのため止まっています…$/);
+  assert.equal(brief.happened, '');
+  assert.doesNotMatch(brief.topic, /（[^）]*$/);
+});
+
+test('topic never cuts a URL in the middle', () => {
+  const url = `https://example.com/${'a'.repeat(100)}`;
+  const brief = inboxBrief(makeItem({ text: `確認してください ${'前'.repeat(55)} ${url}` }));
+  assert.ok(brief.topic.endsWith(url) || !brief.topic.includes('https://'), brief.topic);
 });
 
 test('happened falls back past URL-guide line', t => {
@@ -233,6 +252,7 @@ test('Markdown heading markers stripped from happened', t => {
   const brief = inboxBrief(item);
   assert.doesNotMatch(brief.happened, /^##\s/, 'happened should not start with # heading markers');
   assert.doesNotMatch(brief.happened, /\*\*/, 'happened should not contain bold markers');
+  assert.doesNotMatch(brief.happened, /📋/, 'happened should not contain emoji');
 });
 
 test('Markdown bold markers stripped from decide', t => {

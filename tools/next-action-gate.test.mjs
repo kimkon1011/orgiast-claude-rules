@@ -813,3 +813,46 @@ test('stop_hook_active で期限なし「まだ閉じない」は連続2回ま�
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('方法・プラン・パターン・手段・ルート・オプションもラベルだけなら block', () => {
+  for (const action of ['方法C', 'プランB', 'パターンA', '手段2', 'ルートX', 'オプション3']) {
+    assert.equal(judgeNextAction(inlineReport(action, inlineContent)).code, 'NEXT-ACTION-LABEL-ONLY', action);
+  }
+});
+
+test('本文の「方法C でよいか」は全角コロンなしでも未定義ラベルとして block', () => {
+  const text = body + '\n方法C でよいか\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: ' + SESSION_PHRASES.delete;
+  assert.equal(judgeNextAction(text).code, 'NEXT-ACTION-LABEL-UNDEFINED');
+});
+
+test('本文で C を使うなら A・B・C すべてに8文字以上の中身が必要', () => {
+  const report = definitions => body + '\n' + definitions + '\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: ' + SESSION_PHRASES.delete;
+  assert.equal(judgeNextAction(report('方法C（Google パスワードマネージャーで管理）')).code, 'NEXT-ACTION-LABEL-UNDEFINED');
+  assert.equal(judgeNextAction(report('方法A（月1回の棚卸しを実施する）方法B（週1回の棚卸しを実施する）方法C（Google パスワードマネージャーで管理）')).decision, 'pass');
+});
+
+test('stop_hook_active の書き直しでもラベル・承認・複数・遡りを検査し、3回目で打ち切る', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-hook-labels-'));
+  const previous = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  fs.mkdirSync(path.join(home, '.claude'));
+  try {
+    const cases = [
+      ['label', inlineReport('方法C', inlineContent), 'NEXT-ACTION-LABEL-ONLY'],
+      ['body-label', body + '\n方法C でよいか\n' + footer, 'NEXT-ACTION-LABEL-UNDEFINED'],
+      ['approval', inlineReport('今回の案を承認する'), 'NEXT-ACTION-APPROVAL-INLINE'],
+      ['multiple', inlineReport('支払い、署名', inlineContent), 'NEXT-ACTION-MULTIPLE'],
+      ['backref', inlineReport('前の応答を参照', inlineContent), 'NEXT-ACTION-BACKREF'],
+    ];
+    for (const [session_id, text, code] of cases) {
+      const input = { session_id, stop_hook_active: true };
+      assert.equal(judgeNextAction(text, '', input).code, code);
+      assert.equal(judgeNextAction(text, '', input).code, code);
+      assert.equal(judgeNextAction(text, '', input).decision, 'pass');
+    }
+  } finally {
+    if (previous === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previous;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

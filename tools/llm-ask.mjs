@@ -1,6 +1,7 @@
 // 複数プロバイダのLLMを1本で叩く統合CLIヘルパー。
 import { gatewayConfig, gatewayParams, usageCostFields } from './provider-routing.mjs';
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { readEnvValue } from './env-kv.mjs';
 import { allowedForCategory, callWithFallback, FALLBACK_CHAIN, preferredForCategory } from './llm-fallback.mjs';
 import { geminiUsage, recordGeminiUsage } from './gemini-usage-ledger.mjs';
@@ -26,6 +27,48 @@ const PROVIDERS = {
   claude: { base: 'https://openrouter.ai/api/v1/chat/completions', keyEnv: 'OPENROUTER_API_KEY', keyFile: 'openrouter.env', model: 'anthropic/claude-haiku-5.5', extraHeaders: { 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast' } },
 };
 export const OPENROUTER_GEMINI_MODEL = `google/${PROVIDERS.gemini.model}`;
+
+export function findCommand(name, { env = process.env, platform = process.platform, exists = fs.existsSync } = {}) {
+  const searchPath = env.PATH || env.Path || '';
+  const pathImpl = platform === 'win32' ? path.win32 : path;
+  const separator = platform === 'win32' ? ';' : path.delimiter;
+  const extensions = platform === 'win32'
+    ? String(env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+    : [''];
+  for (const dir of searchPath.split(separator).filter(Boolean)) {
+    for (const extension of extensions) {
+      const candidate = pathImpl.resolve(dir, `${name}${extension}`);
+      if (exists(candidate)) return candidate;
+    }
+  }
+  return '';
+}
+
+// API キーが一つも配置されていない端末でも、ChatGPT 認証済みの Codex CLI を
+// 最終レーンとして使う。read-only + 一時 cwd に固定し、質問への回答以外を実行させない。
+export function runCodexCliFallback({ prompt, system = '', timeoutMs = 120_000, env = process.env, spawn = spawnSync, executable } = {}) {
+  const command = executable || findCommand('codex', { env });
+  if (!command) return { ok: false, reason: 'codex-cli-not-found' };
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-ask-codex-'));
+  const outputFile = path.join(temp, 'answer.txt');
+  const instruction = [
+    'あなたは質問応答専用です。ファイルや外部システムを変更せず、最終回答だけを返してください。',
+    system ? `システム指示:\n${system}` : '',
+    `依頼:\n${prompt}`,
+  ].filter(Boolean).join('\n\n');
+  try {
+    const result = spawn(command, [
+      'exec', '--ephemeral', '--ignore-rules', '--sandbox', 'read-only', '--skip-git-repo-check',
+      '--color', 'never', '--cd', temp, '--output-last-message', outputFile, '-',
+    ], { input: instruction, encoding: 'utf8', timeout: timeoutMs, windowsHide: true, env });
+    const text = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, 'utf8').trim() : '';
+    if (result.status === 0 && text) return { ok: true, text, model: 'codex-cli/default' };
+    const detail = String(result.stderr || result.error?.message || `exit ${result.status}`).replace(/\s+/g, ' ').trim().slice(-300);
+    return { ok: false, reason: detail || 'codex-cli-empty-output' };
+  } finally {
+    try { fs.rmSync(temp, { recursive: true, force: true }); } catch {}
+  }
+}
 
 if (isEntry(import.meta.url)) {
 const args = process.argv.slice(2);
@@ -157,7 +200,13 @@ try {
   console.log(text.trim() || '(出力なし)');
   console.error(`[${result.candidate.provider}:${result.candidate.model}] in=${usage.prompt_tokens || 0} out=${usage.completion_tokens || 0}tok`);
 } catch (error) {
-  console.error(error.message);
-  process.exitCode = 1;
+  const fallback = runCodexCliFallback({ prompt, system, timeoutMs: perProviderTimeoutMs || 120_000 });
+  if (fallback.ok) {
+    console.log(fallback.text);
+    console.error(`[codex-cli:${fallback.model}] APIキー候補全滅から復旧`);
+  } else {
+    console.error(`${error.message} ; codex-cli(${fallback.reason})`);
+    process.exitCode = 1;
+  }
 }
 }

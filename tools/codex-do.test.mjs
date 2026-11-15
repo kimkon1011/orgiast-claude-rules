@@ -176,7 +176,7 @@ test('fallbackBackendTimeoutSecs は全体枠・既定値・環境変数・下�
   assert.equal(fallbackBackendTimeoutSecs(300, {}), 300);
   assert.equal(fallbackBackendTimeoutSecs(1800, { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: '900' }), 900);
   assert.equal(fallbackBackendTimeoutSecs(1800, { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: 'garbage' }), 900);
-  assert.equal(fallbackBackendTimeoutSecs(10, {}), 60);
+  assert.equal(fallbackBackendTimeoutSecs(10, {}), 10);
 });
 
 test('chainBackendBudgetSecs は連鎖の残り予算を超えない（全体枠を使い切ったら0で打ち切る）', () => {
@@ -2637,6 +2637,26 @@ test('timeout 行の試行秒数は予算+kill猶予に収まる（kill で締�
     assert.ok(attempt.secs <= allowed,
       `${attempt.backend} が予算${attempt.budgetSecs}秒+猶予1秒を超えて ${attempt.secs} 秒記録された`);
   }
+});
+
+test('主経路 codex にも共通 cap を適用し timeout 行へ実予算を記録する', () => {
+  const ledgerHome = workDir();
+  const env = fakeNativeCodexEnv('setInterval(() => {}, 1000);');
+  const started = Date.now();
+  const result = run(['--force-native', '--cwd', workDir(), '--model', 'sol', '--no-fallback', '--timeout', '2', '指示内容'], {
+    home: ledgerHome,
+    env: { ...env, CODEX_DO_TIMEOUT_KILL_GRACE_MS: '500' },
+  });
+  const elapsed = (Date.now() - started) / 1000;
+  const rows = fs.readFileSync(path.join(ledgerHome, '.claude', 'executor-usage.jsonl'), 'utf8')
+    .trim().split(/\r?\n/).map(JSON.parse);
+  const timeout = rows.find((row) => row.provider === 'codex' && row.status === 'timeout');
+  assert.ok(timeout, `主経路 timeout 行がない: ${JSON.stringify(rows)}`);
+  assert.equal(timeout.model, 'codex-cli/gpt-5.6-sol');
+  assert.equal(timeout.timeoutSecs, 2);
+  assert.ok(timeout.secs <= 4, `主経路実測が cap を超過: ${timeout.secs}秒`);
+  assert.ok(elapsed < 6, `主経路が共通 cap 2秒を超えて ${elapsed}秒動いた`);
+  assert.notEqual(result.status, 0);
 });
 
 test('gemini が拒否3回の後に無音で停滞しても周期判定で打ち切り次のバックエンドへ進む', () => {

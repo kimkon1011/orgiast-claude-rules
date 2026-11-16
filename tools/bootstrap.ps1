@@ -26,5 +26,11 @@ if (-not (Test-Path (Join-Path $Repo '.git'))) {
   git clone --depth 1 --quiet $Base $Repo
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $Repo 'tools'))) { throw 'repo clone failed' }
 }
-if (Have node) { & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $Repo 'tools\setup.mjs') --converge } else { throw 'node.js is required' }
+if (Have node) {
+  $nodeExe = if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }
+  # Merge stderr in CMD before PowerShell can turn it into NativeCommandError.
+  # /d disables AutoRun; /s /c requires outer quotes around the whole command.
+  & cmd.exe /d /s /c "`"`"$nodeExe`" `"$(Join-Path $Repo 'tools\setup.mjs')`" --converge 2>&1`""
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} else { throw 'node.js is required' }
 Write-Output '[ORGIAST-BOOTSTRAP-COMPLETE]'

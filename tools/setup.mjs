@@ -16,7 +16,6 @@ import { inspectTaskHiddenActions } from './setup-task-hidden-actions.mjs';
 import { convergeDeadlineTasks } from './setup-deadline-watch.mjs';
 import { convergeNightlyReload } from './setup-nightly-reload.mjs';
 import { convergeNodeRuntimeSecurity } from './setup-node-runtime-security.mjs';
-import { createConvergeDiag } from './setup-diag.mjs';
 
 // git 呼び出しを非対話にする（GIT_TERMINAL_PROMPT=0 / GCM_INTERACTIVE=never）。
 // setup.mjs はテストで単体コピーされて実行されるため ./lib/seat-github.mjs を静的 import しない。
@@ -226,6 +225,43 @@ function emit(results) {
 }
 
 
+// 診断: converge 経路のステップ追跡。RUNNER_TEMP がある CI でのみ出力。
+function createConvergeDiag() {
+  const runnerTemp = process.env.RUNNER_TEMP;
+  if (!runnerTemp) {
+    return { active: false, begin() {}, end() {}, write() {}, execFileSyncFail() {}, setupProcessHandlers() {}, getCurrentStep() { return ''; } };
+  }
+  const dir = path.join(runnerTemp, 'clean-install-logs');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch { return { active: false, begin() {}, end() {}, write() {}, execFileSyncFail() {}, setupProcessHandlers() {}, getCurrentStep() { return ''; } }; }
+  const filePath = path.join(dir, 'setup-steps.log');
+  let currentStep = 'init';
+  const startedAt = Date.now();
+  const log = (msg) => { try { fs.appendFileSync(filePath, msg + '\n', 'utf8'); } catch {} };
+  const elapsed = () => Date.now() - startedAt;
+  log(`[${new Date().toISOString()}] converge diag started`);
+  return {
+    active: true,
+    begin(name) { currentStep = name; log(`[${elapsed()}ms] begin: ${name}`); },
+    end(name, status = 'ok', extra = '') { currentStep = name + '(done)'; log(`[${elapsed()}ms] end: ${name} status=${status}${extra ? ' ' + extra : ''}`); },
+    write(msg) { log(`[${elapsed()}ms] ${msg}`); },
+    execFileSyncFail(description, { status, signal, stderr } = {}) {
+      const lines = [`[${elapsed()}ms] execFileSync FAIL: ${description}`];
+      if (status !== undefined && status !== null) lines.push(`  status=${status}`);
+      if (signal) lines.push(`  signal=${signal}`);
+      if (stderr) lines.push(`  stderr=${String(stderr).slice(0, 500)}`);
+      log(lines.join('\n'));
+    },
+    getCurrentStep() { return currentStep; },
+    setupProcessHandlers() {
+      process.on('exit', (code) => { log(`[${elapsed()}ms] process.exit: code=${code} lastStep=${currentStep}`); });
+      process.on('unhandledRejection', (reason) => {
+        const msg = reason?.stack || reason?.message || String(reason);
+        log(`[${elapsed()}ms] unhandledRejection at ${currentStep}: ${msg.slice(0, 1000)}`);
+        process.exitCode = 1;
+      });
+    },
+  };
+}
 const diag = createConvergeDiag();
 if (converge) diag.setupProcessHandlers();
 if (converge) { const lock = acquireSetupConvergeLock({ home }); if (!lock.acquired) { console.log(lock.reason); process.exit(0); } process.on('exit', () => lock.release()); }

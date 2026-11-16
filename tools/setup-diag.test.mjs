@@ -1,4 +1,4 @@
-// setup-diag.mjs のテスト
+// setup-diag 診断関数のテスト（setup.mjs に内蔵）
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -8,17 +8,18 @@ import { fileURLToPath } from 'node:url';
 
 const toolsDir = path.dirname(fileURLToPath(import.meta.url));
 
-async function createDiag() {
+// setup.mjs の createConvergeDiag は export されていないため、
+// テストでは独立した setup-diag.mjs から読み込む（同一ロジック）。
+async function getCreateFn() {
   const mod = await import('./setup-diag.mjs');
   return mod.createConvergeDiag;
 }
 
 test('RUNNER_TEMP 未設定では no-op で書き込まない', async () => {
-  // RUNNER_TEMP が undefined であることを確認
   const orig = process.env.RUNNER_TEMP;
   delete process.env.RUNNER_TEMP;
   try {
-    const createFn = await createDiag();
+    const createFn = await getCreateFn();
     const diag = createFn();
     assert.equal(diag.active, false);
     diag.begin('test');
@@ -38,7 +39,7 @@ test('RUNNER_TEMP 設定時はファイルができる', async (t) => {
   const orig = process.env.RUNNER_TEMP;
   process.env.RUNNER_TEMP = tmp;
   try {
-    const createFn = await createDiag();
+    const createFn = await getCreateFn();
     const diag = createFn();
     assert.equal(diag.active, true);
     const logFile = path.join(tmp, 'clean-install-logs', 'setup-steps.log');
@@ -57,7 +58,7 @@ test('begin/end が正しく追記される', async (t) => {
   const orig = process.env.RUNNER_TEMP;
   process.env.RUNNER_TEMP = tmp;
   try {
-    const createFn = await createDiag();
+    const createFn = await getCreateFn();
     const diag = createFn();
     diag.begin('step1');
     diag.end('step1', 'OK', 'extra info');
@@ -85,7 +86,7 @@ test('execFileSyncFail が status/signal/stderr を追記する', async (t) => {
   const orig = process.env.RUNNER_TEMP;
   process.env.RUNNER_TEMP = tmp;
   try {
-    const createFn = await createDiag();
+    const createFn = await getCreateFn();
     const diag = createFn();
     diag.execFileSyncFail('test-command', { status: 1, stderr: 'something went wrong' });
 

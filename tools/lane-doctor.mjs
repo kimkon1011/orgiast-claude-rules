@@ -13,6 +13,7 @@ import { notifyKim } from './notify-kim.mjs';
 import { redactAll } from './lib/redact.mjs';
 import { catalog } from './provider-catalog.mjs';
 import { applyRealLaneHealth, billingFailure, billingWithQuotaHint, quotaFailure } from './lib/lane-real-health.mjs';
+import { isDailyQuotaResponse, markDailyProviderCooldown, nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { isEnrollToken, validKeyservePcId } from './keyserve-auth.mjs';
 
@@ -75,7 +76,7 @@ health.substituted = Object.entries(health.lanes).filter(([p, s]) => isLane(p) &
     || p === 'gemini' && s.reason === 'missing_key' && health.lanes.openrouter?.alive))
     .map(([provider]) => ({ provider, via: 'openrouter' }));
   for (const { provider, via } of health.substituted) health.lanes[provider].via = via;
-  health.askOrder = ['gemini', 'deepseek', 'groq', 'openrouter'].filter(p => health.lanes[p]?.alive || health.lanes[p]?.via === 'openrouter' && health.lanes.openrouter?.alive);
+  health.askOrder = ['groq', 'deepseek', 'openrouter', 'gemini'].filter(p => health.lanes[p]?.alive || health.lanes[p]?.via === 'openrouter' && health.lanes.openrouter?.alive);
   health.deadNeedsUser = Object.entries(health.lanes).filter(needsUser)
     .map(([provider, s]) => ({ provider, reason: s.reason, tried: s.tried, fix: s.userFix || (s.reason.includes('payment') ? '請求設定でオートチャージ ON。手動チャージは禁止ルール。' : '本人アカウントで認証画面を開き OAuth 同意を完了する。') }));
   const missing = Object.entries(health.lanes).filter(([p, s]) => PROVIDERS.includes(p) && s.reason === 'missing_key' && s.via !== 'openrouter').map(([p]) => p);
@@ -233,6 +234,20 @@ export function notificationText(item, home) {
 4. 完了後は Claude が lane-doctor --probe で復旧を確認します。`;
 }
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+// until がある間は待つ。until が無いときも直近1時間は叩かず、期限到来後に1回だけ確認して自動復帰する。
+export function shouldSkipLiveProbe(state = {}, now = Date.now()) {
+  const reason = String(state.reason || '');
+  if (reason === 'missing_key' || reason === 'disabled') return true;
+  if (!/^(?:billing|quota_wait|cooldown|demoted|daily_limit|lane_doctor_usage_limit)$/.test(reason)) return false;
+  const until = Number(state.until);
+  if (Number.isFinite(until) && until > now) return true;
+  if (Number.isFinite(until) && until <= now) return false;
+  const last = Math.max(Date.parse(state.probedAt) || 0, Number(state.real24h?.lastQuotaAt) || 0, Number(state.real24h?.lastBillingAt) || 0);
+  // quota_wait は月次・週次リセットの可能性があり、1時間おきのprobeでは上限枠を無駄に消費する。
+  // until が分からないときは6時間に1回まで（§1.18.4: 安いAIレーンの疎通probe節約）。
+  const cooldownMs = reason === 'quota_wait' ? 6 * 60 * 60 * 1000 : 60 * 60 * 1000;
+  return Number.isFinite(last) && last > 0 && now - last < cooldownMs;
+}
 export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe, nativeTimeoutMs = NATIVE_WRITE_PROBE_TIMEOUT_MS, spawnImpl = spawnSync, providers = PROVIDERS, probeRetries = 1 } = {}) {
   const started = Date.now(), dir = path.join(home, '.claude');
   const health = laneDoctorQuick({ home, now, save: false, platform, spawnImpl });
@@ -241,7 +256,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   // 各 provider を並行実測し、一つの停止レーンで90秒枠を使い切らない。
   const probeProviders = providers.length ? providers : [...PROVIDERS, ...OPTIONAL_PROVIDERS.filter(o => health.lanes[o])];
   const results = await Promise.all(probeProviders.map(async p => {
-    if (health.lanes[p].reason === 'missing_key' || (p === 'codex' && !codexAuthStatusAny(home, { platform, spawnImpl }).login)) return [p, null];
+    if (!health.lanes[p] || shouldSkipLiveProbe(health.lanes[p], now) || (p === 'codex' && !codexAuthStatusAny(home, { platform, spawnImpl }).login)) return [p, null];
     let dryOk = true;
     if (p === 'codex') {
       if (platform === 'win32' && await listWsl() === '') {
@@ -301,7 +316,17 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       }
       health.lanes[p].probeReason = health.lanes[p].reason;
       if (deferred && cooldown[p]?.until) health.lanes[p].until = cooldown[p].until;
-      if (limited && !payment) { const until = providerResetUntil(text, now); cooldown[p] = { until, at: now, reason: 'lane_doctor_usage_limit' }; cooldownChanged = true; health.lanes[p].until = until; }
+      if (limited && !payment) {
+        if (isDailyQuotaResponse(429, text)) {
+          markDailyProviderCooldown(p, { home, now: new Date(now) });
+          health.lanes[p].until = nextUtcMidnight(new Date(now));
+        } else {
+          const until = providerResetUntil(text, now);
+          cooldown[p] = { until, at: now, reason: 'lane_doctor_usage_limit' };
+          cooldownChanged = true;
+          health.lanes[p].until = until;
+        }
+      }
     }
   }
   if (routingChanged && !persist(path.join(dir, 'routing-overrides.json'), routing, health)) health.repairs = health.repairs.filter(r => r.action !== 'demote_removed' || r.detail !== '実測成功');

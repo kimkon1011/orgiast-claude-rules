@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 
-export const TASK_NAME = 'ClaudeDelegationRatioWatch';
+export const TASK_NAME = 'OrgiastDelegationRatioWatch';
 export const TASK_TIME = '05:40';
 
 export function taskCommand({ node = process.execPath, script = fileURLToPath(new URL('./delegation-ratio-watch.mjs', import.meta.url)), home = os.homedir() } = {}) {

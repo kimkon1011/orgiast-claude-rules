@@ -186,15 +186,29 @@ function check(item) {
         }
         if (!new RegExp(spec.ifEnv.regex).test(raw)) return null;
       }
-      if (spec.hubMode && fleetHubNeedsConfiguration({ home })) return false;
-      if (spec.migrationMarker && !fs.existsSync(resolveHome(spec.migrationMarker))) return false;
+      if (spec.hubMode && fleetHubNeedsConfiguration({ home })) {
+        if (process.env.CI === 'true') return null; // CI では hub 未設定 → NOTICE
+        return false;
+      }
+      if (spec.migrationMarker && !fs.existsSync(resolveHome(spec.migrationMarker))) {
+        if (process.env.CI === 'true') return null; // CI では登録不可能 → NOTICE
+        return false;
+      }
       if (process.env.ORGIAST_SETUP_TASK_INFO_FIXTURE) {
         const fixture = JSON.parse(fs.readFileSync(process.env.ORGIAST_SETUP_TASK_INFO_FIXTURE, 'utf8'));
         const info = fixture[spec.name];
         return info?.registered === true ? checkTaskDetails(spec, info) : false;
       }
-      if (process.platform !== 'win32') return false;
-      execFileSync('schtasks.exe', ['/Query', '/TN', spec.name], { stdio: 'ignore', timeout: 10000, windowsHide: true });
+      if (process.platform !== 'win32') {
+        if (process.env.CI === 'true') return null; // CI では Windows 限定タスク不可 → NOTICE
+        return false;
+      }
+      try {
+        execFileSync('schtasks.exe', ['/Query', '/TN', spec.name], { stdio: 'ignore', timeout: 10000, windowsHide: true });
+      } catch {
+        if (process.env.CI === 'true') return null; // CI ではタスク不在 → NOTICE
+        return false;
+      }
       if (!spec.requireActionTarget && typeof spec.maxRunAgeHours !== 'number' && !spec.maxIntervalMinutes) return true;
       const info = readTaskDetails(spec.name);
       return info ? checkTaskDetails(spec, info) : !spec.maxIntervalMinutes;

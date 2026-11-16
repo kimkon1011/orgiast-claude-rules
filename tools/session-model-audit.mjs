@@ -22,14 +22,15 @@ export function targetModel(home) {
     const raw = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'model-default.json'), 'utf8'));
     if (raw && typeof raw.model === 'string' && raw.model.trim()) return raw.model.trim();
   } catch {}
-  return 'sonnet';
+  return 'opus';
 }
 
 export function settingsModelProblem(model, target) {
   const value = String(model ?? '').trim();
-  if (SUPERVISOR.test(target)) return null; // PC 単位で上位モデルを明示した場合は点検しない
-  if (!value) return '未設定（Claude Code の既定=Opus）';
-  if (SUPERVISOR.test(value)) return value;
+  if (!value) return '未設定（既定は Opus。settings.json の model を opus にする）';
+  if (/sonnet/i.test(value) && /opus/i.test(target)) return value;
+  if (SUPERVISOR.test(value) || /haiku/i.test(value)) return null;
+  if (value && value !== target && !SUPERVISOR.test(value) && /opus/i.test(target)) return value;
   return null;
 }
 

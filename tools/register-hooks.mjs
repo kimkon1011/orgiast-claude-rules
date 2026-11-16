@@ -60,7 +60,7 @@ function load(file) {
 }
 function defaultModel(homeDir) {
   try { const raw = JSON.parse(fs.readFileSync(path.join(homeDir, '.claude', 'model-default.json'), 'utf8')); if (raw && typeof raw.model === 'string' && raw.model.trim()) return raw.model.trim(); } catch {}
-  return 'sonnet';
+  return 'opus';
 }
 function backup(file) { if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak.${stamp}-installer`); }
 function write(file, value) {
@@ -221,7 +221,7 @@ try {
   // 判断が要る場面はそのセッション内で /model や advisor で上げる。次の SessionStart で既定は sonnet に戻る。
   // PC 単位の例外は、そのPCだけの ~/.claude/model-default.json {"model":"..."} で明示する。
   { const target = defaultModel(home); const current = String(settings.model ?? '').trim();
-    if (current !== target && (!current || /opus|fable/i.test(current))) { settings.model = target; added += 1; } }
+    if (current !== target && (!current || !/opus|haiku/i.test(current))) { settings.model = target; added += 1; } }
   // 旧PCは hook が `powershell -NoProfile -File ...ps1` で登録され、実行ポリシーで無音死している。
   policyRepaired = repairPowerShellExecutionPolicy(settings.hooks);
   added += policyRepaired;

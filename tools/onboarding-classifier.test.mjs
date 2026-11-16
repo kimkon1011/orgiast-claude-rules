@@ -31,19 +31,35 @@ function assertOptionalBudget(index) {
   assert(optionalBytes <= INDEX_BUDGET_BYTES, `非必須索引 ${optionalBytes} bytes`);
 }
 
-test('必須ルール全体は18000bytes以下で、超過時は統合・圧縮を要求する', () => {
+test('必須ルール全体は19500bytes以下で、超過時は統合・圧縮を要求する', () => {
   const body = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
-  // Current full mandatory text is already >12 KB; allow limited headroom,
-  // without weakening full-text distribution to satisfy a size target.
+  // 2026-11-16 の最上位ルール（人の手間はAIの効率より上）を全文配布した分だけ上限を上げた。
+  // 余裕は数百バイトに留め、次の追加では統合・圧縮を要求する。全文配布は削らない。
   const assertMandatoryBudget = index => {
     const { mandatoryBytes } = measureIndexBytes(index);
-    assert(mandatoryBytes <= 18000, `必須ルールの統合・圧縮が必要: ${mandatoryBytes} bytes > 18000 bytes`);
+    assert(mandatoryBytes <= 19500, `必須ルールの統合・圧縮が必要: ${mandatoryBytes} bytes > 19500 bytes`);
   };
   assertMandatoryBudget(makeIndex(body));
   const base = makeIndex('');
-  const exact = base + '\n🔴 ' + 'a'.repeat(18000 - Buffer.byteLength('\n🔴 '));
+  const exact = base + '\n🔴 ' + 'a'.repeat(19500 - Buffer.byteLength('\n🔴 '));
   assertMandatoryBudget(exact);
-  assert.throws(() => assertMandatoryBudget(exact + 'a'), /必須ルールの統合・圧縮が必要: 18001 bytes/);
+  assert.throws(() => assertMandatoryBudget(exact + 'a'), /必須ルールの統合・圧縮が必要: 19501 bytes/);
+});
+
+test('人の手間はAIの効率より上のルールが最初の絶対ルールとして全文配布される', () => {
+  const body = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
+  const index = makeIndex(body);
+  const rules = index.split('\n').filter(line => /^\*{0,2}\s*🔴/u.test(line));
+  assert.match(rules[0], /人の手間はAIの効率より上/);
+  assert.match(rules[0], /secretary\/book/);
+  assert.match(rules[0], /kim@orgiast\.jp と seisaku-team@orgiast\.jp の両方が空いている日時/);
+  assert.match(rules[0], /4〜5枠/);
+  assert.match(rules[0], /ご都合が合わない場合は、下記から追加で空き日時をお選びいただけます/);
+  assert.match(rules[0], /下記からご都合のよい日時をお選びいただくか、候補日時をお知らせください/);
+  const at = index.indexOf(rules[0]);
+  for (const later of ['ユーザーの手作業を極限まで減らす', 'send-context-check', '検証表で出し', '費用対効果は', '判断軸はオージャストの長期的利益']) {
+    assert.ok(index.indexOf(later) > at, later);
+  }
 });
 
 test('索引のUTF-8予算は必須全文と非必須案内を重複なく計上する', () => {

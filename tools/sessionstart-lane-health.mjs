@@ -6,6 +6,7 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { sessionSummary } from './stall-scan.mjs';
 import { laneHome } from './lane-doctor.mjs';
 import { laneDoctorQuick, summarize, notifyLaneStops } from './lane-doctor.mjs';
+import { loginHealthSessionStart } from './login-health.mjs';
 import { repairContext } from './lib/lane-repair-state.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -39,8 +40,9 @@ export function sessionLaneHealth(options) {
   const context = auditContext(home);
   (options?.auditLaunch || launchAudit)({ ...options, home, intervalHours: 6 });
   const health = laneDoctorQuick(options);
-launchLaneAutoProbes(health, { ...options, home });
-  return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: seatContext(options?.pcMap, options?.hostname) + '\n' + [context, summarize(health), repairContext(health, home, options?.now), sessionSummary(home, options?.now)].filter(Boolean).join(" / ") } };
+  launchLaneAutoProbes(health, { ...options, home });
+  const loginMsg = loginHealthSessionStart({ home });
+  return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: seatContext(options?.pcMap, options?.hostname) + '\n' + [context, summarize(health), repairContext(health, home, options?.now), sessionSummary(home, options?.now), loginMsg].filter(Boolean).join(" / ") } };
 }
 export async function main() {
   await readStdinWithTimeout();

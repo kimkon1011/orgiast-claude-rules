@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, needsNativeCodexProbe, nativeWriteProbeArgs, directGeminiCliState , shouldSkipLiveProbe } from './lane-doctor.mjs';
+import { laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, needsNativeCodexProbe, nativeWriteProbeArgs, directGeminiCliState, shouldSkipLiveProbe } from './lane-doctor.mjs';
 import { classifyTaskKind } from './lib/task-kind.mjs';
 import { nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
 const now = Date.parse('2026-10-08T06:00:00Z');
@@ -19,11 +19,21 @@ test('gemini-cli は Gemini の OpenRouter 代替表示を継承しない', () =
 
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-doctor-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const envKeys = ['GEMINI_API_KEY', 'DEEPSEEK_API_KEY', 'ZAI_API_KEY', 'GROQ_API_KEY', 'OPENROUTER_API_KEY', 'MISTRAL_API_KEY', 'XAI_API_KEY', 'MOONSHOT_API_KEY'];
+  const savedEnv = {};
+  for (const k of envKeys) {
+    if (process.env[k] !== undefined) { savedEnv[k] = process.env[k]; delete process.env[k]; }
+  }
+  t.after(() => {
+    fs.rmSync(home, { recursive: true, force: true });
+    for (const k of envKeys) {
+      if (savedEnv[k] !== undefined) process.env[k] = savedEnv[k]; else delete process.env[k];
+    }
+  });
   fs.mkdirSync(path.join(home, '.claude')); fs.mkdirSync(path.join(home, '.codex'));
   const token = `x.${Buffer.from(JSON.stringify({ email: 'test@example.com' })).toString('base64url')}.x`;
   atomicJson(path.join(home, '.codex/auth.json'), { tokens: { id_token: token } });
-  for (const [file, key] of [['gemini','GEMINI'],['deepseek','DEEPSEEK'],['zai','ZAI'],['groq','GROQ'],['openrouter','OPENROUTER']]) fs.writeFileSync(path.join(home, `.claude/${file}.env`), `${key}_API_KEY=test-fixture\n`);
+  for (const [file, key] of [['gemini','GEMINI'],['deepseek','DEEPSEEK'],['zai','ZAI'],['groq','GROQ'],['openrouter','OPENROUTER'],['kimi-api','MOONSHOT']]) fs.writeFileSync(path.join(home, `.claude/${file}.env`), `${key}_API_KEY=test-fixture\n`);
   return home;
 }
 const write = (h, f, s) => atomicJson(path.join(h, '.claude', f), s);
@@ -408,6 +418,102 @@ test('codex dry failure with real 401 still classifies oauth_consent', async t =
     notify: async () => ({ delivered: 'test' }) });
   assert.equal(result.lanes.codex.alive, false);
   assert.equal(result.lanes.codex.reason, 'dead:oauth_consent');
+});
+
+test('codex with 14 consecutive 401 bearer auth errors classifies as dead:oauth_consent even during cooldown/real_fail_rate', t => {
+  const home = fixture(t);
+  write(home, 'provider-cooldown.json', { codex: { until: now + 3600_000, reason: 'quota_wait' } });
+  write(home, 'lane-health.json', { lanes: { codex: { alive: false, reason: 'quota_wait', until: now + 3600_000, probedAt: new Date(now - 10000).toISOString(), lastProbeOkAt: new Date(now - 86400_000).toISOString() } } });
+  const rows = Array.from({ length: 14 }, (_, i) => JSON.stringify({
+    t: new Date(now - (14 - i) * 1000).toISOString(),
+    provider: 'codex',
+    status: 'cooldown',
+    reason: '401 Unauthorized: Missing bearer or basic authentication in header',
+    stderrTail: '401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses'
+  })).join('\n');
+  fs.writeFileSync(path.join(home, '.claude/executor-usage.jsonl'), rows + '\n');
+
+  const r = laneDoctorQuick({ home, now, save: false });
+  assert.equal(r.lanes.codex.alive, false);
+  assert.equal(r.lanes.codex.reason, 'dead:oauth_consent');
+});
+
+test('all lanes with auth errors classify as dead:oauth_consent when newer than lastProbeOkAt', t => {
+  for (const [provider, errText] of [
+    ['deepseek', '401 Unauthorized: invalid_api_key'],
+    ['gemini', 'HTTP 401 bearer or basic authentication required'],
+    ['groq', 'token_revoked by server'],
+    ['glm', 'refresh_token expired']
+  ]) {
+    const home = fixture(t);
+    write(home, 'provider-cooldown.json', { [provider]: { until: now + 3600_000, reason: 'quota_wait' } });
+    write(home, 'lane-health.json', { lanes: { [provider]: { alive: false, reason: 'real_fail_rate', probedAt: new Date(now - 10000).toISOString(), lastProbeOkAt: new Date(now - 3600_000).toISOString() } } });
+    fs.writeFileSync(path.join(home, '.claude/executor-usage.jsonl'), JSON.stringify({
+      t: new Date(now - 1000).toISOString(),
+      provider,
+      status: 'error',
+      reason: errText
+    }) + '\n');
+
+    const r = laneDoctorQuick({ home, now, save: false });
+    assert.equal(r.lanes[provider].alive, false, provider);
+    assert.equal(r.lanes[provider].reason, 'dead:oauth_consent', provider);
+  }
+});
+
+test('--probe executes real probe when lastProbeOkAt is older than 24 hours', async t => {
+  const home = fixture(t);
+  write(home, 'lane-health.json', {
+    lanes: {
+      deepseek: {
+        alive: true,
+        reason: 'probe_ok',
+        probedAt: new Date(now - 86400_000 - 1000).toISOString(),
+        lastProbeOkAt: new Date(now - 86400_000 - 1000).toISOString()
+      }
+    }
+  });
+
+  let probed = false;
+  const result = await laneDoctorProbe({
+    home,
+    now,
+    providers: ['deepseek'],
+    probe: async (p) => {
+      if (p === 'deepseek') probed = true;
+      return { code: 0, text: 'PONG' };
+    },
+    notify: async () => ({ delivered: 'test' })
+  });
+
+  assert.equal(probed, true);
+  assert.equal(result.lanes.deepseek.alive, true);
+  assert.equal(result.lanes.deepseek.lastProbeOkAt, new Date(now).toISOString());
+});
+
+test('codex with real24h reasons containing 401 bearer auth errors classifies as dead:oauth_consent without events array', t => {
+  const home = fixture(t);
+  write(home, 'lane-health.json', {
+    lanes: {
+      codex: {
+        alive: false,
+        reason: 'real_fail_rate',
+        probedAt: new Date(now - 10000).toISOString(),
+        lastProbeOkAt: new Date(now - 86400_000).toISOString(),
+        real24h: {
+          calls: 14,
+          failures: 14,
+          reasons: {
+            '401 Unauthorized: Missing bearer or basic authentication in header': 14
+          }
+        }
+      }
+    }
+  });
+
+  const r = laneDoctorQuick({ home, now, save: false });
+  assert.equal(r.lanes.codex.alive, false);
+  assert.equal(r.lanes.codex.reason, 'dead:oauth_consent');
 });
 
 test('shouldSkipLiveProbe: 回数制限・課金中は until まで実測しない', () => {

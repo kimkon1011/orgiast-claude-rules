@@ -10,6 +10,7 @@ const AUTH_MIN_FAILURES = 5;
 const http402 = text => /(?<!\d)402(?!\d)/.test(String(text));
 const http403 = text => /(?<!\d)403(?!\d)/.test(String(text));
 const http429 = text => /(?<!\d)429(?!\d)/.test(String(text));
+export const authFailurePattern = /HTTP[ _:]*401|(?<!\d)401(?!\d)|unauthorized|bearer or basic authentication|authentication|refresh_token|token_revoked|invalid_grant|invalid_api_key|not logged in/i;
 export const quotaFailure = text => http429(text) || /cooldown|(?:usage|weekly|monthly)[_ /.-]*limit|limit[^\n]{0,60}exhausted|rate[_ .-]?limit|RESOURCE_EXHAUSTED|codex_cooldown/i.test(String(text));
 // billing は 402 / insufficient balance|quota|credits / payment_required のみ。
 // 429 や rate limit 由来の "Insufficient credits" を billing と誤判定しない（quotaFailure と順序で分離）。
@@ -43,6 +44,17 @@ export function realLaneStats(home, now = Date.now()) {
     s.events.push(event);
     if (status === 'ok') { s.lastOkAt = Math.max(s.lastOkAt, at); continue; }
     const detail = [row.status, row.httpStatus, row.http_status, row.reason, row.error, row.stderr, row.stderrTail, row.spawnError].filter(Boolean).join(' ');
+    // 認証エラー (401 / bearer or basic authentication / refresh_token / token_revoked / invalid_api_key) は
+    // status が cooldown や 429 であっても最優先で記録し、quota/billing 扱いを阻止する。
+    if (authFailurePattern.test(detail)) {
+      s.failures++;
+      const http = detail.match(/(?:HTTP[ _:]*|(?:^|\s))([45]\d\d)\b/i)?.[1];
+      const reason = redactAll(http ? `HTTP ${http} ${detail.slice(0, 100)}` : String(row.reason || row.stderr || row.stderrTail || row.spawnError || row.status || detail).split(/\r?\n/)[0]).slice(0, 180);
+      event.reason = reason;
+      event.detail = redactAll(detail);
+      s.reasons[reason] = (s.reasons[reason] || 0) + 1;
+      continue;
+    }
     // cooldown 状態の行は常に quota 扱い（実機: glm が 70 件の cooldown 行を持ち real_fail_rate と誤判定）。
     // 402 は RESOURCE_EXHAUSTED を伴うことがある。429 も同居する場合だけ quota を優先する。
     if (row.status !== 'cooldown' && billingFailure(detail) && !billingWithQuotaHint(detail)) {
@@ -61,6 +73,7 @@ export function realLaneStats(home, now = Date.now()) {
     const http = detail.match(/(?:HTTP[ _:]*|(?:^|\s))([45]\d\d)\b/i)?.[1];
     const reason = redactAll(http ? `HTTP ${http}` : String(row.reason || row.stderr || row.stderrTail || row.spawnError || row.status).split(/\r?\n/)[0]).slice(0, 180);
     event.reason = reason;
+    event.detail = redactAll(detail);
     s.reasons[reason] = (s.reasons[reason] || 0) + 1;
   }
   for (const s of Object.values(providers)) s.failRate = s.calls ? s.failures / s.calls : 0;
@@ -70,7 +83,7 @@ export function realLaneStats(home, now = Date.now()) {
 export function applyRealLaneHealth(health, home, now = Date.now()) {
   const stats = realLaneStats(home, now);
   for (const [lane, state] of Object.entries(health.lanes)) {
-    const s = stats[lane];
+    const s = stats[lane] || state.real24h;
     if (s) state.real24h = s;
     const errorQuota = quotaFailure(state.error) && !(billingFailure(state.error) && !billingWithQuotaHint(state.error));
     const errorUntil = quotaReset(state.error);
@@ -86,9 +99,21 @@ export function applyRealLaneHealth(health, home, now = Date.now()) {
       errorQuota && errorUntil > now ? errorUntil : 0, cooldownQuota ? stateUntil : 0) || null;
     // Evaluate only calls after the latest proven recovery, independent of ledger order.
     const lastOkAt = Math.max(s?.lastOkAt || 0, probeOkAt);
-    const calls = s?.events.filter(event => event.at > lastOkAt) || [];
+    const calls = s?.events?.filter(event => event.at > lastOkAt) || [];
     const failures = calls.filter(event => event.reason !== undefined);
-    if (calls.length >= 5 && failures.length / calls.length >= .5) {
+    // A stopped lane must not hide newer auth evidence behind quota/failure state.
+    // Live lanes keep the existing minimum sample and auth-dominance thresholds.
+    const hasAuthError = !state.alive && (
+      (s?.events?.length ? calls.some(e => authFailurePattern.test(`${e.reason || ''} ${e.detail || ''}`)) :
+        s?.reasons && Object.keys(s.reasons).some(r => authFailurePattern.test(r))
+          && (!lastOkAt || millis(state.probedAt) > lastOkAt)) ||
+      (state.error && authFailurePattern.test(state.error)
+        && (!lastOkAt || millis(state.probedAt) > lastOkAt)));
+    if (hasAuthError) {
+      state.alive = false;
+      state.reason = 'dead:oauth_consent';
+      delete state.until;
+    } else if (calls.length >= 5 && failures.length / calls.length >= .5) {
       const isAuth = event => /basic authentication|HTTP\s*401|\b401\b|unauthorized|login required|token.*expired|Missing bearer|Failed to refresh token|access token could not be refreshed|log out and sign in again|sign in again/i.test(event.reason || '');
       const authFailures = failures.filter(isAuth);
       const authDominant = authFailures.length >= AUTH_MIN_FAILURES && authFailures.length / failures.length >= AUTH_DOMINANT_RATIO;

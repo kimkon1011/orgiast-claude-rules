@@ -387,3 +387,25 @@ test('codex refresh-token phrases classify as auth without a 401 or unauthorized
     assert.equal(health.lanes.codex.alive, false);
   }
 });
+
+test('stopped lane auth evidence is superseded by a later ledger or probe success', t => {
+  for (const ledgerSuccess of [false, true]) {
+    const home = fixture(t, [
+      { status: 'error', reason: 'HTTP 401 unauthorized', t: now - 3000 },
+      ...(ledgerSuccess ? [{ status: 'ok', t: now - 2000 }] : []),
+    ]);
+    const health = { lanes: { deepseek: {
+      alive: false, reason: 'quota_wait', until: now + 1000,
+      error: 'HTTP 401 unauthorized', probedAt: now - 3000,
+      lastProbeOkAt: now - (ledgerSuccess ? 4000 : 2000),
+    } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.deepseek.reason, 'quota_wait');
+    fs.appendFileSync(path.join(home, '.claude/executor-usage.jsonl'), '\n' + JSON.stringify({
+      provider: 'deepseek', status: 'cooldown', reason: 'HTTP 401 unauthorized', t: now - 1000,
+    }));
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.deepseek.reason, 'dead:oauth_consent');
+    assert.equal(health.lanes.deepseek.until, undefined);
+  }
+});

@@ -161,12 +161,19 @@ export function collectAiLaneLogins({
     };
   });
 
+  const loginHealth = readJson(path.join(home, ".claude", "login-health.json"), null);
+  const codexHealth = loginHealth?.results?.find(r => r.id === 'codex');
   const codexAuth = readJson(path.join(home, ".codex", "auth.json"), null);
   const idToken = codexAuth?.tokens?.id_token || codexAuth?.id_token || "";
+  let codexStatus = !codexAuth ? "未ログイン" : "ログイン済み";
+  if (codexHealth) {
+    if (codexHealth.status === 'fail') codexStatus = `停止(${codexHealth.detail})`;
+    else if (codexHealth.status === 'ok') codexStatus = "ログイン済み";
+  }
   rows.push({
     service: "安いAI: Codex",
     account: !codexAuth ? "未ログイン" : jwtEmail(idToken) || "ログイン済み(アカウント不明)",
-    scope: "", source: "auth.json", status: !codexAuth ? "未ログイン" : "ログイン済み", version: "",
+    scope: "", source: "auth.json", status: codexStatus, version: "",
   });
   const claude = readJson(path.join(home, ".claude.json"), null);
   rows.push({
@@ -263,11 +270,25 @@ export async function collectCloudInventory({
       });
     }
   }
+  const loginHealth = readJson(path.join(home, ".claude", "login-health.json"), null);
+  const ghHealth = loginHealth?.results?.find(r => r.id === 'github');
+
   if (exists("gh")) {
     const r = run("gh", ["auth", "status"]);
     const parsed = parseGhAuthStatus(r.stdout + "\n" + r.stderr);
     if (parsed.length)
       parsed.forEach((row) => add({ ...row, version: versionOf("gh", run) }));
+    else if (ghHealth && ghHealth.status !== 'fail' && /PAT\s*有効/i.test(ghHealth.detail)) {
+      const userMatch = ghHealth.detail.match(/\(([^,)]+)/);
+      const login = userMatch ? userMatch[1] : '';
+      add({
+        service: "GitHub",
+        account: login,
+        source: "git credential",
+        status: `ログイン済み(git credential${login ? `: ${login}` : ''})`,
+        version: versionOf("gh", run),
+      });
+    }
     else
       add({
         service: "GitHub",
@@ -409,6 +430,38 @@ export async function collectCloudInventory({
       });
     }
   rows.push(...collectAiLaneLogins({ home }));
+
+  const browserDir = path.join(home, ".claude");
+  try {
+    const findSessionFiles = (dir) => {
+      let results = [];
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          results.push(...findSessionFiles(fullPath));
+        } else if (entry.isFile() && entry.name.endsWith("-session-state.json")) {
+          results.push(fullPath);
+        }
+      }
+      return results;
+    };
+    for (const file of findSessionFiles(browserDir)) {
+      const name = path.basename(file, "-session-state.json");
+      const state = readJson(file, null);
+      if (!state) continue;
+      const days = state.needsHumanSince ? Math.max(0, Math.floor((started - Date.parse(state.needsHumanSince)) / 86400000)) : null;
+      const statusText = state.loggedIn ? "ログイン済み" : `未ログイン${days !== null ? ` (${days}日)` : ''}`;
+      add({
+        service: `ブラウザ: ${name}`,
+        account: state.reason || (state.loggedIn ? "ログイン済み" : "要ログイン"),
+        source: path.basename(file),
+        status: statusText,
+        version: "",
+      });
+    }
+  } catch {}
+
   return rows;
 }
 

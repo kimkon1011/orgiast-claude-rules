@@ -11,7 +11,7 @@ test('判断待ちの主題を kim に聞いていなければ block', () => {
 });
 
 test('判断待ちの主題を確認全文で聞いていれば pass', () => {
-  const result = evaluatePendingDecision(`${row}\n\n【kim 確認用の全文】\nIndeed の有料広告・助太刀について、有料広告を再開するか選んでください。推奨は再開です。`);
+  const result = evaluatePendingDecision(`${row}\n\n【kim 確認用の全文】\n有料広告を再開するか選んでください。推奨は再開です。`);
   assert.equal(result.decision, 'pass');
 });
 

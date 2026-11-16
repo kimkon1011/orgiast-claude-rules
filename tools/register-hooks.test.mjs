@@ -656,6 +656,11 @@ test('main の追加ゲートを critical な dispatcher 登録として保持�
       assert.equal(hooks.length, 1); assert.equal(hooks[0].critical, true); assert.equal(hooks[0].policy, true);
       for (const tool of ['Bash','PowerShell', name.startsWith('mail') ? 'mcp__claude_ai_Gmail__send_message' : 'mcp__claude_ai_Canva__delete_design']) assert.match(tool, new RegExp(hooks[0].matcher));
     }
+    const staff = dispatch.events.PreToolUse.filter(h => h.name === 'staff-ask-selfcheck-gate.mjs');
+    assert.equal(staff.length, 1);
+    assert.equal(staff[0].matcher, 'mcp__.*Discord.*|mcp__.*Slack.*|mcp__.*Gmail.*|Bash|PowerShell');
+    assert.equal(staff[0].critical, true);
+    assert.equal(staff[0].policy, true);
     const result = verify();
     assert.equal(result.status, 0, result.stdout + result.stderr);
   }

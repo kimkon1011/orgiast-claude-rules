@@ -6,11 +6,11 @@ import path from 'node:path';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { run } from './stop-gate-runner.mjs';
+import { run, advisoryOnlyReason, RETRY_INSTRUCTION, LIGHT_GATES } from './stop-gate-runner.mjs';
 
 const runner = fileURLToPath(new URL('./stop-gate-runner.mjs', import.meta.url));
 
-for (const rewrite of [false, true]) test(`未登録の約束は共通再試行上限で止まる（書き直し=${rewrite}）`, async t => {
+for (const rewrite of [false, true]) test(`未登録の約束は初回から警告のみ（書き直し=${rewrite}）`, async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-promise-'));
   const previousHome = process.env.ORGIAST_HOME;
   process.env.ORGIAST_HOME = home;
@@ -25,16 +25,16 @@ for (const rewrite of [false, true]) test(`未登録の約束は共通再試行�
   for (let attempt = 0; attempt < 3; attempt++) {
     const text = `${rewrite ? ['台帳へ', 'ノウハウへ', '手順書へ'][attempt] : '台帳へ'}記録します。\nこの後の自動進行: なし`;
     const result = await run({ ...input, last_assistant_message: text, stop_hook_active: attempt > 0 }, context, options);
-    assert.ok(result.record.blockedBy.includes('unregistered-promise-gate'));
-    assert.ok(result.record.reasonCodes.includes('UNREGISTERED-PROMISE'));
-    assert.equal(result.record.verdict, attempt < 2 ? 'block' : 'retry-cap');
-    assert.equal(result.decision, attempt < 2 ? 'block' : undefined);
+    assert.ok(result.record.warned.includes('unregistered-promise-gate'));
+    assert.match(result.systemMessage, /unregistered-promise-gate/);
+    assert.equal(result.record.verdict, 'pass');
+    assert.equal(result.decision, undefined);
   }
   const repaired = await run({ ...input, last_assistant_message: '台帳へ記録しました。', stop_hook_active: true }, context, options);
   assert.equal(repaired.record.verdict, 'pass');
   assert.ok(!repaired.record.blockedBy.includes('unregistered-promise-gate'));
   const records = fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(records[2].verdict, 'pass_after_cap');
+  assert.equal(records[2].verdict, 'pass');
 });
 
 // invoke() は process.env を子プロセスへそのまま渡す。自動セッション（CLAUDE_HEADLESS=1）の中で
@@ -646,7 +646,7 @@ test('先行ゲートが全て降格された場合は第2段の監査で手渡�
     '本文です。結果をまとめました。',
     '',
     '【kim 確認用の全文】',
-    'A案: 見積を据え置く。B案: 値引きする。',
+    'A案: 見積もり金額を据え置く。B案: 全体を10%値引きする。',
     '',
     '恒久策: 一回限り: この判断だけは kim に確認する。',
     '',
@@ -713,15 +713,35 @@ test('自動進行の check は runner から現在ターンとセッション�
   const input = { session_id: 'current-check', last_assistant_message: 'この後の自動進行: 返信を待って配布へ組み込む' };
   const options = { mode: 'off', policyOptions: { home, hostname: 'kim-PC', notify: async () => ({ delivered: 'test' }) } };
   const blocked = await run(input, { raw, humanText: '', assistantText: '' }, options);
-  assert.ok(blocked.record.reasonCodes.includes('AUTOPROGRESS-NEEDS-CURRENT-CHECK'));
+  assert.notEqual(blocked.decision, 'block');
+  assert.ok(blocked.record.warned.includes('unregistered-promise-gate'));
+  assert.equal(blocked.record.autoRegisteredCheck, true);
   const { addCheck } = await import('./auto-progress.mjs');
   addCheck({ session: input.session_id, check: 'test -f result.txt', label: '配布', deadline: '+2d', home, now });
   const passed = await run(input, { raw, humanText: '', assistantText: '' }, options);
   assert.ok(!passed.record.blockedBy.includes('unregistered-promise-gate'));
 });
 
+test('retry preface and piggyback hint alone are advisory; actual violations remain blocking reasons', () => {
+  assert.equal(advisoryOnlyReason(RETRY_INSTRUCTION), true);
+  assert.equal(advisoryOnlyReason(`${RETRY_INSTRUCTION}\n\n### ピギーバック・ヒント\n末尾の書式`), true);
+  assert.equal(advisoryOnlyReason(`${RETRY_INSTRUCTION}\n\n### next-action-gate\n未完了`), false);
+  for (const name of ['url-account-gate', 'message-locator-gate', 'third-party-nudge-gate', 'unregistered-promise-gate']) assert.ok(LIGHT_GATES.includes(name));
+  for (const name of ['mail-send-approval-gate', 'delete-approval-gate', 'api-billing-guard', 'app-llm-cost-gate', 'lane-repair-first-gate']) assert.ok(!LIGHT_GATES.includes(name));
+});
+
+test('message-locator warns on first attempt without requiring a rewrite', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'locator-warning-'));
+  const old = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  t.after(() => { if (old === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = old; });
+  const result = await run({ session_id: 'locator', assistant_text: '結果は Discord に送りました。' }, { raw: '', humanText: '', assistantText: '' }, { mode: 'off' });
+  assert.notEqual(result.decision, 'block');
+  assert.match(result.systemMessage, /message-locator-gate/);
+});
+
 // The safety net must run independently of the ordinary rewrite budget.
-for (const mode of ['cap', 'pass', 'open', 'cron', 'scheduled', 'none', 'failure']) test(`autopilot fallback: ${mode}`, async t => {
+for (const mode of ['cap', 'pass', 'close-pass', 'close-failure', 'open', 'cron', 'scheduled', 'none', 'failure']) test(`autopilot fallback: ${mode}`, async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-fallback-'));
   const previousHome = process.env.ORGIAST_HOME;
   process.env.ORGIAST_HOME = home;
@@ -735,11 +755,12 @@ for (const mode of ['cap', 'pass', 'open', 'cron', 'scheduled', 'none', 'failure
   const { registerStopViolation, stateFile } = await import('./lib/stop-recheck.mjs');
   const input = { session_id: 'fallback', cwd: home };
   const autopilot = mode === 'none' ? 'なし' : '返信が届きしだい報告し、深夜2時に残作業を実施する。' + '進行'.repeat(30);
-  const text = `${mode === 'pass' ? '[AUTOPROGRESS-CHECK-OK: 機械判定できない返信待ち]' : '記録します。'}\n次に kim がすること: ${mode === 'cap' ? '支払い、署名' : 'なし'}\nこの後の自動進行: ${autopilot}\nこのセッション: /session-close は不要なので、このセッションを閉じてよい`;
-  if (mode !== 'pass') for (let i = 0; i < 2; i++) registerStopViolation({ input, assistantText: `prior-${i}`, blockedBy: ['unregistered-promise-gate'], home });
+  // Close reports bypass ordinary gates but must retain the generic watch fallback.
+  const text = `${mode.startsWith('close-') ? closeSteps : mode === 'pass' ? '[AUTOPROGRESS-CHECK-OK: 機械判定できない返信待ち]' : '記録します。'}\n次に kim がすること: ${mode === 'cap' ? '支払い、署名' : 'なし'}\nこの後の自動進行: ${autopilot}\nこのセッション: /session-close は不要なので、このセッションを閉じてよい`;
+  if (mode !== 'pass' && !mode.startsWith('close-')) for (let i = 0; i < 2; i++) registerStopViolation({ input, assistantText: `prior-${i}`, blockedBy: ['unregistered-promise-gate'], home });
   const file = ledgerFile(home);
   if (mode === 'open') fs.writeFileSync(file, JSON.stringify({ ts: new Date().toISOString(), sessionId: 'fallback', status: 'open', check: 'node -e "process.exit(1)"' }) + '\n');
-  if (mode === 'failure') fs.mkdirSync(file);
+  if (mode.endsWith('failure')) fs.mkdirSync(file, { recursive: true });
   const name = mode === 'scheduled' ? 'ScheduleWakeup' : 'CronCreate';
   const raw = ['cron', 'scheduled'].includes(mode) ? [
     { type: 'assistant', timestamp: new Date().toISOString(), message: { content: [{ type: 'tool_use', name, id: 'timer', input: { recurring: true, delaySeconds: 3600 } }] } },
@@ -748,25 +769,34 @@ for (const mode of ['cap', 'pass', 'open', 'cron', 'scheduled', 'none', 'failure
   const context = { raw, humanText: '', assistantText: text };
   const options = { mode: 'off', policyOptions: { home, hostname: 'kim-PC', notify: async () => ({ delivered: 'test' }) } };
   const result = await run(input, context, options);
-  if (mode === 'failure') {
+  if (mode.endsWith('failure')) {
     assert.equal(result.decision, 'block');
     assert.ok(result.record.reasonCodes.includes('AUTOPILOT-REGISTRATION-FAILED'));
     return;
   }
   assert.notEqual(result.decision, 'block', result.reason);
-  const created = ['cap', 'pass'].includes(mode);
-  // At the retry cap, explicit progress checks supersede the generic watch fallback.
-  if (mode === 'cap') {
+  const created = mode === 'close-pass';
+  // WAIT_CHECK now registers immediately when no rewrite-worthy violation remains,
+  // as well as at the retry cap. Either path supersedes the generic fallback.
+  if (mode === 'cap' || mode === 'pass') {
     assert.equal(result.record.verdict, 'pass_after_autoregister');
     assert.equal(result.record.autoRegisteredCheck, false);
     const rows = readLedger(file);
     assert.equal(rows.length, 1);
-    assert.equal(rows[0].status, 'scheduled');
-    assert.match(rows[0].startWhen, /session-progress-check\.mjs" --session "fallback"$/);
+    assert.equal(rows[0].status, 'open');
+    assert.match(rows[0].check, /session-progress-check\.mjs" --session "fallback"$/);
     assert.equal(readLedger(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl')).at(-1).verdict, 'pass_after_autoregister');
     const { record: recordPromise } = await import('./auto-progress-ledger.mjs');
     recordPromise({ ...input, last_assistant_message: text }, { home });
     assert.equal(readLedger(file).at(-1).check, rows[0].check);
+    if (mode === 'pass') {
+      assert.equal(result.record.retryCap, false);
+      assert.equal(fs.existsSync(stateFile(home)), false);
+      assert.ok(result.record.reasonCodes.includes('AUTOPILOT-NO-SESSION-WAKEUP'));
+    }
+    const before = readLedger(file).length;
+    await run(input, context, options);
+    assert.equal(readLedger(file).length, before, 'a registered check must not be duplicated');
     return;
   }
   assert.equal(result.record.autoRegisteredCheck, created);
@@ -781,9 +811,9 @@ for (const mode of ['cap', 'pass', 'open', 'cron', 'scheduled', 'none', 'failure
   assert.equal(row.label, [...autopilot].slice(0, 60).join(''));
   assert.equal(Date.parse(row.deadlineAt) - Date.parse(row.ts), 2 * 86400000);
   const records = readLedger(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'));
-  assert.equal(records.at(-1).verdict, mode === 'cap' ? 'pass_after_cap' : 'pass');
+  assert.equal(records.at(-1).verdict, 'pass');
   assert.equal(records.at(-1).autoRegisteredCheck, true);
-  if (mode === 'pass') assert.equal(fs.existsSync(stateFile(home)), false);
+  assert.equal(fs.existsSync(stateFile(home)), false);
   const notice = consumeInbox({ ...input, hook_event_name: 'UserPromptSubmit' }, { home, env: {} });
   assert.match(notice.hookSpecificOutput.additionalContext, /自動登録した/);
   assert.equal(consumeInbox(input, { home, env: {} }), null);

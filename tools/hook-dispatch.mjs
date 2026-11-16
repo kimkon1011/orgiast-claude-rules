@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { EVENTS, defaultRepo, readDispatchManifest, tokens, isDispatcher } from './hook-dispatch-registry.mjs';
+import { dedupeContext } from './lib/context-dedupe.mjs';
 
 export function matches(matcher, event, input) {
   if (!matcher || matcher === '*') return true;
@@ -23,10 +24,15 @@ export function parseOutput(stdout) {
   }
   return null;
 }
-export function mergeResults(event, results) {
+export function mergeResults(event, results, { home, sessionId } = {}) {
   const reasons = [], contexts = [], messages = [];
   let permission, updatedInput, continueValue, stopReason, sessionTitle, legacyBlock = false;
-  for (const result of results) {
+  for (const [index, result] of results.entries()) {
+    const addContext = text => {
+      const fresh = ['PostToolUse', 'UserPromptSubmit'].includes(event)
+        ? dedupeContext(text, { home, sessionId, source: `dispatch:${result.name || index}` }) : text;
+      if (fresh) contexts.push(fresh);
+    };
     if ((result.timedOut && !(result.name === 'kim-inbox.mjs' && result.contextComplete)) || result.skipped || ![0, 2].includes(result.status)) continue;
     const out = parseOutput(result.stdout), specific = out?.hookSpecificOutput;
     if (result.status === 2) {
@@ -34,9 +40,9 @@ export function mergeResults(event, results) {
       legacyBlock = true;
     } else {
       if (specific?.permissionDecision === 'deny' || out?.decision === 'block') reasons.push(specific?.permissionDecisionReason || out.reason || 'Hook blocked the operation');
-      if (specific?.additionalContext) contexts.push(specific.additionalContext);
+      if (specific?.additionalContext) addContext(specific.additionalContext);
       if (typeof specific?.sessionTitle === 'string' && specific.sessionTitle.trim() && ['SessionStart', 'UserPromptSubmit'].includes(event)) sessionTitle = specific.sessionTitle;
-      if (!out && result.stdout?.trim() && ['SessionStart', 'UserPromptSubmit'].includes(event)) contexts.push(result.stdout.trim());
+      if (!out && result.stdout?.trim() && ['SessionStart', 'UserPromptSubmit', 'PostToolUse'].includes(event)) addContext(result.stdout.trim());
       if (out?.systemMessage) messages.push(out.systemMessage);
       if (specific?.permissionDecision === 'ask') permission = 'ask';
       else if (specific?.permissionDecision === 'allow' && !permission) permission = 'allow';
@@ -235,6 +241,7 @@ export async function dispatch(event, raw, options = {}) {
   const poolSize = Math.max(1, Math.min(8, Math.floor(Number(options.concurrency) || Math.max(4, Math.ceil(os.availableParallelism() / 4)))));
   const slots = [];
   const deadline = start + (options.budgetMs ?? dispatchBudgetMs(home, event, manifest));
+  let budgetExhausted = false;
   const unavailable = (hook, why) => hook.critical
     ? { status: 0, stdout: '', stderr: '', criticalUnfinished: why }
     : { status: 0, skipped: why };
@@ -246,7 +253,7 @@ export async function dispatch(event, raw, options = {}) {
       const item = pending.shift(), { hook } = item, began = Date.now();
       let result;
       if (overloaded && !hook.critical) result = { status: 0, skipped: 'load-shed' };
-      else if (began >= deadline) result = unavailable(hook, 'dispatch-budget');
+      else if (budgetExhausted || began >= deadline) result = unavailable(hook, 'dispatch-budget');
       else {
         // Queue time never consumes the hook's own budget. A separate event
         // deadline keeps us inside settings.json; unfinished gates pass with metrics.
@@ -255,6 +262,10 @@ export async function dispatch(event, raw, options = {}) {
           result = options.execute ? await options.execute(hook, raw, timeout)
             : external ? await externalHook(hook, raw, timeout, { ...options, onSpawn: (...args) => { childProcesses++; options.onSpawn?.(...args); } })
               : await slot.run(hook, raw, timeout);
+          // Timers can fire just before the wall-clock deadline. Once an event-
+          // limited timeout fires, keep its cause instead of reporting worker
+          // exhaustion (or starting another hook in that rounding gap).
+          if (result.timedOut && timeout === deadline - began) budgetExhausted = true;
           if (hook.critical && (result.timedOut || ![0, 2].includes(result.status))) {
             // A timed-out kim-inbox gate that already completed its context keeps
             // the delivery; only the unfinished reason is recorded.
@@ -282,13 +293,13 @@ export async function dispatch(event, raw, options = {}) {
     await Promise.all(consumers);
     // Retired workers are never replaced: even a set of hanging hooks cannot
     // cause unbounded isolate creation. Healthy workers drain the remaining queue.
-    for (const item of nodeQueue) save(item, unavailable(item.hook, Date.now() >= deadline ? 'dispatch-budget' : 'hook-error'), Date.now());
+    for (const item of nodeQueue) save(item, unavailable(item.hook, budgetExhausted || Date.now() >= deadline ? 'dispatch-budget' : 'hook-error'), Date.now());
     const record = { at: new Date(start).toISOString(), event, durationMs: Date.now() - start, overloaded, active: lease.active,
       childProcesses, workersCreated, poolSize, budgetMs: deadline - start,
       timedOut: results.filter(r => r.timedOut).length, skipped: results.filter(r => r.skipped).length,
       hooks: results.map(({ name, critical, durationMs, queueMs, timedOut, skipped, status, error, criticalUnfinished }) => ({ name, critical, durationMs, queueMs, timedOut: !!timedOut, skipped, status, error, criticalUnfinished })) };
     appendMetrics(home, record);
-    return { ...mergeResults(event, results), metrics: record, results };
+    return { ...mergeResults(event, results, { home, sessionId: input.session_id || input.sessionId }), metrics: record, results };
   } finally { for (const slot of slots) slot.close(); lease.release(); }
 }
 export async function hookMain(raw, event = process.argv[2]) {

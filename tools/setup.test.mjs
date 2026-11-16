@@ -12,7 +12,14 @@ const toolsDir = path.dirname(fileURLToPath(import.meta.url));
 const setup = path.join(toolsDir, 'setup.mjs');
 const temp = (name) => fs.mkdtempSync(path.join(os.tmpdir(), name));
 const write = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value); };
-const run = (args, env = {}) => spawnSync(process.execPath, [setup, ...args], { encoding: 'utf8', env: { ...process.env, ORGIAST_REPO: path.dirname(toolsDir), FLEET_BEACON: '0', ...env } });
+const run = (args, env = {}) => {
+  const childEnv = { ...process.env, ORGIAST_REPO: path.dirname(toolsDir), FLEET_BEACON: '0' };
+  // CI escape: 親の CI 変数を子プロセスに渡さない（明示 env で上書き可）。
+  if (!('CI' in env)) delete childEnv.CI;
+  if (!('GITHUB_ACTIONS' in env)) delete childEnv.GITHUB_ACTIONS;
+  Object.assign(childEnv, env);
+  return spawnSync(process.execPath, [setup, ...args], { encoding: 'utf8', env: childEnv });
+};
 const manifest = (items) => ({ version: 1, items });
 const item = (id, type, spec, severity = 'required', extra = {}) => ({ id, type, severity, spec, description: id, ...extra });
 
@@ -129,6 +136,40 @@ test('git-origin: 未配置はNOTICE・届かないURL/認証エラーはNG・�
   // ローカル bare リモートに届く → OK（ネットワーク不要）
   execFileSync('git', ['-C', repo, 'remote', 'set-url', 'origin', bare], { stdio: 'pipe' });
   assert.equal(status(), 'OK');
+});
+
+test('file-nonempty optional items are NOTICE in CI (env keys absent on clean runner)', () => {
+  const home = temp('setup-env-ci-');
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([
+    item('env:ci-key', 'file-nonempty', { path: '.claude/missing-key.env' }, 'optional'),
+    item('env:ci-required', 'file-nonempty', { path: '.claude/missing-required.env' }, 'required'),
+    item('env:ci-present', 'file-nonempty', { path: '.claude/present.env' }, 'optional'),
+  ])));
+  write(path.join(home, '.claude/present.env'), 'exists');
+  // CI=true: optional missing → NOTICE, required missing → NG
+  const ciResult = run(['--json', '--home', home, '--manifest', mf], { CI: 'true' });
+  assert.equal(ciResult.status, 1, 'required NG in CI should exit 1');
+  const ciItems = JSON.parse(ciResult.stdout).items;
+  assert.equal(ciItems.find(i => i.id === 'env:ci-key').status, 'NOTICE');
+  assert.equal(ciItems.find(i => i.id === 'env:ci-required').status, 'NG');
+  assert.equal(ciItems.find(i => i.id === 'env:ci-present').status, 'OK');
+  // CI なし（ローカル実PC相当）: optional missing → NG（自動修復対象として扱う）
+  const localResult = run(['--json', '--home', home, '--manifest', mf]);
+  assert.equal(localResult.status, 1, 'required NG without CI should exit 1');
+  const localItems = JSON.parse(localResult.stdout).items;
+  assert.equal(localItems.find(i => i.id === 'env:ci-key').status, 'NG');
+  assert.equal(localItems.find(i => i.id === 'env:ci-required').status, 'NG');
+  assert.equal(localItems.find(i => i.id === 'env:ci-present').status, 'OK');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('manifest: settings:unattended-elevation-gate is optional until rollout denyAfter', () => {
+  const parsed = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8'));
+  const gate = parsed.items.find(x => x.id === 'settings:unattended-elevation-gate');
+  assert.equal(gate.severity, 'optional', 'should be optional while gate-rollout-manifest denyAfter (2026-11-20) has not passed');
+  const hookFile = parsed.items.find(x => x.id === 'hook:unattended-elevation-gate');
+  assert.equal(hookFile.severity, 'required', 'hook file existence should remain required');
 });
 
 test('project manifest has unique known item types and severities', () => {
@@ -398,6 +439,10 @@ for (const [name, change, expected] of [
   ['unregistered fixture task is NG', { registered: false }, 'NG'],
   ['task absent from fixture is NG', { absent: true }, 'NG'],
   ['legacy spec only checks registration with fixture', { legacy: true, missing: true, age: 60 }, 'OK'],
+  ['hourly external watch must converge to thirty minutes', { cadence: true, intervals: [60] }, 'NG'],
+  ['thirty minute watch with bounded execution passes', { cadence: true, intervals: [30] }, 'OK'],
+  ['unknown repetition interval must be repaired', { cadence: true }, 'NG'],
+  ['execution longer than interval must be repaired', { cadence: true, intervals: [30], executionMinutes: 55 }, 'NG'],
 ]) {
   test(`scheduled-task: ${name}`, (t) => {
     const home = temp('setup-task-info-');
@@ -408,10 +453,11 @@ for (const [name, change, expected] of [
     const script = path.join(home, 'space dir', 'stall-sweeper.mjs');
     write(wrapper, 'wrapper');
     if (!change.missing) write(script, 'script');
-    const spec = { name: 'TestTask', ...(change.legacy ? {} : { requireActionTarget: true, maxRunAgeHours: 50 }) };
+    const spec = { name: 'TestTask', ...(change.legacy ? {} : { requireActionTarget: true, maxRunAgeHours: 50 }), ...(change.cadence ? { maxIntervalMinutes: 30 } : {}) };
     write(mf, JSON.stringify(manifest([item('task:test', 'scheduled-task', spec)])));
     write(fixture, JSON.stringify(change.absent ? {} : { TestTask: {
       registered: change.registered ?? true,
+      intervals: change.intervals, executionMinutes: change.executionMinutes ?? 29,
       actions: [`wscript.exe //nologo "${wrapper}" "C:\\Program Files\\nodejs\\node.exe" "${script}" "--apply"`],
       lastRunTime: change.lastRunTime ?? new Date(Date.now() - (change.age ?? 1) * 3600000).toISOString(),
     } }));

@@ -1,0 +1,18 @@
+{
+  "name": "@orgiast/ai-reliability",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI code generation reliability system — LangGraph-pattern persistent workflow, eval chain, observability",
+  "exports": {
+    ".": "./index.mjs",
+    "./workflow": "./workflow.mjs",
+    "./eval-chain": "./eval-chain.mjs",
+    "./code-validator": "./code-validator.mjs",
+    "./trace": "./trace.mjs"
+  },
+  "files": [
+    "*.mjs",
+    "test/"
+  ]
+}

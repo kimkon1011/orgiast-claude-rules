@@ -149,3 +149,13 @@ test('shell wrappers and OS temp variable paths are recognized',()=>{
   assert.equal(deletion('bash -c "rm important.txt"').decision,'block');
   assert.equal(deletion('Remove-Item "$env:TEMP/claude/scratch.txt"').decision,'pass');
 });
+test('Japanese bracket and URL path boundaries for ID matching', () => {
+  // 許可になる — new boundary characters in the expanded regex
+  assert.equal(deletion('rm ID r-1',[{type:'assistant',content:'ID と r-1 を削除してよい'},{type:'user',content:'削除してよいです。'}]).decision,'pass');
+  assert.equal(deletion('rm ID',[{type:'assistant',content:'ID（ゴミ箱へ移す）'},{type:'user',content:'削除してよいです。'}]).decision,'pass');
+  assert.equal(deletion('rm ID',[{type:'assistant',content:'https://docs.google.com/spreadsheets/d/ID/edit'},{type:'user',content:'削除してよいです。'}]).decision,'pass');
+  // 許可にならない — boundary prevents partial match
+  assert.equal(deletion('rm ID',[{type:'assistant',content:'other-ID'},{type:'user',content:'削除してよいです。'}]).decision,'block');
+  assert.equal(deletion('rm ID',[{type:'assistant',content:'ID-extra'},{type:'user',content:'削除してよいです。'}]).decision,'block');
+  assert.equal(deletion('rm ID',[{type:'assistant',content:'IDx'},{type:'user',content:'削除してよいです。'}]).decision,'block');
+});

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import os from 'node:os';
-import { getDriveToken, driveApi } from './lib/drive-auth.mjs';
+import { getDriveToken, driveApi, defaultDriveKeyPath } from './lib/drive-auth.mjs';
 import { ensureKimEditor, KIM_EMAIL } from './lib/kim-editor.mjs';
 import { addItem } from './kim-inbox.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -26,8 +26,19 @@ export async function sweep({
   map = JSON.parse(fs.readFileSync(new URL('../fleet-pc-map.json', import.meta.url), 'utf8')),
   now = new Date(), home = process.env.ORGIAST_HOME || os.homedir(),
   getToken = getDriveToken, api = driveApi, ensure = ensureKimEditor, inbox = addItem,
+  credentialAvailable = getToken !== getDriveToken || fs.existsSync(process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath()),
 } = {}) {
   const result = { checked: 0, granted: 0, errors: [] };
+  // The sweep must impersonate every execution account. The keyless GWS relay is
+  // intentionally limited to seisaku-team@ (and kim calendar reads), so running
+  // through it can never complete this job. A key-bearing fleet seat performs the
+  // shared sweep; keyless seats should be a successful no-op instead of a daily
+  // task failure that suggests permissions were checked.
+  if (!credentialAvailable) {
+    const skipped = 'DWD サービスアカウント鍵がないためスキップ（鍵のある席で実行）';
+    await inbox(home, { kind: 'info', source: 'kim-editor-sweep', text: `kim 編集権限の日次確認: ${skipped}` });
+    return { ...result, skipped };
+  }
   for (const account of sweepAccounts(map)) {
     try {
       const token = await getToken({ impersonate: account });

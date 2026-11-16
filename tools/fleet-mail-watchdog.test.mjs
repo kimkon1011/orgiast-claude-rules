@@ -158,6 +158,19 @@ test('overlapping watchdog runs skip work and release their instance lock', asyn
   assert.equal(fs.existsSync(path.join(f.home, '.claude/fleet-mail-watchdog.lock')), false);
 });
 
+test('watchdog reaps before its own lock and network work; dry-run never reaps', async t => {
+  const f = fixture(t), { acquireLock } = await import('./fleet-mail.mjs');
+  const release = acquireLock(path.join(f.home, '.claude/fleet-mail-watchdog.lock'));
+  t.after(release);
+  let reaped = 0;
+  const deps = { ...f.deps, reapStalePolls: async () => { reaped++; } };
+  await main([], deps);
+  assert.equal(reaped, 1);
+  assert.equal(f.calls.length, 0);
+  await main(['--dry-run'], deps);
+  assert.equal(reaped, 1);
+});
+
 test('watchdog CLI deadline also terminates handles left alive after main completes', async t => {
   const { spawnSync } = await import('node:child_process');
   const { fileURLToPath, pathToFileURL } = await import('node:url');

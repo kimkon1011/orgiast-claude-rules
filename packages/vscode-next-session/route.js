@@ -30,13 +30,12 @@ function mobileTabOpenCommand(claudeTabCount) {
     : 'claude-vscode.newConversation';
 }
 
-// 作成手段の多段フォールバック。1 回の試行でこの順に試し、タブ総数が増えた時点で成功。
-// 直近で成功した手段を先頭に寄せ、次回はそれを最初に試す。
-const MOBILE_OPEN_METHODS = ['newConversation', 'editorOpen', 'externalUri'];
+// 作成手段。editorOpen と newConversation は作業中の Claude セッションがあるタブごと閉じる
+// 危険性が確認された（2026-11-13 実害）ため、補充には安全な externalUri だけを使う。
+const MOBILE_OPEN_METHODS = Object.freeze(['externalUri']);
 
-function orderMobileOpenMethods(lastGood) {
-  if (!MOBILE_OPEN_METHODS.includes(lastGood)) return [...MOBILE_OPEN_METHODS];
-  return [lastGood, ...MOBILE_OPEN_METHODS.filter((method) => method !== lastGood)];
+function orderMobileOpenMethods(_lastGood) {
+  return [...MOBILE_OPEN_METHODS];
 }
 
 // 失敗後の再試行ポリシー。状態は「最終試行時刻・連続失敗回数・直近1時間の試行時刻」。

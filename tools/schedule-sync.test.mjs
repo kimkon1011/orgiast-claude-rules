@@ -670,3 +670,59 @@ test('不正な正規表現の後の有効な除外ルールも評価する', as
   assert.equal((await x.run()).counts.excluded, 1);
   assert.equal(x.creates.length, 0);
 });
+
+const negaReason = '学会のネガチェックはカレンダーへ自動登録しない（2026-11-16 kim 指示）';
+const negaCases = [
+  { field: 'title', title: 'ネガチェック①', quote: '11/16 11:30〜12:30', text: '11/16 11:30〜12:30' },
+  { field: 'title', title: '制作ネガチェック 3回目', quote: '11/16（月）12-16', text: '11/16（月）12-16' },
+  { field: 'title', title: 'ネガ②', quote: '17日21時でお願いします', text: '17日21時でお願いします' },
+  { field: 'quote', title: '校正予定', quote: 'ネガ①：11/16　11：30～12：30', text: 'ネガ①：11/16　11：30～12：30 でお願いします' },
+  { field: 'text', title: '校正予定', quote: '11/16 11:30', text: '制作ネガチェックは11/16 11:30です' },
+];
+for (const row of negaCases) {
+  test(`既定設定で学会ネガチェックを除外: ${row.field} ${row.title}`, async t => {
+    const x = setup(t), logs = [];
+    const input = { ...message, source: 'discord', chat: '1204愛知nxa救急医学会', text: row.text };
+    x.options.sources = ['discord'];
+    x.deps.collect = async () => ({ messages: [input], stats: { discord: 1 } });
+    x.deps.llm = async () => [{ ...candidate, title: row.title, quote: row.quote }];
+    x.deps.log = line => logs.push(line);
+    x.deps.calendar.get = async () => { assert.fail('excluded candidates must not access Calendar'); };
+    const result = await x.run();
+    assert.equal(result.counts.excluded, 1);
+    assert.equal(result.counts.created, 0);
+    assert.equal(x.creates.length, 0);
+    assert.equal(x.dms.length, 0);
+    assert.ok(logs.includes(`schedule-sync: 除外ルールで登録しない: ${negaReason} ${row.title}`));
+  });
+}
+
+for (const [chat, title, text] of [
+  ['1204愛知nxa救急医学会', '設営', '11/19 設営です'],
+  ['面談設定', '中途の面談', '11/18 10時から中途の面談'],
+  ['営業', 'ネガティブフィードバック共有', '11/20 15時にネガティブフィードバック共有'],
+]) {
+  test(`ネガチェック除外の対象外は登録: ${chat} / ${title}`, async t => {
+    const x = setup(t);
+    const input = { ...message, source: 'discord', chat, text };
+    x.options.sources = ['discord'];
+    x.deps.collect = async () => ({ messages: [input], stats: { discord: 1 } });
+    x.deps.llm = async () => [{ ...candidate, title, quote: text }];
+    const result = await x.run();
+    assert.equal(result.counts.created, 1);
+    assert.equal(result.counts.excluded, 0);
+    assert.equal(x.creates.length, 1);
+  });
+}
+
+test('chat 未指定の除外ルールは全チャンネルに適用する', async t => {
+  const x = setup(t);
+  x.options.excludeFile = path.join(x.dir, 'exclude.json');
+  fs.writeFileSync(x.options.excludeFile, JSON.stringify({ rules: [
+    { pattern: 'ネガチェック', reason: 'chat optional' },
+  ] }));
+  x.deps.collect = async () => ({ messages: [{ ...message, chat: '任意チャンネル' }], stats: {} });
+  x.deps.llm = async () => [{ ...candidate, title: 'ネガチェック' }];
+  assert.equal((await x.run()).counts.excluded, 1);
+  assert.equal(x.creates.length, 0);
+});

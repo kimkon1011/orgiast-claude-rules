@@ -13,6 +13,7 @@ export const REPEAT_MS = 3 * 3600_000;
 export const SESSION_TTL = 30 * DAY;
 export const DISPLAY_LIMIT = 5;
 export const EXTERNAL_LIMIT = 15;
+export const TOP = 3;
 // Separate state: the existing three-hour kim reminder must not suppress Discord work.
 export function discordWaitingContext({ home, now }) {
   let lock;
@@ -52,18 +53,39 @@ export function context(input, { home = process.env.ORGIAST_HOME || os.homedir()
     saveJson(shownFile(home), state);
     if (!items.length) return discordOnly();
     const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url))).replace(/^\/mnt\/([a-z])\//i, (_, drive) => `${drive.toUpperCase()}:/`);
-    const line = item => `・${item.title} ／ 答えてほしいこと: ${item.ask} ／ ${ageLabel(item)}${item.progress ? ` ／ ${item.progress}` : ''}`;
+    // 2026-11-15 kim 指示: 注入を圧縮（件数＋上位3件の1行要約・各100字以内）
+    // 答えてほしいこと（質問文）は必ず残す。100字に収めるため title/age/progress を先に削る
+    const briefLine = item => {
+      const askPart = `答えてほしいこと: ${item.ask}`;
+      const suffixParts = [ageLabel(item), item.progress].filter(Boolean);
+      const suffix = suffixParts.length ? ` ／ ${suffixParts.join(' ／ ')}` : '';
+      const head = `・${item.title}`;
+      let line = `${head} ／ ${askPart}${suffix}`;
+      if ([...line].length <= 100) return line;
+      // 100字超: title から削り、足りなければ ask 末尾を落とす
+      const suffixLen = [...suffix].length;
+      const reserved = 100 - suffixLen;
+      const askBudget = Math.min([...` ／ ${askPart}`].length, Math.max(40, reserved - 3));
+      const titleBudget = Math.max(3, reserved - askBudget);
+      const briefTitle = [...head].slice(0, titleBudget).join('');
+      const surplus = 100 - suffixLen;
+      let core = [...`${briefTitle} ／ ${askPart}`].slice(0, surplus).join('');
+      return `${core}${suffix}`;
+    };
+    const TOP = 3;
     const external = items.filter(item => item.external), internal = items.filter(item => !item.external);
     const isCurrent = item => sessionId && item.source === 'auto-progress' && item.route?.sessionId === sessionId;
     const current = internal.filter(isCurrent);
-    const shownExternal = external.slice(0, EXTERNAL_LIMIT);
-    const shownInternal = [...current, ...internal.filter(item => !isCurrent(item)).slice(0, DISPLAY_LIMIT)];
+    const shownExternal = external.slice(0, TOP);
+    const shownInternal = [...current, ...internal.filter(item => !isCurrent(item)).slice(0, TOP)];
     const waiting = external.filter(item => !item.warning).length;
-    const externalBlock = external.length ? `🔴 社外の人を待たせています ${waiting} 件（古い順）\n${shownExternal.map(line).join('\n')}${external.length > EXTERNAL_LIMIT ? `\nほか ${external.length - EXTERNAL_LIMIT} 件` : ''}\n` : '';
-    const internalBlock = internal.length ? `📌 kim の返事待ち ${internal.length} 件（${current.length ? '現セッション優先・ほかは古い順' : '古い順'}）\n${shownInternal.map(line).join('\n')}${internal.length > shownInternal.length ? `\nほか ${internal.length - shownInternal.length} 件` : ''}\n` : '';
+    const listCmd = `node "${repo}/tools/kim-awaiting.mjs" --list`;
+    const externalBlock = external.length ? `🔴 社外の人を待たせています ${waiting} 件（古い順）\n${shownExternal.map(briefLine).join('\n')}${external.length > TOP ? `\nほか ${external.length - TOP} 件` : ''}\n` : '';
+    const internalBlock = internal.length ? `📌 kim の返事待ち ${internal.length} 件（${current.length ? '現セッション優先・ほかは古い順' : '古い順'}）\n${shownInternal.map(briefLine).join('\n')}${internal.length > shownInternal.length ? `\nほか ${internal.length - shownInternal.length} 件` : ''}\n` : '';
     const routes = [...shownExternal, ...shownInternal].map(item => `id=${item.id} | ${item.title}`).join('\n');
-    const redInstruction = external.length ? '🔴 の項目は、本文を get_thread で読み、返信下書きまで作って kim に提示せよ。送信は kim が『送って』と明示した時だけ。\n' : '';
-    return { hookSpecificOutput: { hookEventName: event, additionalContext: `${discord}【必須・kim の返事待ち】応答の冒頭で user に見える形で、次の一覧をそのまま表示せよ。今回の依頼と無関係でも省略しない。\n${externalBlock}${internalBlock}${redInstruction}kim がこのどれかに答えたら、その答えを本文ファイルに書いて node "${repo}/tools/kim-awaiting.mjs" --answer <id> --body-file <file> で届けよ。kim が「不要」と言ったものは --skip <id> --reason ...。以下の id は kim に見せない。\n${routes}` } };
+    const redInstruction = external.length ? '🔴 の項目は本文を get_thread で読み、返信下書きまで作って提示せよ。送信は kim が明示した時だけ。\n' : '';
+    const helpNote = `全件確認: ${listCmd} ／ 回答: node "${repo}/tools/kim-awaiting.mjs" --answer <id> --body-file <file> ／ 不要: --skip <id>\n`;
+    return { hookSpecificOutput: { hookEventName: event, additionalContext: `${discord}【kim の返事待ち】${helpNote}${externalBlock}${internalBlock}${redInstruction}以下の id は kim に見せない。\n${routes}` } };
   } catch { return null; }
 }
 if (isEntry(import.meta.url)) { try { const out = context(JSON.parse(await readStdinWithTimeout(500))); if (out) console.log(JSON.stringify(out)); } catch {} }

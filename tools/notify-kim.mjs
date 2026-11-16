@@ -6,18 +6,18 @@ import { createHash } from 'node:crypto';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 import { toPlainJa } from './lib/plain-ja.mjs';
-import { classifyKimDm } from './lib/kim-dm-policy.mjs';
+import { classifyKimDm, isKimRecipient, KIM_DISCORD_USER_ID } from './lib/kim-dm-policy.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { addItem, spoolItem, isInboxNoise } from './kim-inbox.mjs';
 import { annotateAccounts } from './url-account-gate.mjs';
-import { discordAllowed } from './lib/kim-discord-allowlist.mjs';
+
 
 const API = 'https://discord.com/api/v10';
 const MAX_CONTENT = 2_000;
 const OMITTED = '…(以下省略)';
 const USER_AGENT = 'orgiast-notify-kim/1.0';
 // kim の Discord ユーザーID（秘密ではない）。設定ファイルの無い PC でも DM が届くよう既定値にする。
-export const KIM_DISCORD_USER_ID = '715210673642012733';
+export { KIM_DISCORD_USER_ID };
 
 function readTrimmed(file) { try { return fs.readFileSync(file, 'utf8').trim(); } catch { return ''; } }
 
@@ -226,10 +226,9 @@ export async function deliverKim(text, {
   // 平易化の書き換えでアカウント表記が落ちることがあるため、書き換え後の本文で補う。
   const translated = annotateAccounts(plainJa ? await plainJaImpl(String(text ?? '')) : text);
   const body = suffix && !allowHumanRequest && kind !== 'ask' ? String(translated).split('\n').filter(line => !HANDOFF.test(line)).join('\n') : translated;
-  const isKimRecipient = userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID;
   let inboxResult = null;
   // kim 宛 Discord DM 全廃（2026-10-27 / 2026-11-10 kim 再指示）。kim への通知は kim-inbox のみ。
-  if (isKimRecipient) {
+  if (isKimRecipient({ id: resolvedUserId, defaultKim: userId == null || String(userId).trim() === '' })) {
     inboxResult = await persistKim(home, { kind: ['ask', 'action'].includes(kind) ? 'ask' : 'info', text: String(body) + suffix, source, sessionId, signal });
     return { ...inboxResult, channel: 'kim-inbox' };
   }

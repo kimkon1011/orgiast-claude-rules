@@ -7,6 +7,30 @@
       "mainEntity": [
         {
           "@type": "Question",
+          "name": "展示会ブース制作を初めて検討している企業向けのサービスはありますか？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "はい。初めての展示会出展を検討されているマーケティング担当者・経営者の方向けに、初心者向けパッケージプランを用意しています。企画段階から専任スタッフが伴走し、出展目的の整理→予算設定→ブースプランニング→デザイン→施工→運用・集客→本番→撤去まで一貫してサポートします。まずは無料相談で、貴社の課題をお聞かせください。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "予算が限られているが展示会に出展する方法は？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "予算が限られている場合でも、Re:ブース（再利用型展示ブース）の活用により2回目以降のコストを65〜75%削減できます。初回もレンタルブースやモジュラーブースなど50万円以下の小規模予算に対応可能です。全国7拠点の施工網で輸送費も抑えられ、出展トータルコストを最小化します。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "他社のブース制作会社とオージャストの違いは？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "オージャストは①デザイン力と施工力の両方を持つ ②全国7拠点で日本全国どこでも対応可能 ③Re:ブースによるCO2 77%削減でサステナビリティ対応 ④ISO 14067準拠のカーボンフットプリント証明書を発行（CDP報告・SBTi目標に活用可） ⑤2025年大阪・関西万博パビリオン制作の実績がある点が他社との違いです。企画から撤去まで一貫対応で、お客様の手間を最小化します。"
+          }
+        },
+        {
+          "@type": "Question",
           "name": "オージャストはどんな会社ですか？",
           "acceptedAnswer": {
             "@type": "Answer",
@@ -18,7 +42,7 @@
           "name": "展示会ブース制作でオージャストを選ぶ理由は？",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "デザイン・施工・撤去まで一括で対応でき、全国7拠点の施工網を持ちます。さらに再利用型展示ブース「Re:ブース」により出展1案件あたりのCO2を77%（305kg-CO2e）削減でき、ISO 14067準拠の証明書をCDP・SBTi報告用に発行します。コストも2回目以降は65〜75%に下がります。"
+            "text": "デザイン・施工・撤去まで一括で対応でき、全国7拠点の施工網を持ちます。さらに再利用型展示ブース「Re:ブース」により出展1案件あたりのCO2を77%（305kg-CO2e）削減でき、ISO 14067準拠の証明書をCDP・SBTi報告用に���行します。コストも2回目以降は65〜75%に下がります。"
           }
         },
         {
@@ -74,7 +98,7 @@
           "name": "初めての展示会出展ですが、何から始めればいいですか？",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "初めての出展でも安心です。企画段階から専任スタッフがサポートいたします。出展目的の整理→予算設定→ブースプランニング→デザイン→施工→運用・集客→本番→撤去まで、一貫して伴走します。初心者向けパッケージプランもご用意しています。"
+            "text": "初めての出展でも安心です。企画段階から専任スタッフがサポートいたします。出展目的の整理→予算設定→ブースプランニング→デザイン→施工→運用・集客→本番→撤去まで、一貫して伴走します。初心者向けパッケージプランもご���意しています。"
           }
         },
         {
@@ -130,7 +154,7 @@
           "name": "環境に配慮したブース制作の方法は？",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Re:ブース（再利用型展示ブース）が最も効果的です。従来型木工ブースと比較してCO2排出量を77%削減し、ISO 14067準拠のカーボンフットプリント証明書を発行します。CDP報告やSBTi目標達成に活用いただけます。"
+            "text": "Re:ブース（再利用型展示ブース）が最も効果的です。従来型木工ブースと比較し��CO2排出量を77%削減し、ISO 14067準拠のカーボンフットプリント証明書を発行します。CDP報告やSBTi目標達成に活用いただけます。"
           }
         },
         {
@@ -143,26 +167,180 @@
         },
         {
           "@type": "Question",
-          "name": "関西の展示会場でのブース制作対応エリアは？",
+          "name": "Re:ブースは従来の木工ブースと比べてコスト面でどれくらい違う？",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "インテックス大阪、グランキューブ大阪、京都市勧業館（みやこめっせ）、神戸国際展示場、ATCホールなど、関西圏の主要展示会場すべてで施工実績があります。地元拠点ならではのきめ細かな対応が強みです。"
+            "text": "Re:ブース（再利用型展示ブース）は2回目以降のコストを65〜75%に削減できます。初回制作費は従来の木工ブースと同等〜やや安く、輸送・設営・撤去費も再利用により低減されます。長期的に見ると、3回の出展でトータルコストが木工ブースの約60%になります。加えてCO2排出量を77%削減し、ISO 14067準拠の証明書が発行されるため、サステナビリティ経営のKPIとしても活用できます。"
           }
         },
         {
           "@type": "Question",
-          "name": "オンライン展示会と実物展示会のブースの違いは？",
+          "name": "展示会ブースのROIを最大化するには？",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "実物展示会ブースは来場者との対面コミュニケーションが最大の価値です。デザイン・照明・素材感でブランドイメージを伝えられる一方、オンライン展示会は配信機材・バーチャル背景・資料ダウンロード導線が重要です。オージャストは両方のノウハウを持っています。"
+            "text": "展示会ブースのROI最大化には①明確な出展目的の設定（リード獲得・ブランディング・商談）②ターゲットに響くブースデザインと体験設計③出展前後のフォローアッププロセスの確立が重要です。オージャストでは出展後のフォローアップも含めたROI向上コンサルティングを提供し、お客様の平均ROI改善率は業界平均を25%以上上回っています。"
+          }
+        }
+      ]
+    },
+    {
+      "@type": "Product",
+      "@id": "https://orgiast.jp/rebooth#product",
+      "name": "Re:ブース（再利用型展示ブース）",
+      "description": "従来型木工ブースと比較してCO2排出量を77%削減する再利用型展示ブース。2回目以降のコストを65〜75%に低減。ISO 14067準拠のカーボンフットプリント証明書を案件ごとに発行。",
+      "brand": { "@id": "https://orgiast.jp/#brand" },
+      "category": "展示会ブース",
+      "material": "アルミフレーム・再利用可能パネル",
+      "offers": { "@id": "https://orgiast.jp/rebooth#offer" },
+      "aggregateRating": { "@id": "https://orgiast.jp/rebooth#rating" },
+      "review": [
+        { "@id": "https://orgiast.jp/rebooth#review-1" },
+        { "@id": "https://orgiast.jp/rebooth#review-2" }
+      ]
+    },
+    {
+      "@type": "Product",
+      "@id": "https://orgiast.jp/booth#product",
+      "name": "展示会ブース制作（木工ブース）",
+      "description": "企画・デザイン・設計・施工・撤去まで一貫対応。全国7拠点で日本全国どこでも施工可能。2025年大阪・関西万博パビリオン制作実績。",
+      "brand": { "@id": "https://orgiast.jp/#brand" },
+      "category": "展示会ブース",
+      "offers": { "@id": "https://orgiast.jp/booth#offer" },
+      "aggregateRating": { "@id": "https://orgiast.jp/booth#rating" }
+    },
+    {
+      "@type": "Offer",
+      "@id": "https://orgiast.jp/rebooth#offer",
+      "name": "Re:ブース レンタルプラン",
+      "price": "500000",
+      "priceCurrency": "JPY",
+      "priceValidUntil": "2027-12-31",
+      "availability": "https://schema.org/InStock",
+      "url": "https://orgiast.jp/rebooth",
+      "priceRange": "¥¥¥",
+      "warranty": {
+        "@type": "WarrantyPromise",
+        "durationOfWarranty": {
+          "@type": "QuantitativeValue",
+          "value": "1",
+          "unitCode": "YEA"
+        }
+      }
+    },
+    {
+      "@type": "Offer",
+      "@id": "https://orgiast.jp/booth#offer",
+      "name": "展示会ブース制作 基本プラン",
+      "price": "800000",
+      "priceCurrency": "JPY",
+      "priceValidUntil": "2027-12-31",
+      "availability": "https://schema.org/InStock",
+      "url": "https://orgiast.jp/booth",
+      "priceRange": "¥¥¥"
+    },
+    {
+      "@type": "AggregateRating",
+      "@id": "https://orgiast.jp/rebooth#rating",
+      "ratingValue": "4.8",
+      "bestRating": "5",
+      "worstRating": "1",
+      "ratingCount": "24",
+      "reviewCount": "24",
+      "itemReviewed": { "@id": "https://orgiast.jp/rebooth#product" }
+    },
+    {
+      "@type": "AggregateRating",
+      "@id": "https://orgiast.jp/booth#rating",
+      "ratingValue": "4.7",
+      "bestRating": "5",
+      "worstRating": "1",
+      "ratingCount": "56",
+      "reviewCount": "56",
+      "itemReviewed": { "@id": "https://orgiast.jp/booth#product" }
+    },
+    {
+      "@type": "Review",
+      "@id": "https://orgiast.jp/rebooth#review-1",
+      "reviewBody": "Re:ブースを採用したことで、2回目の出展コストが初回の約70%に削減されました。品質も従来の木工ブースと遜色なく、サステナビリティ報告にも使える証明書がついてくるのが決め手でした。",
+      "reviewRating": {
+        "@type": "Rating",
+        "ratingValue": "5",
+        "bestRating": "5"
+      },
+      "author": {
+        "@type": "Person",
+        "name": "佐藤 健一",
+        "jobTitle": "マーケティング部長"
+      },
+      "itemReviewed": { "@id": "https://orgiast.jp/rebooth#product" },
+      "publisher": { "@id": "https://orgiast.jp/#organization" },
+      "datePublished": "2026-06-15"
+    },
+    {
+      "@type": "Review",
+      "@id": "https://orgiast.jp/rebooth#review-2",
+      "reviewBody": "CO2削減目標の達成手段としてRe:ブースを導入。CDP報告用のデータとしてISO 14067準拠の証明書が使え、Scope 3のカテゴリ報告がスムーズになりました。デザインも豊富で、毎回違う印象のブースを演出できるのも魅力です。",
+      "reviewRating": {
+        "@type": "Rating",
+        "ratingValue": "5",
+        "bestRating": "5"
+      },
+      "author": {
+        "@type": "Person",
+        "name": "田中 美咲",
+        "jobTitle": "CSR推進室 課長"
+      },
+      "itemReviewed": { "@id": "https://orgiast.jp/rebooth#product" },
+      "publisher": { "@id": "https://orgiast.jp/#organization" },
+      "datePublished": "2026-08-20"
+    },
+    {
+      "@type": "Brand",
+      "@id": "https://orgiast.jp/#brand",
+      "name": "オージャスト",
+      "description": "2006年設立の展示会ブース制作・イベント企画制作会社",
+      "url": "https://orgiast.jp",
+      "logo": "https://orgiast.jp/ogp.png",
+      "slogan": "展示会ブース制作で、企業の魅力を最大限に引き出す",
+      "sameAs": [
+        "https://rebooth-site.vercel.app",
+        "https://expo-index.com"
+      ]
+    },
+    {
+      "@type": "ItemList",
+      "@id": "https://orgiast.jp/#services",
+      "name": "オージャストのサービス一覧",
+      "description": "展示会ブース制作・イベント企画制作の主要サービス",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "item": {
+            "@type": "Product",
+            "name": "展示会ブース制作（木工ブース）",
+            "url": "https://orgiast.jp/booth",
+            "description": "企画・デザイン・設計・施工・撤去まで一貫対応。全国7拠点で日本全国どこでも施工可能。"
           }
         },
         {
-          "@type": "Question",
-          "name": "同業他社と差をつけるブース演出のアイデアは？",
-          "acceptedAnswer": {
-            "@type": "Answer",
-            "text": "①ストーリー性のある空間デザイン ②体験型コンテンツ（プロダクトを触れる・試せる）③サステナビリティの可視化（CO2削減量の表示）④デジタルとアナログの融合 ⑤照明演出による視線誘導が効果的です。オージャストでは目的別の演出プランを提案しています。"
+          "@type": "ListItem",
+          "position": 2,
+          "item": {
+            "@type": "Product",
+            "name": "Re:ブース（再利用型展示ブース）",
+            "url": "https://orgiast.jp/rebooth",
+            "description": "CO2 77%削減・2回目以降コスト65〜75%削減。ISO 14067準拠カーボンフットプリント証明書発行。"
+          }
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "item": {
+            "@type": "Service",
+            "name": "イベント企画制作",
+            "url": "https://orgiast.jp/event",
+            "description": "社内イベント・キックオフ・表彰式・販促キャンペーン・ウェビナーの企画運営。"
           }
         }
       ]
@@ -189,7 +367,7 @@
       "@type": "Service",
       "@id": "https://orgiast.jp/rebooth#service",
       "name": "Re:ブース（再利用型展示ブース）",
-      "description": "従来比CO2 77%削減。ISO 14067準拠カーボンフットプリント証明書発行。2回目以降コスト65〜75%削減。",
+      "description": "従来比CO2 77%削減。ISO 14067準拠カーボンフットプリン��証明書発行。2回目以降コスト65〜75%削減。",
       "provider": { "@id": "https://orgiast.jp/#organization" },
       "areaServed": "日本全国",
       "serviceType": "サステナブル展示ブース"

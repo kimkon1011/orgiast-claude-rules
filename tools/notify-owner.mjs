@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimRecipient } from './lib/kim-dm-policy.mjs';
 import { isKimHumanProgress, deliverHumanProgress } from './lib/auto-progress-human-inbox.mjs';
 import fs from 'node:fs';
 import { notificationKind, routeOwnerDm } from './lib/owner-dm-policy.mjs';
@@ -6,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { appendOwnerInbox } from './lib/auto-progress-inbox.mjs';
+import { appendMobilePush } from './lib/mobile-push-queue.mjs';
 import { notifyKim, KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
@@ -159,6 +161,40 @@ export async function alertUnresolvedRecipient(owner, options = {}) {
   finally { if (fd !== undefined) { fs.closeSync(fd); try { fs.unlinkSync(lock); } catch {} } }
 }
 
+function appendNotifyLedger(home, at, owner, safeText, result) {
+  try {
+    const file = path.join(home, '.claude', 'logs', 'owner-notify-fallback.jsonl');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, JSON.stringify({ at, owner: redactSecrets(owner), ...result, text: safeText }) + '\n', { mode: 0o600 });
+  } catch { /* return the receipt even when the ledger is unwritable */ }
+}
+
+// mobile-push 席への配達: ローカル受け箱への保存は従来どおりで、Discord の代わりに
+// ~/.claude/mobile-push-queue.jsonl へ push 要求を積む。対話セッションの
+// auto-progress-inbox-hook が未送信行を検知して PushNotification で送信し、mark-sent で落とす。
+async function deliverMobilePush(owner, text, options) {
+  const { home } = options;
+  const at = new Date(options.now ?? Date.now()).toISOString();
+  const safeText = redactSecrets(String(text));
+  const attempts = [];
+  let inboxOk = false;
+  try { await prependInbox(home, safeText, at); inboxOk = true; } catch { /* continue queueing */ }
+  try { appendOwnerInbox(home, { source: 'notify-owner', text: safeText }); } catch { /* continue queueing */ }
+  attempts.push({ channel: 'inbox', ok: inboxOk });
+  try {
+    const item = appendMobilePush(home, { owner, title: safeText.split(/\r?\n/).find(line => line.trim()) || '', body: safeText }, { now: options.now });
+    attempts.push({ channel: 'mobile-push', ok: true, id: item.id });
+    const result = { delivered: 'mobile-push-queued', channel: 'mobile-push', ok: true, id: item.id, ts: item.ts, attempts };
+    appendNotifyLedger(home, at, owner, safeText, result);
+    return result;
+  } catch (error) {
+    attempts.push({ channel: 'mobile-push', ok: false, reason: redactSecrets(String(error?.message || error)).slice(0, 500) });
+    const result = { delivered: inboxOk ? 'inbox' : 'none', channel: inboxOk ? 'inbox' : 'none', ok: inboxOk, reason: 'mobile-push queue append failed', attempts };
+    appendNotifyLedger(home, at, owner, safeText, result);
+    return result;
+  }
+}
+
 export async function notifyOwner(owner, text, options = {}) {
   const home = options.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   options = { ...options, home };
@@ -168,8 +204,16 @@ export async function notifyOwner(owner, text, options = {}) {
   }
   // A fleet seat can belong to another account while explicitly notifying kim.
   const recipientId = options.userId ?? resolveOwnerDiscordId(owner, options);
-  if (owner.toLowerCase() === 'kim@orgiast.jp' || recipientId === KIM_DISCORD_USER_ID) {
+  if (isKimRecipient({ owner, id: recipientId })) {
     return routeOwnerDm(owner, text, { ...options, userId: KIM_DISCORD_USER_ID });
+  }
+  // mobile-push 席（cr@orgiast.jp / w018-PC, 2026-11-06 指示）は Discord DM の代わりに
+  // スマホ Claude アプリ通知の要求をキューへ積む。PushNotification は対話セッションからしか
+  // 送れないため、routeOwnerDm の保留・即時判定（Discord DM の流量制限）も経由しない。
+  const mobilePushSeat = owner && owner.toLowerCase() === resolveOwner(options).toLowerCase()
+    ? localPcEntry(options.pcMap ?? ownerPcMap(home), options.label ?? resolveFleetLabel(home)) : null;
+  if (Array.isArray(mobilePushSeat?.notifyChannels) && mobilePushSeat.notifyChannels.includes('mobile-push')) {
+    return deliverMobilePush(owner, text, options);
   }
   const deferred = await routeOwnerDm(owner, text, options);
   if (deferred) {
@@ -191,11 +235,7 @@ export async function notifyOwner(owner, text, options = {}) {
   const attempts = [];
   const finish = result => {
     result = { ...result, attempts };
-    try {
-      const file = path.join(home, '.claude', 'logs', 'owner-notify-fallback.jsonl');
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.appendFileSync(file, JSON.stringify({ at, owner: redactSecrets(owner), ...result, text: safeText }) + '\n', { mode: 0o600 });
-    } catch { /* return the receipt even when the ledger is unwritable */ }
+    appendNotifyLedger(home, at, owner, safeText, result);
     return result;
   };
   const local = owner && owner.toLowerCase() === resolveOwner(options).toLowerCase();

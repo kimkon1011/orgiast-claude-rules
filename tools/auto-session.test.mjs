@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
@@ -1196,6 +1198,17 @@ test('isTodoAlreadyDone は行末に注記と ✅ を後付けされた完了 TO
   assert.equal(isTodoAlreadyDone(md, '[ ] 未着手の別作業'), false);
 });
 
+test('isTodoAlreadyDone は notify-kim マーカー一致で本文の微差を吸収する(2026-11-16)', () => {
+  // 実物: 「検証」vs「再検証」の1文字差で90%閾値を超えず、完了済みTODOにセッションを消費
+  const md = `## 残TODO\n1. ~~通知の原因調査・修復: 検証する。人の操作が不可欠~~ → ✅ 2026-11-16 完了 <!-- notify-kim:1a17781ce18b7b648866 -->\n2. [ ] 別の作業\n`;
+  // notify-kim マーカーが一致すれば本文が微妙に違っても完了
+  assert.equal(isTodoAlreadyDone(md, '[ ] 通知の原因調査・修復: 再検証する。人の操作が不可欠 <!-- notify-kim:1a17781ce18b7b648866 -->'), true);
+  // マーカーが異なれば別の通知として扱う
+  assert.equal(isTodoAlreadyDone(md, '[ ] 通知の原因調査・修復: 検証する。人の操作が不可欠 <!-- notify-kim:0000000000000000 -->'), false);
+  // マーカーが無ければ従来の本文一致判定に委ねる
+  assert.equal(isTodoAlreadyDone(md, '[ ] 別の作業'), false);
+});
+
 test('writeTodoDone は書く直前の再読込内容へ完了印を付け、並行追加行を維持する', () => {
   const batchSnapshot = sample;
   const latest = batchSnapshot.replace('1. 歴史上のTODO\n', '1. 歴史上のTODO\n2) 他セッションが追加\r\n');
@@ -1367,6 +1380,9 @@ test('runChild は冷却中・失敗時の codex-do と保留・最終フォー�
 });
 
 test('runChild に resumeSessionId を渡すと executor 設定にかかわらず claude レーンで起動する', { skip: process.platform === 'win32' ? 'shebang スタブは Windows で起動不可' : false }, async (t) => {
+  const resumeOverride = process.env.ORGIAST_AUTO_RESUME;
+  process.env.ORGIAST_AUTO_RESUME = '1';
+  t.after(() => { resumeOverride === undefined ? delete process.env.ORGIAST_AUTO_RESUME : process.env.ORGIAST_AUTO_RESUME = resumeOverride; });
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-resume-'));
   const previousHome = process.env.ORGIAST_HOME;
   process.env.ORGIAST_HOME = home;
@@ -1401,6 +1417,9 @@ test('runChild に resumeSessionId を渡すと executor 設定にかかわら�
 });
 
 test('runChild に resumeSessionId を渡すと claude が失敗しても cheap-code にフォールバックしない', { skip: process.platform === 'win32' ? 'shebang スタブは Windows で起動不可' : false }, async (t) => {
+  const resumeOverride = process.env.ORGIAST_AUTO_RESUME;
+  process.env.ORGIAST_AUTO_RESUME = '1';
+  t.after(() => { resumeOverride === undefined ? delete process.env.ORGIAST_AUTO_RESUME : process.env.ORGIAST_AUTO_RESUME = resumeOverride; });
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-resume-fail-'));
   const previousHome = process.env.ORGIAST_HOME;
   process.env.ORGIAST_HOME = home;
@@ -1427,5 +1446,39 @@ test('runChild に resumeSessionId を渡すと claude が失敗しても cheap-
     if (previousHome === undefined) delete process.env.ORGIAST_HOME;
     else process.env.ORGIAST_HOME = previousHome;
     fs.rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});
+
+test('runChild は無効時に resumeSessionId 付きの子プロセスを起動しない', async t => {
+  const before = process.env.ORGIAST_AUTO_RESUME;
+  delete process.env.ORGIAST_AUTO_RESUME;
+  try {
+    const spawnImpl = t.mock.fn(() => assert.fail('spawn must not be called'));
+    const result = await runChild('絶対に起動しない', 'prompt', process.cwd(), process.cwd(), 100, { resumeSessionId: 'disabled-session', spawnImpl });
+    assert.equal(spawnImpl.mock.callCount(), 0);
+    assert.deepEqual(result, { status: 'skipped', skippedAutoResume: true, deferred: false, executorUsed: 'none', exitCode: null, stdout: '', stderr: 'auto-resume disabled by config/auto-resume.json' });
+  } finally {
+    if (before === undefined) delete process.env.ORGIAST_AUTO_RESUME;
+    else process.env.ORGIAST_AUTO_RESUME = before;
+  }
+});
+
+test('無効時も通常起動と明示的な fleet-exec 再開は spawn する', async t => {
+  const before = process.env.ORGIAST_AUTO_RESUME;
+  delete process.env.ORGIAST_AUTO_RESUME;
+  t.after(() => { before === undefined ? delete process.env.ORGIAST_AUTO_RESUME : process.env.ORGIAST_AUTO_RESUME = before; });
+  for (const resume of [{}, { resumeSessionId: 'explicit-session', resumeSource: 'fleet-exec' }]) {
+    const spawnImpl = t.mock.fn(() => {
+      const child = new EventEmitter();
+      child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+      queueMicrotask(() => { child.stdout.write('completed'); child.emit('close', 0); });
+      return child;
+    });
+    const result = await runChild('mock', 'prompt', isolatedHome, isolatedHome, 1000,
+      { executorRoot: process.cwd(), spawnImpl, ...resume });
+    assert.equal(result.status, 'success', result.stderr);
+    assert.equal(spawnImpl.mock.callCount(), 1);
+    const args = spawnImpl.mock.calls[0].arguments[1];
+    assert.equal(args.includes('--resume'), Boolean(resume.resumeSessionId));
   }
 });

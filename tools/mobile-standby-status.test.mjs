@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   isStandby, summarize, listRemoteSessions, planOpenCommand, replenishStandby,
   localBridgeIds, checkStandby, defaultGoal, defaultFreshHours, main,
+  defaultFindStuckOpenUrl,
 } from './mobile-standby-status.mjs';
 
 const HOUR = 3_600_000;
@@ -388,4 +389,187 @@ test('replenishes stale standbys without mutating old, used, renamed or other-PC
   assert.equal(result.after.standby, 2);
   assert.equal(result.action, 'replenished');
   assert.deepEqual(sessions.slice(0, snapshot.length), snapshot);
+});
+
+function replenishFixture(t, { localState, state = {}, remoteCount = 0 } = {}) {
+  const home = tempHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const localFile = path.join(home, '.claude', 'mobile-sessions-state.json');
+  if (localState !== undefined) fs.writeFileSync(localFile, JSON.stringify(localState));
+  const stateFile = path.join(home, '.claude', 'mobile-standby-status-state.json');
+  fs.writeFileSync(stateFile, JSON.stringify(state));
+  const titles = ['remote-control-one-tab', 'remote-control-two-tab', 'remote-control-three-tab'];
+  const opened = [], messages = [], sleeps = [];
+  let time = NOW;
+  const options = {
+    home, stateFile, goal: 3, now: () => time, codeCli: 'C:/code.cmd',
+    localIds: new Set(titles),
+    fetchImpl: async () => response(titles.slice(0, remoteCount).map(title =>
+      standby(title, { created_at: new Date(time).toISOString() }))),
+    open: async ({ count }) => { opened.push(count); return count; },
+    notify: async message => { messages.push(message); return { delivered: 'dm' }; },
+    sleep: async ms => { sleeps.push(ms); time += ms; },
+  };
+  return {
+    options, opened, messages, sleeps,
+    readState: () => JSON.parse(fs.readFileSync(stateFile, 'utf8')),
+    advance: ms => { time += ms; },
+  };
+}
+
+test('local waiting tabs prevent opening and notify once per six hours', async t => {
+  const f = replenishFixture(t, { localState: { waiting: 7, updatedAt: NOW } });
+  const result = await replenishStandby(f.options);
+  assert.equal(result.action, 'skipped');
+  assert.equal(result.reason, 'local-tabs-present');
+  assert.equal(result.localWaiting, 7);
+  assert.equal(result.before.standby, 0);
+  await replenishStandby(f.options);
+  assert.deepEqual(f.opened, []);
+  assert.deepEqual(f.sleeps, []);
+  assert.deepEqual(f.messages, ['[mobile-standby] VS Code に待機タブが 7 本ありますが、スマホから見える待機セッションは 0 本です（remote control 未接続）。新しいタブは開いていません。']);
+  assert.deepEqual(f.readState(), { at: NOW, standby: 0, goal: 3, notifiedAt: NOW });
+  f.advance(6 * HOUR);
+  fs.writeFileSync(path.join(f.options.home, '.claude', 'mobile-sessions-state.json'),
+    JSON.stringify({ waiting: 7, updatedAt: NOW + 6 * HOUR }));
+  await replenishStandby(f.options);
+  assert.equal(f.messages.length, 2);
+  assert.deepEqual(f.opened, []);
+});
+
+for (const [name, localState, expected] of [
+  ['stale at sixteen minutes', { waiting: 7, updatedAt: NOW - 16 * 60_000 }, 3],
+  ['fresh at fifteen minutes', { waiting: 7, updatedAt: NOW - 15 * 60_000 }, 0],
+  ['one local tab', { waiting: 1, updatedAt: NOW }, 2],
+  ['missing local file', undefined, 3],
+  ['invalid waiting type', { waiting: '7', updatedAt: NOW }, 3],
+  ['invalid timestamp type', { waiting: 7, updatedAt: String(NOW) }, 3],
+  ['future timestamp', { waiting: 7, updatedAt: NOW + 1 }, 3],
+  ['null local state', null, 3],
+]) {
+  test(`local tab count: ${name}`, async t => {
+    const f = replenishFixture(t, { localState });
+    await replenishStandby(f.options);
+    assert.deepEqual(f.opened, expected ? [expected] : []);
+  });
+}
+
+test('uses the greater of remote and local counts rather than adding them', async t => {
+  const f = replenishFixture(t, { localState: { waiting: 1, updatedAt: NOW }, remoteCount: 2 });
+  await replenishStandby(f.options);
+  assert.deepEqual(f.opened, [1]);
+});
+
+test('a failure one hour ago backs off while recording the check', async t => {
+  const f = replenishFixture(t, { state: { failedOpenAt: NOW - HOUR } });
+  assert.deepEqual(await replenishStandby(f.options), { action: 'skipped', reason: 'backoff' });
+  assert.deepEqual(f.opened, []);
+  assert.deepEqual(f.sleeps, []);
+  assert.deepEqual(f.messages, []);
+  assert.deepEqual(f.readState(), { failedOpenAt: NOW - HOUR, at: NOW, standby: 0, goal: 3 });
+});
+
+test('failed verification persists backoff even when notification is suppressed', async t => {
+  const f = replenishFixture(t, { state: { notifiedAt: NOW - HOUR } });
+  assert.equal((await replenishStandby(f.options)).action, 'shortfall');
+  assert.equal(f.readState().failedOpenAt, NOW + 30_000);
+  f.advance(HOUR);
+  assert.equal((await replenishStandby(f.options)).reason, 'backoff');
+  assert.deepEqual(f.opened, [3]);
+  assert.deepEqual(f.messages, []);
+});
+
+test('failed verification persists backoff when it notifies', async t => {
+  const f = replenishFixture(t);
+  assert.equal((await replenishStandby(f.options)).action, 'notified');
+  assert.equal(f.readState().failedOpenAt, NOW + 30_000);
+  assert.equal(f.messages.length, 1);
+});
+
+test('healthy remote status clears a recent failure', async t => {
+  const f = replenishFixture(t, { state: { failedOpenAt: NOW - HOUR }, remoteCount: 3 });
+  assert.equal((await replenishStandby(f.options)).action, 'none');
+  assert.equal(Object.hasOwn(f.readState(), 'failedOpenAt'), false);
+  assert.deepEqual(f.opened, []);
+});
+
+test('defaultFindStuckOpenUrl returns false on PowerShell failure', async () => {
+  assert.equal(await defaultFindStuckOpenUrl({ spawnImpl: () => ({ status: 1, stdout: '', error: null }) }), false);
+  assert.equal(await defaultFindStuckOpenUrl({ spawnImpl: () => ({ status: 0, stdout: 'none', error: null }) }), false);
+});
+
+test('replenish detects stuck Code.exe --open-url and backs off', async t => {
+  const home = tempHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const stateFile = path.join(home, '.claude', 'mobile-standby-status-state.json');
+  const localIds = new Set(['remote-control-a-b']);
+  const ts = Date.now();
+  const created = new Date(ts - 60_000).toISOString();
+  let findStuckCalled = false;
+  const result = await replenishStandby({
+    home, stateFile, localIds,
+    fetchImpl: async () => response([standby('remote-control-a-b', { created_at: created })]),
+    codeCli: 'C:/code.cmd',
+    open: async () => { assert.fail('must not open'); },
+    sleep: async () => {},
+    notify: async () => ({ delivered: 'dm' }),
+    now: () => ts,
+    findStuckOpenUrl: async () => { findStuckCalled = true; return true; },
+  });
+  const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  assert.equal(result.action, 'skipped');
+  assert.equal(result.reason, 'vscode-unresponsive');
+  assert.equal(findStuckCalled, true);
+  assert.equal(state.failedOpenAt, ts);
+});
+
+test('replenish proceeds normally when no stuck Code.exe --open-url', async t => {
+  const home = tempHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const stateFile = path.join(home, '.claude', 'mobile-standby-status-state.json');
+  const localIds = new Set(['remote-control-a-b', 'remote-control-c-d']);
+  const ts = Date.now();
+  const created = () => new Date(ts - 60_000).toISOString();
+  const pages = [response([standby('remote-control-a-b', { created_at: created() })]),
+    response([standby('remote-control-a-b', { created_at: created() }), standby('remote-control-c-d', { created_at: created() })])];
+  let findStuckCalled = false;
+  const result = await replenishStandby({
+    home, stateFile, localIds,
+    fetchImpl: async () => pages.shift(),
+    codeCli: 'C:/code.cmd',
+    open: async ({ count }) => count,
+    sleep: async () => {},
+    notify: async () => ({ delivered: 'dm' }),
+    now: () => ts,
+    findStuckOpenUrl: () => defaultFindStuckOpenUrl({
+      // PowerShell reports none for a main process with a NodeService child.
+      spawnImpl: () => { findStuckCalled = true; return { status: 0, stdout: 'none\r\n' }; },
+    }),
+  });
+  assert.deepEqual(result.action, 'replenished');
+  assert.equal(findStuckCalled, true);
+  assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(stateFile, 'utf8')), 'failedOpenAt'), false);
+});
+
+test('defaultFindStuckOpenUrl queries direct Code children and reports any orphan', () => {
+  let invocation;
+  const run = stdout => defaultFindStuckOpenUrl({
+    spawnImpl: (...args) => { invocation = args; return { status: 0, stdout }; },
+  });
+  assert.equal(run('none\r\n'), false);
+  const [command, args, options] = invocation;
+  assert.equal(command, 'powershell');
+  const script = args.at(-1);
+  assert.match(script, /Get-CimInstance Win32_Process/);
+  assert.match(script, /\$_.Name -eq 'Code.exe'/);
+  assert.match(script, /\$_.CommandLine.Contains\('--open-url'\)/);
+  assert.match(script, /\$_.CommandLine -notlike '\*--type=\*'/);
+  assert.match(script, /\$_.CreationDate -lt \$cutoff/);
+  assert.match(script, /\$_.ParentProcessId -eq \$c.ProcessId/);
+  assert.match(script, /\$_.CommandLine.Contains\('node.mojom.NodeService'\)/);
+  assert.match(script, /\$stuck = \$false/);
+  assert.match(script, /if \(\$nodeServiceChildren.Count -eq 0\) { \$stuck = \$true; break }/);
+  assert.doesNotMatch(script, /\$pid\s*=/i);
+  assert.equal(options.timeout, 15_000);
+  assert.equal(run('stuck\r\n'), true);
 });

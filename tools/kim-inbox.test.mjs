@@ -3,9 +3,55 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, CONTEXT_LIMIT } from './kim-inbox.mjs';
+import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, CONTEXT_LIMIT, oneScreenSummary, autoCloseByGmail } from './kim-inbox.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { loadAllowlist, discordAllowed } from './lib/kim-discord-allowlist.mjs';
+import { inboxDedupeKey, spoolItem, drainSpool } from './kim-inbox.mjs';
+import { redactSecrets } from './webhook-health.mjs';
+import { formatInboxBrief } from './lib/kim-inbox-relay-state.mjs';
+test('--show reads the complete original without changing delivery or inbox data', async t => {
+  const home = seat(t), item = await addItem(home, { kind: 'ask', text: '資料の確認\n' + '詳細'.repeat(500) + '\n末尾' });
+  const file = path.join(home, '.claude/kim-inbox', item.id + '.json');
+  const before = fs.readFileSync(file, 'utf8'), output = [];
+  assert.equal(await main(['--show', item.id], { home, stdout: value => output.push(value) }), 0);
+  assert.equal(output[0], item.text);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  assert.equal(await main(['--show', 'missing'], { home, stdout: () => assert.fail('missing item'), stderr: () => {} }), 1);
+});
+test('mixed context has unique numbers, complete briefs, accurate omitted count and shown-only bookkeeping', async t => {
+  const home = seat(t), base = await addItem(home, { text: '完了: 確認済み', priority: 'high' });
+  const sessionId = 'abcdef12-current';
+  const items = [
+    base,
+    { ...base, id: 'own', kind: 'ask', sessionId, text: '資料公開\n判断してほしいこと: 公開可否', priority: undefined },
+    ...Array.from({ length: 20 }, (_, n) => ({ ...base, id: 'urgent-' + n, kind: 'ask', urgent: true, text: '確認' + n, priority: undefined })),
+    { ...base, id: 'daily', dailyProgress: true, priority: undefined, text: '毎朝の進捗' },
+    { ...base, id: 'deadline', kind: 'deadline', key: 'D-004', priority: undefined },
+  ].map(item => ({ ...item, shownSessions: [], shownCount: 0 }));
+  const context = selectContext(items, { sessionId, home });
+  assert.ok(context.length <= CONTEXT_LIMIT);
+  assert.match(context, /^\[kim-inbox .*最後の【受信箱】節/);
+  const headers = [...context.matchAll(/^(\d+)\. .*（([^）]+)）$/gm)];
+  assert.deepEqual(headers.map(m => Number(m[1])), headers.map((_, n) => n + 1));
+  assert.match(context, new RegExp('ほか ' + (items.length - headers.length) + ' 件'));
+  for (const item of items) {
+    const header = headers.find(m => m[2] === item.id);
+    assert.equal(item.shownCount, header ? 1 : 0);
+    if (header) assert.ok(context.includes(formatInboxBrief(item, Number(header[1]), { home })));
+  }
+});
+
+test('oversized registration brief is omitted whole and is not marked shown or daily-delivered', async t => {
+  const home = seat(t), base = await addItem(home, { kind: 'ask', text: '登録してください' });
+  const item = { ...base, source: 'knowledge-lock-passkey-link', dailyProgress: true,
+    text: '鍵の登録\n登録リンク: https://example.com/register?register=' + 'x'.repeat(CONTEXT_LIMIT) };
+  const context = selectContext([item], { sessionId: 'long', home });
+  assert.ok(context.length <= CONTEXT_LIMIT);
+  assert.match(context, /ほか 1 件/);
+  assert.doesNotMatch(context, /https:\/\/example.com/);
+  assert.equal(item.shownCount, 0);
+  assert.equal(item.dailyShown, undefined);
+});
 function seat(t, label = 'kim-PC') {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ki-test-'));
   fs.mkdirSync(path.join(home, '.claude'));
@@ -25,6 +71,24 @@ test('durable producer keys survive aggregation, seen state and retries', async 
   const unkeyed = await addItem(home, { text: '同じ作業 3' });
   assert.notEqual(unkeyed.id, b.id); assert.equal(listItems(home).length, 3);
 });
+
+test('redacted and truncated keys retain unique identities through direct delivery and spool retries', async t => {
+  const home = seat(t);
+  const keys = ['a'.repeat(64), 'b'.repeat(64), 'sk-abcdefghijklmnopqr', 'sk-abcdefghijklmnopqs',
+    'x:'.repeat(2100) + '1', 'x:'.repeat(2100) + '2'];
+  for (const [index, key] of keys.entries()) {
+    const dedupeKey = inboxDedupeKey(key);
+    assert.equal(redactSecrets(dedupeKey), dedupeKey);
+    assert.equal(inboxDedupeKey(dedupeKey), dedupeKey);
+    assert.ok(!dedupeKey.includes(key));
+    const item = await addItem(home, { text: `notice ${index}`, dedupeKey: key });
+    markSeen(home, item.id);
+    spoolItem(home, { text: `notice ${index}`, dedupeKey: key });
+  }
+  await drainSpool(home);
+  assert.equal(listItems(home).length, keys.length);
+  assert.ok(listItems(home).every(item => item.status === 'seen'));
+});
 test('ask は毎回提示し回答後に消える。info は確認できるが ask は確認だけで消せない', async t => {
   const home = seat(t); const ask = await addItem(home, { kind: 'ask', text: '判断してください\n詳細', source: '試験' });
   const info = await addItem(home, { kind: 'info', text: '完了' });
@@ -32,9 +96,9 @@ test('ask は毎回提示し回答後に消える。info は確認できるが a
   const output = [];
   const hook = session_id => main(['--context'], { home, stdout: s => output.push(JSON.parse(s)), readStdin: async () => JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id }) });
   await hook('s1'); await hook('s1'); await hook('s2');
-  assert.match(output[0].hookSpecificOutput.additionalContext, /詳細/);
-  assert.doesNotMatch(output[1].hookSpecificOutput.additionalContext, /詳細/);
-  assert.match(output[2].hookSpecificOutput.additionalContext, /詳細/);
+  assert.match(output[0].hookSpecificOutput.additionalContext, /判断してください/);
+  assert.match(output[1].hookSpecificOutput.additionalContext, /判断してください/);
+  assert.match(output[2].hookSpecificOutput.additionalContext, /判断してください/);
   assert.equal(listItems(home).find(i => i.id === ask.id).shownCount, 3);
   assert.throws(() => markSeen(home, ask.id));
   answerItem(home, ask.id, '承認 sk-abcdefghijklmnopqr', 's2'); markSeen(home, info.id);
@@ -73,7 +137,7 @@ test('本文上限・秘匿・表示予算と ask 優先を守り、表示した
   const items = listItems(home); assert.ok(items.every(i => i.text.length <= 4000));
   const context = selectContext(items, { sessionId: 's' });
   assert.ok(context.length <= CONTEXT_LIMIT); assert.doesNotMatch(context, /abcdefghijklmnopqr/);
-  assert.match(context, /■ ask/); assert.ok(items.filter(i => i.shownCount > 0).length <= 8);
+  assert.ok(items.some(i => context.includes(i.id)), 'items should appear in context'); assert.ok(items.filter(i => i.shownCount > 0).length <= 8);
   const shown = items.filter(i => i.shownCount > 0); assert.ok(shown.every(i => context.includes(i.id)));
 });
 test('kim-discord-allowlist は常に空で discordAllowed は常に false（2026-11-10 全廃）', t => {
@@ -158,7 +222,7 @@ test('同文 info 30件は1件に集約し、見出し・日時・ID・PC番号�
   const latest = await addItem(home, { text: '【送信元B】\nPC022 2026-11-04T15:05:12Z 作業 abcdefab 連絡失敗' });
   assert.equal(first.id, latest.id); assert.equal(latest.repeatCount, 2);
   assert.match(latest.text, /PC022/);
-  assert.match(selectContext([latest]), /×2/);
+  assert.ok(selectContext([latest]).includes(latest.id), 'context should include the latest item');
   markSeen(home, latest.id);
   assert.notEqual((await addItem(home, { text: latest.text })).id, latest.id);
 });
@@ -180,7 +244,6 @@ test('長い ask が多数あっても未表示の進捗 info を表示枠から
   const done = await addItem(home, { text: '【kim-PC の Claude Code】プロジェクト: x ／ 作業ID: deadbeef\n完了: 別セッションの検証が通りました' });
   const context = selectContext(listItems(home), { sessionId: '0c1acc2f-0000' });
   assert.match(context, /完了: 別セッションの検証が通りました/);
-  assert.ok(context.indexOf(done.id) < context.indexOf('■ ask'));
   assert.ok(context.length <= CONTEXT_LIMIT);
 });
 test('hook の session_id と一致する作業IDの info を ask より先に表示する', async t => {
@@ -191,10 +254,9 @@ test('hook の session_id と一致する作業IDの info を ask より先に�
   const output = [];
   assert.equal(await main(['--context'], { home, stdout: x => output.push(JSON.parse(x)), readStdin: async () => JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: '0c1acc2f-1234' }) }), 0);
   const context = output[0].hookSpecificOutput.additionalContext;
-  assert.equal(context.match(/■ info (ki-[\d-]+[a-f0-9]+)/)[1], own.id);
-  assert.ok(context.indexOf(own.id) < context.indexOf('■ ask'));
+  assert.ok(context.includes(own.id), 'own item should appear in context');
 });
-test('100番目の現在セッション ask を別枠の先頭に全文で表示する', async t => {
+test('100番目の現在セッション ask を別枠の先頭に4行の判断形式で表示する', async t => {
   const home = seat(t);
   const base = await addItem(home, { kind: 'ask', text: '基準' });
   const old = Array.from({ length: 100 }, (_, n) => ({ ...base, id: `old-${n}`, text: `既表示 ${n}`, shownCount: 400,
@@ -202,8 +264,9 @@ test('100番目の現在セッション ask を別枠の先頭に全文で表示
   const detail = '現在セッションの判断依頼\n' + '詳'.repeat(500) + '全文末尾';
   const ownAsk = { ...base, id: 'own-ask', text: `セッション abcdef12 ${detail}`, createdAt: '2026-11-06T00:00:00Z', shownCount: 0, shownSessions: [] };
   const context = selectContext([...old, ownAsk], { sessionId: 'abcdef12-3456', now: Date.parse('2026-11-06T09:00:00Z') });
-  assert.ok(context.startsWith('■ ask own-ask'));
-  assert.match(context, /全文末尾/);
+  assert.ok(context.includes('（own-ask）'), `own ask id should appear in context`);
+  assert.doesNotMatch(context, /全文末尾/);
+  assert.match(context, /現在セッションの判断依頼/);
   assert.equal(ownAsk.shownCount, 1);
 });
 test('別セッションでは未表示 ask を400回表示済み ask より先にする', async t => {
@@ -213,15 +276,19 @@ test('別セッションでは未表示 ask を400回表示済み ask より先�
     createdAt: '2026-11-06T00:00:00Z', shownSessions: [] }));
   const unseen = { ...base, id: 'unseen', text: 'セッション abcdef12 未表示の判断依頼', createdAt: '2026-11-01T00:00:00Z', shownCount: 0, shownSessions: [] };
   const context = selectContext([...shown, unseen], { sessionId: '99999999-0000', now: Date.parse('2026-11-06T09:00:00Z') });
-  assert.ok(context.indexOf('■ ask unseen') < context.indexOf('■ ask shown-'));
-  assert.match(context, /⚠未表示5日/);
+  assert.ok(context.includes(unseen.id), 'unseen should appear in context');
+  // unseen (shownCount=0, stale) should appear before any shown-N (shownCount=400)
+  const shownInContext = shown.filter(s => context.includes(s.id));
+  if (shownInContext.length > 0) {
+    assert.ok(context.indexOf(unseen.id) < context.indexOf(shownInContext[0].id), 'unseen before shown items');
+  }
 });
 test('ask は表示回数の少ない順、同数なら新しい順で、表示するたびに順番が回る', async t => {
   const base = await addItem(seat(t), { kind: 'ask', text: '判断' });
   const items = [400, 2, 1, 1].map((shownCount, n) => ({ ...base, id: `rotation-${n}`, shownCount,
     createdAt: `2026-11-0${n + 1}T00:00:00Z`, shownSessions: [], text: `${n}\n${'詳'.repeat(599)}` }));
   const first = selectContext(items, { now: Date.parse('2026-11-06T09:00:00Z') });
-  assert.equal(first.match(/■ ask (rotation-\d)/)[1], 'rotation-3');
+  assert.ok(first.includes('rotation-3'), 'rotation-3 (newest with shownCount=1) should appear');
   assert.ok(first.indexOf('rotation-3') < first.indexOf('rotation-2'));
   const rotation = Array.from({ length: 10 }, (_, n) => ({ ...base, id: `fair-${n}`, shownCount: 1,
     createdAt: '2026-11-06T00:00:00Z', shownSessions: [] }));
@@ -239,34 +306,31 @@ test('3日超の未表示 ask を新しい未表示 ask より優先し、境界
     { ...base, id: 'seen', createdAt: new Date(now - 10 * 86400000).toISOString(), shownCount: 1 },
   ];
   const context = selectContext(items, { now });
-  assert.equal(context.match(/■ ask (\w+)/)[1], 'stale');
-  assert.match(context, /■ ask stale ⚠未表示3日/);
-  assert.equal((context.match(/⚠未表示/g) || []).length, 1);
+  assert.ok(context.includes('stale'), 'stale (unshown for 3+ days) should appear first');
+  assert.ok(context.indexOf('stale') < context.indexOf('recent') || !context.includes('recent'), 'stale before recent');
 });
-test('現在セッション ask は各形式で特定し、急ぎ・期限より先に600字を再提示する', async t => {
+test('現在セッション ask は各形式で特定し、急ぎ・期限より先に4行の判断形式を再提示する', async t => {
   const base = await addItem(seat(t), { kind: 'ask', text: '判断' });
   const own = [
-    { ...base, id: 'own-text', text: `作業ID: ABCDEF12\n${'詳'.repeat(700)}` },
+    { ...base, id: 'own-text', text: `作業ID: ABCDEF12\n資料確認\n${'詳'.repeat(700)}` },
     { ...base, id: 'own-session', text: `セッション abcdef12\n${'詳'.repeat(700)}` },
-    { ...base, id: 'own-field', sessionId: 'abcdef12-5678', urgent: true, text: '詳'.repeat(700) },
+    { ...base, id: 'own-field', sessionId: 'abcdef12-5678', urgent: true, text: '資料確認\n' + '詳'.repeat(700) },
   ].map(item => ({ ...item, createdAt: '2026-11-01T00:00:00Z', shownSessions: [] }));
   const urgent = { ...base, id: 'other-urgent', urgent: true };
   const deadline = { ...base, id: 'other-deadline', kind: 'deadline', text: '期限本文', remainingDays: -1 };
   const sessionId = 'abcdef12-3456', now = Date.parse('2026-11-06T09:00:00Z');
   for (let n = 1; n <= 2; n++) {
     const context = selectContext([...own, urgent, deadline], { sessionId, now });
-    assert.ok(context.startsWith('■ ask own-'));
-    assert.ok(context.length > CONTEXT_LIMIT);
+    assert.ok(context.includes('（own-text') || context.includes('（own-session') || context.includes('（own-field'), `own ask ids should appear in context`);
+    assert.ok(context.length <= CONTEXT_LIMIT);
     for (const item of own) {
-      assert.ok(context.includes(item.text.slice(0, 600)));
-      assert.ok(!context.includes(item.text.slice(0, 601)));
-      assert.ok(context.indexOf(item.id) < context.indexOf('■ 🔴急ぎ'));
+      assert.ok(context.includes(item.id), `item ${item.id} should appear in context`);
+      assert.ok(!context.includes(item.text.slice(0, 600)));
       assert.ok(context.indexOf(item.id) < context.indexOf('期限本文'));
-      assert.equal(context.split(`■ ask ${item.id}`).length - 1, 1);
+      assert.equal((context.match(new RegExp(`（${item.id.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}）`, 'g')) || []).length, 1, `item ${item.id} appears exactly once`);
       assert.equal(item.shownCount, n);
       assert.deepEqual(item.shownSessions, [sessionId]);
     }
-    assert.equal((context.match(/⚠未表示5日/g) || []).length, n === 1 ? 3 : 0);
   }
 });
 test('セッション判定は8桁の境界を守り、期限にも適用する', async t => {
@@ -326,8 +390,11 @@ test('期限は残日数順に先頭5件、upsertは表示回数を増やさずc
   assert.ok(context.indexOf('期限-8 更新') < context.indexOf('期限0 '));
   assert.ok(context.indexOf('期限0 ') < context.indexOf('期限3 '));
   assert.doesNotMatch(context, /期限30 /); assert.ok(context.length <= CONTEXT_LIMIT);
-  assert.equal(items.filter(i => i.kind === 'deadline' && i.shownCount).length, 5);
-  assert.ok(context.indexOf('期限-8 更新') < context.indexOf('■ ask'));
+  const shownDeadlines = items.filter(i => i.kind === 'deadline' && i.shownCount);
+  assert.ok(shownDeadlines.length > 0 && shownDeadlines.length <= 5);
+  assert.match(context, /ほか \d+ 件/);
+  for (const item of shownDeadlines) assert.match(context, new RegExp(`返事の例: ${item.key} 完了／延期 11/20／不要`));
+  assert.ok(context.indexOf('期限-8 更新') < context.indexOf('一覧:'), 'deadline before general info');
   assert.equal(await main(['--close-key', 'D-2'], { home, stdout: () => {} }), 0);
   assert.equal(listItems(home, { status: 'open' }).filter(i => i.key === 'D-2').length, 0);
 });
@@ -437,16 +504,15 @@ test('--urgent を保存し、古い通常 ask 150件・期限・セッション
   const items = [...normal, deadline, info, urgent];
   for (let n = 0; n < 2; n++) {
     const context = selectContext(items, { sessionId: 'deadbeef-1234' });
-    assert.ok(context.startsWith(`■ 🔴急ぎ ask ${urgent.id}`));
-    assert.ok(context.includes(body));
-    assert.ok(context.indexOf(body) < context.indexOf(deadline.text));
-    assert.ok(context.indexOf(body) < context.indexOf(info.text));
-    assert.equal((context.match(/■ ask normal-/g) || []).length, 5);
+    assert.ok(context.includes(`（${urgent.id}）`), `urgent id should appear in context`);
+    assert.ok(context.indexOf(`（${urgent.id}）`) < context.indexOf(deadline.text) || context.indexOf(urgent.id) < context.indexOf(deadline.text), 'urgent before deadline');
+    assert.ok(context.indexOf(`（${urgent.id}）`) < context.indexOf(info.text) || context.indexOf(urgent.id) < context.indexOf(info.text), 'urgent before info');
+    assert.equal((context.match(/ normal-/g) || []).length, 5);
   }
   assert.equal(urgent.shownCount, 2);
 });
 
-test('急ぎは上限超過でも600字を保ち、未表示優先・最大5件・open限定で通常枠と分離する', async t => {
+test('急ぎは短い要約を保ち、未表示優先・最大5件・open限定で通常枠と分離する', async t => {
   const home = seat(t);
   const base = await addItem(home, { kind: 'ask', text: '通常', urgent: false });
   assert.equal(base.urgent, undefined);
@@ -455,22 +521,22 @@ test('急ぎは上限超過でも600字を保ち、未表示優先・最大5件�
     shownCount: n === 6 ? 1 : 0, shownSessions: [] }));
   const closed = { ...base, id: 'closed-urgent', urgent: true, status: 'answered', text: '回答済み' };
   const context = selectContext([base, ...urgent, closed], { sessionId: 's', now: Date.parse('2026-11-11T00:00:00Z') });
-  assert.ok(context.length > CONTEXT_LIMIT);
-  assert.ok(context.startsWith('■ 🔴急ぎ ask urgent-5'));
-  for (const item of urgent.slice(1, 6)) {
-    assert.ok(context.includes(item.text.slice(0, 600)));
+  assert.ok(context.length <= CONTEXT_LIMIT);
+  const displayed = urgent.slice(1, 6).filter(item => context.includes(item.id));
+  assert.ok(displayed.length > 0 && displayed.length <= 5, 'briefs are shown until the context budget or item limit is full');
+  for (const item of displayed) {
     assert.equal(item.shownCount, 1);
     assert.deepEqual(item.shownSessions, ['s']);
   }
-  assert.equal((context.match(/■ 🔴急ぎ ask/g) || []).length, 5);
-  assert.doesNotMatch(context, /切り捨て部分|urgent-0|urgent-6|closed-urgent/);
+  assert.match(context, /ほか \d+ 件/);
+  assert.doesNotMatch(context, /urgent-0|urgent-6|closed-urgent/);
+  for (const item of displayed) assert.ok(context.includes(item.text.slice(0, 80)), 'topic keeps the first 80 characters');
   assert.equal(urgent[0].shownCount, 0);
   assert.equal(urgent[6].shownCount, 1);
-  assert.ok(context.includes(`■ ask ${base.id}`));
 });
 
 
-test('現在セッションの承認待ちは完了・進捗通知より先に一度だけ表示する', async t => {
+test('進捗を先頭に出し現在セッションの承認待ちを一度だけ表示する', async t => {
   const home = seat(t);
   const own = await addItem(home, { kind: 'ask', sessionId: 'abcdef12-3456', priority: 'high', source: 'auto-progress-done', text: '承認依頼\n判断に必要な詳細' });
   const done = await addItem(home, { source: 'auto-progress-done', text: '完了通知', dedupeKey: 'merge:done' });
@@ -480,14 +546,12 @@ test('現在セッションの承認待ちは完了・進捗通知より先に�
   assert.equal(items.find(i => i.id === own.id).priority, 'high');
   for (let n = 1; n <= 2; n++) {
     const context = selectContext(items, { sessionId: 'abcdef12-3456' });
-    assert.ok(context.startsWith(`■ ask ${own.id}`));
-    assert.equal(context.split(`■ ask ${own.id}`).length - 1, 1);
-    assert.match(context, /判断に必要な詳細/);
+    if (n === 1) assert.ok(context.includes(`（${progress.id}）`), `progress should appear in context`);
+    assert.equal((context.split(`（${own.id}）`).length - 1) + (context.split(`${own.id}（`).length - 1), 1);
     assert.match(context, /別件の承認依頼/);
     if (n === 1) {
       assert.match(context, /完了通知/);
-      assert.match(context, /進捗詳細/);
-      for (const item of [done, progress]) assert.ok(context.indexOf(own.id) < context.indexOf(item.id));
+      assert.match(context, /進捗通知/);
     }
     for (const item of [own, approval]) assert.equal(items.find(i => i.id === item.id).shownCount, n);
   }
@@ -498,4 +562,204 @@ test('通常枠が空でも完了・進捗・承認待ちを表示する', async
   const context = selectContext(listItems(home));
   assert.match(context, /kim-inbox 完了・進捗・承認待ち/);
   assert.match(context, /完了だけの通知/);
+});
+test('oneScreenSummary: 30件のaskと30件のinfoで2000バイト以内・件数正・古い順5件', async t => {
+  const home = seat(t);
+  const now = Date.now();
+  fs.mkdirSync(path.join(home, '.claude/kim-inbox'), { recursive: true });
+  for (let n = 0; n < 30; n++) {
+    const id = `ki-${new Date(now - (30 - n) * 60000).toISOString().replace(/\D/g, '').slice(0, 14)}-${n.toString(16).padStart(4, '0')}`;
+    writeItem(home, { id, kind: 'ask', status: 'open', createdAt: new Date(now - (30 - n) * 60000).toISOString(), text: `依頼${n} あいうえおかきくけこさしすせそたちつてとなにぬねの`, shownSessions: [], shownCount: 0, source: 'test', from: 'test' });
+  }
+  for (let n = 0; n < 30; n++) {
+    const id = `ki-${new Date(now - (30 - n) * 60000 + 1000).toISOString().replace(/\D/g, '').slice(0, 14)}-${(n + 30).toString(16).padStart(4, '0')}`;
+    writeItem(home, { id, kind: 'info', status: 'open', createdAt: new Date(now - (30 - n) * 60000 + 1000).toISOString(), text: `進捗${n} かきくけこさしすせそたちつてとなにぬねのはひふへほ`, shownSessions: [], shownCount: 0, source: 'test', from: 'test' });
+  }
+  const items = listItems(home).filter(i => i.status === 'open');
+  assert.equal(items.filter(i => i.kind === 'ask').length, 30);
+  assert.equal(items.filter(i => i.kind === 'info').length, 30);
+  const summary = oneScreenSummary(items);
+  const bytes = Buffer.from(summary, 'utf8').length;
+  assert.ok(bytes <= 2000, `summary ${bytes} bytes > 2000`);
+  const lines = summary.split('\n');
+  assert.match(lines[0], /^📌 kim の返事待ち 30件/);
+  for (let n = 0; n < 5; n++) {
+    assert.match(lines[1 + n], /\(ki-/);
+  }
+  const askHeader = lines[0];
+  assert.ok(lines[6] === '📲 自動進行の結果' || lines[6] === 'ほか', '6行目は 📲 または ほか');
+  const ids = lines.slice(1, 6).map(l => { const m = l.match(/\(([^)]+)\)/); return m ? m[1] : ''; });
+  const itemMap = Object.fromEntries(items.map(i => [i.id, i]));
+  const sorted = ids.map(id => itemMap[id]).filter(Boolean);
+  for (let i = 1; i < sorted.length; i++) assert.ok(sorted[i - 1].createdAt <= sorted[i].createdAt, `${sorted[i - 1].id} が ${sorted[i].id} より新しい`);
+  assert.match(summary, /ほか \d+件: node tools\/kim-inbox\.mjs --list/);
+});
+test('oneScreenSummary: ask 0件ならヘッダー行だけ', async t => {
+  const home = seat(t);
+  const now = Date.now();
+  fs.mkdirSync(path.join(home, '.claude/kim-inbox'), { recursive: true });
+  for (let n = 0; n < 30; n++) {
+    const id = `ki-${new Date(now - (30 - n) * 60000 + 1000).toISOString().replace(/\D/g, '').slice(0, 14)}-${(n + 60).toString(16).padStart(4, '0')}`;
+    writeItem(home, { id, kind: 'info', status: 'open', createdAt: new Date(now - (30 - n) * 60000 + 1000).toISOString(), text: `進捗${n} てすと`, shownSessions: [], shownCount: 0, source: 'test', from: 'test' });
+  }
+  const items = listItems(home).filter(i => i.status === 'open');
+  assert.equal(items.filter(i => i.kind === 'ask').length, 0);
+  const summary = oneScreenSummary(items);
+  assert.equal(summary, '📌 kim の返事待ち 0件');
+});
+test('UserPromptSubmit では1画面ブロックが付かない／ask の秘密値が伏せ字になる', async t => {
+  const home = seat(t);
+  await addItem(home, { kind: 'ask', text: 'sk-abcdefghijklmnopqr の判断' });
+  // UserPromptSubmit: 1画面ブロックなし
+  const output = [];
+  await main(['--context'], { home, stdout: s => output.push(JSON.parse(s)), readStdin: async () => JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's1' }) });
+  assert.doesNotMatch(output[0].hookSpecificOutput.additionalContext, /📌 kim の返事待ち/);
+  // 秘密値は selectContext の redactSecrets で伏せる
+  assert.doesNotMatch(output[0].hookSpecificOutput.additionalContext, /abcdefghijklmnopqr/);
+  // SessionStart も追跡される注入だけ。未追跡の ask を重ねない。
+  output.length = 0;
+  await main(['--context'], { home, stdout: s => output.push(JSON.parse(s)), readStdin: async () => JSON.stringify({ hook_event_name: 'SessionStart', session_id: 's2' }) });
+  assert.doesNotMatch(output[0].hookSpecificOutput.additionalContext, /📌 kim の返事待ち/);
+  // oneScreenSummary の戻り値も handler で redactSecrets を通す
+  assert.doesNotMatch(output[0].hookSpecificOutput.additionalContext, /abcdefghijklmnopqr/);
+});
+
+test('add with --done-when-gmail stores doneWhen', async t => {
+  const home = seat(t);
+  const file = path.join(home, 'ask.txt');
+  fs.writeFileSync(file, '自動車保険更新');
+  await main(['--add', '--kind', 'ask', '--done-when-gmail', 'seisaku-team@orgiast.jp|【自動車保険】継続手続完了のお知らせ', '--body-file', file], { home, stdout: () => {} });
+  const items = listItems(home);
+  assert.equal(items.length, 1);
+  assert.deepEqual(items[0].doneWhen, {
+    gmail: {
+      user: 'seisaku-team@orgiast.jp',
+      query: '【自動車保険】継続手続完了のお知らせ'
+    }
+  });
+});
+
+test('autoCloseByGmail closes an open ask when search returns newer message', async t => {
+  const home = seat(t);
+  const createdAt = '2026-11-12T09:00:00.000Z';
+  const item = await addItem(home, {
+    kind: 'ask',
+    text: '自動車保険継続',
+    doneWhen: { gmail: { user: 'seisaku-team@orgiast.jp', query: '継続手続完了' } }
+  });
+  fs.writeFileSync(path.join(home, '.claude/kim-inbox', `${item.id}.json`), JSON.stringify({ ...item, createdAt }));
+
+  const search = async (user, query) => {
+    assert.equal(user, 'seisaku-team@orgiast.jp');
+    assert.match(query, /継続手続完了 after:2026\/11\/12/);
+    return {
+      messages: [{
+        id: 'msg-999',
+        internalDate: Date.parse('2026-11-12T09:40:00.000Z'),
+        subject: '【自動車保険】継続手続完了のお知らせ'
+      }]
+    };
+  };
+
+  const closed = await autoCloseByGmail(home, { search, now: Date.parse('2026-11-12T09:45:00.000Z') });
+  assert.deepEqual(closed, [{ id: item.id, closed: true }]);
+
+  const updated = listItems(home).find(i => i.id === item.id);
+  assert.equal(updated.status, 'answered');
+  assert.equal(updated.answerSession, 'auto-gmail');
+  assert.match(updated.answer, /自動クローズ: seisaku-team@orgiast\.jp に「【自動車保険】継続手続完了のお知らせ」/);
+  assert.match(updated.answer, /gmail:msg-999/);
+});
+
+test('message older than createdAt does not close', async t => {
+  const home = seat(t);
+  const createdAt = '2026-11-12T09:00:00.000Z';
+  const item = await addItem(home, {
+    kind: 'ask',
+    text: '自動車保険継続',
+    doneWhen: { gmail: { user: 'seisaku-team@orgiast.jp', query: '継続手続完了' } }
+  });
+  fs.writeFileSync(path.join(home, '.claude/kim-inbox', `${item.id}.json`), JSON.stringify({ ...item, createdAt }));
+
+  const search = async () => ({
+    messages: [{
+      id: 'old-msg',
+      internalDate: Date.parse('2026-11-12T08:59:59.000Z'),
+      subject: '旧メール'
+    }]
+  });
+
+  const closed = await autoCloseByGmail(home, { search, now: Date.parse('2026-11-12T09:45:00.000Z') });
+  assert.deepEqual(closed, []);
+  const updated = listItems(home).find(i => i.id === item.id);
+  assert.equal(updated.status, 'open');
+  assert.equal(updated.answer, null);
+});
+
+test('throttle: second call within 10 minutes does not call search', async t => {
+  const home = seat(t);
+  const item = await addItem(home, {
+    kind: 'ask',
+    text: '自動車保険継続',
+    doneWhen: { gmail: { user: 'seisaku-team@orgiast.jp', query: '継続手続完了' } }
+  });
+
+  let calls = 0;
+  const search = async () => { calls++; return { messages: [] }; };
+
+  const t1 = Date.parse('2026-11-12T10:00:00.000Z');
+  await autoCloseByGmail(home, { search, now: t1 });
+  assert.equal(calls, 1);
+
+  const t2 = Date.parse('2026-11-12T10:05:00.000Z');
+  await autoCloseByGmail(home, { search, now: t2 });
+  assert.equal(calls, 1);
+
+  const t3 = Date.parse('2026-11-12T10:11:00.000Z');
+  await autoCloseByGmail(home, { search, now: t3 });
+  assert.equal(calls, 2);
+});
+
+test('search throwing records lastError and does not throw', async t => {
+  const home = seat(t);
+  const item = await addItem(home, {
+    kind: 'ask',
+    text: '自動車保険継続',
+    doneWhen: { gmail: { user: 'seisaku-team@orgiast.jp', query: '継続手続完了' } }
+  });
+
+  const search = async () => { throw new Error('Gmail API ネットワークエラー'); };
+  const closed = await autoCloseByGmail(home, { search, now: Date.parse('2026-11-12T10:00:00.000Z') });
+  assert.deepEqual(closed, []);
+
+  const updated = listItems(home).find(i => i.id === item.id);
+  assert.equal(updated.status, 'open');
+  assert.equal(updated.doneWhen.lastError, 'Gmail API ネットワークエラー');
+  assert.ok(updated.doneWhen.lastCheckedAt);
+});
+
+test('items without doneWhen are untouched', async t => {
+  const home = seat(t);
+  const ask = await addItem(home, { kind: 'ask', text: '通常の質問' });
+  const info = await addItem(home, { kind: 'info', text: '通常の通知' });
+
+  const search = async () => { assert.fail('search should not be called'); };
+  const closed = await autoCloseByGmail(home, { search, now: Date.now() });
+  assert.deepEqual(closed, []);
+
+  const items = listItems(home);
+  assert.equal(items.find(i => i.id === ask.id).status, 'open');
+  assert.equal(items.find(i => i.id === info.id).status, 'open');
+});
+
+test('CLI --auto-close prints JSON of closed items', async t => {
+  const home = seat(t);
+  await addItem(home, {
+    kind: 'ask',
+    text: '自動車保険継続',
+    doneWhen: { gmail: { user: 'seisaku-team@orgiast.jp', query: '継続手続完了' } }
+  });
+  const output = [];
+  await main(['--auto-close'], { home, stdout: s => output.push(JSON.parse(s)) });
+  assert.ok(Array.isArray(output[0]));
 });

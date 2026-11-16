@@ -191,6 +191,22 @@ test('emptyOutputReason は Failed to refresh token のトークン期限切れ�
   assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 27, stderrTail: truncated }), 'auth_failed');
 });
 
+test('emptyOutputReason は workspace routing discovery failed/timed out を infra_transient に分類する', () => {
+  // 実測 2026-11-12: 16件が stderrTail "R: Reconnecting... workspace routing discovery failed" で
+  // すべて no_output に落ち codex_empty_output を毎晩起票。infra_transient として分離する。
+  assert.equal(emptyOutputReason({
+    status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 33.8,
+    stderrTail: 'R: Reconnecting... 3/5 ERROR: Reconnecting... 4/5 ERROR: Reconnecting... 5/5 ERROR: workspace routing discovery failed ERROR: workspace routing discovery failed',
+  }), 'infra_transient');
+  // timed out のバリアント（実測 2026-10-20: 5件）
+  assert.equal(emptyOutputReason({
+    status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 236,
+    stderrTail: 'onnecting... 3/5 ERROR: Reconnecting... 4/5 ERROR: Reconnecting... 5/5 ERROR: workspace routing discovery timed out ERROR: workspace routing discovery timed out',
+  }), 'infra_transient');
+  // 対照群: infra_transient 以外の stderrTail は従来どおり no_output。
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 39, stderrTail: 't something else went wrong' }), 'no_output');
+});
+
 test('Failed to refresh token の出力ゼロで codex_empty_output を出さない', () => {
   const dir = home();
   const truncated = 'ager: Failed to refresh token: Your access token could not be refreshed. Please log out and sign in again. ERROR: worksp';
@@ -278,6 +294,38 @@ test('先頭切り詰めの usage limit 2件で codex_empty_output を出さな�
     row(realRow('2026-10-21T00:32:59.024Z', 'codex-cli/gpt-6-astra', 'complex_task', 38.998))
     + row(realRow('2026-10-21T00:33:04.003Z', 'codex-cli/gpt-5.6-sol', 'astra_usage_limit', 4.972)));
   const findings = collectFindings({ home: dir, now: new Date('2026-10-21T01:00:00.000Z'), codexUsedPercent: null });
+  const ids = findings.map((item) => item.id);
+  assert.ok(!ids.includes('codex_empty_output'), JSON.stringify(ids));
+  const limit = findings.find((item) => item.id === 'codex_usage_limit');
+  assert.equal(limit.severity, 'low');
+  assert.deepEqual(limit.evidence, ['2件', 'usage_limit(2件)']);
+});
+
+// 2026-11-14 実測: stderrTail が末尾200字の切り詰めで "(https://chatgpt.com/explore/pro)" だけが残り、
+// "Upgrade to Pro" や "your usage limit" が全く含まれていない行が2件、旧パターンに一致せず
+// no_output に落ちて codex_empty_output が起票された（delegation-health.json 2026-11-14）。
+const URL_ONLY_LIMIT_STDERR = ' (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at Nov 18th, 2026 5:07 PM. tokens used 64,798';
+
+test('URLのみの切り詰め usage limit 行も usage_limit に分類する', () => {
+  assert.equal(emptyOutputReason({
+    status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 508.614, stderrTail: URL_ONLY_LIMIT_STDERR,
+  }), 'usage_limit');
+  // 対照群: 上限URLを含まない status:'error' + exitCode:1 は従来どおり no_output。
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 39, stderrTail: 't something else went wrong' }), 'no_output');
+});
+
+test('URLのみ切り詰めの usage limit 2件で codex_empty_output を出さない', () => {
+  const dir = home();
+  const realRow = (t, secs) => ({
+    t, provider: 'codex', model: 'codex-cli/gpt-5.6-sol', lane: 'default_sol',
+    escalated: false, in: 2289, out: 0,
+    launched: true, timedOut: false, status: 'error', origin: 'interactive', kind: 'implement',
+    exitCode: 1, fastFail: true, attempts: 1, timeoutSecs: 1800, secs, stderrTail: URL_ONLY_LIMIT_STDERR,
+  });
+  write(dir, 'executor-usage.jsonl',
+    row(realRow('2026-11-14T03:18:15.266Z', 508.614))
+    + row(realRow('2026-11-14T03:18:24.917Z', 434.708)));
+  const findings = collectFindings({ home: dir, now: new Date('2026-11-14T04:00:00.000Z'), codexUsedPercent: null });
   const ids = findings.map((item) => item.id);
   assert.ok(!ids.includes('codex_empty_output'), JSON.stringify(ids));
   const limit = findings.find((item) => item.id === 'codex_usage_limit');

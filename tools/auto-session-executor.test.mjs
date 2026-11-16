@@ -208,6 +208,18 @@ test('buildClaudeHeadlessArgs は既定 sonnet で cwd 違いのときだけ add
   }
 });
 
+test('buildClaudeHeadlessArgs はポリシー無効時の --resume を拒否する', () => {
+  const before = process.env.ORGIAST_AUTO_RESUME;
+  delete process.env.ORGIAST_AUTO_RESUME;
+  try {
+    assert.throws(() => buildClaudeHeadlessArgs({ repoCwd: '/repo', historyCwd: '/repo', resumeSessionId: 'session' }), /auto-resume disabled/);
+    assert.ok(buildClaudeHeadlessArgs({ repoCwd: '/repo', historyCwd: '/repo', resumeSessionId: 'session', resumeSource: 'fleet-exec' }).includes('--resume'));
+  } finally {
+    if (before === undefined) delete process.env.ORGIAST_AUTO_RESUME;
+    else process.env.ORGIAST_AUTO_RESUME = before;
+  }
+});
+
 test('recordFallbackToClaude は claude-fallback の行を executor-usage.jsonl に追記する', () => {
   const home = makeHome();
   try {

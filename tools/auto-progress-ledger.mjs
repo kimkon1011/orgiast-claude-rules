@@ -8,6 +8,7 @@ import { isEntry } from './is-entry.mjs';
 import { readAssistantText } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { resolveOwner } from './lib/owner-identity.mjs';
+import { externalSpec, recentSessionSends, monitorCommand, MONITOR_DAYS } from './lib/external-monitor-state.mjs';
 
 const NONE = /^(?:なし|無し|ナシ|ありません|—|–|-|－|ー|―|n\/a|none)$/i;
 // 「**この後の自動進行**: text」「- この後の自動進行：text」など装飾付きにも一致させる。
@@ -112,7 +113,18 @@ export function cleanupOldLedgerTemps(file, { now = Date.now(), maxAgeMs = 36000
 
 export const MAX_RESUMES = 8; // 1件あたりの自動再開の累計上限（watch/digest 共用。循環 import 回避のためここに置く）
 
-export const OPEN_STATUSES = new Set(['open', 'stalled', 'resumed', 'waiting_user', 'scheduled', 'starting', 'start_overdue']);
+export const OPEN_STATUSES = new Set(['open', 'overdue', 'stalled', 'resumed', 'waiting_user', 'scheduled', 'starting', 'start_overdue']);
+
+// Session checks need time to survive overloaded PCs and active sessions.
+export const SESSION_DEADLINE_MS = 6 * 3600000;
+export const SESSION_CHECK_TIMEOUT_MS = 120000;
+export const isSessionProgressCheck = row => /session-progress-check\.mjs(?:["'\s]|$)/.test(row?.check || '');
+export function rollingSessionFields(row, activityAt = 0) {
+  if (!isSessionProgressCheck(row)) return {};
+  const registered = Date.parse(row.checkRegisteredAt || row.ts) || 0;
+  const deadline = Math.max(Date.parse(row.deadlineAt) || 0, Math.max(registered, activityAt) + SESSION_DEADLINE_MS);
+  return { deadlineAt: new Date(deadline).toISOString(), checkTimeoutMs: Math.max(Number(row.checkTimeoutMs) || 0, SESSION_CHECK_TIMEOUT_MS) };
+}
 
 // Timestamp order is authoritative; equal timestamps prefer the later ledger line.
 export function latestOpenPromises(rows) {
@@ -137,11 +149,14 @@ export function applyPromise(rows, record) {
   let toAdd = record;
   if (!toAdd.check && !toAdd.startWhen && !toAdd.autoRegisteredCheck) {
     const existing = rows
-      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && (row.check || row.startWhen || row.autoRegisteredCheck === true))
+      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && !externalSpec(row) && (row.check || row.startWhen || row.autoRegisteredCheck === true))
       .sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0))[0];
     if (existing) {
       toAdd = {
+        ...existing,
         ...toAdd,
+        // A Stop report must not reset retry limits or periodic notification clocks.
+        status: existing.status,
         ...(existing.startWhen ? { startWhen: existing.startWhen, startedAt: existing.startedAt,
           ...(['scheduled', 'starting', 'start_overdue'].includes(existing.status) ? { status: existing.status } : {}) } : {}),
         ...(existing.autoRegisteredCheck ? { autoRegisteredCheck: true } : {}),
@@ -158,6 +173,7 @@ export function applyPromise(rows, record) {
       };
     }
   }
+  toAdd = { ...toAdd, ...rollingSessionFields(toAdd, Date.parse(record.ts) || 0) };
   const replaces = (row) => {
     if (row.sessionId !== toAdd.sessionId || !OPEN_STATUSES.has(row.status)) return false;
     if (row.check) return Boolean(toAdd.check) && row.label === toAdd.label;
@@ -220,9 +236,26 @@ export function record(input, { home, now, hostname, user, owner, readText = (p)
   const row = buildRecord(input, text, { now, hostname, user, owner: owner ?? resolveOwner({ home }) });
   if (!row) return null;
   const file = ledgerFile(home);
-  const rows = applyPromise(readLedger(file), row);
+  const waiting = /(?:返信|返事|回答)待ち/.test(row.promise);
+  const sends = waiting ? recentSessionSends(row.transcriptPath, home, now ?? Date.now()) : [];
+  let rows = readLedger(file);
+  const ownsWait = waiting && (sends.length || rows.some(r => r.sessionId === row.sessionId && OPEN_STATUSES.has(r.status) && externalSpec(r)));
+  // Do not supersede unrelated checks or copy a monitor's cursor into a new declaration.
+  if (ownsWait) rows.push({ ...row, status: 'superseded' });
+  else rows = applyPromise(rows, row);
+  const recorded = rows.at(-1);
+  if (waiting) {
+    for (const spec of sends) {
+      const existing = rows.find(r => r.sessionId === row.sessionId && OPEN_STATUSES.has(r.status) &&
+        externalSpec(r)?.channel === spec.channel && externalSpec(r)?.threadId === spec.threadId && externalSpec(r)?.mailbox === spec.mailbox);
+      if (existing) continue; // Preserve cursor and original expiry across repeated Stop hooks.
+      rows.push({ ...row, status: 'open', promise: '外部チャネルの返信待ちを継続監視', label: `外部返信待ち:${spec.channel}:${spec.threadId}`, check: monitorCommand(spec),
+        checkCwd: row.cwd, checkRegisteredAt: row.ts, externalMonitor: true, nextKim: 'なし', nextClaude: '',
+        deadlineAt: new Date((now ?? Date.now()) + MONITOR_DAYS).toISOString() });
+    }
+  }
   writeLedger(file, rows);
-  return rows.at(-1);
+  return recorded;
 }
 
 async function main() {
@@ -235,7 +268,10 @@ async function main() {
 
 if (isEntry(import.meta.url)) { await main(); process.exitCode = 0; }
 
-export const rowKey = (row) => `${row.pc}|${row.user}|${row.sessionId}|${row.ts}`;
+export const rowKey = (row) => {
+  const spec = externalSpec(row);
+  return `${row.pc}|${row.user}|${row.sessionId}|${row.ts}${spec ? `|external:${spec.channel}:${spec.mailbox || ''}:${spec.threadId}` : ''}`;
+};
 
 export { isUnattendedRow } from './lib/unattended-session.mjs';
 

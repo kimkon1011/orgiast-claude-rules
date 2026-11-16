@@ -3,6 +3,7 @@
 // 通常実装は Sol、長時間・高難度・auto の失敗時は Astra（既定 effort high）。
 // --lane sol|astra|auto / --model astra|sol|<slug> / --effort で指定する。
 // 先頭40行の <!-- lane: astra --> でも指定可。Astra 上限時は Sol へ退避する。
+import { disabledLanes } from './lib/lane-disabled.mjs';
 import { GATEWAY_MODELS, OPENROUTER_BASE } from './provider-routing.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -311,7 +312,7 @@ export function snapshotWorkingTree(cwd, spawnImpl = spawnSync) {
   try {
     const gitCheck = spawnImpl('git', ['-C', cwd, 'rev-parse', '--is-inside-work-tree'], { windowsHide: true, encoding: 'utf8' });
     if (gitCheck && gitCheck.status === 0) {
-      const diff = spawnImpl('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
+      const diff = spawnImpl('git', ['-C', cwd, 'diff', 'HEAD', '--no-ext-diff', '--no-textconv'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
       const status = spawnImpl('git', ['-C', cwd, 'status', '--porcelain'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
       const head = spawnImpl('git', ['-C', cwd, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
       return `${head}\n${diff}\n${status}`;
@@ -382,6 +383,19 @@ export function isCheapFirstEnabled({ kind, instruction, review = false, env = p
   if (/lane:\s*codex/i.test(String(instruction || ''))) return false;
   if (String(env.CODEX_DO_CHEAP_FIRST ?? '') === '0') return false;
   return true;
+}
+
+// A zero exit code alone does not prove that an implementation was delivered.
+export function cheapFirstFailureReason({ kind, result, treeChanged }) {
+  const output = String(result.output || '');
+  const combined = output + '\n' + (result.stderr || '');
+  if (/unrecognized_model/i.test(combined)) return 'unrecognized_model';
+  if (!output.trim()) return 'empty_output';
+  // Replacement characters, invalid controls and common UTF-8-as-Latin-1 sequences.
+  if (/[\uFFFD\u0000-\u0008\u000B\u000C\u000E-\u001F]/u.test(output)
+    || /(?:Ã.|Â.|â[\u0080-\u00BF€]|ðŸ){2,}/u.test(output)) return 'garbled_output';
+  if (kind === 'implement' && !treeChanged) return 'no_changes';
+  return '';
 }
 
 export function shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut, diffText, treeChanged }) {
@@ -516,6 +530,19 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env, { kin
 // 末尾以外は短い探り予算で次へ進む。末尾には通常予算を与え、短すぎる試行が
 // timeout を再記録し続けて冷却から復帰できなくなる循環を防ぐ。
 export const COOLING_PROBE_TIMEOUT_SECS = 120;
+
+// 2026-11-15 実測（DESKTOP-2D0R4LI）: cheap-first 経路では冷却中 backend に短い探り予算(120秒)を
+// 与えたうえで timeout をそのまま fallback-backend-history に記録していた。実装依頼は120秒で
+// 終わらないため探りは必ず timeout になり、その記録で冷却が延長され続ける（24h で
+// deepseek/gemini-cli/cheap-code:deepseek の timeout 82件・ok 0件、通常予算の試行に戻れない）。
+// 結果として全代替レーンが「使えない」扱いになり Claude 本体が作業を肩代わりしていた。
+// 冷却による短縮予算での timeout は本番の失敗ではないので記録しない（null を返す）。
+// 冷却は最後の通常予算 timeout から6時間で自然に解け、通常予算での試行に戻る。
+export function fallbackOutcomeToRecord(outcome, { cooling = false, budgetSecs, normalSecs } = {}) {
+  if (!['ok', 'timeout', 'cli_missing', 'blocked'].includes(outcome)) return null;
+  if (outcome === 'timeout' && cooling && Number.isFinite(Number(budgetSecs)) && Number.isFinite(Number(normalSecs)) && Number(budgetSecs) < Number(normalSecs)) return null;
+  return outcome;
+}
 
 // 1試行に実際に与える秒数。冷却中でなければ従来どおり
 // min(連鎖の残り予算, backend 固有の上限)。冷却中でも末尾の試行は通常予算を使う。
@@ -702,9 +729,12 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   if (geminiKey && !geminiAvailable) console.error('[codex-do] gemini-cli の CLI(gemini) が見つからないため候補から外します');
   if (deepseekKey && !qwenAvailable) console.error('[codex-do] deepseek の CLI(qwen) が見つからないため候補から外します');
   if (openrouterKey && !qwenAvailable) console.error('[codex-do] openrouter-free の CLI(qwen) が見つからないため候補から外します');
+  if (!qwenAvailable && (deepseekKey || openrouterKey)) { maybeAutoInstallQwen(homeDir, { env: process.env }); }
   const geminiBillingBlocked = isProviderBillingBlocked(homeDir, 'gemini');
   if (geminiKey && geminiBillingBlocked) console.error('[codex-do] gemini 直 API は残高不足(402)のため gemini-cli を候補から外します');
-  const gemini = geminiKey && geminiAvailable && !geminiBillingBlocked && { kind: 'gemini', name: 'gemini-cli', model: process.env.CODEX_DO_GEMINI_MODEL || 'gemini-3.6-flash', apiKey: geminiKey };
+  const geminiDisabled = disabledLanes(homeDir).has('gemini-cli');
+  if (geminiKey && geminiDisabled) console.error('[codex-do] gemini-cli は lanes-disabled.json で無効化されているため候補から外します');
+  const gemini = geminiKey && geminiAvailable && !geminiBillingBlocked && !geminiDisabled && { kind: 'gemini', name: 'gemini-cli', model: process.env.CODEX_DO_GEMINI_MODEL || 'gemini-3.6-flash', apiKey: geminiKey };
   const deepseek = deepseekKey && qwenAvailable && { kind: 'qwen', name: 'deepseek', model: GATEWAY_MODELS.deepseek, baseUrl: OPENROUTER_BASE, apiKey: deepseekKey };
   const openrouter = openrouterKey && qwenAvailable && { kind: 'qwen', name: 'openrouter-free', model: process.env.CODEX_DO_FREE_MODEL || 'cohere/north-mini-code:free', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
   const byName = {
@@ -802,6 +832,41 @@ function uniqueBackendsByName(backends) {
 
 export function resolveQwenBackends(homeDir, options = {}) {
   return resolveFallbackBackends(homeDir, options);
+}
+
+// ~/.claude/qwen-autoinstall.json の lastAttemptAt が24時間以内かどうかを判定する。
+// CODEX_DO_NO_AUTOINSTALL=1 なら常に false（テスト・CI 用）。
+export function shouldAutoInstallQwen(homeDir, { env = process.env, now = Date.now() } = {}) {
+  if (env.CODEX_DO_NO_AUTOINSTALL === '1') return false;
+  try {
+    const state = JSON.parse(fs.readFileSync(path.join(homeDir, '.claude', 'qwen-autoinstall.json'), 'utf8'));
+    if (state.lastAttemptAt && (now - new Date(state.lastAttemptAt).getTime()) < 86400000) return false;
+  } catch {}
+  return true;
+}
+
+// qwen CLI が無いとき、裏で npm i -g を切り離した子プロセスで起動する。
+// codex-do 自身は待たずに今の処理を続ける。24時間以内の再試行は抑制する。
+// Windows では shell 経由で起動する。
+export function maybeAutoInstallQwen(homeDir, { env = process.env, spawnImpl = spawn, now = Date.now() } = {}) {
+  if (!shouldAutoInstallQwen(homeDir, { env, now })) return;
+
+  const file = path.join(homeDir, '.claude', 'qwen-autoinstall.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  const body = JSON.stringify({ lastAttemptAt: new Date(now).toISOString() }) + '\n';
+  fs.writeFileSync(tmp, body, 'utf8');
+  try { fs.renameSync(tmp, file); } catch { fs.writeFileSync(file, body, 'utf8'); try { fs.unlinkSync(tmp); } catch {} }
+
+  const isWin = process.platform === 'win32';
+  const child = spawnImpl(
+    isWin ? 'cmd' : 'npm',
+    isWin ? ['/c', 'npm', 'i', '-g', '@qwen-code/qwen-code', '--no-fund', '--no-audit'] : ['i', '-g', '@qwen-code/qwen-code', '--no-fund', '--no-audit'],
+    { detached: true, windowsHide: true, stdio: 'ignore', shell: isWin }
+  );
+  child?.unref();
+
+  console.log('[codex-do] qwen CLI を裏で導入しています（次回の実行から deepseek レーンが使えます）');
 }
 
 // 429/413 はコード上の行番号(例: "foo.ts:429:12")と衝突するため、コロンで数字に
@@ -1138,7 +1203,15 @@ function recordDeferred(gate) {
   try {
     const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
-    const fallbackSkipped = noFallback ? 'no_fallback_flag' : resolveFallbackBackends(home).length === 0 ? 'no_backends' : undefined;
+    // 代替バックエンドを試した後に全滅した場合も記録する
+    let fallbackSkipped;
+    if (noFallback) {
+      fallbackSkipped = 'no_fallback_flag';
+    } else if (gate.reason === 'all_backends_failed') {
+      fallbackSkipped = 'all_backends_failed';
+    } else {
+      fallbackSkipped = resolveFallbackBackends(home).length === 0 ? 'no_backends' : undefined;
+    }
     fs.appendFileSync(ledger, `${JSON.stringify({ t: new Date().toISOString(), provider: 'codex', model: `codex-cli/${selectedLane.slug || 'default'}`, status: 'deferred', reason: gate.reason, retryAt: gate.retryAt, origin, kind: taskKind, launched: false, cwd, ...(fallbackSkipped ? { fallbackSkipped } : {}) })}\n`, 'utf8');
   } catch {}
 }
@@ -1153,7 +1226,9 @@ let cooldownRecheck = false;
 if (useCodex) {
   const gate = decideCodexGate({ home, origin });
   cooldownRecheck = gate.recheck === true;
-  if (gate.deferred && ['codex_cooldown', 'unattended_budget'].includes(gate.reason) && !noFallback && resolveFallbackBackends(home).length > 0) {
+  // 全ての deferred 理由（codex_cooldown / usage_limit / unattended_budget 等）で、
+  // --no-fallback が無ければ既定で代替バックエンドへ回す。終了コード75は代替が全滅した時だけ。
+  if (gate.deferred && !noFallback && resolveFallbackBackends(home).length > 0) {
     cooldownSkipCodex = true;
     skipCodexReason = gate.reason;
     launchUnavailable = true;
@@ -1161,7 +1236,7 @@ if (useCodex) {
     if (skipCodexReason === 'unattended_budget') {
       console.error(`[codex-do] unattended_budget（無人枠 ${gate.used}/${gate.limit} 件、${retryAt} 以降に回復）のため codex を起動せず代替バックエンドへ回します`);
     } else {
-      console.error(`[codex-do] codex_cooldown（${retryAt} まで）のため codex を起動せず代替バックエンドへ回します`);
+      console.error(`[codex-do] ${skipCodexReason}（${retryAt} まで）のため codex を起動せず代替バックエンドへ回します`);
     }
   } else if (gate.deferred) {
     recordDeferred(gate);
@@ -1377,6 +1452,7 @@ async function tryCheapFirstFallback() {
     });
     if (bt <= 0) break;
     const as = Date.now();
+    const backendTreeBefore = treeSnapshot();
     lastBackend = backend;
     console.log(`[codex-do] cheap-first: ${backend.name} model=${backend.model}`);
     const res = backend.kind === 'gemini'
@@ -1391,13 +1467,21 @@ async function tryCheapFirstFallback() {
     if (backend.name === 'gemini-cli' && billingFailure) rememberProviderBillingFailure(home, 'gemini');
     const exhausted = isBackendExhausted(res.output, res.stderr) || (backend.kind === 'cheap-code' && res.status === 3);
     const dec = shouldAdvanceToNextBackend({ timedOut: res.timedOut === true, status: res.status, exhausted, cliMissing, aborted: res.aborted === 'policy_stall' });
-    const outcome = dec.outcome;
-    const treeUnchangedNow = wantedEdit && !res.timedOut && treeBefore.trim() === treeSnapshot().trim() && !hasExternalWork(res);
+    const invalid = dec.outcome === 'ok' ? cheapFirstFailureReason({
+      kind: taskKind, result: res, treeChanged: backendTreeBefore.trim() !== treeSnapshot().trim(),
+    }) : '';
+    const outcome = invalid || dec.outcome;
+    if (invalid) {
+      res.status = 1;
+      console.error('[codex-do] cheap-first: ' + backend.name + ' failed validation (' + invalid + ')');
+    }
     chainResult.push({ backend: backend.name, model: backend.model, status: res.status ?? null, timedOut: res.timedOut === true, out: Math.ceil((res.outputChars || 0) / 4), outChars: res.outputChars || 0, secs: Number(((Date.now() - as) / 1000).toFixed(3)), budgetSecs: bt, stderrTail: String(res.stderr || '').replace(/\s+/g, ' ').trim().slice(-200), outcome });
-    if (dec.advance) { if (['ok', 'timeout', 'cli_missing', 'blocked'].includes(outcome)) recordFallbackBackendOutcome(home, { backend: backend.name, outcome }); continue; }
-    if (!isLast && outcome === 'ok' && treeUnchangedNow) { if (chainResult.at(-1)) chainResult.at(-1).outcome = 'no_changes'; continue; }
+    const toRecord = fallbackOutcomeToRecord(outcome, { cooling: cooling.has(backend.name), budgetSecs: bt, normalSecs: backendSpecificTimeoutSecs(backend.name, process.env, { kind: taskKind }) });
+    if (outcome === 'timeout' && !toRecord) { chainResult.at(-1).outcome = 'probe_timeout'; console.error(`[codex-do] cheap-first: ${backend.name} は冷却中の短縮予算(${bt}秒)で timeout。本番失敗としては記録しません`); }
+    if (dec.advance) { if (toRecord) recordFallbackBackendOutcome(home, { backend: backend.name, outcome: toRecord }); continue; }
+    if (invalid) continue;
     if (outcome === 'ok') cheapSucceeded = true;
-    if (['ok', 'timeout', 'cli_missing', 'blocked'].includes(outcome)) recordFallbackBackendOutcome(home, { backend: backend.name, outcome });
+    if (toRecord) recordFallbackBackendOutcome(home, { backend: backend.name, outcome: toRecord });
     break;
   }
   return { succeeded: cheapSucceeded, result: lastResult || { status: 1, outputChars: 0, output: '', stderr: '' }, chainResult, lastBackend };
@@ -1406,9 +1490,12 @@ async function tryCheapFirstFallback() {
 async function launchCodex(codexArgs, primaryStarted = Date.now()) {
   let result;
 
-  const remainingTimeoutSecs = () => remainingPrimaryBudgetSecs(
-    timeoutSeconds,
-    (Date.now() - primaryStarted) / 1000,
+  // 主経路の codex も fallbackBackendTimeoutSecs の上限(既定900秒)で制限する。
+  // これが無いと --timeout 3000 等の長い全体予算がそのまま codex に渡り、
+  // 1回の codex 呼出で 3000 秒を捨てることになる(2026-11-12 実測: gpt-6-astra 3025秒/予算3000秒)。
+  const remainingTimeoutSecs = () => Math.min(
+    remainingPrimaryBudgetSecs(timeoutSeconds, (Date.now() - primaryStarted) / 1000),
+    fallbackBackendTimeoutSecs(timeoutSeconds),
   );
 
   if (process.platform === 'win32' && !forceNative) {
@@ -1899,6 +1986,14 @@ if (quotaCheck.matched && executorName === 'fallback' && result?.status !== 0) {
 }
 if (executorName === 'fallback' && !cheapFirstFallbackDone) {
   recordUsage(result, `${reportedFallbackBackend?.name ?? 'unknown'}/${reportedFallbackBackend?.model ?? 'unknown'}`, secs, 'fallback', 1, fallbackChain);
+}
+// 代替バックエンドが全滅した場合、記録して deferred(75)で終了する。
+if (cooldownSkipCodex && executorName === 'fallback' && result?.status !== 0 && !fallbackBackend) {
+  const gateForDeferred = { reason: skipCodexReason, retryAt: Date.now() + 3600000 };
+  recordDeferred({ reason: 'all_backends_failed', retryAt: Date.now() + 3600000 });
+  console.error(`[codex-do] 代替バックエンドが全て失敗しました（${skipCodexReason}）。保留にします`);
+  console.log(JSON.stringify(deferredPayload({ reason: skipCodexReason, retryAt: Date.now() + 3600000 }, { origin, kind: taskKind })));
+  process.exit(EX_TEMPFAIL);
 }
 
 // 実行後スキャン: Codex / cheap-code が書いたコードにも Claude API 禁止を効かせる。

@@ -38,7 +38,7 @@ export function getBeeperToken({ env = process.env, appData = process.env.APPDAT
 /**
  * Makes an HTTP request to the Beeper Desktop API.
  */
-export async function beeperFetch(endpoint, { method = 'GET', body, query, timeoutMs = 20000, env = process.env, token: customToken, fetchImpl = globalThis.fetch } = {}) {
+export async function beeperFetch(endpoint, { method = 'GET', body, query, timeoutMs = 20000, env = process.env, token: customToken, binary = false, fetchImpl = globalThis.fetch } = {}) {
   const baseUrl = env.BEEPER_API_BASE || 'http://localhost:23373';
   const token = customToken || getBeeperToken({ env });
 
@@ -95,7 +95,7 @@ export async function beeperFetch(endpoint, { method = 'GET', body, query, timeo
     throw new BeeperApiError(msg, 'BEEPER_ERROR', response.status);
   }
 
-  return await response.json();
+  return binary ? Buffer.from(await response.arrayBuffer()) : await response.json();
 }
 
 export async function getAccounts(options = {}) {
@@ -124,4 +124,21 @@ export async function sendMessage(chatID, text, { replyToMessageID, attachment }
   if (replyToMessageID) body.replyToMessageID = replyToMessageID;
   if (attachment) body.attachment = attachment;
   return await beeperFetch(`/v1/chats/${encodeURIComponent(chatID)}/messages`, { method: 'POST', body, ...options });
+}
+
+// Read metadata again immediately before an automatic reply (does not mark read).
+export async function getChat(chatID, options = {}) {
+  return beeperFetch(`/v1/chats/${encodeURIComponent(chatID)}`, { method: 'GET', ...options });
+}
+
+// Assets remain behind the Desktop API; mxc/file URLs are never fetched directly.
+export async function downloadAttachment(attachment, options = {}) {
+  let url = attachment.srcURL || attachment.url;
+  if (!url) throw new Error('添付URLなし');
+  if (/^(local)?mxc:\/\//.test(url)) {
+    const downloaded = await beeperFetch('/v1/assets/download', { ...options, method: 'POST', body: { url } });
+    if (downloaded.error || !downloaded.srcURL) throw new Error('Beeper asset download failed');
+    url = downloaded.srcURL;
+  }
+  return beeperFetch('/v1/assets/serve', { ...options, query: { url }, binary: true });
 }

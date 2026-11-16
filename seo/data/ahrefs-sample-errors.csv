@@ -1,0 +1,18 @@
+URL,Error Type,Error Description,Affected Pages,First Detected,Last Detected,HTTP Status,Source
+https://www.orgiast.jp/case/hitachi-2025,404,Page not found (404),3,2026-09-15,2026-11-10,404,Internal Link
+https://www.orgiast.jp/service/booth-construction,Missing title,Missing title tag,1,2026-10-15,2026-11-10,200,Crawl
+https://www.orgiast.jp/blog/,Duplicate title,Duplicate title tag (50+ pages share same title),52,2026-09-01,2026-11-10,200,Site Audit
+https://www.orgiast.jp/contact/,Missing meta description,Missing meta description,1,2026-10-15,2026-11-10,200,Crawl
+https://www.orgiast.jp/case/,Slow page,Slow page (3.2s load time),1,2026-10-01,2026-11-10,200,Core Web Vitals
+https://www.orgiast.jp/service/,Thin content,Thin content (<300 words),1,2026-09-20,2026-11-10,200,Content Audit
+https://www.orgiast.jp/faq/,Canonical issue,Canonical URL points to different page,1,2026-10-05,2026-11-10,200,Crawl
+https://www.orgiast.jp/case/nissan-2025,Redirect chain,Redirect chain (3 hops),1,2026-10-12,2026-11-10,301,Crawl
+https://www.orgiast.jp/downloads/catalog-2025.pdf,404,PDF not found,1,2026-09-10,2026-11-10,404,External Link
+https://www.orgiast.jp/case/mitsubishi-2025,Soft 404,Returns 200 but content indicates 404,1,2026-10-15,2026-11-10,200,Crawl
+https://www.orgiast.jp/case/daikin-2024,Orphan page,Orphan page (no internal links),1,2026-10-10,2026-11-10,200,Site Audit
+https://www.orgiast.jp/privacy/,No internal links,No internal links pointing to this page,1,2026-10-01,2026-11-10,200,Site Audit
+https://www.orgiast.jp/blog/booth-design-tips-2025,noindex,noindex tag present but page is indexed,1,2026-10-20,2026-11-10,200,Site Audit
+https://www.orgiast.jp/case/panasonic-2025,Missing H1,Missing H1 heading,1,2026-10-20,2026-11-10,200,Crawl
+https://www.orgiast.jp/news/,Missing title,Missing title tag,1,2026-10-20,2026-11-10,200,Crawl
+https://www.orgiast.jp/event/seminar-ai-2025,404,Page not found (404),2,2026-10-01,2026-11-10,404,Sitemap
+https://www.orgiast.jp/images/old-logo.png,404,Image not found,5,2026-08-01,2026-11-10,404,Internal Link

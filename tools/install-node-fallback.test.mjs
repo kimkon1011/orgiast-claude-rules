@@ -65,3 +65,21 @@ test('既にユーザー領域に展開済みなら再ダウンロードしな�
 test('フォールバック後も「入りませんでした」の案内は残す', () => {
   assert.match(code, /Node\.js が入りませんでした。会社担当\(kim\)に連絡してください/);
 });
+
+test('Qwen CLI の npm 導入コマンドと確認ロジックが gemini-cli と同じパターンで存在する', () => {
+  const qwenInstall = code.match(/NpmInstallTO\s+'@qwen-code\/qwen-code'(\s+(\d+))?/);
+  assert.ok(qwenInstall, '@qwen-code/qwen-code の NpmInstallTO 呼び出しが見つからない');
+  // タイムアウトは600秒(2026-11-11 実測で5分以上かかるため拡大)
+  assert.equal(qwenInstall[2], '600', 'Qwen CLI のタイムアウトが 600 秒ではない');
+  // Have(qwen) で導入判定している
+  assert.ok(/if \(Have qwen\)/.test(code), 'Have qwen の確認が無い');
+});
+
+test('Qwen CLI が無い場合の警告文が存在する', () => {
+  assert.match(code, /Qwen CLI が時間内に入りませんでした/);
+  assert.match(code, /npm i -g @qwen-code\/qwen-code/);
+});
+
+test('Qwen CLI 導入成功時の OK メッセージが存在する', () => {
+  assert.match(code, /OK "Qwen CLI 導入完了"/);
+});

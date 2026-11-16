@@ -25,6 +25,11 @@ export function judge(input, { home = process.env.ORGIAST_HOME || os.homedir(), 
   const toolName = input?.tool_name || '';
   if (!TARGET.test(toolName)) return { decision: 'pass' };
   const args = input?.tool_input || {};
+  // send_message に draftId が指定されている場合、Gmail コネクタは既存下書きをそのまま送信する
+  // （subject/body/htmlBody を無視する）ため、URL 書き換えは起きない。
+  if (toolName.includes('send_message') && typeof args.draftId === 'string' && args.draftId.trim().length > 0) {
+    return { decision: 'pass', reason: 'draftId 送信: コネクタは既存下書きをそのまま送るため URL 書き換えなし' };
+  }
   const text = `${args.subject ?? ''}\n${args.body ?? ''}\n${args.htmlBody ?? ''}`;
   const redirected = GOOGLE_REDIRECT.test(text);
   const bareDomain = BARE_DOMAIN.test(text.replace(EMAIL_ADDRESS, ''));

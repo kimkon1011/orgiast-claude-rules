@@ -78,12 +78,63 @@ test('validateSchema - multiple items', () => {
 });
 
 test('SCHEMA_RULES - all known types have rules', () => {
-  const known = ['Organization', 'LocalBusiness', 'WebSite', 'FAQPage', 'Article', 'HowTo', 'Project', 'BreadcrumbList'];
+  const known = ['Organization', 'LocalBusiness', 'WebSite', 'FAQPage', 'Article', 'HowTo', 'Project', 'BreadcrumbList', 'Product', 'Offer', 'AggregateRating', 'Review', 'Brand', 'ItemList'];
   for (const t of known) {
     assert.ok(SCHEMA_RULES[t], `Missing rules for ${t}`);
     assert.ok(Array.isArray(SCHEMA_RULES[t].required), `required not array for ${t}`);
     assert.ok(Array.isArray(SCHEMA_RULES[t].recommended), `recommended not array for ${t}`);
   }
+});
+
+test('validateSchema - Product passes with required fields', () => {
+  const items = [{ '@type': 'Product', name: 'Test Booth', description: 'A test booth' }];
+  const result = validateSchema(items);
+  assert.equal(result[0].status, 'pass');
+  assert.equal(result[0].missing.length, 0);
+});
+
+test('validateSchema - Product fails without name', () => {
+  const items = [{ '@type': 'Product', description: 'No name here' }];
+  const result = validateSchema(items);
+  assert.equal(result[0].status, 'fail');
+  assert.deepEqual(result[0].missing, ['name']);
+});
+
+test('validateSchema - Offer passes with required fields', () => {
+  const items = [{ '@type': 'Offer', price: '500000', priceCurrency: 'JPY' }];
+  const result = validateSchema(items);
+  assert.equal(result[0].status, 'pass');
+});
+
+test('validateSchema - Offer fails without price', () => {
+  const items = [{ '@type': 'Offer', priceCurrency: 'JPY' }];
+  const result = validateSchema(items);
+  assert.equal(result[0].status, 'fail');
+  assert.deepEqual(result[0].missing, ['price']);
+});
+
+test('validateSchema - AggregateRating passes with required fields', () => {
+  const items = [{ '@type': 'AggregateRating', ratingValue: '4.5', ratingCount: '10', itemReviewed: { '@id': '#product' } }];
+  const result = validateSchema(items);
+  assert.equal(result[0].status, 'pass');
+});
+
+test('validateSchema - Review passes with required fields', () => {
+  const items = [{ '@type': 'Review', reviewBody: 'Great product', author: { '@type': 'Person', name: 'Tester' }, itemReviewed: { '@id': '#product' } }];
+  const result = validateSchema(items);
+  assert.equal(result[0].status, 'pass');
+});
+
+test('validateSchema - Brand passes with required fields', () => {
+  const items = [{ '@type': 'Brand', name: 'Test Brand' }];
+  const result = validateSchema(items);
+  assert.equal(result[0].status, 'pass');
+});
+
+test('validateSchema - ItemList passes with required fields', () => {
+  const items = [{ '@type': 'ItemList', name: 'Services', itemListElement: [{ '@type': 'ListItem', position: 1, item: { '@type': 'Product', name: 'S1' } }] }];
+  const result = validateSchema(items);
+  assert.equal(result[0].status, 'pass');
 });
 
 test('validateSchema - LocalBusiness with missing address', () => {

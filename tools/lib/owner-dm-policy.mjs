@@ -1,3 +1,4 @@
+import { isKimRecipient } from './kim-dm-policy.mjs';
 import { isKimHumanProgress } from './human-progress-row.mjs';
 import fs from 'node:fs';
 import { isUnattendedRow } from './unattended-session.mjs';
@@ -19,7 +20,7 @@ export function notificationKind(text, options = {}) {
 }
 // Lock covers reservation and append, so simultaneous processes cannot claim a ninth slot.
 export async function routeOwnerDm(owner, text, options) {
-  if (String(owner).trim().toLowerCase() === 'kim@orgiast.jp' || String(options.userId) === '715210673642012733') {
+  if (isKimRecipient({ owner, id: options.userId })) {
     const { deliverKim } = await import('../notify-kim.mjs');
     const kind = options.kind === 'ask' || options.kimActionRequired === true || notificationKind(text, options) === 'action' ? 'ask' : 'info';
     const result = await (options.deliverKim ?? deliverKim)(text, { ...options, userId: '715210673642012733', kind, plainJa: false });

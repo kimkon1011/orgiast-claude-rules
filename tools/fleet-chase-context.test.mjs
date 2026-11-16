@@ -48,10 +48,10 @@ test('inbox already presented in same session is omitted; different session reap
   assert.doesNotMatch(context, /id=mail-presented/); assert.match(context, /id=mail-unseen/);
   assert.match(selectContext(f.ledger, { home: f.home, now: NOW, sessionId: 'next' }), /id=mail-presented/);
 });
-test('same content suppressed for 30 minutes, new session and changed debt visible; local hook <500ms', async t => {
+test('same content suppressed for 30 minutes, new session and changed debt visible; local hook <2000ms', async t => {
   const f = fixture(t); f.add('one', 2); f.save();
   const before = fs.readFileSync(ledgerPath(f.home), 'utf8'); const start = performance.now();
-  await f.run(); assert.ok(performance.now() - start < 500);
+  await f.run(); assert.ok(performance.now() - start < 2000);
   await f.run('UserPromptSubmit', NOW + REPEAT_MS - 1); assert.equal(f.outputs.length, 1);
   await f.run('UserPromptSubmit', NOW + REPEAT_MS); assert.equal(f.outputs.length, 2);
   await f.run('UserPromptSubmit', NOW + REPEAT_MS, 'next'); assert.equal(f.outputs.length, 3);

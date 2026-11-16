@@ -36,3 +36,12 @@ test('check 付き行は同一セッションの古いフッター行を従来�
   const row = checked('NVIDIAドライバー582.78更新', '2026-10-29T10:00:02.000Z');
   assert.deepEqual(applyPromise([footer], row).map(item => item.status), ['superseded', 'open']);
 });
+
+test('自動登録の startWhen は同じ label の open check も superseded にしない', () => {
+  const existing = checked('自動登録: 進捗どう？', '2026-11-12T05:57:37.000Z');
+  const scheduled = { sessionId: existing.sessionId, label: existing.label, status: 'scheduled',
+    startWhen: 'node session-progress-check.mjs --session session-1', ts: '2026-11-12T05:57:38.000Z' };
+  const rows = applyPromise([existing], scheduled);
+  assert.deepEqual(rows, [existing, scheduled]);
+  assert.deepEqual(latestOpenPromises(rows), [existing, scheduled]);
+});

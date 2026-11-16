@@ -49,7 +49,7 @@
 - `cost-enforce.json` の書き出し形は維持（他ツールが読む）。テストを更新。
 
 ### 6. `tools/model-agent-guard.mjs`
-- 既存の Fable 判定に加え: `tool_input.prompt` が実装依頼（`cost-routing-gate.mjs` の `IMPLEMENT` 正規表現を export して再利用）で、`subagent_type` が `Explore|Plan|claude-code-guide|biz-reader|statusline-setup` 以外、かつ `implApproved` でないとき deny。理由: `実装サブエージェントは禁止(§1.17)。node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> へ。例外は user の [CLAUDE-IMPL-OK]`。
+- 既存の Fable 判定に加え: `tool_input.prompt` が実装依頼（`cost-routing-gate.mjs` の `IMPLEMENT` 正規表現を export して再利用）で、`subagent_type` が `Explore|Plan|claude-code-guide|biz-reader|statusline-setup|web-fetch` 以外、かつ `implApproved` でないとき deny。理由: `実装サブエージェントは禁止(§1.17)。node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> へ。例外は user の [CLAUDE-IMPL-OK]`。`web-fetch` は WebFetch ツールだけを持つ読み取り専用エージェントのため許可。
 - `cost-routing-gate.mjs` から `IMPLEMENT` を `export const IMPLEMENT = ...` にする（既存の挙動は変えない）。
 
 ### 7. 登録と自己修復

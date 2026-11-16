@@ -26,7 +26,7 @@ const HELPTEXT = `ai-mention-checker — AI検索引用測定ツール
   言及をスコアリングします。APIキー不要で動作します。`;
 
 import https from 'node:https';
-import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const PROVIDERS = new Set(['gemini', 'groq', 'deepseek']);
 
@@ -298,7 +298,7 @@ export async function main(argv = process.argv) {
 }
 
 // ── CLI実行 ──
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isEntry(import.meta.url)) {
   main().catch(err => {
     console.error(`エラー: ${err.message}`);
     process.exitCode = 1;

@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const INPUT_FILE = path.resolve(
@@ -105,6 +106,6 @@ export function main(inputFile = INPUT_FILE, outputDir = OUTPUT_DIR) {
 export default main;
 
 // ── CLI実行 ──
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isEntry(import.meta.url)) {
   main();
 }

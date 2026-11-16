@@ -26,6 +26,7 @@ import { defaultDriveKeyPath } from './lib/drive-auth.mjs';
 import { loadLedger, isInternal, extractAddresses, shouldBlockInternal } from './internal-recipient-gmail-guard.mjs';
 import { bodyHash, checkConsistency, statePath, mimeText, render as renderConsistency } from './mail-consistency-check.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
+import { validateWeekdays } from './lib/weekday-validator.mjs';
 
 export const GMAIL_COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
 export const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -399,6 +400,17 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         stdout(`整合性 block を理由付きで承認: ${args['ack-consistency']}`);
       }
       const draftText = mimeText(draft?.message?.payload).text;
+      // 社外文面の曜日誤りを送信前に検出
+      const weekdayResult = validateWeekdays(draftText);
+      if (!weekdayResult.valid) {
+        const mismatchLines = weekdayResult.mismatches.map(m => `  「${m.matched}」: ${m.date} の正しい曜日は「${m.expected}」ですが「${m.actual}」と書かれています`).join('\n');
+        const warning = `【曜日誤り】送信予定の本文に日付と曜日の不一致があります:\n${mismatchLines}`;
+        if (!args['ack-consistency']) {
+          emit({ ok: false, errorKind: 'weekday_mismatch', mismatches: weekdayResult.mismatches }, `${warning}\n--ack-consistency で上書きして送信するか、本文を修正してください。`);
+          return 2;
+        }
+        stdout(`⚠️ ${warning}`);
+      }
       if (!deps.skipContextCheck) {
         let contextThreadId = draft?.message?.threadId;
         if (!contextThreadId) {

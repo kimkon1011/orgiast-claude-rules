@@ -365,3 +365,23 @@ test('resolveKimApprovedRecipient はディレクトリにないDiscord IDを拒
   });
   assert.equal(result.allowed,false);
 });
+
+
+test('--kim-approved は安価LLMが全部失敗しても社内宛ならマーカーを作る', async t => {
+  const home=tmp(t), file=path.join(home,'body.txt'); fs.writeFileSync(file,'社内連絡');
+  const code=await main(['--channel','discord','--target','1423319951980232744','--text-file',file,'--kim-approved','金さんが承認'],{
+    home,
+    fetchHistory:async()=>({target:'dm-satou',messages:[{id:'m1',at:'2026-11-16T00:00:00.000Z',side:'self',party:'internal',sender:'オージャスト',text:'前の連絡'}]}),
+    runLlm:()=>{ throw new Error('安価LLM判定失敗: gemini HTTP402'); },
+    resolveKimApprovedRecipient:async()=>({allowed:true,resolvedId:'1423319951980232744',source:'internal-senders'}),
+  });
+  assert.equal(code,0);
+  const markers=fs.readdirSync(path.join(home,'.claude','send-context-checks'));
+  assert.equal(markers.length,1);
+  const marker=JSON.parse(fs.readFileSync(path.join(home,'.claude','send-context-checks',markers[0]),'utf8'));
+  assert.equal(marker.llmOk,false);
+  assert.match(marker.reason,/LLM判定失敗/);
+  const row=JSON.parse(fs.readFileSync(path.join(home,'.claude','logs','send-context-kim-approved.jsonl'),'utf8').trim());
+  assert.equal(row.llmOk,false);
+  assert.match(row.llmReason,/LLM判定失敗/);
+});

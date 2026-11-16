@@ -211,7 +211,14 @@ export async function main(argv=process.argv.slice(2), deps={}) {
   const text=fs.readFileSync(file,'utf8').trim(); const result=await (deps.fetchHistory||fetchHistory)(channel,target,{home:deps.home});
   for(const line of labelHistory(result.messages)) console.log(line.slice(0, 700));
   const periodicReport=argv.includes('--periodic-report')?{recipient:val('--recipient')||'宛先本人',kind:'定期報告'}:false;
-  const verdict=(deps.runLlm||runLlm)(result.messages,text,{intendedChanges: intendedChanges.length ? intendedChanges : undefined,periodicReport}); console.log(JSON.stringify(verdict,null,2));
+  let verdict;
+  try {
+    verdict=(deps.runLlm||runLlm)(result.messages,text,{intendedChanges: intendedChanges.length ? intendedChanges : undefined,periodicReport});
+  } catch (error) {
+    if (!kimApproved) throw error;
+    verdict={ok:false,reason:`LLM判定失敗: ${String(error.message||error).slice(0,500)}`,warnings:[]};
+  }
+  console.log(JSON.stringify(verdict,null,2));
   if (kimApproved) {
     const recipient = await (deps.resolveKimApprovedRecipient || resolveKimApprovedRecipient)(channel, target, {
       home: deps.home, fetchImpl: deps.fetchImpl, getDiscordMembersImpl: deps.getDiscordMembersImpl, getDiscordChannel: deps.getDiscordChannel, internalSenders: deps.internalSenders,

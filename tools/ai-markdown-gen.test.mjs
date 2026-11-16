@@ -67,7 +67,7 @@ await describe('ai-markdown-gen', async () => {
   });
 
   // Test 3: generateLlmsTxt produces structured output
-  await it('generateLlmsTxt includes site name and table', () => {
+  await it('generateLlmsTxt includes site name and bullet list', () => {
     mod.clearContent();
     mod.registerContent({
       id: 'svc1',
@@ -81,8 +81,8 @@ await describe('ai-markdown-gen', async () => {
     const llms = mod.generateLlmsTxt('Test Site', 'A test site');
     ok(llms.includes('# Test Site'), 'Should include site name');
     ok(llms.includes('A test site'), 'Should include description');
-    ok(llms.includes('## Service'), 'Should include category heading');
-    ok(llms.includes('Service One'), 'Should include page title');
+    ok(llms.includes('## サービス'), 'Should include category heading');
+    ok(llms.includes('- [Service One]'), 'Should include page as bullet');
   });
 
   // Test 4: generateSitemap produces markdown table

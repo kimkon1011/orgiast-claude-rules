@@ -94,8 +94,7 @@ async function cleanupStaleFallbackTrees({ sharedRepo, pinnedTree, now, run, rea
     const parsed = parseFallbackStamp(entry.slice(prefix.length));
     if (!parsed || parsed.getTime() >= cutoff) continue;
     try {
-      if (!allowUpdate(path.join(dir, entry))) continue;
-      await run('git', ['worktree', 'remove', path.join(dir, entry)], {
+      await run('git', ['worktree', 'remove', '--force', path.join(dir, entry)], {
         cwd: sharedRepo,
         stdio: ['inherit', 'inherit', 'pipe'],
       });

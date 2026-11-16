@@ -6,6 +6,14 @@
 
 質問前に既存権限でファイル/ツール結果を調べ、取得可能な情報を人に聞かない。
 
+## staff-ask-selfcheck-gate
+
+社員・他PC・外部人へ状況を聞く前に、質問の主題に関連する Gmail・Discord・シート等を自分で照会する。求人応募は `to:saiyo@orgiast.jp newer_than:7d` を Gmail で検索し、電話・現地など人にしか分からない結果だけを聞く。
+
+## pending-decision-ask-gate
+
+報告に「判断待ち」と残すなら、同じ主題を【kim 確認用の全文】または「次に kim がすること」に選択肢と推奨付きで入れる。Claude が決められる可逆な事項は決めて進める。
+
 ## control-group-stop-gate
 
 node tools/control-group-check.mjs --gate <変更したゲート名> で現在のソースに killed 証跡を作る。

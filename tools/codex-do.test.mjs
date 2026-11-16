@@ -664,6 +664,64 @@ test('snapshotWorkingTree non-git directory: snapshot is identical when nothing 
   }
 });
 
+test('snapshotWorkingTree git repo: detects changes in .gitignore-d files (2026-11-16 regression)', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-gitignore-'));
+  try {
+    // Init a git repo with a .gitignore that excludes scratch/
+    const git = (...args) => spawnSync('git', ['-C', tempDir, ...args], { windowsHide: true, encoding: 'utf8' });
+    git('init');
+    git('config', 'user.name', 'Test');
+    git('config', 'user.email', 'test@test.com');
+    fs.writeFileSync(path.join(tempDir, '.gitignore'), 'scratch/\n', 'utf8');
+    fs.writeFileSync(path.join(tempDir, '.gitattributes'), '* text=auto\n', 'utf8');
+    git('add', '.gitignore', '.gitattributes');
+    git('commit', '-m', 'init');
+
+    // Create a file inside the .gitignore-d scratch/ directory
+    const scratchDir = path.join(tempDir, 'scratch');
+    fs.mkdirSync(scratchDir, { recursive: true });
+    const ignoredFile = path.join(scratchDir, 'output.txt');
+    fs.writeFileSync(ignoredFile, 'initial content\n', 'utf8');
+
+    const snap1 = snapshotWorkingTree(tempDir);
+
+    // Modify the .gitignore-d file (this is what Codex would do)
+    fs.writeFileSync(ignoredFile, 'modified content\n', 'utf8');
+
+    const snap2 = snapshotWorkingTree(tempDir);
+    // The snapshots MUST differ even though the file is gitignored
+    assert.notEqual(snap1, snap2, 'snapshotWorkingTree should detect changes in .gitignore-d files');
+  } finally {
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('snapshotWorkingTree git repo: detects new file in .gitignore-d directory', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-gitignore2-'));
+  try {
+    const git = (...args) => spawnSync('git', ['-C', tempDir, ...args], { windowsHide: true, encoding: 'utf8' });
+    git('init');
+    git('config', 'user.name', 'Test');
+    git('config', 'user.email', 'test@test.com');
+    fs.writeFileSync(path.join(tempDir, '.gitignore'), 'scratch/\n', 'utf8');
+    git('add', '.gitignore');
+    git('commit', '-m', 'init');
+
+    const snap1 = snapshotWorkingTree(tempDir);
+
+    // Create a new file inside the .gitignore-d directory
+    const scratchDir = path.join(tempDir, 'scratch');
+    fs.mkdirSync(scratchDir, { recursive: true });
+    fs.writeFileSync(path.join(scratchDir, 'new_file.txt'), 'new content\n', 'utf8');
+
+    const snap2 = snapshotWorkingTree(tempDir);
+    // The snapshots MUST differ even though the file is gitignored
+    assert.notEqual(snap1, snap2, 'snapshotWorkingTree should detect new files in .gitignore-d directories');
+  } finally {
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
 test('--no-fallback が指定されても指示文が引数として食われず、正しく除外される', () => {
   const result = run(['--dry-run', '--no-fallback', 'これは指示文です']);
   assert.equal(result.status, 0);

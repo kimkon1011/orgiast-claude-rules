@@ -28,7 +28,7 @@ export function evaluatePendingDecision(text) {
     const subject = subjectOf(lines[i]);
     if (!subjectMentioned(subject, confirmation)) {
       const shown = subject || lines[i].replace(/\|/g, ' ').trim().slice(0, 40);
-      return { decision: 'block', code: 'PENDING-DECISION-NOT-ASKED', reason: `「判断待ち」と書いた ${shown} をまだ判断していない。【kim 確認用の全文】に選択肢と推奨を付けて入れるか、Claude が決めて進める` };
+      return { decision: 'block', code: 'PENDING-DECISION-NOT-ASKED', reason: `「判断待ち」と書いた ${shown} を kim に確認する項目に含めていない。先に node tools/pending-decisions.mjs --list で既存の判断記録と状態を照合する。未解決なら【kim 確認用の全文】に選択肢と推奨を付けて入れるか、Claude が決められる可逆な事項は決めて進める` };
     }
   }
   return { decision: 'pass' };

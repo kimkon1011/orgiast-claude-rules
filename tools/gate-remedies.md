@@ -8,11 +8,11 @@
 
 ## staff-ask-selfcheck-gate
 
-社員・他PC・外部人へ状況を聞く前に、質問の主題に関連する Gmail・Discord・シート等を自分で照会する。求人応募は `to:saiyo@orgiast.jp newer_than:7d` を Gmail で検索し、電話・現地など人にしか分からない結果だけを聞く。
+社員・他PC・外部人へ状況を聞く前に、質問の主題に関連する Gmail・Discord・シート等を自分で照会する。求人応募は `node tools/gmail-search.mjs --user saiyo@orgiast.jp --query "to:saiyo@orgiast.jp newer_than:7d" --body` で検索し、電話・現地など人にしか分からない結果だけを聞く。
 
 ## pending-decision-ask-gate
 
-報告に「判断待ち」と残すなら、同じ主題を【kim 確認用の全文】または「次に kim がすること」に選択肢と推奨付きで入れる。Claude が決められる可逆な事項は決めて進める。
+先に `node tools/pending-decisions.mjs --list` で既存の判断記録と状態を照合する。報告に「判断待ち」と残すなら、同じ主題を【kim 確認用の全文】または「次に kim がすること」に選択肢と推奨付きで入れる。Claude が決められる可逆な事項は決めて進める。
 
 ## control-group-stop-gate
 

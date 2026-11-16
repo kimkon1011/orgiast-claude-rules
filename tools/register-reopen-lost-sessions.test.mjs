@@ -8,7 +8,7 @@ test('Windows registration: one indefinite watch trigger, logon unchanged, legac
   // Fail if injection accidentally reaches the real scheduler. New-ScheduledTask*
   // only constructs in-memory definitions; all registration stays in the test map.
   const script = `function Register-ScheduledTask { throw 'Real scheduler writes prohibited in tests' }; & '${file.replaceAll("'", "''")}'`;
-  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true });
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], { encoding: 'utf8', windowsHide: true });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.match(result.stdout, /PASS: reopen task registration/);
 });

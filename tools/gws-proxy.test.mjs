@@ -8,6 +8,7 @@ import {collectLineRows,syncLineHistory} from './line-history-sync.mjs';
 import {syncKnowledge} from './onboarding-sync.mjs';
 test('missing key routes only fixed account and approved scopes without token relay',()=>{
  assert.equal(proxyCredential({keyPath:'nonexistent',impersonate:'seisaku-team@orgiast.jp',scope:'https://www.googleapis.com/auth/drive'}),GWS_MARKER);
+ assert.equal(proxyCredential({keyPath:'nonexistent',impersonate:'seisaku-team@orgiast.jp',scope:'https://www.googleapis.com/auth/gmail.modify'}),GWS_MARKER);
  assert.throws(()=>proxyCredential({keyPath:'nonexistent',impersonate:'kim@orgiast.jp',scope:'https://www.googleapis.com/auth/drive'}));
  assert.throws(()=>proxyCredential({keyPath:'nonexistent',impersonate:'seisaku-team@orgiast.jp',scope:'https://www.googleapis.com/auth/cloud-platform'}));
 });

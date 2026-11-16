@@ -12,7 +12,14 @@ const toolsDir = path.dirname(fileURLToPath(import.meta.url));
 const setup = path.join(toolsDir, 'setup.mjs');
 const temp = (name) => fs.mkdtempSync(path.join(os.tmpdir(), name));
 const write = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value); };
-const run = (args, env = {}) => spawnSync(process.execPath, [setup, ...args], { encoding: 'utf8', env: { ...process.env, ORGIAST_REPO: path.dirname(toolsDir), FLEET_BEACON: '0', ...env } });
+const run = (args, env = {}) => {
+  const childEnv = { ...process.env, ORGIAST_REPO: path.dirname(toolsDir), FLEET_BEACON: '0' };
+  // CI escape: 親の CI 変数を子プロセスに渡さない（明示 env で上書き可）。
+  if (!('CI' in env)) delete childEnv.CI;
+  if (!('GITHUB_ACTIONS' in env)) delete childEnv.GITHUB_ACTIONS;
+  Object.assign(childEnv, env);
+  return spawnSync(process.execPath, [setup, ...args], { encoding: 'utf8', env: childEnv });
+};
 const manifest = (items) => ({ version: 1, items });
 const item = (id, type, spec, severity = 'required', extra = {}) => ({ id, type, severity, spec, description: id, ...extra });
 

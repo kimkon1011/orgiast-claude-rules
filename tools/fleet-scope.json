@@ -842,9 +842,21 @@
     },
     {
       "path": "tools/self-check-before-asking-guard.mjs",
-      "scope": "kim-only",
-      "step": null,
-      "reason": "要確認"
+      "scope": "fleet",
+      "step": "settings:staff-ask-selfcheck-gate",
+      "reason": "askuser/staff self-check 共通判定の実行時依存"
+    },
+    {
+      "path": "tools/staff-ask-selfcheck-gate.mjs",
+      "scope": "fleet",
+      "step": "settings:staff-ask-selfcheck-gate",
+      "reason": "社員宛て送信前の調査外注を全PCで遮断"
+    },
+    {
+      "path": "tools/pending-decision-ask-gate.mjs",
+      "scope": "fleet",
+      "step": "settings:stop-gate-runner",
+      "reason": "stop-gate-runner の判断待ち放置検査依存"
     },
     {
       "path": "tools/selftest-guards.mjs",

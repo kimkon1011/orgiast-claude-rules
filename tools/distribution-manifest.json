@@ -56,6 +56,7 @@
     ".pr-body-x0044.md": { "reason": "PR #2024 のボディファイル。配布先PCの実行時参照なし" },
     ".pr-body-x0045.md": { "reason": "PR #2117 のボディファイル。配布先PCの実行時参照なし" },
     ".pr-body-x0061.md": { "reason": "PR #2140 のボディファイル（X-0061 Dynamic Workflows）。配布先PCの実行時参照なし" },
+    ".pr-body-x0043.md": { "reason": "PR #2201 のボディファイル（X-0043 Blender MCP）。配布先PCの実行時参照なし" },
     "run-file-20261108-003008.md": { "reason": "X-0007 PHASE1 B 引用ギャップ分析の参照メモ。配布先PCの実行時参照なし" },
     "outputs": { "reason": "PR作業の成果物出力。配布先PCの実行時参照なし" },
     "tasks": { "reason": "Codex への実装指示ファイル。配布先PCの実行時参照なし" },

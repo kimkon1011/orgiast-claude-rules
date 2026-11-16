@@ -8,7 +8,9 @@ const now = Date.parse('2026-11-06T00:00:00Z');
 const source = { pc: 'pc', user: 'user', sessionId: 'a644b252-test', ts: '2026-10-30T12:26:00Z', status: 'done', check: 'node check.mjs', nextClaude: 'continue', label: 'old' };
 const live = { ...source, ts: '2026-11-02T06:29:00Z', status: 'open', label: 'R640 部品の自動入札4件', deadlineAt: '2026-11-05T00:00:00Z' };
 test('both migrations only consider latest session row, including terminal successors and timestamp ties', () => {
-  for (const [select, old] of [[legacyAddCheckMigrationRows, source], [timeOnlyMigrationRows, { ...source, check: 'node -e "process.exit(Date.now() >= Date.parse(\'2026-11-05T00:00:00Z\') ? 0 : 1)"' }]]) {
+  const converted = { ...source, status: 'scheduled', startWhen: source.check, convertedFromAddCheck: true };
+  assert.deepEqual(legacyAddCheckMigrationRows([source]), [], '完了済みの成果確認は再開しない');
+  for (const [select, old] of [[legacyAddCheckMigrationRows, converted], [timeOnlyMigrationRows, { ...source, check: 'node -e "process.exit(Date.now() >= Date.parse(\'2026-11-05T00:00:00Z\') ? 0 : 1)"' }]]) {
     assert.deepEqual(select([old]), [old]);
     for (const status of ['open', 'done', 'dropped']) assert.ok(!select([old, { ...live, status }]).includes(old));
     assert.deepEqual(select([live, old]), []);

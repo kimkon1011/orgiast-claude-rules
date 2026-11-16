@@ -646,7 +646,7 @@ test('先行ゲートが全て降格された場合は第2段の監査で手渡�
     '本文です。結果をまとめました。',
     '',
     '【kim 確認用の全文】',
-    'A案: 見積を据え置く。B案: 値引きする。',
+    'A案: 見積もり金額を据え置く。B案: 全体を10%値引きする。',
     '',
     '恒久策: 一回限り: この判断だけは kim に確認する。',
     '',
@@ -783,8 +783,8 @@ for (const mode of ['cap', 'pass', 'close-pass', 'close-failure', 'open', 'cron'
     assert.equal(result.record.autoRegisteredCheck, false);
     const rows = readLedger(file);
     assert.equal(rows.length, 1);
-    assert.equal(rows[0].status, 'scheduled');
-    assert.match(rows[0].startWhen, /session-progress-check\.mjs" --session "fallback"$/);
+    assert.equal(rows[0].status, 'open');
+    assert.match(rows[0].check, /session-progress-check\.mjs" --session "fallback"$/);
     assert.equal(readLedger(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl')).at(-1).verdict, 'pass_after_autoregister');
     const { record: recordPromise } = await import('./auto-progress-ledger.mjs');
     recordPromise({ ...input, last_assistant_message: text }, { home });

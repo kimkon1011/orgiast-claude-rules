@@ -18,8 +18,9 @@ const FOOTER_PATTERN = /(?:^|\n)次に kim がすること:[ \t]*([^\r\n]*)\r?\n
 // Match list/action separators; exclude digit-grouping commas (e.g. "7,920円")
 // and 「、または」「、もしくは」「、あるいは」disjunctive phrases (one choice, not two actions).
 const MULTIPLE_ACTIONS_PATTERN = /[、・](?!\s*(?:または|もしくは|あるいは))|(?<!\d)[,，](?!\d)/;
-const ACTION_LABEL_PATTERN = /[①-⑳]|[A-ZＡ-Ｚa-z0-9０-９一二三]案|案[A-ZＡ-Ｚ0-9０-９]|選択肢\s*[0-9０-９]+|(?:番号|記号)で(?:選|答|返)/gu;
+const ACTION_LABEL_PATTERN = /[①-⑳]|[A-ZＡ-Ｚa-z0-9０-９一二三]案|案[A-ZＡ-Ｚ0-9０-９]|(?:方法|プラン|パターン|手段|ルート|オプション)\s*[A-ZＡ-Ｚa-z0-9０-９]+|選択肢\s*[A-ZＡ-Ｚa-z0-9０-９]+|(?:番号|記号)で(?:選|答|返)/gu;
 const LABEL_ONLY_REASON = '[NEXT-ACTION-LABEL-ONLY] 「次に kim がすること」にラベル（①・B案・案A など）だけが書かれています。kim はそのラベルの中身を探しに遡る羽目になります（kim 2026-10-28）。(1) kim の過去の決定がある・支払いや同意が要らない・取り消せる判断なら、聞かずに Claude が決めて進め、結果を報告する。この行は「なし」にする (2) どうしても聞くなら、ラベルではなく中身をこの1行に書く（例:「1Password を月 $24.95 で契約するかを はい/いいえ で答える」）。例外は [NEXT-ACTION-LABEL-OK: <理由>]。';
+const LABEL_UNDEFINED_REASON = '[NEXT-ACTION-LABEL-UNDEFINED] 応答本文で中身を定義しないラベルを使っています。ラベルを使わず中身を書く、または A/B/C 全部の中身を同じ節に書いてください。各ラベルの直後の同じ行に8文字以上の中身が必要です。例外は [NEXT-ACTION-LABEL-OK: <理由>]。';
 
 function hasUnexplainedLabel(action) {
   for (const match of action.matchAll(ACTION_LABEL_PATTERN)) {
@@ -27,6 +28,34 @@ function hasUnexplainedLabel(action) {
     const explanation = suffix.match(/^(?:（([^（）\r\n]*)）|\(([^()\r\n]*)\))/u);
     if (!explanation || [...(explanation[1] ?? explanation[2]).trim()].length < 8) return true;
   }
+  return false;
+}
+
+const BODY_LABEL_PATTERN = /([A-ZＡ-Ｚa-z])案|案([A-ZＡ-Ｚa-z])|(?:方法|プラン|パターン|手段|ルート|オプション)\s*([A-ZＡ-Ｚa-z0-9０-９]+)|選択肢\s*([A-ZＡ-Ｚa-z0-9０-９]+)/gu;
+
+function asciiLetter(value) {
+  const normalized = String(value || '').normalize('NFKC').toUpperCase();
+  return /^[A-Z]$/.test(normalized) ? normalized : null;
+}
+
+function bodyLabelViolation(turnSource) {
+  const footerLabel = turnSource.lastIndexOf('次に kim がすること:');
+  const beforeFooter = footerLabel >= 0 ? turnSource.slice(0, footerLabel) : turnSource;
+  const body = beforeFooter
+    .replace(/\x60{3}[^\n]*\n[\s\S]*?\x60{3}|~~~[^\n]*\n[\s\S]*?~~~/g, '')
+    .replace(/^[ \t]*>.*$/gm, '');
+  const matches = [...body.matchAll(BODY_LABEL_PATTERN)];
+  if (!matches.length) return false;
+  const definedLetters = new Set();
+  for (const match of matches) {
+    const suffix = body.slice(match.index + match[0].length).split(/\r?\n/, 1)[0];
+    const explanation = suffix.match(/^(?:（([^（）\r\n]*)）|\(([^()\r\n]*)\)|[ \t]*[:：][ \t]*([^\r\n]*))/u);
+    if (!explanation || [...(explanation[1] ?? explanation[2] ?? explanation[3]).trim()].length < 8) return true;
+    const letter = asciiLetter(match[1] || match[2] || match[3] || match[4]);
+    if (letter) definedLetters.add(letter);
+  }
+  const max = Math.max(...[...definedLetters].map(letter => letter.charCodeAt(0)), 64);
+  for (let code = 65; code <= max; code += 1) if (!definedLetters.has(String.fromCharCode(code))) return true;
   return false;
 }
 
@@ -189,13 +218,14 @@ export function reportsCloseSteps(text) {
   return numbered('1') && numbered('2') && numbered('3');
 }
 
-export function hasOpenSessionCheck(input, home) {
+export function hasOpenSessionCheck(input, home, { humanWait = false } = {}) {
   if (!input.session_id) return false;
   try {
     return latestOpenPromises(readLedger(ledgerFile(home)))
       .some(row => row.sessionId === input.session_id && (
-        (row.status === 'open' && ((typeof row.check === 'string' && row.check.trim()) || row.autoRegisteredCheck === true)) ||
-        (row.status === 'scheduled' && typeof row.startWhen === 'string' && row.startWhen.trim())
+        // Retained retries keep automatic monitoring alive, but do not authorize a human handoff.
+        ((humanWait ? row.status === 'open' : ['open', 'overdue', 'resumed', 'stalled'].includes(row.status)) && ((typeof row.check === 'string' && row.check.trim()) || row.autoRegisteredCheck === true)) ||
+        (!humanWait && row.status === 'scheduled' && typeof row.startWhen === 'string' && row.startWhen.trim())
       ));
   } catch { return false; }
 }
@@ -270,7 +300,7 @@ function waitingCheckIssues(source, transcriptRaw, input, turnSource) {
   // チャットで答えるだけの返信待ち（reply-only）は会話に戻ってくるので台帳は要らない。それ以外の人待ちは載せる。
   const userHandoff = /\[手渡し判定\]|お願いする操作|^手間監査:/m.test(body);
   if ((userHandoff || !NO_ACTION_PATTERN.test(footer.nextAction)) && classifyHandoff(source) !== 'reply-only'
-    && !hasOpenSessionCheck(input) && !noAutocheck) {
+    && !hasOpenSessionCheck(input, undefined, { humanWait: true }) && !noAutocheck) {
     issues.push({ decision: 'block', code: 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', reason: (userHandoff ? 'user 本人への手渡し（[手渡し判定]／お願いする操作）も人待ちです。' : '') + '人待ちの自動進行は台帳の定期チェックに載せる: node tools/auto-progress.mjs --add-check --session <id> --check "<exit0=達成/1=未達のコマンド>" --deadline +7d --label "<名前>" --next-claude "<次の手>"。自動進行が「なし」でも同じセッションの open 行が必要です。自動確認できない場合だけ [NO-AUTOCHECK-OK: <理由>] を記載してください。' });
   }
   if ((userHandoff || !NO_ACTION_PATTERN.test(footer.nextAction)) && classifyHandoff(source) !== 'reply-only'
@@ -326,6 +356,9 @@ function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {
   }
   const labelOverride = [...turnSource.matchAll(/\[NEXT-ACTION-LABEL-OK:[ \t]*([^\]\r\n]*)\]/g)]
     .some(([, reason]) => [...reason.trim()].length >= 5);
+  if (bodyLabelViolation(turnSource) && !labelOverride) {
+    return { decision: 'block', code: 'NEXT-ACTION-LABEL-UNDEFINED', reason: LABEL_UNDEFINED_REASON };
+  }
   if (hasUnexplainedLabel(footer.nextAction) && !labelOverride) {
     return { decision: 'block', code: 'NEXT-ACTION-LABEL-ONLY', reason: LABEL_ONLY_REASON };
   }
@@ -407,6 +440,7 @@ function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {
 // stop_hook_active 中の SESSION-OPEN-NO-DEADLINE 連続ブロック回数を管理する。
 // 同じ session_id で連続2回まで block、3回目以降は pass する（無限ループ防止）。
 const NO_DEADLINE_COUNTER_FILE = () => path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'next-action-no-deadline-counter.json');
+const STOP_HOOK_COUNTER_FILE = () => path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'next-action-stop-hook-counter.json');
 
 function readNoDeadlineCounter() {
   try { return JSON.parse(fs.readFileSync(NO_DEADLINE_COUNTER_FILE(), 'utf8')); } catch { return {}; }
@@ -417,6 +451,45 @@ function writeNoDeadlineCounter(data) {
     fs.mkdirSync(path.dirname(NO_DEADLINE_COUNTER_FILE()), { recursive: true });
     fs.writeFileSync(NO_DEADLINE_COUNTER_FILE(), JSON.stringify(data));
   } catch { /* fail-open */ }
+}
+
+function stopHookLimited(result, input) {
+  const sessionId = input?.session_id || input?.sessionId || '';
+  const file = STOP_HOOK_COUNTER_FILE();
+  let counter = {};
+  try { counter = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* start empty */ }
+  if (!result) {
+    if (counter[sessionId] !== undefined) {
+      delete counter[sessionId];
+      try { fs.writeFileSync(file, JSON.stringify(counter)); } catch { /* fail-open */ }
+    }
+    return { decision: 'pass', reason: 'stop-hook-active' };
+  }
+  const count = (counter[sessionId] || 0) + 1;
+  if (count >= 3) return { decision: 'pass', reason: 'stop-hook-active-limit' };
+  counter[sessionId] = count;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(counter));
+  } catch { /* fail-open */ }
+  return result;
+}
+
+function checkDuringStopHook(text, input, options = {}) {
+  const source = String(text || '').trimEnd();
+  const turnSource = String(options.turnText || source).trimEnd();
+  const footer = footerValues(source);
+  if (!footer) return null;
+  const override = name => [...turnSource.matchAll(new RegExp('\\[' + name + ':[ \\t]*([^\\]\\r\\n]*)\\]', 'g'))]
+    .some(([, reason]) => [...reason.trim()].length >= 5);
+  if (bodyLabelViolation(turnSource) && !override('NEXT-ACTION-LABEL-OK')) return { decision: 'block', code: 'NEXT-ACTION-LABEL-UNDEFINED', reason: LABEL_UNDEFINED_REASON };
+  if (hasUnexplainedLabel(footer.nextAction) && !override('NEXT-ACTION-LABEL-OK')) return { decision: 'block', code: 'NEXT-ACTION-LABEL-ONLY', reason: LABEL_ONLY_REASON };
+  if (footer.nextAction !== 'なし' && MULTIPLE_ACTIONS_PATTERN.test(footer.nextAction)) return { decision: 'block', code: 'NEXT-ACTION-MULTIPLE', reason: 'kim への手渡しが2件以上あります。§1.1 最上位原則に従い、まず自分で潰して1件以下にしてください。' };
+  if (BACKREF_PATTERN.test(footer.nextAction) && !override('NEXT-ACTION-BACKREF-OK')) return { decision: 'block', code: 'NEXT-ACTION-BACKREF', reason: BACKREF_REASON };
+  const placement = approvalPlacement(turnSource);
+  if (footer.nextAction !== 'なし' && APPROVAL_PATTERN.test(footer.nextAction) && placement === 'missing' && !override('NEXT-ACTION-APPROVAL-INLINE-OK')) return { decision: 'block', code: 'NEXT-ACTION-APPROVAL-INLINE', reason: APPROVAL_INLINE_REASON };
+  if (footer.nextAction !== 'なし' && APPROVAL_PATTERN.test(footer.nextAction) && placement === 'not-last' && !override('NEXT-ACTION-APPROVAL-NOT-LAST-OK')) return { decision: 'block', code: 'NEXT-ACTION-APPROVAL-NOT-LAST', reason: APPROVAL_NOT_LAST_REASON };
+  return checkNoDeadlineDuringStopHook(text, input);
 }
 
 // stop_hook_active 中でも SESSION-OPEN-NO-DEADLINE だけは検査する。
@@ -449,10 +522,7 @@ function checkNoDeadlineDuringStopHook(text, input) {
 export function judgeNextAction(text, transcriptRaw = '', input = {}, options = {}) {
   const sessionId = input?.session_id || input?.sessionId || '';
   if (input?.stop_hook_active) {
-    // stop_hook_active 中でも SESSION-OPEN-NO-DEADLINE だけは検査する
-    const noDeadline = checkNoDeadlineDuringStopHook(text, input);
-    if (noDeadline) return noDeadline;
-    return { decision: 'pass', reason: 'stop-hook-active' };
+    return stopHookLimited(checkDuringStopHook(text, input, options), input);
   } else {
     if (sessionId) {
       const counter = readNoDeadlineCounter();
@@ -460,6 +530,14 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}, options = 
         delete counter[sessionId];
         writeNoDeadlineCounter(counter);
       }
+      try {
+        const file = STOP_HOOK_COUNTER_FILE();
+        const stopCounter = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (stopCounter[sessionId] !== undefined) {
+          delete stopCounter[sessionId];
+          fs.writeFileSync(file, JSON.stringify(stopCounter));
+        }
+      } catch { /* fail-open */ }
     }
   }
   if (enabled()) {
@@ -483,6 +561,7 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}, options = 
   const override = (name, minimum = 5) => [...turnSource.matchAll(new RegExp(`\\[${name}:[ \\t]*([^\\]\\r\\n]*)\\]`, 'g'))]
     .some(([, reason]) => [...reason.trim()].length >= minimum);
   if (hasUnexplainedLabel(footer.nextAction) && !override('NEXT-ACTION-LABEL-OK')) add('NEXT-ACTION-LABEL-ONLY', LABEL_ONLY_REASON);
+  if (bodyLabelViolation(turnSource) && !override('NEXT-ACTION-LABEL-OK')) add('NEXT-ACTION-LABEL-UNDEFINED', LABEL_UNDEFINED_REASON);
   if (footer.nextAction !== 'なし' && MULTIPLE_ACTIONS_PATTERN.test(footer.nextAction)) add('NEXT-ACTION-MULTIPLE', 'kim への手渡しが2件以上あります。§1.1 最上位原則に従い、まず自分で潰して1件以下にしてください。');
   if (BACKREF_PATTERN.test(footer.nextAction) && !override('NEXT-ACTION-BACKREF-OK')) add('NEXT-ACTION-BACKREF', BACKREF_REASON);
   const placement = approvalPlacement(turnSource);

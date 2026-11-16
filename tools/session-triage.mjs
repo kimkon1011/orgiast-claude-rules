@@ -158,7 +158,7 @@ function analyze(file, headRaw, tailRaw, headEvents, tailEvents, tailBytes) {
   let gitBranch = '';
   const sessionId = path.basename(file.path, '.jsonl');
   for (const event of combined) {
-    cwd ||= event?.cwd || '';
+    cwd ||= event?.cwd || event?.relocatedCwd || '';
     gitBranch ||= event?.gitBranch || '';
     if (!firstPrompt && isActualUser(event)) firstPrompt = cleanPrompt(textOf(event.message.content));
   }

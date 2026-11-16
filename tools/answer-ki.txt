@@ -1,0 +1,1 @@
+完了確認: セッション 8ff68def（社員立替経費アプリ 増田さんの定額分 備考欄→店名）の作業は HP PC で完了済み（auto-progress-resume state: done）。test PC からの再開試行が cwd 不足でエラーになったが、実作業は origin/main へ push 済み。stalled-session-resume.mjs に完了状態チェックを追加。

@@ -444,7 +444,7 @@ async function main(argv = process.argv.slice(2)) {
   const failures = new Set();
   let llmFn;
   if (useLlm) {
-    const { createLlm } = await import('../discord-autoreply.mjs');
+    const { createLlm } = await import('../lib/autoreply-llm.mjs');
     const os = await import('node:os');
     llmFn = createLlm({ home: os.homedir() });
   }

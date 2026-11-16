@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ensureKimEditor } from './lib/kim-editor.mjs';
 import { extractCreatedFiles, handle } from './kim-editor-posttool.mjs';
-import { sweep, sweepAccounts, sweepQuery } from './kim-editor-sweep.mjs';
+import { retryTransientDrive, sweep, sweepAccounts, sweepQuery } from './kim-editor-sweep.mjs';
 import fs from 'node:fs';
 import { collapseHooks, repositoryHooks } from './hook-dispatch-registry.mjs';
 
@@ -85,6 +85,22 @@ test('sweep reports and throws failures instead of claiming success', async () =
   const rows = [];
   await assert.rejects(sweep({ map: {}, getToken: async () => { throw new Error('denied'); }, inbox: async (_home, row) => rows.push(row) }), /巡回に失敗/);
   assert.match(rows[0].text, /失敗 2件/);
+});
+
+test('Drive transient failures retry, while permanent failures fail immediately', async () => {
+  let calls = 0;
+  const waits = [];
+  assert.equal(await retryTransientDrive(async () => {
+    calls++;
+    if (calls < 3) throw new Error('429 rate limited');
+    return 'ok';
+  }, { sleep: async ms => waits.push(ms) }), 'ok');
+  assert.equal(calls, 3);
+  assert.deepEqual(waits, [500, 1000]);
+
+  calls = 0;
+  await assert.rejects(retryTransientDrive(async () => { calls++; throw new Error('403 denied'); }, { sleep: async () => {} }), /403 denied/);
+  assert.equal(calls, 1);
 });
 test('keyless fleet seats skip the all-account sweep successfully', async () => {
   const rows = [];

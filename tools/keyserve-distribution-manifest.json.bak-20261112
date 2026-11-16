@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "verifiedAt": "2026-10-09",
+  "evidence": "Authenticated POST /api/keys HTTP 200; names only; values never persisted. Response is for the requesting PC; all-PC receipt is unconfirmed.",
+  "distributions": [
+    {
+      "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
+      "file": "kimi-api.env",
+      "keys": [
+        "MOONSHOT_API_KEY",
+        "MOONSHOT_API_BASE"
+      ]
+    },
+    {
+      "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
+      "file": "groq.env",
+      "keys": [
+        "GROQ_API_KEY"
+      ]
+    },
+    {
+      "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
+      "file": "openrouter.env",
+      "keys": [
+        "OPENROUTER_API_KEY"
+      ]
+    },
+    {
+      "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
+      "file": "mistral.env",
+      "keys": [
+        "MISTRAL_API_KEY"
+      ]
+    },
+    {
+      "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
+      "file": "deepseek.env",
+      "keys": [
+        "DEEPSEEK_API_KEY"
+      ]
+    },
+    {
+      "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
+      "file": "xai.env",
+      "keys": [
+        "XAI_API_KEY"
+      ]
+    },
+    {
+      "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
+      "file": "makimono-feedback.env",
+      "keys": [
+        "FEEDBACK_DISCORD_WEBHOOK_URL",
+        "DISCORD_FEEDBACK_CHANNEL_ID"
+      ]
+    },
+    {
+      "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
+      "file": "anthropic.env",
+      "keys": [
+        "ANTHROPIC_API_KEY"
+      ]
+    },
+    {
+      "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
+      "file": "fleet-sheet.env",
+      "keys": [
+        "FLEET_SHEET_URL",
+        "FLEET_SHEET_TOKEN"
+      ]
+    },
+    {
+      "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
+      "file": "cost-reporter.env",
+      "keys": [
+        "DISCORD_COST_WEBHOOK"
+      ]
+    },
+    {
+      "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
+      "file": "orgiast-discord-bot-token.txt",
+      "keys": [
+        "(file)"
+      ]
+    },
+    {
+      "source": "ORGIAST_KEYS_JSON_EXTRA_FEEDBACK",
+      "file": "feedback-relay.env",
+      "keys": [
+        "FEEDBACK_SHARED_FORM_URL"
+      ]
+    },
+    {
+      "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
+      "file": "zai.env",
+      "keys": [
+        "ZAI_API_KEY"
+      ]
+    },
+    {
+      "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
+      "file": "keyserve.env",
+      "keys": [
+        "ORGIAST_KEYSERVE_SECRET",
+        "ORGIAST_KEYSERVE_PC"
+      ]
+    }
+  ],
+  "unverified": [
+    "Server environment-variable-to-file mapping, except EXTRA_FEEDBACK (PR #667), is not exposed by /api/keys."
+  ]
+}

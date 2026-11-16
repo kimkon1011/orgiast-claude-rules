@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { listMessages } from './beeper-api.mjs';
 import { loadSecrets, resolveGroup } from './line-group-send.mjs';
-import { latestOf, readOutbound, writeContextMarker } from './lib/send-context.mjs';
+import { latestOf, readOutbound, textHash, writeContextMarker, writeKimApprovedAudit } from './lib/send-context.mjs';
 import { mintDwdToken } from './gmail-draft.mjs';
 import { resolveDiscordBotToken } from './notify-kim.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
@@ -137,14 +137,99 @@ function queryVerdict(prompt, spawn) {
   } finally { fs.rmSync(dir,{recursive:true,force:true}); }
 }
 
+
+const DISCORD_SNOWFLAKE = /^\d{15,}$/;
+
+export function parseKimApprovedNote(argv) {
+  const i = argv.indexOf('--kim-approved');
+  if (i < 0) return '';
+  const note = String(argv[i + 1] ?? '').trim();
+  if (!note || note.startsWith('--')) throw new Error('--kim-approved には承認の根拠メモが必要です');
+  return note;
+}
+
+export function isInternalDiscordUser(userId, { senders = loadInternalSenders(), members = [] } = {}) {
+  const id = String(userId || '');
+  if (!id) return { allowed: false, source: null };
+  if (senders.discordUserIds.has(id)) return { allowed: true, source: 'internal-senders' };
+  if ((members || []).some(member => String(member.id) === id)) return { allowed: true, source: 'discord-member-directory' };
+  return { allowed: false, source: null };
+}
+
+export async function resolveKimApprovedRecipient(channel, target, {
+  home, fetchImpl, getDiscordMembersImpl, getDiscordChannel, internalSenders,
+} = {}) {
+  const senders = internalSenders || loadInternalSenders();
+  const raw = String(target ?? '').trim();
+  if (channel === 'gmail') {
+    const address = addressOf(raw);
+    const allowed = Boolean(address) && (senders.emailAddresses.has(address) || senders.emailDomains.has(address.split('@')[1] || ''));
+    return { allowed, resolvedId: address || raw, source: allowed ? 'internal-senders' : null };
+  }
+  if (channel === 'line' || channel === 'beeper') {
+    const allowed = senders.lineDisplayNames.has(normalize(raw))
+      || senders.discordUserIds.has(raw)
+      || senders.emailAddresses.has(addressOf(raw));
+    return { allowed, resolvedId: raw, source: allowed ? 'internal-senders' : null };
+  }
+  if (channel !== 'discord') return { allowed: false, resolvedId: raw, source: null };
+
+  const members = await (getDiscordMembersImpl
+    ? getDiscordMembersImpl(raw)
+    : getDiscordMembers({ query: raw, home, fetchImpl }));
+  if (DISCORD_SNOWFLAKE.test(raw) && senders.discordUserIds.has(raw)) {
+    return { allowed: true, resolvedId: raw, source: 'internal-senders' };
+  }
+  const matched = DISCORD_SNOWFLAKE.test(raw)
+    ? (members || []).find(member => String(member.id) === raw)
+    : matchMember(raw, members);
+  if (matched) {
+    const userId = String(matched.id);
+    const check = isInternalDiscordUser(userId, { senders, members });
+    return { allowed: check.allowed, resolvedId: userId, source: check.source };
+  }
+  if (DISCORD_SNOWFLAKE.test(raw) && getDiscordChannel) {
+    const info = await getDiscordChannel(raw);
+    const recipientId = String(info?.recipients?.[0]?.id || info?.recipient_id || '');
+    if (recipientId) {
+      const richer = await (getDiscordMembersImpl
+        ? getDiscordMembersImpl(recipientId)
+        : getDiscordMembers({ query: recipientId, home, fetchImpl }));
+      const merged = [...(members || []), ...(richer || [])];
+      const check = isInternalDiscordUser(recipientId, { senders, members: merged });
+      if (check.allowed) return { allowed: true, resolvedId: recipientId, source: check.source };
+    }
+  }
+  return { allowed: false, resolvedId: raw, source: null };
+}
+
 export async function main(argv=process.argv.slice(2), deps={}) {
   const val=n=>{const i=argv.indexOf(n);return i>=0?argv[i+1]:''}; const channel=val('--channel'), target=val('--target')||val('--group')||val('--thread')||val('--chat')||val('--channel-id'), file=val('--text-file');
   const intendedChanges = []; argv.forEach((v,i) => { if (v === '--intended-change' && argv[i+1]) intendedChanges.push(argv[i+1]); });
-  if(!['line','gmail','discord','beeper'].includes(channel)||!target||!file) throw new Error('使い方: node tools/send-context-check.mjs --channel line|gmail|discord|beeper --target <宛先IDまたはメール> --text-file <送る本文> [--intended-change "<変更内容>"] [--periodic-report --recipient <宛先名>]');
+  if(!['line','gmail','discord','beeper'].includes(channel)||!target||!file) throw new Error('使い方: node tools/send-context-check.mjs --channel line|gmail|discord|beeper --target <宛先IDまたはメール> --text-file <送る本文> [--intended-change "<変更内容>"] [--periodic-report --recipient <宛先名>] [--kim-approved "<承認の根拠メモ>"]');
+  const kimApproved = parseKimApprovedNote(argv);
   const text=fs.readFileSync(file,'utf8').trim(); const result=await (deps.fetchHistory||fetchHistory)(channel,target,{home:deps.home});
   for(const line of labelHistory(result.messages)) console.log(line.slice(0, 700));
   const periodicReport=argv.includes('--periodic-report')?{recipient:val('--recipient')||'宛先本人',kind:'定期報告'}:false;
   const verdict=(deps.runLlm||runLlm)(result.messages,text,{intendedChanges: intendedChanges.length ? intendedChanges : undefined,periodicReport}); console.log(JSON.stringify(verdict,null,2));
+  if (kimApproved) {
+    const recipient = await (deps.resolveKimApprovedRecipient || resolveKimApprovedRecipient)(channel, target, {
+      home: deps.home, fetchImpl: deps.fetchImpl, getDiscordMembersImpl: deps.getDiscordMembersImpl, getDiscordChannel: deps.getDiscordChannel, internalSenders: deps.internalSenders,
+    });
+    writeKimApprovedAudit({
+      channel, target: result.target, resolvedUserId: recipient.resolvedId, bodyHash: textHash(text),
+      llmOk: verdict.ok, llmReason: verdict.reason, warnings: verdict.warnings, kimApproved,
+      allowed: recipient.allowed, source: recipient.source,
+    }, deps.home);
+    if (!recipient.allowed) {
+      console.error('kim 承認でも、既存の社内メンバーリストにない宛先には使えません');
+      return 1;
+    }
+    const written=writeContextMarker({channel,target:result.target,text,latest:latestOf(result.messages),reason:verdict.reason,intendedChanges: intendedChanges.length ? intendedChanges : undefined,home:deps.home,kimApproved,llmOk:verdict.ok});
+    console.log(`承認マーカー: ${written.file}`);
+    if (!verdict.ok) console.log('LLM判定はNGですが、kim承認によりマーカーを作成しました。');
+    return 0;
+  }
   if(!verdict.ok) return 2; const written=writeContextMarker({channel,target:result.target,text,latest:latestOf(result.messages),reason:verdict.reason,intendedChanges: intendedChanges.length ? intendedChanges : undefined,home:deps.home}); console.log(`承認マーカー: ${written.file}`); return 0;
 }
 if(isEntry(import.meta.url)) main().then(c=>{process.exitCode=c}).catch(e=>{console.error(e.message);process.exitCode=1});

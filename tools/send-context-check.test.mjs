@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { assertContextApproved, writeContextMarker } from './lib/send-context.mjs';
-import { classifyMessage, fetchHistory, labelHistory, loadInternalSenders, main, runLlm } from './send-context-check.mjs';
+import { classifyMessage, fetchHistory, labelHistory, loadInternalSenders, main, parseKimApprovedNote, resolveKimApprovedRecipient, runLlm } from './send-context-check.mjs';
 
 const tmp = t => { const p=fs.mkdtempSync(path.join(os.tmpdir(),'send-context-')); t.after(()=>fs.rmSync(p,{recursive:true,force:true})); return p; };
 test('LINE履歴は実テーブルの列名を使って整形する', async t => {
@@ -278,4 +278,90 @@ test('Gmail履歴取得はDRAFTメッセージを除外し検索時に-in:drafts
   assert.ok(!result.messages.some(m => m.text.includes('作成中の下書き本文')));
   assert.equal(result.messages[0].text, '送信済みの案内本文');
   assert.equal(result.messages[1].text, '相手からの返信本文');
+});
+
+
+test('--kim-approved はLLMがNGでも社内宛ならマーカーと監査ログを残す', async t => {
+  const home=tmp(t), file=path.join(home,'body.txt'); fs.writeFileSync(file,'社内連絡本文');
+  const note='2026-11-16 23:04 金さんがグロボのチャットで承認';
+  const code=await main(['--channel','discord','--target','1423319951980232744','--text-file',file,'--kim-approved',note],{
+    home,
+    fetchHistory:async()=>({target:'dm-satou',messages:[{id:'m1',at:'2026-11-16T00:00:00.000Z',side:'self',party:'internal',sender:'オージャスト',text:'前の連絡'}]}),
+    runLlm:()=>({ok:false,reason:'未回答あり',warnings:['未回答']}),
+    resolveKimApprovedRecipient:async()=>({allowed:true,resolvedId:'1423319951980232744',source:'internal-senders'}),
+  });
+  assert.equal(code,0);
+  const markers=fs.readdirSync(path.join(home,'.claude','send-context-checks'));
+  assert.equal(markers.length,1);
+  const marker=JSON.parse(fs.readFileSync(path.join(home,'.claude','send-context-checks',markers[0]),'utf8'));
+  assert.equal(marker.kimApproved,note);
+  assert.equal(marker.llmOk,false);
+  assert.equal(marker.target,'dm-satou');
+  const row=JSON.parse(fs.readFileSync(path.join(home,'.claude','logs','send-context-kim-approved.jsonl'),'utf8').trim());
+  assert.equal(row.llmOk,false);
+  assert.equal(row.llmReason,'未回答あり');
+  assert.deepEqual(row.warnings,['未回答']);
+  assert.equal(row.kimApproved,note);
+  assert.equal(row.target,'dm-satou');
+  assert.equal(row.resolvedUserId,'1423319951980232744');
+  assert.equal(row.bodyHash, marker.bodyHash);
+  assert.equal(row.allowed,true);
+  assert.ok(row.at);
+});
+
+test('--kim-approved は社外宛ではマーカーを作らず監査ログだけ残す', async t => {
+  const home=tmp(t), file=path.join(home,'body.txt'); fs.writeFileSync(file,'社外宛');
+  const code=await main(['--channel','discord','--target','999','--text-file',file,'--kim-approved','金さんが承認'],{
+    home,
+    fetchHistory:async()=>({target:'dm-ext',messages:[{id:'m1',at:'2026-11-16T00:00:00.000Z',side:'external',party:'external',sender:'顧客',text:'hello'}]}),
+    runLlm:()=>({ok:false,reason:'NG',warnings:[]}),
+    resolveKimApprovedRecipient:async()=>({allowed:false,resolvedId:'999',source:null}),
+  });
+  assert.equal(code,1);
+  const dir=path.join(home,'.claude','send-context-checks');
+  assert.equal(fs.existsSync(dir)?fs.readdirSync(dir).length:0,0);
+  const row=JSON.parse(fs.readFileSync(path.join(home,'.claude','logs','send-context-kim-approved.jsonl'),'utf8').trim());
+  assert.equal(row.allowed,false);
+  assert.equal(row.llmOk,false);
+  assert.equal(row.kimApproved,'金さんが承認');
+});
+
+test('--kim-approved 無しのNGは従来どおりマーカーも監査ログも作らない', async t => {
+  const home=tmp(t), file=path.join(home,'body.txt'); fs.writeFileSync(file,'通常');
+  const code=await main(['--channel','discord','--target','1423319951980232744','--text-file',file],{
+    home,
+    fetchHistory:async()=>({target:'dm-1',messages:[{id:'m1',at:'2026-11-16T00:00:00.000Z',side:'self',party:'internal',sender:'オージャスト',text:'x'}]}),
+    runLlm:()=>({ok:false,reason:'NG',warnings:[]}),
+  });
+  assert.equal(code,2);
+  const dir=path.join(home,'.claude','send-context-checks');
+  assert.equal(fs.existsSync(dir)?fs.readdirSync(dir).length:0,0);
+  assert.equal(fs.existsSync(path.join(home,'.claude','logs','send-context-kim-approved.jsonl')),false);
+});
+
+test('--kim-approved の空メモはエラー', () => {
+  assert.throws(() => parseKimApprovedNote(['--kim-approved']), /根拠メモ/);
+  assert.throws(() => parseKimApprovedNote(['--kim-approved','--channel']), /根拠メモ/);
+  assert.equal(parseKimApprovedNote([]), '');
+  assert.equal(parseKimApprovedNote(['--kim-approved',' 金さんが承認 ']), '金さんが承認');
+});
+
+test('resolveKimApprovedRecipient はメンバーディレクトリの社内メンバーを許可する', async () => {
+  const senders=loadInternalSenders();
+  const sawayama={id:'958259895327686656',username:'.kutuku',global_name:'澤山　貴俊'};
+  const result=await resolveKimApprovedRecipient('discord','958259895327686656',{
+    internalSenders: senders,
+    getDiscordMembersImpl: async () => [sawayama],
+  });
+  assert.equal(result.allowed,true);
+  assert.equal(result.resolvedId,'958259895327686656');
+  assert.equal(result.source,'discord-member-directory');
+});
+
+test('resolveKimApprovedRecipient はディレクトリにないDiscord IDを拒否する', async () => {
+  const result=await resolveKimApprovedRecipient('discord','111111111111111111',{
+    internalSenders: loadInternalSenders(),
+    getDiscordMembersImpl: async () => [],
+  });
+  assert.equal(result.allowed,false);
 });

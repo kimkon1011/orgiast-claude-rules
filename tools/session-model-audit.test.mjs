@@ -21,15 +21,14 @@ const at = (min) => new Date(now - min * 60000).toISOString();
 const asst = (min, model, text) => ({ type: 'assistant', timestamp: at(min), message: { model, content: [{ type: 'text', text }] } });
 const user = (min, text) => ({ type: 'user', timestamp: at(min), message: { content: text } });
 
-test('settings: 未設定と opus は NG、opus は OK', () => {
-  assert.ok(settingsModelProblem(undefined, 'opus'));
+test('settings: 未設定と opus/haiku は NG、opus/haiku は OK', () => {
+  assert.equal(settingsModelProblem(undefined, 'opus'), '未設定（Claude Code の既定=Opus）');
   assert.equal(settingsModelProblem('opus[1m]', 'opus'), 'opus[1m]');
   assert.equal(settingsModelProblem('opus', 'opus'), null);
 });
 
-test('settings: 未設定と sonnet/haiku は NG、opus/haiku は OK', () => {
-  assert.ok(settingsModelProblem(undefined, 'haiku'));
-  assert.ok(settingsModelProblem('haiku', 'haiku'));
+test('settings: 未設定と haiku は NG、haiku は OK', () => {
+  assert.equal(settingsModelProblem(undefined, 'haiku'), '未設定（Claude Code の既定=Opus）');
   assert.equal(settingsModelProblem('haiku[1m]', 'haiku'), 'haiku[1m]');
 });
 

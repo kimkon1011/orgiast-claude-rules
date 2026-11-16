@@ -70,13 +70,13 @@ function collectCliAuthStatus() {
   const status = {};
   // gh CLI
   try {
-    const ghOut = execSync('gh auth status --show-token 2>&1 || true', { encoding: 'utf8', timeout: 5000 });
+    const ghOut = execSync('gh auth status --show-token 2>&1 || true', { encoding: 'utf8', timeout: 5000, windowsHide: true });
     const ghMatch = ghOut.match(/Logged in to github\.com account ([^\s]+)/);
     if (ghMatch) status.github = { account: ghMatch[1], authed: true };
   } catch { status.github = { authed: false }; }
   // git config
   try {
-    const gitUser = execSync('git config user.email', { encoding: 'utf8', timeout: 3000 }).trim();
+    const gitUser = execSync('git config user.email', { encoding: 'utf8', timeout: 3000, windowsHide: true }).trim();
     if (gitUser) status.git = { email: gitUser };
   } catch { /* ignore */ }
   return status;

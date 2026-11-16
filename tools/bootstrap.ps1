@@ -28,9 +28,13 @@ if (-not (Test-Path (Join-Path $Repo '.git'))) {
 }
 if (Have node) {
   $nodeExe = if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }
-  # Merge stderr in CMD before PowerShell can turn it into NativeCommandError.
-  # /d disables AutoRun; /s /c requires outer quotes around the whole command.
-  & cmd.exe /d /s /c "`"`"$nodeExe`" `"$(Join-Path $Repo 'tools\setup.mjs')`" --converge 2>&1`""
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  # Windows PowerShell 5.1 promotes native stderr to NativeCommandError when the
+  # preference is Stop. Let setup print its diagnostics, then check its exit code.
+  $savedErrorActionPreference = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  & $nodeExe (Join-Path $Repo 'tools\setup.mjs') --converge 2>&1
+  $setupExitCode = $LASTEXITCODE
+  $ErrorActionPreference = $savedErrorActionPreference
+  if ($setupExitCode -ne 0) { exit $setupExitCode }
 } else { throw 'node.js is required' }
 Write-Output '[ORGIAST-BOOTSTRAP-COMPLETE]'

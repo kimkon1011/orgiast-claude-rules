@@ -14,6 +14,14 @@ import { convergeDeadlineTasks } from './setup-deadline-watch.mjs';
 // convergeMobileStandby が返した後、次の関数群が落ちないことを検証。
 // clean-install CI では RC接頭辞の後の8秒間で無言exit code 1になる。
 
+test('bootstrap lets PowerShell 5.1 capture native stderr without aborting', async () => {
+  const source = await fs.readFile(new URL('./bootstrap.ps1', import.meta.url), 'utf8');
+  assert.match(source, /\$savedErrorActionPreference = \$ErrorActionPreference/);
+  assert.match(source, /\$ErrorActionPreference = 'Continue'[\s\S]*& \$nodeExe[\s\S]*2>&1/);
+  assert.match(source, /\$setupExitCode = \$LASTEXITCODE[\s\S]*\$ErrorActionPreference = \$savedErrorActionPreference/);
+  assert.doesNotMatch(source, /cmd\.exe[\s\S]*setup\.mjs/);
+});
+
 test('convergeMobileStandby → convergeNodeRuntimeSecurity の連続でエラーなく完了する（クリーン環境模擬）', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'clean-ci-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-export const GATE_CONTRACT = { name: 'staff-ask-selfcheck-gate', remedies: [{ kind: 'repo-file', ref: 'tools/gate-remedies.md', section: 'staff-ask-selfcheck-gate' }] };
+export const GATE_CONTRACT = {"name": "staff-ask-selfcheck-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "staff-ask-selfcheck-gate"}]};
 import fs from 'node:fs';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';

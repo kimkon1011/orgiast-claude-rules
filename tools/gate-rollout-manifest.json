@@ -29,8 +29,8 @@
       "rollout": "deny",
       "legacy": true
     },
-    "staff-ask-selfcheck-gate": { "rollout": "deny", "immediatePolicy": "2026-11-16 kim 指摘: 社員への調査外注と無関係な検索証拠を遮断" },
-    "pending-decision-ask-gate": { "rollout": "deny", "legacy": true },
+    "staff-ask-selfcheck-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-16T00:00:00Z", "denyAfter": "2026-11-23T00:00:00Z", "immediatePolicy": "2026-11-16 kim 指摘: 社員への調査外注と無関係な検索証拠を遮断" },
+    "pending-decision-ask-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-16T00:00:00Z", "denyAfter": "2026-11-23T00:00:00Z" },
     "control-group-stop-gate": {
       "rollout": "deny",
       "legacy": true

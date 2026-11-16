@@ -96,6 +96,42 @@ Organization を継承し LocalBusiness に拡張。営業時間・エリアを�
 - Schema.org バリデーション
 - レポート出力
 
+## 追加P1: 著者資格（Author Credential）スキーマ
+
+Yext調査で著者情報エンリッチメントによりAI引用率約1.8倍（X-0055）。Google EEAT評価にも重要。
+
+### Person スキーマ（会社概要ページ）
+
+```json
+{
+  "@context": "https://schema.org",
+  "@type": "Person",
+  "name": "金 功勇",
+  "jobTitle": "代表取締役",
+  "worksFor": { "@type": "Organization", "name": "株式会社オージャスト" },
+  "knowsAbout": ["展示会ブース制作", "社内イベントプロデュース", "イベント運営管理"]
+}
+```
+
+### Article.author（ブログ・事例ページ）
+
+全ブログ記事と事例ページのArticle/Projectスキーマに `author` → Person `@id` 参照を追加。
+
+詳細は `ai-visibility/x0055-site-structure/author-credential-spec.md` 参照。
+
+## 追加P2: Service スキーマ（サービス別ページ）
+
+各サービスページに `Service + OfferCatalog` のJSON-LDを追加。`areaServed` で対応地域を明示。
+
+詳細は `ai-visibility/x0055-site-structure/service-page-archetype.md` 参照。
+
+## 追加P2: LocalBusiness + areaServed（ロケーションページ）
+
+ロケーションページ用に `LocalBusiness + areaServed + hasOfferCatalog` のJSON-LDを追加。
+全国7拠点＋汎用エリアに対応。
+
+詳細は `ai-visibility/x0055-site-structure/location-page-archetype.md` 参照。
+
 ## クロール性改善
 
 - robots.txt の確認と最適化

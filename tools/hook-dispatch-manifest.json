@@ -532,6 +532,12 @@
         "timeout": 15
       },
       {
+        "matcher": "Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/unattended-elevation-gate.mjs\"",
+        "timeout": 15
+      },
+      {
         "matcher": "AskUserQuestion",
         "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/askuser-selfcheck-gate.mjs\"",

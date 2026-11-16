@@ -8,8 +8,14 @@ export function subjectOf(line) {
   const cells = line.split('|').map(s => s.trim()).filter(Boolean);
   let head = cells.length >= 2 ? cells[0] : line.split(/[：:|]/, 1)[0];
   head = head.replace(/^[-*#\s]+/, '').trim();
-  const candidates = head.match(/[A-Za-z][A-Za-z0-9・+＆&／/ _-]{2,}|[一-龠ァ-ヶー]{3,}/g) || [];
-  return candidates.map(s => s.trim()).find(s => s.length >= 3 && !STOPWORDS.test(s)) || '';
+  return head.length >= 3 && !STOPWORDS.test(head) ? head : '';
+}
+
+function subjectMentioned(subject, confirmation) {
+  if (!subject) return false;
+  if (confirmation.toLowerCase().includes(subject.toLowerCase())) return true;
+  const tokens = subject.match(/[A-Za-z][A-Za-z0-9_-]{2,}|[一-龠ァ-ヶー]{3,}/g) || [];
+  return tokens.some(token => !STOPWORDS.test(token) && confirmation.toLowerCase().includes(token.toLowerCase()));
 }
 
 export function evaluatePendingDecision(text) {
@@ -20,7 +26,7 @@ export function evaluatePendingDecision(text) {
   for (let i = 0; i < (sectionIndex >= 0 ? sectionIndex : lines.length); i++) {
     if (!PENDING.test(lines[i])) continue;
     const subject = subjectOf(lines[i]);
-    if (!subject || !confirmation.toLowerCase().includes(subject.toLowerCase())) {
+    if (!subjectMentioned(subject, confirmation)) {
       const shown = subject || lines[i].replace(/\|/g, ' ').trim().slice(0, 40);
       return { decision: 'block', code: 'PENDING-DECISION-NOT-ASKED', reason: `「判断待ち」と書いた ${shown} を kim に聞いていない。【kim 確認用の全文】に選択肢と推奨を付けて入れるか、Claude が決めて進める` };
     }

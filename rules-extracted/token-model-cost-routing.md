@@ -11,7 +11,8 @@ ONBOARDING.compressed.md §1.13 / §1.16 / §1.17 / §1.17.1 / §1.18 の詳細�
 | タスク種別 | 使う実行者 | 費用 | 根拠 |
 |---|---|---|---|
 | 定型・確定処理（集計/整形/置換/スクレイプ/移送） | **ローカルスクリプト**（Python/Node） | ゼロ | トークン消費なし。決定的で再現可能 |
-| コード実装 | **Codex**（CLI, ChatGPT定額枠） | 定額内 | §1.17。Claude Codeは指揮官（設計/レビュー/verify） |
+| GitHub リポジトリのコード修正（数行の軽い修正を除く） | **Cursor cloud agent**（`tools/cursor-handoff.mjs` でラベル `cursor-agent` の issue） | Cursor の未使用枠。追加の従量課金なし | §1.17.3。Claude Code は実装せず、できた PR を確認する |
+| 数行の修正・PC ローカルのコード実装 | **Codex**（CLI, ChatGPT定額枠） | 定額内 | §1.17。Claude Codeは指揮官（設計/レビュー/verify） |
 | 外部事実のWeb調査・属性エンリッチ（多段・根拠URL要。例: 企業の上場/設立日/新卒採用/出展歴） | **Manus**（`src/lib/manus.ts` パターン, 専用エージェント枠） | 専用枠 | 自律Webエージェント。Claudeの`web_search`ループにトークンを燃やすより適・精度も高い。会社ごと1タスクでJSON回収、sources(根拠URL)を必ず保持 |
 | 上記に当てはまらない認知作業 | ↓ モデルルーティングへ | — | — |
 
@@ -26,7 +27,7 @@ Manus適用外（Claude/Codexで足りる）: 単発の軽い事実確認、根�
 | 指揮官・判断・設計（アーキ設計/根本原因/横断一貫性/経営判断/タスク分解・レビュー） | **Opus5** | $5/$25 | GA・Opus4.8の2倍性能で同単価。旧「Opus 4.7/4.8」参照はOpus5に読替 |
 | 生成（顧客向け文章・返信・要約） | **Sonnet 4.6** | $3/$15 | default（§1.18）。返信生成A/Bで綺麗な本文を安定生成 |
 | 軽処理（分類・抽出・OCR・ラベリング） | **Haiku 4.5** | $1/$5 | 抽出系はSonnetとほぼ同等品質 |
-| コード実装 | **Codex** | 定額枠 | §1.17。従量課金ゼロ |
+| コード実装 | **Cursor レーン**（リポジトリのまとまった修正、§1.17.3）／**Codex**（数行・PC ローカル） | Cursor の未使用枠／Codex 定額枠 | 従量課金ゼロ |
 | 社内推論（議事録採点・出展予測など、出力が構造化JSON） | 原則 **Sonnet**（最高価値のみOpus5）。Kimi K2.6は実験枠のみ | Sonnet $3/$15 | 下記A/B参照 |
 | 監督（設計・分解・指示・レビュー・検証＝メインループ） | Opus、または **Fable**（`tools/fable-policy.json` の `planIncluded: true` のアカウントのみ） | Fable $10/$50 | §1.16（2026-09-03改定）。実装・量産・分類・サブエージェントには使わない |
 
@@ -99,7 +100,7 @@ Why（旧ルールの前提が誤りだった）: 旧「別課金枠だから全
 代替:
 - 生成品質重視 → Opus 4.7 / 4.8
 - 速度・単純タスク → Sonnet / Haiku
-- コーディング → §1.17 に従い Codex
+- コーディング → リポジトリのまとまった修正は §1.17.3 の Cursor レーン。数行と PC ローカルは §1.17 の Codex
 
 過去メモリのスコープを「サブエージェント限定」から「全用途」に拡張したのが本ルール（2026-06-06 kim 指示）。
 
@@ -165,7 +166,13 @@ wsl -d Ubuntu -- bash -lc "ps -eo pid,etime,stat,args | grep '[c]odex'"
 
 Why: Codex は並列コード生成が得意で、大量実装・A/B 比較・OpenAI 系推論モデル特性が必要なタスクに向く。Claude Code のオーケストレーション能力（MCP・hook・memory・徹底自動化ルール群）と組み合わせるのが最適。ただし verify は Claude Code 側の責務（§1.2 の根本診断原則を Codex 出力にも適用）。
 
-適用外（Claude Code が自分で書いてよいケース）:
+### 1.17.3 Cursor レーン（全アカウント）
+
+リポジトリのコード修正（数行の軽い修正を除く）は自分で実装せず、tools/cursor-handoff.mjs でcursor-agentラベルのissueを立ててCursorに回し、自分はできたPRの確認だけをする。
+
+kim@orgiast.jp、cr@orgiast.jp、seisaku-team@orgiast.jp、nishi@orgiast.jp を含む、共通ルールを読む全アカウントに適用する。issue のラベルは `cursor-agent`（待ち）、`cursor-agent:running`（着手）、`cursor-agent:done`（完了）。PR 本文に `Closes #N` を書く。オーナーの Grok Bot が open な `cursor-agent` issue を毎時拾って Cursor cloud agent を起動する。そのポーラーはこのリポジトリの外にある。契約の全文は `docs/cursor-lane.md`。
+
+適用外（Claude Code または Codex が書いてよいケース）:
 - ごく短い編集（数行修正、typo、リネーム、import 追加）
 - Codex 呼び出しのオーバーヘッドが本体作業より重いとき
 - 設計試行錯誤中で毎回コードを書き直すフェーズ（設計固まってから Codex 一発生成）

@@ -13,3 +13,5 @@
 5. 以上を終えるまで、Fable が実装・量産を肩代わりしない。
 
 判定の記録: 応答冒頭の「[委譲判定]」行に、レーン生存の確認結果を 1 語添える（例: 実装=Codex（native 実測 OK））。
+
+GitHub リポジトリのまとまったコード修正は、Codex に渡す前に Cursor レーンへ回す。`node tools/cursor-handoff.mjs` で `cursor-agent` の issue を立て、自分はできた PR の確認だけをする。数行と PC ローカルは従来どおり。契約は `docs/cursor-lane.md`。

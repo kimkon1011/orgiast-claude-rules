@@ -631,7 +631,8 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 **1.13 トークン効率（出力・入力キャッシュ・サブエージェント）**
 
 - **実行者ルーティング（まず「LLMに直接やらせる」以外の適材を選ぶ、費用対効果ファースト）**:
-  - **コード実装 → Codex**（ChatGPT定額枠、§1.17。従量トークンを使わない主経路）
+  - **GitHub リポジトリのコード修正（数行の軽い修正を除く）→ Cursor レーン**（§1.17.3。`tools/cursor-handoff.mjs` で `cursor-agent` の issue を立て、自分はできた PR の確認だけ。Cursor の未使用枠を使い、Claude Code の利用枠を使わない）
+  - **数行の軽い修正・PC ローカルのコード実装 → Codex**（ChatGPT定額枠、§1.17。従量トークンを使わない主経路）
   - **Web検索 → `node ~/orgiast-claude-rules/tools/web-search.mjs "<質問>"` を第一経路にする**（Gemini検索。オートチャージ有効で枠切れしない・出典URL付き）。Geminiが失敗した場合は自動でGroqへフォールバックする。多段の深掘り調査と根拠URLの束が必要なときだけ `manus-research.mjs`（専用枠）へ上げる
   - **外部事実のWeb調査・属性エンリッチ（多段・根拠URL要。例: 企業の上場/設立日/出展歴）→ Manus**（`src/lib/manus.ts` パターン。専用エージェント枠で、Claudeのweb_searchループにトークンを燃やすより適・精度も高い。sources必ず保持）
   - **定型・確定処理（集計・整形・置換・スクレイプ）→ ローカルスクリプト**（Python/Node、トークン消費ゼロ）
@@ -651,7 +652,7 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
   - **指揮官・判断・設計 → Opus5**（GA・$5/$25・Opus4.8の2倍性能で同単価。アーキ設計/根本原因分析/横断一貫性/経営判断/タスク分解・レビュー）
   - **生成（顧客向け文章・返信・要約）→ Sonnet**（default、§1.18）
   - **軽処理（分類・抽出・OCR）→ Haiku**
-  - **コード実装 → Codex**（定額枠、§1.17）
+  - **GitHub リポジトリのまとまったコード修正 → Cursor レーン**（§1.17.3）。**数行・PC ローカルのコード実装 → Codex**（定額枠、§1.17）
   - **社内推論（議事録採点・出展予測など出力が構造化JSON）→ 原則 Sonnet**（最高価値判断のみOpus5）。中量級の生成・推論・量産は Kimi K3（`reasoning_effort=none`）も標準経路として常用してよい。
   - **Fable は「定額内なら監督用のみ」可**（§1.16、サブエージェントは引き続き禁止）
 - 重い探索はAgentツール(Explore/general-purpose)に委譲し「結果を200字以内・コード本体は含めない」と指定
@@ -1022,7 +1023,7 @@ Codex実装、Claude設計・指示・レビュー・検証、追加費用ゼロ
 
 **1.17 コーディングは Codex を主に使う（Claude Code は指揮官）**
 
-新規実装はBash tool経由の Codex CLIへ委譲し、Claudeは設計・分解・レビュー・commit/PR/デプロイの指揮・検証を担う（方針は §1.18）。旧適用外（短い編集・呼出しコストが重い場合・設計試行錯誤・既存スキルの定型）は、2026-10-17 の実装deny/明示承認条件を免除しない。
+新規実装はBash tool経由の Codex CLIへ委譲し、Claudeは設計・分解・レビュー・commit/PR/デプロイの指揮・検証を担う（方針は §1.18）。旧適用外（短い編集・呼出しコストが重い場合・設計試行錯誤・既存スキルの定型）は、2026-10-17 の実装deny/明示承認条件を免除しない。GitHub リポジトリへ入れるまとまった修正は、Codex に渡す前に §1.17.3 の Cursor レーンへ回す。ここに残すのは数行の軽い修正と、リポジトリに上げない PC ローカル作業である。
 
 **🔴 Codexへの指示は必ずファイルで渡す。シェルを1層も通さない・TTYなし・パイプなし。**
 
@@ -1066,6 +1067,14 @@ Astra の上限到達時は同じ指示を Sol で1回再実行し、Sol も上�
 指示ファイルの先頭40行に `<!-- lane: astra -->` を書いても Astra 指定になる（Sol は `<!-- lane: sol -->`）。
 auto はレビューを Sol に、2700秒以上または長時間性キーワード2種以上を Astra に振り分ける。失敗時の昇格は `--no-escalate` で停止。
 Astra クールダウン中は Sol を使う。明示の `--model astra`（または完全 slug）だけは再試行できる。
+
+### 1.17.3 Cursorレーン（全アカウント・リポジトリのコード修正）
+
+リポジトリのコード修正（数行の軽い修正を除く）は自分で実装せず、tools/cursor-handoff.mjs でcursor-agentラベルのissueを立ててCursorに回し、自分はできたPRの確認だけをする。
+
+この節は共通ルールを読む全アカウントに適用する（kim@orgiast.jp、cr@orgiast.jp、seisaku-team@orgiast.jp、nishi@orgiast.jp を含む）。GitHub リポジトリへ入れるまとまった修正は、§1.13 の「実装は Codex」よりこちらを優先する。数行の軽い修正（typo、リネーム、import 追加、1ファイルの数行）と、GitHub に上げない PC ローカル作業は、これまでどおり Claude Code または Codex で行う（§1.17 / §1.18）。
+
+手順は `node tools/cursor-handoff.mjs --repo <owner/name> --title "<題>" --body-file <指示.md> --from "<アカウント / PC / セッション>"`。`--dry-run` は issue を作らない。本文には目的、受け入れ条件、触るファイル・範囲、テスト方法を書く。秘密は書かない。ラベル契約（`cursor-agent` は待ち、`cursor-agent:running` は着手、`cursor-agent:done` は完了。PR 本文に `Closes #N`）と、オーナーの Grok Bot が開いている `cursor-agent` issue を毎時拾って Cursor cloud agent を起動する契約は `docs/cursor-lane.md`。起動役はこのリポジトリの外にあり、API キーや従量課金のサービスは使わない。できた PR は自分で確認する。
 
 ### 1.18 監督と実行レーン
 
@@ -1116,6 +1125,8 @@ Astra クールダウン中は Sol を使う。明示の `--model astra`（ま�
 | mcp | Sonnetサブエージェント | Fable/Opusは結果確認のみ |
 | design | Fable（planIncluded=true のみ監督可。false なら Opus）、複数仮説の設計判断 | Sonnetで材料整理 |
 
+GitHub リポジトリのコード修正で、数行の軽い修正を超えるものは implement レーンに乗せる前に §1.17.3 の Cursor レーンへ回す。数行と PC ローカルは表の implement / edit-small のまま。
+
 Fable/Opus本体の直接ツール実行は1ターン4回で警告、8回で停止（lane-guard）。例外はuser指示の `[LANE-OK]`。非Claude実装レーンが全滅してもSonnetへ自動切替せず、§1.18の順序で停止・費用提示・kim承認を守る。verify / bulkのSonnet経路を実装の代用にしない。MCPコネクタ操作は最初からSonnetサブエージェントへ渡してよいが、アプリ実装は含めない（2026-09-10承認、2026-09-15実装fallback改定）。
 
 ### 1.18.2 Grok Bot にブラウザ実操作を委譲（2026-09-17 導入）
@@ -1132,7 +1143,8 @@ Claude Code・Codex・安いLLMは**APIがあるものしか触れない**。だ
 
 | 作業 | 担当 |
 |---|---|
-| コード実装・リポジトリ変更 | Codex（§1.17）。**Grok Bot に実装をやらせない** |
+| GitHub リポジトリのまとまったコード修正 | Cursor レーン（§1.17.3）。Grok Bot は実装せず、`cursor-agent` の issue を毎時拾って Cursor cloud agent を起動するだけ |
+| 数行の修正・PC ローカルのコード | Codex（§1.17）。**Grok Bot に実装をやらせない** |
 | 分類・抽出・要約・量産 | Groq / OpenRouter / Gemini（§1.13） |
 | API のある操作（Drive・Gmail・Sheets・Discord・GitHub） | Claude Code の MCP / CLI。**先にこちらを試す（§AUTOMATION-FIRST）** |
 | **API が無い／認証壁で Claude が触れず、user に手作業が残っていたもの** | **Grok Bot** |

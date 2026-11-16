@@ -67,8 +67,21 @@ env[name] = config.defaultModel;  // deepseek/deepseek-v4-flash
 
 **結論**: 探索・分類・ログ読みのサブエージェントを安価モデル（Haiku/深セン）にルーティングすることで、ブースデザインコード生成のサブエージェントコストを **$11.60 から $0.02〜$0.02 まで抑制**（99%超削減）。全タスクを Opus high で回す必要はない。
 
+## 追記 (2026-11-13 X-0035 / PR #1976)
+
+### 実際に作成されたファイル
+
+| 設置先 | 状態 |
+|---|---|
+| `$CLAUDE_CONFIG_DIR/agents/Explore.md` | ✅ 作成済み（cheap-code 子プロセスで有効） |
+| `~/.claude/agents/Explore.md` | ✅ 作成済み（ネイティブ直起動セッション用） |
+| `repo/.claude/agents/Explore.md` | ✅ 作成済み・PR #1976（バージョン管理・配布用） |
+
+前回の記録（2026-11-12）は「実施予定」の記述であり、実際のファイル作成は 2026-11-13 の X-0035 自動セッションで完了した。`model: haiku` の frontmatter で Haiku 固定、フリートでは `deepseek/deepseek-v4-flash` に解決。
+
 ## 残タスク
 
-- 次セッション起動時に `~/.claude/agents/Explore.md` が実際に読み込まれていることの実機確認（起動後 Agent リスト "Explore" の description が本ファイルの内容に変わっていることを目視）
-- 実際のブース提案ワークフロー 1 セッションを計測し、サブエージェントコールの内訳を `executor-usage.jsonl` で確認
-- `/compact` -> モデル切替の運用ルール徹底（同一セッション内でモデルを乱発しない）
+- [ ] `~/.claude/agents/Explore.md` が次セッション起動時に実際に読み込まれていることの実機確認（Agent リスト "Explore" の description 確認）
+- [ ] 実際のブース提案ワークフロー 1 セッションを計測し、サブエージェントコールの内訳を `executor-usage.jsonl` で確認
+- [ ] `/compact` → モデル切替の運用ルール徹底（同一セッション内でモデルを乱発しない）
+- [ ] PR #1976 マージ後のグローバル反映確認

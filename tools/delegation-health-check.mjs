@@ -278,7 +278,7 @@ const CODEX_MODEL_AUTH_MISMATCH = /is not supported when using codex with a chat
 // 実測 2026-10-21T00:32Z の2件(astra→sol 退避)が旧パターンに一致せず no_output に落ち、
 // codex_empty_output が毎晩起票された。先頭欠落を許容する語("your usage limit" + "Upgrade to Pro"、
 // 最後の砦として ChatGPT の購入URL)も一致させる。
-const CODEX_USAGE_LIMIT = /You(?:[’']ve| have) hit your usage limit|your usage limit[.!]?\s*Upgrade to Pro|Upgrade to Pro \(https:\/\/chatgpt\.com\/explore\/pro\)|Usage limit (?:reached|exceeded)/i;
+const CODEX_USAGE_LIMIT = /You(?:[’']ve| have) hit your usage limit|your usage limit[.!]?\s*Upgrade to Pro|Upgrade to Pro \(https:\/\/chatgpt\.com\/explore\/pro\)|Usage limit (?:reached|exceeded)|https:\/\/chatgpt\.com\/(?:explore\/pro|settings\/usage)/i;
 
 // 選択モデルが一時的に満員のときは、codex 自体の出力異常ではない。
 const CODEX_MODEL_CAPACITY = /Selected model is at capacity\. Please try a different model\./i;

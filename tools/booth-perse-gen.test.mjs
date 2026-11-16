@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { parseArgs, loadKey, buildPrompt, generate, runAll, buildRetryCommand } from './booth-perse-gen.mjs';
+import { spawnSync } from 'node:child_process';
+import { parseArgs, requireDimensionReference, loadKey, buildPrompt, generate, runAll, buildRetryCommand } from './booth-perse-gen.mjs';
 
 const tempDir = (t, prefix) => {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
@@ -161,6 +162,41 @@ test('parseArgs: --base を寸法下絵として読む', () => {
   const o = parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--base', 'underlay.png', '--ref', 'logo.png']);
   assert.equal(o.base, 'underlay.png');
   assert.deepEqual(o.refs, ['logo.png']);
+});
+
+test('requireDimensionReference: 寸法既知なのに --base / --blender-out が無ければ手順付きで止まる', () => {
+  const opts = parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--max-height', '3.6']);
+  assert.throws(
+    () => requireDimensionReference(opts),
+    /render-dimension-underlay\.py[\s\S]*--base/,
+  );
+});
+
+test('requireDimensionReference: 読める --base または Blender パースがあれば通る', (t) => {
+  const dir = tempDir(t, 'perse-dimension-');
+  const base = path.join(dir, 'underlay.png');
+  writeFileSync(base, 'underlay');
+  writeFileSync(path.join(dir, 'persp_front_left.png'), 'perspective');
+  const withBase = parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--base', base]);
+  const withBlender = parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--blender-out', dir]);
+  assert.equal(requireDimensionReference(withBase), withBase);
+  assert.equal(requireDimensionReference(withBlender), withBlender);
+});
+
+test('dimension reference fails closed for empty/missing files and empty Blender directories', (t) => {
+  const dir = tempDir(t, 'perse-empty-');
+  const empty = path.join(dir, 'empty.png');
+  writeFileSync(empty, '');
+  for (const options of [{}, { base: empty }, { base: path.join(dir, 'missing.png') }, { blenderOut: dir }, { blenderOut: path.join(dir, 'missing') }]) {
+    assert.throws(() => requireDimensionReference({ maxHeight: 3.6, ...options }), /--base/);
+  }
+});
+
+test('CLI rejects missing dimension reference before opening brief or loading credentials', () => {
+  const run = spawnSync(process.execPath, ['tools/booth-perse-gen.mjs', '--brief', 'missing', '--plans', 'missing', '--out', 'unused', '--max-height', '3.6'], { encoding: 'utf8', windowsHide: true });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /render-dimension-underlay\.py/);
+  assert.doesNotMatch(run.stderr, /ENOENT|OPENROUTER/);
 });
 
 test('parseArgs: --only で再生成する案を1件に絞れる', () => {

@@ -123,6 +123,15 @@ function create(home, options) {
     // Keep distinct jobs separate even when their text normalizes to the same prefix.
     if (options.dedupeKey) {
       const existing = listItems(home).find(item => item.dedupeKey === inboxDedupeKey(options.dedupeKey));
+      if (existing && options.progressAt && options.kind === 'info') {
+        return update(home, existing.id, current => {
+          if ((Date.parse(current.progressAt) || 0) >= Date.parse(options.progressAt)) return;
+          current.text = text; current.progressAt = options.progressAt; current.lastAt = options.progressAt;
+          current.repeatCount = (current.repeatCount ?? 1) + 1;
+          current.status = 'open'; current.shownSessions = []; current.shownCount = 0; current.lastShownAt = null;
+          current.forwardMailId = null; current.forwardError = null;
+        });
+      }
       if (existing && options.refresh && existing.source === 'morning-session-sweep' && options.source === existing.source && options.kind === 'info') return update(home, existing.id, current => {
         current.text = text; current.lastAt = new Date().toISOString(); current.status = 'open';
         current.shownCount = 0; current.shownSessions = []; current.lastShownAt = null;
@@ -198,14 +207,14 @@ export function compactItems(home) {
     return result;
   });
 }
-function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen }) {
+function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen, progressAt }) {
   if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');
   if (doneWhen && kind !== 'ask') throw new Error('--done-when-gmail は ask 専用です');
   fs.mkdirSync(directory(home), { recursive: true });
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     if (revision !== undefined) item.revision = revision;
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -228,7 +237,7 @@ export function spoolItem(home, options) {
   const file = path.join(dir, `${id}.json`), temp = `${file}.tmp`;
   const record = { ...(options.priority === 'high' ? { priority: 'high' } : {}), kind: options.kind || 'info', text: clean(options.text), source: clean(options.source),
     from: clean(options.from ?? resolveFleetLabel(home, { hostname: os.hostname() })),
-    ...(options.sessionId ? { sessionId: clean(options.sessionId) } : {}),
+    ...(options.progressAt ? { progressAt: options.progressAt } : {}), ...(options.sessionId ? { sessionId: clean(options.sessionId) } : {}),
     dedupeKey: options.dedupeKey ? inboxDedupeKey(options.dedupeKey) : `spool:${id}` };
   try {
     fs.writeFileSync(temp, JSON.stringify(record) + '\n', { flag: 'wx', mode: 0o600 });

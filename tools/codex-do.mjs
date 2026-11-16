@@ -308,23 +308,16 @@ export function isCodexAuthFailure(result, promptText = '') {
   return detectCodexAuthFailure(result.output, result.stderr, promptText);
 }
 
-export function snapshotWorkingTree(cwd, spawnImpl = spawnSync) {
-  try {
-    const gitCheck = spawnImpl('git', ['-C', cwd, 'rev-parse', '--is-inside-work-tree'], { windowsHide: true, encoding: 'utf8' });
-    if (gitCheck && gitCheck.status === 0) {
-      const diff = spawnImpl('git', ['-C', cwd, 'diff', 'HEAD', '--no-ext-diff', '--no-textconv'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
-      const status = spawnImpl('git', ['-C', cwd, 'status', '--porcelain'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
-      const head = spawnImpl('git', ['-C', cwd, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
-      return `${head}\n${diff}\n${status}`;
-    }
-  } catch (err) {
-    // Fall through
-  }
+// .claude/.codex は codex-do 自身が台帳やクールダウンを書く場所なので作業の変更とみなさない
+const SNAPSHOT_EXCLUDE = new Set(['.git', 'node_modules', '.next', 'dist', '.claude', '.codex']);
 
+// ファイルシステム上の mtime/size ハッシュを取得する。git の管理外（.gitignore 配下など）の
+// 変更も検出するため、git diff だけでは不十分なケースで使う（2026-11-16 実測:
+// keiri-hub/scratch/ が .gitignore 配下で git 差分0件のため、Codex の修正が空diff扱いに
+// なった）。非 git リポジトリでも同じロジックでスナップショットを取る。
+function captureFsHash(cwd) {
   try {
     const lines = [];
-    // .claude/.codex は codex-do 自身が台帳やクールダウンを書く場所なので作業の変更とみなさない
-    const exclude = new Set(['.git', 'node_modules', '.next', 'dist', '.claude', '.codex']);
     let count = 0;
 
     function walk(dir) {
@@ -336,7 +329,7 @@ export function snapshotWorkingTree(cwd, spawnImpl = spawnSync) {
         return;
       }
       for (const entry of entries) {
-        if (exclude.has(entry.name)) continue;
+        if (SNAPSHOT_EXCLUDE.has(entry.name)) continue;
         const fullPath = path.join(dir, entry.name);
         if (entry.isDirectory()) {
           walk(fullPath);
@@ -361,6 +354,26 @@ export function snapshotWorkingTree(cwd, spawnImpl = spawnSync) {
   } catch (err) {
     return '';
   }
+}
+
+export function snapshotWorkingTree(cwd, spawnImpl = spawnSync) {
+  try {
+    const gitCheck = spawnImpl('git', ['-C', cwd, 'rev-parse', '--is-inside-work-tree'], { windowsHide: true, encoding: 'utf8' });
+    if (gitCheck && gitCheck.status === 0) {
+      const diff = spawnImpl('git', ['-C', cwd, 'diff', 'HEAD', '--no-ext-diff', '--no-textconv'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
+      const status = spawnImpl('git', ['-C', cwd, 'status', '--porcelain'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
+      const head = spawnImpl('git', ['-C', cwd, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
+      // filesystem mtime/size ハッシュを追加。git 管理外（.gitignore 配下）の変更も検出する。
+      // git diff/status だけでは .gitignore 配下のファイル作成・変更が差分0件になるため
+      // （2026-11-16 実測: keiri-hub/scratch/）、ハッシュも一緒に含める。
+      const fsHash = captureFsHash(cwd);
+      return `${head}\n${diff}\n${status}\n---fs-hash---\n${fsHash}`;
+    }
+  } catch (err) {
+    // Fall through
+  }
+
+  return captureFsHash(cwd);
 }
 
 // 指示文が編集を求めているかを kind と文面の両方で判定する。

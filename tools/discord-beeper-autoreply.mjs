@@ -14,6 +14,8 @@ import {
 import { addItem as addKimInboxItem } from './kim-inbox.mjs';
 import { resolveDiscordLink } from './discord-beeper-link.mjs';
 import { collectReadableContent } from './lib/autoreply-attachments.mjs';
+import { extractSearchTerms, searchRelated } from './lib/autoreply-related.mjs';
+import { beeperFetch as beeperFetchFn } from './beeper-api.mjs';
 
 export const DISCORD_ACCOUNT = 'discordgo.715210673642012733';
 const HOUR = 3600000;
@@ -84,9 +86,56 @@ async function historyFor(api, chat) {
 }
 function acquire(dir) {
   const file = path.join(dir, 'lock');
-  try { fs.writeFileSync(file, JSON.stringify({ pid: process.pid, host: os.hostname() }), { flag: 'wx' }); }
-  catch (e) { if (e.code === 'EEXIST') return null; throw e; }
-  return () => fs.unlinkSync(file);
+  const pid = process.pid;
+  const host = os.hostname();
+  const ts = Date.now();
+  const owner = JSON.stringify({ pid, host, ts, token: crypto.randomUUID() });
+  let holder = null;
+
+  try {
+    fs.writeFileSync(file, owner, { flag: 'wx' });
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+    let stale = false;
+    let h = { pid: 'unknown', host: 'unknown', ts: null };
+    try {
+      const stat = fs.statSync(file);
+      const raw = fs.readFileSync(file, 'utf8');
+      let existing;
+      try { existing = JSON.parse(raw); h = existing; } catch { /* corrupted JSON */ }
+      if (existing && existing.host === host && Number.isInteger(existing.pid) && existing.pid > 0) {
+        try { process.kill(existing.pid, 0); } catch (e2) { if (e2.code === 'ESRCH') stale = true; }
+      }
+      if (!stale && Date.now() - stat.mtimeMs > 15 * 60000) stale = true;
+      if (!stale) {
+        holder = { pid: h?.pid ?? 'unknown', host: h?.host ?? 'unknown', ts: h?.ts ?? null, ageSec: Math.round((Date.now() - stat.mtimeMs) / 1000) };
+        return { release: null, holder };
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      return { release: null, holder: { pid: 'unknown', host: 'unknown', ageSec: 0 } };
+    }
+    // Steal: unlink and retry wx
+    try { fs.unlinkSync(file); } catch { return { release: null, holder: holder || { pid: 'race', host: 'race', ageSec: 0 } }; }
+    try { fs.writeFileSync(file, owner, { flag: 'wx' }); }
+    catch (e2) { if (e2.code === 'EEXIST') return { release: null, holder: { pid: 'race', host: 'race', ageSec: 0 } }; throw e2; }
+  }
+
+  const heartbeat = setInterval(() => {
+    try {
+      const content = fs.readFileSync(file, 'utf8');
+      if (content === owner) { const d = new Date(); fs.utimesSync(file, d, d); }
+    } catch { /* lock stolen or gone */ }
+  }, 30000);
+  heartbeat.unref();
+
+  return {
+    release: () => {
+      clearInterval(heartbeat);
+      try { if (fs.readFileSync(file, 'utf8') === owner) fs.unlinkSync(file); } catch { /* already gone */ }
+    },
+    holder: null,
+  };
 }
 export async function runOnce(options = {}) {
   const home = options.home || os.homedir(), dryRun = Boolean(options.dryRun), api = options.api || beeper;
@@ -102,9 +151,36 @@ export async function runOnce(options = {}) {
   try {
     if (!dryRun) {
       fs.mkdirSync(dir, { recursive: true });
-      release = acquire(dir);
-      if (!release) return { ...result, locked: true };
-      await flushUnreportedSentLogs(home, { addItemImpl });
+      const acq = acquire(dir);
+      if (acq.holder) {
+        result.locked = true;
+        result.holder = acq.holder;
+      } else {
+        release = acq.release;
+        fs.rmSync(path.join(dir, 'locked-stuck.json'), { force: true });
+        await flushUnreportedSentLogs(home, { addItemImpl });
+      }
+    }
+    if (result.locked) {
+      // Track continuous locked duration — notify kim-inbox after 30min.
+      const stuckFile = path.join(dir, 'locked-stuck.json');
+      try {
+        const stuckRaw = read(stuckFile);
+        const stuck = stuckRaw ? JSON.parse(stuckRaw) : null;
+        const stuckMs = stuck ? now - new Date(stuck.firstLockedAt).getTime() : 0;
+        if (!stuck || !Number.isFinite(stuckMs) || stuckMs < 0) {
+          atomic(stuckFile, { firstLockedAt: new Date(now).toISOString(), notified: false });
+        } else if (stuckMs > 30 * 60000 && !stuck.notified) {
+          await addItemImpl(home, {
+            kind: 'info',
+            text: `Beeper autoreply lock が ${result.holder.ageSec || '?'} 秒間取得できません（連続 ${Math.round(stuckMs / 60000)} 分）: holder=${JSON.stringify(result.holder)}。acquire の自動奪取条件（同一 host で pid 不在 または mtime 15分超）を待機中。`,
+            source: 'discord-beeper-autoreply',
+            dedupeKey: `beeper-autoreply-stuck-lock:${stuck.firstLockedAt}`,
+          });
+          atomic(stuckFile, { firstLockedAt: stuck.firstLockedAt, notified: true });
+        }
+      } catch { /* best-effort */ }
+      return result;
     }
     if (fs.existsSync(path.join(dir, 'PAUSE'))) return { ...result, paused: true };
     const stored = read(stateFile);
@@ -214,11 +290,31 @@ export async function runOnce(options = {}) {
           await decide(`添付取得失敗: ${collected.failures.map(f => `${f.name}: ${f.reason}`).join('; ')}`);
           continue;
         }
+        // Search related conversations for context
+        const docTexts = collected.documents.map(d => d.text);
+        const related = await searchRelated({
+          terms: await extractSearchTerms(question, docTexts, llm),
+          question,
+          llm,
+          beeperFetch: options.beeperFetch || ((endpoint, init) => beeperFetchFn(endpoint, { ...init, fetchImpl: options.fetchImpl, timeoutMs: 5000 })),
+          excludeMessageIds: new Set(pending.map(m => m.id)),
+          sinceDays: 180, maxItems: 10, maxBytes: 10000,
+          excludeChatIds: chat.id,
+        }).catch(() => []);
+        // Read corrections from server version's file for DM reply input
+        const correctionsFile = path.join(home, '.claude', 'discord-autoreply', 'corrections.jsonl');
+        const readCorrections = () => {
+          try {
+            return read(correctionsFile).split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+          } catch { return []; }
+        };
         const classifyInput = {
           channelName: chat.title, context: all.slice(-25).map(m => ({ author: m.senderName, content: plainText(m.text), isSelf: m.isSender })),
           message: { content: question },
           knowledge: read(path.join(home, '.claude', 'discord-autoreply', 'knowledge.md')),
           rules: read(path.join(home, '.claude', 'discord-autoreply', 'rules.md')),
+          corrections: readCorrections().slice(-30),
+          ...(related.length ? { related } : {}),
           ...(collected.images.length ? { images: collected.images } : {}),
           ...(collected.documents.length ? { documents: collected.documents } : {}),
         };
@@ -252,6 +348,7 @@ export async function runOnce(options = {}) {
             classifyInput.knowledge || '',
             classifyInput.rules || '',
             ...collected.documents.map(d => d.text),
+            ...(classifyInput.related || []).map(r => `[${r.chat}] ${r.sender}: ${r.text}`),
           ].join('\n');
           const invented = inventedAmounts(decision.answer, sourceText);
           if (invented.length > 0) {
@@ -344,12 +441,114 @@ export async function runOnce(options = {}) {
         result.errors.push(`chat ${chat.localChatID || chat.id}: ${error.code || error.name || 'Error'}`);
       }
     }
+
+    // ── Learning phase: detect deleted auto-replies and learn from kim's corrections ──
+    const correctionsFile = path.join(home, '.claude', 'discord-autoreply', 'corrections.jsonl');
+    const readCorrections = () => {
+      try { return read(correctionsFile).split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line)); }
+      catch { return []; }
+    };
+    const recordCorrection = row => {
+      if (!readCorrections().some(x => x.msgId === row.msgId)) {
+        fs.mkdirSync(path.dirname(correctionsFile), { recursive: true });
+        fs.appendFileSync(correctionsFile, JSON.stringify(row) + '\n');
+      }
+    };
+    const AUTOREPLY_PREFIX = '【kimのClaudeによる代理回答】';
+    const DELETION_LEARN_DAYS = 7;
+    const DELETION_LEARN_HOURS = 24;
+
+    for (const [chatId, entry] of Object.entries(state.chats)) {
+      if (entry.status !== 'sent' || !entry.replyId || entry.learnedDeletion) continue;
+      const entryTs = Date.parse(entry.timestamp);
+      if (!Number.isFinite(entryTs) || now - entryTs > DELETION_LEARN_DAYS * 86400000) {
+        entry.learnedDeletion = true;
+        continue;
+      }
+      try {
+        // Fetch history with coverage check: don't stop at isSender, continue
+        // until we either find the auto-reply or cover its timestamp.
+        const fetchedItems = new Map();
+        let fetchCursor;
+        let historyCovered = false;
+
+        for (let page = 0; page < 20; page++) {
+          const data = await api.listMessages(chatId, { limit: 50, cursor: fetchCursor, direction: 'before' });
+          if (!Array.isArray(data.items)) break;
+          for (const m of data.items) {
+            if (m.accountID && m.accountID !== DISCORD_ACCOUNT) continue;
+            fetchedItems.set(m.id, m);
+          }
+          // Check if the oldest valid message's timestamp is <= the auto-reply's timestamp
+          const valid = validMessages([...fetchedItems.values()]);
+          if (valid.length > 0 && timestamp(valid[0]) <= entryTs) {
+            historyCovered = true;
+            break;
+          }
+          if (!data.hasMore || !data.oldestCursor) break;
+          fetchCursor = data.oldestCursor;
+        }
+
+        const all = validMessages([...fetchedItems.values()]);
+        // Find auto-reply in raw items (validMessages filters out isDeleted)
+        const autoReplyMsg = [...fetchedItems.values()].find(m => m.id === entry.replyId);
+        // Deleted if: (a) isDeleted flag is set, or (b) history covers the
+        // timestamp but the message is not found.
+        const isDeleted = autoReplyMsg
+          ? autoReplyMsg.isDeleted === true
+          : historyCovered;
+        if (!isDeleted) {
+          // Not deleted — skip learning (or history didn't cover the timestamp)
+          if (historyCovered) entry.learnedDeletion = true;
+          continue;
+        }
+        // Auto-reply was deleted. Find kim's first non-auto-reply message
+        // sent after the auto-reply (deletion time unavailable, so use
+        // auto-reply's send time as lower bound), within 24h.
+        const kimCorrection = all.find(m =>
+          m.isSender
+          && !plainText(m.text).startsWith(AUTOREPLY_PREFIX)
+          && timestamp(m) > entryTs
+          && timestamp(m) - entryTs <= DELETION_LEARN_HOURS * 3600000
+        );
+        if (!kimCorrection) {
+          // No correction found yet — keep checking on next run
+          continue;
+        }
+        // Save to corrections.jsonl
+        recordCorrection({
+          msgId: entry.replyId,
+          question: entry.question || '',
+          autoAnswer: entry.content || '',
+          kimAnswer: plainText(kimCorrection.text),
+          outcome: 'deleted_and_corrected',
+          confirmed: true,
+          ts: new Date(now).toISOString(),
+          where: 'dm',
+        });
+        entry.learnedDeletion = true;
+        result.learned ??= { corrected: 0, confirmed: 0, expired: 0, deletedAndCorrected: 0 };
+        result.learned.deletedAndCorrected = (result.learned.deletedAndCorrected || 0) + 1;
+        // Notify kim-inbox
+        if (!dryRun) {
+          await addItemImpl(home, {
+            kind: 'info',
+            source: 'discord-beeper-autoreply',
+            text: `自動返信の訂正を学習: ${entry.senderName || chatId}`,
+            dedupeKey: `deletion-learn:${entry.replyId}`,
+          });
+        }
+      } catch {
+        // Learning failure must not stop the reply cycle
+        continue;
+      }
+    }
     save();
   } catch (error) { result.ok = false; result.errors.push(error.message); }
   finally {
-    if (release) {
+    if (release || result.locked) {
       try { fs.appendFileSync(path.join(dir, 'log.jsonl'), JSON.stringify({ ts: new Date(now).toISOString(), ...result }) + '\n'); }
-      finally { release(); }
+      finally { release?.(); }
     }
   }
   if (result.errors.length) result.ok = false;

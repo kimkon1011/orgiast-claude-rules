@@ -74,7 +74,7 @@ export function applyDisabledLanes(health, home = laneHome()) {
   return health;
 }
 function orders(health, home = laneHome()) {
-  health.implementOrder = ['codex', 'deepseek', 'glm', 'gemini-cli'].filter(p => health.lanes[p]?.alive);
+  health.implementOrder = ['codex', 'deepseek', 'glm', 'gemini-cli', 'openrouter'].filter(p => health.lanes[p]?.alive);
   // 旧 payment_required の扱いは維持し、billing は専用の日次通知と代替ルートに回す。
   const billing = readJson(path.join(repo, 'tools/provider-billing.json'));
   const needsUser = ([p, s]) => isLane(p) && /^(?:dead:)?(?:payment_required|oauth_consent|account_creation|physical_operation)$/.test(s.reason)

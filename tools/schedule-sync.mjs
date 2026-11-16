@@ -37,14 +37,15 @@ function loadExcludeRules(file) {
     const { rules } = readJson(file, {});
     if (!Array.isArray(rules)) return [];
     return rules.flatMap(rule => {
-      if (!rule || typeof rule.chat !== 'string' || typeof rule.pattern !== 'string' || typeof rule.reason !== 'string') return [];
-      try { return [{ ...rule, pattern: new RegExp(rule.pattern) }]; }
+      if (!rule || typeof rule.pattern !== 'string' || typeof rule.reason !== 'string') return [];
+      if (rule.chat != null && typeof rule.chat !== 'string') return [];
+      try { return [{ ...rule, chat: rule.chat ?? '', pattern: new RegExp(rule.pattern) }]; }
       catch { return []; }
     });
   } catch { return []; }
 }
 function exclusionRule(rules, candidate, message) {
-  return rules.find(rule => String(message.chat ?? '').includes(rule.chat)
+  return rules.find(rule => (!rule.chat || String(message.chat ?? '').includes(rule.chat))
     && [candidate.title, candidate.quote, message.text].some(text => rule.pattern.test(String(text ?? ''))));
 }
 function readLines(file) {

@@ -59,6 +59,20 @@ export function parseArgs(argv) {
   return opts;
 }
 
+export function requireDimensionReference(opts) {
+  const usable = (file) => {
+    try { return readFileSync(file).length > 0; } catch { return false; }
+  };
+  if (opts.base && usable(opts.base)) return opts;
+  if (!opts.base && opts.blenderOut && findBlenderRefs(opts.blenderOut).length) return opts;
+  throw new Error([
+    `寸法既知のブース（高さ上限 ${opts.maxHeight} m）は読み込み可能な寸法下絵なしで生成できません。`,
+    'tools/booth-3d/render-dimension-underlay.py で下絵 PNG を作り、--base <下絵.png> に渡してください。',
+    '段階2の Blender 出力を使う場合は --blender-out <出力dir> を指定してください。',
+    USAGE,
+  ].join('\n'));
+}
+
 // 高さと明るさは提案の柱なので、ブリーフに書き忘れても全案へ必ず足す（kim 2026-10-27・サポリス案が2.7mで低かった）。
 export function heightLightClause(maxHeight = DEFAULT_MAX_HEIGHT) {
   return `MANDATORY HEIGHT & LIGHT (applies to this plan, overrides any taller height above): this is a SINGLE-STOREY exhibition stand. Its overall structure/truss height is about ${maxHeight} m and MUST NOT exceed ${maxHeight} m. It must look like a normal single-level booth within a ${maxHeight} m decoration limit - NEVER a double-height, two-storey or 5-6 m tall hall structure. Keep headers and the top logo sign low, around ${maxHeight} m. The booth must also look BRIGHT - noticeably brighter than the neighbouring booths (spotlights and/or backlit light boxes), graphics evenly lit, no dark corners.
@@ -154,14 +168,16 @@ export function buildRetryCommand(opts, result) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  requireDimensionReference(opts);
   const originalRefs = [...opts.refs];
   if (opts.blenderOut) {
     const blenderRefs = findBlenderRefs(opts.blenderOut);
     if (blenderRefs.length > 0) {
-      opts.refs.push(...blenderRefs);
+      opts.refs.unshift(...blenderRefs);
       console.error(`[blender-out] ${blenderRefs.length} 件のパース画像を参照画像として追加: ${blenderRefs.join(', ')}`);
     } else {
-      console.error('[blender-out] 段階2のパース画像が見つかりませんでした（--blender-out は無視して続行）');
+      // A valid explicit --base was checked above and takes precedence.
+      console.error('[blender-out] パース画像なし。検証済みの --base を使用します。');
     }
   }
   let plans = JSON.parse(readFileSync(opts.plans, 'utf8'));

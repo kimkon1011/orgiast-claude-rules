@@ -45,6 +45,14 @@ function fixture(t, { initial = true, messages = [message()], reply = [], after 
       throw new Error(`Unexpected request: ${url}`);
     }, ...extra,
   };
+  // Keep extraction separate from reply/retry mocks and never contact a live Beeper.
+  options.beeperFetch = async () => ({ items: [] });
+  let replyLlm = options.llm;
+  Object.defineProperty(options, 'llm', {
+    get: () => async args => args.system?.startsWith('Extract proper nouns')
+      ? JSON.stringify(['スマートエイト']) : replyLlm(args),
+    set: value => { replyLlm = value; },
+  });
   return { options, home, dir, file, calls, notifications, llmCalls, state,
     readState: () => JSON.parse(fs.readFileSync(file('state.json'), 'utf8')),
     writeState: () => fs.writeFileSync(file('state.json'), JSON.stringify(state)),
@@ -1224,6 +1232,45 @@ test('discord: 文脈メッセージに未対応添付(.xlsx)があっても、�
   assert.equal(result.wouldSend.length, 1);
   assert.equal(f.posts().length, 0);
   assert.equal(f.llmCalls.length, 1);
+});
+
+// Related conversation integration: use the same fixture through the real reply pipeline.
+for (const amount of ['40,000円', '4万円']) {
+  test(`辻さん: related を LLM 入力に含め、${amount} を捏造扱いしない`, async t => {
+    const f = fixture(t);
+    f.options.beeperFetch = async (endpoint, { query }) => {
+      assert.equal(endpoint, '/v1/messages/search');
+      assert.equal(query.query, 'スマートエイト');
+      return {
+        items: [{ id: 'related-1', chatID: 'group1', senderName: '川本',
+          timestamp: new Date(Date.now() - 86400000).toISOString(),
+          text: '<p>制作費２万円+5千円+1.5万円の合計４万円(税抜)で3プランという認識でよろしいでしょうか</p>' }],
+        chats: { group1: { title: '川本, 大平, 白川 & 百瀬' } },
+      };
+    };
+    f.options.llm = async ({ input, system }) => {
+      assert.equal(input.related.length, 1);
+      assert.equal(input.related[0].sender, '川本');
+      assert.equal(input.related[0].chat, '川本, 大平, 白川 & 百瀬');
+      assert.match(input.related[0].text, /合計４万円/);
+      assert.match(system, /全体最適/);
+      return JSON.stringify({ needs_reply: true, needs_kim_decision: false,
+        answer: `${amount}で合っているので原価に計上してください。根拠: 川本, 大平, 白川 & 百瀬で川本さんが合計４万円と発言。`, confidence: 0.95 });
+    };
+    // The question itself contains no amount: only related can justify the reply.
+    const result = await runOnce(f.options);
+    assert.equal(result.replied, 1);
+    assert.match(f.posts()[0].body.content, /原価に計上/);
+  });
+}
+
+test('関連検索失敗でも返信処理が続く', async t => {
+  const f = fixture(t);
+  let searched = false;
+  f.options.beeperFetch = async () => { searched = true; throw new Error('Beeper down'); };
+  const result = await runOnce(f.options);
+  assert.equal(searched, true);
+  assert.equal(result.replied, 1);
 });
 
 test('collectReadableContent: 対象を優先し文脈画像の上限超過は捨て、失敗を分離する', async () => {

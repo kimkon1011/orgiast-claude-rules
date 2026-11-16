@@ -21,11 +21,16 @@ const at = (min) => new Date(now - min * 60000).toISOString();
 const asst = (min, model, text) => ({ type: 'assistant', timestamp: at(min), message: { model, content: [{ type: 'text', text }] } });
 const user = (min, text) => ({ type: 'user', timestamp: at(min), message: { content: text } });
 
-test('settings: 未設定と opus は NG、sonnet は OK', () => {
-  assert.ok(settingsModelProblem(undefined, 'sonnet'));
-  assert.equal(settingsModelProblem('opus[1m]', 'sonnet'), 'opus[1m]');
-  assert.equal(settingsModelProblem('sonnet', 'sonnet'), null);
+test('settings: 未設定と opus は NG、opus は OK', () => {
+  assert.ok(settingsModelProblem(undefined, 'opus'));
+  assert.equal(settingsModelProblem('opus[1m]', 'opus'), 'opus[1m]');
   assert.equal(settingsModelProblem('opus', 'opus'), null);
+});
+
+test('settings: 未設定と sonnet/haiku は NG、opus/haiku は OK', () => {
+  assert.ok(settingsModelProblem(undefined, 'haiku'));
+  assert.ok(settingsModelProblem('haiku', 'haiku'));
+  assert.equal(settingsModelProblem('haiku[1m]', 'haiku'), 'haiku[1m]');
 });
 
 test('返事待ち: 取り消せる選択肢で止まると WAITING、送信承認待ちは WAIT_HUMAN、なしは対象外', () => {
@@ -47,8 +52,8 @@ test('audit: Opus で動いて返事待ちのセッションを NG にする', (
   assert.ok(r.findings.some((f) => f.kind === 'SETTINGS'));
 });
 
-test('audit: Sonnet 既定で待ちもなければ OK', (t) => {
-  const h = home({ model: 'sonnet' }, { c3333333: [user(30, 'x'), asst(20, 'claude-sonnet-5-5', '完了。次に kim がすること: なし')] }, t);
+test('audit: Opus 既定で待ちもなければ OK', (t) => {
+  const h = home({ model: 'opus' }, { c3333333: [user(30, 'x'), asst(20, 'claude-opus-5-5', '完了。次に kim がすること: なし')] }, t);
   const r = audit({ home: h, now, hours: 6, idleMin: 15 });
   assert.equal(r.status, 'OK');
 });

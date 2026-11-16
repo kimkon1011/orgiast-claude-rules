@@ -216,9 +216,9 @@ try {
   if (settings.remoteControlAtStartup !== true) { settings.remoteControlAtStartup = true; added += 1; }
   // 全PC・全アカウントの応答・セッション名を日本語に固定する。途中で英語に切り替わった事故の再発防止(cr 2026-10-18)。
   if (settings.language !== 'japanese') { settings.language = 'japanese'; added += 1; }
-  // 全PC・全アカウントの既定モデルを Sonnet に収束する(kim 2026-11-15「自動で動く作業も、開いたセッションも既定は Sonnet」)。
-  // 未設定(=Claude Code 既定の Opus)・opus・opus[1m]・fable を sonnet に倒す。haiku 等の下位指定はそのまま。
-  // 判断が要る場面はそのセッション内で /model や advisor で上げる。次の SessionStart で既定は sonnet に戻る。
+  // 全PC・全アカウントの既定モデルを Opus に収束する(kim 2026-11-17「自動で動く作業は基本 Opus、軽い定型作業だけ Sonnet/Haiku、fable は自動化では Opus に倒す」)。
+  // 未設定(=Claude Code 既定の Opus)・opus・opus[1m]・fable を opus に倒す。haiku 等の下位指定はそのまま。
+  // 判断が要る場面はそのセッション内で /model や advisor で上げる。次の SessionStart で既定は opus に戻る。
   // PC 単位の例外は、そのPCだけの ~/.claude/model-default.json {"model":"..."} で明示する。
   { const target = defaultModel(home); const current = String(settings.model ?? '').trim();
     if (current !== target && (!current || /opus|fable/i.test(current))) { settings.model = target; added += 1; } }

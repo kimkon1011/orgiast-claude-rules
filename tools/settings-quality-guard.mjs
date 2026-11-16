@@ -56,7 +56,7 @@ export function normalizeSessionSettings(settingsPath, { env = process.env } = {
   const model = settings.model;
   if (model != null && model !== '' && !/fable|opus/i.test(String(model)) && !/\[1m\]/.test(String(model))) return { changed: false };
   const from = model == null || model === '' ? '未設定' : String(model);
-  settings.model = 'sonnet';
+  settings.model = 'opus';
   fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
   return { changed: true, from };
 }

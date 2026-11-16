@@ -22,7 +22,7 @@ export function targetModel(home) {
     const raw = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'model-default.json'), 'utf8'));
     if (raw && typeof raw.model === 'string' && raw.model.trim()) return raw.model.trim();
   } catch {}
-  return 'sonnet';
+  return 'opus';
 }
 
 export function settingsModelProblem(model, target) {

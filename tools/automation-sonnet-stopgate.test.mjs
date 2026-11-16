@@ -7,13 +7,22 @@ import { automationModel } from './lib/automation-model.mjs';
 import { disabledLanes } from './lib/lane-disabled.mjs';
 import { splitRepeatedGateBlocks } from './lib/stop-recheck.mjs';
 
-test('自動実行のモデルは既定 sonnet、opus/fable 指定も sonnet に倒す', () => {
-  assert.equal(automationModel(undefined, {}), 'sonnet');
-  assert.equal(automationModel('claude-opus-5', {}), 'sonnet');
-  assert.equal(automationModel('claude-fable-5-1', {}), 'sonnet');
+test('自動実行のモデルは既定 opus、fable は opus に倒す、haiku はそのまま', () => {
+  assert.equal(automationModel(undefined, {}), 'opus');
+  assert.equal(automationModel('claude-opus-5', {}), 'opus');
+  assert.equal(automationModel('claude-fable-5-1', {}), 'opus');
   assert.equal(automationModel('haiku', {}), 'haiku');
   assert.equal(automationModel('', { ORGIAST_AUTOMATION_MODEL: 'haiku' }), 'haiku');
-  assert.equal(automationModel('', { ORGIAST_AUTOMATION_MODEL: 'opus' }), 'sonnet');
+  assert.equal(automationModel('', { ORGIAST_AUTOMATION_MODEL: 'opus' }), 'opus');
+});
+
+test('automationModel: 未設定は opus、fable は opus に倒す、sonnet/haiku はそのまま', () => {
+  assert.equal(automationModel(undefined), 'opus');
+  assert.equal(automationModel('fable'), 'opus');
+  assert.equal(automationModel('sonnet'), 'sonnet');
+  assert.equal(automationModel('haiku'), 'haiku');
+  assert.equal(automationModel(undefined, { ORGIAST_AUTOMATION_MODEL: 'haiku' }), 'haiku');
+  assert.equal(automationModel('fable', { ORGIAST_AUTOMATION_MODEL: 'haiku' }), 'haiku');
 });
 
 test('lanes-disabled.json の gemini は gemini-cli も無効にする', () => {

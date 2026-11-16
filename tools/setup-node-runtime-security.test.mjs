@@ -27,7 +27,7 @@ async function fixture(t, options = {}) {
   const launcher = path.join(desktop, 'Node更新-test user.cmd');
   const io = {
     platform: 'win32', arch: 'x64', home: root, temp: root, account: 'test user',
-    env: { ...process.env, ...(options.env || {}) }, fs,
+    env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'CI' && k !== 'GITHUB_ACTIONS')), ...(options.env || {}) }, fs,
     wslInstalled: () => true, msiBusy: () => false,
     now: () => now,
     sleep: async (ms) => { sleeps.push(ms); now += ms; },

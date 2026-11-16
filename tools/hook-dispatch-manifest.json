@@ -538,6 +538,12 @@
         "timeout": 15
       },
       {
+        "matcher": "mcp__.*Discord.*|mcp__.*Slack.*|mcp__.*Gmail.*|Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/staff-ask-selfcheck-gate.mjs\"",
+        "timeout": 15
+      },
+      {
         "matcher": "Bash|PowerShell|mcp__claude_ai_Gmail(?:_\\d+)?__(send_message|reply|forward)",
         "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/mail-send-approval-gate.mjs\"",

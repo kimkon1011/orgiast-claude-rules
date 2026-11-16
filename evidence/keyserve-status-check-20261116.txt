@@ -1,0 +1,7 @@
+DESKTOP-8NKVJ12 keyserve status check (2026-11-16)
+- keyserve.env: absent
+- enroll.env: absent
+- keyserve-pc.txt: absent
+- This PC cannot self-issue enrollment tokens (no primary key)
+- fleet-mail: not configured (cannot auto-request kim-PC)
+- Previous attempt (2026-11-14) confirmed same state, result written as completed:false

@@ -108,15 +108,15 @@ test('過去の定期プロンプトは最新の通常ターンを免除しな�
   assert.notEqual(result.record.auditEvidence, 'unchanged-periodic-report');
 });
 
-test('定期短文でも実作業の違反はblockし、差し戻しに全文再掲指示を付けない', async t => {
+test('定期短文の未登録の約束は警告にし、全文再掲指示を付けない', async t => {
   const { options } = fixture(t);
   const text = '変化なし。台帳へ記録します。';
   const result = await run({ session_id: 'operational', assistant_text: text }, { humanText: periodic, raw: jsonl([user(periodic), assistant(text)]) }, options);
   assert.equal(result.record.unchangedPeriodicReport, true);
-  assert.equal(result.decision, 'block');
-  assert.ok(result.record.blockedBy.includes('unregistered-promise-gate'));
-  assert.ok(result.record.reasonCodes.includes('UNREGISTERED-PROMISE'));
-  assert.doesNotMatch(result.reason, /【最終まとめ】|①報告|ピギーバック|次に kim がすること/);
+  assert.equal(result.decision, undefined);
+  assert.ok(result.record.warned.includes('unregistered-promise-gate'));
+  assert.match(result.systemMessage, /unregistered-promise-gate/);
+  assert.doesNotMatch(result.systemMessage, /【最終まとめ】|①報告|ピギーバック|次に kim がすること/);
 });
 
 test('CLIはmeta定期プロンプトを認識しtool_resultとStop feedbackを飛ばす', t => {

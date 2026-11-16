@@ -58,7 +58,7 @@ export async function withLedgerLock(home, fn) {
 export function googleClient({ getToken = getDriveToken, fetchImpl = gwsFetch } = {}) {
   const tokens = new Map();
   const tokenRoutes = new Map();
-  return async function request(url, { user = 'kim@orgiast.jp', scope = 'https://www.googleapis.com/auth/drive', method = 'GET', body, text = false } = {}) {
+  return async function request(url, { user = 'kim@orgiast.jp', scope = 'https://www.googleapis.com/auth/drive', method = 'GET', body, rawBody, contentType, text = false, buffer = false } = {}) {
     const requestedKey = `${user}|${scope}`;
     const key = tokenRoutes.get(requestedKey) || requestedKey;
     let token = tokens.get(key);
@@ -78,10 +78,10 @@ export function googleClient({ getToken = getDriveToken, fetchImpl = gwsFetch } 
       tokens.set(tokenKey, token);
       tokenRoutes.set(requestedKey, tokenKey);
     }
-    const response = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${token.value}`, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30000) });
+    const response = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${token.value}`, 'Content-Type': rawBody ? contentType : 'application/json' }, body: rawBody || (body ? JSON.stringify(body) : undefined), signal: AbortSignal.timeout(30000) });
     if (!response.ok) { const e = new Error(`Google ${method} HTTP ${response.status}`); e.status = response.status; throw e; }
     if (response.status === 204) return null;
-    return text ? response.text() : response.json();
+    return buffer ? Buffer.from(await response.arrayBuffer()) : text ? response.text() : response.json();
   };
 }
 export function parseRows(values, tab = '期限台帳') {

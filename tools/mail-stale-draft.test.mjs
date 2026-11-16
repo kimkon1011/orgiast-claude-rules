@@ -179,6 +179,22 @@ test('runCli は認証情報があって全ユーザーの API が失敗すれ�
   assert.equal(code, 3);
 });
 
+test('runCli --scheduled は古い下書きがあっても点検成功なら終了コード 0', async () => {
+  const code = await runCli(['--scheduled'], {
+    hasCredential: () => true,
+    scanMailbox: async ({ user }) => ({
+      user,
+      scanned: 1,
+      stale: [{ subject: '既ラベル', to: 'outside@example.com', savedAt: '2026/11/15 04:00', newlyLabeled: false, alreadyLabeled: true, findings: [{ thread_fact: '前回の点検でラベル付与済み' }] }],
+      truncated: false,
+      unprocessed: 0,
+      errors: [],
+    }),
+    stdout: () => {},
+  });
+  assert.equal(code, 0);
+});
+
 test('runCli(["--apply","--notify"], deps) は newlyLabeled の下書きだけ通知し、古い下書きがあれば終了コード 2、新規0件なら notify を呼ばない', async () => {
   let notifiedText = null;
   const notifyMock = text => { notifiedText = text; };

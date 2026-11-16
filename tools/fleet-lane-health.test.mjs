@@ -143,6 +143,16 @@ test('同日でもstaleがあればprobeを再実行する', async t => {
   assert.equal(r.spawns[1].opts.env.ORGIAST_HOME, path.dirname(r.dir));
 });
 
+test('staleで同日再probeし停止理由が変わってもfix-nowは1回だけ起動する', async t => {
+  const r = run(t, { codex: { alive: false, reason: 'probe_failed' } });
+  assert.equal((await r.call()).autoFix, 'launched');
+  fs.writeFileSync(path.join(r.dir, 'lane-health.json'), health({ codex: { alive: false, reason: 'probe_failed:stale' } }));
+  const result = await r.call({ spawnSyncImpl: () => ({ status: 0, stdout: health({ codex: { alive: false, reason: 'native_failed:wsl' } }) }) });
+  assert.equal(result.autoFix, 'none');
+  assert.equal(r.sent.length, 2);
+  assert.equal(r.launched.length, 1);
+});
+
 test('watchdog notification batch is bounded and resumes unnotified rows next run', async t => {
   const home = tmp(t); fs.mkdirSync(path.join(home, '.claude'));
   const now = () => Date.parse('2026-10-15T13:00:00Z');

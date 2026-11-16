@@ -149,38 +149,38 @@ interface QCItem {
   category: 'seo' | 'fact' | 'style' | 'structure' | 'technical';
   name: string;
   description: string;
-  passThreshold: number; // 0-1
+  threshold: number; // 0-1
 }
 
 // QC項目一覧（22項目）
 const QC_ITEMS: QCItem[] = [
   // SEO系（6項目）
-  { id: 'QC01', category: 'seo', name: 'タイトルKW含有', threshold: 1.0 },
-  { id: 'QC02', category: 'seo', name: 'メタ description 存在', threshold: 1.0 },
-  { id: 'QC03', category: 'seo', name: 'H2にKW分散', threshold: 0.8 },
-  { id: 'QC04', category: 'seo', name: '共起語最低回数充足', threshold: 1.0 },
-  { id: 'QC05', category: 'seo', name: '内部リンク適正', threshold: 0.8 },
-  { id: 'QC06', category: 'seo', name: '文字数範囲内（目標±20%）', threshold: 1.0 },
+  { id: 'QC01', category: 'seo', name: 'タイトルKW含有', description: 'タイトルにターゲットキーワードが含まれているか', threshold: 1.0 },
+  { id: 'QC02', category: 'seo', name: 'メタ description 存在', description: 'メタ description が設定されているか', threshold: 1.0 },
+  { id: 'QC03', category: 'seo', name: 'H2にKW分散', description: 'H2見出し全体にキーワードが適切に分散しているか', threshold: 0.8 },
+  { id: 'QC04', category: 'seo', name: '共起語最低回数充足', description: '指定された共起語が最低回数以上出現しているか', threshold: 1.0 },
+  { id: 'QC05', category: 'seo', name: '内部リンク適正', description: '内部リンクが適切な箇所に設定されているか', threshold: 0.8 },
+  { id: 'QC06', category: 'seo', name: '文字数範囲内（目標±20%）', description: '記事全体の文字数が目標の±20%以内に収まっているか', threshold: 1.0 },
   // 事実系（5項目）
-  { id: 'QC07', category: 'fact', name: '自社事実の正確反映', threshold: 1.0 },
-  { id: 'QC08', category: 'fact', name: 'ハルシネーション不在', threshold: 1.0 },
-  { id: 'QC09', category: 'fact', name: '日付・数値の整合', threshold: 1.0 },
-  { id: 'QC10', category: 'fact', name: '固有名詞の正誤', threshold: 1.0 },
-  { id: 'QC11', category: 'fact', name: '禁止語不使用', threshold: 1.0 },
+  { id: 'QC07', category: 'fact', name: '自社事実の正確反映', description: '設計書の自社事実が正確に記事に反映されているか', threshold: 1.0 },
+  { id: 'QC08', category: 'fact', name: 'ハルシネーション不在', description: '設計書にない架空の事実や数値が含まれていないか', threshold: 1.0 },
+  { id: 'QC09', category: 'fact', name: '日付・数値の整合', description: '日付や数値が設計書と整合しているか', threshold: 1.0 },
+  { id: 'QC10', category: 'fact', name: '固有名詞の正誤', description: '会社名・製品名などの固有名詞が正しく表記されているか', threshold: 1.0 },
+  { id: 'QC11', category: 'fact', name: '禁止語不使用', description: '禁止語リストの語句が使用されていないか', threshold: 1.0 },
   // 文体系（5項目）
-  { id: 'QC12', category: 'style', name: '文体見本との一致度', threshold: 0.7 },
-  { id: 'QC13', category: 'style', name: '冗長表現不在', threshold: 0.8 },
-  { id: 'QC14', category: 'style', name: '一文の長さ適正（80字以内）', threshold: 0.8 },
-  { id: 'QC15', category: 'style', name: '段落適正長さ', threshold: 0.7 },
-  { id: 'QC16', category: 'style', name: '箇条書きの適正使用', threshold: 0.7 },
+  { id: 'QC12', category: 'style', name: '文体見本との一致度', description: '指定された文体見本（ですます調等）に沿っているか', threshold: 0.7 },
+  { id: 'QC13', category: 'style', name: '冗長表現不在', description: '不要な修飾や冗長な表現が含まれていないか', threshold: 0.8 },
+  { id: 'QC14', category: 'style', name: '一文の長さ適正（80字以内）', description: '一文が80字以内に収まっているか', threshold: 0.8 },
+  { id: 'QC15', category: 'style', name: '段落適正長さ', description: '段落の長さが適切（読みやすい分量）か', threshold: 0.7 },
+  { id: 'QC16', category: 'style', name: '箇条書きの適正使用', description: '箇条書きが適切な場面で使用されているか', threshold: 0.7 },
   // 構造系（3項目）
-  { id: 'QC17', category: 'structure', name: 'H2/H3構成が設計と一致', threshold: 0.9 },
-  { id: 'QC18', category: 'structure', name: 'FAQ構造化データ対応', threshold: 0.8 },
-  { id: 'QC19', category: 'structure', name: 'セクション間の文字数バランス', threshold: 0.7 },
+  { id: 'QC17', category: 'structure', name: 'H2/H3構成が設計と一致', description: '見出し構成が設計書の指定と一致しているか', threshold: 0.9 },
+  { id: 'QC18', category: 'structure', name: 'FAQ構造化データ対応', description: 'FAQセクションが構造化データに対応した形式か', threshold: 0.8 },
+  { id: 'QC19', category: 'structure', name: 'セクション間の文字数バランス', description: '各セクションの文字数が偏りすぎていないか', threshold: 0.7 },
   // 技術系（3項目）
-  { id: 'QC20', category: 'technical', name: 'リンク切れなし', threshold: 1.0 },
-  { id: 'QC21', category: 'technical', name: 'Markdown構文正', threshold: 1.0 },
-  { id: 'QC22', category: 'technical', name: '出力が指定フォーマット一致', threshold: 1.0 },
+  { id: 'QC20', category: 'technical', name: 'リンク切れなし', description: '記事内のリンクがすべて有効か', threshold: 1.0 },
+  { id: 'QC21', category: 'technical', name: 'Markdown構文正', description: 'Markdownの構文エラーがないか', threshold: 1.0 },
+  { id: 'QC22', category: 'technical', name: '出力が指定フォーマット一致', description: '出力形式が指定されたフォーマットに従っているか', threshold: 1.0 },
 ];
 ```
 
@@ -273,14 +273,14 @@ const QC_ITEMS: QCItem[] = [
   "faqCount": 4,
   "style": "ですます調、専門用語には初出時に平易な説明、簡潔で読みやすい文体",
   "prohibitedWords": ["驚愕", "必見", "今すぐ", "業界No.1"],
-  "requiredKeywords": ["展示会", "ブース制作", "オージャスト", customPerClient]
+  "requiredKeywords": ["展示会", "ブース制作", "オージャスト", "<customPerClient>"]
 }
 ```
 
 #### Step 2: 既存事例で1本生成（codex-do委譲）
 
 1. 設計書JSONに実際の事例データ（顧客名、年、イベント名等）を投入
-2. `node tools/codex-do.mjs "design/booth-article-template.json の設計書に従い展示会ブース事例記事を執筆" --cwd "..." --kind code`
+2. `node tools/codex-do.mjs "design/booth-article-template.json の設計書に従い展示会ブース事例記事を執筆" --cwd "..." --kind implement`
 3. 22項目QC自動チェック
 4. 合格した記事を管理画面に保存
 

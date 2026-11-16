@@ -19,6 +19,9 @@ import {
   createOrUpdateCompanionEvent,
   findSeisakuProfileName,
   runScheduler,
+  JOIN_WINDOW_BEFORE_MS,
+  JOIN_WINDOW_AFTER_MS,
+  JOIN_ERROR_COOLDOWN_MS,
 } from './meet-cue-scheduler.mjs';
 
 import { copyProfileFromChrome } from './meet-cue.mjs';
@@ -546,6 +549,100 @@ test('runScheduler: Meetリンクが無い予定（no_meet）は題名に「様�
     assert.equal(res.actions.length, 0);
     assert.equal(res.skipped.length, 1);
     assert.equal(res.skipped[0].reason, 'no_meet');
+  } finally {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test('参加窓の境界（-5分/+15分）の定数および判定の動作検証', () => {
+  assert.equal(JOIN_WINDOW_BEFORE_MS, 5 * 60 * 1000, '開始5分前 (300,000ms)');
+  assert.equal(JOIN_WINDOW_AFTER_MS, 15 * 60 * 1000, '開始後15分 (900,000ms)');
+
+  const nowMs = new Date('2026-11-12T10:00:00.000Z').getTime();
+
+  // Exactly -5 minutes (10:05 event when now is 10:00) -> in join window
+  const eventInWindowStart = createMockEvent({
+    start: { dateTime: new Date(nowMs + JOIN_WINDOW_BEFORE_MS).toISOString() },
+    end: { dateTime: new Date(nowMs + 60 * 60 * 1000).toISOString() },
+  });
+  const mechStart = checkMechanicalConditions(eventInWindowStart, { now: new Date(nowMs) });
+  assert.equal(mechStart.ok, true);
+
+  // Exactly +15 minutes (09:45 event when now is 10:00) -> in join window
+  const eventInWindowEnd = createMockEvent({
+    start: { dateTime: new Date(nowMs - JOIN_WINDOW_AFTER_MS).toISOString() },
+    end: { dateTime: new Date(nowMs + 30 * 60 * 1000).toISOString() },
+  });
+  const mechEnd = checkMechanicalConditions(eventInWindowEnd, { now: new Date(nowMs) });
+  assert.equal(mechEnd.ok, true);
+
+  // +16 minutes ago (09:44 event when now is 10:00) -> outside window
+  const eventOutsidePast = createMockEvent({
+    start: { dateTime: new Date(nowMs - (JOIN_WINDOW_AFTER_MS + 60000)).toISOString() },
+    end: { dateTime: new Date(nowMs + 30 * 60 * 1000).toISOString() },
+  });
+  const mechOutsidePast = checkMechanicalConditions(eventOutsidePast, { now: new Date(nowMs) });
+  assert.equal(mechOutsidePast.ok, false);
+  assert.equal(mechOutsidePast.reason, 'outside_window');
+});
+
+test('runScheduler: joinError 発生後 10 分以内の再試行抑止', async () => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-retry-test-'));
+  try {
+    const nowMs = new Date('2026-11-12T10:00:00.000Z').getTime();
+
+    const event = createMockEvent({
+      summary: 'M:テスト商談様',
+      start: { dateTime: new Date(nowMs + 2 * 60 * 1000).toISOString() }, // in join window
+      end: { dateTime: new Date(nowMs + 60 * 60 * 1000).toISOString() },
+    });
+
+    const eventKey = 'abc-defg-hij_' + new Date(nowMs + 2 * 60 * 1000).toISOString();
+
+    // 1. State with recent joinError (3 minutes ago)
+    const stateWithRecentError = {
+      [eventKey]: {
+        docId: 'doc123',
+        cardsFile: 'cards.json',
+        joinError: 'redirected_to_landing',
+        lastJoinErrorTime: nowMs - 3 * 60 * 1000,
+      },
+    };
+
+    const askJevImpl = async () => ({
+      ok: true,
+      answers: { kind: { type: 'choice', choice: 'customer_meeting', confidence: 0.9 } },
+    });
+
+    const optsRecent = createMockSchedulerOptions(event, askJevImpl, tmpHome);
+    optsRecent.now = new Date(nowMs);
+    optsRecent.dryRun = false;
+    optsRecent.state = stateWithRecentError;
+
+    const resRecent = await runScheduler(optsRecent);
+    assert.equal(resRecent.ok, true);
+    assert.equal(resRecent.actions.length, 1);
+    assert.equal(resRecent.actions[0].actionStatus, 'join_error_cooldown', '10分以内の joinError は再試行スキップされること');
+
+    // 2. State with old joinError (11 minutes ago) -> allowed
+    const stateWithOldError = {
+      [eventKey]: {
+        docId: 'doc123',
+        cardsFile: 'cards.json',
+        joinError: 'redirected_to_landing',
+        lastJoinErrorTime: nowMs - 11 * 60 * 1000,
+      },
+    };
+
+    const optsOld = createMockSchedulerOptions(event, askJevImpl, tmpHome);
+    optsOld.now = new Date(nowMs);
+    optsOld.dryRun = true; // dryRun to prevent actual spawn
+    optsOld.state = stateWithOldError;
+
+    const resOld = await runScheduler(optsOld);
+    assert.equal(resOld.ok, true);
+    assert.equal(resOld.actions.length, 1);
+    assert.notEqual(resOld.actions[0].actionStatus, 'join_error_cooldown', '10分経過後は join_error_cooldown にならないこと');
   } finally {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }

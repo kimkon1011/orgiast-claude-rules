@@ -3,6 +3,7 @@
 // 通常実装は Sol、長時間・高難度・auto の失敗時は Astra（既定 effort high）。
 // --lane sol|astra|auto / --model astra|sol|<slug> / --effort で指定する。
 // 先頭40行の <!-- lane: astra --> でも指定可。Astra 上限時は Sol へ退避する。
+import { disabledLanes } from './lib/lane-disabled.mjs';
 import { GATEWAY_MODELS, OPENROUTER_BASE } from './provider-routing.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -530,6 +531,19 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env, { kin
 // timeout を再記録し続けて冷却から復帰できなくなる循環を防ぐ。
 export const COOLING_PROBE_TIMEOUT_SECS = 120;
 
+// 2026-11-15 実測（DESKTOP-2D0R4LI）: cheap-first 経路では冷却中 backend に短い探り予算(120秒)を
+// 与えたうえで timeout をそのまま fallback-backend-history に記録していた。実装依頼は120秒で
+// 終わらないため探りは必ず timeout になり、その記録で冷却が延長され続ける（24h で
+// deepseek/gemini-cli/cheap-code:deepseek の timeout 82件・ok 0件、通常予算の試行に戻れない）。
+// 結果として全代替レーンが「使えない」扱いになり Claude 本体が作業を肩代わりしていた。
+// 冷却による短縮予算での timeout は本番の失敗ではないので記録しない（null を返す）。
+// 冷却は最後の通常予算 timeout から6時間で自然に解け、通常予算での試行に戻る。
+export function fallbackOutcomeToRecord(outcome, { cooling = false, budgetSecs, normalSecs } = {}) {
+  if (!['ok', 'timeout', 'cli_missing', 'blocked'].includes(outcome)) return null;
+  if (outcome === 'timeout' && cooling && Number.isFinite(Number(budgetSecs)) && Number.isFinite(Number(normalSecs)) && Number(budgetSecs) < Number(normalSecs)) return null;
+  return outcome;
+}
+
 // 1試行に実際に与える秒数。冷却中でなければ従来どおり
 // min(連鎖の残り予算, backend 固有の上限)。冷却中でも末尾の試行は通常予算を使う。
 export function effectiveBackendTimeoutSecs(backendName, { chainBudget, cooling = false, env = process.env, isLastBackend = false, kind } = {}) {
@@ -718,7 +732,9 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   if (!qwenAvailable && (deepseekKey || openrouterKey)) { maybeAutoInstallQwen(homeDir, { env: process.env }); }
   const geminiBillingBlocked = isProviderBillingBlocked(homeDir, 'gemini');
   if (geminiKey && geminiBillingBlocked) console.error('[codex-do] gemini 直 API は残高不足(402)のため gemini-cli を候補から外します');
-  const gemini = geminiKey && geminiAvailable && !geminiBillingBlocked && { kind: 'gemini', name: 'gemini-cli', model: process.env.CODEX_DO_GEMINI_MODEL || 'gemini-3.6-flash', apiKey: geminiKey };
+  const geminiDisabled = disabledLanes(homeDir).has('gemini-cli');
+  if (geminiKey && geminiDisabled) console.error('[codex-do] gemini-cli は lanes-disabled.json で無効化されているため候補から外します');
+  const gemini = geminiKey && geminiAvailable && !geminiBillingBlocked && !geminiDisabled && { kind: 'gemini', name: 'gemini-cli', model: process.env.CODEX_DO_GEMINI_MODEL || 'gemini-3.6-flash', apiKey: geminiKey };
   const deepseek = deepseekKey && qwenAvailable && { kind: 'qwen', name: 'deepseek', model: GATEWAY_MODELS.deepseek, baseUrl: OPENROUTER_BASE, apiKey: deepseekKey };
   const openrouter = openrouterKey && qwenAvailable && { kind: 'qwen', name: 'openrouter-free', model: process.env.CODEX_DO_FREE_MODEL || 'cohere/north-mini-code:free', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
   const byName = {
@@ -1187,7 +1203,15 @@ function recordDeferred(gate) {
   try {
     const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
-    const fallbackSkipped = noFallback ? 'no_fallback_flag' : resolveFallbackBackends(home).length === 0 ? 'no_backends' : undefined;
+    // 代替バックエンドを試した後に全滅した場合も記録する
+    let fallbackSkipped;
+    if (noFallback) {
+      fallbackSkipped = 'no_fallback_flag';
+    } else if (gate.reason === 'all_backends_failed') {
+      fallbackSkipped = 'all_backends_failed';
+    } else {
+      fallbackSkipped = resolveFallbackBackends(home).length === 0 ? 'no_backends' : undefined;
+    }
     fs.appendFileSync(ledger, `${JSON.stringify({ t: new Date().toISOString(), provider: 'codex', model: `codex-cli/${selectedLane.slug || 'default'}`, status: 'deferred', reason: gate.reason, retryAt: gate.retryAt, origin, kind: taskKind, launched: false, cwd, ...(fallbackSkipped ? { fallbackSkipped } : {}) })}\n`, 'utf8');
   } catch {}
 }
@@ -1202,7 +1226,9 @@ let cooldownRecheck = false;
 if (useCodex) {
   const gate = decideCodexGate({ home, origin });
   cooldownRecheck = gate.recheck === true;
-  if (gate.deferred && ['codex_cooldown', 'unattended_budget'].includes(gate.reason) && !noFallback && resolveFallbackBackends(home).length > 0) {
+  // 全ての deferred 理由（codex_cooldown / usage_limit / unattended_budget 等）で、
+  // --no-fallback が無ければ既定で代替バックエンドへ回す。終了コード75は代替が全滅した時だけ。
+  if (gate.deferred && !noFallback && resolveFallbackBackends(home).length > 0) {
     cooldownSkipCodex = true;
     skipCodexReason = gate.reason;
     launchUnavailable = true;
@@ -1210,7 +1236,7 @@ if (useCodex) {
     if (skipCodexReason === 'unattended_budget') {
       console.error(`[codex-do] unattended_budget（無人枠 ${gate.used}/${gate.limit} 件、${retryAt} 以降に回復）のため codex を起動せず代替バックエンドへ回します`);
     } else {
-      console.error(`[codex-do] codex_cooldown（${retryAt} まで）のため codex を起動せず代替バックエンドへ回します`);
+      console.error(`[codex-do] ${skipCodexReason}（${retryAt} まで）のため codex を起動せず代替バックエンドへ回します`);
     }
   } else if (gate.deferred) {
     recordDeferred(gate);
@@ -1450,10 +1476,12 @@ async function tryCheapFirstFallback() {
       console.error('[codex-do] cheap-first: ' + backend.name + ' failed validation (' + invalid + ')');
     }
     chainResult.push({ backend: backend.name, model: backend.model, status: res.status ?? null, timedOut: res.timedOut === true, out: Math.ceil((res.outputChars || 0) / 4), outChars: res.outputChars || 0, secs: Number(((Date.now() - as) / 1000).toFixed(3)), budgetSecs: bt, stderrTail: String(res.stderr || '').replace(/\s+/g, ' ').trim().slice(-200), outcome });
-    if (dec.advance) { if (['ok', 'timeout', 'cli_missing', 'blocked'].includes(outcome)) recordFallbackBackendOutcome(home, { backend: backend.name, outcome }); continue; }
+    const toRecord = fallbackOutcomeToRecord(outcome, { cooling: cooling.has(backend.name), budgetSecs: bt, normalSecs: backendSpecificTimeoutSecs(backend.name, process.env, { kind: taskKind }) });
+    if (outcome === 'timeout' && !toRecord) { chainResult.at(-1).outcome = 'probe_timeout'; console.error(`[codex-do] cheap-first: ${backend.name} は冷却中の短縮予算(${bt}秒)で timeout。本番失敗としては記録しません`); }
+    if (dec.advance) { if (toRecord) recordFallbackBackendOutcome(home, { backend: backend.name, outcome: toRecord }); continue; }
     if (invalid) continue;
     if (outcome === 'ok') cheapSucceeded = true;
-    if (['ok', 'timeout', 'cli_missing', 'blocked'].includes(outcome)) recordFallbackBackendOutcome(home, { backend: backend.name, outcome });
+    if (toRecord) recordFallbackBackendOutcome(home, { backend: backend.name, outcome: toRecord });
     break;
   }
   return { succeeded: cheapSucceeded, result: lastResult || { status: 1, outputChars: 0, output: '', stderr: '' }, chainResult, lastBackend };
@@ -1462,9 +1490,12 @@ async function tryCheapFirstFallback() {
 async function launchCodex(codexArgs, primaryStarted = Date.now()) {
   let result;
 
-  const remainingTimeoutSecs = () => remainingPrimaryBudgetSecs(
-    timeoutSeconds,
-    (Date.now() - primaryStarted) / 1000,
+  // 主経路の codex も fallbackBackendTimeoutSecs の上限(既定900秒)で制限する。
+  // これが無いと --timeout 3000 等の長い全体予算がそのまま codex に渡り、
+  // 1回の codex 呼出で 3000 秒を捨てることになる(2026-11-12 実測: gpt-6-astra 3025秒/予算3000秒)。
+  const remainingTimeoutSecs = () => Math.min(
+    remainingPrimaryBudgetSecs(timeoutSeconds, (Date.now() - primaryStarted) / 1000),
+    fallbackBackendTimeoutSecs(timeoutSeconds),
   );
 
   if (process.platform === 'win32' && !forceNative) {
@@ -1955,6 +1986,14 @@ if (quotaCheck.matched && executorName === 'fallback' && result?.status !== 0) {
 }
 if (executorName === 'fallback' && !cheapFirstFallbackDone) {
   recordUsage(result, `${reportedFallbackBackend?.name ?? 'unknown'}/${reportedFallbackBackend?.model ?? 'unknown'}`, secs, 'fallback', 1, fallbackChain);
+}
+// 代替バックエンドが全滅した場合、記録して deferred(75)で終了する。
+if (cooldownSkipCodex && executorName === 'fallback' && result?.status !== 0 && !fallbackBackend) {
+  const gateForDeferred = { reason: skipCodexReason, retryAt: Date.now() + 3600000 };
+  recordDeferred({ reason: 'all_backends_failed', retryAt: Date.now() + 3600000 });
+  console.error(`[codex-do] 代替バックエンドが全て失敗しました（${skipCodexReason}）。保留にします`);
+  console.log(JSON.stringify(deferredPayload({ reason: skipCodexReason, retryAt: Date.now() + 3600000 }, { origin, kind: taskKind })));
+  process.exit(EX_TEMPFAIL);
 }
 
 // 実行後スキャン: Codex / cheap-code が書いたコードにも Claude API 禁止を効かせる。

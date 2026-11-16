@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { EVENTS, defaultRepo, readDispatchManifest, tokens, isDispatcher } from './hook-dispatch-registry.mjs';
+import { dedupeContext } from './lib/context-dedupe.mjs';
 
 export function matches(matcher, event, input) {
   if (!matcher || matcher === '*') return true;
@@ -23,10 +24,15 @@ export function parseOutput(stdout) {
   }
   return null;
 }
-export function mergeResults(event, results) {
+export function mergeResults(event, results, { home, sessionId } = {}) {
   const reasons = [], contexts = [], messages = [];
   let permission, updatedInput, continueValue, stopReason, sessionTitle, legacyBlock = false;
-  for (const result of results) {
+  for (const [index, result] of results.entries()) {
+    const addContext = text => {
+      const fresh = ['PostToolUse', 'UserPromptSubmit'].includes(event)
+        ? dedupeContext(text, { home, sessionId, source: `dispatch:${result.name || index}` }) : text;
+      if (fresh) contexts.push(fresh);
+    };
     if ((result.timedOut && !(result.name === 'kim-inbox.mjs' && result.contextComplete)) || result.skipped || ![0, 2].includes(result.status)) continue;
     const out = parseOutput(result.stdout), specific = out?.hookSpecificOutput;
     if (result.status === 2) {
@@ -34,9 +40,9 @@ export function mergeResults(event, results) {
       legacyBlock = true;
     } else {
       if (specific?.permissionDecision === 'deny' || out?.decision === 'block') reasons.push(specific?.permissionDecisionReason || out.reason || 'Hook blocked the operation');
-      if (specific?.additionalContext) contexts.push(specific.additionalContext);
+      if (specific?.additionalContext) addContext(specific.additionalContext);
       if (typeof specific?.sessionTitle === 'string' && specific.sessionTitle.trim() && ['SessionStart', 'UserPromptSubmit'].includes(event)) sessionTitle = specific.sessionTitle;
-      if (!out && result.stdout?.trim() && ['SessionStart', 'UserPromptSubmit', 'PostToolUse'].includes(event)) contexts.push(result.stdout.trim());
+      if (!out && result.stdout?.trim() && ['SessionStart', 'UserPromptSubmit', 'PostToolUse'].includes(event)) addContext(result.stdout.trim());
       if (out?.systemMessage) messages.push(out.systemMessage);
       if (specific?.permissionDecision === 'ask') permission = 'ask';
       else if (specific?.permissionDecision === 'allow' && !permission) permission = 'allow';
@@ -293,7 +299,7 @@ export async function dispatch(event, raw, options = {}) {
       timedOut: results.filter(r => r.timedOut).length, skipped: results.filter(r => r.skipped).length,
       hooks: results.map(({ name, critical, durationMs, queueMs, timedOut, skipped, status, error, criticalUnfinished }) => ({ name, critical, durationMs, queueMs, timedOut: !!timedOut, skipped, status, error, criticalUnfinished })) };
     appendMetrics(home, record);
-    return { ...mergeResults(event, results), metrics: record, results };
+    return { ...mergeResults(event, results, { home, sessionId: input.session_id || input.sessionId }), metrics: record, results };
   } finally { for (const slot of slots) slot.close(); lease.release(); }
 }
 export async function hookMain(raw, event = process.argv[2]) {

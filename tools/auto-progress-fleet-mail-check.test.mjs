@@ -44,6 +44,47 @@ test('照会プロセスの異常終了を停滞と混同しない', () => {
     assert.throws(() => checkFleetMail({ mail: 'mail-1', spawnImpl: () => result }), /取得できません/);
   }
 });
+
+const cacheNow = Date.parse('2026-11-02T06:00:00Z');
+
+function cacheSpawnWithHeader(header, stdoutLines, status = 3) {
+  return () => ({
+    status,
+    stdout: header + '\n' + Object.entries(stdoutLines).map(([k, v]) => `${k}: ${v || '(なし)'}`).join('\n'),
+    stderr: ''
+  });
+}
+
+test('キャッシュ status 3 + 30分前 + sent/未開封 → code 1 にキャッシュ注釈', () => {
+  const result = checkFleetMail({ mail: 'mail-1', now: cacheNow, spawnImpl: cacheSpawnWithHeader('（キャッシュ・2026-11-02T05:30:00Z）', {
+    to: '作業用011', status: 'sent', createdAt: '2026-11-01T23:00:00Z'
+  }) });
+  assert.equal(result.code, 1);
+  assert.match(result.text, /未開封/);
+  assert.match(result.text, /キャッシュ/);
+  assert.match(result.text, /30分前/);
+});
+
+test('キャッシュ時刻が7時間前 → throws', () => {
+  assert.throws(() => checkFleetMail({ mail: 'mail-1', now: cacheNow, spawnImpl: cacheSpawnWithHeader('（キャッシュ・2026-11-01T23:00:00Z）', {
+    to: '作業用011', status: 'sent', createdAt: '2026-11-01T22:00:00Z'
+  }) }), /キャッシュが古く/);
+});
+
+test('キャッシュ・取得時刻不明 → throws', () => {
+  assert.throws(() => checkFleetMail({ mail: 'mail-1', now: cacheNow, spawnImpl: cacheSpawnWithHeader('（キャッシュ・取得時刻不明）', {
+    to: '作業用011', status: 'sent', createdAt: '2026-11-01T22:00:00Z'
+  }) }), /取得時刻不明/);
+});
+
+test('キャッシュ + status: expired → code 3', () => {
+  const result = checkFleetMail({ mail: 'mail-1', now: cacheNow, spawnImpl: cacheSpawnWithHeader('（キャッシュ・2026-11-02T05:30:00Z）', {
+    to: '作業用011', status: 'expired', createdAt: '2026-11-01T22:00:00Z'
+  }) });
+  assert.equal(result.code, 3);
+  assert.match(result.text, /期限切れ/);
+});
+
 test('未開封時間を指定でき、開封後の期限切れも停滞になる', () => {
   const spawnImpl = () => ({ status: 0, stdout: 'to: 作業用011\nstatus: sent\ncreatedAt: 2026-11-01T22:00:00Z' });
   assert.equal(checkFleetMail({ mail: 'mail-1', now, unseenHours: 1, spawnImpl }).code, 3);

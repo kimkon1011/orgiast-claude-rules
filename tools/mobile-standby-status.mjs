@@ -9,7 +9,7 @@ import pool from './lib/mobile-state.cjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { buildVscodeUri, resolveVscodeCli } from './next-session-launch.mjs';
 import { notifyKim } from './notify-kim.mjs';
@@ -24,8 +24,38 @@ export const STANDBY_TITLE = /^remote-control-/;
 export const PLACEHOLDER_TITLE = /^\d{3}｜待機中$/;
 // 現在の自動名は <ホスト名スラッグ>-<形容詞>-<名詞>（例 011-prancy-dusk）。
 export const AUTO_TITLE = /^[a-z0-9]+(?:-[a-z0-9]+)*-[a-z]+-[a-z]+$/;
+export const OPENURL_STUCK_TIMEOUT_MS = 15_000;
+
+export function defaultFindStuckOpenUrl({ spawnImpl = spawnSync } = {}) {
+  const script = `
+$cutoff = (Get-Date).AddSeconds(-60).ToUniversalTime()
+try {
+  $codeProcs = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'Code.exe' })
+  $candidates = @($codeProcs | Where-Object {
+    $null -ne $_.CommandLine -and $_.CommandLine.Contains('--open-url') -and $_.CommandLine -notlike '*--type=*' -and $_.CreationDate -lt $cutoff
+  })
+  if ($candidates.Count -eq 0) { Write-Output 'none'; return }
+  $stuck = $false
+  foreach ($c in $candidates) {
+    $nodeServiceChildren = @($codeProcs | Where-Object {
+      $_.ParentProcessId -eq $c.ProcessId -and $null -ne $_.CommandLine -and $_.CommandLine.Contains('node.mojom.NodeService')
+    })
+    if ($nodeServiceChildren.Count -eq 0) { $stuck = $true; break }
+  }
+  if ($stuck) { Write-Output 'stuck' } else { Write-Output 'none' }
+} catch { Write-Output 'none' }
+`;
+  const result = spawnImpl('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: OPENURL_STUCK_TIMEOUT_MS });
+  if (result.error || result.status !== 0) return false;
+  return String(result.stdout ?? '').trim() === 'stuck';
+}
 
 function json(file, fallback = {}) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
+function localWaitingTabs(home = os.homedir(), now = Date.now()) {
+  const { waiting, updatedAt } = json(path.join(home, '.claude', 'mobile-sessions-state.json')) ?? {};
+  return Number.isFinite(waiting) && waiting >= 0 && Number.isFinite(updatedAt)
+    && updatedAt <= now && now - updatedAt <= 15 * 60_000 ? waiting : null;
+}
 function titleOf(session) { return String(session?.title ?? '').split('\n')[0]; }
 function stripId(id) { return String(id ?? '').replace(/^(cse_|session_)/, ''); }
 
@@ -148,6 +178,7 @@ export async function replenishStandby({
   home, fetchImpl = fetch, goal = GOAL, localIds, freshHours = defaultFreshHours(home), waitMs = 30_000, now = Date.now,
   spawnProcess = spawn, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   notify = notifyKim, codeCli, open = openStandbyTabs, stateFile,
+  findStuckOpenUrl = defaultFindStuckOpenUrl,
 } = {}) {
   if (!pool.isMobileEnabled(home ?? os.homedir())) return { action: 'skipped', reason: 'disabled' };
   const state = stateFile ? json(stateFile) : {};
@@ -156,25 +187,58 @@ export async function replenishStandby({
   if (before.error) return { action: 'skipped', reason: before.error, before };
   // 健全でも記録する。記録しないと purge-sessions --hook が SessionStart/Stop のたびに起動してしまう。
   // notifiedAt は引き継ぐ（DM の間引きに使う）。
-  if (stateFile) fs.writeFileSync(stateFile, JSON.stringify({ ...state, at: startedAt, standby: before.standby, goal }));
+  Object.assign(state, { at: startedAt, standby: before.standby, goal });
+  const saveState = () => { if (stateFile) fs.writeFileSync(stateFile, JSON.stringify(state)); };
+  if (!before.shortfall) delete state.failedOpenAt;
+  saveState();
   if (!before.shortfall) return { action: 'none', before };
+  const localWaiting = localWaitingTabs(home, startedAt);
+  const count = Math.max(0, goal - Math.max(before.standby, localWaiting ?? 0));
+  if (!count) {
+    if (startedAt - (Number(state.notifiedAt) || 0) >= NOTIFY_COOLDOWN) {
+      const message = `[mobile-standby] VS Code に待機タブが ${localWaiting} 本ありますが、スマホから見える待機セッションは ${before.standby} 本です（remote control 未接続）。新しいタブは開いていません。`;
+      await notify(message).catch(() => {});
+      state.notifiedAt = startedAt;
+      saveState();
+    }
+    return { action: 'skipped', reason: 'local-tabs-present', localWaiting, before };
+  }
+  if (Number.isFinite(state.failedOpenAt) && startedAt - state.failedOpenAt < NOTIFY_COOLDOWN) {
+    return { action: 'skipped', reason: 'backoff' };
+  }
+  // VS Code が固まっていないか確認。残骸があれば開かずバックオフに乗せる。
+  if (findStuckOpenUrl) {
+    try {
+      const stuck = await findStuckOpenUrl({ spawnImpl: spawnSync });
+      if (stuck) {
+        state.failedOpenAt = now();
+        saveState();
+        return { action: 'skipped', reason: 'vscode-unresponsive' };
+      }
+    } catch { /* 確認失敗時は残骸なし扱いで従来どおり動く */ }
+  }
   const cli = codeCli ?? resolveVscodeCli({ env: process.env, exists: fs.existsSync, homedir: home ?? os.homedir() });
   if (!cli) return { action: 'skipped', reason: 'no-vscode-cli', before };
   let opened;
-  try { opened = await open({ home, count: before.shortfall, codeCli: cli, spawnProcess }); }
+  try { opened = await open({ home, count, codeCli: cli, spawnProcess }); }
   catch (error) { return { action: 'failed', reason: `open failed: ${error.message}`, before }; }
   await sleep(waitMs);
   const after = await checkStandby({ home, fetchImpl, goal, localIds, freshHours, now: now() });
   if (after.shortfall) {
+    state.failedOpenAt = now();
+    saveState();
     // 開き直しても戻らない時だけ知らせる。同じ不足で毎時 DM しないよう 6 時間に 1 回まで。
     if (startedAt - (Number(state.notifiedAt) || 0) < NOTIFY_COOLDOWN) {
       return { action: 'shortfall', suppressed: true, opened, before, after };
     }
     const message = `[mobile-standby] 待機セッションが不足しています。目標 ${goal} 本 / 現在 ${after.standby} 本（${after.titles.join(', ') || 'なし'}）。${opened} 本を開きましたが 30 秒後も不足。`;
     const delivery = await notify(message).catch((error) => ({ delivered: 'none', reason: error.message }));
-    if (stateFile) fs.writeFileSync(stateFile, JSON.stringify({ ...state, at: startedAt, standby: before.standby, goal, notifiedAt: startedAt }));
+    state.notifiedAt = startedAt;
+    saveState();
     return { action: 'notified', opened, before, after, delivery };
   }
+  delete state.failedOpenAt;
+  saveState();
   return { action: 'replenished', opened, before, after };
 }
 

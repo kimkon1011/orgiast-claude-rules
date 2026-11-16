@@ -77,6 +77,7 @@ node deck-hybrid/preview.mjs
 - 写真面積40%以上。暗化filter・opacityなし。表・平面図主体は写真を省略する。表紙は白い文字面・キャプションが隠す面積も差し引いて検査する。
 - `preview.mjs` は画像decode・フォント読込を待ち、本文実測行数、写真面積、文字切れ、フッター衝突、暗化を検査する。問題があればPNG・`out/preview-checks.json` を残してexit 1。
 - 全ページPNGをReadで原寸目視し、写真 / 余白 / 文字量 / 数字 / 一貫性の5観点を5点満点で採点。写真のない図表ページは写真のみ対象外。1項目でも3点以下なら直し、build→preview→全ページ目視をやり直す。
+- Chrome等で直接PDF化した場合も `node tools/pdf-page-check.mjs --pdf <file>` で全ページをPNGにしてReadする。社内向けの記載がないことも確認する。
 - `visual-review.json` は下の形式。再出力後は採点も更新する。保存後、次のコマンドで報告を更新できる。
 
 ```json

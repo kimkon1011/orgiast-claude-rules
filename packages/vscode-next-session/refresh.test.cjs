@@ -9,8 +9,13 @@ const { decideAction } = require('./route');
 
 const MIN = 60000;
 const NOW = 1_000_000_000_000;
-const tab = (ageMin, extra = {}) => ({ label: 'Claude Code', appearedAt: NOW - ageMin * MIN, isActive: false, ...extra });
-const base = { now: NOW, minutes: 60, hoursOk: true, lastRefreshAt: null, target: 1 };
+const openedTabs = new Set();
+const tab = (ageMin, extra = {}) => {
+  const identity = {};
+  openedTabs.add(identity);
+  return { tab: identity, label: 'Claude Code', appearedAt: NOW - ageMin * MIN, isActive: false, ...extra };
+};
+const base = { openedTabs, now: NOW, minutes: 60, hoursOk: true, lastRefreshAt: null, target: 1 };
 
 test('時間帯: 06-24 は終了排他、22-06 は日跨ぎ、不正値は null', () => {
   assert.deepEqual(parseRefreshHours('06-24'), { start: 6, end: 24 });

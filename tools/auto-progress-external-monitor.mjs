@@ -1,7 +1,47 @@
 import { externalSpec, eventKey, readEvents, saveEvent, MONITOR_DAYS } from './lib/external-monitor-state.mjs';
 import { rowKey } from './auto-progress-ledger.mjs';
 import { fetchMessages } from './auto-progress-external-check.mjs';
-import { addItem } from './kim-inbox.mjs';
+import { addItem, listItems, updateInboxItem, inboxDedupeKey } from './kim-inbox.mjs';
+import { redactSecrets } from './webhook-health.mjs';
+import { autoResumeAllowed } from './lib/auto-resume-policy.mjs';
+
+function inboxOptions(event) {
+  return { kind: 'ask', priority: 'high', source: 'auto-progress-external', sessionId: event.row.sessionId,
+    text: `🔴 ${event.row.label || event.channel} に新着\n送信者: ${event.message.sender || '不明'}\n時刻: ${event.message.at}\n${event.message.text}\n作業ID: ${event.row.sessionId}\n新着を確認し、対応方針を判断してください。`,
+    dedupeKey: `external-message:${event.key}` };
+}
+
+// Older inbox versions redacted every event hash to the same key. A cursor may
+// already have advanced and the resume may be done, so repair durable receipts
+// independently of polling. Keep genuine prior notices (and their answers).
+export async function repairExternalInboxReceipts({ home, now = Date.now(), io = {} }) {
+  const items = new Map(listItems(home).map(item => [item.id, item]));
+  const result = { rekeyed: 0, requeued: 0 };
+  const retained = new Set();
+  for (const event of readEvents(home).sort((a, b) => Date.parse(a.queuedAt) - Date.parse(b.queuedAt))) {
+    const old = items.get(event.inboxId), options = inboxOptions(event);
+    const key = inboxDedupeKey(options.dedupeKey);
+    if (!old || old.source !== options.source) continue;
+    if (old.dedupeKey === key) { retained.add(old.id); continue; }
+    if (!retained.has(old.id) && old.text === redactSecrets(options.text).slice(0, 4000)) {
+      updateInboxItem(home, old.id, item => { item.dedupeKey = key; });
+      retained.add(old.id);
+      result.rekeyed++;
+      continue;
+    }
+    const item = await (io.addKimInboxItem || addItem)(home, options);
+    if (!item?.id || item.forwardError) throw new Error(item?.forwardError || 'External inbox repair failed');
+    event.inboxRepair = { at: new Date(now).toISOString(), previousInboxId: event.inboxId,
+      previousState: event.state, previousResumeOutcome: event.resumeOutcome };
+    event.inboxId = item.id;
+    event.state = 'pending';
+    delete event.attemptedAt;
+    delete event.resumeOutcome;
+    saveEvent(home, event);
+    result.requeued++;
+  }
+  return result;
+}
 
 export async function pollExternal(row, { home, now, patch, io = {} }) {
   const spec = externalSpec(row);
@@ -27,8 +67,7 @@ export async function pollExternal(row, { home, now, patch, io = {} }) {
         events.set(key, event);
       }
       if (!event.inboxId) {
-        const text = `🔴 ${row.label || spec.channel} に新着\n送信者: ${event.message.sender || '不明'}\n時刻: ${event.message.at}\n${event.message.text}\n作業ID: ${row.sessionId}\n新着を確認し、対応方針を判断してください。`;
-        const item = await (io.addKimInboxItem || addItem)(home, { kind: 'ask', priority: 'high', source: 'auto-progress-external', text, dedupeKey: `external-message:${key}` });
+        const item = await (io.addKimInboxItem || addItem)(home, inboxOptions(event));
         if (!item?.id || item.forwardError) throw new Error(item?.forwardError || 'External inbox delivery failed');
         event.inboxId = item.id;
         saveEvent(home, event);
@@ -50,10 +89,23 @@ export async function pollExternal(row, { home, now, patch, io = {} }) {
 
 // Durable queue, grouped by original session. Retain failures for the next tick.
 export async function drainExternalQueue({ home, now, resume, io = {} }) {
-  const pending = readEvents(home).filter(e => e.inboxId && e.state !== 'done' &&
+  await repairExternalInboxReceipts({ home, now, io });
+  const events = readEvents(home);
+  const pending = events.filter(e => e.inboxId && !['done', 'disabled'].includes(e.state) &&
     (!e.attemptedAt || now - Date.parse(e.attemptedAt) >= 30 * 60000))
     .sort((a, b) => (Date.parse(a.attemptedAt) || 0) - (Date.parse(b.attemptedAt) || 0) || Date.parse(a.queuedAt) - Date.parse(b.queuedAt));
   if (!pending.length) return { resumed: 0 };
+  if (!autoResumeAllowed()) {
+    for (const sessionId of new Set(pending.map(e => e.row.sessionId))) {
+      if (!events.some(e => e.row.sessionId === sessionId && e.state === 'disabled')) {
+        await (io.addKimInboxItem || addItem)(home, { kind: 'info', source: 'auto-progress-auto-resume-disabled', sessionId,
+          dedupeKey: `external-auto-resume-disabled:${sessionId}`,
+          text: `自動再開は行いません。続けるときはこのセッションを開いて指示してください: claude --resume ${sessionId}` });
+      }
+      for (const event of pending.filter(e => e.row.sessionId === sessionId)) { event.state = 'disabled'; saveEvent(home, event); }
+    }
+    return { resumed: 0 };
+  }
   const batch = pending.filter(e => e.row.sessionId === pending[0].row.sessionId).slice(0, 50);
   for (const event of batch) { event.attemptedAt = new Date(now).toISOString(); saveEvent(home, event); }
   const row = { ...batch[0].row, promise: '外部チャネルの新着を確認する',

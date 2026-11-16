@@ -65,6 +65,20 @@ node seo/ahrefs-gsc-priority.mjs --ahrefs ahrefs-errors.csv --gsc gsc-pages.csv 
 - サンプルデータ: `seo/data/ahrefs-sample-errors.csv` / `seo/data/gsc-sample-pages.csv`
 - テスト: `node --test seo/ahrefs-gsc-priority.test.mjs`
 
+## X-0065: カスタム技術SEOクローラー（2026-11-16 完了）
+
+Python製の軽量技術SEOクローラー。Requests/BeautifulSoup/Pandasで構築。
+
+```bash
+pip install requests beautifulsoup4 pandas lxml
+python seo/x0065-tech-seo-crawler.py https://example.com --max-pages 50
+```
+
+全5STEP: URL検証 → 内部リンクBFS巡回 → HTML抽出 → 技術チェック（HTTP/タイトル/H1/canonical/noindex/リンク） → CSVエクスポート
+
+- スクリプト: [`seo/x0065-tech-seo-crawler.py`](./x0065-tech-seo-crawler.py)
+- 自社サイト・イベントページ・ブース関連ページのSEO監査に活用
+
 ## 進行管理
 - 本件は `next-session.md` #7 として管理
 - ブロッカー解消後に再開

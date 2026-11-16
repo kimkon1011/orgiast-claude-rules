@@ -328,3 +328,62 @@ test('mixed auth and non-auth failures still produce real_fail_rate', t => {
   assert.equal(health.lanes.codex.reason, 'real_fail_rate');
   assert.equal(health.lanes.codex.alive, false);
 });
+
+test('89 codex refresh-token failures and one WSL failure produce dead:oauth_consent', t => {
+  const error = 'Failed to refresh token: Your access token could not be refreshed. Please log out and sign in again. ERROR: workspace routing discovery unauthorized (401)';
+  const other = 'WSL ディストリが見つかりませんでした';
+  const home = fixture(t, [
+    ...Array.from({ length: 89 }, () => ({ provider: 'codex', status: 'error', stderr: error })),
+    { provider: 'codex', status: 'error', stderr: other },
+  ]);
+  const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.codex.reason, 'dead:oauth_consent');
+  assert.equal(health.lanes.codex.alive, false);
+  assert.ok(health.lanes.codex.error.includes(`認証系 89件 / その他 1件: ${other}`));
+});
+
+test('18 auth failures and one server failure on deepseek produce auth_invalid', t => {
+  const home = fixture(t, [
+    ...Array.from({ length: 18 }, () => ({ status: 'error', reason: 'HTTP 401 unauthorized' })),
+    { status: 'error', reason: 'HTTP 500 internal error' },
+  ]);
+  const health = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.deepseek.reason, 'auth_invalid');
+  assert.equal(health.lanes.deepseek.alive, false);
+  assert.match(health.lanes.deepseek.error, /認証系 18件 \/ その他 1件: HTTP 500/);
+});
+
+test('auth dominance includes 90 percent but excludes 80 percent', t => {
+  for (const authCount of [8, 9]) {
+    const home = fixture(t, [
+      ...Array.from({ length: authCount }, () => ({ provider: 'codex', status: 'error', reason: 'HTTP 401 unauthorized' })),
+      ...Array.from({ length: 10 - authCount }, () => ({ provider: 'codex', status: 'error', reason: 'HTTP 500 internal error' })),
+    ]);
+    const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.codex.reason, authCount === 9 ? 'dead:oauth_consent' : 'real_fail_rate');
+    assert.equal(health.lanes.codex.alive, false);
+  }
+});
+
+test('auth dominance requires five auth failures even with 100 percent of failures', t => {
+  const home = fixture(t, [
+    ...Array.from({ length: 4 }, () => ({ provider: 'codex', status: 'error', reason: 'HTTP 401 unauthorized' })),
+    { provider: 'codex', status: '429', until: now - 1 },
+  ]);
+  const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.codex.reason, 'real_fail_rate');
+});
+
+test('codex refresh-token phrases classify as auth without a 401 or unauthorized hint', t => {
+  for (const reason of ['Failed to refresh token', 'access token could not be refreshed', 'log out and sign in again', 'sign in again']) {
+    const home = fixture(t, Array.from({ length: 5 }, () => ({ provider: 'codex', status: 'error', reason })));
+    const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.codex.reason, 'dead:oauth_consent', reason);
+    assert.equal(health.lanes.codex.alive, false);
+  }
+});

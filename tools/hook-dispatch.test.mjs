@@ -56,6 +56,18 @@ test('SessionStart emits sessionTitle without additionalContext', () => {
   const merged = mergeResults('SessionStart', [output({ sessionTitle: '999｜待機中' })]);
   assert.deepEqual(JSON.parse(merged.stdout), { hookSpecificOutput: { hookEventName: 'SessionStart', sessionTitle: '999｜待機中' } });
 });
+test('prompt/posttool context is deduped per source across events without changing block decisions', t => {
+  const options = { home: fixture(t), sessionId: 'dedupe' };
+  const results = [{ ...output({ additionalContext: '同じ通知' }), name: 'source' }];
+  assert.equal(mergeResults('PostToolUse', results, options).payload.hookSpecificOutput.additionalContext, '同じ通知');
+  assert.equal(mergeResults('UserPromptSubmit', results, options).stdout, '');
+  const changed = [{ ...output({ additionalContext: '変更された通知' }), name: 'source' }];
+  assert.equal(mergeResults('UserPromptSubmit', changed, options).payload.hookSpecificOutput.additionalContext, '変更された通知');
+  assert.equal(mergeResults('UserPromptSubmit', results, { ...options, sessionId: 'other' }).payload.hookSpecificOutput.additionalContext, '同じ通知');
+  const block = { status: 0, stdout: JSON.stringify({ decision: 'block', reason: 'protected', hookSpecificOutput: { additionalContext: '変更された通知' } }), name: 'source' };
+  assert.deepEqual(mergeResults('UserPromptSubmit', [block], options).payload, { decision: 'block', reason: 'protected' });
+  assert.ok(mergeResults('SessionStart', results, options).payload.hookSpecificOutput);
+});
 test('UserPromptSubmit combines additionalContext and the last valid successful sessionTitle', () => {
   const merged = mergeResults('UserPromptSubmit', [output({ additionalContext: 'context' }), output({ sessionTitle: 'first' }), output({ sessionTitle: '999｜待機中' }),
     ...['', '   ', null, 123].map(sessionTitle => output({ sessionTitle })),

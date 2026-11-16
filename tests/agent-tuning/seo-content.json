@@ -1,0 +1,71 @@
+{
+  "name": "展示会SEOコンテンツ生成",
+  "description": "展示会ブース関連のSEOコンテンツ生成エージェントの評価セット",
+  "version": "1.0.0",
+  "cases": [
+    {
+      "id": "booth-cost",
+      "query": "展示会ブース 制作 費用 相場",
+      "expectedElements": ["価格帯", "規模別", "見積依頼CTA", "相場感", "費用"],
+      "axes": ["accuracy", "completeness", "usefulness"],
+      "minScore": 3,
+      "category": "費用"
+    },
+    {
+      "id": "osaka-booth",
+      "query": "大阪 展示会 ブース 制作 会社",
+      "expectedElements": ["地域情報", "事例", "比較", "大阪", "制作会社"],
+      "axes": ["accuracy", "completeness", "usefulness"],
+      "minScore": 3,
+      "category": "地域"
+    },
+    {
+      "id": "first-exhibition",
+      "query": "初めての展示会 ブース レイアウト",
+      "expectedElements": ["初心者向け", "ステップ", "レイアウト例", "注意点", "準備"],
+      "axes": ["accuracy", "completeness", "usefulness"],
+      "minScore": 3,
+      "category": "初心者"
+    },
+    {
+      "id": "small-booth-ideas",
+      "query": "小規模ブース 集客 アイデア",
+      "expectedElements": ["具体策", "事例", "予算感", "効果", "集客"],
+      "axes": ["accuracy", "completeness", "usefulness"],
+      "minScore": 3,
+      "category": "集客"
+    },
+    {
+      "id": "design-trend",
+      "query": "展示会 ブース デザイン トレンド 2027",
+      "expectedElements": ["トレンド", "デザイン例", "業界動向", "参考事例", "2027"],
+      "axes": ["accuracy", "completeness", "usefulness"],
+      "minScore": 2,
+      "category": "デザイン"
+    },
+    {
+      "id": "rebooth-cost",
+      "query": "Reブース 初期費用 ランニングコスト",
+      "expectedElements": ["Reブース", "初期費用", "ランニングコスト", "比較", "メリット"],
+      "axes": ["accuracy", "completeness", "usefulness"],
+      "minScore": 3,
+      "category": "Reブース"
+    },
+    {
+      "id": "bigsight-rules",
+      "query": "東京ビッグサイト ブース 設営 注意点",
+      "expectedElements": ["東京ビッグサイト", "設営", "注意点", "ルール", "搬入"],
+      "axes": ["accuracy", "completeness", "usefulness"],
+      "minScore": 3,
+      "category": "会場"
+    },
+    {
+      "id": "purpose-setting",
+      "query": "展示会 出展 目的 決め方",
+      "expectedElements": ["目的設定", "KPI", "ターゲット", "効果測定", "計画"],
+      "axes": ["accuracy", "completeness", "usefulness"],
+      "minScore": 3,
+      "category": "戦略"
+    }
+  ]
+}

@@ -13,11 +13,11 @@ export function resolvePcNumber({ env = process.env, hostname = os.hostname(), m
       const names = [entry.hostname, ...(Array.isArray(entry.aliases) ? entry.aliases : [])];
       if (!names.some(name => typeof name === 'string' && name.toLowerCase() === host)) continue;
       for (const name of [entry.remoteName, entry.sheetName, key]) {
-        const number = typeof name === 'string' && name.match(/作業用(\d{3})/);
+        const number = typeof name === 'string' && name.match(/(?:作業|カフェ)用(\d{3})/);
         if (number) return number[1];
       }
       if (typeof entry.titleLabel === 'string' && /^[A-Za-z][A-Za-z0-9-]{1,15}$/.test(entry.titleLabel)) return entry.titleLabel;
     }
   } catch { /* Missing or invalid map still permits hostname fallback. */ }
-  return String(hostname).match(/作業用(\d{3})/)?.[1] || '';
+  return String(hostname).match(/(?:作業|カフェ)用(\d{3})/)?.[1] || '';
 }

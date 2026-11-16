@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { disabledLanes } from './lib/lane-disabled.mjs';
 import { wslInstalled } from './lib/wsl-present.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,6 +10,7 @@ import { isEntry } from './is-entry.mjs';
 import { codexAuthStatusAny } from './codex-auth-status.mjs';
 import { loadEnvKey, loadGeminiKey, loadDeepseekKey } from './codex-do.mjs';
 import { providerResetUntil } from './codex-cooldown.mjs';
+import { isDailyQuotaResponse, nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { redactAll } from './lib/redact.mjs';
 import { catalog } from './provider-catalog.mjs';
@@ -65,6 +67,12 @@ function keyserveEnrolled(home, env = process.env) {
   const secret = env.ORGIAST_KEYSERVE_SECRET || readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
   return Boolean(secret && !isEnrollToken(secret));
 }
+// PC ごとの恒久無効化（lanes-disabled.json）。probe も通知もせず、順番から外す（2026-11-15 kim 指示: 008 の Gemini 停止）。
+// quick と probe の両経路で、実績反映（applyRealLaneHealth）の後に必ず掛け直す。
+export function applyDisabledLanes(health, home = laneHome()) {
+  for (const p of disabledLanes(home)) if (health.lanes?.[p]) health.lanes[p] = { alive: false, reason: 'disabled' };
+  return health;
+}
 function orders(health, home = laneHome()) {
   health.implementOrder = ['codex', 'deepseek', 'glm', 'gemini-cli'].filter(p => health.lanes[p]?.alive);
   // 旧 payment_required の扱いは維持し、billing は専用の日次通知と代替ルートに回す。
@@ -75,7 +83,8 @@ health.substituted = Object.entries(health.lanes).filter(([p, s]) => isLane(p) &
     || p === 'gemini' && s.reason === 'missing_key' && health.lanes.openrouter?.alive))
     .map(([provider]) => ({ provider, via: 'openrouter' }));
   for (const { provider, via } of health.substituted) health.lanes[provider].via = via;
-  health.askOrder = ['gemini', 'deepseek', 'groq', 'openrouter'].filter(p => health.lanes[p]?.alive || health.lanes[p]?.via === 'openrouter' && health.lanes.openrouter?.alive);
+  // 安い順。Gemini は恒久停止せず同列の受け皿。失敗・回数制限時だけ一時退避し、回復後に戻す。Claude 本体はこの順に含めない。
+  health.askOrder = ['groq', 'deepseek', 'openrouter', 'gemini'].filter(p => health.lanes[p]?.alive || health.lanes[p]?.via === 'openrouter' && health.lanes.openrouter?.alive);
   health.deadNeedsUser = Object.entries(health.lanes).filter(needsUser)
     .map(([provider, s]) => ({ provider, reason: s.reason, tried: s.tried, fix: s.userFix || (s.reason.includes('payment') ? '請求設定でオートチャージ ON。手動チャージは禁止ルール。' : '本人アカウントで認証画面を開き OAuth 同意を完了する。') }));
   const missing = Object.entries(health.lanes).filter(([p, s]) => PROVIDERS.includes(p) && s.reason === 'missing_key' && s.via !== 'openrouter').map(([p]) => p);
@@ -144,6 +153,7 @@ const paymentFresh = old.lanes?.[p]?.reason === 'dead:payment_required' && Numbe
   applyRealLaneHealth(health, home, now);
   // API key の生存と CLI の有無は別条件。CLI が無い場合は実装候補にしない。
   health.lanes['gemini-cli'] = directGeminiCliState(health.lanes.gemini, executable('gemini'));
+  applyDisabledLanes(health, home);
 orders(health, home);
   if (!health.lanes.deepseek.alive && health.lanes.deepseek.reason === 'dead:payment_required' && health.lanes.openrouter?.alive) health.lanes.deepseek.via = 'openrouter';
   if (save) { demoteBilling(health, home, now); persist(path.join(dir, 'lane-health.json'), health, health); }
@@ -233,6 +243,22 @@ export function notificationText(item, home) {
 4. 完了後は Claude が lane-doctor --probe で復旧を確認します。`;
 }
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// 回数制限・課金切れ・クールダウン中は実APIへ probe しない（空いている枠をヘルスチェックが食い潰すのを防ぐ）。
+// until がある間は待つ。until が無いときも直近1時間は叩かず、期限到来後に1回だけ確認して自動復帰する。
+export function shouldSkipLiveProbe(state = {}, now = Date.now()) {
+  const reason = String(state.reason || '');
+  if (reason === 'missing_key' || reason === 'disabled') return true;
+  if (!/^(?:billing|quota_wait|cooldown|demoted|daily_limit|lane_doctor_usage_limit)$/.test(reason)) return false;
+  const until = Number(state.until);
+  if (Number.isFinite(until) && until > now) return true;
+  if (Number.isFinite(until) && until <= now) return false;
+  const last = Math.max(Date.parse(state.probedAt) || 0, Number(state.real24h?.lastQuotaAt) || 0, Number(state.real24h?.lastBillingAt) || 0);
+  // quota_wait は月次・週次リセットの可能性があり、1時間おきのprobeでは上限枠を無駄に消費する。
+  // until が分からないときは6時間に1回まで（§1.18.4: 安いAIレーンの疎通probe節約）。
+  const cooldownMs = reason === 'quota_wait' ? 6 * 60 * 60 * 1000 : 60 * 60 * 1000;
+  return Number.isFinite(last) && last > 0 && now - last < cooldownMs;
+}
 export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe, nativeTimeoutMs = NATIVE_WRITE_PROBE_TIMEOUT_MS, spawnImpl = spawnSync, providers = PROVIDERS, probeRetries = 1 } = {}) {
   const started = Date.now(), dir = path.join(home, '.claude');
   const health = laneDoctorQuick({ home, now, save: false, platform, spawnImpl });
@@ -241,7 +267,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   // 各 provider を並行実測し、一つの停止レーンで90秒枠を使い切らない。
   const probeProviders = providers.length ? providers : [...PROVIDERS, ...OPTIONAL_PROVIDERS.filter(o => health.lanes[o])];
   const results = await Promise.all(probeProviders.map(async p => {
-    if (health.lanes[p].reason === 'missing_key' || (p === 'codex' && !codexAuthStatusAny(home, { platform, spawnImpl }).login)) return [p, null];
+    if (!health.lanes[p] || shouldSkipLiveProbe(health.lanes[p], now) || (p === 'codex' && !codexAuthStatusAny(home, { platform, spawnImpl }).login)) return [p, null];
     let dryOk = true;
     if (p === 'codex') {
       if (platform === 'win32' && await listWsl() === '') {
@@ -299,7 +325,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       }
       health.lanes[p].probeReason = health.lanes[p].reason;
       if (deferred && cooldown[p]?.until) health.lanes[p].until = cooldown[p].until;
-      if (limited && !payment) { const until = providerResetUntil(text, now); cooldown[p] = { until, at: now, reason: 'lane_doctor_usage_limit' }; cooldownChanged = true; health.lanes[p].until = until; }
+      if (limited && !payment) { const daily = isDailyQuotaResponse(429, text); const until = daily ? nextUtcMidnight(new Date(now)) : providerResetUntil(text, now); cooldown[p] = { until, at: now, reason: daily ? 'daily_limit' : 'lane_doctor_usage_limit' }; cooldownChanged = true; health.lanes[p].until = until; }
     }
   }
   if (routingChanged && !persist(path.join(dir, 'routing-overrides.json'), routing, health)) health.repairs = health.repairs.filter(r => r.action !== 'demote_removed' || r.detail !== '実測成功');
@@ -307,6 +333,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   health.probedAt = new Date(now).toISOString();
   applyRealLaneHealth(health, home, now);
   health.lanes['gemini-cli'] = directGeminiCliState(health.lanes.gemini, executable('gemini'));
+  applyDisabledLanes(health, home);
   orders(health, home);
   demoteBilling(health, home, now);
   await notifyLaneStops(health, { home, now, notify, budgetMs, started, platform, spawnImpl });

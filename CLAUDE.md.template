@@ -12,7 +12,10 @@
 <!-- BEGIN: オージャスト共通ルール (自動同期 ONBOARDING.md) -->
 - 基本理念・判断基準（毎セッション読み込み・迷ったらここに戻る）: @~/.claude/orgiast-mission.md
 全文は ~/.claude/orgiast-onboarding.md。自動ロードされないため、判断に迷ったら Read ツールで該当節を読むこと
+### 人の手間はAIの効率より優先
+**🔴 人の手間はAIの効率より上（kim 2026-11-16 決定・全PC全アカウント）。金さん（user）の手間もお客様の手間も、AIの効率のために犠牲にしない。このルールは手間最優先（§1.1／§1.1.0）・照合（送信前の矛盾・重複照会）・検証表（完了報告）・コスパ全体最適（費用対効果・長期的利益）を含む既存のどのルールよりも優先する。照合と検証表そのものは省略しない。承認必須（社外送信・削除・課金）は飛ばさない。user に手間をかけるときは、AIで回避できる方法を必ず一緒に提案する。社外のお客様への日程調整は、URLを貼って選ばせるだけにしない。秘書の空き日程ツール（https://claude-pc.tailc5d751.ts.net/secretary/book 。kim@orgiast.jp と seisaku-team@orgiast.jp の両方が空いている日時）から空きを取り、本文に具体的な候補を4〜5枠並べる。「ご都合が合わない場合は、下記から追加で空き日時をお選びいただけます」とURLを添えてよい。悪い例:「下記からご都合のよい日時をお選びいただくか、候補日時をお知らせください。（URLのみ）」。**
 ### 1.1 自動化・手渡しの原則
+**社員・他PCに状況を聞く前も、user に聞く前と同じく自分で照会する（応募・メール・シート・Discord は Claude が読める）。
 **🔴 判断の土台は基本理念（@~/.claude/orgiast-mission.md）。目的は user の生産性・長期的利益が最優先。乖離時は理念優先で rules repo へ修正提案。承認必須事項（送信・削除・課金等）は理念を理由に飛ばさない。**
 **🔴 応答は常に日本語（コード・識別子は原文可）。Stop hook の書き直しも日本語を保つ。response-language-gate が検査し、setup --converge が language: japanese を配布する。**
 **🔴 user の操作はゼロが原則。手間は全員の手作業・再送・再入力・確認を含む最上位コスト。①Claude が実行 → ②MCP・CLI・定期ジョブ・fleet 等の別経路 → ③実行不能を実測したものだけ make-desktop-launcher.mjs でダブルクリック1個にする。PowerShell 貼り付けを頼まない。試した経路・結果・操作回数を「手間監査:」に書き、準備は全て先に済ませる。人の理解・同意は省かない（§1.1.0／§1.1.1）。**
@@ -38,7 +41,6 @@
 **🔴 メールの送信・下書きはすべて seisaku-team@orgiast.jp。送信指示時は重複・矛盾照会**
 **🔴 メールは送信前に本文全文を提示し明示承認後のみ送る。多数宛は1社ずつ YES を得る。gmail-draft.mjs --send の自動チェック（スレッド全体の合意×見積明細：金額・数量・人件費・納品形態・日程等）を通し、block は修正する。生の Gmail API 送信は禁止。送信後は本文全文・添付の中身・送信日時/元/先/件名をチャットに表示する。**
 **🔴 送信前、自社分も宛先全履歴を読み、聞き直し/未回答/矛盾・重複をsend-context-checkで確認結果を承認全文で提示。**
-**🔴 外部との日程調整はこちらから候補日時を3〜5枠出す。**
 **🔴 完了報告は「依頼範囲の全要素 × 実データ」の検証表で出し、できていない要素は Claude から対処案を出す。user に発見させない。**
 **🔴 承認待ちの文面・選択肢は毎回「【kim 確認用の全文】」で全文再掲し、遡らせない。NEXT-ACTION-BACKREF／NEXT-ACTION-APPROVAL-INLINE が検査する。状態が変わらない定期報告は「変化なし」1行のみ、確認事項・本文・手順・別件一覧を毎回再掲しない。**
 **🔴 Claude が決められる判断（過去の決定あり・支払い/同意不要・取り消せる）は聞かずに決めて進め、結果を報告する。**
@@ -71,9 +73,11 @@ Google APIはDWD優先、着手時にサービス別所有アカウントを宣�
 **1.13 トークン効率（出力・入力キャッシュ・サブエージェント）**
 ### 1.13.1 effortLevelと品質
 effortLevelの既定は **medium**（kim 2026-09-17 改定）、lowは禁止。`settings-quality-guard` がlowへの変更をblockし、SessionStartでmediumへ復元する。highへの引き上げは設計・横断調査の時だけ、セッション単位で行う。thinking予算・監督モデル・実装先（Codex）を節約目的で下げないルールは維持し、節約は委譲・レスポンス数削減・無人ジョブの非Claude化・キャッシュ維持で行う。
+**🔴 大事な判断の前は必ず /advisor に相談してから決めて。**
 ### 1.14 permission mode と安全装置
 permission mode の既定は `bypassPermissions`。
 ### 1.15 自律進行・セッション引継ぎ
+**自動再開は廃止。
 **🔴 セッションは1目的。完了時はClaudeが確認なしで /session-close し、引継ぎ後に次セッションを自動起動する。早朝に未クローズの全セッションを確認する。リモートコントロールは常時有効、スマホ用の空きセッションを3つ確保する。タイトル先頭にPC番号（fleet-pc-map、例018｜）と状態【閉じて可】／【MM/DD/HH:MMまで】を付ける。閉じて可は終了定型文かつuserの残作業なしの場合のみ。詳細は本節「クローズ・待機タイトル」。**
 ### 案件の引き継ぎ（全アカウント共通）
 kim が操作する対象アカウントの案件作業は、案件ID・案件一覧の名前から自動で紐付き、Drive ハブの `case-sessions/<案件ID>/` に残る。
@@ -94,7 +98,7 @@ Claude Code・Codex・安いLLMは**APIがあるものしか触れない**。
 ### 1.18.4 着手前のレーン生存確認と「体制不備を先に直す」原則
 - Fable 5.1（および Opus）の担当は設計・タスク分解・指示・レビュー・検証だけ。
 **🔴 他AI（Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM）は使うのが既定、Claudeだけは理由が必要。残高切れは入金（オートチャージON）、キー失効/403は再発行、429は別の他AIへ。「外す／やめる／縮小」を選択肢にせず、障害は別の他AIで吸収し復旧後に戻す。割り振りは先に具体名で書く（要約=Gemini、下書き=Kimi、実装=Codex、Claude=verify）。「必要なら使う」は禁止。**
-**🔴 故障レーンは全PC・全アカウント・無人でも同じセッションで最優先修復。SessionStart の 🛑 に従い、他PCの同アカウント・SendMessage・CLI・API の使える経路を当ターンで尽くす。返事待ちで放置せず、人にしかできない操作はこのPCの操作者（kim）へ直接頼み、実呼び出し成功まで確認する。lane-repair-first-gate が未修復の通常作業を止める。node tools/lane-doctor.mjs --probe、または lane-repair-log.mjs --lane <名> --tried "<試行>" --result fixed|unfixable（6時間有効）で記録し、応答に [LANE-REPAIR] を書く。reset 既知の429/usage_limitは quota_wait として別の安いレーンへ。Codex probe失敗は直接WSL終了コードでも切り分け、「生存 ✅」だけを信用しない。**
+**🔴 故障レーンは全PC・無人でも同じセッションで最優先修復し、Claude は作業を肩代わりしない。codex-do 失敗時は lane-health.json の次の安いレーンへ渡し直し、全レーン停止なら止めて `~/.claude/lane-watch/status.md` の理由と kim の操作を報告する。人にしかできない操作は kim へ直接頼み実呼び出し成功まで確認。lane-repair-first-gate が未修復の通常作業を止める。node tools/lane-doctor.mjs --probe か lane-repair-log.mjs --lane <名> --tried "<試行>" --result fixed|unfixable（6時間有効）で記録し [LANE-REPAIR] を書く。reset 既知の429/usage_limitは quota_wait として別の安いレーンへ。Codex probe失敗はWSL終了コードでも切り分け、「生存 ✅」だけを信用しない。**
 ### 1.19 マキモノとハイブリッド企画書
 完成済み指示書を探し着手（画像・資料: §1.19.1／1.19.2）。
 ### 1.19.1 「ChatGPTでデザインして」と言われたら Claude が上書きしない
@@ -111,8 +115,9 @@ Bashは1呼出1コマンド、専用ツール・allow済み経路を使う。
 捏造禁止、辞書・仕様は実装と一致、外部ツール別の操作規約遵守。
 **🔴 備品管理表（全体）『備品在庫管理表』の K列（現在在庫数）は関数列。K には何も書かない（在庫数は E列）。K を跨ぐ範囲は分けて書く。bihin-kcol-gate が止める。**
 **2.1 経営データに無い属性をハルシネーションしない**
-**🔴 業務の表・文書・スライドはGoogle形式で作り案件のDriveフォルダに置き、共有済みDrive URLで渡す。ローカルOffice/CSVやClaude Docs・claude.ai artifact URLで納品しない。社外指定形式はGoogle正本から書き出しを添える（§2.6.2）。**
+**🔴 業務の表・文書・スライドはGoogle形式で案件Driveに置き、共有済みURLで渡す。ローカルOffice/CSV・Claude Docs・artifact URLの納品禁止。社外指定形式はGoogle正本から書き出して添付（§2.6.2）。**
 **2.6.2 業務の表・文書・スライドは Google Workspace で作る（Excel/Word/PowerPoint を作らない・絶対）**
+**🔴 納品前に全ページ画像を目視。**
 ### 2.8 AI費用・夜間処理・無人運転
 用途別費用最適化、遅延可能処理は夜間へ、無人処理は試行上限・監視必須。
 **🔴 アプリ（デプロイ済み・Actions・cron・GAS・スクリプト）のLLM/検索は他AIが既定。Claude API（@anthropic-ai/sdk・api.anthropic.com・claude-*）の新規利用・Claudeへの自動フォールバックも禁止。旧 LLM-PROVIDER-REASON は新規利用の許可にならない（2026-11-05）。検索収集=Gemini Flash grounding、分類/抽出/要約=Groq/DeepSeek/Gemini Flash。他AIを3社以上同じ評価セットで比較（取得項目数・一致率・1件実費）し、1社だけでClaudeへ戻さない。障害は別の他AIへ、全滅なら停止・通知。「当面Claude」「入金不要」で済ませずキー登録・デプロイ・入金依頼・他AI実動確認まで行う。既存アプリも呼び先を確認しClaudeなら置換案を先に出す。有料一括20件超は1〜10件の実費実測→[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z]→承認→コードの予算超過自動停止。オートチャージは上限ではない。app-llm-cost-gate が検査（§2.8.0）。**

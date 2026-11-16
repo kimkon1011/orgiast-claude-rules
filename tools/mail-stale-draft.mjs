@@ -300,14 +300,15 @@ function notifyText(results) {
 }
 
 export async function runCli(argv = process.argv.slice(2), deps = {}) {
-  const users = []; let apply = false, notify = false, json = false;
+  const users = []; let apply = false, notify = false, json = false, scheduled = false;
   let deadlineMin = 8;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--apply') apply = true; else if (a === '--notify') notify = true; else if (a === '--json') json = true;
+    else if (a === '--scheduled') scheduled = true;
     else if (a === '--user' && argv[i + 1]) users.push(argv[++i]);
     else if (a === '--deadline-min' && argv[i + 1]) deadlineMin = Number(argv[++i]);
-    else { (deps.stdout ?? console.log)('使い方: node tools/mail-stale-draft.mjs [--user addr]... [--apply] [--notify] [--json] [--deadline-min N]'); return 64; }
+    else { (deps.stdout ?? console.log)('使い方: node tools/mail-stale-draft.mjs [--user addr]... [--apply] [--notify] [--json] [--scheduled] [--deadline-min N]'); return 64; }
   }
   if (!(deps.hasCredential ?? hasAnyCredential)()) {
     (deps.stdout ?? console.log)('■ Gmail の認証情報(鍵・リレー)が無いPCのためスキップ（何もしない）');
@@ -326,6 +327,7 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
   }
   (deps.stdout ?? console.log)(json ? JSON.stringify({ results, notified: Boolean(text) }) : render(results));
   if (results.every(r => r.error)) return 3;
+  if (scheduled) return 0;
   return results.some(r => r.stale.length) ? 2 : 0;
 }
 if (isEntry(import.meta.url)) process.exitCode = await runCli();

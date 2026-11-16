@@ -158,7 +158,7 @@ function reasonTop(rows) {
 // 2026-09-11 実測: 404秒/487秒で打ち切られた実行は rollout ログ上は tsc 実行など実作業の途中だった。
 // codex は WSL の名前解決失敗などで、セッションを作る前に exit 1 / 出力ゼロで死ぬことがある。
 // これは codex 本体の故障ではなく一過性のインフラ障害で、codex-do 側の再試行で回復する。
-const INFRA_TRANSIENT = /failed to lookup address information|failed to connect to websocket|stream error|connection reset|i\/o timeout|dns|failed to record rollout items|thread [0-9a-f-]{8,} not found/i;
+const INFRA_TRANSIENT = /failed to lookup address information|failed to connect to websocket|stream error|connection reset|i\/o timeout|dns|failed to record rollout items|thread [0-9a-f-]{8,} not found|workspace routing discovery (?:failed|timed out)/i;
 
 // WSL のディストリが1つも無い PC では codex レーンを環境修復する必要がある。
 // 「そもそも走っていない」の中でも、コードで直せる起動失敗(codex_launch_failed)と分けて扱う
@@ -278,7 +278,7 @@ const CODEX_MODEL_AUTH_MISMATCH = /is not supported when using codex with a chat
 // 実測 2026-10-21T00:32Z の2件(astra→sol 退避)が旧パターンに一致せず no_output に落ち、
 // codex_empty_output が毎晩起票された。先頭欠落を許容する語("your usage limit" + "Upgrade to Pro"、
 // 最後の砦として ChatGPT の購入URL)も一致させる。
-const CODEX_USAGE_LIMIT = /You(?:[’']ve| have) hit your usage limit|your usage limit[.!]?\s*Upgrade to Pro|Upgrade to Pro \(https:\/\/chatgpt\.com\/explore\/pro\)|Usage limit (?:reached|exceeded)/i;
+const CODEX_USAGE_LIMIT = /You(?:[’']ve| have) hit your usage limit|your usage limit[.!]?\s*Upgrade to Pro|Upgrade to Pro \(https:\/\/chatgpt\.com\/explore\/pro\)|Usage limit (?:reached|exceeded)|https:\/\/chatgpt\.com\/(?:explore\/pro|settings\/usage)/i;
 
 // 選択モデルが一時的に満員のときは、codex 自体の出力異常ではない。
 const CODEX_MODEL_CAPACITY = /Selected model is at capacity\. Please try a different model\./i;
@@ -652,6 +652,21 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
         evidence: [`${billingSuspended.length}件が恒久課金切れ`, ...(billingCooldown ? [`cooldown ${cooldown[provider].reason} until ${new Date(Number(cooldown[provider].until)).toISOString()}`] : []),
           ...reasonTop(billingSuspended.map(row => ({ reason: row.reason || row.stderrTail || emptyOutputReason(row) })))] });
       continue;
+    }
+    // cooldown 中に一部の non-benign 行（no_output）が混ざっても、レーン障害ではない。
+    // 2026-11-14 実測: gemini 470 件中 469 が quota_limited / 1 が no_output → �値未満で
+    // provider_usage_limit に落ちず lane_outage_unrepaired が生成された。
+    // 再発防止: cooldown 中かつ non-benign が 5 件未満かつ 10% 未満なら quota 扱いにする。
+    const activeCooldown = Number(cooldown?.[provider]?.until) > nowMs;
+    if (activeCooldown && benign.length > 0) {
+      const nonBenign = attempts.length - benign.length;
+      const nonBenignRatio = nonBenign / attempts.length;
+      if (nonBenign <= 5 && nonBenignRatio <= 0.1) {
+        findings.push({ id: 'provider_usage_limit', provider, severity: 'low', title: `${provider} は上限/レート制限で停止（欠陥ではない）`,
+          evidence: [`${attempts.length}件中${benign.length}件が上限/レート制限`, `以外 ${nonBenign}件は cooldown 中の artifact`,
+            ...reasonTop(attempts.map(row => ({ reason: row.stderrTail || row.reason || emptyOutputReason(row) })))] });
+        continue;
+      }
     }
     if (benign.length === attempts.length) {
       findings.push({ id: 'provider_usage_limit', provider, severity: 'low', title: `${provider} は上限/レート制限で停止（欠陥ではない）`,

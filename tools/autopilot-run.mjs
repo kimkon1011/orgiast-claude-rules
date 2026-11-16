@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { automationModel } from './lib/automation-model.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -44,12 +45,12 @@ export async function sampleCpuBusy({ sampleMs = 5000, cpusImpl = os.cpus, sleep
 // 「オートパイロットをオーパスに変えて」。共有リポジトリの既定を変えると他 PC まで変わるため）。
 // claude- 以外や、planIncluded=false での Fable 指定は無視して既定に戻す。
 export function supervisorModel(objectiveFile, policy) {
-  const fallback = fableAllowedForSupervisor(policy) ? 'claude-fable-5-1' : 'claude-opus-5';
+  // 2026-11-15 kim 指示: 自動実行（autopilot）は Sonnet。objective の opus/fable 指定も Sonnet に倒す。
+  const fallback = automationModel();
   let pinned = '';
   try { pinned = JSON.parse(fs.readFileSync(objectiveFile, 'utf8').match(/```json\s*\n([\s\S]*?)\n```/)[1]).model; } catch {}
   if (typeof pinned !== 'string' || !/^claude-[a-z0-9-]+$/.test(pinned)) return fallback;
-  if (/fable/.test(pinned) && !fableAllowedForSupervisor(policy)) return fallback;
-  return pinned;
+  return automationModel(pinned);
 }
 export function buildWatchPrompt(watch, repo = REPO) {
   return `autopilot の「見張り」を1件だけ確かめる。実装・修正・外部への送信はしない（読む・数える・ログを見るだけ）。

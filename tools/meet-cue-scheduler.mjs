@@ -28,6 +28,10 @@ const __dirname = path.dirname(__filename);
 const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
 const ADMIN_SCOPE = 'https://www.googleapis.com/auth/admin.directory.user.readonly';
 
+export const JOIN_WINDOW_BEFORE_MS = 5 * 60 * 1000; // 開始5分前
+export const JOIN_WINDOW_AFTER_MS = 15 * 60 * 1000; // 開始後15分
+export const JOIN_ERROR_COOLDOWN_MS = 10 * 60 * 1000; // 10分間再試行抑制
+
 export const homeDir = () => process.env.ORGIAST_HOME || os.homedir();
 export const meetCueBaseDir = (home = homeDir()) => path.join(home, '.claude', 'meet-cue');
 export const schedulerStatePath = (home = homeDir()) => path.join(meetCueBaseDir(home), 'scheduler-state.json');
@@ -121,11 +125,11 @@ export function checkMechanicalConditions(event, { staffAddresses = [], ownerEma
   const meetInfo = extractMeetInfo(event);
   if (!meetInfo) return { ok: false, reason: 'no_meet' };
 
-  // Time window: start within past 10 minutes to next N hours
+  // Time window: start within past JOIN_WINDOW_AFTER_MS (15 min) to next N hours
   const startTime = new Date(event.start?.dateTime || event.start?.date || 0);
   const nowMs = now.getTime();
   const startMs = startTime.getTime();
-  const minTime = nowMs - 10 * 60 * 1000;
+  const minTime = nowMs - JOIN_WINDOW_AFTER_MS;
   const maxTime = nowMs + hours * 60 * 60 * 1000;
 
   if (startMs < minTime || startMs > maxTime) return { ok: false, reason: 'outside_window' };
@@ -346,7 +350,7 @@ export async function fetchTargetCalendars({ getToken = getDriveToken, fetchImpl
 }
 
 export async function listCalendarEvents({ calendarId, token, now = new Date(), hours = 24, fetchImpl = globalThis.fetch }) {
-  const timeMin = new Date(now.getTime() - 10 * 60 * 1000).toISOString();
+  const timeMin = new Date(now.getTime() - JOIN_WINDOW_AFTER_MS).toISOString();
   const timeMax = new Date(now.getTime() + hours * 60 * 60 * 1000).toISOString();
   const params = new URLSearchParams({
     timeMin,
@@ -748,10 +752,10 @@ export async function runScheduler(options = {}) {
       }
     }
 
-    // 1b. Join Meet Window check: start - 2 min to start + 10 min
+    // 1b. Join Meet Window check: start - 5 min to start + 15 min
     const nowMs = now.getTime();
-    const windowStart = startMs - 2 * 60 * 1000;
-    const windowEnd = startMs + 10 * 60 * 1000;
+    const windowStart = startMs - JOIN_WINDOW_BEFORE_MS;
+    const windowEnd = startMs + JOIN_WINDOW_AFTER_MS;
     const inJoinWindow = nowMs >= windowStart && nowMs <= windowEnd;
 
     let actionStatus = 'idle';
@@ -760,45 +764,69 @@ export async function runScheduler(options = {}) {
       const pidAlive = isPidAlive(itemState.joinedPid);
       if (pidAlive) {
         actionStatus = 'running';
-      } else if (!dryRun && docId && itemState.cardsFile) {
-        // Count active concurrent running sessions
-        const activeCount = Object.values(state).filter(s => isPidAlive(s.joinedPid)).length;
-        if (activeCount >= config.maxConcurrent) {
-          actionStatus = 'max_concurrent_exceeded';
-          console.log(`[meet-cue-scheduler] 同時上限(${config.maxConcurrent})超過のため参加保留: ${event.summary}`);
-          try {
-            await addItem(home, {
-              kind: 'info',
-              text: `【Meetカンペ待機】同時上限(${config.maxConcurrent})超過のため参加保留: ${event.summary}`,
-              source: 'meet-cue-scheduler',
-            });
-          } catch { /* ignore */ }
-        } else {
-          // Launch meet-cue.mjs start in background detached
-          try {
-            const scriptPath = fileURLToPath(new URL('./meet-cue.mjs', import.meta.url));
-            const args = [
-              scriptPath,
-              'start',
-              '--url', meetInfo.meetUrl,
-              '--staff', staffEmail,
-              '--title', event.summary || '打合せ',
-              '--cards-file', itemState.cardsFile,
-              '--doc-id', docId,
-              '--brief-file', itemState.briefFile || '',
-              '--max-minutes', String(durationMinutes + 30),
-            ];
+      } else {
+        // Check if previous attempt ended with joinError within 10 min
+        if (itemState.sessionId && (!itemState.joinError || !itemState.lastJoinErrorTime)) {
+          const sFile = path.join(meetCueBaseDir(home), itemState.sessionId, 'session.json');
+          if (fs.existsSync(sFile)) {
+            try {
+              const sData = JSON.parse(fs.readFileSync(sFile, 'utf8'));
+              if (sData.joinError) {
+                itemState.joinError = sData.joinError;
+                const st = fs.statSync(sFile);
+                itemState.lastJoinErrorTime = st.mtimeMs;
+              }
+            } catch { /* ignore */ }
+          }
+        }
 
-            const child = spawn(process.execPath, args, { detached: true, windowsHide: true, stdio: 'ignore' });
+        const isRecentJoinError = itemState.joinError &&
+          itemState.lastJoinErrorTime &&
+          (nowMs - itemState.lastJoinErrorTime < JOIN_ERROR_COOLDOWN_MS);
 
-            child.unref();
+        if (isRecentJoinError) {
+          actionStatus = 'join_error_cooldown';
+          console.log(`[meet-cue-scheduler] joinError (${itemState.joinError}) 発生後 10 分以内のため再試行スキップ: ${event.summary}`);
+        } else if (!dryRun && docId && itemState.cardsFile) {
+          // Count active concurrent running sessions
+          const activeCount = Object.values(state).filter(s => isPidAlive(s.joinedPid)).length;
+          if (activeCount >= config.maxConcurrent) {
+            actionStatus = 'max_concurrent_exceeded';
+            console.log(`[meet-cue-scheduler] 同時上限(${config.maxConcurrent})超過のため参加保留: ${event.summary}`);
+            try {
+              await addItem(home, {
+                kind: 'info',
+                text: `【Meetカンペ待機】同時上限(${config.maxConcurrent})超過のため参加保留: ${event.summary}`,
+                source: 'meet-cue-scheduler',
+              });
+            } catch { /* ignore */ }
+          } else {
+            // Launch meet-cue.mjs start in background detached
+            try {
+              const scriptPath = fileURLToPath(new URL('./meet-cue.mjs', import.meta.url));
+              const args = [
+                scriptPath,
+                'start',
+                '--url', meetInfo.meetUrl,
+                '--staff', staffEmail,
+                '--title', event.summary || '打合せ',
+                '--cards-file', itemState.cardsFile,
+                '--doc-id', docId,
+                '--brief-file', itemState.briefFile || '',
+                '--max-minutes', String(durationMinutes + 30),
+              ];
 
-            itemState.joinedPid = child.pid;
-            actionStatus = `launched_pid_${child.pid}`;
-            console.log(`[meet-cue-scheduler] Meet Bot 起動成功 (PID: ${child.pid}, ${event.summary})`);
-          } catch (err) {
-            console.error(`[meet-cue-scheduler] Meet Bot 起動失敗 (${event.summary}):`, err.message);
-            errors.push({ event: event.summary, stage: 'launch', error: err.message });
+              const child = spawn(process.execPath, args, { detached: true, windowsHide: true, stdio: 'ignore' });
+
+              child.unref();
+
+              itemState.joinedPid = child.pid;
+              actionStatus = `launched_pid_${child.pid}`;
+              console.log(`[meet-cue-scheduler] Meet Bot 起動成功 (PID: ${child.pid}, ${event.summary})`);
+            } catch (err) {
+              console.error(`[meet-cue-scheduler] Meet Bot 起動失敗 (${event.summary}):`, err.message);
+              errors.push({ event: event.summary, stage: 'launch', error: err.message });
+            }
           }
         }
       }
@@ -872,12 +900,17 @@ export async function main(argv = process.argv.slice(2)) {
       console.log(JSON.stringify(result, null, 2));
     }
 
-    if (!result.ok) {
-      process.exit(1);
+    const code = result.ok ? 0 : 1;
+    if (isEntry(import.meta.url)) {
+      process.exit(code);
     }
+    return code;
   } catch (err) {
     console.error('meet-cue-scheduler 致命的エラー:', err);
-    process.exit(1);
+    if (isEntry(import.meta.url)) {
+      process.exit(1);
+    }
+    throw err;
   }
 }
 

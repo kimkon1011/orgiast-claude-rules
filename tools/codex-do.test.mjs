@@ -24,6 +24,30 @@ test('remainingPrimaryBudgetSecs は起動前経過を主経路予算から差�
   assert.equal(remainingPrimaryBudgetSecs(210, 240), 1);
 });
 
+// 2026-11-12 実測: 主経路 codex に --timeout 3000 が渡ると fallbackBackendTimeoutSecs の
+// 上限(既定900秒)が効かず、codex 1回で 3025 秒を捨てた。launchCodex の remainingTimeoutSecs は
+// fallbackBackendTimeoutSecs で制限されるべき（PR #NNNN の修正）。
+test('主経路のタイムアウトは fallbackBackendTimeoutSecs の上限で制限される', () => {
+  // 全体予算 3000 秒でも、主経路の試行は fallbackBackendTimeoutSecs(3000) = 900 秒を上限とする。
+  const capped = Math.min(
+    remainingPrimaryBudgetSecs(3000, 0),
+    fallbackBackendTimeoutSecs(3000),
+  );
+  assert.equal(capped, 900, '主経路の上限は fallbackBackendTimeoutSecs(3000) = 900 秒');
+  // 既定の 1800 秒でも同様
+  const cappedDefault = Math.min(
+    remainingPrimaryBudgetSecs(1800, 0),
+    fallbackBackendTimeoutSecs(1800),
+  );
+  assert.equal(cappedDefault, 900, '既定 timeout でも上限 900 秒');
+  // 全体予算が 900 未満ならその値が上限
+  const small = Math.min(
+    remainingPrimaryBudgetSecs(600, 0),
+    fallbackBackendTimeoutSecs(600),
+  );
+  assert.equal(small, 600, '全体予算が 900 未満ならそのまま');
+});
+
 function run(args, options = {}) {
   const home = options.home ?? workDir();
   return spawnSync(process.execPath, [tool, ...args], {

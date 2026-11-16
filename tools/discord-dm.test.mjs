@@ -211,17 +211,12 @@ test('トークン無しはexit 2で送信しない', async () => {
   } finally { console.log = originalLog; console.error = originalError; }
 });
 
-test('送信本文からAPIキーとAuthorization付きURLを除去する', async () => {
-  const bodies = [];
-  await sendDiscordDm('百瀬', 'key sk-abcdefghijklmnopqr https://example.test/a?Authorization=secret-value', {
-    home, token: 'test-token', resolve, plainJaImpl: async (text) => text,
-    fetchImpl: async (_url, init) => {
-      bodies.push(JSON.parse(init.body));
-      return bodies.length === 1 ? response({ json: { id: 'dm' } }) : response();
-    },
-  });
-  assert.doesNotMatch(bodies[1].content, /sk-abcdefghijklmnopqr|secret-value/);
-  assert.match(bodies[1].content, /\[REDACTED\]/);
+test('秘密値を含む本文は送信を停止する', async () => {
+  const msg = 'key sk-abcdefghijklmnopqr https://example.test/a?Authorization=secret-value';
+  await assert.rejects(
+    () => sendDiscordDm('百瀬', msg, { home, token: 'test-token', resolve, fetchImpl: async () => assert.fail('送信しない') }),
+    /秘密値は DM では送れません/,
+  );
 });
 
 test('新しい絶対ルール行はmakeIndexの出力に全文残る', () => {
@@ -242,6 +237,19 @@ test('kim 宛 dry-run は台帳にも Discord にも書き込まない', async (
 });
 test('報告全文モードでは切り詰め送信を拒否', async () => {
   await assert.rejects(()=>sendDiscordDm('佐藤優奈','あ'.repeat(2500),{home,resolve,noCopyKim:true,noReplyFooter:true,requireFullBody:true,fetchImpl:async()=>assert.fail('長文を一部送信しない')}),/報告全文/);
+});
+test('Webhook URLを含む本文は送信停止', async () => {
+  await assert.rejects(
+    () => sendDiscordDm('百瀬', '設定は https://discord.com/api/webhooks/123456789012345678/AbCdEfGhIjKlMnO41pQrStUvWxYz0123456789_AB です', { home, token: 'test-token', resolve, fetchImpl: async () => assert.fail('送信しない') }),
+    /秘密値は DM では送れません/,
+  );
+});
+test('秘密値を含まない通常本文は送信できる', async () => {
+  const result = await sendDiscordDm('百瀬', '定例報告: 本日の作業は完了しました', {
+    home, token: 'test-token', resolve, noCopyKim: true,
+    fetchImpl: async (_url, init) => init && { ok: true, status: 200, json: async () => init.method === 'POST' && init.body && JSON.parse(init.body).recipient_id ? { id: 'dm' } : { id: 'msg' } },
+  });
+  assert.equal(result.delivered, true);
 });
 test('非 kim 席の写しは転送失敗でもローカル台帳へ残す', async t => {
   const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'dm-remote-'));

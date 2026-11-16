@@ -3,6 +3,9 @@ import path from 'node:path';
 import { normalizeExecutorStatus } from '../executor-status.mjs';
 import { redactAll } from './redact.mjs';
 
+const AUTH_DOMINANT_RATIO = 0.9;
+const AUTH_MIN_FAILURES = 5;
+
 // HTTP 429 / usage limit / cooldown は全て quota 系。cooldown は billing 系と排他（同じ行に cooldown + 402 は起こらない）。
 const http402 = text => /(?<!\d)402(?!\d)/.test(String(text));
 const http403 = text => /(?<!\d)403(?!\d)/.test(String(text));
@@ -86,12 +89,19 @@ export function applyRealLaneHealth(health, home, now = Date.now()) {
     const calls = s?.events.filter(event => event.at > lastOkAt) || [];
     const failures = calls.filter(event => event.reason !== undefined);
     if (calls.length >= 5 && failures.length / calls.length >= .5) {
-      const allAuth = failures.every(event => /basic authentication|HTTP\s*401|\b401\b|unauthorized|login required|token.*expired|Missing bearer/i.test(event.reason || ''));
-      if (allAuth) {
+      const isAuth = event => /basic authentication|HTTP\s*401|\b401\b|unauthorized|login required|token.*expired|Missing bearer|Failed to refresh token|access token could not be refreshed|log out and sign in again|sign in again/i.test(event.reason || '');
+      const authFailures = failures.filter(isAuth);
+      const authDominant = authFailures.length >= AUTH_MIN_FAILURES && authFailures.length / failures.length >= AUTH_DOMINANT_RATIO;
+      if (authDominant) {
         state.alive = false;
         state.reason = lane === 'codex' ? 'dead:oauth_consent' : 'auth_invalid';
         delete state.until;
         state.error = failures.map(event => event.reason).filter(Boolean).join('; ');
+        const otherFailures = failures.filter(event => !isAuth(event));
+        if (otherFailures.length) {
+          const topOther = Object.entries(otherFailures.reduce((reasons, event) => { reasons[event.reason] = (reasons[event.reason] || 0) + 1; return reasons; }, {})).sort((a, b) => b[1] - a[1])[0][0];
+          state.error += `; 認証系 ${authFailures.length}件 / その他 ${otherFailures.length}件: ${topOther}`;
+        }
       } else {
         state.alive = false;
         state.reason = 'real_fail_rate';

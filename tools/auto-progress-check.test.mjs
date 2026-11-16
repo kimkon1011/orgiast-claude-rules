@@ -32,28 +32,26 @@ test('auto-progress refuses a send promise without a matching approval marker', 
   const home = tmp();
   assert.throws(() => addCheck({ session: 'send-without-approval', check: 'exit 1', deadline: '+1d', label: '準備完了', nextClaude: 'LINEへ送信する', home, probe: () => ({ code: 1 }) }), /社外送信は登録できません/);
 });
-test('watch: before deadline stays open; overdue closes and retries final DM; a new revision can complete', async () => {
-  const home = tmp(); register(home); let code = 1, deliveries = 0, fail = true;
-  const io = { ...baseIo, executeCheck: () => ({ code, text: '確認結果\n本文は捨てる' }), notifyOwner: async () => { deliveries++; return { delivered: fail ? 'none' : 'dm' }; } };
-  await watch({ home, now, io }); assert.equal(deliveries, 0);
-  assert.equal(fs.existsSync(path.join(home, '.claude', 'next-session.md')), false);
+test('watch: overdue keeps checking without a new registration and completes on evidence', async () => {
+  const home = tmp(); register(home); let code = 1, checks = 0;
+  const io = { ...baseIo, cwdExists: () => false,
+    executeCheck: () => { checks++; return { code, text: '確認結果\n本文は捨てる' }; },
+    notifyOwner: async () => ({ delivered: 'dm' }) };
+  await watch({ home, now, io });
   const later = now + 86400000;
-  assert.equal((await watch({ home, now: later, io })).errors.length, 1);
-  fail = false;
-  await watch({ home, now: later, io }); await watch({ home, now: later, io });
-  assert.equal(deliveries, 2);
+  for (let i = 0; i < 2; i++) {
+    assert.deepEqual((await watch({ home, now: later, io })).errors, []);
+    assert.equal(readLedger(ledgerFile(home))[0].status, 'overdue');
+  }
+  assert.equal(checks, 3);
   assert.equal(fs.readFileSync(path.join(home, '.claude', 'next-session.md'), 'utf8').match(/- \[ \]/g).length, 1);
-  assert.equal(readLedger(ledgerFile(home))[0].status, 'overdue_reported');
   code = 0;
-  addCheck({ home, now: later + 1, session: 'session', check: 'node check.mjs', label: '着信再確認', deadline: '+24h' });
-  await watch({ home, now: later, io }); await watch({ home, now: later, io });
-  assert.equal(deliveries, 2);
-  assert.equal(listItems(home).filter(i => i.source === 'auto-progress-done').length, 1);
-  const row = readLedger(ledgerFile(home)).at(-1);
+  await watch({ home, now: later + 1, io });
+  const row = readLedger(ledgerFile(home))[0];
   assert.equal(row.status, 'done'); assert.equal(row.checkText, '確認結果\n本文は捨てる');
-  assert.equal((await digest({ home, now: later, io: { notify: () => assert.fail('duplicate digest') } })).sent, false);
-  });
-  test('watch: 未達は毎朝inboxに保存し、同じ内容の定期DMは送らない', async () => {
+  assert.equal(listItems(home).filter(item => /check 達成/.test(item.text)).length, 1);
+});
+test('watch: 未達は毎朝inboxに保存し、同じ内容の定期DMは送らない', async () => {
   const home = tmp(); register(home); const messages = [];
   const io = { ...baseIo, executeCheck: () => ({ code: 1, text: '未達: まだ届いていません' }),
     notifyOwner: async (_, text) => { messages.push(text); return { delivered: 'dm' }; } };
@@ -63,7 +61,8 @@ test('watch: before deadline stays open; overdue closes and retries final DM; a 
   assert.equal(daily.length, 1); assert.match(daily[0].text, /未達: まだ届いていません/);
   assert.equal(readLedger(ledgerFile(home))[0].lastCheckOutput, '未達: まだ届いていません');
   await watch({ home, now: now + 24 * 3600000, io });
-  assert.equal(messages.length, 1); assert.match(messages[0], /期限切れ（/);
+  assert.equal(messages.length, 0);
+  assert.equal(readLedger(ledgerFile(home))[0].status, 'overdue');
   assert.equal(listItems(home).filter(item => item.source === 'auto-progress-heartbeat').length, 1);
 });
   test('watch: failed completion delivery retries without running check again; dry run has no side effects', async () => {
@@ -231,12 +230,13 @@ test('check completion requires inbox read-back and does not retry after success
  assert.equal(readLedger(ledgerFile(home))[0].checkNotifiedResult, 'done');
 });
 
-test('missing Discord, quiet hours and daily DM quota do not suppress nextClaude resume', async () => {
+test('missing Discord and quiet hours do not suppress overdue nextClaude resume', async () => {
   const home = tmp();
-  const later = Date.parse('2026-11-04T16:00:00Z'); // 01:00 JST
-  addCheck({ home, now: later - 3600000, session: 'quiet-check', check: 'x', label: '到着確認', deadline: '+24h', nextClaude: '添付を確認して承認用の本文を作る' });
+  const later = Date.parse('2026-11-04T16:00:00Z');
+  addCheck({ home, now: later - 2 * 3600000, session: 'quiet-check', check: 'x', label: '本文作成確認', deadline: '+1h', nextClaude: '承認用の本文を作る' });
   let resumes = 0;
-  const io = { ...baseIo, clock: () => later, executeCheck: () => ({ code: 0, text: '到着済み' }), resume: async () => { resumes++; return { outcome: 'done', reason: '本文作成済み' }; }, notifyOwner: () => assert.fail('no Discord') };
+  const io = { ...baseIo, clock: () => later, executeCheck: () => ({ code: resumes ? 0 : 1, text: resumes ? '本文作成済み' : '未達' }),
+    resume: async () => { resumes++; return { outcome: 'done', reason: '本文作成済み' }; }, notifyOwner: () => assert.fail('no Discord') };
   const summary = await watch({ home, now: later, io });
   assert.deepEqual(summary.errors, []);
   const [row] = readLedger(ledgerFile(home));
@@ -285,29 +285,21 @@ test('ledger failure after delivery retains inbox and retries the receipt withou
   assert.equal(listItems(home).length, 1);
 });
 
-test('ask file 全文を保存し、人待ちを通知して期限切れは最終報告1回で閉じる', async () => {
- const home = tmp();
- const askFile = path.join(home, 'ask.txt');
- const ask = 'Google アカウントで開いてください。\nスクリプト URL を貼ってください。';
- fs.writeFileSync(askFile, ask);
- const row = addCheck({ home, now, session: 'human', check: 'node check.mjs', label: '清掃報告GAS URL待ち', deadline: '+24h', askFile });
- assert.equal(readLedger(ledgerFile(home))[0].ask, ask);
- const messages = [];
- const io = { ...baseIo, executeCheck: () => ({ code: 1, text: '未達' }), notifyOwner: async (_, text) => { messages.push(text); return { delivered: 'inbox' }; } };
- await watch({ home, now: now + 6 * 3600000, io });
- assert.match(messages[0], /あなたの作業待ち: 清掃報告GAS URL待ち/);
- assert.ok(messages[0].includes(ask));
- assert.doesNotMatch(messages[0], /check の実行ログ/);
- await watch({ home, now: now + 24 * 3600000, io });
- assert.match(messages[1], /期限切れ（2026-10-24T00:00:00.000Z）/);
- await watch({ home, now: now + 47 * 3600000, io });
- assert.equal(messages.length, 2);
- await watch({ home, now: now + 48 * 3600000, io });
- assert.equal(messages.length, 2);
- assert.ok(messages[1].includes(ask));
- assert.equal(readLedger(ledgerFile(home))[0].status, 'overdue_reported');
- assert.ok(readLedger(ledgerFile(home))[0].overdueReportedAt);
- assert.doesNotMatch(fs.readFileSync(path.join(home, '.claude', 'next-session.md'), 'utf8'), /check の実行ログ/);
+test('ask file 全文を保存し、人待ちは期限後も追跡し定期通知する', async () => {
+  const home = tmp(), askFile = path.join(home, 'ask.txt');
+  const ask = 'Google アカウントで開いてください。\nスクリプト URL を貼ってください。';
+  fs.writeFileSync(askFile, ask);
+  writeLedger(ledgerFile(home), [{ ts: new Date(now - 1).toISOString(), sessionId: 'human', status: 'open', nextKim: 'URL を貼る' }]);
+  addCheck({ home, now, session: 'human', check: 'node check.mjs', label: '清掃報告GAS URL待ち', deadline: '+24h', askFile });
+  const messages = [];
+  const io = { ...baseIo, executeCheck: () => ({ code: 1, text: '未達' }), notifyOwner: async (_, text) => { messages.push(text); return { delivered: 'inbox' }; } };
+  for (const hours of [6, 24, 27]) await watch({ home, now: now + hours * 3600000, io });
+  assert.equal(readLedger(ledgerFile(home))[0].status, 'superseded');
+  assert.equal(readLedger(ledgerFile(home)).at(-1).status, 'overdue');
+  assert.equal(messages.length, 3);
+  for (const message of messages) assert.ok(message.includes(ask));
+  assert.equal(readLedger(ledgerFile(home)).at(-1).ask, ask);
+  assert.doesNotMatch(fs.readFileSync(path.join(home, '.claude', 'next-session.md'), 'utf8'), /check の実行ログ/);
 });
 
  test('人待ちで ask がなければ promise を全文表示する', () => {
@@ -468,3 +460,5 @@ test('CLI: --force-check だけでは scratchpad 参照を登録できない', (
     else process.env.ORGIAST_HOME = previousHome;
   }
 });
+
+process.env.ORGIAST_AUTO_RESUME = '1';

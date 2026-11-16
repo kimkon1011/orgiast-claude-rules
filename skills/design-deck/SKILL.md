@@ -29,7 +29,7 @@ Claude が構成・原稿・文字と数字を HTML/CSS で組版し、Gemini �
 
 展示会ブースの提案書（Reブース・木工ブースとも）は、作るたび・作り直すたびに **ChatGPT 系の画像モデルで作ったパースを3案** 入れる。依頼文に「パース」と書かれていなくても入れる。
 
-着手前に必ず `~/.claude/knowledge/production-sales/10_booth-production.md` と `30_memory-booth.md` を、高さ・小間寸法・保有機材・過去失敗について Grep して読む。保有機材リスト（Drive『【マスター】保有機材リスト【オージャスト】』スライド／Reブース保有機材PDF）も読む。
+着手前に必ず `~/.claude/knowledge/production-sales/10_booth-production.md` と `30_memory-booth.md` を、高さ・小間寸法・保有機材・過去失敗について Grep して読む。保有機材リスト（Drive『【マスター】保有機材リスト【オージャスト】』スライド／Reブース保有機材PDF）も読む。寸法既知のパースは必ず `render-dimension-underlay.py` 等で寸法下絵を作り、`booth-perse-gen.mjs --base <下絵PNG>` に渡す。
 
 1. 3案は見積の松竹梅（例: シンプル／スタンダード／インパクト）と1対1で対応させ、各案の違い（展示台・ロゴボックス・光る壁・上部サイン・モニター台数など）を絵で見分けられるようにする。
    - 保有機材を具体名でブリーフと見積に反映する（黒DIYパネル・展示台・ロゴボックス(LED)・ローテーブル＋低椅子4〜5・白スタッキング椅子・32"モニター/LEDビジョンバナー・A1 LEDパネル・LEDチューブ・床パネル等）。保有品を優先し、使わない案は理由を書く。
@@ -107,6 +107,8 @@ node deck-hybrid/preview.mjs
 写真のない図表ページは写真だけ「対象外」とし、採点は `visual-review.json` に記録して `BUILD-REPORT.md` に反映する。元v4の採点を別案件へ流用しない。
 
 1項目でも3点以下なら原因を直し、build→preview→全ページ目視をやり直す。画像デコード、文字切れ、フッター衝突、本文実測行数、写真面積、写真の暗化も `out/preview-checks.json` で確認する。
+
+Chrome 等で直接PDF化した場合も同じ。`node tools/pdf-page-check.mjs --install` で mupdf を導入した後、`node tools/pdf-page-check.mjs --pdf <file>` で全ページをPNGにして Read する。出力した資料が社内向けの記載を含まないことも確認する。
 
 ## 7. PDF と Drive
 

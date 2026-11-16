@@ -1,10 +1,12 @@
 #!/usr/bin/env node
+import { automationModel } from './lib/automation-model.mjs';
 import fs from 'node:fs';
 import { launchAudit } from './unattended-job-audit.mjs';
 import { codexAuthStatus } from './codex-auth-status.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { autoResumeAllowed } from './lib/auto-resume-policy.mjs';
 import { fileURLToPath } from 'node:url';
 import { machineIdentity, getClaudeAccountEmail } from './machine-identity.mjs';
 import { parseHandoff } from './auto-session.mjs';
@@ -187,15 +189,17 @@ export function collectStatus({ home, repo, label, hostname, run = runSync, plat
   return { text: redactSecrets(text), data: { label, hostname, platform, account, codex, git, syncLast, failures, todoCount, promptOptin: accepts.includes('prompt'), codexOptin: accepts.includes('codex'), sharedMemory, knowledge, checkedAt: new Date().toISOString() } };
 }
 
-export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnImpl = spawn, readOnly = false, onStart, resumeSessionId, resumeMailId, drivenByHub = false, home, setTimer = setTimeout, clearTimer = clearTimeout }) {
+export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnImpl = spawn, readOnly = false, onStart, resumeSessionId, resumeSource = 'fleet-exec', resumeMailId, drivenByHub = false, home, setTimer = setTimeout, clearTimer = clearTimeout }) {
   // Fleet mail supplies a durable mail-seen callback; directives have no mail id.
   if (onStart) await onStart();
+  if (resumeSessionId && !autoResumeAllowed({ source: resumeSource })) return { exitCode: null, reason: 'auto-resume disabled by config/auto-resume.json', outputTail: 'auto-resume disabled by config/auto-resume.json' };
   return new Promise((resolve) => {
     const started = Date.now();
     let stdout = '';
     let stderr = '';
     let settled = false;
-    const args = ['-p', ...(resumeSessionId ? ['--resume', resumeSessionId] : [])];
+    // 自動実行（fleet 指示の実行）は Sonnet（2026-11-15 kim 指示）。
+    const args = ['-p', '--model', automationModel(), ...(resumeSessionId ? ['--resume', resumeSessionId] : [])];
     // Fleet mail is answer-only; existing directives retain their original behavior.
     if (readOnly) args.push('--tools', 'Read,Glob,Grep', '--allowedTools', 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--settings', '{"disableAllHooks":true}', '--model', 'sonnet');
     args.push('--', String(body ?? ''));

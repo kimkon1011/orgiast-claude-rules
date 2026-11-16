@@ -7,10 +7,10 @@ function run(command, spawnImpl = spawnSync) {
   return text ? JSON.parse(text) : null;
 }
 
-export function getScheduledTaskInfo(taskName, { spawnImpl = spawnSync } = {}) {
+export async function getScheduledTaskInfo(taskName, { spawnImpl = spawnSync } = {}) {
   const name = String(taskName).replaceAll("'", "''");
-  const command = `try{$t=Get-ScheduledTask -TaskName '${name}' -ErrorAction Stop;$i=Get-ScheduledTaskInfo -TaskName '${name}' -ErrorAction Stop;[pscustomobject]@{taskName=$t.TaskName;state=[string]$t.State;lastRunTime=$i.LastRunTime.ToString('o');nextRunTime=$i.NextRunTime.ToString('o');lastTaskResult=$i.LastTaskResult;neverRun=($i.LastRunTime.Year -le 1999)}|ConvertTo-Json -Compress}catch{if($_.FullyQualifiedErrorId -match 'NoMatchingMSFT_ScheduledTaskFound'){Write-Output 'null'}else{throw}}`;
-  return Promise.resolve(run(command, spawnImpl));
+  const command = `try{$t=Get-ScheduledTask -TaskName '${name}' -ErrorAction Stop;$i=Get-ScheduledTaskInfo -TaskName '${name}' -ErrorAction Stop;[pscustomobject]@{taskName=$t.TaskName;state=[string]$t.State;lastRunTime=$i.LastRunTime.ToString('o');nextRunTime=$i.NextRunTime.ToString('o');lastTaskResult=$i.LastTaskResult;neverRun=($i.LastRunTime.Year -le 1999)}|ConvertTo-Json -Compress}catch{if($_.FullyQualifiedErrorId -match 'NoMatchingMSFT_ScheduledTaskFound|CmdletizationQuery_NotFound_TaskName'){Write-Output 'null'}else{throw}}`;
+  return run(command, spawnImpl);
 }
 
 export function startScheduledTask(taskName, { spawnImpl = spawnSync } = {}) {

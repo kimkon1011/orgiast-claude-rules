@@ -139,6 +139,36 @@ function queryVerdict(prompt, spawn) {
 
 
 const DISCORD_SNOWFLAKE = /^\d{15,}$/;
+const DISCORD_GUILD_ID = '715211007307284530';
+
+function readMemberCache(home) {
+  try { return JSON.parse(fs.readFileSync(path.join(home, '.claude', 'orgiast-discord-members.json'), 'utf8')); } catch { return null; }
+}
+
+export function findMemberInDirectoryCache(userId, home) {
+  const id = String(userId || '');
+  if (!id || !home) return null;
+  const cache = readMemberCache(home);
+  for (const entry of Object.values(cache?.queries || {})) {
+    const hit = (entry?.members || []).find(member => String(member.id) === id);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+export async function fetchDiscordGuildMember(userId, { home, fetchImpl = globalThis.fetch, token } = {}) {
+  const auth = token ?? resolveDiscordBotToken(home);
+  if (!auth) return null;
+  const response = await fetchImpl(`https://discord.com/api/v10/guilds/${DISCORD_GUILD_ID}/members/${encodeURIComponent(userId)}`, {
+    headers: { Authorization: `Bot ${auth}`, 'User-Agent': 'orgiast-discord-dm/1.0' },
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Discord ギルドメンバー取得が HTTP ${response.status}`);
+  const row = await response.json();
+  const id = String(row.user?.id || row.id || '');
+  return id ? { id, username: row.user?.username || null, global_name: row.user?.global_name || null, nick: row.nick || null } : null;
+}
+
 
 export function parseKimApprovedNote(argv) {
   const i = argv.indexOf('--kim-approved');
@@ -157,7 +187,7 @@ export function isInternalDiscordUser(userId, { senders = loadInternalSenders(),
 }
 
 export async function resolveKimApprovedRecipient(channel, target, {
-  home, fetchImpl, getDiscordMembersImpl, getDiscordChannel, internalSenders,
+  home, fetchImpl, getDiscordMembersImpl, getDiscordChannel, getGuildMember, token, internalSenders,
 } = {}) {
   const senders = internalSenders || loadInternalSenders();
   const raw = String(target ?? '').trim();
@@ -180,13 +210,23 @@ export async function resolveKimApprovedRecipient(channel, target, {
   if (DISCORD_SNOWFLAKE.test(raw) && senders.discordUserIds.has(raw)) {
     return { allowed: true, resolvedId: raw, source: 'internal-senders' };
   }
+  const cached = DISCORD_SNOWFLAKE.test(raw) ? findMemberInDirectoryCache(raw, home) : null;
   const matched = DISCORD_SNOWFLAKE.test(raw)
-    ? (members || []).find(member => String(member.id) === raw)
+    ? (members || []).find(member => String(member.id) === raw) || cached
     : matchMember(raw, members);
   if (matched) {
     const userId = String(matched.id);
-    const check = isInternalDiscordUser(userId, { senders, members });
+    const check = isInternalDiscordUser(userId, { senders, members: [...(members || []), matched] });
     return { allowed: check.allowed, resolvedId: userId, source: check.source };
+  }
+  if (DISCORD_SNOWFLAKE.test(raw)) {
+    const guildMember = await (getGuildMember
+      ? getGuildMember(raw)
+      : fetchDiscordGuildMember(raw, { home, fetchImpl, token: token }));
+    if (guildMember) {
+      const check = isInternalDiscordUser(guildMember.id, { senders, members: [...(members || []), guildMember] });
+      if (check.allowed) return { allowed: true, resolvedId: String(guildMember.id), source: check.source };
+    }
   }
   if (DISCORD_SNOWFLAKE.test(raw) && getDiscordChannel) {
     const info = await getDiscordChannel(raw);
@@ -221,7 +261,7 @@ export async function main(argv=process.argv.slice(2), deps={}) {
   console.log(JSON.stringify(verdict,null,2));
   if (kimApproved) {
     const recipient = await (deps.resolveKimApprovedRecipient || resolveKimApprovedRecipient)(channel, target, {
-      home: deps.home, fetchImpl: deps.fetchImpl, getDiscordMembersImpl: deps.getDiscordMembersImpl, getDiscordChannel: deps.getDiscordChannel, internalSenders: deps.internalSenders,
+      home: deps.home, fetchImpl: deps.fetchImpl, getDiscordMembersImpl: deps.getDiscordMembersImpl, getDiscordChannel: deps.getDiscordChannel, getGuildMember: deps.getGuildMember, token: deps.token, internalSenders: deps.internalSenders,
     });
     writeKimApprovedAudit({
       channel, target: result.target, resolvedUserId: recipient.resolvedId, bodyHash: textHash(text),

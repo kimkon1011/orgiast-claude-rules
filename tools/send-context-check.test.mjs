@@ -362,6 +362,7 @@ test('resolveKimApprovedRecipient はディレクトリにないDiscord IDを拒
   const result=await resolveKimApprovedRecipient('discord','111111111111111111',{
     internalSenders: loadInternalSenders(),
     getDiscordMembersImpl: async () => [],
+    getGuildMember: async () => null,
   });
   assert.equal(result.allowed,false);
 });
@@ -384,4 +385,32 @@ test('--kim-approved は安価LLMが全部失敗しても社内宛ならマー�
   const row=JSON.parse(fs.readFileSync(path.join(home,'.claude','logs','send-context-kim-approved.jsonl'),'utf8').trim());
   assert.equal(row.llmOk,false);
   assert.match(row.llmReason,/LLM判定失敗/);
+});
+
+
+test('resolveKimApprovedRecipient はメンバーキャッシュのIDを許可する', async t => {
+  const home=tmp(t);
+  fs.mkdirSync(path.join(home,'.claude'));
+  fs.writeFileSync(path.join(home,'.claude','orgiast-discord-members.json'), JSON.stringify({
+    queries: { '澤山': { fetched_at: '2026-11-16T00:00:00.000Z', members: [{ id:'958259895327686656', username:'.kutuku', global_name:'澤山　貴俊' }] } }
+  }));
+  const result=await resolveKimApprovedRecipient('discord','958259895327686656',{
+    home,
+    internalSenders: loadInternalSenders(),
+    getDiscordMembersImpl: async () => [],
+  });
+  assert.equal(result.allowed,true);
+  assert.equal(result.resolvedId,'958259895327686656');
+  assert.equal(result.source,'discord-member-directory');
+});
+
+test('resolveKimApprovedRecipient はギルドメンバーID照会でも許可する', async () => {
+  const result=await resolveKimApprovedRecipient('discord','958259895327686656',{
+    internalSenders: loadInternalSenders(),
+    getDiscordMembersImpl: async () => [],
+    getGuildMember: async () => ({ id:'958259895327686656', username:'.kutuku', global_name:'澤山　貴俊' }),
+  });
+  assert.equal(result.allowed,true);
+  assert.equal(result.resolvedId,'958259895327686656');
+  assert.equal(result.source,'discord-member-directory');
 });

@@ -131,6 +131,11 @@ export async function getChat(chatID, options = {}) {
   return beeperFetch(`/v1/chats/${encodeURIComponent(chatID)}`, { method: 'GET', ...options });
 }
 
+// Search messages across all conversations.
+export async function searchMessages(query, { limit = 20 } = {}, options = {}) {
+  return await beeperFetch('/v1/messages/search', { method: 'GET', query: { query, limit }, ...options });
+}
+
 // Assets remain behind the Desktop API; mxc/file URLs are never fetched directly.
 export async function downloadAttachment(attachment, options = {}) {
   let url = attachment.srcURL || attachment.url;

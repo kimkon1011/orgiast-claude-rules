@@ -14,6 +14,8 @@ import {
 import { addItem as addKimInboxItem } from './kim-inbox.mjs';
 import { resolveDiscordLink } from './discord-beeper-link.mjs';
 import { collectReadableContent } from './lib/autoreply-attachments.mjs';
+import { extractSearchTerms, searchRelated } from './lib/autoreply-related.mjs';
+import { beeperFetch as beeperFetchFn } from './beeper-api.mjs';
 
 export const DISCORD_ACCOUNT = 'discordgo.715210673642012733';
 const HOUR = 3600000;
@@ -288,11 +290,21 @@ export async function runOnce(options = {}) {
           await decide(`添付取得失敗: ${collected.failures.map(f => `${f.name}: ${f.reason}`).join('; ')}`);
           continue;
         }
+        // Search related conversations for context
+        const docTexts = collected.documents.map(d => d.text);
+        const related = await searchRelated({
+          terms: await extractSearchTerms(question, docTexts, llm),
+          beeperFetch: options.beeperFetch || ((endpoint, init) => beeperFetchFn(endpoint, { ...init, fetchImpl: options.fetchImpl, timeoutMs: 5000 })),
+          excludeMessageIds: new Set(pending.map(m => m.id)),
+          sinceDays: 180, maxItems: 10, maxBytes: 10000,
+          excludeChatIds: chat.id,
+        }).catch(() => []);
         const classifyInput = {
           channelName: chat.title, context: all.slice(-25).map(m => ({ author: m.senderName, content: plainText(m.text), isSelf: m.isSender })),
           message: { content: question },
           knowledge: read(path.join(home, '.claude', 'discord-autoreply', 'knowledge.md')),
           rules: read(path.join(home, '.claude', 'discord-autoreply', 'rules.md')),
+          ...(related.length ? { related } : {}),
           ...(collected.images.length ? { images: collected.images } : {}),
           ...(collected.documents.length ? { documents: collected.documents } : {}),
         };
@@ -326,6 +338,7 @@ export async function runOnce(options = {}) {
             classifyInput.knowledge || '',
             classifyInput.rules || '',
             ...collected.documents.map(d => d.text),
+            ...(classifyInput.related || []).map(r => `[${r.chat}] ${r.sender}: ${r.text}`),
           ].join('\n');
           const invented = inventedAmounts(decision.answer, sourceText);
           if (invented.length > 0) {

@@ -502,3 +502,84 @@ test('beeper: 対象メッセージの添付取得失敗は従来どおり kim-i
   assert.equal(f.inboxItems[0].kind, 'ask');
   assert.match(f.inboxItems[0].text, /target-broken.png: HTTP 404/);
 });
+
+// ─── acquire 堅牢化 ────────────────────────────────────────────────
+
+test('死んだ pid のロックを奪って実行される', async t => {
+  const f = fixture(t);
+  const lockDir = path.join(f.home, '.claude/discord-beeper-autoreply');
+  fs.mkdirSync(lockDir, { recursive: true });
+  fs.writeFileSync(path.join(lockDir, 'lock'), JSON.stringify({ pid: 99999999, host: os.hostname(), ts: Date.now() }));
+  const result = await runOnce(f.options);
+  assert.equal(result.locked, undefined);
+  assert.equal(result.replied, 1);
+  assert.equal(f.sent.length, 1);
+});
+
+test('生存 pid（自プロセス）かつ新しいロックは locked', async t => {
+  const f = fixture(t);
+  const lockDir = path.join(f.home, '.claude/discord-beeper-autoreply');
+  fs.mkdirSync(lockDir, { recursive: true });
+  fs.writeFileSync(path.join(lockDir, 'lock'), JSON.stringify({ pid: process.pid, host: os.hostname(), ts: Date.now() }));
+  const result = await runOnce(f.options);
+  assert.equal(result.locked, true);
+  assert.equal(result.holder.pid, process.pid);
+  assert.equal(result.holder.host, os.hostname());
+  assert.equal(f.sent.length, 0);
+});
+
+test('15分超で異なるホストのロックも奪う', async t => {
+  const f = fixture(t);
+  const lockDir = path.join(f.home, '.claude/discord-beeper-autoreply');
+  fs.mkdirSync(lockDir, { recursive: true });
+  const lockFile = path.join(lockDir, 'lock');
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: 12345, host: 'OTHER-PC', ts: Date.now() - 20 * 60000 }));
+  const old = new Date(Date.now() - 20 * 60000);
+  fs.utimesSync(lockFile, old, old);
+  const result = await runOnce(f.options);
+  assert.equal(result.locked, undefined);
+  assert.equal(result.replied, 1);
+});
+
+test('壊れた JSON で 15分超は奪う', async t => {
+  const f = fixture(t);
+  const lockDir = path.join(f.home, '.claude/discord-beeper-autoreply');
+  fs.mkdirSync(lockDir, { recursive: true });
+  const lockFile = path.join(lockDir, 'lock');
+  fs.writeFileSync(lockFile, 'garbage-bytes');
+  const old = new Date(Date.now() - 20 * 60000);
+  fs.utimesSync(lockFile, old, old);
+  const result = await runOnce(f.options);
+  assert.equal(result.locked, undefined);
+  assert.equal(result.replied, 1);
+});
+
+test('locked も log.jsonl に残る（holder 情報付き）', async t => {
+  const f = fixture(t);
+  const lockDir = path.join(f.home, '.claude/discord-beeper-autoreply');
+  fs.mkdirSync(lockDir, { recursive: true });
+  fs.writeFileSync(path.join(lockDir, 'lock'), JSON.stringify({ pid: 88888, host: 'OTHER-PC', ts: Date.now() }));
+  const result = await runOnce(f.options);
+  assert.equal(result.locked, true);
+  const logFile = path.join(lockDir, 'log.jsonl');
+  assert.equal(fs.existsSync(logFile), true);
+  const lines = fs.readFileSync(logFile, 'utf8').trim().split('\n');
+  const last = JSON.parse(lines[lines.length - 1]);
+  assert.equal(last.locked, true);
+  assert.equal(last.holder.host, 'OTHER-PC');
+  assert.equal(last.holder.pid, 88888);
+  assert.ok(typeof last.holder.ageSec === 'number');
+});
+
+test('壊れた JSON で 15分以内なら locked', async t => {
+  const f = fixture(t);
+  const lockDir = path.join(f.home, '.claude/discord-beeper-autoreply');
+  fs.mkdirSync(lockDir, { recursive: true });
+  fs.writeFileSync(path.join(lockDir, 'lock'), 'corrupt-data');
+  // mtime は直近（utimes しないので作成直後）→ stale にならず locked
+  const result = await runOnce(f.options);
+  assert.equal(result.locked, true);
+  assert.equal(result.holder.pid, 'unknown');
+  assert.equal(result.holder.host, 'unknown');
+  assert.equal(f.sent.length, 0);
+});

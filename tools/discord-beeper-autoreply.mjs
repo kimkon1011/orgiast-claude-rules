@@ -84,9 +84,53 @@ async function historyFor(api, chat) {
 }
 function acquire(dir) {
   const file = path.join(dir, 'lock');
-  try { fs.writeFileSync(file, JSON.stringify({ pid: process.pid, host: os.hostname() }), { flag: 'wx' }); }
-  catch (e) { if (e.code === 'EEXIST') return null; throw e; }
-  return () => fs.unlinkSync(file);
+  const pid = process.pid;
+  const host = os.hostname();
+  const ts = Date.now();
+  const owner = JSON.stringify({ pid, host, ts });
+  let holder = null;
+
+  try {
+    fs.writeFileSync(file, owner, { flag: 'wx' });
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+    let stale = false;
+    let h = { pid: 'unknown', host: 'unknown', ts: null };
+    try {
+      const stat = fs.statSync(file);
+      const raw = fs.readFileSync(file, 'utf8');
+      let existing;
+      try { existing = JSON.parse(raw); h = existing; } catch { /* corrupted JSON */ }
+      if (existing && existing.host === host) {
+        try { process.kill(existing.pid, 0); } catch (e2) { if (e2.code === 'ESRCH') stale = true; }
+      }
+      if (!stale && Date.now() - stat.mtimeMs > 15 * 60000) stale = true;
+      if (!stale) {
+        holder = { pid: h?.pid ?? 'unknown', host: h?.host ?? 'unknown', ts: h?.ts ?? null, ageSec: Math.round((Date.now() - stat.mtimeMs) / 1000) };
+        return { release: null, holder };
+      }
+    } catch { stale = true; }
+    // Steal: unlink and retry wx
+    try { fs.unlinkSync(file); } catch { return { release: null, holder: holder || { pid: 'race', host: 'race', ageSec: 0 } }; }
+    try { fs.writeFileSync(file, owner, { flag: 'wx' }); }
+    catch (e2) { if (e2.code === 'EEXIST') return { release: null, holder: { pid: 'race', host: 'race', ageSec: 0 } }; throw e2; }
+  }
+
+  const heartbeat = setInterval(() => {
+    try {
+      const content = fs.readFileSync(file, 'utf8');
+      if (content === owner) { const d = new Date(); fs.utimesSync(file, d, d); }
+    } catch { /* lock stolen or gone */ }
+  }, 30000);
+  heartbeat.unref();
+
+  return {
+    release: () => {
+      clearInterval(heartbeat);
+      try { if (fs.readFileSync(file, 'utf8') === owner) fs.unlinkSync(file); } catch { /* already gone */ }
+    },
+    holder: null,
+  };
 }
 export async function runOnce(options = {}) {
   const home = options.home || os.homedir(), dryRun = Boolean(options.dryRun), api = options.api || beeper;
@@ -102,9 +146,35 @@ export async function runOnce(options = {}) {
   try {
     if (!dryRun) {
       fs.mkdirSync(dir, { recursive: true });
-      release = acquire(dir);
-      if (!release) return { ...result, locked: true };
-      await flushUnreportedSentLogs(home, { addItemImpl });
+      const acq = acquire(dir);
+      if (acq.holder) {
+        result.locked = true;
+        result.holder = acq.holder;
+      } else {
+        release = acq.release;
+        await flushUnreportedSentLogs(home, { addItemImpl });
+      }
+    }
+    if (result.locked) {
+      // Track continuous locked duration — notify kim-inbox after 30min.
+      const stuckFile = path.join(dir, 'locked-stuck.json');
+      try {
+        const stuckRaw = read(stuckFile);
+        const stuck = stuckRaw ? JSON.parse(stuckRaw) : null;
+        const stuckMs = stuck ? now - new Date(stuck.firstLockedAt).getTime() : 0;
+        if (!stuck || stuckMs < 0) {
+          atomic(stuckFile, { firstLockedAt: new Date(now).toISOString(), notified: false });
+        } else if (stuckMs > 30 * 60000 && !stuck.notified) {
+          addItemImpl(home, {
+            kind: 'info',
+            text: `Beeper autoreply lock が ${result.holder.ageSec || '?'} 秒間取得できません（連続 ${Math.round(stuckMs / 60000)} 分）: holder=${JSON.stringify(result.holder)}。acquire の自動奪取条件（同一 host で pid 不在 または mtime 15分超）を待機中。`,
+            source: 'discord-beeper-autoreply',
+            dedupeKey: 'beeper-autoreply-stuck-lock',
+          });
+          atomic(stuckFile, { firstLockedAt: stuck.firstLockedAt, notified: true });
+        }
+      } catch { /* best-effort */ }
+      return result;
     }
     if (fs.existsSync(path.join(dir, 'PAUSE'))) return { ...result, paused: true };
     const stored = read(stateFile);
@@ -350,6 +420,8 @@ export async function runOnce(options = {}) {
     if (release) {
       try { fs.appendFileSync(path.join(dir, 'log.jsonl'), JSON.stringify({ ts: new Date(now).toISOString(), ...result }) + '\n'); }
       finally { release(); }
+    } else if (result.locked) {
+      try { fs.appendFileSync(path.join(dir, 'log.jsonl'), JSON.stringify({ ts: new Date(now).toISOString(), ...result }) + '\n'); } catch {}
     }
   }
   if (result.errors.length) result.ok = false;

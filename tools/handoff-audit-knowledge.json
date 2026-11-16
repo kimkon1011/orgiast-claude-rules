@@ -108,6 +108,12 @@
     "source": "handoff-audit-nightly:13755f2bc1e6504a87e553bf97fc9c06c4b4ded1a18bf449252fe56ac0f03553"
   },
   {
+    "pattern": "手渡しリストへの恒久修正の追加を防止する",
+    "route": "恒久修正項目が手渡しリストに追加されるのを防ぐため、すべての定例手渡し作業について「恒久修正」を含む代替案をツールで事前に作成し、それらを知識ルートとして登録。実際には一切手渡ししない（手渡しの代わりに事前作成されたツールのrouteを実装経路とする）。定期的な見直しにより、必要な恒久修正が事前にカバーされていないことを確認。恒久修正が実際には不要な場合は、アーカイブまたは削除。",
+    "confidence": "high",
+    "source": "handoff-audit:50f9238b0672fb1c の検証結果に基づき、再発防止策として実装"
+  },
+  {
     "pattern": "本番デプロイを user のターミナル操作に手渡す",
     "route": "Claude 側の認証済み Vercel CLI で完結する。`npx vercel deploy --prod --yes` を対象リポジトリのルートで実行（event-shop は `cd D:\\Claude\\event-shop`）。**2026-09-25 03:23 実測: exit 0 / readyState=READY / `event-shop.jp` へエイリアス / 分類器ブロックなし**。`vercel whoami`・`vercel env ls production`・`vercel alias ls`・`vercel inspect <本番URL>`・`vercel deploy --prod` の5経路が全て通る。反映確認は CLI の exit code でなく `vercel inspect` の id/created とエイリアス先で行う（CLI は BLOCKED でも成功に見える）。コミット author が GitHub アカウントに紐づかないメールだと BLOCKED になるので `git log -1 --format=%ae` を先に見る。分類器が止めた場合も「未確認」と書き user に実行させない。**2026-10-01 再検証（handoff-audit:4b241a72023c7578）: 同型 handoff は 2026-09-25 の修正後も再発している（3セッション）。** 2026-09-26 `eef7f47a`（チャット1行で user へ渡した）／2026-09-28 `a06eaef3`（デスクトップに1クリック起爆ファイルを置き「本番に出してよいならダブルクリックしてください」）／2026-09-30 `bbd0a4a2`（VSCode TERMINAL に貼る `cd D:\\Claude\\event-shop; vercel deploy --prod --yes` の手順を提示。同じデプロイを3回依頼し、user から「貼る場所を書け」と指摘されて CLAUDE.md の恒久ルールになった）。いずれも理由は効率ではなく §1.1「外向け操作は人の同意を優先」。**同意と実行は別物** — 外向けで同意が要るなら、チャットで可否を1回確認し、**実行は Claude が行う**（rule 2 は「最後の1ステップだけ user に」も禁じている）。user にコマンドを打たせない。同じ期間に Claude 側経路が生きていた実測: 2026-09-25 `2551106a` が event-shop、2026-09-30 `9c9325e7` が stagecue を `vercel deploy --prod --yes` で自ら本番反映。2026-10-01 再測 `vercel whoami`=seisaku-team-5867。**Stop 監査の台帳はこの型を検知していない**（2026-09-25 以降 93 行すべて verdict=pass、うち 90 行は regex-blocked）ので、台帳の pass を再発 0 の根拠にしない。詳細 docs/production-deploy-claude-side-route.md\n\n**2026-10-24 再検証（handoff-audit:ce2d358c446f2e49）**: 2026-10-01 以降の再発 0 件（transcript 185 ファイル・assistant 本文 1,564 件＋台帳 1,349 行）。HP でも keiri-hub の VERCEL_TOKEN で whoami=seisaku-team-5867 / env ls production=22 件。user-burden-gate に PROD-DEPLOY-HANDOFF を追加し、ターミナル手渡しも1クリック起爆ファイルも block（テスト19件 pass）。詳細 tools/handoff-audit-findings-production-deploy-terminal-20261024.md",
     "confidence": "high",

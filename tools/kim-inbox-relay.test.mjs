@@ -218,3 +218,11 @@ test('duplicate different workId: each must appear individually', async t => {
   const result = f.judge('【受信箱】\n' + formatInboxBrief(a, 1));
   assert.equal(result.decision, 'block');
 });
+
+test('inboxSummary does not split emoji surrogate pairs at its caps', () => {
+  const loneSurrogate = /(?:[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF])/;
+  const heading = inboxSummary({ kind: 'ask', text: `${'あ'.repeat(139)}🚀 承認待ち: テストが成功しました。🔑 鍵付きです` });
+  const action = inboxSummary({ kind: 'ask', text: `件名\n${'い'.repeat(89)}🚀 承認待ち` });
+  assert.doesNotMatch(heading, loneSurrogate);
+  assert.doesNotMatch(action, loneSurrogate);
+});

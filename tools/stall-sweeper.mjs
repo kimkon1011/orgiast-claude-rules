@@ -91,6 +91,16 @@ export function detectFailedJob(rows, now = Date.now()) {
     // `groq:不明` アーティファクト)。フォールバックチェーンが負荷を吸収するため再実行対象にしない。
     // 実ジョブ(taskName/job/cwd 付帯)の http_429 は従来どおり失敗として拾う。
     if (r.taskName == null && r.job == null && r.cwd == null && /^http_429$/.test(String(r.status))) return [];
+    // テンポラリディレクトリ（Codex の lane-codex-write-* 等）を cwd とするエントリで、
+    // そのディレクトリが既に存在しない場合は正常にクリーンアップ済みであり再実行不能。
+    // 本物の失敗ではなく、毎回再試行してノイズになるだけなので除外する(2026-11-16)。
+    if (r.cwd) {
+      const cwdPath = localPath(r.cwd);
+      if (cwdPath && !fs.existsSync(cwdPath)) {
+        const tempDir = os.tmpdir();
+        if (path.resolve(cwdPath).toLowerCase().startsWith(path.resolve(tempDir).toLowerCase())) return [];
+      }
+    }
     return [item('failed_job', id, `実行失敗: ${id}`, r.location || r.cwd || id, age(r.t, now), 'Codexで原因を調査して安全に再実行',
       `直近の終了コード ${r.status}`, { cwd: localPath(r.cwd), taskName: r.taskName, eventTime: r.t })];
   });

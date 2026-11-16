@@ -6,12 +6,13 @@ import { displayPcNames } from './pc-display.mjs';
 
 export const revisionOf = item => createHash('sha256').update(JSON.stringify([item.kind, item.text, item.revision, item.progressVersion])).digest('hex');
 export const jstDay = now => new Date(now + 9 * 3600000).toISOString().slice(0, 10);
+const cap = (text, length) => Array.from(text).slice(0, length).join('');
 export function inboxSummary(item) {
   const lines = String(item.text).split(/\r?\n/).map(s => s.trim()).filter(Boolean);
   if (item.source === 'knowledge-lock-passkey-link' && lines.some(line => /^登録リンク: https:\/\//.test(line))) return lines.join(' ');
-  const heading = lines.filter(line => !/^(作業ID:|成果物:|自動起票:|原因:|対処:|\d+[.．、)）])/.test(line)).join(' ').slice(0, 140);
+  const heading = cap(lines.filter(line => !/^(作業ID:|成果物:|自動起票:|原因:|対処:|\d+[.．、)）])/.test(line)).join(' '), 140);
   const action = lines.slice(1).find(s => /承認待ち|kim.*(?:判断|承認|操作)|登録リンク/.test(s));
-  return (heading + (action && !heading.includes(action) ? ` / ${action.slice(0, 90)}` : '')).replace(/\s+/g, ' ').trim();
+  return (heading + (action && !heading.includes(action) ? ` / ${cap(action, 90)}` : '')).replace(/\s+/g, ' ').trim();
 }
 export function relayDue(item, sessionId, now = Date.now()) {
   const delivery = item.deliveredToKim;
@@ -27,7 +28,6 @@ const linkGuideLine = /^(?:手順書[（(]|手順書[:：]|開く(?:アカウン
 const stripMarkdown = text => text.replace(/^[#\-*]+\s*/gm, '').replace(/\*\*/g, '').trim();
 const cleanDisplayText = text => stripMarkdown(withoutEmoji(text));
 const stripSubjectBrackets = text => text.replace(/^【([^】]+)】\s*/, '$1 ').trim();
-const cap = (text, length) => Array.from(text).slice(0, length).join('');
 const capTopic = (text, length) => {
   if (Array.from(text).length <= length) return text;
   const shortened = /https?:\/\//.test(text) ? capWithoutSplittingUrl(text, length) : cap(text, length);

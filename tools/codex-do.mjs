@@ -136,8 +136,27 @@ export function decideCodexLane({ lane = 'auto', model, promptText = '', timeout
 // -c splits keys on dots, so a quoted "makeloop@makeloop" key is not addressable; override the table as TOML.
 export const DISABLE_MAKELOOP = ['-c', 'plugins={"makeloop@makeloop"={enabled=false}}'];
 
+// X-0046: Codex の不要機能を --disable で除外し、システムプロンプトの肥大化を防いでトークンを節約する。
+// ➀ブラウザ操作（browser_use）➁画面操作（computer_use）➂画像生成（image_generation）
+// ➃画像表示（view_image）➄音声（in_app_voice / in_app_dictation）➅アプリ内ブラウザ（in_app_browser）
+// ➆sleep_tool（ブース自動化やイベント資料生成のコード実装には不要）。
+// shell_tool, plugins, code_mode, incremental_tools 等の実装に必要な機能は維持する。
+// このリストは codex features list から抽出した stable かつ不要なもの。
+export const DISABLE_UNUSED_FEATURES = [
+  '--disable', 'browser_use',
+  '--disable', 'browser_use_external',
+  '--disable', 'browser_use_full_cdp_access',
+  '--disable', 'computer_use',
+  '--disable', 'image_generation',
+  '--disable', 'in_app_browser',
+  '--disable', 'in_app_dictation',
+  '--disable', 'in_app_voice',
+  '--disable', 'sleep_tool',
+  '--disable', 'view_image',
+];
+
 export function buildCodexExecArgs({ slug, effort, review = false } = {}) {
-  return ['exec', ...(slug ? ['-m', slug] : []), ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []), ...DISABLE_MAKELOOP, '-s', review ? 'read-only' : 'workspace-write', '-'];
+  return ['exec', ...(slug ? ['-m', slug] : []), ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []), ...DISABLE_MAKELOOP, ...DISABLE_UNUSED_FEATURES, '-s', review ? 'read-only' : 'workspace-write', '-'];
 }
 
 // Windows ネイティブの codex は `-s workspace-write` を渡しても必ず read-only に倒れ、

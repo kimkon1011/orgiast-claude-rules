@@ -828,6 +828,14 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
         return;
       }
       timedOut = true;
+      // Resolve the promise first so the caller sees the timeout immediately,
+      // regardless of how long process cleanup takes (e.g. new Worker() on
+      // Windows CI can block for seconds). The kill below continues asynchronously.
+      child.stdin?.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.unref();
+      complete(null);
       // taskkill can take seconds on Windows. Do not block the deadline or wait for
       // inherited pipes to close before advancing. Its /T cleanup continues independently.
       if (child.pid) {
@@ -851,11 +859,6 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
           });
         } else { try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} } }
       }
-      child.stdin?.destroy();
-      child.stdout.destroy();
-      child.stderr.destroy();
-      child.unref();
-      complete(null);
     }, laneTimeoutMs);
     const complete = (code) => {
       if (settled) return;

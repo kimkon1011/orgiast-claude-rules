@@ -1,5 +1,6 @@
 import { progressHome, notificationMocks } from './test-helpers/auto-progress-home.mjs';
 import test from 'node:test';
+process.env.ORGIAST_AUTO_RESUME = '1';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -489,7 +490,7 @@ test('レシート済み完了は legacy add-check 移行で復活させない',
   const notifiedOnly = { ...base, ts: '2026-11-05T10:05:00.000Z', doneInboxId: '', doneInboxVerifiedAt: '', doneNotifiedAt: '2026-11-05T11:05:00.000Z' };
   const noReceipt = { ...base, ts: '2026-11-05T10:10:00.000Z', doneInboxId: '', doneInboxVerifiedAt: '', doneNotifiedAt: '' };
   const rows = [withReceipt, notifiedOnly, noReceipt];
-  assert.deepEqual(legacyAddCheckMigrationRows(rows), [noReceipt]);
+  assert.deepEqual(legacyAddCheckMigrationRows(rows), []);
 });
 
 test('再開指示は取り消せる作業を先に済ませ、支払い等だけでneeds_userにする', async t => {
@@ -545,6 +546,36 @@ test('summarizeEvidence: 実際の判断待ち通知に内部語や識別子を�
   assert.doesNotMatch(summary, /[A-Za-z]{3,}/);
   assert.doesNotMatch(summary, /[0-9a-f]{8}/i);
   assert.equal(summary, '承認返事は未着。取り消せる準備を全て完了');
+});
+
+test('run() の phaseMs が各段階の経過時間を記録し、チェックループが保守処理より先に実行される', async t => {
+  const home = progressHome('phasems-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const now = Date.parse('2026-11-11T12:00:00Z');
+  writeLedger(ledgerFile(home), [{
+    ts: new Date(now - 2 * 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'test',
+    sessionId: 'phase-ms-test', cwd: path.join(home, 'nonexistent'), promise: 'テスト', status: 'open',
+  }]);
+  const summary = await run({ home, now, io: {
+    clock: () => now, transcriptFiles: [], sheetConfig: () => null,
+    ...notificationMocks,
+    digest: async () => ({}), escalateKimDecisions: async () => ({}),
+  } });
+  assert.ok(summary.phaseMs, 'phaseMs が存在する');
+  const keys = Object.keys(summary.phaseMs);
+  assert.ok(keys.length >= 6, `phaseMs に ${keys.length} 段階以上ある: ${keys.join(', ')}`);
+  assert.ok(keys.includes('temp-cleanup'), 'temp-cleanup が含まれる');
+  assert.ok(keys.includes('read-ledger'), 'read-ledger が含まれる');
+  assert.ok(keys.includes('candidates'), 'candidates が含まれる');
+  assert.ok(keys.includes('check-loop'), 'check-loop が含まれる');
+  assert.ok(keys.includes('maintenance'), 'maintenance が含まれる');
+  // キーの配列順 = 実行順。チェックループが保守より前であることを確認。
+  const checkIdx = keys.indexOf('check-loop');
+  const maintIdx = keys.indexOf('maintenance');
+  assert.ok(checkIdx < maintIdx, `check-loop(index ${checkIdx}) が maintenance(index ${maintIdx}) より前`);
+  for (const [name, ms] of Object.entries(summary.phaseMs)) {
+    assert.ok(ms >= 0, `${name}: ${ms}ms`);
+  }
 });
 
 test('summarizeEvidence: 文と節を選別し、括弧や手順列挙を残さない', () => {

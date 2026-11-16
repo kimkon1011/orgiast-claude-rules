@@ -64,6 +64,27 @@ test('parseLlmResult: 完了のnextは空にしconfidenceを丸める', () => {
   );
 });
 
+test('relocatedCwd が cwd として採用される（bridge-session 対応）', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-triage-relocated-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const project = path.join(root, 'projects', 'fixture');
+  await fs.mkdir(project, { recursive: true });
+  const transcript = [
+    { type: 'bridge-session', sessionId: '00000000-0000-0000-0000-000000000001' },
+    { type: 'last-prompt', lastPrompt: '福利厚生カフェレシートの修正' },
+    { type: 'custom-title', customTitle: '【11/13/09:54まで】社員立替経費アプリ' },
+    { type: 'relocated', relocatedCwd: 'C:\\Users\\test\\Desktop', sessionId: '00000000-0000-0000-0000-000000000001' },
+    { type: 'user', timestamp: '2026-11-01T00:00:00Z', message: { role: 'user', content: '立替経費の修正' } },
+    { type: 'assistant', timestamp: '2026-11-01T00:01:00Z', message: { role: 'assistant', content: '修正完了' } },
+  ];
+  await fs.writeFile(path.join(project, 'f84f4059-586b-4161-a9ab-c026ad9adb7e.jsonl'), `${transcript.map(JSON.stringify).join('\n')}\n`);
+  const { stdout } = await execFileAsync(process.execPath, [fileURLToPath(new URL('./session-triage.mjs', import.meta.url)), '--all', '--include-current', '--include-closed', '--include-completed', '--json'], {
+    env: { ...process.env, CLAUDE_PROJECTS_DIR: path.join(root, 'projects') },
+  });
+  const session = JSON.parse(stdout).sessions[0];
+  assert.equal(session.cwd, 'C:\\Users\\test\\Desktop');
+});
+
 test('合成APIエラー行はassistant返答に数えず末尾user未応答になる', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-triage-api-error-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

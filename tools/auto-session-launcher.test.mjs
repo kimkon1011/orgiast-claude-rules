@@ -372,7 +372,7 @@ test('3日より古い fallback tree だけ削除し、掃除が失敗しても�
     // 期待値も同じ組み立て方で比較する。
     const expectedRemovedPath = path.join(dir, path.basename(oldFallback));
     assert.ok(calls.some((call) => call.command === 'git'
-      && call.args.join(' ') === `worktree remove ${expectedRemovedPath}`));
+      && call.args.join(' ') === `worktree remove --force ${expectedRemovedPath}`));
     assert.equal(
       calls.some((call) => call.command === 'git' && call.args.some((arg) => arg.includes(path.basename(recentFallback)))),
       false,

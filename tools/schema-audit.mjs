@@ -17,6 +17,12 @@ const SCHEMA_RULES = {
   HowTo: { required: ['name', 'step'], recommended: ['totalTime', 'estimatedCost'] },
   Project: { required: ['name'], recommended: ['description', 'url'] },
   BreadcrumbList: { required: ['itemListElement'], recommended: [] },
+  Product: { required: ['name', 'description'], recommended: ['brand', 'offers', 'aggregateRating', 'category'] },
+  Offer: { required: ['price', 'priceCurrency'], recommended: ['availability', 'priceValidUntil', 'url'] },
+  AggregateRating: { required: ['ratingValue', 'ratingCount', 'itemReviewed'], recommended: ['bestRating', 'reviewCount'] },
+  Review: { required: ['reviewBody', 'author', 'itemReviewed'], recommended: ['reviewRating', 'datePublished'] },
+  Brand: { required: ['name'], recommended: ['description', 'url', 'logo', 'slogan', 'sameAs'] },
+  ItemList: { required: ['name', 'itemListElement'], recommended: ['description'] },
 };
 
 function extractJsonLd(html) {

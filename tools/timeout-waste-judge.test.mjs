@@ -157,6 +157,31 @@ test('主経路でも与えた予算を超えたら上限超過としてバッ�
   assert.equal(report.overCapAttempts[0].budgetSecs, 1800);
 });
 
+// 2026-11-12 実測: gpt-6-astra が --timeout 3000 で 3025 秒動いた。予算 3000 を 25 秒超えているため
+// waste-exceeds-cap（TIMEOUT_KILL_FIX_MERGED_AT より前なので明示的に since を指定）。
+test('2026-11-12 実例（主経路 codex gpt-6-astra / 3025.112 秒 / timeoutSecs=3000）は上限超過', () => {
+  const report = judgeTimeoutRows([
+    {
+      t: '2026-11-12T01:33:52.714Z',
+      provider: 'codex',
+      model: 'codex-cli/gpt-6-astra',
+      lane: 'long_timeout',
+      timedOut: true,
+      status: 'timeout',
+      timeoutSecs: 3000,
+      secs: 3025.112,
+      origin: 'unattended',
+    },
+  ], { since: '2026-11-03T15:38:52Z' }); // 古い基準時刻で判定
+  assert.equal(report.verdict, 'waste-exceeds-cap');
+  assert.equal(report.overCapRows, 1);
+  assert.equal(report.overCapAttempts[0].path, 'primary');
+  assert.equal(report.overCapAttempts[0].backend, 'codex');
+  assert.equal(report.overCapAttempts[0].budgetSecs, 3000);
+  assert.equal(report.overCapAttempts[0].secs, 3025.112);
+  assert.equal(report.maxAttemptSecs, 3025.112);
+});
+
 test('チェーン試行は記録された budgetSecs を予算に使う', () => {
   const report = judgeTimeoutRows([
     { t: '2026-10-21T00:00:00Z', provider: 'fallback', timedOut: true, secs: 950, chain: [

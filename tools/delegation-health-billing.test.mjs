@@ -98,3 +98,27 @@ test('24h の恒久課金切れ cooldown があれば reason 無しの 429 で�
   assert.equal(finding?.severity, 'low');
   assert.match(finding.evidence.join(' '), /cooldown http_429/);
 });
+
+test('cooldown 中に no_output が混じっても lane_outage_unrepaired にしない', () => {
+  // 実測 2026-11-14: gemini 470 件 = quota_limited 469 + no_output 1。
+  // provider-cooldown に reason:"billing" のエントリがあるが permanentBilling なし。
+  // 従来は benign.length(469) !== attempts.length(470) で lane_outage_unrepaired。
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [
+    ...[0, 1, 2, 3].map((n) => row({
+      t: new Date(NOW.getTime() - n * 60_000).toISOString(), provider: 'gemini', status: 'http_429', out: 0,
+    })),
+    ...[0, 1, 2, 3, 4].map((n) => row({
+      t: new Date(NOW.getTime() - n * 120_000).toISOString(), provider: 'gemini', status: 'http_429', out: 0,
+    })),
+    // no_output: status='error' は infra_transient/quota_limited どちらにも該当せず no_output になる
+    row({ t: new Date(NOW.getTime() - 300_000).toISOString(), provider: 'gemini', status: 'error', out: 0 }),
+  ].join(''));
+  write(dir, 'provider-cooldown.json', { gemini: { until: NOW.getTime() + 86_400_000, at: NOW.getTime(), reason: 'billing' } });
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((item) => item.id === 'lane_outage_unrepaired'), false);
+  const finding = findings.find((item) => item.id === 'provider_usage_limit');
+  assert.equal(finding?.severity, 'low');
+  assert.equal('fixTask' in finding, false);
+  assert.match(finding.evidence.join(' '), /cooldown 中の artifact/);
+});

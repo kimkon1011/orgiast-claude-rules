@@ -51,7 +51,7 @@ export function realLaneStats(home, now = Date.now()) {
       const http = detail.match(/(?:HTTP[ _:]*|(?:^|\s))([45]\d\d)\b/i)?.[1];
       const reason = redactAll(http ? `HTTP ${http} ${detail.slice(0, 100)}` : String(row.reason || row.stderr || row.stderrTail || row.spawnError || row.status || detail).split(/\r?\n/)[0]).slice(0, 180);
       event.reason = reason;
-      event.detail = detail;
+      event.detail = redactAll(detail);
       s.reasons[reason] = (s.reasons[reason] || 0) + 1;
       continue;
     }
@@ -73,7 +73,7 @@ export function realLaneStats(home, now = Date.now()) {
     const http = detail.match(/(?:HTTP[ _:]*|(?:^|\s))([45]\d\d)\b/i)?.[1];
     const reason = redactAll(http ? `HTTP ${http}` : String(row.reason || row.stderr || row.stderrTail || row.spawnError || row.status).split(/\r?\n/)[0]).slice(0, 180);
     event.reason = reason;
-    event.detail = detail;
+    event.detail = redactAll(detail);
     s.reasons[reason] = (s.reasons[reason] || 0) + 1;
   }
   for (const s of Object.values(providers)) s.failRate = s.calls ? s.failures / s.calls : 0;
@@ -101,9 +101,14 @@ export function applyRealLaneHealth(health, home, now = Date.now()) {
     const lastOkAt = Math.max(s?.lastOkAt || 0, probeOkAt);
     const calls = s?.events?.filter(event => event.at > lastOkAt) || [];
     const failures = calls.filter(event => event.reason !== undefined);
-    const hasAuthError = (s?.events?.length ? s.events.some(e => e.at > probeOkAt && authFailurePattern.test(e.reason || e.detail || '')) :
-      s?.reasons ? Object.keys(s.reasons).some(r => authFailurePattern.test(r)) && (!probeOkAt || millis(state.probedAt) > probeOkAt || (s.lastOkAt || 0) < millis(state.probedAt)) : false) ||
-      (state.error && authFailurePattern.test(state.error) && (!probeOkAt || now >= probeOkAt));
+    // A stopped lane must not hide newer auth evidence behind quota/failure state.
+    // Live lanes keep the existing minimum sample and auth-dominance thresholds.
+    const hasAuthError = !state.alive && (
+      (s?.events?.length ? calls.some(e => authFailurePattern.test(`${e.reason || ''} ${e.detail || ''}`)) :
+        s?.reasons && Object.keys(s.reasons).some(r => authFailurePattern.test(r))
+          && (!lastOkAt || millis(state.probedAt) > lastOkAt)) ||
+      (state.error && authFailurePattern.test(state.error)
+        && (!lastOkAt || millis(state.probedAt) > lastOkAt)));
     if (hasAuthError) {
       state.alive = false;
       state.reason = 'dead:oauth_consent';

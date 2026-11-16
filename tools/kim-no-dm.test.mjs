@@ -20,8 +20,9 @@ test('kim 宛は常に inbox だけで Discord API を呼ばない', async t => 
   const dir = home(t);
   for (const [kind, text] of [['action', '判断してください'], ['automatic', '緊急の障害'], ['digest', '【進捗まとめ】'], ['done-requested', '✅ 完了']]) {
     const calls = [];
-    const result = await deliverKim(text, { home: dir, userId: KIM_DISCORD_USER_ID, kind, plainJa: false, token: 'unused', sessionId: 'kim-no-dm-session', fetchImpl: async () => { calls.push('called'); return Response.json({}); } });
+    const result = await deliverKim(text, { home: dir, userId: KIM_DISCORD_USER_ID, kind, plainJa: false, token: 'unused', sessionId: 'kim-no-dm-session', discordAllowed: () => ({ allowed: true }), fetchImpl: async () => { calls.push('called'); return Response.json({}); } });
     assert.equal(result.delivered, 'session-inbox', `テキスト「${text}」がDM配送されました`);
+    assert.equal(result.channel, 'kim-inbox');
     assert.equal(calls.length, 0, `テキスト「${text}」でDiscordが呼ばれました`);
   }
   assert.equal(listItems(dir).length, 4);
@@ -62,7 +63,7 @@ test('raw DM channel transports are audited; new bypasses fail this inventory', 
     ['discord-dm.mjs', 'const inbox = isKim;'],
     ['feedback-nag.mjs', 'if (deferred) return deferred;'],
     ['notify-kim.mjs', 'return persistKim(home,'],
-    ['sga-autopilot.mjs', 'if (userId === KIM_DISCORD_USER_ID) await (deps.deliverKim || deliverKim)'],
+    ['sga-autopilot.mjs', 'if (isKimRecipient({ id: userId })) await (deps.deliverKim || deliverKim)'],
     ['feedback-kit/gas/templates/FeedbackRelay.js', 'kim-inbox'],
   ]);
   const walk = dir => fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => {

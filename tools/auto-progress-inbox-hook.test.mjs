@@ -1,7 +1,47 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { appendOwnerInbox, appendInbox, consumeInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
+import { appendMobilePush, mobilePushQueueFile, pendingMobilePush, markMobilePushSent } from './lib/mobile-push-queue.mjs';
+import { main as progressReminder } from './intra-turn-progress-reminder.mjs';
+import { resolveOwner } from './lib/fleet-owner.mjs';
+
+test('only hook output deduplicates mobile push across PostToolUse and UserPromptSubmit', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cross-hook-push-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const owner = resolveOwner({ home });
+  const input = { session_id: 'cross-hook' }, options = { home, env: {} };
+  const runHook = (script, hookInput = input) => {
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL(script, import.meta.url))], {
+      input: JSON.stringify(hookInput), encoding: 'utf8', timeout: 15000,
+      env: { ...process.env, HOME: home, USERPROFILE: home, ORGIAST_HOME: home,
+        CLAUDE_HEADLESS: '', ORGIAST_HEADLESS_JOB: '', INTRA_TURN_PROGRESS_DISABLED: '', INTRA_TURN_PROGRESS_THRESHOLD: '20' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim() ? JSON.parse(result.stdout).hookSpecificOutput.additionalContext : '';
+  };
+  const reminderScript = './intra-turn-progress-reminder.mjs';
+  const inboxScript = './auto-progress-inbox-hook.mjs';
+  appendMobilePush(home, { owner, title: '進捗', body: '確認中' });
+  const before = fs.readFileSync(mobilePushQueueFile(home), 'utf8');
+  // Calling the queue consumers does not claim that context was emitted.
+  assert.match(progressReminder(input, options).pushContext, /スマホ通知/);
+  assert.match(consumeInbox(input, options).hookSpecificOutput.additionalContext, /スマホ通知/);
+  assert.match(runHook(reminderScript), /未送信 1 件/);
+  assert.doesNotMatch(runHook(reminderScript), /スマホ通知/);
+  assert.doesNotMatch(runHook(inboxScript), /スマホ通知/);
+  assert.equal(fs.readFileSync(mobilePushQueueFile(home), 'utf8'), before);
+  appendMobilePush(home, { owner, title: '進捗2', body: '完了' });
+  assert.match(runHook(inboxScript), /未送信 2 件/);
+  assert.doesNotMatch(runHook(inboxScript), /スマホ通知/);
+  assert.doesNotMatch(runHook(reminderScript), /スマホ通知/);
+  assert.match(runHook(reminderScript, { session_id: 'other' }), /未送信 2 件/);
+  markMobilePushSent(home, pendingMobilePush(home).map(row => row.id));
+  assert.doesNotMatch(runHook(inboxScript), /スマホ通知/);
+  assert.deepEqual(pendingMobilePush(home), []);
+});
 
 test('inbox を hook に注入して既読化する', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'progress-inbox-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));

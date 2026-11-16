@@ -1,6 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+export function isHousekeepingOnly(text) {
+  if (!text) return false;
+  const s = String(text).trim();
+  // 「不要」「なし」で始まる（なし/無し/ナシ/特になし/不要/不要。 を拡張で包含）
+  if (/^(?:特に)?(?:なし|無し|ナシ)/.test(s)) return true;
+  if (/^不要[。、]?/.test(s)) return true;
+  // タブやセッションの片付けだけ: タブを閉じる／✕ で閉じる／新しいタブで Enter／Enter を1回押す／セッションを閉じる
+  if (/(?:タブ|✕|セッション).*閉じる|閉じる.*(?:タブ|✕|セッション)|Enter.*(?:1回)?押す/.test(s)) return true;
+  return false;
+}
+
 // Read only explicitly linked artifacts or the DONE sibling of a checked job log.
 export function checkLogPaths(row) {
   return [...String(row.check || row.startWhen || '').matchAll(/['"]([^'"\r\n]+\.log)['"]/g)].map(m => m[1]);
@@ -41,7 +52,7 @@ export function completionActions(row, { home, readFile = fs.readFileSync } = {}
     } catch (error) { errors.push(`${file}: ${error.code || error.message}`); }
   }
   const next = String(row.nextKim || '').trim();
-  if (next && !/^(?:特に)?(?:なし|無し|ナシ)/.test(next)) return { kind: 'ask', actions: [next], text: `kim がすること: ${next}` };
+  if (next && !isHousekeepingOnly(next)) return { kind: 'ask', actions: [next], text: `kim がすること: ${next}` };
   if (readable) return { kind: 'info', file: readable, actions: [], text: `成果物: ${readable}\nkim がすること: 成果物に承認待ちの列挙なし` };
   return { kind: 'info', actions: [], text: errors.length ? `成果物の確認未了: ${errors.join(' / ')}\nkim の承認待ち: 未確認` : 'kim がすること: なし（台帳上。成果物の指定なし）' };
 }

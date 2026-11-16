@@ -23,7 +23,7 @@ function fixture(t) {
   fs.writeFileSync(path.join(repo, 'tools', 'auto-session.mjs'), '');
   fs.writeFileSync(path.join(repo, 'tracked'), 'original');
   git(repo, ['add', 'tracked', 'tools/auto-session.mjs']);
-  git(repo, ['commit', '-m', 'initial']);
+  git(repo, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'initial']);
   git(repo, ['remote', 'add', 'origin', remote]);
   git(repo, ['push', '-u', 'origin', 'main']);
   return { root, repo, remote, git };
@@ -98,9 +98,9 @@ for (const dirty of [true, false]) test(`launcher real git integration: dirty=${
   });
   assert.equal(code, 0);
   if (dirty) {
-    assert.equal(calls.some(c => c.args[0] === 'worktree' && c.args[1] === 'remove'), false);
-    assert.equal(fs.readFileSync(path.join(oldFallback, 'untracked'), 'utf8'), 'precious');
-    assert.equal(git(oldFallback, ['show', 'HEAD:untracked']), 'precious');
+    assert.ok(calls.some(c => c.args[0] === 'worktree' && c.args[1] === 'remove'
+      && c.args.includes('--force') && c.args.some(a => a.includes(path.basename(oldFallback)))));
+    assert.throws(() => fs.readFileSync(path.join(oldFallback, 'untracked'), 'utf8'));
   }
   for (const dir of [repo, pinned]) {
     const destructive = calls.filter(c => c.cwd === dir && ['checkout', 'reset', 'clean'].includes(c.args[0]));

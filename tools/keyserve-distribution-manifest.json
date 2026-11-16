@@ -104,6 +104,14 @@
         "ORGIAST_KEYSERVE_SECRET",
         "ORGIAST_KEYSERVE_PC"
       ]
+    },
+    {
+      "source": "ORGIAST_KEYS_JSON_EXTRA_SECURITY_HEALTH",
+      "file": "security-health-oauth.env",
+      "keys": [
+        "SECURITY_HEALTH_OAUTH_CLIENT_ID",
+        "SECURITY_HEALTH_OAUTH_CLIENT_SECRET"
+      ]
     }
   ],
   "unverified": [

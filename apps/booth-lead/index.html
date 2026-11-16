@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ブースAIリード</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- QRコード読み取りライブラリ -->
+  <script src="https://unpkg.com/html5-qrcode" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <!-- ナビゲーション -->
+  <header class="app-header">
+    <h1 class="app-title">ブースAIリード</h1>
+    <nav class="tab-nav" role="tablist" aria-label="メインタブ">
+      <button class="tab-btn active" role="tab" aria-selected="true" aria-controls="panel-scan" id="tab-scan" data-tab="scan">スキャン</button>
+      <button class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-dashboard" id="tab-dashboard" data-tab="dashboard">ダッシュボード</button>
+      <button class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-conversation" id="tab-conversation" data-tab="conversation">会話</button>
+      <button class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-campaign" id="tab-campaign" data-tab="campaign">キャンペーン</button>
+    </nav>
+  </header>
+
+  <!-- メインコンテンツ -->
+  <main class="app-main">
+
+    <!-- ========== スキャンタブ ========== -->
+    <section class="tab-panel active" id="panel-scan" role="tabpanel" aria-labelledby="tab-scan">
+      <div class="scan-layout">
+        <!-- QRスキャナー -->
+        <div class="scan-section">
+          <h2 class="section-title">QRスキャン</h2>
+          <div id="qr-reader" class="qr-reader-container" aria-label="QRコードスキャナー"></div>
+          <div id="qr-reader-results" class="qr-status" aria-live="polite">カメラを起動中...</div>
+          <div class="form-field camera-field">
+            <label for="camera-select">使用するカメラ</label>
+            <select id="camera-select" class="select-lg" aria-label="使用するカメラ">
+              <option value="">背面カメラ（自動選択）</option>
+            </select>
+          </div>
+          <div class="btn-group">
+            <button id="btn-start-scan" class="btn btn-primary">スキャン開始</button>
+            <button id="btn-stop-scan" class="btn btn-secondary" disabled>停止</button>
+          </div>
+        </div>
+
+        <!-- 手動入力 -->
+        <div class="scan-section">
+          <h2 class="section-title">手動入力</h2>
+          <p class="section-desc">QRコードが読めない場合は手動で入力してください</p>
+          <form id="lead-form" class="lead-form" novalidate>
+            <div class="form-field">
+              <label for="input-name">名前 <span class="required">*</span></label>
+              <input type="text" id="input-name" name="name" required autocomplete="name" placeholder="山田 太郎">
+            </div>
+            <div class="form-field">
+              <label for="input-company">会社名 <span class="required">*</span></label>
+              <input type="text" id="input-company" name="company" required placeholder="株式会社オージャスト">
+            </div>
+            <div class="form-field">
+              <label for="input-position">役職</label>
+              <input type="text" id="input-position" name="position" placeholder="部長">
+            </div>
+            <div class="form-field">
+              <label for="input-email">メールアドレス</label>
+              <input type="email" id="input-email" name="email" placeholder="taro@example.com">
+            </div>
+            <div class="form-field">
+              <label for="input-phone">電話番号</label>
+              <input type="tel" id="input-phone" name="phone" placeholder="03-1234-5678">
+            </div>
+            <div class="form-field">
+              <label for="input-interests">関心事項</label>
+              <textarea id="input-interests" name="interests" rows="2" placeholder="例: 新製品A, デモ希望"></textarea>
+            </div>
+            <div class="form-field">
+              <label for="input-notes">メモ</label>
+              <textarea id="input-notes" name="notes" rows="2" placeholder="来場者の様子など"></textarea>
+            </div>
+            <div id="form-error" class="form-error" role="alert" hidden></div>
+            <button type="submit" class="btn btn-primary btn-lg btn-full">リードを登録</button>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== ダッシュボードタブ ========== -->
+    <section class="tab-panel" id="panel-dashboard" role="tabpanel" aria-labelledby="tab-dashboard">
+      <h2 class="section-title">ダッシュボード</h2>
+
+      <!-- 統計カード -->
+      <div class="stats-grid" id="stats-grid" aria-live="polite">
+        <div class="stat-card stat-total">
+          <div class="stat-value" id="stat-total">0</div>
+          <div class="stat-label">総リード</div>
+        </div>
+        <div class="stat-card stat-hot">
+          <div class="stat-value" id="stat-hot">0</div>
+          <div class="stat-label">HOT</div>
+        </div>
+        <div class="stat-card stat-warm">
+          <div class="stat-value" id="stat-warm">0</div>
+          <div class="stat-label">WARM</div>
+        </div>
+        <div class="stat-card stat-cold">
+          <div class="stat-value" id="stat-cold">0</div>
+          <div class="stat-label">COLD</div>
+        </div>
+        <div class="stat-card stat-avg">
+          <div class="stat-value" id="stat-avg">0</div>
+          <div class="stat-label">平均スコア</div>
+        </div>
+      </div>
+
+      <!-- 検索 -->
+      <div class="search-bar">
+        <label for="search-leads" class="sr-only">リード検索</label>
+        <input type="search" id="search-leads" class="search-input" placeholder="名前・会社名で検索..." aria-label="リード検索">
+      </div>
+
+      <!-- リード一覧 -->
+      <div class="leads-table-wrapper">
+        <table class="leads-table" id="leads-table" aria-label="リード一覧">
+          <thead>
+            <tr>
+              <th>スコア</th>
+              <th>カテゴリ</th>
+              <th>名前</th>
+              <th>会社</th>
+              <th>役職</th>
+              <th>登録日時</th>
+            </tr>
+          </thead>
+          <tbody id="leads-tbody">
+            <tr class="empty-row">
+              <td colspan="6">リードがありません。スキャンタブから登録してください。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- リード詳細パネル -->
+      <div class="detail-panel" id="detail-panel" hidden>
+        <div class="detail-header">
+          <h3 class="detail-title" id="detail-name">リード詳細</h3>
+          <button class="btn btn-icon detail-close" id="detail-close" aria-label="閉じる">&times;</button>
+        </div>
+        <div class="detail-body" id="detail-body"></div>
+      </div>
+    </section>
+
+    <!-- ========== 会話タブ ========== -->
+    <section class="tab-panel" id="panel-conversation" role="tabpanel" aria-labelledby="tab-conversation">
+      <h2 class="section-title">会話録音・文字起こし</h2>
+
+      <!-- リード選択 -->
+      <div class="form-field">
+        <label for="conv-lead-select">リード選択</label>
+        <select id="conv-lead-select" class="select-lg" aria-label="リード選択">
+          <option value="">-- リードを選択 --</option>
+        </select>
+      </div>
+
+      <!-- 録音コントロール -->
+      <div class="recording-controls" id="recording-controls" hidden>
+        <div class="recording-indicator" id="recording-indicator">
+          <span class="rec-dot" id="rec-dot"></span>
+          <span id="rec-timer">00:00</span>
+        </div>
+
+        <!-- オーディオビジュアライザー -->
+        <canvas id="audio-visualizer" class="audio-visualizer" width="400" height="80" aria-label="音声波形"></canvas>
+
+        <div class="btn-group">
+          <button id="btn-rec-start" class="btn btn-danger btn-lg">録音開始</button>
+          <button id="btn-rec-pause" class="btn btn-secondary btn-lg" disabled>一時停止</button>
+          <button id="btn-rec-stop" class="btn btn-secondary btn-lg" disabled>停止</button>
+        </div>
+      </div>
+
+      <!-- 録音録がない場合 -->
+      <div id="conv-empty" class="empty-state">
+        <p>リードを選択して録音を開始してください</p>
+      </div>
+
+      <!-- 録音一覧 -->
+      <div id="recordings-list" class="recordings-list" hidden>
+        <h3 class="subsection-title">録音一覧</h3>
+        <div id="recordings-container"></div>
+      </div>
+
+      <!-- 文字起こし -->
+      <div id="transcription-section" class="transcription-section" hidden>
+        <h3 class="subsection-title">文字起こし</h3>
+        <div id="transcript-display" class="transcript-display" aria-live="polite"></div>
+        <div id="interim-display" class="interim-display" aria-live="polite"></div>
+        <div id="transcription-fallback" class="transcription-fallback" hidden>
+          <label for="manual-transcript">文字起こし（手動入力）</label>
+          <textarea id="manual-transcript" class="textarea-lg" rows="6" placeholder="音声認識が利用できないため、手動で文字起こしを入力してください"></textarea>
+          <button id="btn-save-manual-transcript" class="btn btn-primary">文字起こしを保存</button>
+        </div>
+      </div>
+
+      <!-- AIスコアリング -->
+      <div id="ai-scoring-section" class="scoring-section" hidden>
+        <h3 class="subsection-title">AIスコアリング</h3>
+        <div class="score-display">
+          <div class="score-gauge-container">
+            <div class="score-gauge" id="score-gauge" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+              <span class="score-value" id="score-value">0</span>
+              <span class="score-unit">点</span>
+            </div>
+            <div class="score-category" id="score-category">COLD</div>
+          </div>
+          <div class="score-detail" id="score-detail"></div>
+        </div>
+
+        <!-- AIサマリー -->
+        <div class="ai-summary" id="ai-summary" hidden>
+          <h4 class="subsection-title">AIサマリー</h4>
+          <div id="summary-content"></div>
+        </div>
+
+        <!-- メモ -->
+        <div class="notes-section">
+          <h4 class="subsection-title">メモ</h4>
+          <textarea id="lead-notes" class="textarea-lg" rows="3" placeholder="メモを入力..."></textarea>
+          <button id="btn-save-notes" class="btn btn-primary">メモを保存</button>
+        </div>
+      </div>
+
+      <!-- エラーメッセージ -->
+      <div id="conv-error" class="form-error" role="alert" hidden></div>
+    </section>
+
+    <!-- ========== キャンペーンタブ ========== -->
+    <section class="tab-panel" id="panel-campaign" role="tabpanel" aria-labelledby="tab-campaign">
+      <h2 class="section-title">キャンペーン・CRM連携</h2>
+
+      <div class="campaign-grid">
+        <!-- エクスポート -->
+        <div class="campaign-section">
+          <h3 class="subsection-title">エクスポート</h3>
+          <p>リードデータをCSVまたはJSONでダウンロード</p>
+          <div class="btn-group">
+            <button id="btn-export-csv" class="btn btn-primary btn-lg">CSVダウンロード</button>
+            <button id="btn-export-json" class="btn btn-secondary btn-lg">JSONダウンロード</button>
+          </div>
+        </div>
+
+        <!-- インポート -->
+        <div class="campaign-section">
+          <h3 class="subsection-title">インポート</h3>
+          <p>JSONファイルからリードデータを取り込み</p>
+          <label for="import-file" class="btn btn-secondary btn-lg file-input-label">
+            JSONファイルを選択
+            <input type="file" id="import-file" accept=".json" class="file-input-hidden" aria-label="JSONファイル選択">
+          </label>
+          <div id="import-result" class="import-result" aria-live="polite"></div>
+        </div>
+
+        <!-- メールテンプレート -->
+        <div class="campaign-section campaign-section-full">
+          <h3 class="subsection-title">メールテンプレート</h3>
+          <div class="form-field">
+            <label for="template-select">テンプレート選択</label>
+            <select id="template-select" class="select-lg">
+              <option value="">-- テンプレートを選択 --</option>
+              <option value="thankyou">お礼メール</option>
+              <option value="materials">資料送付</option>
+              <option value="demo">デモ案内</option>
+              <option value="quote">見積確認</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="template-lead-select">送信対象リード</label>
+            <select id="template-lead-select" class="select-lg">
+              <option value="">-- リードを選択（全リードにも適用可） --</option>
+            </select>
+          </div>
+          <div class="btn-group">
+            <button id="btn-preview-email" class="btn btn-primary" disabled>メールをプレビュー</button>
+            <button id="btn-export-email-csv" class="btn btn-secondary">メール一覧CSV出力</button>
+            <button id="btn-export-email-txt" class="btn btn-secondary">個別メールTXT出力</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="email-preview-dialog" class="preview-dialog" aria-labelledby="email-preview-title">
+    <div id="email-preview-section" class="email-preview-section">
+      <div class="detail-header">
+        <h2 id="email-preview-title" class="subsection-title">メールプレビュー</h2>
+        <button id="btn-close-email" class="btn btn-icon" aria-label="メールプレビューを閉じる">&times;</button>
+      </div>
+      <div id="email-preview" class="email-preview" contenteditable="true" role="textbox" aria-multiline="true" aria-label="メール本文編集"></div>
+      <button id="btn-copy-email" class="btn btn-primary">クリップボードにコピー</button>
+    </div>
+  </dialog>
+
+  <!-- トースト通知 -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <!-- テンプレート -->
+  <template id="lead-row-template">
+    <tr class="lead-row" tabindex="0" role="button">
+      <td class="td-score"></td>
+      <td class="td-category"></td>
+      <td class="td-name"></td>
+      <td class="td-company"></td>
+      <td class="td-position"></td>
+      <td class="td-created"></td>
+    </tr>
+  </template>
+
+  <template id="recording-item-template">
+    <div class="recording-item">
+      <div class="recording-info">
+        <span class="recording-duration"></span>
+        <span class="recording-time"></span>
+      </div>
+      <audio class="recording-audio" controls></audio>
+    </div>
+  </template>
+</body>
+</html>

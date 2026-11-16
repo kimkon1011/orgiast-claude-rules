@@ -37,7 +37,7 @@ export function convergeNightlyReload({ platform = process.platform, run = execF
   try {
     const settingsChanged = restore(settingsPath);
     let tasksChanged = false;
-    for (const script of ['register-nightly-reload-vscode.ps1', 'register-reopen-lost-sessions.ps1']) {
+    for (const script of ['register-nightly-reload-vscode.ps1', 'register-reopen-lost-sessions.ps1', 'register-claude-priority-guard.ps1']) {
       const output = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
         '-File', path.join(toolsDir, script)],
       { encoding: 'utf8', windowsHide: true, timeout: 30000 });

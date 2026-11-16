@@ -143,7 +143,16 @@ for y in (.16,5.84):
     box('Glowing white membrane canopy',(3,y,3.34),(5.72,.07,.36),fabric,bevel=.006)
 for x in (.16,5.84):
     box('Glowing white membrane canopy',(x,3,3.34),(.07,5.65,.36),fabric,bevel=.006)
-wordmark((3,.115,3.25),.3,navy)
+# v9: cladding stays inside the audited envelope and hides exposed trusses.
+cladding = navy if plan=='standard' else fabric
+for x in (.14,5.86):
+    for y in (.14,5.86):
+        box('Clad upright',(x,y,1.8),(.28,.28,3.6),cladding,bevel=0)
+for y in (.14,5.86):
+    box('Clad header',(3,y,3.38),(6,.28,.44),cladding,bevel=0)
+for x in (.14,5.86):
+    box('Clad header',(x,3,3.38),(.28,6,.44),cladding,bevel=0)
+wordmark((3,.003,3.25),.3,letter if plan=='standard' else navy)
 if plan=='premium':
     box('Full luminous membrane ceiling',(3,3,3.15),(5.6,5.6,.035),fabric,bevel=0)
 wordmark((2.5,5.865,2.49),.4)
@@ -226,8 +235,8 @@ elif plan=='premium':
     curve('Halo within 3.6m envelope',[(3+1.35*math.cos(t*2*math.pi/96),3+1.35*math.sin(t*2*math.pi/96),3.02) for t in range(97)],.045,fabric)
     for x in (.45,3.9,5.55): box('Recessed floor light',(x,3,.053),(.023,5.4,.006),blue,bevel=0)
 elif plan=='impact':
-    # Figure-eight light gate under the roof, entirely inside the footprint.
-    points=[(1.85+1.57*math.cos(t*2*math.pi/160),.38,1.63+1.35*math.sin(2*t*2*math.pi/160)) for t in range(161)]
+    # Compact feature: <=2.4m wide, <=2.0m high, with walking space at the front.
+    points=[(2.7+1.1*math.cos(t*2*math.pi/160),2.65,1.0+.85*math.sin(2*t*2*math.pi/160)) for t in range(161)]
     curve('Infinity gate aluminium core',points,.085,silver)
     curve('Infinity blue half',[(x,y-.075,z) for x,y,z in points[:81]],.045,blue)
     curve('Infinity purple half',[(x,y-.075,z) for x,y,z in points[80:]],.045,purple)
@@ -303,6 +312,8 @@ audit={'plan':plan,'method':'Blender Eevee','booth_bounds_min':minimum,'booth_bo
        'height_m':3.6,'person_height_m':1.7,'camera_location':list(camera.location),'camera_mm':32,
        'width':1600,'height':900,'front_top_edge_px':[px((0,0,3.6)),px((6,0,3.6))],
        'top_shift_percent_geometry':shift,'readable_text':['GridBeyond']}
+audit['projected_ratio'] = abs(px((0,0,0))[1]-px((0,0,3.6))[1])/abs(px((0,0,0))[1]-px((0,0,1.7))[1])
+audit['measurement_points_px'] = {str(p):px(p) for p in [(0,0,0),(0,0,3.6),(6,0,0),(0,6,0),(-.65,-.5,0),(-.65,-.5,1.7)]}
 with open(os.path.join(out,f'geometry-{plan}.json'),'w',encoding='utf-8') as handle:
     json.dump(audit,handle,indent=2)
 bpy.ops.wm.save_as_mainfile(filepath=os.path.join(out,f'GridBeyond-{plan}-v5.blend'))

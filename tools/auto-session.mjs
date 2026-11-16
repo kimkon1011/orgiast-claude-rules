@@ -7,6 +7,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { isEntry } from './is-entry.mjs';
+import { autoResumeAllowed } from './lib/auto-resume-policy.mjs';
 import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
 import { ledgerRows, runTaskLedger } from './task-ledger.mjs';
 import { alternateCheapProvider, autoSessionExecutor, buildClaudeHeadlessArgs, buildCheapCodeArgs, buildCodexDoArgs, cheapProvidersAllCooling, codexDoLaneEnabled, claudeFallbackEnabled, prepareExecutorRoot, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
@@ -469,6 +470,19 @@ export function isTodoAlreadyDone(md, todoText) {
   // 印の形が増えるたびに再実行保護が片方だけ効かなくなるのを避ける。
   const lineRe = new RegExp(`^\\s*\\d+[.)、]\\s+(?:~~${escaped}~~|\\[完了[^\\]]*\\]\\s+${escaped})`, 'm');
   if (lineRe.test(source)) return true;
+  // 2026-11-16: notify-kim マーカーが一致すれば本文が微妙に違っても完了と判定する
+  // （実害: 「検証」vs「再検証」の1文字差で90%閾値を超えず、完了済みTODOに
+  //   セッションを1本丸ごと消費した。notify-kim は同一通知の一意IDなので最強の一致鍵）。
+  const notifyMarker = firstLine.match(/<!--\s*notify-kim:([a-f0-9]+)\s*-->/);
+  if (notifyMarker) {
+    const doneLines = source.split(/\r?\n/).filter(line => {
+      const body = line.replace(/^\s*\d+[a-z]?[.)、]\s*/i, '');
+      if (body === line) return false; // 番号なし行はスキップ
+      return /~~[^~]*~~/.test(body) || /^(?:\*\*)?\s*(?:\[完了|\[[xX]\]|✅)/.test(body);
+    });
+    const markerRe = new RegExp(`<!--\\s*notify-kim:${notifyMarker[1]}\\s*-->`);
+    if (doneLines.some(body => markerRe.test(body))) return true;
+  }
   // 2026-10-25 実測: バッチ選定（15:30Z）の後に別セッションが該当行の**行末**へ注記と
   // 「→ ✅ 完了」を足したため、原文の完全一致では完了を見失い、既に片付いた TODO に
   // セッションを1本消費した（runs/2026-10-25-manifest.json の selectedTodos[5]
@@ -749,6 +763,9 @@ function extensionExecutables() {
 }
 
 export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, runOptions = {}) {
+  if (runOptions.resumeSessionId && !autoResumeAllowed({ source: runOptions.resumeSource })) {
+    return { status: 'skipped', skippedAutoResume: true, deferred: false, executorUsed: 'none', exitCode: null, stdout: '', stderr: 'auto-resume disabled by config/auto-resume.json' };
+  }
   // 実行役のコードは origin/main の専用 worktree から読む。pinned tree はセッションが作業ブランチを
   // 切るため、夜間に main へ入った修正が同じ夜の後続セッションへ届かない(2026-10-25 実測)。
   const executorRoot = runOptions.executorRoot ?? prepareExecutorRoot({ repoRoot: REPO_ROOT });
@@ -783,11 +800,11 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
       activeLane = codex ? 'codex-do' : cheap ? 'cheap-code' : 'claude';
       if (codex) codexTried = true;
       let child;
-      try { child = spawn(cheap || codex ? process.execPath : executable, codex
+      try { child = (runOptions.spawnImpl ?? spawn)(cheap || codex ? process.execPath : executable, codex
         ? buildCodexDoArgs({ repoRoot: executorRoot, promptFile, cwd: historyCwd })
         : cheap
         ? buildCheapCodeArgs({ repoRoot: executorRoot, provider: cheapProvider, promptFile, cwd: historyCwd })
-        : buildClaudeHeadlessArgs({ repoCwd, historyCwd, resumeSessionId: runOptions.resumeSessionId, ...(runOptions.model ? { model: runOptions.model } : {}) }), { detached: process.platform !== 'win32', cwd: historyCwd,
+        : buildClaudeHeadlessArgs({ repoCwd, historyCwd, resumeSessionId: runOptions.resumeSessionId, resumeSource: runOptions.resumeSource, ...(runOptions.model ? { model: runOptions.model } : {}) }), { detached: process.platform !== 'win32', cwd: historyCwd,
         // cheap-code 側でも浄化するが、claude フォールバック(監督セッション)はここで
         // デスクトップ由来の CLAUDECODE / CLAUDE_CODE_* / MCP_* を外しておく。
         env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: runOptions.headlessJob || (codex ? 'auto-session:codex-do' : cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude') }, stdio: [cheap || codex ? 'ignore' : 'pipe', 'pipe', 'pipe'], windowsHide: true }); }
@@ -824,6 +841,14 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
         return;
       }
       timedOut = true;
+      // Resolve the promise first so the caller sees the timeout immediately,
+      // regardless of how long process cleanup takes (e.g. new Worker() on
+      // Windows CI can block for seconds). The kill below continues asynchronously.
+      child.stdin?.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.unref();
+      complete(null);
       // taskkill can take seconds on Windows. Do not block the deadline or wait for
       // inherited pipes to close before advancing. Its /T cleanup continues independently.
       if (child.pid) {
@@ -847,11 +872,6 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
           });
         } else { try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} } }
       }
-      child.stdin?.destroy();
-      child.stdout.destroy();
-      child.stderr.destroy();
-      child.unref();
-      complete(null);
     }, laneTimeoutMs);
     const complete = (code) => {
       if (settled) return;

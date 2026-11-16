@@ -114,7 +114,7 @@ kim-inboxは期限を先頭・残日数順・最大5行・各140字で表示。�
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/register-deadline-watch-tasks.ps1 -Ensure
 ```
 
-OrgiastDeadlineDetect（02:40）とOrgiastDeadlineWatch（08:30）を同期済みmainから起動する。wscript → run-hidden.vbs → node、同時起動はIgnoreNew。`lib/kim-operated.mjs` が認めるkim席だけで登録し、他の席はno-op。`-DryRun`、`-ValidateOnly`、`-Unregister` 対応。`setup.mjs --converge` と `register-nightly-tools.ps1` から同じ登録処理を呼ぶ。登録後はアクションと時刻を再読込して照合する。
+OrgiastDeadlineDetect（02:40）とOrgiastDeadlineWatch（08:30）を同期済みmainから起動する。wscript → run-hidden.vbs → node、同時起動はIgnoreNew。**kim 操作席かつ kim@ DWD 鍵がある席だけで登録**。鍵なし席は既存タスクを無効化（削除しない）。`-DryRun`、`-ValidateOnly`、`-Unregister` 対応。`setup.mjs --converge` と `register-nightly-tools.ps1` から同じ登録処理を呼ぶ。登録後はアクションと時刻を再読込して照合する。
 
 本番の `--init`、登録、通知を伴う実行は、指定された後続の検証セッションで行う。この実装セッションはフィクスチャ・依存注入のテストのみ。
 

@@ -84,3 +84,5 @@ test('push ダイジェストも check の停滞を件数に含める', () => {
   const row = { status: 'open', verdict: 'stalled', label: '返信待ち', nextKim: 'なし', unattended: true };
   assert.match(compactDigest([row], [], now).text, /自動作業\n完了 0件・止まっている 1件/);
 });
+
+process.env.ORGIAST_AUTO_RESUME = '1';

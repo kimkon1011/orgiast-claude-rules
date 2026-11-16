@@ -3,7 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { classify, classifyDetailed, classifyOrphanClaudeWaitLoops, classifyOrphanConsoleWindows, classifyVscodeIdle, parseOptions, parseProcessLines, readHygieneConfig, shouldKillVscodeIdle, vscodeCpuPolicy, sampleVscodeCpu, main } from './process-hygiene.mjs';
+import { isVscodeClaude, classify, classifyDetailed, classifyOrphanClaudeWaitLoops, classifyOrphanConsoleWindows, classifyOrphanOpenUrl, classifyVscodeIdle, parseOptions, parseProcessLines, readHygieneConfig, shouldKillVscodeIdle, vscodeCpuPolicy, sampleVscodeCpu, main } from './process-hygiene.mjs';
 
 const now = Date.parse('2026-09-11T06:00:00Z');
 const VSC_CMD = 'C:\\Users\\kim\\.vscode\\extensions\\anthropic.claude-code-2.1.285-win32-x64\\resources\\native-binary\\claude.exe --output-format stream-json';
@@ -330,4 +330,114 @@ test('classifyVscodeIdle: vscodeIdleKill: false の時は候補を 0 件にす�
 
   const enabled = idleRun(procs, sessions);
   assert.equal(enabled.length, 1);
+});
+
+
+test('isVscodeClaude excludes 11 desktop processes and retains 8 VS Code CLI processes', () => {
+  const rows = [
+    ...Array.from({ length: 11 }, () => ({ Name: 'claude.exe', CommandLine: APP_CMD })),
+    ...Array.from({ length: 8 }, () => ({ Name: 'claude.exe', CommandLine: VSC_CMD })),
+  ];
+  assert.equal(rows.filter(isVscodeClaude).length, 8);
+  assert.equal(isVscodeClaude({ Name: 'claude.exe', CommandLine: VSC_CMD + ' --type=renderer' }), false);
+});
+
+const codeProc = (pid, commandLine, ageMin, mb = 100) => ({
+  Name: 'Code.exe', ProcessId: pid, ParentProcessId: 1,
+  CommandLine: commandLine,
+  CreationDate: new Date(now - ageMin * 60_000).toISOString(),
+  WorkingSetSize: mb * 1024 * 1024,
+});
+const childProc = (pid, parentPid, commandLine, ageMin) => ({
+  Name: 'Code.exe', ProcessId: pid, ParentProcessId: parentPid,
+  CommandLine: commandLine,
+  CreationDate: new Date(now - ageMin * 60_000).toISOString(),
+  WorkingSetSize: 100 * 1024 * 1024,
+});
+
+test('orphan-open-url: 10分超の Code.exe --open-url だけ検出する', () => {
+  const result = classifyOrphanOpenUrl([
+    codeProc(1, 'C:\\Program Files\\Microsoft VS Code\\Code.exe --open-url vscode://Anthropic.claude-code/open', 15),
+    codeProc(2, 'C:\\Program Files\\Microsoft VS Code\\Code.exe --open-url vscode://Anthropic.claude-code/open', 5),
+    codeProc(3, 'Code.exe --locale ja', 20),
+  ], now);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].pid, 1);
+  assert.equal(result[0].kind, 'orphan-open-url');
+  assert.equal(result[0].ageMin >= 15, true);
+});
+
+test('orphan-open-url: 10分以下は検出しない', () => {
+  assert.equal(classifyOrphanOpenUrl([codeProc(1, 'Code.exe --open-url ...', 10)], now).length, 0);
+  assert.equal(classifyOrphanOpenUrl([codeProc(2, 'Code.exe --open-url ...', 9)], now).length, 0);
+});
+
+test('orphan-open-url: --open-url を含まない Code.exe は無視', () => {
+  assert.equal(classifyOrphanOpenUrl([codeProc(1, 'Code.exe --locale ja', 30)], now).length, 0);
+});
+
+test('orphan-open-url: Code.exe 以外のプロセスは無視', () => {
+  assert.equal(classifyOrphanOpenUrl([{ ...codeProc(1, 'Code.exe --open-url ...', 15), Name: 'node.exe' }], now).length, 0);
+});
+
+test('orphan-open-url: --kill でツリー停止し dry-run では止めない', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hygiene-openurl-'));
+  const previousLockHome = process.env.ORGIAST_LOCK_HOME;
+  process.env.ORGIAST_LOCK_HOME = home;
+  const stopped = [];
+  const deps = {
+    platform: 'win32', home, now, batchLock: {}, commitFreeGb: 100,
+    listProcesses: () => [codeProc(1, 'Code.exe --open-url vscode://test', 15)],
+    sampleVscodeCpu: () => ({ loads: [], cpu5sByPid: {} }),
+    stopOrphanOpenUrls: (items) => { stopped.push(...items.map((item) => item.pid)); return []; },
+    stopOrphanShells: () => [], stopTrees: () => [], stopProcesses: () => [], stopOrphanWindows: () => [],
+    notify: async () => ({ delivered: 'test' }),
+  };
+  try {
+    assert.equal(await main(['--kill', '--dry-run'], deps), 0);
+    assert.deepEqual(stopped, []);
+    assert.equal(await main(['--kill'], deps), 0);
+    assert.deepEqual(stopped, [1]);
+  } finally {
+    if (previousLockHome === undefined) delete process.env.ORGIAST_LOCK_HOME;
+    else process.env.ORGIAST_LOCK_HOME = previousLockHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('orphan-open-url: NodeService の子を持つ本体は残骸に入らない', () => {
+  const result = classifyOrphanOpenUrl([
+    codeProc(100, 'C:\\Program Files\\Microsoft VS Code\\Code.exe --open-url vscode://Anthropic.claude-code/open', 120),
+    childProc(101, 100, 'C:\\Program Files\\Microsoft VS Code\\Code.exe --type=crashpad-handler', 120),
+    childProc(102, 100, 'C:\\Program Files\\Microsoft VS Code\\Code.exe --type=utility --utility-sub-type=node.mojom.NodeService', 120),
+    childProc(103, 100, 'C:\\Program Files\\Microsoft VS Code\\Code.exe --type=gpu-process', 120),
+  ], now);
+  assert.equal(result.length, 0);
+});
+
+test('orphan-open-url: 子が crashpad/network/gpu だけの --open-url は残骸に入る', () => {
+  const result = classifyOrphanOpenUrl([
+    codeProc(200, 'C:\\Program Files\\Microsoft VS Code\\Code.exe --open-url vscode://Anthropic.claude-code/open', 15),
+    childProc(201, 200, 'C:\\Program Files\\Microsoft VS Code\\Code.exe --type=crashpad-handler', 15),
+    childProc(202, 200, 'C:\\Program Files\\Microsoft VS Code\\Code.exe --type=gpu-process', 15),
+    childProc(203, 200, 'Code.exe --type=utility --utility-sub-type=network.mojom.NetworkService', 15),
+  ], now);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].pid, 200);
+});
+
+test('orphan-open-url: --type= を含む子プロセス自身は残骸に入らない', () => {
+  const result = classifyOrphanOpenUrl([
+    { ...codeProc(300, 'Code.exe --open-url vscode://test --type=crashpad-handler', 30) },
+  ], now);
+  assert.equal(result.length, 0);
+});
+
+test('orphan-open-url: unrelated or non-Code NodeService does not protect an orphan', () => {
+  const result = classifyOrphanOpenUrl([
+    codeProc(400, 'Code.exe --open-url vscode://test', 15),
+    childProc(401, 999, 'Code.exe --utility-sub-type=node.mojom.NodeService', 15),
+    { ...childProc(402, 400, 'node.mojom.NodeService', 15), Name: 'node.exe' },
+  ], now);
+  assert.deepEqual(result.map(row => row.pid), [400]);
 });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { syncRemoteTitles, untitledBridge } from './sync-remote-titles.mjs';
+import { syncRemoteTitles, untitledBridge, AUTO_TITLE_RE } from './sync-remote-titles.mjs';
 
 const now = Date.parse('2026-10-23T03:00:00Z');
 const bridge = (id) => JSON.stringify({ type: 'bridge-session', sessionId: id, bridgeSessionId: `cse_${id}` }) + '\n';
@@ -60,4 +60,31 @@ test('http failure and dry-run leave transcripts untouched', async (t) => {
   assert.equal(fs.readFileSync(path.join(project, 'a.jsonl'), 'utf8'), bridge('a') + user);
   const placeholder = await syncRemoteTitles({ base, now, dryRun: true, fetchImpl: async () => reply({ title: 'remote-control-mossy-island' }) });
   assert.deepEqual(placeholder.sessions, []);
+});
+
+test('AUTO_TITLE_RE excludes server auto titles and allows user/conversation titles', async (t) => {
+  const autoTitles = [
+    'remote-control-mossy-island',
+    '018-resilient-steele',
+    '018|resilient-steele',
+    '018｜resilient-steele',
+    '018-remote-control-mossy-island',
+    'remote-control-018-mossy-island',
+  ];
+  for (const title of autoTitles) {
+    assert.equal(AUTO_TITLE_RE.test(title), true, `expected auto title ${title} to match AUTO_TITLE_RE`);
+    const { base } = fixture(t, [['a', bridge('a') + user, 30]]);
+    const res = await syncRemoteTitles({ base, now, dryRun: true, fetchImpl: async () => reply({ title }) });
+    assert.deepEqual(res.sessions, [], `expected title ${title} to be excluded from sync`);
+  }
+
+  const userTitles = [
+    '2026年10月の重大脆弱性への対応',
+    '018のバグ修正について',
+    'fix: スマホ待機セッション',
+    'PR 1234 review',
+  ];
+  for (const title of userTitles) {
+    assert.equal(AUTO_TITLE_RE.test(title), false, `expected user title ${title} not to match AUTO_TITLE_RE`);
+  }
 });

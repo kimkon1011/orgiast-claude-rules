@@ -167,7 +167,7 @@ export function executeAction(action, ctx) {
       const protectedPaths = [BACKLOG, 'data/marketing/flags.json', LOG, BRIEF];
       const before = protectedPaths.map(p => read(safePath(ctx.root, p)));
       r = invoke(`${route}.mjs`, ['--prompt-file', prompt, '--cwd', ctx.root,
-        ...(route === 'codex-do' ? ['--origin', 'unattended', '--timeout', '1800', '--no-fallback'] : [])], { ...ctx, timeout: 1_830_000 });
+        ...(route === 'codex-do' ? ['--origin', 'unattended', '--timeout', '1800'] : [])], { ...ctx, timeout: 1_830_000 });
       if (protectedPaths.some((p, i) => read(safePath(ctx.root, p)) !== before[i])) {
         protectedPaths.forEach((p, i) => before[i] === null ? fs.rmSync(safePath(ctx.root, p), { force: true }) : atomicWrite(safePath(ctx.root, p), before[i]));
         return { ok: false, reason: 'executor_modified_control_files' };

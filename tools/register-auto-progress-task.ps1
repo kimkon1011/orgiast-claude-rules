@@ -1,5 +1,5 @@
 # Registers the auto-progress tasks (idempotent, Windows PowerShell 5.1 safe: ASCII only).
-#   OrgiastAutoProgressWatch  hourly (all PCs) -> tools\auto-progress-watch.mjs
+#   OrgiastAutoProgressWatch  every 30 minutes (all PCs)
 #   OrgiastAutoProgressDigest daily 08:40          (all PCs)
 param([switch]$ValidateOnly, [switch]$Unregister)
 $ErrorActionPreference = 'Stop'
@@ -21,16 +21,16 @@ if ($ValidateOnly) {
 }
 $node = (Get-Command node -CommandType Application -ErrorAction Stop | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source
 if (-not $node) { throw 'node.exe not found' }
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 55)
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 29)
 
-# Bound the hourly watch below its interval: IgnoreNew otherwise refuses overlapping starts.
+# Bound the watch below its interval: IgnoreNew otherwise refuses overlapping starts.
 $watchAction = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($watch) -WorkingDirectory $repo
-$watchTriggers = @((New-ScheduledTaskTrigger -Once -At '00:00' -RepetitionInterval (New-TimeSpan -Hours 1)))
-Register-ScheduledTask -TaskName $names[0] -Action $watchAction -Trigger $watchTriggers -Settings $settings -Description 'Check declared auto-progress promises hourly; resume stalled ones after two hours and report to the owner and fleet sheet.' -Force | Out-Null
+$watchTriggers = @((New-ScheduledTaskTrigger -Once -At '00:00' -RepetitionInterval (New-TimeSpan -Minutes 30)))
+Register-ScheduledTask -TaskName $names[0] -Action $watchAction -Trigger $watchTriggers -Settings $settings -Description 'Check declared auto-progress every 30 minutes; monitor external replies continuously.' -Force | Out-Null
 
 $digestAction = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($digest) -WorkingDirectory $repo
 $digestTrigger = New-ScheduledTaskTrigger -Daily -At '08:40'
-Register-ScheduledTask -TaskName $names[1] -Action $digestAction -Trigger $digestTrigger -Settings $settings -Description 'Morning owner DM digest of local auto-progress items on every PC; watch also sends after hourly checks.' -Force | Out-Null
+Register-ScheduledTask -TaskName $names[1] -Action $digestAction -Trigger $digestTrigger -Settings $settings -Description 'Morning owner DM digest of local auto-progress items on every PC.' -Force | Out-Null
 
 foreach ($n in $names) {
   $t = Get-ScheduledTask -TaskName $n -ErrorAction Stop
@@ -38,5 +38,6 @@ foreach ($n in $names) {
   $expectedTimes = if ($n -eq $names[0]) { @('00:00') } else { @('08:40') }
   $actualTimes = @($t.Triggers | ForEach-Object { $_.StartBoundary.Substring(11, 5) } | Sort-Object)
   if (-not $t.Actions.Arguments.Contains($expectedScript) -or ($actualTimes -join ',') -ne ($expectedTimes -join ',')) { throw "read-back failed: $n" }
+  if ($n -eq $names[0] -and ($t.Triggers[0].Repetition.Interval -ne 'PT30M' -or $t.Settings.ExecutionTimeLimit -ne 'PT29M')) { throw "cadence read-back failed: $n" }
   Write-Host ("OK: {0} state={1} triggers={2}" -f $n, $t.State, (($t.Triggers | ForEach-Object { $_.StartBoundary.Substring(11, 5) }) -join ','))
 }

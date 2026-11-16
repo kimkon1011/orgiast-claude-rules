@@ -81,14 +81,14 @@ test('hook starts poll and sync without GAS, locks, pipes or child waiting', asy
   }
   assert.equal(fs.existsSync(path.join(f.dir, 'fleet-mail.lock')), false);
 });
-test('presentation queues durable seen/ack, and sync CLI sends both in order', async t => {
+test('presentation queues durable seen/ack, and sync CLI drains the ack batch first', async t => {
   const f = fixture(t, [mail('reply-abc')]); await f.run();
   const saved = readInbox(f.home, { unreadOnly: false })[0];
   assert.equal(saved.presentedSession, 't'); assert.equal(saved.presentedAt, new Date(NOW).toISOString()); assert.equal(saved.status, 'done'); assert.deepEqual(saved.pendingServer, ['seen', 'ack']);
   fs.writeFileSync(path.join(f.dir, 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.invalid\nFLEET_SHEET_TOKEN=test\n');
   const calls = [];
   await mailMain(['--sync-pending'], { home: f.home, stdout() {}, stderr() {}, request: async (kind, payload) => { calls.push({ kind, payload }); return payload.ids ? { ok: true, results: payload.ids.map(id => ({ id, ok: true })) } : { ok: true, mail: {} }; } });
-  assert.deepEqual(calls.map(c => c.kind), ['mail-seen', 'mail-ack']); assert.match(calls[0].payload.seenBy, /:t$/);
+  assert.deepEqual(calls.map(c => c.kind), ['mail-ack', 'mail-seen']); assert.match(calls[1].payload.seenBy, /:t$/);
   assert.deepEqual(readInbox(f.home, { unreadOnly: false })[0].pendingServer, []);
   await f.run('UserPromptSubmit', 'another'); assert.equal(f.outputs.length, 1);
 });
@@ -96,7 +96,8 @@ test('fresh last-poll suppresses poll, inflight poll does not masquerade as succ
   const f = fixture(t);
   fs.writeFileSync(path.join(f.dir, '.fleet-mail-poll.json'), '{}'); assert.equal(shouldReceivePoll(f.home), true);
   const marker = path.join(f.dir, '.fleet-mail-last-poll.json'); fs.writeFileSync(marker, '{}');
-  const now = fs.statSync(marker).mtimeMs;
+  const now = Date.now();
+  fs.writeFileSync(marker, JSON.stringify({ at: new Date(now).toISOString() }));
   assert.equal(shouldReceivePoll(f.home, { now: () => now + POLL_STALE_MS }), false);
   assert.equal(shouldReceivePoll(f.home, { now: () => now + POLL_STALE_MS + 1 }), true);
 });
@@ -142,12 +143,12 @@ test('C11 hook skips seen and presented writes when the inbox file is locked', a
   assert.equal(readInbox(f.home, { unreadOnly: false })[0].presentedSession, 'retry');
 });
 
-test('D4 poll freshness stat failure still presents and queues local inbox context', async t => {
+test('D4 poll freshness read failure still presents and queues local inbox context', async t => {
   const f = fixture(t, [mail('visible')]);
-  const stat = fs.statSync;
-  t.mock.method(fs, 'statSync', (file, ...args) => {
+  const read = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', (file, ...args) => {
     if (String(file).endsWith('.fleet-mail-last-poll.json')) throw Object.assign(new Error('private'), { code: 'EACCES' });
-    return stat(file, ...args);
+    return read(file, ...args);
   });
   await f.run();
   assert.match(f.outputs[0].hookSpecificOutput.additionalContext, /id=mail-visible/);

@@ -9,6 +9,9 @@ import { readStdin } from './transcript-tail.mjs';
 export const GMAIL_WRITE_ACTIONS = ['create_draft', 'send_message', 'update_draft', 'reply', 'forward'];
 export const TARGET = new RegExp(`^mcp__claude_ai_Gmail(?:_\\d+)?__(${GMAIL_WRITE_ACTIONS.join('|')})$`);
 const RECIPIENT_FIELD = /^(?:to|cc|bcc|recipients?|to_?recipients?|cc_?recipients?|bcc_?recipients?|to_?addresses?|cc_?addresses?|bcc_?addresses?)$/i;
+const TO_FIELD = /^(?:to|recipients?|to_?recipients?|to_?addresses?)$/i;
+const CC_FIELD = /^(?:cc|cc_?recipients?|cc_?addresses?)$/i;
+const BCC_FIELD = /^(?:bcc|bcc_?recipients?|bcc_?addresses?)$/i;
 const ADDRESS_FIELD = /^(?:email|email_?address|address|value)$/i;
 
 // GitHub の @メンションは「誰に届くか」が GitHub 側の通知になるため、内部ハンドルを同じ台帳で塞ぐ。
@@ -56,12 +59,48 @@ export function isInternal(addr, ledger) {
     || (normalized.includes('@') && ledger.domains.some((item) => item.trim().toLowerCase() === domain));
 }
 
+function recipientAddresses(value) {
+  return extractAddresses({ recipients: value });
+}
+
+function splitRecipientFields(input) {
+  const fields = { to: [], cc: [], bcc: [] };
+  function visit(value) {
+    if (Array.isArray(value)) return value.forEach(visit);
+    if (!value || typeof value !== 'object') return;
+    for (const [key, item] of Object.entries(value)) {
+      if (TO_FIELD.test(key)) fields.to.push(item);
+      else if (CC_FIELD.test(key)) fields.cc.push(item);
+      else if (BCC_FIELD.test(key)) fields.bcc.push(item);
+      else visit(item);
+    }
+  }
+  visit(input);
+  return fields;
+}
+
+/**
+ * 社内向け Gmail を止める共通判定。
+ * To に外部宛が1件でもあれば社外向けメールなので、Cc/Bcc の社内宛は許可する。
+ */
+export function shouldBlockInternal({ to, cc, bcc } = {}, ledger) {
+  const toAddresses = recipientAddresses(to);
+  const allAddresses = [...new Set([
+    ...toAddresses,
+    ...recipientAddresses(cc),
+    ...recipientAddresses(bcc),
+  ])];
+  return allAddresses.some((addr) => isInternal(addr, ledger))
+    && !toAddresses.some((addr) => !isInternal(addr, ledger));
+}
+
 export function judge(hookInput, ledger) {
   if (!TARGET.test(hookInput?.tool_name || '')) return { decision: 'pass', addresses: [], internal: [] };
   if (/__forward$/u.test(hookInput.tool_name)) return { decision: 'pass', addresses: extractAddresses(hookInput.tool_input), internal: [] };
-  const addresses = extractAddresses(hookInput.tool_input);
+  const { to, cc, bcc } = splitRecipientFields(hookInput.tool_input);
+  const addresses = extractAddresses({ to, cc, bcc });
   const internal = addresses.filter((addr) => isInternal(addr, ledger));
-  if (!addresses.length || internal.length !== addresses.length) return { decision: 'pass', addresses, internal };
+  if (!shouldBlockInternal({ to, cc, bcc }, ledger)) return { decision: 'pass', addresses, internal };
   const reason = `[INTERNAL-RECIPIENT] ${internal.join(', ')} は内部（社内・グループ会社・スタッフ）宛です。Claude が Discord の DM で送り、Gmail の下書き・送信は作らないでください。既存メールの転送は node tools/gmail-draft.mjs --forward <messageId> --to <宛先> で可能です。Discord で送れない時だけ、チャット本文に「宛先／用件／本文」をコピペできる完成形で表示してください。Gmail 下書きは顧客・取引先・外部の人宛だけ有効です。台帳: ~/.claude/internal-recipients.json`;
   return { decision: 'block', addresses, internal, reason };
 }

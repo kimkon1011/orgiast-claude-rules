@@ -68,7 +68,11 @@ export function isClosable(footer) {
 
 export function latestWaitDeadline(text) {
   const footer = footerValues(text);
-  return footer ? openDeadline(footer.session) : null;
+  if (footer) return openDeadline(footer.session);
+  const normalized = String(text || '').replace(/：/g, ':');
+  const m = normalized.match(/(?:^|\n)このセッション:[ \t]*([^\r\n]+)/);
+  if (m) return openDeadline(m[1].trim());
+  return null;
 }
 
 function reopenRecordedSession(id) {
@@ -250,7 +254,8 @@ export function lastAssistantTimestamp(raw) {
   return null;
 }
 
-const withoutPc = title => title.replace(/^\d{3}｜/, '');
+const PC_PREFIX = /^(?:\d{3}|[A-Za-z][A-Za-z0-9-]{1,15})｜/;
+const withoutPc = title => title.replace(PC_PREFIX, '');
 function titleBody(title) {
   const body = withoutPc(title.trim()).replace(PREFIX, '').trim();
   return isNoiseText(body) ? '' : body;
@@ -337,7 +342,7 @@ export function promptSubmit(input, { readFile = fs.readFileSync, statSize = p =
     const closed = isClosed(sessionId);
     let title = !closed && hasCustom && customSource !== 'orgiast-auto'
       ? custom : desiredTitle(lastAssistantText(raw), raw, pc, closed, sessionId) ?? custom;
-    if (!/^\d{3}｜/.test(title)) title = `${pc}｜${title}`;
+    if (!PC_PREFIX.test(title)) title = `${pc}｜${title}`;
     return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', sessionTitle: title } };
   } catch (e) { logError('promptSubmit', e); return null; }
 }

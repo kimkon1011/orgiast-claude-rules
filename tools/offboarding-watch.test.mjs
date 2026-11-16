@@ -174,3 +174,28 @@ test('既存notify-kimの配信関数は kim 宛 DM を送らず kim-inbox に�
   assert.match(stored, /Claude 組織からの削除・Workspace 停止を承認/);
   assert.doesNotMatch(f.output, /secret-test-token/);
 });
+
+test('正規の社外ドメイン席はWorkspace不在でも退職・台帳外と判定せず失効しない', async t => {
+  const f = fixture(t);
+  f.member.email = 'genbateam.toho@gmail.com'; f.member.claudeEmails = []; f.member.name = '東邦鋼業の現場用';
+  f.write('claude-account-ledger.json', f.ledger);
+  f.deps.collectors.workspace = async () => ok([]);
+  f.deps.collectors.claude = async () => ok([{ email: f.member.email }]);
+  const { result } = await f.run(['--apply-revoke']);
+  assert.deepEqual(result.retired, []); assert.deepEqual(result.findings, []); assert.deepEqual(result.unknown, []);
+  assert.deepEqual(f.calls, []);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, 'claude-account-ledger.json'))).members[0].status, 'active');
+});
+test('社外ドメインでも台帳退職済・退職日到達ならClaude組織の残存を検出する', async t => {
+  for (const retired of [true, false]) {
+    const f = fixture(t); f.member.email = 'external@gmail.com'; f.member.claudeEmails = [];
+    if (retired) f.member.status = 'retired'; else f.member.retiredOn = '2026-10-29';
+    f.write('claude-account-ledger.json', f.ledger);
+    f.deps.collectors.workspace = async () => ok([]);
+    f.deps.collectors.claude = async () => ok([{ email: f.member.email }]);
+    const { result } = await f.run();
+    assert.equal(result.retired.length, 1);
+    assert.ok(result.findings.some(i => i.type === 'claude-member'));
+    assert.ok(!result.retired[0].reasons.includes('Workspaceに存在しない'));
+  }
+});

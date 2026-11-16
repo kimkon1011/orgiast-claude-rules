@@ -6,6 +6,14 @@
 
 質問前に既存権限でファイル/ツール結果を調べ、取得可能な情報を人に聞かない。
 
+## staff-ask-selfcheck-gate
+
+社員・他PC・外部人へ状況を聞く前に、質問の主題に関連する Gmail・Discord・シート等を自分で照会する。求人応募は `to:saiyo@orgiast.jp newer_than:7d` を Gmail で検索し、電話・現地など人にしか分からない結果だけを聞く。
+
+## pending-decision-ask-gate
+
+報告に「判断待ち」と残すなら、同じ主題を【kim 確認用の全文】または「次に kim がすること」に選択肢と推奨付きで入れる。Claude が決められる可逆な事項は決めて進める。
+
 ## control-group-stop-gate
 
 node tools/control-group-check.mjs --gate <変更したゲート名> で現在のソースに killed 証跡を作る。
@@ -93,6 +101,7 @@ claude.ai の Gmail コネクタは、本文や件名の `http://` / `https://` 
 - 上の経路が使えず急ぐ場合は、URL を `8sp.jp/food` のようにスキーム（https://）なしで書けば書き換えられず、受信側でリンクになる。
 - 2026-10-30 から全PCで初回から deny（観察期間なし）。user-PC で社外宛返信の URL が転送 URL に書き換わった実害による。
 - override は、転送 URL への書き換えが起きないことを生 MIME の読み戻しまで含めて確認でき、利用者がそのリスクを明示的に受け入れた場合だけ使う。`~/.claude/gmail-connector-url-gate-override` の1行目に短い有効期限の ISO 8601 時刻を書く。
+- gmail-draft.mjs で作った下書きを送る時は send_message に draftId と同じ本文の body を渡す（body は送信内容に使われない）。draftId が指定された send_message は URL チェックを通過する。
 
 ## live-artifact-read-gate
 
@@ -244,6 +253,10 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 
 既存 Stop runner から呼ぶため Stop hook 設定 の追加登録は不要。`ORGIAST_SIDE_EFFECT_LEFT_GATE=0` で無効化できる。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
 
+## unattended-elevation-gate
+
+無人セッション（CLAUDE_HEADLESS=1、ORGIAST_HEADLESS_JOB 設定、SDK CLI）での UAC 必須インストール（winget install/upgrade、msiexec /i、Start-Process -Verb RunAs、choco install、Setup/Installer .exe）をブロックする。必要なインストールは対話セッションで実行するか、`node tools/kim-inbox.mjs --ask "UAC 必須インストール: <インストール対象と理由>" --answer "インストール手順"` で依頼を積む。
+
 ## answer-canonical-gate
 
 人の質問への回答をその場限りの文面で終えず、答えを正本（社内マニュアル・FAQ・応募者向け案内ページ・テンプレート・memory・コード）に追記し、次から相手や担当者が自分で引ける形にする。追記後は `正本化: <追記先の名前とリンク>` を1行書く。
@@ -268,6 +281,8 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 ## third-party-nudge-gate
 
 他の人・他PC・他アカウントの対応待ちで止まる報告には、最終まとめの「user がやること」に任意の後押し文を必ず入れる: 「急ぐ場合だけ、<相手>に口頭やチャットで『<その1文で分かる用件。何がどこに届いていて何を対応してほしいか>』と一言伝えてもらえると早く進みます」。user がやらなくても進む前提で、必須作業とは分けて書く。
+
+また、外部待ち（第三者待ち・本番反映待ち等）がある場合は、末尾に『このセッション: まだ閉じない（<何を待つか>・YYYY-MM-DD HH:MM まで待つ）』の待機期限フッターを必ず記載する（期限切れは kim-inbox に通知される）。待ちの進捗確認は node tools/auto-progress.mjs --start-when "<到着を判定するコマンド>" --next-claude "<届いたらやること>"（または --add-check --check "<完了判定>"）で登録する。session 内の run_in_background の見張りや CronCreate はセッション終了で消えるため使わない。
 
 コードブロック・引用行は対象外。既存 Stop runner から呼ぶため Stop hook 設定の追加登録は不要。`ORGIAST_THIRD_PARTY_NUDGE_GATE=0` で無効化できる。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
 
@@ -319,6 +334,10 @@ PR のマージを人に頼む文（本文の「次に kim がすること」・
 
 全PC・全アカウントで修復可能なレーン故障を最初に直す。`node tools/lane-doctor.mjs --probe` で診断する。Codex の probe_failed は直接 `wsl -d Ubuntu -u root -- codex exec --skip-git-repo-check "ping"` の終了コードでも切り分け、probe 経路だけの故障をレーン停止と断定しない。
 修復を試し、成功を実測したら `node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段と実測>" --result fixed`。`unfixable` は lane-health の reason が `billing` / `dead:oauth_consent` / `dead:physical_operation` / `quota_wait` の場合だけ受理する。原因未分類や修復可能な失敗では、分類修正と別キー・OAuth無料枠・OpenRouter 等を試す。同一故障で3回連続修復不可なら notify-kim に1回通知する。429/usage_limit で reset が判明している quota_wait は修復対象外で、SessionStart に出る代替の安いレーンへ回す。gate 自体の例外は gate-errors.jsonl に記録して fail-open。
+
+## pdf-deliverable-visual-gate
+
+対象PDFを `node tools/pdf-page-check.mjs --pdf <file>` で再描画し、出力された全ページPNGを現在のセッションで1枚ずつ Read する。修正した場合は描画と全ページReadを最初からやり直す。
 
 ## deliverable-drive-link-gate
 

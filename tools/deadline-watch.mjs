@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { seatCheck } from './lib/deadline-seat.mjs';
 import { parseRows as parseVehicles, retireVehicleAsks } from './vehicle-inspection-watch.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
@@ -199,6 +200,10 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   let args; const startedAt = new Date().toISOString(); let ok = false;
   try {
     args = parseArgs(argv); const today = args.now || jstDate();
+    if (!args.fixture && deps.skipSeatCheck !== true) {
+      const seat = seatCheck(home);
+      if (!seat.kim) { stdout(JSON.stringify({ skip: true, reason: 'deadline jobs run only on the seat with the kim DWD key', seat })); return 0; }
+    }
     const fixture = args.fixture ? readJson(args.fixture) : null;
     if (args.fixture && (!fixture || !Array.isArray(fixture.rows))) throw new Error('fixture の台帳JSONがありません、または形式が不正です');
     const config = fixture ? { ...DEFAULT_CONFIG, ...fixture.config, calendar: { enabled: false } } : deps.config || loadConfig(home);
@@ -225,8 +230,8 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   } catch (e) { stderr(`deadline-watch: ${e.message}`); return 1; }
   finally {
     if (args && !args['dry-run'] && !args.digest) {
-      await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineWatch', startedAt, finishedAt: new Date().toISOString(), ok, summary: ok ? '期限追跡完了' : '期限追跡失敗', cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
-      try { const log = path.join(home, '.claude/logs/deadline-watch.log'); fs.mkdirSync(path.dirname(log), { recursive: true }); fs.appendFileSync(log, `${new Date().toISOString()} deadline-watch ${ok ? 'ok' : 'failed'}\n`); } catch (e) { stderr(`deadline-watch: log write failed (${e.code || e.message})`); }
+      await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineWatch', startedAt, finishedAt: new Date().toISOString(), ok, summary: ok ? '期限追跡完了' : '鍵なし席のためスキップ', cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
+      try { const log = path.join(home, '.claude/logs/deadline-watch.log'); fs.mkdirSync(path.dirname(log), { recursive: true }); fs.appendFileSync(log, `${new Date().toISOString()} deadline-watch ${ok ? 'ok' : 'skipped'}\n`); } catch (e) { stderr(`deadline-watch: log write failed (${e.code || e.message})`); }
     }
   }
 }

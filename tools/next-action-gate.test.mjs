@@ -3,7 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { judgeNextAction, reportsCloseSteps, SESSION_PHRASES as PHRASES, openDeadline, openPhrase } from './next-action-gate.mjs';
+import { judgeNextAction, reportsCloseSteps, SESSION_PHRASES as PHRASES, openDeadline, openPhrase, hasOpenSessionCheck } from './next-action-gate.mjs';
 
 // open は期限入りのテンプレートなので、テストでは遠い未来の期限を入れた実例で検証する。
 const SESSION_PHRASES = { ...PHRASES, open: 'まだ閉じない（作業中・2099-12-31 23:59 まで待つ）', pending: '/session-close をして（まだ閉じない・2099-12-31 23:59 まで待つ）' };
@@ -585,8 +585,14 @@ test('人待ちは自動進行なしでも同一sessionのopen台帳行を要求
   withOpenCheck((input, file) => {
     assert.equal(judgeNextAction(text, cronRow, input).decision, 'pass');
     assert.equal(judgeNextAction(text, cronRow, { session_id: 'other' }).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
-    for (const status of ['done', 'superseded', 'waiting_user', 'stalled', 'resumed']) {
+    for (const status of ['done', 'superseded', 'waiting_user']) {
       fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status, check: 'node check.mjs', ask: '本人が行う操作の全文です。' }));
+      assert.equal(judgeNextAction(text, '', input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', status);
+    }
+    for (const status of ['overdue', 'stalled', 'resumed']) {
+      fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status, check: 'node check.mjs', ask: '本人が行う操作の全文です。' }));
+      assert.equal(hasOpenSessionCheck(input), true, status);
+      assert.equal(judgeNextAction(text, cronRow, input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', status);
       assert.equal(judgeNextAction(text, '', input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', status);
     }
     fs.rmSync(file);
@@ -603,7 +609,7 @@ test('人待ちは自動進行なしでも同一sessionのopen台帳行を要求
 
 // 他の判定も満たした応答で、新しい判定の到達性を検証する。
 const inlineReport = (action, content = '') => `${body}\n恒久策: 一回限り: 今回の判断は本人の意思が必要\n${content}次に kim がすること: ${action}\nこの後の自動進行: なし\nこのセッション: ${SESSION_PHRASES.delete}`;
-const inlineContent = '【kim 確認用の全文】\nA案: 今回の提案を採用する。B案: 保留する。\n';
+const inlineContent = '【kim 確認用の全文】\nA案: 今回の提案を採用する。B案: 今回の提案内容を保留する。\n';
 
 test('指定された遡り語は括弧内やなしで始まる値でも拒否する', () => {
   for (const word of ['前の応答', '前々回', '前回の応答', '上の応答', '先ほどの', 'さっきの', '末尾の返信文', '前に出した', '既に提示', '上記の文面', '上記の返信', '前述', '以前の応答', '過去の応答', '遡って', 'スクロール']) {
@@ -754,8 +760,9 @@ test('ラベルの理由付き例外は新判定だけを解除する', () => {
   assert.equal(judgeNextAction(inlineReport('B案、支払い', override)).code, 'NEXT-ACTION-MULTIPLE');
 });
 
-test('なしや本文・引用だけのラベルは block しない', () => {
-  assert.equal(judgeNextAction(inlineReport('なし', '> ①②③ から番号で選ぶ\nB案は過去の失敗例です。\n')).decision, 'pass');
+test('引用内のラベルは無視し、本文の未定義ラベルは block する', () => {
+  assert.equal(judgeNextAction(inlineReport('なし', '> ①②③ から番号で選ぶ\n')).decision, 'pass');
+  assert.equal(judgeNextAction(inlineReport('なし', 'B案は過去の失敗例です。\n')).code, 'NEXT-ACTION-LABEL-UNDEFINED');
 });
 
 test('同じターンの前メッセージに承認全文と恒久策があれば再掲せず不足フッターだけで通る', () => {
@@ -809,6 +816,49 @@ test('stop_hook_active で期限なし「まだ閉じない」は連続2回ま�
   } finally {
     if (prevHome === undefined) delete process.env.ORGIAST_HOME;
     else process.env.ORGIAST_HOME = prevHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('方法・プラン・パターン・手段・ルート・オプションもラベルだけなら block', () => {
+  for (const action of ['方法C', 'プランB', 'パターンA', '手段2', 'ルートX', 'オプション3']) {
+    assert.equal(judgeNextAction(inlineReport(action, inlineContent)).code, 'NEXT-ACTION-LABEL-ONLY', action);
+  }
+});
+
+test('本文の「方法C でよいか」は全角コロンなしでも未定義ラベルとして block', () => {
+  const text = body + '\n方法C でよいか\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: ' + SESSION_PHRASES.delete;
+  assert.equal(judgeNextAction(text).code, 'NEXT-ACTION-LABEL-UNDEFINED');
+});
+
+test('本文で C を使うなら A・B・C すべてに8文字以上の中身が必要', () => {
+  const report = definitions => body + '\n' + definitions + '\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: ' + SESSION_PHRASES.delete;
+  assert.equal(judgeNextAction(report('方法C（Google パスワードマネージャーで管理）')).code, 'NEXT-ACTION-LABEL-UNDEFINED');
+  assert.equal(judgeNextAction(report('方法A（月1回の棚卸しを実施する）方法B（週1回の棚卸しを実施する）方法C（Google パスワードマネージャーで管理）')).decision, 'pass');
+});
+
+test('stop_hook_active の書き直しでもラベル・承認・複数・遡りを検査し、3回目で打ち切る', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-hook-labels-'));
+  const previous = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  fs.mkdirSync(path.join(home, '.claude'));
+  try {
+    const cases = [
+      ['label', inlineReport('方法C', inlineContent), 'NEXT-ACTION-LABEL-ONLY'],
+      ['body-label', body + '\n方法C でよいか\n' + footer, 'NEXT-ACTION-LABEL-UNDEFINED'],
+      ['approval', inlineReport('今回の案を承認する'), 'NEXT-ACTION-APPROVAL-INLINE'],
+      ['multiple', inlineReport('支払い、署名', inlineContent), 'NEXT-ACTION-MULTIPLE'],
+      ['backref', inlineReport('前の応答を参照', inlineContent), 'NEXT-ACTION-BACKREF'],
+    ];
+    for (const [session_id, text, code] of cases) {
+      const input = { session_id, stop_hook_active: true };
+      assert.equal(judgeNextAction(text, '', input).code, code);
+      assert.equal(judgeNextAction(text, '', input).code, code);
+      assert.equal(judgeNextAction(text, '', input).decision, 'pass');
+    }
+  } finally {
+    if (previous === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previous;
     fs.rmSync(home, { recursive: true, force: true });
   }
 });

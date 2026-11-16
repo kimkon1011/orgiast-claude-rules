@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { classify, sweep, HOUR, acquireLock, repositories, notifyStuckPr } from './stuck-pr-sweeper.mjs';
+import { classify, sweep, HOUR, acquireLock, repositories, notifyStuckPr, cloneRoot, migrateLegacyClones, cleanupClosedClones } from './stuck-pr-sweeper.mjs';
 const now = Date.parse('2026-11-02T10:00:00Z');
 const ago = hours => new Date(now - hours * HOUR).toISOString();
 const base = () => ({ repo: 'kimkon1011/example', number: 1, title: 'repair example', url: 'https://github.com/kimkon1011/example/pull/1', state: 'OPEN', author: { login: 'kimkon1011' }, createdAt: ago(1), headRefOid: 'a'.repeat(40), statusCheckRollup: [], reviewRequests: [] });
@@ -126,4 +126,113 @@ for (const fallback of [false, true]) test(`real ${fallback ? 'auto-progress fal
   } else {
     const item=JSON.parse(fs.readFileSync(path.join(f.home,'.claude/kim-inbox',id+'.json'),'utf8'));assert.equal(item.status,'dropped');
   }
+});
+
+test('cloneRoot returns default pr-clones directory and respects ORGIAST_PR_CLONE_ROOT', () => {
+  const home = '/fake/home';
+  assert.equal(cloneRoot(home, {}), path.join(home, 'pr-clones'));
+  assert.equal(cloneRoot(home, { ORGIAST_PR_CLONE_ROOT: '/custom/clone/root' }), '/custom/clone/root');
+});
+
+test('migrateLegacyClones moves -- directories and attempt txt files, ignores non-hyphenated dirs, and skips existing targets', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migrate-test-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+
+  const legacy = path.join(home, '.claude/stuck-pr-worktrees');
+  const newRoot = path.join(home, 'pr-clones');
+
+  const validRepoLegacy = path.join(legacy, 'owner--repo/1');
+  const otherWorktreeLegacy = path.join(legacy, 'pc-load-reopen-cap/subfolder');
+  fs.mkdirSync(validRepoLegacy, { recursive: true });
+  fs.mkdirSync(otherWorktreeLegacy, { recursive: true });
+  fs.writeFileSync(path.join(validRepoLegacy, 'code.js'), 'console.log(1)');
+  fs.writeFileSync(path.join(legacy, 'owner--repo-1-attempt-0.txt'), 'prompt text');
+
+  const existingRepoLegacy = path.join(legacy, 'owner--exist/2');
+  fs.mkdirSync(existingRepoLegacy, { recursive: true });
+  fs.writeFileSync(path.join(existingRepoLegacy, 'old.js'), 'old');
+  fs.mkdirSync(path.join(newRoot, 'owner--exist/2'), { recursive: true });
+  fs.writeFileSync(path.join(newRoot, 'owner--exist/2/already.js'), 'already');
+
+  const res = migrateLegacyClones({ home, newRoot });
+
+  assert.ok(res.moved.some(m => m.from.includes('owner--repo') && m.to.includes('owner--repo')));
+  assert.ok(fs.existsSync(path.join(newRoot, 'owner--repo/1/code.js')));
+  assert.ok(fs.existsSync(path.join(newRoot, 'owner--repo-1-attempt-0.txt')));
+
+  assert.ok(fs.existsSync(path.join(legacy, 'pc-load-reopen-cap/subfolder')));
+
+  assert.ok(res.skipped.some(s => s.from.includes('owner--exist')));
+  assert.ok(fs.existsSync(path.join(legacy, 'owner--exist/2/old.js')));
+});
+
+test('cleanupClosedClones handles MERGED/CLOSED clean, OPEN, dirty, unpushed, and git failures correctly', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cleanup-test-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+
+  const newRoot = path.join(home, 'pr-clones');
+
+  const makeDir = prNum => {
+    const dir = path.join(newRoot, `owner--repo1/${prNum}`);
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  };
+
+  const d10 = makeDir(10);
+  const d11 = makeDir(11);
+  const d12 = makeDir(12);
+  const d13 = makeDir(13);
+  const d14 = makeDir(14);
+  const d15 = makeDir(15);
+
+  fs.writeFileSync(path.join(newRoot, 'owner--repo1-10-attempt-0.txt'), 'attempt 10');
+
+  const stateMap = {
+    'owner/repo1#10': 'MERGED',
+    'owner/repo1#11': 'CLOSED',
+    'owner/repo1#12': 'OPEN',
+    'owner/repo1#13': 'MERGED',
+    'owner/repo1#14': 'MERGED',
+    'owner/repo1#15': 'MERGED',
+  };
+
+  const stateOf = async (repo, num) => stateMap[`${repo}#${num}`];
+
+  const gitMock = (args, options) => {
+    const cwd = typeof options === 'string' ? options : options.cwd;
+    if (cwd.endsWith('13')) {
+      if (args[0] === 'status') return ' M modified.js\n';
+      return '0';
+    }
+    if (cwd.endsWith('14')) {
+      if (args[0] === 'status') return '';
+      if (args[0] === 'rev-list') return '2\n';
+      return '0';
+    }
+    if (cwd.endsWith('15')) {
+      throw new Error('fatal: Not a git repository');
+    }
+    if (args[0] === 'status') return '';
+    if (args[0] === 'rev-list') return '0\n';
+    return '';
+  };
+
+  const res = await cleanupClosedClones({ home, newRoot, stateOf, git: gitMock });
+
+  assert.equal(res.deleted.length, 2);
+  assert.ok(res.deleted.some(d => d.number === 10));
+  assert.ok(res.deleted.some(d => d.number === 11));
+  assert.ok(!fs.existsSync(d10));
+  assert.ok(!fs.existsSync(d11));
+  assert.ok(!fs.existsSync(path.join(newRoot, 'owner--repo1-10-attempt-0.txt')));
+
+  assert.ok(res.kept.some(k => k.number === 12 && k.reason.includes('open')));
+  assert.ok(res.kept.some(k => k.number === 13 && k.reason === 'dirty'));
+  assert.ok(res.kept.some(k => k.number === 14 && k.reason === 'unpushed-commits'));
+  assert.ok(res.kept.some(k => k.number === 15 && k.reason.includes('git-error')));
+
+  assert.ok(fs.existsSync(d12));
+  assert.ok(fs.existsSync(d13));
+  assert.ok(fs.existsSync(d14));
+  assert.ok(fs.existsSync(d15));
 });

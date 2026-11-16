@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { disabledLanes } from './lib/lane-disabled.mjs';
 import { wslInstalled } from './lib/wsl-present.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,11 +10,11 @@ import { isEntry } from './is-entry.mjs';
 import { codexAuthStatusAny } from './codex-auth-status.mjs';
 import { loadEnvKey, loadGeminiKey, loadDeepseekKey } from './codex-do.mjs';
 import { providerResetUntil } from './codex-cooldown.mjs';
+import { isDailyQuotaResponse, nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { redactAll } from './lib/redact.mjs';
 import { catalog } from './provider-catalog.mjs';
 import { applyRealLaneHealth, billingFailure, billingWithQuotaHint, quotaFailure } from './lib/lane-real-health.mjs';
-import { isDailyQuotaResponse, markDailyProviderCooldown, nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { isEnrollToken, validKeyservePcId } from './keyserve-auth.mjs';
 
@@ -66,8 +67,14 @@ function keyserveEnrolled(home, env = process.env) {
   const secret = env.ORGIAST_KEYSERVE_SECRET || readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
   return Boolean(secret && !isEnrollToken(secret));
 }
+// PC ごとの恒久無効化（lanes-disabled.json）。probe も通知もせず、順番から外す（2026-11-15 kim 指示: 008 の Gemini 停止）。
+// quick と probe の両経路で、実績反映（applyRealLaneHealth）の後に必ず掛け直す。
+export function applyDisabledLanes(health, home = laneHome()) {
+  for (const p of disabledLanes(home)) if (health.lanes?.[p]) health.lanes[p] = { alive: false, reason: 'disabled' };
+  return health;
+}
 function orders(health, home = laneHome()) {
-  health.implementOrder = ['codex', 'deepseek', 'glm', 'gemini-cli'].filter(p => health.lanes[p]?.alive);
+  health.implementOrder = ['codex', 'deepseek', 'glm', 'gemini-cli', 'openrouter'].filter(p => health.lanes[p]?.alive);
   // 旧 payment_required の扱いは維持し、billing は専用の日次通知と代替ルートに回す。
   const billing = readJson(path.join(repo, 'tools/provider-billing.json'));
   const needsUser = ([p, s]) => isLane(p) && /^(?:dead:)?(?:payment_required|oauth_consent|account_creation|physical_operation)$/.test(s.reason)
@@ -76,6 +83,7 @@ health.substituted = Object.entries(health.lanes).filter(([p, s]) => isLane(p) &
     || p === 'gemini' && s.reason === 'missing_key' && health.lanes.openrouter?.alive))
     .map(([provider]) => ({ provider, via: 'openrouter' }));
   for (const { provider, via } of health.substituted) health.lanes[provider].via = via;
+  // 安い順。Gemini は恒久停止せず同列の受け皿。失敗・回数制限時だけ一時退避し、回復後に戻す。Claude 本体はこの順に含めない。
   health.askOrder = ['groq', 'deepseek', 'openrouter', 'gemini'].filter(p => health.lanes[p]?.alive || health.lanes[p]?.via === 'openrouter' && health.lanes.openrouter?.alive);
   health.deadNeedsUser = Object.entries(health.lanes).filter(needsUser)
     .map(([provider, s]) => ({ provider, reason: s.reason, tried: s.tried, fix: s.userFix || (s.reason.includes('payment') ? '請求設定でオートチャージ ON。手動チャージは禁止ルール。' : '本人アカウントで認証画面を開き OAuth 同意を完了する。') }));
@@ -145,6 +153,7 @@ const paymentFresh = old.lanes?.[p]?.reason === 'dead:payment_required' && Numbe
   applyRealLaneHealth(health, home, now);
   // API key の生存と CLI の有無は別条件。CLI が無い場合は実装候補にしない。
   health.lanes['gemini-cli'] = directGeminiCliState(health.lanes.gemini, executable('gemini'));
+  applyDisabledLanes(health, home);
 orders(health, home);
   if (!health.lanes.deepseek.alive && health.lanes.deepseek.reason === 'dead:payment_required' && health.lanes.openrouter?.alive) health.lanes.deepseek.via = 'openrouter';
   if (save) { demoteBilling(health, home, now); persist(path.join(dir, 'lane-health.json'), health, health); }
@@ -234,6 +243,8 @@ export function notificationText(item, home) {
 4. 完了後は Claude が lane-doctor --probe で復旧を確認します。`;
 }
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// 回数制限・課金切れ・クールダウン中は実APIへ probe しない（空いている枠をヘルスチェックが食い潰すのを防ぐ）。
 // until がある間は待つ。until が無いときも直近1時間は叩かず、期限到来後に1回だけ確認して自動復帰する。
 export function shouldSkipLiveProbe(state = {}, now = Date.now()) {
   const reason = String(state.reason || '');
@@ -316,17 +327,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       }
       health.lanes[p].probeReason = health.lanes[p].reason;
       if (deferred && cooldown[p]?.until) health.lanes[p].until = cooldown[p].until;
-      if (limited && !payment) {
-        if (isDailyQuotaResponse(429, text)) {
-          markDailyProviderCooldown(p, { home, now: new Date(now) });
-          health.lanes[p].until = nextUtcMidnight(new Date(now));
-        } else {
-          const until = providerResetUntil(text, now);
-          cooldown[p] = { until, at: now, reason: 'lane_doctor_usage_limit' };
-          cooldownChanged = true;
-          health.lanes[p].until = until;
-        }
-      }
+      if (limited && !payment) { const daily = isDailyQuotaResponse(429, text); const until = daily ? nextUtcMidnight(new Date(now)) : providerResetUntil(text, now); cooldown[p] = { until, at: now, reason: daily ? 'daily_limit' : 'lane_doctor_usage_limit' }; cooldownChanged = true; health.lanes[p].until = until; }
     }
   }
   if (routingChanged && !persist(path.join(dir, 'routing-overrides.json'), routing, health)) health.repairs = health.repairs.filter(r => r.action !== 'demote_removed' || r.detail !== '実測成功');
@@ -334,6 +335,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   health.probedAt = new Date(now).toISOString();
   applyRealLaneHealth(health, home, now);
   health.lanes['gemini-cli'] = directGeminiCliState(health.lanes.gemini, executable('gemini'));
+  applyDisabledLanes(health, home);
   orders(health, home);
   demoteBilling(health, home, now);
   await notifyLaneStops(health, { home, now, notify, budgetMs, started, platform, spawnImpl });

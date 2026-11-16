@@ -126,7 +126,9 @@ function check(item) {
     if (item.type === 'file-nonempty') {
       const candidates = (spec.paths || [spec.path]).map(resolveHome);
       if (spec.ifPresent && !candidates.some(fs.existsSync)) return null;
-      return candidates.some((target) => readNonempty(target, spec.kind));
+      const exists = candidates.some((target) => readNonempty(target, spec.kind));
+      if (!exists && item.severity !== 'required' && process.env.CI === 'true') return null;
+      return exists;
     }
     if (item.type === 'git-origin') {
       // 配布元リポの origin が届くかを確かめる。届かない URL（not-found・未認証で認証エラーに見える auth）は

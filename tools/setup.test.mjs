@@ -138,6 +138,40 @@ test('git-origin: 未配置はNOTICE・届かないURL/認証エラーはNG・�
   assert.equal(status(), 'OK');
 });
 
+test('file-nonempty optional items are NOTICE in CI (env keys absent on clean runner)', () => {
+  const home = temp('setup-env-ci-');
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([
+    item('env:ci-key', 'file-nonempty', { path: '.claude/missing-key.env' }, 'optional'),
+    item('env:ci-required', 'file-nonempty', { path: '.claude/missing-required.env' }, 'required'),
+    item('env:ci-present', 'file-nonempty', { path: '.claude/present.env' }, 'optional'),
+  ])));
+  write(path.join(home, '.claude/present.env'), 'exists');
+  // CI=true: optional missing → NOTICE, required missing → NG
+  const ciResult = run(['--json', '--home', home, '--manifest', mf], { CI: 'true' });
+  assert.equal(ciResult.status, 1, 'required NG in CI should exit 1');
+  const ciItems = JSON.parse(ciResult.stdout).items;
+  assert.equal(ciItems.find(i => i.id === 'env:ci-key').status, 'NOTICE');
+  assert.equal(ciItems.find(i => i.id === 'env:ci-required').status, 'NG');
+  assert.equal(ciItems.find(i => i.id === 'env:ci-present').status, 'OK');
+  // CI なし（ローカル実PC相当）: optional missing → NG（自動修復対象として扱う）
+  const localResult = run(['--json', '--home', home, '--manifest', mf]);
+  assert.equal(localResult.status, 1, 'required NG without CI should exit 1');
+  const localItems = JSON.parse(localResult.stdout).items;
+  assert.equal(localItems.find(i => i.id === 'env:ci-key').status, 'NG');
+  assert.equal(localItems.find(i => i.id === 'env:ci-required').status, 'NG');
+  assert.equal(localItems.find(i => i.id === 'env:ci-present').status, 'OK');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('manifest: settings:unattended-elevation-gate is optional until rollout denyAfter', () => {
+  const parsed = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8'));
+  const gate = parsed.items.find(x => x.id === 'settings:unattended-elevation-gate');
+  assert.equal(gate.severity, 'optional', 'should be optional while gate-rollout-manifest denyAfter (2026-11-20) has not passed');
+  const hookFile = parsed.items.find(x => x.id === 'hook:unattended-elevation-gate');
+  assert.equal(hookFile.severity, 'required', 'hook file existence should remain required');
+});
+
 test('project manifest has unique known item types and severities', () => {
   const parsed = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8'));
   const ids = parsed.items.map((entry) => entry.id);

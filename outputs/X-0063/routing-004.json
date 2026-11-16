@@ -1,0 +1,43 @@
+{
+  "attempt": "004",
+  "revision": "a1281338960532f9dcfb39407853cbb3206491e4",
+  "scope": [
+    "README.md",
+    "docs",
+    "config",
+    ".claude"
+  ],
+  "pattern": "X-0063|競合ブース|会場リサーチ|キャッシュを壊さない|一括クリーンアップ",
+  "sources": [
+    {
+      "path": "docs/ai-news-x0016-subagent-evolution.md",
+      "sha256": "4c9f5257bb70c34f22c70d2e86145175bfdd5bce5a0b04f62e0240970c7166ac"
+    },
+    {
+      "path": "docs/ai-news-x0009-seo-workflow-agent-9steps.md",
+      "sha256": "9a30d0a13684c1175e97eb07e216f176fb09e22fda014ae706e1b77650ae22e5"
+    },
+    {
+      "path": "docs/ai-news-x0041-monetization-research-master-prompt.md",
+      "sha256": "d6752e3d40734ce11553e4a6a3768e3cbf88ca40f0a62c7ac3fdbabce5c683c0"
+    }
+  ],
+  "result": "業務語に一致した3資料は適用案・コンテキスト試算・SEO構築案。対象ブラウザAIの要求構築・逐次画像削除・実利用起動設定を証明しない。",
+  "limitations": [
+    "初回広域検索は不存在configs/.mcp.json指定で終了2。出力も多く最終判断には使用せず、存在する4範囲へ限定して再検索。",
+    "ローカル静的検索のみ。対象製品不存在の証明ではない。"
+  ],
+  "criteria": {
+    "C1": "未達",
+    "C2": "未達",
+    "C3": "未達",
+    "C4": "未達",
+    "C5": "未達"
+  },
+  "next_inputs": [
+    "実際に使うブラウザAI製品名・版と起動コマンド/設定所在",
+    "要求構築と画像履歴処理を所有するソースへの正規アクセス",
+    "匿名化した変更前要求（画像・参照・tool対応含む）と両業務の実行条件",
+    "有料比較の既存権限・費用上限の証拠"
+  ]
+}

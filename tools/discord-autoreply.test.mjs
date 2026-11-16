@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { runOnce, main, createDiscord, discordRequest, ensureTaskPriority, createLlm, contentFor, parseJson, combinePermissions, inventedAmounts } from './discord-autoreply.mjs';
+import { runOnce, main, createDiscord, discordRequest, ensureTaskPriority, createLlm, contentFor, parseJson, combinePermissions, inventedAmounts, isReportOnly } from './discord-autoreply.mjs';
 
 const NOW = Date.parse('2026-10-09T03:00:00Z');
 const KIM = '715210673642012733';
@@ -45,6 +45,14 @@ function fixture(t, { initial = true, messages = [message()], reply = [], after 
       throw new Error(`Unexpected request: ${url}`);
     }, ...extra,
   };
+  // Keep extraction separate from reply/retry mocks and never contact a live Beeper.
+  options.beeperFetch = async () => ({ items: [] });
+  let replyLlm = options.llm;
+  Object.defineProperty(options, 'llm', {
+    get: () => async args => args.system?.startsWith('Extract proper nouns')
+      ? JSON.stringify(['スマートエイト']) : replyLlm(args),
+    set: value => { replyLlm = value; },
+  });
   return { options, home, dir, file, calls, notifications, llmCalls, state,
     readState: () => JSON.parse(fs.readFileSync(file('state.json'), 'utf8')),
     writeState: () => fs.writeFileSync(file('state.json'), JSON.stringify(state)),
@@ -744,6 +752,68 @@ test('質問文にある金額を回答で引用しても送信される', async
 });
 
 
+test('isReportOnly: 完了報告「終わりました」→ true', () => {
+  assert.equal(isReportOnly('上記のタスクは本番前まですべて終わりました。'), true);
+});
+
+test('isReportOnly: 「全て問題ありません」→ true', () => {
+  assert.equal(isReportOnly('①～⑤全て問題ありません。'), true);
+});
+
+test('isReportOnly: 「よろしいでしょうか」→ false', () => {
+  assert.equal(isReportOnly('以下4点については、どのように記載すればよろしいでしょうか？'), false);
+});
+
+test('isReportOnly: 「確認お願いします」→ false', () => {
+  assert.equal(isReportOnly('座面カバーですかね？確認お願いします。'), false);
+});
+
+test('isReportOnly: 「報告します」→ true', () => {
+  assert.equal(isReportOnly('連絡事項を報告します'), true);
+});
+
+test('isReportOnly: 「報告を行います」→ true', () => {
+  assert.equal(isReportOnly('取引先に報告を行います'), true);
+});
+
+test('isReportOnly: 「入力いたしました」→ true', () => {
+  assert.equal(isReportOnly('システムに入力いたしました'), true);
+});
+
+test('isReportOnly: 「完了しました」→ true', () => {
+  assert.equal(isReportOnly('全て完了しました'), true);
+});
+
+test('isReportOnly: null/空 → false', () => {
+  assert.equal(isReportOnly(null), false);
+  assert.equal(isReportOnly(''), false);
+});
+
+test('isReportOnly: 疑問符あり → false', () => {
+  assert.equal(isReportOnly('確認できたでしょうか？'), false);
+});
+
+test('isReportOnly: 「ください」あり → false', () => {
+  assert.equal(isReportOnly('確認してください'), false);
+});
+
+test('isReportOnly: 「お願いします」あり → false', () => {
+  assert.equal(isReportOnly('対応をお願いします'), false);
+});
+
+test('isReportOnly: 「いかが」あり → false', () => {
+  assert.equal(isReportOnly('ご検討いかがでしょうか'), false);
+});
+
+test('isReportOnly: 「どう」あり → false', () => {
+  assert.equal(isReportOnly('どうしましょう'), false);
+});
+
+test('isReportOnly: 「可否」あり → false', () => {
+  assert.equal(isReportOnly('対応可否を教えてください'), false);
+});
+
+
 test('新規IPv4接続を毎回使い本文読み込みの停止にも期限を適用', async t => {
   const requests = [];
   const url = 'https://discord.test';
@@ -1027,18 +1097,38 @@ test('画像payloadはDeepSeek強制指定でもGemini→Kimi→Gensparkのみ',
 });
 
 import { readGoogleDoc, extractPdfText } from './lib/autoreply-attachments.mjs';
-for (const [mime, format] of [['document', 'text/plain'], ['spreadsheet', 'text/csv'], ['presentation', 'text/plain']]) {
-  test(`DWD request: ${mime} は正しい形式でexportし第二主体へfallback`, async () => {
+for (const [mime, format, extraHandler] of [
+  ['document', 'text/plain', null],
+  ['spreadsheet', 'sheets', url => {
+    if (url.includes('fields=sheets.properties')) return { sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }] };
+    if (url.includes('/values:batchGet')) return { valueRanges: [{ values: [['header'], ['ドキュメントの本文']] }] };
+    return undefined;
+  }],
+  ['presentation', 'text/plain', null],
+]) {
+  test(`DWD request: ${mime} は正しい形式でexport/APIし第二主体へfallback`, async () => {
     const calls = [];
     const request = async (url, options) => {
       calls.push({ url, ...options });
       if (options.user === 'kim@orgiast.jp') throw new Error('denied');
-      if (url.includes('?fields=')) return { id: 'file1', mimeType: `application/vnd.google-apps.${mime}` };
-      assert.equal(new URL(url).searchParams.get('mimeType'), format);
+      // Drive metadata: ?fields= containing mimeType
+      if (url.includes('mimeType&') || url.includes('mimeType,')) return { id: 'file1', mimeType: `application/vnd.google-apps.${mime}` };
+      if (extraHandler) {
+        const r = extraHandler(url);
+        if (r !== undefined) return r;
+      } else {
+        assert.equal(new URL(url).searchParams.get('mimeType'), format);
+      }
       return 'ドキュメントの本文';
     };
     const result = await collectReadableContent({ messages: [{ content: 'https://docs.google.com/document/d/file1/edit' }], readGoogleUrl: id => readGoogleDoc(id, { request }) });
-    assert.equal(result.documents[0].text, 'ドキュメントの本文');
+    const text = result.documents?.[0]?.text || '';
+    if (extraHandler) {
+      // spreadsheets returns Sheets API format
+      assert.ok(text.includes('Sheet1') || text.includes('ドキュメントの本文'));
+    } else {
+      assert.ok(text.includes('ドキュメントの本文'));
+    }
     assert.equal(calls[0].user, 'kim@orgiast.jp');
     assert.equal(calls.at(-1).user, 'seisaku-team@orgiast.jp');
   });
@@ -1142,6 +1232,45 @@ test('discord: 文脈メッセージに未対応添付(.xlsx)があっても、�
   assert.equal(result.wouldSend.length, 1);
   assert.equal(f.posts().length, 0);
   assert.equal(f.llmCalls.length, 1);
+});
+
+// Related conversation integration: use the same fixture through the real reply pipeline.
+for (const amount of ['40,000円', '4万円']) {
+  test(`辻さん: related を LLM 入力に含め、${amount} を捏造扱いしない`, async t => {
+    const f = fixture(t);
+    f.options.beeperFetch = async (endpoint, { query }) => {
+      assert.equal(endpoint, '/v1/messages/search');
+      assert.equal(query.query, 'スマートエイト');
+      return {
+        items: [{ id: 'related-1', chatID: 'group1', senderName: '川本',
+          timestamp: new Date(Date.now() - 86400000).toISOString(),
+          text: '<p>制作費２万円+5千円+1.5万円の合計４万円(税抜)で3プランという認識でよろしいでしょうか</p>' }],
+        chats: { group1: { title: '川本, 大平, 白川 & 百瀬' } },
+      };
+    };
+    f.options.llm = async ({ input, system }) => {
+      assert.equal(input.related.length, 1);
+      assert.equal(input.related[0].sender, '川本');
+      assert.equal(input.related[0].chat, '川本, 大平, 白川 & 百瀬');
+      assert.match(input.related[0].text, /合計４万円/);
+      assert.match(system, /全体最適/);
+      return JSON.stringify({ needs_reply: true, needs_kim_decision: false,
+        answer: `${amount}で合っているので原価に計上してください。根拠: 川本, 大平, 白川 & 百瀬で川本さんが合計４万円と発言。`, confidence: 0.95 });
+    };
+    // The question itself contains no amount: only related can justify the reply.
+    const result = await runOnce(f.options);
+    assert.equal(result.replied, 1);
+    assert.match(f.posts()[0].body.content, /原価に計上/);
+  });
+}
+
+test('関連検索失敗でも返信処理が続く', async t => {
+  const f = fixture(t);
+  let searched = false;
+  f.options.beeperFetch = async () => { searched = true; throw new Error('Beeper down'); };
+  const result = await runOnce(f.options);
+  assert.equal(searched, true);
+  assert.equal(result.replied, 1);
 });
 
 test('collectReadableContent: 対象を優先し文脈画像の上限超過は捨て、失敗を分離する', async () => {

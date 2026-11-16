@@ -418,7 +418,7 @@ test('shouldSkipLiveProbe: 回数制限・課金中は until まで実測しな�
   assert.equal(shouldSkipLiveProbe({ reason: 'quota_wait', until: now }, now), false);
   assert.equal(shouldSkipLiveProbe({ reason: 'probe_ok' }, now), false);
   assert.equal(shouldSkipLiveProbe({ reason: 'quota_wait', probedAt: new Date(now - 10 * 60 * 1000).toISOString() }, now), true);
-  assert.equal(shouldSkipLiveProbe({ reason: 'quota_wait', probedAt: new Date(now - 2 * 60 * 60 * 1000).toISOString() }, now), false);
+  assert.equal(shouldSkipLiveProbe({ reason: 'quota_wait', probedAt: new Date(now - 7 * 60 * 60 * 1000).toISOString() }, now), false); // quota_wait は 6h 窓
 });
 
 test('quota_wait 中の groq は probe せず、期限後に自動で実測して復帰できる', async t => {

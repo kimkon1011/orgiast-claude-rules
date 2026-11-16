@@ -17,10 +17,10 @@ export function main(argv = process.argv.slice(2), deps = {}) {
   const sourceHidden = path.join(repo, 'tools', 'run-hidden.vbs');
   const installedDir = path.join(home, '.claude', 'tools');
   const installedHidden = path.join(installedDir, 'run-hidden.vbs');
-  const opts = { home, intervalMinutes: 60, executionTimeLimitMinutes: 10, scriptArgs: ['--apply', '--notify'], initialDelayMinutes: 7, description: 'stale Gmail draft guard (hourly)' };
+  const opts = { home, intervalMinutes: 60, executionTimeLimitMinutes: 10, scriptArgs: ['--apply', '--notify', '--scheduled'], initialDelayMinutes: 7, description: 'stale Gmail draft guard (hourly)' };
   if (argv.includes('--dry-run')) {
     const plan = registerHourlyTask(TASK, path.join(repo, 'tools', 'mail-stale-draft.mjs'), { ...opts, dryRun: true });
-    console.log(`PLAN: ${plan.taskName} hourly: node tools/mail-stale-draft.mjs --apply --notify`);
+    console.log(`PLAN: ${plan.taskName} hourly: node tools/mail-stale-draft.mjs --apply --notify --scheduled`);
     console.log(`PLAN: repo=${repo}`);
     return plan;
   }

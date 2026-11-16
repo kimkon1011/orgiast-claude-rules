@@ -86,6 +86,16 @@ test('sweep reports and throws failures instead of claiming success', async () =
   await assert.rejects(sweep({ map: {}, getToken: async () => { throw new Error('denied'); }, inbox: async (_home, row) => rows.push(row) }), /巡回に失敗/);
   assert.match(rows[0].text, /失敗 2件/);
 });
+test('keyless fleet seats skip the all-account sweep successfully', async () => {
+  const rows = [];
+  const result = await sweep({ credentialAvailable: false,
+    getToken: async () => { throw new Error('must not request a relay token'); },
+    inbox: async (_home, row) => rows.push(row),
+  });
+  assert.equal(result.checked, 0);
+  assert.match(result.skipped, /サービスアカウント鍵がない/);
+  assert.match(rows[0].text, /スキップ/);
+});
 test('hook is registered synchronously and cannot be load-shed; daily sweep is distributed', () => {
   const hook = collapseHooks(repositoryHooks(process.cwd(), process.cwd())).manifest.events.PostToolUse.find(h => h.name === 'kim-editor-posttool.mjs');
   assert.ok(hook); assert.equal(hook.async, undefined); assert.equal(hook.critical, true);

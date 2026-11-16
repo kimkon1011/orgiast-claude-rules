@@ -94,16 +94,16 @@ test('shrunk transcript resets and rebuilds aggregate', () => {
   assert.deepEqual(aggregate(f.root, 'shrunk'), { offset: fs.statSync(f.transcript).size, turns: 1, cacheRead: 8, lastModel: 'claude-opus-4-7', lastContext: 8 });
 });
 
-test('301st assistant response prompts handoff once, including after cooldown and truncation', () => {
+test('121st assistant response (exceeds new 120 limit) prompts handoff once', () => {
   const f = fixture(), input = { transcript_path: f.transcript, session_id: 'limit' };
-  fs.writeFileSync(f.transcript, (assistant('claude-opus-5', 1) + '\n').repeat(300));
+  fs.writeFileSync(f.transcript, (assistant('claude-opus-5', 1) + '\n').repeat(120));
   assert.equal(run(f.root, input).stdout, '');
   fs.appendFileSync(f.transcript, '{malformed}\n' + JSON.stringify({ type: 'user', message: { content: '続けて' } }) + '\n');
   assert.equal(run(f.root, input).stdout, '');
   fs.appendFileSync(f.transcript, assistant('claude-opus-5', 1) + '\n');
   const out = JSON.parse(run(f.root, input).stdout).hookSpecificOutput;
   assert.equal(out.hookEventName, 'UserPromptSubmit');
-  assert.equal(out.additionalContext, '長期セッション上限に達しました。この応答を終えたら /session-close で引き継ぎ、次セッションで続けてください');
+  assert.match(out.additionalContext, /\/session-close/);
   const file = path.join(f.root, '.claude/session-guard/limit.json');
   const state = JSON.parse(fs.readFileSync(file, 'utf8'));
   state.handoffNotified = '2000-01-01T00:00:00Z';
@@ -116,20 +116,20 @@ test('301st assistant response prompts handoff once, including after cooldown an
 test('latest context sums all three input fields, uses strict threshold and supports env overrides', () => {
   const f = fixture(), input = { transcript_path: f.transcript, session_id: 'context' };
   const write = usage => fs.appendFileSync(f.transcript, JSON.stringify({ type: 'assistant', message: { usage } }) + '\n');
-  write({ input_tokens: 50000, cache_read_input_tokens: 90000, cache_creation_input_tokens: 10000 });
+  write({ input_tokens: 60000, cache_read_input_tokens: 90000, cache_creation_input_tokens: 10000 });
   assert.equal(run(f.root, input).stdout, '');
-  write({ input_tokens: 50001, cache_read_input_tokens: 90000, cache_creation_input_tokens: 10000 });
-  assert.match(run(f.root, input).stdout, /長期セッション上限/);
-  assert.equal(aggregate(f.root, 'context').lastContext, 150001);
+  write({ input_tokens: 60001, cache_read_input_tokens: 90000, cache_creation_input_tokens: 10000 });
+  assert.match(run(f.root, input).stdout, /session-close/);
+  assert.equal(aggregate(f.root, 'context').lastContext, 160001);
   assert.equal(run(f.root, { ...input, session_id: 'higher' }, { ORGIAST_SESSION_MAX_CONTEXT: '200000' }).stdout, '');
-  assert.match(run(f.root, { ...input, session_id: 'lower-count' }, { ORGIAST_SESSION_MAX_CONTEXT: '200000', ORGIAST_SESSION_MAX_RESPONSES: '2' }).stdout, /長期セッション上限/);
+  assert.match(run(f.root, { ...input, session_id: 'lower-count' }, { ORGIAST_SESSION_MAX_CONTEXT: '200000', ORGIAST_SESSION_MAX_RESPONSES: '2' }).stdout, /session-close/);
 });
 
 test('old aggregates are rescanned to recover latest context', () => {
-  const f = fixture('claude-opus-5', 200000), input = { transcript_path: f.transcript, session_id: 'migration' };
+  const f = fixture('claude-opus-5', 170000), input = { transcript_path: f.transcript, session_id: 'migration' };
   const dir = path.join(f.root, '.claude/session-guard');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'migration.json'), JSON.stringify({ aggregate: { offset: fs.statSync(f.transcript).size, turns: 1, cacheRead: 200000 } }));
-  assert.match(run(f.root, input).stdout, /長期セッション上限/);
+  assert.match(run(f.root, input).stdout, /session-close/);
   assert.equal(aggregate(f.root, 'migration').turns, 1);
 });

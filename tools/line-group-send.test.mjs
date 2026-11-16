@@ -18,6 +18,13 @@ test('parseArgs: グループと本文・画像を受け取る', () => {
   assert.equal(o.dryRun, true);
 });
 
+test('parseArgs: --skip-context-check を受け取りデフォルトfalse', () => {
+  const o1 = parseArgs(['--group', 'x', '--text-file', 'a.txt']);
+  assert.equal(o1.skipContextCheck, false);
+  const o2 = parseArgs(['--group', 'x', '--text-file', 'a.txt', '--skip-context-check']);
+  assert.equal(o2.skipContextCheck, true);
+});
+
 test('parseArgs: グループ無し・本文も画像も無しは使い方エラー', () => {
   assert.throws(() => parseArgs(['--text-file', 'a.txt']), /使い方/);
   assert.throws(() => parseArgs(['--group', 'x']), /使い方/);

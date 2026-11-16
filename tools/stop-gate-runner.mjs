@@ -54,9 +54,11 @@ import { evaluateShallowAnswer } from './shallow-answer-gate.mjs';
 import { judgeTurnLanguage } from './response-language-gate.mjs';
 import { evaluateUnregisteredPromise } from './unregistered-promise-gate.mjs';
 import { appendStopLedger, registerStopViolation, CAP_CONTEXT, splitRepeatedGateBlocks } from './lib/stop-recheck.mjs';
+import { stripInboxSection } from './lib/inbox-section-filter.mjs';
 import { STOP_RETRY_INSTRUCTION, withStopRetryInstruction } from './lib/stop-retry-message.mjs';
 import { evaluateClaudeFallbackReport } from './claude-fallback-report-gate.mjs';
-import { buildRecord, extractPromise, ledgerFile as progressLedgerFile, readLedger, writeLedger, applyPromise } from './auto-progress-ledger.mjs';
+import { evaluatePendingDecision } from './pending-decision-ask-gate.mjs';
+import { buildRecord, extractPromise, ledgerFile as progressLedgerFile, readLedger, writeLedger, applyPromise, latestOpenPromises, rollingSessionFields } from './auto-progress-ledger.mjs';
 import { appendInbox } from './lib/auto-progress-inbox.mjs';
 import { isUnchangedPeriodicReport } from './lib/unchanged-periodic-report.mjs';
 
@@ -122,6 +124,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     // 第2段は全regexの結果確定後に評価する。
     ['handoff-audit-gate', () => evaluateAudit({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw, sessionId: ctx.sessionId, regexBlocked: results.length > 0 }, { home: home(), ...auditOptions })],
     ['self-check-before-asking-guard', () => { const found = findOutsourcedInvestigation(reportText, scanToolUsesFromRaw(ctx.transcriptRaw)); return found ? { decision: 'block', reason: formatSelfCheck(found), code: 'SELF-CHECK' } : { decision: 'pass' }; }],
+    ['pending-decision-ask-gate', () => evaluatePendingDecision(reportText)],
     ['stop-gate', () => { if (!stopGateEnabled()) return { decision: 'pass' }; const todo = shouldBlock(ctx.assistantText); const question = !todo && shouldBlockProgressQuestion(ctx.assistantText); return todo ? { decision: 'block', reason: reasonFor(remainingItems(ctx.assistantText)), code: 'remaining-todo' } : question ? { decision: 'block', reason: progressQuestionReason(), code: 'progress-question' } : { decision: 'pass' }; }],
     ['report-length-gate', () => reportLengthEnabled() ? judgeReportLengthWithLlm(ctx.assistantText, ctx.humanText) : { decision: 'pass' }],
     ['side-effect-left-gate', () => judgeSideEffectLeft(ctx.assistantText, blocks(currentTurnEntries(ctx.transcriptRaw), 'tool_use'))],
@@ -167,7 +170,14 @@ export function hasFutureOpenCheck(sessionId, { home: progressHome = home(), now
 // No invented shell predicate: auto-progress-watch evaluates evidence for open rows without check.
 export function ensureAutopilotCheck(input, assistantText, transcriptRaw, now = Date.now()) {
   const promise = extractPromise(assistantText);
-  if (!promise || hasOpenSessionCheck(input, home())) return false;
+  if (!promise) return false;
+  if (hasOpenSessionCheck(input, home())) {
+    const file = progressLedgerFile(home()), rows = readLedger(file);
+    const active = new Set(latestOpenPromises(rows).filter(row => row.sessionId === input.session_id));
+    const refreshed = rows.map(row => active.has(row) ? { ...row, ...rollingSessionFields(row, now) } : row);
+    if (refreshed.some((row, i) => row.deadlineAt !== rows[i].deadlineAt || row.checkTimeoutMs !== rows[i].checkTimeoutMs)) writeLedger(file, refreshed);
+    return false;
+  }
   const wakeup = hasSessionWakeup(transcriptRaw, input);
   if (wakeup.cron || wakeup.scheduled) return false;
   const row = buildRecord(input, assistantText, { now });
@@ -244,11 +254,13 @@ async function runOtherGates(input, context, auditOptions = {}) {
   const sessionId = input?.session_id || input?.sessionId || path.basename(input?.transcript_path || '', '.jsonl');
   input = { ...input, session_id: sessionId };
   const assistantText = input?.last_assistant_message ?? input?.assistant_text ?? context.assistantText;
+  // 受信箱節は kim-inbox-relay が処理済み。他ゲートの走査対象から除外（kim 2026-11-15）
+  const gateText = stripInboxSection(assistantText);
   // Deterministic permission guard: enforce before retry/close bypasses and rollout demotion.
-  const invite = evaluateInvitePermissions(assistantText);
+  const invite = evaluateInvitePermissions(gateText);
   if (invite.decision === 'block') return invite;
   const base = { sessionId, blockedBy: [], reasonCodes: [], excerpt: String(assistantText || '').slice(0, 200) };
-  const deliverable = judgeDeliverableDriveLink({ text: assistantText || '', toolUses: blocks(currentTurnEntries(context.raw), 'tool_use') });
+  const deliverable = judgeDeliverableDriveLink({ text: gateText || '', toolUses: blocks(currentTurnEntries(context.raw), 'tool_use') });
   const streak = registerDeliverableCheck({ home: home(), sessionId, blocked: deliverable.decision === 'block' });
   if (deliverable.decision === 'block' && !streak.capped && splitRepeatedGateBlocks({ input, gates: ['deliverable-drive-link-gate'], home: home(), now: auditOptions.now ?? Date.now(), max: SPECIAL_GATE_MAX_BLOCKS_PER_TURN }).repeated.length) streak.capped = true;
   if (deliverable.decision === 'block') {
@@ -276,7 +288,7 @@ async function runOtherGates(input, context, auditOptions = {}) {
   }
   const transcriptTurnText = currentTurnAssistantText(context.raw);
   const turnText = transcriptTurnText.includes(assistantText) ? transcriptTurnText : [transcriptTurnText, assistantText].filter(Boolean).join('\n\n');
-  const evaluated = await evaluateGates({ input, assistantText, turnText, humanText: context.humanText, lastUserPrompt: context.lastUserPrompt, transcriptRaw: context.raw, sessionId }, auditOptions);
+  const evaluated = await evaluateGates({ input, assistantText: gateText, turnText: stripInboxSection(turnText), humanText: context.humanText, lastUserPrompt: context.lastUserPrompt, transcriptRaw: context.raw, sessionId }, auditOptions);
   const audit = evaluated.audit;
   const warnings = [];
   const effective = [];
@@ -323,12 +335,13 @@ async function runOtherGates(input, context, auditOptions = {}) {
       } else {
         const purpose = String(assistantText).match(/^\s*(?:\*\*)?\[本セッションの目的\](?:\*\*)?[ \t]*([^\r\n]+)(?:\r?\n|$)/)?.[1]?.trim();
         const label = purpose || [...String(context.lastUserPrompt || context.humanText || '')].slice(0, 60).join('');
-        const deadline = openDeadline(footerValues(assistantText)?.session)?.toISOString() || '+24h';
+        const deadline = new Date(Math.max(openDeadline(footerValues(assistantText)?.session)?.getTime() || Date.now() + 24 * 3600000, Date.now() + 6 * 3600000)).toISOString();
         const script = fileURLToPath(new URL('./session-progress-check.mjs', import.meta.url)).replaceAll('\\', '/');
         // Double quotes work in both cmd.exe and the check executor's Bash shell.
         // Reject shell metacharacters that still expand within double quotes.
         if (/["$`%!\r\n]/.test(script) || !/^[a-zA-Z0-9_-]+$/.test(sessionId)) throw new Error('台帳チェックのパスまたは session ID が不正です');
         await (auditOptions.addCheck || addCheck)({
+          autoRegisteredCheck: true, timeout: 120, transcriptPath: input.transcript_path || input.transcriptPath || '',
           session: sessionId, label: `自動登録: ${label || sessionId}`, deadline,
           check: `node "${script}" --session "${sessionId}"`,
           nextClaude: 'このセッションの未完了の約束（この後の自動進行の行）を進め、結果を kim に報告する',

@@ -6,6 +6,14 @@
 
 質問前に既存権限でファイル/ツール結果を調べ、取得可能な情報を人に聞かない。
 
+## staff-ask-selfcheck-gate
+
+社員・他PC・外部人へ状況を聞く前に、質問の主題に関連する Gmail・Discord・シート等を自分で照会する。求人応募は `to:saiyo@orgiast.jp newer_than:7d` を Gmail で検索し、電話・現地など人にしか分からない結果だけを聞く。
+
+## pending-decision-ask-gate
+
+報告に「判断待ち」と残すなら、同じ主題を【kim 確認用の全文】または「次に kim がすること」に選択肢と推奨付きで入れる。Claude が決められる可逆な事項は決めて進める。
+
 ## control-group-stop-gate
 
 node tools/control-group-check.mjs --gate <変更したゲート名> で現在のソースに killed 証跡を作る。
@@ -273,6 +281,8 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 ## third-party-nudge-gate
 
 他の人・他PC・他アカウントの対応待ちで止まる報告には、最終まとめの「user がやること」に任意の後押し文を必ず入れる: 「急ぐ場合だけ、<相手>に口頭やチャットで『<その1文で分かる用件。何がどこに届いていて何を対応してほしいか>』と一言伝えてもらえると早く進みます」。user がやらなくても進む前提で、必須作業とは分けて書く。
+
+また、外部待ち（第三者待ち・本番反映待ち等）がある場合は、末尾に『このセッション: まだ閉じない（<何を待つか>・YYYY-MM-DD HH:MM まで待つ）』の待機期限フッターを必ず記載する（期限切れは kim-inbox に通知される）。待ちの進捗確認は node tools/auto-progress.mjs --start-when "<到着を判定するコマンド>" --next-claude "<届いたらやること>"（または --add-check --check "<完了判定>"）で登録する。session 内の run_in_background の見張りや CronCreate はセッション終了で消えるため使わない。
 
 コードブロック・引用行は対象外。既存 Stop runner から呼ぶため Stop hook 設定の追加登録は不要。`ORGIAST_THIRD_PARTY_NUDGE_GATE=0` で無効化できる。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
 

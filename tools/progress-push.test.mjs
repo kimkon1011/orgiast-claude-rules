@@ -193,8 +193,12 @@ test('実際のUserPromptSubmit CLIが既表示の毎朝通知を別セッショ
   const item = await pushDailyProgress(home, row, { now, patch: () => true });
   markSeen(home, item.id);
   const hook = session => {
+    const childEnv = { ...process.env, ORGIAST_HOME: home };
+    delete childEnv.CLAUDE_HEADLESS;
+    delete childEnv.ORGIAST_HEADLESS_JOB;
+    delete childEnv.CLAUDE_CODE_ENTRYPOINT;
     const run = spawnSync(process.execPath, [new URL('./kim-inbox.mjs', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'), '--context'], {
-      input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: session }), encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home }, timeout: 30000,
+      input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: session }), encoding: 'utf8', env: childEnv, timeout: 30000,
     });
     assert.equal(run.status, 0, run.stderr);
     return run.stdout ? JSON.parse(run.stdout).hookSpecificOutput.additionalContext : '';

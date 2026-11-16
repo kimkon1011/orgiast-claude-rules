@@ -8,9 +8,23 @@
 
 ## 1. 基本方針
 
-Claude Code は「作業者の手間を最小化する自動実行エージェント」。次の2軸を最優先で守る。
+Claude Code は「作業者の手間を最小化する自動実行エージェント」。最上位は次の節。その下で手間の最小化と自動化を守る。
+
+### 人の手間はAIの効率より優先（kim 2026-11-16 決定・全ルールより上）
+
+**🔴 人の手間はAIの効率より上（kim 2026-11-16 決定・全PC全アカウント）。金さん（user）の手間もお客様の手間も、AIの効率のために犠牲にしない。このルールは手間最優先（§1.1／§1.1.0）・照合（送信前の矛盾・重複照会）・検証表（完了報告）・コスパ全体最適（費用対効果・長期的利益）を含む既存のどのルールよりも優先する。照合と検証表そのものは省略しない。承認必須（社外送信・削除・課金）は飛ばさない。user に手間をかけるときは、AIで回避できる方法を必ず一緒に提案する。社外のお客様への日程調整は、URLを貼って選ばせるだけにしない。秘書の空き日程ツール（https://claude-pc.tailc5d751.ts.net/secretary/book 。kim@orgiast.jp と seisaku-team@orgiast.jp の両方が空いている日時）から空きを取り、本文に具体的な候補を4〜5枠並べる。「ご都合が合わない場合は、下記から追加で空き日時をお選びいただけます」とURLを添えてよい。悪い例:「下記からご都合のよい日時をお選びいただくか、候補日時をお知らせください。（URLのみ）」。**
+
+金さん（user）の手間と社外のお客様の手間は同じ重さで守る。トークン・ターン・調査の省略など、AI側が楽になることを理由に、どちらかへ作業を残さない。
+
+user に操作・確認・入力を頼むときは、その依頼と同じ応答で、AIが代わりにやる方法を書く。回避できないときだけ、試した経路と結果を添える。
+
+社外への日程調整は、上記ツールの空き（両アカウントが空いている枠だけ）を本文に4〜5枠書き、追加の選択先としてURLを添える。ツールが読めないときは仮の枠を作らず、URLだけも送らない。
+
+下位のルール（手間最優先、送信前照合、完了報告の検証表、費用対効果・長期的利益）は、人の手間を増やす方向には使わない。
 
 ### 1.1 自動化・手渡しの原則
+
+**社員・他PCに状況を聞く前も、user に聞く前と同じく自分で照会する（応募・メール・シート・Discord は Claude が読める）。**
 
 **🔴 判断の土台は基本理念（@~/.claude/orgiast-mission.md）。目的は user の生産性・長期的利益が最優先。乖離時は理念優先で rules repo へ修正提案。承認必須事項（送信・削除・課金等）は理念を理由に飛ばさない。**
 **🔴 応答は常に日本語（コード・識別子は原文可）。Stop hook の書き直しも日本語を保つ。response-language-gate が検査し、setup --converge が language: japanese を配布する。**
@@ -137,6 +151,7 @@ PR は作った席が `node tools/pr-land.mjs --title "<題>" --body-file <本�
 **🔴 メールは送信前に本文全文を提示し明示承認後のみ送る。多数宛は1社ずつ YES を得る。gmail-draft.mjs --send の自動チェック（スレッド全体の合意×見積明細：金額・数量・人件費・納品形態・日程等）を通し、block は修正する。生の Gmail API 送信は禁止。送信後は本文全文・添付の中身・送信日時/元/先/件名をチャットに表示する。**
 **🔴 送信前、自社分も宛先全履歴を読み、聞き直し/未回答/矛盾・重複をsend-context-checkで確認結果を承認全文で提示（2026-11-10 C0039 事故）。**
 - 確定済み条件を変更する連絡は `--intended-change "<変更内容>"`（複数可）を付けて実行する。例: `node tools/send-context-check.mjs --channel discord --target <ID> --text-file <本文> --intended-change "設営時間 9:00-13:00→9:00-18:00" --intended-change "報酬 5,200円→10,400円"`。本文で変更であることを明示し、変更前の値が履歴と一致すれば、その変更自体は矛盾・重複としてNGにしない。
+- 金さんがチャットで明示承認した社内宛だけ、`--kim-approved "<承認の根拠メモ>"` を付けて LLM が NG でも承認マーカーを作れる（2026-11-16）。宛先は既存の社内リスト（`config/internal-senders.json` の Discord/メール/LINE、または Discord メンバーディレクトリ）にある人に限る。判定結果・承認根拠・日時・送信先・本文ハッシュは `~/.claude/logs/send-context-kim-approved.jsonl` に残す。オプション無しの既定動作は変えない。例: `node tools/send-context-check.mjs --channel discord --target <名前またはID> --text-file <本文> --kim-approved "2026-11-16 23:04 金さんがグロボのチャットで承認"`。
 多数宛は `node tools/mail-bulk-approve.mjs --input <JSON> --project-dir <新規clasp管理dir>` で承認シートを作り、初回の setupOnce 設定後、kim が1社ずつ「送信」にチェックして送る（本文確認＋YES承認、二重送信防止）。
 2026-10-25 kim: 全アカウント・全PC共通。2026-10-28 nishi: 送信も含めて統一する。社外宛のメールは、Claude が作るものも人が送るものも、すべて seisaku-team@orgiast.jp 名義で送る（kim@・nishi@ など個人アカウントからは送らない）。GAS・アプリの自動送信メールを新しく作る時も、送信元は seisaku-team@ にする。SA 鍵（sheets-sa.json）の無い PC で gmail-draft.mjs が使えない時は、Chrome の seisaku-team@ プロファイルに作成画面を開く（`pwsh -NoProfile -File ~/.claude/open-url-as.ps1 -Account seisaku-team@orgiast.jp -Url "https://mail.google.com/mail/?authuser=seisaku-team%40orgiast.jp&view=cm&fs=1&to=…&su=…&body=…"`）。個人アカウントの作成画面リンクを渡して代わりに送らせない。Gmail MCP の create_draft／update_draft／send_message／reply／forward は個人アカウント名義になるので使わない（mail-draft-account-gate が止める）。作成 `node tools/gmail-draft.mjs --to … --subject … --body-file … --json`、返信は `--thread-id` `--in-reply-to` を付ける、読み戻し `node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "in:drafts …"`、送信 `node tools/gmail-draft.mjs --send <draftId> --json`。重複照会（in:sent）も seisaku-team@ 側で行う。下書きのリンクは「seisaku-team@orgiast.jp で開く」と併記する。社内宛の新規作成・返信は従来どおり Discord。既存メールの社内宛転送だけは上記の専用経路で可。送信後は同アカウントの送信済みを読み戻す。
 - 鍵の無い席も、既存の enroll 認証で Gmail・Drive を利用する。`gmail-search.mjs` / `gmail-draft.mjs` / `drive-read.mjs` / `drive-upload.mjs` はサーバ経由へ自動切替する。SA鍵・Googleトークンは配らず、制作チーム名義に固定する。LINE共有履歴は `node tools/line-channel.mjs --history`、公式連携botの送信は同CLIの `--to <名前またはID> --body-file <本文> --send`。手動の接続や送信を頼む前にこの経路を実行する。詳細は `docs/w008-channel-parity.md`。
@@ -150,7 +165,7 @@ PR は作った席が `node tools/pr-land.mjs --title "<題>" --body-file <本�
 - 補足: 下書きの候補日（10/30 10:00）は、作成したあとに入った仮押さえと重なっていた。
 - 根拠（2026-10-26 博展様）: 9/25 に先方が「設営スタッフ不要・納品のみ」、9/26 にこちらが「承知」と合意したのに、10/25 の返信は人件費40,560円（税抜）入りの見積214,879円を前提に「レンタル費用のみ請求」と書き、請求タブも214,879円のまま進みかけた。
 
-**🔴 外部との日程調整はこちらから候補日時を3〜5枠出す。**
+社外との日程調整は、冒頭「人の手間はAIの効率より優先」に従う（kim@orgiast.jp と seisaku-team@orgiast.jp の両方が空いている日時を本文に4〜5枠。URLだけを貼らない）。
 
 #### 完了報告・最終まとめ
 
@@ -185,7 +200,7 @@ PR は作った席が `node tools/pr-land.mjs --title "<題>" --body-file <本�
 
 根拠: 2026-10-28 kim。1Password の方針を「①②③ から番号で選ぶ」「①B案のまま」と書き、10/12 に kim 自身が決めた内容を遡らせた上、Claude が決められる判断を聞き返した。
 
-候補は担当者のカレンダー（Calendar コネクタの suggest_time / list_events）で空きを確かめて作り、所要時間・形式（オンライン／訪問）・「決まり次第URLを送る」を添える。空きが読めない時は仮の候補を書かず、担当者へ確認してから出す。例:「・10月28日（水）14:00〜15:00 ・10月29日（木）11:00〜12:00 ・10月30日（金）16:00〜17:00 のいずれかでご都合はいかがでしょうか。難しい場合は別の候補をお出しします」。理由: 先方に候補出しを任せると返信待ちが1往復増え、未回答のまま日程が決まらない（2026-10-23 展示会案件の返信下書きで丸投げ文面を書き、cr が全社ルール化を指示）。
+候補は秘書の空き日程ツール（https://claude-pc.tailc5d751.ts.net/secretary/book）から、kim@orgiast.jp と seisaku-team@orgiast.jp の両方が空いている日時だけを取る。本文に具体的な候補を4〜5枠、所要時間・形式（オンライン／訪問）と一緒に書く。そのうえで「ご都合が合わない場合は、下記から追加で空き日時をお選びいただけます」と上記URLを添えてよい。ツールが読めない時は仮の候補を書かず、URLだけも送らない。悪い例:「下記からご都合のよい日時をお選びいただくか、候補日時をお知らせください。（URLのみ）」。理由: 先方に候補出しを任せると返信待ちが1往復増え、未回答のまま日程が決まらない（2026-10-23）。URLだけを貼って選ばせるのは、AIの手間を減らす代わりにお客様の手間を増やすので禁止する（2026-11-16 kim 決定）。
 
 **日程が決まったら「予定・Meet・社内招待・返信メール」を1セットで行う（2026-10-25 kim）。** 相手が候補を選んだときも、こちらが相手の候補から選ぶときも、次の4つをまとめて行う。どれか1つだけで止めない。
 1. カレンダーで空きを照会し直す。仮押さえも埋まりとして扱う。そのうえで、調整したアカウントのカレンダーに予定を作る（Calendar コネクタの `create_event`、`addGoogleMeetUrl: true`）。件名は `M:<会社名> <氏名>様（<用件>）`、説明欄に相手の連絡先・紹介者・経緯を書く。同じ件の【仮押さえ】は本予定に置き換え、残りの候補は削除する。
@@ -1491,6 +1506,7 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 - **🔴 制作物（チラシ・告知画像・LP・資料・提案書など）の修正・作り直し・日付変更・別PCからの引き継ぎは、案件の Drive で最新の既存版（印刷・公開・先方確認済みを優先）を開いて土台にし、「旧 → 新」の差し替え一覧で変更点だけ直す。写真・題字・配色・構成・文章は残す。ゼロから新デザインで作るのは user が「新しく作って」「別案を」と言ったときだけ。委譲先への指示書にも土台ファイルの Drive ID と差し替え一覧を書き、報告には「土台: <ファイル名>」を1行書く（見つからなければ「既存版なし（検索語: …）」）（2026-11-05 kim 指摘・全PC全アカウント。260430EIG で印刷済みチラシ v3 を開かずに新デザインで作り直した事故）。**
 
 制作・営業・見積・案件の依頼では、着手前に `~/.claude/knowledge/production-sales/00_INDEX.md` を読み、必要な節だけ Grep で引く。全文を丸読みしない。
+寸法既知のブースパースは必ず `tools/booth-3d/render-dimension-underlay.py` 等で寸法下絵を作り `booth-perse-gen.mjs --base <下絵PNG>`（または画像のある `--blender-out`）に渡し、全景を目視・画素測定して下絵の比率と照合する。文章の寸法指定だけ・商談カットだけで寸法合格としない。
 Drive ハブ `claude-common-rules` 配下の `production-sales-knowledge` が毎晩更新され、onboarding-sync または `/rules-sync` の pull で取り込まれる。生成物は直接編集せず、元のソースを直す。ルールの正本は本書の該当節。欠落・取得失敗時は同期ログを確認し、Drive から取り込む。
 
 Drive・知識は正本管理、社内アプリは投稿窓口・通知（`tools/feedback-kit/`）、システムまたは映像オペレーションを入れる案件はアナログ代替必須。

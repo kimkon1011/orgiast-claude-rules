@@ -61,6 +61,22 @@ export function judgeUserBurden(text, humanText = '') {
     || /(?:開いて|押して|貼って|選んで|進んで)[ \t]*(?:ください|下さい|ほしい|もらえ)/.test(prose);
   if (!triggered) return { decision: 'pass', triggered: false, missing: [] };
 
+  // 誤止め放置→user 手渡し型: ゲート/フックに止められた原因を直さず user に手作業を依頼していないか。
+  // 2026-11-16 事故: web-fetch が実装サブエージェント禁止で止まったのに、直さず kim に電話を頼んだ。
+  // classifier/拒否は audit 行（「classifier に拒否された」）で頻出するので左側に含めない。
+  // ゲート/フックに固有の語（hook/フック/guard/deny/禁止ルール/ブロック）と「止め」「拒否」「deny」の共起だけ検出。
+  const blockedAndHandoff = /(?:hook|フック|guard|ゲート|deny|禁止ルール|ブロック)[^。\r\n]{0,40}(?:止め|拒否|deny)/i.test(prose)
+    || /(?:止め|拒否|deny)[^。\r\n]{0,40}(?:hook|フック|guard|ゲート|deny|禁止ルール|ブロック)/i.test(prose);
+  if (blockedAndHandoff && !/\[BLOCK-REPAIRED:[ \t]+\S[^\r\n]*/.test(prose) && !/\[BURDEN-OK\][ \t]+\S[^\r\n]*/.test(prose)) {
+    return {
+      decision: 'block',
+      triggered: true,
+      missing: ['[BLOCK-REPAIRED]'],
+      code: 'BLOCK-REPAIRED',
+      reason: '止められた原因を直す・正規の別経路を使うのが先です。user に回す前に、(1) 止めたゲートの許可条件を読み、誤止めなら codex-do で修正して着地（pr-land）(2) 別経路（別のエージェント種別、Bash の curl、Playwright、他AI）を実行 (3) それでも不可の時だけ理由付きで [BURDEN-OK]。直した場合は [BLOCK-REPAIRED: …] を書く'
+    };
+  }
+
   // 本番デプロイの手渡しは、手順が揃っていても・1クリック起爆ファイルでも通さない。
   // Claude 側で `npx vercel deploy --prod --yes` を実行し、`vercel inspect` で id/created/alias を
   // 確認するのが恒久経路（docs/production-deploy-claude-side-route.md）。同意が要る場合は

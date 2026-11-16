@@ -65,6 +65,25 @@ test('コマンド無しの「本番反映を実行してください」も bloc
   assert.equal(result.code, 'PROD-DEPLOY-HANDOFF');
 });
 
+test('誤止め放置→user 手渡し型: 止められた＋電話依頼は block', () => {
+  const text = 'フックに止められたので、kim に電話して対応をお願いします。';
+  const result = judgeUserBurden(text);
+  assert.equal(result.decision, 'block');
+  assert.equal(result.code, 'BLOCK-REPAIRED');
+});
+test('誤止め放置: [BLOCK-REPAIRED] がある場合は通す', () => {
+  const text = 'フックに止められたので直しました。[BLOCK-REPAIRED: model-agent-guard.mjs に web-fetch を許可リスト追加して pr-land]';
+  assert.equal(judgeUserBurden(text).decision, 'pass');
+});
+test('誤止め放置: [BURDEN-OK] がある場合は通す', () => {
+  const text = 'フックに止められたので、kim に電話して対応をお願いします。[BURDEN-OK] 別経路なし・ゲート正当';
+  assert.equal(judgeUserBurden(text).decision, 'pass');
+});
+test('誤止め放置: 止められた表現なしの通常依頼は既存判定に従う', () => {
+  const text = `次に kim がすること: ダブルクリックする\n${launcher}\n${audit}`;
+  assert.equal(judgeUserBurden(text).decision, 'pass');
+});
+
 test('Claude が実行した報告と、user 自身が実行すると明示した場合だけ通す', () => {
   assert.equal(judgeUserBurden('Claude 側で `npx vercel deploy --prod --yes` を実行しました。`vercel inspect` で新しい id と alias を確認済みです。\n次に kim がすること: なし').triggered, false);
   const explicit = `user がご自身で実行すると仰ったので手順を再掲します。\n\`\`\`bash\nnpx vercel deploy --prod --yes\n\`\`\`\n実行してください。\n[PROD-DEPLOY-HANDOFF-OK] 「自分でデプロイしたい」と user が明示\n${audit}`;

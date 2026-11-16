@@ -184,6 +184,7 @@ function hasUserMessageInProjects(home, sessionId) {
         return text.includes('"type":"user"');
       }
     }
+    return false;
   } catch { /* ignored */ }
   return undefined;
 }

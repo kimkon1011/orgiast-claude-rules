@@ -290,7 +290,7 @@ test('decideTrimExcess: 待機タブ数が target 超過の時、10分以上経�
   assert.equal(trimSmall.length, 2);
   assert.deepEqual(trimSmall.map(t => t.id), ['t1', 't2']);
 
-  // 3. 除外条件: アクティブ、10分未満、会話あり(hasUserMessage=true/undefined) は閉じない
+  // 3. 除外条件: アクティブ、10分未満、会話あり(hasUserMessage=true) は閉じない
   const mixedTabs = [
     { id: 'active', label: '018-a-b', appearedAt: now - 30 * 60000, isActive: true, hasUserMessage: false },
     { id: 'young', label: 'Claude Code', appearedAt: now - 5 * 60000, isActive: false, hasUserMessage: false },
@@ -300,7 +300,39 @@ test('decideTrimExcess: 待機タブ数が target 超過の時、10分以上経�
     { id: 'ok2', label: '018-x-y', appearedAt: now - 20 * 60000, isActive: false, hasUserMessage: false },
   ];
   const trimMixed = decideTrimExcess({ tabs: mixedTabs, target: 3, now });
-  // 待機 6 本 > target 3 -> 超過 3 本だが条件を満たすのは ok1, ok2 の 2 本だけ
-  assert.equal(trimMixed.length, 2);
-  assert.deepEqual(trimMixed.map(t => t.id), ['ok1', 'ok2']);
+  // 発言なし確定の ok1, ok2 を優先し、不明の unknown を最後に閉じる
+  assert.equal(trimMixed.length, 3);
+  assert.deepEqual(trimMixed.map(t => t.id), ['ok1', 'ok2', 'unknown']);
+});
+
+test('decideTrimExcess: unknown waiting tabs respect age, activity and title', () => {
+  const now = 1000000000;
+  const base = { label: 'Claude Code', appearedAt: now - REFRESH_MIN_AGE_MS, hasUserMessage: undefined };
+  const eligible = { ...base, id: 'eligible' };
+  const tabs = [
+    eligible,
+    { ...base, isActive: true },
+    { ...base, appearedAt: base.appearedAt + 1 },
+    { ...base, label: 'ユーザーの作業' },
+    { ...base, hasUserMessage: true },
+  ];
+  assert.deepEqual(decideTrimExcess({ tabs, target: 0, now }), [eligible]);
+});
+
+test('decideTrimExcess: false precedes older unknown tabs and retains target', () => {
+  const now = 1000000000;
+  const tabs = [
+    { id: 'unknown-old', hasUserMessage: undefined, appearedAt: now - 30 * 60000 },
+    { id: 'empty-new', hasUserMessage: false, appearedAt: now - 15 * 60000 },
+    { id: 'unknown-new', hasUserMessage: undefined, appearedAt: now - 20 * 60000 },
+    { id: 'empty-old', hasUserMessage: false, appearedAt: now - 25 * 60000 },
+    { id: 'unknown-newest', hasUserMessage: undefined, appearedAt: now - 12 * 60000 },
+  ].map(tab => ({ ...tab, label: 'Claude Code' }));
+  assert.deepEqual(decideTrimExcess({ tabs, target: 3, now }).map(t => t.id), ['empty-old', 'empty-new']);
+  assert.deepEqual(decideTrimExcess({ tabs, target: 1, now }).map(t => t.id), ['empty-old', 'empty-new', 'unknown-old', 'unknown-new']);
+  const unknown = tabs.filter(tab => tab.hasUserMessage === undefined);
+  assert.equal(decideTrimExcess({ tabs: unknown, target: 2, now }).length, 1);
+  assert.deepEqual(decideTrimExcess({ tabs: unknown, target: 3, now }), []);
+  assert.deepEqual(decideTrimExcess({ tabs: unknown, target: 4, now }), []);
+  assert.equal(decideTrimExcess({ tabs: unknown, target: 0, now, maxClose: 1 }).length, 1);
 });

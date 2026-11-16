@@ -51,6 +51,16 @@ export function validateSeatConfig(secrets, tiers, env) {
     }
     seen.add(secret);
   }
+
+  // Every pcId in tiers must exist in secrets (catches --tier-for typos / missing ledger entries)
+  if (tiers) {
+    for (const pcId of Object.keys(tiers)) {
+      if (!(pcId in secrets)) {
+        errors.push(`tier 指定の PC_ID が台帳にありません: ${pcId}`);
+      }
+    }
+  }
+
   return { valid: errors.length === 0, errors };
 }
 
@@ -188,20 +198,35 @@ export function collect({ mailFiles, home = HOME, privkeyPath = PRIVKEY_FILE, pu
   try { ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf8')); } catch {}
 
   for (const mailFile of mailFiles) {
-    const content = fs.readFileSync(mailFile, 'utf8');
+    // Normalize CRLF to LF (PowerShell Set-Content, fleet-mail, etc.)
+    const content = fs.readFileSync(mailFile, 'utf8').replace(/\r\n/g, '\n');
 
-    const pcMatch = content.match(/^SEAT-PC:\s*(.+)$/m);
-    const hostMatch = content.match(/^SEAT-HOST:\s*(.+)$/m);
-    const sealedMatch = content.match(/SEAT-SEALED-BEGIN\n([\s\S]*?)\nSEAT-SEALED-END/);
+    const pcMatch = content.match(/^>?\s*SEAT-PC:\s*(.+)$/m);
+    const hostMatch = content.match(/^>?\s*SEAT-HOST:\s*(.+)$/m);
 
-    if (!pcMatch || !hostMatch || !sealedMatch) {
+    // Find sealed block markers with flexible line matching
+    // (handles > prefix from email replies, extra whitespace, etc.)
+    const lines = content.split('\n');
+    let beginIdx = -1, endIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const stripped = lines[i].replace(/^>\s*/, '').trim();
+      if (stripped === 'SEAT-SEALED-BEGIN') beginIdx = i;
+      if (stripped === 'SEAT-SEALED-END') { endIdx = i; break; }
+    }
+
+    if (!pcMatch || !hostMatch || beginIdx === -1 || endIdx === -1 || endIdx <= beginIdx + 1) {
       console.error(`封印文が見つかりません: ${mailFile}`);
       continue;
     }
 
     const pcId = pcMatch[1].trim();
     const hostname = hostMatch[1].trim();
-    const sealedText = sealedMatch[1].trim();
+
+    // Extract lines between markers, strip quoting prefix, trim, filter empty
+    const sealedLines = lines.slice(beginIdx + 1, endIdx)
+      .map(l => l.replace(/^>\s*/, '').trim())
+      .filter(l => l.length > 0);
+    const sealedText = sealedLines.join('\n');
 
     // Verify hostname against expect list
     if (expectMap.has(pcId)) {

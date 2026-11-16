@@ -96,6 +96,16 @@ test('validateSeatConfig: accepts valid config', () => {
   assert.deepEqual(result.errors, []);
 });
 
+test('validateSeatConfig: rejects tier pcId not in secrets', () => {
+  const secret = 'a'.repeat(48);
+  const result = validateSeatConfig(
+    { 'valid-pc': secret },
+    { 'valid-pc': 'workspace', 'missing-pc': 'workspace' }
+  );
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some(e => e.includes('台帳にありません')));
+});
+
 // ── workspace-bundle ────────────────────────────────────
 
 test('workspace-bundle: produces valid addTierFiles-compatible output', () => {
@@ -385,6 +395,83 @@ test('collect: hostname mismatch exits 3 and does not add to ledger', () => {
   }
 });
 
+test('collect: handles CRLF line endings', () => {
+  const home = tempDir();
+  const { pubPath, privPath } = generateKeyPair(home);
+  writeKeyserveEnv(home, 'test-pc', 'old-secret');
+
+  try {
+    // Run issue to get a sealed secret
+    const issueResult = runCli(['issue', '--pubkey', pubPath], { ORGIAST_HOME: home, ORGIAST_KEYSERVE_PC: 'test-pc' });
+    assert.equal(issueResult.status, 0);
+
+    // Create mail file with CRLF line endings (simulating PowerShell Set-Content)
+    const mailDir = tempDir();
+    const mailFile = path.join(mailDir, 'mail.txt');
+    const crlfContent = issueResult.stdout.replace(/\n/g, '\r\n');
+    fs.writeFileSync(mailFile, crlfContent, 'utf8');
+
+    // Run collect
+    const collectResult = runCli(
+      ['collect', '--mail-file', mailFile, '--privkey', privPath, '--pubkey', pubPath],
+      { ORGIAST_HOME: home, ORGIAST_KEYSERVE_PC: 'test-pc' }
+    );
+    assert.equal(collectResult.status, 0, `collect failed: ${collectResult.stderr}`);
+
+    // Verify ledger has the entry
+    const ledgerPath = path.join(home, '.claude', 'seat-secret-ledger.json');
+    assert.ok(fs.existsSync(ledgerPath));
+    const ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf8'));
+    assert.ok(ledger['test-pc']);
+
+    fs.rmSync(mailDir, { recursive: true, force: true });
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('collect: handles extra lines and quoting prefix around sealed block', () => {
+  const home = tempDir();
+  const { pubPath, privPath } = generateKeyPair(home);
+  writeKeyserveEnv(home, 'test-pc', 'old-secret');
+
+  try {
+    // Run issue to get a sealed secret
+    const issueResult = runCli(['issue', '--pubkey', pubPath], { ORGIAST_HOME: home, ORGIAST_KEYSERVE_PC: 'test-pc' });
+    assert.equal(issueResult.status, 0);
+
+    // Create mail file with extra lines and > prefix (simulating email reply quoting)
+    const mailDir = tempDir();
+    const mailFile = path.join(mailDir, 'mail.txt');
+    const original = issueResult.stdout;
+    const withPrefix = original.split('\n').map(line => {
+      if (line.startsWith('SEAT-') || line.startsWith('ORGLOCK')) {
+        return '> ' + line;
+      }
+      return line;
+    }).join('\n');
+    const wrapped = `Some preamble text\n\n${withPrefix}\n\nSome trailing text\n`;
+    fs.writeFileSync(mailFile, wrapped, 'utf8');
+
+    // Run collect
+    const collectResult = runCli(
+      ['collect', '--mail-file', mailFile, '--privkey', privPath, '--pubkey', pubPath],
+      { ORGIAST_HOME: home, ORGIAST_KEYSERVE_PC: 'test-pc' }
+    );
+    assert.equal(collectResult.status, 0, `collect failed: ${collectResult.stderr}`);
+
+    // Verify ledger has the entry
+    const ledgerPath = path.join(home, '.claude', 'seat-secret-ledger.json');
+    assert.ok(fs.existsSync(ledgerPath));
+    const ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf8'));
+    assert.ok(ledger['test-pc']);
+
+    fs.rmSync(mailDir, { recursive: true, force: true });
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 // ── build ───────────────────────────────────────────────
 
 test('build: generates pc-secrets.json and pc-tiers.json from ledger', () => {
@@ -434,6 +521,43 @@ test('build: generates pc-secrets.json and pc-tiers.json from ledger', () => {
     // Verify build output does NOT contain the plaintext secret
     assert.ok(!buildResult.stdout.includes(secrets['test-pc']));
     assert.ok(!buildResult.stderr.includes(secrets['test-pc']));
+
+    fs.rmSync(mailDir, { recursive: true, force: true });
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('build: rejects --tier-for pcId not in ledger', () => {
+  const home = tempDir();
+  const { pubPath, privPath } = generateKeyPair(home);
+  writeKeyserveEnv(home, 'test-pc', 'old-secret');
+
+  try {
+    // Run issue to create a secret
+    const issueResult = runCli(['issue', '--pubkey', pubPath], { ORGIAST_HOME: home, ORGIAST_KEYSERVE_PC: 'test-pc' });
+    assert.equal(issueResult.status, 0);
+
+    // Create mail file and run collect
+    const mailDir = tempDir();
+    const mailFile = path.join(mailDir, 'mail.txt');
+    fs.writeFileSync(mailFile, issueResult.stdout, 'utf8');
+
+    const collectResult = runCli(
+      ['collect', '--mail-file', mailFile, '--privkey', privPath, '--pubkey', pubPath],
+      { ORGIAST_HOME: home, ORGIAST_KEYSERVE_PC: 'test-pc' }
+    );
+    assert.equal(collectResult.status, 0);
+
+    // Run build with --tier-for pointing to a pcId NOT in the ledger
+    const outDir = path.join(home, 'out');
+    const buildResult = runCli(
+      ['build', '--out-dir', outDir, '--tier-for', 'nonexistent-pc', '--privkey', privPath, '--pubkey', pubPath],
+      { ORGIAST_HOME: home }
+    );
+    // Should fail with exit code 1
+    assert.notEqual(buildResult.status, 0);
+    assert.ok(buildResult.stderr.includes('台帳にありません') || buildResult.stderr.includes('tier'));
 
     fs.rmSync(mailDir, { recursive: true, force: true });
   } finally {

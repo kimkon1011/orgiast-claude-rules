@@ -109,10 +109,10 @@ test('child env は state の config dir だけ上書きし、他の CLAUDE 変�
 test('VSCode CLI は明示パス、ユーザーインストール、未検出の順で解決する', () => {
   const home = 'C:\\Users\\test';
   const explicit = 'D:\\VSCode\\bin\\code.cmd';
-  assert.equal(resolveVscodeCli({ env: { VSCODE_CLI_PATH: explicit }, exists: (file) => file === explicit, homedir: home }), explicit);
+  assert.equal(resolveVscodeCli({ regQuery: () => '', env: { VSCODE_CLI_PATH: explicit }, exists: (file) => file === explicit, homedir: home }), explicit);
   const local = path.join(home, 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd');
-  assert.equal(resolveVscodeCli({ env: {}, exists: (file) => file === local, homedir: () => home }), local);
-  assert.equal(resolveVscodeCli({ env: {}, exists: () => false, homedir: home }), '');
+  assert.equal(resolveVscodeCli({ regQuery: () => '', env: {}, exists: (file) => file === local, homedir: () => home }), local);
+  assert.equal(resolveVscodeCli({ regQuery: () => '', env: {}, exists: () => false, homedir: home }), '');
 });
 
 test('Claude Code の open URI にプロンプトを URL エンコードする', () => {
@@ -313,6 +313,9 @@ function fakeIo(overrides = {}) {
     io: {
       env: { CLAUDE_CLI_PATH: claude },
       countClaudeProcesses: () => null,
+      getFreeMemoryMb: () => 8192, // 8GB 空き → メモリガードは通る
+      getCpuUsagePct: async () => 10,
+      regQuery: () => '', // reg.exe の実呼び出しを抑制
       homedir: () => home,
       exists: (file) => file === claude || file === 'C:\\work',
       readdir: () => [],
@@ -1154,8 +1157,8 @@ test('headless は glm 失敗後に deepseek の代替レーンで成功する',
 });
 
 
-test('注入したプロセス数が 12 なら起動をスキップし過負荷をログに出す', async () => {
-  const { io, calls } = fakeIo({ countClaudeProcesses: () => 12 });
+test('注入したプロセス数が 60 なら起動をスキップし過負荷をログに出す', async () => {
+  const { io, calls } = fakeIo({ countClaudeProcesses: () => 60 });
   assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
   assert.equal(calls.spawn.length, 0);
   assert.match(calls.logs.join('\n'), /スキップ:.*過負荷/);
@@ -1163,13 +1166,49 @@ test('注入したプロセス数が 12 なら起動をスキップし過負荷�
 
 test('過負荷ガードは上限・環境設定・force・取得不能を扱う', () => {
   const base = { state: {}, now: Date.now(), env: {}, force: false, pendingTab: false };
-  const blocked = shouldLaunch({ ...base, claudeProcesses: 12 });
+  const blocked = shouldLaunch({ ...base, claudeProcesses: 60 });
   assert.equal(blocked.ok, false);
   assert.match(blocked.reason, /過負荷/);
-  assert.equal(shouldLaunch({ ...base, claudeProcesses: 11 }).ok, true);
-  assert.equal(shouldLaunch({ ...base, claudeProcesses: 12, force: true }).ok, true);
-  assert.equal(shouldLaunch({ ...base, claudeProcesses: 12, env: { ORGIAST_NEXT_SESSION_MAX_CLAUDE: '20' } }).ok, true);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 59 }).ok, true);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 60, force: true }).ok, true);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 60, env: { ORGIAST_NEXT_SESSION_MAX_CLAUDE: '70' } }).ok, true);
   assert.equal(shouldLaunch({ ...base, claudeProcesses: null }).ok, true);
+});
+
+test('空きメモリ不足で起動をスキップする', () => {
+  const base = { state: {}, now: Date.now(), env: {}, force: false, pendingTab: false };
+  const blocked = shouldLaunch({ ...base, freeMemMb: 2048 }); // 2GB < 4GB
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.reason, /空き物理メモリ/);
+  assert.equal(shouldLaunch({ ...base, freeMemMb: 4096 }).ok, true); // 4GB = 閾値
+  assert.equal(shouldLaunch({ ...base, freeMemMb: 8192 }).ok, true); // 8GB OK
+});
+
+test('空きメモリ不足でも force なら起動する', () => {
+  const result = shouldLaunch({ state: {}, now: Date.now(), env: {}, force: true, freeMemMb: 1024 });
+  assert.equal(result.ok, true);
+});
+
+test('空きメモリ取得不能(null)ならスキップしない（本数だけで判断）', () => {
+  const result = shouldLaunch({ state: {}, now: Date.now(), env: {}, freeMemMb: null });
+  assert.equal(result.ok, true);
+});
+
+test('ORGIAST_NEXT_SESSION_MIN_FREE_MEM_MB で空きメモリ下限を変更できる', () => {
+  const base = { state: {}, now: Date.now(), force: false, pendingTab: false };
+  const result = shouldLaunch({ ...base, freeMemMb: 2000, env: { ORGIAST_NEXT_SESSION_MIN_FREE_MEM_MB: '1000' } });
+  assert.equal(result.ok, true); // 2GB >= 1GB
+  const blocked = shouldLaunch({ ...base, freeMemMb: 500, env: { ORGIAST_NEXT_SESSION_MIN_FREE_MEM_MB: '1000' } });
+  assert.equal(blocked.ok, false);
+});
+
+test('CPU 90%以上で全指標と停止理由をログ向け reason に含める', () => {
+  const result = shouldLaunch({ state: {}, now: Date.now(), env: {}, force: false, pendingTab: false, freeMemMb: 8192, cpuPct: 90, claudeProcesses: 12 });
+  assert.equal(result.ok, false);
+  assert.equal(result.stop, 'cpuPct');
+  assert.match(result.reason, /空き物理メモリ=8192MB/);
+  assert.match(result.reason, /CPU=90%/);
+  assert.match(result.reason, /Claude本数=12/);
 });
 
 test('tasklist CSV の Claude 行を数え、実行失敗なら null を返す', () => {
@@ -1232,4 +1271,14 @@ test('countClaudeProcesses counts inaccessible CLI metadata and filters executab
   ];
   assert.equal(countClaudeProcesses(() => JSON.stringify(rows)), 2);
   assert.equal(countClaudeProcesses(command => { assert.equal(command, 'powershell.exe'); return '[]'; }), 0);
+});
+
+
+test('35本・28GBなら起動し、メモリ取得不能時はCPUでなく本数だけで判断する', () => {
+  const base = { state: {}, now: Date.now(), env: {}, force: false, pendingTab: false, claudeProcesses: 35 };
+  assert.equal(shouldLaunch({ ...base, freeMemMb: 28672, cpuPct: 89.9 }).ok, true);
+  assert.equal(shouldLaunch({ ...base, freeMemMb: null, cpuPct: 99 }).ok, true);
+  assert.equal(shouldLaunch({ ...base, freeMemMb: null, cpuPct: 99, claudeProcesses: 60 }).stop, 'claudeCount');
+  assert.equal(shouldLaunch({ ...base, freeMemMb: 4095.999, cpuPct: 10 }).stop, 'freeMem');
+  assert.equal(shouldLaunch({ ...base, freeMemMb: 4096, cpuPct: null }).ok, true);
 });

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export function readVscodeHiddenSessionIds({ env = process.env, fsImpl = fs, openDb } = {}) {
+export function readVscodeHiddenSessionIds({ env = process.env, fsImpl = fs, openDb, readOnly = false } = {}) {
   const ids = new Set();
   const appData = env?.APPDATA || (env?.HOME ? path.join(env.HOME, 'AppData', 'Roaming') : path.join(os.homedir(), 'AppData', 'Roaming'));
   const dbPath = path.join(appData, 'Code', 'User', 'globalStorage', 'state.vscdb');
@@ -15,13 +15,14 @@ export function readVscodeHiddenSessionIds({ env = process.env, fsImpl = fs, ope
 
   let tmpDir = null;
   try {
-    const tmpBase = os.tmpdir();
-    const mkdtemp = fsImpl?.mkdtempSync ?? fs.mkdtempSync;
-    tmpDir = mkdtemp(path.join(tmpBase, 'vscode-hidden-'));
-    const tmpPath = path.join(tmpDir, 'state.vscdb');
-
-    const copy = fsImpl?.copyFileSync ?? fs.copyFileSync;
-    copy(dbPath, tmpPath);
+    let tmpPath = dbPath;
+    if (!readOnly) {
+      const mkdtemp = fsImpl?.mkdtempSync ?? fs.mkdtempSync;
+      tmpDir = mkdtemp(path.join(os.tmpdir(), 'vscode-hidden-'));
+      tmpPath = path.join(tmpDir, 'state.vscdb');
+      const copy = fsImpl?.copyFileSync ?? fs.copyFileSync;
+      copy(dbPath, tmpPath);
+    }
 
     let rows = [];
     if (typeof openDb === 'function') {
@@ -33,7 +34,7 @@ export function readVscodeHiddenSessionIds({ env = process.env, fsImpl = fs, ope
         rows = dbObj;
       }
     } else {
-      const db = new DatabaseSync(tmpPath);
+      const db = new DatabaseSync(tmpPath, { readOnly: true });
       try {
         db.exec('PRAGMA query_only = 1');
       } catch {}

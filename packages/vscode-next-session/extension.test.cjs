@@ -108,7 +108,7 @@ test('URI concurrency and tab title events replenish one without interactive ren
   for (const disposable of context.subscriptions) disposable.dispose();
 });
 
-function loadExtension({ onCommand, onExternal }) {
+function loadExtension({ onCommand, onExternal, onReadState }) {
   const tabs = [];
   const logs = [];
   let handler;
@@ -118,7 +118,17 @@ function loadExtension({ onCommand, onExternal }) {
     Uri: { parse: (value) => ({ value }) },
     env: { async openExternal(uri) { return onExternal(uri, tabs, TabInputWebview); } },
     window: {
-      tabGroups: { all: [{ tabs }], onDidChangeTabs() { return { dispose() {} }; } },
+      tabGroups: {
+        all: [{ tabs }],
+        onDidChangeTabs() { return { dispose() {} }; },
+        async close(target) {
+          for (const tab of Array.isArray(target) ? target : [target]) {
+            const index = tabs.indexOf(tab);
+            if (index >= 0) tabs.splice(index, 1);
+          }
+          return true;
+        },
+      },
       createOutputChannel() { return { appendLine(line) { logs.push(line); } }; },
       registerUriHandler(value) { handler = value; return { dispose() {} }; },
       showErrorMessage(message) { assert.fail(message); },
@@ -128,18 +138,19 @@ function loadExtension({ onCommand, onExternal }) {
   };
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'extension.js'), 'utf8'), {
-    module, process, URLSearchParams, console, clearInterval, clearTimeout, setTimeout, Date,
+    module, process, URLSearchParams, __filename: path.join(__dirname, 'extension.js'), console, clearInterval, clearTimeout, setTimeout, Date,
     setInterval(fn, ms) { return ms === 5000 ? null : setInterval(fn, ms); },
     require(name) {
       if (name === 'vscode') return vscode;
+      if (name === 'node:child_process' && onReadState) return { execFile(_cmd, _args, _opts, callback) { callback(null, JSON.stringify(onReadState())); } };
       if (name === 'node:fs') return { mkdirSync() {}, writeFileSync() {} };
       if (name === './mobile-pool') return { ...require('./mobile-pool'), createOwnershipLease: () => ({ acquire: async () => true, release() {} }) };
       return require(name);
     },
   });
   module.exports.setOpenWaitMs(60);
-  module.exports.activate({ subscriptions: [] });
-  return { handler, tabs, logs };
+  module.exports.activate({ subscriptions: [], ...(onReadState ? { storageUri: { fsPath: 'C:/storage/workspace/orgiast.next-session' } } : {}) });
+  return { handler, tabs, logs, TabInputWebview };
 }
 
 test('creation falls back through methods, logs labels, and remembers the working one', async () => {
@@ -167,4 +178,41 @@ test('all methods failing is logged per attempt and unchanged state only once', 
   assert.equal(logs.filter((line) => line.includes('ok=false')).length, 3);
   assert.equal(logs.filter((line) => line.includes('ok=true')).length, 0);
   assert.equal(logs.filter((line) => line.includes('mobile tabs: waiting=0 target=1')).length, 1);
+});
+
+test('reopen URI は一致する死んだ Claude タブだけ閉じて公式 URI を開く', async () => {
+  const opened = [];
+  const { handler, tabs, TabInputWebview } = loadExtension({
+    onCommand() {},
+    onExternal(uri) { opened.push(uri.value); return true; },
+  });
+  const existing = { input: new TabInputWebview(), label: '障害 cse_deadbeef1234' };
+  tabs.push(existing);
+  await handler.handleUri({ path: '/reopen', query: 'session=cse_deadbeef1234' });
+  assert.equal(tabs.includes(existing), false);
+  assert.deepEqual(opened, ['vscode://anthropic.claude-code/open?session=cse_deadbeef1234']);
+});
+
+
+test('reopen URI は実機形式の保存済み sessionID から現在のタブを探す', async () => {
+  const opened = [];
+  const { handler, tabs, TabInputWebview } = loadExtension({ onCommand() {},
+    onExternal(uri) { opened.push(uri.value); return true; },
+    onReadState: () => ({ tabs: [{ title: '復旧の仕事', sessionId: 'target-id', isClaude: true }] }),
+  });
+  const existing = { input: new TabInputWebview(), label: '復旧の仕事' };
+  tabs.push(existing, { input: new TabInputWebview(), label: '無関係の仕事' });
+  await handler.handleUri({ path: '/reopen', query: 'session=target-id' });
+  assert.equal(tabs.includes(existing), false);
+  assert.equal(tabs.length, 1);
+  assert.deepEqual(opened, ['vscode://anthropic.claude-code/open?session=target-id']);
+});
+
+test('reopen URI は対象なしなら open のみ、IDなしでは何もしない', async () => {
+  const opened = [];
+  const { handler } = loadExtension({ onCommand() {}, onExternal(uri) { opened.push(uri.value); return true; } });
+  await handler.handleUri({ path: '/reopen', query: '' });
+  assert.deepEqual(opened, []);
+  await handler.handleUri({ path: '/reopen', query: 'session=missing-id' });
+  assert.deepEqual(opened, ['vscode://anthropic.claude-code/open?session=missing-id']);
 });

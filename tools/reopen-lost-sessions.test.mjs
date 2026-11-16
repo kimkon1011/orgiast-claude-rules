@@ -95,7 +95,7 @@ test('reopenLost: worktree cwd のセッションは最初の非 worktree cwd �
         if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
           return { status: 0, stdout: '0' };
         }
-        psCalls.push(cmdStr);
+        if (!cmdStr.includes('FreePhysicalMemory')) psCalls.push(cmdStr);
       }
       return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
     },
@@ -236,7 +236,7 @@ test('opening continues after API deadline; focus precedes URI; lock released an
     windowReady: () => { clock = 120000; return true; }, wait: async () => {},
   });
   assert.equal(result.reopened.length, 1);
-  const ps = calls.filter(a => a[0] !== 'agents');
+  const ps = calls.filter(a => a[0] !== 'agents' && !a.at(-1).includes('FreePhysicalMemory'));
   assert.ok(ps[0].at(-1).includes('C:\\work'));
   assert.ok(ps[1].at(-1).includes('--open-url'));
   assert.equal(fs.existsSync(path.join(base, 'reopen-lost-sessions.lock')), false);
@@ -367,11 +367,13 @@ test('post-reopen verification records verified and unverified', async t => {
   const base = fixture(t);
   let clock = 0;
   let agentCheckCount = 0;
+  const reopenUris = [];
 
   const result = await reopenLost({
     base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, now: () => clock,
     fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
     spawn: (cmd, args) => {
+      if (cmd === 'powershell.exe' && String(args.at(-1)).includes('orgiast.next-session/reopen')) reopenUris.push(args.at(-1));
       if (args[0] === 'agents') {
         agentCheckCount++;
         if (agentCheckCount > 1) return { status: 0, stdout: '[]' };
@@ -386,6 +388,9 @@ test('post-reopen verification records verified and unverified', async t => {
   assert.equal(result.reopened.length, 1);
   assert.deepEqual(result.verified, []);
   assert.deepEqual(result.unverified, ['one']);
+  assert.deepEqual(result.retriedViaExtension, ['one']);
+  assert.equal(reopenUris.length, 1);
+  assert.match(reopenUris[0], /reopen\?session=one/);
 });
 
 test('findWorkspaceForCwd resolves workspace file for folder itself, relative subfolders, env var, storage.json, and handles comments/broken JSON', t => {
@@ -512,7 +517,7 @@ test('reopenLost: ウィンドウ無し＋lastActiveWindow.workspaceIdentifier �
         if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
           return { status: 0, stdout: '0' };
         }
-        psCalls.push(cmdStr);
+        if (!cmdStr.includes('FreePhysicalMemory')) psCalls.push(cmdStr);
       }
       return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
     },
@@ -561,7 +566,7 @@ test('reopenLost falls back to code <cwd> with openedWith: folder when no worksp
         if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
           return { status: 0, stdout: '0' };
         }
-        psCalls.push(cmdStr);
+        if (!cmdStr.includes('FreePhysicalMemory')) psCalls.push(cmdStr);
       }
       return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
     },
@@ -854,7 +859,7 @@ test('state-based: VS Code 再起動後は開き直す', async t => {
   assert.equal(result.skipped.closedInRunningVscode, 0);
 });
 
-test('CPU 85%以上で開き直しを defer、watermark を進めない', async t => {
+test('CPU 90%以上で開き直しを defer、watermark を進めない', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-cpu-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const base = mkLocalIdx(t, root, { cse_one: 'C:\\work' });
@@ -870,6 +875,7 @@ test('CPU 85%以上で開き直しを defer、watermark を進めない', async 
     return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
   };
   const spawn = (cmd, args) => {
+    if (String(args.at(-1)).includes('FreePhysicalMemory')) return { status: 0, stdout: '8388608' };
     if (args[0] === 'agents') return { status: 0, stdout: '[]' };
     return { status: 0, stdout: '' };
   };
@@ -883,7 +889,7 @@ test('CPU 85%以上で開き直しを defer、watermark を進めない', async 
 
   const result = await watchReopen({ base, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, cpusImpl, now: () => nowTime,
     windowReady: () => true, wait: async () => {} });
-  assert.equal(result.deferredCpu, 92);
+  assert.ok(result.deferredCpu > 91 && result.deferredCpu < 93);
   assert.equal(result.reopened.length, 0);
   // watermark は deferredCpu により進まない
   assert.equal(fs.existsSync(stateFile), false);
@@ -912,7 +918,7 @@ test('claude agents 呼び出しが失敗したら registry 代替に移行（�
     },
   });
   // 再試行なし（vscodeStartedAt 1回 + agents 1回）
-  assert.equal(attempts, 2);
+  assert.equal(attempts, process.platform === 'win32' ? 3 : 2); // Windows はメモリ照会が加わる
   // registry 代替で aliveSource='registry'
   assert.equal(result.aliveSource, 'registry');
   assert.ok(result.agentsError, 'agentsError に失敗理由が残る');
@@ -1161,7 +1167,7 @@ test('acquireLock dual update: futimesSync and utimesSync run without error', t 
 
 // ── reopenLost writes progress at key stages ────────────
 
-test('reopenLost writes progress during dry run', async t => {
+test('dry-run は loadGuard を返し進捗・ログ・ロックを書き換えない', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-progress-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const base = path.join(root, '.claude');
@@ -1173,18 +1179,17 @@ test('reopenLost writes progress during dry run', async t => {
     { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
   ].map(JSON.stringify).join('\n'));
 
-  await reopenLost({
+  const result = await reopenLost({
     base, since, until, dryRun: true, claudeCli: 'claude.exe',
     fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
     spawn: () => ({ status: 0, stdout: '[]' }),
   });
 
-  // Progress file should exist with at least 'done' stage
-  const progressPath = path.join(base, 'reopen-lost-sessions-progress.json');
-  assert.ok(fs.existsSync(progressPath), 'progress file should exist');
-  const data = JSON.parse(fs.readFileSync(progressPath, 'utf8'));
-  assert.equal(data.stage, 'done');
-  assert.equal(data.detail, 'log written');
+  assert.ok(result.loadGuard);
+  for (const name of ['progress.json', 'state.json', 'lock', 'log']) {
+    assert.equal(fs.existsSync(path.join(base, `reopen-lost-sessions-${name}`)), false);
+  }
+
 });
 
 test('measureCpuAsync: 50% usage from stubbed cpus', async () => {
@@ -1201,7 +1206,7 @@ test('measureCpuAsync: 50% usage from stubbed cpus', async () => {
   let waited = false;
   const wait = async ms => { waited = true; };
   const result = await measureCpuAsync({ sampleMs: 100, cpusImpl, wait });
-  assert.equal(result, 62);
+  assert.ok(Math.abs(result - 100 * (1 - 50 / 130)) < 0.001);
   assert.ok(waited);
 });
 
@@ -1248,7 +1253,7 @@ test('measureCpuAsync: multi-core aggregation', async () => {
     return callCount === 1 ? [cpu1a, cpu2a] : [cpu1b, cpu2b];
   };
   const result = await measureCpuAsync({ sampleMs: 100, cpusImpl, wait: async () => {} });
-  assert.equal(result, 44);
+  assert.ok(Math.abs(result - 400 / 9) < 0.001);
 });
 
 test('hasCodeWindow: spawn status/error/stdout behavior', () => {
@@ -1432,7 +1437,7 @@ test('parseOptions: 既定 max は 3 である', () => {
   assert.equal(opts.max, 3);
 });
 
-test('loadGuard: claude プロセス数 >= 閾値(10)で 0 件 reopen かつ skipped.loadGuard に計上', async t => {
+test('loadGuard: claude プロセス数 >= 閾値(60)で 0 件 reopen かつ skipped.loadGuard に計上', async t => {
   const base = fixture(t);
   const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
   const fetchImpl = async url => {
@@ -1440,8 +1445,13 @@ test('loadGuard: claude プロセス数 >= 閾値(10)で 0 件 reopen かつ ski
     return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
   };
   const spawn = (cmd, args) => {
+    if (cmd === 'powershell.exe') {
+      const cmdStr = args?.[args.length - 1] || '';
+      if (cmdStr.includes('FreePhysicalMemory')) return { status: 0, stdout: '16777216' }; // 16GB 空き → メモリは OK
+      return { status: 0, stdout: '' };
+    }
     if (cmd === 'tasklist') {
-      const csv = Array(10).fill('"claude.exe","1234","Console","1","100,000 K"').join('\n');
+      const csv = Array(60).fill('"claude.exe","1234","Console","1","100,000 K"').join('\n');
       return { status: 0, stdout: csv };
     }
     if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
@@ -1450,11 +1460,11 @@ test('loadGuard: claude プロセス数 >= 閾値(10)で 0 件 reopen かつ ski
   const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime });
   assert.equal(result.reopened.length, 0);
   assert.equal(result.skipped.loadGuard, 1);
-  assert.equal(result.loadGuard.claudeCount, 10);
+  assert.equal(result.loadGuard.claudeCount, 60);
   assert.equal(result.loadGuard.reason, 'claudeCount');
 });
 
-test('loadGuard: CPU >= 閾値(85%)で 0 件 reopen かつ skipped.loadGuard に計上', async t => {
+test('loadGuard: CPU >= 閾値(90%)で 0 件 reopen かつ skipped.loadGuard に計上', async t => {
   const base = fixture(t);
   const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
   const fetchImpl = async url => {
@@ -1462,6 +1472,11 @@ test('loadGuard: CPU >= 閾値(85%)で 0 件 reopen かつ skipped.loadGuard に
     return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
   };
   const spawn = (cmd, args) => {
+    if (cmd === 'powershell.exe') {
+      const cmdStr = args?.[args.length - 1] || '';
+      if (cmdStr.includes('FreePhysicalMemory')) return { status: 0, stdout: '16777216' }; // 16GB 空き → メモリは OK
+      return { status: 0, stdout: '' };
+    }
     if (cmd === 'tasklist') return { status: 0, stdout: '"claude.exe","1234","Console","1","100,000 K"\n' };
     if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
     return { status: 0, stdout: '' };
@@ -1475,7 +1490,7 @@ test('loadGuard: CPU >= 閾値(85%)で 0 件 reopen かつ skipped.loadGuard に
   const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, cpusImpl, checkCpu: true, checkClaude: true, now: () => nowTime });
   assert.equal(result.reopened.length, 0);
   assert.equal(result.skipped.loadGuard, 1);
-  assert.equal(result.loadGuard.cpuPct, 95);
+  assert.ok(result.loadGuard.cpuPct > 94 && result.loadGuard.cpuPct < 95);
   assert.match(result.loadGuard.reason, /cpuPct/);
 });
 
@@ -1487,6 +1502,13 @@ test('loadGuard: tasklist 失敗時は fail-open でスキップせず reopen �
     return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
   };
   const spawn = (cmd, args) => {
+    if (cmd === 'powershell.exe') {
+      const cmdStr = args?.[args.length - 1] || '';
+      if (cmdStr.includes('FreePhysicalMemory')) return { status: 0, stdout: '16777216' }; // メモリは OK
+      // CIM query for Claude processes → エラーを起こす
+      if (cmdStr.includes('Win32_Process')) return { status: 1, error: new Error('CIM query failed'), stdout: '' };
+      return { status: 0, stdout: '' };
+    }
     if (cmd === 'tasklist') return { status: 1, error: new Error('tasklist failed'), stdout: '' };
     if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
     return { status: 0, stdout: '' };
@@ -1755,3 +1777,121 @@ test('loadGuard counts missing metadata and excludes desktop executable paths', 
   const result = await getLoadGuardStatus({ checkCpu: false, spawn: () => ({ status: 0, stdout: JSON.stringify(rows) }) });
   assert.equal(result.claudeCount, 1);
 });
+
+test('loadGuard: 空きメモリ < 4GB で skipped.loadGuard に計上し理由に freeMem が含まれる', async t => {
+  const base = fixture(t);
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
+  };
+  const spawn = (cmd, args) => {
+    if (cmd === 'powershell.exe') {
+      const cmdStr = args?.[args.length - 1] || '';
+      if (cmdStr.includes('FreePhysicalMemory')) return { status: 0, stdout: '2048000' }; // 2GB → 4GB 未満
+      return { status: 0, stdout: JSON.stringify([{ Name: 'claude.exe', CommandLine: 'claude.exe --resume abc' }]) };
+    }
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime });
+  assert.equal(result.reopened.length, 0);
+  assert.equal(result.skipped.loadGuard, 1);
+  assert.equal(result.loadGuard.freeMemMb, 2000);
+  assert.match(result.loadGuard.reason, /freeMem/);
+});
+
+test('loadGuard: 空きメモリ >= 4GB ならメモリでは止まらず reopen 実行される', async t => {
+  const base = fixture(t);
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
+  };
+  const spawn = (cmd, args) => {
+    if (cmd === 'powershell.exe') {
+      const cmdStr = args?.[args.length - 1] || '';
+      if (cmdStr.includes('FreePhysicalMemory')) return { status: 0, stdout: '8388608' }; // 8GB → OK
+      return { status: 0, stdout: JSON.stringify([{ Name: 'claude.exe', CommandLine: 'claude.exe --resume abc' }]) };
+    }
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  assert.equal(result.skipped.loadGuard, 0);
+  assert.equal(result.reopened.length, 1);
+});
+
+test('loadGuard: 空きメモリ取得失敗時は本数だけで判断（従来どおり）', async t => {
+  const base = fixture(t);
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
+  };
+  const spawn = (cmd, args) => {
+    if (cmd === 'powershell.exe') {
+      const cmdStr = args?.[args.length - 1] || '';
+      if (cmdStr.includes('FreePhysicalMemory')) return { status: 1, error: new Error('CIM failed'), stdout: '' };
+      return { status: 0, stdout: JSON.stringify([{ Name: 'claude.exe', CommandLine: 'claude.exe --resume abc' }]) };
+    }
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  assert.equal(result.skipped.loadGuard, 0);
+  assert.equal(result.reopened.length, 1);
+  assert.equal(result.loadGuard.mode, 'count-only');
+  assert.equal(result.loadGuard.freeMemMb, null);
+});
+
+test('getLoadGuardStatus: freeMemMb が status に含まれる', async () => {
+  const result = await getLoadGuardStatus({ checkCpu: false, checkClaude: false, spawn: (cmd, args) => {
+    if (cmd === 'powershell.exe' && (args?.[args.length - 1] || '').includes('FreePhysicalMemory')) {
+      return { status: 0, stdout: '4194304' }; // 4GB → 閾値ぴったりで OK
+    }
+    return { status: 0, stdout: '' };
+  }});
+  assert.equal(result.freeMemMb, 4096);
+  assert.equal(result.triggered, false);
+});
+
+
+for (const outcome of ['connected', 'failed', 'closed', 'alive']) {
+  test(`拡張再試行: ${outcome} を記録し重複再試行しない`, async t => {
+    const base = fixture(t);
+    let attempts = 0, verificationWaits = 0, aliveChecks = 0;
+    const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'mock',
+      checkCpu: false, checkClaude: false, windowReady: () => true,
+      fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+      wait: async ms => { if (ms === 90000) verificationWaits++; },
+      spawn: (cmd, args) => {
+        if (args[0] === 'agents') {
+          if (verificationWaits) aliveChecks++;
+          if (outcome === 'closed' && aliveChecks === 1) fs.writeFileSync(path.join(base, 'closed-sessions.json'), JSON.stringify({ ids: ['one'] }));
+          const alive = (outcome === 'connected' && verificationWaits === 2) || (outcome === 'alive' && aliveChecks >= 2);
+          return { status: 0, stdout: JSON.stringify(alive ? [{ kind: 'interactive', sessionId: 'one' }] : []) };
+        }
+        if (String(args.at(-1)).includes('orgiast.next-session/reopen')) {
+          attempts++;
+          return { status: outcome === 'failed' ? 1 : 0, stdout: '' };
+        }
+        return { status: 0, stdout: '' };
+      },
+    });
+    assert.equal(result.error, undefined);
+    if (outcome === 'connected') {
+      assert.equal(attempts, 1);
+      assert.deepEqual(result.retriedViaExtension, ['one']);
+      assert.deepEqual(result.verified, ['one']);
+      assert.deepEqual(result.unverified, []);
+    } else if (outcome === 'failed') {
+      assert.equal(attempts, 1);
+      assert.deepEqual(result.retriedViaExtension, []);
+      assert.equal(result.extensionRetryFailed[0].id, 'one');
+    } else {
+      assert.equal(attempts, 0);
+      assert.equal(result.skipped[outcome], 1);
+    }
+  });
+}

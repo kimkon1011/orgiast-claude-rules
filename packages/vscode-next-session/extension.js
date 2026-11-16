@@ -8,6 +8,7 @@ const {
 } = require('./mobile-pool');
 const { resolveClaudeShellPath } = require('./shell-path');
 const { decideAction, orderMobileOpenMethods } = require('./route');
+const { tabMatchesSession, reopenSession } = require('./reopen-tabs.cjs');
 
 const { readRows, createToolRunner, createArchiveWatcher } = require('./archive-tabs');
 const { parseEditorMemento, selectTabsToClose, planClose } = require('./tab-sessions.cjs');
@@ -264,6 +265,26 @@ function activate(context) {
           if (action.refresh) await refreshWaitingTab({ force: true });
           return;
         }
+        if (action.kind === 'reopen') {
+          const sessionId = action.session;
+          if (!sessionId) {
+            log('reopen: session ID が指定されていません');
+            return;
+          }
+          let state = null;
+          if (context.storageUri) {
+            const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+            state = await runReadTabState(path.dirname(context.storageUri.fsPath),
+              path.join(appData, 'Code', 'User', 'globalStorage'), mobileHome);
+          }
+          const result = await reopenSession({
+            sessionId, tabs: claudeTabs, mementoTabs: state?.tabs || [],
+            close: targets => vscode.window.tabGroups.close(targets),
+            open: uri => vscode.env.openExternal(vscode.Uri.parse(uri)),
+          });
+          log(`reopen: session=${sessionId} closed=${result.closed} stateRead=${state !== null}`);
+          return;
+        }
         const cwd = params.get('cwd') || undefined;
         const probe = params.get('probe') === '1';
         const resolved = probe ? null : resolveClaudeShellPath(params.get('claude'));
@@ -372,4 +393,4 @@ function activate(context) {
 
 function deactivate() { mobileLease.release(); }
 
-module.exports = { activate, deactivate, ensureMobileTabs, setOpenWaitMs(ms) { openWaitMs = ms; } };
+module.exports = { activate, deactivate, ensureMobileTabs, tabMatchesSession, setOpenWaitMs(ms) { openWaitMs = ms; } };

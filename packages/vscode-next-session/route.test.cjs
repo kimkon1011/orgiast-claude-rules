@@ -29,6 +29,14 @@ test('空のパスは start を返す', () => {
   assert.deepEqual(decideAction({ path: '', query: '' }), { kind: 'start' });
 });
 
+test('/reopen は session ID 付きで reopen を返す', () => {
+  assert.deepEqual(decideAction({ path: '/reopen', query: 'session=cse_abc123' }), { kind: 'reopen', session: 'cse_abc123' });
+});
+
+test('/reopen は session が空文字でも kind=reopen を返す', () => {
+  assert.deepEqual(decideAction({ path: '/reopen', query: '' }), { kind: 'reopen', session: '' });
+});
+
 test('スマホ用タブは失敗回数が上限未満の間だけ再試行する', () => {
   assert.equal(shouldRetryMobileTab(1, 12), true);
   assert.equal(shouldRetryMobileTab(12, 12), false);

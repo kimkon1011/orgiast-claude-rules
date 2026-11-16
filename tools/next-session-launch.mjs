@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { getFreeMemoryMb, getCpuUsagePct } from './lib/session-load.mjs';
+export { getFreeMemoryMb, getCpuUsagePct };
 import { countWindowsClaudeProcesses } from './lib/windows-process.mjs';
 import { readHandoff, handoffLockEnabled } from './lib/handoff-store.mjs';
 import fs from 'node:fs';
@@ -506,7 +508,7 @@ export function hasUnsentVscodeTab({ state, now, promptConsumed, windowMs = 6 * 
 
 // 2026-11-04 kim-PC: 並行セッションの hook 爆発で PC が操作不能になった最中にも新しいタブを開き続け、
 // VSCode が応答せず「Another instance of Code is running but not responding」が4回出た。
-export const DEFAULT_MAX_CLAUDE_PROCESSES = 12;
+export const DEFAULT_MAX_CLAUDE_PROCESSES = 60;
 
 export function countClaudeProcesses(exec = execFileSync) {
   if (process.platform !== 'win32' && exec === execFileSync) return null;
@@ -515,7 +517,7 @@ export function countClaudeProcesses(exec = execFileSync) {
   } catch { return null; }
 }
 
-export function shouldLaunch({ state, now, env, force, pendingTab, claudeProcesses = null }) {
+export function shouldLaunch({ state, now, env, force, pendingTab, claudeProcesses = null, freeMemMb = null, cpuPct = null }) {
   if (state.enabled === false) {
     return { ok: false, reason: '設定で無効化されています (~/.claude/next-session-launch.json の enabled:false)' };
   }
@@ -529,9 +531,17 @@ export function shouldLaunch({ state, now, env, force, pendingTab, claudeProcess
   if (!force && !Number.isNaN(lastLaunch) && now - lastLaunch < 120_000) {
     return { ok: false, reason: '120秒以内に起動済みなので二重起動を防ぎます' };
   }
+  const minFreeMemMb = Number.isFinite(Number(env.ORGIAST_NEXT_SESSION_MIN_FREE_MEM_MB)) ? Number(env.ORGIAST_NEXT_SESSION_MIN_FREE_MEM_MB) : 4096;
+  if (!force && freeMemMb !== null && freeMemMb < minFreeMemMb) {
+    return { ok: false, stop: 'freeMem', reason: `負荷ガード[freeMem]: 空き物理メモリ=${freeMemMb}MB（下限 ${minFreeMemMb}MB）、CPU=${cpuPct ?? '取得不能'}%、Claude本数=${claudeProcesses ?? '取得不能'}` };
+  }
+  const maxCpu = Number.isFinite(Number(env.ORGIAST_NEXT_SESSION_MAX_CPU)) ? Number(env.ORGIAST_NEXT_SESSION_MAX_CPU) : 90;
+  if (!force && freeMemMb !== null && cpuPct !== null && cpuPct >= maxCpu) {
+    return { ok: false, stop: 'cpuPct', reason: `負荷ガード[cpuPct]: 空き物理メモリ=${freeMemMb ?? '取得不能'}MB、CPU=${cpuPct}%（上限未満 ${maxCpu}%）、Claude本数=${claudeProcesses ?? '取得不能'}` };
+  }
   const maxClaude = Number(env.ORGIAST_NEXT_SESSION_MAX_CLAUDE) || DEFAULT_MAX_CLAUDE_PROCESSES;
   if (!force && Number.isFinite(claudeProcesses) && claudeProcesses >= maxClaude) {
-    return { ok: false, reason: `claude.exe が ${claudeProcesses} 個動いていて PC が過負荷になるため起動しません（上限 ${maxClaude}、ORGIAST_NEXT_SESSION_MAX_CLAUDE で変更可）` };
+    return { ok: false, stop: 'claudeCount', reason: `過負荷ガード[claudeCount]: 空き物理メモリ=${freeMemMb ?? '取得不能'}MB、CPU=${cpuPct ?? '取得不能'}%、Claude本数=${claudeProcesses}（上限 ${maxClaude}）` };
   }
   if (!force && pendingTab === true) {
     return { ok: false, reason: '前回開いた VSCode タブがまだ未送信です。タブバー右端のタブ（タブ名 Claude Code）で Enter を押すと始まります。新しく開き直すには --force-launch' };
@@ -585,7 +595,7 @@ export async function launchNextSession(argv = [], io = {}) {
   const log = io.log ?? console.log;
   const arm = io.armToFile ?? armToFile;
   const flags = parseArgs(argv);
-  const codeCli = resolveVscodeCli({ env, exists, homedir: home });
+  const codeCli = resolveVscodeCli({ env, exists, homedir: home, regQuery: io.regQuery });
   let cwd;
 
   try {
@@ -683,8 +693,16 @@ export async function launchNextSession(argv = [], io = {}) {
     const launchEnv = { ...childEnv({ env, configDir, source: configDirSource }), ORGIAST_HEADLESS_JOB: 'next-session-launch' };
     const pendingTab = hasUnsentVscodeTab({ state, now, promptConsumed });
     const claudeProcesses = countClaude();
-    if (flags.dryRun) log(`[next-session] claude.exe が ${claudeProcesses ?? '不明'} 個（Claude Code CLI、上限 ${Number(env.ORGIAST_NEXT_SESSION_MAX_CLAUDE) || DEFAULT_MAX_CLAUDE_PROCESSES}）`);
-    const decision = shouldLaunch({ state, now, env, force: flags.force, pendingTab: route === 'inline' || route === 'headless' ? false : pendingTab, claudeProcesses });
+    const getFreeMem = io.getFreeMemoryMb ?? getFreeMemoryMb;
+    const freeMemMb = getFreeMem(execFileSync);
+    const getCpu = io.getCpuUsagePct ?? getCpuUsagePct;
+    const cpuPct = await getCpu({ cpusImpl: io.cpus ?? os.cpus, wait: io.wait, sampleMs: 1000 });
+    if (flags.dryRun) {
+      log(`[next-session] claude.exe が ${claudeProcesses ?? '不明'} 個（Claude Code CLI、上限 ${Number(env.ORGIAST_NEXT_SESSION_MAX_CLAUDE) || DEFAULT_MAX_CLAUDE_PROCESSES}）`);
+      log(`[next-session] 空き物理メモリ ${freeMemMb ?? '取得不能'}MB（下限 ${Number.isFinite(Number(env.ORGIAST_NEXT_SESSION_MIN_FREE_MEM_MB)) ? Number(env.ORGIAST_NEXT_SESSION_MIN_FREE_MEM_MB) : 4096}MB）`);
+      log(`[next-session] CPU ${cpuPct ?? '取得不能'}%（上限未満 ${Number.isFinite(Number(env.ORGIAST_NEXT_SESSION_MAX_CPU)) ? Number(env.ORGIAST_NEXT_SESSION_MAX_CPU) : 90}%）`);
+    }
+    const decision = shouldLaunch({ state, now, env, force: flags.force, pendingTab: route === 'inline' || route === 'headless' ? false : pendingTab, claudeProcesses, freeMemMb, cpuPct });
     if (!decision.ok) {
       log(`[next-session] スキップ: ${decision.reason}`);
       return 0;

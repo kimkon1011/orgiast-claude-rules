@@ -5,7 +5,7 @@
 ## インストール
 
 ```sh
-code --install-extension orgiast-next-session-0.3.9.vsix --force
+code --install-extension orgiast-next-session-0.4.1.vsix --force
 ```
 
 通常は fleet converge の `mobile-standby`（`tools/mobile-standby.mjs`）が同梱 VSIX の最新版を自動インストールします。`tools/next-session-launch.mjs --target vscode-ext` も同じ版比較で導入・更新します。
@@ -44,7 +44,7 @@ URI、起動時、タブ変更、5秒ごとの補充は同じ処理で直列化�
 
 副作用: 閉じた古い待機セッションの行は、スマホ一覧に offline として残ります（セッション自体は未使用のため実害はありません）。
 
-この変更はタブの補充を担当します。別の `claude-mobile` サーバーやスケジュールタスクを停止・変更しません。実機の補充・定期リフレッシュには同梱0.3.9 VSIXの導入が必要です。
+この変更はタブの補充を担当します。別の `claude-mobile` サーバーやスケジュールタスクを停止・変更しません。実機の補充・定期リフレッシュには同梱0.4.1 VSIXの導入が必要です。
 
 URI は外部プロセスやブラウザからも開けるため、`claude` パラメータは実在する絶対パスかつファイル名が `claude` / `claude.exe` の場合だけ実行します。
 
@@ -64,3 +64,11 @@ code --uninstall-extension orgiast.next-session
 
 ## 0.3.9
 git worktree フォルダで開かれた VS Code ウィンドウが待機タブのリースを取得・補充しないようにし、起動時・定期処理で未使用の待機タブだけを閉じて通常ウィンドウへ委譲します（会話中タブは保持）。また PC 再起動後の再接続（reopen-lost-sessions）では worktree パスで新規 VS Code ウィンドウが開かないよう制御します。
+
+## 0.4.1
+
+`vscode://orgiast.next-session/reopen?session=<ID>` は対象の Claude タブを閉じてから公式拡張の open URI を呼びます。2.1.319 の実データでは viewType は共通名で label に ID がないため、保存された webview state.sessionID と現在の一意なタイトルを照合します。短縮 ID・重複タイトル・空タブ名からの推測では閉じません。対応するタブがなければ open のみ、閉じる操作に失敗した場合はエラーを記録します。
+
+復旧スクリプトは初回検証で unverified のセッションだけを一度再試行し、再検証します。導入後は次回の VS Code 再読み込みで有効になります。
+
+ビルド: パッケージディレクトリで `npx --yes @vscode/vsce package --no-dependencies --out orgiast-next-session-0.4.1.vsix`。

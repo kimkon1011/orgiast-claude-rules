@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { hostExitArchive } from './lib/host-exit-archive.mjs';
 import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
 import { isEntry } from './is-entry.mjs';
+import { getFreeMemoryMb, getCpuUsagePct } from './lib/session-load.mjs';
 import { countWindowsClaudeProcesses } from './lib/windows-process.mjs';
 
 const DEFAULT_MAX_REOPEN = 3;
@@ -330,28 +331,7 @@ export function agentsFromRegistry(sessionsDir) {
   }
   return result;
 }
-export async function measureCpuAsync({ sampleMs = 1000, cpusImpl = os.cpus, wait = sleep } = {}) {
-  try {
-    const first = cpusImpl();
-    await wait(sampleMs);
-    const second = cpusImpl();
-    let totalIdle1 = 0, totalAll1 = 0;
-    let totalIdle2 = 0, totalAll2 = 0;
-    for (const cpu of first) {
-      const t = cpu.times;
-      totalAll1 += t.user + t.nice + t.system + t.idle + t.iowait + t.irq + t.softirq;
-      totalIdle1 += t.idle;
-    }
-    for (const cpu of second) {
-      const t = cpu.times;
-      totalAll2 += t.user + t.nice + t.system + t.idle + t.iowait + t.irq + t.softirq;
-      totalIdle2 += t.idle;
-    }
-    const idleDiff = totalIdle2 - totalIdle1;
-    const totalDiff = totalAll2 - totalAll1;
-    return totalDiff > 0 ? Math.round(100 * (1 - idleDiff / totalDiff)) : null;
-  } catch { return null; }
-}
+export const measureCpuAsync = getCpuUsagePct;
 const quotePS = s => "'" + s.replaceAll("'", "''") + "'";
 // VS Code の可視メインウィンドウが1つ以上開いているかを PowerShell で確認する。
 // タイムアウト 15 秒。エラー・タイムアウト・数値でない出力時は安全側（ウィンドウあり＝URIのみ）として true を返す。
@@ -543,11 +523,15 @@ export async function getLoadGuardStatus({
   wait = sleep,
   checkCpu = true,
   checkClaude = true,
+  platform = process.platform,
+  freemem = os.freemem,
 } = {}) {
-  const maxClaude = Number.isFinite(Number(env?.REOPEN_MAX_CLAUDE)) ? Number(env.REOPEN_MAX_CLAUDE) : 10;
-  const maxCpu = Number.isFinite(Number(env?.REOPEN_MAX_CPU)) ? Number(env.REOPEN_MAX_CPU) : 85;
+  const maxClaude = Number.isFinite(Number(env?.REOPEN_MAX_CLAUDE)) ? Number(env.REOPEN_MAX_CLAUDE) : 60;
+  const maxCpu = Number.isFinite(Number(env?.REOPEN_MAX_CPU)) ? Number(env.REOPEN_MAX_CPU) : 90;
+  const minFreeMemMb = Number.isFinite(Number(env?.REOPEN_MIN_FREE_MEM_MB)) ? Number(env.REOPEN_MIN_FREE_MEM_MB) : 4096;
 
   let claudeCount = null;
+  let freeMemMb = null;
   let loadError = null;
 
   if (checkClaude) {
@@ -562,17 +546,25 @@ export async function getLoadGuardStatus({
     }
   }
 
+  freeMemMb = getFreeMemoryMb(spawn, { platform, freemem });
+
   const cpuPct = checkCpu ? await measureCpuAsync({ sampleMs: 1000, cpusImpl, wait }) : null;
 
   const reasons = [];
+  if (freeMemMb !== null && freeMemMb < minFreeMemMb) reasons.push('freeMem');
+  if (freeMemMb !== null && cpuPct !== null && cpuPct >= maxCpu) reasons.push('cpuPct');
   if (claudeCount !== null && claudeCount >= maxClaude) reasons.push('claudeCount');
-  if (cpuPct !== null && cpuPct >= maxCpu) reasons.push('cpuPct');
 
   const triggered = reasons.length > 0;
   const reason = triggered ? reasons.join(',') : null;
 
   const status = {
     claudeCount,
+    freeMemMb,
+    minFreeMemMb,
+    maxCpu,
+    maxClaude,
+    mode: freeMemMb === null ? 'count-only' : 'memory-cpu',
     cpuPct,
     reason,
     triggered,
@@ -665,8 +657,8 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs, stateBased = false,
   checkCpu = true, checkClaude = false, cpusImpl, vscodeStartedAt, openDb } = {}) {
-  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
-  const initialHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
+  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], retriedViaExtension: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
+  const initialHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb, readOnly: dryRun });
   const hiddenSessionIds = initialHidden.ids;
   if (initialHidden.error) {
     result.hiddenError = initialHidden.error;
@@ -674,12 +666,14 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
   // Dry run is strictly read-only: no lock or log mutation on the user's PC.
   const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'));
   if (!release) return { ...result, error: 'locked' };
-  writeProgress(base, 'lock', 'acquired');
+  const progress = (stage, detail) => { if (!dryRun) writeProgress(base, stage, detail); };
+  progress('lock', 'acquired');
   try {
+    if (dryRun) result.loadGuard = await getLoadGuardStatus({ env, spawn, cpusImpl, wait, checkCpu, checkClaude });
     const token = readJson(path.join(base, '.credentials.json')).claudeAiOauth?.accessToken;
     const org = readJson(path.join(base, '..', '.claude.json')).oauthAccount?.organizationUuid;
     if (!token || !org) throw Error('Missing RC credentials');
-    writeProgress(base, 'auth', 'credentials loaded');
+    progress('auth', 'credentials loaded');
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01',
       'anthropic-beta': 'ccr-byoc-2025-07-29', 'x-organization-uuid': org };
     const cli = claudeCli || resolveClaudeCli({ env, exists: fsImpl.existsSync, readdir: fsImpl.readdirSync, spawn });
@@ -720,13 +714,13 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
       }
     };
     const living = alive();
-    writeProgress(base, 'alive', `source=${result.aliveSource}, count=${living.size}`);
+    progress('alive', `source=${result.aliveSource}, count=${living.size}`);
     const indexSinceMs = stateBased
       ? now() - 72 * 3600 * 1000
       : Date.parse(since) - 24 * 3600 * 1000;
     const locals = localIndex(base, undefined, { sinceMs: Number.isFinite(indexSinceMs) ? indexSinceMs : now() - 72 * 3600 * 1000 });
     const closed = closedIds(base);
-    writeProgress(base, 'index', `local=${locals.size}, closed=${closed.size}, skippedOld=${locals.skippedOld}, indexMs=${locals.indexMs}`);
+    progress('index', `local=${locals.size}, closed=${closed.size}, skippedOld=${locals.skippedOld}, indexMs=${locals.indexMs}`);
     result.indexed = locals.indexed;
     result.indexSkippedOld = locals.skippedOld;
     result.indexMs = locals.indexMs;
@@ -826,25 +820,22 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
       } while (cursor);
     } catch (error) { result.apiError = error.message; }
     if (!dryRun && result.candidates.length) {
-      writeProgress(base, 'fetch', `candidates=${result.candidates.length}`);
+      progress('fetch', `candidates=${result.candidates.length}`);
       const loadStatus = await getLoadGuardStatus({ env, spawn, cpusImpl, wait, checkCpu, checkClaude });
-      if (loadStatus.error) {
-        result.loadGuard = { claudeCount: loadStatus.claudeCount, cpuPct: loadStatus.cpuPct, reason: loadStatus.reason, error: loadStatus.error };
-      }
+      result.loadGuard = loadStatus;
       if (loadStatus.triggered) {
         result.skipped.loadGuard = result.candidates.length;
-        result.loadGuard = { claudeCount: loadStatus.claudeCount, cpuPct: loadStatus.cpuPct, reason: loadStatus.reason, ...(loadStatus.error ? { error: loadStatus.error } : {}) };
-        if (loadStatus.cpuPct !== null && loadStatus.cpuPct >= (Number.isFinite(Number(env.REOPEN_MAX_CPU)) ? Number(env.REOPEN_MAX_CPU) : 85)) {
+        if (loadStatus.reason?.split(',').includes('cpuPct')) {
           result.deferredCpu = loadStatus.cpuPct;
         }
       } else {
         const code = codeCli || resolveCodeCli(env, fsImpl.existsSync);
         let windowOpened = false; // 1回の実行で新規ウィンドウを作るのは最大1回まで
         for (const candidate of result.candidates.slice(0, max)) {
-          writeProgress(base, 'open', `id=${candidate.id}`);
+          progress('open', `id=${candidate.id}`);
           // Recheck after fetching and between opens: close/purge may have happened meanwhile.
           const refreshed = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
-          const recheckHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
+          const recheckHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb, readOnly: dryRun });
           const currentHidden = recheckHidden.error ? hiddenSessionIds : recheckHidden.ids;
           const reason = exclusion(refreshed, closedIds(base), alive(), currentHidden);
           if (reason) { result.skipped[reason]++; continue; }
@@ -878,7 +869,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
               }
               if (!found) throw Error('VS Code window timeout');
               const current = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
-              const lateHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
+              const lateHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb, readOnly: dryRun });
               const currentLateHidden = lateHidden.error ? hiddenSessionIds : lateHidden.ids;
               const lateReason = exclusion(current, closedIds(base), alive(), currentLateHidden);
               if (lateReason) { result.skipped[lateReason]++; continue; }
@@ -894,7 +885,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
         }
         // Post-reopen verification: wait 90s then check which sessions are actually connected
         if (result.reopened.length) {
-          writeProgress(base, 'verify', `waiting 90s for ${result.reopened.length} reopened`);
+          progress('verify', `waiting 90s for ${result.reopened.length} reopened`);
           await wait(90000);
           try {
             const agents = alive();
@@ -904,6 +895,33 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
               if (agents.has(r.id)) result.verified.push(r.id);
               else result.unverified.push(r.id);
             }
+            // Each unverified session gets at most one extension retry per run.
+            for (const id of result.unverified) {
+              try {
+                const current = [...localIndex(base, id).values()].find(local => local.id === id);
+                const hidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
+                const reason = exclusion(current, closedIds(base), alive(), hidden.error ? hiddenSessionIds : hidden.ids);
+                if (reason) { result.skipped[reason]++; continue; }
+                const retryLoad = await getLoadGuardStatus({ env, spawn, cpusImpl, wait, checkCpu, checkClaude });
+                if (retryLoad.triggered) {
+                  result.loadGuard = retryLoad;
+                  result.skipped.loadGuard++;
+                  continue;
+                }
+                const uri = `vscode://orgiast.next-session/reopen?session=${encodeURIComponent(id)}`;
+                ps(`& ${quotePS(code)} --open-url ${quotePS(uri)}; exit $LASTEXITCODE`, spawn);
+                result.retriedViaExtension.push(id);
+              } catch (error) {
+                (result.extensionRetryFailed ??= []).push({ id, error: error.message });
+              }
+            }
+            if (result.retriedViaExtension.length) {
+              progress('verify-extension', `waiting 90s for ${result.retriedViaExtension.length} retried`);
+              await wait(90000);
+              const afterRetry = alive();
+              result.verified = result.reopened.filter(item => afterRetry.has(item.id)).map(item => item.id);
+              result.unverified = result.reopened.filter(item => !afterRetry.has(item.id)).map(item => item.id);
+            }
           } catch (e) { result.verifyError = e.message; }
         }
       }
@@ -911,7 +929,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
   } catch (error) { result.error = error.message; }
   finally {
     try { if (!dryRun) fs.appendFileSync(path.join(base, 'reopen-lost-sessions.log'), JSON.stringify(result) + '\n'); }
-    finally { writeProgress(base, 'done', 'log written'); release(); }
+    finally { progress('done', 'log written'); release(); }
   }
   return result;
 }

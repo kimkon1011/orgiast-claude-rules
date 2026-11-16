@@ -294,16 +294,26 @@ export async function runOnce(options = {}) {
         const docTexts = collected.documents.map(d => d.text);
         const related = await searchRelated({
           terms: await extractSearchTerms(question, docTexts, llm),
+          question,
+          llm,
           beeperFetch: options.beeperFetch || ((endpoint, init) => beeperFetchFn(endpoint, { ...init, fetchImpl: options.fetchImpl, timeoutMs: 5000 })),
           excludeMessageIds: new Set(pending.map(m => m.id)),
           sinceDays: 180, maxItems: 10, maxBytes: 10000,
           excludeChatIds: chat.id,
         }).catch(() => []);
+        // Read corrections from server version's file for DM reply input
+        const correctionsFile = path.join(home, '.claude', 'discord-autoreply', 'corrections.jsonl');
+        const readCorrections = () => {
+          try {
+            return read(correctionsFile).split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+          } catch { return []; }
+        };
         const classifyInput = {
           channelName: chat.title, context: all.slice(-25).map(m => ({ author: m.senderName, content: plainText(m.text), isSelf: m.isSender })),
           message: { content: question },
           knowledge: read(path.join(home, '.claude', 'discord-autoreply', 'knowledge.md')),
           rules: read(path.join(home, '.claude', 'discord-autoreply', 'rules.md')),
+          corrections: readCorrections().slice(-30),
           ...(related.length ? { related } : {}),
           ...(collected.images.length ? { images: collected.images } : {}),
           ...(collected.documents.length ? { documents: collected.documents } : {}),
@@ -429,6 +439,108 @@ export async function runOnce(options = {}) {
       } catch (error) {
         await decide(`読み取り・分類を確認できません: ${error.code || error.name || 'Error'}`);
         result.errors.push(`chat ${chat.localChatID || chat.id}: ${error.code || error.name || 'Error'}`);
+      }
+    }
+
+    // ── Learning phase: detect deleted auto-replies and learn from kim's corrections ──
+    const correctionsFile = path.join(home, '.claude', 'discord-autoreply', 'corrections.jsonl');
+    const readCorrections = () => {
+      try { return read(correctionsFile).split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line)); }
+      catch { return []; }
+    };
+    const recordCorrection = row => {
+      if (!readCorrections().some(x => x.msgId === row.msgId)) {
+        fs.mkdirSync(path.dirname(correctionsFile), { recursive: true });
+        fs.appendFileSync(correctionsFile, JSON.stringify(row) + '\n');
+      }
+    };
+    const AUTOREPLY_PREFIX = '【kimのClaudeによる代理回答】';
+    const DELETION_LEARN_DAYS = 7;
+    const DELETION_LEARN_HOURS = 24;
+
+    for (const [chatId, entry] of Object.entries(state.chats)) {
+      if (entry.status !== 'sent' || !entry.replyId || entry.learnedDeletion) continue;
+      const entryTs = Date.parse(entry.timestamp);
+      if (!Number.isFinite(entryTs) || now - entryTs > DELETION_LEARN_DAYS * 86400000) {
+        entry.learnedDeletion = true;
+        continue;
+      }
+      try {
+        // Fetch history with coverage check: don't stop at isSender, continue
+        // until we either find the auto-reply or cover its timestamp.
+        const fetchedItems = new Map();
+        let fetchCursor;
+        let historyCovered = false;
+
+        for (let page = 0; page < 20; page++) {
+          const data = await api.listMessages(chatId, { limit: 50, cursor: fetchCursor, direction: 'before' });
+          if (!Array.isArray(data.items)) break;
+          for (const m of data.items) {
+            if (m.accountID && m.accountID !== DISCORD_ACCOUNT) continue;
+            fetchedItems.set(m.id, m);
+          }
+          // Check if the oldest valid message's timestamp is <= the auto-reply's timestamp
+          const valid = validMessages([...fetchedItems.values()]);
+          if (valid.length > 0 && timestamp(valid[0]) <= entryTs) {
+            historyCovered = true;
+            break;
+          }
+          if (!data.hasMore || !data.oldestCursor) break;
+          fetchCursor = data.oldestCursor;
+        }
+
+        const all = validMessages([...fetchedItems.values()]);
+        // Find auto-reply in raw items (validMessages filters out isDeleted)
+        const autoReplyMsg = [...fetchedItems.values()].find(m => m.id === entry.replyId);
+        // Deleted if: (a) isDeleted flag is set, or (b) history covers the
+        // timestamp but the message is not found.
+        const isDeleted = autoReplyMsg
+          ? autoReplyMsg.isDeleted === true
+          : historyCovered;
+        if (!isDeleted) {
+          // Not deleted — skip learning (or history didn't cover the timestamp)
+          if (historyCovered) entry.learnedDeletion = true;
+          continue;
+        }
+        // Auto-reply was deleted. Find kim's first non-auto-reply message
+        // sent after the auto-reply (deletion time unavailable, so use
+        // auto-reply's send time as lower bound), within 24h.
+        const kimCorrection = all.find(m =>
+          m.isSender
+          && !plainText(m.text).startsWith(AUTOREPLY_PREFIX)
+          && timestamp(m) > entryTs
+          && timestamp(m) - entryTs <= DELETION_LEARN_HOURS * 3600000
+        );
+        if (!kimCorrection) {
+          // No correction found yet — keep checking on next run
+          continue;
+        }
+        // Save to corrections.jsonl
+        recordCorrection({
+          msgId: entry.replyId,
+          question: entry.question || '',
+          autoAnswer: entry.content || '',
+          kimAnswer: plainText(kimCorrection.text),
+          outcome: 'deleted_and_corrected',
+          confirmed: true,
+          ts: new Date(now).toISOString(),
+          where: 'dm',
+        });
+        entry.learnedDeletion = true;
+        result.learned ??= { corrected: 0, confirmed: 0, expired: 0, deletedAndCorrected: 0 };
+        result.learned.deletedAndCorrected = (result.learned.deletedAndCorrected || 0) + 1;
+        // Notify kim-inbox
+        if (!dryRun) {
+          await addItemImpl(home, {
+            kind: 'info',
+            source: 'discord-beeper-autoreply',
+            text: `自動返信の訂正を学習: ${entry.senderName || chatId}`,
+            dedupeKey: `deletion-learn:${entry.replyId}`,
+          });
+        }
+      } catch {
+        // Learning failure must not stop the reply cycle
+        continue;
       }
     }
     save();

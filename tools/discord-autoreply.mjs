@@ -645,6 +645,8 @@ export async function runOnce(options = {}) {
           // Search related conversations for context
           const related = await searchRelated({
             terms: await extractSearchTerms(m.content || '', collected.documents.map(d => d.text), llm),
+            question: m.content || '',
+            llm,
             beeperFetch: options.beeperFetch || ((endpoint, init) => beeperFetch(endpoint, { ...init, fetchImpl: options.fetchImpl, timeoutMs: 5000 })),
             excludeMessageIds: new Set([m.id]),
             sinceDays: 180, maxItems: 10, maxBytes: 10000,

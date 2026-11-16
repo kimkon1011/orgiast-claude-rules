@@ -718,3 +718,370 @@ test('searchRelated: 前後展開でヒットから±10メッセージ以内の�
   assert.ok(result.some(r => r.sender === '大平' && r.via === 'context'));
   assert.ok(!result.some(r => r.sender === '白川'));
 });
+
+// ── Stage 2: AI-generated additional search terms ──────────────────────
+
+test('searchRelated: 2段目で追加語を生成し新たな結果を取得', async () => {
+  // Stage 1: "スマートエイト" で検索 → 10/24 辻さんの発言のみ
+  // Stage 2: LLM が "川本 制作費" を提案 → 9/24 川本さんの発言を追加取得
+  let searchCalls = 0;
+  const llm = async ({ category, system, input }) => {
+    assert.equal(category, 'classification');
+    assert.ok(input.question.includes('スマートエイト'));
+    assert.ok(input.stage1Results);
+    return JSON.stringify(['川本 制作費', '４万']);
+  };
+  const beeperFetch = async (endpoint, opts) => {
+    if (endpoint === '/v1/messages/search') {
+      searchCalls++;
+      if (searchCalls === 1) {
+        // Stage 1: search for "スマートエイト"
+        return {
+          items: [{
+            id: 'oct24', chatID: 'group1', senderName: '辻',
+            timestamp: '2026-10-24T10:00:00Z',
+            text: 'スマートエイトの原価追加について質問です',
+          }],
+          chats: { group1: { title: '川本, 大平, 白川 & 百瀬' } },
+        };
+      }
+      // Stage 2: search for "川本 制作費" or "４万"
+      return {
+        items: [{
+          id: 'sep24', chatID: 'group1', senderName: '川本',
+          timestamp: '2026-09-24T10:00:00Z',
+          text: '制作費2万円+5千円+1.5万円の合計4万円(税抜)で3プランという認識でよろしいでしょうか',
+        }],
+        chats: { group1: { title: '川本, 大平, 白川 & 百瀬' } },
+      };
+    }
+    return { items: [] };
+  };
+  const result = await searchRelated({
+    terms: ['スマートエイト'],
+    question: 'スマートエイト様の原価確認',
+    llm,
+    beeperFetch,
+    maxItems: 10, maxBytes: 20000,
+  });
+  assert.equal(searchCalls, 6, 'should search stage 1 (1 term) then stage 2 (2 terms with variants: 川本 制作費, 川本, 制作費, ４万, 4万)');
+  // First-stage direct hit comes first
+  assert.equal(result[0].sender, '辻');
+  assert.equal(result[0].via, undefined);
+  // Second-stage hit comes after
+  assert.equal(result[1].sender, '川本');
+  assert.equal(result[1].via, 'stage2');
+  assert.ok(result[1].text.includes('4万円'));
+});
+
+test('searchRelated: 2段目LLMが空配列を返したら追加検索しない', async () => {
+  let searchCalls = 0;
+  const llm = async () => JSON.stringify([]);
+  const beeperFetch = async (endpoint) => {
+    if (endpoint === '/v1/messages/search') {
+      searchCalls++;
+      return {
+        items: [{ id: 'hit', chatID: 'c1', senderName: '辻',
+          timestamp: '2026-10-24T10:00:00Z', text: 'スマートエイトの質問' }],
+        chats: { c1: { title: '相談' } },
+      };
+    }
+    return { items: [] };
+  };
+  const result = await searchRelated({
+    terms: ['スマートエイト'],
+    question: 'テスト質問',
+    llm,
+    beeperFetch,
+    maxItems: 10, maxBytes: 20000,
+  });
+  assert.equal(searchCalls, 1, 'should not search stage 2 when LLM returns empty');
+  assert.equal(result.length, 1);
+  assert.equal(result[0].sender, '辻');
+});
+
+test('searchRelated: 2段目LLMが失敗しても1段目の結果で続行', async () => {
+  let searchCalls = 0;
+  const llm = async () => { throw new Error('LLM down'); };
+  const beeperFetch = async (endpoint) => {
+    if (endpoint === '/v1/messages/search') {
+      searchCalls++;
+      return {
+        items: [{ id: 'hit', chatID: 'c1', senderName: '辻',
+          timestamp: '2026-10-24T10:00:00Z', text: 'スマートエイトの質問' }],
+        chats: { c1: { title: '相談' } },
+      };
+    }
+    return { items: [] };
+  };
+  const result = await searchRelated({
+    terms: ['スマートエイト'],
+    question: 'テスト質問',
+    llm,
+    beeperFetch,
+    maxItems: 10, maxBytes: 20000,
+  });
+  assert.equal(searchCalls, 1, 'should still have stage 1 results');
+  assert.equal(result.length, 1);
+  assert.equal(result[0].sender, '辻');
+});
+
+test('searchRelated: 2段目検索が失敗しても1段目の結果で続行', async () => {
+  let searchCalls = 0;
+  const llm = async () => JSON.stringify(['追加語']);
+  const beeperFetch = async (endpoint) => {
+    if (endpoint === '/v1/messages/search') {
+      searchCalls++;
+      if (searchCalls === 1) {
+        return {
+          items: [{ id: 'hit', chatID: 'c1', senderName: '辻',
+            timestamp: '2026-10-24T10:00:00Z', text: 'スマートエイトの質問' }],
+          chats: { c1: { title: '相談' } },
+        };
+      }
+      throw new Error('Beeper down for stage 2');
+    }
+    return { items: [] };
+  };
+  const result = await searchRelated({
+    terms: ['スマートエイト'],
+    question: 'テスト質問',
+    llm,
+    beeperFetch,
+    maxItems: 10, maxBytes: 20000,
+  });
+  assert.equal(searchCalls, 2, 'stage 2 search attempted but failed');
+  assert.equal(result.length, 1, 'stage 1 results preserved');
+  assert.equal(result[0].sender, '辻');
+});
+
+test('searchRelated: 2段目で既存の結果と重複しない', async () => {
+  let searchCalls = 0;
+  const llm = async () => JSON.stringify(['スマートエイト']); // Same as stage 1 term
+  const beeperFetch = async (endpoint) => {
+    if (endpoint === '/v1/messages/search') {
+      searchCalls++;
+      return {
+        items: [{ id: 'hit', chatID: 'c1', senderName: '辻',
+          timestamp: '2026-10-24T10:00:00Z', text: 'スマートエイトの質問' }],
+        chats: { c1: { title: '相談' } },
+      };
+    }
+    return { items: [] };
+  };
+  const result = await searchRelated({
+    terms: ['スマートエイト'],
+    question: 'テスト質問',
+    llm,
+    beeperFetch,
+    maxItems: 10, maxBytes: 20000,
+  });
+  assert.equal(searchCalls, 2, 'stage 2 search ran');
+  assert.equal(result.length, 1, 'no duplicate from stage 2');
+  assert.equal(result[0].sender, '辻');
+});
+
+test('searchRelated: 2段目結果は1段目直接ヒットの後、コンテキストの前に配置', async () => {
+  let searchCalls = 0;
+  const llm = async () => JSON.stringify(['追加語']);
+  const beeperFetch = async (endpoint) => {
+    if (endpoint === '/v1/messages/search') {
+      searchCalls++;
+      if (searchCalls === 1) {
+        return {
+          items: [{ id: 'hit', chatID: 'c1', senderName: '辻',
+            timestamp: '2026-10-24T10:00:00Z', text: 'スマートエイトの質問' }],
+          chats: { c1: { title: '相談' } },
+        };
+      }
+      return {
+        items: [{ id: 'stage2', chatID: 'c2', senderName: '川本',
+          timestamp: '2026-09-24T10:00:00Z', text: '制作費4万円の見積もり' }],
+        chats: { c2: { title: '別の会話' } },
+      };
+    }
+    if (endpoint.startsWith('/v1/chats/') && endpoint.endsWith('/messages')) {
+      return { items: [{ id: 'ctx', senderName: '大平', timestamp: '2026-10-20T10:00:00Z',
+        text: 'スマートエイト 合計4万円で承知しました' }], hasMore: false };
+    }
+    return { items: [] };
+  };
+  const result = await searchRelated({
+    terms: ['スマートエイト'],
+    question: 'テスト質問',
+    llm,
+    beeperFetch,
+    maxItems: 10, maxBytes: 20000,
+  });
+  // Order: direct hit (辻) → stage2 (川本) → context (大平)
+  assert.equal(result[0].sender, '辻');
+  assert.equal(result[0].via, undefined);
+  assert.equal(result[1].sender, '川本');
+  assert.equal(result[1].via, 'stage2');
+  assert.equal(result[2].sender, '大平');
+  assert.equal(result[2].via, 'context');
+});
+
+test('searchRelated: 2段目はquestionが無いとスキップ', async () => {
+  let searchCalls = 0;
+  const llm = async () => { throw new Error('should not be called'); };
+  const beeperFetch = async (endpoint) => {
+    if (endpoint === '/v1/messages/search') {
+      searchCalls++;
+      return {
+        items: [{ id: 'hit', chatID: 'c1', senderName: '辻',
+          timestamp: '2026-10-24T10:00:00Z', text: 'スマートエイトの質問' }],
+        chats: { c1: { title: '相談' } },
+      };
+    }
+    return { items: [] };
+  };
+  const result = await searchRelated({
+    terms: ['スマートエイト'],
+    // No question or llm — stage 2 should be skipped
+    beeperFetch,
+    maxItems: 10, maxBytes: 20000,
+  });
+  assert.equal(searchCalls, 1);
+  assert.equal(result.length, 1);
+});
+
+test('searchRelated: 2段目で辻さんケースの川本発言を追加取得', async () => {
+  // 実害の再現: 辻さん「スマートエイト様 DXPO福岡'26 studioreal様の請求書(税抜40,000円)を原価に追加してよいか」
+  // 1段目: "スマートエイト" で 9/18 百瀬「各20,000円」、9/22 kim「報酬5000円追加」がヒット
+  // 2段目: LLM が "川本 制作費" を提案 → 9/24 川本「制作費2万円+5千円+1.5万円の合計4万円(税抜)」を追加取得
+  let searchCalls = 0;
+  const llm = async ({ input }) => {
+    assert.ok(input.question.includes('スマートエイト'));
+    assert.ok(input.stage1Results);
+    return JSON.stringify(['川本 制作費', '４万']);
+  };
+  const beeperFetch = async (endpoint, opts) => {
+    if (endpoint === '/v1/messages/search') {
+      searchCalls++;
+      if (searchCalls === 1) {
+        // Stage 1: "スマートエイト" → 百瀬とkimの発言
+        return {
+          items: [
+            { id: 'sep18', chatID: 'group1', senderName: '百瀬',
+              timestamp: '2026-09-18T10:00:00Z',
+              text: '各20,000円（計40,000円）という認識です' },
+            { id: 'sep22', chatID: 'group1', senderName: 'kim',
+              timestamp: '2026-09-22T10:00:00Z',
+              text: '報酬5000円追加でお願いします' },
+          ],
+          chats: { group1: { title: '川本, 大平, 白川 & 百瀬' } },
+        };
+      }
+      // Stage 2: "川本 制作費" → 川本の発言
+      return {
+        items: [{
+          id: 'sep24', chatID: 'group1', senderName: '川本',
+          timestamp: '2026-09-24T10:00:00Z',
+          text: '制作費2万円+5千円+1.5万円の合計4万円(税抜)で3プランという認識でよろしいでしょうか',
+        }],
+        chats: { group1: { title: '川本, 大平, 白川 & 百瀬' } },
+      };
+    }
+    return { items: [] };
+  };
+  const result = await searchRelated({
+    terms: ['スマートエイト'],
+    question: '原価確認をお願いします。案件名：スマートエイト様第1回 【営業・マーケ・DX推進】AIエージェントDXPO福岡\'26 請求者名：studioreal様 内容：こちらの請求書が届きましたが、原価の記載がありませんでした。こちら原価として追加記入してよろしいでしょうか？',
+    llm,
+    beeperFetch,
+    maxItems: 30, maxBytes: 20000,
+  });
+  // Stage 1 direct hits come first
+  assert.ok(result.some(r => r.sender === '百瀬' && !r.via));
+  assert.ok(result.some(r => r.sender === 'kim' && !r.via));
+  // Stage 2 hit: 川本's 9/24 message
+  assert.ok(result.some(r => r.sender === '川本' && r.via === 'stage2'));
+  const kawamoto = result.find(r => r.sender === '川本');
+  assert.ok(kawamoto.text.includes('4万円'));
+  assert.ok(kawamoto.text.includes('2万円'));
+});
+
+// ── generateSearchVariants tests ─────────────────────────────────────
+
+test('generateSearchVariants: 全角→半角数字', async () => {
+  const { generateSearchVariants } = await import('./autoreply-related.mjs');
+  const variants = generateSearchVariants('４万円');
+  assert.ok(variants.includes('４万円'), 'original preserved');
+  assert.ok(variants.includes('4万円'), 'half-width variant');
+});
+
+test('generateSearchVariants: 半角→全角数字', async () => {
+  const { generateSearchVariants } = await import('./autoreply-related.mjs');
+  const variants = generateSearchVariants('4万');
+  assert.ok(variants.includes('4万'), 'original preserved');
+  assert.ok(variants.includes('４万'), 'full-width variant');
+});
+
+test('generateSearchVariants: 複合語を分割', async () => {
+  const { generateSearchVariants } = await import('./autoreply-related.mjs');
+  const variants = generateSearchVariants('川本 制作費');
+  assert.ok(variants.includes('川本 制作費'), 'original preserved');
+  assert.ok(variants.includes('川本'), 'split part 1');
+  assert.ok(variants.includes('制作費'), 'split part 2');
+});
+
+test('generateSearchVariants: 全角スペース区切りも分割', async () => {
+  const { generateSearchVariants } = await import('./autoreply-related.mjs');
+  const variants = generateSearchVariants('川本　制作費');
+  assert.ok(variants.includes('川本'), 'split by full-width space');
+  assert.ok(variants.includes('制作費'), 'split by full-width space');
+});
+
+test('generateSearchVariants: 単一語はそのまま', async () => {
+  const { generateSearchVariants } = await import('./autoreply-related.mjs');
+  const variants = generateSearchVariants('川本');
+  assert.equal(variants.length, 1);
+  assert.equal(variants[0], '川本');
+});
+
+test('generateSearchVariants: 数字混じりの複合語で全角半角両方生成', async () => {
+  const { generateSearchVariants } = await import('./autoreply-related.mjs');
+  const variants = generateSearchVariants('川本 ４万');
+  assert.ok(variants.includes('川本 ４万'), 'original');
+  assert.ok(variants.includes('川本 4万'), 'half-width digits');
+  assert.ok(variants.includes('川本'), 'split name');
+  assert.ok(variants.includes('４万'), 'split amount full-width');
+  assert.ok(variants.includes('4万'), 'split amount half-width');
+});
+
+test('Stage 2: 全角数字の検索語で半角も検索される', async () => {
+  // Verify that searchRelated with stage2TermHits tracks hits correctly
+  // when the LLM returns a full-width digit term
+  const { searchRelated } = await import('./autoreply-related.mjs');
+  let searchCalls = 0;
+  let searchQueries = [];
+  const beeperFetch = async (endpoint, opts) => {
+    if (endpoint === '/v1/messages/search') {
+      searchCalls++;
+      searchQueries.push(opts.query.query);
+      if (searchCalls === 1) {
+        // Stage 1: return a result so Stage 2 runs
+        return { items: [{ id: 'hit1', chatID: 'c1', senderName: '辻', timestamp: new Date().toISOString(), text: 'スマートエイトの質問' }], chats: { c1: { title: '相談' } } };
+      }
+      return { items: [], chats: {} };
+    }
+    return { items: [] };
+  };
+  // Mock llm to return a full-width digit term
+  const llm = async () => JSON.stringify(['４万']);
+  const stage2TermHits = {};
+  await searchRelated({
+    terms: ['スマートエイト'],
+    question: 'スマートエイトの原価は４万円ですか？',
+    llm,
+    beeperFetch,
+    stage2TermHits,
+    maxItems: 10, maxBytes: 20000,
+  });
+  // Should have searched for both '４万' and '4万'
+  assert.ok(searchQueries.includes('４万'), 'should search original full-width term');
+  assert.ok(searchQueries.includes('4万'), 'should search half-width variant');
+  assert.equal(Object.keys(stage2TermHits).length, 1);
+  assert.equal(stage2TermHits['４万'], 0); // no results from mock
+});

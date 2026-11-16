@@ -53,6 +53,7 @@
     ".pr-body-x0054-v2.md": { "reason": "PR #2136 のボディファイル。配布先PCの実行時参照なし" },
     ".pr-body-x0005-review.md": { "reason": "PR #2133 のボディファイル。配布先PCの実行時参照なし" },
     ".pr-body-x0042.md": { "reason": "PR #2128 のボディファイル。配布先PCの実行時参照なし" },
+    ".pr-body-x0043-gui-to-cli.md": { "reason": "PR #2205 のボディファイル。配布先PCの実行時参照なし" },
     ".pr-body-x0044.md": { "reason": "PR #2024 のボディファイル。配布先PCの実行時参照なし" },
     ".pr-body-x0045.md": { "reason": "PR #2117 のボディファイル。配布先PCの実行時参照なし" },
     ".pr-body-x0061.md": { "reason": "PR #2140 のボディファイル（X-0061 Dynamic Workflows）。配布先PCの実行時参照なし" },

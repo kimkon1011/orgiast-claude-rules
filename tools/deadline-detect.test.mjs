@@ -131,7 +131,7 @@ test('鍵なし席はseat checkでスキップされる', async t => {
   assert.equal(code, 0);
   const result = JSON.parse(output[0]);
   assert.equal(result.skip, true);
-  assert.match(result.reason, /DWD key/);
+  assert.match(result.reason, /スキップ/);
   assert.equal(heartbeats.length, 1);
   assert.match(heartbeats[0].summary, /スキップ/);
 });

@@ -489,6 +489,12 @@ export function caseForMessage(message, cases) {
 function fallbackMovement(messages) {
   return `${txt(messages.at(-1)?.subject) || "メールの更新あり"}。`;
 }
+export function reportSenderLabel(message = {}) {
+  const value = message.latestSender || message.from || "",
+    parsed = sender(value),
+    display = txt(parsed.name) || parsed.email || "送信者不明";
+  return `佐藤さん担当（送信：${display}）`;
+}
 const personToken = value => txt(value).replace(/^['"]|['"]$/g, "")
   .replace(/(?:株式会社|合同会社|有限会社|一般社団法人|御中|ご担当者?|担当)$/g, "").trim()
   .split(/[\s　]+/).at(-1)?.replace(/(?:様|氏|さん)$/g, "") || "";
@@ -623,9 +629,10 @@ export async function buildDailyReport(
         : "先方送信",
     }));
     const label = customerLabel(g.caseItem),
-      summaryLimit = Math.max(10, 70 - `・${label}：`.length),
+      senderLabel = reportSenderLabel(g.messages.at(-1)),
+      summaryLimit = Math.max(10, 70 - `・${label}：${senderLabel}`.length),
       allowedNames = threadPersonNames(g.messages),
-      prompt = `社長への報告本文を日本語${summaryLimit}字以内の完結した1文で書く。末尾を省略記号にしない。顧客名は見出しにあるので繰り返さず、佐藤の実施内容と先方からの要望・返事を最大2点、事実だけで書く。この入力は1案件の1スレッドだけであり、他の案件やスレッドの情報を補わない。人名はFrom／Toの表示名または本文の署名にある名前だけを使い、それ以外は「先方」と書く。使用可能な人名: ${[...allowedNames].join("、") || "なし"}。最終メッセージの送信者: ${g.messages.at(-1).latestSender || g.messages.at(-1).from}（${g.messages.at(-1).latestDirection || input.at(-1).direction}）。時系列順に読み、引用された過去メールを今回の発言と混同しない。確定・相談・依頼を厳密に区別し、推測で「確定」と書かない。希望日時は希望と書く。予定人数と氏名が確定した人数を区別し、未定・後日連絡は未定のまま書く。誰が誰に頼んだかを逆転させない。JSONや前置き不要。\n${JSON.stringify(input)}`;
+      prompt = `社長への報告本文を日本語${summaryLimit}字以内の完結した1文で書く。末尾を省略記号にしない。顧客名と担当者・送信者は見出しに機械的に付けるので繰り返さず、案件の動きと先方からの要望・返事を最大2点、事実だけで書く。担当が佐藤でも、佐藤本人が送信したと推測して「佐藤が送った」「佐藤が依頼した」等と書かない。実際の行為者を述べる場合はメール原本の送信者だけを使う。この入力は1案件の1スレッドだけであり、他の案件やスレッドの情報を補わない。人名はFrom／Toの表示名または本文の署名にある名前だけを使い、それ以外は「先方」と書く。使用可能な人名: ${[...allowedNames].join("、") || "なし"}。最終メッセージの送信者: ${g.messages.at(-1).latestSender || g.messages.at(-1).from}（${g.messages.at(-1).latestDirection || input.at(-1).direction}）。時系列順に読み、引用された過去メールを今回の発言と混同しない。確定・相談・依頼を厳密に区別し、推測で「確定」と書かない。希望日時は希望と書く。予定人数と氏名が確定した人数を区別し、未定・後日連絡は未定のまま書く。誰が誰に頼んだかを逆転させない。JSONや前置き不要。\n${JSON.stringify(input)}`;
     let summary;
     try {
       let raw = replaceUnknownPersonNames(await askReportLlm(prompt, deps), allowedNames);
@@ -637,7 +644,7 @@ export async function buildDailyReport(
       llmErrors.push(e.message);
     }
     const url = g.messages[0]?.url || gmailUrl(g.messages[0]?.threadId);
-    movements.push(`・${label}：${summary}`);
+    movements.push(`・${label}：${senderLabel}${summary}`);
     details.push(["昨日の動き", summary, g.caseItem?.code || "", url]);
   }
   const problems = [];

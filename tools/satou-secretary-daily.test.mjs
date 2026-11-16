@@ -28,6 +28,7 @@ import {
   replaceUnknownPersonNames,
   completeReportSentence,
   finalizeReportLine,
+  reportSenderLabel,
   run,
   deliveryFailureNoticeText,
   notifyDeliveryFailure,
@@ -317,6 +318,15 @@ test("要約入力は時系列、最終送信者と本文を含み、内部転�
   assert.ok(prompts[0].indexOf("発注します")<prompts[0].indexOf("申込書の返送"));
   assert.ok(prompts.every(p=>!p.includes("混ぜない転送本文")));
 });
+test("担当案件は佐藤さん担当と実際の送信者を分け、佐藤本人の送信と推測させない", async () => {
+  const prompts=[];
+  const report=await buildDailyReport({now:new Date("2026-11-10T06:30:00+09:00"),cases:[{code:"C001",client:"顧客社",state:"確定"}],messages:[{
+    threadId:"t1",internalDate:String(+new Date("2026-11-09T12:00:00+09:00")),subject:"C001 アンケート",from:"株式会社オージャスト 制作チーム <seisaku-team@orgiast.jp>",to:"customer@example.jp",body:"アンケートへの回答をお願いします。",
+  }],actions:[]},{askLlm:async prompt=>{prompts.push(prompt);return prompt.includes("社長への報告本文")?"アンケートへの回答を依頼した。":"なし";}});
+  assert.equal(reportSenderLabel({from:"株式会社オージャスト 制作チーム <seisaku-team@orgiast.jp>"}),"佐藤さん担当（送信：株式会社オージャスト 制作チーム）");
+  assert.match(report.text,/顧客社：佐藤さん担当（送信：株式会社オージャスト 制作チーム）アンケートへの回答を依頼した。/);
+  assert.match(prompts[0],/佐藤本人が送信したと推測して「佐藤が送った」「佐藤が依頼した」等と書かない/);
+});
 test("案件内でもスレッドを分離し、別スレッドの人名を報告に出さない", async () => {
   const prompts = [], base = { internalDate: String(+new Date("2026-11-09T12:00:00+09:00")), to: "佐藤 優奈 <satou@orgiast.jp>", subject: "261125TUM 入館者", snippet: "確認" };
   const report = await buildDailyReport({ now: new Date("2026-11-10T06:30:00+09:00"), cases: [{ code: "261125TUM", client: "株式会社TOKIUM", state: "確定" }], messages: [
@@ -325,7 +335,7 @@ test("案件内でもスレッドを分離し、別スレッドの人名を報�
   ], actions: [] }, { askLlm: async prompt => { prompts.push(prompt); if (prompt.includes("社長判断") || prompt.includes("問題候補")) return "なし"; return prompt.includes("ogata@tokium.jp") ? "稲沼氏の氏名を小川様に通知" : "小川様から別件の連絡を受領"; } });
   assert.equal(prompts.filter(x => x.includes("社長への報告本文")).length, 2);
   const tokiumLine = report.lines.find(line => line.includes("氏名を"));
-  assert.equal(tokiumLine, "・TOKIUM：先方の氏名を先方に通知。");
+  assert.equal(tokiumLine, "・TOKIUM：佐藤さん担当（送信：小形）先方の氏名を先方に通知。");
   assert.doesNotMatch(tokiumLine, /小川様/);
 });
 test("報告行は70字以内の完結文で、省略記号では終わらない", async () => {

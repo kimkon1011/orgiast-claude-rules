@@ -26,7 +26,8 @@ async function fixture(t, options = {}) {
   const desktop = path.join(root, "OneDrive 日本語 O'Brien", 'Desktop');
   const launcher = path.join(desktop, 'Node更新-test user.cmd');
   const io = {
-    platform: 'win32', arch: 'x64', home: root, temp: root, account: 'test user', fs,
+    platform: 'win32', arch: 'x64', home: root, temp: root, account: 'test user',
+    env: { ...process.env, ...(options.env || {}) }, fs,
     wslInstalled: () => true, msiBusy: () => false,
     now: () => now,
     sleep: async (ms) => { sleeps.push(ms); now += ms; },
@@ -330,6 +331,30 @@ test('setup integration emits exactly one runtime result, skips verify and custo
   assert.equal(JSON.parse(run(['--converge', '--json'])).items.find((item) => item.id === 'node-runtime-security').status, 'OK');
   assert.doesNotMatch(run(['--verify']), /node-runtime-security|task-hidden-actions/);
   assert.doesNotMatch(run(['--converge', '--manifest', path.join(root, 'setup-manifest.json')]), /node-runtime-security|task-hidden-actions/);
+});
+
+test('CI=true では MSI/WSL 更新をスキップし NOTICE を返す', async (t) => {
+  const f = await fixture(t, { env: { CI: 'true' } });
+  const result = await convergeNodeRuntimeSecurity(f.io);
+  assert.equal(result.status, 'NOTICE');
+  assert.equal(result.checked, true);
+  assert.equal(result.repaired, false);
+  assert.match(result.description, /CI 環境/);
+  assert.equal(f.downloads.length, 0);
+  assert.equal(f.calls.some((call) => /msiexec|wsl/.test(call.file)), false);
+  assert.equal(f.launches, 0);
+});
+
+test('GITHUB_ACTIONS=true でも MSI/WSL 更新をスキップし NOTICE を返す', async (t) => {
+  const f = await fixture(t, { env: { GITHUB_ACTIONS: 'true' } });
+  const result = await convergeNodeRuntimeSecurity(f.io);
+  assert.equal(result.status, 'NOTICE');
+  assert.equal(result.checked, true);
+  assert.equal(result.repaired, false);
+  assert.match(result.description, /CI 環境/);
+  assert.equal(f.downloads.length, 0);
+  assert.equal(f.calls.some((call) => /msiexec|wsl/.test(call.file)), false);
+  assert.equal(f.launches, 0);
 });
 
 const lockPath = f => path.join(f.root, '.claude', 'state', 'node-runtime-security.lock');

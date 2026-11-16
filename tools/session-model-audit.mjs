@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// Claude Code セッションの「モデル」と「kim の返事待ちで停止」を機械的に点検する軽いチェック（2026-11-15 kim 指示）。
-// 背景: 既定を Sonnet にすると決めても Opus のまま動き、取り消せる対策を並べて「一言返して」と止まる事故が繰り返された。
+// Claude Code セッションの「モデル」と「kim の返事待ちで停止」を機械的に点検する軽いチェック（2026-11-17 改定）。
+// 背景: 既定は Opus。settings が sonnet / 未設定なら NG SETTINGS。Opus での軽い作業は警告にとどめる。
 // 使い方: node tools/session-model-audit.mjs [--hours 6] [--idle-min 15] [--json]
 // 出力1行目: SESSION-AUDIT host=<PC> status=OK|NG settings_model=<値> target=<既定> scanned=<件> opus=<件> waiting=<件>
-// 2行目以降: NG SETTINGS / NG OPUS / NG WAITING / INFO WAIT_HUMAN（人にしかできない待ちは異常にしない）
-// 終了コード: 0=正常 1=異常あり 2=点検自体の失敗。読むのは ~/.claude/settings.json と ~/.claude/projects/*/*.jsonl だけで、何も書き換えない。
+// 2行目以降: NG SETTINGS / WARN OPUS_LIGHT / NG WAITING / INFO WAIT_HUMAN（人にしかできない待ちは異常にしない）
+// 終了コード: 0=正常（警告のみも含む） 1=異常あり 2=点検自体の失敗。読むのは ~/.claude/settings.json と ~/.claude/projects/*/*.jsonl だけで、何も書き換えない。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,15 +22,22 @@ export function targetModel(home) {
     const raw = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'model-default.json'), 'utf8'));
     if (raw && typeof raw.model === 'string' && raw.model.trim()) return raw.model.trim();
   } catch {}
-  return 'sonnet';
+  return 'opus';
 }
 
 export function settingsModelProblem(model, target) {
   const value = String(model ?? '').trim();
-  if (SUPERVISOR.test(target)) return null; // PC 単位で上位モデルを明示した場合は点検しない
-  if (!value) return '未設定（Claude Code の既定=Opus）';
-  if (SUPERVISOR.test(value)) return value;
+  // Opus 既定は OK。haiku は意図した下位指定として残す。sonnet / 未設定は NG SETTINGS。
+  if (SUPERVISOR.test(value) || /haiku/i.test(value)) return null;
+  if (!value) return '未設定（既定は Opus。settings.json の model を opus にする）';
+  if (/sonnet/i.test(value) && SUPERVISOR.test(target)) return value;
+  if (value && value !== target && SUPERVISOR.test(target)) return value;
   return null;
+}
+
+const LIGHT_WORK = /\/session-close|session-close|記録の追記|締め作業|定型の確認|一覧化|整形|転記/;
+export function isLightWork(text) {
+  return LIGHT_WORK.test(String(text || ''));
 }
 
 function textOf(content) {
@@ -121,7 +128,11 @@ export function audit({ home = process.env.ORGIAST_HOME || os.homedir(), hours =
       const base = { session: id, title: info.title.slice(0, 40), entrypoint: info.entrypoint || '-', model: info.lastModel || '-', last: jst(info.lastActivity) };
       if (info.title.includes('【閉じて可】')) continue;
       const activeInWindow = info.lastActivity && Date.parse(info.lastActivity) >= since;
-      if (activeInWindow && info.lastModel && SUPERVISOR.test(info.lastModel) && !SUPERVISOR.test(target)) findings.push({ level: 'NG', kind: 'OPUS', ...base });
+      if (activeInWindow && info.lastModel && SUPERVISOR.test(info.lastModel) && isLightWork(`${info.title}\n${info.entrypoint}\n${info.lastAssistantText}`)) {
+        findings.push({ level: 'WARN', kind: 'OPUS_LIGHT', ...base });
+      } else if (activeInWindow && info.lastModel && SUPERVISOR.test(info.lastModel) && !SUPERVISOR.test(target)) {
+        findings.push({ level: 'NG', kind: 'OPUS', ...base });
+      }
       if (info.endsWithAssistantText && info.lastAssistantAt && Date.parse(info.lastAssistantAt) >= since) {
         const idle = Math.round((now - Date.parse(info.lastAssistantAt)) / 60000);
         const verdict = idle >= idleMin ? waitingVerdict(info.lastAssistantText) : null;
@@ -132,7 +143,7 @@ export function audit({ home = process.env.ORGIAST_HOME || os.homedir(), hours =
   const ng = findings.filter((x) => x.level === 'NG');
   return {
     host: os.hostname(), status: ng.length ? 'NG' : 'OK', settingsModel: settingsModel || '未設定', target, scanned,
-    opus: findings.filter((x) => x.kind === 'OPUS').length, waiting: findings.filter((x) => x.kind === 'WAITING').length, findings,
+    opus: findings.filter((x) => x.kind === 'OPUS' || x.kind === 'OPUS_LIGHT').length, waiting: findings.filter((x) => x.kind === 'WAITING').length, findings,
   };
 }
 
@@ -140,7 +151,7 @@ export function format(r) {
   const lines = [`SESSION-AUDIT host=${r.host} status=${r.status} settings_model=${r.settingsModel} target=${r.target} scanned=${r.scanned} opus=${r.opus} waiting=${r.waiting}`];
   for (const f of r.findings) {
     if (f.kind === 'SETTINGS') { lines.push(`${f.level} SETTINGS ${f.detail}`); continue; }
-    const extra = f.kind === 'OPUS' ? `model=${f.model}` : `idle=${f.idleMin}m kim="${f.kimLine}"`;
+    const extra = (f.kind === 'OPUS' || f.kind === 'OPUS_LIGHT') ? `model=${f.model}` : `idle=${f.idleMin}m kim="${f.kimLine}"`;
     lines.push(`${f.level} ${f.kind} ${f.session} 「${f.title}」 ${extra} last=${f.last} entry=${f.entrypoint}`);
   }
   return lines.join('\n');

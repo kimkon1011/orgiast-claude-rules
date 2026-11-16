@@ -956,7 +956,7 @@ test('buildChildArgs は cwd が異なる場合だけ --add-dir を2つ渡す', 
   // (2026-09-17: 実機の settings.json に defaultMode が無く無人実行が承認待ちで止まっていたため)。
   assert.equal(different[different.indexOf('--permission-mode') + 1], 'auto');
   assert.equal(same[same.indexOf('--permission-mode') + 1], 'auto');
-  assert.equal(different[different.indexOf('--model') + 1], 'sonnet');
+  assert.equal(different[different.indexOf('--model') + 1], 'opus');
 });
 
 test('buildChildArgs は環境変数で無人実行モデルを上書きできる', () => {

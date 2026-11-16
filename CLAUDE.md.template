@@ -69,7 +69,9 @@ Google APIはDWD優先、着手時にサービス別所有アカウントを宣�
 **🔴 全プロジェクトは「後で別アカウント（例: cr@orgiast.jp）へ管理を移す」前提で作る（kim 2026-10-22 厳命・全PC全アカウント）。外部リソースは最小、個人依存値は env/Binding、リポ直下に HANDOVER.md 必須、移管は「招待＋オーナー変更」だけで終わる構成にする。**
 **1.12.1 移管前提の設計ルール**
 ### 1.13 トークン効率
-**🔴 トークン効率: 出力は Caveman（output-styles/caveman.md、前置きなし・完了結論1〜3行。必要な検証表・全文・末尾3行は省略しない）。CLAUDE.md は恒久ルールのみ、上部ほど静的にし、進行中タスク・今日の数字・障害を書かない。モデル切替を乱発しない。探索は Explore/general-purpose に「結果200字以内・コード本体なし」で委譲。実装は Codex、設計/横断調査/複数仮説は Opus/Fable（§1.16 の制約）、軽い確認は Sonnet/Haiku、迷ったら Auto。**
+**🔴 既定モデルは Opus（自動の作業も、開いたセッションも）。/session-close・記録の追記だけの締め、定型の確認・一覧化・整形・転記だけ Sonnet。迷ったら Opus（2026-11-17 kim）。2026-11-15 の「自動は Sonnet のみ・Opus 禁止」は廃止。**
+
+**🔴 トークン効率: 出力は Caveman（output-styles/caveman.md、前置きなし・完了結論1〜3行。必要な検証表・全文・末尾3行は省略しない）。CLAUDE.md は恒久ルールのみ、上部ほど静的にし、進行中タスク・今日の数字・障害を書かない。モデル切替を乱発しない。探索は Explore/general-purpose に「結果200字以内・コード本体なし」で委譲。実装は Codex、設計/横断調査/複数仮説は Opus/Fable（§1.16 の制約）、軽い確認・締めは Sonnet/Haiku、迷ったら Opus。**
 **1.13 トークン効率（出力・入力キャッシュ・サブエージェント）**
 ### 1.13.1 effortLevelと品質
 effortLevelの既定は **medium**（kim 2026-09-17 改定）、lowは禁止。`settings-quality-guard` がlowへの変更をblockし、SessionStartでmediumへ復元する。highへの引き上げは設計・横断調査の時だけ、セッション単位で行う。thinking予算・監督モデル・実装先（Codex）を節約目的で下げないルールは維持し、節約は委譲・レスポンス数削減・無人ジョブの非Claude化・キャッシュ維持で行う。

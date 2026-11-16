@@ -108,7 +108,7 @@ test('register-hooks: 旧PCを .mjs へ移行し、独自設定を保ったま�
   const sessionCommands = (after.hooks?.SessionStart || []).flatMap((group) => (group.hooks || []).map((hook) => String(hook.command || '')));
   assert(sessionCommands.filter((command) => command.includes('onboarding-sync.mjs')).length === 1, JSON.stringify(sessionCommands));
   assert(!sessionCommands.some((command) => command.includes('onboarding-sync.ps1')), JSON.stringify(sessionCommands));
-  assert(sessionCommands.includes('echo user-hook') && after.custom === 'keep' && after.model === 'sonnet', 'ユーザー独自フック・独自キーが失われた、または既定モデルが sonnet に収束していない');
+  assert(sessionCommands.includes('echo user-hook') && after.custom === 'keep' && after.model === 'opus', 'ユーザー独自フック・独自キーが失われた、または既定モデルが opus に収束していない');
   const stable = fs.readFileSync(file, 'utf8');
   const second = run('register-hooks.mjs', undefined, ['--hooks-only'], { ORGIAST_HOME: temp, ORGIAST_REPO: repo });
   assert(second.status === 0 && fs.readFileSync(file, 'utf8') === stable, second.stdout || second.stderr || '2回目で settings.json が変化した');

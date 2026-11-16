@@ -22,6 +22,7 @@
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 // ─── 型定義（JSDoc） ───────────────────────────────────────────
 
@@ -690,6 +691,6 @@ export {
 
 // ─── 直接実行 ──────────────────────────────────────────────────
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isEntry(import.meta.url)) {
   main().catch(console.error);
 }

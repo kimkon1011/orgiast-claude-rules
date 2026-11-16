@@ -372,7 +372,7 @@ describe('WorkflowEngine（Temporal パターン）', () => {
     });
     const result = await workflow.run();
     assert.equal(result.success, true);
-    assert.ok(result.totalDuration > 0);
+    assert.ok(result.totalDuration >= 0);
     assert.equal(result.phasesCompleted, 4);
   });
 

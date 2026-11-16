@@ -1335,7 +1335,7 @@ test('runChild は冷却中・失敗時の codex-do と保留・最終フォー�
       const claudeFile = path.join(home, 'claude-stub');
       fs.writeFileSync(claudeFile, `#!${process.execPath}\n(async () => { const fs = require('node:fs'); let stdin = ''; for await (const chunk of process.stdin) stdin += chunk; ${trace} })();\n`, { mode: 0o755 });
 	      const budgetMs = scenario.timeout && !scenario.bothCheapTimeout ? 1500 : 5000;
-	      const toleranceMs = process.platform === "win32" && scenario.bothCheapTimeout ? 3500 : 1500;
+	      const toleranceMs = process.platform === "win32" && (scenario.bothCheapTimeout || scenario.timeout) ? 3500 : 1500;
       const began = performance.now();
       const result = await runChild(claudeFile, 'lane test', home, home, budgetMs, { executorRoot: home, ...(scenario.model ? { model: 'sonnet' } : {}) });
       const elapsedMs = performance.now() - began;

@@ -16,6 +16,7 @@ import { inspectTaskHiddenActions } from './setup-task-hidden-actions.mjs';
 import { convergeDeadlineTasks } from './setup-deadline-watch.mjs';
 import { convergeNightlyReload } from './setup-nightly-reload.mjs';
 import { convergeNodeRuntimeSecurity } from './setup-node-runtime-security.mjs';
+import { createConvergeDiag } from './setup-diag.mjs';
 
 // git 呼び出しを非対話にする（GIT_TERMINAL_PROMPT=0 / GCM_INTERACTIVE=never）。
 // setup.mjs はテストで単体コピーされて実行されるため ./lib/seat-github.mjs を静的 import しない。
@@ -225,6 +226,8 @@ function emit(results) {
 }
 
 
+const diag = createConvergeDiag();
+if (converge) diag.setupProcessHandlers();
 if (converge) { const lock = acquireSetupConvergeLock({ home }); if (!lock.acquired) { console.log(lock.reason); process.exit(0); } process.on('exit', () => lock.release()); }
 
   let manifest;
@@ -232,6 +235,7 @@ if (converge) { const lock = acquireSetupConvergeLock({ home }); if (!lock.acqui
   if (manifest) {
     let settingsMigration;
     if (converge) {
+      diag.begin('classifier-settings');
       const item = { id: 'classifier-settings', severity: 'required', description: 'hook登録・日次通知hook削除・allowルール同期' };
       try {
         // Let the registrar select the dedicated main anchor unless explicitly overridden.
@@ -243,12 +247,16 @@ if (converge) { const lock = acquireSetupConvergeLock({ home }); if (!lock.acqui
         });
         const repaired = convergeAllowRules(home);
         settingsMigration = { item, status: 'OK', checked: true, repaired };
+        diag.end('classifier-settings', 'OK');
       } catch (error) {
+        diag.end('classifier-settings', 'NG', String(error?.message || error).split(/\r?\n/)[0]);
+        diag.execFileSyncFail('classifier-settings register-hooks', { status: error?.status, signal: error?.signal, stderr: error?.stderr });
         settingsMigration = { item, status: 'NG', checked: true, repaired: false, reason: String(error?.message || error).split(/\r?\n/)[0] };
       }
     }
     let results = inspect(manifest.items);
     if (converge) {
+      diag.begin('manifest-repair');
       const attemptedCommands = new Set();
       const attemptedItems = new Set();
       for (let pass = 0; pass < 2; pass++) {
@@ -262,61 +270,98 @@ if (converge) { const lock = acquireSetupConvergeLock({ home }); if (!lock.acqui
         results = inspect(manifest.items);
         for (const result of results) result.repaired = attemptedItems.has(result.item.id);
       }
+      diag.end('manifest-repair', 'ok');
     }
     if (converge) {
+      diag.begin('playbooks');
       const item = { id: 'playbooks', severity: 'optional', description: '成功した手作業手順の配布（既存の実測は保持）' };
-      try { const copied = distributePlaybooks(path.dirname(scriptDir), home); results.push({ item, status: 'OK', checked: true, repaired: copied > 0 }); }
-      catch { results.push({ item, status: 'NG', checked: true, repaired: false }); }
+      try { const copied = distributePlaybooks(path.dirname(scriptDir), home); results.push({ item, status: 'OK', checked: true, repaired: copied > 0 }); diag.end('playbooks', 'OK'); }
+      catch { results.push({ item, status: 'NG', checked: true, repaired: false }); diag.end('playbooks', 'NG'); }
     }
     if (settingsMigration) results.push(settingsMigration);
     // スマホ用待機タブ: 拡張導入・count=3・mobileTabs=0 除去。--manifest 指定時(テスト/臨時検査)は実機を触らない。
     if (converge && !valueAfter('--manifest')) {
+      diag.begin('mobile-standby');
       const item = { id: 'mobile-standby', severity: 'optional', description: 'スマホ用 Claude Code 待機タブ3本（拡張導入・設定収束）' };
       try {
         const outcome = convergeMobileStandby({ home, repoRoot: path.dirname(scriptDir) });
         if (!jsonOutput) for (const line of outcome.lines) console.log(line);
         results.push({ item, status: outcome.ok ? 'OK' : 'NG', checked: true, repaired: Boolean(outcome.config?.changed || outcome.settings?.changed || outcome.extension?.status === 'installed' || outcome.rcPrefix?.changed),
           reason: outcome.ok ? '' : outcome.lines.filter((line) => /失敗|NG/.test(line)).join(' / ') });
-      } catch { results.push({ item, status: 'NG', checked: true, repaired: false }); }
+        diag.end('mobile-standby', outcome.ok ? 'OK' : 'NG');
+      } catch { results.push({ item, status: 'NG', checked: true, repaired: false }); diag.end('mobile-standby', 'NG'); }
     }
     // 実機の更新は通常の converge のみ。verify / カスタム manifest は副作用なし。
     if (converge && !valueAfter('--manifest')) {
+      diag.begin('node-runtime-security');
       const item = { id: 'node-runtime-security', severity: 'optional', description: 'Node.js ランタイムセキュリティ更新（Windows MSI + WSL Ubuntu）' };
       try {
         const { description, ...outcome } = await convergeNodeRuntimeSecurity();
         results.push({ item: { ...item, description: description || item.description }, ...outcome });
+        diag.end('node-runtime-security', outcome?.status || 'OK');
       } catch (error) {
         const msg = String(error?.message || error).split(/\r?\n/)[0];
         if (!jsonOutput) console.error(`[node-runtime-security] 失敗: ${msg}`);
+        diag.execFileSyncFail('node-runtime-security', { status: error?.status, signal: error?.signal, stderr: error?.stderr });
         results.push({ item, status: 'NOTICE', checked: true, repaired: false });
+        diag.end('node-runtime-security', 'NOTICE', msg);
       }
     }
     if (converge && !valueAfter('--manifest')) {
-      const { description, ...outcome } = inspectTaskHiddenActions({ converge });
+      diag.begin('task-hidden-actions');
+      let outcome;
+      try {
+        outcome = inspectTaskHiddenActions({ converge });
+      } catch (error) {
+        diag.execFileSyncFail('task-hidden-actions', { status: error?.status, signal: error?.signal, stderr: error?.stderr });
+        outcome = { description: String(error?.message || error).split(/\r?\n/)[0], status: 'NG', checked: true, repaired: false };
+      }
       // reason は fleet beacon に載る。NG のときにタスク名をリモートから特定できるようにする。
-      results.push({ item: { id: 'task-hidden-actions', severity: 'optional', description }, ...outcome, reason: outcome.status === 'OK' ? '' : description });
+      results.push({ item: { id: 'task-hidden-actions', severity: 'optional', description: outcome.description }, ...outcome, reason: outcome.status === 'OK' ? '' : outcome.description });
+      diag.end('task-hidden-actions', outcome.status);
     }
     if (converge && !valueAfter('--manifest')) {
-      const { description, ...outcome } = convergeNightlyReload();
-      results.push({ item: { id: 'nightly-reload-vscode', severity: 'required', description }, ...outcome });
+      diag.begin('nightly-reload-vscode');
+      let outcome;
+      try {
+        outcome = convergeNightlyReload();
+      } catch (error) {
+        diag.execFileSyncFail('nightly-reload-vscode', { status: error?.status, signal: error?.signal, stderr: error?.stderr });
+        outcome = { description: String(error?.message || error).split(/\r?\n/)[0], status: 'NG', checked: true, repaired: false };
+      }
+      results.push({ item: { id: 'nightly-reload-vscode', severity: 'required', description: outcome.description }, ...outcome });
+      diag.end('nightly-reload-vscode', outcome.status);
     }
     if (converge && !valueAfter('--manifest')) {
-      const { description, ...outcome } = convergeDeadlineTasks({ home });
-      results.push({ item: { id: 'deadline-watch', severity: 'required', description }, ...outcome });
+      diag.begin('deadline-watch');
+      let outcome;
+      try {
+        outcome = convergeDeadlineTasks({ home });
+      } catch (error) {
+        diag.execFileSyncFail('deadline-watch', { status: error?.status, signal: error?.signal, stderr: error?.stderr });
+        outcome = { description: String(error?.message || error).split(/\r?\n/)[0], status: 'NG', checked: true, repaired: false };
+      }
+      results.push({ item: { id: 'deadline-watch', severity: 'required', description: outcome.description }, ...outcome });
+      diag.end('deadline-watch', outcome.status);
     }
+    diag.begin('emit');
     emit(results);
+    diag.end('emit', 'ok');
     // fleet ビーコン: converge の結果を GAS へ送る。fail-open（exit code に一切影響させない）。
     // --manifest 指定時(テスト/臨時検査)は実機を触らない。FLEET_BEACON_ALLOW_MANIFEST=1 のときだけ許可。
     const beaconAllowed = converge && !argv.includes('--no-beacon') && process.env.FLEET_BEACON !== '0'
       && (!valueAfter('--manifest') || process.env.FLEET_BEACON_ALLOW_MANIFEST === '1');
     if (beaconAllowed) {
+      diag.begin('beacon');
       try {
         const { buildBeacon, sendBeacon } = await import('./fleet-beacon.mjs');
         const beacon = buildBeacon({ home, results });
         const outcome = await sendBeacon(beacon, { home, timeoutMs: 15000 });
         if (!jsonOutput) console.log(`[beacon] ${outcome.ok ? 'sent' : outcome.skipped ? 'skip' : 'failed'}: ${outcome.reason || beacon.label}`);
+        diag.end('beacon', outcome.ok ? 'sent' : 'failed', outcome.reason || '');
       } catch (error) {
         if (!jsonOutput) console.log(`[beacon] failed: ${String(error?.message || error).split(/\r?\n/)[0]}`);
+        diag.end('beacon', 'catch', String(error?.message || error).split(/\r?\n/)[0]);
       }
     }
     const requiredNg = results.some((r) => r.item.severity === 'required' && r.status === 'NG');

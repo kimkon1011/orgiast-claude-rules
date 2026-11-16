@@ -32,7 +32,7 @@ if (Have node) {
   # preference is Stop. Let setup print its diagnostics, then check its exit code.
   $savedErrorActionPreference = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  & $nodeExe (Join-Path $Repo 'tools\setup.mjs') --converge 2>&1
+  & $nodeExe (Join-Path $Repo 'tools\setup.mjs') --converge 2>&1 | ForEach-Object { $_.ToString() }
   $setupExitCode = $LASTEXITCODE
   $ErrorActionPreference = $savedErrorActionPreference
   if ($setupExitCode -ne 0) { exit $setupExitCode }

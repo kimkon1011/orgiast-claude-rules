@@ -17,7 +17,7 @@ import { convergeDeadlineTasks } from './setup-deadline-watch.mjs';
 test('bootstrap lets PowerShell 5.1 capture native stderr without aborting', async () => {
   const source = await fs.readFile(new URL('./bootstrap.ps1', import.meta.url), 'utf8');
   assert.match(source, /\$savedErrorActionPreference = \$ErrorActionPreference/);
-  assert.match(source, /\$ErrorActionPreference = 'Continue'[\s\S]*& \$nodeExe[\s\S]*2>&1/);
+  assert.match(source, /\$ErrorActionPreference = 'Continue'[\s\S]*& \$nodeExe[\s\S]*2>&1 \| ForEach-Object \{ \$_\.ToString\(\) \}/);
   assert.match(source, /\$setupExitCode = \$LASTEXITCODE[\s\S]*\$ErrorActionPreference = \$savedErrorActionPreference/);
   assert.doesNotMatch(source, /cmd\.exe[\s\S]*setup\.mjs/);
 });

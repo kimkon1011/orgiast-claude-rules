@@ -12,6 +12,7 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
 import { isUnattendedSession } from './lib/unattended-session.mjs';
 import { inboxText, inboxFile, readRows } from './lib/auto-progress-inbox.mjs';
+import { oneScreenSummary } from './lib/one-screen-summary.mjs';
 export { inboxFile, appendInbox, appendOwnerInbox } from './lib/auto-progress-inbox.mjs';
 function displayText(text, limit = 1500) {
   const seen = new Set();
@@ -91,7 +92,9 @@ export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.home
   if (!lines.length && !warning && !pushContext) return null;
   const event = input.hook_event_name || 'UserPromptSubmit';
   const context = lines.length ? `【必須】応答の冒頭で user に見える形で「📲 自動進行の結果（聞かれる前にお知らせ）」として次を表示せよ: ${displayText(lines.join('\n'), Infinity)}` : '';
-  return { hookSpecificOutput: { hookEventName: event, additionalContext: [warning, context, pushContext].filter(Boolean).join('\n') } };
+  const summary = oneScreenSummary([...unreadOwner, ...unreadSession]);
+  const finalContext = [warning, context, pushContext, summary].filter(Boolean).join('\n');
+  return { hookSpecificOutput: { hookEventName: event, additionalContext: finalContext } };
 }
 async function main() {
   try {

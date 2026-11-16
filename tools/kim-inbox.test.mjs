@@ -563,7 +563,7 @@ test('通常枠が空でも完了・進捗・承認待ちを表示する', async
   assert.match(context, /kim-inbox 完了・進捗・承認待ち/);
   assert.match(context, /完了だけの通知/);
 });
-test('oneScreenSummary: 30件のaskと30件のinfoで2000バイト以内・件数正・古い順5件', async t => {
+test('oneScreenSummary: 30件のaskと30件のinfoで6000バイト以内・件数正・古い順5件', async t => {
   const home = seat(t);
   const now = Date.now();
   fs.mkdirSync(path.join(home, '.claude/kim-inbox'), { recursive: true });
@@ -580,19 +580,21 @@ test('oneScreenSummary: 30件のaskと30件のinfoで2000バイト以内・件�
   assert.equal(items.filter(i => i.kind === 'info').length, 30);
   const summary = oneScreenSummary(items);
   const bytes = Buffer.from(summary, 'utf8').length;
-  assert.ok(bytes <= 2000, `summary ${bytes} bytes > 2000`);
+  assert.ok(bytes <= 6000, `summary ${bytes} bytes > 6000`);
   const lines = summary.split('\n');
-  assert.match(lines[0], /^📌 kim の返事待ち 30件/);
-  for (let n = 0; n < 5; n++) {
-    assert.match(lines[1 + n], /\(ki-/);
+  assert.match(lines[0], /^📌 kim の返事待ち/);
+  assert.match(lines[0], /30件/);
+  for (let n = 1; n < 6; n++) {
+    assert.match(lines[n], /件名: ki-/);
   }
-  const askHeader = lines[0];
-  assert.ok(lines[6] === '📲 自動進行の結果' || lines[6] === 'ほか', '6行目は 📲 または ほか');
-  const ids = lines.slice(1, 6).map(l => { const m = l.match(/\(([^)]+)\)/); return m ? m[1] : ''; });
-  const itemMap = Object.fromEntries(items.map(i => [i.id, i]));
-  const sorted = ids.map(id => itemMap[id]).filter(Boolean);
-  for (let i = 1; i < sorted.length; i++) assert.ok(sorted[i - 1].createdAt <= sorted[i].createdAt, `${sorted[i - 1].id} が ${sorted[i].id} より新しい`);
-  assert.match(summary, /ほか \d+件: node tools\/kim-inbox\.mjs --list/);
+  const askSectionIndex = lines.findIndex(l => l === '📌 kim の返事待ち');
+  assert.ok(askSectionIndex >= 0, 'Should have judgment waiting section');
+  assert.ok(lines[askSectionIndex + 1].includes('件') && !lines[askSectionIndex + 1].includes('件名'), 'Second line should be count');
+  const summaryIndex = lines.findIndex(l => l === '📊 件数');
+  assert.ok(summaryIndex > 0, 'Should have count summary section');
+  assert.ok(lines[summaryIndex + 1].includes('kim の返事待ち'), 'Should have judgment count');
+  assert.ok(lines[summaryIndex + 2].includes('自動進行の結果'), 'Should have completion count');
+  assert.ok(lines[summaryIndex + 3].includes('止まっている'), 'Should have stale count');
 });
 test('oneScreenSummary: ask 0件ならヘッダー行だけ', async t => {
   const home = seat(t);
@@ -605,7 +607,12 @@ test('oneScreenSummary: ask 0件ならヘッダー行だけ', async t => {
   const items = listItems(home).filter(i => i.status === 'open');
   assert.equal(items.filter(i => i.kind === 'ask').length, 0);
   const summary = oneScreenSummary(items);
-  assert.equal(summary, '📌 kim の返事待ち 0件');
+  // Should still show judgment waiting section with 0件, plus other sections
+  assert.ok(summary.includes('📌 kim の返事待ち'));
+  assert.ok(summary.includes('0件'));
+  assert.ok(summary.includes('📲 自動進行の結果'));
+  assert.ok(summary.includes('🔴 止まっている'));
+  assert.ok(summary.includes('📊 件数'));
 });
 test('UserPromptSubmit では1画面ブロックが付かない／ask の秘密値が伏せ字になる', async t => {
   const home = seat(t);

@@ -541,33 +541,8 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   }
   return text + omitted(eligible.length - selected.length) + footer;
 }
-export function oneScreenSummary(items) {
-  const openItems = items.filter(i => i.status === 'open');
-  const asks = openItems.filter(i => i.kind === 'ask').sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
-  const infos = openItems.filter(i => i.kind === 'info').sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
-  const lines = [];
-  const askCount = asks.length;
-  lines.push(`📌 kim の返事待ち ${askCount}件`);
-  if (askCount === 0) return lines.join('\n');
-  for (const ask of asks.slice(0, 5)) {
-    const text = ask.text.replace(/[\r\n]+/g, ' ').slice(0, 120);
-    lines.push(`${text} (${ask.id})`);
-  }
-  if (infos.length > 0) {
-    lines.push(`📲 自動進行の結果`);
-    for (const info of infos.slice(0, 5)) {
-      const text = info.text.replace(/[\r\n]+/g, ' ').slice(0, 120);
-      lines.push(text);
-    }
-  }
-  const totalOpen = openItems.length;
-  const shownTotal = Math.min(askCount, 5) + Math.min(infos.length, 5);
-  const remaining = totalOpen - shownTotal;
-  if (remaining > 0) lines.push(`ほか ${remaining}件: node tools/kim-inbox.mjs --list`);
-  let summary = lines.join('\n');
-  while (lines.length > 0 && Buffer.from(lines.join('\n'), 'utf8').length > 2000) lines.pop();
-  return lines.length === 0 ? `📌 kim の返事待ち ${askCount}件` : lines.join('\n');
-}
+// oneScreenSummary is now implemented in lib/one-screen-summary.mjs
+export { oneScreenSummary } from './lib/one-screen-summary.mjs';
 export async function main(args = process.argv.slice(2), { home = process.env.ORGIAST_HOME || os.homedir(), stdout = console.log, stderr = console.error, readStdin = readStdinWithTimeout } = {}) {
   const value = flag => args[args.indexOf(flag) + 1];
   try {

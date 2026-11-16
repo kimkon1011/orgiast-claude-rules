@@ -169,7 +169,7 @@ test('concurrent live process lock and corrupt ledger fail closed', async t => {
 test('Calendar DWD rejection includes scope/client ID; live aborts and dry-run reports unverified candidates', async t => {
   const x = setup(t); const keyPath = path.join(x.dir, 'key.json');
   fs.writeFileSync(keyPath, JSON.stringify({ client_id: '123456' }));
-  await assert.rejects(calendarToken({ keyPath, getToken: async opts => { assert.equal(opts.scope, CALENDAR_SCOPE); assert.equal(opts.impersonate, 'kim@orgiast.jp'); throw new Error('unauthorized_client'); } }), error => /123456/.test(error.message) && error.message.includes(CALENDAR_SCOPE));
+  await assert.rejects(calendarToken({ keyPath, getToken: async opts => { assert.equal(opts.scope, CALENDAR_SCOPE); assert.equal(opts.impersonate, 'seisaku-team @orgiast.jp'); throw new Error('unauthorized_client'); } }), error => /123456/.test(error.message) && error.message.includes(CALENDAR_SCOPE));
   delete x.deps.calendar;
   x.deps.getCalendarToken = async () => { throw new Error('unauthorized_client'); };
   await assert.rejects(x.run(), /unauthorized_client/);

@@ -19,6 +19,7 @@ export { isScheduleCandidate } from './lib/schedule-candidate.mjs';
 
 export const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
 const USER = 'kim@orgiast.jp';
+const CALENDAR_OWNER = 'seisaku-team @orgiast.jp';
 const HOUR = 3600000;
 const API = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
 const execFileAsync = promisify(execFile);
@@ -77,7 +78,7 @@ function acquireLock(dir) {
 }
 
 export async function calendarToken({ signal, getToken = getDriveToken, keyPath = process.env.GOOGLE_SA_KEY || defaultDriveKeyPath() } = {}) {
-  try { return await getToken({ scope: CALENDAR_SCOPE, impersonate: USER, keyPath, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000) }); }
+  try { return await getToken({ scope: CALENDAR_SCOPE, impersonate: CALENDAR_OWNER, keyPath, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000) }); }
   catch (error) {
     let clientId = '(SA key client_id unavailable)';
     try { clientId = readJson(keyPath, {}).client_id || clientId; } catch {}
@@ -366,7 +367,7 @@ export function eventBody(candidate, message, index) {
   if (candidate.location) body.location = candidate.location;
   return body;
 }
-const eventLink = event => event.htmlLink || `https://calendar.google.com/calendar/event?eid=${Buffer.from(`${event.id} ${USER}`).toString('base64url')}`;
+const eventLink = event => event.htmlLink || `https://calendar.google.com/calendar/event?eid=${Buffer.from(`${event.id} ${CALENDAR_OWNER}`).toString('base64url')}`;
 
 export function reportLine(row) {
   const date = row.start.slice(0, 16).replace('T', ' ');

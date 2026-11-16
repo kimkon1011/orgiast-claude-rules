@@ -63,7 +63,7 @@ JSON の `counts.failed` / `counts.skipped` はメッセージ数、その他の
 ## 認証
 
 - DWD: `tools/lib/drive-auth.mjs` の既定 SA ファイル、または `GOOGLE_SA_KEY`。
-- impersonate: `kim@orgiast.jp`。
+- impersonate: `seisaku-team @orgiat.jp`。
 - Calendar: `https://www.googleapis.com/auth/calendar.events`。
 - Gmail: 既存 gmail.readonly の委任も必要。
 - Discord: `DISCORD_BOT_TOKEN` または `~/.claude/orgiast-discord-bot-token.txt`。
@@ -74,7 +74,7 @@ Calendar DWD が拒否されたら、エラーと SA の client_id、追加す�
 返す。この状態で重複判定成功・作成可能とは扱わない。
 
 2026-10-22、DWD クライアントID `110910358431552197763` に `calendar.events` を追加済み。
-同スコープで kim@orgiast.jp のトークンを取得し、primary の 2026-10-26（JST）を
+同スコープで seisaku-team @orgiat.jp のトークンを取得し、primary の 2026-10-26（JST）を
 `events.list` で読み取れた（12件）。既存の「【ラハイナ】全社mtg」12:00〜13:00 を確認済み。
 
 ## 永続化と再試行

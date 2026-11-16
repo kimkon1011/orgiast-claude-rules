@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { automationModel } from './lib/automation-model.mjs';
 import fs from 'node:fs';
 import { launchAudit } from './unattended-job-audit.mjs';
 import { codexAuthStatus } from './codex-auth-status.mjs';
@@ -197,7 +198,8 @@ export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, s
     let stdout = '';
     let stderr = '';
     let settled = false;
-    const args = ['-p', ...(resumeSessionId ? ['--resume', resumeSessionId] : [])];
+    // 自動実行（fleet 指示の実行）は Sonnet（2026-11-15 kim 指示）。
+    const args = ['-p', '--model', automationModel(), ...(resumeSessionId ? ['--resume', resumeSessionId] : [])];
     // Fleet mail is answer-only; existing directives retain their original behavior.
     if (readOnly) args.push('--tools', 'Read,Glob,Grep', '--allowedTools', 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--settings', '{"disableAllHooks":true}', '--model', 'sonnet');
     args.push('--', String(body ?? ''));

@@ -1,0 +1,24 @@
+{
+  "iteration": "003",
+  "date": "2026-11-15",
+  "kind": "静的調査。実要求の観測ではない",
+  "files": {
+    "README.md": "d3fc6ef9fc405c29188f6b5dfda4524d37be11b8ce105adad93d977ddce7b8e7",
+    "manifest.json": "c1580b10d4529c505f51159a5a5d30030bcadb2008e2b8023c2d9101f288360b",
+    ".claude/settings.json": "b461bcf4a89ffdac38dc4c41f0a37f150012fc5cac171a5a339c82d5ab829bb8",
+    "tools/browser-extension-audit.mjs": "8b425a44eb81a7a5a198de69efce8d70f0a6344c44c8f7023acb95fafb3ecef4",
+    "tools/setup-manifest.json": "3c12e54dc4d5e75b44f4247a75d7d8bddabd863e70e3bbbee66e06ba2a7f5f2b",
+    "tools/register-hooks.mjs": "c4f5e2087c43ca75b57a17b71630c559d4e0accbb87223532fd705dc73610493",
+    "tools/lib/meet-cue-browser.mjs": "dee8da693784f8409ed73d6e06040f2c7c5a2fe0c381649fff2154df8dc4935c",
+    "packages/vscode-next-session/extension.js": "5c62703b8656b5e3346d7ee2f397c5c7346b6494e449f87a2d8823221fa68bb3"
+  },
+  "findings": [
+    "manifestはルール・skill配布用",
+    "browser-extension-auditは拡張一覧監査",
+    "register-hooksのMCP登録はgemini-cli",
+    "meet-cue-browserはMeet参加・字幕取得",
+    "vscode-next-sessionはClaude Codeタブ起動。要求構築の証明にはならない"
+  ],
+  "C1": "未達: 業務とモデル要求の接続が不明",
+  "C2_C3_C4_C5": "未達。実装・要求観測・実測・ゲートなし"
+}

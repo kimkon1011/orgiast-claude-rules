@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { budgetVerdict, estimateTokens, noteResponse, readBudget, writeBudget } from './rate-budget.mjs';
+import { isDailyQuotaResponse, nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
 
 export const FALLBACK_CHAIN = Object.freeze([
   { provider: 'groq', model: 'openai/gpt-oss-120b' },
@@ -148,6 +149,39 @@ function reasonForLog(reason, maxLength = 140) {
   return singleLine.length <= maxLength ? singleLine : `${singleLine.slice(0, maxLength - 1)}…`;
 }
 
+// 429 本文から "Your limit will reset at 2026-11-19 19:53:29" 形式の reset 時刻を解析する。
+// 成功時は epoch ms、失敗時は null。
+export function parseQuotaResetTime(text, now = Date.now()) {
+  const raw = String(text || '');
+  // パターン: "limit (will|shall) reset at YYYY-MM-DD HH:MM:SS" / "resets at YYYY-MM-DD HH:MM:SS"
+  const m = raw.match(/(?:limit|quota|usage)\s+(?:will|shall)\s+(?:reset|be\s+reset)\s+(?:at|on)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?)/i)
+    || raw.match(/(?:resets?|reset)\s+(?:at|on)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?)/i);
+  if (m) {
+    // タイムゾーン表記が無い場合は +09:00（JST）として解釈。Z/オフセット付きはそのまま。
+    const dateStr = m[1].replace(' ', 'T') + (m[1].length <= 16 ? ':00' : '');
+    const hasTz = /[+-]\d{2}:\d{2}$/.test(dateStr) || dateStr.endsWith('Z');
+    const parsed = Date.parse(dateStr + (hasTz ? '' : '+09:00'));
+    if (Number.isFinite(parsed) && parsed > now) return parsed;
+  }
+  return null;
+}
+
+// lane-health.json に quota_wait を書き込む（上限中レーンを他からも避けさせる）。
+function saveQuotaWaitToLaneHealth(provider, until, detail, hp, persist) {
+  if (!persist) return;
+  try {
+    let health;
+    try { health = JSON.parse(fs.readFileSync(hp, 'utf8').replace(/^﻿/, '')); } catch { health = {}; }
+    if (!health.lanes) health.lanes = {};
+    const p = String(provider).toLowerCase();
+    health.lanes[p] = { alive: false, reason: 'quota_wait', until, error: (detail || '').slice(0, 500), probedAt: new Date().toISOString() };
+    fs.mkdirSync(path.dirname(hp), { recursive: true });
+    const tmp = `${hp}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+    try { fs.writeFileSync(tmp, JSON.stringify(health, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(tmp, hp); }
+    finally { try { fs.unlinkSync(tmp); } catch {} }
+  } catch {}
+}
+
 // Bound both headers and body consumption; abort the real HTTP request and also
 // settle when a custom transport ignores AbortSignal. Retried requests share the
 // candidate's deadline rather than receiving a fresh budget each time.
@@ -177,11 +211,12 @@ async function fetchBeforeDeadline(fetchImpl, request, deadline) {
   } finally { clearTimeout(timer); }
 }
 
-export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category = '', allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, persistState = true, perProviderTimeoutMs, now = () => Date.now() }) {
+export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category = '', allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, laneHealthFile, persistState = true, perProviderTimeoutMs, now = () => Date.now() }) {
   if (perProviderTimeoutMs != null && (!Number.isSafeInteger(perProviderTimeoutMs) || perProviderTimeoutMs <= 0 || perProviderTimeoutMs > 2147483647)) throw new Error('perProviderTimeoutMs must be a positive timer-safe integer');
   start = routeCandidate(start);
   chain = chain.map(routeCandidate);
   const home = process.env.ORGIAST_HOME || os.homedir();
+  const _laneHealthFile = laneHealthFile || (cooldownFile ? path.join(path.dirname(cooldownFile), 'lane-health.json') : path.join(home, '.claude', 'lane-health.json'));
   const timestamp = now();
   const cost = dailyCost(ledgerFile || path.join(home, '.claude', 'executor-usage.jsonl'), timestamp);
   const warn = threshold('ORGIAST_LLM_DAILY_WARN_USD', 1);
@@ -208,12 +243,18 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
         .map(([provider]) => String(provider).toLowerCase());
     } catch {}
   }
+  // lanes-disabled.json に載った provider は start でも候補から外す。課金・回数制限は cooldown で一時退避し、回復後は自動で戻す。
+  let disabled = new Set();
+  if (cooldownFile != null || !process.env.NODE_TEST_CONTEXT) {
+    try { disabled = new Set(Object.keys(JSON.parse(fs.readFileSync(cooldownFile ? path.join(path.dirname(cooldownFile), 'lanes-disabled.json') : path.join(home, '.claude', 'lanes-disabled.json'), 'utf8').replace(/^\uFEFF/, '')) || {}).map(p => p.toLowerCase())); } catch {}
+  }
   const candidates = [];
   const seen = new Set();
   // Gateway selection is routing, not failover; --no-fallback still uses OpenRouter.
   const expanded = [start, ...chain];
   for (const candidate of expanded.filter(Boolean)) {
     if (!allowedForCategory(candidate, category)) continue;
+    if (disabled.has(String(candidate.provider).toLowerCase())) { console.error(`[routing] ${candidate.provider} は lanes-disabled.json で無効化されているため使いません`); continue; }
     const identity = `${candidate.provider}:${candidate.model}`;
     if (seen.has(identity)) continue;
     seen.add(identity);
@@ -243,28 +284,69 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
     if (until < Number(state.until)) { state.until = until; cooldownDirty = true; }
   }
   saveCooldowns();
-  const available = useCooldown ? candidates.filter(({ provider }) => !(Number(cooldowns?.[provider]?.until) > timestamp)) : candidates;
+  // lane-health.json の quota_wait 状態もチェックし、reset 時刻まで呼ばない
+  let laneHealth = null;
+  let quotaWaitProviders = [];
+  if (useCooldown) {
+    try {
+      laneHealth = JSON.parse(fs.readFileSync(_laneHealthFile, 'utf8').replace(/^\uFEFF/, ''));
+      quotaWaitProviders = Object.entries(laneHealth?.lanes || {})
+        .filter(([, state]) => state?.reason === 'quota_wait' && Number(state?.until) > timestamp)
+        .map(([provider]) => String(provider).toLowerCase());
+    } catch {}
+  }
+  const available = useCooldown
+    ? candidates.filter(({ provider }) => {
+        const p = String(provider).toLowerCase();
+        if (Number(cooldowns?.[p]?.until) > timestamp) return false;
+        if (quotaWaitProviders.includes(p)) return false;
+        return true;
+      })
+    : candidates;
   const selectedCandidates = available.length ? available : candidates;
   const skipped = [];
-  if (useCooldown && available.length) {
+  if (useCooldown && (available.length || quotaWaitProviders.length)) {
     for (const candidate of candidates) {
-      const state = cooldowns?.[candidate.provider];
-      if (Number(state?.until) <= timestamp || !state) continue;
-      const minutes = Math.max(1, Math.ceil((state.until - timestamp) / 60000));
-      skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'cooldown', minutesLeft: minutes });
-      console.error(`[cooldown] ${candidate.provider} はスキップ (${state.reason || 'unknown'}, 残り${minutes}分)`);
+      const p = String(candidate.provider).toLowerCase();
+      const cd = cooldowns?.[p];
+      if (Number(cd?.until) > timestamp) {
+        const minutes = Math.max(1, Math.ceil((cd.until - timestamp) / 60000));
+        skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'cooldown', minutesLeft: minutes });
+        console.error(`[cooldown] ${candidate.provider} はスキップ (${cd.reason || 'unknown'}, 残り${minutes}分)`);
+      } else if (quotaWaitProviders.includes(p)) {
+        const qw = laneHealth?.lanes?.[p];
+        const minutes = qw?.until ? Math.max(1, Math.ceil((Number(qw.until) - timestamp) / 60000)) : '?';
+        skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'quota_wait', minutesLeft: minutes });
+        console.error(`[quota_wait] ${candidate.provider} は枠上限中のためスキップ (残り${minutes}分)`);
+      }
     }
   }
 
-  function setCooldown(provider, status, response, permanentBilling = false) {
+  function setCooldown(provider, status, response, permanentBilling = false, detail = '') {
     if (!useCooldown) return;
+    const at = now();
+    const retryMs = retryAfterMs(response, at) ?? 0;
+    // 429 本文から reset 時刻を解析し、lane-health.json にも quota_wait として保存する。
+    // 例: "Your limit will reset at 2026-11-19 19:53:29"
+    const parsedReset = parseQuotaResetTime(detail, at);
+    if (status === 429 && !permanentBilling && isDailyQuotaResponse(status, detail)) {
+      cooldowns[provider] = { until: nextUtcMidnight(new Date(at)), reason: 'daily_limit', at };
+      cooldownDirty = true;
+      saveCooldowns();
+      return;
+    }
     let duration = 0;
     if (status === 402 || permanentBilling) duration = 24 * 60 * 60 * 1000;
-    else if (status === 429) duration = Math.min(cooldownMax, Math.max(cooldownMin, retryAfterMs(response, now()) ?? cooldownMin));
+    else if (status === 429) duration = Math.min(cooldownMax, Math.max(cooldownMin, retryMs || cooldownMin));
     else if ([401, 403].includes(status)) duration = 6 * 60 * 60 * 1000;
     if (!duration) return;
-    const at = now();
     cooldowns[provider] = { until: at + duration, reason: `http_${status}`, at, ...(permanentBilling ? { permanentBilling: true } : {}) };
+    // 429 で reset 時刻が本文から取れたら lane-health.json に quota_wait を書く
+    if (status === 429 && parsedReset) {
+      cooldowns[provider].until = Math.max(cooldowns[provider].until, parsedReset);
+      saveQuotaWaitToLaneHealth(provider, parsedReset, detail, _laneHealthFile, persistState);
+      console.error(`[quota_wait] ${provider} の上限リセット時刻: ${new Date(parsedReset).toISOString()}（本文から解析）`);
+    }
     cooldownDirty = true;
     saveCooldowns();
   }
@@ -355,11 +437,12 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
       // groq の通常429の本文には `https://console.groq.com/settings/billing` が含まれるため、
       // 素の `billing` で判定すると日次上限(TPD)を恒久障害と誤判定する。恒久障害の文面だけを拾う。
       const permanentBilling = status === 429 && isPermanentBillingDetail(detail);
-      setCooldown(candidate.provider, status, response, permanentBilling);
+      setCooldown(candidate.provider, status, response, permanentBilling, detail);
 
       if (timedOut) break; // A hung candidate must not consume three timeout windows.
       const kind = classifyFailure(status);
-      if (permanentBilling || kind !== 'retry' || attempt === 2) break;
+      const dailyQuota = status === 429 && isDailyQuotaResponse(status, detail);
+      if (permanentBilling || dailyQuota || kind !== 'retry' || attempt === 2) break;
       const specified = retryAfterMs(response);
       if (specified != null && specified > 60000) break;
       const delay = specified ?? 1000 * 2 ** attempt;

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { automationModel } from './lib/automation-model.mjs';
 import { countWindowsClaudeProcesses } from './lib/windows-process.mjs';
 import { readHandoff, handoffLockEnabled } from './lib/handoff-store.mjs';
 import fs from 'node:fs';
@@ -889,7 +890,7 @@ export async function launchNextSession(argv = [], io = {}) {
     }
 
     const wt = resolveWt({ env, readdir, homedir: home, flagWt: flags.wt });
-    const plan = planLaunch({ claudeBin, cwd, prompt: `[headless:next-session-launch] ${flags.prompt}`, wt, model: handoffModel });
+    const plan = planLaunch({ claudeBin, cwd, prompt: `[headless:next-session-launch] ${flags.prompt}`, wt, model: automationModel(handoffModel) });
     if (flags.dryRun) {
       log(JSON.stringify({ ...plan, account, configDir, configDirSource }));
       return 0;

@@ -192,7 +192,7 @@ if ($codex) {
 
 # 5d. 自己テスト: 受信タスクと同じ claude で短い応答が返るか
 if ($claudeExe -and (Test-Path $claudeExe)) {
-  $t = (& $claudeExe -p 'OK とだけ返してください' --model haiku 2>&1 | Out-String)
+  $t = (& $claudeExe -p 'OK とだけ返してください' --model haiku --no-session-persistence 2>&1 | Out-String)
   Say ('self-test(claude -p): ' + $(if ($t -match 'OK') { 'OK' } else { 'NG ' + (Tail $t 2) }))
 }
 

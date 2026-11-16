@@ -5,7 +5,17 @@ test('implementation blocks every model and ignores override/codex wording; exem
   const h=fs.mkdtempSync(path.join(os.tmpdir(),'agent-policy-')); t.after(()=>fs.rmSync(h,{recursive:true,force:true})); fs.mkdirSync(path.join(h,'.claude')); fs.writeFileSync(path.join(h,'.claude/cost-enforce-override'),'1');
   const run = tool_input => { const r=spawnSync(process.execPath,['tools/model-agent-guard.mjs'],{input:JSON.stringify({tool_name:'Agent',session_id:'s',tool_input}),encoding:'utf8',env:{...process.env,ORGIAST_HOME:h}}); assert.equal(r.status,0); return r.stdout ? JSON.parse(r.stdout).hookSpecificOutput : {}; };
   for(const model of ['sonnet','haiku','opus','fable']) assert.equal(run({model,prompt:'Codex の代わりに実装して',subagent_type:'general-purpose'}).permissionDecision,'deny');
-  for(const subagent_type of ['Explore','Plan','claude-code-guide','biz-reader','statusline-setup']) assert.equal(run({model:'sonnet',prompt:'実装を確認して',subagent_type}).permissionDecision,undefined);
+  for(const subagent_type of ['Explore','Plan','claude-code-guide','biz-reader','statusline-setup','web-fetch']) assert.equal(run({model:'sonnet',prompt:'実装を確認して',subagent_type}).permissionDecision,undefined);
   fs.writeFileSync(path.join(h,'.claude/claude-impl-allow.json'),JSON.stringify({sessionId:'s',marker:'[CLAUDE-IMPL-OK]',until:new Date(Date.now()+3500000).toISOString()}));
   assert.equal(run({model:'sonnet',prompt:'実装して',subagent_type:'general-purpose'}).permissionDecision,undefined);
+});
+
+test('web-fetch is allowed even with implementation-like prompt (readonly agent)', t => {
+  const h=fs.mkdtempSync(path.join(os.tmpdir(),'agent-webfetch-')); t.after(()=>fs.rmSync(h,{recursive:true,force:true})); fs.mkdirSync(path.join(h,'.claude'));
+  const run = tool_input => { const r=spawnSync(process.execPath,['tools/model-agent-guard.mjs'],{input:JSON.stringify({tool_name:'Agent',session_id:'s',tool_input}),encoding:'utf8',env:{...process.env,ORGIAST_HOME:h}}); assert.equal(r.status,0); return r.stdout ? JSON.parse(r.stdout).hookSpecificOutput : {}; };
+  // web-fetch は読み取り専用なので実装風の文でも allow
+  assert.equal(run({subagent_type:'web-fetch',prompt:'ページを読み、予約の手順を答えて'}).permissionDecision,undefined);
+  assert.equal(run({subagent_type:'web-fetch',prompt:'この関数を実装して'}).permissionDecision,undefined);
+  // general-purpose は実装風の文で deny のまま
+  assert.equal(run({subagent_type:'general-purpose',prompt:'この関数を実装して'}).permissionDecision,'deny');
 });

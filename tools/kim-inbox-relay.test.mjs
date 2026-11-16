@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { addItem, listItems, main, answerItem, markSeen, updateInboxItem, selectContext } from './kim-inbox.mjs';
 import { evaluateKimInboxRelay, commitKimInboxDelivery } from './kim-inbox-relay.mjs';
-import { inboxSummary, recordInjection, recordPromptAnswers, relayDue, interactiveInboxSession } from './lib/kim-inbox-relay-state.mjs';
+import { inboxSummary, formatInboxBrief, recordInjection, recordPromptAnswers, relayDue, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
 import { run } from './stop-gate-runner.mjs';
 const now = Date.parse('2026-11-12T10:00:00Z');
 function fixture(t) {
@@ -15,11 +15,11 @@ function fixture(t) {
   const input = { session_id: 'human-session', cwd: home };
   const f = { home, input, inject: items => recordInjection(home, input.session_id, items, { now }),
     judge: (text = '', extra = {}) => evaluateKimInboxRelay(input, { home, now, env: {}, text, ...extra }),
-    section: items => '【受信箱】\n' + items.map((i,n) => `${n+1}. ${i.id} ${inboxSummary(i)}`).join('\n') };
+    section: items => '【受信箱】\n' + items.map((i,n) => formatInboxBrief(i, n + 1)).join('\n') };
   // Fixtures are retained under /tmp; production inboxes are never modified.
   return f;
 }
-test('context injection is not delivery; final ID and summary are required, not thinking/history or ID alone', async t => {
+test('context injection is not delivery; final ID and structured lines are required', async t => {
   const f = fixture(t), item = await addItem(f.home, { kind: 'ask', text: '鍵付き化が完了。nacci0713 の扱いと PR #7 は承認待ち' });
   const output = [];
   await main(['--context'], { home: f.home, stdout: s => output.push(s), readStdin: async () => JSON.stringify({ ...f.input, hook_event_name: 'UserPromptSubmit' }) });
@@ -28,9 +28,37 @@ test('context injection is not delivery; final ID and summary are required, not 
   assert.equal(f.judge('別作業は完了しました', { raw: f.section([item]) }).decision, 'block');
   assert.equal(f.judge(`【受信箱】\n${item.id}`).decision, 'block');
   assert.equal(f.judge(`${item.id} ${inboxSummary(item)}`).decision, 'block');
+  assert.equal(f.judge(`【受信箱】\n1. ${item.id} ${inboxSummary(item)}`).decision, 'block');
+  assert.equal(f.judge(f.section([item]).replaceAll(item.id, '')).decision, 'block');
   assert.equal(f.judge('```\n' + f.section([item]) + '\n```').decision, 'block');
   assert.equal(f.judge(f.section([item]).split('\n').map(l => '> ' + l).join('\n')).decision, 'block');
   assert.equal(f.judge(f.section([item])).decision, 'pass');
+});
+
+test('each item needs its own explanation; indented and bulleted numbering delimit items', async t => {
+  const f = fixture(t), a = await addItem(f.home, { kind: 'ask', text: '承認待ち: 資料の公開' });
+  const b = await addItem(f.home, { kind: 'ask', text: '承認待ち: 日程の変更' });
+  f.inject([a, b]);
+  for (const prefix of ['2.', '  2.', '- 2.']) {
+    assert.equal(f.judge(`【受信箱】\n1. ${a.id}\n${prefix} ${b.id}\n   返事: 可か不可`).decision, 'block');
+  }
+  assert.equal(f.judge(`【受信箱】\n1. ${a.id}-extra\n判断: 確認\n2. ${b.id}\n返事: 確認`).decision, 'block');
+  const result = f.judge(`【受信箱】\n1. 公開の件（${a.id}）\n   判断: 資料を公開するか\n2. 日程の件（${b.id}）\n   返事: 可または不要`);
+  assert.equal(result.decision, 'pass');
+  assert.equal(result.receipts[0].summary, formatInboxBrief(a, 1, { home: f.home }).split('\n')[0]);
+});
+
+test('decorated inbox headings, trailing labels and paraphrases pass; missing IDs and later sections do not', async t => {
+  const f = fixture(t);
+  const a = await addItem(f.home, { kind: 'ask', text: '原文の長い依頼です' });
+  const b = await addItem(f.home, { kind: 'ask', text: '別の長い依頼です' });
+  f.inject([a, b]);
+  for (const heading of ['【受信箱】確認事項', '### 【受信箱】', '**【受信箱】** 要点', '  ### **【受信箱】**（2件）']) {
+    assert.equal(f.judge(`${heading}\n1. ${a.id}\n判断: 公開するか\n2. ${b.id}\n返事: 日程を変えるか`).decision, 'pass');
+    assert.equal(f.judge(`${heading}\n1. ${a.id} 言い換え\n判断: 公開可否\n2. ${b.id} 短く要約\n返事: 変更可否`).decision, 'pass');
+    assert.equal(f.judge(`${heading}\n1. ${a.id}\n判断: 公開可否\n### 別件\n2. ${b.id}\n返事: 変更可否`).decision, 'block');
+    assert.equal(f.judge(`${heading}\n${a.id}`).decision, 'block');
+  }
 });
 test('receipts suppress same-session asks until next JST day, high info until refreshed, other sessions still see asks', async t => {
   const f = fixture(t);
@@ -94,11 +122,18 @@ test('runner relay precedes retry/close bypasses, and another gate rejecting a d
   const old = process.env.ORGIAST_HOME; process.env.ORGIAST_HOME = f.home;
   t.after(() => { if (old === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = old; });
   const ctx = { raw: '', humanText: '確認して', assistantText: '' };
-  for (let n=0;n<5;n++) assert.equal((await run({ ...f.input, stop_hook_active: true, last_assistant_message: '完了' }, ctx)).record.blockedBy[0], 'kim-inbox-relay');
+  for (let n=0;n<2;n++) assert.equal((await run({ ...f.input, stop_hook_active: true, last_assistant_message: '完了' }, ctx)).record.blockedBy[0], 'kim-inbox-relay');
+  // 2026-11-15: 同じターン3回目以降は警告のみ。配達記録は付けず、次のターンで再度届ける。
+  const capped = await run({ ...f.input, stop_hook_active: true, last_assistant_message: '完了' }, ctx);
+  assert.notEqual(capped.decision, 'block');
+  assert.match(capped.systemMessage, /kim-inbox-relay/);
+  assert.equal(listItems(f.home)[0].deliveredToKim, undefined);
+  fs.rmSync(path.join(f.home, '.claude', 'stop-gate-repeat-state.json'), { force: true });
   const result = await run({ ...f.input, last_assistant_message: f.section([a]) + '\nhttps://discord.com/oauth2/authorize?client_id=1511684767546871818&permissions=0' }, ctx);
   assert.equal(result.decision, 'block');
   assert.equal(listItems(f.home)[0].deliveredToKim, undefined);
-  const success = await run({ ...f.input, last_assistant_message: f.section([a]) + '\n次に kim がすること: なし' }, ctx);
+  const successText = f.section([a]) + '\n【最終まとめ】\n①報告: 受信箱を提示しました\n②kim の確認事項: 受信箱の判断\n③kim がやること: 返事の例から回答\n恒久策: 一回限り: このfixture固有の配達確認\n次に kim がすること: 受信箱へ回答\nこの後の自動進行: なし\nこのセッション: /session-close は不要なので、このセッションを閉じてよい';
+  const success = await run({ ...f.input, last_assistant_message: successText }, ctx);
   assert.notEqual(success.decision, 'block', JSON.stringify(success));
   assert.equal(listItems(f.home)[0].deliveredToKim.count, 1);
 });
@@ -109,6 +144,26 @@ test('manual --seen during a turn cannot bypass final-message verification', asy
   assert.equal(f.judge('完了しました').decision, 'block');
   commitKimInboxDelivery(f.home, f.input.session_id, f.judge(f.section([info])).receipts, now);
   assert.equal(listItems(f.home)[0].deliveredToKim.count, 1);
+});
+
+test('two inbox blocks exhaust the shared turn budget, but permission blocks survive', async t => {
+  const f = fixture(t), item = await addItem(f.home, { kind: 'ask', text: '確認事項' });
+  f.inject([item]);
+  const old = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = f.home;
+  t.after(() => { if (old === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = old; });
+  const ctx = { raw: '', humanText: '', assistantText: '' };
+  const options = { mode: 'off', policyOptions: { home: f.home, hostname: 'kim-PC', notify: async () => ({ delivered: 'test' }) } };
+  for (let n = 0; n < 2; n++) assert.equal((await run({ ...f.input, assistant_text: '完了' }, ctx, options)).decision, 'block');
+  const changed = await run({ ...f.input, assistant_text: `${f.section([item])}\nGitHub の画面で Merge をクリックしてください。` }, ctx, options);
+  assert.notEqual(changed.decision, 'block');
+  assert.match(changed.systemMessage, /同一ターン上限/);
+  assert.equal(listItems(f.home)[0].deliveredToKim, undefined);
+  for (let n = 0; n < 4; n++) {
+    const safety = await run({ ...f.input, assistant_text: 'https://discord.com/oauth2/authorize?client_id=1511684767546871818&permissions=0' }, ctx, options);
+    assert.equal(safety.decision, 'block');
+    assert.match(safety.reason, /権限/);
+  }
 });
 
 test('passkey ask relays the complete signed URL rather than a truncated token', async t => {
@@ -129,4 +184,37 @@ test('hundreds of reserved asks rotate in bounded batches without starving progr
   const initial = new Set(items.filter(i=>i.shownCount>0).map(i=>i.id));
   selectContext(items,{sessionId:f.input.session_id,now,home:f.home});
   assert.ok(items.some(i=>i.shownCount>0 && !initial.has(i.id)));
+});
+
+test('duplicate same workId+decide: only representative needs written; both are receipts', async t => {
+  const f = fixture(t);
+  const baseText = '【DELL・seisaku-team@orgiast.jp の Claude Code】プロジェクト: test ／ セッションの目的: 三共精機にメール送信 ／ 作業ID: c8d99e2b\n自動進行が判断待ちです: メールの送付可否\nあなたの返事待ち: 送ってよいですか';
+  const a = await addItem(f.home, { kind: 'ask', text: baseText });
+  const b = await addItem(f.home, { kind: 'ask', text: baseText });
+  f.inject([a, b]);
+
+  // Blocked if neither is shown
+  const blocked = f.judge('別の作業をしました');
+  assert.equal(blocked.decision, 'block');
+  assert.match(blocked.reason, /同じ件/);
+
+  // Both are receipted when the deterministically selected representative is shown.
+  const representative = groupInboxItems([a, b])[0].representative;
+  const section = '【受信箱】\n' + formatInboxBrief(representative, 1);
+  const result = f.judge(section);
+  assert.equal(result.decision, 'pass', `${result.code}: ${result.reason?.slice(0, 100)}`);
+  assert.equal(result.receipts.length, 2);
+  assert.ok(result.receipts.some(r => r.id === a.id));
+  assert.ok(result.receipts.some(r => r.id === b.id));
+});
+
+test('duplicate different workId: each must appear individually', async t => {
+  const f = fixture(t);
+  const a = await addItem(f.home, { kind: 'ask', text: '【DELL・seisaku-team@orgiast.jp の Claude Code】プロジェクト: test ／ 作業ID: c8d99e2b\n自動進行が判断待ちです: メールの送付可否\nあなたの返事待ち: 送ってよいですか' });
+  const b = await addItem(f.home, { kind: 'ask', text: '【DELL・seisaku-team@orgiast.jp の Claude Code】プロジェクト: test ／ 作業ID: 7f14e87b\n自動進行が判断待ちです: メールの送付可否\nあなたの返事待ち: 送ってよいですか' });
+  f.inject([a, b]);
+
+  // Only one in section → blocked
+  const result = f.judge('【受信箱】\n' + formatInboxBrief(a, 1));
+  assert.equal(result.decision, 'block');
 });

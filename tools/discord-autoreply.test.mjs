@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { runOnce, main, createDiscord, discordRequest, ensureTaskPriority, createLlm, contentFor, parseJson, combinePermissions, inventedAmounts } from './discord-autoreply.mjs';
+import { runOnce, main, createDiscord, discordRequest, ensureTaskPriority, createLlm, contentFor, parseJson, combinePermissions, inventedAmounts, isReportOnly } from './discord-autoreply.mjs';
 
 const NOW = Date.parse('2026-10-09T03:00:00Z');
 const KIM = '715210673642012733';
@@ -45,6 +45,14 @@ function fixture(t, { initial = true, messages = [message()], reply = [], after 
       throw new Error(`Unexpected request: ${url}`);
     }, ...extra,
   };
+  // Keep extraction separate from reply/retry mocks and never contact a live Beeper.
+  options.beeperFetch = async () => ({ items: [] });
+  let replyLlm = options.llm;
+  Object.defineProperty(options, 'llm', {
+    get: () => async args => args.system?.startsWith('Extract proper nouns')
+      ? JSON.stringify(['スマートエイト']) : replyLlm(args),
+    set: value => { replyLlm = value; },
+  });
   return { options, home, dir, file, calls, notifications, llmCalls, state,
     readState: () => JSON.parse(fs.readFileSync(file('state.json'), 'utf8')),
     writeState: () => fs.writeFileSync(file('state.json'), JSON.stringify(state)),
@@ -744,6 +752,68 @@ test('質問文にある金額を回答で引用しても送信される', async
 });
 
 
+test('isReportOnly: 完了報告「終わりました」→ true', () => {
+  assert.equal(isReportOnly('上記のタスクは本番前まですべて終わりました。'), true);
+});
+
+test('isReportOnly: 「全て問題ありません」→ true', () => {
+  assert.equal(isReportOnly('①～⑤全て問題ありません。'), true);
+});
+
+test('isReportOnly: 「よろしいでしょうか」→ false', () => {
+  assert.equal(isReportOnly('以下4点については、どのように記載すればよろしいでしょうか？'), false);
+});
+
+test('isReportOnly: 「確認お願いします」→ false', () => {
+  assert.equal(isReportOnly('座面カバーですかね？確認お願いします。'), false);
+});
+
+test('isReportOnly: 「報告します」→ true', () => {
+  assert.equal(isReportOnly('連絡事項を報告します'), true);
+});
+
+test('isReportOnly: 「報告を行います」→ true', () => {
+  assert.equal(isReportOnly('取引先に報告を行います'), true);
+});
+
+test('isReportOnly: 「入力いたしました」→ true', () => {
+  assert.equal(isReportOnly('システムに入力いたしました'), true);
+});
+
+test('isReportOnly: 「完了しました」→ true', () => {
+  assert.equal(isReportOnly('全て完了しました'), true);
+});
+
+test('isReportOnly: null/空 → false', () => {
+  assert.equal(isReportOnly(null), false);
+  assert.equal(isReportOnly(''), false);
+});
+
+test('isReportOnly: 疑問符あり → false', () => {
+  assert.equal(isReportOnly('確認できたでしょうか？'), false);
+});
+
+test('isReportOnly: 「ください」あり → false', () => {
+  assert.equal(isReportOnly('確認してください'), false);
+});
+
+test('isReportOnly: 「お願いします」あり → false', () => {
+  assert.equal(isReportOnly('対応をお願いします'), false);
+});
+
+test('isReportOnly: 「いかが」あり → false', () => {
+  assert.equal(isReportOnly('ご検討いかがでしょうか'), false);
+});
+
+test('isReportOnly: 「どう」あり → false', () => {
+  assert.equal(isReportOnly('どうしましょう'), false);
+});
+
+test('isReportOnly: 「可否」あり → false', () => {
+  assert.equal(isReportOnly('対応可否を教えてください'), false);
+});
+
+
 test('新規IPv4接続を毎回使い本文読み込みの停止にも期限を適用', async t => {
   const requests = [];
   const url = 'https://discord.test';
@@ -830,4 +900,408 @@ test('Windows: BelowNormalの子プロセスはmain実行前の読み込み中�
     console.log(os.getPriority());`;
   const output = execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 30000, windowsHide: true });
   assert.equal(Number(output.trim()), os.constants.priority.PRIORITY_NORMAL);
+});
+
+// --- 添付画像・Google Docs 関連のテスト ---
+import { collectReadableContent, extractGoogleUrls } from './lib/autoreply-attachments.mjs';
+
+test('collectReadableContent: 画像添付を base64 data URI に変換', async t => {
+  const png1x1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  let called = false;
+  const result = await collectReadableContent({
+    messages: [{ attachments: [{ fileName: 'test.png', mimeType: 'image/png', url: 'https://cdn.discord.com/test.png' }] }],
+    downloadAttachment: async (attach) => { called = true; assert.equal(attach.url, 'https://cdn.discord.com/test.png'); return png1x1; },
+    maxImages: 4,
+  });
+  assert.equal(called, true);
+  assert.equal(result.images.length, 1);
+  assert.ok(result.images[0].dataUrl.startsWith('data:image/png;base64,'));
+  assert.equal(result.images[0].name, 'test.png');
+  assert.equal(result.documents.length, 0);
+  assert.equal(result.failures.length, 0);
+});
+
+test('collectReadableContent: 4MB超の画像は failure', async t => {
+  const large = Buffer.alloc(5 * 1024 * 1024);
+  const result = await collectReadableContent({
+    messages: [{ attachments: [{ mimeType: 'image/jpeg', url: 'https://example.com/large.jpg' }] }],
+    downloadAttachment: async () => large,
+    maxImages: 4,
+  });
+  assert.equal(result.images.length, 0);
+  assert.equal(result.failures.length, 1);
+  assert.match(result.failures[0].reason, /4MB超/);
+});
+
+test('collectReadableContent: URLのない添付はfailure', async t => {
+  const result = await collectReadableContent({
+    messages: [{ attachments: [{ mimeType: 'image/png', name: 'no-url.png' }] }],
+    downloadAttachment: async () => { throw new Error('must not call'); },
+  });
+  assert.equal(result.images.length, 0);
+  assert.equal(result.failures.length, 1);
+  assert.equal(result.documents.length, 0);
+});
+
+test('collectReadableContent: 画像上限超過は failure', async t => {
+  const small = Buffer.from([0]);
+  const attaches = Array.from({ length: 5 }, (_, i) => ({ mimeType: 'image/png', url: `https://example.com/${i}.png` }));
+  const result = await collectReadableContent({
+    messages: [{ attachments: attaches }],
+    downloadAttachment: async () => small,
+    maxImages: 2,
+  });
+  assert.equal(result.images.length, 2);
+  assert.equal(result.failures.length, 3);
+  assert.equal(result.failures.every(f => f.reason === '画像上限超過'), true);
+});
+
+test('collectReadableContent: Google Docs URL を DWD で読み取る', async t => {
+  const result = await collectReadableContent({
+    messages: [{ text: 'こちらの資料をご確認ください https://docs.google.com/document/d/abc123/edit' }],
+    downloadAttachment: async () => { throw new Error('must not call'); },
+    readGoogleUrl: async (fileId) => { assert.equal(fileId, 'abc123'); return 'Google Docs の本文'; },
+  });
+  assert.equal(result.documents.length, 1);
+  assert.equal(result.documents[0].source, 'google_url');
+  assert.match(result.documents[0].text, /Google Docs の本文/);
+  assert.equal(result.images.length, 0);
+  assert.equal(result.failures.length, 0);
+});
+
+test('collectReadableContent: Google Sheets URL を CSV で読み取る', async t => {
+  const result = await collectReadableContent({
+    messages: [{ text: 'https://docs.google.com/spreadsheets/d/sheet123/edit#gid=0' }],
+    downloadAttachment: async () => { throw new Error('must not call'); },
+    readGoogleUrl: async (fileId) => { assert.equal(fileId, 'sheet123'); return 'header1,header2\nval1,val2'; },
+  });
+  assert.equal(result.documents.length, 1);
+  assert.equal(result.documents[0].source, 'google_url');
+  assert.equal(result.failures.length, 0);
+});
+
+test('collectReadableContent: Google Drive ファイル URL', async t => {
+  const result = await collectReadableContent({
+    messages: [{ text: 'https://drive.google.com/file/d/driveFile123/view' }],
+    downloadAttachment: async () => { throw new Error('must not call'); },
+    readGoogleUrl: async (fileId) => { assert.equal(fileId, 'driveFile123'); return 'Drive ファイルのテキスト'; },
+  });
+  assert.equal(result.documents.length, 1);
+  assert.equal(result.failures.length, 0);
+});
+
+test('collectReadableContent: Google Docs URL 読取失敗時は failure になる', async t => {
+  const result = await collectReadableContent({
+    messages: [{ text: 'こちら https://docs.google.com/document/d/bad-doc/edit' }],
+    downloadAttachment: async () => { throw new Error('must not call'); },
+    readGoogleUrl: async () => { throw new Error('認証エラー'); },
+  });
+  assert.equal(result.documents.length, 0);
+  assert.equal(result.failures.length, 1);
+  assert.match(result.failures[0].reason, /認証エラー/);
+});
+
+test('collectReadableContent: テキスト添付も document として抽出', async t => {
+  const result = await collectReadableContent({
+    messages: [{ attachments: [{ fileName: 'notes.txt', mimeType: 'text/plain', url: 'https://example.com/notes.txt' }] }],
+    downloadAttachment: async () => Buffer.from('これはテスト本文です'),
+    maxTextBytes: 30000,
+  });
+  assert.equal(result.documents.length, 1);
+  assert.equal(result.documents[0].source, 'attachment');
+  assert.equal(result.documents[0].name, 'notes.txt');
+  assert.match(result.documents[0].text, /テスト本文/);
+  assert.equal(result.images.length, 0);
+  assert.equal(result.failures.length, 0);
+});
+
+test('CANT_READ_REPLY_PTN: 正しい禁止パターンを検出', async t => {
+  const { CANT_READ_REPLY_PTN } = await import('./discord-autoreply.mjs');
+  for (const bad of ['確認できません', '読めません', '添付ファイルを開けません', '画像を閲覧できない', 'ドキュメントを確認することができません']) {
+    assert.equal(CANT_READ_REPLY_PTN.test(bad), true, `should match: ${bad}`);
+  }
+  for (const ok of ['ご確認ください', '資料を確認します', '確認いたします', 'ご確認のほどよろしくお願いします', 'ご確認お願いします', '添付を確認しました']) {
+    assert.equal(CANT_READ_REPLY_PTN.test(ok), false, `should NOT match: ${ok}`);
+  }
+});
+
+test('extractGoogleUrls: Docs/Sheets/Slides/Drive URL を抽出', () => {
+  const urls = extractGoogleUrls('https://docs.google.com/document/d/doc1/edit と https://drive.google.com/file/d/drive1/view と https://docs.google.com/spreadsheets/d/sheet1/edit');
+  assert.equal(urls.length, 3);
+  assert.equal(urls[0].id, 'doc1'); assert.equal(urls[1].id, 'sheet1'); assert.equal(urls[2].id, 'drive1');
+});
+
+test('extractGoogleUrls: 該当なしは空配列', () => {
+  assert.deepEqual(extractGoogleUrls('通常のテキスト https://example.com'), []);
+  assert.deepEqual(extractGoogleUrls(''), []);
+});
+
+test('createLlm: 画像ありのとき IMAGE_REPLY_CHAIN を使い image_url マルチパートを構築', async t => {
+  const result = await collectReadableContent({
+    messages: [{ attachments: [{ fileName: 'img.png', mimeType: 'image/png', url: 'https://cdn.discord.com/img.png' }] }],
+    downloadAttachment: async () => Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]),
+    maxImages: 4,
+  });
+  assert.equal(result.images.length, 1);
+  // Verify the dataUrl is well-formed
+  assert.ok(result.images[0].dataUrl.startsWith('data:image/png;base64,'));
+});
+
+test('添付取得失敗（404）時は送信せず判断待ち', async t => {
+  const msg = message({ attachments: [{ url: 'https://cdn.discord.com/broken.png', filename: 'broken.png', content_type: 'image/png' }] });
+  const f = fixture(t, { messages: [msg] });
+  const baseFetch = f.options.fetchImpl;
+  f.options.fetchImpl = async (url, init) => {
+    const u = String(url);
+    if (u.includes('cdn.discord.com')) return new Response('', { status: 404 });
+    return baseFetch(url, init);
+  };
+  const result = await runOnce(f.options);
+  assert.equal(result.replied, 0);
+  assert.equal(result.ok, true);
+  assert.equal(f.readState().handled['100']?.reason, 'decision');
+});
+
+test('回答が「読めません」を含む場合は送信せず判断待ち', async t => {
+  // No attachments on message — purely testing the CANT_READ guard on LLM output
+  const f = fixture(t);
+  f.options.llm = async () => JSON.stringify({ needs_reply: true, needs_kim_decision: false, answer: '添付ファイルを読めません', confidence: 0.9 });
+  const result = await runOnce(f.options);
+  assert.equal(result.replied, 0);
+  assert.equal(f.readState().handled['100']?.reason, 'decision');
+});
+
+test('画像payloadはDeepSeek強制指定でもGemini→Kimi→Gensparkのみ', async t => {
+  const f = fixture(t, { messages: [] });
+  for (const [name, key] of [['gemini', 'GEMINI_API_KEY'], ['openrouter', 'OPENROUTER_API_KEY'], ['genspark-proxy', 'GSK_PROXY_KEY'], ['deepseek', 'DEEPSEEK_API_KEY']]) {
+    fs.writeFileSync(path.join(f.home, '.claude', `${name}.env`), `${key}=test-key\n`);
+  }
+  const requests = [];
+  const llm = createLlm({ home: f.home, env: { DISCORD_AUTOREPLY_PROVIDER: 'deepseek' }, sleepImpl: async () => {}, fetchImpl: async (url, init) => {
+    const body = JSON.parse(init.body); requests.push({ url, body });
+    if (requests.length < 3) return new Response('{}', { status: 400 });
+    return json({ choices: [{ message: { content: JSON.stringify(decision) } }] });
+  } });
+  const images = [{ mime: 'image/png', name: 'sample.png', dataUrl: 'data:image/png;base64,aW1hZ2U=' }];
+  await llm({ category: 'jp_reply', system: 'test', input: { images, documents: [{ text: '本文' }] } });
+  assert.equal(requests.length, 3);
+  assert.match(requests[0].url, /googleapis/);
+  assert.match(requests[1].url, /openrouter/);
+  assert.match(requests[2].url, /genspark/);
+  for (const { url, body } of requests) {
+    assert.doesNotMatch(url, /deepseek|anthropic/);
+    assert.equal(body.messages[1].content[1].type, 'image_url');
+    assert.equal(body.messages[1].content[1].image_url.url, images[0].dataUrl);
+    assert.equal(JSON.parse(body.messages[1].content[0].text).documents[0].text, '本文');
+  }
+});
+
+import { readGoogleDoc, extractPdfText } from './lib/autoreply-attachments.mjs';
+for (const [mime, format, extraHandler] of [
+  ['document', 'text/plain', null],
+  ['spreadsheet', 'sheets', url => {
+    if (url.includes('fields=sheets.properties')) return { sheets: [{ properties: { sheetId: 0, title: 'Sheet1' } }] };
+    if (url.includes('/values:batchGet')) return { valueRanges: [{ values: [['header'], ['ドキュメントの本文']] }] };
+    return undefined;
+  }],
+  ['presentation', 'text/plain', null],
+]) {
+  test(`DWD request: ${mime} は正しい形式でexport/APIし第二主体へfallback`, async () => {
+    const calls = [];
+    const request = async (url, options) => {
+      calls.push({ url, ...options });
+      if (options.user === 'kim@orgiast.jp') throw new Error('denied');
+      // Drive metadata: ?fields= containing mimeType
+      if (url.includes('mimeType&') || url.includes('mimeType,')) return { id: 'file1', mimeType: `application/vnd.google-apps.${mime}` };
+      if (extraHandler) {
+        const r = extraHandler(url);
+        if (r !== undefined) return r;
+      } else {
+        assert.equal(new URL(url).searchParams.get('mimeType'), format);
+      }
+      return 'ドキュメントの本文';
+    };
+    const result = await collectReadableContent({ messages: [{ content: 'https://docs.google.com/document/d/file1/edit' }], readGoogleUrl: id => readGoogleDoc(id, { request }) });
+    const text = result.documents?.[0]?.text || '';
+    if (extraHandler) {
+      // spreadsheets returns Sheets API format
+      assert.ok(text.includes('Sheet1') || text.includes('ドキュメントの本文'));
+    } else {
+      assert.ok(text.includes('ドキュメントの本文'));
+    }
+    assert.equal(calls[0].user, 'kim@orgiast.jp');
+    assert.equal(calls.at(-1).user, 'seisaku-team@orgiast.jp');
+  });
+}
+
+test('Discord本文のGoogle URLを読んでLLMに渡し本文をstate/logに保存しない', async t => {
+  const f = fixture(t, { messages: [message({ content: `<@${KIM}> https://docs.google.com/document/d/file1/edit` })] });
+  const secretText = 'DOCUMENT_CONTENT_ONLY_IN_LLM';
+  f.options.readGoogleUrl = async () => secretText;
+  await runOnce(f.options);
+  assert.equal(f.llmCalls[0].input.documents[0].text, secretText);
+  assert.doesNotMatch(fs.readFileSync(f.file('state.json'), 'utf8'), new RegExp(secretText));
+  assert.doesNotMatch(fs.readFileSync(f.file('sent-log.jsonl'), 'utf8'), new RegExp(secretText));
+});
+
+test('閲覧できない仕様という回答はkim-inboxへ送り相手には送信しない', async t => {
+  const f = fixture(t, { llmResult: { ...decision, answer: '閲覧できない仕様です' } });
+  const inbox = [];
+  f.options.addItemImpl = async (_, item) => { inbox.push(item); return { id: 'ask1' }; };
+  await runOnce(f.options);
+  assert.equal(f.posts().length, 0);
+  assert.equal(inbox[0].kind, 'ask');
+});
+
+test('PDFはGemini inline_dataで抽出し複数文書の合計バイト上限超過は truncated として表現', async t => {
+  const f = fixture(t, { messages: [] });
+  fs.writeFileSync(path.join(f.home, '.claude', 'gemini.env'), 'GEMINI_API_KEY=test-key\n');
+  const pdf = Buffer.from('%PDF-test');
+  const text = await extractPdfText(pdf, { home: f.home, fetchImpl: async (_, init) => {
+    const part = JSON.parse(init.body).contents[0].parts[1];
+    assert.equal(part.inline_data.mime_type, 'application/pdf');
+    assert.equal(part.inline_data.data, pdf.toString('base64'));
+    return json({ candidates: [{ content: { parts: [{ text: 'PDF本文' }] } }] });
+  } });
+  assert.equal(text, 'PDF本文');
+  const result = await collectReadableContent({ messages: [{ attachments: [1, 2].map(i => ({ name: `${i}.pdf`, mimeType: 'application/pdf', url: `https://example.com/${i}` })) }], downloadAttachment: async () => pdf, extractPdf: async () => text, maxTextBytes: 10 });
+  assert.ok(result.documents.reduce((n, d) => n + Buffer.byteLength(d.text), 0) <= 10);
+  // Byte truncation no longer produces a failure; the truncated document is included with truncated:true.
+  assert.equal(result.failures.length, 0);
+  assert.equal(result.contextFailures?.length || 0, 0);
+  assert.equal(result.documents.filter(d => d.truncated).length, 1);
+});
+
+test('文脈メッセージの添付失敗は返信を止めない', async t => {
+  const f = fixture(t);
+  const baseFetch = f.options.fetchImpl;
+  const inbox = [];
+  f.options.addItemImpl = async (_, item) => { inbox.push(item); return { id: 'ask' }; };
+  f.options.fetchImpl = async (url, init) => {
+    if (String(url).includes('cdn.discord.com')) return new Response('', { status: 404 });
+    if (new URL(url).searchParams.has('before')) return json([message({ id: '99', attachments: [{ filename: 'context.xlsx', content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', url: 'https://cdn.discord.com/context.xlsx' }] })]);
+    return baseFetch(url, init);
+  };
+  const result = await runOnce(f.options);
+  // Context .xlsx failure does not block the reply; only target failures do.
+  assert.equal(result.replied, 1);
+  assert.equal(f.posts().length, 1);
+  assert.equal(f.llmCalls.length, 1);
+  // inbox has 1 info (sent report), but no ask — context failure is not a target failure.
+  assert.equal(inbox.length, 1);
+  assert.equal(inbox[0].kind, 'info');
+});
+
+test('禁止表現の再生成で閲覧できないと回答しても送信しない', async t => {
+  const f = fixture(t);
+  let calls = 0;
+  f.options.llm = async () => JSON.stringify({ ...decision, answer: ++calls === 1 ? 'kimに確認いたします' : '閲覧できない仕様です' });
+  const inbox = [];
+  f.options.addItemImpl = async (_, item) => { inbox.push(item); return { id: 'ask' }; };
+  await runOnce(f.options);
+  assert.equal(calls, 2);
+  assert.equal(f.posts().length, 0);
+  assert.equal(inbox[0].kind, 'ask');
+});
+
+test('discord: 対象メッセージの添付取得失敗（404）は従来どおり kim-inbox', async t => {
+  const msg = message({ attachments: [{ url: 'https://cdn.discord.com/target.png', filename: 'target.png', content_type: 'image/png' }] });
+  const f = fixture(t, { messages: [msg] });
+  const baseFetch = f.options.fetchImpl;
+  const inbox = [];
+  f.options.addItemImpl = async (_, item) => { inbox.push(item); return { id: 'ask' }; };
+  f.options.fetchImpl = async (url, init) => {
+    if (String(url).includes('cdn.discord.com')) return new Response('', { status: 404 });
+    return baseFetch(url, init);
+  };
+  const result = await runOnce(f.options);
+  assert.equal(result.replied, 0);
+  assert.equal(f.posts().length, 0);
+  assert.equal(f.llmCalls.length, 0);
+  assert.match(inbox[0].text, /target.png: HTTP 404/);
+});
+
+test('discord: 文脈メッセージに未対応添付(.xlsx)があっても、対象メッセージがテキストだけなら返信が送られる', async t => {
+  const f = fixture(t);
+  const baseFetch = f.options.fetchImpl;
+  f.options.fetchImpl = async (url, init) => {
+    if (new URL(url).searchParams.has('before')) return json([message({ id: '99', attachments: [{ filename: 'data.xlsx', content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', url: 'https://cdn.discord.com/data.xlsx' }] })]);
+    return baseFetch(url, init);
+  };
+  const result = await runOnce({ ...f.options, dryRun: true });
+  assert.equal(result.wouldSend.length, 1);
+  assert.equal(f.posts().length, 0);
+  assert.equal(f.llmCalls.length, 1);
+});
+
+// Related conversation integration: use the same fixture through the real reply pipeline.
+for (const amount of ['40,000円', '4万円']) {
+  test(`辻さん: related を LLM 入力に含め、${amount} を捏造扱いしない`, async t => {
+    const f = fixture(t);
+    f.options.beeperFetch = async (endpoint, { query }) => {
+      assert.equal(endpoint, '/v1/messages/search');
+      assert.equal(query.query, 'スマートエイト');
+      return {
+        items: [{ id: 'related-1', chatID: 'group1', senderName: '川本',
+          timestamp: new Date(Date.now() - 86400000).toISOString(),
+          text: '<p>制作費２万円+5千円+1.5万円の合計４万円(税抜)で3プランという認識でよろしいでしょうか</p>' }],
+        chats: { group1: { title: '川本, 大平, 白川 & 百瀬' } },
+      };
+    };
+    f.options.llm = async ({ input, system }) => {
+      assert.equal(input.related.length, 1);
+      assert.equal(input.related[0].sender, '川本');
+      assert.equal(input.related[0].chat, '川本, 大平, 白川 & 百瀬');
+      assert.match(input.related[0].text, /合計４万円/);
+      assert.match(system, /全体最適/);
+      return JSON.stringify({ needs_reply: true, needs_kim_decision: false,
+        answer: `${amount}で合っているので原価に計上してください。根拠: 川本, 大平, 白川 & 百瀬で川本さんが合計４万円と発言。`, confidence: 0.95 });
+    };
+    // The question itself contains no amount: only related can justify the reply.
+    const result = await runOnce(f.options);
+    assert.equal(result.replied, 1);
+    assert.match(f.posts()[0].body.content, /原価に計上/);
+  });
+}
+
+test('関連検索失敗でも返信処理が続く', async t => {
+  const f = fixture(t);
+  let searched = false;
+  f.options.beeperFetch = async () => { searched = true; throw new Error('Beeper down'); };
+  const result = await runOnce(f.options);
+  assert.equal(searched, true);
+  assert.equal(result.replied, 1);
+});
+
+test('collectReadableContent: 対象を優先し文脈画像の上限超過は捨て、失敗を分離する', async () => {
+  const image = name => ({ name, mimeType: 'image/png', url: `https://example.com/${name}` });
+  const downloads = [];
+  const result = await collectReadableContent({
+    messages: [
+      { id: 'context', attachments: [image('old.png'), { name: 'old.xlsx', url: 'https://example.com/old.xlsx' }] },
+      { id: 'target', attachments: [image('new.png'), image('broken.png')] },
+    ],
+    targetIds: new Set(['target']), maxImages: 2,
+    downloadAttachment: async a => {
+      downloads.push(a.name);
+      if (a.name === 'broken.png') throw new Error('HTTP 404');
+      return Buffer.from('image');
+    },
+  });
+  assert.deepEqual(result.images.map(i => i.name), ['new.png', 'old.png']);
+  assert.deepEqual(result.failures, [{ name: 'broken.png', reason: 'HTTP 404' }]);
+  assert.deepEqual(result.contextFailures, [{ name: 'old.xlsx', reason: '未対応の添付形式' }]);
+  assert.deepEqual(downloads, ['new.png', 'broken.png', 'old.png']);
+
+  const capped = await collectReadableContent({
+    messages: [
+      { id: 'context', attachments: [image('old.png')] },
+      { id: 'target', attachments: [image('new.png')] },
+    ],
+    targetIds: new Set(['target']), maxImages: 1,
+    downloadAttachment: async a => { assert.equal(a.name, 'new.png'); return Buffer.from('image'); },
+  });
+  assert.deepEqual(capped.images.map(i => i.name), ['new.png']);
+  assert.deepEqual(capped.failures, []);
+  assert.deepEqual(capped.contextFailures, []);
 });

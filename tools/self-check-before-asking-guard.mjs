@@ -33,18 +33,26 @@ import { currentTurnAssistantText } from './lib/assistant-text.mjs';
 import { withStopRetryInstruction } from './lib/stop-retry-message.mjs';
 
 // 「調べた結果をこちらに返してほしい」という形。実行依頼(押して/入力して)は含めない。
-const REPORT_BACK = /(?:教えて|返信して|報告して|共有して|知らせて|返して)\s*(?:ください|下さい|もらえますか|いただけますか|ほしい|欲しい)|返信(?:を)?(?:ください|下さい|お願い)|(?:確認|チェック|調べ|見)(?:して|し|て)\s*(?:みて)?\s*(?:ください|下さい|もらえますか|いただけますか)|(?:あるか|いるか|できるか|届いているか|存在するか|どちらか|どれか)[^。.\n]{0,20}(?:教えて|返信|報告|確認)|(?:分かりますか|わかりますか|ご存じですか|心当たり)/;
+export const REPORT_BACK = /(?:教えて|返信して|報告して|共有して|知らせて|返して)\s*(?:ください|下さい|もらえますか|いただけますか|ほしい|欲しい)|返信(?:を)?(?:ください|下さい|お願い)|(?:確認|チェック|調べ|見)(?:して|し|て)\s*(?:みて)?\s*(?:ください|下さい|もらえますか|いただけますか)|(?:あるか|いるか|できるか|届いているか|存在するか|どちらか|どれか)[^。.\n]{0,20}(?:教えて|返信|報告|確認)|(?:分かりますか|わかりますか|ご存じですか|心当たり)/;
+export const STAFF_STATUS_QUESTION = /(?:来ています|ありました|通りました|届きました|どうなっています|いかがです)か[？?]?/;
 
 // 人にしかできない操作。この語を含む段落は「頼んで良い依頼」なので判定から外す。
 // ここを削ると「同意・承認・支払いまで自動化しろ」という誤ったガードになる(CLAUDE.md 🛑上限)。
-const HUMAN_ONLY = /OAuth|初回同意|同意画面|ブラウザで(?:ログイン|同意|承認|許可)|支払|決済|クレジットカード|APIキーを(?:発行|作成)|SMS|二段階認証|物理|現地|電話|権限(?:を)?(?:付与|付けて|足して)/;
+export const HUMAN_ONLY = /OAuth|初回同意|同意画面|ブラウザで(?:ログイン|同意|承認|許可)|支払|決済|クレジットカード|APIキーを(?:発行|作成)|SMS|二段階認証|物理|現地|電話|権限(?:を)?(?:付与|付けて|足して)/;
 
 // 自分で叩けるデータソース。
 //   ask   … その段落が「そのデータソースの話」かどうか
 //   tool  … 証拠になるツール名(MCP のように名前だけで用途が確定するもの)
 //   probe … 証拠になる *コマンド本文*。Bash/PowerShell のように汎用なツールはこちらで見る
 // tool と probe はどちらか一方でも当たれば「自分で調べた」と見なす。
-const SOURCES = [
+export const SOURCES = [
+  {
+    key: '求人応募',
+    ask: /応募|求人|Airワーク|engage|エンゲージ|ジモティー|求人ボックス|Indeed|審査/i,
+    tool: /Gmail/i,
+    relevance: /saiyo|応募|airwork|air.?work|en-gage|engage|jmty|ジモティー|kyujinbox|求人ボックス|indeed/i,
+    how: 'Gmail search_threads query "to:saiyo@orgiast.jp newer_than:7d"',
+  },
   {
     key: 'Gmail',
     ask: /メール|受信トレイ|Gmail|迷惑メール|認証コード|届いて|from:|メールアドレス/i,
@@ -163,15 +171,19 @@ export function splitParagraphs(text) {
   return paragraphs;
 }
 
-function hasEvidence(source, evidence) {
+function hasEvidence(source, evidence, paragraph, requireRelevantEvidence) {
   const names = [...(evidence.names || [])];
-  if (source.tool && names.some((name) => source.tool.test(name))) return true;
-  if (source.probe && source.probe.test(evidence.inputs || '')) return true;
-  return false;
+  const inputs = evidence.inputs || '';
+  const matched = (source.tool && names.some((name) => source.tool.test(name))) || (source.probe && source.probe.test(inputs));
+  if (!matched) return false;
+  if (!requireRelevantEvidence) return true;
+  if (source.relevance?.test(inputs)) return true;
+  const keywords = String(paragraph || '').match(/[A-Za-z][A-Za-z0-9@._-]{2,}|[一-龠ァ-ヶー]{3,}/g) || [];
+  return keywords.some(keyword => inputs.toLowerCase().includes(keyword.toLowerCase()));
 }
 
 // evidence は { names:Set, inputs:string }。後方互換のため Set を直接渡す呼び方も許す。
-export function findOutsourcedInvestigation(text, evidenceOrNames) {
+export function findOutsourcedInvestigation(text, evidenceOrNames, options = {}) {
   const body = String(text || '');
   if (!body.trim()) return null;
   if (hasEvidenceMarker(body)) return null;
@@ -183,10 +195,10 @@ export function findOutsourcedInvestigation(text, evidenceOrNames) {
   const found = new Map();
   for (const paragraph of splitParagraphs(body)) {
     if (HUMAN_ONLY.test(paragraph)) continue;      // 人にしかできない操作は頼んで良い
-    if (!REPORT_BACK.test(paragraph)) continue;    // 同じ段落に依頼表現が無ければ対象外
+    if (!REPORT_BACK.test(paragraph) && !(options.staffQuestions && STAFF_STATUS_QUESTION.test(paragraph))) continue;
     for (const source of SOURCES) {
       if (!source.ask.test(paragraph)) continue;
-      if (hasEvidence(source, evidence)) continue;
+      if (hasEvidence(source, evidence, paragraph, options.requireRelevantEvidence)) continue;
       if (!found.has(source.key)) found.set(source.key, source);
     }
   }

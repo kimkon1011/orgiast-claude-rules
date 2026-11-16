@@ -10,6 +10,10 @@ import { inspectTranscript } from './fable-session-guard.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
 
+// 読み取り専用のサブエージェント種別: 実装を伴わない調査・Web取得・計画・ガイドのみ。
+// WebFetch ツールだけを持つ web-fetch は読み取り専用なので実装禁止の対象外。
+const READONLY_SUBAGENTS = /^(Explore|Plan|claude-code-guide|biz-reader|statusline-setup|web-fetch)$/i;
+
 export async function hookMain(raw) {
 
 
@@ -19,7 +23,7 @@ try {
   if (!/^(Agent|Task)$/.test(String(input.tool_name || ''))) return;
   const toolInput = input.tool_input || {};
   if (IMPLEMENT.test(String(toolInput.prompt || '')) &&
-      !/^(Explore|Plan|claude-code-guide|biz-reader|statusline-setup)$/i.test(String(toolInput.subagent_type || '')) &&
+      !READONLY_SUBAGENTS.test(String(toolInput.subagent_type || '')) &&
       !implApproved(process.env.ORGIAST_HOME || os.homedir(), input.session_id)) {
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: '実装サブエージェントは禁止(§1.17)。node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> へ。例外は user の [CLAUDE-IMPL-OK]' } }));
     return;

@@ -10,11 +10,14 @@
  *   --intent     検索意図（デフォルト: 情報収集）
  *   --output     出力ファイルパス
  *   --mock       モックモード（LLM呼び出しなし）
+ *   --tune       エージェント自動チューニングを実行（X-0063）
+ *   --tune-report チューニング結果レポートの出力先
  *
  * 使い方:
  *   node seo/x0018-seo-content-pipeline.mjs --research --kw "展示会 ブース 制作 費用" --output outputs/X-0018/analysis.md
  *   node seo/x0018-seo-content-pipeline.mjs --draft --kw "展示会 ブース 制作 費用" --output outputs/X-0018/draft.md
  *   node seo/x0018-seo-content-pipeline.mjs --full --kw "展示会 初めて ブース 費用" --output outputs/X-0018/full.md
+ *   node seo/x0018-seo-content-pipeline.mjs --tune --tune-report outputs/X-0063/tune-report.json
  */
 
 import { writeFileSync, mkdirSync, existsSync } from 'fs';
@@ -299,9 +302,16 @@ function parseArgs() {
       case '--intent': opts.intent = args[++i]; break;
       case '--output': opts.output = resolveOutputPath(args[++i]); break;
       case '--mock': opts.mock = true; break;
+      case '--tune': opts.tune = true; break;
+      case '--tune-report': opts.tuneReport = resolveOutputPath(args[++i]); break;
       case '--help': showUsage(); process.exit(0);
       default: break;
     }
+  }
+
+  // tune モードは kw 不要
+  if (opts.tune) {
+    return opts;
   }
 
   if (!opts.research && !opts.draft) {
@@ -392,6 +402,38 @@ function formatDraftReport(draft) {
 async function main() {
   const opts = parseArgs();
 
+  // ── tune モード（X-0063: エージェント自動チューニング） ─────────
+  if (opts.tune) {
+    const tunerPath = resolve(__dirname, '..', 'tools', 'agent-auto-tuner.mjs');
+    if (!existsSync(tunerPath)) {
+      console.error('[X-0018] ❌ tools/agent-auto-tuner.mjs が見つかりません');
+      process.exit(1);
+    }
+
+    const { execFileSync } = await import('child_process');
+    const stdout = execFileSync(process.execPath, [
+      tunerPath, '--full', '--json',
+    ], { encoding: 'utf-8', maxBuffer: 4 * 1024 * 1024 });
+
+    const result = JSON.parse(stdout);
+    console.error(`[X-0018] ✅ Agent auto-tuning complete`);
+    console.error(`[X-0018]     Average score: ${result.averageScore}/15`);
+    console.error(`[X-0018]     Improvements: ${result.improvements?.length || 0}`);
+
+    if (opts.tuneReport) {
+      writeFileSync(opts.tuneReport, JSON.stringify({
+        ...result,
+        pipeline: 'x0018-seo-content-pipeline',
+        timestamp: new Date().toISOString(),
+      }, null, 2), 'utf-8');
+      console.error(`[X-0018] ✅ Tune report written to: ${opts.tuneReport}`);
+    } else {
+      console.log(JSON.stringify(result, null, 2));
+    }
+    return;
+  }
+
+  // ── 通常モード ──────────────────────────────────────────────────
   const results = [];
 
   if (opts.research) {

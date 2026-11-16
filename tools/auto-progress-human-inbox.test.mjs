@@ -124,7 +124,9 @@ test('G kind becomes ask when nextKim is non-empty, info when empty', async t =>
   r.nextKim = '設定を保存してください';
   await deliverHumanProgress(dir, r);
   const items = allInboxItems(dir);
-  assert.equal(items[items.length - 1].kind, 'ask');
+  assert.equal(items.length, 2);
+  assert.deepEqual(items.map(item => item.kind).sort(), ['ask', 'info']);
+  assert.match(items.find(item => item.kind === 'ask').text, /設定を保存してください/);
 });
 
 test('G nextKim from checkText JSON overrides row.nextKim', async t => {

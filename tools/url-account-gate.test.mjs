@@ -165,14 +165,15 @@ test('新しい推奨形式と前行アカウント＋単独Markdownリンクを
   assert.match(formatReason([studio]), /\*\*<アカウント>\*\* で開く: \[表示名\]\(URL\)/);
 });
 
-test('runner に登録され、アカウント追記で当該理由が消える', t => {
-  for (const [text, blocked] of [[studio, true], [`${studio}${account}`, false]]) {
+// 2026-11-15 kim: url-account-gate は runner では軽い指摘として警告のみ（block しない）。
+test('runner に登録され、警告に出し、アカウント追記で当該理由が消える', t => {
+  for (const [text, warned] of [[studio, true], [`${studio}${account}`, false]]) {
     const result = invoke(t, text, { runner: true });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
     const output = result.stdout ? JSON.parse(result.stdout) : {};
-    assert.equal((output.reason || '').includes('[URL-ACCOUNT]'), blocked);
-    if (blocked) assert.equal(output.decision, 'block');
+    assert.notEqual(output.decision, 'block');
+    assert.equal((output.systemMessage || '').includes('url-account-gate'), warned);
   }
 });
 

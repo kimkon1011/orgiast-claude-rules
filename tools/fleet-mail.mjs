@@ -234,8 +234,10 @@ export async function dailyLaneHealth({ dir, label, request, now = Date.now, pla
   if (state.sig === stamp && now() - Date.parse(state.at) < 24 * 3600_000) return { skipped: 'dedupe' };
   let autoFix = 'none';
   const fixScript = path.join(repo, 'tools', 'fleet-fix-now.ps1');
-  if (dead.some(d => repairAdvice(d.lane, d.reason).fixNow) && platform === 'win32' && fs.existsSync(fixScript)) {
-    try { launch('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', fixScript, '-NoLogin']); autoFix = 'launched'; }
+  const fixMarker = path.join(dir, '.fleet-lane-health-fix-day');
+  let fixLast = ''; try { fixLast = fs.readFileSync(fixMarker, 'utf8').trim(); } catch {}
+  if (dead.some(d => repairAdvice(d.lane, d.reason).fixNow) && platform === 'win32' && fs.existsSync(fixScript) && fixLast !== day) {
+    try { launch('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', fixScript, '-NoLogin']); autoFix = 'launched'; fs.writeFileSync(fixMarker, day); }
     catch { autoFix = 'failed'; }
   }
   const at = new Date(now()).toISOString();

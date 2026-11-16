@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // No LLM calls here; process execution, notification and file timestamps are injectable.
+import { automationModel } from './lib/automation-model.mjs';
 import fs from 'node:fs/promises';
 import { latestWaitDeadline, waitPrefix } from './session-wait-title.mjs';
 import os from 'node:os';
@@ -226,7 +227,7 @@ stuck=それ以外で進められなかった。
   if (available) {
     let child;
     try {
-      await invoke(executable, ['--resume', record.sessionId, '-p', prompt], {
+      await invoke(executable, ['--resume', record.sessionId, '-p', '--model', automationModel(), prompt], {
         cwd: record.cwd, env, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true,
       });
       child = { status: 'success', executorUsed: 'claude' };
@@ -535,6 +536,18 @@ export async function run(config = options(), io = {}) {
         const job = (async () => {
           let result;
           try {
+            // 既に完了済み（auto-progress-resume state = done/progressed）ならスキップ
+            const aprFile = path.join(home, '.claude', `auto-progress-resume-${record.sessionId}.json`);
+            try {
+              const apr = JSON.parse(await fs.readFile(aprFile, 'utf8'));
+              if (apr.state === 'done' || apr.state === 'progressed') {
+                entry.attempts.pop(); entry.noProgress = Math.max(0, entry.noProgress - 1); state.count--;
+                entry.skipReason = '完了済み';
+                rows.find(row => row.sessionId === record.sessionId).skip = '完了済み';
+                await save(ledger);
+                return;
+              }
+            } catch { /* apr file not found or parse error, continue to resume attempt */ }
             if (!record.cwd) throw new Error('cwd missing');
             const resultFile = path.join(dir, `stalled-result-${record.sessionId}-${night}.json`);
             await fs.rm(resultFile, { force: true });

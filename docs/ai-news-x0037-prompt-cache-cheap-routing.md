@@ -364,6 +364,49 @@ const response = await openai.chat.completions.create({
 
 ## 10. 参考文献
 
+## 11. 実装記録
+
+### 2026-11-16: 初回実装 — ツール出力圧縮・コンテキストGC・バッチ化プロンプト
+
+X-0037 の実装として、以下の4つの構成要素を作成・マージ（PR #2125）。
+
+#### 11.1 ツール出力のほぼロスレス圧縮 — `tools/tool-output-compress.mjs`
+
+| 圧縮方式 | 対象パターン | 圧縮率（目安） |
+|---------|------------|--------------|
+| 同一行集約 | 連続する同一行 → `[[+ N identical lines]]` | 60〜90%（反復パターン） |
+| JSON配列圧縮 | 12件超の配列 → 先頭6件＋末尾6件 | 40〜80%（大きなJSON） |
+| JSONオブジェクト圧縮 | 20キー超のオブジェクト → 先頭8＋末尾8キー | 30〜70%（大きなオブジェクト） |
+| テーブル/CSV圧縮 | 15行超の区切り文字表 → 先頭8行＋末尾4行 | 50〜80%（ログ/grep結果） |
+| Head+tail trim | maxTokens超過時 | 可変（maxTokensに依存） |
+
+`context-trim.mjs` の `trimProgressive()` と連携し、ターンごとの段階的トリミングパイプラインで動作する。
+
+#### 11.2 古いコンテキストのGC — `tools/context-gc.mjs`
+
+| フェーズ | 処理 | 効果 |
+|---------|------|------|
+| 1: フォールディング | `session-fold.mjs` の `fold()` で古いセグメントをスタブ化 | コンテキスト内のトークン数を削減 |
+| 2: 圧縮 | フォールド済み内部コンテンツを `compressOutput()` で圧縮 | 復元可能な状態でストレージ節約 |
+| 3: ハードエビクション | maxAge超過セグメントを `[[evicted]]` スタブに置換 | ストレージ完全解放（sha256整合維持） |
+
+#### 11.3 ファイル検索用SQLite
+
+本フェーズでは未実装。現状の `session-fold.mjs` の `search()`（メモリ内IDF検索）で代替。SQLite版は次フェーズの課題。
+
+#### 11.4 ツール呼び出しのバッチ化プロンプト — `PROMPT-batch-tool-calls.md`
+
+| 指示 | 効果（見込） |
+|------|------------|
+| 独立ツールの並列呼び出し | ターン数 30〜50%削減 |
+| TTL内連続リクエスト集中 | キャッシュ再読コスト 40〜60%削減 |
+| ブースバリエーション一括生成テンプレート | 1回の応答で5案生成 |
+
+#### 11.5 残課題
+- ファイル検索用SQLite（高速 persistent インデックス）は未実装
+- バッチ化プロンプトの実セッションでの効果測定
+- `PROMPT-batch-tool-calls.md` の settings.json 補足設定の自動適用
+
 - [Anthropic Prompt Caching](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching)
 - [OpenAI Prompt Caching Guide](https://platform.openai.com/docs/guides/prompt-caching)
 - [xAI Grok API (chat-completions)](https://docs.x.ai/docs/api-reference/chat-completions)

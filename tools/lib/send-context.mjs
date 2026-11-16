@@ -7,8 +7,12 @@ export const MAX_MARKER_AGE_MS = 30 * 60 * 1000;
 export const textHash = text => createHash('sha256').update(String(text ?? '').replace(/\r\n/g, '\n').trim()).digest('hex');
 export const markerPath = (text, home = process.env.ORGIAST_HOME || os.homedir()) => path.join(home, '.claude', 'send-context-checks', `${textHash(text)}.json`);
 
-export function writeContextMarker({ channel, target, text, latest, reason, intendedChanges, home, now = new Date() }) {
+export function writeContextMarker({ channel, target, text, latest, reason, intendedChanges, home, now = new Date(), kimApproved, llmOk }) {
   const marker = { version: 1, checkedAt: now.toISOString(), channel, target, bodyHash: textHash(text), latest: latest ?? null, reason, intendedChanges: Array.isArray(intendedChanges) && intendedChanges.length ? intendedChanges : undefined };
+  if (kimApproved) {
+    marker.kimApproved = String(kimApproved);
+    marker.llmOk = Boolean(llmOk);
+  }
   const file = markerPath(text, home);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o600 });
@@ -45,4 +49,27 @@ export function recordOutbound(entry, home) {
 }
 export function readOutbound(target, home) {
   try { return fs.readFileSync(outboundLogPath(home), 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse).filter(x => String(x.target) === String(target)); } catch { return []; }
+}
+
+export function kimApprovedLogPath(home = process.env.ORGIAST_HOME || os.homedir()) {
+  return path.join(home, '.claude', 'logs', 'send-context-kim-approved.jsonl');
+}
+export function writeKimApprovedAudit(entry, home) {
+  const file = kimApprovedLogPath(home);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const row = {
+    at: entry.at || new Date().toISOString(),
+    channel: entry.channel,
+    target: entry.target,
+    resolvedUserId: entry.resolvedUserId ?? null,
+    bodyHash: entry.bodyHash,
+    llmOk: Boolean(entry.llmOk),
+    llmReason: String(entry.llmReason ?? entry.reason ?? ''),
+    warnings: Array.isArray(entry.warnings) ? entry.warnings : [],
+    kimApproved: String(entry.kimApproved || ''),
+    allowed: entry.allowed !== false,
+    source: entry.source ?? null,
+  };
+  fs.appendFileSync(file, `${JSON.stringify(row)}\n`, 'utf8');
+  return { file, row };
 }

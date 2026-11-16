@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveOwner, resolveOwnerDiscordId } from './notify-owner.mjs';
 import { mobilePushInstruction } from './lib/mobile-push-queue.mjs';
+import { dedupeContext } from './lib/context-dedupe.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
@@ -45,7 +46,7 @@ function recipientWarning(options, now) {
     if (fd !== undefined) { fs.closeSync(fd); fs.unlinkSync(lock); }
   }
 }
-export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.homedir(), env = process.env, now = Date.now(), label = resolveFleetLabel(home), ...ownerOptions } = {}) {
+export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.homedir(), env = process.env, now = Date.now(), label = resolveFleetLabel(home), dedupePushContext = false, ...ownerOptions } = {}) {
   if (isUnattendedSession(input, { home, env })) return null;
   const sessionId = input?.session_id || input?.sessionId; if (!sessionId) return null;
   const ownerFile = inboxFile(home, '_owner');
@@ -80,11 +81,13 @@ export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.home
   }
   const warning = recipientWarning({ ...ownerOptions, home, label }, new Date(now));
   // mobile-push 席の未送信 push 要求は、この対話セッションに PushNotification 送信を指示する。
-  const pushContext = mobilePushInstruction(home, {
+  let pushContext = mobilePushInstruction(home, {
     now,
     owner: resolveOwner({ ...ownerOptions, home, label }),
     cliPath: path.join(path.dirname(fileURLToPath(import.meta.url)), 'mobile-push-queue.mjs'),
   });
+  // Only the hook entrypoint opts in; queue consumers still see every pending item.
+  if (dedupePushContext) pushContext = dedupeContext(pushContext, { home, sessionId, source: 'mobile-push' });
   if (!lines.length && !warning && !pushContext) return null;
   const event = input.hook_event_name || 'UserPromptSubmit';
   const context = lines.length ? `【必須】応答の冒頭で user に見える形で「📲 自動進行の結果（聞かれる前にお知らせ）」として次を表示せよ: ${displayText(lines.join('\n'), Infinity)}` : '';
@@ -93,7 +96,7 @@ export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.home
 async function main() {
   try {
     const input = JSON.parse(await readStdinWithTimeout());
-    const out = consumeInbox(input);
+    const out = consumeInbox(input, { dedupePushContext: true });
     const { sessionDigest } = await import('./auto-progress-digest.mjs');
     const digest = sessionDigest();
     if (digest) {

@@ -109,6 +109,7 @@ function system(overrides) {
     home: process.env.USERPROFILE || os.homedir(),
     temp: process.env.TEMP || os.tmpdir(),
     account: process.env.USERNAME || os.userInfo().username,
+    env: process.env,
     fs,
     wslInstalled,
     async msiBusy() {
@@ -237,6 +238,9 @@ async function ubuntuRuntime(io, releases) {
 export async function convergeNodeRuntimeSecurity(overrides = {}) {
   const io = system(overrides);
   if (io.platform !== 'win32') return { status: 'NOTICE', checked: false, repaired: false, description: 'Windows ホストで実行してください（WSL Ubuntu も Windows 経由で検査）' };
+  if (io.env?.CI === 'true' || io.env?.GITHUB_ACTIONS === 'true') {
+    return { status: 'NOTICE', checked: true, repaired: false, description: 'CI 環境のため Node ランタイム更新をスキップ' };
+  }
   const lock = path.join(io.home, '.claude', 'state', 'node-runtime-security.lock');
   const notice = (description) => ({ status: 'NOTICE', checked: true, repaired: false, description });
   let handle;

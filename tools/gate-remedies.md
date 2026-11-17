@@ -2,6 +2,30 @@
 
 値そのものは記載しない。取得: `node tools/onboarding-sync.mjs --keys-only --force`。
 
+## external-channel-unmonitored-gate
+
+Stop gate: 外部チャネル（LINE/Discord/Beeper）の返信待ち promise を検出し、auto-progress の監視が未登録の場合に block する。
+
+- block されたら、返信待ちの外部チャネルに対して `auto-progress-external-check.mjs` を使った監視を事前に登録する。
+- 既に監視済みで block が誤検出の場合は、応答にその説明を加えて再送する。
+- 詳細: `docs/x-0045-missing-gates.md` 優先3「外部チャネル未監視型」
+
+## silent-check-failure-gate
+
+Stop gate: auto-progress check の応答に障害信号（exit code 1以上／MODULE_NOT_FOUND）が含まれているのに成功を主張している場合に warn する。
+
+- warn されたら、当該 check の実ログ（Vercel/gh run view）を直接照会し、沈黙故障か否かを確認す��。
+- 本当に成功している場合は、障害信号が誤検出である根拠を応答に含める。
+- 詳細: `docs/x-0045-missing-gates.md` 優先1「見張りの沈黙故障型」
+
+## stale-worktree-gate
+
+PreToolUse gate: 実行元の cwd が nightly-repo 以外の古い worktree/別クローンで、かつ定期ジョブ系コマンドを実行しようとしている場合に block する。
+
+- block されたら、cwd を nightly-repo に変更して再実行する。
+- 意図的に別ツリーで実行する必要がある場合は、読み取り専用コマンド／管理操作／dry-run に限定する。
+- 詳細: `docs/x-0045-missing-gates.md` 優先2「実行元ツリー固着型」
+
 ## calendar-external-guest-gate
 
 社外のメールアドレスをカレンダーの参加者（attendees）に追加する Calendar MCP / Bash / PowerShell の操作をブロックする。社内（@orgiast.jp または config/staff-addresses.json のアドレス）のみ通す。

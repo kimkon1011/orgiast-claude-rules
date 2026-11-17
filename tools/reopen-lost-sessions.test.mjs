@@ -2382,6 +2382,29 @@ test('recordApiResult: 成功でカウンターを 0 に戻す', t => {
   assert.equal(readFailState(base).consecutiveFails, 0);
 });
 
+test('CLI entry point: apiError 単発では process.exitCode を立てず、連続 8 回で立てる', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-exit-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  // Simulate CLI entry point logic for watch mode (lines 1308-1312 equivalent)
+  // apiError alone without error/failed/unverified should not set exitCode
+  // because recordApiResult returns false for a single transient failure
+  let exitCode = 0;
+  const check = (result) => {
+    if (result.error || result.failed?.length || result.unverified?.length) exitCode = 1;
+    if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) exitCode = 1;
+    if (recordApiResult(base, result.apiError)) exitCode = 1;
+  };
+  check({ apiError: 'API time limit', error: undefined, candidates: [], reopened: [], skipped: {} });
+  assert.equal(exitCode, 0, 'single apiError should not set exitCode');
+  // 連続 8 回で exitCode が立つ
+  for (let i = 0; i < 7; i++) recordApiResult(base, 'error');
+  exitCode = 0;
+  check({ apiError: 'error', error: undefined, candidates: [], reopened: [], skipped: {} });
+  assert.equal(exitCode, 1, '8th consecutive failure should set exitCode');
+});
+
 test('recordApiResult: 初回はカウンターが 1 になる', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-api-first-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

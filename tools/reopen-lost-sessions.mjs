@@ -741,8 +741,13 @@ export async function connectedRcSessionIds({ fetchImpl = fetch, headers, now = 
   let cursor = '';
   do {
     if (now() >= deadline) throw Error('RC verification time limit');
-    const response = await fetchImpl(`${BASE}?${new URLSearchParams({ limit: '100', ...(cursor && { cursor }) })}`, {
-      headers, signal: AbortSignal.timeout(Math.max(1, deadline - now())),
+    const response = await fetchWithRetry(`${BASE}?${new URLSearchParams({ limit: '100', ...(cursor && { cursor }) })}`, {
+      headers,
+    }, RETRY_MAX, {
+      timeoutMs: Math.max(1, Math.min(deadline - now(), 30000)),
+      deadline,
+      nowFn: now,
+      fetchImpl,
     });
     if (!response.ok) throw Error(`RC API HTTP ${response.status}`);
     const body = await response.json();
@@ -984,7 +989,13 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
     const deadline = now() + (stateBased ? 180000 : 60000);
     const get = async url => {
       if (now() >= deadline) throw Error('API time limit');
-      const response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(Math.max(1, deadline - now())) });
+      const timeoutMs = Math.max(1, Math.min(deadline - now(), 30000));
+      const response = await fetchWithRetry(url, { headers }, RETRY_MAX, {
+        timeoutMs,
+        deadline,
+        nowFn: now,
+        fetchImpl,
+      });
       if (!response.ok) throw Error(`RC API HTTP ${response.status}`);
       return response.json();
     };
@@ -1305,7 +1316,7 @@ if (isEntry(import.meta.url)) {
       });
       clearTimeout(watchdogTimer);
       console.log(JSON.stringify(result));
-      if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
+      if (result.error || result.failed?.length || result.unverified?.length) process.exitCode = 1;
       // loadGuard blocked all candidates → not a clean run
       if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) process.exitCode = 1;
       // 連続失敗カウンター: API エラーが連続 8 回超でのみ exit 1（一時的ネットワーク不調は exit 0）
@@ -1314,7 +1325,7 @@ if (isEntry(import.meta.url)) {
       const result = await reopenLost({ ...opts, checkClaude: true });
       const base = opts.base || path.join(os.homedir(), '.claude');
       console.log(JSON.stringify(result));
-      if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
+      if (result.error || result.failed?.length || result.unverified?.length) process.exitCode = 1;
       if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) process.exitCode = 1;
       // 連続失敗カウンター: API エラーが連続 8 回超でのみ exit 1（一時的ネットワーク不調は exit 0）
       if (recordApiResult(base, result.apiError)) process.exitCode = 1;

@@ -405,3 +405,76 @@ test('他レーンが修正中のため未検証という先送りを検出す�
     '[handoff-audit:116827928ab09de7] 恒久修正の先送り文を検出（W）「Codex が修正中で、まだ確かめられる状態にないため」'
   ]) assert.deepEqual(detect(text), [], text);
 });
+
+// ================================================================
+// 2026-11-18: W パターンに除外を2つ追加（INBOX_RELAY / DELEGATION_STARTED）
+// 実測で確定した誤検知 5 件を止めるテスト
+// ================================================================
+test('【受信箱】formのkim-inbox info通知転記はWと誤検出しない（96bfba6f / d5fa33a8）', () => {
+  const text = '【受信箱】\n起きたこと: 018 が次に何の作業をするかを決めるのを待っている、というお知らせです。';
+  assert.deepEqual(detect(text).map(found => found.pattern), [], 'INBOX_RELAY ガードで除外されるべき');
+});
+
+test('委譲起動直後の完了待ちはWと誤検出しない（e88a780c / 8b21d815）', () => {
+  // 実測 e88a780c: Codex に実装を委譲した直後の完了待ち
+  const text1 = 'Codex に実装を委譲し、バックグラウンドで進行中です。完了を待ちます。';
+  assert.deepEqual(detect(text1).map(found => found.pattern), [], 'DELEGATION_STARTED ガードで除外されるべき（委譲を起動）');
+  // 実測 8b21d815: 指示文には委譲語が無いためWとして検出される＝正しい挙動
+  // 「次に kim がすること: なし（Codex の生成完了を待っています）」は委譲を起動した
+  // 文脈が別行にあるので、この文単体ではDELEGATION_STARTEDが効かずW検出される
+});
+
+test('指示書を作成してcodex-doを起動した直後の完了待ちはWと誤検出しない（統合文）', () => {
+  // e88a780c の実際のhandoff文脈を再現: 指示書作成とcodex-do起動が同じ文にある
+  const text = '指示書を作成して codex-do を起動しました。次に kim がすること: なし（Codex の生成完了を待っています）';
+  const results = detect(text);
+  assert.deepEqual(results.map(found => found.pattern), [], 'DELEGATION_STARTED ガードで除外されるべき（指示書を作成して codex-do を起動）');
+});
+
+test('本物の違反は今までどおりWとして検出される', () => {
+  // ケース4: ルール+Codexの両方待ち
+  const text4 = 'ルール側の PR のマージと、Codex の実装完了の両方を待っています。どちらも終わると通知が来るので、届き次第検証に入ります。';
+  assert.ok(detect(text4).some(d => d.pattern === 'W'), 'ケース4: ルール+Codexの両方待ちはWとして検出されるべき');
+
+  // ケース5: 次セッションへの恒久対応
+  const text5 = '恒久対応は次セッションで実装します。';
+  assert.ok(detect(text5).some(d => d.pattern === 'W' || d.pattern === 'P1'), 'ケース5: 次セッションでの実装はWまたはP1として検出されるべき');
+
+  // ケース6: 数分待ち
+  const text6 = '数分お待ちください。';
+  assert.ok(detect(text6).some(d => d.pattern === 'W'), 'ケース6: 数分待ちはWとして検出されるべき');
+});
+
+// 上記テストでカバーできるよう、DELEGATION_STARTEDとINBOX_RELAYの統合も確認
+test('INBOX_RELAY 統合テスト: 受信箱形式の通知はWから除外される', () => {
+  const texts = [
+    '【受信箱】起きたこと: Codex が書き込みタスクで exit_null になる原因診断の完了待ちです。',
+    '【受信箱】\n返事の例: 指示書を作成して codex-do を起動しました。完了を待っています。',
+  ];
+  for (const text of texts) {
+    const results = detect(text);
+    assert.deepEqual(results.map(found => found.pattern), [], `INBOX_RELAY: "${text.slice(0, 40)}..." はWとして検出されないべき`);
+  }
+});
+// 受信箱形式でもP1（恒久修正の先送り）のような実違反は引き続き検出する
+test('INBOX_RELAY はP1検出に影響しない', () => {
+  // 「修正の恒久対応を次回に」はP1違反。INBOX_RELAYはWのループ内だけの除外なので
+  // P1は引き続き検出される。これは正しい挙動。
+  const text = '【受信箱】\n判断してほしいこと: この修正の恒久対応を次回に回すかどうかの返事を待っています。';
+  const results = detect(text);
+  assert.ok(results.length > 0, 'P1違反は引き続き検出されるべき');
+  assert.equal(results[0].pattern, 'P1', '恒久+次回のP1はそのまま検出される');
+});
+
+test('DELEGATION_STARTED 統合テスト: 委譲起動直後の完了待ちはWから除外される', () => {
+  const texts = [
+    '指示書を書いて codex-do に委譲しました。完了を待っています。',
+    'Codex に依頼を渡しました。完了を待ちます。',
+    '指示書を作成して DeepSeek へ投げました。完了待ちです。',
+    'サブエージェントを起動しました。完了を待っています。',
+  ];
+  for (const text of texts) {
+    const results = detect(text);
+    assert.deepEqual(results.map(found => found.pattern), [], `DELEGATION_STARTED: "${text.slice(0, 40)}..." はWとして検出されないべき`);
+  }
+});

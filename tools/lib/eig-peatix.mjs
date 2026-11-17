@@ -29,6 +29,35 @@ export async function withPeatixPage(read) {
     await page.click('#verify-button');
     await page.waitForTimeout(4000);
     await page.goto(EVENT_URL, { waitUntil: 'networkidle' });
+    await page.route('**/*', route => {
+      const req = route.request();
+      return /peatix\.com$/.test(new URL(req.url()).hostname) && !['GET', 'HEAD'].includes(req.method()) ? route.abort() : route.continue();
+    });
     return await read(page);
   } finally { await browser.close(); }
+}
+
+export function parseTickets(rows, body) {
+  const tickets = rows.filter(row => row.length >= 4 && /^\s*[\d,]+\s*\//.test(row[0])).map(row => {
+    const match = row[0].match(/^\s*([\d,]+)\s*\/\s*([\d,]+)\s*$/);
+    if (!match || !row[1].trim()) throw new Error('Peatix ticket table changed');
+    return { name: row[1].trim(), count: Number(match[1].replaceAll(',', '')), capacity: Number(match[2].replaceAll(',', '')) };
+  });
+  const total = body.match(/([\d,]+)\s*\/\s*([\d,]+)\s*申し込み数/);
+  if (!tickets.length || !total) throw new Error('Peatix sales data missing (not zero)');
+  const registrations = tickets.reduce((sum,t) => sum + t.count, 0);
+  const capacity = tickets.reduce((sum,t) => sum + t.capacity, 0);
+  if (registrations !== Number(total[1].replaceAll(',', '')) || capacity !== Number(total[2].replaceAll(',', ''))) throw new Error('Peatix totals mismatch');
+  return { tickets, registrations, capacity, presenters: tickets.filter(t => /登壇/.test(t.name)).reduce((sum,t) => sum+t.count,0) };
+}
+export async function collectPeatix() {
+  return withPeatixPage(async page => {
+    const publicBody = await page.locator('body').innerText();
+    const dashboard = await page.locator('a').evaluateAll(es => es.map(e => e.href).find(h => h === 'https://peatix.com/event/5269635/dashboard'));
+    if (!dashboard) throw new Error('Peatix authenticated dashboard missing');
+    await page.goto(dashboard, { waitUntil: 'networkidle' });
+    await page.waitForSelector('table.sales-data');
+    const rows = await page.locator('table.sales-data tr').evaluateAll(es => es.map(e => [...e.querySelectorAll('td')].map(c => c.innerText)));
+    return { ...parseTickets(rows, await page.locator('body').innerText()), cafe212: /課題の概要[\s\S]{0,50}Cafe\s*212/.test(publicBody) ? 1 : null, source: dashboard };
+  });
 }

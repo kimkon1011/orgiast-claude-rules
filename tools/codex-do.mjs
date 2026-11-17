@@ -398,6 +398,21 @@ export function isCheapFirstEnabled({ kind, instruction, review = false, env = p
   return true;
 }
 
+// 指示の先頭行（空行を除く最初の行）が `lane: codex`（大文字小文字・前後空白無視）か判定する。
+// codex-do が Codex を起動できない理由（予算超過・クールダウン等）に当たった時に、
+// 代替バックエンドへフォールバックせず exit 75 で deferred にするための判断材料。
+// この関数自身は I/O を持たない純粋関数。
+export function isCodexPinned(instruction) {
+  const text = String(instruction || '');
+  const lines = text.split(/\r?\n/);
+  for (const raw of lines) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    return /^lane:\s*codex$/i.test(trimmed);
+  }
+  return false;
+}
+
 // A zero exit code alone does not prove that an implementation was delivered.
 export function cheapFirstFailureReason({ kind, result, treeChanged }) {
   const output = String(result.output || '');
@@ -1311,6 +1326,16 @@ let cooldownRecheck = false;
 if (useCodex) {
   const gate = decideCodexGate({ home, origin });
   cooldownRecheck = gate.recheck === true;
+  // lane: codex 固定: Codex を起動できない理由（予算超過・クールダウン等）に当たったら
+  // 代替バックエンドへフォールバックせず、exit 75 (deferred) で終了する。
+  if (gate.deferred && isCodexPinned(instruction)) {
+    const pinnedReason = `lane-codex-pinned:${gate.reason}`;
+    const pinnedGate = { ...gate, reason: pinnedReason };
+    recordDeferred(pinnedGate);
+    console.error(`[codex-do] lane: codex 固定 — ${gate.reason}（${new Date(gate.retryAt).toLocaleString()} 以降に再試行）。代替バックエンドへフォールバックしません`);
+    console.log(JSON.stringify(deferredPayload(pinnedGate, { origin, kind: taskKind })));
+    process.exit(EX_TEMPFAIL);
+  }
   // 全ての deferred 理由（codex_cooldown / usage_limit / unattended_budget 等）で、
   // --no-fallback が無ければ既定で代替バックエンドへ回す。終了コード75は代替が全滅した時だけ。
   if (gate.deferred && !noFallback && resolveFallbackBackends(home, { taskKind }).length > 0) {

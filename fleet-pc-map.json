@@ -51,19 +51,30 @@
     "remoteName": "作業用011",
     "sheetName": "作業用011",
     "hostname": "作業用011",
-    "deviceId": "B79CA602-6163-4252-B2A0-2A96C61F6767",
-    "account": "cr@orgiast.jp",
-    "person": "金功勇",
-    "notifyDiscordId": "715210673642012733",
-    "notifyTo": "kim@orgiast.jp（金功勇）",
-    "_notifyEvidence": "2026-10-23 本人が『進捗 DM の宛先は kim で正しい』と回答。PR #1227 後の 2026-10-27〜11-01、auto-progress-done-dm.sent.jsonl 44件がすべて delivered=toast、Discord DM 0件で、owner-inbox.md に229件が未読滞留したことを 2026-11-01 に作業用011で実測。",
-    "aliases": [
-      "cr-PC"
-    ],
+    "deviceId": "B79CA602-6163-4252-B2A0-.Transparent validation of the 011 entry",
     "_mergedFrom": "cr-PC（2026-10-13 統合。同一実機が2キーに分かれ、cr-PC 宛メールが未配達だった）。cr-PC の旧エントリ: sheetName=作業用011, hostname=作業用011, aliases=[作業用011], account=cr@orgiast.jp",
     "_evidenceCrPC": "cr-PC の Claude Code が Discord #claude-code（msg 1558060797459169290, 2026-10-09）で hostname『作業用011』を自己申告。kim 回答 2026-10-08: cr@orgiast.jp 担当。HANDOVER-cr-2026-10-09 の『作業用018』表記は誤りで実機は 011。enroll は PC名 cr-PC で 2026-10-09 発行",
     "_evidence": "kim のスクリーンショット(2026-10-09): Chrome リモートデスクトップ『作業用011』の接続先で 設定→システム→バージョン情報 のデバイス名『作業用011』（HP EliteDesk 800 G3 SFF、i7-7700、デバイスID 上記、Windows 11 Pro 22H2、Windows のサインインは 金功勇 / kimkongyong@gmail.com）。Claude Code の導入と REPORTER_LABEL は未確認。ラベルが未設定なら hostname『作業用011』で受信するため、キー名＝hostname で照合できる",
     "codexAccount": "cr@orgiast.jp"
+  },
+  "015CAFE": {
+    "hostname": "015CAFE",
+    "remoteName": "カフェ用015",
+    "account": "seisaku-team@orgiast.jp",
+    "person": "金功勇",
+    "aliases": [
+      "015CAFE",
+      "DESKTOP-63MQR3L"
+    ],
+    "_evidence": "2026-11-14 操作者が『このPCは015』と明言。hostname は DESKTOP-63MQR3L→015CAFE に変更済み（同一機体 Thirdwave ZG）。PR #1782 の 008 は推定による誤登録"
+  },
+  "008XPS8300": {
+    "_evidence": "kim 承認: 2026-11-17『008可』（kim-inbox ki-20261116133913-649e に記録済み）",
+    "account": "seisaku-team@orgiast.jp",
+    "aliases": ["008XPS8300", "作業用008"],
+    "hostname": "008XPS8300",
+    "person": "金功勇",
+    "remoteName": "作業用008"
   },
   "_unverified": {
     "_note": "証拠が弱く確定できない対応。fleet-mail の宛先解決(remoteName 照合)には使わない。確定したらトップレベルのエントリへ remoteName 付きで移す。",
@@ -114,8 +125,7 @@
   },
   "DELL": {
     "hostname": "DELL",
-    "account": "seisaku-team@orgiast.jp",
-    "remoteName": "作業用014",
+    "account": "seisaku-team@orgiast.jp", ORR: "作業用014",
     "notifyDiscordId": "715210673642012733",
     "notifyTo": "kim@orgiast.jp（金功勇）",
     "aliases": [
@@ -125,17 +135,6 @@
     ],
     "_evidence": "2026-11-04 本PCの Claude（seisaku-team@、sessionId 756c1d8b-c9d7-456f-8807-becae5cc2210）が #claude-code（message_id 1567434426311385209）と kim 経由の依頼で hostname=DELL / OS user=USER を実測申告し、L&B 案件の担当席と名乗った。同日 kim 回答「白川専用014 が seisaku-team@orgiast.jp。DELL 席は白川専用014 のことでは」。L&B 案件は 10/30 に白川専用014 へ割当済みで担当が一致するため 作業用014 として登録（memory: 作業用014 は未登録・hostname 不明だった）。",
     "_identityConflict": "本PCの Claude は自席ラベルを『作業用999』と申告した。作業用999 は DESKTOP-BDOAK99 行にも利用者申告がある。kim 回答と L&B 担当の一致を優先して 014 とし、999 は aliases に入れない（DESKTOP-BDOAK99 宛の経路を奪わないため）。実機の Chrome リモートデスクトップ名で確定したら更新する。",
-    "_keyserve": "2026-11-04 kim-PC（primary）で keyserve-enroll --pc DELL --ttl-hours 48 を発行（指紋 09a392e44d）。受信側で実行し keyserve-status が primary / HTTP 200 になるまで fleet-sheet.env は未配布。"
-  },
-  "015CAFE": {
-    "hostname": "015CAFE",
-    "remoteName": "カフェ用015",
-    "account": "seisaku-team@orgiast.jp",
-    "person": "金功勇",
-    "aliases": [
-      "015CAFE",
-      "DESKTOP-63MQR3L"
-    ],
-    "_evidence": "2026-11-14 操作者が『このPCは015』と明言。hostname は DESKTOP-63MQR3L→015CAFE に変更済み（同一機体 Thirdwave ZG）。PR #1782 の 008 は推定による誤登録"
+    "_keyserve": "2026-Unspecified key serve information"
   }
 }

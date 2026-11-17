@@ -25,7 +25,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 // Base delay 1s, double each retry: 1s, 2s, 4s. Max 3 retries before giving up.
 const RETRY_MAX = 3;
 const RETRY_BASE_MS = 1000;
-async function fetchWithRetry(url, init, retries = RETRY_MAX, nowFn = Date.now) {
+export async function fetchWithRetry(url, init, retries = RETRY_MAX, nowFn = Date.now) {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const response = await fetch(url, init);
@@ -45,13 +45,13 @@ async function fetchWithRetry(url, init, retries = RETRY_MAX, nowFn = Date.now) 
 }
 // 連続失敗カウンターを ~/.claude/reopen-lost-sessions-fail-state.json で管理。
 // 連続 8 回（約 2 時間）以上失敗した場合のみ exit 1 を返す（監視が真の停止を検出できるようにする）。
-const FAIL_STATE_FILE = 'reopen-lost-sessions-fail-state.json';
-const CONSECUTIVE_FAIL_THRESHOLD = 8;
-function readFailState(base) {
+export const FAIL_STATE_FILE = 'reopen-lost-sessions-fail-state.json';
+export const CONSECUTIVE_FAIL_THRESHOLD = 8;
+export function readFailState(base) {
   try { return readJson(path.join(base, FAIL_STATE_FILE), { consecutiveFails: 0, lastFailAt: null }); }
   catch { return { consecutiveFails: 0, lastFailAt: null }; }
 }
-function writeFailState(base, state) {
+export function writeFailState(base, state) {
   fs.writeFileSync(path.join(base, FAIL_STATE_FILE), JSON.stringify(state) + '\n');
 }
 function readJson(file, fallback) {
@@ -716,9 +716,9 @@ export async function connectedRcSessionIds({ fetchImpl = fetch, headers, now = 
   let cursor = '';
   do {
     if (now() >= deadline) throw Error('RC verification time limit');
-    const response = await fetchImpl(`${BASE}?${new URLSearchParams({ limit: '100', ...(cursor && { cursor }) })}`, {
-      headers, signal: AbortSignal.timeout(Math.max(1, deadline - now())),
-    });
+    const response = await fetchWithRetry(`${BASE}?${new URLSearchParams({ limit: '100', ...(cursor && { cursor }) })}`, {
+      headers, signal: AbortSignal.timeout(Math.max(1, Math.min(deadline - now(), 30000))),
+    }, RETRY_MAX, now);
     if (!response.ok) throw Error(`RC API HTTP ${response.status}`);
     const body = await response.json();
     if (!Array.isArray(body.data)) throw Error('Invalid sessions response');
@@ -1279,14 +1279,48 @@ if (isEntry(import.meta.url)) {
       });
       clearTimeout(watchdogTimer);
       console.log(JSON.stringify(result));
-      if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
+      if (result.error || result.failed?.length || result.unverified?.length) process.exitCode = 1;
       // loadGuard blocked all candidates → not a clean run
       if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) process.exitCode = 1;
+      // 連続失敗カウンター: API エラーが連続 8 回超でのみ exit 1（一時的ネットワーク不調は exit 0）
+      if (result.apiError) {
+        const state = readFailState(base);
+        state.consecutiveFails = (state.consecutiveFails || 0) + 1;
+        state.lastFailAt = new Date().toISOString();
+        writeFailState(base, state);
+        if (state.consecutiveFails >= CONSECUTIVE_FAIL_THRESHOLD) {
+          process.exitCode = 1;
+        }
+      } else {
+        const state = readFailState(base);
+        if (state.consecutiveFails > 0) {
+          state.consecutiveFails = 0;
+          state.lastFailAt = null;
+          writeFailState(base, state);
+        }
+      }
     } else {
       const result = await reopenLost({ ...opts, checkClaude: true });
+      const base = opts.base || path.join(os.homedir(), '.claude');
       console.log(JSON.stringify(result));
-      if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
+      if (result.error || result.failed?.length || result.unverified?.length) process.exitCode = 1;
       if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) process.exitCode = 1;
+      if (result.apiError) {
+        const state = readFailState(base);
+        state.consecutiveFails = (state.consecutiveFails || 0) + 1;
+        state.lastFailAt = new Date().toISOString();
+        writeFailState(base, state);
+        if (state.consecutiveFails >= CONSECUTIVE_FAIL_THRESHOLD) {
+          process.exitCode = 1;
+        }
+      } else {
+        const state = readFailState(base);
+        if (state.consecutiveFails > 0) {
+          state.consecutiveFails = 0;
+          state.lastFailAt = null;
+          writeFailState(base, state);
+        }
+      }
     }
   } catch (error) { console.log(JSON.stringify({ error: error.message })); process.exitCode = 1; }
 }

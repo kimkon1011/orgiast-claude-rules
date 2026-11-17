@@ -192,6 +192,8 @@ test('軽い操作に実装を混ぜると拒否し、Edit/Write の連続は警
     const result = run(blocked, { tool_name: 'Bash', tool_input: { command } });
     assert.equal(result.hookSpecificOutput.permissionDecision, 'deny', command);
     assert.match(result.hookSpecificOutput.permissionDecisionReason, /Codex が使えない時は deepseek へ。生存レーン: deepseek, openrouter/);
+    assert.match(result.hookSpecificOutput.permissionDecisionReason, /フォールバック順:/);
+    assert.doesNotMatch(result.hookSpecificOutput.permissionDecisionReason, /deepseek\/glm\/gemini へ流れる/);
     assert.equal(calls(blocked), ++expected, command);
   }
   const h = setup('implement', 'claude-opus-5', { toolCalls: 0 });

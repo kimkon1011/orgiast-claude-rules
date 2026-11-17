@@ -1071,7 +1071,7 @@ test('回答が「読めません」を含む場合は送信せず判断待ち',
   assert.equal(f.readState().handled['100']?.reason, 'decision');
 });
 
-test('画像payloadはDeepSeek強制指定でもGemini→Kimi→Gensparkのみ', async t => {
+test('画像payloadはDeepSeek強制指定でもGemini→OpenRouter Gemini→Kimiのみ', async t => {
   const f = fixture(t, { messages: [] });
   for (const [name, key] of [['gemini', 'GEMINI_API_KEY'], ['openrouter', 'OPENROUTER_API_KEY'], ['genspark-proxy', 'GSK_PROXY_KEY'], ['deepseek', 'DEEPSEEK_API_KEY']]) {
     fs.writeFileSync(path.join(f.home, '.claude', `${name}.env`), `${key}=test-key\n`);
@@ -1086,8 +1086,11 @@ test('画像payloadはDeepSeek強制指定でもGemini→Kimi→Gensparkのみ',
   await llm({ category: 'jp_reply', system: 'test', input: { images, documents: [{ text: '本文' }] } });
   assert.equal(requests.length, 3);
   assert.match(requests[0].url, /googleapis/);
+  assert.equal(requests[0].body.model, 'gemini-3.6-flash');
   assert.match(requests[1].url, /openrouter/);
-  assert.match(requests[2].url, /genspark/);
+  assert.equal(requests[1].body.model, 'google/gemini-3.7-flash');
+  assert.match(requests[2].url, /openrouter/);
+  assert.match(requests[2].body.model, /kimi-k3/);
   for (const { url, body } of requests) {
     assert.doesNotMatch(url, /deepseek|anthropic/);
     assert.equal(body.messages[1].content[1].type, 'image_url');

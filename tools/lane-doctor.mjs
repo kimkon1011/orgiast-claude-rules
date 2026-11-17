@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { disabledLanes } from './lib/lane-disabled.mjs';
+import { readDisabledEntries, restoreExpiredDisabledLanes } from './lib/lane-disabled.mjs';
 import { wslInstalled } from './lib/wsl-present.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -69,8 +69,17 @@ function keyserveEnrolled(home, env = process.env) {
 }
 // PC ごとの恒久無効化（lanes-disabled.json）。probe も通知もせず、順番から外す（2026-11-15 kim 指示: 008 の Gemini 停止）。
 // quick と probe の両経路で、実績反映（applyRealLaneHealth）の後に必ず掛け直す。
-export function applyDisabledLanes(health, home = laneHome()) {
-  for (const p of disabledLanes(home)) if (health.lanes?.[p]) health.lanes[p] = { alive: false, reason: 'disabled' };
+export function applyDisabledLanes(health, home = laneHome(), now = Date.now()) {
+  if (!health.lanes) return health;
+  for (const [name, entry] of Object.entries(readDisabledEntries(home))) {
+    const until = Number(entry?.until);
+    const expired = Number.isFinite(until) && until <= now;
+    const state = { alive: false, reason: expired ? 'disabled:expired' : 'disabled', ...(Number.isFinite(until) ? { until } : {}) };
+    const targets = [name];
+    if (name === 'gemini') targets.push('gemini-cli');
+    if (name === 'openrouter') targets.push('openrouter-free', 'openrouter-code');
+    for (const p of targets) if (health.lanes[p]) health.lanes[p] = state;
+  }
   return health;
 }
 function orders(health, home = laneHome()) {
@@ -333,6 +342,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   health.probedAt = new Date(now).toISOString();
   applyRealLaneHealth(health, home, now);
   health.lanes['gemini-cli'] = directGeminiCliState(health.lanes.gemini, executable('gemini'));
+  restoreExpiredDisabledLanes(health, home, now);
   applyDisabledLanes(health, home);
   orders(health, home);
   demoteBilling(health, home, now);

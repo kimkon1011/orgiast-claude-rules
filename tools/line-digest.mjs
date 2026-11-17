@@ -1,4 +1,4 @@
-import { gatewayParams, usageCostFields } from './provider-routing.mjs';
+import { gatewayParams } from './provider-routing.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -189,6 +189,7 @@ export function createLlmClient({ home = os.homedir(), fetchImpl = fetch, sleep 
   return async ({ provider, messages, maxTokens = 4000, responseFormat }) => {
     const run = async (format) => callWithFallback({
       start: { provider, model: PROVIDERS[provider]?.model }, chain: FALLBACK_CHAIN, fetchImpl, sleepImpl: sleep, ledgerFile: usageFile,
+      caller: 'line-digest', category: 'digest',
       cooldownFile: path.join(home, '.claude', 'provider-cooldown.json'),
       payloadFor(candidate) {
         const p = PROVIDERS[candidate.provider], key = p && loadKey(home, candidate.provider);
@@ -206,11 +207,6 @@ export function createLlmClient({ home = os.homedir(), fetchImpl = fetch, sleep 
         const content = choice.message?.content;
         if (typeof content !== 'string' || !content.trim()) return 'content が空です';
         return true;
-      },
-      async onAttempt(info) {
-        const usage = info.status === 'ok' ? (await info.response.clone().json().catch(() => ({}))).usage || {} : {};
-        const rec = { t: new Date().toISOString(), tool: 'line-digest', provider: info.candidate.provider, model: info.candidate.model, ...usageCostFields(usage), in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover, ok: info.status === 'ok' };
-        try { fs.mkdirSync(path.dirname(usageFile), { recursive: true }); fs.appendFileSync(usageFile, `${JSON.stringify(rec)}\n`); } catch {}
       },
     });
     let result;

@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { inspectTranscript } from './fable-session-guard.mjs';
 import { classifyBashCommand } from './usage-stats.mjs';
 import { laneDoctorQuick, readJson, freshProbe } from './lane-doctor.mjs';
+import { resolveFallbackBackends } from './codex-do.mjs';
 import { isEntry } from './is-entry.mjs';
 import { laneAdvice } from './cost-routing-gate.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
@@ -159,7 +160,12 @@ export function laneHealthDecision(home, now = Date.now()) {
   try { health = readJson(path.join(home, '.claude', 'lane-health.json'), null) || laneDoctorQuick({ home, now }); }
   catch { return { permissionDecision: 'deny', permissionDecisionReason: 'レーン状態を読めません。先に node tools/lane-doctor.mjs --probe を実行せよ。' }; }
   if (health.implementOrder?.[0] === 'codex') return { permissionDecision: 'deny', permissionDecisionReason: 'Codex は生きている。node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> へ渡せ' };
-  if (Array.isArray(health.implementOrder) && health.implementOrder.length) return { permissionDecision: 'deny', permissionDecisionReason: `Codex が使えない時は ${health.implementOrder[0]} へ。生存レーン: ${health.implementOrder.join(', ')}。例: node tools/codex-do.mjs --prompt-file <指示> --cwd <対象>（内蔵フォールバックで deepseek/glm/gemini へ流れる）` };
+  if (Array.isArray(health.implementOrder) && health.implementOrder.length) {
+    let live = [];
+    try { live = resolveFallbackBackends(home).map((backend) => backend.name); } catch { live = []; }
+    const orderText = live.length ? live.join(' → ') : '候補なし';
+    return { permissionDecision: 'deny', permissionDecisionReason: `Codex が使えない時は ${health.implementOrder[0]} へ。生存レーン: ${health.implementOrder.join(', ')}。例: node tools/codex-do.mjs --prompt-file <指示> --cwd <対象>（フォールバック順: ${orderText}）` };
+  }
   if (Array.isArray(health.implementOrder) && freshProbe(health.probedAt, now)) return { permissionDecision: 'deny', permissionDecisionReason: IMPLEMENTATION_DENIAL };
   return { permissionDecision: 'deny', permissionDecisionReason: '生存レーンが未確認。先に node tools/lane-doctor.mjs --probe を実行せよ。' };
 }

@@ -1219,13 +1219,21 @@ export function writeGatewayOverride({ claudeDir, provider, writeImpl = null }) 
 }
 
 // codex_saturated 対処: ~/.claude/codex-fallback-order.json に fallback 順を書く。
-// 2026-09-08 実測で cheap-code:glm 1544s/277tok・gemini-cli 2234s/0tok と低成果
-// (delegation-health fallback_low_yield)。救済レーンは速度と成功率を最優先し、
-// fail 4.2% / 平均36秒と最良の qwen(deepseek-chat) を先頭、glm(定額)を2番目、
-// 平均509秒かつハング実績のある gemini-cli を最後にする。
+// 2026-11 実測: qwen → cheap-code:deepseek → cheap-code:glm → gemini-cli → openrouter-free。
+// PC ごとの ~/.claude/codex-fallback-order.local.json（例: 008 は Gemini を外す）は上書きしない。
+export const DEFAULT_CODEX_FALLBACK_ORDER = Object.freeze(['qwen', 'cheap-code:deepseek', 'cheap-code:glm', 'gemini-cli', 'openrouter-free']);
 export function writeCodexFallbackOrder({ claudeDir, zaiAvailable, writeImpl = null }) {
+  const localFile = path.join(claudeDir, 'codex-fallback-order.local.json');
+  if (fs.existsSync(localFile)) {
+    let order = [];
+    try {
+      const parsed = JSON.parse(fs.readFileSync(localFile, 'utf8'));
+      order = Array.isArray(parsed) ? parsed : [];
+    } catch { order = []; }
+    return { file: localFile, order, changed: false, preserved: true, zaiAvailable: Boolean(zaiAvailable) };
+  }
   const file = path.join(claudeDir, 'codex-fallback-order.json');
-  const order = zaiAvailable ? ['qwen', 'cheap-code:glm', 'gemini-cli'] : ['qwen', 'cheap-code:deepseek', 'gemini-cli'];
+  const order = [...DEFAULT_CODEX_FALLBACK_ORDER];
   const content = `${JSON.stringify(order, null, 2)}\n`;
   let previous = null;
   try { previous = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}

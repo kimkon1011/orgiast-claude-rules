@@ -13,7 +13,7 @@ import { redactSecrets } from './webhook-health.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
-import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
+import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, recordNaturalLanguageAnswers, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
 import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
 const exec = promisify(execFile);
 const directory = home => path.join(home, '.claude/kim-inbox');
@@ -579,7 +579,12 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       const kim = isKimSeat(home);
       if (!interactiveInboxSession(input, { home })) return 0;
       const sessionId = String(input.session_id ?? '');
-      if (kim && event === 'UserPromptSubmit') recordPromptAnswers(home, sessionId, String(input.prompt || ''), { listItems, answerItem });
+      let nlHints = '';
+      if (kim && event === 'UserPromptSubmit') {
+        recordPromptAnswers(home, sessionId, String(input.prompt || ''), { listItems, answerItem });
+        const nlResult = recordNaturalLanguageAnswers(home, sessionId, String(input.prompt || ''), { listItems, answerItem });
+        if (nlResult.hints.length) nlHints = nlResult.hints.join('\n');
+      }
       await drainSpool(home);
       if (kim) await ingestFleetMail(home);
       await autoCloseByGmail(home);
@@ -587,7 +592,11 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       const counts = new Map(items.map(i => [i.id, i.shownCount]));
       const context = selectContext(items, { sessionId: String(input.session_id ?? ''), sheetUrl: deadlineSheetUrl(home), home, event });
       if (kim) recordInjection(home, sessionId, items.filter(i => i.shownCount !== counts.get(i.id) && (i.kind === 'ask' || isHighInfo(i))), { event });
-      if (context) stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }));
+      const contextParts = [];
+      if (context) contextParts.push(context);
+      if (nlHints) contextParts.push(nlHints);
+      const mergedContext = contextParts.join('\n\n');
+      if (mergedContext) stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: mergedContext } }));
       for (const item of items.filter(i => i.shownCount !== counts.get(i.id))) update(home, item.id, current => {
         current.shownSessions = [...new Set([...current.shownSessions, ...item.shownSessions])]; current.shownCount++; current.lastShownAt = item.lastShownAt;
         if (item.dailyShown) current.dailyShown = { ...(current.dailyShown || {}), ...item.dailyShown };

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { main, extractBatch, candidateRow, evidencedDue, runDetect, askProvider } from './deadline-detect.mjs';
+import { seatCheck } from './lib/deadline-seat.mjs';
 import { collectGmail, collectDrive, readDriveText, collectLine, collectDiscord, wantsBody, trimBytes } from './lib/deadline-sources.mjs';
 import { DEFAULT_CONFIG, saveJson, dataPath } from './deadline-ledger.mjs';
 const document = { source: 'Gmail', sourceRef: 'mail:test', date: '2026-11-03T23:00:00Z', text: '明日までに回答してください。', mailbox: 'kim@orgiast.jp', threadId: 'thread' };
@@ -22,9 +23,12 @@ test('fixtureは6件を分類し、実ネットワークと書込なしで再現
 
 test('Gemini失敗はOpenRouterのみ、JSON不正もfallback', async () => {
   const calls = [];
-  const items = await extractBatch([document], { ask: async provider => { calls.push(provider); return provider === 'gemini' ? 'invalid' : { items: [item] }; } });
+  const { items, skipped } = await extractBatch([document], { ask: async provider => { calls.push(provider); return provider === 'gemini' ? 'invalid' : { items: [item] }; } });
   assert.equal(items.length, 1); assert.deepEqual(calls, ['gemini','openrouter']);
-  await assert.rejects(extractBatch([document], { ask: async () => ({ items: [{ ...item, sourceRef: 'invented' }] }) }), /入力にありません/);
+  // invented sourceRef is skipped, not thrown
+  const result2 = await extractBatch([document], { ask: async () => ({ items: [{ ...item, sourceRef: 'invented' }] }) });
+  assert.equal(result2.items.length, 0);
+  assert.equal(result2.skipped.length, 1);
 });
 
 test('プロバイダの既定fallbackを無効化し、OpenRouterは非Claudeモデルを固定', async t => {
@@ -41,8 +45,8 @@ test('相対日付はJST送信日基準、引用や根拠のない日付を台�
   assert.equal(evidencedDue('1週間以内に提出', document.date, '2026-11-11'), '2026-11-11');
   const invented = candidateRow({ ...item, due: '2026-12-31' }, document, now);
   assert.equal(invented.status, '候補'); assert.equal(invented.due, null);
-  assert.throws(() => candidateRow({ ...item, quote: '架空の日付' }, document, now), /原文/);
-  assert.equal(candidateRow({ ...item, confidence: 0.2 }, document, now), null);
+  assert.equal(candidateRow({ ...item, quote: '架空の日付' }, document, now).row, null);
+  assert.equal(candidateRow({ ...item, confidence: 0.2 }, document, now).row, null);
   assert.equal(candidateRow({ ...item, kind: '訴訟・法務', confidence: 0.2, due: null }, document, now).status, '候補');
 });
 
@@ -127,13 +131,39 @@ test('不存在のfixtureで本番ソースへfallbackしない', async t => {
 test('鍵なし席はseat checkでスキップされる', async t => {
   const home=homeFor(t), output=[], heartbeats=[];
   fs.writeFileSync(path.join(home,'.claude.json'), JSON.stringify({oauthAccount:{emailAddress:'seisaku-team@orgiast.jp'}}));
-  const code = await main(['--now','2026-11-04'], { home, stdout: x => output.push(x), skipSeatCheck: false, search: () => assert.fail('no network'), heartbeat: async (info) => heartbeats.push(info), notify: () => assert.fail('no notify') });
+  // Inject a seatCheck that uses a non-existent key path so it never hits the real DWD key.
+  const code = await main(['--now','2026-11-04'], { home, stdout: x => output.push(x), skipSeatCheck: false, search: () => assert.fail('no network'), heartbeat: async (info) => heartbeats.push(info), notify: () => assert.fail('no notify'), seatCheck: (h) => seatCheck(h, { keyPath: path.join(home, 'nonexistent-key.json') }) });
   assert.equal(code, 0);
   const result = JSON.parse(output[0]);
   assert.equal(result.skip, true);
   assert.match(result.reason, /DWD key/);
   assert.equal(heartbeats.length, 1);
   assert.match(heartbeats[0].summary, /スキップ/);
+});
+
+test('引用不一致1件混ざってもdryRun:falseでnextが保存される', async t => {
+  const home = homeFor(t), state = {}, rows = [], candidates = [];
+  const ledger = { read: async tab => [...(tab === '候補' ? candidates : rows)], append: async (newRows, tab) => (tab === '候補' ? candidates : rows).push(...newRows) };
+  const goodDoc = { source: 'Gmail', sourceRef: 'mail:good', date: '2026-11-03T23:00:00Z', text: '明日までに回答してください。', mailbox: 'kim@orgiast.jp', threadId: 't1' };
+  const badDoc = { source: 'Gmail', sourceRef: 'mail:bad', date: '2026-11-03T23:00:00Z', text: '本日中に対応します。', mailbox: 'kim@orgiast.jp', threadId: 't2' };
+  const goodItem = { sourceRef: 'mail:good', title: '回答', due: '2026-11-05', kind: '回答・返信', action: '返信', assignee: 'kim', confidence: 0.9, quote: '明日までに回答してください。' };
+  const badItem = { sourceRef: 'mail:bad', title: '架空の期限', due: '2026-11-05', kind: '回答・返信', action: '対応', assignee: 'kim', confidence: 0.9, quote: '原文にない引用' };
+  const sources = [{ key: 'gmail', load: async () => ({ documents: [goodDoc, badDoc], next: { watermark: '2026-11-04' } }) }];
+  const params = { home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, state, sources, now, dryRun: false, ask: async () => ({ items: [goodItem, badItem], skipped: [] }), notify: async () => {} };
+  const result = await runDetect(params);
+  // Good item was added
+  assert.equal(result.added, 1);
+  // Bad item was skipped (quote mismatch), not in errors
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.skipped.length, 1);
+  assert.match(result.skipped[0].reason, /引用が原文にありません/);
+  assert.equal(result.skipped[0].sourceRef, 'mail:bad');
+  // dryRun:false — next cursor was saved in state
+  assert.deepEqual(state.sources.gmail, { watermark: '2026-11-04' });
+  // Good item was appended to rows
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].sourceId, 'mail:good');
+  assert.equal(rows[0].status, '未着手');
 });
 
 test('鍵持ちのkim席はfixtureモードで通常動作（fixtureはseat checkをスキップ）', async t => {

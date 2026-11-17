@@ -167,15 +167,37 @@ test('safeReason returns error code for ProcessImproveError', () => {
   assert.equal(safeReason(new ProcessImproveError('test-error')), 'test-error');
 });
 
-test('safeReason returns unexpected: prefix for generic errors', () => {
-  assert.equal(safeReason(new Error('something broke')), 'unexpected:Error');
-  assert.equal(safeReason(new TypeError('bad')), 'unexpected:TypeError');
+test('safeReason returns unexpected: prefix for generic errors with code and message', () => {
+  assert.equal(safeReason(new Error('something broke')), 'unexpected:Error::something broke');
+  assert.equal(safeReason(new TypeError('bad')), 'unexpected:TypeError::bad');
+});
+
+test('safeReason includes error code when present', () => {
+  const err = new Error('disk full');
+  err.code = 'ENOSPC';
+  assert.equal(safeReason(err), 'unexpected:Error:ENOSPC:disk full');
+});
+
+test('safeReason truncates long message to 80 chars', () => {
+  const longMsg = 'x'.repeat(200);
+  assert.equal(safeReason(new Error(longMsg)), `unexpected:Error::${'x'.repeat(80)}`);
 });
 
 test('safeReason handles null/undefined', () => {
   assert.equal(safeReason({ code: 'ENOENT' }), 'file-not-found');
   assert.equal(safeReason({ code: 'ETIMEDOUT' }), 'timeout');
-  assert.equal(safeReason({}), 'unexpected:Error');
+  assert.equal(safeReason({}), 'unexpected:Error::');
+});
+
+test('safeReason redacts secret-looking strings from error message', () => {
+  const err = new Error('Connection failed: password=hunter2&api_key=sk-live_abc123');
+  const result = safeReason(err);
+  assert.ok(!result.includes('hunter2'), 'password value should be redacted');
+  assert.ok(!result.includes('abc123'), 'api key should be redacted');
+  assert.ok(result.includes('***REDACTED***'), 'redacted marker should appear');
+  const err2 = new Error('auth token: ghp_abcdefghijklmnopqrstuvwxyz123456');
+  const result2 = safeReason(err2);
+  assert.ok(result2.includes('***REDACTED***'), 'GitHub PAT should be redacted');
 });
 
 // ===== normalize + Jaccard edge cases =====
@@ -962,7 +984,7 @@ test('TLDV_PI_LOG_DIR redirects log output to custom dir', async () => {
   try {
     const { appendLog } = await import('./tldv-process-improve.mjs');
     appendLog({ event: 'test-log-dir-override', message: 'check' });
-    const logFile = path.join(testDir, 'tldv-process-improve.log');
+    const logFile = path.join(testDir, 'tldv-process-improve.jsonl');
     assert.ok(fs.existsSync(logFile));
     const content = fs.readFileSync(logFile, 'utf8');
     assert.ok(content.includes('test-log-dir-override'));

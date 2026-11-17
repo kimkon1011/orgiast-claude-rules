@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { readEnvValue } from './env-kv.mjs';
+import { redactSecrets } from './redact-secrets.mjs';
 
 // -- 定数 --
 const HOME = process.env.ORGIAST_HOME || os.homedir();
@@ -18,7 +19,8 @@ function getLogDir() {
   return process.env.TLDV_PI_LOG_DIR || path.join(CLAUDE_DIR, 'logs');
 }
 function getLogPath() {
-  return path.join(getLogDir(), 'tldv-process-improve.log');
+  // Write to .jsonl to avoid contention with the scheduled task's stdout redirect.
+  return path.join(getLogDir(), 'tldv-process-improve.jsonl');
 }
 const STATE_PATH = path.join(STATE_DIR, 'tldv-process-improve.json');
 const CONFIG_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'config', 'tldv-process-improve.json');
@@ -50,7 +52,8 @@ export function safeReason(error) {
   if (error instanceof ProcessImproveError) return error.code;
   if (error?.code === 'ENOENT') return 'file-not-found';
   if (error?.code === 'ETIMEDOUT') return 'timeout';
-  return `unexpected:${error?.name || 'Error'}`;
+  const msg = redactSecrets(String(error?.message || '')).slice(0, 80);
+  return `unexpected:${error?.name || 'Error'}:${error?.code || ''}:${msg}`;
 }
 
 // -- 子プロセス実行ヘルパー（execFile を Promise + 決まった exitCode/out/err に統一） --
@@ -100,9 +103,14 @@ export function writeState(statePath, state) {
 export function appendLog(entry) {
   const dir = getLogDir();
   const logPath = getLogPath();
-  fs.mkdirSync(dir, { recursive: true });
-  const line = JSON.stringify({ t: new Date().toISOString(), ...entry }) + '\n';
-  fs.appendFileSync(logPath, line);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const line = JSON.stringify({ t: new Date().toISOString(), ...entry }) + '\n';
+    fs.appendFileSync(logPath, line);
+  } catch (error) {
+    // Log write must never crash the main process.
+    try { process.stderr.write(`appendLog failed: ${error?.message || error}\n`); } catch {}
+  }
 }
 
 // -- 引数解析 --

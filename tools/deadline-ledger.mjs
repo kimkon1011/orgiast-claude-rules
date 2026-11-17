@@ -78,7 +78,8 @@ export function googleClient({ getToken = getDriveToken, fetchImpl = gwsFetch } 
       tokens.set(tokenKey, token);
       tokenRoutes.set(requestedKey, tokenKey);
     }
-    const response = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${token.value}`, 'Content-Type': rawBody ? contentType : 'application/json' }, body: rawBody || (body ? JSON.stringify(body) : undefined), signal: AbortSignal.timeout(30000) });
+    const timeout = scope === 'https://www.googleapis.com/auth/drive' ? 90000 : 30000;
+    const response = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${token.value}`, 'Content-Type': rawBody ? contentType : 'application/json' }, body: rawBody || (body ? JSON.stringify(body) : undefined), signal: AbortSignal.timeout(timeout) });
     if (!response.ok) { const e = new Error(`Google ${method} HTTP ${response.status}`); e.status = response.status; throw e; }
     if (response.status === 204) return null;
     return buffer ? Buffer.from(await response.arrayBuffer()) : text ? response.text() : response.json();

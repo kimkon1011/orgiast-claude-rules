@@ -1,0 +1,89 @@
+{
+  "name": "展示会ブース記事一括生成パイプライン",
+  "description": "見本記事から10工程で展示会ブース記事を生成するデフォルトワークフロー",
+  "version": "1.0.0",
+  "steps": [
+    {
+      "id": "needs-analysis",
+      "label": "ニーズ分析・ターゲット特定",
+      "description": "見本記事を分析し、検索意図・ターゲットペルソナ・カバーすべき論点を特定する",
+      "llm": "gemini",
+      "promptTemplate": "あなたは展示会マーケティングアナリストです。以下の見本記事を分析し、{targetAudience}向けの新しい記事を企画するための分析をしてください。\n\n【見本記事】\n{sample}\n\n【分析項目】\n1. この記事の狙っている検索意図は何か\n2. ターゲット読者のペルソナ（職種・課題・知識レベル）\n3. カバーすべき論点リスト（5〜10個）\n4. 差別化できる視点\n5. 競合記事との違い\n\n【出力形式】\nJSON形式で出力してください。",
+      "output": "needs-analysis.json"
+    },
+    {
+      "id": "headline-composition",
+      "label": "見出し構成（SEO最適化）",
+      "description": "ニーズ分析に基づき、SEOキーワードを配置した階層見出しを生成する",
+      "dependsOn": ["needs-analysis"],
+      "llm": "gemini",
+      "promptTemplate": "あなたはSEOコンテンツストラテジストです。以下のターゲット分析に基づき、新しい記事の見出し構成を作成してください。\n\n【ターゲット分析】\n{needs-analysis}\n\n【制約】\n- H1：1つ（記事タイトル、30文字以内、キーワードを含む）\n- H2：3〜5つ\n- H3：各H2につき2〜4つ\n- 各見出しに自然な形でキーワードを含める\n- 見本記事（{sampleTitle}）と同じトーンを維持\n\n【出力形式】\nJSON形式（h1, h2s[], h3s[{h2, h3s[]}]）で出力してください。",
+      "output": "headlines.json"
+    },
+    {
+      "id": "thumbnail-plan",
+      "label": "サムネイル・アイキャッチ画像案",
+      "description": "記事内容に即したサムネイル画像のコンセプトを3案生成する",
+      "dependsOn": ["needs-analysis", "headline-composition"],
+      "llm": "gemini",
+      "promptTemplate": "あなたはWebデザイナーです。以下の記事構成に基づき、アイキャッチ画像と挿入画像のプランを立案してください。\n\n【記事タイトル】\n{headlines.h1}\n\n【見出し構成】\n{headlines}\n\n【ターゲット】\n{needs-analysis.targetAudience}\n\n【出力形式】\n各案について以下をJSONで出力：\n- コンセプト\n- 構図の説明\n- カラーパレット\n- 使用する要素（写真・イラスト・グラフ等）\n- 参考イメージのキーワード（画像検索用）",
+      "output": "thumbnail-plan.json"
+    },
+    {
+      "id": "social-proof",
+      "label": "口コミ・ソーシャルプルーフ収集",
+      "description": "記事テーマに関連するユーザーの声・口コミ・Xポストを検索・収集する",
+      "dependsOn": ["needs-analysis"],
+      "type": "collect",
+      "collectMethod": "gemini",
+      "llm": "gemini",
+      "promptTemplate": "あなたはソーシャルリスニングアナリストです。以下のテーマに関連する、展示会出展企業の口コミ・体験談・Xポストを収集してください。\n\n【テーマ】\n{needs-analysis.topic}\n\n【ターゲットペルソナ】\n{needs-analysis.targetAudience}\n\n【収集すべき情報】\n- 実際の出展者の声（良い点・課題）\n- 展示会ブースに関するXポストの傾向\n- よくある誤解や懸念\n- 期待される効果に関する証言\n\n注意：捏造しないでください。一般に知られている事例や公開情報に基づき、「一般的な傾向として」という形で事実に基づいて記述してください。実在しない個人の引用を作らないでください。",
+      "output": "social-proof.json"
+    },
+    {
+      "id": "article-draft",
+      "label": "記事本文執筆",
+      "description": "全素材を統合し、見本のトーンを継承した記事本文を生成する",
+      "dependsOn": ["needs-analysis", "headline-composition", "thumbnail-plan", "social-proof"],
+      "llm": "gemini",
+      "promptTemplate": "あなたは{roleName}です。以下の全ての素材を使って、完成度の高い記事本文を執筆してください。\n\n【役割】\n{role}\n\n【見出し構成】\n{headlines}\n\n【ターゲット分析】\n{needs-analysis}\n\n【ソーシャルプルーフ】\n{social-proof}\n\n【制約】\n- 見本記事（{sampleTitle}）のトーンと品質を維持\n- 各見出しの内容を過不足なくカバー\n- 具体例・数値を交える\n- 箇条書きと段落をバランスよく\n- 長さ：2000〜4000文字\n- 文体：「ですます調」統一\n\n【出力形式】\nMarkdown形式（見出し・本文・箇条書きを含む完全な記事）",
+      "output": "article-draft.md"
+    },
+    {
+      "id": "wordpress-format",
+      "label": "WordPress整形・文字装飾",
+      "description": "Markdown記事をWordPress（Gutenberg）互換HTMLに変換する",
+      "dependsOn": ["article-draft"],
+      "llm": "gemini",
+      "promptTemplate": "あなたはWordPressエキスパートです。以下のMarkdown記事をGutenbergエディタ互換のHTMLに変換してください。\n\n【元記事】\n{article-draft}\n\n【変換ルール】\n- H2 → <h2>（見出しブロック）\n- H3 → <h3>\n- 段落 → <p>（段落ブロック）\n- 箇条書き → <ul>/<ol>（リストブロック）\n- 強調 → <strong>/<em>\n- 引用 → <blockquote>（引用ブロック）\n- テーブル → <figure class=\"wp-block-table\"><table>\n- 画像プレースホルダ → <figure class=\"wp-block-image\"><img src=\"{{IMAGE_URL}}\" alt=\"...\"/>\n- 外部リンク → target=\"_blank\" rel=\"noopener\"\n- 社内リンク候補はaタグにdata-internal=\"suggest\"属性\n\n【出力形式】\n完全なHTML（body内部のみ）",
+      "output": "wordpress-body.html"
+    },
+    {
+      "id": "link-settings",
+      "label": "内部・外部リンク設定",
+      "description": "社内の関連記事・サービスページへのリンク候補を自動選定する",
+      "dependsOn": ["article-draft"],
+      "llm": "gemini",
+      "promptTemplate": "あなたは内部リンクストラテジストです。以下の記事コンテンツに最適な内部リンクと外部リンクを提案してください。\n\n【記事】\n{article-draft}\n\n【社内サイトのページ一覧】\n{internalPages}\n\n【各リンクに含める情報】\n- アンカーテキスト\n- リンク先URL（既存ページへの相対パス、なければ提案）\n- リンクを設置すべき位置（どの見出しの近くか）\n- 関連性の説明\n\n【出力形式】\nJSON配列",
+      "output": "link-suggestions.json"
+    },
+    {
+      "id": "meta-generation",
+      "label": "メタ情報・構造化データ生成",
+      "description": "SEOメタデータ（title, description, OGP, JSON-LD）を生成する",
+      "dependsOn": ["article-draft", "headline-composition"],
+      "llm": "gemini",
+      "promptTemplate": "あなたはSEOスペシャリストです。以下の記事からメタデータと構造化データを生成してください。\n\n【記事タイトル】\n{headlines.h1}\n\n【本文冒頭200文字】\n{articleDraftExcerpt}\n\n【生成項目】\n1. titleタグ（30文字以内）\n2. meta description（120文字以内、キーワードを含む）\n3. OGPタグ（og:title, og:description, og:type=article）\n4. JSON-LD（Article スキーマ）\n5.  canonical URL候補\n\n【出力形式】\nJSON",
+      "output": "meta.json"
+    },
+    {
+      "id": "quality-check",
+      "label": "品質チェック・校正",
+      "description": "全成果物の一貫性・品質を自動検証する",
+      "dependsOn": ["article-draft", "meta-generation", "wordpress-format"],
+      "llm": "gemini",
+      "promptTemplate": "あなたは品質管理責任者です。以下の記事と成果物をチェックし、問題点をレポートしてください。\n\n【原稿】\n{article-draft}\n\n【WordPress HTML】\n{wordpress-format}\n\n【メタデータ】\n{meta-generation}\n\n【チェック項目】\n1. タイトルと本文の一貫性\n2. 見出し構成の論理的な流れ\n3. 誤字脱字\n4. 事実誤認・不正確な記述\n5. 重複・冗長な表現\n6. メタデータと本文の整合性\n7. リンク切れ候補\n8. 長さの適正\n\n【出力形式】\nJSON（passed: boolean, issues: [{severity, location, description, suggestion}]）",
+      "output": "quality-report.json"
+    }
+  ]
+}

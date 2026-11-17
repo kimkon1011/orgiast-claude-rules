@@ -103,7 +103,7 @@ function parseTicketText(text) {
   const lines = text.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
   const tickets = [];
   for (let i = 0; i < lines.length; i++) {
-    const match = lines[i].match(/(?:申込|参加者|枚数|売上枚数)?\s*(\d+)\s*(?:枚|人|件)(?:\s*[/／]\s*\d+)?/);
+    const match = lines[i].match(/^(?:(?:申込(?:数)?|参加者(?:数)?|枚数|売上枚数)[:：\s]*)?(\d+)\s*(?:枚|人|件)(?:\s*[/／]\s*\d+)?$/);
     if (!match) continue;
     const name = lines.slice(Math.max(0, i - 2), i).findLast(x => !/^\d|[円%]$/.test(x)) || '合計';
     if (!tickets.some(t => t.name === name)) tickets.push({ name, count: Number(match[1]) });
@@ -120,13 +120,14 @@ export async function collectPeatix(gmailToken) {
     const code = await waitForCode(gmailToken, requested);
     for (let i = 0; i < 6; i++) await page.locator(`#otp-field${i}`).fill(code[i]);
     await page.locator('#verify-button').click(); await page.waitForTimeout(4000);
-    const candidates = [`https://peatix.com/event/${EVENT_ID}/attendees`, `https://peatix.com/event/${EVENT_ID}/manage`, `https://peatix.com/event/${EVENT_ID}/dashboard`];
+    const candidates = [`https://peatix.com/event/${EVENT_ID}/manage/`, `https://peatix.com/event/${EVENT_ID}/manage/attendees/`, `https://peatix.com/event/${EVENT_ID}/manage/sales/`];
     const seen = new Set(); let best = { tickets: [], text: '', url: '' };
     for (const url of candidates) {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 }); await page.waitForTimeout(2500);
       const links = await page.locator('a').evaluateAll(as => as.map(a => ({ href:a.href, text:a.innerText })).filter(x => /attendee|ticket|order|sales|参加者|申込|チケット/i.test(`${x.href} ${x.text}`)));
       for (const current of [page.url(), ...links.map(x => x.href)]) {
         if (seen.has(current)) continue; seen.add(current); if (current !== page.url()) { await page.goto(current, { waitUntil:'domcontentloaded', timeout:60000 }); await page.waitForTimeout(2000); }
+        if (!page.url().includes(`/event/${EVENT_ID}/manage`)) continue;
         const text = await page.locator('body').innerText(); const tickets = parseTicketText(text);
         if (tickets.length > best.tickets.length) best = { tickets, text, url: page.url() };
       }
@@ -194,12 +195,17 @@ export async function main() {
   const [gmailToken, driveToken, sheetsToken] = await Promise.all([token('https://www.googleapis.com/auth/gmail.readonly'), token('https://www.googleapis.com/auth/drive'), token('https://www.googleapis.com/auth/spreadsheets')]);
   const files = await findFiles(driveToken);
   const masters = {};
-  for (const name of ['課題提供企業 配信先マスタ','参加者 案内先マスタ']) {
-    const file = files.find(x => x.name === name); if (!file) throw new Error(`${name} がフォルダにありません`);
-    masters[name] = aggregateMaster(await sheetValues(sheetsToken, file.id));
+  const masterSpecs = [
+    { key:'company', title:'課題提供企業 配信先マスター', aliases:[/1212食AIピッチ_課題提供企業_打診先\d+社$/] },
+    { key:'participant', title:'参加者 案内先マスター', aliases:[/1212食AIピッチ_学生団体打診先_\d+団体$/] },
+  ];
+  for (const spec of masterSpecs) {
+    const file = files.find(x => x.name === spec.title) || files.find(x => x.mimeType === 'application/vnd.google-apps.spreadsheet' && spec.aliases.some(re => re.test(x.name)));
+    if (!file) throw new Error(`${spec.title} がフォルダにありません`);
+    masters[spec.key] = { sourceName:file.name, ...aggregateMaster(await sheetValues(sheetsToken, file.id)) };
   }
   const [peatix, gmail] = await Promise.all([collectPeatix(gmailToken), collectGmail(gmailToken)]);
-  const company = masters['課題提供企業 配信先マスタ'], participant = masters['参加者 案内先マスタ'];
+  const company = masters.company, participant = masters.participant;
   const metrics = { registrations:peatix.total, positive:Math.max(company.positive, gmail.positive), confirmed:company.confirmed, materials:company.materials, speakers:participant.speakers };
   const judgment = evaluateKpi(metrics, now.date); const sheet = await ensureKpiSheet(driveToken, sheetsToken);
   const row = [now.timestamp, peatix.total, peatix.tickets.map(x=>`${x.name}:${x.count}`).join(' / '), gmail.total, gmail.positive, gmail.declined, company.sent, company.replies, metrics.positive, participant.sent, participant.replies, judgment.status, judgment.missing.join(' / '), `Peatix:${peatix.sourceUrl}`];

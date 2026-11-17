@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { realLaneStats, applyRealLaneHealth, billingFailure, billingWithQuotaHint } from './lib/lane-real-health.mjs';
+import { realLaneStats, applyRealLaneHealth, billingFailure, billingWithQuotaHint, probeViaChain } from './lib/lane-real-health.mjs';
 import { laneDoctorQuick, laneDoctorProbe } from './lane-doctor.mjs';
 const now = Date.parse('2026-10-29T12:00:00Z');
 function fixture(t, rows) {
@@ -408,4 +408,21 @@ test('cached chain evidence cannot retain billing, quota, auth or alive classifi
     assert.equal(health.lanes.codex.alive, false);
     assert.equal(health.lanes.codex.viaChain, true);
   }
+});
+test('probeViaChain: demote 通知行は連鎖と誤認しない', t => {
+  // [routing] gemini はdemote中のため連鎖の末尾へ回します は「別レーンへ切り替えた」証拠ではない
+  assert.equal(probeViaChain('[routing] gemini はdemote中のため連鎖の末尾へ回します\nPONG\n[openrouter:openai/gpt-oss-120b] in=73 out=5tok', 'openrouter'), false);
+  assert.equal(probeViaChain('[routing] gemini はdemote中のため連鎖の末尾へ回します\nPONG\n[openrouter:deepseek/deepseek-v4-flash] in=10 out=3tok', 'deepseek'), false);
+});
+test('probeViaChain: OpenRouter 経由の正規経路は連鎖と誤認しない', t => {
+  assert.equal(probeViaChain('PONG\n[openrouter:mistralai/mistral-medium-3.1] in=21 out=3tok', 'mistral'), false);
+});
+test('probeViaChain: 他のレーンへの OpenRouter 経由は連鎖と判定する', t => {
+  assert.equal(probeViaChain('PONG\n[openrouter:openai/gpt-oss-120b] in=73 out=5tok', 'deepseek'), true);
+});
+test('probeViaChain: 既存の cheap-first 判定を維持する', t => {
+  assert.equal(probeViaChain('[codex-do] cheap-first: Gemini HTTP 402', 'codex'), true);
+});
+test('probeViaChain: 既存の routing fallback 判定を維持する', t => {
+  assert.equal(probeViaChain('[routing] groq fallback to gemini', 'groq'), true);
 });

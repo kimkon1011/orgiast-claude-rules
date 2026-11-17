@@ -12,8 +12,24 @@ export function laneErrorText(text, lane) {
   ).join('\n');
 }
 export function probeViaChain(text, lane) {
-  return /cheap-first:|fallback backend=|ack backend=|\[routing\].*(?:fallback|switch|chain)/i.test(String(text))
-    || LANE_NAMES.some(other => other !== lane && new RegExp(`\\b${other}\\b`, 'i').test(String(text)));
+  // demote 情報行は「別レーンへ切り替えた」証拠ではないため除外する
+  const cleaned = String(text).replace(/\[routing\]\s*\S+\s*はdemote中のため連鎖の末尾へ回します\s*\n?/g, '');
+  // [openrouter:<model>] タグの model 部分に lane 名が含まれる場合、その lane の正規経路として openrouter 一致を無視する
+  // 例: [openrouter:deepseek/deepseek-v4-flash] が deepseek の出力に出た場合は viaChain=false
+  const modelMatch = cleaned.match(/\[openrouter:([^\]]+)\]/);
+  if (modelMatch) {
+    const model = modelMatch[1].toLowerCase();
+    const lcLane = lane.toLowerCase();
+    // lane 名が model 内に含まれる場合（例: deepseek → deepseek-v4-flash, mistral → mistralai/mistral-medium）、
+    // その lane の正規経路として openrouter 一致を無視する
+    if (LANE_NAMES.some(other => other !== lane && new RegExp(`\\b${other}\\b`, 'i').test(cleaned.replace(/\[openrouter:[^\]]+\]/, '')))) {
+      return true;
+    }
+    // lane 名が model に含まれていれば、この openrouter タグは正規経路
+    if (model.includes(lcLane)) return false;
+  }
+  return /cheap-first:|fallback backend=|ack backend=|\[routing\].*(?:fallback|switch|chain)/i.test(cleaned)
+    || LANE_NAMES.some(other => other !== lane && new RegExp(`\\b${other}\\b`, 'i').test(cleaned));
 }
 
 const AUTH_DOMINANT_RATIO = 0.9;

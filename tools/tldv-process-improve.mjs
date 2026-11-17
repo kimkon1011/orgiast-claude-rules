@@ -42,8 +42,8 @@ const DUP_LOOKBACK = 800;
 const MAX_LLM_CALLS = 60;
 // チャンクサイズ
 const CHUNK_SIZE = 12000;
-// 時間予算（ms）。開始から50分後に強制終了を避け exit 0 で正常終了する。
-export const TIME_BUDGET_MS = 50 * 60 * 1000;
+// 時間予算（ms）。タスク上限1時間に対し、LLM解析1件が最大約15分かかる実測（2026-11-17）を見込んで30分で新規会議の処理を打ち切る。
+export const TIME_BUDGET_MS = 30 * 60 * 1000;
 // 時間予算のマージン（ms）。この残時間を切ったら knowhow-add など遅い後処理をスキップする。
 export const TIME_MARGIN_MS = 5 * 60 * 1000;
 
@@ -1211,11 +1211,12 @@ export async function runImprove(options = {}, dependencies = {}) {
 
     // -- 各会議を LLM 解析 --
     const excludePatterns = config.excludeTitlePatterns || [];
-    for (const meeting of newMeetings.slice(0, opts.limit || Infinity)) {
+    const targetMeetings = newMeetings.slice(0, opts.limit || Infinity);
+    for (const [index, meeting] of targetMeetings.entries()) {
       if (state && state.llmCallsToday >= MAX_LLM_CALLS) break;
       // 時間予算を超えたら残りの会議をスキップして正常終了へ移行
       if (!hasTimeBudget(deadline)) {
-        summary.timeBudgetSkipped = newMeetings.length - summary.fetched + summary.fetched - summary.skippedExcluded;
+        summary.timeBudgetSkipped = targetMeetings.length - index;
         appendLog({ event: 'time-budget-reached', phase: 'llm-processing', meetingId: meeting.id, elapsed: Date.now() - startTime });
         break;
       }

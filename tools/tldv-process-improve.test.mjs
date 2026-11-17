@@ -1535,6 +1535,7 @@ test('isTimeTight returns false when well within budget', () => {
 
 test('hasTimeBudget constants are reasonable', () => {
   assert.ok(TIME_BUDGET_MS > 0);
+  assert.ok(TIME_BUDGET_MS <= 30 * 60 * 1000);
   assert.ok(TIME_MARGIN_MS > 0);
   assert.ok(TIME_MARGIN_MS < TIME_BUDGET_MS);
 });

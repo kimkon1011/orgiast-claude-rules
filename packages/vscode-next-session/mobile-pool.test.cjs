@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createPool, createOwnershipLease, readConfig, readSnapshot, isWorktreeFolder, decideRefresh, decideWorktreeCleanup, REFRESH_MIN_AGE_MS, AUTO_TITLE_RE, isWaitingTab, decideTrimExcess } = require('./mobile-pool');
+const { createPool, createOwnershipLease, readConfig, readSnapshot, isWorktreeFolder, decideRefresh, decideWorktreeCleanup, REFRESH_MIN_AGE_MS, AUTO_TITLE_RE, isWaitingTab, decideTrimExcess, EMPTY_SPARE_KEEP, selectExcessEmptySpares } = require('./mobile-pool');
 
 // git worktree を模した一時フォルダ（.git ファイルが gitdir: .../worktrees/... を指す）
 function makeWorktree(t) {
@@ -335,4 +335,33 @@ test('decideTrimExcess: false precedes older unknown tabs and retains target', (
   assert.deepEqual(decideTrimExcess({ tabs: unknown, target: 3, now }), []);
   assert.deepEqual(decideTrimExcess({ tabs: unknown, target: 4, now }), []);
   assert.equal(decideTrimExcess({ tabs: unknown, target: 0, now, maxClose: 1 }).length, 1);
+});
+
+test('selectExcessEmptySpares: 空の予備が 3 を超えたら古い順の余分だけ。空でない・返事待ち・アクティブは閉じない', () => {
+  assert.equal(EMPTY_SPARE_KEEP, 3);
+  const sessions = [
+    { id: 'old', appearedAt: 10, empty: true },
+    { id: 'mid', appearedAt: 20, empty: true },
+    { id: 'active', appearedAt: 5, empty: true, isActive: true },
+    { id: 'new', appearedAt: 30, empty: true },
+    { id: 'newest', appearedAt: 40, empty: true },
+    { id: 'busy', appearedAt: 1, empty: false },
+    { id: 'ask', appearedAt: 2, empty: true, awaitingOwner: true },
+    { id: 'unknown', appearedAt: 3 },
+    { appearedAt: 0, empty: true },
+  ];
+  // 空の予備は old/mid/active/new/newest の 5。アクティブは残し、古い非アクティブから 2 本。
+  assert.deepEqual(selectExcessEmptySpares(sessions).map((session) => session.id), ['old', 'mid']);
+  const kept = [
+    { id: 'a', appearedAt: 1, empty: true },
+    { id: 'b', appearedAt: 2, empty: true },
+    { id: 'c', appearedAt: 3, empty: true },
+    { id: 'busy', appearedAt: 0, empty: false },
+    { id: 'ask', appearedAt: 0, empty: true, awaitingOwner: true },
+  ];
+  assert.deepEqual(selectExcessEmptySpares(kept), []);
+  assert.deepEqual(selectExcessEmptySpares([
+    { id: 'only-busy', appearedAt: 0, empty: false },
+    { id: 'only-ask', appearedAt: 1, empty: true, awaitingOwner: true },
+  ]), []);
 });

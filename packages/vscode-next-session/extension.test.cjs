@@ -213,7 +213,7 @@ test('refresh closes only an owned unchanged tab, one even with concurrent reque
   const existing = { input: new Input(), label: 'Claude Code' };
   tabs.push(existing);
   await handler.handleUri({ path: '/mobile', query: 'count=4' });
-  assert.equal(tabs.length, 4);
+  assert.equal(tabs.length, 3);
   const owned = tabs.slice(1);
   // First refresh records appearance times, too young to close.
   await handler.handleUri({ path: '/mobile', query: 'count=4&refresh=1' });
@@ -252,6 +252,77 @@ test('transcript: sessionId あり・全 project に jsonl 無しなら false', 
   assert.equal(check(home, 'used-session'), false);
   fs.appendFileSync(file, '{"type":"user","message":"hello"}\n');
   assert.equal(check(home, 'used-session'), true);
+});
+
+test('補充の前に空の予備が 3 を超えていれば、古い余分だけを close-session --no-launch で閉じ、空でないセッションとオーナー待ちは閉じない', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-spare-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.join(home, 'repo');
+  fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'tools', 'close-session.mjs'), '// test stub\n');
+  const projects = path.join(home, '.claude', 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  for (const id of ['a', 'b', 'c', 'd', 'f']) fs.writeFileSync(path.join(projects, `${id}.jsonl`), '{"type":"assistant"}\n');
+  fs.writeFileSync(path.join(projects, 'e.jsonl'), '{"type":"user","message":"hello"}\n');
+  fs.writeFileSync(path.join(home, '.claude', 'auto-progress-ledger.jsonl'), '{"sessionId":"f","status":"waiting_user"}\n{"sessionId":"a","status":"open"}\n');
+  const ids = ['a', 'b', 'c', 'd', 'e', 'f'];
+  const calls = [];
+  let opened = 0;
+  class TabInputWebview { viewType = 'claudeVSCodePanel'; }
+  const tabs = ids.map(() => ({ input: new TabInputWebview(), label: 'Claude Code', isActive: false }));
+  const execFile = (_cmd, args, _opts, cb) => {
+    calls.push(args);
+    if (String(args[0]).includes('read-tab-state')) {
+      cb(null, JSON.stringify({
+        tabs: ids.map((id, index) => ({ group: 0, index, sessionId: id, title: 'Claude Code', isClaude: true })),
+        hiddenSessionIds: [], closedSessionIds: [],
+      }));
+      return;
+    }
+    cb(null, 'closed');
+  };
+  const vscode = {
+    TabInputWebview,
+    Uri: { parse: (value) => ({ value }) },
+    env: { async openExternal() { opened += 1; return true; } },
+    window: {
+      tabGroups: { all: [{ tabs }], onDidChangeTabs() { return { dispose() {} }; }, async close() { return true; } },
+      createOutputChannel() { return { appendLine() {} }; },
+      registerUriHandler(value) { handler = value; return { dispose() {} }; },
+      showErrorMessage(message) { assert.fail(message); },
+    },
+    workspace: { getConfiguration() { return { get(key) { return key === 'mobileTabs' ? 0 : undefined; } }; } },
+    commands: { async getCommands() { return []; }, async executeCommand() {} },
+    extensions: { getExtension() { return null; } },
+  };
+  let handler;
+  const proc = Object.create(process);
+  proc.env = { ...process.env, ORGIAST_HOME: home, ORGIAST_NIGHTLY_REPO: repo };
+  const module = { exports: {} };
+  const context = { subscriptions: [], storageUri: { fsPath: path.join(home, 'ws', 'state.vscdb') } };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'extension.js'), 'utf8'), {
+    module, process: proc, URLSearchParams, console, clearInterval, clearTimeout, setTimeout,
+    setInterval(fn, ms) { return ms === 5000 ? null : setInterval(fn, ms); },
+    __filename: path.join(__dirname, 'extension.js'),
+    __dirname,
+    require(name) {
+      if (name === 'vscode') return vscode;
+      if (name === 'node:child_process') return { execFile };
+      if (name === './mobile-pool') return { ...require('./mobile-pool'), createOwnershipLease: () => ({ acquire: async () => true, release() {} }) };
+      return require(name);
+    },
+  });
+  module.exports.activate(context);
+  await handler.handleUri({ path: '/mobile', query: 'count=9' });
+  const closeCalls = calls.filter((args) => String(args[0]).includes('close-session.mjs'));
+  assert.equal(closeCalls.length, 1);
+  assert.equal([...closeCalls[0]].slice(1).join('\n'), '--session\na\n--no-launch');
+  const readAt = calls.findIndex((args) => String(args[0]).includes('read-tab-state'));
+  const closeAt = calls.findIndex((args) => String(args[0]).includes('close-session'));
+  assert.ok(readAt >= 0 && readAt < closeAt);
+  assert.equal(opened, 0);
+  assert.equal(tabs.length, ids.length);
+  for (const disposable of context.subscriptions) disposable.dispose?.();
 });
 
 test('transcript: directory/file read errors remain undefined', (t) => {

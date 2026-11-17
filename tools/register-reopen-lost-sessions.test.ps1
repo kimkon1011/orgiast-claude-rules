@@ -67,4 +67,35 @@ Assert ($script:stored['OrgiastReopenLostSessionsWatch'].Triggers.Count -eq 1) '
 $r6 = Register-ReopenLostTask -GetTask $get -RegisterTask $register
 Assert (-not $r6.changed -and $script:writes -eq 5) 'legacy repair is idempotent'
 
+# 既存タスクがローカルラッパーを指していれば、再登録で正本パスに戻さない。
+$wrapper = 'C:\local\reopen-lost-sessions-pc.mjs'
+foreach ($name in @('OrgiastReopenLostSessions', 'OrgiastReopenLostSessionsWatch')) {
+    $script:stored[$name].Actions[0].Arguments = $script:stored[$name].Actions[0].Arguments -replace 'reopen-lost-sessions\.mjs', 'reopen-lost-sessions-pc.mjs'
+}
+$writesBefore = $script:writes
+$rWrap = Register-ReopenLostTask -GetTask $get -RegisterTask $register -ScriptConfigFile 'C:\missing\reopen-lost-sessions.json'
+Assert (-not $rWrap.changed -and $script:writes -eq $writesBefore) 'local wrapper survives re-register'
+Assert ($script:stored['OrgiastReopenLostSessions'].Actions[0].Arguments -like "*$wrapper*") 'logon task keeps wrapper'
+Assert ($script:stored['OrgiastReopenLostSessionsWatch'].Actions[0].Arguments -like "*$wrapper*") 'watch task keeps wrapper'
+Assert ($script:stored['OrgiastReopenLostSessionsWatch'].Actions[0].Arguments -like '*--watch*') 'watch flag remains'
+
+# 環境変数の明示パスはラッパー検出より優先し、両方のタスクへ使う。
+$env:ORGIAST_REOPEN_SCRIPT = 'D:\custom\reopen-lost-sessions-box.mjs'
+$rEnv = Register-ReopenLostTask -GetTask $get -RegisterTask $register -ScriptConfigFile 'C:\missing\reopen-lost-sessions.json'
+Assert ($rEnv.changed) 'env override re-registers'
+Assert ($script:stored['OrgiastReopenLostSessions'].Actions[0].Arguments -like '*reopen-lost-sessions-box.mjs*') 'logon uses env script'
+Assert ($script:stored['OrgiastReopenLostSessionsWatch'].Actions[0].Arguments -like '*reopen-lost-sessions-box.mjs*') 'watch uses env script'
+Remove-Item Env:ORGIAST_REOPEN_SCRIPT
+$writesEnv = $script:writes
+$rKeep = Register-ReopenLostTask -GetTask $get -RegisterTask $register -ScriptConfigFile 'C:\missing\reopen-lost-sessions.json'
+Assert (-not $rKeep.changed -and $script:writes -eq $writesEnv) 'wrapper-shaped env path survives after the env is cleared'
+
+# 設定 JSON の script も正本より優先する。
+$cfg = Join-Path $env:TEMP 'reopen-lost-sessions-config.json'
+Set-Content -LiteralPath $cfg -Value '{"script":"E:\\pc\\reopen-lost-sessions-cfg.mjs"}' -Encoding ascii
+$rCfg = Register-ReopenLostTask -GetTask $get -RegisterTask $register -ScriptOverride '' -ScriptConfigFile $cfg
+Assert ($rCfg.changed) 'config override re-registers'
+Assert ($script:stored['OrgiastReopenLostSessions'].Actions[0].Arguments -like '*reopen-lost-sessions-cfg.mjs*') 'logon uses config script'
+Remove-Item -LiteralPath $cfg -ErrorAction SilentlyContinue
+
 Write-Output 'PASS: reopen task registration (both logon and watch tasks, mocked scheduler)'

@@ -123,7 +123,7 @@ export function enqueueToolRouteReview(markdown, held) {
   return `${markdown}\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n${todo}\n`;
 }
 export function dequeueToolRouteReview(markdown) {
-  const pattern = /^1\.\s*\[handoff-audit:tool-name-route\].*?(?:\r?\n)(?:\r?\n)?/m;
+  const pattern = /^\d+\.\s*\[handoff-audit:tool-name-route\].*?(?:\r?\n)(?:\r?\n)?/m;
   return markdown.replace(pattern, '');
 }
 export function deferralLedgerFile(home) {

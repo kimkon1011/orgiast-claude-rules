@@ -386,6 +386,14 @@ test('dequeueToolRouteReview: TODO が無ければ同一文字列を返す', () 
 test('dequeueToolRouteReview: 空文字列でも壊れない', () => {
   assert.equal(dequeueToolRouteReview(''), '');
 });
+test('dequeueToolRouteReview: 番号が振り直されていても tool-name-route の行だけ消える', () => {
+  const before = '## 残TODO\n18. foo\n19. [handoff-audit:tool-name-route] bar\n20. baz\n\n## その他\n';
+  const after = dequeueToolRouteReview(before);
+  assert.equal(after, '## 残TODO\n18. foo\n20. baz\n\n## その他\n');
+  assert.ok(!after.includes('tool-name-route'));
+  assert.ok(after.includes('18. foo'));
+  assert.ok(after.includes('20. baz'));
+});
 test('--mark-reviewed: 一時 home で candidates を台帳へ移し、TODO を消す', async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-mark-reviewed-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

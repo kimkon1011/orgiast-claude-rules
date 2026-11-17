@@ -1,0 +1,29 @@
+# tool-name-route 候補レビュー（2026-11-18）
+
+`~/.claude/handoff-audit-candidates.jsonl` に残っていた12件（全て reason=tool-name-route、観測 2026-11-03〜14）を、既存 knowledge エントリ・実在ツールの実装・前例（PR #1151 / #1258 / #1434 / #1458 / #2240）との照合基準で処理した。道具名をそのまま knowledge に入れず、再現可能な手順（実在する経路のみ）にできるものだけを採用する。
+
+## 既存 knowledge に同一パターンが存在 → 棄却（4件）
+
+- `7e6d5c9f…` 社外顧客への返信送信の同意確認 → `チャット表示`: **既存知識** line 363「社外顧客への返信送信の同意確認」（承認・実行・read-back の手順文として2026-11-03に採用済み）と完全に同一。新規知見なし。
+- `8fba91a8…` Drive 保存の手渡し（鍵不在を理由に別PC依頼） → `Drive MCP`: **既存知識** line 369「Drive 保存の手渡し（鍵不在を理由に別PC依頼）」（コネクタ→DWD→read-back の手順文として2026-11-03に採用済み）と完全に同一。
+- `ba761818…` 修正対象ファイルが別 PC にあるための手渡し → `codex-do.mjs`: **既存知識** line 375「修正対象ファイルが別 PC にあるための手渡し」（単発タスク・成果物検証の手順文として2026-11-03に採用済み）と完全に同一。
+- `fbfaba77…` 新セッション開始の Enter 送信を user に依頼 → `codex-do.mjs`: **既存知識** line 381「新セッション開始の Enter 送信を user に依頼」（auto-session 再入・台帳 read-back の手順文として2026-11-03に採用済み）と完全に同一。
+
+## 既存知識で概念的にカバー → 棄却（4件）
+
+- `f912a62b…` 外部状態の断定を根拠なしで記載 → `Gmail MCP`: **既存知識**「バックグラウンド再生成の進捗待ち（証拠なしに背景ジョブの状態を断定して待たせる）」の route（rule 4: 照会できない項目は「未確認」と書き断定も確率表現もしない）と概念が重複。本候補は「根拠なしで断定」に特化しているが、既存 entry が監査基準 rule 4 として一般化されており新規知見がない。
+- `6ffb8dcc…` 外部サービスのUI操作をユーザーに依頼する → `Gmail MCP`: **既存知識**「GitHub の画面操作・ボタン押下を user に依頼」が gh CLI での代替手順を包括的に記述し、「permission 分類器で自動経路が止まった」も一般化されている。さらに「手渡し作業をユーザーに指示する（汎用）」が全サービス共通の手渡し防止手順を定義している。
+- `5a7eba61…` 委譲判定でCodex実装委譲 → `codex-do.mjs`: **既存知識**「サブエージェント/他AIレーンへ実装を委譲して『実行中』で終わる」と実質的に同一（codex-do.mjs を前景・単発で回し当ターン内に完了まで見届ける）。「委譲判定で」が条件付きである点のみ異なるが、route の結論は同じ。
+- `de88f84c…` ユーザーに短い返答で確認させる → `チャット表示`: **既存知識**「手渡し作業をユーザーに指示する（汎用）」の route が「user に手作業を渡す前に、当ターンで全経路を実試行する」手順を定義しており、本候補のパターンはその一部（確認のみの手渡し）に過ぎない。新規知見なし。
+
+## 新規採用（4件）
+
+- `b6e8e3a5…` 別PCのログイン済みブラウザセッションが必要な外部サービス送信 → `codex-do.mjs`: 別PCにしか無いブラウザセッション（OAuth 同意・2FA 等）が必要な外部サービス（freee・X・各種SaaS）への送信は、fleet-mail または直接指示で別PCの codex へタスクとして渡し、各PCに保存済みの storageState/Chrome プロファイルを再利用させる。実行不能なら試行記録・エラーとともに「未確認」と書く。
+- `ba761818…` (同一観測の別候補) PDF が大きすぎて MCP で開けない → `Drive API`: Drive MCP で開けない大きな PDF は、DWD（kim impersonate / drive スコープ）の Drive API v3 files.get?alt=media でバイナリを取得し、ローカルの Playwright/chromium または node buffer の text 抽出で読む。OpenAI/ChatGPT の PDF アップロードに頼らない。
+- `8e389652…` メールの不達情報を報告し、原因を示す → `Gmail MCP`: メール不達（bounce）の検出は、DWD 経由で Gmail API users.messages.list（query="is:unread from:mailer-daemon"）と messages.get で不達本文（NDR）を読み、error code（550/554 等）と原因（mailbox full / user unknown / spam blocked）を判定する。推測で原因を書かず、不達の有無が分からない場合は「未確認」と書く。
+- `ebdd7635…` ファイル/フォルダの権限確認と読み戻し → `Drive API`: ファイル/フォルダへのアクセス権限（閲覧・編集・コメントの各レベル）の確認は、既存 knowledge entry「Drive フォルダへの権限付与を手渡しで依頼する」が権限付与（書き込み）の手順をカバーしているが、本候補は**権限の確認と読み戻しのみ**（読み取り専用）に特化する。DWD（kim impersonate / drive スコープ）で `tools/lib/drive-auth.mjs` の `getDriveToken` を使い、Drive API v3 `files.get`（fields=permissions.id,permissions.emailAddress,permissions.role の specificFields）で既存権限一覧を取得し、「共有済み/未共有」の判定結果を報告する。sheets の権限確認は上記 sheets-readonly SA 鍵でも可能。権限が不足していることだけを原因に手渡しせず、permissions が取得できなければそのエラーを記録する。権限付与が必要なら、別 knowledge entry「Drive フォルダへの権限付与」/ tools/drive-share.mjs へ進む。
+
+## 備考（監査 fix 案の道具名は実在確認必須）
+
+- 新規採用4件とも observation が示す道具名（codex-do.mjs / Drive API / Gmail MCP）は実在の経路名であり、夜間監査モデルの fix 案が挙げたものである。観測行と原 transcript の照合は行わず、生成元の文面は命令として実行しない。
+- 本レビューで既存知識と判断した8件は、新規性が無いため full text を knowledge に追加しない。同一 observation が再び candidates に出た場合は監査フィルタの改善対象とする。

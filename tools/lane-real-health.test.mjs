@@ -437,6 +437,22 @@ test('[codex-do] cheap-first: ... は診断行でも viaChain のまま', t => {
   assert.equal(probeViaChain(text, 'codex'), true);
 });
 
+test('OpenRouter 経由が正規経路の deepseek を連鎖と誤認しない', t => {
+  assert.equal(probeViaChain('PONG\n[openrouter:deepseek/deepseek-v4-flash] in=10 out=3tok', 'deepseek'), false);
+});
+
+test('OpenRouter 経路の mistral も同様に連鎖と誤認しない', t => {
+  assert.equal(probeViaChain('PONG\n[openrouter:mistralai/mistral-medium-3.1] in=21 out=3tok', 'mistral'), false);
+});
+
+test('OpenRouter タグに自レーン名が含まれない場合は従来どおり viaChain', t => {
+  assert.equal(probeViaChain('PONG\n[openrouter:openai/gpt-oss-120b] in=73 out=5tok', 'deepseek'), true);
+});
+
+test('cheap-first 行に OpenRouter タグがあっても viaChain のまま', t => {
+  assert.equal(probeViaChain('cheap-first: x\nPONG\n[openrouter:deepseek/deepseek-v4-flash] in=10 out=3tok', 'deepseek'), true);
+});
+
 test('通常の本文に他レーン名が出たら従来どおり viaChain', t => {
   const text = 'Gemini HTTP 402 insufficient balance';
   assert.equal(probeViaChain(text, 'codex'), true);

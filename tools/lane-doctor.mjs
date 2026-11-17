@@ -214,7 +214,7 @@ export async function runNativeWriteProbe({ home, timeoutMs }) {
 export function runProbe(provider, { home, timeoutMs, dryRun = false, execFileImpl = execFile } = {}) {
   const args = provider === 'codex'
     ? [path.join(repo, 'tools/codex-do.mjs'), 'Reply with exactly: PONG. Do not modify any files.', '--cwd', repo, '--kind', 'implement', '--no-fallback', '--no-escalate', ...(needsNativeCodexProbe() ? ['--allow-native'] : []), ...(dryRun ? ['--dry-run'] : ['--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))])]
-    : [path.join(repo, 'tools/llm-ask.mjs'), '--provider', provider, 'Reply with exactly: PONG', '--max', '10', '--no-fallback'];
+    : [path.join(repo, 'tools/llm-ask.mjs'), '--provider', provider, 'Reply with exactly: PONG', '--max', '64', '--no-fallback'];
   return new Promise(resolve => execFileImpl(process.execPath, args, { cwd: repo, env: { ...process.env, ORGIAST_HOME: home, CODEX_DO_CHEAP_FIRST: '0' }, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 256 * 1024, windowsHide: true }, (e, stdout, stderr) => resolve({ code: e ? e.code || 1 : 0, text: redactAll(`${stdout}\n${stderr}`) })));
 }
 export function notificationText(item, home) {

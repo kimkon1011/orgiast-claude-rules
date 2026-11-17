@@ -16,11 +16,18 @@ export function laneErrorText(text, lane) {
 // （2026-11-17 実測: openrouter が答えているのに冒頭の [routing] gemini… で probe_inconclusive）。
 const DIAGNOSTIC_LINE = /^\s*\[(?:routing|cooldown|codex-do)\]/i;
 const CHAIN_MARKER = /cheap-first:|fallback backend=|ack backend=|\[routing\].*(?:fallback|switch|chain)/i;
+// [openrouter:deepseek/deepseek-v4-flash] は OpenRouter 経由の正規経路レーンを示すタグ。
+// そのレーン自身が OpenRouter 経由で答えたなら連鎖ではないので、タグを除去してから判定する。
+const OPENROUTER_TAG = /\[openrouter:([^\]\s]+)\]/gi;
+function stripOpenrouterTag(line, lane) {
+  return line.replace(OPENROUTER_TAG, (tag, model) =>
+    lane !== 'openrouter' && model.toLowerCase().includes(String(lane).toLowerCase()) ? '' : tag);
+}
 export function probeViaChain(text, lane) {
   return String(text).split(/\r?\n/).some(line =>
     CHAIN_MARKER.test(line)
     || (!DIAGNOSTIC_LINE.test(line)
-      && LANE_NAMES.some(other => other !== lane && new RegExp(`\\b${other}\\b`, 'i').test(line))));
+      && LANE_NAMES.some(other => other !== lane && new RegExp(`\\b${other}\\b`, 'i').test(stripOpenrouterTag(line, lane)))));
 }
 
 const AUTH_DOMINANT_RATIO = 0.9;

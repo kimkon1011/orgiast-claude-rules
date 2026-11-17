@@ -718,13 +718,39 @@ export async function writeImprovementSheet(items, { token, dryRun = false, fetc
   }
   const writeStartRow = lastNonEmptyRow + 1;
 
+  // ★ ここから: H 列の出典URLから既存会議URLを抽出し、重複 item を除外する
+  const existingMeetingUrls = new Set();
+  const urlRe = /［出典:\s*tl;dv\s*([^］\s]+)\s*］/;
+  for (const row of allValues) {
+    const hVal = String(row[7] ?? '').trim();
+    const m = hVal.match(urlRe);
+    if (m) existingMeetingUrls.add(m[1]);
+  }
+  const filteredItems = [];
+  const skippedMeetingUrls = [];
+  for (const item of items) {
+    if (item.meetingUrl && existingMeetingUrls.has(item.meetingUrl)) {
+      skippedMeetingUrls.push(item.meetingUrl);
+    } else {
+      filteredItems.push(item);
+    }
+  }
+  if (skippedMeetingUrls.length > 0) {
+    appendLog({ event: 'skip-existing-meeting', skipped: skippedMeetingUrls.length, meetingUrls: [...new Set(skippedMeetingUrls)] });
+  }
+  const writeItems = filteredItems;
+  if (writeItems.length === 0 && !dryRun) {
+    return { written: 0, writeStartRow: null, skippedExisting: skippedMeetingUrls.length };
+  }
+  // ★ ここまで
+
   // 4. batchUpdate 用データ生成（A:B / D:E / F:H の3範囲）
   const kindJp = { app: 'アプリ改善', template: 'テンプレート修正', knowhow: 'ノウハウ', manual: 'マニュアル修正', process: '業務フロー' };
   const abValues = [];
   const deValues = [];
   const fghValues = [];
 
-  for (const item of items) {
+  for (const item of writeItems) {
     const kj = kindJp[item.kind] || item.kind;
     const meetingName = (item.caseName || '').replace(/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}（日本時間）\s*/, '');
     const eventText = `【${kj}】${item.event || ''}`;
@@ -737,7 +763,7 @@ export async function writeImprovementSheet(items, { token, dryRun = false, fetc
   }
 
   if (dryRun) {
-    const plannedRows = items.map((item, i) => {
+    const plannedRows = writeItems.map((item, i) => {
       const kj = kindJp[item.kind] || item.kind;
       const meetingName = (item.caseName || '').replace(/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}（日本時間）\s*/, '');
       return {
@@ -751,7 +777,7 @@ export async function writeImprovementSheet(items, { token, dryRun = false, fetc
         H: `${item.solution || ''}［出典: tl;dv ${item.meetingUrl || ''}］`,
       };
     });
-    return { planned: items.length, writeStartRow, tabName, rows: plannedRows };
+    return { planned: writeItems.length, writeStartRow, tabName, rows: plannedRows, skippedExisting: skippedMeetingUrls.length };
   }
 
   // 5. 書き込み前にグリッド行数を確認し、必要なら appendDimension で行を追加
@@ -764,7 +790,7 @@ export async function writeImprovementSheet(items, { token, dryRun = false, fetc
     const targetSheet = sheets.find(s => s.properties?.title === tabName);
     if (!targetSheet) throw new ProcessImproveError('sheet-tab-not-found');
     const rowCount = targetSheet.properties.gridProperties.rowCount;
-    const needed = writeStartRow + items.length - 1;
+    const needed = writeStartRow + writeItems.length - 1;
     if (needed > rowCount) {
       const added = needed - rowCount;
       await driveFetch(
@@ -789,9 +815,9 @@ export async function writeImprovementSheet(items, { token, dryRun = false, fetc
   const batchBody = {
     valueInputOption: 'USER_ENTERED',
     data: [
-      { range: `${safeTabName}!A${writeStartRow}:B${writeStartRow + items.length - 1}`, majorDimension: 'ROWS', values: abValues },
-      { range: `${safeTabName}!D${writeStartRow}:E${writeStartRow + items.length - 1}`, majorDimension: 'ROWS', values: deValues },
-      { range: `${safeTabName}!F${writeStartRow}:H${writeStartRow + items.length - 1}`, majorDimension: 'ROWS', values: fghValues },
+      { range: `${safeTabName}!A${writeStartRow}:B${writeStartRow + writeItems.length - 1}`, majorDimension: 'ROWS', values: abValues },
+      { range: `${safeTabName}!D${writeStartRow}:E${writeStartRow + writeItems.length - 1}`, majorDimension: 'ROWS', values: deValues },
+      { range: `${safeTabName}!F${writeStartRow}:H${writeStartRow + writeItems.length - 1}`, majorDimension: 'ROWS', values: fghValues },
     ],
   };
   await driveFetch(
@@ -801,21 +827,21 @@ export async function writeImprovementSheet(items, { token, dryRun = false, fetc
   );
 
   // 7. 読み戻し確認（F と H）
-  const verifyRange = `${safeTabName}!F${writeStartRow}:H${writeStartRow + items.length - 1}`;
+  const verifyRange = `${safeTabName}!F${writeStartRow}:H${writeStartRow + writeItems.length - 1}`;
   const verify = await driveFetch(
     `${SHEETS_BASE}/${sheetId}/values/${encodeURIComponent(verifyRange)}?valueRenderOption=FORMATTED_VALUE`,
     {}, token, { fetchImpl }
   );
   const writtenF = (verify.values || []).map(r => String(r[0] || ''));
   const writtenH = (verify.values || []).map(r => String(r[2] || ''));
-  for (let i = 0; i < items.length; i++) {
+  for (let i = 0; i < writeItems.length; i++) {
     if (writtenF[i] !== fghValues[i][0] || writtenH[i] !== fghValues[i][2]) {
       appendLog({ event: 'write-verification-failed', idx: i, expectedF: fghValues[i][0], actualF: writtenF[i] });
       throw new ProcessImproveError('write-verification-failed');
     }
   }
 
-  return { written: items.length, writeStartRow };
+  return { written: writeItems.length, writeStartRow, skippedExisting: skippedMeetingUrls.length };
 }
 
 // -- ログシートの作成または取得 --
@@ -1154,7 +1180,7 @@ export async function runImprove(options = {}, dependencies = {}) {
 
   const summary = {
     fetched: 0, processed: 0, extracted: 0, duplicates: 0, skippedOld: 0,
-    skippedDuplicateSource: 0, skippedExcluded: 0,
+    skippedDuplicateSource: 0, skippedExcluded: 0, skippedExisting: 0,
     sheetWritten: 0, feedbackSent: 0, knowhowAdded: 0, templateReflected: 0, failed: 0,
     totalItems: 0, error: '',
     timeBudgetSkipped: 0, knowhowSkipped: 0,
@@ -1324,6 +1350,7 @@ export async function runImprove(options = {}, dependencies = {}) {
         }
         try {
           sheetPlan = await writeImprovementSheet(allItems, { token, dryRun: true, fetchImpl });
+          if (sheetPlan && sheetPlan.skippedExisting) summary.skippedExisting += sheetPlan.skippedExisting;
         } catch (error) {
           if (error instanceof ProcessImproveError && error.code === 'sheet-header-mismatch') {
             summary.error = 'sheet-header-mismatch';
@@ -1357,6 +1384,7 @@ export async function runImprove(options = {}, dependencies = {}) {
       try {
         const sheetResult = await writeImprovementSheet(allItems, { token, fetchImpl });
         summary.sheetWritten = sheetResult.written;
+        if (sheetResult.skippedExisting) summary.skippedExisting += sheetResult.skippedExisting;
       } catch (sheetError) {
         if (sheetError instanceof ProcessImproveError && sheetError.code === 'sheet-header-mismatch') {
           summary.error = 'sheet-header-mismatch';
@@ -1470,7 +1498,7 @@ export async function runImprove(options = {}, dependencies = {}) {
 
     // -- 標準出力サマリ --
     console.log(`fetched=${summary.fetched} processed=${summary.processed} extracted=${summary.extracted} ` +
-      `duplicates=${summary.duplicates} sheet=${summary.sheetWritten} feedback=${summary.feedbackSent} ` +
+      `duplicates=${summary.duplicates} skippedExisting=${summary.skippedExisting} sheet=${summary.sheetWritten} feedback=${summary.feedbackSent} ` +
       `knowhow=${summary.knowhowAdded} template=${summary.templateReflected} failed=${summary.failed} ` +
       `timeBudgetSkipped=${summary.timeBudgetSkipped} knowhowSkipped=${summary.knowhowSkipped}`);
 

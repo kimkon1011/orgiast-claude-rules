@@ -1868,3 +1868,84 @@ test('requestJson 4xx body capture does not break 5xx retry', async () => {
   assert.deepEqual(result, { data: 'ok' });
   assert.equal(callCount, 3);
 });
+
+// ===== writeImprovementSheet URL-based duplicate guard =====
+test('writeImprovementSheet dry-run skips items whose meetingUrl exists in H column', async () => {
+  const mockFetch = async (url) => {
+    if (url.includes('oauth2')) return jsonResponse({ access_token: 'mock-token' });
+    if (url.includes('fields=sheets.properties')) {
+      return jsonResponse({ sheets: [{ properties: { sheetId: 354072335, title: '改善シート' } }] });
+    }
+    const decoded = decodeURIComponent(url);
+    if (decoded.includes('A2:H2')) {
+      return jsonResponse({ values: [['タイムスタンプ', '担当', '責任者（プロデューサー）', 'カテゴリ', '改善されるコスト（金額）', 'エピソード・発生内容', '発生原因', '発生原因対策']] });
+    }
+    if (decoded.includes('A1:J')) {
+      // H 列に AAA の URL を持つ行がある
+      return jsonResponse({ values: [
+        ['集計: 100'],
+        ['タイムスタンプ', '担当', '責任者（プロデューサー）', 'カテゴリ', '改善されるコスト（金額）', 'エピソード・発生内容', '発生原因', '発生原因対策'],
+        ['', '', '', '', '', '事象A', '原因A', '解決策［出典: tl;dv https://tldv.io/app/meetings/AAA］'],
+      ]});
+    }
+    return jsonResponse({});
+  };
+  // AAA は既存 → skip, BBB は新規 → write, 空 meetingUrl → write
+  const items = [
+    { kind: 'process', event: 'event AAA', solution: 'sol', cause: '', caseName: '会議A', meetingUrl: 'https://tldv.io/app/meetings/AAA' },
+    { kind: 'process', event: 'event BBB', solution: 'sol', cause: '', caseName: '会議B', meetingUrl: 'https://tldv.io/app/meetings/BBB' },
+    { kind: 'process', event: 'event empty', solution: 'sol', cause: '', caseName: '会議C', meetingUrl: '' },
+  ];
+  const result = await writeImprovementSheet(items, { token: 'mock-token', dryRun: true, fetchImpl: mockFetch });
+  assert.equal(result.planned, 2, 'should plan 2 items (BBB + empty)');
+  assert.equal(result.skippedExisting, 1, 'should skip 1 existing');
+  // AAA の行がないこと
+  assert.equal(result.rows.length, 2);
+  assert.ok(result.rows.every(r => !r.F.includes('event AAA')), 'AAA should not appear in planned rows');
+});
+
+test('writeImprovementSheet non-dry run skips all-existing items and does not call batchUpdate or appendDimension', async () => {
+  let batchUpdateCalled = false;
+  let appendDimensionCalled = false;
+  const mockFetch = async (url, init) => {
+    if (url.includes('oauth2')) return jsonResponse({ access_token: 'mock-token' });
+    if (url.includes('fields=sheets.properties(sheetId,title,gridProperties.rowCount)')) {
+      return jsonResponse({ sheets: [{ properties: { sheetId: 354072335, title: '改善シート', gridProperties: { rowCount: 4000 } } }] });
+    }
+    if (url.includes('fields=sheets.properties')) {
+      return jsonResponse({ sheets: [{ properties: { sheetId: 354072335, title: '改善シート' } }] });
+    }
+    const decoded = decodeURIComponent(url);
+    if (decoded.includes('A2:H2')) {
+      return jsonResponse({ values: [['タイムスタンプ', '担当', '責任者（プロデューサー）', 'カテゴリ', '改善されるコスト（金額）', 'エピソード・発生内容', '発生原因', '発生原因対策']] });
+    }
+    if (decoded.includes('A1:J')) {
+      return jsonResponse({ values: [
+        ['集計: 100'],
+        ['タイムスタンプ', '担当', '責任者（プロデューサー）', 'カテゴリ', '改善されるコスト（金額）', 'エピソード・発生内容', '発生原因', '発生原因対策'],
+        ['', '', '', '', '', '事象A', '原因A', '解決策［出典: tl;dv https://tldv.io/app/meetings/AAA］'],
+      ]});
+    }
+    if (url.includes(':batchUpdate')) {
+      if (url.includes('values:batchUpdate')) {
+        batchUpdateCalled = true;
+      } else {
+        appendDimensionCalled = true;
+      }
+      return jsonResponse({});
+    }
+    if (decoded.includes('!F') && decoded.includes(':H')) {
+      return jsonResponse({ values: [['', '', '']] });
+    }
+    return jsonResponse({});
+  };
+  // AAA のみ → すべてスキップ → Sheets API を呼ばない
+  const result = await writeImprovementSheet(
+    [{ kind: 'process', event: 'event AAA', solution: 'sol', cause: '', caseName: '会議A', meetingUrl: 'https://tldv.io/app/meetings/AAA' }],
+    { token: 'mock-token', dryRun: false, fetchImpl: mockFetch }
+  );
+  assert.equal(result.written, 0);
+  assert.equal(result.skippedExisting, 1);
+  assert.equal(batchUpdateCalled, false, 'batchUpdate should NOT be called when all items skipped');
+  assert.equal(appendDimensionCalled, false, 'appendDimension should NOT be called when all items skipped');
+});

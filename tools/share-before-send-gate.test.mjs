@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { judge, HOOK_MATCHER } from './share-before-send-gate.mjs';
+import { checkAnyoneOnDrive, judge, HOOK_MATCHER } from './share-before-send-gate.mjs';
 const url = 'https://docs.google.com/document/d/file123/edit';
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'share-gate-'));
@@ -106,4 +106,26 @@ test('checkAnyone failure blocks with failure reason', async t => {
   const r = await judge(message(), { ...opts, checkAnyone: async () => { throw new Error('API error'); } });
   assert.equal(r.decision, 'block');
   assert.match(r.reason, /リンク公開かの確認に失敗/);
+});
+test('DWD owner permissions success returns true', async () => {
+  const fetchImpl = async url => url.includes('/permissions?')
+    ? new Response(JSON.stringify({ permissions: [{ type: 'anyone', role: 'reader' }] }), { status: 200 })
+    : new Response(JSON.stringify({ owners: [{ emailAddress: 'owner@orgiast.jp' }] }), { status: 200 });
+  assert.equal(await checkAnyoneOnDrive('file123', { getToken: async () => 'token', fetchImpl }), true);
+});
+test('DWD failure and anonymous success returns true', async () => {
+  const fetchImpl = async url => url.startsWith('https://www.googleapis.com/')
+    ? new Response(JSON.stringify({ error: { message: 'forbidden' } }), { status: 403 })
+    : new Response('', { status: url.includes('/file/d/') ? 200 : 404 });
+  assert.equal(await checkAnyoneOnDrive('file123', { getToken: async () => 'token', fetchImpl }), true);
+});
+test('all methods failure blocks and exposes HTTP statuses', async t => {
+  const opts = fixture(t);
+  const fetchImpl = async url => new Response('', { status: url.includes('googleapis.com') ? 403 : 404 });
+  const checkAnyone = id => checkAnyoneOnDrive(id, { getToken: async () => 'token', fetchImpl });
+  const r = await judge(message(), { ...opts, checkAnyone });
+  assert.equal(r.decision, 'block');
+  assert.match(r.reason, /dwd-files\.get=HTTP 403/);
+  assert.match(r.reason, /anonymous-file=HTTP 404/);
+  assert.match(r.reason, /anonymous-folder=HTTP 404/);
 });

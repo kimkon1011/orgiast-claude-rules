@@ -57,7 +57,7 @@ function transcriptIds(raw) {
  */
 async function awaitOrThrow(checkFn, fileIds) {
   const results = await Promise.allSettled(fileIds.map(id =>
-    checkFn(id).then(isPublic => ({ id, isPublic })).catch(() => { throw id; })
+    checkFn(id).then(isPublic => ({ id, isPublic })).catch(error => { throw { id, error }; })
   ));
   const pub = [], failures = [];
   for (const r of results) {
@@ -108,7 +108,7 @@ export async function judge(input, { ledgerPath = shareLedgerPath(), now = Date.
   if (checkAnyone) {
     const anyoneChecks = await awaitOrThrow(checkAnyone, missing);
     if (anyoneChecks.failures.length) {
-      return { decision: 'block', reason: anyoneChecks.failures.map(id => `リンク公開かの確認に失敗: node tools/drive-share.mjs --id ${id} --to <相手のメール>（社内は編集者・社外はコメント可が既定）。社員宛てなら --to syain@orgiast.jp で全社員に共有できます。共有済みのファイルなら同コマンドで記録されます（既存権限はスキップ）。`).join('\n') };
+      return { decision: 'block', reason: anyoneChecks.failures.map(({ id, error }) => `リンク公開かの確認に失敗（${String(error?.message ?? error)}）: node tools/drive-share.mjs --id ${id} --to <相手のメール>（社内は編集者・社外はコメント可が既定）。社員宛てなら --to syain@orgiast.jp で全社員に共有できます。共有済みのファイルなら同コマンドで記録されます（既存権限はスキップ）。`).join('\n') };
     }
     const anyoneIds = anyoneChecks.publicIds;
     if (anyoneIds.length) {
@@ -124,22 +124,61 @@ export async function judge(input, { ledgerPath = shareLedgerPath(), now = Date.
   return { decision: 'block', reason: missing.map(id => `送信前に相手へ共有してください: node tools/drive-share.mjs --id ${id} --to <相手のメール>（社内は編集者・社外はコメント可が既定）。社員宛てなら --to syain@orgiast.jp で全社員に共有できます。共有済みのファイルなら同コマンドで記録されます（既存権限はスキップ）。`).join('\n') };
 }
 /**
- * Drive API でファイルの permissions を取得し、type=anyone かつ role が reader 以上の共有があれば true を返す。
- * 3秒タイムアウト。
+ * DWD で所有者を特定して permissions を取得する。API で確認できない場合は
+ * 匿名の Drive 閲覧 URL も確認する。全体で8秒、判定不能は fail-closed。
  */
-export async function checkAnyoneOnDrive(fileId) {
-  const { getDriveToken, driveApi } = await import('./lib/drive-auth.mjs');
-  const token = await getDriveToken({ asServiceAccount: true });
+export async function checkAnyoneOnDrive(fileId, dependencies = {}) {
+  const { getDriveToken } = await import('./lib/drive-auth.mjs');
+  const getToken = dependencies.getToken ?? getDriveToken;
+  const fetchImpl = dependencies.fetchImpl ?? globalThis.fetch;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 3000);
+  const timer = setTimeout(() => controller.abort(), dependencies.timeoutMs ?? 8000);
+  const attempts = [];
+  const request = async (label, url, options = {}) => {
+    try {
+      const res = await fetchImpl(url, { ...options, signal: controller.signal });
+      attempts.push(`${label}=HTTP ${res.status}`);
+      return res;
+    } catch (error) {
+      attempts.push(`${label}=${error?.name === 'AbortError' ? 'timeout' : 'fetch-error'}`);
+      return null;
+    }
+  };
   try {
-    const res = await driveApi(token, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/permissions?fields=permissions(id,type,role)&supportsAllDrives=true`, { signal: controller.signal });
+    try {
+      const readerToken = await getToken({ impersonate: 'seisaku-team@orgiast.jp', signal: controller.signal, fetchImpl });
+      const metaRes = await request('dwd-files.get', `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=owners(emailAddress)&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${readerToken}` } });
+      if (metaRes?.ok) {
+        const meta = await metaRes.json();
+        const owner = meta.owners?.map(o => o.emailAddress).find(email => /@orgiast\.jp$/i.test(email));
+        if (owner) {
+          const ownerToken = await getToken({ impersonate: owner, signal: controller.signal, fetchImpl });
+          const permissionRes = await request('owner-permissions.list', `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/permissions?fields=permissions(type,role)&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${ownerToken}` } });
+          if (permissionRes?.ok) {
+            const data = await permissionRes.json();
+            return (data.permissions ?? []).some(p => p.type === 'anyone');
+          }
+        } else attempts.push('owner=external-or-missing');
+      }
+    } catch (error) {
+      attempts.push(`dwd=${error?.name === 'AbortError' ? 'timeout' : 'error'}`);
+    }
+
+    for (const [label, url] of [
+      ['anonymous-file', `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view`],
+      ['anonymous-folder', `https://drive.google.com/drive/folders/${encodeURIComponent(fileId)}`],
+    ]) {
+      const res = await request(label, url, { redirect: 'manual' });
+      const location = res?.headers.get('location');
+      const loginRedirect = location && /(?:^|\.)accounts\.google\.com$/i.test(new URL(location, url).hostname);
+      if (res?.status === 200 && !loginRedirect) return true;
+    }
+    throw new Error(attempts.join(', '));
+  } catch (error) {
+    if (error?.message === attempts.join(', ')) throw error;
+    throw new Error(attempts.length ? attempts.join(', ') : `all-methods=${error?.name === 'AbortError' ? 'timeout' : 'error'}`);
+  } finally {
     clearTimeout(timer);
-    const data = await res.json();
-    return (data.permissions ?? []).some(p => p.type === 'anyone' && ['reader', 'commenter', 'writer', 'fileOrganizer', 'organizer', 'owner'].includes(p.role));
-  } catch {
-    clearTimeout(timer);
-    throw new Error('リンク公開かの確認に失敗');
   }
 }
 

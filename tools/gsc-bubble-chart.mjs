@@ -13,6 +13,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const USAGE = `使い方:
   node tools/gsc-bubble-chart.mjs --input <csv-path> [options]
@@ -88,11 +89,11 @@ function generateDemoData() {
 }
 
 // ─── CSV パース ─────────────────────────────────────────────────────────
-function parseCSV(text) {
-  const lines = text.trim().split(/\r?\n/);
-  if (lines.length < 2) throw new Error('CSVにデータ行がありません');
+export function parseCSV(text) {
+  const records = parseCSVRecords(text.replace(/^\uFEFF/, ''));
+  if (records.length < 2) throw new Error('CSVにデータ行がありません');
 
-  const header = parseCSVLine(lines[0]);
+  const header = records[0];
   const colMap = {};
   const required = ['Query', 'Impressions', 'Clicks', 'Position', 'CTR'];
   const aliases = {
@@ -104,9 +105,6 @@ function parseCSV(text) {
     'page': 'Page', 'pages': 'Page', 'url': 'Page',
   };
 
-  // ページビューCSVの場合
-  const isPageReport = header.some(h => /^page$/i.test(h) || /^url$/i.test(h));
-
   for (let i = 0; i < header.length; i++) {
     const raw = header[i].trim();
     const normalized = raw.replace(/"/g, '').trim();
@@ -115,8 +113,9 @@ function parseCSV(text) {
     const stdKey = required.find(r => r.toLowerCase() === mapped.toLowerCase());
     if (stdKey) {
       colMap[stdKey] = i;
-    } else if (!colMap['Page'] && (normalized.toLowerCase() === 'page' || normalized.toLowerCase() === 'url')) {
-      colMap['Page'] = i;
+    } else if (colMap.Query === undefined && (mapped === 'Page' || normalized.toLowerCase() === 'url')) {
+      // Pages.csv でも以降の描画処理では共通の query フィールドを使う。
+      colMap.Query = i;
     }
   }
 
@@ -126,8 +125,8 @@ function parseCSV(text) {
   }
 
   const rows = [];
-  for (let i = 1; i < lines.length; i++) {
-    const vals = parseCSVLine(lines[i]);
+  for (let i = 1; i < records.length; i++) {
+    const vals = records[i];
     if (vals.length <= Math.max(...Object.values(colMap))) continue;
     try {
       const row = {
@@ -143,15 +142,16 @@ function parseCSV(text) {
   return rows;
 }
 
-function parseCSVLine(line) {
-  const result = [];
+export function parseCSVRecords(text) {
+  const records = [];
+  let record = [];
   let current = '';
   let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
     if (inQuotes) {
       if (ch === '"') {
-        if (i + 1 < line.length && line[i + 1] === '"') {
+        if (i + 1 < text.length && text[i + 1] === '"') {
           current += '"';
           i++;
         } else {
@@ -164,15 +164,25 @@ function parseCSVLine(line) {
       if (ch === '"') {
         inQuotes = true;
       } else if (ch === ',') {
-        result.push(current);
+        record.push(current);
         current = '';
+      } else if (ch === '\n' || ch === '\r') {
+        record.push(current);
+        records.push(record);
+        record = [];
+        current = '';
+        if (ch === '\r' && text[i + 1] === '\n') i++;
       } else {
         current += ch;
       }
     }
   }
-  result.push(current);
-  return result;
+  if (inQuotes) throw new Error('CSVの引用符が閉じられていません');
+  if (current !== '' || record.length > 0) {
+    record.push(current);
+    records.push(record);
+  }
+  return records.filter(row => row.some(value => value.trim() !== ''));
 }
 
 function parseCTR(val) {
@@ -186,14 +196,14 @@ function parseCTR(val) {
 }
 
 // ─── ゾーン分類 ─────────────────────────────────────────────────────────
-function classifyZone(position, ctr) {
+export function classifyZone(position, ctr) {
   if (position <= 10 && ctr < 0.05) return 'mismatch';
   if (position <= 20 || (ctr >= 0.05 && ctr < 0.15)) return 'potential';
   return 'assess';
 }
 
 // ─── HTML 生成 ──────────────────────────────────────────────────────────
-function generateHTML(data, { siteName = '', minImpressions = 0 } = {}) {
+export function generateHTML(data, { siteName = '', minImpressions = 0 } = {}) {
   const filtered = data.filter(r => r.impressions >= minImpressions);
   const sorted = [...filtered].sort((a, b) => a.position - b.position);
 
@@ -215,7 +225,7 @@ function generateHTML(data, { siteName = '', minImpressions = 0 } = {}) {
     };
   });
 
-  const siteLabel = siteName ? ` — ${siteName}` : '';
+  const siteLabel = siteName ? ` — ${escapeHTML(siteName)}` : '';
   const totalQueries = sorted.length;
   const totalImpressions = sorted.reduce((s, r) => s + r.impressions, 0);
   const totalClicks = sorted.reduce((s, r) => s + r.clicks, 0);
@@ -302,7 +312,7 @@ footer { text-align: center; font-size: 0.75em; color: #aaa; margin-top: 20px; }
 <div id="tooltip" class="tooltip-data"></div>
 
 <script>
-const ALL_DATA = ${JSON.stringify(dataJson)};
+const ALL_DATA = ${safeJsonForScript(dataJson)};
 
 const ZONE_COLORS = {
   mismatch: { bg: 'rgba(231, 76, 60, 0.55)', border: 'rgba(231, 76, 60, 0.9)' },
@@ -427,9 +437,19 @@ renderChart(0);
 </html>`;
 }
 
+function escapeHTML(value) {
+  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function safeJsonForScript(value) {
+  return JSON.stringify(value).replace(/</g, '\\u003c').replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+}
+
 // ─── メイン ──────────────────────────────────────────────────────────────
 function main() {
-  const args = process.argv.slice(1);
+  const args = process.argv.slice(2);
   if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
     console.log(USAGE);
     process.exit(0);
@@ -496,4 +516,6 @@ function main() {
   console.log(`統計: ${data.length}クエリ / 総impressions ${data.reduce((s,r)=>s+r.impressions,0).toLocaleString()} / 総clicks ${data.reduce((s,r)=>s+r.clicks,0).toLocaleString()}`);
 }
 
-main();
+const isDirectRun = process.argv[1]
+  && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+if (isDirectRun) main();

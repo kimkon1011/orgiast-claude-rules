@@ -4,6 +4,7 @@
   "type": "module",
   "dependencies": {
     "playwright-core": "^1.49.0",
-    "postgres": "^3.4.9"
+    "postgres": "^3.4.9",
+    "xlsx": "^0.18.5"
   }
 }

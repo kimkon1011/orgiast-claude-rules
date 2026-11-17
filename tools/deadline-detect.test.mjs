@@ -247,3 +247,37 @@ test('鍵持ちのkim席はfixtureモードで通常動作（fixtureはseat chec
   assert.equal(result.skip, undefined);
   assert.equal(result.added, 5);
 });
+
+test('鍵なし席スキップ時はheartbeatがok=true・summaryに理由', async t => {
+  const home = homeFor(t), heartbeats = [];
+  const code = await main(['--now','2026-11-04'], {
+    home, stdout: () => {}, search: () => assert.fail('no network'),
+    heartbeat: async (info) => heartbeats.push(info),
+    seatCheck: () => ({ kim: false }),
+  });
+  assert.equal(code, 0);
+  assert.equal(heartbeats.length, 1);
+  assert.equal(heartbeats[0].ok, true);
+  assert.equal(heartbeats[0].summary, '鍵なし席のためスキップ');
+});
+
+test('エラー時はheartbeat summaryに実際のソース名が書かれる', async t => {
+  const home = homeFor(t), heartbeats = [], output = [];
+  const config = { ...DEFAULT_CONFIG, sheetId: 'test' };
+  saveJson(dataPath(home, 'config.json'), config);
+  const sources = [{ key: 'broken-source', load: async () => { throw Error('offline'); } }];
+  const ledger = { read: async () => [], append: async () => {} };
+  const code = await main(['--now','2026-11-04'], {
+    home, stdout: x => output.push(x), stderr: () => {},
+    heartbeat: async (info) => heartbeats.push(info),
+    skipSeatCheck: true,
+    config, sources, ledger,
+    ask: async () => ({ items: [], skipped: [] }),
+    notify: async () => {},
+  });
+  assert.equal(code, 1);
+  assert.equal(heartbeats.length, 1);
+  assert.equal(heartbeats[0].ok, false);
+  assert.match(heartbeats[0].summary, /^期限検出エラー:/);
+  assert.ok(heartbeats[0].summary.includes('broken-source'));
+});

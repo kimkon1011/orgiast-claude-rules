@@ -103,7 +103,8 @@ export async function runDetect({ home, config, ledger, state, sources, now, dry
   const persist = () => saveJson(dataPath(home, 'state.json'), state);
   for (const source of sources) {
     try {
-      const { documents, next } = await source.load();
+      const { documents, next, skipped: sourceSkipped = [] } = await source.load();
+      for (const s of sourceSkipped) result.skipped.push({ source: source.key, ...s });
       for (let i = 0; i < documents.length; i += 10) {
         // Completed/unneeded source IDs never go to the model again.
         const batch = documents.slice(i, i + 10).filter(d => !all.some(r => r.sourceId === d.sourceRef));

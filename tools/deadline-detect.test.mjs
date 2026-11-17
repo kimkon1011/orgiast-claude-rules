@@ -83,6 +83,79 @@ test('Drive OCRはコピーだけ削除、export失敗でも後始末、dry-run�
   assert.ok(Buffer.byteLength(trimBytes('あ'.repeat(30000))) <= 30000);
 });
 
+test('Driveの1ファイルreadDriveText失敗でも残りは処理されskipped・nextが返る', async () => {
+  const files = [
+    { id: 'ok-1', name: 'ok1.pdf', mimeType: 'application/pdf', modifiedTime: '2026-11-04T01:00:00Z', webViewLink: 'https://drive.google.com/file/d/ok-1/view' },
+    { id: 'fail-1', name: 'big.pdf', mimeType: 'application/pdf', modifiedTime: '2026-11-04T02:00:00Z', webViewLink: 'https://drive.google.com/file/d/fail-1/view' },
+    { id: 'ok-2', name: 'ok2.pdf', mimeType: 'application/pdf', modifiedTime: '2026-11-04T03:00:00Z', webViewLink: 'https://drive.google.com/file/d/ok-2/view' },
+  ];
+  const request = async (url, opts) => {
+    // files.list call
+    if (url.includes('drive/v3/files?') && !url.includes('/copy') && !url.includes('/export')) {
+      return { files, nextPageToken: 'next-token' };
+    }
+    // OCR copy: POST
+    if (opts?.method === 'POST' && url.includes('/copy')) {
+      const match = url.match(/files\/([^/]+)\/copy/);
+      if (match[1] === 'fail-1') throw new Error('The operation was aborted due to timeout');
+      return { id: `copy-${match[1]}` };
+    }
+    // export: GET
+    if (url.includes('/export')) {
+      return 'extracted text';
+    }
+    // DELETE temporary copy
+    if (opts?.method === 'DELETE') return null;
+    // ensureKimEditor permissions check
+    if (url.includes('/permissions')) return { permissions: [{ type: 'user', emailAddress: 'kim@orgiast.jp', role: 'owner' }] };
+    return {};
+  };
+  const result = await collectDrive({ user: 'kim@orgiast.jp', state: {}, now: new Date('2026-11-04T04:00:00Z'), request });
+  // 2 files succeeded
+  assert.equal(result.documents.length, 2);
+  assert.equal(result.documents[0].sourceRef, 'drive:ok-1');
+  assert.equal(result.documents[1].sourceRef, 'drive:ok-2');
+  // 1 file skipped
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].sourceRef, 'drive:fail-1');
+  assert.match(result.skipped[0].reason, /Drive読み取り失敗/);
+  // next watermark is saved
+  assert.ok(result.next);
+  assert.equal(result.next.pageToken, 'next-token');
+});
+
+test('Driveの1ファイルreadDriveText失敗でもrunDetectでskippedが積まれerrorsに入らない', async t => {
+  const home = homeFor(t), state = {}, rows = [], candidates = [];
+  const ledger = { read: async tab => [...(tab === '候補' ? candidates : rows)], append: async (newRows, tab) => (tab === '候補' ? candidates : rows).push(...newRows) };
+  const request = async (url, opts) => {
+    // files.list
+    if (url.includes('drive/v3/files?') && !url.includes('/copy') && !url.includes('/export')) {
+      return { files: [
+        { id: 'fail-1', name: 'big.pdf', mimeType: 'application/pdf', modifiedTime: '2026-11-04T02:00:00Z', webViewLink: 'https://drive.google.com/file/d/fail-1/view' },
+      ], nextPageToken: 'next-token' };
+    }
+    // OCR copy
+    if (opts?.method === 'POST' && url.includes('/copy')) throw new Error('The operation was aborted due to timeout');
+    // DELETE
+    if (opts?.method === 'DELETE') return null;
+    return {};
+  };
+  const sources = [{ key: 'drive:kim@orgiast.jp', load: () => collectDrive({ user: 'kim@orgiast.jp', state: {}, now: new Date('2026-11-04T04:00:00Z'), request }) }];
+  const params = { home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, state, sources, now: new Date('2026-11-04T04:00:00Z'), dryRun: false, ask: async () => ({ items: [] }), notify: async () => {} };
+  const result = await runDetect(params);
+  // No items added (no successful documents to extract from)
+  assert.equal(result.added, 0);
+  // errors is empty — file-level failure is skipped, not an error
+  assert.equal(result.errors.length, 0);
+  // skipped contains the file that timed out
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].source, 'drive:kim@orgiast.jp');
+  assert.match(result.skipped[0].reason, /Drive読み取り失敗/);
+  // next is saved in state (even though all files failed — the window advances)
+  assert.ok(state.sources['drive:kim@orgiast.jp']);
+  assert.equal(state.sources['drive:kim@orgiast.jp'].pageToken, 'next-token');
+});
+
 test('Driveの50件上限とLINE/Discordの新規行を読み込む', async t => {
   const result = await collectDrive({ user: 'kim@orgiast.jp', state: {}, now, request: async (url) => { assert.match(url, /pageSize=50/); return { files: [], nextPageToken: 'next' }; } });
   assert.equal(result.next.pageToken, 'next'); assert.equal(result.next.watermark, undefined);

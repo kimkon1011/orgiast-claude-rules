@@ -314,6 +314,8 @@ export async function run(config = options(), io = {}) {
     if (!readonly && records.length) {
       const closed = await loadClosed();
       const retired = Object.entries(ledger.sessions).filter(([id, entry]) => entry.noProgress >= 3 && !closed.sessions[id]);
+      const skippedOnlyForDeadline = rows.length > 0 && rows.every(row => row.skip === '締切超過(翌晩へ)');
+      if (!results.length && !retired.length && skippedOnlyForDeadline) return { rows, results, aborted: state.aborted, ...(state.noExecutor ? { noExecutor: state.noExecutor } : {}) };
       const count = outcome => results.filter(r => r.outcome === outcome).length;
       const summary = `確認 ${results.length}件 / 進んだ ${count('progressed')} / 進まず ${count('no-progress')} / 時間切れ ${count('timeout')} / エラー ${count('error')} / 締切で翌晩へ ${rows.filter(r => r.skip === '締切超過(翌晩へ)').length} / 3回進捗なしで停止中 ${retired.length}`;
       const waiting = retired.length ? '\n自動では進められないので kim の判断待ち\n' + retired.slice(0, 20).map(([id, entry]) => `${entry.title ?? id} (${id})`).join('\n') : '';

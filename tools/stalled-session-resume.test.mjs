@@ -58,6 +58,14 @@ test('saveJson cleans up and preserves the original error when rename fails', as
 test('0 stalled: no execution or notification', async t => {
   const f = await fixture(t, 0); await run(options([], {}), f.io); assert.equal(f.calls(), 0); assert.equal(f.notices(), 0);
 });
+test('deadline-only skips do not notify', async t => {
+  const f = await fixture(t, 3);
+  f.io.now = () => new Date(2026, 8, 24, 8).getTime();
+  const r = await run(options([], {}), f.io);
+  assert.equal(r.results.length, 0);
+  assert.deepEqual(r.rows.map(row => row.skip), Array(3).fill('締切超過(翌晩へ)'));
+  assert.equal(f.notices(), 0);
+});
 test('nightly limit is enforced across repeated invocations', async t => {
   const f = await fixture(t); await run(options(['--limit', '3'], {}), f.io); await run(options(['--limit', '3'], {}), f.io); assert.equal(f.calls(), 3); assert.equal(f.notices(), 2);
 });

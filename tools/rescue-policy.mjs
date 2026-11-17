@@ -34,6 +34,24 @@ function nestedRoot(tree, name) {
   }
   return null;
 }
+// `status` と `git add` の間に作られた入れ子クローンは gitlink (mode 160000) として
+// index に入る。宣言済み submodule ではない gitlink が rescue コミットに入ると、その
+// ブランチの checkout が以後すべて壊れる（2026-11-17 rescue/auto-session-20261117-153005）。
+// staging 後の index を実測して落とす後段ガード。
+export function unstageUndeclaredGitlinks(tree, env = process.env) {
+  const stagedLinks = git(tree, ['ls-files', '--stage'], undefined, env)
+    .split(/\r?\n/).filter(Boolean)
+    .filter(line => line.startsWith('160000 '))
+    .map(line => line.slice(line.indexOf('\t') + 1));
+  if (!stagedLinks.length) return [];
+  // HEAD に既にある gitlink は正規の submodule。落とすのは新規に入った分だけ。
+  const known = new Set(git(tree, ['ls-tree', '-r', 'HEAD'], undefined, env)
+    .split(/\r?\n/).filter(line => line.startsWith('160000 '))
+    .map(line => line.slice(line.indexOf('\t') + 1)));
+  const drop = stagedLinks.filter(p => !known.has(p));
+  if (drop.length) git(tree, ['rm', '--cached', '-f', '-q', '--', ...drop], undefined, env);
+  return drop;
+}
 export function dirtyStatus(tree) {
   const records = git(tree, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=all']).split('\0');
   const kept = [], paths = [], snapshotPaths = [];
@@ -77,6 +95,7 @@ export function snapshotTree(tree, status) {
     git(tree, ['read-tree', parent], undefined, env);
     if (status.snapshotPaths.length) git(tree, ['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'],
       status.snapshotPaths.map(p => `:(top,literal)${p}\0`).join(''), env);
+    unstageUndeclaredGitlinks(tree, env);
     return git(tree, ['write-tree'], undefined, env).trim();
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 }
@@ -193,6 +212,8 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
         // pathspecs as errors, and cannot sweep up a clone created after status.
         if (status.paths.length) git(tree, ['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'],
           status.paths.map(p => `:(top,literal)${p}\0`).join(''));
+        const droppedLinks = unstageUndeclaredGitlinks(tree);
+        if (droppedLinks.length) log('RESCUE_GITLINK_DROPPED', droppedLinks.join(' '));
         git(tree, ['-c', 'user.name=Auto Session Rescue', '-c', 'user.email=auto-session-rescue@localhost', 'commit', '-m', `auto-session-rescue-${stamp}`]);
         sha = git(tree, ['rev-parse', 'HEAD']).trim();
       }

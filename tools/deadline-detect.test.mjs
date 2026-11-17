@@ -239,6 +239,22 @@ test('引用不一致1件混ざってもdryRun:falseでnextが保存される', 
   assert.equal(rows[0].status, '未着手');
 });
 
+test('鍵なし席（deps.seatCheckでkim:false）はheartbeat ok=trueでスキップ', async t => {
+  const home = homeFor(t), output = [], heartbeats = [];
+  const code = await main(['--now', '2026-11-04'], {
+    home,
+    stdout: x => output.push(x),
+    heartbeat: async info => heartbeats.push(info),
+    seatCheck: () => ({ kim: false }),
+  });
+  assert.equal(code, 0);
+  assert.equal(heartbeats.length, 1);
+  assert.equal(heartbeats[0].ok, true);
+  assert.equal(heartbeats[0].summary, '鍵なし席のためスキップ');
+  const result = JSON.parse(output[0]);
+  assert.equal(result.skip, true);
+});
+
 test('鍵持ちのkim席はfixtureモードで通常動作（fixtureはseat checkをスキップ）', async t => {
   const home=homeFor(t), output=[];
   const code = await main(['--dry-run','--fixture','tools/fixtures/deadline/'], { home, stdout: x => output.push(x), skipSeatCheck: false, request: () => assert.fail('network'), heartbeat: () => assert.fail('heartbeat'), notify: () => assert.fail('notify') });

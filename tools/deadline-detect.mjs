@@ -149,7 +149,7 @@ export async function runDetect({ home, config, ledger, state, sources, now, dry
 }
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const home = deps.home || defaultHome(), stdout = deps.stdout || console.log, stderr = deps.stderr || console.error;
-  const startedAt = new Date().toISOString(); const dryRun = argv.includes('--dry-run'); let ok = false, valid = false;
+  const startedAt = new Date().toISOString(); const dryRun = argv.includes('--dry-run'); let ok = false, valid = false, resultSummary = '';
   try {
     const opts = {};
     for (let i = 0; i < argv.length; i++) {
@@ -162,7 +162,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     valid = true;
     if (!opts.fixture && deps.skipSeatCheck !== true) {
       const seat = deps.seatCheck ? deps.seatCheck(home) : seatCheck(home);
-      if (!seat.kim) { stdout(JSON.stringify({ skip: true, reason: 'deadline jobs run only on the seat with the kim DWD key', seat })); return 0; }
+      if (!seat.kim) { resultSummary = '鍵なし席のためスキップ'; ok = true; stdout(JSON.stringify({ skip: true, reason: 'deadline jobs run only on the seat with the kim DWD key', seat })); return 0; }
     }
     const fixture = opts.fixture ? readJson(path.join(opts.fixture, 'ledger.json'), {}) : null;
     if (opts.fixture && (!fixture || !Array.isArray(fixture.rows))) throw new Error('fixture の台帳JSONがありません、または形式が不正です');
@@ -185,13 +185,16 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       return result;
     };
     const result = dryRun ? await work() : await withLedgerLock(home, work);
-    stdout(JSON.stringify(result, null, 2)); ok = result.errors.length === 0; return ok ? 0 : 1;
-  } catch (e) { stderr(`deadline-detect: ${e.message}`); return 1; }
+    stdout(JSON.stringify(result, null, 2));
+    ok = result.errors.length === 0;
+    resultSummary = ok ? '期限検出完了' : `期限検出エラー: ${result.errors.map(e => e.source).join(', ')}`;
+    return ok ? 0 : 1;
+  } catch (e) { if (!resultSummary) resultSummary = String(e.message).slice(0, 200); stderr(`deadline-detect: ${e.message}`); return 1; }
   finally {
     if (valid && !dryRun) {
-      await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineDetect', startedAt, finishedAt: new Date().toISOString(), ok, summary: ok ? '期限検出完了' : '鍵なし席のためスキップ', cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
+      await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineDetect', startedAt, finishedAt: new Date().toISOString(), ok, summary: resultSummary || (ok ? '期限検出完了' : '期限検出失敗'), cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
       const log = path.join(home, '.claude/logs/deadline-detect.log'); fs.mkdirSync(path.dirname(log), { recursive: true });
-      try { fs.appendFileSync(log, `${new Date().toISOString()} deadline-detect ${ok ? 'ok' : 'skipped'}\n`); }
+      try { fs.appendFileSync(log, `${new Date().toISOString()} deadline-detect ${ok ? 'ok' : 'failed'} ${resultSummary}\n`); }
       catch (error) { if (error.code !== 'EBUSY') throw error; }
     }
   }

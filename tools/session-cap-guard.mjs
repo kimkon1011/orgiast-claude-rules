@@ -7,6 +7,8 @@ import { isEntry } from './is-entry.mjs';
 
 const HOUR = 60 * 60 * 1000;
 export const HOURLY_MARKER = '【グロボの毎時定時起動】';
+const HEAD_BYTES = 65536; // 64 KB for marker detection
+const TAIL_BYTES = 262144; // 256 KB for close-detection tail
 
 function positiveNumber(value, fallback) {
   const parsed = Number(value);
@@ -62,26 +64,49 @@ function enumerateWindowsProcesses() {
   return Array.isArray(parsed) ? parsed : [parsed];
 }
 
-function findHourlySessions(home) {
+function readHead(fd, bytes) {
+  const buf = Buffer.alloc(bytes);
+  const { bytesRead } = fs.readSync(fd, buf, 0, bytes, 0);
+  return buf.subarray(0, bytesRead).toString('utf8');
+}
+
+function readTail(fd, fileSize, bytes) {
+  const chunk = Math.min(bytes, fileSize);
+  const buf = Buffer.alloc(chunk);
+  const offset = fileSize - chunk;
+  const { bytesRead } = fs.readSync(fd, buf, 0, chunk, offset);
+  return buf.subarray(0, bytesRead).toString('utf8');
+}
+
+export function findHourlySessions(home, { now = Date.now(), scanHours } = {}) {
   const root = path.join(home, '.claude', 'projects');
   if (!fs.existsSync(root)) return [];
   const sessions = [];
   const pending = [root];
+  const scanMs = (scanHours ?? positiveNumber(process.env.HOURLY_SESSION_SCAN_HOURS, 48)) * HOUR;
   while (pending.length) {
     const dir = pending.pop();
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) pending.push(fullPath);
       else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
-        const text = fs.readFileSync(fullPath, 'utf8');
-        if (!text.includes(HOURLY_MARKER)) continue;
         const stat = fs.statSync(fullPath);
-        sessions.push({
-          sessionId: path.basename(entry.name, '.jsonl'),
-          lastActivity: stat.mtime.toISOString(),
-          closed: /<command-name>\s*\/session-close\s*<\/command-name>|"commandName"\s*:\s*"\/?session-close"/.test(text),
-          transcript: fullPath,
-        });
+        if (now - stat.mtime.getTime() > scanMs) continue;
+        const fd = fs.openSync(fullPath, 'r');
+        try {
+          const head = readHead(fd, HEAD_BYTES);
+          if (!head.includes(HOURLY_MARKER)) continue;
+          const tail = readTail(fd, stat.size, TAIL_BYTES);
+          const closed = /<command-name>\s*\/session-close\s*<\/command-name>|"commandName"\s*:\s*"\/?session-close"/.test(tail);
+          sessions.push({
+            sessionId: path.basename(entry.name, '.jsonl'),
+            lastActivity: stat.mtime.toISOString(),
+            closed,
+            transcript: fullPath,
+          });
+        } finally {
+          fs.closeSync(fd);
+        }
       }
     }
   }
@@ -101,7 +126,7 @@ export function main(env = process.env) {
   const result = decideLaunch({
     isHourlyLaunch: isHourlyInvocation,
     enumerateProcesses: enumerateWindowsProcesses,
-    listSessions: () => findHourlySessions(home),
+    listSessions: () => findHourlySessions(home, { now }),
     now,
     limit,
     staleHours,

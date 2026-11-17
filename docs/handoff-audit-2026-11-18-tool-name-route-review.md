@@ -20,8 +20,8 @@
 
 - `b6e8e3a5…` 別PCのログイン済みブラウザセッションが必要な外部サービス送信 → `codex-do.mjs`: 別PCにしか無いブラウザセッション（OAuth 同意・2FA 等）が必要な外部サービス（freee・X・各種SaaS）への送信は、fleet-mail または直接指示で別PCの codex へタスクとして渡し、各PCに保存済みの storageState/Chrome プロファイルを再利用させる。実行不能なら試行記録・エラーとともに「未確認」と書く。
 - `ba761818…`（同一観測の別候補）PDF が大きすぎて MCP で開けない → `Drive API`: Drive MCP で開けない大きな PDF は、DWD（kim impersonate / drive スコープ）の Drive API v3 files.get?alt=media でバイナリを取得し、ローカルの Playwright/chromium または node 上で text 抽出する。OpenAI/ChatGPT の PDF アップロードに頼らない。
-- `8e389652…` メールの不達情報を報告し、原因を示す → `Gmail MCP`: メール不達（bounce）の検出は、DWD 経由で Gmail API users.messages.list（query="is:unread from:mailer-daemon"）と messages.get で不達本文（NDR）を読み、error code（550/554 等）と原因を判定する。推測で原因を書かず、不達の有無が分からない場合は「未確認」と書く。
-- `ebdd7635…` ファイル/フォルダの権限確認と読み戻し → `Drive API`: ファイル/フォルダへのアクセス権限の確認は読み取り専用で完結する。DWD で Drive API v3 files.get（fields=permissions）で既存権限一覧を取得し報告する。権限付与が必要なら tools/drive-share.mjs へ進む。
+- `8e389652…` メールの不達情報を報告し、原因を示す → `Gmail MCP`: メール不達（bounce）の検出は、Gmail コネクタ（search_threads/get_thread）または tools/gmail-search.mjs（DWD）で不達本文（NDR）を読み、error code（550/554 等）と原因を判定する。推測で原因を書かず、不達の有無が分からない場合は「未確認」と書く。再送は社外送信なので、原因と再送案（宛先修正・本文全文）を最終メッセージに出し、kim の「送ってよい」の後に tools/gmail-draft.mjs --send で送る。
+- `ebdd7635…` ファイル/フォルダの権限確認と読み戻し → `Drive API`: ファイル/フォルダへのアクセス権限の確認は読み取り専用で完結する。DWD で Drive API v3 files.get（fields=permissions）で既存権限一覧を取得し報告する。権限付与・変更は取り消せない操作なので、必要な権限（相手・ロール）を最終メッセージに書き kim の承認後に tools/drive-share.mjs で付け、files.get の permissions で読み戻す。ただし kim@orgiast.jp への編集権限付与は既定ルールどおり承認不要。
 
 ## 備考（監査 fix 案の道具名は実在確認必須）
 

@@ -415,13 +415,13 @@
   },
   {
     "pattern": "メールの不達情報を報告し、原因を示す",
-    "route": "メール不達（bounce）の検出と原因報告は Claude 側で行う。DWD（seisaku-team@orgiast.jp impersonate / gmail.readonly スコープ）で Gmail API `users.messages.list` を query=\"is:unread from:mailer-daemon\"（または bounce・MAILER-DAEMON・Delivery Status Notification の件名）で叩き、不達メール（NDR）の本文を `messages.get`（format=full）で読んで error code（550/554 等）と原因（mailbox full / user unknown / spam blocked / recipient rejected）を本文の pattern から判定する。推測や類似メールの経験で原因を書かず、不達の有無が `is:unread` の range 外なら「不達の有無は未確認」と書く。送信失敗の error がユーザー名・パスワード・認証の話でなければ送信再試行を Claude 自身で行う（`node tools/gmail-draft.mjs --rebounce <messageId>` 等は現時点で未実装なので、元の宛先へ再送するか代替ルートを実測する）。Gmail MCP は本環境に無い（mcpServers=gemini-cli のみ）が、DWD 経路の読み取りは既存ツール（tools/gmail-search.mjs）で通る。",
+    "route": "メール不達（bounce）の検出と原因報告は Claude 側で行う。Gmail コネクタ（search_threads/get_thread）または `tools/gmail-search.mjs`（DWD: seisaku-team@orgiast.jp impersonate / gmail.readonly スコープ）で、不達メール（NDR）を query=\"is:unread from:mailer-daemon\"（または bounce・MAILER-DAEMON・Delivery Status Notification の件名）から検索して本文を読み、error code（550/554 等）と原因（mailbox full / user unknown / spam blocked / recipient rejected）を本文の pattern から判定する。推測や類似メールの経験で原因を書かず、不達の有無が `is:unread` の range 外なら「不達の有無は未確認」と書く。再送は社外送信なので、原因と再送案（宛先修正・本文全文）を最終メッセージに出し、kim の「送ってよい」の後に `tools/gmail-draft.mjs --send` で送る。",
     "confidence": "high",
     "source": "handoff-audit-nightly:8e38965212aa239b426cb65e3b16d1d712dcc85224a13b89350517a588c0df69 / 2026-11-18 tool-name-route レビューで route（`Gmail MCP` 道具名のみ）を DWD 経由 Gmail API の不達検出手順文へ書き直して採用"
   },
   {
     "pattern": "ファイル/フォルダの権限確認と読み戻し",
-    "route": "ファイル/フォルダへのアクセス権限（閲覧・編集・コメントの各レベル）の確認は、権限付与（書き込み）ではなく読み取り専用操作として完結する。DWD（kim impersonate / drive スコープ）で `tools/lib/drive-auth.mjs` の `getDriveToken` を使い、Drive API v3 `files.get` に fields=permissions(id,emailAddress,role,type) を指定して既存権限一覧を取得し、各メールアドレスとロールの組を「共有済み」と判定する。特定のアカウント（例: kim@・seisaku-team@）が未共有の場合は「未確認」と書かず、共有されていない事実と現在の権限ロール一覧をそのまま報告する。permissions フィールドが取得できない（403 または unauthorized_client）場合のみエラーを記録し、権限不足を手渡し理由にしない。権限付与が必要なら tools/drive-share.mjs へ進む。sheets の権限確認は sheets-readonly SA 鍵（scope=spreadsheets.readonly）でも可能。",
+    "route": "ファイル/フォルダへのアクセス権限（閲覧・編集・コメントの各レベル）の確認は、権限付与（書き込み）ではなく読み取り専用操作として完結する。DWD（kim impersonate / drive スコープ）で `tools/lib/drive-auth.mjs` の `getDriveToken` を使い、Drive API v3 `files.get` に fields=permissions(id,emailAddress,role,type) を指定して既存権限一覧を取得し、各メールアドレスとロールの組を「共有済み」と判定する。特定のアカウント（例: kim@・seisaku-team@）が未共有の場合は「未確認」と書かず、共有されていない事実と現在の権限ロール一覧をそのまま報告する。permissions フィールドが取得できない（403 または unauthorized_client）場合のみエラーを記録し、権限不足を手渡し理由にしない。権限付与・変更は取り消せない操作なので、必要な権限（相手・ロール）を最終メッセージに書き kim の承認後に `tools/drive-share.mjs` で付け、`files.get` の permissions で読み戻す。ただし kim@orgiast.jp への編集権限付与は既定ルールどおり承認不要。sheets の権限確認は sheets-readonly SA 鍵（scope=spreadsheets.readonly）でも可能。",
     "confidence": "high",
     "source": "handoff-audit-nightly:ebdd7635bd8dc350cd7586c5b9aa45d012881565a901ad94f77c5ff0569f1912 / 2026-11-18 tool-name-route レビューで route（`Drive API` 道具名のみ）を読み取り専用権限確認の手順文へ書き直して採用"
   }

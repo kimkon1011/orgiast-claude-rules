@@ -241,10 +241,12 @@ test('backendSpecificTimeoutSecs は gemini-cli に既定200秒・cheap-code:dee
   assert.equal(backendSpecificTimeoutSecs('openrouter-free', {}), null);
 });
 
-// 2026-11-11 修正: 実装依頼(--kind implement)は 400 秒では終わらず代替 AI が必ず
-// 時間切れになるため、既定予算を 1200 秒に引き上げる。
-test('backendSpecificTimeoutSecs は kind=implement で既定予算を 1200 秒に引き上げる', () => {
-  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}, { kind: 'implement' }), 1200);
+// 2026-11-18 修正: executor-usage.jsonl（2026-11-01以降）で deepseek 系 implement
+// 成功 722 件の p95=54 秒・p99=384 秒・最大 597 秒。720 秒で観測済み成功を切らず
+// timeout 1回あたりの廃棄を約 180 秒減らす。gemini は 1200 秒のまま。
+test('backendSpecificTimeoutSecs は kind=implement で deepseek は 720・gemini は 1200', () => {
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}, { kind: 'implement' }), 720);
+  assert.equal(backendSpecificTimeoutSecs('deepseek', {}, { kind: 'implement' }), 720);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}, { kind: 'implement' }), 1200);
 });
 
@@ -255,8 +257,9 @@ test('backendSpecificTimeoutSecs は kind が無い・implement 以外の場合�
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}, { kind: 'verify' }), 200);
 });
 
-test('backendSpecificTimeoutSecs は kind=implement でも env 指定を優先する', () => {
+test('backendSpecificTimeoutSecs は kind=implement でも env 指定を優先する（deepseek 720 基準でも env が勝つ）', () => {
   assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '450' }, { kind: 'implement' }), 450);
+  assert.equal(backendSpecificTimeoutSecs('deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '900' }, { kind: 'implement' }), 900);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '180' }, { kind: 'implement' }), 180);
 });
 

@@ -579,9 +579,10 @@ export function fallbackBackendTimeoutSecs(timeoutSeconds, env = process.env) {
 // 2026-11-11 再調整: chain 実測（223件の chain 試行中成功46件/p95=524秒）より
 // cheap-code:deepseek を 500→400 秒に引き下げ。100秒/件の廃棄削減。
 // chain 上限を 700 秒から 600 秒に収める。
-// 実装依頼(--kind implement)は既定予算と 1200 の大きい方を返す。400 秒では実装が
-// 終わらず代替 AI が必ず時間切れになるため。env の CODEX_DO_*_TIMEOUT_SECS 指定は
-// 従来どおり最優先で、指定があれば kind に関係なくその値を返す。
+// 2026-11-18 再調整: executor-usage.jsonl（2026-11-01以降）で deepseek 系 implement
+// 成功 722 件の p95=54 秒・p99=384 秒・最大 597 秒。1200 だと 900 秒 timeout 時の
+// 待機ロス（fallback_chain_timeout 経由）が 300 秒/件になる。720 秒で観測済み成功を
+// 1件も切らず、timeout 1回あたりの廃棄を約 180 秒減らす。
 export function backendSpecificTimeoutSecs(backendName, env = process.env, { kind } = {}) {
   if (backendName === 'gemini-cli') {
     const raw = Number(env.CODEX_DO_GEMINI_TIMEOUT_SECS);
@@ -592,7 +593,7 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env, { kin
   if (backendName === 'cheap-code:deepseek' || backendName === 'deepseek') {
     const raw = Number(env.CODEX_DO_DEEPSEEK_TIMEOUT_SECS);
     if (Number.isFinite(raw) && raw > 0) return raw;
-    return kind === 'implement' ? 1200 : 400;
+    return kind === 'implement' ? 720 : 400;
   }
   return null;
 }

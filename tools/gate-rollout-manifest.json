@@ -134,6 +134,13 @@
       "rollout": "deny",
       "legacy": true
     },
+    "org-instructions-char-gate": {
+      "immediatePolicy": "2026-11-17 user 指示: 組織指示案の全体字数実測を Stop で必須化",
+      "rollout": "deny",
+      "pilotDeny": true,
+      "distributedAt": "2026-11-17T00:00:00Z",
+      "denyAfter": "2026-11-24T00:00:00Z"
+    },
     "next-action-gate": {
       "rollout": "deny",
       "legacy": true

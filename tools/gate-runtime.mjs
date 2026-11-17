@@ -43,6 +43,8 @@ if (name === 'mail-send-approval-gate' && entry?.rollout === 'deny' && entry.imm
     && entry.immediatePolicy === '2026-11-02 kim 指示: アプリからの Claude API 利用を全PC全アカウント全プロジェクトで禁止') return 'deny';
   if (name === 'response-language-gate' && entry?.rollout === 'deny'
     && entry.immediatePolicy === '2026-10-26 cr 指示: Stop hook の書き直しで英語へ逸脱した実害') return 'deny';
+  if (name === 'org-instructions-char-gate' && entry?.rollout === 'deny'
+    && entry.immediatePolicy === '2026-11-17 user 指示: 組織指示案の全体字数実測を Stop で必須化') return 'deny';
   if (entry?.legacy === true && entry.rollout === 'deny') return 'deny';
   if (entry?.pilotDeny === true && (manifest?.pilotHosts || []).some(h => h.toLowerCase() === hostname.toLowerCase())) return 'deny';
   if (entry?.rollout === 'warn') return 'warn';

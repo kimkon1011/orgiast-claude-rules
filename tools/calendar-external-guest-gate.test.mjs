@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { judge } from './calendar-external-guest-gate.mjs';
 
 // Helper: create a minimal transcript fixture for marker testing
@@ -230,11 +231,25 @@ for (const command of [
 ]) test(`additional shell routes: ${command}`, () => assert.equal(judge({tool_name:'Bash',tool_input:{command}}).decision,'block'));
 
 test('real PreToolUse process emits deny JSON', () => {
-  const result = spawnSync(process.execPath, ['tools/calendar-external-guest-gate.mjs'], {
-    input: JSON.stringify({tool_name:'mcp__google_calendar__create_event',tool_input:{attendees:['client@example.com']}}), encoding:'utf8', timeout:10000,
-  });
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision, 'deny');
+  // Resolve a native path from the test module, independent of the runner's cwd.
+  // URL.pathname leaves /C:/ and escaped characters in Windows paths.
+  const script = fileURLToPath(new URL('./calendar-external-guest-gate.mjs', import.meta.url));
+  const input = JSON.stringify({tool_name:'mcp__google_calendar__create_event',tool_input:{attendees:['client@example.com']}});
+  for (const newline of ['', '\n', '\r\n']) {
+    const result = spawnSync(process.execPath, [script], {
+      cwd: os.tmpdir(), input: input + newline, encoding:'utf8', timeout:10000,
+    });
+    const diagnostic = JSON.stringify({ executable: process.execPath, script, newline,
+      error: result.error?.message, status: result.status, signal: result.signal,
+      stdout: result.stdout, stderr: result.stderr });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, diagnostic);
+    assert.ok(result.stdout?.trim(), diagnostic);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.hookSpecificOutput.hookEventName, 'PreToolUse', diagnostic);
+    assert.equal(output.hookSpecificOutput.permissionDecision, 'deny', diagnostic);
+    assert.ok(output.hookSpecificOutput.permissionDecisionReason.includes('client@example.com'), diagnostic);
+  }
 });
 test('canonical hook matcher and converge required repair include the gate', () => {
   const hooks = JSON.parse(fs.readFileSync(new URL('./hook-dispatch-manifest.json',import.meta.url),'utf8'));

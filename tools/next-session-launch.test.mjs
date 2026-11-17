@@ -34,6 +34,7 @@ import {
   runHeadlessNextSession,
   sanitizeEnv,
   shouldLaunch,
+  DEFAULT_MAX_CLAUDE_PROCESSES,
   shouldInstallBundledVsix,
   trustKeyVariants,
 } from './next-session-launch.mjs';
@@ -1154,8 +1155,8 @@ test('headless は glm 失敗後に deepseek の代替レーンで成功する',
 });
 
 
-test('注入したプロセス数が 12 なら起動をスキップし過負荷をログに出す', async () => {
-  const { io, calls } = fakeIo({ countClaudeProcesses: () => 12 });
+test('注入したプロセス数が 5 なら起動をスキップし過負荷をログに出す', async () => {
+  const { io, calls } = fakeIo({ countClaudeProcesses: () => 5 });
   assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
   assert.equal(calls.spawn.length, 0);
   assert.match(calls.logs.join('\n'), /スキップ:.*過負荷/);
@@ -1163,12 +1164,14 @@ test('注入したプロセス数が 12 なら起動をスキップし過負荷�
 
 test('過負荷ガードは上限・環境設定・force・取得不能を扱う', () => {
   const base = { state: {}, now: Date.now(), env: {}, force: false, pendingTab: false };
-  const blocked = shouldLaunch({ ...base, claudeProcesses: 12 });
+  assert.equal(DEFAULT_MAX_CLAUDE_PROCESSES, 5);
+  const blocked = shouldLaunch({ ...base, claudeProcesses: 5 });
   assert.equal(blocked.ok, false);
-  assert.match(blocked.reason, /過負荷/);
-  assert.equal(shouldLaunch({ ...base, claudeProcesses: 11 }).ok, true);
-  assert.equal(shouldLaunch({ ...base, claudeProcesses: 12, force: true }).ok, true);
-  assert.equal(shouldLaunch({ ...base, claudeProcesses: 12, env: { ORGIAST_NEXT_SESSION_MAX_CLAUDE: '20' } }).ok, true);
+  assert.match(blocked.reason, /上限 5/);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 4 }).ok, true);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 5, force: true }).ok, true);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 5, env: { ORGIAST_NEXT_SESSION_MAX_CLAUDE: '20' } }).ok, true);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 20, env: { ORGIAST_NEXT_SESSION_MAX_CLAUDE: '20' } }).ok, false);
   assert.equal(shouldLaunch({ ...base, claudeProcesses: null }).ok, true);
 });
 

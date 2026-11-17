@@ -13,6 +13,12 @@ import { countWindowsClaudeProcesses } from './lib/windows-process.mjs';
 import { addItem } from './kim-inbox.mjs';
 
 const DEFAULT_MAX_REOPEN = 3;
+// 自動 claude がこの本数以上なら新しい開き直しをしない（オーナー指定。REOPEN_MAX_CLAUDE で上書き）。
+export const DEFAULT_REOPEN_MAX_CLAUDE = 5;
+function maxClaudeFromEnv(env) {
+  const value = Number(env?.REOPEN_MAX_CLAUDE);
+  return Number.isFinite(value) ? value : DEFAULT_REOPEN_MAX_CLAUDE;
+}
 const BASE = 'https://api.anthropic.com/v1/code/sessions';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 function readJson(file, fallback) {
@@ -704,7 +710,7 @@ export async function getLoadGuardStatus({
   isWaitingSession,
   now = Date.now,
 } = {}) {
-  const maxClaude = Number.isFinite(Number(env?.REOPEN_MAX_CLAUDE)) ? Number(env.REOPEN_MAX_CLAUDE) : 10;
+  const maxClaude = maxClaudeFromEnv(env);
   const maxCpu = Number.isFinite(Number(env?.REOPEN_MAX_CPU)) ? Number(env.REOPEN_MAX_CPU) : 85;
 
   let claudeCount = null;
@@ -1027,7 +1033,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
         result.loadGuard = { claudeCount: loadStatus.claudeCount, cpuPct: loadStatus.cpuPct, reason: loadStatus.reason, error: loadStatus.error };
       }
       const cpuThreshold = Number.isFinite(Number(env.REOPEN_MAX_CPU)) ? Number(env.REOPEN_MAX_CPU) : 85;
-      const claudeThreshold = Number.isFinite(Number(env.REOPEN_MAX_CLAUDE)) ? Number(env.REOPEN_MAX_CLAUDE) : 10;
+      const claudeThreshold = maxClaudeFromEnv(env);
       const isCpuHigh = loadStatus.cpuPct !== null && loadStatus.cpuPct >= cpuThreshold;
       const isClaudeHigh = loadStatus.claudeCount !== null && loadStatus.claudeCount >= claudeThreshold;
 
@@ -1041,12 +1047,17 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
           result.deferredCpu = loadStatus.cpuPct;
           reopenCandidates = [];
         } else if (isClaudeHigh) {
-          // claudeCount high → still reopen 1 candidate so RC doesn't stay cut off
-          const allowCount = Math.min(1, reopenCandidates.length);
-          const skipCount = reopenCandidates.length - allowCount;
-          if (skipCount > 0) result.skipped.loadGuard = skipCount;
-          result.loadGuard.allowFirst = true;
-          reopenCandidates = reopenCandidates.slice(0, allowCount);
+          // 既定は 0 件。REOPEN_ALLOW_FIRST=1 のときだけ、従来どおり 1 件だけ開く。
+          if (env?.REOPEN_ALLOW_FIRST === '1') {
+            const allowCount = Math.min(1, reopenCandidates.length);
+            const skipCount = reopenCandidates.length - allowCount;
+            if (skipCount > 0) result.skipped.loadGuard = skipCount;
+            result.loadGuard.allowFirst = true;
+            reopenCandidates = reopenCandidates.slice(0, allowCount);
+          } else {
+            result.skipped.loadGuard = reopenCandidates.length;
+            reopenCandidates = [];
+          }
         }
       }
 

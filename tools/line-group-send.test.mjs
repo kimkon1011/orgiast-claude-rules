@@ -9,6 +9,8 @@ test('assertSendableText: 文字化けとプレースホルダ残りは送らな
   assert.doesNotThrow(() => assertSendableText('皆さん、お疲れさまです。'));
   assert.throws(() => assertSendableText('Ã§Ã£Ã¤Ã¥Ã¦'), /文字化け/);
   assert.throws(() => assertSendableText('料金は XX 円です'), /プレースホルダ/);
+  assert.throws(() => assertSendableText('https://claude-pc.tailc5d751.ts.net/secretary/book'), /空き日程URL/);
+  assert.doesNotThrow(() => assertSendableText('11月20日 10:00はいかがでしょうか。'));
 });
 
 test('parseArgs: グループと本文・画像を受け取る', () => {

@@ -1,10 +1,18 @@
-User-agent: *
+User-agent: Googlebot
+Allow: /
+Crawl-delay: 10
+
+User-agent: OAI-SearchBot
 Allow: /
 
-# Descriptive resources for crawlers and AI systems.
-# These paths are relative to the deployment origin when this directory is served at /apps/expo-apply/.
-# /apps/expo-apply/llms.txt
-# /apps/expo-apply/ai.txt
-# /apps/expo-apply/index.md
-# /apps/expo-apply/faq.html
-# /apps/expo-apply/research.html
+User-agent: Claude-SearchBot
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: *
+Allow: /
+Disallow: /test/
+
+Sitemap: https://orgiast.jp/apps/expo-apply/sitemap.xml

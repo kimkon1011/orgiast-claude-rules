@@ -6,8 +6,13 @@ import { keyserveSecret, requireKeyservePcId, keyserveAuthHeaders } from '../key
 export const GWS_USER = 'seisaku-team@orgiast.jp';
 export const GWS_MARKER = 'orgiast-server-side-gws';
 export const GWS_KIM_MARKER = 'orgiast-server-side-gws-kim';
+export const GWS_SA_SELF_MARKER = 'orgiast-server-side-gws-sa-self';
 export function proxyCredential({ keyPath, impersonate, scope }) {
   if (keyPath && fs.existsSync(keyPath)) return null;
+  if (impersonate === 'sa-self') {
+    if (!String(scope).split(/\s+/).every(s => /^https:\/\/www\.googleapis\.com\/auth\/(drive|spreadsheets)$/.test(s))) throw Error('GWS proxy: sa-self only allowed for drive/spreadsheets');
+    return GWS_SA_SELF_MARKER;
+  }
   if (![GWS_USER,'kim@orgiast.jp'].includes(impersonate)) throw Error('GWS proxy: unsupported subject');
   if (!String(scope).split(/\s+/).every(s => /^https:\/\/www\.googleapis\.com\/auth\/(drive|spreadsheets|calendar\.readonly|gmail\.(readonly|compose|send))$/.test(s))) throw Error('GWS proxy: unsupported scope');
   if (impersonate === 'kim@orgiast.jp' && scope !== 'https://www.googleapis.com/auth/calendar.readonly') throw Error('GWS proxy: kim is calendar-only');
@@ -64,11 +69,12 @@ export function googleRoute(raw, marker = GWS_MARKER) {
 export async function gwsFetch(url, options = {}, dependencies = {}) {
   const headers = new Headers(options.headers);
   const marker = headers.get('authorization')?.replace(/^Bearer /,'');
-  if (![GWS_MARKER,GWS_KIM_MARKER].includes(marker)) return (dependencies.fetchImpl || globalThis.fetch)(url, options);
+  if (![GWS_MARKER,GWS_KIM_MARKER,GWS_SA_SELF_MARKER].includes(marker)) return (dependencies.fetchImpl || globalThis.fetch)(url, options);
   const route = googleRoute(url, marker), method = options.method || 'GET';
+  const extra = marker === GWS_SA_SELF_MARKER ? { principal: 'sa-self' } : {};
   const request = dependencies.request || channelRequest;
   const result = await request('gws', { ...dependencies, signal: options.signal,
-    ...(method === 'GET' ? { query: route } : { body: { ...route, method,
+    ...(method === 'GET' ? { query: { ...route, ...extra } } : { body: { ...route, ...extra, method,
       contentType: headers.get('content-type') || '', body: Buffer.from(options.body || '').toString('base64'),
       dryRun: headers.get('x-orgiast-dry-run') === 'true' } }) });
   if (!Number.isInteger(result.status) || typeof result.body !== 'string') throw Error('GWS proxy: invalid response');

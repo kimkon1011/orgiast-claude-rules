@@ -1,0 +1,17 @@
+[
+  {
+    "id": "ume",
+    "label": "梅 Calm Grid (standard)",
+    "add": "CALM GRID / STANDARD: preserve the standard-plan base geometry. Use clean navy and white curved panels, restrained blue-purple indirect lighting, a clear rear-wall presentation screen, and an orderly calm grid rhythm. Keep all three open sides unobstructed."
+  },
+  {
+    "id": "take",
+    "label": "竹 Luminous Membrane (premium)",
+    "add": "LUMINOUS MEMBRANE / PREMIUM: color and finish the premium-plan base geometry in place. The three oval luminous membrane reliefs are fixed to the rear wall; keep their exact positions and sizes. Apply white membrane texture, warm timber accents, plants, and blue-purple light lines only to shapes already present in the base image. Do not add a lantern, pendant, suspended element, hanging sign, truss, canopy, fascia, or any new structure. Keep all three open sides unobstructed."
+  },
+  {
+    "id": "matsu",
+    "label": "松 Infinite Flow (impact)",
+    "add": "INFINITE FLOW / IMPACT: preserve the impact-plan base geometry. Express a dynamic but buildable blue-to-purple flow with the compact infinity feature entirely inside the 3.6 m envelope and footprint. Keep all three open sides unobstructed. The infinity artwork is at most 2.4 m wide and 2.0 m high, behind the entrance aisle; it must not become a gate or touch any beam. Preserve the small base-image feature."
+  }
+]

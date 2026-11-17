@@ -45,7 +45,7 @@ export async function sampleCpuBusy({ sampleMs = 5000, cpusImpl = os.cpus, sleep
 // 「オートパイロットをオーパスに変えて」。共有リポジトリの既定を変えると他 PC まで変わるため）。
 // claude- 以外や、planIncluded=false での Fable 指定は無視して既定に戻す。
 export function supervisorModel(objectiveFile, policy) {
-  // 2026-11-15 kim 指示: 自動実行（autopilot）は Sonnet。objective の opus/fable 指定も Sonnet に倒す。
+  // 2026-11-17 kim 指示: 自動実行（autopilot）の既定は Opus。軽い作業だけ Sonnet。fable 指定は opus に倒す。
   const fallback = automationModel();
   let pinned = '';
   try { pinned = JSON.parse(fs.readFileSync(objectiveFile, 'utf8').match(/```json\s*\n([\s\S]*?)\n```/)[1]).model; } catch {}

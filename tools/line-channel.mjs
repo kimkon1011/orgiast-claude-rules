@@ -3,16 +3,18 @@ import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { channelRequest } from './lib/gws-proxy.mjs';
 import { isEntry } from './is-entry.mjs';
+import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 export async function run(args=process.argv.slice(2), request=channelRequest) {
  const value=f=>{const i=args.indexOf(f);return i<0?undefined:args[i+1];};
  const allowed=['--contacts','--history','--limit','--before','--chat','--to','--body-file','--send','--dry-run','--retry-key'];
  for(let i=0;i<args.length;i++){if(!allowed.includes(args[i]))throw Error('Unknown LINE argument');if(['--limit','--before','--chat','--to','--body-file','--retry-key'].includes(args[i])){if(!args[++i] || args[i].startsWith('--'))throw Error('Missing LINE argument');}}
  if(args.includes('--contacts')) return request('line',{query:{mode:'contacts'}});
- if(!value('--to') && args.includes('--dry-run') && value('--body-file') && !args.includes('--send')) return request('line',{body:{op:'validate',dryRun:true,text:fs.readFileSync(value('--body-file'),'utf8')}});
+ if(!value('--to') && args.includes('--dry-run') && value('--body-file') && !args.includes('--send')) { const text=fs.readFileSync(value('--body-file'),'utf8'); if(findSecretaryBookingUrls(text).length) throw Error(SECRETARY_BOOKING_URL_REASON); return request('line',{body:{op:'validate',dryRun:true,text}}); }
  if(!value('--to')) return request('line',{query:{mode:'history',limit:value('--limit') || '20',...(value('--before')?{before:value('--before')}:{ }),...(value('--chat')?{chat:value('--chat')}:{})}});
  if(!value('--body-file'))throw Error('--body-file required');
  if(args.includes('--send')&&args.includes('--dry-run'))throw Error('--send and --dry-run are exclusive');
  const text=fs.readFileSync(value('--body-file'),'utf8');
+ if(findSecretaryBookingUrls(text).length) throw Error(SECRETARY_BOOKING_URL_REASON);
  const contacts=await request('line',{query:{mode:'contacts'}}), query=value('--to');
  const matches=contacts.contacts.filter(c=>c.active&&(c.id===query||c.name===query));
  if(!matches.length && /^[UC][a-f0-9]{32}$/i.test(query)) matches.push({id:query,name:'LINE ID指定'});

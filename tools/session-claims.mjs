@@ -156,7 +156,12 @@ async function main() {
   const value = name => { const i = args.indexOf(name); return i < 0 ? '' : args[i + 1] || ''; };
   const self = value('--self') || process.env.CLAUDE_SESSION_ID || '';
   const command = ['--sync', '--claim', '--release', '--filter', '--list'].find(c => args.includes(c));
-  if (!command || (['--claim', '--release', '--filter'].includes(command) && !self)) return;
+  if (!command) return;
+  if (['--claim', '--release'].includes(command) && !self) return;
+  if (command === '--filter' && !self) {
+    console.error('--self <session-id> が必要です（不明なら --self none）');
+    process.exit(2);
+  }
   const base = path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude');
   debug(`home = ${os.homedir()} / base = ${base} / command = ${command}`);
   const file = path.join(base, 'session-claims.json');

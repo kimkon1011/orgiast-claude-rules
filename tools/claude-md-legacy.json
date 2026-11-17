@@ -60,7 +60,7 @@
     "kind": "section",
     "text": "## トークン効率\n\n- **出力は Caveman**: 前置きなし、完了報告 1〜3 行（output-styles/caveman.md）\n- **キャッシュ保護**: CLAUDE.md には恒久ルールだけ。実行中タスク・今日の数字・進行中障害は書かない（毎回キャッシュを壊す）。上部ほど静的に。セッション中のモデル切替を乱発しない\n- **モデルルーティング**: 単純編集/grep/確認系 → Sonnet/Haiku、設計/横断調査/複数仮説 → Opus/Fable。迷ったら Auto\n- **重い探索はサブエージェント委譲**: 「配下を全部読んで○○」型は Explore/general-purpose に投げ、「結果を200字以内・コード本体は含めない」と指定して親コンテキストを守る",
     "requires": [
-      "**🔴 トークン効率: 出力は Caveman（output-styles/caveman.md、前置きなし・完了結論1〜3行。必要な検証表・全文・末尾3行は省略しない）。CLAUDE.md は恒久ルールのみ、上部ほど静的にし、進行中タスク・今日の数字・障害を書かない。モデル切替を乱発しない。探索は Explore/general-purpose に「結果200字以内・コード本体なし」で委譲。実装は Codex、設計/横断調査/複数仮説は Opus/Fable（§1.16 の制約）、軽い確認は Sonnet/Haiku、迷ったら Auto。**"
+      "**🔴 トークン効率: 出力は Caveman（output-styles/caveman.md、前置きなし・完了結論1〜3行。必要な検証表・全文・末尾3行は省略しない）。CLAUDE.md は恒久ルールのみ、上部ほど静的にし、進行中タスク・今日の数字・障害を書かない。モデル切替を乱発しない。探索は Explore/general-purpose に「結果200字以内・コード本体なし」で委譲。実装は Codex、設計/横断調査/複数仮説は Opus/Fable（§1.16 の制約）、軽い確認・締めは Sonnet/Haiku、迷ったら Opus。**"
     ]
   },
   {

@@ -1,0 +1,13 @@
+COLORIZE AND FINISH THE SUPPLIED DIMENSION BASE IMAGE IN PLACE. THIS IS NOT A REQUEST TO INVENT OR REDESIGN A BOOTH.
+
+Absolute priority: preserve the input image's structural outline and pixel positions. Keep every column, the ceiling/header upper edge, the rear wall, all footprint edges, every opening, every person, the camera, and the background hall in exactly the same place and at exactly the same size as the input. Keep the background hall visually unchanged.
+
+The GridBeyond booth is exactly 6 m by 6 m, single-storey, maximum 3.6 m, one rear wall and three open sides. The existing person positions and small scale are locked. The existing booth top line is locked. There must be generous empty hall-ceiling space above it.
+
+The three small white oval membrane reliefs are already fixed to the rear wall in the base image. Keep them at exactly that position and size; add surface texture and glow only. They are wall reliefs, not hanging objects. Do not add any lantern, pendant, suspended element, hanging sign, truss, canopy, fascia, or new structure.
+
+STRICTLY FORBIDDEN: any booth pixel above the input booth top line, floating or ceiling-mounted elements, roof crowns, parapets, second tiers, overhangs, tall portals, extra walls, new foreground people, changed camera angle, changed hall, or structure outside the base silhouette.
+
+Only finish surfaces and furnishings already inside the fixed shell: GridBeyond Blue #0566d8, Navy #1c1463, Purple #9052f3, white fabric, light timber, low tables and chairs, the low illuminated counter, reusable floor panels, and the thin header already shown. Only GridBeyond lettering; screens contain abstract blue-purple patterns without words.
+
+FINAL SELF-CHECK: overlay the output on the input. If the outline, column locations, top edge, person locations, background hall, or framing differ, restore them to the exact input geometry. Geometry fidelity outranks realism and decoration.

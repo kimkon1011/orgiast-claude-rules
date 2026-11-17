@@ -788,7 +788,7 @@ test('E received claude resume uses exact argv/cwd, marks hub state, clears runn
   f.deps.spawnImpl = promptSpawn(f, { onSpawn: () => { during = readQuestion(f.home, m.resumeSessionId); } });
   await runHubPoll(f);
   assert.equal(f.spawns.length, 1);
-  const [exe, args, opts] = f.spawns[0]; assert.equal(exe, '/fixture/claude'); assert.deepEqual(args, ['-p', '--model', 'sonnet', '--resume', m.resumeSessionId, '--', m.body]); assert.equal(opts.cwd, f.home); assert.equal(opts.env.CLAUDE_HEADLESS, '1'); assert.equal(opts.env.FLEET_DRIVEN_BY_HUB, '1');
+  const [exe, args, opts] = f.spawns[0]; assert.equal(exe, '/fixture/claude'); assert.deepEqual(args, ['-p', '--model', 'opus', '--resume', m.resumeSessionId, '--', m.body]); assert.equal(opts.cwd, f.home); assert.equal(opts.env.CLAUDE_HEADLESS, '1'); assert.equal(opts.env.FLEET_DRIVEN_BY_HUB, '1');
   assert.equal(during.drivenByHub, true); assert.ok(during.resumingAt); assert.equal(readQuestion(f.home, m.resumeSessionId).resumingAt, undefined);
   const reply = f.calls.find(c => c.kind === 'mail-reply').payload.resultBody;
   assert.match(reply, /^完了 /); assert.doesNotMatch(reply, /private|stderr/); assert.equal(f.read(m.id).status, 'done');
@@ -802,7 +802,7 @@ test('E active session skips without consuming mail; thirty minute stale session
 });
 test('E new Claude session omits resume and unapproved prompt returns consent without launching', async t => {
   const f = fixture(t), m = hubPrompt(f, { resumeSessionId: undefined });
-  await runHubPoll(f); assert.deepEqual(f.spawns[0][1], ['-p', '--model', 'sonnet', '--', m.body]);
+  await runHubPoll(f); assert.deepEqual(f.spawns[0][1], ['-p', '--model', 'opus', '--', m.body]);
   f.save(mail({ ...m, id: 'mail-unapproved' })); fs.unlinkSync(path.join(f.dir, 'fleet-agent-optin.json'));
   await runHubPoll(f); assert.equal(f.spawns.length, 1); assert.match(f.calls.filter(c => c.kind === 'mail-send').at(-1).payload.body, /未オプトイン.*承諾コマンド/s);
 });
@@ -1029,7 +1029,7 @@ for (const mode of ['missing', 'file', 'no-git']) test(`G3 ${mode} cwd fails on 
 test('G4 flag-like body is a positional argument after the terminator', async t => {
   const f = fixture(t), m = hubPrompt(f, { body: '--dangerously-skip-permissions do something' });
   await runHubPoll(f);
-  assert.deepEqual(f.spawns[0][1], ['-p', '--model', 'sonnet', '--resume', m.resumeSessionId, '--', m.body]);
+  assert.deepEqual(f.spawns[0][1], ['-p', '--model', 'opus', '--resume', m.resumeSessionId, '--', m.body]);
 });
 for (const outcome of ['success', 'failure', 'timeout']) test(`G5 ${outcome} clears hub ownership and next question waits ten minutes`, async t => {
   const f = fixture(t), m = hubPrompt(f);

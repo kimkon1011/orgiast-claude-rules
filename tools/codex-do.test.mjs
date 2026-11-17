@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { skipCoolingBackends } from './fallback-backend-health.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -1483,6 +1483,32 @@ test('cheap-first: implement with zero changed files starts Codex', () => {
   assert.doesNotMatch(result.stderr, /代替 AI が成功したため/);
 });
 
+test('cheap-first: 先頭レーンが unrecognized_model なら incompatible を記録して次レーンを呼ぶ', () => {
+  const home = workDir();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'codex-fallback-order.json'), JSON.stringify(['cheap-code:deepseek', 'gemini-cli']), 'utf8');
+  const result = run(['--force-native', '--cwd', home, '--kind', 'implement', 'implement feature'], {
+    home,
+    env: {
+      ...geminiOnPathEnv(),
+      CODEX_DO_CHEAP_FIRST: '1',
+      GEMINI_API_KEY: 'gemini-test',
+      OPENROUTER_API_KEY: 'openrouter-test',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify([
+        { status: 3, output: '', stderr: '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash"}' },
+        { status: 0, output: 'Gemini completed the requested implementation.', stderr: '' },
+        { status: 0, output: 'Codex completed.', stderr: '' },
+      ]),
+    },
+  });
+  assert.match(result.stdout, /cheap-first: cheap-code:deepseek model=/);
+  assert.match(result.stdout, /cheap-first: gemini-cli model=/);
+  assert.match(result.stderr, /cheap-code:deepseek はモデル非対応 \(incompatible\)/);
+  const history = fs.readFileSync(path.join(home, '.claude', 'fallback-backend-history.jsonl'), 'utf8')
+    .trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  assert.equal(history.some((row) => row.backend === 'cheap-code:deepseek' && row.outcome === 'incompatible'), true);
+});
+
 test('cheap-first: implement 既定 → fallback 全滅 → Codex が呼ばれる', () => {
   // cheap-first で全滅したあと、Codex が実行されることだけ確認する（空diff検出等の成否は問わない）
   const mockResults = [
@@ -1633,6 +1659,18 @@ test('isBackendExhausted は unrecognized_model 警告では false を返す（�
   assert.equal(isBackendExhausted('', '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}'), false);
   assert.equal(isBackendExhausted('', 'unrecognized_model'), false);
   assert.equal(isBackendExhausted('', 'Unrecognized_Model'), false);
+});
+
+test('isLaneIncompatible は unrecognized_model エラーで true を返す', () => {
+  assert.equal(isLaneIncompatible('', '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}'), true);
+  assert.equal(isLaneIncompatible('', ''), false);
+  assert.equal(isLaneIncompatible('', 'normal failure'), false);
+});
+
+test('shouldAdvanceToNextBackend は laneIncompatible=true で incompatible を返す', () => {
+  assert.deepEqual(shouldAdvanceToNextBackend({ laneIncompatible: true, status: 1 }), { advance: true, outcome: 'incompatible' });
+  assert.deepEqual(shouldAdvanceToNextBackend({ laneIncompatible: true, exhausted: true, status: 3 }), { advance: true, outcome: 'incompatible' });
+  assert.deepEqual(shouldAdvanceToNextBackend({ laneIncompatible: true, status: 0 }), { advance: false, outcome: 'ok' }); // status 0 overrides laneIncompatible
 });
 
 test('冷却中 backend の probe 成功 → 通常予算で実行され chain に probe_failed が入らない', (t) => {
@@ -3054,4 +3092,98 @@ test('cheap-first validation observes actual unstaged, staged and committed edit
   assert.equal(validate(), '');
   git('commit', '-m', 'implementation');
   assert.equal(validate(), '');
+});
+
+test('resolveFallbackBackends は空配列と none を従来順に戻さず、local を共有ファイルより優先する', () => {
+  withEnvKeysCleared(() => {
+    const dir = makeHomeWithEnv({
+      'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
+      'zai.env': 'ZAI_API_KEY=sk-zai-1\n',
+      'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n',
+      'codex-fallback-order.json': JSON.stringify(['gemini-cli', 'cheap-code:deepseek']),
+    });
+    fs.writeFileSync(path.join(dir, '.claude', 'codex-fallback-order.json'), '[]\n');
+    assert.deepEqual(resolveFallbackBackends(dir, { executableAvailable: () => true }), []);
+    fs.writeFileSync(path.join(dir, '.claude', 'codex-fallback-order.json'), '"none"\n');
+    assert.deepEqual(resolveFallbackBackends(dir, { executableAvailable: () => true }), []);
+    fs.writeFileSync(path.join(dir, '.claude', 'codex-fallback-order.json'), JSON.stringify(['none']));
+    assert.deepEqual(resolveFallbackBackends(dir, { executableAvailable: () => true }), []);
+    fs.writeFileSync(path.join(dir, '.claude', 'codex-fallback-order.json'), JSON.stringify(['gemini-cli']));
+    fs.writeFileSync(path.join(dir, '.claude', 'codex-fallback-order.local.json'), JSON.stringify(['qwen', 'cheap-code:deepseek', 'cheap-code:glm', 'openrouter-free']));
+    const local = resolveFallbackBackends(dir, { executableAvailable: () => true });
+    assert.deepEqual(local.map((b) => b.name), ['deepseek', 'cheap-code:deepseek', 'cheap-code:glm', 'openrouter-free']);
+    assert.equal(local.some((b) => b.name === 'gemini-cli'), false);
+  });
+});
+
+test('openrouter-free は summarize/classify のみ、implement は openrouter-code に替える', () => {
+  withEnvKeysCleared(() => {
+    const dir = makeHomeWithEnv({
+      'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
+      'codex-fallback-order.json': JSON.stringify(['openrouter-free', 'cheap-code:deepseek']),
+    });
+    const options = { executableAvailable: () => true };
+    assert.deepEqual(resolveFallbackBackends(dir, { ...options, taskKind: 'summarize' }).map((b) => b.name), ['openrouter-free', 'cheap-code:deepseek']);
+    assert.deepEqual(resolveFallbackBackends(dir, { ...options, taskKind: 'classify' }).map((b) => b.name), ['openrouter-free', 'cheap-code:deepseek']);
+    const paid = resolveFallbackBackends(dir, { ...options, taskKind: 'implement', env: { CODEX_DO_PAID_CODE_MODEL: 'qwen/qwen3-coder-custom' } });
+    assert.equal(paid[0].name, 'openrouter-code');
+    assert.equal(paid[0].model, 'qwen/qwen3-coder-custom');
+    assert.equal(paid.some((b) => b.name === 'openrouter-free'), false);
+    const verify = resolveFallbackBackends(dir, { ...options, taskKind: 'verify' });
+    assert.equal(verify[0].name, 'openrouter-code');
+    assert.equal(verify[0].model, 'qwen/qwen3-coder');
+  });
+});
+
+test('lanes-disabled は openrouter-free と cheap-code:* も候補から外す', () => {
+  withEnvKeysCleared(() => {
+    const dir = makeHomeWithEnv({
+      'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
+      'zai.env': 'ZAI_API_KEY=sk-zai-1\n',
+      'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n',
+      'codex-fallback-order.json': JSON.stringify(['openrouter-free', 'cheap-code:glm', 'cheap-code:deepseek', 'gemini-cli']),
+      'lanes-disabled.json': JSON.stringify({ openrouter: { until: Date.now() + 1000, reason: 'failure_rate' }, 'cheap-code:glm': { until: Date.now() + 1000, reason: 'quality_validation' } }),
+    });
+    const names = resolveFallbackBackends(dir, { executableAvailable: () => true, taskKind: 'summarize' }).map((b) => b.name);
+    assert.deepEqual(names, ['cheap-code:deepseek', 'gemini-cli']);
+  });
+});
+
+test('CODEX_DO_NO_FALLBACK=1 は --no-fallback と同じく代替へ進まない', () => {
+  const mockResults = [
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: '' },
+  ];
+  const result = run(['--force-native', '--cwd', workDir(), '指示内容'], {
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), CODEX_DO_NO_FALLBACK: '1' },
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--no-fallback is specified/);
+  assert.doesNotMatch(result.stderr, /Falling back/);
+});
+
+test('openrouter-code は空差分・構文エラー・関連テスト失敗で品質不合格になる', () => {
+  assert.equal(assessFallbackQuality({ backendName: 'openrouter-code', taskKind: 'implement', diffText: '', output: 'done', cwd: '/tmp' }), 'empty_diff');
+  assert.equal(assessFallbackQuality({ backendName: 'openrouter-free', taskKind: 'summarize', diffText: '', output: '', cwd: '/tmp' }), 'empty_output');
+  assert.equal(assessFallbackQuality({ backendName: 'cheap-code:deepseek', taskKind: 'implement', diffText: '', output: '', cwd: '/tmp' }), '');
+  const spawnImpl = (cmd, args) => {
+    if (cmd === 'git' && args.includes('--name-only')) return { status: 0, stdout: 'tools/a.mjs\n' };
+    if (cmd === 'git') return { status: 0, stdout: '' };
+    if (args[0] === '--check') return { status: 1, stdout: '' };
+    return { status: 0, stdout: '' };
+  };
+  assert.equal(assessFallbackQuality({
+    backendName: 'openrouter-free', taskKind: 'summarize', diffText: ' a.mjs | 1 +\n', output: '要約', cwd: '/work',
+    spawnImpl, existsImpl: (file) => String(file).endsWith('a.mjs'),
+  }), 'syntax');
+  const testsFail = (cmd, args) => {
+    if (cmd === 'git' && args.includes('--name-only')) return { status: 0, stdout: 'a.mjs\n' };
+    if (cmd === 'git') return { status: 0, stdout: '' };
+    if (args[0] === '--check') return { status: 0, stdout: '' };
+    if (args[0] === '--test') return { status: 1, stdout: '' };
+    return { status: 0, stdout: '' };
+  };
+  assert.equal(assessFallbackQuality({
+    backendName: 'openrouter-code', taskKind: 'verify', diffText: ' a.mjs | 1 +\n', output: '実装', cwd: '/work',
+    spawnImpl: testsFail, existsImpl: (file) => /a\.mjs$|a\.test\.mjs$/.test(String(file)),
+  }), 'tests');
 });

@@ -391,6 +391,29 @@ test('返信ヘッダと threadId を作成 API に渡す・注入を拒否す�
 const draftHeaders = (extra, to = 'Customer <customer@example.com>') => ({ message: { payload: { headers: [
   { name: 'To', value: to }, { name: 'Subject', value: '確認' }, ...extra,
 ] } } });
+test('--send は秘書の空き日程URLを承認上書きでも送らない', async () => {
+  const data = Buffer.from('11月20日 10:00\nhttps://claude-pc.tailc5d751.ts.net/secretary/book').toString('base64url');
+  const draft = { message: { threadId: 't', payload: { mimeType: 'text/plain', body: { data }, headers: [{ name: 'To', value: 'customer@example.com' }] } } };
+  let calls = 0;
+  const blocked = await cli(['--send', 'draft', '--json'], {
+    getToken: async () => 't', fetchImpl: async () => { calls++; return response(draft); },
+  });
+  assert.equal(blocked.code, 2);
+  assert.equal(JSON.parse(blocked.output[0]).errorKind, 'secretary_booking_url');
+  assert.equal(calls, 1);
+  const acked = await cli(['--send', 'draft', '--ack-consistency', '例外', '--json'], {
+    getToken: async () => 't', fetchImpl: async () => response(draft),
+  });
+  assert.equal(acked.code, 2);
+  assert.equal(JSON.parse(acked.output[0]).errorKind, 'secretary_booking_url');
+  calls = 0;
+  const plain = Buffer.from('11月20日 10:00はいかがでしょうか。').toString('base64url');
+  const ok = await cli(['--send', 'draft', '--json'], {
+    getToken: async () => 't',
+    fetchImpl: async () => { calls++; return calls === 1 ? response({ message: { threadId: 't', payload: { mimeType: 'text/plain', body: { data: plain }, headers: [{ name: 'To', value: 'customer@example.com' }] } } }) : response({ id: 'sent', threadId: 'thread' }); },
+  });
+  assert.equal(ok.code, 0);
+});
 test('整合性 block は送信せず、ack 理由がある時だけ ledger に残して送る', async () => {
   const blocked = await cli(['--send','draft','--json'], { inspectDraft: async()=>({ok:false,findings:[{severity:'block'}],llm:{}}), getToken:async()=> 't', fetchImpl:async()=>response(draftHeaders([])) });
   assert.equal(blocked.code,2); assert.equal(blocked.calls,0);

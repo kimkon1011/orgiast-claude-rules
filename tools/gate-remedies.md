@@ -2,6 +2,14 @@
 
 値そのものは記載しない。取得: `node tools/onboarding-sync.mjs --keys-only --force`。
 
+## calendar-external-guest-gate
+
+社外のメールアドレスをカレンダーの参加者（attendees）に追加する Calendar MCP / Bash / PowerShell の操作をブロックする。社内（@orgiast.jp または config/staff-addresses.json のアドレス）のみ通す。
+
+- 承認マーカーによる解除はしない。社外 attendee を取り除き、社内参加者だけで再実行する。外部 payload を使う場合も参加者を検証可能な形にする。
+- 社外の人への案内は `node tools/gmail-draft.mjs --user <アカウント> --to <宛先> --subject "..." --body-file <本文>` でメール本文に日時と会議URLを書いて送る
+- 例外はない（従来型の「ゲートをskip」方式は未実装）
+
 ## askuser-selfcheck-gate
 
 質問前に既存権限でファイル/ツール結果を調べ、取得可能な情報を人に聞かない。
@@ -165,6 +173,8 @@ run_in_background を外し前景実行、ScheduleWakeup を使わず timeout �
 
 GUI operator・承認済み送信スクリプトは回数制限の対象外（Codex に委譲できない PC 操作を送信途中で止めないため）。
 ゲートが本体に要求するコマンドは `gateRequired` でツール回数に関係なく常時許可する。
+締め・記録・確認（`git status` / `diff` / `log`、`node --test`、`node --check`、`session-claims.mjs`、`close-session.mjs`、`kim-inbox.mjs`、`next-session.md` の編集と `next-session-rotate.mjs` / `next-session-launch.mjs`、`drive-upload.mjs` と Drive への `rclone copyto`）は回数に数えない。連結・置換・リダイレクトで実装コマンドを混ぜたものは対象外にしない。
+実装の Edit/Write は 4 回で警告、8 回で deny のまま。
 ゲートとガードが衝突したら回避せず、両者の契約テストを追加・修正して直す。
 
 node tools/lane-doctor.mjs --probe で状態更新し、node tools/codex-do.mjs --prompt-file <指示> --cwd <対象>。
@@ -364,6 +374,20 @@ SendUserFile、コードブロック内のローカルパス、チャット添�
 
 削除対象のパス/IDを全件チャットに列挙し、その後の kim の明示許可を得る。globや変数は実際の対象を展開して列挙し、具体的なパスで実行する。OS一時フォルダ・指定生成物・同ターンに新規作成成功を確認できたファイルは対象外。
 
+## org-instructions-char-gate
+
+claude.ai の「組織の指示」は3,000字上限。組織指示への追記案を含む応答には `[ORG-CHARS: n/3000]` の字数明記が必須。
+
+- 現行全文＋追記を合わせた全文テキストを用意してから `node tools/org-instructions-chars.mjs --file <全文テキスト>` で字数を数え、結果を応答に `[ORG-CHARS: n/3000]` の形で記載する。
+- 2,800字を超える場合は、追記ではなく「全文の短縮版（Ctrl+A→貼り替え）」を Google ドキュメントで渡す。その場合は応答に「全文差し替え」の文言と `[ORG-CHARS: n/3000]` を両方書く。
+- 組織指示に関係ない文では発火しない。
+
 ## progress-cron-gate
 
 自動進行・待機を約束した対話セッションでは CronCreate で定期進捗を登録する。例: cron `17 9-19/2 * * *`、prompt は「約束した対象を実測して変化だけ5行以内で報告。kim に操作は求めない」。期限付きの待ちは one-shot も登録する。同一セッションの block は1回まで。headless・非対話 entrypoint・サブエージェントは対象外。状態は `~/.claude/progress-cron-gate-state/` に保存。
+
+## lane-claim-evidence-gate
+
+原因: 他レーンの連鎖出力・古い監視表示だけで停止や入金を断定した。
+直し方: `node tools/lane-doctor.mjs --probe`（個別は `--provider codex`）を実行し、lane-health.json の probedAt / viaChain=false / probeResult と一致する30分以内の `[LANE-PROBE: lane=codex at=<ISO時刻> direct=yes result=fail evidence=exit 1]` を本文に添える。全レーン停止には全対象の証拠が必要。実測不能は未確認と書く。Codex の単体確認は `CODEX_DO_CHEAP_FIRST=0 node tools/codex-do.mjs "Reply PONG" --kind implement --no-fallback`。稼働中の安いAIに直接渡し直し作業を続ける。引用行・コードは対象外、同一セッションのブロックは3回まで。
+配布: register-hooks の共通 stop-gate-runner、setup-manifest の実体検査、onboarding-sync の tools 再帰配布、gate-rollout-manifest の全席即時 deny。settings.json の直接編集は不要。

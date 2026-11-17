@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 無人セッション(auto-session / next-session-launch)の実行者選択と子プロセス組み立ての共有部品。
-// どちらも「既定は cheap-code(定額/従量安)、失敗した時だけ claude -p --model sonnet へ落とす」で
+// どちらも「既定は cheap-code(定額/従量安)、失敗した時だけ claude -p --model opus へ落とす」で
 // 挟む箇所がほぼ同じなのでここに切り出した(2026-09-07 B5)。
 import fs from 'node:fs';
 import os from 'node:os';
@@ -148,8 +148,8 @@ export function buildCodexDoArgs({ repoRoot, promptFile, cwd }) {
   return [codexDo, '--prompt-file', promptFile, '--cwd', cwd, '--origin', 'unattended'];
 }
 
-// cheap-code が失敗した時の最終手段: claude -p(headless) 。無人の残TODO消化に Opus は過剰なので Sonnet。
-export function buildClaudeHeadlessArgs({ repoCwd, historyCwd, model = process.env.ORGIAST_AUTO_SESSION_MODEL || 'sonnet', resumeSessionId, resumeSource }) {
+// cheap-code が失敗した時の最終手段: claude -p(headless) 。既定は Opus（2026-11-17 kim）。軽い締めだけ Sonnet。
+export function buildClaudeHeadlessArgs({ repoCwd, historyCwd, model = process.env.ORGIAST_AUTO_SESSION_MODEL || 'opus', resumeSessionId, resumeSource }) {
   // --permission-mode auto を明示的に渡す。以前は「渡さず ~/.claude/settings.json の既定 auto を
   // 継承する」設計だったが、2026-09-17 に実機の settings.json を直接確認したところ
   // permissions.defaultMode が未設定（allow は4件のみ）だった。継承先が存在しない前提だったため、
@@ -185,7 +185,7 @@ export function writeAutoSessionEnv({ home = process.env.ORGIAST_HOME || os.home
 }
 
 // cheap-code → claude への落下を台帳(executor-usage.jsonl)に残す。失敗しても例外を投げない。
-export function recordFallbackToClaude({ home = process.env.ORGIAST_HOME || os.homedir(), reason, model = process.env.ORGIAST_AUTO_SESSION_MODEL || 'sonnet', appendImpl = null, now = new Date() } = {}) {
+export function recordFallbackToClaude({ home = process.env.ORGIAST_HOME || os.homedir(), reason, model = process.env.ORGIAST_AUTO_SESSION_MODEL || 'opus', appendImpl = null, now = new Date() } = {}) {
   try {
     const row = `${JSON.stringify({ t: now.toISOString(), provider: 'claude-fallback', model, status: 'fallback', reason: String(reason || 'unknown') })}\n`;
     if (appendImpl) appendImpl(path.join(home, '.claude', 'executor-usage.jsonl'), row, 'utf8');

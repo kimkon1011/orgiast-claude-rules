@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { realLaneStats, applyRealLaneHealth, billingFailure, billingWithQuotaHint } from './lib/lane-real-health.mjs';
+import { realLaneStats, applyRealLaneHealth, billingFailure, billingWithQuotaHint, probeViaChain } from './lib/lane-real-health.mjs';
 import { laneDoctorQuick, laneDoctorProbe } from './lane-doctor.mjs';
 const now = Date.parse('2026-10-29T12:00:00Z');
 function fixture(t, rows) {
@@ -386,4 +386,74 @@ test('codex refresh-token phrases classify as auth without a 401 or unauthorized
     assert.equal(health.lanes.codex.reason, 'dead:oauth_consent', reason);
     assert.equal(health.lanes.codex.alive, false);
   }
+});
+
+test('ledger filters routing and other-lane billing, quota and auth lines', t => {
+  for (const text of ['[codex-do] Gemini HTTP 402 insufficient balance', '[routing] HTTP 429', 'fallback backend=gemini HTTP 401 unauthorized', 'cheap-first: HTTP 402', 'ack backend=groq HTTP 402', 'Gemini HTTP 402 insufficient balance']) {
+    const home = fixture(t, [{ provider: 'codex', status: 'error', stderr: text }]);
+    const stats = realLaneStats(home, now).codex;
+    assert.equal(stats.billingCalls, 0, text);
+    assert.equal(stats.quotaCalls, 0, text);
+  }
+  const home = fixture(t, [{ provider: 'codex', status: 'error', stderr: 'HTTP 402 insufficient balance' }]);
+  assert.equal(realLaneStats(home, now).codex.billingCalls, 1);
+});
+
+test('cached chain evidence cannot retain billing, quota, auth or alive classification', t => {
+  const home = fixture(t, []);
+  for (const reason of ['billing', 'quota_wait', 'auth_invalid', 'probe_ok']) {
+    const health = { lanes: { codex: { alive: reason === 'probe_ok', reason, error: 'Gemini HTTP 402 insufficient balance' } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.codex.reason, 'probe_inconclusive');
+    assert.equal(health.lanes.codex.alive, false);
+    assert.equal(health.lanes.codex.viaChain, true);
+  }
+});
+
+test('[routing] 診断行に他レーン名があっても自レーンのタグで答えた probe は viaChain にしない', t => {
+  const text = [
+    '[routing] カテゴリ summarize は実測表から openrouter/inclusionai/ling-3.0-flash を先頭にします',
+    '[routing] gemini はdemote中のため連鎖の末尾へ回します',
+    '[cooldown] glm はスキップ (lane_doctor_usage_limit, 残り2991分)',
+    '(出力なし)',
+    '[openrouter:openai/gpt-oss-120b] in=73 out=10tok',
+  ].join('\n');
+  assert.equal(probeViaChain(text, 'openrouter'), false);
+});
+
+test('他レーンのタグで答えた probe は viaChain', t => {
+  const text = [
+    '[routing] カテゴリ summarize は実測表から openrouter/inclusionai/ling-3.0-flash を先頭にします',
+    '[routing] gemini はdemote中のため連鎖の末尾へ回します',
+    '[cooldown] glm はスキップ (lane_doctor_usage_limit, 残り2991分)',
+    '(出力なし)',
+    '[openrouter:inclusionai/ling-3.0-flash] in=26 out=90tok',
+  ].join('\n');
+  assert.equal(probeViaChain(text, 'deepseek'), true);
+});
+
+test('[codex-do] cheap-first: ... は診断行でも viaChain のまま', t => {
+  const text = '[codex-do] cheap-first: Gemini HTTP 402 insufficient balance';
+  assert.equal(probeViaChain(text, 'codex'), true);
+});
+
+test('OpenRouter 経由が正規経路の deepseek を連鎖と誤認しない', t => {
+  assert.equal(probeViaChain('PONG\n[openrouter:deepseek/deepseek-v4-flash] in=10 out=3tok', 'deepseek'), false);
+});
+
+test('OpenRouter 経路の mistral も同様に連鎖と誤認しない', t => {
+  assert.equal(probeViaChain('PONG\n[openrouter:mistralai/mistral-medium-3.1] in=21 out=3tok', 'mistral'), false);
+});
+
+test('OpenRouter タグに自レーン名が含まれない場合は従来どおり viaChain', t => {
+  assert.equal(probeViaChain('PONG\n[openrouter:openai/gpt-oss-120b] in=73 out=5tok', 'deepseek'), true);
+});
+
+test('cheap-first 行に OpenRouter タグがあっても viaChain のまま', t => {
+  assert.equal(probeViaChain('cheap-first: x\nPONG\n[openrouter:deepseek/deepseek-v4-flash] in=10 out=3tok', 'deepseek'), true);
+});
+
+test('通常の本文に他レーン名が出たら従来どおり viaChain', t => {
+  const text = 'Gemini HTTP 402 insufficient balance';
+  assert.equal(probeViaChain(text, 'codex'), true);
 });

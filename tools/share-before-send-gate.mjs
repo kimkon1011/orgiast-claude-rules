@@ -2,6 +2,8 @@
 export const GATE_CONTRACT = {"name":"share-before-send-gate","remedies":[{"kind":"repo-file","ref":"tools/drive-share.mjs"}]};
 import fs from 'node:fs';
 import path from 'node:path';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { extractFileId, shareLedgerPath } from './lib/drive-share.mjs';
 import { extractAddresses } from './internal-recipient-gmail-guard.mjs';
 import { readStdin } from './transcript-tail.mjs';
@@ -48,7 +50,24 @@ function transcriptIds(raw) {
   return ids;
 }
 
-export function judge(input, { ledgerPath = shareLedgerPath(), now = Date.now() } = {}) {
+/**
+ * checkAnyone(fileId) => Promise<boolean> を並列実行し、
+ * { publicIds: string[], publicSet: Set<string>, failures: string[] } を返す。
+ * checkFn が throw した fileId は failures に入る。
+ */
+async function awaitOrThrow(checkFn, fileIds) {
+  const results = await Promise.allSettled(fileIds.map(id =>
+    checkFn(id).then(isPublic => ({ id, isPublic })).catch(error => { throw { id, error }; })
+  ));
+  const pub = [], failures = [];
+  for (const r of results) {
+    if (r.status === 'fulfilled') { if (r.value.isPublic) pub.push(r.value.id); }
+    else failures.push(r.reason);
+  }
+  return { publicIds: pub, publicSet: new Set(pub), failures };
+}
+
+export async function judge(input, { ledgerPath = shareLedgerPath(), now = Date.now(), checkAnyone } = {}) {
   if (!input || typeof input !== 'object') throw new Error('hook 入力が不正です');
   if (!TARGET.test(input.tool_name ?? '')) return { decision: 'pass' };
   const args = input.tool_input ?? {};
@@ -84,13 +103,106 @@ export function judge(input, { ledgerPath = shareLedgerPath(), now = Date.now() 
   const shared = input.transcript_path && fs.existsSync(input.transcript_path) ? transcriptIds(fs.readFileSync(input.transcript_path, 'utf8')) : new Set();
   const missing = pending.filter(id => !shared.has(id));
   if (!missing.length) return { decision: 'pass' };
+  // Anyone-link check: 既に「リンクを知っている全員が閲覧可」なら毎回の個別共有は不要。
+  // 照会失敗は fail-closed（block）だが、理由に「リンク公開かの確認に失敗」を追加する。
+  if (checkAnyone) {
+    const anyoneChecks = await awaitOrThrow(checkAnyone, missing);
+    if (anyoneChecks.failures.length) {
+      return { decision: 'block', reason: anyoneChecks.failures.map(({ id, error }) => `リンク公開かの確認に失敗（${String(error?.message ?? error)}）: node tools/drive-share.mjs --id ${id} --to <相手のメール>（社内は編集者・社外はコメント可が既定）。社員宛てなら --to syain@orgiast.jp で全社員に共有できます。共有済みのファイルなら同コマンドで記録されます（既存権限はスキップ）。`).join('\n') };
+    }
+    const anyoneIds = anyoneChecks.publicIds;
+    if (anyoneIds.length) {
+      // Cache に anyone 公開判定を追記
+      const row = anyoneIds.map(fileId => JSON.stringify({ ts: new Date(now).toISOString(), fileId, emails: ['anyone-with-link'], via: 'anyone-link-check' }) + '\n').join('');
+      mkdirSync(dirname(ledgerPath), { recursive: true });
+      appendFileSync(ledgerPath, row);
+    }
+    const afterAnyone = missing.filter(id => !anyoneChecks.publicSet.has(id));
+    if (!afterAnyone.length) return { decision: 'pass' };
+    return { decision: 'block', reason: afterAnyone.map(id => `送信前に相手へ共有してください: node tools/drive-share.mjs --id ${id} --to <相手のメール>（社内は編集者・社外はコメント可が既定）。社員宛てなら --to syain@orgiast.jp で全社員に共有できます。共有済みのファイルなら同コマンドで記録されます（既存権限はスキップ）。`).join('\n') };
+  }
   return { decision: 'block', reason: missing.map(id => `送信前に相手へ共有してください: node tools/drive-share.mjs --id ${id} --to <相手のメール>（社内は編集者・社外はコメント可が既定）。社員宛てなら --to syain@orgiast.jp で全社員に共有できます。共有済みのファイルなら同コマンドで記録されます（既存権限はスキップ）。`).join('\n') };
 }
+/**
+ * DWD で所有者を特定して permissions を取得する。API で確認できない場合は
+ * 匿名の Drive 閲覧 URL も確認する。全体で8秒、判定不能は fail-closed。
+ */
+export async function checkAnyoneOnDrive(fileId, dependencies = {}) {
+  const { getDriveToken } = await import('./lib/drive-auth.mjs');
+  const { gwsFetch } = await import('./lib/gws-proxy.mjs');
+  const getToken = dependencies.getToken ?? getDriveToken;
+  const fetchImpl = dependencies.fetchImpl ?? globalThis.fetch;
+  // getDriveToken may return a GWS routing marker instead of a Google token.
+  const apiFetch = dependencies.apiFetch ?? ((url, options) => gwsFetch(url, options, { fetchImpl }));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), dependencies.timeoutMs ?? 8000);
+  const attempts = [];
+  const failure = error => {
+    const status = error?.status ?? /\bHTTP (\d{3})\b/.exec(error?.message ?? '')?.[1];
+    return status ? `HTTP ${status}` : controller.signal.aborted || ['AbortError', 'TimeoutError'].includes(error?.name) ? 'timeout' : 'error';
+  };
+  const tokenFor = (impersonate, label) => getToken({
+    impersonate, signal: controller.signal,
+    fetchImpl: async (...args) => {
+      const res = await fetchImpl(...args);
+      if (!res.ok) attempts.push(`${label}=HTTP ${res.status}`);
+      return res;
+    },
+  });
+  const request = async (label, url, options = {}) => {
+    try {
+      const fetcher = options.headers ? apiFetch : fetchImpl;
+      const res = await fetcher(url, { ...options, signal: controller.signal });
+      attempts.push(`${label}=HTTP ${res.status}`);
+      return res;
+    } catch (error) {
+      attempts.push(`${label}=${failure(error)}`);
+      return null;
+    }
+  };
+  try {
+    try {
+      const readerToken = await tokenFor('seisaku-team@orgiast.jp', 'reader-token');
+      const metaRes = await request('dwd-files.get', `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=owners(emailAddress)&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${readerToken}` } });
+      if (metaRes?.ok) {
+        const meta = await metaRes.json();
+        const owner = meta.owners?.map(o => o.emailAddress).find(email => /@orgiast\.jp$/i.test(email));
+        if (owner) {
+          const ownerToken = owner === 'seisaku-team@orgiast.jp' ? readerToken : await tokenFor(owner, 'owner-token');
+          const permissionRes = await request('owner-permissions.list', `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/permissions?fields=permissions(type,role)&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${ownerToken}` } });
+          if (permissionRes?.ok) {
+            const data = await permissionRes.json();
+            return (data.permissions ?? []).some(p => p.type === 'anyone');
+          }
+        } else attempts.push('owner=external-or-missing');
+      }
+    } catch (error) {
+      attempts.push(`dwd=${failure(error)}`);
+    }
+
+    for (const [label, url] of [
+      ['anonymous-file', `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view`],
+      ['anonymous-folder', `https://drive.google.com/drive/folders/${encodeURIComponent(fileId)}`],
+    ]) {
+      const res = await request(label, url, { redirect: 'manual' });
+      const location = res?.headers.get('location');
+      const loginRedirect = location && /(?:^|\.)accounts\.google\.com$/i.test(new URL(location, url).hostname);
+      if (res?.status === 200 && !loginRedirect) return true;
+    }
+    throw new Error(attempts.join(', '));
+  } catch (error) {
+    if (error?.message === attempts.join(', ')) throw error;
+    throw new Error(attempts.length ? attempts.join(', ') : `all-methods=${error?.name === 'AbortError' ? 'timeout' : 'error'}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function main() {
   try {
     const raw = await readStdin();
     if (!raw.trim()) return;
-    const result = judge(JSON.parse(raw));
+    const result = await judge(JSON.parse(raw), { checkAnyone: checkAnyoneOnDrive });
     if (result.decision === 'block') console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: result.reason } }));
   } catch (error) { console.error(`[SHARE-BEFORE-SEND] 判定をスキップ: ${String(error.message).replace(/[\r\n]+/g, ' ')}`); }
 }

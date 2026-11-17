@@ -355,11 +355,16 @@ export async function search(query, options = {}) {
       const request = requests[provider];
       const result = await request({ query, url: options.crawlUrl, ...options, model, apiKey: keys[provider], fetchImpl: options.fetchImpl ?? globalThis.fetch, spawnImpl: options.spawnImpl ?? spawn });
       const usage = result.raw?.usageMetadata || result.raw?.usage || {};
+      const openRouterUsd = model === 'openai/gpt-oss-120b:online'
+        ? (typeof usage.cost === 'number' && Number.isFinite(usage.cost) && usage.cost >= 0
+          ? usage.cost
+          : ((Number(usage.prompt_tokens) || 0) * 0.15 + (Number(usage.completion_tokens) || 0) * 0.6) / 1e6)
+        : null;
       const row = provider === 'deepseek'
         ? { t: new Date().toISOString(), provider, model, calls: 1, usd: 0.00075, secs: result.elapsedMs / 1000 }
         : provider === 'gemini'
         ? { t: new Date().toISOString(), provider, model, in: usage.promptTokenCount || 0, out: usage.candidatesTokenCount || 0, secs: result.elapsedMs / 1000, grounded: result.raw?.candidates?.[0]?.groundingMetadata != null }
-        : { t: new Date().toISOString(), provider, model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: result.elapsedMs / 1000 };
+        : { t: new Date().toISOString(), provider, model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: result.elapsedMs / 1000, ...(openRouterUsd == null ? {} : { status: 'ok', usd: openRouterUsd }) };
       try {
         (options.appendUsage || appendExecutorUsage)(row, { homeDir: options.homeDir, usageFile: options.usageFile });
       } catch (error) {

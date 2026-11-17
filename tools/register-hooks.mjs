@@ -60,7 +60,7 @@ function load(file) {
 }
 function defaultModel(homeDir) {
   try { const raw = JSON.parse(fs.readFileSync(path.join(homeDir, '.claude', 'model-default.json'), 'utf8')); if (raw && typeof raw.model === 'string' && raw.model.trim()) return raw.model.trim(); } catch {}
-  return 'sonnet';
+  return 'opus';
 }
 function backup(file) { if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak.${stamp}-installer`); }
 function write(file, value) {
@@ -216,12 +216,12 @@ try {
   if (settings.remoteControlAtStartup !== true) { settings.remoteControlAtStartup = true; added += 1; }
   // 全PC・全アカウントの応答・セッション名を日本語に固定する。途中で英語に切り替わった事故の再発防止(cr 2026-10-18)。
   if (settings.language !== 'japanese') { settings.language = 'japanese'; added += 1; }
-  // 全PC・全アカウントの既定モデルを Sonnet に収束する(kim 2026-11-15「自動で動く作業も、開いたセッションも既定は Sonnet」)。
-  // 未設定(=Claude Code 既定の Opus)・opus・opus[1m]・fable を sonnet に倒す。haiku 等の下位指定はそのまま。
-  // 判断が要る場面はそのセッション内で /model や advisor で上げる。次の SessionStart で既定は sonnet に戻る。
-  // PC 単位の例外は、そのPCだけの ~/.claude/model-default.json {"model":"..."} で明示する。
+  // 全PC・全アカウントの既定モデルを Opus に収束する(kim 2026-11-17「基本は Opus。簡単な作業だけ Sonnet。迷ったら Opus」)。
+  // 未設定・sonnet・fable を opus に倒す。opus / opus[1m] / haiku はそのまま。
+  // 軽い締め作業だけそのセッションで Sonnet を使う。次の SessionStart で既定は opus に戻る。
+  // 2026-11-15 の「自動は Sonnet のみ・Opus 禁止」は廃止。PC 単位の例外は ~/.claude/model-default.json {"model":"..."} で明示する。
   { const target = defaultModel(home); const current = String(settings.model ?? '').trim();
-    if (current !== target && (!current || /opus|fable/i.test(current))) { settings.model = target; added += 1; } }
+    if (current !== target && (!current || !/opus|haiku/i.test(current))) { settings.model = target; added += 1; } }
   // 旧PCは hook が `powershell -NoProfile -File ...ps1` で登録され、実行ポリシーで無音死している。
   policyRepaired = repairPowerShellExecutionPolicy(settings.hooks);
   added += policyRepaired;

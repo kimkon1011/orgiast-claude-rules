@@ -54,8 +54,10 @@ test('人の手間はAIの効率より上のルールが最初の絶対ルール
   assert.match(rules[0], /secretary\/book/);
   assert.match(rules[0], /kim@orgiast\.jp と seisaku-team@orgiast\.jp の両方が空いている日時/);
   assert.match(rules[0], /4〜5枠/);
-  assert.match(rules[0], /ご都合が合わない場合は、下記から追加で空き日時をお選びいただけます/);
-  assert.match(rules[0], /下記からご都合のよい日時をお選びいただくか、候補日時をお知らせください/);
+  assert.match(rules[0], /お客様に送らない/);
+  assert.match(rules[0], /別日を聞く/);
+  assert.match(rules[0], /追加の候補を出す/);
+  assert.doesNotMatch(rules[0], /URLを添えてよい/);
   const at = index.indexOf(rules[0]);
   for (const later of ['ユーザーの手作業を極限まで減らす', 'send-context-check', '検証表で出し', '費用対効果は', '判断軸はオージャストの長期的利益']) {
     assert.ok(index.indexOf(later) > at, later);

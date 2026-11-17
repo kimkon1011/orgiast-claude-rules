@@ -507,7 +507,8 @@ export function hasUnsentVscodeTab({ state, now, promptConsumed, windowMs = 6 * 
 
 // 2026-11-04 kim-PC: 並行セッションの hook 爆発で PC が操作不能になった最中にも新しいタブを開き続け、
 // VSCode が応答せず「Another instance of Code is running but not responding」が4回出た。
-export const DEFAULT_MAX_CLAUDE_PROCESSES = 12;
+// 自動起動は claude が 5 本以上なら止める（オーナー指定。ORGIAST_NEXT_SESSION_MAX_CLAUDE で上書き）。
+export const DEFAULT_MAX_CLAUDE_PROCESSES = 5;
 
 export function countClaudeProcesses(exec = execFileSync) {
   if (process.platform !== 'win32' && exec === execFileSync) return null;

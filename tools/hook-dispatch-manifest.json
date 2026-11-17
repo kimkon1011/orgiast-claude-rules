@@ -562,6 +562,12 @@
         "timeout": 15
       },
       {
+        "matcher": "mcp__.*(?:[Cc]alendar|gcal).*|Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/calendar-external-guest-gate.mjs\"",
+        "timeout": 15
+      },
+      {
         "matcher": "Read|Grep|Glob|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit",
         "type": "command",
         "command": "node \"${repo}/tools/knowledge-guard.mjs\"",
@@ -595,6 +601,12 @@
       }
     ],
     "Stop": [
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/org-instructions-char-gate.mjs\"",
+        "timeout": 15
+      },
       {
         "matcher": "*",
         "type": "command",

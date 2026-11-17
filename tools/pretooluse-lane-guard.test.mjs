@@ -113,3 +113,104 @@ test('repair log remains callable after lane guard limit in unattended session',
   t.after(() => fs.rmSync(h, { recursive: true, force: true }));
   assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: 'node tools/lane-repair-log.mjs --lane deepseek --tried check --result unfixable' } }), null);
 });
+
+function calls(home) { return JSON.parse(fs.readFileSync(path.join(home, '.claude/session-lane/s.json'))).toolCalls; }
+function codexDown(home) { fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify({ implementOrder: ['deepseek', 'openrouter'] })); }
+
+test('blockAt 以降の session-claims --release / close-session / node --test は拒否せず回数に入れない', t => {
+  const commands = [
+    'node tools/session-claims.mjs --release --self s --reason closed',
+    'node ~/orgiast-claude-rules/tools/session-claims.mjs --release --self s --reason closed',
+    'node "$HOME/orgiast-claude-rules/tools/close-session.mjs" --session s',
+    'node ~/.claude/nightly-repo/tools/close-session.mjs --session abc --no-launch',
+    'node --test tools/pretooluse-lane-guard.test.mjs',
+    'node --test --test-concurrency=1 tools/a.test.mjs tools/b.test.mjs',
+    'node.exe --check tools/pretooluse-lane-guard.mjs',
+    'cd repo && node --test tools/a.test.mjs',
+    'git status --short',
+    'git diff --stat',
+    'git log -5 --oneline',
+    'git --no-pager log -1',
+    'cd repo && git status --short && git diff && git log -1',
+    'git -C repo diff',
+    'node tools/kim-inbox.mjs --status',
+    'node tools/kim-inbox.mjs --add --kind info --summary "報告 & 記録" --body-file report.md',
+    'node tools/drive-upload.mjs --file "report.md" --folder folderId --authuser kim@example.com',
+    'node tools/next-session-rotate.mjs',
+    'node tools/next-session-launch.mjs --show-target',
+    'rclone copyto report.md remote:name --drive-root-folder-id folderId',
+    '& node tools/close-session.mjs --session s',
+  ];
+  for (const lane of ['implement', 'edit-small', 'verify', 'bulk']) {
+    const h = setup(lane, 'claude-opus-5', { toolCalls: 7 });
+    t.after(() => fs.rmSync(h, { recursive: true, force: true }));
+    codexDown(h);
+    for (const tool_name of ['Bash', 'PowerShell']) {
+      for (const command of commands) {
+        const tool_input = tool_name === 'PowerShell' ? { script: command } : { command };
+        assert.equal(run(h, { tool_name, tool_input }), null, `${lane} ${tool_name}: ${command}`);
+      }
+    }
+    assert.equal(calls(h), 7, lane);
+    assert.equal(run(h, { tool_input: { file_path: path.join(h, '.claude', 'next-session.md') } }), null);
+    assert.equal(calls(h), 7, lane);
+  }
+});
+
+test('確認コマンドは実装の警告回数を消費しない', t => {
+  const h = setup('implement', 'claude-opus-5', { toolCalls: 0 });
+  t.after(() => fs.rmSync(h, { recursive: true, force: true }));
+  codexDown(h);
+  for (let i = 0; i < 3; i++) assert.equal(run(h, { tool_name: 'Edit', tool_input: { file_path: path.join(h, 'a.js') } }), null);
+  for (const command of ['node --test tools/a.test.mjs', 'node tools/session-claims.mjs --release --self s --reason closed', 'git status']) {
+    assert.equal(run(h, { tool_name: 'Bash', tool_input: { command } }), null);
+  }
+  assert.equal(calls(h), 3);
+  assert.match(run(h, { tool_name: 'Write', tool_input: { file_path: path.join(h, 'a.js') } }).hookSpecificOutput.additionalContext, /4 回/);
+});
+
+test('軽い操作に実装を混ぜると拒否し、Edit/Write の連続は警告のあと拒否する', t => {
+  const blocked = setup('implement', 'claude-opus-5', { toolCalls: 100 });
+  t.after(() => fs.rmSync(blocked, { recursive: true, force: true }));
+  codexDown(blocked);
+  const mixed = [
+    'node --test tools/a.test.mjs &',
+    'node --test tools/a.test.mjs; node tools/foo.mjs',
+    'node tools/close-session.mjs --session s && node tools/foo.mjs',
+    'node tools/session-claims.mjs --release --self s; rm -rf x',
+    'node --check tools/a.mjs > out',
+    'node --test -e "fs.writeFileSync(\'a.js\', \'code\')"',
+    'node tools/foo.mjs --test',
+    'node --test-reporter=spec tools/foo.mjs',
+    'node /tmp/close-session.mjs --session s',
+    'node tools/foo.mjs',
+    'rclone sync a remote:b',
+    'node --require ./hook.js tools/close-session.mjs --session s',
+  ];
+  let expected = 100;
+  for (const command of mixed) {
+    const result = run(blocked, { tool_name: 'Bash', tool_input: { command } });
+    assert.equal(result.hookSpecificOutput.permissionDecision, 'deny', command);
+    assert.match(result.hookSpecificOutput.permissionDecisionReason, /Codex が使えない時は deepseek へ。生存レーン: deepseek, openrouter/);
+    assert.match(result.hookSpecificOutput.permissionDecisionReason, /フォールバック順:/);
+    assert.doesNotMatch(result.hookSpecificOutput.permissionDecisionReason, /deepseek\/glm\/gemini へ流れる/);
+    assert.equal(calls(blocked), ++expected, command);
+  }
+  const h = setup('implement', 'claude-opus-5', { toolCalls: 0 });
+  t.after(() => fs.rmSync(h, { recursive: true, force: true }));
+  codexDown(h);
+  const edit = () => run(h, { tool_name: 'Edit', tool_input: { file_path: path.join(h, 'impl.js') } });
+  const write = () => run(h, { tool_name: 'Write', tool_input: { file_path: path.join(h, 'impl.js') } });
+  for (let i = 1; i <= 3; i++) assert.equal(edit(), null, `edit ${i}`);
+  assert.match(write().hookSpecificOutput.additionalContext, /4 回/);
+  for (let i = 5; i <= 7; i++) assert.match(edit().hookSpecificOutput.additionalContext, new RegExp(`${i} 回`));
+  const denied = write();
+  assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /Codex が使えない時は deepseek へ。生存レーン: deepseek, openrouter/);
+  assert.equal(calls(h), 8);
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: 'node --test tools/a.test.mjs' } }), null);
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: 'node tools/session-claims.mjs --release --self s --reason closed' } }), null);
+  assert.equal(run(h, { tool_name: 'PowerShell', tool_input: { script: 'node tools/close-session.mjs --session s' } }), null);
+  assert.equal(calls(h), 8);
+  assert.equal(edit().hookSpecificOutput.permissionDecision, 'deny');
+});

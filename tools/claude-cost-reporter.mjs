@@ -192,8 +192,11 @@ export const PRICING = {
   'claude-opus-4-8': { in: 5, out: 25, cacheWrite: 6.25, cacheRead: 0.5 },
   'claude-opus-5': { in: 5, out: 25, cacheWrite: 6.25, cacheRead: 0.5 },   // Opus5(GA・Opus4.8と同単価)
   'claude-fable-5': { in: 10, out: 50, cacheWrite: 12.5, cacheRead: 1.0 }, // §1.16禁止、検出したら警告
+  // 2026-11-18 追加（claude.ai/pricing より）
+  'claude-opus-5-5': { in: 4, out: 20, cacheWrite: 5, cacheRead: 0.2 },
+  'claude-sonnet-5-5': { in: 2, out: 10, cacheWrite: 2.5, cacheRead: 0.1 },
 };
-function priceOf(model) {
+export function priceOf(model) {
   if (PRICING[model]) return PRICING[model];
   // 日付サフィックス付きID(例: claude-haiku-4-5-20251001)は末尾-YYYYMMDDを剥がして再照合
   const stripped = String(model).replace(/-\d{8}$/, '');
@@ -217,7 +220,7 @@ function findTranscripts(root) {
 }
 
 // --- 1ファイルを1行ずつ処理。usage/model/timestamp だけ抜き、contentは触らない ---
-function processFile(filePath, monthStart, byModel, unknownModels, cache) {
+export function processFile(filePath, monthStart, byModel, unknownModels, cache) {
   let raw;
   try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return; }
   for (const line of raw.split('\n')) {
@@ -243,7 +246,7 @@ function processFile(filePath, monthStart, byModel, unknownModels, cache) {
         (cacheWriteTok / 1e6) * price.cacheWrite +
         (cacheReadTok / 1e6) * price.cacheRead;
     } else {
-      unknownModels.add(model);
+      if (model !== '<synthetic>') unknownModels.add(model);
     }
     const usage = byModel[model] || { cost: 0, inTok: 0, outTok: 0 };
     usage.cost += cost;

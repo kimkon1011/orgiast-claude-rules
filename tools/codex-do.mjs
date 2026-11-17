@@ -841,6 +841,10 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   }
   function acceptBackend(backend) {
     if (!backend) return null;
+    if (isBackendPermanentlyBroken(homeDir, backend.name)) {
+      console.error(`[codex-do] ${backend.name} は lane-health.json で恒久故障(unrecognized_model)のため候補から外します`);
+      return null;
+    }
     if (isBackendDisabled(backend)) {
       console.error(`[codex-do] ${backend.name} は lanes-disabled.json で無効化されているため候補から外します`);
       return null;
@@ -926,6 +930,28 @@ export function isProviderBillingBlocked(homeDir, provider, now = Date.now()) {
     if (Number(state?.until) > now && /billing|payment|402/i.test(String(state?.reason || ''))) return true;
   } catch {}
   return false;
+}
+
+export function isBackendPermanentlyBroken(homeDir, backend) {
+  try {
+    const health = JSON.parse(fs.readFileSync(path.join(homeDir, '.claude', 'lane-health.json'), 'utf8').replace(/^\uFEFF/, ''));
+    const lane = health?.lanes?.[backend];
+    return lane?.alive === false && lane?.reason === 'broken' && lane?.errorKind === 'unrecognized_model';
+  } catch { return false; }
+}
+
+export function rememberBackendPermanentlyBroken(homeDir, backend, errorKind, now = Date.now()) {
+  const file = path.join(homeDir, '.claude', 'lane-health.json');
+  let health = {};
+  try { health = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) || {}; } catch {}
+  if (!health || typeof health !== 'object' || Array.isArray(health)) health = {};
+  if (!health.lanes || typeof health.lanes !== 'object' || Array.isArray(health.lanes)) health.lanes = {};
+  health.lanes[backend] = { alive: false, reason: 'broken', errorKind, probedAt: new Date(now).toISOString() };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(health, null, 2)}\n`, 'utf8');
+  try { fs.renameSync(tmp, file); } catch { fs.writeFileSync(file, `${JSON.stringify(health, null, 2)}\n`, 'utf8'); try { fs.unlinkSync(tmp); } catch {} }
+  return health.lanes[backend];
 }
 
 function rememberProviderBillingFailure(homeDir, provider, now = Date.now()) {
@@ -1597,6 +1623,7 @@ async function tryCheapFirstFallback() {
     if (backend.name === 'gemini-cli' && billingFailure) rememberProviderBillingFailure(home, 'gemini');
     const exhausted = isBackendExhausted(res.output, res.stderr) || (backend.kind === 'cheap-code' && res.status === 3);
     const laneIncompatible = isLaneIncompatible(res.output, res.stderr);
+    if (laneIncompatible) rememberBackendPermanentlyBroken(home, backend.name, 'unrecognized_model');
     const dec = shouldAdvanceToNextBackend({ timedOut: res.timedOut === true, status: res.status, exhausted, cliMissing, aborted: res.aborted === 'policy_stall', laneIncompatible });
     const diffNow = dec.outcome === 'ok' && (backend.name === 'openrouter-free' || backend.name === 'openrouter-code')
       ? spawnSync('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' })
@@ -1987,6 +2014,7 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
         const exhausted = isBackendExhausted(result.output, result.stderr)
           || (backend.kind === 'cheap-code' && result.status === 3);
         const laneIncompatible = isLaneIncompatible(result.output, result.stderr);
+        if (laneIncompatible) rememberBackendPermanentlyBroken(home, backend.name, 'unrecognized_model');
         const decision = shouldAdvanceToNextBackend({ timedOut: result.timedOut === true, status: result.status, exhausted, cliMissing, aborted: result.aborted === 'policy_stall', laneIncompatible });
         const outcome = decision.outcome;
 

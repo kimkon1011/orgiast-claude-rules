@@ -21,6 +21,39 @@ function maxClaudeFromEnv(env) {
 }
 const BASE = 'https://api.anthropic.com/v1/code/sessions';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Retry with exponential backoff for transient network failures.
+// Base delay 1s, double each retry: 1s, 2s, 4s. Max 3 retries before giving up.
+const RETRY_MAX = 3;
+const RETRY_BASE_MS = 1000;
+async function fetchWithRetry(url, init, retries = RETRY_MAX, nowFn = Date.now) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(url, init);
+      if (response.ok) return response;
+      // 429/503/502 are transient; other 4xx are likely permanent.
+      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+        if (attempt < retries) await sleep(RETRY_BASE_MS * Math.pow(2, attempt));
+        continue;
+      }
+      return response;
+    } catch (e) {
+      if (attempt < retries) await sleep(RETRY_BASE_MS * Math.pow(2, attempt));
+      else throw e;
+    }
+  }
+  throw Error('fetchWithRetry exhausted');
+}
+// 連続失敗カウンターを ~/.claude/reopen-lost-sessions-fail-state.json で管理。
+// 連続 8 回（約 2 時間）以上失敗した場合のみ exit 1 を返す（監視が真の停止を検出できるようにする）。
+const FAIL_STATE_FILE = 'reopen-lost-sessions-fail-state.json';
+const CONSECUTIVE_FAIL_THRESHOLD = 8;
+function readFailState(base) {
+  try { return readJson(path.join(base, FAIL_STATE_FILE), { consecutiveFails: 0, lastFailAt: null }); }
+  catch { return { consecutiveFails: 0, lastFailAt: null }; }
+}
+function writeFailState(base, state) {
+  fs.writeFileSync(path.join(base, FAIL_STATE_FILE), JSON.stringify(state) + '\n');
+}
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
   catch (e) { if (e.code === 'ENOENT' && fallback !== undefined) return fallback; throw e; }
@@ -926,8 +959,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
     const deadline = now() + (stateBased ? 180000 : 60000);
     const get = async url => {
       if (now() >= deadline) throw Error('API time limit');
-      const response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(Math.max(1, deadline - now())) });
-      if (!response.ok) throw Error(`RC API HTTP ${response.status}`);
+      const response = await fetchWithRetry(url, { headers, signal: AbortSignal.timeout(Math.max(1, Math.min(deadline - now(), 30000))) }, RETRY_MAX, now);
       return response.json();
     };
     let cursor = '';

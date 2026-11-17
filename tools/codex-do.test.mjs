@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { skipCoolingBackends } from './fallback-backend-health.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -1483,6 +1483,32 @@ test('cheap-first: implement with zero changed files starts Codex', () => {
   assert.doesNotMatch(result.stderr, /代替 AI が成功したため/);
 });
 
+test('cheap-first: 先頭レーンが unrecognized_model なら incompatible を記録して次レーンを呼ぶ', () => {
+  const home = workDir();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'codex-fallback-order.json'), JSON.stringify(['cheap-code:deepseek', 'gemini-cli']), 'utf8');
+  const result = run(['--force-native', '--cwd', home, '--kind', 'implement', 'implement feature'], {
+    home,
+    env: {
+      ...geminiOnPathEnv(),
+      CODEX_DO_CHEAP_FIRST: '1',
+      GEMINI_API_KEY: 'gemini-test',
+      OPENROUTER_API_KEY: 'openrouter-test',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify([
+        { status: 3, output: '', stderr: '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash"}' },
+        { status: 0, output: 'Gemini completed the requested implementation.', stderr: '' },
+        { status: 0, output: 'Codex completed.', stderr: '' },
+      ]),
+    },
+  });
+  assert.match(result.stdout, /cheap-first: cheap-code:deepseek model=/);
+  assert.match(result.stdout, /cheap-first: gemini-cli model=/);
+  assert.match(result.stderr, /cheap-code:deepseek はモデル非対応 \(incompatible\)/);
+  const history = fs.readFileSync(path.join(home, '.claude', 'fallback-backend-history.jsonl'), 'utf8')
+    .trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  assert.equal(history.some((row) => row.backend === 'cheap-code:deepseek' && row.outcome === 'incompatible'), true);
+});
+
 test('cheap-first: implement 既定 → fallback 全滅 → Codex が呼ばれる', () => {
   // cheap-first で全滅したあと、Codex が実行されることだけ確認する（空diff検出等の成否は問わない）
   const mockResults = [
@@ -1633,6 +1659,18 @@ test('isBackendExhausted は unrecognized_model 警告では false を返す（�
   assert.equal(isBackendExhausted('', '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}'), false);
   assert.equal(isBackendExhausted('', 'unrecognized_model'), false);
   assert.equal(isBackendExhausted('', 'Unrecognized_Model'), false);
+});
+
+test('isLaneIncompatible は unrecognized_model エラーで true を返す', () => {
+  assert.equal(isLaneIncompatible('', '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}'), true);
+  assert.equal(isLaneIncompatible('', ''), false);
+  assert.equal(isLaneIncompatible('', 'normal failure'), false);
+});
+
+test('shouldAdvanceToNextBackend は laneIncompatible=true で incompatible を返す', () => {
+  assert.deepEqual(shouldAdvanceToNextBackend({ laneIncompatible: true, status: 1 }), { advance: true, outcome: 'incompatible' });
+  assert.deepEqual(shouldAdvanceToNextBackend({ laneIncompatible: true, exhausted: true, status: 3 }), { advance: true, outcome: 'incompatible' });
+  assert.deepEqual(shouldAdvanceToNextBackend({ laneIncompatible: true, status: 0 }), { advance: false, outcome: 'ok' }); // status 0 overrides laneIncompatible
 });
 
 test('冷却中 backend の probe 成功 → 通常予算で実行され chain に probe_failed が入らない', (t) => {

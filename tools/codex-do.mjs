@@ -552,7 +552,7 @@ export const COOLING_PROBE_TIMEOUT_SECS = 120;
 // 冷却による短縮予算での timeout は本番の失敗ではないので記録しない（null を返す）。
 // 冷却は最後の通常予算 timeout から6時間で自然に解け、通常予算での試行に戻る。
 export function fallbackOutcomeToRecord(outcome, { cooling = false, budgetSecs, normalSecs } = {}) {
-  if (!['ok', 'timeout', 'cli_missing', 'blocked'].includes(outcome)) return null;
+  if (!['ok', 'timeout', 'cli_missing', 'blocked', 'incompatible'].includes(outcome)) return null;
   if (outcome === 'timeout' && cooling && Number.isFinite(Number(budgetSecs)) && Number.isFinite(Number(normalSecs)) && Number(budgetSecs) < Number(normalSecs)) return null;
   return outcome;
 }
@@ -903,6 +903,11 @@ export function isBackendExhausted(output, stderr) {
   return merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '429') || isHttpStatusCodeLine(line, '413'));
 }
 
+export function isLaneIncompatible(output, stderr) {
+  const merged = `${output || ''}\n${stderr || ''}`;
+  return /\[claude-code:unrecognized_model\]/.test(merged);
+}
+
 export function isBackendBillingFailure(output, stderr) {
   const merged = `${output || ''}\n${stderr || ''}`;
   return /prepayment credits are depleted|payment required/i.test(merged)
@@ -954,12 +959,15 @@ export function shouldAbortPolicyStall({
     && countPolicyDenials(stderr) >= minDenials;
 }
 
-export function shouldAdvanceToNextBackend({ timedOut, status, exhausted, cliMissing, aborted } = {}) {
+export function shouldAdvanceToNextBackend({ timedOut, status, exhausted, cliMissing, aborted, laneIncompatible } = {}) {
   if (aborted) return { advance: true, outcome: 'blocked' };
   if (timedOut) return { advance: true, outcome: 'timeout' };
-  // status 0 は exhausted/cliMissing より優先（成功終了は絶対に捨てない）
+  // status 0 は exhausted/cliMissing/laneIncompatible より優先（成功終了は絶対に捨てない）
   if (status === 0) return { advance: false, outcome: 'ok' };
   if (cliMissing) return { advance: true, outcome: 'cli_missing' };
+  // cheap-code は一般エラーを status=3 で返すため exhausted と同時に立つことがある。
+  // 恒久的な構成不一致を quota_wait 相当として記録しないよう、incompatible を優先する。
+  if (laneIncompatible) return { advance: true, outcome: 'incompatible' };
   if (exhausted) return { advance: true, outcome: 'exhausted' };
   return { advance: false, outcome: 'failed' };
 }
@@ -1479,11 +1487,15 @@ async function tryCheapFirstFallback() {
     const billingFailure = isBackendBillingFailure(res.output, res.stderr);
     if (backend.name === 'gemini-cli' && billingFailure) rememberProviderBillingFailure(home, 'gemini');
     const exhausted = isBackendExhausted(res.output, res.stderr) || (backend.kind === 'cheap-code' && res.status === 3);
-    const dec = shouldAdvanceToNextBackend({ timedOut: res.timedOut === true, status: res.status, exhausted, cliMissing, aborted: res.aborted === 'policy_stall' });
+    const laneIncompatible = isLaneIncompatible(res.output, res.stderr);
+    const dec = shouldAdvanceToNextBackend({ timedOut: res.timedOut === true, status: res.status, exhausted, cliMissing, aborted: res.aborted === 'policy_stall', laneIncompatible });
     const invalid = dec.outcome === 'ok' ? cheapFirstFailureReason({
       kind: taskKind, result: res, treeChanged: backendTreeBefore.trim() !== treeSnapshot().trim(),
     }) : '';
     const outcome = invalid || dec.outcome;
+    if (outcome === 'incompatible') {
+      console.error(`[codex-do] cheap-first: ${backend.name} はモデル非対応 (incompatible) のため次の安いレーンへ移ります`);
+    }
     if (invalid) {
       res.status = 1;
       console.error('[codex-do] cheap-first: ' + backend.name + ' failed validation (' + invalid + ')');
@@ -1858,7 +1870,8 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
         if (backend.name === 'gemini-cli' && billingFailure) rememberProviderBillingFailure(home, 'gemini');
         const exhausted = isBackendExhausted(result.output, result.stderr)
           || (backend.kind === 'cheap-code' && result.status === 3);
-        const decision = shouldAdvanceToNextBackend({ timedOut: result.timedOut === true, status: result.status, exhausted, cliMissing, aborted: result.aborted === 'policy_stall' });
+        const laneIncompatible = isLaneIncompatible(result.output, result.stderr);
+        const decision = shouldAdvanceToNextBackend({ timedOut: result.timedOut === true, status: result.status, exhausted, cliMissing, aborted: result.aborted === 'policy_stall', laneIncompatible });
         const outcome = decision.outcome;
 
         fallbackChain.push({
@@ -1892,9 +1905,12 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
           console.error(`[codex-do] backend=${backend.name} の CLI が見つからないため次のバックエンドへ移ります`);
         } else if (outcome === 'exhausted') {
           console.error(`[codex-do] backend=${backend.name} が上限/エラーで使えないため次へ`);
+        } else if (outcome === 'incompatible') {
+          console.error(`[codex-do] backend=${backend.name} はモデル非対応 (incompatible) のため次のバックエンドへ移ります`);
         }
         if (decision.advance) {
-          if (outcome === 'ok' || outcome === 'timeout' || outcome === 'cli_missing' || outcome === 'blocked') recordFallbackBackendOutcome(home, { backend: backend.name, outcome });
+          const toRecord = fallbackOutcomeToRecord(outcome);
+          if (toRecord) recordFallbackBackendOutcome(home, { backend: backend.name, outcome: toRecord });
           continue;
         }
         // 実装系指示で終了コード 0 でも変更ファイルが 0 件の場合は「変更なし」として次のバックエンドへ進む

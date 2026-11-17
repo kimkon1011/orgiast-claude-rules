@@ -232,19 +232,17 @@ export function recordPromptAnswers(home, sessionId, prompt, { listItems, answer
   return answers;
 }
 
-// 自然言語の肯定/否定キーワード分類
-const NL_POSITIVE = /^(?:良い|良いです|良いよ|大丈夫|入れる|入れて|入れてください|ok|お願い|お願いします|進めて|進めてください|承認|承認します|承認する|全部ok|全部良い|全部承認|はい|はい。|はいはい|可)$/i;
-const NL_NEGATIVE = /^(?:不要|やめ|やめて|止め|止めて|やめてください|だめ|ダメ|不可|いいえ|保留|ちょっと待って|待って)$/i;
-const NL_DONE = /^(?:完了|完了した|おわり|終わり)$/i;
-
+// 自然言語の肯定/否定キーワード分類（前方一致で判定、文末の終助詞を許容）
 function classifyNaturalLanguage(text) {
-  const trimmed = text.trim().replace(/[。、.!！\s]+$/, '');
-  if (NL_POSITIVE.test(trimmed)) return '可';
-  if (NL_NEGATIVE.test(trimmed)) return '否認';
-  if (NL_DONE.test(trimmed)) return '完了';
+  const t = text.trim().replace(/[。、.!！\s]+$/g, '');
+  // 否定を先に見る（安全側）
+  if (/^(?:不要|やめ|止め|だめ|ダメ|不可|いいえ|保留|ちょっと待って|待って)/.test(t)) return '否認';
+  // 肯定
+  if (/^(?:良い|大丈夫|入れ|ok|お願い|進めて|承認|はい|可)/i.test(t)) return '可';
+  // 完了
+  if (/^(?:完了|おわり|終わり)/.test(t)) return '完了';
   // 「上のNはOK」パターン
-  const inlinePositive = trimmed.match(/^(?:上[のの]?\d+(?:\s*[、,]\s*\d+)*\s*(?:は|も)?\s*)(OK|良い|大丈夫|お願い|承認|可|全部OK)/i);
-  if (inlinePositive) return '可';
+  if (/^(?:上[のの]?\d+(?:\s*[、,]\s*\d+)*\s*(?:は|も)?\s*)(?:OK|良い|大丈夫|お願い|承認|可|全部OK)/i.test(t)) return '可';
   return null;
 }
 
@@ -284,8 +282,8 @@ export function recordNaturalLanguageAnswers(home, sessionId, prompt, { listItem
       answers.push(answerItem(home, item.id, nn.answer, sessionId));
       matched++;
     }
-    if (matched === 0 && numberedNatural.length === 1 && openAsks.length === 1) {
-      // 番号が1でアイテムが1つ → 該当すると見なす
+    // 番号が1でアイテムが1つ、かつ肯定のときだけフォールバック記録
+    if (matched === 0 && numberedNatural.length === 1 && openAsks.length === 1 && numberedNatural[0].answer === '可') {
       answers.push(answerItem(home, openAsks[0].id, numberedNatural[0].answer, sessionId));
     }
     return { answers, hints };

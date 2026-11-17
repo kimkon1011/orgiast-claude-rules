@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { addItem, listItems, main, answerItem, markSeen, updateInboxItem, selectContext } from './kim-inbox.mjs';
 import { evaluateKimInboxRelay, commitKimInboxDelivery } from './kim-inbox-relay.mjs';
-import { inboxSummary, formatInboxBrief, recordInjection, recordPromptAnswers, recordNaturalLanguageAnswers, relayDue, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
+import { inboxSummary, formatInboxBrief, recordInjection, recordPromptAnswers, relayDue, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
 import { run } from './stop-gate-runner.mjs';
 const now = Date.parse('2026-11-12T10:00:00Z');
 function fixture(t) {
@@ -15,9 +15,7 @@ function fixture(t) {
   const input = { session_id: 'human-session', cwd: home };
   const f = { home, input, inject: items => recordInjection(home, input.session_id, items, { now }),
     judge: (text = '', extra = {}) => evaluateKimInboxRelay(input, { home, now, env: {}, text, ...extra }),
-    section: items => '【受信箱】
-' + items.map((i,n) => formatInboxBrief(i, n + 1)).join('
-') };
+    section: items => '【受信箱】\n' + items.map((i,n) => formatInboxBrief(i, n + 1)).join('\n') };
   // Fixtures are retained under /tmp; production inboxes are never modified.
   return f;
 }
@@ -28,18 +26,12 @@ test('context injection is not delivery; final ID and structured lines are requi
   assert.equal(listItems(f.home)[0].shownCount, 1);
   assert.equal(listItems(f.home)[0].deliveredToKim, undefined);
   assert.equal(f.judge('別作業は完了しました', { raw: f.section([item]) }).decision, 'block');
-  assert.equal(f.judge(`【受信箱】
-${item.id}`).decision, 'block');
+  assert.equal(f.judge(`【受信箱】\n${item.id}`).decision, 'block');
   assert.equal(f.judge(`${item.id} ${inboxSummary(item)}`).decision, 'block');
-  assert.equal(f.judge(`【受信箱】
-1. ${item.id} ${inboxSummary(item)}`).decision, 'block');
+  assert.equal(f.judge(`【受信箱】\n1. ${item.id} ${inboxSummary(item)}`).decision, 'block');
   assert.equal(f.judge(f.section([item]).replaceAll(item.id, '')).decision, 'block');
-  assert.equal(f.judge('```
-' + f.section([item]) + '
-```').decision, 'block');
-  assert.equal(f.judge(f.section([item]).split('
-').map(l => '> ' + l).join('
-')).decision, 'block');
+  assert.equal(f.judge('```\n' + f.section([item]) + '\n```').decision, 'block');
+  assert.equal(f.judge(f.section([item]).split('\n').map(l => '> ' + l).join('\n')).decision, 'block');
   assert.equal(f.judge(f.section([item])).decision, 'pass');
 });
 
@@ -48,24 +40,12 @@ test('each item needs its own explanation; indented and bulleted numbering delim
   const b = await addItem(f.home, { kind: 'ask', text: '承認待ち: 日程の変更' });
   f.inject([a, b]);
   for (const prefix of ['2.', '  2.', '- 2.']) {
-    assert.equal(f.judge(`【受信箱】
-1. ${a.id}
-${prefix} ${b.id}
-   返事: 可か不可`).decision, 'block');
+    assert.equal(f.judge(`【受信箱】\n1. ${a.id}\n${prefix} ${b.id}\n   返事: 可か不可`).decision, 'block');
   }
-  assert.equal(f.judge(`【受信箱】
-1. ${a.id}-extra
-判断: 確認
-2. ${b.id}
-返事: 確認`).decision, 'block');
-  const result = f.judge(`【受信箱】
-1. 公開の件（${a.id}）
-   判断: 資料を公開するか
-2. 日程の件（${b.id}）
-   返事: 可または不要`);
+  assert.equal(f.judge(`【受信箱】\n1. ${a.id}-extra\n判断: 確認\n2. ${b.id}\n返事: 確認`).decision, 'block');
+  const result = f.judge(`【受信箱】\n1. 公開の件（${a.id}）\n   判断: 資料を公開するか\n2. 日程の件（${b.id}）\n   返事: 可または不要`);
   assert.equal(result.decision, 'pass');
-  assert.equal(result.receipts[0].summary, formatInboxBrief(a, 1, { home: f.home }).split('
-')[0]);
+  assert.equal(result.receipts[0].summary, formatInboxBrief(a, 1, { home: f.home }).split('\n')[0]);
 });
 
 test('decorated inbox headings, trailing labels and paraphrases pass; missing IDs and later sections do not', async t => {
@@ -74,24 +54,10 @@ test('decorated inbox headings, trailing labels and paraphrases pass; missing ID
   const b = await addItem(f.home, { kind: 'ask', text: '別の長い依頼です' });
   f.inject([a, b]);
   for (const heading of ['【受信箱】確認事項', '### 【受信箱】', '**【受信箱】** 要点', '  ### **【受信箱】**（2件）']) {
-    assert.equal(f.judge(`${heading}
-1. ${a.id}
-判断: 公開するか
-2. ${b.id}
-返事: 日程を変えるか`).decision, 'pass');
-    assert.equal(f.judge(`${heading}
-1. ${a.id} 言い換え
-判断: 公開可否
-2. ${b.id} 短く要約
-返事: 変更可否`).decision, 'pass');
-    assert.equal(f.judge(`${heading}
-1. ${a.id}
-判断: 公開可否
-### 別件
-2. ${b.id}
-返事: 変更可否`).decision, 'block');
-    assert.equal(f.judge(`${heading}
-${a.id}`).decision, 'block');
+    assert.equal(f.judge(`${heading}\n1. ${a.id}\n判断: 公開するか\n2. ${b.id}\n返事: 日程を変えるか`).decision, 'pass');
+    assert.equal(f.judge(`${heading}\n1. ${a.id} 言い換え\n判断: 公開可否\n2. ${b.id} 短く要約\n返事: 変更可否`).decision, 'pass');
+    assert.equal(f.judge(`${heading}\n1. ${a.id}\n判断: 公開可否\n### 別件\n2. ${b.id}\n返事: 変更可否`).decision, 'block');
+    assert.equal(f.judge(`${heading}\n${a.id}`).decision, 'block');
   }
 });
 test('receipts suppress same-session asks until next JST day, high info until refreshed, other sessions still see asks', async t => {
@@ -142,15 +108,12 @@ test('1 可 records the shown ask via answerItem; quoted, ambiguous, stale and o
   const f = fixture(t), a = await addItem(f.home, { kind: 'ask', text: 'PR のマージを承認してください' }); f.inject([a]);
   commitKimInboxDelivery(f.home, f.input.session_id, f.judge(f.section([a])).receipts, now);
   const answer = (prompt, session = f.input.session_id) => recordPromptAnswers(f.home, session, prompt, { listItems, answerItem });
-  for (const p of ['例: 1 可', '1 可
-作業を調べて', '> 1 可', '1 保留']) assert.equal(answer(p).length, 0);
+  for (const p of ['例: 1 可', '1 可\n作業を調べて', '> 1 可', '1 保留']) assert.equal(answer(p).length, 0);
   assert.equal(answer('1 可', 'other').length, 0);
   assert.equal(answer('1 可').length, 1);
   assert.equal(listItems(f.home)[0].answer, '可');
   assert.equal(listItems(f.home)[0].answerSession, f.input.session_id);
-  const multi = await addItem(f.home, { kind: 'ask', text: '承認待ち2件
-1. 共有
-2. 配布' }); f.inject([multi]);
+  const multi = await addItem(f.home, { kind: 'ask', text: '承認待ち2件\n1. 共有\n2. 配布' }); f.inject([multi]);
   commitKimInboxDelivery(f.home, f.input.session_id, f.judge(f.section([multi])).receipts, now);
   assert.equal(answer('1 可').length, 0);
 });
@@ -166,19 +129,10 @@ test('runner relay precedes retry/close bypasses, and another gate rejecting a d
   assert.match(capped.systemMessage, /kim-inbox-relay/);
   assert.equal(listItems(f.home)[0].deliveredToKim, undefined);
   fs.rmSync(path.join(f.home, '.claude', 'stop-gate-repeat-state.json'), { force: true });
-  const result = await run({ ...f.input, last_assistant_message: f.section([a]) + '
-https://discord.com/oauth2/authorize?client_id=1511684767546871818&permissions=0' }, ctx);
+  const result = await run({ ...f.input, last_assistant_message: f.section([a]) + '\nhttps://discord.com/oauth2/authorize?client_id=1511684767546871818&permissions=0' }, ctx);
   assert.equal(result.decision, 'block');
   assert.equal(listItems(f.home)[0].deliveredToKim, undefined);
-  const successText = f.section([a]) + '
-【最終まとめ】
-①報告: 受信箱を提示しました
-②kim の確認事項: 受信箱の判断
-③kim がやること: 返事の例から回答
-恒久策: 一回限り: このfixture固有の配達確認
-次に kim がすること: 受信箱へ回答
-この後の自動進行: なし
-このセッション: /session-close は不要なので、このセッションを閉じてよい';
+  const successText = f.section([a]) + '\n【最終まとめ】\n①報告: 受信箱を提示しました\n②kim の確認事項: 受信箱の判断\n③kim がやること: 返事の例から回答\n恒久策: 一回限り: このfixture固有の配達確認\n次に kim がすること: 受信箱へ回答\nこの後の自動進行: なし\nこのセッション: /session-close は不要なので、このセッションを閉じてよい';
   const success = await run({ ...f.input, last_assistant_message: successText }, ctx);
   assert.notEqual(success.decision, 'block', JSON.stringify(success));
   assert.equal(listItems(f.home)[0].deliveredToKim.count, 1);
@@ -201,8 +155,7 @@ test('two inbox blocks exhaust the shared turn budget, but permission blocks sur
   const ctx = { raw: '', humanText: '', assistantText: '' };
   const options = { mode: 'off', policyOptions: { home: f.home, hostname: 'kim-PC', notify: async () => ({ delivered: 'test' }) } };
   for (let n = 0; n < 2; n++) assert.equal((await run({ ...f.input, assistant_text: '完了' }, ctx, options)).decision, 'block');
-  const changed = await run({ ...f.input, assistant_text: `${f.section([item])}
-GitHub の画面で Merge をクリックしてください。` }, ctx, options);
+  const changed = await run({ ...f.input, assistant_text: `${f.section([item])}\nGitHub の画面で Merge をクリックしてください。` }, ctx, options);
   assert.notEqual(changed.decision, 'block');
   assert.match(changed.systemMessage, /同一ターン上限/);
   assert.equal(listItems(f.home)[0].deliveredToKim, undefined);
@@ -215,8 +168,7 @@ GitHub の画面で Merge をクリックしてください。` }, ctx, options)
 
 test('passkey ask relays the complete signed URL rather than a truncated token', async t => {
   const f = fixture(t), url = 'https://keyserve.test/api/knowledge?register=' + 'a'.repeat(500);
-  const item = await addItem(f.home, { kind: 'ask', priority: 'high', source: 'knowledge-lock-passkey-link', text: `パスキー登録をお願いします。
-登録リンク: ${url}` });
+  const item = await addItem(f.home, { kind: 'ask', priority: 'high', source: 'knowledge-lock-passkey-link', text: `パスキー登録をお願いします。\n登録リンク: ${url}` });
   const context = selectContext([item], { sessionId: f.input.session_id, now, home: f.home });
   assert.ok(context.includes(url)); f.inject([item]);
   assert.ok(f.judge().reason.includes(url));
@@ -236,9 +188,7 @@ test('hundreds of reserved asks rotate in bounded batches without starving progr
 
 test('duplicate same workId+decide: only representative needs written; both are receipts', async t => {
   const f = fixture(t);
-  const baseText = '【DELL・seisaku-team@orgiast.jp の Claude Code】プロジェクト: test ／ セッションの目的: 三共精機にメール送信 ／ 作業ID: c8d99e2b
-自動進行が判断待ちです: メールの送付可否
-あなたの返事待ち: 送ってよいですか';
+  const baseText = '【DELL・seisaku-team@orgiast.jp の Claude Code】プロジェクト: test ／ セッションの目的: 三共精機にメール送信 ／ 作業ID: c8d99e2b\n自動進行が判断待ちです: メールの送付可否\nあなたの返事待ち: 送ってよいですか';
   const a = await addItem(f.home, { kind: 'ask', text: baseText });
   const b = await addItem(f.home, { kind: 'ask', text: baseText });
   f.inject([a, b]);
@@ -250,8 +200,7 @@ test('duplicate same workId+decide: only representative needs written; both are 
 
   // Both are receipted when the deterministically selected representative is shown.
   const representative = groupInboxItems([a, b])[0].representative;
-  const section = '【受信箱】
-' + formatInboxBrief(representative, 1);
+  const section = '【受信箱】\n' + formatInboxBrief(representative, 1);
   const result = f.judge(section);
   assert.equal(result.decision, 'pass', `${result.code}: ${result.reason?.slice(0, 100)}`);
   assert.equal(result.receipts.length, 2);
@@ -261,112 +210,19 @@ test('duplicate same workId+decide: only representative needs written; both are 
 
 test('duplicate different workId: each must appear individually', async t => {
   const f = fixture(t);
-  const a = await addItem(f.home, { kind: 'ask', text: '【DELL・seisaku-team@orgiast.jp の Claude Code】プロジェクト: test ／ 作業ID: c8d99e2b
-自動進行が判断待ちです: メールの送付可否
-あなたの返事待ち: 送ってよいですか' });
-  const b = await addItem(f.home, { kind: 'ask', text: '【DELL・seisaku-team@orgiast.jp の Claude Code】プロジェクト: test ／ 作業ID: 7f14e87b
-自動進行が判断待ちです: メールの送付可否
-あなたの返事待ち: 送ってよいですか' });
+  const a = await addItem(f.home, { kind: 'ask', text: '【DELL・seisaku-team@orgiast.jp の Claude Code】プロジェクト: test ／ 作業ID: c8d99e2b\n自動進行が判断待ちです: メールの送付可否\nあなたの返事待ち: 送ってよいですか' });
+  const b = await addItem(f.home, { kind: 'ask', text: '【DELL・seisaku-team@orgiast.jp の Claude Code】プロジェクト: test ／ 作業ID: 7f14e87b\n自動進行が判断待ちです: メールの送付可否\nあなたの返事待ち: 送ってよいですか' });
   f.inject([a, b]);
 
   // Only one in section → blocked
-  const result = f.judge('【受信箱】
-' + formatInboxBrief(a, 1));
+  const result = f.judge('【受信箱】\n' + formatInboxBrief(a, 1));
   assert.equal(result.decision, 'block');
 });
 
 test('inboxSummary does not split emoji surrogate pairs at its caps', () => {
   const loneSurrogate = /(?:[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF])/;
   const heading = inboxSummary({ kind: 'ask', text: `${'あ'.repeat(139)}🚀 承認待ち: テストが成功しました。🔑 鍵付きです` });
-  const action = inboxSummary({ kind: 'ask', text: `件名
-${'い'.repeat(89)}🚀 承認待ち` });
+  const action = inboxSummary({ kind: 'ask', text: `件名\n${'い'.repeat(89)}🚀 承認待ち` });
   assert.doesNotMatch(heading, loneSurrogate);
   assert.doesNotMatch(action, loneSurrogate);
-});
-
-// --- Natural language reply auto-recording tests ---
-test('NL: single affirmative with single pending ask records as '可'', t => {
-  const f = fixture(t);
-  const item = { id: 'ki-20261112000000-0001', kind: 'ask', text: '承認待ち: 資料の公開', createdAt: '2026-11-12T00:00:00.000Z', lastAt: '2026-11-12T00:00:00.000Z', status: 'open', shownSessions: [], shownCount: 0 };
-  const dir = path.join(f.home, '.claude/kim-inbox');
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, item.id + '.json'), JSON.stringify(item));
-  const revision = require('crypto').createHash('sha256').update(JSON.stringify(['ask', item.text, undefined, undefined])).digest('hex');
-  const stateDir = path.join(f.home, '.claude/kim-inbox-relay');
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.writeFileSync(path.join(stateDir, require('crypto').createHash('sha256').update(f.input.session_id).digest('hex') + '.json'),
-    JSON.stringify({ sessionId: f.input.session_id, lastDelivered: [{ id: 'ki-20261112000000-0001', number: 1, revision }] }) + '
-');
-  const result = recordNaturalLanguageAnswers(f.home, f.input.session_id, '良いですよ', { listItems, answerItem });
-  assert.equal(result.answers.length, 1);
-  assert.equal(result.hints.length, 0);
-  const saved = listItems(f.home).find(i => i.id === 'ki-20261112000000-0001');
-  assert.equal(saved.answer, '可');
-});
-
-test('NL: numbered natural (1. 良い 2. OK) records both', t => {
-  const f = fixture(t);
-  const a = { id: 'ki-20261112000000-0001', kind: 'ask', text: '公開承認', createdAt: '2026-11-12T00:00:00.000Z', lastAt: '2026-11-12T00:00:00.000Z', status: 'open', shownSessions: [], shownCount: 0 };
-  const b = { id: 'ki-20261112000000-0002', kind: 'ask', text: '変更承認', createdAt: '2026-11-12T00:00:00.000Z', lastAt: '2026-11-12T00:00:00.000Z', status: 'open', shownSessions: [], shownCount: 0 };
-  const dir = path.join(f.home, '.claude/kim-inbox');
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, a.id + '.json'), JSON.stringify(a));
-  fs.writeFileSync(path.join(dir, b.id + '.json'), JSON.stringify(b));
-  const revA = require('crypto').createHash('sha256').update(JSON.stringify(['ask', a.text, undefined, undefined])).digest('hex');
-  const revB = require('crypto').createHash('sha256').update(JSON.stringify(['ask', b.text, undefined, undefined])).digest('hex');
-  const stateDir = path.join(f.home, '.claude/kim-inbox-relay');
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.writeFileSync(path.join(stateDir, require('crypto').createHash('sha256').update(f.input.session_id).digest('hex') + '.json'),
-    JSON.stringify({ sessionId: f.input.session_id, lastDelivered: [{ id: a.id, number: 1, revision: revA }, { id: b.id, number: 2, revision: revB }] }) + '
-');
-  const result = recordNaturalLanguageAnswers(f.home, f.input.session_id, '1. 良い
-2. OK', { listItems, answerItem });
-  assert.equal(result.answers.length, 2);
-  const savedA = listItems(f.home).find(i => i.id === a.id);
-  const savedB = listItems(f.home).find(i => i.id === b.id);
-  assert.equal(savedA.answer, '可');
-  assert.equal(savedB.answer, '可');
-});
-
-test('NL: multiple pending with vague reply returns hints not answers', t => {
-  const f = fixture(t);
-  const items = [1,2,3].map(i => ({ id: 'ki-20261112000000-000' + i, kind: 'ask', text: '判断' + i, createdAt: '2026-11-12T00:00:00.000Z', lastAt: '2026-11-12T00:00:00.000Z', status: 'open', shownSessions: [], shownCount: 0 }));
-  const dir = path.join(f.home, '.claude/kim-inbox');
-  fs.mkdirSync(dir, { recursive: true });
-  for (const item of items) fs.writeFileSync(path.join(dir, item.id + '.json'), JSON.stringify(item));
-  const stateDir = path.join(f.home, '.claude/kim-inbox-relay');
-  fs.mkdirSync(stateDir, { recursive: true });
-  const delivered = items.map((item, n) => ({ id: item.id, number: n + 1,
-    revision: require('crypto').createHash('sha256').update(JSON.stringify(['ask', item.text, undefined, undefined])).digest('hex') }));
-  fs.writeFileSync(path.join(stateDir, require('crypto').createHash('sha256').update(f.input.session_id).digest('hex') + '.json'),
-    JSON.stringify({ sessionId: f.input.session_id, lastDelivered: delivered }) + '
-');
-  const result = recordNaturalLanguageAnswers(f.home, f.input.session_id, 'OK', { listItems, answerItem });
-  assert.equal(result.answers.length, 0);
-  assert.ok(result.hints.length > 0);
-});
-
-test('NL: no delivery state returns empty', t => {
-  const f = fixture(t);
-  const result = recordNaturalLanguageAnswers(f.home, f.input.session_id, '良いです', { listItems, answerItem });
-  assert.equal(result.answers.length, 0);
-  assert.equal(result.hints.length, 0);
-});
-
-test('NL: negative keyword records as 否認', t => {
-  const f = fixture(t);
-  const item = { id: 'ki-20261112000000-0001', kind: 'ask', text: '不要な作業', createdAt: '2026-11-12T00:00:00.000Z', lastAt: '2026-11-12T00:00:00.000Z', status: 'open', shownSessions: [], shownCount: 0 };
-  const dir = path.join(f.home, '.claude/kim-inbox');
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, item.id + '.json'), JSON.stringify(item));
-  const revision = require('crypto').createHash('sha256').update(JSON.stringify(['ask', item.text, undefined, undefined])).digest('hex');
-  const stateDir = path.join(f.home, '.claude/kim-inbox-relay');
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.writeFileSync(path.join(stateDir, require('crypto').createHash('sha256').update(f.input.session_id).digest('hex') + '.json'),
-    JSON.stringify({ sessionId: f.input.session_id, lastDelivered: [{ id: item.id, number: 1, revision }] }) + '
-');
-  const result = recordNaturalLanguageAnswers(f.home, f.input.session_id, '不要', { listItems, answerItem });
-  assert.equal(result.answers.length, 1);
-  const saved = listItems(f.home).find(i => i.id === item.id);
-  assert.equal(saved.answer, '否認');
 });

@@ -36,11 +36,44 @@ export function getBeeperToken({ env = process.env, appData = process.env.APPDAT
 }
 
 /**
+ * 000 の Beeper 中継（tools/beeper-gateway.mjs）の設定を読む。
+ * ~/.claude/secrets/beeper-gateway.json = { "base": "http://192.168.0.4:23380", "token": "..." }
+ * NEVER logs, prints, or includes the token in exceptions.
+ */
+export function getGatewayConfig({ env = process.env, home = env.ORGIAST_HOME || (env === process.env ? os.homedir() : null) } = {}) {
+  if (env.BEEPER_GATEWAY_DISABLE === '1') return null;
+  // テスト等で env を差し替えたときは、明示した設定パス／ORGIAST_HOME 以外を読まない
+  if (!env.BEEPER_GATEWAY_CONFIG && !home) return null;
+  const p = env.BEEPER_GATEWAY_CONFIG || path.join(home, '.claude', 'secrets', 'beeper-gateway.json');
+  try {
+    const c = JSON.parse(fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, ''));
+    if (c && typeof c.base === 'string' && typeof c.token === 'string' && c.token) return { base: c.base, token: c.token };
+  } catch { /* 設定なし */ }
+  return null;
+}
+
+/**
+ * 接続先を決める。優先順: BEEPER_API_BASE 明示 → このPCの Beeper → 000 の中継（BEEPER_VIA_GATEWAY=1 なら中継を優先）。
+ * 戻り値の token は呼び出し側で表示しないこと。
+ */
+export function resolveBeeperTarget({ env = process.env, appData = process.env.APPDATA } = {}) {
+  const local = 'http://localhost:23373';
+  if (env.BEEPER_API_BASE) return { via: 'env', baseUrl: env.BEEPER_API_BASE, token: getBeeperToken({ env, appData }) };
+  const gw = getGatewayConfig({ env });
+  if (gw && env.BEEPER_VIA_GATEWAY === '1') return { via: 'gateway', baseUrl: gw.base, token: gw.token };
+  const token = getBeeperToken({ env, appData });
+  if (token) return { via: 'local', baseUrl: local, token };
+  if (gw) return { via: 'gateway', baseUrl: gw.base, token: gw.token };
+  return { via: 'none', baseUrl: local, token: null };
+}
+
+/**
  * Makes an HTTP request to the Beeper Desktop API.
  */
 export async function beeperFetch(endpoint, { method = 'GET', body, query, timeoutMs = 20000, env = process.env, token: customToken, binary = false, fetchImpl = globalThis.fetch } = {}) {
-  const baseUrl = env.BEEPER_API_BASE || 'http://localhost:23373';
-  const token = customToken || getBeeperToken({ env });
+  const target = customToken ? { baseUrl: env.BEEPER_API_BASE || 'http://localhost:23373', token: customToken } : resolveBeeperTarget({ env });
+  const baseUrl = target.baseUrl;
+  const token = target.token;
 
   if (!token) {
     throw new BeeperApiError('Beeper access token not found or unauthorized', 'BEEPER_UNAUTHORIZED', 401);

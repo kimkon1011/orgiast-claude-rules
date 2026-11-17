@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { getLoadGuardStatus, hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord, measureUserIdleSec, DEFAULT_REOPEN_MAX_CLAUDE } from './reopen-lost-sessions.mjs';
 import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
-import { unverifiedStreakCounts, isSessionProcessRunning, connectedRcSessionIds } from './reopen-lost-sessions.mjs';
+import { unverifiedStreakCounts, isSessionProcessRunning, connectedRcSessionIds, recordApiResult, fetchWithRetry, readFailState, writeFailState, FAIL_STATE_FILE, CONSECUTIVE_FAIL_THRESHOLD } from './reopen-lost-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
 const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
@@ -2259,4 +2259,134 @@ test('measureUserIdleSec: Win32 実機で数値を返す（Add-Type 完全性の
   const sec = measureUserIdleSec();
   assert.ok(Number.isInteger(sec), `measureUserIdleSec() returned non-integer: ${sec}`);
   assert.ok(sec >= 0, `measureUserIdleSec() returned negative: ${sec}`);
+});
+
+// ── fetchWithRetry ──────────────────────────────────────
+
+test('fetchWithRetry: 200 は1回目で返る', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    fetchImpl: async () => { calls++; return { ok: true }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.ok(res.ok);
+  assert.equal(calls, 1);
+});
+
+test('fetchWithRetry: 4xx（非 429）は即座に返りリトライしない', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 3, {
+    fetchImpl: async () => { calls++; return { ok: false, status: 403 }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.equal(res.status, 403);
+  assert.equal(calls, 1);
+});
+
+test('fetchWithRetry: 429 はリトライする', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    fetchImpl: async () => { calls++; return calls < 3 ? { ok: false, status: 429 } : { ok: true }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.ok(res.ok);
+  assert.equal(calls, 3);
+});
+
+test('fetchWithRetry: 5xx はリトライする', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    fetchImpl: async () => { calls++; return calls < 3 ? { ok: false, status: 503 } : { ok: true }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.ok(res.ok);
+  assert.equal(calls, 3);
+});
+
+test('fetchWithRetry: リトライ上限に達すると最後の response を返す（例外を投げない）', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    fetchImpl: async () => { calls++; return { ok: false, status: 503 }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.equal(res.status, 503);
+  assert.equal(calls, 3);
+});
+
+test('fetchWithRetry: ネットワーク例外はリトライし最後に throw', async () => {
+  await assert.rejects(fetchWithRetry('https://test', {}, 1, {
+    fetchImpl: async () => { throw new Error('ECONNREFUSED'); },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  }));
+});
+
+test('fetchWithRetry: 再試行ごとに新しい signal を使う（古い signal の abort が残りの試行を妨げない）', async () => {
+  let calls = 0;
+  let signals = [];
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    timeoutMs: 50000,
+    fetchImpl: async (url, opts) => {
+      calls++;
+      signals.push(opts.signal);
+      if (calls === 1) { opts.signal.addEventListener('abort', () => {}); return { ok: false, status: 429 }; }
+      return { ok: true };
+    },
+    nowFn: () => 0, deadline: Infinity,
+  });
+  assert.ok(res.ok);
+  assert.equal(calls, 2);
+  assert.notEqual(signals[0], signals[1], 'each retry should get a new signal');
+});
+
+test('fetchWithRetry: deadline 超過で throw', async () => {
+  let clock = 0;
+  await assert.rejects(fetchWithRetry('https://test', {}, 1, {
+    fetchImpl: async () => { clock = 100; return { ok: false, status: 429 }; },
+    nowFn: () => clock, deadline: 50, timeoutMs: 50000,
+  }));
+});
+
+// ── recordApiResult ────────────────────────────────────
+
+test('recordApiResult: 連続 7 回失敗でも exit 1 にならない', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-api-7-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  for (let i = 0; i < 7; i++) {
+    assert.equal(recordApiResult(base, 'some error', new Date().toISOString()), false);
+  }
+  const state = readFailState(base);
+  assert.equal(state.consecutiveFails, 7);
+});
+
+test('recordApiResult: 連続 8 回失敗で exit 1 が必要', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-api-8-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  for (let i = 0; i < 7; i++) {
+    recordApiResult(base, 'error');
+  }
+  assert.equal(recordApiResult(base, 'error'), true);
+});
+
+test('recordApiResult: 成功でカウンターを 0 に戻す', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-api-reset-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  for (let i = 0; i < 5; i++) recordApiResult(base, 'error');
+  assert.equal(readFailState(base).consecutiveFails, 5);
+  recordApiResult(base, null);
+  assert.equal(readFailState(base).consecutiveFails, 0);
+});
+
+test('recordApiResult: 初回はカウンターが 1 になる', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-api-first-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  assert.equal(recordApiResult(base, 'error'), false);
+  assert.equal(readFailState(base).consecutiveFails, 1);
 });

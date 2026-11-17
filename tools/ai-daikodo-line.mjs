@@ -1,8 +1,68 @@
 #!/usr/bin/env node
-import fs from'node:fs';import os from'node:os';import path from'node:path';import{strToUUID}from'./line-group-send.mjs';import{isEntry}from'./is-entry.mjs';
-function envFile(h){const f=path.join(h,'.claude','tanom-admin.env');if(!fs.existsSync(f))return{};return Object.fromEntries(fs.readFileSync(f,'utf8').split(/\r?\n/).map(x=>x.match(/^([A-Z_]+)=(.*)$/)).filter(Boolean).map(m=>[m[1],m[2]]));}
-export function parseArgs(a){const o={json:false,dryRun:false};for(let i=0;i<a.length;i++){const x=a[i],v=a[i+1];if(x==='--status')o.action='status';else if(x==='--set-webhook')o.action='set';else if(x==='--inbox')o.action='inbox';else if(x==='--send')o.action='send';else if(x==='--json')o.json=true;else if(x==='--dry-run')o.dryRun=true;else if(['--since','--user','--text-file','--retry-key'].includes(x)){o[x.slice(2).replace(/-([a-z])/g,(_,c)=>c.toUpperCase())]=v;i++;}else throw new Error(`不明なオプション: ${x}`);}if(!o.action)throw new Error('--status / --set-webhook / --inbox / --send を指定');return o;}
-export function makeClient({base,key,fetchImpl=fetch}){return{async call(p,init={}){const r=await fetchImpl(`${base}${p}`,{...init,headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json',...(init.headers||{})}}),text=await r.text();let body;try{body=JSON.parse(text);}catch{body=text;}if(!r.ok)throw new Error(`HTTP ${r.status}: ${typeof body==='string'?body:JSON.stringify(body)}`);return{status:r.status,body};}};}
-export function formatStatus(s){const e=s.endpoint?.body??{},t=s.test?.body??{},i=s.info?.body??{},q=s.quota?.body??{},c=s.consumption?.body??{};return`LINE: ${i.displayName??'-'} (${i.basicId??'-'})\nWebhook URL: ${e.endpoint??'-'}\nactive: ${e.active??'-'}\ntest: ${s.test?.ok?'success':'failed'}${t.reason?` (${t.reason})`:''}\n送信数: ${c.totalUsage??'-'} / ${q.value??q.type??'-'}`;}
-export async function main(args=process.argv.slice(2),deps={}){const o=parseArgs(args),home=deps.home??os.homedir(),e={...envFile(home),...process.env},base=e.TANOM_BASE||'https://ai-daikodo.com',key=e.TANOM_ADMIN_KEY;if(!key)throw new Error('TANOM_ADMIN_KEY がありません');const c=makeClient({base,key,fetchImpl:deps.fetchImpl});if(o.action==='status'){const x=(await c.call('/api/admin/line/webhook-status')).body;console.log(o.json?JSON.stringify(x,null,2):formatStatus(x));return x;}if(o.action==='set'){await c.call('/api/admin/line/webhook-endpoint',{method:'POST',body:JSON.stringify({endpoint:`${base}/api/line-webhook`})});return main(['--status'],deps);}if(o.action==='inbox'){const q=o.since?`?since=${encodeURIComponent(o.since)}`:'';const x=(await c.call(`/api/admin/line/inbox${q}`)).body;console.log(o.json?JSON.stringify(x,null,2):x.map(t=>`${t.displayName} (${t.lineUserId})\n${t.messages.map(m=>`  ${m.at} ${m.author}: ${m.text}`).join('\n')}`).join('\n\n'));return x;}if(!o.user||!o.textFile)throw new Error('--user と --text-file が必要');const text=fs.readFileSync(o.textFile,'utf8').trim(),retryKey=/^[0-9a-f-]{36}$/i.test(o.retryKey||'')?o.retryKey:strToUUID(o.retryKey||`${o.user}:${text}`);console.log(`送信先: ${o.user}\n--- 本文 ---\n${text}\n--- ここまで ---\nretryKey: ${retryKey}`);if(o.dryRun){console.log('[dry-run] 送信しない');return{dryRun:true,retryKey};}const x=await c.call('/api/admin/line/push',{method:'POST',body:JSON.stringify({userId:o.user,text,retryKey})});console.log(`HTTP ${x.status} sentMessages=${x.body.sentMessages?.length??0}`);return x.body;}
-if(isEntry(import.meta.url))main().catch(e=>{console.error(e.message);process.exitCode=1;});
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { parseEnv } from 'node:util';
+import { isEntry } from './is-entry.mjs';
+
+export function parseArgs(argv) {
+  const result = { json: false };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--status' || arg === '--inbox') {
+      if (result.command) throw new Error('choose --status or --inbox');
+      result.command = arg.slice(2);
+    } else if (arg === '--json') result.json = true;
+    else if (arg === '--since') {
+      const value = argv[++i];
+      if (!value || !Number.isFinite(Date.parse(value))) throw new Error('--since requires a valid date');
+      result.since = value;
+    } else throw new Error(`unknown argument: ${arg}`);
+  }
+  if (!result.command) throw new Error('use --status or --inbox');
+  if (result.command === 'inbox') result.since ??= new Date(Date.now() - 7 * 864e5).toISOString();
+  return result;
+}
+export function configuration({ env = process.env, home = os.homedir(), readFile = fs.readFileSync } = {}) {
+  let saved = {};
+  try { saved = parseEnv(readFile(path.join(home, '.claude', 'tanom-admin.env'), 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const key = env.AI_DAIKODO_ADMIN_API_KEY || env.TANOM_ADMIN_KEY || saved.TANOM_ADMIN_KEY;
+  const base = env.AI_DAIKODO_BASE_URL || env.TANOM_BASE || saved.TANOM_BASE || 'https://ai-daikodo.com';
+  return { key, base };
+}
+export async function callAdmin(apiPath, { fetchImpl = fetch, key, base = 'https://ai-daikodo.com' } = {}) {
+  if (!key) throw new Error('Set AI_DAIKODO_ADMIN_API_KEY or ~/.claude/tanom-admin.env');
+  const url = new URL(base);
+  if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Admin base must be an HTTPS URL without credentials');
+  const response = await fetchImpl(new URL(apiPath, url), {
+    headers: { Authorization: `Bearer ${key}` }, redirect: 'error', signal: AbortSignal.timeout(120000),
+  });
+  const text = await response.text();
+  let body;
+  try { body = JSON.parse(text); } catch { throw new Error(`admin API HTTP ${response.status}: invalid JSON`); }
+  // Keep partial inbox data and diagnostics, but return a failing exit code.
+  if (body?.incomplete === true && Array.isArray(body.threads) && [206, 503].includes(response.status)) return body;
+  if (!response.ok) throw new Error(`admin API HTTP ${response.status}: ${JSON.stringify(body).split(key).join('[REDACTED]')}`);
+  return body;
+}
+export async function run(argv, options = {}) {
+  const args = parseArgs(argv);
+  const apiPath = args.command === 'status' ? '/api/admin/line/webhook-status'
+    : `/api/admin/line/inbox?since=${encodeURIComponent(args.since)}`;
+  const body = await callAdmin(apiPath, options);
+  const degraded = body?.incomplete === true || (args.command === 'status' &&
+    [body?.storage, body?.discord?.channel, body?.discord?.archivedThreads, body?.test].some(item => item?.ok === false));
+  return { args, body, exitCode: degraded ? 2 : 0 };
+}
+export async function main(argv, options = {}) {
+  const { out = console.log, err = console.error } = options;
+  try {
+    const result = await run(argv, { ...configuration(options), ...options });
+    out(JSON.stringify(result.body, null, 2));
+    if (result.exitCode) err('受信箱の取得に障害があります。空配列を「メッセージなし」と判断しないでください。');
+    return result.exitCode;
+  } catch (error) { err(error.message); return 1; }
+}
+if (isEntry(import.meta.url)) process.exitCode = await main(process.argv.slice(2));
+

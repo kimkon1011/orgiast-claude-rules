@@ -21,6 +21,46 @@ function maxClaudeFromEnv(env) {
 }
 const BASE = 'https://api.anthropic.com/v1/code/sessions';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+export async function fetchWithRetry(url, { headers, timeoutMs = 10000, retries = 3, baseDelayMs = 1000, fetchImpl = fetch, deadline, now = Date.now } = {}) {
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (attempt > 0 && deadline !== undefined && now() >= deadline) throw lastError || Error('fetch deadline exceeded');
+    try {
+      const signal = AbortSignal.timeout(timeoutMs);
+      const response = await fetchImpl(url, { headers, signal });
+      if (response.status === 429 || response.status >= 500) {
+        const delay = baseDelayMs * Math.pow(2, attempt);
+        if (attempt >= retries || (deadline !== undefined && now() + delay >= deadline)) return response;
+        await sleep(delay);
+        continue;
+      }
+      return response;
+    } catch (e) {
+      if (e.name === 'AbortError' || e.name === 'TimeoutError') {
+        lastError = Error(`fetch timeout (${timeoutMs}ms)`);
+      } else {
+        lastError = e;
+      }
+      const delay = baseDelayMs * Math.pow(2, attempt);
+      if (attempt >= retries || (deadline !== undefined && now() + delay >= deadline)) throw lastError;
+      await sleep(delay);
+    }
+  }
+  throw lastError || Error('fetch failed');
+}
+export function recordApiResult(base, apiError, threshold = 8) {
+  const stateFile = path.join(base, 'reopen-lost-sessions-fail-state.json');
+  let state;
+  try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); }
+  catch (e) { if (e.code !== 'ENOENT') throw e; state = { count: 0 }; }
+  if (apiError) {
+    state.count = (state.count || 0) + 1;
+  } else {
+    state.count = 0;
+  }
+  fs.writeFileSync(stateFile, JSON.stringify(state) + '\n');
+  return state.count >= threshold;
+}
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
   catch (e) { if (e.code === 'ENOENT' && fallback !== undefined) return fallback; throw e; }
@@ -683,8 +723,9 @@ export async function connectedRcSessionIds({ fetchImpl = fetch, headers, now = 
   let cursor = '';
   do {
     if (now() >= deadline) throw Error('RC verification time limit');
-    const response = await fetchImpl(`${BASE}?${new URLSearchParams({ limit: '100', ...(cursor && { cursor }) })}`, {
-      headers, signal: AbortSignal.timeout(Math.max(1, deadline - now())),
+    const timeoutMs = Math.max(1000, deadline - now());
+    const response = await fetchWithRetry(`${BASE}?${new URLSearchParams({ limit: '100', ...(cursor && { cursor }) })}`, {
+      headers, timeoutMs, retries: 2, baseDelayMs: 1000, fetchImpl, deadline, now,
     });
     if (!response.ok) throw Error(`RC API HTTP ${response.status}`);
     const body = await response.json();
@@ -926,7 +967,8 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
     const deadline = now() + (stateBased ? 180000 : 60000);
     const get = async url => {
       if (now() >= deadline) throw Error('API time limit');
-      const response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(Math.max(1, deadline - now())) });
+      const timeoutMs = Math.max(1000, deadline - now());
+      const response = await fetchWithRetry(url, { headers, timeoutMs, retries: 2, baseDelayMs: 1000, fetchImpl, deadline, now });
       if (!response.ok) throw Error(`RC API HTTP ${response.status}`);
       return response.json();
     };
@@ -1247,13 +1289,14 @@ if (isEntry(import.meta.url)) {
       });
       clearTimeout(watchdogTimer);
       console.log(JSON.stringify(result));
-      if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
+      if (result.error || recordApiResult(base, result.apiError) || result.failed?.length || result.unverified?.length) process.exitCode = 1;
       // loadGuard blocked all candidates → not a clean run
       if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) process.exitCode = 1;
     } else {
+      const base = opts.base || path.join(os.homedir(), '.claude');
       const result = await reopenLost({ ...opts, checkClaude: true });
       console.log(JSON.stringify(result));
-      if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
+      if (result.error || recordApiResult(base, result.apiError) || result.failed?.length || result.unverified?.length) process.exitCode = 1;
       if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) process.exitCode = 1;
     }
   } catch (error) { console.log(JSON.stringify({ error: error.message })); process.exitCode = 1; }

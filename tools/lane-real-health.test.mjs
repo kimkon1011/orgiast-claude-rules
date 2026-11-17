@@ -426,3 +426,6 @@ test('probeViaChain: 既存の cheap-first 判定を維持する', t => {
 test('probeViaChain: 既存の routing fallback 判定を維持する', t => {
   assert.equal(probeViaChain('[routing] groq fallback to gemini', 'groq'), true);
 });
+test('probeViaChain: cheap-first 併記時の deepseek 連鎖判定', t => {
+  assert.equal(probeViaChain('[codex-do] cheap-first: x\nPONG\n[openrouter:deepseek/deepseek-v4-flash] in=10 out=3tok', 'deepseek'), true);
+});

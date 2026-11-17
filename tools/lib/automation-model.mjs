@@ -12,3 +12,4 @@ export function automationModel(requested, env = process.env) {
   if (value && !FABLE.test(value)) return value;
   return fallback;
 }
+

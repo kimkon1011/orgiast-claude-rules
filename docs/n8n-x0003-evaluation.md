@@ -46,6 +46,46 @@
 - WSL・docker とも無し。C4 は引き続き未検証（FINAL 不可）。インポートは一度も到達していない。
 - 再開条件: Linux/WSL か docker のある環境で `npm i n8n`（--force 不要）して `N8N_USER_FOLDER` を tmp にし、`n8n import:workflow --input=<active=false 化した候補>` → `export:workflow` でノード数一致を確認する。
 
+## C4 再試行（iter8・ブロッカー解消／インポートは次回）
+- **根本原因を特定**: n8n は公式に **Node.js 20.19〜24.x** を要求する（https://docs.n8n.io/hosting/installation/npm/ の原文「n8n requires a Node.js version between 20.19 and 24.x, inclusive.」）。iter4/iter5 の `package.json` 欠落・`Cannot find module` は、要求バージョン未満の環境（WSL 側 v18.20.8）へ入れていたことが主因。npm の `engines` 不一致が warning 止まりで進むため、壊れたツリーが出来ていた。
+- **WSL1 でも Node 20 は動く（実測）**: 過去記録の「WSL1 では Node v22 が Exec format error」は v22 固有で、v20 には当てはまらない。nodesource の `setup_20.x` で導入し `/usr/bin/node -v` → **v20.20.2** が正常応答。`dpkg -l nodejs` も `20.20.2-1nodesource1 amd64` で整合。
+  - 注意: 導入直後に `node -v` が v18 と返るのはログインシェルの `hash` キャッシュのため。判定は `/usr/bin/node -v` か `hash -r` 後に行う。
+  - WSL2 への upgrade（Hyper-V/仮想化）は依然不可だが、**C4 検証に WSL2 は不要**。
+- 現在地: クリーンな `/tmp/n8n-v20`（`npm init -y` 済み）で `npm install n8n` を実行中（ログ `/tmp/n8n-v20-install.log`）。
+- 次の手（この順で実行）:
+  1. `wsl -d Ubuntu -- bash -lc 'cd /tmp/n8n-v20 && ls node_modules/.bin/n8n && ./node_modules/.bin/n8n --version'` でインストール完了を確認（`--force` は使わない。使うと再び壊れる）。
+  2. 候補 5 件の JSON を `active:false` 化したコピーに変換（候補3 は元 JSON が `active:true`）。
+  3. `N8N_USER_FOLDER=/tmp/n8n-user ./node_modules/.bin/n8n import:workflow --input=<候補>` を 5 件分。
+  4. `export:workflow` で書き戻し、**ノード数の一致**を候補ごとに assert（C4 合格条件）。
+- 公式の注記: 「npm-based installs are deprecated from n8n 3.0」（Docker 推奨）。今回の隔離検証は npm で足りるが、**本番運用ルートは Docker を前提に設計する**。
+
+## C6 最終ゲート（本番投入の可否判定）
+C5 の承認を得た後、以下 6 ゲートが**全て pass** した時だけ本番ワークフローを有効化する。1 つでも fail なら有効化しない。
+
+| ゲート | 条件 | 判定方法 |
+|---|---|---|
+| G1 隔離インポート | C4 が pass（5 件ともインポート→エクスポートでノード数一致） | `export:workflow` の JSON を diff |
+| G2 送信系の無効化 | 顧客向け送信ノード（候補1・5）と Welcome Email（候補2）が disabled または削除済み | 取込後 JSON の `disabled:true` を全件 grep |
+| G3 Gmail は下書きのみ | `resource` が `draft` 以外の Gmail ノードが 0 件 | 取込後 JSON を機械判定 |
+| G4 認証情報の最小権限 | Gmail OAuth2 は `gmail.compose` まで（`gmail.send` を含めない）、OpenAI キーは専用発行 | 認証登録画面のスコープを読み戻し |
+| G5 active:false での投入 | 全ワークフローが `active:false` で登録されている | `n8n list:workflow` で active 列を確認 |
+| G6 kim の明示承認 | 置き場所（Cloud / セルフホスト）と「下書き限定で開始」への承認が kim-inbox に answered で残っている | kim-inbox の該当 ask を読み戻し |
+
+## 実行環境の費用比較（2026-11-18 実測・n8n 公式ページ）
+価格ページの表記は **EUR・年払い・税抜**（USD 表記なし）。
+
+| ルート | 費用 | 実行回数/月 | 備考 |
+|---|---|---|---|
+| n8n Cloud Starter | 20€/月 | 2,500 | 共有プロジェクト1、同時実行5 |
+| n8n Cloud Pro | 50€/月 | 10,000 | 共有プロジェクト3、同時実行最大50 |
+| n8n Cloud Business | 667€/月 | 40,000 | **セルフホスト専用**（Cloud 未提供・待機リスト） |
+| セルフホスト Community | 0€ | 無制限 | SSO/Git版管理/キューモード/監査ログ等は Enterprise ライセンス要 |
+
+- 全プランで**ユーザー数・ワークフロー数は無制限**。課金基準は月間「ワークフロー実行回数」のみ（ステップ数は無関係）。
+- セルフホストのみ可の機能: bash 実行、カスタムノード、LangSmith/OpenTelemetry トレース。
+- **Sustainable Use License の商用利用条件はページに記載がなく取得不可**。社内業務での利用可否は LICENSE.md の確認が別途必要（C6 の G6 前に要確認）。
+- 出典: https://n8n.io/pricing/ ／ https://docs.n8n.io/hosting/installation/npm/
+
 ## 本番投入の承認依頼文（C5）
 【kim 確認用の全文】
 X-0003（n8n 事前構築ワークフロー）の評価結果です。

@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { skipCoolingBackends } from './fallback-backend-health.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, isCodexPinned, shouldAutoInstallQwen, maybeAutoInstallQwen } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -1443,6 +1443,114 @@ test('review で変更0件でも終了コード 0（非 implement は空 diff �
     },
   });
   assert.equal(result.status, 0);
+});
+
+// ── lane:codex pin テスト ───────────────────────────────────────────
+
+test('isCodexPinned: 先頭行が lane: codex のとき true を返す', () => {
+  assert.equal(isCodexPinned('lane: codex\n指示文'), true);
+  assert.equal(isCodexPinned('Lane: Codex\n何か実装して'), true);
+  assert.equal(isCodexPinned('lane: Codex\n<!-- comment -->\n実装'), true);
+  assert.equal(isCodexPinned('\n\nlane: codex\n本文'), true);
+  assert.equal(isCodexPinned('  lane: codex  \n指示'), true);
+});
+
+test('isCodexPinned: 先頭行が lane: codex 以外のとき false を返す', () => {
+  assert.equal(isCodexPinned('lane: astra\n指示'), false);
+  assert.equal(isCodexPinned('<!-- lane: codex -->\n指示'), false);
+  assert.equal(isCodexPinned('lane: codex 以外の行\n実装'), false);
+  assert.equal(isCodexPinned(''), false);
+  assert.equal(isCodexPinned(null), false);
+  assert.equal(isCodexPinned('Lane: codex 以外の文脈の一部'), false);
+});
+
+test('isCodexPinned: 空行のみのあとに lane: codex があれば true', () => {
+  assert.equal(isCodexPinned('\r\nlane: codex\n指示'), true);
+  assert.equal(isCodexPinned('\n\n\nlane: codex'), true);
+});
+
+test('lane: codex 固定 + unattended_budget 超過 → exit 75 deferred、代替バックエンドを呼ばない', () => {
+  const home = workDir();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  const now = new Date('2026-11-17T12:00:00Z').getTime();
+  const rows = Array.from({ length: 8 }, () => ({
+    t: new Date(now).toISOString(), provider: 'codex', origin: 'unattended', status: 'ok'
+  }));
+  fs.writeFileSync(path.join(home, '.claude', 'executor-usage.jsonl'),
+    rows.map((r) => JSON.stringify(r)).join('\n'));
+  const promptFile = writePrompt('lane: codex\n仕様書に従って実装して');
+  const result = run([
+    '--force-native', '--cwd', home,
+    '--origin', 'unattended',
+    '--kind', 'implement',
+    '--prompt-file', promptFile,
+    'dummy'
+  ], {
+    home,
+    env: {
+      CODEX_DO_CHEAP_FIRST: '0',
+      OPENROUTER_API_KEY: 'sk-test',
+    },
+  });
+  assert.equal(result.status, 75, `exit 75 expected, got ${result.status}\n${result.stderr}`);
+  assert.match(result.stdout, /"status":"deferred"/, 'stdout に deferred JSON を出力');
+  assert.match(result.stdout, /lane-codex-pinned/, 'reason に lane-codex-pinned を含む');
+  assert.doesNotMatch(result.stderr, /代替バックエンドへ回します/, '代替バックエンドへの切り替えログが出ない');
+  assert.doesNotMatch(result.stderr, /cheap-first/, 'cheap-first のログが出ない');
+});
+
+test('lane: codex 固定 + codex_cooldown → exit 75 deferred、代替バックエンドを呼ばない', () => {
+  const home = workDir();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  const now = Date.now();
+  fs.writeFileSync(path.join(home, '.claude', 'codex-cooldown.json'),
+    JSON.stringify({ until: now + 60000, reason: 'usage_limit', t: now }));
+  const promptFile = writePrompt('lane: codex\n実装してくれ');
+  const result = run([
+    '--force-native', '--cwd', home,
+    '--kind', 'implement',
+    '--prompt-file', promptFile,
+    'dummy'
+  ], {
+    home,
+    env: {
+      CODEX_DO_CHEAP_FIRST: '0',
+      OPENROUTER_API_KEY: 'sk-test',
+    },
+  });
+  assert.equal(result.status, 75, `exit 75 expected, got ${result.status}\n${result.stderr}`);
+  assert.match(result.stdout, /"status":"deferred"/, 'stdout に deferred JSON を出力');
+  assert.match(result.stdout, /lane-codex-pinned/, 'reason に lane-codex-pinned を含む');
+  assert.match(result.stderr, /lane: codex 固定/, 'lane: codex 固定のメッセージが出る');
+  assert.doesNotMatch(result.stderr, /代替バックエンドへ回します/, '代替バックエンドへの切り替えログが出ない');
+});
+
+test('lane: codex なし + unattended_budget 超過 → 従来どおりフォールバックへ回る（回帰）', () => {
+  const home = workDir();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  const now = new Date('2026-11-17T12:00:00Z').getTime();
+  const rows = Array.from({ length: 8 }, () => ({
+    t: new Date(now).toISOString(), provider: 'codex', origin: 'unattended', status: 'ok'
+  }));
+  fs.writeFileSync(path.join(home, '.claude', 'executor-usage.jsonl'),
+    rows.map((r) => JSON.stringify(r)).join('\n'));
+  const result = run([
+    '--force-native', '--cwd', home,
+    '--origin', 'unattended',
+    '--kind', 'implement',
+    '普通の実装指示'
+  ], {
+    home,
+    env: {
+      CODEX_DO_CHEAP_FIRST: '0',
+      OPENROUTER_API_KEY: 'sk-test',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify([
+        { status: 0, output: '正常に実装完了', stderr: '' },
+      ]),
+    },
+  });
+  assert.notEqual(result.status, 75, `exit 75 ではなくフォールバックが実行されるべき: status=${result.status}`);
+  assert.match(result.stderr, /代替バックエンドへ回します/, '代替バックエンドへの切り替えログが出る');
 });
 
 // ── cheap-first テスト ───────────────────────────────────────────────

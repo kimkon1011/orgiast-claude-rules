@@ -68,15 +68,16 @@ $r6 = Register-ReopenLostTask -GetTask $get -RegisterTask $register
 Assert (-not $r6.changed -and $script:writes -eq 5) 'legacy repair is idempotent'
 
 # 既存タスクがローカルラッパーを指していれば、再登録で正本パスに戻さない。
-$wrapper = 'C:\local\reopen-lost-sessions-pc.mjs'
+# 実パスは実行環境の tools ディレクトリなので、ファイル名だけを見る。
+$wrapperName = 'reopen-lost-sessions-pc.mjs'
 foreach ($name in @('OrgiastReopenLostSessions', 'OrgiastReopenLostSessionsWatch')) {
-    $script:stored[$name].Actions[0].Arguments = $script:stored[$name].Actions[0].Arguments -replace 'reopen-lost-sessions\.mjs', 'reopen-lost-sessions-pc.mjs'
+    $script:stored[$name].Actions[0].Arguments = $script:stored[$name].Actions[0].Arguments -replace 'reopen-lost-sessions\.mjs', $wrapperName
 }
 $writesBefore = $script:writes
 $rWrap = Register-ReopenLostTask -GetTask $get -RegisterTask $register -ScriptConfigFile 'C:\missing\reopen-lost-sessions.json'
 Assert (-not $rWrap.changed -and $script:writes -eq $writesBefore) 'local wrapper survives re-register'
-Assert ($script:stored['OrgiastReopenLostSessions'].Actions[0].Arguments -like "*$wrapper*") 'logon task keeps wrapper'
-Assert ($script:stored['OrgiastReopenLostSessionsWatch'].Actions[0].Arguments -like "*$wrapper*") 'watch task keeps wrapper'
+Assert ($script:stored['OrgiastReopenLostSessions'].Actions[0].Arguments -like "*$wrapperName*") 'logon task keeps wrapper'
+Assert ($script:stored['OrgiastReopenLostSessionsWatch'].Actions[0].Arguments -like "*$wrapperName*") 'watch task keeps wrapper'
 Assert ($script:stored['OrgiastReopenLostSessionsWatch'].Actions[0].Arguments -like '*--watch*') 'watch flag remains'
 
 # 環境変数の明示パスはラッパー検出より優先し、両方のタスクへ使う。

@@ -101,6 +101,7 @@ export async function fetchHistory(channel, target, { home = process.env.ORGIAST
 }
 
 export function parseVerdict(raw) { const m=String(raw).match(/\{[\s\S]*\}/); if(!m) throw new Error(`LLM判定がJSONではありません: ${String(raw).replace(/\s+/g,' ').slice(0,200)}`); const j=JSON.parse(m[0]); return { ok:j.verdict==='OK', reason:String(j.reason||''), warnings:Array.isArray(j.warnings)?j.warnings:[] }; }
+<<<<<<< Updated upstream
 // 定期報告モードでは、未解決事項の再掲を許容しつつ、質問と原本との不一致は止める。
 export function periodicReportInstruction(periodicReport) {
   if (!periodicReport) return '①回答済み質問の聞き直し ②[相手]の未回答質問・要望への未回答 ③[自社]が既に聞いた質問を重ねて聞いていないか ④日付・金額・数量・手配状況・呼び方の食い違い ⑤自社既送信との重複・矛盾、のどれかがあればNG。';
@@ -124,6 +125,19 @@ export function runLlm(history, text, { intendedChanges, spawn = spawnSync, peri
 }
 
 function queryVerdict(prompt, spawn) {
+=======
+// 定期報告モード（periodicReport）: 宛先本人への毎日の状況報告など、未解決事項を
+// 繰り返し報告するのが正しい送信向けの判定。同じ未対応項目の再掲はNGにせず、
+// 「報告中の宛先への質問」と「日付・金額・人名の食い違い」だけをNGにする（2026-11-13）。
+export function periodicReportInstruction(periodicReport) {
+  if (!periodicReport) return '①回答済み質問の聞き直し ②[相手]の未回答質問・要望への未回答 ③[自社]が既に聞いた質問を重ねて聞いていないか ④日付・金額・数量・手配状況・呼び方の食い違い ⑤自社既送信との重複・矛盾、のどれかがあればNG。';
+  const recipient = periodicReport.recipient || '宛先本人', kind = periodicReport.kind || '定期報告';
+  return `今回は${recipient}さん（宛先本人）あての${kind}である。定期報告では次で判定する。「同じ未対応の項目を、前日以前の報告でも書いている」ことはNGにしない——未解決事項を毎日繰り返し報告するのは正しい動きだから。次の場合は従来どおりNG: ①報告の中で宛先本人に質問している（状況報告に質問を含めてはならない） ②日付・金額・人名が履歴中の元の報告・メール原本と食い違っている。`;
+}
+
+export function runLlm(history, text, { spawn = spawnSync, periodicReport = false } = {}) {
+  const prompt = `次の宛先履歴と送信予定本文を検査し、JSONだけを返す。形式: {"verdict":"OK|NG","reason":"理由","warnings":["警告"]}。発言者ラベルは厳守する。[相手]の未回答の質問・要望だけを「相手の未回答」と扱い、[自社]の質問を相手の要望と解釈しない。${periodicReportInstruction(periodicReport)}\n履歴:\n${labelHistory(history).join('\n')}\n送信予定:\n${text}`;
+>>>>>>> Stashed changes
   const tool = path.join(path.dirname(fileURLToPath(import.meta.url)), 'llm-ask.mjs');
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'send-context-prompt-')), promptFile=path.join(dir,'prompt.txt');
   try {
@@ -246,6 +260,7 @@ export async function resolveKimApprovedRecipient(channel, target, {
 
 export async function main(argv=process.argv.slice(2), deps={}) {
   const val=n=>{const i=argv.indexOf(n);return i>=0?argv[i+1]:''}; const channel=val('--channel'), target=val('--target')||val('--group')||val('--thread')||val('--chat')||val('--channel-id'), file=val('--text-file');
+<<<<<<< Updated upstream
   const intendedChanges = []; argv.forEach((v,i) => { if (v === '--intended-change' && argv[i+1]) intendedChanges.push(argv[i+1]); });
   if(!['line','gmail','discord','beeper'].includes(channel)||!target||!file) throw new Error('使い方: node tools/send-context-check.mjs --channel line|gmail|discord|beeper --target <宛先IDまたはメール> --text-file <送る本文> [--intended-change "<変更内容>"] [--periodic-report --recipient <宛先名>] [--kim-approved "<承認の根拠メモ>"]');
   const kimApproved = parseKimApprovedNote(argv);
@@ -286,5 +301,13 @@ export async function main(argv=process.argv.slice(2), deps={}) {
     return 0;
   }
   if(!verdict.ok) return 2; const written=writeContextMarker({channel,target:result.target,text,latest:latestOf(result.messages),reason:verdict.reason,intendedChanges: intendedChanges.length ? intendedChanges : undefined,home:deps.home}); console.log(`承認マーカー: ${written.file}`); return 0;
+=======
+  if(!['line','gmail','discord','beeper'].includes(channel)||!target||!file) throw new Error('使い方: node tools/send-context-check.mjs --channel line|gmail|discord|beeper --target <宛先IDまたはメール> --text-file <送る本文> [--periodic-report --recipient <宛先名>]');
+  const text=fs.readFileSync(file,'utf8').trim(); const result=await (deps.fetchHistory||fetchHistory)(channel,target,{home:deps.home});
+  for(const line of labelHistory(result.messages)) console.log(line.slice(0, 700));
+  const periodicReport=argv.includes('--periodic-report')?{recipient:val('--recipient')||'宛先本人',kind:'定期報告'}:false;
+  const verdict=(deps.runLlm||runLlm)(result.messages,text,{periodicReport}); console.log(JSON.stringify(verdict,null,2));
+  if(!verdict.ok) return 2; const written=writeContextMarker({channel,target:result.target,text,latest:latestOf(result.messages),reason:verdict.reason,home:deps.home}); console.log(`承認マーカー: ${written.file}`); return 0;
+>>>>>>> Stashed changes
 }
 if(isEntry(import.meta.url)) main().then(c=>{process.exitCode=c}).catch(e=>{console.error(e.message);process.exitCode=1});

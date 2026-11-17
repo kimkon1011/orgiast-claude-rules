@@ -30,7 +30,10 @@ import {
   finalizeReportLine,
   run,
   deliveryFailureNoticeText,
+<<<<<<< Updated upstream
   notifyDeliveryFailure,
+=======
+>>>>>>> Stashed changes
 } from "./satou-secretary-daily.mjs";
 import { register, TASK_NAME, TASK_RETRY_NAME } from "./satou-secretary-daily-register.mjs";
 const now = new Date("2026-11-09T06:30:00+09:00"),
@@ -371,6 +374,7 @@ test("送信済みの印があれば再実行（07:30枠）は何もしない", 
   assert.equal(p.write.mode,"skipped");
   assert.equal(sources,0);
 });
+<<<<<<< Updated upstream
 
 test("ソース単位で最大4回試し、成功ソースとメール原本を本番配信ゲートまで保持する", async t => {
   const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-sources-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
@@ -417,6 +421,8 @@ test("案内DMの応答消失も台帳に記録し、同日の再実行で重ね
   assert.equal(sends,1);assert.equal(logs.length,3);
   assert.equal(logs[0],"DM送信失敗: 本報告NG 理由");assert.match(logs[1],/^案内DMも失敗:/);
 });
+=======
+>>>>>>> Stashed changes
 test("1ソース最後まで失敗しても取れた分で報告を作り、末尾に1行だけ断りを書く", async t => {
   const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-partial-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
   const previousKey=process.env.GOOGLE_SA_KEY;
@@ -425,7 +431,10 @@ test("1ソース最後まで失敗しても取れた分で報告を作り、末�
   const sheetsHeader=["案件名","納品日","営業","予算項目","クライアント名","ｺｰﾄﾞ","制作","売上","実施計画URL","見積書URL","営業スタッフ","案件ルート"];
   const p=await run({now:new Date("2026-11-10T06:30:00+09:00"),dryRun:true,deps:{
     home,
+<<<<<<< Updated upstream
     sleepImpl: async () => {},
+=======
+>>>>>>> Stashed changes
     searchGmail:async()=>{throw Error("channel gws: HTTP 500");},
     getSheetsToken:async()=>"t",
     askLlm:async()=>"なし",
@@ -515,7 +524,12 @@ test("台帳書き込み失敗でも報告ファイルを残し配信は試み�
   const deps2=makeDeps(()=>({ok:false,reason:"重複"})); deps2.home=home2;
   await assert.rejects(()=>run({now,deps:deps2}),/履歴照合NG/);
   assert.equal(dmTexts.length,2);
+<<<<<<< Updated upstream
   assert.match(dmTexts[1],/台帳への本文の保存にも失敗/);
+=======
+  assert.match(dmTexts[1],/自動作成・送信に失敗/);
+  assert.match(dmTexts[1],/07:30 にもう1回自動で実行/);
+>>>>>>> Stashed changes
 });
 test("register は06:30本番と07:30再実行の2タスクを同じ非表示ランチャーで登録する", t => {
   const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-register-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
@@ -531,7 +545,11 @@ test("register は06:30本番と07:30再実行の2タスクを同じ非表示ラ
   assert.match(out.command,/run-hidden\.vbs/);
   const bat=fs.readFileSync(path.join(home,".claude","tools","satou-secretary-daily-wrapper.bat"),"utf8");
   assert.match(bat,/satou-secretary-daily\.mjs/);
+<<<<<<< Updated upstream
   assert.ok(bat.includes(path.join(home,".claude","satou-secretary","run.log")));
+=======
+  assert.match(bat,/satou-secretary\\run\.log/);
+>>>>>>> Stashed changes
 });
 test("同時実行と応答消失時は再送せず、ゲートNG時は送信済みにしない", async t => {
   const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-lock-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));

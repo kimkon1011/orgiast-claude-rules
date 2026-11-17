@@ -107,6 +107,7 @@ tools/.cache/
 /.codegraph/
 /.codegraph-wsl/
 /.codegraph-npm-cache/
+<<<<<<< Updated upstream
 PR_BODY.md
 
 # ONBOARDING §1.6 / §1.7-E に従って settings・hook 系ツールが編集前に置く自動バックアップ
@@ -116,3 +117,7 @@ PR_BODY.md
 # tools/*.bak-20261117 の 4 ファイル 574 行のみ＝実変更ゼロの空救済）。
 *.bak-*
 *.bak.*
+=======
+.vercel
+.env*
+>>>>>>> Stashed changes

@@ -1178,7 +1178,10 @@ export async function run({
     let draftInLedger = true;
     try {
       p.write = await write(p, deps);
+<<<<<<< Updated upstream
       draftInLedger = !p.write.failures.some(x => x.startsWith("自動_社長報告"));
+=======
+>>>>>>> Stashed changes
     } catch (e) {
       // 台帳書き込み失敗でも報告本文は完成しているため、配信は続ける。
       draftInLedger = false;
@@ -1187,7 +1190,11 @@ export async function run({
     }
     if (shouldDeliver({ dryRun, noDeliver }))
       try {
+<<<<<<< Updated upstream
         p.delivery = await deliverReport(report, { now, deps, sourceMessages: gmail.messages });
+=======
+        p.delivery = await deliverReport(report, { now, deps });
+>>>>>>> Stashed changes
       } catch (e) {
         // DM が最終的に送れなかった場合: 台帳へ理由1行 + 佐藤さんへ短い案内DM（1日1通）。
         p.deliveryFailure = e.message;
@@ -1214,7 +1221,11 @@ export async function appendRunLogRow(row, deps = {}) {
 export const deliveryFailureNoticeText = (draftInLedger = true) =>
   draftInLedger
     ? `今朝の業務報告の下書きは自動で送れませんでした。台帳の『自動_社長報告』タブに本文があります：${LEDGER_URL}`
+<<<<<<< Updated upstream
     : `今朝の業務報告を自動で送れませんでした。台帳への本文の保存にも失敗しています：${LEDGER_URL}`;
+=======
+    : `今朝の業務報告は自動作成・送信に失敗しました。07:30 にもう1回自動で実行します。続きは台帳で確認してください：${LEDGER_URL}`;
+>>>>>>> Stashed changes
 export async function notifyDeliveryFailure(reason, { now = new Date(), deps = {}, draftInLedger = true } = {}) {
   const home = deps.home || os.homedir(), oneLine = String(reason ?? "").replace(/\s+/g, " ").slice(0, 300);
   try {
@@ -1223,10 +1234,14 @@ export async function notifyDeliveryFailure(reason, { now = new Date(), deps = {
     console.error(`satou-secretary: 実行ログへDM送信失敗理由を書けませんでした: ${e.message}`);
   }
   const notice = noticeMarkerOf(now, home);
+<<<<<<< Updated upstream
   // Reserve the day's single attempt before posting, including ambiguous network failures.
   fs.mkdirSync(path.dirname(notice), { recursive: true });
   try { fs.writeFileSync(notice, JSON.stringify({ at: new Date().toISOString(), status: "attempting" }) + "\n", { flag: "wx" }); }
   catch (e) { if (e.code === "EEXIST") return { notified: false, reason: "notice-already-attempted" }; throw e; }
+=======
+  if (fs.existsSync(notice)) return { notified: false, reason: "notice-already-sent" };
+>>>>>>> Stashed changes
   try {
     const history = await (deps.fetchSendHistory || fetchSendHistory)("discord", REPORT_DM_TARGET, { home, fetchImpl: deps.discordFetchImpl }),
       text = deliveryFailureNoticeText(draftInLedger);
@@ -1234,10 +1249,16 @@ export async function notifyDeliveryFailure(reason, { now = new Date(), deps = {
     const sent = await (deps.sendDiscordDm || sendDiscordDm)(REPORT_DM_TARGET, text, { home, noCopyKim: true, noReplyFooter: true, requireFullBody: true, fetchImpl: deps.discordFetchImpl });
     if (!sent.delivered || !sent.messageId) throw Error("Discord送信結果を確認できません");
     fs.mkdirSync(path.dirname(notice), { recursive: true });
+<<<<<<< Updated upstream
     fs.writeFileSync(notice, `${JSON.stringify({ at: new Date().toISOString(), status: "sent", channelId: sent.channelId, messageId: sent.messageId, reason: oneLine })}\n`);
     return { notified: true, ...sent };
   } catch (e) {
     fs.writeFileSync(notice, JSON.stringify({ at: new Date().toISOString(), status: "failed-or-unconfirmed", error: e.message }) + "\n");
+=======
+    fs.writeFileSync(notice, `${JSON.stringify({ at: new Date().toISOString(), channelId: sent.channelId, messageId: sent.messageId, reason: oneLine })}\n`, { flag: "wx" });
+    return { notified: true, ...sent };
+  } catch (e) {
+>>>>>>> Stashed changes
     console.error(`satou-secretary: 送信失敗の案内DMも送れませんでした: ${e.message}`);
     try {
       await appendRunLogRow([jstStamp(now), "", "", "", "", "", "", "", "", `案内DMも失敗: ${String(e.message).replace(/\s+/g, " ").slice(0, 200)}`], deps);
@@ -1252,6 +1273,7 @@ export const deliveredMarkerOf = (now, home) => path.join(stateDirOf(home), `del
 export const noticeMarkerOf = (now, home) => path.join(stateDirOf(home), `notice-${fmt(now)}`);
 const jstStamp = (now) =>
   `${fmt(now)} ${new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit" }).format(now)} JST`;
+<<<<<<< Updated upstream
 export const reportDeliveryText = text => `おはようございます。毎日の業務状況報告です。\n\n${text}`;
 export function mailSourceEvidence(messages = []) {
   return messages.map(m => {
@@ -1263,6 +1285,10 @@ export function mailSourceEvidence(messages = []) {
   }).filter(Boolean).join('\n');
 }
 export async function deliverReport(report, { now = new Date(), deps = {}, sourceMessages = [] } = {}) {
+=======
+export const reportDeliveryText = text => `おはようございます。社長への業務報告の下書きです（このまま社長とのグループへ転送できます。直したい所は Claude に伝えてください）\n\n${text}`;
+export async function deliverReport(report, { now = new Date(), deps = {} } = {}) {
+>>>>>>> Stashed changes
   const home = deps.home || os.homedir(), stamp = fmt(now), dir = stateDirOf(home), mark = deliveredMarkerOf(now, home);
   if (fs.existsSync(mark)) return { delivered: false, reason: "already-delivered", marker: mark };
   fs.mkdirSync(dir, { recursive: true });
@@ -1277,7 +1303,11 @@ export async function deliverReport(report, { now = new Date(), deps = {}, sourc
   for (let attempt = 0; attempt < 3; attempt++) try {
     // 日次DMは宛先=佐藤さん本人への毎日の状況報告（定期報告）として照合する。
     verdict = await (deps.checkSendContext || checkSendContext)(history.messages, text, {
+<<<<<<< Updated upstream
       periodicReport: { recipient: REPORT_DM_TARGET, kind: "毎日の状況報告", sourceEvidence: mailSourceEvidence(sourceMessages) },
+=======
+      periodicReport: { recipient: REPORT_DM_TARGET, kind: "毎日の状況報告" },
+>>>>>>> Stashed changes
     });
     break;
   } catch (error) { lastCheckError = error; }

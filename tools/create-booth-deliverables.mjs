@@ -1,34 +1,21 @@
 #!/usr/bin/env node
-/**
- * Create Google Sheet and Doc using direct service account auth (bypass gws proxy).
- */
-import { getServiceAccountToken } from './lib/drive-auth.mjs';
+import { getDriveToken, driveApi } from './lib/drive-auth.mjs';
 import fs from 'node:fs';
 
 const SPREADSHEET_TITLE = '【下書き】2027上期 展示会ブース営業リスト（2026-11-17）';
 const DOC_TITLE = '【下書き】展示会ブース新規提案メール（2026-11-17）';
 const KIM_EMAIL = 'kim@orgiast.jp';
-const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/documents';
-
-async function api(url, opts = {}, token) {
-  const res = await fetch(url, {
-    ...opts,
-    headers: { Authorization: `Bearer ${token}`, ...(opts.headers ?? {}) },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status} ${res.statusText}: ${text.slice(0, 300)}`);
-  }
-  return res.json();
-}
+const ACTING_USER = 'seisaku-team@orgiast.jp';
 
 async function main() {
-  const token = await getServiceAccountToken({ scope: DRIVE_SCOPE });
-  console.log('Got SA token (service account self, not impersonated)');
+  const token = await getDriveToken({ impersonate: ACTING_USER });
+  const SHEETS = 'https://sheets.googleapis.com/v4/spreadsheets';
+  const DRIVE = 'https://www.googleapis.com/drive/v3/files';
+  const DOCS = 'https://docs.googleapis.com/v1/documents';
 
-  // --- Create Spreadsheet ---
+  // Create Sheet
   console.log('Creating spreadsheet...');
-  const sheetData = await api('https://sheets.googleapis.com/v4/spreadsheets', {
+  const sheetData = await driveApi(token, SHEETS, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -39,86 +26,98 @@ async function main() {
         { properties: { title: '過去実績と選定理由' } },
       ],
     }),
-  }, token);
+  }).then(r => r.json());
   const sheetId = sheetData.spreadsheetId;
   console.log(`Sheet ID: ${sheetId}`);
 
+  // Get actual sheet IDs from properties
+  const props = await driveApi(token, `${SHEETS}/${sheetId}?fields=sheets.properties`, { method: 'GET' }).then(r => r.json());
+  const sheetIds = props.sheets.map(s => s.properties.sheetId);
+  console.log('Sheet tab IDs:', sheetIds);
+
+  const [tab0, tab1, tab2] = sheetIds;
+
+  // Write headers via batchUpdate
+  const updateRow = async (tabIdx, headers) => {
+    await driveApi(token, `${SHEETS}/${sheetId}:batchUpdate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        requests: [{
+          updateCells: {
+            range: { sheetId: tabIdx, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: headers.length },
+            rows: [{ values: headers.map(v => ({ userEnteredValue: { stringValue: v } })) }],
+            fields: 'userEnteredValue',
+          },
+        }],
+      }),
+    });
+  };
+
+  await updateRow(tab0, ['展示会名','会場','会期','主催','公式URL','出展社一覧ページURL','確認状態','確認元URL']);
+  console.log('Tab1 headers written');
+  await updateRow(tab1, ['展示会名','企業名','業種','出展ページURL','取得元URL','年度']);
+  console.log('Tab2 headers written');
+  await updateRow(tab2, ['展示会名','選定理由','類似実績(顧客名)','実績展示会名','業種','案件ID','実績PDF有無']);
+  console.log('Tab3 headers written');
+
   // Share with kim
-  await api(`https://www.googleapis.com/drive/v3/files/${sheetId}/permissions?sendNotificationEmail=false`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role: 'writer', type: 'user', emailAddress: KIM_EMAIL }),
-  }, token);
-  console.log('Shared sheet with kim');
+  try {
+    await driveApi(token, `${DRIVE}/${sheetId}/permissions?supportsAllDrives=true&sendNotificationEmail=false`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'writer', type: 'user', emailAddress: KIM_EMAIL }),
+    });
+    console.log('Sheet shared with kim');
+  } catch (e) { console.log(`Sheet share note: ${e.message}`); }
 
-  // Write headers
-  const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
-  await api(`${SHEETS_API}/${sheetId}/values/%E5%B1%95%E7%A4%BA%E4%BC%9A15%E4%BB%B6!A1:H1?valueInputOption=USER_ENTERED`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ values: [['展示会名', '会場', '会期', '主催', '公式URL', '出展社一覧ページURL', '確認状態', '確認元URL']] }),
-  }, token);
-  await api(`${SHEETS_API}/${sheetId}/values/%E5%87%BA%E5%B1%95%E4%BC%81%E6%A5%AD50%E7%A4%BE!A1:F1?valueInputOption=USER_ENTERED`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ values: [['展示会名', '企業名', '業種', '出展ページURL', '取得元URL', '年度']] }),
-  }, token);
-  await api(`${SHEETS_API}/${sheetId}/values/%E9%81%8E%E5%8E%BB%E5%AE%9F%E7%B8%BE%E3%81%A8%E9%81%B8%E5%AE%9A%E7%90%86%E7%94%B1!A1:G1?valueInputOption=USER_ENTERED`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ values: [['展示会名', '選定理由', '類似実績(顧客名)', '実績展示会名', '業種', '案件ID', '実績PDF有無']] }),
-  }, token);
-  console.log('Headers written');
-
-  // Verify permission
-  const perms = await api(`https://www.googleapis.com/drive/v3/files/${sheetId}/permissions?fields=permissions(id,emailAddress,role,type)`, {}, token);
-  const kimPerm = (perms.permissions || []).find(p => p.emailAddress === KIM_EMAIL);
-  console.log(`Sheet kim: ${kimPerm?.role || 'NOT FOUND'}`);
+  // Verify permissions
+  try {
+    const pr = await driveApi(token, `${DRIVE}/${sheetId}/permissions?fields=permissions(id,emailAddress,role,type)&supportsAllDrives=true`, { method: 'GET' }).then(r => r.json());
+    console.log('Sheet perms:', JSON.stringify((pr.permissions||[]).map(p => ({email:p.emailAddress,role:p.role}))));
+  } catch (e) { console.log(`Perm read note: ${e.message}`); }
 
   const sheetUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/edit?authuser=${KIM_EMAIL}`;
 
-  // --- Create Doc ---
+  // Create Doc
   console.log('Creating document...');
-  const docData = await api('https://docs.googleapis.com/v1/documents', {
+  const docData = await driveApi(token, DOCS, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title: DOC_TITLE }),
-  }, token);
+  }).then(r => r.json());
   const docId = docData.documentId;
   console.log(`Doc ID: ${docId}`);
 
-  // Share with kim
-  await api(`https://www.googleapis.com/drive/v3/files/${docId}/permissions?sendNotificationEmail=false`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role: 'writer', type: 'user', emailAddress: KIM_EMAIL }),
-  }, token);
-
-  // Write template content
   let content = `【下書き】展示会ブース新規提案メール（2026-11-17）\n\n`;
-  try {
-    const tmplPath = 'C:\\Users\\USER\\terminals\\booth-email-template.md';
-    if (fs.existsSync(tmplPath)) content = fs.readFileSync(tmplPath, 'utf8');
-  } catch {}
-  await api(`https://docs.googleapis.com/v1/documents/${docId}:batchUpdate`, {
+  try { const p = 'C:\\Users\\USER\\terminals\\booth-email-template.md'; if (fs.existsSync(p)) content = fs.readFileSync(p, 'utf8'); } catch {}
+  await driveApi(token, `${DOCS}/${docId}:batchUpdate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ requests: [{ insertText: { location: { index: 1 }, text: content } }] }),
-  }, token);
+  });
+  console.log('Doc content written');
 
-  // Verify permissions
-  const docPerms = await api(`https://www.googleapis.com/drive/v3/files/${docId}/permissions?fields=permissions(id,emailAddress,role,type)`, {}, token);
-  const docKimPerm = (docPerms.permissions || []).find(p => p.emailAddress === KIM_EMAIL);
-  console.log(`Doc kim: ${docKimPerm?.role || 'NOT FOUND'}`);
+  // Share Doc
+  try {
+    await driveApi(token, `${DRIVE}/${docId}/permissions?supportsAllDrives=true&sendNotificationEmail=false`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'writer', type: 'user', emailAddress: KIM_EMAIL }),
+    });
+    console.log('Doc shared with kim');
+  } catch (e) { console.log(`Doc share note: ${e.message}`); }
+
+  try {
+    const dpr = await driveApi(token, `${DRIVE}/${docId}/permissions?fields=permissions(id,emailAddress,role,type)&supportsAllDrives=true`, { method: 'GET' }).then(r => r.json());
+    console.log('Doc perms:', JSON.stringify((dpr.permissions||[]).map(p => ({email:p.emailAddress,role:p.role}))));
+  } catch (e) { console.log(`Doc perm read note: ${e.message}`); }
 
   const docUrl = `https://docs.google.com/document/d/${docId}/edit?authuser=${KIM_EMAIL}`;
 
-  // Save URLs
-  const result = { spreadsheetUrl: sheetUrl, documentUrl: docUrl, spreadsheetId: sheetId, documentId: docId };
-  fs.writeFileSync('C:\\Users\\USER\\terminals\\deliverables-urls.json', JSON.stringify(result, null, 2));
+  fs.writeFileSync('C:\\Users\\USER\\terminals\\deliverables-urls.json', JSON.stringify({ spreadsheetUrl: sheetUrl, documentUrl: docUrl, spreadsheetId: sheetId, documentId: docId }, null, 2));
   console.log(`\nSheet: ${sheetUrl}`);
   console.log(`Doc: ${docUrl}`);
-  console.log('Done!');
 }
 
 main().catch(e => { console.error(e.message); process.exit(1); });

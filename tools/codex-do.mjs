@@ -398,6 +398,29 @@ export function isCheapFirstEnabled({ kind, instruction, review = false, env = p
   return true;
 }
 
+export function detectIrreversibleSideEffect(text) {
+  const value = String(text || '');
+  const has = (pattern) => pattern.test(value);
+
+  return (has(/\bseisaku-mail\.mjs\b/i) && has(/\bsend\b/i))
+    || (has(/\bgmail-draft\.mjs\b/i) && has(/--send\b/i))
+    || has(/\bsend_message\b/i)
+    || (has(/\bfleet-mail\.mjs\b/i) && has(/--send\b/i))
+    || has(/\bnotify-kim\b/i)
+    || (has(/\bdiscord\b/i) && has(/\bsend_(?:dm|message)\b/i))
+    || (has(/\bcurl\b/i) && has(/(?:^|\s)-X\s+POST\b/i)
+      && [...value.matchAll(/https?:\/\/[^\s"'`]+/gi)]
+        .some(([url]) => !/^https?:\/\/(?:localhost|127\.0\.0\.1|\[?::1\]?)(?::|\/|$)/i.test(url)))
+    || has(/\bdelete-draft\b/i)
+    || has(/\bgh\s+pr\s+merge\b/i)
+    || has(/\bgit\s+push\b/i)
+    || (has(/\bvercel\s+deploy\b/i) && has(/--prod\b/i));
+}
+
+export function shouldDisableExecutionChains(text) {
+  return detectIrreversibleSideEffect(text);
+}
+
 // A zero exit code alone does not prove that an implementation was delivered.
 export function cheapFirstFailureReason({ kind, result, treeChanged }) {
   const output = String(result.output || '');
@@ -1347,7 +1370,11 @@ try {
 const wantedEdit = wantsEdit(taskKind, instruction, review);
 const started = Date.now();
 let mockIndex = 0;
-const cheapFirst = useCodex && isCheapFirstEnabled({ kind: taskKind, instruction, review, env: process.env });
+const irreversible = shouldDisableExecutionChains(instruction);
+if (irreversible) {
+  console.error('[codex-do] irreversible: 外部送信を含むため再試行・フォールバックを無効化（1回だけ実行）');
+}
+const cheapFirst = !irreversible && useCodex && isCheapFirstEnabled({ kind: taskKind, instruction, review, env: process.env });
 if (cheapFirst) {
   console.error('[codex-do] cheap-first: 安いAIを先に実行します（Codex は失敗時のみ）');
 }
@@ -1707,6 +1734,7 @@ async function executeCodex() {
     const elapsed = (Date.now() - attemptStarted) / 1000;
     seconds += elapsed;
     attempts = attempt;
+    if (irreversible) break;
     // そもそも起動できていない(launched:false)なら再試行しても結果は変わらない。
     if (result?.launched === false) break;
     // 認証失敗は再試行しても直らない。出力ゼロの再試行を省いてフォールバックへ回す。
@@ -1777,7 +1805,7 @@ while (!(cheapFirstFallbackDone && executorName === 'fallback')) {
     continue;
   }
   const failure = failureReason(result);
-  if (!quotaCheck.matched && failure && !launchUnavailable && !authFailed && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
+  if (!irreversible && !quotaCheck.matched && failure && !launchUnavailable && !authFailed && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
     console.log(`[codex-do] sol 失敗 → astra へ昇格 (理由: ${failure})`);
     escalated = true;
     selectedLane = { slug: ASTRA, effort: 'high', reason: `escalated:${failure}` };
@@ -1801,7 +1829,7 @@ const fallbackReason = skipCodexReason === 'unattended_budget' ? 'Codex 無人�
   : authFailed ? 'Codex 未ログイン(認証失敗)'
   : launchUnavailable ? 'WSL 経路が無く codex を起動できない'
   : quotaCheck.matched ? 'Codex usage limit を検出' : 'Astra 昇格後も失敗';
-if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
+if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed)) {
   if (quotaCheck.matched) {
     quotaResetUntil = parseCodexResetUntil(`${result?.output || ''}\n${result?.stderr || ''}`);
     try { writeCodexCooldown(quotaResetUntil); } catch {}

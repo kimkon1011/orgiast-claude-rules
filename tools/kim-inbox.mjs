@@ -15,6 +15,7 @@ import { isEntry } from './is-entry.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
 import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, recordNaturalLanguageAnswers, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
 import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
+import { collectAwaiting, respond } from './kim-awaiting.mjs';
 const exec = promisify(execFile);
 const directory = home => path.join(home, '.claude/kim-inbox');
 const clean = value => redactSecrets(String(value ?? '')).slice(0, 4000);
@@ -582,7 +583,8 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       let nlHints = '';
       if (kim && event === 'UserPromptSubmit') {
         recordPromptAnswers(home, sessionId, String(input.prompt || ''), { listItems, answerItem });
-        const nlResult = recordNaturalLanguageAnswers(home, sessionId, String(input.prompt || ''), { listItems, answerItem });
+        const awaitingItems = collectAwaiting({ home, sessionId, now: Date.now() });
+        const nlResult = recordNaturalLanguageAnswers(home, sessionId, String(input.prompt || ''), { listItems, answerItem, respond, awaitingItems });
         if (nlResult.hints.length) nlHints = nlResult.hints.join('\n');
       }
       await drainSpool(home);

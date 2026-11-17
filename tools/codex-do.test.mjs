@@ -1472,7 +1472,7 @@ test('isCodexPinned: 空行のみのあとに lane: codex があれば true', ()
 test('lane: codex 固定 + unattended_budget 超過 → exit 75 deferred、代替バックエンドを呼ばない', () => {
   const home = workDir();
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
-  const now = new Date('2026-11-17T12:00:00Z').getTime();
+  const now = Date.now();
   const rows = Array.from({ length: 8 }, () => ({
     t: new Date(now).toISOString(), provider: 'codex', origin: 'unattended', status: 'ok'
   }));
@@ -1528,7 +1528,7 @@ test('lane: codex 固定 + codex_cooldown → exit 75 deferred、代替バック
 test('lane: codex なし + unattended_budget 超過 → 従来どおりフォールバックへ回る（回帰）', () => {
   const home = workDir();
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
-  const now = new Date('2026-11-17T12:00:00Z').getTime();
+  const now = Date.now();
   const rows = Array.from({ length: 8 }, () => ({
     t: new Date(now).toISOString(), provider: 'codex', origin: 'unattended', status: 'ok'
   }));

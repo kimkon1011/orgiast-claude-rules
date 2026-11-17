@@ -27,6 +27,7 @@ import { loadLedger, isInternal, extractAddresses, shouldBlockInternal } from '.
 import { bodyHash, checkConsistency, statePath, mimeText, render as renderConsistency } from './mail-consistency-check.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
 import { validateWeekdays } from './lib/weekday-validator.mjs';
+import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 
 export const GMAIL_COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
 export const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -392,6 +393,12 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         const current = await (deps.getDraftBody ?? (options => fetchDraftBody({ ...options, fetchImpl, getToken })))({ user, id: args.send });
         consistency = age <= 86400000 && cached.bodyHash === bodyHash(current) ? cached : await inspect();
       } catch { consistency = await inspect(); }
+      const draftText = mimeText(draft?.message?.payload).text;
+      const bookingUrls = findSecretaryBookingUrls(draftText);
+      if (bookingUrls.length) {
+        emit({ ok: false, errorKind: 'secretary_booking_url', matches: bookingUrls }, `${SECRETARY_BOOKING_URL_REASON}\n検出: ${bookingUrls.join('、')}`);
+        return 2;
+      }
       if (!isForward && !consistency.ok && !args['ack-consistency']) { emit({ ok: false, errorKind: 'consistency_block', findings: consistency.findings }, renderConsistency(consistency)); return 2; }
       if (!isForward && args['ack-consistency']) {
         const record = { t: new Date().toISOString(), draftId: args.send, user, reason: args['ack-consistency'], findings: consistency.findings };
@@ -399,7 +406,6 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         (deps.appendLedger ?? ((p,s) => { fs.mkdirSync(path.dirname(p), {recursive:true}); fs.appendFileSync(p,s); }))(ledgerFile, JSON.stringify(record)+'\n');
         stdout(`整合性 block を理由付きで承認: ${args['ack-consistency']}`);
       }
-      const draftText = mimeText(draft?.message?.payload).text;
       // 社外文面の曜日誤りを送信前に検出
       const weekdayResult = validateWeekdays(draftText);
       if (!weekdayResult.valid) {

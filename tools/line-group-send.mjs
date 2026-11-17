@@ -12,6 +12,7 @@ import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
 import { assertContextApproved, latestOf, readOutbound, recordOutbound } from './lib/send-context.mjs';
+import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 
 /** 任意の文字列を UUID v5 形式（SHA-256 ベース・決定論的）に変換する。同じ文字列→同じUUID。
  *  LINE API の X-Line-Retry-Key は UUID 形式が必要だが、人間が覚えやすい任意文字列を指定できるようにするため。 */
@@ -149,6 +150,8 @@ export function assertSendableText(text) {
   if (japanese === 0 && latin1 >= 5) throw new Error('本文が文字化けしている（日本語0文字・U+0080-00FF が多数）');
   const placeholder = text.match(/XX|\{\{|\}\}|【要記入】|（記入）|TODO/);
   if (placeholder) throw new Error(`本文にプレースホルダが残っている: ${placeholder[0]}`);
+  const bookingUrls = findSecretaryBookingUrls(text);
+  if (bookingUrls.length) throw new Error(SECRETARY_BOOKING_URL_REASON);
 }
 
 export function buildMessages(text, imageUrls) {

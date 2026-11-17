@@ -17,6 +17,7 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { BeeperApiError, sendMessage, listMessages } from './beeper-api.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
+import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 
 // ── レート制限 ───────────────────────────────────────────────────────
 
@@ -130,6 +131,7 @@ async function beeperSend(options) {
   // 本文は必ずファイルから
   const text = fs.readFileSync(bodyFile, 'utf8').trim();
   if (!text) throw new Error('本文が空です');
+  if (findSecretaryBookingUrls(text).length) throw Object.assign(new Error(SECRETARY_BOOKING_URL_REASON), { exitCode: 1 });
 
   // 1. Receipt 検証
   const item = verifyReceipt(home, queueID, receiptID);
@@ -238,7 +240,9 @@ async function main(args = process.argv.slice(2)) {
 
   if (has('--dry-run')) {
     if (!chatID || !bodyFile) { console.error('--dry-run にも --chat と --body-file が必要です'); return 1; }
-    console.log(JSON.stringify({ dryRun: true, chatID, textLength: fs.readFileSync(bodyFile, 'utf8').trim().length }));
+    const dryText = fs.readFileSync(bodyFile, 'utf8').trim();
+    if (findSecretaryBookingUrls(dryText).length) { console.error(SECRETARY_BOOKING_URL_REASON); return 1; }
+    console.log(JSON.stringify({ dryRun: true, chatID, textLength: dryText.length }));
     return 0;
   }
 

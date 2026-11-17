@@ -231,3 +231,67 @@ export function recordPromptAnswers(home, sessionId, prompt, { listItems, answer
   }
   return answers;
 }
+
+// Natural language reply classification (prefix match, allows sentence-ending particles)
+function classifyNaturalLanguage(text) {
+  const t = text.trim().replace(/[。、.!！\s]+$/g, '');
+  if (/^(?:不要|やめ|止め|だめ|ダメ|不可|いいえ|保留|ちょっと待って|待って)/.test(t)) return '否認';
+  if (/^(?:良い|大丈夫|入れ|ok|お願い|進めて|承認|はい|可)/i.test(t)) return '可';
+  if (/^(?:完了|おわり|終わり)/.test(t)) return '完了';
+  if (/^(?:上[のの]?\d+(?:\s*[、,]\s*\d+)*\s*(?:は|も)?\s*)(?:OK|良い|大丈夫|お願い|承認|可|全部OK)/i.test(t)) return '可';
+  return null;
+}
+
+// Record natural-language replies. Returns { answers, hints }. Low confidence → hints only, not recorded.
+export function recordNaturalLanguageAnswers(home, sessionId, prompt, { listItems, answerItem }) {
+  if (!sessionId) return { answers: [], hints: [] };
+  const state = readRelayState(home, sessionId), delivered = state.lastDelivered || [];
+  if (!delivered.length) return { answers: [], hints: [] };
+
+  const lines = prompt.trim().split(/\r?\n/).filter(Boolean);
+  const items = listItems(home);
+  const openAsks = delivered
+    .map(d => items.find(i => i.id === d.id && i.kind === 'ask' && i.status === 'open' && revisionOf(i) === d.revision))
+    .filter(Boolean);
+
+  if (!openAsks.length) return { answers: [], hints: [] };
+
+  const answers = [];
+  const hints = [];
+
+  // Pattern 1: numbered natural language "1. 良い 2. OK 3. 不要"
+  const numberedNatural = lines.map(line => {
+    const m = line.trim().match(/^([1-9]\d*)\s*[.．、)）]\s*(.+)$/);
+    if (!m) return null;
+    const answer = classifyNaturalLanguage(m[2]);
+    if (!answer) return null;
+    return { number: parseInt(m[1]), answer };
+  }).filter(Boolean);
+
+  if (numberedNatural.length > 0) {
+    let matched = 0;
+    for (const nn of numberedNatural) {
+      const receipt = delivered.find(d => d.number === nn.number);
+      const item = receipt ? openAsks.find(i => i.id === receipt.id) : null;
+      if (!item) continue;
+      if (nn.answer === '否認' || nn.answer === '保留') continue;
+      answers.push(answerItem(home, item.id, nn.answer, sessionId));
+      matched++;
+    }
+    // Fallback: single numbered item with single pending ask, positive only
+    if (matched === 0 && numberedNatural.length === 1 && openAsks.length === 1 && numberedNatural[0].answer === '可') {
+      answers.push(answerItem(home, openAsks[0].id, numberedNatural[0].answer, sessionId));
+    }
+    return { answers, hints };
+  }
+
+  // Pattern 2: whole prompt is a single reply "良いですよ" "OK" "進めて"
+  const promptAnswer = classifyNaturalLanguage(lines.join(' '));
+  if (promptAnswer && openAsks.length === 1) {
+    answers.push(answerItem(home, openAsks[0].id, promptAnswer, sessionId));
+  } else if (promptAnswer && openAsks.length >= 2 && openAsks.length <= 3) {
+    hints.push(`kim の返事が判断待ちの項目への回答のように見えます。「${promptAnswer}」として記録します（違えば訂正してください）。`);
+  }
+
+  return { answers, hints };
+}

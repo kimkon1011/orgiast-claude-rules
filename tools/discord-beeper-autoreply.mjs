@@ -36,6 +36,15 @@ export function isSyntheticMessage(m) {
   if (!m || m.isSender) return false;
   return m.type === 'TEXT' && SYNTHETIC_PTN.test(plainText(m.text || ''));
 }
+export function selectReplyTarget(pending) {
+  return pending.filter(m => !m.isSender && !m.isDeleted && !m.isHidden
+    && m.type === 'TEXT' && plainText(m.text) && !isSyntheticMessage(m)).sort(compare).at(-1);
+}
+export function hasSendFailure(message) {
+  return Boolean(message && (message.sendError || message.failed || message.isFailed
+    || message.sendFailed || /^(failed|error|send_failed)$/i.test(message.status || '')
+    || /^(failed|error|send_failed)$/i.test(message.sendStatus || '')));
+}
 const timestamp = m => Date.parse(m.timestamp);
 const compare = (a, b) => timestamp(a) - timestamp(b)
   || (BigInt(/^\d+$/.test(a.sortKey) ? a.sortKey : '0') > BigInt(/^\d+$/.test(b.sortKey) ? b.sortKey : '0') ? 1
@@ -238,7 +247,7 @@ export async function runOnce(options = {}) {
         const lastSelf = all.findLast(m => m.isSender);
         if (prior?.status === 'sending') {
           const found = all.find(m => m.isSender && plainText(m.text) === prior.content && timestamp(m) >= timestamp(prior));
-          if (found) {
+          if (found && !hasSendFailure(found)) {
             state.chats[chat.id] = { ...prior, status: 'sent', replyId: found.id };
             await recordSentReply(home, {
               where: 'dm',
@@ -317,7 +326,7 @@ export async function runOnce(options = {}) {
           } catch { return []; }
         };
         const classifyInput = {
-          channelName: chat.title, context: all.slice(-25).map(m => ({ author: m.senderName, content: plainText(m.text), isSelf: m.isSender })),
+          channelName: chat.title, context: all.filter(m => !isSyntheticMessage(m)).slice(-25).map(m => ({ author: m.senderName, content: plainText(m.text), isSelf: m.isSender })),
           message: { content: question },
           knowledge: read(path.join(home, '.claude', 'discord-autoreply', 'knowledge.md')),
           rules: read(path.join(home, '.claude', 'discord-autoreply', 'rules.md')),
@@ -414,10 +423,12 @@ export async function runOnce(options = {}) {
 
         let sent;
         // 返信先は pending の最新（本物メッセージ）、合成メッセージは避ける
-        const replyTarget = pending.length > 0 ? pending.at(-1) : latest;
-        try { sent = await api.sendMessage(chat.id, content, { replyToMessageID: replyTarget.id }); }
+        const replyTarget = selectReplyTarget(pending);
+        try { sent = await api.sendMessage(chat.id, content, replyTarget ? { replyToMessageID: replyTarget.id } : {}); }
         catch { await decide('送信結果が不明。再送せず Discord で確認してください', 'uncertain'); continue; }
         if (sent?.chatID && sent.chatID !== chat.id) { await decide('送信結果の会話IDが一致しません', 'uncertain'); continue; }
+
+        if (hasSendFailure(sent)) { await decide('送信失敗の印を検出。再送せず Discord で確認してください', 'uncertain'); continue; }
 
         let found;
         try {
@@ -432,6 +443,8 @@ export async function runOnce(options = {}) {
           }
         } catch { /* Receipt is uncertain; never resend. */ }
         if (!found) { await decide('送信後の本文読み戻しに失敗。再送せず Discord で確認してください', 'uncertain'); continue; }
+
+        if (hasSendFailure(found)) { await decide('送信失敗の印を検出。再送せず Discord で確認してください', 'uncertain'); continue; }
 
         state.chats[chat.id] = { ...mark(latest), status: 'sent', replyId: found.id, content };
         await recordSentReply(home, {

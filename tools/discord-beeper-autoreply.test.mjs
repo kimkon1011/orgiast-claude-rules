@@ -1184,3 +1184,36 @@ test('合成判定は受信TEXTのみ、HTMLと英語不在着信にも対応', 
   assert.equal(isSyntheticMessage(null), false);
   assert.equal(isSyntheticMessage(message()), false);
 });
+
+test('TEXTの質問がない添付メッセージにはreplyToを付けない', async t => {
+  const f = fixture(t);
+  f.data.chat1[0].type = 'IMAGE';
+  f.data.chat1[0].text = '';
+  const result = await runOnce(f.options);
+  assert.equal(result.replied, 1);
+  assert.deepEqual(f.sent[0].options, {});
+});
+
+test('本文が空のTEXTは返信先にしない', async t => {
+  const f = fixture(t);
+  f.data.chat1.unshift(message({ id: 'empty', text: '<p> </p>', timestamp: new Date(NOW - 500).toISOString() }));
+  assert.equal((await runOnce(f.options)).replied, 1);
+  assert.equal(f.sent[0].options.replyToMessageID, 'm1');
+});
+
+for (const failure of [{ sendError: 'bridge failed' }, { failed: true }, { status: 'failed' }, { sendStatus: 'error' }]) {
+  test(`読み戻しの送信失敗を成功記録しない ${JSON.stringify(failure)}`, async t => {
+    const f = fixture(t);
+    const send = f.api.sendMessage;
+    f.api.sendMessage = async (...args) => {
+      const sent = await send(...args);
+      Object.assign(f.data.chat1[0], failure);
+      return sent;
+    };
+    assert.equal((await runOnce(f.options)).replied, 0);
+    assert.equal(f.state().chats.chat1.status, 'uncertain');
+    assert.equal(fs.existsSync(path.join(f.home, '.claude/discord-autoreply/sent-log.jsonl')), false);
+    await runOnce(f.options);
+    assert.equal(f.sent.length, 1);
+  });
+}

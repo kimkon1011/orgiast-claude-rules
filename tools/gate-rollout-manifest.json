@@ -29,6 +29,7 @@
       "rollout": "deny",
       "legacy": true
     },
+    "calendar-external-guest-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-17T00:00:00Z", "denyAfter": "2026-11-24T00:00:00Z", "immediatePolicy": "2026-11-15 user 指示: 社外ゲストをカレンダー招待に入れない" },
     "staff-ask-selfcheck-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-16T00:00:00Z", "denyAfter": "2026-11-23T00:00:00Z", "immediatePolicy": "2026-11-16 kim 指摘: 社員への調査外注と無関係な検索証拠を遮断" },
     "pending-decision-ask-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-16T00:00:00Z", "denyAfter": "2026-11-23T00:00:00Z" },
     "control-group-stop-gate": {

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
-export const GATE_CONTRACT = { name: 'calendar-external-guest-gate', remedies: [{ kind: 'repo-file', ref: 'tools/gate-remedies.md', section: 'calendar-external-guest-gate' }] };
+export const GATE_CONTRACT = {"name":"calendar-external-guest-gate","remedies":[{"kind":"repo-file","ref":"tools/gate-remedies.md","section":"calendar-external-guest-gate"}]};
 export const HOOK_MATCHER = 'mcp__.*(?:[Cc]alendar|gcal).*|Bash|PowerShell';
 const CALENDAR_TOOLS = /^mcp__.*(?:calendar|gcal).*?(?:create|update|respond|insert|patch)/i;
 export const BLOCK_REASON = '社外の人は社内カレンダーの招待者に入れない。お客様への案内はメール本文に日時と会議URLを書く。';

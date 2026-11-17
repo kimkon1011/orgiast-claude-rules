@@ -17,6 +17,8 @@ const DYNAMIC_RE = /import\(\s*['"](\.{1,2}\/[^'"]+\.m?js)['"]\s*\)/g;
 const KNOWN_STATIC_CYCLES = new Set([
   // hasHandoff は呼び出し時にだけ使われ、モジュール評価中には参照されない。
   'handoff-action-evidence.mjs -> handoff-quality-gate.mjs -> handoff-action-evidence.mjs',
+  // JSDoc の使用例の import 文が regex に捕捉される自己循環。実コード上の循環ではない。
+  'self-verify-workflow.mjs -> self-verify-workflow.mjs',
 ]);
 
 function listModules(dir) {

@@ -9,18 +9,24 @@ import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { readEnvValue } from './env-kv.mjs';
+import { redactSecrets } from './redact-secrets.mjs';
 
 // -- 定数 --
 const HOME = process.env.ORGIAST_HOME || os.homedir();
 const CLAUDE_DIR = path.join(HOME, '.claude');
-const STATE_DIR = path.join(CLAUDE_DIR, 'state');
+function getStateDir() {
+  return process.env.TLDV_PROCESS_IMPROVE_STATE_DIR || path.join(CLAUDE_DIR, 'state');
+}
+function getStatePath() {
+  return path.join(getStateDir(), 'tldv-process-improve.json');
+}
 function getLogDir() {
   return process.env.TLDV_PI_LOG_DIR || path.join(CLAUDE_DIR, 'logs');
 }
 function getLogPath() {
-  return path.join(getLogDir(), 'tldv-process-improve.log');
+  // Write to .jsonl to avoid contention with the scheduled task's stdout redirect.
+  return path.join(getLogDir(), 'tldv-process-improve.jsonl');
 }
-const STATE_PATH = path.join(STATE_DIR, 'tldv-process-improve.json');
 const CONFIG_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'config', 'tldv-process-improve.json');
 const AUTH_MODULE_URL = new URL('./lib/drive-auth.mjs', import.meta.url).href;
 const DRIVE_BASE = 'https://www.googleapis.com/drive/v3/files';
@@ -40,6 +46,10 @@ const DUP_LOOKBACK = 800;
 const MAX_LLM_CALLS = 60;
 // チャンクサイズ
 const CHUNK_SIZE = 12000;
+// 時間予算（ms）。タスク上限1時間に対し、LLM解析1件が最大約15分かかる実測（2026-11-17）を見込んで30分で新規会議の処理を打ち切る。
+export const TIME_BUDGET_MS = 30 * 60 * 1000;
+// 時間予算のマージン（ms）。この残時間を切ったら knowhow-add など遅い後処理をスキップする。
+export const TIME_MARGIN_MS = 5 * 60 * 1000;
 
 // -- エラー型 --
 export class ProcessImproveError extends Error {
@@ -50,7 +60,18 @@ export function safeReason(error) {
   if (error instanceof ProcessImproveError) return error.code;
   if (error?.code === 'ENOENT') return 'file-not-found';
   if (error?.code === 'ETIMEDOUT') return 'timeout';
-  return `unexpected:${error?.name || 'Error'}`;
+  const msg = redactSecrets(String(error?.message || '')).slice(0, 80);
+  return `unexpected:${error?.name || 'Error'}:${error?.code || ''}:${msg}`;
+}
+
+// -- 時間予算超過チェック --
+export function hasTimeBudget(deadline) {
+  return Date.now() < deadline;
+}
+
+// -- 遅い後処理（knowhow-addなど）をスキップするか --
+export function isTimeTight(deadline) {
+  return Date.now() > (deadline - TIME_MARGIN_MS);
 }
 
 // -- 子プロセス実行ヘルパー（execFile を Promise + 決まった exitCode/out/err に統一） --
@@ -80,7 +101,7 @@ export function defaultState() {
   return { version: 1, processedMeetings: {}, lastRun: null, logSheetId: null, llmCallsToday: 0 };
 }
 
-export function readState(statePath = STATE_PATH) {
+export function readState(statePath = getStatePath()) {
   try {
     const raw = JSON.parse(fs.readFileSync(statePath, 'utf8'));
     return { ...defaultState(), ...raw };
@@ -100,9 +121,14 @@ export function writeState(statePath, state) {
 export function appendLog(entry) {
   const dir = getLogDir();
   const logPath = getLogPath();
-  fs.mkdirSync(dir, { recursive: true });
-  const line = JSON.stringify({ t: new Date().toISOString(), ...entry }) + '\n';
-  fs.appendFileSync(logPath, line);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const line = JSON.stringify({ t: new Date().toISOString(), ...entry }) + '\n';
+    fs.appendFileSync(logPath, line);
+  } catch (error) {
+    // Log write must never crash the main process.
+    try { process.stderr.write(`appendLog failed: ${error?.message || error}\n`); } catch {}
+  }
 }
 
 // -- 引数解析 --
@@ -149,9 +175,16 @@ export async function requestJson(url, init = {}, { fetchImpl = fetch, sleepImpl
       catch { throw new ProcessImproveError(`${label}-invalid-json`); }
     }
     const status = response.status;
-    await response.body?.cancel();
+    // レスポンス本文（先頭300文字）を読み、400系エラーの原因を残す
+    let responseBodyPreview = '';
+    if (!response.ok && status !== 429 && status >= 400 && status < 500) {
+      try { responseBodyPreview = ((await response.text()) || '').slice(0, 300); } catch {}
+    } else {
+      await response.body?.cancel();
+    }
     if ((status !== 429 && (status < 500 || status > 599)) || attempt === attempts - 1) {
-      throw new ProcessImproveError(`${label}-http-${status}`);
+      const errMsg = responseBodyPreview ? `${label}-http-${status}: ${responseBodyPreview}` : `${label}-http-${status}`;
+      throw new ProcessImproveError(errMsg);
     }
     await sleepImpl(1000 * 2 ** attempt);
   }
@@ -721,7 +754,38 @@ export async function writeImprovementSheet(items, { token, dryRun = false, fetc
     return { planned: items.length, writeStartRow, tabName, rows: plannedRows };
   }
 
-  // 5. batchUpdate 書き込み
+  // 5. 書き込み前にグリッド行数を確認し、必要なら appendDimension で行を追加
+  if (!dryRun) {
+    const gridMeta = await driveFetch(
+      `${SHEETS_BASE}/${sheetId}?fields=sheets.properties(sheetId,title,gridProperties.rowCount)`,
+      {}, token, { fetchImpl, label: 'sheet-grid-meta' }
+    );
+    const sheets = gridMeta.sheets || [];
+    const targetSheet = sheets.find(s => s.properties?.title === tabName);
+    if (!targetSheet) throw new ProcessImproveError('sheet-tab-not-found');
+    const rowCount = targetSheet.properties.gridProperties.rowCount;
+    const needed = writeStartRow + items.length - 1;
+    if (needed > rowCount) {
+      const added = needed - rowCount;
+      await driveFetch(
+        `${SHEETS_BASE}/${sheetId}:batchUpdate`,
+        { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            requests: [{
+              appendDimension: {
+                sheetId: targetSheetId,
+                dimension: 'ROWS',
+                length: added,
+              },
+            }],
+          }) },
+        token, { fetchImpl, label: 'sheet-append-dimension' }
+      );
+      appendLog({ event: 'grid-rows-appended', tabName, added, rowCountBefore: rowCount });
+    }
+  }
+
+  // 6. batchUpdate 書き込み
   const batchBody = {
     valueInputOption: 'USER_ENTERED',
     data: [
@@ -736,7 +800,7 @@ export async function writeImprovementSheet(items, { token, dryRun = false, fetc
     token, { fetchImpl }
   );
 
-  // 6. 読み戻し確認（F と H）
+  // 7. 読み戻し確認（F と H）
   const verifyRange = `${safeTabName}!F${writeStartRow}:H${writeStartRow + items.length - 1}`;
   const verify = await driveFetch(
     `${SHEETS_BASE}/${sheetId}/values/${encodeURIComponent(verifyRange)}?valueRenderOption=FORMATTED_VALUE`,
@@ -755,8 +819,20 @@ export async function writeImprovementSheet(items, { token, dryRun = false, fetc
 }
 
 // -- ログシートの作成または取得 --
+// Google スプレッドシート ID の正規表現（44文字、英数字 + ハイフン + アンダースコア）
+const SHEET_ID_RE = /^[A-Za-z0-9_-]{30,}$/;
+
 export async function ensureLogSheet({ token, state, fetchImpl = fetch, summary } = {}) {
-  if (state.logSheetId) return state.logSheetId;
+  if (state.logSheetId) {
+    // 無効な sheetId（例: テストで書き込まれた "test-log-sheet"）は新規作成に進む
+    if (!SHEET_ID_RE.test(state.logSheetId)) {
+      const invalidValue = state.logSheetId;
+      state.logSheetId = null;
+      appendLog({ event: 'log-sheet-id-invalid', value: invalidValue });
+    } else {
+      return state.logSheetId;
+    }
+  }
 
   const config = loadConfig();
   // 初回作成
@@ -822,7 +898,7 @@ export async function ensureLogSheet({ token, state, fetchImpl = fetch, summary 
   }
 
   state.logSheetId = result.spreadsheetId;
-  try { writeState(STATE_PATH, state); } catch { /* state 保存失敗はベストエフォート */ }
+  try { writeState(getStatePath(), state); } catch { /* state 保存失敗はベストエフォート */ }
   return result.spreadsheetId;
 }
 
@@ -1008,9 +1084,17 @@ export async function addConstructionKnowhow(items, { dryRun = false, fetchImpl 
   if (!runNodeImpl && !fs.existsSync(cmdPath)) return 0;
 
   let added = 0;
+  // 連続失敗カウンター: 3回連続で失敗したら残りをスキップ（全件失敗で2分×Nを防ぐ）
+  let consecutiveFailures = 0;
+  const MAX_CONSECUTIVE_FAILURES = 3;
   for (const item of items) {
     if (added >= (config.knowhow?.maxPerNight || 5)) break;
     if (item.kind !== 'knowhow') continue;
+    // 連続N回失敗したら残りの knowhow 登録をスキップ
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      appendLog({ event: 'knowhow-skip-consecutive-failures', consecutiveFailures });
+      break;
+    }
 
     // entry object: category,type,phase must be set. Others are detected from meeting content.
     const entry = [{
@@ -1030,17 +1114,23 @@ export async function addConstructionKnowhow(items, { dryRun = false, fetchImpl 
         // CommandQueue result format: { ok: true, command, result: <戻り値> }
         try {
           const output = JSON.parse(result.stdout);
-          if (output && output.ok === true && output.result) added++;
-          else {
+          if (output && output.ok === true && output.result) {
+            added++;
+            consecutiveFailures = 0; // 成功でリセット
+          } else {
+            consecutiveFailures++;
             appendLog({ event: 'knowhow-add-error', exitCode: result.exitCode, ok: output?.ok, stdout: (result.stdout || '').slice(0, 200), stderr: (result.stderr || '').slice(0, 200) });
           }
         } catch {
+          consecutiveFailures++;
           appendLog({ event: 'knowhow-add-error', exitCode: result.exitCode, stdout: (result.stdout || '').slice(0, 200), stderr: (result.stderr || '').slice(0, 200) });
         }
       } else {
+        consecutiveFailures++;
         appendLog({ event: 'knowhow-add-error', exitCode: result.exitCode, stderr: (result.stderr || '').slice(0, 200) });
       }
     } catch (error) {
+      consecutiveFailures++;
       appendLog({ event: 'knowhow-add-error', exitCode: -1, error: safeReason(error) });
     } finally {
       try { fs.rmSync(argsFile, { force: true }); } catch {}
@@ -1055,15 +1145,19 @@ export async function runImprove(options = {}, dependencies = {}) {
   const execFileImpl = dependencies.execFile;
   const opts = { ...options };
   const config = loadConfig();
-  let state = readState(STATE_PATH);
+  let state = readState(getStatePath());
   // dry-run では状態を更新しない
   const persistState = !opts.dryRun && state;
+
+  const startTime = Date.now();
+  const deadline = startTime + TIME_BUDGET_MS;
 
   const summary = {
     fetched: 0, processed: 0, extracted: 0, duplicates: 0, skippedOld: 0,
     skippedDuplicateSource: 0, skippedExcluded: 0,
     sheetWritten: 0, feedbackSent: 0, knowhowAdded: 0, templateReflected: 0, failed: 0,
     totalItems: 0, error: '',
+    timeBudgetSkipped: 0, knowhowSkipped: 0,
   };
   const allItems = [];
   const processedIds = [];
@@ -1171,8 +1265,15 @@ export async function runImprove(options = {}, dependencies = {}) {
 
     // -- 各会議を LLM 解析 --
     const excludePatterns = config.excludeTitlePatterns || [];
-    for (const meeting of newMeetings.slice(0, opts.limit || Infinity)) {
+    const targetMeetings = newMeetings.slice(0, opts.limit || Infinity);
+    for (const [index, meeting] of targetMeetings.entries()) {
       if (state && state.llmCallsToday >= MAX_LLM_CALLS) break;
+      // 時間予算を超えたら残りの会議をスキップして正常終了へ移行
+      if (!hasTimeBudget(deadline)) {
+        summary.timeBudgetSkipped = targetMeetings.length - index;
+        appendLog({ event: 'time-budget-reached', phase: 'llm-processing', meetingId: meeting.id, elapsed: Date.now() - startTime });
+        break;
+      }
 
       // 除外パターンに一致する会議はスキップ
       const matchedPattern = excludePatterns.find(p => (meeting.title || '').includes(p));
@@ -1251,7 +1352,7 @@ export async function runImprove(options = {}, dependencies = {}) {
       token = await getDriveToken({ impersonate: 'kim@orgiast.jp', fetchImpl });
     }
 
-    // 1. 改善項目シート
+    // 1. 改善項目シート（時間予算に関わらず最低限の書き込みは行う）
     if (allItems.length > 0) {
       try {
         const sheetResult = await writeImprovementSheet(allItems, { token, fetchImpl });
@@ -1271,49 +1372,11 @@ export async function runImprove(options = {}, dependencies = {}) {
       }
     }
 
-    // 2. app フィードバック
-    summary.feedbackSent = await postAppFeedback(allItems, { fetchImpl });
-
-    // 3. knowhow 登録
-    summary.knowhowAdded = await addConstructionKnowhow(allItems);
-
-    // 4. ログシート
-    const logSheetId = await ensureLogSheet({ token, state: persistState ? state : { logSheetId: null }, fetchImpl, summary });
-
-    // 5. テンプレート反映案タブ（kind=template）
-    if (allItems.length > 0) {
-      try {
-        summary.templateReflected = await writeTemplateReflection(allItems, { token, logSheetId, fetchImpl });
-      } catch { /* テンプレート反映案書き込み失敗は致命的ではない */ }
-    }
-
-    // 6. 抽出ログ（各項目1行）
-    for (const item of allItems) {
-      await writeLogEntry({
-        token, logSheetId,
-        entry: {
-          meetingName: item.caseName,
-          kind: item.kind,
-          caseName: item.caseName,
-          event: item.event,
-          solution: item.solution,
-          decided: item.decided,
-          target: item.target,
-          evidence: item.evidence,
-          confidence: item.confidence,
-          reflectionResult: summary.sheetWritten > 0 ? `シート行 ${summary.sheetWritten}` : '',
-        },
-        fetchImpl,
-      });
-    }
-
-    // 7. 実行サマリ
-    await writeRunSummary({ token, logSheetId, summary, fetchImpl });
-
-    // -- 状態保存（全書き込み成功後に処理済みとして記録） --
-    if (persistState) {
+    // -- 改善項目シート書き込み成功時点で処理済み会議を保存 --
+    // 後段の補助処理（ログシート・テンプレート反映・実行サマリ）の失敗に巻き込まれないように、
+    // ここで processedMeetings を state に永続化する。
+    if (persistState && processedIds.length > 0) {
       state.lastRun = new Date().toISOString();
-      // 全書き込み成功後、抽出成功した会議だけ state に保存
       for (const id of processedIds) {
         if (!state.processedMeetings[id]) {
           state.processedMeetings[id] = {
@@ -1323,17 +1386,93 @@ export async function runImprove(options = {}, dependencies = {}) {
           };
         }
       }
-      writeState(STATE_PATH, state);
+      writeState(getStatePath(), state);
     }
 
-    // -- kim-inbox 通知 --
-    const logSheetUrl = `https://docs.google.com/spreadsheets/d/${logSheetId}`;
-    await notifyKimInbox(summary, logSheetUrl);
+    // -- ここから下は補助処理。失敗しても run-error にはせず summary.failed に計上して継続する --
+    try {
+
+      // 時間予算チェック: 残り5分を切ったら遅い後処理（knowhow 等）をスキップする
+      if (isTimeTight(deadline)) {
+        summary.knowhowSkipped = allItems.filter(i => i.kind === 'knowhow').length;
+        appendLog({ event: 'time-budget-tight', phase: 'knowhow-add', elapsed: Date.now() - startTime, knowhowSkipped: summary.knowhowSkipped });
+      }
+
+      // 2. app フィードバック（短いので常に実行）
+      try { summary.feedbackSent = await postAppFeedback(allItems, { fetchImpl }); }
+      catch (postError) { summary.failed++; appendLog({ event: 'post-process-error', phase: 'app-feedback', error: safeReason(postError) }); }
+
+      // 3. knowhow 登録（時間予算を超えていたらスキップ）
+      if (!isTimeTight(deadline)) {
+        try { summary.knowhowAdded = await addConstructionKnowhow(allItems); }
+        catch (knowhowError) { summary.failed++; appendLog({ event: 'post-process-error', phase: 'knowhow-add', error: safeReason(knowhowError) }); }
+      } else if (!summary.knowhowSkipped) {
+        summary.knowhowSkipped = allItems.filter(i => i.kind === 'knowhow').length;
+      }
+
+      // 4. ログシート
+      let logSheetId = '';
+      try {
+        logSheetId = await ensureLogSheet({ token, state: persistState ? state : { logSheetId: null }, fetchImpl, summary });
+      } catch (logSheetError) {
+        summary.failed++;
+        appendLog({ event: 'post-process-error', phase: 'log-sheet', error: safeReason(logSheetError) });
+      }
+
+      // 5. テンプレート反映案タブ（kind=template）
+      if (allItems.length > 0 && logSheetId) {
+        try {
+          summary.templateReflected = await writeTemplateReflection(allItems, { token, logSheetId, fetchImpl });
+        } catch { /* テンプレート反映案書き込み失敗は致命的ではない */ }
+      }
+
+      // 6. 抽出ログ（各項目1行）
+      if (logSheetId) {
+        for (const item of allItems) {
+          try {
+            await writeLogEntry({
+              token, logSheetId,
+              entry: {
+                meetingName: item.caseName,
+                kind: item.kind,
+                caseName: item.caseName,
+                event: item.event,
+                solution: item.solution,
+                decided: item.decided,
+                target: item.target,
+                evidence: item.evidence,
+                confidence: item.confidence,
+                reflectionResult: summary.sheetWritten > 0 ? `シート行 ${summary.sheetWritten}` : '',
+              },
+              fetchImpl,
+            });
+          } catch { /* ログエントリ書き込み1件の失敗は無視 */ }
+        }
+      }
+
+      // 7. 実行サマリ
+      if (logSheetId) {
+        try { await writeRunSummary({ token, logSheetId, summary, fetchImpl }); }
+        catch { /* 実行サマリ書き込み失敗は致命的ではない */ }
+      }
+
+      // -- kim-inbox 通知 --
+      if (logSheetId) {
+        const logSheetUrl = `https://docs.google.com/spreadsheets/d/${logSheetId}`;
+        try { await notifyKimInbox(summary, logSheetUrl); } catch { /* 通知失敗はベストエフォート */ }
+      }
+
+    } catch (postError) {
+      // 補助処理全体の予期しないエラー（例: token 取得失敗）も summary.failed に計上
+      summary.failed++;
+      appendLog({ event: 'post-process-error', phase: 'auxiliary', error: safeReason(postError) });
+    }
 
     // -- 標準出力サマリ --
     console.log(`fetched=${summary.fetched} processed=${summary.processed} extracted=${summary.extracted} ` +
       `duplicates=${summary.duplicates} sheet=${summary.sheetWritten} feedback=${summary.feedbackSent} ` +
-      `knowhow=${summary.knowhowAdded} template=${summary.templateReflected} failed=${summary.failed}`);
+      `knowhow=${summary.knowhowAdded} template=${summary.templateReflected} failed=${summary.failed} ` +
+      `timeBudgetSkipped=${summary.timeBudgetSkipped} knowhowSkipped=${summary.knowhowSkipped}`);
 
     appendLog({ event: 'run-complete', ...summary });
     return summary.failed > 0 ? 1 : 0;

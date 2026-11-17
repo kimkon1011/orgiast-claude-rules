@@ -13,8 +13,72 @@ import { countWindowsClaudeProcesses } from './lib/windows-process.mjs';
 import { addItem } from './kim-inbox.mjs';
 
 const DEFAULT_MAX_REOPEN = 3;
+// 自動 claude がこの本数以上なら新しい開き直しをしない（オーナー指定。REOPEN_MAX_CLAUDE で上書き）。
+export const DEFAULT_REOPEN_MAX_CLAUDE = 5;
+function maxClaudeFromEnv(env) {
+  const value = Number(env?.REOPEN_MAX_CLAUDE);
+  return Number.isFinite(value) ? value : DEFAULT_REOPEN_MAX_CLAUDE;
+}
 const BASE = 'https://api.anthropic.com/v1/code/sessions';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Retry with exponential backoff for transient network failures.
+// Base delay 1s, double each retry: 1s, 2s, 4s. Max 3 retries before giving up.
+const RETRY_MAX = 3;
+const RETRY_BASE_MS = 1000;
+export async function fetchWithRetry(url, init, retries = RETRY_MAX, {
+  timeoutMs = 30000,
+  deadline = Infinity,
+  nowFn = Date.now,
+  fetchImpl = fetch,
+} = {}) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (nowFn() >= deadline) throw Error('fetchWithRetry deadline exceeded');
+    try {
+      const signal = AbortSignal.timeout(timeoutMs);
+      const response = await fetchImpl(url, { ...init, signal });
+      if (response.ok) return response;
+      // 429/503/502 are transient; other 4xx are likely permanent.
+      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+        return response; // permanent error, don't retry
+      }
+      if (attempt < retries) {
+        await sleep(RETRY_BASE_MS * Math.pow(2, attempt));
+        continue;
+      }
+      return response; // last attempt, return whatever we got
+    } catch (e) {
+      if (attempt < retries) await sleep(RETRY_BASE_MS * Math.pow(2, attempt));
+      else throw e;
+    }
+  }
+  throw Error('fetchWithRetry exhausted');
+}
+// 連続失敗カウンターを ~/.claude/reopen-lost-sessions-fail-state.json で管理。
+// 連続 8 回（約 2 時間）以上失敗した場合のみ exit 1 を返す（監視が真の停止を検出できるようにする）。
+export const FAIL_STATE_FILE = 'reopen-lost-sessions-fail-state.json';
+export const CONSECUTIVE_FAIL_THRESHOLD = 8;
+export function readFailState(base) {
+  try { return readJson(path.join(base, FAIL_STATE_FILE), { consecutiveFails: 0, lastFailAt: null }); }
+  catch { return { consecutiveFails: 0, lastFailAt: null }; }
+}
+export function writeFailState(base, state) {
+  fs.writeFileSync(path.join(base, FAIL_STATE_FILE), JSON.stringify(state) + '\n');
+}
+export function recordApiResult(base, apiError, nowDate = new Date().toISOString()) {
+  const state = readFailState(base);
+  if (apiError) {
+    state.consecutiveFails = (state.consecutiveFails || 0) + 1;
+    state.lastFailAt = nowDate;
+    writeFailState(base, state);
+    return state.consecutiveFails >= CONSECUTIVE_FAIL_THRESHOLD;
+  }
+  if (state.consecutiveFails > 0) {
+    state.consecutiveFails = 0;
+    state.lastFailAt = null;
+    writeFailState(base, state);
+  }
+  return false;
+}
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
   catch (e) { if (e.code === 'ENOENT' && fallback !== undefined) return fallback; throw e; }
@@ -704,7 +768,7 @@ export async function getLoadGuardStatus({
   isWaitingSession,
   now = Date.now,
 } = {}) {
-  const maxClaude = Number.isFinite(Number(env?.REOPEN_MAX_CLAUDE)) ? Number(env.REOPEN_MAX_CLAUDE) : 10;
+  const maxClaude = maxClaudeFromEnv(env);
   const maxCpu = Number.isFinite(Number(env?.REOPEN_MAX_CPU)) ? Number(env.REOPEN_MAX_CPU) : 85;
 
   let claudeCount = null;
@@ -1027,7 +1091,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
         result.loadGuard = { claudeCount: loadStatus.claudeCount, cpuPct: loadStatus.cpuPct, reason: loadStatus.reason, error: loadStatus.error };
       }
       const cpuThreshold = Number.isFinite(Number(env.REOPEN_MAX_CPU)) ? Number(env.REOPEN_MAX_CPU) : 85;
-      const claudeThreshold = Number.isFinite(Number(env.REOPEN_MAX_CLAUDE)) ? Number(env.REOPEN_MAX_CLAUDE) : 10;
+      const claudeThreshold = maxClaudeFromEnv(env);
       const isCpuHigh = loadStatus.cpuPct !== null && loadStatus.cpuPct >= cpuThreshold;
       const isClaudeHigh = loadStatus.claudeCount !== null && loadStatus.claudeCount >= claudeThreshold;
 
@@ -1041,12 +1105,17 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
           result.deferredCpu = loadStatus.cpuPct;
           reopenCandidates = [];
         } else if (isClaudeHigh) {
-          // claudeCount high → still reopen 1 candidate so RC doesn't stay cut off
-          const allowCount = Math.min(1, reopenCandidates.length);
-          const skipCount = reopenCandidates.length - allowCount;
-          if (skipCount > 0) result.skipped.loadGuard = skipCount;
-          result.loadGuard.allowFirst = true;
-          reopenCandidates = reopenCandidates.slice(0, allowCount);
+          // 既定は 0 件。REOPEN_ALLOW_FIRST=1 のときだけ、従来どおり 1 件だけ開く。
+          if (env?.REOPEN_ALLOW_FIRST === '1') {
+            const allowCount = Math.min(1, reopenCandidates.length);
+            const skipCount = reopenCandidates.length - allowCount;
+            if (skipCount > 0) result.skipped.loadGuard = skipCount;
+            result.loadGuard.allowFirst = true;
+            reopenCandidates = reopenCandidates.slice(0, allowCount);
+          } else {
+            result.skipped.loadGuard = reopenCandidates.length;
+            reopenCandidates = [];
+          }
         }
       }
 
@@ -1239,11 +1308,16 @@ if (isEntry(import.meta.url)) {
       if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
       // loadGuard blocked all candidates → not a clean run
       if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) process.exitCode = 1;
+      // 連続失敗カウンター: API エラーが連続 8 回超でのみ exit 1（一時的ネットワーク不調は exit 0）
+      if (recordApiResult(base, result.apiError)) process.exitCode = 1;
     } else {
       const result = await reopenLost({ ...opts, checkClaude: true });
+      const base = opts.base || path.join(os.homedir(), '.claude');
       console.log(JSON.stringify(result));
       if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
       if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) process.exitCode = 1;
+      // 連続失敗カウンター: API エラーが連続 8 回超でのみ exit 1（一時的ネットワーク不調は exit 0）
+      if (recordApiResult(base, result.apiError)) process.exitCode = 1;
     }
   } catch (error) { console.log(JSON.stringify({ error: error.message })); process.exitCode = 1; }
 }

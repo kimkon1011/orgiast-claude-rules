@@ -80,8 +80,8 @@
     {"path": "config/kim-discord-allowlist.json", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/fleet-selfcheck-prompt.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
     {"path": "tools/fleet-task-runner.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
-    {"path": "tools/session-model-audit.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "各PCのセッションのモデル（Opus 混入）と kim 返事待ち停止を毎時の見回りから読み取り専用で点検する"},
-    {"path": "tools/lib/automation-model.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "自動実行（fleet-agent・autopilot 等）のモデルを Sonnet に揃える実行時依存"},
+    {"path": "tools/session-model-audit.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "各PCのセッションのモデル（settings が Sonnet/未設定なら NG、Opus の軽い作業は警告）と kim 返事待ち停止を毎時の見回りから読み取り専用で点検する"},
+    {"path": "tools/lib/automation-model.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "自動実行（fleet-agent・autopilot 等）の既定モデルを Opus にする実行時依存（軽い作業のみ Sonnet）"},
 {"path": "tools/lib/lane-disabled.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "PC 単位のレーン無効化（lanes-disabled.json）を codex-do・lane-doctor・llm-fallback が読む実行時依存"},
 {"path": "tools/lib/auto-resume-policy.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "fleet-task-runner 等が参照する自動再開ポリシー。通常のconverge配布に含める"},
     {"path": "tools/fleet-selfcheck.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
@@ -1349,6 +1349,7 @@
     {"path": "tools/tldv-process-improve.mjs", "scope": "kim-only", "reason": "tl;dv 会議→制作プロセス改善の夜間ループ。DWD鍵とLLM鍵を持つ作業用011（kim-PC）だけで実行"},
     {"path": "config/tldv-process-improve.json", "scope": "kim-only", "reason": "tl;dv 改善ループの設定。kim-PCでしか使わない"},
     {"path": "tools/register-tldv-process-improve-task.ps1", "scope": "kim-only", "reason": "kim-PC（作業用011）だけで OrgiastTldvProcessImprove タスクを登録する"},
-    {"path": "tools/tldv-process-improve.test.mjs", "scope": "kim-only", "reason": "tl;dv 改善ループのテスト。CIで実行するがfleet配布はkim-PCだけ"}
+    {"path": "tools/tldv-process-improve.test.mjs", "scope": "kim-only", "reason": "tl;dv 改善ループのテスト。CIで実行するがfleet配布はkim-PCだけ"},
+    {"path": "tools/register-ai-daikodo-line-watch.ps1", "scope": "kim-only", "step": null, "reason": "AI代行堂LINE監視のschtasks登録。tanom-admin.env と run-hidden.vbs に依存し、各PCの初期セットアップ時に1回実行"}
   ]
 }

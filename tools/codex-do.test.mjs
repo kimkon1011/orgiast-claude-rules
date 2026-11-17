@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { skipCoolingBackends } from './fallback-backend-health.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -241,10 +241,12 @@ test('backendSpecificTimeoutSecs は gemini-cli に既定200秒・cheap-code:dee
   assert.equal(backendSpecificTimeoutSecs('openrouter-free', {}), null);
 });
 
-// 2026-11-11 修正: 実装依頼(--kind implement)は 400 秒では終わらず代替 AI が必ず
-// 時間切れになるため、既定予算を 1200 秒に引き上げる。
-test('backendSpecificTimeoutSecs は kind=implement で既定予算を 1200 秒に引き上げる', () => {
-  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}, { kind: 'implement' }), 1200);
+// 2026-11-18 修正: executor-usage.jsonl（2026-11-01以降）で deepseek 系 implement
+// 成功 722 件の p95=54 秒・p99=384 秒・最大 597 秒。720 秒で観測済み成功を切らず
+// timeout 1回あたりの廃棄を約 180 秒減らす。gemini は 1200 秒のまま。
+test('backendSpecificTimeoutSecs は kind=implement で deepseek は 720・gemini は 1200', () => {
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}, { kind: 'implement' }), 720);
+  assert.equal(backendSpecificTimeoutSecs('deepseek', {}, { kind: 'implement' }), 720);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}, { kind: 'implement' }), 1200);
 });
 
@@ -255,8 +257,9 @@ test('backendSpecificTimeoutSecs は kind が無い・implement 以外の場合�
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}, { kind: 'verify' }), 200);
 });
 
-test('backendSpecificTimeoutSecs は kind=implement でも env 指定を優先する', () => {
+test('backendSpecificTimeoutSecs は kind=implement でも env 指定を優先する（deepseek 720 基準でも env が勝つ）', () => {
   assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '450' }, { kind: 'implement' }), 450);
+  assert.equal(backendSpecificTimeoutSecs('deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '900' }, { kind: 'implement' }), 900);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '180' }, { kind: 'implement' }), 180);
 });
 
@@ -661,6 +664,64 @@ test('snapshotWorkingTree non-git directory: snapshot is identical when nothing 
     try {
       fs.rmSync(tempDir, { recursive: true, force: true });
     } catch {}
+  }
+});
+
+test('snapshotWorkingTree git repo: detects changes in .gitignore-d files (2026-11-16 regression)', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-gitignore-'));
+  try {
+    // Init a git repo with a .gitignore that excludes scratch/
+    const git = (...args) => spawnSync('git', ['-C', tempDir, ...args], { windowsHide: true, encoding: 'utf8' });
+    git('init');
+    git('config', 'user.name', 'Test');
+    git('config', 'user.email', 'test@test.com');
+    fs.writeFileSync(path.join(tempDir, '.gitignore'), 'scratch/\n', 'utf8');
+    fs.writeFileSync(path.join(tempDir, '.gitattributes'), '* text=auto\n', 'utf8');
+    git('add', '.gitignore', '.gitattributes');
+    git('commit', '-m', 'init');
+
+    // Create a file inside the .gitignore-d scratch/ directory
+    const scratchDir = path.join(tempDir, 'scratch');
+    fs.mkdirSync(scratchDir, { recursive: true });
+    const ignoredFile = path.join(scratchDir, 'output.txt');
+    fs.writeFileSync(ignoredFile, 'initial content\n', 'utf8');
+
+    const snap1 = snapshotWorkingTree(tempDir);
+
+    // Modify the .gitignore-d file (this is what Codex would do)
+    fs.writeFileSync(ignoredFile, 'modified content\n', 'utf8');
+
+    const snap2 = snapshotWorkingTree(tempDir);
+    // The snapshots MUST differ even though the file is gitignored
+    assert.notEqual(snap1, snap2, 'snapshotWorkingTree should detect changes in .gitignore-d files');
+  } finally {
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('snapshotWorkingTree git repo: detects new file in .gitignore-d directory', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-gitignore2-'));
+  try {
+    const git = (...args) => spawnSync('git', ['-C', tempDir, ...args], { windowsHide: true, encoding: 'utf8' });
+    git('init');
+    git('config', 'user.name', 'Test');
+    git('config', 'user.email', 'test@test.com');
+    fs.writeFileSync(path.join(tempDir, '.gitignore'), 'scratch/\n', 'utf8');
+    git('add', '.gitignore');
+    git('commit', '-m', 'init');
+
+    const snap1 = snapshotWorkingTree(tempDir);
+
+    // Create a new file inside the .gitignore-d directory
+    const scratchDir = path.join(tempDir, 'scratch');
+    fs.mkdirSync(scratchDir, { recursive: true });
+    fs.writeFileSync(path.join(scratchDir, 'new_file.txt'), 'new content\n', 'utf8');
+
+    const snap2 = snapshotWorkingTree(tempDir);
+    // The snapshots MUST differ even though the file is gitignored
+    assert.notEqual(snap1, snap2, 'snapshotWorkingTree should detect new files in .gitignore-d directories');
+  } finally {
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
   }
 });
 
@@ -1337,6 +1398,9 @@ test('implement + 全バックエンドが変更0件 → 非ゼロ終了し、�
     { status: 0, output: 'done', stderr: '' },
   ];
   const home = workDir();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  // 既定候補や実機の CLI に左右されず、検証する chain を固定する。
+  fs.writeFileSync(path.join(home, '.claude/codex-fallback-order.json'), JSON.stringify(["cheap-code:deepseek", "gemini-cli"]));
   const result = run(['--force-native', '--cwd', home, '--kind', 'implement', '実装して'], {
     home,
     env: {
@@ -1360,6 +1424,9 @@ test('implement + 変更0件の1 backendのみでも非ゼロ終了（最後の1
     { status: 0, output: '実装完了しました', stderr: '' },
   ];
   const home = workDir();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  // 既定候補や実機の CLI に左右されず、検証する chain を固定する。
+  fs.writeFileSync(path.join(home, '.claude/codex-fallback-order.json'), JSON.stringify(["cheap-code:deepseek"]));
   const result = run(['--force-native', '--cwd', home, '--kind', 'implement', '実装して'], {
     home,
     env: {
@@ -1385,6 +1452,87 @@ test('review で変更0件でも終了コード 0（非 implement は空 diff �
     },
   });
   assert.equal(result.status, 0);
+});
+
+test('detectIrreversibleSideEffect は各外部操作と複数行の指示を検出する', () => {
+  for (const instruction of [
+    'node tools/seisaku-mail.mjs send --yes を1回だけ実行',
+    'node tools/gmail-draft.mjs draft-id --send',
+    'gmail-draft.mjs を使う。\nオプションは --send',
+    'send_message channel hello',
+    'node tools/fleet-mail.mjs --send',
+    'node tools/notify-kim.mjs done',
+    'discord send_dm user hello',
+    'discord send_message channel hello',
+    'discord send hello',
+    'curl -X POST https://example.com/hook',
+    'curl -XPOST https://example.com/hook',
+    'curl --request POST https://example.com/hook',
+    'curl -X "POST" https://example.com/hook',
+    'curl -X POST https://example.com/localhost',
+    'curl -X POST https://localhost.example.com/hook',
+    'curl -X POST https://127.0.0.1.example.com/hook',
+    'curl -X POST https://localhost@external.example/hook',
+    'curl -X POST https://localhost:443@external.example/hook',
+    'node tools/delete-draft.mjs draft-id',
+    'gh pr merge 123 --squash',
+    'git push origin main',
+    'vercel deploy --prod',
+    'GIT PUSH origin main',
+    '修正してから\nnode tools/seisaku-mail.mjs send --yes\n完了条件: 送信は1回',
+  ]) {
+    assert.equal(detectIrreversibleSideEffect(instruction), true, instruction);
+  }
+});
+
+test('detectIrreversibleSideEffect は通常の実装・読み取り指示では false', () => {
+  for (const instruction of [
+    '', undefined, null,
+    'tools/foo.mjs に関数を追加しテストする',
+    'バグを修正する',
+    'node tools/seisaku-mail.mjs list',
+    'node tools/gmail-draft.mjs draft-id',
+    'node tools/fleet-mail.mjs --dry-run',
+    'curl https://example.com/hook',
+    'curl -X POST http://localhost:3000/test',
+    'curl -X POST http://localhost?test=1',
+    'curl -X POST http://127.0.0.1:3000/test',
+    'curl -X POST http://[::1]:3000/test',
+    'git status', 'gh pr view 123', 'vercel deploy',
+  ]) {
+    assert.equal(detectIrreversibleSideEffect(instruction), false, String(instruction));
+  }
+});
+
+test('decideExecutionPolicy は外部操作で全 chain・再試行・空差分判定を無効化する', () => {
+  for (const noFallback of [false, true]) {
+    const instruction = '修正してから node tools/seisaku-mail.mjs send --yes';
+    assert.deepEqual(decideExecutionPolicy({ instruction, noFallback }), {
+      irreversible: true, noFallback: true, cheapFirstAllowed: false,
+      maxAttempts: 1, allowModelRetry: false, requireTreeChanges: false,
+    });
+    assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction, env: { CODEX_DO_CHEAP_FIRST: '1' } }), false);
+  }
+});
+
+test('decideExecutionPolicy は通常の指示と明示 noFallback の既存動作を保つ', () => {
+  for (const noFallback of [false, true]) {
+    assert.deepEqual(decideExecutionPolicy({ instruction: '関数を実装して', noFallback }), {
+      irreversible: false, noFallback, cheapFirstAllowed: true,
+      maxAttempts: 2, allowModelRetry: true, requireTreeChanges: true,
+    });
+  }
+});
+
+test('外部操作の no_changes を失敗にせず実行結果を改変しない', () => {
+  const { irreversible, requireTreeChanges } = decideExecutionPolicy({ instruction: '修正してから git push' });
+  assert.equal(requireTreeChanges && wantsEdit('implement', '修正してから git push'), false);
+  for (const status of [0, 1, 3]) {
+    const result = Object.freeze({ status, output: '修正後の送信が完了', stderr: '' });
+    assert.equal(cheapFirstFailureReason({ kind: 'implement', result, treeChanged: false, irreversible }), '');
+    assert.equal(result.status, status);
+  }
+  assert.equal(cheapFirstFailureReason({ kind: 'implement', result: { status: 0, output: '完了' }, treeChanged: false }), 'no_changes');
 });
 
 // ── cheap-first テスト ───────────────────────────────────────────────
@@ -1423,6 +1571,32 @@ test('cheap-first: implement with zero changed files starts Codex', () => {
   assert.match(result.stderr, /failed validation \(no_changes\)/);
   assert.match(result.stdout, /executor=codex/);
   assert.doesNotMatch(result.stderr, /代替 AI が成功したため/);
+});
+
+test('cheap-first: 先頭レーンが unrecognized_model なら incompatible を記録して次レーンを呼ぶ', () => {
+  const home = workDir();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'codex-fallback-order.json'), JSON.stringify(['cheap-code:deepseek', 'gemini-cli']), 'utf8');
+  const result = run(['--force-native', '--cwd', home, '--kind', 'implement', 'implement feature'], {
+    home,
+    env: {
+      ...geminiOnPathEnv(),
+      CODEX_DO_CHEAP_FIRST: '1',
+      GEMINI_API_KEY: 'gemini-test',
+      OPENROUTER_API_KEY: 'openrouter-test',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify([
+        { status: 3, output: '', stderr: '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash"}' },
+        { status: 0, output: 'Gemini completed the requested implementation.', stderr: '' },
+        { status: 0, output: 'Codex completed.', stderr: '' },
+      ]),
+    },
+  });
+  assert.match(result.stdout, /cheap-first: cheap-code:deepseek model=/);
+  assert.match(result.stdout, /cheap-first: gemini-cli model=/);
+  assert.match(result.stderr, /cheap-code:deepseek はモデル非対応 \(incompatible\)/);
+  const history = fs.readFileSync(path.join(home, '.claude', 'fallback-backend-history.jsonl'), 'utf8')
+    .trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  assert.equal(history.some((row) => row.backend === 'cheap-code:deepseek' && row.outcome === 'incompatible'), true);
 });
 
 test('cheap-first: implement 既定 → fallback 全滅 → Codex が呼ばれる', () => {
@@ -1577,6 +1751,18 @@ test('isBackendExhausted は unrecognized_model 警告では false を返す（�
   assert.equal(isBackendExhausted('', 'Unrecognized_Model'), false);
 });
 
+test('isLaneIncompatible は unrecognized_model エラーで true を返す', () => {
+  assert.equal(isLaneIncompatible('', '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}'), true);
+  assert.equal(isLaneIncompatible('', ''), false);
+  assert.equal(isLaneIncompatible('', 'normal failure'), false);
+});
+
+test('shouldAdvanceToNextBackend は laneIncompatible=true で incompatible を返す', () => {
+  assert.deepEqual(shouldAdvanceToNextBackend({ laneIncompatible: true, status: 1 }), { advance: true, outcome: 'incompatible' });
+  assert.deepEqual(shouldAdvanceToNextBackend({ laneIncompatible: true, exhausted: true, status: 3 }), { advance: true, outcome: 'incompatible' });
+  assert.deepEqual(shouldAdvanceToNextBackend({ laneIncompatible: true, status: 0 }), { advance: false, outcome: 'ok' }); // status 0 overrides laneIncompatible
+});
+
 test('冷却中 backend の probe 成功 → 通常予算で実行され chain に probe_failed が入らない', (t) => {
   const mockResults = [
     { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: '' },
@@ -1592,12 +1778,17 @@ test('冷却中 backend の probe 成功 → 通常予算で実行され chain �
   fs.writeFileSync(path.join(claude, 'openrouter.env'), 'OPENROUTER_API_KEY=sk-test\n', 'utf8');
   // cheap-code を冷却状態にする（fallback-backend-history.jsonl に timeout 行を追加）
   const coolingFile = path.join(claude, 'fallback-backend-history.jsonl');
-  fs.writeFileSync(coolingFile, `${JSON.stringify({ t: Date.now(), backend: 'cheap-code:deepseek', outcome: 'timeout' })}\n`, 'utf8');
+  // 全候補を冷却して先頭の probe を必ず通す（末尾だけなら probe されない）。
+  fs.writeFileSync(path.join(claude, 'codex-fallback-order.json'), JSON.stringify(['cheap-code:deepseek', 'gemini-cli']));
+  fs.writeFileSync(coolingFile, ['cheap-code:deepseek', 'gemini-cli'].map(backend =>
+    JSON.stringify({ t: Date.now(), backend, outcome: 'timeout' })
+  ).join('\n') + '\n', 'utf8');
   const result = run(['--force-native', '--cwd', home, '指示内容'], {
     home,
-    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', OPENROUTER_API_KEY: 'sk-test' },
+    env: { ...geminiOnPathEnv(), CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: 'sk-gemini', OPENROUTER_API_KEY: 'sk-test' },
   });
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /信号確認成功/);
   assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
   // chain に probe_failed がなく、ok で終わっている
   const ledger = fs.readFileSync(path.join(home, '.claude/executor-usage.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
@@ -1660,12 +1851,17 @@ test('probeBackendAlive は本番 cwd ではなく一時ディレクトリで起
   fs.writeFileSync(path.join(claude, 'openrouter.env'), 'OPENROUTER_API_KEY=sk-test\n', 'utf8');
   // cheap-code を冷却状態 → probe が実行される条件を作る
   const coolingFile = path.join(claude, 'fallback-backend-history.jsonl');
-  fs.writeFileSync(coolingFile, `${JSON.stringify({ t: Date.now(), backend: 'cheap-code:deepseek', outcome: 'timeout' })}\n`, 'utf8');
+  // 全候補を冷却して先頭の probe を必ず通す（末尾だけなら probe されない）。
+  fs.writeFileSync(path.join(claude, 'codex-fallback-order.json'), JSON.stringify(['cheap-code:deepseek', 'gemini-cli']));
+  fs.writeFileSync(coolingFile, ['cheap-code:deepseek', 'gemini-cli'].map(backend =>
+    JSON.stringify({ t: Date.now(), backend, outcome: 'timeout' })
+  ).join('\n') + '\n', 'utf8');
   const result = run(['--force-native', '--cwd', home, '指示内容'], {
     home,
-    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', OPENROUTER_API_KEY: 'sk-test' },
+    env: { ...geminiOnPathEnv(), CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: 'sk-gemini', OPENROUTER_API_KEY: 'sk-test' },
   });
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /信号確認成功/);
   // chain に probe_failed が無く、ok で終わっている
   const ledger = fs.readFileSync(path.join(home, '.claude/executor-usage.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
   const fallbackRow = ledger.find(r => r.provider === 'fallback');
@@ -2996,4 +3192,98 @@ test('cheap-first validation observes actual unstaged, staged and committed edit
   assert.equal(validate(), '');
   git('commit', '-m', 'implementation');
   assert.equal(validate(), '');
+});
+
+test('resolveFallbackBackends は空配列と none を従来順に戻さず、local を共有ファイルより優先する', () => {
+  withEnvKeysCleared(() => {
+    const dir = makeHomeWithEnv({
+      'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
+      'zai.env': 'ZAI_API_KEY=sk-zai-1\n',
+      'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n',
+      'codex-fallback-order.json': JSON.stringify(['gemini-cli', 'cheap-code:deepseek']),
+    });
+    fs.writeFileSync(path.join(dir, '.claude', 'codex-fallback-order.json'), '[]\n');
+    assert.deepEqual(resolveFallbackBackends(dir, { executableAvailable: () => true }), []);
+    fs.writeFileSync(path.join(dir, '.claude', 'codex-fallback-order.json'), '"none"\n');
+    assert.deepEqual(resolveFallbackBackends(dir, { executableAvailable: () => true }), []);
+    fs.writeFileSync(path.join(dir, '.claude', 'codex-fallback-order.json'), JSON.stringify(['none']));
+    assert.deepEqual(resolveFallbackBackends(dir, { executableAvailable: () => true }), []);
+    fs.writeFileSync(path.join(dir, '.claude', 'codex-fallback-order.json'), JSON.stringify(['gemini-cli']));
+    fs.writeFileSync(path.join(dir, '.claude', 'codex-fallback-order.local.json'), JSON.stringify(['qwen', 'cheap-code:deepseek', 'cheap-code:glm', 'openrouter-free']));
+    const local = resolveFallbackBackends(dir, { executableAvailable: () => true });
+    assert.deepEqual(local.map((b) => b.name), ['deepseek', 'cheap-code:deepseek', 'cheap-code:glm', 'openrouter-free']);
+    assert.equal(local.some((b) => b.name === 'gemini-cli'), false);
+  });
+});
+
+test('openrouter-free は summarize/classify のみ、implement は openrouter-code に替える', () => {
+  withEnvKeysCleared(() => {
+    const dir = makeHomeWithEnv({
+      'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
+      'codex-fallback-order.json': JSON.stringify(['openrouter-free', 'cheap-code:deepseek']),
+    });
+    const options = { executableAvailable: () => true };
+    assert.deepEqual(resolveFallbackBackends(dir, { ...options, taskKind: 'summarize' }).map((b) => b.name), ['openrouter-free', 'cheap-code:deepseek']);
+    assert.deepEqual(resolveFallbackBackends(dir, { ...options, taskKind: 'classify' }).map((b) => b.name), ['openrouter-free', 'cheap-code:deepseek']);
+    const paid = resolveFallbackBackends(dir, { ...options, taskKind: 'implement', env: { CODEX_DO_PAID_CODE_MODEL: 'qwen/qwen3-coder-custom' } });
+    assert.equal(paid[0].name, 'openrouter-code');
+    assert.equal(paid[0].model, 'qwen/qwen3-coder-custom');
+    assert.equal(paid.some((b) => b.name === 'openrouter-free'), false);
+    const verify = resolveFallbackBackends(dir, { ...options, taskKind: 'verify' });
+    assert.equal(verify[0].name, 'openrouter-code');
+    assert.equal(verify[0].model, 'qwen/qwen3-coder');
+  });
+});
+
+test('lanes-disabled は openrouter-free と cheap-code:* も候補から外す', () => {
+  withEnvKeysCleared(() => {
+    const dir = makeHomeWithEnv({
+      'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
+      'zai.env': 'ZAI_API_KEY=sk-zai-1\n',
+      'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n',
+      'codex-fallback-order.json': JSON.stringify(['openrouter-free', 'cheap-code:glm', 'cheap-code:deepseek', 'gemini-cli']),
+      'lanes-disabled.json': JSON.stringify({ openrouter: { until: Date.now() + 1000, reason: 'failure_rate' }, 'cheap-code:glm': { until: Date.now() + 1000, reason: 'quality_validation' } }),
+    });
+    const names = resolveFallbackBackends(dir, { executableAvailable: () => true, taskKind: 'summarize' }).map((b) => b.name);
+    assert.deepEqual(names, ['cheap-code:deepseek', 'gemini-cli']);
+  });
+});
+
+test('CODEX_DO_NO_FALLBACK=1 は --no-fallback と同じく代替へ進まない', () => {
+  const mockResults = [
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: '' },
+  ];
+  const result = run(['--force-native', '--cwd', workDir(), '指示内容'], {
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), CODEX_DO_NO_FALLBACK: '1' },
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--no-fallback is specified/);
+  assert.doesNotMatch(result.stderr, /Falling back/);
+});
+
+test('openrouter-code は空差分・構文エラー・関連テスト失敗で品質不合格になる', () => {
+  assert.equal(assessFallbackQuality({ backendName: 'openrouter-code', taskKind: 'implement', diffText: '', output: 'done', cwd: '/tmp' }), 'empty_diff');
+  assert.equal(assessFallbackQuality({ backendName: 'openrouter-free', taskKind: 'summarize', diffText: '', output: '', cwd: '/tmp' }), 'empty_output');
+  assert.equal(assessFallbackQuality({ backendName: 'cheap-code:deepseek', taskKind: 'implement', diffText: '', output: '', cwd: '/tmp' }), '');
+  const spawnImpl = (cmd, args) => {
+    if (cmd === 'git' && args.includes('--name-only')) return { status: 0, stdout: 'tools/a.mjs\n' };
+    if (cmd === 'git') return { status: 0, stdout: '' };
+    if (args[0] === '--check') return { status: 1, stdout: '' };
+    return { status: 0, stdout: '' };
+  };
+  assert.equal(assessFallbackQuality({
+    backendName: 'openrouter-free', taskKind: 'summarize', diffText: ' a.mjs | 1 +\n', output: '要約', cwd: '/work',
+    spawnImpl, existsImpl: (file) => String(file).endsWith('a.mjs'),
+  }), 'syntax');
+  const testsFail = (cmd, args) => {
+    if (cmd === 'git' && args.includes('--name-only')) return { status: 0, stdout: 'a.mjs\n' };
+    if (cmd === 'git') return { status: 0, stdout: '' };
+    if (args[0] === '--check') return { status: 0, stdout: '' };
+    if (args[0] === '--test') return { status: 1, stdout: '' };
+    return { status: 0, stdout: '' };
+  };
+  assert.equal(assessFallbackQuality({
+    backendName: 'openrouter-code', taskKind: 'verify', diffText: ' a.mjs | 1 +\n', output: '実装', cwd: '/work',
+    spawnImpl: testsFail, existsImpl: (file) => /a\.mjs$|a\.test\.mjs$/.test(String(file)),
+  }), 'tests');
 });

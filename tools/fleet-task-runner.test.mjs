@@ -183,7 +183,7 @@ test('fleet-exec は無効時も --resume 付きで起動し、他の source は
   assert.equal(calls.length, 0);
   assert.equal((await runPrompt({ ...options, resumeSource: 'fleet-exec' })).exitCode, 0);
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0].slice(0, 5), ['-p', '--model', 'sonnet', '--resume', 'session']);
+  assert.deepEqual(calls[0].slice(0, 5), ['-p', '--model', 'opus', '--resume', 'session']);
 });
 import { classifyExecutionResult } from './fleet-mail.mjs';
 for (const length of [8000, 8001, 120000]) {

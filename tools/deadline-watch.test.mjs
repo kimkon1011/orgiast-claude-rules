@@ -113,9 +113,9 @@ test('鍵なし席はseat checkでスキップされる', async t => {
   assert.equal(code, 0);
   const result = JSON.parse(output[0]);
   assert.equal(result.skip, true);
-  assert.match(result.reason, /スキップ/);
+  assert.match(result.reason, /DWD key/);
   assert.equal(heartbeats.length, 1);
-  assert.match(heartbeats[0].summary, /スキップ/);
+  assert.match(heartbeats[0].summary, /DWD key/);
 });
 
 test('鍵持ちのkim席はfixtureモードで通常動作（fixtureはseat checkをスキップ）', async t => {

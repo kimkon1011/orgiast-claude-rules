@@ -15,7 +15,16 @@ const HOUR = 3600000, DAY = 24 * HOUR;
 const homeDefault = () => process.env.ORGIAST_HOME || os.homedir();
 const read = (file, fallback) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
 const key = name => String(name).replace(/^\\/, '').toLowerCase();
-const stamp = value => typeof value === 'number' ? value : Date.parse(value);
+const SUCCESS_RESULTS = [0, 267009, 267011, 267014];
+export const stamp = value => {
+  if (typeof value === 'number') return value;
+  const text = String(value ?? '').trim();
+  const dotNet = /^\/Date\((-?\d+)(?:[+-]\d{4})?\)\/$/.exec(text);
+  if (dotNet) return Number(dotNet[1]);
+  const local = /^(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})(?:\.(\d+))?$/.exec(text);
+  if (local) return new Date(+local[1], +local[2] - 1, +local[3], +local[4], +local[5], +local[6], +(local[7] || 0)).getTime();
+  return Date.parse(text);
+};
 
 export function expectedPeriodHours(triggers = []) {
   const periods = [].concat(triggers || []).filter(t => t.enabled !== false && t.Enabled !== false).map(t => {
@@ -45,7 +54,7 @@ export function auditTasks(tasks, overrides = {}, now = Date.now(), { required =
     if (!(maxAgeHours > 0)) continue;
     const last = stamp(task.lastRunTime);
     if (['Ready', 'Running'].includes(task.state) && (!Number.isFinite(last) || new Date(last).getUTCFullYear() <= 1999 || +now - last > maxAgeHours * HOUR)) add('missed');
-    if (task.lastTaskResult != null && ![0, 267009, 267011, 267014].includes(Number(task.lastTaskResult))) add('failed');
+    if (task.lastTaskResult != null && !SUCCESS_RESULTS.includes(Number(task.lastTaskResult))) add('failed');
     for (const artifact of override.artifacts || []) {
       const mtime = artifactMtimes[artifact];
       if (!Number.isFinite(mtime) || +now - mtime > maxAgeHours * HOUR) add('artifact_stale', { artifact });
@@ -55,12 +64,17 @@ export function auditTasks(tasks, overrides = {}, now = Date.now(), { required =
   return findings;
 }
 
-export function unresolvedTasks(tasks, findings, state, now = Date.now()) {
+export function unresolvedTasks(tasks, findings, state, now = Date.now(), { required = [] } = {}) {
+  const requiredSet = new Set(required.map(key));
   return Object.entries(state.heals || {}).flatMap(([name, heal]) => {
     if (heal.resolved || +now <= stamp(heal.at)) return [];
     const task = tasks.find(t => key(t.taskName) === key(name));
+    // Disabled non-required tasks are intentionally retired → treat as resolved.
+    if (task && task.state === 'Disabled' && !requiredSet.has(key(name))) return [];
     const stillBad = findings.some(f => key(f.name) === key(name));
-    return !task || !(stamp(task.lastRunTime) > stamp(heal.at)) || stillBad
+    const ranAfterHeal = task && stamp(task.lastRunTime) > stamp(heal.at);
+    const healthyNow = task && task.state !== 'Disabled' && !stillBad && SUCCESS_RESULTS.includes(Number(task.lastTaskResult));
+    return !task || stillBad || !(ranAfterHeal || healthyNow)
       ? [{ name, kind: 'unresolved', reason: heal.kind, at: heal.at }] : [];
   });
 }
@@ -131,7 +145,7 @@ export async function runAudit({ home = homeDefault(), platform = process.platfo
     state.notified ??= {};
     const save = () => { fs.writeFileSync(`${stateFile}.tmp`, JSON.stringify(state, null, 2)); fs.renameSync(`${stateFile}.tmp`, stateFile); };
     const findings = auditTasks(tasks, overrides, now, { required, artifactMtimes });
-    const unresolved = unresolvedTasks(tasks, findings, state, now);
+    const unresolved = unresolvedTasks(tasks, findings, state, now, { required });
     for (const name of Object.keys(state.heals || {})) if (!unresolved.some(f => f.name === name) && +now > stamp(state.heals[name].at)) { state.heals[name].resolved = true; delete state.notified[name]; }
     const heals = dryRun ? [] : await healTasks(findings, { startScheduledTask: start, enableScheduledTask: enable, runConverge: () => background([path.join(dir, 'setup.mjs'), '--converge'], { home, spawnImpl, platform }), state, now, save });
     const lines = unresolved.map(f => `🚨 未修復: ${f.name}（${f.reason}）`);

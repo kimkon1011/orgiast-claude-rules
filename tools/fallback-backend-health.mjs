@@ -4,6 +4,7 @@
 // 状態は homeDir/.claude/fallback-backend-history.jsonl に1行 JSON で追記する。
 import fs from 'node:fs';
 import path from 'node:path';
+import { disableLanesTemporarily } from './lib/lane-disabled.mjs';
 
 export const FALLBACK_BACKEND_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6時間
 
@@ -137,6 +138,38 @@ export function deprioritizeUnreliableBackends(backends, history, {
 // name が cooling に含まれる backend を除いた配列を返す。
 // keepAtLeastOne が true（既定）で除外した結果が空になる場合は、元の配列をそのまま返す
 // （＝候補ゼロで詰むのを防ぐ）。除外した backend は1件につき1行 console.error で出す。
+// 24h で 5 回以上かつ失敗が過半数、または品質検証の失敗が 3 連続なら一時停止の対象。
+export function unhealthyCandidates(rows, { now = Date.now(), windowMs = 24 * 60 * 60 * 1000 } = {}) {
+  const groups = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const name = String(row?.backend || row?.name || row?.provider || '').trim();
+    if (!name) continue;
+    const t = typeof row.t === 'number' ? row.t : Date.parse(row.t);
+    if (!Number.isFinite(t) || t < now - windowMs || t > now) continue;
+    const list = groups.get(name) || [];
+    list.push({ t, outcome: String(row.outcome || row.status || '') });
+    groups.set(name, list);
+  }
+  const hits = [];
+  for (const [name, list] of groups) {
+    list.sort((a, b) => a.t - b.t);
+    const failures = list.filter((row) => row.outcome !== 'ok' && row.outcome !== 'success');
+    if (list.length >= 5 && failures.length / list.length > 0.5) {
+      hits.push({ name, reason: 'failure_rate', calls: list.length, failures: failures.length });
+      continue;
+    }
+    const tail = list.slice(-3);
+    if (tail.length === 3 && tail.every((row) => row.outcome === 'quality_fail')) hits.push({ name, reason: 'quality_validation', calls: list.length, failures: 3 });
+  }
+  return hits;
+}
+
+export function applyCandidateHealth(homeDir, { rows, now = Date.now(), force = false } = {}) {
+  if (!force && process.env.NODE_TEST_CONTEXT) return [];
+  const source = Array.isArray(rows) ? rows : readFallbackBackendHistory(homeDir);
+  return disableLanesTemporarily(homeDir, unhealthyCandidates(source, { now }), now);
+}
+
 export function skipCoolingBackends(backends, cooling, { keepAtLeastOne = true } = {}) {
   const list = Array.isArray(backends) ? backends : [];
   const names = cooling instanceof Set ? cooling : new Set(cooling || []);

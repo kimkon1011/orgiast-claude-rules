@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { dirtyStatus, rescueTree } from './nightly-rescue.mjs';
-import { snapshotTree } from './rescue-policy.mjs';
+import { snapshotTree, unstageUndeclaredGitlinks } from './rescue-policy.mjs';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nightly-rescue-'));
@@ -199,4 +199,35 @@ test('auto-session rescues skip a snapshot tree a rescue branch already holds', 
   const third = await rescueTree(f.repo, f.home, { ...f, now: f.now + 12 * 3600000 });
   assert.ok(third.events.some(e => e.step === 'RESCUE_LOCAL_OK'), JSON.stringify(third.events));
   assert.equal(branches(f).length, 2);
+});
+
+test('unstageUndeclaredGitlinks removes a gitlink that is not a declared submodule', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rescue-gitlink-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const repo = path.join(root, 'repo');
+  fs.mkdirSync(repo);
+  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  git('init', '-b', 'main');
+  git('config', 'user.name', 'Test');
+  git('config', 'user.email', 'test@example.invalid');
+  fs.writeFileSync(path.join(repo, 'tracked'), 'original');
+  git('add', '.'); git('commit', '-m', 'initial');
+  // Create a nested git repo inside the parent (gitlink candidate).
+  fs.mkdirSync(path.join(repo, 'nested'));
+  const ngit = (...args) => execFileSync('git', ['-C', path.join(repo, 'nested'), ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  ngit('init', '-b', 'main');
+  ngit('config', 'user.name', 'Test');
+  ngit('config', 'user.email', 'test@example.invalid');
+  fs.writeFileSync(path.join(repo, 'nested', 'file'), 'content');
+  ngit('add', '.'); ngit('commit', '-m', 'nested initial');
+  // Stage the nested repo — this creates a gitlink (mode 160000) in the index.
+  git('add', '--', 'nested');
+  const before = git('ls-files', '--stage');
+  assert.ok(before.split(/\r?\n/).some(line => line.startsWith('160000 ')), 'gitlink should be staged');
+  // Call the function.
+  const dropped = unstageUndeclaredGitlinks(repo);
+  assert.ok(dropped.includes('nested'), `dropped should include 'nested', got: ${JSON.stringify(dropped)}`);
+  const after = git('ls-files', '--stage');
+  assert.equal(after.split(/\r?\n/).filter(Boolean).filter(line => line.startsWith('160000 ')).length, 0,
+    `160000 entries should be empty, got: ${after}`);
 });

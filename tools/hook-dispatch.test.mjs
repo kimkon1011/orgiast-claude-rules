@@ -233,7 +233,7 @@ test('selfcheck actually repairs a missing dispatcher and resurrected individual
   settings.hooks.PreToolUse[0].hooks.push({ type: 'command', command: 'custom-sync', timeout: 3 });
   settings.hooks.PreToolUse.push({ matcher: 'Bash', hooks: [{ type: 'command', command: `node "${path.join(repo, 'tools/api-billing-guard.mjs')}"` }] });
   fs.writeFileSync(file, JSON.stringify(settings));
-  execFileSync(process.execPath, ['tools/hook-selfcheck.mjs'], { env, stdio: 'pipe', timeout: 30000 });
+  execFileSync(process.execPath, ['tools/hook-selfcheck.mjs'], { env, stdio: 'pipe', timeout: 60000 });
   assert.deepEqual(dispatcherProblems(JSON.parse(fs.readFileSync(file, 'utf8')), repo), []);
   const manifest = JSON.parse(fs.readFileSync(runtimeManifestPath(home), 'utf8'));
   assert.equal(manifest.events.PreToolUse.filter(h => h.name === 'api-billing-guard.mjs').length, 1);

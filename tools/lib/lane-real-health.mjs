@@ -3,6 +3,35 @@ import path from 'node:path';
 import { normalizeExecutorStatus } from '../executor-status.mjs';
 import { redactAll } from './redact.mjs';
 
+export const LANE_NAMES = ['codex', 'gemini', 'deepseek', 'groq', 'openrouter', 'glm', 'grok', 'mistral', 'kimi'];
+// Routing diagnostics describe other invocations, never this provider's HTTP response.
+export function laneErrorText(text, lane) {
+  return String(text || '').split(/\r?\n/).filter(line =>
+    !/\[codex-do\]|\[routing\]|fallback backend=|cheap-first:|ack backend=/i.test(line)
+    && !LANE_NAMES.some(other => other !== lane && new RegExp(`\\b${other}\\b`, 'i').test(line))
+  ).join('\n');
+}
+// [routing] / [cooldown] / [codex-do] は「どのレーンが答えたか」ではなく経路の診断。
+// ここに並ぶ他レーン名を連鎖の証拠にすると、自レーンが答えた probe まで判定不能に落ちる
+// （2026-11-17 実測: openrouter が答えているのに冒頭の [routing] gemini… で probe_inconclusive）。
+const DIAGNOSTIC_LINE = /^\s*\[(?:routing|cooldown|codex-do)\]/i;
+// [routing] の demote 診断行（provider 名 fallback）で誤判定した 2026-11-17 実測。
+// 実際の連鎖は cheap-first: / fallback backend= / ack backend= で表れる。
+const CHAIN_MARKER = /cheap-first:|fallback backend=|ack backend=/i;
+// [openrouter:deepseek/deepseek-v4-flash] は OpenRouter 経由の正規経路レーンを示すタグ。
+// そのレーン自身が OpenRouter 経由で答えたなら連鎖ではないので、タグを除去してから判定する。
+const OPENROUTER_TAG = /\[openrouter:([^\]\s]+)\]/gi;
+function stripOpenrouterTag(line, lane) {
+  return line.replace(OPENROUTER_TAG, (tag, model) =>
+    lane === 'openrouter' || model.toLowerCase().includes(String(lane).toLowerCase()) ? '' : tag);
+}
+export function probeViaChain(text, lane) {
+  return String(text).split(/\r?\n/).some(line =>
+    CHAIN_MARKER.test(line)
+    || (!DIAGNOSTIC_LINE.test(line)
+      && LANE_NAMES.some(other => other !== lane && new RegExp(`\\b${other}\\b`, 'i').test(stripOpenrouterTag(line, lane)))));
+}
+
 const AUTH_DOMINANT_RATIO = 0.9;
 const AUTH_MIN_FAILURES = 5;
 
@@ -42,7 +71,7 @@ export function realLaneStats(home, now = Date.now()) {
     const event = { at };
     s.events.push(event);
     if (status === 'ok') { s.lastOkAt = Math.max(s.lastOkAt, at); continue; }
-    const detail = [row.status, row.httpStatus, row.http_status, row.reason, row.error, row.stderr, row.stderrTail, row.spawnError].filter(Boolean).join(' ');
+    const detail = laneErrorText([row.status, row.httpStatus, row.http_status, row.reason, row.error, row.stderr, row.stderrTail, row.spawnError].filter(Boolean).join('\n'), row.provider);
     // cooldown 状態の行は常に quota 扱い（実機: glm が 70 件の cooldown 行を持ち real_fail_rate と誤判定）。
     // 402 は RESOURCE_EXHAUSTED を伴うことがある。429 も同居する場合だけ quota を優先する。
     if (row.status !== 'cooldown' && billingFailure(detail) && !billingWithQuotaHint(detail)) {
@@ -59,7 +88,7 @@ export function realLaneStats(home, now = Date.now()) {
     }
     s.failures++;
     const http = detail.match(/(?:HTTP[ _:]*|(?:^|\s))([45]\d\d)\b/i)?.[1];
-    const reason = redactAll(http ? `HTTP ${http}` : String(row.reason || row.stderr || row.stderrTail || row.spawnError || row.status).split(/\r?\n/)[0]).slice(0, 180);
+    const reason = redactAll(http ? `HTTP ${http}` : laneErrorText(row.reason || row.stderr || row.stderrTail || row.spawnError || row.status, row.provider).split(/\r?\n/)[0]).slice(0, 180);
     event.reason = reason;
     s.reasons[reason] = (s.reasons[reason] || 0) + 1;
   }
@@ -72,6 +101,14 @@ export function applyRealLaneHealth(health, home, now = Date.now()) {
   for (const [lane, state] of Object.entries(health.lanes)) {
     const s = stats[lane];
     if (s) state.real24h = s;
+    if (state.error && probeViaChain(state.error, lane)) { state.viaChain = true; state.reason = 'probe_inconclusive'; }
+    if (state.error !== undefined) state.error = laneErrorText(state.error, lane);
+    if (state.reason === 'billing' && s?.billingCalls === 0 && s.lastOkAt >= now - 6 * 3600_000 && s.lastOkAt <= now && (state.billingProbeStreak || 0) < 2) state.reason = 'probe_inconclusive';
+    if (state.viaChain || state.reason === 'probe_inconclusive') {
+      state.alive = false;
+      state.reason = 'probe_inconclusive';
+      continue;
+    }
     const errorQuota = quotaFailure(state.error) && !(billingFailure(state.error) && !billingWithQuotaHint(state.error));
     const errorUntil = quotaReset(state.error);
     // A direct probe success after the last 429 proves the quota window is over.

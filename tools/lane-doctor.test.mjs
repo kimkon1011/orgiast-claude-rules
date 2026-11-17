@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, needsNativeCodexProbe, nativeWriteProbeArgs, directGeminiCliState , shouldSkipLiveProbe } from './lane-doctor.mjs';
+import { runProbe, laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, needsNativeCodexProbe, nativeWriteProbeArgs, directGeminiCliState , shouldSkipLiveProbe } from './lane-doctor.mjs';
+import { restoreExpiredDisabledLanes } from './lib/lane-disabled.mjs';
 import { classifyTaskKind } from './lib/task-kind.mjs';
 import { nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
 const now = Date.parse('2026-10-08T06:00:00Z');
@@ -417,8 +418,33 @@ test('shouldSkipLiveProbe: 回数制限・課金中は until まで実測しな�
   assert.equal(shouldSkipLiveProbe({ reason: 'billing', until: now + 1000 }, now), true);
   assert.equal(shouldSkipLiveProbe({ reason: 'quota_wait', until: now }, now), false);
   assert.equal(shouldSkipLiveProbe({ reason: 'probe_ok' }, now), false);
+  assert.equal(shouldSkipLiveProbe({ reason: 'disabled', until: now + 1000 }, now), true);
+  assert.equal(shouldSkipLiveProbe({ reason: 'disabled:expired', until: now - 1 }, now), false);
   assert.equal(shouldSkipLiveProbe({ reason: 'quota_wait', probedAt: new Date(now - 10 * 60 * 1000).toISOString() }, now), true);
-  assert.equal(shouldSkipLiveProbe({ reason: 'quota_wait', probedAt: new Date(now - 7 * 60 * 60 * 1000).toISOString() }, now), false); // quota_wait は 6h 窓
+  assert.equal(shouldSkipLiveProbe({ reason: 'quota_wait', probedAt: new Date(now - 7 * 60 * 60 * 1000).toISOString() }, now), false);
+});
+
+test('期限切れの一時停止は probe 成功で戻り、失敗なら 6 時間延ばし、until 無しは残す', () => {
+  const source = fs.readFileSync(new URL('./lane-doctor.mjs', import.meta.url), 'utf8');
+  assert.match(source, /restoreExpiredDisabledLanes\(health, home, now\);\n\s*applyDisabledLanes\(health, home\);/);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-restore-'));
+  fs.mkdirSync(path.join(home, '.claude'));
+  const now = 1_700_000_000_000;
+  const file = path.join(home, '.claude', 'lanes-disabled.json');
+  fs.writeFileSync(file, JSON.stringify({
+    'openrouter-free': { until: now - 1000, reason: 'failure_rate' },
+    'cheap-code:deepseek': { until: now - 1000, reason: 'quality_validation' },
+    gemini: { reason: 'manual' },
+  }));
+  const health = { lanes: { openrouter: { alive: true, reason: 'probe_ok' }, deepseek: { alive: false, reason: 'probe_failed' }, gemini: { alive: true, reason: 'probe_ok' } }, repairs: [] };
+  const restored = restoreExpiredDisabledLanes(health, home, now);
+  assert.deepEqual(restored, ['openrouter-free']);
+  const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(data['openrouter-free'], undefined);
+  assert.equal(data.gemini.reason, 'manual');
+  assert.equal(data.gemini.until, undefined);
+  assert.equal(data['cheap-code:deepseek'].until, now + 6 * 60 * 60 * 1000);
+  fs.rmSync(home, { recursive: true, force: true });
 });
 
 test('quota_wait 中の groq は probe せず、期限後に自動で実測して復帰できる', async t => {
@@ -451,4 +477,44 @@ test('質問順は安いレーンが先で、Gemini は同列の受け皿とし�
   const r = laneDoctorQuick({ home: h, now, save: false });
   assert.deepEqual(r.askOrder, ['groq', 'deepseek', 'openrouter', 'gemini']);
   assert.ok(!r.askOrder.includes('claude'));
+});
+
+test('Codex probe rejects Gemini 402 chain output, genuine direct 402 remains billing', async t => {
+  for (const [text, extra, expected] of [
+    ['[codex-do] cheap-first: Gemini HTTP 402 insufficient balance', {}, 'probe_inconclusive'],
+    ['HTTP 402 insufficient balance', { viaChain: true }, 'probe_inconclusive'],
+    ['Gemini HTTP 402 insufficient balance', {}, 'probe_inconclusive'],
+    ['HTTP 402 insufficient balance', {}, 'billing'],
+  ]) {
+    const home = fixture(t);
+    const result = await laneDoctorProbe({ home, now, platform: 'linux', providers: ['codex'], probe: async () => ({ code: 1, text, ...extra }), notify: async () => ({ delivered: 'test' }) });
+    assert.equal(result.lanes.codex.reason, expected, text);
+  }
+});
+test('recent real success requires two consecutive direct billing probes; success resets streak', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.claude/executor-usage.jsonl'), JSON.stringify({ provider: 'codex', t: now - 1000, status: 'ok' }) + '\n');
+  const options = { home, now, platform: 'linux', providers: ['codex'], probe: async () => ({ code: 1, text: 'HTTP 402 insufficient balance' }), notify: async () => ({ delivered: 'test' }) };
+  assert.equal((await laneDoctorProbe(options)).lanes.codex.reason, 'probe_inconclusive');
+  assert.equal((await laneDoctorProbe({ ...options, now: now + 1 })).lanes.codex.reason, 'billing');
+});
+
+test('Codex probe bypasses cheap-first and task routing with no fallback', async () => {
+  const result = await runProbe('codex', { home: '/tmp/unused', timeoutMs: 1000, execFileImpl(exe, args, options, done) {
+    assert.equal(options.env.CODEX_DO_CHEAP_FIRST, '0');
+    assert.ok(args.includes('--no-fallback'));
+    assert.equal(args[args.indexOf('--kind') + 1], 'implement');
+    done(null, 'PONG', '');
+  } });
+  assert.equal(result.code, 0);
+});
+
+test('chain success and quota cannot prove the requested Codex lane is alive or quota-limited', async t => {
+  for (const code of [0, 1]) {
+    const home = fixture(t);
+    const result = await laneDoctorProbe({ home, now, platform: 'linux', providers: ['codex'], probe: async () => ({ code, text: '[routing] fallback backend=gemini\nHTTP 429 usage limit' }), notify: async () => ({ delivered: 'test' }) });
+    assert.equal(result.lanes.codex.reason, 'probe_inconclusive');
+    assert.equal(result.lanes.codex.viaChain, true);
+    assert.equal(result.lanes.codex.probeResult, 'inconclusive');
+  }
 });

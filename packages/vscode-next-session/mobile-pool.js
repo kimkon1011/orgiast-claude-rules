@@ -163,8 +163,26 @@ function decideTrimExcess({ tabs, target, now = Date.now(), maxClose = 10, minAg
   return candidates.slice(0, maxTrimCount);
 }
 
+// 空の Remote Control 予備はちょうどこの本数だけ残す（オーナー指定）。
+const EMPTY_SPARE_KEEP = 3;
+// 補充の前に、空の予備が EMPTY_SPARE_KEEP を超えていれば古い余分だけを返す。
+// 空でないセッション、オーナーの返事待ち、アクティブなタブは返さない。
+// session: { id, appearedAt, empty, awaitingOwner, isActive }
+function selectExcessEmptySpares(sessions, { keep = EMPTY_SPARE_KEEP } = {}) {
+  if (!Array.isArray(sessions) || !(keep >= 0)) return [];
+  const empty = sessions.filter((session) => session
+    && session.empty === true
+    && session.awaitingOwner !== true
+    && typeof session.id === 'string'
+    && session.id);
+  if (empty.length <= keep) return [];
+  const closable = empty.filter((session) => !session.isActive);
+  closable.sort((a, b) => (a.appearedAt ?? 0) - (b.appearedAt ?? 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return closable.slice(0, empty.length - keep);
+}
+
 module.exports = {
   AUTO_TITLE_RE, targetCount, readConfig, readSnapshot, createOwnershipLease, isWaitingTab, createPool,
   REFRESH_MIN_AGE_MS, RC_IN_USE_THRESHOLD_MS, decideRefresh, readRefreshConfig, readLastRefreshAt, inRefreshHours,
-  isWorktreeFolder, decideWorktreeCleanup, decideTrimExcess,
+  isWorktreeFolder, decideWorktreeCleanup, decideTrimExcess, EMPTY_SPARE_KEEP, selectExcessEmptySpares,
 };

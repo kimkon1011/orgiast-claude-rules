@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "description": "オージャスト運用アカウント一覧（2FA監査用）。Google Workspace 管理コンソールの実状態を確認の上、適宜更新すること。",
+  "updatedAt": "2026-11-17",
+  "accounts": [
+    {
+      "email": "kim@orgiast.jp",
+      "role": "super-admin",
+      "note": "代表・全操作。最高権限のため最優先で2FA+パスキー適用必須",
+      "has2FA": null,
+      "method": "unknown",
+      "risk": "高"
+    },
+    {
+      "email": "seisaku-team@orgiast.jp",
+      "role": "shared",
+      "note": "制作業務・メール送信・GAS実行。共有アカウントのため運用ルール確定が先",
+      "has2FA": null,
+      "method": "unknown",
+      "risk": "高"
+    },
+    {
+      "email": "nishi@orgiast.jp",
+      "role": "admin",
+      "note": "経理・請求業務。金銭的被害リスクあり",
+      "has2FA": null,
+      "method": "unknown",
+      "risk": "高"
+    }
+  ]
+}

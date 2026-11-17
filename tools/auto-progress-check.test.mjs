@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { addCheck, main } from './auto-progress.mjs';
-import { executeCheck, preflightCheck, hasBashEnvExpansion, hasCheckError, CHECK_ERROR_PATTERNS, resolveCheckShell, CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS, pendingAction } from './auto-progress-check.mjs';
+import { checkPromise, executeCheck, preflightCheck, hasBashEnvExpansion, hasCheckError, CHECK_ERROR_PATTERNS, resolveCheckShell, CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS, CHECK_MAX_BUFFER_BYTES, pendingAction } from './auto-progress-check.mjs';
 import { readLedger, writeLedger, ledgerFile } from './auto-progress-ledger.mjs';
 import { run as watch } from './auto-progress-watch.mjs';
 import { run as digest } from './auto-progress-digest.mjs';
@@ -189,7 +189,7 @@ test('executeCheck invokes explicit Bash without shell and preserves execution o
   assert.deepEqual(executeCheck({ check, checkCwd: home }, { home, shellPath: 'git-bash', spawnImpl: (shell, args, opts) => {
     assert.equal(shell, 'git-bash'); assert.deepEqual(args, ['-c', check]);
     assert.equal(Object.hasOwn(opts, 'shell'), false); assert.equal(opts.cwd, home);
-    assert.equal(opts.timeout, CHECK_TIMEOUT_MS); assert.equal(opts.maxBuffer, 64 * 1024);
+    assert.equal(opts.timeout, CHECK_TIMEOUT_MS); assert.equal(opts.maxBuffer, CHECK_MAX_BUFFER_BYTES);
     assert.equal(opts.windowsHide, true); assert.equal(opts.encoding, 'utf8'); assert.equal(opts.env.ORGIAST_HOME, home);
     return { status: 1, stdout: '' };
   } }), { code: 1, stdout: '', text: '未達', stderr: '' });
@@ -462,3 +462,32 @@ test('CLI: --force-check だけでは scratchpad 参照を登録できない', (
 });
 
 process.env.ORGIAST_AUTO_RESUME = '1';
+
+test('executeCheck reports an output overflow as the buffer bound, not as a shell failure', () => {
+  const error = Object.assign(new Error('spawnSync C:\Program Files\Git\bin\bash.exe ENOBUFS'), { code: 'ENOBUFS' });
+  const result = executeCheck({ check: 'gh run view --log' }, { home: tmp(), shellPath: null, spawnImpl: () => ({ status: null, error, stdout: '' }) });
+  assert.equal(result.code, null);
+  assert.equal(result.overflowed, true);
+  assert.match(result.text, /判定不能/);
+  assert.match(result.text, /4MB の上限/);
+  assert.match(result.text, /tail -c/);
+  assert.doesNotMatch(result.text, /ENOBUFS/);
+  assert.doesNotMatch(result.text, /bash\.exe/);
+});
+
+test('checkPromise treats an output overflow as unknown, not as a failed check', async () => {
+  const home = tmp();
+  const row = { check: 'gh run view --log', label: '出力の多い check', deadlineAt: new Date(now + 86400000).toISOString(), status: 'open' };
+  const changes = {};
+  await checkPromise(row, { home, now, patch: (_, next) => Object.assign(changes, next), suppressNotices: true,
+    io: { executeCheck: () => ({ code: null, overflowed: true, stdout: '', text: '判定不能: check の出力が 4MB の上限を超えました' }) } });
+  assert.equal(changes.checkResult, 'unknown');
+  assert.equal(changes.verdict, 'check_unknown');
+});
+
+test('executeCheck gives checks a buffer large enough for gh/git logs', () => {
+  let seen = null;
+  executeCheck({ check: 'gh run view --log' }, { home: tmp(), shellPath: null, spawnImpl: (_, options) => { seen = options.maxBuffer; return { status: 0, stdout: 'ok' }; } });
+  assert.equal(seen, CHECK_MAX_BUFFER_BYTES);
+  assert.ok(seen >= 1024 * 1024);
+});

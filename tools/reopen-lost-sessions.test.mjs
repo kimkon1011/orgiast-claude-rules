@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getLoadGuardStatus, hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord, measureUserIdleSec } from './reopen-lost-sessions.mjs';
+import { getLoadGuardStatus, hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord, measureUserIdleSec, DEFAULT_REOPEN_MAX_CLAUDE } from './reopen-lost-sessions.mjs';
 import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
-import { unverifiedStreakCounts, isSessionProcessRunning, connectedRcSessionIds } from './reopen-lost-sessions.mjs';
+import { unverifiedStreakCounts, isSessionProcessRunning, connectedRcSessionIds, recordApiResult, fetchWithRetry, readFailState, writeFailState, FAIL_STATE_FILE, CONSECUTIVE_FAIL_THRESHOLD } from './reopen-lost-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
 const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
@@ -1429,28 +1429,50 @@ test('parseOptions: 既定 max は 3 である', () => {
   assert.equal(opts.max, 3);
 });
 
-test('loadGuard: claude プロセス数 >= 閾値(10)でも 1 件は reopen する（RC切断放置防止）', async t => {
+function claudeEnv(extra = {}) {
+  const env = { ...process.env, ...extra };
+  if (!Object.hasOwn(extra, 'REOPEN_MAX_CLAUDE')) delete env.REOPEN_MAX_CLAUDE;
+  if (!Object.hasOwn(extra, 'REOPEN_ALLOW_FIRST')) delete env.REOPEN_ALLOW_FIRST;
+  return env;
+}
+function tasklistSpawn(count) {
+  return (cmd, args) => {
+    if (cmd === 'tasklist') {
+      return { status: 0, stdout: Array(count).fill('"claude.exe","1234","Console","1","100,000 K"').join('\n') };
+    }
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+}
+
+test('loadGuard: 既定上限は 5。5 以上は 0 件、4 件は開く。REOPEN_ALLOW_FIRST=1 のときだけ 1 件開く', async t => {
+  assert.equal(DEFAULT_REOPEN_MAX_CLAUDE, 5);
   const base = fixture(t);
   const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
   const fetchImpl = async url => {
     if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
     return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
   };
-  const spawn = (cmd, args) => {
-    if (cmd === 'tasklist') {
-      const csv = Array(10).fill('"claude.exe","1234","Console","1","100,000 K"').join('\n');
-      return { status: 0, stdout: csv };
-    }
-    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
-    return { status: 0, stdout: '' };
-  };
-  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
-  // claudeCount 高でも 1 件は reopen（CPU 負荷ではないため）
-  assert.equal(result.reopened.length, 1);
-  assert.equal(result.skipped.loadGuard, 0);
-  assert.equal(result.loadGuard.claudeCount, 10);
-  assert.equal(result.loadGuard.reason, 'claudeCount');
-  assert.equal(result.loadGuard.allowFirst, true);
+  const run = (count, extra) => reopenLost({
+    base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl,
+    spawn: tasklistSpawn(count), checkCpu: false, checkClaude: true, env: claudeEnv(extra),
+    now: () => nowTime, windowReady: async () => true, wait: async () => {},
+  });
+  const blocked = await run(5);
+  assert.equal(blocked.reopened.length, 0);
+  assert.equal(blocked.skipped.loadGuard, 1);
+  assert.equal(blocked.loadGuard.claudeCount, 5);
+  assert.equal(blocked.loadGuard.reason, 'claudeCount');
+  assert.equal(blocked.loadGuard.allowFirst, undefined);
+  for (const flag of ['0', 'true', 'yes']) {
+    const off = await run(5, { REOPEN_ALLOW_FIRST: flag });
+    assert.equal(off.reopened.length, 0, flag);
+    assert.equal(off.loadGuard.allowFirst, undefined, flag);
+  }
+  const under = await run(4);
+  assert.equal(under.reopened.length, 1);
+  assert.equal(under.skipped.loadGuard, 0);
+  assert.equal(under.loadGuard?.allowFirst, undefined);
 });
 
 test('loadGuard: CPU >= 閾値(85%)で 0 件 reopen かつ skipped.loadGuard に計上', async t => {
@@ -1503,7 +1525,7 @@ test('loadGuard: tasklist 失敗時は fail-open でスキップせず reopen �
   assert.equal(result.reopened.length, 1);
 });
 
-test('loadGuard: claudeCount 高でも 3 件中 1 件のみ reopen、残り 2 件は skipped.loadGuard に計上', async t => {
+test('loadGuard: claudeCount が既定上限以上なら 3 件とも reopen せず skipped.loadGuard に計上', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-loadguard-3cand-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const base = path.join(root, '.claude');
@@ -1531,18 +1553,22 @@ test('loadGuard: claudeCount 高でも 3 件中 1 件のみ reopen、残り 2 �
   };
   const spawn = (cmd, args) => {
     if (cmd === 'tasklist') {
-      const csv = Array(10).fill('"claude.exe","1234","Console","1","100,000 K"').join('\n');
+      const csv = Array(5).fill('"claude.exe","1234","Console","1","100,000 K"').join('\n');
       return { status: 0, stdout: csv };
     }
     if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
     return { status: 0, stdout: '' };
   };
-  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
-  // claudeCount 高でも 1 件は reopen、残り 2 件は skipped
-  assert.equal(result.reopened.length, 1, '1 candidate should be reopened');
-  assert.equal(result.skipped.loadGuard, 2, '2 candidates should be skipped by loadGuard');
-  assert.equal(result.loadGuard.allowFirst, true);
-  assert.equal(result.loadGuard.claudeCount, 10);
+  const env = claudeEnv();
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, env, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  assert.equal(result.reopened.length, 0, 'no candidate should be reopened at the default cap');
+  assert.equal(result.skipped.loadGuard, 3, 'all candidates should be skipped by loadGuard');
+  assert.equal(result.loadGuard.allowFirst, undefined);
+  assert.equal(result.loadGuard.claudeCount, 5);
+  const allowed = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, env: claudeEnv({ REOPEN_ALLOW_FIRST: '1' }), now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  assert.equal(allowed.reopened.length, 1);
+  assert.equal(allowed.skipped.loadGuard, 2);
+  assert.equal(allowed.loadGuard.allowFirst, true);
 });
 
 test('countWindowsClaudeProcesses: orphan claude processes (parent PID not alive) are excluded', async t => {
@@ -1634,7 +1660,7 @@ test('loadGuard: CPU 高 (>=85%) は claudeCount が低くても全件 defer す
   assert.equal(result.loadGuard.allowFirst, undefined, 'allowFirst should not be set for CPU defer');
 });
 
-test('loadGuard: PowerShell 出力から Claude デスクトップアプリ (11本) を除外し CLI (8本) だけを数え、上限(10)未満のためブロックしない', async t => {
+test('loadGuard: PowerShell 出力から Claude デスクトップアプリ (11本) を除外し CLI (8本) だけを数え、明示上限 10 未満ならブロックしない', async t => {
   const base = fixture(t);
   const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
   const fetchImpl = async url => {
@@ -1671,10 +1697,11 @@ test('loadGuard: PowerShell 出力から Claude デスクトップアプリ (11�
     if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
     return { status: 0, stdout: '' };
   };
-  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  const env = claudeEnv({ REOPEN_MAX_CLAUDE: '10' });
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, env, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
   assert.equal(result.skipped.loadGuard, 0);
   assert.equal(result.reopened.length, 1);
-  const guard = await getLoadGuardStatus({ spawn, checkCpu: false });
+  const guard = await getLoadGuardStatus({ spawn, checkCpu: false, env });
   assert.equal(guard.claudeCount, 8);
   assert.equal(guard.triggered, false);
   assert.equal(guard.reason, null);
@@ -2232,4 +2259,134 @@ test('measureUserIdleSec: Win32 実機で数値を返す（Add-Type 完全性の
   const sec = measureUserIdleSec();
   assert.ok(Number.isInteger(sec), `measureUserIdleSec() returned non-integer: ${sec}`);
   assert.ok(sec >= 0, `measureUserIdleSec() returned negative: ${sec}`);
+});
+
+// ── fetchWithRetry ──────────────────────────────────────
+
+test('fetchWithRetry: 200 は1回目で返る', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    fetchImpl: async () => { calls++; return { ok: true }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.ok(res.ok);
+  assert.equal(calls, 1);
+});
+
+test('fetchWithRetry: 4xx（非 429）は即座に返りリトライしない', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 3, {
+    fetchImpl: async () => { calls++; return { ok: false, status: 403 }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.equal(res.status, 403);
+  assert.equal(calls, 1);
+});
+
+test('fetchWithRetry: 429 はリトライする', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    fetchImpl: async () => { calls++; return calls < 3 ? { ok: false, status: 429 } : { ok: true }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.ok(res.ok);
+  assert.equal(calls, 3);
+});
+
+test('fetchWithRetry: 5xx はリトライする', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    fetchImpl: async () => { calls++; return calls < 3 ? { ok: false, status: 503 } : { ok: true }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.ok(res.ok);
+  assert.equal(calls, 3);
+});
+
+test('fetchWithRetry: リトライ上限に達すると最後の response を返す（例外を投げない）', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    fetchImpl: async () => { calls++; return { ok: false, status: 503 }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.equal(res.status, 503);
+  assert.equal(calls, 3);
+});
+
+test('fetchWithRetry: ネットワーク例外はリトライし最後に throw', async () => {
+  await assert.rejects(fetchWithRetry('https://test', {}, 1, {
+    fetchImpl: async () => { throw new Error('ECONNREFUSED'); },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  }));
+});
+
+test('fetchWithRetry: 再試行ごとに新しい signal を使う（古い signal の abort が残りの試行を妨げない）', async () => {
+  let calls = 0;
+  let signals = [];
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    timeoutMs: 50000,
+    fetchImpl: async (url, opts) => {
+      calls++;
+      signals.push(opts.signal);
+      if (calls === 1) { opts.signal.addEventListener('abort', () => {}); return { ok: false, status: 429 }; }
+      return { ok: true };
+    },
+    nowFn: () => 0, deadline: Infinity,
+  });
+  assert.ok(res.ok);
+  assert.equal(calls, 2);
+  assert.notEqual(signals[0], signals[1], 'each retry should get a new signal');
+});
+
+test('fetchWithRetry: deadline 超過で throw', async () => {
+  let clock = 0;
+  await assert.rejects(fetchWithRetry('https://test', {}, 1, {
+    fetchImpl: async () => { clock = 100; return { ok: false, status: 429 }; },
+    nowFn: () => clock, deadline: 50, timeoutMs: 50000,
+  }));
+});
+
+// ── recordApiResult ────────────────────────────────────
+
+test('recordApiResult: 連続 7 回失敗でも exit 1 にならない', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-api-7-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  for (let i = 0; i < 7; i++) {
+    assert.equal(recordApiResult(base, 'some error', new Date().toISOString()), false);
+  }
+  const state = readFailState(base);
+  assert.equal(state.consecutiveFails, 7);
+});
+
+test('recordApiResult: 連続 8 回失敗で exit 1 が必要', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-api-8-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  for (let i = 0; i < 7; i++) {
+    recordApiResult(base, 'error');
+  }
+  assert.equal(recordApiResult(base, 'error'), true);
+});
+
+test('recordApiResult: 成功でカウンターを 0 に戻す', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-api-reset-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  for (let i = 0; i < 5; i++) recordApiResult(base, 'error');
+  assert.equal(readFailState(base).consecutiveFails, 5);
+  recordApiResult(base, null);
+  assert.equal(readFailState(base).consecutiveFails, 0);
+});
+
+test('recordApiResult: 初回はカウンターが 1 になる', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-api-first-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  assert.equal(recordApiResult(base, 'error'), false);
+  assert.equal(readFailState(base).consecutiveFails, 1);
 });

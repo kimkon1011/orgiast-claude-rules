@@ -7,6 +7,7 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
 import { validApprovalMarker } from './lib/send-approval.mjs';
 import { readContextMarker, MAX_MARKER_AGE_MS } from './lib/send-context.mjs';
+import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 export const HOOK_MATCHER = 'mcp__claude_ai_Gmail(?:_\\d+)?__(send_message|reply|forward)|Bash|PowerShell';
 export const BLOCK_REASON = '本文の全文をチャットに表示し、kim の『送ってよい』を得てから送信してください（組織指示11）。多数宛は mail-bulk-approve を使う';
 export const APPROVAL_MISSING_REASON = 'kim の最新の発言が送信承認として読めません（例: 送って／おくって／OK）。本文の全文を表示したうえで送信承認を得てください。';
@@ -64,6 +65,7 @@ export function judge(input, { targets, env = process.env, home = env.ORGIAST_HO
   try {
     targets ??= sendTargets(input);
     if (!targets.length) return { decision: 'pass' };
+    if (targets.some(target => findSecretaryBookingUrls(target.body).length)) return block(SECRETARY_BOOKING_URL_REASON);
     if (requireContext) for (const target of targets) {
         const marker = readContextMarker(normalize(target.body), home);
         if (!marker || Date.now() - Date.parse(marker.checkedAt) > MAX_MARKER_AGE_MS) return block(CONTEXT_REASON);

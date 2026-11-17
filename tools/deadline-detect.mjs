@@ -47,8 +47,18 @@ export async function extractBatch(documents, { ask = askProvider, home } = {}) 
   for (const provider of ['gemini','openrouter']) {
     try {
       const result = parseExtraction(await ask(provider, documents, { home }));
-      if (result.items.some(item => !documents.some(d => d.sourceRef === item.sourceRef))) throw new Error('抽出応答の出典IDが入力にありません');
-      return result.items;
+      // Per-item sourceRef validation: items whose sourceRef is not in the input
+      // are dropped individually rather than failing the whole batch.
+      const valid = [];
+      const skipped = [];
+      for (const item of result.items) {
+        if (!documents.some(d => d.sourceRef === item.sourceRef)) {
+          skipped.push({ sourceRef: item.sourceRef, title: item.title, reason: '出典IDが入力にありません' });
+        } else {
+          valid.push(item);
+        }
+      }
+      return { items: valid, skipped };
     } catch (e) { failure = e; }
   }
   throw new Error(`Gemini/OpenRouterで抽出できません: ${failure.message}`);
@@ -70,11 +80,17 @@ export function evidencedDue(quote, date, proposed) {
   }
   return null;
 }
+/**
+ * @param {object} item
+ * @param {object} document
+ * @param {Date} now
+ * @returns {{ title, due, status, kind, company, action, assignee, quote, source, sourceId, detectedAt, notifyCount, notes }|{ row:null, reason:string }}
+ */
 export function candidateRow(item, document, now) {
-  if (!document.text.includes(item.quote) || !item.quote.trim()) throw new Error('根拠の引用が原文にありません');
+  if (!document.text.includes(item.quote) || !item.quote.trim()) return { row: null, reason: 'quote-not-found' };
   const due = evidencedDue(item.quote, document.date, item.due);
   const status = item.confidence >= 0.8 && due ? '未着手' : HIGH_RISK.has(item.kind) || item.confidence >= 0.5 ? '候補' : null;
-  if (!status) return null;
+  if (!status) return { row: null, reason: 'low-confidence-or-no-evidence' };
   const defaultAssignee = item.kind === '支払' ? '経理' : 'kim';
   const assignee = typeof item.assignee === 'string' && item.assignee.trim() && document.text.includes(item.assignee.trim()) ? item.assignee.trim().slice(0,80) : defaultAssignee;
   return { title: item.title.trim().slice(0,300), due, status, kind: item.kind, company: String(item.company || '').slice(0,100), action: String(item.action || '').slice(0,1000), assignee,
@@ -83,19 +99,33 @@ export function candidateRow(item, document, now) {
 }
 export async function runDetect({ home, config, ledger, state, sources, now, dryRun, ask, notify = addItem }) {
   const all = [...await ledger.read(), ...await ledger.read('候補')];
-  const result = { at: now.toISOString(), dryRun, added: 0, candidates: 0, items: [], errors: [] };
+  const result = { at: now.toISOString(), dryRun, added: 0, candidates: 0, items: [], errors: [], skipped: [] };
   const persist = () => saveJson(dataPath(home, 'state.json'), state);
   for (const source of sources) {
     try {
-      const { documents, next } = await source.load();
+      const { documents, next, skipped: sourceSkipped = [] } = await source.load();
+      for (const s of sourceSkipped) result.skipped.push({ source: source.key, ...s });
       for (let i = 0; i < documents.length; i += 10) {
         // Completed/unneeded source IDs never go to the model again.
         const batch = documents.slice(i, i + 10).filter(d => !all.some(r => r.sourceId === d.sourceRef));
         if (!batch.length) continue;
-        const items = await extractBatch(batch, { ask, home });
+        const { items, skipped } = await extractBatch(batch, { ask, home });
+        for (const s of skipped) result.skipped.push({ source: source.key, ...s });
         for (const item of items) {
-          const row = candidateRow(item, batch.find(d => d.sourceRef === item.sourceRef), now);
-          if (!row || isDuplicate(row, all)) continue;
+          const doc = batch.find(d => d.sourceRef === item.sourceRef);
+          const row = candidateRow(item, doc, now);
+          if (row === null) {
+            // Backward compat: old candidateRow returned null (quote not found)
+            result.skipped.push({ source: source.key, sourceRef: item.sourceRef, title: item.title, reason: '根拠の引用が原文にありません' });
+            continue;
+          }
+          if (row?.row === null) {
+            // New format: distinguishes reason
+            const reason = row.reason === 'quote-not-found' ? '根拠の引用が原文にありません' : '確信度が低いか期限の根拠が不足しています';
+            result.skipped.push({ source: source.key, sourceRef: item.sourceRef, title: item.title, reason });
+            continue;
+          }
+          if (isDuplicate(row, all)) continue;
           row.id = nextId(all);
           if (!dryRun) await ledger.append([row], row.status === '候補' ? '候補' : '期限台帳');
           all.push(row); result.items.push(row);
@@ -131,7 +161,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     const now = new Date(opts.now || deps.now || new Date()); if (!Number.isFinite(now.getTime())) throw new Error('--now が不正です');
     valid = true;
     if (!opts.fixture && deps.skipSeatCheck !== true) {
-      const seat = seatCheck(home);
+      const seat = deps.seatCheck ? deps.seatCheck(home) : seatCheck(home);
       if (!seat.kim) {
         resultSummary = '鍵なし席のためスキップ';
         stdout(JSON.stringify({ skip: true, reason: resultSummary, seat }));

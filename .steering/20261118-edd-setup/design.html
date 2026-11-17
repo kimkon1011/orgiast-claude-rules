@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>2026-11-18 EDDセットアップ 設計</title>
+<link rel="stylesheet" href="../../docs/assets/design-system.css">
+</head>
+<body><main>
+<h1>EDDセットアップ - 設計</h1>
+<p>作成: 2026-11-18 | ステータス: 完了</p>
+
+<h2>1. 実装アプローチ</h2>
+<p>本作業はコード実装を伴わない。以下のドキュメント作成を順次行う。</p>
+<ol>
+<li>プロジェクトルートに <code>eval-driven/</code> ディレクトリ新設</li>
+<li>EDD設計書 <code>eval-driven/index.md</code> 作成（Markdown、既存docs/と同形式）</li>
+<li>初期評価データセット <code>eval-driven/eval-set/initial-evaluations.tsv</code> 作成（人間編集用TSV）</li>
+<li>機械処理用JSON <code>eval-driven/eval-set/initial-evaluations.json</code> 作成</li>
+<li>ステアリングファイル <code>.steering/20261118-edd-setup/</code> 作成</li>
+</ol>
+
+<h2>2. 評価データの設計判断</h2>
+<h3>2.1 TSVとJSONの2形式</h3>
+<p>斎藤さんのNoteでは評価データを「テスト10件」と説明している。実運用では以下の理由で2形式を併用する:</p>
+<ul>
+<li><strong>TSV</strong>: Excel/Google Sheets で直接開けて人間が編集しやすい。diffが行単位で見やすい</li>
+<li><strong>JSON</strong>: スクリプトから読み込みやすい。スキーマバリデーション可能</li>
+<li>正本はJSONとし、TSVは人間の編集インタフェースとして維持する</li>
+</ul>
+
+<h3>2.2 評価項目</h3>
+<p>5軸評価（routing / info_sufficiency / tone_ethics / no_overaction）に重み付けを導入。
+Meta論文のEDDアプローチを参考に、routing（振り分け）と no_overaction（余計な処理をしない）に高い重みを置く。</p>
+
+<h3>2.3 評価例のカテゴリ設計</h3>
+<p>30件の評価例を6カテゴリに分散。エッジケース（EVAL-026〜027 範囲外の質問、EVAL-028 怒りクレーム）を含める。</p>
+
+<h2>3. 変更コンポーネント</h2>
+<ul>
+<li>新規作成: <code>eval-driven/</code> ディレクトリ全体（4ファイル + .gitkeep）</li>
+<li>新規作成: <code>.steering/20261118-edd-setup/</code>（3ファイル）</li>
+<li>既存ファイルへの影響: なし</li>
+</ul>
+
+<h2>UI影響セクション</h2>
+<p><strong>UI変更なし</strong> — EDDはバックエンドの評価プロセスであり、操作画面は存在しない。</p>
+</main></body>
+</html>

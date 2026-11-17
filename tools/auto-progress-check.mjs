@@ -25,6 +25,8 @@ export const CHECK_ERROR_PATTERNS = [
 
 export const CHECK_TIMEOUT_MS = 30000;
 export const MAX_CHECK_TIMEOUT_MS = 300000;
+// check の出力上限。64KB は gh/git 系のログ出力で簡単に超え、ENOBUFS で判定不能になっていた。
+export const CHECK_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 export const UNMET_INTERVAL_MS = 6 * 3600000;
 // 外部の成果を読まず、時計と定数だけで決まる典型的な判定。
 // 登録時だけでなく、旧台帳を評価する watch からも同じ判定を使う。
@@ -166,18 +168,22 @@ export function resolveCheckShell({ platform = process.platform, env = process.e
 }
 export function executeCheck(row, { home, spawnImpl = spawnSync, shellPath = resolveCheckShell() } = {}) {
   const options = { cwd: row.checkCwd || row.cwd, encoding: 'utf8',
-    timeout: resolveCheckTimeout(row), maxBuffer: 64 * 1024, windowsHide: true,
+    timeout: resolveCheckTimeout(row), maxBuffer: CHECK_MAX_BUFFER_BYTES, windowsHide: true,
     env: { ...process.env, ORGIAST_HOME: home, ORGIAST_CHECK_TIMEOUT_MS: String(resolveCheckTimeout(row)) } };
   const result = shellPath ? spawnImpl(shellPath, ['-c', normalizeCheckForBash(row.check)], options)
     : spawnImpl(row.check, { ...options, shell: true });
   const gotStderr = String(result.stderr || '');
   const code = result.error || result.signal || (result.status !== 0 && hasCheckCrash(gotStderr)) ? null : result.status;
   // spawnSync の生メッセージ（… bash.exe ETIMEDOUT）はシェル故障に見えるため、上限超過と延長方法を書く。
+  // 生の `spawnSync ... bash.exe ENOBUFS` はシェル故障に見えるため、上限と縮め方を書く。
+  const overflowed = result.error?.code === 'ENOBUFS';
   const failure = result.error?.code === 'ETIMEDOUT'
     ? `check が ${options.timeout / 1000} 秒の上限を超えました（遅い check は --add-check --timeout <秒> で延長・最大 ${MAX_CHECK_TIMEOUT_MS / 1000} 秒）`
-    : oneLine(result.error?.message || gotStderr) || code;
+    : overflowed
+      ? `check の出力が ${CHECK_MAX_BUFFER_BYTES / 1024 / 1024}MB の上限を超えました（check の出力を減らすか、末尾だけ出す形（例: 2>&1 | tail -c 4000）に直してください）`
+      : oneLine(result.error?.message || gotStderr) || code;
   const timedOut = result.error?.code === 'ETIMEDOUT';
-  return { code, ...(timedOut ? { timedOut: true } : {}), stdout: String(result.stdout || ''), text: timedOut ? `判定不能: ${failure}\n${String(result.stdout || '').trim()}` : code === null ? `check エラー: ${failure}` : String(result.stdout || '').trim() || (code === 0 ? '達成を確認' : code === 1 ? '未達' : code === 3 ? '止まっている' : `check エラー: ${failure}`), stderr: gotStderr };
+  return { code, ...(timedOut ? { timedOut: true } : {}), ...(overflowed ? { overflowed: true } : {}), stdout: String(result.stdout || ''), text: timedOut || overflowed ? `判定不能: ${failure}\n${String(result.stdout || '').trim()}` : code === null ? `check エラー: ${failure}` : String(result.stdout || '').trim() || (code === 0 ? '達成を確認' : code === 1 ? '未達' : code === 3 ? '止まっている' : `check エラー: ${failure}`), stderr: gotStderr };
 }
 export { checkProgressSummary } from './lib/check-progress-summary.mjs';
 export function pendingAction(row) {
@@ -201,7 +207,8 @@ export async function checkPromise(row, { home, now, patch, io = {}, suppressNot
     result = row.status === 'done' && row.checkResult === 'done'
       ? { code: 0, text: row.checkText } : await (io.executeCheck ?? executeCheck)(row, { home });
   } catch (error) { result = { code: null, ...(error.code === 'ETIMEDOUT' ? { timedOut: true } : {}), text: `check エラー: ${error.message || error}` }; }
-  const state = result.timedOut ? 'unknown' : result.code === 0 ? 'done' : result.code === 1 ? 'unmet' : result.code === 3 ? 'stalled' : 'error';
+  // 出力上限超過も「判定不能」。check エラー扱いにすると、動いている check が毎回失敗として積まれる。
+  const state = result.timedOut || result.overflowed ? 'unknown' : result.code === 0 ? 'done' : result.code === 1 ? 'unmet' : result.code === 3 ? 'stalled' : 'error';
   const overdue = now >= Date.parse(row.deadlineAt);
   const changes = { lastCheckOutput: checkOutput(result.stdout ?? result.text), checkResult: state, checkText: state === 'stalled' ? lastLine(result.stdout ?? result.text) : String(result.text || ''), checkStderr: String(result.stderr || ''), lastCheckedAt: new Date(now).toISOString(),
     verdict: state === 'done' ? 'done' : state === 'stalled' ? 'stalled' : state === 'unknown' ? 'check_unknown' : state === 'error' ? 'check_error' : overdue ? 'unmet' : 'in_progress',

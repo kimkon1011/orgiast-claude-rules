@@ -622,3 +622,51 @@ test('parseQuotaResetTime: 本文から reset 時刻を解析', () => {
   const none = parseQuotaResetTime('Rate limit exceeded', now);
   assert.equal(none, null);
 });
+
+test('glm は provider-limit-history の until が未来なら payload を作らずにスキップする', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000;
+  fs.writeFileSync(path.join(path.dirname(files.cooldownFile), 'provider-limit-history.jsonl'), `${JSON.stringify({ provider: 'glm', until: timestamp + 60_000, reason: 'usage_limit' })}\n`);
+  const payloads = [];
+  const result = await callWithFallback({
+    start: { provider: 'glm', model: 'glm-5.3' }, chain: [second], ...files, now: () => timestamp,
+    payloadFor(candidate) { payloads.push(candidate.provider); return requestFor(); },
+    fetchImpl: async () => new Response('{}', { status: 200 }),
+  });
+  assert.deepEqual(payloads, ['openrouter']);
+  assert.equal(result.candidate.provider, 'openrouter');
+});
+
+test('deepseek 直URLは limit-history の間 fetch せず次候補を使う', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000;
+  fs.writeFileSync(path.join(path.dirname(files.cooldownFile), 'provider-limit-history.jsonl'), `${JSON.stringify({ provider: 'deepseek', until: timestamp + 3_600_000, reason: 'http_402' })}\n`);
+  const urls = [];
+  const result = await callWithFallback({
+    start: { provider: 'openrouter', model: 'deepseek/deepseek-chat' },
+    chain: [{ provider: 'groq', model: 'openai/gpt-oss-120b' }],
+    ...files, now: () => timestamp,
+    payloadFor(candidate) {
+      return candidate.model.includes('deepseek')
+        ? { url: 'https://api.deepseek.com/v1/chat/completions', init: {} }
+        : { url: 'https://api.groq.com/openai/v1/chat/completions', init: {} };
+    },
+    fetchImpl: async (url) => { urls.push(String(url)); return new Response('{}', { status: 200 }); },
+  });
+  assert.deepEqual(urls, ['https://api.groq.com/openai/v1/chat/completions']);
+  assert.equal(result.candidate.model, 'openai/gpt-oss-120b');
+});
+
+test('台帳行には category と caller が必ず入る', async (t) => {
+  const files = temporaryFiles(t);
+  await callWithFallback({
+    start, chain: [], category: 'jp_reply', caller: 'unit', ...files,
+    payloadFor: requestFor,
+    fetchImpl: async () => new Response(JSON.stringify({ usage: { prompt_tokens: 3, completion_tokens: 4 } }), { status: 200 }),
+  });
+  const row = JSON.parse(fs.readFileSync(files.ledgerFile, 'utf8'));
+  assert.equal(row.category, 'jp_reply');
+  assert.equal(row.caller, 'unit');
+  assert.equal(row.tool, 'unit');
+  assert.equal(row.in, 3);
+  assert.equal(row.out, 4);
+  assert.equal(row.status, 'ok');
+});

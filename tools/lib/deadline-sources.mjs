@@ -4,6 +4,7 @@ import path from 'node:path';
 import { searchGmail } from '../gmail-search.mjs';
 import { listDecisions } from '../pending-decisions.mjs';
 import { readJson, jstDate } from '../deadline-ledger.mjs';
+import { redactSecrets } from '../redact-secrets.mjs';
 export const KEYWORDS = /期限|締切|締め切り|まで(に)?|満了|提出|回答|返送|納期|支払期日|振込期日|更新|期日|催告|督促|裁判|訴訟|答弁|準備書面|消防|質問書|届出|申請|報告書/;
 export const trimBytes = text => Buffer.from(String(text || ''), 'utf8').subarray(0, 30000).toString('utf8').replace(/\uFFFD$/, '');
 export function isAutomatic(mail) {
@@ -66,11 +67,17 @@ export async function collectDrive({ user, state, now, request, dryRun = false }
     result = await request(makeUrl(), { user });
   }
   const documents = [];
+  const skipped = [];
   for (const file of result.files || []) {
-    const text = await readDriveText(file, { user, request, dryRun });
+    let text;
+    try { text = await readDriveText(file, { user, request, dryRun }); }
+    catch (error) {
+      skipped.push({ sourceRef: `drive:${file.id}`, title: file.name, reason: `Drive読み取り失敗: ${redactSecrets(error.message).slice(0, 120)}` });
+      continue;
+    }
     if (text) documents.push({ source: 'Drive', sourceRef: `drive:${file.id}`, text: trimBytes(`${file.name}\n${text}`), date: file.modifiedTime, url: file.webViewLink || `https://drive.google.com/file/d/${file.id}/view` });
   }
-  return { documents, next: finishWindow(current, result.nextPageToken, result.files?.length || 0) };
+  return { documents, skipped, next: finishWindow(current, result.nextPageToken, result.files?.length || 0) };
 }
 function timestamp(value) {
   const numeric = Number(value); return Number.isFinite(numeric) && numeric > 0 ? (numeric < 1e12 ? numeric * 1000 : numeric) : Date.parse(value);

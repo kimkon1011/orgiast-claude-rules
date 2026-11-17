@@ -12,6 +12,8 @@ const {
   coolingBackendNames,
   skipCoolingBackends,
   deprioritizeUnreliableBackends,
+  unhealthyCandidates,
+  applyCandidateHealth,
 } = await import('./fallback-backend-health.mjs');
 
 function tmpHome() {
@@ -212,4 +214,29 @@ test('deprioritizeUnreliableBackends: 入力配列を破壊しない', () => {
   const result = deprioritizeUnreliableBackends(original, history, { now, windowMs: 7 * 24 * 3600 * 1000, minRuns: 10, minSuccessRate: 0.4 });
   assert.deepEqual(original.map((b) => b.name), copy.map((b) => b.name), '入力配列は変更されていない');
   assert.notEqual(result, original, '新しい配列を返している');
+});
+
+test('24h で 5 回以上かつ失敗が過半数、または品質失敗 3 連続で 6 時間だけ止める', () => {
+  const home = tmpHome();
+  const now = 10_000_000;
+  const rate = [];
+  for (let i = 0; i < 5; i++) rate.push({ t: now - 1000 + i, backend: 'openrouter-free', outcome: i < 3 ? 'timeout' : 'ok' });
+  assert.equal(unhealthyCandidates(rate, { now })[0].reason, 'failure_rate');
+  assert.deepEqual(unhealthyCandidates(rate.map((row, i) => ({ ...row, outcome: i < 2 ? 'timeout' : 'ok' })), { now }), []);
+  const half = Array.from({ length: 6 }, (_, i) => ({ t: now - i, backend: 'openrouter', outcome: i < 3 ? 'fail' : 'ok' }));
+  assert.deepEqual(unhealthyCandidates(half, { now }), []);
+  const written = applyCandidateHealth(home, { rows: rate, now, force: true });
+  assert.deepEqual(written, ['openrouter-free']);
+  const disabled = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'lanes-disabled.json'), 'utf8'));
+  assert.equal(disabled['openrouter-free'].until, now + 6 * 60 * 60 * 1000);
+  assert.equal(disabled['openrouter-free'].reason, 'failure_rate');
+  fs.writeFileSync(path.join(home, '.claude', 'lanes-disabled.json'), JSON.stringify({ gemini: { reason: 'manual' } }));
+  const quality = [1, 2, 3].map((i) => ({ t: now - i, backend: 'cheap-code:glm', outcome: 'quality_fail' }));
+  quality.push({ t: now, backend: 'gemini', outcome: 'quality_fail' }, { t: now - 1, backend: 'gemini', outcome: 'quality_fail' }, { t: now - 2, backend: 'gemini', outcome: 'quality_fail' });
+  applyCandidateHealth(home, { rows: quality, now, force: true });
+  const kept = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'lanes-disabled.json'), 'utf8'));
+  assert.equal(kept.gemini.reason, 'manual');
+  assert.equal(kept.gemini.until, undefined);
+  assert.equal(kept['cheap-code:glm'].reason, 'quality_validation');
+  assert.equal(kept['cheap-code:glm'].until, now + 6 * 60 * 60 * 1000);
 });

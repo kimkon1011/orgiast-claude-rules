@@ -1,0 +1,650 @@
+{
+  "metadata": {
+    "title": "EDD 初期評価データセット",
+    "description": "ブース制作の顧客問い合わせ対応エージェントの初期評価データセット",
+    "version": "1.0.0",
+    "created": "2026-11-18",
+    "source": "eval-driven/eval-set/initial-evaluations.tsv",
+    "total_evaluations": 30,
+    "categories": {
+      "見積もり依頼": 7,
+      "仕様質問": 5,
+      "クレーム・修正": 5,
+      "納期・スケジュール": 3,
+      "変更・キャンセル": 4,
+      "その他": 6
+    }
+  },
+  "evaluations": [
+    {
+      "id": "EVAL-001",
+      "category": "見積もり依頼",
+      "title": "初回見積もり（3m×3mブース）",
+      "input": {
+        "message": "お世話になっております。新しくブース制作の見積もりをお願いしたいです。規模は3m×3m、装丁は簡易的なもので大丈夫です。よろしくお願いします。",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "初回の見積もり依頼は営業チームへ振る。サイズ・要望の記載あり。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["見積もり", "初回", "営業"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-002",
+      "category": "見積もり依頼",
+      "title": "条件付き見積もり（2ヶ月後イベント）",
+      "input": {
+        "message": "いつもお世話になっております。2ヶ月後のイベント用に4m×2mのブース見積もりをお願いします。予算は30万円程度で収めたいです。",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "予算・サイズ・時期が明記された見積もり依頼。営業チームへ。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["見積もり", "予算あり"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-003",
+      "category": "見積もり依頼",
+      "title": "「いくらくらい？」だけの問い合わせ",
+      "input": {
+        "message": "すみません、ブース制作ってだいたいいくらくらいかかりますか？",
+        "channel": "discord"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "概算見積もり希望。金額の問い合わせは営業チームへ誘導。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 0.5,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["見積もり", "概算", "金額"],
+      "notes": "情報不足だが定型での相場回答は可能。ただし確定見積ではない旨を明記する必要あり。"
+    },
+    {
+      "id": "EVAL-004",
+      "category": "見積もり依頼",
+      "title": "既存デザインの流用見積もり",
+      "input": {
+        "message": "前回作ってもらったブースと同じデザインで、サイズだけ変えて見積もりをお願いできますか？",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "既存デザインの流用は営業が過去の実績を踏まえて見積もる。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["見積もり", "流用", "リピート"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-005",
+      "category": "仕様質問",
+      "title": "素材に関する質問",
+      "input": {
+        "message": "ブースの床材について質問です。搬入先の展示場が重量制限10kg/m2なのですが、対応可能な素材はありますか？",
+        "channel": "discord"
+      },
+      "expected": {
+        "routing": "production",
+        "rationale": "素材・重量の専門的質問は制作チームへ。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["素材", "重量制限", "仕様"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-006",
+      "category": "仕様質問",
+      "title": "設置方法の確認",
+      "input": {
+        "message": "このブースって工具なしで組み立てられますか？会場によっては工具持込禁止なので。",
+        "channel": "discord"
+      },
+      "expected": {
+        "routing": "production",
+        "rationale": "設置方法の技術的質問は制作チームへ。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["設置", "工具", "仕様"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-007",
+      "category": "仕様質問",
+      "title": "図面送付の依頼",
+      "input": {
+        "message": "事前に図面を送ってもらえますか？自社のデザイナーがレイアウトを確認したいとのことです。",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "図面の送付依頼は営業が担当する（契約条件による）。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 0.5,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["図面", "レイアウト"],
+      "notes": "契約状態によっては対応可否が変わる。営業が判断。"
+    },
+    {
+      "id": "EVAL-008",
+      "category": "仕様質問",
+      "title": "電源工事の有無",
+      "input": {
+        "message": "電気工事は別料金ですか？それともブース料金に含まれていますか？",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "料金に関する質問は営業へ。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["オプション", "電気", "料金"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-009",
+      "category": "クレーム・修正",
+      "title": "納品物の不具合",
+      "input": {
+        "message": "先日納品いただいたブースのパネルに傷が入っていました。至急交換をお願いします。",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "support",
+        "rationale": "クレームはサポートチームへ。交換手配のため。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["クレーム", "傷", "交換"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-010",
+      "category": "クレーム・修正",
+      "title": "色味が違う",
+      "input": {
+        "message": "打ち合わせと違う色味のパネルが届きました。打ち合わせ時の見本と同じ色に交換してください。",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "support",
+        "rationale": "色味の相違はサポートが対応。交換手配。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["クレーム", "色味", "交換"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-011",
+      "category": "クレーム・修正",
+      "title": "納期遅延のクレーム",
+      "input": {
+        "message": "3日前に納品予定と聞いていたがまだ届いていません。明日がイベント本番で非常に困っています。",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "support",
+        "rationale": "納期遅延クレームはサポートが優先対応。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["クレーム", "納期遅延", "緊急"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-012",
+      "category": "クレーム・修正",
+      "title": "価格に不服（後から追加請求）",
+      "input": {
+        "message": "最初の見積もりより20万円も高い請求が来ました。説明をお願いします。",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "価格に関する不服は営業が説明。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["クレーム", "価格", "追加請求"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-013",
+      "category": "納期・スケジュール",
+      "title": "納期の問い合わせ（発注前）",
+      "input": {
+        "message": "今注文した場合、最短でいつ納品可能ですか？イベントは2ヶ月後です。",
+        "channel": "discord"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "納期に関する質問は営業が回答（発注前のため）。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["納期", "スケジュール"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-014",
+      "category": "納期・スケジュール",
+      "title": "スケジュール調整の相談",
+      "input": {
+        "message": "展示会の日程が変更になりました。搬入日を1日早めることは可能でしょうか？",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "日程変更の相談は営業が調整。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["日程変更", "調整"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-015",
+      "category": "納期・スケジュール",
+      "title": "急ぎの対応依頼",
+      "input": {
+        "message": "急で申し訳ありません。来週の展示会に出展することになり、5営業日でブース制作は可能ですか？",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "緊急受注の可否は営業が判断。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 0.5,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["急ぎ", "短期", "営業"],
+      "notes": "緊急対応の可否は工場の空き状況次第。即答不可の場合は確認を取ってから回答する。"
+    },
+    {
+      "id": "EVAL-016",
+      "category": "変更・キャンセル",
+      "title": "注文内容の変更",
+      "input": {
+        "message": "先日発注した3m×3mブースを4m×3mに変更したいです。追加料金はいくらになりますか？",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "注文変更は営業が追加料金を計算。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["変更", "サイズ追加"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-017",
+      "category": "変更・キャンセル",
+      "title": "注文キャンセルの申し出",
+      "input": {
+        "message": "申し訳ありませんが、イベント自体が中止になったのでブースの注文をキャンセルしたいです。",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "キャンセルは営業が契約条件に基づき対応。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 0.5,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["キャンセル", "イベント中止"],
+      "notes": "キャンセル料の有無は契約条件による。"
+    },
+    {
+      "id": "EVAL-018",
+      "category": "変更・キャンセル",
+      "title": "オプション追加の相談",
+      "input": {
+        "message": "パンフレットラックを追加したいのですが、まだ間に合いますか？",
+        "channel": "discord"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "オプション追加は営業が工数の都合を確認。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 0.5,
+        "no_overaction": 1.0
+      },
+      "tags": ["オプション", "追加", "変更"],
+      "notes": "社内の返信が遅くなりがち。トーンに注意して「確認します」で一旦止めるのが良い。"
+    },
+    {
+      "id": "EVAL-019",
+      "category": "その他",
+      "title": "営業時間の問い合わせ",
+      "input": {
+        "message": "お忙しいところすみません。御社の営業時間を教えてください。",
+        "channel": "discord"
+      },
+      "expected": {
+        "routing": "direct_answer",
+        "rationale": "事務的な質問は直接回答する。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["営業時間", "雑問"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-020",
+      "category": "その他",
+      "title": "会社概要の問い合わせ",
+      "input": {
+        "message": "御社の会社概要や沿革を教えてください。",
+        "channel": "discord"
+      },
+      "expected": {
+        "routing": "direct_answer",
+        "rationale": "一般的な会社情報は直接回答する。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["会社概要", "雑問"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-021",
+      "category": "その他",
+      "title": "障がい者配慮の相談",
+      "input": {
+        "message": "車椅子でブース見学をする予定です。バリアフリー対応は可能ですか？高さ30cmの段差があります。",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "バリアフリー対応の可否は営業が制作チームと確認。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["バリアフリー", "配慮", "アクセシビリティ"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-022",
+      "category": "その他",
+      "title": "協業の申し出",
+      "input": {
+        "message": "御社のブース制作に興味があります。当社は印刷会社で、相乗りできればと思っています。",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "協業の申し出は営業が判断。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["協業", "パートナー"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-023",
+      "category": "その他",
+      "title": "単なる雑談・あいさつ",
+      "input": {
+        "message": "展示会で御社のブースを見ました。すごくかっこよかったです！",
+        "channel": "discord"
+      },
+      "expected": {
+        "routing": "direct_answer",
+        "rationale": "雑談・あいさつは直接感謝を伝えて閉じる。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["雑談", "あいさつ"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-024",
+      "category": "見積もり依頼",
+      "title": "リピート客からの簡易見積もり",
+      "input": {
+        "message": "いつものサイズ（3m×3m）で見積もりください。",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "リピート客の簡易見積もりは営業へ。過去実績を参照。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 1.0,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["見積もり", "リピート", "簡易"],
+      "notes": ""
+    },
+    {
+      "id": "EVAL-025",
+      "category": "仕様質問",
+      "title": "翻訳パネルの有無",
+      "input": {
+        "message": "海外の来場者向けに英語の案内パネルはオプションで作れますか？",
+        "channel": "discord"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "オプションの可否は営業が確認。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 0.5,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["オプション", "翻訳", "パネル"],
+      "notes": "制作可能かは工場次第。営業→制作の確認ルート。"
+    },
+    {
+      "id": "EVAL-026",
+      "category": "仕様質問",
+      "title": "「ITツールの追加」誤登録防止",
+      "input": {
+        "message": "testツールの追加ってどうやるんですか？",
+        "channel": "discord"
+      },
+      "expected": {
+        "routing": "direct_answer",
+        "rationale": "ITツールの質問だが「ブース制作の顧客問い合わせエージェント」の範囲外。自社のITツール(Slack等)の話であれば確認して直接回答or一般論として案内する。IT依頼として誤登録しない。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 0.5,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["誤登録防止", "ITツール"],
+      "notes": "斎藤さんのNote事例。本エージェントはブース制作に特化しているので、ITツール質問は範囲外と判断するか、一般案内に留める。"
+    },
+    {
+      "id": "EVAL-027",
+      "category": "その他",
+      "title": "VPN設定の質問",
+      "input": {
+        "message": "会社のVPNにつながらないんだけど、何か知ってる？",
+        "channel": "discord"
+      },
+      "expected": {
+        "routing": "direct_answer",
+        "rationale": "VPN設定の質問は社内向けITサポートの範囲で、本エージェントの担当外。直接回答はせず、IT担当窓口を案内する。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 0.5,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["誤登録防止", "VPN", "ITサポート"],
+      "notes": "同上。範囲外の質問を誤って自社のIT依頼として登録しない。"
+    },
+    {
+      "id": "EVAL-028",
+      "category": "クレーム・修正",
+      "title": "怒っているクレーム",
+      "input": {
+        "message": "何回もメールしてるのに全然返事がない！どうなってるんだ！！お前ら誠意を見せろ！！",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "support",
+        "rationale": "怒りのクレームはサポートへ。エスカレーションが必要。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 0.5,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["クレーム", "怒り", "エスカレーション"],
+      "notes": "トーンの評価は悩ましい。まず謝罪して状況確認。感情的にならず冷静に対応する必要あり。"
+    },
+    {
+      "id": "EVAL-029",
+      "category": "見積もり依頼",
+      "title": "漠然とした要望",
+      "input": {
+        "message": "ブースを作りたいんですけど、何も決まってなくて。どうしたらいいですか？",
+        "channel": "discord"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "何も決まっていない場合は営業が初期相談を実施。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 0.5,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["見積もり", "漠然", "初回相談"],
+      "notes": "情報不足だが「まずはご相談」と営業チームへつなぐ。"
+    },
+    {
+      "id": "EVAL-030",
+      "category": "変更・キャンセル",
+      "title": "発注後の大幅変更",
+      "input": {
+        "message": "先日発注したブースですが、展示会のテーマが変わったのでデザインを一から作り直したいです。追加料金はいくらですか？",
+        "channel": "email"
+      },
+      "expected": {
+        "routing": "sales",
+        "rationale": "大幅変更は営業が実工数を再見積もり。"
+      },
+      "scores": {
+        "routing": 1.0,
+        "info_sufficiency": 0.5,
+        "tone_ethics": 1.0,
+        "no_overaction": 1.0
+      },
+      "tags": ["変更", "大幅", "再見積もり"],
+      "notes": "契約状態によって追加料金の扱いが変わる。"
+    }
+  ]
+}

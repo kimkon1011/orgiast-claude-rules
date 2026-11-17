@@ -198,7 +198,7 @@ export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, s
     let stdout = '';
     let stderr = '';
     let settled = false;
-    // 自動実行（fleet 指示の実行）は Sonnet（2026-11-15 kim 指示）。
+    // 自動実行（fleet 指示の実行）の既定は Opus（2026-11-17 kim 指示）。readOnly の定型確認は Sonnet。
     const args = ['-p', '--model', automationModel(), ...(resumeSessionId ? ['--resume', resumeSessionId] : [])];
     // Fleet mail is answer-only; existing directives retain their original behavior.
     if (readOnly) args.push('--tools', 'Read,Glob,Grep', '--allowedTools', 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--settings', '{"disableAllHooks":true}', '--model', 'sonnet');

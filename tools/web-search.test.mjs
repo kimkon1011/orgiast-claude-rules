@@ -284,6 +284,32 @@ test('台帳追記が失敗しても検索結果を返す', async () => {
   }
 });
 
+test('OpenRouter gpt-oss-120b:online は台帳に status と usd を残す', async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'web-search-oss-ledger-'));
+  try {
+    const usageFile = path.join(temp, 'executor-usage.jsonl');
+    const billed = await search('質問', {
+      provider: 'openrouter', openrouterApiKey: 'test', usageFile,
+      fetchImpl: async () => response({ choices: [{ message: { content: '回答' } }], usage: { prompt_tokens: 1000, completion_tokens: 2000, cost: 0.0017 } }),
+    });
+    assert.equal(billed.model, 'openai/gpt-oss-120b:online');
+    const row = JSON.parse(fs.readFileSync(usageFile, 'utf8').trim());
+    assert.equal(row.status, 'ok');
+    assert.equal(row.usd, 0.0017);
+    assert.equal(row.model, 'openai/gpt-oss-120b:online');
+    fs.writeFileSync(usageFile, '');
+    await search('質問', {
+      provider: 'openrouter', openrouterApiKey: 'test', usageFile,
+      fetchImpl: async () => response({ choices: [{ message: { content: '回答' } }], usage: { prompt_tokens: 1_000_000, completion_tokens: 0 } }),
+    });
+    const estimated = JSON.parse(fs.readFileSync(usageFile, 'utf8').trim().split('\n').at(-1));
+    assert.equal(estimated.status, 'ok');
+    assert.equal(estimated.usd, 0.15);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test('--provider openrouter で本文と annotations の URL を JSON で返す', async () => {
   const out = outputSink();
   let request;

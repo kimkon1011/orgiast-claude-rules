@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { main, extractBatch, candidateRow, evidencedDue, runDetect, askProvider } from './deadline-detect.mjs';
+import { seatCheck } from './lib/deadline-seat.mjs';
 import { collectGmail, collectDrive, readDriveText, collectLine, collectDiscord, wantsBody, trimBytes } from './lib/deadline-sources.mjs';
 import { DEFAULT_CONFIG, saveJson, dataPath } from './deadline-ledger.mjs';
 const document = { source: 'Gmail', sourceRef: 'mail:test', date: '2026-11-03T23:00:00Z', text: '明日までに回答してください。', mailbox: 'kim@orgiast.jp', threadId: 'thread' };
@@ -22,9 +23,12 @@ test('fixtureは6件を分類し、実ネットワークと書込なしで再現
 
 test('Gemini失敗はOpenRouterのみ、JSON不正もfallback', async () => {
   const calls = [];
-  const items = await extractBatch([document], { ask: async provider => { calls.push(provider); return provider === 'gemini' ? 'invalid' : { items: [item] }; } });
+  const { items, skipped } = await extractBatch([document], { ask: async provider => { calls.push(provider); return provider === 'gemini' ? 'invalid' : { items: [item] }; } });
   assert.equal(items.length, 1); assert.deepEqual(calls, ['gemini','openrouter']);
-  await assert.rejects(extractBatch([document], { ask: async () => ({ items: [{ ...item, sourceRef: 'invented' }] }) }), /入力にありません/);
+  // invented sourceRef is skipped, not thrown
+  const result2 = await extractBatch([document], { ask: async () => ({ items: [{ ...item, sourceRef: 'invented' }] }) });
+  assert.equal(result2.items.length, 0);
+  assert.equal(result2.skipped.length, 1);
 });
 
 test('プロバイダの既定fallbackを無効化し、OpenRouterは非Claudeモデルを固定', async t => {
@@ -41,8 +45,8 @@ test('相対日付はJST送信日基準、引用や根拠のない日付を台�
   assert.equal(evidencedDue('1週間以内に提出', document.date, '2026-11-11'), '2026-11-11');
   const invented = candidateRow({ ...item, due: '2026-12-31' }, document, now);
   assert.equal(invented.status, '候補'); assert.equal(invented.due, null);
-  assert.throws(() => candidateRow({ ...item, quote: '架空の日付' }, document, now), /原文/);
-  assert.equal(candidateRow({ ...item, confidence: 0.2 }, document, now), null);
+  assert.equal(candidateRow({ ...item, quote: '架空の日付' }, document, now).row, null);
+  assert.equal(candidateRow({ ...item, confidence: 0.2 }, document, now).row, null);
   assert.equal(candidateRow({ ...item, kind: '訴訟・法務', confidence: 0.2, due: null }, document, now).status, '候補');
 });
 
@@ -77,6 +81,79 @@ test('Drive OCRはコピーだけ削除、export失敗でも後始末、dry-run�
   assert.match(calls.at(-1)[0], /temporary$/); assert.equal(calls.at(-1)[1].method, 'DELETE');
   assert.equal(await readDriveText(file, { dryRun: true, request: () => assert.fail('mutation') }), '');
   assert.ok(Buffer.byteLength(trimBytes('あ'.repeat(30000))) <= 30000);
+});
+
+test('Driveの1ファイルreadDriveText失敗でも残りは処理されskipped・nextが返る', async () => {
+  const files = [
+    { id: 'ok-1', name: 'ok1.pdf', mimeType: 'application/pdf', modifiedTime: '2026-11-04T01:00:00Z', webViewLink: 'https://drive.google.com/file/d/ok-1/view' },
+    { id: 'fail-1', name: 'big.pdf', mimeType: 'application/pdf', modifiedTime: '2026-11-04T02:00:00Z', webViewLink: 'https://drive.google.com/file/d/fail-1/view' },
+    { id: 'ok-2', name: 'ok2.pdf', mimeType: 'application/pdf', modifiedTime: '2026-11-04T03:00:00Z', webViewLink: 'https://drive.google.com/file/d/ok-2/view' },
+  ];
+  const request = async (url, opts) => {
+    // files.list call
+    if (url.includes('drive/v3/files?') && !url.includes('/copy') && !url.includes('/export')) {
+      return { files, nextPageToken: 'next-token' };
+    }
+    // OCR copy: POST
+    if (opts?.method === 'POST' && url.includes('/copy')) {
+      const match = url.match(/files\/([^/]+)\/copy/);
+      if (match[1] === 'fail-1') throw new Error('The operation was aborted due to timeout');
+      return { id: `copy-${match[1]}` };
+    }
+    // export: GET
+    if (url.includes('/export')) {
+      return 'extracted text';
+    }
+    // DELETE temporary copy
+    if (opts?.method === 'DELETE') return null;
+    // ensureKimEditor permissions check
+    if (url.includes('/permissions')) return { permissions: [{ type: 'user', emailAddress: 'kim@orgiast.jp', role: 'owner' }] };
+    return {};
+  };
+  const result = await collectDrive({ user: 'kim@orgiast.jp', state: {}, now: new Date('2026-11-04T04:00:00Z'), request });
+  // 2 files succeeded
+  assert.equal(result.documents.length, 2);
+  assert.equal(result.documents[0].sourceRef, 'drive:ok-1');
+  assert.equal(result.documents[1].sourceRef, 'drive:ok-2');
+  // 1 file skipped
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].sourceRef, 'drive:fail-1');
+  assert.match(result.skipped[0].reason, /Drive読み取り失敗/);
+  // next watermark is saved
+  assert.ok(result.next);
+  assert.equal(result.next.pageToken, 'next-token');
+});
+
+test('Driveの1ファイルreadDriveText失敗でもrunDetectでskippedが積まれerrorsに入らない', async t => {
+  const home = homeFor(t), state = {}, rows = [], candidates = [];
+  const ledger = { read: async tab => [...(tab === '候補' ? candidates : rows)], append: async (newRows, tab) => (tab === '候補' ? candidates : rows).push(...newRows) };
+  const request = async (url, opts) => {
+    // files.list
+    if (url.includes('drive/v3/files?') && !url.includes('/copy') && !url.includes('/export')) {
+      return { files: [
+        { id: 'fail-1', name: 'big.pdf', mimeType: 'application/pdf', modifiedTime: '2026-11-04T02:00:00Z', webViewLink: 'https://drive.google.com/file/d/fail-1/view' },
+      ], nextPageToken: 'next-token' };
+    }
+    // OCR copy
+    if (opts?.method === 'POST' && url.includes('/copy')) throw new Error('The operation was aborted due to timeout');
+    // DELETE
+    if (opts?.method === 'DELETE') return null;
+    return {};
+  };
+  const sources = [{ key: 'drive:kim@orgiast.jp', load: () => collectDrive({ user: 'kim@orgiast.jp', state: {}, now: new Date('2026-11-04T04:00:00Z'), request }) }];
+  const params = { home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, state, sources, now: new Date('2026-11-04T04:00:00Z'), dryRun: false, ask: async () => ({ items: [] }), notify: async () => {} };
+  const result = await runDetect(params);
+  // No items added (no successful documents to extract from)
+  assert.equal(result.added, 0);
+  // errors is empty — file-level failure is skipped, not an error
+  assert.equal(result.errors.length, 0);
+  // skipped contains the file that timed out
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].source, 'drive:kim@orgiast.jp');
+  assert.match(result.skipped[0].reason, /Drive読み取り失敗/);
+  // next is saved in state (even though all files failed — the window advances)
+  assert.ok(state.sources['drive:kim@orgiast.jp']);
+  assert.equal(state.sources['drive:kim@orgiast.jp'].pageToken, 'next-token');
 });
 
 test('Driveの50件上限とLINE/Discordの新規行を読み込む', async t => {
@@ -127,13 +204,39 @@ test('不存在のfixtureで本番ソースへfallbackしない', async t => {
 test('鍵なし席はseat checkでスキップされる', async t => {
   const home=homeFor(t), output=[], heartbeats=[];
   fs.writeFileSync(path.join(home,'.claude.json'), JSON.stringify({oauthAccount:{emailAddress:'seisaku-team@orgiast.jp'}}));
-  const code = await main(['--now','2026-11-04'], { home, stdout: x => output.push(x), skipSeatCheck: false, search: () => assert.fail('no network'), heartbeat: async (info) => heartbeats.push(info), notify: () => assert.fail('no notify') });
+  // Inject a seatCheck that uses a non-existent key path so it never hits the real DWD key.
+  const code = await main(['--now','2026-11-04'], { home, stdout: x => output.push(x), skipSeatCheck: false, search: () => assert.fail('no network'), heartbeat: async (info) => heartbeats.push(info), notify: () => assert.fail('no notify'), seatCheck: (h) => seatCheck(h, { keyPath: path.join(home, 'nonexistent-key.json') }) });
   assert.equal(code, 0);
   const result = JSON.parse(output[0]);
   assert.equal(result.skip, true);
   assert.match(result.reason, /スキップ/);
   assert.equal(heartbeats.length, 1);
   assert.match(heartbeats[0].summary, /スキップ/);
+});
+
+test('引用不一致1件混ざってもdryRun:falseでnextが保存される', async t => {
+  const home = homeFor(t), state = {}, rows = [], candidates = [];
+  const ledger = { read: async tab => [...(tab === '候補' ? candidates : rows)], append: async (newRows, tab) => (tab === '候補' ? candidates : rows).push(...newRows) };
+  const goodDoc = { source: 'Gmail', sourceRef: 'mail:good', date: '2026-11-03T23:00:00Z', text: '明日までに回答してください。', mailbox: 'kim@orgiast.jp', threadId: 't1' };
+  const badDoc = { source: 'Gmail', sourceRef: 'mail:bad', date: '2026-11-03T23:00:00Z', text: '本日中に対応します。', mailbox: 'kim@orgiast.jp', threadId: 't2' };
+  const goodItem = { sourceRef: 'mail:good', title: '回答', due: '2026-11-05', kind: '回答・返信', action: '返信', assignee: 'kim', confidence: 0.9, quote: '明日までに回答してください。' };
+  const badItem = { sourceRef: 'mail:bad', title: '架空の期限', due: '2026-11-05', kind: '回答・返信', action: '対応', assignee: 'kim', confidence: 0.9, quote: '原文にない引用' };
+  const sources = [{ key: 'gmail', load: async () => ({ documents: [goodDoc, badDoc], next: { watermark: '2026-11-04' } }) }];
+  const params = { home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, state, sources, now, dryRun: false, ask: async () => ({ items: [goodItem, badItem], skipped: [] }), notify: async () => {} };
+  const result = await runDetect(params);
+  // Good item was added
+  assert.equal(result.added, 1);
+  // Bad item was skipped (quote mismatch), not in errors
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.skipped.length, 1);
+  assert.match(result.skipped[0].reason, /引用が原文にありません/);
+  assert.equal(result.skipped[0].sourceRef, 'mail:bad');
+  // dryRun:false — next cursor was saved in state
+  assert.deepEqual(state.sources.gmail, { watermark: '2026-11-04' });
+  // Good item was appended to rows
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].sourceId, 'mail:good');
+  assert.equal(rows[0].status, '未着手');
 });
 
 test('鍵持ちのkim席はfixtureモードで通常動作（fixtureはseat checkをスキップ）', async t => {

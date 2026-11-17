@@ -8,7 +8,7 @@
 //
 // 使い方（000 で）:
 //   node tools/beeper-gateway.mjs init-token   # 中継トークンを作る（既にあれば何もしない。値は表示しない）
-//   node tools/beeper-gateway.mjs serve        # 中継を起動（既定 0.0.0.0:23380）
+//   node tools/beeper-gateway.mjs serve [--host 127.0.0.1 --port 23381]  # 中継を起動（既定 0.0.0.0:23380。LAN 側を python 転送にするときは 127.0.0.1:23381）
 //   node tools/beeper-gateway.mjs check        # このPCから中継/ローカル経由で読み取り疎通を確認（送信しない）
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -187,8 +187,9 @@ async function main(argv = process.argv.slice(2)) {
     const tokenFile = gatewayTokenPath(home);
     if (!fs.existsSync(tokenFile)) { console.error('中継トークンがありません。先に init-token を実行してください'); return 2; }
     const gatewayToken = fs.readFileSync(tokenFile, 'utf8').trim();
-    const port = Number(process.env.BEEPER_GATEWAY_PORT || DEFAULT_PORT);
-    const host = process.env.BEEPER_GATEWAY_HOST || '0.0.0.0';
+    const arg = (f) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : undefined; };
+    const port = Number(arg('--port') || process.env.BEEPER_GATEWAY_PORT || DEFAULT_PORT);
+    const host = arg('--host') || process.env.BEEPER_GATEWAY_HOST || '0.0.0.0';
     const cidrs = process.env.BEEPER_GATEWAY_CIDRS ? process.env.BEEPER_GATEWAY_CIDRS.split(',') : DEFAULT_ALLOWED_CIDRS;
     const logPath = path.join(home, '.claude', 'logs', 'beeper-gateway.jsonl');
     const server = createGatewayServer({ gatewayToken, allowedCidrs: cidrs, logPath, readOnly: process.env.BEEPER_GATEWAY_READONLY === '1' });
@@ -200,7 +201,7 @@ async function main(argv = process.argv.slice(2)) {
     return new Promise(() => {});
   }
   if (cmd === 'check') return check();
-  console.error('使い方: node tools/beeper-gateway.mjs init-token | serve | check [検索語]');
+  console.error('使い方: node tools/beeper-gateway.mjs init-token | serve [--host H --port P] | check [検索語]');
   return 1;
 }
 

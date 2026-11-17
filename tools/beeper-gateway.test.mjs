@@ -118,7 +118,7 @@ test('中継: 送信はテキストのみ・本文はログに残さない・上
   });
 });
 
-test('resolveBeeperTarget: ローカル Beeper がなければ中継設定を使う', () => {
+test('resolveBeeperTarget: 中継設定があれば中継を優先（Beeper 本体は 000 だけ）', () => {
   const dir = tmp();
   const cfg = path.join(dir, 'gw.json');
   fs.writeFileSync(cfg, JSON.stringify({ base: 'http://192.168.0.4:23380', token: 't' }));
@@ -126,10 +126,9 @@ test('resolveBeeperTarget: ローカル Beeper がなければ中継設定を使
   const t = resolveBeeperTarget({ env: { BEEPER_GATEWAY_CONFIG: cfg }, appData: noLocal });
   assert.equal(t.via, 'gateway');
   assert.equal(t.baseUrl, 'http://192.168.0.4:23380');
-  const t2 = resolveBeeperTarget({ env: { BEEPER_GATEWAY_CONFIG: cfg, BEEPER_ACCESS_TOKEN: 'L' }, appData: noLocal });
-  assert.equal(t2.via, 'local');
-  const t3 = resolveBeeperTarget({ env: { BEEPER_GATEWAY_CONFIG: cfg, BEEPER_ACCESS_TOKEN: 'L', BEEPER_VIA_GATEWAY: '1' }, appData: noLocal });
-  assert.equal(t3.via, 'gateway');
+  assert.equal(resolveBeeperTarget({ env: { BEEPER_GATEWAY_CONFIG: cfg, BEEPER_ACCESS_TOKEN: 'L' }, appData: noLocal }).via, 'gateway');
+  assert.equal(resolveBeeperTarget({ env: { BEEPER_GATEWAY_CONFIG: cfg, BEEPER_ACCESS_TOKEN: 'L', BEEPER_PREFER_LOCAL: '1' }, appData: noLocal }).via, 'local');
+  assert.equal(resolveBeeperTarget({ env: { BEEPER_ACCESS_TOKEN: 'L' }, appData: noLocal }).via, 'local');
   assert.equal(resolveBeeperTarget({ env: {}, appData: noLocal }).via, 'none');
   assert.equal(getGatewayConfig({ env: {} }), null);
 });

@@ -14,6 +14,7 @@ import { resolveDiscordBotToken } from './notify-kim.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { collectPlaudForHub } from './plaud-to-tldv.mjs';
 import { isEntry } from './is-entry.mjs';
+import { resolveBeeperTarget } from './beeper-api.mjs';
 export const SOURCES = ['inquiry-sheet', 'gmail-kim', 'gmail-seisaku', 'discord', 'line', 'line-chat', 'plaud', 'tldv'];
 const DAY = 86400000;
 const iso = n => new Date(n).toISOString();
@@ -191,22 +192,20 @@ async function jsonFetch(url, init, fetchImpl) {
   return r.status === 204 ? {} : r.json();
 }
 export async function getBeeperToken(home) {
-  const envToken = process.env.BEEPER_ACCESS_TOKEN;
-  if (envToken) return envToken;
-  const dbPath = path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'BeeperTexts', 'account.db');
-  if (!fs.existsSync(dbPath)) throw new Error('Beeper Desktop API unavailable');
-  const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    const row = db.prepare('SELECT access_token FROM account LIMIT 1').get();
-    if (!row || !row.access_token) throw new Error('Beeper token invalid');
-    return row.access_token;
-  } finally { db.close(); }
+  return (await getBeeperTarget(home)).token;
 }
 
-async function beeperFetch(path, token, fetchImpl, signal) {
+// Beeper 本体は 000 だけ。他PCは 000 の中継（beeper-gateway.json）経由。000 自身はローカル。
+export async function getBeeperTarget(home) {
+  const t = resolveBeeperTarget();
+  if (t.token) return { token: t.token, baseUrl: t.baseUrl };
+  const dbPath = path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'BeeperTexts', 'account.db');
+  throw new Error(fs.existsSync(dbPath) ? 'Beeper token invalid' : 'Beeper Desktop API unavailable');
+}
+
+async function beeperFetch(path, token, fetchImpl, signal, base = 'http://localhost:23373') {
   try {
-    const r = await fetchImpl(`http://localhost:23373${path}`, { headers: { Authorization: `Bearer ${token}` }, signal });
+    const r = await fetchImpl(`${base.replace(/\/+$/, '')}${path}`, { headers: { Authorization: `Bearer ${token}` }, signal });
     if (!r.ok) {
       if (r.status === 401) throw Object.assign(new Error('Beeper token invalid'), { status: 401 });
       const body = await r.json().catch(() => ({}));
@@ -259,7 +258,9 @@ export async function collectSource(source, ctx) {
     return { messages, cursor: { since: all.length > messages.length ? since : until } };
   }
   if (source === 'line-chat') {
-    const token = ctx.beeperToken || await getBeeperToken(home);
+    const target = ctx.beeperToken ? { token: ctx.beeperToken, baseUrl: 'http://localhost:23373' } : await getBeeperTarget(home);
+    const token = target.token;
+    const beeperBase = target.baseUrl;
     const limit = (config.sourceLimits?.['line-chat'] ?? config.maxPerSource);
     const sinceMs = cursor.since ?? since;
     const end = cursor.end || until;
@@ -267,7 +268,7 @@ export async function collectSource(source, ctx) {
     const cases = ctx.cases || [];
 
     // /v1/accounts returns a direct array (not {items})
-    const accounts = await beeperFetch('/v1/accounts', token, fetchImpl, ctx.signal);
+    const accounts = await beeperFetch('/v1/accounts', token, fetchImpl, ctx.signal, beeperBase);
     const lineAccountIds = new Set((Array.isArray(accounts) ? accounts : (accounts.items || [])).filter(a =>
       a.network === 'LINE' || a.bridge?.type === 'line' || String(a.accountID || a.id).startsWith('line.')
     ).map(a => a.accountID || a.id));
@@ -277,7 +278,7 @@ export async function collectSource(source, ctx) {
     const chats = [];
     let hasMore, cursorToken, chatPages = 0;
     do {
-      const p = await beeperFetch(`/v1/chats?limit=${chatLimit}${cursorToken ? `&cursor=${encodeURIComponent(cursorToken)}&direction=before` : ''}`, token, fetchImpl, ctx.signal);
+      const p = await beeperFetch(`/v1/chats?limit=${chatLimit}${cursorToken ? `&cursor=${encodeURIComponent(cursorToken)}&direction=before` : ''}`, token, fetchImpl, ctx.signal, beeperBase);
       for (const c of (p.items || [])) {
         if (lineAccountIds.has(c.accountID) || c.network === 'line') chats.push(c);
       }
@@ -340,7 +341,7 @@ export async function collectSource(source, ctx) {
 
       do {
         const url = `/v1/chats/${chatId}/messages${pageCursor ? `?cursor=${encodeURIComponent(pageCursor)}&direction=before` : ''}`;
-        const p = await beeperFetch(url, token, fetchImpl, ctx.signal);
+        const p = await beeperFetch(url, token, fetchImpl, ctx.signal, beeperBase);
 
         for (const msg of (p.items || [])) {
           if (msg.isDeleted) continue;

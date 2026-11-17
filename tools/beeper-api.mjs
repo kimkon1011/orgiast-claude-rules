@@ -53,14 +53,16 @@ export function getGatewayConfig({ env = process.env, home = env.ORGIAST_HOME ||
 }
 
 /**
- * 接続先を決める。優先順: BEEPER_API_BASE 明示 → このPCの Beeper → 000 の中継（BEEPER_VIA_GATEWAY=1 なら中継を優先）。
+ * 接続先を決める。Beeper 本体は 000 だけに置く（2026-11-17 kim 決定）。
+ * 優先順: BEEPER_API_BASE 明示 → 000 の中継設定（beeper-gateway.json）→ このPCの Beeper（000 自身）。
+ * BEEPER_PREFER_LOCAL=1 のときだけ、中継設定があってもローカルを先に使う。
  * 戻り値の token は呼び出し側で表示しないこと。
  */
 export function resolveBeeperTarget({ env = process.env, appData = process.env.APPDATA } = {}) {
   const local = 'http://localhost:23373';
   if (env.BEEPER_API_BASE) return { via: 'env', baseUrl: env.BEEPER_API_BASE, token: getBeeperToken({ env, appData }) };
   const gw = getGatewayConfig({ env });
-  if (gw && env.BEEPER_VIA_GATEWAY === '1') return { via: 'gateway', baseUrl: gw.base, token: gw.token };
+  if (gw && env.BEEPER_PREFER_LOCAL !== '1') return { via: 'gateway', baseUrl: gw.base, token: gw.token };
   const token = getBeeperToken({ env, appData });
   if (token) return { via: 'local', baseUrl: local, token };
   if (gw) return { via: 'gateway', baseUrl: gw.base, token: gw.token };

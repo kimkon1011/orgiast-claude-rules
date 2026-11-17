@@ -106,7 +106,7 @@ kim-inboxは期限を先頭・残日数順・最大5行・各140字で表示。�
 
 未着手・対応中・延期の有効な期限を終日予定 `【期限】件名` としてupsert。7日前・1日前のpopup、説明に台帳URL。`extendedProperties.private.deadlineId` と決定的なイベントIDで重複を防ぐ。完了・不要は次の追跡時に予定を削除する。403では一度だけログを出し、`state.json` の `calendarSync:false` で以後停止する。権限修復を検証した担当者がこの値を削除した場合に再開する。
 
-毎回ローカルheartbeatを記録し、`logs/deadline-detect.log` / `logs/deadline-watch.log` とタスク結果で稼働確認する。ヘルス期待は36時間。部分失敗も成功扱いにせず終了コード1。初回は `LastRunTime` と `LastTaskResult`、heartbeatの `ok` を合わせて確認する。
+毎回ローカルheartbeatを記録し、`logs/deadline-detect.log` / `logs/deadline-watch-app.log`（vbs リダイレクト先は `deadline-watch.log`） とタスク結果で稼働確認する。ヘルス期待は36時間。部分失敗も成功扱いにせず終了コード1。初回は `LastRunTime` と `LastTaskResult`、heartbeatの `ok` を合わせて確認する。
 
 ## 登録と配布
 

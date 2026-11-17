@@ -1250,11 +1250,16 @@ if (isEntry(import.meta.url)) {
       if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
       // loadGuard blocked all candidates → not a clean run
       if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) process.exitCode = 1;
+      // 連続失敗カウンター: API エラーが連続 8 回超でのみ exit 1（一時的ネットワーク不調は exit 0）
+      if (recordApiResult(base, result.apiError)) process.exitCode = 1;
     } else {
       const result = await reopenLost({ ...opts, checkClaude: true });
+      const base = opts.base || path.join(os.homedir(), '.claude');
       console.log(JSON.stringify(result));
       if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
       if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) process.exitCode = 1;
+      // 連続失敗カウンター: API エラーが連続 8 回超でのみ exit 1（一時的ネットワーク不調は exit 0）
+      if (recordApiResult(base, result.apiError)) process.exitCode = 1;
     }
   } catch (error) { console.log(JSON.stringify({ error: error.message })); process.exitCode = 1; }
 }

@@ -1,0 +1,19 @@
+## 問題
+`OrgiastDeadlineDetect` タスクが常に `ok: false` + 「鍵なし席のためスキップ」と報告し、修復通知が発行され続けている。
+
+## 原因
+`deadline-detect.mjs` の `main()` 関数に2つのバグ：
+1. 席なしスキップ時も `ok = false`（初期値）のまま exit 0 する → heartbeat が「失敗」と報告
+2. 実行中エラー（Gmail 403、LLM抽出失敗、fetch failed）が発生しても `resultSummary` が設定されず、finally 節の `ok ? '期限検出完了' : '鍵なし席のためスキップ'` が常に後者を選ぶ
+
+## 修正
+1. 座席なしスキップ時: `ok = true` + `resultSummary = '鍵なし席のためスキップ'`
+2. エラー検出時: `resultSummary = '期限検出エラー: source名, ...'`
+3. finally 節: `resultSummary || (ok ? 通常 : フォールバック)` で正しい理由を優先
+4. ログ行も `ok ? 'ok' : resultSummary` に変更
+
+## 検証
+- `seatCheck()` が `kim: false` を返す場合 → `ok: true` として報告
+- エラー有りの実行 → `ok: false` + 実際のエラー原因がsummaryに
+- `--dry-run --fixture` テストは従来通り pass
+🤖 Generated with [Claude Code](https://claude.com/claude-code)

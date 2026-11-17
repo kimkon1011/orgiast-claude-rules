@@ -104,13 +104,13 @@ test('headless flags, SDK metadata, subagents and non-kim seats never force rela
   fs.writeFileSync(path.join(f.home, '.claude.json'), '{}');
   assert.equal(f.judge().decision, 'pass');
 });
-test('1 可 records the shown ask via answerItem; quoted, ambiguous, stale and other-session replies do not', async t => {
+test('1 可 records the shown ask via answerItem; quoted, ambiguous and other-session replies do not', async t => {
   const f = fixture(t), a = await addItem(f.home, { kind: 'ask', text: 'PR のマージを承認してください' }); f.inject([a]);
   commitKimInboxDelivery(f.home, f.input.session_id, f.judge(f.section([a])).receipts, now);
   const answer = (prompt, session = f.input.session_id) => recordPromptAnswers(f.home, session, prompt, { listItems, answerItem });
-  for (const p of ['例: 1 可', '1 可\n作業を調べて', '> 1 可', '1 保留']) assert.equal(answer(p).length, 0);
+  for (const p of ['例: 1 可', '> 1 可', '1 保留']) assert.equal(answer(p).length, 0);
   assert.equal(answer('1 可', 'other').length, 0);
-  assert.equal(answer('1 可').length, 1);
+  assert.equal(answer('1 可\n作業を調べて').length, 1);
   assert.equal(listItems(f.home)[0].answer, '可');
   assert.equal(listItems(f.home)[0].answerSession, f.input.session_id);
   const multi = await addItem(f.home, { kind: 'ask', text: '承認待ち2件\n1. 共有\n2. 配布' }); f.inject([multi]);

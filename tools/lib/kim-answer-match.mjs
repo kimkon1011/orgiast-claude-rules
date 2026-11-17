@@ -35,6 +35,7 @@ export function presentedTargets(candidates, assistantText) {
 const subjectWords = title => String(title || '').split(/[\s:：、。・「」『』【】()（）／/]+|から|について|して|する|です|ます|[のをはがにとへ]/)
   .filter(word => [...word].length >= 3 && !/^(確認|判断|承認|返事|お願い|この件|この作業|ください|してよい|よいですか)/.test(word));
 const keyOf = target => `${target.id}#${target.part || ''}`;
+const standaloneReply = text => /^(?:はい[、。\s]*)?(?:可|不可|否|不要|否認|承認|はい|いいえ|OK|完了|良い|よい|いいよ|お願い(?:します)?|(?:そのまま|それで|この件は|上の件は)?(?:進めて|進める|やって|続けて|入れて|入れる|中止して|やめて)(?:ください)?)[。.!！\s]*$/i.test(text);
 
 export function matchPromptAnswers(prompt, targets, { assistantText = '' } = {}) {
   const text = visibleAnswerText(prompt), matches = [], uncertain = [];
@@ -70,7 +71,8 @@ export function matchPromptAnswers(prompt, targets, { assistantText = '' } = {})
       if (new Set(named.map(keyOf)).size === 1) selected = named;
       else if (named.length) { uncertain.push(...named); continue; }
       // Only a short, standalone reply can refer implicitly to one presented ask.
-      else if (targets.length === 1 && text.length <= 80 && segments.length === 1) selected = targets;
+      else if (targets.length === 1 && segments.length === 1 && (standaloneReply(text)
+        || (/^(?:こちら)?(?:今晩|今夜)じゃなく今からやって[。！!]*$/.test(text) && /今晩|今夜|夜間/.test(targets[0].title + assistantText)))) selected = targets;
       else if (targets.length) { uncertain.push(...targets); continue; }
     }
     if (!selected.length) continue;

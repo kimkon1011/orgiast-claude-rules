@@ -21,6 +21,64 @@ function maxClaudeFromEnv(env) {
 }
 const BASE = 'https://api.anthropic.com/v1/code/sessions';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Retry with exponential backoff for transient network failures.
+// Base delay 1s, double each retry: 1s, 2s, 4s. Max 3 retries before giving up.
+const RETRY_MAX = 3;
+const RETRY_BASE_MS = 1000;
+export async function fetchWithRetry(url, init, retries = RETRY_MAX, {
+  timeoutMs = 30000,
+  deadline = Infinity,
+  nowFn = Date.now,
+  fetchImpl = fetch,
+} = {}) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (nowFn() >= deadline) throw Error('fetchWithRetry deadline exceeded');
+    try {
+      const signal = AbortSignal.timeout(timeoutMs);
+      const response = await fetchImpl(url, { ...init, signal });
+      if (response.ok) return response;
+      // 429/503/502 are transient; other 4xx are likely permanent.
+      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+        return response; // permanent error, don't retry
+      }
+      if (attempt < retries) {
+        await sleep(RETRY_BASE_MS * Math.pow(2, attempt));
+        continue;
+      }
+      return response; // last attempt, return whatever we got
+    } catch (e) {
+      if (attempt < retries) await sleep(RETRY_BASE_MS * Math.pow(2, attempt));
+      else throw e;
+    }
+  }
+  throw Error('fetchWithRetry exhausted');
+}
+// 連続失敗カウンターを ~/.claude/reopen-lost-sessions-fail-state.json で管理。
+// 連続 8 回（約 2 時間）以上失敗した場合のみ exit 1 を返す（監視が真の停止を検出できるようにする）。
+export const FAIL_STATE_FILE = 'reopen-lost-sessions-fail-state.json';
+export const CONSECUTIVE_FAIL_THRESHOLD = 8;
+export function readFailState(base) {
+  try { return readJson(path.join(base, FAIL_STATE_FILE), { consecutiveFails: 0, lastFailAt: null }); }
+  catch { return { consecutiveFails: 0, lastFailAt: null }; }
+}
+export function writeFailState(base, state) {
+  fs.writeFileSync(path.join(base, FAIL_STATE_FILE), JSON.stringify(state) + '\n');
+}
+export function recordApiResult(base, apiError, nowDate = new Date().toISOString()) {
+  const state = readFailState(base);
+  if (apiError) {
+    state.consecutiveFails = (state.consecutiveFails || 0) + 1;
+    state.lastFailAt = nowDate;
+    writeFailState(base, state);
+    return state.consecutiveFails >= CONSECUTIVE_FAIL_THRESHOLD;
+  }
+  if (state.consecutiveFails > 0) {
+    state.consecutiveFails = 0;
+    state.lastFailAt = null;
+    writeFailState(base, state);
+  }
+  return false;
+}
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
   catch (e) { if (e.code === 'ENOENT' && fallback !== undefined) return fallback; throw e; }

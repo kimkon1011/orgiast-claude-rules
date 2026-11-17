@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { expectedPeriodHours, auditTasks, healTasks, unresolvedTasks, runAudit, launchAudit, notifyUnresolved, main } from './unattended-job-audit.mjs';
+import { stamp, expectedPeriodHours, auditTasks, healTasks, unresolvedTasks, runAudit, launchAudit, notifyUnresolved, main } from './unattended-job-audit.mjs';
 import { listScheduledTaskDetails, enableScheduledTask, startScheduledTask } from './lib/scheduled-task.mjs';
 const now = Date.parse('2026-10-18T20:00:00+09:00');
 const daily = { type: 'MSFT_TaskDailyTrigger', daysInterval: 1 };
@@ -55,11 +55,25 @@ test('healing once per day, enable then start, converge only once and catch fail
   const result = await healTasks([{ name: 'z', kind: 'failed' }], { ...options, startScheduledTask: () => { throw new Error('private'); } });
   assert.equal(result[0].error, '修復の起動に失敗'); assert.ok(state.heals.z);
 });
-test('next audit escalates even when the original finding disappeared; successful progress clears', () => {
+test('next audit clears a healthy task or successful progress; missing task stays unresolved', () => {
   const state = { heals: { OrgiastCostImproveLoop: { at: new Date(now).toISOString(), kind: 'missed' } } };
-  assert.equal(unresolvedTasks([task()], [], state, now + 1).length, 1);
+  assert.equal(unresolvedTasks([task()], [], state, now + 1).length, 0);
   assert.equal(unresolvedTasks([task({ lastRunTime: new Date(now + 1).toISOString() })], [], state, now + 2).length, 0);
   assert.equal(unresolvedTasks([], [], state, now + 1).length, 1);
+});
+test('healthy task clears heal even when lastRunTime is unparseable', () => {
+  const state = { heals: { OrgiastCostImproveLoop: { at: new Date(now).toISOString(), kind: 'failed' } } };
+  assert.deepEqual(unresolvedTasks([task({ lastRunTime: 'not-a-date', lastTaskResult: 0 })], [], state, now + 1), []);
+});
+test('failed task remains unresolved after heal', () => {
+  const state = { heals: { OrgiastCostImproveLoop: { at: new Date(now).toISOString(), kind: 'failed' } } };
+  assert.equal(unresolvedTasks([task({ lastRunTime: 'not-a-date', lastTaskResult: 1 })], [], state, now + 1).length, 1);
+});
+test('stamp parses ISO, .NET JSON, local scheduler time, and preserves never-run dates', () => {
+  assert.equal(stamp('2026-11-17T15:02:47Z'), Date.parse('2026-11-17T15:02:47Z'));
+  assert.equal(stamp('/Date(1763391767000)/'), 1763391767000);
+  assert.equal(stamp('2026/11/18 0:02:47'), new Date(2026, 10, 18, 0, 2, 47).getTime());
+  assert.ok(new Date(stamp('1999/11/30 0:00:00')).getUTCFullYear() <= 1999);
 });
 test('persistent repair, unresolved daily notification, recovery and dry-run', async t => {
   const home = temp(t), notifications = [], starts = [];

@@ -129,30 +129,46 @@ export async function judge(input, { ledgerPath = shareLedgerPath(), now = Date.
  */
 export async function checkAnyoneOnDrive(fileId, dependencies = {}) {
   const { getDriveToken } = await import('./lib/drive-auth.mjs');
+  const { gwsFetch } = await import('./lib/gws-proxy.mjs');
   const getToken = dependencies.getToken ?? getDriveToken;
   const fetchImpl = dependencies.fetchImpl ?? globalThis.fetch;
+  // getDriveToken may return a GWS routing marker instead of a Google token.
+  const apiFetch = dependencies.apiFetch ?? ((url, options) => gwsFetch(url, options, { fetchImpl }));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), dependencies.timeoutMs ?? 8000);
   const attempts = [];
+  const failure = error => {
+    const status = error?.status ?? /\bHTTP (\d{3})\b/.exec(error?.message ?? '')?.[1];
+    return status ? `HTTP ${status}` : controller.signal.aborted || ['AbortError', 'TimeoutError'].includes(error?.name) ? 'timeout' : 'error';
+  };
+  const tokenFor = (impersonate, label) => getToken({
+    impersonate, signal: controller.signal,
+    fetchImpl: async (...args) => {
+      const res = await fetchImpl(...args);
+      if (!res.ok) attempts.push(`${label}=HTTP ${res.status}`);
+      return res;
+    },
+  });
   const request = async (label, url, options = {}) => {
     try {
-      const res = await fetchImpl(url, { ...options, signal: controller.signal });
+      const fetcher = options.headers ? apiFetch : fetchImpl;
+      const res = await fetcher(url, { ...options, signal: controller.signal });
       attempts.push(`${label}=HTTP ${res.status}`);
       return res;
     } catch (error) {
-      attempts.push(`${label}=${error?.name === 'AbortError' ? 'timeout' : 'fetch-error'}`);
+      attempts.push(`${label}=${failure(error)}`);
       return null;
     }
   };
   try {
     try {
-      const readerToken = await getToken({ impersonate: 'seisaku-team@orgiast.jp', signal: controller.signal, fetchImpl });
+      const readerToken = await tokenFor('seisaku-team@orgiast.jp', 'reader-token');
       const metaRes = await request('dwd-files.get', `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=owners(emailAddress)&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${readerToken}` } });
       if (metaRes?.ok) {
         const meta = await metaRes.json();
         const owner = meta.owners?.map(o => o.emailAddress).find(email => /@orgiast\.jp$/i.test(email));
         if (owner) {
-          const ownerToken = await getToken({ impersonate: owner, signal: controller.signal, fetchImpl });
+          const ownerToken = owner === 'seisaku-team@orgiast.jp' ? readerToken : await tokenFor(owner, 'owner-token');
           const permissionRes = await request('owner-permissions.list', `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/permissions?fields=permissions(type,role)&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${ownerToken}` } });
           if (permissionRes?.ok) {
             const data = await permissionRes.json();
@@ -161,7 +177,7 @@ export async function checkAnyoneOnDrive(fileId, dependencies = {}) {
         } else attempts.push('owner=external-or-missing');
       }
     } catch (error) {
-      attempts.push(`dwd=${error?.name === 'AbortError' ? 'timeout' : 'error'}`);
+      attempts.push(`dwd=${failure(error)}`);
     }
 
     for (const [label, url] of [

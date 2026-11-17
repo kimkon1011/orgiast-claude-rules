@@ -107,17 +107,25 @@ test('checkAnyone failure blocks with failure reason', async t => {
   assert.equal(r.decision, 'block');
   assert.match(r.reason, /リンク公開かの確認に失敗/);
 });
-test('DWD owner permissions success returns true', async () => {
+test('DWD owner permissions success passes using the owner subject', async t => {
+  const opts = fixture(t);
+  const subjects = [];
   const fetchImpl = async url => url.includes('/permissions?')
-    ? new Response(JSON.stringify({ permissions: [{ type: 'anyone', role: 'reader' }] }), { status: 200 })
-    : new Response(JSON.stringify({ owners: [{ emailAddress: 'owner@orgiast.jp' }] }), { status: 200 });
-  assert.equal(await checkAnyoneOnDrive('file123', { getToken: async () => 'token', fetchImpl }), true);
+    ? Response.json({ permissions: [{ type: 'anyone', role: 'reader' }] })
+    : Response.json({ owners: [{ emailAddress: 'owner@orgiast.jp' }] });
+  const checkAnyone = id => checkAnyoneOnDrive(id, {
+    getToken: async ({ impersonate }) => { subjects.push(impersonate); return 'token'; }, fetchImpl,
+  });
+  assert.equal((await judge(message(), { ...opts, checkAnyone })).decision, 'pass');
+  assert.deepEqual(subjects, ['seisaku-team@orgiast.jp', 'owner@orgiast.jp']);
 });
-test('DWD failure and anonymous success returns true', async () => {
+test('DWD failure and anonymous success passes', async t => {
+  const opts = fixture(t);
   const fetchImpl = async url => url.startsWith('https://www.googleapis.com/')
     ? new Response(JSON.stringify({ error: { message: 'forbidden' } }), { status: 403 })
     : new Response('', { status: url.includes('/file/d/') ? 200 : 404 });
-  assert.equal(await checkAnyoneOnDrive('file123', { getToken: async () => 'token', fetchImpl }), true);
+  const checkAnyone = id => checkAnyoneOnDrive(id, { getToken: async () => 'token', fetchImpl });
+  assert.equal((await judge(message(), { ...opts, checkAnyone })).decision, 'pass');
 });
 test('all methods failure blocks and exposes HTTP statuses', async t => {
   const opts = fixture(t);
@@ -128,4 +136,77 @@ test('all methods failure blocks and exposes HTTP statuses', async t => {
   assert.match(r.reason, /dwd-files\.get=HTTP 403/);
   assert.match(r.reason, /anonymous-file=HTTP 404/);
   assert.match(r.reason, /anonymous-folder=HTTP 404/);
+});
+
+test('owner confirms limited file returns false and blocks', async t => {
+  const opts = fixture(t);
+  const fetchImpl = async url => {
+    assert.ok(url.startsWith('https://www.googleapis.com/'));
+    return Response.json(url.includes('/permissions?')
+      ? { permissions: [{ type: 'user', role: 'owner' }, { type: 'group', role: 'reader' }] }
+      : { owners: [{ emailAddress: 'seisaku-team@orgiast.jp' }] });
+  };
+  const checkAnyone = id => checkAnyoneOnDrive(id, { getToken: async () => 'token', fetchImpl });
+  assert.equal(await checkAnyone('file123'), false);
+  assert.equal((await judge(message(), { ...opts, checkAnyone })).decision, 'block');
+});
+
+test('permissions 403 falls back to anonymous folder without credentials or redirects', async () => {
+  const fetchImpl = async (url, options) => {
+    if (url.includes('/permissions?')) return new Response('', { status: 403 });
+    if (url.startsWith('https://www.googleapis.com/')) return Response.json({ owners: [{ emailAddress: 'owner@orgiast.jp' }] });
+    assert.equal(options.headers, undefined);
+    assert.equal(options.redirect, 'manual');
+    return url.includes('/file/d/')
+      ? new Response('', { status: 302, headers: { location: 'https://accounts.google.com/ServiceLogin' } })
+      : new Response('', { status: 200 });
+  };
+  assert.equal(await checkAnyoneOnDrive('file123', { getToken: async () => 'token', fetchImpl }), true);
+});
+
+test('GWS failures retain HTTP status and login locations do not pass even with 200', async t => {
+  const opts = fixture(t);
+  const checkAnyone = id => checkAnyoneOnDrive(id, {
+    getToken: async () => 'orgiast-server-side-gws',
+    apiFetch: async () => { throw Object.assign(new Error('channel gws: HTTP 403'), { status: 403 }); },
+    fetchImpl: async (_url, options) => {
+      assert.equal(options.headers, undefined);
+      return new Response('', { status: 200, headers: { location: 'https://accounts.google.com/ServiceLogin' } });
+    },
+  });
+  const result = await judge(message(), { ...opts, checkAnyone });
+  assert.equal(result.decision, 'block');
+  assert.match(result.reason, /dwd-files\.get=HTTP 403/);
+});
+
+test('token endpoint HTTP status survives token error without leaking its message', async () => {
+  await assert.rejects(checkAnyoneOnDrive('file123', {
+    getToken: async ({ fetchImpl, signal }) => {
+      await fetchImpl('https://oauth2.googleapis.com/token', { signal });
+      throw new Error('sensitive token response');
+    },
+    fetchImpl: async url => new Response('', { status: url.includes('oauth2') ? 401 : 404 }),
+  }), error => {
+    assert.match(error.message, /reader-token=HTTP 401/);
+    assert.doesNotMatch(error.message, /sensitive/);
+    return true;
+  });
+});
+
+test('one deadline covers token and subsequent requests and blocks on timeout', async t => {
+  const opts = fixture(t);
+  let sharedSignal;
+  const checkAnyone = id => checkAnyoneOnDrive(id, {
+    timeoutMs: 20,
+    getToken: async ({ signal }) => { sharedSignal = signal; return 'token'; },
+    fetchImpl: async (_url, { signal }) => {
+      assert.equal(signal, sharedSignal);
+      signal.throwIfAborted();
+      return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    },
+  });
+  const result = await judge(message(), { ...opts, checkAnyone });
+  assert.equal(result.decision, 'block');
+  assert.match(result.reason, /dwd-files\.get=timeout/);
+  assert.match(result.reason, /anonymous-folder=timeout/);
 });

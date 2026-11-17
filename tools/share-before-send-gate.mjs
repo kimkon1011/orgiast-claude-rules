@@ -2,6 +2,8 @@
 export const GATE_CONTRACT = {"name":"share-before-send-gate","remedies":[{"kind":"repo-file","ref":"tools/drive-share.mjs"}]};
 import fs from 'node:fs';
 import path from 'node:path';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { extractFileId, shareLedgerPath } from './lib/drive-share.mjs';
 import { extractAddresses } from './internal-recipient-gmail-guard.mjs';
 import { readStdin } from './transcript-tail.mjs';
@@ -48,7 +50,24 @@ function transcriptIds(raw) {
   return ids;
 }
 
-export function judge(input, { ledgerPath = shareLedgerPath(), now = Date.now() } = {}) {
+/**
+ * checkAnyone(fileId) => Promise<boolean> を並列実行し、
+ * { public: string[], publicSet: Set<string>, failures: string[] } を返す。
+ * checkFn が throw した fileId は failures に入る。
+ */
+async function awaitOrThrow(checkFn, fileIds) {
+  const results = await Promise.allSettled(fileIds.map(id =>
+    checkFn(id).then(isPublic => ({ id, isPublic })).catch(() => { throw id; })
+  ));
+  const pub = [], failures = [];
+  for (const r of results) {
+    if (r.status === 'fulfilled') { if (r.value.isPublic) pub.push(r.value.id); }
+    else failures.push(r.reason);
+  }
+  return { publicIds: pub, publicSet: new Set(pub), failures };
+}
+
+export async function judge(input, { ledgerPath = shareLedgerPath(), now = Date.now(), checkAnyone } = {}) {
   if (!input || typeof input !== 'object') throw new Error('hook 入力が不正です');
   if (!TARGET.test(input.tool_name ?? '')) return { decision: 'pass' };
   const args = input.tool_input ?? {};
@@ -84,13 +103,51 @@ export function judge(input, { ledgerPath = shareLedgerPath(), now = Date.now() 
   const shared = input.transcript_path && fs.existsSync(input.transcript_path) ? transcriptIds(fs.readFileSync(input.transcript_path, 'utf8')) : new Set();
   const missing = pending.filter(id => !shared.has(id));
   if (!missing.length) return { decision: 'pass' };
+  // Anyone-link check: 既に「リンクを知っている全員が閲覧可」なら毎回の個別共有は不要。
+  // 照会失敗は fail-closed（block）だが、理由に「リンク公開かの確認に失敗」を追加する。
+  if (checkAnyone) {
+    const anyoneChecks = await awaitOrThrow(checkAnyone, missing);
+    if (anyoneChecks.failures.length) {
+      return { decision: 'block', reason: anyoneChecks.failures.map(id => `リンク公開かの確認に失敗: node tools/drive-share.mjs --id ${id} --to <相手のメール>（社内は編集者・社外はコメント可が既定）。社員宛てなら --to syain@orgiast.jp で全社員に共有できます。共有済みのファイルなら同コマンドで記録されます（既存権限はスキップ）。`).join('\n') };
+    }
+    const anyoneIds = anyoneChecks.publicIds;
+    if (anyoneIds.length) {
+      // Cache に anyone 公開判定を追記
+      const row = anyoneIds.map(fileId => JSON.stringify({ ts: new Date(now).toISOString(), fileId, emails: ['anyone-with-link'], via: 'anyone-link-check' }) + '\n').join('');
+      mkdirSync(dirname(ledgerPath), { recursive: true });
+      appendFileSync(ledgerPath, row);
+    }
+    const afterAnyone = missing.filter(id => !anyoneChecks.publicSet.has(id));
+    if (!afterAnyone.length) return { decision: 'pass' };
+    return { decision: 'block', reason: afterAnyone.map(id => `送信前に相手へ共有してください: node tools/drive-share.mjs --id ${id} --to <相手のメール>（社内は編集者・社外はコメント可が既定）。社員宛てなら --to syain@orgiast.jp で全社員に共有できます。共有済みのファイルなら同コマンドで記録されます（既存権限はスキップ）。`).join('\n') };
+  }
   return { decision: 'block', reason: missing.map(id => `送信前に相手へ共有してください: node tools/drive-share.mjs --id ${id} --to <相手のメール>（社内は編集者・社外はコメント可が既定）。社員宛てなら --to syain@orgiast.jp で全社員に共有できます。共有済みのファイルなら同コマンドで記録されます（既存権限はスキップ）。`).join('\n') };
 }
+/**
+ * Drive API でファイルの permissions を取得し、type=anyone かつ role が reader 以上の共有があれば true を返す。
+ * 3秒タイムアウト。
+ */
+export async function checkAnyoneOnDrive(fileId) {
+  const { getDriveToken, driveApi } = await import('./lib/drive-auth.mjs');
+  const token = await getDriveToken({ asServiceAccount: true });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3000);
+  try {
+    const res = await driveApi(token, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/permissions?fields=permissions(id,type,role)&supportsAllDrives=true`, { signal: controller.signal });
+    clearTimeout(timer);
+    const data = await res.json();
+    return (data.permissions ?? []).some(p => p.type === 'anyone' && ['reader', 'commenter', 'writer', 'fileOrganizer', 'organizer', 'owner'].includes(p.role));
+  } catch {
+    clearTimeout(timer);
+    throw new Error('リンク公開かの確認に失敗');
+  }
+}
+
 export async function main() {
   try {
     const raw = await readStdin();
     if (!raw.trim()) return;
-    const result = judge(JSON.parse(raw));
+    const result = await judge(JSON.parse(raw), { checkAnyone: checkAnyoneOnDrive });
     if (result.decision === 'block') console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: result.reason } }));
   } catch (error) { console.error(`[SHARE-BEFORE-SEND] 判定をスキップ: ${String(error.message).replace(/[\r\n]+/g, ' ')}`); }
 }

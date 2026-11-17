@@ -478,3 +478,41 @@ test('DELEGATION_STARTED 統合テスト: 委譲起動直後の完了待ちはW�
     assert.deepEqual(results.map(found => found.pattern), [], `DELEGATION_STARTED: "${text.slice(0, 40)}..." はWとして検出されないべき`);
   }
 });
+
+// ================================================================
+// 2026-11-18: HANDOFF_NONE_LINE + LANE_NAME 除外（実測 e88a780c）
+// フッターだけのメッセージ「次に kim がすること: なし（Codex の生成完了を待っています）」
+// が W に当たらないことと、人の作業がある同型文は引き続き検出されること
+// ================================================================
+test('kimの作業なし＋レーン待ちのフッターはWと誤検出しない（e88a780c / 実測原文）', () => {
+  // 実測例: 3行フッターだけのメッセージ
+  const text = '次に kim がすること: なし（Codex の生成完了を待っています） この後の自動進行: Codex 完了後に検証します';
+  const results = detect(text);
+  assert.deepEqual(results.map(found => found.pattern), [], 'HANDOFF_NONE_LINE + LANE_NAME ガードで除外されるべき');
+});
+
+test('kimの作業なし＋レーン待ち: バリエーションも除外される', () => {
+  for (const text of [
+    '次に kim がすること: なし（DeepSeek の結果を待っています）',
+    '次に kim がすること: 特になし（codex-do の完了待ちです）',
+    '次に kim がすること: ありません（Gemini の完了を待っています）',
+    '次に kim がすること: 無し（サブエージェントの完了を待っています）',
+  ]) {
+    const results = detect(text);
+    assert.deepEqual(results.map(found => found.pattern), [], `バリエーション: "${text}" はWとして検出されないべき`);
+  }
+});
+
+test('kimの作業あり＋レーン待ちは従来どおりWとして検出される', () => {
+  // kim の作業が「なし」ではないので除外されない
+  const text = '次に kim がすること: 差分をレビューしてください。Codex の完了を待っています';
+  const results = detect(text);
+  assert.ok(results.some(d => d.pattern === 'W'), 'kimの作業ありはWとして検出されるべき');
+});
+
+test('kimの作業なしでもレーン名が無ければWとして検出される', () => {
+  // LANE_NAME に一致しないので除外されない
+  const text = '次に kim がすること: なし（完了を待っています）';
+  const results = detect(text);
+  assert.ok(results.some(d => d.pattern === 'W'), 'レーン名が無ければWとして検出されるべき');
+});

@@ -108,6 +108,12 @@ const INBOX_RELAY = /(?:【受信箱】|起きたこと[:：]|判断してほし
 // 委譲を起動したと明記した語が一致位置の手前 120 字以内にある場合だけ採用しない。
 // （委譲の報告が無いまま待つ形 — 2026-10-21 の 7 ターン言い換え待機 — は従来どおり検出する）
 const DELEGATION_STARTED = /(?:codex-do|cheap-code|llm-ask|指示書を(?:作成|書|渡|用意)|(?:Codex|Gemini|DeepSeek|Groq|OpenRouter|Mistral|サブエージェント)[ \t]*(?:に|へ|を)[^。\n]{0,24}(?:委譲|依頼|渡し|投げ|起動|実行させ))/;
+// 2026-11-18 実測（e88a780c / 2026-11-17T04:04:04.337Z）: 3行フッターだけのメッセージ
+// 「次に kim がすること: なし（Codex の生成完了を待っています）」が W に当たっていた。
+// 人の作業がゼロ（なし）で、待つ相手が自動レーンなら、委譲済みの正当な待機なので除外する。
+// 委譲の起動語が同じメッセージに無くてもよい（フッターだけの応答は起動を別ターンで報告している）。
+const HANDOFF_NONE_LINE = /次に\s*kim\s*がすること[:：][ \t*_`]*(?:なし|特になし|ありません|無し)/;
+const LANE_NAME = /(Codex|codex-do|cheap-code|llm-ask|Gemini|DeepSeek|Groq|OpenRouter|Mistral|Kimi|GLM|サブエージェント)/;
 const EXTERNAL_WAIT_SUBJECT = /(お客様|客様|顧客|取引先|先方|問い?合わ?せ|サブエージェント)/;
 // 2026-11-02T04:31:09.948Z（handoff-audit:9b11ce35d2bc6d3a / 6b41b59b / W）の原文は
 // 「雇保の喪失届は、10月度の給与データが取り込まれるのを待っている状態です」で拾えたが、
@@ -138,6 +144,7 @@ const W  = {
       if (REPLY_WAIT.test(match[0]) && EXTERNAL_WAIT_SUBJECT.test(text.slice(Math.max(0, match.index - 60), match.index))) continue;
       if (INBOX_RELAY.test(text.slice(Math.max(0, match.index - 200), match.index))) continue;
       if (DELEGATION_STARTED.test(text.slice(Math.max(0, match.index - 120), match.index))) continue;
+      if (LANE_NAME.test(text.slice(Math.max(0, match.index - 60), match.index + match[0].length + 60)) && HANDOFF_NONE_LINE.test(text.slice(Math.max(0, match.index - 200), match.index))) continue;
       if (DATA_WAIT_RE.test(match[0]) && EXTERNAL_WAIT_SUBJECT.test(text.slice(Math.max(0, match.index - 40), match.index))) continue;
       return match;
     }

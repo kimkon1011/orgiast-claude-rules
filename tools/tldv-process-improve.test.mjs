@@ -1115,6 +1115,9 @@ test('writeImprovementSheet uses batchUpdate with 3 ranges A:B / D:E / F:H', asy
   let capturedBody = null;
   const mockFetch = async (url, init) => {
     if (url.includes('oauth2')) return jsonResponse({ access_token: 'mock-token' });
+    if (url.includes('fields=sheets.properties(sheetId,title,gridProperties.rowCount)')) {
+      return jsonResponse({ sheets: [{ properties: { sheetId: 354072335, title: '改善シート', gridProperties: { rowCount: 4000 } } }] });
+    }
     if (url.includes('fields=sheets.properties')) {
       return jsonResponse({ sheets: [{ properties: { sheetId: 354072335, title: '改善シート' } }] });
     }
@@ -1127,6 +1130,10 @@ test('writeImprovementSheet uses batchUpdate with 3 ranges A:B / D:E / F:H', asy
     }
     if (url.includes('values:batchUpdate')) {
       capturedBody = JSON.parse(init.body);
+      return jsonResponse({});
+    }
+    if (url.includes(':batchUpdate')) {
+      // appendDimension request
       return jsonResponse({});
     }
     if (decoded.includes('!F') && decoded.includes(':H')) {
@@ -1261,6 +1268,198 @@ test('writeLogEntry uses values:append with insertDataOption', async () => {
   assert.ok(capturedBody.values.length === 1);
   assert.equal(capturedBody.values[0][1], '会議1'); // meetingName (index 1)
   assert.equal(capturedBody.values[0][5], 'test'); // event (index 5)
+});
+
+// ===== Grid 制限: appendDimension で行追加 =====
+test('writeImprovementSheet appends rows via appendDimension when needed', async () => {
+  let appendDimensionCalled = false;
+  let appendDimensionBody = null;
+  let appendDimensionUrl = '';
+  let valuesBatchUpdateCalled = false;
+  const mockFetch = async (url, init) => {
+    if (url.includes('oauth2')) return jsonResponse({ access_token: 'mock-token' });
+    // 1回目: resolveTabName 用の fields=sheets.properties（gridProperties.rowCount なし）
+    if (url.includes('fields=sheets.properties') && !url.includes('gridProperties.rowCount')) {
+      return jsonResponse({ sheets: [{ properties: { sheetId: 354072335, title: '改善シート' } }] });
+    }
+    // 2回目: グリッド行数確認用
+    if (url.includes('gridProperties.rowCount')) {
+      return jsonResponse({ sheets: [{ properties: { sheetId: 354072335, title: '改善シート', gridProperties: { rowCount: 3777 } } }] });
+    }
+    const decoded = decodeURIComponent(url);
+    if (decoded.includes('A2:H2')) {
+      return jsonResponse({ values: [['タイムスタンプ', '担当', '責任者（プロデューサー）', 'カテゴリ', '改善されるコスト（金額）', 'エピソード・発生内容', '発生原因', '発生原因対策']] });
+    }
+    if (decoded.includes('A1:J')) {
+      return jsonResponse({ values: [['集計: 100'], ['タイムスタンプ', '担当', '責任者（プロデューサー）', 'カテゴリ', '改善されるコスト（金額）', 'エピソード・発生内容', '発生原因', '発生原因対策']] });
+    }
+    if (url.includes(':batchUpdate') && init?.body) {
+      const body = JSON.parse(init.body);
+      if (body.requests?.[0]?.appendDimension) {
+        appendDimensionCalled = true;
+        appendDimensionBody = body;
+        appendDimensionUrl = url;
+        return jsonResponse({});
+      }
+    }
+    if (url.includes('values:batchUpdate')) {
+      valuesBatchUpdateCalled = true;
+      return jsonResponse({});
+    }
+    if (decoded.includes('!F') && decoded.includes(':H')) {
+      return jsonResponse({ values: [['【業務フロー】test event', '', 'test solution［出典: tl;dv https://url］']] });
+    }
+    return jsonResponse({});
+  };
+  const result = await writeImprovementSheet(
+    [{ kind: 'process', event: 'test event', solution: 'test solution', cause: '', caseName: 'test meeting', meetingUrl: 'https://url' }],
+    { token: 'mock-token', dryRun: false, fetchImpl: mockFetch }
+  );
+  // writeStartRow=3（集計行1+ヘッダー行2=2行 → writeStartRow=3）、items=1、needed=3、rowCount=3777 → 行追加不要
+  assert.equal(appendDimensionCalled, false, 'should NOT append dimension when rowCount is enough');
+  assert.equal(valuesBatchUpdateCalled, true, 'values:batchUpdate should be called');
+  assert.equal(result.written, 1);
+});
+
+test('writeImprovementSheet calls appendDimension when writeStartRow + items exceeds grid rowCount', async () => {
+  let appendDimensionCalled = false;
+  let appendDimensionBody = null;
+  let valuesBatchUpdateCalled = false;
+  const mockFetch = async (url, init) => {
+    if (url.includes('oauth2')) return jsonResponse({ access_token: 'mock-token' });
+    // resolveTabName: gridProperties.rowCount なし
+    if (url.includes('fields=sheets.properties') && !url.includes('gridProperties.rowCount')) {
+      return jsonResponse({ sheets: [{ properties: { sheetId: 354072335, title: '改善シート' } }] });
+    }
+    // グリッド行数確認: rowCount=10 と低く設定
+    if (url.includes('gridProperties.rowCount')) {
+      return jsonResponse({ sheets: [{ properties: { sheetId: 354072335, title: '改善シート', gridProperties: { rowCount: 10 } } }] });
+    }
+    const decoded = decodeURIComponent(url);
+    if (decoded.includes('A2:H2')) {
+      return jsonResponse({ values: [['タイムスタンプ', '担当', '責任者（プロデューサー）', 'カテゴリ', '改善されるコスト（金額）', 'エピソード・発生内容', '発生原因', '発生原因対策']] });
+    }
+    if (decoded.includes('A1:J') && !decoded.includes('F10:H12') && !decoded.includes('F1')) {
+      // 最終行が10行目まで埋まっている（rowCount=10）。行0=集計、行1=ヘッダー、行2-9=データ行（行9まで非空）
+      // writeStartRow=10, needed=12 (10+3-1), rowCount=10 → 行追加必要
+      const tenRows = Array.from({ length: 10 }, (_, i) => {
+        if (i === 0) return ['集計: 100'];
+        if (i === 1) return ['タイムスタンプ', '担当', '責任者（プロデューサー）', 'カテゴリ', '改善されるコスト（金額）', 'エピソード・発生内容', '発生原因', '発生原因対策'];
+        return [`data${i}`];
+      });
+      return jsonResponse({ values: tenRows, range: "'改善シート'!A1:J10" });
+    }
+    if (url.includes(':batchUpdate') && init?.body) {
+      const body = JSON.parse(init.body);
+      if (body.requests?.[0]?.appendDimension) {
+        appendDimensionCalled = true;
+        appendDimensionBody = body;
+        return jsonResponse({});
+      }
+    }
+    if (url.includes('values:batchUpdate')) {
+      valuesBatchUpdateCalled = true;
+      return jsonResponse({});
+    }
+    // 読み戻し確認: F10:H12 のような具体的範囲指定のみマッチ
+    const verifyMatch = decoded.match(/!F(\d+):H(\d+)/);
+    if (verifyMatch) {
+      const startRow = parseInt(verifyMatch[1]);
+      const endRow = parseInt(verifyMatch[2]);
+      const count = endRow - startRow + 1;
+      const values = [];
+      for (let i = 0; i < count; i++) {
+        values.push([`【業務フロー】event${i + 1}`, '', `sol${i + 1}［出典: tl;dv url］`]);
+      }
+      return jsonResponse({ values });
+    }
+    return jsonResponse({});
+  };
+  // 3 items → writeStartRow=10, needed=12, rowCount=10 → length=2 の appendDimension
+  const result = await writeImprovementSheet(
+    [
+      { kind: 'process', event: 'event1', solution: 'sol1', cause: '', caseName: '会議', meetingUrl: 'url' },
+      { kind: 'process', event: 'event2', solution: 'sol2', cause: '', caseName: '会議', meetingUrl: 'url' },
+      { kind: 'process', event: 'event3', solution: 'sol3', cause: '', caseName: '会議', meetingUrl: 'url' },
+    ],
+    { token: 'mock-token', dryRun: false, fetchImpl: mockFetch }
+  );
+  assert.equal(appendDimensionCalled, true, 'appendDimension should be called');
+  assert.ok(appendDimensionBody !== null);
+  assert.equal(appendDimensionBody.requests[0].appendDimension.sheetId, 354072335);
+  assert.equal(appendDimensionBody.requests[0].appendDimension.dimension, 'ROWS');
+  assert.equal(appendDimensionBody.requests[0].appendDimension.length, 3);
+  assert.equal(valuesBatchUpdateCalled, true, 'values:batchUpdate should be called after appendDimension');
+  assert.equal(result.written, 3);
+});
+
+test('writeImprovementSheet does not call appendDimension in dryRun mode even when rowCount would be exceeded', async () => {
+  let appendDimensionCalled = false;
+  let valuesBatchUpdateCalled = false;
+  const mockFetch = async (url) => {
+    if (url.includes('oauth2')) return jsonResponse({ access_token: 'mock-token' });
+    if (url.includes('fields=sheets.properties')) {
+      return jsonResponse({ sheets: [{ properties: { sheetId: 354072335, title: '改善シート' } }] });
+    }
+    const decoded = decodeURIComponent(url);
+    if (decoded.includes('A2:H2')) {
+      return jsonResponse({ values: [['タイムスタンプ', '担当', '責任者（プロデューサー）', 'カテゴリ', '改善されるコスト（金額）', 'エピソード・発生内容', '発生原因', '発生原因対策']] });
+    }
+    if (decoded.includes('A1:J')) {
+      return jsonResponse({ values: [['集計: 100'], ['タイムスタンプ', '担当']] });
+    }
+    if (url.includes(':batchUpdate')) {
+      if (url.includes('values:batchUpdate')) {
+        valuesBatchUpdateCalled = true;
+      } else {
+        appendDimensionCalled = true;
+      }
+      return jsonResponse({});
+    }
+    return jsonResponse({});
+  };
+  // dryRun: true → appendDimension も batchUpdate も呼ばれないはず
+  const result = await writeImprovementSheet(
+    [{ kind: 'process', event: 'event1', solution: 'sol1', cause: '', caseName: '会議', meetingUrl: 'url' }],
+    { token: 'mock-token', dryRun: true, fetchImpl: mockFetch }
+  );
+  assert.equal(appendDimensionCalled, false, 'appendDimension should NOT be called in dry-run');
+  assert.equal(valuesBatchUpdateCalled, false, 'values:batchUpdate should NOT be called in dry-run');
+  assert.equal(result.planned, 1);
+});
+
+test('writeImprovementSheet throws sheet-tab-not-found when target tab name does not exist in grid meta', async () => {
+  let gridMetaCalled = false;
+  const mockFetch = async (url) => {
+    if (url.includes('oauth2')) return jsonResponse({ access_token: 'mock-token' });
+    if (url.includes('fields=sheets.properties') && !url.includes('gridProperties.rowCount')) {
+      return jsonResponse({ sheets: [{ properties: { sheetId: 354072335, title: '改善シート' } }] });
+    }
+    if (url.includes('gridProperties.rowCount')) {
+      gridMetaCalled = true;
+      // 空の sheets → タブが見つからない
+      return jsonResponse({ sheets: [] });
+    }
+    const decoded = decodeURIComponent(url);
+    if (decoded.includes('A2:H2')) {
+      return jsonResponse({ values: [['タイムスタンプ', '担当', '責任者（プロデューサー）', 'カテゴリ', '改善されるコスト（金額）', 'エピソード・発生内容', '発生原因', '発生原因対策']] });
+    }
+    if (decoded.includes('A1:J')) {
+      return jsonResponse({ values: [['集計: 100'], ['タイムスタンプ', '担当']] });
+    }
+    return jsonResponse({});
+  };
+  try {
+    await writeImprovementSheet(
+      [{ kind: 'process', event: 'event1', solution: 'sol1', cause: '', caseName: '会議', meetingUrl: 'url' }],
+      { token: 'mock-token', dryRun: false, fetchImpl: mockFetch }
+    );
+    assert.unreachable('should have thrown');
+  } catch (error) {
+    assert.ok(error instanceof ProcessImproveError);
+    assert.equal(error.code, 'sheet-tab-not-found');
+  }
+  assert.equal(gridMetaCalled, true, 'grid meta should be fetched');
 });
 
 // ===== Fix 2b: writeRunSummary uses values:append =====

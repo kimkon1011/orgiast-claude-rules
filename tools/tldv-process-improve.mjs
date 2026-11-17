@@ -754,7 +754,38 @@ export async function writeImprovementSheet(items, { token, dryRun = false, fetc
     return { planned: items.length, writeStartRow, tabName, rows: plannedRows };
   }
 
-  // 5. batchUpdate 書き込み
+  // 5. 書き込み前にグリッド行数を確認し、必要なら appendDimension で行を追加
+  if (!dryRun) {
+    const gridMeta = await driveFetch(
+      `${SHEETS_BASE}/${sheetId}?fields=sheets.properties(sheetId,title,gridProperties.rowCount)`,
+      {}, token, { fetchImpl, label: 'sheet-grid-meta' }
+    );
+    const sheets = gridMeta.sheets || [];
+    const targetSheet = sheets.find(s => s.properties?.title === tabName);
+    if (!targetSheet) throw new ProcessImproveError('sheet-tab-not-found');
+    const rowCount = targetSheet.properties.gridProperties.rowCount;
+    const needed = writeStartRow + items.length - 1;
+    if (needed > rowCount) {
+      const added = needed - rowCount;
+      await driveFetch(
+        `${SHEETS_BASE}/${sheetId}:batchUpdate`,
+        { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            requests: [{
+              appendDimension: {
+                sheetId: targetSheetId,
+                dimension: 'ROWS',
+                length: added,
+              },
+            }],
+          }) },
+        token, { fetchImpl, label: 'sheet-append-dimension' }
+      );
+      appendLog({ event: 'grid-rows-appended', tabName, added, rowCountBefore: rowCount });
+    }
+  }
+
+  // 6. batchUpdate 書き込み
   const batchBody = {
     valueInputOption: 'USER_ENTERED',
     data: [
@@ -769,7 +800,7 @@ export async function writeImprovementSheet(items, { token, dryRun = false, fetc
     token, { fetchImpl }
   );
 
-  // 6. 読み戻し確認（F と H）
+  // 7. 読み戻し確認（F と H）
   const verifyRange = `${safeTabName}!F${writeStartRow}:H${writeStartRow + items.length - 1}`;
   const verify = await driveFetch(
     `${SHEETS_BASE}/${sheetId}/values/${encodeURIComponent(verifyRange)}?valueRenderOption=FORMATTED_VALUE`,

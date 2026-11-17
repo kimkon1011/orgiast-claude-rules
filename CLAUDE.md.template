@@ -74,7 +74,12 @@ Google APIはDWD優先、着手時にサービス別所有アカウントを宣�
 **1.13 トークン効率（出力・入力キャッシュ・サブエージェント）**
 ### 1.13.1 effortLevelと品質
 effortLevelの既定は **high**（kim 2026-11-18 改定。Artificial Analysis 322タスク実測: high 58点 $7.51/タスク 31分に対し max 56点 $44.22/2.2hと6倍コストで低品質、low 48点 $2.49/13分。highが最良値）。medium/lowは禁止。`settings-quality-guard` がmedium/lowへの変更をblockし、SessionStartでhighへ復元する。thinking予算・監督モデル・実装先（Codex）を節約目的で下げないルールは維持し、節約は委譲・レスポンス数削減・無人ジョブの非Claude化・キャッシュ維持で行う。
-**🔴 大事な判断の前は必ず /advisor に相談してから決めて。**
+### 1.13.2 相談タイミング（Sonnet + Fable advisor）
+**🔴 Sonnet 5.5 を日常作業（コード作成・テスト実行・文章作成）に使い、要所判断だけ `/advisor fable` で Fable 5.1 に相談する。相談は以下の3タイミングに限定:**
+1. **計画の行き詰まり** — 15分以上進まない設計判断
+2. **同じエラー2回連続** — 根本原因の切り分けが必要な時
+3. **作業完了前** — PR作成・送信・デプロイ直前の最終確認
+**コスト: 全 Opus 比 約1/5（全 Sonnet の場合）。Fable 相談は全体の3%未満に抑制。**
 ### 1.14 permission mode と安全装置
 permission mode の既定は `bypassPermissions`。
 ### 1.15 自律進行・セッション引継ぎ

@@ -42,6 +42,10 @@ const DUP_LOOKBACK = 800;
 const MAX_LLM_CALLS = 60;
 // チャンクサイズ
 const CHUNK_SIZE = 12000;
+// 時間予算（ms）。開始から50分後に強制終了を避け exit 0 で正常終了する。
+export const TIME_BUDGET_MS = 50 * 60 * 1000;
+// 時間予算のマージン（ms）。この残時間を切ったら knowhow-add など遅い後処理をスキップする。
+export const TIME_MARGIN_MS = 5 * 60 * 1000;
 
 // -- エラー型 --
 export class ProcessImproveError extends Error {
@@ -54,6 +58,16 @@ export function safeReason(error) {
   if (error?.code === 'ETIMEDOUT') return 'timeout';
   const msg = redactSecrets(String(error?.message || '')).slice(0, 80);
   return `unexpected:${error?.name || 'Error'}:${error?.code || ''}:${msg}`;
+}
+
+// -- 時間予算超過チェック --
+export function hasTimeBudget(deadline) {
+  return Date.now() < deadline;
+}
+
+// -- 遅い後処理（knowhow-addなど）をスキップするか --
+export function isTimeTight(deadline) {
+  return Date.now() > (deadline - TIME_MARGIN_MS);
 }
 
 // -- 子プロセス実行ヘルパー（execFile を Promise + 決まった exitCode/out/err に統一） --
@@ -1016,9 +1030,17 @@ export async function addConstructionKnowhow(items, { dryRun = false, fetchImpl 
   if (!runNodeImpl && !fs.existsSync(cmdPath)) return 0;
 
   let added = 0;
+  // 連続失敗カウンター: 3回連続で失敗したら残りをスキップ（全件失敗で2分×Nを防ぐ）
+  let consecutiveFailures = 0;
+  const MAX_CONSECUTIVE_FAILURES = 3;
   for (const item of items) {
     if (added >= (config.knowhow?.maxPerNight || 5)) break;
     if (item.kind !== 'knowhow') continue;
+    // 連続N回失敗したら残りの knowhow 登録をスキップ
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      appendLog({ event: 'knowhow-skip-consecutive-failures', consecutiveFailures });
+      break;
+    }
 
     // entry object: category,type,phase must be set. Others are detected from meeting content.
     const entry = [{
@@ -1038,17 +1060,23 @@ export async function addConstructionKnowhow(items, { dryRun = false, fetchImpl 
         // CommandQueue result format: { ok: true, command, result: <戻り値> }
         try {
           const output = JSON.parse(result.stdout);
-          if (output && output.ok === true && output.result) added++;
-          else {
+          if (output && output.ok === true && output.result) {
+            added++;
+            consecutiveFailures = 0; // 成功でリセット
+          } else {
+            consecutiveFailures++;
             appendLog({ event: 'knowhow-add-error', exitCode: result.exitCode, ok: output?.ok, stdout: (result.stdout || '').slice(0, 200), stderr: (result.stderr || '').slice(0, 200) });
           }
         } catch {
+          consecutiveFailures++;
           appendLog({ event: 'knowhow-add-error', exitCode: result.exitCode, stdout: (result.stdout || '').slice(0, 200), stderr: (result.stderr || '').slice(0, 200) });
         }
       } else {
+        consecutiveFailures++;
         appendLog({ event: 'knowhow-add-error', exitCode: result.exitCode, stderr: (result.stderr || '').slice(0, 200) });
       }
     } catch (error) {
+      consecutiveFailures++;
       appendLog({ event: 'knowhow-add-error', exitCode: -1, error: safeReason(error) });
     } finally {
       try { fs.rmSync(argsFile, { force: true }); } catch {}
@@ -1067,11 +1095,15 @@ export async function runImprove(options = {}, dependencies = {}) {
   // dry-run では状態を更新しない
   const persistState = !opts.dryRun && state;
 
+  const startTime = Date.now();
+  const deadline = startTime + TIME_BUDGET_MS;
+
   const summary = {
     fetched: 0, processed: 0, extracted: 0, duplicates: 0, skippedOld: 0,
     skippedDuplicateSource: 0, skippedExcluded: 0,
     sheetWritten: 0, feedbackSent: 0, knowhowAdded: 0, templateReflected: 0, failed: 0,
     totalItems: 0, error: '',
+    timeBudgetSkipped: 0, knowhowSkipped: 0,
   };
   const allItems = [];
   const processedIds = [];
@@ -1181,6 +1213,12 @@ export async function runImprove(options = {}, dependencies = {}) {
     const excludePatterns = config.excludeTitlePatterns || [];
     for (const meeting of newMeetings.slice(0, opts.limit || Infinity)) {
       if (state && state.llmCallsToday >= MAX_LLM_CALLS) break;
+      // 時間予算を超えたら残りの会議をスキップして正常終了へ移行
+      if (!hasTimeBudget(deadline)) {
+        summary.timeBudgetSkipped = newMeetings.length - summary.fetched + summary.fetched - summary.skippedExcluded;
+        appendLog({ event: 'time-budget-reached', phase: 'llm-processing', meetingId: meeting.id, elapsed: Date.now() - startTime });
+        break;
+      }
 
       // 除外パターンに一致する会議はスキップ
       const matchedPattern = excludePatterns.find(p => (meeting.title || '').includes(p));
@@ -1259,7 +1297,7 @@ export async function runImprove(options = {}, dependencies = {}) {
       token = await getDriveToken({ impersonate: 'kim@orgiast.jp', fetchImpl });
     }
 
-    // 1. 改善項目シート
+    // 1. 改善項目シート（時間予算に関わらず最低限の書き込みは行う）
     if (allItems.length > 0) {
       try {
         const sheetResult = await writeImprovementSheet(allItems, { token, fetchImpl });
@@ -1279,11 +1317,21 @@ export async function runImprove(options = {}, dependencies = {}) {
       }
     }
 
-    // 2. app フィードバック
+    // 時間予算チェック: 残り5分を切ったら遅い後処理（knowhow 等）をスキップする
+    if (isTimeTight(deadline)) {
+      summary.knowhowSkipped = allItems.filter(i => i.kind === 'knowhow').length;
+      appendLog({ event: 'time-budget-tight', phase: 'knowhow-add', elapsed: Date.now() - startTime, knowhowSkipped: summary.knowhowSkipped });
+    }
+
+    // 2. app フィードバック（短いので常に実行）
     summary.feedbackSent = await postAppFeedback(allItems, { fetchImpl });
 
-    // 3. knowhow 登録
-    summary.knowhowAdded = await addConstructionKnowhow(allItems);
+    // 3. knowhow 登録（時間予算を超えていたらスキップ）
+    if (!isTimeTight(deadline)) {
+      summary.knowhowAdded = await addConstructionKnowhow(allItems);
+    } else if (!summary.knowhowSkipped) {
+      summary.knowhowSkipped = allItems.filter(i => i.kind === 'knowhow').length;
+    }
 
     // 4. ログシート
     const logSheetId = await ensureLogSheet({ token, state: persistState ? state : { logSheetId: null }, fetchImpl, summary });
@@ -1318,10 +1366,10 @@ export async function runImprove(options = {}, dependencies = {}) {
     // 7. 実行サマリ
     await writeRunSummary({ token, logSheetId, summary, fetchImpl });
 
-    // -- 状態保存（全書き込み成功後に処理済みとして記録） --
+    // -- 状態保存（knowhow 失敗は別として、処理済み会議は必ず保存。次回の重複除去で救う） --
     if (persistState) {
       state.lastRun = new Date().toISOString();
-      // 全書き込み成功後、抽出成功した会議だけ state に保存
+      // シート書き込みが成功した会議だけ state に保存（knowhow 失敗でも次回スキップされる）
       for (const id of processedIds) {
         if (!state.processedMeetings[id]) {
           state.processedMeetings[id] = {
@@ -1341,7 +1389,8 @@ export async function runImprove(options = {}, dependencies = {}) {
     // -- 標準出力サマリ --
     console.log(`fetched=${summary.fetched} processed=${summary.processed} extracted=${summary.extracted} ` +
       `duplicates=${summary.duplicates} sheet=${summary.sheetWritten} feedback=${summary.feedbackSent} ` +
-      `knowhow=${summary.knowhowAdded} template=${summary.templateReflected} failed=${summary.failed}`);
+      `knowhow=${summary.knowhowAdded} template=${summary.templateReflected} failed=${summary.failed} ` +
+      `timeBudgetSkipped=${summary.timeBudgetSkipped} knowhowSkipped=${summary.knowhowSkipped}`);
 
     appendLog({ event: 'run-complete', ...summary });
     return summary.failed > 0 ? 1 : 0;

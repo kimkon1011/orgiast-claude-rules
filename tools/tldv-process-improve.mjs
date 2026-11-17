@@ -14,7 +14,12 @@ import { redactSecrets } from './redact-secrets.mjs';
 // -- 定数 --
 const HOME = process.env.ORGIAST_HOME || os.homedir();
 const CLAUDE_DIR = path.join(HOME, '.claude');
-const STATE_DIR = path.join(CLAUDE_DIR, 'state');
+function getStateDir() {
+  return process.env.TLDV_PROCESS_IMPROVE_STATE_DIR || path.join(CLAUDE_DIR, 'state');
+}
+function getStatePath() {
+  return path.join(getStateDir(), 'tldv-process-improve.json');
+}
 function getLogDir() {
   return process.env.TLDV_PI_LOG_DIR || path.join(CLAUDE_DIR, 'logs');
 }
@@ -22,7 +27,6 @@ function getLogPath() {
   // Write to .jsonl to avoid contention with the scheduled task's stdout redirect.
   return path.join(getLogDir(), 'tldv-process-improve.jsonl');
 }
-const STATE_PATH = path.join(STATE_DIR, 'tldv-process-improve.json');
 const CONFIG_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'config', 'tldv-process-improve.json');
 const AUTH_MODULE_URL = new URL('./lib/drive-auth.mjs', import.meta.url).href;
 const DRIVE_BASE = 'https://www.googleapis.com/drive/v3/files';
@@ -97,7 +101,7 @@ export function defaultState() {
   return { version: 1, processedMeetings: {}, lastRun: null, logSheetId: null, llmCallsToday: 0 };
 }
 
-export function readState(statePath = STATE_PATH) {
+export function readState(statePath = getStatePath()) {
   try {
     const raw = JSON.parse(fs.readFileSync(statePath, 'utf8'));
     return { ...defaultState(), ...raw };
@@ -784,8 +788,20 @@ export async function writeImprovementSheet(items, { token, dryRun = false, fetc
 }
 
 // -- ログシートの作成または取得 --
+// Google スプレッドシート ID の正規表現（44文字、英数字 + ハイフン + アンダースコア）
+const SHEET_ID_RE = /^[A-Za-z0-9_-]{30,}$/;
+
 export async function ensureLogSheet({ token, state, fetchImpl = fetch, summary } = {}) {
-  if (state.logSheetId) return state.logSheetId;
+  if (state.logSheetId) {
+    // 無効な sheetId（例: テストで書き込まれた "test-log-sheet"）は新規作成に進む
+    if (!SHEET_ID_RE.test(state.logSheetId)) {
+      const invalidValue = state.logSheetId;
+      state.logSheetId = null;
+      appendLog({ event: 'log-sheet-id-invalid', value: invalidValue });
+    } else {
+      return state.logSheetId;
+    }
+  }
 
   const config = loadConfig();
   // 初回作成
@@ -851,7 +867,7 @@ export async function ensureLogSheet({ token, state, fetchImpl = fetch, summary 
   }
 
   state.logSheetId = result.spreadsheetId;
-  try { writeState(STATE_PATH, state); } catch { /* state 保存失敗はベストエフォート */ }
+  try { writeState(getStatePath(), state); } catch { /* state 保存失敗はベストエフォート */ }
   return result.spreadsheetId;
 }
 
@@ -1098,7 +1114,7 @@ export async function runImprove(options = {}, dependencies = {}) {
   const execFileImpl = dependencies.execFile;
   const opts = { ...options };
   const config = loadConfig();
-  let state = readState(STATE_PATH);
+  let state = readState(getStatePath());
   // dry-run では状態を更新しない
   const persistState = !opts.dryRun && state;
 
@@ -1339,7 +1355,7 @@ export async function runImprove(options = {}, dependencies = {}) {
           };
         }
       }
-      writeState(STATE_PATH, state);
+      writeState(getStatePath(), state);
     }
 
     // -- ここから下は補助処理。失敗しても run-error にはせず summary.failed に計上して継続する --

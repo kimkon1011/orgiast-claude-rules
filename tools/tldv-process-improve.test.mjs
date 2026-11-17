@@ -16,14 +16,19 @@ import {
   requestJson,
 } from './tldv-process-improve.mjs';
 
-// -- テスト用の LOG_DIR --
+// -- テスト用の一時ディレクトリ（state + log） --
+const testStateDir = path.join(os.tmpdir(), `tldv-pi-state-${randomUUID()}`);
 const testLogDir = path.join(os.tmpdir(), `tldv-pi-test-${randomUUID()}`);
+const origStateDir = process.env.TLDV_PROCESS_IMPROVE_STATE_DIR;
 const origLogDir = process.env.TLDV_PI_LOG_DIR;
 
+process.env.TLDV_PROCESS_IMPROVE_STATE_DIR = testStateDir;
 process.env.TLDV_PI_LOG_DIR = testLogDir;
 
 test.after(() => {
+  process.env.TLDV_PROCESS_IMPROVE_STATE_DIR = origStateDir;
   process.env.TLDV_PI_LOG_DIR = origLogDir;
+  try { fs.rmSync(testStateDir, { recursive: true, force: true }); } catch {}
   try { fs.rmSync(testLogDir, { recursive: true, force: true }); } catch {}
 });
 
@@ -1420,6 +1425,41 @@ test('ensureLogSheet accepts owner role as valid', async () => {
   await ensureLogSheet({ token: 'mock-token', state, fetchImpl: mockFetch });
   // Should not have logged an error — owner is accepted
   assert.equal(state.logSheetId, 'test-log-sheet');
+});
+
+// ===== Fix: ensureLogSheet は不正な state.logSheetId を無効として新規作成に進む =====
+test('ensureLogSheet rejects invalid logSheetId (e.g. "test-log-sheet") and creates new', async () => {
+  let callCount = 0;
+  const mockFetch = async (url, init) => {
+    callCount++;
+    if (url.includes('oauth2.googleapis.com/token')) {
+      return jsonResponse({ access_token: 'mock-token' });
+    }
+    if (url.includes('sheets.googleapis.com')) {
+      return jsonResponse({ spreadsheetId: '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms', spreadsheetUrl: 'https://sheet.url' });
+    }
+    return jsonResponse({});
+  };
+  const state = { logSheetId: 'test-log-sheet' }; // 不正な値
+  const sheetId = await ensureLogSheet({ token: 'mock-token', state, fetchImpl: mockFetch });
+  // 新規作成された有効な sheetId が返る
+  assert.ok(sheetId !== 'test-log-sheet', 'invalid logSheetId should not be returned');
+  assert.ok(sheetId.length >= 30, 'valid sheet ID should be returned');
+  assert.equal(state.logSheetId, sheetId);
+  // 作成処理が呼ばれた（oauth2 + sheets の2回以上 = 新規作成が走った）
+  assert.ok(callCount >= 2, 'should have called create endpoint');
+});
+
+test('ensureLogSheet accepts valid logSheetId without creating new sheet', async () => {
+  let callCount = 0;
+  const mockFetch = async (url, init) => {
+    callCount++;
+    return jsonResponse({});
+  };
+  const state = { logSheetId: '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms' };
+  const sheetId = await ensureLogSheet({ token: 'mock-token', state, fetchImpl: mockFetch });
+  assert.equal(sheetId, '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms');
+  assert.equal(callCount, 0); // API 呼び出しなし
 });
 
 // ===== Fix 2: 同一 extractImprovements 呼び出し内の重複除去 =====

@@ -239,58 +239,139 @@ function classifyNaturalLanguage(text) {
   if (/^(?:良い|大丈夫|入れ|ok|お願い|進めて|承認|はい|可)/i.test(t)) return '可';
   if (/^(?:完了|おわり|終わり)/.test(t)) return '完了';
   if (/^(?:上[のの]?\d+(?:\s*[、,]\s*\d+)*\s*(?:は|も)?\s*)(?:OK|良い|大丈夫|お願い|承認|可|全部OK)/i.test(t)) return '可';
+  // "全部OK" "両方OK" "全部進めて" as standalone
+  if (/^(?:全部|両方|すべて)\s*(?:OK|良い|大丈夫|お願い|進めて|可)/i.test(t)) return '可';
+  if (/^(?:全部|両方|すべて)\s*(?:不要|やめ|止め)/i.test(t)) return '否認';
   return null;
 }
 
+function writeTempAnswer(home, text) {
+  const dir = path.join(home, '.claude', 'kim-inbox-relay', 'tmp-answers');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${Date.now()}.${randomBytes(4).toString('hex')}.txt`);
+  fs.writeFileSync(file, text, 'utf8');
+  return file;
+}
+
+// Match awaiting item by title words in prompt. Returns { id, answer } or null.
+function matchAwaitingItemByContent(prompt, awaitingItem) {
+  const lines = prompt.trim().split(/\r?\n/).filter(Boolean);
+  const promptText = lines.join(' ').toLowerCase();
+  // Title words that are distinctive (≥2 chars, not common stopwords)
+  const stopwords = new Set(['して', 'する', 'ため', 'こと', 'これ', 'それ', 'あれ', 'この', 'その', 'ある', 'ない', 'いる', 'なる', 'ます', 'です', 'たい', 'もの', 'とき', 'ため', 'よう', 'から', 'まで', 'の', 'へ', 'を', 'が', 'に', 'は', 'と', 'も', 'で', 'や', 'て', 'た', 'だ', 'な', 'い', 'う', 'お', 'か', 'き', 'く', 'け', 'こ', 'さ', 'し', 'す', 'せ', 'そ', 'ち', 'つ']);
+  const titleWords = String(awaitingItem.title).split(/[\s/／（）()、,]+/).filter(w => w.length >= 2 && !stopwords.has(w));
+  const askWords = String(awaitingItem.ask).split(/[\s/／（）()、,]+/).filter(w => w.length >= 2 && !stopwords.has(w));
+  const allKeywords = [...new Set([...titleWords, ...askWords])];
+  if (allKeywords.length === 0) return null;
+  const matchCount = allKeywords.filter(w => promptText.includes(w)).length;
+  // Require at least 2 keyword matches, or 1 if the item only has 1 keyword
+  const threshold = allKeywords.length === 1 ? 1 : 2;
+  if (matchCount < threshold) return null;
+  const answer = classifyNaturalLanguage(promptText);
+  return answer ? { id: awaitingItem.id, answer } : null;
+}
+
 // Record natural-language replies. Returns { answers, hints }. Low confidence → hints only, not recorded.
-export function recordNaturalLanguageAnswers(home, sessionId, prompt, { listItems, answerItem }) {
+// Extended with awaitingItems (ap:/fm:/ex:) and respond callback for non-kim-inbox items.
+export function recordNaturalLanguageAnswers(home, sessionId, prompt, { listItems, answerItem, respond, awaitingItems } = {}) {
   if (!sessionId) return { answers: [], hints: [] };
   const state = readRelayState(home, sessionId), delivered = state.lastDelivered || [];
-  if (!delivered.length) return { answers: [], hints: [] };
 
   const lines = prompt.trim().split(/\r?\n/).filter(Boolean);
-  const items = listItems(home);
-  const openAsks = delivered
-    .map(d => items.find(i => i.id === d.id && i.kind === 'ask' && i.status === 'open' && revisionOf(i) === d.revision))
-    .filter(Boolean);
-
-  if (!openAsks.length) return { answers: [], hints: [] };
-
   const answers = [];
   const hints = [];
 
-  // Pattern 1: numbered natural language "1. 良い 2. OK 3. 不要"
-  const numberedNatural = lines.map(line => {
-    const m = line.trim().match(/^([1-9]\d*)\s*[.．、)）]\s*(.+)$/);
-    if (!m) return null;
-    const answer = classifyNaturalLanguage(m[2]);
-    if (!answer) return null;
-    return { number: parseInt(m[1]), answer };
-  }).filter(Boolean);
+  // --- Part 1: ki-* kim-inbox items (existing logic) ---
+  if (delivered.length) {
+    const items = listItems ? listItems(home) : [];
+    const openAsks = delivered
+      .map(d => items.find(i => i.id === d.id && i.kind === 'ask' && i.status === 'open' && revisionOf(i) === d.revision))
+      .filter(Boolean);
 
-  if (numberedNatural.length > 0) {
-    let matched = 0;
-    for (const nn of numberedNatural) {
-      const receipt = delivered.find(d => d.number === nn.number);
-      const item = receipt ? openAsks.find(i => i.id === receipt.id) : null;
-      if (!item) continue;
-      if (nn.answer === '否認' || nn.answer === '保留') continue;
-      answers.push(answerItem(home, item.id, nn.answer, sessionId));
-      matched++;
+    if (openAsks.length) {
+      // Pattern 1: numbered natural language "1. 良い 2. OK 3. 不要"
+      const numberedNatural = lines.map(line => {
+        const m = line.trim().match(/^([1-9]\d*)\s*[.．、)）]\s*(.+)$/);
+        if (!m) return null;
+        const answer = classifyNaturalLanguage(m[2]);
+        if (!answer) return null;
+        return { number: parseInt(m[1]), answer };
+      }).filter(Boolean);
+
+      if (numberedNatural.length > 0) {
+        let matched = 0;
+        for (const nn of numberedNatural) {
+          const receipt = delivered.find(d => d.number === nn.number);
+          const item = receipt ? openAsks.find(i => i.id === receipt.id) : null;
+          if (!item) continue;
+          if (nn.answer === '否認' || nn.answer === '保留') continue;
+          answers.push(answerItem(home, item.id, nn.answer, sessionId));
+          matched++;
+        }
+        // Fallback: single numbered item with single pending ask, positive only
+        if (matched === 0 && numberedNatural.length === 1 && openAsks.length === 1 && numberedNatural[0].answer === '可') {
+          answers.push(answerItem(home, openAsks[0].id, numberedNatural[0].answer, sessionId));
+        }
+        // If ki-* matched, still check awaiting items below
+      }
+
+      // Pattern 2: whole prompt is a single reply "良いですよ" "OK" "進めて" (only if no ki-* match yet)
+      if (!numberedNatural.length) {
+        const promptAnswer = classifyNaturalLanguage(lines.join(' '));
+        if (promptAnswer && openAsks.length === 1) {
+          answers.push(answerItem(home, openAsks[0].id, promptAnswer, sessionId));
+        } else if (promptAnswer && openAsks.length >= 2 && openAsks.length <= 3) {
+          hints.push(`kim の返事が判断待ちの項目への回答のように見えます。「${promptAnswer}」として記録します（違えば訂正してください）。`);
+        }
+      }
     }
-    // Fallback: single numbered item with single pending ask, positive only
-    if (matched === 0 && numberedNatural.length === 1 && openAsks.length === 1 && numberedNatural[0].answer === '可') {
-      answers.push(answerItem(home, openAsks[0].id, numberedNatural[0].answer, sessionId));
-    }
-    return { answers, hints };
   }
 
-  // Pattern 2: whole prompt is a single reply "良いですよ" "OK" "進めて"
-  const promptAnswer = classifyNaturalLanguage(lines.join(' '));
-  if (promptAnswer && openAsks.length === 1) {
-    answers.push(answerItem(home, openAsks[0].id, promptAnswer, sessionId));
-  } else if (promptAnswer && openAsks.length >= 2 && openAsks.length <= 3) {
-    hints.push(`kim の返事が判断待ちの項目への回答のように見えます。「${promptAnswer}」として記録します（違えば訂正してください）。`);
+  // --- Part 2: Awaiting items (ap:, fm:, ex:) ---
+  if (awaitingItems?.length && respond) {
+    const awaitingApFm = awaitingItems.filter(ai => ai.id.startsWith('ap:') || ai.id.startsWith('fm:'));
+    const awaitingEx = awaitingItems.filter(ai => ai.id.startsWith('ex:'));
+
+    // Pattern 3: "全部OK" "全部進めて" → all ap/fm items
+    const allAnswer = classifyNaturalLanguage(lines.join(' '));
+    if (/^(?:全部|両方|すべて)/.test(lines.join(' ').trim()) && allAnswer && awaitingApFm.length >= 2) {
+      for (const ai of awaitingApFm) {
+        const bodyFile = writeTempAnswer(home, allAnswer);
+        respond(ai.id, { home, bodyFile });
+        answers.push(ai.id);
+      }
+      return { answers, hints };
+    }
+
+    // Pattern 4: Single awaiting item + single reply
+    if (awaitingApFm.length === 1) {
+      const promptAnswer = classifyNaturalLanguage(lines.join(' '));
+      if (promptAnswer) {
+        const ai = awaitingApFm[0];
+        const bodyFile = writeTempAnswer(home, promptAnswer);
+        respond(ai.id, { home, bodyFile });
+        answers.push(ai.id);
+        return { answers, hints };
+      }
+    }
+
+    // Pattern 5: Content match by title/ask words
+    for (const ai of awaitingApFm) {
+      const match = matchAwaitingItemByContent(prompt, ai);
+      if (match) {
+        const bodyFile = writeTempAnswer(home, match.answer);
+        respond(ai.id, { home, bodyFile });
+        answers.push(ai.id);
+      }
+    }
+
+    // Pattern 6: Low confidence for multiple awaiting items
+    if (!answers.length && awaitingApFm.length >= 2 && awaitingApFm.length <= 3) {
+      const promptAnswer = classifyNaturalLanguage(lines.join(' '));
+      if (promptAnswer) {
+        hints.push(`kim の返事が返事待ち項目（${awaitingApFm.map(ai => ai.title).join('、')}）への回答のように見えます。「${promptAnswer}」として記録します（違えば訂正してください）。`);
+      }
+    }
   }
 
   return { answers, hints };

@@ -253,6 +253,22 @@ function writeTempAnswer(home, text) {
   return file;
 }
 
+// Loose classification: check if affirmative/negative keywords appear anywhere in text
+function classifyNaturalLanguageLoose(text) {
+  const t = text.trim().toLowerCase();
+  // Japanese affirmative keywords (no \b since it doesn't work with Japanese)
+  const affirmative = ['良い', '大丈夫', 'ok', 'お願い', '進めて', '承認', 'はい', '可', 'よい', 'いい', 'マージしてよい', 'リリースしてよい', '公開してよい', '入れてよい', '削除してよい'];
+  for (const kw of affirmative) { if (t.includes(kw)) return '可'; }
+  const negative = ['不要', 'やめ', '止め', 'だめ', 'ダメ', '不可', 'いいえ', '保留', 'やめて', 'やめる', 'ストップ'];
+  for (const kw of negative) { if (t.includes(kw)) return '否認'; }
+  const done = ['完了', 'おわり', '終わり'];
+  for (const kw of done) { if (t.includes(kw)) return '完了'; }
+  // "全部OK" / "両方OK" patterns
+  if (/(全部|両方|すべて)\s*(ok|良い|大丈夫|進めて|可)/i.test(t)) return '可';
+  if (/(全部|両方|すべて)\s*(不要|やめ|止め)/i.test(t)) return '否認';
+  return null;
+}
+
 // Match awaiting item by title words in prompt. Returns { id, answer } or null.
 function matchAwaitingItemByContent(prompt, awaitingItem) {
   const lines = prompt.trim().split(/\r?\n/).filter(Boolean);
@@ -263,11 +279,19 @@ function matchAwaitingItemByContent(prompt, awaitingItem) {
   const askWords = String(awaitingItem.ask).split(/[\s/／（）()、,]+/).filter(w => w.length >= 2 && !stopwords.has(w));
   const allKeywords = [...new Set([...titleWords, ...askWords])];
   if (allKeywords.length === 0) return null;
-  const matchCount = allKeywords.filter(w => promptText.includes(w)).length;
+  // Flexible matching: check if keyword (or its significant prefix) appears in prompt
+  const matchCount = allKeywords.filter(w => {
+    if (promptText.includes(w)) return true;
+    // Allow partial match: prompt contains first 80% of keyword
+    const prefixLen = Math.max(2, Math.floor(w.length * 0.8));
+    const prefix = w.slice(0, prefixLen);
+    return prefix.length >= 2 && promptText.includes(prefix);
+  }).length;
   // Require at least 2 keyword matches, or 1 if the item only has 1 keyword
   const threshold = allKeywords.length === 1 ? 1 : 2;
   if (matchCount < threshold) return null;
-  const answer = classifyNaturalLanguage(promptText);
+  // Use loose classification for content-matched items
+  const answer = classifyNaturalLanguageLoose(promptText);
   return answer ? { id: awaitingItem.id, answer } : null;
 }
 
@@ -328,7 +352,8 @@ export function recordNaturalLanguageAnswers(home, sessionId, prompt, { listItem
   }
 
   // --- Part 2: Awaiting items (ap:, fm:, ex:) ---
-  if (awaitingItems?.length && respond) {
+  // Skip awaiting handling if ki-* items were already answered (prioritize kim-inbox items)
+  if (awaitingItems?.length && respond && !answers.length) {
     const awaitingApFm = awaitingItems.filter(ai => ai.id.startsWith('ap:') || ai.id.startsWith('fm:'));
     const awaitingEx = awaitingItems.filter(ai => ai.id.startsWith('ex:'));
 

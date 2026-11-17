@@ -13,6 +13,29 @@ export function readJsonl(file) {
   try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } }); }
   catch (e) { if (e.code === 'ENOENT') return []; throw e; }
 }
+export function reviewedCandidatesFile(home) {
+  return path.join(home, '.claude', 'handoff-audit-candidates-reviewed.jsonl');
+}
+export function pruneReviewedCandidates(candidates, knowledge, reviewedRows) {
+  const reviewedKeys = new Set(reviewedRows.map(r => `${hash([r.observation, key(r.pattern)])}\u0000${key(r.pattern)}`));
+  const knowledgeKeys = new Set(knowledge.map(k => key(k.pattern)));
+  const kept = [];
+  const pruned = [];
+  for (const c of candidates) {
+    const ck = key(c.pattern);
+    const cid = hash([c.observation, ck]);
+    if (reviewedKeys.has(`${cid}\u0000${ck}`)) {
+      pruned.push(c);
+      continue;
+    }
+    if (knowledgeKeys.has(ck)) {
+      pruned.push({ ...c, decision: 'auto-pruned' });
+      continue;
+    }
+    kept.push(c);
+  }
+  return { kept, pruned };
+}
 export function promotionFile(home) {
   return path.join(home, '.claude', 'handoff-audit-promotions.jsonl');
 }
@@ -38,11 +61,13 @@ export function isToolNameRoute(route, toolRoutes = []) {
 }
 // automation-routes の道具名だけを昇格すると、監査対象が pattern でなく道具になり空回りする。
 // 確信度や観測回数によらず候補に保留し、人が手順文に書き直してから採用する。
-export function mergeKnowledge(knowledge, learned, candidates, observation, toolRoutes = []) {
+export function mergeKnowledge(knowledge, learned, candidates, observation, toolRoutes = [], reviewed = []) {
   const next = [...knowledge];
   const pending = [...candidates];
   const promoted = [];
+  const reviewedKeys = new Set(reviewed.map(r => `${hash([r.observation, key(r.pattern)])}\u0000${key(r.pattern)}`));
   for (const item of learned) {
+    if (reviewedKeys.has(`${hash([item.observation || observation, key(item.pattern)])}\u0000${key(item.pattern)}`)) continue;
     // 監査キュー自身の話(Self-reference)は学習しない。レビューセッションの最終文
     // 「tool-name-route の候補1件は棄却しました」を夜間監査が pattern に変換した行
     // （2026-11-03 実測: pattern="tool-name-route の棄却" / route="gh secret"）は
@@ -92,10 +117,14 @@ export function enqueueTodos(markdown, items, knownRoutes = []) {
 // 道具名 route は自動昇格しないので、候補に積むだけだと誰も読まず腐る。見直し TODO を1本だけ常設する。
 export function enqueueToolRouteReview(markdown, held) {
   if (!held || /\[handoff-audit:tool-name-route\]/.test(markdown)) return markdown;
-  const todo = `1. [handoff-audit:tool-name-route] handoff-audit-candidates.jsonl に route が道具名だけの候補（reason=tool-name-route）が保留されている — pattern ごとに route を手順文へ書き直して tools/handoff-audit-knowledge.json へ PR で採用するか、棄却する（2026-10-26 PR #1151 と同じ扱い）。kimへのDMなし。`;
+  const todo = `1. [handoff-audit:tool-name-route] handoff-audit-candidates.jsonl に route が道具名だけの候補（reason=tool-name-route）が保留されている — pattern ごとに route を手順文へ書き直して tools/handoff-audit-knowledge.json へ PR で採用するか、棄却する（2026-10-26 PR #1151 と同じ扱い）。処理後は node tools/handoff-audit-nightly.mjs --mark-reviewed --ref "<PR番号>" で台帳へ移す。kimへのDMなし。`;
   const heading = /^## 残TODO[^\r\n]*(?:\r?\n|$)/m;
   if (heading.test(markdown)) return markdown.replace(heading, m => `${m.endsWith('\n') ? m : m + '\n'}${todo}\n\n`);
   return `${markdown}\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n${todo}\n`;
+}
+export function dequeueToolRouteReview(markdown) {
+  const pattern = /^1\.\s*\[handoff-audit:tool-name-route\].*?(?:\r?\n)(?:\r?\n)?/m;
+  return markdown.replace(pattern, '');
 }
 export function deferralLedgerFile(home) {
   return path.join(home, '.claude', 'handoff-audit-deferral-ledger.jsonl');
@@ -176,8 +205,17 @@ export async function runNightly(options = {}) {
     let knowledge = JSON.parse(fs.readFileSync(knowledgeFile, 'utf8'));
     const resources = { ...(options.resources || loadResources(home)), knowledge };
     const candidateFile = path.join(dir, 'handoff-audit-candidates.jsonl');
+    const reviewedFile = reviewedCandidatesFile(home);
     const processedFile = path.join(dir, 'handoff-audit-nightly-ledger.jsonl');
     let candidates = readJsonl(candidateFile);
+    const reviewedRows = readJsonl(reviewedFile);
+    const { kept, pruned } = pruneReviewedCandidates(candidates, knowledge, reviewedRows);
+    if (pruned.length > 0) {
+      const ts = new Date().toISOString();
+      for (const p of pruned) appendJsonl(reviewedFile, { ts, observation: p.observation, pattern: p.pattern, route: p.route, decision: p.decision || 'rejected', ref: 'auto-pruned' });
+      candidates = kept;
+      fs.writeFileSync(candidateFile, kept.map(JSON.stringify).join('\n') + (kept.length > 0 ? '\n' : ''));
+    }
     const done = new Set(readJsonl(processedFile).filter(r => r.verdict !== 'audit-unavailable').map(r => r.observation));
     const stopRows = readJsonl(path.join(dir, 'stop-gate-runner-ledger.jsonl'));
     const targets = selectTargets(readJsonl(path.join(dir, 'handoff-audit-ledger.jsonl')), stopRows, +since, +until);
@@ -195,7 +233,7 @@ export async function runNightly(options = {}) {
       // 既知経路にない生成文を自動実行キューへ流さない。
       const learned = result.learned.filter(l => knownRoutes.has(l.route));
       const priorRoutes = knowledge.map(k => k.route);
-      const merged = mergeKnowledge(knowledge, learned, candidates, observation, toolRoutes);
+      const merged = mergeKnowledge(knowledge, learned, candidates, observation, toolRoutes, reviewedRows);
       if (merged.knowledge.length !== knowledge.length) fs.writeFileSync(knowledgeFile, JSON.stringify(merged.knowledge, null, 2) + '\n');
       // nightly-bootstrap が毎回 reset --hard する tree の外に置く。reset で route 文が消えないようにするため。
       for (const entry of merged.promoted) {
@@ -265,10 +303,55 @@ export async function runNightly(options = {}) {
       }
       deferral = { total, hits: rows.length, byPattern, enqueued, detector: usedDetector, detectorDiffers: detector.differs };
     } catch (error) { deferral = { ...deferral, error: error.message }; }
+    // tool-name-route が全件処理済みなら TODO を消す
+    const toolRoutePending = candidates.filter(c => c.reason === 'tool-name-route').length;
+    if (toolRoutePending === 0) {
+      const nextFile = path.join(dir, 'next-session.md');
+      try {
+        const previous = fs.readFileSync(nextFile, 'utf8');
+        const dequeued = dequeueToolRouteReview(previous);
+        if (dequeued !== previous) writeHandoff(nextFile, dequeued);
+      } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    }
     return { targets: targets.length, reviewed, added, promoted, deferral, stopRechecks, stopRecheckWarnings };
   } finally { fs.closeSync(fd); fs.unlinkSync(lock); }
 }
 if (isEntry(import.meta.url)) {
+  // --mark-reviewed: move all reason=tool-name-route candidates to reviewed ledger, dequeue TODO
+  const markReviewedArgv = process.argv.indexOf('--mark-reviewed');
+  if (markReviewedArgv >= 0) {
+    const decisionArg = process.argv.indexOf('--decision');
+    const defaultDecision = decisionArg >= 0 ? process.argv[decisionArg + 1] : 'rejected';
+    const refArg = process.argv.indexOf('--ref');
+    const ref = refArg >= 0 ? process.argv[refArg + 1] : '';
+    const homeArg = process.argv.indexOf('--home');
+    const home = homeArg >= 0 ? process.argv[homeArg + 1] : auditHome();
+    const dir = path.join(home, '.claude');
+    const candidateFile = path.join(dir, 'handoff-audit-candidates.jsonl');
+    const reviewedFile = reviewedCandidatesFile(home);
+    const nextFile = path.join(dir, 'next-session.md');
+    const candidates = readJsonl(candidateFile);
+    const knowledgeFile = fileURLToPath(new URL('./handoff-audit-knowledge.json', import.meta.url));
+    const knowledge = JSON.parse(fs.readFileSync(knowledgeFile, 'utf8'));
+    const toolRouteCandidates = candidates.filter(c => c.reason === 'tool-name-route');
+    const ts = new Date().toISOString();
+    let moved = 0;
+    for (const c of toolRouteCandidates) {
+      const autoDecision = knowledge.some(k => key(k.pattern) === key(c.pattern)) ? 'adopted' : defaultDecision;
+      appendJsonl(reviewedFile, { ts, observation: c.observation, pattern: c.pattern, route: c.route, decision: autoDecision, ref });
+      moved++;
+    }
+    const kept = candidates.filter(c => c.reason !== 'tool-name-route');
+    if (toolRouteCandidates.length > 0) fs.writeFileSync(candidateFile, kept.map(JSON.stringify).join('\n') + (kept.length > 0 ? '\n' : ''));
+    // dequeue TODO from next-session.md
+    try {
+      const previous = fs.readFileSync(nextFile, 'utf8');
+      const dequeued = dequeueToolRouteReview(previous);
+      if (dequeued !== previous) writeHandoff(nextFile, dequeued);
+    } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    console.log(JSON.stringify({ moved }));
+    process.exit(0);
+  }
   try { console.log(JSON.stringify(await runNightly())); }
   catch (error) { console.error(`handoff-audit-nightly: ${error.message}`); process.exitCode = 1; }
 }

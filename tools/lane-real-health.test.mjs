@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { realLaneStats, applyRealLaneHealth, billingFailure, billingWithQuotaHint } from './lib/lane-real-health.mjs';
+import { realLaneStats, applyRealLaneHealth, billingFailure, billingWithQuotaHint, probeViaChain } from './lib/lane-real-health.mjs';
 import { laneDoctorQuick, laneDoctorProbe } from './lane-doctor.mjs';
 const now = Date.parse('2026-10-29T12:00:00Z');
 function fixture(t, rows) {
@@ -408,4 +408,36 @@ test('cached chain evidence cannot retain billing, quota, auth or alive classifi
     assert.equal(health.lanes.codex.alive, false);
     assert.equal(health.lanes.codex.viaChain, true);
   }
+});
+
+test('[routing] 診断行に他レーン名があっても自レーンのタグで答えた probe は viaChain にしない', t => {
+  const text = [
+    '[routing] カテゴリ summarize は実測表から openrouter/inclusionai/ling-3.0-flash を先頭にします',
+    '[routing] gemini はdemote中のため連鎖の末尾へ回します',
+    '[cooldown] glm はスキップ (lane_doctor_usage_limit, 残り2991分)',
+    '(出力なし)',
+    '[openrouter:openai/gpt-oss-120b] in=73 out=10tok',
+  ].join('\n');
+  assert.equal(probeViaChain(text, 'openrouter'), false);
+});
+
+test('他レーンのタグで答えた probe は viaChain', t => {
+  const text = [
+    '[routing] カテゴリ summarize は実測表から openrouter/inclusionai/ling-3.0-flash を先頭にします',
+    '[routing] gemini はdemote中のため連鎖の末尾へ回します',
+    '[cooldown] glm はスキップ (lane_doctor_usage_limit, 残り2991分)',
+    '(出力なし)',
+    '[openrouter:inclusionai/ling-3.0-flash] in=26 out=90tok',
+  ].join('\n');
+  assert.equal(probeViaChain(text, 'deepseek'), true);
+});
+
+test('[codex-do] cheap-first: ... は診断行でも viaChain のまま', t => {
+  const text = '[codex-do] cheap-first: Gemini HTTP 402 insufficient balance';
+  assert.equal(probeViaChain(text, 'codex'), true);
+});
+
+test('通常の本文に他レーン名が出たら従来どおり viaChain', t => {
+  const text = 'Gemini HTTP 402 insufficient balance';
+  assert.equal(probeViaChain(text, 'codex'), true);
 });

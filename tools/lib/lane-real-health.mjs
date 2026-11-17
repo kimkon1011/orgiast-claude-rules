@@ -11,9 +11,16 @@ export function laneErrorText(text, lane) {
     && !LANE_NAMES.some(other => other !== lane && new RegExp(`\\b${other}\\b`, 'i').test(line))
   ).join('\n');
 }
+// [routing] / [cooldown] / [codex-do] は「どのレーンが答えたか」ではなく経路の診断。
+// ここに並ぶ他レーン名を連鎖の証拠にすると、自レーンが答えた probe まで判定不能に落ちる
+// （2026-11-17 実測: openrouter が答えているのに冒頭の [routing] gemini… で probe_inconclusive）。
+const DIAGNOSTIC_LINE = /^\s*\[(?:routing|cooldown|codex-do)\]/i;
+const CHAIN_MARKER = /cheap-first:|fallback backend=|ack backend=|\[routing\].*(?:fallback|switch|chain)/i;
 export function probeViaChain(text, lane) {
-  return /cheap-first:|fallback backend=|ack backend=|\[routing\].*(?:fallback|switch|chain)/i.test(String(text))
-    || LANE_NAMES.some(other => other !== lane && new RegExp(`\\b${other}\\b`, 'i').test(String(text)));
+  return String(text).split(/\r?\n/).some(line =>
+    CHAIN_MARKER.test(line)
+    || (!DIAGNOSTIC_LINE.test(line)
+      && LANE_NAMES.some(other => other !== lane && new RegExp(`\\b${other}\\b`, 'i').test(line))));
 }
 
 const AUTH_DOMINANT_RATIO = 0.9;

@@ -55,10 +55,13 @@ export function auditTasks(tasks, overrides = {}, now = Date.now(), { required =
   return findings;
 }
 
-export function unresolvedTasks(tasks, findings, state, now = Date.now()) {
+export function unresolvedTasks(tasks, findings, state, now = Date.now(), { required = [] } = {}) {
+  const requiredSet = new Set(required.map(key));
   return Object.entries(state.heals || {}).flatMap(([name, heal]) => {
     if (heal.resolved || +now <= stamp(heal.at)) return [];
     const task = tasks.find(t => key(t.taskName) === key(name));
+    // Disabled non-required tasks are intentionally retired → treat as resolved.
+    if (task && task.state === 'Disabled' && !requiredSet.has(key(name))) return [];
     const stillBad = findings.some(f => key(f.name) === key(name));
     return !task || !(stamp(task.lastRunTime) > stamp(heal.at)) || stillBad
       ? [{ name, kind: 'unresolved', reason: heal.kind, at: heal.at }] : [];
@@ -131,7 +134,7 @@ export async function runAudit({ home = homeDefault(), platform = process.platfo
     state.notified ??= {};
     const save = () => { fs.writeFileSync(`${stateFile}.tmp`, JSON.stringify(state, null, 2)); fs.renameSync(`${stateFile}.tmp`, stateFile); };
     const findings = auditTasks(tasks, overrides, now, { required, artifactMtimes });
-    const unresolved = unresolvedTasks(tasks, findings, state, now);
+    const unresolved = unresolvedTasks(tasks, findings, state, now, { required });
     for (const name of Object.keys(state.heals || {})) if (!unresolved.some(f => f.name === name) && +now > stamp(state.heals[name].at)) { state.heals[name].resolved = true; delete state.notified[name]; }
     const heals = dryRun ? [] : await healTasks(findings, { startScheduledTask: start, enableScheduledTask: enable, runConverge: () => background([path.join(dir, 'setup.mjs'), '--converge'], { home, spawnImpl, platform }), state, now, save });
     const lines = unresolved.map(f => `🚨 未修復: ${f.name}（${f.reason}）`);

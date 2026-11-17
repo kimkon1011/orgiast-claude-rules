@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 
 function run(command, spawnImpl = spawnSync) {
-  const result = spawnImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::OutputEncoding=[Text.Encoding]::UTF8;$ErrorActionPreference='Stop';${command}`], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
+  const result = spawnImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::OutputEncoding=[Text.Encoding]::UTF8;$ErrorActionPreference='Stop';${command}`], { encoding: 'utf8', windowsHide: true, timeout: 60000 });
   if (result.error || result.status !== 0) throw result.error || new Error(result.stderr || `powershell exit ${result.status}`);
   const text = String(result.stdout || '').trim();
   return text ? JSON.parse(text) : null;

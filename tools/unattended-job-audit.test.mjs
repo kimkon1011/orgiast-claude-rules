@@ -105,6 +105,21 @@ test('shared guard enforces 6h and 24h launch intervals', t => {
   assert.equal(launchAudit({ ...options, now: now + 6 * 3600000 }), true);
   assert.equal(calls.length, 2); assert.ok(calls[0][1].includes('--quiet'));
 });
+test('Disabled non-required task with heal is resolved (intentionally retired)', () => {
+  const state = { heals: { OrgiastRetired: { at: new Date(now).toISOString(), kind: 'failed' } } };
+  const retired = [{ taskName: '\\OrgiastRetired', state: 'Disabled', lastRunTime: '1999-01-01', lastTaskResult: 0, triggers: [daily] }];
+  assert.equal(unresolvedTasks(retired, [], state, now + 1).length, 0);
+  assert.equal(unresolvedTasks(retired, [], state, now + 1, { required: ['OrgiastCostImproveLoop'] }).length, 0);
+  // Existing heuristics (task missing, or task ran since heal) still apply
+  assert.equal(unresolvedTasks([], [], state, now + 1).length, 1, 'missing tasks stay unresolved');
+  const ran = [{ ...retired[0], lastRunTime: new Date(now + 1).toISOString(), state: 'Ready' }];
+  assert.equal(unresolvedTasks(ran, [], state, now + 2).length, 0, 'post-heal run clears');
+});
+test('Disabled required task with heal remains unresolved', () => {
+  const state = { heals: { OrgiastRetired: { at: new Date(now).toISOString(), kind: 'failed' } } };
+  const tasks = [{ taskName: '\\OrgiastRetired', state: 'Disabled', lastRunTime: '1999-01-01', lastTaskResult: 0, triggers: [daily] }];
+  assert.equal(unresolvedTasks(tasks, [], state, now + 1, { required: ['OrgiastRetired'] }).length, 1);
+});
 test('notification DM success and missing-token / thrown DM fallback use fleet mail', async t => {
   const home = temp(t), calls = [], spawnImpl = spawnStub(calls);
   await notifyUnresolved('test', { home, spawnImpl, notify: async () => ({ delivered: 'dm' }) }); assert.equal(calls.length, 0);

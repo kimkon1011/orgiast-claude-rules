@@ -165,6 +165,8 @@ run_in_background を外し前景実行、ScheduleWakeup を使わず timeout �
 
 GUI operator・承認済み送信スクリプトは回数制限の対象外（Codex に委譲できない PC 操作を送信途中で止めないため）。
 ゲートが本体に要求するコマンドは `gateRequired` でツール回数に関係なく常時許可する。
+締め・記録・確認（`git status` / `diff` / `log`、`node --test`、`node --check`、`session-claims.mjs`、`close-session.mjs`、`kim-inbox.mjs`、`next-session.md` の編集と `next-session-rotate.mjs` / `next-session-launch.mjs`、`drive-upload.mjs` と Drive への `rclone copyto`）は回数に数えない。連結・置換・リダイレクトで実装コマンドを混ぜたものは対象外にしない。
+実装の Edit/Write は 4 回で警告、8 回で deny のまま。
 ゲートとガードが衝突したら回避せず、両者の契約テストを追加・修正して直す。
 
 node tools/lane-doctor.mjs --probe で状態更新し、node tools/codex-do.mjs --prompt-file <指示> --cwd <対象>。

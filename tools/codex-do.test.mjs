@@ -1445,6 +1445,46 @@ test('review で変更0件でも終了コード 0（非 implement は空 diff �
   assert.equal(result.status, 0);
 });
 
+test('detectIrreversibleSideEffect は取り消せない外部操作を検出する', () => {
+  for (const instruction of [
+    'node tools/seisaku-mail.mjs send --yes',
+    'node tools/gmail-draft.mjs draft-id --send',
+    'send_message channel hello',
+    'node tools/fleet-mail.mjs --send',
+    'node tools/notify-kim.mjs done',
+    'discord send_dm user hello',
+    'discord send_message channel hello',
+    'curl -X POST https://example.com/hook',
+    'node tools/delete-draft.mjs draft-id',
+    'gh pr merge 123 --squash',
+    'git push origin main',
+    'vercel deploy --prod',
+  ]) {
+    assert.equal(detectIrreversibleSideEffect(instruction), true, instruction);
+  }
+  assert.equal(detectIrreversibleSideEffect('通常の実装指示: tools/foo.mjs に関数を追加する'), false);
+  assert.equal(detectIrreversibleSideEffect('curl -X POST http://localhost:3000/test'), false);
+});
+
+test('shouldDisableExecutionChains は外部操作で chain を無効化する', () => {
+  assert.equal(shouldDisableExecutionChains('git push origin main'), true);
+  assert.equal(shouldDisableExecutionChains('通常の実装指示'), false);
+});
+
+test('irreversible 指示は Codex を1回だけ実行し no_changes でも fallback しない', () => {
+  const result = run(['--force-native', '--cwd', workDir(), '--kind', 'implement', 'node tools/seisaku-mail.mjs send --yes'], {
+    env: {
+      CODEX_DO_CHEAP_FIRST: '1',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: 'sent', stderr: '' }]),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /irreversible: 外部送信を含むため再試行・フォールバックを無効化（1回だけ実行）/);
+  assert.doesNotMatch(result.stderr, /cheap-first|codex が .*再試行|sol 失敗|Falling back/);
+  assert.match(result.stdout, /executor=codex/);
+  assert.doesNotMatch(result.stdout, /executor=fallback/);
+});
+
 // ── cheap-first テスト ───────────────────────────────────────────────
 
 test('isCheapFirstEnabled: implement 既定で有効、review では無効、lane:codex 記載で無効、env=0 で無効', () => {

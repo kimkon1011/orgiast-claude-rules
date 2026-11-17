@@ -1,0 +1,4 @@
+import test from'node:test';import assert from'node:assert/strict';import fs from'node:fs';import os from'node:os';import path from'node:path';import{customerPending,processThreads}from'./ai-daikodo-line-watch.mjs';
+const thread={threadId:'t1',lineUserId:'Uabc',displayName:'顧客',messages:[{id:'m1',at:'2026-11-17T00:00:00Z',author:'customer',text:'質問です'}]};
+test('customer判定',()=>{assert.equal(customerPending(thread),true);assert.equal(customerPending({...thread,messages:[{...thread.messages[0],author:'staff'}]}),false);});
+test('重複登録防止',async()=>{const h=fs.mkdtempSync(path.join(os.tmpdir(),'watch-'));let notices=0;const deps={home:h,draft:async()=> '返信案',notify:async()=>{notices++;}};assert.equal((await processThreads([thread],deps)).length,1);assert.equal((await processThreads([thread],deps)).length,0);assert.equal(notices,1);assert.ok(fs.existsSync(path.join(h,'.claude','ai-daikodo-line','drafts','t1-m1.txt')));});

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { getLoadGuardStatus, hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord, measureUserIdleSec, DEFAULT_REOPEN_MAX_CLAUDE } from './reopen-lost-sessions.mjs';
 import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
-import { unverifiedStreakCounts, isSessionProcessRunning, connectedRcSessionIds } from './reopen-lost-sessions.mjs';
+import { unverifiedStreakCounts, isSessionProcessRunning, connectedRcSessionIds, fetchWithRetry, recordApiResult } from './reopen-lost-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
 const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
@@ -2259,4 +2259,102 @@ test('measureUserIdleSec: Win32 実機で数値を返す（Add-Type 完全性の
   const sec = measureUserIdleSec();
   assert.ok(Number.isInteger(sec), `measureUserIdleSec() returned non-integer: ${sec}`);
   assert.ok(sec >= 0, `measureUserIdleSec() returned negative: ${sec}`);
+});
+
+// ── fetchWithRetry ──────────────────────────────────────
+
+test('fetchWithRetry: 4xx (non-429) は再試行せずすぐ返す', async () => {
+  let attempts = 0;
+  const fetchImpl = async () => { attempts++; return { ok: false, status: 403 }; };
+  const response = await fetchWithRetry('http://x', { fetchImpl });
+  assert.equal(response.status, 403);
+  assert.equal(attempts, 1, 'should not retry 403');
+});
+
+test('fetchWithRetry: 429 は指数バックオフで再試行する', async () => {
+  let attempts = 0;
+  const fetchImpl = async () => { attempts++; return { ok: false, status: 429 }; };
+  const response = await fetchWithRetry('http://x', { fetchImpl, retries: 2, baseDelayMs: 1 });
+  assert.equal(response.status, 429);
+  assert.equal(attempts, 3, 'should retry 429 2+1=3 times');
+});
+
+test('fetchWithRetry: 5xx は指数バックオフで再試行する', async () => {
+  let attempts = 0;
+  const fetchImpl = async () => { attempts++; return { ok: false, status: 502 }; };
+  const response = await fetchWithRetry('http://x', { fetchImpl, retries: 1, baseDelayMs: 1 });
+  assert.equal(response.status, 502);
+  assert.equal(attempts, 2, 'should retry 502');
+});
+
+test('fetchWithRetry: ネットワーク例外は再試行する', async () => {
+  let attempts = 0;
+  const fetchImpl = async () => { attempts++; throw Error('ENOTFOUND'); };
+  await assert.rejects(() => fetchWithRetry('http://x', { fetchImpl, retries: 1, baseDelayMs: 1 }));
+  assert.equal(attempts, 2);
+});
+
+test('fetchWithRetry: 試行ごとに新しい signal が作られる', async () => {
+  const signals = [];
+  const fetchImpl = async (_url, opts) => { signals.push(opts.signal); throw Error('net err'); };
+  await assert.rejects(() => fetchWithRetry('http://x', { fetchImpl, retries: 1, baseDelayMs: 1 }));
+  assert.equal(signals.length, 2);
+  assert.notEqual(signals[0], signals[1], 'each attempt gets a new AbortSignal');
+});
+
+test('fetchWithRetry: deadline を超える再試行はしない', async () => {
+  let attempts = 0;
+  const now = () => 1000;
+  const deadline = 1000;
+  const fetchImpl = async () => { attempts++; return { ok: false, status: 502 }; };
+  const response = await fetchWithRetry('http://x', { fetchImpl, retries: 3, baseDelayMs: 10, deadline, now });
+  assert.equal(response.status, 502);
+  assert.equal(attempts, 1, 'deadline exceeded on first attempt');
+});
+
+test('fetchWithRetry: 成功したら response を返す', async () => {
+  const fetchImpl = async () => ({ ok: true, status: 200 });
+  const response = await fetchWithRetry('http://x', { fetchImpl });
+  assert.equal(response.status, 200);
+});
+
+// ── recordApiResult ─────────────────────────────────────
+
+test('recordApiResult: 7回連続失敗まで false、8回目で true', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'record-api-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  for (let i = 0; i < 7; i++) {
+    assert.equal(recordApiResult(base, 'fetch timeout'), false, `attempt ${i + 1} should be false`);
+  }
+  assert.equal(recordApiResult(base, 'fetch timeout'), true, '8th attempt should be true');
+  const state = JSON.parse(fs.readFileSync(path.join(base, 'reopen-lost-sessions-fail-state.json'), 'utf8'));
+  assert.equal(state.count, 8);
+});
+
+test('recordApiResult: 成功するとカウンタが0に戻る', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'record-reset-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  recordApiResult(base, 'error'); recordApiResult(base, 'error'); recordApiResult(base, 'error');
+  assert.equal(recordApiResult(base, null), false, 'success resets counter');
+  const state = JSON.parse(fs.readFileSync(path.join(base, 'reopen-lost-sessions-fail-state.json'), 'utf8'));
+  assert.equal(state.count, 0);
+});
+
+test('recordApiResult: 初回呼び出し（state ファイル無し）で count=1', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'record-first-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  assert.equal(recordApiResult(base, 'timeout'), false, 'first call should be false');
+  const state = JSON.parse(fs.readFileSync(path.join(base, 'reopen-lost-sessions-fail-state.json'), 'utf8'));
+  assert.equal(state.count, 1);
+});
+
+test('recordApiResult: 既定の閾値は 8', () => {
+  const src = fs.readFileSync(new URL('./reopen-lost-sessions.mjs', import.meta.url), 'utf8');
+  assert.ok(src.includes('threshold = 8'), 'default threshold should be 8');
 });

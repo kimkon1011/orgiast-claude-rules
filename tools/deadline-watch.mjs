@@ -231,7 +231,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   finally {
     if (args && !args['dry-run'] && !args.digest) {
       await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineWatch', startedAt, finishedAt: new Date().toISOString(), ok, summary: ok ? '期限追跡完了' : '鍵なし席のためスキップ', cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
-      try { const log = path.join(home, '.claude/logs/deadline-watch.log'); fs.mkdirSync(path.dirname(log), { recursive: true }); fs.appendFileSync(log, `${new Date().toISOString()} deadline-watch ${ok ? 'ok' : 'skipped'}\n`); } catch (e) { stderr(`deadline-watch: log write failed (${e.code || e.message})`); }
+      try { const log = path.join(home, '.claude/logs/deadline-watch-app.log'); fs.mkdirSync(path.dirname(log), { recursive: true }); fs.appendFileSync(log, `${new Date().toISOString()} deadline-watch ${ok ? 'ok' : 'skipped'}\n`); } catch (e) { stderr(`deadline-watch: log write failed (${e.code || e.message})`); }
     }
   }
 }

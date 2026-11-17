@@ -191,13 +191,10 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     };
     const result = dryRun ? await work() : await withLedgerLock(home, work);
     stdout(JSON.stringify(result, null, 2));
-      if (result.errors.length === 0) {
-        ok = true; resultSummary = '期限検出完了';
-      } else {
-        resultSummary = `期限検出エラー: ${result.errors.map(e => e.source).join(', ')}`;
-      }
-      return ok ? 0 : 1;
-  } catch (e) { stderr(`deadline-detect: ${e.message}`); return 1; }
+    if (result.errors.length === 0) { ok = true; resultSummary = '期限検出完了'; }
+    else resultSummary = `期限検出エラー: ${result.errors.map(e => e.source).join(', ')}`;
+    return ok ? 0 : 1;
+  } catch (e) { resultSummary = `期限検出エラー: ${e.message}`; stderr(`deadline-detect: ${e.message}`); return 1; }
   finally {
     if (valid && !dryRun) {
       await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineDetect', startedAt, finishedAt: new Date().toISOString(), ok, summary: resultSummary || (ok ? '期限検出完了' : '鍵なし席のためスキップ'), cycleMinutes: 1440 }, { homeDir: home, localOnly: true });

@@ -392,14 +392,50 @@ export function wantsEdit(kind, instruction, review = false) {
 // review や非 implement では常に false。
 export function isCheapFirstEnabled({ kind, instruction, review = false, env = process.env } = {}) {
   if (kind !== 'implement') return false;
+  if (detectIrreversibleSideEffect(instruction)) return false;
   if (review) return false;
   if (/lane:\s*codex/i.test(String(instruction || ''))) return false;
   if (String(env.CODEX_DO_CHEAP_FIRST ?? '') === '0') return false;
   return true;
 }
 
+// 副作用はファイル差分では検証できない。指示中の操作名を保守的に検出する。
+export function detectIrreversibleSideEffect(text) {
+  const value = String(text ?? '');
+  const has = (pattern) => pattern.test(value);
+  return (has(/\bseisaku-mail\.mjs\b/i) && has(/\bsend\b/i))
+    || (has(/\bgmail-draft\.mjs\b/i) && has(/--send\b/i))
+    || has(/\bsend_(?:message|dm)\b/i)
+    || (has(/\bfleet-mail\.mjs\b/i) && has(/--send\b/i))
+    || has(/\bnotify-kim\b/i)
+    || (has(/\bdiscord\b/i) && has(/\bsend\b/i))
+    || (has(/\bcurl\b/i) && has(/(?:^|\s)(?:-X\s*|--request(?:\s+|=))["']?POST\b/i)
+      && [...value.matchAll(/https?:\/\/[^\s"'`]+/gi)]
+        .some(([url]) => {
+          try { return !['localhost', '127.0.0.1', '[::1]'].includes(new URL(url).hostname.toLowerCase()); }
+          catch { return true; } // URL を判別できないときも再送を避ける。
+        }))
+    || has(/\bdelete-draft\b/i)
+    || has(/\bgh\s+pr\s+merge\b/i)
+    || has(/\bgit\s+push\b/i)
+    || (has(/\bvercel\s+deploy\b/i) && has(/--prod\b/i));
+}
+
+// 全再実行経路で共有する I/O のない判定。失敗・タイムアウトでも2人目に渡さない。
+export function decideExecutionPolicy({ instruction = '', noFallback = false } = {}) {
+  const irreversible = detectIrreversibleSideEffect(instruction);
+  return {
+    irreversible,
+    noFallback: noFallback || irreversible,
+    cheapFirstAllowed: !irreversible,
+    maxAttempts: irreversible ? 1 : 2,
+    allowModelRetry: !irreversible,
+    requireTreeChanges: !irreversible,
+  };
+}
+
 // A zero exit code alone does not prove that an implementation was delivered.
-export function cheapFirstFailureReason({ kind, result, treeChanged }) {
+export function cheapFirstFailureReason({ kind, result, treeChanged, irreversible = false }) {
   const output = String(result.output || '');
   const combined = output + '\n' + (result.stderr || '');
   if (/unrecognized_model/i.test(combined)) return 'unrecognized_model';
@@ -407,7 +443,7 @@ export function cheapFirstFailureReason({ kind, result, treeChanged }) {
   // Replacement characters, invalid controls and common UTF-8-as-Latin-1 sequences.
   if (/[\uFFFD\u0000-\u0008\u000B\u000C\u000E-\u001F]/u.test(output)
     || /(?:Ã.|Â.|â[\u0080-\u00BF€]|ðŸ){2,}/u.test(output)) return 'garbled_output';
-  if (kind === 'implement' && !treeChanged) return 'no_changes';
+  if (!irreversible && kind === 'implement' && !treeChanged) return 'no_changes';
   return '';
 }
 
@@ -1123,7 +1159,7 @@ const dryRun = args.includes('--dry-run');
 const forceNative = args.includes('--force-native') && !args.includes('--require-wsl') && process.env.ORGIAST_CODEX_REQUIRE_WSL !== '1';
 const allowNative = args.includes('--allow-native'); // 互換用の no-op。
 const requireWsl = args.includes('--require-wsl') || process.env.ORGIAST_CODEX_REQUIRE_WSL === '1';
-const noFallback = args.includes('--no-fallback') || process.env.CODEX_DO_NO_FALLBACK === '1';
+let noFallback = args.includes('--no-fallback') || process.env.CODEX_DO_NO_FALLBACK === '1';
 // WSL 経路が使えず codex を起動できなかったか。true のときは再試行/昇格をせず、
 // 既存のフォールバック連鎖へそのまま渡す（2026-09-19）。
 let launchUnavailable = false;
@@ -1220,6 +1256,9 @@ if (promptFileIndex >= 0) {
   }
 }
 if (!instruction.trim()) { console.error(usage); process.exit(2); }
+const executionPolicy = decideExecutionPolicy({ instruction, noFallback });
+const { irreversible } = executionPolicy;
+noFallback = executionPolicy.noFallback;
 
 const home = process.env.ORGIAST_HOME || os.homedir();
 const slug = cwd.replace(/[^a-z0-9]/gi, '-').toLowerCase();
@@ -1282,6 +1321,9 @@ const kindAuto = !explicitKind && !model && lane === 'auto' && !review && (promp
 const taskKind = explicitKind || (kindAuto ? classifyTaskKind(instruction) : 'implement');
 const useCodex = CODEX_KINDS.has(taskKind);
 if (dryRun) { console.log(`[codex-do] kind=${taskKind} origin=${origin} route=${useCodex ? 'codex' : 'llm-ask'}`); if (useCodex) logCodex(); console.log(prompt); process.exit(0); }
+if (irreversible) {
+  console.error('[codex-do] irreversible: 外部送信を含むため再試行・フォールバックを無効化（1回だけ実行）');
+}
 
 // 保留判定: 上限中・無人枠超過なら Codex を起動せず deferred(終了コード 75)で返す。失敗ではない。
 function recordDeferred(gate) {
@@ -1344,10 +1386,10 @@ try {
 // 入っていても編集を要求していない。文面だけで判定すると「〜を修正したか検証して」が wantedEdit に
 // なり、空diff→codex の不要な astra 昇格→gemini fallback まで走って failure として台帳に残る
 // (2026-10-19 実測: fallback の直近3件中2件が kind:verify の空diff)。kind を優先する。
-const wantedEdit = wantsEdit(taskKind, instruction, review);
+const wantedEdit = executionPolicy.requireTreeChanges && wantsEdit(taskKind, instruction, review);
 const started = Date.now();
 let mockIndex = 0;
-const cheapFirst = useCodex && isCheapFirstEnabled({ kind: taskKind, instruction, review, env: process.env });
+const cheapFirst = executionPolicy.cheapFirstAllowed && useCodex && isCheapFirstEnabled({ kind: taskKind, instruction, review, env: process.env });
 if (cheapFirst) {
   console.error('[codex-do] cheap-first: 安いAIを先に実行します（Codex は失敗時のみ）');
 }
@@ -1505,6 +1547,7 @@ async function runLlmAsk() {
     const ok = res.status === 0 && String(res.output || '').trim().length > 0;
     chain.push({ backend: provider, status: res.status ?? null, out: Math.ceil((res.outputChars || 0) / 4), secs: Number(((Date.now() - attemptStarted) / 1000).toFixed(3)), outcome: ok ? 'ok' : 'failed' });
     if (ok) return { result: res, provider, chain };
+    if (irreversible) break;
   }
   return { result: last || { status: 1, outputChars: 0, output: '', stderr: '' }, provider: null, chain };
 }
@@ -1513,11 +1556,12 @@ if (!useCodex) {
   console.log(llmAskWarning);
   const started2 = Date.now();
   const routed = await runLlmAsk();
-  recordUsage({ ...routed.result, status: routed.provider ? 0 : (routed.result.status || 1) }, `llm-ask/${routed.provider || 'none'}`, (Date.now() - started2) / 1000, 'llm-ask', routed.chain.length, routed.chain);
+  const routedStatus = irreversible ? (routed.result.status ?? 1) : (routed.provider ? 0 : (routed.result.status || 1));
+  recordUsage({ ...routed.result, status: routedStatus }, `llm-ask/${routed.provider || 'none'}`, (Date.now() - started2) / 1000, 'llm-ask', routed.chain.length, routed.chain);
   if (!routed.provider) console.error(`[codex-do] llm-ask(gemini/deepseek/groq)がすべて失敗しました。Codex が必要な作業なら --kind implement を付けて再実行してください`);
   console.log(`[codex-do] executor=llm-ask${routed.provider ? `:${routed.provider}` : ''} kind=${taskKind}`);
   console.log(llmAskWarning);
-  process.exit(routed.provider ? 0 : (routed.result.status || 1));
+  process.exit(routedStatus);
 }
 
 async function tryCheapFirstFallback() {
@@ -1558,7 +1602,7 @@ async function tryCheapFirstFallback() {
       : null;
     const quality = diffNow ? assessFallbackQuality({ backendName: backend.name, taskKind, diffText: diffNow.stdout, output: res.output, cwd }) : '';
     const invalid = dec.outcome === 'ok' ? (quality || cheapFirstFailureReason({
-      kind: taskKind, result: res, treeChanged: backendTreeBefore.trim() !== treeSnapshot().trim(),
+      kind: taskKind, result: res, treeChanged: backendTreeBefore.trim() !== treeSnapshot().trim(), irreversible,
     })) : '';
     const outcome = quality ? 'quality_fail' : (invalid || dec.outcome);
     if (outcome === 'incompatible') {
@@ -1700,13 +1744,14 @@ async function executeCodex() {
   const codexArgs = buildCodexExecArgs({ ...selectedLane, review });
   let result = null, attempts = 0, seconds = 0;
   const primaryStarted = Date.now();
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= executionPolicy.maxAttempts; attempt++) {
     const attemptStarted = Date.now();
     logCodex();
     result = await launchCodex(codexArgs, primaryStarted);
     const elapsed = (Date.now() - attemptStarted) / 1000;
     seconds += elapsed;
     attempts = attempt;
+    if (!executionPolicy.allowModelRetry) break;
     // そもそも起動できていない(launched:false)なら再試行しても結果は変わらない。
     if (result?.launched === false) break;
     // 認証失敗は再試行しても直らない。出力ゼロの再試行を省いてフォールバックへ回す。
@@ -1764,7 +1809,7 @@ while (!(cheapFirstFallbackDone && executorName === 'fallback')) {
   result = await executeCodex();
   quotaCheck = detectQuotaLimit(result?.output, result?.stderr, result?.status, prompt);
   if (clearCooldownAfterRecheck({ home, recheck: cooldownRecheck, result, quotaMatched: quotaCheck.matched })) cooldownRecheck = false;
-  if (quotaCheck.matched && selectedLane.slug === ASTRA && !astraRetreated) {
+  if (executionPolicy.allowModelRetry && quotaCheck.matched && selectedLane.slug === ASTRA && !astraRetreated) {
     const resetUntil = parseCodexResetUntil(`${result.output || ''}\n${result.stderr || ''}`);
     try { writeCodexCooldown(resetUntil, 'codex-astra', 'usage_limit'); } catch {}
     try {
@@ -1777,7 +1822,7 @@ while (!(cheapFirstFallbackDone && executorName === 'fallback')) {
     continue;
   }
   const failure = failureReason(result);
-  if (!quotaCheck.matched && failure && !launchUnavailable && !authFailed && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
+  if (executionPolicy.allowModelRetry && !quotaCheck.matched && failure && !launchUnavailable && !authFailed && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
     console.log(`[codex-do] sol 失敗 → astra へ昇格 (理由: ${failure})`);
     escalated = true;
     selectedLane = { slug: ASTRA, effort: 'high', reason: `escalated:${failure}` };
@@ -1801,7 +1846,7 @@ const fallbackReason = skipCodexReason === 'unattended_budget' ? 'Codex 無人�
   : authFailed ? 'Codex 未ログイン(認証失敗)'
   : launchUnavailable ? 'WSL 経路が無く codex を起動できない'
   : quotaCheck.matched ? 'Codex usage limit を検出' : 'Astra 昇格後も失敗';
-if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
+if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed)) {
   if (quotaCheck.matched) {
     quotaResetUntil = parseCodexResetUntil(`${result?.output || ''}\n${result?.stderr || ''}`);
     try { writeCodexCooldown(quotaResetUntil); } catch {}

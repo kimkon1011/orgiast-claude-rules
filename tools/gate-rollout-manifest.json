@@ -111,7 +111,7 @@
       "rollout": "deny",
       "legacy": true
     },
-    "lane-claim-evidence-gate": {"rollout":"deny","immediatePolicy":"2026-11-17 kim 指示: レーン断定には直接実測が必須"},
+    "lane-claim-evidence-gate": {"rollout":"deny","immediatePolicy":"2026-11-17 kim 指示: レーン断定には直接実測が必須","distributedAt":"2026-11-17T00:00:00Z","denyAfter":"2026-11-24T00:00:00Z"},
     "lane-abandonment-gate": {
       "rollout": "deny",
       "legacy": true

@@ -8,6 +8,7 @@ import { isEntry } from './is-entry.mjs';
 import { listMessages } from './beeper-api.mjs';
 import { loadSecrets, resolveGroup } from './line-group-send.mjs';
 import { latestOf, readOutbound, textHash, writeContextMarker, writeKimApprovedAudit } from './lib/send-context.mjs';
+import { findPcoContactBan, isPcoSendLifted, PCO_CONTACT_BAN_REASON } from './lib/pco-contact-ban.mjs';
 import { mintDwdToken } from './gmail-draft.mjs';
 import { resolveDiscordBotToken } from './notify-kim.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
@@ -248,7 +249,14 @@ export async function main(argv=process.argv.slice(2), deps={}) {
   const intendedChanges = []; argv.forEach((v,i) => { if (v === '--intended-change' && argv[i+1]) intendedChanges.push(argv[i+1]); });
   if(!['line','gmail','discord','beeper'].includes(channel)||!target||!file) throw new Error('使い方: node tools/send-context-check.mjs --channel line|gmail|discord|beeper --target <宛先IDまたはメール> --text-file <送る本文> [--intended-change "<変更内容>"] [--periodic-report --recipient <宛先名>] [--kim-approved "<承認の根拠メモ>"]');
   const kimApproved = parseKimApprovedNote(argv);
-  const text=fs.readFileSync(file,'utf8').trim(); const result=await (deps.fetchHistory||fetchHistory)(channel,target,{home:deps.home});
+  const text=fs.readFileSync(file,'utf8').trim();
+  const pcoBan=findPcoContactBan({target,text});
+  if(pcoBan && !isPcoSendLifted(kimApproved)){
+    const detail=pcoBan.address||pcoBan.domain||pcoBan.name||target;
+    console.error(`${PCO_CONTACT_BAN_REASON}（対象: ${detail}）`);
+    return 3;
+  }
+  const result=await (deps.fetchHistory||fetchHistory)(channel,target,{home:deps.home});
   for(const line of labelHistory(result.messages)) console.log(line.slice(0, 700));
   const periodicReport=argv.includes('--periodic-report')?{recipient:val('--recipient')||'宛先本人',kind:'定期報告'}:false;
   let verdict;

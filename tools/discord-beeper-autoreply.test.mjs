@@ -1075,3 +1075,22 @@ test('削除検出: isDeleted フラグ → 学習する', async t => {
   assert.equal(entry.msgId, replyId);
   assert.equal(entry.outcome, 'deleted_and_corrected');
 });
+
+for (const safeRetry of [false, true]) test(`11/17 社外招待指示: 再生成1回・safe=${safeRetry}`, async t => {
+  const items = [];
+  const f = fixture(t);
+  f.options.addItemImpl = async (_home, item) => { items.push(item); return { id: 'ask' }; };
+  let calls = 0;
+  f.options.llm = async ({ input, system }) => {
+    calls++;
+    assert.match(system, /お客様（社外の人）を社内カレンダーの予定に招待するよう社員に指示しない/);
+    if (calls === 2) assert.equal(input.forbiddenRetry, true);
+    return JSON.stringify({ ...reply, answer: calls === 2 && safeRetry
+      ? 'お客様へメール本文に日時と会議URLを書いて案内してください。'
+      : 'カレンダー招待への丸山様（必要であれば加藤様）の追加もお願いします' });
+  };
+  await runOnce(f.options);
+  assert.equal(calls, 2);
+  assert.equal(f.sent.length, safeRetry ? 1 : 0);
+  if (!safeRetry) assert.deepEqual(items.map(i => i.kind), ['ask']);
+});

@@ -43,7 +43,7 @@ const PREFIX = '【kimのClaudeによる代理回答】';
 const CORRECTED = '【kimのClaudeによる代理回答・kimが訂正済み→下のkimの返信を参照】';
 const DISCLAIMER = '\n\n※kim本人の返答ではなく自動返信です。訂正があれば kim が追って返信します。';
 const DISCLAIMER_PTN = /\n\n※kim本人の返答ではなく自動返信です。訂正があれば kim が追って返信します。\s*$/;
-export const FORBIDDEN_REPLY_PTN = /kim.{0,6}(に|へ)(確認|転送)|転送(しました|いたしました)|確認(待ち|でき次第|が取れ次第)|少々お待ち|今しばらくお待ち|個人DM/;
+export const FORBIDDEN_REPLY_PTN = /kim.{0,6}(に|へ)(確認|転送)|転送(しました|いたしました)|確認(待ち|でき次第|が取れ次第)|少々お待ち|今しばらくお待ち|個人DM|カレンダー.{0,10}(招待|追加).{0,30}(様|さん|お客|クライアント|先方)|(様|お客|クライアント|先方).{0,30}カレンダー.{0,10}(招待|追加)/;
 const SEED = '<!-- 会社・kimについて人が自由に追記できます。 -->\nkim = 株式会社オージャスト 代表。関連会社: Reブース／NEXTForward／東邦鋼業。社内連絡は Discord、決着はメール。\n';
 const ADMIN_ERROR = 'admin token がありません。node tools/discord-admin-token-install.mjs を実行してください';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -204,7 +204,7 @@ export async function classifyReply(llm, input) {
 export async function retryForbiddenAnswer(llm, decision, input) {
   const retryRaw = await llm({
     category: 'jp_reply',
-    system: REPLY_SYSTEM + '\n\n直前の回答に禁止表現（代表への確認を約束する文/転送/確認待ち/少々お待ち/個人DM）が含まれていました。その場で具体的に判断して回答してください。判断を先送りする文は書かないでください。',
+    system: REPLY_SYSTEM + '\n\n直前の回答に禁止表現（代表への確認を約束する文/転送/確認待ち/少々お待ち/個人DM/カレンダー招待への社外の人の追加）が含まれていました。その場で具体的に判断して回答してください。判断を先送りする文は書かないでください。',
     input: { ...input, forbiddenRetry: true, previousAnswer: decision.answer }
   });
   let retry;
@@ -356,6 +356,7 @@ needs_reply: 質問・依頼・確認求め=true、報告・連絡のみ=false�
 needs_kim_decision: related・documents・context 等の根拠が食い違う・見つからない時だけ=true。
 needs_kim_decision=trueでもneeds_reply=trueとし、暫定回答（answer）を必ず書く。あなたはその場で決めて答えること。質問には会話・knowledge・rulesから最も妥当な具体的な答え（数量・可否・進め方・どの部屋か等）を暫定で書く。迷う時は安全側・小さく取り消せる案を具体的に示す（例: 「まず1個購入で進めてください」「〜は保留で、先に〜を進めてください」）。判断を先送りするだけの文は書かない。
 禁止表現: 「代表に確認します／確認いたします」「転送しました」「確認待ち」「確認でき次第ご連絡」「少々お待ちください」「個人DMへ」の類は一切使わない。
+	カレンダー招待の禁止: お客様（社外の人）を社内カレンダーの予定に招待するよう社員に指示しない。お客様への案内はメール本文に日時と会議URLを書く。
 添付・リンクの中身は input の attachments/documents（画像は images のマルチパート） に入っている。中身を読んだうえで答える。「閲覧できない」「読めない」「確認できない仕様」等と答えてはならない。
 暫定回答には分かる事実（締切・必要書類・過去の慣例）を添え、推測で決定事項を書かない。知らないことは未確認と明記し、相手が今できる具体的な次の一手を書く。数字・固有名詞をでっち上げない。
 	会話・knowledge・documents・related に無い金額・単価・見積額を書かない。金額が必要なら「金額は kim が後で確定します」とだけ書く。

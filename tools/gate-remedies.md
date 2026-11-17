@@ -2,6 +2,14 @@
 
 値そのものは記載しない。取得: `node tools/onboarding-sync.mjs --keys-only --force`。
 
+## calendar-external-guest-gate
+
+社外のメールアドレスをカレンダーの参加者（attendees）に追加する Calendar MCP / Bash / PowerShell の操作をブロックする。社内（@orgiast.jp または config/staff-addresses.json のアドレス）のみ通す。
+
+- 承認マーカーによる解除はしない。社外 attendee を取り除き、社内参加者だけで再実行する。外部 payload を使う場合も参加者を検証可能な形にする。
+- 社外の人への案内は `node tools/gmail-draft.mjs --user <アカウント> --to <宛先> --subject "..." --body-file <本文>` でメール本文に日時と会議URLを書いて送る
+- 例外はない（従来型の「ゲートをskip」方式は未実装）
+
 ## askuser-selfcheck-gate
 
 質問前に既存権限でファイル/ツール結果を調べ、取得可能な情報を人に聞かない。

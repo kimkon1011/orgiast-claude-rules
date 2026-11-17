@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { runOnce, main, createDiscord, discordRequest, ensureTaskPriority, createLlm, contentFor, parseJson, combinePermissions, inventedAmounts, isReportOnly } from './discord-autoreply.mjs';
+import { runOnce, main, createDiscord, discordRequest, ensureTaskPriority, createLlm, contentFor, parseJson, combinePermissions, inventedAmounts, isReportOnly, FORBIDDEN_REPLY_PTN } from './discord-autoreply.mjs';
 
 const NOW = Date.parse('2026-10-09T03:00:00Z');
 const KIM = '715210673642012733';
@@ -1304,4 +1304,34 @@ test('collectReadableContent: 対象を優先し文脈画像の上限超過は�
   assert.deepEqual(capped.images.map(i => i.name), ['new.png']);
   assert.deepEqual(capped.failures, []);
   assert.deepEqual(capped.contextFailures, []);
+});
+
+test('FORBIDDEN_REPLY_PTN blocks calendar guest invitation pattern', () => {
+  // 11/17 の実害文面
+  assert.ok(FORBIDDEN_REPLY_PTN.test('カレンダー招待への丸山様（必要であれば加藤様）の追加もお願いします'));
+  // 類似パターン
+  assert.ok(FORBIDDEN_REPLY_PTN.test('カレンダー招待に田中様を追加してください'));
+  assert.ok(FORBIDDEN_REPLY_PTN.test('佐藤様をカレンダーに招待してください'));
+  // 内部だけの会話は引っかからない
+  assert.ok(!FORBIDDEN_REPLY_PTN.test('社内メンバーをカレンダーに招待しました（kim、seisaku-team）'));
+  assert.ok(!FORBIDDEN_REPLY_PTN.test('カレンダーの設定を確認しました'));
+});
+
+for (const safeRetry of [false, true]) test(`11/17 社外招待指示: 再生成1回・safe=${safeRetry}`, async t => {
+  const items = [];
+  const f = fixture(t);
+  f.options.addItemImpl = async (_home, item) => { items.push(item); return { id: 'ask' }; };
+  let calls = 0;
+  f.options.llm = async ({ input, system }) => {
+    calls++;
+    assert.match(system, /お客様（社外の人）を社内カレンダーの予定に招待するよう社員に指示しない/);
+    if (calls === 2) assert.equal(input.forbiddenRetry, true);
+    return JSON.stringify({ ...decision, answer: calls === 2 && safeRetry
+      ? 'お客様へメール本文に日時と会議URLを書いて案内してください。'
+      : 'カレンダー招待への丸山様（必要であれば加藤様）の追加もお願いします' });
+  };
+  await runOnce(f.options);
+  assert.equal(calls, 2);
+  assert.equal(f.posts().length, safeRetry ? 1 : 0);
+  if (!safeRetry) assert.deepEqual(items.map(i => i.kind), ['ask']);
 });

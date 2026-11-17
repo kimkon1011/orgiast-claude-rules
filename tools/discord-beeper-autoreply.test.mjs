@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runOnce, DISCORD_ACCOUNT, messageLink, isMessageRequest } from './discord-beeper-autoreply.mjs';
+import { runOnce, DISCORD_ACCOUNT, messageLink, isMessageRequest, isSyntheticMessage } from './discord-beeper-autoreply.mjs';
 
 const NOW = Date.parse('2026-11-12T04:00:00Z'); // 13:00 JST (allowed window)
 const reply = { needs_reply: true, needs_kim_decision: false, answer: 'マニュアルの一覧から確認できます。', confidence: 0.95 };
 const account = { accountID: DISCORD_ACCOUNT, network: 'Discord', user: { isSelf: true, id: 'kim' } };
-const message = (overrides = {}) => ({ id: 'm1', accountID: DISCORD_ACCOUNT, timestamp: new Date(NOW - 1000).toISOString(), sortKey: '2', text: 'マニュアルはどこですか？', senderName: '田中', isSender: false, ...overrides });
+const message = (overrides = {}) => ({ id: 'm1', type: 'TEXT', accountID: DISCORD_ACCOUNT, timestamp: new Date(NOW - 1000).toISOString(), sortKey: '2', text: 'マニュアルはどこですか？', senderName: '田中', isSender: false, ...overrides });
 const chat = (overrides = {}) => ({ id: 'chat1', localChatID: '828', accountID: DISCORD_ACCOUNT, title: '相談', type: 'single', ...overrides });
 
 function fixture(t, { chats = [chat()], messages, decision = reply } = {}) {
@@ -1076,6 +1076,86 @@ test('削除検出: isDeleted フラグ → 学習する', async t => {
   assert.equal(entry.outcome, 'deleted_and_corrected');
 });
 
+// ── 合成メッセージ（通話通知）対応 ──────────────────────────────────
+
+test('最新が通話通知→1つ前の本物の質問に返信', async t => {
+  const callMsg = message({
+    id: 'call',
+    sortKey: '3',
+    timestamp: new Date(NOW - 500).toISOString(),
+    text: 'kanbara1110 started a call. Use the Discord app to answer.',
+  });
+  const f = fixture(t, { messages: [message(), callMsg] });
+  f.data.chat1.push(message({ id: 'own', sortKey: '1', timestamp: new Date(NOW - 5000).toISOString(), isSender: true }));
+  const result = await runOnce(f.options);
+  assert.equal(result.replied, 1);
+  assert.equal(f.sent.length, 1);
+  // 返信先は通話通知(id=call)ではなく本物の質問(id=m1)
+  assert.equal(f.sent[0].options.replyToMessageID, 'm1');
+  const logged = fs.readFileSync(path.join(f.home, '.claude/discord-autoreply/sent-log.jsonl'), 'utf8');
+  assert.doesNotMatch(JSON.parse(logged.trim()).question, /started a call/);
+});
+
+test('通話通知のみ（本物のメッセージなし）→送信しない', async t => {
+  const callMsg = message({
+    id: 'call',
+    sortKey: '2',
+    timestamp: new Date(NOW - 500).toISOString(),
+    text: '(kanbara1110 started a call. Use the Discord app to answer.)',
+  });
+  const f = fixture(t, { messages: [callMsg] });
+  f.data.chat1.push(message({ id: 'own', sortKey: '1', timestamp: new Date(NOW - 5000).toISOString(), isSender: true }));
+  const result = await runOnce(f.options);
+  // pending が空になる（通話通知のみ）→ skipped
+  assert.equal(result.replied, 0);
+  assert.equal(f.sent.length, 0);
+  assert.equal(result.skipped, 1);
+});
+
+test('不在着信も合成メッセージとして扱う', async t => {
+  const missedCall = message({
+    id: 'missed',
+    sortKey: '3',
+    timestamp: new Date(NOW - 500).toISOString(),
+    text: '不在着信: kanbara1110',
+  });
+  const f = fixture(t, { messages: [message(), missedCall] });
+  f.data.chat1.push(message({ id: 'own', sortKey: '1', timestamp: new Date(NOW - 5000).toISOString(), isSender: true }));
+  const result = await runOnce(f.options);
+  assert.equal(result.replied, 1);
+  assert.equal(f.sent.length, 1);
+  // 返信先は本物の質問
+  assert.equal(f.sent[0].options.replyToMessageID, 'm1');
+});
+
+test('通話通知の後に本物の質問が来たらそちらに返信', async t => {
+  // own → 通話通知 → 質問(新しい)
+  const callMsg = message({
+    id: 'call',
+    sortKey: '2',
+    timestamp: new Date(NOW - 1000).toISOString(),
+    text: 'started a call. Use the Discord app to answer.',
+  });
+  const newQuestion = message({
+    id: 'new-q',
+    sortKey: '3',
+    timestamp: new Date(NOW - 500).toISOString(),
+    text: 'さっきの件どうなりましたか？',
+  });
+  const f = fixture(t, { messages: [callMsg, newQuestion] });
+  f.data.chat1.push(message({ id: 'own', sortKey: '1', timestamp: new Date(NOW - 5000).toISOString(), isSender: true }));
+  const result = await runOnce(f.options);
+  assert.equal(result.replied, 1);
+  // 最新の本物の質問に返信
+  assert.equal(f.sent[0].options.replyToMessageID, 'new-q');
+  // 質問本文に通話通知が含まれない
+  const sentContent = f.sent[0].content;
+  assert.doesNotMatch(sentContent, /started a call/);
+  const logged = fs.readFileSync(path.join(f.home, '.claude/discord-autoreply/sent-log.jsonl'), 'utf8');
+  assert.match(JSON.parse(logged.trim()).question, /どうなりましたか/);
+  assert.doesNotMatch(JSON.parse(logged.trim()).question, /started a call/);
+});
+
 for (const safeRetry of [false, true]) test(`11/17 社外招待指示: 再生成1回・safe=${safeRetry}`, async t => {
   const items = [];
   const f = fixture(t);
@@ -1093,4 +1173,14 @@ for (const safeRetry of [false, true]) test(`11/17 社外招待指示: 再生成
   assert.equal(calls, 2);
   assert.equal(f.sent.length, safeRetry ? 1 : 0);
   if (!safeRetry) assert.deepEqual(items.map(i => i.kind), ['ask']);
+});
+
+test('合成判定は受信TEXTのみ、HTMLと英語不在着信にも対応', () => {
+  for (const text of ['<p>STARTED A CALL</p>', 'Use the Discord app to answer', '不在着信', 'Missed call']) {
+    assert.equal(isSyntheticMessage(message({ text })), true);
+    assert.equal(isSyntheticMessage(message({ text, isSender: true })), false);
+    assert.equal(isSyntheticMessage(message({ text, type: 'IMAGE' })), false);
+  }
+  assert.equal(isSyntheticMessage(null), false);
+  assert.equal(isSyntheticMessage(message()), false);
 });

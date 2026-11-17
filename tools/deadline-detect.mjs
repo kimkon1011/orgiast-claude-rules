@@ -23,7 +23,13 @@ JSONのみ: {"items":[{"title":"件名","due":"YYYY-MM-DD または null","kind"
 入力:\n${JSON.stringify(documents)}`;
 }
 export function parseExtraction(value) {
-  const parsed = typeof value === 'string' ? JSON.parse(value.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) : value;
+  const parsed = typeof value === 'string' ? (() => {
+    const stripped = value.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    try { return JSON.parse(stripped); } catch {
+      // LLM (Gemini/OpenRouter) が日本語括弧「」をJSON値の引用符として返すことがある
+      return JSON.parse(stripped.replace(/(?<=:\s*)「([^」]*)」/g, '"$1"').replace(/(?<=:\s*)「/g, '"').replace(/」/g, '"'));
+    }
+  })() : value;
   if (!parsed || !Array.isArray(parsed.items) || parsed.items.length > 100) throw new Error('抽出応答のitemsが不正です');
   for (const i of parsed.items) {
     if (!i || typeof i.title !== 'string' || !i.title.trim() || typeof i.sourceRef !== 'string' || typeof i.confidence !== 'number' || i.confidence < 0 || i.confidence > 1 || !Number.isFinite(i.confidence) || typeof i.quote !== 'string' || !KINDS.includes(i.kind) || i.due !== null && (typeof i.due !== 'string' || parseSheetDate(i.due) !== i.due)) throw new Error('抽出項目の形式が不正です');

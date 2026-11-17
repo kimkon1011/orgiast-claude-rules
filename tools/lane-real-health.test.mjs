@@ -457,3 +457,26 @@ test('通常の本文に他レーン名が出たら従来どおり viaChain', t 
   const text = 'Gemini HTTP 402 insufficient balance';
   assert.equal(probeViaChain(text, 'codex'), true);
 });
+
+test('[routing] の demote 診断行（provider 名 fallback）を連鎖と誤認しない 2026-11-17 実測', t => {
+  const text = [
+    '[cost] 本日の安いAI実行者 概算 $3.24 が警告値 $1.00 を超過',
+    '[routing] groq は lanes-disabled.json で無効化されているため使いません',
+    '[routing] glm は lanes-disabled.json で無効化されているため使いません',
+    '[routing] gemini は lanes-disabled.json で無効化されているため使いません',
+    '[routing] fallback はdemote中のため連鎖の末尾へ回します',
+    '[routing] gemini はdemote中のため連鎖の末尾へ回します',
+    '[routing] glm はdemote中のため連鎖の末尾へ回します',
+    '[routing] genspark はdemote中のため連鎖の末尾へ回します',
+    '[routing] codex はdemote中のため連鎖の末尾へ回します',
+    '[cooldown] genspark はスキップ (http_401, 残り81分)',
+    'PONG',
+    '[openrouter:deepseek/deepseek-v4-flash] in=11 out=3tok',
+  ].join('\n');
+  assert.equal(probeViaChain(text, 'deepseek'), false);
+  assert.equal(probeViaChain(text, 'openrouter'), false);
+});
+
+test('cheap-first: を含む出力は viaChain のまま（回帰）', t => {
+  assert.equal(probeViaChain('cheap-first: gemini → deepseek', 'deepseek'), true);
+});

@@ -15,13 +15,15 @@ export function laneErrorText(text, lane) {
 // ここに並ぶ他レーン名を連鎖の証拠にすると、自レーンが答えた probe まで判定不能に落ちる
 // （2026-11-17 実測: openrouter が答えているのに冒頭の [routing] gemini… で probe_inconclusive）。
 const DIAGNOSTIC_LINE = /^\s*\[(?:routing|cooldown|codex-do)\]/i;
-const CHAIN_MARKER = /cheap-first:|fallback backend=|ack backend=|\[routing\].*(?:fallback|switch|chain)/i;
+// [routing] の demote 診断行（provider 名 fallback）で誤判定した 2026-11-17 実測。
+// 実際の連鎖は cheap-first: / fallback backend= / ack backend= で表れる。
+const CHAIN_MARKER = /cheap-first:|fallback backend=|ack backend=/i;
 // [openrouter:deepseek/deepseek-v4-flash] は OpenRouter 経由の正規経路レーンを示すタグ。
 // そのレーン自身が OpenRouter 経由で答えたなら連鎖ではないので、タグを除去してから判定する。
 const OPENROUTER_TAG = /\[openrouter:([^\]\s]+)\]/gi;
 function stripOpenrouterTag(line, lane) {
   return line.replace(OPENROUTER_TAG, (tag, model) =>
-    lane !== 'openrouter' && model.toLowerCase().includes(String(lane).toLowerCase()) ? '' : tag);
+    lane === 'openrouter' || model.toLowerCase().includes(String(lane).toLowerCase()) ? '' : tag);
 }
 export function probeViaChain(text, lane) {
   return String(text).split(/\r?\n/).some(line =>

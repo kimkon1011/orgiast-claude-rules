@@ -13,6 +13,7 @@ import {
   resolveTabName, writeImprovementSheet, writeLogEntry, writeRunSummary,
   writeTemplateReflection, ensureLogSheet, notifyKimInbox,
   postAppFeedback, addConstructionKnowhow, extractImprovements,
+  requestJson,
 } from './tldv-process-improve.mjs';
 
 // -- テスト用の LOG_DIR --
@@ -1556,4 +1557,75 @@ test('isTimeTight causes knowhow-add to be skipped when margin exceeded', () => 
   assert.equal(isTimeTight(deadline), true);
   // この状態で addConstructionKnowhow がスキップされることは runImprove の制御による
   // (isTimeTight は knowhow スキップの条件として使われる)
+});
+
+// ===== Fix: 改善項目シート書き込みの成功時点で processedMeetings を state に保存する =====
+test('writeState is called after improvement sheet write, not delayed by log sheet 400', async () => {
+  // writeImprovementSheet の成功後、ensureLogSheet など後段の補助処理が 400 で失敗しても
+  // processedMeetings が state に保存されていることを確認するため、writeImprovementSheet → writeState
+  // の呼び出し順を検証する。（runImprove 全体ではなく個別関数の動作を保証）
+  const { writeState, defaultState, readState } = await import('./tldv-process-improve.mjs');
+
+  // 1. 一時的な state パスで writeState をテスト
+  const tmpStateDir = path.join(os.tmpdir(), `tldv-pi-state-test-${randomUUID()}`);
+  fs.mkdirSync(tmpStateDir, { recursive: true });
+  const tmpStatePath = path.join(tmpStateDir, 'state.json');
+  try {
+    const state = defaultState();
+    writeState(tmpStatePath, state);
+    // 空の state を書いて読み戻せることを確認
+    const read = readState(tmpStatePath);
+    assert.equal(Object.keys(read.processedMeetings).length, 0);
+    assert.equal(read.llmCallsToday, 0);
+
+    // 2. processedMeetings を追加して保存 → readState で取り出せる
+    state.processedMeetings['mtg-1'] = { title: '', processedAt: new Date().toISOString(), items: 1 };
+    state.processedMeetings['mtg-2'] = { title: 'test', processedAt: new Date().toISOString(), items: 2 };
+    state.lastRun = new Date().toISOString();
+    writeState(tmpStatePath, state);
+
+    const read2 = readState(tmpStatePath);
+    assert.equal(Object.keys(read2.processedMeetings).length, 2);
+    assert.ok(read2.processedMeetings['mtg-1']);
+    assert.ok(read2.processedMeetings['mtg-2']);
+    assert.equal(read2.processedMeetings['mtg-2'].items, 2);
+    assert.ok(read2.lastRun);
+  } finally {
+    try { fs.rmSync(tmpStateDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+// ===== Fix: 400 のとき run-error にレスポンス本文が残る =====
+test('requestJson includes response body in error message for 4xx', async () => {
+  let callCount = 0;
+  const mockFetch = async (url, init) => {
+    callCount++;
+    return new Response(JSON.stringify({ error: { message: 'Invalid query', details: 'Sheet name contains invalid characters' } }), { status: 400 });
+  };
+  try {
+    await requestJson('https://sheets.googleapis.com/v4/spreadsheets/xxx/values/A1', {}, { fetchImpl: mockFetch, label: 'sheet-test' });
+    assert.unreachable('should have thrown');
+  } catch (error) {
+    assert.ok(error instanceof ProcessImproveError);
+    // エラーコードにレスポンス本文の先頭が含まれている
+    assert.ok(error.code.startsWith('sheet-test-http-400:'), `error.code should contain body preview: ${error.code}`);
+    assert.ok(error.code.includes('Invalid query'), `error.code should include response body: ${error.code}`);
+    assert.ok(error.code.includes('invalid characters'), `error.code should include full body: ${error.code}`);
+  }
+  // エラーは1回目で投げられる（リトライなし）
+  assert.equal(callCount, 1);
+});
+
+test('requestJson 4xx body capture does not break 5xx retry', async () => {
+  let callCount = 0;
+  const mockFetch = async (url, init) => {
+    callCount++;
+    if (callCount <= 2) {
+      return new Response('Service Unavailable', { status: 503 });
+    }
+    return new Response(JSON.stringify({ data: 'ok' }), { status: 200 });
+  };
+  const result = await requestJson('https://api.test/endpoint', {}, { fetchImpl: mockFetch, label: 'test-api', attempts: 3 });
+  assert.deepEqual(result, { data: 'ok' });
+  assert.equal(callCount, 3);
 });

@@ -171,9 +171,16 @@ export async function requestJson(url, init = {}, { fetchImpl = fetch, sleepImpl
       catch { throw new ProcessImproveError(`${label}-invalid-json`); }
     }
     const status = response.status;
-    await response.body?.cancel();
+    // レスポンス本文（先頭300文字）を読み、400系エラーの原因を残す
+    let responseBodyPreview = '';
+    if (!response.ok && status !== 429 && status >= 400 && status < 500) {
+      try { responseBodyPreview = ((await response.text()) || '').slice(0, 300); } catch {}
+    } else {
+      await response.body?.cancel();
+    }
     if ((status !== 429 && (status < 500 || status > 599)) || attempt === attempts - 1) {
-      throw new ProcessImproveError(`${label}-http-${status}`);
+      const errMsg = responseBodyPreview ? `${label}-http-${status}: ${responseBodyPreview}` : `${label}-http-${status}`;
+      throw new ProcessImproveError(errMsg);
     }
     await sleepImpl(1000 * 2 ** attempt);
   }
@@ -1318,59 +1325,11 @@ export async function runImprove(options = {}, dependencies = {}) {
       }
     }
 
-    // 時間予算チェック: 残り5分を切ったら遅い後処理（knowhow 等）をスキップする
-    if (isTimeTight(deadline)) {
-      summary.knowhowSkipped = allItems.filter(i => i.kind === 'knowhow').length;
-      appendLog({ event: 'time-budget-tight', phase: 'knowhow-add', elapsed: Date.now() - startTime, knowhowSkipped: summary.knowhowSkipped });
-    }
-
-    // 2. app フィードバック（短いので常に実行）
-    summary.feedbackSent = await postAppFeedback(allItems, { fetchImpl });
-
-    // 3. knowhow 登録（時間予算を超えていたらスキップ）
-    if (!isTimeTight(deadline)) {
-      summary.knowhowAdded = await addConstructionKnowhow(allItems);
-    } else if (!summary.knowhowSkipped) {
-      summary.knowhowSkipped = allItems.filter(i => i.kind === 'knowhow').length;
-    }
-
-    // 4. ログシート
-    const logSheetId = await ensureLogSheet({ token, state: persistState ? state : { logSheetId: null }, fetchImpl, summary });
-
-    // 5. テンプレート反映案タブ（kind=template）
-    if (allItems.length > 0) {
-      try {
-        summary.templateReflected = await writeTemplateReflection(allItems, { token, logSheetId, fetchImpl });
-      } catch { /* テンプレート反映案書き込み失敗は致命的ではない */ }
-    }
-
-    // 6. 抽出ログ（各項目1行）
-    for (const item of allItems) {
-      await writeLogEntry({
-        token, logSheetId,
-        entry: {
-          meetingName: item.caseName,
-          kind: item.kind,
-          caseName: item.caseName,
-          event: item.event,
-          solution: item.solution,
-          decided: item.decided,
-          target: item.target,
-          evidence: item.evidence,
-          confidence: item.confidence,
-          reflectionResult: summary.sheetWritten > 0 ? `シート行 ${summary.sheetWritten}` : '',
-        },
-        fetchImpl,
-      });
-    }
-
-    // 7. 実行サマリ
-    await writeRunSummary({ token, logSheetId, summary, fetchImpl });
-
-    // -- 状態保存（knowhow 失敗は別として、処理済み会議は必ず保存。次回の重複除去で救う） --
-    if (persistState) {
+    // -- 改善項目シート書き込み成功時点で処理済み会議を保存 --
+    // 後段の補助処理（ログシート・テンプレート反映・実行サマリ）の失敗に巻き込まれないように、
+    // ここで processedMeetings を state に永続化する。
+    if (persistState && processedIds.length > 0) {
       state.lastRun = new Date().toISOString();
-      // シート書き込みが成功した会議だけ state に保存（knowhow 失敗でも次回スキップされる）
       for (const id of processedIds) {
         if (!state.processedMeetings[id]) {
           state.processedMeetings[id] = {
@@ -1383,9 +1342,84 @@ export async function runImprove(options = {}, dependencies = {}) {
       writeState(STATE_PATH, state);
     }
 
-    // -- kim-inbox 通知 --
-    const logSheetUrl = `https://docs.google.com/spreadsheets/d/${logSheetId}`;
-    await notifyKimInbox(summary, logSheetUrl);
+    // -- ここから下は補助処理。失敗しても run-error にはせず summary.failed に計上して継続する --
+    try {
+
+      // 時間予算チェック: 残り5分を切ったら遅い後処理（knowhow 等）をスキップする
+      if (isTimeTight(deadline)) {
+        summary.knowhowSkipped = allItems.filter(i => i.kind === 'knowhow').length;
+        appendLog({ event: 'time-budget-tight', phase: 'knowhow-add', elapsed: Date.now() - startTime, knowhowSkipped: summary.knowhowSkipped });
+      }
+
+      // 2. app フィードバック（短いので常に実行）
+      try { summary.feedbackSent = await postAppFeedback(allItems, { fetchImpl }); }
+      catch (postError) { summary.failed++; appendLog({ event: 'post-process-error', phase: 'app-feedback', error: safeReason(postError) }); }
+
+      // 3. knowhow 登録（時間予算を超えていたらスキップ）
+      if (!isTimeTight(deadline)) {
+        try { summary.knowhowAdded = await addConstructionKnowhow(allItems); }
+        catch (knowhowError) { summary.failed++; appendLog({ event: 'post-process-error', phase: 'knowhow-add', error: safeReason(knowhowError) }); }
+      } else if (!summary.knowhowSkipped) {
+        summary.knowhowSkipped = allItems.filter(i => i.kind === 'knowhow').length;
+      }
+
+      // 4. ログシート
+      let logSheetId = '';
+      try {
+        logSheetId = await ensureLogSheet({ token, state: persistState ? state : { logSheetId: null }, fetchImpl, summary });
+      } catch (logSheetError) {
+        summary.failed++;
+        appendLog({ event: 'post-process-error', phase: 'log-sheet', error: safeReason(logSheetError) });
+      }
+
+      // 5. テンプレート反映案タブ（kind=template）
+      if (allItems.length > 0 && logSheetId) {
+        try {
+          summary.templateReflected = await writeTemplateReflection(allItems, { token, logSheetId, fetchImpl });
+        } catch { /* テンプレート反映案書き込み失敗は致命的ではない */ }
+      }
+
+      // 6. 抽出ログ（各項目1行）
+      if (logSheetId) {
+        for (const item of allItems) {
+          try {
+            await writeLogEntry({
+              token, logSheetId,
+              entry: {
+                meetingName: item.caseName,
+                kind: item.kind,
+                caseName: item.caseName,
+                event: item.event,
+                solution: item.solution,
+                decided: item.decided,
+                target: item.target,
+                evidence: item.evidence,
+                confidence: item.confidence,
+                reflectionResult: summary.sheetWritten > 0 ? `シート行 ${summary.sheetWritten}` : '',
+              },
+              fetchImpl,
+            });
+          } catch { /* ログエントリ書き込み1件の失敗は無視 */ }
+        }
+      }
+
+      // 7. 実行サマリ
+      if (logSheetId) {
+        try { await writeRunSummary({ token, logSheetId, summary, fetchImpl }); }
+        catch { /* 実行サマリ書き込み失敗は致命的ではない */ }
+      }
+
+      // -- kim-inbox 通知 --
+      if (logSheetId) {
+        const logSheetUrl = `https://docs.google.com/spreadsheets/d/${logSheetId}`;
+        try { await notifyKimInbox(summary, logSheetUrl); } catch { /* 通知失敗はベストエフォート */ }
+      }
+
+    } catch (postError) {
+      // 補助処理全体の予期しないエラー（例: token 取得失敗）も summary.failed に計上
+      summary.failed++;
+      appendLog({ event: 'post-process-error', phase: 'auxiliary', error: safeReason(postError) });
+    }
 
     // -- 標準出力サマリ --
     console.log(`fetched=${summary.fetched} processed=${summary.processed} extracted=${summary.extracted} ` +

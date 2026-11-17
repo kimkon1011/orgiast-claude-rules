@@ -14,7 +14,7 @@ export function proxyCredential({ keyPath, impersonate, scope }) {
     return GWS_SA_SELF_MARKER;
   }
   if (![GWS_USER,'kim@orgiast.jp'].includes(impersonate)) throw Error('GWS proxy: unsupported subject');
-  if (!String(scope).split(/\s+/).every(s => /^https:\/\/www\.googleapis\.com\/auth\/(drive|spreadsheets|calendar\.readonly|gmail\.(readonly|compose|send))$/.test(s))) throw Error('GWS proxy: unsupported scope');
+  if (!String(scope).split(/\s+/).every(s => /^https:\/\/www\.googleapis\.com\/auth\/(drive|spreadsheets|calendar\.readonly|gmail\.(readonly|compose|modify|send))$/.test(s))) throw Error('GWS proxy: unsupported scope');
   if (impersonate === 'kim@orgiast.jp' && scope !== 'https://www.googleapis.com/auth/calendar.readonly') throw Error('GWS proxy: kim is calendar-only');
   return impersonate === 'kim@orgiast.jp' ? GWS_KIM_MARKER : GWS_MARKER;
 }

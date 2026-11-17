@@ -14,7 +14,7 @@ import { isDailyQuotaResponse, nextUtcMidnight } from './lib/provider-daily-cool
 import { notifyKim } from './notify-kim.mjs';
 import { redactAll } from './lib/redact.mjs';
 import { catalog } from './provider-catalog.mjs';
-import { applyRealLaneHealth, billingFailure, billingWithQuotaHint, quotaFailure } from './lib/lane-real-health.mjs';
+import { applyRealLaneHealth, laneErrorText, probeViaChain, billingFailure, billingWithQuotaHint, quotaFailure } from './lib/lane-real-health.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { isEnrollToken, validKeyservePcId } from './keyserve-auth.mjs';
 
@@ -42,6 +42,7 @@ function probeHistory(state = {}) {
   const lastProbeOkAt = state.lastProbeOkAt ||
     (state.alive && /^(?:auth_ok:)?probe_ok(?::stale)?$/.test(state.reason) ? state.probedAt : undefined);
   return {
+    ...Object.fromEntries(['viaChain', 'probeResult', 'probeEvidence', 'billingProbeStreak'].filter(key => state[key] !== undefined).map(key => [key, state[key]])),
     ...(state.probedAt ? { probedAt: state.probedAt } : {}),
     ...(lastProbeOkAt ? { lastProbeOkAt } : {}),
     ...(state.probeReason || state.probedAt ? { probeReason: state.probeReason || state.reason } : {}),
@@ -195,7 +196,7 @@ export function nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }) {
 export const NATIVE_WRITE_PROBE_TIMEOUT_MS = 180_000;
 export async function runNativeWriteProbe({ home, timeoutMs }) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-codex-write-'));
-  const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e, stdout, stderr) => {
+  const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home, CODEX_DO_CHEAP_FIRST: '0' }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e, stdout, stderr) => {
     const output = `${stdout || ''}\n${stderr || ''}`.trim();
     if (e?.killed || e?.signal) return resolve({ code: 1, timedOut: true, text: `タイムアウト(${Math.ceil(timeoutMs / 1000)}s) ${output}`.trim() });
     resolve({ code: e ? 1 : 0, text: output });
@@ -207,14 +208,14 @@ export async function runNativeWriteProbe({ home, timeoutMs }) {
     const result = await run(process.execPath, nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }));
     let ok = false;
     try { ok = fs.readFileSync(path.join(cwd, 'WRITE_OK.txt'), 'utf8').trim() === 'WRITE_OK'; } catch {}
-    return { code: result.code === 0 && ok ? 0 : 1, text: ok ? 'WRITE_OK' : `書き込み確認失敗 ${result.text || ''}` };
+    return { viaChain: probeViaChain(result.text, 'codex'), code: result.code === 0 && ok ? 0 : 1, text: ok ? 'WRITE_OK' : `書き込み確認失敗 ${result.text || ''}` };
   } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
 }
-export function runProbe(provider, { home, timeoutMs, dryRun = false } = {}) {
+export function runProbe(provider, { home, timeoutMs, dryRun = false, execFileImpl = execFile } = {}) {
   const args = provider === 'codex'
-    ? [path.join(repo, 'tools/codex-do.mjs'), 'Reply with exactly: PONG. Do not modify any files.', '--cwd', repo, '--no-fallback', '--no-escalate', ...(needsNativeCodexProbe() ? ['--allow-native'] : []), ...(dryRun ? ['--dry-run'] : ['--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))])]
+    ? [path.join(repo, 'tools/codex-do.mjs'), 'Reply with exactly: PONG. Do not modify any files.', '--cwd', repo, '--kind', 'implement', '--no-fallback', '--no-escalate', ...(needsNativeCodexProbe() ? ['--allow-native'] : []), ...(dryRun ? ['--dry-run'] : ['--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))])]
     : [path.join(repo, 'tools/llm-ask.mjs'), '--provider', provider, 'Reply with exactly: PONG', '--max', '10', '--no-fallback'];
-  return new Promise(resolve => execFile(process.execPath, args, { cwd: repo, env: { ...process.env, ORGIAST_HOME: home }, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 256 * 1024, windowsHide: true }, (e, stdout, stderr) => resolve({ code: e ? e.code || 1 : 0, text: redactAll(`${stdout}\n${stderr}`) })));
+  return new Promise(resolve => execFileImpl(process.execPath, args, { cwd: repo, env: { ...process.env, ORGIAST_HOME: home, CODEX_DO_CHEAP_FIRST: '0' }, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 256 * 1024, windowsHide: true }, (e, stdout, stderr) => resolve({ code: e ? e.code || 1 : 0, text: redactAll(`${stdout}\n${stderr}`) })));
 }
 export function notificationText(item, home) {
   if (item.reason === 'keyserve_unenrolled') {
@@ -298,7 +299,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       const dry = await probe(p, { home, timeoutMs: Math.min(15000, probeBudget), dryRun: true });
       dryOk = dry.code === 0;
       // 再利用は成功結果だけ。失敗を30分使い回すと直後に直ったレーンが停止のまま残る（2026-10-25 実測: 直接実行は PONG なのに probe_failed）。
-      if (dryOk && previous.lanes?.codex?.alive && freshProbe(previous.lanes.codex.probedAt, now)) return [p, { cached: previous.lanes.codex }];
+      if (dryOk && previous.lanes?.codex?.alive && previous.lanes.codex.viaChain !== true && freshProbe(previous.lanes.codex.probedAt, now)) return [p, { cached: previous.lanes.codex }];
     }
     // dry 失敗（コールド起動が15秒上限を超える等）で即 probe_failed にしない。残り予算の本番 probe で判定する
     // （2026-11-06/07 連日再発: 直接実行は PONG・24h実績0失敗のレーンが dry タイムアウトで停止扱いになった）。
@@ -310,21 +311,31 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   for (const [p, result] of results) {
     if (!result) continue;
     if (result.cached && !result.cached.alive) { health.lanes[p] = { ...result.cached, ...probeHistory(result.cached) }; continue; }
-    const text = result.text || '', stamp = new Date(now).toISOString();
+    const rawText = result.text || '', text = laneErrorText(rawText, p), stamp = new Date(now).toISOString();
+    const viaChain = Boolean(result.viaChain || probeViaChain(rawText, p));
+    if (viaChain) {
+      health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: 'probe_inconclusive', probedAt: stamp, viaChain: true, probeResult: 'inconclusive', billingProbeStreak: 0, error: text };
+      continue;
+    }
     const nativeRepair = 'codex: WSL 不在のため Windows ネイティブ(danger-full-access)に切替';
     if (result.nativeRepair && result.code === 0 && !health.repairs.includes(nativeRepair)) health.repairs.push(nativeRepair);
     if (result.code === 0 || result.cached?.alive) {
       health.lanes[p] = result.cached
         ? { ...result.cached, ...probeHistory(result.cached) }
-        : { alive: true, reason: result.nativeRepair ? 'native_ok' : p === 'codex' ? 'auth_ok:probe_ok' : 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: result.nativeRepair ? 'native_ok' : p === 'codex' ? 'auth_ok:probe_ok' : 'probe_ok' };
+        : { alive: true, reason: result.nativeRepair ? 'native_ok' : p === 'codex' ? 'auth_ok:probe_ok' : 'probe_ok', probedAt: stamp, viaChain: false, probeResult: 'alive', probeEvidence: 'exit 0', billingProbeStreak: 0, lastProbeOkAt: stamp, probeReason: result.nativeRepair ? 'native_ok' : p === 'codex' ? 'auth_ok:probe_ok' : 'probe_ok' };
       if (routing.demote?.[p] !== undefined) { delete routing.demote[p]; routingChanged = true; health.repairs.push({ provider: p, action: 'demote_removed', detail: '実測成功' }); }
       if (cooldown[p]) { delete cooldown[p]; cooldownChanged = true; health.repairs.push({ provider: p, action: 'cooldown_removed', detail: '実測成功' }); }
     } else {
-      const payment = billingFailure(text) && !billingWithQuotaHint(text);
-      const limited = !payment && quotaFailure(text);
+      const billing = billingFailure(text) && !billingWithQuotaHint(text);
+      const stats = health.lanes[p]?.real24h;
+      const streak = billing ? (previous.lanes?.[p]?.billingProbeStreak || 0) + 1 : 0;
+      const recentSuccess = stats && stats.billingCalls === 0 && stats.lastOkAt <= now && stats.lastOkAt >= now - 6 * 3600_000;
+      const uncertain = billing && recentSuccess && streak < 2;
+      const payment = billing && !uncertain;
+      const limited = !billing && quotaFailure(text);
       // codex-do が利用枠クールダウンで保留(exit 75)した場合は WSL 問題ではなく枠切れ。クールダウン自体は既存のまま触らない。
       const deferred = /codex_cooldown/.test(text);
-      health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: payment ? 'billing' : (limited || deferred) ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired/i.test(text) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, ...(result.authOk ? { authOk: true } : {}) };
+      health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: uncertain ? 'probe_inconclusive' : payment ? 'billing' : (limited || deferred) ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired/i.test(text) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, viaChain: false, probeResult: uncertain ? 'inconclusive' : 'fail', probeEvidence: `exit ${result.code}`, billingProbeStreak: streak, ...(result.authOk ? { authOk: true } : {}) };
       // 失敗の中身を必ず残す（2026-10-15 作業用011: 理由が記録されず原因を追えなかった）
       health.lanes[p].error = String(text || '').replace(/(sk-|eyJ)[A-Za-z0-9._-]{8,}/g, '$1***').replace(/\s+/g, ' ').trim().slice(-400);
       // native の失敗でも、認証・上限・課金が原因なら physical_operation（再起動が要る）と誤判定しない

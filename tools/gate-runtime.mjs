@@ -27,6 +27,7 @@ if (name === 'mail-send-approval-gate' && entry?.rollout === 'deny' && entry.imm
     && entry.immediatePolicy === '2026-10-27 kim 厳命: kim 宛 Discord 報告を全PCで停止') return 'deny';
   if (name === 'lane-repair-first-gate' && entry?.rollout === 'deny'
     && entry.immediatePolicy === '2026-10-29 user 指示: 全PC・全アカウントで故障レーン修復を最優先') return 'deny';
+  if (name === 'lane-claim-evidence-gate' && entry?.rollout === 'deny') return 'deny';
   if (name === 'lane-abandonment-gate') {
     try { if (JSON.parse(fs.readFileSync(path.join(home, '.claude/rule-enforcement.json'), 'utf8'))['repair-failed-lane-first']?.mode === 'block') return 'deny'; } catch {}
   }

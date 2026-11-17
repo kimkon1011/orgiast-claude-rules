@@ -31,6 +31,7 @@ import { judge as judgeDecisionResearch, formatReason as decisionResearchReason 
 import { configuredMode, evaluateNegativeClaimFromRaw } from './negative-claim-gate.mjs';
 import { configuredMode as externalStateMode, evaluateExternalStateClaimFromRaw } from './external-state-claim-gate.mjs';
 import { evaluateReportedSymptomFromRaw } from './reported-symptom-gate.mjs';
+import { evaluateLaneClaimEvidence } from './lane-claim-evidence-gate.mjs';
 import { evaluateLaneAbandonment } from './lane-abandonment-gate.mjs';
 import { evaluateCourseCorrections } from './course-correction-gate.mjs';
 import { evaluateAudit } from './handoff-audit-gate.mjs';
@@ -119,6 +120,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['pr-handoff-gate', () => evaluatePrHandoff(ctx.assistantText)],
     ['merge-handoff-gate', () => evaluateMergeHandoff(ctx.assistantText, blocks(currentTurnEntries(ctx.transcriptRaw), 'tool_use'))],
     ['reported-symptom-gate', () => evaluateReportedSymptomFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw })],
+    ['lane-claim-evidence-gate', () => evaluateLaneClaimEvidence(ctx, { home: home(), ...auditOptions })],
     ['lane-abandonment-gate', () => evaluateLaneAbandonment(ctx, { home: home(), ...auditOptions })],
     ['course-correction-gate', () => evaluateCourseCorrections(ctx, { home: home(), ...auditOptions })],
     // 第2段は全regexの結果確定後に評価する。

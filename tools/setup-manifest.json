@@ -1,6 +1,7 @@
 {
   "version": 1,
   "items": [
+    {"id":"hook:lane-claim-evidence-gate","type":"file-nonempty","severity":"required","spec":{"paths":[".claude/nightly-repo/tools/lane-claim-evidence-gate.mjs","orgiast-claude-rules/tools/lane-claim-evidence-gate.mjs","Downloads/orgiast-claude-rules/tools/lane-claim-evidence-gate.mjs"]},"description":"レーン状態断定の直接実測ゲート（共通Stop runner経由）","repair":["onboarding-sync.mjs","--force"]},
     {"id":"settings:org-instructions-char-gate","type":"json-valid","severity":"required","spec":{"path":".claude/settings.json","hookEvent":"Stop","hookScript":"org-instructions-char-gate.mjs","hookRunner":"gate-hook-runner.mjs","hookArgs":"","async":false,"timeout":15},"description":"Stop: 組織指示案の全体字数実測を必須化","repair":["register-hooks.mjs","--hooks-only"]},
     {"id":"hook:org-instructions-char-gate","type":"file-nonempty","severity":"required","spec":{"paths":[".claude/nightly-repo/tools/org-instructions-char-gate.mjs","orgiast-claude-rules/tools/org-instructions-char-gate.mjs","Downloads/orgiast-claude-rules/tools/org-instructions-char-gate.mjs"]},"description":"組織指示字数 Stop hook 実体","repair":["onboarding-sync.mjs","--force"]},
     {"id":"tool:org-instructions-chars","type":"file-nonempty","severity":"required","spec":{"paths":[".claude/nightly-repo/tools/org-instructions-chars.mjs","orgiast-claude-rules/tools/org-instructions-chars.mjs","Downloads/orgiast-claude-rules/tools/org-instructions-chars.mjs"]},"description":"組織指示の Unicode コードポイント字数計測 CLI","repair":["onboarding-sync.mjs","--force"]},

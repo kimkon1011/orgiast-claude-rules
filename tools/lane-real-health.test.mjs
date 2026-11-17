@@ -387,3 +387,25 @@ test('codex refresh-token phrases classify as auth without a 401 or unauthorized
     assert.equal(health.lanes.codex.alive, false);
   }
 });
+
+test('ledger filters routing and other-lane billing, quota and auth lines', t => {
+  for (const text of ['[codex-do] Gemini HTTP 402 insufficient balance', '[routing] HTTP 429', 'fallback backend=gemini HTTP 401 unauthorized', 'cheap-first: HTTP 402', 'ack backend=groq HTTP 402', 'Gemini HTTP 402 insufficient balance']) {
+    const home = fixture(t, [{ provider: 'codex', status: 'error', stderr: text }]);
+    const stats = realLaneStats(home, now).codex;
+    assert.equal(stats.billingCalls, 0, text);
+    assert.equal(stats.quotaCalls, 0, text);
+  }
+  const home = fixture(t, [{ provider: 'codex', status: 'error', stderr: 'HTTP 402 insufficient balance' }]);
+  assert.equal(realLaneStats(home, now).codex.billingCalls, 1);
+});
+
+test('cached chain evidence cannot retain billing, quota, auth or alive classification', t => {
+  const home = fixture(t, []);
+  for (const reason of ['billing', 'quota_wait', 'auth_invalid', 'probe_ok']) {
+    const health = { lanes: { codex: { alive: reason === 'probe_ok', reason, error: 'Gemini HTTP 402 insufficient balance' } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.codex.reason, 'probe_inconclusive');
+    assert.equal(health.lanes.codex.alive, false);
+    assert.equal(health.lanes.codex.viaChain, true);
+  }
+});

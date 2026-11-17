@@ -1,0 +1,4 @@
+import test from'node:test';import assert from'node:assert/strict';import{parseArgs,run}from'./ai-daikodo-line.mjs';
+test('inbox requires no customer send and encodes since',async()=>{let request;const fetchImpl=async(url,init)=>{request={url,init};return new Response('[]',{status:200});};const{body}=await run(['--inbox','--since','2026-06-01T00:00:00Z','--json'],{fetchImpl,key:'test-key'});assert.deepEqual(body,[]);assert.match(request.url,/since=2026-06-01T00%3A00%3A00Z/);assert.equal(request.init.headers.Authorization,'Bearer test-key');assert.equal(request.init.method,undefined);});
+test('status path',async()=>{let url;const fetchImpl=async value=>{url=value;return new Response('{"ok":true}',{status:200});};const{body}=await run(['--status'],{fetchImpl,key:'test-key'});assert.deepEqual(body,{ok:true});assert.match(url,/webhook-status$/);});
+test('rejects unsupported push arguments',()=>assert.throws(()=>parseArgs(['--push']),/unknown argument/));

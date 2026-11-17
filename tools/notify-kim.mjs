@@ -65,10 +65,12 @@ const AUTO_RESUME_NOTICE = /^エラーで止まっていた依頼を見つけ、
 const RESUME_REPORT = /^夜間セッション再開 \([^\n)]*\)$/m;
 const RESUME_ROW = /\([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\): (?:progressed|no-progress|error)$/mi;
 const RESUME_ERROR = /\([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\): error$/mi;
+const RESUME_ZERO_RUN_SUMMARY = /^確認 0件 \/ 進んだ 0 \/ 進まず 0 \/ 時間切れ 0 \/ エラー 0 \/ 締切で翌晩へ \d+ \/ 3回進捗なしで停止中 0$/m;
 // 目的文に引用された過去の失敗ではなく、今回の結果と中止の有無で判定する。
-// 結果行が1行も無い本文は再開レポートとみなさない（見出しだけの失敗通知を塞がない）。
+// UUID付き結果行、または締切後に何も実行せず翌晩へ送った構文の正しい集計を必須にする。
+// 見出しだけや不正な集計は再開レポートとみなさず、失敗通知を塞がない。
 function isSuccessfulResumeReport(text) {
-  return RESUME_REPORT.test(text) && RESUME_ROW.test(text) && !RESUME_ERROR.test(text)
+  return RESUME_REPORT.test(text) && (RESUME_ROW.test(text) || RESUME_ZERO_RUN_SUMMARY.test(text)) && !RESUME_ERROR.test(text)
     && !text.includes('連続2件エラーのため今晩は中止');
 }
 const normalizeFailure = text => String(text).replace(/\d{4}-\d{2}-\d{2}(?:[T ][\d:.]+Z?)?/g, '<日時>').replace(/\d+\s*(?:回|件|日|時間|分|秒)/g, '<回数>').replace(/\d+(?:\.\d+)?%/g, '<割合>').replace(/\btick\s*:\s*\d+\b/gi, 'tick: <番号>').replace(/\s+/g, ' ').trim();

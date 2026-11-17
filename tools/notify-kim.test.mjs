@@ -222,6 +222,28 @@ test('夜間セッション再開は目的文に失敗を含んでも全行 prog
   assert.equal(s.messages[0], report);
 });
 
+test('夜間セッション再開は締切繰越だけのゼロ実行集計なら起票しない', async () => {
+  const dir = home(), s = sender(dir);
+  const report = '確認 0件 / 進んだ 0 / 進まず 0 / 時間切れ 0 / エラー 0 / 締切で翌晩へ 3 / 3回進捗なしで停止中 0\n夜間セッション再開 (LAPTOP-21BPBOMF)';
+  assert.equal((await notifyKim(report, s.options)).delivered, 'dm');
+  assert.equal(fs.existsSync(path.join(dir, '.claude/next-session.md')), false);
+  assert.equal(s.messages[0], report);
+});
+
+for (const [label, detail] of [
+  ['エラーがある', '確認 0件 / 進んだ 0 / 進まず 0 / 時間切れ 0 / エラー 1 / 締切で翌晩へ 3 / 3回進捗なしで停止中 0'],
+  ['3回進捗なしの停止がある', '確認 0件 / 進んだ 0 / 進まず 0 / 時間切れ 0 / エラー 0 / 締切で翌晩へ 3 / 3回進捗なしで停止中 1'],
+  ['集計の構文が不正', '確認 0件 / エラー 0 / 締切で翌晩へ 3 / 3回進捗なしで停止中 0'],
+  ['集計行がない', '処理失敗'],
+]) {
+  test(`夜間セッション再開のゼロ実行報告で${label}場合は起票する`, async () => {
+    const dir = home(), s = sender(dir);
+    const report = `${detail}\n夜間セッション再開 (test-host)`;
+    await notifyKim(report, s.options);
+    assert.match(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8'), /通知の原因調査・修復:/);
+  });
+}
+
 test('夜間セッション再開に1行でも error があれば目的文の失敗語によらず起票する', async () => {
   for (const title of ['quota-sweep:claude が直近 4 件すべて失敗している', '通常の作業']) {
     const dir = home(), s = sender(dir);

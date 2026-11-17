@@ -427,7 +427,16 @@ export function buildGeminiEnv(baseEnv, apiKey) {
 export function fallbackBackendTimeoutSecs(timeoutSeconds, env = process.env) {
   const raw = Number(env.CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS);
   const wanted = Number.isFinite(raw) && raw > 0 ? raw : 900;
-  return Math.max(60, Math.min(timeoutSeconds, wanted));
+  return Math.min(timeoutSeconds, Math.max(60, wanted));
+}
+
+// Windows の休止中も Date.now() は進む一方、timer と子プロセスは動かない。
+// timeout 行では休止時間を除外できるよう、実際に動けた最大時間を上限にする。
+export function measuredAttemptSecs(startedAt, { timedOut = false, budgetSecs, killGraceMs = 0, now = Date.now() } = {}) {
+  const wallSecs = Math.max(0, (Number(now) - Number(startedAt)) / 1000);
+  if (!timedOut || !Number.isFinite(Number(budgetSecs))) return Number(wallSecs.toFixed(3));
+  const cap = Math.max(0, Number(budgetSecs)) + Math.max(0, Number(killGraceMs)) / 1000;
+  return Number(Math.min(wallSecs, cap).toFixed(3));
 }
 
 // 2026-10-30 以降の生産的成功（executor-usage.jsonl）の最大所要時間は、
@@ -923,6 +932,8 @@ if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
   console.error(`--timeout は正の秒数で指定してください\n${usage}`);
   process.exit(2);
 }
+// #773 の cap を fallback だけでなく Codex 主経路・SOL→ASTRA 昇格にも適用する。
+const executionTimeoutSeconds = fallbackBackendTimeoutSecs(timeoutSeconds);
 
 // 指示文はファイルから読むのを既定にする。argv で渡すとシェルがバッククォートを
 // コマンド置換として実行し、仕様の一部が消えたプロンプトが Codex に届く(2026-08-26 実害)。
@@ -1083,7 +1094,7 @@ function execute(command, commandArgs, options = {}) {
     const callStarted = Date.now();
     const callTimeoutSeconds = Number.isFinite(options.timeoutSecs) && options.timeoutSecs > 0
       ? options.timeoutSecs
-      : timeoutSeconds;
+      : executionTimeoutSeconds;
     const spawnOptions = { ...options };
     delete spawnOptions.timeoutSecs;
     delete spawnOptions.abortPolicyStall;
@@ -1114,6 +1125,8 @@ function execute(command, commandArgs, options = {}) {
       // 親が先に終わって孫が pipe を握ったままだと taskkill /T の木から外れ 'close' が来ない
       // (2026-10-28 実測: 予算600秒の gemini-cli 試行が 1044 秒)。猶予後は close を待たず打ち切る。
       forceTimer = setTimeout(() => {
+        // 親が先に消えて木から外れた孫も、猶予終了時に再度停止を試みる。
+        killProcessTree(child);
         for (const stream of [child.stdin, child.stdout, child.stderr]) { try { stream?.destroy(); } catch { /* 既に閉じている */ } }
         settle({ status: 124, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null });
       }, timeoutKillGraceMs(process.env));
@@ -1183,7 +1196,7 @@ function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
     const row = buildUsageRow({
       result, model: modelName, seconds, provider, attempts, chain,
-      timeoutSecs: timeoutSeconds, lane: selectedLane.reason, escalated,
+      timeoutSecs: executionTimeoutSeconds, lane: selectedLane.reason, escalated,
       promptChars: prompt.length, origin, kind: taskKind, cwd,
       reason: ledgerReason
     });
@@ -1223,7 +1236,7 @@ async function launchCodex(codexArgs, primaryStarted = Date.now()) {
   let result;
 
   const remainingTimeoutSecs = () => remainingPrimaryBudgetSecs(
-    timeoutSeconds,
+    executionTimeoutSeconds,
     (Date.now() - primaryStarted) / 1000,
   );
 
@@ -1333,12 +1346,17 @@ async function executeCodex() {
   }
   const codexArgs = buildCodexExecArgs({ ...selectedLane, review });
   let result = null, attempts = 0, seconds = 0;
-  const primaryStarted = Date.now();
+  // SOL→ASTRA へ昇格しても共通 cap の起点をリセットしない。
+  const primaryStarted = started;
   for (let attempt = 1; attempt <= 2; attempt++) {
     const attemptStarted = Date.now();
     logCodex();
     result = await launchCodex(codexArgs, primaryStarted);
-    const elapsed = (Date.now() - attemptStarted) / 1000;
+    const elapsed = measuredAttemptSecs(attemptStarted, {
+      timedOut: result?.timedOut === true,
+      budgetSecs: remainingPrimaryBudgetSecs(executionTimeoutSeconds, (attemptStarted - primaryStarted) / 1000),
+      killGraceMs: timeoutKillGraceMs(process.env),
+    });
     seconds += elapsed;
     attempts = attempt;
     // そもそも起動できていない(launched:false)なら再試行しても結果は変わらない。
@@ -1390,7 +1408,8 @@ while (true) {
     continue;
   }
   const failure = failureReason(result);
-  if (!quotaCheck.matched && failure && !launchUnavailable && !authFailed && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
+  if (!quotaCheck.matched && failure && !launchUnavailable && !authFailed && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0
+    && (Date.now() - started) / 1000 < executionTimeoutSeconds) {
     console.log(`[codex-do] sol 失敗 → astra へ昇格 (理由: ${failure})`);
     escalated = true;
     selectedLane = { slug: ASTRA, effort: 'high', reason: `escalated:${failure}` };
@@ -1439,17 +1458,16 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
       console.error('GEMINI_API_KEY、OPENROUTER_API_KEY、ZAI_API_KEY が無いためフォールバックを実行できません');
       result.status = 1;
     } else {
-      const chainStarted = Date.now();
       fallbackChain = [];
       for (const [backendIndex, backend] of backends.entries()) {
         // 全冷却で戻されたチェーンも末尾には通常予算を残す（1件だけの場合も同じ）。
         const backendTimeout = effectiveBackendTimeoutSecs(backend.name, {
-          chainBudget: chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000),
+          chainBudget: chainBackendBudgetSecs(executionTimeoutSeconds, (Date.now() - started) / 1000),
           cooling: cooling.has(backend.name),
           isLastBackend: backendIndex === backends.length - 1
         });
         if (backendTimeout <= 0) {
-          console.error(`[codex-do] フォールバック全体の時間枠(${timeoutSeconds}秒)を使い切ったため、残りのバックエンドは実行しません`);
+          console.error(`[codex-do] 実行全体の時間枠(${executionTimeoutSeconds}秒)を使い切ったため、残りのバックエンドは実行しません`);
           break;
         }
         const attemptStarted = Date.now();
@@ -1493,7 +1511,11 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
           // stderrTail は末尾200字のため拒否回数が欠ける。打ち切り判定と同じ実測値（全 stderr の拒否回数・出力文字数）を残す。
           policyDenials: countPolicyDenials(result.stderr),
           outChars: result.outputChars || 0,
-          secs: Number(((Date.now() - attemptStarted) / 1000).toFixed(3)),
+          secs: measuredAttemptSecs(attemptStarted, {
+            timedOut: result.timedOut === true,
+            budgetSecs: backendTimeout,
+            killGraceMs: timeoutKillGraceMs(process.env),
+          }),
           // この試行に実際に与えた予算。delegation-health の timeout 判定が
           // 「900 秒固定」ではなく与えた予算で判定できるようにする（2026-10-22）。
           budgetSecs: backendTimeout,

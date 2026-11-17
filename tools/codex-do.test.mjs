@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { skipCoolingBackends } from './fallback-backend-health.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, measuredAttemptSecs, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -171,7 +171,13 @@ test('fallbackBackendTimeoutSecs は全体枠・既定値・環境変数・下�
   assert.equal(fallbackBackendTimeoutSecs(300, {}), 300);
   assert.equal(fallbackBackendTimeoutSecs(1800, { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: '900' }), 900);
   assert.equal(fallbackBackendTimeoutSecs(1800, { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: 'garbage' }), 900);
-  assert.equal(fallbackBackendTimeoutSecs(10, {}), 60);
+  assert.equal(fallbackBackendTimeoutSecs(10, {}), 10);
+});
+
+test('timeout 実測は Windows 休止の壁時計差を予算+kill猶予へ丸める', () => {
+  assert.equal(measuredAttemptSecs(1_000, { now: 80_872_310, timedOut: true, budgetSecs: 900, killGraceMs: 5_000 }), 905);
+  assert.equal(measuredAttemptSecs(1_000, { now: 4_250, timedOut: true, budgetSecs: 900, killGraceMs: 5_000 }), 3.25);
+  assert.equal(measuredAttemptSecs(1_000, { now: 80_872_310, timedOut: false, budgetSecs: 900, killGraceMs: 5_000 }), 80871.31);
 });
 
 test('chainBackendBudgetSecs は連鎖の残り予算を超えない（全体枠を使い切ったら0で打ち切る）', () => {
@@ -2252,6 +2258,30 @@ function fakeNativeCodexEnv(body) {
   const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH') || 'PATH';
   return { PATH: `${dir}${path.delimiter}${process.env[pathKey] || ''}` };
 }
+
+test('Codex 主経路も共通 cap で子プロセス木を止め、台帳へ実予算を記録する', () => {
+  const ledgerHome = workDir();
+  const env = fakeNativeCodexEnv(`
+import { spawn } from 'node:child_process';
+spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' });
+setInterval(() => {}, 1000);
+`);
+  const startedAt = Date.now();
+  const result = run(['--force-native', '--cwd', workDir(), '--model', 'astra', '--no-fallback', '--timeout', '2', '指示内容'], {
+    home: ledgerHome,
+    env: { ...env, CODEX_DO_TIMEOUT_KILL_GRACE_MS: '500' },
+  });
+  const elapsedSecs = (Date.now() - startedAt) / 1000;
+  const rows = fs.readFileSync(path.join(ledgerHome, '.claude', 'executor-usage.jsonl'), 'utf8')
+    .trim().split(/\r?\n/).map(JSON.parse);
+  const timeout = rows.find((row) => row.provider === 'codex' && row.status === 'timeout');
+  assert.ok(timeout, `主経路 timeout 行がない: ${JSON.stringify(rows)}`);
+  assert.equal(timeout.model, 'codex-cli/gpt-6-astra');
+  assert.equal(timeout.timeoutSecs, 2);
+  assert.ok(timeout.secs <= 2.5, `予算2秒+猶予0.5秒を超えて記録: ${timeout.secs}`);
+  assert.ok(elapsedSecs < 8, `子プロセス木が残り ${elapsedSecs} 秒かかった`);
+  assert.notEqual(result.status, 0);
+});
 
 test('fast-fail 再試行の timer は主経路の残り予算だけで掛かり、全体で --timeout を超えない', () => {
   const env = fakeNativeCodexEnv(`

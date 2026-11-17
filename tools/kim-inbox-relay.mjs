@@ -1,6 +1,7 @@
 import os from 'node:os';
 import { isKimSeat, listItems, updateInboxItem } from './kim-inbox.mjs';
 import { formatInboxBrief, revisionOf, relayDue, jstDay, readRelayState, writeRelayState, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
+import { inboxCategory } from './lib/kim-inbox-category.mjs';
 
 const normalize = text => String(text).replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '').replace(/\s+/g, ' ').trim();
 
@@ -11,7 +12,7 @@ export function evaluateKimInboxRelay(input = {}, { home = process.env.ORGIAST_H
   const state = readRelayState(home, sessionId);
   const items = listItems(home);
   const pending = (state.pending || []).flatMap(p => {
-    const item = items.find(i => i.id === p.id && (i.status === 'open' || (i.kind === 'info' && i.status === 'seen')) && revisionOf(i) === p.revision && relayDue(i, sessionId, now));
+    const item = items.find(i => i.id === p.id && inboxCategory(i) !== 'notification' && (i.status === 'open' || (i.kind === 'info' && i.status === 'seen')) && revisionOf(i) === p.revision && relayDue(i, sessionId, now));
     return item ? [item] : [];
   });
   if (!pending.length) return pass;

@@ -3,6 +3,8 @@ import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { isUnattendedSession } from './unattended-session.mjs';
 import { displayPcNames } from './pc-display.mjs';
+import { presentedTargets, matchPromptAnswers, answerConfirmation } from './kim-answer-match.mjs';
+import { inboxCategory } from './kim-inbox-category.mjs';
 
 export const revisionOf = item => createHash('sha256').update(JSON.stringify([item.kind, item.text, item.revision, item.progressVersion])).digest('hex');
 export const jstDay = now => new Date(now + 9 * 3600000).toISOString().slice(0, 10);
@@ -215,19 +217,43 @@ export function recordInjection(home, sessionId, items, { event, now = Date.now(
   writeRelayState(home, sessionId, { ...state, sessionId, event, injectedAt: new Date(now).toISOString(),
     pending: items.map((item, n) => ({ id: item.id, revision: revisionOf(item), summary: formatInboxBrief(item, n + 1, { home }).split('\n')[0] })) });
 }
-export function recordPromptAnswers(home, sessionId, prompt, { listItems, answerItem }) {
+export function recordPromptAnswers(home, sessionId, prompt, { listItems, answerItem, awaiting = [], answerAwaiting, assistantText, now = Date.now() }) {
   if (!sessionId) return [];
   const state = readRelayState(home, sessionId), delivered = state.lastDelivered || [];
-  const lines = prompt.trim().split(/\r?\n/);
-  const matches = lines.map(line => line.trim().match(/^(ki-\d{14}-[a-f0-9]{4}|[1-9]\d*)\s*[:：、.．]?\s+(可|不可|承認|否認|はい|いいえ|不要|完了|OK|保留)[。.!！]?$/i));
-  if (!matches.length || matches.some(m => !m)) return [];
   const items = listItems(home), answers = [];
+  const recent = now - Date.parse(state.deliveredAt) <= 7 * 86400_000;
+  const candidates = recent ? delivered.flatMap(receipt => {
+    const item = items.find(i => i.id === receipt.id && inboxCategory(i) === 'decision' && i.status === 'open' && revisionOf(i) === receipt.revision);
+    return item ? [{ ...receipt, title: inboxBrief(item, { home }).topic, text: item.text, group: receipt.number ? `inbox:${receipt.number}` : item.id }] : [];
+  }) : [];
+  const targets = presentedTargets([...candidates, ...awaiting], assistantText);
+  const { matches, uncertain } = matchPromptAnswers(prompt, targets, { assistantText });
+  const partial = { ...(state.partialAnswers || {}) };
+  const grouped = new Map();
   for (const match of matches) {
-    const receipt = delivered.find(d => match[1] === d.id || match[1] === String(d.number));
-    const item = items.find(i => i.id === receipt?.id && i.kind === 'ask' && i.status === 'open' && revisionOf(i) === receipt.revision);
-    if (!item || match[2] === '保留') continue;
-    if (!match[1].startsWith('ki-') && (item.text.match(/^\s*\d+[.．、)）]/gm) || []).length > 1) continue;
-    answers.push(answerItem(home, item.id, match[2], sessionId));
+    const { target } = match;
+    const group = grouped.get(target.id) || [];
+    group.push(match); grouped.set(target.id, group);
   }
+  for (const [id, group] of grouped) {
+    const target = group[0].target;
+    let answer = group[0].answer;
+    if (target.part) {
+      const prior = partial[id]?.revision === target.revision ? partial[id].answers : {};
+      const parts = { ...prior, ...Object.fromEntries(group.map(m => [m.target.part, m.answer])) };
+      partial[id] = { revision: target.revision, answers: parts };
+      if (!target.parts.every(n => parts[n])) continue;
+      answer = target.parts.map(n => `${n}. ${parts[n]}`).join('\n');
+    }
+    if (id.startsWith('ki-')) answers.push(answerItem(home, id, answer, sessionId));
+    else if (answerAwaiting) {
+      const result = answerAwaiting(id, answer);
+      if (result !== 0) { uncertain.push(target); continue; }
+      answers.push({ id, answer });
+    }
+    delete partial[id];
+  }
+  writeRelayState(home, sessionId, { ...state, partialAnswers: partial });
+  answers.confirmation = answerConfirmation(uncertain);
   return answers;
 }

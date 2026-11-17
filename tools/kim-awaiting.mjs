@@ -11,7 +11,7 @@ import { appendInbox } from './auto-progress-inbox-hook.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
 import { mailboxDraftLabel } from './lib/drafts-auto-cleared.mjs';
 import { active, CATEGORY, DAY } from './lib/fleet-chase-policy.mjs';
-import { externalFile, readSkips, isSkipped, addSkip, saveAnswer } from './lib/external-waiting-state.mjs';
+import { externalFile, readSkips, isSkipped, addSkip, saveAnswer, answersDir } from './lib/external-waiting-state.mjs';
 
 export function readJson(file, fallback = null) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
@@ -26,6 +26,23 @@ export function saveJson(file, value) {
 const ledgerPath = home => path.join(home, '.claude', 'fleet-chase', 'ledger.json');
 
 export const shownFile = home => path.join(home, '.claude', 'state', 'kim-awaiting-shown.json');
+export const awaitingRevision = item => createHash('sha256').update(JSON.stringify([item.id, item.title, item.ask, item.waitingSince, item.route, item.lastMessageId])).digest('hex');
+export function promptAwaitingCandidates(home, sessionId, items, now = Date.now()) {
+  const prior = readJson(shownFile(home), {})[sessionId];
+  if (!prior || now - prior.at > 7 * DAY) return [];
+  return (prior.candidates || []).flatMap(receipt => {
+    const item = items.find(item => item.id === receipt.id && !item.warning && awaitingRevision(item) === receipt.revision);
+    return item ? [{ ...receipt, title: item.title, text: item.ask, group: item.id }] : [];
+  });
+}
+export function answerFromPrompt(id, answer, { home, now = Date.now(), spawnImpl = spawnSync } = {}) {
+  // Retain a local audit body and use precisely the same route as --answer.
+  const digest = createHash('sha256').update(`${id}\n${answer}`).digest('hex');
+  const bodyFile = path.join(home, '.claude', 'state', 'kim-chat-answers', `${digest}.txt`);
+  fs.mkdirSync(path.dirname(bodyFile), { recursive: true });
+  fs.writeFileSync(bodyFile, answer, { mode: 0o600 });
+  return respond(id, { home, bodyFile, now, spawnImpl });
+}
 export const apId = row => 'ap:' + createHash('sha256').update(rowKey(row)).digest('hex').slice(0, 12);
 export const isKimMail = item => item.kind === 'inbound' && (item.category === CATEGORY.decision || /^\[(判断|作業)依頼\]/.test(item.why || item.title || ''));
 export const MAX_FLEET_ITEMS = 10000;
@@ -64,9 +81,11 @@ export function collectExternal({ home, now }) {
   }
   const items = (state.items || []).filter(item => !isSkipped(skips, item)).sort((a, b) => Date.parse(a.since) - Date.parse(b.since));
   for (const item of items) {
+    const answer = readJson(path.join(answersDir(home), `${item.id.slice(3)}.json`));
+    if (answer?.lastMessageId === item.lastMessageId && answer.lastMessageId) continue;
     const ms = Math.max(0, now - Date.parse(item.since));
     const title = item.kind === 'draft' ? `下書きのまま未送信: ${item.who}${mailboxDraftLabel(item.mailbox)}「${item.subject}」` : `${item.who}${item.assignee ? `（担当: ${item.assignee}）` : ''}「${item.subject}」`;
-    out.push({ id: item.id, source: 'external', external: true, title, ask: item.ask || '返信内容を決める', waitingSince: item.since, ageDays: Math.floor(ms / DAY), ageHours: Math.floor(ms / 3600_000), route: { threadId: item.threadId, mailbox: item.mailbox } });
+    out.push({ id: item.id, source: 'external', external: true, title, ask: item.ask || '返信内容を決める', lastMessageId: item.lastMessageId, waitingSince: item.since, ageDays: Math.floor(ms / DAY), ageHours: Math.floor(ms / 3600_000), route: { threadId: item.threadId, mailbox: item.mailbox } });
   }
   return out;
 }
@@ -128,7 +147,10 @@ export function collectAwaiting({ home = process.env.ORGIAST_HOME || os.homedir(
 }
 export function clearShown(home, id) {
   const state = readJson(shownFile(home), {});
-  for (const session of Object.values(state)) session.ids = (session.ids || []).filter(value => value !== id);
+  for (const session of Object.values(state)) {
+    session.ids = (session.ids || []).filter(value => value !== id);
+    session.candidates = (session.candidates || []).filter(value => value.id !== id);
+  }
   saveJson(shownFile(home), state);
 }
 export function respond(id, { home = process.env.ORGIAST_HOME || os.homedir(), bodyFile, reason, skip = false, now = Date.now(), spawnImpl = spawnSync } = {}) {

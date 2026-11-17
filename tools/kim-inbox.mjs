@@ -14,6 +14,9 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
 import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
+import { inboxCategory, inboxCounts } from './lib/kim-inbox-category.mjs';
+import { collectAwaiting, promptAwaitingCandidates, answerFromPrompt } from './kim-awaiting.mjs';
+import { readTranscriptContext } from './lib/assistant-text.mjs';
 import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
 const exec = promisify(execFile);
 const directory = home => path.join(home, '.claude/kim-inbox');
@@ -437,7 +440,8 @@ function deadlineDays(item, now) {
   return /期限切れ/.test(item.text) ? -Infinity : Infinity;
 }
 export function selectContext(items, { sessionId = '', now = Date.now(), sheetUrl = '（未初期化）', home = process.env.ORGIAST_HOME || os.homedir(), event = 'UserPromptSubmit' } = {}) {
-  items = items.filter(item => relayDue(item, sessionId, now));
+  const notifications = inboxCounts(items).notification;
+  items = items.filter(item => inboxCategory(item) !== 'notification' && relayDue(item, sessionId, now));
   const own = item => {
     if (sessionId.length < 8) return false;
     const current = sessionId.slice(0, 8).toLowerCase();
@@ -492,7 +496,7 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   ])];
   const label = eligible.every(i => reserved.includes(i)) ? '完了・進捗・承認待ち'
     : `期限 ${deadlines.length} / 未回収 ask ${allAsks.length} / 未確認 info ${infos.length}`;
-  let text = `[kim-inbox ${label}] 最後の【受信箱】節に、各件を『何の件／起きたこと／判断してほしいこと／返事の例』で書く。原文を切り詰めて貼らない。注入は配達ではない。ask は返答後 --answer、info は報告後 --seen で記録する。\n`;
+  let text = `[kim-inbox ${label} / システム通知 ${notifications}（判断待ち対象外・保持）] 最後の【受信箱】節に、各件を『何の件／起きたこと／判断してほしいこと／返事の例』で書く。原文を切り詰めて貼らない。注入は配達ではない。ask は返答後 --answer、info は報告後 --seen で記録する。\n`;
   if (deadlines.length) text += `期限台帳: ${sheetUrl}（返答後は deadline-watch.mjs --done/--defer/--drop）\n`;
   text = redactSecrets(text);
   const footer = '一覧: node tools/kim-inbox.mjs --list --open';
@@ -542,12 +546,14 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   return text + omitted(eligible.length - selected.length) + footer;
 }
 export function oneScreenSummary(items) {
-  const openItems = items.filter(i => i.status === 'open');
+  const counts = inboxCounts(items);
+  const openItems = items.filter(i => i.status === 'open' && inboxCategory(i) !== 'notification');
   const asks = openItems.filter(i => i.kind === 'ask').sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   const infos = openItems.filter(i => i.kind === 'info').sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   const lines = [];
   const askCount = asks.length;
   lines.push(`📌 kim の返事待ち ${askCount}件`);
+  if (counts.notification) lines.push(`システム通知 ${counts.notification}件（判断待ち対象外・保持）`);
   if (askCount === 0) return lines.join('\n');
   for (const ask of asks.slice(0, 5)) {
     const text = ask.text.replace(/[\r\n]+/g, ' ').slice(0, 120);
@@ -578,14 +584,21 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       if (!['SessionStart', 'UserPromptSubmit'].includes(event)) return 0;
       const kim = isKimSeat(home);
       if (!interactiveInboxSession(input, { home })) return 0;
-      const sessionId = String(input.session_id ?? '');
-      if (kim && event === 'UserPromptSubmit') recordPromptAnswers(home, sessionId, String(input.prompt || ''), { listItems, answerItem });
+      const sessionId = String(input.session_id ?? input.sessionId ?? '');
+      let confirmation = '';
+      if (kim && event === 'UserPromptSubmit') {
+        const assistantText = readTranscriptContext(input.transcript_path || input.transcriptPath, { maxBytes: 2 * 1024 * 1024 }).assistantText;
+        const awaiting = promptAwaitingCandidates(home, sessionId, collectAwaiting({ home, sessionId }));
+        const result = recordPromptAnswers(home, sessionId, redactSecrets(String(input.prompt || '')), { listItems, answerItem, awaiting, assistantText,
+          answerAwaiting: (id, answer) => answerFromPrompt(id, answer, { home }) });
+        confirmation = result.confirmation || '';
+      }
       await drainSpool(home);
       if (kim) await ingestFleetMail(home);
       await autoCloseByGmail(home);
       const items = listItems(home).filter(i => (i.status === 'open' || (i.dailyProgress && i.status === 'seen')) && (kim || i.forwardError));
       const counts = new Map(items.map(i => [i.id, i.shownCount]));
-      const context = selectContext(items, { sessionId: String(input.session_id ?? ''), sheetUrl: deadlineSheetUrl(home), home, event });
+      const context = [confirmation, selectContext(items, { sessionId, sheetUrl: deadlineSheetUrl(home), home, event })].filter(Boolean).join('\n');
       if (kim) recordInjection(home, sessionId, items.filter(i => i.shownCount !== counts.get(i.id) && (i.kind === 'ask' || isHighInfo(i))), { event });
       if (context) stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }));
       for (const item of items.filter(i => i.shownCount !== counts.get(i.id))) update(home, item.id, current => {
@@ -617,8 +630,12 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
     else if (args.includes('--status') || args.includes('--list')) {
       await autoCloseByGmail(home);
       const items = listItems(home, { status: args.includes('--open') || args.includes('--status') ? 'open' : undefined });
-      if (args.includes('--status')) stdout(`kim-inbox: open ask ${items.filter(i => i.kind === 'ask').length} / open info ${items.filter(i => i.kind === 'info').length}\n最古: ${items.length ? `${items[0].id} ${items[0].text.split(/\r?\n/)[0].slice(0, 120)}` : 'なし'}`);
-      else stdout(args.includes('--json') ? JSON.stringify(items) : displayPcNames(items.map(i => `${i.id} ${i.kind} ${i.status} ${i.text.split(/\r?\n/)[0]}`).join('\n'), { home }));
+      const counts = inboxCounts(items), decisions = items.filter(i => inboxCategory(i) === 'decision');
+      if (args.includes('--status')) stdout(`kim-inbox: open ask ${counts.decision} / open info ${counts.information} / system notifications ${counts.notification}（判断待ち対象外・保持）\n最古: ${decisions.length ? `${decisions[0].id} ${decisions[0].text.split(/\r?\n/)[0].slice(0, 120)}` : 'なし'}`);
+      else {
+        const visible = args.includes('--decisions') ? decisions : items;
+        stdout(args.includes('--json') ? JSON.stringify(visible) : displayPcNames(visible.map(i => `${i.id} ${i.kind} ${i.status} [${inboxCategory(i)}] ${i.text.split(/\r?\n/)[0]}`).join('\n'), { home }));
+      }
     } else throw new Error('--add / --answer / --seen / --drop / --show / --list / --status / --context / --compact / --auto-close を指定してください');
     return 0;
   } catch (error) { stderr(`kim-inbox: ${clean(error.message).replace(/[\r\n]+/g, ' ')}`); return args.includes('--context') ? 0 : 1; }

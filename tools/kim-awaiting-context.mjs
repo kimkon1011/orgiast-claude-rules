@@ -3,7 +3,7 @@ import os from 'node:os';
 import { mkdirSync, rmdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { collectAwaiting, shownFile, readJson, saveJson, ageLabel, COLLECT_BUDGET_MS } from './kim-awaiting.mjs';
+import { collectAwaiting, shownFile, readJson, saveJson, ageLabel, COLLECT_BUDGET_MS, awaitingRevision } from './kim-awaiting.mjs';
 import { readManualLedger, findManualWaiting } from './outbound-reply-chase.mjs';
 import { DAY } from './lib/fleet-chase-policy.mjs';
 import { isUnattendedRow } from './auto-progress-ledger.mjs';
@@ -78,6 +78,9 @@ export function context(input, { home = process.env.ORGIAST_HOME || os.homedir()
     const current = internal.filter(isCurrent);
     const shownExternal = external.slice(0, TOP);
     const shownInternal = [...current, ...internal.filter(item => !isCurrent(item)).slice(0, TOP)];
+    state[session].candidates = [...shownExternal, ...shownInternal].filter(item => !item.warning)
+      .map(item => ({ id: item.id, title: item.title, revision: awaitingRevision(item) }));
+    saveJson(shownFile(home), state);
     const waiting = external.filter(item => !item.warning).length;
     const listCmd = `node "${repo}/tools/kim-awaiting.mjs" --list`;
     const externalBlock = external.length ? `🔴 社外の人を待たせています ${waiting} 件（古い順）\n${shownExternal.map(briefLine).join('\n')}${external.length > TOP ? `\nほか ${external.length - TOP} 件` : ''}\n` : '';

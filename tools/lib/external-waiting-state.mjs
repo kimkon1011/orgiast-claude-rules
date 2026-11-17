@@ -34,5 +34,5 @@ export function saveAnswer(home, id, body, now = Date.now()) {
   if (!/^ex:[0-9a-f]{12}$/.test(id)) throw new Error('invalid external id');
   const item = (readJsonSafe(externalFile(home), {}).items || []).find(entry => entry.id === id);
   if (!item) throw new Error('external item not found');
-  writeJsonAtomic(path.join(answersDir(home), `${id.slice(3)}.json`), { id, answer: body, at: new Date(now).toISOString(), mailbox: item.mailbox, threadId: item.threadId, subject: item.subject, who: item.who });
+  writeJsonAtomic(path.join(answersDir(home), `${id.slice(3)}.json`), { id, answer: body, at: new Date(now).toISOString(), lastMessageId: item.lastMessageId, mailbox: item.mailbox, threadId: item.threadId, subject: item.subject, who: item.who });
 }

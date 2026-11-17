@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { skipCoolingBackends } from './fallback-backend-health.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, isBackendPermanentlyBroken, rememberBackendPermanentlyBroken, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -1597,6 +1597,22 @@ test('cheap-first: 先頭レーンが unrecognized_model なら incompatible を
   const history = fs.readFileSync(path.join(home, '.claude', 'fallback-backend-history.jsonl'), 'utf8')
     .trim().split(/\r?\n/).map((line) => JSON.parse(line));
   assert.equal(history.some((row) => row.backend === 'cheap-code:deepseek' && row.outcome === 'incompatible'), true);
+  const health = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'lane-health.json'), 'utf8'));
+  assert.equal(health.lanes['cheap-code:deepseek'].reason, 'broken');
+  assert.equal(health.lanes['cheap-code:deepseek'].errorKind, 'unrecognized_model');
+  const next = resolveFallbackBackends(home, { taskKind: 'implement', executableAvailable: () => true });
+  assert.equal(next.some((backend) => backend.name === 'cheap-code:deepseek'), false);
+});
+
+test('恒久故障の記録は既存 lane-health を保ち、対象 backend だけ broken にする', () => {
+  const home = workDir();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'lane-health.json'), JSON.stringify({ probedAt: 'old', lanes: { gemini: { alive: true } } }));
+  rememberBackendPermanentlyBroken(home, 'cheap-code:deepseek', 'unrecognized_model', Date.parse('2026-11-18T00:00:00Z'));
+  assert.equal(isBackendPermanentlyBroken(home, 'cheap-code:deepseek'), true);
+  const health = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'lane-health.json'), 'utf8'));
+  assert.deepEqual(health.lanes.gemini, { alive: true });
+  assert.equal(health.lanes['cheap-code:deepseek'].probedAt, '2026-11-18T00:00:00.000Z');
 });
 
 test('cheap-first: implement 既定 → fallback 全滅 → Codex が呼ばれる', () => {

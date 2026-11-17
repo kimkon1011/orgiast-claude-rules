@@ -163,6 +163,14 @@ export function buildMessages(text, imageUrls) {
   return chunks;
 }
 
+export function assertPushSucceeded(response, body) {
+  if (response.ok) return;
+  if (response.status === 429) {
+    console.error('[line-group-send] LINE bot の月間枠切れ。代替: Beeper 経由で kim の LINE から送る → node tools/send-context-check.mjs --channel beeper --target <beeperChatID> --text-file <本文> の後、reply-queue で receipt を作り node tools/beeper-send.mjs --chat <beeperChatID> --body-file <本文> --queue-id <id> --receipt <rid>。kim に手動コピペ・有料プランを選ばせない。');
+  }
+  throw new Error(`push 失敗 ${response.status} ${body}`);
+}
+
 async function main() {
   const o = parseArgs(process.argv.slice(2));
   const s = await loadSecrets();
@@ -196,7 +204,7 @@ async function main() {
       body: JSON.stringify({ to: groupId, messages }),
     });
     const body = await r.text();
-    if (!r.ok) throw new Error(`push 失敗 ${r.status} ${body}`);
+    assertPushSucceeded(r, body);
     const sent = JSON.parse(body).sentMessages || [];
     for (const message of sent) recordOutbound({ channel: 'line', target: groupId, text: messages.find(m => m.type === 'text')?.text ?? '', messageId: message.id });
     console.log(`push ${i + 1}/${chunks.length}: HTTP ${r.status} sentMessages=${sent.length} ids=${sent.map((m) => m.id).join(',')} retryKey=${retryKey}`);

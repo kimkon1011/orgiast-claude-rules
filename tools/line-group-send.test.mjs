@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseArgs, buildMessages, loadSecrets, resolveGroup, assertSendableText, strToUUID, normalizeGroupName } from './line-group-send.mjs';
+import { parseArgs, buildMessages, loadSecrets, resolveGroup, assertSendableText, assertPushSucceeded, strToUUID, normalizeGroupName } from './line-group-send.mjs';
 
 test('assertSendableText: 文字化けとプレースホルダ残りは送らない', () => {
   assert.doesNotThrow(() => assertSendableText('皆さん、お疲れさまです。'));
@@ -40,6 +40,20 @@ test('buildMessages: 本文が先頭・1回の push は最大5件', () => {
   assert.deepEqual(chunks[0][0], { type: 'text', text: '本文' });
   assert.equal(chunks[1][0].originalContentUrl, 'u5');
   assert.equal(buildMessages('', ['u1']).flat()[0].type, 'image');
+});
+
+test('assertPushSucceeded: 429 は stderr に Beeper 代替経路を案内する', (t) => {
+  const originalError = console.error;
+  const errors = [];
+  t.after(() => { console.error = originalError; });
+  console.error = (message) => errors.push(message);
+
+  assert.throws(
+    () => assertPushSucceeded({ ok: false, status: 429 }, '{"message":"Monthly limit exceeded"}'),
+    /push 失敗 429/,
+  );
+  assert.match(errors.join('\n'), /Beeper/);
+  assert.match(errors.join('\n'), /beeper-send\.mjs/);
 });
 
 test('loadSecrets: env と line-send.env が揃えば Vercel に行かない', async () => {

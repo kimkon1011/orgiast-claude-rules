@@ -231,3 +231,76 @@ export function recordPromptAnswers(home, sessionId, prompt, { listItems, answer
   }
   return answers;
 }
+
+// 自然言語の肯定/否定キーワード分類
+const NL_POSITIVE = /^(?:良い|良いです|良いよ|大丈夫|入れる|入れて|入れてください|ok|お願い|お願いします|進めて|進めてください|承認|承認します|承認する|全部ok|全部良い|全部承認|はい|はい。|はいはい|可)$/i;
+const NL_NEGATIVE = /^(?:不要|やめ|やめて|止め|止めて|やめてください|だめ|ダメ|不可|いいえ|保留|ちょっと待って|待って)$/i;
+const NL_DONE = /^(?:完了|完了した|おわり|終わり)$/i;
+
+function classifyNaturalLanguage(text) {
+  const trimmed = text.trim().replace(/[。、.!！\s]+$/, '');
+  if (NL_POSITIVE.test(trimmed)) return '可';
+  if (NL_NEGATIVE.test(trimmed)) return '否認';
+  if (NL_DONE.test(trimmed)) return '完了';
+  // 「上のNはOK」パターン
+  const inlinePositive = trimmed.match(/^(?:上[のの]?\d+(?:\s*[、,]\s*\d+)*\s*(?:は|も)?\s*)(OK|良い|大丈夫|お願い|承認|可|全部OK)/i);
+  if (inlinePositive) return '可';
+  return null;
+}
+
+// 自然文の返事を記録する。確信度が低いときは記録せずヒント文字列を返す（caller が追加コンテキストに含める）
+export function recordNaturalLanguageAnswers(home, sessionId, prompt, { listItems, answerItem }) {
+  if (!sessionId) return { answers: [], hints: [] };
+  const state = readRelayState(home, sessionId), delivered = state.lastDelivered || [];
+  if (!delivered.length) return { answers: [], hints: [] };
+
+  const lines = prompt.trim().split(/\r?\n/).filter(Boolean);
+  const items = listItems(home);
+  const openAsks = delivered
+    .map(d => items.find(i => i.id === d.id && i.kind === 'ask' && i.status === 'open' && revisionOf(i) === d.revision))
+    .filter(Boolean);
+
+  if (!openAsks.length) return { answers: [], hints: [] };
+
+  const answers = [];
+  const hints = [];
+
+  // パターン1: 番号付き自然言語 "1. 良い 2. OK 3. 不要"
+  const numberedNatural = lines.map(line => {
+    const m = line.trim().match(/^([1-9]\d*)\s*[.．、)）]\s*(.+)$/);
+    if (!m) return null;
+    const answer = classifyNaturalLanguage(m[2]);
+    if (!answer) return null;
+    return { number: parseInt(m[1]), answer };
+  }).filter(Boolean);
+
+  if (numberedNatural.length > 0) {
+    let matched = 0;
+    for (const nn of numberedNatural) {
+      const receipt = delivered.find(d => d.number === nn.number);
+      const item = receipt ? openAsks.find(i => i.id === receipt.id) : null;
+      if (!item) continue;
+      if (nn.answer === '否認' || nn.answer === '保留') continue;
+      answers.push(answerItem(home, item.id, nn.answer, sessionId));
+      matched++;
+    }
+    if (matched === 0 && numberedNatural.length === 1 && openAsks.length === 1) {
+      // 番号が1でアイテムが1つ → 該当すると見なす
+      answers.push(answerItem(home, openAsks[0].id, numberedNatural[0].answer, sessionId));
+    }
+    return { answers, hints };
+  }
+
+  // パターン2: 全体がひとつの返事 "良いですよ" "OK" "進めて"
+  const promptAnswer = classifyNaturalLanguage(lines.join(' '));
+  if (promptAnswer && openAsks.length === 1) {
+    // 判断待ちが1件だけ → 確度高、自動記録
+    answers.push(answerItem(home, openAsks[0].id, promptAnswer, sessionId));
+  } else if (promptAnswer && openAsks.length >= 2 && openAsks.length <= 3) {
+    // 複数判断待ちだが肯定/否定語がある → 確度中、ヒントを返す（記録しない）
+    hints.push(`kim の返事が判断待ちの項目への回答のように見えます。「${promptAnswer}」として記録します（違えば訂正してください）。`);
+  }
+  // openAsks.length > 3 の曖昧な返事 → 何もしない
+
+  return { answers, hints };
+}

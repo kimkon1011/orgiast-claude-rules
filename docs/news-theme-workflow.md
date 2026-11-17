@@ -239,26 +239,32 @@ AIニュース提案ドキュメント作成（docs/ai-news-x-*.md）
 
 ## 自動化計画
 
-### 6.1 定期実行（cron / CI）
+### 6.0 運用計画への誘導
 
-```yaml
-# 月1回の自動実行（推奨）
-schedule: "0 9 1 * *"  # 毎月1日 09:00
-command: node seo/x0057-ai-news-pipeline.mjs --mode full
-```
+自動化の詳細設計・スケジュール・実行手順は **`docs/news-theme-operations-plan.md`（X-0062 ⑤ 運用計画）** に集約した。以下はその概要のみを記載する。
 
-### 6.2 GAS連携（将来構想）
+### 6.1 定期実行（CI cron / GASハイブリッド）
 
-Google Apps Script による自動化を検討中：
-- Google Trends データの定期取得（Google Sheets 連携）
-- Slack/Discord への提案通知
-- 承認ワークフローの簡略化
+月次サイクル（每月1日 09:00 JST 開始）：
+
+| Phase | 実行方式 | 主体 |
+|-------|---------|------|
+| Phase 1 (KW収集) | CI cron (GitHub Actions) | 自動 |
+| Phase 2 (ChatGPT評価) | 人間操作（ブラウザ） | 人間 |
+| Phase 3 (提案生成) | 自動 + 人間追記 | 自動+人間 |
+| Phase 4 (記事化判断) | 人間判断 | 人間 |
+| Phase 5 (効果検証) | CI cron + GAS | 自動 |
+
+### 6.2 GAS管理（提案一覧・通知）
+
+Google Apps Script で管理する機能：
+- 提案一覧シートの自動更新（新規提案追加・状態変更）
+- Discord通知トリガー（月次開始・リマインダー・サマリ）
+- スクリプトプロパティによる設定管理
 
 ### 6.3 出力の自動配布
 
-- 提案ファイルを GitHub リポジトリに自動 commit
-- 変更検知 → 関係者への通知
-- 週次サマリの自動生成
+- 提案ファイルを GitHub リポジトリに自動 commit（CI cron）
 
 ---
 
@@ -269,6 +275,7 @@ Google Apps Script による自動化を検討中：
 | ファイル | 役割 |
 |---------|------|
 | `docs/news-theme-workflow.md` | **本ドキュメント** — プロセス手順書 |
+| `docs/news-theme-operations-plan.md` | X-0062 ⑤ 運用計画（CI cron + GAS） |
 | `docs/ai-news-x0062-ai-agent-seo.md` | X-0062 提案全体の戦略文書 |
 | `data/chatgpt-input-format-x0062.md` | ChatGPT 入力フォーマット定義 |
 | `seo/x0057-ai-news-pipeline.mjs` | Google Trends 収集パイプライン |

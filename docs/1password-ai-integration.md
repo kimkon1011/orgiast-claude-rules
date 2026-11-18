@@ -87,3 +87,18 @@ $h = Get-Content -Raw -Path $p | ConvertFrom-Json -AsHashtable
 - ファイルが読めないなど、どうしても確かめられないときは「未確認」と明記し、「すでにオンなら何もしなくてよい」と書いたうえで、この節の手順も一緒に出す。
 
 2026-11-18 の 000 では、上記の手順だけで Windows Hello を出さずに、Windows Hello と CLI 連携がすでにオンだと確認できた。
+
+## 金さんに頼む前の確認（通知が出ない方法で必ず先に確認する）
+
+- デスクトップアプリの設定は `%LOCALAPPDATA%\1Password\settings\settings.json` を読む。値の表示はしない。キー名と真偽だけ見る。
+  - Windows Hello: `security.authenticatedUnlock.enabled`
+  - CLI連携: `developers.cliSharedLockState.enabled`
+  - MCP連携: `developers.mcpIntegration.enabled`
+- `op` コマンドはそれ自体が Windows Hello の確認を金さんの画面に出す。確認目的で `op` を叩かない。
+- 「未確認」の項目を金さんへのボタン一覧に入れない。確認できないなら、確認できない理由を書く。
+
+## Windows Hello を出す作業の決まり
+
+- 事前に金さんへ「いつ・何回・何のために出るか」を伝え、在席を確かめてから始める。
+- 最初の1回（`op whoami`）が失敗・タイムアウトしたら、その場で全体を中止する。後続の `op` を続けて呼ばない（呼ぶたびに確認が出る）。
+- 2026-11-18 18:21〜18:26 JST、この決まりがなかったため確認が約5回出て全てタイムアウトした（取り込みは0件）。

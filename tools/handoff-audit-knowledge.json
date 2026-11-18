@@ -430,5 +430,11 @@
     "route": "user 操作を残す完了・手渡し報告では、最終メッセージ冒頭に `[手渡し判定]` を置き、①当ターンで試した経路と結果（コマンド・終了コード・エラー本文）、②user が必要な理由が OAuth 初回同意・支払い・アカウント作成・物理操作のいずれかに該当することを同じブロックに書く。`Gmail MCP` や「お願いします」だけの文面で代用しない。外部状態の件数・有無は `node tools/kim-inbox.mjs`・mobile-push-queue・DWD/API 等の直接照会の実応答を根拠にするか、照会できなければ「未確認」と書く。末尾は `次に kim がすること: なし` または `次に kim がすること: <1件の具体手順>` の指定形式を守り、余分な注釈を付けない。",
     "confidence": "high",
     "source": "handoff-audit-nightly:a1710bca4fb89b85eb04da4230c54a3403080272fc2f51d0d97a2e6f002f6ada / 2026-11-21 tool-name-route レビューで route（`Gmail MCP` 道具名のみ）を [手渡し判定] 必須記載の手順文へ書き直して採用"
+  },
+  {
+    "pattern": "自動削除の判断と実行をユーザーに委ねない",
+    "route": "不要ファイル・下書き・ブランチの削除が必要なときは、対象一覧（ID・名前・最終更新・残す理由が無い根拠）と、Claude 側で実行するコマンド全文（Drive は DWD で files.update trashed=true、Gmail 下書きは `node tools/gmail-draft.mjs --delete <draftId>`、ブランチは git push origin --delete）を用意し、kim-inbox に承認待ちとして積む。user に手で削除させない。承認後は Claude が実行し、API で存在しないことを読み戻して報告する（組織指示12: 削除は承認後のみ）。",
+    "confidence": "high",
+    "source": "2026-11-19 handoff-audit-candidates tool-name-route レビュー（元 route: Drive API 道具名のみ→削除対象の特定・承認・実行・読み戻しの手順文に置換）"
   }
 ]

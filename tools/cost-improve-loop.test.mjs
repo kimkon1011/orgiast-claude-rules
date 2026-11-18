@@ -24,7 +24,8 @@ import {
   writeCodexFallbackOrder,
   writeAutoSessionExecutorEnv,
   writeBudgetPressure,
-  splitWhitelistedCommand
+  splitWhitelistedCommand,
+  runEntry
 } from './cost-improve-loop.mjs';
 
 const main = (args, io = {}) => mainImpl(args, { scanAiReceipts: async () => ({ errors: [] }), receiptLedgerAgeHours: () => 0, alertAiReceipts: async () => {}, ...io });
@@ -1028,4 +1029,72 @@ test('receipt signals: success is clean; stale boundary and missing ledger are d
     assert.equal(violations.length, 1);
     assert.match(violations[0].evidence, /領収書台帳が .*h 更新されていない/);
   }
+});
+
+test('runEntry: refresh throw でも run が呼ばれ、process.exitCode=1 になる', async () => {
+  const savedExitCode = process.exitCode;
+  process.exitCode = 0;
+
+  let calledRun = false;
+  const result = await runEntry({
+    argv: [],
+    refresh: () => { throw new Error('simulated timeout'); },
+    run: () => { calledRun = true; return Promise.resolve('ok'); },
+  });
+
+  assert.equal(calledRun, true, 'refresh が throw しても run は呼ばれる');
+  assert.equal(process.exitCode, 1, 'process.exitCode は 1 になる');
+
+  process.exitCode = savedExitCode;
+});
+
+test('runEntry: refresh 成功時は process.exitCode を変えず run が呼ばれる', async () => {
+  const savedExitCode = process.exitCode;
+  process.exitCode = 0;
+
+  let calledRun = false;
+  const result = await runEntry({
+    argv: [],
+    refresh: () => 'ok',
+    run: () => { calledRun = true; return Promise.resolve('ok'); },
+  });
+
+  assert.equal(calledRun, true, 'run は呼ばれる');
+  assert.equal(process.exitCode, 0, 'process.exitCode は変わらない');
+
+  process.exitCode = savedExitCode;
+});
+
+test('runEntry: --dry-run では refresh を呼ばず（throw しても止まらない）run が呼ばれる', async () => {
+  const savedExitCode = process.exitCode;
+  process.exitCode = 0;
+
+  let calledRefresh = false;
+  let calledRun = false;
+  const result = await runEntry({
+    argv: ['--dry-run'],
+    refresh: () => { calledRefresh = true; return 'ok'; },
+    run: () => { calledRun = true; return Promise.resolve('ok'); },
+  });
+
+  assert.equal(calledRefresh, false, '--dry-run では refresh を呼ばない');
+  assert.equal(calledRun, true, 'run は呼ばれる');
+  assert.equal(process.exitCode, 0, 'process.exitCode は変わらない');
+
+  process.exitCode = savedExitCode;
+});
+
+test('runEntry: run 自身が throw したら process.exitCode=1 になる', async () => {
+  const savedExitCode = process.exitCode;
+  process.exitCode = 0;
+
+  await runEntry({
+    argv: ['--dry-run'],
+    refresh: () => 'ok',
+    run: () => { throw new Error('run failed'); },
+  });
+
+  assert.equal(process.exitCode, 1, 'run の throw で exitCode=1');
+
+  process.exitCode = savedExitCode;
 });

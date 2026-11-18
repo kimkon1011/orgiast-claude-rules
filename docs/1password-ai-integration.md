@@ -50,3 +50,40 @@ op run --env-file "$HOME\gb-offload\ai.env" -- claude -p ...
 2. 000 で平文 `.env` の値を AI-Keys に取り込む（op CLI、ローカル完結。値は表示しない）。
 3. 取り込んだ `.env` を `op://` 参照に置き換え、元ファイルは `.bak` に退避（削除は金さん承認後）。
 4. 取り込んだ鍵は発行元でローテーションする（公式推奨。平文時代の露出は消えないため）。
+
+## 通知を出さずに設定を確かめる（Windows）
+
+金さんに「Windows Hello」や「1Password CLI と連携」をオンにするよう依頼する前に、この手順で現状を確認する。`op` コマンド（`op account list` / `op vault list` / `op signin` など）は使わない。アプリ連携がオンだと、これらは Windows Hello の確認を画面に出す。確認を省略して未確認のまま依頼に回すことも禁止する。
+
+確認先（000 で 2026-11-18 実測。値は出さずキー名だけ先に確認し、該当する真偽値だけ読む。`authTags` など他の値は表示しない）:
+
+- ファイル: `%LOCALAPPDATA%\1Password\settings\settings.json`
+- 形式: ネストではなく、ドット付きのキー名がフラットに並ぶ（例: `"developers.cliSharedLockState.enabled": true`）
+
+| アプリの設定 | キー | true の意味 |
+|---|---|---|
+| 設定 > セキュリティ > Windows Hello | `security.authenticatedUnlock.enabled` | オン（補助確認: `security.authenticatedUnlock.deviceBasedUnlock` と `security.authenticatedUnlock.useHardware`） |
+| 設定 > 開発者 > 1Password CLIと連携 | `developers.cliSharedLockState.enabled` | オン |
+| 開発者向け MCP 連携 | `developers.mcpIntegration.enabled` | オン |
+
+PowerShell 例（既知の真偽値だけ出力する。`authTags` は出さない）:
+
+```powershell
+$p = "$env:LOCALAPPDATA\1Password\settings\settings.json"
+$h = Get-Content -Raw -Path $p | ConvertFrom-Json -AsHashtable
+@(
+  'security.authenticatedUnlock.enabled',
+  'security.authenticatedUnlock.deviceBasedUnlock',
+  'security.authenticatedUnlock.useHardware',
+  'developers.cliSharedLockState.enabled',
+  'developers.mcpIntegration.enabled'
+) | ForEach-Object { "$_=$($h[$_])" }
+```
+
+判断:
+
+- 該当キーが `True` なら、その設定の依頼は出さない。確認結果だけ報告する。
+- `False` またはキーが無いときだけ、オンにする依頼を出してよい。確認結果を依頼文に書く。
+- ファイルが読めないなど、どうしても確かめられないときは「未確認」と明記し、「すでにオンなら何もしなくてよい」と書いたうえで、この節の手順も一緒に出す。
+
+2026-11-18 の 000 では、上記の手順だけで Windows Hello を出さずに、Windows Hello と CLI 連携がすでにオンだと確認できた。

@@ -9,7 +9,7 @@ import { skipCoolingBackends } from './fallback-backend-health.mjs';
 import { runGeminiBudgetGuard } from './gemini-budget-guard.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isBackendAuthFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, writeCursorAgentAuthFailed, buildCursorAgentArgs, resolveCursorAgentBackend, fallbackOutcomeToRecord, cursorAgentAuthPaths } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -3389,4 +3389,100 @@ test('resolveFallbackBackends は local.json があるとき cursor-agent を自
 
 test('buildCursorAgentArgs は非対話の -p --force --trust と workspace を付ける', () => {
   assert.deepEqual(buildCursorAgentArgs({ workspace: 'C:/work' }), ['-p', '--force', '--trust', '--workspace', 'C:/work']);
+});
+
+test('isBackendAuthFailure は認証エラー文字列で true を返す', () => {
+  assert.equal(isBackendAuthFailure('Authentication required. Please run', ''), true);
+  assert.equal(isBackendAuthFailure('', 'Authentication required'), true);
+  assert.equal(isBackendAuthFailure('', "Error: agent login first"), true);
+  assert.equal(isBackendAuthFailure('Please set CURSOR_API_KEY', ''), true);
+  assert.equal(isBackendAuthFailure('set CURSOR_API_KEY environment variable', ''), true);
+  assert.equal(isBackendAuthFailure('invalid api key', ''), true);
+  assert.equal(isBackendAuthFailure('', 'invalid_api_key'), true);
+  assert.equal(isBackendAuthFailure('HTTP 401 Unauthorized', ''), true);
+  assert.equal(isBackendAuthFailure('', '401 Unauthorized'), true);
+  // 無関係なエラーでは false
+  assert.equal(isBackendAuthFailure('', 'Error: something else'), false);
+  assert.equal(isBackendAuthFailure('Connection refused', ''), false);
+  assert.equal(isBackendAuthFailure('', 'permission denied'), false);
+});
+
+test('shouldAdvanceToNextBackend は authFailed=true で advance:true, outcome:auth_fail を返す', () => {
+  assert.deepEqual(shouldAdvanceToNextBackend({ authFailed: true, status: 1 }), { advance: true, outcome: 'auth_fail' });
+  assert.deepEqual(shouldAdvanceToNextBackend({ authFailed: true, exhausted: true, status: 3 }), { advance: true, outcome: 'auth_fail' });
+  // status 0 は authFailed より優先
+  assert.deepEqual(shouldAdvanceToNextBackend({ authFailed: true, status: 0 }), { advance: false, outcome: 'ok' });
+  // 既存の引数を壊さない
+  assert.deepEqual(shouldAdvanceToNextBackend({}), { advance: false, outcome: 'failed' });
+  assert.deepEqual(shouldAdvanceToNextBackend({ cliMissing: true, status: 1 }), { advance: true, outcome: 'cli_missing' });
+});
+
+test('fallbackOutcomeToRecord は auth_fail を通す', () => {
+  assert.equal(fallbackOutcomeToRecord('auth_fail', {}), 'auth_fail');
+  // クーリング中の timeout は従来どおり null
+  assert.equal(fallbackOutcomeToRecord('timeout', { cooling: true, budgetSecs: 60, normalSecs: 600 }), null);
+  // ok は通る
+  assert.equal(fallbackOutcomeToRecord('ok', {}), 'ok');
+});
+
+test('isCursorAgentLoggedIn は auth-failed ファイルが認証ファイルより新しいと false', () => {
+  const home = path.join(os.tmpdir(), 'cursor-auth-failed-' + Date.now());
+  const claudeDir = path.join(home, '.claude');
+  const authFailedFile = path.join(claudeDir, 'cursor-agent-auth-failed.json');
+  const authFile = path.join(home, '.cursor', 'cli-config.json');
+  fs.mkdirSync(path.dirname(authFile), { recursive: true });
+  fs.writeFileSync(authFile, 'present');
+  const authMtimeMs = fs.statSync(authFile).mtimeMs;
+  try {
+    // 認証ファイルが存在し、auth-failed の at が auth の mtime より古い → ログイン中
+    fs.writeFileSync(authFailedFile, JSON.stringify({ at: authMtimeMs - 1000 }) + '\n', 'utf8');
+    assert.equal(isCursorAgentLoggedIn(home, { env: {} }), true);
+    // auth-failed の at が auth mtime より新しい → ログイン失敗状態
+    fs.writeFileSync(authFailedFile, JSON.stringify({ at: authMtimeMs + 1000 }) + '\n', 'utf8');
+    assert.equal(isCursorAgentLoggedIn(home, { env: {} }), false);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('isCursorAgentLoggedIn は auth-failed ファイルが無ければ従来どおり認証ファイルの存在で判定する', () => {
+  const home = path.join(os.tmpdir(), 'cursor-auth-normal-' + Date.now());
+  const authFile = path.join(home, '.cursor', 'cli-config.json');
+  fs.mkdirSync(path.dirname(authFile), { recursive: true });
+  fs.writeFileSync(authFile, 'present');
+  try {
+    assert.equal(isCursorAgentLoggedIn(home, { env: {} }), true);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+  assert.equal(isCursorAgentLoggedIn('/no-such-home', { env: {} }), false);
+});
+
+test('isCursorAgentLoggedIn は CURSOR_API_KEY が設定されていれば auth-failed を無視して true', () => {
+  const home = path.join(os.tmpdir(), 'cursor-auth-key-' + Date.now());
+  const claudeDir = path.join(home, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  // auth-failed ファイルを最新のタイムスタンプで書いておく
+  fs.writeFileSync(path.join(claudeDir, 'cursor-agent-auth-failed.json'), JSON.stringify({ at: Date.now() + 100000 }) + '\n', 'utf8');
+  try {
+    // CURSOR_API_KEY が設定されている → auth-failed があっても true
+    assert.equal(isCursorAgentLoggedIn(home, { env: { CURSOR_API_KEY: 'sk-xxx' } }), true);
+    // CURSOR_API_KEY が無い → auth-failed によって false
+    assert.equal(isCursorAgentLoggedIn(home, { env: {} }), false);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('writeCursorAgentAuthFailed は ~/.claude/cursor-agent-auth-failed.json を書く', () => {
+  const home = path.join(os.tmpdir(), 'cursor-auth-write-' + Date.now());
+  try {
+    writeCursorAgentAuthFailed(home, { now: 1234567890 });
+    const file = path.join(home, '.claude', 'cursor-agent-auth-failed.json');
+    assert.ok(fs.existsSync(file));
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(data.at, 1234567890);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });

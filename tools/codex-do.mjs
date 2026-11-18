@@ -1741,7 +1741,9 @@ async function tryCheapFirstFallback() {
     if (backend.name === 'gemini-cli' && billingFailure) rememberProviderBillingFailure(home, 'gemini');
     const exhausted = isBackendExhausted(res.output, res.stderr) || (backend.kind === 'cheap-code' && res.status === 3);
     const laneIncompatible = isLaneIncompatible(res.output, res.stderr);
-    const dec = shouldAdvanceToNextBackend({ timedOut: res.timedOut === true, status: res.status, exhausted, cliMissing, aborted: res.aborted === 'policy_stall', laneIncompatible });
+    const authFailed = isBackendAuthFailure(res.output, res.stderr);
+    const dec = shouldAdvanceToNextBackend({ timedOut: res.timedOut === true, status: res.status, exhausted, cliMissing, aborted: res.aborted === 'policy_stall', laneIncompatible, authFailed });
+    if (authFailed && backend.name === 'cursor-agent') writeCursorAgentAuthFailed(home);
     const diffNow = dec.outcome === 'ok' && (backend.name === 'openrouter-free' || backend.name === 'openrouter-code')
       ? spawnSync('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' })
       : null;
@@ -1752,6 +1754,8 @@ async function tryCheapFirstFallback() {
     const outcome = quality ? 'quality_fail' : (invalid || dec.outcome);
     if (outcome === 'incompatible') {
       console.error(`[codex-do] cheap-first: ${backend.name} はモデル非対応 (incompatible) のため次の安いレーンへ移ります`);
+    } else if (outcome === 'auth_fail') {
+      console.error(`[codex-do] cheap-first: ${backend.name} は認証エラー (auth_fail) のため次の安いレーンへ移ります`);
     }
     if (invalid) {
       res.status = 1;
@@ -2136,7 +2140,9 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
         const exhausted = isBackendExhausted(result.output, result.stderr)
           || (backend.kind === 'cheap-code' && result.status === 3);
         const laneIncompatible = isLaneIncompatible(result.output, result.stderr);
-        const decision = shouldAdvanceToNextBackend({ timedOut: result.timedOut === true, status: result.status, exhausted, cliMissing, aborted: result.aborted === 'policy_stall', laneIncompatible });
+        const authFailed = isBackendAuthFailure(result.output, result.stderr);
+        const decision = shouldAdvanceToNextBackend({ timedOut: result.timedOut === true, status: result.status, exhausted, cliMissing, aborted: result.aborted === 'policy_stall', laneIncompatible, authFailed });
+        if (authFailed && backend.name === 'cursor-agent') writeCursorAgentAuthFailed(home);
         const outcome = decision.outcome;
 
         fallbackChain.push({
@@ -2172,6 +2178,8 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
           console.error(`[codex-do] backend=${backend.name} が上限/エラーで使えないため次へ`);
         } else if (outcome === 'incompatible') {
           console.error(`[codex-do] backend=${backend.name} はモデル非対応 (incompatible) のため次のバックエンドへ移ります`);
+        } else if (outcome === 'auth_fail') {
+          console.error(`[codex-do] backend=${backend.name} は認証エラー (auth_fail) のため次のバックエンドへ移ります`);
         }
         if (decision.advance) {
           const toRecord = fallbackOutcomeToRecord(outcome);

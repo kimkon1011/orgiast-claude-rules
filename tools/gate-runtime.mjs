@@ -14,6 +14,8 @@ function readRollout() { try { return JSON.parse(fs.readFileSync(path.join(tools
 const hostName = () => process.env.ORGIAST_HOSTNAME || os.hostname();
 export function rolloutMode(name, { manifest = readRollout(), home = homeDir(), hostname = hostName(), now = Date.now() } = {}) {
   const entry = manifest?.gates?.[name];
+  if (name === 'unrequested-automation-gate' && entry?.rollout === 'deny'
+    && entry.immediatePolicy === '2026-11-11 kim 指示: 未依頼の自動通知・定期実行追加を全席で拒否') return 'deny';
   if (name === 'pdf-deliverable-visual-gate' && entry?.rollout === 'deny'
     && entry.immediatePolicy === '2026-11-15 user 指示: 全席でPDF納品前に描画後の全ページ目視を必須化') return 'deny';
 if (name === 'mail-send-approval-gate' && entry?.rollout === 'deny' && entry.immediatePolicy === '2026-11-05 kim 承認: 組織指示11 メール送信は本文確認＋明示承認後のみ') return 'deny';

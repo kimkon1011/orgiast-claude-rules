@@ -365,6 +365,12 @@
     ],
     "PreToolUse": [
       {
+        "matcher": "Write|Edit|MultiEdit|Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/unrequested-automation-gate.mjs\"",
+        "timeout": 15
+      },
+      {
         "matcher": "SendUserFile|mcp__claude_ai_Google_Drive(?:_\\d+)?__create_file|Bash|PowerShell",
         "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/pdf-deliverable-visual-gate.mjs\"",

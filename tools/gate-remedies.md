@@ -410,6 +410,10 @@ claude.ai の「組織の指示」は3,000字上限。組織指示への追記�
 
 自動進行・待機を約束した対話セッションでは CronCreate で定期進捗を登録する。例: cron `17 9-19/2 * * *`、prompt は「約束した対象を実測して変化だけ5行以内で報告。kim に操作は求めない」。期限付きの待ちは one-shot も登録する。同一セッションの block は1回まで。headless・非対話 entrypoint・サブエージェントは対象外。状態は `~/.claude/progress-cron-gate-state/` に保存。
 
+## unrequested-automation-gate
+
+人へ自動で届く通知と定期実行を同時に追加する場合は、同じ追加ブロックへ `REQUESTED-BY: <依頼者> YYYY-MM-DD` または `<依頼者> 指定 YYYY-MM-DD` を記録する。依頼記録が無い場合は実装せず、kim に可否を確認する。既存ファイルの別ブロックにある依頼元マーカーは、新しい自動通知の根拠として使わない。
+
 ## lane-claim-evidence-gate
 
 原因: 他レーンの連鎖出力・古い監視表示だけで停止や入金を断定した。

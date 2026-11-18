@@ -162,3 +162,44 @@ test('通知文は失敗系の語を伏せる', () => {
   assert.doesNotMatch(text, /エラー/); assert.match(text, /30時間待ち/);
 });
 test('同梱の staff-addresses.json が読める', () => { assert.ok(loadStaff().has('meropp.16@gmail.com')); });
+test('403 rateLimitExceeded を retry する', async t => {
+  const home = fixture(t); const sleepCalls = [];
+  const normal = fakeGmail({ threads: [thread(message('m1'))] });
+  let first = true;
+  const fetchImpl = async url => {
+    if (first) { first = false; return { ok: false, status: 403, text: async () => JSON.stringify({ error: 'rateLimitExceeded' }), json: async () => ({ error: 'rateLimitExceeded' }) }; }
+    return normal(url);
+  };
+  const result = await scan({ home, now: NOW, deps: { fetchImpl, getToken: async () => 't', sleepImpl: ms => { sleepCalls.push(ms); } }, staff: new Set(), mailboxes: [MB], push: false });
+  assert.equal(sleepCalls.length, 1);
+  assert.ok(sleepCalls[0] > 0);
+  assert.equal(result.state.sources[MB].ok, true);
+});
+test('429 + retry-after: 3 で 3000ms 待つ', async t => {
+  const home = fixture(t); const sleepCalls = [];
+  const normal = fakeGmail({ threads: [], drafts: [] });
+  let first = true;
+  const fetchImpl = async url => {
+    if (first) { first = false; return { ok: false, status: 429, text: async () => '{}', json: async () => ({}), headers: { get: h => h === 'retry-after' ? '3' : null } }; }
+    return normal(url);
+  };
+  const result = await scan({ home, now: NOW, deps: { fetchImpl, getToken: async () => 't', sleepImpl: ms => { sleepCalls.push(ms); } }, staff: new Set(), mailboxes: [MB], push: false });
+  assert.equal(sleepCalls.length, 1);
+  assert.equal(sleepCalls[0], 3000);
+});
+test('403 insufficientPermissions は retry せずエラーにする', async t => {
+  const home = fixture(t); let callCount = 0;
+  const fetchImpl = async url => { callCount++; return { ok: false, status: 403, text: async () => JSON.stringify({ error: 'insufficientPermissions' }), json: async () => ({ error: 'insufficientPermissions' }) }; };
+  const result = await scan({ home, now: NOW, deps: { fetchImpl, getToken: async () => 't' }, staff: new Set(), mailboxes: [MB], push: false });
+  assert.equal(result.state.sources[MB].ok, false);
+  assert.match(result.state.sources[MB].error, /Gmail API 403/);
+  assert.equal(callCount, 1);
+});
+test('maxRetries を使い切るとエラーになる', async t => {
+  const home = fixture(t); let callCount = 0;
+  const fetchImpl = async url => { callCount++; return { ok: false, status: 429, text: async () => '{}', json: async () => ({}) }; };
+  const result = await scan({ home, now: NOW, deps: { fetchImpl, getToken: async () => 't', maxRetries: 0 }, staff: new Set(), mailboxes: [MB], push: false });
+  assert.equal(result.state.sources[MB].ok, false);
+  assert.match(result.state.sources[MB].error, /Gmail API 429/);
+  assert.equal(callCount, 1);
+});

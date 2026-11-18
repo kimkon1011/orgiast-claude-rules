@@ -138,6 +138,15 @@ test('メールの重複除去はmessage id、なければ日時と方向', () =
   const a = { ...msg('inbound', '25'), rfc822_message_id: '<one>' };
   assert.equal(deduplicateMessages([a, { ...a }, msg('outbound', '24'), msg('outbound', '24')]).length, 2);
 });
+test('自動返信のみの顧客は顧客待ち', () => {
+  const result = classifyLead(lead, [msg('outbound', '23'), { ...msg('inbound', '25', '※こちらは自動返信メッセージです'), subject: undefined }], now);
+  assert.equal(result.category, '🟡 顧客待ち');
+});
+test('自動返信より前に本物の返信があれば要返信のまま', () => {
+  const result = classifyLead(lead, [msg('outbound', '22'), { ...msg('inbound', '24', '※こちらは自動返信メッセージです'), subject: undefined }, msg('inbound', '26', '御見積書をお送りください')], now);
+  assert.equal(result.category, '🔴 要返信');
+  assert.equal(result.nextAction, '顧客の返信に未回答: 御見積書をお送りください');
+});
 test('完了済み・社内・連携テストを除外', () => {
   assert.equal(deduplicateLeads([
     { ...lead, raw_payload: { event_shop: { closed_at: 'x' } } },

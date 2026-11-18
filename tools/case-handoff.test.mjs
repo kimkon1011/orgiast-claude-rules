@@ -125,7 +125,8 @@ test('failure keeps exact batch queued, successful replay advances cursor once, 
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'case-test-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const file = path.join(home, 'session.jsonl'); fs.writeFileSync(file, transcript);
   let fail = true; const batches = new Set(); let calls = 0;
-  const c = client({ home, ...identity, fetchImpl: async (_url, init) => {
+  let goalSynced = '';
+  const c = client({ home, ...identity, syncGoals: async id => { goalSynced = id; }, fetchImpl: async (_url, init) => {
     if (init.method === 'GET') return Response.json({ state: renderState({}, source), log: '' });
     const b = JSON.parse(init.body); calls++; if (fail) throw Error('offline');
     batches.add(b.batchId); return Response.json({ batchId: b.batchId, stateReady: true });
@@ -135,6 +136,7 @@ test('failure keeps exact batch queued, successful replay advances cursor once, 
   fail = false; assert.equal((await c.drain()).sent, 1); assert.equal((await c.drain()).sent, 0);
   assert.equal(batches.size, 1); assert.equal(calls, 2);
   assert.ok(bytes(await c.resume('261021KGS')) <= 6144); assert.ok(fs.existsSync(path.join(c.base, 'case-sessions/261021KGS/STATE.md')));
+  assert.equal(goalSynced, '261021KGS');
 });
 
 test('setup converge installs all four hooks with matching verification and repairs a missing hook', t => {

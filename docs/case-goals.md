@@ -10,7 +10,7 @@ Stop は `case-binding/<session_id>.json` の全案件・全metricを照合す�
 
 ## Driveへの引継ぎ
 
-`case-handoff.mjs` の同期対象は STATE.md / LOG.md / GOALS.json。目標台帳は既存のGWSプロキシ（制作アカウント）で、同じDriveハブの `case-sessions/<caseId>/` に保存する。目標CLIは更新前後、case-handoffは再開・同期・案件検出の際に目標を同期する。フォルダ作成は既存case-handoff APIに任せ、独立して同名フォルダを作らない。同期失敗は無言にせず再試行コマンドを示す。
+`case-handoff.mjs` の同期対象は STATE.md / LOG.md / GOALS.json。目標台帳は既存のGWSプロキシ（制作アカウント）で、同じDriveハブの `case-sessions/<caseId>/` に保存する。目標CLIは更新前後、case-handoffは再開・同期・案件検出・明示bindの際に目標を同期する。フォルダ作成は既存case-handoff APIに任せ、独立して同名フォルダを作らない。同期失敗は無言にせず再試行コマンドを示す。GOALS-sync.jsonに失敗状態を残し、初回取得失敗を「目標なし」と誤認してStop・送信チェックを通さない。
 
 Drive v3プロキシには条件付き更新がないため、`GOALS.<revision>.json` を変更不可の履歴として保存し、`GOALS.json` は最新履歴の投影にする。全revisionを読み、祖先の包含・承認履歴の連続性を検証してからローカルに反映する。複数席の同時更新が分岐した場合はGOAL-SYNCとして停止し、両方の履歴を保持する。削除・時刻だけでの上書き・無承認の自動縮小はしない。競合時は両方の目標と承認文を照合して台帳を修復してから再同期する。ローカルだけを消してやり直さない。
 

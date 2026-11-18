@@ -41,3 +41,15 @@ test('CLI binding finds goal, shrink creates no approval marker even with kim-ap
   const code = await main(['--channel', 'gmail', '--target', 'client@example.test', '--text-file', file, '--session', 's1', '--kim-approved', 'この本文の送信を承認'], { home, fetchHistory: () => { throw Error('must not fetch'); } });
   assert.equal(code, 2); assert.equal(fs.existsSync(path.join(home, '.claude/send-context-checks')), false);
 });
+test('semantic shrink and unavailable AI cannot be bypassed by a send approval', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'goal-semantic-test-')), file = path.join(home, 'message.txt');
+  writeJson(goalsPath(id, home), ledger()); fs.writeFileSync(file, 'Cafe 212とあと2社を募集します');
+  const args = ['--channel', 'gmail', '--target', 'internal@example.test', '--text-file', file, '--case', id, '--kim-approved', '本文送信を承認'];
+  const deps = { home, fetchHistory: async () => ({ target: 'thread', messages: [] }), resolveKimApprovedRecipient: () => { throw Error('must not approve'); } };
+  const code = await main(args, { ...deps, runLlm: (_history, _text, opts) => {
+    assert.equal(opts.goals[0].target, 10); return { ok: false, reason: 'GOAL-SHRINK: 3社に縮小', warnings: [] };
+  } });
+  assert.equal(code, 2);
+  await assert.rejects(main(args, { ...deps, runLlm: () => { throw Error('AI unavailable'); } }), /AI unavailable/);
+  assert.equal(fs.existsSync(path.join(home, '.claude/send-context-checks')), false);
+});

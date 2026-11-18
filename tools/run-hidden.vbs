@@ -75,7 +75,13 @@ If Not fso.FolderExists(logDir) Then
   fso.CreateFolder logDir
   On Error Goto 0
 End If
-logPath = logDir & "\" & baseName & ".log"
+logPath = logDir & "\" & baseName & "-wrapper.log"
+
+' Why -wrapper: the VBS wrapper's cmd.exe holds a handle on the log file for
+' the entire duration of the child process via ">>". If the child script also
+' writes to <basename>.log (e.g. deadline-watch.mjs), the handle contention
+' causes EBUSY on Windows. Using a dedicated wrapper log separates the two
+' output streams.
 
 ' Rotate at ~1 MB so the log cannot grow without bound.
 On Error Resume Next

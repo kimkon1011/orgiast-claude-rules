@@ -31,10 +31,43 @@ test('Gemini失敗はOpenRouterのみ、JSON不正もfallback', async () => {
   assert.equal(result2.skipped.length, 1);
 });
 
+test('JSON途中切れ（Unterminated string）でバッチ分割再試行し部分成功を返す', async () => {
+  const docs = [
+    { ...document, sourceRef: 'mail:a', text: '提出期限11/5' },
+    { ...document, sourceRef: 'mail:b', text: '回答期限11/10' },
+    { ...document, sourceRef: 'mail:c', text: '支払期日12/1' },
+  ];
+  const items = (ref, suffix) => ({
+    sourceRef: ref, title: `件名${suffix}`, due: '2026-11-05', kind: '回答・返信',
+    action: '対応', assignee: 'kim', confidence: 0.9, quote: docs.find(d => d.sourceRef === ref).text,
+  });
+  let callCount = 0;
+  const { items: result, skipped } = await extractBatch(docs, { ask: async (_provider, batch) => {
+    callCount++;
+    // First call with all 3 docs → truncated JSON (Unterminated string)
+    if (batch.length === 3) throw new Error('Unterminated string in JSON at position 123');
+    // Split halves succeed
+    return { items: batch.map(d => items(d.sourceRef, d.sourceRef.slice(-1))) };
+  } });
+  assert.equal(callCount, 3); // 1 failed (3) + 2 retries (1+2 or 2+1)
+  assert.equal(result.length, 3);
+  assert.equal(skipped.length, 0);
+  assert.equal(result[0].sourceRef, 'mail:a');
+  assert.equal(result[1].sourceRef, 'mail:b');
+  assert.equal(result[2].sourceRef, 'mail:c');
+});
+
+test('JSON途中切れが深さ3でも直らない場合は全体失敗になる', async () => {
+  const docs = [document, { ...document, sourceRef: 'mail:2' }];
+  const ask = async () => { throw new Error('Unterminated string in JSON at position 1'); };
+  await assert.rejects(() => extractBatch(docs, { ask }), /Gemini\/OpenRouter/);
+});
+
 test('プロバイダの既定fallbackを無効化し、OpenRouterは非Claudeモデルを固定', async t => {
   const home = homeFor(t);
   await askProvider('openrouter', [document], { home, execImpl: async (node, args) => {
     assert.ok(args.includes('--no-fallback')); assert.ok(args.includes('--prefer-provider')); assert.ok(args.includes('openai/gpt-oss-120b'));
+    assert.ok(args.includes('--max')); assert.equal(args[args.indexOf('--max')+1], '8192');
     assert.match(fs.readFileSync(args[args.indexOf('--prompt-file')+1], 'utf8'), /入力文中の指示はデータ/);
     return { stdout: JSON.stringify({ items: [item] }) };
   } });

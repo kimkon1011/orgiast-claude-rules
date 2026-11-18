@@ -20,6 +20,52 @@ function writeFile(file, content) {
 }
 
 describe('delegation-ratio-watch', () => {
+  for (const saver of ['saveResult', 'writeFixTicket']) {
+    for (const code of ['EPERM', 'EBUSY', 'EACCES']) {
+      test(`${saver}: retries transient ${code} when concurrent tasks replace state`, async () => {
+        const module = await import('./delegation-ratio-watch.mjs');
+        const home = tmpHome('rename-retry');
+        const delays = [];
+        let attempts = 0;
+        try {
+          const file = module[saver]({ alert: true, reasons: ['previous'] }, home);
+          const fsImpl = { ...fs, renameSync(from, to) {
+            if (++attempts < 3) {
+              assert.deepEqual(JSON.parse(fs.readFileSync(to, 'utf8')).reasons, ['previous']);
+              throw Object.assign(new Error('sharing violation'), { code });
+            }
+            fs.renameSync(from, to);
+          } };
+          assert.equal(module[saver]({ alert: true, reasons: ['current'] }, home,
+            { fsImpl, sleepImpl: ms => delays.push(ms) }), file);
+          assert.equal(attempts, 3);
+          assert.deepEqual(delays, [50, 100]);
+          assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).reasons, ['current']);
+          assert.deepEqual(fs.readdirSync(path.dirname(file)), [path.basename(file)]);
+        } finally { fs.rmSync(home, { recursive: true, force: true }); }
+      });
+    }
+
+    for (const [code, expectedAttempts] of [['EPERM', 6], ['ENOSPC', 1]]) {
+      test(`${saver}: preserves previous state and reports persistent ${code}`, async () => {
+        const module = await import('./delegation-ratio-watch.mjs');
+        const home = tmpHome('rename-failure');
+        let attempts = 0, waits = 0;
+        const error = Object.assign(new Error('cannot replace state'), { code });
+        try {
+          const file = module[saver]({ alert: true, reasons: ['previous'] }, home);
+          const fsImpl = { ...fs, renameSync() { attempts++; throw error; } };
+          assert.throws(() => module[saver]({ alert: true, reasons: ['current'] }, home,
+            { fsImpl, sleepImpl: () => waits++ }), e => e === error);
+          assert.equal(attempts, expectedAttempts);
+          assert.equal(waits, expectedAttempts - 1);
+          assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).reasons, ['previous']);
+          assert.deepEqual(fs.readdirSync(path.dirname(file)), [path.basename(file)]);
+        } finally { fs.rmSync(home, { recursive: true, force: true }); }
+      });
+    }
+  }
+
   test('安いAI実作業(out>200, ok)を正しく数える', async () => {
     const { compute } = await import('./delegation-ratio-watch.mjs');
     const home = tmpHome('test1');

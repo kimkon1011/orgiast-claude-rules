@@ -211,12 +211,26 @@ export function compute({ home = os.homedir(), now = Date.now(), executorUsageFi
   return result;
 }
 
-export function saveResult(result, home = os.homedir()) {
-  const file = path.join(home, '.claude', 'delegation-ratio-watch.json');
+// Duplicate scheduled tasks/readers can briefly deny replacement on Windows.
+// Retry only rename: keep the previous JSON intact and never replay delivery.
+function saveJson(file, value, { fsImpl = fs, sleepImpl = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
   const tmp = `${file}.${Math.random().toString(16).slice(2)}.tmp`;
-  try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(tmp, JSON.stringify(result, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(tmp, file); }
-  finally { try { fs.unlinkSync(tmp); } catch {} }
+  try {
+    fsImpl.mkdirSync(path.dirname(file), { recursive: true });
+    fsImpl.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+    for (let attempt = 0; ; attempt++) {
+      try { fsImpl.renameSync(tmp, file); break; }
+      catch (error) {
+        if (!['EPERM', 'EBUSY', 'EACCES'].includes(error.code) || attempt >= 5) throw error;
+        sleepImpl(50 * (2 ** attempt));
+      }
+    }
+  } finally { try { fsImpl.unlinkSync(tmp); } catch {} }
   return file;
+}
+
+export function saveResult(result, home = os.homedir(), deps) {
+  return saveJson(path.join(home, '.claude', 'delegation-ratio-watch.json'), result, deps);
 }
 
 // kim-inbox に送る本文を組み立てる
@@ -261,7 +275,7 @@ export function notifyInbox(result, home = os.homedir(), execImpl = execFileSync
 }
 
 // 次回 auto-session 用の根本修正起票
-export function writeFixTicket(result, home = os.homedir()) {
+export function writeFixTicket(result, home = os.homedir(), deps) {
   if (!result.alert) return null;
   const fixFile = path.join(home, '.claude', 'delegation-ratio-watch-fix.json');
   const fix = {
@@ -275,10 +289,7 @@ export function writeFixTicket(result, home = os.homedir()) {
       '復帰まで llm-fallback の quota_wait スキップに任せる',
     ],
   };
-  const tmp = `${fixFile}.${Math.random().toString(16).slice(2)}.tmp`;
-  try { fs.mkdirSync(path.dirname(fixFile), { recursive: true }); fs.writeFileSync(tmp, JSON.stringify(fix, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(tmp, fixFile); }
-  finally { try { fs.unlinkSync(tmp); } catch {} }
-  return fixFile;
+  return saveJson(fixFile, fix, deps);
 }
 
 if (isEntry(import.meta.url)) {

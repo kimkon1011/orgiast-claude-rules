@@ -61,6 +61,13 @@ test('all pages with an image specification pass the image gate',async t=>{
   assert.deepEqual(f.runtime.imageMissingPages(f.runtime.loadPages()),[]);
   assert.doesNotThrow(()=>f.build.buildHTML(f.runtime.loadPages()));
 });
+test('kind image elements satisfy the gate and render their local asset',async t=>{
+  const f=await fixture(t),page=f.pages[3];
+  delete page.visualBrief;delete page.fallbackPhoto;delete page.photoSources;
+  page.elements=[{kind:'image',src:'../assets/photo.svg'}];f.save();
+  assert.deepEqual(f.runtime.imageMissingPages(f.runtime.loadPages()),[]);
+  assert.match(f.build.buildHTML(f.runtime.loadPages()).html,/data:image\/svg\+xml;base64,/);
+});
 test('PDF subprocess exit zero is insufficient when output is not a PDF',async t=>{
   const f=await fixture(t);
   fs.writeFileSync(path.join(f.root,'html-to-pdf.mjs'),"import fs from 'node:fs';fs.writeFileSync(process.argv[3],'not a pdf');");

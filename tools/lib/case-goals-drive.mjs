@@ -31,7 +31,20 @@ export function newestGoals(versions, caseId) {
   return head;
 }
 
-export async function syncGoals(caseId, { home = goalHome(), fetchImpl = gwsFetch, ensureEditor = ensureKimEditor } = {}) {
+export async function syncGoals(caseId, options = {}) {
+  const home = options.home || goalHome(), statusFile = goalsPath(caseId, home).replace(/GOALS\.json$/, 'GOALS-sync.json');
+  try {
+    const data = await syncGoalsImpl(caseId, { ...options, home });
+    writeJson(statusFile, { ok: true, at: new Date().toISOString(), revision: data?.revision || null });
+    return data;
+  } catch (error) {
+    // A failed cold pull must not be mistaken for "this case has no goals".
+    writeJson(statusFile, { ok: false, at: new Date().toISOString() });
+    throw error;
+  }
+}
+
+async function syncGoalsImpl(caseId, { home = goalHome(), fetchImpl = gwsFetch, ensureEditor = ensureKimEditor } = {}) {
   const local = loadGoals(caseId, home);
   async function request(endpoint, options = {}) {
     const response = await fetchImpl(`${ROOT}${endpoint}`, { ...options, signal: AbortSignal.timeout(20000),

@@ -36,7 +36,7 @@ test('incorrect target/current/deadline or example in fenced code does not pass'
 test('seven-day, today and overdue boundaries; delay and action must be in same paragraph', () => {
   for (const deadline of ['2026-11-25', '2026-11-18']) {
     const f = fixture(deadline);
-    for (const suffix of ['', '\n遅れ', '\n10社へ送信する', '\n\n遅れ。10社へ送信する', '\n遅れ。別経路を検討']) assert.equal(judge({ ...f.input, last_assistant_message: f.line + suffix }, f).decision, 'block');
+    for (const suffix of ['', '\n遅れ', '\n10社へ送信する', '\n\n遅れ。10社へ送信する', '\n遅れ。別経路を検討', '\n遅れ。送信済み30社', '\n遅れ。10社へ送信しました', '\n遅れ。0社へ送信する']) assert.equal(judge({ ...f.input, last_assistant_message: f.line + suffix }, f).decision, 'block');
     for (const suffix of ['\n遅れ。明日10社へ送信する', '\n遅れ。別経路: 電話で追加打診する']) assert.equal(judge({ ...f.input, last_assistant_message: f.line + suffix }, f).decision, 'pass');
   }
   const expired = fixture('2026-11-17'); assert.equal(judge(expired.input, expired).decision, 'pass');
@@ -49,6 +49,17 @@ test('every metric is required; malformed ledger fails closed and stop_hook_acti
   writeJson(goalsPath(id, f.home), data);
   assert.equal(judge({ ...f.input, last_assistant_message: f.line, stop_hook_active: true }, f).decision, 'block');
   fs.writeFileSync(goalsPath(id, f.home), '{bad'); assert.equal(judge(f.input, f).decision, 'block');
+});
+test('failed cold Drive sync cannot silently pass as an unregistered goal', () => {
+  const f = fixture();
+  writeJson(path.join(f.home, '.claude/case-sessions', id, 'GOALS-sync.json'), { ok: false });
+  assert.equal(judge({ ...f.input, last_assistant_message: f.line }, f).decision, 'block');
+});
+test('achieved goal still needs its progress line but does not require delay wording', () => {
+  const f = fixture('2026-11-18');
+  const data = updateGoals(JSON.parse(fs.readFileSync(goalsPath(id, f.home))), id, 'progress', { metric: '課題提供企業', current: 10, sent: 50 });
+  writeJson(goalsPath(id, f.home), data);
+  assert.equal(judge({ ...f.input, last_assistant_message: f.line.replace('現状 0', '現状 10').replace('1/日', '0/日') }, f).decision, 'pass');
 });
 test('actual hook process reads binding and transcript, and wrapped policy denies on a fresh non-pilot PC', async () => {
   const f = fixture('2099-12-12'), transcript = path.join(f.home, 'session.jsonl');

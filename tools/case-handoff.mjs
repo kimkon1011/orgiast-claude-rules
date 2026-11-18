@@ -288,6 +288,8 @@ export async function main(args = process.argv.slice(2)) {
     const session = args.includes('--session') ? opt('--session') : process.env.CLAUDE_SESSION_ID;
     if (!session) throw Error('--session <現在のセッションID> が必要です');
     c.bind(session, ids, args.includes('--transcript') ? opt('--transcript') : undefined);
+    await c.request({}, { op: 'touch', caseId: ids[0], sessionId: session, account: c.account, pc: c.pc });
+    await syncGoals(ids[0], { home });
     console.log(`case-handoff: ${ids[0]} に紐付けました`);
   } else if (command === 'resume' || command === 'sync') console.log(await c.resume(ids[0], { transcripts: command === 'sync' }));
   else throw Error('usage: case-handoff.mjs bind|watch|unwatch|resume|sync <案件ID/案件名> | flush <sessionId> | retry | hook');

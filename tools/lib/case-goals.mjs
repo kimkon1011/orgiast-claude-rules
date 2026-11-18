@@ -94,7 +94,11 @@ export function boundCaseIds(sessionId, home = goalHome()) {
 }
 export function contextGoals({ home = goalHome(), sessionId = process.env.CLAUDE_SESSION_ID, caseId, text = '' } = {}) {
   const ids = new Set([...boundCaseIds(sessionId, home), ...detectCases(text), ...(caseId ? [caseId] : [])]);
-  return [...ids].flatMap(id => (loadGoals(id, home)?.goals || []).map(g => ({ ...g, caseId: id })));
+  return [...ids].flatMap(id => {
+    const status = readOptionalJson(goalsPath(id, home).replace(/GOALS\.json$/, 'GOALS-sync.json'));
+    if (status?.ok === false) throw Error(`GOAL-SYNC: ${id} のDrive同期が未完了です。node tools/case-handoff.mjs sync ${id} で再試行してください`);
+    return (loadGoals(id, home)?.goals || []).map(g => ({ ...g, caseId: id }));
+  });
 }
 
 export function goalShrinkInstruction(goals) {

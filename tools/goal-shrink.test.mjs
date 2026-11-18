@@ -39,5 +39,5 @@ test('CLI binding finds goal, shrink creates no approval marker even with kim-ap
   writeJson(goalsPath(id, home), ledger()); writeJson(path.join(home, '.claude/case-binding/s1.json'), { cases: [id] });
   fs.writeFileSync(file, '課題企業は1社で開催します');
   const code = await main(['--channel', 'gmail', '--target', 'client@example.test', '--text-file', file, '--session', 's1', '--kim-approved', 'この本文の送信を承認'], { home, fetchHistory: () => { throw Error('must not fetch'); } });
-  assert.equal(code, 2); assert.equal(fs.existsSync(path.join(home, '.claude/send-context')), false);
+  assert.equal(code, 2); assert.equal(fs.existsSync(path.join(home, '.claude/send-context-checks')), false);
 });

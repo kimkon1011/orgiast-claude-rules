@@ -2,10 +2,39 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
+import { GMAIL_READONLY_SCOPE, mintDwdToken } from './gmail-draft.mjs';
+import { gwsFetch } from './lib/gws-proxy.mjs';
 
 const DAY = 86400000;
 const dateKey = value => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo' }).format(new Date(value));
 const time = value => new Date(value).getTime();
+
+/**
+ * Check whether the given customer email has a Gmail draft in the specified user's mailbox.
+ * Only checks seisaku-team@orgiast.jp and kim@orgiast.jp.
+ * Returns { found: true, account, draftId } on match, { found: false } when no draft exists,
+ * or { found: false, error: 'string' } on API failure (never throws).
+ */
+export async function checkGmailDrafts(customerEmail, { fetchImpl = gwsFetch, getToken = mintDwdToken } = {}) {
+  const accounts = ['seisaku-team@orgiast.jp', 'kim@orgiast.jp'];
+  for (const account of accounts) {
+    try {
+      const token = await getToken({ user: account, scope: GMAIL_READONLY_SCOPE, fetchImpl });
+      const res = await fetchImpl(
+        `https://gmail.googleapis.com/gmail/v1/users/me/drafts?q=${encodeURIComponent(`to:${customerEmail} in:drafts`)}`,
+        { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000) },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await res.json();
+      if (Array.isArray(body.drafts) && body.drafts.length > 0) {
+        return { found: true, account, draftId: body.drafts[0].id };
+      }
+    } catch {
+      // エラーなら次のアカウントへ、または結果なしで継続
+    }
+  }
+  return { found: false };
+}
 const bodyLines = message => String(message?.body ?? '').split(/\r?\n/).filter(line => !/^\s*>/.test(line)).map(line => line.trim()).filter(Boolean);
 export function deduplicateMessages(messages) {
   const seen = new Set();
@@ -15,7 +44,7 @@ export function deduplicateMessages(messages) {
     seen.add(key); return true;
   });
 }
-export function classifyLead(lead, messages, now = new Date()) {
+export async function classifyLead(lead, messages, now = new Date(), deps = {}) {
   const unique = deduplicateMessages(messages);
   const lastIn = unique.find(m => m.direction === 'inbound');
   const lastOut = unique.find(m => m.direction === 'outbound');
@@ -31,8 +60,19 @@ export function classifyLead(lead, messages, now = new Date()) {
   } else if (!lastOut || (lastIn && time(lastIn.received_at) > time(lastOut.received_at))) {
     category = '🔴 要返信';
     const excerpt = bodyLines(lastIn).find(line => !/^(お世話に|いつも|お待たせ|恐れ入)|^.{0,12}ありがとうございます。?$|です。$|様[、。]?$|^[-=＝―─*]+$/.test(line)) ?? '';
-    nextAction = !lastOut
-      ? `初回返信が未送信（下書き有無: ${lead.raw_payload?.event_shop?.draft_saved_at ? '下書きあり・未送信' : '下書きなし'}）`
+    nextAction = !lastOut ? await (async () => {
+      // Gmail 下書きを確認（seisaku-team / kim の両方で当該顧客宛の下書きを検索）
+      if (deps.gmailDraftCheck && lead.email) {
+        const result = await deps.gmailDraftCheck(lead.email);
+        if (result.found) {
+          return `初回返信が未送信（Gmail下書きあり: ${result.account} ${result.draftId}・承認待ち）`;
+        }
+        if (result.error) {
+          return `初回返信が未送信（Gmail下書き: 未確認）`;
+        }
+      }
+      return `初回返信が未送信（下書き有無: ${lead.raw_payload?.event_shop?.draft_saved_at ? '管理画面に下書きあり・未送信' : '下書きなし'}）`;
+    })()
       : `顧客の返信に未回答: ${Array.from(excerpt).slice(0, 60).join('')}`;
   } else {
     category = '🟡 顧客待ち';
@@ -98,7 +138,7 @@ export function renderMarkdown(leads, duplicateCount, now) {
   }
   return lines.join('\n');
 }
-export async function main({ env = process.env, args = process.argv.slice(2), now = new Date(), fetchImpl = globalThis.fetch, log = console.log } = {}) {
+export async function main({ env = process.env, args = process.argv.slice(2), now = new Date(), fetchImpl = globalThis.fetch, log = console.log, deps = {} } = {}) {
   const credentials = await loadCredentials(env);
   if (!credentials.url || !credentials.key) { log(`イベント百貨店問合せ: 未確認（認証情報なし。試したパス: ${credentials.path}）`); return 0; }
   try {
@@ -106,7 +146,7 @@ export async function main({ env = process.env, args = process.argv.slice(2), no
     const data = await request(credentials, `/rest/v1/quote_requests?select=id,company_name,contact_name,email,event_name,preferred_date,created_at,status,raw_payload&source=eq.event-shop.jp&created_at=gte.${since}&order=created_at.desc&limit=200`, fetchImpl);
     const { leads, duplicateCount } = deduplicateLeads(data);
     const results = [];
-    for (const lead of leads) results.push(classifyLead(lead, await request(credentials, messageQuery(lead), fetchImpl), now));
+    for (const lead of leads) results.push(await classifyLead(lead, await request(credentials, messageQuery(lead), fetchImpl), now, deps));
     const sorted = sortLeads(results);
     if (args.includes('--quiet') && !sorted.some(l => l.category === '🔴 要返信')) return 0;
     log(args.includes('--json') ? JSON.stringify(sorted, null, 2) : renderMarkdown(sorted, duplicateCount, now));

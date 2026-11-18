@@ -615,7 +615,7 @@ export const COOLING_PROBE_TIMEOUT_SECS = 120;
 // 冷却による短縮予算での timeout は本番の失敗ではないので記録しない（null を返す）。
 // 冷却は最後の通常予算 timeout から6時間で自然に解け、通常予算での試行に戻る。
 export function fallbackOutcomeToRecord(outcome, { cooling = false, budgetSecs, normalSecs } = {}) {
-  if (!['ok', 'timeout', 'cli_missing', 'blocked', 'incompatible'].includes(outcome)) return null;
+  if (!['ok', 'timeout', 'cli_missing', 'blocked', 'incompatible', 'auth_fail'].includes(outcome)) return null;
   if (outcome === 'timeout' && cooling && Number.isFinite(Number(budgetSecs)) && Number.isFinite(Number(normalSecs)) && Number(budgetSecs) < Number(normalSecs)) return null;
   return outcome;
 }
@@ -851,12 +851,43 @@ export function findCursorAgentCommand({
 export function isCursorAgentLoggedIn(homeDir, {
   env = process.env,
   existsImpl = fs.existsSync,
+  readFileImpl = fs.readFileSync,
+  statImpl = fs.statSync,
   cursorAgentLoggedIn,
 } = {}) {
   if (cursorAgentLoggedIn === true) return true;
   if (cursorAgentLoggedIn === false) return false;
   if (String(env.CURSOR_API_KEY || '').trim()) return true;
+  // 認証失敗ファイルが認証ファイルの更新以降に書かれていれば、認証が未修復とみなす
+  const authFailedFile = path.join(homeDir, '.claude', 'cursor-agent-auth-failed.json');
+  if (existsImpl(authFailedFile)) {
+    try {
+      const authFailedData = JSON.parse(readFileImpl(authFailedFile, 'utf8'));
+      const failedAt = Number(authFailedData?.at);
+      if (Number.isFinite(failedAt)) {
+        const authPaths = cursorAgentAuthPaths(homeDir, env);
+        let latestAuthMtimeMs = 0;
+        for (const p of authPaths) {
+          try {
+            const st = statImpl(p);
+            // mtimeMs はエポックからのミリ秒 (Date.now() と同じ単位)
+            const mtimeMs = st.mtimeMs ?? (st.mtime ? st.mtime.getTime?.() ?? 0 : 0);
+            if (Number(mtimeMs) > latestAuthMtimeMs) latestAuthMtimeMs = Number(mtimeMs);
+          } catch { /* ファイル不在は無視 */ }
+        }
+        if (failedAt >= latestAuthMtimeMs) return false;
+      }
+    } catch { /* 読み取り失敗は握りつぶし、従来どおり認証ファイルの存在で判定 */ }
+  }
   return cursorAgentAuthPaths(homeDir, env).some((p) => existsImpl(p));
+}
+
+export function writeCursorAgentAuthFailed(homeDir, { now = Date.now() } = {}) {
+  const file = path.join(homeDir, '.claude', 'cursor-agent-auth-failed.json');
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ at: now }) + '\n', 'utf8');
+  } catch { /* 書き込み失敗は握りつぶす */ }
 }
 
 export function resolveCursorAgentBackend(homeDir, options = {}) {
@@ -1111,6 +1142,18 @@ export function isBackendCliMissing(output, stderr) {
   return false;
 }
 
+export function isBackendAuthFailure(output, stderr) {
+  const merged = `${output || ''}\n${stderr || ''}`;
+  if (/authentication required/i.test(merged)) return true;
+  if (/agent login/i.test(merged)) return true;
+  if (/set cursor_api_key/i.test(merged)) return true;
+  if (/invalid api key/i.test(merged)) return true;
+  if (/invalid_api_key/i.test(merged)) return true;
+  // 401 と Unauthorized が同じ行にあるかチェック
+  if (merged.split(/\r?\n/).some((line) => /401/i.test(line) && /unauthorized/i.test(line))) return true;
+  return false;
+}
+
 export const POLICY_STALL_MIN_ELAPSED_SECS = 300;
 export const POLICY_STALL_MIN_OUTPUT_CHARS = 400;
 export const POLICY_STALL_MIN_DENIALS = 3;
@@ -1147,11 +1190,12 @@ export function shouldAbortPolicyStall({
     && countPolicyDenials(stderr) >= minDenials;
 }
 
-export function shouldAdvanceToNextBackend({ timedOut, status, exhausted, cliMissing, aborted, laneIncompatible } = {}) {
+export function shouldAdvanceToNextBackend({ timedOut, status, exhausted, cliMissing, aborted, laneIncompatible, authFailed } = {}) {
   if (aborted) return { advance: true, outcome: 'blocked' };
   if (timedOut) return { advance: true, outcome: 'timeout' };
-  // status 0 は exhausted/cliMissing/laneIncompatible より優先（成功終了は絶対に捨てない）
+  // status 0 は authFailed/cliMissing/exhausted/laneIncompatible より優先（成功終了は絶対に捨てない）
   if (status === 0) return { advance: false, outcome: 'ok' };
+  if (authFailed) return { advance: true, outcome: 'auth_fail' };
   if (cliMissing) return { advance: true, outcome: 'cli_missing' };
   // cheap-code は一般エラーを status=3 で返すため exhausted と同時に立つことがある。
   // 恒久的な構成不一致を quota_wait 相当として記録しないよう、incompatible を優先する。

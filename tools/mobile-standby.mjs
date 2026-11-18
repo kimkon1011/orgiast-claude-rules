@@ -270,10 +270,12 @@ export function convergeMobileStandby({ home, repoRoot = path.dirname(toolsDir),
     const target = settingsPath ?? path.join(home, 'AppData', 'Roaming', 'Code', 'User', 'settings.json');
     const r = ensureMobileRefreshDisabled(target); note('VSCode refresh', r); result.refreshSetting = r;
   } catch (error) { result.ok = false; lines.push(`[mobile-standby] VSCode refresh: 失敗 ${error.message}`); }
-  try {
-    const r = convergeMobileExtension({ home, repoRoot, env, runCodeCli, exists, readdir, regQuery }); note('拡張', r.status === 'ng' ? { note: `NG ${r.note}` } : r); result.extension = r;
-    if (r.status === 'ng') result.ok = false;
-  } catch (error) { result.ok = false; lines.push(`[mobile-standby] 拡張: 失敗 ${error.message}`); }
+  if (enabled) {
+    try {
+      const r = convergeMobileExtension({ home, repoRoot, env, runCodeCli, exists, readdir, regQuery }); note('拡張', r.status === 'ng' ? { note: `NG ${r.note}` } : r); result.extension = r;
+      if (r.status === 'ng') result.ok = false;
+    } catch (error) { result.ok = false; lines.push(`[mobile-standby] 拡張: 失敗 ${error.message}`); }
+  } else { note('拡張', { note: '無効のためスキップ' }); result.extension = { status: 'skip', note: '無効' }; }
   try {
     const r = convergeRcNamePrefix(rcPrefix); note('RC接頭辞', r); result.rcPrefix = r;
     if (r.ok === false) result.ok = false;

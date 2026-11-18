@@ -1,7 +1,7 @@
 {
   "_comment": "鍵末尾4文字→契約アカウント。鍵を足したらここに1行足す。鍵本体は記録しない。根拠: gemini は AI Studio 画面（kim 2026-10-30 確認）、その他は seisaku-team@ Gmail で各社の請求書・領収書・アカウント通知の宛先を照合（2026-11-02）。",
   "gemini": {
-    "C-Hs": "seisaku-team@orgiast.jp"
+    "faeQ": "seisaku-team@orgiast.jp"
   },
   "openrouter": {
     "7db0": "seisaku-team@orgiast.jp"

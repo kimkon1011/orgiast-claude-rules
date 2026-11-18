@@ -219,7 +219,7 @@ test('unprobed configuration remains distinct and equal-time limits are supersed
 test('Gemini billing notification includes official steps, account, outcome and fallback', t => {
   const text = notificationText({provider:'gemini',reason:'billing',error:'HTTP 402 Your prepayment credits are depleted'},fixture(t));
   for (const expected of ['https://aistudio.google.com/billing', 'seisaku-team@orgiast.jp', 'まず無料枠・既存契約内の他AIレーンを実測', '比較表の最後']) assert.ok(text.includes(expected), expected);
-  assert.ok(!text.includes('設定して保存')); 
+  assert.ok(!text.includes('設定して保存'));
   assert.match(text,/\n根拠: https:\/\/ai.google.dev\/gemini-api\/docs\/billing$/);
 });
 test('needsNativeCodexProbe is win32-only and follows the WSL distro listing', () => {

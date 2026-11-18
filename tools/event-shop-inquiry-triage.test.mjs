@@ -58,6 +58,16 @@ test('3c: 他社様の事例は質問文であり誤爆しない', () => {
   const result = classifyLead(lead, [msg('inbound', '15', body)], now);
   assert.equal(result.category, '🔴 要返信');
 });
+test('3d: 「他社の見積もりと比較したい」は要返信（誤爆防止）', () => {
+  const body = '他社の見積もりと比較したいので、御見積書をいただけますか。';
+  const result = classifyLead(lead, [msg('inbound', '15', body)], now);
+  assert.equal(result.category, '🔴 要返信');
+});
+test('3e: 「キャンセル料は何日前から」は要返信（誤爆防止）', () => {
+  const body = 'キャンセル料は何日前から発生しますか。';
+  const result = classifyLead(lead, [msg('inbound', '15', body)], now);
+  assert.equal(result.category, '🔴 要返信');
+});
 test('6: 同じemail/productの1日差は最新だけを残す', () => {
   const newer = { ...lead, id: 'new', created_at: '2026-10-22T03:00:00Z' };
   assert.deepEqual(deduplicateLeads([lead, newer]), { leads: [newer], duplicateCount: 1 });

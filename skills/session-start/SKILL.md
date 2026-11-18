@@ -37,8 +37,10 @@ SessionStart hook が kim-inbox の未回収 ask を注入する。目的を確�
 
 ## 2. 目的を1件に確定する
 
-- 候補を集める前に `~/.claude/business-goals.md` を必ず読む。「売上・利益レバー（上から優先）」の未完了レバー1件を候補の **1番目**にする（手順0・1.5の優先事項はそのまま）。候補源は次の順:
-  1. `~/.claude/business-goals.md` の最優先の未完了レバー
+- 候補を集める前に `~/.claude/business-goals.md` を読む。**無い、または「売上・利益レバー」の節が空なら `~/.claude/next-actions.md` を読む**（夜間に `tools/next-actions.mjs` が機械生成する台帳。autopilot-tick.mjs と同じ fallback）。
+  **どちらも無い場合は、その場で `node tools/next-actions.mjs` を1回実行して生成してから読む**（groq/deepseek/openrouter の安いレーンで生成されるので Claude の消費はゼロ）。生成に失敗したら「売上レバーの台帳が無い（理由: &lt;stderr 1行&gt;）」と1行書いてから次の候補源へ進む。
+- 「売上・利益レバー（上から優先）」の未完了レバー1件を候補の **1番目**にする（手順0・1.5の優先事項はそのまま）。候補源は次の順:
+  1. `~/.claude/business-goals.md` の最優先の未完了レバー（無ければ `~/.claude/next-actions.md` の「明日の推奨アクション」）
   2. `~/.claude/next-session.md` の目的・残TODO
   3. `~/.claude/session-handoffs.md`（放置セッションの再開一覧。`/session-triage` が生成）
   4. 直近の memory の「未決」「次アクション」記述

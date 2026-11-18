@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { main, extractBatch, candidateRow, evidencedDue, runDetect, askProvider } from './deadline-detect.mjs';
+import { main, extractBatch, candidateRow, evidencedDue, runDetect, askProvider, parseExtraction } from './deadline-detect.mjs';
 import { seatCheck } from './lib/deadline-seat.mjs';
 import { collectGmail, collectDrive, readDriveText, collectLine, collectDiscord, wantsBody, trimBytes } from './lib/deadline-sources.mjs';
 import { DEFAULT_CONFIG, saveJson, dataPath } from './deadline-ledger.mjs';
@@ -246,4 +246,45 @@ test('鍵持ちのkim席はfixtureモードで通常動作（fixtureはseat chec
   const result = JSON.parse(output[0]);
   assert.equal(result.skip, undefined);
   assert.equal(result.added, 5);
+});
+
+test('「」引用符の値が正しくパースされる', () => {
+  const input = `{"items":[{"title":「回答」,"due":「2026-12-01」,"kind":「回答・返信」,"action":「返信」,"assignee":「kim」,"confidence":0.9,"quote":「明日までに」,"sourceRef":「mail:test」}]}`;
+  const result = parseExtraction(input);
+  assert.equal(result.items[0].title, '回答');
+  assert.equal(result.items[0].due, '2026-12-01');
+  assert.equal(result.items[0].quote, '明日までに');
+});
+
+test('「」引用符と通常のJSON引用符が混在しても正しくパースされる', () => {
+  const input = '{"items":[{"title":"「見積書」提出","due":"2026-12-01","kind":"回答・返信","action":"返信","assignee":"kim","confidence":0.9,"quote":"「見積書」を提出","sourceRef":"mail:test"}]}';
+  const result = parseExtraction(input);
+  assert.equal(result.items[0].title, '「見積書」提出');
+  assert.equal(result.items[0].due, '2026-12-01');
+  assert.equal(result.items[0].quote, '「見積書」を提出');
+});
+
+test('「」引用符の値と通常の値が混在しても正しくパースされる', () => {
+  const input = `{"items":[{"title":「回答」,"due":"2026-12-01","kind":"回答・返信","action":"返信","assignee":"kim","confidence":0.9,"quote":"「明日までに」提出","sourceRef":"mail:test"}]}`;
+  const result = parseExtraction(input);
+  assert.equal(result.items[0].title, '回答');
+  assert.equal(result.items[0].due, '2026-12-01');
+  assert.equal(result.items[0].quote, '「明日までに」提出');
+});
+
+test('「」引用符の中のダブルクォートとバックスラッシュをエスケープする', () => {
+  const input = String.raw`{"items":[{"title":「A"B\C」,"due":"2026-12-01","kind":"回答・返信","confidence":0.9,"quote":"原文","sourceRef":"mail:test"}]}`;
+  assert.equal(parseExtraction(input).items[0].title, String.raw`A"B\C`);
+});
+
+test('配列要素も「」引用符でパースされる', () => {
+  const input = `{"items":[「test1」,{"title":"回答","due":"2026-12-01","kind":"回答・返信","action":"返信","assignee":"kim","confidence":0.9,"quote":"原文","sourceRef":"mail:test"}]}`;
+  // これは items の型チェックで弾かれる（items がオブジェクトの配列でない）
+  // フォールバックを通るだけで parseExtraction のバリデーションで throw することを確認
+  assert.throws(() => parseExtraction(input), /itemsが不正です/);
+});
+
+test('壊れたJSONは従来どおり例外を投げる', () => {
+  assert.throws(() => parseExtraction('not json at all'), SyntaxError);
+  assert.throws(() => parseExtraction('{"items":['), SyntaxError);
 });

@@ -23,8 +23,46 @@ JSONのみ: {"items":[{"title":"件名","due":"YYYY-MM-DD または null","kind"
 入力:\n${JSON.stringify(documents)}`;
 }
 export function parseExtraction(value) {
-  const parsed = typeof value === 'string' ? JSON.parse(value.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) : value;
-  if (!parsed || !Array.isArray(parsed.items) || parsed.items.length > 100) throw new Error('抽出応答のitemsが不正です');
+  const parsed = typeof value === 'string' ? (() => {
+    const stripped = value.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    try { return JSON.parse(stripped); } catch (error) {
+      // LLM (Gemini/OpenRouter) が日本語括弧「」をJSON値の引用符として返すことがある
+      // 通常のJSON文字列の外側にある値位置（: / [ / , の直後）の「...」だけを置換する
+      let fixed = '';
+      let inString = false;
+      let escaped = false;
+      for (let i = 0; i < stripped.length; i += 1) {
+        const char = stripped[i];
+        if (inString) {
+          fixed += char;
+          if (escaped) escaped = false;
+          else if (char === '\\') escaped = true;
+          else if (char === '"') inString = false;
+          continue;
+        }
+        if (char === '"') {
+          inString = true;
+          fixed += char;
+          continue;
+        }
+        fixed += char;
+        if (![':', '[', ','].includes(char)) continue;
+        while (/\s/.test(stripped[i + 1] ?? '')) fixed += stripped[i += 1];
+        if (stripped[i + 1] !== '「') continue;
+        fixed += '"';
+        i += 2;
+        while (i < stripped.length && stripped[i] !== '」') {
+          if (stripped[i] === '\\' || stripped[i] === '"') fixed += '\\';
+          fixed += stripped[i];
+          i += 1;
+        }
+        if (i < stripped.length) fixed += '"';
+        else i -= 1;
+      }
+      try { return JSON.parse(fixed); } catch { throw error; }
+    }
+  })() : value;
+  if (!parsed || !Array.isArray(parsed.items) || parsed.items.length > 100 || parsed.items.some(i => !i || typeof i !== 'object' || Array.isArray(i))) throw new Error('抽出応答のitemsが不正です');
   for (const i of parsed.items) {
     if (!i || typeof i.title !== 'string' || !i.title.trim() || typeof i.sourceRef !== 'string' || typeof i.confidence !== 'number' || i.confidence < 0 || i.confidence > 1 || !Number.isFinite(i.confidence) || typeof i.quote !== 'string' || !KINDS.includes(i.kind) || i.due !== null && (typeof i.due !== 'string' || parseSheetDate(i.due) !== i.due)) throw new Error('抽出項目の形式が不正です');
   }

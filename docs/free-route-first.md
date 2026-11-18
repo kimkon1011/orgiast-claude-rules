@@ -34,8 +34,12 @@ calendarの承認をBeeper送信receiptへ読み替えず、当日本文の個�
 
 ## ローカル配置
 
-既存の毎朝9時タスクの起動パスを維持し、ローカル`send-today.mjs`を
-nightly-repoの`tools/lahaina-daily-post.mjs`のmainへ委譲する薄い入口にする。
+既存の毎朝9時タスクの起動パスを維持する。`node tools/install-lahaina-daily-post.mjs`
+が既存入口をバックアップし、検証済みの本体と承認ヘルパーをローカル`runtime/`へ配置する。
+`send-today.mjs`はこの本体へ委譲する薄い入口になる。先に`--dry-run`で配置先を確認できる。
+夜間ジョブがnightly-repoを別commitへcheckoutして新規ファイルが消えても本体は残る。
+既存のBeeper・reply-queue・inbox・context-checkはnightly-repoの正規ツールを参照する。
+更新時も同じインストーラを実行する（定期タスク設定の変更不要）。
 calendar、sent、quota、runsは従来の`~/.claude/lahaina-daily-post/`を使用する。
 calendar本文や認証情報はリポジトリへ複製しない。
 検証は`--dry-run`と一時homeでのユニットテストのみ。本番グループへ送信しない。

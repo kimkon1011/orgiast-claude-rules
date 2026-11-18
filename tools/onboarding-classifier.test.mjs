@@ -31,19 +31,20 @@ function assertOptionalBudget(index) {
   assert(optionalBytes <= INDEX_BUDGET_BYTES, `非必須索引 ${optionalBytes} bytes`);
 }
 
-test('必須ルール全体は19500bytes以下で、超過時は統合・圧縮を要求する', () => {
+test('必須ルール全体は20200bytes以下で、超過時は統合・圧縮を要求する', () => {
   const body = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
-  // 2026-11-16 の最上位ルール（人の手間はAIの効率より上）を全文配布した分だけ上限を上げた。
+  // 2026-11-16 の最上位ルール（人の手間はAIの効率より上）に加え、2026-11-18 の
+  // 「依頼する前に、すでに済んでいないかを確認する」を全文配布した分だけ上限を上げた。
   // 余裕は数百バイトに留め、次の追加では統合・圧縮を要求する。全文配布は削らない。
   const assertMandatoryBudget = index => {
     const { mandatoryBytes } = measureIndexBytes(index);
-    assert(mandatoryBytes <= 19500, `必須ルールの統合・圧縮が必要: ${mandatoryBytes} bytes > 19500 bytes`);
+    assert(mandatoryBytes <= 20200, `必須ルールの統合・圧縮が必要: ${mandatoryBytes} bytes > 20200 bytes`);
   };
   assertMandatoryBudget(makeIndex(body));
   const base = makeIndex('');
-  const exact = base + '\n🔴 ' + 'a'.repeat(19500 - Buffer.byteLength('\n🔴 '));
+  const exact = base + '\n🔴 ' + 'a'.repeat(20200 - Buffer.byteLength('\n🔴 '));
   assertMandatoryBudget(exact);
-  assert.throws(() => assertMandatoryBudget(exact + 'a'), /必須ルールの統合・圧縮が必要: 19501 bytes/);
+  assert.throws(() => assertMandatoryBudget(exact + 'a'), /必須ルールの統合・圧縮が必要: 20201 bytes/);
 });
 
 test('人の手間はAIの効率より上のルールが最初の絶対ルールとして全文配布される', () => {

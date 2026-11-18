@@ -22,13 +22,13 @@ function finishWindow(state, pageToken, count) {
   if (!pageToken) { next.watermark = state.until; delete next.until; delete next.query; }
   return next;
 }
-export async function collectGmail({ user, state, now, search = searchGmail }) {
+export async function collectGmail({ user, state, now, search = searchGmail, signal }) {
   const current = windowState(state, now, 80), max = 80 - current.used;
   if (max <= 0) return { documents: [], next: state };
   const since = current.watermark ? ` after:${Math.floor(Date.parse(current.watermark) / 1000) - 1}` : '';
   const query = current.query || `newer_than:3d -category:promotions -category:social -list:googlegroups-manage${since} before:${Math.ceil(Date.parse(current.until) / 1000)}`;
   current.query = query;
-  const result = await search({ user, query, max, pageToken: current.pageToken, withBody: true, bodyLimit: 30000, shouldFetchBody: wantsBody, concurrency: 3 });
+  const result = await search({ user, query, max, pageToken: current.pageToken, withBody: true, bodyLimit: 30000, shouldFetchBody: wantsBody, concurrency: 3, signal });
   const documents = result.messages.filter(m => wantsBody(m) && m.body).map(m => ({
     source: 'Gmail', sourceRef: `gmail:${user}:${m.id}`, text: trimBytes(`${m.subject}\n${m.body}`),
     date: new Date(Number(m.internalDate) || Date.parse(m.date)).toISOString(), url: `https://mail.google.com/mail/u/${encodeURIComponent(user)}/#all/${m.threadId || m.id}`,
@@ -36,20 +36,20 @@ export async function collectGmail({ user, state, now, search = searchGmail }) {
   }));
   return { documents, next: finishWindow(current, result.nextPageToken, result.messages.length + (result.skipped || 0)) };
 }
-export async function readDriveText(file, { user, request, dryRun }) {
+export async function readDriveText(file, { user, request, dryRun, signal }) {
   let id = file.id, temporary;
   if (file.mimeType !== 'application/vnd.google-apps.document') {
     if (dryRun) return ''; // OCR copies are mutations; fixture dry-run supplies extracted text.
-    const copy = await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}/copy?ocrLanguage=ja&fields=id&ignoreDefaultVisibility=true`, { user, method: 'POST', body: { name: `deadline-ocr-${id}`, mimeType: 'application/vnd.google-apps.document', appProperties: { deadlineWatchOCR: '1' } } });
+    const copy = await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}/copy?ocrLanguage=ja&fields=id&ignoreDefaultVisibility=true`, { user, method: 'POST', signal, body: { name: `deadline-ocr-${id}`, mimeType: 'application/vnd.google-apps.document', appProperties: { deadlineWatchOCR: '1' } } });
     if (!copy.id || copy.id === id) throw new Error('OCRコピーのIDが不正です');
     temporary = id = copy.id;
 
   }
-  try { if (temporary) await ensureKimEditor(id, { actingUser: user, token: 'request-adapter', created: true, api: async (_token, url, options = {}) => { const value = await request(url, { user, method: options.method || 'GET', ...(options.body ? { body: JSON.parse(options.body) } : {}) }); return { json: async () => value }; } });
-    return trimBytes(await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}/export?mimeType=text%2Fplain`, { user, text: true })); }
+  try { if (temporary) await ensureKimEditor(id, { actingUser: user, token: 'request-adapter', created: true, api: async (_token, url, options = {}) => { const value = await request(url, { user, signal, method: options.method || 'GET', ...(options.body ? { body: JSON.parse(options.body) } : {}) }); return { json: async () => value }; } });
+    return trimBytes(await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}/export?mimeType=text%2Fplain`, { user, text: true, signal })); }
   finally { if (temporary) await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(temporary)}`, { user, method: 'DELETE' }); }
 }
-export async function collectDrive({ user, state, now, request, dryRun = false }) {
+export async function collectDrive({ user, state, now, request, dryRun = false, signal, onStage = () => {} }) {
   const current = windowState(state, now, 50), max = 50 - current.used;
   if (max <= 0) return { documents: [], next: state };
   const since = current.watermark || new Date(now.getTime() - 3 * 86400000).toISOString();
@@ -60,17 +60,18 @@ export async function collectDrive({ user, state, now, request, dryRun = false }
     return `https://www.googleapis.com/drive/v3/files?${params}`;
   };
   let result;
-  try { result = await request(makeUrl(current.pageToken), { user }); }
+  try { result = await request(makeUrl(current.pageToken), { user, signal }); }
   catch (error) {
     if (!current.pageToken || !/HTTP 400/.test(error.message)) throw error;
     delete current.pageToken;
-    result = await request(makeUrl(), { user });
+    result = await request(makeUrl(), { user, signal });
   }
   const documents = [];
   const skipped = [];
   for (const file of result.files || []) {
+    if (signal?.aborted) throw signal.reason;
     let text;
-    try { text = await readDriveText(file, { user, request, dryRun }); }
+    try { onStage(`drive ${user} file ${file.id} start`); text = await readDriveText(file, { user, request, dryRun, signal }); onStage(`drive ${user} file ${file.id} end`); }
     catch (error) {
       skipped.push({ sourceRef: `drive:${file.id}`, title: file.name, reason: `Drive読み取り失敗: ${redactSecrets(error.message).slice(0, 120)}` });
       continue;
@@ -112,10 +113,11 @@ export async function collectDiscord({ home, state = {}, now }) {
   const documents = listDecisions({ home }).filter(r => r.source === 'discord-inbox' && Date.parse(r.capturedAt) > since && Date.parse(r.capturedAt) <= now.getTime()).map(r => ({ source: 'Discord', sourceRef: `discord:${r.id}`, date: r.capturedAt, text: trimBytes(r.text), url: '' }));
   return { documents, next: { watermark: documents.length ? new Date(Math.max(...documents.map(r => Date.parse(r.date)))).toISOString() : state.watermark || new Date(since).toISOString() } };
 }
-export function sourceLoaders({ home, config, state, now, sheets, request, search, dryRun }) {
+export function sourceLoaders({ home, config, state, now, sheets, request, search, dryRun, onStage = () => {} }) {
+  const sourceSignal = () => AbortSignal.timeout(Number(process.env.DEADLINE_SOURCE_TIMEOUT_MS) || 60_000);
   return [
-    ...config.mailboxes.map(user => ({ key: `gmail:${user}`, load: () => collectGmail({ user, state: state.sources?.[`gmail:${user}`], now, search }) })),
-    ...config.driveUsers.map(user => ({ key: `drive:${user}`, load: () => collectDrive({ user, state: state.sources?.[`drive:${user}`], now, request, dryRun }) })),
+    ...config.mailboxes.map(user => ({ key: `gmail:${user}`, load: () => collectGmail({ user, state: state.sources?.[`gmail:${user}`], now, search, signal: sourceSignal() }) })),
+    ...config.driveUsers.map(user => ({ key: `drive:${user}`, load: () => collectDrive({ user, state: state.sources?.[`drive:${user}`], now, request, dryRun, signal: sourceSignal(), onStage }) })),
     ...config.lineSheets.map(sheetId => ({ key: `line:${sheetId}`, load: () => collectLine({ sheetId, state: state.sources?.[`line:${sheetId}`], now, sheets }) })),
     { key: 'discord', load: () => collectDiscord({ home, state: state.sources?.discord, now }) },
   ];

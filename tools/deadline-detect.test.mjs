@@ -7,6 +7,7 @@ import { main, extractBatch, candidateRow, evidencedDue, runDetect, askProvider,
 import { seatCheck } from './lib/deadline-seat.mjs';
 import { collectGmail, collectDrive, readDriveText, collectLine, collectDiscord, wantsBody, trimBytes } from './lib/deadline-sources.mjs';
 import { DEFAULT_CONFIG, saveJson, dataPath } from './deadline-ledger.mjs';
+import { createSheetsClient } from './lib/sheets-dwd.mjs';
 const document = { source: 'Gmail', sourceRef: 'mail:test', date: '2026-11-03T23:00:00Z', text: '明日までに回答してください。', mailbox: 'kim@orgiast.jp', threadId: 'thread' };
 const item = { sourceRef: document.sourceRef, title: '回答', due: '2026-11-05', kind: '回答・返信', action: '返信', assignee: 'kim', confidence: 0.9, quote: document.text };
 const now = new Date('2026-11-04T02:00:00Z');
@@ -59,6 +60,31 @@ test('途中で抽出失敗した源の透かしは保持し、他源だけ進�
   assert.equal(result.added, 1); assert.equal(result.errors.length, 1); assert.equal(state.sources.broken.watermark, 'old'); assert.equal(state.sources.good.watermark, 'new');
   rows[0].status = '完了';
   assert.equal((await runDetect({ ...params, ask: async () => assert.fail('closed source repeated') })).added, 0);
+});
+
+test('応答しないfetchはAbortSignalでrejectされハングしない', async () => {
+  const started = Date.now();
+  const fetchImpl = (_url, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  });
+  const sheets = createSheetsClient({ fetchImpl, getToken: async () => 'token', timeoutMs: 25 });
+  await assert.rejects(sheets.get('sheet', 'A1'), /fetch failed.*aborted|fetch failed.*timeout/i);
+  assert.ok(Date.now() - started < 1000);
+});
+
+test('Gmail quota 403は2回再試行後にsourceをスキップして続行', async t => {
+  const home = homeFor(t), state = {}, delays = [], stages = [];
+  const quota = Object.assign(new Error('Gmail API 403: rateLimitExceeded Quota exceeded'), { status: 403 });
+  let attempts = 0;
+  const sources = [
+    { key: 'gmail', load: async () => { attempts++; throw quota; } },
+    { key: 'discord', load: async () => ({ documents: [], next: { watermark: 'done' } }) },
+  ];
+  const ledger = { read: async () => [], append: async () => assert.fail('no rows') };
+  const result = await runDetect({ home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, state, sources, now, dryRun: false, ask: async () => assert.fail('no LLM'), notify: async () => {}, sleepImpl: async ms => delays.push(ms), stage: value => stages.push(value) });
+  assert.equal(attempts, 3); assert.deepEqual(delays, [500, 1000]);
+  assert.equal(result.errors.length, 0); assert.match(result.skipped[0].reason, /quota retry exhausted/);
+  assert.deepEqual(state.sources.discord, { watermark: 'done' });
 });
 
 test('Gmailは件名/snippet選別し、日80通の残数とページカーソルを保持', async () => {

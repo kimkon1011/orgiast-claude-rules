@@ -5,22 +5,28 @@ const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 export const quoteTab = (title) => `'${title.replaceAll("'", "''")}'`;
 
 // No mutation retries: an ambiguous append response must be read back by id.
-export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken } = {}) {
+export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken, timeoutMs = Number(process.env.DEADLINE_FETCH_TIMEOUT_MS) || 60_000, onStage = () => {} } = {}) {
   let token;
   let expires = 0;
   async function request(id, suffix = '', method = 'GET', body) {
     if (!token || Date.now() >= expires) {
-      try { token = await getToken({ scope: SCOPE, impersonate: 'kim@orgiast.jp', signal: AbortSignal.timeout(30_000) }); }
-      catch {
+      onStage('token start (sheets)');
+      try { token = await getToken({ scope: SCOPE, impersonate: 'kim@orgiast.jp', signal: AbortSignal.timeout(timeoutMs) }); }
+      catch (primaryError) {
         // Fallback: use 'drive' scope (supported by DWD proxy) instead of 'spreadsheets'
-        token = await getToken({ scope: 'https://www.googleapis.com/auth/drive', impersonate: 'seisaku-team@orgiast.jp', signal: AbortSignal.timeout(30_000) });
+        try { token = await getToken({ scope: 'https://www.googleapis.com/auth/drive', impersonate: 'seisaku-team@orgiast.jp', signal: AbortSignal.timeout(timeoutMs) }); }
+        catch (fallbackError) { throw new Error(`Sheets token failed: ${fallbackError.message}`, { cause: fallbackError.cause || primaryError }); }
       }
+      onStage('token end (sheets)');
       expires = Date.now() + 50 * 60_000;
     }
-    const response = await fetchImpl(`${API}/${encodeURIComponent(id)}${suffix}`, {
-      method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30_000),
-    });
+    let response;
+    try {
+      response = await fetchImpl(`${API}/${encodeURIComponent(id)}${suffix}`, {
+        method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) { throw new Error(`Sheets ${method} fetch failed: ${error.message}`, { cause: error }); }
     if (!response.ok) throw new Error(`Sheets ${method} HTTP ${response.status}`);
     return response.json();
   }

@@ -210,6 +210,17 @@ test('全体上限では残sourceをskipしてexit 0・heartbeat okにする', a
   assert.equal(heartbeats[0].ok, true); assert.match(heartbeats[0].summary, /partial=1 skipped=1/);
 });
 
+test('DEADLINE_TOTAL_BUDGET_MSで全体上限を設定できる', async t => {
+  const previous = process.env.DEADLINE_TOTAL_BUDGET_MS;
+  process.env.DEADLINE_TOTAL_BUDGET_MS = '40';
+  t.after(() => previous === undefined ? delete process.env.DEADLINE_TOTAL_BUDGET_MS : process.env.DEADLINE_TOTAL_BUDGET_MS = previous);
+  const home = homeFor(t), output = [];
+  const code = await main([], { home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger: { read: async () => [] },
+    sources: [{ key: 'hang', load: async () => new Promise(() => {}) }], skipSeatCheck: true,
+    stdout: value => output.push(JSON.parse(value)), heartbeat: async () => {}, notify: async () => {} });
+  assert.equal(code, 0); assert.match(output[0].skipped[0].reason, /全体時間上限/);
+});
+
 test('token取得不可で全体が成立しない場合はexit 1のまま', async t => {
   const home = homeFor(t), heartbeats = [];
   const code = await main([], { home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger: { read: async () => { throw new Error('token unavailable'); } }, sources: [], skipSeatCheck: true, stderr: () => {}, stdout: () => {}, heartbeat: async value => heartbeats.push(value) });

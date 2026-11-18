@@ -61,7 +61,7 @@ Gmailは各箱80通/日まで、件名とsnippetで期限関連語を選別し�
 
 Driveは1回240秒の時間予算（`DEADLINE_DRIVE_BUDGET_MS`）を超えると新しいファイルの処理を止め、取得済み本文をpartial成功として返す。1ファイルは45秒（`DEADLINE_DRIVE_FILE_TIMEOUT_MS`、OCRコピーの後始末を含む）で打ち切ってskippedへ入れる。既存の `state.json` に固定検索条件・ページ内の処理済みIDと `pending` の抽出待ち本文を保存する。次回は未抽出batchを先に処理してから未処理ファイルを読み、日次50件上限は維持する。台帳に期限が追加されなかった本文も再OCRしない。
 
-プロセス開始から540秒で取得・抽出を止め、残りsourceをskipする（`DEADLINE_PROCESS_BUDGET_MS` で短縮可能、540秒を超える指定は不可）。処理済みbatchと再開位置を書き込み、書込待機も開始から590秒までに打ち切る。partial・一部skippedは終了コード0。source単位の失敗も他sourceが処理できていれば0にし、heartbeatのsummaryへpartial/skipped件数と実際の理由を残す。台帳read/token取得、台帳・状態書込など全体が成立しない失敗は終了コード1。
+プロセス開始から540秒で取得・抽出を止め、残りsourceをskipする（`DEADLINE_TOTAL_BUDGET_MS` で短縮可能、540秒を超える指定は不可）。処理済みbatchと再開位置を書き込み、書込待機も開始から590秒までに打ち切る。partial・一部skippedは終了コード0。source単位の失敗も他sourceが処理できていれば0にし、heartbeatのsummaryへpartial/skipped件数と実際の理由を残す。台帳read/token取得、台帳・状態書込など全体が成立しない失敗は終了コード1。
 
 実データの `--dry-run` も台帳・状態・inbox・カレンダーを書き換えない。PDF・画像のOCRコピー作成は省略する。フィクスチャのdry-runはネットワークも鍵も不要。
 

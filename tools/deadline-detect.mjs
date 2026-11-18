@@ -261,7 +261,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const stageOutput = deps.stage || console.error;
   const stage = message => stageOutput(`[deadline-detect] ${new Date().toISOString()} ${message}`);
   const nowMs = deps.nowMs || Date.now; const processStarted = nowMs();
-  const processBudgetMs = budgetMs(deps.processBudgetMs ?? process.env.DEADLINE_PROCESS_BUDGET_MS, 540_000, 540_000);
+  const processBudgetMs = budgetMs(deps.processBudgetMs ?? process.env.DEADLINE_TOTAL_BUDGET_MS, 540_000, 540_000);
   const controller = new AbortController(), finishController = new AbortController();
   const processSignal = controller.signal, finishSignal = finishController.signal;
   const timer = setTimeout(() => controller.abort(new Error('全体時間上限到達')), processBudgetMs);

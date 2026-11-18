@@ -124,13 +124,36 @@ async function mapLimit(values, limit, fn) {
   return out;
 }
 
-export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = getDriveToken, staff, now = Date.now(), stats = { answeredElsewhere: 0 } }) {
+// 再試行対象のエラーかどうか。429, 特定の403(rateLimitExceeded/userRateLimitExceeded/quotaExceeded), 5xx。
+function isRetryableStatus(status, body) {
+  if (status === 429) return true;
+  if (status === 403 && body) {
+    const text = typeof body === 'string' ? body : JSON.stringify(body);
+    if (/(?:rateLimitExceeded|userRateLimitExceeded|quotaExceeded)|Quota exceeded/i.test(text)) return true;
+  }
+  return status >= 500 && status < 600;
+}
+function parseRetryAfter(response) {
+  const val = response.headers.get('retry-after');
+  if (!val) return 0;
+  const secs = parseInt(val, 10);
+  return Number.isFinite(secs) ? Math.min(secs, 60) * 1000 : 0;
+}
+const defaultSleep = ms => new Promise(r => setTimeout(r, ms));
+
+export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = getDriveToken, staff, now = Date.now(), stats = { answeredElsewhere: 0 }, sleep = defaultSleep } = {}) {
   const token = await getToken({ scope: SCOPE, impersonate: mailbox, signal: AbortSignal.timeout(20_000) });
   const get = async (route, { optional = false } = {}) => {
-    const response = await fetchImpl(`${API}${route}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) });
-    if (optional && [404, 410].includes(response.status)) return null;
-    if (!response.ok) throw new Error(`Gmail API ${response.status}: ${(await response.text()).slice(0, 200)}`);
-    return response.json();
+    const maxRetries = 5;
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetchImpl(`${API}${route}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) });
+      if (optional && [404, 410].includes(response.status)) return null;
+      if (response.ok) return response.json();
+      const body = await response.text();
+      if (!isRetryableStatus(response.status, body) || attempt >= maxRetries) throw new Error(`Gmail API ${response.status}: ${body.slice(0, 200)}`);
+      const delay = parseRetryAfter(response) || Math.min(2000 * Math.pow(2, attempt) + Math.floor(Math.random() * 1001), 60_000);
+      await sleep(delay);
+    }
   };
   const stubs = []; let pageToken = '';
   for (let page = 0; page < MAX_PAGES; page++) {

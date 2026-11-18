@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { parseLlmResult } from './session-triage.mjs';
+import { parseLlmResult, isEmptySession, selectRecords } from './session-triage.mjs';
 
 const execFileAsync = promisify(execFile);
 const expected = { verdict: '未完了', confidence: 85, next: '残作業を確認する' };
@@ -62,6 +62,63 @@ test('parseLlmResult: 完了のnextは空にしconfidenceを丸める', () => {
     parseLlmResult('{"verdict":"完了","confidence":99.6,"next":"不要な追加提案"}'),
     { verdict: '完了', confidence: 100, next: '' },
   );
+});
+
+test('isEmptySession: lastAssistantTextが空かつfirstPromptが(プロンプトなし)のとき真', () => {
+  const record = { lastAssistantText: '', firstPrompt: '(プロンプトなし)' };
+  assert.equal(isEmptySession(record), true);
+});
+
+test('isEmptySession: lastAssistantTextが存在するとき偽', () => {
+  const record = { lastAssistantText: '何か書いた', firstPrompt: '(プロンプトなし)' };
+  assert.equal(isEmptySession(record), false);
+});
+
+test('isEmptySession: firstPromptが(プロンプトなし)以外のとき偽', () => {
+  const record = { lastAssistantText: '', firstPrompt: '資料を作成する' };
+  assert.equal(isEmptySession(record), false);
+});
+
+test('selectRecords: llmMode=false で先頭 top 件だけ返す', () => {
+  const records = Array.from({ length: 5 }, (_, i) => ({ id: i }));
+  const result = selectRecords(records, 2, false);
+  assert.equal(result.length, 2);
+  assert.deepEqual(result, records.slice(0, 2));
+});
+
+test('selectRecords: llmMode=true で対話ありtop件＋対話なし全件を返す', () => {
+  const empties = Array.from({ length: 5 }, (_, i) => ({
+    id: i,
+    lastAssistantText: '',
+    firstPrompt: '(プロンプトなし)',
+  }));
+  const conversations = Array.from({ length: 5 }, (_, i) => ({
+    id: 10 + i,
+    lastAssistantText: '応答',
+    firstPrompt: '質問',
+  }));
+  const filtered = [...conversations, ...empties];
+  const result = selectRecords(filtered, 2, true);
+  // 対話あり2件 + 空5件 = 7件。順序は保たれる（最初に対話あり、その後に空）。
+  assert.equal(result.length, 7);
+  assert.equal(result[0].id, 10);
+  assert.equal(result[1].id, 11);
+  assert.equal(result[2].id, 0);
+  assert.equal(result[3].id, 1);
+  assert.equal(result[4].id, 2);
+  assert.equal(result[5].id, 3);
+  assert.equal(result[6].id, 4);
+});
+
+test('selectRecords: llmMode=true で対話なしのみでも全件返す', () => {
+  const empties = Array.from({ length: 3 }, (_, i) => ({
+    id: i,
+    lastAssistantText: '',
+    firstPrompt: '(プロンプトなし)',
+  }));
+  const result = selectRecords(empties, 2, true);
+  // 対話あり0件(先頭0) + 空3件 = 3件
+  assert.equal(result.length, 3);
 });
 
 test('relocatedCwd が cwd として採用される（bridge-session 対応）', async (t) => {

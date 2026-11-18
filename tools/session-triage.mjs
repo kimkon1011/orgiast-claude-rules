@@ -332,6 +332,24 @@ export function parseLlmResult(stdout) {
   return null;
 }
 
+export function isEmptySession(record) {
+  return !record.lastAssistantText && record.firstPrompt === '(プロンプトなし)';
+}
+
+export function selectRecords(filtered, top, llmMode) {
+  if (!llmMode) return filtered.slice(0, top);
+  const conversations = [];
+  const empties = [];
+  for (const r of filtered) {
+    if (isEmptySession(r)) {
+      empties.push(r);
+    } else {
+      conversations.push(r);
+    }
+  }
+  return conversations.slice(0, top).concat(empties);
+}
+
 function applyLlmResult(record, result) {
   record.llm = result;
   record.nextAction = result.next;
@@ -392,7 +410,7 @@ async function addLlmJudgments(records) {
       // LLM呼び出しを省略して完了扱いにする。
       // LLMに渡しても「末尾assistantテキストが空の時だけ不明」の指示で
       // 常に不明が返り、LLMコストだけ消費して何も進まないため。
-      if (!record.lastAssistantText && record.firstPrompt === '(プロンプトなし)') {
+      if (isEmptySession(record)) {
         const defaultResult = { verdict: '完了', confidence: 90, next: '' };
         applyLlmResult(record, defaultResult);
         llmStats.success++;
@@ -465,7 +483,7 @@ if (isMain) {
     const files = await listFiles();
     const records = (await Promise.all(files.map(inspect))).filter(Boolean).sort((a, b) => b.score - a.score || a.ageDays - b.ageDays);
     const filtered = statusFilter ? records.filter((r) => r.status === statusFilter) : records;
-    let selected = filtered.slice(0, top);
+    let selected = selectRecords(filtered, top, llmMode);
     let llmStats;
     if (llmMode) {
       llmStats = await addLlmJudgments(selected);

@@ -194,6 +194,10 @@ export function nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }) {
   return [path.join(repo, 'tools/codex-do.mjs'), instruction, '--cwd', cwd, '--kind', 'implement', '--force-native', '--no-fallback', '--no-escalate', '--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))];
 }
 export const NATIVE_WRITE_PROBE_TIMEOUT_MS = 180_000;
+export function nativeWriteProbeResult(result, readBackOk) {
+  if (readBackOk) return { viaChain: false, code: 0, text: `WRITE_OK${result.code === 0 ? '' : ` exit=${result.code}`}` };
+  return { viaChain: probeViaChain(result.text, 'codex'), code: 1, text: `書き込み確認失敗 ${result.text || ''}` };
+}
 export async function runNativeWriteProbe({ home, timeoutMs }) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-codex-write-'));
   const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home, CODEX_DO_CHEAP_FIRST: '0' }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e, stdout, stderr) => {
@@ -208,7 +212,7 @@ export async function runNativeWriteProbe({ home, timeoutMs }) {
     const result = await run(process.execPath, nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }));
     let ok = false;
     try { ok = fs.readFileSync(path.join(cwd, 'WRITE_OK.txt'), 'utf8').trim() === 'WRITE_OK'; } catch {}
-    return { viaChain: probeViaChain(result.text, 'codex'), code: result.code === 0 && ok ? 0 : 1, text: ok ? 'WRITE_OK' : `書き込み確認失敗 ${result.text || ''}` };
+    return nativeWriteProbeResult(result, ok);
   } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
 }
 export function runProbe(provider, { home, timeoutMs, dryRun = false, execFileImpl = execFile } = {}) {

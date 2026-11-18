@@ -1,0 +1,24 @@
+{
+  "mode": "parallel",
+  "decider": {
+    "provider": "groq",
+    "model": "openai/gpt-oss-120b",
+    "confidenceThreshold": 0.9
+  },
+  "sonnet": {
+    "provider": "claude",
+    "model": "anthropic/claude-sonnet-5.5"
+  },
+  "comparison": {
+    "enabled": true,
+    "strategy": "decider_first",
+    "logPath": "outputs/X-0081/comparison-log.jsonl",
+    "discrepancyReportPath": "outputs/X-0081/discrepancies.jsonl"
+  },
+  "inquiryClassification": {
+    "dimensions": ["lead_qualified", "urgency", "type"]
+  },
+  "boothTypeClassification": {
+    "dimensions": ["booth_type", "custom_features", "priority"]
+  }
+}

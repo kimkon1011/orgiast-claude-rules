@@ -35,6 +35,7 @@ export function atomicJson(file, value) {
   finally { try { fs.unlinkSync(tmp); } catch {} }
 }
 const MAX_HISTORY_RESET_MS = 7 * 86400_000;
+export const WSL_STATUS_TIMEOUT_MS = 20_000;
 const time = v => typeof v === 'number' ? v : Date.parse(v);
 export const freshProbe = (v, now = Date.now()) => Number.isFinite(time(v)) && now - time(v) >= 0 && now - time(v) < 30 * 60_000;
 // Migrate successful probes written before lastProbeOkAt was introduced.
@@ -217,6 +218,11 @@ export function runProbe(provider, { home, timeoutMs, dryRun = false, execFileIm
     : [path.join(repo, 'tools/llm-ask.mjs'), '--provider', provider, 'Reply with exactly: PONG', '--max', '64', '--no-fallback'];
   return new Promise(resolve => execFileImpl(process.execPath, args, { cwd: repo, env: { ...process.env, ORGIAST_HOME: home, CODEX_DO_CHEAP_FIRST: '0' }, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 256 * 1024, windowsHide: true }, (e, stdout, stderr) => resolve({ code: e ? e.code || 1 : 0, text: redactAll(`${stdout}\n${stderr}`) })));
 }
+export function checkWslStatus({ timeoutMs = WSL_STATUS_TIMEOUT_MS, execFileImpl = execFile } = {}) {
+  return new Promise(resolve => execFileImpl('wsl', ['--status'], { timeout: timeoutMs, killSignal: 'SIGKILL', windowsHide: true, maxBuffer: 64 * 1024 }, e => {
+    resolve({ responsive: !(e?.killed || e?.signal || e?.code === 'ETIMEDOUT'), timedOut: Boolean(e?.killed || e?.signal || e?.code === 'ETIMEDOUT') });
+  }));
+}
 export function notificationText(item, home) {
   if (item.reason === 'keyserve_unenrolled') {
     const hostname = os.hostname(), pc = validKeyservePcId(hostname) ? hostname : 'PC名要指定', user = os.userInfo().username;
@@ -269,7 +275,7 @@ export function shouldSkipLiveProbe(state = {}, now = Date.now()) {
   const cooldownMs = reason === 'quota_wait' ? 6 * 60 * 60 * 1000 : 60 * 60 * 1000;
   return Number.isFinite(last) && last > 0 && now - last < cooldownMs;
 }
-export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe, nativeTimeoutMs = NATIVE_WRITE_PROBE_TIMEOUT_MS, spawnImpl = spawnSync, providers = PROVIDERS, probeRetries = 1 } = {}) {
+export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, wslStatusCheck = checkWslStatus, nativeWriteProbe = runNativeWriteProbe, nativeTimeoutMs = NATIVE_WRITE_PROBE_TIMEOUT_MS, spawnImpl = spawnSync, providers = PROVIDERS, probeRetries = 1 } = {}) {
   const started = Date.now(), dir = path.join(home, '.claude');
   const health = laneDoctorQuick({ home, now, save: false, platform, spawnImpl });
   const previous = readJson(path.join(dir, 'lane-health.json'));
@@ -342,6 +348,13 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       if (result.nativeRepair && health.lanes[p].reason === 'probe_failed') {
         if (result.timedOut) health.lanes[p].reason = 'probe_failed:timeout';
         else if (/blocked by read-only sandbox|sandbox:\s*read-only|Read-only file system|EROFS/i.test(text) || /spawn .*ENOENT|codex.*not found|is not recognized/i.test(text)) Object.assign(health.lanes[p], { reason: 'dead:physical_operation', tried: 'Windows ネイティブ(danger-full-access)でファイル作成・read-back', userFix: '管理者 PowerShell で wsl.exe --install --no-distribution を実行して Windows を再起動する。' });
+      }
+      if (p === 'codex' && platform === 'win32' && !result.nativeRepair && health.lanes[p].reason === 'probe_failed') {
+        const wsl = await wslStatusCheck({ timeoutMs: WSL_STATUS_TIMEOUT_MS });
+        if (wsl.timedOut || !wsl.responsive) {
+          const message = `WSL が ${Math.ceil(WSL_STATUS_TIMEOUT_MS / 1000)} 秒間無応答です。PC 再起動または WslService 再起動が必要です。`;
+          Object.assign(health.lanes[p], { reason: 'dead:physical_operation', error: message, probeEvidence: message, tried: 'wsl --status で WSL サービスの生存確認', userFix: 'PC を再起動するか、管理者権限で WslService を再起動する。' });
+        }
       }
       health.lanes[p].probeReason = health.lanes[p].reason;
       if (deferred && cooldown[p]?.until) health.lanes[p].until = cooldown[p].until;

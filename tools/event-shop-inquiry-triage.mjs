@@ -17,6 +17,7 @@ const time = value => new Date(value).getTime();
  */
 export async function checkGmailDrafts(customerEmail, { fetchImpl = gwsFetch, getToken = mintDwdToken } = {}) {
   const accounts = ['seisaku-team@orgiast.jp', 'kim@orgiast.jp'];
+  let lastError = null;
   for (const account of accounts) {
     try {
       const token = await getToken({ user: account, scope: GMAIL_READONLY_SCOPE, fetchImpl });
@@ -29,9 +30,12 @@ export async function checkGmailDrafts(customerEmail, { fetchImpl = gwsFetch, ge
       if (Array.isArray(body.drafts) && body.drafts.length > 0) {
         return { found: true, account, draftId: body.drafts[0].id };
       }
-    } catch {
-      // エラーなら次のアカウントへ、または結果なしで継続
+    } catch (err) {
+      lastError = { account, reason: err.message || String(err) };
     }
+  }
+  if (lastError) {
+    return { found: false, error: `${lastError.account}: ${lastError.reason}` };
   }
   return { found: false };
 }
@@ -141,10 +145,10 @@ export function renderMarkdown(leads, duplicateCount, now) {
 export async function main({ env = process.env, args = process.argv.slice(2), now = new Date(), fetchImpl = globalThis.fetch, log = console.log, deps = {} } = {}) {
   const credentials = await loadCredentials(env);
   if (!credentials.url || !credentials.key) { log(`イベント百貨店問合せ: 未確認（認証情報なし。試したパス: ${credentials.path}）`); return 0; }
-  // main() が直接呼ばれたときは Gmail 下書き照会を有効にする（テストは deps.gmailDraftCheck を注入）
+  // main() が直接呼ばれたときは Gmail 下書き照会を有効にする（既定の gwsFetch を使用）
   const gmailDraftCheck = deps.gmailDraftCheck ?? (async (email) => {
     try {
-      return await checkGmailDrafts(email, { fetchImpl });
+      return await checkGmailDrafts(email);
     } catch { return { found: false, error: 'error' }; }
   });
   try {

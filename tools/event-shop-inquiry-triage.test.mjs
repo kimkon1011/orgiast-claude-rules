@@ -231,11 +231,34 @@ test('checkGmailDrafts: API失敗は未確認として続行', async () => {
   assert.deepEqual(result, { found: true, account: 'kim@orgiast.jp', draftId: 'r-recovered' });
   assert.equal(callIndex, 2); // 両方試行
 });
-test('checkGmailDrafts: 全API失敗でもエラーを投げず未確認を返す', async () => {
+test('checkGmailDrafts: 全API失敗でエラーを返す', async () => {
   const getToken = async ({ user, scope }) => { throw new Error('token error'); };
   const fetchImpl = async () => { throw new Error('network error'); };
   const result = await checkGmailDrafts('fail@example.com', { fetchImpl, getToken });
-  assert.deepEqual(result, { found: false }); // 両方失敗 → 結果なし
+  assert.deepEqual(result, { found: false, error: 'kim@orgiast.jp: token error' });
+});
+test('checkGmailDrafts: 両アカウントHTTP 403でエラーを返す', async () => {
+  let callIndex = 0;
+  const getToken = async ({ user, scope }) => 'mock-token';
+  const fetchImpl = async (url, options) => {
+    callIndex++;
+    return { ok: false, status: 403 };
+  };
+  const result = await checkGmailDrafts('forbidden@example.com', { fetchImpl, getToken });
+  assert.deepEqual(result, { found: false, error: 'kim@orgiast.jp: HTTP 403' });
+  assert.equal(callIndex, 2); // 両方試行
+});
+test('checkGmailDrafts: 1アカウント失敗・他は下書きなしでエラーを返す', async () => {
+  let callIndex = 0;
+  const getToken = async ({ user, scope }) => 'mock-token';
+  const fetchImpl = async (url, options) => {
+    callIndex++;
+    if (callIndex <= 1) return { ok: false, status: 403 }; // seisaku-team: 失敗
+    return { ok: true, json: async () => ({ drafts: [] }) }; // kim: 下書きなし
+  };
+  const result = await checkGmailDrafts('half-fail@example.com', { fetchImpl, getToken });
+  assert.deepEqual(result, { found: false, error: 'seisaku-team@orgiast.jp: HTTP 403' });
+  assert.equal(callIndex, 2); // 両方試行
 });
 test('classifyLead: deps.gmailDraftCheck でGmail下書きあり', async () => {
   const gmailDraftCheck = async (email) => {

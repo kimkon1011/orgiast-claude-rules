@@ -1,0 +1,920 @@
+{
+  "site": "rebooth",
+  "mode": "apply",
+  "at": "2026-11-18T05:14:00.529Z",
+  "status": "deployed and verified",
+  "uploaded": [],
+  "candidates": [
+    {
+      "root": "/web/rebooth.co.jp",
+      "matches": [],
+      "checks": [
+        {
+          "path": "/wp-content/plugins/contact-form-7/includes/css/styles.css",
+          "ftpSize": null,
+          "httpSize": 2979,
+          "httpSha256": "a3b9f5df6bf638a4cb583480bed6e18a84ad7141cc3d75b81094f91dd7b82f32",
+          "match": false
+        },
+        {
+          "path": "/wp-content/themes/rebooth/style.css",
+          "ftpSize": null,
+          "httpSize": 161194,
+          "httpSha256": "1ba31197c079d5b28d471a134b98f3ac9eedab5e733f762edb972f480fed0d3e",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/06/favicon-450x450.png",
+          "ftpSize": null,
+          "httpSize": 15361,
+          "httpSha256": "2c13e71d8d9b92a28155760ef4d656090774ec902d43be8ebba46bcd5550fd73",
+          "match": false
+        },
+        {
+          "path": "/wp-content/themes/rebooth/assets/images/booth.svg",
+          "ftpSize": null,
+          "httpSize": 265801,
+          "httpSha256": "968eca1d55e361d53fcfb571edd7b3d16329208098625125651825613b73ceec",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/09/AWARD_Osaka.png",
+          "ftpSize": null,
+          "httpSize": 897998,
+          "httpSha256": "b7309e9711ab37c524a94855ba83c19bae19c649dcc49b9b3343813a9ec2a663",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/09/AWARD_SDGs.png",
+          "ftpSize": null,
+          "httpSize": 754678,
+          "httpSha256": "9cc41a1db2a16d82b635c77ff2835543e617822cac50b0268e099bbb071ae063",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/09/AWARD_Yemen.png",
+          "ftpSize": null,
+          "httpSize": 1072480,
+          "httpSha256": "8429c766f75690cd1b6fc5179af6b4274914ac2472b5a9bfa482032d1fe56e3a",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/10/green-energy-2026-1-1-960x795.jpg",
+          "ftpSize": null,
+          "httpSize": 170694,
+          "httpSha256": "8443551138a7cab71050f9196fea4f457de7091bf03bda2ad319a38dc223d120",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/08/w2-4-960x521.jpg",
+          "ftpSize": null,
+          "httpSize": 86086,
+          "httpSha256": "ffe779e8ffad132a1565e7afcb4094e5f478502ee7194459a272914d9c2b3296",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/08/20260623_094156-960x501.jpg",
+          "ftpSize": null,
+          "httpSize": 109260,
+          "httpSha256": "361fdffde870b12aebc8ace7c4d035862a5b856a60fcbc3001b8a7fd2228f732",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/08/IMG_5271-960x720.jpg",
+          "ftpSize": null,
+          "httpSize": 129930,
+          "httpSha256": "a846fb3a05b0ef6617c04fae7e058bb3f1450e6acd13786577bd7f61370f5d6b",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/08/IMG_9271-960x512.jpg",
+          "ftpSize": null,
+          "httpSize": 105202,
+          "httpSha256": "12f586c097ef312f4b6484d1f1646216abc45165fd1e06e772d111a9c146d31e",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/06/header_logo_b.svg",
+          "ftpSize": null,
+          "httpSize": 3357,
+          "httpSha256": "26c1b628986cf1a79ea6c138e10c7eeba3c903c6ec3de51af45e24d386bfbb87",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/06/logo-3.png",
+          "ftpSize": null,
+          "httpSize": 6592,
+          "httpSha256": "092a4b9c4f24c1afd3382bccad6d69cb039f6c13bc79ab704abf0fe503c72e0f",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/06/ozie_logo.svg",
+          "ftpSize": null,
+          "httpSize": 2560,
+          "httpSha256": "5c6c9c706945826ce770df6fbe0c606e2dda9e215ca08644e75bacb42a1d40b3",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/05/fox.svg",
+          "ftpSize": null,
+          "httpSize": 6946,
+          "httpSha256": "2c755a744af5beebc16bfeff0e9604243aa6b01951b719fca607f3a2d7c6017a",
+          "match": false
+        }
+      ]
+    },
+    {
+      "root": "/web",
+      "matches": [],
+      "checks": [
+        {
+          "path": "/wp-content/plugins/contact-form-7/includes/css/styles.css",
+          "ftpSize": null,
+          "httpSize": 2979,
+          "httpSha256": "a3b9f5df6bf638a4cb583480bed6e18a84ad7141cc3d75b81094f91dd7b82f32",
+          "match": false
+        },
+        {
+          "path": "/wp-content/themes/rebooth/style.css",
+          "ftpSize": null,
+          "httpSize": 161194,
+          "httpSha256": "1ba31197c079d5b28d471a134b98f3ac9eedab5e733f762edb972f480fed0d3e",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/06/favicon-450x450.png",
+          "ftpSize": null,
+          "httpSize": 15361,
+          "httpSha256": "2c13e71d8d9b92a28155760ef4d656090774ec902d43be8ebba46bcd5550fd73",
+          "match": false
+        },
+        {
+          "path": "/wp-content/themes/rebooth/assets/images/booth.svg",
+          "ftpSize": null,
+          "httpSize": 265801,
+          "httpSha256": "968eca1d55e361d53fcfb571edd7b3d16329208098625125651825613b73ceec",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/09/AWARD_Osaka.png",
+          "ftpSize": null,
+          "httpSize": 897998,
+          "httpSha256": "b7309e9711ab37c524a94855ba83c19bae19c649dcc49b9b3343813a9ec2a663",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/09/AWARD_SDGs.png",
+          "ftpSize": null,
+          "httpSize": 754678,
+          "httpSha256": "9cc41a1db2a16d82b635c77ff2835543e617822cac50b0268e099bbb071ae063",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/09/AWARD_Yemen.png",
+          "ftpSize": null,
+          "httpSize": 1072480,
+          "httpSha256": "8429c766f75690cd1b6fc5179af6b4274914ac2472b5a9bfa482032d1fe56e3a",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/10/green-energy-2026-1-1-960x795.jpg",
+          "ftpSize": null,
+          "httpSize": 170694,
+          "httpSha256": "8443551138a7cab71050f9196fea4f457de7091bf03bda2ad319a38dc223d120",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/08/w2-4-960x521.jpg",
+          "ftpSize": null,
+          "httpSize": 86086,
+          "httpSha256": "ffe779e8ffad132a1565e7afcb4094e5f478502ee7194459a272914d9c2b3296",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/08/20260623_094156-960x501.jpg",
+          "ftpSize": null,
+          "httpSize": 109260,
+          "httpSha256": "361fdffde870b12aebc8ace7c4d035862a5b856a60fcbc3001b8a7fd2228f732",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/08/IMG_5271-960x720.jpg",
+          "ftpSize": null,
+          "httpSize": 129930,
+          "httpSha256": "a846fb3a05b0ef6617c04fae7e058bb3f1450e6acd13786577bd7f61370f5d6b",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/08/IMG_9271-960x512.jpg",
+          "ftpSize": null,
+          "httpSize": 105202,
+          "httpSha256": "12f586c097ef312f4b6484d1f1646216abc45165fd1e06e772d111a9c146d31e",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/06/header_logo_b.svg",
+          "ftpSize": null,
+          "httpSize": 3357,
+          "httpSha256": "26c1b628986cf1a79ea6c138e10c7eeba3c903c6ec3de51af45e24d386bfbb87",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/06/logo-3.png",
+          "ftpSize": null,
+          "httpSize": 6592,
+          "httpSha256": "092a4b9c4f24c1afd3382bccad6d69cb039f6c13bc79ab704abf0fe503c72e0f",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/06/ozie_logo.svg",
+          "ftpSize": null,
+          "httpSize": 2560,
+          "httpSha256": "5c6c9c706945826ce770df6fbe0c606e2dda9e215ca08644e75bacb42a1d40b3",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/05/fox.svg",
+          "ftpSize": null,
+          "httpSize": 6946,
+          "httpSha256": "2c755a744af5beebc16bfeff0e9604243aa6b01951b719fca607f3a2d7c6017a",
+          "match": false
+        }
+      ]
+    },
+    {
+      "root": "/web/www.rebooth.co.jp",
+      "matches": [],
+      "checks": [
+        {
+          "path": "/wp-content/plugins/contact-form-7/includes/css/styles.css",
+          "ftpSize": null,
+          "httpSize": 2979,
+          "httpSha256": "a3b9f5df6bf638a4cb583480bed6e18a84ad7141cc3d75b81094f91dd7b82f32",
+          "match": false
+        },
+        {
+          "path": "/wp-content/themes/rebooth/style.css",
+          "ftpSize": null,
+          "httpSize": 161194,
+          "httpSha256": "1ba31197c079d5b28d471a134b98f3ac9eedab5e733f762edb972f480fed0d3e",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/06/favicon-450x450.png",
+          "ftpSize": null,
+          "httpSize": 15361,
+          "httpSha256": "2c13e71d8d9b92a28155760ef4d656090774ec902d43be8ebba46bcd5550fd73",
+          "match": false
+        },
+        {
+          "path": "/wp-content/themes/rebooth/assets/images/booth.svg",
+          "ftpSize": null,
+          "httpSize": 265801,
+          "httpSha256": "968eca1d55e361d53fcfb571edd7b3d16329208098625125651825613b73ceec",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/09/AWARD_Osaka.png",
+          "ftpSize": null,
+          "httpSize": 897998,
+          "httpSha256": "b7309e9711ab37c524a94855ba83c19bae19c649dcc49b9b3343813a9ec2a663",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/09/AWARD_SDGs.png",
+          "ftpSize": null,
+          "httpSize": 754678,
+          "httpSha256": "9cc41a1db2a16d82b635c77ff2835543e617822cac50b0268e099bbb071ae063",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/09/AWARD_Yemen.png",
+          "ftpSize": null,
+          "httpSize": 1072480,
+          "httpSha256": "8429c766f75690cd1b6fc5179af6b4274914ac2472b5a9bfa482032d1fe56e3a",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/10/green-energy-2026-1-1-960x795.jpg",
+          "ftpSize": null,
+          "httpSize": 170694,
+          "httpSha256": "8443551138a7cab71050f9196fea4f457de7091bf03bda2ad319a38dc223d120",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/08/w2-4-960x521.jpg",
+          "ftpSize": null,
+          "httpSize": 86086,
+          "httpSha256": "ffe779e8ffad132a1565e7afcb4094e5f478502ee7194459a272914d9c2b3296",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/08/20260623_094156-960x501.jpg",
+          "ftpSize": null,
+          "httpSize": 109260,
+          "httpSha256": "361fdffde870b12aebc8ace7c4d035862a5b856a60fcbc3001b8a7fd2228f732",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/08/IMG_5271-960x720.jpg",
+          "ftpSize": null,
+          "httpSize": 129930,
+          "httpSha256": "a846fb3a05b0ef6617c04fae7e058bb3f1450e6acd13786577bd7f61370f5d6b",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/08/IMG_9271-960x512.jpg",
+          "ftpSize": null,
+          "httpSize": 105202,
+          "httpSha256": "12f586c097ef312f4b6484d1f1646216abc45165fd1e06e772d111a9c146d31e",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/06/header_logo_b.svg",
+          "ftpSize": null,
+          "httpSize": 3357,
+          "httpSha256": "26c1b628986cf1a79ea6c138e10c7eeba3c903c6ec3de51af45e24d386bfbb87",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/06/logo-3.png",
+          "ftpSize": null,
+          "httpSize": 6592,
+          "httpSha256": "092a4b9c4f24c1afd3382bccad6d69cb039f6c13bc79ab704abf0fe503c72e0f",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/06/ozie_logo.svg",
+          "ftpSize": null,
+          "httpSize": 2560,
+          "httpSha256": "5c6c9c706945826ce770df6fbe0c606e2dda9e215ca08644e75bacb42a1d40b3",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/05/fox.svg",
+          "ftpSize": null,
+          "httpSize": 6946,
+          "httpSha256": "2c755a744af5beebc16bfeff0e9604243aa6b01951b719fca607f3a2d7c6017a",
+          "match": false
+        }
+      ]
+    },
+    {
+      "root": "/public_html",
+      "matches": [],
+      "checks": [
+        {
+          "path": "/wp-content/plugins/contact-form-7/includes/css/styles.css",
+          "ftpSize": null,
+          "httpSize": 2979,
+          "httpSha256": "a3b9f5df6bf638a4cb583480bed6e18a84ad7141cc3d75b81094f91dd7b82f32",
+          "match": false
+        },
+        {
+          "path": "/wp-content/themes/rebooth/style.css",
+          "ftpSize": null,
+          "httpSize": 161194,
+          "httpSha256": "1ba31197c079d5b28d471a134b98f3ac9eedab5e733f762edb972f480fed0d3e",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/06/favicon-450x450.png",
+          "ftpSize": null,
+          "httpSize": 15361,
+          "httpSha256": "2c13e71d8d9b92a28155760ef4d656090774ec902d43be8ebba46bcd5550fd73",
+          "match": false
+        },
+        {
+          "path": "/wp-content/themes/rebooth/assets/images/booth.svg",
+          "ftpSize": null,
+          "httpSize": 265801,
+          "httpSha256": "968eca1d55e361d53fcfb571edd7b3d16329208098625125651825613b73ceec",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/09/AWARD_Osaka.png",
+          "ftpSize": null,
+          "httpSize": 897998,
+          "httpSha256": "b7309e9711ab37c524a94855ba83c19bae19c649dcc49b9b3343813a9ec2a663",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/09/AWARD_SDGs.png",
+          "ftpSize": null,
+          "httpSize": 754678,
+          "httpSha256": "9cc41a1db2a16d82b635c77ff2835543e617822cac50b0268e099bbb071ae063",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/09/AWARD_Yemen.png",
+          "ftpSize": null,
+          "httpSize": 1072480,
+          "httpSha256": "8429c766f75690cd1b6fc5179af6b4274914ac2472b5a9bfa482032d1fe56e3a",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/10/green-energy-2026-1-1-960x795.jpg",
+          "ftpSize": null,
+          "httpSize": 170694,
+          "httpSha256": "8443551138a7cab71050f9196fea4f457de7091bf03bda2ad319a38dc223d120",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/08/w2-4-960x521.jpg",
+          "ftpSize": null,
+          "httpSize": 86086,
+          "httpSha256": "ffe779e8ffad132a1565e7afcb4094e5f478502ee7194459a272914d9c2b3296",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/08/20260623_094156-960x501.jpg",
+          "ftpSize": null,
+          "httpSize": 109260,
+          "httpSha256": "361fdffde870b12aebc8ace7c4d035862a5b856a60fcbc3001b8a7fd2228f732",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/08/IMG_5271-960x720.jpg",
+          "ftpSize": null,
+          "httpSize": 129930,
+          "httpSha256": "a846fb3a05b0ef6617c04fae7e058bb3f1450e6acd13786577bd7f61370f5d6b",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/08/IMG_9271-960x512.jpg",
+          "ftpSize": null,
+          "httpSize": 105202,
+          "httpSha256": "12f586c097ef312f4b6484d1f1646216abc45165fd1e06e772d111a9c146d31e",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/06/header_logo_b.svg",
+          "ftpSize": null,
+          "httpSize": 3357,
+          "httpSha256": "26c1b628986cf1a79ea6c138e10c7eeba3c903c6ec3de51af45e24d386bfbb87",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/06/logo-3.png",
+          "ftpSize": null,
+          "httpSize": 6592,
+          "httpSha256": "092a4b9c4f24c1afd3382bccad6d69cb039f6c13bc79ab704abf0fe503c72e0f",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/06/ozie_logo.svg",
+          "ftpSize": null,
+          "httpSize": 2560,
+          "httpSha256": "5c6c9c706945826ce770df6fbe0c606e2dda9e215ca08644e75bacb42a1d40b3",
+          "match": false
+        },
+        {
+          "path": "/wp-content/uploads/2026/05/fox.svg",
+          "ftpSize": null,
+          "httpSize": 6946,
+          "httpSha256": "2c755a744af5beebc16bfeff0e9604243aa6b01951b719fca607f3a2d7c6017a",
+          "match": false
+        }
+      ]
+    },
+    {
+      "root": "/",
+      "matches": [
+        "/wp-content/plugins/contact-form-7/includes/css/styles.css",
+        "/wp-content/themes/rebooth/style.css"
+      ],
+      "checks": [
+        {
+          "path": "/wp-content/plugins/contact-form-7/includes/css/styles.css",
+          "ftpSize": 2979,
+          "httpSize": 2979,
+          "httpSha256": "a3b9f5df6bf638a4cb583480bed6e18a84ad7141cc3d75b81094f91dd7b82f32",
+          "match": true,
+          "ftpSha256": "a3b9f5df6bf638a4cb583480bed6e18a84ad7141cc3d75b81094f91dd7b82f32"
+        },
+        {
+          "path": "/wp-content/themes/rebooth/style.css",
+          "ftpSize": 161194,
+          "httpSize": 161194,
+          "httpSha256": "1ba31197c079d5b28d471a134b98f3ac9eedab5e733f762edb972f480fed0d3e",
+          "match": true,
+          "ftpSha256": "1ba31197c079d5b28d471a134b98f3ac9eedab5e733f762edb972f480fed0d3e"
+        }
+      ]
+    }
+  ],
+  "docroot": "/",
+  "anomalous": [
+    {
+      "dir": "/web/orgiast.jp/en/en/expo-apply/wp",
+      "entries": []
+    },
+    {
+      "dir": "/web/orgiast.jp/en/en/expo-apply",
+      "entries": [
+        {
+          "name": "wp",
+          "size": 0,
+          "directory": true
+        }
+      ]
+    },
+    {
+      "dir": "/web/orgiast.jp/en/en",
+      "entries": [
+        {
+          "name": "expo-apply",
+          "size": 0,
+          "directory": true
+        }
+      ]
+    }
+  ],
+  "expoPresentBefore": false,
+  "protectedBefore": [],
+  "expoHttpBefore": 404,
+  "offset": 100,
+  "limit": 50,
+  "plan": [
+    {
+      "file": "en/exhibition/1592/index.html",
+      "size": 63088,
+      "remoteSize": 63088,
+      "sha256": "ad5519e7758d29a6b23c8b123ca4ede42bfaf2f28425e7bcae775a1aedc47287",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/exhibition/1603/index.html",
+      "size": 62914,
+      "remoteSize": 62914,
+      "sha256": "dfa99631febfb9b9d53edbe374e78b94ee43a5bec60507804c796ca1da1020b9",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/exhibition/1606/index.html",
+      "size": 59664,
+      "remoteSize": 59664,
+      "sha256": "7f9ab1931a0d97a60c7e8a8e004eed22adb7cb20d5766c47d66d3d95a1900e82",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/exhibition/1609/index.html",
+      "size": 60484,
+      "remoteSize": 60484,
+      "sha256": "4f67006a7e204dd700504bd60ac1cd19c5ca1f4c7d65157e0c0eecf3d930ae7b",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/exhibition/1612/index.html",
+      "size": 62009,
+      "remoteSize": 62009,
+      "sha256": "5f0634acbfe710734a42fb441735d3b223ee7385f3741237bb30a4649cb4583b",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/exhibition/1615/index.html",
+      "size": 61735,
+      "remoteSize": 61735,
+      "sha256": "d51b5f939a71a784e89326bd1c2cfb0a2d55e797f6c74fb511efabee50660ef8",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/exhibition/1618/index.html",
+      "size": 60846,
+      "remoteSize": 60846,
+      "sha256": "b6d494c28dab852ca12aaf3376c73de5756fc98104df9272ea6414fdc64369d7",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/exhibition/1621/index.html",
+      "size": 59109,
+      "remoteSize": 59109,
+      "sha256": "98fe376b7b34ceb0dd653611d07df8593e401e521968e5a80908afe79609c2d6",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/exhibition/1626/index.html",
+      "size": 58805,
+      "remoteSize": 58805,
+      "sha256": "35ca63f541be85258f359f82a4103a9ee190bc5780e1782447dac67b5efa0b47",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/exhibition/1629/index.html",
+      "size": 62895,
+      "remoteSize": 62895,
+      "sha256": "04b111215e5256ee830a7a97c227a923597a5c5ceda3bb8087cd12c179eee82a",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/exhibition/1632/index.html",
+      "size": 61909,
+      "remoteSize": 61909,
+      "sha256": "7b29c43e5332483a534a252fe877e8a1d23f6a74020a8cd226d9fd7bf3a23509",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/index.html",
+      "size": 86720,
+      "remoteSize": 86720,
+      "sha256": "6e264085c3159dc409b85968035a18ed90aa03ebb6116a5d60909df12bee4c76",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/industry_type/beauty/index.html",
+      "size": 43000,
+      "remoteSize": 43000,
+      "sha256": "217f67de1c986e28e4606d7857b4aadfff305f8a78b953f54c56029b3a916c47",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/industry_type/eco/index.html",
+      "size": 40091,
+      "remoteSize": 40091,
+      "sha256": "ee258b633235b8935f62d5f1cbc86f98a810db188ca6d32ff77f4b8f4082a87b",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/industry_type/education-affairs-resources/index.html",
+      "size": 40309,
+      "remoteSize": 40309,
+      "sha256": "10254ab11dcfa4b1af8e05ca853b0e8fe530f6103575ce59c5e411ceddf8eae5",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/industry_type/event/index.html",
+      "size": 42959,
+      "remoteSize": 42959,
+      "sha256": "3d4163a93d843b37554b75e45f2605d61ab4d903c431b5f0446c64ae5c3cdde7",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/industry_type/finance/index.html",
+      "size": 40101,
+      "remoteSize": 40101,
+      "sha256": "7beafc48806912c331e3689801837a67d9c6534d49eb6b5047710d5b118f92c8",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/industry_type/food/index.html",
+      "size": 41011,
+      "remoteSize": 41011,
+      "sha256": "1be285044282c53bbbcda819c756e8848c265d84f29a7b94ad639a92da570534",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/industry_type/industry-other/index.html",
+      "size": 41910,
+      "remoteSize": 41910,
+      "sha256": "2e3706ef78814c1530da022942dac8bf86c0cc9cd8aedef75bab46b79bd97343",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/industry_type/it/index.html",
+      "size": 51085,
+      "remoteSize": 51085,
+      "sha256": "9df65ba6c6e8445d1aa732a215c43582a214c262d2c6036d90dfa09862cb9481",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/industry_type/logistics/index.html",
+      "size": 40148,
+      "remoteSize": 40148,
+      "sha256": "a90d8e2c94eeb42650189a1fcbe0cdfbb115c11252c1d4fda42c076547a12368",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/industry_type/medical/index.html",
+      "size": 43959,
+      "remoteSize": 43959,
+      "sha256": "45a4c407a5238e8b09871325c9aa2a3e69f50181e23026388a390a7522ef85ad",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/industry_type/printing/index.html",
+      "size": 40073,
+      "remoteSize": 40073,
+      "sha256": "9d238456cfb8527e24fa57a13b916b0d0b5d3bd1b209e6246e44db181a41e970",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/industry_type/real-estate/index.html",
+      "size": 45099,
+      "remoteSize": 45099,
+      "sha256": "5e709e71c69a7562c87a6a09ddb295d64fb94dc1df0902dcb281d0eb24e26ca5",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/industry_type/science/index.html",
+      "size": 40173,
+      "remoteSize": 40173,
+      "sha256": "efaa1cd3eeb1c662f44b6208797bfaee5af8c1a05db6ba111adabc9a0aa043c1",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/industry_type/semiconductor-machine/index.html",
+      "size": 45895,
+      "remoteSize": 45895,
+      "sha256": "22eb01114161f6ad9971e72b73d5844db4eacfac8bb9a00bafc553488be8873d",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/layout_type/layout-1/index.html",
+      "size": 51125,
+      "remoteSize": 51125,
+      "sha256": "e0d782b6c8b886fef3961d7e5fa33c7a70b5f3bb97bb3f999b0ae967c09b499a",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/layout_type/layout-2/index.html",
+      "size": 51097,
+      "remoteSize": 51097,
+      "sha256": "63acaedfdb611378b5aca5290a78f3311bdc228501bbbc6a3e8728f43ca078a2",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/layout_type/layout-3/index.html",
+      "size": 44792,
+      "remoteSize": 44792,
+      "sha256": "61a5fcee56dd2fdeab86e43014358fefa6f223c3a8e2b25207b58d9dc8a001f9",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/layout_type/layout-4/index.html",
+      "size": 44890,
+      "remoteSize": 44890,
+      "sha256": "2650196ffd7bf22201af164b493648ca0af2582e569abf84119c5ba6457e44a7",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/news/1112/index.html",
+      "size": 74250,
+      "remoteSize": 74250,
+      "sha256": "8c954962ebe64d31db775e0b49da643b0f19469e2964f537a74e92a8c05faf74",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/news/1113/index.html",
+      "size": 63883,
+      "remoteSize": 63883,
+      "sha256": "6d463996fbf4c93f13ca5ccfd0ea189e9117c05458ea609b3beb42f983e090c4",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/news/310/index.html",
+      "size": 42875,
+      "remoteSize": 42875,
+      "sha256": "a397703962e9159ac2718d232fa1ac7e52ffa1fe6c38855cb4a25495912cafe7",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/news/377/index.html",
+      "size": 41277,
+      "remoteSize": 41277,
+      "sha256": "d160500abc576920ec2fd81bc315fbbfa04858af87cf7095a865993099b84f6f",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/news/index.html",
+      "size": 41525,
+      "remoteSize": 41525,
+      "sha256": "57f9e7764b2312f7054cd9033b3dfbb47a986b972d30c8b885abde9b2962aecb",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/price_range/price-100-200/index.html",
+      "size": 51077,
+      "remoteSize": 51077,
+      "sha256": "29823c47e88bc363c5ac9cd178c2d14a55cee21c3c67375920c691791d631a41",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/price_range/price-200-300/index.html",
+      "size": 48798,
+      "remoteSize": 48798,
+      "sha256": "315cf69788867b55305b3a3a8191456c29276ef4eea8323b70a9bb462d367da9",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/price_range/price-300-500/index.html",
+      "size": 43982,
+      "remoteSize": 43982,
+      "sha256": "dead0c13a77549d06bac95923f2a5c9c5b4fdc5a6201ba0e0e523381c8be37b3",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/price_range/price-50-100/index.html",
+      "size": 51156,
+      "remoteSize": 51156,
+      "sha256": "8df75a93cab59b49ce9c4895d77da0938046509a4e7efbd5b7b2d101a76f5e06",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/price_range/price-500/index.html",
+      "size": 41998,
+      "remoteSize": 41998,
+      "sha256": "a3993b9faf17bcb5b7217f7ee2d49b392add44aed504ec0c81e9ca5a784f7c33",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/privacy-policy/index.html",
+      "size": 47154,
+      "remoteSize": 47154,
+      "sha256": "dd5f0216b13854e1dc618997d4dff6e13927a27fed8eb81151037f039c7c4e7f",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/production/1358/index.html",
+      "size": 47732,
+      "remoteSize": 47732,
+      "sha256": "48677284b10fbe963fd5a0a83c573c3c15521eb3a7c9ad02382baeb306f93245",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/reviews/1309/index.html",
+      "size": 54999,
+      "remoteSize": 54999,
+      "sha256": "38f698b2358e3113132121525c8416d6c3fc04e9dfbfed7453e732af52673bbb",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/reviews/index.html",
+      "size": 45500,
+      "remoteSize": 45500,
+      "sha256": "6760614bcf79ce5b593878fb3b6b65762e1672fd2c47f519b7cf9a74a90d587f",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/sitemap.xml",
+      "size": 21549,
+      "remoteSize": 21549,
+      "sha256": "05a901c873461f17971f8d9c64bd11b223e16465fedc2a118a68e97043283c0c",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/thanks/index.html",
+      "size": 46431,
+      "remoteSize": 46431,
+      "sha256": "c74b3316622541b9787069cfecabef73991560425e42fb69057de141ea639fea",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/why-choose-us/design-quality/index.html",
+      "size": 60912,
+      "remoteSize": 60912,
+      "sha256": "7b1f0681d7c2dc2aad36c3d6f0927ce23e9f5f6fc0abb140672d661d9011b42e",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/why-choose-us/index.html",
+      "size": 84737,
+      "remoteSize": 84737,
+      "sha256": "a707496cea660afd2b78288a4aa4f365f02fadd8eb9a0246a9cf398f563d7c70",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/why-choose-us/reduces-costs/index.html",
+      "size": 59977,
+      "remoteSize": 59977,
+      "sha256": "fe71e05b41e526bc017b22db07de64932cef329c2f17215c4c0ad1ddfba2e5d5",
+      "action": "unchanged"
+    },
+    {
+      "file": "en/why-choose-us/reuse/index.html",
+      "size": 60942,
+      "remoteSize": 60942,
+      "sha256": "2461c032cf363c88c8c460e3119b937b7252775eb8405275c98a02ea940f5a7b",
+      "action": "unchanged"
+    }
+  ],
+  "expoPresentAfter": false,
+  "protectedAfter": [],
+  "protectedMatch": true,
+  "anomalousAfter": [
+    {
+      "dir": "/web/orgiast.jp/en/en/expo-apply/wp",
+      "entries": []
+    },
+    {
+      "dir": "/web/orgiast.jp/en/en/expo-apply",
+      "entries": [
+        {
+          "name": "wp",
+          "size": 0,
+          "directory": true
+        }
+      ]
+    },
+    {
+      "dir": "/web/orgiast.jp/en/en",
+      "entries": [
+        {
+          "name": "expo-apply",
+          "size": 0,
+          "directory": true
+        }
+      ]
+    }
+  ],
+  "anomalousMatch": true
+}

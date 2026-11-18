@@ -1,0 +1,33 @@
+{
+  "id": 681,
+  "type": "pages",
+  "link": "https://rebooth.co.jp/news/",
+  "title": "Announcements",
+  "content_html": "<main>\n  <div class=\"l-container-fluid\">\n    <ul class=\"c-breadcrumb\" itemscope itemtype=\"https://schema.org/BreadcrumbList\"><li class=\"c-breadcrumb__item\" itemprop=\"itemListElement\" itemscope itemtype=\"https://schema.org/ListItem\"><a itemprop=\"item\" href=\"https://rebooth.co.jp\"><span itemprop=\"name\" >HOME</span></a><meta itemprop=\"position\" content=\"1\" /></li><li class=\"c-breadcrumb__item\" itemprop=\"itemListElement\" itemscope itemtype=\"https://schema.org/ListItem\"><span itemprop=\"name\" >Announcements</span><meta itemprop=\"position\" content=\"2\" /></li></ul>  </div>\n  <div class=\"l-container-fluid p-archive--news\">\n    <div class=\"l-block-row\">\n      <section class=\"l-block-row__sub\">\n        <div class=\"p-page__title c-title-sec\">\n          <p class=\"c-text--en js-split\">\n            news\n          </p>\n          <h1 class=\"c-text--ja\">\n            Announcements\n          </h1>\n        </div>\n      </section>\n      <section class=\"l-block-row__main\">\n        <section class=\"l-box\">\n                      <div class=\"p-archive__list p-news-list\">\n                                           <div class=\"p-archive-list__item g-list-fade-in\">\n               <a class=\"p-news-card\" href=\"https://rebooth.co.jp/news/1112/\">\n                 <div class=\"p-post__date\"><span class=\"p-post-date__year\">2026</span>\n                   <span class=\"p-post-date__date\">10.13</span>\n                 </div>\n                 <h3 class=\"p-news-card__title\">Re:Booth (Re:ブース) production of the Republic of Yemen pavilion receives Bronze Award at Osaka Kansai Expo</h3>\n               </a>\n             </div>                                           <div class=\"p-archive-list__item g-list-fade-in\">\n               <a class=\"p-news-card\" href=\"https://rebooth.co.jp/news/310/\">\n                 <div class=\"p-post__date\"><span class=\"p-post-date__year\">2026</span>\n                   <span class=\"p-post-date__date\">10.01</span>\n                 </div>\n                 <h3 class=\"p-news-card__title\">Announcement of Website Renewal</h3>\n               </a>\n             </div>                                           <div class=\"p-archive-list__item g-list-fade-in\">\n               <a class=\"p-news-card\" href=\"https://rebooth.co.jp/news/377/\">\n                 <div class=\"p-post__date\"><span class=\"p-post-date__year\">2026</span>\n                   <span class=\"p-post-date__date\">10.01</span>\n                 </div>\n                 <h3 class=\"p-news-card__title\">Added Re:Booth Production Case Studies</h3>\n               </a>\n             </div>                                           <div class=\"p-archive-list__item g-list-fade-in\">\n               <a class=\"p-news-card\" href=\"https://rebooth.co.jp/news/1113/\">\n                 <div class=\"p-post__date\"><span class=\"p-post-date__year\">2026</span>\n                   <span class=\"p-post-date__date\">08.21</span>\n                 </div>\n                 <h3 class=\"p-news-card__title\">Reusable Exhibition Booth [Re:Booth] Certified under the Osaka City New Business Field Development Business Operator Certification Program (Venture Procurement System)</h3>\n               </a>\n             </div>                          </div>\n            <div class=\"p-archive-list__link\">\n                          </div>\n                  </section>\n      </section>\n\n    </div>\n  </div>\n</main>",
+  "modified": "2026-06-08T08:17:10",
+  "_source_hash": "5e6645fd22debeae21bfafaa2d59ce7cad9d749417478a048488545a087810d8",
+  "_translated_at": "2026-11-18T04:38:18.118Z",
+  "_source_language": "ja",
+  "_target_language": "en",
+  "_translation_policy": "site-en-v3-preserve-names-numbers",
+  "_validation": {
+    "ok": true,
+    "japanese": {
+      "raw": 2,
+      "rate": 0.45454545454545453,
+      "unapproved": 0,
+      "samples": []
+    },
+    "extra_numbers": [],
+    "a": [
+      5,
+      5
+    ],
+    "img": [
+      0,
+      0
+    ],
+    "issues": []
+  },
+  "_retry_performed": false
+}

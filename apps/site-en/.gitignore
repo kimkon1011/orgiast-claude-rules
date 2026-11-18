@@ -1,0 +1,13 @@
+node_modules/
+dist/
+source/
+evidence/**/*.html
+evidence/**/*.txt
+evidence/**/*.js
+evidence/**/*.log
+.site-en-manifest.json
+.regen-state.*.json
+evidence/live/
+evidence/deploy-*.json
+evidence/build-state.json
+evidence/pending-*.json

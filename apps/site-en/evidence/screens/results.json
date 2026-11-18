@@ -1,0 +1,152 @@
+[
+  {
+    "site": "rebooth",
+    "width": 1440,
+    "url": "https://rebooth.co.jp/en/",
+    "status": 200,
+    "file": "evidence/screens/rebooth-1440.png",
+    "errors": [],
+    "failedRequests": [
+      {
+        "url": "https://ad.doubleclick.net/ccm/s/collect?auid=745884782.1794979294&gtm=45He6bg2v9263390197za208zd9263390197xecxf1&fmt=3",
+        "error": "net::ERR_BLOCKED_BY_ORB"
+      }
+    ],
+    "lang": "en",
+    "noindex": "noindex,nofollow",
+    "viewport": 1440,
+    "scrollWidth": 1440,
+    "height": 8354,
+    "stylesheets": [
+      null,
+      null,
+      "https://rebooth.co.jp/wp-content/plugins/contact-form-7/includes/css/styles.css?ver=6.1.6",
+      "https://rebooth.co.jp/wp-content/themes/rebooth/style.css?ver=1791955550",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "images": {
+      "total": 37,
+      "loaded": 32,
+      "unloaded": [
+        {
+          "src": "https://rebooth.co.jp/wp-content/uploads/2026/05/soracom.svg",
+          "dataSrc": null,
+          "loading": "lazy"
+        },
+        {
+          "src": "https://rebooth.co.jp/wp-content/uploads/2026/06/logo_faith.png",
+          "dataSrc": null,
+          "loading": "lazy"
+        },
+        {
+          "src": "https://rebooth.co.jp/wp-content/uploads/2026/05/logo-netoff-450x161.avif",
+          "dataSrc": null,
+          "loading": "lazy"
+        },
+        {
+          "src": "https://rebooth.co.jp/wp-content/uploads/2026/06/logo.png",
+          "dataSrc": null,
+          "loading": "lazy"
+        },
+        {
+          "src": "https://rebooth.co.jp/wp-content/uploads/2026/06/menu_logo.png",
+          "dataSrc": null,
+          "loading": "lazy"
+        }
+      ]
+    }
+  },
+  {
+    "site": "rebooth",
+    "width": 390,
+    "url": "https://rebooth.co.jp/en/",
+    "status": 200,
+    "file": "evidence/screens/rebooth-390.png",
+    "errors": [],
+    "failedRequests": [
+      {
+        "url": "https://ad.doubleclick.net/ccm/s/collect?auid=1022266100.1794979309&gtm=45He6bg2v9263390197za208zd9263390197xecxf1&fmt=3",
+        "error": "net::ERR_BLOCKED_BY_ORB"
+      }
+    ],
+    "lang": "en",
+    "noindex": "noindex,nofollow",
+    "viewport": 390,
+    "scrollWidth": 390,
+    "height": 10848,
+    "stylesheets": [
+      null,
+      null,
+      "https://rebooth.co.jp/wp-content/plugins/contact-form-7/includes/css/styles.css?ver=6.1.6",
+      "https://rebooth.co.jp/wp-content/themes/rebooth/style.css?ver=1791955550",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "images": {
+      "total": 37,
+      "loaded": 30,
+      "unloaded": [
+        {
+          "src": "https://rebooth.co.jp/wp-content/uploads/2026/05/logo_gulliver.svg",
+          "dataSrc": null,
+          "loading": "lazy"
+        },
+        {
+          "src": "https://rebooth.co.jp/wp-content/uploads/2026/06/download-1.png",
+          "dataSrc": null,
+          "loading": "lazy"
+        },
+        {
+          "src": "https://rebooth.co.jp/wp-content/uploads/2026/05/soracom.svg",
+          "dataSrc": null,
+          "loading": "lazy"
+        },
+        {
+          "src": "https://rebooth.co.jp/wp-content/uploads/2026/06/logo_faith.png",
+          "dataSrc": null,
+          "loading": "lazy"
+        },
+        {
+          "src": "https://rebooth.co.jp/wp-content/uploads/2026/05/logo-netoff-450x161.avif",
+          "dataSrc": null,
+          "loading": "lazy"
+        },
+        {
+          "src": "https://rebooth.co.jp/wp-content/uploads/2026/06/logo.png",
+          "dataSrc": null,
+          "loading": "lazy"
+        },
+        {
+          "src": "https://rebooth.co.jp/wp-content/uploads/2026/06/menu_logo.png",
+          "dataSrc": null,
+          "loading": "lazy"
+        }
+      ]
+    }
+  }
+]

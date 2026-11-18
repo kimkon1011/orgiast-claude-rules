@@ -1,0 +1,33 @@
+{
+  "id": 7184,
+  "type": "pages",
+  "link": "https://www.orgiast.jp/contactform-complete",
+  "title": "Inquiry – Submission Complete",
+  "content_html": "<div id=\"contentsArea\">\r\n\r\n\r\n  <div id=\"contactForm\" class=\"contactForm\">\r\n    <div class=\"contactForm__title\">\r\n      <h2>Inquiry Form</h2>\r\n    </div> <!-- .contactForm__title -->\r\n\r\n    <div class=\"contactForm__inner\">\r\n\r\n      <!-- contactForm送信完了メッセージ -->\r\n      <div id=\"js-success\" class=\"contactForm__message\">\r\n        <p>\r\n          Thank you for your inquiry.<br>\r\n          We will review the information you have submitted and contact you in return.<br>\r\n          Please note that we cannot respond to solicitations for products or services. Thank you for your understanding.\r\n        </p>\r\n        <p>\r\n          If your matter is urgent, we also accept inquiries by phone.<br>\r\n          Please feel free to contact us at 0120-487-121.<br>\r\n          Business hours: Weekdays 10:00–18:00<br>\r\n        </p>\r\n      </div> <!-- #js-success .contactForm-message -->\r\n\r\n      <!-- contactForm送信完了メッセージ -->\r\n      <div id=\"js-error\" class=\"contactForm__message -error\">\r\n        <p>Submission failed. Please refresh the page and submit again.</p>\r\n      </div> <!-- #js-error .contactForm-message -->\r\n\r\n    </div> <!-- .contactForm__inner .inner -->\r\n  </div> <!-- .contactForm -->\r\n\r\n\r\n  <!-- CSS 記載 -->\r\n  <style>\r\n    .contactForm {\r\n      width: 90%;\r\n      max-width: 640px;\r\n      margin: 30px auto;\r\n      border: 1px solid rgba(52, 163, 194, 0.662745098);\r\n      border-radius: 10px;\r\n    }\r\n\r\n\r\n    @media (min-width: 960px) {\r\n      .contactForm {\r\n        margin: 0 auto 50px;\r\n      }\r\n    }\r\n\r\n    .contactForm__title h2 {\r\n      color: #fff;\r\n      font-size: 26px;\r\n      font-weight: 500;\r\n      text-align: center;\r\n      padding: 15px 0;\r\n      margin: 0;\r\n      background-color: rgba(52, 163, 194, 0.7);\r\n      border-radius: 8px 8px 0 0;\r\n    }\r\n\r\n    @media (min-width: 960px) {\r\n      .contactForm__title h2 {\r\n        font-size: 32px;\r\n        padding: 15px 0;\r\n      }\r\n    }\r\n\r\n    .contactForm__message {\r\n      width: 90%;\r\n      margin: 0 auto;\r\n    }\r\n\r\n    .contactForm__message p {\r\n      padding: 16px 0;\r\n    }\r\n\r\n    .contactForm__message.-error {\r\n      display: none;\r\n      color: red;\r\n    }\r\n  </style>\r\n\r\n\r\n\r\n\r\n</div>",
+  "modified": "2025-04-15T11:50:12",
+  "_source_hash": "31566e2396e5eff706715d216b16a9961275e43d88030059418eb917eadeeb7d",
+  "_translated_at": "2026-11-18T04:38:17.476Z",
+  "_source_language": "ja",
+  "_target_language": "en",
+  "_translation_policy": "site-en-v3-preserve-names-numbers",
+  "_validation": {
+    "ok": true,
+    "japanese": {
+      "raw": 0,
+      "rate": 0,
+      "unapproved": 0,
+      "samples": []
+    },
+    "extra_numbers": [],
+    "a": [
+      0,
+      0
+    ],
+    "img": [
+      0,
+      0
+    ],
+    "issues": []
+  },
+  "_retry_performed": false
+}

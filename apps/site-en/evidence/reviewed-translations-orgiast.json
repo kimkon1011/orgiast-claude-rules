@@ -1,0 +1,112 @@
+[
+  {
+    "ja": "2022年には年間で60,000万点以上の納品実績もあり、多くの企業に人気の記念品メーカーです。",
+    "en": "In 2022, it delivered over 600 million items during the year, making it a popular commemorative gift manufacturer among many companies.",
+    "reason": "Preserve the source quantity exactly: 60,000 × 10,000 = 600,000,000. Do not silently correct the source."
+  },
+  {
+    "ja": "2024年2月に代々木国立競技場で開催された社内運動会には、参加対象となる入社5年目までの新卒・キャリア入社の社員が全国から集まり、およそ1.200名が参加しました。",
+    "en": "At the company sports day held at Yoyogi National Stadium in February 2024, eligible graduate and mid-career hires in their first 5 years of employment gathered from across the country, with approximately 1.200 participants.",
+    "reason": "Preserve the source's ambiguous 1.200 notation verbatim; do not reinterpret it as 1,200."
+  },
+  {
+    "ja": "社員数1.217人に対して年間の利用回数が1,419回となっており、社員同士の交流を深めるための福利厚生制度として従業員から人気を博しています。",
+    "en": "With 1.217 employees, annual usage reached 1,419 times, making this employee benefit popular as a way to deepen interaction among colleagues.",
+    "reason": "Preserve the source's ambiguous 1.217 notation verbatim; do not reinterpret it as 1,217."
+  },
+  {
+    "ja": "懇親会とは、参加者同士が互いをよく知り、親しい関係を築くことを主目的とした集まりを指します。「懇（ねんごろ）」という漢字が示すように、丁寧で深い関係性の構築を意図した場であり、単に同じ空間で食事をするだけの飲み会や食事会とは、設計の意図が異なります。",
+    "en": "A networking event refers to a gathering whose primary purpose is for participants to get to know each other well and build close relationships. As indicated by the kanji pronounced “kon” or “nengoro” (cordial or intimate), it is intended as a setting for courteous and deep relationship building, and its design purpose differs from that of a mere drinking or dining party where people simply share the same space for a meal.",
+    "reason": "Reviewed after explicit provider retries: retain meaning and the required representative name; explain the kanji in English."
+  },
+  {
+    "ja": "社内イベントに込める想いについて、株式会社オージャスト代表の金功勇に聞きました。社員総会・キックオフ・表彰式など、企業の社内イベントを「伝わる場」にするための視点と、映像・演出・運営を一体で設計することの意義を語ります。",
+    "en": "We asked 金功勇 (Representative Director & President) of Orgiast Co., Ltd. about the passion behind internal events. He discusses perspectives for turning corporate internal events such as the employee general meeting, kickoff, and award ceremony into \"communicative venues\", and the significance of designing video, staging, and operation as an integrated whole.",
+    "reason": "Reviewed after explicit provider retries: retain meaning and the required representative name; explain the kanji in English."
+  },
+  {
+    "ja": "社員総会、キックオフ、表彰式——。企業が社員のために催す「社内イベント」は、コスト項目として捉えられがちです。しかし、その場に込められた想いが組織の空気を変え、一人ひとりの仕事への向き合い方に影響を与えることがあります。社内イベントの企画・制作・運営を支援する株式会社オージャスト代表の金功勇に、社内イベントへの考え方と、その場づくりに懸ける想いを聞きました。",
+    "en": "Employee general meetings, kickoffs, award ceremonies—Corporate \"internal events\" held for employees are often regarded as cost items. However, the passion placed into these occasions can alter the organizational atmosphere and affect each individual's approach to work. We spoke with 金功勇 (Representative Director & President) of Orgiast Co., Ltd., who supports the planning, production, and operation of internal events, about his perspective on internal events and the dedication he puts into creating those venues.",
+    "reason": "Reviewed after explicit provider retries: retain meaning and the required representative name; explain the kanji in English."
+  },
+  {
+    "ja": "件名：【全員参加】〇〇年度キックオフ Webミーティングのご案内（●月●日）",
+    "en": "Subject: [All Participants Required] FYXX Kickoff Web Meeting Invitation (● Month ● Day)",
+    "reason": "Source placeholder 〇〇 rendered as XX; no dates, years or names filled in."
+  },
+  {
+    "ja": "下記の日程にて〇〇年度キックオフをオンラインで開催いたします。対面参加・リモート参加どちらも可能なハイブリッド形式です。全員参加をお願いいたします。",
+    "en": "We will hold the FYXX kickoff online on the schedule below. It will be a hybrid format that allows both in‑person and remote participation. All staff are requested to attend.",
+    "reason": "Source placeholder 〇〇 rendered as XX; no dates, years or names filled in."
+  },
+  {
+    "ja": "・参加方法：〇〇ツールにて接続（URLは別途メールにてご案内）",
+    "en": "• Participation method: Connect via the XX tool (URL will be provided in a separate email).",
+    "reason": "Source placeholder 〇〇 rendered as XX; no dates, years or names filled in."
+  },
+  {
+    "ja": "接続に関するご不明点や当日のトラブルは、総務部〇〇（内線：〇〇〇〇）までご連絡ください。当日の録画については、後日社内ポータルにて共有予定です。",
+    "en": "Please contact the General Affairs Department XX (extension: XXXX) for any questions regarding the connection or on‑the‑day issues. The recording of the meeting will be shared on the internal portal at a later date.",
+    "reason": "Source placeholder 〇〇 rendered as XX; no dates, years or names filled in."
+  },
+  {
+    "ja": "「●月●日（〇）正午までに、以下フォームまたは〇〇宛にご回答ください」",
+    "en": "Please respond by noon on ● month ● day (〇) using the form below or to XX.",
+    "reason": "Source placeholder 〇〇 rendered as XX; no dates, years or names filled in."
+  },
+  {
+    "ja": "この度、下記の日程にて〇〇年度 社員総会を開催いたします。今期の業績報告および来期方針の共有を行う重要な場となりますので、全員ご参加ください。",
+    "en": "We will hold the FYXX Employee General Meeting on the dates below. This will be an important occasion for reporting this term's performance and sharing the plan for the next term, so please ensure all employees attend.",
+    "reason": "Source placeholder 〇〇 rendered as XX; no dates, years or names filled in."
+  },
+  {
+    "ja": "出欠の回答は●月●日（〇）までに、下記フォームよりお願いいたします。ご不明な点は総務部〇〇までお気軽にご連絡ください。",
+    "en": "Please submit your attendance response via the form below by ● Month ● Day (●). If you have any questions, feel free to contact the General Affairs Department, XX.",
+    "reason": "Source placeholder 〇〇 rendered as XX; no dates, years or names filled in."
+  },
+  {
+    "ja": "件名：【ご案内】〇〇年度 表彰式の開催について（●月●日）",
+    "en": "Subject: 【Notice】Holding of the FYXX Awards Ceremony (● Month ● Day)",
+    "reason": "Source placeholder 〇〇 rendered as XX; no dates, years or names filled in."
+  },
+  {
+    "ja": "日頃のご尽力に感謝申し上げます。今年度の活躍を称える「〇〇アワード」を下記の日程で開催いたします。受賞者の発表は当日のお楽しみです。全員ご参加ください。",
+    "en": "We appreciate your continued efforts. The “XX Award” recognizing this year's achievements will be held on the date below. The announcement of the winners will be a surprise on the day. Please ensure everyone participates.",
+    "reason": "Source placeholder 〇〇 rendered as XX; no dates, years or names filled in."
+  },
+  {
+    "ja": "・対面参加会場：〇〇会議室（〇〇ビル〇階）",
+    "en": "• In‑person venue: XX conference room (XX Building, Xth floor).",
+    "reason": "Unfilled source placeholders use X/XX in English."
+  },
+  {
+    "ja": "・会場：〇〇ホール（〇〇ビル〇階）",
+    "en": "・Venue: XX Hall (XX Building, floor X)",
+    "reason": "Unfilled source placeholders use X/XX in English."
+  },
+  {
+    "ja": "業績下降期に社内イベントを行うことで、なぜ組織が傷つくのか。社内イベント企画・演出を20年手がけてきた株式会社オージャスト代表の金功勇が、現場で目撃した「逆効果の構造」と、正しい設計の考え方を語ります。",
+    "en": "Why organizations are harmed when internal events are held during a performance decline. 金功勇 (Representative Director & President) of Orgiast Co., Ltd., who has been planning and directing internal events for 20 years, explains the “counterproductive structure” he witnessed on the ground and the correct design approach.",
+    "reason": "Use the required source-attested representative name and role; remove invented romanization."
+  },
+  {
+    "ja": "「社内イベントは、やり方を間違えると、組織のエネルギーを奪います。特に業績が下がっているときほど、その危険性は高まります」——そう静かに、しかし確信を持って語るのは、株式会社オージャスト代表の金功勇で...",
+    "en": "\"Internal events, if done incorrectly, drain an organization’s energy. The risk is especially heightened when performance is declining,\" says, quietly yet confidently, 金功勇 (Representative Director & President) of Orgiast Co., Ltd...",
+    "reason": "Use the required source-attested representative name and role; remove invented romanization."
+  },
+  {
+    "ja": "「社内イベントは、やり方を間違えると、組織のエネルギーを奪います。特に業績が下がっているときほど、その危険性は高まります」——そう静かに、しかし確信を持って語るのは、株式会社オージャスト代表の金功勇です。社員総会・表彰式・キックオフ・周年イベントなど、組織を一つにするためのイベントを20年にわたって企画・演出してきた金代表に、業績下降期における社内イベントの本質的なリスクと、それでも社内イベントが組織に果たしうる役割についてお話を聞きました。",
+    "en": "\"Internal events, if done incorrectly, drain an organization’s energy. The risk is especially heightened when performance is declining,\" says, quietly yet confidently, 金功勇 (Representative Director & President) of Orgiast Co., Ltd. We spoke with the president, who has planned and directed events such as employee general meetings, award ceremonies, kick‑offs, and anniversary events for 20 years, about the fundamental risks of internal events during a performance decline and the role that internal events can still play for an organization.",
+    "reason": "Use the required source-attested representative name and role; remove invented romanization."
+  },
+  {
+    "ja": "社内イベントが終わった後、映像や写真、台本、企画書はどこへ行くのでしょうか。多くの企業では、当日の盛り上がりとともにそれらの素材も「お役御免」となり、どこかのフォルダに眠ったまま日々の業務に埋もれていきます。しかし、社内イベント・クリエイティブ制作を手がける株式会社オージャスト代表の金功勇は、「イベントの素材は、作った",
+    "en": "After an internal event ends, where do the videos, photos, scripts, and project plans go? In many companies, along with the excitement of the day, those materials also become \"retired from service\" and remain buried in some folder, lost in daily operations. However, 金功勇 (Representative Director & President) of Orgiast Co., Ltd., which handles internal event and creative production, says, \"The event materials, once created,",
+    "reason": "Use required name; preserve truncated excerpts without completing missing claims or numbers."
+  },
+  {
+    "ja": "社内イベントが終わった後、映像や写真、台本、企画書はどこへ行くのでしょうか。多くの企業では、当日の盛り上がりとともにそれらの素材も「お役御免」となり、どこかのフォルダに眠ったまま日々の業務に埋もれていきます。しかし、社内イベント・クリエイティブ制作を手がける株式会社オージャスト代表の金功勇は、「イベントの素材は、作った瞬間よりも10年後のほうが価値を持つことがある」と語ります。なぜ過去の素材が経営資産になるのか、そしてその価値を引き出すためにどんな運用が必要なのか——代表にじっくりお話を聞きました。",
+    "en": "After an internal event ends, where do the videos, photos, scripts, and project plans go? In many companies, along with the excitement of the day, those materials also become \"retired from service\" and remain buried in some folder, lost in daily operations. However, 金功勇 (Representative Director & President) of Orgiast Co., Ltd., which handles internal event and creative production, says, \"Event materials can sometimes hold more value 10 years later than at the moment they were created.\" We asked the Representative Director in detail why past materials become management assets and what kind of operation is necessary to draw out that value.",
+    "reason": "Use required name; preserve truncated excerpts without completing missing claims or numbers."
+  }
+]

@@ -1,0 +1,33 @@
+{
+  "id": 717,
+  "type": "pages",
+  "link": "https://rebooth.co.jp/thanks/",
+  "title": "Your inquiry has been sent",
+  "content_html": "<main class=\"p-page\">\n        <div class=\"l-container-fluid\">\n        <ul class=\"c-breadcrumb\" itemscope itemtype=\"https://schema.org/BreadcrumbList\"><li class=\"c-breadcrumb__item\" itemprop=\"itemListElement\" itemscope itemtype=\"https://schema.org/ListItem\"><a itemprop=\"item\" href=\"https://rebooth.co.jp\"><span itemprop=\"name\" >HOME</span></a><meta itemprop=\"position\" content=\"1\" /></li><li class=\"c-breadcrumb__item\" itemprop=\"itemListElement\" itemscope itemtype=\"https://schema.org/ListItem\"><span itemprop=\"name\">Your inquiry has been sent</span><meta itemprop=\"position\" content=\"2\" /></li></ul>      </div>\n      <section class=\"p-page__header\">\n        <div class=\"l-container-fluid\">\n          <div class=\"p-page__title c-title-sec \">\n            <p class=\"c-text--en js-split\">\n              thanks            </p>\n            <h1 class=\"c-text--ja p-page__title--fade\">Your inquiry has been sent</h1>\n          </div>\n        </div>\n                                </section>  <div class=\"wp_block-content\">\n    \n<div class=\"wp-block-group l-box l-box-lg is-layout-constrained wp-block-group-is-layout-constrained\">\n<p class=\"wp-block-paragraph\">Thank you very much for your inquiry.<br>Your submission has been received successfully.</p>\n\n\n\n<p class=\"wp-block-paragraph\">A staff member will review the content and typically respond within 2 to 3 business days.<br>In the unlikely event that you do not receive a reply after several days, please contact us again.</p>\n\n\n\n<p class=\"wp-block-paragraph\">Please note that depending on the nature of your inquiry, it may take some time before we can respond.<br>Also, please check whether the email has been routed to your spam folder.</p>\n</div>\n\n\n\n<div class=\"wp-block-buttons is-layout-flex wp-block-buttons-is-layout-flex\">\n<div class=\"wp-block-button is-style-default has-arrow-prev is-decorated has-arrow-prev\"><a class=\"wp-block-button__link wp-element-button\" href=\"https://rebooth.co.jp/\">Home Page</a></div>\n</div>\n\n\n  </div>\n  </div>\n</main>",
+  "modified": "2026-06-09T02:13:33",
+  "_source_hash": "0a27e6215a7a3ab66623bb3ab3d6319144a314dd958e4be1de7987b41fe45beb",
+  "_translated_at": "2026-11-18T04:38:18.282Z",
+  "_source_language": "ja",
+  "_target_language": "en",
+  "_translation_policy": "site-en-v3-preserve-names-numbers",
+  "_validation": {
+    "ok": true,
+    "japanese": {
+      "raw": 0,
+      "rate": 0,
+      "unapproved": 0,
+      "samples": []
+    },
+    "extra_numbers": [],
+    "a": [
+      2,
+      2
+    ],
+    "img": [
+      0,
+      0
+    ],
+    "issues": []
+  },
+  "_retry_performed": false
+}

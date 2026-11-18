@@ -1,0 +1,28 @@
+{
+  "provider": "deepseek",
+  "retry": false,
+  "at": "2026-11-18T04:37:47.621Z",
+  "input": {
+    "0": "社内イベント・クリエイティブ",
+    "1": "トピックス",
+    "2": "採用情報",
+    "3": "お電話でのお問い合わせ 0120-487-121",
+    "4": "閉じる",
+    "5": "LINEでもお気軽に",
+    "6": "ご相談ください",
+    "7": "インタビュー",
+    "8": "お探しのページは見つかりませんでした。"
+  },
+  "output": {
+    "0": "Internal Events & Creative",
+    "1": "Topics",
+    "2": "Careers",
+    "3": "Phone inquiries: 0120-487-121",
+    "4": "Close",
+    "5": "Feel free to contact us",
+    "6": "via LINE",
+    "7": "Interview",
+    "8": "The page you are looking for could not be found."
+  },
+  "errors": []
+}

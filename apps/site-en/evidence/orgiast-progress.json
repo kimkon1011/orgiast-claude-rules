@@ -1,0 +1,46 @@
+{
+  "started_at": "2026-11-18T05:26:01.274Z",
+  "inventory": 375,
+  "runs": [
+    {
+      "mode": "audit",
+      "offset": 0,
+      "limit": 375,
+      "at": "2026-11-18T05:26:10.561Z"
+    },
+    {
+      "mode": "repair",
+      "offset": 0,
+      "limit": 400,
+      "at": "2026-11-18T05:27:38.097Z"
+    },
+    {
+      "mode": "repair",
+      "offset": 400,
+      "limit": 1000,
+      "at": "2026-11-18T05:29:13.470Z"
+    },
+    {
+      "mode": "repair",
+      "offset": 1400,
+      "limit": 1200,
+      "at": "2026-11-18T05:31:10.076Z"
+    },
+    {
+      "mode": "repair",
+      "offset": 2600,
+      "limit": 1200,
+      "at": "2026-11-18T05:34:08.919Z"
+    },
+    {
+      "mode": "repair",
+      "offset": 3800,
+      "limit": 1200,
+      "at": "2026-11-18T05:36:54.884Z"
+    }
+  ],
+  "excluded": [],
+  "unresolved": 800,
+  "updated_at": "2026-11-18T05:36:54.884Z",
+  "generated": 225
+}

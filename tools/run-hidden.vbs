@@ -24,15 +24,38 @@
 Option Explicit
 
 Dim args, i, inner, exePath, baseName, logDir, logPath, shell, fso, rc, full
-Dim lockedLog, ts, primaryLock, primaryReserved
+Dim lockedLog, ts, primaryLock, primaryReserved, staleRecovered
 
 ' Reserve the primary log before testing it: two simultaneous task names can
 ' otherwise both pass CanAppendTo and race at cmd's redirection open.
-Function ReservePrimary(fs, lockPath)
+Function ReservePrimary(fs, lockPath, ByRef recovered)
+  Dim lockFolder
+  recovered = False
   On Error Resume Next
   Err.Clear
   fs.CreateFolder lockPath
-  ReservePrimary = (Err.Number = 0)
+  If Err.Number = 0 Then
+    ReservePrimary = True
+    On Error Goto 0
+    Exit Function
+  End If
+
+  Err.Clear
+  If fs.FolderExists(lockPath) Then
+    Set lockFolder = fs.GetFolder(lockPath)
+    If Err.Number = 0 Then
+      If DateDiff("s", lockFolder.DateCreated, Now) > 7200 Then
+        Err.Clear
+        fs.DeleteFolder lockPath, True
+        If Err.Number = 0 Then
+          Err.Clear
+          fs.CreateFolder lockPath
+          If Err.Number = 0 Then recovered = True
+        End If
+      End If
+    End If
+  End If
+  ReservePrimary = recovered
   On Error Goto 0
 End Function
 
@@ -87,7 +110,7 @@ If Not fso.FolderExists(logDir) Then
 End If
 logPath = logDir & "\" & baseName & ".log"
 primaryLock = logPath & ".runner-lock"
-primaryReserved = ReservePrimary(fso, primaryLock)
+primaryReserved = ReservePrimary(fso, primaryLock, staleRecovered)
 
 ' Rotate at ~1 MB so the log cannot grow without bound.
 On Error Resume Next
@@ -98,6 +121,16 @@ If primaryReserved And fso.FileExists(logPath) Then
   End If
 End If
 On Error Goto 0
+
+If staleRecovered Then
+  On Error Resume Next
+  Set ts = fso.OpenTextFile(logPath, 8, True)
+  If Err.Number = 0 Then
+    ts.WriteLine "run-hidden: stale primary lock recovered: " & primaryLock
+    ts.Close
+  End If
+  On Error Goto 0
+End If
 
 ' If a leftover child still holds a handle on the log, cmd's ">>" would fail
 ' and the job would never start. Switch to a sibling log and say why in it.

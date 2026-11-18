@@ -15,3 +15,21 @@
 .standalone-timeline{display:grid;grid-template-columns:repeat(4,1fr);gap:32px;align-content:start}.standalone-timeline .time{font-size:24px;padding:28px;border-top:4px solid var(--teal)}.standalone-timeline .time b,.standalone-timeline .time span{display:block;margin-bottom:20px}.compare-columns{display:flex;gap:40px}.compare-columns article{flex:1;min-width:0;padding:32px;background:var(--soft)}.compare-columns .metric{margin:32px 0}.compare-columns p{font-size:24px;line-height:1.7}.stats-grid{flex-wrap:wrap}
 
 .standalone-timeline .time b{font-size:32px}.standalone-timeline .time span{font-size:24px}
+
+/* All former text-only templates now share the right-hand photo panel. */
+.split .standalone-timeline{grid-template-columns:repeat(2,1fr);gap:20px}
+.split .standalone-timeline .time{padding:18px}
+.split .compare-columns{gap:16px}
+.split .compare-columns article{padding:18px}
+.split .compare-columns p{font-size:18px}
+.split .layoutwrap{grid-template-columns:1fr 1fr;gap:24px}
+.split .floor-wrap{height:420px}
+.split .specs{padding-top:0}
+.split .specs .metric strong{font-size:64px}
+.split .spec p{font-size:15px}
+.split .metric-foot{font-size:14px}
+.split .finance{font-size:14px}
+.split .finance th,.split .finance td{padding:7px}
+.split .finance td[rowspan]{font-size:14px}
+.split .formulas{gap:14px}
+.split .formula h3,.split .formula p{font-size:14px}

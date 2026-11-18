@@ -6,20 +6,23 @@ export const root=path.resolve(dir,'..');
 export const out=path.join(dir,'out');
 export const readJSON=p=>JSON.parse(fs.readFileSync(p,'utf8'));
 export const writeJSON=(p,data)=>fs.writeFileSync(p,JSON.stringify(data,null,2)+'\n');
-function imageElement(value){
-  if(!value||typeof value!=='object')return null;
-  if(!Array.isArray(value)&&value.kind==='image')return value;
-  for(const child of Array.isArray(value)?value:Object.values(value)){
-    const found=imageElement(child);if(found)return found;
-  }
-  return null;
+export function imageElements(page){
+  const result=[];
+  const visit=value=>{
+    if(!value||typeof value!=='object')return;
+    if(value.kind==='image')result.push({...value,src:value.src??value.file??value.path});
+    else for(const child of Object.values(value))visit(child);
+  };
+  visit(page.elements);
+  return result;
 }
+const nonempty=value=>typeof value==='string'&&value.trim().length>0;
 export function pageImageSpec(page){
-  if(page.visualBrief)return {kind:'generated',value:page.visualBrief};
-  if(page.directVisual)return {kind:'direct',value:page.directVisual};
-  if(page.fallbackPhoto)return {kind:'fallback',value:page.fallbackPhoto};
-  const element=imageElement(page.elements);
-  const value=element?.src??element?.file??element?.path;
+  if(nonempty(page.visualBrief))return {kind:'generated',value:page.visualBrief};
+  if(nonempty(page.directVisual))return {kind:'direct',value:page.directVisual};
+  if(nonempty(page.fallbackPhoto))return {kind:'fallback',value:page.fallbackPhoto};
+  const element=imageElements(page).find(element=>nonempty(element.src));
+  const value=element?.src;
   if(value)return {kind:'element',value,element};
   return null;
 }
@@ -30,9 +33,7 @@ export function loadPages(){
   for(const page of pages){
     if(!/^[a-z0-9-]+$/.test(page.id)||ids.has(page.id))throw new Error(`Invalid/duplicate page id: ${page.id}`);
     ids.add(page.id);
-    const imageSpec=pageImageSpec(page);
-    const elementImage=imageSpec?.kind==='element'?imageSpec.value:null;
-    for(const file of [...(page.photoSources??[]),page.directVisual,page.fallbackPhoto,page.svg,elementImage].filter(Boolean)){
+    for(const file of [...(page.photoSources??[]),page.directVisual,page.fallbackPhoto,page.svg,...imageElements(page).map(element=>element.src)].filter(Boolean)){
       const resolved=path.resolve(dir,file);
       if(!resolved.startsWith(root+path.sep)||!fs.existsSync(resolved))throw new Error(`Missing/outside project asset: ${file}`);
     }

@@ -25,5 +25,12 @@
   ],
   "emailDomains": [
     "orgiast.jp"
+  ],
+  "beeperInternalChats": [
+    {
+      "chatId": "!BOwKKifdLGec7wJCYH5d:beeper.local",
+      "name": "西田直哉",
+      "email": "nishi@orgiast.jp"
+    }
   ]
 }

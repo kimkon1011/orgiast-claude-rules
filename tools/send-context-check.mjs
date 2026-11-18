@@ -25,6 +25,12 @@ const defaultInternalSendersFile = path.join(path.dirname(fileURLToPath(import.m
 const normalize = value => String(value ?? '').normalize('NFKC').trim().toLocaleLowerCase();
 const addressOf = value => (String(value ?? '').match(/<([^<>\s]+@[^<>\s]+)>/)?.[1] || String(value ?? '').match(/[^\s<>,]+@[^\s<>,]+/)?.[0] || '').toLowerCase();
 
+function isInternalEmail(email, senders) {
+  const address = normalize(addressOf(email) || email);
+  if (!address) return false;
+  return senders.emailAddresses.has(address) || senders.emailDomains.has(address.split('@')[1] || '');
+}
+
 export function loadInternalSenders(file = defaultInternalSendersFile) {
   const config = JSON.parse(fs.readFileSync(file, 'utf8'));
   return {
@@ -32,7 +38,23 @@ export function loadInternalSenders(file = defaultInternalSendersFile) {
     discordUserIds: new Set((config.discordUserIds || []).map(String)),
     emailAddresses: new Set((config.emailAddresses || []).map(normalize)),
     emailDomains: new Set((config.emailDomains || []).map(normalize)),
+    // 社内メンバーの Beeper 1対1（チャットID/表示名→社内メール）。lineDisplayNames には載せない。
+    beeperInternalChats: (config.beeperInternalChats || []).map(row => ({
+      chatId: String(row.chatId || row.chatID || '').trim(),
+      name: normalize(row.name),
+      email: normalize(addressOf(row.email) || row.email || ''),
+    })).filter(row => row.chatId || row.name),
   };
+}
+
+export function matchBeeperInternalChat(raw, senders) {
+  const chats = senders.beeperInternalChats || [];
+  const rawTrim = String(raw ?? '').trim();
+  if (!rawTrim) return null;
+  const rawNorm = normalize(rawTrim);
+  const match = chats.find(row => (row.chatId && row.chatId === rawTrim) || (row.name && row.name === rawNorm));
+  if (!match || !isInternalEmail(match.email, senders)) return null;
+  return match;
 }
 export function classifyMessage(message, channel, config = loadInternalSenders()) {
   if (message.side === 'self') return { ...message, party: 'internal' };
@@ -198,6 +220,10 @@ export async function resolveKimApprovedRecipient(channel, target, {
     return { allowed, resolvedId: address || raw, source: allowed ? 'internal-senders' : null };
   }
   if (channel === 'line' || channel === 'beeper') {
+    const chat = matchBeeperInternalChat(raw, senders);
+    if (chat) {
+      return { allowed: true, resolvedId: chat.chatId || raw, source: 'beeper-internal-chats' };
+    }
     const allowed = senders.lineDisplayNames.has(normalize(raw))
       || senders.discordUserIds.has(raw)
       || senders.emailAddresses.has(addressOf(raw));

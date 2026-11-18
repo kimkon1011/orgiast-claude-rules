@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { analyzeThread, analyzeDraft, addressee, dedupe, scan, notifyText, stripQuoted, isAckOnly, loadStaff, KIM, HOUR } from './external-waiting.mjs';
+import { analyzeThread, analyzeDraft, addressee, dedupe, scan, scanMailbox, notifyText, stripQuoted, isAckOnly, loadStaff, KIM, HOUR } from './external-waiting.mjs';
 import { externalFile, readJsonSafe, addSkip, readSkips, isSkipped } from './lib/external-waiting-state.mjs';
 
 const NOW = Date.parse('2026-11-04T03:00:00Z');

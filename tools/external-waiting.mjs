@@ -124,13 +124,26 @@ async function mapLimit(values, limit, fn) {
   return out;
 }
 
-export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = getDriveToken, staff, now = Date.now(), stats = { answeredElsewhere: 0 } }) {
+export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = getDriveToken, staff, now = Date.now(), stats = { answeredElsewhere: 0 }, sleepImpl = ms => new Promise(r => setTimeout(r, ms)), maxRetries = 4 } = {}) {
   const token = await getToken({ scope: SCOPE, impersonate: mailbox, signal: AbortSignal.timeout(20_000) });
   const get = async (route, { optional = false } = {}) => {
-    const response = await fetchImpl(`${API}${route}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) });
-    if (optional && [404, 410].includes(response.status)) return null;
-    if (!response.ok) throw new Error(`Gmail API ${response.status}: ${(await response.text()).slice(0, 200)}`);
-    return response.json();
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetchImpl(`${API}${route}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) });
+      if (optional && [404, 410].includes(response.status)) return null;
+      if (response.ok) return response.json();
+      const status = response.status; let body, isRetriable;
+      if (status === 429 || (status >= 500 && status <= 504)) isRetriable = true;
+      else if (status === 403) { body = await response.text(); isRetriable = /rateLimitExceeded|userRateLimitExceeded/.test(body); }
+      else isRetriable = false;
+      if (isRetriable && attempt < maxRetries) {
+        const retryAfter = response.headers?.get?.('retry-after');
+        let delay = Math.min(2000 * (1 << attempt), 60000);
+        if (retryAfter) { const s = Number(retryAfter); if (Number.isFinite(s)) delay = Math.min(s * 1000, 60000); else { const p = Date.parse(retryAfter); if (Number.isFinite(p)) delay = Math.min(p - Date.now(), 60000); } }
+        await sleepImpl(delay);
+        continue;
+      }
+      throw new Error(`Gmail API ${status}: ${(body ?? await response.text()).slice(0, 200)}`);
+    }
   };
   const stubs = []; let pageToken = '';
   for (let page = 0; page < MAX_PAGES; page++) {

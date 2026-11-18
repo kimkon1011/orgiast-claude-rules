@@ -6,7 +6,8 @@ test('getScheduledTaskInfo maps a missing task to null', async () => {
   let script = '';
   const result = await getScheduledTaskInfo('missing', { spawnImpl: (_exe, args) => { script = args.at(-1); return { status: 0, stdout: 'null\n', stderr: '' }; } });
   assert.equal(result, null);
-  assert.match(script, /_NotFound_/);
+  assert.match(script, /NoMatchingMSFT_ScheduledTaskFound/);
+  assert.match(script, /CmdletizationQuery_NotFound_TaskName/);
 });
 
 test('getScheduledTaskInfo still throws other PowerShell failures', async () => {

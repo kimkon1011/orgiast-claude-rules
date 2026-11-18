@@ -15,6 +15,7 @@
 ## カタログ
 | 型 | 症状（初出） | 横展開の検索 | ゲート |
 |---|---|---|---|
+| paid-option-before-free-route | 無料の既存経路を調べず費用案を先頭に提示（2026-11-18）。横展開11箇所（通知10＋日次配信1） | tools/ の quota・429・枠切れ・残高不足 と 有料・課金・入金・チャージ | decision-research-gate（無料案先頭＋FREE-ALT-CHECKED）、daily-beeper-approval / lahaina-daily-post の回帰テスト |
 | 企画書の画像不足型 | 企画書の画像不足（表紙以外写真なし、2026-11-18 270114KOK） | `skills/design-deck/pipeline` の pages.json 読込・BUILD-REPORT 採用方式・「写真なし」「画像なし」 | design-deck pipeline が画像なしページをエラー化 |
 | レーン状態の誤断定型 | Gemini 402 の連鎖出力を Codex billing と誤分類し、直接実測なしで入金必要・全滅と報告して稼働レーンがあるのに待機（2026-11-17 kim-PC） | billingFailure / cheap-first / viaChain / 全滅 / LANE-PROBE | tools/lib/lane-real-health.mjs、tools/lane-doctor.mjs、tools/lane-claim-evidence-gate.mjs |
 | 配布漏れ型 | per-PC 機能が1台でだけ動き、converge に未登録。配布対象が手書き一覧で、新しいフォルダ（packages/）が漏れた（2026-10-11 スマホ用待機タブ） | 配布・コピー対象を手書きで列挙している箇所（onboarding-sync のフォルダ一覧、zip 経路、converge の登録表）。per-PC の機能を足す PR | 配布カバレッジのテスト、fleet-scope 宣言レジストリ（fleet か kim-only かの宣言必須）、converge ビーコンと fleet-status |

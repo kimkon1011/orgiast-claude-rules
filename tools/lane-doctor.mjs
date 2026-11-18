@@ -230,7 +230,7 @@ export function notificationText(item, home) {
       try { const comments = fs.readFileSync(f, 'utf8').split('\n').filter(l => /^\s*#/.test(l)).join('\n'); owner = comments.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i)?.[0] || owner; } catch {}
     }
     owner ||= 'seisaku-team@orgiast.jp（TrackPlanner、未確認なら AI Studio で確認）';
-    return `Gemini が停止しています（${item.reason}）。
+    return `Gemini が残高不足(402)で停止しています（${item.reason}）。
 まず無料枠・既存契約内の他AIレーンを実測し、使える経路へ切り替えます（成功未確認の経路を稼働済みと断定しません）。
 残高・設定の読取確認: ${owner} で https://aistudio.google.com/billing
 追加費用案は無料・既存経路が使えない実測理由を示せた場合だけ比較表の最後に提示します。

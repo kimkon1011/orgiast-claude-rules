@@ -98,7 +98,7 @@ export async function run({
   const entry = findEntry(calendar, date);
   if (!entry) { log(`本日分なし: ${date}`); return 0; }
 
-  // 枠待ちチェック — quota-wait.json の until が date より後なら送信をスキップ
+  // 月間上限中はbotを呼ばず、当日分をBeeper承認キューへ回す
   let quota = null;
   try {
     quota = JSON.parse(readFileSync(quotaPath, 'utf8'));

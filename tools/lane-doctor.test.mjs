@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runProbe, laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, needsNativeCodexProbe, nativeWriteProbeArgs, directGeminiCliState , shouldSkipLiveProbe } from './lane-doctor.mjs';
+import { runProbe, laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, needsNativeCodexProbe, nativeWriteProbeArgs, nativeWriteProbeResult, directGeminiCliState , shouldSkipLiveProbe } from './lane-doctor.mjs';
 import { restoreExpiredDisabledLanes } from './lib/lane-disabled.mjs';
 import { classifyTaskKind } from './lib/task-kind.mjs';
 import { nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
@@ -39,6 +39,18 @@ test('native write probe forces implement routing while preserving its arguments
   assert.ok(args.includes('--timeout'));
   assert.ok(args.includes(instruction));
   assert.equal(classifyTaskKind(instruction), 'investigate');
+});
+test('native write probe treats a successful read-back as alive even when the process exits 1', () => {
+  const result = nativeWriteProbeResult({ code: 1, text: '[routing] fallback backend=gemini\nWRITE_OK' }, true);
+  assert.equal(result.code, 0);
+  assert.equal(result.viaChain, false);
+  assert.match(result.text, /WRITE_OK/);
+  assert.match(result.text, /exit=1/);
+});
+test('native write probe fails when read-back fails even when the process exits 0', () => {
+  const result = nativeWriteProbeResult({ code: 0, text: 'PONG' }, false);
+  assert.equal(result.code, 1);
+  assert.match(result.text, /書き込み確認失敗/);
 });
 test('quick removes expired demote/cooldown atomically, preserves unrelated providers and reads history', t => {
   const h = fixture(t);

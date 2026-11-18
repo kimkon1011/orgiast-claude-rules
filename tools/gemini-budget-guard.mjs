@@ -9,7 +9,7 @@ import { notifyKim } from './notify-kim.mjs';
 // usdPerJpy is retained as the requested config spelling and uses that same unit.
 const FIXED_BUDGET = new URL('./budget-fixed.json', import.meta.url);
 export function geminiMonth(now = new Date()) { return new Date(new Date(now).getTime() + 9 * 3600000).toISOString().slice(0, 7); }
-export function calcSessionCost({ model, input, output, cached }, pricing = {}, now = new Date()) {
+export function calcSessionCost({ model, input, output, cached, thoughts = 0 }, pricing = {}, now = new Date()) {
   if (typeof model !== 'string' || !model) return null;
   const rate = pricing?.models?.[model];
   const valid = (!pricing.validThrough || new Date(now).toISOString().slice(0, 10) <= pricing.validThrough)
@@ -17,15 +17,17 @@ export function calcSessionCost({ model, input, output, cached }, pricing = {}, 
     && typeof rate?.outputUsdPerMillion === 'number' && Number.isFinite(rate.outputUsdPerMillion) && rate.outputUsdPerMillion >= 0;
   if (!valid) return null;
   const i = Number.isFinite(input) && input >= 0 ? input : 0;
-  const o = Number.isFinite(output) && output >= 0 ? output : 0;
+  const o = Number.isFinite(output) && output >= 0 ? output + thoughts : 0;
   const c = Number.isFinite(cached) && cached >= 0 ? cached : 0;
   const ci = typeof rate.cachedInputUsdPerMillion === 'number' && Number.isFinite(rate.cachedInputUsdPerMillion) && rate.cachedInputUsdPerMillion >= 0
     ? rate.cachedInputUsdPerMillion : 0;
   return ((i - c) * rate.inputUsdPerMillion + c * ci + o * rate.outputUsdPerMillion) / 1e6;
 }
 export function collectSessionLogUsage({ home = geminiHome(), fsImpl = fs, now = new Date() } = {}) {
+  const nowMs = new Date(now).getTime();
   const month = geminiMonth(now);
-  const results = []; // { project, model, input, output, cached, sessionId }
+  const results = []; // Each Gemini response is billable, including repeated sessionIds.
+  Object.defineProperty(results, 'invalidRows', { value: 0, writable: true });
   const root = path.join(home, '.gemini', 'tmp');
   let projects;
   try { projects = fsImpl.readdirSync(root, { withFileTypes: true }); } catch { return results; }
@@ -36,26 +38,32 @@ export function collectSessionLogUsage({ home = geminiHome(), fsImpl = fs, now =
     let files;
     try { files = fsImpl.readdirSync(chats, { withFileTypes: true }); } catch { continue; }
     for (const entry of files) {
-      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+      if (!entry.isFile()) continue;
       const sessionFileMatch = entry.name.match(/^session-(.+)\.jsonl$/);
-      const sessionId = sessionFileMatch ? sessionFileMatch[1] : entry.name;
+      if (!sessionFileMatch) continue;
+      const [, sessionId] = sessionFileMatch;
       const file = path.join(chats, entry.name);
       let lines;
       try { lines = fsImpl.readFileSync(file, 'utf8').split(/\r?\n/); } catch { continue; }
       for (const line of lines) {
         if (!line.trim()) continue;
         let row;
-        try { row = JSON.parse(line); } catch { continue; }
-        if (row?.type !== 'gemini' || !row.tokens) continue;
+        try { row = JSON.parse(line); } catch { results.invalidRows++; continue; }
+        if (!object(row)) { results.invalidRows++; continue; }
+        if (row?.type !== 'gemini') continue;
+        // Gemini CLI also writes transcript entries without a model or usage.
+        if (row.tokens === null && row.model === undefined) continue;
         const ts = Date.parse(row.timestamp);
-        if (!Number.isFinite(ts)) continue;
-        if (geminiMonth(new Date(ts)) !== month) continue;
+        if (!Number.isFinite(ts)) { results.invalidRows++; continue; }
+        if (geminiMonth(new Date(ts)) !== month || ts > nowMs) continue;
+        if (!object(row.tokens)) { results.invalidRows++; continue; }
         const input = Number.isSafeInteger(row.tokens.input) && row.tokens.input >= 0 ? row.tokens.input : null;
         const output = Number.isSafeInteger(row.tokens.output) && row.tokens.output >= 0 ? row.tokens.output : null;
-        const cached = Number.isSafeInteger(row.tokens.cached) && row.tokens.cached >= 0 ? row.tokens.cached : null;
+        const cached = row.tokens.cached === undefined ? 0 : row.tokens.cached;
         const model = typeof row.model === 'string' && row.model ? row.model : null;
-        if (input === null || output === null || model === null) continue;
-        results.push({ project: projectName, model, input, output, cached: cached ?? 0, sessionId });
+        if (input === null || output === null || !Number.isSafeInteger(cached) || cached < 0 || cached > input
+          || (row.tokens.thoughts !== undefined && (!Number.isSafeInteger(row.tokens.thoughts) || row.tokens.thoughts < 0))) { results.invalidRows++; continue; }
+        results.push({ project: projectName, model, input, output, cached, thoughts: row.tokens.thoughts ?? 0, sessionId: typeof row.sessionId === 'string' && row.sessionId ? row.sessionId : sessionId });
       }
     }
   }
@@ -65,7 +73,7 @@ export function summarizeGeminiBudget(rows, { now = new Date(), budgetJpy = 5000
   if (!(budgetJpy > 0) || !Number.isFinite(budgetJpy) || !(usdJpy > 0) || !Number.isFinite(usdJpy)) throw new Error('Gemini予算・換算レートは正の数が必要です');
   const month = geminiMonth(now);
   let spentUsd = 0, unmeasuredCalls = 0, totalCalls = 0, sessionInvalidRows = 0;
-  const byProject = {};
+  const byProject = Object.create(null);
   // Collect sessionIds from ledger for dedup
   const ledgerSessionIds = new Set();
   for (const row of rows) {
@@ -89,35 +97,32 @@ export function summarizeGeminiBudget(rows, { now = new Date(), budgetJpy = 5000
     }
   }
   // Process session log rows, dedup by sessionId
-  const seenSessionIds = new Set();
-  let sessionSessionCount = 0, unmeasuredSessionCalls = 0;
-  const byProjectSession = {};
+  invalidRows += sessionLogRows.invalidRows || 0;
+  let sessionCallCount = 0, unmeasuredSessionCalls = 0;
   for (const sl of sessionLogRows) {
-    if (!sl || !sl.model) { sessionInvalidRows++; continue; }
+    if (!object(sl)) { sessionInvalidRows++; continue; }
     // Dedup: skip if already in ledger
-    if (sl.sessionId && (ledgerSessionIds.has(sl.sessionId) || seenSessionIds.has(sl.sessionId))) continue;
-    if (sl.sessionId) seenSessionIds.add(sl.sessionId);
+    if (sl.sessionId && ledgerSessionIds.has(sl.sessionId)) continue;
     const usd = calcSessionCost(sl, pricing, now);
-    sessionSessionCount++;
+    sessionCallCount++;
     if (usd !== null && Number.isFinite(usd) && usd >= 0) {
       spentUsd += usd;
       const proj = sl.project || 'unknown';
       byProject[proj] = (byProject[proj] || 0) + usd;
-      byProjectSession[proj] = (byProjectSession[proj] || 0) + usd;
     } else {
       unmeasuredSessionCalls++;
     }
   }
-  totalCalls += sessionSessionCount;
+  totalCalls += sessionCallCount;
   unmeasuredCalls += unmeasuredSessionCalls;
   invalidRows += sessionInvalidRows;
   const spentJpy = spentUsd * usdJpy, pct = spentJpy / budgetJpy * 100;
   const jst = new Date(new Date(now).getTime() + 9 * 3600000);
   const days = new Date(Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth() + 1, 0)).getUTCDate();
   const paceEomJpy = spentJpy / Math.max(1, jst.getUTCDate()) * days;
-  // Session-logs-aware thresholds: 70% warn, 90% stop/unknown
-  const level = !ledgerAvailable || invalidRows > 0 || totalCalls === 0 || unmeasuredCalls / totalCalls > 0.2
-    ? 'unknown' : pct > 90 ? 'stop' : pct >= 70 ? 'warn' : 'ok';
+  // Known spending takes priority over incomplete measurement.
+  const level = pct >= 90 ? 'stop' : pct >= 70 ? 'warn'
+    : invalidRows > 0 || totalCalls === 0 || unmeasuredCalls / totalCalls > 0.2 ? 'unknown' : 'ok';
   // Sort byProject by USD descending
   const sortedByProject = Object.entries(byProject).sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ project: k, usd: Math.round(v * 100) / 100 }));
   return { month, spentUsd, spentJpy, budgetJpy, pct, unmeasuredCalls, paceEomJpy, level, totalCalls, ledgerAvailable, invalidRows, byProject: sortedByProject, checkedAt: new Date(now).toISOString() };
@@ -138,7 +143,7 @@ export function formatGeminiBudgetStatus(status, { now = new Date(), unmeasuredC
   if (!status || status.month !== geminiMonth(now) || !['spentUsd', 'spentJpy', 'budgetJpy', 'pct', 'unmeasuredCalls'].every((key) => typeof status[key] === 'number' && Number.isFinite(status[key]))) return `- Gemini 従量: 未計測あり（当月の予算状態なし・不正。利用余裕は判断不能）${unmeasuredCalls > 0 ? ` / うち未計測 ${unmeasuredCalls} 件（実費はこれより大きい）` : ''}`;
   const missing = status.unmeasuredCalls > 0 ? ` / うち未計測 ${status.unmeasuredCalls} 件（実費はこれより大きい）` : '';
   const stale = !Number.isFinite(Date.parse(status.checkedAt)) || new Date(now) - Date.parse(status.checkedAt) > 36 * 3600000;
-  return `- Gemini 従量: 台帳計測分 $${status.spentUsd.toFixed(2)}（≒¥${Math.round(status.spentJpy).toLocaleString('ja-JP')}） / 月予算¥${status.budgetJpy.toLocaleString('ja-JP')} に対し ${status.pct.toFixed(1)}% / ${stale ? 'unknown（予算状態が古い）' : status.level}${missing}${status.level === 'unknown' ? ' / 未計測あり・実費総額と利用余裕は判断不能' : ''}`;
+  return `- Gemini 従量: 台帳・CLI計測分 $${status.spentUsd.toFixed(2)}（≒¥${Math.round(status.spentJpy).toLocaleString('ja-JP')}） / 月予算¥${status.budgetJpy.toLocaleString('ja-JP')} に対し ${status.pct.toFixed(1)}% / ${stale ? 'unknown（予算状態が古い）' : status.level}${missing}${status.level === 'unknown' ? ' / 未計測あり・実費総額と利用余裕は判断不能' : ''}`;
 }
 
 export async function runGeminiBudgetGuard({ home = geminiHome(), now = new Date(), dryRun = false, fsImpl = fs, notifyImpl = notifyKim } = {}) {
@@ -164,8 +169,8 @@ export async function runGeminiBudgetGuard({ home = geminiHome(), now = new Date
   const status = summarizeGeminiBudget(rows, { now, budgetJpy: Number(config.budgetJpy ?? 50000), usdJpy, ledgerAvailable, invalidRows, sessionLogRows, pricing });
   if (dryRun) return status;
   writeJson(path.join(dir, 'gemini-budget-status.json'), status, fsImpl);
-  // Known spending alone can exceed budget even when the headline level is unknown.
-  if (status.pct > 90) {
+  // Stop at 90%, retaining the existing direct-API demotion as well.
+  if (status.pct >= 90) {
     const file = path.join(dir, 'routing-overrides.json');
     const state = readJson(file, fsImpl, {});
     if (!object(state) || (state.demote !== undefined && !object(state.demote))) throw new Error('routing-overrides.json 不正: 既存データを保持して中止');
@@ -173,6 +178,13 @@ export async function runGeminiBudgetGuard({ home = geminiHome(), now = new Date
     const until = new Date(Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth() + 1, 1) - 9 * 3600000).toISOString();
     state.demote = { ...state.demote, gemini: Date.parse(state.demote?.gemini) > Date.parse(until) ? state.demote.gemini : until };
     writeJson(file, state, fsImpl);
+    const cooldownFile = path.join(dir, 'provider-cooldown.json');
+    const cooldown = readJson(cooldownFile, fsImpl, {});
+    if (!object(cooldown)) throw new Error('provider-cooldown.json 不正');
+    if (!(Number(cooldown.gemini?.until) >= Date.parse(until))) {
+      cooldown.gemini = { until: Date.parse(until), at: new Date(now).getTime(), reason: 'gemini-budget' };
+      writeJson(cooldownFile, cooldown, fsImpl);
+    }
   }
   if (status.level !== 'ok') {
     const result = await notifyImpl(`Gemini 月次予算警告\n${formatGeminiBudgetStatus(status, { now })}\n月末ペース（計測分）: ¥${Math.round(status.paceEomJpy).toLocaleString('ja-JP')}`, { home, webhookFallback: false });

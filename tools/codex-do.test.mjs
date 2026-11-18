@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { skipCoolingBackends } from './fallback-backend-health.mjs';
+import { runGeminiBudgetGuard } from './gemini-budget-guard.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
 const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy } = await import('./codex-do.mjs');
@@ -3286,4 +3287,23 @@ test('openrouter-code は空差分・構文エラー・関連テスト失敗で�
     backendName: 'openrouter-code', taskKind: 'verify', diffText: ' a.mjs | 1 +\n', output: '実装', cwd: '/work',
     spawnImpl: testsFail, existsImpl: (file) => /a\.mjs$|a\.test\.mjs$/.test(String(file)),
   }), 'tests');
+});
+
+test('Gemini budget stop excludes CLI even as the only fallback, expiry restores it', async ({ mock }) => {
+  const home = workDir();
+  const dir = path.join(home, '.claude');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'gemini.env'), 'GEMINI_API_KEY=test-budget-key\n');
+  const file = path.join(dir, 'provider-cooldown.json');
+  const options = { executableAvailable: () => true };
+  fs.writeFileSync(path.join(dir, 'codex-fallback-order.json'), JSON.stringify(['gemini-cli']));
+  fs.writeFileSync(path.join(dir, 'gemini-budget.json'), JSON.stringify({ budgetJpy: 100, usdJpy: 1 }));
+  const now = new Date('2026-11-18T00:00:00Z');
+  mock.method(Date, 'now', () => now.getTime());
+  fs.writeFileSync(path.join(dir, 'executor-usage.jsonl'), JSON.stringify({ provider: 'gemini', t: now.toISOString(), usd: 90 }) + '\n');
+  const status = await runGeminiBudgetGuard({ home, now, notifyImpl: async () => ({ delivered: 'dm' }) });
+  assert.equal(status.level, 'stop', JSON.stringify(status));
+  assert.ok(!resolveFallbackBackends(home, options).some(b => b.name === 'gemini-cli'));
+  fs.writeFileSync(file, JSON.stringify({ gemini: { until: Date.now() - 1000, reason: 'gemini-budget' } }));
+  assert.ok(resolveFallbackBackends(home, options).some(b => b.name === 'gemini-cli'));
 });

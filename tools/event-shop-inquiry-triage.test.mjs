@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyLead, deduplicateLeads, deduplicateMessages, sortLeads, main, messageQuery, renderMarkdown } from './event-shop-inquiry-triage.mjs';
+import path from 'node:path';
+import { classifyLead, deduplicateLeads, deduplicateMessages, sortLeads, loadCredentials, main, messageQuery, renderMarkdown } from './event-shop-inquiry-triage.mjs';
 const now = new Date('2026-10-27T03:00:00Z');
 const lead = { id: 'a', email: 'client@example.com', company_name: '会社', contact_name: '担当', created_at: '2026-10-21T03:00:00Z', preferred_date: '2026-11-18', raw_payload: { product: '展示会' } };
 const msg = (direction, day, body = '') => ({ direction, received_at: `2026-10-${day}T03:00:00Z`, body });
@@ -54,12 +55,28 @@ test('8: 認証なしのmainは1行を出しexit 0を返す', async () => {
   const output = [];
   const code = await main({
     env: { SUPABASE_URL: '', SUPABASE_SERVICE_ROLE_KEY: '', EVENT_SHOP_ENV_FILE: '/tmp/nonexistent-inquiry-triage-env-827361' },
+    credentialsLoader: async () => ({ url: undefined, key: undefined, paths: ['/tmp/nonexistent-inquiry-triage-env-827361', '/home/test/event-shop/.env.local', 'D:/Claude/event-shop/.env.local'] }),
     fetchImpl: () => { assert.fail('認証なしでネットワークにアクセスしない'); },
     log: value => output.push(value),
   });
   assert.equal(code, 0);
   assert.equal(output.length, 1);
   assert.match(output[0], /未確認（認証情報なし。試したパス:/);
+  assert.match(output[0], /event-shop[/\\]\.env\.local, D:\/Claude\/event-shop\/\.env\.local/);
+});
+test('EVENT_SHOP_ENV_FILEがない場合はホーム直下のevent-shopを拾う', async () => {
+  const calls = [];
+  const home = path.resolve('/home/test');
+  const expectedPath = path.join(home, 'event-shop', '.env.local');
+  const credentials = await loadCredentials({}, home, async (candidate, encoding) => {
+    calls.push([candidate, encoding]);
+    if (candidate === expectedPath) return 'NEXT_PUBLIC_SUPABASE_URL=https://example.invalid\nSUPABASE_SERVICE_ROLE_KEY=test-key';
+    throw new Error('not found');
+  });
+  assert.equal(credentials.path, expectedPath);
+  assert.equal(credentials.url, 'https://example.invalid');
+  assert.equal(credentials.key, 'test-key');
+  assert.deepEqual(calls, [[expectedPath, 'utf8']]);
 });
 test('メールの重複除去はmessage id、なければ日時と方向', () => {
   const a = { ...msg('inbound', '25'), rfc822_message_id: '<one>' };

@@ -1,4 +1,6 @@
 import { readFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
 const DAY = 86400000;
@@ -52,17 +54,24 @@ export function sortLeads(leads) {
   const rank = { '🔴 要返信': 0, '🟡 顧客待ち': 1, '⚪ 終了候補': 2 };
   return [...leads].sort((a, b) => rank[a.category] - rank[b.category] || (a.category === '🔴 要返信' ? (a.preferred_date || '9999').localeCompare(b.preferred_date || '9999') : 0) || time(a.created_at) - time(b.created_at));
 }
-export async function loadCredentials(env = process.env) {
-  const path = env.EVENT_SHOP_ENV_FILE || 'D:/Claude/event-shop/.env.local';
-  if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) return { url: env.SUPABASE_URL, key: env.SUPABASE_SERVICE_ROLE_KEY, path };
+export async function loadCredentials(env = process.env, home = os.homedir(), readFileImpl = readFile) {
+  const paths = [env.EVENT_SHOP_ENV_FILE, path.join(home, 'event-shop', '.env.local'), 'D:/Claude/event-shop/.env.local'].filter(Boolean);
+  if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) return { url: env.SUPABASE_URL, key: env.SUPABASE_SERVICE_ROLE_KEY, path: paths[0], paths };
   let contents = '';
-  try { contents = await readFile(path, 'utf8'); } catch { /* Missing credentials must not block session startup. */ }
+  let selectedPath;
+  for (const candidate of paths) {
+    try {
+      contents = await readFileImpl(candidate, 'utf8');
+      selectedPath = candidate;
+      break;
+    } catch { /* Try the next location; missing credentials must not block session startup. */ }
+  }
   const values = {};
   for (const line of contents.split(/\r?\n/)) {
     const match = line.match(/^\s*([A-Z_]+)\s*=\s*(.*?)\s*$/);
     if (match) values[match[1]] = match[2].replace(/^"(.*)"$/, '$1');
   }
-  return { url: values.NEXT_PUBLIC_SUPABASE_URL || values.SUPABASE_URL, key: values.SUPABASE_SERVICE_ROLE_KEY || values.SUPABASE_SECRET_KEY, path };
+  return { url: values.NEXT_PUBLIC_SUPABASE_URL || values.SUPABASE_URL, key: values.SUPABASE_SERVICE_ROLE_KEY || values.SUPABASE_SECRET_KEY, path: selectedPath, paths };
 }
 const freeMail = /^(gmail\.com|googlemail\.com|yahoo\.(com|co\.jp)|ymail\.com|icloud\.com|me\.com|mac\.com|outlook\.(com|jp)|hotmail\.(com|co\.jp)|live\.(com|jp)|msn\.com|aol\.com)$/i;
 export function messageQuery(lead) {
@@ -94,9 +103,9 @@ export function renderMarkdown(leads, duplicateCount, now) {
   }
   return lines.join('\n');
 }
-export async function main({ env = process.env, args = process.argv.slice(2), now = new Date(), fetchImpl = globalThis.fetch, log = console.log } = {}) {
-  const credentials = await loadCredentials(env);
-  if (!credentials.url || !credentials.key) { log(`イベント百貨店問合せ: 未確認（認証情報なし。試したパス: ${credentials.path}）`); return 0; }
+export async function main({ env = process.env, args = process.argv.slice(2), now = new Date(), fetchImpl = globalThis.fetch, log = console.log, credentialsLoader = loadCredentials } = {}) {
+  const credentials = await credentialsLoader(env);
+  if (!credentials.url || !credentials.key) { log(`イベント百貨店問合せ: 未確認（認証情報なし。試したパス: ${credentials.paths.join(', ')}）`); return 0; }
   try {
     const since = dateKey(new Date(time(now) - 120 * DAY));
     const data = await request(credentials, `/rest/v1/quote_requests?select=id,company_name,contact_name,email,event_name,preferred_date,created_at,status,raw_payload&source=eq.event-shop.jp&created_at=gte.${since}&order=created_at.desc&limit=200`, fetchImpl);

@@ -670,8 +670,8 @@ test('31. B4 effect は既存ファイル内容を保持して書き込む', () 
     assert.deepEqual(Object.keys(overrides.demote).sort(), ['gemini', 'groq']);
     assert.equal(writeRoutingOverride({ claudeDir, provider: 'groq', now: NOW }).changed, false, '同値なら no_change');
 
-    // codex-fallback-order: qwen → deepseek → glm → gemini-cli → openrouter-free。zai の有無では並びを変えない。
-    const fallbackOrder = ['qwen', 'cheap-code:deepseek', 'cheap-code:glm', 'gemini-cli', 'openrouter-free'];
+    // codex-fallback-order: cursor-agent → qwen → deepseek → glm → gemini-cli → openrouter-free。zai の有無では並びを変えない。
+    const fallbackOrder = ['cursor-agent', 'qwen', 'cheap-code:deepseek', 'cheap-code:glm', 'gemini-cli', 'openrouter-free'];
     assert.equal(writeCodexFallbackOrder({ claudeDir, zaiAvailable: true }).changed, true);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeDir, 'codex-fallback-order.json'), 'utf8')), fallbackOrder);
     assert.equal(writeCodexFallbackOrder({ claudeDir, zaiAvailable: false }).changed, false);

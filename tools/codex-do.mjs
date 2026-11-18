@@ -736,7 +736,7 @@ export function codexFallbackOrderFile(homeDir) {
 
 // ~/.claude/codex-fallback-order.json で fallback 順を上書きできる
 // (cost-improve-loop の codex_saturated 対処が書く。無ければ従来順)。
-// 使える名前: "cheap-code:glm" / "cheap-code:deepseek" / "qwen" / "gemini-cli" / "openrouter-free" / "openrouter-code"。
+// 使える名前: "cursor-agent" / "cheap-code:glm" / "cheap-code:deepseek" / "qwen" / "gemini-cli" / "openrouter-free" / "openrouter-code"。
 // [] または "none" は「フォールバックしない」で、従来順には戻さない。local.json があればそちらを優先する。
 function readFallbackOrderFile(file) {
   if (!fs.existsSync(file)) return undefined;
@@ -805,6 +805,80 @@ export function findExecutable(name, { env = process.env, platform = process.pla
   return null;
 }
 
+
+export function cursorAgentAuthPaths(homeDir, env = process.env) {
+  const homes = [...new Set([homeDir, env.USERPROFILE, env.HOME].filter(Boolean))];
+  const rels = [
+    ['.cursor', 'cli-config.json'],
+    ['.cursor', 'auth.json'],
+    ['.config', 'cursor', 'auth.json'],
+  ];
+  const paths = [];
+  for (const home of homes) {
+    for (const rel of rels) paths.push(path.join(home, ...rel));
+  }
+  return paths;
+}
+
+export function findCursorAgentCommand({
+  env = process.env,
+  platform = process.platform,
+  existsImpl = fs.existsSync,
+  executableAvailable,
+} = {}) {
+  const names = ['cursor-agent', 'agent'];
+  for (const name of names) {
+    if (typeof executableAvailable === 'function') {
+      if (executableAvailable(name)) return name;
+    } else {
+      const found = findExecutable(name, { env, platform, existsImpl });
+      if (found) return found;
+    }
+  }
+  const localAppData = env.LOCALAPPDATA
+    || (env.USERPROFILE ? path.join(env.USERPROFILE, 'AppData', 'Local') : '');
+  if (!localAppData) return '';
+  const dir = path.join(localAppData, 'cursor-agent');
+  const wellKnown = platform === 'win32'
+    ? [path.join(dir, 'agent.cmd'), path.join(dir, 'cursor-agent.cmd')]
+    : [path.join(dir, 'agent'), path.join(dir, 'cursor-agent')];
+  for (const candidate of wellKnown) {
+    if (existsImpl(candidate)) return candidate;
+  }
+  return '';
+}
+
+export function isCursorAgentLoggedIn(homeDir, {
+  env = process.env,
+  existsImpl = fs.existsSync,
+  cursorAgentLoggedIn,
+} = {}) {
+  if (cursorAgentLoggedIn === true) return true;
+  if (cursorAgentLoggedIn === false) return false;
+  if (String(env.CURSOR_API_KEY || '').trim()) return true;
+  return cursorAgentAuthPaths(homeDir, env).some((p) => existsImpl(p));
+}
+
+export function resolveCursorAgentBackend(homeDir, options = {}) {
+  const command = findCursorAgentCommand(options);
+  if (!command) return null;
+  if (!isCursorAgentLoggedIn(homeDir, options)) return null;
+  const env = options.env || process.env;
+  return {
+    kind: 'cursor-agent',
+    name: 'cursor-agent',
+    provider: 'cursor-agent',
+    command,
+    model: env.CURSOR_AGENT_MODEL || 'cursor-agent',
+  };
+}
+
+export function buildCursorAgentArgs({ workspace } = {}) {
+  const args = ['-p', '--force', '--trust'];
+  if (workspace) args.push('--workspace', workspace);
+  return args;
+}
+
 export function resolveFallbackBackends(homeDir, options = {}) {
   const executableAvailable = options.executableAvailable || ((cmd) => Boolean(findExecutable(cmd, options)));
   const geminiKey = loadGeminiKey(homeDir);
@@ -828,12 +902,22 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   const deepseek = deepseekKey && qwenAvailable && { kind: 'qwen', name: 'deepseek', model: GATEWAY_MODELS.deepseek, baseUrl: OPENROUTER_BASE, apiKey: deepseekKey };
   const openrouter = openrouterKey && qwenAvailable && { kind: 'qwen', name: 'openrouter-free', model: env.CODEX_DO_FREE_MODEL || 'cohere/north-mini-code:free', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
   const openrouterCode = openrouterKey && qwenAvailable && { kind: 'qwen', name: 'openrouter-code', model: env.CODEX_DO_PAID_CODE_MODEL || 'qwen/qwen3-coder', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
+  const cursorAgent = resolveCursorAgentBackend(homeDir, { ...options, executableAvailable });
   const byName = {
+    'cursor-agent': () => cursorAgent,
     'gemini-cli': () => gemini,
     'qwen': () => deepseek,
     'openrouter-free': () => openrouter,
     'openrouter-code': () => openrouterCode,
   };
+  const usedLocalOrder = readFallbackOrderFile(path.join(homeDir, '.claude', 'codex-fallback-order.local.json')) !== undefined;
+  function withCursorAgentFirst(backends) {
+    const usesCursor = taskKind === 'implement' || taskKind === 'verify';
+    if (!usesCursor || usedLocalOrder) return backends;
+    const ready = acceptBackend(cursorAgent);
+    if (!ready || backends.some((b) => b.name === 'cursor-agent')) return backends;
+    return uniqueBackendsByName([ready, ...backends]);
+  }
   function isBackendDisabled(backend) {
     const name = String(backend?.name || '').toLowerCase();
     if (!name) return false;
@@ -863,7 +947,7 @@ export function resolveFallbackBackends(homeDir, options = {}) {
       if (backend) backends.push(backend);
       else if (!raw) console.error(`[codex-do] codex-fallback-order.json の ${name} はキー未設定か未知の名前のためスキップ`);
     }
-    if (backends.length) return uniqueBackendsByName(backends);
+    if (backends.length) return withCursorAgentFirst(uniqueBackendsByName(backends));
     console.error('[codex-do] codex-fallback-order.json に使えるバックエンドが無いため従来順へ戻します');
   }
   const ccDeepseek = cheapCodeBackend('cheap-code:deepseek', homeDir);
@@ -875,7 +959,9 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   // cost-improve-loop の writeCodexFallbackOrder も gemini-cli を最後に置くため、既定を
   // 「成功が速く確実な cheap-code → 最終手段の gemini-cli」に揃える
   // （delegation-health:fallback_chain_timeout 2026-10-27 起票の対処）。
-  const ordered = [ccDeepseek, ccGlm, gemini];
+  const ordered = [];
+  if (taskKind === 'implement' || taskKind === 'verify') ordered.push(cursorAgent);
+  ordered.push(ccDeepseek, ccGlm, gemini);
   if (taskKind === 'implement' || taskKind === 'verify') ordered.push(openrouterCode);
   if (taskKind === 'summarize' || taskKind === 'classify') ordered.push(openrouter);
   return uniqueBackendsByName(ordered.map((backend) => acceptBackend(backend)).filter(Boolean));
@@ -1566,6 +1652,17 @@ if (!useCodex) {
   process.exit(routedStatus);
 }
 
+async function executeCursorAgent(backend, { timeoutSecs, promptText, cwd: runCwd = cwd } = {}) {
+  const cmd = backend.command || 'cursor-agent';
+  return execute(cmd, buildCursorAgentArgs({ workspace: runCwd }), {
+    cwd: runCwd,
+    env: process.env,
+    shell: process.platform === 'win32',
+    timeoutSecs,
+    promptText: `${GEMINI_CWD_GUARD}${promptText}`,
+  });
+}
+
 async function tryCheapFirstFallback() {
   if (!cheapFirst) return null;
   const resolvedBackends = resolveFallbackBackends(home, { taskKind });
@@ -1590,7 +1687,9 @@ async function tryCheapFirstFallback() {
       ? await execute('gemini', buildGeminiArgs({ model: backend.model, policyFile: prepareGeminiWorkerPolicy(home) }), { cwd, env: buildGeminiEnv(process.env, backend.apiKey), shell: process.platform === 'win32', timeoutSecs: bt, abortPolicyStall: true, promptText: `${GEMINI_CWD_GUARD}${prompt}` })
       : backend.kind === 'cheap-code'
         ? await executeCheapCode(backend, bt)
-        : await execute('qwen', buildQwenArgs({ timeoutSecs: bt, model: backend.model }), { cwd, env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }), shell: process.platform === 'win32', timeoutSecs: bt });
+        : backend.kind === 'cursor-agent'
+          ? await executeCursorAgent(backend, { timeoutSecs: bt, promptText: prompt })
+          : await execute('qwen', buildQwenArgs({ timeoutSecs: bt, model: backend.model }), { cwd, env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }), shell: process.platform === 'win32', timeoutSecs: bt });
     lastResult = res;
     if (res.status === null) res.status = 1;
     const cliMissing = isBackendCliMissing(res.output, `${res.stderr || ''}\n${res.error?.message || ''}`);
@@ -1891,6 +1990,9 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
               promptText: pingPrompt,
             });
           }
+          if (backend.kind === 'cursor-agent') {
+            return await executeCursorAgent(backend, { timeoutSecs, promptText: pingPrompt, cwd: probeDir });
+          }
           if (backend.kind === 'cheap-code') {
             const promptFile = path.join(os.tmpdir(), `orgiast-probe-${process.pid}-${Date.now()}.md`);
             try {
@@ -1970,7 +2072,9 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
             })
           : backend.kind === 'cheap-code'
             ? await executeCheapCode(backend, backendTimeout)
-            : await execute('qwen', buildQwenArgs({ timeoutSecs: backendTimeout, model: backend.model }), {
+            : backend.kind === 'cursor-agent'
+              ? await executeCursorAgent(backend, { timeoutSecs: backendTimeout, promptText: prompt })
+              : await execute('qwen', buildQwenArgs({ timeoutSecs: backendTimeout, model: backend.model }), {
                 cwd,
                 env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }),
                 shell: process.platform === 'win32',

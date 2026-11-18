@@ -9,7 +9,7 @@ import { skipCoolingBackends } from './fallback-backend-health.mjs';
 import { runGeminiBudgetGuard } from './gemini-budget-guard.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -3306,4 +3306,87 @@ test('Gemini budget stop excludes CLI even as the only fallback, expiry restores
   assert.ok(!resolveFallbackBackends(home, options).some(b => b.name === 'gemini-cli'));
   fs.writeFileSync(file, JSON.stringify({ gemini: { until: Date.now() - 1000, reason: 'gemini-budget' } }));
   assert.ok(resolveFallbackBackends(home, options).some(b => b.name === 'gemini-cli'));
+});
+
+
+test('findCursorAgentCommand は PATH 上の cursor-agent を優先し、無ければ Windows の既定ディレクトリを見る', () => {
+  const found = findCursorAgentCommand({ executableAvailable: (cmd) => cmd === 'cursor-agent' });
+  assert.equal(found, 'cursor-agent');
+  const viaAgent = findCursorAgentCommand({ executableAvailable: (cmd) => cmd === 'agent' });
+  assert.equal(viaAgent, 'agent');
+  const dir = path.join(os.tmpdir(), 'cursor-agent-wellknown-' + Date.now());
+  const agentCmd = path.join(dir, 'cursor-agent', 'agent.cmd');
+  fs.mkdirSync(path.dirname(agentCmd), { recursive: true });
+  fs.writeFileSync(agentCmd, 'rem');
+  try {
+    const wellKnown = findCursorAgentCommand({
+      executableAvailable: () => false,
+      platform: 'win32',
+      env: { LOCALAPPDATA: dir },
+      existsImpl: (p) => p === agentCmd,
+    });
+    assert.equal(wellKnown, agentCmd);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('isCursorAgentLoggedIn はフラグ・CURSOR_API_KEY・認証ファイルの有無だけを見ます（値は読まない）', () => {
+  assert.equal(isCursorAgentLoggedIn('/tmp', { cursorAgentLoggedIn: true }), true);
+  assert.equal(isCursorAgentLoggedIn('/tmp', { cursorAgentLoggedIn: false, env: { CURSOR_API_KEY: 'x' } }), false);
+  assert.equal(isCursorAgentLoggedIn('/tmp', { env: { CURSOR_API_KEY: 'x' } }), true);
+  const home = path.join(os.tmpdir(), 'cursor-auth-' + Date.now());
+  const auth = path.join(home, '.cursor', 'cli-config.json');
+  fs.mkdirSync(path.dirname(auth), { recursive: true });
+  fs.writeFileSync(auth, 'present');
+  try {
+    assert.equal(isCursorAgentLoggedIn(home, { env: {} }), true);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+  assert.equal(isCursorAgentLoggedIn('/no-such-cursor-home', { env: {} }), false);
+});
+
+test('resolveFallbackBackends は implement/verify でログイン済みの cursor-agent を有料 OpenRouter より前に置く', () => {
+  const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
+  const options = { executableAvailable: () => true, cursorAgentLoggedIn: true };
+  assert.deepEqual(resolveFallbackBackends(dir, { ...options, taskKind: 'implement' }).map((b) => b.name), [
+    'cursor-agent', 'cheap-code:deepseek', 'openrouter-code',
+  ]);
+  assert.deepEqual(resolveFallbackBackends(dir, { ...options, taskKind: 'verify' }).map((b) => b.name)[0], 'cursor-agent');
+  assert.ok(resolveFallbackBackends(dir, { ...options, taskKind: 'implement' }).some((b) => b.name === 'openrouter-code'));
+  assert.equal(resolveFallbackBackends(dir, { ...options, taskKind: 'implement' }).findIndex((b) => b.name === 'cursor-agent')
+    < resolveFallbackBackends(dir, { ...options, taskKind: 'implement' }).findIndex((b) => b.name === 'openrouter-code'), true);
+});
+
+test('resolveFallbackBackends は未ログインや CLI 無し、summarize/classify では cursor-agent を使わない（従来順）', () => {
+  const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
+  const unsigned = resolveFallbackBackends(dir, { executableAvailable: () => true, taskKind: 'implement' }).map((b) => b.name);
+  assert.ok(!unsigned.includes('cursor-agent'));
+  assert.deepEqual(unsigned, ['cheap-code:deepseek', 'openrouter-code']);
+  const noCli = resolveFallbackBackends(dir, {
+    executableAvailable: (cmd) => cmd !== 'cursor-agent' && cmd !== 'agent',
+    cursorAgentLoggedIn: true,
+    taskKind: 'implement',
+    env: {},
+    existsImpl: () => false,
+  }).map((b) => b.name);
+  assert.ok(!noCli.includes('cursor-agent'));
+  const summarized = resolveFallbackBackends(dir, { executableAvailable: () => true, cursorAgentLoggedIn: true, taskKind: 'summarize' }).map((b) => b.name);
+  assert.ok(!summarized.includes('cursor-agent'));
+});
+
+test('resolveFallbackBackends は local.json があるとき cursor-agent を自動挿入せず、共有ファイルへは先頭に足す', () => {
+  const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
+  const claude = path.join(dir, '.claude');
+  fs.mkdirSync(claude, { recursive: true });
+  const options = { executableAvailable: () => true, cursorAgentLoggedIn: true, taskKind: 'implement' };
+  fs.writeFileSync(path.join(claude, 'codex-fallback-order.json'), JSON.stringify(['cheap-code:deepseek', 'openrouter-code']) + '\n');
+  assert.deepEqual(resolveFallbackBackends(dir, options).map((b) => b.name), ['cursor-agent', 'cheap-code:deepseek', 'openrouter-code']);
+  fs.writeFileSync(path.join(claude, 'codex-fallback-order.local.json'), JSON.stringify(['cheap-code:deepseek', 'openrouter-code']) + '\n');
+  assert.deepEqual(resolveFallbackBackends(dir, options).map((b) => b.name), ['cheap-code:deepseek', 'openrouter-code']);
+});
+
+test('buildCursorAgentArgs は非対話の -p --force --trust と workspace を付ける', () => {
+  assert.deepEqual(buildCursorAgentArgs({ workspace: 'C:/work' }), ['-p', '--force', '--trust', '--workspace', 'C:/work']);
 });

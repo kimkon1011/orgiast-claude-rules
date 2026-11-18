@@ -9,6 +9,7 @@ const required = [
   '金さんに通知が出ない方法を優先する',
   '未確認',
   'すでにオンなら何もしなくてよい',
+  '金さんの画面に確認・通知が出る操作は、事前に予告して了承を得てから実行し、最初に失敗したら止める',
 ];
 
 function read(rel) {
@@ -30,6 +31,8 @@ test('automation-first-checklist has the pre-ask checklist', () => {
   assert.ok(text.includes('依頼する前に、すでに済んでいないかを確認する'));
   assert.ok(text.includes('金さんへの依頼文を出す前のチェックリスト'));
   assert.ok(text.includes('developers.cliSharedLockState.enabled'));
+  assert.ok(text.includes('画面に確認が出る操作は、予告と了承のあと、最初の失敗で止める'));
+  assert.ok(text.includes('最初の1回が失敗・タイムアウトしたら'));
 });
 
 test('1Password doc has a no-prompt settings check', () => {

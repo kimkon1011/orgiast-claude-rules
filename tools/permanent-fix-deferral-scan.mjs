@@ -215,14 +215,20 @@ export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null 
       if (!entry) continue;
       const at = Date.parse(entry.ts);
       if (!(at >= Date.parse(since)) || (until !== null && !(at < Date.parse(until)))) continue;
-      const quotes = index === 0 ? [String(entry.excerpt ?? '')]
-        : (Array.isArray(entry.violations) ? entry.violations : []).map(v => String(v?.quote ?? ''));
+      const candidates = index === 0
+        ? [{ text: String(entry.excerpt ?? ''), field: 'quote' }]
+        : [
+            ...(Array.isArray(entry.violations) ? entry.violations : []).map(v => ({ text: String(v?.quote ?? ''), field: 'quote' })),
+            { text: String(entry.excerpt ?? ''), field: 'excerpt' }
+          ];
       let text = '';
       let found = null;
-      for (const quote of quotes) {
-        found = detect(quote)[0];
+      let foundField = 'quote';
+      for (const { text: t, field } of candidates) {
+        found = detect(t)[0];
         if (found) {
-          text = quote;
+          text = t;
+          foundField = field;
           break;
         }
       }
@@ -231,7 +237,7 @@ export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null 
       byPattern[pattern]++;
       const day = new Date(entry.ts).toISOString().slice(0, 10);
       counts[day] = (counts[day] || 0) + 1;
-      rows.push({ pattern, ts: entry.ts, verdict: entry.verdict ?? entry.decision ?? '', sessionId: String(entry.sessionId ?? ''),
+      rows.push({ pattern, field: foundField, ts: entry.ts, verdict: entry.verdict ?? entry.decision ?? '', sessionId: String(entry.sessionId ?? ''),
         match: text.slice(Math.max(0, match.index - 45), match.index + match[0].length + 110).replace(/[\r\n]+/g, ' ') });
     }
     return { name, file, total: lines.length, hits: rows.length, byPattern, byDay: Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b))), rows };

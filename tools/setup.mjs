@@ -127,7 +127,9 @@ function check(item) {
       const candidates = (spec.paths || [spec.path]).map(resolveHome);
       if (spec.ifPresent && !candidates.some(fs.existsSync)) return null;
       const exists = candidates.some((target) => readNonempty(target, spec.kind));
-      if (!exists && item.severity !== 'required' && process.env.CI === 'true') return null;
+      // Cursor アプリ/CLI は実機では required。clean-install CI で毎回 winget と公式
+      // インストーラ（数十MB）まで走らせると不安定なため、CI では欠席を NOTICE にする。
+      if (!exists && process.env.CI === 'true' && (item.severity !== 'required' || item.id === 'cmd:cursor' || item.id === 'cmd:cursor-agent')) return null;
       return exists;
     }
     if (item.type === 'git-origin') {

@@ -7,8 +7,9 @@ const DAY = 86400000;
 const dateKey = value => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo' }).format(new Date(value));
 const time = value => new Date(value).getTime();
 const bodyLines = message => String(message?.body ?? '').split(/\r?\n/).filter(line => !/^\s*>/.test(line)).map(line => line.trim()).filter(Boolean);
-const autoReplyPattern = /自動返信|自動応答|自動送信|auto-?reply|automatic\s*reply|out\s*of\s*office|不在に|不在中/i;
-const isAutoReply = msg => msg && (autoReplyPattern.test(msg.subject ?? '') || autoReplyPattern.test(bodyLines(msg).join('\n')));
+const autoReplyBodyPattern = /自動返信|自動応答|auto-?reply|automatic\s*reply|out\s*of\s*(?:the\s*)?office/i;
+const autoReplySubjectPattern = /自動返信|自動応答|auto-?reply|automatic\s*reply|out\s*of\s*(?:the\s*)?office|不在/i;
+const isAutoReply = msg => Boolean(msg) && (autoReplySubjectPattern.test(msg.subject ?? '') || autoReplyBodyPattern.test(bodyLines(msg).join('\n')));
 export function deduplicateMessages(messages) {
   const seen = new Set();
   return [...messages].sort((a, b) => time(b.received_at) - time(a.received_at)).filter(m => {

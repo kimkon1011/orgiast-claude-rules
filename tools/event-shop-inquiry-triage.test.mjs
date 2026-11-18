@@ -147,6 +147,14 @@ test('自動返信より前に本物の返信があれば要返信のまま', ()
   assert.equal(result.category, '🔴 要返信');
   assert.equal(result.nextAction, '顧客の返信に未回答: 御見積書をお送りください');
 });
+test('本文で過去の不在に触れた顧客返信は要返信', () => {
+  const result = classifyLead(lead, [msg('outbound', '23'), { ...msg('inbound', '25', '先週は不在にしておりました。御見積書をお送りください'), subject: undefined }], now);
+  assert.equal(result.category, '🔴 要返信');
+});
+test('自動送信と記載された問合せフォーム通知は要返信', () => {
+  const result = classifyLead(lead, [msg('outbound', '23'), { ...msg('inbound', '25', 'このメールは自動送信されています。お問い合わせ内容: ブース制作の相談'), subject: undefined }], now);
+  assert.equal(result.category, '🔴 要返信');
+});
 test('完了済み・社内・連携テストを除外', () => {
   assert.equal(deduplicateLeads([
     { ...lead, raw_payload: { event_shop: { closed_at: 'x' } } },

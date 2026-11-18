@@ -141,12 +141,18 @@ export function renderMarkdown(leads, duplicateCount, now) {
 export async function main({ env = process.env, args = process.argv.slice(2), now = new Date(), fetchImpl = globalThis.fetch, log = console.log, deps = {} } = {}) {
   const credentials = await loadCredentials(env);
   if (!credentials.url || !credentials.key) { log(`イベント百貨店問合せ: 未確認（認証情報なし。試したパス: ${credentials.path}）`); return 0; }
+  // main() が直接呼ばれたときは Gmail 下書き照会を有効にする（テストは deps.gmailDraftCheck を注入）
+  const gmailDraftCheck = deps.gmailDraftCheck ?? (async (email) => {
+    try {
+      return await checkGmailDrafts(email, { fetchImpl });
+    } catch { return { found: false, error: 'error' }; }
+  });
   try {
     const since = dateKey(new Date(time(now) - 120 * DAY));
     const data = await request(credentials, `/rest/v1/quote_requests?select=id,company_name,contact_name,email,event_name,preferred_date,created_at,status,raw_payload&source=eq.event-shop.jp&created_at=gte.${since}&order=created_at.desc&limit=200`, fetchImpl);
     const { leads, duplicateCount } = deduplicateLeads(data);
     const results = [];
-    for (const lead of leads) results.push(await classifyLead(lead, await request(credentials, messageQuery(lead), fetchImpl), now, deps));
+    for (const lead of leads) results.push(await classifyLead(lead, await request(credentials, messageQuery(lead), fetchImpl), now, { gmailDraftCheck }));
     const sorted = sortLeads(results);
     if (args.includes('--quiet') && !sorted.some(l => l.category === '🔴 要返信')) return 0;
     log(args.includes('--json') ? JSON.stringify(sorted, null, 2) : renderMarkdown(sorted, duplicateCount, now));

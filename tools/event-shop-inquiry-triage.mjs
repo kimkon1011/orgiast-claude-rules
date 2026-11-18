@@ -7,6 +7,8 @@ const DAY = 86400000;
 const dateKey = value => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo' }).format(new Date(value));
 const time = value => new Date(value).getTime();
 const bodyLines = message => String(message?.body ?? '').split(/\r?\n/).filter(line => !/^\s*>/.test(line)).map(line => line.trim()).filter(Boolean);
+const autoReplyPattern = /自動返信|自動応答|自動送信|auto-?reply|automatic\s*reply|out\s*of\s*office|不在に|不在中/i;
+const isAutoReply = msg => msg && (autoReplyPattern.test(msg.subject ?? '') || autoReplyPattern.test(bodyLines(msg).join('\n')));
 export function deduplicateMessages(messages) {
   const seen = new Set();
   return [...messages].sort((a, b) => time(b.received_at) - time(a.received_at)).filter(m => {
@@ -17,10 +19,10 @@ export function deduplicateMessages(messages) {
 }
 export function classifyLead(lead, messages, now = new Date()) {
   const unique = deduplicateMessages(messages);
-  const lastIn = unique.find(m => m.direction === 'inbound');
+  const lastIn = unique.find(m => m.direction === 'inbound' && !isAutoReply(m));
   const lastOut = unique.find(m => m.direction === 'outbound');
   const past = Boolean(lead.preferred_date && lead.preferred_date < dateKey(now));
-  const declined = /見送|改めてご連絡|必要な際は|今回は|辞退/.test(bodyLines(lastIn).join('\n'));
+  const declined = /見送|改めてご連絡|必要な際は|今回は|辞退|別社|他社に(?:依頼|お願い|決|発注)|他社で(?:進め|決|お願い)|お断り|見合わせ/.test(bodyLines(lastIn).join('\n'));
   // 登録上の開催日が過ぎていても、直近14日以内に顧客から未回答の返信があれば進行中として扱う。
   const activeReply = Boolean(lastIn && (!lastOut || time(lastIn.received_at) > time(lastOut.received_at)) && time(now) - time(lastIn.received_at) < 14 * DAY);
   let category, nextAction;

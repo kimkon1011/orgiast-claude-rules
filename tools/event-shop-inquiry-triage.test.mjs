@@ -138,6 +138,22 @@ test('mainはmock fetchで認証ヘッダ・検索・JSON・quiet・API失敗を
   await main({ env, now, fetchImpl: async () => ({ ok: false, status: 503, statusText: 'Unavailable' }), log: s => quiet.push(s) });
   assert.equal(quiet[0], 'イベント百貨店問合せ: 未確認（503 Unavailable）');
 });
+test('9: 自動返信のみの顧客は顧客待ち', () => {
+  const result = classifyLead(lead, [msg('outbound', '23'), { ...msg('inbound', '25', '※こちらは自動返信メッセージです'), subject: undefined }], now);
+  assert.equal(result.category, '🟡 顧客待ち');
+});
+test('9b: 自動返信より前に本物の返信があれば要返信のまま', () => {
+  const result = classifyLead(lead, [msg('outbound', '22'), { ...msg('inbound', '24', '※こちらは自動返信メッセージです'), subject: undefined }, msg('inbound', '26', '御見積書をお送りください')], now);
+  assert.equal(result.category, '🔴 要返信');
+  assert.equal(result.nextAction, '顧客の返信に未回答: 御見積書をお送りください');
+});
+test('10: 別社に依頼の辞退で終了候補', () => {
+  assert.equal(classifyLead(lead, [msg('inbound', '25', '別社にお願いすることになりました')], now).category, '⚪ 終了候補');
+});
+test('10b: 他社との比較は辞退にならない', () => {
+  const result = classifyLead(lead, [msg('inbound', '25', '他社様のお見積もりと比較したいです')], now);
+  assert.equal(result.category, '🔴 要返信');
+});
 test('Markdownの件数・日時・リンク・重複注記・セルエスケープ', () => {
   const output = renderMarkdown([classifyLead({ ...lead, company_name: 'A|B' }, [], now)], 1, now);
   assert.match(output, /2026-10-27 12:00/);

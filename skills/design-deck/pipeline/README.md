@@ -35,12 +35,14 @@ node deck-hybrid/preview.mjs
 
 共通は `id / type / kicker / headline / body / footerPage`。写真生成ページに `visualBrief / photoSources / fallbackPhoto`、数字ページに `stats` を置く。任意の `footerText / footerNote / photoCaption / visualAlt` で案件の文言を指定できる。
 
+全ページ（表紙・会社概要・表を含む）に画像が必須。`directVisual`、`fallbackPhoto`、`elements: [{"kind":"image","src":"../assets/photo.jpg"}]` または `visualBrief` で指定する。要素形式では最初の画像を写真パネルに使う。生成指定のみの場合は build 前に `gen-visuals.mjs` を実行し、生成ファイルまたはフォールバック画像を用意する。`photoSources` や図面用 `svg` だけでは表示画像の指定にならない。build / report は画像なしページを終了コード非0で拒否し、`BUILD-REPORT.md` に「画像なしページ: N件」と全対象ページ名を残す。例外指定はない。生成画像には「イメージ（AI生成）」を注記する。
+
 | type | 表現 | 必須の追加データ |
 |---|---|---|
 | `cover` | フルブリード写真＋左下の白い文字面・大見出し | `visualBrief`, `photoSources`, `fallbackPhoto`, `subtitle`, `event`等 |
 | `stats` | 左に96pxの数字2〜4個、右に写真パネル | `stats`, `facts`, `booth`, `cost` |
 | `visual` | 右60%の写真と左の短い見出し・本文 | 画像情報 |
-| `table` | 表主体、必要なら写真帯を検討 | `table.headers`, `table.rows`, `insight` |
+| `table` | 表＋写真パネル | `table.headers`, `table.rows`, `insight`, 画像情報 |
 | `layout-diagram` | v3 SVG平面図＋96pxの面積と説明 | `svg`, `companyCount`, `area`, `frontWidth`, `features`, `shared`, `note` |
 | `perspective` | 社長提供画像を直接 `<img>` で大きく表示 | `directVisual`, `crop`, `points`, `note`。`visualBrief`は禁止 |
 | `leads-chart` | v3の棒グラフ・共有プール表＋右の接客写真 | `svg`, `table`, `chartNote`, `poolNote`, `methods`, `reason` |
@@ -74,9 +76,9 @@ node deck-hybrid/preview.mjs
 
 - 1ページ1メッセージ。1600×900、`@page`一致。navy / teal / 白 / amber。本文外側余白96px以上（写真のフルブリードは例外）、数字96px級、単位は小さく。
 - 見出し14字超・導入本文の推定3行超は `out/build-checks.json` に警告。ビルドは止まらないので、警告を読んで直す。表セル・構造化項目・脚注は導入本文と区別する。
-- 写真面積40%以上。暗化filter・opacityなし。表・平面図主体は写真を省略する。表紙は白い文字面・キャプションが隠す面積も差し引いて検査する。
+- 写真面積40%以上。暗化filter・opacityなし。表・平面図主体にも画像を入れ、競合する内容は複数ページに分ける。表紙は白い文字面・キャプションが隠す面積も差し引いて検査する。
 - `preview.mjs` は画像decode・フォント読込を待ち、本文実測行数、写真面積、文字切れ、フッター衝突、暗化を検査する。問題があればPNG・`out/preview-checks.json` を残してexit 1。
-- 全ページPNGをReadで原寸目視し、写真 / 余白 / 文字量 / 数字 / 一貫性の5観点を5点満点で採点。写真のない図表ページは写真のみ対象外。1項目でも3点以下なら直し、build→preview→全ページ目視をやり直す。
+- 全ページPNGをReadで原寸目視し、写真 / 余白 / 文字量 / 数字 / 一貫性の5観点を5点満点で採点。写真も全ページ採点する。1項目でも3点以下なら直し、build→preview→全ページ目視をやり直す。
 - Chrome等で直接PDF化した場合も `node tools/pdf-page-check.mjs --pdf <file>` で全ページをPNGにしてReadする。社内向けの記載がないことも確認する。
 - `visual-review.json` は下の形式。再出力後は採点も更新する。保存後、次のコマンドで報告を更新できる。
 

@@ -61,6 +61,9 @@
     "headline": "選択肢を比較する",
     "body": "判断軸を先に示す。",
     "footerPage": "04",
+    "visualBrief": "完成ブースの素材と仕上がりを比較できる実写調の写真。縦長パネルの中央に主役を置く。文字は描かない。",
+    "photoSources": ["../assets/photo-01.jpg", "../assets/photo-02.jpg"],
+    "fallbackPhoto": "../assets/photo-01.jpg",
     "table": {
       "headers": [
         "案",
@@ -89,6 +92,9 @@
     "headline": "実行順序を示す",
     "body": "次の行動を迷わせない。",
     "footerPage": "05",
+    "visualBrief": "完成ブースで最終確認を行う担当者の自然な様子。明るい実写調、縦長パネル用。文字は描かない。",
+    "photoSources": ["../assets/photo-01.jpg", "../assets/photo-02.jpg"],
+    "fallbackPhoto": "../assets/photo-02.jpg",
     "timeline": [
       {
         "date": "10月",
@@ -115,6 +121,9 @@
     "headline": "三案を一目で比べる",
     "body": "差が出る項目だけを残す。",
     "footerPage": "06",
+    "visualBrief": "回遊しやすい完成会場の実写調の写真。通路と展示台を中央に収める。文字は描かない。",
+    "photoSources": ["../assets/photo-01.jpg", "../assets/photo-02.jpg"],
+    "fallbackPhoto": "../assets/photo-01.jpg",
     "columns": [
       {
         "title": "A案",

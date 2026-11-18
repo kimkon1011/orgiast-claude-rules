@@ -12,7 +12,7 @@ export function loadPages(){
   for(const page of pages){
     if(!/^[a-z0-9-]+$/.test(page.id)||ids.has(page.id))throw new Error(`Invalid/duplicate page id: ${page.id}`);
     ids.add(page.id);
-    for(const file of [...(page.photoSources??[]),page.directVisual,page.fallbackPhoto,page.svg].filter(Boolean)){
+    for(const file of [...(page.photoSources??[]),page.directVisual,page.fallbackPhoto,page.svg,...(page.elements??[]).filter(element=>element.kind==='image').map(element=>element.src)].filter(Boolean)){
       const resolved=path.resolve(dir,file);
       if(!resolved.startsWith(root+path.sep)||!fs.existsSync(resolved))throw new Error(`Missing/outside project asset: ${file}`);
     }

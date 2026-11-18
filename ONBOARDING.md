@@ -131,6 +131,8 @@ user に何かを頼む前に `user の時間を使う理由: <長期的利益�
 
 **🔴 判断材料は聞かれる前に調べる。費用・プラン・契約・招待・手作業の提案は、2案以上の比較表（月額・得られる枠・手間）＋出典＋推奨を付けて出す。decision-research-gate が差し戻す（2026-10-10 kim 厳命）。**
 
+**無料・既存経路を先に実測する（2026-11-18、paid-option-before-free-route）。** 費用がかかる案は、無料・既存経路（Beeper／既存ツール／他AIレーン／既存契約）を実測で洗い出し、使えない理由を示せた場合だけ、最後に比較表付きで出す。先頭に置かない。無料案を案1にし、同じ応答に `[FREE-ALT-CHECKED: 調べた無料経路と実測結果（20文字以上）]` を付ける。kim 自身がその課金を指示済みの場合だけ `[PAID-OK: 「kim の指示の引用」]` で例外を示す。`[RESEARCH-OK]` ではこの確認を省略できない。過去の事実・引用は提案に数えない。セッション中に関連memoryが更新された通知が出たら、費用提案前に再読する。既存送信経路でも本文承認・receiptは省略しない。
+
 nishi@・cr@・seisaku-team@・Genba の席も user=kim（2026-10-28 kim）。kim が別PCにいる前提で kim-PC に回さず、その場で直接聞く。この席では共有 memory 索引の冒頭注記が毎セッション自動で読まれ、同じ規則を伝える（全PC索引の予算を使わない）。対象アカウントの正本は `tools/lib/kim-operated.mjs`。この席では kim-PC の memory（毎晩 `~/.claude/shared-memory/` へ配布、kim の役割・プロフィールの user 型を含む）を kim 本人の好み・厳命としてそのまま適用する。「kim-PC に確認します」「kim さんに伝えてください」は書かない。対話セッションの質問は kim-PC へ自動転送しない（`fleet-question-relay`）。fleet-mail で kim-PC に送るのは、kim-PC の Discord・ローカルファイルなど kim-PC でしか触れない資源を使う作業依頼だけにする。社員本人が使う席（例: 東邦2階HP）は従来どおり別人として扱う。根拠（2026-10-28 kim）: kim-PC で話した内容が他アカウントに反映されず、同じ話を繰り返していた。
 
 **🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PR は作った席が自分で着地させる。pr-land.mjs --title "<題>" --body-file <本文> でbaseへpushし着地させる（通常はautomerge、安全弁パスはCI合格後pr-merge、workflow変更は停止）。権限・鍵・マージを kim-PC に頼まない。不足時は `node tools/access-doctor.mjs --fix`。内部Gmail下書き禁止。**社内DMは承認不要。秘密値非記載。社外全文承認後。

@@ -30,7 +30,7 @@ export function deadLanes(health) {
 // 推奨対処。fixNow=true は fleet-fix-now.ps1 -NoLogin で受信側PC自身が直せる試行、human は人の操作が要る理由。
 export function repairAdvice(lane, reason) {
   const r = String(reason ?? '');
-  if (/payment_required/.test(r)) return { fixNow: false, auto: false, human: '請求設定を開き支払い方法を確認しオートチャージ ON を保存する（Claude からは決済できない）' };
+  if (/payment_required/.test(r)) return { fixNow: false, auto: false, human: 'まず無料枠・既存契約内の他AIレーンを実測して切り替える。追加費用案は代替不可の証拠と比較表がある場合だけ最後に提示' };
   if (/physical_operation/.test(r)) return { fixNow: false, auto: false, human: '管理者 PowerShell で wsl.exe --install --no-distribution を実行して Windows を再起動する（管理者権限が必要）' };
   if (/^cooldown|demoted/.test(r)) return { fixNow: false, auto: true, human: null, note: '利用上限のクールダウン中。期限が来れば自動復帰する' };
   if (lane === 'codex') {

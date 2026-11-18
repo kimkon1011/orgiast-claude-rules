@@ -601,7 +601,7 @@ test('29. B4 kind は PLAYBOOK の mode/effect で action 化され baseline に
   assert.equal(providerUnhealthy.effect, 'writeRoutingOverride');
   assert.equal(providerUnhealthy.provider, 'groq');
   assert.equal(providerUnhealthy.baseline.metric, 'failRate');
-  assert.match(providerUnhealthy.reportNote, /有料枠で解消可\(例: Groq Dev tier\)/);
+  assert.match(providerUnhealthy.reportNote, /まず無料枠・既存契約内の他AIレーンを実測/);
 
   const codexSaturated = byKind('codex_saturated');
   assert.ok(codexSaturated);

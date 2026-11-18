@@ -61,6 +61,9 @@
     "headline": "選択肢を比較する",
     "body": "判断軸を先に示す。",
     "footerPage": "04",
+    "visualBrief": "比較検討する担当者と提案資料を右側に置き、表の可読領域を左側に確保。",
+    "photoSources": ["../assets/photo-01.jpg", "../assets/photo-02.jpg"],
+    "fallbackPhoto": "../assets/photo-01.jpg",
     "table": {
       "headers": [
         "案",
@@ -89,6 +92,9 @@
     "headline": "実行順序を示す",
     "body": "次の行動を迷わせない。",
     "footerPage": "05",
+    "visualBrief": "進行中の会場準備を中央に置き、工程の流れを感じる実写調。",
+    "photoSources": ["../assets/photo-01.jpg", "../assets/photo-03.jpg"],
+    "fallbackPhoto": "../assets/photo-03.jpg",
     "timeline": [
       {
         "date": "10月",
@@ -115,6 +121,9 @@
     "headline": "三案を一目で比べる",
     "body": "差が出る項目だけを残す。",
     "footerPage": "06",
+    "visualBrief": "三つの展示案を見比べる担当者。比較欄を邪魔しない余白を右側に確保。",
+    "photoSources": ["../assets/photo-02.jpg", "../assets/photo-03.jpg"],
+    "fallbackPhoto": "../assets/photo-02.jpg",
     "columns": [
       {
         "title": "A案",

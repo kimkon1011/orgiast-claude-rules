@@ -26,6 +26,11 @@ export function evaluateTop3Delivery(asOf, nowMs) {
   return { key, label, lastSuccess: asOf, ageDays, status, line };
 }
 
+export function evaluateTop3DeliveryForHost({ taskRegistered, stateFileExists, asOf }, nowMs) {
+  if (!taskRegistered && !stateFileExists) return null;
+  return evaluateTop3Delivery(asOf, nowMs);
+}
+
 export function evaluate(entries, lastSuccessByKey, nowMs) {
   return entries.map((entry) => {
     const key = `${entry.repo}#${entry.workflow}`;
@@ -137,6 +142,15 @@ function fetchLastSuccess(entry) {
   }
 }
 
+function isTop3CatchupTaskRegistered() {
+  if (process.platform !== 'win32') return false;
+  const result = spawnSync('schtasks', ['/query', '/tn', 'OrgiastTop3Catchup'], {
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+  return !result.error && result.status === 0;
+}
+
 function main() {
   const toolsDir = path.dirname(fileURLToPath(import.meta.url));
   const entries = JSON.parse(fs.readFileSync(path.join(toolsDir, 'cron-watch.json'), 'utf8'));
@@ -156,9 +170,16 @@ function main() {
   try { complianceLastRun = JSON.parse(fs.readFileSync(complianceState, 'utf8')).lastRunAt || null; } catch { }
   const complianceAge = complianceLastRun ? (nowMs - Date.parse(complianceLastRun)) / DAY_MS : Infinity;
   results.push({ key: 'local#rule-compliance-loop', label: 'ルール遵守監査', lastSuccess: complianceLastRun, ageDays: complianceAge, status: complianceAge >= 2 ? (complianceLastRun ? 'stale' : 'never') : 'ok', line: complianceAge >= 2 ? `🚨 ルール遵守監査: ${complianceLastRun ? `最終実行 ${complianceLastRun.slice(0, 10)}` : '実行記録なし'}` : `✅ ルール遵守監査: 最終実行 ${complianceLastRun.slice(0, 10)}` });
+  const top3StateFile = path.join(outputDir, 'secretary-state', 'top3.json');
+  const top3StateFileExists = fs.existsSync(top3StateFile);
   let top3AsOf = null;
-  try { top3AsOf = JSON.parse(fs.readFileSync(path.join(outputDir, 'secretary-state', 'top3.json'), 'utf8')).asOf || null; } catch { }
-  results.push(evaluateTop3Delivery(top3AsOf, nowMs));
+  try { top3AsOf = JSON.parse(fs.readFileSync(top3StateFile, 'utf8')).asOf || null; } catch { }
+  const top3Result = evaluateTop3DeliveryForHost({
+    taskRegistered: isTop3CatchupTaskRegistered(),
+    stateFileExists: top3StateFileExists,
+    asOf: top3AsOf,
+  }, nowMs);
+  if (top3Result) results.push(top3Result);
   let skipRecords = [];
   try { skipRecords = fs.readFileSync(path.join(outputDir, 'handoff-gate-skips.jsonl'), 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse); } catch { }
   const skipAlert = evaluateGateSkips(skipRecords, nowMs);

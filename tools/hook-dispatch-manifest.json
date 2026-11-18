@@ -364,6 +364,12 @@
         "timeout": 15
       },
       {
+        "matcher": "Bash|PowerShell|Edit|Write|MultiEdit",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/unrequested-automation-gate.mjs\"",
+        "timeout": 15
+      },
+      {
         "matcher": "*",
         "type": "command",
         "command": "node \"${repo}/tools/api-billing-guard.mjs\"",

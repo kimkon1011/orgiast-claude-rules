@@ -134,7 +134,7 @@ function isRetryableStatus(status, body) {
   return status >= 500 && status < 600;
 }
 function parseRetryAfter(response) {
-  const val = response.headers.get('retry-after');
+  const val = response.headers?.get?.('retry-after');
   if (!val) return 0;
   const secs = parseInt(val, 10);
   return Number.isFinite(secs) ? Math.min(secs, 60) * 1000 : 0;
@@ -221,13 +221,13 @@ export function notifyText(items, now) {
   return displayPcNames(`【社外返信待ち】24時間以上お待たせしている社外の方が ${items.length} 件あります。\n${lines.join('\n')}${items.length > 10 ? `\nほか ${items.length - 10} 件` : ''}\n次のセッションの冒頭で返信下書きを用意します。`);
 }
 
-export async function scan({ home = defaultHome(), now = Date.now(), mailboxes = MAILBOXES, push = true, deps = {}, staff = loadStaff(), notify, classify = askLlm } = {}) {
+export async function scan({ home = defaultHome(), now = Date.now(), mailboxes = MAILBOXES, push = true, deps = {}, staff = loadStaff(), notify, classify = askLlm, sleep = defaultSleep } = {}) {
   const previous = readJsonSafe(externalFile(home), {});
   const cacheFile = path.join(stateDir(home), 'external-waiting-llm-cache.json');
   const cache = readJsonSafe(cacheFile, {});
   const sources = {}, collected = [], stats = { llmCalls: 0, llmFailures: 0, ackSkipped: 0, answeredElsewhere: 0 };
   for (const mailbox of mailboxes) {
-    try { collected.push(...await scanMailbox(mailbox, { ...deps, staff, now, stats })); sources[mailbox] = { ok: true }; }
+    try { collected.push(...await scanMailbox(mailbox, { ...deps, staff, now, stats, sleep })); sources[mailbox] = { ok: true }; }
     catch (error) {
       sources[mailbox] = { ok: false, error: String(error.message || error).slice(0, 300) };
       collected.push(...(previous.items || []).filter(item => item.mailbox === mailbox)); // 取得失敗を 0 件扱いにしない

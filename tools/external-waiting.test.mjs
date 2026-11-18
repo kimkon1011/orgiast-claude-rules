@@ -90,7 +90,7 @@ function fakeGmail({ threads = [], drafts = [], fail = false, bodies = {}, sent 
   };
 }
 const deps = (over = {}) => ({ fetchImpl: fakeGmail(over), getToken: async () => 'token' });
-const run = (home, over = {}, options = {}) => scan({ home, now: NOW, deps: deps(over), staff: new Set(), mailboxes: [MB], push: false, ...options });
+const run = (home, over = {}, options = {}) => scan({ home, now: NOW, deps: deps(over), staff: new Set(), mailboxes: [MB], push: false, sleep: async () => {}, ...options });
 
 test('scan は状態ファイルを書き、取得失敗のメールボックスは ok:false で 0 件扱いにしない', async t => {
   const home = fixture(t);

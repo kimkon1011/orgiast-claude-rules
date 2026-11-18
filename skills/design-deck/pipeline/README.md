@@ -29,7 +29,7 @@ node deck-hybrid/preview.mjs
 ```
 
 通常は既存画像をスキップ。`--force` は `visualBrief` のある全ページを再生成する。文字・数字・表だけの修正ではbuild→previewだけを実行する。
-出力は `out/<title>.html` / `.pdf`、全ページ `out/preview-pNN.png`、`out/preview-index.html`、各検査JSON、`BUILD-REPORT.md`。`report.mjs`・`runtime.mjs`・`styles.css` も必ず一緒にコピーする。
+出力は `out/<title>.html` / `.pdf`、全ページ `out/preview-pNN.png`、`out/preview-index.html`、各検査JSON、`BUILD-REPORT.md`。`report.mjs`・`runtime.mjs`・`image-gate.mjs`・`styles.css` も必ず一緒にコピーする。
 
 ## ページ定義
 

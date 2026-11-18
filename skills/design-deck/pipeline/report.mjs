@@ -15,7 +15,7 @@ export function writeReport(){
   const cell=s=>String(s??'').replace(/\|/g,'\\|').replace(/\r?\n/g,'<br>');
   const rows=pages.map(p=>{
     const visual=checks.pages.find(c=>c.id===p.id)?.visual;
-    const sources=p.directVisual?[p.directVisual]:p.photoSources??[];
+    const sources=p.directVisual?[p.directVisual]:p.photoSources??(visual?[visual.file]:[]);
     return `| ${cell(p.id)} ${cell(p.headline)} | ${cell(p.type)} | ${cell(sources.join(', '))} | ${cell(visual?.mode??'写真なし')} |`;
   });
   fs.writeFileSync(path.join(dir,'BUILD-REPORT.md'),`# ${title} BUILD REPORT

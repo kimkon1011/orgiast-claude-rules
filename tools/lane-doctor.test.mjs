@@ -122,6 +122,24 @@ test('a fresh failed Codex probe is re-measured instead of being reused',async t
   const r=await laneDoctorProbe({home:h,now,probe,notify:async()=>({delivered:'dm'}),listWsl:async()=>'Ubuntu'});
   assert.equal(r.lanes.codex.alive,true);
 });
+test('Codex probe 失敗時に WSL が無応答なら physical_operation に分類する', async t => {
+  const h = fixture(t); let checks = 0;
+  const r = await laneDoctorProbe({ home: h, now, platform: 'win32', providers: ['codex'], listWsl: () => 'Ubuntu',
+    probe: async () => ({ code: 1, text: '' }), wslStatusCheck: async () => { checks++; return { responsive: false, timedOut: true }; }, notify: async () => ({ delivered: 'test' }) });
+  assert.equal(checks, 1);
+  assert.equal(r.lanes.codex.reason, 'dead:physical_operation');
+  assert.match(r.lanes.codex.error, /WSL.*無応答.*PC 再起動.*WslService 再起動/);
+  assert.equal(r.lanes.codex.probeEvidence, r.lanes.codex.error);
+  assert.ok(r.deadNeedsUser.some(item => item.provider === 'codex' && item.reason === 'dead:physical_operation'));
+});
+test('Codex probe 失敗時に WSL が応答すれば probe_failed のままにする', async t => {
+  const h = fixture(t); let checks = 0;
+  const r = await laneDoctorProbe({ home: h, now, platform: 'win32', providers: ['codex'], listWsl: () => 'Ubuntu',
+    probe: async () => ({ code: 1, text: 'codex failed' }), wslStatusCheck: async () => { checks++; return { responsive: true, timedOut: false }; }, notify: async () => ({ delivered: 'test' }) });
+  assert.equal(checks, 1);
+  assert.equal(r.lanes.codex.reason, 'probe_failed');
+  assert.equal(r.lanes.codex.probeEvidence, 'exit 1');
+});
 test('notification reports key owner only from comments',t=>{const h=fixture(t);fs.appendFileSync(path.join(h,'.claude/gemini.env'),'# owner: owner@example.com\n');const text=notificationText({provider:'gemini',reason:'dead:payment_required'},h);assert.match(text,/owner@example.com/);assert.ok(!text.includes('test-fixture'));});
 test('successful probe supersedes older limit history; expired cooldown becomes recheckable',t=>{
   const h=fixture(t),stamp=new Date(now-1000).toISOString();

@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyLead, deduplicateLeads, deduplicateMessages, sortLeads, main, messageQuery, renderMarkdown } from './event-shop-inquiry-triage.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { classifyLead, deduplicateLeads, deduplicateMessages, sortLeads, main, messageQuery, renderMarkdown, loadCredentials } from './event-shop-inquiry-triage.mjs';
 const now = new Date('2026-10-27T03:00:00Z');
 const lead = { id: 'a', email: 'client@example.com', company_name: '会社', contact_name: '担当', created_at: '2026-10-21T03:00:00Z', preferred_date: '2026-11-18', raw_payload: { product: '展示会' } };
 const msg = (direction, day, body = '') => ({ direction, received_at: `2026-10-${day}T03:00:00Z`, body });
@@ -50,7 +53,10 @@ test('7: 要返信の開催日順・受信順・日付なし、その後顧客�
   const values = [white, red('none', ''), red('late', '2026-12-01'), yellow, red('early-new', '2026-11-01', '2026-10-22'), red('early-old', '2026-11-01')];
   assert.deepEqual(sortLeads(values).map(l => l.id), ['early-old', 'early-new', 'late', 'none', 'yellow', 'white']);
 });
-test('8: 認証なしのmainは1行を出しexit 0を返す', async () => {
+test('8: 認証なしのmainは試した全パスを1行で出しexit 0を返す', async t => {
+  t.mock.method(os, 'homedir', () => '/mock-home');
+  t.mock.method(fs, 'existsSync', () => false);
+  t.mock.method(fs.promises, 'readFile', () => { assert.fail('存在しないファイルを読まない'); });
   const output = [];
   const code = await main({
     env: { SUPABASE_URL: '', SUPABASE_SERVICE_ROLE_KEY: '', EVENT_SHOP_ENV_FILE: '/tmp/nonexistent-inquiry-triage-env-827361' },
@@ -59,7 +65,43 @@ test('8: 認証なしのmainは1行を出しexit 0を返す', async () => {
   });
   assert.equal(code, 0);
   assert.equal(output.length, 1);
-  assert.match(output[0], /未確認（認証情報なし。試したパス:/);
+  assert.equal(output[0], `イベント百貨店問合せ: 未確認（認証情報なし。試したパス: /tmp/nonexistent-inquiry-triage-env-827361, ${path.join('/mock-home', 'event-shop', '.env.local')}, D:/Claude/event-shop/.env.local）`);
+});
+
+for (const scenario of [
+  { name: '明示パスを最優先', explicit: '/explicit/.env.local', existing: [0, 1, 2], selected: 0 },
+  { name: '環境変数なしでホーム配下を選ぶ', existing: [0, 1], selected: 0 },
+  { name: '明示パスがなければホーム配下を選ぶ', explicit: '/missing/.env.local', existing: [1, 2], selected: 1 },
+  { name: 'ホーム配下もなければ旧PCパスを選ぶ', explicit: '/missing/.env.local', existing: [2], selected: 2 },
+]) {
+  test(`認証ファイル探索: ${scenario.name}`, async t => {
+    t.mock.method(os, 'homedir', () => '/mock-home');
+    const candidates = [scenario.explicit, path.join('/mock-home', 'event-shop', '.env.local'), 'D:/Claude/event-shop/.env.local'].filter(Boolean);
+    const checked = [];
+    t.mock.method(fs, 'existsSync', candidate => {
+      checked.push(candidate);
+      return scenario.existing.some(index => candidates[index] === candidate);
+    });
+    t.mock.method(fs.promises, 'readFile', async (file, encoding) => {
+      assert.equal(file, candidates[scenario.selected]);
+      assert.equal(encoding, 'utf8');
+      return 'NEXT_PUBLIC_SUPABASE_URL="https://example.invalid"\nSUPABASE_SECRET_KEY="test-key"\n';
+    });
+    const credentials = await loadCredentials({ EVENT_SHOP_ENV_FILE: scenario.explicit });
+    assert.deepEqual(credentials, { url: 'https://example.invalid', key: 'test-key', path: candidates[scenario.selected] });
+    assert.deepEqual(checked, candidates.slice(0, scenario.selected + 1));
+  });
+}
+
+test('認証ファイル探索: 最初のファイルが空でも後続を読まない', async t => {
+  t.mock.method(fs, 'existsSync', () => true);
+  t.mock.method(fs.promises, 'readFile', async file => {
+    assert.equal(file, '/explicit/.env.local');
+    return '';
+  });
+  assert.deepEqual(await loadCredentials({ EVENT_SHOP_ENV_FILE: '/explicit/.env.local' }), {
+    url: undefined, key: undefined, path: '/explicit/.env.local',
+  });
 });
 test('メールの重複除去はmessage id、なければ日時と方向', () => {
   const a = { ...msg('inbound', '25'), rfc822_message_id: '<one>' };

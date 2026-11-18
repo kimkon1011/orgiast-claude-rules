@@ -1,4 +1,6 @@
-import { readFile } from 'node:fs/promises';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
 const DAY = 86400000;
@@ -53,16 +55,17 @@ export function sortLeads(leads) {
   return [...leads].sort((a, b) => rank[a.category] - rank[b.category] || (a.category === '🔴 要返信' ? (a.preferred_date || '9999').localeCompare(b.preferred_date || '9999') : 0) || time(a.created_at) - time(b.created_at));
 }
 export async function loadCredentials(env = process.env) {
-  const path = env.EVENT_SHOP_ENV_FILE || 'D:/Claude/event-shop/.env.local';
-  if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) return { url: env.SUPABASE_URL, key: env.SUPABASE_SERVICE_ROLE_KEY, path };
+  const candidates = [env.EVENT_SHOP_ENV_FILE, path.join(os.homedir(), 'event-shop', '.env.local'), 'D:/Claude/event-shop/.env.local'].filter(Boolean);
+  if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) return { url: env.SUPABASE_URL, key: env.SUPABASE_SERVICE_ROLE_KEY, path: candidates[0] };
+  const filePath = candidates.find(candidate => fs.existsSync(candidate));
   let contents = '';
-  try { contents = await readFile(path, 'utf8'); } catch { /* Missing credentials must not block session startup. */ }
+  try { if (filePath) contents = await fs.promises.readFile(filePath, 'utf8'); } catch { /* Missing credentials must not block session startup. */ }
   const values = {};
   for (const line of contents.split(/\r?\n/)) {
     const match = line.match(/^\s*([A-Z_]+)\s*=\s*(.*?)\s*$/);
     if (match) values[match[1]] = match[2].replace(/^"(.*)"$/, '$1');
   }
-  return { url: values.NEXT_PUBLIC_SUPABASE_URL || values.SUPABASE_URL, key: values.SUPABASE_SERVICE_ROLE_KEY || values.SUPABASE_SECRET_KEY, path };
+  return { url: values.NEXT_PUBLIC_SUPABASE_URL || values.SUPABASE_URL, key: values.SUPABASE_SERVICE_ROLE_KEY || values.SUPABASE_SECRET_KEY, path: filePath || candidates.join(', ') };
 }
 const freeMail = /^(gmail\.com|googlemail\.com|yahoo\.(com|co\.jp)|ymail\.com|icloud\.com|me\.com|mac\.com|outlook\.(com|jp)|hotmail\.(com|co\.jp)|live\.(com|jp)|msn\.com|aol\.com)$/i;
 export function messageQuery(lead) {

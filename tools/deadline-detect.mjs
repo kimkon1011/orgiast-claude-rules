@@ -13,6 +13,7 @@ import { reportHeartbeat } from './lib/heartbeat.mjs';
 import { addItem } from './kim-inbox.mjs';
 import { DEFAULT_CONFIG, KINDS, createLedger, loadConfig, defaultHome, dataPath, readJson, saveJson, googleClient, withLedgerLock, parseSheetDate, jstDate, isDuplicate, nextId, sheetUrl, initialize } from './deadline-ledger.mjs';
 import { sourceLoaders, fixtureLoaders } from './lib/deadline-sources.mjs';
+import { budgetMs, withAbort } from './lib/deadline-budget.mjs';
 const exec = promisify(execFile);
 const HIGH_RISK = new Set(['訴訟・法務','行政・消防','補助金・申請']);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -76,7 +77,7 @@ export function parseExtraction(value) {
   }
   return parsed;
 }
-export async function askProvider(provider, documents, { home, execImpl = exec } = {}) {
+export async function askProvider(provider, documents, { home, execImpl = exec, signal } = {}) {
   if (!['gemini','openrouter'].includes(provider)) throw new Error('未許可のプロバイダ');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-llm-'));
   try {
@@ -84,15 +85,15 @@ export async function askProvider(provider, documents, { home, execImpl = exec }
     const args = [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', provider, '--prefer-provider', '--no-fallback', '--category','extraction','--prompt-file',file,'--per-provider-timeout-ms','45000'];
     // Pin the fallback to a non-Claude model even if llm-ask's defaults change.
     if (provider === 'openrouter') args.push('--model','openai/gpt-oss-120b');
-    const { stdout } = await execImpl(process.execPath, args, { encoding: 'utf8', windowsHide: true, timeout: 55000, maxBuffer: 2 * 1024 * 1024, env: { ...process.env, ORGIAST_HOME: home } });
+    const { stdout } = await execImpl(process.execPath, args, { encoding: 'utf8', windowsHide: true, signal, timeout: 55000, maxBuffer: 2 * 1024 * 1024, env: { ...process.env, ORGIAST_HOME: home } });
     return parseExtraction(stdout);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
-export async function extractBatch(documents, { ask = askProvider, home } = {}) {
+export async function extractBatch(documents, { ask = askProvider, home, signal } = {}) {
   let failure;
   for (const provider of ['gemini','openrouter']) {
     try {
-      const result = parseExtraction(await ask(provider, documents, { home }));
+      const result = parseExtraction(await withAbort(signal, () => ask(provider, documents, { home, signal })));
       // Per-item sourceRef validation: items whose sourceRef is not in the input
       // are dropped individually rather than failing the whole batch.
       const valid = [];
@@ -105,7 +106,7 @@ export async function extractBatch(documents, { ask = askProvider, home } = {}) 
         }
       }
       return { items: valid, skipped };
-    } catch (e) { failure = e; }
+    } catch (e) { signal?.throwIfAborted(); failure = e; }
   }
   throw new Error(`Gemini/OpenRouterで抽出できません: ${failure.message}`);
 }
@@ -143,34 +144,61 @@ export function candidateRow(item, document, now) {
     quote: `${item.quote.slice(0,1500)}${document.url ? `\n${document.url}` : ''}`, source: document.source, sourceId: document.sourceRef, detectedAt: now.toISOString(), notifyCount: 0,
     notes: JSON.stringify({ confidence: item.confidence, ...(document.mailbox ? { mailbox: document.mailbox, threadId: document.threadId } : {}), ...(!due && item.due ? { warning: '期限の根拠を確認してください', proposedDue: item.due } : {}) }) };
 }
-export async function runDetect({ home, config, ledger, state, sources, now, dryRun, ask, notify = addItem, stage = () => {}, sleepImpl = sleep }) {
+export async function runDetect({ home, config, ledger, state, sources, now, dryRun, ask, notify = addItem, stage = () => {}, sleepImpl = sleep, nowMs = Date.now, deadlineMs = Infinity, processSignal, finishSignal }) {
   stage('source ledger read start');
-  const all = [...await ledger.read(), ...await ledger.read('候補')];
+  const all = [...await withAbort(finishSignal, () => ledger.read()), ...await withAbort(finishSignal, () => ledger.read('候補'))];
   stage('source ledger read end');
-  const result = { at: now.toISOString(), dryRun, added: 0, candidates: 0, items: [], errors: [], skipped: [] };
-  const persist = () => saveJson(dataPath(home, 'state.json'), state);
-  for (const source of sources) {
+  const result = { at: now.toISOString(), dryRun, added: 0, candidates: 0, items: [], errors: [], skipped: [], partial: [], completedSources: 0 };
+  const persist = () => {
+    try { saveJson(dataPath(home, 'state.json'), state); }
+    catch (error) { throw Object.assign(new Error(`状態書込失敗: ${errorReason(error)}`, { cause: error }), { fatal: true }); }
+  };
+  const queue = [...sources];
+  for (let sourceIndex = 0; sourceIndex < queue.length; sourceIndex++) {
+    const source = queue[sourceIndex];
+    if (processSignal?.aborted || nowMs() >= deadlineMs) {
+      result.skipped.push({ source: source.key, reason: '全体時間上限到達のためsourceをスキップ' });
+      result.partial.push({ source: source.key, reason: '全体時間上限到達' });
+      continue;
+    }
     try {
       stage(`source ${source.key} start`);
-      let loaded;
-      for (let attempt = 0; ; attempt++) {
-        try { loaded = await source.load(); break; }
+      let loaded = state.pending?.[source.key];
+      const resumedPending = Boolean(loaded);
+      if (loaded) stage(`source ${source.key} resume pending (${loaded.documents.length} documents)`);
+      for (let attempt = 0; !loaded; attempt++) {
+        try { loaded = source.handlesAbort ? await source.load() : await withAbort(processSignal, () => source.load()); break; }
         catch (error) {
+          processSignal?.throwIfAborted();
           if (!isQuotaError(error) || attempt >= 2) throw error;
           const delay = 500 * (2 ** attempt);
           stage(`source ${source.key} quota retry ${attempt + 1}/2 in ${delay}ms`);
-          await sleepImpl(delay);
+          await withAbort(processSignal, () => sleepImpl(delay));
         }
       }
-      const { documents, next, skipped: sourceSkipped = [] } = loaded;
+      const { documents, next, skipped: sourceSkipped = [], partial } = loaded;
       stage(`source ${source.key} end (${documents.length} documents)`);
+      if (partial) result.partial.push({ source: source.key, ...partial });
       for (const s of sourceSkipped) result.skipped.push({ source: source.key, ...s });
+      // Save fetched text before extraction so a cutoff never repeats expensive OCR.
+      // The source cursor advances only after every pending batch is accounted for.
+      if (!dryRun) { state.pending ||= {}; state.pending[source.key] = { ...loaded }; persist(); }
+      let sourceComplete = true;
       for (let i = 0; i < documents.length; i += 10) {
+        if (processSignal?.aborted || nowMs() >= deadlineMs) {
+          sourceComplete = false;
+          result.partial.push({ source: source.key, reason: '全体時間上限到達（未抽出documentを次回へ繰越）', remaining: documents.length - i });
+          result.skipped.push({ source: source.key, reason: `全体時間上限到達のため未抽出 ${documents.length - i} 件を繰越` });
+          break;
+        }
         // Completed/unneeded source IDs never go to the model again.
         const batch = documents.slice(i, i + 10).filter(d => !all.some(r => r.sourceId === d.sourceRef));
-        if (!batch.length) continue;
+        if (!batch.length) {
+          if (!dryRun) { state.pending[source.key].documents = documents.slice(i + 10); persist(); }
+          continue;
+        }
         stage(`LLM ${source.key} start (${batch.length} documents)`);
-        const { items, skipped } = await extractBatch(batch, { ask, home });
+        const { items, skipped } = await extractBatch(batch, { ask, home, signal: processSignal });
         stage(`LLM ${source.key} end (${items.length} items)`);
         for (const s of skipped) result.skipped.push({ source: source.key, ...s });
         for (const item of items) {
@@ -189,28 +217,42 @@ export async function runDetect({ home, config, ledger, state, sources, now, dry
           }
           if (isDuplicate(row, all)) continue;
           row.id = nextId(all);
-          if (!dryRun) { stage(`write ${source.key} start`); await ledger.append([row], row.status === '候補' ? '候補' : '期限台帳'); stage(`write ${source.key} end`); }
+          if (!dryRun) {
+            stage(`write ${source.key} start`);
+            try { await withAbort(finishSignal, () => ledger.append([row], row.status === '候補' ? '候補' : '期限台帳')); }
+            catch (error) { throw Object.assign(new Error(`台帳書込失敗: ${errorReason(error)}`, { cause: error }), { fatal: true }); }
+            stage(`write ${source.key} end`);
+          }
           all.push(row); result.items.push(row);
           if (row.status === '候補') {
             result.candidates++;
             if (!dryRun) { state.candidateNoticePending = (state.candidateNoticePending || 0) + 1; persist(); }
           } else result.added++;
         }
+        if (!dryRun) { state.pending[source.key].documents = documents.slice(i + 10); persist(); }
       }
-      if (!dryRun) { state.sources ||= {}; state.sources[source.key] = next; persist(); }
+      if (sourceComplete) {
+        result.completedSources++;
+        if (!dryRun) { state.sources ||= {}; state.sources[source.key] = next; delete state.pending[source.key]; persist(); }
+        if (resumedPending && !dryRun) queue.splice(sourceIndex + 1, 0, source);
+      }
     } catch (e) {
+      if (e.fatal) throw e;
       const reason = errorReason(e);
       stage(`source ${source.key} failed: ${reason}`);
-      if (isQuotaError(e)) result.skipped.push({ source: source.key, reason: `quota retry exhausted: ${reason}` });
+      if (processSignal?.aborted) {
+        result.partial.push({ source: source.key, reason: '全体時間上限到達（取得済みdocumentは次回へ繰越）' });
+        result.skipped.push({ source: source.key, reason: '全体時間上限到達' });
+      } else if (isQuotaError(e)) result.skipped.push({ source: source.key, reason: `quota retry exhausted: ${reason}` });
       else result.errors.push({ source: source.key, error: reason });
     }
   }
-  if (!dryRun && state.candidateNoticePending) {
+  if (!dryRun && state.candidateNoticePending && !processSignal?.aborted && nowMs() < deadlineMs) {
     try {
       const day = jstDate(now);
-      await notify(home, { kind: 'info', source: 'deadline-candidates', text: `候補 ${state.candidateNoticePending} 件。台帳の『候補』タブで承認/不要\n${sheetUrl(config)}`, dedupeKey: `deadline-candidates:${day}` });
+      await withAbort(processSignal, () => notify(home, { kind: 'info', source: 'deadline-candidates', text: `候補 ${state.candidateNoticePending} 件。台帳の『候補』タブで承認/不要\n${sheetUrl(config)}`, dedupeKey: `deadline-candidates:${day}`, signal: processSignal }));
       state.candidateNoticePending = 0; persist();
-    } catch (e) { result.errors.push({ source: 'candidate-notice', error: e.message }); }
+    } catch (e) { if (e.fatal) throw e; result.errors.push({ source: 'candidate-notice', error: e.message }); }
   }
   return result;
 }
@@ -218,6 +260,13 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const home = deps.home || defaultHome(), stdout = deps.stdout || console.log, stderr = deps.stderr || console.error;
   const stageOutput = deps.stage || console.error;
   const stage = message => stageOutput(`[deadline-detect] ${new Date().toISOString()} ${message}`);
+  const nowMs = deps.nowMs || Date.now; const processStarted = nowMs();
+  const processBudgetMs = budgetMs(deps.processBudgetMs ?? process.env.DEADLINE_PROCESS_BUDGET_MS, 540_000, 540_000);
+  const controller = new AbortController(), finishController = new AbortController();
+  const processSignal = controller.signal, finishSignal = finishController.signal;
+  const timer = setTimeout(() => controller.abort(new Error('全体時間上限到達')), processBudgetMs);
+  // Stop acquiring/extracting at 540s; reserve at most 50s for writes and local heartbeat.
+  const finishTimer = setTimeout(() => finishController.abort(new Error('最終書込時間上限到達')), processBudgetMs + 50_000);
   const startedAt = new Date().toISOString(); const dryRun = argv.includes('--dry-run'); let ok = false, valid = false, resultSummary = '';
   try {
     stage('init start');
@@ -245,34 +294,47 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     const config = fixture ? { ...DEFAULT_CONFIG, ...fixture.config } : deps.config || loadConfig(home);
     if (!config.sheetId) {
       stderr('deadline-detect: deadline-ledger 未初期化のため自動初期化します');
-      const result = await initialize({ home, sheets: deps.sheets || createSheetsClient({ fetchImpl: gwsFetch, onStage: stage }), request: deps.request || googleClient() });
+      const request = deps.request || googleClient();
+      const result = await withAbort(processSignal, () => initialize({ home, sheets: deps.sheets || createSheetsClient({ fetchImpl: gwsFetch, onStage: stage, signal: processSignal }), request: (url, options) => request(url, { ...options, signal: processSignal }) }));
       config.sheetId = result.sheetId;
       saveJson(dataPath(home, 'config.json'), config);
     }
-    const sheets = deps.sheets || createSheetsClient({ fetchImpl: gwsFetch, onStage: stage });
+    const sheets = deps.sheets || createSheetsClient({ fetchImpl: gwsFetch, onStage: stage, signal: finishSignal });
+    const sourceSheets = deps.sheets || createSheetsClient({ fetchImpl: gwsFetch, onStage: stage, signal: processSignal });
     const ledger = deps.ledger || (fixture ? { read: async tab => tab === '候補' ? fixture.candidates || [] : fixture.rows || [] } : createLedger({ config, sheets }));
     const work = async () => {
       const state = fixture ? {} : readJson(dataPath(home, 'state.json'), {});
-      const sources = deps.sources || (fixture ? fixtureLoaders(opts.fixture) : sourceLoaders({ home, config, state, now, sheets, request: deps.request || googleClient(), search: deps.search, dryRun, onStage: stage }));
+      const sources = deps.sources || (fixture ? fixtureLoaders(opts.fixture) : sourceLoaders({ home, config, state, now, sheets: sourceSheets, request: deps.request || googleClient(), search: deps.search, dryRun, processSignal, onStage: stage }));
       const mocks = fixture ? readJson(path.join(opts.fixture, 'gemini-response.json')) : null;
       const ask = deps.ask || (fixture ? async (_, docs) => ({ items: mocks.items.filter(i => docs.some(d => d.sourceRef === i.sourceRef)) }) : askProvider);
-      const result = await runDetect({ home, config, ledger, state, sources, now, dryRun, ask, notify: deps.notify, stage });
+      const result = await runDetect({ home, config, ledger, state, sources, now, dryRun, ask, notify: deps.notify, stage, nowMs, deadlineMs: processStarted + processBudgetMs, processSignal, finishSignal });
       if (!dryRun) { const file = dataPath(home, 'detect-log.jsonl'); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.appendFileSync(file, JSON.stringify({ ...result, items: result.items.map(r => ({ id: r.id, sourceId: r.sourceId, status: r.status })) }) + '\n'); }
       return result;
     };
     const result = dryRun ? await work() : await withLedgerLock(home, work);
     stdout(JSON.stringify(result, null, 2));
-    if (result.errors.length === 0) { ok = true; resultSummary = '期限検出完了'; }
+    if (result.errors.length === 0 || result.completedSources > 0 || result.partial.length > 0) {
+      ok = true;
+      const reasons = [...result.errors.map(v => ({ ...v, reason: v.error })), ...result.partial, ...result.skipped].map(v => `${v.source}: ${v.reason}`).filter(Boolean);
+      resultSummary = `期限検出完了 partial=${result.partial.length} skipped=${result.skipped.length} errors=${result.errors.length}${reasons.length ? ` (${reasons.join('; ')})` : ''}`;
+    }
     else resultSummary = `期限検出エラー: ${result.errors.map(e => `${e.source}: ${e.error}`).join('; ')}`;
     return ok ? 0 : 1;
   } catch (e) { const reason = errorReason(e); resultSummary = `期限検出エラー: ${reason}`; stderr(`deadline-detect: ${reason}`); return 1; }
   finally {
+    clearTimeout(timer); clearTimeout(finishTimer);
     if (valid && !dryRun) {
       await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineDetect', startedAt, finishedAt: new Date().toISOString(), ok, summary: resultSummary || (ok ? '期限検出完了' : '鍵なし席のためスキップ'), cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
       const log = path.join(home, '.claude/logs/deadline-detect.log'); fs.mkdirSync(path.dirname(log), { recursive: true });
-      try { fs.appendFileSync(log, `${new Date().toISOString()} deadline-detect ${ok ? 'ok' : resultSummary || 'skipped'}\n`); }
+      try { fs.appendFileSync(log, `${new Date().toISOString()} deadline-detect ${resultSummary || 'skipped'}\n`); }
       catch (error) { if (error.code !== 'EBUSY') throw error; }
     }
   }
 }
-if (isEntry(import.meta.url)) process.exitCode = await main();
+if (isEntry(import.meta.url)) {
+  const code = await main();
+  // All checkpoints and heartbeat are complete. Flush output, then do not let
+  // sockets/child pipes from cancelled work keep the scheduled process alive.
+  await Promise.all([process.stdout, process.stderr].map(stream => new Promise(resolve => stream.write('', resolve))));
+  process.exit(code);
+}

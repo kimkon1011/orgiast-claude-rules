@@ -35,30 +35,51 @@ export async function askProvider(provider, documents, { home, execImpl = exec }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-llm-'));
   try {
     const file = path.join(dir, 'prompt.txt'); fs.writeFileSync(file, extractionPrompt(documents), { mode: 0o600 });
-    const args = [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', provider, '--prefer-provider', '--no-fallback', '--category','extraction','--prompt-file',file,'--per-provider-timeout-ms','45000'];
+    const args = [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', provider, '--prefer-provider', '--no-fallback', '--category','extraction','--prompt-file',file,'--per-provider-timeout-ms','45000','--max','8192'];
     // Pin the fallback to a non-Claude model even if llm-ask's defaults change.
     if (provider === 'openrouter') args.push('--model','openai/gpt-oss-120b');
     const { stdout } = await execImpl(process.execPath, args, { encoding: 'utf8', windowsHide: true, timeout: 55000, maxBuffer: 2 * 1024 * 1024, env: { ...process.env, ORGIAST_HOME: home } });
     return parseExtraction(stdout);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
+/**
+ * Try a single provider; if JSON parsing fails (truncated output),
+ * split the batch in half and recurse so each half has a shorter prompt
+ * and a higher chance of completing within max_tokens.
+ */
+async function tryProvider(provider, documents, { ask, home, depth = 0 }) {
+  if (documents.length === 0) return { items: [], skipped: [] };
+  try {
+    const result = parseExtraction(await ask(provider, documents, { home }));
+    const valid = [];
+    const skipped = [];
+    for (const item of result.items) {
+      if (!documents.some(d => d.sourceRef === item.sourceRef)) {
+        skipped.push({ sourceRef: item.sourceRef, title: item.title, reason: '出典IDが入力にありません' });
+      } else {
+        valid.push(item);
+      }
+    }
+    return { items: valid, skipped };
+  } catch (e) {
+    // Unterminated / unexpected token in JSON → likely truncated output.
+    // Split and retry each half separately.
+    if (/JSON/i.test(e.message) && documents.length >= 2 && depth < 3) {
+      const mid = Math.ceil(documents.length / 2);
+      const [left, right] = await Promise.all([
+        tryProvider(provider, documents.slice(0, mid), { ask, home, depth: depth + 1 }),
+        tryProvider(provider, documents.slice(mid), { ask, home, depth: depth + 1 }),
+      ]);
+      return { items: [...left.items, ...right.items], skipped: [...left.skipped, ...right.skipped] };
+    }
+    throw e;
+  }
+}
 export async function extractBatch(documents, { ask = askProvider, home } = {}) {
   let failure;
   for (const provider of ['gemini','openrouter']) {
     try {
-      const result = parseExtraction(await ask(provider, documents, { home }));
-      // Per-item sourceRef validation: items whose sourceRef is not in the input
-      // are dropped individually rather than failing the whole batch.
-      const valid = [];
-      const skipped = [];
-      for (const item of result.items) {
-        if (!documents.some(d => d.sourceRef === item.sourceRef)) {
-          skipped.push({ sourceRef: item.sourceRef, title: item.title, reason: '出典IDが入力にありません' });
-        } else {
-          valid.push(item);
-        }
-      }
-      return { items: valid, skipped };
+      return await tryProvider(provider, documents, { ask, home });
     } catch (e) { failure = e; }
   }
   throw new Error(`Gemini/OpenRouterで抽出できません: ${failure.message}`);

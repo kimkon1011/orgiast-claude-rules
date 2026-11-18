@@ -610,6 +610,12 @@
       {
         "matcher": "*",
         "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/goal-pace-gate.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "*",
+        "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/org-instructions-char-gate.mjs\"",
         "timeout": 15
       },

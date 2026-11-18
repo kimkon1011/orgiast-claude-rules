@@ -24,7 +24,8 @@ export function judge(input, { home = goalHome(), now = Date.now() } = {}) {
     return { decision: 'pass' };
   } catch (e) { return { decision: 'block', code: 'GOAL-PACE', reason: `[GOAL-PACE] 目標台帳を確認できません: ${e.message}` }; }
 }
-if (isEntry(import.meta.url)) {
+export async function main() {
   try { const result = judge(JSON.parse(await readStdinWithTimeout())); if (result.decision === 'block') console.log(JSON.stringify(result)); }
   catch (e) { console.log(JSON.stringify({ decision: 'block', reason: `[GOAL-PACE] hook入力を確認できません: ${e.message}` })); }
 }
+if (isEntry(import.meta.url)) await main();

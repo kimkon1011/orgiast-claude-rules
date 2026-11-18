@@ -36,6 +36,8 @@
 
 追記ルール: 型名は構造を表す語にする。症状は1行、日付と出典を付ける。ゲート列が空の行は未完了として扱い、埋まるまで消さない。
 
+- 型: 目標の暗黙縮小・ペース放置型（2026-11-18 kim・260430EIG）: kim／顧客が示した目標（数・範囲）を、Claude が下流の文面・計画で承認なく下げる。または、承認待ち・前提待ちで送信を止めたまま、期日までの必要ペースを示さない。原因は、目の前の文面の整合・承認の通りやすさ・前提の完成を優先する部分最適。横展開: 案件目標台帳・引継ぎDrive同期・Stop・社外送信・ルール配布・setup/selfcheck の6箇所。ゲート: GOAL-PACE / GOAL-SHRINK（case-goals / goal-pace-gate / send-context-check）。
+
 - 型: 秘匿置換による通知識別子衝突型（2026-11-13 エイト様 LINE 新着640415182069432706、watch summary 06:00:00Z・外部イベント台帳）→ dedupeKey のハッシュが一律 [REDACTED] となり回答済み別通知へ誤集約。対策: 置換・切詰め対象キーは安定した分割ダイジェストで保持し、誤った既存受領記録を本文照合で修復して未通知分だけ再キュー。ゲート: tools/auto-progress-external-monitor.test.mjs（実 inbox・復旧再実行）/ tools/kim-inbox.test.mjs（秘匿キー・spool 重複防止）。
 
 - 型: ループ誤判定型（再接続の空振りを無限ループと誤判定し、正当な再接続まで遮断）: reopenLoop ガードが「24時間・試行回数」で数え、切断中のままのセッションを3回の空振りで24h遮断した（2026-11-09 実測・4本） → 対策: 成功（verified）した再接続だけを60分窓で数え、unverified は数えない。一覧取得失敗は nightly-reload-vscode が3回リトライして ERROR を残す（無言 SKIP しない）。ゲート: reopen-lost-sessions.test.mjs / nightly-reload-vscode.test.ps1

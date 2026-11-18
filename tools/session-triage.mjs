@@ -388,6 +388,16 @@ async function addLlmJudgments(records) {
 出力形式: {"verdict":"未完了|完了|不明","confidence":0-100,"next":"次にやるべき1アクション(40字以内、完了なら空文字)"}\n\n当初の依頼: ${record.llmTitle}\n末尾assistantテキスト: ${shorten(record.lastAssistantText || '(なし)', 900)}\n構造上の事実: ${facts.join('、') || '特になし'}`;
       // 外部プロバイダへ渡す直前にも必ず全ペイロードを再マスクする。
       prompt = redactSecrets(prompt);
+      // 対話の無いセッション（lastAssistantTextが空かつfirstPromptが無し）は
+      // LLM呼び出しを省略して完了扱いにする。
+      // LLMに渡しても「末尾assistantテキストが空の時だけ不明」の指示で
+      // 常に不明が返り、LLMコストだけ消費して何も進まないため。
+      if (!record.lastAssistantText && record.firstPrompt === '(プロンプトなし)') {
+        const defaultResult = { verdict: '完了', confidence: 90, next: '' };
+        applyLlmResult(record, defaultResult);
+        llmStats.success++;
+        continue;
+      }
       let result;
       let failure = '';
       for (const selectedProvider of providerChain) {

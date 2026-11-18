@@ -64,6 +64,7 @@
     ".pr-body-x0058.md": { "reason": "PR #2258 のボディファイル（X-0058 計画駆動開発）。配布先PCの実行時参照なし" },
     ".pr-body-x0062.md": { "reason": "PR #2290 のボディファイル（X-0062 ④プロセス手順書）。配布先PCの実行時参照なし" },
     ".pr-body-x0079.md": { "reason": "PR #2280 のボディファイル（X-0079 EDD設計書）。配布先PCの実行時参照なし" },
+    ".pr-body-x0065-gmail-draft-check.md": { "reason": "PR #X-0065 のボディファイル。配布先PCの実行時参照なし" },
     "run-file-20261108-003008.md": { "reason": "X-0007 PHASE1 B 引用ギャップ分析の参照メモ。配布先PCの実行時参照なし" },
     "outputs": { "reason": "PR作業の成果物出力。配布先PCの実行時参照なし" },
     "tasks": { "reason": "Codex への実装指示ファイル。配布先PCの実行時参照なし" },

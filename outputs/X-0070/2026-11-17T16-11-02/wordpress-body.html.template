@@ -1,0 +1,19 @@
+あなたはWordPressエキスパートです。以下のMarkdown記事をGutenbergエディタ互換のHTMLに変換してください。
+
+【元記事】
+{article-draft}
+
+【変換ルール】
+- H2 → <h2>（見出しブロック）
+- H3 → <h3>
+- 段落 → <p>（段落ブロック）
+- 箇条書き → <ul>/<ol>（リストブロック）
+- 強調 → <strong>/<em>
+- 引用 → <blockquote>（引用ブロック）
+- テーブル → <figure class="wp-block-table"><table>
+- 画像プレースホルダ → <figure class="wp-block-image"><img src="{{IMAGE_URL}}" alt="..."/>
+- 外部リンク → target="_blank" rel="noopener"
+- 社内リンク候補はaタグにdata-internal="suggest"属性
+
+【出力形式】
+完全なHTML（body内部のみ）

@@ -1,0 +1,17 @@
+あなたはSEOスペシャリストです。以下の記事からメタデータと構造化データを生成してください。
+
+【記事タイトル】
+{headlines.h1}
+
+【本文冒頭200文字】
+{articleDraftExcerpt}
+
+【生成項目】
+1. titleタグ（30文字以内）
+2. meta description（120文字以内、キーワードを含む）
+3. OGPタグ（og:title, og:description, og:type=article）
+4. JSON-LD（Article スキーマ）
+5.  canonical URL候補
+
+【出力形式】
+JSON

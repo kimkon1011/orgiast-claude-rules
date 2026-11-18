@@ -1,0 +1,22 @@
+[
+  {
+    "title": "ブース制作サービス",
+    "path": "/service/booth-production"
+  },
+  {
+    "title": "施工事例一覧",
+    "path": "/case-studies"
+  },
+  {
+    "title": "よくある質問",
+    "path": "/faq"
+  },
+  {
+    "title": "お見積り依頼",
+    "path": "/contact/estimate"
+  },
+  {
+    "title": "展示会ブース成功ガイド",
+    "path": "/guide/exhibition-success"
+  }
+]

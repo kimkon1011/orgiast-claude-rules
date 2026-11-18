@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runOnce, DISCORD_ACCOUNT, messageLink, isMessageRequest, isSyntheticMessage } from './discord-beeper-autoreply.mjs';
+import { runOnce, main, DISCORD_ACCOUNT, messageLink, isMessageRequest, isSyntheticMessage } from './discord-beeper-autoreply.mjs';
+import { main as guildMain } from './discord-autoreply.mjs';
 
 const NOW = Date.parse('2026-11-12T04:00:00Z'); // 13:00 JST (allowed window)
 const reply = { needs_reply: true, needs_kim_decision: false, answer: 'マニュアルの一覧から確認できます。', confidence: 0.95 };
@@ -1217,3 +1218,168 @@ for (const failure of [{ sendError: 'bridge failed' }, { failed: true }, { statu
     assert.equal(f.sent.length, 1);
   });
 }
+
+
+const learnNeutral = { is_correction: false, is_confirmation: false, rule: null, fact: null };
+const learnCorrected = { ...learnNeutral, is_correction: true,
+  rule: '最新の案件状況を確認する', fact: 'スマートエイトの担当は百瀬' };
+const learningFile = (f, name) => path.join(f.home, '.claude', 'discord-autoreply', name);
+const learnedRows = f => fs.readFileSync(learningFile(f, 'corrections.jsonl'), 'utf8')
+  .trim().split('\n').map(line => JSON.parse(line));
+
+function mockLearning(f, classify) {
+  f.options.llm = async ({ category, system, input }) => {
+    if (!system.startsWith('質問／自動返信／kimの発言')) return JSON.stringify(reply);
+    assert.equal(category, 'classification');
+    return JSON.stringify(classify(input));
+  };
+}
+function addKimFollowup(f, text, id = 'kim-followup') {
+  f.options.now = () => NOW + 2000;
+  f.data.chat1.push(message({ id, isSender: true, text, timestamp: new Date(NOW + 1000).toISOString() }));
+}
+
+test('削除されていない代理回答への後続訂正を学習し、再巡回でも重複しない', async t => {
+  const f = fixture(t);
+  mockLearning(f, () => learnCorrected);
+  assert.equal((await runOnce(f.options)).replied, 1);
+  assert.equal(f.state().chats.chat1.learnedDeletion, true);
+  const kimAnswer = 'スマートエイトは失注しました。担当は百瀬';
+  addKimFollowup(f, kimAnswer);
+  assert.equal((await runOnce(f.options)).learned.corrected, 1);
+  await runOnce(f.options);
+  assert.deepEqual(learnedRows(f), [{
+    ts: new Date(NOW + 2000).toISOString(), where: 'dm', chatId: 'chat1', msgId: 'sentchat1',
+    question: `田中: ${message().text}`, autoAnswer: f.sent[0].content, kimAnswer, rule: learnCorrected.rule, outcome: 'corrected'
+  }]);
+  assert.match(fs.readFileSync(learningFile(f, 'rules.md'), 'utf8'), /最新の案件状況を確認する/);
+  assert.match(fs.readFileSync(learningFile(f, 'knowledge.md'), 'utf8'), /スマートエイトの担当は百瀬/);
+  const notifications = f.inboxItems.filter(item => item.dedupeKey === 'dm-learn:sentchat1');
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].text, '自動返信の訂正を学習: 田中');
+});
+
+test('無関係な発言は記録して再評価せず、後から来た確認を学習する', async t => {
+  const f = fixture(t);
+  const seen = [];
+  mockLearning(f, ({ kimAnswer }) => {
+    seen.push(kimAnswer);
+    return { ...learnNeutral, is_confirmation: kimAnswer === 'そのURLで合っています' };
+  });
+  await runOnce(f.options);
+  addKimFollowup(f, '明日は出張です');
+  await runOnce(f.options);
+  assert.deepEqual(f.state().learnQueue[0].evaluatedKimIds, ['kim-followup']);
+  assert.equal(f.state().learnQueue[0].learned, false);
+  assert.equal(fs.existsSync(learningFile(f, 'corrections.jsonl')), false);
+  f.data.chat1.push(message({ id: 'confirmation', isSender: true, text: 'そのURLで合っています',
+    timestamp: new Date(NOW + 1500).toISOString() }));
+  await runOnce(f.options);
+  assert.deepEqual(seen, ['明日は出張です', 'そのURLで合っています']);
+  assert.equal(learnedRows(f)[0].outcome, 'confirmed');
+  assert.equal(fs.existsSync(learningFile(f, 'rules.md')), false);
+});
+
+test('同じDMで2件目を送信しても1件目の学習を続ける', async t => {
+  const f = fixture(t);
+  mockLearning(f, ({ question }) => question === `田中: ${message().text}` ? learnCorrected : learnNeutral);
+  await runOnce(f.options);
+  const sendTime = NOW + 5000;
+  f.options.now = () => sendTime;
+  f.data.chat1.push(message({ id: 'second-question', text: '次の案件の担当は？',
+    timestamp: new Date(sendTime - 1000).toISOString() }));
+  f.api.sendMessage = async (id, content) => {
+    f.data[id].push(message({ id: 'second-reply', text: content, isSender: true,
+      timestamp: new Date(sendTime).toISOString() }));
+    return { id: 'second-reply' };
+  };
+  assert.equal((await runOnce(f.options)).replied, 1);
+  assert.equal(f.state().chats.chat1.replyId, 'second-reply');
+  assert.deepEqual(f.state().learnQueue.map(entry => entry.replyId), ['sentchat1', 'second-reply']);
+  f.options.now = () => sendTime + 2000;
+  f.data.chat1.push(message({ id: 'first-correction', text: '最初の回答を訂正します', isSender: true,
+    timestamp: new Date(sendTime + 1000).toISOString() }));
+  await runOnce(f.options);
+  assert.equal(learnedRows(f)[0].msgId, 'sentchat1');
+  assert.deepEqual(f.state().learnQueue.map(entry => entry.learned), [true, false]);
+});
+
+test('72時間で未学習の返信をexpiredとして閉じる', async t => {
+  const f = fixture(t);
+  await runOnce(f.options);
+  f.options.now = () => NOW + 72 * 3600000;
+  assert.equal((await runOnce(f.options)).learned.expired, 1);
+  assert.equal(learnedRows(f)[0].outcome, 'expired');
+  assert.equal(f.state().learnQueue[0].learned, true);
+  let status;
+  assert.equal(await guildMain(['status'], { home: f.home, print: output => { status = output; } }), 0);
+  assert.deepEqual(status.learnQueue, { unlearned: 0, learned: 1 });
+});
+
+test('代理回答プレフィックス付きの後続発言は判定に渡さない', async t => {
+  const f = fixture(t);
+  let calls = 0;
+  mockLearning(f, () => { calls++; return learnCorrected; });
+  await runOnce(f.options);
+  addKimFollowup(f, '【kimのClaudeによる代理回答】\n別の質問への回答');
+  await runOnce(f.options);
+  assert.equal(calls, 0);
+  assert.deepEqual(f.state().learnQueue[0].evaluatedKimIds, []);
+  assert.equal(f.state().learnQueue[0].learned, false);
+});
+
+test('learn-backfill --days 3 --dry-run はDM履歴でIDを補完し、件数だけ返す', async t => {
+  const f = fixture(t);
+  const log = learningFile(f, 'sent-log.jsonl');
+  fs.mkdirSync(path.dirname(log), { recursive: true });
+  const entry = { where: 'dm', channelId: 'chat1', question: '質問', content: '代理回答',
+    ts: new Date(NOW - 2000).toISOString(), senderName: '田中' };
+  fs.writeFileSync(log, [
+    { ...entry, replyId: 'known-id' }, entry, { ...entry, content: '履歴にない本文' },
+    { ...entry, where: 'guild', replyId: 'guild-id' },
+    { ...entry, ts: new Date(NOW - 4 * 86400000).toISOString(), replyId: 'old-id' }
+  ].map(row => JSON.stringify(row)).join('\n') + '\n');
+  f.data.chat1.push(message({ id: 'resolved-id', isSender: true, text: entry.content, timestamp: entry.ts }));
+  const reports = [];
+  const options = { ...f.options, print: report => reports.push(report) };
+  assert.equal(await main(['learn-backfill', '--days', '3', '--dry-run'], options), 0);
+  assert.deepEqual(reports.at(-1), { ok: true, dryRun: true, count: 2 });
+  assert.equal(fs.existsSync(f.file), false);
+  assert.equal(await main(['learn-backfill', '--days', '3'], options), 0);
+  assert.deepEqual(f.state().learnQueue.map(row => row.replyId), ['known-id', 'resolved-id']);
+  assert.equal(await main(['learn-backfill', '--days', '3'], options), 0);
+  assert.equal(reports.at(-1).count, 0);
+});
+
+
+test('送信上限に達した巡回でも後続訂正を学習する', async t => {
+  const f = fixture(t);
+  mockLearning(f, () => learnCorrected);
+  await runOnce(f.options);
+  addKimFollowup(f, '担当は百瀬です');
+  f.data.chat1.push(message({ id: 'next-question', text: '次の案件は？',
+    timestamp: new Date(NOW + 1500).toISOString() }));
+  const state = f.state();
+  state.hourly = Array(30).fill(NOW);
+  f.save(state);
+  const result = await runOnce(f.options);
+  assert.equal(result.limited, true);
+  assert.equal(result.replied, 0);
+  assert.equal(result.learned.corrected, 1);
+});
+
+test('送信結果の復旧でも読み戻した返信をキューに追加する', async t => {
+  const f = fixture(t);
+  const content = '【kimのClaudeによる代理回答】\n回答';
+  const sent = message({ id: 'recovered-reply', text: content, isSender: true,
+    timestamp: new Date(NOW).toISOString() });
+  f.data.chat1.push(sent);
+  f.save({ version: 1, hourly: [], chats: { chat1: { ...message(), status: 'sending',
+    content, question: '質問' } } });
+  assert.equal((await runOnce(f.options)).ok, true);
+  assert.equal(f.sent.length, 0);
+  assert.deepEqual(f.state().learnQueue, [{
+    chatId: 'chat1', replyId: sent.id, question: '質問', answer: content, ts: sent.timestamp,
+    senderName: '田中', evaluatedKimIds: [], learned: false
+  }]);
+});

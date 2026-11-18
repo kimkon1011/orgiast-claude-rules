@@ -15,6 +15,7 @@
 ## カタログ
 | 型 | 症状（初出） | 横展開の検索 | ゲート |
 |---|---|---|---|
+| 企画書の画像不足型 | 企画書の画像不足（表紙以外写真なし、2026-11-18 270114KOK） | `skills/design-deck/pipeline` の pages.json 読込・BUILD-REPORT 採用方式・「写真なし」「画像なし」 | design-deck pipeline が画像なしページをエラー化 |
 | レーン状態の誤断定型 | Gemini 402 の連鎖出力を Codex billing と誤分類し、直接実測なしで入金必要・全滅と報告して稼働レーンがあるのに待機（2026-11-17 kim-PC） | billingFailure / cheap-first / viaChain / 全滅 / LANE-PROBE | tools/lib/lane-real-health.mjs、tools/lane-doctor.mjs、tools/lane-claim-evidence-gate.mjs |
 | 配布漏れ型 | per-PC 機能が1台でだけ動き、converge に未登録。配布対象が手書き一覧で、新しいフォルダ（packages/）が漏れた（2026-10-11 スマホ用待機タブ） | 配布・コピー対象を手書きで列挙している箇所（onboarding-sync のフォルダ一覧、zip 経路、converge の登録表）。per-PC の機能を足す PR | 配布カバレッジのテスト、fleet-scope 宣言レジストリ（fleet か kim-only かの宣言必須）、converge ビーコンと fleet-status |
 | 見張りの沈黙故障型 | 自動進行の check（`node C:\Users\...`）が Git bash で `\` を失い MODULE_NOT_FOUND、node の exit 1 が「未達」と同じなので check_error にならず空振り。kim が「進捗どう？」と再度聞いた（2026-11-06）。同時期に Bot DM の依頼は返事待ちの追跡対象外だった（2026-10-26〜11-05） | 終了コードだけで成否を読む見張り（auto-progress check・health check・watchdog）。人への依頼を送る経路で返事待ち台帳に載らないもの | executeCheck のパス正規化＋クラッシュを check_error にして通知、登録時 preflight で拒否、`auto-progress.mjs --audit-checks`（#1622）。Discord 依頼の自動登録 hook と2日超のセッション注入（#1573） |

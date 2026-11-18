@@ -74,6 +74,8 @@ test('design-deck はハイブリッド企画書モデルと修正分担を固�
     '文字・数字・表・余白への不満',
     'Genspark: 写真配置の文法',
     'Canva は使わない',
+    '全ページに写真・画像を最低1枚',
+    '画像なしページを警告ではなくエラー',
   ]) {
     assert.ok(source.includes(text), `design-deck に「${text}」がありません`);
   }
@@ -87,6 +89,7 @@ test('design-deck pipeline は必須ファイルと7ページ型を同梱する'
   const pages = JSON.parse(fs.readFileSync(path.join(pipeline, 'pages.example.json'), 'utf8'));
   assert.deepEqual(pages.map((page) => page.type), ['cover', 'stats', 'visual', 'table', 'timeline', 'compare', 'perspective']);
   for (const page of pages) {
+    assert.ok(page.visualBrief || page.directVisual || page.fallbackPhoto || page.elements?.some((element) => element.kind === 'image'), `${page.id}: 画像指定がありません`);
     for (const photo of page.photoSources ?? []) assert.ok(photo.startsWith('../'), `${page.id}: 写真パスが相対ではありません`);
   }
 });

@@ -6,6 +6,23 @@ export const root=path.resolve(dir,'..');
 export const out=path.join(dir,'out');
 export const readJSON=p=>JSON.parse(fs.readFileSync(p,'utf8'));
 export const writeJSON=(p,data)=>fs.writeFileSync(p,JSON.stringify(data,null,2)+'\n');
+function imageElement(value){
+  if(!value||typeof value!=='object')return null;
+  if(!Array.isArray(value)&&value.kind==='image')return value;
+  for(const child of Array.isArray(value)?value:Object.values(value)){
+    const found=imageElement(child);if(found)return found;
+  }
+  return null;
+}
+export function pageImageSpec(page){
+  if(page.visualBrief)return {kind:'generated',value:page.visualBrief};
+  if(page.directVisual)return {kind:'direct',value:page.directVisual};
+  if(page.fallbackPhoto)return {kind:'fallback',value:page.fallbackPhoto};
+  const element=imageElement(page.elements);
+  if(element)return {kind:'element',value:element.src??element.file??element.path??null,element};
+  return null;
+}
+export const imageMissingPages=pages=>pages.filter(page=>!pageImageSpec(page));
 export function loadPages(){
   const pages=readJSON(path.join(dir,'pages.json'));
   const ids=new Set();

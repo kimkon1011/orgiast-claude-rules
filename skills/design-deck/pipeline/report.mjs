@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import {dir,out,title,readJSON} from './runtime.mjs';
+import {dir,out,title,readJSON,imageMissingPages} from './runtime.mjs';
 const optional=(file,fallback)=>fs.existsSync(file)?readJSON(file):fallback;
 // Report only evidence from this build. Never copy the original project's approval or scores.
 export function writeReport(){
@@ -11,6 +11,7 @@ export function writeReport(){
   const review=optional(path.join(dir,'visual-review.json'),null);
   const log=optional(path.join(dir,'gen-visuals-log.json'),{runs:[]});
   const attempts=log.runs.flatMap(r=>r.pages.flatMap(p=>p.attempts??[]));
+  const missing=imageMissingPages(pages);
   const cell=s=>String(s??'').replace(/\|/g,'\\|').replace(/\r?\n/g,'<br>');
   const rows=pages.map(p=>{
     const visual=checks.pages.find(c=>c.id===p.id)?.visual;
@@ -25,6 +26,7 @@ export function writeReport(){
 - HTML: [out/${title}.html](out/${encodeURIComponent(title)}.html)
 - PNG: ${preview.pages.length}ページ / [一覧](out/preview-index.html)
 - ビルド警告: ${checks.warnings.length}件 / [記録](out/build-checks.json)
+- 画像なしページ: ${missing.length}件${missing.length?` / ${missing.map(p=>`${cell(p.id)} ${cell(p.headline)}`).join(', ')}`:''}
 - プレビュー問題: ${preview.issues.length}件 / [記録](out/preview-checks.json)
 - 原稿表との照合: ${preview.sourceTablesVerified===true?'一致':preview.sourceTablesVerified===false?'不一致':'未実施（sourceHtml未指定）'}
 - 画像生成の累計試行: ${attempts.length}回 / 失敗: ${attempts.filter(a=>!a.success).length}回 / [記録](gen-visuals-log.json)

@@ -48,6 +48,19 @@ test('14/15 character and 3/4 line warning boundaries',async t=>{
   assert.equal(f.build.textWarnings({id:'p',headline:'あ'.repeat(14),body:'あ'.repeat(96)}).warnings.length,0);
   assert.equal(f.build.textWarnings({id:'p',headline:'あ'.repeat(15),body:'あ'.repeat(97)}).warnings.length,2);
 });
+test('a page without an image fails the build gate and is named in BUILD-REPORT',async t=>{
+  const f=await fixture(t);delete f.pages[3].visualBrief;delete f.pages[3].fallbackPhoto;delete f.pages[3].photoSources;f.save();
+  assert.throws(()=>f.build.buildHTML(f.runtime.loadPages()),/画像なしページ: 1件.*p04/);
+  const run=spawnSync(process.execPath,[path.join(f.dir,'build.mjs')],{encoding:'utf8'});
+  assert.notEqual(run.status,0);assert.match(run.stderr,/画像なしページ: 1件.*p04/);
+  const report=fs.readFileSync(path.join(f.dir,'BUILD-REPORT.md'),'utf8');
+  assert.match(report,/画像なしページ: 1件 \/ p04 選択肢を比較する/);
+});
+test('all pages with an image specification pass the image gate',async t=>{
+  const f=await fixture(t);
+  assert.deepEqual(f.runtime.imageMissingPages(f.runtime.loadPages()),[]);
+  assert.doesNotThrow(()=>f.build.buildHTML(f.runtime.loadPages()));
+});
 test('PDF subprocess exit zero is insufficient when output is not a PDF',async t=>{
   const f=await fixture(t);
   fs.writeFileSync(path.join(f.root,'html-to-pdf.mjs'),"import fs from 'node:fs';fs.writeFileSync(process.argv[3],'not a pdf');");

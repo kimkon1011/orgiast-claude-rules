@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "seatHostname": "kim-PC",
+  "seatHostnames": ["kim-PC"],
   "calendars": [
     "kim@orgiast.jp",
     "seisaku-team@orgiast.jp"

@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
   isTargetEvent,
@@ -19,6 +18,7 @@ import {
   createOrUpdateCompanionEvent,
   findSeisakuProfileName,
   runScheduler,
+  readConfig,
   JOIN_WINDOW_BEFORE_MS,
   JOIN_WINDOW_AFTER_MS,
   JOIN_ERROR_COOLDOWN_MS,
@@ -252,22 +252,18 @@ test('findHeaderInsertIndex: 区切り線から挿入位置を算出', async () 
 
 test('runScheduler: seatHostname 不一致で何もせずスキップ', async () => {
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-home-'));
-  const configPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'config', 'meet-cue.json');
-
-  const originalConfig = fs.readFileSync(configPath, 'utf8');
   try {
-    const customConfig = JSON.parse(originalConfig);
-    customConfig.seatHostname = 'NON_EXISTENT_HOSTNAME_123';
-    fs.writeFileSync(configPath, JSON.stringify(customConfig), 'utf8');
-
-    const res = await runScheduler({ home: tmpHome });
+    const res = await runScheduler({
+      home: tmpHome,
+      hostname: '000KimPC',
+      config: { seatHostname: 'NON_EXISTENT_HOSTNAME_123' },
+    });
     assert.equal(res.ok, true);
     assert.equal(res.skipped, 'seat_hostname_mismatch');
     assert.equal(res.skippedHost, true);
     assert.deepEqual(res.actions, []);
     assert.deepEqual(res.skippedEvents, []);
   } finally {
-    fs.writeFileSync(configPath, originalConfig, 'utf8');
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
 });
@@ -284,6 +280,23 @@ test('runScheduler: options.hostname 注入による seatHostname 不一致の�
   } finally {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
+});
+
+test('runScheduler: 新旧の席ホスト名をどちらも許可する', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-home-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const config = readConfig();
+  assert.deepEqual(config.seatHostnames, ['000KimPC', 'DESKTOP-2D0R4LI']);
+  for (const hostname of ['000KimPC', 'desktop-2d0r4li']) {
+    const res = await runScheduler({ home, hostname, config: { ...config, enabled: false } });
+    assert.equal(res.skipped, 'disabled');
+  }
+  const legacy = await runScheduler({
+    home,
+    hostname: 'desktop-2d0r4li',
+    config: { seatHostname: 'DESKTOP-2D0R4LI', enabled: false },
+  });
+  assert.equal(legacy.skipped, 'disabled');
 });
 
 function createMockEvent(overrides = {}) {

@@ -19,11 +19,12 @@ function temporaryHome(t) {
 test('Meet scheduler accepts current and former kim-PC hostnames, including legacy configurations', async t => {
   const home = temporaryHome(t);
   const config = { ...readConfig(home), enabled: false };
-  assert.equal(config.seatHostname, 'kim-PC');
-  for (const seatHostname of [config.seatHostname, 'DESKTOP-2D0R4LI']) {
+  assert.deepEqual(config.seatHostnames, ['kim-PC']);
+  const legacyConfig = { enabled: false, seatHostname: 'DESKTOP-2D0R4LI' };
+  for (const seatConfig of [config, legacyConfig]) {
     for (const hostname of kimHosts) {
-      const result = await runScheduler({ home, hostname, config: { ...config, seatHostname } });
-      assert.equal(result.skipped, 'disabled', `${seatHostname} / ${hostname}`);
+      const result = await runScheduler({ home, hostname, config: seatConfig });
+      assert.equal(result.skipped, 'disabled', hostname);
     }
   }
   const result = await runScheduler({ home, hostname: otherHost, config });

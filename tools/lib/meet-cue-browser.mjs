@@ -76,32 +76,104 @@ export async function checkPlaywrightAvailable() {
   };
 }
 
+/**
+ * Checks profile directory structure and returns detailed diagnostics.
+ * Returns an object with profileDir, exists, subDirs, cookieFiles, and summary.
+ */
 export async function checkProfileLoggedIn(profileDir) {
-  // Check cookies or profile existence
-  if (!fs.existsSync(profileDir)) return false;
-  const cookiePath = path.join(profileDir, 'Default', 'Cookies');
-  const networkCookiePath = path.join(profileDir, 'Default', 'Network', 'Cookies');
-  return fs.existsSync(cookiePath) || fs.existsSync(networkCookiePath);
+  const result = {
+    profileDir,
+    exists: false,
+    subDirs: [],
+    cookieFiles: [],
+    summary: 'not_found',
+  };
+
+  if (!profileDir || typeof profileDir !== 'string' || !fs.existsSync(profileDir)) {
+    return result;
+  }
+
+  result.exists = true;
+
+  // List subdirectories
+  try {
+    const entries = fs.readdirSync(profileDir, { withFileTypes: true });
+    result.subDirs = entries.filter(e => e.isDirectory()).map(e => e.name);
+  } catch { /* ignore */ }
+
+  // Find cookie files
+  const cookiePaths = [
+    path.join(profileDir, 'Default', 'Cookies'),
+    path.join(profileDir, 'Default', 'Network', 'Cookies'),
+    path.join(profileDir, 'Cookies'),
+    path.join(profileDir, 'Network', 'Cookies'),
+  ];
+
+  // Also check subdirectories for cookie files
+  for (const sub of result.subDirs) {
+    cookiePaths.push(path.join(profileDir, sub, 'Cookies'));
+    cookiePaths.push(path.join(profileDir, sub, 'Network', 'Cookies'));
+  }
+
+  for (const cp of cookiePaths) {
+    if (fs.existsSync(cp)) {
+      try {
+        const stat = fs.statSync(cp);
+        result.cookieFiles.push({
+          path: cp,
+          sizeBytes: stat.size,
+          mtime: stat.mtime.toISOString(),
+        });
+      } catch { /* ignore */ }
+    }
+  }
+
+  if (result.cookieFiles.length === 0) {
+    result.summary = 'no_cookie_files';
+  } else {
+    result.summary = 'cookie_files_present';
+  }
+
+  return result;
 }
+
+/**
+ * Google ログインに必要な cookie 名の一覧。
+ */
+export const REQUIRED_GOOGLE_COOKIES = ['SID', 'HSID', 'SSID', '__Secure-1PSID', '__Secure-3PSID'];
 
 /**
  * Checks if the browser profile is actually signed into Google by inspecting cookies.
  * Does NOT open a browser — safe to call anytime.
- * Looks for SID or __Secure-1PSID cookies with domain .google.com.
+ * Returns an object with signedIn (boolean), foundCookies (string[]), missingCookies (string[]),
+ * and cookieFiles (string[]).
  */
 export async function isProfileSignedIn(profileDir, options = {}) {
+  const result = {
+    signedIn: false,
+    foundCookies: [],
+    missingCookies: [...REQUIRED_GOOGLE_COOKIES],
+    cookieFiles: [],
+  };
+
   if (!profileDir || typeof profileDir !== 'string' || !fs.existsSync(profileDir)) {
-    return false;
+    return result;
   }
 
+  // If a live browser context is provided, check via cookies API
   if (options.context) {
     try {
       const cookies = await options.context.cookies();
-      const hasSid = cookies.some(c => (c.name === 'SID' || c.name === '__Secure-1PSID') && (c.domain || '').includes('google.com'));
-      if (hasSid) return true;
+      const googleCookies = cookies.filter(c => (c.domain || '').includes('google.com'));
+      for (const c of googleCookies) {
+        if (REQUIRED_GOOGLE_COOKIES.includes(c.name) && !result.foundCookies.includes(c.name)) {
+          result.foundCookies.push(c.name);
+        }
+      }
     } catch { /* ignore */ }
   }
 
+  // Collect all cookie file paths
   const cookiesPaths = [
     path.join(profileDir, 'Default', 'Cookies'),
     path.join(profileDir, 'Default', 'Network', 'Cookies'),
@@ -119,30 +191,39 @@ export async function isProfileSignedIn(profileDir, options = {}) {
     }
   } catch { /* ignore */ }
 
+  // Scan cookie files for Google session cookies
   for (const cp of cookiesPaths) {
     if (!fs.existsSync(cp)) continue;
+    result.cookieFiles.push(cp);
     try {
       const buf = fs.readFileSync(cp);
       const str = buf.toString('utf8');
-      if (str.includes('SID') || str.includes('__Secure-1PSID')) {
-        return true;
+      for (const name of REQUIRED_GOOGLE_COOKIES) {
+        if (str.includes(name) && !result.foundCookies.includes(name)) {
+          result.foundCookies.push(name);
+        }
       }
     } catch {
       try {
         const buf = fs.readFileSync(cp);
-        if (buf.includes(Buffer.from('SID')) || buf.includes(Buffer.from('__Secure-1PSID'))) {
-          return true;
+        for (const name of REQUIRED_GOOGLE_COOKIES) {
+          if (buf.includes(Buffer.from(name)) && !result.foundCookies.includes(name)) {
+            result.foundCookies.push(name);
+          }
         }
       } catch { /* ignore */ }
     }
   }
 
-  return false;
+  result.missingCookies = REQUIRED_GOOGLE_COOKIES.filter(n => !result.foundCookies.includes(n));
+  result.signedIn = result.foundCookies.length >= 2; // At least SID + one more
+  return result;
 }
 
 async function checkUiReached(page) {
   const selectors = [
     ...MEET_SELECTORS.joinButtons,
+    ...MEET_SELECTORS.inCallButtons,
     ...MEET_SELECTORS.guestNameInput,
     ...MEET_SELECTORS.captionToggleButtons,
     'button[aria-label*="マイク"]',
@@ -164,6 +245,19 @@ async function checkUiReached(page) {
   return false;
 }
 
+export function copyMeetBotProfile(source, destination) {
+  if (!fs.lstatSync(source).isDirectory()) {
+    throw new Error(`ブラウザプロファイルのディレクトリが見つかりません: ${source}`);
+  }
+  fs.cpSync(source, destination, {
+    recursive: true,
+    filter: (entry) => {
+      const name = path.basename(entry).toLowerCase();
+      return !name.startsWith('singleton') && name !== 'lockfile' && !fs.lstatSync(entry).isSymbolicLink();
+    },
+  });
+}
+
 export async function startMeetBot({
   url,
   mode = 'profile', // 'profile' | 'guest'
@@ -172,6 +266,8 @@ export async function startMeetBot({
   sessionDir = '',
   botDisplayName = 'オージャストAI',
   onCaption = () => {},
+  onJoinState = () => {},
+  getCaptionLineCount = () => 0,
   log = console.error,
   uiTimeoutMs = 90000,
 } = {}) {
@@ -180,27 +276,70 @@ export async function startMeetBot({
     throw new Error('playwright-core または Chrome 実行ファイルが見つかりません。doctor を確認してください。');
   }
 
-  const profileDir = mode === 'guest'
-    ? fs.mkdtempSync(path.join(os.tmpdir(), 'meet-guest-profile-'))
-    : path.join(os.homedir(), '.claude', 'browser-profiles', 'meet-bot-seisaku');
+  const profileDir = sessionDir
+    ? path.join(sessionDir, 'profile')
+    : fs.mkdtempSync(path.join(os.tmpdir(), 'meet-bot-profile-'));
+  let ownsProfile = !sessionDir;
+  let context;
+  const close = async () => {
+    try {
+      await context?.close();
+    } catch (err) {
+      log(`[meet-cue-browser] ブラウザ終了失敗: ${err.message}`);
+    }
+    if (ownsProfile) {
+      try {
+        fs.rmSync(profileDir, { recursive: true, force: true, maxRetries: 3 });
+      } catch (err) {
+        log(`[meet-cue-browser] プロファイル削除失敗: ${err.message}`);
+      }
+    }
+  };
 
-  fs.mkdirSync(profileDir, { recursive: true });
+  try {
+    try {
+      if (sessionDir) {
+        fs.mkdirSync(sessionDir, { recursive: true });
+        fs.mkdirSync(profileDir, { mode: 0o700 });
+        ownsProfile = true;
+      }
+      if (mode !== 'guest') {
+        const home = process.env.ORGIAST_HOME || os.homedir();
+        copyMeetBotProfile(path.join(home, '.claude', 'browser-profiles', 'meet-bot-seisaku'), profileDir);
+      }
+    } catch (err) {
+      err.reason = 'profile_copy_failed';
+      throw err;
+    }
 
-  log(`[meet-cue-browser] プロファイル: ${profileDir} (mode: ${mode})`);
+    log(`[meet-cue-browser] プロファイル: ${profileDir} (mode: ${mode})`);
+    context = await chromium.launchPersistentContext(profileDir, {
+      executablePath,
+      headless: false,
+      viewport: { width: 1280, height: 720 },
+      args: [
+        '--use-fake-ui-for-media-stream',
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-notifications',
+        '--disable-infobars',
+      ],
+    });
 
-  const context = await chromium.launchPersistentContext(profileDir, {
-    executablePath,
-    headless: false,
-    viewport: { width: 1280, height: 720 },
-    args: [
-      '--use-fake-ui-for-media-stream',
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-notifications',
-      '--disable-infobars',
-    ],
-  });
+    return await runMeetBot(context, close, {
+      url, mode, maxMinutes, debugDom, sessionDir, botDisplayName,
+      onCaption, onJoinState, getCaptionLineCount, log, uiTimeoutMs,
+    });
+  } catch (err) {
+    await close();
+    throw err;
+  }
+}
 
+async function runMeetBot(context, close, {
+  url, mode, maxMinutes, debugDom, sessionDir, botDisplayName,
+  onCaption, onJoinState, getCaptionLineCount, log, uiTimeoutMs,
+}) {
   const page = context.pages()[0] || await context.newPage();
 
   // Expose caption callback to browser page
@@ -251,12 +390,6 @@ export async function startMeetBot({
         log(`[meet-cue-browser] スクリーンショット保存失敗: ${e.message}`);
       }
     }
-    try {
-      await context.close();
-    } catch { /* ignore */ }
-    if (mode === 'guest') {
-      try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch { /* ignore */ }
-    }
     const err = new Error(`Meet 参加失敗: ${failReason}`);
     err.reason = failReason;
     throw err;
@@ -289,27 +422,43 @@ export async function startMeetBot({
     }
   }
 
-  // Join meeting by clicking join / request button
-  let joined = false;
-  const joinDeadline = Date.now() + 600000; // 10 minutes wait for approval
-
-  while (Date.now() < joinDeadline && !joined) {
-    for (const sel of MEET_SELECTORS.joinButtons) {
-      try {
-        const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 1000 })) {
-          await btn.click();
-          log(`[meet-cue-browser] 参加ボタンをクリック: ${sel}`);
-          joined = true;
-          break;
-        }
-      } catch { /* try next */ }
+  // The request button only enters the lobby. Wait for a visible in-call control.
+  let requested = false;
+  let joinedAt;
+  const inCallSelector = MEET_SELECTORS.inCallButtons.map(sel => sel + ':visible').join(', ');
+  const joinDeadline = Date.now() + 600000;
+  while (Date.now() < joinDeadline) {
+    if (await page.locator(inCallSelector).first().isVisible()) {
+      joinedAt = Date.now();
+      onJoinState('joined');
+      break;
     }
-    if (joined) break;
+    if (!requested) {
+      for (const sel of MEET_SELECTORS.joinButtons) {
+        try {
+          const btn = page.locator(sel).first();
+          if (!(await btn.isVisible())) continue;
+          await btn.click({ timeout: 2000 });
+        } catch { continue; }
+        log(`[meet-cue-browser] 参加ボタンをクリック: ${sel}`);
+        requested = true;
+        onJoinState('waiting_in_lobby');
+        break;
+      }
+    }
     await page.waitForTimeout(2000);
   }
-
-  await page.waitForTimeout(3000);
+  if (!joinedAt) {
+    const reason = requested ? 'lobby_timeout' : 'join_button_not_found';
+    if (sessionDir) {
+      try {
+        await page.screenshot({ path: path.join(sessionDir, 'join-failed.png'), timeout: 5000 });
+      } catch (err) {
+        log(`[meet-cue-browser] スクリーンショット保存失敗: ${err.message}`);
+      }
+    }
+    throw Object.assign(new Error(`Meet 参加失敗: ${reason}`), { reason });
+  }
 
   // Turn on captions
   log('[meet-cue-browser] 字幕をオンに設定中...');
@@ -334,10 +483,10 @@ export async function startMeetBot({
   }
 
   // Inject MutationObserver script for subtitle extraction
-  await page.evaluate(() => {
+  await page.evaluate((captionSelector) => {
     const observer = new MutationObserver((mutations) => {
       // Find all caption elements
-      const captionNodes = document.querySelectorAll('.a7238b, [aria-label*="字幕"], [data-caption-tracks], div[role="region"][aria-label*="caption"], .aG928e, .T4L22b, .yg3S7d');
+      const captionNodes = document.querySelectorAll(captionSelector);
       if (captionNodes.length > 0) {
         captionNodes.forEach(node => {
           const text = node.textContent || '';
@@ -361,7 +510,7 @@ export async function startMeetBot({
     });
 
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-  });
+  }, MEET_SELECTORS.captionContainers.join(', '));
 
   // Debug DOM Timer
   let debugInterval = null;
@@ -383,6 +532,8 @@ export async function startMeetBot({
   }
 
   // Monitor loop for exit conditions
+  const pendingShots = [1, 3, 10];
+  let captionDebugPending = true;
   let isStopped = false;
   const startTime = Date.now();
   const maxMs = maxMinutes * 60 * 1000;
@@ -392,6 +543,28 @@ export async function startMeetBot({
       if (Date.now() - startTime >= maxMs) {
         log('[meet-cue-browser] maxMinutes 到達により終了します。');
         break;
+      }
+
+      if (sessionDir) {
+        const elapsed = Date.now() - joinedAt;
+        try {
+          if (captionDebugPending && elapsed >= 180000) {
+            captionDebugPending = false;
+            if (getCaptionLineCount() === 0) {
+              await saveCaptionDebug(page, sessionDir);
+            }
+          }
+        } catch (err) {
+          log(`[meet-cue-browser] 字幕診断保存失敗: ${err.message}`);
+        }
+        while (!isStopped && pendingShots.length && elapsed >= pendingShots[0] * 60000) {
+          const minutes = String(pendingShots.shift()).padStart(2, '0');
+          try {
+            await page.screenshot({ path: path.join(sessionDir, `shot-${minutes}m.png`), timeout: 5000 });
+          } catch (err) {
+            log(`[meet-cue-browser] スクリーンショット保存失敗: ${err.message}`);
+          }
+        }
       }
 
       // Check if left call
@@ -414,12 +587,7 @@ export async function startMeetBot({
   const stop = async () => {
     isStopped = true;
     if (debugInterval) clearInterval(debugInterval);
-    try {
-      await context.close();
-    } catch { /* ignore */ }
-    if (mode === 'guest') {
-      try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch { /* ignore */ }
-    }
+    await close();
     log('[meet-cue-browser] Bot セッション終了');
   };
 
@@ -429,4 +597,25 @@ export async function startMeetBot({
     stop,
     monitorPromise,
   };
+}
+
+async function saveCaptionDebug(page, sessionDir) {
+  const captured = await page.evaluate(() => ({
+    ariaLabels: [...new Set(Array.from(document.querySelectorAll('[aria-label]'),
+      element => element.getAttribute('aria-label')))],
+    bodyText: document.body.innerText,
+  }));
+  const selectorHits = {};
+  for (const [group, candidates] of Object.entries(MEET_SELECTORS)) {
+    selectorHits[group] = Object.fromEntries(await Promise.all(candidates.map(async candidate => [
+      candidate,
+      group === 'leftCallTexts'
+        ? captured.bodyText.split(candidate).length - 1
+        : await page.locator(candidate).count(),
+    ])));
+  }
+  fs.writeFileSync(path.join(sessionDir, 'caption-debug.json'), JSON.stringify({
+    selectorHits,
+    ariaLabels: captured.ariaLabels,
+  }, null, 2), 'utf8');
 }

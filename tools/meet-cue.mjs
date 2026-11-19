@@ -35,6 +35,8 @@ import {
   formatJstSessionDate,
   sanitizeCardData,
   resolveBotDisplayName,
+  matchesSeatHostname,
+  resolveSeatHostnames,
 } from './lib/meet-cue-core.mjs';
 
 import {
@@ -49,6 +51,7 @@ import {
   checkPlaywrightAvailable,
   checkProfileLoggedIn,
   isProfileSignedIn,
+  REQUIRED_GOOGLE_COOKIES,
 } from './lib/meet-cue-browser.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -274,8 +277,8 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'doctor') {
     const playwrightInfo = await checkPlaywrightAvailable();
     const profileDir = path.join(os.homedir(), '.claude', 'browser-profiles', 'meet-bot-seisaku');
-    const loggedIn = await checkProfileLoggedIn(profileDir);
-    const signedIn = await isProfileSignedIn(profileDir);
+    const profileDiag = await checkProfileLoggedIn(profileDir);
+    const signInDiag = await isProfileSignedIn(profileDir);
 
     let jevDoctor = { ok: false };
     try {
@@ -288,12 +291,100 @@ export async function main(argv = process.argv.slice(2)) {
       dwdTokenOk = Boolean(token);
     } catch { /* ignore */ }
 
+    // Check bot-login.json
+    let botLoginInfo = null;
+    const botLoginPath = path.join(meetCueBaseDir(), 'bot-login.json');
+    try {
+      if (fs.existsSync(botLoginPath)) {
+        botLoginInfo = JSON.parse(fs.readFileSync(botLoginPath, 'utf8'));
+      }
+    } catch { /* ignore */ }
+
+    // Check seat hostname match
+    let seatHostnameMatch = false;
+    let configSeatHostnames = [];
+    try {
+      const configPath = fileURLToPath(new URL('../config/meet-cue.json', import.meta.url));
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        configSeatHostnames = resolveSeatHostnames(config);
+        seatHostnameMatch = matchesSeatHostname(configSeatHostnames, os.hostname());
+      }
+    } catch { /* ignore */ }
+
+    // Build actionable guidance
+    const issues = [];
+    const guidance = [];
+
+    if (!playwrightInfo.available) {
+      issues.push('playwright_unavailable');
+      guidance.push('npm install playwright-core を実行し、npx playwright install chromium でブラウザをインストールしてください。');
+    }
+
+    if (!profileDiag.exists) {
+      issues.push('profile_not_found');
+      guidance.push('meet-cue login を実行して Google ログインプロファイルを作成してください。');
+    } else if (profileDiag.summary === 'no_cookie_files') {
+      issues.push('profile_no_cookies');
+      guidance.push('meet-cue login を実行して Google アカウントでログインしてください。');
+    } else if (!signInDiag.signedIn) {
+      issues.push('profile_not_signed_in');
+      const missing = signInDiag.missingCookies.join(', ');
+      guidance.push(`プロファイルに Google セッション cookie が不足しています（不足: ${missing}）。meet-cue login を実行して再ログインしてください。`);
+    }
+
+    if (!jevDoctor.ok) {
+      issues.push('jev_unavailable');
+      guidance.push('Jev (TypeSafe Jev) が利用できません。jev doctor の出力を確認してください。');
+    }
+
+    if (!dwdTokenOk) {
+      issues.push('dwd_token_missing');
+      guidance.push('Google Docs API トークンが取得できません。dwd の認証を確認してください。');
+    }
+
+    if (!seatHostnameMatch) {
+      issues.push('seat_hostname_mismatch');
+      guidance.push(`config/meet-cue.json の seatHostnames (${configSeatHostnames.join(', ') || '未設定'}) がこの PC の hostname (${os.hostname()}) と一致しません。スケジューラーはこの PC で起動しません。`);
+    }
+
     const report = {
-      playwrightAvailable: playwrightInfo.available,
-      chromeExecutable: playwrightInfo.executablePath || null,
-      botProfileLoggedIn: loggedIn,
-      botProfileSignedIn: signedIn,
-      jev: jevDoctor,
+      ok: issues.length === 0,
+      issues,
+      guidance: guidance.length > 0 ? guidance : ['全ての診断に合格しています。'],
+      playwright: {
+        available: playwrightInfo.available,
+        executablePath: playwrightInfo.executablePath || null,
+      },
+      profile: {
+        dir: profileDir,
+        exists: profileDiag.exists,
+        subDirs: profileDiag.subDirs,
+        cookieFiles: profileDiag.cookieFiles.map(f => ({
+          path: f.path,
+          sizeBytes: f.sizeBytes,
+          mtime: f.mtime,
+        })),
+        summary: profileDiag.summary,
+        signedIn: signInDiag.signedIn,
+        foundCookies: signInDiag.foundCookies,
+        missingCookies: signInDiag.missingCookies,
+      },
+      botLogin: botLoginInfo ? {
+        account: botLoginInfo.account,
+        profile: botLoginInfo.profile,
+        at: botLoginInfo.at,
+      } : null,
+      seat: {
+        hostname: os.hostname(),
+        configSeatHostname: configSeatHostnames.join(', ') || null,
+        configSeatHostnames,
+        match: seatHostnameMatch,
+      },
+      jev: {
+        ok: jevDoctor.ok,
+        ...(jevDoctor.ok ? {} : { reason: jevDoctor.reason || 'unknown' }),
+      },
       dwdToken: dwdTokenOk,
     };
 
@@ -508,6 +599,7 @@ export async function main(argv = process.argv.slice(2)) {
         'doc-id': { type: 'string' },
         mode: { type: 'string' },
         'max-minutes': { type: 'string' },
+        'session-id': { type: 'string' },
         'interval-sec': { type: 'string' },
         'debug-dom': { type: 'boolean' },
       },
@@ -519,7 +611,10 @@ export async function main(argv = process.argv.slice(2)) {
       process.exit(2);
     }
 
-    const sessionId = generateSessionId();
+    const sessionId = values['session-id'] ?? generateSessionId();
+    if (!/^\d{8}-\d{6}-[a-f0-9]{4}$/.test(sessionId)) {
+      throw new Error('無効な --session-id です。');
+    }
     const sessionDir = path.join(meetCueBaseDir(), sessionId);
     fs.mkdirSync(sessionDir, { recursive: true });
     saveLatestSessionId(sessionId);
@@ -579,6 +674,7 @@ export async function main(argv = process.argv.slice(2)) {
       kimUrl: docInfo.kimUrl,
       headerInsertIndex: docInfo.headerInsertIndex,
       startTime: new Date().toISOString(),
+      joinState: 'joining',
     };
 
     fs.writeFileSync(path.join(sessionDir, 'session.json'), JSON.stringify(sessionState, null, 2));
@@ -611,6 +707,11 @@ export async function main(argv = process.argv.slice(2)) {
         debugDom: Boolean(values['debug-dom']),
         sessionDir,
         botDisplayName,
+        getCaptionLineCount: () => assembler.finalizedLines.length,
+        onJoinState: (joinState) => {
+          sessionState.joinState = joinState;
+          fs.writeFileSync(path.join(sessionDir, 'session.json'), JSON.stringify(sessionState, null, 2), 'utf8');
+        },
         onCaption: ({ speaker, text, timestamp }) => {
           const newlyFinalized = assembler.pushMutation({ speaker, text, timestamp });
           for (const line of newlyFinalized) {
@@ -624,6 +725,9 @@ export async function main(argv = process.argv.slice(2)) {
       const reason = err.reason || err.message || 'unknown';
       console.error(`[meet-cue start] Meet 参加エラー (${reason}):`, err.message);
 
+      transcriptStream.end();
+      cuesStream.end();
+      if (sessionState.joinState === 'joining') sessionState.joinState = 'failed';
       sessionState.joinError = reason;
       fs.writeFileSync(path.join(sessionDir, 'session.json'), JSON.stringify(sessionState, null, 2), 'utf8');
 

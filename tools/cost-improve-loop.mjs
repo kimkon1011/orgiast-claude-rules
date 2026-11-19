@@ -1753,15 +1753,23 @@ export function refreshCostDirective({ home, spawn = defaultSpawnSync } = {}) {
     cwd: path.resolve(import.meta.dirname, '..'), env: { ...process.env, ORGIAST_HOME: home },
     encoding: 'utf8', windowsHide: true, timeout: 300_000,
   });
+  if (result.error?.code === 'ETIMEDOUT') throw new Error('cost-directive refresh: timeout 300s でスキップ（main は続行）');
   if (result.error || result.status !== 0) throw new Error(`cost-directive refresh failed: ${result.error?.message || `exit ${result.status}`} ${String(result.stderr || '').slice(-1000)}`);
   return `cost-directive refreshed: ${path.join(home, '.claude', 'cost-directive.md')} (exit 0)`;
 }
 
 if (isEntry(import.meta.url)) {
-  Promise.resolve().then(() => {
+  Promise.resolve().then(async () => {
     // Run before fleet/network/notification work: a successful daily task must
     // also refresh the local directive. Dry runs keep their read-only contract.
-    if (!process.argv.includes('--dry-run')) console.error(refreshCostDirective({ home: path.dirname(getClaudeDir(process.argv.slice(2))) }));
+    if (!process.argv.includes('--dry-run')) {
+      try {
+        console.error(await refreshCostDirective({ home: path.dirname(getClaudeDir(process.argv.slice(2))) }));
+      } catch (err) {
+        console.error(`Warning: ${String(err?.message || err).replace(/\s+/g, ' ')}`);
+        process.exitCode = 1;
+      }
+    }
     return main();
   }).catch((err) => {
     console.error(err);

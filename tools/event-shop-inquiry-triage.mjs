@@ -39,6 +39,46 @@ export async function checkGmailDrafts(customerEmail, { fetchImpl = gwsFetch, ge
   }
   return { found: false };
 }
+/**
+ * Check whether the given customer email has a sent Gmail message from the specified user's mailbox.
+ * Only checks seisaku-team@orgiast.jp and kim@orgiast.jp.
+ * Returns { found: true, account, messageId, sentAt } on match, { found: false } when no sent message exists,
+ * or { found: false, error: 'string' } on API failure (never throws).
+ */
+export async function checkGmailSent(customerEmail, { fetchImpl = gwsFetch, getToken = mintDwdToken } = {}) {
+  const accounts = ['seisaku-team@orgiast.jp', 'kim@orgiast.jp'];
+  let lastError = null;
+  for (const account of accounts) {
+    try {
+      const token = await getToken({ user: account, scope: GMAIL_READONLY_SCOPE, fetchImpl });
+      // Search for sent messages to this customer
+      const searchRes = await fetchImpl(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(`to:${customerEmail} in:sent`)}`,
+        { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000) },
+      );
+      if (!searchRes.ok) throw new Error(`HTTP ${searchRes.status}`);
+      const searchBody = await searchRes.json();
+      if (!Array.isArray(searchBody.messages) || searchBody.messages.length === 0) continue;
+      // Fetch the most recent sent message for its date
+      const firstId = searchBody.messages[0].id;
+      const msgRes = await fetchImpl(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${firstId}?format=metadata&metadataHeaders=Date`,
+        { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000) },
+      );
+      if (!msgRes.ok) throw new Error(`HTTP ${msgRes.status}`);
+      const msgBody = await msgRes.json();
+      const sentAt = new Date(Number(msgBody.internalDate)).toISOString().slice(0, 10);
+      return { found: true, account, messageId: firstId, sentAt };
+    } catch (err) {
+      lastError = { account, reason: err.message || String(err) };
+    }
+  }
+  if (lastError) {
+    return { found: false, error: `${lastError.account}: ${lastError.reason}` };
+  }
+  return { found: false };
+}
+
 const bodyLines = message => String(message?.body ?? '').split(/\r?\n/).filter(line => !/^\s*>/.test(line)).map(line => line.trim()).filter(Boolean);
 const autoReplyBodyPattern = /自動返信|自動応答|auto-?reply|automatic\s*reply|out\s*of\s*(?:the\s*)?office/i;
 const autoReplySubjectPattern = /自動返信|自動応答|auto-?reply|automatic\s*reply|out\s*of\s*(?:the\s*)?office|不在/i;
@@ -65,9 +105,30 @@ export async function classifyLead(lead, messages, now = new Date(), deps = {}) 
     category = '⚪ 終了候補';
     nextAction = past ? '開催日経過→管理画面で完了に' : '辞退の返信あり→管理画面で完了に';
   } else if (!lastOut || (lastIn && time(lastIn.received_at) > time(lastOut.received_at))) {
-    category = '🔴 要返信';
     const excerpt = bodyLines(lastIn).find(line => !/^(お世話に|いつも|お待たせ|恐れ入)|^.{0,12}ありがとうございます。?$|です。$|様[、。]?$|^[-=＝―─*]+$/.test(line)) ?? '';
     nextAction = !lastOut ? await (async () => {
+      // Gmail 送信済みを先に確認（seisaku-team / kim の両方で当該顧客宛の送信メールを検索）
+      if (deps.gmailSentCheck && lead.email) {
+        const sentResult = await deps.gmailSentCheck(lead.email);
+        if (sentResult.found) {
+          category = '🟡 顧客待ち';
+          return `Gmail から送信済み（${sentResult.sentAt}・管理画面DBに未反映）。顧客の返信待ち`;
+        }
+        if (sentResult.error) {
+          category = '🔴 要返信';
+          // エラー時は下書き確認に進み、戻り値に「未確認」を添える
+          const draftText = await (async () => {
+            if (deps.gmailDraftCheck && lead.email) {
+              const draftResult = await deps.gmailDraftCheck(lead.email);
+              if (draftResult.found) return `Gmail下書きあり（${draftResult.account} ${draftResult.draftId}）・承認待ち`;
+              if (draftResult.error) return '下書き未確認';
+            }
+            return lead.raw_payload?.event_shop?.draft_saved_at ? '管理画面に下書きあり・未送信' : '下書きなし';
+          })();
+          return `初回返信が未送信（${draftText}）（Gmail送信済み: 未確認）`;
+        }
+      }
+      category = '🔴 要返信';
       // Gmail 下書きを確認（seisaku-team / kim の両方で当該顧客宛の下書きを検索）
       if (deps.gmailDraftCheck && lead.email) {
         const result = await deps.gmailDraftCheck(lead.email);
@@ -80,7 +141,7 @@ export async function classifyLead(lead, messages, now = new Date(), deps = {}) 
       }
       return `初回返信が未送信（下書き有無: ${lead.raw_payload?.event_shop?.draft_saved_at ? '管理画面に下書きあり・未送信' : '下書きなし'}）`;
     })()
-      : `顧客の返信に未回答: ${Array.from(excerpt).slice(0, 60).join('')}`;
+      : ((category = '🔴 要返信'), `顧客の返信に未回答: ${Array.from(excerpt).slice(0, 60).join('')}`);
   } else {
     category = '🟡 顧客待ち';
     const days = Math.max(0, Math.floor((time(now) - time(lastOut.received_at)) / DAY));
@@ -148,10 +209,15 @@ export function renderMarkdown(leads, duplicateCount, now) {
 export async function main({ env = process.env, args = process.argv.slice(2), now = new Date(), fetchImpl = globalThis.fetch, log = console.log, deps = {} } = {}) {
   const credentials = await loadCredentials(env);
   if (!credentials.url || !credentials.key) { log(`イベント百貨店問合せ: 未確認（認証情報なし。試したパス: ${credentials.path}）`); return 0; }
-  // main() が直接呼ばれたときは Gmail 下書き照会を有効にする（既定の gwsFetch を使用）
+  // main() が直接呼ばれたときは Gmail 下書き照会と送信済み確認を有効にする（既定の gwsFetch を使用）
   const gmailDraftCheck = deps.gmailDraftCheck ?? (async (email) => {
     try {
       return await checkGmailDrafts(email);
+    } catch { return { found: false, error: 'error' }; }
+  });
+  const gmailSentCheck = deps.gmailSentCheck ?? (async (email) => {
+    try {
+      return await checkGmailSent(email);
     } catch { return { found: false, error: 'error' }; }
   });
   try {
@@ -159,7 +225,7 @@ export async function main({ env = process.env, args = process.argv.slice(2), no
     const data = await request(credentials, `/rest/v1/quote_requests?select=id,company_name,contact_name,email,event_name,preferred_date,created_at,status,raw_payload&source=eq.event-shop.jp&created_at=gte.${since}&order=created_at.desc&limit=200`, fetchImpl);
     const { leads, duplicateCount } = deduplicateLeads(data);
     const results = [];
-    for (const lead of leads) results.push(await classifyLead(lead, await request(credentials, messageQuery(lead), fetchImpl), now, { gmailDraftCheck }));
+    for (const lead of leads) results.push(await classifyLead(lead, await request(credentials, messageQuery(lead), fetchImpl), now, { gmailDraftCheck, gmailSentCheck }));
     const sorted = sortLeads(results);
     if (args.includes('--quiet') && !sorted.some(l => l.category === '🔴 要返信')) return 0;
     log(args.includes('--json') ? JSON.stringify(sorted, null, 2) : renderMarkdown(sorted, duplicateCount, now));

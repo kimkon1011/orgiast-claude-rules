@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { classifyLead, checkGmailDrafts, deduplicateLeads, deduplicateMessages, sortLeads, main, messageQuery, renderMarkdown, loadCredentials } from './event-shop-inquiry-triage.mjs';
+import { classifyLead, checkGmailDrafts, checkGmailSent, deduplicateLeads, deduplicateMessages, sortLeads, main, messageQuery, renderMarkdown, loadCredentials } from './event-shop-inquiry-triage.mjs';
 const now = new Date('2026-10-27T03:00:00Z');
 const lead = { id: 'a', email: 'client@example.com', company_name: '会社', contact_name: '担当', created_at: '2026-10-21T03:00:00Z', preferred_date: '2026-11-18', raw_payload: { product: '展示会' } };
 const msg = (direction, day, body = '') => ({ direction, received_at: `2026-10-${day}T03:00:00Z`, body });
@@ -306,4 +306,27 @@ test('classifyLead: deps.gmailDraftCheck でGmail下書きなし・管理画面�
   const result = await classifyLead(lead, [], now, { gmailDraftCheck });
   assert.equal(result.category, '🔴 要返信');
   assert.match(result.nextAction, /下書きなし/);
+});
+test('classifyLead: 送信済みあり→カテゴリは顧客待ち・nextActionに送信済み記載', async () => {
+  const gmailSentCheck = async (email) => ({ found: true, account: 'seisaku-team@orgiast.jp', messageId: 'abc123', sentAt: '2026-11-18' });
+  const gmailDraftCheck = async () => { throw new Error('should not be called'); };
+  const result = await classifyLead(lead, [], now, { gmailSentCheck, gmailDraftCheck });
+  assert.equal(result.category, '🟡 顧客待ち');
+  assert.match(result.nextAction, /送信済み/);
+  assert.match(result.nextAction, /2026-11-18/);
+});
+test('classifyLead: 送信済みなし・下書きあり→既存の文言を保つ', async () => {
+  const gmailSentCheck = async (email) => ({ found: false });
+  const gmailDraftCheck = async (email) => ({ found: true, account: 'seisaku-team@orgiast.jp', draftId: 'r-test-123' });
+  const result = await classifyLead(lead, [], now, { gmailSentCheck, gmailDraftCheck });
+  assert.equal(result.category, '🔴 要返信');
+  assert.match(result.nextAction, /初回返信が未送信/);
+  assert.match(result.nextAction, /r-test-123/);
+});
+test('classifyLead: 送信済み確認 error→カテゴリは要返信のまま・nextActionに未確認', async () => {
+  const gmailSentCheck = async (email) => ({ found: false, error: 'API timeout' });
+  const gmailDraftCheck = async (email) => ({ found: false });
+  const result = await classifyLead(lead, [], now, { gmailSentCheck, gmailDraftCheck });
+  assert.equal(result.category, '🔴 要返信');
+  assert.match(result.nextAction, /未確認/);
 });

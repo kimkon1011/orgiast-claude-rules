@@ -128,3 +128,84 @@ test('全ページのworkflow変更とパス取得失敗はマージを停止', 
     assert(!f.calls.some(c => c.args[1] === 'merge'));
   }
 });
+
+test('gh の timeout は既定値を使い、正の整数の環境変数で上書きできる', () => {
+  const key = 'PR_MERGE_GH_TIMEOUT_MS';
+  const original = process.env[key];
+  try {
+    for (const [value, expected] of [
+      [undefined, 180_000], ['5000', 5_000], ['', 180_000], ['abc', 180_000],
+      ['0', 180_000], ['-1', 180_000], ['1.5', 180_000], ['2147483648', 180_000],
+    ]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+      const f = fixture();
+      const timeouts = [];
+      mergePr({ pr: 1 }, { exec(file, args, options) {
+        timeouts.push(options.timeout);
+        return f.exec(file, args, options);
+      } });
+      assert.deepEqual(timeouts, Array(6).fill(expected));
+    }
+  } finally {
+    if (original === undefined) delete process.env[key];
+    else process.env[key] = original;
+  }
+});
+
+function timeoutFixture(base, matches, failures = Infinity) {
+  const attempts = [];
+  const error = Object.assign(new Error('spawnSync gh ETIMEDOUT'), { code: 'ETIMEDOUT' });
+  return { attempts, error, exec(file, args, options) {
+    if (matches(args)) {
+      attempts.push({ file, args, options });
+      if (attempts.length <= failures) throw error;
+    }
+    return base.exec(file, args, options);
+  } };
+}
+
+test('各読み取り系の ETIMEDOUT は同じ呼び出しを1回再試行して MERGED を返す', () => {
+  for (const matches of [
+    args => args[1] === 'view' && args.at(-1).includes('statusCheckRollup'),
+    args => args[0] === 'repo' && args[1] === 'view',
+    args => args[0] === 'api' && args.includes('--paginate'),
+    args => args[1] === 'checks',
+    args => args[1] === 'view' && args.at(-1) === 'state,mergedAt',
+  ]) {
+    const f = timeoutFixture(fixture(), matches, 1);
+    assert.equal(mergePr({ pr: 1 }, f).state, 'MERGED');
+    assert.equal(f.attempts.length, 2);
+    assert.deepEqual(f.attempts[0], f.attempts[1]);
+  }
+});
+
+test('読み取りが2回タイムアウトしたら延長方法を表示して停止する', () => {
+  const base = fixture();
+  const f = timeoutFixture(base, args => args[0] === 'pr' && args[1] === 'view');
+  assert.throws(() => mergePr({ pr: 1 }, f), error => {
+    assert.equal(error.message, `gh が ${f.attempts[0].options.timeout} ms 以内に応答しませんでした（PC 高負荷の可能性。PR_MERGE_GH_TIMEOUT_MS で延長可）`);
+    return error.cause === f.error;
+  });
+  assert.equal(f.attempts.length, 2);
+  assert.deepEqual(base.calls, []);
+});
+
+test('pr merge がタイムアウトしても再試行や REST マージを行わない', () => {
+  const base = fixture();
+  const f = timeoutFixture(base, args => args[1] === 'merge' || args.includes('PUT'));
+  f.error.stderr = 'permission denied: MergePullRequest';
+  assert.throws(() => mergePr({ pr: 1 }, f), /PR_MERGE_GH_TIMEOUT_MS/);
+  assert.deepEqual(f.attempts.map(call => call.args.slice(0, 2)), [['pr', 'merge']]);
+  assert.deepEqual(base.calls.map(call => call.args[1]), ['view', 'checks']);
+});
+
+test('REST PUT と DELETE のタイムアウトは再試行しない', () => {
+  for (const method of ['PUT', 'DELETE']) {
+    const base = restFixture({ error: new Error('permission denied: MergePullRequest') });
+    const f = timeoutFixture(base, args => args[0] === 'api' && args[2] === method);
+    if (method === 'PUT') assert.throws(() => mergePr({ pr: 1 }, f), /PR_MERGE_GH_TIMEOUT_MS/);
+    else assert.equal(mergePr({ pr: 1 }, f).state, 'MERGED');
+    assert.equal(f.attempts.length, 1);
+  }
+});

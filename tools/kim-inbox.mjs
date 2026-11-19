@@ -15,6 +15,7 @@ import { isEntry } from './is-entry.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
 import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, recordNaturalLanguageAnswers, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
 import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
+import { syncEscalationAnswer } from './lib/escalation-answer-sync.mjs';
 const exec = promisify(execFile);
 const directory = home => path.join(home, '.claude/kim-inbox');
 const clean = value => redactSecrets(String(value ?? '')).slice(0, 4000);
@@ -303,7 +304,24 @@ export function listItems(home, { status } = {}) {
   }).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 }
 export function answerItem(home, id, answer, sessionId = '') {
-  return update(home, id, item => { item.status = 'answered'; item.answer = clean(answer); item.answeredAt = new Date().toISOString(); item.answerSession = clean(sessionId); });
+  const item = update(home, id, item => { item.status = 'answered'; item.answer = clean(answer); item.answeredAt = new Date().toISOString(); item.answerSession = clean(sessionId); });
+  syncLedger(home, item);
+  return item;
+}
+// 質問を出す前の照合（2026-11-19）: 語をすべて含む回答済み・取り下げ済みの ask を新しい順に返す。
+// 別セッションが同じ質問を kim に出し直さないよう、質問前に `--lookup "<語> <語>"` で確かめる。
+export function lookupAnswers(home, query, { now = Date.now(), days = 60 } = {}) {
+  const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) throw new Error('--lookup には検索語が必要です');
+  return listItems(home).filter(item => item.kind === 'ask' && ['answered', 'dropped'].includes(item.status)
+    && now - (Date.parse(item.answeredAt || item.lastAt || item.createdAt) || 0) < days * 86400000
+    && words.every(word => `${item.text}\n${item.answer || ''}`.toLowerCase().includes(word)))
+    .sort((a, b) => String(b.answeredAt || b.createdAt).localeCompare(String(a.answeredAt || a.createdAt)))
+    .slice(0, 20).map(item => ({ id: item.id, status: item.status, answeredAt: item.answeredAt || null, answer: item.answer, question: item.text.slice(0, 300) }));
+}
+// 判断待ちエスカレーションへの回答・取り下げは自動進行台帳の行にも書き戻す（翌日の再質問を止める）。
+function syncLedger(home, item) {
+  try { syncEscalationAnswer(home, item); } catch (error) { console.error(`kim-inbox: 台帳への回答書き戻しに失敗: ${clean(error?.message || String(error))}`); }
 }
 export function markSeen(home, id) {
   return update(home, id, item => { if (item.kind !== 'info') throw new Error('ask は --answer で返答を記録してください'); item.status = 'seen'; });
@@ -360,7 +378,9 @@ export function deadlineSheetUrl(home) {
 }
 export function dropItem(home, id, reason) {
   if (!String(reason ?? '').trim()) throw new Error('取り下げ理由が必要です');
-  return update(home, id, item => { item.status = 'dropped'; item.answer = clean(reason); });
+  const item = update(home, id, item => { item.status = 'dropped'; item.answer = clean(reason); });
+  syncLedger(home, item);
+  return item;
 }
 const inboxDir = home => path.join(home, '.claude/fleet-inbox');
 const readJsonFile = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
@@ -617,6 +637,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       const item = await addItem(home, { urgent: args.includes('--urgent'), text: fs.readFileSync(value('--body-file'), 'utf8'), kind: args.includes('--kind') ? value('--kind') : 'info', key: args.includes('--key') ? value('--key') : undefined, due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '', ...(doneWhen ? { doneWhen } : {}) });
       stdout(JSON.stringify({ id: item.id, status: item.status, forwarded: item.status === 'forwarded' }));
     } else if (args.includes('--answer')) stdout(JSON.stringify(answerItem(home, value('--answer'), fs.readFileSync(value('--body-file'), 'utf8'), process.env.CLAUDE_SESSION_ID || '')));
+    else if (args.includes('--lookup')) stdout(JSON.stringify(lookupAnswers(home, value('--lookup')), null, 2));
     else if (args.includes('--seen-matching')) stdout(JSON.stringify(seenMatching(home, value('--seen-matching'), args.includes('--kind') ? value('--kind') : 'info')));
     else if (args.includes('--seen')) stdout(JSON.stringify(markSeen(home, value('--seen'))));
     else if (args.includes('--close-key')) stdout(JSON.stringify(closeKey(home, value('--close-key'))));

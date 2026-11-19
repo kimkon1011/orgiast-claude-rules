@@ -9,6 +9,17 @@ Claude が構成・原稿・文字と数字を HTML/CSS で組版し、Gemini �
 
 パイプラインの実体は `media-kit-node/deck-hybrid/`。別プロジェクトでは `skills/design-deck/pipeline/` を対象プロジェクトへコピーし、`pages.example.json` を `pages.json` にして内容と相対画像パスを書き換える。実制作フォルダを使える場合はその `deck-hybrid/` 全体をコピーして `pages.json` を書き換える。同梱版の依存関係・設定と元版からの差分は [pipeline/README.md](pipeline/README.md) を読む。
 
+## 0. 構成とデザイン規則を先に決める（毎回・指示がなくても行う／kim 2026-11-19）
+
+`pages.json` や画像生成に入る前に、必ず [story-and-design.md](story-and-design.md) を読み、次の4つを作る。どれかが欠けたら未完成として扱う。
+
+1. `deck-hybrid/brief.md`: 相手・相手の姿勢（懸念は原文）・場面・決めてほしいこと1つ・手元の根拠・用途トーン。
+2. 説明の型の組み合わせ（導入・骨格・部品・橋渡し・締めから2〜5個）を3案出し、本命で進める。組み立てメモは `BUILD-REPORT.md` に書き、お客様向け資料には載せない。
+3. `deck-hybrid/DESIGN.md`: 主色1色＋グレー＋補色1色まで、書体2種、文字サイズと余白の段階。`visualBrief` と CSS に毎回反映する。
+4. 各ページを「主役は1つ・比べるなら1点だけ変える・前後比較は同じ倍率・問いは回収する」で設計する。
+
+入力に無い数字・事例は作らず〈金額〉のように空けて残し、最終報告で一覧にする。
+
 ## 1. 対象と前提
 
 - 対象: 提案書、企画書、営業資料、プレゼン、デッキ、スライド、ブースプラン、パース入り資料など、見た目が評価対象になる複数ページ資料。
@@ -107,7 +118,9 @@ node deck-hybrid/preview.mjs
 
 図表ページを含め、全ページの写真を採点し、`visual-review.json` に記録して `BUILD-REPORT.md` に反映する。元v4の採点を別案件へ流用しない。
 
-1項目でも3点以下なら原因を直し、build→preview→全ページ目視をやり直す。画像デコード、文字切れ、フッター衝突、本文実測行数、写真面積、写真の暗化も `out/preview-checks.json` で確認する。
+採点と同時に、[story-and-design.md](story-and-design.md) の「E. AIっぽさ点検」（白背景に箇条書きだけ・理由のない青・タイトル下の線・はみ出し・主役が分からない・どの会社にも言える文・基準のない数字など）を全ページで確認し、当たった項目を `visual-review.json` に書く。
+
+1項目でも3点以下、または AIっぽさ点検に1つでも当たったら原因を直し、build→preview→全ページ目視をやり直す。画像デコード、文字切れ、フッター衝突、本文実測行数、写真面積、写真の暗化も `out/preview-checks.json` で確認する。
 
 Chrome 等で直接PDF化した場合も同じ。`node tools/pdf-page-check.mjs --install` で mupdf を導入した後、`node tools/pdf-page-check.mjs --pdf <file>` で全ページをPNGにして Read する。出力した資料が社内向けの記載を含まないことも確認する。
 

@@ -710,11 +710,11 @@ function questionFixture(f, extra = {}) {
   fs.appendFileSync(path.join(f.dir, 'fleet-sheet.env'), `FLEET_HUB=${sender}\n`);
   return question;
 }
-function promptSpawn(f, { code = 0, output = '完了 token=private', onSpawn } = {}) {
+function promptSpawn(f, { code = 0, output = '完了 token=private', diagnostic = 'stderr must not replace stdout', onSpawn } = {}) {
   return (...args) => {
     f.spawns.push(args); onSpawn?.();
     const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => true;
-    queueMicrotask(() => { child.stdout.emit('data', output); child.stderr.emit('data', 'stderr must not replace stdout'); child.emit('close', code); });
+    queueMicrotask(() => { child.stdout.emit('data', output); child.stderr.emit('data', diagnostic); child.emit('close', code); });
     return child;
   };
 }
@@ -1080,10 +1080,25 @@ test('G6 runner serializes concurrent resumes and preserves the first owner', as
   finish(); await first;
   assert.equal(readQuestion(f.home, m.resumeSessionId).drivenByHub, false);
 });
-test('G7 failed execution with empty stdout reports stderr tail', async t => {
-  const f = fixture(t); hubPrompt(f); f.deps.spawnImpl = promptSpawn(f, { code: 1, output: '' });
+test('G7 failed execution sends a redacted diagnostic and exposes it to the waiting sender', async t => {
+  const f = fixture(t), m = hubPrompt(f);
+  const diagnostic = 'Permission allow rule (settings.json): warning\r\n' +
+    'HTTP 401 Authorization: Bearer fake-bearer-value password="fake quoted secret"\r\n' +
+    'irrelevant log\n'.repeat(400);
+  f.deps.spawnImpl = promptSpawn(f, { code: 1, output: '', diagnostic });
   await runHubPoll(f);
-  assert.match(f.calls.find(c => c.kind === 'mail-send').payload.body, /自動回答.*exit-1.*stderr must not replace stdout/s);
+  const reply = f.calls.find(c => c.kind === 'mail-send').payload.body;
+  const { reason } = f.calls.find(c => c.kind === 'mail-fail').payload;
+  const waited = await waitForReply(m.id, 1, {
+    now: () => now,
+    request: async () => ({ mail: { status: 'failed', failReason: reason } }),
+  });
+  assert.equal(waited.exitCode, 1);
+  for (const text of [reply, reason, waited.text]) {
+    assert.match(text, /exit-1.*HTTP 401/s);
+    assert.match(text, /REDACTED/);
+    assert.doesNotMatch(text, /fake-bearer-value|fake quoted secret|irrelevant log|Permission allow rule/);
+  }
   assert.equal(hubReport({ exitCode: 1, stdoutTail: '', outputTail: '', error: 'failure detail' }).outputTail.endsWith('failure detail'), true);
 });
 test('G9 answer rejects other recipients and detects changed retries unless forced', async t => {
@@ -1244,9 +1259,11 @@ for (const [result, reason] of [
   const replies = f.calls.filter(c => c.kind === 'mail-reply');
   if (reason) {
     assert.equal(replies.length, 0);
-    assert.equal(f.calls.find(c => c.kind === 'mail-fail').payload.reason, reason);
+    const failReason = f.calls.find(c => c.kind === 'mail-fail').payload.reason;
+    assert.ok(failReason.startsWith(reason));
+    assert.doesNotMatch(failReason, /private/);
     assert.equal(f.read(mail().id).status, 'failed');
-    assert.equal(f.read(mail().id).failReason, reason);
+    assert.equal(f.read(mail().id).failReason, failReason);
     assert.doesNotMatch(f.calls.find(c => c.kind === 'mail-send').payload.body, /private/);
   } else assert.equal(replies[0].payload.resultBody, 'answer');
   await pollOnce(f.deps);

@@ -35,15 +35,29 @@ SessionStart hook が kim-inbox の未回収 ask を注入する。目的を確�
 4. マージ確認後 `node tools/proposal-session.mjs --complete "<id>" --revision "<提示時の番号>" --decision approved --pr "<PR URL>"`。却下なら実装をせず `node tools/proposal-session.mjs --complete "<id>" --revision "<提示時の番号>" --decision rejected --reason "<理由>"`。シェル引数を適切に引用する。完了メッセージだけでなく `proposals/done/<id>.json` の status・理由・PR と次の引き継ぎを read-back する。
 5. 完了処理は `.json`・`.md`・生成指示書を `done/` へ移し、キューの次の1件を先頭に登録する。元の引き継ぎは残る。次の提案は次セッションで扱う。`next-session.md` の提案ブロックを手で削除しない。
 
+
+
+## 1.6 日中と夜間の切り分け（kim 2026-11-19）
+
+- 日中の対話セッションでは、急ぎの作業・承認や返事が要る作業・お客様対応・当日期限を目的候補の先頭にする。
+- 急ぎでなく、金さんの返事も不要な作業（調査・下書き・点検・設定修復・データ照合・コピーなど）は、今すぐ必要と言われたときを除き、`~/.claude/next-session.md` の残TODOへ `【夜間】` を付けて回し、このセッションの目的にしない。
+- `【夜間】` 付きの項目は、日中の目的候補から外す（今すぐ必要と言われたときを除く）。
+- 成果物を `~/.claude/night-briefs/` に置いてもよいが、作業項目の正本は next-session.md の `【夜間】` 行とする。`night-briefs/` を自動で全部実行しない。
+- 夜間・無人（auto-session）では `【夜間】` と残TODOを拾って進める。送信・支払い・削除・課金変更・社外連絡はせず、承認待ちとして朝に残す。朝の報告は1回にまとめる（このセッションから金さんへ途中報告しない）。
+- 詳細は ONBOARDING.md §2.8.6 と AI統一台帳の「夜間作業」タブ。
+
 ## 2. 目的を1件に確定する
 
-- 候補を集める前に `~/.claude/business-goals.md` を必ず読む。「売上・利益レバー（上から優先）」の未完了レバー1件を候補の **1番目**にする（手順0・1.5の優先事項はそのまま）。候補源は次の順:
-  1. `~/.claude/business-goals.md` の最優先の未完了レバー
+- 候補を集める前に `~/.claude/business-goals.md` を読む。**無い、または「売上・利益レバー」の節が空なら `~/.claude/next-actions.md` を読む**（夜間に `tools/next-actions.mjs` が機械生成する台帳。autopilot-tick.mjs と同じ fallback）。
+  **どちらも無い場合は、その場で `node tools/next-actions.mjs` を1回実行して生成してから読む**（groq/deepseek/openrouter の安いレーンで生成されるので Claude の消費はゼロ）。生成に失敗したら「売上レバーの台帳が無い（理由: &lt;stderr 1行&gt;）」と1行書いてから次の候補源へ進む。
+- 「売上・利益レバー（上から優先）」の未完了レバー1件を候補の **1番目**にする（手順0・1.5の優先事項はそのまま）。候補源は次の順:
+  1. `~/.claude/business-goals.md` の最優先の未完了レバー（無ければ `~/.claude/next-actions.md` の「明日の推奨アクション」）
   2. `~/.claude/next-session.md` の目的・残TODO
   3. `~/.claude/session-handoffs.md`（放置セッションの再開一覧。`/session-triage` が生成）
   4. 直近の memory の「未決」「次アクション」記述
   5. `~/.claude/promotion-queue.md` のPROMOTE待ち
 - 基盤・ツール系の残TODOは、売上・利益レバーを止めているブロッカー、または期限付きの効果確認だけを候補に出す。
+- 日中の対話では、候補から `【夜間】` 付きを外す（今すぐ必要と言われたときを除く）。外した分は消さず next-session.md に残す。
 - **候補を kim に見せる前に、着手済みを機械で落とす**（重複着手の防止・トークン増ゼロ）:
   候補を1行1件でスクラッチパッドのファイルに書き、
   `node ~/orgiast-claude-rules/tools/session-claims.mjs --filter --self <このセッションのid> --candidates <そのファイル>`

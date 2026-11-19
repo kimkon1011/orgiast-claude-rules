@@ -99,8 +99,11 @@ function fleetPlanUpsert(headers, rows, payload) {
   values[columns.mainModel] = payload.mainModel || '';
   if (payload.delegRatio !== '') values[columns.delegRatio] = payload.delegRatio == null ? '' : payload.delegRatio;
   if (columns.delegRatioLegacy >= 0 && payload.delegRatioLegacy !== '') values[columns.delegRatioLegacy] = payload.delegRatioLegacy == null ? '' : payload.delegRatioLegacy;
-  if (columns.planSevenDayPct >= 0) values[columns.planSevenDayPct] = payload.planSevenDayPct == null ? '計測不能' : payload.planSevenDayPct;
-  if (columns.planFiveHourPct >= 0) values[columns.planFiveHourPct] = payload.planFiveHourPct == null ? '計測不能' : payload.planFiveHourPct;
+  ['planSevenDayPct', 'planFiveHourPct'].forEach(function(key) {
+    if (columns[key] < 0) return;
+    const value = payload[key];
+    values[columns[key]] = value == null || value === '' || value === '計測不能' ? '計測不能(報告元から理由なし)' : value;
+  });
   if (columns.budgetPacePct >= 0) values[columns.budgetPacePct] = payload.budgetPacePct == null ? '計測不能' : payload.budgetPacePct;
   if (columns.settingsModel >= 0) values[columns.settingsModel] = payload.settingsModel || '未設定(=Opus)';
   values[columns.cheapAiUse] = payload.cheapAiUse || '';

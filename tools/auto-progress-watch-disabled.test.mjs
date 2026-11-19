@@ -42,7 +42,7 @@ for (const kind of ['stalled', 'waiting_user', 'overdue-check', 'overdue-start',
       transcriptEvidence: () => ({ count: 0, lastAt: 0, snippets: [] }),
       recentFiles: () => ({ names: [], lastAt: 0 }), autoSessionRuns: () => ({ names: [], lastAt: 0 }),
       judge: () => ({ verdict: 'stalled', reason: '停滞' }),
-      executeCheck: async () => ({ code: kind === 'scheduled-start' ? 0 : 1, text: '未完了' }),
+      executeCheck: async () => ({ code: kind === 'scheduled-start' ? 0 : 1, text: kind === 'scheduled-start' ? '成果物を確認' : '未完了' }),
       resume: () => assert.fail('no resume'), addKimInboxItem: async (_home, item) => {
         if (++attempts === 1) throw new Error('temporary inbox failure');
         notices.push(item); return { id: 'notice' };
@@ -57,10 +57,29 @@ for (const kind of ['stalled', 'waiting_user', 'overdue-check', 'overdue-start',
     }
     assert.equal(attempts, 2);
     assert.equal(notices.length, 1);
-    assert.match(notices[0].text, /自動再開は行いません.*claude --resume s/);
+    const [notice] = notices;
     const saved = readLedger(ledgerFile(home))[0];
-    assert.equal(saved.status, 'stalled');
-    assert.equal(saved.resumeOutcome, 'disabled');
+    if (kind === 'overdue-start') {
+      assert.equal(saved.status, 'expired');
+      assert.ok(saved.startExpiredNotifiedAt);
+      assert.equal(notice.source, 'auto-progress-start-expired');
+      assert.equal(notice.kind, 'ask');
+      assert.equal(notice.priority, 'high');
+      assert.match(notice.text, /いまの状態: 開始予約の期限切れ/);
+    } else {
+      assert.equal(saved.status, 'stalled');
+      assert.equal(saved.resumeOutcome, 'disabled');
+      if (kind === 'scheduled-start') {
+        assert.equal(notice.source, 'auto-progress-ready-deferred');
+        assert.equal(notice.kind, 'ask');
+        assert.equal(notice.priority, 'high');
+        assert.match(notice.text, /いまの状態: 条件は達成/);
+        assert.match(notice.text, /確認結果: 成果物を確認/);
+        assert.match(notice.text, /自動再開は行いません/);
+      } else {
+        assert.match(notice.text, /自動再開は行いません.*claude --resume s/);
+      }
+    }
     assert.equal(saved.resumeCount ?? 0, 0);
   });
 }

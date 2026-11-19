@@ -43,6 +43,12 @@ test('failed output does not consume the recipient notice', t => {
   assert.ok(context(consumeOwnerInbox(input, options)).includes(CHAT_RECIPIENT_NOTICE));
 });
 
+test('loop 起床では owner 通知を注入しない', t => {
+  const options = { ...fixture(t), resolveOwnerDiscordId: () => '' };
+  assert.ok(context(consumeOwnerInbox(input, options)).includes(CHAT_RECIPIENT_NOTICE));
+  assert.equal(consumeOwnerInbox({ ...input, prompt: '<<autonomous-loop-dynamic>>' }, options), null);
+});
+
 test('kim warning is limited to one attempt per day under concurrent notifications', async t => {
   const options = fixture(t), calls = [];
   Object.assign(options, { now: new Date(2026, 10, 3, 9).getTime(), toast: () => false,

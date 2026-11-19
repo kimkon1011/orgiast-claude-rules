@@ -45,6 +45,29 @@ test('stateに計測値が無ければ数値0へ変換しない', () => {
   assert.equal(payload.claudeUsd, '');
 });
 
+test('プラン上限の計測不能理由を両方のセルに送る', () => {
+  const missing = reportPayload();
+  assert.equal(missing.planSevenDayPct, '計測不能(credentials: ENOENT)');
+  assert.equal(missing.planFiveHourPct, '計測不能(credentials: ENOENT)');
+  const noToken = reportPayload({ '.credentials.json': { claudeAiOauth: {} } });
+  assert.equal(noToken.planSevenDayPct, '計測不能(accessToken 未設定)');
+  assert.equal(noToken.planFiveHourPct, '計測不能(accessToken 未設定)');
+});
+
+test('古い cost-loop 値が最新の Claude コスト概算を隠さない', () => {
+  const cost = { t: '2026-11-15T02:00:00Z', claudeUSD: 211.18 };
+  assert.equal(reportPayload({
+    'cost-loop-state.json': cost,
+    '.cost-reporter-state.json': { lastRun: '2026-11-19T02:00:00Z', mtdUsd: 235.673 },
+  }).claudeUsd, 235.67);
+  assert.equal(reportPayload({
+    'cost-loop-state.json': cost,
+    '.cost-reporter-state.json': {
+      measuredAt: '2026-11-14T02:00:00Z', lastRun: '2026-11-19T02:00:00Z', mtdUsd: 200,
+    },
+  }).claudeUsd, 211.18);
+});
+
 test('stateに計測値があればパーセント表記で送る', () => {
   const payload = reportPayload({
     'cost-loop-state.json': { nonClaudeDelegRatio: 0.286, delegRatio: 0.286, claudeUSD: 1.234 },
@@ -111,6 +134,13 @@ test('GAS upsertは空の計測値で既存セルを上書きせず、実測0は
   assert.equal(zero.values[columns.claudeUsd], 0);
   assert.equal(zero.values[columns.delegRatio], '0.0%');
   assert.equal(zero.values[columns.delegRatioLegacy], '0.0%');
+  assert.equal(unknown.values[columns.planSevenDayPct], '計測不能(報告元から理由なし)');
+  assert.equal(unknown.values[columns.planFiveHourPct], '計測不能(報告元から理由なし)');
+  const plan = context.fleetPlanUpsert(headers, [row], {
+    label: 'fleet-sheet-test', planSevenDayPct: '計測不能(HTTP 401)', planFiveHourPct: 0,
+  });
+  assert.equal(plan.values[columns.planSevenDayPct], '計測不能(HTTP 401)');
+  assert.equal(plan.values[columns.planFiveHourPct], 0);
 });
 
 const response = (body, status = 200) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });

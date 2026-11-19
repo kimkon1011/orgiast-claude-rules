@@ -20,3 +20,16 @@ test('dashboard displays a completed HP watch and unresolved asks without hiding
   await page.reload();
   await expect(section.getByRole('alert')).toContainText('ログインして');
 });
+
+test('inbox scan in progress is not presented as zero unanswered asks', async ({ page }) => {
+  await page.route('**/secretary/api/**', route => route.fulfill({ status: 401, body: '{}' }));
+  await page.route('**/secretary/api/watches', route => route.fulfill({ json: {
+    watches: [], recentCompleted: [{ id: 'hp', label: '東邦2階HP 使用量把握', verdict: 'done', status: 'done' }],
+    inboxAsks: [], totalWatches: 0, totalAsks: null, inboxStatus: 'refreshing', inboxUpdatedAt: null, warnings: [], updatedAt: '2026-11-15T08:00:00Z',
+  } }));
+  await page.goto('/secretary');
+  const section = page.getByRole('region', { name: 'kim-PC の見張り・確認' });
+  await expect(section.getByText('東邦2階HP 使用量把握', { exact: true })).toBeVisible();
+  await expect(section.getByText('確認事項を更新中…')).toBeVisible();
+  await expect(section.getByText('未回答の確認はありません。')).toHaveCount(0);
+});

@@ -1,8 +1,7 @@
 {
   "version": 1,
   "pilotHosts": [
-    "kim-PC",
-    "DESKTOP-2D0R4LI"
+    "kim-PC"
   ],
   "gates": {
     "pdf-deliverable-visual-gate": { "rollout": "deny", "immediatePolicy": "2026-11-15 user 指示: 全席でPDF納品前に描画後の全ページ目視を必須化" },

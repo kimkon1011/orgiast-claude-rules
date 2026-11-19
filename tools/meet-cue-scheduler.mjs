@@ -17,8 +17,8 @@ import { isEntry } from './is-entry.mjs';
 import { askJev } from './jev.mjs';
 import { getDriveToken, DRIVE_SCOPE } from './lib/drive-auth.mjs';
 import { setupCueDocument } from './lib/meet-cue-doc.mjs';
-import { resolveBotDisplayName } from './lib/meet-cue-core.mjs';
-import { generateCardsFromBrief } from './meet-cue.mjs';
+import { DEFAULT_SEAT_HOSTNAMES, matchesSeatHostname, resolveBotDisplayName, resolveSeatHostnames } from './lib/meet-cue-core.mjs';
+import { generateCardsFromBrief, generateSessionId } from './meet-cue.mjs';
 import { matchMeetingInquiries, INQUIRY_SHEET, INQUIRY_TAB, readSheet } from './lib/inquiry-sheet.mjs';
 import { addItem } from './kim-inbox.mjs';
 
@@ -44,7 +44,8 @@ export function readConfig(home = homeDir()) {
       const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       return {
         enabled: parsed.enabled ?? true,
-        seatHostname: parsed.seatHostname || 'DESKTOP-2D0R4LI',
+        seatHostnames: resolveSeatHostnames(parsed.seatHostnames == null && !parsed.seatHostname
+          ? { seatHostnames: DEFAULT_SEAT_HOSTNAMES } : parsed),
         calendars: Array.isArray(parsed.calendars) && parsed.calendars.length > 0
           ? parsed.calendars
           : ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'],
@@ -57,7 +58,7 @@ export function readConfig(home = homeDir()) {
   }
   return {
     enabled: true,
-    seatHostname: 'DESKTOP-2D0R4LI',
+    seatHostnames: DEFAULT_SEAT_HOSTNAMES,
     calendars: ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'],
     maxConcurrent: 3,
     botDisplayName: resolveBotDisplayName({}),
@@ -546,8 +547,9 @@ export async function runScheduler(options = {}) {
 
   // Seat hostname check
   const currentHostname = options.hostname || options.deps?.hostname || os.hostname();
-  if (config.seatHostname && config.seatHostname.toLowerCase() !== currentHostname.toLowerCase()) {
-    console.log(`[meet-cue-scheduler] seatHostname 不一致のため待機 (現在: ${currentHostname}, 対象: ${config.seatHostname})`);
+  const seatHostnames = resolveSeatHostnames(config);
+  if (!matchesSeatHostname(seatHostnames, currentHostname)) {
+    console.log(`[meet-cue-scheduler] seatHostname 不一致のため待機 (現在: ${currentHostname}, 対象: ${seatHostnames.join(', ')})`);
     return {
       ok: true,
       skippedHost: true,
@@ -555,7 +557,7 @@ export async function runScheduler(options = {}) {
       actions: [],
       skippedEvents: [],
       currentHostname,
-      targetHostname: config.seatHostname,
+      targetHostname: seatHostnames.join(', '),
     };
   }
 
@@ -804,22 +806,42 @@ export async function runScheduler(options = {}) {
             // Launch meet-cue.mjs start in background detached
             try {
               const scriptPath = fileURLToPath(new URL('./meet-cue.mjs', import.meta.url));
+              const sessionId = generateSessionId();
+              const sessionDir = path.join(meetCueBaseDir(home), sessionId);
+              fs.mkdirSync(meetCueBaseDir(home), { recursive: true });
+              fs.mkdirSync(sessionDir, { mode: 0o700 });
               const args = [
                 scriptPath,
                 'start',
+                '--session-id', sessionId,
                 '--url', meetInfo.meetUrl,
                 '--staff', staffEmail,
                 '--title', event.summary || '打合せ',
                 '--cards-file', itemState.cardsFile,
                 '--doc-id', docId,
-                '--brief-file', itemState.briefFile || '',
+                ...(itemState.briefFile ? ['--brief-file', itemState.briefFile] : []),
                 '--max-minutes', String(durationMinutes + 30),
               ];
 
-              const child = spawn(process.execPath, args, { detached: true, windowsHide: true, stdio: 'ignore' });
-
+              const logFd = fs.openSync(path.join(sessionDir, 'bot.log'), 'a', 0o600);
+              let child;
+              try {
+                child = spawn(process.execPath, args, {
+                  detached: true, windowsHide: true, stdio: ['ignore', logFd, logFd],
+                  env: { ...process.env, ORGIAST_HOME: home },
+                });
+                await new Promise((resolve, reject) => {
+                  child.once('spawn', resolve);
+                  child.once('error', reject);
+                });
+              } finally {
+                fs.closeSync(logFd);
+              }
               child.unref();
 
+              itemState.sessionId = sessionId;
+              delete itemState.joinError;
+              delete itemState.lastJoinErrorTime;
               itemState.joinedPid = child.pid;
               actionStatus = `launched_pid_${child.pid}`;
               console.log(`[meet-cue-scheduler] Meet Bot 起動成功 (PID: ${child.pid}, ${event.summary})`);

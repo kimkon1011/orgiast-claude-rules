@@ -74,3 +74,7 @@ code --uninstall-extension orgiast.next-session
 
 ## 0.3.9
 git worktree フォルダで開かれた VS Code ウィンドウが待機タブのリースを取得・補充しないようにし、起動時・定期処理で未使用の待機タブだけを閉じて通常ウィンドウへ委譲します（会話中タブは保持）。また PC 再起動後の再接続（reopen-lost-sessions）では worktree パスで新規 VS Code ウィンドウが開かないよう制御します。
+
+### セッションの再オープン
+
+`vscode://orgiast.next-session/reopen?session=<ID>` は、保存済みセッション ID と一意なタイトルなどで対象の Claude Code タブを照合し、対象があれば閉じてから公式拡張のセッション URI を開きます。対象が見つからない場合は公式 URI のみを開きます。

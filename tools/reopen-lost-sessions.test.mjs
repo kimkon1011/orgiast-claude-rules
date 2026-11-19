@@ -2413,3 +2413,45 @@ test('recordApiResult: 初回はカウンターが 1 になる', t => {
   assert.equal(recordApiResult(base, 'error'), false);
   assert.equal(readFailState(base).consecutiveFails, 1);
 });
+
+for (const scenario of ['verified', 'recovered by RC', 'still unverified', 'dispatch failure', 'closed meanwhile', 'alive meanwhile']) {
+  test(`拡張再試行: ${scenario}`, async t => {
+    const base = fixture(t), opts = guardOptions(base);
+    const { spawn, fetchImpl } = opts;
+    let waits = 0, attempts = 0, verificationAgentChecks = 0;
+    opts.wait = async ms => { if (ms === 90000) waits++; };
+    opts.spawn = (cmd, args) => {
+      if (waits && args[0] === 'agents') {
+        verificationAgentChecks++;
+        if (scenario === 'alive meanwhile' && verificationAgentChecks >= 2) {
+          return { status: 0, stdout: JSON.stringify([{ kind: 'interactive', sessionId: 'one' }]) };
+        }
+      }
+      if (args.at(-1).includes('vscode://orgiast.next-session/reopen?session=one')) {
+        attempts++;
+        if (scenario === 'dispatch failure') return { status: 1, stdout: '', stderr: 'mock failure' };
+      }
+      return spawn(cmd, args);
+    };
+    opts.fetchImpl = async url => {
+      if (!waits) return fetchImpl(url);
+      if (scenario === 'closed meanwhile') {
+        fs.writeFileSync(path.join(base, 'closed-sessions.json'), JSON.stringify({ ids: ['one'] }));
+      }
+      const connected = scenario === 'verified' || (scenario === 'recovered by RC' && waits === 2);
+      return { ok: true, json: async () => ({ data: [{ id: 'cse_one', connection_status: connected ? 'connected' : 'disconnected' }] }) };
+    };
+    const result = await reopenLost(opts);
+    const retried = ['recovered by RC', 'still unverified'].includes(scenario);
+    const verified = ['verified', 'recovered by RC'].includes(scenario);
+    assert.equal(result.reopened.length, 1);
+    assert.equal(attempts, Number(retried || scenario === 'dispatch failure'));
+    assert.equal(waits, retried ? 2 : 1);
+    assert.deepEqual(result.retriedViaExtension, retried ? ['one'] : []);
+    assert.deepEqual(result.verified, verified ? ['one'] : []);
+    assert.deepEqual(result.unverified, verified ? [] : ['one']);
+    if (scenario === 'dispatch failure') assert.equal(result.extensionRetryFailed[0].id, 'one');
+    if (scenario === 'closed meanwhile') assert.equal(result.skipped.closed, 1);
+    if (scenario === 'alive meanwhile') assert.equal(result.skipped.alive, 1);
+  });
+}

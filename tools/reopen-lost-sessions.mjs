@@ -894,7 +894,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs, stateBased = false,
   checkCpu = true, checkClaude = false, cpusImpl, vscodeStartedAt, openDb, checkIdle = true, idleImpl } = {}) {
-  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closable: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0, unverifiedStreak: 0, processRunning: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
+  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], retriedViaExtension: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closable: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0, unverifiedStreak: 0, processRunning: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
   const progress = (stage, detail) => { if (!dryRun) writeProgress(base, stage, detail); };
   const initialHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
   const hiddenSessionIds = initialHidden.ids;
@@ -1199,10 +1199,14 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
         if (result.reopened.length) {
           progress('verify', `waiting 90s for ${result.reopened.length} reopened`);
           await wait(90000);
-          let agents, connected;
-          try { agents = alive(); } catch (e) { result.verifyError = e.message; }
-          try { connected = await connectedRcSessionIds({ fetchImpl, headers, now }); }
-          catch (e) { result.verifyApiError = e.message; }
+          const verify = async () => {
+            let agents, connected;
+            try { agents = alive(); } catch (e) { result.verifyError = e.message; }
+            try { connected = await connectedRcSessionIds({ fetchImpl, headers, now }); }
+            catch (e) { result.verifyApiError = e.message; }
+            return { agents, connected };
+          };
+          const { agents, connected } = await verify();
           if (agents || connected) {
             result.verified = [];
             result.unverified = [];
@@ -1210,6 +1214,36 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
               if (agents?.has(r.id) || connected?.has(r.rcId)) result.verified.push(r.id);
               else if (agents) result.unverified.push(r.id);
             }
+          }
+          const unverified = new Set(result.unverified);
+          for (const candidate of result.reopened) {
+            const { id } = candidate;
+            if (!unverified.delete(id)) continue;
+            try {
+              const retryLoad = await getLoadGuardStatus({ env, spawn, cpusImpl, wait, checkCpu, checkClaude, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now });
+              if (retryLoad.triggered) continue;
+              const current = [...localIndex(base, id).values()].find(local => local.id === id);
+              const hidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
+              const reason = exclusion(current, closedIds(base), alive(), hidden.error ? hiddenSessionIds : hidden.ids);
+              if (reason) { result.skipped[reason]++; continue; }
+              if (isSessionProcessRunning({ ...candidate, bridgeSessionId: current.bridgeSessionId || candidate.bridgeSessionId }, {
+                sessionsDir: path.join(base, 'sessions'), spawn, fsImpl,
+              })) { result.skipped.processRunning++; continue; }
+              const uri = `vscode://orgiast.next-session/reopen?session=${encodeURIComponent(id)}`;
+              ps(`& ${quotePS(code)} --open-url ${quotePS(uri)}; exit $LASTEXITCODE`, spawn);
+              result.retriedViaExtension.push(id);
+            } catch (error) {
+              (result.extensionRetryFailed ??= []).push({ id, error: error.message });
+            }
+          }
+          if (result.retriedViaExtension.length) {
+            progress('verify-extension', `waiting 90s for ${result.retriedViaExtension.length} retried`);
+            await wait(90000);
+            const afterRetry = await verify();
+            const recovered = new Set(result.reopened.filter(r =>
+              afterRetry.agents?.has(r.id) || afterRetry.connected?.has(r.rcId)).map(r => r.id));
+            result.verified.push(...result.unverified.filter(id => recovered.has(id)));
+            result.unverified = result.unverified.filter(id => !recovered.has(id));
           }
         }
       }

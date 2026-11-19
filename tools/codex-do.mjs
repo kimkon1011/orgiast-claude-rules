@@ -1131,6 +1131,11 @@ export const timeoutKillGraceMs = (env = {}) => positiveEnv(env.CODEX_DO_TIMEOUT
 export function remainingPrimaryBudgetSecs(budgetSecs, elapsedSecs) {
   return Math.max(1, budgetSecs - elapsedSecs);
 }
+export function primaryTimeoutLimitSecs(timeoutSeconds, explicit, env = process.env) {
+  // 既定の長い全体予算では、単発の試行に使う時間を抑える（2026-11-12 実測）。
+  return explicit ? timeoutSeconds : fallbackBackendTimeoutSecs(timeoutSeconds, env);
+}
+
 export const policyStallCheckMs = (env = {}) => positiveEnv(env.CODEX_DO_POLICY_STALL_CHECK_MS, 5000);
 
 export function shouldAbortPolicyStall({
@@ -1321,7 +1326,8 @@ if (showBudget) {
 }
 
 // タイムアウト既定30分。無限に待って気付かないより、切って原因を見に行くほうが安い。
-const timeoutSeconds = timeoutIndex >= 0 ? Number(args[timeoutIndex + 1]) : 1800;
+const explicitTimeout = timeoutIndex >= 0;
+const timeoutSeconds = explicitTimeout ? Number(args[timeoutIndex + 1]) : 1800;
 if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
   console.error(`--timeout は正の秒数で指定してください\n${usage}`);
   process.exit(2);
@@ -1727,15 +1733,18 @@ async function tryCheapFirstFallback() {
   return { succeeded: cheapSucceeded, result: lastResult || { status: 1, outputChars: 0, output: '', stderr: '' }, chainResult, lastBackend };
 }
 
+const primaryLimitSecs = primaryTimeoutLimitSecs(timeoutSeconds, explicitTimeout);
+let primaryLimitLogged = false;
 async function launchCodex(codexArgs, primaryStarted = Date.now()) {
   let result;
+  if (!primaryLimitLogged) {
+    console.error(`[codex-do] 主経路の上限=${primaryLimitSecs}秒`);
+    primaryLimitLogged = true;
+  }
 
-  // 主経路の codex も fallbackBackendTimeoutSecs の上限(既定900秒)で制限する。
-  // これが無いと --timeout 3000 等の長い全体予算がそのまま codex に渡り、
-  // 1回の codex 呼出で 3000 秒を捨てることになる(2026-11-12 実測: gpt-6-astra 3025秒/予算3000秒)。
   const remainingTimeoutSecs = () => Math.min(
     remainingPrimaryBudgetSecs(timeoutSeconds, (Date.now() - primaryStarted) / 1000),
-    fallbackBackendTimeoutSecs(timeoutSeconds),
+    primaryLimitSecs,
   );
 
   if (process.platform === 'win32' && !forceNative) {

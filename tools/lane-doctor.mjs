@@ -194,8 +194,19 @@ export function nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }) {
   return [path.join(repo, 'tools/codex-do.mjs'), instruction, '--cwd', cwd, '--kind', 'implement', '--force-native', '--no-fallback', '--no-escalate', '--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))];
 }
 export const NATIVE_WRITE_PROBE_TIMEOUT_MS = 180_000;
-export async function runNativeWriteProbe({ home, timeoutMs }) {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-codex-write-'));
+// Codex の書き込み点検は固定フォルダーで行う。一時フォルダー（lane-codex-write-*）を毎回作ると、
+// ChatGPT(Codex) アプリが新しいフォルダーとして「このフォルダーを信頼しますか？」を毎回出すため（2026-11-19 金さん指摘）。
+// フォルダー自体は残し、中身だけ毎回前後で空にする。ORGIAST_LANE_PROBE_DIR で上書き可（テスト用）。
+export function laneProbeWorkDir({ env = process.env, homedir = os.homedir() } = {}) {
+  return env.ORGIAST_LANE_PROBE_DIR || path.join(homedir, 'gb-offload', 'lane-doctor-work');
+}
+export function resetLaneProbeWorkDir(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of fs.readdirSync(dir)) fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+  return dir;
+}
+export async function runNativeWriteProbe({ home, timeoutMs, workDir = laneProbeWorkDir() }) {
+  const cwd = resetLaneProbeWorkDir(workDir);
   const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home, CODEX_DO_CHEAP_FIRST: '0' }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e, stdout, stderr) => {
     const output = `${stdout || ''}\n${stderr || ''}`.trim();
     if (e?.killed || e?.signal) return resolve({ code: 1, timedOut: true, text: `タイムアウト(${Math.ceil(timeoutMs / 1000)}s) ${output}`.trim() });
@@ -209,7 +220,7 @@ export async function runNativeWriteProbe({ home, timeoutMs }) {
     let ok = false;
     try { ok = fs.readFileSync(path.join(cwd, 'WRITE_OK.txt'), 'utf8').trim() === 'WRITE_OK'; } catch {}
     return { viaChain: probeViaChain(result.text, 'codex'), code: result.code === 0 && ok ? 0 : 1, text: ok ? 'WRITE_OK' : `書き込み確認失敗 ${result.text || ''}` };
-  } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
+  } finally { try { resetLaneProbeWorkDir(cwd); } catch {} }
 }
 export function runProbe(provider, { home, timeoutMs, dryRun = false, execFileImpl = execFile } = {}) {
   const args = provider === 'codex'

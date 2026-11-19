@@ -7,6 +7,11 @@ test('non-elevated task registration control flow (Windows PowerShell 5.1 mocks)
     fileURLToPath(new URL('./secretary-uptime-registration.test.ps1', import.meta.url))], { windowsHide: true, timeout: 60000, stdio: 'pipe' });
 });
 
+test('secretary restart matches observed Windows command lines and checks listener ownership', { skip: process.platform !== 'win32' }, () => {
+  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+    fileURLToPath(new URL('./secretary-server-process.test.ps1', import.meta.url))], { windowsHide: true, timeout: 60000, stdio: 'pipe' });
+});
+
 test('legacy and watchdog gateway starts cannot both bind the same wildcard address', async t => {
   const { createServer } = await import('node:net');
   const winner = createServer();

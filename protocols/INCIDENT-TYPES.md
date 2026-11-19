@@ -60,3 +60,4 @@
 - 型: 返事の取りこぼし型（kim の自然文返事が台帳に自動記録されず、ap:/fm:/ex: の返事待ちが何日も open のまま残る。recordPromptAnswers の構造化マッチングが「良い」「入れる」「OK」等の自然語や複数行番号付き返事を拾えず、ap:/fm:/ex: の返事自体に記録経路が無い。2026-11-17 実測: 1784件の open ask がゲート拒否通知で埋もれ、本物の判断待ちが識別不能） → 横展開の検索: recordPromptAnswers の呼出箇所（kim-inbox.mjs）、collectAwaiting 経路（kim-awaiting.mjs の respond）、自然文返事・番号付き複数行に対応していない判定箇所全般 → ゲート: tools/lib/kim-inbox-relay-state.mjs の recordNaturalLanguageAnswers（自然文マッチング・確信度低はヒント返却）、kim-inbox.mjs の UserPromptSubmit handler で nlHints 注入、kim-inbox-nl-answers.test.mjs で回帰テスト
 - 2026-11-18 代替送信経路の未提示: LINE bot 429 で kim 手動/有料の二択を出した。Beeper（kim本人LINE）経路があった。→ line-group-send.mjs の 429 時に Beeper 経路を出力
 - 型: hook 注入の一覧を毎ターン冒頭表示させ同一セッションで大量再掲 → 新着差分・最終メッセージのみ・loop抑止を inbox-display-policy で強制
+- 型: コマンドラインの引用符の違いで正規のプロセスを別物と判定し、再起動を拒否する（2026-11-19 kim-PC、secretary-restart.ps1 の 3939/3940 実測） → 対策: 引数単位でパスとポートを照合し、Next.js の子プロセスは親も確認する。ゲート: tools/secretary-server-process.test.ps1

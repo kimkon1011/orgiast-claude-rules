@@ -1,4 +1,5 @@
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'secretary-server-process.ps1')
 $AppDir=Join-Path $env:USERPROFILE 'Downloads\secretary-pc'
 # Run only from a session allowed to write AppDir and the user's .claude directory.
 # No elevation or sandbox bypass is attempted by this installer.
@@ -39,9 +40,8 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Secretary build failed; live process remains running' }
 } finally { Pop-Location }
 # The new build is complete before touching the currently running server.
-$next=Join-Path $AppDir 'node_modules\next\dist\bin\next'
-$servers=@(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($next) -and $_.CommandLine -match '-p\s+3940(?:\s|$)' })
-foreach ($serverProcess in $servers) { Stop-Process -Id $serverProcess.ProcessId -Force }
+$server=Get-SecretaryServer -ServerDir $AppDir -Port 3940
+foreach ($serverProcess in $server.Processes) { Stop-Process -Id $serverProcess.ProcessId -Force }
 $production=Join-Path $AppDir '.next-production'
 if (Test-Path -LiteralPath $production) { Move-Item -LiteralPath $production -Destination (Join-Path $backup 'previous-production') }
 Move-Item -LiteralPath (Join-Path $AppDir $buildDir) -Destination $production

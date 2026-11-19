@@ -1,6 +1,6 @@
 # 停滞セッションの夜間再開
 
-自動再開は廃止（kim 2026-11-14）。期限切れ・停滞は kim-inbox 通知のみ行う。
+このツールの自動再開は無効のまま（kim 2026-11-14）。期限切れ・停滞は kim-inbox 通知のみ行う。止まったセッションの自動再開は、kim 2026-11-18 の決定により各PCの見回り GrokBot-Offload-patrol が行う（kim の返事待ちは再開せず要判断に載せる。詳細は ONBOARDING.md）。
 
 `tools/stalled-session-resume.mjs` は `session-triage.mjs` の `listFiles` / `inspect` の結果を使う。両関数を export にしただけで、検出規則は変更していない。
 

@@ -786,6 +786,30 @@ test('answer closes open asks for the same ledger row or dedupe key', async t =>
   assert.equal(items.get(otherRow.id).status, 'open');
 });
 
+test('answer is persisted while the aggregation lock is held', async t => {
+  const home = seat(t);
+  const ask = await addItem(home, { kind: 'ask', text: '確認', dedupeKey: 'job:1' });
+  const lock = path.join(home, '.claude/kim-inbox/info-aggregation.lock');
+  fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
+  const waitSetting = 'ORGIAST_INBOX_GROUP_LOCK_WAIT_MS';
+  const previousWait = process.env[waitSetting];
+  process.env[waitSetting] = '0';
+  t.after(() => {
+    if (previousWait === undefined) delete process.env[waitSetting];
+    else process.env[waitSetting] = previousWait;
+  });
+  const log = t.mock.method(console, 'error', () => {});
+
+  const answered = answerItem(home, ask.id, '承認');
+
+  assert.equal(answered.status, 'answered');
+  assert.deepEqual(listItems(home, { status: 'answered' }), [answered]);
+  assert.equal(answered.answer, '承認');
+  assert.equal(fs.readFileSync(lock, 'utf8'), String(process.pid));
+  assert.equal(log.mock.callCount(), 1);
+  assert.match(log.mock.calls[0].arguments[0], /回答は記録済み.*台帳が使用中です/);
+});
+
 test('drop closes only open asks with the matching key for ordinary questions', async t => {
   const home = seat(t);
   const original = await addItem(home, { kind: 'ask', text: '確認', dedupeKey: 'job:1' });

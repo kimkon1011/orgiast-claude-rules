@@ -87,8 +87,8 @@ function acquireInboxLock(home, key, waitMs = 10_000) {
   if (fd === undefined) throw new Error('kim-inbox: 台帳が使用中です');
   return () => { fs.closeSync(fd); fs.unlinkSync(lock); };
 }
-function locked(home, key, fn) {
-  const release = acquireInboxLock(home, key);
+function locked(home, key, fn, waitMs) {
+  const release = acquireInboxLock(home, key, waitMs);
   try { return fn(); } finally { release(); }
 }
 function update(home, id, fn) {
@@ -305,7 +305,9 @@ export function listItems(home, { status } = {}) {
 }
 // Share the creation lock so a duplicate cannot be added during a group update.
 export function withInboxGroupLock(home, fn) {
-  return locked(home, 'info-aggregation', fn);
+  const rawWaitMs = process.env.ORGIAST_INBOX_GROUP_LOCK_WAIT_MS;
+  const waitMs = rawWaitMs?.trim() ? Number(rawWaitMs) : undefined;
+  return locked(home, 'info-aggregation', fn, Number.isFinite(waitMs) && waitMs >= 0 ? waitMs : undefined);
 }
 
 export function supersedeAsk(home, id, target) {
@@ -322,23 +324,27 @@ export function supersedeAsk(home, id, target) {
 }
 
 function resolveItem(home, id, fields) {
-  return withInboxGroupLock(home, () => {
-    const item = update(home, id, current => Object.assign(current, fields, { answeredAt: new Date().toISOString() }));
-    syncLedger(home, item);
-    if (item.kind !== 'ask') return item;
+  const item = update(home, id, current => Object.assign(current, fields, { answeredAt: new Date().toISOString() }));
+  syncLedger(home, item);
+  if (item.kind !== 'ask') return item;
 
-    const parsed = parseEscalation(item);
-    if (!parsed && !item.dedupeKey) return item;
-    const row = parsed && (readLedger(ledgerFile(home)).find(candidate => matchesRow(item, candidate))
-      || { ts: parsed.ts, sessionId: item.sessionId?.slice(0, 8) === parsed.session ? item.sessionId : parsed.session });
-    for (const candidate of listItems(home, { status: 'open' })) {
-      if (candidate.kind !== 'ask') continue;
-      if ((item.dedupeKey && candidate.dedupeKey === item.dedupeKey) || (row && matchesRow(candidate, row))) {
-        supersedeAsk(home, candidate.id, item);
+  const parsed = parseEscalation(item);
+  if (!parsed && !item.dedupeKey) return item;
+  try {
+    withInboxGroupLock(home, () => {
+      const row = parsed && (readLedger(ledgerFile(home)).find(candidate => matchesRow(item, candidate))
+        || { ts: parsed.ts, sessionId: item.sessionId?.slice(0, 8) === parsed.session ? item.sessionId : parsed.session });
+      for (const candidate of listItems(home, { status: 'open' })) {
+        if (candidate.kind !== 'ask') continue;
+        if ((item.dedupeKey && candidate.dedupeKey === item.dedupeKey) || (row && matchesRow(candidate, row))) {
+          supersedeAsk(home, candidate.id, item);
+        }
       }
-    }
-    return item;
-  });
+    });
+  } catch (error) {
+    console.error('kim-inbox: 同じ質問の整理に失敗（回答は記録済み、次回 dedupe-backfill で整理）: ' + clean(error?.message ?? error));
+  }
+  return item;
 }
 
 export function answerItem(home, id, answer, sessionId = '') {

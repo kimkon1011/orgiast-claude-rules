@@ -212,6 +212,16 @@ function annotation(manifest, kimOperated) {
 
 `;
 }
+// Some distribution sources carry individual notes without the source index.
+function ensureSharedMemoryIndex(dir, { dryRun, introduction } = {}) {
+  if (dryRun) return;
+  const index = path.join(dir, 'MEMORY.md');
+  const content = (introduction || '') + '# 全社共有の知見\n\n'
+    + 'このディレクトリは読み取り専用。必要時に index/*.md または個別の *.md を Grep し、該当ファイルを読む。\n';
+  try { fs.writeFileSync(index, content, { flag: 'wx' }); }
+  catch (error) { if (error.code !== 'EEXIST') throw error; }
+}
+
 export async function installFromDriveMaster(options = {}) {
   const home = options.home || process.env.ORGIAST_HOME || os.homedir();
   const dir = options.sharedDir || path.join(home, '.claude', 'shared-memory');
@@ -274,6 +284,7 @@ export async function installFromDriveMaster(options = {}) {
     } catch {}
   }
 
+  ensureSharedMemoryIndex(dir, { dryRun: options.dryRun });
   return {
     source: 'drive-master',
     generatedAt: new Date().toISOString(),
@@ -381,12 +392,14 @@ export async function installSharedMemories(options = {}) {
     }
     result.unchanged = manifest.files.length - changed.length;
     for (const name of localFiles(dir)) {
-      if (names.has(name) || ['.state.json', 'README.md'].includes(name)) continue;
+      if (names.has(name) || ['.state.json', 'README.md'].includes(name)
+        || (name === 'MEMORY.md' && !previous?.files?.[name])) continue;
       if (!options.dryRun) fs.rmSync(path.join(dir, name));
       result.removed++;
     }
     if (!options.dryRun) {
       fs.mkdirSync(dir, { recursive: true });
+      if (!names.has('MEMORY.md')) ensureSharedMemoryIndex(dir, { introduction: annotation(manifest, kimOperated) });
       fs.writeFileSync(statePath, JSON.stringify({ generatedAt: manifest.generatedAt, source: manifest.source, kimOperated, files: Object.fromEntries(manifest.files.map(file => [file.name, file.sha256])) }, null, 2) + '\n');
     }
   } catch (error) { emit(`memory-share install 取得失敗: ${oneLine(error)}`); result.error = oneLine(error); }

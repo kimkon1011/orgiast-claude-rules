@@ -11,7 +11,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { resolveBrowserExecutable, runHumanLogin } from './human-login.mjs';
 import { findChromium } from '../gpage-fetch.mjs';
-import { MEET_SELECTORS } from './meet-cue-core.mjs';
+import { MEET_SELECTORS, normalizeCaptionRows } from './meet-cue-core.mjs';
 
 function getBrowsersBaseDir() {
   if (process.env.PLAYWRIGHT_BROWSERS_PATH) return process.env.PLAYWRIGHT_BROWSERS_PATH;
@@ -320,8 +320,8 @@ export function readMeetCaptions(root, selectors, excludedContainer, identifyRow
   const rows = [];
   const regions = Array.from(root.querySelectorAll(selector))
     .filter(region => !region.closest(excludedContainer));
-  const addRow = (speaker, text, element, index = 0) => {
-    const row = { speaker, text };
+  const addRow = (speaker, text, element, index = 0, fromFallback = false) => {
+    const row = { speaker, text, fromFallback };
     if (identifyRow) row.rowId = identifyRow(element, index);
     rows.push(row);
   };
@@ -336,8 +336,7 @@ export function readMeetCaptions(root, selectors, excludedContainer, identifyRow
         if (!body || body.closest(excludedContainer)) continue;
         const content = body.cloneNode(true);
         content.querySelectorAll(ignored).forEach(child => child.remove());
-        const text = content.textContent.trim();
-        if (text) addRow(speaker, text, row);
+        addRow(speaker, content.textContent, row);
       }
       continue;
     }
@@ -346,8 +345,7 @@ export function readMeetCaptions(root, selectors, excludedContainer, identifyRow
     let chunks = [];
     let index = 0;
     const flush = () => {
-      const text = chunks.join('').trim();
-      if (text && !/^[a-z0-9_]+$/.test(text)) addRow(speaker, text, region, index);
+      if (chunks.length) addRow(speaker, chunks.join(''), region, index, true);
       chunks = [];
     };
     const visit = (node) => {
@@ -686,9 +684,10 @@ async function runMeetBot(context, close, {
 export async function watchMeetCaptions(page, { onCaption, log, pollMs = 1500 }) {
   let latestSequence = 0;
   let previous = new Map();
-  const receive = ({ sequence, rows }) => {
+  const receive = ({ sequence, rows: rawRows }) => {
     if (sequence <= latestSequence) return;
     latestSequence = sequence;
+    const rows = normalizeCaptionRows(rawRows);
     const current = new Map(rows.map(row => [row.rowId, row]));
     const timestamp = Date.now();
     for (const rowId of previous.keys()) {

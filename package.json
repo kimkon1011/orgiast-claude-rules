@@ -5,8 +5,5 @@
   "dependencies": {
     "playwright-core": "^1.49.0",
     "postgres": "^3.4.9"
-  },
-  "devDependencies": {
-    "linkedom": "^0.18.15"
   }
 }

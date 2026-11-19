@@ -5,6 +5,15 @@
 
 import { sameFleetPc } from '../fleet-pc-identity.mjs';
 
+export function normalizeCaptionRows(rows) {
+  return rows.flatMap(({ text: rawText, fromFallback, ...row }) => {
+    const text = rawText.trim();
+    if (!text || /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(text)) return [];
+    if (fromFallback && /^[a-z0-9_]+$/.test(text)) return [];
+    return [{ ...row, text }];
+  });
+}
+
 /**
  * Formats a Date object or timestamp as JST string (UTC+9).
  */

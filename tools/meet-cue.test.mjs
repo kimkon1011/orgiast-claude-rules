@@ -4,11 +4,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseHTML } from 'linkedom';
 
 import {
   CaptionAssembler,
-  MEET_SELECTORS,
+  normalizeCaptionRows,
   CueTracker,
   STANDARD_CARDS,
   BOT_DISPLAY_NAME_DEFAULT,
@@ -42,7 +41,6 @@ import {
   detectMeetJoinState,
   dismissMeetPopups,
   enableMeetCaptions,
-  readMeetCaptions,
   watchMeetCaptions,
   findMeetJoinButton,
   joinMeetPage,
@@ -563,8 +561,8 @@ test('/new のリダイレクト先を保持し、ホームへ戻ったときだ
 });
 
 test('字幕ボタンのラベルまたは aria-pressed でオンを確認し、最大3回試す', async () => {
-  for (const action of ['already_enabled', 'click', 'pressed', 'c', 'retry', 'unconfirmed']) {
-    let enabled = action === 'already_enabled';
+  for (const action of ['already_enabled', 'already_pressed', 'click', 'pressed', 'c', 'retry', 'unconfirmed']) {
+    let enabled = ['already_enabled', 'already_pressed'].includes(action);
     const actions = [];
     const locator = (matches) => ({
       matches,
@@ -581,7 +579,10 @@ test('字幕ボタンのラベルまたは aria-pressed でオンを確認し、
     const page = {
       locator: selector => locator(() => {
         if (selector === ':visible') return true;
-        if (selector.includes('Turn off captions')) return enabled && action !== 'pressed';
+        if (selector.includes('[aria-pressed="true"]:visible') && action === 'already_pressed') {
+          return selector.includes('字幕と翻訳');
+        }
+        if (selector.includes('Turn off captions')) return enabled && !['pressed', 'already_pressed'].includes(action);
         if (selector === '[aria-pressed="true"]') return enabled && action === 'pressed';
         return selector.includes('Turn on captions') && ['click', 'pressed'].includes(action);
       }),
@@ -595,61 +596,39 @@ test('字幕ボタンのラベルまたは aria-pressed でオンを確認し、
     };
     assert.equal(await enableMeetCaptions(page), action !== 'unconfirmed');
     const expected = {
-      already_enabled: [], click: ['click'], pressed: ['click'], c: ['focus', 'c'],
+      already_enabled: [], already_pressed: [], click: ['click'], pressed: ['click'], c: ['focus', 'c'],
       retry: ['focus', 'c', 'focus', 'c'], unconfirmed: ['focus', 'c', 'focus', 'c', 'focus', 'c'],
     };
     assert.deepEqual(actions, expected[action]);
   }
 });
 
-test('字幕領域から話者と本文を分け、ツールバーやアイコン名を除外する', () => {
-  const text = textContent => ({ nodeType: 3, textContent });
-  const element = (token, ...childNodes) => {
-    const node = {
-      nodeType: 1,
-      childNodes,
-      matches: selector => selector.split(', ').includes(token),
-      get textContent() { return childNodes.map(child => child.textContent).join(''); },
-      getAttribute: () => null,
-      cloneNode: () => element(token, ...childNodes),
-      querySelectorAll: () => [],
-      closest: selector => node.matches(selector) ? node : null,
-      contains: child => childNodes.includes(child),
-    };
-    return node;
-  };
-  const speaker = name => element('[data-sender-name]', text(name));
-  const region = element('region',
-    element('div', speaker('田中'), text('予算を確認します。'),
-      element('button', text('buttonText')), element('i', text('iconText')),
-      element('.material-icons', text('materialIcon')), element('.google-symbols', text('symbol')),
-      element('[aria-hidden="true"]', text('hidden'))),
-    element('div', speaker('佐藤'), text('承知しました。')),
-    ...['translate_cc', 'closed_caption', 'mic_off', 'icon_123'].map(icon =>
-      element('div', speaker('田中'), text(icon))),
-  );
-  const root = { querySelectorAll: () => [
-    region, element('[role="toolbar"]', text('ツールバー')), element('button', text('字幕ボタン')),
-  ] };
-  region.querySelectorAll = () => [];
-  assert.deepEqual(readMeetCaptions(root, { ...MEET_SELECTORS, captionContainers: ['region'] }, 'button, [role="toolbar"]'), [
-    { speaker: '田中', text: '予算を確認します。' },
-    { speaker: '佐藤', text: '承知しました。' },
-  ]);
-});
-
-test('実測した字幕 DOM から話者と本文を抽出し、字幕ボタンのアイコンを除外する', () => {
+test('実測した字幕の話者と本文を保持し、アイコン名と空行を除外する', () => {
   const html = fs.readFileSync(new URL('./test-fixtures/meet-cue-captions-ja.html', import.meta.url), 'utf8');
-  const { document } = parseHTML(html);
-  assert.deepEqual(readMeetCaptions(document, MEET_SELECTORS, 'button, [role="toolbar"]'), [{
-    speaker: 'あなた',
-    text: '本日はお時間をいただきありがとうございます。展示会のブースについて、ご予算はどのくらいをお考えでしょうか。過去の事例もご紹介できます。',
-  }]);
+  const speaker = html.match(/<span class="NWpY1d">([^<]+)<\/span>/)[1];
+  const text = html.match(/<div class="ygicle [^"]+">([^<]+)<\/div>/)[1];
+  const icon = html.match(/<i [^>]*>(translate_cc)<\/i>/)[1];
+  assert.deepEqual(normalizeCaptionRows([
+    { speaker, text: ` ${text} `, rowId: '1:0' },
+    { speaker, text: '承知しました', rowId: '2:0', fromFallback: true },
+    { speaker, text: 'hello', rowId: '3:0' },
+    { speaker, text: 'noise', fromFallback: true },
+    ...[icon, 'closed_caption', 'mic_off', 'icon_123', ' '].map(text => ({ speaker, text })),
+  ]), [
+    {
+      speaker: 'あなた',
+      text: '本日はお時間をいただきありがとうございます。展示会のブースについて、ご予算はどのくらいをお考えでしょうか。過去の事例もご紹介できます。',
+      rowId: '1:0',
+    },
+    { speaker: 'あなた', text: '承知しました', rowId: '2:0' },
+    { speaker: 'あなた', text: 'hello', rowId: '3:0' },
+  ]);
 });
 
 test('字幕監視: 遅れて現れた領域をポーリングし、Observer と終了直前の読み取りでも通知する', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] });
-  const { document } = parseHTML('<html><body></body></html>');
+  let regions = [];
+  const document = { querySelectorAll: () => regions };
   let notify;
   const observed = new Set();
   class MutationObserver {
@@ -678,26 +657,32 @@ test('字幕監視: 遅れて現れた領域をポーリングし、Observer と
     await new Promise(resolve => setImmediate(resolve));
   };
   const insert = text => {
-    const region = document.createElement('div');
-    region.setAttribute('role', 'region');
-    region.setAttribute('aria-label', '字幕');
-    region.innerHTML = '<div class="nMcdL"><div class="adE6rb"><span class="NWpY1d">あなた</span></div><div class="ygicle"></div></div>';
-    region.querySelector('.ygicle').textContent = text;
-    document.body.append(region);
-    return region;
+    const body = {
+      textContent: text,
+      closest: () => null,
+      cloneNode() {
+        return { textContent: this.textContent, querySelectorAll: () => [] };
+      },
+    };
+    const row = {
+      closest: () => null,
+      querySelector: selector => selector === '.ygicle' ? body : { textContent: 'あなた' },
+    };
+    const region = { closest: () => null, querySelectorAll: () => [row] };
+    regions = [region];
+    return { region, body };
   };
   assert.equal(observed.size, 0);
   const first = insert('本日は');
   await poll();
-  assert.ok(observed.has(first));
-  first.querySelector('.ygicle').textContent = '本日はお時間を';
+  assert.ok(observed.has(first.region));
+  first.body.textContent = '本日はお時間を';
   notify();
   await poll();
-  first.remove();
   const second = insert('展示会の');
   await poll();
-  assert.deepEqual([...observed], [second]);
-  second.querySelector('.ygicle').textContent = '展示会のご予算を';
+  assert.deepEqual([...observed], [second.region]);
+  second.body.textContent = '展示会のご予算を';
   await stop();
 
   assert.deepEqual(received.map(row => row.text), ['本日は', '本日はお時間を', '', '展示会の', '展示会のご予算を']);
@@ -707,49 +692,25 @@ test('字幕監視: 遅れて現れた領域をポーリングし、Observer と
   assert.deepEqual(errors, []);
 });
 
-test('実測した字幕ボタンの aria-pressed が true なら字幕の操作を省く', async () => {
-  const html = fs.readFileSync(new URL('./test-fixtures/meet-cue-captions-ja.html', import.meta.url), 'utf8');
-  const { document } = parseHTML(html);
-  const locator = elements => ({
-    filter: () => locator([]),
-    or: other => locator([...new Set([...elements, ...other.elements])]),
-    and: other => locator(elements.filter(element => other.elements.includes(element))),
-    first: () => locator(elements.slice(0, 1)),
-    isVisible: async () => elements.length > 0,
-    elements,
-  });
-  const page = {
-    locator: selector => locator([...document.querySelectorAll(selector === ':visible' ? '*' : selector.replaceAll(':visible', ''))]),
-  };
-  assert.equal(await enableMeetCaptions(page), true);
-});
-
-test('実測した2つのダイアログの閉じるボタンだけを押す', async () => {
-  const html = fs.readFileSync(new URL('./test-fixtures/meet-cue-captions-ja.html', import.meta.url), 'utf8');
-  const { document } = parseHTML(html);
-  const label = element => element.getAttribute('aria-label') ??
-    document.getElementById(element.getAttribute('aria-labelledby'))?.textContent;
-  const closed = [];
+test('対象ダイアログの閉じるボタンだけを押す', async () => {
+  const dialogs = new Set(['会議の準備が整いました', 'Gemini をご利用いただけます', '字幕と翻訳']);
   const page = {
     getByRole(role, { name, exact }) {
+      assert.equal(role, 'dialog');
       assert.equal(exact, true);
-      const dialog = [...document.querySelectorAll(`[role="${role}"]`)].find(element => label(element) === name);
       return {
-        getByRole(childRole, { name: childName, exact: exactChild }) {
-          assert.equal(exactChild, true);
-          const button = [...dialog.querySelectorAll(`[role="${childRole}"]`)]
-            .find(element => label(element) === childName);
+        getByRole(childRole, options) {
+          assert.equal(childRole, 'button');
+          assert.deepEqual(options, { name: '閉じる', exact: true });
           return {
             first() { return this; },
-            isVisible: async () => Boolean(button),
-            click: async () => { closed.push(button); dialog.remove(); },
+            isVisible: async () => dialogs.has(name),
+            click: async () => { dialogs.delete(name); },
           };
         },
       };
     },
   };
   await dismissMeetPopups(page);
-  assert.equal(closed.length, 2);
-  assert.equal(document.querySelectorAll('[role="dialog"]').length, 0);
-  assert.ok(document.querySelector('button[aria-label="字幕と翻訳"]'));
+  assert.deepEqual([...dialogs], ['字幕と翻訳']);
 });

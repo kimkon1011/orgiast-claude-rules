@@ -160,7 +160,10 @@ test('合成APIエラー行はassistant返答に数えず末尾user未応答に�
 });
 
 // 実CLIと変更していないworkerを動かし、外部LLMだけを固定応答に差し替える。
-async function triageFixture(t) {
+async function triageFixture(t, transcript = [
+  { type: 'user', message: { role: 'user', content: '資料を作成する' } },
+  { type: 'assistant', message: { role: 'assistant', content: '残TODOを確認する' } },
+]) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-triage-contract-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const script = path.join(root, 'session-triage.mjs');
@@ -177,13 +180,10 @@ async function triageFixture(t) {
   const project = path.join(root, 'projects', 'fixture');
   await fs.mkdir(project, { recursive: true });
   const id = 'f84f4059-586b-4161-a9ab-c026ad9adb7e';
-  const transcript = [
-    { type: 'user', cwd: root, message: { role: 'user', content: '資料を作成する' } },
-    { type: 'assistant', message: { role: 'assistant', content: '残TODOを確認する' } },
-  ];
+  const fixtureTranscript = transcript.map((event) => event.type === 'user' ? { cwd: root, ...event } : event);
   await fs.writeFile(
     path.join(project, `${id}.jsonl`),
-    `${transcript.map((event) => JSON.stringify(event)).join('\n')}\n`,
+    `${fixtureTranscript.map((event) => JSON.stringify(event)).join('\n')}\n`,
     'utf8',
   );
   const callsPath = path.join(root, 'calls.jsonl');
@@ -247,6 +247,31 @@ test('正当な不明はproviderフォールバックせず解析成功として
   assert.equal(result.summary.llm.success, 1);
   assert.equal(result.summary.llm.failure, 0);
   assert.deepEqual(result.sessions[0].llm, { verdict: '不明', confidence: 0, next: '' });
+});
+
+test('SDK起動でassistant返答が空ならLLMを呼ばず完了80にする', async (t) => {
+  const run = await triageFixture(t, [
+    { type: 'attachment', entrypoint: 'sdk-cli' },
+    { type: 'user', message: { role: 'user', content: '資料を作成する' } },
+  ]);
+  const result = await run('good');
+  assert.deepEqual(result.calls, []);
+  assert.equal(result.summary.llm.success, 1);
+  assert.deepEqual(result.sessions[0].llm, { verdict: '完了', confidence: 80, next: '' });
+});
+
+test('対話起動でassistant返答が空ならLLMを呼ばず未完了70にする', async (t) => {
+  const run = await triageFixture(t, [
+    { type: 'user', message: { role: 'user', content: '資料を作成する' } },
+  ]);
+  const result = await run('good');
+  assert.deepEqual(result.calls, []);
+  assert.equal(result.summary.llm.success, 1);
+  assert.deepEqual(result.sessions[0].llm, {
+    verdict: '未完了',
+    confidence: 70,
+    next: 'セッションを再開して依頼に着手する',
+  });
 });
 
 test('対話の無いセッションはLLM呼び出しを省略して完了扱いにする', async (t) => {

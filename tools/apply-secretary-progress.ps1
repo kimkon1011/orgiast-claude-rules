@@ -4,11 +4,11 @@ $AppDir=Join-Path $env:USERPROFILE 'Downloads\secretary-pc'
 # No elevation or sandbox bypass is attempted by this installer.
 if ($env:COMPUTERNAME -ne 'DESKTOP-2D0R4LI') { throw 'This deployment is scoped to kim-PC / DESKTOP-2D0R4LI' }
 $payload=Join-Path $PSScriptRoot 'secretary-progress'
-$manifest=Get-Content (Join-Path $payload 'manifest.json') -Raw | ConvertFrom-Json
+$manifest=Get-Content (Join-Path $payload 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 foreach ($entry in $manifest.files) {
   $destination=Join-Path $AppDir $entry.path
   $current=if (Test-Path -LiteralPath $destination) { (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLower() } else { $null }
-  if ($current -ne $entry.before -and $current -ne $entry.after) { throw "Changed since review; refusing overwrite: $($entry.path)" }
+  if ($current -ne $entry.before -and $current -ne $entry.after -and $current -notin @($entry.previous)) { throw "Changed since review; refusing overwrite: $($entry.path)" }
 }
 $backup=Join-Path $env:USERPROFILE ('.claude\secretary-uptime\backup-'+(Get-Date -Format yyyyMMdd-HHmmss))
 New-Item -ItemType Directory -Path $backup -Force | Out-Null

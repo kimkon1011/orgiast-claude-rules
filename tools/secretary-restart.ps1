@@ -1,5 +1,15 @@
 param([Parameter(Mandatory=$true)][ValidateSet('gateway','secretary')][string]$Service,[switch]$InspectOnly)
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'secretary-legacy-task.ps1')
+$bindAddress = '127.0.0.1'
+if ($Service -eq 'gateway') {
+  $legacy = Get-ScheduledTask -TaskName 'ClaudeMobile-WebServer' -ErrorAction SilentlyContinue
+  if ($legacy -and $legacy.State -ne 'Disabled') {
+    if (!(Test-SafeLegacyGateway -TaskXml ([xml](Export-ScheduledTask -TaskName 'ClaudeMobile-WebServer')))) { throw 'Unverified legacy gateway starter is enabled' }
+    # Match its exact bind address: the OS admits one listener, including a startup race.
+    $bindAddress = '0.0.0.0'
+  }
+}
 $port = if ($Service -eq 'gateway') { 3939 } else { 3940 }
 $folder = if ($Service -eq 'gateway') { 'claude-mobile' } else { 'secretary-pc' }
 $serverDir = Join-Path $env:USERPROFILE "Downloads\$folder"
@@ -26,7 +36,7 @@ $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction 
 foreach ($listener in $listeners) {
   if ($listener.OwningProcess -eq 0 -or $listener.OwningProcess -notin $matching.ProcessId) { throw "Port $port is owned by an unexpected process; refused to terminate it" }
 }
-if ($InspectOnly) { [pscustomobject]@{ Service=$Service; Port=$port; Dist=$dist; ProcessIds=@($matching.ProcessId); Listening=($listeners.Count -gt 0) } | ConvertTo-Json; exit 0 }
+if ($InspectOnly) { [pscustomobject]@{ Service=$Service; Port=$port; Dist=$dist; BindAddress=$bindAddress; ProcessIds=@($matching.ProcessId); Listening=($listeners.Count -gt 0) } | ConvertTo-Json; exit 0 }
 foreach ($serverProcess in $matching) { Stop-Process -Id $serverProcess.ProcessId -Force -ErrorAction Stop }
 if ($matching.Count) { Start-Sleep -Seconds 2 }
 $logDir = Join-Path $env:USERPROFILE '.claude\secretary-uptime'
@@ -38,5 +48,5 @@ if ($Service -eq 'gateway') {
   $env:SECRETARY_TOKEN = $secretaryToken
 }
 $suffix = Get-Date -Format 'yyyyMMdd-HHmmss'
-$started = Start-Process -FilePath $node -ArgumentList @(('"{0}"' -f $next),'start','-H','127.0.0.1','-p',"$port") -WorkingDirectory $serverDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir "$Service-$suffix.out.log") -RedirectStandardError (Join-Path $logDir "$Service-$suffix.err.log") -PassThru
+$started = Start-Process -FilePath $node -ArgumentList @(('"{0}"' -f $next),'start','-H',$bindAddress,'-p',"$port") -WorkingDirectory $serverDir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir "$Service-$suffix.out.log") -RedirectStandardError (Join-Path $logDir "$Service-$suffix.err.log") -PassThru
 Write-Output "$Service started pid=$($started.Id) dist=$dist port=$port"

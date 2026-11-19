@@ -9,7 +9,7 @@ import { skipCoolingBackends } from './fallback-backend-health.mjs';
 import { runGeminiBudgetGuard } from './gemini-budget-guard.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -1536,6 +1536,29 @@ test('外部操作の no_changes を失敗にせず実行結果を改変しな�
 });
 
 // ── cheap-first テスト ───────────────────────────────────────────────
+
+test('detectCheapFirstUnsuitable: デザイン・PR着地・ルール文を検出し通常実装は許可する', () => {
+  for (const instruction of [
+    'チラシ裏面の住所を1行直して',
+    'node tools/pr-land.mjs --title x で着地',
+    'ONBOARDING.md の §1.17 に1行追記',
+  ]) {
+    assert.equal(detectCheapFirstUnsuitable(instruction), true, instruction);
+  }
+  assert.equal(detectCheapFirstUnsuitable('tools/foo.mjs の引数パースのバグを直す'), false);
+});
+
+test('isCheapFirstEnabled: unsuitable 指示は無効、通常実装は有効、env=0 は従来どおり無効', () => {
+  for (const instruction of [
+    'チラシ裏面の住所を1行直して',
+    'node tools/pr-land.mjs --title x で着地',
+    'ONBOARDING.md の §1.17 に1行追記',
+  ]) {
+    assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction, env: { CODEX_DO_CHEAP_FIRST: '1' } }), false, instruction);
+  }
+  assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction: 'tools/foo.mjs の引数パースのバグを直す', env: { CODEX_DO_CHEAP_FIRST: '1' } }), true);
+  assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction: 'tools/foo.mjs の引数パースのバグを直す', env: { CODEX_DO_CHEAP_FIRST: '0' } }), false);
+});
 
 test('isCheapFirstEnabled: implement 既定で有効、review では無効、lane:codex 記載で無効、env=0 で無効', () => {
   // implement 既定: 有効

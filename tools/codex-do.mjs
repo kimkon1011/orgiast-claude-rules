@@ -393,10 +393,26 @@ export function wantsEdit(kind, instruction, review = false) {
 export function isCheapFirstEnabled({ kind, instruction, review = false, env = process.env } = {}) {
   if (kind !== 'implement') return false;
   if (detectIrreversibleSideEffect(instruction)) return false;
+  if (detectCheapFirstUnsuitable(instruction)) return false;
   if (review) return false;
   if (/lane:\s*codex/i.test(String(instruction || ''))) return false;
   if (String(env.CODEX_DO_CHEAP_FIRST ?? '') === '0') return false;
   return true;
+}
+
+// デザイン、PR 着地・公開反映、運用ルール文は安いAIでの誤変更リスクが高いため Codex 本体へ送る。
+export function detectCheapFirstUnsuitable(text) {
+  const value = String(text ?? '');
+  return /デザイン|チラシ|フライヤー|(?<!引数)パース|スライド|企画書|レイアウト|画像|バナー|ロゴ/.test(value)
+    || /\b(?:design|flyer|banner|layout|slide|mockup)\b/i.test(value)
+    || /\b(?:pr-land|pr-merge)\.mjs\b/i.test(value)
+    || /\bgh\s+pr\s+merge\b/i.test(value)
+    || /--automerge\b/i.test(value)
+    || /着地|マージして/.test(value)
+    || /\bvercel\s+deploy\b/i.test(value)
+    || /\bclasp\s+(?:push|deploy)\b/i.test(value)
+    || /\b(?:ONBOARDING\.md|CLAUDE\.md|INCIDENT-TYPES\.md|orgiast-mission\.md)\b/i.test(value)
+    || /(?:^|[\\/])(?:protocols|knowledge|rules)[\\/]/i.test(value);
 }
 
 // 副作用はファイル差分では検証できない。指示中の操作名を保守的に検出する。
@@ -1486,6 +1502,11 @@ let mockIndex = 0;
 const cheapFirst = executionPolicy.cheapFirstAllowed && useCodex && isCheapFirstEnabled({ kind: taskKind, instruction, review, env: process.env });
 if (cheapFirst) {
   console.error('[codex-do] cheap-first: 安いAIを先に実行します（Codex は失敗時のみ）');
+} else if (executionPolicy.cheapFirstAllowed && useCodex && taskKind === 'implement'
+  && !review && !/lane:\s*codex/i.test(String(instruction || ''))
+  && String(process.env.CODEX_DO_CHEAP_FIRST ?? '') !== '0'
+  && detectCheapFirstUnsuitable(instruction)) {
+  console.error('[codex-do] cheap-first: 指示がデザイン/PR着地/ルール文のため Codex 本体で実行します');
 }
 
 

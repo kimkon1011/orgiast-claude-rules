@@ -286,7 +286,7 @@ test('runScheduler: 新旧の席ホスト名をどちらも許可する', async 
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-home-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const config = readConfig();
-  assert.deepEqual(config.seatHostnames, ['000KimPC', 'DESKTOP-2D0R4LI']);
+  assert.deepEqual(config.seatHostnames, ['kim-PC']);
   for (const hostname of ['000KimPC', 'desktop-2d0r4li']) {
     const res = await runScheduler({ home, hostname, config: { ...config, enabled: false } });
     assert.equal(res.skipped, 'disabled');

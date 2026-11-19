@@ -15,9 +15,11 @@ const isMain = isEntry(import.meta.url);
 const args = isMain ? process.argv.slice(2) : [];
 
 export const DEFAULT_MAX = 360;
-export const MAX_TRIAGE_TIMEOUT_MS = 45 * 60_000;
+// 2026-11-19 実測: 2並列で40件を108秒 = 5.4秒/件。安全係数1.5で8.1秒/件。
+export const TRIAGE_TIMEOUT_PER_ITEM_MS = 8_100;
+export const MAX_TRIAGE_TIMEOUT_MS = DEFAULT_MAX * TRIAGE_TIMEOUT_PER_ITEM_MS;
 export function triageTimeoutMs(max) {
-  return Math.min(MAX_TRIAGE_TIMEOUT_MS, Math.max(30_000, max * 15_000));
+  return Math.min(MAX_TRIAGE_TIMEOUT_MS, Math.max(30_000, max * TRIAGE_TIMEOUT_PER_ITEM_MS));
 }
 
 function usage(message) {

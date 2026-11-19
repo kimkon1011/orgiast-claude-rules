@@ -10,6 +10,7 @@ import {
   DEFAULT_MAX,
   llmFailureReason,
   MAX_TRIAGE_TIMEOUT_MS,
+  TRIAGE_TIMEOUT_PER_ITEM_MS,
   triageTimeoutMs,
 } from './session-auto-close.mjs';
 
@@ -21,10 +22,12 @@ test('既定 --max は滞留を1回で消化できる360件', () => {
   assert.equal(DEFAULT_MAX, 360);
 });
 
-test('triage timeoutは15秒/件、最小30秒、最大45分', () => {
+test('triage timeoutは実測ベースの8.1秒/件、最小30秒、360件分を上限とする', () => {
+  assert.equal(TRIAGE_TIMEOUT_PER_ITEM_MS, 8_100);
+  assert.equal(MAX_TRIAGE_TIMEOUT_MS, 2_916_000);
   assert.equal(triageTimeoutMs(0), 30_000);
   assert.equal(triageTimeoutMs(1), 30_000);
-  assert.equal(triageTimeoutMs(40), 600_000);
+  assert.equal(triageTimeoutMs(40), 324_000);
   assert.equal(triageTimeoutMs(DEFAULT_MAX), MAX_TRIAGE_TIMEOUT_MS);
   assert.equal(triageTimeoutMs(1_000), MAX_TRIAGE_TIMEOUT_MS);
 });

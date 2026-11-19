@@ -136,7 +136,7 @@ export function messageQuery(lead) {
   const pattern = encodeURIComponent(freeMail.test(domain) ? lead.email : domain);
   return `/rest/v1/channel_messages?select=received_at,direction,sender_identifier,subject,body,rfc822_message_id&received_at=gte.${String(lead.created_at).slice(0, 10)}&or=(sender_identifier.ilike.*${pattern}*,raw->>to.ilike.*${pattern}*,raw->>cc.ilike.*${pattern}*)&order=received_at.desc&limit=20`;
 }
-async function request(credentials, query, fetchImpl) {
+export async function request(credentials, query, fetchImpl) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
   try {

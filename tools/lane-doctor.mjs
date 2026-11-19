@@ -349,10 +349,17 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: uncertain ? 'probe_inconclusive' : payment ? 'billing' : (limited || deferred) ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired/i.test(text) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, viaChain: false, probeResult: uncertain ? 'inconclusive' : 'fail', probeEvidence: `exit ${result.code}`, billingProbeStreak: streak, ...(result.authOk ? { authOk: true } : {}) };
       // 失敗の中身を必ず残す（2026-10-15 作業用011: 理由が記録されず原因を追えなかった）
       health.lanes[p].error = String(text || '').replace(/(sk-|eyJ)[A-Za-z0-9._-]{8,}/g, '$1***').replace(/\s+/g, ' ').trim().slice(-400);
+      // WSL サービス(LxssManager)停止による probe 失敗は人による修復（管理者権限でサービス起動）が必要。
+      // nativeRepair 有無にかかわらず検出する: native 経路でない場合（listWsl が null のフォールスルー等）でも
+      // エラー本文に WSL サービス障害の証拠が含まれていれば physical_operation に分類する（2026-11-19 実測）。
+      const wslServiceError = /Wsl[/\\]Service|ERROR_SERVICE_DISABLED|\bLxssManager\b|HCS\b|サービスは無効|cannot be started|要素が見つかりません/i.test(text);
+      if (health.lanes[p].reason === 'probe_failed' && wslServiceError) {
+        Object.assign(health.lanes[p], { reason: 'dead:physical_operation', tried: 'codex probe', userFix: '管理者権限の PowerShell で sc start LxssManager を実行してください。直らなければ wsl.exe --install --no-distribution の後に Windows を再起動してください。' });
+      }
       // native の失敗でも、認証・上限・課金が原因なら physical_operation（再起動が要る）と誤判定しない
       if (result.nativeRepair && health.lanes[p].reason === 'probe_failed') {
         if (result.timedOut) health.lanes[p].reason = 'probe_failed:timeout';
-        else if (/blocked by read-only sandbox|sandbox:\s*read-only|Read-only file system|EROFS/i.test(text) || /spawn .*ENOENT|codex.*not found|is not recognized/i.test(text)) Object.assign(health.lanes[p], { reason: 'dead:physical_operation', tried: 'Windows ネイティブ(danger-full-access)でファイル作成・read-back', userFix: '管理者 PowerShell で wsl.exe --install --no-distribution を実行して Windows を再起動する。' });
+        else if (!wslServiceError && (/blocked by read-only sandbox|sandbox:\s*read-only|Read-only file system|EROFS/i.test(text) || /spawn .*ENOENT|codex.*not found|is not recognized/i.test(text))) Object.assign(health.lanes[p], { reason: 'dead:physical_operation', tried: 'Windows ネイティブ(danger-full-access)でファイル作成・read-back', userFix: '管理者 PowerShell で wsl.exe --install --no-distribution を実行して Windows を再起動する。' });
       }
       health.lanes[p].probeReason = health.lanes[p].reason;
       if (deferred && cooldown[p]?.until) health.lanes[p].until = cooldown[p].until;

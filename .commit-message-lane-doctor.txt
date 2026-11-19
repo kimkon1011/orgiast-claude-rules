@@ -1,0 +1,3 @@
+fix(lane-doctor): WSLサブシステム停止を dead:physical_operation として分類する
+
+LxssManager が STOPPED で管理者権限が必要なケースを probe_failed ではなく人の操作が必要として分類し、lane-repair-log が unfixable を記録できるようにする。

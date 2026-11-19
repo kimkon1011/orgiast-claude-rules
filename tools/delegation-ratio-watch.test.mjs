@@ -46,7 +46,7 @@ describe('delegation-ratio-watch', () => {
       });
     }
 
-    for (const [code, expectedAttempts] of [['EPERM', 21], ['ENOSPC', 1]]) {
+    for (const [code, expectedAttempts] of [['EPERM', 9], ['ENOSPC', 1]]) {
       test(`${saver}: preserves previous state and reports persistent ${code}`, async () => {
         const module = await import('./delegation-ratio-watch.mjs');
         const home = tmpHome('rename-failure');

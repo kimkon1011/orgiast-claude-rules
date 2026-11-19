@@ -213,8 +213,7 @@ export function compute({ home = os.homedir(), now = Date.now(), executorUsageFi
 
 // Duplicate scheduled tasks/readers can briefly deny replacement on Windows.
 // Retry only rename: keep the previous JSON intact and never replay delivery.
-// MaxRc 2026-11-20: 5 回→20 回で待ちを伸ばし（100ms×2^attempt、最大約1.5→約100秒）、
-// それでも取れなければ呼び出し元で握りつぶす（exit 0 で次回再試行）。
+// 上限 8 回・1回最大 2 秒・合計約 9 秒（100ms×2^attempt、capped at 2000ms）。
 function saveJson(file, value, { fsImpl = fs, sleepImpl = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
   const pid = process.pid;
   const tmp = `${file}.${pid}.${Math.random().toString(16).slice(2)}.tmp`;
@@ -224,11 +223,11 @@ function saveJson(file, value, { fsImpl = fs, sleepImpl = ms => Atomics.wait(new
     for (let attempt = 0; ; attempt++) {
       try { fsImpl.renameSync(tmp, file); break; }
       catch (error) {
-        if (!['EPERM', 'EBUSY', 'EACCES'].includes(error.code) || attempt >= 20) {
+        if (!['EPERM', 'EBUSY', 'EACCES'].includes(error.code) || attempt >= 8) {
           console.error(`[saveJson] rename failed after ${attempt} retries: ${error.code} ${error.message}`);
           throw error;
         }
-        sleepImpl(100 * (2 ** attempt));
+        sleepImpl(Math.min(100 * (2 ** attempt), 2000));
       }
     }
   } finally { try { fsImpl.unlinkSync(tmp); } catch {} }

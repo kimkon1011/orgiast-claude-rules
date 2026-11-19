@@ -48,6 +48,7 @@ test('secretary installer reaches preflight only on kim-PC (Windows PowerShell)'
   fs.copyFileSync(new URL('../fleet-pc-map.json', import.meta.url), path.join(home, 'fleet-pc-map.json'));
   const installer = path.join(tools, 'apply-secretary-progress.ps1');
   fs.copyFileSync(new URL('./apply-secretary-progress.ps1', import.meta.url), installer);
+  fs.copyFileSync(new URL('./secretary-server-process.ps1', import.meta.url), path.join(tools, 'secretary-server-process.ps1'));
   // A missing fixture file with a required prior hash stops the installer before writes or restarts.
   fs.writeFileSync(path.join(payload, 'manifest.json'), JSON.stringify({
     files: [{ path: 'fixture.txt', before: 'a'.repeat(64), after: 'b'.repeat(64), previous: [] }],

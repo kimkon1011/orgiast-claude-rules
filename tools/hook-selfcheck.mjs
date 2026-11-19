@@ -29,6 +29,7 @@ export const REQUIRED_HOOKS = [
   ['UserPromptSubmit', 'fable-session-guard.mjs'],
   ['UserPromptSubmit', 'current-session.mjs'],
   ['Stop', 'stop-gate-runner.mjs'],
+  ['Stop', 'goal-pace-gate.mjs'],
   ['SessionStart', 'fable-session-guard.mjs'],
   ['SessionStart', 'session-list-tidy.mjs'],
   ['SessionStart', 'hook-selfcheck.mjs'],

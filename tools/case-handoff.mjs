@@ -10,6 +10,9 @@ import { isEntry } from './is-entry.mjs';
 import { keyserveAuthHeaders, keyserveSecret, requireKeyservePcId } from './keyserve-auth.mjs';
 import { claudeAccount, isKimOperated } from './lib/kim-operated.mjs';
 import { CASE_ID, detectCases, nextBatch, resumeText, hash, validateIdentity } from './lib/case-handoff.mjs';
+import { syncGoals } from './lib/case-goals-drive.mjs';
+
+export const SYNC_FILES = ['STATE.md', 'LOG.md', 'GOALS.json'];
 
 const script = fileURLToPath(import.meta.url);
 export function readJson(file, fallback = null) {
@@ -196,6 +199,7 @@ export function client(options = {}) {
   }
   async function resume(caseId, { transcripts = false } = {}) {
     const data = await fetchResume(caseId);
+    await (options.syncGoals || syncGoals)(caseId, { home });
     const dir = path.join(base, 'case-sessions', caseId);
     atomic(path.join(dir, 'STATE.md'), data.state); atomic(path.join(dir, 'LOG.md'), data.log);
     if (transcripts) {
@@ -250,6 +254,7 @@ export async function main(args = process.argv.slice(2)) {
     if (fs.existsSync(path.join(c.base, 'case-queue'))) background(c);
     for (const caseId of binding.cases) {
       const meta = await c.request({}, { op: 'touch', caseId, sessionId: session, account: c.account, pc: c.pc });
+      await syncGoals(caseId, { home });
       if (meta.hasState) console.log(`[case] /case-resume ${caseId} で続きから読める${meta.warning ? `。${meta.warning}` : ''}`);
       else if (meta.warning) console.log(`[case] ${caseId}: ${meta.warning}`);
     }
@@ -261,6 +266,7 @@ export async function main(args = process.argv.slice(2)) {
         c.bind(session, extra, input.transcript_path);
         for (const caseId of extra) {
           const meta = await c.request({}, { op: 'touch', caseId, sessionId: session, account: c.account, pc: c.pc });
+          await syncGoals(caseId, { home });
           if (meta.hasState) console.log(`[case] /case-resume ${caseId} で続きから読める${meta.warning ? `。${meta.warning}` : ''}`);
         }
       }
@@ -282,6 +288,8 @@ export async function main(args = process.argv.slice(2)) {
     const session = args.includes('--session') ? opt('--session') : process.env.CLAUDE_SESSION_ID;
     if (!session) throw Error('--session <現在のセッションID> が必要です');
     c.bind(session, ids, args.includes('--transcript') ? opt('--transcript') : undefined);
+    await c.request({}, { op: 'touch', caseId: ids[0], sessionId: session, account: c.account, pc: c.pc });
+    await syncGoals(ids[0], { home });
     console.log(`case-handoff: ${ids[0]} に紐付けました`);
   } else if (command === 'resume' || command === 'sync') console.log(await c.resume(ids[0], { transcripts: command === 'sync' }));
   else throw Error('usage: case-handoff.mjs bind|watch|unwatch|resume|sync <案件ID/案件名> | flush <sessionId> | retry | hook');

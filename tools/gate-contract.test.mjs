@@ -23,6 +23,11 @@ test('new rollout entries must declare the seven day window; legacy inventory is
     const row = manifest.gates[name];
     assert.ok(row, `${name}: missing rollout entry`);
     assert.ok(['warn','deny'].includes(row.rollout));
+    if (name === 'goal-pace-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-11-18 kim 指示: 目標の暗黙縮小とペース放置を全PC全アカウントで停止');
+      continue;
+    }
     if (name === 'pdf-deliverable-visual-gate') {
       assert.equal(row.rollout, 'deny');
       assert.equal(row.immediatePolicy, '2026-11-15 user 指示: 全席でPDF納品前に描画後の全ページ目視を必須化');

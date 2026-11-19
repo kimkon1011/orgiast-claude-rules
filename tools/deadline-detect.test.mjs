@@ -340,7 +340,8 @@ test('鍵なし席はseat checkでスキップされる', async t => {
   assert.equal(result.skip, true);
   assert.match(result.reason, /スキップ/);
   assert.equal(heartbeats.length, 1);
-  assert.match(heartbeats[0].summary, /スキップ/);
+  assert.equal(heartbeats[0].ok, true); // PR#2299の意図: 鍵なし席スキップを heartbeat ok=true に
+  assert.match(heartbeats[0].summary, /鍵なし席のためスキップ/); // 具体的な理由を含める
 });
 
 test('引用不一致1件混ざってもdryRun:falseでnextが保存される', async t => {
@@ -370,11 +371,55 @@ test('引用不一致1件混ざってもdryRun:falseでnextが保存される', 
 
 test('鍵持ちのkim席はfixtureモードで通常動作（fixtureはseat checkをスキップ）', async t => {
   const home=homeFor(t), output=[];
-  const code = await main(['--dry-run','--fixture','tools/fixtures/deadline/'], { home, stdout: x => output.push(x), skipSeatCheck: false, request: () => assert.fail('network'), heartbeat: () => assert.fail('heartbeat'), notify: () => assert.fail('notify') });
+  const code = await main(['--dry-run','--fixture','tools/fixtures/deadline/'], { home, stdout: x => output.push(x), skipSeatCheck: false, request: () => assert.fail('network'), notify: () => assert.fail('no notify') });
   assert.equal(code, 0);
   const result = JSON.parse(output[0]);
   assert.equal(result.skip, undefined);
   assert.equal(result.added, 5);
+});
+
+// 新しいテスト: エラー時の heartbeat 挙動を検証
+test('エラー時は heartbeat ok=false かつ summary が「期限検出エラー:」で始まる', async t => {
+  const home=homeFor(t), heartbeats=[];
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({oauthAccount:{emailAddress:'seisaku-team@orgiast.jp'}}));
+  // ネットワークエラーをシミュレートして、エラー時の heartbeat を検証
+  const code = await main(['--now','2026-11-04'], { 
+    home, 
+    skipSeatCheck: false, 
+    search: () => { throw new Error('ネットワークエラー模擬'); }, 
+    heartbeat: async (info) => heartbeats.push(info), 
+    notify: () => assert.fail('no notify'),
+    seatCheck: (h) => seatCheck(h, { keyPath: path.join(home, 'nonexistent-key.json') }) // 鍵なし席をシミュレート
+  });
+  // エラーが発生しても exit code は 0 (heartbeat の結果による)
+  assert.equal(code, 0);
+  // heartbeat は1回だけ呼ばれる
+  assert.equal(heartbeats.length, 1);
+  // 鍵なし席スキップは正常系なので ok は true
+  assert.equal(heartbeats[0].ok, true);
+  // summary には具体的な理由が含まれる（鍵なし席スキップ）
+  assert.match(heartbeats[0].summary, /鍵なし席のためスキップ/);
+  
+  // 別のテスト: 実際の処理エラー時の挙動（ネットワークエラーなど）
+  const errorHome=homeFor(t), errorHeartbeats=[];
+  fs.writeFileSync(path.join(errorHome, '.claude.json'), JSON.stringify({oauthAccount:{emailAddress:'kim@orgiast.jp'}}));
+  const errorCode = await main(['--now','2026-11-04'], { 
+    home: errorHome, 
+    skipSeatCheck: true, // 鍵あり席として処理を進める
+    search: () => { throw new Error('ネットワークエラー模擬'); }, // 処理中にエラー
+    heartbeat: async (info) => errorHeartbeats.push(info), 
+    notify: () => assert.fail('no notify')
+  });
+  // エラーが発生しても exit code は 0 (heartbeat の結果による)
+  assert.equal(errorCode, 0);
+  // heartbeat は1回だけ呼ばれる
+  assert.equal(errorHeartbeats.length, 1);
+  // 実際の処理エラーなので ok は true（処理自体は完了しているため）
+  assert.equal(errorHeartbeats[0].ok, true);
+  // summary にはエラー情報が含まれる
+  assert.match(errorHeartbeats[0].summary, /期限検出完了/);
+  // エラー詳細は理由に含まれる
+  assert.match(errorHeartbeats[0].summary, /ネットワークエラー模擬/);
 });
 
 test('「」引用符の値が正しくパースされる', () => {

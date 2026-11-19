@@ -132,4 +132,26 @@ Bashは1呼出1コマンド、専用ツール・allow済み経路を使う。
 各PCで自動取込・自己更新・コスト点検、setup --convergeでallow追加。
 - 全社共有の知見（kim-PC の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る
 - 制作・営業・見積・案件の着手前: ~/.claude/knowledge/production-sales/00_INDEX.md を読み、必要な節だけ Grep。全文を丸読みしない。
+
+### X-0092: 探索Haiku・実装Sonnet・判断Opus — モデル委譲ルール
+
+**🔴 用途別モデル割当（AIニュース提案 X-0092 / 2026-11-20）:**
+- **探索・リポジトリ把握（Search）** → Haiku（`.claude/agents/Search.md`）
+- **呼出箇所検索（Grep）** → Haiku（`.claude/agents/Grep.md`）
+- **差分確認・監査（Audit）** → Haiku（`.claude/agents/Audit.md`）
+- **実装・テスト実行** → Sonnet（Implementer）または Codex（codex-do）
+- **設計判断・最終承認** → Opus
+
+**🔴 Opus が入るのは以下の3時点だけ:**
+1. 計画確定前（タスク分解・実装方針の最終判断）
+2. 同じエラーが2回出たとき（障害解析と再発防止策の決定）
+3. 完了前（最終レビュー・品質保証）
+
+**🔴 オージャスト業務での役割固定（試行中）:**
+- 過去ブース一式の検索 → **Haiku**（Search エージェントに委譲）
+- 見積・仕様ドラフト → **Sonnet**（Implementer エージェントに委譲）
+- 最終デザイン判断 → **Opus**（監督セッションで実施）
+
+**🔴 `.claude/agents/` の各エージェント定義は model フィールドで使用モデルを指定する。**
+エージェント呼び出し時は `subagent_type` にエージェント名（Search / Grep / Audit / Implementer）を指定する。
 <!-- END: オージャスト共通ルール -->

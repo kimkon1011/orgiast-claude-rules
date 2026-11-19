@@ -1292,6 +1292,13 @@ test('buildPrompt は fleet-mail の [判断依頼] へ返信も判断もしな�
   assert.match(prompt, /\[判断依頼\][^\n]*返信も判断も行わない/);
 });
 
+test('buildPrompt は夜間でも送信・支払い・削除・課金変更をせず、【夜間】付きを優先する', () => {
+  const prompt = buildPrompt('実装する', {}, '/repo', '/tmp/run.summary.md', 60);
+  assert.match(prompt, /支払い・削除・課金変更も行わない/);
+  assert.match(prompt, /承認待ち（朝）/);
+  assert.match(prompt, /【夜間】/);
+});
+
 test('runChild は冷却中・失敗時の codex-do と保留・最終フォールバックを扱う', async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-lane-'));
   const previousHome = process.env.ORGIAST_HOME;

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { main, extractBatch, candidateRow, evidencedDue, runDetect, askProvider, parseExtraction } from './deadline-detect.mjs';
 import { seatCheck } from './lib/deadline-seat.mjs';
-import { collectGmail, collectDrive, readDriveText, collectLine, collectDiscord, wantsBody, trimBytes } from './lib/deadline-sources.mjs';
+import { collectGmail, collectDrive, readDriveText, collectLine, collectDiscord, wantsBody, trimBytes, sourceLoaders } from './lib/deadline-sources.mjs';
 import { DEFAULT_CONFIG, saveJson, dataPath } from './deadline-ledger.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 const document = { source: 'Gmail', sourceRef: 'mail:test', date: '2026-11-03T23:00:00Z', text: '明日までに回答してください。', mailbox: 'kim@orgiast.jp', threadId: 'thread' };
@@ -87,16 +87,30 @@ test('Gmail quota 403は2回再試行後にsourceをスキップして続行', a
   assert.deepEqual(state.sources.discord, { watermark: 'done' });
 });
 
-test('Gmailは件名/snippet選別し、日80通の残数とページカーソルを保持', async () => {
+test('Gmailは本文取得対象だけを上限に数えページカーソルを保持', async () => {
   assert.equal(wantsBody({ subject: 'GitHub 提出期限', from: 'github.com' }), false);
   assert.equal(wantsBody({ subject: '回答期限', from: 'customer@example.invalid' }), true);
   assert.equal(wantsBody({ subject: '自動返信 回答期限', from: 'noreply@example.invalid' }), false);
-  const result = await collectGmail({ user: 'kim@orgiast.jp', state: { day: '2026-11-04', used: 79, watermark: '2026-11-02T00:00:00Z' }, now, search: async opts => {
-    assert.equal(opts.max, 1); assert.equal(opts.shouldFetchBody, wantsBody); assert.match(opts.query, /newer_than:3d/);
-    return { nextPageToken: 'next', messages: [{ id: 'one', subject: '提出期限', body: '11/5まで', internalDate: now.getTime(), threadId: 'thread' }] };
+  const result = await collectGmail({ user: 'kim@orgiast.jp', limit: 1, state: { day: '2026-11-04', used: 0, watermark: '2026-11-03T12:00:00Z' }, now, search: async opts => {
+    assert.equal(opts.max, 100); assert.equal(opts.shouldFetchBody, wantsBody); assert.doesNotMatch(opts.query, /newer_than/);
+    return { nextPageToken: 'next', messages: [{ id: 'meta', subject: 'お知らせ' }, { id: 'one', subject: '提出期限', body: '11/5まで', internalDate: now.getTime(), threadId: 'thread' }] };
   } });
-  assert.equal(result.next.used, 80); assert.equal(result.next.pageToken, 'next'); assert.equal(result.next.watermark, '2026-11-02T00:00:00Z');
-  await collectGmail({ user: 'kim@orgiast.jp', state: result.next, now, search: () => assert.fail('daily cap') });
+  assert.equal(result.next.used, 1); assert.equal(result.next.limit, 1); assert.equal(result.next.pageToken, 'next');
+  await collectGmail({ user: 'kim@orgiast.jp', limit: 1, state: result.next, now, search: () => assert.fail('daily cap') });
+});
+
+test('Gmail窓queryは初回だけnewer_thanを使い旧queryを救済する', async () => {
+  const seen = [];
+  for (const state of [{}, { watermark: '2026-11-03T00:00:00Z' }, { watermark: '2026-11-03T00:00:00Z', query: 'newer_than:3d old' }]) await collectGmail({ user: 'kim@orgiast.jp', state, now, search: async o => { seen.push(o.query); return { messages: [] }; } });
+  assert.match(seen[0], /newer_than:3d/); assert.match(seen[0], /before:/);
+  for (const query of seen.slice(1)) { assert.doesNotMatch(query, /newer_than/); assert.match(query, /after:/); assert.match(query, /before:/); }
+});
+
+test('config上限をloaderから渡しDrive pageSizeにも反映する', async () => {
+  const state = { sources: {} }, config = { mailboxes: ['mail'], driveUsers: ['drive'], lineSheets: [], gmailDailyLimit: 5, driveDailyLimit: 7 };
+  const loaders = sourceLoaders({ home: '', config, state, now, sheets: {}, request: async url => { assert.match(url, /pageSize=7/); return { files: [] }; }, search: async o => { assert.equal(o.max, 100); return { messages: [{ subject: '通常連絡' }] }; } });
+  assert.equal((await loaders[0].load()).next.limit, 5); assert.equal((await loaders[0].load()).next.used, 0);
+  assert.equal((await loaders[1].load()).next.limit, 7);
 });
 
 test('Drive OCRはコピーだけ削除、export失敗でも後始末、dry-runはコピーなし', async () => {
@@ -228,7 +242,18 @@ test('token取得不可で全体が成立しない場合はexit 1のまま', asy
 });
 
 test('Driveの50件上限とLINE/Discordの新規行を読み込む', async t => {
-  const result = await collectDrive({ user: 'kim@orgiast.jp', state: {}, now, request: async (url) => { assert.match(url, /pageSize=50/); return { files: [], nextPageToken: 'next' }; } });
+  const result = await collectDrive({ user: 'kim@orgiast.jp', state: {}, now, limit: 50, request: async (url) => { assert.match(url, /pageSize=50/); return { files: [], nextPageToken: 'next' }; } });
+  assert.equal(result.next.pageToken, 'next'); assert.equal(result.next.watermark, undefined);
+  const line = await collectLine({ sheetId: 'sheet', state: { watermark: '2026-11-03T00:00:00Z' }, now, sheets: { get: async () => [['id','ts','text'], ['new', now.getTime()-1, '明日まで'], ['old', Date.parse('2026-11-02'), '過去']] } });
+  assert.equal(line.documents.length, 1); assert.match(line.documents[0].sourceRef, /new$/);
+  const home = homeFor(t); fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude/discord-inbox-state.json'), JSON.stringify({ cursor: 'x' }));
+  fs.writeFileSync(path.join(home, '.claude/pending-decisions.jsonl'), JSON.stringify({ id: 'd', source: 'discord-inbox', capturedAt: now.toISOString(), text: '期限は明日' }) + '\n');
+  assert.equal((await collectDiscord({ home, state: {}, now })).documents.length, 1);
+});
+
+test('Driveの既定150件上限とLINE/Discordの新規行を読み込む', async t => {
+  const result = await collectDrive({ user: 'kim@orgiast.jp', state: {}, now, request: async (url) => { assert.match(url, /pageSize=150/); return { files: [], nextPageToken: 'next' }; } });
   assert.equal(result.next.pageToken, 'next'); assert.equal(result.next.watermark, undefined);
   const line = await collectLine({ sheetId: 'sheet', state: { watermark: '2026-11-03T00:00:00Z' }, now, sheets: { get: async () => [['id','ts','text'], ['new', now.getTime()-1, '明日まで'], ['old', Date.parse('2026-11-02'), '過去']] } });
   assert.equal(line.documents.length, 1); assert.match(line.documents[0].sourceRef, /new$/);
@@ -236,6 +261,34 @@ test('Driveの50件上限とLINE/Discordの新規行を読み込む', async t =>
   fs.writeFileSync(path.join(home,'.claude/discord-inbox-state.json'), JSON.stringify({ lastIntakeAt: now.toISOString() }));
   fs.writeFileSync(path.join(home,'.claude/pending-decisions.jsonl'), JSON.stringify({ id:'one', source:'discord-inbox', capturedAt: now.toISOString(), text:'回答期限は11/5' })+'\n');
   assert.equal((await collectDiscord({ home, now })).documents.length, 1);
+});
+
+test('遅れた窓は複数ページを読み完了し通常窓は1ページだけ読む', async () => {
+  const oldNow = new Date('2026-11-10T00:00:00Z'), gmailTokens = [];
+  const gmail = await collectGmail({ user: 'mail', state: { watermark: '2026-11-01T00:00:00Z', until: '2026-11-02T00:00:00Z' }, now: oldNow, search: async o => {
+    gmailTokens.push(o.pageToken); return o.pageToken ? { messages: [] } : { messages: [], nextPageToken: 'g2' };
+  } });
+  assert.deepEqual(gmailTokens, [undefined, 'g2']); assert.equal(gmail.next.watermark, '2026-11-02T00:00:00Z');
+  assert.equal('until' in gmail.next, false); assert.equal('query' in gmail.next, false); assert.equal('pageToken' in gmail.next, false);
+  let recentCalls = 0;
+  const recent = await collectGmail({ user: 'mail', state: { watermark: '2026-11-09T12:00:00Z' }, now: oldNow, search: async () => { recentCalls++; return { messages: [], nextPageToken: 'later' }; } });
+  assert.equal(recentCalls, 1); assert.equal(recent.next.pageToken, 'later');
+  const driveTokens = [];
+  const drive = await collectDrive({ user: 'drive', state: { watermark: '2026-11-01T00:00:00Z', until: '2026-11-02T00:00:00Z' }, now: oldNow, request: async url => {
+    const token = new URL(url).searchParams.get('pageToken'); driveTokens.push(token); return token ? { files: [] } : { files: [], nextPageToken: 'd2' };
+  } });
+  assert.deepEqual(driveTokens, [null, 'd2']); assert.equal(drive.next.watermark, '2026-11-02T00:00:00Z'); assert.equal('until' in drive.next, false);
+});
+
+test('runDetectは2日超のGmail/Drive遅れを1回だけ通知し解消時に印を消す', async t => {
+  const home = homeFor(t), state = {}, notices = [], now = new Date('2026-11-10T00:00:00Z');
+  const ledger = { read: async () => [], append: async () => {} };
+  const sources = [{ key: 'gmail:mail', load: async () => ({ documents: [], next: { watermark: '2026-11-01T00:00:00Z' } }) }];
+  const params = { home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, state, sources, now, dryRun: false, ask: async () => ({ items: [] }), notify: async (_home, notice) => notices.push(notice) };
+  await runDetect(params); await runDetect(params);
+  assert.equal(notices.filter(n => n.source === 'deadline-lag').length, 1); assert.equal(notices[0].dedupeKey, 'deadline-lag:2026-11-10'); assert.match(notices[0].text, /gmail:mail: 2026-11-01/);
+  sources[0].load = async () => ({ documents: [], next: { watermark: now.toISOString() } });
+  await runDetect(params); assert.equal(state.lagNoticeAt, undefined);
 });
 
 test('旧LINE受信ログの日本語見出しも期限検出へ正規化する', async () => {

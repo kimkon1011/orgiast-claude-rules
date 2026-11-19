@@ -20,22 +20,30 @@ function windowState(previous = {}, now, limit) {
 }
 function finishWindow(state, pageToken, count) {
   const next = { ...state, used: state.used + count, pageToken: pageToken || null };
-  if (!pageToken) { next.watermark = state.until; delete next.until; delete next.query; }
+  if (!pageToken) { next.watermark = state.until; delete next.until; delete next.query; delete next.pageToken; }
   return next;
 }
-export async function collectGmail({ user, state, now, search = searchGmail, signal }) {
-  const current = windowState(state, now, 80), max = 80 - current.used;
-  if (max <= 0) return { documents: [], next: state };
+const isBehind = (state, now) => Math.min(...[state.until, state.watermark].map(Date.parse).filter(Number.isFinite)) <= now.getTime() - 86400000;
+export async function collectGmail({ user, state, now, search = searchGmail, limit = 400, signal }) {
+  let current = windowState(state, now, limit);
+  if (current.used >= limit) return { documents: [], next: current };
   const since = current.watermark ? ` after:${Math.floor(Date.parse(current.watermark) / 1000) - 1}` : '';
-  const query = current.query || `newer_than:3d -category:promotions -category:social -list:googlegroups-manage${since} before:${Math.ceil(Date.parse(current.until) / 1000)}`;
+  const staleQuery = current.watermark && /(?:^|\s)newer_than:/.test(current.query || '');
+  const query = !staleQuery && current.query || `${current.watermark ? '' : 'newer_than:3d '}-category:promotions -category:social -list:googlegroups-manage${since} before:${Math.ceil(Date.parse(current.until) / 1000)}`;
   current.query = query;
-  const result = await search({ user, query, max, pageToken: current.pageToken, withBody: true, bodyLimit: 30000, shouldFetchBody: wantsBody, concurrency: 3, signal });
-  const documents = result.messages.filter(m => wantsBody(m) && m.body).map(m => ({
-    source: 'Gmail', sourceRef: `gmail:${user}:${m.id}`, text: trimBytes(`${m.subject}\n${m.body}`),
-    date: new Date(Number(m.internalDate) || Date.parse(m.date)).toISOString(), url: `https://mail.google.com/mail/u/${encodeURIComponent(user)}/#all/${m.threadId || m.id}`,
-    mailbox: user, threadId: m.threadId, to: m.to,
-  }));
-  return { documents, next: finishWindow(current, result.nextPageToken, result.messages.length + (result.skipped || 0)) };
+  const documents = [], behind = isBehind(current, now);
+  for (let page = 0; page < (behind ? 50 : 1); page++) {
+    const result = await search({ user, query, max: 100, pageToken: current.pageToken, withBody: true, bodyLimit: 30000, shouldFetchBody: wantsBody, concurrency: 3, signal });
+    const messages = result.messages || [], used = messages.filter(wantsBody).length;
+    documents.push(...messages.filter(m => wantsBody(m) && m.body).map(m => ({
+      source: 'Gmail', sourceRef: `gmail:${user}:${m.id}`, text: trimBytes(`${m.subject}\n${m.body}`),
+      date: new Date(Number(m.internalDate) || Date.parse(m.date)).toISOString(), url: `https://mail.google.com/mail/u/${encodeURIComponent(user)}/#all/${m.threadId || m.id}`,
+      mailbox: user, threadId: m.threadId, to: m.to,
+    })));
+    current = finishWindow(current, result.nextPageToken, used);
+    if (!result.nextPageToken || current.used >= limit) break;
+  }
+  return { documents, next: current };
 }
 export async function readDriveText(file, { user, request, dryRun, signal, cleanupSignal }) {
   let id = file.id, temporary;
@@ -55,62 +63,63 @@ export async function readDriveText(file, { user, request, dryRun, signal, clean
     }
   }
 }
-export async function collectDrive({ user, state, now, request, dryRun = false, signal, onStage = () => {}, budgetMs = positiveBudget(process.env.DEADLINE_DRIVE_BUDGET_MS, 240_000), perFileTimeoutMs = positiveBudget(process.env.DEADLINE_DRIVE_FILE_TIMEOUT_MS, 45_000), nowMs = Date.now }) {
-  const current = windowState(state, now, 50);
-  const max = Math.max(0, 50 - current.used);
-  if (!max) return { documents: [], next: state, skipped: [{ reason: 'Drive日次50件上限（次回日付更新後に再開）' }] };
+export async function collectDrive({ user, state, now, request, dryRun = false, limit = 150, signal, onStage = () => {}, budgetMs = positiveBudget(process.env.DEADLINE_DRIVE_BUDGET_MS, 240_000), perFileTimeoutMs = positiveBudget(process.env.DEADLINE_DRIVE_FILE_TIMEOUT_MS, 45_000), nowMs = Date.now }) {
+  let current = windowState(state, now, limit);
+  let max = Math.max(0, limit - current.used);
+  if (!max) return { documents: [], next: current, skipped: [{ reason: `Drive日次${limit}件上限（次回日付更新後に再開）` }] };
   const started = nowMs();
   const processedIds = new Set(current.processedIds || []);
   const since = current.watermark || new Date(now.getTime() - 3 * 86400000).toISOString();
   const q = current.query || `trashed = false and modifiedTime > '${since}' and modifiedTime <= '${current.until}' and (mimeType = 'application/vnd.google-apps.document' or mimeType = 'application/pdf' or mimeType contains 'image/') and not appProperties has { key='deadlineWatchOCR' and value='1' }`;
   current.query = q;
   const makeUrl = pageToken => {
-    const params = new URLSearchParams({ q, orderBy: 'modifiedTime', pageSize: '50', fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)', ...(pageToken ? { pageToken } : {}) });
+    const params = new URLSearchParams({ q, orderBy: 'modifiedTime', pageSize: String(Math.min(1000, max)), fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)', ...(pageToken ? { pageToken } : {}) });
     return `https://www.googleapis.com/drive/v3/files?${params}`;
   };
-  let result;
-  const listSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(Math.min(budgetMs, 60_000))]) : AbortSignal.timeout(Math.min(budgetMs, 60_000));
-  try { result = await withAbort(listSignal, () => request(makeUrl(current.pageToken), { user, signal: listSignal })); }
-  catch (error) {
-    if (listSignal.aborted) return { documents: [], next: current, partial: { reason: signal?.aborted ? '全体時間上限到達' : 'Drive一覧取得時間上限到達', processed: 0 } };
-    if (!current.pageToken || !/HTTP 400/.test(error.message)) throw error;
-    delete current.pageToken;
-    result = await withAbort(listSignal, () => request(makeUrl(), { user, signal: listSignal }));
-  }
   const documents = [];
   const skipped = [];
-  let partial = false, processed = 0;
-  const resumed = (result.files || []).filter(file => processedIds.has(file.id)).length;
-  onStage(`drive ${user} page (${result.files?.length || 0} files, ${resumed} already processed)`);
-  for (const file of result.files || []) {
-    if (processedIds.has(file.id)) continue;
-    if (signal?.aborted || nowMs() - started >= budgetMs || processed >= max) { partial = true; break; }
-    let text;
-    const fileLimit = AbortSignal.timeout(perFileTimeoutMs);
-    // Reserve up to five seconds within the file limit for OCR-copy cleanup.
-    const readLimit = AbortSignal.timeout(Math.max(1, perFileTimeoutMs - Math.min(5000, perFileTimeoutMs / 10)));
-    const fileSignal = signal ? AbortSignal.any([signal, readLimit]) : readLimit;
-    const boundedRequest = (url, options) => withAbort(options.signal, () => request(url, options));
-    try { onStage(`drive ${user} file ${file.id} start`); text = await readDriveText(file, { user, request: boundedRequest, dryRun, signal: fileSignal, cleanupSignal: fileLimit }); onStage(`drive ${user} file ${file.id} end`); }
+  const behind = isBehind(current, now);
+  let processed = 0;
+  for (let page = 0; page < (behind ? 50 : 1); page++) {
+    max = Math.min(1000, limit - current.used);
+    let result;
+    const listSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(Math.min(budgetMs, 60_000))]) : AbortSignal.timeout(Math.min(budgetMs, 60_000));
+    try { result = await withAbort(listSignal, () => request(makeUrl(current.pageToken), { user, signal: listSignal })); }
     catch (error) {
-      skipped.push({ sourceRef: `drive:${file.id}`, title: file.name, reason: `Drive読み取り失敗: ${redactSecrets(error.message).slice(0, 120)}` });
-      // A process cutoff retries this file; an individual file failure is skipped.
-      if (signal?.aborted) { partial = true; break; }
-      processedIds.add(file.id);
-      processed++;
-      continue;
+      if (listSignal.aborted) return { documents, skipped, next: { ...current, processedIds: [...processedIds], used: current.used + processed }, partial: { reason: signal?.aborted ? '全体時間上限到達' : 'Drive一覧取得時間上限到達', processed } };
+      if (!current.pageToken || !/HTTP 400/.test(error.message)) throw error;
+      delete current.pageToken;
+      result = await withAbort(listSignal, () => request(makeUrl(), { user, signal: listSignal }));
     }
-    if (text) documents.push({ source: 'Drive', sourceRef: `drive:${file.id}`, text: trimBytes(`${file.name}\n${text}`), date: file.modifiedTime, url: file.webViewLink || `https://drive.google.com/file/d/${file.id}/view` });
-    processedIds.add(file.id);
-    processed++;
+    const resumed = (result.files || []).filter(file => processedIds.has(file.id)).length;
+    onStage(`drive ${user} page (${result.files?.length || 0} files, ${resumed} already processed)`);
+    for (const file of result.files || []) {
+      if (processedIds.has(file.id)) continue;
+      if (signal?.aborted || nowMs() - started >= budgetMs || current.used + processed >= limit) {
+        return { documents, skipped, partial: { reason: signal?.aborted ? '全体時間上限到達' : current.used + processed >= limit ? `Drive日次${limit}件上限` : 'Drive時間予算到達', processed, remaining: (result.files || []).filter(item => !processedIds.has(item.id)).length }, next: { ...current, processedIds: [...processedIds], used: current.used + processed } };
+      }
+      let text;
+      const fileLimit = AbortSignal.timeout(perFileTimeoutMs);
+      const readLimit = AbortSignal.timeout(Math.max(1, perFileTimeoutMs - Math.min(5000, perFileTimeoutMs / 10)));
+      const fileSignal = signal ? AbortSignal.any([signal, readLimit]) : readLimit;
+      const boundedRequest = (url, options) => withAbort(options.signal, () => request(url, options));
+      try { onStage(`drive ${user} file ${file.id} start`); text = await readDriveText(file, { user, request: boundedRequest, dryRun, signal: fileSignal, cleanupSignal: fileLimit }); onStage(`drive ${user} file ${file.id} end`); }
+      catch (error) {
+        skipped.push({ sourceRef: `drive:${file.id}`, title: file.name, reason: `Drive読み取り失敗: ${redactSecrets(error.message).slice(0, 120)}` });
+        if (signal?.aborted) return { documents, skipped, partial: { reason: '全体時間上限到達', processed }, next: { ...current, processedIds: [...processedIds], used: current.used + processed } };
+        processedIds.add(file.id); processed++; continue;
+      }
+      if (text) documents.push({ source: 'Drive', sourceRef: `drive:${file.id}`, text: trimBytes(`${file.name}\n${text}`), date: file.modifiedTime, url: file.webViewLink || `https://drive.google.com/file/d/${file.id}/view` });
+      processedIds.add(file.id); processed++;
+    }
+    onStage(`drive ${user} processed=${processed} documents=${documents.length} skipped=${skipped.length} partial=false`);
+    current = finishWindow(current, result.nextPageToken, processed);
+    processed = 0;
+    processedIds.clear();
+    if (!result.nextPageToken || current.used >= limit) break;
   }
-  onStage(`drive ${user} processed=${processed} documents=${documents.length} skipped=${skipped.length} partial=${Boolean(partial)}`);
-  if (partial) {
-    return { documents, skipped, partial: { reason: signal?.aborted ? '全体時間上限到達' : processed >= max ? 'Drive日次50件上限' : 'Drive時間予算到達', processed, remaining: (result.files || []).filter(file => !processedIds.has(file.id)).length }, next: { ...current, processedIds: [...processedIds], used: current.used + processed } };
-  }
-  const next = finishWindow(current, result.nextPageToken, processed);
-  delete next.processedIds;
-  return { documents, skipped, next };
+  delete current.processedIds;
+  return { documents, skipped, next: current };
 }
 function timestamp(value) {
   const numeric = Number(value); return Number.isFinite(numeric) && numeric > 0 ? (numeric < 1e12 ? numeric * 1000 : numeric) : Date.parse(value);
@@ -148,8 +157,8 @@ export async function collectDiscord({ home, state = {}, now }) {
 export function sourceLoaders({ home, config, state, now, sheets, request, search, dryRun, onStage = () => {}, processSignal }) {
   const sourceSignal = () => processSignal ? AbortSignal.any([processSignal, AbortSignal.timeout(Number(process.env.DEADLINE_SOURCE_TIMEOUT_MS) || 60_000)]) : AbortSignal.timeout(Number(process.env.DEADLINE_SOURCE_TIMEOUT_MS) || 60_000);
   return [
-    ...config.mailboxes.map(user => ({ key: `gmail:${user}`, load: () => collectGmail({ user, state: state.sources?.[`gmail:${user}`], now, search, signal: sourceSignal() }) })),
-    ...config.driveUsers.map(user => ({ key: `drive:${user}`, handlesAbort: true, load: () => collectDrive({ user, state: state.sources?.[`drive:${user}`], now, request, dryRun, signal: processSignal, onStage }) })),
+    ...config.mailboxes.map(user => ({ key: `gmail:${user}`, load: () => collectGmail({ user, state: state.sources?.[`gmail:${user}`], now, search, limit: config.gmailDailyLimit, signal: sourceSignal() }) })),
+    ...config.driveUsers.map(user => ({ key: `drive:${user}`, handlesAbort: true, load: () => collectDrive({ user, state: state.sources?.[`drive:${user}`], now, request, dryRun, limit: config.driveDailyLimit, signal: processSignal, onStage }) })),
     ...config.lineSheets.map(sheetId => ({ key: `line:${sheetId}`, load: () => collectLine({ sheetId, state: state.sources?.[`line:${sheetId}`], now, sheets }) })),
     { key: 'discord', load: () => collectDiscord({ home, state: state.sources?.discord, now }) },
   ];

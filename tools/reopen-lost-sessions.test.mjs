@@ -270,7 +270,7 @@ test('API failure is explicit and partial candidates survive API-only deadline',
 
 test('closed during fetch is excluded at dispatch time', async t => {
   const base = fixture(t);
-  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'mock', checkIdle: false,
+  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'mock', checkCpu: false, checkIdle: false,
     spawn: (cmd, args) => { assert.equal(args[0], 'agents'); return { status: 0, stdout: '[]' }; },
     fetchImpl: async url => ({ ok: true, json: async () => {
       if (url.includes('/events?')) { fs.writeFileSync(path.join(base, 'closed-sessions.json'), JSON.stringify({ ids: ['one'] })); return { data: [exit] }; }
@@ -1184,21 +1184,19 @@ test('reopenLost dry run never writes progress, lock or log', async t => {
   }
 });
 
-test('measureCpuAsync: 50% usage from stubbed cpus', async () => {
-  const cpu1 = { times: { user: 100, nice: 0, system: 50, idle: 200, iowait: 0, irq: 0, softirq: 0 } };
-  const cpu2 = { times: { user: 150, nice: 0, system: 80, idle: 250, iowait: 0, irq: 0, softirq: 0 } };
-  // total1 = 350, total2 = 480, diff = 130
-  // idle1 = 200, idle2 = 250, diff = 50
-  // usage = 100 * (1 - 50/130) ≈ 62 → round to 62
+test('measureCpuAsync: 50% usage from stubbed cpus (Node.js real format)', async () => {
+  // Node.js os.cpus() returns times with user, nice, sys, idle, irq fields only
+  const cpu1 = { times: { user: 100, nice: 0, sys: 50, idle: 200, irq: 0 } };
+  const cpu2 = { times: { user: 120, nice: 5, sys: 70, idle: 250, irq: 5 } };
   let callCount = 0;
   const cpusImpl = () => {
     callCount++;
     return callCount === 1 ? [cpu1] : [cpu2];
   };
   let waited = false;
-  const wait = async ms => { waited = true; };
+  const wait = async ms => { waited = ms === 100; };
   const result = await measureCpuAsync({ sampleMs: 100, cpusImpl, wait });
-  assert.equal(result, 62);
+  assert.equal(result, 50);
   assert.ok(waited);
 });
 
@@ -1490,8 +1488,8 @@ test('loadGuard: CPU >= 閾値(85%)で 0 件 reopen かつ skipped.loadGuard に
   let cpuCallCount = 0;
   const cpusImpl = () => {
     cpuCallCount++;
-    if (cpuCallCount === 1) return [{ times: { user: 0, nice: 0, system: 0, idle: 0, iowait: 0, irq: 0, softirq: 0 } }];
-    return [{ times: { user: 50, nice: 0, system: 40, idle: 5, iowait: 0, irq: 0, softirq: 0 } }];
+    if (cpuCallCount === 1) return [{ times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 } }];
+    return [{ times: { user: 50, nice: 0, sys: 40, idle: 5, irq: 5 } }];
   };
   const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, cpusImpl, checkCpu: true, checkClaude: true, now: () => nowTime });
   assert.equal(result.reopened.length, 0);
@@ -1588,6 +1586,43 @@ test('countWindowsClaudeProcesses: orphan claude processes (parent PID not alive
   const { countWindowsClaudeProcesses } = await import('./lib/windows-process.mjs');
   const count = countWindowsClaudeProcesses(exec);
   assert.equal(count, 3, 'orphan process should be excluded');
+});
+
+test('countWindowsClaudeProcesses: non-orphan claude processes with non-claude parents are included (new ParentAlive logic)', async t => {
+  // Create claude processes with non-claude parent processes (e.g. Code.exe, powershell.exe, explorer.exe)
+  // These should be counted as they are not orphans (their parents are alive non-claude processes)
+  const cliRows = [
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume abc', ProcessId: 100, ParentProcessId: 150, ParentAlive: true }, // Parent is Code.exe (PID 150)
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume def', ProcessId: 101, ParentProcessId: 160, ParentAlive: true }, // Parent is powershell.exe (PID 160)
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume ghi', ProcessId: 102, ParentProcessId: 170, ParentAlive: true }, // Parent is explorer.exe (PID 170)
+    // Orphan: PPID=999 (parent does not exist)
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume orphan', ProcessId: 200, ParentProcessId: 999, ParentAlive: false },
+  ];
+  const psScript = JSON.stringify(cliRows);
+  const exec = (cmd, args) => {
+    assert.equal(cmd, 'powershell.exe');
+    return psScript;
+  };
+  const { countWindowsClaudeProcesses } = await import('./lib/windows-process.mjs');
+  const count = countWindowsClaudeProcesses(exec);
+  assert.equal(count, 3, 'claude processes with non-claude parents should be included, orphan should be excluded');
+});
+
+test('countWindowsClaudeProcesses: backward compatibility when ParentAlive property is missing', async t => {
+  // Old format without ParentAlive property - should fall back to old logic
+  const cliRows = [
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume abc', ProcessId: 100, ParentProcessId: 1 }, // Parent PID 1 (system) - should be included
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume def', ProcessId: 101, ParentProcessId: 150 }, // Parent PID 150 (non-existent) - should be excluded as orphan
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume ghi', ProcessId: 102, ParentProcessId: 100 }, // Parent PID 100 (another claude.exe) - should be included
+  ];
+  const psScript = JSON.stringify(cliRows);
+  const exec = (cmd, args) => {
+    assert.equal(cmd, 'powershell.exe');
+    return psScript;
+  };
+  const { countWindowsClaudeProcesses } = await import('./lib/windows-process.mjs');
+  const count = countWindowsClaudeProcesses(exec);
+  assert.equal(count, 2, 'process with alive parent should be included, orphan should be excluded (backward compatibility)');
 });
 
 test('loadGuard: credential diagnostics show missing file/field details', async t => {
@@ -1756,13 +1791,19 @@ test('watchReopen: max 未指定時は 5 件の候補があっても reopen は�
     return { status: 0, stdout: '' };
   };
 
+  let idle = 100;
+  const cpusImpl = () => {
+    idle += 100;
+    return [{ times: { user: 100, nice: 0, sys: 50, idle, irq: 0 } }];
+  };
+
   const result = await watchReopen({
     base,
     claudeCli: 'claude.exe',
     codeCli: 'C:\\code.cmd',
     fetchImpl,
     spawn,
-    checkCpu: false,
+    cpusImpl,
     checkClaude: false,
     now: () => nowTime,
     windowReady: async () => true,

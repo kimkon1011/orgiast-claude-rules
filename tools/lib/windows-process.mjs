@@ -63,7 +63,17 @@ export function isClaudeCodeCliProcess(processInfo) {
 // Includes ProcessId and ParentProcessId for orphan/zombie detection.
 export const CLAUDE_PROCESS_SCRIPT = `[Console]::OutputEncoding=[Text.Encoding]::UTF8
 $ErrorActionPreference='Stop'
-$rows=@(Get-CimInstance Win32_Process -Filter "Name='claude.exe'" | Select-Object Name,ExecutablePath,CommandLine,ProcessId,ParentProcessId)
+# Use one snapshot for both the parent PID lookup and the Claude rows.
+$allProcesses=@(Get-CimInstance Win32_Process)
+$allPids=@{}
+foreach ($process in $allProcesses) {
+  $allPids[[int]$process.ProcessId]=$true
+}
+$rows=@($allProcesses | Where-Object { $_.Name -eq 'claude.exe' } | Select-Object Name,ExecutablePath,CommandLine,ProcessId,ParentProcessId)
+foreach ($row in $rows) {
+  $ppid=[int]$row.ParentProcessId
+  $row | Add-Member -NotePropertyName ParentAlive -NotePropertyValue ($ppid -le 0 -or $ppid -eq 1 -or $ppid -eq 4 -or $allPids.ContainsKey($ppid))
+}
 ConvertTo-Json -InputObject $rows -Compress`;
 
 // Well-known system PIDs (idle, system, process manager) always considered alive.
@@ -75,14 +85,21 @@ const ALWAYS_ALIVE_PIDS = new Set([0, 1, 4]);
  * the count and should not block RC reconnection.
  */
 function excludeOrphans(rows) {
-  const alivePids = new Set(rows.map(r => Number(r.ProcessId)).filter(pid => Number.isInteger(pid) && pid > 0));
   return rows.filter(row => {
+    // If ParentAlive property exists (new format), use it directly
+    if (typeof row.ParentAlive === 'boolean') {
+      return row.ParentAlive;
+    }
+
+    // Otherwise fall back to old logic
     const ppid = Number(row.ParentProcessId);
     // Parent PID 0 or missing \u2192 system-initiated, treat as alive
     if (!Number.isInteger(ppid) || ppid <= 0) return true;
     // Well-known system PIDs are always alive (idle/process manager)
     if (ALWAYS_ALIVE_PIDS.has(ppid)) return true;
+
     // Parent is in the alive set \u2192 not orphaned
+    const alivePids = new Set(rows.map(r => Number(r.ProcessId)).filter(pid => Number.isInteger(pid) && pid > 0));
     if (alivePids.has(ppid)) return true;
     return false;
   });

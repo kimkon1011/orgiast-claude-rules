@@ -450,12 +450,16 @@ export async function measureCpuAsync({ sampleMs = 1000, cpusImpl = os.cpus, wai
     let totalIdle2 = 0, totalAll2 = 0;
     for (const cpu of first) {
       const t = cpu.times;
-      totalAll1 += t.user + t.nice + t.system + t.idle + t.iowait + t.irq + t.softirq;
+      // Sum all numeric values in the times object to get total time
+      const allTimes1 = Object.values(t).reduce((sum, val) => typeof val === 'number' ? sum + val : sum, 0);
+      totalAll1 += allTimes1;
       totalIdle1 += t.idle;
     }
     for (const cpu of second) {
       const t = cpu.times;
-      totalAll2 += t.user + t.nice + t.system + t.idle + t.iowait + t.irq + t.softirq;
+      // Sum all numeric values in the times object to get total time
+      const allTimes2 = Object.values(t).reduce((sum, val) => typeof val === 'number' ? sum + val : sum, 0);
+      totalAll2 += allTimes2;
       totalIdle2 += t.idle;
     }
     const idleDiff = totalIdle2 - totalIdle1;

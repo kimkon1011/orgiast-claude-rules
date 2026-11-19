@@ -58,6 +58,20 @@ test('corrupt parse cache is ignored and rebuilt', () => {
   fs.writeFileSync(cache, '{broken'); resetParseCacheForTests();
   assert.equal(collectClaudeStats({ home, now }).totals.outputTokens, 7); assert.doesNotThrow(() => JSON.parse(fs.readFileSync(cache, 'utf8')));
 });
+test('parse cache drops UNC paths and keeps local codex session paths', () => {
+  const { home, file } = fixture(), now = Date.now(), cache = path.join(home, '.claude', 'cost-loop-parse-cache.json');
+  const projects = path.join(home, '.claude', 'projects'), uncPath = String.raw`\\wsl.localhost\Offline\root\.codex\sessions\stale.jsonl`;
+  const localCodex = path.join(home, '.codex', 'sessions', 'session.jsonl');
+  fs.mkdirSync(path.dirname(localCodex), { recursive: true }); fs.writeFileSync(localCodex, 'dummy');
+  fs.writeFileSync(file, JSON.stringify({ timestamp: new Date(now).toISOString(), message: { model: 'opus', usage: { output_tokens: 7 }, content: [] } }));
+  fs.writeFileSync(cache, JSON.stringify({ version: 5, files: { [uncPath]: { mtimeMs: now }, [localCodex]: { mtimeMs: now } }, dirs: { [uncPath]: { mtimeMs: now, children: [] }, [projects]: { mtimeMs: now, children: [] } } }));
+  resetParseCacheForTests(); assert.equal(collectClaudeStats({ home, now }).totals.outputTokens, 7);
+  const saved = JSON.parse(fs.readFileSync(cache, 'utf8'));
+  assert.equal(saved.files[uncPath], undefined, 'UNC path must be dropped');
+  assert.equal(saved.dirs[uncPath], undefined, 'UNC dir must be dropped');
+  assert.ok(saved.files[localCodex], 'local codex session path must be kept');
+  assert.ok(saved.dirs[projects], 'projects dir must be kept');
+});
 test('blocks assigns visible estimates and the output remainder to thinking', () => { const { home, file } = fixture(), now = Date.now(); fs.writeFileSync(file, JSON.stringify({ timestamp: new Date(now).toISOString(), message: { model: 'opus', usage: { output_tokens: 100 }, content: [{ type: 'text', text: '12345' }, { type: 'tool_use', name: 'Bash', input: '12345' }] } })); const b = collectClaudeStats({ home, now }).blocks, textEstimate = 5 / 1.8, toolEstimate = JSON.stringify('12345').length / 3.4; assert.ok(Math.abs(b.text - textEstimate) < 1e-9); assert.ok(Math.abs(b.tool_use - toolEstimate) < 1e-9); assert.ok(Math.abs(b.thinking - (100 - textEstimate - toolEstimate)) < 1e-9); assert.equal(b.tools.Bash, b.tool_use); });
 test('blocks assigns empty thinking-only output to thinking', () => { const { home, file } = fixture(), now = Date.now(); fs.writeFileSync(file, JSON.stringify({ timestamp: new Date(now).toISOString(), message: { model: 'opus', usage: { output_tokens: 100 }, content: [{ type: 'thinking', signature: 'sig' }] } })); const b = collectClaudeStats({ home, now }).blocks; assert.equal(b.thinking, 100); assert.equal(b.text, 0); assert.equal(b.unattributed, 0); });
 test('blocks assigns output with empty content to thinking remainder', () => { const { home, file } = fixture(), now = Date.now(); fs.writeFileSync(file, JSON.stringify({ timestamp: new Date(now).toISOString(), message: { model: 'opus', usage: { output_tokens: 100 }, content: [] } })); const b = collectClaudeStats({ home, now }).blocks; assert.equal(b.unattributed, 0); assert.equal(b.text, 0); assert.equal(b.thinking, 100); });

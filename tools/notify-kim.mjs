@@ -201,6 +201,14 @@ async function persistKim(home, options) {
   }
 }
 
+// Pass through dedupeKey and escalateRefresh for inbox deduplication.
+function withDedupeOptions(options) {
+  const { dedupeKey, escalateRefresh, ...rest } = options;
+  if (dedupeKey) rest.dedupeKey = dedupeKey;
+  if (escalateRefresh) rest.escalateRefresh = true;
+  return rest;
+}
+
 export async function deliverKim(text, {
   home = process.env.ORGIAST_HOME || os.homedir(),
   userId,
@@ -215,6 +223,7 @@ export async function deliverKim(text, {
   suffix = '',
   allowHumanRequest = false,
   kind = 'info', source = '', sessionId = '', discordAllowed: discordAllowedOption,
+  dedupeKey, escalateRefresh,
 } = {}) {
   if (isInboxNoise({ kind, source, text: String(text ?? '') })) return { delivered: 'suppressed', reason: 'fleet-ledger-or-gate-statistics' };
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
@@ -229,7 +238,7 @@ export async function deliverKim(text, {
   let inboxResult = null;
   // kim 宛 Discord DM 全廃（2026-10-27 / 2026-11-10 kim 再指示）。kim への通知は kim-inbox のみ。
   if (isKimRecipient({ id: resolvedUserId, defaultKim: userId == null || String(userId).trim() === '' })) {
-    inboxResult = await persistKim(home, { kind: ['ask', 'action'].includes(kind) ? 'ask' : 'info', text: String(body) + suffix, source, sessionId, signal });
+    inboxResult = await persistKim(home, { kind: ['ask', 'action'].includes(kind) ? 'ask' : 'info', text: String(body) + suffix, source, sessionId, signal, ...(dedupeKey ? { dedupeKey } : {}), ...(escalateRefresh ? { escalateRefresh } : {}) });
     return { ...inboxResult, channel: 'kim-inbox' };
   }
   const content = suffix ? String(body).slice(0, Math.max(0, MAX_CONTENT - suffix.length)) + suffix : clipDiscordContent(body);
@@ -281,7 +290,7 @@ export async function deliverKim(text, {
   // Discord/webhook が使えない kim 宛通知は kim-inbox に保存する（2026-11-04）
   // これにより Discord Bot トークンが無い PC でも通知が失われない。
   if (resolvedUserId === KIM_DISCORD_USER_ID || String(userId) === KIM_DISCORD_USER_ID) {
-    return persistKim(home, { kind, text: String(body) + suffix, source, sessionId, signal });
+    return persistKim(home, { kind, text: String(body) + suffix, source, sessionId, signal, ...(dedupeKey ? { dedupeKey } : {}), ...(escalateRefresh ? { escalateRefresh } : {}) });
   }
   console.error(`notify-kim: 通知先を解決できず送信しません (${dmReason})`);
   return { delivered: 'none', reason: dmReason };

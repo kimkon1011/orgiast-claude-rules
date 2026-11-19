@@ -44,7 +44,8 @@ export async function escalateKimDecisions({ home = process.env.ORGIAST_HOME || 
       targets.push({ rowKey: key, text });
       if (dryRun) continue;
       try {
-        const result = await (io.notifyKim ?? notifyKim)(text, { kind: 'ask', kimActionRequired: true, sessionId: row.sessionId || '', home, now });
+        const dedupeKey = `auto-progress-escalate:${key}`;
+        const result = await (io.notifyKim ?? notifyKim)(text, { kind: 'ask', kimActionRequired: true, sessionId: row.sessionId || '', home, now, dedupeKey, escalateRefresh: true });
         if (!['dm', 'webhook', 'session-inbox'].includes(result?.delivered)) {
           (io.stderr ?? console.error)(`auto-progress-escalate: ${key}: ${result?.delivered || 'none'}: ${result?.reason || 'not delivered'}`);
           continue;

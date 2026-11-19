@@ -27,11 +27,12 @@ export function mergePr(options, { exec = execFileSync } = {}) {
     ? timeoutMs : 180_000;
   const gh = (args, retryOnTimeout = false) => {
     const commandArgs = options.githubRepo && args[0] === 'pr' ? [...args, '--repo', options.githubRepo] : args;
-    const execOptions = { cwd: repo, encoding: 'utf8', timeout, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] };
     const attempts = retryOnTimeout ? 2 : 1;
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
-        return String(exec('gh', commandArgs, execOptions)).trim();
+        return String(exec('gh', commandArgs, {
+          cwd: repo, encoding: 'utf8', timeout, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+        })).trim();
       } catch (error) {
         if (error.code !== 'ETIMEDOUT') throw error;
         if (attempt === attempts) {

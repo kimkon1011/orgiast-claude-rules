@@ -292,7 +292,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
     let dryOk = true;
     if (p === 'codex') {
       const wslDistros = platform === 'win32' ? await listWsl() : undefined;
-      if (platform === 'win32' && wslDistros === '') {
+      if (platform === 'win32' && (wslDistros === '' || wslDistros == null)) {
         // 1回の起動失敗で即 down→kim 通知しない。一過性のスパウン失敗は短い再試行で吸収する（2026-11-07 実測: 06:57Z failure → 07:00Z same 経路で fixed。probeRetries=1 で合計2回実行）。
         let result;
         const failures = [];

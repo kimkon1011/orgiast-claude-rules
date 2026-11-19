@@ -15,6 +15,7 @@
 ## カタログ
 | 型 | 症状（初出） | 横展開の検索 | ゲート |
 |---|---|---|---|
+| 本番常駐サーバーの開発モード起動型 | kim-PC のログオン後に SessionStart フックが秘書アプリを `next dev` で起動し、認証付き一覧 API に28.6秒（2026-11-19、`secretary-pc-ensure.log`） | タスクの Actions・WorkingDirectory、Startup、Run キー、SessionStart フック、起動スクリプトの `npm run dev`・`next dev`・`3940` | `tools/secretary-registration.test.mjs` で管理下の本番起動コマンドを検証し、実機のログオン後に 3940 番の待受プロセスと親コマンドを照合 |
 | PC名の直書き照合 | kim-PC のホスト名変更で秘書アプリの本番反映が停止（2026-11-19） | ps1 / mjs / json / gs の旧ホスト名・COMPUTERNAME・seatHostname・pilotHosts | fleet-pc-map の代表名と別名で判定し、新旧名と対象外PCを回帰テスト |
 | 企画書の画像不足型 | 企画書の画像不足（表紙以外写真なし、2026-11-18 270114KOK） | `skills/design-deck/pipeline` の pages.json 読込・BUILD-REPORT 採用方式・「写真なし」「画像なし」 | design-deck pipeline が画像なしページをエラー化 |
 | レーン状態の誤断定型 | Gemini 402 の連鎖出力を Codex billing と誤分類し、直接実測なしで入金必要・全滅と報告して稼働レーンがあるのに待機（2026-11-17 kim-PC） | billingFailure / cheap-first / viaChain / 全滅 / LANE-PROBE | tools/lib/lane-real-health.mjs、tools/lane-doctor.mjs、tools/lane-claim-evidence-gate.mjs |

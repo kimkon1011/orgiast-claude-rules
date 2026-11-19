@@ -1,3 +1,5 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -22,7 +24,16 @@ test('legacy and watchdog gateway starts cannot both bind the same wildcard addr
     loser.once('error', resolve);
     loser.listen(winner.address().port, '0.0.0.0', () => { loser.close(); resolve(new Error('duplicate listener admitted')); });
   });
-  const assert = await import('node:assert/strict');
   assert.equal(error.code, 'EADDRINUSE');
   assert.equal(winner.listening, true);
+});
+
+test('秘書アプリの管理下の再起動は本番ビルドを next start で起動する', () => {
+  const restart = readFileSync(new URL('./secretary-restart.ps1', import.meta.url), 'utf8');
+  assert.match(restart, /\$env:NODE_ENV\s*=\s*'production'/);
+  assert.match(restart, /SECRETARY_NEXT_DIST_DIR\s*=\s*\$dist/);
+  const launch = restart.match(/^[^\r\n]*Start-Process -FilePath \$node[^\r\n]*$/m)?.[0];
+  assert.ok(launch);
+  assert.match(launch, /-ArgumentList @\(\([^\r\n]*? -f \$next\),\s*'start',/);
+  assert.match(launch, /-WorkingDirectory \$serverDir\b/);
 });

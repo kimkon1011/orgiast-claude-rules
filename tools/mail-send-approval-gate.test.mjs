@@ -130,6 +130,23 @@ test('draft creation and forward-draft creation stay allowed', () => {
   for (const command of ['node tools/gmail-draft.mjs --to a@b.com --body x','node tools/gmail-draft.mjs --forward msg --to a@b.com']) assert.equal(judge({tool_name:'Bash',tool_input:{command}}).decision,'pass');
 });
 
+test('seisaku-mail send と send workflow は同じ承認ゲートの対象', () => {
+  const body = '社外向け本文';
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'seisaku-gate-'));
+  fs.writeFileSync(path.join(cwd, 'body.txt'), body);
+  try {
+    for (const command of [
+      'node tools/seisaku-mail.mjs send --to customer@example.com --subject test --body-file body.txt --yes',
+      `gh workflow run seisaku-mail.yml -f mode=send -f body_b64=${Buffer.from(body).toString('base64')}`,
+      `gh workflow run seisaku-mail.yml --field=mode=send --raw-field=body_b64=${Buffer.from(body).toString('base64')}`,
+    ]) {
+      assert.equal(judge({ tool_name: 'Bash', cwd, tool_input: { command } }).decision, 'block');
+      assert.equal(judge({ tool_name: 'Bash', cwd, tool_input: { command }, transcript: evidence(body) }).decision, 'pass');
+    }
+    assert.equal(judge({ tool_name: 'Bash', cwd, tool_input: { command: 'node tools/seisaku-mail.mjs draft --to customer@example.com --subject test --body-file body.txt' } }).decision, 'pass');
+  } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
+});
+
 test('send CLI names used only as data do not trigger the approval gate', () => {
   const heredocReadOnly = `cat <<'EOF' > /tmp/readline.mjs
 import { loadSecrets } from '/repo/tools/line-group-send.mjs';

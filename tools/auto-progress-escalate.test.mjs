@@ -71,3 +71,20 @@ test('message preserves decision text and caps context lengths', () => {
   assert.ok(!text.includes('約'.repeat(81)));
   assert.match(text, /PC test-PC \/ セッション session- \/ 台帳 ts/);
 });
+
+test('同じ行の ask が受信箱にあれば新しく積まず、回答済みなら台帳へ書き戻す（2026-11-19 重複質問）', async t => {
+  const open = row(60), answered = row(70, { sessionId: 'abcdef12-0000' }), fresh = row(80);
+  const opts = setup(t, [open, answered, fresh]);
+  const ask = (r, extra) => ({ id: 'ki-x', kind: 'ask', text: escalationText(r, now - 24 * H), ...extra });
+  const synced = [], sentOptions = [];
+  opts.io.listInbox = () => [ask(open, { status: 'open' }), ask(answered, { status: 'answered', answer: '既製品ですすめて', answeredAt: new Date(now - H).toISOString() })];
+  opts.io.syncAnswer = (home, item) => { synced.push(item.answer); return true; };
+  opts.io.notifyKim = async (text, options) => { sentOptions.push(options); return { delivered: 'session-inbox' }; };
+  const result = await escalateKimDecisions(opts);
+  assert.equal(result.sent, 1);
+  assert.deepEqual(result.targets.map(target => target.rowKey), [escalationRowKey(fresh)]);
+  assert.deepEqual(result.suppressed.map(entry => entry.reason).sort(), ['already-open', 'answered']);
+  assert.deepEqual(synced, ['既製品ですすめて']);
+  assert.equal(sentOptions[0].dedupeKey, `auto-progress-escalate:${escalationRowKey(fresh)}`);
+  assert.equal(sentOptions[0].source, 'auto-progress-escalate');
+});

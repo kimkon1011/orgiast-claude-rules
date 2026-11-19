@@ -169,8 +169,15 @@ export async function runAudit({ home = homeDefault(), platform = process.platfo
   } finally { if (locked) try { fs.unlinkSync(lock); } catch {} }
 }
 
-export function auditContext(home) {
-  try { const lines = fs.readFileSync(path.join(home, '.claude/unattended-job-audit-last.txt'), 'utf8').trim().split(/\r?\n/).filter(Boolean).slice(0, 3); return lines.length ? `[無人ジョブ監査] ${lines.join(' / ')}` : ''; } catch { return ''; }
+export function auditContext(home, { now = Date.now(), staleHours = 6 } = {}) {
+  try {
+    const file = path.join(home, '.claude/unattended-job-audit-last.txt');
+    const lines = fs.readFileSync(file, 'utf8').trim().split(/\r?\n/).filter(Boolean).slice(0, 3);
+    if (!lines.length) return '';
+    const ageHours = (+now - fs.statSync(file).mtimeMs) / HOUR;
+    const age = ageHours > staleHours ? `（${ageHours.toFixed(1)}時間前の判定）` : '';
+    return `[無人ジョブ監査]${age} ${lines.join(' / ')}`;
+  } catch { return ''; }
 }
 export function launchAudit({ home = homeDefault(), now = Date.now(), intervalHours = 6, platform = process.platform, spawnImpl = spawn } = {}) {
   if (platform !== 'win32') return false;

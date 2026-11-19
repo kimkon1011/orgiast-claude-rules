@@ -295,7 +295,12 @@ try {
   backup(claudeFile);
   const claude = load(claudeFile);
   if (!claude.mcpServers || typeof claude.mcpServers !== 'object' || Array.isArray(claude.mcpServers)) claude.mcpServers = {};
-  claude.mcpServers['gemini-cli'] = { type: 'stdio', command: 'npx', args: ['-y', 'gemini-mcp-tool'], env: { GEMINI_API_KEY: geminiKey, GEMINI_CLI_TRUST_WORKSPACE: 'true', GEMINI_MCP_BACKEND: 'gemini' } };
+  // kim が外すと決めた MCP は再登録しない（~/.claude/mcp-optout.json、2026-11-19）。
+  // register-hooks は単体コピーでも動く必要があるため lib/mcp-optout.mjs と同じ判定をここに持つ。
+  let mcpOptout = [];
+  try { mcpOptout = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'mcp-optout.json'), 'utf8').replace(/^\uFEFF/, '')).disabled || []; } catch {}
+  if (Array.isArray(mcpOptout) && mcpOptout.includes('gemini-cli')) delete claude.mcpServers['gemini-cli'];
+  else claude.mcpServers['gemini-cli'] = { type: 'stdio', command: 'npx', args: ['-y', 'gemini-mcp-tool'], env: { GEMINI_API_KEY: geminiKey, GEMINI_CLI_TRUST_WORKSPACE: 'true', GEMINI_MCP_BACKEND: 'gemini' } };
   write(claudeFile, claude);
   console.log(`  [OK] settings.json${added ? '(hook ' + added + '件追加)' : '(変更なし)'} / .claude.json 更新`);
   if (skippedNames.length) console.log(`[注意] hook ${skippedNames.length} 本が repo に見つからず skip: ${skippedNames.join(', ')}`);

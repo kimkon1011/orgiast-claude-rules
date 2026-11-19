@@ -9,6 +9,8 @@ import { loadAllowlist, discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { inboxDedupeKey, spoolItem, drainSpool } from './kim-inbox.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { formatInboxBrief } from './lib/kim-inbox-relay-state.mjs';
+// The hook intentionally skips sdk-cli sessions; these tests exercise interactive delivery.
+delete process.env.CLAUDE_CODE_ENTRYPOINT;
 test('--show reads the complete original without changing delivery or inbox data', async t => {
   const home = seat(t), item = await addItem(home, { kind: 'ask', text: '資料の確認\n' + '詳細'.repeat(500) + '\n末尾' });
   const file = path.join(home, '.claude/kim-inbox', item.id + '.json');
@@ -59,6 +61,44 @@ function seat(t, label = 'kim-PC') {
   fs.writeFileSync(path.join(home, '.claude/fleet-pc-map.json'), JSON.stringify({ [label]: { account: label === 'kim-PC' ? 'kim@orgiast.jp' : 'test@example.test' } }));
   t.after(() => fs.rmSync(home, { force: true, recursive: true })); return home;
 }
+
+test('同じ本文の ask は空白・改行・大文字小文字を正規化して count を増やす', async t => {
+  const home = seat(t);
+  const first = await addItem(home, { kind: 'ask', text: '  Approve\n\tThis  ' });
+  const second = await addItem(home, { kind: 'ask', text: 'approve this' });
+  assert.equal(second.id, first.id);
+  const items = listItems(home);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].count, 2);
+  assert.ok(Date.parse(items[0].lastSeenAt) >= Date.parse(items[0].createdAt));
+});
+
+test('本文が異なる ask は別レコードになる', async t => {
+  const home = seat(t);
+  await addItem(home, { kind: 'ask', text: '承認してください A' });
+  await addItem(home, { kind: 'ask', text: '承認してください B' });
+  assert.equal(listItems(home).length, 2);
+});
+
+test('answer 済み ask と同じ本文は新規 open ask になる', async t => {
+  const home = seat(t);
+  const answered = await addItem(home, { kind: 'ask', text: '再確認してください' });
+  answerItem(home, answered.id, '承認');
+  const reopened = await addItem(home, { kind: 'ask', text: '再確認してください' });
+  assert.notEqual(reopened.id, answered.id);
+  assert.equal(listItems(home).length, 2);
+  assert.equal(listItems(home, { status: 'open' }).length, 1);
+});
+
+test('info の同文集約も count と repeatCount を維持する', async t => {
+  const home = seat(t);
+  const first = await addItem(home, { kind: 'info', text: '完了 しました' });
+  const second = await addItem(home, { kind: 'info', text: ' 完了\nしました ' });
+  assert.equal(second.id, first.id);
+  assert.equal(listItems(home).length, 1);
+  assert.equal(listItems(home)[0].count, 2);
+  assert.equal(listItems(home)[0].repeatCount, 2);
+});
 
 test('durable producer keys survive aggregation, seen state and retries', async t => {
   const home = seat(t);
@@ -178,7 +218,7 @@ test('手作業依頼を ask に分類し台帳に依頼本文を残す', async 
   const result = await notifyKim('接続して確認してください', { home, plainJa: false, fetchImpl: async () => assert.fail('Discord 禁止') });
   assert.equal(result.kind, 'ask'); assert.match(listItems(home)[0].text, /接続して確認してください/);
 });
-test('複数プロセスの info は集約し ask は全件保存する', async t => {
+test('複数プロセスの info と ask はそれぞれ1件に集約する', async t => {
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const { fileURLToPath } = await import('node:url');
@@ -187,8 +227,9 @@ test('複数プロセスの info は集約し ask は全件保存する', async 
   assert.equal(new Set(results.map(r => JSON.parse(r.stdout).id)).size, 1);
   assert.equal(listItems(home).length, 1); assert.equal(listItems(home)[0].repeatCount, 4);
   const asks = await Promise.all(Array.from({ length: 4 }, () => promisify(execFile)(process.execPath, [fileURLToPath(new URL('./kim-inbox.mjs', import.meta.url)), '--add', '--kind', 'ask', '--body-file', file], { env: { ...process.env, ORGIAST_HOME: home }, windowsHide: true })));
-  assert.equal(new Set(asks.map(r => JSON.parse(r.stdout).id)).size, 4);
-  assert.equal(listItems(home).filter(i => i.kind === 'ask').length, 4);
+  assert.equal(new Set(asks.map(r => JSON.parse(r.stdout).id)).size, 1);
+  assert.equal(listItems(home).filter(i => i.kind === 'ask').length, 1);
+  assert.equal(listItems(home).find(i => i.kind === 'ask').count, 4);
 });
 
 test('破損・欠損フィールドのあるファイルで正常な未回収項目を隠さない', async t => {
@@ -212,7 +253,7 @@ test('fleet 受信ファイルが使用中でも項目を表示でき、次回�
 function writeItem(home, item) {
   fs.writeFileSync(path.join(home, '.claude/kim-inbox', `${item.id}.json`), JSON.stringify(item));
 }
-test('同文 info 30件は1件に集約し、見出し・日時・ID・PC番号の差も吸収する', async t => {
+test('同文 info 30件は1件に集約し、異なる本文は別件として残す', async t => {
   const home = seat(t);
   for (let n = 0; n < 30; n++) await addItem(home, { text: '連絡が届いていません' });
   const [item] = listItems(home, { status: 'open' });
@@ -220,7 +261,7 @@ test('同文 info 30件は1件に集約し、見出し・日時・ID・PC番号�
   assert.ok(Number.isFinite(Date.parse(item.lastAt)));
   const first = await addItem(home, { text: '【送信元A】\nPC011 2026-11-02T14:04:00Z 作業 0c1acc2f 連絡失敗' });
   const latest = await addItem(home, { text: '【送信元B】\nPC022 2026-11-04T15:05:12Z 作業 abcdefab 連絡失敗' });
-  assert.equal(first.id, latest.id); assert.equal(latest.repeatCount, 2);
+  assert.notEqual(first.id, latest.id); assert.equal(latest.repeatCount, 1);
   assert.match(latest.text, /PC022/);
   assert.ok(selectContext([latest]).includes(latest.id), 'context should include the latest item');
   markSeen(home, latest.id);
@@ -762,4 +803,73 @@ test('CLI --auto-close prints JSON of closed items', async t => {
   const output = [];
   await main(['--auto-close'], { home, stdout: s => output.push(JSON.parse(s)) });
   assert.ok(Array.isArray(output[0]));
+});
+
+test('answer closes open asks for the same ledger row or dedupe key', async t => {
+  const home = seat(t);
+  const ts = '2026-11-18T00:00:00.000Z';
+  const sessionId = 'abcdef12-full-session';
+  const text = (days, time = ts) => `【要対応・kim の判断待ち ${days}日】確認（元の約束: 作業 / セッション abcdef12 / 台帳 ts ${time}）`;
+  const original = await addItem(home, { kind: 'ask', text: text(2), sessionId });
+  const sameRow = await addItem(home, { kind: 'ask', text: text(3) });
+  const sameKey = await addItem(home, { kind: 'ask', text: '旧形式', dedupeKey: `auto-progress-escalate:${sessionId}${ts}` });
+  const otherRow = await addItem(home, { kind: 'ask', text: text(2, '2026-11-17T00:00:00.000Z') });
+
+  const answered = answerItem(home, original.id, '承認');
+  const items = new Map(listItems(home).map(item => [item.id, item]));
+  for (const duplicate of [sameRow, sameKey]) {
+    const saved = items.get(duplicate.id);
+    assert.equal(saved.status, 'superseded');
+    assert.equal(saved.supersededInto, answered.id);
+    assert.equal(saved.answer, answered.answer);
+    assert.equal(saved.answeredAt, answered.answeredAt);
+  }
+  assert.equal(items.get(otherRow.id).status, 'open');
+});
+
+test('answer is persisted while the aggregation lock is held', async t => {
+  const home = seat(t);
+  const ask = await addItem(home, { kind: 'ask', text: '確認', dedupeKey: 'job:1' });
+  const lock = path.join(home, '.claude/kim-inbox/info-aggregation.lock');
+  fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
+  const waitSetting = 'ORGIAST_INBOX_GROUP_LOCK_WAIT_MS';
+  const previousWait = process.env[waitSetting];
+  process.env[waitSetting] = '0';
+  t.after(() => {
+    if (previousWait === undefined) delete process.env[waitSetting];
+    else process.env[waitSetting] = previousWait;
+  });
+  const log = t.mock.method(console, 'error', () => {});
+
+  const answered = answerItem(home, ask.id, '承認');
+
+  assert.equal(answered.status, 'answered');
+  assert.deepEqual(listItems(home, { status: 'answered' }), [answered]);
+  assert.equal(answered.answer, '承認');
+  assert.equal(fs.readFileSync(lock, 'utf8'), String(process.pid));
+  assert.equal(log.mock.callCount(), 1);
+  assert.match(log.mock.calls[0].arguments[0], /回答は記録済み.*台帳が使用中です/);
+});
+
+test('drop closes only open asks with the matching key for ordinary questions', async t => {
+  const home = seat(t);
+  const original = await addItem(home, { kind: 'ask', text: '確認', dedupeKey: 'job:1' });
+  const duplicate = await addItem(home, { kind: 'ask', text: '別文面' });
+  const sameText = await addItem(home, { kind: 'ask', text: original.text });
+  const info = await addItem(home, { kind: 'info', text: '報告', dedupeKey: 'job:2' });
+  for (const item of [duplicate, info]) {
+    const file = path.join(home, '.claude/kim-inbox', item.id + '.json');
+    fs.writeFileSync(file, JSON.stringify({ ...item, dedupeKey: original.dedupeKey }));
+  }
+
+  const dropped = dropItem(home, original.id, '不要');
+  const items = new Map(listItems(home).map(item => [item.id, item]));
+  const saved = items.get(duplicate.id);
+  assert.equal(saved.status, 'superseded');
+  assert.equal(saved.supersededInto, dropped.id);
+  assert.equal(saved.answer, '不要');
+  assert.ok(dropped.answeredAt);
+  assert.equal(saved.answeredAt, dropped.answeredAt);
+  assert.equal(items.get(sameText.id).status, 'open');
+  assert.equal(items.get(info.id).status, 'open');
 });

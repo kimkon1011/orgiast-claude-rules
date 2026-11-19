@@ -67,6 +67,7 @@ export function googleRoute(raw, marker = GWS_MARKER) {
   throw Error('GWS proxy: unsupported Google endpoint');
 }
 export async function gwsFetch(url, options = {}, dependencies = {}) {
+  options = { ...options, signal: options.signal || AbortSignal.timeout(Number(process.env.DEADLINE_FETCH_TIMEOUT_MS) || 60_000) };
   const headers = new Headers(options.headers);
   const marker = headers.get('authorization')?.replace(/^Bearer /,'');
   if (![GWS_MARKER,GWS_KIM_MARKER,GWS_SA_SELF_MARKER].includes(marker)) return (dependencies.fetchImpl || globalThis.fetch)(url, options);

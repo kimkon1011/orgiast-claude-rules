@@ -2,7 +2,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
+import { FINAL_ONLY_INSTRUCTION, isLoopWake } from './lib/inbox-display-policy.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -70,7 +72,7 @@ export function parsePendingActions(text, today = new Date()) {
 
 export function formatPendingActions(actions) {
   const lines = [
-    'この応答の冒頭で、以下をそのまま user に伝えること。',
+    FINAL_ONLY_INSTRUCTION,
     '',
     '未処理のユーザーアクションがあります。',
   ];
@@ -85,22 +87,19 @@ export function formatPendingActions(actions) {
   return lines.join('\n');
 }
 
+export function pendingActionsContext(input = {}, { home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now() } = {}) {
+  try {
+    if (isLoopWake(input, { home, now, hook: 'pending-actions-notice' })) return null;
+    const file = path.join(home, '.claude', 'pending-user-actions.md');
+    const actions = parsePendingActions(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''), new Date(now));
+    return actions.length ? { hookSpecificOutput: {
+      hookEventName: input.hook_event_name || 'SessionStart', additionalContext: formatPendingActions(actions),
+    } } : null;
+  } catch { return null; }
+}
 if (isEntry(import.meta.url)) {
   try {
-    const file = path.join(os.homedir(), '.claude', 'pending-user-actions.md');
-    const text = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
-    const actions = parsePendingActions(text, new Date());
-
-    if (actions.length > 0) {
-      const out = formatPendingActions(actions);
-      console.log(JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: 'SessionStart',
-          additionalContext: out,
-        },
-      }));
-    }
-  } catch {
-    // SessionStart を妨げない。読み込み・パース・出力の異常時は黙って終了する。
-  }
+    const out = pendingActionsContext(JSON.parse((await readStdinWithTimeout(500)) || '{}'));
+    if (out) console.log(JSON.stringify(out));
+  } catch { /* SessionStart を妨げない。 */ }
 }

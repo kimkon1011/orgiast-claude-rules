@@ -1,5 +1,6 @@
 import dns from 'node:dns';
 import { getDriveToken } from './drive-auth.mjs';
+import { withAbort } from './deadline-budget.mjs';
 
 // Prefer IPv4 because a slow IPv6 route caused connection timeouts and deadline-watch exit 1 on this seat (2026-11-19).
 dns.setDefaultResultOrder('ipv4first');
@@ -10,50 +11,60 @@ export const quoteTab = (title) => `'${title.replaceAll("'", "''")}'`;
 
 // POST is not retried: an ambiguous append response must be read back by id.
 // GET and PUT are idempotent, so wait and retry them on 429/5xx responses and transient network failures.
-export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), maxRetries = 5 } = {}) {
+export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), maxRetries = 5, timeoutMs = Number(process.env.DEADLINE_FETCH_TIMEOUT_MS) || 60_000, onStage = () => {}, signal } = {}) {
   let token;
   let expires = 0;
   async function request(id, suffix = '', method = 'GET', body) {
-    if (!token || Date.now() >= expires) {
-      try { token = await getToken({ scope: SCOPE, impersonate: 'kim@orgiast.jp', signal: AbortSignal.timeout(30_000) }); }
-      catch {
-        // Fallback: use 'drive' scope (supported by DWD proxy) instead of 'spreadsheets'
-        token = await getToken({ scope: 'https://www.googleapis.com/auth/drive', impersonate: 'seisaku-team@orgiast.jp', signal: AbortSignal.timeout(30_000) });
+    const requestSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
+    return withAbort(requestSignal, async () => {
+      if (!token || Date.now() >= expires) {
+        onStage('token start (sheets)');
+        try { token = await getToken({ scope: SCOPE, impersonate: 'kim@orgiast.jp', signal: requestSignal }); }
+        catch (primaryError) {
+          requestSignal.throwIfAborted();
+          // Fallback: use 'drive' scope (supported by DWD proxy) instead of 'spreadsheets'
+          try { token = await getToken({ scope: 'https://www.googleapis.com/auth/drive', impersonate: 'seisaku-team@orgiast.jp', signal: requestSignal }); }
+          catch (fallbackError) { throw new Error(`Sheets token failed: ${fallbackError.message}`, { cause: fallbackError.cause || primaryError }); }
+        }
+        onStage('token end (sheets)');
+        expires = Date.now() + 50 * 60_000;
       }
-      expires = Date.now() + 50 * 60_000;
-    }
-    const retryableMethod = method === 'GET' || method === 'PUT';
-    const retryableStatuses = new Set([429, 500, 502, 503, 504]);
-    const retryableNetworkCodes = new Set([
-      'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'ECONNRESET', 'ETIMEDOUT',
-      'ECONNREFUSED', 'EAI_AGAIN', 'ENETUNREACH',
-    ]);
-    for (let retries = 0; ; retries++) {
-      let response;
-      try {
-        response = await fetchImpl(`${API}/${encodeURIComponent(id)}${suffix}`, {
-          method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30_000),
-        });
-      } catch (error) {
-        const retryableError = (error?.name === 'TypeError' && error?.message === 'fetch failed')
-          || error?.name === 'TimeoutError'
-          || retryableNetworkCodes.has(error?.cause?.code);
-        if (!retryableMethod || !retryableError || retries >= maxRetries) throw error;
-        await sleep(Math.min(2_000 * (2 ** retries), 60_000));
-        continue;
+      const retryableMethod = method === 'GET' || method === 'PUT';
+      const retryableStatuses = new Set([429, 500, 502, 503, 504]);
+      const retryableNetworkCodes = new Set([
+        'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'ECONNRESET', 'ETIMEDOUT',
+        'ECONNREFUSED', 'EAI_AGAIN', 'ENETUNREACH',
+      ]);
+      for (let retries = 0; ; retries++) {
+        let response;
+        try {
+          response = await fetchImpl(`${API}/${encodeURIComponent(id)}${suffix}`, {
+            method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            ...(body ? { body: JSON.stringify(body) } : {}), signal: requestSignal,
+          });
+        } catch (error) {
+          const retryableError = (error?.name === 'TypeError' && error?.message === 'fetch failed')
+            || error?.name === 'TimeoutError'
+            || retryableNetworkCodes.has(error?.cause?.code);
+          if (!retryableMethod || !retryableError || retries >= maxRetries) throw error;
+          await sleep(Math.min(2_000 * (2 ** retries), 60_000));
+          continue;
+        }
+        if (response.ok) return response.json();
+        if (!retryableMethod || !retryableStatuses.has(response.status) || retries >= maxRetries) {
+          throw new Error(`Sheets ${method} HTTP ${response.status}`);
+        }
+        const retryAfter = response.headers?.get?.('Retry-After');
+        const retryAfterSeconds = retryAfter === null || retryAfter === undefined || retryAfter === '' ? NaN : Number(retryAfter);
+        const delay = Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
+          ? retryAfterSeconds * 1_000
+          : 2_000 * (2 ** retries);
+        await sleep(Math.min(delay, 60_000));
       }
-      if (response.ok) return response.json();
-      if (!retryableMethod || !retryableStatuses.has(response.status) || retries >= maxRetries) {
-        throw new Error(`Sheets ${method} HTTP ${response.status}`);
-      }
-      const retryAfter = response.headers?.get?.('Retry-After');
-      const retryAfterSeconds = retryAfter === null || retryAfter === undefined || retryAfter === '' ? NaN : Number(retryAfter);
-      const delay = Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
-        ? retryAfterSeconds * 1_000
-        : 2_000 * (2 ** retries);
-      await sleep(Math.min(delay, 60_000));
-    }
+    }).catch(error => {
+      if (requestSignal.aborted) throw new Error(`Sheets ${method} fetch failed: ${error.message}`, { cause: error });
+      throw error;
+    });
   }
   const metadata = (id) => request(id, '?fields=spreadsheetId,spreadsheetUrl,sheets(properties)');
   const get = async (id, range) => (await request(id, `/values/${encodeURIComponent(range)}?valueRenderOption=UNFORMATTED_VALUE`)).values ?? [];

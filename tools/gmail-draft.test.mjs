@@ -68,6 +68,7 @@ async function cli(argv, overrides = {}) {
     readState: () => { throw new Error('no cached state'); },
     inspectDraft: async () => ({ ok: true, findings: [], llm: { provider: null, error: null } }),
     skipContextCheck: true,
+    acquireDedupe: async () => ({ recordSuccess() {}, release() {} }),
     ...overrides,
   } });
   return { code, output, calls, tokens };

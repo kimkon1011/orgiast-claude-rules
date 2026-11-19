@@ -62,3 +62,4 @@
 - 2026-11-18 代替送信経路の未提示: LINE bot 429 で kim 手動/有料の二択を出した。Beeper（kim本人LINE）経路があった。→ line-group-send.mjs の 429 時に Beeper 経路を出力
 - 型: hook 注入の一覧を毎ターン冒頭表示させ同一セッションで大量再掲 → 新着差分・最終メッセージのみ・loop抑止を inbox-display-policy で強制
 - 型: コマンドラインの引用符の違いで正規のプロセスを別物と判定し、再起動を拒否する（2026-11-19 kim-PC、secretary-restart.ps1 の 3939/3940 実測） → 対策: 引数単位でパスとポートを照合し、Next.js の子プロセスは親も確認する。ゲート: tools/secretary-server-process.test.ps1
+| ゲートをコマンド名に結びつけ別経路を見落とす | 送信ツール本体で防御＋送信経路の網羅テスト |

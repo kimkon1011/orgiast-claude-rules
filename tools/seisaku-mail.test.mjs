@@ -15,7 +15,7 @@ function fixture(t, { artifact = true, result = { ok: true, threadId: 't1', mess
   let time = Date.parse('2026-10-28T01:00:00.300Z'), polls = 0, output = '', downloaded;
   const calls = [], sleeps = [];
   const runInfo = status => ({ id: 42, created_at: '2026-10-28T01:00:01Z', status });
-  const run = createCli({ home, env, now: () => time, sleep: async ms => { sleeps.push(ms); time += ms; }, stdout: s => { output += s; }, spawnSync: (cmd, args, opts) => {
+  const run = createCli({ home, env, now: () => time, sleep: async ms => { sleeps.push(ms); time += ms; }, stdout: s => { output += s; }, searchSent: async () => [], acquireDedupe: async () => ({ recordSuccess() {}, release() {} }), spawnSync: (cmd, args, opts) => {
     calls.push({ cmd, args, opts });
     assert.equal(cmd, 'gh');
     assert.equal(opts.shell, false);

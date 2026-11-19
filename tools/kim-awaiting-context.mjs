@@ -43,8 +43,7 @@ export function context(input, { home = process.env.ORGIAST_HOME || os.homedir()
     const event = input.hook_event_name || 'UserPromptSubmit';
     if (!['SessionStart', 'UserPromptSubmit'].includes(event)) return null;
     const sessionId = String(input.session_id || input.sessionId || '');
-    // kim 回答済みの項目は質問として注入しない（2026-11-19）。
-    const items = collect({ home, now, budgetMs: COLLECT_BUDGET_MS, sessionId }).filter(item => !item.answered);
+    const items = collect({ home, now, budgetMs: COLLECT_BUDGET_MS, sessionId });
     const discord = discordWaitingContext({ home, now });
     const discordOnly = () => discord ? { hookSpecificOutput: { hookEventName: event, additionalContext: discord } } : null;
     // loop 起床は discord 以外何も注入しない

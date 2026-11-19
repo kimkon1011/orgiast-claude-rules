@@ -346,20 +346,3 @@ test('hook displays only added ids at the end and suppresses repeated prompts', 
   assert.equal(context({ ...input, prompt: 'second request' }, options), null);
   assert.equal(context({ ...input, prompt: '<<autonomous-loop-dynamic>>' }, options), null);
 });
-
-test('ex: に kim の回答が保存されたら質問として出さず、回答済みとして分けて表示する（2026-11-19 重複質問）', t => {
-  const home = fixture(t), bodyFile = path.join(home, 'answer.txt'); fs.writeFileSync(bodyFile, '最新にして送る');
-  writeExternal(home, { items: [extItem(), extItem({ id: 'ex:bbbbbbbbbbbb', threadId: 't2', lastMessageId: 'n1' })] });
-  assert.equal(respond('ex:aaaaaaaaaaaa', { home, bodyFile, now: NOW }), 0);
-  const items = collectAwaiting({ home, now: NOW });
-  const answered = items.find(item => item.id === 'ex:aaaaaaaaaaaa');
-  assert.equal(answered.answered, true);
-  assert.match(answered.progress, /kim 回答済み .*最新にして送る/);
-  assert.equal(items.find(item => item.id === 'ex:bbbbbbbbbbbb').answered, undefined);
-  const out = context({ hook_event_name: 'SessionStart', session_id: 's-dup' }, { home, now: NOW, env: {} });
-  const text = out.hookSpecificOutput.additionalContext;
-  assert.ok(!text.includes('id=ex:aaaaaaaaaaaa'));
-  assert.ok(text.includes('id=ex:bbbbbbbbbbbb'));
-  writeExternal(home, { items: [extItem({ lastMessageId: 'm2' })] });
-  assert.equal(collectAwaiting({ home, now: NOW })[0].answered, undefined);
-});

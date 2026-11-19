@@ -34,14 +34,5 @@ export function saveAnswer(home, id, body, now = Date.now()) {
   if (!/^ex:[0-9a-f]{12}$/.test(id)) throw new Error('invalid external id');
   const item = (readJsonSafe(externalFile(home), {}).items || []).find(entry => entry.id === id);
   if (!item) throw new Error('external item not found');
-  writeJsonAtomic(path.join(answersDir(home), `${id.slice(3)}.json`), { id, answer: body, at: new Date(now).toISOString(), mailbox: item.mailbox, threadId: item.threadId, subject: item.subject, who: item.who, lastMessageId: item.lastMessageId });
-}
-// kim の回答を読み戻す（2026-11-19）。回答後に同じスレッドへ新しい受信が来たら（lastMessageId が変わったら）無効。
-export function readAnswer(home, item) {
-  if (!/^ex:[0-9a-f]{12}$/.test(String(item?.id || ''))) return null;
-  const answer = readJsonSafe(path.join(answersDir(home), `${item.id.slice(3)}.json`), null);
-  if (!answer || typeof answer.answer !== 'string' || !answer.answer.trim()) return null;
-  if (answer.lastMessageId && item.lastMessageId && answer.lastMessageId !== item.lastMessageId) return null;
-  if (!answer.lastMessageId && Date.parse(answer.at) < Date.parse(item.since)) return null;
-  return answer;
+  writeJsonAtomic(path.join(answersDir(home), `${id.slice(3)}.json`), { id, answer: body, at: new Date(now).toISOString(), mailbox: item.mailbox, threadId: item.threadId, subject: item.subject, who: item.who });
 }

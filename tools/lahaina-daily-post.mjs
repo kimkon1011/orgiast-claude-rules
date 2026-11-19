@@ -7,7 +7,8 @@ import { tokyoToday, findEntry, formatMessage, wasSent } from './lahaina-daily-m
 export { tokyoToday, weekdayJa, findEntry, formatMessage, wasSent } from './lahaina-daily-message.mjs';
 import { attemptPath } from './lahaina-standing-policy.mjs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 export const PROJECT_DIR = join(process.env.ORGIAST_HOME || homedir(), '.claude', 'lahaina-daily-post');
 export const CALENDAR_PATH = join(PROJECT_DIR, 'calendar.json');
@@ -161,4 +162,4 @@ export async function main(argv = process.argv.slice(2)) {
   appendFileSync(RUN_LOG_PATH, `${JSON.stringify({ startedAt, finishedAt: new Date().toISOString(), exitCode: process.exitCode, output })}\n`, 'utf8');
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
+if (isEntry(import.meta.url)) await main();

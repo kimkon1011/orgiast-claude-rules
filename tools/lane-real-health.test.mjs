@@ -113,7 +113,7 @@ test('billing quick diagnosis notification is once per lane per UTC day', async 
   await notifyLaneStops(health, { home, now, notify });
   await notifyLaneStops(health, { home, now: now + 1000, notify });
   assert.equal(sent.length, 1);
-  assert.match(sent[0], /の deepseek が残高不足\(402\)。入金（オートチャージON）が既定/);
+  assert.match(sent[0], /の deepseek が残高不足\(402\)。まず無料枠・既存契約内の他AIレーンを実測し、使える経路へ切り替えます。追加費用案は代替不可の証拠と比較表がある場合だけ最後に提示します$/);
   await notifyLaneStops(health, { home, now: now + 12 * 3600_000, notify });
   assert.equal(sent.length, 2);
 });

@@ -27,8 +27,8 @@ export function install({ home = os.homedir(), sourceRepo = fileURLToPath(new UR
   const wrapper = `// Installed from tools/install-lahaina-daily-post.mjs. Runtime survives checkout switches.
 export * from './runtime/lahaina-daily-post.mjs';
 import { main } from './runtime/lahaina-daily-post.mjs';
-import { pathToFileURL } from 'node:url';
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
+import { isEntry } from '${pathToFileURL(path.join(toolsDir, 'is-entry.mjs')).href}';
+if (isEntry(import.meta.url)) await main();
 `;
   const files = new Map([
     [path.join(dir, 'runtime', 'daily-beeper-approval.mjs'), helper],

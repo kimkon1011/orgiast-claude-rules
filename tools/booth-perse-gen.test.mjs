@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { parseArgs, requireDimensionReference, loadKey, buildPrompt, generate, runAll, buildRetryCommand } from './booth-perse-gen.mjs';
+import { parseArgs, applyBaseMetadata, requireDimensionReference, loadKey, buildPrompt, generate, runAll, buildRetryCommand } from './booth-perse-gen.mjs';
 
 const tempDir = (t, prefix) => {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
@@ -64,6 +64,39 @@ test('buildPrompt: どの案にも高さ3.6mと明るさの指示が必ず入る
   assert.match(t, /hall ceiling is more than 10 m high/);
   assert.match(t, /Adjacent exhibition booths are only about 2\.7-3\.6 m high/);
   assert.ok(t.indexOf('MANDATORY HEIGHT') > t.indexOf('PLAN SIMPLE'), '案の記述より後ろに置き、低い高さの記述を上書きする');
+});
+
+test('buildPrompt: 13.5×9m・正面/右開放と閉鎖壁を反映する', () => {
+  const prompt = buildPrompt('BRIEF', { add: 'PLAN' }, 3.6, [], 13.5, 9, ['front', 'right']);
+  assert.match(prompt, /footprint is 13\.5 m wide by 9 m deep/);
+  assert.match(prompt, /13\.5 m width is about 3\.8 times its 3\.6 m height/);
+  assert.match(prompt, /Keep the front and right sides open\./);
+  assert.match(prompt, /Keep the left and back sides closed by walls\./);
+  assert.doesNotMatch(prompt, /Keep the three open sides open/);
+});
+
+test('buildPrompt: 既定寸法・開放面では従来文を維持する', () => {
+  const prompt = buildPrompt('BRIEF', { add: 'PLAN' });
+  assert.match(prompt, /footprint is 6 m wide by 6 m deep\. Its 6 m width is about 1\.7 times its 3\.6 m height\./);
+  assert.match(prompt, /Keep the three open sides open\./);
+});
+
+test('base meta の寸法を既定にし、明示オプションを優先する', (t) => {
+  const dir = tempDir(t, 'perse-meta-');
+  const base = path.join(dir, 'u.png');
+  writeFileSync(base, 'png');
+  writeFileSync(path.join(dir, 'u.json'), JSON.stringify({ width_m: 13.5, depth_m: 9, open_sides: ['front', 'right'] }));
+  const fromMeta = applyBaseMetadata(parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--base', base]));
+  assert.deepEqual({ width: fromMeta.width, depth: fromMeta.depth, openSides: fromMeta.openSides }, { width: 13.5, depth: 9, openSides: ['front', 'right'] });
+  const explicit = applyBaseMetadata(parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--base', base, '--width', '7', '--open', 'front,left']));
+  assert.deepEqual({ width: explicit.width, depth: explicit.depth, openSides: explicit.openSides }, { width: 7, depth: 9, openSides: ['front', 'left'] });
+});
+
+test('parseArgs: booth dimensions と open sides を検証する', () => {
+  const opts = parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--width', '13.5', '--depth', '9', '--open', 'front,right']);
+  assert.deepEqual({ width: opts.width, depth: opts.depth, openSides: opts.openSides }, { width: 13.5, depth: 9, openSides: ['front', 'right'] });
+  assert.throws(() => parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--width', '0']), /--width/);
+  assert.throws(() => parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--open', 'front,roof']), /--open/);
 });
 
 test('parseArgs: --model で OpenRouter の画像モデルを切り替えられる', () => {

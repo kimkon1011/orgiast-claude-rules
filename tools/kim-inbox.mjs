@@ -14,7 +14,7 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
 import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, recordNaturalLanguageAnswers, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
-import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
+import { readLedger, ledgerFile, OPEN_STATUSES, updateLedgerRow } from './auto-progress-ledger.mjs';
 const exec = promisify(execFile);
 const directory = home => path.join(home, '.claude/kim-inbox');
 const clean = value => redactSecrets(String(value ?? '')).slice(0, 4000);
@@ -64,6 +64,12 @@ function save(home, item) {
   const temp = `${file}.${randomBytes(8).toString('hex')}.tmp`;
   try { fs.writeFileSync(temp, JSON.stringify(item, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(temp, file); }
   finally { fs.rmSync(temp, { force: true }); }
+  // Move non-open items to .archive/ so listItems (hook path) reads fewer files.
+  if (item.status !== 'open') {
+    const archiveDir = path.join(directory(home), '.archive');
+    fs.mkdirSync(archiveDir, { recursive: true });
+    try { fs.renameSync(file, path.join(archiveDir, `${item.id}.json`)); } catch { /* 既に移動済みまたは競合 */ }
+  }
 }
 // 同じ項目の回答・表示更新を直列化し、古い表示更新が回答を上書きしない。
 function acquireInboxLock(home, key, waitMs = 10_000) {
@@ -93,7 +99,10 @@ function locked(home, key, fn) {
 function update(home, id, fn) {
   if (!validId(id)) throw new Error('kim-inbox: ID が不正です');
   return locked(home, id, () => {
-    const item = JSON.parse(fs.readFileSync(path.join(directory(home), `${id}.json`), 'utf8'));
+    const mainPath = path.join(directory(home), `${id}.json`);
+    const archivePath = path.join(directory(home), '.archive', `${id}.json`);
+    const filePath = fs.existsSync(mainPath) ? mainPath : (fs.existsSync(archivePath) ? archivePath : mainPath);
+    const item = JSON.parse(fs.readFileSync(filePath, 'utf8'));
     fn(item); save(home, item); return item;
   });
 }
@@ -157,6 +166,15 @@ function create(home, options) {
           current.progressVersion = (current.progressVersion || 0) + 1;
         }
       });
+      // escalateRefresh: update text of open items without resetting answer; skip if already answered.
+      if (existing && options.escalateRefresh) {
+        if (existing.status === 'answered') return existing;
+        return update(home, existing.id, current => {
+          current.text = text; current.lastAt = new Date().toISOString();
+          current.shownSessions = []; current.shownCount = 0; current.lastShownAt = null;
+          current.forwardMailId = options.forwardMailId || null; current.forwardError = null;
+        });
+      }
       return existing || createNew(home, options);
     }
     if ((options.kind ?? 'info') === 'info') {
@@ -289,21 +307,41 @@ export async function addItem(home, options, { drain = true } = {}) {
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 }
 export function listItems(home, { status } = {}) {
-  let files;
-  try { files = fs.readdirSync(directory(home)); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
-  return files.filter(f => validId(f.replace(/\.json$/, '')) && f.endsWith('.json')).flatMap(f => {
-    try {
-      const item = JSON.parse(fs.readFileSync(path.join(directory(home), f), 'utf8'));
-      const valid = validId(item.id) && ['ask', 'info', 'deadline'].includes(item.kind) && typeof item.createdAt === 'string'
-        && Number.isFinite(Date.parse(item.createdAt)) && typeof item.text === 'string'
-        && Array.isArray(item.shownSessions) && Number.isFinite(item.shownCount);
-      return valid && (!status || item.status === status) ? [item] : [];
-    }
-    catch { return []; } // 破損した1件で他の未回収項目を隠さない。
-  }).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const readDir = (dir) => {
+    let files;
+    try { files = fs.readdirSync(dir); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+    return files.filter(f => validId(f.replace(/\.json$/, '')) && f.endsWith('.json')).flatMap(f => {
+      try {
+        const item = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+        const valid = validId(item.id) && ['ask', 'info', 'deadline'].includes(item.kind) && typeof item.createdAt === 'string'
+          && Number.isFinite(Date.parse(item.createdAt)) && typeof item.text === 'string'
+          && Array.isArray(item.shownSessions) && Number.isFinite(item.shownCount);
+        return valid && (!status || item.status === status) ? [item] : [];
+      }
+      catch { return []; }
+    });
+  };
+  const main = readDir(directory(home));
+  // When filtering by status, the main directory (open items) is sufficient.
+  // Without a filter, also read .archive/ for operations that need all items (e.g. dedupeKey lookup).
+  const all = status ? main : [...main, ...readDir(path.join(directory(home), '.archive'))];
+  return all.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 }
 export function answerItem(home, id, answer, sessionId = '') {
-  return update(home, id, item => { item.status = 'answered'; item.answer = clean(answer); item.answeredAt = new Date().toISOString(); item.answerSession = clean(sessionId); });
+  const item = update(home, id, item => { item.status = 'answered'; item.answer = clean(answer); item.answeredAt = new Date().toISOString(); item.answerSession = clean(sessionId); });
+  // Write answer back to the ledger if this item originated from an escalation.
+  const ledgerMatch = item.text.match(/セッション\s+([a-f0-9]{8})\s*\/\s*台帳\s+ts\s+(\S+)/i);
+  if (ledgerMatch) {
+    const [, sessionPrefix, ts] = ledgerMatch;
+    updateLedgerRow(home, sessionPrefix, ts, {
+      kimAnswer: clean(answer),
+      kimAnsweredAt: new Date().toISOString(),
+      kimAnswerSession: clean(sessionId),
+      status: 'resolved',
+      nextKim: 'なし',
+    });
+  }
+  return item;
 }
 export function markSeen(home, id) {
   return update(home, id, item => { if (item.kind !== 'info') throw new Error('ask は --answer で返答を記録してください'); item.status = 'seen'; });

@@ -275,6 +275,31 @@ export const rowKey = (row) => {
 
 export { isUnattendedRow } from './lib/unattended-session.mjs';
 
+// Find a ledger row by sessionId prefix and ts, then apply updates.
+// Returns the updated row, or null if not found.
+export function updateLedgerRow(home, sessionIdPrefix, ts, updates) {
+  const file = ledgerFile(home);
+  const rows = readLedger(file);
+  let found = false;
+  const next = rows.map(row => {
+    if (found) return row;
+    const matchSession = String(row.sessionId || '').slice(0, 8).toLowerCase() === String(sessionIdPrefix || '').slice(0, 8).toLowerCase();
+    const matchTs = row.ts === ts || (ts && String(row.ts).startsWith(String(ts)));
+    if (matchSession && matchTs) {
+      found = true;
+      return { ...row, ...updates };
+    }
+    return row;
+  });
+  if (!found) return null;
+  writeLedger(file, next);
+  return next.find(row => {
+    const matchSession = String(row.sessionId || '').slice(0, 8).toLowerCase() === String(sessionIdPrefix || '').slice(0, 8).toLowerCase();
+    const matchTs = row.ts === ts || (ts && String(row.ts).startsWith(String(ts)));
+    return matchSession && matchTs;
+  }) || null;
+}
+
 export const kimAction = row => {
   const value = String(row.nextKim || '').trim();
   const action = /^(?:(?:特に)?なし|無し|ナシ|(?:対応(?:は)?)?不要(?:です)?|(?:特に)?ありません|none|n\/a|[-—–－ー―])(?:[（(].*[）)])?[。．]?$/i.test(value) || !value ? 'なし' : value;

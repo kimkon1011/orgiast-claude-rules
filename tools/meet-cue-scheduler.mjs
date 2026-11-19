@@ -5,6 +5,7 @@
  */
 
 import fs from 'node:fs';
+import { sameFleetPc } from './fleet-pc-identity.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -44,7 +45,7 @@ export function readConfig(home = homeDir()) {
       const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       return {
         enabled: parsed.enabled ?? true,
-        seatHostname: parsed.seatHostname || 'DESKTOP-2D0R4LI',
+        seatHostname: parsed.seatHostname || 'kim-PC',
         calendars: Array.isArray(parsed.calendars) && parsed.calendars.length > 0
           ? parsed.calendars
           : ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'],
@@ -57,7 +58,7 @@ export function readConfig(home = homeDir()) {
   }
   return {
     enabled: true,
-    seatHostname: 'DESKTOP-2D0R4LI',
+    seatHostname: 'kim-PC',
     calendars: ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'],
     maxConcurrent: 3,
     botDisplayName: resolveBotDisplayName({}),
@@ -546,7 +547,7 @@ export async function runScheduler(options = {}) {
 
   // Seat hostname check
   const currentHostname = options.hostname || options.deps?.hostname || os.hostname();
-  if (config.seatHostname && config.seatHostname.toLowerCase() !== currentHostname.toLowerCase()) {
+  if (config.seatHostname && !sameFleetPc(config.seatHostname, currentHostname)) {
     console.log(`[meet-cue-scheduler] seatHostname 不一致のため待機 (現在: ${currentHostname}, 対象: ${config.seatHostname})`);
     return {
       ok: true,

@@ -1,7 +1,8 @@
 ﻿param([switch]$DryRun, [switch]$Ensure, [switch]$Remove)
 $ErrorActionPreference = 'Stop'
 $map = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'fleet-pc-map.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($env:COMPUTERNAME -ine $map.'kim-PC'.hostname) { Write-Host 'skip: meeting-prep belongs to kim-PC'; exit 0 }
+$kimPc = $map.'kim-PC'
+if (-not $env:COMPUTERNAME -or $env:COMPUTERNAME -notin (@($kimPc.hostname) + @($kimPc.aliases))) { Write-Host 'skip: meeting-prep belongs to kim-PC'; exit 0 }
 if (-not $Remove -and (Get-TimeZone).Id -ne 'Tokyo Standard Time') { throw 'meeting-prep requires Tokyo Standard Time for 07:00 JST' }
 . (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
 $repo = Resolve-RegisterRepoRoot -Fallback (Get-SyncedRepoRoot) -RequiredPaths @('tools\meeting-prep-dispatch.mjs', 'templates\meeting-prep-prompt.md', 'config\meeting-prep-routing.json')

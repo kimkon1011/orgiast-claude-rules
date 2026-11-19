@@ -2,7 +2,11 @@ $ErrorActionPreference='Stop'
 $AppDir=Join-Path $env:USERPROFILE 'Downloads\secretary-pc'
 # Run only from a session allowed to write AppDir and the user's .claude directory.
 # No elevation or sandbox bypass is attempted by this installer.
-if ($env:COMPUTERNAME -ne 'DESKTOP-2D0R4LI') { throw 'This deployment is scoped to kim-PC / DESKTOP-2D0R4LI' }
+$mapPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'fleet-pc-map.json'
+$kimPc = (Get-Content -LiteralPath $mapPath -Raw -Encoding UTF8 | ConvertFrom-Json).'kim-PC'
+if (-not $env:COMPUTERNAME -or $env:COMPUTERNAME -notin (@($kimPc.hostname) + @($kimPc.aliases))) {
+  throw 'This deployment is scoped to kim-PC'
+}
 $payload=Join-Path $PSScriptRoot 'secretary-progress'
 $manifest=Get-Content (Join-Path $payload 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 foreach ($entry in $manifest.files) {

@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
-import { getAccessToken } from './lib/freee-auth.mjs';
+import { getAccessToken, hasFreeeDbConfig } from './lib/freee-auth.mjs';
 import { sheetsMetadata, sheetsGet, sheetsAppend, ensureSheetTab, quoteTab } from './lib/sheets-dwd.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -333,6 +333,7 @@ export async function runCheck(opts, injected = {}) {
 }
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  if (!hasFreeeDbConfig()) { console.log('skip: expense-leak-check (freee DB 設定なし・このPCは対象外)'); return; }
   // Lock dry runs too: all processes share the Yahoo browser profile and state.
   await mkdir(dirname(opts.statePath), { recursive: true });
   const lockPath = `${opts.statePath}.lock`;

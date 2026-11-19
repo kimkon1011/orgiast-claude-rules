@@ -217,7 +217,7 @@ test('ready の再開失敗は本文付き ask を残し、再確認せず毎回
   await run({ home, now, io });
   const ask = listItems(home).find(item => item.source === 'auto-progress-ready-deferred');
   assert.equal(ask.kind, 'ask'); assert.equal(ask.priority, 'high');
-  assert.match(ask.text, /条件は達成（自動再開に失敗）/); assert.match(ask.text, /セッション 9873da23/);
+  assert.match(ask.text, /いまの状態: 条件は達成/); assert.match(ask.text, /セッション 9873da23/);
   assert.match(ask.text, /古川さんの返信本文/); assert.doesNotMatch(ask.text, /未達/);
   assert.equal(ask.text.split('確認結果: ')[1].split('\n')[0].length, 600);
   assert.equal(readLedger(ledgerFile(home))[0].status, 'scheduled');
@@ -226,18 +226,6 @@ test('ready の再開失敗は本文付き ask を残し、再確認せず毎回
   await run({ home, now: now + 2000, io });
   assert.equal(checks, 1); assert.equal(resumes, 2);
   assert.equal(listItems(home).filter(item => item.source === 'auto-progress-ready-deferred').length, 1);
-});
-test('Codex の失敗時は既存 CLI の同一セッション再開を試す', async t => {
-  const { options, home } = setup(t); const row = addCheck(options); const calls = [];
-  const result = await resumeSession(row, { home, reason: 'scheduled-start', io: { executable: 'mock',
-    runChild: async (_exe, _prompt, _cwd, _history, _timeout, opts) => {
-      calls.push(opts);
-      if (calls.length === 1) return { status: 'failure', executorUsed: 'codex-do', deferred: true };
-      fs.writeFileSync(path.join(home, '.claude', `auto-progress-resume-${row.sessionId.slice(0, 8)}.json`), JSON.stringify({ state: 'done', evidence: '完了' }));
-      return { status: 'success', executorUsed: 'claude' };
-    } } });
-  assert.equal(result.state, 'done'); assert.equal(calls.length, 2);
-  assert.equal(calls[1].executor, 'claude'); assert.equal(calls[1].resumeSessionId, row.sessionId);
 });
 test('巡回あたりの起動上限を予約にも適用する', async t => {
   const { options, home } = setup(t);
@@ -268,18 +256,43 @@ test('定期digestに開始予約と期限超過が出る', async t => {
 });
 
 process.env.ORGIAST_AUTO_RESUME = '1';
-test('静穏時間の再開失敗も ask を保存し、通知保存失敗は次回復旧する', async t => {
-  const { options, home } = setup(t); addCheck(options);
+test('静穏時間でも条件達成の ask を保存し、保存失敗時は通知だけを再試行する', async t => {
+  const before = process.env.ORGIAST_AUTO_RESUME;
+  delete process.env.ORGIAST_AUTO_RESUME;
+  t.after(() => { process.env.ORGIAST_AUTO_RESUME = before; });
+  const { options, home } = setup(t, { session: '9873da23-night' }); addCheck(options);
   const night = Date.parse('2026-11-02T16:00:00Z');
-  let fail = true;
+  const checkText = '夜間に届いた回答' + 'あ'.repeat(700);
+  let checks = 0, attempts = 0, resumes = 0;
   const io = { ...ioBase, clock: () => night,
-    executeCheck: () => ({ code: 0, text: '夜間に届いた回答' }),
-    resume: async () => ({ outcome: 'error', reason: '起動失敗' }),
-    addKimInboxItem: (home, options) => { if (fail) throw Error('disk unavailable'); return ioBase.addKimInboxItem(home, options); } };
+    executeCheck: () => { checks++; return { code: 0, text: checkText }; },
+    resume: async () => { resumes++; },
+    addKimInboxItem: (home, options) => {
+      if (++attempts === 1) throw Error('disk unavailable');
+      return ioBase.addKimInboxItem(home, options);
+    } };
   const failed = await run({ home, now: night, io });
   assert.ok(failed.errors.some(error => /disk unavailable/.test(error)));
-  assert.equal(readLedger(ledgerFile(home))[0].status, 'scheduled');
-  fail = false;
-  await run({ home, now: night, io });
-  assert.equal(listItems(home).filter(item => item.kind === 'ask' && /夜間に届いた回答/.test(item.text)).length, 1);
+  const pending = readLedger(ledgerFile(home))[0];
+  assert.equal(pending.checkResult, 'ready');
+  assert.equal(pending.resumeOutcome, 'disabled');
+  assert.equal(pending.autoResumeDisabledNotifiedAt, undefined);
+  for (let i = 1; i <= 2; i++) {
+    const result = await run({ home, now: night + i * 1000, io });
+    assert.equal(result.resumed, 0);
+    assert.deepEqual(result.errors, []);
+  }
+  const asks = listItems(home).filter(item => item.source === 'auto-progress-ready-deferred');
+  assert.equal(asks.length, 1);
+  const [ask] = asks;
+  assert.equal(ask.kind, 'ask');
+  assert.equal(ask.priority, 'high');
+  assert.match(ask.text, /セッション 9873da23/);
+  assert.match(ask.text, /いまの状態: 条件は達成/);
+  assert.match(ask.text, /自動再開は行いません/);
+  assert.doesNotMatch(ask.text, /未達/);
+  assert.ok(ask.text.split('\n').includes(`確認結果: ${checkText.slice(0, 600)}`));
+  assert.equal(checks, 1);
+  assert.equal(attempts, 2);
+  assert.equal(resumes, 0);
 });

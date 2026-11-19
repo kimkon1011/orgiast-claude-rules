@@ -25,8 +25,28 @@ function stripOpenrouterTag(line, lane) {
   return line.replace(OPENROUTER_TAG, (tag, model) =>
     lane === 'openrouter' || model.toLowerCase().includes(String(lane).toLowerCase()) ? '' : tag);
 }
+// 2026-11-20 実測: codex 書き込み probe が成功していても、再掲された MEMORY.md 索引の
+// deepseek 等を拾って probe_inconclusive になったため、入力の再掲部分だけを除く。
+export function stripCodexPromptEcho(text) {
+  const value = String(text);
+  const newline = value.includes('\r\n') ? '\r\n' : '\n';
+  const lines = value.split(/\r?\n/);
+  let separatorSeen = false;
+  let changed = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*--------\s*$/.test(lines[i])) separatorSeen = true;
+    if (!separatorSeen || !/^\s*user\s*$/.test(lines[i])) continue;
+    const end = lines.findIndex((line, index) => index > i
+      && /^\s*(?:codex|exec|thinking|tokens used)\s*$/.test(line));
+    lines.splice(i, end === -1 ? lines.length - i : end - i);
+    changed = true;
+    if (end === -1) break;
+    i--;
+  }
+  return changed ? lines.join(newline) : value;
+}
 export function probeViaChain(text, lane) {
-  return String(text).split(/\r?\n/).some(line =>
+  return stripCodexPromptEcho(text).split(/\r?\n/).some(line =>
     CHAIN_MARKER.test(line)
     || (!DIAGNOSTIC_LINE.test(line)
       && LANE_NAMES.some(other => other !== lane && new RegExp(`\\b${other}\\b`, 'i').test(stripOpenrouterTag(line, lane)))));

@@ -352,9 +352,18 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       // WSL サービス(LxssManager)停止による probe 失敗は人による修復（管理者権限でサービス起動）が必要。
       // nativeRepair 有無にかかわらず検出する: native 経路でない場合（listWsl が null のフォールスルー等）でも
       // エラー本文に WSL サービス障害の証拠が含まれていれば physical_operation に分類する（2026-11-19 実測）。
-      const wslServiceError = /Wsl[/\\]Service|ERROR_SERVICE_DISABLED|\bLxssManager\b|HCS\b|サービスは無効|cannot be started|要素が見つかりません/i.test(text);
+      // この判定は codex レーンのみに限定する（2026-11-19 修正: deepseek 等のエラーに汎用語が含まれる誤検出防止）。
+      const wslServiceError = p === 'codex' && /Wsl[/\\]Service|ERROR_SERVICE_DISABLED|\bLxssManager\b|HCS\b|サービスは無効|cannot be started|要素が見つかりません/i.test(text);
       if (health.lanes[p].reason === 'probe_failed' && wslServiceError) {
         Object.assign(health.lanes[p], { reason: 'dead:physical_operation', tried: 'codex probe', userFix: '管理者権限の PowerShell で sc start LxssManager を実行してください。直らなければ wsl.exe --install --no-distribution の後に Windows を再起動してください。' });
+      }
+      // codex レーンで probe 失敗かつエラー本文が空で、WSL ディストリ列挙が失敗(null)または空だった場合も
+      // WSL サービス障害として dead:physical_operation に分類する（2026-11-19 実測: error 空文字でパターンマッチ不能）。
+      if (p === 'codex' && health.lanes[p].reason === 'probe_failed' && (!text || text.trim().length < 5)) {
+        const wslDistros = listWslDistros();
+        if (wslDistros === null || wslDistros === '') {
+          Object.assign(health.lanes[p], { reason: 'dead:physical_operation', tried: 'WSL ディストリ列挙が失敗', userFix: '管理者権限の PowerShell で sc start LxssManager を実行してください。直らなければ wsl.exe --install --no-distribution の後に Windows を再起動してください。' });
+        }
       }
       // native の失敗でも、認証・上限・課金が原因なら physical_operation（再起動が要る）と誤判定しない
       if (result.nativeRepair && health.lanes[p].reason === 'probe_failed') {

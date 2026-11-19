@@ -6,8 +6,27 @@ import path from 'node:path';
 export const OWNER = 'kimkon1011';
 // 配布正本リポジトリ。origin が「届かない URL」になったときの向け替え先（PC004 実害 2026-11-05）。
 export const RULES_ORIGIN_URL = `https://github.com/${OWNER}/orgiast-claude-rules.git`;
+
+// timeout の決定順: options.timeout > ORGIAST_GH_TIMEOUT_MS > 既定 180_000
+function resolveTimeout(options) {
+  if (options.timeout !== undefined) return options.timeout;
+  const env = Number(process.env.ORGIAST_GH_TIMEOUT_MS);
+  if (Number.isFinite(env) && Number.isInteger(env) && env > 0) return env;
+  return 180_000;
+}
+
 export function command(file, args, cwd = process.cwd(), options = {}) {
-  return String(execFileSync(file, args, { cwd, encoding: 'utf8', timeout: 60_000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], ...options })).trim();
+  const syncExec = options.execFileSync || execFileSync;
+  const timeout = resolveTimeout(options);
+  const execOptions = { cwd, encoding: 'utf8', timeout, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], ...options, execFileSync: undefined };
+  try {
+    return String(syncExec(file, args, execOptions)).trim();
+  } catch (error) {
+    if (file === 'gh' && error?.code === 'ETIMEDOUT') {
+      return String(syncExec(file, args, execOptions)).trim();
+    }
+    throw error;
+  }
 }
 export function api(run, endpoint) {
   return JSON.parse(run('gh', ['api', endpoint]));

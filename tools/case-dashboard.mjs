@@ -23,14 +23,20 @@ const TAB_RANGE = `'${TAB_NAME}'!A:ZZ`;
 
 // ── 型推定 ────────────────────────────────────────────────────────
 /** 列の値集合から推定型を返す */
-function inferType(values) {
+function inferType(values, columnName = '') {
   const nonEmpty = values.filter(v => v !== '' && v !== null && v !== undefined);
   if (nonEmpty.length === 0) return 'string';
 
-  // 日付パターン
+  // 日付文字列パターン
   const datePattern = /^\d{4}[-\/]\d{1,2}[-\/]\d{1,2}$/;
   const dateLike = nonEmpty.filter(v => datePattern.test(String(v).trim()));
   if (dateLike.length >= nonEmpty.length * 0.7) return 'date';
+
+  // 日付シリアル値パターン（列名に「日」「日付」「date」を含み、値が20000〜80000の数値）
+  if (matchColumn(columnName, ['日', '日付', 'date'])) {
+    const serialLike = nonEmpty.filter(v => typeof v === 'number' && v >= 20000 && v <= 80000);
+    if (serialLike.length >= nonEmpty.length * 0.7) return 'date';
+  }
 
   // 数値（カンマや円記号を含む可能性）
   const numPattern = /^-?[¥$]?\d[\d,]*\.?\d*$/;
@@ -54,6 +60,17 @@ function choiceValues(values) {
 function matchColumn(name, patterns) {
   const n = name.normalize('NFKC').replace(/[\s　]+/g, '').toLowerCase();
   return patterns.some(p => n.includes(p));
+}
+
+/** Google Sheets シリアル値 → YYYY-MM-DD 文字列 */
+function serialToDate(serial) {
+  if (typeof serial !== 'number' || serial < 20000 || serial > 80000) return String(serial);
+  // 1899-12-30 を起点 0 とする
+  const date = new Date(Date.UTC(1899, 11, 30 + Math.floor(serial)));
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 // ── HTML 生成 ──────────────────────────────────────────────────────
@@ -87,7 +104,35 @@ function colIndex(i) {
 }
 
 function generateHtml({ headers, types, choiceMap, rows }) {
-  // 状態/フェーズ列の検出
+  // スキップ列（空見出し／#REF!）を除去
+  const skipMask = headers.map(h => h === '' || h.startsWith('#REF!'));
+  if (skipMask.some(Boolean)) {
+    const oldToNew = {};
+    let newIdx = 0;
+    for (let i = 0; i < headers.length; i++) {
+      if (!skipMask[i]) oldToNew[i] = newIdx++;
+    }
+    headers = headers.filter((_, i) => !skipMask[i]);
+    types = types.filter((_, i) => !skipMask[i]);
+    choiceMap = Object.fromEntries(
+      Object.entries(choiceMap).map(([k, v]) => [oldToNew[Number(k)], v])
+    );
+    rows = rows.map(r => r.filter((_, i) => !skipMask[i]));
+  }
+
+  // 日付シリアル値を YYYY-MM-DD に変換
+  const dateIndices = headers.map((h, i) => types[i] === 'date' ? i : -1).filter(i => i >= 0);
+  if (dateIndices.length > 0) {
+    rows = rows.map(r => {
+      const row = [...r];
+      for (const di of dateIndices) {
+        if (typeof row[di] === 'number' && row[di] >= 20000 && row[di] <= 80000) {
+          row[di] = serialToDate(row[di]);
+        }
+      }
+      return row;
+    });
+  }
   const statusIdx = headers.findIndex((_, i) =>
     matchColumn(headers[i], ['状態', 'フェーズ', 'ステータス', 'ステイタス', 'phase', 'status'])
   );
@@ -97,9 +142,6 @@ function generateHtml({ headers, types, choiceMap, rows }) {
   const personIdx = headers.findIndex((_, i) =>
     matchColumn(headers[i], ['担当者', '担当', 'person', '担当者名', '担当スタッフ'])
   );
-
-  // 日付列の検出（複数可）
-  const dateIndices = headers.map((h, i) => types[i] === 'date' ? i : -1).filter(i => i >= 0);
 
   // 日付列名→値の一覧を作る
   const dateColumnNames = dateIndices.map(i => headers[i]);
@@ -329,6 +371,26 @@ ${hasDate ? `<div class="section"><h2>今月〜来月の予定</h2><div id="sche
 </html>`;
 }
 
+// ── スキーマ出力 ─────────────────────────────────────────────────────
+/** 列情報から `--schema-only` 出力用のスキーマ配列を生成 */
+function buildSchema(headers, types, choiceMap) {
+  return headers.map((name, i) => {
+    const col = {
+      index: i,
+      col: colIndex(i),
+      name,
+      type: types[i],
+    };
+    if (name === '' || name.startsWith('#REF!')) {
+      col.skipped = true;
+    }
+    if (types[i] === 'choice') {
+      col.distinct = choiceMap[i]?.length || 0;
+    }
+    return col;
+  });
+}
+
 // ── メイン ─────────────────────────────────────────────────────────
 async function main() {
   const args = process.argv.slice(2);
@@ -376,7 +438,7 @@ async function main() {
 
   // 列ごとに値を収集して型推定
   const colValues = headers.map((_, i) => dataRows.map(r => r[i] ?? ''));
-  const types = colValues.map(vals => inferType(vals));
+  const types = colValues.map((vals, i) => inferType(vals, headers[i]));
   const choiceMap = {};
   headers.forEach((h, i) => {
     if (types[i] === 'choice') {
@@ -385,13 +447,7 @@ async function main() {
   });
 
   if (schemaOnly) {
-    const schema = headers.map((name, i) => ({
-      index: i,
-      col: colIndex(i),
-      name,
-      type: types[i],
-      ...(types[i] === 'choice' ? { choices: choiceMap[i] } : {}),
-    }));
+    const schema = buildSchema(headers, types, choiceMap);
     const info = {
       sheetId: SHEET_ID,
       tab: TAB_NAME,
@@ -414,4 +470,4 @@ async function main() {
 const isMain = process.argv[1] && (process.argv[1] === import.meta.filename || path.resolve(process.argv[1]) === import.meta.filename);
 if (isMain) main().catch(err => { console.error(err.message); process.exit(1); });
 
-export { inferType, choiceValues, matchColumn, generateHtml, SHEET_ID, TAB_NAME };
+export { inferType, choiceValues, matchColumn, serialToDate, buildSchema, generateHtml, SHEET_ID, TAB_NAME };

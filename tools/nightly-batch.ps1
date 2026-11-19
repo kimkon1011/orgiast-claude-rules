@@ -110,11 +110,33 @@ try {
     # Runtime wiring: the existing nightly task picks this up without re-registration.
     $expenseLeak = Join-Path $PSScriptRoot 'expense-leak-check.mjs'
     if (Test-Path -LiteralPath $expenseLeak -PathType Leaf) {
-        try {
-            $expenseOutput = @(& $node.Source $expenseLeak --weekly 2>&1)
-            $expenseExit = $LASTEXITCODE
-            Write-NightlyStepResult 'expense-leak-check' $expenseExit $expenseOutput
-        } catch { Write-NightlyLog 'expense-leak-check' ('error:' + $_.Exception.Message) }
+        # freee の DB 接続文字列が不足する PC では静かにスキップする。
+        # freee-auth.mjs の loadDbUrl() と同じ fallback 順で確認する。
+        $expenseLeakHasDb = $false
+        if ($env:PURCHASING_APP_DATABASE_URL) { $expenseLeakHasDb = $true }
+        else {
+            foreach ($candidate in @(
+                (Join-Path (Split-Path -Parent $PSScriptRoot) '.env.local'),
+                (Join-Path ([Environment]::GetFolderPath('UserProfile')) 'orgiast-main\.env.local')
+            )) {
+                if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                    $lines = @(Get-Content -LiteralPath $candidate -Encoding utf8 -ErrorAction SilentlyContinue)
+                    if ($lines -match '^\s*(export\s+)?PURCHASING_APP_DATABASE_URL\s*=') {
+                        $expenseLeakHasDb = $true
+                        break
+                    }
+                }
+            }
+        }
+        if (-not $expenseLeakHasDb) {
+            Write-NightlyLog 'expense-leak-check' 'skip:freee DB未設定'
+        } else {
+            try {
+                $expenseOutput = @(& $node.Source $expenseLeak --weekly 2>&1)
+                $expenseExit = $LASTEXITCODE
+                Write-NightlyStepResult 'expense-leak-check' $expenseExit $expenseOutput
+            } catch { Write-NightlyLog 'expense-leak-check' ('error:' + $_.Exception.Message) }
+        }
     } else { Write-NightlyLog 'expense-leak-check' 'skip:script missing' }
     # 窓を出す起動方式で(再)登録された定期タスクを毎晩 run-hidden.vbs へ包み直す。
     $hideTasks = Join-Path $PSScriptRoot 'hide-task-windows.ps1'

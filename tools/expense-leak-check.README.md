@@ -22,6 +22,8 @@ node "C:\Users\uers\orgiast-main\tools\expense-leak-check.mjs" --limit 5 --verif
 
 freeeの接続設定はリポジトリ直下 `.env.local` の `PURCHASING_APP_DATABASE_URL`、または同名環境変数を使います。既存 `freee-query.mjs` の OAuth 更新処理を `lib/freee-auth.mjs` へそのまま切り出しました。会計APIはGETのみです。OAuthトークン更新の既存POSTとトークンDB更新は維持しています。トークン値やDB接続文字列は出力しません。
 
+DB 未設定の PC では夜間バッチ `nightly-batch.ps1` が expense-leak-check をスキップします。`PURCHASING_APP_DATABASE_URL` 環境変数が無く、かつ候補パスの `.env.local` に同設定行が無い場合、ログに `skip:freee DB未設定` を記録して次へ進みます。
+
 Google認証は既存 `lib/drive-auth.mjs` と同じSA鍵、Sheetsは `kim@orgiast.jp`、Gmailは各受信箱をimpersonateします。Gmailにはreadonly scopeを使い、Yahooは `--open` を付けず検索一覧のみ読みます。Yahooの共有ブラウザプロファイルが使用中ならブラウザ側のロックエラーを記録し、別プロファイルを起動しません。ジョブ自身の検索は必ず直列です。
 
 金額バリアントと正規化した利用先先頭語で検索し、取引日±10日のJST範囲を適用します。GmailのURLは受信箱別のthreadリンクです。Yahoo既存CLIは件名・送信者を構造化せず一覧テキストを260文字で切るため、明示的な日付・利用先・金額が揃う結果のみ証跡に採用します。Yahooの件名欄は一覧テキスト、送信者は空欄、リンクは受信箱トップになります。曖昧なヒット数は `searches.yahooUnverified` に記録します。メール本文の取得・既読化は行いません。

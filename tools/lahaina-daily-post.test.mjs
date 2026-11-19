@@ -9,7 +9,7 @@ function fixture(t) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const calendarPath = path.join(dir, 'calendar.json');
   fs.writeFileSync(calendarPath, JSON.stringify([{ date: '2026-11-18', theme: 'テスト', ask: '写真' }]));
-  return { date: '2026-11-18', calendarPath, quotaPath: path.join(dir, 'quota.json'), sentPath: path.join(dir, 'sent.jsonl'), log: () => {} };
+  return { home: dir, inbox: async () => ({}), date: '2026-11-18', calendarPath, quotaPath: path.join(dir, 'quota.json'), sentPath: path.join(dir, 'sent.jsonl'), log: () => {} };
 }
 test('monthly 429 registers approval, never marks sent; wait period uses Beeper each day', async t => {
   const f = fixture(t); let bot = 0, beeper = 0;
@@ -24,9 +24,13 @@ test('dry-run quota fallback leaves disk unchanged, including simulated 429', as
   await run({ ...f, dryRun: true, sender: () => { throw new Error('429 monthly limit'); }, fallback: ({ dryRun }) => { assert.equal(dryRun, true); return { dryRun }; } });
   assert.equal(fs.existsSync(f.quotaPath), false); assert.equal(fs.existsSync(f.sentPath), false);
 });
-test('ordinary 429 and fallback errors are surfaced, never silent success', async t => {
+test('any 429 uses standing fallback, ordinary errors surface, non-monthly quota is not persisted', async t => {
   const f = fixture(t);
-  await assert.rejects(run({ ...f, sender: () => { throw new Error('429 rate limit'); }, fallback: () => { throw new Error('must not call'); } }), /rate limit/);
+  let calls = 0;
+  await run({ ...f, sender: () => { throw new Error('429 rate limit'); }, fallback: () => { calls++; return { state: 'blocked' }; } });
+  assert.equal(calls, 1);
+  assert.equal(fs.existsSync(f.quotaPath), false);
+  await assert.rejects(run({ ...f, sender: () => { throw new Error('500 failure'); } }), /500 failure/);
   await assert.rejects(run({ ...f, sender: () => { throw new Error('429 monthly limit'); }, fallback: () => { throw new Error('Beeper down'); } }), /Beeper down/);
 });
 test('bot success and approved Beeper sent state prevent repeat; malformed result fails', async t => {

@@ -1,9 +1,12 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, appendFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, appendFileSync, writeFileSync, unlinkSync, openSync, closeSync, existsSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
-import { prepareApproval } from './daily-beeper-approval.mjs';
-import { join } from 'node:path';
+import { sendStandingDaily, notifyStandingInfo } from './lahaina-standing-send.mjs';
+import { tokyoToday, findEntry, formatMessage, wasSent } from './lahaina-daily-message.mjs';
+export { tokyoToday, weekdayJa, findEntry, formatMessage, wasSent } from './lahaina-daily-message.mjs';
+import { attemptPath } from './lahaina-standing-policy.mjs';
+import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const PROJECT_DIR = join(process.env.ORGIAST_HOME || homedir(), '.claude', 'lahaina-daily-post');
@@ -15,13 +18,6 @@ export const NIGHTLY_REPO = fileURLToPath(new URL('..', import.meta.url));
 export const SEND_TOOL = join(NIGHTLY_REPO, 'tools', 'line-group-send.mjs');
 export const GROUP_ID = 'C812a1d8216456feca9043b9f8d3bd35d';
 
-export function tokyoToday(now = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit'
-  }).formatToParts(now);
-  const value = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
-  return `${value.year}-${value.month}-${value.day}`;
-}
 
 export function nextMonthFirst(dateStr) {
   const [y, m] = dateStr.split('-').map(Number);
@@ -33,10 +29,6 @@ export function nextMonthFirst(dateStr) {
   return `${value.year}-${value.month}-${value.day}`;
 }
 
-export function weekdayJa(date) {
-  const index = new Date(`${date}T00:00:00Z`).getUTCDay();
-  return '日月火水木金土'[index];
-}
 
 export function retryUuid(date) {
   const hex = createHash('sha256').update(`lahaina-daily-${date}`).digest('hex').slice(0, 32).split('');
@@ -46,27 +38,8 @@ export function retryUuid(date) {
   return `${raw.slice(0, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}-${raw.slice(16, 20)}-${raw.slice(20)}`;
 }
 
-export function findEntry(calendar, date) {
-  return calendar.find((entry) => entry.date === date);
-}
 
-export function formatMessage(entry) {
-  const [, month, day] = entry.date.split('-').map(Number);
-  return `【今日のインスタ用 写真のお願い】${month}/${day}（${weekdayJa(entry.date)}）\n` +
-    `テーマ：${entry.theme}\n` +
-    `お願い：${entry.ask}\n\n` +
-    'このグループに、写真1〜3枚と一言コメント（20字くらい）をお昼12時までに送ってください。\n' +
-    '写真の明るさ調整と投稿文はこちらで作ります。お客様のお顔・車のナンバーは写さないでください。';
-}
 
-export function wasSent(sentText, date) {
-  return sentText.split(/\r?\n/).filter(Boolean).some((line) => {
-    try {
-      const record = JSON.parse(line);
-      return record.date === date && record.failed !== true;
-    } catch { return false; }
-  });
-}
 
 export function invokeSender({ text, date, dryRun }) {
   const tempPath = join(tmpdir(), `lahaina-daily-${process.pid}-${Date.now()}.txt`);
@@ -83,12 +56,12 @@ export function invokeSender({ text, date, dryRun }) {
   }
 }
 
-export const beeperFallback = options => prepareApproval({ ...options, title: '株式会社ラハイナ' });
+export const beeperFallback = options => sendStandingDaily(options);
 
-export async function run({
+async function runUnlocked({
   date = tokyoToday(), dryRun = false, calendarPath = CALENDAR_PATH, sentPath = SENT_PATH,
   quotaPath = QUOTA_PATH, sender = invokeSender, fallback = beeperFallback, log = console.log,
-  scheduled = false, now = new Date()
+  scheduled = false, now = new Date(), home = process.env.ORGIAST_HOME || homedir(), inbox
 } = {}) {
   const hour = Number(new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Asia/Tokyo', hour: '2-digit', hourCycle: 'h23'
@@ -98,7 +71,7 @@ export async function run({
   const entry = findEntry(calendar, date);
   if (!entry) { log(`本日分なし: ${date}`); return 0; }
 
-  // 月間上限中はbotを呼ばず、当日分をBeeper承認キューへ回す
+  // 月間上限中はbotを呼ばず、当日分をBeeperの常設承認経路へ回す
   let quota = null;
   try {
     quota = JSON.parse(readFileSync(quotaPath, 'utf8'));
@@ -109,12 +82,17 @@ export async function run({
   try { sentText = readFileSync(sentPath, 'utf8'); } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  if (wasSent(sentText, date)) { log(`送信済み: ${date}`); return 0; }
+  if (wasSent(sentText, date) || existsSync(attemptPath(home, date))) {
+    const reason = wasSent(sentText, date) ? '当日は送信済みです（1日1通）' : '当日のBeeper送信試行記録があります。自動再送禁止';
+    log(reason);
+    if (!dryRun) await notifyStandingInfo(home, date, reason, inbox);
+    return 0;
+  }
 
   const text = formatMessage(entry);
   log(text);
   const requestBeeper = async () => {
-    const result = await fallback({ text, date, dryRun });
+    const result = await fallback({ text, date, dryRun, now, calendarPath, sentPath, home, inbox });
     log(JSON.stringify(result));
     if (result.state === 'sent' && !dryRun) appendFileSync(sentPath, JSON.stringify({ date, route: 'beeper', queueID: result.queueID, sentAt: new Date().toISOString() }) + '\n', 'utf8');
     return 0;
@@ -131,13 +109,29 @@ export async function run({
     return 0;
   } catch (error) {
     const message = [error.stderr?.toString().trim(), error.message].filter(Boolean).join('\n');
-    if (/429/.test(message) && /monthly limit/i.test(message)) {
+    if (/\b429\b/.test(message)) {
       const until = nextMonthFirst(date);
-      if (!dryRun) writeFileSync(quotaPath, JSON.stringify({ detectedAt: new Date().toISOString(), until, reason: 'LINE monthly limit' }, null, 2) + '\n', 'utf8');
-      log('LINE月間上限: 無料のBeeper経路で当日分を承認待ちにします');
+      if (!dryRun && /monthly limit/i.test(message)) writeFileSync(quotaPath, JSON.stringify({ detectedAt: new Date().toISOString(), until, reason: 'LINE monthly limit' }, null, 2) + '\n', 'utf8');
+      log('LINE HTTP 429: Beeper経路で当日分の常設承認を検証します');
       return requestBeeper();
     }
     throw error;
+  }
+}
+
+export async function run(options = {}) {
+  if (options.dryRun) return runUnlocked(options);
+  const lockPath = join(dirname(options.sentPath || SENT_PATH), 'daily-run.lock');
+  let lock;
+  try {
+    lock = openSync(lockPath, 'wx', 0o600);
+    return await runUnlocked(options);
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    await notifyStandingInfo(options.home || process.env.ORGIAST_HOME || homedir(), options.date || tokyoToday(), '同時実行または未解決の実行記録があります。自動再送禁止', options.inbox);
+    return 0;
+  } finally {
+    if (lock !== undefined) { closeSync(lock); unlinkSync(lockPath); }
   }
 }
 

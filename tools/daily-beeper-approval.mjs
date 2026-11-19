@@ -1,4 +1,4 @@
-// Scheduled outbound messages use per-message approval; never mint standing approval.
+// Generic messages require per-message approval. Lahaina standing authorization is scoped separately.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,23 +10,10 @@ import { addItem } from './kim-inbox.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const toolsDir = path.dirname(fileURLToPath(import.meta.url));
+const beeperSendTool = path.join(toolsDir, 'beeper-send.mjs');
 const defaultHome = () => process.env.ORGIAST_HOME || os.homedir();
-export async function findChat(title, read = listChats) {
-  let cursor;
-  const matches = new Map();
-  const seen = new Set();
-  for (let page = 0; page < 100; page++) {
-    const result = await read({ limit: 200, cursor, direction: cursor ? 'before' : undefined });
-    for (const chat of result.items || []) if (chat.title === title) matches.set(chat.id, chat);
-    if (!result.hasMore) {
-      if (matches.size !== 1 || ![...matches.keys()][0]) throw new Error(`Beeper title一致は1件必要です（${matches.size}件）`);
-      return [...matches.values()][0];
-    }
-    if (!result.oldestCursor || seen.has(result.oldestCursor)) throw new Error('Beeper chat pagination stalled');
-    seen.add(result.oldestCursor); cursor = result.oldestCursor;
-  }
-  throw new Error('Beeper chat pagination limit');
-}
+import { findChat as findExactChat } from './lahaina-standing-policy.mjs';
+export const findChat = (title, read = listChats) => findExactChat(title, read);
 
 export async function prepareApproval({ date, text, title, dryRun = false, home = defaultHome(), readChats = listChats, inbox = addItem }) {
   const chat = await findChat(title, readChats);
@@ -53,19 +40,19 @@ export async function sendApproved(id, { home = defaultHome(), now = new Date(),
   if (item.state !== 'approved' || item.decision?.finalText !== item.body || item.draft?.text !== item.body) throw new Error('本文一致のkim承認が必要です');
   const bodyFile = path.join(home, '.claude', 'reply-queue', `${id}-body.txt`);
   fs.writeFileSync(bodyFile, item.body, 'utf8');
-  const invoke = (tool, args) => exec(process.execPath, [path.join(toolsDir, tool), ...args], {
+  const invoke = (tool, args) => exec(process.execPath, [tool === 'beeper-send.mjs' ? beeperSendTool : path.join(toolsDir, tool), ...args], {
     cwd: path.dirname(toolsDir), encoding: 'utf8', timeout: 60000, windowsHide: true,
     env: { ...process.env, ORGIAST_HOME: home }, stdio: ['ignore', 'pipe', 'pipe']
   });
   // Context check must succeed before receipt's 60-second window begins.
-  invoke('send-context-check.mjs', ['--channel', 'beeper', '--target', item.thread, '--text-file', bodyFile]);
+  await invoke('send-context-check.mjs', ['--channel', 'beeper', '--target', item.thread, '--text-file', bodyFile]);
   const latest = await readMessages(item.thread, { limit: 100 });
   const incoming = (latest.items || []).filter(m => !m.isSender && (!m.timestamp || Date.parse(m.timestamp) > Date.parse(item.receivedAt)))
     .map(m => ({ id: m.id, content: m.text, authorId: m.senderID }));
   const receipt = issueReceipt(home, id, { fetchLatest: () => incoming });
   if (!receipt.ok) throw new Error(receipt.reason);
   try {
-    const result = JSON.parse(invoke('beeper-send.mjs', ['--chat', item.thread, '--body-file', bodyFile, '--queue-id', id, '--receipt', receipt.receipt.id]));
+    const result = JSON.parse(await invoke('beeper-send.mjs', ['--chat', item.thread, '--body-file', bodyFile, '--queue-id', id, '--receipt', receipt.receipt.id]));
     if (!result.ok || !result.messageID || result.chatID !== item.thread) throw new Error('送信結果が不確定です');
     markSent(home, id, { receiptId: receipt.receipt.id, messageId: result.messageID });
     return result;

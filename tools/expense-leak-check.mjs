@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Read-only freee/Gmail/Yahoo reconciliation. Only the dedicated Sheet tab and kim DM are written.
+import { existsSync, readFileSync } from 'node:fs';
 import { readFile, writeFile, mkdir, rename, open, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -58,6 +59,19 @@ export function parseArgs(argv, env = process.env) {
   opts.out = resolve(opts.out || join(home, '.claude', 'logs', 'expense-leak', `${opts.today}.json`));
   opts.yahooScript = env.EXPENSE_LEAK_YAHOO_SCRIPT || join(homedir(), 'Downloads', 'CLAUDE.md配布', 'yahoo-auction-sniper', 'yahoo-mail-search.mjs');
   return opts;
+}
+export function isDbConfigured() {
+  // Mirrors freee-auth loadDbUrl() logic but returns boolean instead of throwing.
+  if (process.env.PURCHASING_APP_DATABASE_URL?.trim()) return true;
+  const candidates = [join(HERE, '..', '.env.local'), join(homedir(), 'orgiast-main', '.env.local')];
+  for (const envPath of candidates) {
+    try {
+      if (!existsSync(envPath)) continue;
+      const text = readFileSync(envPath, 'utf8');
+      if (/^\s*(?:export\s+)?PURCHASING_APP_DATABASE_URL\s*=\s*\S+/m.test(text)) return true;
+    } catch { /* not accessible on this machine */ }
+  }
+  return false;
 }
 export function weeklySkip(today, lastRunAt) {
   if (!lastRunAt || !Number.isFinite(Date.parse(lastRunAt))) return false;
@@ -266,6 +280,8 @@ export async function runCheck(opts, injected = {}) {
   const save = injected.save || atomicJson;
   const state = injected.state || await readState(opts.statePath);
   if (opts.weekly && weeklySkip(opts.today, state.lastRunAt)) return { skip: true };
+  // Skip if freee DB is not configured (e.g., 014 machine with no PostgreSQL).
+  if (!injected.freeeGet && !isDbConfigured()) return { skip: true, reason: 'freee DB not configured' };
   const result = { today: opts.today, from: opts.from, to: opts.to, dryRun: opts.dryRun, wallets: [], statusCounts: {}, candidateTotal: 0, results: [], cacheHits: 0, yahooUnavailable: false, issues: [], appended: 0, complete: false };
   const budget = { gmail: Object.fromEntries(USERS.map((u) => [u, 0])), yahoo: 0, yahooUnavailable: false, yahooFailed: false, yahooUnverified: 0 };
   result.searches = budget;
@@ -342,7 +358,7 @@ async function main() {
   try {
     await lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
     const result = await runCheck(opts);
-    if (result.skip) console.log('skip: weekly expense-leak-check');
+    if (result.skip) console.log(result.reason ? `skip: expense-leak-check: ${result.reason}` : 'skip: weekly expense-leak-check');
     else if (opts.dryRun) console.log(JSON.stringify(result, null, 2));
     else console.log(`expense-leak-check: candidates=${result.candidateTotal} processed=${result.results.length} cached=${result.cacheHits} deferred=${result.deferredTotal || 0} appended=${result.appended} dm=${result.notification?.delivered || 'none'} yahooFailed=${result.searches.yahooFailed} failed=${!!result.failed}`);
     if (result.failed) process.exitCode = 1;

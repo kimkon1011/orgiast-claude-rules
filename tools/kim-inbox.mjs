@@ -15,7 +15,7 @@ import { isEntry } from './is-entry.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
 import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, recordNaturalLanguageAnswers, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
 import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
-import { syncEscalationAnswer } from './lib/escalation-answer-sync.mjs';
+import { matchesRow, parseEscalation, syncEscalationAnswer } from './lib/escalation-answer-sync.mjs';
 const exec = promisify(execFile);
 const directory = home => path.join(home, '.claude/kim-inbox');
 const clean = value => redactSecrets(String(value ?? '')).slice(0, 4000);
@@ -303,10 +303,46 @@ export function listItems(home, { status } = {}) {
     catch { return []; } // 破損した1件で他の未回収項目を隠さない。
   }).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 }
+// Share the creation lock so a duplicate cannot be added during a group update.
+export function withInboxGroupLock(home, fn) {
+  return locked(home, 'info-aggregation', fn);
+}
+
+export function supersedeAsk(home, id, target) {
+  let changed = false;
+  update(home, id, current => {
+    if (current.kind !== 'ask' || current.status !== 'open') return;
+    Object.assign(current, {
+      status: 'superseded', supersededInto: target.id,
+      answer: target.answer ?? null, answeredAt: target.answeredAt ?? null,
+    });
+    changed = true;
+  });
+  return changed;
+}
+
+function resolveItem(home, id, fields) {
+  return withInboxGroupLock(home, () => {
+    const item = update(home, id, current => Object.assign(current, fields, { answeredAt: new Date().toISOString() }));
+    syncLedger(home, item);
+    if (item.kind !== 'ask') return item;
+
+    const parsed = parseEscalation(item);
+    if (!parsed && !item.dedupeKey) return item;
+    const row = parsed && (readLedger(ledgerFile(home)).find(candidate => matchesRow(item, candidate))
+      || { ts: parsed.ts, sessionId: item.sessionId?.slice(0, 8) === parsed.session ? item.sessionId : parsed.session });
+    for (const candidate of listItems(home, { status: 'open' })) {
+      if (candidate.kind !== 'ask') continue;
+      if ((item.dedupeKey && candidate.dedupeKey === item.dedupeKey) || (row && matchesRow(candidate, row))) {
+        supersedeAsk(home, candidate.id, item);
+      }
+    }
+    return item;
+  });
+}
+
 export function answerItem(home, id, answer, sessionId = '') {
-  const item = update(home, id, item => { item.status = 'answered'; item.answer = clean(answer); item.answeredAt = new Date().toISOString(); item.answerSession = clean(sessionId); });
-  syncLedger(home, item);
-  return item;
+  return resolveItem(home, id, { status: 'answered', answer: clean(answer), answerSession: clean(sessionId) });
 }
 // 質問を出す前の照合（2026-11-19）: 語をすべて含む回答済み・取り下げ済みの ask を新しい順に返す。
 // 別セッションが同じ質問を kim に出し直さないよう、質問前に `--lookup "<語> <語>"` で確かめる。
@@ -378,9 +414,7 @@ export function deadlineSheetUrl(home) {
 }
 export function dropItem(home, id, reason) {
   if (!String(reason ?? '').trim()) throw new Error('取り下げ理由が必要です');
-  const item = update(home, id, item => { item.status = 'dropped'; item.answer = clean(reason); });
-  syncLedger(home, item);
-  return item;
+  return resolveItem(home, id, { status: 'dropped', answer: clean(reason) });
 }
 const inboxDir = home => path.join(home, '.claude/fleet-inbox');
 const readJsonFile = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };

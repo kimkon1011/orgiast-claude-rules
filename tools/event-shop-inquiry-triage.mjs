@@ -39,6 +39,43 @@ export async function checkGmailDrafts(customerEmail, { fetchImpl = gwsFetch, ge
   }
   return { found: false };
 }
+/**
+ * Check whether the given customer email has a Gmail sent message from seisaku-team@ or kim@.
+ * Returns { found: true, account, timestamp } on match, { found: false } when no sent message exists,
+ * or { found: false, error: 'string' } on API failure (never throws).
+ */
+export async function gmailLastOutbound(customerEmail, { fetchImpl = gwsFetch, getToken = mintDwdToken } = {}) {
+  const accounts = ['seisaku-team@orgiast.jp', 'kim@orgiast.jp'];
+  let lastError = null;
+  for (const account of accounts) {
+    try {
+      const token = await getToken({ user: account, scope: GMAIL_READONLY_SCOPE, fetchImpl });
+      const res = await fetchImpl(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(`to:${customerEmail} in:sent`)}&maxResults=1`,
+        { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000) },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await res.json();
+      if (Array.isArray(body.messages) && body.messages.length > 0) {
+        const msgRes = await fetchImpl(
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${body.messages[0].id}?format=metadata&metadataHeaders=Date`,
+          { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000) },
+        );
+        if (msgRes.ok) {
+          const msgBody = await msgRes.json();
+          const timestamp = msgBody.internalDate ? parseInt(msgBody.internalDate) : Date.now();
+          return { found: true, account, timestamp };
+        }
+      }
+    } catch (err) {
+      lastError = { account, reason: err.message || String(err) };
+    }
+  }
+  if (lastError) {
+    return { found: false, error: `${lastError.account}: ${lastError.reason}` };
+  }
+  return { found: false };
+}
 const bodyLines = message => String(message?.body ?? '').split(/\r?\n/).filter(line => !/^\s*>/.test(line)).map(line => line.trim()).filter(Boolean);
 const autoReplyBodyPattern = /自動返信|自動応答|auto-?reply|automatic\s*reply|out\s*of\s*(?:the\s*)?office/i;
 const autoReplySubjectPattern = /自動返信|自動応答|auto-?reply|automatic\s*reply|out\s*of\s*(?:the\s*)?office|不在/i;
@@ -54,7 +91,19 @@ export function deduplicateMessages(messages) {
 export async function classifyLead(lead, messages, now = new Date(), deps = {}) {
   const unique = deduplicateMessages(messages);
   const lastIn = unique.find(m => m.direction === 'inbound' && !isAutoReply(m));
-  const lastOut = unique.find(m => m.direction === 'outbound');
+  let lastOut = unique.find(m => m.direction === 'outbound');
+  // Gmail送信済み照合: channel_messages に載らない seisaku-team@ からの送信を検出
+  let gmailOutbound = null;
+  if (deps.gmailLastOutboundCheck && lead.email) {
+    const result = await deps.gmailLastOutboundCheck(lead.email);
+    if (result.found) {
+      gmailOutbound = { account: result.account, timestamp: result.timestamp };
+      const channelTs = lastOut ? time(lastOut.received_at) : 0;
+      if (result.timestamp > channelTs) {
+        lastOut = { received_at: new Date(result.timestamp).toISOString(), direction: 'outbound', _source: 'gmail' };
+      }
+    }
+  }
   const past = Boolean(lead.preferred_date && lead.preferred_date < dateKey(now));
   const body = bodyLines(lastIn).join('\n');
   const declined = /見送(?!りをいただきありがとう)/u.test(body) || /改めてご連絡|必要な際は|今回は(?!質問)/u.test(body) || /辞退/u.test(body) || /(?:別社|他社|他業者|別の業者)(?:にて|で|に)(?:問い合わせ|ご連絡|対応|依頼|発注|お願い|決定|手配)/u.test(body) || /またの機会|次の機会|見合わせ/u.test(body) || /キャンセル(?:させ|いたし|と(?:な|言|申)|させて(?:いただ|頂)|させて(?:もらい|貰))/u.test(body);
@@ -86,7 +135,7 @@ export async function classifyLead(lead, messages, now = new Date(), deps = {}) 
     const days = Math.max(0, Math.floor((time(now) - time(lastOut.received_at)) / DAY));
     nextAction = `顧客の返信待ち（最終送信から ${days} 日）${days >= 7 ? '・追客候補' : ''}`;
   }
-  return { ...lead, category, nextAction, lastIn: lastIn ?? null, lastOut: lastOut ?? null };
+  return { ...lead, category, nextAction, lastIn: lastIn ?? null, lastOut: lastOut ?? null, gmailOutbound };
 }
 /**
  * Determine whether a lead is a close candidate (終了候補) using the same logic as classifyLead.
@@ -156,7 +205,8 @@ export function renderMarkdown(leads, duplicateCount, now) {
   for (const lead of leads) {
     const latest = [lead.lastIn, lead.lastOut].filter(Boolean).sort((a, b) => time(b.received_at) - time(a.received_at))[0];
     const ended = lead.category === '⚪ 終了候補';
-    lines.push(`| ${lead.category} | ${cell(lead.company_name)}${ended ? '' : ` / ${cell(lead.contact_name)}`} | ${ended ? '' : `${shortDate(lead.created_at)} (${Math.max(0, Math.floor((time(now) - time(lead.created_at)) / DAY))}日)`} | ${ended ? '' : shortDate(lead.preferred_date)} | ${ended ? '' : latest ? `${latest.direction === 'inbound' ? '顧客' : '当社'} ${shortDate(latest.received_at)}` : 'なし'} | ${cell(lead.nextAction)} | https://event-shop.jp/admin/inquiries/${encodeURIComponent(lead.id)} |`);
+    const outboundLabel = latest?.direction === 'outbound' ? (latest._source === 'gmail' ? '当社(Gmail)' : '当社') : '';
+    lines.push(`| ${lead.category} | ${cell(lead.company_name)}${ended ? '' : ` / ${cell(lead.contact_name)}`} | ${ended ? '' : `${shortDate(lead.created_at)} (${Math.max(0, Math.floor((time(now) - time(lead.created_at)) / DAY))}日)`} | ${ended ? '' : shortDate(lead.preferred_date)} | ${ended ? '' : latest ? `${latest.direction === 'inbound' ? '顧客' : outboundLabel} ${shortDate(latest.received_at)}` : 'なし'} | ${cell(lead.nextAction)} | https://event-shop.jp/admin/inquiries/${encodeURIComponent(lead.id)} |`);
   }
   return lines.join('\n');
 }
@@ -169,12 +219,17 @@ export async function main({ env = process.env, args = process.argv.slice(2), no
       return await checkGmailDrafts(email);
     } catch { return { found: false, error: 'error' }; }
   });
+  const gmailLastOutboundCheck = deps.gmailLastOutboundCheck ?? (async (email) => {
+    try {
+      return await gmailLastOutbound(email);
+    } catch { return { found: false, error: 'error' }; }
+  });
   try {
     const since = dateKey(new Date(time(now) - 120 * DAY));
     const data = await request(credentials, `/rest/v1/quote_requests?select=id,company_name,contact_name,email,event_name,preferred_date,created_at,status,raw_payload&source=eq.event-shop.jp&created_at=gte.${since}&order=created_at.desc&limit=200`, fetchImpl);
     const { leads, duplicateCount } = deduplicateLeads(data);
     const results = [];
-    for (const lead of leads) results.push(await classifyLead(lead, await request(credentials, messageQuery(lead), fetchImpl), now, { gmailDraftCheck }));
+    for (const lead of leads) results.push(await classifyLead(lead, await request(credentials, messageQuery(lead), fetchImpl), now, { gmailDraftCheck, gmailLastOutboundCheck }));
     const sorted = sortLeads(results);
     if (args.includes('--quiet') && !sorted.some(l => l.category === '🔴 要返信')) return 0;
     log(args.includes('--json') ? JSON.stringify(sorted, null, 2) : renderMarkdown(sorted, duplicateCount, now));

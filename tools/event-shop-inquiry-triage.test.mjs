@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { classifyLead, checkGmailDrafts, deduplicateLeads, deduplicateMessages, sortLeads, main, messageQuery, renderMarkdown, loadCredentials } from './event-shop-inquiry-triage.mjs';
+import { classifyLead, checkGmailDrafts, gmailLastOutbound, deduplicateLeads, deduplicateMessages, sortLeads, main, messageQuery, renderMarkdown, loadCredentials } from './event-shop-inquiry-triage.mjs';
 const now = new Date('2026-10-27T03:00:00Z');
 const lead = { id: 'a', email: 'client@example.com', company_name: '会社', contact_name: '担当', created_at: '2026-10-21T03:00:00Z', preferred_date: '2026-11-18', raw_payload: { product: '展示会' } };
 const msg = (direction, day, body = '') => ({ direction, received_at: `2026-10-${day}T03:00:00Z`, body });
@@ -276,6 +276,108 @@ test('checkGmailDrafts: 1アカウント失敗・他は下書きなしでエラ�
   const result = await checkGmailDrafts('half-fail@example.com', { fetchImpl, getToken });
   assert.deepEqual(result, { found: false, error: 'seisaku-team@orgiast.jp: HTTP 403' });
   assert.equal(callIndex, 2); // 両方試行
+});
+test('gmailLastOutbound: Gmail送信済みあり（seisaku-team）', async () => {
+  let callIndex = 0;
+  const getToken = async ({ user, scope }) => 'mock-token';
+  const fetchImpl = async (url, options) => {
+    callIndex++;
+    if (callIndex === 1) {
+      // 1回目: messages list → 1件ヒット
+      return { ok: true, json: async () => ({ messages: [{ id: 'msg-001' }] }) };
+    }
+    if (callIndex === 2) {
+      // 2回目: message detail → internalDate
+      return { ok: true, json: async () => ({ internalDate: '1732000000000' }) };
+    }
+    if (callIndex === 3) {
+      // 3回目(kim): messages list → 0件
+      return { ok: true, json: async () => ({}) };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  const result = await gmailLastOutbound('ishii@growth-verse.ai', { fetchImpl, getToken });
+  assert.deepEqual(result, { found: true, account: 'seisaku-team@orgiast.jp', timestamp: 1732000000000 });
+  assert.equal(callIndex, 2); // seisaku-team で見つかった時点で戻る
+});
+test('gmailLastOutbound: Gmail送信済みあり（kim）', async () => {
+  let callIndex = 0;
+  const getToken = async ({ user, scope }) => 'mock-token';
+  const fetchImpl = async (url, options) => {
+    callIndex++;
+    if (callIndex === 1) return { ok: true, json: async () => ({}) }; // seisaku-team messages: 0件
+    if (callIndex === 2) return { ok: true, json: async () => ({ messages: [{ id: 'kim-msg' }] }) }; // kim messages: あり
+    return { ok: true, json: async () => ({ internalDate: '1732100000000' }) }; // kim detail
+  };
+  const result = await gmailLastOutbound('client@example.com', { fetchImpl, getToken });
+  assert.deepEqual(result, { found: true, account: 'kim@orgiast.jp', timestamp: 1732100000000 });
+  assert.equal(callIndex, 3); // seisaku-team messages + kim messages + kim detail
+});
+test('gmailLastOutbound: 送信済みなし', async () => {
+  let callIndex = 0;
+  const getToken = async ({ user, scope }) => 'mock-token';
+  const fetchImpl = async (url, options) => {
+    callIndex++;
+    return { ok: true, json: async () => ({}) };
+  };
+  const result = await gmailLastOutbound('nobody@example.com', { fetchImpl, getToken });
+  assert.deepEqual(result, { found: false });
+  assert.equal(callIndex, 2); // 両アカウント×1回(messagesのみ、detailは呼ばれない)
+});
+test('gmailLastOutbound: API失敗は続行', async () => {
+  let callIndex = 0;
+  const getToken = async ({ user, scope }) => 'mock-token';
+  const fetchImpl = async (url, options) => {
+    callIndex++;
+    if (callIndex === 1) throw new Error('network error'); // seisaku-team messages: fail
+    if (callIndex === 2) return { ok: true, json: async () => ({ messages: [{ id: 'recovered' }] }) }; // kim messages: あり
+    return { ok: true, json: async () => ({ internalDate: '1732200000000' }) }; // kim detail
+  };
+  const result = await gmailLastOutbound('recover@example.com', { fetchImpl, getToken });
+  assert.deepEqual(result, { found: true, account: 'kim@orgiast.jp', timestamp: 1732200000000 });
+  assert.equal(callIndex, 3); // seisaku-team fail + kim messages + kim detail
+});
+test('gmailLastOutbound: 全API失敗でエラー', async () => {
+  const getToken = async ({ user, scope }) => { throw new Error('token error'); };
+  const fetchImpl = async () => { throw new Error('network error'); };
+  const result = await gmailLastOutbound('fail@example.com', { fetchImpl, getToken });
+  assert.deepEqual(result, { found: false, error: 'kim@orgiast.jp: token error' });
+});
+test('classifyLead: deps.gmailLastOutboundCheck でGmail送信済み→顧客待ち', async () => {
+  const gmailLastOutboundCheck = async (email) => {
+    assert.equal(email, 'client@example.com');
+    return { found: true, account: 'seisaku-team@orgiast.jp', timestamp: 1732000000000 };
+  };
+  const result = await classifyLead(lead, [], now, { gmailLastOutboundCheck });
+  assert.equal(result.category, '🟡 顧客待ち');
+  assert.equal(result.gmailOutbound.account, 'seisaku-team@orgiast.jp');
+  assert.equal(result.lastOut._source, 'gmail');
+});
+test('classifyLead: deps.gmailLastOutboundCheck でGmailよりchannel_messagesの方が新しい', async () => {
+  const gmailLastOutboundCheck = async (email) => {
+    return { found: true, account: 'seisaku-team@orgiast.jp', timestamp: new Date('2026-10-22T03:00:00Z').getTime() };
+  };
+  // channel_messages の outbound は 10/23 でGmailより新しい
+  const result = await classifyLead(lead, [msg('outbound', '23')], now, { gmailLastOutboundCheck });
+  assert.equal(result.category, '🟡 顧客待ち');
+  assert.equal(result.lastOut._source, undefined); // channel_messages 由来を維持
+});
+test('classifyLead: deps.gmailLastOutboundCheck API失敗でも要返信のまま', async () => {
+  const gmailLastOutboundCheck = async (email) => {
+    return { found: false, error: 'API error' };
+  };
+  const result = await classifyLead(lead, [], now, { gmailLastOutboundCheck });
+  assert.equal(result.category, '🔴 要返信');
+  assert.equal(result.gmailOutbound, null);
+});
+test('renderMarkdown: Gmail出典の最終やり取りに当社(Gmail)と表示', async () => {
+  const futureLead = { ...lead, preferred_date: '2026-12-20' };
+  const result = await classifyLead(futureLead, [], new Date('2026-11-19T03:00:00Z'), {
+    gmailLastOutboundCheck: async () => ({ found: true, account: 'seisaku-team@orgiast.jp', timestamp: 1732000000000 }),
+  });
+  assert.equal(result.category, '🟡 顧客待ち');
+  const output = renderMarkdown([result], 0, new Date('2026-11-19T03:00:00Z'));
+  assert.match(output, /当社\(Gmail\)/);
 });
 test('classifyLead: deps.gmailDraftCheck でGmail下書きあり', async () => {
   const gmailDraftCheck = async (email) => {

@@ -175,8 +175,8 @@ export function contextHook(input, { home = defaultHome(), now = Date.now(), env
     if (!selected.length) return null;
     // 内容ハッシュ付き ID で新着選別
     const allIds = selected.map(contentAugmentedId);
-    const { fresh, known } = selectNew({ home, hook: 'urgent-blocker', sessionId, ids: allIds, now });
-    if (!fresh.length) return known ? { hookSpecificOutput: { hookEventName: event, additionalContext: `${FINAL_ONLY_INSTRUCTION}\nほか既出 ${known} 件` } } : null;
+    const { fresh, knownFromOtherSessions } = selectNew({ home, hook: 'urgent-blocker', sessionId, ids: allIds, now });
+    if (!fresh.length) return knownFromOtherSessions ? { hookSpecificOutput: { hookEventName: event, additionalContext: `${FINAL_ONLY_INSTRUCTION}\nほか既出 ${knownFromOtherSessions} 件` } } : null;
     const freshSet = new Set(fresh);
     const freshItems = selected.filter(item => freshSet.has(contentAugmentedId(item)));
     if (!freshItems.length) return null;
@@ -184,7 +184,7 @@ export function contextHook(input, { home = defaultHome(), now = Date.now(), env
       const link = item.link ? ` ／ ${item.link}` : '';
       return `🚨 割り込み（別セッションで急ぎの人待ち）: ${item.title} ／ お願い: ${item.ask}${link}`;
     });
-    const knownLine = known > 0 ? `\nほか既出 ${known} 件` : '';
+    const knownLine = knownFromOtherSessions > 0 ? `\nほか既出 ${knownFromOtherSessions} 件` : '';
     return {
       hookSpecificOutput: {
         hookEventName: event,

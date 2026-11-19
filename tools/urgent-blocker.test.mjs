@@ -15,6 +15,39 @@ function home(t) {
   return h;
 }
 
+test('contextHook: 同一セッションで既出件数行を繰り返さない', t => {
+  const h = home(t);
+  addItem(h, { session: 'sess-A', title: 'blocked', ask: 'do something' });
+  const env = {};
+  // 別セッション初回 → fresh 表示
+  const first = contextHook(
+    { hook_event_name: 'UserPromptSubmit', session_id: 'sess-B', prompt: 'first' },
+    { home: h, now: () => 1000, env }
+  );
+  assert.ok(first);
+  assert.match(first.hookSpecificOutput.additionalContext, /🚨 割り込み/);
+  // 同一セッション2回目（fresh 0件）→ null
+  const second = contextHook(
+    { hook_event_name: 'UserPromptSubmit', session_id: 'sess-B', prompt: 'second' },
+    { home: h, now: () => 2000, env }
+  );
+  assert.equal(second, null);
+  // 別セッション初回 → 既出件数行
+  const third = contextHook(
+    { hook_event_name: 'UserPromptSubmit', session_id: 'sess-C', prompt: 'third' },
+    { home: h, now: () => 3000, env }
+  );
+  assert.ok(third);
+  assert.match(third.hookSpecificOutput.additionalContext, /既出 1 件/);
+  assert.doesNotMatch(third.hookSpecificOutput.additionalContext, /🚨 割り込み/);
+  // その別セッション2回目 → null
+  const fourth = contextHook(
+    { hook_event_name: 'UserPromptSubmit', session_id: 'sess-C', prompt: 'fourth' },
+    { home: h, now: () => 4000, env }
+  );
+  assert.equal(fourth, null);
+});
+
 test('登録→一覧→解決の基本経路', t => {
   const h = home(t);
   const item = addItem(h, { session: 'sess-A', title: 'LINEログイン画像認証待ち', ask: 'LINE公式アカウントにログイン（2分）', link: 'https://example.com/login' });

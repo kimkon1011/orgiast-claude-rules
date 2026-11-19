@@ -63,6 +63,8 @@ export function selectNew({ home = defaultHome(), hook, sessionId, ids = [], now
       if (Object.values(sessions).some(at => now - at <= 86400_000)) {
         known++;
         knownFromOtherSessions++;
+        // Record current session so the same session won't be shown "既出 N 件" again
+        entries[id] = { ...entry, sessions: { ...sessions, [sessionId]: now } };
         continue;
       }
       fresh.push(id);

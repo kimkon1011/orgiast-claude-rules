@@ -35,7 +35,7 @@ test('同一セッションで2回目のプロンプト（id 1件追加）→ �
   assert.equal(r2.known, 2);
 });
 
-test('別セッション（24h以内に表示済み）→ 件数行のみ。25h後→全文', t => {
+test('別セッション（24h以内に表示済み）→ 件数行のみ。同セッション2回目→null。25h後も再掲しない（既出記録が残る）', t => {
   const home = fixture(t);
   const now = Date.now();
   // セッションA で表示
@@ -45,10 +45,11 @@ test('別セッション（24h以内に表示済み）→ 件数行のみ。25h�
   assert.equal(r1.fresh.length, 0);
   assert.equal(r1.known, 2);
   assert.equal(r1.knownFromOtherSessions, 2);
-  // セッションB���25h後）→ fresh
+  // セッションB（25h後）→ 既出（同セッションの記録が残っているため fresh にならない）
   const r2 = selectNew({ home, hook: 'test-hook', sessionId: 'sess-b', ids: ['id-x', 'id-y'], now: now + 25 * 3600_000 });
-  assert.equal(r2.fresh.length, 2);
-  assert.equal(r2.known, 0);
+  assert.equal(r2.fresh.length, 0);
+  assert.equal(r2.known, 2);
+  assert.equal(r2.knownFromOtherSessions, 0);
 });
 
 test('<<autonomous-loop-dynamic>> prompt → isLoopWake が true', () => {

@@ -13,11 +13,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
+import { FINAL_ONLY_INSTRUCTION, selectNew, isLoopWake } from './lib/inbox-display-policy.mjs';
 
-export const INTERRUPT_REPEAT_MS = 60 * 60 * 1000; // 同じ blocker を同じセッションへ出すのは60分に1回まで
+export const INTERRUPT_REPEAT_MS = 60 * 60 * 1000; // 互換 export（context の再掲判定には使用しない）
 const ID_PATTERN = /^ub-\d{14}-[a-f0-9]{4}$/;
 const clean = value => String(value ?? '').replace(/[\r\n\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 600);
 const stateFile = home => path.join(home, '.claude', 'urgent-blocker.json');
@@ -132,18 +133,10 @@ export function isMachinePrompt(prompt = '') {
   return /^(?:【定期|【続き・自動|【自動|\[(?:cron|scheduled task)\](?:\s|$)|<(?:cron-trigger|scheduled-task)(?:\s[^>]*|)>|<task-notification)/i.test(text);
 }
 
-// 割り込み対象を選ぶ（純関数）。登録元が今のセッション以外・60分以内に同じセッションへ出していない・
-// cron プロンプトでないものだけ。shownSessions の更新は呼び出し側（markShown）が行う。
-export function selectForInterrupt(items, { sessionId = '', now = Date.now(), prompt = '', repeatMs = INTERRUPT_REPEAT_MS } = {}) {
+// 登録元と機械プロンプトを除外。表示済み判定は共通ポリシーが担当する。
+export function selectForInterrupt(items, { sessionId = '', prompt = '' } = {}) {
   if (!sessionId || isMachinePrompt(prompt)) return [];
-  return items
-    .filter(item => item.status === 'open' && item.session && item.session !== sessionId)
-    .filter(item => {
-      const shownAt = item.shownSessions?.[sessionId];
-      if (!shownAt) return true;
-      const at = Date.parse(shownAt);
-      return !Number.isFinite(at) || now - at >= repeatMs;
-    });
+  return items.filter(item => item.status === 'open' && item.session && item.session !== sessionId);
 }
 
 export function markShown(home, ids, sessionId, now = new Date()) {
@@ -161,6 +154,12 @@ export function markShown(home, ids, sessionId, now = new Date()) {
   });
 }
 
+// 内容ハッシュ付き ID（ask/title が変わると新しい項目として扱う）
+function contentAugmentedId(item) {
+  const hash = createHash('sha256').update(JSON.stringify([item.title, item.ask])).digest('hex').slice(0, 8);
+  return `${item.id}:${hash}`;
+}
+
 // hook（SessionStart / UserPromptSubmit）: 未解決の急ぎの人待ちを別セッションへ割り込み表示する。
 export function contextHook(input, { home = defaultHome(), now = Date.now(), env = process.env } = {}) {
   try {
@@ -169,18 +168,27 @@ export function contextHook(input, { home = defaultHome(), now = Date.now(), env
     if (!['SessionStart', 'UserPromptSubmit'].includes(event)) return null;
     const sessionId = String(input.session_id || input.sessionId || '');
     if (!sessionId) return null;
+    // loop 起床は抑止
+    if (isLoopWake(input, { home, now, hook: 'urgent-blocker' })) return null;
     const items = listItems(home, { status: 'open' });
-    const selected = selectForInterrupt(items, { sessionId, now: now(), prompt: input.prompt || '' });
+    const selected = selectForInterrupt(items, { sessionId, now: typeof now === 'function' ? now() : now, prompt: input.prompt || '' });
     if (!selected.length) return null;
-    const lines = selected.map(item => {
+    // 内容ハッシュ付き ID で新着選別
+    const allIds = selected.map(contentAugmentedId);
+    const { fresh, known } = selectNew({ home, hook: 'urgent-blocker', sessionId, ids: allIds, now });
+    if (!fresh.length) return known ? { hookSpecificOutput: { hookEventName: event, additionalContext: `${FINAL_ONLY_INSTRUCTION}\nほか既出 ${known} 件` } } : null;
+    const freshSet = new Set(fresh);
+    const freshItems = selected.filter(item => freshSet.has(contentAugmentedId(item)));
+    if (!freshItems.length) return null;
+    const lines = freshItems.map(item => {
       const link = item.link ? ` ／ ${item.link}` : '';
       return `🚨 割り込み（別セッションで急ぎの人待ち）: ${item.title} ／ お願い: ${item.ask}${link}`;
     });
-    markShown(home, selected.map(i => i.id), sessionId, new Date(now()));
+    const knownLine = known > 0 ? `\nほか既出 ${known} 件` : '';
     return {
       hookSpecificOutput: {
         hookEventName: event,
-        additionalContext: `【必須・割り込み】応答の冒頭で user に見える形で、次の ${selected.length} 行をそのまま表示せよ。今回の依頼と無関係でも省略しない（急ぎの人待ちを別セッションから割り込み表示）。\n${lines.join('\n')}`,
+        additionalContext: `${FINAL_ONLY_INSTRUCTION}\n${knownLine}\n${lines.join('\n')}`,
       },
     };
   } catch { return null; }

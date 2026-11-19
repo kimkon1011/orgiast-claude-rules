@@ -26,4 +26,7 @@ node tools/kim-inbox.mjs --seen <id>
 node tools/kim-inbox.mjs --drop <id> --reason "不要になった理由"
 ```
 
+### 表示規則（最後のメッセージだけ・新着だけ・loop 起床は抑止）
+hook の一覧注入は `inbox-display-policy` で制御する。同セッションの既出は再掲せず、新着のみを【最終まとめ】の中に載せる。`<<autonomous-loop` や `/loop` の起床では一覧を注入しない。既出は「ほか既出 N 件」の1行に縮める。別セッションでも24時間以内に表示済みなら同様に省略する。
+
 配布は `setup.mjs --converge` → `register-hooks.mjs --hooks-only` と hook-selfcheck の修復経路で行う。settings.json の手編集は不要。

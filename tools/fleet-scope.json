@@ -72,6 +72,7 @@
     {"path": "tools/register-comms-hub-sync.mjs", "scope": "kim-only", "step": "task:comms-hub-sync", "reason": "convergeからEnsure登録"},
 {"path": "tools/kim-discord-report-gate.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/kim-inbox-relay-state.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の注入・配達・返答記録を全PCへ配布する実行時依存"},
+    {"path": "tools/lib/escalation-answer-sync.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の回答を自動進行台帳へ書き戻し、判断待ちの重複質問を止める実行時依存"},
     {"path": "tools/kim-inbox-relay.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "Stop で kim への受信箱配達を検証する"},
     {"path": "tools/kim-inbox.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/kim-discord-allowlist.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},

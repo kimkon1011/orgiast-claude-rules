@@ -24,7 +24,7 @@
 Option Explicit
 
 Dim args, i, inner, exePath, baseName, logDir, logPath, shell, fso, rc, full
-Dim lockedLog, ts
+Dim lockedLog, ts, j, tokens, found
 
 ' True when path can be opened for appending right now (nobody holds a handle
 ' that denies it). Creates the file when missing, same as cmd's ">>" would.
@@ -46,6 +46,19 @@ Function Timestamp()
       Right("00" & Minute(n), 2) & Right("00" & Second(n), 2)
 End Function
 
+' Returns the base name when the token looks like a runnable script, else "".
+Function ScriptBaseName(fsoRef, token)
+  Dim ext
+  ScriptBaseName = ""
+  If Len(token) = 0 Then Exit Function
+  ext = LCase(fsoRef.GetExtensionName(token))
+  If ext = "ps1" Or ext = "mjs" Or ext = "js" Then
+    If LCase(fsoRef.GetFileName(token)) <> "nightly-bootstrap.ps1" Then
+      ScriptBaseName = fsoRef.GetBaseName(token)
+    End If
+  End If
+End Function
+
 Set args = WScript.Arguments
 If args.Count < 1 Then
   WScript.Quit 2
@@ -58,16 +71,34 @@ exePath = args(0)
 baseName = fso.GetBaseName(exePath)
 
 ' Prefer the target script name over the interpreter or bootstrap wrapper.
+' Pass 1: the argument itself is the script path.
 For i = 1 To args.Count - 1
-  If LCase(fso.GetExtensionName(args(i))) = "ps1" Or _
-      LCase(fso.GetExtensionName(args(i))) = "mjs" Or _
-      LCase(fso.GetExtensionName(args(i))) = "js" Then
-    If LCase(fso.GetFileName(args(i))) <> "nightly-bootstrap.ps1" Then
-      baseName = fso.GetBaseName(args(i))
-      Exit For
-    End If
+  If ScriptBaseName(fso, args(i)) <> "" Then
+    baseName = ScriptBaseName(fso, args(i))
+    Exit For
   End If
 Next
+
+' Pass 2: the script path is embedded inside a folded argument such as
+' -Command "& 'node.exe' 'C:\path\bot.mjs' --once". Split on whitespace and
+' quotes, then look for a script token.
+If baseName = fso.GetBaseName(exePath) Then
+  For i = 1 To args.Count - 1
+    found = ""
+    tokens = Split(Replace(Replace(Replace(args(i), Chr(34), " "), "'", " "), vbTab, " "), " ")
+    For j = 0 To UBound(tokens)
+      If found = "" Then
+        If ScriptBaseName(fso, tokens(j)) <> "" Then
+          found = ScriptBaseName(fso, tokens(j))
+        End If
+      End If
+    Next
+    If found <> "" Then
+      baseName = found
+      Exit For
+    End If
+  Next
+End If
 
 logDir = shell.ExpandEnvironmentStrings("%USERPROFILE%") & "\.claude\logs"
 If Not fso.FolderExists(logDir) Then

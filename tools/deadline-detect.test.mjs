@@ -62,7 +62,12 @@ test('途中で抽出失敗した源の透かしは保持し、他源だけ進�
   assert.equal((await runDetect({ ...params, ask: async () => assert.fail('closed source repeated') })).added, 0);
 });
 
-test('応答しないfetchはAbortSignalでrejectされハングしない', async () => {
+test('応答しないfetchはAbortSignalでrejectされハングしない', async t => {
+  // AbortSignal.timeout() does not keep Node's event loop alive. Keep this
+  // isolated test alive until the abort fires, as the real scheduled process
+  // has other active handles while a request is in flight.
+  const keepAlive = setTimeout(() => {}, 1000);
+  t.after(() => clearTimeout(keepAlive));
   const started = Date.now();
   const fetchImpl = (_url, { signal }) => new Promise((_resolve, reject) => {
     signal.addEventListener('abort', () => reject(signal.reason), { once: true });

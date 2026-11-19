@@ -889,10 +889,12 @@ export async function sendExecutionFailure(args) {
   const { result, label } = args;
   const diagnostic = [result.stderrHead, result.stderrTail, result.error]
     .map(value => stripClaudeWarnings(redactSecrets(redactForShare(value ?? ''))).split('\n')[0].trim())
-    .find(Boolean)?.slice(0, 300);
+    .find(Boolean)?.slice(0, 600);
   const reason = redactSecrets(redactForShare(result.reason));
+  // 実行エラーは送信側の --wait にも表示する。未承諾や中断は既存の状態コードを保つ。
+  const executionError = (result.exitCode != null && result.exitCode !== 0) || (result.error && !result.timedOut);
   return sendHubFailure({ ...args, result: { ...result, reason,
-    failReason: diagnostic ? `${reason} — ${diagnostic}` : reason,
+    failReason: diagnostic && executionError ? `${reason} — ${diagnostic}` : reason,
     outputTail: `${label} の自動回答が完了しなかった（${reason}）。${label} の対話セッションで回答する` +
       (diagnostic ? `\n診断: ${diagnostic}` : '') } });
 }

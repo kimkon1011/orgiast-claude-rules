@@ -36,6 +36,10 @@ import {
   copyMeetBotProfile,
   startMeetBot,
   checkPlaywrightAvailable,
+  detectMeetJoinState,
+  enableMeetCaptions,
+  findMeetJoinButton,
+  joinMeetPage,
 } from './lib/meet-cue-browser.mjs';
 
 test('getLlmAskPath: Windows 形式の file URL から llm-ask.mjs の正しい絶対パスを解決できること', () => {
@@ -426,4 +430,129 @@ test('copyMeetBotProfile: ログイン用ファイルを複製し、各階層の
   fs.writeFileSync(path.join(first, 'Default', 'Network', 'Cookies'), 'updated');
   assert.equal(fs.readFileSync(path.join(second, 'Default', 'Network', 'Cookies'), 'utf8'), 'Default/Network/Cookies');
   assert.equal(fs.readFileSync(path.join(source, 'Default', 'Network', 'Cookies'), 'utf8'), 'Default/Network/Cookies');
+});
+
+const meetCode = 'jdo-fpvd-xau';
+const meetingUrl = `https://meet.google.com/${meetCode}`;
+const meetHome = 'https://meet.google.com/';
+
+function stubMeetDom({ url = meetingUrl, buttons = [], texts = [], inCall = false } = {}) {
+  return {
+    url: () => url,
+    viewportSize: () => ({ width: 1280, height: 720 }),
+    locator: () => ({ first: () => ({ isVisible: async () => inCall }) }),
+    getByText: (pattern) => ({
+      all: async () => texts.filter(({ text }) => pattern.test(text)).map(item => ({
+        isVisible: async () => !item.hidden,
+        evaluate: async fn => fn({ closest: () => item.button ? {} : null }),
+      })),
+    }),
+    getByRole: () => ({
+      filter: ({ hasText }) => ({
+        all: async () => buttons.filter(({ text }) => hasText.test(text)).map(item => ({
+          innerText: async () => item.visibleText ?? item.text,
+          isVisible: async () => !item.hidden,
+          isEnabled: async () => !item.disabled,
+          boundingBox: async () => ({ x: item.x ?? 620, y: 345, width: 40, height: 30 }),
+          click: async () => item.click?.(),
+        })),
+      }),
+    }),
+  };
+}
+
+test('参加ボタンは表示テキストの完全一致を指定順で探す', async () => {
+  const labels = ['今すぐ参加', 'Join now', '参加をリクエスト', 'Ask to join', '参加'];
+  const decoys = [
+    { text: '今すぐ参加する方法' },
+    { text: '今すぐ参加', hidden: true },
+    { text: '今すぐ参加', visibleText: '' },
+    { text: '今すぐ参加', disabled: true },
+    { text: '参加', x: 100 },
+  ];
+  for (const [index, label] of labels.entries()) {
+    const buttons = [...decoys, ...labels.slice(index).reverse().map(text => ({ text }))];
+    const page = stubMeetDom({ buttons });
+    assert.equal((await findMeetJoinButton(page, meetCode)).label, label);
+  }
+  assert.equal(await findMeetJoinButton(stubMeetDom({ buttons: decoys }), meetCode), null);
+  assert.equal(await findMeetJoinButton(stubMeetDom({
+    url: meetHome, buttons: [{ text: '参加' }],
+  }), meetCode), null);
+});
+
+test('会議コードと表示中の UI から参加状態を判定する', async () => {
+  for (const [expected, dom] of [
+    ['home', { url: meetHome, inCall: true }],
+    ['home', { url: meetingUrl.replace(meetCode, 'abc-defg-hij') }],
+    ['prejoin', { texts: [{ text: 'Ask to join', button: true }, { text: 'Asking to join', hidden: true }] }],
+    ['in_lobby', { texts: [{ text: '参加をリクエストしています' }] }],
+    ['in_lobby', { texts: [{ text: 'Asking to join…' }] }],
+    ['in_call', { inCall: true, texts: [{ text: 'Asking to join…' }] }],
+  ]) {
+    assert.equal(await detectMeetJoinState(stubMeetDom(dom), meetCode), expected);
+  }
+});
+
+test('/new のリダイレクト先を保持し、ホームへ戻ったときだけ一度開き直す', async () => {
+  for (const succeeds of [true, false]) {
+    const newUrl = `${meetHome}new`;
+    const navigations = [];
+    const states = [];
+    let activeUrl;
+    let inCall = false;
+    const getDom = () => stubMeetDom({
+      url: activeUrl,
+      inCall,
+      buttons: [{ text: '今すぐ参加', click: () => {
+        if (succeeds && navigations.length === 2) inCall = true;
+        else activeUrl = meetHome;
+      } }],
+    });
+    const page = {
+      goto: async url => {
+        navigations.push(url);
+        activeUrl = url;
+      },
+      waitForTimeout: async () => { activeUrl = meetingUrl; },
+      url: () => activeUrl,
+      locator: (...args) => getDom().locator(...args),
+      getByText: (...args) => getDom().getByText(...args),
+      getByRole: (...args) => getDom().getByRole(...args),
+    };
+    assert.equal(await joinMeetPage(page, {
+      url: newUrl,
+      preparePrejoin: async () => {},
+      onJoinState: state => states.push(state),
+      log: () => {},
+      uiTimeoutMs: 1000,
+    }), succeeds ? null : 'left_meeting_page');
+    assert.deepEqual(navigations, [newUrl, meetingUrl]);
+    assert.deepEqual(states, ['home', 'prejoin', 'home', 'prejoin', succeeds ? 'in_call' : 'home']);
+  }
+});
+
+test('字幕の操作後にオフボタンが表示された場合だけオンと判定する', async () => {
+  for (const action of ['already_enabled', 'click', 'c', 'unconfirmed']) {
+    let enabled = action === 'already_enabled';
+    const actions = [];
+    const page = {
+      getByRole: (_role, { name }) => ({
+        first: () => ({
+          isVisible: async () => enabled
+            ? name.test('Turn off captions')
+            : action === 'click' && name.test('字幕をオンにする'),
+          click: async () => { actions.push('click'); enabled = true; },
+          waitFor: async () => {
+            if (!enabled || !name.test('Turn off captions')) throw new Error('字幕オンを確認できません');
+          },
+        }),
+      }),
+      keyboard: {
+        press: async key => { actions.push(key); enabled = action === 'c'; },
+      },
+    };
+    assert.equal(await enableMeetCaptions(page), action !== 'unconfirmed');
+    assert.deepEqual(actions, action === 'already_enabled' ? [] : [action === 'click' ? 'click' : 'c']);
+  }
 });

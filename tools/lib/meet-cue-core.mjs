@@ -83,14 +83,8 @@ export const MEET_SELECTORS = {
     'button[aria-label*="通話を終了"]',
     'button[aria-label*="Leave call" i]',
   ],
-  joinButtons: [
-    'button:has-text("今すぐ参加")',
-    'button:has-text("参加をリクエスト")',
-    'button:has-text("Join now")',
-    'button:has-text("Ask to join")',
-    'button[aria-label*="参加"]',
-    'button[aria-label*="Join"]',
-  ],
+  joinButtons: ['今すぐ参加', 'Join now', '参加をリクエスト', 'Ask to join', '参加'],
+  lobbyTexts: [/参加をリクエストしています|参加をリクエストしました|参加の承認を待|asking to join|ask to join|request sent|someone.*let you in|waiting to be admitted/i],
   guestNameInput: [
     'input[placeholder*="名前"]',
     'input[placeholder*="Name"]',
@@ -98,12 +92,8 @@ export const MEET_SELECTORS = {
     'input[aria-label*="Name"]',
     'input[type="text"]',
   ],
-  captionToggleButtons: [
-    'button[aria-label*="字幕"]',
-    'button[aria-label*="caption"]',
-    'button[aria-label*="Caption"]',
-    '[data-tooltip*="字幕"]',
-  ],
+  captionsEnable: [/^(字幕をオンにする|字幕を有効にする|字幕をオン|Turn on captions)(?:$|[（(\s])/i],
+  captionsDisable: [/^(字幕をオフにする|字幕を無効にする|字幕をオフ|Turn off captions)(?:$|[（(\s])/i],
   captionContainers: [
     '.a7238b',
     '[aria-label*="字幕"]',

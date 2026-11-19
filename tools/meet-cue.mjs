@@ -675,6 +675,7 @@ export async function main(argv = process.argv.slice(2)) {
       headerInsertIndex: docInfo.headerInsertIndex,
       startTime: new Date().toISOString(),
       joinState: 'joining',
+      captionsOn: false,
     };
 
     fs.writeFileSync(path.join(sessionDir, 'session.json'), JSON.stringify(sessionState, null, 2));
@@ -710,6 +711,10 @@ export async function main(argv = process.argv.slice(2)) {
         getCaptionLineCount: () => assembler.finalizedLines.length,
         onJoinState: (joinState) => {
           sessionState.joinState = joinState;
+          fs.writeFileSync(path.join(sessionDir, 'session.json'), JSON.stringify(sessionState, null, 2), 'utf8');
+        },
+        onCaptionsOn: (captionsOn) => {
+          sessionState.captionsOn = captionsOn;
           fs.writeFileSync(path.join(sessionDir, 'session.json'), JSON.stringify(sessionState, null, 2), 'utf8');
         },
         onCaption: ({ speaker, text, timestamp }) => {

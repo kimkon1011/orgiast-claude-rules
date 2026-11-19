@@ -220,29 +220,142 @@ export async function isProfileSignedIn(profileDir, options = {}) {
   return result;
 }
 
-async function checkUiReached(page) {
-  const selectors = [
-    ...MEET_SELECTORS.joinButtons,
-    ...MEET_SELECTORS.inCallButtons,
-    ...MEET_SELECTORS.guestNameInput,
-    ...MEET_SELECTORS.captionToggleButtons,
-    'button[aria-label*="マイク"]',
-    'button[aria-label*="mic"]',
-    'button[aria-label*="カメラ"]',
-    'button[aria-label*="camera"]',
-    'button[aria-label*="通話"]',
-    '[data-unresolved-meeting-id]',
-  ];
+function parseMeetUrl(value) {
+  const url = URL.canParse(value) ? new URL(value) : null;
+  return url?.origin === 'https://meet.google.com' ? url : null;
+}
 
-  for (const sel of selectors) {
-    try {
-      const loc = page.locator(sel).first();
-      if (await loc.isVisible({ timeout: 300 })) {
-        return true;
-      }
-    } catch { /* ignore */ }
+function meetingCode(value) {
+  return parseMeetUrl(value)?.pathname.match(/^\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:\/|$)/i)?.[1].toLowerCase();
+}
+
+const inCallSelector = MEET_SELECTORS.inCallButtons.map(sel => sel + ':visible').join(', ');
+
+export async function detectMeetJoinState(page, code) {
+  if (!code || meetingCode(page.url()) !== code) return 'home';
+  if (await page.locator(inCallSelector).first().isVisible()) return 'in_call';
+
+  // ボタンの「Ask to join」は待機メッセージに含めない。
+  const lobbyText = page.getByText(MEET_SELECTORS.lobbyTexts[0]);
+  for (const element of await lobbyText.all()) {
+    if (!(await element.isVisible())) continue;
+    if (await element.evaluate(node => !node.closest('button, [role="button"]'))) {
+      return 'in_lobby';
+    }
   }
-  return false;
+  return 'prejoin';
+}
+
+export async function findMeetJoinButton(page, code, { requireEnabled = true } = {}) {
+  if (!code || meetingCode(page.url()) !== code) return null;
+
+  for (const label of MEET_SELECTORS.joinButtons) {
+    const buttons = page.getByRole('button').filter({ hasText: new RegExp(`^\\s*${label}\\s*$`) });
+    for (const button of await buttons.all()) {
+      if (!(await button.isVisible()) || (requireEnabled && !(await button.isEnabled()))) continue;
+      if ((await button.innerText({ timeout: 1000 })).trim() !== label) continue;
+      if (label === '参加') {
+        const box = await button.boundingBox();
+        const viewport = page.viewportSize();
+        if (!box || !viewport) continue;
+        const x = box.x + box.width / 2;
+        const y = box.y + box.height / 2;
+        if (x < viewport.width / 4 || x > viewport.width * 3 / 4 ||
+            y < viewport.height / 4 || y > viewport.height * 3 / 4) continue;
+      }
+      return { button, label };
+    }
+  }
+  return null;
+}
+
+export async function enableMeetCaptions(page) {
+  const enabled = page.getByRole('button', { name: MEET_SELECTORS.captionsDisable[0] }).first();
+  const enable = page.getByRole('button', { name: MEET_SELECTORS.captionsEnable[0] }).first();
+  try {
+    if (await enabled.isVisible()) return true;
+    if (await enable.isVisible()) {
+      await enable.click({ timeout: 2000 });
+    } else {
+      await page.keyboard.press('c');
+    }
+    await enabled.waitFor({ state: 'visible', timeout: 3000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function joinMeetPage(page, {
+  url, preparePrejoin, onJoinState, log, uiTimeoutMs,
+}) {
+  let meetingUrl = url;
+  let code = meetingCode(url);
+  const createsMeeting = parseMeetUrl(url)?.pathname === '/new';
+  let previousState;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    log(`[meet-cue-browser] Meet URL へ移動中: ${meetingUrl}`);
+    await page.goto(meetingUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    let uiDeadline = Date.now() + uiTimeoutMs;
+    let lobbyDeadline;
+    let prepared = false;
+    let clicked = false;
+
+    while (true) {
+      const currentUrl = page.url();
+      if (!code && createsMeeting) {
+        code = meetingCode(currentUrl);
+        if (code) meetingUrl = currentUrl;
+      }
+      const state = await detectMeetJoinState(page, code);
+      if (state !== previousState) {
+        onJoinState(state);
+        previousState = state;
+      }
+      if (state === 'home') {
+        if (parseMeetUrl(currentUrl)?.pathname === '/new' && createsMeeting && !code &&
+            Date.now() < uiDeadline) {
+          await page.waitForTimeout(250);
+          continue;
+        }
+        if (attempt === 0 && !clicked && URL.canParse(currentUrl) &&
+            new URL(currentUrl).hostname === 'accounts.google.com') {
+          return 'signin_required';
+        }
+        if (attempt === 0 && (code || createsMeeting)) break;
+        return 'left_meeting_page';
+      }
+      if (state === 'in_call') return null;
+      if (state === 'in_lobby') {
+        lobbyDeadline ??= Date.now() + 600000;
+        if (Date.now() >= lobbyDeadline) return 'lobby_timeout';
+      } else {
+        if (lobbyDeadline) uiDeadline = Date.now() + uiTimeoutMs;
+        lobbyDeadline = undefined;
+        if (Date.now() >= uiDeadline) return clicked ? 'join_confirmation_timeout' : 'join_button_not_found';
+        if (!clicked) {
+          const choice = await findMeetJoinButton(page, code, { requireEnabled: prepared });
+          if (choice && !prepared) {
+            prepared = true;
+            await preparePrejoin();
+            continue;
+          }
+          if (choice && meetingCode(page.url()) === code) {
+            try {
+              await choice.button.click({ timeout: 2000 });
+              clicked = true;
+              log(`[meet-cue-browser] 参加ボタンをクリック: ${choice.label}`);
+            } catch (err) {
+              log(`[meet-cue-browser] 参加ボタンのクリック失敗: ${err.message}`);
+            }
+            // クリック直後の遷移を次の判定で確認する。
+            continue;
+          }
+        }
+      }
+      await page.waitForTimeout(500);
+    }
+  }
 }
 
 export function copyMeetBotProfile(source, destination) {
@@ -267,6 +380,7 @@ export async function startMeetBot({
   botDisplayName = 'オージャストAI',
   onCaption = () => {},
   onJoinState = () => {},
+  onCaptionsOn = () => {},
   getCaptionLineCount = () => 0,
   log = console.error,
   uiTimeoutMs = 90000,
@@ -328,7 +442,7 @@ export async function startMeetBot({
 
     return await runMeetBot(context, close, {
       url, mode, maxMinutes, debugDom, sessionDir, botDisplayName,
-      onCaption, onJoinState, getCaptionLineCount, log, uiTimeoutMs,
+      onCaption, onJoinState, onCaptionsOn, getCaptionLineCount, log, uiTimeoutMs,
     });
   } catch (err) {
     await close();
@@ -338,7 +452,7 @@ export async function startMeetBot({
 
 async function runMeetBot(context, close, {
   url, mode, maxMinutes, debugDom, sessionDir, botDisplayName,
-  onCaption, onJoinState, getCaptionLineCount, log, uiTimeoutMs,
+  onCaption, onJoinState, onCaptionsOn, getCaptionLineCount, log, uiTimeoutMs,
 }) {
   const page = context.pages()[0] || await context.newPage();
 
@@ -347,109 +461,26 @@ async function runMeetBot(context, close, {
     onCaption({ speaker, text, timestamp: Date.now() });
   });
 
-  log(`[meet-cue-browser] Meet URL へ移動中: ${url}`);
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await page.waitForTimeout(3000);
+  const preparePrejoin = async () => {
+    try {
+      await page.keyboard.press('Control+d');
+      await page.waitForTimeout(500);
+      await page.keyboard.press('Control+e');
+    } catch { /* 無効なショートカットは無視する */ }
 
-  // Check URL redirect or wait up to uiTimeoutMs (default 90s) for join/meeting UI
-  const uiDeadline = Date.now() + uiTimeoutMs;
-  let failReason = null;
-  let uiReached = false;
-
-  while (Date.now() < uiDeadline) {
-    const currentUrl = page.url();
-    if (currentUrl.includes('accounts.google.com')) {
-      failReason = 'signin_required';
-      break;
-    }
-    if (!currentUrl.includes('meet.google.com')) {
-      failReason = 'redirected_to_landing';
-      break;
-    }
-
-    if (await checkUiReached(page)) {
-      uiReached = true;
-      break;
-    }
-
-    await page.waitForTimeout(1000);
-  }
-
-  if (!uiReached && !failReason) {
-    failReason = 'join_ui_not_found';
-  }
-
-  if (failReason) {
-    log(`[meet-cue-browser] Meet 参加失敗を検知しました (理由: ${failReason}, URL: ${page.url()})`);
-    if (sessionDir) {
-      try {
-        fs.mkdirSync(sessionDir, { recursive: true });
-        await page.screenshot({ path: path.join(sessionDir, 'join-failed.png'), fullPage: false });
-        log(`[meet-cue-browser] 失敗スクリーンショット保存: ${path.join(sessionDir, 'join-failed.png')}`);
-      } catch (e) {
-        log(`[meet-cue-browser] スクリーンショット保存失敗: ${e.message}`);
-      }
-    }
-    const err = new Error(`Meet 参加失敗: ${failReason}`);
-    err.reason = failReason;
-    throw err;
-  }
-
-  // Turn off mic & camera via keyboard shortcuts
-  try {
-    await page.keyboard.press('Control+d');
-    await page.waitForTimeout(500);
-    await page.keyboard.press('Control+e');
-    await page.waitForTimeout(1000);
-  } catch { /* ignore */ }
-
-  // Check if mode is profile but page redirected to login
-  if (mode === 'profile' && page.url().includes('accounts.google.com')) {
-    log('[meet-cue-browser] 警告: 未ログイン状態を検知しました。ゲストモードで継続します。');
-  }
-
-  // Handle guest mode name entry
-  if (mode === 'guest' || page.url().includes('accounts.google.com')) {
-    for (const sel of MEET_SELECTORS.guestNameInput) {
-      try {
-        const input = page.locator(sel).first();
-        if (await input.isVisible({ timeout: 1000 })) {
-          await input.fill(botDisplayName);
-          log(`[meet-cue-browser] ゲスト名を「${botDisplayName}」に設定`);
-          break;
-        }
-      } catch { /* try next */ }
-    }
-  }
-
-  // The request button only enters the lobby. Wait for a visible in-call control.
-  let requested = false;
-  let joinedAt;
-  const inCallSelector = MEET_SELECTORS.inCallButtons.map(sel => sel + ':visible').join(', ');
-  const joinDeadline = Date.now() + 600000;
-  while (Date.now() < joinDeadline) {
-    if (await page.locator(inCallSelector).first().isVisible()) {
-      joinedAt = Date.now();
-      onJoinState('joined');
-      break;
-    }
-    if (!requested) {
-      for (const sel of MEET_SELECTORS.joinButtons) {
-        try {
-          const btn = page.locator(sel).first();
-          if (!(await btn.isVisible())) continue;
-          await btn.click({ timeout: 2000 });
-        } catch { continue; }
-        log(`[meet-cue-browser] 参加ボタンをクリック: ${sel}`);
-        requested = true;
-        onJoinState('waiting_in_lobby');
+    if (mode === 'guest') {
+      for (const selector of MEET_SELECTORS.guestNameInput) {
+        const input = page.locator(selector).first();
+        if (!(await input.isVisible())) continue;
+        await input.fill(botDisplayName, { timeout: 2000 });
+        log(`[meet-cue-browser] ゲスト名を「${botDisplayName}」に設定`);
         break;
       }
     }
-    await page.waitForTimeout(2000);
-  }
-  if (!joinedAt) {
-    const reason = requested ? 'lobby_timeout' : 'join_button_not_found';
+  };
+  const reason = await joinMeetPage(page, { url, preparePrejoin, onJoinState, log, uiTimeoutMs });
+  if (reason) {
+    log(`[meet-cue-browser] Meet 参加失敗 (理由: ${reason}, URL: ${page.url()})`);
     if (sessionDir) {
       try {
         await page.screenshot({ path: path.join(sessionDir, 'join-failed.png'), timeout: 5000 });
@@ -460,27 +491,10 @@ async function runMeetBot(context, close, {
     throw Object.assign(new Error(`Meet 参加失敗: ${reason}`), { reason });
   }
 
-  // Turn on captions
-  log('[meet-cue-browser] 字幕をオンに設定中...');
-  let captionOn = false;
-  for (const sel of MEET_SELECTORS.captionToggleButtons) {
-    try {
-      const btn = page.locator(sel).first();
-      if (await btn.isVisible({ timeout: 1000 })) {
-        await btn.click();
-        log(`[meet-cue-browser] 字幕ボタンをクリック: ${sel}`);
-        captionOn = true;
-        break;
-      }
-    } catch { /* try next */ }
-  }
-
-  if (!captionOn) {
-    try {
-      await page.keyboard.press('c');
-      log('[meet-cue-browser] ショートカット "c" キーで字幕トグルを試行');
-    } catch { /* ignore */ }
-  }
+  const joinedAt = Date.now();
+  const captionsOn = await enableMeetCaptions(page);
+  onCaptionsOn(captionsOn);
+  log(`[meet-cue-browser] 字幕オンの確認: ${captionsOn}`);
 
   // Inject MutationObserver script for subtitle extraction
   await page.evaluate((captionSelector) => {
@@ -611,7 +625,13 @@ async function saveCaptionDebug(page, sessionDir) {
       candidate,
       group === 'leftCallTexts'
         ? captured.bodyText.split(candidate).length - 1
-        : await page.locator(candidate).count(),
+        : group === 'joinButtons'
+          ? await page.getByRole('button', { name: candidate, exact: true }).count()
+          : group === 'lobbyTexts'
+            ? await page.getByText(candidate).count()
+            : candidate instanceof RegExp
+              ? await page.getByRole('button', { name: candidate }).count()
+              : await page.locator(candidate).count(),
     ])));
   }
   fs.writeFileSync(path.join(sessionDir, 'caption-debug.json'), JSON.stringify({

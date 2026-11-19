@@ -260,6 +260,25 @@ test('SDK起動でassistant返答が空ならLLMを呼ばず完了80にする', 
   assert.deepEqual(result.sessions[0].llm, { verdict: '完了', confidence: 80, next: '' });
 });
 
+test('VSCode対話のpromptSourceがsdkでもassistant返答が空なら未完了70にする', async (t) => {
+  const run = await triageFixture(t, [
+    { type: 'attachment', entrypoint: 'claude-vscode' },
+    {
+      type: 'user',
+      promptSource: 'sdk',
+      message: { role: 'user', content: '資料を作成する' },
+    },
+  ]);
+  const result = await run('good');
+  assert.deepEqual(result.calls, []);
+  assert.equal(result.summary.llm.success, 1);
+  assert.deepEqual(result.sessions[0].llm, {
+    verdict: '未完了',
+    confidence: 70,
+    next: 'セッションを再開して依頼に着手する',
+  });
+});
+
 test('対話起動でassistant返答が空ならLLMを呼ばず未完了70にする', async (t) => {
   const run = await triageFixture(t, [
     { type: 'user', message: { role: 'user', content: '資料を作成する' } },

@@ -154,8 +154,7 @@ function statusFor(score) {
 function analyze(file, headRaw, tailRaw, headEvents, tailEvents, tailBytes) {
   const combined = headEvents.concat(tailEvents);
   const sdkStarted = combined.some((event) =>
-    /^sdk(?:-|$)/i.test(String(event?.entrypoint || '')) ||
-    (event?.type === 'user' && event?.promptSource === 'sdk'));
+    /^sdk(?:-|$)/i.test(String(event?.entrypoint || '')));
   let firstPrompt = '';
   let cwd = '';
   let gitBranch = '';

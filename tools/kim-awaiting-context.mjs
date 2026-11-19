@@ -4,6 +4,7 @@ import { mkdirSync, rmdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectAwaiting, shownFile, readJson, saveJson, ageLabel, COLLECT_BUDGET_MS } from './kim-awaiting.mjs';
+import { readAnswers, markAnswerDone } from './lib/external-waiting-state.mjs';
 import { readManualLedger, findManualWaiting } from './outbound-reply-chase.mjs';
 import { DAY } from './lib/fleet-chase-policy.mjs';
 import { isUnattendedRow } from './auto-progress-ledger.mjs';
@@ -14,6 +15,23 @@ export const SESSION_TTL = 30 * DAY;
 export const DISPLAY_LIMIT = 5;
 export const EXTERNAL_LIMIT = 15;
 export const TOP = 3;
+// 回答済みの社外返信を注入するための状態ファイル
+export const answerInjectionFile = home => path.join(home, '.claude', 'state', 'kim-awaiting-answer-injection.json');
+// 回答済みの項目を1回だけ注入する。処理が終わった項目は done として記録する。
+export function collectAnswerInjections({ home, now }) {
+  const answers = readAnswers(home).filter(a => !a.done);
+  if (!answers.length) return '';
+  const state = readJson(answerInjectionFile(home), {});
+  const lines = [];
+  for (const answer of answers) {
+    if (state[answer.id]) continue; // 既に注入済み
+    state[answer.id] = { at: new Date(now).toISOString() };
+    lines.push(`kim の回答があります: ${answer.id} ${answer.answer.slice(0, 100)}。返信下書きを作って、その内容で進める。処理が終わったら \`node tools/kim-awaiting.mjs --answer-done ${answer.id}\` を実行して完了を記録する。`);
+  }
+  if (!lines.length) return '';
+  saveJson(answerInjectionFile(home), state);
+  return `【必須】以下の回答を処理してください。\n${lines.join('\n')}\n`;
+}
 // Separate state: the existing three-hour kim reminder must not suppress Discord work.
 export function discordWaitingContext({ home, now }) {
   let lock;
@@ -73,7 +91,7 @@ export function context(input, { home = process.env.ORGIAST_HOME || os.homedir()
       return `${core}${suffix}`;
     };
     const TOP = 3;
-    const external = items.filter(item => item.external), internal = items.filter(item => !item.external);
+    const external = items.filter(item => item.external && !item.answered), answered = items.filter(item => item.answered), internal = items.filter(item => !item.external);
     const isCurrent = item => sessionId && item.source === 'auto-progress' && item.route?.sessionId === sessionId;
     const current = internal.filter(isCurrent);
     const shownExternal = external.slice(0, TOP);
@@ -85,7 +103,8 @@ export function context(input, { home = process.env.ORGIAST_HOME || os.homedir()
     const routes = [...shownExternal, ...shownInternal].map(item => `id=${item.id} | ${item.title}`).join('\n');
     const redInstruction = external.length ? '🔴 の項目は本文を get_thread で読み、返信下書きまで作って提示せよ。送信は kim が明示した時だけ。\n' : '';
     const helpNote = `全件確認: ${listCmd} ／ 回答: node "${repo}/tools/kim-awaiting.mjs" --answer <id> --body-file <file> ／ 不要: --skip <id>\n`;
-    return { hookSpecificOutput: { hookEventName: event, additionalContext: `${discord}【kim の返事待ち】${helpNote}${externalBlock}${internalBlock}${redInstruction}以下の id は kim に見せない。\n${routes}` } };
+    const answerInjections = collectAnswerInjections({ home, now });
+    return { hookSpecificOutput: { hookEventName: event, additionalContext: `${discord}${answerInjections}【kim の返事待ち】${helpNote}${externalBlock}${internalBlock}${redInstruction}以下の id は kim に見せない。\n${routes}` } };
   } catch { return null; }
 }
 if (isEntry(import.meta.url)) { try { const out = context(JSON.parse(await readStdinWithTimeout(500))); if (out) console.log(JSON.stringify(out)); } catch {} }

@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { collectAwaiting, respond, apId, shownFile } from './kim-awaiting.mjs';
-import { context, REPEAT_MS, SESSION_TTL, DISPLAY_LIMIT, TOP } from './kim-awaiting-context.mjs';
+import { collectAwaiting, respond, apId, shownFile, respondAll, formatList } from './kim-awaiting.mjs';
+import { context, REPEAT_MS, SESSION_TTL, DISPLAY_LIMIT, TOP, collectAnswerInjections, answerInjectionFile } from './kim-awaiting-context.mjs';
+import { saveAnswer, readAnswers, markAnswerDone } from './lib/external-waiting-state.mjs';
 import { ledgerFile, readLedger, writeLedger, rowKey, MAX_RESUMES } from './auto-progress-ledger.mjs';
 import { inboxFile } from './auto-progress-inbox-hook.mjs';
 import { mailCategory } from './fleet-mail.mjs';
@@ -311,6 +312,101 @@ test('auto registration marker does not hide an explicit waiting_user request', 
   writeLedger(ledgerFile(home), [row({ autoRegisteredCheck: true, status: 'waiting_user', nextKim: '予算を承認してください' })]);
   const items = collectAwaiting({ home, now: NOW });
   assert.equal(items.filter(item => item.route?.sessionId === 'session-a').length, 1);
+});
+
+test('ex: 回答済み項目は answered=true で表示され、再提示対象から外れる', async t => {
+  const home = fixture(t), bodyFile = path.join(home, 'answer.txt');
+  fs.writeFileSync(bodyFile, 'この日で返信して');
+  writeExternal(home, { items: [extItem()] });
+  // 回答を保存
+  saveAnswer(home, 'ex:aaaaaaaaaaaa', 'この日で返信して', NOW);
+  const items = collectAwaiting({ home, now: NOW });
+  const answered = items.filter(i => i.answered);
+  const pending = items.filter(i => i.external && !i.answered);
+  assert.equal(answered.length, 1);
+  assert.equal(answered[0].id, 'ex:aaaaaaaaaaaa');
+  assert.match(answered[0].ask, /回答済み/);
+  assert.equal(pending.length, 0);
+  // formatList で回答済みが別枠表示される
+  const formatted = formatList(items);
+  assert.match(formatted, /📗 社外返信の回答済み/);
+  assert.doesNotMatch(formatted, /🔴 社外の人を待たせています/);
+});
+
+test('ex: 回答済み項目は collectAnswerInjections で1回だけ注入され、done 後は注入されない', t => {
+  const home = fixture(t);
+  writeExternal(home, { items: [extItem()] });
+  saveAnswer(home, 'ex:aaaaaaaaaaaa', 'この日で返信して', NOW);
+  // 初回: 注入あり
+  const injection1 = collectAnswerInjections({ home, now: NOW });
+  assert.match(injection1, /kim の回答があります/);
+  assert.match(injection1, /ex:aaaaaaaaaaaa/);
+  // 2回目: 注入なし（既に記録済み）
+  const injection2 = collectAnswerInjections({ home, now: NOW + 3600_000 });
+  assert.equal(injection2, '');
+  // markAnswerDone 後は done なので注入されない
+  markAnswerDone(home, 'ex:aaaaaaaaaaaa');
+  // 念のため注入記録を消しても、done なので注入されない
+  const state = readJson(answerInjectionFile(home), {});
+  delete state['ex:aaaaaaaaaaaa'];
+  saveJson(answerInjectionFile(home), state);
+  const injection3 = collectAnswerInjections({ home, now: NOW + 7200_000 });
+  assert.equal(injection3, '');
+});
+
+test('ex: 回答済み項目は markAnswerDone で done になる', t => {
+  const home = fixture(t);
+  writeExternal(home, { items: [extItem()] });
+  saveAnswer(home, 'ex:aaaaaaaaaaaa', 'この日で返信して', NOW);
+  assert.equal(readAnswers(home).filter(a => !a.done).length, 1);
+  markAnswerDone(home, 'ex:aaaaaaaaaaaa');
+  assert.equal(readAnswers(home).filter(a => !a.done).length, 0);
+  assert.equal(readAnswers(home).filter(a => a.done).length, 1);
+});
+
+test('同じ who の古い下書きは新しい下書きに置き換えられる', t => {
+  const home = fixture(t);
+  writeExternal(home, {
+    items: [
+      extItem({ id: 'ex:aaaaaaaaaaaa', kind: 'draft', who: 'cust@example.com', subject: '古い案', since: new Date(NOW - 3 * 3600_000).toISOString() }),
+      extItem({ id: 'ex:bbbbbbbbbbbb', kind: 'draft', who: 'cust@example.com', subject: '新しい案', since: new Date(NOW - 3600_000).toISOString() }),
+    ],
+  });
+  const items = collectAwaiting({ home, now: NOW });
+  const drafts = items.filter(i => i.external && i.title.includes('cust@example.com'));
+  assert.equal(drafts.length, 1);
+  assert.match(drafts[0].title, /新しい案/);
+  assert.doesNotMatch(drafts[0].title, /古い案/);
+});
+
+test('--answer-all は複数の kim-awaiting ID をまとめて更新する', t => {
+  const home = fixture(t);
+  writeExternal(home, { items: [extItem()] });
+  writeLedger(ledgerFile(home), [row()]);
+  const bodyFile = path.join(home, 'answer.txt');
+  fs.writeFileSync(bodyFile, '進めてください');
+  const ap = apId(row());
+  respondAll({ home, bodyFile, ids: ['ex:aaaaaaaaaaaa', ap], now: NOW });
+  // ex: の回答が保存された
+  assert.equal(readAnswers(home).filter(a => !a.done).length, 1);
+  assert.equal(readAnswers(home)[0].answer, '進めてください');
+  // ap: の回答が台帳に反映された
+  const updated = readLedger(ledgerFile(home))[0];
+  assert.equal(updated.kimAnswer, '進めてください');
+});
+
+test('--answer-all は kim-inbox も更新する', t => {
+  const home = fixture(t);
+  writeExternal(home, { items: [extItem()] });
+  const bodyFile = path.join(home, 'answer.txt');
+  fs.writeFileSync(bodyFile, '可');
+  let invoked = false;
+  respondAll({ home, bodyFile, inboxId: 'ki-test', ids: ['ex:aaaaaaaaaaaa'], now: NOW, spawnImpl: (...args) => {
+    invoked = true;
+    assert.match(args[1][2], /ki-test/);
+    return { status: 0 };
+  } });
+  assert.equal(invoked, true);
 });
 
 process.env.ORGIAST_AUTO_RESUME = '1';

@@ -61,6 +61,7 @@ import { evaluateClaudeFallbackReport } from './claude-fallback-report-gate.mjs'
 import { evaluatePendingDecision } from './pending-decision-ask-gate.mjs';
 import { evaluateSilentCheckFailure } from './silent-check-failure-gate.mjs';
 import { evaluateExternalChannelPromise } from './external-channel-unmonitored-gate.mjs';
+import { judge as judgeAwaitingAnswer } from './awaiting-answer-gate.mjs';
 import { buildRecord, extractPromise, ledgerFile as progressLedgerFile, readLedger, writeLedger, applyPromise, latestOpenPromises, rollingSessionFields } from './auto-progress-ledger.mjs';
 import { appendInbox } from './lib/auto-progress-inbox.mjs';
 import { isUnchangedPeriodicReport } from './lib/unchanged-periodic-report.mjs';
@@ -139,6 +140,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['third-party-nudge-gate', () => judgeThirdPartyNudge(ctx.assistantText)],
     ['unregistered-promise-gate', () => evaluateUnregisteredPromise(ctx.assistantText, { sessionId: ctx.sessionId, transcriptRaw: ctx.transcriptRaw, home: home() })],
     ['external-channel-unmonitored-gate', () => evaluateExternalChannelPromise(ctx.assistantText)],
+    ['awaiting-answer-gate', () => judgeAwaitingAnswer(ctx.humanText, { home: home() })],
     ['progress-cron-gate', () => evaluateProgressCron(ctx.input, { home: home() })],
     ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw, { ...ctx.input, session_id: ctx.sessionId }, { turnText: ctx.turnText })],
     ['user-burden-gate', () => judgeUserBurden(ctx.assistantText, ctx.humanText)],

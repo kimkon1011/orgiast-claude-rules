@@ -17,7 +17,7 @@ test('transformMessage builds the external id and attachment metadata', () => {
   assert.equal(result.external_message_id, 'discord:channel-1:123456789');
   assert.equal(result.sender_identifier, 'user-1');
   assert.equal(result.body, 'hello');
-  assert.deepEqual(result.attachments, [{ id: 'file-1', filename: 'brief.pdf', url: 'https://cdn.test/brief.pdf', content_type: 'application/pdf', size: 42 }]);
+  assert.deepEqual(result.attachments, [{ name: 'brief.pdf', url: 'https://cdn.test/brief.pdf', mime: 'application/pdf', size: 42 }]);
 });
 
 test('transformMessage skips an empty body', () => {

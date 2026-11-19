@@ -22,14 +22,15 @@ export function transformMessage(channelId, message) {
   if (!body || !messageId) return null;
 
   const author = message?.author ?? {};
+  // ingest API / channel-inbox は name・mime（Discord の filename・content_type を写す）
   const attachments = Array.isArray(message?.attachments)
     ? message.attachments.map((attachment) => ({
-        id: trimmed(attachment?.id) || undefined,
-        filename: trimmed(attachment?.filename) || undefined,
+        name: trimmed(attachment?.filename) || undefined,
         url: trimmed(attachment?.url) || undefined,
-        content_type: trimmed(attachment?.content_type) || undefined,
+        mime: trimmed(attachment?.content_type) || undefined,
         size: Number.isFinite(Number(attachment?.size)) ? Number(attachment.size) : undefined,
       })).map((attachment) => Object.fromEntries(Object.entries(attachment).filter(([, value]) => value !== undefined)))
+        .filter((attachment) => attachment.name)
     : [];
 
   return {

@@ -105,7 +105,7 @@ export function createCli({ spawnSync = nativeSpawnSync, env = process.env, home
         }
       }
       const workflow = write ? WRITE_WORKFLOW : READ_WORKFLOW;
-      const inputs = write ? { mode: action, to: opts.to, subject: opts.subject, body_b64: Buffer.from(body, 'utf8').toString('base64') } : { action, user: opts.user || 'seisaku-team@orgiast.jp', ...(action === 'search' ? { query: opts.query, max: opts.max || '10' } : {}), ...(opts.id ? { id: opts.id } : {}) };
+      const inputs = write ? { mode: action, to: opts.to, subject: opts.subject, body_b64: Buffer.from(body, 'utf8').toString('base64') } : { action, user: opts.user || 'seisaku-team@orgiast.jp', ...(action === 'search' ? { query: opts.query } : {}), ...(['search', 'drafts'].includes(action) ? { max: opts.max || '10' } : {}), ...(opts.id ? { id: opts.id } : {}) };
       if (write) for (const [flag, input] of [['cc', 'cc'], ['reply-to-thread-of', 'reply_to_thread_of'], ['attach-drive', 'attachment_drive_ids']]) if (opts[flag]) inputs[input] = opts[flag];
       const args = ['workflow', 'run', workflow, '--repo', repo];
       for (const [key, value] of Object.entries(inputs)) args.push('-f', `${key}=${value}`);

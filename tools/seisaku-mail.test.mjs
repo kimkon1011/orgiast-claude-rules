@@ -121,6 +121,22 @@ for (const [action, args, expected] of [
   assert.ok(f.calls.find(c => c.args[1] === 'download').args.includes('seisaku-mail-read-result'));
 });
 
+test('drafts passes explicit/default max while message omits max', async t => {
+  for (const [args, expected] of [
+    [['drafts', '--max', '50'], 'max=50'],
+    [['drafts'], 'max=10'],
+  ]) {
+    const f = fixture(t);
+    assert.equal(await f.run([...args, '--json']), 0);
+    const index = f.calls[0].args.indexOf(expected);
+    assert.ok(index > 0);
+    assert.equal(f.calls[0].args[index - 1], '-f');
+  }
+  const message = fixture(t);
+  assert.equal(await message.run(['message', '--id', 'm1', '--json']), 0);
+  assert.ok(!message.calls[0].args.some(arg => arg.startsWith('max=')));
+});
+
 test('token file is trimmed, supplied only in environment and redacted from output', async t => {
   const f = fixture(t, { result: { ok: false, error: 'secret-test-token' } });
   assert.equal(await f.run(writeArgs(f)), 1);

@@ -93,7 +93,11 @@ function escapeJs(str) {
 
 /** 列情報からHTMLのJSON埋め込み用に安全な文字列へ */
 function safeJson(obj) {
-  return JSON.stringify(obj).replace(/</g, '\\u003C').replace(/>/g, '\\u003E');
+  return JSON.stringify(obj)
+    .replace(/</g, '\\u003C')
+    .replace(/>/g, '\\u003E')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
 }
 
 /** 列インデックスをアルファベット（A, B, ..., Z, AA, AB, ...）に */
@@ -115,7 +119,9 @@ function generateHtml({ headers, types, choiceMap, rows }) {
     headers = headers.filter((_, i) => !skipMask[i]);
     types = types.filter((_, i) => !skipMask[i]);
     choiceMap = Object.fromEntries(
-      Object.entries(choiceMap).map(([k, v]) => [oldToNew[Number(k)], v])
+      Object.entries(choiceMap)
+        .map(([k, v]) => [oldToNew[Number(k)], v])
+        .filter(([k]) => k !== undefined)
     );
     rows = rows.map(r => r.filter((_, i) => !skipMask[i]));
   }
@@ -200,8 +206,9 @@ let filteredData = [...DATA];
 let sortCol = -1, sortAsc = true;
 
 function renderCards() {
+  if (STATUS_IDX < 0) return;
   const el = document.getElementById('status-cards');
-  if (STATUS_IDX < 0) { el.innerHTML = '<p class="empty">状態列がありません</p>'; return; }
+  if (!el) return;
   const counts = {};
   for (const r of filteredData) {
     const v = (r[STATUS_IDX] || '').trim() || '(未設定)';
@@ -213,8 +220,9 @@ function renderCards() {
 }
 
 function renderPersonChart() {
+  if (PERSON_IDX < 0) return;
   const el = document.getElementById('person-chart');
-  if (PERSON_IDX < 0) { el.innerHTML = '<p class="empty">担当者列がありません</p>'; return; }
+  if (!el) return;
   const counts = {};
   for (const r of filteredData) {
     const v = (r[PERSON_IDX] || '').trim() || '(未設定)';
@@ -232,8 +240,9 @@ function renderPersonChart() {
 }
 
 function renderSchedule() {
+  if (!DATE_IDXS.length) return;
   const el = document.getElementById('schedule');
-  if (!DATE_IDXS.length) { el.innerHTML = '<p class="empty">日付列がありません</p>'; return; }
+  if (!el) return;
   const now = new Date();
   const thisMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
   const nextMonth = now.getMonth() === 11

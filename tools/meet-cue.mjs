@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { finished } from 'node:stream/promises';
 import { randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -547,7 +548,6 @@ export async function main(argv = process.argv.slice(2)) {
 
     for (let i = 0; i < parsedLines.length; i++) {
       const line = parsedLines[i];
-      simulatedTime += 4000;
 
       assembler.pushMutation({
         speaker: line.speaker,
@@ -555,7 +555,8 @@ export async function main(argv = process.argv.slice(2)) {
         timestamp: simulatedTime,
       });
 
-      assembler.tick(simulatedTime);
+      simulatedTime += 4000;
+      assembler.flush(simulatedTime);
 
       await runDecisionRound({
         assembler,
@@ -602,13 +603,21 @@ export async function main(argv = process.argv.slice(2)) {
         'session-id': { type: 'string' },
         'interval-sec': { type: 'string' },
         'debug-dom': { type: 'boolean' },
+        'test-audio': { type: 'string' },
       },
     });
 
     if (!values.url || !values.staff) {
       console.error('Error: --url <Meet URL> と --staff <社員メール> は必須です。');
-      console.error('使い方: node tools/meet-cue.mjs start --url <Meet URL> --staff <メール> [--title <名>] [--brief <本文>]');
+      console.error('使い方: node tools/meet-cue.mjs start --url <Meet URL> --staff <メール> [--title <名>] [--brief <本文>] [--test-audio <WAV の絶対パス>]');
       process.exit(2);
+    }
+
+    const testAudio = values['test-audio'];
+    if (testAudio !== undefined && (!path.isAbsolute(testAudio) ||
+        path.extname(testAudio).toLowerCase() !== '.wav' ||
+        !fs.statSync(testAudio, { throwIfNoEntry: false })?.isFile())) {
+      throw new Error('--test-audio には実在する WAV ファイルの絶対パスを指定してください。');
     }
 
     const sessionId = values['session-id'] ?? generateSessionId();
@@ -687,6 +696,19 @@ export async function main(argv = process.argv.slice(2)) {
 
     let jevCallCount = 0;
     let newCharsSinceLastCheck = 0;
+    let detectedCaption = false;
+    const logBot = (message) => {
+      fs.appendFileSync(path.join(sessionDir, 'bot.log'),
+        `[meet-cue] ${message}\n`, { mode: 0o600 });
+    };
+    const logCaptionCount = (event) => logBot(`${event} 確定字幕行数: ${assembler.finalizedLines.length}`);
+    const recordCaptions = (lines) => {
+      for (const line of lines) {
+        transcriptStream.write(JSON.stringify(line) + '\n');
+        newCharsSinceLastCheck += line.text.length;
+      }
+    };
+
 
     // 3. Start Meet Bot
     // Read config for botDisplayName
@@ -703,6 +725,7 @@ export async function main(argv = process.argv.slice(2)) {
     try {
       bot = await startMeetBot({
         url: values.url,
+        testAudio,
         mode: values.mode || 'profile',
         maxMinutes: parseInt(values['max-minutes'] || '120', 10),
         debugDom: Boolean(values['debug-dom']),
@@ -717,11 +740,11 @@ export async function main(argv = process.argv.slice(2)) {
           sessionState.captionsOn = captionsOn;
           fs.writeFileSync(path.join(sessionDir, 'session.json'), JSON.stringify(sessionState, null, 2), 'utf8');
         },
-        onCaption: ({ speaker, text, timestamp }) => {
-          const newlyFinalized = assembler.pushMutation({ speaker, text, timestamp });
-          for (const line of newlyFinalized) {
-            transcriptStream.write(JSON.stringify(line) + '\n');
-            newCharsSinceLastCheck += line.text.length;
+        onCaption: (caption) => {
+          recordCaptions(assembler.pushMutation(caption));
+          if (!detectedCaption && caption.text) {
+            detectedCaption = true;
+            logCaptionCount('字幕を初検出');
           }
         },
         log: console.log,
@@ -770,6 +793,9 @@ export async function main(argv = process.argv.slice(2)) {
       return { ok: false, code: 3, joinError: reason };
     }
 
+    const captionTick = setInterval(() => recordCaptions(assembler.tick()), 250);
+    const captionLog = setInterval(() => logCaptionCount('経過'), 60000);
+
     // Handle Ctrl+C
     let isTerminating = false;
     const cleanup = async () => {
@@ -777,10 +803,12 @@ export async function main(argv = process.argv.slice(2)) {
       isTerminating = true;
       console.log('\n[meet-cue start] 終了処理を開始します...');
 
+      clearInterval(captionTick);
+      clearInterval(captionLog);
       await bot.stop();
 
-      transcriptStream.end();
-      cuesStream.end();
+      recordCaptions(assembler.flush());
+      await Promise.all([finished(transcriptStream.end()), finished(cuesStream.end())]);
 
       const summary = {
         sessionId,
@@ -825,40 +853,43 @@ export async function main(argv = process.argv.slice(2)) {
         if (isTerminating) break;
 
         const now = Date.now();
-        const newlyFinalized = assembler.tick(now);
-        for (const line of newlyFinalized) {
-          transcriptStream.write(JSON.stringify(line) + '\n');
-          newCharsSinceLastCheck += line.text.length;
-        }
-
-        // Trigger Jev if interval passed or >= 60 new chars accumulated
-        if (assembler.finalizedLines.length > 0 && (newCharsSinceLastCheck >= 60 || jevCallCount === 0)) {
+        if (newCharsSinceLastCheck >= 40) {
+          const charCount = newCharsSinceLastCheck;
           newCharsSinceLastCheck = 0;
           jevCallCount++;
+          const calledAt = new Date(now).toISOString();
+          logBot(`${calledAt} Jev 呼び出し（確定字幕 ${charCount} 文字）`);
 
-          await runDecisionRound({
-            assembler,
-            tracker,
-            cards,
-            brief,
-            now,
-            askJev: (opts) => askJev({ ...opts, label: 'meet-cue-loop' }),
-            generateHelpCue,
-            insertCue: async (cueToPresent) => {
-              await insertCueToDocument({
-                docId: docInfo.docId,
-                cue: cueToPresent,
-                insertIndex: docInfo.headerInsertIndex,
-              });
-            },
-            label: 'meet-cue-loop',
-            onCue: async ({ timestamp, action, cue }) => {
-              cuesStream.write(JSON.stringify({ timestamp, action, cue }) + '\n');
-            },
-            log: (decision, cueToPresent) => {
-              console.log(`\n[meet-cue] カンペ差し込み [${decision.phase}]: ${cueToPresent.title || '助け舟'} -> "${cueToPresent.say}"`);
-            },
-          });
+          let result;
+          try {
+            result = await runDecisionRound({
+              assembler,
+              tracker,
+              cards,
+              brief,
+              now,
+              askJev: (opts) => askJev({ ...opts, label: 'meet-cue-loop' }),
+              generateHelpCue,
+              insertCue: async (cueToPresent) => {
+                await insertCueToDocument({
+                  docId: docInfo.docId,
+                  cue: cueToPresent,
+                  insertIndex: docInfo.headerInsertIndex,
+                });
+              },
+              label: 'meet-cue-loop',
+              onCue: async ({ timestamp, action, cue }) => {
+                if (!isTerminating) cuesStream.write(JSON.stringify({ timestamp, action, cue }) + '\n');
+              },
+              log: (decision, cueToPresent) => {
+                console.log(`\n[meet-cue] カンペ差し込み [${decision.phase}]: ${cueToPresent.title || '助け舟'} -> "${cueToPresent.say}"`);
+              },
+            });
+          } catch (err) {
+            logBot(`${calledAt} Jev 結果: 出さない（${err.message}）`);
+            continue;
+          }
+          logBot(`${calledAt} Jev 結果: ${result.presented ? result.cue.title || '助け舟' : '出さない'}`);
         }
       }
     };

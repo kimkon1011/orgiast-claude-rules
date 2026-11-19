@@ -92,17 +92,17 @@ export const MEET_SELECTORS = {
     'input[aria-label*="Name"]',
     'input[type="text"]',
   ],
-  captionsEnable: [/^(字幕をオンにする|字幕を有効にする|字幕をオン|Turn on captions)(?:$|[（(\s])/i],
-  captionsDisable: [/^(字幕をオフにする|字幕を無効にする|字幕をオフ|Turn off captions)(?:$|[（(\s])/i],
+  captionsEnable: ['字幕をオンにする', 'Turn on captions'],
+  captionsDisable: ['字幕をオフにする', 'Turn off captions'],
+  captionToggles: ['button[aria-label="字幕と翻訳"]'],
   captionContainers: [
-    '.a7238b',
-    '[aria-label*="字幕"]',
-    '[data-caption-tracks]',
-    'div[role="region"][aria-label*="caption"]',
-    '.aG928e',
-    '.T4L22b',
-    '.yg3S7d',
+    '[role="region"][aria-label="字幕"]',
+    '[role="region"][aria-label="Captions"]',
   ],
+  captionRows: ['.nMcdL'],
+  captionSpeakers: ['.adE6rb .NWpY1d'],
+  captionTexts: ['.ygicle'],
+  dismissibleDialogs: ['会議の準備が整いました', 'Gemini をご利用いただけます'],
   leftCallTexts: [
     '通話から退出しました',
     'You left the call',
@@ -193,60 +193,89 @@ export const STANDARD_CARDS = [
   },
 ];
 
-/**
- * Subtitle streaming assembler.
- * Handles growing text for live speakers, deduplicating, and finalizing after 1.5s pause or speaker change.
- */
+/** 話者ブロックの全文から、安定した文だけを記録する。 */
 export class CaptionAssembler {
-  constructor({ finalizeDelayMs = 1500 } = {}) {
+  constructor({ finalizeDelayMs = 2500, silenceDelayMs = 4000 } = {}) {
     this.finalizeDelayMs = finalizeDelayMs;
-    this.currentSpeaker = null;
-    this.currentText = '';
-    this.lastChangeTime = 0;
+    this.silenceDelayMs = silenceDelayMs;
+    this.rows = new Map();
+    this.confirmedBySpeaker = new Map();
     this.finalizedLines = []; // { id, speaker, text, timestamp }
-    this.nextId = 1;
+    this.lastActivity = -Infinity;
   }
 
-  pushMutation({ speaker = '不明', text = '', timestamp = Date.now() }) {
-    const trimmedText = text.trim();
-    if (!trimmedText) return [];
+  pushMutation({ rowId, speaker = '不明', text = '', timestamp = Date.now() }) {
+    text = text.trim();
+    const previous = this.rows.get(rowId);
+    if (!text) {
+      this.rows.delete(rowId);
+      return [];
+    }
+    if (previous?.speaker === speaker && previous.text === text) return [];
+    this.lastActivity = timestamp;
 
-    const newFinalized = [];
-
-    // Check if speaker changed
-    if (this.currentSpeaker && this.currentSpeaker !== speaker && this.currentText) {
-      newFinalized.push(this._finalizeCurrent(timestamp));
+    const sameSpeaker = previous?.speaker === speaker ? previous : undefined;
+    const confirmed = this.confirmedBySpeaker.get(speaker) ?? new Set();
+    this.confirmedBySpeaker.set(speaker, confirmed);
+    let committedTail;
+    const sentences = [];
+    for (const match of text.matchAll(/[^。？！?!]+[。？！?!]*|[。？！?!]+/g)) {
+      const original = match[0].trim();
+      let sentence = original;
+      const complete = /[。？！?!]$/.test(sentence);
+      const key = this._normalize(sentence);
+      // Meet が先頭を文の途中まで切り詰めたとき、記録済みの断片を残さない。
+      const clipped = sentences.length === 0 && complete && sameSpeaker?.sentences.some(part =>
+        (part.clipped || confirmed.has(part.key)) && part.key.endsWith(key));
+      const oldTail = sameSpeaker?.committedTail;
+      if (!committedTail && oldTail && sentence.startsWith(oldTail)) {
+        committedTail = oldTail;
+        sentence = sentence.slice(oldTail.length).trim();
+      }
+      const pendingKey = this._normalize(sentence);
+      sentences.push({
+        original,
+        text: sentence,
+        key: pendingKey,
+        complete,
+        clipped,
+        since: sameSpeaker?.sentences.find(part => part.key === pendingKey)?.since ?? timestamp,
+      });
     }
 
-    this.currentSpeaker = speaker;
-    if (this.currentText !== trimmedText) {
-      this.currentText = trimmedText;
-      this.lastChangeTime = timestamp;
-    }
-
-    return newFinalized;
+    this.rows.set(rowId, { speaker, text, sentences, confirmed, committedTail });
+    return [];
   }
 
   tick(now = Date.now()) {
-    const newFinalized = [];
-    if (this.currentText && this.lastChangeTime && (now - this.lastChangeTime >= this.finalizeDelayMs)) {
-      newFinalized.push(this._finalizeCurrent(now));
+    const lines = [];
+    for (const row of this.rows.values()) {
+      for (const sentence of row.sentences) {
+        const { text, key, complete, clipped, since } = sentence;
+        if (clipped || !text || /^[。？！?!]+$/.test(text) || row.confirmed.has(key)) continue;
+        const ready = complete
+          ? now - since >= this.finalizeDelayMs
+          : now - this.lastActivity >= this.silenceDelayMs;
+        if (!ready) continue;
+
+        row.confirmed.add(key);
+        if (!complete) row.committedTail = sentence.original;
+        const line = { id: `cap-${this.finalizedLines.length + 1}`, speaker: row.speaker, text, timestamp: now };
+        this.finalizedLines.push(line);
+        lines.push(line);
+      }
     }
-    return newFinalized;
+    return lines;
   }
 
-  _finalizeCurrent(timestamp) {
-    const line = {
-      id: `cap-${this.nextId++}`,
-      speaker: this.currentSpeaker || '話者',
-      text: this.currentText,
-      timestamp,
-    };
-    this.finalizedLines.push(line);
-    this.currentSpeaker = null;
-    this.currentText = '';
-    this.lastChangeTime = 0;
-    return line;
+  flush(now = Date.now()) {
+    const lines = this.tick(now);
+    this.rows.clear();
+    return lines;
+  }
+
+  _normalize(text) {
+    return text.normalize('NFKC').replace(/\s+/g, ' ').trim();
   }
 
   getRecentWindow(now = Date.now(), windowMs = 120000) {

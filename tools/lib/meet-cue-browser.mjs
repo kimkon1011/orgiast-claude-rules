@@ -269,21 +269,106 @@ export async function findMeetJoinButton(page, code, { requireEnabled = true } =
   return null;
 }
 
-export async function enableMeetCaptions(page) {
-  const enabled = page.getByRole('button', { name: MEET_SELECTORS.captionsDisable[0] }).first();
-  const enable = page.getByRole('button', { name: MEET_SELECTORS.captionsEnable[0] }).first();
-  try {
-    if (await enabled.isVisible()) return true;
-    if (await enable.isVisible()) {
-      await enable.click({ timeout: 2000 });
-    } else {
-      await page.keyboard.press('c');
-    }
-    await enabled.waitFor({ state: 'visible', timeout: 3000 });
-    return true;
-  } catch {
-    return false;
+export async function dismissMeetPopups(page) {
+  for (const name of MEET_SELECTORS.dismissibleDialogs) {
+    const close = page.getByRole('dialog', { name, exact: true })
+      .getByRole('button', { name: '閉じる', exact: true }).first();
+    if (await close.isVisible()) await close.click({ timeout: 1500 }).catch(() => {});
   }
+}
+
+export async function enableMeetCaptions(page) {
+  const buttons = 'button, [role="button"]';
+  const enableCandidates = page.locator(buttons).filter({
+    hasText: /^(字幕をオンにする|Turn on captions)$/,
+  }).or(page.locator(MEET_SELECTORS.captionsEnable.map(label =>
+    `:is(${buttons})[aria-label="${label}"]`).join(', '))).and(page.locator(':visible'));
+  const toggles = MEET_SELECTORS.captionToggles;
+  const enable = enableCandidates.or(page.locator(toggles.map(selector =>
+    `${selector}[aria-pressed="false"]:visible`).join(', '))).first();
+  const enabled = page.locator([
+    ...toggles.map(selector => `${selector}[aria-pressed="true"]:visible`),
+    ...MEET_SELECTORS.captionsDisable.map(label => `:is(${buttons})[aria-label="${label}"]:visible`),
+  ].join(', ')).or(enableCandidates.and(page.locator('[aria-pressed="true"]'))).first();
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      if (await enabled.isVisible()) return true;
+      if (attempt !== 1 && await enable.isVisible()) {
+        await enable.click({ timeout: 2000 });
+      } else {
+        await page.evaluate(() => {
+          const body = document.body;
+          if (!body.hasAttribute('tabindex')) body.tabIndex = -1;
+          body.focus();
+        });
+        await page.keyboard.press('c');
+      }
+      await enabled.waitFor({ state: 'visible', timeout: 3000 });
+      return true;
+    } catch { /* 次の試行で状態を再確認する */ }
+  }
+  return false;
+}
+
+const excludedCaptionContainer = 'button, [role="button"], [role="toolbar"], [aria-hidden="true"]';
+
+export function readMeetCaptions(root, selectors, excludedContainer, identifyRow) {
+  const selector = selectors.captionContainers.join(', ');
+  const speakerSelector = '.zs5S2e, .bh44bd, [data-sender-name]';
+  const ignored = 'button, [role="button"], i, .material-icons, .google-symbols, [aria-hidden="true"]';
+  const rows = [];
+  const regions = Array.from(root.querySelectorAll(selector))
+    .filter(region => !region.closest(excludedContainer));
+  const addRow = (speaker, text, element, index = 0) => {
+    const row = { speaker, text };
+    if (identifyRow) row.rowId = identifyRow(element, index);
+    rows.push(row);
+  };
+  for (const region of regions) {
+    if (regions.some(other => other !== region && other.contains(region))) continue;
+    const captionRows = region.querySelectorAll(selectors.captionRows.join(', '));
+    if (captionRows.length) {
+      for (const row of captionRows) {
+        if (row.closest(excludedContainer)) continue;
+        const speaker = row.querySelector(selectors.captionSpeakers.join(', '))?.textContent.trim() || '参加者';
+        const body = row.querySelector(selectors.captionTexts.join(', '));
+        if (!body || body.closest(excludedContainer)) continue;
+        const content = body.cloneNode(true);
+        content.querySelectorAll(ignored).forEach(child => child.remove());
+        const text = content.textContent.trim();
+        if (text) addRow(speaker, text, row);
+      }
+      continue;
+    }
+
+    let speaker = '参加者';
+    let chunks = [];
+    let index = 0;
+    const flush = () => {
+      const text = chunks.join('').trim();
+      if (text && !/^[a-z0-9_]+$/.test(text)) addRow(speaker, text, region, index);
+      chunks = [];
+    };
+    const visit = (node) => {
+      if (node.nodeType === 3) {
+        chunks.push(node.textContent);
+      } else if (node.nodeType === 1 && !node.matches(ignored)) {
+        if (node.matches(speakerSelector)) {
+          flush();
+          index++;
+          const name = node.cloneNode(true);
+          name.querySelectorAll(ignored).forEach(child => child.remove());
+          speaker = name.textContent.trim() || node.getAttribute('data-sender-name')?.trim() || '参加者';
+        } else {
+          node.childNodes.forEach(visit);
+        }
+      }
+    };
+    visit(region);
+    flush();
+  }
+  return rows;
 }
 
 export async function joinMeetPage(page, {
@@ -373,6 +458,7 @@ export function copyMeetBotProfile(source, destination) {
 
 export async function startMeetBot({
   url,
+  testAudio,
   mode = 'profile', // 'profile' | 'guest'
   maxMinutes = 120,
   debugDom = false,
@@ -433,15 +519,20 @@ export async function startMeetBot({
       viewport: { width: 1280, height: 720 },
       args: [
         '--use-fake-ui-for-media-stream',
+        ...(testAudio ? [
+          '--use-fake-device-for-media-stream',
+          `--use-file-for-fake-audio-capture=${testAudio}`,
+        ] : []),
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-notifications',
         '--disable-infobars',
+        '--disable-session-crashed-bubble',
       ],
     });
 
     return await runMeetBot(context, close, {
-      url, mode, maxMinutes, debugDom, sessionDir, botDisplayName,
+      url, mode, maxMinutes, debugDom, sessionDir, botDisplayName, testAudio,
       onCaption, onJoinState, onCaptionsOn, getCaptionLineCount, log, uiTimeoutMs,
     });
   } catch (err) {
@@ -451,22 +542,25 @@ export async function startMeetBot({
 }
 
 async function runMeetBot(context, close, {
-  url, mode, maxMinutes, debugDom, sessionDir, botDisplayName,
+  url, mode, maxMinutes, debugDom, sessionDir, botDisplayName, testAudio,
   onCaption, onJoinState, onCaptionsOn, getCaptionLineCount, log, uiTimeoutMs,
 }) {
   const page = context.pages()[0] || await context.newPage();
 
-  // Expose caption callback to browser page
-  await page.exposeFunction('__meetCueOnCaption', (speaker, text) => {
-    onCaption({ speaker, text, timestamp: Date.now() });
-  });
-
+  const enableTestMic = async () => {
+    const mutedMic = page.getByRole('button', {
+      name: /^(Turn on microphone|Unmute microphone|マイクをオンにする|マイクのミュートを解除)(?:$|[（( ])/i,
+    }).and(page.locator(':visible')).first();
+    if (await mutedMic.isVisible()) await mutedMic.click({ timeout: 2000 });
+  };
   const preparePrejoin = async () => {
     try {
-      await page.keyboard.press('Control+d');
+      if (!testAudio) await page.keyboard.press('Control+d');
       await page.waitForTimeout(500);
       await page.keyboard.press('Control+e');
     } catch { /* 無効なショートカットは無視する */ }
+
+    if (testAudio) await enableTestMic();
 
     if (mode === 'guest') {
       for (const selector of MEET_SELECTORS.guestNameInput) {
@@ -492,39 +586,13 @@ async function runMeetBot(context, close, {
   }
 
   const joinedAt = Date.now();
+  await dismissMeetPopups(page);
   const captionsOn = await enableMeetCaptions(page);
   onCaptionsOn(captionsOn);
   log(`[meet-cue-browser] 字幕オンの確認: ${captionsOn}`);
 
-  // Inject MutationObserver script for subtitle extraction
-  await page.evaluate((captionSelector) => {
-    const observer = new MutationObserver((mutations) => {
-      // Find all caption elements
-      const captionNodes = document.querySelectorAll(captionSelector);
-      if (captionNodes.length > 0) {
-        captionNodes.forEach(node => {
-          const text = node.textContent || '';
-          if (text.trim()) {
-            // Attempt speaker identification
-            const speakerNode = node.querySelector('.zs5S2e, .bh44bd, [data-sender-name]');
-            const speaker = speakerNode ? speakerNode.textContent.trim() : '参加者';
-            window.__meetCueOnCaption(speaker, text.trim());
-          }
-        });
-      } else {
-        // Fallback: search for floating caption overlay text
-        const spans = document.querySelectorAll('div[style*="position"] span, div[class*="caption"]');
-        spans.forEach(span => {
-          const txt = span.textContent || '';
-          if (txt.length > 5 && txt.length < 500) {
-            window.__meetCueOnCaption('話者', txt.trim());
-          }
-        });
-      }
-    });
-
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-  }, MEET_SELECTORS.captionContainers.join(', '));
+  if (testAudio) await enableTestMic();
+  const stopCaptions = await watchMeetCaptions(page, { onCaption, log });
 
   // Debug DOM Timer
   let debugInterval = null;
@@ -583,6 +651,7 @@ async function runMeetBot(context, close, {
 
       // Check if left call
       try {
+        await dismissMeetPopups(page);
         const bodyText = await page.evaluate(() => document.body.innerText || '');
         if (MEET_SELECTORS.leftCallTexts.some(t => bodyText.includes(t))) {
           log('[meet-cue-browser] 通話から退出した画面を検知しました。');
@@ -601,6 +670,7 @@ async function runMeetBot(context, close, {
   const stop = async () => {
     isStopped = true;
     if (debugInterval) clearInterval(debugInterval);
+    await stopCaptions();
     await close();
     log('[meet-cue-browser] Bot セッション終了');
   };
@@ -613,29 +683,111 @@ async function runMeetBot(context, close, {
   };
 }
 
+export async function watchMeetCaptions(page, { onCaption, log, pollMs = 1500 }) {
+  let latestSequence = 0;
+  let previous = new Map();
+  const receive = ({ sequence, rows }) => {
+    if (sequence <= latestSequence) return;
+    latestSequence = sequence;
+    const current = new Map(rows.map(row => [row.rowId, row]));
+    const timestamp = Date.now();
+    for (const rowId of previous.keys()) {
+      if (!current.has(rowId)) onCaption({ rowId, text: '', timestamp });
+    }
+    for (const row of rows) {
+      const old = previous.get(row.rowId);
+      if (old?.text !== row.text || old.speaker !== row.speaker) onCaption({ ...row, timestamp });
+    }
+    previous = current;
+  };
+
+  await page.exposeFunction('__meetCueOnCaption', receive);
+  await page.evaluate(`(({ selectors, excludedContainer }) => {
+    const readCaptions = ${readMeetCaptions.toString()};
+    const containerSelector = selectors.captionContainers.join(', ');
+    const ids = new WeakMap();
+    let nextId = 0;
+    let sequence = 0;
+    let regions = [];
+    const snapshot = () => ({
+      sequence: ++sequence,
+      rows: readCaptions(document, selectors, excludedContainer, (element, index) => {
+        if (!ids.has(element)) ids.set(element, ++nextId);
+        return ids.get(element) + ':' + index;
+      }),
+    });
+    let observerError;
+    const observer = new MutationObserver(() => {
+      window.__meetCueOnCaption(snapshot()).catch(error => { observerError = String(error); });
+    });
+    window.__meetCueReadCaptions = (stop) => {
+      const current = Array.from(document.querySelectorAll(containerSelector))
+        .filter(region => !region.closest(excludedContainer));
+      if (stop || current.length !== regions.length || current.some((region, i) => region !== regions[i])) {
+        observer.disconnect();
+        regions = current;
+        if (!stop) {
+          for (const region of regions) {
+            observer.observe(region, { childList: true, subtree: true, characterData: true, attributes: true });
+          }
+        }
+      }
+      const result = { ...snapshot(), observerError };
+      observerError = undefined;
+      return result;
+    };
+  })(${JSON.stringify({ selectors: MEET_SELECTORS, excludedContainer: excludedCaptionContainer })})`);
+
+  const poll = async (stop = false) => {
+    try {
+      const result = await page.evaluate(stop => window.__meetCueReadCaptions(stop), stop);
+      if (result.observerError) log(`[meet-cue-browser] 字幕 Observer の通知に失敗: ${result.observerError}`);
+      receive(result);
+    } catch (err) {
+      if (!page.isClosed()) log(`[meet-cue-browser] 字幕の読み取りに失敗: ${err.message}`);
+    }
+  };
+  await poll();
+  let pendingPoll;
+  const interval = setInterval(() => {
+    pendingPoll ??= poll().finally(() => { pendingPoll = undefined; });
+  }, pollMs);
+
+  return async () => {
+    clearInterval(interval);
+    await pendingPoll;
+    await poll(true);
+  };
+}
+
 async function saveCaptionDebug(page, sessionDir) {
-  const captured = await page.evaluate(() => ({
+  const captured = await page.evaluate(({ selector, excludedContainer }) => ({
+    captionCandidates: Array.from(document.querySelectorAll(selector), element => ({
+      outerHTML: element.outerHTML.slice(0, 2000),
+      excluded: Boolean(element.closest(excludedContainer)),
+    })),
     ariaLabels: [...new Set(Array.from(document.querySelectorAll('[aria-label]'),
       element => element.getAttribute('aria-label')))],
     bodyText: document.body.innerText,
-  }));
+  }), { selector: MEET_SELECTORS.captionContainers.join(', '), excludedContainer: excludedCaptionContainer });
   const selectorHits = {};
   for (const [group, candidates] of Object.entries(MEET_SELECTORS)) {
     selectorHits[group] = Object.fromEntries(await Promise.all(candidates.map(async candidate => [
       candidate,
       group === 'leftCallTexts'
         ? captured.bodyText.split(candidate).length - 1
-        : group === 'joinButtons'
+        : ['joinButtons', 'captionsEnable', 'captionsDisable'].includes(group)
           ? await page.getByRole('button', { name: candidate, exact: true }).count()
-          : group === 'lobbyTexts'
-            ? await page.getByText(candidate).count()
-            : candidate instanceof RegExp
-              ? await page.getByRole('button', { name: candidate }).count()
+          : group === 'dismissibleDialogs'
+            ? await page.getByRole('dialog', { name: candidate, exact: true }).count()
+            : group === 'lobbyTexts'
+              ? await page.getByText(candidate).count()
               : await page.locator(candidate).count(),
     ])));
   }
   fs.writeFileSync(path.join(sessionDir, 'caption-debug.json'), JSON.stringify({
     selectorHits,
     ariaLabels: captured.ariaLabels,
+    captionCandidates: captured.captionCandidates,
   }, null, 2), 'utf8');
 }

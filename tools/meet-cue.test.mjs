@@ -1,11 +1,14 @@
+import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { parseHTML } from 'linkedom';
 
 import {
   CaptionAssembler,
+  MEET_SELECTORS,
   CueTracker,
   STANDARD_CARDS,
   BOT_DISPLAY_NAME_DEFAULT,
@@ -37,7 +40,10 @@ import {
   startMeetBot,
   checkPlaywrightAvailable,
   detectMeetJoinState,
+  dismissMeetPopups,
   enableMeetCaptions,
+  readMeetCaptions,
+  watchMeetCaptions,
   findMeetJoinButton,
   joinMeetPage,
 } from './lib/meet-cue-browser.mjs';
@@ -114,31 +120,55 @@ test('JST 日時・セッション ID フォーマット検証', () => {
   assert.equal(formatJstSessionDate(utcDate), '20261112-112530');
 });
 
-test('CaptionAssembler: 字幕の重複除去、1.5秒確定、話者切替', t => {
-  const assembler = new CaptionAssembler({ finalizeDelayMs: 1500 });
-  const start = 1000000;
+test('CaptionAssembler: 1文字ずつ伸びても句点で終わった文だけを2.5秒後に確定する', () => {
+  const assembler = new CaptionAssembler();
+  const sentence = '展示会のブースについて、ご予算はどのくらいをお考えでしょうか。';
+  const input = sentence + '過';
+  for (let i = 1; i <= input.length; i++) {
+    assert.deepEqual(assembler.pushMutation({ rowId: 'a', speaker: 'あなた', text: input.slice(0, i), timestamp: i * 100 }), []);
+  }
 
-  // 1. Single speaker growing text
-  assembler.pushMutation({ speaker: '田中', text: 'こんにちは', timestamp: start });
-  assembler.pushMutation({ speaker: '田中', text: 'こんにちは、オージャストの', timestamp: start + 500 });
-  assembler.pushMutation({ speaker: '田中', text: 'こんにちは、オージャストの田中です。', timestamp: start + 1000 });
+  const deadline = sentence.length * 100 + 2500;
+  assert.deepEqual(assembler.tick(deadline - 1), []);
+  assert.deepEqual(assembler.tick(deadline).map(line => line.text), [sentence]);
+  assert.deepEqual(assembler.tick(deadline + 100), []);
+});
 
-  assert.equal(assembler.finalizedLines.length, 0, '確定前は0件');
+test('CaptionAssembler: 認識結果が書き換わると安定時間を数え直す', () => {
+  const assembler = new CaptionAssembler();
+  const push = (text, timestamp) => assembler.pushMutation({ rowId: 'a', text, timestamp });
+  push('展示会のコースについて伺います。', 0);
+  push('展示会のブースについて伺います。', 2000);
+  assert.deepEqual(assembler.tick(2500), []);
+  assert.deepEqual(assembler.tick(4499), []);
+  assert.deepEqual(assembler.tick(4500).map(line => line.text), ['展示会のブースについて伺います。']);
+  assert.deepEqual(assembler.tick(7000), []);
+});
 
-  // 2. Tick after 1.5s pause
-  const newlyFinalized = assembler.tick(start + 2600);
-  assert.equal(newlyFinalized.length, 1);
-  assert.equal(newlyFinalized[0].speaker, '田中');
-  assert.equal(newlyFinalized[0].text, 'こんにちは、オージャストの田中です。');
-  assert.equal(assembler.finalizedLines.length, 1);
+test('CaptionAssembler: 先頭が途中まで消えても文やその断片を二重に確定しない', () => {
+  const assembler = new CaptionAssembler();
+  const push = (text, timestamp, rowId = 'a') => assembler.pushMutation({ rowId, text, timestamp });
+  push('ご予算を伺います。過去の事例もご紹介できます。', 0);
+  assert.equal(assembler.tick(2500).length, 2);
+  push('伺います。過去の事例もご紹介できます。いかがでしょうか？', 3000);
+  push('過去の事例もご紹介できます。いかがでしょうか？', 4000);
+  assert.deepEqual(assembler.tick(5500).map(line => line.text), ['いかがでしょうか？']);
+  push('過去の事例もご紹介できます。いかがでしょうか?', 6000, 'b');
+  assert.deepEqual(assembler.tick(8500), []);
+});
 
-  // 3. Speaker switch immediately finalizes previous
-  assembler.pushMutation({ speaker: '佐藤', text: 'よろしくお願いします。', timestamp: start + 3000 });
-  const switched = assembler.pushMutation({ speaker: '鈴木', text: '本日はお時間ありがとうございます。', timestamp: start + 3200 });
-
-  assert.equal(switched.length, 1);
-  assert.equal(switched[0].speaker, '佐藤');
-  assert.equal(switched[0].text, 'よろしくお願いします。');
+test('CaptionAssembler: 句点のない末尾は4秒の無変化を待ち、句点を補わない', () => {
+  const assembler = new CaptionAssembler();
+  const push = (text, timestamp, rowId = 'a') => assembler.pushMutation({ rowId, text, timestamp });
+  push('ご予算は', 0);
+  push('はい？', 1000, 'b');
+  assert.deepEqual(assembler.tick(3500).map(line => line.text), ['はい？']);
+  assert.deepEqual(assembler.tick(4999), []);
+  assert.deepEqual(assembler.tick(5000).map(line => line.text), ['ご予算は']);
+  push('ご予算は。', 5100);
+  assert.deepEqual(assembler.tick(7600), []);
+  push('次の展示会は', 8000);
+  assert.deepEqual(assembler.flush(11999), []);
 });
 
 test('buildJevState & buildJevQuestions: 120秒窓、簡略化されたカード一覧、質問生成', () => {
@@ -310,7 +340,7 @@ test('CLI start の必須引数チェック（未指定時 exit 2）', async () 
 test('runDecisionRound: スタブで予算懸念 -> budget カードが Doc 差し込み関数に渡り、40秒以内の2回目は出ないこと', async () => {
   const assembler = new CaptionAssembler();
   assembler.pushMutation({ speaker: 'お客様', text: '予算が厳しくて費用が高すぎます', timestamp: 1000 });
-  assembler.tick(3000);
+  assembler.tick(5000);
 
   const tracker = new CueTracker({ globalCooldownMs: 40000 });
   const cards = [...STANDARD_CARDS];
@@ -532,27 +562,194 @@ test('/new のリダイレクト先を保持し、ホームへ戻ったときだ
   }
 });
 
-test('字幕の操作後にオフボタンが表示された場合だけオンと判定する', async () => {
-  for (const action of ['already_enabled', 'click', 'c', 'unconfirmed']) {
+test('字幕ボタンのラベルまたは aria-pressed でオンを確認し、最大3回試す', async () => {
+  for (const action of ['already_enabled', 'click', 'pressed', 'c', 'retry', 'unconfirmed']) {
     let enabled = action === 'already_enabled';
     const actions = [];
+    const locator = (matches) => ({
+      matches,
+      filter: () => locator(() => false),
+      or: other => locator(() => matches() || other.matches()),
+      and: other => locator(() => matches() && other.matches()),
+      first() { return this; },
+      isVisible: async () => matches(),
+      click: async () => { actions.push('click'); enabled = true; },
+      waitFor: async () => {
+        if (!matches()) throw new Error('字幕オンを確認できません');
+      },
+    });
     const page = {
-      getByRole: (_role, { name }) => ({
-        first: () => ({
-          isVisible: async () => enabled
-            ? name.test('Turn off captions')
-            : action === 'click' && name.test('字幕をオンにする'),
-          click: async () => { actions.push('click'); enabled = true; },
-          waitFor: async () => {
-            if (!enabled || !name.test('Turn off captions')) throw new Error('字幕オンを確認できません');
-          },
-        }),
+      locator: selector => locator(() => {
+        if (selector === ':visible') return true;
+        if (selector.includes('Turn off captions')) return enabled && action !== 'pressed';
+        if (selector === '[aria-pressed="true"]') return enabled && action === 'pressed';
+        return selector.includes('Turn on captions') && ['click', 'pressed'].includes(action);
       }),
+      evaluate: async () => { actions.push('focus'); },
       keyboard: {
-        press: async key => { actions.push(key); enabled = action === 'c'; },
+        press: async key => {
+          actions.push(key);
+          enabled = action === 'c' || (action === 'retry' && actions.length === 4);
+        },
       },
     };
     assert.equal(await enableMeetCaptions(page), action !== 'unconfirmed');
-    assert.deepEqual(actions, action === 'already_enabled' ? [] : [action === 'click' ? 'click' : 'c']);
+    const expected = {
+      already_enabled: [], click: ['click'], pressed: ['click'], c: ['focus', 'c'],
+      retry: ['focus', 'c', 'focus', 'c'], unconfirmed: ['focus', 'c', 'focus', 'c', 'focus', 'c'],
+    };
+    assert.deepEqual(actions, expected[action]);
   }
+});
+
+test('字幕領域から話者と本文を分け、ツールバーやアイコン名を除外する', () => {
+  const text = textContent => ({ nodeType: 3, textContent });
+  const element = (token, ...childNodes) => {
+    const node = {
+      nodeType: 1,
+      childNodes,
+      matches: selector => selector.split(', ').includes(token),
+      get textContent() { return childNodes.map(child => child.textContent).join(''); },
+      getAttribute: () => null,
+      cloneNode: () => element(token, ...childNodes),
+      querySelectorAll: () => [],
+      closest: selector => node.matches(selector) ? node : null,
+      contains: child => childNodes.includes(child),
+    };
+    return node;
+  };
+  const speaker = name => element('[data-sender-name]', text(name));
+  const region = element('region',
+    element('div', speaker('田中'), text('予算を確認します。'),
+      element('button', text('buttonText')), element('i', text('iconText')),
+      element('.material-icons', text('materialIcon')), element('.google-symbols', text('symbol')),
+      element('[aria-hidden="true"]', text('hidden'))),
+    element('div', speaker('佐藤'), text('承知しました。')),
+    ...['translate_cc', 'closed_caption', 'mic_off', 'icon_123'].map(icon =>
+      element('div', speaker('田中'), text(icon))),
+  );
+  const root = { querySelectorAll: () => [
+    region, element('[role="toolbar"]', text('ツールバー')), element('button', text('字幕ボタン')),
+  ] };
+  region.querySelectorAll = () => [];
+  assert.deepEqual(readMeetCaptions(root, { ...MEET_SELECTORS, captionContainers: ['region'] }, 'button, [role="toolbar"]'), [
+    { speaker: '田中', text: '予算を確認します。' },
+    { speaker: '佐藤', text: '承知しました。' },
+  ]);
+});
+
+test('実測した字幕 DOM から話者と本文を抽出し、字幕ボタンのアイコンを除外する', () => {
+  const html = fs.readFileSync(new URL('./test-fixtures/meet-cue-captions-ja.html', import.meta.url), 'utf8');
+  const { document } = parseHTML(html);
+  assert.deepEqual(readMeetCaptions(document, MEET_SELECTORS, 'button, [role="toolbar"]'), [{
+    speaker: 'あなた',
+    text: '本日はお時間をいただきありがとうございます。展示会のブースについて、ご予算はどのくらいをお考えでしょうか。過去の事例もご紹介できます。',
+  }]);
+});
+
+test('字幕監視: 遅れて現れた領域をポーリングし、Observer と終了直前の読み取りでも通知する', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const { document } = parseHTML('<html><body></body></html>');
+  let notify;
+  const observed = new Set();
+  class MutationObserver {
+    constructor(callback) { notify = callback; }
+    observe(region, options) {
+      assert.equal(options.characterData, true);
+      assert.equal(options.subtree, true);
+      observed.add(region);
+    }
+    disconnect() { observed.clear(); }
+  }
+  const window = {};
+  const page = {
+    exposeFunction: async (name, callback) => { window[name] = async value => callback(value); },
+    evaluate: async (expression, arg) => runInNewContext(
+      typeof expression === 'string' ? expression : `(${expression})(arg)`,
+      { window, document, MutationObserver, arg },
+    ),
+    isClosed: () => false,
+  };
+  const received = [];
+  const errors = [];
+  const stop = await watchMeetCaptions(page, { onCaption: caption => received.push(caption), log: msg => errors.push(msg) });
+  const poll = async () => {
+    t.mock.timers.tick(1500);
+    await new Promise(resolve => setImmediate(resolve));
+  };
+  const insert = text => {
+    const region = document.createElement('div');
+    region.setAttribute('role', 'region');
+    region.setAttribute('aria-label', '字幕');
+    region.innerHTML = '<div class="nMcdL"><div class="adE6rb"><span class="NWpY1d">あなた</span></div><div class="ygicle"></div></div>';
+    region.querySelector('.ygicle').textContent = text;
+    document.body.append(region);
+    return region;
+  };
+  assert.equal(observed.size, 0);
+  const first = insert('本日は');
+  await poll();
+  assert.ok(observed.has(first));
+  first.querySelector('.ygicle').textContent = '本日はお時間を';
+  notify();
+  await poll();
+  first.remove();
+  const second = insert('展示会の');
+  await poll();
+  assert.deepEqual([...observed], [second]);
+  second.querySelector('.ygicle').textContent = '展示会のご予算を';
+  await stop();
+
+  assert.deepEqual(received.map(row => row.text), ['本日は', '本日はお時間を', '', '展示会の', '展示会のご予算を']);
+  assert.equal(received[0].rowId, received[1].rowId);
+  assert.notEqual(received[0].rowId, received[3].rowId);
+  assert.equal(observed.size, 0);
+  assert.deepEqual(errors, []);
+});
+
+test('実測した字幕ボタンの aria-pressed が true なら字幕の操作を省く', async () => {
+  const html = fs.readFileSync(new URL('./test-fixtures/meet-cue-captions-ja.html', import.meta.url), 'utf8');
+  const { document } = parseHTML(html);
+  const locator = elements => ({
+    filter: () => locator([]),
+    or: other => locator([...new Set([...elements, ...other.elements])]),
+    and: other => locator(elements.filter(element => other.elements.includes(element))),
+    first: () => locator(elements.slice(0, 1)),
+    isVisible: async () => elements.length > 0,
+    elements,
+  });
+  const page = {
+    locator: selector => locator([...document.querySelectorAll(selector === ':visible' ? '*' : selector.replaceAll(':visible', ''))]),
+  };
+  assert.equal(await enableMeetCaptions(page), true);
+});
+
+test('実測した2つのダイアログの閉じるボタンだけを押す', async () => {
+  const html = fs.readFileSync(new URL('./test-fixtures/meet-cue-captions-ja.html', import.meta.url), 'utf8');
+  const { document } = parseHTML(html);
+  const label = element => element.getAttribute('aria-label') ??
+    document.getElementById(element.getAttribute('aria-labelledby'))?.textContent;
+  const closed = [];
+  const page = {
+    getByRole(role, { name, exact }) {
+      assert.equal(exact, true);
+      const dialog = [...document.querySelectorAll(`[role="${role}"]`)].find(element => label(element) === name);
+      return {
+        getByRole(childRole, { name: childName, exact: exactChild }) {
+          assert.equal(exactChild, true);
+          const button = [...dialog.querySelectorAll(`[role="${childRole}"]`)]
+            .find(element => label(element) === childName);
+          return {
+            first() { return this; },
+            isVisible: async () => Boolean(button),
+            click: async () => { closed.push(button); dialog.remove(); },
+          };
+        },
+      };
+    },
+  };
+  await dismissMeetPopups(page);
+  assert.equal(closed.length, 2);
+  assert.equal(document.querySelectorAll('[role="dialog"]').length, 0);
+  assert.ok(document.querySelector('button[aria-label="字幕と翻訳"]'));
 });

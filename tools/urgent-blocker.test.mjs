@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   addItem, resolveById, resolveBySession, listItems, hasOpenForSession,
-  selectForInterrupt, markShown, contextHook, isMachinePrompt, INTERRUPT_REPEAT_MS, main,
+  selectForInterrupt, markShown, contextHook, isMachinePrompt, INTERRUPT_REPEAT_MS, main, withLock, readState, writeState,
 } from './urgent-blocker.mjs';
 
 function home(t) {
@@ -91,16 +91,20 @@ test('contextHook: 別セッションの blocker を割り込み表示し、同�
   assert.equal(contextHook({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-B', prompt: 'x' }, { home: h, now: () => Date.now(), env: { CLAUDE_HEADLESS: '1' } }), null);
 });
 
-test('contextHook: 一度表示した blocker は60分以内に同じセッションへ再表示しない', t => {
+test('contextHook: 一度表示した blocker は60分以内に同じセッションへ再表示しない（代わりに返事を捕捉する）', t => {
   const h = home(t);
   addItem(h, { session: 'sess-A', title: 't', ask: 'a' });
   const env = {};
   const first = contextHook({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-B', prompt: 'x' }, { home: h, now: () => 1000, env });
   assert.ok(first);
-  const second = contextHook({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-B', prompt: 'x' }, { home: h, now: () => 1000 + 60_000, env });
-  assert.equal(second, null);
+  assert.match(first.hookSpecificOutput.additionalContext, /🚨 割り込み/);
+  // Second call within 60 min: captures the prompt as a reply (not a re-show)
+  const second = contextHook({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-B', prompt: '返事です' }, { home: h, now: () => 1000 + 60_000, env });
+  assert.ok(second);
+  assert.match(second.hookSpecificOutput.additionalContext, /返事として記録/);
+  // Item is now 'answered', so no re-show even after 60+ min
   const third = contextHook({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-B', prompt: 'x' }, { home: h, now: () => 1000 + 61 * 60_000, env });
-  assert.ok(third);
+  assert.equal(third, null);
 });
 
 test('CLI: --add / --list / --resolve の入出力', async t => {
@@ -121,12 +125,183 @@ test('CLI: --add / --list / --resolve の入出力', async t => {
   assert.equal(await run(['--unknown']), 1);
 });
 
-test('markShown は対象 id の shownSessions だけを更新する', t => {
+test('markShown は lastShownPrompt を設定する', t => {
   const h = home(t);
   const a = addItem(h, { session: 'sess-A', title: 't', ask: 'a' });
-  const b = addItem(h, { session: 'sess-A', title: 't', ask: 'b' });
-  markShown(h, [a.id], 'sess-B', new Date('2026-11-10T01:00:00Z'));
+  markShown(h, [a.id], 'sess-B', new Date('2026-11-16T13:25:00Z'));
   const items = listItems(h);
-  assert.ok(items.find(i => i.id === a.id).shownSessions['sess-B']);
-  assert.deepEqual(items.find(i => i.id === b.id).shownSessions, {});
+  const item = items.find(i => i.id === a.id);
+  assert.deepEqual(item.lastShownPrompt, { session: 'sess-B', at: '2026-11-16T13:25:00.000Z' });
+});
+
+test('contextHook: 返事を自動捕捉する', t => {
+  const h = home(t);
+  const item = addItem(h, { session: 'sess-A', title: 'DWD鍵配布', ask: '鍵を配って' });
+  // Simulate: markShown sets lastShownPrompt
+  markShown(h, [item.id], 'sess-B', new Date('2026-11-16T13:25:00Z'));
+  // Next UserPromptSubmit in sess-B captures the reply
+  const out = contextHook(
+    { hook_event_name: 'UserPromptSubmit', session_id: 'sess-B', prompt: '014だけじゃなく、008.011.014.015.018.019も配って' },
+    { home: h, now: () => Date.parse('2026-11-16T13:25:33Z'), env: {} }
+  );
+  assert.ok(out);
+  assert.match(out.hookSpecificOutput.additionalContext, /返事として記録/);
+  assert.match(out.hookSpecificOutput.additionalContext, /--reopen/);
+  // Verify state
+  const items = listItems(h);
+  const updated = items.find(i => i.id === item.id);
+  assert.equal(updated.status, 'answered');
+  assert.equal(updated.replies.length, 1);
+  assert.equal(updated.replies[0].text, '014だけじゃなく、008.011.014.015.018.019も配って');
+  assert.equal(updated.replies[0].session, 'sess-B');
+  assert.equal(updated.lastShownPrompt, undefined);
+});
+
+test('contextHook: 機械プロンプトでは返事を捕捉しない', t => {
+  const h = home(t);
+  const item = addItem(h, { session: 'sess-A', title: 't', ask: 'a' });
+  markShown(h, [item.id], 'sess-B', new Date());
+  const out = contextHook(
+    { hook_event_name: 'UserPromptSubmit', session_id: 'sess-B', prompt: '【定期の進捗確認】進めて' },
+    { home: h, now: () => Date.now(), env: {} }
+  );
+  // Should not capture reply (machine prompt), and no interrupt (same session)
+  assert.equal(out, null);
+  const items = listItems(h);
+  assert.equal(items.find(i => i.id === item.id).status, 'open');
+});
+
+test('contextHook: SessionStart では返事を捕捉しない', t => {
+  const h = home(t);
+  const item = addItem(h, { session: 'sess-A', title: 't', ask: 'a' });
+  markShown(h, [item.id], 'sess-B', new Date());
+  const out = contextHook(
+    { hook_event_name: 'SessionStart', session_id: 'sess-B', prompt: 'こんにちは' },
+    { home: h, now: () => Date.now(), env: {} }
+  );
+  assert.equal(out, null);
+  const items = listItems(h);
+  assert.equal(items.find(i => i.id === item.id).status, 'open');
+});
+
+test('contextHook: 登録元セッションに返事を配達する', t => {
+  const h = home(t);
+  const item = addItem(h, { session: 'sess-A', title: 'DWD鍵配布', ask: '鍵を配って' });
+  // Manually add a reply (simulating what another session would do)
+  withLock(h, () => {
+    const state = readState(h);
+    const i = state.items.find(x => x.id === item.id);
+    i.status = 'answered';
+    i.replies = [{ session: 'sess-B', at: '2026-11-16T13:25:33Z', text: '014だけじゃなく、008.011.014.015.018.019も配って' }];
+    writeState(h, state);
+  });
+  // Now sess-A gets a UserPromptSubmit
+  const out = contextHook(
+    { hook_event_name: 'UserPromptSubmit', session_id: 'sess-A', prompt: '続きをやります' },
+    { home: h, now: () => Date.parse('2026-11-16T14:00:00Z'), env: {} }
+  );
+  assert.ok(out);
+  assert.match(out.hookSpecificOutput.additionalContext, /別セッションで kim が返事済み/);
+  assert.match(out.hookSpecificOutput.additionalContext, /DWD鍵配布/);
+  assert.match(out.hookSpecificOutput.additionalContext, /014だけじゃなく/);
+  assert.match(out.hookSpecificOutput.additionalContext, /--resolve/);
+});
+
+test('contextHook: 返事配達と割り込み表示は共存する', t => {
+  const h = home(t);
+  // Item A belongs to sess-A (will receive delivery)
+  const itemA = addItem(h, { session: 'sess-A', title: 'DWD鍵配布', ask: '鍵を配って' });
+  withLock(h, () => {
+    const state = readState(h);
+    const i = state.items.find(x => x.id === itemA.id);
+    i.status = 'answered';
+    i.replies = [{ session: 'sess-B', at: '2026-11-16T13:25:33Z', text: '返事' }];
+    writeState(h, state);
+  });
+  // Item B belongs to sess-C (will interrupt sess-A)
+  addItem(h, { session: 'sess-C', title: 'LINEログイン', ask: 'ログイン（2分）' });
+  // sess-A gets a UserPromptSubmit
+  const out = contextHook(
+    { hook_event_name: 'UserPromptSubmit', session_id: 'sess-A', prompt: '続きをやります' },
+    { home: h, now: () => Date.parse('2026-11-16T14:00:00Z'), env: {} }
+  );
+  assert.ok(out);
+  assert.match(out.hookSpecificOutput.additionalContext, /別セッションで kim が返事済み/);
+  assert.match(out.hookSpecificOutput.additionalContext, /🚨 割り込み/);
+});
+
+test('CLI: --answer で手動返事を記録する', async t => {
+  const h = home(t);
+  const item = addItem(h, { session: 'sess-A', title: 't', ask: 'a' });
+  const out = [];
+  const run = args => main(args, { home: h, stdout: s => out.push(s), stderr: () => {}, readStdin: async () => '{}' });
+  assert.equal(await run(['--answer', item.id, '--text', '返事です']), 0);
+  const result = JSON.parse(out.pop());
+  assert.equal(result.status, 'answered');
+  const items = listItems(h);
+  const updated = items.find(i => i.id === item.id);
+  assert.equal(updated.status, 'answered');
+  assert.equal(updated.replies.length, 1);
+  assert.equal(updated.replies[0].text, '返事です');
+});
+
+test('CLI: --reopen で answered を open に戻す', async t => {
+  const h = home(t);
+  const item = addItem(h, { session: 'sess-A', title: 't', ask: 'a' });
+  // First answer it
+  withLock(h, () => {
+    const state = readState(h);
+    const i = state.items.find(x => x.id === item.id);
+    i.status = 'answered';
+    i.replies = [{ session: 'sess-B', at: '2026-11-16T13:25:33Z', text: '返事' }];
+    writeState(h, state);
+  });
+  const out = [];
+  const run = args => main(args, { home: h, stdout: s => out.push(s), stderr: () => {}, readStdin: async () => '{}' });
+  assert.equal(await run(['--reopen', item.id]), 0);
+  const result = JSON.parse(out.pop());
+  assert.equal(result.status, 'open');
+  const items = listItems(h);
+  const updated = items.find(i => i.id === item.id);
+  assert.equal(updated.status, 'open');
+  assert.equal(updated.replies, undefined);
+});
+
+test('CLI: --list --answered で answered 項目を一覧する', async t => {
+  const h = home(t);
+  const item = addItem(h, { session: 'sess-A', title: 't', ask: 'a' });
+  // Answer it
+  withLock(h, () => {
+    const state = readState(h);
+    const i = state.items.find(x => x.id === item.id);
+    i.status = 'answered';
+    i.replies = [{ session: 'sess-B', at: '2026-11-16T13:25:33Z', text: '返事' }];
+    writeState(h, state);
+  });
+  const out = [];
+  const run = args => main(args, { home: h, stdout: s => out.push(s), stderr: () => {}, readStdin: async () => '{}' });
+  assert.equal(await run(['--list', '--answered', '--json']), 0);
+  const listed = JSON.parse(out.pop());
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].status, 'answered');
+  // --open should not show answered
+  assert.equal(await run(['--list', '--open', '--json']), 0);
+  assert.equal(JSON.parse(out.pop()).length, 0);
+});
+
+test('CLI: --answer は解決済み blocker を拒否する', async t => {
+  const h = home(t);
+  const item = addItem(h, { session: 'sess-A', title: 't', ask: 'a' });
+  resolveById(h, item.id);
+  const out = [];
+  const run = args => main(args, { home: h, stdout: s => out.push(s), stderr: () => {}, readStdin: async () => '{}' });
+  assert.equal(await run(['--answer', item.id, '--text', '返事']), 1);
+});
+
+test('CLI: --reopen は answered 以外を拒否する', async t => {
+  const h = home(t);
+  const item = addItem(h, { session: 'sess-A', title: 't', ask: 'a' });
+  const out = [];
+  const run = args => main(args, { home: h, stdout: s => out.push(s), stderr: () => {}, readStdin: async () => '{}' });
+  assert.equal(await run(['--reopen', item.id]), 1); // status is open, not answered
 });

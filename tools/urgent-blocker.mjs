@@ -24,7 +24,7 @@ const stateFile = home => path.join(home, '.claude', 'urgent-blocker.json');
 export const defaultHome = () => process.env.ORGIAST_HOME || os.homedir();
 
 // 単一 JSON を全セッションから触るため、ロックで直列化する（kim-inbox と同じ wx 方式）。
-function withLock(home, fn) {
+export function withLock(home, fn) {
   fs.mkdirSync(path.dirname(stateFile(home)), { recursive: true });
   const lock = `${stateFile(home)}.lock`;
   let fd;
@@ -50,7 +50,7 @@ function withLock(home, fn) {
 
 function validItem(item) {
   return item && ID_PATTERN.test(item.id) && typeof item.session === 'string' && typeof item.title === 'string'
-    && typeof item.ask === 'string' && ['open', 'resolved'].includes(item.status) && typeof item.createdAt === 'string';
+    && typeof item.ask === 'string' && ['open', 'answered', 'resolved'].includes(item.status) && typeof item.createdAt === 'string';
 }
 
 export function readState(home) {
@@ -63,7 +63,7 @@ export function readState(home) {
   }
 }
 
-function writeState(home, state) {
+export function writeState(home, state) {
   fs.mkdirSync(path.dirname(stateFile(home)), { recursive: true });
   const tmp = `${stateFile(home)}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
   try { fs.writeFileSync(tmp, JSON.stringify(state, null, 1) + '\n', { mode: 0o600 }); fs.renameSync(tmp, stateFile(home)); }
@@ -155,13 +155,17 @@ export function markShown(home, ids, sessionId, now = new Date()) {
     for (const item of state.items) {
       if (!ids.includes(item.id)) continue;
       item.shownSessions = { ...(item.shownSessions || {}), [sessionId]: iso };
+      item.lastShownPrompt = { session: sessionId, at: iso };
       changed = true;
     }
     if (changed) writeState(home, state);
   });
 }
 
-// hook（SessionStart / UserPromptSubmit）: 未解決の急ぎの人待ちを別セッションへ割り込み表示する。
+// hook（SessionStart / UserPromptSubmit）:
+//   1. 返事の自動捕捉: 直前の割り込み表示に対する user の返事を replies に記録する。
+//   2. 割り込み表示: 未解決の急ぎの人待ちを別セッションへ割り込み表示する。
+//   3. 登録元への配達: 別セッションで返事が付いた項目を登録元セッションへ通知する。
 export function contextHook(input, { home = defaultHome(), now = Date.now(), env = process.env } = {}) {
   try {
     if (env.CLAUDE_HEADLESS === '1' || env.ORGIAST_AUTO_SESSION === '1') return null;
@@ -169,18 +173,69 @@ export function contextHook(input, { home = defaultHome(), now = Date.now(), env
     if (!['SessionStart', 'UserPromptSubmit'].includes(event)) return null;
     const sessionId = String(input.session_id || input.sessionId || '');
     if (!sessionId) return null;
-    const items = listItems(home, { status: 'open' });
-    const selected = selectForInterrupt(items, { sessionId, now: now(), prompt: input.prompt || '' });
-    if (!selected.length) return null;
-    const lines = selected.map(item => {
-      const link = item.link ? ` ／ ${item.link}` : '';
-      return `🚨 割り込み（別セッションで急ぎの人待ち）: ${item.title} ／ お願い: ${item.ask}${link}`;
-    });
-    markShown(home, selected.map(i => i.id), sessionId, new Date(now()));
+    const prompt = String(input.prompt || '');
+    const isMachine = isMachinePrompt(prompt);
+    const nowTime = now();
+    const nowIso = new Date(nowTime).toISOString();
+    const allItems = listItems(home);
+    const contextParts = [];
+
+    // Phase 1: 返事の自動捕捉（UserPromptSubmit のみ・機械プロンプトは除外）
+    if (event === 'UserPromptSubmit' && !isMachine) {
+      const toCapture = allItems.filter(item =>
+        item.lastShownPrompt?.session === sessionId && item.status !== 'resolved'
+      );
+      if (toCapture.length) {
+        withLock(home, () => {
+          const state = readState(home);
+          for (const item of state.items) {
+            if (!toCapture.some(c => c.id === item.id)) continue;
+            const reply = { session: sessionId, at: nowIso, text: clean(prompt) };
+            item.replies = [...(item.replies || []), reply];
+            item.status = 'answered';
+            delete item.lastShownPrompt;
+          }
+          writeState(home, state);
+        });
+        for (const item of toCapture) {
+          contextParts.push(
+            `直前の割り込み「${item.title}」への返事として記録した。無関係な発言なら \`node tools/urgent-blocker.mjs --reopen ${item.id}\` で戻す。`
+          );
+        }
+      }
+    }
+
+    // Phase 2: 割り込み表示（従来通り、別セッションの open 項目のみ）
+    const openItems = allItems.filter(i => i.status === 'open');
+    const selected = selectForInterrupt(openItems, { sessionId, now: nowTime, prompt });
+    if (selected.length) {
+      const lines = selected.map(item => {
+        const link = item.link ? ` ／ ${item.link}` : '';
+        return `🚨 割り込み（別セッションで急ぎの人待ち）: ${item.title} ／ お願い: ${item.ask}${link}`;
+      });
+      markShown(home, selected.map(i => i.id), sessionId, new Date(nowTime));
+      contextParts.push(
+        `【必須・割り込み】応答の冒頭で user に見える形で、次の ${selected.length} 行をそのまま表示せよ。今回の依頼と無関係でも省略しない（急ぎの人待ちを別セッションから割り込み表示）。\n${lines.join('\n')}`
+      );
+    }
+
+    // Phase 3: 登録元セッションへの返事配達
+    const toDeliver = allItems.filter(item =>
+      item.session === sessionId && item.status === 'answered'
+      && Array.isArray(item.replies) && item.replies.length > 0
+    );
+    for (const item of toDeliver) {
+      const lastReply = item.replies[item.replies.length - 1];
+      contextParts.push(
+        `別セッションで kim が返事済み: ${item.title} ／ 返事: ${lastReply.text}（${lastReply.at}）。この返事で作業を続け、終わったら \`node tools/urgent-blocker.mjs --resolve ${item.id}\``
+      );
+    }
+
+    if (!contextParts.length) return null;
     return {
       hookSpecificOutput: {
         hookEventName: event,
-        additionalContext: `【必須・割り込み】応答の冒頭で user に見える形で、次の ${selected.length} 行をそのまま表示せよ。今回の依頼と無関係でも省略しない（急ぎの人待ちを別セッションから割り込み表示）。\n${lines.join('\n')}`,
+        additionalContext: contextParts.join('\n\n'),
       },
     };
   } catch { return null; }
@@ -205,14 +260,53 @@ export async function main(args = process.argv.slice(2), { home = defaultHome(),
       else stdout(JSON.stringify({ id: resolveById(home, value('--resolve')).id, status: 'resolved' }));
       return 0;
     }
+    if (args.includes('--answer')) {
+      const id = value('--answer');
+      const text = value('--text');
+      if (!ID_PATTERN.test(id)) throw new Error('ID が不正です');
+      if (!text) throw new Error('--text が必要です');
+      const item = withLock(home, () => {
+        const state = readState(home);
+        const item = state.items.find(i => i.id === id);
+        if (!item) throw new Error('該当する blocker がありません');
+        if (item.status === 'resolved') throw new Error('解決済みの blocker には返事できません');
+        const reply = { session: 'cli', at: new Date().toISOString(), text: clean(text) };
+        item.replies = [...(item.replies || []), reply];
+        item.status = 'answered';
+        writeState(home, state);
+        return item;
+      });
+      stdout(JSON.stringify({ id: item.id, status: item.status }));
+      return 0;
+    }
+    if (args.includes('--reopen')) {
+      const id = value('--reopen');
+      if (!ID_PATTERN.test(id)) throw new Error('ID が不正です');
+      const item = withLock(home, () => {
+        const state = readState(home);
+        const item = state.items.find(i => i.id === id);
+        if (!item) throw new Error('該当する blocker がありません');
+        if (item.status !== 'answered') throw new Error('answered 状態の blocker のみ reopen できます');
+        item.status = 'open';
+        item.replies = (item.replies || []).slice(0, -1);
+        if (!item.replies.length) delete item.replies;
+        writeState(home, state);
+        return item;
+      });
+      stdout(JSON.stringify({ id: item.id, status: item.status }));
+      return 0;
+    }
     if (args.includes('--list') || args.includes('--status')) {
-      const items = listItems(home, { status: args.includes('--open') || args.includes('--status') ? 'open' : undefined });
+      let statusFilter;
+      if (args.includes('--open') || args.includes('--status')) statusFilter = 'open';
+      else if (args.includes('--answered')) statusFilter = 'answered';
+      const items = listItems(home, { status: statusFilter });
       if (args.includes('--json')) stdout(JSON.stringify(items));
       else if (args.includes('--status')) stdout(`urgent-blocker: open ${items.length} 件${items.length ? `\n最古: ${items[0].id} ${items[0].title}` : ''}`);
       else stdout(items.map(i => `${i.id} ${i.status} ${i.session} ${i.title}`).join('\n') || '');
       return 0;
     }
-    throw new Error('--add / --resolve / --list / --status / --context を指定してください');
+    throw new Error('--add / --resolve / --answer / --reopen / --list / --status / --context を指定してください');
   } catch (error) {
     stderr(`urgent-blocker: ${String(error.message).replace(/[\r\n]+/g, ' ')}`);
     return args.includes('--context') ? 0 : 1;

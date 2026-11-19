@@ -233,7 +233,7 @@ export async function runDetect({ home, config, ledger, state, sources, now, dry
       }
       if (sourceComplete) {
         result.completedSources++;
-        if (!dryRun) { state.sources ||= {}; state.sources[source.key] = next; delete state.pending[source.key]; persist(); }
+        if (!dryRun) { state.sources ||= {}; state.sources[source.key] = next; delete state.pending[source.key]; if (state.transientErrors) delete state.transientErrors[source.key]; persist(); }
         if (resumedPending && !dryRun) queue.splice(sourceIndex + 1, 0, source);
       }
     } catch (e) {
@@ -245,8 +245,15 @@ export async function runDetect({ home, config, ledger, state, sources, now, dry
         result.skipped.push({ source: source.key, reason: '全体時間上限到達' });
       } else if (isQuotaError(e)) result.skipped.push({ source: source.key, reason: `quota retry exhausted: ${reason}` });
       else if (isTransientSourceError(e)) {
-        result.partial.push({ source: source.key, reason: `一時的エラー（次回再試行）: ${reason}` });
-        result.skipped.push({ source: source.key, reason: `一時的エラー: ${reason}` });
+        const transientErrors = (state.transientErrors ||= {});
+        const count = (transientErrors[source.key] || 0) + 1;
+        transientErrors[source.key] = count;
+        if (count >= 3) {
+          result.errors.push({ source: source.key, error: `一時的エラーが${count}回連続: ${reason}` });
+        } else {
+          result.partial.push({ source: source.key, reason: `一時的エラー（${count}回目/次回再試行）: ${reason}` });
+          result.skipped.push({ source: source.key, reason: `一時的エラー: ${reason}` });
+        }
       } else result.errors.push({ source: source.key, error: reason });
     }
   }

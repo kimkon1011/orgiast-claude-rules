@@ -572,6 +572,36 @@ test('Gmail sourceの全メッセージタイムアウトはrunDetectでpartial�
   assert.doesNotMatch(heartbeats[0].summary, /errors=[1-9]/);
 });
 
+test('3回連続の一時的エラーはerrorsになる', async t => {
+  const home = homeFor(t), state = { transientErrors: { 'gmail:test': 2 } };
+  const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+  const sources = [{ key: 'gmail:test', load: async () => { throw timeout; } }];
+  const ledger = { read: async () => [], append: async () => {} };
+  const result = await runDetect({ home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, state, sources, now, dryRun: false, ask: async () => assert.fail('no LLM'), notify: async () => {} });
+  assert.equal(result.partial.length, 0);
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0].error, /3回連続/);
+  assert.equal(state.transientErrors['gmail:test'], 3);
+});
+
+test('成功後に連続エラー回数が0に戻る', async t => {
+  const home = homeFor(t);
+  // 前回2回失敗していた状態
+  const state = { transientErrors: { 'gmail:test': 2 } };
+  const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+  const ledger = { read: async () => [], append: async () => {} };
+  // 1回目: 成功 → transientErrors が削除される
+  const sources = [{ key: 'gmail:test', load: async () => ({ documents: [], next: { watermark: '2026-11-04T00:00:00Z' } }) }];
+  const r1 = await runDetect({ home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, state, sources, now, dryRun: false, ask: async () => ({ items: [] }), notify: async () => {} });
+  assert.equal(r1.errors.length, 0);
+  assert.equal(state.transientErrors?.['gmail:test'], undefined);
+  // 2回目: 同じsourceがタイムアウト → partial（カウンターがリセットされたので1回目扱い）
+  const r2 = await runDetect({ home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, state, sources: [{ key: 'gmail:test', load: async () => { throw timeout; } }], now, dryRun: false, ask: async () => assert.fail('no LLM'), notify: async () => {} });
+  assert.equal(r2.errors.length, 0);
+  assert.equal(r2.partial.length, 1);
+  assert.equal(state.transientErrors['gmail:test'], 1);
+});
+
 test('認証エラーはerrorのまま（transientではない）', async t => {
   const home = homeFor(t);
   const authError = Object.assign(new Error('Gmail API 401: Unauthorized'), { status: 401 });

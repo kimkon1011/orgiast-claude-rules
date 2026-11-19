@@ -5,11 +5,29 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { closeRecord, llmFailureReason } from './session-auto-close.mjs';
+import {
+  closeRecord,
+  DEFAULT_MAX,
+  llmFailureReason,
+  MAX_TRIAGE_TIMEOUT_MS,
+  triageTimeoutMs,
+} from './session-auto-close.mjs';
 
 const execFileAsync = promisify(execFile);
 const sessionId = 'f84f4059-586b-4161-a9ab-c026ad9adb7e';
 const closedAt = '2026-09-14T00:00:00.000Z';
+
+test('既定 --max は滞留を1回で消化できる360件', () => {
+  assert.equal(DEFAULT_MAX, 360);
+});
+
+test('triage timeoutは15秒/件、最小30秒、最大45分', () => {
+  assert.equal(triageTimeoutMs(0), 30_000);
+  assert.equal(triageTimeoutMs(1), 30_000);
+  assert.equal(triageTimeoutMs(40), 600_000);
+  assert.equal(triageTimeoutMs(DEFAULT_MAX), MAX_TRIAGE_TIMEOUT_MS);
+  assert.equal(triageTimeoutMs(1_000), MAX_TRIAGE_TIMEOUT_MS);
+});
 
 function record(overrides = {}) {
   return {

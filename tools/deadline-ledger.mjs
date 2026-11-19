@@ -16,6 +16,7 @@ export const KINDS = ['車検','訴訟・法務','行政・消防','補助金・
 export const STATUSES = ['候補','未着手','対応中','完了','不要','延期'];
 export const DEFAULT_CONFIG = {
   sheetId: '', mailboxes: ['kim@orgiast.jp','seisaku-team@orgiast.jp'], driveUsers: ['kim@orgiast.jp','seisaku-team@orgiast.jp'],
+  gmailDailyLimit: 400, driveDailyLimit: 150,
   lineSheets: ['1sCzmIvFmd2ZnDR2ZUMXmiIKjMJ21O9yMR6trY5e9JGo','1RRBNc_2Dvf5v0vdP2M7OHb6b9KhaNy9AoNo1MhZkUDI'],
   vehicleSheetId: '1mo8-hSCA-qDgblGBND-mjPEAF5fZ73etoz_mPeMZMLA', kimNames: ['kim','金','金功勇',''],
   calendar: { enabled: true, calendarId: 'kim@orgiast.jp' },

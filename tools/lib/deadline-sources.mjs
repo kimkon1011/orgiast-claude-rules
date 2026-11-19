@@ -19,22 +19,30 @@ function windowState(previous = {}, now, limit) {
 }
 function finishWindow(state, pageToken, count) {
   const next = { ...state, used: state.used + count, pageToken: pageToken || null };
-  if (!pageToken) { next.watermark = state.until; delete next.until; delete next.query; }
+  if (!pageToken) { next.watermark = state.until; delete next.until; delete next.query; delete next.pageToken; }
   return next;
 }
-export async function collectGmail({ user, state, now, search = searchGmail }) {
-  const current = windowState(state, now, 80), max = 80 - current.used;
-  if (max <= 0) return { documents: [], next: state };
+const isBehind = (state, now) => Math.min(...[state.until, state.watermark].map(Date.parse).filter(Number.isFinite)) <= now.getTime() - 86400000;
+export async function collectGmail({ user, state, now, search = searchGmail, limit = 400 }) {
+  let current = windowState(state, now, limit);
+  if (current.used >= limit) return { documents: [], next: current };
   const since = current.watermark ? ` after:${Math.floor(Date.parse(current.watermark) / 1000) - 1}` : '';
-  const query = current.query || `newer_than:3d -category:promotions -category:social -list:googlegroups-manage${since} before:${Math.ceil(Date.parse(current.until) / 1000)}`;
+  const staleQuery = current.watermark && /(?:^|\s)newer_than:/.test(current.query || '');
+  const query = !staleQuery && current.query || `${current.watermark ? '' : 'newer_than:3d '}-category:promotions -category:social -list:googlegroups-manage${since} before:${Math.ceil(Date.parse(current.until) / 1000)}`;
   current.query = query;
-  const result = await search({ user, query, max, pageToken: current.pageToken, withBody: true, bodyLimit: 30000, shouldFetchBody: wantsBody, concurrency: 3 });
-  const documents = result.messages.filter(m => wantsBody(m) && m.body).map(m => ({
-    source: 'Gmail', sourceRef: `gmail:${user}:${m.id}`, text: trimBytes(`${m.subject}\n${m.body}`),
-    date: new Date(Number(m.internalDate) || Date.parse(m.date)).toISOString(), url: `https://mail.google.com/mail/u/${encodeURIComponent(user)}/#all/${m.threadId || m.id}`,
-    mailbox: user, threadId: m.threadId, to: m.to,
-  }));
-  return { documents, next: finishWindow(current, result.nextPageToken, result.messages.length + (result.skipped || 0)) };
+  const documents = [], behind = isBehind(current, now);
+  for (let page = 0; page < (behind ? 50 : 1); page++) {
+    const result = await search({ user, query, max: 100, pageToken: current.pageToken, withBody: true, bodyLimit: 30000, shouldFetchBody: wantsBody, concurrency: 3 });
+    const messages = result.messages || [], used = messages.filter(wantsBody).length;
+    documents.push(...messages.filter(m => wantsBody(m) && m.body).map(m => ({
+      source: 'Gmail', sourceRef: `gmail:${user}:${m.id}`, text: trimBytes(`${m.subject}\n${m.body}`),
+      date: new Date(Number(m.internalDate) || Date.parse(m.date)).toISOString(), url: `https://mail.google.com/mail/u/${encodeURIComponent(user)}/#all/${m.threadId || m.id}`,
+      mailbox: user, threadId: m.threadId, to: m.to,
+    })));
+    current = finishWindow(current, result.nextPageToken, used);
+    if (!result.nextPageToken || current.used >= limit) break;
+  }
+  return { documents, next: current };
 }
 export async function readDriveText(file, { user, request, dryRun }) {
   let id = file.id, temporary;
@@ -49,9 +57,9 @@ export async function readDriveText(file, { user, request, dryRun }) {
     return trimBytes(await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}/export?mimeType=text%2Fplain`, { user, text: true })); }
   finally { if (temporary) await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(temporary)}`, { user, method: 'DELETE' }); }
 }
-export async function collectDrive({ user, state, now, request, dryRun = false }) {
-  const current = windowState(state, now, 50), max = 50 - current.used;
-  if (max <= 0) return { documents: [], next: state };
+export async function collectDrive({ user, state, now, request, dryRun = false, limit = 150 }) {
+  let current = windowState(state, now, limit), max = limit - current.used;
+  if (max <= 0) return { documents: [], next: current };
   const since = current.watermark || new Date(now.getTime() - 3 * 86400000).toISOString();
   const q = current.query || `trashed = false and modifiedTime > '${since}' and modifiedTime <= '${current.until}' and (mimeType = 'application/vnd.google-apps.document' or mimeType = 'application/pdf' or mimeType contains 'image/') and not appProperties has { key='deadlineWatchOCR' and value='1' }`;
   current.query = q;
@@ -59,25 +67,28 @@ export async function collectDrive({ user, state, now, request, dryRun = false }
     const params = new URLSearchParams({ q, orderBy: 'modifiedTime', pageSize: String(max), fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)', ...(pageToken ? { pageToken } : {}) });
     return `https://www.googleapis.com/drive/v3/files?${params}`;
   };
-  let result;
-  try { result = await request(makeUrl(current.pageToken), { user }); }
-  catch (error) {
-    if (!current.pageToken || !/HTTP 400/.test(error.message)) throw error;
-    delete current.pageToken;
-    result = await request(makeUrl(), { user });
-  }
   const documents = [];
   const skipped = [];
-  for (const file of result.files || []) {
-    let text;
-    try { text = await readDriveText(file, { user, request, dryRun }); }
+  const behind = isBehind(current, now);
+  for (let page = 0; page < (behind ? 50 : 1); page++) {
+    max = Math.min(1000, limit - current.used);
+    let result;
+    try { result = await request(makeUrl(current.pageToken), { user }); }
     catch (error) {
-      skipped.push({ sourceRef: `drive:${file.id}`, title: file.name, reason: `Drive読み取り失敗: ${redactSecrets(error.message).slice(0, 120)}` });
-      continue;
+      if (!current.pageToken || !/HTTP 400/.test(error.message)) throw error;
+      delete current.pageToken;
+      result = await request(makeUrl(), { user });
     }
-    if (text) documents.push({ source: 'Drive', sourceRef: `drive:${file.id}`, text: trimBytes(`${file.name}\n${text}`), date: file.modifiedTime, url: file.webViewLink || `https://drive.google.com/file/d/${file.id}/view` });
+    for (const file of result.files || []) {
+      let text;
+      try { text = await readDriveText(file, { user, request, dryRun }); }
+      catch (error) { skipped.push({ sourceRef: `drive:${file.id}`, title: file.name, reason: `Drive読み取り失敗: ${redactSecrets(error.message).slice(0, 120)}` }); continue; }
+      if (text) documents.push({ source: 'Drive', sourceRef: `drive:${file.id}`, text: trimBytes(`${file.name}\n${text}`), date: file.modifiedTime, url: file.webViewLink || `https://drive.google.com/file/d/${file.id}/view` });
+    }
+    current = finishWindow(current, result.nextPageToken, result.files?.length || 0);
+    if (!result.nextPageToken || current.used >= limit) break;
   }
-  return { documents, skipped, next: finishWindow(current, result.nextPageToken, result.files?.length || 0) };
+  return { documents, skipped, next: current };
 }
 function timestamp(value) {
   const numeric = Number(value); return Number.isFinite(numeric) && numeric > 0 ? (numeric < 1e12 ? numeric * 1000 : numeric) : Date.parse(value);
@@ -114,8 +125,8 @@ export async function collectDiscord({ home, state = {}, now }) {
 }
 export function sourceLoaders({ home, config, state, now, sheets, request, search, dryRun }) {
   return [
-    ...config.mailboxes.map(user => ({ key: `gmail:${user}`, load: () => collectGmail({ user, state: state.sources?.[`gmail:${user}`], now, search }) })),
-    ...config.driveUsers.map(user => ({ key: `drive:${user}`, load: () => collectDrive({ user, state: state.sources?.[`drive:${user}`], now, request, dryRun }) })),
+    ...config.mailboxes.map(user => ({ key: `gmail:${user}`, load: () => collectGmail({ user, state: state.sources?.[`gmail:${user}`], now, search, limit: config.gmailDailyLimit }) })),
+    ...config.driveUsers.map(user => ({ key: `drive:${user}`, load: () => collectDrive({ user, state: state.sources?.[`drive:${user}`], now, request, dryRun, limit: config.driveDailyLimit }) })),
     ...config.lineSheets.map(sheetId => ({ key: `line:${sheetId}`, load: () => collectLine({ sheetId, state: state.sources?.[`line:${sheetId}`], now, sheets }) })),
     { key: 'discord', load: () => collectDiscord({ home, state: state.sources?.discord, now }) },
   ];

@@ -183,6 +183,17 @@ export async function runDetect({ home, config, ledger, state, sources, now, dry
       state.candidateNoticePending = 0; persist();
     } catch (e) { result.errors.push({ source: 'candidate-notice', error: e.message }); }
   }
+  if (!dryRun) {
+    const lagging = Object.entries(state.sources || {}).filter(([key, value]) => /^(?:gmail|drive):/.test(key) && Date.parse(value.watermark) <= now.getTime() - 2 * 86400000);
+    if (!lagging.length) { if (state.lagNoticeAt) { delete state.lagNoticeAt; persist(); } }
+    else if (!state.lagNoticeAt) {
+      try {
+        const text = `${lagging.map(([key, value]) => `${key}: ${value.watermark}`).join('\n')}。期限の自動検出が遅れています。tools/deadline-detect.mjs の state を確認`;
+        await notify(home, { kind: 'info', source: 'deadline-lag', text, dedupeKey: `deadline-lag:${jstDate(now)}` });
+        state.lagNoticeAt = now.toISOString(); persist();
+      } catch (e) { result.errors.push({ source: 'deadline-lag', error: e.message }); }
+    }
+  }
   return result;
 }
 export async function main(argv = process.argv.slice(2), deps = {}) {

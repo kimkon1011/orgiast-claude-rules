@@ -1,4 +1,5 @@
 import { proxyCredential, gwsFetch, GWS_USER } from './gws-proxy.mjs';
+import { tryRelayToken } from './seisaku-gmail-token.mjs';
 import { createSign } from 'node:crypto';
 import { readFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -66,6 +67,8 @@ export async function getDriveToken({
   asServiceAccount = false,
 } = {}) {
   if (asServiceAccount) return getServiceAccountToken({ scope, signal, fetchImpl });
+  const gmailRelay = await tryRelayToken({ keyPath, impersonate, scope, signal, fetchImpl, statePath });
+  if (gmailRelay) return gmailRelay;
   const relay = proxyCredential({ keyPath, impersonate, scope });
   if (relay !== null) return relay;
   const key = JSON.parse(readFileSync(keyPath, 'utf8'));

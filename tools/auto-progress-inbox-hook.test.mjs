@@ -193,3 +193,14 @@ for (const item of [
   const original = consumeInbox({ session_id: 'original' }, { home, env: {} });
   assert.ok(original.hookSpecificOutput.additionalContext.endsWith(text));
 });
+
+test('loop 起床では inbox を注入しない', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-skip-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  appendInbox(home, 's1', { state: 'done', evidence: 'ループでも届く内容' });
+  // 通常のプロンプト → 届く
+  assert.ok(consumeInbox({ session_id: 's1' }, { home, env: {} }));
+  // loop 起床 → 届かない
+  assert.equal(consumeInbox({ session_id: 's1', prompt: '<<autonomous-loop-dynamic>>' }, { home, env: {} }), null);
+  assert.equal(consumeInbox({ session_id: 's1', prompt: '/loop 5m /check' }, { home, env: {} }), null);
+});

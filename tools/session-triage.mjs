@@ -332,6 +332,24 @@ export function parseLlmResult(stdout) {
   return null;
 }
 
+export function isEmptySession(record) {
+  return !record.lastAssistantText && record.firstPrompt === '(プロンプトなし)';
+}
+
+export function selectRecords(filtered, top, llmMode) {
+  if (!llmMode) return filtered.slice(0, top);
+  const conversations = [];
+  const empties = [];
+  for (const r of filtered) {
+    if (isEmptySession(r)) {
+      empties.push(r);
+    } else {
+      conversations.push(r);
+    }
+  }
+  return conversations.slice(0, top).concat(empties);
+}
+
 function applyLlmResult(record, result) {
   record.llm = result;
   record.nextAction = result.next;
@@ -388,6 +406,16 @@ async function addLlmJudgments(records) {
 出力形式: {"verdict":"未完了|完了|不明","confidence":0-100,"next":"次にやるべき1アクション(40字以内、完了なら空文字)"}\n\n当初の依頼: ${record.llmTitle}\n末尾assistantテキスト: ${shorten(record.lastAssistantText || '(なし)', 900)}\n構造上の事実: ${facts.join('、') || '特になし'}`;
       // 外部プロバイダへ渡す直前にも必ず全ペイロードを再マスクする。
       prompt = redactSecrets(prompt);
+      // 対話の無いセッション（lastAssistantTextが空かつfirstPromptが無し）は
+      // LLM呼び出しを省略して完了扱いにする。
+      // LLMに渡しても「末尾assistantテキストが空の時だけ不明」の指示で
+      // 常に不明が返り、LLMコストだけ消費して何も進まないため。
+      if (isEmptySession(record)) {
+        const defaultResult = { verdict: '完了', confidence: 90, next: '' };
+        applyLlmResult(record, defaultResult);
+        llmStats.success++;
+        continue;
+      }
       let result;
       let failure = '';
       for (const selectedProvider of providerChain) {
@@ -455,7 +483,7 @@ if (isMain) {
     const files = await listFiles();
     const records = (await Promise.all(files.map(inspect))).filter(Boolean).sort((a, b) => b.score - a.score || a.ageDays - b.ageDays);
     const filtered = statusFilter ? records.filter((r) => r.status === statusFilter) : records;
-    let selected = filtered.slice(0, top);
+    let selected = selectRecords(filtered, top, llmMode);
     let llmStats;
     if (llmMode) {
       llmStats = await addLlmJudgments(selected);

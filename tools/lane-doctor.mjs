@@ -194,8 +194,19 @@ export function nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }) {
   return [path.join(repo, 'tools/codex-do.mjs'), instruction, '--cwd', cwd, '--kind', 'implement', '--force-native', '--no-fallback', '--no-escalate', '--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))];
 }
 export const NATIVE_WRITE_PROBE_TIMEOUT_MS = 180_000;
-export async function runNativeWriteProbe({ home, timeoutMs }) {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-codex-write-'));
+// Codex の書き込み点検は固定フォルダーで行う。一時フォルダー（lane-codex-write-*）を毎回作ると、
+// ChatGPT(Codex) アプリが新しいフォルダーとして「このフォルダーを信頼しますか？」を毎回出すため（2026-11-19 金さん指摘）。
+// フォルダー自体は残し、中身だけ毎回前後で空にする。ORGIAST_LANE_PROBE_DIR で上書き可（テスト用）。
+export function laneProbeWorkDir({ env = process.env, homedir = os.homedir() } = {}) {
+  return env.ORGIAST_LANE_PROBE_DIR || path.join(homedir, 'gb-offload', 'lane-doctor-work');
+}
+export function resetLaneProbeWorkDir(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of fs.readdirSync(dir)) fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+  return dir;
+}
+export async function runNativeWriteProbe({ home, timeoutMs, workDir = laneProbeWorkDir() }) {
+  const cwd = resetLaneProbeWorkDir(workDir);
   const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home, CODEX_DO_CHEAP_FIRST: '0' }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e, stdout, stderr) => {
     const output = `${stdout || ''}\n${stderr || ''}`.trim();
     if (e?.killed || e?.signal) return resolve({ code: 1, timedOut: true, text: `タイムアウト(${Math.ceil(timeoutMs / 1000)}s) ${output}`.trim() });
@@ -209,7 +220,7 @@ export async function runNativeWriteProbe({ home, timeoutMs }) {
     let ok = false;
     try { ok = fs.readFileSync(path.join(cwd, 'WRITE_OK.txt'), 'utf8').trim() === 'WRITE_OK'; } catch {}
     return { viaChain: probeViaChain(result.text, 'codex'), code: result.code === 0 && ok ? 0 : 1, text: ok ? 'WRITE_OK' : `書き込み確認失敗 ${result.text || ''}` };
-  } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
+  } finally { try { resetLaneProbeWorkDir(cwd); } catch {} }
 }
 export function runProbe(provider, { home, timeoutMs, dryRun = false, execFileImpl = execFile } = {}) {
   const args = provider === 'codex'
@@ -276,7 +287,8 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
     if (!health.lanes[p] || shouldSkipLiveProbe(health.lanes[p], now) || (p === 'codex' && !codexAuthStatusAny(home, { platform, spawnImpl }).login)) return [p, null];
     let dryOk = true;
     if (p === 'codex') {
-      if (platform === 'win32' && await listWsl() === '') {
+      const wslDistros = platform === 'win32' ? await listWsl() : undefined;
+      if (platform === 'win32' && (wslDistros === '' || wslDistros == null)) {
         // 1回の起動失敗で即 down→kim 通知しない。一過性のスパウン失敗は短い再試行で吸収する（2026-11-07 実測: 06:57Z failure → 07:00Z same 経路で fixed。probeRetries=1 で合計2回実行）。
         let result;
         const failures = [];
@@ -289,13 +301,16 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
           failures.push(result.text || '(出力なし)');
           if (result.timedOut) break;
         }
+        const probeErrorText = result.text || '';
         if (result.code !== 0) result.text = `ネイティブ書き込み probe ${failures.length}回失敗(最終) ${failures.map((text, i) => `${i + 1}回目: ${text}`).join(' / ')}`;
-        return [p, { ...result, nativeRepair: true }];
+        return [p, { ...result, nativeRepair: true, probeErrorText, wslDistros }];
       }
       const dry = await probe(p, { home, timeoutMs: Math.min(15000, probeBudget), dryRun: true });
       dryOk = dry.code === 0;
       // 再利用は成功結果だけ。失敗を30分使い回すと直後に直ったレーンが停止のまま残る（2026-10-25 実測: 直接実行は PONG なのに probe_failed）。
-      if (dryOk && previous.lanes?.codex?.alive && previous.lanes.codex.viaChain !== true && freshProbe(previous.lanes.codex.probedAt, now)) return [p, { cached: previous.lanes.codex }];
+      if (dryOk && previous.lanes?.codex?.alive && previous.lanes.codex.viaChain !== true && freshProbe(previous.lanes.codex.probedAt, now)) return [p, { cached: previous.lanes.codex, wslDistros }];
+      const full = await probe(p, { home, timeoutMs: Math.max(1, probeBudget - (Date.now() - started)) });
+      return [p, { ...full, ...(dryOk ? { authOk: true } : {}), wslDistros }];
     }
     // dry 失敗（コールド起動が15秒上限を超える等）で即 probe_failed にしない。残り予算の本番 probe で判定する
     // （2026-11-06/07 連日再発: 直接実行は PONG・24h実績0失敗のレーンが dry タイムアウトで停止扱いになった）。
@@ -339,6 +354,13 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
         if (result.timedOut) health.lanes[p].reason = 'probe_failed:timeout';
         else if (/blocked by read-only sandbox|sandbox:\s*read-only|Read-only file system|EROFS/i.test(text) || /spawn .*ENOENT|codex.*not found|is not recognized/i.test(text)) Object.assign(health.lanes[p], { reason: 'dead:physical_operation', tried: 'Windows ネイティブ(danger-full-access)でファイル作成・read-back', userFix: '管理者 PowerShell で wsl.exe --install --no-distribution を実行して Windows を再起動する。' });
       }
+      const wslServiceFailure = p === 'codex' && /Wsl\/Service|ERROR_SERVICE_DISABLED|LxssManager|\bHCS\b|サービスは無効|cannot be started|要素が見つかりません/i.test(text);
+      const missingWslWithShortError = p === 'codex' && String(result.probeErrorText ?? text).trim().length < 5 && (result.wslDistros == null || result.wslDistros === '');
+      if (health.lanes[p].reason === 'probe_failed' && (wslServiceFailure || missingWslWithShortError)) Object.assign(health.lanes[p], {
+        reason: 'dead:physical_operation',
+        tried: 'Codex probe と WSL ディストリビューション列挙で WSL サービス状態を確認',
+        userFix: '管理者 PowerShell で LxssManager サービスを開始するか、wsl.exe --install --no-distribution を実行して Windows を再起動する。'
+      });
       health.lanes[p].probeReason = health.lanes[p].reason;
       if (deferred && cooldown[p]?.until) health.lanes[p].until = cooldown[p].until;
       if (limited && !payment) { const daily = isDailyQuotaResponse(429, text); const until = daily ? nextUtcMidnight(new Date(now)) : providerResetUntil(text, now); cooldown[p] = { until, at: now, reason: daily ? 'daily_limit' : 'lane_doctor_usage_limit' }; cooldownChanged = true; health.lanes[p].until = until; }

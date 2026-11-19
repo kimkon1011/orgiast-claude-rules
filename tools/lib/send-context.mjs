@@ -24,11 +24,21 @@ export function readContextMarker(text, home) {
 }
 
 const sameLatest = (a, b) => String(a?.id ?? '') === String(b?.id ?? '') && String(a?.at ?? '') === String(b?.at ?? '');
-export async function assertContextApproved({ channel, target, text, home, getLatest, now = Date.now() }) {
+export async function assertContextApproved({ channel, target, text, home, getLatest, now = Date.now(), internalOptIn = false }) {
   const command = `node tools/send-context-check.mjs --channel ${channel} --target ${JSON.stringify(target)} --text-file <送る本文>`;
   const fail = why => { const error = new Error(`送信前の履歴整合性チェックが必要です: ${why}\n実行: ${command}`); error.code = 'SEND_CONTEXT_REQUIRED'; throw error; };
   const marker = readContextMarker(text, home);
-  if (!marker) fail('承認マーカーがありません');
+  if (!marker) {
+    if (internalOptIn === true) {
+      // An unreadable or malformed marker must still block approval.
+      try {
+        fs.lstatSync(markerPath(text, home));
+      } catch (error) {
+        if (error.code === 'ENOENT') return { reason: 'internal-auto', internalOptIn: true };
+      }
+    }
+    fail('承認マーカーがありません');
+  }
   if (marker.bodyHash !== textHash(text) || marker.channel !== channel || String(marker.target) !== String(target)) fail('本文または宛先がチェック時と異なります');
   if (!Number.isFinite(Date.parse(marker.checkedAt)) || now - Date.parse(marker.checkedAt) > MAX_MARKER_AGE_MS || now < Date.parse(marker.checkedAt)) fail('チェックから30分を超えています');
   const latest = await getLatest();

@@ -280,6 +280,18 @@ test('danger-full-access のログを含む一般失敗は physical_operation �
   assert.equal(r.lanes.codex.reason,'probe_failed');
   assert.equal(r.lanes.codex.tried,undefined);
 });
+test('WSL 列挙失敗(null)でも書き込み修復成功 → native_ok', async t => {
+  const h = fixture(t);
+  const r = await laneDoctorProbe({home:h,now,platform:'win32',providers:['codex'],listWsl:()=>null,nativeWriteProbe:async()=>({code:0}),probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})});
+  assert.equal(r.lanes.codex.alive,true);
+  assert.equal(r.lanes.codex.reason,'native_ok');
+});
+test('WSL 列挙失敗(null)＋ネイティブ書き込み失敗 → dead:physical_operation', async t => {
+  const h = fixture(t);
+  const r = await laneDoctorProbe({home:h,now,platform:'win32',providers:['codex'],listWsl:()=>null,nativeWriteProbe:async()=>({code:1,text:''}),probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})});
+  assert.equal(r.lanes.codex.alive,false);
+  assert.equal(r.lanes.codex.reason,'dead:physical_operation');
+});
 test('glm cooldown and explicitly tagged legacy history cannot block healthy Codex', t => {
   const h = fixture(t), until = now + 3600000;
   write(h, 'provider-cooldown.json', { glm: { until, reason: 'usage_limit' } });

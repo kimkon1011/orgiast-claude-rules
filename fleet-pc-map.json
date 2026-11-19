@@ -3,14 +3,14 @@
   "_codexAccountDefault": "seisaku-team@orgiast.jp",
   "_codexAccountNote": "Codex(ChatGPT)は担当者ごとに分担（kim 2026-10-12 最終決定）: kim@=kim-PC(Pro)、nishi@=nishi-PC・kimko-PC、cr@=cr-PC・w018-PC（各自で有料プラン契約）、未指定の作業用999・カフェ用015 は _codexAccountDefault=seisaku-team@。Auto top-up はオフ。account は Claude の担当席で別物。",
   "kim-PC": {
-    "hostname": "DESKTOP-2D0R4LI",
+    "hostname": "000KIMPC",
     "titleLabel": "KimPC",
     "person": "金功勇",
     "aliases": [
       "DESKTOP-2D0R4LI",
       "kim-PC(開発機/kim)"
     ],
-    "_evidence": "報告本文の 🖥 hostname=DESKTOP-2D0R4LI / user=uers / git=kim@orgiast.jp（2026-08-27 実測）。kim 明示回答『18行目(kim-PC)と22行目(DESKTOP-2D0R4LI)は同じパソコン』（2026-08-27）。kim が DESKTOP-2D0R4LI を『作業用004民泊用』行から独立行へ移動済み＝作業用004民泊用 は開発機ではないことが確定",
+    "_evidence": "報告本文の 🖥 hostname=DESKTOP-2D0R4LI / user=uers / git=kim@orgiast.jp（2026-08-27 実測）。kim 明示回答『18行目(kim-PC)と22行目(DESKTOP-2D0R4LI)は同じパソコン』（2026-08-27）。kim が DESKTOP-2D0R4LI を『作業用004民泊用』行から独立行へ移動済み＝作業用004民泊用 は開発機ではないことが確定。2026-11-19 に PC 名を 000KIMPC に変更（DNS 表記 000KimPC）",
     "codexAccount": "kim@orgiast.jp"
   },
   "kimko-PC": {

@@ -13,6 +13,7 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isUnattendedSession } from './lib/unattended-session.mjs';
 import { inboxText, inboxFile, readRows } from './lib/auto-progress-inbox.mjs';
 export { inboxFile, appendInbox, appendOwnerInbox } from './lib/auto-progress-inbox.mjs';
+import { FINAL_ONLY_INSTRUCTION, isLoopWake } from './lib/inbox-display-policy.mjs';
 function displayText(text, limit = 1500) {
   const seen = new Set();
   return String(text).split(/\r?\n/).filter(line => {
@@ -49,6 +50,7 @@ function recipientWarning(options, now) {
 export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.homedir(), env = process.env, now = Date.now(), label = resolveFleetLabel(home), dedupePushContext = false, ...ownerOptions } = {}) {
   if (isUnattendedSession(input, { home, env })) return null;
   const sessionId = input?.session_id || input?.sessionId; if (!sessionId) return null;
+  if (isLoopWake(input, { home, now, hook: 'auto-progress-inbox-hook' })) return null;
   const ownerFile = inboxFile(home, '_owner');
   const sessionFile = inboxFile(home, sessionId);
   const sessionRows = readRows(sessionFile);
@@ -90,17 +92,18 @@ export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.home
   if (dedupePushContext) pushContext = dedupeContext(pushContext, { home, sessionId, source: 'mobile-push' });
   if (!lines.length && !warning && !pushContext) return null;
   const event = input.hook_event_name || 'UserPromptSubmit';
-  const context = lines.length ? `【必須】応答の冒頭で user に見える形で「📲 自動進行の結果（聞かれる前にお知らせ）」として次を表示せよ: ${displayText(lines.join('\n'), Infinity)}` : '';
+  const context = lines.length ? `${FINAL_ONLY_INSTRUCTION}\n「📲 自動進行の結果（聞かれる前にお知らせ）」として次を表示せよ: ${displayText(lines.join('\n'), Infinity)}` : '';
   return { hookSpecificOutput: { hookEventName: event, additionalContext: [warning, context, pushContext].filter(Boolean).join('\n') } };
 }
 async function main() {
   try {
     const input = JSON.parse(await readStdinWithTimeout());
     const out = consumeInbox(input, { dedupePushContext: true });
+    if (isLoopWake(input, { hook: 'auto-progress-digest' })) return;
     const { sessionDigest } = await import('./auto-progress-digest.mjs');
     const digest = sessionDigest();
     if (digest) {
-      const context = `【進捗まとめ】以下を応答で提示する（最大5件・1件1行）。\n${digest}`;
+      const context = `${FINAL_ONLY_INSTRUCTION}\n【進捗まとめ】以下を提示する（最大5件・1件1行）。\n${digest}`;
       if (out) out.hookSpecificOutput.additionalContext += '\n' + context;
       else { console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: input.hook_event_name || 'UserPromptSubmit', additionalContext: context } })); return; }
     }

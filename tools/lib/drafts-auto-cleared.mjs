@@ -6,6 +6,7 @@ import { gwsFetch } from './gws-proxy.mjs';
 import { headerValue, extractBody } from '../gmail-search.mjs';
 import { addItem } from '../kim-inbox.mjs';
 import { jstDay } from './auto-progress-daily.mjs';
+import { gmailFetchWithRetry } from './gmail-retry.mjs';
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const mailboxes = ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'];
@@ -28,13 +29,17 @@ export function clearedReason(draft, sent, sameMailbox) {
   const prefix = Array.from(draftBody(draft)).slice(0, 100).join(''), other = Array.from(draftBody(sent)).slice(0, 100).join('');
   return (a && a === b) || (prefix && prefix === other) ? '送信済み' : null;
 }
-export async function gmailClient(mailbox, { getToken = getDriveToken, fetchImpl = gwsFetch, write = false } = {}) {
+export async function gmailClient(mailbox, { getToken = getDriveToken, fetchImpl = gwsFetch, write = false, onRetry, sleep } = {}) {
   const token = await getToken({ scope: `https://www.googleapis.com/auth/gmail.${write ? 'compose' : 'readonly'}`, impersonate: mailbox, signal: AbortSignal.timeout(20000) });
   return async (route, { method = 'GET', optional = false } = {}) => {
-    const response = await fetchImpl(`${API}${route}`, { method, headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30000) });
-    if (optional && [404, 410].includes(response.status)) return null;
-    if (!response.ok) throw new Error(`Gmail ${mailbox}: HTTP ${response.status}`);
-    return response.status === 204 ? null : response.json();
+    try {
+      const response = await gmailFetchWithRetry(`${API}${route}`, { method, headers: { Authorization: `Bearer ${token}` } }, { fetchImpl, onRetry, sleep });
+      return response.status === 204 ? null : response.json();
+    } catch (error) {
+      if (optional && error.status && [404, 410].includes(error.status)) return null;
+      if (error.status !== undefined) throw new Error(`Gmail ${mailbox}: HTTP ${error.status}`);
+      throw error;
+    }
   };
 }
 export async function allPages(get, route, field) {
@@ -63,7 +68,7 @@ export async function filterClearedDrafts(items, { home, now, deps = {}, stats }
   const drafts = items.filter(item => item.kind === 'draft' && item.draftMessage);
   const clients = new Map();
   const get = async mailbox => {
-    if (!clients.has(mailbox)) clients.set(mailbox, await gmailClient(mailbox, deps));
+    if (!clients.has(mailbox)) clients.set(mailbox, await gmailClient(mailbox, { ...deps, onRetry: () => { stats.gmailRetries = (stats.gmailRetries || 0) + 1; } }));
     return clients.get(mailbox);
   };
   const known = new Set(clearedRecords(home).filter(row => row.event === 'cleared').map(row => row.key));

@@ -1,3 +1,4 @@
+import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,6 +7,7 @@ import path from 'node:path';
 
 import {
   CaptionAssembler,
+  normalizeCaptionRows,
   CueTracker,
   STANDARD_CARDS,
   BOT_DISPLAY_NAME_DEFAULT,
@@ -33,8 +35,15 @@ import {
 
 import {
   isProfileSignedIn,
+  copyMeetBotProfile,
   startMeetBot,
   checkPlaywrightAvailable,
+  detectMeetJoinState,
+  dismissMeetPopups,
+  enableMeetCaptions,
+  watchMeetCaptions,
+  findMeetJoinButton,
+  joinMeetPage,
 } from './lib/meet-cue-browser.mjs';
 
 test('getLlmAskPath: Windows 形式の file URL から llm-ask.mjs の正しい絶対パスを解決できること', () => {
@@ -109,31 +118,55 @@ test('JST 日時・セッション ID フォーマット検証', () => {
   assert.equal(formatJstSessionDate(utcDate), '20261112-112530');
 });
 
-test('CaptionAssembler: 字幕の重複除去、1.5秒確定、話者切替', t => {
-  const assembler = new CaptionAssembler({ finalizeDelayMs: 1500 });
-  const start = 1000000;
+test('CaptionAssembler: 1文字ずつ伸びても句点で終わった文だけを2.5秒後に確定する', () => {
+  const assembler = new CaptionAssembler();
+  const sentence = '展示会のブースについて、ご予算はどのくらいをお考えでしょうか。';
+  const input = sentence + '過';
+  for (let i = 1; i <= input.length; i++) {
+    assert.deepEqual(assembler.pushMutation({ rowId: 'a', speaker: 'あなた', text: input.slice(0, i), timestamp: i * 100 }), []);
+  }
 
-  // 1. Single speaker growing text
-  assembler.pushMutation({ speaker: '田中', text: 'こんにちは', timestamp: start });
-  assembler.pushMutation({ speaker: '田中', text: 'こんにちは、オージャストの', timestamp: start + 500 });
-  assembler.pushMutation({ speaker: '田中', text: 'こんにちは、オージャストの田中です。', timestamp: start + 1000 });
+  const deadline = sentence.length * 100 + 2500;
+  assert.deepEqual(assembler.tick(deadline - 1), []);
+  assert.deepEqual(assembler.tick(deadline).map(line => line.text), [sentence]);
+  assert.deepEqual(assembler.tick(deadline + 100), []);
+});
 
-  assert.equal(assembler.finalizedLines.length, 0, '確定前は0件');
+test('CaptionAssembler: 認識結果が書き換わると安定時間を数え直す', () => {
+  const assembler = new CaptionAssembler();
+  const push = (text, timestamp) => assembler.pushMutation({ rowId: 'a', text, timestamp });
+  push('展示会のコースについて伺います。', 0);
+  push('展示会のブースについて伺います。', 2000);
+  assert.deepEqual(assembler.tick(2500), []);
+  assert.deepEqual(assembler.tick(4499), []);
+  assert.deepEqual(assembler.tick(4500).map(line => line.text), ['展示会のブースについて伺います。']);
+  assert.deepEqual(assembler.tick(7000), []);
+});
 
-  // 2. Tick after 1.5s pause
-  const newlyFinalized = assembler.tick(start + 2600);
-  assert.equal(newlyFinalized.length, 1);
-  assert.equal(newlyFinalized[0].speaker, '田中');
-  assert.equal(newlyFinalized[0].text, 'こんにちは、オージャストの田中です。');
-  assert.equal(assembler.finalizedLines.length, 1);
+test('CaptionAssembler: 先頭が途中まで消えても文やその断片を二重に確定しない', () => {
+  const assembler = new CaptionAssembler();
+  const push = (text, timestamp, rowId = 'a') => assembler.pushMutation({ rowId, text, timestamp });
+  push('ご予算を伺います。過去の事例もご紹介できます。', 0);
+  assert.equal(assembler.tick(2500).length, 2);
+  push('伺います。過去の事例もご紹介できます。いかがでしょうか？', 3000);
+  push('過去の事例もご紹介できます。いかがでしょうか？', 4000);
+  assert.deepEqual(assembler.tick(5500).map(line => line.text), ['いかがでしょうか？']);
+  push('過去の事例もご紹介できます。いかがでしょうか?', 6000, 'b');
+  assert.deepEqual(assembler.tick(8500), []);
+});
 
-  // 3. Speaker switch immediately finalizes previous
-  assembler.pushMutation({ speaker: '佐藤', text: 'よろしくお願いします。', timestamp: start + 3000 });
-  const switched = assembler.pushMutation({ speaker: '鈴木', text: '本日はお時間ありがとうございます。', timestamp: start + 3200 });
-
-  assert.equal(switched.length, 1);
-  assert.equal(switched[0].speaker, '佐藤');
-  assert.equal(switched[0].text, 'よろしくお願いします。');
+test('CaptionAssembler: 句点のない末尾は4秒の無変化を待ち、句点を補わない', () => {
+  const assembler = new CaptionAssembler();
+  const push = (text, timestamp, rowId = 'a') => assembler.pushMutation({ rowId, text, timestamp });
+  push('ご予算は', 0);
+  push('はい？', 1000, 'b');
+  assert.deepEqual(assembler.tick(3500).map(line => line.text), ['はい？']);
+  assert.deepEqual(assembler.tick(4999), []);
+  assert.deepEqual(assembler.tick(5000).map(line => line.text), ['ご予算は']);
+  push('ご予算は。', 5100);
+  assert.deepEqual(assembler.tick(7600), []);
+  push('次の展示会は', 8000);
+  assert.deepEqual(assembler.flush(11999), []);
 });
 
 test('buildJevState & buildJevQuestions: 120秒窓、簡略化されたカード一覧、質問生成', () => {
@@ -305,7 +338,7 @@ test('CLI start の必須引数チェック（未指定時 exit 2）', async () 
 test('runDecisionRound: スタブで予算懸念 -> budget カードが Doc 差し込み関数に渡り、40秒以内の2回目は出ないこと', async () => {
   const assembler = new CaptionAssembler();
   assembler.pushMutation({ speaker: 'お客様', text: '予算が厳しくて費用が高すぎます', timestamp: 1000 });
-  assembler.tick(3000);
+  assembler.tick(5000);
 
   const tracker = new CueTracker({ globalCooldownMs: 40000 });
   const cards = [...STANDARD_CARDS];
@@ -386,11 +419,298 @@ test('isProfileSignedIn: Google ログイン状態の cookie ファイル存在�
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'profile-signin-test-'));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
-  assert.equal(await isProfileSignedIn(tmpDir), false);
+  assert.equal((await isProfileSignedIn(tmpDir)).signedIn, false);
 
   const defaultDir = path.join(tmpDir, 'Default');
   fs.mkdirSync(defaultDir, { recursive: true });
   fs.writeFileSync(path.join(defaultDir, 'Cookies'), 'dummy sqlite cookie content with SID inside', 'utf8');
 
-  assert.equal(await isProfileSignedIn(tmpDir), true);
+  assert.equal((await isProfileSignedIn(tmpDir)).signedIn, false);
+
+  fs.writeFileSync(path.join(defaultDir, 'Cookies'), 'dummy sqlite cookie content with SID and HSID', 'utf8');
+  assert.equal((await isProfileSignedIn(tmpDir)).signedIn, true);
+});
+
+test('copyMeetBotProfile: ログイン用ファイルを複製し、各階層のロックを除外する', (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-profile-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const source = path.join(tmp, 'source');
+  const files = ['Local State', 'Default/Cookies', 'Default/Network/Cookies'];
+  const locks = ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'lockfile', 'Default/Network/lockfile'];
+  for (const file of [...files, ...locks]) {
+    const target = path.join(source, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, file);
+  }
+
+  const first = path.join(tmp, 'first', 'profile');
+  const second = path.join(tmp, 'second', 'profile');
+  copyMeetBotProfile(source, first);
+  copyMeetBotProfile(source, second);
+  for (const file of files) {
+    assert.equal(fs.readFileSync(path.join(first, file), 'utf8'), file);
+    assert.equal(fs.readFileSync(path.join(second, file), 'utf8'), file);
+  }
+  for (const lock of locks) {
+    assert.equal(fs.existsSync(path.join(first, lock)), false);
+    assert.equal(fs.readFileSync(path.join(source, lock), 'utf8'), lock);
+  }
+  fs.writeFileSync(path.join(first, 'Default', 'Network', 'Cookies'), 'updated');
+  assert.equal(fs.readFileSync(path.join(second, 'Default', 'Network', 'Cookies'), 'utf8'), 'Default/Network/Cookies');
+  assert.equal(fs.readFileSync(path.join(source, 'Default', 'Network', 'Cookies'), 'utf8'), 'Default/Network/Cookies');
+});
+
+const meetCode = 'jdo-fpvd-xau';
+const meetingUrl = `https://meet.google.com/${meetCode}`;
+const meetHome = 'https://meet.google.com/';
+
+function stubMeetDom({ url = meetingUrl, buttons = [], texts = [], inCall = false } = {}) {
+  return {
+    url: () => url,
+    viewportSize: () => ({ width: 1280, height: 720 }),
+    locator: () => ({ first: () => ({ isVisible: async () => inCall }) }),
+    getByText: (pattern) => ({
+      all: async () => texts.filter(({ text }) => pattern.test(text)).map(item => ({
+        isVisible: async () => !item.hidden,
+        evaluate: async fn => fn({ closest: () => item.button ? {} : null }),
+      })),
+    }),
+    getByRole: () => ({
+      filter: ({ hasText }) => ({
+        all: async () => buttons.filter(({ text }) => hasText.test(text)).map(item => ({
+          innerText: async () => item.visibleText ?? item.text,
+          isVisible: async () => !item.hidden,
+          isEnabled: async () => !item.disabled,
+          boundingBox: async () => ({ x: item.x ?? 620, y: 345, width: 40, height: 30 }),
+          click: async () => item.click?.(),
+        })),
+      }),
+    }),
+  };
+}
+
+test('参加ボタンは表示テキストの完全一致を指定順で探す', async () => {
+  const labels = ['今すぐ参加', 'Join now', '参加をリクエスト', 'Ask to join', '参加'];
+  const decoys = [
+    { text: '今すぐ参加する方法' },
+    { text: '今すぐ参加', hidden: true },
+    { text: '今すぐ参加', visibleText: '' },
+    { text: '今すぐ参加', disabled: true },
+    { text: '参加', x: 100 },
+  ];
+  for (const [index, label] of labels.entries()) {
+    const buttons = [...decoys, ...labels.slice(index).reverse().map(text => ({ text }))];
+    const page = stubMeetDom({ buttons });
+    assert.equal((await findMeetJoinButton(page, meetCode)).label, label);
+  }
+  assert.equal(await findMeetJoinButton(stubMeetDom({ buttons: decoys }), meetCode), null);
+  assert.equal(await findMeetJoinButton(stubMeetDom({
+    url: meetHome, buttons: [{ text: '参加' }],
+  }), meetCode), null);
+});
+
+test('会議コードと表示中の UI から参加状態を判定する', async () => {
+  for (const [expected, dom] of [
+    ['home', { url: meetHome, inCall: true }],
+    ['home', { url: meetingUrl.replace(meetCode, 'abc-defg-hij') }],
+    ['prejoin', { texts: [{ text: 'Ask to join', button: true }, { text: 'Asking to join', hidden: true }] }],
+    ['in_lobby', { texts: [{ text: '参加をリクエストしています' }] }],
+    ['in_lobby', { texts: [{ text: 'Asking to join…' }] }],
+    ['in_call', { inCall: true, texts: [{ text: 'Asking to join…' }] }],
+  ]) {
+    assert.equal(await detectMeetJoinState(stubMeetDom(dom), meetCode), expected);
+  }
+});
+
+test('/new のリダイレクト先を保持し、ホームへ戻ったときだけ一度開き直す', async () => {
+  for (const succeeds of [true, false]) {
+    const newUrl = `${meetHome}new`;
+    const navigations = [];
+    const states = [];
+    let activeUrl;
+    let inCall = false;
+    const getDom = () => stubMeetDom({
+      url: activeUrl,
+      inCall,
+      buttons: [{ text: '今すぐ参加', click: () => {
+        if (succeeds && navigations.length === 2) inCall = true;
+        else activeUrl = meetHome;
+      } }],
+    });
+    const page = {
+      goto: async url => {
+        navigations.push(url);
+        activeUrl = url;
+      },
+      waitForTimeout: async () => { activeUrl = meetingUrl; },
+      url: () => activeUrl,
+      locator: (...args) => getDom().locator(...args),
+      getByText: (...args) => getDom().getByText(...args),
+      getByRole: (...args) => getDom().getByRole(...args),
+    };
+    assert.equal(await joinMeetPage(page, {
+      url: newUrl,
+      preparePrejoin: async () => {},
+      onJoinState: state => states.push(state),
+      log: () => {},
+      uiTimeoutMs: 1000,
+    }), succeeds ? null : 'left_meeting_page');
+    assert.deepEqual(navigations, [newUrl, meetingUrl]);
+    assert.deepEqual(states, ['home', 'prejoin', 'home', 'prejoin', succeeds ? 'in_call' : 'home']);
+  }
+});
+
+test('字幕ボタンのラベルまたは aria-pressed でオンを確認し、最大3回試す', async () => {
+  for (const action of ['already_enabled', 'already_pressed', 'click', 'pressed', 'c', 'retry', 'unconfirmed']) {
+    let enabled = ['already_enabled', 'already_pressed'].includes(action);
+    const actions = [];
+    const locator = (matches) => ({
+      matches,
+      filter: () => locator(() => false),
+      or: other => locator(() => matches() || other.matches()),
+      and: other => locator(() => matches() && other.matches()),
+      first() { return this; },
+      isVisible: async () => matches(),
+      click: async () => { actions.push('click'); enabled = true; },
+      waitFor: async () => {
+        if (!matches()) throw new Error('字幕オンを確認できません');
+      },
+    });
+    const page = {
+      locator: selector => locator(() => {
+        if (selector === ':visible') return true;
+        if (selector.includes('[aria-pressed="true"]:visible') && action === 'already_pressed') {
+          return selector.includes('字幕と翻訳');
+        }
+        if (selector.includes('Turn off captions')) return enabled && !['pressed', 'already_pressed'].includes(action);
+        if (selector === '[aria-pressed="true"]') return enabled && action === 'pressed';
+        return selector.includes('Turn on captions') && ['click', 'pressed'].includes(action);
+      }),
+      evaluate: async () => { actions.push('focus'); },
+      keyboard: {
+        press: async key => {
+          actions.push(key);
+          enabled = action === 'c' || (action === 'retry' && actions.length === 4);
+        },
+      },
+    };
+    assert.equal(await enableMeetCaptions(page), action !== 'unconfirmed');
+    const expected = {
+      already_enabled: [], already_pressed: [], click: ['click'], pressed: ['click'], c: ['focus', 'c'],
+      retry: ['focus', 'c', 'focus', 'c'], unconfirmed: ['focus', 'c', 'focus', 'c', 'focus', 'c'],
+    };
+    assert.deepEqual(actions, expected[action]);
+  }
+});
+
+test('実測した字幕の話者と本文を保持し、アイコン名と空行を除外する', () => {
+  const html = fs.readFileSync(new URL('./test-fixtures/meet-cue-captions-ja.html', import.meta.url), 'utf8');
+  const speaker = html.match(/<span class="NWpY1d">([^<]+)<\/span>/)[1];
+  const text = html.match(/<div class="ygicle [^"]+">([^<]+)<\/div>/)[1];
+  const icon = html.match(/<i [^>]*>(translate_cc)<\/i>/)[1];
+  assert.deepEqual(normalizeCaptionRows([
+    { speaker, text: ` ${text} `, rowId: '1:0' },
+    { speaker, text: '承知しました', rowId: '2:0', fromFallback: true },
+    { speaker, text: 'hello', rowId: '3:0' },
+    { speaker, text: 'noise', fromFallback: true },
+    ...[icon, 'closed_caption', 'mic_off', 'icon_123', ' '].map(text => ({ speaker, text })),
+  ]), [
+    {
+      speaker: 'あなた',
+      text: '本日はお時間をいただきありがとうございます。展示会のブースについて、ご予算はどのくらいをお考えでしょうか。過去の事例もご紹介できます。',
+      rowId: '1:0',
+    },
+    { speaker: 'あなた', text: '承知しました', rowId: '2:0' },
+    { speaker: 'あなた', text: 'hello', rowId: '3:0' },
+  ]);
+});
+
+test('字幕監視: 遅れて現れた領域をポーリングし、Observer と終了直前の読み取りでも通知する', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let regions = [];
+  const document = { querySelectorAll: () => regions };
+  let notify;
+  const observed = new Set();
+  class MutationObserver {
+    constructor(callback) { notify = callback; }
+    observe(region, options) {
+      assert.equal(options.characterData, true);
+      assert.equal(options.subtree, true);
+      observed.add(region);
+    }
+    disconnect() { observed.clear(); }
+  }
+  const window = {};
+  const page = {
+    exposeFunction: async (name, callback) => { window[name] = async value => callback(value); },
+    evaluate: async (expression, arg) => runInNewContext(
+      typeof expression === 'string' ? expression : `(${expression})(arg)`,
+      { window, document, MutationObserver, arg },
+    ),
+    isClosed: () => false,
+  };
+  const received = [];
+  const errors = [];
+  const stop = await watchMeetCaptions(page, { onCaption: caption => received.push(caption), log: msg => errors.push(msg) });
+  const poll = async () => {
+    t.mock.timers.tick(1500);
+    await new Promise(resolve => setImmediate(resolve));
+  };
+  const insert = text => {
+    const body = {
+      textContent: text,
+      closest: () => null,
+      cloneNode() {
+        return { textContent: this.textContent, querySelectorAll: () => [] };
+      },
+    };
+    const row = {
+      closest: () => null,
+      querySelector: selector => selector === '.ygicle' ? body : { textContent: 'あなた' },
+    };
+    const region = { closest: () => null, querySelectorAll: () => [row] };
+    regions = [region];
+    return { region, body };
+  };
+  assert.equal(observed.size, 0);
+  const first = insert('本日は');
+  await poll();
+  assert.ok(observed.has(first.region));
+  first.body.textContent = '本日はお時間を';
+  notify();
+  await poll();
+  const second = insert('展示会の');
+  await poll();
+  assert.deepEqual([...observed], [second.region]);
+  second.body.textContent = '展示会のご予算を';
+  await stop();
+
+  assert.deepEqual(received.map(row => row.text), ['本日は', '本日はお時間を', '', '展示会の', '展示会のご予算を']);
+  assert.equal(received[0].rowId, received[1].rowId);
+  assert.notEqual(received[0].rowId, received[3].rowId);
+  assert.equal(observed.size, 0);
+  assert.deepEqual(errors, []);
+});
+
+test('対象ダイアログの閉じるボタンだけを押す', async () => {
+  const dialogs = new Set(['会議の準備が整いました', 'Gemini をご利用いただけます', '字幕と翻訳']);
+  const page = {
+    getByRole(role, { name, exact }) {
+      assert.equal(role, 'dialog');
+      assert.equal(exact, true);
+      return {
+        getByRole(childRole, options) {
+          assert.equal(childRole, 'button');
+          assert.deepEqual(options, { name: '閉じる', exact: true });
+          return {
+            first() { return this; },
+            isVisible: async () => dialogs.has(name),
+            click: async () => { dialogs.delete(name); },
+          };
+        },
+      };
+    },
+  };
+  await dismissMeetPopups(page);
+  assert.deepEqual([...dialogs], ['字幕と翻訳']);
 });

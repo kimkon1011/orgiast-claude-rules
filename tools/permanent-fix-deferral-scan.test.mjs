@@ -516,3 +516,77 @@ test('kimの作業なしでもレーン名が無ければWとして検出され�
   const results = detect(text);
   assert.ok(results.some(d => d.pattern === 'W'), 'レーン名が無ければWとして検出されるべき');
 });
+
+// ================================================================
+// 2026-11-19: handoff-audit ledger の excerpt フィールドも検出対象に
+// ================================================================
+test('handoff-audit ledgerのexcerptだけに先送り文がある行を検出する', t => {
+  const home = fixture(t);
+  const names = ['handoff-audit-ledger.jsonl', 'handoff-audit-nightly-ledger.jsonl'];
+  const entry = {
+    ts: '2026-11-19T00:00:00Z',
+    verdict: 'pass',
+    sessionId: 'excerptonly123456',
+    violations: [{ quote: '修正が完了しました' }],
+    excerpt: '恒久修正は次セッションで行う'
+  };
+  for (const name of names) {
+    fs.writeFileSync(path.join(home, '.claude', name), `${JSON.stringify(entry)}\n`);
+  }
+  const result = scan({ home });
+  for (const source of result.sources) {
+    const isHandoff = source.name === 'handoff-audit-ledger.jsonl' || source.name === 'handoff-audit-nightly-ledger.jsonl';
+    if (isHandoff) {
+      assert.equal(source.hits, 1, `${source.name}: excerpt only should hit`);
+      assert.equal(source.rows[0].field, 'excerpt', `${source.name}: should report field=excerpt`);
+      assert.equal(source.rows[0].pattern, 'P1', `${source.name}: should detect P1`);
+    } else {
+      assert.equal(source.hits, 0, `${source.name}: should not hit (no file written)`);
+    }
+  }
+});
+
+test('同じ行でquoteとexcerptの両方がヒットしたら1件に数える', t => {
+  const home = fixture(t);
+  const names = ['handoff-audit-ledger.jsonl', 'handoff-audit-nightly-ledger.jsonl'];
+  const entry = {
+    ts: '2026-11-19T00:00:00Z',
+    verdict: 'pass',
+    sessionId: 'bothhit1234567',
+    violations: [{ quote: '恒久修正は次セッションで行う' }],
+    excerpt: '少々お待ちください'
+  };
+  for (const name of names) {
+    fs.writeFileSync(path.join(home, '.claude', name), `${JSON.stringify(entry)}\n`);
+  }
+  const result = scan({ home });
+  for (const source of result.sources) {
+    const isHandoff = source.name === 'handoff-audit-ledger.jsonl' || source.name === 'handoff-audit-nightly-ledger.jsonl';
+    if (isHandoff) {
+      assert.equal(source.hits, 1, `${source.name}: should count as 1 even with both hitting`);
+      assert.equal(source.rows[0].field, 'quote', `${source.name}: should prefer quote field when both match`);
+      assert.equal(source.rows[0].pattern, 'P1', `${source.name}: should detect P1 from quote`);
+    } else {
+      assert.equal(source.hits, 0, `${source.name}: should not hit`);
+    }
+  }
+});
+
+test('先送り文の無いexcerptはhandoff-auditで0件', t => {
+  const home = fixture(t);
+  const names = ['handoff-audit-ledger.jsonl', 'handoff-audit-nightly-ledger.jsonl'];
+  const entry = {
+    ts: '2026-11-19T00:00:00Z',
+    verdict: 'pass',
+    sessionId: 'cleanboth12345',
+    violations: [{ quote: '修正が完了しました' }],
+    excerpt: 'すべての修正を完了し、結果を記録しました。'
+  };
+  for (const name of names) {
+    fs.writeFileSync(path.join(home, '.claude', name), `${JSON.stringify(entry)}\n`);
+  }
+  const result = scan({ home });
+  for (const source of result.sources) {
+    assert.equal(source.hits, 0, `${source.name}: should have 0 hits with clean content`);
+  }
+});

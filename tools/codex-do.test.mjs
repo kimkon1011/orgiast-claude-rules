@@ -9,7 +9,7 @@ import { skipCoolingBackends } from './fallback-backend-health.mjs';
 import { runGeminiBudgetGuard } from './gemini-budget-guard.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -25,28 +25,27 @@ test('remainingPrimaryBudgetSecs は起動前経過を主経路予算から差�
   assert.equal(remainingPrimaryBudgetSecs(210, 240), 1);
 });
 
-// 2026-11-12 実測: 主経路 codex に --timeout 3000 が渡ると fallbackBackendTimeoutSecs の
-// 上限(既定900秒)が効かず、codex 1回で 3025 秒を捨てた。launchCodex の remainingTimeoutSecs は
-// fallbackBackendTimeoutSecs で制限されるべき（PR #NNNN の修正）。
-test('主経路のタイムアウトは fallbackBackendTimeoutSecs の上限で制限される', () => {
-  // 全体予算 3000 秒でも、主経路の試行は fallbackBackendTimeoutSecs(3000) = 900 秒を上限とする。
-  const capped = Math.min(
-    remainingPrimaryBudgetSecs(3000, 0),
-    fallbackBackendTimeoutSecs(3000),
-  );
-  assert.equal(capped, 900, '主経路の上限は fallbackBackendTimeoutSecs(3000) = 900 秒');
-  // 既定の 1800 秒でも同様
-  const cappedDefault = Math.min(
-    remainingPrimaryBudgetSecs(1800, 0),
-    fallbackBackendTimeoutSecs(1800),
-  );
-  assert.equal(cappedDefault, 900, '既定 timeout でも上限 900 秒');
-  // 全体予算が 900 未満ならその値が上限
-  const small = Math.min(
-    remainingPrimaryBudgetSecs(600, 0),
-    fallbackBackendTimeoutSecs(600),
-  );
-  assert.equal(small, 600, '全体予算が 900 未満ならそのまま');
+test('明示した主経路の上限はフォールバックの上限と独立している', () => {
+  const env = { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: '300' };
+  assert.equal(primaryTimeoutLimitSecs(3600, true, env), 3600);
+  assert.equal(primaryTimeoutLimitSecs(30, true, env), 30);
+  assert.equal(primaryTimeoutLimitSecs(1800, false, {}), 900);
+  assert.equal(primaryTimeoutLimitSecs(1800, false, env), 300);
+  assert.equal(chainBackendBudgetSecs(3600, 0, {}), 900);
+});
+
+test('CLI は主経路の上限を起動時に stderr で一度だけ報告する', () => {
+  for (const [args, expected] of [[['--timeout', '3600'], 3600], [[], 900]]) {
+    const result = run(['--review', '--no-fallback', ...args, 'Review this patch'], {
+      env: {
+        CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: '',
+        CODEX_DO_MOCK_RESULTS: JSON.stringify([{ output: 'review complete' }]),
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(result.stderr.split(/\r?\n/).filter(line => line.includes('主経路の上限=')),
+      [`[codex-do] 主経路の上限=${expected}秒`]);
+  }
 });
 
 function run(args, options = {}) {

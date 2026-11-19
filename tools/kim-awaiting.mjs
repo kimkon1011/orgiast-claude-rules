@@ -11,7 +11,7 @@ import { appendInbox } from './auto-progress-inbox-hook.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
 import { mailboxDraftLabel } from './lib/drafts-auto-cleared.mjs';
 import { active, CATEGORY, DAY } from './lib/fleet-chase-policy.mjs';
-import { externalFile, readSkips, isSkipped, addSkip, saveAnswer } from './lib/external-waiting-state.mjs';
+import { externalFile, readSkips, isSkipped, addSkip, saveAnswer, readAnswer } from './lib/external-waiting-state.mjs';
 
 export function readJson(file, fallback = null) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
@@ -66,14 +66,22 @@ export function collectExternal({ home, now }) {
   for (const item of items) {
     const ms = Math.max(0, now - Date.parse(item.since));
     const title = item.kind === 'draft' ? `下書きのまま未送信: ${item.who}${mailboxDraftLabel(item.mailbox)}「${item.subject}」` : `${item.who}${item.assignee ? `（担当: ${item.assignee}）` : ''}「${item.subject}」`;
+    // kim が回答済みの項目は質問として出さない（2026-11-19: 回答が保存されても読まれず、同じ質問が繰り返されていた）。
+    const answer = readAnswer(home, item);
+    if (answer) {
+      out.push({ id: item.id, source: 'external', external: true, answered: true, title, ask: 'なし（kim 回答済み・Claude が反映して対応）', progress: `kim 回答済み ${String(answer.at || '').slice(0, 10)}: ${cleanDisplay(answer.answer).slice(0, 60)}`, waitingSince: item.since, ageDays: Math.floor(ms / DAY), ageHours: Math.floor(ms / 3600_000), route: { threadId: item.threadId, mailbox: item.mailbox } });
+      continue;
+    }
     out.push({ id: item.id, source: 'external', external: true, title, ask: item.ask || '返信内容を決める', waitingSince: item.since, ageDays: Math.floor(ms / DAY), ageHours: Math.floor(ms / 3600_000), route: { threadId: item.threadId, mailbox: item.mailbox } });
   }
   return out;
 }
 export function formatList(items) {
-  const external = items.filter(item => item.external), internal = items.filter(item => !item.external);
+  const answered = items.filter(item => item.answered);
+  const external = items.filter(item => item.external && !item.answered), internal = items.filter(item => !item.external && !item.answered);
   const line = item => `・${item.title} ／ 答えてほしいこと: ${item.ask} ／ ${ageLabel(item)}${item.progress ? ` ／ ${item.progress}` : ''}`;
-  return [...(external.length ? [`🔴 社外の人を待たせています ${external.filter(item => !item.warning).length} 件（古い順）`, ...external.map(line)] : []), `📌 kim の返事待ち ${internal.length} 件（古い順）`, ...internal.map(line)].join('\n');
+  const done = item => `・${item.title} ／ ${item.progress}`;
+  return [...(external.length ? [`🔴 社外の人を待たせています ${external.filter(item => !item.warning).length} 件（古い順）`, ...external.map(line)] : []), `📌 kim の返事待ち ${internal.length} 件（古い順）`, ...internal.map(line), ...(answered.length ? [`✅ kim 回答済み・Claude が対応する ${answered.length} 件（kim への質問ではない）`, ...answered.map(done)] : [])].join('\n');
 }
 export function collectAwaiting({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), budgetMs = Infinity, sessionId = '' } = {}) {
   const started = performance.now();

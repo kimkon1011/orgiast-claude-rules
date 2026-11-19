@@ -61,7 +61,26 @@ export function sanitizeCardData(card, brief = '') {
   return copy;
 }
 
+export const DEFAULT_SEAT_HOSTNAMES = ['000KimPC', 'DESKTOP-2D0R4LI'];
+
+export function resolveSeatHostnames(config) {
+  const configured = config.seatHostnames ?? config.seatHostname;
+  return (Array.isArray(configured) ? configured : [configured])
+    .filter(name => typeof name === 'string' && name.trim())
+    .map(name => name.trim());
+}
+
+export function matchesSeatHostname(hostnames, hostname) {
+  return hostnames.length === 0 || hostnames.some(name => name.toLowerCase() === hostname.toLowerCase());
+}
+
 export const MEET_SELECTORS = {
+  inCallButtons: [
+    'button[aria-label*="通話から退出"]',
+    'button[aria-label*="通話を退出"]',
+    'button[aria-label*="通話を終了"]',
+    'button[aria-label*="Leave call" i]',
+  ],
   joinButtons: [
     'button:has-text("今すぐ参加")',
     'button:has-text("参加をリクエスト")',

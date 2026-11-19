@@ -33,6 +33,7 @@ import {
 
 import {
   isProfileSignedIn,
+  copyMeetBotProfile,
   startMeetBot,
   checkPlaywrightAvailable,
 } from './lib/meet-cue-browser.mjs';
@@ -386,11 +387,43 @@ test('isProfileSignedIn: Google ログイン状態の cookie ファイル存在�
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'profile-signin-test-'));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
-  assert.equal(await isProfileSignedIn(tmpDir), false);
+  assert.equal((await isProfileSignedIn(tmpDir)).signedIn, false);
 
   const defaultDir = path.join(tmpDir, 'Default');
   fs.mkdirSync(defaultDir, { recursive: true });
   fs.writeFileSync(path.join(defaultDir, 'Cookies'), 'dummy sqlite cookie content with SID inside', 'utf8');
 
-  assert.equal(await isProfileSignedIn(tmpDir), true);
+  assert.equal((await isProfileSignedIn(tmpDir)).signedIn, false);
+
+  fs.writeFileSync(path.join(defaultDir, 'Cookies'), 'dummy sqlite cookie content with SID and HSID', 'utf8');
+  assert.equal((await isProfileSignedIn(tmpDir)).signedIn, true);
+});
+
+test('copyMeetBotProfile: ログイン用ファイルを複製し、各階層のロックを除外する', (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-profile-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const source = path.join(tmp, 'source');
+  const files = ['Local State', 'Default/Cookies', 'Default/Network/Cookies'];
+  const locks = ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'lockfile', 'Default/Network/lockfile'];
+  for (const file of [...files, ...locks]) {
+    const target = path.join(source, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, file);
+  }
+
+  const first = path.join(tmp, 'first', 'profile');
+  const second = path.join(tmp, 'second', 'profile');
+  copyMeetBotProfile(source, first);
+  copyMeetBotProfile(source, second);
+  for (const file of files) {
+    assert.equal(fs.readFileSync(path.join(first, file), 'utf8'), file);
+    assert.equal(fs.readFileSync(path.join(second, file), 'utf8'), file);
+  }
+  for (const lock of locks) {
+    assert.equal(fs.existsSync(path.join(first, lock)), false);
+    assert.equal(fs.readFileSync(path.join(source, lock), 'utf8'), lock);
+  }
+  fs.writeFileSync(path.join(first, 'Default', 'Network', 'Cookies'), 'updated');
+  assert.equal(fs.readFileSync(path.join(second, 'Default', 'Network', 'Cookies'), 'utf8'), 'Default/Network/Cookies');
+  assert.equal(fs.readFileSync(path.join(source, 'Default', 'Network', 'Cookies'), 'utf8'), 'Default/Network/Cookies');
 });

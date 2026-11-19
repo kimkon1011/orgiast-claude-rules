@@ -3,7 +3,7 @@
 // seisaku-team@ のような共有アカウントは kim の Gmail コネクタからは見えないため、
 // impersonate してこちらから読む。書き込み系は一切持たせない。
 import { getDriveToken } from './lib/drive-auth.mjs';
-import { gwsFetch } from './lib/gws-proxy.mjs';
+import { gwsFetch, isTransientSourceError } from './lib/gws-proxy.mjs';
 import { routeMailbox } from './lib/mail-groups.mjs';
 import { isEntry } from './is-entry.mjs';
 
@@ -80,9 +80,9 @@ export async function searchGmail({ user, query, max = 10, withBody = false, bod
     while (offset < stubs.length && !signal?.aborted) {
       const stub = stubs[offset++];
       let retrieved = false;
+      const metadata = !withBody || !!shouldFetchBody;
       try {
         if (skipId(stub.id)) { pending.delete(stub.id); continue; }
-        const metadata = !withBody || !!shouldFetchBody;
         let message = await gmail(token, `/messages/${stub.id}?format=${metadata ? 'metadata' : 'full'}${metadata ? '&metadataHeaders=Date&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=List-Unsubscribe' : ''}`, fetchImpl, signal);
         let compact = compactMessage(message);
         if (withBody && (!shouldFetchBody || shouldFetchBody(compact))) {
@@ -94,6 +94,29 @@ export async function searchGmail({ user, query, max = 10, withBody = false, bod
         results.push(compact); pending.delete(stub.id);
       } catch (error) {
         if (!retrieved && (error?.status === 404 || error?.status === 410)) { skipped++; pending.delete(stub.id); continue; }
+        // Transient errors (timeout, 5xx, network): retry once per message
+        if (!retrieved && isTransientSourceError(error)) {
+          try {
+            let message = await gmail(token, `/messages/${stub.id}?format=${metadata ? 'metadata' : 'full'}${metadata ? '&metadataHeaders=Date&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=List-Unsubscribe' : ''}`, fetchImpl, signal);
+            let compact = compactMessage(message);
+            if (withBody && (!shouldFetchBody || shouldFetchBody(compact))) {
+              if (metadata) message = await gmail(token, `/messages/${stub.id}?format=full`, fetchImpl, signal);
+              compact = { ...compactMessage(message), body: extractBody(message.payload, bodyLimit) };
+            }
+            retrieved = true;
+            if (onMessage) await onMessage(compact);
+            results.push(compact); pending.delete(stub.id);
+            continue;
+          } catch (retryError) {
+            if (isTransientSourceError(retryError)) {
+              skipped++; pending.delete(stub.id);
+              continue;
+            }
+            failure ||= retryError;
+            if (!allowPartial) break;
+            continue;
+          }
+        }
         failure ||= error;
         if (!allowPartial) break;
       }
@@ -103,7 +126,7 @@ export async function searchGmail({ user, query, max = 10, withBody = false, bod
   if (failure && !allowPartial) throw failure;
   if (signal?.aborted && !allowPartial) throw signal.reason || new Error('Gmail search interrupted');
 
-  if (skipped > 0) console.error(`gmail-search: ${skipped}件のメッセージが取得前に削除または移動されたためスキップしました`);
+  if (skipped > 0) console.error(`gmail-search: ${skipped}件のメッセージをスキップしました（削除/移動または一時的エラー）`);
   return { user, query, ...(routed.notice ? { notice: routed.notice } : {}), estimate: Number(list.resultSizeEstimate) || results.length, messages: results, skipped, nextPageToken: list.nextPageToken || null, ...(allowPartial ? { pendingIds: [...pending], partial: pending.size > 0, error: failure?.message || (signal?.aborted ? "Gmail source budget exhausted" : undefined) } : {}) };
 }
 

@@ -536,3 +536,48 @@ test('状態ファイル書込失敗はsource成功で隠さずexit 1', async t 
     } }], stdout: () => {}, stderr: () => {}, stage: () => {}, heartbeat: async value => heartbeats.push(value) });
   assert.equal(code, 1); assert.equal(heartbeats[0].ok, false); assert.match(heartbeats[0].summary, /状態書込失敗/);
 });
+
+test('Gmail sourceのタイムアウトはpartialになりerrorにならない', async t => {
+  const home = homeFor(t), state = {}, stages = [];
+  const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+  const sources = [
+    { key: 'gmail:kim@orgiast.jp', load: async () => { throw timeout; } },
+    { key: 'discord', load: async () => ({ documents: [], next: { watermark: 'done' } }) },
+  ];
+  const ledger = { read: async () => [], append: async () => {} };
+  const result = await runDetect({ home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, state, sources, now, dryRun: false, ask: async () => assert.fail('no LLM'), notify: async () => {}, stage: value => stages.push(value) });
+  // Timeout → partial, not error
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.partial.length, 1);
+  assert.match(result.partial[0].reason, /一時的エラー/);
+  assert.match(result.skipped[0].reason, /一時的エラー/);
+  // Non-Gmail source was processed
+  assert.deepEqual(state.sources.discord, { watermark: 'done' });
+});
+
+test('Gmail sourceの全メッセージタイムアウトはrunDetectでpartial（複数source）', async t => {
+  const home = homeFor(t), heartbeats = [];
+  const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+  const code = await main([], { home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, skipSeatCheck: true,
+    ledger: { read: async () => [] }, sources: [
+      { key: 'gmail:kim@orgiast.jp', load: async () => { throw timeout; } },
+      { key: 'gmail:seisaku-team@orgiast.jp', load: async () => { throw timeout; } },
+      { key: 'drive:kim@orgiast.jp', load: async () => ({ documents: [], next: { watermark: 'done' }, partial: { reason: 'Drive時間予算到達', processed: 1 } }) },
+    ], stdout: () => {}, stderr: () => {}, stage: () => {}, heartbeat: async value => heartbeats.push(value) });
+  // Partial source(s) → exit 0
+  assert.equal(code, 0);
+  assert.equal(heartbeats[0].ok, true);
+  // Both gmail sources are partial, not error
+  assert.match(heartbeats[0].summary, /partial=3/);
+  assert.doesNotMatch(heartbeats[0].summary, /errors=[1-9]/);
+});
+
+test('認証エラーはerrorのまま（transientではない）', async t => {
+  const home = homeFor(t);
+  const authError = Object.assign(new Error('Gmail API 401: Unauthorized'), { status: 401 });
+  const sources = [{ key: 'gmail:kim@orgiast.jp', load: async () => { throw authError; } }];
+  const ledger = { read: async () => [], append: async () => {} };
+  const result = await runDetect({ home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, sources, state: {}, now, dryRun: false, ask: async () => assert.fail('no LLM'), notify: async () => {} });
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.partial.length, 0);
+});

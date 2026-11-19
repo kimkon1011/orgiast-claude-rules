@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { seatCheck } from './lib/deadline-seat.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
-import { gwsFetch } from './lib/gws-proxy.mjs';
+import { gwsFetch, isTransientSourceError } from './lib/gws-proxy.mjs';
 import { reportHeartbeat } from './lib/heartbeat.mjs';
 import { addItem } from './kim-inbox.mjs';
 import { DEFAULT_CONFIG, KINDS, createLedger, loadConfig, defaultHome, dataPath, readJson, saveJson, googleClient, withLedgerLock, parseSheetDate, jstDate, isDuplicate, nextId, sheetUrl, initialize } from './deadline-ledger.mjs';
@@ -244,7 +244,10 @@ export async function runDetect({ home, config, ledger, state, sources, now, dry
         result.partial.push({ source: source.key, reason: '全体時間上限到達（取得済みdocumentは次回へ繰越）' });
         result.skipped.push({ source: source.key, reason: '全体時間上限到達' });
       } else if (isQuotaError(e)) result.skipped.push({ source: source.key, reason: `quota retry exhausted: ${reason}` });
-      else result.errors.push({ source: source.key, error: reason });
+      else if (isTransientSourceError(e)) {
+        result.partial.push({ source: source.key, reason: `一時的エラー（次回再試行）: ${reason}` });
+        result.skipped.push({ source: source.key, reason: `一時的エラー: ${reason}` });
+      } else result.errors.push({ source: source.key, error: reason });
     }
   }
   if (!dryRun && state.candidateNoticePending && !processSignal?.aborted && nowMs() < deadlineMs) {

@@ -31,7 +31,7 @@ test('外部送信 API を呼ぶ全エントリが保護方式付きで登録さ
   const found = scanExternalSendEntries();
   assert.deepEqual(Object.keys(registry).sort(), found, `送信経路の登録表を更新してください: ${JSON.stringify(found)}`);
   for (const [file, row] of Object.entries(registry)) {
-    assert.ok(['mail-send-approval-gate', 'send-dedupe', 'send-context-check'].includes(row.protection), `${file}: protection が不正`);
+    assert.ok(['mail-send-approval-gate', 'send-dedupe', 'tool-send-dedupe', 'send-context-check', 'internal-only'].includes(row.protection), `${file}: protection が不正`);
   }
   assert.equal(registry['tools/gmail-draft.mjs'].protection, 'send-dedupe');
   assert.equal(registry['tools/seisaku-mail.mjs'].protection, 'send-dedupe');

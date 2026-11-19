@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCli } from './seisaku-mail.mjs';
 
-function fixture(t, { artifact = true, result = { ok: true, threadId: 't1', messageId: 'm1' }, log, pending = false, never = false, env = {} } = {}) {
+function fixture(t, { artifact = true, result = { ok: true, threadId: 't1', messageId: 'm1' }, log, pending = false, never = false, env = {}, searchSent = async () => [], acquireDedupe = async () => ({ recordSuccess() {}, release() {} }) } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'seisaku-test-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const body = join(home, 'body.txt');
@@ -15,7 +15,7 @@ function fixture(t, { artifact = true, result = { ok: true, threadId: 't1', mess
   let time = Date.parse('2026-10-28T01:00:00.300Z'), polls = 0, output = '', downloaded;
   const calls = [], sleeps = [];
   const runInfo = status => ({ id: 42, created_at: '2026-10-28T01:00:01Z', status });
-  const run = createCli({ home, env, now: () => time, sleep: async ms => { sleeps.push(ms); time += ms; }, stdout: s => { output += s; }, searchSent: async () => [], acquireDedupe: async () => ({ recordSuccess() {}, release() {} }), spawnSync: (cmd, args, opts) => {
+  const run = createCli({ home, env, now: () => time, sleep: async ms => { sleeps.push(ms); time += ms; }, stdout: s => { output += s; }, searchSent, acquireDedupe, spawnSync: (cmd, args, opts) => {
     calls.push({ cmd, args, opts });
     assert.equal(cmd, 'gh');
     assert.equal(opts.shell, false);
@@ -63,6 +63,29 @@ test('send preview exits 64 before any gh call; --yes dispatches send', async t 
   const approved = fixture(t);
   assert.equal(await approved.run([...writeArgs(approved, 'send'), '--yes']), 0);
   assert.ok(approved.calls[0].args.includes('mode=send'));
+});
+
+test('send は各Toを送信済み検索し、検出・検索失敗を exit 4 で拒否する', async t => {
+  const queries = [];
+  for (const searchSent of [
+    async address => { queries.push(address); return address === 'b@example.com' ? [{ date: '2026-11-18' }] : []; },
+    async () => { throw new Error('search down'); },
+  ]) {
+    const f = fixture(t, { searchSent });
+    const argv = writeArgs(f, 'send');
+    argv[argv.indexOf('info@example.com')] = 'a@example.com,b@example.com';
+    assert.equal(await f.run([...argv, '--yes']), 4);
+    assert.equal(f.calls.length, 0);
+    assert.match(JSON.parse(f.output()).error, /送信済み|同じ宛先/u);
+  }
+  assert.deepEqual(queries, ['a@example.com', 'b@example.com']);
+});
+
+test('--allow-repeat は検索を省略し、理由を dedupe へ渡す', async t => {
+  let options;
+  const f = fixture(t, { searchSent: async () => { throw new Error('must not search'); }, acquireDedupe: async value => { options = value; return { recordSuccess() {}, release() {} }; } });
+  assert.equal(await f.run([...writeArgs(f, 'send'), '--yes', '--allow-repeat', '訂正版']), 0);
+  assert.equal(options.allowRepeat, '訂正版');
 });
 
 test('polls every five seconds, ignores old runs and waits for completion', async t => {

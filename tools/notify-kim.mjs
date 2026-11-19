@@ -192,21 +192,13 @@ function benignQuotaSweepReport(text) {
 async function persistKim(home, options) {
   try {
     const item = await addItem(home, options);
-    return { delivered: 'session-inbox', id: item.id, kind: item.kind };
+    return { delivered: 'session-inbox', id: item.id, kind: item.kind, ...(item.status === 'answered' ? { status: item.status } : {}) };
   } catch (error) {
     try { return spoolItem(home, options); }
     catch (spoolError) {
       return { delivered: 'none', reason: `kim-inbox: ${redactSecrets(error.message)}; spool: ${redactSecrets(spoolError.message)}` };
     }
   }
-}
-
-// Pass through dedupeKey and escalateRefresh for inbox deduplication.
-function withDedupeOptions(options) {
-  const { dedupeKey, escalateRefresh, ...rest } = options;
-  if (dedupeKey) rest.dedupeKey = dedupeKey;
-  if (escalateRefresh) rest.escalateRefresh = true;
-  return rest;
 }
 
 export async function deliverKim(text, {

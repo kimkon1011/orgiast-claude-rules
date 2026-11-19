@@ -4,7 +4,10 @@ import { createHash, randomBytes } from 'node:crypto';
 import { isUnattendedSession } from './unattended-session.mjs';
 import { displayPcNames } from './pc-display.mjs';
 
-export const revisionOf = item => createHash('sha256').update(JSON.stringify([item.kind, item.text, item.revision, item.progressVersion])).digest('hex');
+export const revisionOf = item => {
+  const text = item.text.replace(/^(【要対応・kim の判断待ち) \d+日】/, '$1】');
+  return createHash('sha256').update(JSON.stringify([item.kind, text, item.revision, item.progressVersion])).digest('hex');
+};
 export const jstDay = now => new Date(now + 9 * 3600000).toISOString().slice(0, 10);
 const cap = (text, length) => Array.from(text).slice(0, length).join('');
 export function inboxSummary(item) {
@@ -221,7 +224,7 @@ export function recordPromptAnswers(home, sessionId, prompt, { listItems, answer
   const lines = prompt.trim().split(/\r?\n/);
   const matches = lines.map(line => line.trim().match(/^(ki-\d{14}-[a-f0-9]{4}|[1-9]\d*)\s*[:：、.．]?\s+(可|不可|承認|否認|はい|いいえ|不要|完了|OK|保留)[。.!！]?$/i));
   if (!matches.length || matches.some(m => !m)) return [];
-  const items = listItems(home), answers = [];
+  const items = listItems(home, { status: 'open' }), answers = [];
   for (const match of matches) {
     const receipt = delivered.find(d => match[1] === d.id || match[1] === String(d.number));
     const item = items.find(i => i.id === receipt?.id && i.kind === 'ask' && i.status === 'open' && revisionOf(i) === receipt.revision);
@@ -249,7 +252,7 @@ export function recordNaturalLanguageAnswers(home, sessionId, prompt, { listItem
   if (!delivered.length) return { answers: [], hints: [] };
 
   const lines = prompt.trim().split(/\r?\n/).filter(Boolean);
-  const items = listItems(home);
+  const items = listItems(home, { status: 'open' });
   const openAsks = delivered
     .map(d => items.find(i => i.id === d.id && i.kind === 'ask' && i.status === 'open' && revisionOf(i) === d.revision))
     .filter(Boolean);

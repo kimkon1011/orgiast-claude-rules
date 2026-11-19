@@ -7,7 +7,9 @@
 //   node tools/urgent-blocker.mjs --add --session <id> --title "<何が止まっているか>" --ask "<人にしてほしい1操作・所要時間>" [--link <URL>]
 //   node tools/urgent-blocker.mjs --resolve <id>
 //   node tools/urgent-blocker.mjs --resolve --session <id>     # そのセッションの open を全て解決
-//   node tools/urgent-blocker.mjs --list [--open] [--json]
+//   node tools/urgent-blocker.mjs --answer <id> --text "<返事>"
+//   node tools/urgent-blocker.mjs --reopen <id>
+//   node tools/urgent-blocker.mjs --list [--open | --answered] [--json]
 //   node tools/urgent-blocker.mjs --status
 //   node tools/urgent-blocker.mjs --context                    # SessionStart / UserPromptSubmit の hook
 import fs from 'node:fs';
@@ -51,7 +53,7 @@ function withLock(home, fn) {
 
 function validItem(item) {
   return item && ID_PATTERN.test(item.id) && typeof item.session === 'string' && typeof item.title === 'string'
-    && typeof item.ask === 'string' && ['open', 'resolved'].includes(item.status) && typeof item.createdAt === 'string';
+    && typeof item.ask === 'string' && ['open', 'answered', 'resolved'].includes(item.status) && typeof item.createdAt === 'string';
 }
 
 export function readState(home) {
@@ -94,14 +96,51 @@ export function addItem(home, { session, title, ask, link = '' }) {
   });
 }
 
-export function resolveById(home, id) {
+function updateItem(home, id, update) {
   if (!ID_PATTERN.test(id)) throw new Error('ID が不正です');
   return withLock(home, () => {
     const state = readState(home);
     const item = state.items.find(i => i.id === id);
     if (!item) throw new Error('該当する blocker がありません');
-    if (item.status === 'open') { item.status = 'resolved'; item.resolvedAt = new Date().toISOString(); writeState(home, state); }
+    if (update(item)) writeState(home, state);
     return item;
+  });
+}
+
+export function resolveById(home, id) {
+  return updateItem(home, id, item => {
+    if (item.status === 'resolved') return false;
+    item.status = 'resolved';
+    item.resolvedAt = new Date().toISOString();
+    delete item.lastShownPrompt;
+    return true;
+  });
+}
+
+function recordReply(item, reply) {
+  if (!Array.isArray(item.replies)) item.replies = [];
+  item.replies.push(reply);
+  item.status = 'answered';
+  delete item.lastShownPrompt;
+}
+
+function answerById(home, id, text, session) {
+  const reply = clean(text);
+  if (!reply) throw new Error('--text が必要です');
+  return updateItem(home, id, item => {
+    if (item.status === 'resolved') throw new Error('解決済みの blocker には返事を追加できません');
+    recordReply(item, { session: clean(session) || null, at: new Date().toISOString(), text: reply });
+    return true;
+  });
+}
+
+function reopenById(home, id) {
+  return updateItem(home, id, item => {
+    if (item.status !== 'answered') throw new Error('answered の blocker を指定してください');
+    item.status = 'open';
+    if (Array.isArray(item.replies)) item.replies.pop();
+    delete item.lastShownPrompt;
+    return true;
   });
 }
 
@@ -110,7 +149,11 @@ export function resolveBySession(home, session) {
   return withLock(home, () => {
     const state = readState(home);
     const resolved = state.items.filter(i => i.session === session && i.status === 'open');
-    for (const item of resolved) { item.status = 'resolved'; item.resolvedAt = new Date().toISOString(); }
+    for (const item of resolved) {
+      item.status = 'resolved';
+      item.resolvedAt = new Date().toISOString();
+      delete item.lastShownPrompt;
+    }
     if (resolved.length) writeState(home, state);
     return resolved;
   });
@@ -141,17 +184,20 @@ export function selectForInterrupt(items, { sessionId = '', prompt = '' } = {}) 
 
 export function markShown(home, ids, sessionId, now = new Date()) {
   if (!ids.length || !sessionId) return;
-  const iso = now.toISOString();
   withLock(home, () => {
     const state = readState(home);
-    let changed = false;
-    for (const item of state.items) {
-      if (!ids.includes(item.id)) continue;
-      item.shownSessions = { ...(item.shownSessions || {}), [sessionId]: iso };
-      changed = true;
-    }
-    if (changed) writeState(home, state);
+    const items = state.items.filter(item => item.status === 'open' && ids.includes(item.id));
+    if (!items.length) return;
+    markItemsShown(items, sessionId, now.toISOString());
+    writeState(home, state);
   });
+}
+
+function markItemsShown(items, session, at) {
+  for (const item of items) {
+    item.shownSessions = { ...(item.shownSessions || {}), [session]: at };
+    item.lastShownPrompt = { session, at };
+  }
 }
 
 // 内容ハッシュ付き ID（ask/title が変わると新しい項目として扱う）
@@ -168,34 +214,63 @@ export function contextHook(input, { home = defaultHome(), now = Date.now(), env
     if (!['SessionStart', 'UserPromptSubmit'].includes(event)) return null;
     const sessionId = String(input.session_id || input.sessionId || '');
     if (!sessionId) return null;
-    // loop 起床は抑止
-    if (isLoopWake(input, { home, now, hook: 'urgent-blocker' })) return null;
-    const items = listItems(home, { status: 'open' });
-    const selected = selectForInterrupt(items, { sessionId, now: typeof now === 'function' ? now() : now, prompt: input.prompt || '' });
-    if (!selected.length) return null;
-    // 内容ハッシュ付き ID で新着選別
-    const allIds = selected.map(contentAugmentedId);
-    const { fresh, knownFromOtherSessions } = selectNew({ home, hook: 'urgent-blocker', sessionId, ids: allIds, now });
-    if (!fresh.length) return knownFromOtherSessions ? { hookSpecificOutput: { hookEventName: event, additionalContext: `${FINAL_ONLY_INSTRUCTION}\nほか既出 ${knownFromOtherSessions} 件` } } : null;
-    const freshSet = new Set(fresh);
-    const freshItems = selected.filter(item => freshSet.has(contentAugmentedId(item)));
-    if (!freshItems.length) return null;
-    const lines = freshItems.map(item => {
-      const link = item.link ? ` ／ ${item.link}` : '';
-      return `🚨 割り込み（別セッションで急ぎの人待ち）: ${item.title} ／ お願い: ${item.ask}${link}`;
-    });
-    const knownLine = knownFromOtherSessions > 0 ? `\nほか既出 ${knownFromOtherSessions} 件` : '';
-    return {
-      hookSpecificOutput: {
+    const timestamp = typeof now === 'function' ? now() : now;
+    const at = new Date(timestamp).toISOString();
+    const loopWake = isLoopWake(input, { home, now: timestamp, hook: 'urgent-blocker' });
+    const machinePrompt = isMachinePrompt(input.prompt);
+    return withLock(home, () => {
+      const state = readState(home);
+      const lines = [];
+      let changed = false;
+      if (event === 'UserPromptSubmit') {
+        const text = loopWake || machinePrompt ? '' : clean(input.prompt);
+        for (const item of state.items) {
+          if (item.status !== 'open' || item.lastShownPrompt?.session !== sessionId) continue;
+          delete item.lastShownPrompt;
+          changed = true;
+          if (!text) continue;
+          recordReply(item, { session: sessionId, at, text });
+          lines.push(`直前の割り込み ${item.title} への返事として記録した。無関係な発言なら \`node tools/urgent-blocker.mjs --reopen ${item.id}\` で戻す。`);
+        }
+      }
+      if (!loopWake) {
+        for (const item of state.items) {
+          if (item.session !== sessionId || item.status !== 'answered') continue;
+          const reply = item.replies?.at(-1);
+          if (!reply) continue;
+          lines.push(`別セッションで kim が返事済み: ${item.title} ／ 返事: ${reply.text}（${reply.at}）。この返事で作業を続け、終わったら \`node tools/urgent-blocker.mjs --resolve ${item.id}\`。`);
+        }
+        const selected = selectForInterrupt(state.items, { sessionId, prompt: input.prompt });
+        if (selected.length) {
+          const ids = selected.map(contentAugmentedId);
+          const { fresh, knownFromOtherSessions } = selectNew({ home, hook: 'urgent-blocker', sessionId, ids, now: timestamp });
+          const freshSet = new Set(fresh);
+          const freshItems = selected.filter(item => freshSet.has(contentAugmentedId(item)));
+          if (knownFromOtherSessions) lines.push(`ほか既出 ${knownFromOtherSessions} 件`);
+          for (const item of freshItems) {
+            const link = item.link ? ` ／ ${item.link}` : '';
+            lines.push(`🚨 割り込み（別セッションで急ぎの人待ち）: ${item.title} ／ お願い: ${item.ask}${link}`);
+          }
+          if (freshItems.length) {
+            markItemsShown(freshItems, sessionId, at);
+            changed = true;
+          }
+        }
+      }
+      if (changed) writeState(home, state);
+      return lines.length ? { hookSpecificOutput: {
         hookEventName: event,
-        additionalContext: `${FINAL_ONLY_INSTRUCTION}\n${knownLine}\n${lines.join('\n')}`,
-      },
-    };
+        additionalContext: `${FINAL_ONLY_INSTRUCTION}\n${lines.join('\n')}`,
+      } } : null;
+    });
   } catch { return null; }
 }
 
 export async function main(args = process.argv.slice(2), { home = defaultHome(), stdout = console.log, stderr = console.error, readStdin = readStdinWithTimeout, now = Date.now, env = process.env } = {}) {
-  const value = flag => args[args.indexOf(flag) + 1];
+  const value = flag => {
+    const index = args.indexOf(flag);
+    return index < 0 ? undefined : args[index + 1];
+  };
   try {
     if (args.includes('--context')) {
       const input = JSON.parse(await readStdin(2000));
@@ -213,14 +288,24 @@ export async function main(args = process.argv.slice(2), { home = defaultHome(),
       else stdout(JSON.stringify({ id: resolveById(home, value('--resolve')).id, status: 'resolved' }));
       return 0;
     }
+    if (args.includes('--answer') || args.includes('--reopen')) {
+      const item = args.includes('--answer')
+        ? answerById(home, value('--answer'), value('--text'), value('--session') || env.CLAUDE_SESSION_ID)
+        : reopenById(home, value('--reopen'));
+      stdout(JSON.stringify({ id: item.id, status: item.status }));
+      return 0;
+    }
     if (args.includes('--list') || args.includes('--status')) {
-      const items = listItems(home, { status: args.includes('--open') || args.includes('--status') ? 'open' : undefined });
+      let status;
+      if (args.includes('--open') || args.includes('--status')) status = 'open';
+      else if (args.includes('--answered')) status = 'answered';
+      const items = listItems(home, { status });
       if (args.includes('--json')) stdout(JSON.stringify(items));
       else if (args.includes('--status')) stdout(`urgent-blocker: open ${items.length} 件${items.length ? `\n最古: ${items[0].id} ${items[0].title}` : ''}`);
       else stdout(items.map(i => `${i.id} ${i.status} ${i.session} ${i.title}`).join('\n') || '');
       return 0;
     }
-    throw new Error('--add / --resolve / --list / --status / --context を指定してください');
+    throw new Error('--add / --answer / --reopen / --resolve / --list / --status / --context を指定してください');
   } catch (error) {
     stderr(`urgent-blocker: ${String(error.message).replace(/[\r\n]+/g, ' ')}`);
     return args.includes('--context') ? 0 : 1;

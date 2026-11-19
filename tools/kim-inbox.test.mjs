@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, CONTEXT_LIMIT, oneScreenSummary, autoCloseByGmail } from './kim-inbox.mjs';
+import { readLedger } from './auto-progress-ledger.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { loadAllowlist, discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { inboxDedupeKey, spoolItem, drainSpool } from './kim-inbox.mjs';
@@ -762,4 +763,74 @@ test('CLI --auto-close prints JSON of closed items', async t => {
   const output = [];
   await main(['--auto-close'], { home, stdout: s => output.push(JSON.parse(s)) });
   assert.ok(Array.isArray(output[0]));
+});
+
+test('escalateRefresh updates text of open item without resetting answer', async t => {
+  const home = seat(t);
+  const item = await addItem(home, { kind: 'ask', text: '初回の質問', dedupeKey: 'auto-progress-escalate:test-key' });
+  assert.equal(item.status, 'open');
+  // escalateRefresh should update text but keep status open
+  const refreshed = await addItem(home, { kind: 'ask', text: '更新された質問（2日経過）', dedupeKey: 'auto-progress-escalate:test-key', escalateRefresh: true });
+  assert.equal(refreshed.id, item.id);
+  assert.equal(refreshed.status, 'open');
+  assert.match(refreshed.text, /更新された質問/);
+  // Now answer it
+  answerItem(home, item.id, '承認します', 'test-session');
+  const answered = listItems(home).find(i => i.id === item.id);
+  assert.equal(answered.status, 'answered');
+  // escalateRefresh on answered item should return the existing item unchanged
+  const afterAnswer = await addItem(home, { kind: 'ask', text: 'もう一度質問', dedupeKey: 'auto-progress-escalate:test-key', escalateRefresh: true });
+  assert.equal(afterAnswer.status, 'answered');
+  assert.doesNotMatch(afterAnswer.text, /もう一度質問/);
+});
+
+test('answerItem writes back to ledger when text contains session/ts pattern', async t => {
+  const home = seat(t);
+  const ledgerPath = path.join(home, '.claude/auto-progress-ledger.jsonl');
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  const row = { ts: '2026-11-19T10:00:00.000Z', sessionId: 'abcdef12-3456-7890-abcd-ef1234567890', status: 'waiting_user', nextKim: 'kim の承認が必要です', promise: '確認して報告', pc: 'test-PC' };
+  fs.writeFileSync(ledgerPath, JSON.stringify(row) + '\n');
+  const item = await addItem(home, { kind: 'ask', text: `判断してください\n（セッション abcdef12 / 台帳 ts 2026-11-19T10:00:00.000Z）`, dedupeKey: 'auto-progress-escalate:test-ledger' });
+  answerItem(home, item.id, '500円で確定', 'answer-session');
+  const rows = readLedger(ledgerPath);
+  const updated = rows.find(r => r.sessionId === 'abcdef12-3456-7890-abcd-ef1234567890');
+  assert.ok(updated, 'ledger row should exist');
+  assert.equal(updated.kimAnswer, '500円で確定');
+  assert.equal(updated.status, 'open');
+  assert.equal(updated.kimAnswerSession, 'answer-session');
+  assert.equal(updated.kimAnsweredAt, listItems(home, { status: 'answered' })[0].answeredAt);
+  const sessionInbox = path.join(home, '.claude/auto-progress-inbox', row.sessionId + '.jsonl');
+  assert.match(fs.readFileSync(sessionInbox, 'utf8'), /500円で確定/);
+  assert.equal(updated.nextKim, 'なし');
+});
+
+test('save moves non-open items to .archive/', async t => {
+  const home = seat(t);
+  const inboxDir = path.join(home, '.claude/kim-inbox');
+  const archiveDir = path.join(inboxDir, '.archive');
+  const item = await addItem(home, { kind: 'ask', text: 'テスト質問' });
+  assert.ok(fs.existsSync(path.join(inboxDir, `${item.id}.json`)));
+  // Answer it — should move to archive
+  answerItem(home, item.id, '回答');
+  assert.ok(!fs.existsSync(path.join(inboxDir, `${item.id}.json`)), 'answered item should be moved from main dir');
+  assert.ok(fs.existsSync(path.join(archiveDir, `${item.id}.json`)), 'answered item should exist in archive');
+  // listItems without filter should still find it
+  const items = listItems(home);
+  assert.ok(items.some(i => i.id === item.id), 'archived item should be found by listItems');
+  // listItems with status filter should not include archived non-open items
+  const openItems = listItems(home, { status: 'open' });
+  assert.ok(!openItems.some(i => i.id === item.id), 'archived answered item should not appear in open filter');
+});
+
+test('dedupeKey + escalateRefresh skips creation when answered item exists', async t => {
+  const home = seat(t);
+  // Create an ask with dedupeKey
+  const item = await addItem(home, { kind: 'ask', text: '初回質問', dedupeKey: 'auto-progress-escalate:test-skip' });
+  assert.equal(item.status, 'open');
+  // Answer it
+  answerItem(home, item.id, '回答済み');
+  // Try to create a new item with same dedupeKey and escalateRefresh
+  const result = await addItem(home, { kind: 'ask', text: '再質問', dedupeKey: 'auto-progress-escalate:test-skip', escalateRefresh: true });
+  assert.equal(result.status, 'answered', 'should return existing answered item');
+  assert.doesNotMatch(result.text, /再質問/, 'text should not be updated for answered items');
 });

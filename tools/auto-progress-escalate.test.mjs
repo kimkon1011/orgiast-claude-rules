@@ -71,3 +71,22 @@ test('message preserves decision text and caps context lengths', () => {
   assert.ok(!text.includes('約'.repeat(81)));
   assert.match(text, /PC test-PC \/ セッション session- \/ 台帳 ts/);
 });
+test('daily escalation refreshes one inbox ask and skips it after an answer', async t => {
+  const r = row(60), opts = setup(t, [r]);
+  fs.mkdirSync(path.join(opts.home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(opts.home, '.claude', 'cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+  const { addItem, listItems, answerItem } = await import('./kim-inbox.mjs');
+  opts.io.notifyKim = async (text, options) => {
+    assert.equal(options.dedupeKey, `auto-progress-escalate:${escalationRowKey(r)}`);
+    const item = await addItem(opts.home, { ...options, text });
+    return { delivered: 'session-inbox', status: item.status };
+  };
+  assert.equal((await escalateKimDecisions(opts)).sent, 1);
+  const first = listItems(opts.home)[0];
+  assert.equal((await escalateKimDecisions({ ...opts, now: now + 24 * H })).sent, 1);
+  assert.deepEqual(listItems(opts.home).map(item => item.id), [first.id]);
+  assert.match(listItems(opts.home)[0].text, /判断待ち 3日/);
+  answerItem(opts.home, first.id, '承認');
+  assert.equal((await escalateKimDecisions({ ...opts, now: now + 48 * H })).sent, 0);
+  assert.deepEqual(listItems(opts.home).map(item => item.status), ['answered']);
+});

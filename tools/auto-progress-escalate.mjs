@@ -2,14 +2,14 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ledgerFile, readLedger, OPEN_STATUSES } from './auto-progress-ledger.mjs';
+import { ledgerFile, readLedger, OPEN_STATUSES, escalationRowKey, escalationDedupeKey } from './auto-progress-ledger.mjs';
 import { decisionOwnerOf } from './auto-progress-decision-owner.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { acquireLock } from './lib/progress-file-lock.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const DAY_MS = 86400000;
-export const escalationRowKey = row => `${row.sessionId || ''}${row.ts || ''}`;
+export { escalationRowKey };
 export function decisionAge(row, now) {
   const times = [row.ts, row.lastCheckedAt].map(Date.parse).filter(Number.isFinite);
   return times.length ? now - Math.min(...times) : NaN;
@@ -44,9 +44,9 @@ export async function escalateKimDecisions({ home = process.env.ORGIAST_HOME || 
       targets.push({ rowKey: key, text });
       if (dryRun) continue;
       try {
-        const dedupeKey = `auto-progress-escalate:${key}`;
-        const result = await (io.notifyKim ?? notifyKim)(text, { kind: 'ask', kimActionRequired: true, sessionId: row.sessionId || '', home, now, dedupeKey, escalateRefresh: true });
-        if (!['dm', 'webhook', 'session-inbox'].includes(result?.delivered)) {
+        const dedupeKey = escalationDedupeKey(row);
+        const result = await (io.notifyKim ?? notifyKim)(text, { kind: 'ask', kimActionRequired: true, source: 'auto-progress-escalate', sessionId: row.sessionId || '', home, now, dedupeKey, escalateRefresh: true });
+        if (!['dm', 'webhook', 'session-inbox', 'spooled'].includes(result?.delivered)) {
           (io.stderr ?? console.error)(`auto-progress-escalate: ${key}: ${result?.delivered || 'none'}: ${result?.reason || 'not delivered'}`);
           continue;
         }
@@ -54,7 +54,7 @@ export async function escalateKimDecisions({ home = process.env.ORGIAST_HOME || 
         const temp = `${file}.${process.pid}.tmp`;
         fs.writeFileSync(temp, `${JSON.stringify(state)}\n`);
         fs.renameSync(temp, file);
-        sent++;
+        if (result.status !== 'answered') sent++;
       } catch (error) {
         (io.stderr ?? console.error)(`auto-progress-escalate: ${key}: ${error?.message || error}`);
       }

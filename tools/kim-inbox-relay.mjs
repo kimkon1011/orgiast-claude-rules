@@ -1,5 +1,5 @@
 import os from 'node:os';
-import { isKimSeat, listItems, updateInboxItem } from './kim-inbox.mjs';
+import { isKimSeat, readInboxItem, updateInboxItem } from './kim-inbox.mjs';
 import { formatInboxBrief, revisionOf, relayDue, jstDay, readRelayState, writeRelayState, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
 
 const normalize = text => String(text).replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '').replace(/\s+/g, ' ').trim();
@@ -9,10 +9,9 @@ export function evaluateKimInboxRelay(input = {}, { home = process.env.ORGIAST_H
   const pass = { decision: 'pass', receipts: [] };
   if (!sessionId || !isKimSeat(home) || !interactiveInboxSession(input, { home, env, raw })) return pass;
   const state = readRelayState(home, sessionId);
-  const items = listItems(home);
   const pending = (state.pending || []).flatMap(p => {
-    const item = items.find(i => i.id === p.id && (i.status === 'open' || (i.kind === 'info' && i.status === 'seen')) && revisionOf(i) === p.revision && relayDue(i, sessionId, now));
-    return item ? [item] : [];
+    const item = readInboxItem(home, p.id);
+    return item && (item.status === 'open' || (item.kind === 'info' && item.status === 'seen')) && revisionOf(item) === p.revision && relayDue(item, sessionId, now) ? [item] : [];
   });
   if (!pending.length) return pass;
   // Group duplicate items by work ID + decide; only the representative must appear in the response.

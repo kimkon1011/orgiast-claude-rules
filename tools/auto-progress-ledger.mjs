@@ -275,29 +275,40 @@ export const rowKey = (row) => {
 
 export { isUnattendedRow } from './lib/unattended-session.mjs';
 
-// Find a ledger row by sessionId prefix and ts, then apply updates.
-// Returns the updated row, or null if not found.
-export function updateLedgerRow(home, sessionIdPrefix, ts, updates) {
-  const file = ledgerFile(home);
+export const escalationRowKey = row => `${row.sessionId || ''}${row.ts || ''}`;
+export const escalationDedupeKey = row => `auto-progress-escalate:${escalationRowKey(row)}`;
+
+export function legacyEscalationRef(text) {
+  const match = /セッション\s+([^\s/]{1,8})\s*\/\s*台帳\s+ts\s+([^\s）)]+)/.exec(text);
+  return match && { sessionPrefix: match[1], ts: match[2] };
+}
+
+export function escalationRowLookup(rows, encodeKey) {
+  const byKey = new Map();
+  const byRef = new Map();
+  const add = (index, key, row) => index.set(key, index.has(key) ? null : row);
+  for (const row of rows) {
+    if (row.externalMonitor || typeof row.sessionId !== 'string' || !row.sessionId || !row.ts) continue;
+    add(byKey, encodeKey(escalationDedupeKey(row)), row);
+    add(byRef, `${row.sessionId.slice(0, 8)}|${row.ts}`, row);
+  }
+  return item => {
+    if (byKey.has(item.dedupeKey)) return byKey.get(item.dedupeKey);
+    const ref = legacyEscalationRef(item.text);
+    return ref ? byRef.get(`${ref.sessionPrefix}|${ref.ts}`) ?? null : null;
+  };
+}
+
+export function updateLedgerRow(file, match, update) {
   const rows = readLedger(file);
-  let found = false;
-  const next = rows.map(row => {
-    if (found) return row;
-    const matchSession = String(row.sessionId || '').slice(0, 8).toLowerCase() === String(sessionIdPrefix || '').slice(0, 8).toLowerCase();
-    const matchTs = row.ts === ts || (ts && String(row.ts).startsWith(String(ts)));
-    if (matchSession && matchTs) {
-      found = true;
-      return { ...row, ...updates };
-    }
-    return row;
-  });
-  if (!found) return null;
-  writeLedger(file, next);
-  return next.find(row => {
-    const matchSession = String(row.sessionId || '').slice(0, 8).toLowerCase() === String(sessionIdPrefix || '').slice(0, 8).toLowerCase();
-    const matchTs = row.ts === ts || (ts && String(row.ts).startsWith(String(ts)));
-    return matchSession && matchTs;
-  }) || null;
+  const index = rows.findIndex(row => rowKey(row) === rowKey(match));
+  if (index < 0) return null;
+  const next = update(rows[index]);
+  if (next !== rows[index]) {
+    rows[index] = next;
+    writeLedger(file, rows);
+  }
+  return rows[index];
 }
 
 export const kimAction = row => {

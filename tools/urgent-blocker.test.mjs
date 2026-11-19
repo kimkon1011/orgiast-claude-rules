@@ -26,9 +26,9 @@ test('contextHook: 同一セッションで既出件数行を繰り返さない'
   );
   assert.ok(first);
   assert.match(first.hookSpecificOutput.additionalContext, /🚨 割り込み/);
-  // 同一セッション2回目（fresh 0件）→ null
+  // 自動プロンプトは返事として記録せず、既出の項目も表示しない
   const second = contextHook(
-    { hook_event_name: 'UserPromptSubmit', session_id: 'sess-B', prompt: 'second' },
+    { hook_event_name: 'UserPromptSubmit', session_id: 'sess-B', prompt: '[cron] second' },
     { home: h, now: () => 2000, env }
   );
   assert.equal(second, null);
@@ -46,6 +46,8 @@ test('contextHook: 同一セッションで既出件数行を繰り返さない'
     { home: h, now: () => 4000, env }
   );
   assert.equal(fourth, null);
+  assert.equal(listItems(h, { status: 'open' }).length, 1);
+  assert.equal(listItems(h)[0].lastShownPrompt, undefined);
 });
 
 test('登録→一覧→解決の基本経路', t => {
@@ -166,6 +168,9 @@ test('markShown は対象 id の shownSessions だけを更新する', t => {
   markShown(h, [a.id], 'sess-B', new Date('2026-11-10T01:00:00Z'));
   const items = listItems(h);
   assert.ok(items.find(i => i.id === a.id).shownSessions['sess-B']);
+  assert.deepEqual(items.find(i => i.id === a.id).lastShownPrompt, {
+    session: 'sess-B', at: '2026-11-10T01:00:00.000Z',
+  });
   assert.deepEqual(items.find(i => i.id === b.id).shownSessions, {});
 });
 
@@ -180,5 +185,52 @@ test('context: known count across sessions and changed ask becomes fresh', t => 
   assert.doesNotMatch(known.hookSpecificOutput.additionalContext, /first ask|応答の冒頭/);
   const file = path.join(h, '.claude', 'urgent-blocker.json');
   const state = JSON.parse(fs.readFileSync(file)); state.items[0].ask = 'changed ask'; fs.writeFileSync(file, JSON.stringify(state));
-  assert.match(contextHook({ ...input, prompt: 'second' }, { home: h, now, env }).hookSpecificOutput.additionalContext, /changed ask/);
+  assert.match(contextHook({ ...input, hook_event_name: 'SessionStart', prompt: '' }, { home: h, now, env }).hookSpecificOutput.additionalContext, /changed ask/);
+});
+
+test('contextHook: 同じセッションの次の発言を記録し、登録元に配達する', t => {
+  const h = home(t);
+  const item = addItem(h, { session: 'origin', title: '配布先', ask: 'どこに配る？' });
+  const submit = (session_id, prompt, now, hook_event_name = 'UserPromptSubmit') =>
+    contextHook({ session_id, prompt, hook_event_name }, { home: h, now, env: {} })
+      ?.hookSpecificOutput.additionalContext;
+
+  assert.match(submit('viewer', '最初の質問', 1000), /🚨 割り込み/);
+  assert.deepEqual(listItems(h)[0].lastShownPrompt, { session: 'viewer', at: new Date(1000).toISOString() });
+  assert.match(submit('other', '別件', 2000), /既出 1 件/);
+  assert.equal(listItems(h)[0].status, 'open');
+  const answer = submit('viewer', '  014にも\n' + '配'.repeat(600), 3000);
+  assert.match(answer, /配布先 への返事として記録した/);
+  assert.ok(answer.includes(`--reopen ${item.id}`));
+  const [answered] = listItems(h, { status: 'answered' });
+  const at = new Date(3000).toISOString();
+  const text = '014にも ' + '配'.repeat(594);
+  assert.deepEqual(answered.replies, [{ session: 'viewer', at, text }]);
+  assert.equal(answered.lastShownPrompt, undefined);
+  const delivered = submit('origin', '', 4000, 'SessionStart');
+  assert.ok(delivered.includes(`別セッションで kim が返事済み: 配布先 ／ 返事: ${text}（${at}）`));
+  assert.ok(delivered.includes(`--resolve ${item.id}`));
+  assert.equal(submit('third', 'こんにちは', 25 * 3600_000), undefined);
+  assert.equal(resolveById(h, item.id).status, 'resolved');
+  assert.equal(submit('origin', '続き', 25 * 3600_000 + 1000), undefined);
+});
+
+test('CLI: --answer と --list --answered と --reopen', async t => {
+  const h = home(t);
+  const item = addItem(h, { session: 'origin', title: '配布先', ask: 'どこに配る？' });
+  addItem(h, { session: 'other', title: '別件', ask: '確認して' });
+  const out = [];
+  const run = args => main(args, { home: h, env: {}, stdout: s => out.push(s), stderr: () => {} });
+  assert.equal(await run(['--answer', item.id]), 1);
+  assert.equal(await run(['--answer', item.id, '--text', '第一希望']), 0);
+  assert.equal(JSON.parse(out.pop()).status, 'answered');
+  assert.equal(await run(['--answer', item.id, '--text', '訂正']), 0);
+  assert.equal(await run(['--list', '--answered', '--json']), 0);
+  const listed = JSON.parse(out.pop());
+  assert.deepEqual(listed.map(i => i.id), [item.id]);
+  assert.deepEqual(listed[0].replies.map(reply => reply.text), ['第一希望', '訂正']);
+  assert.equal(await run(['--reopen', item.id]), 0);
+  assert.equal(JSON.parse(out.pop()).status, 'open');
+  assert.deepEqual(listItems(h, { status: 'answered' }), []);
+  assert.deepEqual(listItems(h).find(i => i.id === item.id).replies.map(reply => reply.text), ['第一希望']);
 });

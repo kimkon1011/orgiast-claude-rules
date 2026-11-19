@@ -420,9 +420,10 @@ async function addLlmJudgments(records) {
       let failure = '';
       for (const selectedProvider of providerChain) {
         try {
-          const { stdout } = await execFileAsync(process.execPath, [helper, '--provider', selectedProvider, '--max', '200', prompt], { timeout: 60_000, maxBuffer: 256 * 1024 });
+          const { stdout, stderr } = await execFileAsync(process.execPath, [helper, '--provider', selectedProvider, '--max', '200', prompt], { timeout: 60_000, maxBuffer: 256 * 1024 });
           result = parseLlmResult(stdout);
           if (process.env.SESSION_TRIAGE_DEBUG) console.error(`DBG ${record.sessionId.slice(0, 8)} provider=${selectedProvider} promptLen=${prompt.length} raw=${JSON.stringify(String(stdout).slice(0, 300))}`);
+          if (process.env.SESSION_TRIAGE_DEBUG) console.error(`DBG ${record.sessionId.slice(0, 8)} provider=${selectedProvider} transport=${JSON.stringify(String(stderr).slice(0, 2000))}`);
           if (result) break;
           failure = `${selectedProvider}: LLM応答を解析できません`;
           if (!llmStats.providerNotes.includes(failure)) llmStats.providerNotes.push(failure);
@@ -484,6 +485,9 @@ if (isMain) {
     const records = (await Promise.all(files.map(inspect))).filter(Boolean).sort((a, b) => b.score - a.score || a.ageDays - b.ageDays);
     const filtered = statusFilter ? records.filter((r) => r.status === statusFilter) : records;
     let selected = selectRecords(filtered, top, llmMode);
+    if (process.env.SESSION_TRIAGE_DEBUG_SESSION_ID) {
+      selected = selected.filter((record) => record.sessionId === process.env.SESSION_TRIAGE_DEBUG_SESSION_ID);
+    }
     let llmStats;
     if (llmMode) {
       llmStats = await addLlmJudgments(selected);

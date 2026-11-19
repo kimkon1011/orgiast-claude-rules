@@ -104,6 +104,10 @@ const hasWorkId = item => /作業ID:\s*[a-f0-9]{8}(?![a-f0-9])/i.test(item.text)
 const newestFirst = (a, b) => (b.lastAt || b.createdAt).localeCompare(a.lastAt || a.createdAt) || b.id.localeCompare(a.id);
 export const normalizeInboxText = text => String(text ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
 const contentDedupeKey = item => `${item.kind}\n${normalizeInboxText(item.text)}`;
+const legacyInfoKey = text => text.replace(/^【[^\r\n]*】[^\S\r\n]*(?:\r?\n|$)/, '')
+  .replace(/\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?/g, '#')
+  .replace(/\b(?:0x[a-f0-9]+|[a-f0-9]{8,})\b/gi, '#')
+  .replace(/\d+/g, '#').slice(0, 120);
 // 集約の検索と作成を同じロックで守り、同時追加も取りこぼさない。
 function create(home, options) {
   return locked(home, 'info-aggregation', () => {
@@ -184,7 +188,7 @@ export function compactItems(home) {
     const groups = new Map();
     for (const item of listItems(home, { status: 'open' })) {
       if (item.dedupeKey || item.kind !== 'info' || isHighInfo(item) || hasWorkId(item)) continue;
-      const key = contentDedupeKey(item);
+      const key = legacyInfoKey(item.text);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(item);
     }
@@ -208,7 +212,7 @@ export function compactItems(home) {
   });
 }
 export function dedupeExisting(home, { apply = false } = {}) {
-  return locked(home, 'info-aggregation', () => {
+  const inspect = () => {
     const open = listItems(home, { status: 'open' }).filter(item => ['ask', 'info'].includes(item.kind));
     const groups = new Map();
     for (const item of open) {
@@ -234,7 +238,8 @@ export function dedupeExisting(home, { apply = false } = {}) {
       });
     }
     return { before: open.length, after: open.length - merged, groups: duplicateGroups.length, merged, applied: apply };
-  });
+  };
+  return apply ? locked(home, 'info-aggregation', inspect) : inspect();
 }
 function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen, progressAt }) {
   if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');

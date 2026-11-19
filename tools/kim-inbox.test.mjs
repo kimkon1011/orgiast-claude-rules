@@ -9,6 +9,8 @@ import { loadAllowlist, discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { inboxDedupeKey, spoolItem, drainSpool } from './kim-inbox.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { formatInboxBrief } from './lib/kim-inbox-relay-state.mjs';
+// The hook intentionally skips sdk-cli sessions; these tests exercise interactive delivery.
+delete process.env.CLAUDE_CODE_ENTRYPOINT;
 test('--show reads the complete original without changing delivery or inbox data', async t => {
   const home = seat(t), item = await addItem(home, { kind: 'ask', text: '資料の確認\n' + '詳細'.repeat(500) + '\n末尾' });
   const file = path.join(home, '.claude/kim-inbox', item.id + '.json');

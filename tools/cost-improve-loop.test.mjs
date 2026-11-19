@@ -1031,7 +1031,7 @@ test('receipt signals: success is clean; stale boundary and missing ledger are d
   }
 });
 
-test('runEntry: refresh throw でも run が呼ばれ、process.exitCode=1 になる', async () => {
+test('runEntry: refresh throw でも run が呼ばれ、process.exitCode は変わらない', async () => {
   const savedExitCode = process.exitCode;
   process.exitCode = 0;
 
@@ -1043,7 +1043,7 @@ test('runEntry: refresh throw でも run が呼ばれ、process.exitCode=1 に�
   });
 
   assert.equal(calledRun, true, 'refresh が throw しても run は呼ばれる');
-  assert.equal(process.exitCode, 1, 'process.exitCode は 1 になる');
+  assert.equal(process.exitCode, 0, '任意の前処理失敗だけでは process.exitCode を変えない');
 
   process.exitCode = savedExitCode;
 });

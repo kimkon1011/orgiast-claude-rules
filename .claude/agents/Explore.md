@@ -1,5 +1,5 @@
 ---
-model: haiku
+model: claude-haiku-4-5
 description: 読み取り専用の探索エージェント。ファイル横断検索・内容調査に特化。編集・作成・削除不可。
 tools:
   - Read

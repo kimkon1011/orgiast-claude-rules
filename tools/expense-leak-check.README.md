@@ -20,7 +20,7 @@ node "C:\Users\uers\orgiast-main\tools\expense-leak-check.mjs" --limit 5 --verif
 - `EXPENSE_LEAK_HOME`: state/logの保存ルート上書き。標準は OS のホーム。WSL検証では書込可能な作業ディレクトリ内を指定します。
 - `EXPENSE_LEAK_YAHOO_SCRIPT`: Yahooスクリプトの絶対パス上書き。既定はホーム配下の `Downloads/CLAUDE.md配布/yahoo-auction-sniper/yahoo-mail-search.mjs`。
 
-freeeの接続設定はリポジトリ直下 `.env.local` の `PURCHASING_APP_DATABASE_URL`、または同名環境変数を使います。設定が無いPCではスクリプト冒頭で `hasFreeeDbConfig()` が false を返し、`main()` が `exit 0` で skip します。既存 `freee-query.mjs` の OAuth 更新処理を `lib/freee-auth.mjs` へそのまま切り出しました。会計APIはGETのみです。OAuthトークン更新の既存POSTとトークンDB更新は維持しています。トークン値やDB接続文字列は出力しません。
+freeeの接続設定はリポジトリ直下 `.env.local` の `PURCHASING_APP_DATABASE_URL`、または同名環境変数を使います。設定が無いPCではスクリプト冒頭で `hasFreeeDbConfig()` が false を返し、`main()` が `exit 0` で skip します。freee DB 設定が無いPCでは skip（exit 0）。既存 `freee-query.mjs` の OAuth 更新処理を `lib/freee-auth.mjs` へそのまま切り出しました。会計APIはGETのみです。OAuthトークン更新の既存POSTとトークンDB更新は維持しています。トークン値やDB接続文字列は出力しません。
 
 Google認証は既存 `lib/drive-auth.mjs` と同じSA鍵、Sheetsは `kim@orgiast.jp`、Gmailは各受信箱をimpersonateします。Gmailにはreadonly scopeを使い、Yahooは `--open` を付けず検索一覧のみ読みます。Yahooの共有ブラウザプロファイルが使用中ならブラウザ側のロックエラーを記録し、別プロファイルを起動しません。ジョブ自身の検索は必ず直列です。
 

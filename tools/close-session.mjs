@@ -76,7 +76,8 @@ if (!process.argv.includes("--no-launch")) {
     const launchArgs = ["--session", sessionId];
     if (process.argv.includes("--force-launch")) launchArgs.push("--force");
     await launchNextSession(launchArgs);
-  } catch {
-    // 次セッションの起動失敗で、完了済みの close-session を失敗扱いにしない。
+  } catch (error) {
+    const message = String(error?.message ?? error ?? '不明');
+    console.error(`[next-session] 警告: 次セッションの起動に失敗しました (${message})。close 処理は完了しています`);
   }
 }

@@ -279,6 +279,29 @@ test('danger-full-access のログを含む一般失敗は physical_operation �
   assert.equal(r.lanes.codex.reason,'probe_failed');
   assert.equal(r.lanes.codex.tried,undefined);
 });
+test('wslSubsystemFault lxss_stopped で codex probe_failed が dead:physical_operation になる', async t => {
+  const h = fixture(t);
+  const r = await laneDoctorProbe({ home: h, now, platform: 'win32', providers: ['codex'],
+    listWsl: () => 'Ubuntu',
+    spawnImpl: (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: 'fixture-token' } }) }),
+    probe: async () => ({ code: 1, text: 'generic probe failure' }),
+    wslSubsystemFault: () => ({ kind: 'lxss_stopped', detail: 'SERVICE_STOPPED' }),
+    notify: async () => ({ delivered: 'dm' }) });
+  assert.equal(r.lanes.codex.reason, 'dead:physical_operation');
+  assert.equal(r.lanes.codex.tried, 'WSLサブシステムの起動確認');
+  assert.match(r.lanes.codex.userFix, /sc start LxssManager/);
+});
+test('wslSubsystemFault が null なら probe_failed を変更しない', async t => {
+  const h = fixture(t);
+  const r = await laneDoctorProbe({ home: h, now, platform: 'win32', providers: ['codex'],
+    listWsl: () => 'Ubuntu',
+    spawnImpl: (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: 'fixture-token' } }) }),
+    probe: async () => ({ code: 1, text: 'generic probe failure' }),
+    wslSubsystemFault: () => null,
+    notify: async () => ({ delivered: 'dm' }) });
+  assert.equal(r.lanes.codex.reason, 'probe_failed');
+  assert.equal(r.lanes.codex.tried, undefined);
+});
 test('glm cooldown and explicitly tagged legacy history cannot block healthy Codex', t => {
   const h = fixture(t), until = now + 3600000;
   write(h, 'provider-cooldown.json', { glm: { until, reason: 'usage_limit' } });

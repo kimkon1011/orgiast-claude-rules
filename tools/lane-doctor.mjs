@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readDisabledEntries, restoreExpiredDisabledLanes } from './lib/lane-disabled.mjs';
 import { wslInstalled } from './lib/wsl-present.mjs';
+import { wslSubsystemFault } from './lib/wsl-health.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -269,7 +270,7 @@ export function shouldSkipLiveProbe(state = {}, now = Date.now()) {
   const cooldownMs = reason === 'quota_wait' ? 6 * 60 * 60 * 1000 : 60 * 60 * 1000;
   return Number.isFinite(last) && last > 0 && now - last < cooldownMs;
 }
-export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe, nativeTimeoutMs = NATIVE_WRITE_PROBE_TIMEOUT_MS, spawnImpl = spawnSync, providers = PROVIDERS, probeRetries = 1 } = {}) {
+export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe, nativeTimeoutMs = NATIVE_WRITE_PROBE_TIMEOUT_MS, spawnImpl = spawnSync, providers = PROVIDERS, probeRetries = 1, wslSubsystemFault: wslSubsystemFaultFn = wslSubsystemFault } = {}) {
   const started = Date.now(), dir = path.join(home, '.claude');
   const health = laneDoctorQuick({ home, now, save: false, platform, spawnImpl });
   const previous = readJson(path.join(dir, 'lane-health.json'));
@@ -342,6 +343,17 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       if (result.nativeRepair && health.lanes[p].reason === 'probe_failed') {
         if (result.timedOut) health.lanes[p].reason = 'probe_failed:timeout';
         else if (/blocked by read-only sandbox|sandbox:\s*read-only|Read-only file system|EROFS/i.test(text) || /spawn .*ENOENT|codex.*not found|is not recognized/i.test(text)) Object.assign(health.lanes[p], { reason: 'dead:physical_operation', tried: 'Windows ネイティブ(danger-full-access)でファイル作成・read-back', userFix: '管理者 PowerShell で wsl.exe --install --no-distribution を実行して Windows を再起動する。' });
+      }
+      // codex が probe_failed かつ nativeRepair 経路でないとき、WSL サブシステム自体の故障を確認する
+      if (p === 'codex' && health.lanes[p].reason === 'probe_failed' && !result.nativeRepair) {
+        const subFault = wslSubsystemFaultFn({ platform, spawnImpl });
+        if (subFault) {
+          Object.assign(health.lanes[p], {
+            reason: 'dead:physical_operation',
+            tried: 'WSLサブシステムの起動確認',
+            userFix: '管理者として PowerShell を開き sc start LxssManager を実行する。それでも起動しない場合は Windows を再起動する。',
+          });
+        }
       }
       health.lanes[p].probeReason = health.lanes[p].reason;
       if (deferred && cooldown[p]?.until) health.lanes[p].until = cooldown[p].until;

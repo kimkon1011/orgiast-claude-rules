@@ -34,6 +34,14 @@ function writeCostEnforce(home, mode) {
   fs.writeFileSync(path.join(claude, 'cost-enforce.json'), JSON.stringify({ mode }));
 }
 
+test('no-response-gate: Node.js 回帰テスト', () => {
+  const result = spawnSync(process.execPath, ['--test', 'tools/no-response-gate.test.mjs'], {
+    cwd: repo, encoding: 'utf8', windowsHide: true,
+  });
+  assert(result.status === 0, result.stdout || result.stderr || result.error?.message);
+  console.log(result.stdout.trim());
+});
+
 test('fleet-poller: rules-resync はリポの .mjs を優先する', () => {
   // 凍結コピー(~/.claude/hooks/onboarding-sync.ps1)を先に叩くと、中央キューから配っても
   // 古い実装が動くだけで配布が届かない端末を治せない。

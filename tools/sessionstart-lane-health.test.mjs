@@ -51,3 +51,12 @@ test('SessionStart auto-probes only eligible lanes and throttles each provider f
   health.lanes.codex.autoProbeStarted=false; health.lanes.deepseek.autoProbeStarted=false;
   assert.deepEqual(launchLaneAutoProbes(health,{home,now:now+30*60000,spawnProbe}),['codex','deepseek']);
 });
+
+test('SessionStart auto-probes disabled:expired lanes but not disabled lanes', t => {
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'lane-auto-probe-disabled-expired-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+  const now=Date.parse('2026-10-26T03:00:00Z'), calls=[];
+  const spawnProbe=(cmd,args,options)=>{calls.push({cmd,args,options});return {unref(){}};};
+  const health={lanes:{deepseek:{alive:false,reason:'disabled:expired',until:new Date(now-1).toISOString()},gemini:{alive:false,reason:'disabled',until:new Date(now+3600000).toISOString()}}};
+  assert.deepEqual(launchLaneAutoProbes(health,{home,now,spawnProbe}),['deepseek']);
+  assert.equal(calls.length,1); assert.ok(calls.every(c=>c.options.detached&&c.options.windowsHide&&c.options.stdio==='ignore'));
+});

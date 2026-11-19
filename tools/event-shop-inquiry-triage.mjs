@@ -88,7 +88,22 @@ export async function classifyLead(lead, messages, now = new Date(), deps = {}) 
   }
   return { ...lead, category, nextAction, lastIn: lastIn ?? null, lastOut: lastOut ?? null };
 }
-const excluded = lead => lead.raw_payload?.event_shop?.closed_at || String(lead.company_name ?? '').includes('連携テスト') || /@(orgiast\.jp|event-shop\.jp)$/i.test(lead.email ?? '');
+/**
+ * Determine whether a lead is a close candidate (終了候補) using the same logic as classifyLead.
+ * Returns true when the lead should be moved to completed status.
+ * This is the shared predicate used by both triage and event-shop-close-ended.
+ */
+export function isCloseCandidate(lead, messages, now = new Date()) {
+  const unique = deduplicateMessages(messages);
+  const lastIn = unique.find(m => m.direction === 'inbound' && !isAutoReply(m));
+  const lastOut = unique.find(m => m.direction === 'outbound');
+  const past = Boolean(lead.preferred_date && lead.preferred_date < dateKey(now));
+  const body = bodyLines(lastIn).join('\n');
+  const declined = /見送(?!りをいただきありがとう)/u.test(body) || /改めてご連絡|必要な際は|今回は(?!質問)/u.test(body) || /辞退/u.test(body) || /(?:別社|他社|他業者|別の業者)(?:にて|で|に)(?:問い合わせ|ご連絡|対応|依頼|発注|お願い|決定|手配)/u.test(body) || /またの機会|次の機会|見合わせ/u.test(body) || /キャンセル(?:させ|いたし|と(?:な|言|申)|させて(?:いただ|頂)|させて(?:もらい|貰))/u.test(body);
+  const activeReply = Boolean(lastIn && (!lastOut || time(lastIn.received_at) > time(lastOut.received_at)) && time(now) - time(lastIn.received_at) < 14 * DAY);
+  return declined || (past && !activeReply);
+}
+export const excluded = lead => lead.raw_payload?.event_shop?.closed_at || String(lead.company_name ?? '').includes('連携テスト') || /@(orgiast\.jp|event-shop\.jp)$/i.test(lead.email ?? '');
 export function deduplicateLeads(leads) {
   const kept = [];
   let duplicateCount = 0;

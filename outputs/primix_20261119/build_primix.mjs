@@ -59,14 +59,19 @@ function styleSheet(sheet, rows, title, subtitle) {
   sheet.getRange(`G${t + 2}`).formulas = [[`=SUM(G${t}:G${t + 1})`]];
   sheet.getRange(`G${t + 3}`).formulas = [[`=ROUNDDOWN(G${t + 2}*10%,0)`]];
   sheet.getRange(`G${t + 4}`).formulas = [[`=SUM(G${t + 2}:G${t + 3})`]];
-  sheet.getRange(`A${t}:D${t}`).merge();
-  sheet.getRange(`A${t}`).values = [["社内用収支メモ"]];
-  sheet.getRange(`A${t + 1}:D${t + 4}`).values = [
-    ["確認済み原価", title.includes("標準") ? 212900 : 174100, "未確認原価", "MC・準備・交通費等を含むため利益確定不可"],
-    ["マスタ準拠", "進行D・運営スタッフ・基本イベントセット・管理費", "マスタ外/過去実額", "構成・台本・ゲーム・スライド・打合せ・無線"],
-    ["社長判断", "交通費の確定、マスタ外項目の最終価格", "予算", "両案とも税込100万円以内"],
-    ["状態", "社内案・未送信", "作成日", "2026-11-19"],
+  const m = t + 6;
+  sheet.getRange(`A${m}:H${m}`).merge();
+  sheet.getRange(`A${m}`).values = [["社内用収支メモ"]];
+  const memo = [
+    ["確認済み原価", `${(title.includes("標準") ? 212900 : 174100).toLocaleString("ja-JP")}円。MC・準備・交通費等の原価が未確認のため、利益・利益率は確定不可`],
+    ["マスタ準拠", "進行D・運営スタッフ・基本イベントセット・管理費。マスタ外／過去実額は構成・台本・ゲーム・スライド・打合せ・無線"],
+    ["社長判断", "交通費の確定、マスタ外項目の最終価格、標準案と最小案の選択"],
+    ["状態", "社内案・未送信。作成日 2026-11-19。両案とも税込100万円以内"],
   ];
+  memo.forEach((row, i) => {
+    sheet.getRange(`B${m + 1 + i}:H${m + 1 + i}`).merge();
+    sheet.getRange(`A${m + 1 + i}:B${m + 1 + i}`).values = [[row[0], row[1]]];
+  });
   sheet.getRange("A2:H2").format = { font: { name: "Arial", size: 14, bold: true, color: "#202124" } };
   sheet.getRange("A3:H3").format = { font: { name: "Arial", size: 10, italic: true, color: "#5F6368" } };
   sheet.getRange("A5:H5").format = { fill: "#E8EAED", font: { name: "Arial", size: 10, bold: true, color: "#202124" }, horizontalAlignment: "center", verticalAlignment: "center", wrapText: true, borders: { preset: "outside", color: "#BDC1C6" } };
@@ -76,8 +81,9 @@ function styleSheet(sheet, rows, title, subtitle) {
   sheet.getRange(`F${start}:G${t + 4}`).format.numberFormat = "#,##0\"円\"";
   sheet.getRange(`F${t}:G${t + 4}`).format = { font: { name: "Arial", size: 10, bold: true }, fill: "#F8F9FA", borders: { preset: "outside", color: "#BDC1C6" } };
   sheet.getRange(`F${t + 4}:G${t + 4}`).format = { font: { name: "Arial", size: 11, bold: true }, fill: "#E6F4EA", borders: { preset: "doubleBottom", color: "#5F6368" } };
-  sheet.getRange(`A${t}:D${t}`).format = { fill: "#F1F3F4", font: { name: "Arial", size: 10, bold: true } };
-  sheet.getRange(`A${t + 1}:D${t + 4}`).format = { font: { name: "Arial", size: 9 }, wrapText: true, verticalAlignment: "top" };
+  sheet.getRange(`A${m}:H${m}`).format = { fill: "#F1F3F4", font: { name: "Arial", size: 10, bold: true } };
+  sheet.getRange(`A${m + 1}:H${m + 4}`).format = { font: { name: "Arial", size: 9 }, wrapText: true, verticalAlignment: "top" };
+  sheet.getRange(`A${m + 1}:A${m + 4}`).format.font = { name: "Arial", size: 9, bold: true };
   sheet.getRange("A:H").format.font = { name: "Arial", size: 10 };
   sheet.getRange("A:A").format.columnWidthPx = 72;
   sheet.getRange("B:B").format.columnWidthPx = 175;
@@ -126,7 +132,7 @@ const check1 = await wb.inspect({ kind: "table", range: "標準案!A1:H22", incl
 const check2 = await wb.inspect({ kind: "table", range: "最小案!A1:H21", include: "values,formulas", tableMaxRows: 25, tableMaxCols: 8 });
 const errors = await wb.inspect({ kind: "match", searchTerm: "#REF!|#DIV/0!|#VALUE!|#NAME\\?|#N/A|#NUM!|#NULL!|#SPILL!|#CALC!", options: { useRegex: true, maxResults: 100 }, summary: "final formula error scan" });
 console.log(check1.ndjson); console.log(check2.ndjson); console.log(errors.ndjson);
-for (const [sheetName, range, file] of [["標準案","A1:H22","standard.png"],["最小案","A1:H21","minimum.png"],["前提・確認事項",`A1:D${4+notes.length}`,"notes.png"]]) {
+for (const [sheetName, range, file] of [["標準案","A1:H27","standard.png"],["最小案","A1:H26","minimum.png"],["前提・確認事項",`A1:D${4+notes.length}`,"notes.png"]]) {
   const blob = await wb.render({ sheetName, range, scale: 1 });
   await fs.writeFile(`${outDir}/${file}`, new Uint8Array(await blob.arrayBuffer()));
 }

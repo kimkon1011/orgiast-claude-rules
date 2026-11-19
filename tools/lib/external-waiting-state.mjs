@@ -36,3 +36,27 @@ export function saveAnswer(home, id, body, now = Date.now()) {
   if (!item) throw new Error('external item not found');
   writeJsonAtomic(path.join(answersDir(home), `${id.slice(3)}.json`), { id, answer: body, at: new Date(now).toISOString(), mailbox: item.mailbox, threadId: item.threadId, subject: item.subject, who: item.who });
 }
+export function readAnswers(home) {
+  const dir = answersDir(home);
+  try {
+    return fs.readdirSync(dir).filter(f => f.endsWith('.json')).map(f => {
+      try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); }
+      catch { return null; }
+    }).filter(Boolean);
+  } catch { return []; }
+}
+export function isAnswered(item, answers) {
+  return answers.some(a => a.id === item.id && !a.done);
+}
+export function markAnswerDone(home, id) {
+  if (!/^ex:[0-9a-f]{12}$/.test(id)) throw new Error('invalid external id');
+  const file = path.join(answersDir(home), `${id.slice(3)}.json`);
+  try {
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    data.done = true;
+    data.doneAt = new Date().toISOString();
+    writeJsonAtomic(file, data);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}

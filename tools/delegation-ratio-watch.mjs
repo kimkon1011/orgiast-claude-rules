@@ -213,16 +213,22 @@ export function compute({ home = os.homedir(), now = Date.now(), executorUsageFi
 
 // Duplicate scheduled tasks/readers can briefly deny replacement on Windows.
 // Retry only rename: keep the previous JSON intact and never replay delivery.
+// MaxRc 2026-11-20: 5 回→20 回で待ちを伸ばし（100ms×2^attempt、最大約1.5→約100秒）、
+// それでも取れなければ呼び出し元で握りつぶす（exit 0 で次回再試行）。
 function saveJson(file, value, { fsImpl = fs, sleepImpl = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
-  const tmp = `${file}.${Math.random().toString(16).slice(2)}.tmp`;
+  const pid = process.pid;
+  const tmp = `${file}.${pid}.${Math.random().toString(16).slice(2)}.tmp`;
   try {
     fsImpl.mkdirSync(path.dirname(file), { recursive: true });
     fsImpl.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
     for (let attempt = 0; ; attempt++) {
       try { fsImpl.renameSync(tmp, file); break; }
       catch (error) {
-        if (!['EPERM', 'EBUSY', 'EACCES'].includes(error.code) || attempt >= 5) throw error;
-        sleepImpl(50 * (2 ** attempt));
+        if (!['EPERM', 'EBUSY', 'EACCES'].includes(error.code) || attempt >= 20) {
+          console.error(`[saveJson] rename failed after ${attempt} retries: ${error.code} ${error.message}`);
+          throw error;
+        }
+        sleepImpl(100 * (2 ** attempt));
       }
     }
   } finally { try { fsImpl.unlinkSync(tmp); } catch {} }
@@ -297,7 +303,8 @@ if (isEntry(import.meta.url)) {
   const now = Date.now();
   const dryRun = process.argv.includes('--dry-run');
   const result = compute({ home, now });
-  saveResult(result, home);
+  // saveResult が EPERM で失敗しても exit 1 にしない（次回のタスク起動で再試行）。
+  try { saveResult(result, home); } catch (e) { console.error(`[delegation-ratio-watch] saveResult skipped: ${e.message}`); }
   if (result.alert) {
     if (dryRun) {
       console.log('【kim-inbox に積む本文（--dry-run）】');
@@ -306,7 +313,7 @@ if (isEntry(import.meta.url)) {
     } else {
       const ok = notifyInbox(result, home);
       if (!ok) process.exitCode = 1;
-      writeFixTicket(result, home);
+      try { writeFixTicket(result, home); } catch (e) { console.error(`[delegation-ratio-watch] writeFixTicket skipped: ${e.message}`); }
     }
     for (const r of result.reasons) console.error(`[delegation-ratio-watch] 🔴 ${r}`);
   } else {

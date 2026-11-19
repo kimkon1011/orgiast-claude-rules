@@ -39,14 +39,14 @@ describe('delegation-ratio-watch', () => {
           assert.equal(module[saver]({ alert: true, reasons: ['current'] }, home,
             { fsImpl, sleepImpl: ms => delays.push(ms) }), file);
           assert.equal(attempts, 3);
-          assert.deepEqual(delays, [50, 100]);
+          assert.deepEqual(delays, [100, 200]);
           assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).reasons, ['current']);
           assert.deepEqual(fs.readdirSync(path.dirname(file)), [path.basename(file)]);
         } finally { fs.rmSync(home, { recursive: true, force: true }); }
       });
     }
 
-    for (const [code, expectedAttempts] of [['EPERM', 6], ['ENOSPC', 1]]) {
+    for (const [code, expectedAttempts] of [['EPERM', 21], ['ENOSPC', 1]]) {
       test(`${saver}: preserves previous state and reports persistent ${code}`, async () => {
         const module = await import('./delegation-ratio-watch.mjs');
         const home = tmpHome('rename-failure');

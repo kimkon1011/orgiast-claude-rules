@@ -1,0 +1,11 @@
+{
+  "tools/gmail-draft.mjs": { "channel": "gmail", "protection": "send-dedupe" },
+  "tools/seisaku-mail.mjs": { "channel": "gmail", "protection": "send-dedupe" },
+  "tools/line-group-send.mjs": { "channel": "line", "protection": "mail-send-approval-gate" },
+  "tools/beeper-send.mjs": { "channel": "beeper", "protection": "mail-send-approval-gate" },
+  "tools/discord-autoreply.mjs": { "channel": "discord", "protection": "tool-send-dedupe" },
+  "tools/discord-beeper-autoreply.mjs": { "channel": "discord", "protection": "tool-send-dedupe" },
+  "tools/discord-dm.mjs": { "channel": "discord", "protection": "send-context-check" },
+  "tools/feedback-nag.mjs": { "channel": "discord", "protection": "internal-only" },
+  "tools/notify-kim.mjs": { "channel": "discord", "protection": "internal-only" }
+}

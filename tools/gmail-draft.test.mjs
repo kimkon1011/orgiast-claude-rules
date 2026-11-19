@@ -68,6 +68,7 @@ async function cli(argv, overrides = {}) {
     readState: () => { throw new Error('no cached state'); },
     inspectDraft: async () => ({ ok: true, findings: [], llm: { provider: null, error: null } }),
     skipContextCheck: true,
+    acquireDedupe: async () => ({ recordSuccess() {}, release() {} }),
     ...overrides,
   } });
   return { code, output, calls, tokens };
@@ -543,6 +544,23 @@ test('送信 API の失敗は再試行せず秘密を出さない', async () => 
   assert.equal(result.code, 1);
   assert.equal(calls, 2);
   assert.equal(result.output[0].includes('SECRET'), false);
+});
+
+test('--send の重複は exit 4、--allow-repeat 理由付きなら成功後に台帳へ記録する', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gmail-dedupe-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const ledgerFile = path.join(home, '.claude', 'send-ledger.jsonl');
+  fs.mkdirSync(path.dirname(ledgerFile), { recursive: true });
+  fs.writeFileSync(ledgerFile, `${JSON.stringify({ sentAt: new Date().toISOString(), to: ['customer@example.com'], bodyHash: 'old' })}\n`);
+  let calls = 0;
+  const duplicate = await cli(['--send', 'd', '--json'], { home, acquireDedupe: undefined, getToken: async () => 't', fetchImpl: async () => { calls++; return response(draftHeaders([])); } });
+  assert.equal(duplicate.code, 4);
+  assert.equal(calls, 1);
+  assert.match(JSON.parse(duplicate.output[0]).error, /同じ宛先へ/u);
+  calls = 0;
+  const allowed = await cli(['--send', 'd', '--allow-repeat', '訂正版', '--json'], { home, acquireDedupe: undefined, getToken: async () => 't', fetchImpl: async () => ++calls === 1 ? response(draftHeaders([])) : response({ id: 'sent', threadId: 'thread' }) });
+  assert.equal(allowed.code, 0);
+  assert.equal(JSON.parse(fs.readFileSync(ledgerFile, 'utf8').trim().split(/\r?\n/u).at(-1)).allowRepeatReason, '訂正版');
 });
 
 test('--send の getLatest は DRAFT メッセージを最新履歴から除外し、threadId 無し時の検索クエリに -in:drafts を指定する', async () => {

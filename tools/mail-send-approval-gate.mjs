@@ -28,6 +28,13 @@ function executedScript(args, pattern) {
   const entry = args.slice(1).find(arg => arg === '--' || !arg.startsWith('-'));
   return entry !== '--' && pattern.test(base(entry));
 }
+function workflowInput(args, name) {
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i];
+    const value = ['-f', '--field', '-F', '--raw-field'].includes(token) ? args[++i] : token.match(/^(?:-f|--field|-F|--raw-field)=(.*)$/u)?.[1];
+    if (value?.startsWith(`${name}=`)) return value.slice(name.length + 1);
+  }
+}
 export function sendTargets(input) {
   if (/^mcp__claude_ai_Gmail(?:_\d+)?__(send_message|reply|forward)$/.test(input?.tool_name)) {
     const a = input.tool_input ?? {};
@@ -37,6 +44,16 @@ export function sendTargets(input) {
   const targets = [];
   for (const args of shellSegments(input.tool_input?.command ?? '')) {
     if (executedScript(args, /^gmail-draft\.mjs$/i) && option(args, '--send')) targets.push({ draftId: option(args, '--send'), user: option(args, '--user') ?? 'seisaku-team@orgiast.jp' });
+    else if (executedScript(args, /^seisaku-mail\.mjs$/i) && args.includes('send')) {
+      const file = option(args, '--body-file');
+      targets.push({ body: file ? fs.readFileSync(path.resolve(input.cwd ?? process.cwd(), file), 'utf8') : '' });
+    }
+    else if (/^gh$/iu.test(String(args[0] ?? '').split(/[\\/]/u).at(-1).replace(/\.exe$/iu, ''))
+      && args[1] === 'workflow' && args[2] === 'run' && /(?:^|[\\/])seisaku-mail\.yml$/iu.test(args[3] ?? '')
+      && workflowInput(args, 'mode') === 'send') {
+      const encoded = workflowInput(args, 'body_b64');
+      targets.push({ body: encoded ? Buffer.from(encoded, 'base64').toString('utf8') : '' });
+    }
     else if (executedScript(args, /^line-group-send\.mjs$/i)) {
       if (args.includes('--dry-run')) continue;
       const file = option(args, '--text-file');

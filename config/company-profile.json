@@ -1,0 +1,31 @@
+{
+  "zenshoQualification": {
+    "status": "expired",
+    "expiredOn": "2025-03-31",
+    "note": "再申請準備中"
+  },
+  "registeredLocalities": ["大阪府", "大阪市"],
+  "businessKeywords": [
+    "展示会",
+    "ブース",
+    "設営",
+    "式典",
+    "映像制作",
+    "動画制作",
+    "オンライン配信",
+    "イベント運営",
+    "会議運営",
+    "運営業務",
+    "プロポーザル イベント",
+    "イベント",
+    "会場",
+    "運営",
+    "映像",
+    "動画",
+    "学会",
+    "出展"
+  ],
+  "maxNoticesPerDay": 40,
+  "maxLlmCallsPerDay": 60,
+  "maxDraftsPerDay": 3
+}

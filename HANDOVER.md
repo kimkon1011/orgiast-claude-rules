@@ -50,6 +50,35 @@ node tools/collect.mjs
 なし（コード内にID/パスワード不使用）。
 kkj.go.jp API は完全公開。
 
+## 毎朝の自動進行
+
+タスクスケジューラ `\OrgiastBidDailyCollect`（毎朝 6:00）が `tools/daily-collect.bat` を実行する。
+
+1. `node tools/collect.mjs` → `data/candidates-YYYY-MM-DD.csv`
+2. 続けて `node tools/daily-pipeline.mjs`（collect 失敗時は pipeline を走らせない）
+
+パイプラインがやること（社外への送信・申込・ログインはしない）:
+
+- `data/state/seen.json` に無い公告URLだけを対象
+- `config/company-profile.json` の `businessKeywords` で名前フィルタ。外れは安いAI（deepseek→openrouter→kimi）で一括分類
+- 公告を GET 取得・テキスト化 → `data/notices/<date>/`、抽出 `extract.json`
+- tier A/B/C 判定 → `reports/shortlist-<date>.md`
+- A（適合 高/中）最大3件の提案書・見積下書き → `reports/drafts/<date>/<slug>/`
+- Google シート「官公庁入札 候補台帳」（ID は `config/sheet.json`）
+- 新しい A が1件以上の日だけ kim-inbox に ask を1件
+- A の参加申込・提出期限を期限台帳へ登録
+- 実行ログ: `data/pipeline-runs.jsonl` / `data/daily-pipeline.log`
+
+### company-profile の書き換え方
+
+資格を取ったら `config/company-profile.json` を更新する:
+
+- `zenshoQualification.status` を `"active"` にし、有効期限を書く
+- 自治体名簿に登載したら `registeredLocalities` に都道府県・市区名を追加
+- 1日上限は `maxNoticesPerDay` / `maxLlmCallsPerDay` / `maxDraftsPerDay`
+
+手動確認: `node tools/daily-pipeline.mjs --date YYYY-MM-DD --dry-run`
+
 ## 次の操作（移管先で最初にやること）
 1. `node tools/collect.mjs` を実行して最新の候補を取得
 2. CSV を Google スプレッドシートにインポートして共有

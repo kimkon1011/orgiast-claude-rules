@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createPool, createOwnershipLease, readConfig, readSnapshot, isWorktreeFolder, decideRefresh, decideWorktreeCleanup, REFRESH_MIN_AGE_MS, AUTO_TITLE_RE, isWaitingTab, decideTrimExcess, EMPTY_SPARE_KEEP, selectExcessEmptySpares, buildAutoTitleRe } = require('./mobile-pool');
+const { createPool, createOwnershipLease, readConfig, readSnapshot, isWorktreeFolder, decideRefresh, decideWorktreeCleanup, REFRESH_MIN_AGE_MS, setAutoTitlePrefixes, isWaitingTab, decideTrimExcess, EMPTY_SPARE_KEEP, selectExcessEmptySpares, buildAutoTitleRe } = require('./mobile-pool');
 
 // git worktree を模した一時フォルダ（.git ファイルが gitdir: .../worktrees/... を指す）
 function makeWorktree(t) {
@@ -263,8 +263,6 @@ test('isWaitingTab recognizes Claude Code and auto title patterns', () => {
 test('buildAutoTitleRe は prefix 未設定で従来の正規表現を返す', () => {
   const re = buildAutoTitleRe('');
   assert.equal(re.source, /^(?:remote-control-|\d{3}[-｜|])+[a-z]+-[a-z]+$/i.source);
-  // AUTO_TITLE_RE は env var が設定されていると拡張される（個別の source 比較はしない）
-  // env var 設定時も isWaitingTab の既存動作は維持されることを別テストで検証
 });
 
 test('buildAutoTitleRe は prefix=KimPC で KimPC 接頭辞を認識する', () => {
@@ -298,12 +296,33 @@ test('buildAutoTitleRe は prefix に英数字以外を含むラベルでも正�
   assert.equal(re.test('My-PC_2-gentle-otter'), true);
 });
 
-test('isWaitingTab は環境変数未設定時、従来の 3 桁・remote-control のみ認識し KimPC は false', () => {
-  // このテストは env var 未設定の既定状態で実行されることを前提とする
+test('isWaitingTab は既定でスマホ用セッションと待機の接頭辞を認識する', () => {
+  assert.equal(isWaitingTab('スマホ用セッション｜gentle-otter'), true);
+  assert.equal(isWaitingTab('待機-gentle-otter'), true);
+  assert.equal(isWaitingTab('remote-control-スマホ用セッション｜gentle-otter'), true);
+  assert.equal(isWaitingTab('KimPC｜gentle-otter'), false);
+});
+
+test('isWaitingTab は設定した接頭辞で待機タブだけを認識する', (t) => {
+  t.after(() => setAutoTitlePrefixes());
+  setAutoTitlePrefixes(['KimPC']);
   assert.equal(isWaitingTab('Claude Code'), true);
   assert.equal(isWaitingTab('018-resilient-steele'), true);
   assert.equal(isWaitingTab('remote-control-mossy-island'), true);
-  assert.equal(isWaitingTab('KimPC｜gentle-otter'), false);
+  assert.equal(isWaitingTab('KimPC｜gentle-otter'), true);
+  assert.equal(isWaitingTab('OtherPC｜a-b'), false);
+  assert.equal(isWaitingTab('KimPC｜【閉じて可】セッション'), false);
+  assert.equal(isWaitingTab('スマホ用セッションの不具合'), false);
+});
+
+test('buildAutoTitleRe は配列内の重複と空の接頭辞を無視する', () => {
+  const re = buildAutoTitleRe(['KimPC', '', 'A.B', 'KimPC', ' ']);
+  assert.equal(re.source, buildAutoTitleRe(['KimPC', 'A.B']).source);
+  assert.equal(re.test('KimPC｜gentle-otter'), true);
+  assert.equal(re.test('A.B｜gentle-otter'), true);
+  assert.equal(re.test('AXB｜gentle-otter'), false);
+  assert.equal(re.test('｜gentle-otter'), false);
+  assert.equal(buildAutoTitleRe(['', ' ']).source, buildAutoTitleRe('').source);
 });
 
 test('decideTrimExcess: 待機タブ数が target 超過の時、10分以上経った会話なし・非アクティブな待機タブを古い順に閉じる', () => {

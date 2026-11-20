@@ -410,6 +410,41 @@ test('deadline stops new launches and next night prioritizes unattempted session
   assert.deepEqual(started, ['session-0', 'session-1']);
 });
 
+test('deadline-only nightly skips do not execute or notify when auto-resume is enabled', async t => {
+  const f = await fixture(t, 3);
+  f.io.now = () => new Date(2026, 8, 24, 8).getTime();
+  const r = await run(options([], {}), f.io);
+  assert.equal(f.calls(), 0);
+  assert.equal(f.notices(), 0);
+  assert.equal(r.results.length, 0);
+  assert.equal(r.rows.length, 3);
+  assert.deepEqual(r.rows.map(row => row.skip), Array(3).fill('締切超過(翌晩へ)'));
+});
+
+test('deadline skips mixed with another abnormal skip still notify', async t => {
+  const f = await fixture(t, 3); let time = f.io.now();
+  f.io.now = () => time;
+  f.io.execute = async () => { time += 5 * 3600000; return { outcome: 'error', reason: 'failed' }; };
+  const r = await run(options([], {}), f.io);
+  assert.equal(r.results.length, 1);
+  assert.equal(r.results[0].outcome, 'error');
+  assert.deepEqual(r.rows.map(row => row.skip), ['', '締切超過(翌晩へ)', '締切超過(翌晩へ)']);
+  assert.equal(f.notices(), 1);
+});
+
+test('deadline-only rows still notify when a session is retired', async t => {
+  const f = await fixture(t, 3);
+  f.io.now = () => new Date(2026, 8, 24, 8).getTime();
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  await fs.writeFile(f.file, JSON.stringify({ version: 1, nights: {}, sessions: {
+    retired: { title: 'Retired task', noProgress: 3, attempts: [] }
+  } }));
+  const r = await run(options([], {}), f.io);
+  assert.equal(r.results.length, 0);
+  assert.deepEqual(r.rows.map(row => row.skip), Array(3).fill('締切超過(翌晩へ)'));
+  assert.equal(f.notices(), 1);
+});
+
 test('fair order uses oldest last night then score and age', async t => {
   const f = await fixture(t, 4);
   await fs.mkdir(path.dirname(f.file), { recursive: true });

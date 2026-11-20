@@ -38,8 +38,14 @@ export function repositoryHooks(repo = defaultRepo, home) {
   return hooks;
 }
 export function collapseHooks(hooks, repo = defaultRepo) {
-  const settingsHooks = {}, events = {};
+  const canonical = JSON.parse(fs.readFileSync(path.join(repo, 'tools/hook-dispatch-manifest.json'), 'utf8'));
+  const settingsHooks = {}, events = {}, legacyDuplicatesRemoved = {};
+  const basename = file => path.posix.basename(file.replace(/\\/g, '/')).toLowerCase();
   for (const event of EVENTS) {
+    const replacements = new Set((canonical.events[event] || []).map(h => {
+      const [, first = '', second = ''] = tokens(h.command);
+      return basename(basename(first) === 'gate-hook-runner.mjs' ? second : first);
+    }).filter(name => name.endsWith('.mjs')).map(name => name.slice(0, -4)));
     const asyncGroups = [];
     events[event] = [];
     for (const group of hooks[event] || []) {
@@ -49,7 +55,11 @@ export function collapseHooks(hooks, repo = defaultRepo) {
         if (hook.async === true) asynchronous.push(hook);
         else {
           if (hook.type && hook.type !== 'command') throw new Error(`Cannot dispatch synchronous ${hook.type} hook in ${event}; existing settings must be preserved`);
-          events[event].push(describeHook(hook, group.matcher || '*', repo));
+          const described = describeHook(hook, group.matcher || '*', repo);
+          const legacyScript = !described.node && tokens(hook.command).find(word => /\.ps1$/i.test(word));
+          if (legacyScript && replacements.has(basename(legacyScript).slice(0, -4))) {
+            legacyDuplicatesRemoved[event] = (legacyDuplicatesRemoved[event] || 0) + 1;
+          } else events[event].push(described);
         }
       }
       if (asynchronous.length) asyncGroups.push({ ...group, hooks: asynchronous });
@@ -60,7 +70,7 @@ export function collapseHooks(hooks, repo = defaultRepo) {
     settingsHooks[event] = [{ matcher: '*', hooks: [{ type: 'command', command: `node "${path.join(repo, 'tools/hook-dispatch.mjs')}" ${event}`, timeout }] }, ...asyncGroups];
   }
   for (const [event, groups] of Object.entries(hooks)) if (!EVENTS.includes(event)) settingsHooks[event] = groups;
-  return { hooks: settingsHooks, manifest: { version: 1, repo, events } };
+  return { hooks: settingsHooks, manifest: { version: 1, repo, events, legacyDuplicatesRemoved } };
 }
 function sameRepo(a, b) {
   try {

@@ -2,14 +2,16 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { spawn } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
-import { EVENTS, defaultRepo, readDispatchManifest, tokens, isDispatcher } from './hook-dispatch-registry.mjs';
+import { EVENTS, defaultRepo, describeHook, readDispatchManifest, tokens, isDispatcher } from './hook-dispatch-registry.mjs';
 import { acknowledgeRecovery, journalPrompt, markJournal } from './prompt-journal.mjs';
 import { dedupeContext } from './lib/context-dedupe.mjs';
+import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
+import { createReclaimDirectory, removeReclaimDirectory } from './lib/reclaim-lock.mjs';
 
 export function matches(matcher, event, input) {
   if (!matcher || matcher === '*') return true;
@@ -190,12 +192,60 @@ function workerSlot(options) {
     },
   };
 }
+function spawnExternal(hook, options) {
+  const parts = tokens(hook.command);
+  const powershell = /(?:^|[\\/])(?:pwsh|powershell)(?:\.exe)?$/i.test(parts[0]);
+  const settings = { windowsHide: true, ...options };
+  return powershell ? spawn(parts[0], parts.slice(1), settings)
+    : spawn(hook.command, { ...settings, shell: true });
+}
+function detachedHook(hook, raw, home, options) {
+  const command = process.platform === 'win32' ? hook.command.toLowerCase() : hook.command;
+  const key = createHash('sha256').update(command).digest('hex');
+  const dir = path.join(home, '.claude', 'hook-metrics', 'detached');
+  const claim = path.join(dir, key + '.lock');
+  const owner = path.join(dir, key + '.json');
+  const input = path.join(dir, key + '.stdin');
+  fs.mkdirSync(dir, { recursive: true });
+  try { createReclaimDirectory(claim); }
+  catch (error) {
+    if (error.code === 'EEXIST') return { skipped: 'detached-running' };
+    throw error;
+  }
+  try {
+    let previous;
+    try { previous = JSON.parse(fs.readFileSync(owner, 'utf8')); }
+    catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
+    // Recover if the dispatcher died or its recorded PID was recycled. Windows
+    // reuses PIDs quickly, so a long window could silence a hook for a day.
+    if (Number.isSafeInteger(previous?.pid) && previous.pid > 0 && Date.now() - previous.at < 600000) {
+      let alive = true;
+      try { process.kill(previous.pid, 0); }
+      catch (error) { if (error.code === 'ESRCH') alive = false; }
+      if (alive) return { skipped: 'detached-running' };
+    }
+    // Inherit a readable file as stdin. A pipe could keep the CLI alive while
+    // a slow-starting child leaves a large prompt buffered in the parent.
+    fs.writeFileSync(input, raw, { mode: 0o600 });
+    const fd = fs.openSync(input, 'r');
+    let child;
+    try {
+      child = spawnExternal(hook, { env: options.env, ...backgroundSpawnOptions(), stdio: [fd, 'ignore', 'ignore'] });
+    } finally {
+      fs.closeSync(fd);
+      try { fs.unlinkSync(input); } catch {}
+    }
+    child.once('error', () => {});
+    child.unref();
+    if (!child.pid) return { status: 1, error: 'Could not start detached hook' };
+    fs.writeFileSync(owner, JSON.stringify({ pid: child.pid, at: Date.now() }));
+    options.onSpawn?.(child, hook);
+    return { detached: true };
+  } finally { removeReclaimDirectory(claim); }
+}
 function externalHook(hook, raw, timeoutMs, options) {
   return new Promise(resolve => {
-    const parts = tokens(hook.command);
-    const powershell = /(?:^|[\\/])(?:pwsh|powershell)(?:\.exe)?$/i.test(parts[0]);
-    const child = powershell ? spawn(parts[0], parts.slice(1), { windowsHide: true, env: options.env, stdio: 'pipe' })
-      : spawn(hook.command, { shell: true, windowsHide: true, env: options.env, stdio: 'pipe' });
+    const child = spawnExternal(hook, { env: options.env, stdio: 'pipe' });
     options.onSpawn?.(child, hook);
     let stdout = '', stderr = '', settled = false;
     const finish = value => { if (settled) return; settled = true; clearTimeout(timer); resolve(value); };
@@ -229,7 +279,8 @@ export async function dispatch(event, raw, options = {}) {
   // The CLI event is authoritative, even if a client omitted hook_event_name.
   raw = JSON.stringify({ ...input, hook_event_name: event });
   const start = Date.now();
-  const manifest = options.manifest || readDispatchManifest(home, options.repo || defaultRepo);
+  const repo = options.repo || defaultRepo;
+  const manifest = options.manifest || readDispatchManifest(home, repo);
   const lease = acquireLoadLease(home, options.loadOptions);
   const overloaded = options.overloaded ?? lease.overloaded;
   const selected = (manifest.events[event] || []).filter(h => matches(h.matcher, event, input));
@@ -282,7 +333,24 @@ export async function dispatch(event, raw, options = {}) {
   };
   try {
     const nodeQueue = options.execute ? queue : queue.filter(item => item.hook.node);
-    const externalQueue = options.execute ? [] : queue.filter(item => !item.hook.node);
+    const externalQueue = [];
+    if (!options.execute) for (const item of queue.filter(item => !item.hook.node)) {
+      const { hook } = item;
+      // Raw manifest entries can omit classification. Keep their Node CLI
+      // commands on the existing waited path.
+      const rawNode = hook.node === undefined && describeHook(hook, hook.matcher, repo).node;
+      if (event === 'SessionStart' || hook.wait === true || rawNode) {
+        externalQueue.push(item);
+        continue;
+      }
+      const began = Date.now();
+      try {
+        save(item, detachedHook(hook, raw, home, { ...options, onSpawn(...args) {
+          childProcesses++;
+          options.onSpawn?.(...args);
+        } }), began);
+      } catch (error) { save(item, { status: 1, error: error.message }, began); }
+    }
     const consumers = Array.from({ length: Math.min(poolSize, nodeQueue.length) }, () => {
       const slot = options.execute ? null : workerSlot({ ...options,
         onWorkerCreated() { workersCreated++; options.onWorkerCreated?.(); },
@@ -298,8 +366,9 @@ export async function dispatch(event, raw, options = {}) {
     for (const item of nodeQueue) save(item, unavailable(item.hook, budgetExhausted || Date.now() >= deadline ? 'dispatch-budget' : 'hook-error'), Date.now());
     const record = { at: new Date(start).toISOString(), event, durationMs: Date.now() - start, overloaded, active: lease.active,
       childProcesses, workersCreated, poolSize, budgetMs: deadline - start,
+      legacyDuplicatesRemoved: manifest.legacyDuplicatesRemoved?.[event] || 0,
       timedOut: results.filter(r => r.timedOut).length, skipped: results.filter(r => r.skipped).length,
-      hooks: results.map(({ name, critical, durationMs, queueMs, timedOut, skipped, status, error, criticalUnfinished }) => ({ name, critical, durationMs, queueMs, timedOut: !!timedOut, skipped, status, error, criticalUnfinished })) };
+      hooks: results.map(({ name, critical, durationMs, queueMs, timedOut, skipped, status, error, criticalUnfinished, detached }) => ({ name, critical, durationMs, queueMs, timedOut: !!timedOut, skipped, status, error, criticalUnfinished, detached })) };
     appendMetrics(home, record);
     const merged = mergeResults(event, results, { home, sessionId: input.session_id || input.sessionId });
     if (journalId && (merged.payload.decision === 'block' || merged.payload.continue === false)) {

@@ -274,6 +274,14 @@ try {
     fs.closeSync(fs.openSync(path.join(home, '.claude', 'share-ledger.jsonl'), 'a'));
   }
   const collapsed = collapseHooks(settings.hooks, repo);
+  // Keep the cumulative migration count available to dispatch metrics after
+  // later converge runs, when the removed hooks are no longer in the input.
+  for (const [event, count] of Object.entries(previousManifest?.legacyDuplicatesRemoved || {})) {
+    if (Object.hasOwn(collapsed.manifest.events, event) && Number.isSafeInteger(count) && count > 0) {
+      const removed = collapsed.manifest.legacyDuplicatesRemoved;
+      removed[event] = (removed[event] || 0) + count;
+    }
+  }
   const manifestFile = runtimeManifestPath(home);
   const manifestChanged = JSON.stringify(load(manifestFile)) !== JSON.stringify(collapsed.manifest);
   if (manifestChanged) write(manifestFile, collapsed.manifest);

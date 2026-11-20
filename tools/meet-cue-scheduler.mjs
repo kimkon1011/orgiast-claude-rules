@@ -15,12 +15,14 @@ import { parseArgs } from 'node:util';
 
 import { isEntry } from './is-entry.mjs';
 import { askJev } from './jev.mjs';
-import { getDriveToken, DRIVE_SCOPE } from './lib/drive-auth.mjs';
+import { getDriveToken, driveApi, DRIVE_SCOPE } from './lib/drive-auth.mjs';
 import { setupCueDocument } from './lib/meet-cue-doc.mjs';
 import { DEFAULT_SEAT_HOSTNAMES, matchesSeatHostname, resolveBotDisplayName, resolveSeatHostnames } from './lib/meet-cue-core.mjs';
 import { generateCardsFromBrief, generateSessionId } from './meet-cue.mjs';
 import { matchMeetingInquiries, INQUIRY_SHEET, INQUIRY_TAB, readSheet } from './lib/inquiry-sheet.mjs';
 import { addItem } from './kim-inbox.mjs';
+import { sendDiscordDm } from './discord-dm.mjs';
+import { calendarStartMs, isInternalEmail } from './lib/calendar-shared.mjs';
 
 const execFileAsync = promisify(execFile);
 const __filename = fileURLToPath(import.meta.url);
@@ -93,7 +95,9 @@ export function loadSchedulerState(home = homeDir()) {
 export function saveSchedulerState(state, home = homeDir()) {
   const p = schedulerStatePath(home);
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(state, null, 2), 'utf8');
+  const temporary = `${p}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(state, null, 2), 'utf8');
+  fs.renameSync(temporary, p);
 }
 
 export function isExternalEmail(email, staffAddresses = []) {
@@ -361,112 +365,18 @@ export async function listCalendarEvents({ calendarId, token, now = new Date(), 
     showDeleted: 'false',
   });
 
-  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`;
-  const res = await fetchImpl(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!res.ok) {
-    throw new Error(`Calendar API list ${calendarId} HTTP ${res.status}`);
-  }
-
-  const data = await res.json();
-  return data.items || [];
-}
-
-export function buildCompanionEventBody({ originalEvent, docUrl, orgiastAttendees = [] }) {
-  const cleanSummary = (originalEvent.summary || '打合せ').replace(/^📝カンペ:\s*/, '');
-  const description = `Bot が開始1分前に参加し、言うことをこの Doc の一番上に出します。kim は Doc に直接書けば届きます\n\n${docUrl}`;
-
-  const attendees = orgiastAttendees.map(email => ({ email }));
-
-  return {
-    summary: `📝カンペ: ${cleanSummary}`,
-    description,
-    start: originalEvent.start,
-    end: originalEvent.end,
-    attendees,
-    visibility: 'private',
-    transparency: 'transparent',
-    reminders: {
-      useDefault: false,
-      overrides: [{ method: 'popup', minutes: 5 }],
-    },
-    extendedProperties: {
-      private: {
-        meetCueSource: originalEvent.id,
-      },
-    },
-  };
-}
-
-export async function findCompanionEvent({ token, calendarId, originalEventId, fetchImpl = globalThis.fetch }) {
-  const query = new URLSearchParams({
-    privateExtendedProperty: `meetCueSource=${originalEventId}`,
-  });
-  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${query}`;
-  const res = await fetchImpl(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!res.ok) return null;
-  const data = await res.json();
-  if (data.items && data.items.length > 0) {
-    return data.items[0];
-  }
-  return null;
-}
-
-export async function createOrUpdateCompanionEvent({ token, calendarId, originalEvent, docUrl, orgiastAttendees, fetchImpl = globalThis.fetch }) {
-  const existing = await findCompanionEvent({ token, calendarId, originalEventId: originalEvent.id, fetchImpl });
-  const body = buildCompanionEventBody({ originalEvent, docUrl, orgiastAttendees });
-
-  if (!existing) {
-    const postUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?sendUpdates=none`;
-    const createRes = await fetchImpl(postUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify(body),
-    });
-    if (!createRes.ok) {
-      throw new Error(`Companion event create failed HTTP ${createRes.status}: ${await createRes.text()}`);
-    }
-    const created = await createRes.json();
-
-    // GET read-back verification
-    const getUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(created.id)}`;
-    const readBack = await fetchImpl(getUrl, { headers: { Authorization: `Bearer ${token}` } });
-    if (readBack.ok) {
-      return await readBack.json();
-    }
-    return created;
-  }
-
-  // Handle existing: check if time or cancellation state changed
-  let needsPatch = false;
-  const patchBody = {};
-
-  if (originalEvent.status === 'cancelled') {
-    if (!existing.summary.includes('（中止）')) {
-      patchBody.summary = `${existing.summary}（中止）`;
-      needsPatch = true;
-    }
-  } else {
-    if (JSON.stringify(existing.start) !== JSON.stringify(originalEvent.start) ||
-        JSON.stringify(existing.end) !== JSON.stringify(originalEvent.end)) {
-      patchBody.start = originalEvent.start;
-      patchBody.end = originalEvent.end;
-      needsPatch = true;
-    }
-  }
-
-  if (needsPatch) {
-    const patchUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(existing.id)}?sendUpdates=none`;
-    const patchRes = await fetchImpl(patchUrl, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify(patchBody),
-    });
-    if (patchRes.ok) {
-      return await patchRes.json();
-    }
-  }
-
-  return existing;
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
+  const items = [];
+  let pageToken;
+  do {
+    if (pageToken) params.set('pageToken', pageToken);
+    const res = await fetchImpl(`${url}?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`Calendar API list ${calendarId} HTTP ${res.status}`);
+    const data = await res.json();
+    items.push(...(data.items || []));
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+  return items;
 }
 
 export function findSeisakuProfileName(userDataDir) {
@@ -519,6 +429,110 @@ export async function attemptAutoLogin({ home = homeDir(), fetchImpl = globalThi
     }
     return { ok: false, reason: err.message };
   }
+}
+
+/**
+ * 内部のみの予定（主催が orgiast.jp かつ参加者全員が社内）の説明欄にカンペ URL を追記する。
+ * 既に同じ URL が説明欄にあれば追記しない。
+ */
+export async function appendCueUrlToDescription({ token, calendarId, event, docUrl, fetchImpl = globalThis.fetch }) {
+  const existingDesc = event.description || '';
+  const line = `📝カンペ: ${docUrl}`;
+  if (existingDesc.split(/\r?\n/).some(entry => entry.trim() === line)) return { appended: false, reason: 'already_exists' };
+
+  const patchBody = { description: [existingDesc, line].filter(Boolean).join('\n') };
+  const patchUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(event.id)}?sendUpdates=none`;
+  const res = await fetchImpl(patchUrl, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(event.etag ? { 'If-Match': event.etag } : {}) },
+    body: JSON.stringify(patchBody),
+  });
+  if (!res.ok) throw new Error(`Description append failed HTTP ${res.status}: ${await res.text()}`);
+  return { appended: true };
+}
+
+export async function sendCueDocUrlAsDm({ staffEmail, docUrl, home = homeDir() }) {
+  if (staffEmail === 'kim@orgiast.jp') {
+    await addItem(home, {
+      kind: 'info',
+      text: `【Meetカンペ】カンペ Doc ができました: ${docUrl}`,
+      source: 'meet-cue',
+    });
+    return;
+  }
+  const body = `【Meetカンペ】開始が近づきました。打合せ用カンペ Doc です: ${docUrl}\n\n打合せ中はこの Doc にカンペが表示されます。`;
+  await sendDiscordDm(staffEmail, body, { home, noReplyFooter: true, noCopyKim: true });
+}
+
+async function shareCueDocument(itemState, recipients, getToken) {
+  const pending = recipients.filter(email =>
+    email !== 'seisaku-team@orgiast.jp' && email !== 'kim@orgiast.jp' && !itemState.cueDocReaders?.includes(email));
+  if (!pending.length) return;
+
+  const token = await getToken({ impersonate: 'seisaku-team@orgiast.jp', scope: DRIVE_SCOPE });
+  const base = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(itemState.docId)}/permissions`;
+  const params = new URLSearchParams({ supportsAllDrives: 'true', fields: 'nextPageToken,permissions(emailAddress)' });
+  const existing = new Set();
+  let pageToken;
+  do {
+    if (pageToken) params.set('pageToken', pageToken);
+    const page = await (await driveApi(token, `${base}?${params}`)).json();
+    for (const permission of page.permissions || []) existing.add(permission.emailAddress?.toLowerCase());
+    pageToken = page.nextPageToken;
+  } while (pageToken);
+
+  for (const emailAddress of pending) {
+    if (!existing.has(emailAddress)) {
+      await driveApi(token, `${base}?supportsAllDrives=true&sendNotificationEmail=false`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'user', role: 'reader', emailAddress }),
+      });
+    }
+    (itemState.cueDocReaders ??= []).push(emailAddress);
+  }
+}
+
+export async function deliverCueUrl({
+  event, itemState, now, getToken, fetchImpl, home,
+  calendarId, sendCue = sendCueDocUrlAsDm, grantAccess = async () => {},
+  checkpoint = () => {}, onError = () => {},
+}) {
+  if (!itemState.staffUrl) return;
+  const docUrl = new URL(itemState.staffUrl);
+  docUrl.searchParams.delete('authuser');
+  const organizer = event.organizer?.email;
+  const attendees = event.attendees || [];
+  const targets = [...new Set([organizer, ...attendees.map(a => a.email)]
+    .filter(isInternalEmail).map(email => email.trim().toLowerCase()))];
+  if (isInternalEmail(organizer) && !event.attendeesOmitted && attendees.every(a => isInternalEmail(a.email))) {
+    if (calendarId !== organizer.trim().toLowerCase()) throw new Error('主催者の予定を取得できませんでした');
+    await grantAccess(targets);
+    const token = await getToken({ impersonate: calendarId, scope: CALENDAR_SCOPE });
+    await appendCueUrlToDescription({ token, calendarId, event, docUrl: docUrl.href, fetchImpl });
+    itemState.cueUrlAppended = true;
+    return;
+  }
+
+  const start = calendarStartMs(event);
+  itemState.cueDmDueAt = new Date(start - 10 * 60000).toISOString();
+  itemState.cueDmTargets = targets;
+  if (now.getTime() < start - 10 * 60000 || now.getTime() >= start) return;
+  const sent = itemState.cueDmDelivered ??= {};
+  for (const staffEmail of targets) {
+    if (sent[staffEmail]) continue;
+    try {
+      await grantAccess([staffEmail]);
+      docUrl.searchParams.set('authuser', staffEmail);
+      await sendCue({ staffEmail, docUrl: docUrl.href, home });
+    } catch (error) {
+      onError(staffEmail, error);
+      continue;
+    }
+    sent[staffEmail] = now.toISOString();
+    checkpoint();
+  }
+  itemState.cueDmSent = targets.length > 0 && targets.every(email => sent[email]);
 }
 
 export function isPidAlive(pid) {
@@ -577,8 +591,7 @@ export async function runScheduler(options = {}) {
 
   // Collect events across target calendars
   const errors = [];
-  const seenEventKeys = new Set();
-  const uniqueCalendarEvents = [];
+  const uniqueCalendarEvents = new Map();
 
   for (const calId of targetCalendars) {
     try {
@@ -588,9 +601,8 @@ export async function runScheduler(options = {}) {
         const meetInfo = extractMeetInfo(ev);
         const startStr = ev.start?.dateTime || ev.start?.date || '';
         const key = meetInfo ? `${meetInfo.conferenceCode}_${startStr}` : `${ev.id}_${startStr}`;
-        if (!seenEventKeys.has(key)) {
-          seenEventKeys.add(key);
-          uniqueCalendarEvents.push({ event: ev, calendarId: calId });
+        if (!uniqueCalendarEvents.has(key) || ev.organizer?.self) {
+          uniqueCalendarEvents.set(key, { event: ev, calendarId: calId });
         }
       }
     } catch (err) {
@@ -602,7 +614,7 @@ export async function runScheduler(options = {}) {
   const targetEvents = [];
   const skippedEvents = [];
 
-  for (const { event, calendarId } of uniqueCalendarEvents) {
+  for (const { event, calendarId } of uniqueCalendarEvents.values()) {
     const startIso = new Date(event.start?.dateTime || event.start?.date || 0).toISOString();
 
     // 1. Mechanical check
@@ -686,12 +698,11 @@ export async function runScheduler(options = {}) {
     if (!staffEmail) staffEmail = orgiastAttendees[0] || 'seisaku-team@orgiast.jp';
 
     let docId = itemState.docId;
-    let companionEventId = itemState.companionEventId;
 
-    if (!docId && !dryRun) {
+    if ((!docId || !itemState.cardsFile) && !dryRun) {
       try {
         console.log(`[meet-cue-scheduler] カンペ Doc 作成開始: "${event.summary}" (${staffEmail})`);
-        const docInfo = await setupCueDocument({
+        const docInfo = docId ? { docId, staffUrl: itemState.staffUrl } : await setupCueDocument({
           title: event.summary || '打合せ',
           staff: staffEmail,
           impersonate: 'seisaku-team@orgiast.jp',
@@ -734,23 +745,23 @@ export async function runScheduler(options = {}) {
         itemState.cardsFile = path.join(prepDir, 'cards.json');
         itemState.briefFile = path.join(prepDir, 'brief.txt');
 
-        // Create companion event on Calendar
-        const calToken = await getToken({ impersonate: calendarId, scope: CALENDAR_SCOPE });
-        const companion = await createOrUpdateCompanionEvent({
-          token: calToken,
-          calendarId,
-          originalEvent: event,
-          docUrl: docInfo.staffUrl,
-          orgiastAttendees,
-          fetchImpl,
-        });
-
-        companionEventId = companion.id;
-        itemState.companionEventId = companionEventId;
         itemState.prepared = true;
       } catch (err) {
         console.error(`[meet-cue-scheduler] 準備失敗 (${event.summary}):`, err.message);
         errors.push({ event: event.summary, stage: 'prep', error: err.message });
+      }
+    }
+
+    if (!dryRun && itemState.prepared) {
+      try {
+        await deliverCueUrl({
+          event, itemState, now, getToken, fetchImpl, home, calendarId,
+          grantAccess: recipients => shareCueDocument(itemState, recipients, getToken),
+          checkpoint: () => saveSchedulerState(state, home),
+          onError: (target, error) => errors.push({ event: event.summary, stage: 'cueDm', target, error: error.message }),
+        });
+      } catch (error) {
+        errors.push({ event: event.summary, stage: 'cueDelivery', error: error.message });
       }
     }
 
@@ -864,7 +875,8 @@ export async function runScheduler(options = {}) {
       staffEmail,
       prepared: Boolean(itemState.prepared || docId),
       docId: docId || null,
-      companionEventId: companionEventId || null,
+      cueUrlAppended: Boolean(itemState.cueUrlAppended),
+      cueDmSent: Boolean(itemState.cueDmSent),
       inJoinWindow,
       actionStatus,
       classification,
@@ -900,7 +912,73 @@ export async function runScheduler(options = {}) {
   };
 }
 
+/**
+ * 移行: meetCueSource が付いた「📝カンペ」予定のうち、今後開始するものを削除する。
+ * 過去の予定は残す。削除結果を ~/.claude/logs/meet-cue-companion-cleanup.json に書き出す。
+ */
+export async function migrateCleanupCompanions({
+  dryRun = false, getTokenImpl = getDriveToken, fetchImpl = globalThis.fetch,
+  home = homeDir(), now = new Date(), calendars,
+} = {}) {
+  const targets = calendars || await fetchTargetCalendars({
+    getToken: getTokenImpl, fetchImpl, baseCalendars: readConfig(home).calendars,
+  });
+  const candidates = [], deleted = [], errors = [];
+  for (const calendarId of targets) {
+    try {
+      const token = await getTokenImpl({ impersonate: calendarId, scope: CALENDAR_SCOPE });
+      const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
+      const params = new URLSearchParams({ timeMin: now.toISOString(), maxResults: '2500', showDeleted: 'false' });
+      const events = [];
+      let pageToken;
+      do {
+        if (pageToken) params.set('pageToken', pageToken);
+        const res = await fetchImpl(`${base}?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+        if (!res.ok) throw new Error(`Calendar list HTTP ${res.status}`);
+        const page = await res.json();
+        events.push(...(page.items || []));
+        pageToken = page.nextPageToken;
+      } while (pageToken);
+
+      for (const event of events) {
+        if (!event.summary?.startsWith('📝カンペ:') || !event.extendedProperties?.private?.meetCueSource ||
+            !(calendarStartMs(event) > now.getTime())) continue;
+        const { id, summary } = event;
+        const item = { calendarId, id, summary };
+        candidates.push(item);
+        if (dryRun) continue;
+        try {
+          const res = await fetchImpl(`${base}/${encodeURIComponent(id)}?sendUpdates=none`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${token}`, ...(event.etag ? { 'If-Match': event.etag } : {}) },
+          });
+          if (!res.ok) throw new Error(`Calendar delete HTTP ${res.status}`);
+          deleted.push(item);
+        } catch (error) {
+          errors.push({ ...item, error: error.message });
+        }
+      }
+    } catch (error) {
+      errors.push({ calendarId, error: error.message });
+    }
+  }
+
+  const result = { ok: errors.length === 0, dryRun, candidates, deletedCount: deleted.length, deleted, errors };
+  if (!dryRun) {
+    const logDir = path.join(home, '.claude', 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.writeFileSync(path.join(logDir, 'meet-cue-companion-cleanup.json'), JSON.stringify({ at: now.toISOString(), ...result }, null, 2));
+  }
+  return result;
+}
+
 export async function main(argv = process.argv.slice(2)) {
+  if (argv.includes('--migrate-companions')) {
+    const result = await migrateCleanupCompanions({ dryRun: argv.includes('--dry-run') });
+    console.log(JSON.stringify(result, null, 2));
+    return result.ok ? 0 : 1;
+  }
+
   const { values } = parseArgs({
     args: argv,
     allowPositionals: true,

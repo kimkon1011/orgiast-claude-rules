@@ -14,8 +14,7 @@ import {
   deduplicateEvents,
   isExternalEmail,
   extractMeetInfo,
-  buildCompanionEventBody,
-  createOrUpdateCompanionEvent,
+  deliverCueUrl,
   findSeisakuProfileName,
   runScheduler,
   readConfig,
@@ -123,72 +122,6 @@ test('deduplicateEvents: 会議コードによる重複排除', () => {
   const deduplicated = deduplicateEvents([ev1, ev2]);
   assert.equal(deduplicated.length, 1, '同じ Meet コード・時刻の予定は1件に統合');
   assert.equal(deduplicated[0].calendarId, 'kim@orgiast.jp');
-});
-
-test('buildCompanionEventBody: 社外・個人 Gmail が参加者に入らず private, transparent, extendedProperties が設定されること', () => {
-  const originalEvent = {
-    id: 'orig123',
-    summary: '〇〇社商談',
-    start: { dateTime: '2026-11-12T10:00:00.000Z' },
-    end: { dateTime: '2026-11-12T11:00:00.000Z' },
-  };
-
-  const docUrl = 'https://docs.google.com/document/d/doc123/edit';
-  const orgiastAttendees = ['tanaka@orgiast.jp', 'kim@orgiast.jp'];
-
-  const companion = buildCompanionEventBody({ originalEvent, docUrl, orgiastAttendees });
-
-  assert.equal(companion.summary, '📝カンペ: 〇〇社商談');
-  assert.match(companion.description, /doc123/);
-  assert.equal(companion.visibility, 'private');
-  assert.equal(companion.transparency, 'transparent');
-  assert.equal(companion.extendedProperties.private.meetCueSource, 'orig123');
-  assert.deepEqual(companion.attendees, [{ email: 'tanaka@orgiast.jp' }, { email: 'kim@orgiast.jp' }]);
-});
-
-test('createOrUpdateCompanionEvent: 冪等性（既存があれば再作成しない）', async () => {
-  const token = 'fake-token';
-  const calendarId = 'tanaka@orgiast.jp';
-  const originalEvent = {
-    id: 'orig999',
-    summary: '打合せ',
-    start: { dateTime: '2026-11-12T10:00:00.000Z' },
-    end: { dateTime: '2026-11-12T11:00:00.000Z' },
-  };
-
-  let postCount = 0;
-  const mockFetch = async (url, opts = {}) => {
-    if (url.includes('privateExtendedProperty=')) {
-      return {
-        ok: true,
-        json: async () => ({
-          items: [{
-            id: 'existing-companion-1',
-            summary: '📝カンペ: 打合せ',
-            start: { dateTime: '2026-11-12T10:00:00.000Z' },
-            end: { dateTime: '2026-11-12T11:00:00.000Z' },
-          }],
-        }),
-      };
-    }
-    if (opts.method === 'POST') {
-      postCount++;
-      return { ok: true, json: async () => ({ id: 'new-companion' }) };
-    }
-    return { ok: true, json: async () => ({ id: 'existing-companion-1' }) };
-  };
-
-  const companion = await createOrUpdateCompanionEvent({
-    token,
-    calendarId,
-    originalEvent,
-    docUrl: 'https://docs.google.com/...',
-    orgiastAttendees: ['tanaka@orgiast.jp'],
-    fetchImpl: mockFetch,
-  });
-
-  assert.equal(companion.id, 'existing-companion-1');
-  assert.equal(postCount, 0, '既存があるため POST は呼ばれない');
 });
 
 test('findSeisakuProfileName: Chrome Local State から seisaku-team の Profile 名を特定', () => {
@@ -659,4 +592,97 @@ test('runScheduler: joinError 発生後 10 分以内の再試行抑止', async (
   } finally {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
+});
+
+// ─── A. News behavior: append to description, DM, migration ───
+
+test('社内主催・社内参加者のみなら元の予定の説明欄へ追記し、再実行しても増やさない', async () => {
+  const calendarId = 'kim@orgiast.jp';
+  const event = { id: 'internal', organizer: { email: calendarId }, description: '元の説明', etag: 'v1' };
+  const itemState = { staffUrl: 'https://docs.google.com/document/d/doc123/edit' };
+  let writes = 0;
+  const args = {
+    event, itemState, calendarId,
+    getToken: async ({ impersonate }) => { assert.equal(impersonate, calendarId); return 'mock'; },
+    fetchImpl: async (url, opts) => {
+      writes++;
+      assert.match(url, /internal\?sendUpdates=none$/);
+      assert.equal(opts.method, 'PATCH');
+      assert.equal(opts.headers['If-Match'], 'v1');
+      const body = JSON.parse(opts.body);
+      assert.deepEqual(body, { description: `元の説明\n📝カンペ: ${itemState.staffUrl}` });
+      event.description = body.description;
+      return { ok: true };
+    },
+  };
+  await deliverCueUrl(args);
+  await deliverCueUrl(args);
+  assert.equal(writes, 1);
+});
+
+test('社外主催または社外参加者ありなら元の予定へ書かず、開始10分前に社内だけへ通知する', async () => {
+  const start = Date.parse('2026-11-22T01:00:00Z');
+  for (const organizer of ['client@example.com', 'kim@orgiast.jp', undefined]) {
+    const sent = [];
+    const errors = [];
+    const itemState = { staffUrl: 'https://docs.google.com/document/d/doc123/edit' };
+    let fail = true;
+    const args = {
+      event: {
+        organizer: { email: organizer }, start: { dateTime: new Date(start).toISOString() },
+        attendees: ['kim@orgiast.jp', 'STAFF@orgiast.jp', 'staff@orgiast.jp', 'another@gmail.com'].map(email => ({ email })),
+      },
+      itemState,
+      getToken: () => assert.fail('Calendar write must not be attempted'),
+      sendCue: async ({ staffEmail }) => {
+        if (staffEmail === 'staff@orgiast.jp' && fail) throw new Error('temporary failure');
+        sent.push(staffEmail);
+      },
+      onError: email => errors.push(email),
+    };
+    await deliverCueUrl({ ...args, now: new Date(start - 600001) });
+    assert.equal(itemState.cueDmDueAt, new Date(start - 600000).toISOString());
+    assert.deepEqual(sent, []);
+    await deliverCueUrl({ ...args, now: new Date(start - 600000) });
+    assert.deepEqual(sent, ['kim@orgiast.jp']);
+    assert.deepEqual(errors, ['staff@orgiast.jp']);
+    fail = false;
+    await deliverCueUrl({ ...args, now: new Date(start - 599000) });
+    await deliverCueUrl({ ...args, now: new Date(start - 598000) });
+    assert.deepEqual(sent, ['kim@orgiast.jp', 'staff@orgiast.jp']);
+    assert.equal(itemState.cueDmSent, true);
+  }
+});
+
+test('migrateCleanupCompanions: 過去と識別マーカーのない予定を除外し成功した削除を記録', async t => {
+  const { migrateCleanupCompanions } = await import('./meet-cue-scheduler.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-migrate-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const now = new Date('2026-11-21T00:00:00Z');
+  const marked = { summary: '📝カンペ: テスト', extendedProperties: { private: { meetCueSource: 'original' } } };
+  const future = { ...marked, id: 'future', start: { dateTime: '2027-01-01T00:00:00Z' } };
+  const deletes = [];
+  const options = {
+    home, now, calendars: ['kim@orgiast.jp'], getTokenImpl: async () => 'mock',
+    fetchImpl: async (url, init) => {
+      if (init.method === 'DELETE') {
+        deletes.push(url);
+        return { ok: true };
+      }
+      if (new URL(url).searchParams.get('pageToken')) return { ok: true, json: async () => ({ items: [future] }) };
+      const items = [
+        { ...future, id: 'past', start: { dateTime: '2026-11-20T23:55:00Z' } },
+        { ...future, id: 'unmarked', extendedProperties: {} },
+      ];
+      return { ok: true, json: async () => ({ items, nextPageToken: 'page2' }) };
+    },
+  };
+  const dry = await migrateCleanupCompanions({ ...options, dryRun: true });
+  assert.deepEqual(dry.candidates.map(event => event.id), ['future']);
+  assert.equal(deletes.length, 0);
+  const result = await migrateCleanupCompanions(options);
+  assert.equal(result.deletedCount, 1);
+  assert.match(deletes[0], /future\?sendUpdates=none$/);
+  const report = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'logs', 'meet-cue-companion-cleanup.json')));
+  assert.deepEqual(report.deleted.map(event => event.summary), [marked.summary]);
 });

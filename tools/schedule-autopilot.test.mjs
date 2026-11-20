@@ -140,3 +140,14 @@ test('集約元: 見出しが空の列は列番号で拾い、案件は3日以�
   const { text } = buildMorningDigest({ plans: [], now: new Date('2026-11-23T23:00:00Z'), sources: { items: project.map(p => ({ ...p, diff: 0 })), milestones: [] } });
   assert.match(text, /営業・案件・問い合わせ/);
 });
+
+test('遅れていて担当PCが分かるものは、朝に1回だけその席へ自動で再依頼する', async () => {
+  const prompts = [];
+  const deps = { ledger: fakeLedger([row({ id: 'S-7', title: '見積の再送', kind: 'その他', due: '2026-11-19', notes: withMeta('', { pc: '011NEXT', time: '15:00' }) })]), state: {}, config: { calendar: { enabled: false } },
+    sources: { items: [], milestones: [] }, deliver: async () => {}, listItems: () => [], sendPrompt: async (to, body) => prompts.push({ to, body }) };
+  await run({ slot: 'morning', now: at('2026-11-20T08:00'), deps, home: os.tmpdir() });
+  await run({ slot: 'morning', now: at('2026-11-20T08:05'), deps, home: os.tmpdir() });
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].to, '011NEXT');
+  assert.match(prompts[0].body, /^\[作業依頼\].*S-7/);
+});

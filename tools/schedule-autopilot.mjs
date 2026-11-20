@@ -133,7 +133,8 @@ export function recoveryPlan(plan, config = {}) {
   const next = nextBusinessDay(jstNow().date, bizOpts(config));
   if (plan.type === 'send') return `挽回策: ${md(next)}(${wd(next)}) 9:00 に送る。返事の期限が近すぎる文面なら1営業日延ばした版に直す`;
   if (plan.needsKim) return '挽回策: 今日中に返事をもらえれば担当PCが続きをすぐ進める';
-  return `挽回策: 担当（${plan.assignee}）へ今日中の対応を再依頼する。延ばすなら「延期 ${plan.id} ${md(next)}」と返事`;
+  if (plan.pc) return `挽回策: 担当PC（${plan.pc}）へ今日中の対応を自動で再依頼（${md(next)}(${wd(next)})までに終わらなければ翌朝も載せる）`;
+  return `挽回策: 担当（${plan.assignee}）が今日中に対応。終われば台帳の状態を完了、延ばすなら期限日を直す（それまで毎朝この一覧に残る）`;
 }
 export function askText(plan, n) {
   return [
@@ -389,6 +390,15 @@ export async function run({ home = defaultHome(), slot = 'tick', now = new Date(
     if (!quiet && !state.sent?.[key] && !dryRun) {
       await deliver({ kind: 'info', text: digest.text, title: `予定の先回り ${md(date)}: 送る${digest.counts.send}・判断${digest.counts.asks}・遅れ${digest.counts.late}`, dedupeKey: `schedule-autopilot:${key}` });
       (state.sent ||= {})[key] = new Date().toISOString(); out.sent.push(key);
+    }
+    // 遅れていて担当PCが分かるものは、その席へ1回だけ自動で再依頼する（金さんの手は使わない）。
+    for (const p of plans.filter(x => x.pc && !x.needsKim && stageOf(x, now, config) === 'late')) {
+      const k = `schedule-autopilot:rerequest:${p.id}:${p.actionAt}`;
+      if (state.sent?.[k] || dryRun) continue;
+      try {
+        await (deps.sendPrompt || ((to, body) => defaultSendPrompt(home, to, body)))(p.pc, `[作業依頼] 期限台帳 ${p.id}「${p.title}」が期限（${when(p)}）を過ぎています。今日中に対応し、終わったら node tools/schedule-autopilot.mjs done --id ${p.id}。社外送信・支払い・削除は金さんの承認済みの範囲だけ。`);
+        (state.sent ||= {})[k] = new Date().toISOString(); out.sent.push(k);
+      } catch (e) { out.errors.push({ id: p.id, phase: 'rerequest', error: e.message }); }
     }
     for (const [i, p] of digest.asks.entries()) {
       const s = stageOf(p, now, config), k = `schedule-autopilot:ask:${p.id}:${s}`;

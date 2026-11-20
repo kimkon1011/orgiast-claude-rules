@@ -24,14 +24,21 @@ export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken
         onStage('token end (sheets)');
         expires = Date.now() + 50 * 60_000;
       }
-      let response;
-      try {
-        response = await fetchImpl(`${API}/${encodeURIComponent(id)}${suffix}`, {
-          method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          ...(body ? { body: JSON.stringify(body) } : {}), signal: requestSignal,
-        });
-      } catch (error) { throw new Error(`Sheets ${method} fetch failed: ${error.message}`, { cause: error }); }
-      if (!response.ok) throw new Error(`Sheets ${method} HTTP ${response.status}`);
+      let response; const MAX_ATTEMPTS = 3;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          response = await fetchImpl(`${API}/${encodeURIComponent(id)}${suffix}`, {
+            method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            ...(body ? { body: JSON.stringify(body) } : {}), signal: requestSignal,
+          });
+        } catch (error) { throw new Error(`Sheets ${method} fetch failed: ${error.message}`, { cause: error }); }
+        if (response.ok) break;
+        if (response.status === 429 && attempt < MAX_ATTEMPTS) {
+          await new Promise(r => setTimeout(r, 1000 * attempt)); // 1s, 2s, 4s backoff
+          continue;
+        }
+        throw new Error(`Sheets ${method} HTTP ${response.status}`);
+      }
       return response.json();
     }).catch(error => {
       if (requestSignal.aborted) throw new Error(`Sheets ${method} fetch failed: ${error.message}`, { cause: error });

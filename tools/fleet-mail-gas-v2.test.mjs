@@ -7,6 +7,7 @@ const source = fs.readFileSync(new URL('../gas/fleet-status-sheet/Mail.gs', impo
 const now = Date.parse('2026-10-14T00:00:00Z');
 function harness({ beaconRows = [['label'], ['receiver'], ['cr-PC']], statusRows = [['label', 'hostname'], ['receiver', 'host']], statusHeaders, rosterFault = false, sheetsTypes = false } = {}) {
   const rows = [], alertRows = [], properties = { SHEET_ID: 'fixture' };
+  const formats = [];
   let time = now;
   const triggers = [], webhooks = [], warnings = [], faults = {};
   const lock = { held: false, releases: 0, hasLock() { return this.held; }, tryLock() { this.held = true; return true; }, releaseLock() { this.held = false; this.releases++; } };
@@ -20,6 +21,7 @@ function harness({ beaconRows = [['label'], ['receiver'], ['cr-PC']], statusRows
     maxColumns: 26, getMaxColumns() { return this.maxColumns; }, insertColumnsAfter(_after, count) { this.maxColumns += count; },
     getLastRow: () => rows.length, getLastColumn: () => Math.max(0, ...rows.map(row => row.length)), setFrozenRows() {}, deleteRow: n => rows.splice(n - 1, 1),
     getRange(row, col, count, width) { if (col + width - 1 > this.maxColumns) throw new Error('range exceeds grid'); return {
+      setNumberFormat(format) { formats.push({ row, col, count, width, format }); return this; },
       getValues: () => {
         if (rows === alertRows && count === 1 && row === faults.readBackRow) return [Array(width).fill('mismatch')];
         return Array.from({ length: count }, (_, i) => Array.from({ length: width }, (_, j) => rows[row - 1 + i]?.[col - 1 + j] ?? '')); },
@@ -49,7 +51,7 @@ function harness({ beaconRows = [['label'], ['receiver'], ['cr-PC']], statusRows
   };
   const names = [...source.matchAll(/^function (\w+)\(/gm)].map(m => m[1]);
   const api = new Function(...Object.keys(deps), `${source}\nreturn { ${names.join(', ')}, headers: FLEET_MAIL_HEADERS_, alertHeaders: FLEET_MAIL_ALERT_HEADERS_, renotifyMs: FLEET_MAIL_RENOTIFY_MS_, sla: FLEET_MAIL_SLA_, ackLimit: FLEET_MAIL_ACK_LIMIT_, terminalStatuses: FLEET_MAIL_TERMINAL_STATUSES_, pollLimit: FLEET_MAIL_POLL_LIMIT_ };`)(...Object.values(deps));
-  return { ...api, rows, alertRows, properties, triggers, webhooks, faults, warnings, lock, advance: ms => { time += ms; } };
+  return { ...api, rows, alertRows, properties, triggers, webhooks, faults, warnings, formats, lock, advance: ms => { time += ms; } };
 }
 const send = (h, overrides = {}) => h.sendFleetMail({ id: 'mail-original', from: 'sender', to: 'receiver', messageKind: 'note', why: 'test', body: 'body', ...overrides });
 const poll = (h, overrides = {}) => h.pollFleetMail({ to: 'receiver', hostname: 'host', ...overrides });
@@ -409,6 +411,15 @@ test('J mail-send succeeds with Sheets boolean and numeric coercion and preserve
     assert.equal(mail.meta, JSON.stringify({ relay: true }));
     assert.equal(send(h, { id, auto }).duplicate, true);
   }
+});
+test('numeric-only destination is formatted as text and legacy numeric rows match zero-padded labels', () => {
+  const h = harness({ sheetsTypes: true });
+  send(h, { to: '018' });
+  assert.ok(h.formats.some(call => call.col === h.headers.indexOf('to') + 1 && call.format === '@'));
+  h.rows[1][h.headers.indexOf('to')] = 18;
+  assert.equal(h.getFleetMail({ id: 'mail-original' }).mail.to, '18');
+  assert.equal(h.fleetMailMatches(h.getFleetMail({ id: 'mail-original' }).mail, '018', '', now, false), true);
+  assert.equal(h.fleetMailMatches(h.getFleetMail({ id: 'mail-original' }).mail, '019', '', now, false), false);
 });
 test('J read-back normalizes all cell types without trimming strings or hiding mismatches', () => {
   const h = harness({ sheetsTypes: true });

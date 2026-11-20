@@ -4,13 +4,154 @@
   "sendCutoff": "12:00",
   "hoursBefore": 3,
   "morningHour": 8,
-  "closed": ["12-29", "12-30", "12-31", "01-02", "01-03"],
-  "calendar": { "enabled": true, "calendarId": "kim@orgiast.jp", "reminderMinutes": 30 },
+  "closed": [
+    "12-29",
+    "12-30",
+    "12-31",
+    "01-02",
+    "01-03"
+  ],
+  "calendar": {
+    "enabled": true,
+    "calendarId": "kim@orgiast.jp",
+    "reminderMinutes": 30
+  },
   "sources": [
-    { "name": "3億円 日次タスク", "kind": "plan", "sheetId": "1Qa5bPpvjgpm2lFPfeG08jVMem1FWk1QkbsCHSf5eS4o", "tabs": ["日次タスク"], "date": ["日付"], "title": ["タスク（何を・どこまで）"], "assignee": ["担当"], "status": ["状態"], "closedWords": ["完了", "中止", "不要", "見送", "済"], "window": [-14, 0] },
-    { "name": "3億円 週次マイルストーン", "kind": "milestone", "sheetId": "1Qa5bPpvjgpm2lFPfeG08jVMem1FWk1QkbsCHSf5eS4o", "tabs": ["週次マイルストーン"] },
-    { "name": "営業進捗", "kind": "followup", "sheetId": "1_gBiNL5Ev-nMMzXe633omrVUphkw1xBK3MK4upBzz7M", "maxTabs": 6, "date": ["次回連絡日"], "title": ["企業名/案件名", "企業名", "案件名"], "assignee": ["営業担当", "担当"], "status": ["ステータス", "進捗"], "closedWords": ["失注", "完了", "受注", "対応しない", "見送", "終了"], "window": [-7, 1] },
-    { "name": "案件一覧マスター", "kind": "project", "sheetId": "14RC6og1ma_I3LGHwCVwswKArgHwCOPxWlPB3g8adaYY", "maxTabs": 4, "date": ["納期", "納品日", "実施日", "開催日", "期日", "期限"], "title": ["案件名", "件名", "顧客名", "会社名"], "assignee": ["担当", "営業担当", "担当者"], "status": ["ステータス", "状態", "進捗"], "closedWords": ["納品完了", "完了", "失注", "キャンセル", "中止"], "window": [0, 7] },
-    { "name": "問い合わせ一覧", "kind": "inquiry", "sheetId": "1JC4No-GdeBYWZMT1b0S8VTpcPrTzoOapHgjQn7KWE3Q", "maxTabs": 2, "maxRows": 3000, "date": ["対応期限", "期限", "次回連絡日", "返信期限"], "title": ["会社名", "企業名", "件名", "お名前"], "assignee": ["担当", "対応者"], "status": ["ステータス", "対応状況", "状態"], "closedWords": ["対応済", "完了", "不要", "対応しない", "クローズ"], "window": [-3, 1] }
+    {
+      "name": "3億円 日次タスク",
+      "kind": "plan",
+      "sheetId": "1Qa5bPpvjgpm2lFPfeG08jVMem1FWk1QkbsCHSf5eS4o",
+      "tabs": [
+        "日次タスク"
+      ],
+      "date": [
+        "日付"
+      ],
+      "title": [
+        "タスク（何を・どこまで）"
+      ],
+      "assignee": [
+        "担当"
+      ],
+      "status": [
+        "状態"
+      ],
+      "closedWords": [
+        "完了",
+        "中止",
+        "不要",
+        "見送",
+        "済"
+      ],
+      "window": [
+        -14,
+        0
+      ]
+    },
+    {
+      "name": "3億円 週次マイルストーン",
+      "kind": "milestone",
+      "sheetId": "1Qa5bPpvjgpm2lFPfeG08jVMem1FWk1QkbsCHSf5eS4o",
+      "tabs": [
+        "週次マイルストーン"
+      ]
+    },
+    {
+      "name": "営業進捗",
+      "kind": "followup",
+      "sheetId": "1_gBiNL5Ev-nMMzXe633omrVUphkw1xBK3MK4upBzz7M",
+      "date": [
+        "次回連絡日"
+      ],
+      "title": [
+        "企業名/案件名",
+        "企業名/案件名（自動入力）"
+      ],
+      "assignee": [
+        "営業担当",
+        "担当"
+      ],
+      "status": [
+        "ステータス",
+        "進捗"
+      ],
+      "closedWords": [
+        "失注",
+        "完了",
+        "受注",
+        "対応しない",
+        "見送",
+        "終了"
+      ],
+      "window": [
+        -7,
+        1
+      ],
+      "tabs": [
+        "長期フォロー",
+        "営業進捗管理_自動更新なし"
+      ]
+    },
+    {
+      "name": "案件一覧マスター",
+      "kind": "project",
+      "sheetId": "14RC6og1ma_I3LGHwCVwswKArgHwCOPxWlPB3g8adaYY",
+      "date": [
+        "納品日"
+      ],
+      "title": [
+        "案件名"
+      ],
+      "assignee": [
+        "営業",
+        "制作"
+      ],
+      "status": [
+        "予算項目"
+      ],
+      "closedWords": [
+        "納品完了",
+        "失注",
+        "キャンセル",
+        "中止"
+      ],
+      "window": [
+        0,
+        7
+      ],
+      "tabs": [
+        "案件一覧"
+      ]
+    },
+    {
+      "name": "問い合わせ一覧",
+      "kind": "inquiry",
+      "sheetId": "1JC4No-GdeBYWZMT1b0S8VTpcPrTzoOapHgjQn7KWE3Q",
+      "maxRows": 3000,
+      "date": [
+        "日付"
+      ],
+      "title": [
+        2,
+        "問合せ元"
+      ],
+      "assignee": [],
+      "status": [],
+      "closedWords": [
+        "対応済",
+        "完了",
+        "不要",
+        "対応しない",
+        "クローズ"
+      ],
+      "window": [
+        -3,
+        0
+      ],
+      "tabs": [
+        "未対応問合せ一覧（両方）"
+      ],
+      "_note": "未対応の問い合わせだけが並ぶタブ。受付から3日以内を朝の一覧に出す。名前の列は見出しが空なので列番号2（C列）"
+    }
   ]
 }

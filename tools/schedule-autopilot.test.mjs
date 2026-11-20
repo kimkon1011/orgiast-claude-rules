@@ -130,3 +130,13 @@ test('集約元: 見出し名で列を探し、完了・期間外を除く', () 
   assert.deepEqual(items.map(i => i.title), ['学会20社へ送付']);
   assert.equal(items[0].diff, -1);
 });
+
+test('集約元: 見出しが空の列は列番号で拾い、案件は3日以内の納品を朝の一覧に出す', () => {
+  const inquiry = extractSourceRows([['注意'], ['問合せ元', '日付'], ['HP', '2026-11-19', '山田']], { name: '問い合わせ一覧', kind: 'inquiry', date: ['日付'], title: [2, '問合せ元'], window: [-3, 0] }, '2026-11-20');
+  assert.equal(inquiry[0].title, '山田');
+  const project = extractSourceRows([['予算項目', '案件名', '納品日', '営業'], ['確定', '上場の鐘', '2026-11-24', '金'], ['納品完了', '済み案件', '2026-11-24', '金']],
+    { name: '案件一覧マスター', kind: 'project', date: ['納品日'], title: ['案件名'], assignee: ['営業'], status: ['予算項目'], closedWords: ['納品完了'], window: [0, 7] }, '2026-11-20');
+  assert.deepEqual(project.map(p => p.title), ['上場の鐘']);
+  const { text } = buildMorningDigest({ plans: [], now: new Date('2026-11-23T23:00:00Z'), sources: { items: project.map(p => ({ ...p, diff: 0 })), milestones: [] } });
+  assert.match(text, /営業・案件・問い合わせ/);
+});

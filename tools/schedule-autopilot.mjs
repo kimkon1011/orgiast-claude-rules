@@ -145,7 +145,8 @@ export function askText(plan, n) {
 }
 
 // ---------- 集約元（読み取りのみ） ----------
-const pick = (header, names = []) => names.map(n => header.findIndex(h => String(h).trim() === n)).find(i => i >= 0) ?? -1;
+// 名前の候補で列を探す。数値は列番号（見出しが空の列用）。
+const pick = (header, names = []) => names.map(n => typeof n === 'number' ? n : header.findIndex(h => String(h).trim() === n)).find(i => i >= 0) ?? -1;
 export function sheetDate(value, today) {
   if (typeof value === 'number' && value > 20000) return new Date(Date.UTC(1899, 11, 30) + Math.floor(value) * 86_400_000).toISOString().slice(0, 10);
   const text = String(value ?? '').normalize('NFKC');
@@ -214,10 +215,12 @@ export function buildMorningDigest({ plans, now = new Date(), config = {}, sourc
   if (planLate.length || planToday.length || sources.milestones.length) {
     lines.push('', `📈 3億円計画: 今日のタスク ${planToday.length}件／終わっていない過去分 ${planLate.length}件`);
     for (const m of sources.milestones) lines.push(`　今週(${m.week})の目標: ${m.goal.slice(0, 80)}`);
-    if (planLate.length) lines.push(...cap(planLate.map(i => `・${md(i.date)} ${i.title}（${i.assignee || '担当未定'}）→ 今日の朝枠に繰り越し`), 4, '3億円 実行計画'));
+    if (planToday.length) lines.push(...cap(planToday.map(i => `・今日 ${i.title}（${i.assignee || '担当未定'}）`), 4, '3億円 実行計画'));
+    if (planLate.length) lines.push(...cap(planLate.map(i => `・${md(i.date)} ${i.title}（${i.assignee || '担当未定'}）→ 今日の朝枠に繰り越し`), 3, '3億円 実行計画'));
   }
-  const follow = sources.items.filter(i => ['followup', 'project', 'inquiry'].includes(i.kind) && i.diff <= 0);
-  if (follow.length) lines.push('', `📞 営業・案件・問い合わせ（期日が今日まで ${follow.length}件）`, ...cap(follow.sort((a, b) => a.diff - b.diff).map(i => `・${i.source}: ${i.title} ${md(i.date)}${i.diff < 0 ? `（${-i.diff}日過ぎ）` : ''} 担当 ${i.assignee || '未定'}`), 5, '各シート'));
+  // 案件は納品日の3日前から、営業・問い合わせは当日から並べる。
+  const follow = sources.items.filter(i => ['followup', 'project', 'inquiry'].includes(i.kind) && i.diff <= (i.kind === 'project' ? 3 : 0));
+  if (follow.length) lines.push('', `📞 営業・案件・問い合わせ（今日までの連絡・3日以内の納品 ${follow.length}件）`, ...cap(follow.sort((a, b) => a.diff - b.diff).map(i => `・${i.source}: ${i.title} ${md(i.date)}${i.diff < 0 ? `（${-i.diff}日過ぎ）` : i.diff > 0 ? `（あと${i.diff}日）` : '（今日）'} 担当 ${i.assignee || '未定'}`), 5, '各シート'));
   if (lines.length === 1) lines.push('今日・次の営業日に手当てが要る予定はありません。');
   if (ledgerUrl) lines.push('', `期限台帳: ${ledgerUrl}`);
   return { text: lines.join('\n'), asks: asks.map(x => x.p), counts: { send: sendNow.length, asks: asks.length, today: today.length, ahead: ahead.length, late: late.length, planLate: planLate.length, follow: follow.length }, business };

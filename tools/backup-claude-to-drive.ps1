@@ -472,13 +472,25 @@ try {
     Write-Event 'plan drive-root=H:\ reason=no-mounted-drive-dry-run-fallback'
   }
   $useRclone = (-not $driveProcess -or -not $driveRoot) -and $rcloneRemote
-  if (-not $DryRun -and -not $driveRoot -and -not $useRclone) { Stop-DriveNotAvailable }
-  if (-not $driveRoot -and -not $useRclone) { throw 'Google Drive のマウントも rclone リモートも利用できません' }
-  if (-not $driveRoot -and $useRclone) { $driveRoot = 'H:\' }
+  $localFallback = $false
+  if (-not $DryRun -and -not $driveRoot -and -not $useRclone) {
+    $localFallback = $true
+    $localBackupDir = if ($env:CLAUDE_BACKUP_LOCAL_DIR) { $env:CLAUDE_BACKUP_LOCAL_DIR } else { 'D:\claude-backups' }
+    $localBackupRoot = [IO.Path]::GetPathRoot($localBackupDir)
+    if (-not (Test-Path -LiteralPath $localBackupRoot)) {
+      $localFallback = $false
+      Write-Event ('WARN local-fallback=unavailable root={0} reason=drive-not-found' -f $localBackupRoot)
+      Stop-DriveNotAvailable
+    } else {
+      Write-Event ('plan local-fallback path={0}' -f $localBackupDir)
+    }
+  }
+  if (-not $driveRoot -and -not $useRclone -and -not $localFallback) { throw 'Google Drive のマウントも rclone リモートも利用できません' }
+  if (-not $driveRoot -and ($useRclone -or $localFallback)) { $driveRoot = 'H:\' }
 
-  # DryRun / useRclone 時は Join-Path が実在ドライブを要求してクラッシュするため
+  # DryRun / useRclone / localFallback 時は Join-Path が実在ドライブを要求してクラッシュするため
   # プレースホルダパスを直書きで設定する（不存ドライブの H:\ では Join-Path が例外を投げる）。
-  if ($useRclone -or $DryRun) {
+  if ($useRclone -or $DryRun -or $localFallback) {
     $myDriveName = 'マイドライブ'
     $script:driveBackup = 'H:\マイドライブ\Claude-Backups\{0}' -f $hostname
     $driveZip = '{0}\claude-{1}-{2}.zip' -f $script:driveBackup, $hostname, (Get-Date).ToString('yyyy-MM-dd')
@@ -590,7 +602,37 @@ try {
   $zipSize = (Get-Item -LiteralPath $localZip).Length
   Write-Event ('zip-created bytes={0}' -f $zipSize)
 
-  if ($useRclone) {
+  if ($localFallback) {
+    # Local fallback: Drive/rclone 共に使えないためローカル退避先へ書く
+    New-Item -ItemType Directory -Path $localBackupDir -Force | Out-Null
+    $backupFileName = 'claude-{0}-{1}.zip' -f $hostname, (Get-Date).ToString('yyyy-MM-dd')
+    $localZipDest = Join-Path $localBackupDir $backupFileName
+    Copy-Item -LiteralPath $localZip -Destination $localZipDest -Force
+    Copy-Item -LiteralPath $restoreSource -Destination (Join-Path $localBackupDir 'RESTORE-claude-backup.md') -Force
+    foreach ($restoreFile in @($restoreScriptSource, $restoreLauncherSource)) {
+      if (Test-Path -LiteralPath $restoreFile) { Copy-Item -LiteralPath $restoreFile -Destination (Join-Path $localBackupDir ([IO.Path]::GetFileName($restoreFile))) -Force }
+      else { Write-Event ('WARN restore-set-copy=skipped source={0} reason=not-found' -f $restoreFile) }
+    }
+
+    $archive = [IO.Compression.ZipFile]::OpenRead($localZipDest)
+    try {
+      $names = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+      $hasClaude = @($names | Where-Object { $_ -eq '.claude/CLAUDE.md' }).Count -gt 0
+      $hasSettings = @($names | Where-Object { $_ -eq '.claude/settings.json' }).Count -gt 0
+      $hasProjects = @($names | Where-Object { $_ -like '.claude/projects/*' }).Count -gt 0
+      $hasClaudeJson = @($names | Where-Object { $_ -eq 'home/.claude.json' }).Count -gt 0
+      $hasManifest = @($names | Where-Object { $_ -eq 'home/backup-manifest.json' }).Count -gt 0
+      $hasBackupTask = @($names | Where-Object { $_ -eq 'home/scheduled-tasks/ClaudeDailyDriveBackup.xml' }).Count -gt 0
+      $taskRequirementMet = ($taskCount -eq 0) -or $hasBackupTask
+      if ($names.Count -lt 5000 -or -not $hasClaude -or -not $hasSettings -or -not $hasProjects -or -not $hasClaudeJson -or -not $hasManifest -or -not $taskRequirementMet) {
+        $claudeJsonHint = if (-not $hasClaudeJson) { ' Claude Code が書き込み中で .claude.json を取得できなかった可能性があります。' } else { '' }
+        throw ('read-back 不合格 entries={0} .claude/CLAUDE.md={1} .claude/settings.json={2} .claude/projects={3} home/.claude.json={4} manifest={5} backupTask={6}.{7}' -f $names.Count, $hasClaude, $hasSettings, $hasProjects, $hasClaudeJson, $hasManifest, $taskRequirementMet, $claudeJsonHint)
+      }
+      Write-Event ('verified entries={0} .claude/CLAUDE.md={1} .claude/settings.json={2} .claude/projects={3} home/.claude.json={4} manifest={5} backupTask={6}' -f $names.Count, $hasClaude, $hasSettings, $hasProjects, $hasClaudeJson, $hasManifest, $taskRequirementMet)
+    } finally { $archive.Dispose() }
+    # ローカル退避ではローテーションは行わない（ファイル削除は人の許可が必要）。
+    Write-Event ('local-fallback=ok path={0} reason=drive-not-available' -f $localBackupDir)
+  } elseif ($useRclone) {
     # Rclone fallback path: upload zip and restore files to rclone remote
     $rcloneZipName = 'claude-{0}-{1}.zip' -f $hostname, (Get-Date).ToString('yyyy-MM-dd')
     $rcloneDest = '{0}:Claude-Backups/{1}/' -f $rcloneRemote, $hostname
@@ -661,7 +703,7 @@ try {
   $nowUtc = (Get-Date).ToUniversalTime()
   $successState = Read-BackupState
   $successState['lastSuccessUtc'] = $nowUtc.ToString('o')
-  $successState['lastBackup'] = $driveZip
+  $successState['lastBackup'] = if ($localFallback) { $localZipDest } else { $driveZip }
   $successState['verifiedEntries'] = $names.Count
   Write-BackupState $successState
   if ($previousSuccess -and (($nowUtc - $previousSuccess).TotalDays -ge 3)) { Send-Discord ('✅ Claude バックアップが復旧しました。PC: {0} / 前回成功: {1}' -f $hostname, $previousSuccess.ToString('yyyy-MM-dd HH:mm UTC')) }

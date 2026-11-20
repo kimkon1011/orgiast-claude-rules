@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isAiSource, fmtMonth, sortMonthsDesc, calcDateRange, renderMarkdown } from './ai-referral-report.mjs';
+import { isAiSource, fmtMonth, sortMonthsDesc, calcDateRange, renderMarkdown, DEFAULT_MONTHS } from './ai-referral-report.mjs';
 
 // --- isAiSource ----------------------------------------------------------------
 
@@ -118,6 +118,62 @@ test('calcDateRange: months=13 は約1年前の月初から', () => {
   const sm = String(start.getMonth() + 1).padStart(2, '0');
   const r = calcDateRange(13);
   assert.equal(r.startDate, `${sy}-${sm}-01`);
+});
+
+test('calcDateRange: months=15 は15か月前の月初から今日まで', () => {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth() - 14, 1);
+  const sy = start.getFullYear();
+  const sm = String(start.getMonth() + 1).padStart(2, '0');
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  const r = calcDateRange(15);
+  assert.equal(r.startDate, `${sy}-${sm}-01`);
+  assert.equal(r.endDate, `${y}-${m}-${d}`);
+});
+
+test('DEFAULT_MONTHS が 15 である（前年同期3か月を揃えるため）', () => {
+  assert.equal(DEFAULT_MONTHS, 15);
+});
+
+test('renderMarkdown: months=15 でも直近3か月 vs 前年同期3か月が機能する', () => {
+  // 15か月分のデータを降順で生成: 最新月〜15か月前
+  // 202611, 202610, ..., 202509 の15か月
+  const months = [];
+  for (let i = 0; i < 15; i++) {
+    const d = new Date(2026, 10, 1);
+    d.setMonth(d.getMonth() - i);
+    const ym = d.getFullYear().toString() + String(d.getMonth() + 1).padStart(2, '0');
+    months.push(ym);
+  }
+  // months は降順: [202611, 202610, ..., 202509]
+  const aiData = {
+    months: months.map((ym) => ({
+      yearMonth: ym,
+      totalSessions: 1000,
+      aiSessions: 50,
+      aiSources: { 'chatgpt.com': 30, 'perplexity.ai': 20 },
+      totalKeyEvents: 200,
+      aiKeyEvents: 10,
+    })),
+    keyEventMetric: 'keyEvents',
+  };
+  const channelData = months.map((ym) => ({
+    yearMonth: ym,
+    channels: { 'Organic Search': 500, Direct: 300, Referral: 100, '(other)': 100 },
+  }));
+
+  const md = renderMarkdown(aiData, channelData, 15);
+
+  // セクション4が存在する
+  assert.match(md, /## 4\. 直近3か月 vs 前年同期3か月/);
+  // 前年同期ラベルに3か月分が出ている
+  const prevMatch = md.match(/- 前年同期: (.+)/);
+  assert.ok(prevMatch, '前年同期行がある');
+  // 中黒（・）で区切られた3つの月ラベルがある
+  const prevParts = prevMatch[1].split('・').filter(Boolean);
+  assert.equal(prevParts.length, 3, `前年同期に3か月分のラベルがある: "${prevMatch[1]}"`);
 });
 
 // --- renderMarkdown -----------------------------------------------------------

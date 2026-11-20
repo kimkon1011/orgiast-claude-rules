@@ -10,7 +10,7 @@
  *
  * 既定:
  *   --property 279040101  （orgiast.jp GA4）
- *   --months 13          （直近 13 ヶ月）
+ *   --months 15          （直近 15 ヶ月）
  */
 
 import fs from 'node:fs';
@@ -21,7 +21,7 @@ import { defaultDriveKeyPath } from './lib/drive-auth.mjs';
 // --- 定数 ----------------------------------------------------------------
 
 const DEFAULT_PROPERTY = '279040101';
-const DEFAULT_MONTHS = 13;
+const DEFAULT_MONTHS = 15;
 const GA4_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly';
 
 /**

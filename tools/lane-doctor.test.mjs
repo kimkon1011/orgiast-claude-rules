@@ -218,7 +218,8 @@ test('unprobed configuration remains distinct and equal-time limits are supersed
 
 test('Gemini billing notification includes official steps, account, outcome and fallback', t => {
   const text = notificationText({provider:'gemini',reason:'billing',error:'HTTP 402 Your prepayment credits are depleted'},fixture(t));
-  for (const expected of ['https://aistudio.google.com/billing','seisaku-team@orgiast.jp','TrackPlanner','個人 Gmail','シークレットウィンドウ','右上アバター','前払いクレジットが 0','Setup auto-reload（上限付き）','Available credits','Manage auto-reload','支払い方法・補充額・最低残高しきい値','monthly auto-charge limit','保存','0 より大きく','03:00','次セッション開始','gemini ✅','キー所有アカウントが別','Gemini まだ 402']) assert.ok(text.includes(expected), expected);
+  for (const expected of ['https://aistudio.google.com/billing', 'seisaku-team@orgiast.jp', 'まず無料枠・既存契約内の他AIレーンを実測', '比較表の最後']) assert.ok(text.includes(expected), expected);
+  assert.ok(!text.includes('設定して保存'));
   assert.match(text,/\n根拠: https:\/\/ai.google.dev\/gemini-api\/docs\/billing$/);
 });
 test('needsNativeCodexProbe is win32-only and follows the WSL distro listing', () => {
@@ -278,6 +279,18 @@ test('danger-full-access のログを含む一般失敗は physical_operation �
   const r=await laneDoctorProbe({home:h,now,platform:'win32',providers:['codex'],listWsl:()=>'',nativeWriteProbe:async()=>({code:1,text:'sandbox: danger-full-access\nsome other error'}),probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})});
   assert.equal(r.lanes.codex.reason,'probe_failed');
   assert.equal(r.lanes.codex.tried,undefined);
+});
+test('WSL 列挙失敗(null)でも書き込み修復成功 → native_ok', async t => {
+  const h = fixture(t);
+  const r = await laneDoctorProbe({home:h,now,platform:'win32',providers:['codex'],listWsl:()=>null,nativeWriteProbe:async()=>({code:0}),probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})});
+  assert.equal(r.lanes.codex.alive,true);
+  assert.equal(r.lanes.codex.reason,'native_ok');
+});
+test('WSL 列挙失敗(null)＋ネイティブ書き込み失敗 → dead:physical_operation', async t => {
+  const h = fixture(t);
+  const r = await laneDoctorProbe({home:h,now,platform:'win32',providers:['codex'],listWsl:()=>null,nativeWriteProbe:async()=>({code:1,text:''}),probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})});
+  assert.equal(r.lanes.codex.alive,false);
+  assert.equal(r.lanes.codex.reason,'dead:physical_operation');
 });
 test('glm cooldown and explicitly tagged legacy history cannot block healthy Codex', t => {
   const h = fixture(t), until = now + 3600000;

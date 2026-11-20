@@ -21,8 +21,16 @@ export function readDisabledEntries(home = process.env.ORGIAST_HOME || os.homedi
     return out;
   } catch { return {}; }
 }
-export function disabledLanes(home = process.env.ORGIAST_HOME || os.homedir()) {
-  const set = new Set(Object.keys(readDisabledEntries(home)));
+export function disabledLanes(home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now()) {
+  const set = new Set();
+  for (const [name, entry] of Object.entries(readDisabledEntries(home))) {
+    const until = Number(entry?.until);
+    // until が過去の一時停止は無効として扱わない。restoreExpiredDisabledLanes の
+    // probe を待たずに期限切れを外す（cursor-agent は lane-doctor の PROBE_OF に
+    // 無く、期限切れのまま永遠に候補から外れる実害があった。2026-11-20 000/011）。
+    if (Number.isFinite(until) && until <= now) continue;
+    set.add(name);
+  }
   if (set.has('gemini')) set.add('gemini-cli');
   if (set.has('openrouter')) { set.add('openrouter-free'); set.add('openrouter-code'); }
   return set;
@@ -55,6 +63,7 @@ export function disableLanesTemporarily(home, hits, now = Date.now()) {
 const PROBE_OF = {
   gemini: 'gemini', 'gemini-cli': 'gemini', openrouter: 'openrouter', 'openrouter-free': 'openrouter', 'openrouter-code': 'openrouter',
   qwen: 'deepseek', deepseek: 'deepseek', 'cheap-code:deepseek': 'deepseek', glm: 'glm', 'cheap-code:glm': 'glm', groq: 'groq',
+  'cursor-agent': 'cursor-agent',
 };
 // until を過ぎた一時停止だけを見る。生存 probe なら削除して復帰、失敗なら until を +6h に伸ばす。until 無しは触らない。
 export function restoreExpiredDisabledLanes(health, home, now = Date.now()) {

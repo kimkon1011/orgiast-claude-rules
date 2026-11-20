@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { RULES, LIMITS, HEADER, TAB, parseArgs, ruleVerdict, merchantToken, amountVariants, gmailQuery, parseYahoo, weeklySkip, collectTxns, searchEvidence, runCheck, sheetRows, dmText, atomicJson, web23Query, checkWeb23Delivery, WEB23_ADDRESS, WEB23_LOOKBACK_DAYS } from './expense-leak-check.mjs';
+import { RULES, LIMITS, HEADER, TAB, parseArgs, ruleVerdict, merchantToken, amountVariants, gmailQuery, parseYahoo, weeklySkip, collectTxns, searchEvidence, runCheck, reportResult, sheetRows, dmText, atomicJson, web23Query, checkWeb23Delivery, WEB23_ADDRESS, WEB23_LOOKBACK_DAYS } from './expense-leak-check.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 
 const opts = (args = []) => parseArgs(args, { EXPENSE_LEAK_TODAY: '2026-10-09', EXPENSE_LEAK_HOME: '/tmp/expense-test' });
@@ -42,6 +42,7 @@ test('CLI uses JST window, validates dates, and bounds verification to five', ()
   assert.throws(() => opts(['--limit', '0']));
   assert.throws(() => opts(['--verification']));
   assert.equal(opts(['--verification', '--limit', '5']).verification, true);
+  assert.equal(opts(['--verbose']).verbose, true);
 });
 test('private and expense expectations derive from exported RULES', () => {
   for (const rule of RULES.alwaysPrivate) for (const term of rule.terms) for (const amount of rule.amounts || [1599]) {
@@ -214,7 +215,7 @@ test('Sheets helper resets a dragged freeze line back to one header row', async 
 });
 test('real CLI weekly skip exits 0 without credentials and leaves state unchanged', async () => {
   const home = await mkdtemp(join(tmpdir(), 'expense-weekly-'));
-  const env = { ...process.env, EXPENSE_LEAK_HOME: home, EXPENSE_LEAK_TODAY: '2026-10-13' };
+  const env = { ...process.env, EXPENSE_LEAK_HOME: home, EXPENSE_LEAK_TODAY: '2026-10-13', PURCHASING_APP_DATABASE_URL: 'postgres://test@localhost/test' };
   const o = parseArgs(['--weekly'], env);
   const state = { lastRunAt: '2026-10-13T03:00:00+09:00', txns: {} };
   await atomicJson(o.statePath, state);
@@ -256,6 +257,23 @@ test('web23 zero-count warning is fail-open, never pins an outage as zero', asyn
   assert.equal((await checkWeb23Delivery(call('not json'))).status, 'unverified');
   assert.equal((await checkWeb23Delivery({ ...call('{"messages":[]}'), search: async () => ({ code: 1, stdout: '' }) })).status, 'unverified');
   assert.deepEqual(await checkWeb23Delivery({ ...call('{"messages":[]}'), timeLeft: () => false }), { status: 'unverified', reason: '時間上限' });
+});
+test('Discord DM failure with zero candidates does not set failed=true (exit 0)', async () => {
+  const h = harness([]);
+  h.injected.notify = async () => { throw new Error('Connector unavailable'); };
+  const r = await runCheck(opts(), h.injected);
+  assert.equal(r.failed, undefined);
+  assert.equal(r.failReason, '');
+  assert.equal(reportResult(r, (line) => assert.match(line, /failed=false failReason=$/)), 0);
+  assert.equal(h.state.lastRunAt, `${opts().today}T03:00:00+09:00`);
+});
+test('real Sheets failure with candidates sets failed=true and failReason', async () => {
+  const h = harness([txn(1)]);
+  h.injected.sheets.append = async () => { throw new Error('Sheets POST HTTP 503'); };
+  const r = await runCheck(opts(), h.injected);
+  assert.equal(r.failed, true);
+  assert.equal(r.failReason, 'sheets-write');
+  assert.equal(reportResult(r, (line) => assert.match(line, /failed=true failReason=sheets-write$/)), 1);
 });
 test('DM reports web23 zero and unverified separately', () => {
   const base = { today: '2026-10-19', candidateTotal: 0, results: [], issues: [], yahooUnavailable: false };

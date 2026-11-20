@@ -55,8 +55,16 @@ function cachedFile(home, file, kind, st, parse) {
   state.misses++; state.dirty = true;
   return result;
 }
+function isUncPath(candidate) {
+  return candidate.startsWith('\\\\') || candidate.startsWith('//');
+}
 function saveCache(home) {
-  const state = cacheState(home); if (!state.dirty) return;
+  const state = cacheState(home);
+  // UNC パス（\\\\wsl.localhost\\ など）のキーだけを I/O なしで削除（ed81c161 の全消去を限定）
+  // ローカルの .codex/sessions/ パスは保持し、既存の retention / existsSync 判定に委ねる
+  for (const f of Object.keys(state.files)) { if (isUncPath(f)) { delete state.files[f]; state.dirty = true; } }
+  for (const d of Object.keys(state.dirs)) { if (isUncPath(d)) { delete state.dirs[d]; state.dirty = true; } }
+  if (!state.dirty) return;
   const retentionCutoff = Date.now() - 30 * DAY;
   for (const file of Object.keys(state.files)) { try { if (state.files[file]?.mtimeMs < retentionCutoff || !fs.existsSync(file)) delete state.files[file]; } catch { delete state.files[file]; } }
   try { fs.mkdirSync(path.dirname(state.file), { recursive: true }); fs.writeFileSync(state.file, JSON.stringify({ version: CACHE_VERSION, files: state.files, dirs: state.dirs })); state.dirty = false; } catch {}
@@ -78,12 +86,8 @@ function cachedWalk(home, root) {
   visit(root); state.walks.set(root, out); return out;
 }
 function bulkStat(files) {
-  if (files.length < 64) return files.map((file) => { try { const st = fs.statSync(file); return { size: st.size, mtimeMs: st.mtimeMs }; } catch { return null; } });
-  const program = "import fs from 'node:fs/promises';let s='';for await(const c of process.stdin)s+=c;const f=JSON.parse(s);const r=await Promise.all(f.map(async p=>{try{const x=await fs.stat(p);return [x.size,x.mtimeMs]}catch{return null}}));process.stdout.write(JSON.stringify(r));";
-  try {
-    const run = spawnSync(process.execPath, ['--input-type=module', '-e', program], { windowsHide: true, input: JSON.stringify(files), encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
-    if (run.status === 0) return JSON.parse(run.stdout).map((x) => x && ({ size: x[0], mtimeMs: x[1] }));
-  } catch {}
+  // Windows では大量 stat 用の Node 子プロセスが終了待ちで固まることがある。
+  // projects 全件でも同期 stat は十分速く、子プロセス起動やフォールバックも不要。
   return files.map((file) => { try { const st = fs.statSync(file); return { size: st.size, mtimeMs: st.mtimeMs }; } catch { return null; } });
 }
 function parseClaudeFile(file) {

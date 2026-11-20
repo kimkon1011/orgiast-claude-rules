@@ -2,10 +2,10 @@ param([string]$ToolsDir=$PSScriptRoot)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
 . (Join-Path $PSScriptRoot 'secretary-legacy-task.ps1')
-$ToolsDir = Resolve-RegisterToolsDir -Fallback $ToolsDir -RequiredLeaves @('secretary-uptime.mjs','secretary-restart.ps1','kim-inbox.mjs','is-entry.mjs','secretary-legacy-task.ps1')
+$ToolsDir = Resolve-RegisterToolsDir -Fallback $ToolsDir -RequiredLeaves @('secretary-uptime.mjs','secretary-restart.ps1','kim-inbox.mjs','is-entry.mjs','secretary-legacy-task.ps1','secretary-server-process.ps1')
 $watchdog = Join-Path $ToolsDir 'secretary-uptime.mjs'
 $hidden = Join-Path $env:USERPROFILE '.claude\tools\run-hidden.vbs'
-foreach ($required in @($watchdog,$hidden,(Join-Path $ToolsDir 'secretary-restart.ps1'),(Join-Path $ToolsDir 'kim-inbox.mjs'))) {
+foreach ($required in @($watchdog,$hidden,(Join-Path $ToolsDir 'secretary-restart.ps1'),(Join-Path $ToolsDir 'secretary-server-process.ps1'),(Join-Path $ToolsDir 'kim-inbox.mjs'))) {
   if (!(Test-Path -LiteralPath $required)) { throw "Missing dependency: $required" }
 }
 # A healthy dev process is not proof that next start can recover after a crash.

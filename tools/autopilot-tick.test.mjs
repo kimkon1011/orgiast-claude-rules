@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
-import { runAutopilot, sendNotice, autopilotPaths, parseControl, capReason, dateKey, acquireLock } from './autopilot-tick.mjs';
+import { runAutopilot, sendNotice, autopilotPaths, parseControl, capReason, dateKey, acquireLock, summarize } from './autopilot-tick.mjs';
 import { readDeferred } from './lib/owner-dm-policy.mjs';
 import { toastSummary } from './autopilot-local-notice.mjs';
 
@@ -201,6 +201,8 @@ test('hours cap uses the range of today log timestamps and fires immediately on 
   const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: 'test', 'max-hours-per-day': 1 });
   await f.call('post', { summary: 'first', progress: 10 });
+  // Write a run.log entry to provide runMs for the daily_hours_cap calculation
+  fs.appendFileSync(path.join(f.paths.dir, 'run.log'), JSON.stringify({ ts: NOW.toISOString(), runMs: 3600000 }) + '\n', 'utf8');
   const result = await f.call('post', { summary: 'second', progress: 20 }, { now: new Date(NOW.getTime() + 3_600_000) });
   assert.equal(result.status, 'paused');
   assert.equal(result.watchdog.reason, 'daily_hours_cap');
@@ -521,7 +523,10 @@ test('replenishment preserves daily, time and lifetime caps', async (t) => {
   for (const [flag, limit, reason] of [['max-iter-per-day', 1, 'daily_iter_cap'], ['max-total-iter', 1, 'total_cap'], ['max-hours-per-day', 1, 'daily_hours_cap']]) {
     const f = discord(t, { askImpl: async () => 'Yes' });
     await f.call('start', { objective: 'first', [flag]: limit });
-    if (flag === 'max-hours-per-day') await f.call('post', { summary: 'start work', progress: 10 });
+    if (flag === 'max-hours-per-day') {
+      await f.call('post', { summary: 'start work', progress: 10 });
+      fs.appendFileSync(path.join(f.paths.dir, 'run.log'), JSON.stringify({ ts: NOW.toISOString(), runMs: 3600000 }) + '\n', 'utf8');
+    }
     const extra = { now: new Date(NOW.getTime() + 3_600_000) };
     await f.call('post', { summary: 'verified', progress: 100, evidence: '完了を確認' }, extra);
     candidates(f, '## 推奨アクション\n1. second');
@@ -1056,4 +1061,90 @@ test('post with stale or missing artifact is noop, records staleArtifacts, and e
   assert.equal(explicitNoop.noop, true);
   assert.deepEqual(explicitNoop.artifacts, [path.resolve(freshPath)]);
   assert.deepEqual(explicitNoop.staleArtifacts, []);
+});
+
+test('summarize: runMs hours (1.3h) < maxHoursPerDay when span is 6h', () => {
+  const day = '2026-09-21';
+  const now = new Date('2026-09-21T00:10:00Z');
+  const log = Array.from({ length: 11 }, (_, i) => ({ ts: new Date(now.getTime() + i * 30 * 60_000).toISOString(), summary: `tick ${i}`, progress: i * 10 }));
+  const runLog = Array.from({ length: 11 }, () => ({ ts: '2026-09-21T00:10:00Z', runMs: Math.round(1.3 * 3_600_000 / 11) }));
+  const today = summarize(log, day, runLog);
+  assert.ok(today.hours < 6, `expected hours < 6, got ${today.hours}`);
+  assert.ok(today.hours > 1, `expected hours > 1, got ${today.hours}`);
+  const state = { totalIterations: 0, iterationsToday: 0, consecutiveNoop: 0 };
+  const objective = { maxIterPerDay: 20, maxHoursPerDay: 6, maxNoop: 3, maxTotalIter: 200 };
+  assert.equal(capReason(state, objective, today), null);
+});
+
+test('summarize: runMs 6h or more triggers daily_hours_cap', () => {
+  const day = '2026-09-21';
+  const log = [{ ts: '2026-09-21T00:00:00Z', summary: 'tick', progress: 50 }];
+  const runLog = [{ ts: '2026-09-21T00:00:00Z', runMs: 6 * 3_600_000 }];
+  const today = summarize(log, day, runLog);
+  assert.ok(today.hours >= 6, `expected hours >= 6, got ${today.hours}`);
+  const state = { totalIterations: 0, iterationsToday: 0, consecutiveNoop: 0 };
+  const objective = { maxIterPerDay: 20, maxHoursPerDay: 6, maxNoop: 3, maxTotalIter: 200 };
+  assert.equal(capReason(state, objective, today), 'daily_hours_cap');
+});
+
+test('summarize: without runMs, uses rows * 0.25h (24 rows=6h cap, 11 rows=null)', () => {
+  const day = '2026-09-21';
+  // 24 rows at 30-min intervals (00:00Z-11:30Z, all within JST day 09:00-20:30)
+  const log24 = Array.from({ length: 24 }, (_, i) => ({ ts: new Date(Date.parse('2026-09-21T00:00:00Z') + i * 30 * 60_000).toISOString(), summary: `tick ${i}`, progress: i * 4 }));
+  const today24 = summarize(log24, day, []);
+  assert.equal(today24.hours, 6);
+  const state = { totalIterations: 0, iterationsToday: 0, consecutiveNoop: 0 };
+  const objective = { maxIterPerDay: 20, maxHoursPerDay: 6, maxNoop: 3, maxTotalIter: 200 };
+  assert.equal(capReason(state, objective, today24), 'daily_hours_cap');
+  // 11 rows without runMs → 11 * 0.25 = 2.75h → null
+  const log11 = Array.from({ length: 11 }, (_, i) => ({ ts: `2026-09-21T${String(i).padStart(2, '0')}:00:00Z`, summary: `tick ${i}`, progress: i * 10 }));
+  const today11 = summarize(log11, day, []);
+  assert.equal(today11.hours, 2.75);
+  assert.equal(capReason(state, objective, today11), null);
+  // Different day also works
+  const day2 = '2026-09-22';
+  assert.equal(summarize(log11, day2, []).hours, 0);
+});
+
+test('summarize: runMs entries from a different JST day are not counted', () => {
+  const day = '2026-09-21';
+  const log = [{ ts: '2026-09-21T10:00:00Z', summary: 'tick', progress: 50 }];
+  const runLog = [
+    { ts: '2026-09-21T10:00:00Z', runMs: 600000 },
+    { ts: '2026-09-22T01:00:00Z', runMs: 600000 },
+  ];
+  const today = summarize(log, day, runLog);
+  assert.equal(today.hours, 600000 / 3_600_000);
+});
+
+test('summarize: corrupted run.log lines do not cause exceptions', async (t) => {
+  const f = fixture(t);
+  await f.call('start', { objective: 'test', 'max-hours-per-day': 6 });
+  await f.call('post', { summary: 'first', progress: 5 });
+  const runLogPath = path.join(f.paths.dir, 'run.log');
+  fs.appendFileSync(runLogPath, 'not json\n', 'utf8');
+  fs.appendFileSync(runLogPath, JSON.stringify({ ts: '2026-09-21T00:10:00Z', runMs: 600000 }) + '\n', 'utf8');
+  fs.appendFileSync(runLogPath, '{broken}\n', 'utf8');
+  // Should not throw — pre returns normally
+  const pre = await f.call('pre');
+  assert.equal(pre.verdict, 'run');
+});
+
+test('daily_hours_cap paused state resumes with pre when runMs hours < maxHoursPerDay (same day)', async (t) => {
+  const f = fixture(t);
+  await f.call('start', { objective: 'test', 'max-hours-per-day': 6 });
+  await f.call('post', { summary: 'first', progress: 5 });
+  // Write run.log with runMs totaling well under 6h
+  const runLogPath = path.join(f.paths.dir, 'run.log');
+  fs.appendFileSync(runLogPath, JSON.stringify({ ts: '2026-09-21T00:10:00Z', runMs: 600000 }) + '\n', 'utf8');
+  fs.appendFileSync(runLogPath, JSON.stringify({ ts: '2026-09-21T00:40:00Z', runMs: 500000 }) + '\n', 'utf8');
+  // Pause with daily_hours_cap (simulating being paused by old code)
+  await f.call('pause', { reason: 'daily_hours_cap' });
+  assert.equal((await f.call('status')).state.pausedReason, 'daily_hours_cap');
+  // pre recalculates with runMs and finds hours < 6, so resumes
+  const pre = await f.call('pre');
+  assert.equal(pre.verdict, 'run');
+  const status = await f.call('status');
+  assert.equal(status.state.status, 'running');
+  assert.equal(status.state.pausedReason, null);
 });

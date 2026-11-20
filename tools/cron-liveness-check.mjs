@@ -109,13 +109,13 @@ function fetchDunningLog(entry) {
     const result = spawnSync('gh', [
       'run', 'list', '--repo', entry.repo, '--workflow', entry.workflow,
       '--event=schedule', '--limit', '1', '--json', 'databaseId',
-    ], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    ], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20000 });
     if (result.error || result.status !== 0) return undefined;
     const runs = JSON.parse(result.stdout);
     const id = Array.isArray(runs) ? runs[0]?.databaseId : undefined;
     if (!Number.isSafeInteger(id) || id <= 0) return undefined;
     const log = spawnSync('gh', ['run', 'view', String(id), '--repo', entry.repo, '--log'],
-      { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20000 });
     if (log.error || log.status !== 0) return undefined;
     return log.stdout;
   } catch {
@@ -127,7 +127,7 @@ function fetchLastSuccess(entry) {
   const result = spawnSync('gh', [
     'run', 'list', '--repo', entry.repo, '--workflow', entry.workflow,
     '--event=schedule', '--status', 'success', '--limit', '1', '--json', 'updatedAt',
-  ], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  ], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20000 });
   if (result.error || result.status !== 0) return undefined;
   try {
     const runs = JSON.parse(result.stdout);

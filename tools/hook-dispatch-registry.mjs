@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
@@ -21,7 +22,7 @@ export function describeHook(hook, matcher = '*', repo = defaultRepo) {
   if (node) { try { source = fs.readFileSync(script, 'utf8'); contract = readContract(script); } catch {} }
   const name = node ? path.basename(script.replace(/\\/g, '/')) : String(hook.command);
   // Unknown custom commands are conservative: never shed a potential deny gate.
-  const critical = !!contract || /permissionDecision\s*:\s*['"]deny|decision\s*:\s*['"]block|exitCode\s*=\s*2\b/.test(source) || ['kim-editor-posttool.mjs', 'kim-inbox.mjs', 'api-billing-guard.mjs', 'exec-tree-edit-guard.mjs', 'stop-gate-runner.mjs'].includes(name)
+  const critical = !!contract || /permissionDecision\s*:\s*['"]deny|decision\s*:\s*['"]block|exitCode\s*=\s*2\b/.test(source) || ['kim-editor-posttool.mjs', 'kim-inbox.mjs', 'lost-prompt-context.mjs', 'api-billing-guard.mjs', 'exec-tree-edit-guard.mjs', 'stop-gate-runner.mjs'].includes(name)
     || !node || !path.resolve(script).startsWith(path.resolve(repo) + path.sep);
   return { ...hook, matcher, name, node, script: node ? script : undefined,
     args: node ? words.slice(wrapped ? 3 : 2) : [], policy: wrapped, critical,
@@ -37,9 +38,17 @@ export function repositoryHooks(repo = defaultRepo, home) {
   }
   return hooks;
 }
-export function collapseHooks(hooks, repo = defaultRepo) {
-  const settingsHooks = {}, events = {};
+export function collapseHooks(hooks, repo = defaultRepo, home = process.env.ORGIAST_HOME || os.homedir()) {
+  const canonical = JSON.parse(fs.readFileSync(path.join(repo, 'tools/hook-dispatch-manifest.json'), 'utf8'));
+  const settingsHooks = {}, events = {}, legacyDuplicatesRemoved = {};
+  const basename = file => path.posix.basename(file.replace(/\\/g, '/')).toLowerCase();
+  const pathKey = file => process.platform === 'win32' ? file.toLowerCase() : file;
+  const legacyDir = pathKey(path.resolve(home, '.claude', 'hooks'));
   for (const event of EVENTS) {
+    const replacements = new Set((canonical.events[event] || []).map(h => {
+      const [, first = '', second = ''] = tokens(h.command);
+      return basename(basename(first) === 'gate-hook-runner.mjs' ? second : first);
+    }).filter(name => name.endsWith('.mjs')).map(name => name.slice(0, -4)));
     const asyncGroups = [];
     events[event] = [];
     for (const group of hooks[event] || []) {
@@ -49,7 +58,17 @@ export function collapseHooks(hooks, repo = defaultRepo) {
         if (hook.async === true) asynchronous.push(hook);
         else {
           if (hook.type && hook.type !== 'command') throw new Error(`Cannot dispatch synchronous ${hook.type} hook in ${event}; existing settings must be preserved`);
-          events[event].push(describeHook(hook, group.matcher || '*', repo));
+          const described = describeHook(hook, group.matcher || '*', repo);
+          const words = described.node ? [] : tokens(hook.command);
+          const fileIndex = words.findIndex(word => /^-File$/i.test(word));
+          const legacyScript = fileIndex > 0 && /(?:^|[\\/])(?:pwsh|powershell)(?:\.exe)?$/i.test(words[0])
+            ? words[fileIndex + 1] : undefined;
+          // Only migrate old installer copies in this registration's home.
+          if (legacyScript && /\.ps1$/i.test(legacyScript) && path.isAbsolute(legacyScript) &&
+            pathKey(path.dirname(path.resolve(legacyScript))) === legacyDir &&
+            replacements.has(basename(legacyScript).slice(0, -4))) {
+            legacyDuplicatesRemoved[event] = (legacyDuplicatesRemoved[event] || 0) + 1;
+          } else events[event].push(described);
         }
       }
       if (asynchronous.length) asyncGroups.push({ ...group, hooks: asynchronous });
@@ -60,7 +79,7 @@ export function collapseHooks(hooks, repo = defaultRepo) {
     settingsHooks[event] = [{ matcher: '*', hooks: [{ type: 'command', command: `node "${path.join(repo, 'tools/hook-dispatch.mjs')}" ${event}`, timeout }] }, ...asyncGroups];
   }
   for (const [event, groups] of Object.entries(hooks)) if (!EVENTS.includes(event)) settingsHooks[event] = groups;
-  return { hooks: settingsHooks, manifest: { version: 1, repo, events } };
+  return { hooks: settingsHooks, manifest: { version: 1, repo, events, legacyDuplicatesRemoved } };
 }
 function sameRepo(a, b) {
   try {
@@ -73,7 +92,7 @@ export function readDispatchManifest(home, repo = defaultRepo) {
     const saved = JSON.parse(fs.readFileSync(runtimeManifestPath(home), 'utf8'));
     if (saved.version === 1 && sameRepo(saved.repo, repo) && saved.events) return saved;
   } catch {}
-  return collapseHooks(repositoryHooks(repo, home), repo).manifest;
+  return collapseHooks(repositoryHooks(repo, home), repo, home).manifest;
 }
 export function effectiveHooks(settings, manifest) {
   const result = structuredClone(settings.hooks || {});

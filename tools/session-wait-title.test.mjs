@@ -649,3 +649,12 @@ test('日付が無く既存 custom-title に【11/12/12:00まで】があるな�
   const result = desiredTitle(text, rawWithCustom, '', false, 's1');
   assert.equal(result, null);
 });
+
+test('納期付き待機印を付け替え、完了時に閉じて可へ変更する', () => {
+  const raw = JSON.stringify({ type: 'custom-title', customTitle: '018｜【11/20/09:00まで・納期11/21】目的' });
+  const footer = '次に kim がすること: なし\nこの後の自動進行: 自動チェックを実行します\nこのセッション: ';
+  assert.equal(desiredTitle(footer + 'まだ閉じない（作業中・2026-11-20 10:00 まで待つ／納期 2026-11-22・残り作業 1日）', raw, '018'),
+    '018｜【11/20/10:00まで・納期11/22】目的');
+  assert.equal(desiredTitle(footer + '/session-close は終わっているので、このセッションを閉じてよい', raw, '018'),
+    '018｜【閉じて可】目的');
+});

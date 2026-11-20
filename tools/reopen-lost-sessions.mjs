@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Remote Control session metadata only; no LLM/search requests.
+import { checkSessionConcurrency, SESSION_CONCURRENCY_CAP } from './lib/session-concurrency.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { hostExitArchive } from './lib/host-exit-archive.mjs';
 import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
 import { isEntry } from './is-entry.mjs';
-import { countWindowsClaudeProcesses } from './lib/windows-process.mjs';
+import { CLAUDE_PROCESS_SCRIPT, countWindowsClaudeProcesses, listWindowsClaudeProcesses } from './lib/windows-process.mjs';
 import { addItem } from './kim-inbox.mjs';
 
 const DEFAULT_MAX_REOPEN = 3;
@@ -301,8 +302,11 @@ export function hasConversation(rows, bytes = 0) {
 // `.git` ディレクトリ（メイン checkout）に到達したらそこで打ち切って false。
 function isWorktreeFolder(cwd, fsImpl) {
   if (!cwd) return false;
-  const norm = normalizePath(cwd);
+  // A Windows absolute path on POSIX has no local ancestors to inspect.
+  const foreignAbsolute = !path.isAbsolute(cwd) && path.win32.isAbsolute(cwd);
+  const norm = foreignAbsolute ? path.win32.normalize(cwd).toLowerCase() : normalizePath(cwd);
   if (norm.includes('\\.claude\\worktrees\\')) return true;
+  if (foreignAbsolute) return false;
   let dir = path.resolve(cwd);
   while (true) {
     const gitPath = path.join(dir, '.git');
@@ -762,6 +766,12 @@ export async function connectedRcSessionIds({ fetchImpl = fetch, headers, now = 
   return connected;
 }
 
+function processOutput(spawn, command, args, options) {
+  const result = spawn(command, args, { ...options, windowsHide: true });
+  if (result.error || result.status !== 0) throw result.error || new Error(`exit code ${result.status}`);
+  return result.stdout;
+}
+
 export async function getLoadGuardStatus({
   env = process.env,
   spawn = spawnSync,
@@ -781,11 +791,7 @@ export async function getLoadGuardStatus({
 
   if (checkClaude) {
     try {
-      claudeCount = countWindowsClaudeProcesses((command, args, options) => {
-        const result = spawn(command, args, { windowsHide: true, ...options });
-        if (result.error || result.status !== 0) throw result.error || new Error(`exit code ${result.status}`);
-        return result.stdout;
-      }, { sessionsDir, isWaitingSession, now });
+      claudeCount = countWindowsClaudeProcesses((...args) => processOutput(spawn, ...args), { sessionsDir, isWaitingSession, now });
     } catch (e) {
       loadError = e.message;
     }
@@ -893,7 +899,7 @@ export function resolveClaudeCli({ env = process.env, exists = fs.existsSync, re
 export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_MAX_REOPEN, gapSec = 10,
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs, stateBased = false,
-  checkCpu = true, checkClaude = false, cpusImpl, vscodeStartedAt, openDb, checkIdle = true, idleImpl } = {}) {
+  checkCpu = true, checkClaude = false, cpusImpl, vscodeStartedAt, openDb, checkIdle = true, idleImpl, checkConcurrency = checkSessionConcurrency, concurrencyPlatform = process.platform } = {}) {
   const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], retriedViaExtension: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closable: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0, unverifiedStreak: 0, processRunning: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
   const progress = (stage, detail) => { if (!dryRun) writeProgress(base, stage, detail); };
   const initialHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
@@ -918,7 +924,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
         throw Error(`Missing accessToken in ${credFile}: topKeys=${topKeys.join(',')} oauthKeys=${oauthKeys.join(',')}`);
       }
     } catch (e) {
-      if (e.code === 'ENOENT') throw Error(`RC credentials file not found: ${credFile}`);
+      if (e.code === 'ENOENT') { result.rcAvailable = false; return result; }
       throw e;
     }
     try {
@@ -1097,7 +1103,17 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
       if (idleSec !== null && idleSec < REOPEN_MIN_IDLE_SEC) {
         result.deferredActive = idleSec;
       } else {
-      const loadStatus = await getLoadGuardStatus({ env, spawn, cpusImpl, wait, checkCpu, checkClaude, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now });
+      // Both guards use the same CIM snapshot. Keep the load guard's tasklist fallback.
+      let snapshot;
+      const snapshotSpawn = (command, args, options) => {
+        if (args.at(-1) !== CLAUDE_PROCESS_SCRIPT) return spawn(command, args, { ...options, windowsHide: true });
+        if (!snapshot) {
+          try { snapshot = spawn(command, args, { ...options, windowsHide: true }); }
+          catch (error) { snapshot = { error }; }
+        }
+        return snapshot;
+      };
+      const loadStatus = await getLoadGuardStatus({ env, spawn: snapshotSpawn, cpusImpl, wait, checkCpu, checkClaude, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now });
       if (loadStatus.error) {
         result.loadGuard = { claudeCount: loadStatus.claudeCount, cpuPct: loadStatus.cpuPct, reason: loadStatus.reason, error: loadStatus.error };
       }
@@ -1132,6 +1148,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
 
       if (reopenCandidates.length) {
         const code = codeCli || resolveCodeCli(env, fsImpl.existsSync);
+        let capacity;
         let windowOpened = false; // 1回の実行で新規ウィンドウを作るのは最大1回まで
         for (const candidate of reopenCandidates) {
           progress('open', `id=${candidate.id}`);
@@ -1165,6 +1182,15 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
               launch = 'uri-only';
               targetPath = null;
               openedWith = null;
+            }
+            capacity ??= checkConcurrency({
+              env, platform: concurrencyPlatform,
+              list: () => listWindowsClaudeProcesses((...args) => processOutput(snapshotSpawn, ...args)),
+            });
+            const count = capacity.count === null ? null : capacity.count + result.reopened.length;
+            if (!capacity.ok || (count !== null && count >= capacity.limit)) {
+              result.sessionConcurrencyCap = { ...capacity, ok: false, reason: SESSION_CONCURRENCY_CAP, count };
+              break;
             }
             if (launch === 'opened-window') {
               // ウィンドウを開く
@@ -1309,10 +1335,10 @@ export async function watchReopen(opts = {}, maxParam) {
   const until = new Date(nowTime - 60000).toISOString();
   const result = await reopenLost({
     since, until, max, dryRun, base, fetchImpl, spawn, wait, now: nowFn, claudeCli, codeCli, env, fsImpl, windowReady, cpusImpl,
-    checkIdle, idleImpl,
+    checkIdle, idleImpl, checkConcurrency: opts?.checkConcurrency, concurrencyPlatform: opts?.concurrencyPlatform,
     stateBased: true, checkClaude: true, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now: nowFn
   });
-  if (!result.error && !result.apiError && !result.deferredCpu && !result.deferredActive && !result.skipped?.loadGuard && !dryRun) {
+  if (!result.error && !result.apiError && !result.deferredCpu && !result.deferredActive && !result.skipped?.loadGuard && !result.sessionConcurrencyCap && !dryRun) {
     fs.writeFileSync(stateFile, JSON.stringify({ watermark: until }) + '\n');
   }
   return result;

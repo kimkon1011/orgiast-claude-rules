@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { realLaneStats, applyRealLaneHealth, billingFailure, billingWithQuotaHint, probeViaChain } from './lib/lane-real-health.mjs';
+import { realLaneStats, applyRealLaneHealth, billingFailure, billingWithQuotaHint, probeViaChain, stripCodexPromptEcho } from './lib/lane-real-health.mjs';
 import { laneDoctorQuick, laneDoctorProbe } from './lane-doctor.mjs';
 const now = Date.parse('2026-10-29T12:00:00Z');
 function fixture(t, rows) {
@@ -113,7 +113,7 @@ test('billing quick diagnosis notification is once per lane per UTC day', async 
   await notifyLaneStops(health, { home, now, notify });
   await notifyLaneStops(health, { home, now: now + 1000, notify });
   assert.equal(sent.length, 1);
-  assert.match(sent[0], /の deepseek が残高不足\(402\)。入金（オートチャージON）が既定/);
+  assert.match(sent[0], /の deepseek が残高不足\(402\)。まず無料枠・既存契約内の他AIレーンを実測し、使える経路へ切り替えます。追加費用案は代替不可の証拠と比較表がある場合だけ最後に提示します$/);
   await notifyLaneStops(health, { home, now: now + 12 * 3600_000, notify });
   assert.equal(sent.length, 2);
 });
@@ -456,6 +456,33 @@ test('cheap-first 行に OpenRouter タグがあっても viaChain のまま', t
 test('通常の本文に他レーン名が出たら従来どおり viaChain', t => {
   const text = 'Gemini HTTP 402 insufficient balance';
   assert.equal(probeViaChain(text, 'codex'), true);
+});
+
+test('Codex CLI のプロンプト再掲内の他レーン名を viaChain 判定に使わない', t => {
+  const withoutUser = '--------\nprovider: openai\nGemini response';
+  assert.equal(stripCodexPromptEcho(withoutUser), withoutUser);
+  const prefix = [
+    '[codex-do] executor=codex',
+    'OpenAI Codex v0.162.1',
+    '--------',
+    'provider: openai',
+    '--------',
+    'user',
+    'Gemini と DeepSeek は入力に書かれただけ',
+  ];
+  const direct = [...prefix, 'codex', 'WRITE_OK を確認しました。'].join('\n');
+  assert.equal(probeViaChain(direct, 'codex'), false);
+  assert.equal(stripCodexPromptEcho(direct).includes('Gemini'), false);
+
+  const fallback = [...prefix, 'codex', 'fallback backend=deepseek'].join('\n');
+  assert.equal(probeViaChain(fallback, 'codex'), true);
+
+  const otherLaneResponse = [...prefix, 'exec', 'deepseek answered'].join('\n');
+  assert.equal(probeViaChain(otherLaneResponse, 'codex'), true);
+
+  const promptOnly = prefix.join('\n');
+  assert.equal(probeViaChain(promptOnly, 'codex'), false);
+  assert.equal(stripCodexPromptEcho(promptOnly), prefix.slice(0, 5).join('\n'));
 });
 
 test('[routing] の demote 診断行（provider 名 fallback）を連鎖と誤認しない 2026-11-17 実測', t => {

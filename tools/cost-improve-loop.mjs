@@ -517,7 +517,7 @@ export function buildCombinedCodexSpec(actions) {
 function humanTodoMessage(violation, now, retryCount = 0, retryMode = 'directive') {
   const pc = violation.pc;
   if (violation.kind === 'balance_low') {
-    if (violation.provider === 'genspark') return `【このPC】Genspark の前払いクレジットが ${Math.round(Number(violation.actualValue))} です（閾値 ${CREDIT_LOW_THRESHOLD}）。Genspark にチャージするか、画像生成を止めるかの判断が必要です。`;
+    if (violation.provider === 'genspark') return `【このPC】Genspark の前払いクレジットが ${Math.round(Number(violation.actualValue))} です（閾値 ${CREDIT_LOW_THRESHOLD}）。まず無料枠・既存契約内の画像生成経路を実測します。追加費用案は代替不可の証拠と比較表がある場合だけ最後に提示します。`;
     const switched = ['deepseek', 'kimi'].includes(violation.provider) ? '切替済み' : '未切替';
     return `【このPC】${violation.provider} の残高が $${Number(violation.actualValue).toFixed(2)} です。自動チャージが無いプロバイダです。OpenRouter 経由へ${switched}。`;
   }
@@ -725,11 +725,11 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
     if (violation.provider) action.provider = violation.provider;
     if (mode === 'human' && hasThreeConsecutiveFailures) action.humanSince = now.toISOString();
     if (kind === 'provider_unhealthy') {
-      // DM 本文の1行: 無料枠の上限が原因なら有料枠で即解消できることを示す。
-      action.reportNote = '有料枠で解消可(例: Groq Dev tier)';
+      // 既存経路を実測する前に支出を提案しない。
+      action.reportNote = 'まず無料枠・既存契約内の他AIレーンを実測。追加費用案は代替不可の証拠と比較表がある場合だけ最後に提示';
     }
     if (kind === 'spend_anomaly') action.durationHours = 24;
-    if (kind === 'balance_low') action.reportNote = action.provider === 'genspark' ? '前払い枠が残り少。チャージまたは画像生成レーンの停止を判断' : `自動チャージが無いプロバイダです。OpenRouter 経由へ切替${['deepseek', 'kimi'].includes(action.provider) ? '済み' : '未'}`;
+    if (kind === 'balance_low') action.reportNote = action.provider === 'genspark' ? '前払い枠が残り少。まず無料枠・既存契約内の画像生成経路を実測。追加費用案は代替不可の場合だけ比較表の最後に提示' : `自動チャージが無いプロバイダです。OpenRouter 経由へ切替${['deepseek', 'kimi'].includes(action.provider) ? '済み' : '未'}`;
 
     if (mode === 'auto-local') {
       if (playbook.command) action.command = playbook.command;
@@ -1757,14 +1757,30 @@ export function refreshCostDirective({ home, spawn = defaultSpawnSync } = {}) {
   return `cost-directive refreshed: ${path.join(home, '.claude', 'cost-directive.md')} (exit 0)`;
 }
 
-if (isEntry(import.meta.url)) {
-  Promise.resolve().then(() => {
-    // Run before fleet/network/notification work: a successful daily task must
-    // also refresh the local directive. Dry runs keep their read-only contract.
-    if (!process.argv.includes('--dry-run')) console.error(refreshCostDirective({ home: path.dirname(getClaudeDir(process.argv.slice(2))) }));
-    return main();
+export function runEntry({ argv, refresh, run }) {
+  return Promise.resolve().then(() => {
+    // directive の更新に失敗しても本体(run)は必ず走らせる。
+    // 019 で cost-work-loop.mjs が 300s timeout になり、main() が 2026-11-09 以降
+    // 一度も実行されていなかった（nightly-bootstrap ログ 所要=300.832 / 終了コード=1）。
+    if (!argv.includes('--dry-run')) {
+      try {
+        console.error(refresh());
+      } catch (err) {
+        console.error(`WARN cost-directive refresh failed (本体は続行): ${err?.message || err}`);
+        process.exitCode = 1;
+      }
+    }
+    return run();
   }).catch((err) => {
     console.error(err);
     process.exitCode = 1;
+  });
+}
+
+if (isEntry(import.meta.url)) {
+  runEntry({
+    argv: process.argv,
+    refresh: () => refreshCostDirective({ home: path.dirname(getClaudeDir(process.argv.slice(2))) }),
+    run: main,
   });
 }

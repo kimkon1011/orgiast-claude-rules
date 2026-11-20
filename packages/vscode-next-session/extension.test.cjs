@@ -16,6 +16,11 @@ test('worktree ウィンドウ: 補充せず、起動時に未使用待機タブ
   const commands = [];
   const snapshots = [];
   let handler;
+  let configurationChanged;
+  const prefixKey = 'CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX';
+  let configuration = [{ name: prefixKey, value: '設定用' }];
+  const { isWaitingTab, setAutoTitlePrefixes } = require('./mobile-pool');
+  t.after(() => setAutoTitlePrefixes());
   class TabInputWebview { viewType = 'claudeVSCodePanel'; }
   tabs.push(
     { input: new TabInputWebview(), label: 'Claude Code', isActive: false },
@@ -34,7 +39,10 @@ test('worktree ウィンドウ: 補充せず、起動時に未使用待機タブ
       showErrorMessage(message) { assert.fail(message); },
     },
     workspace: {
-      getConfiguration() { return { get() { return 0; } }; },
+      onDidChangeConfiguration(listener) { configurationChanged = listener; return { dispose() {} }; },
+      getConfiguration(section) {
+        return { get(key) { return section === 'claudeCode' && key === 'environmentVariables' ? configuration : 0; } };
+      },
       workspaceFolders: [{ uri: { fsPath: wtDir } }],
     },
     commands: { async executeCommand(command) { commands.push(command); } },
@@ -43,7 +51,8 @@ test('worktree ウィンドウ: 補充せず、起動時に未使用待機タブ
   };
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'extension.js'), 'utf8'), {
-    module, process, URLSearchParams, console, clearInterval, clearTimeout, setTimeout,
+    module, process: { ...process, env: { ...process.env, [prefixKey]: 'KimPC' } },
+    URLSearchParams, console, clearInterval, clearTimeout, setTimeout,
     setInterval(fn, ms) { return ms === 5000 ? null : setInterval(fn, ms); },
     require(name) {
       if (name === 'vscode') return vscode;
@@ -53,6 +62,14 @@ test('worktree ウィンドウ: 補充せず、起動時に未使用待機タブ
     },
   });
   module.exports.activate({ subscriptions: [] });
+  assert.equal(isWaitingTab('設定用｜gentle-otter'), true);
+  assert.equal(isWaitingTab('KimPC｜gentle-otter'), true);
+  assert.equal(isWaitingTab('スマホ用セッション｜gentle-otter'), true);
+  configuration = { [prefixKey]: '変更後' };
+  configurationChanged({ affectsConfiguration: section => section === 'claudeCode' });
+  assert.equal(isWaitingTab('設定用｜gentle-otter'), false);
+  assert.equal(isWaitingTab('変更後｜gentle-otter'), true);
+  assert.equal(isWaitingTab('KimPC｜gentle-otter'), true);
   // 起動時 cleanup: 未使用待機タブ（Claude Code）だけ閉じ、会話中タブは残す
   // worktree ウィンドウの openedTabs は空（自分で開いていない）なので何も閉じない
   assert.equal(tabs.length, 2);
@@ -80,7 +97,7 @@ test('URI concurrency and tab title events replenish one without interactive ren
       registerUriHandler(value) { handler = value; return { dispose() {} }; },
       showErrorMessage(message) { assert.fail(message); },
     },
-    workspace: { getConfiguration() { return { get(key) { return key === 'mobileTabs' ? 0 : undefined; } }; } },
+    workspace: { onDidChangeConfiguration() { return { dispose() {} }; }, getConfiguration() { return { get(key) { return key === 'mobileTabs' ? 0 : undefined; } }; } },
     commands: { async executeCommand(command) { commands.push(command); } },
   };
   const module = { exports: {} };
@@ -135,7 +152,7 @@ function loadExtension({ onCommand, onExternal, onReadState, clock = Date }) {
       registerUriHandler(value) { handler = value; return { dispose() {} }; },
       showErrorMessage(message) { assert.fail(message); },
     },
-    workspace: { getConfiguration() { return { get(key) { return key === 'mobileTabs' ? 0 : undefined; } }; } },
+    workspace: { onDidChangeConfiguration() { return { dispose() {} }; }, getConfiguration() { return { get(key) { return key === 'mobileTabs' ? 0 : undefined; } }; } },
     commands: { async executeCommand(command) { return onCommand(command, tabs, TabInputWebview); } },
   };
   const module = { exports: {} };
@@ -301,7 +318,7 @@ test('補充の前に空の予備が 3 を超えていれば、古い余分だ�
       registerUriHandler(value) { handler = value; return { dispose() {} }; },
       showErrorMessage(message) { assert.fail(message); },
     },
-    workspace: { getConfiguration() { return { get(key) { return key === 'mobileTabs' ? 0 : undefined; } }; } },
+    workspace: { onDidChangeConfiguration() { return { dispose() {} }; }, getConfiguration() { return { get(key) { return key === 'mobileTabs' ? 0 : undefined; } }; } },
     commands: { async getCommands() { return []; }, async executeCommand() {} },
     extensions: { getExtension() { return null; } },
   };

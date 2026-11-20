@@ -3,14 +3,14 @@
   "_note": "kim/監督Claude が指示を1件書き、各PCの fleet-agent が15分以内に拾って結果を Discord へ返す。kind は status / prompt / enable-auto-session の3つだけ。prompt と enable-auto-session はそのPCの人がオプトイン済みの場合のみ実行される。空配列にすると全PCで何も起きない。 PC間メッセージは fleet-mail.mjs（双方向）を使う。",
   "directives": [
     {
-      "id": "run-20261116-222212-6285",
+      "id": "run-20261119-224043-1839",
       "kind": "run",
-      "targets": "nishi-PC",
+      "targets": "kim-PC",
       "why": "stale_report 自動復旧",
       "task": "fleet-sheet-report",
       "createdBy": "uers",
-      "createdAt": "2026-11-16T22:22:12.953Z",
-      "expiresAt": "2026-11-18T22:22:12.953Z"
+      "createdAt": "2026-11-19T22:40:43.939Z",
+      "expiresAt": "2026-11-21T22:40:43.939Z"
     }
   ]
 }

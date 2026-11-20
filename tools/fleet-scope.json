@@ -2,9 +2,12 @@
   "version": 1,
   "entries": [
     {"path": "tools/fleet-scope.json", "scope": "fleet", "step": "settings:setup-converge", "reason": "fleet scope 定義ファイル。setup --converge の配布対象判定に使われる"},
+    {"path":"tools/register-beeper-gateway.ps1","scope":"kim-only","reason":"Beeper 本体がある 000（kim-PC）だけで中継の常駐タスクを登録する。他PCは beeper-gateway-client.ps1 を使う"},
     {"path":"tools/register-secretary-uptime.ps1","scope":"kim-only","reason":"kim-PCの秘書ゲートウェイ3939と秘書3940を監視するタスク登録。他PCには登録しない"},
     {"path":"tools/secretary-uptime-registration.test.ps1","scope":"kim-only","reason":"秘書監視の登録結果をmockで検証するテスト。実タスクは作成しない"},
     {"path":"tools/secretary-legacy-task.ps1","scope":"kim-only","reason":"kim-PCの旧3939起動タスクの共存検査とACL証跡取得"},
+    {"path":"tools/secretary-server-process.ps1","scope":"kim-only","reason":"kim-PCの秘書ゲートウェイ3939と秘書3940の再起動対象を照合"},
+    {"path":"tools/secretary-server-process.test.ps1","scope":"kim-only","reason":"秘書の再起動対象を実測したコマンドラインで照合するテスト"},
     {"path":"tools/lib/external-monitor-state.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"外部返信待ちの宛先照合・重複排除・永続再開キュー"},
     {"path":"tools/lib/send-context.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"Stop hookが同一セッションの送信成功記録を照合する依存"},
     {"path":"tools/auto-progress-external-monitor.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"LINE/Gmail新着の継続監視と元セッション再開"},
@@ -24,6 +27,7 @@
     {"path": "tools/knowledge-guard.mjs", "scope": "fleet", "step": "settings:knowledge-guard-PreToolUse", "reason": "契約判定・蓄積保護と封印を全PCへconverge配布"},
     {"path": "tools/lib/handoff-store.mjs", "scope": "fleet", "step": "settings:knowledge-guard-PreToolUse", "reason": "引き継ぎ書の封印読み書き（fleet-task-runner 等の実行時依存）を全PCへconverge配布"},
     {"path": "tools/register-morning-session-sweep.ps1", "scope": "fleet", "step": "task:morning-session-sweep", "reason": "全PCの未クローズセッションを毎朝06:30に回収する共通タスク"},
+    {"path": "tools/lib/session-claim-cache.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "セッション目的抽出を衝突フックと着手台帳で共有する実行時依存"},
     {"path": "tools/hook-dispatch.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "全PCの同期hookをイベント単位で1本に集約するディスパッチャ（PC過負荷対策 #1568）"},
     {"path": "tools/hook-dispatch-benchmark.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "ディスパッチャの所要時間を各PCで計測するベンチマーク"},
     {"path": "tools/deadline-ledger.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
@@ -32,6 +36,7 @@
     {"path": "tools/lib/deadline-sources.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
     {"path": "tools/setup-deadline-watch.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
     {"path": "tools/register-deadline-watch-tasks.ps1", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
+    {"path": "tools/register-schedule-autopilot-task.ps1", "scope": "fleet", "step": "deadline-watch", "reason": "予定の逆算プッシュの共通実装。タスク登録はkim操作席(000)だけで実行"},
     {"path": "tools/delegation-ratio-watch.mjs", "scope": "fleet", "step": "task:delegation-ratio-watch", "reason": "委譲率ウォッチドッグ（毎日05:40実行）。Claudeの重み付き消費・安いAIの実作業件数・保留件数・quota_wait呼出を集計"},
     {"path": "tools/delegation-ratio-watch-register.mjs", "scope": "fleet", "step": "task:delegation-ratio-watch", "reason": "委譲率ウォッチドッグのschtasks登録"},
     {"path": "tools/lib/fleet-chase-ledger.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "watchdogが未達通知をkimへ送らず追跡台帳へ保存する共通依存"},
@@ -1003,6 +1008,12 @@
       "scope": "fleet",
       "step": "task:fleet-mail",
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/lib/session-concurrency.mjs",
+      "scope": "fleet",
+      "step": "nightly-reload-vscode",
+      "reason": "対話セッションの起動・再接続・スマホ用待機タブで使用する同時セッション上限"
     },
     {
       "path": "tools/lib/windows-process.mjs",

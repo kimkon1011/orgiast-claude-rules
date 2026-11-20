@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import { matchCase, exclusion, processPage, run, SOURCES, createDriveSink, parseArgs, publishedText, parseEntries, collectSource, render, parseCaseRows, writeLastRun, createPhaseTracker } from './comms-hub-sync.mjs';
 
 // All tests must use a temp ORGIAST_HOME so no run() call writes to ~/.claude
@@ -195,6 +196,52 @@ test('Plaud adapter reads existing transcript without import or credential persi
     assert.equal(fs.readFileSync(sessionFile,'utf8'),original);
   } finally {fs.rmSync(home,{recursive:true,force:true});}
 });
+
+test('Plaud ハブは v4 のカーソルと既存の文字起こし artifact を読む', async t => {
+  const home = makeTestHome(t);
+  const sessionFile = path.join(home, '.claude', 'plaud-to-tldv-state.json');
+  fs.mkdirSync(path.dirname(sessionFile));
+  const now = Date.now();
+  const exp = Math.floor(now / 1000) + 3600;
+  const ut = `a.${Buffer.from(JSON.stringify({ exp })).toString('base64url')}.z`;
+  const original = JSON.stringify({ session: { ut, workspaceId: 'personal', wt: 'mock', wtExp: exp } });
+  fs.writeFileSync(sessionFile, original);
+  const state = {};
+  const cursors = [], details = [];
+  let legacyCalls = 0;
+  const ctx = { home, since: now - 86400000, until: now, config, state, fetchImpl: async (value, init) => {
+    const url = new URL(value);
+    if (url.hostname === 'media.example.test') {
+      assert.equal(init, undefined);
+      return new Response(gzipSync(JSON.stringify({ trans_result: [{ speaker: 'staff', content: '業務連絡' }] })));
+    }
+    assert.equal(init.headers.authorization, 'Bearer mock');
+    if (url.pathname === '/file/simple/web') {
+      legacyCalls++;
+      return Response.json({ status: -1800907 });
+    }
+    if (url.pathname === '/file-app/v4/recordings/all') {
+      const cursor = url.searchParams.get('cursor');
+      cursors.push(cursor);
+      return Response.json({ status: 0, data: { items: [{ file_id: cursor ? 'f_new' : 'of_old', name: '見積会議', created_at_show_ms: now - 1000, duration_ms: 300_000 }], next_cursor: cursor ? null : 'next' } });
+    }
+    assert.match(url.pathname, /^\/file-app\/v4\/files\/detail\//);
+    details.push(url.pathname.split('/').at(-1));
+    return Response.json({ status: 0, data: { objects: [{ object_type: 'TRANSCRIPT', content_url: 'https://media.example.test/transcript.json.gz' }] } });
+  } };
+  const first = await collectSource('plaud', ctx);
+  assert.equal(first.messages[0].id, 'old');
+  assert.equal(first.messages[0].text, 'staff: 業務連絡');
+  assert.deepEqual(first.cursor, { since: ctx.since, end: now, plaudV4Cursor: 'next' });
+  assert.equal(state.plaudApiVersion, 4);
+  const second = await collectSource('plaud', { ...ctx, cursor: first.cursor });
+  assert.equal(second.messages[0].id, 'f_new');
+  assert.deepEqual(second.cursor, { since: now });
+  assert.equal(legacyCalls, 1);
+  assert.deepEqual(cursors, [null, 'next']);
+  assert.deepEqual(details, ['of_old', 'f_new']);
+  assert.equal(fs.readFileSync(sessionFile, 'utf8'), original);
+});
 test('publication failure preserves source results and creation counts in report',async()=>{
  const state={sources:{},cases:{},rootId:'root'};
  const report=await run({live:true},{config,cases,state,save(){},collect:async()=>({messages:[],cursor:{since:1}}),sink:{createdDocs:2,async init(){},async finish(){throw Error('API HTTP 403 SERVICE_DISABLED');}}});
@@ -219,11 +266,56 @@ test('tl;dv missing transcript keeps metadata, continues page, records error and
  const text=fs.readFileSync(path.join(storeDir,'cases/261101ABC.md'),'utf8');
  assert.equal(parseEntries(text).length,2);assert.equal(text.match(/recovered transcript/g).length,2);
 });
-test('index distinguishes partial transcript failure from full success',async()=>{
- const state={sources:{plaud:{lastSuccess:'2026-10-01T00:00:00.000Z'}},cases:{}};
- const report=await run({live:true},{config,cases,state,save(){},collect:async source=>({messages:source==='plaud'?[{...message,source,transcriptError:'artifact missing',text:''}]:[],cursor:{since:1}}),sink:{createdDocs:0,async init(){},async append(){},async finish(){return {};}}});
- assert.equal(report.exitCode,0);assert.equal(state.sources.plaud.lastSuccess,'2026-10-01T00:00:00.000Z');assert.match(state.sources.plaud.error,/artifact missing/);
- assert.ok(state.sources.tldv.lastSuccess);
+test('tl;dv の文字起こしが保留でも lastSuccess と lastSync が進む', async () => {
+  const now = Date.parse('2026-11-10T00:00:00Z');
+  const stamp = new Date(now).toISOString();
+  const state = { sources: { tldv: { lastSuccess: message.ts, error: 'legacy pending', failedAt: message.ts } }, cases: {} };
+  const report = await run({ live: true }, { config, cases, state, now, save() {},
+    collect: async source => ({ messages: source === 'tldv' ? [{ ...message, source, text: '', transcriptError: 'unsupported schema' }] : [], cursor: { since: now } }),
+    sink: { createdDocs: 0, async init() {}, async append() {}, async finish() {} },
+  });
+  assert.equal(report.exitCode, 0);
+  assert.equal(report.sources.tldv.transcriptFailures, 1);
+  assert.equal(report.sources.tldv.error, undefined);
+  assert.equal(report.sources.tldv.pending, '1 transcript(s) pending: unsupported schema');
+  assert.equal(state.sources.tldv.pending, report.sources.tldv.pending);
+  assert.equal(state.sources.tldv.lastSuccess, stamp);
+  assert.equal(state.sources.tldv.lastSync, stamp);
+  assert.equal(state.sources.tldv.error, undefined);
+  assert.equal(state.sources.tldv.failedAt, undefined);
+  assert.equal(state.sources.tldv.transcriptFailures[message.id].firstFailedAt, stamp);
+});
+
+test('14日超の保留は abandonedAt を残し、一覧に再出現しても取得しない', async t => {
+  const home = makeTestHome(t);
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude', 'tldv.env'), 'TLDV_API_KEY=mock');
+  const ts = message.ts;
+  const now = Date.parse(ts) + 14 * 86400000 + 1000;
+  const lastAttempt = new Date(now - 3600000).toISOString();
+  const firstFailedAt = new Date(now - 14 * 86400000).toISOString();
+  const stamp = new Date(now).toISOString();
+  const failure = { id: 'old', title: message.subject, ts, reason: 'unsupported schema', lastAttempt };
+  const state = { sources: { tldv: { transcriptFailures: { old: failure, boundary: { ...failure, id: 'boundary', firstFailedAt } } } }, cases: {} };
+  const requested = [];
+  const report = await run({ live: true }, { config, cases, state, now, save() {},
+    collect: async (source, ctx) => source === 'tldv' ? collectSource(source, { ...ctx, home }) : { messages: [], cursor: { since: now } },
+    fetchImpl: async value => {
+      const pathname = new URL(value).pathname;
+      if (pathname.endsWith('/transcript')) {
+        requested.push(pathname.split('/').at(-2));
+        return Response.json({ data: [] });
+      }
+      return Response.json({ results: [{ id: 'old', happenedAt: ts, name: message.subject }], pages: 1 });
+    },
+    sink: { createdDocs: 0, async init() {}, async append() {}, async finish() {} },
+  });
+  assert.deepEqual(requested, ['boundary']);
+  assert.equal(state.sources.tldv.transcriptFailures.old.abandonedAt, stamp);
+  assert.equal(state.sources.tldv.transcriptFailures.old.lastAttempt, lastAttempt);
+  assert.equal(state.sources.tldv.transcriptFailures.boundary.firstFailedAt, firstFailedAt);
+  assert.equal(state.sources.tldv.transcriptFailures.boundary.lastAttempt, stamp);
+  assert.equal(report.sources.tldv.transcriptFailures, 1);
 });
 
 test('Plaud isolates missing, failed and empty transcripts while retaining metadata',async t=>{

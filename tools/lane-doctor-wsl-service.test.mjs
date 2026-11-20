@@ -19,10 +19,11 @@ function fixture(t) {
   return home;
 }
 
-async function classify(t, provider, text, listWsl = () => 'Ubuntu') {
+async function classify(t, provider, text, listWsl = () => 'Ubuntu', nativeWriteProbe) {
   const home = fixture(t);
   return laneDoctorProbe({ home, now, platform: 'win32', providers: [provider], listWsl,
-    probe: async () => ({ code: 1, text }), notify: async () => ({ delivered: 'test' }) });
+    probe: async () => ({ code: 1, text }), notify: async () => ({ delivered: 'test' }),
+    ...(nativeWriteProbe ? { nativeWriteProbe } : {}) });
 }
 
 for (const text of [
@@ -41,7 +42,8 @@ for (const text of [
 });
 
 test('Codex の空エラーかつ WSL 列挙 null を物理操作に分類', async t => {
-  const result = await classify(t, 'codex', '', () => null);
+  // null WSL → ネイティブ書き込み probe 経路へ。短いエラー文字列で物理操作に分類される。
+  const result = await classify(t, 'codex', '', () => null, async () => ({ code: 1, text: '' }));
   assert.equal(result.lanes.codex.reason, 'dead:physical_operation');
 });
 

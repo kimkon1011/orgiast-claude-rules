@@ -6,7 +6,9 @@ import test from 'node:test';
 import {
   dedupeKey,
   isNearDuplicate,
+  isStaleOverdue,
   mergeTasks,
+  pickTop,
   preprocessForTasks,
   priorityScore,
   runDiscordTaskDigest,
@@ -23,6 +25,36 @@ function snowflake(ms, increment = 0n) {
 }
 
 const NOW = new Date('2026-09-02T03:00:00.000Z');
+
+test('isStaleOverdue は JST で期限を7日超過した未完了タスクを判定する', () => {
+  const now = new Date('2026-09-01T15:00:00Z');
+  const task = { status: '未着手', deadline: '2026-08-25' };
+  assert.equal(isStaleOverdue(task, { now }), true);
+  assert.equal(isStaleOverdue({ ...task, deadline: '2026-08-26' }, { now }), false);
+  assert.equal(isStaleOverdue({ ...task, deadline: '' }, { now }), false);
+  assert.equal(isStaleOverdue({ ...task, deadline: '2026/08/25' }, { now }), false);
+  assert.equal(isStaleOverdue({ ...task, deadline: '2026-02-30' }, { now }), false);
+  assert.equal(isStaleOverdue({ ...task, status: '完了' }, { now }), false);
+});
+
+test('pickTop は入力順を保ち、通常枠と期限超過枠にそれぞれ上限を適用する', () => {
+  const stale = { id: 'T-0001', rank: 'P1', title: '発送手配', deadline: '2026-08-25' };
+  const first = { id: 'T-0002', rank: 'P2', title: '見積作成' };
+  const second = { id: 'T-0003', rank: 'P1', title: '確認連絡' };
+  const active = { status: '進行中' };
+  const tasks = [
+    { ...stale, ...active },
+    { ...first, ...active },
+    { ...stale, ...active, id: 'T-0004' },
+    { ...second, ...active },
+    { ...stale, ...active, id: 'T-0005' },
+    { ...second, ...active, id: 'T-0006' },
+  ];
+  assert.deepEqual(pickTop(tasks, { now: NOW, limit: 2 }), {
+    top: [first, second],
+    staleOverdue: [stale, { ...stale, id: 'T-0004' }],
+  });
+});
 
 test('snowflakeToMs は既知の snowflake を時刻に変換する', () => {
   assert.equal(snowflakeToMs('175928847299117063'), 1462015105796);

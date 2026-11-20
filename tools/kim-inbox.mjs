@@ -15,7 +15,7 @@ import { isEntry } from './is-entry.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
 import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, recordNaturalLanguageAnswers, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
 import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
-import { syncEscalationAnswer } from './lib/escalation-answer-sync.mjs';
+import { matchesRow, parseEscalation, syncEscalationAnswer } from './lib/escalation-answer-sync.mjs';
 const exec = promisify(execFile);
 const directory = home => path.join(home, '.claude/kim-inbox');
 const clean = value => redactSecrets(String(value ?? '')).slice(0, 4000);
@@ -87,8 +87,8 @@ function acquireInboxLock(home, key, waitMs = 10_000) {
   if (fd === undefined) throw new Error('kim-inbox: 台帳が使用中です');
   return () => { fs.closeSync(fd); fs.unlinkSync(lock); };
 }
-function locked(home, key, fn) {
-  const release = acquireInboxLock(home, key);
+function locked(home, key, fn, waitMs) {
+  const release = acquireInboxLock(home, key, waitMs);
   try { return fn(); } finally { release(); }
 }
 function update(home, id, fn) {
@@ -102,12 +102,12 @@ export { update as updateInboxItem };
 export const isHighInfo = item => item.kind === 'info' && (item.priority === 'high' || /^auto-progress-(done|heartbeat)$/.test(item.source) || /完了|進捗|進んでいる|承認待ち|✅|未達|確認エラー|判断待ち|自動進行|まとめ/.test(item.text));
 const hasWorkId = item => /作業ID:\s*[a-f0-9]{8}(?![a-f0-9])/i.test(item.text);
 const newestFirst = (a, b) => (b.lastAt || b.createdAt).localeCompare(a.lastAt || a.createdAt) || b.id.localeCompare(a.id);
-function normalizationKey(text) {
-  return text.replace(/^【[^\r\n]*】[^\S\r\n]*(?:\r?\n|$)/, '')
-    .replace(/\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?/g, '#')
-    .replace(/\b(?:0x[a-f0-9]+|[a-f0-9]{8,})\b/gi, '#')
-    .replace(/\d+/g, '#').slice(0, 120);
-}
+export const normalizeInboxText = text => String(text ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+const contentDedupeKey = item => `${item.kind}\n${normalizeInboxText(item.text)}`;
+const legacyInfoKey = text => text.replace(/^【[^\r\n]*】[^\S\r\n]*(?:\r?\n|$)/, '')
+  .replace(/\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?/g, '#')
+  .replace(/\b(?:0x[a-f0-9]+|[a-f0-9]{8,})\b/gi, '#')
+  .replace(/\d+/g, '#').slice(0, 120);
 // 集約の検索と作成を同じロックで守り、同時追加も取りこぼさない。
 function create(home, options) {
   return locked(home, 'info-aggregation', () => {
@@ -160,15 +160,18 @@ function create(home, options) {
       });
       return existing || createNew(home, options);
     }
-    if ((options.kind ?? 'info') === 'info') {
-      const key = normalizationKey(text);
-      const matches = listItems(home, { status: 'open' }).filter(i => !i.dedupeKey && i.kind === 'info' && normalizationKey(i.text) === key).sort(newestFirst);
+    const kind = options.kind ?? 'info';
+    if (['ask', 'info'].includes(kind)) {
+      const key = `${kind}\n${normalizeInboxText(text)}`;
+      const matches = listItems(home, { status: 'open' }).filter(i => !i.dedupeKey && contentDedupeKey(i) === key).sort(newestFirst);
       for (const match of matches) {
         let merged = false;
         const item = update(home, match.id, current => {
           if (current.status !== 'open') return;
-          current.repeatCount = (current.repeatCount ?? 1) + 1;
-          current.lastAt = new Date().toISOString(); current.text = text;
+          const now = new Date().toISOString();
+          current.count = (current.count ?? current.repeatCount ?? 1) + 1;
+          current.lastSeenAt = now;
+          if (current.kind === 'info') { current.repeatCount = current.count; current.lastAt = now; current.text = text; }
           // 進捗の再送（まとめの明示再送など）は既表示でも kim にもう一度出す。
           if (isHighInfo(current)) { current.shownSessions = []; current.shownCount = 0; }
           if (options.forwardMailId) current.forwardMailId = options.forwardMailId;
@@ -185,7 +188,7 @@ export function compactItems(home) {
     const groups = new Map();
     for (const item of listItems(home, { status: 'open' })) {
       if (item.dedupeKey || item.kind !== 'info' || isHighInfo(item) || hasWorkId(item)) continue;
-      const key = normalizationKey(item.text);
+      const key = legacyInfoKey(item.text);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(item);
     }
@@ -208,6 +211,36 @@ export function compactItems(home) {
     return result;
   });
 }
+export function dedupeExisting(home, { apply = false } = {}) {
+  const inspect = () => {
+    const open = listItems(home, { status: 'open' }).filter(item => ['ask', 'info'].includes(item.kind));
+    const groups = new Map();
+    for (const item of open) {
+      const key = contentDedupeKey(item);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    }
+    const duplicateGroups = [...groups.values()].filter(items => items.length > 1);
+    const merged = duplicateGroups.reduce((total, items) => total + items.length - 1, 0);
+    if (apply) for (const items of duplicateGroups) {
+      const [kept, ...duplicates] = items;
+      const totalCount = items.reduce((total, item) => total + (item.count ?? item.repeatCount ?? 1), 0);
+      const lastSeenAt = items.map(item => item.lastSeenAt || item.lastAt || item.createdAt).sort().at(-1);
+      update(home, kept.id, current => {
+        if (current.status !== 'open') return;
+        current.count = totalCount;
+        current.lastSeenAt = lastSeenAt;
+        if (current.kind === 'info') { current.repeatCount = totalCount; current.lastAt = lastSeenAt; }
+      });
+      for (const duplicate of duplicates) update(home, duplicate.id, current => {
+        if (current.status !== 'open') return;
+        current.status = 'merged'; current.mergedInto = kept.id;
+      });
+    }
+    return { before: open.length, after: open.length - merged, groups: duplicateGroups.length, merged, applied: apply };
+  };
+  return apply ? locked(home, 'info-aggregation', inspect) : inspect();
+}
 function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen, progressAt }) {
   if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');
   if (doneWhen && kind !== 'ask') throw new Error('--done-when-gmail は ask 専用です');
@@ -215,7 +248,7 @@ function createNew(home, { kind = 'info', text, source = '', from = resolveFleet
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     if (revision !== undefined) item.revision = revision;
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -272,11 +305,11 @@ export async function drainSpool(home, { stderr = console.error, execImpl, signa
   } finally { release(); }
   return imported;
 }
-export async function addItem(home, options, { drain = true } = {}) {
+export async function addItem(home, options, { drain = true, localOnly = false } = {}) {
   if (drain) await drainSpool(home, { execImpl: options.execImpl, signal: options.signal });
   if (isInboxNoise(options)) return { id: null, status: 'suppressed', kind: options.kind || 'info' };
   const item = create(home, options);
-  if (item.kind === 'deadline' || isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;
+  if (localOnly || item.kind === 'deadline' || isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-inbox-'));
   try {
     const file = path.join(temp, 'body.txt');
@@ -303,10 +336,52 @@ export function listItems(home, { status } = {}) {
     catch { return []; } // 破損した1件で他の未回収項目を隠さない。
   }).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 }
-export function answerItem(home, id, answer, sessionId = '') {
-  const item = update(home, id, item => { item.status = 'answered'; item.answer = clean(answer); item.answeredAt = new Date().toISOString(); item.answerSession = clean(sessionId); });
+// Share the creation lock so a duplicate cannot be added during a group update.
+export function withInboxGroupLock(home, fn) {
+  const rawWaitMs = process.env.ORGIAST_INBOX_GROUP_LOCK_WAIT_MS;
+  const waitMs = rawWaitMs?.trim() ? Number(rawWaitMs) : undefined;
+  return locked(home, 'info-aggregation', fn, Number.isFinite(waitMs) && waitMs >= 0 ? waitMs : undefined);
+}
+
+export function supersedeAsk(home, id, target) {
+  let changed = false;
+  update(home, id, current => {
+    if (current.kind !== 'ask' || current.status !== 'open') return;
+    Object.assign(current, {
+      status: 'superseded', supersededInto: target.id,
+      answer: target.answer ?? null, answeredAt: target.answeredAt ?? null,
+    });
+    changed = true;
+  });
+  return changed;
+}
+
+function resolveItem(home, id, fields) {
+  const item = update(home, id, current => Object.assign(current, fields, { answeredAt: new Date().toISOString() }));
   syncLedger(home, item);
+  if (item.kind !== 'ask') return item;
+
+  const parsed = parseEscalation(item);
+  if (!parsed && !item.dedupeKey) return item;
+  try {
+    withInboxGroupLock(home, () => {
+      const row = parsed && (readLedger(ledgerFile(home)).find(candidate => matchesRow(item, candidate))
+        || { ts: parsed.ts, sessionId: item.sessionId?.slice(0, 8) === parsed.session ? item.sessionId : parsed.session });
+      for (const candidate of listItems(home, { status: 'open' })) {
+        if (candidate.kind !== 'ask') continue;
+        if ((item.dedupeKey && candidate.dedupeKey === item.dedupeKey) || (row && matchesRow(candidate, row))) {
+          supersedeAsk(home, candidate.id, item);
+        }
+      }
+    });
+  } catch (error) {
+    console.error('kim-inbox: 同じ質問の整理に失敗（回答は記録済み、次回 dedupe-backfill で整理）: ' + clean(error?.message ?? error));
+  }
   return item;
+}
+
+export function answerItem(home, id, answer, sessionId = '') {
+  return resolveItem(home, id, { status: 'answered', answer: clean(answer), answerSession: clean(sessionId) });
 }
 // 質問を出す前の照合（2026-11-19）: 語をすべて含む回答済み・取り下げ済みの ask を新しい順に返す。
 // 別セッションが同じ質問を kim に出し直さないよう、質問前に `--lookup "<語> <語>"` で確かめる。
@@ -378,9 +453,7 @@ export function deadlineSheetUrl(home) {
 }
 export function dropItem(home, id, reason) {
   if (!String(reason ?? '').trim()) throw new Error('取り下げ理由が必要です');
-  const item = update(home, id, item => { item.status = 'dropped'; item.answer = clean(reason); });
-  syncLedger(home, item);
-  return item;
+  return resolveItem(home, id, { status: 'dropped', answer: clean(reason) });
 }
 const inboxDir = home => path.join(home, '.claude/fleet-inbox');
 const readJsonFile = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
@@ -643,13 +716,17 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
     else if (args.includes('--close-key')) stdout(JSON.stringify(closeKey(home, value('--close-key'))));
     else if (args.includes('--drop')) stdout(JSON.stringify(dropItem(home, value('--drop'), args.includes('--reason') ? value('--reason') : '')));
     else if (args.includes('--compact')) stdout(JSON.stringify(compactItems(home)));
+    else if (args.includes('--dedupe-existing')) {
+      const result = dedupeExisting(home, { apply: args.includes('--apply') });
+      stdout(`kim-inbox dedupe-existing${result.applied ? ' (apply)' : ' (dry)'}: ${result.before}件 → ${result.after}件（重複 ${result.merged}件、${result.groups}グループ）`);
+    }
     else if (args.includes('--auto-close')) stdout(JSON.stringify(await autoCloseByGmail(home)));
     else if (args.includes('--status') || args.includes('--list')) {
       await autoCloseByGmail(home);
       const items = listItems(home, { status: args.includes('--open') || args.includes('--status') ? 'open' : undefined });
       if (args.includes('--status')) stdout(`kim-inbox: open ask ${items.filter(i => i.kind === 'ask').length} / open info ${items.filter(i => i.kind === 'info').length}\n最古: ${items.length ? `${items[0].id} ${items[0].text.split(/\r?\n/)[0].slice(0, 120)}` : 'なし'}`);
-      else stdout(args.includes('--json') ? JSON.stringify(items) : displayPcNames(items.map(i => `${i.id} ${i.kind} ${i.status} ${i.text.split(/\r?\n/)[0]}`).join('\n'), { home }));
-    } else throw new Error('--add / --answer / --seen / --drop / --show / --list / --status / --context / --compact / --auto-close を指定してください');
+      else stdout(args.includes('--json') ? JSON.stringify(items) : displayPcNames(items.map(i => `${i.id} ${i.kind} ${i.status} ${i.text.split(/\r?\n/)[0]}${(i.count ?? i.repeatCount ?? 1) >= 2 ? ` (同じ内容 ${i.count ?? i.repeatCount} 件)` : ''}`).join('\n'), { home }));
+    } else throw new Error('--add / --answer / --seen / --drop / --show / --list / --status / --context / --compact / --dedupe-existing [--dry|--apply] / --auto-close を指定してください');
     return 0;
   } catch (error) { stderr(`kim-inbox: ${clean(error.message).replace(/[\r\n]+/g, ' ')}`); return args.includes('--context') ? 0 : 1; }
 }

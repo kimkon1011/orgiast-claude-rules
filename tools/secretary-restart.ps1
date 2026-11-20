@@ -1,6 +1,7 @@
 param([Parameter(Mandatory=$true)][ValidateSet('gateway','secretary')][string]$Service,[switch]$InspectOnly)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'secretary-legacy-task.ps1')
+. (Join-Path $PSScriptRoot 'secretary-server-process.ps1')
 $bindAddress = '127.0.0.1'
 if ($Service -eq 'gateway') {
   $legacy = Get-ScheduledTask -TaskName 'ClaudeMobile-WebServer' -ErrorAction SilentlyContinue
@@ -28,15 +29,9 @@ if ($Service -eq 'gateway') {
   $secretaryToken = (Get-Content -LiteralPath $tokenFile -Raw).Trim()
   if (!$secretaryToken) { throw 'Secretary access-token is empty' }
 }
-# Only terminate the configured server, never an unrelated node process or PID 0.
-$matching = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object {
-  $_.CommandLine -and $_.CommandLine.Contains($next) -and $_.CommandLine -match "(?:^|\s)-p\s+$port(?:\s|$)"
-})
-$listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
-foreach ($listener in $listeners) {
-  if ($listener.OwningProcess -eq 0 -or $listener.OwningProcess -notin $matching.ProcessId) { throw "Port $port is owned by an unexpected process; refused to terminate it" }
-}
-if ($InspectOnly) { [pscustomobject]@{ Service=$Service; Port=$port; Dist=$dist; BindAddress=$bindAddress; ProcessIds=@($matching.ProcessId); Listening=($listeners.Count -gt 0) } | ConvertTo-Json; exit 0 }
+$server = Get-SecretaryServer -ServerDir $serverDir -Port $port
+$matching = $server.Processes
+if ($InspectOnly) { [pscustomobject]@{ Service=$Service; Port=$port; Dist=$dist; BindAddress=$bindAddress; ProcessIds=@($matching.ProcessId); Listening=$server.Listening } | ConvertTo-Json; exit 0 }
 foreach ($serverProcess in $matching) { Stop-Process -Id $serverProcess.ProcessId -Force -ErrorAction Stop }
 if ($matching.Count) { Start-Sleep -Seconds 2 }
 $logDir = Join-Path $env:USERPROFILE '.claude\secretary-uptime'

@@ -1,8 +1,13 @@
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'secretary-server-process.ps1')
 $AppDir=Join-Path $env:USERPROFILE 'Downloads\secretary-pc'
 # Run only from a session allowed to write AppDir and the user's .claude directory.
 # No elevation or sandbox bypass is attempted by this installer.
-if ($env:COMPUTERNAME -ne 'DESKTOP-2D0R4LI') { throw 'This deployment is scoped to kim-PC / DESKTOP-2D0R4LI' }
+$mapPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'fleet-pc-map.json'
+$kimPc = (Get-Content -LiteralPath $mapPath -Raw -Encoding UTF8 | ConvertFrom-Json).'kim-PC'
+if (-not $env:COMPUTERNAME -or $env:COMPUTERNAME -notin (@($kimPc.hostname) + @($kimPc.aliases))) {
+  throw 'This deployment is scoped to kim-PC'
+}
 $payload=Join-Path $PSScriptRoot 'secretary-progress'
 $manifest=Get-Content (Join-Path $payload 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 foreach ($entry in $manifest.files) {
@@ -35,9 +40,8 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Secretary build failed; live process remains running' }
 } finally { Pop-Location }
 # The new build is complete before touching the currently running server.
-$next=Join-Path $AppDir 'node_modules\next\dist\bin\next'
-$servers=@(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($next) -and $_.CommandLine -match '-p\s+3940(?:\s|$)' })
-foreach ($serverProcess in $servers) { Stop-Process -Id $serverProcess.ProcessId -Force }
+$server=Get-SecretaryServer -ServerDir $AppDir -Port 3940
+foreach ($serverProcess in $server.Processes) { Stop-Process -Id $serverProcess.ProcessId -Force }
 $production=Join-Path $AppDir '.next-production'
 if (Test-Path -LiteralPath $production) { Move-Item -LiteralPath $production -Destination (Join-Path $backup 'previous-production') }
 Move-Item -LiteralPath (Join-Path $AppDir $buildDir) -Destination $production

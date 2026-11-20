@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
   isTargetEvent,
@@ -15,17 +14,21 @@ import {
   deduplicateEvents,
   isExternalEmail,
   extractMeetInfo,
-  buildCompanionEventBody,
-  createOrUpdateCompanionEvent,
+  deliverCueUrl,
   findSeisakuProfileName,
   runScheduler,
+  botLoginPath,
+  loadSchedulerState,
+  saveSchedulerState,
+  readConfig,
   JOIN_WINDOW_BEFORE_MS,
   JOIN_WINDOW_AFTER_MS,
   JOIN_ERROR_COOLDOWN_MS,
 } from './meet-cue-scheduler.mjs';
 
 import { copyProfileFromChrome } from './meet-cue.mjs';
-import { findHeaderInsertIndex } from './lib/meet-cue-doc.mjs';
+import { GREETING_LINE } from './lib/meet-cue-core.mjs';
+import { findHeaderInsertIndex, insertGreetingIfNeeded } from './lib/meet-cue-doc.mjs';
 
 test('isExternalEmail: 社外ドメインと staff-addresses の判定', () => {
   const staff = ['personal@gmail.com'];
@@ -125,72 +128,6 @@ test('deduplicateEvents: 会議コードによる重複排除', () => {
   assert.equal(deduplicated[0].calendarId, 'kim@orgiast.jp');
 });
 
-test('buildCompanionEventBody: 社外・個人 Gmail が参加者に入らず private, transparent, extendedProperties が設定されること', () => {
-  const originalEvent = {
-    id: 'orig123',
-    summary: '〇〇社商談',
-    start: { dateTime: '2026-11-12T10:00:00.000Z' },
-    end: { dateTime: '2026-11-12T11:00:00.000Z' },
-  };
-
-  const docUrl = 'https://docs.google.com/document/d/doc123/edit';
-  const orgiastAttendees = ['tanaka@orgiast.jp', 'kim@orgiast.jp'];
-
-  const companion = buildCompanionEventBody({ originalEvent, docUrl, orgiastAttendees });
-
-  assert.equal(companion.summary, '📝カンペ: 〇〇社商談');
-  assert.match(companion.description, /doc123/);
-  assert.equal(companion.visibility, 'private');
-  assert.equal(companion.transparency, 'transparent');
-  assert.equal(companion.extendedProperties.private.meetCueSource, 'orig123');
-  assert.deepEqual(companion.attendees, [{ email: 'tanaka@orgiast.jp' }, { email: 'kim@orgiast.jp' }]);
-});
-
-test('createOrUpdateCompanionEvent: 冪等性（既存があれば再作成しない）', async () => {
-  const token = 'fake-token';
-  const calendarId = 'tanaka@orgiast.jp';
-  const originalEvent = {
-    id: 'orig999',
-    summary: '打合せ',
-    start: { dateTime: '2026-11-12T10:00:00.000Z' },
-    end: { dateTime: '2026-11-12T11:00:00.000Z' },
-  };
-
-  let postCount = 0;
-  const mockFetch = async (url, opts = {}) => {
-    if (url.includes('privateExtendedProperty=')) {
-      return {
-        ok: true,
-        json: async () => ({
-          items: [{
-            id: 'existing-companion-1',
-            summary: '📝カンペ: 打合せ',
-            start: { dateTime: '2026-11-12T10:00:00.000Z' },
-            end: { dateTime: '2026-11-12T11:00:00.000Z' },
-          }],
-        }),
-      };
-    }
-    if (opts.method === 'POST') {
-      postCount++;
-      return { ok: true, json: async () => ({ id: 'new-companion' }) };
-    }
-    return { ok: true, json: async () => ({ id: 'existing-companion-1' }) };
-  };
-
-  const companion = await createOrUpdateCompanionEvent({
-    token,
-    calendarId,
-    originalEvent,
-    docUrl: 'https://docs.google.com/...',
-    orgiastAttendees: ['tanaka@orgiast.jp'],
-    fetchImpl: mockFetch,
-  });
-
-  assert.equal(companion.id, 'existing-companion-1');
-  assert.equal(postCount, 0, '既存があるため POST は呼ばれない');
-});
-
 test('findSeisakuProfileName: Chrome Local State から seisaku-team の Profile 名を特定', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chrome-user-data-'));
   const localState = {
@@ -252,22 +189,18 @@ test('findHeaderInsertIndex: 区切り線から挿入位置を算出', async () 
 
 test('runScheduler: seatHostname 不一致で何もせずスキップ', async () => {
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-home-'));
-  const configPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'config', 'meet-cue.json');
-
-  const originalConfig = fs.readFileSync(configPath, 'utf8');
   try {
-    const customConfig = JSON.parse(originalConfig);
-    customConfig.seatHostname = 'NON_EXISTENT_HOSTNAME_123';
-    fs.writeFileSync(configPath, JSON.stringify(customConfig), 'utf8');
-
-    const res = await runScheduler({ home: tmpHome });
+    const res = await runScheduler({
+      home: tmpHome,
+      hostname: '000KimPC',
+      config: { seatHostname: 'NON_EXISTENT_HOSTNAME_123' },
+    });
     assert.equal(res.ok, true);
     assert.equal(res.skipped, 'seat_hostname_mismatch');
     assert.equal(res.skippedHost, true);
     assert.deepEqual(res.actions, []);
     assert.deepEqual(res.skippedEvents, []);
   } finally {
-    fs.writeFileSync(configPath, originalConfig, 'utf8');
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
 });
@@ -284,6 +217,23 @@ test('runScheduler: options.hostname 注入による seatHostname 不一致の�
   } finally {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
+});
+
+test('runScheduler: 新旧の席ホスト名をどちらも許可する', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-home-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const config = readConfig();
+  assert.deepEqual(config.seatHostnames, ['kim-PC']);
+  for (const hostname of ['000KimPC', 'desktop-2d0r4li']) {
+    const res = await runScheduler({ home, hostname, config: { ...config, enabled: false } });
+    assert.equal(res.skipped, 'disabled');
+  }
+  const legacy = await runScheduler({
+    home,
+    hostname: 'desktop-2d0r4li',
+    config: { seatHostname: 'DESKTOP-2D0R4LI', enabled: false },
+  });
+  assert.equal(legacy.skipped, 'disabled');
 });
 
 function createMockEvent(overrides = {}) {
@@ -646,4 +596,191 @@ test('runScheduler: joinError 発生後 10 分以内の再試行抑止', async (
   } finally {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
+});
+
+// ─── A. News behavior: append to description, DM, migration ───
+
+test('社内主催・社内参加者のみなら元の予定の説明欄へ追記し、再実行しても増やさない', async () => {
+  const calendarId = 'kim@orgiast.jp';
+  const event = { id: 'internal', organizer: { email: calendarId }, description: '元の説明', etag: 'v1' };
+  const itemState = { staffUrl: 'https://docs.google.com/document/d/doc123/edit' };
+  let writes = 0;
+  const args = {
+    event, itemState, calendarId,
+    getToken: async ({ impersonate }) => { assert.equal(impersonate, calendarId); return 'mock'; },
+    fetchImpl: async (url, opts) => {
+      writes++;
+      assert.match(url, /internal\?sendUpdates=none$/);
+      assert.equal(opts.method, 'PATCH');
+      assert.equal(opts.headers['If-Match'], 'v1');
+      const body = JSON.parse(opts.body);
+      assert.deepEqual(body, { description: `元の説明\n📝カンペ: ${itemState.staffUrl}` });
+      event.description = body.description;
+      return { ok: true };
+    },
+  };
+  await deliverCueUrl(args);
+  await deliverCueUrl(args);
+  assert.equal(writes, 1);
+});
+
+test('社外主催または社外参加者ありなら元の予定へ書かず、開始10分前に社内だけへ通知する', async () => {
+  const start = Date.parse('2026-11-22T01:00:00Z');
+  for (const organizer of ['client@example.com', 'kim@orgiast.jp', undefined]) {
+    const sent = [];
+    const errors = [];
+    const itemState = { staffUrl: 'https://docs.google.com/document/d/doc123/edit' };
+    let fail = true;
+    const args = {
+      event: {
+        organizer: { email: organizer }, start: { dateTime: new Date(start).toISOString() },
+        attendees: ['kim@orgiast.jp', 'STAFF@orgiast.jp', 'staff@orgiast.jp', 'another@gmail.com'].map(email => ({ email })),
+      },
+      itemState,
+      getToken: () => assert.fail('Calendar write must not be attempted'),
+      sendCue: async ({ staffEmail }) => {
+        if (staffEmail === 'staff@orgiast.jp' && fail) throw new Error('temporary failure');
+        sent.push(staffEmail);
+      },
+      onError: email => errors.push(email),
+    };
+    await deliverCueUrl({ ...args, now: new Date(start - 600001) });
+    assert.equal(itemState.cueDmDueAt, new Date(start - 600000).toISOString());
+    assert.deepEqual(sent, []);
+    await deliverCueUrl({ ...args, now: new Date(start - 600000) });
+    assert.deepEqual(sent, ['kim@orgiast.jp']);
+    assert.deepEqual(errors, ['staff@orgiast.jp']);
+    fail = false;
+    await deliverCueUrl({ ...args, now: new Date(start - 599000) });
+    await deliverCueUrl({ ...args, now: new Date(start - 598000) });
+    assert.deepEqual(sent, ['kim@orgiast.jp', 'staff@orgiast.jp']);
+    assert.equal(itemState.cueDmSent, true);
+  }
+});
+
+test('migrateCleanupCompanions: 過去と識別マーカーのない予定を除外し成功した削除を記録', async t => {
+  const { migrateCleanupCompanions } = await import('./meet-cue-scheduler.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-migrate-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const now = new Date('2026-11-21T00:00:00Z');
+  const marked = { summary: '📝カンペ: テスト', extendedProperties: { private: { meetCueSource: 'original' } } };
+  const future = { ...marked, id: 'future', start: { dateTime: '2027-01-01T00:00:00Z' } };
+  const deletes = [];
+  const options = {
+    home, now, calendars: ['kim@orgiast.jp'], getTokenImpl: async () => 'mock',
+    fetchImpl: async (url, init) => {
+      if (init.method === 'DELETE') {
+        deletes.push(url);
+        return { ok: true };
+      }
+      if (new URL(url).searchParams.get('pageToken')) return { ok: true, json: async () => ({ items: [future] }) };
+      const items = [
+        { ...future, id: 'past', start: { dateTime: '2026-11-20T23:55:00Z' } },
+        { ...future, id: 'unmarked', extendedProperties: {} },
+      ];
+      return { ok: true, json: async () => ({ items, nextPageToken: 'page2' }) };
+    },
+  };
+  const dry = await migrateCleanupCompanions({ ...options, dryRun: true });
+  assert.deepEqual(dry.candidates.map(event => event.id), ['future']);
+  assert.equal(deletes.length, 0);
+  const result = await migrateCleanupCompanions(options);
+  assert.equal(result.deletedCount, 1);
+  assert.match(deletes[0], /future\?sendUpdates=none$/);
+  const report = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'logs', 'meet-cue-companion-cleanup.json')));
+  assert.deepEqual(report.deleted.map(event => event.summary), [marked.summary]);
+});
+
+test('E: 同じ eventKey の参加中 Bot が生存している場合だけ起動を抑止する', async t => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-dup-test-'));
+  t.after(() => fs.rmSync(tmpHome, { recursive: true, force: true }));
+  const now = new Date('2026-11-12T10:00:00.000Z');
+  const start = new Date(+now + 120000).toISOString();
+  const event = createMockEvent({
+    start: { dateTime: start },
+    end: { dateTime: new Date(+now + 3600000).toISOString() },
+  });
+  const eventKey = `abc-defg-hij_${start}`;
+  const sessionId = '20261112-100000-1234';
+  const sessionDir = path.join(tmpHome, '.claude', 'meet-cue', sessionId);
+  fs.mkdirSync(sessionDir, { recursive: true });
+  const opts = createMockSchedulerOptions(event, async () => ({
+    ok: true,
+    answers: { kind: { type: 'choice', choice: 'customer_meeting', confidence: 0.9 } },
+  }), tmpHome);
+  opts.now = now;
+  opts.dryRun = true;
+  opts.state = { [eventKey]: { docId: 'doc123', cardsFile: 'cards.json' } };
+  const cases = [
+    [{}, true],
+    [{ joinState: 'prejoin' }, true],
+    [{ joinState: 'in_lobby' }, true],
+    [{ pid: 999999999 }, false],
+    [{ endReason: 'meeting_ended' }, false],
+    [{ eventKey: 'another-event' }, false],
+  ];
+  for (const [overrides, running] of cases) {
+    fs.writeFileSync(path.join(sessionDir, 'session.json'), JSON.stringify({
+      sessionId, eventKey, pid: process.pid, joinState: 'in_call', ...overrides,
+    }));
+    const result = await runScheduler(opts);
+    assert.equal(result.actions.length, 1);
+    assert.equal(result.actions[0].actionStatus === 'running', running);
+  }
+});
+
+test('F: 既存 Doc の見出し直下に太字の案内を一度だけ挿入する', async () => {
+  const heading = '【Meetカンペ】打合せ🍵\n';
+  const makeParagraph = (text, startIndex) => ({
+    startIndex,
+    endIndex: startIndex + text.length,
+    paragraph: { elements: [{ textRun: { content: text } }] },
+  });
+  const doc = {
+    revisionId: 'revision-1',
+    body: { content: [makeParagraph(heading, 1), makeParagraph('日時: ...\n', heading.length + 1)] },
+  };
+  const updates = [];
+  const opts = {
+    docId: 'test-doc-id',
+    getToken: async () => 'fake-token',
+    api: async (_token, url, opts) => {
+      if (url.endsWith(':batchUpdate')) {
+        const update = JSON.parse(opts.body);
+        updates.push(update);
+        const { location, text } = update.requests[0].insertText;
+        doc.body.content.splice(1, 0, makeParagraph(text, location.index));
+      }
+      return { json: async () => doc };
+    },
+  };
+  assert.deepEqual(await insertGreetingIfNeeded(opts), { inserted: true });
+  assert.deepEqual(await insertGreetingIfNeeded(opts), { inserted: false });
+  assert.equal(updates.length, 1);
+  const [{ requests, writeControl }] = updates;
+  const index = heading.length + 1;
+  assert.deepEqual(writeControl, { requiredRevisionId: 'revision-1' });
+  assert.deepEqual(requests[0].insertText, { location: { index }, text: `${GREETING_LINE}\n\n` });
+  assert.equal(requests[1].updateTextStyle.textStyle.bold, true);
+  assert.deepEqual(requests[1].updateTextStyle.range, { startIndex: index, endIndex: index + GREETING_LINE.length });
+});
+
+test('F: スケジューラは台帳にある開始前の Doc を準備時に一度だけ更新する', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-greeting-test-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const future = 'abc-defg-hij_2026-11-12T11:00:00.000Z';
+  const past = 'abc-defg-hij_2026-11-12T09:00:00.000Z';
+  saveSchedulerState({ [future]: { docId: 'future' }, [past]: { docId: 'past' } }, home);
+  fs.writeFileSync(botLoginPath(home), JSON.stringify({ ok: true }));
+
+  const checkedDocs = [];
+  const opts = {
+    ...createMockSchedulerOptions([], async () => assert.fail('Jev を呼ばない'), home),
+    dryRun: false,
+    insertGreetingIfNeeded: async ({ docId }) => checkedDocs.push(docId),
+  };
+  assert.equal((await runScheduler(opts)).ok, true);
+  assert.equal(loadSchedulerState(home)[future].greetingChecked, true);
+  assert.equal((await runScheduler(opts)).ok, true);
+  assert.deepEqual(checkedDocs, ['future']);
 });

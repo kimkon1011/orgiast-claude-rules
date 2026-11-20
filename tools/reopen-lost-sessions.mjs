@@ -337,6 +337,13 @@ export function resolveReopenFolder(cwd, transcriptCwds = [], { fsImpl = fs, spa
   } catch { /* git 不可: null へ */ }
   return null;
 }
+// recent-active モードで対象外にする待機タブの題名パターン（2026-11-20 指示）。
+// 011-resilient-steele のような自動付与題名／〜｜待機中／remote-control-xxx。
+export function isWaitingTitle(title) {
+  const t = (title ?? '').trim();
+  if (!t) return false;
+  return /^\d{3}-[a-z]+$/.test(t) || /｜待機中$/.test(t) || /^remote-control-/.test(t);
+}
 export function hasHostExit(events, since, until) {
   return events.some(e => e.event_type === 'system' && e.payload?.reason === 'host_exit'
     && Date.parse(e.created_at) >= Date.parse(since) && Date.parse(e.created_at) <= Date.parse(until));
@@ -812,19 +819,28 @@ export async function getLoadGuardStatus({
 }
 
 export function parseOptions(args, spawn = spawnSync) {
-  const options = { dryRun: false, max: DEFAULT_MAX_REOPEN, gapSec: 10, watch: false };
+  const options = { dryRun: false, max: DEFAULT_MAX_REOPEN, gapSec: 10, watch: false, recentActive: false, recentActiveHours: 24 };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--dry-run') { options.dryRun = true; continue; }
     if (arg === '--watch') { options.watch = true; continue; }
+    if (arg === '--recent-active') {
+      options.recentActive = true;
+      // 任意引数: 直後が数値なら時間数として扱う（--recent-active 24 / --recent-active --max 5 の両方に対応）
+      const next = args[i + 1];
+      if (next !== undefined && /^\d+(?:\.\d+)?$/.test(next)) { options.recentActiveHours = Number(next); i++; }
+      continue;
+    }
     const key = { '--since': 'since', '--until': 'until', '--max': 'max', '--gap-sec': 'gapSec' }[arg];
     if (!key || !args[i + 1]) throw Error(`Invalid option: ${arg}`);
     if (key === 'max') options.maxSet = true;
     options[key] = ['max', 'gapSec'].includes(key) ? Number(args[++i]) : args[++i];
   }
   if (options.watch && (options.since || options.until)) throw Error('--watch and --since/--until are mutually exclusive');
+  if (options.watch && options.recentActive) throw Error('--watch and --recent-active are mutually exclusive');
+  if (!Number.isFinite(options.recentActiveHours) || options.recentActiveHours <= 0) throw Error('Invalid recent-active hours');
   if (!Number.isInteger(options.max) || options.max < 1 || !Number.isFinite(options.gapSec) || options.gapSec < 0) throw Error('Invalid max/gap');
-  if (!options.watch) {
+  if (!options.watch && !options.recentActive) {
     if (!options.since || !options.until) {
       const boot = Date.parse(ps('(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString("o")', spawn));
       options.since ??= new Date(boot - 15 * 60000).toISOString();
@@ -832,6 +848,8 @@ export function parseOptions(args, spawn = spawnSync) {
     }
     if (!Number.isFinite(Date.parse(options.since)) || !Number.isFinite(Date.parse(options.until)) || Date.parse(options.since) > Date.parse(options.until)) throw Error('Invalid time range');
   }
+  // recent-active モードの既定 max は 5（host_exit 既定の 3 とは別）。明示 --max は優先。
+  if (options.recentActive && !options.maxSet) options.max = 5;
   return options;
 }
 export function acquireLock(file, now = Date.now()) {
@@ -861,13 +879,25 @@ export function resolveClaudeCli({ env = process.env, exists = fs.existsSync, re
   const localBin = path.join(home, '.local', 'bin', binName);
   if (exists(localBin)) return localBin;
 
+  // (b2) npm グローバルの claude.cmd。Windows は拡張子なしの npm shim
+  // （AppData\Roaming\npm\claude）を spawn すると ENOENT になるため .cmd を使う。
+  const npmCmd = process.platform === 'win32'
+    ? path.join(env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'npm', 'claude.cmd')
+    : null;
+  if (npmCmd && exists(npmCmd)) return npmCmd;
+
   // (c) where.exe / which
   try {
     const cmd = process.platform === 'win32' ? 'where.exe' : 'which';
     const result = spawn(cmd, ['claude'], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
     if (result.status === 0) {
-      const first = String(result.stdout ?? '').split('\n')[0].trim();
-      if (first && exists(first)) return first;
+      const lines = String(result.stdout ?? '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      // Windows では where.exe が拡張子なし shim を先に返すことがあるため
+      // spawn 可能な .cmd/.exe/.bat の行だけを選ぶ。
+      const preferred = process.platform === 'win32'
+        ? lines.find(p => /\.(cmd|exe|bat)$/i.test(p))
+        : lines[0];
+      if (preferred && exists(preferred)) return preferred;
     }
   } catch { /* not available or not found */ }
 
@@ -887,14 +917,24 @@ export function resolveClaudeCli({ env = process.env, exists = fs.existsSync, re
     } catch { /* directory not found */ }
   } catch { /* path construction error */ }
 
-  throw new Error('claude CLI not found');
+  const searched = [
+    fromEnv && `env CLAUDE_CLI/CLAUDE_CLI_PATH/CLAUDE_BIN=${fromEnv}`,
+    localBin,
+    npmCmd,
+    process.platform === 'win32' ? 'where.exe claude (.cmd/.exe/.bat)' : 'which claude',
+  ].filter(Boolean);
+  throw new Error(`claude CLI not found (tried: ${searched.join('; ')})`);
 }
 
+// recent-active モードの同時起動上限。このツールが自分で開き直す本数だけで数え、
+// 合計この値を超えない。VSCode で人が開いているセッションは数えない（2026-11-20 指示）。
+export const RECENT_ACTIVE_HARD_CAP = 5;
 export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_MAX_REOPEN, gapSec = 10,
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs, stateBased = false,
-  checkCpu = true, checkClaude = false, cpusImpl, vscodeStartedAt, openDb, checkIdle = true, idleImpl } = {}) {
-  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closable: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0, unverifiedStreak: 0, processRunning: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
+  checkCpu = true, checkClaude = false, cpusImpl, vscodeStartedAt, openDb, checkIdle = true, idleImpl,
+  recentActive = false, recentActiveHours = 24 } = {}) {
+  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closable: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0, unverifiedStreak: 0, processRunning: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null, recentActive: recentActive || null, recentActiveHours: recentActive ? recentActiveHours : null };
   const progress = (stage, detail) => { if (!dryRun) writeProgress(base, stage, detail); };
   const initialHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
   const hiddenSessionIds = initialHidden.ids;
@@ -974,7 +1014,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
     };
     const living = alive();
     progress('alive', `source=${result.aliveSource}, count=${living.size}`);
-    const indexSinceMs = stateBased
+    const indexSinceMs = stateBased || recentActive
       ? now() - 72 * 3600 * 1000
       : Date.parse(since) - 24 * 3600 * 1000;
     const locals = localIndex(base, undefined, { sinceMs: Number.isFinite(indexSinceMs) ? indexSinceMs : now() - 72 * 3600 * 1000 });
@@ -986,7 +1026,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
     const reopenCounts = reopenLoopCounts(base, now);
     const repeatCounts = reopenRepeatCounts(base, now);
     const unverifiedCounts = unverifiedStreakCounts(base, now);
-    const deadline = now() + (stateBased ? 180000 : 60000);
+    const deadline = now() + (stateBased || recentActive ? 180000 : 60000);
     const get = async url => {
       if (now() >= deadline) throw Error('API time limit');
       const timeoutMs = Math.max(1, Math.min(deadline - now(), 30000));
@@ -1001,11 +1041,14 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
     };
     let cursor = '';
     const seen = new Set(), seenIds = new Set();
+    // recent-active モード: ページング全体で集めた候補を updated_at 降順ソートしてから上位だけ開く
+    const recentPool = [];
+    let stopPaging = false;
     try {
       do {
         const body = await get(`${BASE}?${new URLSearchParams({ limit: '100', ...(cursor && { cursor }) })}`);
         if (!Array.isArray(body.data)) throw Error('Invalid sessions response');
-        const sessions = stateBased ? body.data : body.data.filter(session => !Number.isFinite(Date.parse(session.updated_at)) || Date.parse(session.updated_at) >= Date.parse(since));
+        const sessions = stateBased || recentActive ? body.data : body.data.filter(session => !Number.isFinite(Date.parse(session.updated_at)) || Date.parse(session.updated_at) >= Date.parse(since));
 
         // 状態ベースの候補（--watch 専用、events API 不要）
         if (stateBased) {
@@ -1058,6 +1101,38 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
           }
         }
 
+        // recent-active モード（--recent-active）: 単に開いていないだけの切断セッションを
+        // updated_at 新しい順に開き直す。host_exit も state 判定も不要。
+        if (recentActive) {
+          const cutoffMs = now() - recentActiveHours * 3600 * 1000;
+          for (const session of sessions) {
+            if (session.status !== 'active' || session.connection_status === 'connected') continue;
+            const updatedAt = Date.parse(session.updated_at);
+            if (!Number.isFinite(updatedAt) || updatedAt < cutoffMs) continue;
+            // 待機タブ（中身のない空き枠）は対象にしない
+            if (isWaitingTitle(session.title)) { result.skipped.standby++; continue; }
+            if ((session.title ?? '').includes('【閉じて可】')) { result.skipped.closable++; continue; }
+            const local = locals.get(session.id);
+            if (!local || seenIds.has(local.id)) continue;
+            // ユーザーがアーカイブ・クローズしたものは除外（closed ledger / VSCode hidden）
+            const reason = exclusion(local, closed, living, hiddenSessionIds);
+            if (reason) { result.skipped[reason]++; continue; }
+            if (reopenCounts[local.id] >= 3) { result.skipped.reopenLoop++; continue; }
+            if (repeatCounts[local.id] >= 3) { result.skipped.reopenRepeat++; continue; }
+            if (unverifiedCounts[local.id] >= 2) { result.skipped.unverifiedStreak++; continue; }
+            seenIds.add(local.id);
+            recentPool.push({ local, session, updatedAt });
+          }
+          // updated_at 降順と仮定し、ページ全体が窗口より古ければこれ以上ページングしない
+          if (sessions.length > 0 && sessions.every(s => {
+            const ua = Date.parse(s.updated_at);
+            return !Number.isFinite(ua) || ua < cutoffMs;
+          })) {
+            stopPaging = true;
+          }
+        }
+
+        if (!stateBased && !recentActive) {
         for (let offset = 0; offset < sessions.length; offset += 6) {
           const batch = await Promise.allSettled(sessions.slice(offset, offset + 6).map(async session => {
             const events = await get(`${BASE}/${encodeURIComponent(session.id)}/events?limit=20`);
@@ -1085,11 +1160,21 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
           const failed = batch.find(item => item.status === 'rejected');
           if (failed) throw failed.reason;
         }
-        cursor = body.next_cursor || '';
+        }
+        cursor = stopPaging ? '' : (body.next_cursor || '');
         if (cursor && seen.has(cursor)) throw Error('Repeated API cursor');
         seen.add(cursor);
       } while (cursor);
     } catch (error) { result.apiError = error.message; }
+    // recent-active: updated_at 新しい順に並べ、上位 --max（既定5・ハード上限5）件だけ候補にする
+    if (recentActive && recentPool.length) {
+      recentPool.sort((a, b) => b.updatedAt - a.updatedAt);
+      const take = Math.min(max, RECENT_ACTIVE_HARD_CAP);
+      for (const { local, session, updatedAt } of recentPool.slice(0, take)) {
+        result.candidates.push({ id: local.id, bridgeSessionId: local.bridgeSessionId, rcId: session.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'recent-active', updatedAt: new Date(updatedAt).toISOString() });
+      }
+      result.recentActiveConsidered = recentPool.length;
+    }
     if (!dryRun && result.candidates.length) {
       progress('fetch', `candidates=${result.candidates.length}`);
       // アイドル保護: 最終入力から REOPEN_MIN_IDLE_SEC 秒未満なら開き直しを全部見送る
@@ -1097,7 +1182,9 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
       if (idleSec !== null && idleSec < REOPEN_MIN_IDLE_SEC) {
         result.deferredActive = idleSec;
       } else {
-      const loadStatus = await getLoadGuardStatus({ env, spawn, cpusImpl, wait, checkCpu, checkClaude, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now });
+      // recent-active モードは既存 claude プロセス数（VSCode で人が開いている分を含む）で
+      // ブロックしない。同時起動上限は自分で開き直した本数（RECENT_ACTIVE_HARD_CAP）で数える。
+      const loadStatus = await getLoadGuardStatus({ env, spawn, cpusImpl, wait, checkCpu, checkClaude: recentActive ? false : checkClaude, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now });
       if (loadStatus.error) {
         result.loadGuard = { claudeCount: loadStatus.claudeCount, cpuPct: loadStatus.cpuPct, reason: loadStatus.reason, error: loadStatus.error };
       }
@@ -1322,7 +1409,7 @@ if (isEntry(import.meta.url)) {
       // 連続失敗カウンター: API エラーが連続 8 回超でのみ exit 1（一時的ネットワーク不調は exit 0）
       if (recordApiResult(base, result.apiError)) process.exitCode = 1;
     } else {
-      const result = await reopenLost({ ...opts, checkClaude: true });
+      const result = await reopenLost({ ...opts, checkClaude: !opts.recentActive });
       const base = opts.base || path.join(os.homedir(), '.claude');
       console.log(JSON.stringify(result));
       if (result.error || result.failed?.length || result.unverified?.length) process.exitCode = 1;

@@ -146,7 +146,7 @@ function Get-RcloneExe {
   return $null
 }
 
-function Get-RcloneRemoteName {
+function Get-RcloneRemoteName([switch]$AllowReadOnly) {
   <#
     .SYNOPSIS
       Returns an rclone remote name if available, type=drive, and not readonly.
@@ -161,9 +161,12 @@ function Get-RcloneRemoteName {
       Write-Event ('WARN rclone-remote=skipped remote={0} reason=not-drive-type' -f $remoteName)
       return $null
     }
-    if ($configOutput -match 'scope\s*=\s*drive\.readonly') {
+    if ($configOutput -match 'scope\s*=\s*drive\.readonly' -and -not $AllowReadOnly) {
       Write-Event ('WARN rclone-remote=skipped remote={0} reason=readonly-scope' -f $remoteName)
       return $null
+    }
+    if ($configOutput -match 'scope\s*=\s*drive\.readonly') {
+      Write-Event ('WARN rclone-remote=readable remote={0} writable=false reason=readonly-scope' -f $remoteName)
     }
     Write-Event ('rclone-remote=found remote={0}' -f $remoteName)
     return $remoteName
@@ -184,11 +187,16 @@ function Send-ToRclone {
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
       foreach ($line in $result) { Write-Event ('WARN rclone-output: {0}' -f $line) }
+      Write-Event ('fallback=rclone remote={0} result=failed' -f $RemoteName)
       throw "exit code: $exitCode"
     }
+    Write-Event ('fallback=rclone remote={0} result=ok' -f $RemoteName)
     Write-Event ('rclone-copy=ok remote={0} file={1}' -f $RemoteName, [IO.Path]::GetFileName($ZipPath))
     return $true
   } catch {
+    if ($_.Exception.Message -notmatch '^exit code:') {
+      Write-Event ('fallback=rclone remote={0} result=failed' -f $RemoteName)
+    }
     Write-Event ('WARN rclone-copy=failed remote={0} reason={1}' -f $RemoteName, $_.Exception.Message)
     return $false
   }
@@ -437,9 +445,10 @@ try {
 
   $driveProcess = Get-Process -Name 'GoogleDriveFS' -ErrorAction SilentlyContinue
   $driveRoot = Find-GoogleDrive
-  $rcloneRemote = Get-RcloneRemoteName
+  # DryRun は読み取り専用 remote でも経路と宛先を検証する。本番では書き込み可能な remote だけを使う。
+  $rcloneRemote = Get-RcloneRemoteName -AllowReadOnly:$DryRun
   if ($DryRun -and -not $driveRoot) {
-    if ($rcloneRemote) { Write-Event ('plan rclone-fallback=available remote={0}' -f $rcloneRemote) }
+    if ($rcloneRemote) { Write-Event ('plan fallback=rclone remote={0} result=ok mode=dry-run destination=Claude-Backups/{1}' -f $rcloneRemote, $hostname) }
     $driveRoot = 'H:\'
     Write-Event 'plan drive-root=H:\ reason=no-mounted-drive-dry-run-fallback'
   }

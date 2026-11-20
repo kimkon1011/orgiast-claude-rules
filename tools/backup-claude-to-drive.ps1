@@ -152,25 +152,28 @@ function Get-RcloneRemoteName {
       Returns an rclone remote name if available, type=drive, and not readonly.
       Returns $null if not available.
   #>
-  $remoteName = if ($env:CLAUDE_BACKUP_RCLONE_REMOTE) { $env:CLAUDE_BACKUP_RCLONE_REMOTE } else { 'aujust' }
   $rcloneExe = Get-RcloneExe
   if (-not $rcloneExe) { Write-Event 'WARN rclone-remote=skipped reason=rclone-not-found'; return $null }
-  try {
-    $configOutput = & $rcloneExe config show $remoteName 2>$null | Out-String
-    if (-not $configOutput -or $configOutput -notmatch 'type\s*=\s*drive') {
-      Write-Event ('WARN rclone-remote=skipped remote={0} reason=not-drive-type' -f $remoteName)
-      return $null
+  $candidates = if ($env:CLAUDE_BACKUP_RCLONE_REMOTE) { @($env:CLAUDE_BACKUP_RCLONE_REMOTE) } else { @('claude-backup', 'aujust') }
+  foreach ($remoteName in $candidates) {
+    try {
+      $configOutput = & $rcloneExe config show $remoteName 2>$null | Out-String
+      if (-not $configOutput -or $configOutput -notmatch 'type\s*=\s*drive') {
+        if ($env:CLAUDE_BACKUP_RCLONE_REMOTE) { Write-Event ('WARN rclone-remote=skipped remote={0} reason=not-drive-type' -f $remoteName) }
+        continue
+      }
+      if ($configOutput -match 'scope\s*=\s*drive\.readonly') {
+        if ($env:CLAUDE_BACKUP_RCLONE_REMOTE) { Write-Event ('WARN rclone-remote=skipped remote={0} reason=readonly-scope' -f $remoteName) }
+        continue
+      }
+      Write-Event ('rclone-remote=found remote={0}' -f $remoteName); return $remoteName
+    } catch {
+      if ($env:CLAUDE_BACKUP_RCLONE_REMOTE) { Write-Event ('WARN rclone-remote=skipped remote={0} reason={1}' -f $remoteName, $_.Exception.Message) }
+      continue
     }
-    if ($configOutput -match 'scope\s*=\s*drive\.readonly') {
-      Write-Event ('WARN rclone-remote=skipped remote={0} reason=readonly-scope' -f $remoteName)
-      return $null
-    }
-    Write-Event ('rclone-remote=found remote={0}' -f $remoteName)
-    return $remoteName
-  } catch {
-    Write-Event ('WARN rclone-remote=skipped remote={0} reason={1}' -f $remoteName, $_.Exception.Message)
-    return $null
   }
+  if (-not $env:CLAUDE_BACKUP_RCLONE_REMOTE) { Write-Event 'WARN rclone-remote=skipped reason=no-writable-drive-remote' }
+  return $null
 }
 
 function Send-ToRclone {
@@ -258,12 +261,16 @@ function Push-KimInboxInfo([string]$Body) {
     # スケジュールタスクからの実行で Start-Process -NoNewWindow が $p.ExitCode を空にする不具合があるため。
     $processInfo = New-Object System.Diagnostics.ProcessStartInfo
     $processInfo.FileName = $node.Source
-    $processInfo.Arguments = "$kimInbox --add --kind info --body-file `"$bodyFile`" --source backup-claude-to-drive"
+    $processInfo.Arguments = "`"$kimInbox`" --add --kind info --body-file `"$bodyFile`" --source backup-claude-to-drive"
     $processInfo.UseShellExecute = $false
     $processInfo.CreateNoWindow = $true
     $processInfo.RedirectStandardOutput = $true
     $processInfo.RedirectStandardError = $true
     $p = [System.Diagnostics.Process]::Start($processInfo)
+    # RedirectStandardOutput/Error=true では、出力バッファが詰まると子プロセスがブロックする。
+    # WaitForExit より先に非同期読み取りを開始しデッドロックを回避する。
+    $stdoutTask = $p.StandardOutput.ReadToEndAsync()
+    $stderrTask = $p.StandardError.ReadToEndAsync()
     $exited = $p.WaitForExit(60000)
     if (-not $exited) { $p.Kill(); Write-Event 'WARN kim-inbox-notice=failed reason=timeout'; return $false }
     # WaitForExit 完了後も ExitCode が未設定のケースがあるため、HasExited 確認後に再度待つ。

@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { EVENTS, defaultRepo, readDispatchManifest, tokens, isDispatcher } from './hook-dispatch-registry.mjs';
-import { acknowledgeRecovery, journalPrompt, markHandled } from './prompt-journal.mjs';
+import { acknowledgeRecovery, journalPrompt, markJournal } from './prompt-journal.mjs';
 import { dedupeContext } from './lib/context-dedupe.mjs';
 
 export function matches(matcher, event, input) {
@@ -303,7 +303,7 @@ export async function dispatch(event, raw, options = {}) {
     appendMetrics(home, record);
     const merged = mergeResults(event, results, { home, sessionId: input.session_id || input.sessionId });
     if (journalId && (merged.payload.decision === 'block' || merged.payload.continue === false)) {
-      markHandled(home, input.session_id, journalId);
+      markJournal(home, input.session_id, journalId);
     }
     if (event === 'Stop' && merged.payload.decision !== 'block' && merged.payload.continue !== false) {
       acknowledgeRecovery(home, input);

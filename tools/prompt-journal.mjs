@@ -2,8 +2,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { isEntry } from './is-entry.mjs';
-import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { isKimOperated } from './lib/kim-operated.mjs';
 import { redactForShare } from './lib/share-secrets.mjs';
@@ -30,12 +28,13 @@ export function journalPrompt(input, { home = journalHome(), now = new Date() } 
   } catch { /* Never interrupt prompt submission. */ }
 }
 
-export const handledFile = (home, session, id) => path.join(journalDir(home), 'handled', session, id);
+const markerFile = (home, session, id, state) => path.join(journalDir(home), state, session, id);
+export const hasJournalMarker = (home, session, id, state) => fs.existsSync(markerFile(home, session, id, state));
 
-export function markHandled(home, session, id) {
+export function markJournal(home, session, id, state = 'handled') {
   if (!validId(session) || !validId(id)) return;
   try {
-    const file = handledFile(home, session, id);
+    const file = markerFile(home, session, id, state);
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     fs.closeSync(fs.openSync(file, 'a', 0o600));
   } catch { /* Retry recovery if its acknowledgement cannot be saved. */ }
@@ -45,10 +44,6 @@ export function acknowledgeRecovery(home, input) {
   if (!validId(input.session_id) || typeof input.last_assistant_message !== 'string'
     || !fs.existsSync(journalDir(home))) return;
   for (const match of input.last_assistant_message.matchAll(/^\s*prompt-journal-answered: ([a-f0-9-]{36})[\t ]*$/gim)) {
-    markHandled(home, input.session_id, match[1]);
+    markJournal(home, input.session_id, match[1]);
   }
-}
-
-if (isEntry(import.meta.url)) {
-  try { journalPrompt(JSON.parse(await readStdinWithTimeout())); } catch { /* fail open */ }
 }

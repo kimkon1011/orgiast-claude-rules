@@ -1,6 +1,6 @@
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
-import { journalHome, validId } from './prompt-journal.mjs';
+import { journalHome, markJournal, validId } from './prompt-journal.mjs';
 import { findLostPrompts } from './lost-prompt-scan.mjs';
 
 export async function hookMain(raw, { home = journalHome(), stdout = console.log } = {}) {
@@ -17,6 +17,8 @@ export async function hookMain(raw, { home = journalHome(), stdout = console.log
       '以下はこのセッションで記録から欠落した kim の返答です。内容を確認して回答してください。実際に回答した項目ごとに、対応する prompt-journal-answered 行を回答の末尾に独立した行として記載してください。',
       ...lost.map(row => `kim の未達の返答: ${row.prompt}\nprompt-journal-answered: ${row.id}`),
     ].join('\n\n');
+    // Preserve an immediate SessionStart recovery across the ordinary age grace period.
+    if (event === 'SessionStart') for (const row of lost) markJournal(home, row.session_id, row.id, 'presented');
     stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext } }));
   } catch { /* Recovery must fail open. */ }
 }

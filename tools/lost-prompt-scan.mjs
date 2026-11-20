@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { isEntry } from './is-entry.mjs';
-import { handledFile, journalDir, journalHome, promptText, transcriptPath, validId } from './prompt-journal.mjs';
+import { hasJournalMarker, journalDir, journalHome, promptText, transcriptPath, validId } from './prompt-journal.mjs';
 
 const GRACE_MS = 2 * 60_000;
 const journalDate = /^\d{4}-\d\d-\d\d\.jsonl$/;
@@ -87,7 +87,8 @@ export async function findLostPrompts({ home = journalHome(), now = Date.now(), 
       for (const row of submissions.reverse()) {
         const at = Date.parse(row.at);
         if (times.length && times.at(-1) >= at) times.pop();
-        else if (at <= now - graceMs && !fs.existsSync(handledFile(home, session, row.id))) lost.push(row);
+        else if ((at <= now - graceMs || (sessionId && hasJournalMarker(home, session, row.id, 'presented')))
+          && !hasJournalMarker(home, session, row.id, 'handled')) lost.push(row);
       }
     }
   }
@@ -99,7 +100,7 @@ export async function scanLostPrompts({ home = journalHome(), ...options } = {})
   if (!lost.length) return 0;
   const { addItem } = await import('./kim-inbox.mjs');
   for (const row of lost) {
-    if (fs.existsSync(handledFile(home, row.session_id, row.id))) continue;
+    if (hasJournalMarker(home, row.session_id, row.id, 'handled')) continue;
     await addItem(home, {
       kind: 'info', source: 'lost-prompt-scan', sessionId: row.session_id, dedupeKey: 'lost-prompt:' + row.id,
       text: `Claude Code 未達の返答 (${row.session_id})\n${[...row.prompt].slice(0, 80).join('')}`,

@@ -7,16 +7,15 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { dispatch } from './hook-dispatch.mjs';
-import { repositoryHooks } from './hook-dispatch-registry.mjs';
+import { collapseHooks, repositoryHooks } from './hook-dispatch-registry.mjs';
 import { listItems } from './kim-inbox.mjs';
-import { hookMain } from './lost-prompt-context.mjs';
 import { findLostPrompts } from './lost-prompt-scan.mjs';
 import { journalDir, journalPrompt } from './prompt-journal.mjs';
 import { registerLostPromptScan } from './register-lost-prompt-scan-task.mjs';
 
 const session = '2076fd36-ae6b-4462-ac35-e6cfc0365caf';
 const repo = fileURLToPath(new URL('..', import.meta.url));
-const at = new Date('2026-11-19T11:53:07Z');
+const at = new Date(Date.now() - 24 * 60 * 60_000);
 const emptyManifest = { events: {} };
 
 function fixture(t) {
@@ -45,8 +44,9 @@ test('journal precedes other hooks under load and redacts the payload', async t 
   });
   const before = performance.now();
   assert.ok(journalPrompt({ session_id: session, prompt: '短い返答' }, { home, now: at }));
-  t.diagnostic(`journal append: ${(performance.now() - before).toFixed(2)} ms`);
-  assert.ok(performance.now() - before < 50);
+  const appendMs = performance.now() - before;
+  t.diagnostic(`journal append: ${appendMs.toFixed(2)} ms`);
+  assert.ok(appendMs < 50);
   assert.deepEqual(repositoryHooks(repo, home).SessionStart.some(group => group.hooks[0].command.includes('lost-prompt-context.mjs')), true);
 });
 
@@ -80,24 +80,21 @@ test('scanner CLI delivers deduplicated info and matches each transcript occurre
 
 test('session recovery repeats until an accepted Stop acknowledges the answer', async t => {
   const { home, transcript } = fixture(t);
-  const id = journalPrompt({ session_id: session, prompt: 'これに回答して', transcript_path: transcript }, { home, now: at });
-  const contextHook = { name: 'lost-prompt-context.mjs', critical: true, node: true };
-  const manifest = { events: { SessionStart: [contextHook], UserPromptSubmit: [contextHook] } };
+  // Resume during the scanner's grace period, then exercise the real hook worker.
+  const id = journalPrompt({ session_id: session, prompt: 'これに回答して', transcript_path: transcript }, { home });
+  const events = repositoryHooks(repo, home);
+  for (const event of ['SessionStart', 'UserPromptSubmit']) {
+    events[event] = events[event].filter(group => group.hooks[0].command.includes('lost-prompt-context.mjs'));
+  }
+  const { manifest } = collapseHooks({ SessionStart: events.SessionStart, UserPromptSubmit: events.UserPromptSubmit }, repo);
   const input = { session_id: session, transcript_path: transcript };
-  const opts = {
-    home, manifest, overloaded: true,
-    async execute(_hook, raw) {
-      let stdout = '';
-      await hookMain(raw, { home, stdout: value => { stdout = value; } });
-      return { status: 0, stdout };
-    },
-  };
+  const opts = { home, manifest, overloaded: true, env: { ...process.env, ORGIAST_HOME: home } };
   for (const event of ['SessionStart', 'UserPromptSubmit', 'UserPromptSubmit']) {
     const result = await dispatch(event, JSON.stringify(input), opts);
     assert.match(result.payload.hookSpecificOutput.additionalContext, /kim の未達の返答: これに回答して/);
   }
   await dispatch('Stop', JSON.stringify({ ...input, last_assistant_message: '別件の回答' }), { home, manifest: emptyManifest });
-  assert.equal((await findLostPrompts({ home })).length, 1);
+  assert.equal((await findLostPrompts({ home, graceMs: 0 })).length, 1);
   await dispatch('Stop', JSON.stringify({ ...input, last_assistant_message: `回答です。\nprompt-journal-answered: ${id}` }), { home, manifest: emptyManifest });
   assert.deepEqual((await dispatch('UserPromptSubmit', JSON.stringify(input), opts)).payload, {});
 });

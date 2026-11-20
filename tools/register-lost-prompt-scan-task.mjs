@@ -11,7 +11,7 @@ export function registerLostPromptScan({ home = journalHome(), dryRun = false } 
   const repo = resolveRegisterRepoRoot({
     fallback: fileURLToPath(new URL('..', import.meta.url)),
     requiredPaths: ['tools/lost-prompt-scan.mjs', 'tools/run-hidden.vbs'],
-    home,
+    env: { ...process.env, ORGIAST_HOME: home },
   });
   if (!dryRun) {
     if (process.platform !== 'win32') throw new Error('Task Scheduler requires Windows');

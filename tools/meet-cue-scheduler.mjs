@@ -13,10 +13,11 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { parseArgs } from 'node:util';
 
+import { acquireLock } from './lib/progress-file-lock.mjs';
 import { isEntry } from './is-entry.mjs';
 import { askJev } from './jev.mjs';
 import { getDriveToken, driveApi, DRIVE_SCOPE } from './lib/drive-auth.mjs';
-import { setupCueDocument } from './lib/meet-cue-doc.mjs';
+import { setupCueDocument, insertGreetingIfNeeded } from './lib/meet-cue-doc.mjs';
 import { DEFAULT_SEAT_HOSTNAMES, matchesSeatHostname, resolveBotDisplayName, resolveSeatHostnames } from './lib/meet-cue-core.mjs';
 import { generateCardsFromBrief, generateSessionId } from './meet-cue.mjs';
 import { matchMeetingInquiries, INQUIRY_SHEET, INQUIRY_TAB, readSheet } from './lib/inquiry-sheet.mjs';
@@ -545,7 +546,43 @@ export function isPidAlive(pid) {
   }
 }
 
+function liveSessionEventKeys(home) {
+  const baseDir = meetCueBaseDir(home);
+  const keys = new Set();
+  let entries;
+  try {
+    entries = fs.readdirSync(baseDir);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+    return keys;
+  }
+  for (const id of entries) {
+    if (!/^\d{8}-\d{6}-[a-f0-9]{4}$/.test(id)) continue;
+    try {
+      const session = JSON.parse(fs.readFileSync(path.join(baseDir, id, 'session.json'), 'utf8'));
+      if (session.eventKey && !session.endReason &&
+          ['joining', 'prejoin', 'in_lobby', 'in_call'].includes(session.joinState) &&
+          isPidAlive(session.pid)) {
+        keys.add(session.eventKey);
+      }
+    } catch { /* session.json がまだ存在しないか書き込み中 */ }
+  }
+  return keys;
+}
+
 export async function runScheduler(options = {}) {
+  if (options.dryRun || options['dry-run']) return runSchedulerPass(options);
+  const home = options.home || homeDir();
+  const release = acquireLock(path.join(meetCueBaseDir(home), 'scheduler.lock'));
+  if (!release) return { ok: true, skipped: 'scheduler_running', actions: [] };
+  try {
+    return await runSchedulerPass(options);
+  } finally {
+    release();
+  }
+}
+
+async function runSchedulerPass(options = {}) {
   const home = options.home || homeDir();
   const now = options.now ? new Date(options.now) : new Date();
   const hours = options.hours ? parseInt(options.hours, 10) : 24;
@@ -554,6 +591,7 @@ export async function runScheduler(options = {}) {
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   const sheetReader = options.readSheet || readSheet;
   const askJevImpl = options.askJevImpl || askJev;
+  const ensureDocGreeting = options.insertGreetingIfNeeded || insertGreetingIfNeeded;
 
   const config = options.config || readConfig(home);
   const staffAddresses = loadStaffAddresses(home);
@@ -583,6 +621,19 @@ export async function runScheduler(options = {}) {
   // Try auto login if needed
   if (!dryRun) {
     await attemptAutoLogin({ home, fetchImpl });
+  }
+
+  if (!dryRun) {
+    for (const [eventKey, itemState] of Object.entries(state)) {
+      const start = Date.parse(eventKey.slice(eventKey.lastIndexOf('_') + 1));
+      if (!itemState.docId || itemState.greetingChecked || !(start > now.getTime())) continue;
+      try {
+        await ensureDocGreeting({ docId: itemState.docId, getToken });
+        itemState.greetingChecked = true;
+      } catch (err) {
+        console.error(`[meet-cue-scheduler] 冒頭案内の追加に失敗 (${eventKey}):`, err.message);
+      }
+    }
   }
 
   // Fetch target calendars
@@ -670,6 +721,7 @@ export async function runScheduler(options = {}) {
   }
 
   const plannedActions = [];
+  const activeSessionKeys = liveSessionEventKeys(home);
 
   for (const { event, calendarId, classification } of targetEvents) {
     const meetInfo = extractMeetInfo(event);
@@ -711,6 +763,7 @@ export async function runScheduler(options = {}) {
 
         docId = docInfo.docId;
         itemState.docId = docId;
+        itemState.greetingChecked = true;
         itemState.staffUrl = docInfo.staffUrl;
 
         // Build brief
@@ -774,8 +827,7 @@ export async function runScheduler(options = {}) {
     let actionStatus = 'idle';
 
     if (inJoinWindow) {
-      const pidAlive = isPidAlive(itemState.joinedPid);
-      if (pidAlive) {
+      if (isPidAlive(itemState.joinedPid) || activeSessionKeys.has(eventKey)) {
         actionStatus = 'running';
       } else {
         // Check if previous attempt ended with joinError within 10 min
@@ -802,7 +854,10 @@ export async function runScheduler(options = {}) {
           console.log(`[meet-cue-scheduler] joinError (${itemState.joinError}) 発生後 10 分以内のため再試行スキップ: ${event.summary}`);
         } else if (!dryRun && docId && itemState.cardsFile) {
           // Count active concurrent running sessions
-          const activeCount = Object.values(state).filter(s => isPidAlive(s.joinedPid)).length;
+          const activeCount = new Set([
+            ...activeSessionKeys,
+            ...Object.keys(state).filter(key => isPidAlive(state[key].joinedPid)),
+          ]).size;
           if (activeCount >= config.maxConcurrent) {
             actionStatus = 'max_concurrent_exceeded';
             console.log(`[meet-cue-scheduler] 同時上限(${config.maxConcurrent})超過のため参加保留: ${event.summary}`);
@@ -825,6 +880,7 @@ export async function runScheduler(options = {}) {
                 scriptPath,
                 'start',
                 '--session-id', sessionId,
+                '--event-key', eventKey,
                 '--url', meetInfo.meetUrl,
                 '--staff', staffEmail,
                 '--title', event.summary || '打合せ',
@@ -854,6 +910,9 @@ export async function runScheduler(options = {}) {
               delete itemState.joinError;
               delete itemState.lastJoinErrorTime;
               itemState.joinedPid = child.pid;
+              activeSessionKeys.add(eventKey);
+              state[eventKey] = itemState;
+              saveSchedulerState(state, home);
               actionStatus = `launched_pid_${child.pid}`;
               console.log(`[meet-cue-scheduler] Meet Bot 起動成功 (PID: ${child.pid}, ${event.summary})`);
             } catch (err) {

@@ -17,6 +17,9 @@ import {
   deliverCueUrl,
   findSeisakuProfileName,
   runScheduler,
+  botLoginPath,
+  loadSchedulerState,
+  saveSchedulerState,
   readConfig,
   JOIN_WINDOW_BEFORE_MS,
   JOIN_WINDOW_AFTER_MS,
@@ -24,7 +27,8 @@ import {
 } from './meet-cue-scheduler.mjs';
 
 import { copyProfileFromChrome } from './meet-cue.mjs';
-import { findHeaderInsertIndex } from './lib/meet-cue-doc.mjs';
+import { GREETING_LINE } from './lib/meet-cue-core.mjs';
+import { findHeaderInsertIndex, insertGreetingIfNeeded } from './lib/meet-cue-doc.mjs';
 
 test('isExternalEmail: 社外ドメインと staff-addresses の判定', () => {
   const staff = ['personal@gmail.com'];
@@ -685,4 +689,98 @@ test('migrateCleanupCompanions: 過去と識別マーカーのない予定を除
   assert.match(deletes[0], /future\?sendUpdates=none$/);
   const report = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'logs', 'meet-cue-companion-cleanup.json')));
   assert.deepEqual(report.deleted.map(event => event.summary), [marked.summary]);
+});
+
+test('E: 同じ eventKey の参加中 Bot が生存している場合だけ起動を抑止する', async t => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-dup-test-'));
+  t.after(() => fs.rmSync(tmpHome, { recursive: true, force: true }));
+  const now = new Date('2026-11-12T10:00:00.000Z');
+  const start = new Date(+now + 120000).toISOString();
+  const event = createMockEvent({
+    start: { dateTime: start },
+    end: { dateTime: new Date(+now + 3600000).toISOString() },
+  });
+  const eventKey = `abc-defg-hij_${start}`;
+  const sessionId = '20261112-100000-1234';
+  const sessionDir = path.join(tmpHome, '.claude', 'meet-cue', sessionId);
+  fs.mkdirSync(sessionDir, { recursive: true });
+  const opts = createMockSchedulerOptions(event, async () => ({
+    ok: true,
+    answers: { kind: { type: 'choice', choice: 'customer_meeting', confidence: 0.9 } },
+  }), tmpHome);
+  opts.now = now;
+  opts.dryRun = true;
+  opts.state = { [eventKey]: { docId: 'doc123', cardsFile: 'cards.json' } };
+  const cases = [
+    [{}, true],
+    [{ joinState: 'prejoin' }, true],
+    [{ joinState: 'in_lobby' }, true],
+    [{ pid: 999999999 }, false],
+    [{ endReason: 'meeting_ended' }, false],
+    [{ eventKey: 'another-event' }, false],
+  ];
+  for (const [overrides, running] of cases) {
+    fs.writeFileSync(path.join(sessionDir, 'session.json'), JSON.stringify({
+      sessionId, eventKey, pid: process.pid, joinState: 'in_call', ...overrides,
+    }));
+    const result = await runScheduler(opts);
+    assert.equal(result.actions.length, 1);
+    assert.equal(result.actions[0].actionStatus === 'running', running);
+  }
+});
+
+test('F: 既存 Doc の見出し直下に太字の案内を一度だけ挿入する', async () => {
+  const heading = '【Meetカンペ】打合せ🍵\n';
+  const makeParagraph = (text, startIndex) => ({
+    startIndex,
+    endIndex: startIndex + text.length,
+    paragraph: { elements: [{ textRun: { content: text } }] },
+  });
+  const doc = {
+    revisionId: 'revision-1',
+    body: { content: [makeParagraph(heading, 1), makeParagraph('日時: ...\n', heading.length + 1)] },
+  };
+  const updates = [];
+  const opts = {
+    docId: 'test-doc-id',
+    getToken: async () => 'fake-token',
+    api: async (_token, url, opts) => {
+      if (url.endsWith(':batchUpdate')) {
+        const update = JSON.parse(opts.body);
+        updates.push(update);
+        const { location, text } = update.requests[0].insertText;
+        doc.body.content.splice(1, 0, makeParagraph(text, location.index));
+      }
+      return { json: async () => doc };
+    },
+  };
+  assert.deepEqual(await insertGreetingIfNeeded(opts), { inserted: true });
+  assert.deepEqual(await insertGreetingIfNeeded(opts), { inserted: false });
+  assert.equal(updates.length, 1);
+  const [{ requests, writeControl }] = updates;
+  const index = heading.length + 1;
+  assert.deepEqual(writeControl, { requiredRevisionId: 'revision-1' });
+  assert.deepEqual(requests[0].insertText, { location: { index }, text: `${GREETING_LINE}\n\n` });
+  assert.equal(requests[1].updateTextStyle.textStyle.bold, true);
+  assert.deepEqual(requests[1].updateTextStyle.range, { startIndex: index, endIndex: index + GREETING_LINE.length });
+});
+
+test('F: スケジューラは台帳にある開始前の Doc を準備時に一度だけ更新する', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-greeting-test-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const future = 'abc-defg-hij_2026-11-12T11:00:00.000Z';
+  const past = 'abc-defg-hij_2026-11-12T09:00:00.000Z';
+  saveSchedulerState({ [future]: { docId: 'future' }, [past]: { docId: 'past' } }, home);
+  fs.writeFileSync(botLoginPath(home), JSON.stringify({ ok: true }));
+
+  const checkedDocs = [];
+  const opts = {
+    ...createMockSchedulerOptions([], async () => assert.fail('Jev を呼ばない'), home),
+    dryRun: false,
+    insertGreetingIfNeeded: async ({ docId }) => checkedDocs.push(docId),
+  };
+  assert.equal((await runScheduler(opts)).ok, true);
+  assert.equal(loadSchedulerState(home)[future].greetingChecked, true);
+  assert.equal((await runScheduler(opts)).ok, true);
+  assert.deepEqual(checkedDocs, ['future']);
 });

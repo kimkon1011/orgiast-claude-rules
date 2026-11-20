@@ -26,6 +26,13 @@ import { reapStalePolls } from './lib/fleet-poll-reaper.mjs';
 export { resolveFleetLabel, dailyRuleCompliance };
 export { RECLAIM_STALE_MS } from './lib/reclaim-lock.mjs';
 
+export function sameFleetAddress(a, b) {
+  const left = a == null ? '' : String(a);
+  const right = b == null ? '' : String(b);
+  if (left === right) return true;
+  return /^\d+$/.test(left) && /^\d+$/.test(right) && Number(left) === Number(right);
+}
+
 export function isFleetHub(label, config) {
   return label === (config.FLEET_HUB || HUB_LABEL);
 }
@@ -1109,8 +1116,9 @@ export async function pollOnce(deps = {}) {
       if (now() - saveStartedAt >= saveBudgetMs) { undurable++; break; }
       if (raw?.id && ((batch.successfulIds?.includes(raw.id) && fs.existsSync(fileOf(raw.id))) || batch.quarantinedIds?.includes(raw.id))) continue;
       try {
-        const exact = raw && (raw.to === 'all' || raw.to === label || (typeof raw.to === 'string' && raw.to.toLowerCase() === identity.hostname?.toLowerCase()));
-        const legacyTo = !exact && typeof raw?.to === 'string' && !!raw.to && (label.includes(raw.to) || identity.hostname?.toLowerCase().includes(raw.to.toLowerCase()));
+        const to = raw?.to == null ? '' : String(raw.to);
+        const exact = raw && (to === 'all' || sameFleetAddress(to, label) || to.toLowerCase() === identity.hostname?.toLowerCase());
+        const legacyTo = !exact && !!to && (label.includes(to) || identity.hostname?.toLowerCase().includes(to.toLowerCase()));
         if (!/^mail-[A-Za-z0-9-]{1,180}$/.test(raw?.id || '') || (!exact && !legacyTo) || !['note', 'prompt'].includes(raw.kind)
           || typeof raw.body !== 'string' || !raw.from || !Number.isFinite(Date.parse(raw.expiresAt))) throw Object.assign(new Error('invalid incoming mail'), { code: 'INVALID_INCOMING_MAIL' });
         let created = false;

@@ -11,7 +11,7 @@ import { appendInbox } from './auto-progress-inbox-hook.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
 import { mailboxDraftLabel } from './lib/drafts-auto-cleared.mjs';
 import { active, CATEGORY, DAY } from './lib/fleet-chase-policy.mjs';
-import { externalFile, readSkips, isSkipped, addSkip, saveAnswer } from './lib/external-waiting-state.mjs';
+import { externalFile, readSkips, isSkipped, addSkip, saveAnswer, hasAnswer, readAnswers, groupDrafts } from './lib/external-waiting-state.mjs';
 
 export function readJson(file, fallback = null) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
@@ -62,11 +62,22 @@ export function collectExternal({ home, now }) {
     const reason = failed.map(([mailbox, source]) => `${mailbox}: ${source.error || '取得失敗'}`).join(' / ') || 'なし';
     out.push({ id: 'ex:monitor', source: 'external', external: true, warning: true, title: `社外返信の監視が止まっています（最終更新 ${state.generatedAt || '不明'} / エラー ${reason}）`, ask: '監視を直す（Claude が対応）', waitingSince: state.generatedAt || new Date(now).toISOString(), ageDays: 0, route: {} });
   }
-  const items = (state.items || []).filter(item => !isSkipped(skips, item)).sort((a, b) => Date.parse(a.since) - Date.parse(b.since));
+  const filtered = (state.items || []).filter(item => !isSkipped(skips, item)).sort((a, b) => Date.parse(a.since) - Date.parse(b.since));
+  const { kept: items, replacedIds } = groupDrafts(filtered);
   for (const item of items) {
     const ms = Math.max(0, now - Date.parse(item.since));
-    const title = item.kind === 'draft' ? `下書きのまま未送信: ${item.who}${mailboxDraftLabel(item.mailbox)}「${item.subject}」` : `${item.who}${item.assignee ? `（担当: ${item.assignee}）` : ''}「${item.subject}」`;
-    out.push({ id: item.id, source: 'external', external: true, title, ask: item.ask || '返信内容を決める', waitingSince: item.since, ageDays: Math.floor(ms / DAY), ageHours: Math.floor(ms / 3600_000), route: { threadId: item.threadId, mailbox: item.mailbox } });
+    const answered = hasAnswer(home, item.id);
+    const draftNote = item.kind === 'draft' ? `下書きのまま未送信: ${item.who}${mailboxDraftLabel(item.mailbox)}「${item.subject}」` : `${item.who}${item.assignee ? `（担当: ${item.assignee}）` : ''}「${item.subject}」`;
+    const title = answered ? `✅ 回答済み・送信待ち: ${draftNote}` : draftNote;
+    const ask = answered ? '回答済み。返信下書きを作って送信する' : (item.ask || '返信内容を決める');
+    out.push({ id: item.id, source: 'external', external: true, title, ask, answered, waitingSince: item.since, ageDays: Math.floor(ms / DAY), ageHours: Math.floor(ms / 3600_000), route: { threadId: item.threadId, mailbox: item.mailbox } });
+  }
+  // replacedIds を skip 相当として扱う（次回表示されない）
+  for (const id of replacedIds) {
+    try {
+      const orig = (state.items || []).find(e => e.id === id);
+      if (orig && !isSkipped(skips, { id, lastMessageId: orig.lastMessageId || '' })) addSkip(home, id, '古い下書き（新しいものに置き換え）', now);
+    } catch {}
   }
   return out;
 }
@@ -132,6 +143,7 @@ export function clearShown(home, id) {
   saveJson(shownFile(home), state);
 }
 export function respond(id, { home = process.env.ORGIAST_HOME || os.homedir(), bodyFile, reason, skip = false, now = Date.now(), spawnImpl = spawnSync } = {}) {
+  if (id === '--answer-all') return respondAll({ home, bodyFile, reason, skip, now, spawnImpl });
   if (skip ? !reason?.trim() : !bodyFile) throw new Error(skip ? '--reason required' : '--body-file required');
   const body = skip ? '' : fs.readFileSync(bodyFile, 'utf8').trim();
   if (!skip && !body) throw new Error('empty answer');

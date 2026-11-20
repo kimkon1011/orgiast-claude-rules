@@ -451,8 +451,20 @@ try {
     Write-Event 'plan drive-root=H:\ reason=no-mounted-drive-dry-run-fallback'
   }
   $useRclone = (-not $driveProcess -or -not $driveRoot) -and $rcloneRemote
-  if (-not $DryRun -and -not $driveRoot -and -not $useRclone) { Stop-DriveNotAvailable }
-  if (-not $driveRoot -and -not $useRclone) { throw 'Google Drive のマウントも rclone リモートも利用できません' }
+  $localFallback = $false
+  if (-not $DryRun -and -not $driveRoot -and -not $useRclone) {
+    $localFallback = $true
+    $localBackupDir = if ($env:CLAUDE_BACKUP_LOCAL_DIR) { $env:CLAUDE_BACKUP_LOCAL_DIR } else { 'D:\claude-backups' }
+    $localBackupRoot = [IO.Path]::GetPathRoot($localBackupDir)
+    if (-not (Test-Path -LiteralPath $localBackupRoot)) {
+      $localFallback = $false
+      Write-Event ('WARN local-fallback=unavailable root={0} reason=drive-not-found' -f $localBackupRoot)
+      Stop-DriveNotAvailable
+    } else {
+      Write-Event ('plan local-fallback path={0}' -f $localBackupDir)
+    }
+  }
+  if (-not $driveRoot -and -not $useRclone -and -not $localFallback) { throw 'Google Drive のマウントも rclone リモートも利用できません' }
   if (-not $driveRoot -and $useRclone) { $driveRoot = 'H:\' }
 
   # DryRun / useRclone 時は Join-Path が実在ドライブを要求してクラッシュするため

@@ -1,1 +1,9 @@
-{"enabled": false, "reason": "kim 2026-11-14: Claude 使用量の59%が自動再開だったため廃止。待ち状態は kim-inbox 通知のみ", "allowSources": ["fleet-exec"]}
+{
+  "enabled": false,
+  "reason": "kim 2026-11-14: Claude 使用量の59%が自動再開だったため、時刻起点の一律再開を廃止",
+  "allowSources": [
+    "fleet-exec"
+  ],
+  "eventResume": true,
+  "eventResumeReason": "kim 2026-11-20 承認: 状態変化と納期危険のときだけ再開"
+}

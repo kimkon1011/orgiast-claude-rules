@@ -393,3 +393,23 @@ test('90 percent writes budget cooldown, preserving other providers', async () =
   assert.deepEqual(state.groq, { until: 123 });
   assert.equal(state.gemini.until, Date.parse('2026-09-30T15:00:00Z'));
 });
+
+// ── Default config fallback ──
+test('falls back to config/gemini-budget.default.json when ~/.claude config lacks budgetJpy', async () => {
+  const defaultUrl = new URL('../config/gemini-budget.default.json', import.meta.url);
+  const fsImpl = memoryFs();
+  fsImpl.files.set(path.join(dir, 'executor-usage.jsonl'), '');
+  fsImpl.files.set(defaultUrl.href, JSON.stringify({ budgetJpy: 10000 }));
+  const status = await runGeminiBudgetGuard({ home, now, fsImpl, dryRun: true });
+  assert.equal(status.budgetJpy, 10000);
+});
+
+test('~/.claude/gemini-budget.json budgetJpy takes priority over repo default', async () => {
+  const defaultUrl = new URL('../config/gemini-budget.default.json', import.meta.url);
+  const fsImpl = memoryFs();
+  fsImpl.files.set(path.join(dir, 'executor-usage.jsonl'), '');
+  fsImpl.files.set(path.join(dir, 'gemini-budget.json'), JSON.stringify({ budgetJpy: 100 }));
+  fsImpl.files.set(defaultUrl.href, JSON.stringify({ budgetJpy: 10000 }));
+  const status = await runGeminiBudgetGuard({ home, now, fsImpl, dryRun: true });
+  assert.equal(status.budgetJpy, 100); // ~/.claude wins
+});

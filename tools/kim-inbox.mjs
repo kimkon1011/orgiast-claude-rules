@@ -305,11 +305,11 @@ export async function drainSpool(home, { stderr = console.error, execImpl, signa
   } finally { release(); }
   return imported;
 }
-export async function addItem(home, options, { drain = true } = {}) {
+export async function addItem(home, options, { drain = true, localOnly = false } = {}) {
   if (drain) await drainSpool(home, { execImpl: options.execImpl, signal: options.signal });
   if (isInboxNoise(options)) return { id: null, status: 'suppressed', kind: options.kind || 'info' };
   const item = create(home, options);
-  if (item.kind === 'deadline' || isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;
+  if (localOnly || item.kind === 'deadline' || isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-inbox-'));
   try {
     const file = path.join(temp, 'body.txt');

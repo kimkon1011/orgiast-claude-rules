@@ -5,7 +5,7 @@ import path from 'node:path';
 import { searchGmail } from './gmail-search.mjs';
 import { createLlmClient, PROVIDERS } from './line-digest.mjs';
 import { getDriveToken } from './lib/drive-auth.mjs';
-import { mergeTasks, taskToRow, sortTasks } from './discord-task-digest.mjs';
+import { mergeTasks, pickTop, taskToRow, sortTasks } from './discord-task-digest.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const DEFAULT_USER = 'seisaku-team@orgiast.jp';
@@ -198,7 +198,7 @@ export async function runMailTaskDigest(options = {}) {
     fs.mkdirSync(path.dirname(stateFile), { recursive: true });
     fs.writeFileSync(stateFile, `${JSON.stringify({ lastRunAt: now.toISOString(), messageIds }, null, 2)}\n`);
   }
-  const result = { ok: true, user: opts.user, fetched, afterFilter: prepared.length, extracted: extracted.items.length, added: merged.added.length, suppressed: merged.suppressed, held: extracted.held, totalRows: rows.length, top: merged.tasks.slice(0, 5).map(({ id, rank, title }) => ({ id, rank, title })) };
+  const result = { ok: true, user: opts.user, fetched, afterFilter: prepared.length, extracted: extracted.items.length, added: merged.added.length, suppressed: merged.suppressed, held: extracted.held, totalRows: rows.length, ...pickTop(merged.tasks, { now }) };
   (options.log || console.log)(JSON.stringify(result));
   (options.log || console.log)(`mail-task-digest: 取得${fetched}通 / 新規${merged.added.length}件 / P1 ${merged.tasks.filter((task) => task.rank === 'P1').length}件`);
   return result;

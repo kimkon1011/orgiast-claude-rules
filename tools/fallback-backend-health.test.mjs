@@ -332,3 +332,10 @@ test('429 を除いた残りで判定される（ok1 + fail1 + http_429×5 → c
   // nonQuota = 2件（ok + fail）→ calls=2 < 5 なので停止しない
   assert.deepEqual(unhealthyCandidates(rows, { now }), []);
 });
+
+test('skipCoolingBackends は keepNames で指定した定額レーンは冷却中でも残す', () => {
+  const backends = [{ name: 'cursor-agent' }, { name: 'cheap-code:deepseek' }, { name: 'qwen' }];
+  const cooling = new Set(['cursor-agent', 'qwen']);
+  const kept = skipCoolingBackends(backends, cooling, { keepNames: ['cursor-agent'] });
+  assert.deepEqual(kept.map((b) => b.name), ['cursor-agent', 'cheap-code:deepseek']);
+});

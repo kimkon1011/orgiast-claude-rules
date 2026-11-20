@@ -1757,14 +1757,30 @@ export function refreshCostDirective({ home, spawn = defaultSpawnSync } = {}) {
   return `cost-directive refreshed: ${path.join(home, '.claude', 'cost-directive.md')} (exit 0)`;
 }
 
-if (isEntry(import.meta.url)) {
-  Promise.resolve().then(() => {
-    // Run before fleet/network/notification work: a successful daily task must
-    // also refresh the local directive. Dry runs keep their read-only contract.
-    if (!process.argv.includes('--dry-run')) console.error(refreshCostDirective({ home: path.dirname(getClaudeDir(process.argv.slice(2))) }));
-    return main();
+export function runEntry({ argv, refresh, run }) {
+  return Promise.resolve().then(() => {
+    // directive の更新に失敗しても本体(run)は必ず走らせる。
+    // 019 で cost-work-loop.mjs が 300s timeout になり、main() が 2026-11-09 以降
+    // 一度も実行されていなかった（nightly-bootstrap ログ 所要=300.832 / 終了コード=1）。
+    if (!argv.includes('--dry-run')) {
+      try {
+        console.error(refresh());
+      } catch (err) {
+        console.error(`WARN cost-directive refresh failed (本体は続行): ${err?.message || err}`);
+        process.exitCode = 1;
+      }
+    }
+    return run();
   }).catch((err) => {
     console.error(err);
     process.exitCode = 1;
+  });
+}
+
+if (isEntry(import.meta.url)) {
+  runEntry({
+    argv: process.argv,
+    refresh: () => refreshCostDirective({ home: path.dirname(getClaudeDir(process.argv.slice(2))) }),
+    run: main,
   });
 }

@@ -26,14 +26,25 @@ export const stamp = value => {
   return Date.parse(text);
 };
 
+const isoPeriodHours = value => {
+  const m = /^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(value || '');
+  return m ? (+m[1] || 0) * 24 + (+m[2] || 0) + (+m[3] || 0) / 60 + (+m[4] || 0) / 3600 : null;
+};
+
 export function expectedPeriodHours(triggers = []) {
   const periods = [].concat(triggers || []).filter(t => t.enabled !== false && t.Enabled !== false).map(t => {
     const interval = t.repetition?.interval ?? t.Repetition?.Interval;
-    const m = /^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(interval || '');
-    if (m) return (+m[1] || 0) * 24 + (+m[2] || 0) + (+m[3] || 0) / 60 + (+m[4] || 0) / 3600;
+    const intervalHours = isoPeriodHours(interval);
     const type = t.type ?? t.Type ?? t.CimClass?.CimClassName;
-    if (type === 'MSFT_TaskDailyTrigger') return 24 * (t.daysInterval ?? t.DaysInterval ?? 1);
-    if (type === 'MSFT_TaskWeeklyTrigger') return 168 * (t.weeksInterval ?? t.WeeksInterval ?? 1);
+    const basePeriod = type === 'MSFT_TaskDailyTrigger' ? 24 * (t.daysInterval ?? t.DaysInterval ?? 1)
+      : type === 'MSFT_TaskWeeklyTrigger' ? 168 * (t.weeksInterval ?? t.WeeksInterval ?? 1) : null;
+    if (intervalHours !== null) {
+      const duration = t.repetition?.duration ?? t.Repetition?.Duration;
+      const durationHours = isoPeriodHours(duration);
+      if (basePeriod && durationHours !== null && durationHours < basePeriod) return basePeriod - Math.floor(durationHours / intervalHours) * intervalHours;
+      return intervalHours;
+    }
+    if (basePeriod) return basePeriod;
     return 0;
   }).filter(n => Number.isFinite(n) && n > 0);
   return periods.length ? Math.min(...periods) : null;

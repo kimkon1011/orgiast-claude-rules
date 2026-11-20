@@ -115,7 +115,7 @@ let geminiBudgetStatus = null;
 try { geminiBudgetStatus = JSON.parse(fs.readFileSync(path.join(HOME, '.claude', 'gemini-budget-status.json'), 'utf8')); } catch {}
 // 日次ループのたびにschedule実績を更新する。gh未導入・認証失敗・cron停止でも本体は継続する。
 spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), 'cron-liveness-check.mjs')], { windowsHide: true,
-  env: { ...process.env, ORGIAST_HOME: HOME }, stdio: 'ignore',
+  env: { ...process.env, ORGIAST_HOME: HOME }, stdio: 'ignore', timeout: 30000,
 });
 const cronLivenessFile = path.join(HOME, '.claude', 'cron-liveness.json');
 let cronLiveness = null;

@@ -153,6 +153,8 @@ function statusFor(score) {
 
 function analyze(file, headRaw, tailRaw, headEvents, tailEvents, tailBytes) {
   const combined = headEvents.concat(tailEvents);
+  const sdkStarted = combined.some((event) =>
+    /^sdk(?:-|$)/i.test(String(event?.entrypoint || '')));
   let firstPrompt = '';
   let cwd = '';
   let gitBranch = '';
@@ -237,6 +239,7 @@ function analyze(file, headRaw, tailRaw, headEvents, tailEvents, tailBytes) {
     lastAssistantText: shorten(lastAssistantText, 1500), ageDays: Number(ageDays.toFixed(1)),
     messageCountEstimate: messageCount, score, status: status.name, emoji: status.emoji, reasons,
     signals: {
+      sdkStarted,
       lastUserUnanswered: lastRole === 'user',
       lastUserUnansweredByApiError: lastRole === 'user' && endedWithError,
       interrupted: /\[Request interrupted by user\]|request interrupted|interrupted by user|リクエストはユーザーにより中断/i.test(interruptionText),
@@ -423,6 +426,14 @@ async function addLlmJudgments(records) {
       // 常に不明が返り、LLMコストだけ消費して何も進まないため。
       if (isEmptySession(record)) {
         const defaultResult = { verdict: '完了', confidence: 90, next: '' };
+        applyLlmResult(record, defaultResult);
+        llmStats.success++;
+        continue;
+      }
+      if (!String(record.lastAssistantText || '').trim()) {
+        const defaultResult = record.signals.sdkStarted
+          ? { verdict: '完了', confidence: 80, next: '' }
+          : { verdict: '未完了', confidence: 70, next: 'セッションを再開して依頼に着手する' };
         applyLlmResult(record, defaultResult);
         llmStats.success++;
         continue;

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Read-only freee/Gmail/Yahoo reconciliation. Only the dedicated Sheet tab and kim DM are written.
 import { readFile, writeFile, mkdir, rename, open, unlink } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,8 +36,8 @@ export const shiftDay = (day, count) => new Date(Date.parse(`${day}T00:00:00Z`) 
 export const projectCode = (day) => `${day.slice(2, 4)}${day.slice(5, 7)}01OR`;
 function validDay(day) { return /^\d{4}-\d{2}-\d{2}$/.test(day) && !Number.isNaN(Date.parse(day)) && shiftDay(day, 0) === day; }
 export function parseArgs(argv, env = process.env) {
-  const opts = { today: env.EXPENSE_LEAK_TODAY || jstDay(), dryRun: false, weekly: false, noYahoo: false, noGmail: false, limit: Infinity, verification: false };
-  const flags = { '--dry-run': 'dryRun', '--weekly': 'weekly', '--no-yahoo': 'noYahoo', '--no-gmail': 'noGmail', '--verification': 'verification' };
+  const opts = { today: env.EXPENSE_LEAK_TODAY || jstDay(), dryRun: false, weekly: false, noYahoo: false, noGmail: false, limit: Infinity, verification: false, verbose: false };
+  const flags = { '--dry-run': 'dryRun', '--weekly': 'weekly', '--no-yahoo': 'noYahoo', '--no-gmail': 'noGmail', '--verification': 'verification', '--verbose': 'verbose' };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (flags[arg]) opts[flags[arg]] = true;
@@ -324,15 +325,43 @@ export async function runCheck(opts, injected = {}) {
     await checkpoint();
     return result;
   } catch (error) {
-    // Only our controlled messages are safe to persist; low-level errors can include secrets.
-    result.issues.push(/^(freee |Invalid |Unsupported |Sheets |Sheet |Output tab |Discord |Cannot read)/.test(error.message) ? error.message : 'Run failed (network, filesystem or response error)');
+    // Only exception class and HTTP status are logged; messages may contain credentials.
+    const msg = String(error.message ?? '');
+    if (/^(freee |Invalid |Unsupported |Sheets |Sheet |Output tab |Discord |Cannot read)/.test(msg)) {
+      result.issues.push(msg);
+    } else {
+      const httpMatch = msg.match(/HTTP\s+(\d{3})/);
+      const qualifiers = [error.name || 'Error'];
+      if (httpMatch) qualifiers.push(`HTTP ${httpMatch[1]}`);
+      if (error.code && typeof error.code === 'string') qualifiers.push(`code=${error.code}`);
+      result.issues.push(`Run failed: ${qualifiers.join(' ')}`);
+    }
+    if (opts.verbose) console.error(`[expense-leak-check] ${error.name || 'Error'}: ${error.message}\n${error.stack || '(no stack)'}`);
     result.failed = true;
     await checkpoint();
     return result;
   }
 }
+function hasFreeeDbConfig() {
+  if (process.env.PURCHASING_APP_DATABASE_URL) return true;
+  try {
+    const paths = [
+      join(HERE, '..', '.env.local'),
+      join(homedir(), 'orgiast-main', '.env.local'),
+    ];
+    for (const path of paths) {
+      if (existsSync(path) && readFileSync(path, 'utf8').includes('PURCHASING_APP_DATABASE_URL')) return true;
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  if (!hasFreeeDbConfig()) {
+    console.log('skip: expense-leak-check requires freee DB config (PURCHASING_APP_DATABASE_URL)');
+    return;
+  }
   // Lock dry runs too: all processes share the Yahoo browser profile and state.
   await mkdir(dirname(opts.statePath), { recursive: true });
   const lockPath = `${opts.statePath}.lock`;

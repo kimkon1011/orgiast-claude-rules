@@ -25,6 +25,14 @@ test('CostImproveLoop fixture: formula is 37h; 36h override detects missed run a
   assert.equal(auditTasks([task()], { OrgiastCostImproveLoop: { maxAgeHours: 36 } }, now)[0].kind, 'missed');
   assert.equal(auditTasks([task()], {}, now + 3600000)[0].kind, 'missed');
 });
+test('finite daily repetition window uses the overnight gap as cadence', () => {
+  const auditAt = Date.parse('2026-11-20T03:20:00+09:00');
+  const trigger = { ...daily, repetition: { interval: 'PT1H', duration: 'PT13H30M' } };
+  const lastRunTime = '2026-11-19T21:00:00+09:00';
+  assert.deepEqual(auditTasks([task({ triggers: [trigger], lastRunTime })], {}, auditAt), []);
+  assert.equal(auditTasks([task({ triggers: [trigger], lastRunTime: '2026-11-18T21:00:00+09:00' })], {}, auditAt)[0].kind, 'missed');
+  assert.equal(auditTasks([task({ triggers: [{ ...daily, repetition: { interval: 'PT1H' } }], lastRunTime })], {}, auditAt)[0].kind, 'missed');
+});
 test('missed never-run, failed codes, MorningBatch interrupted is not failed', () => {
   assert.equal(auditTasks([task({ lastRunTime: '1999-01-01' })], {}, now)[0].kind, 'missed');
   assert.equal(auditTasks([task({ lastTaskResult: 1 })], {}, now)[0].kind, 'failed');

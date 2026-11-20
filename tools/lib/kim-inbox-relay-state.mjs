@@ -17,7 +17,11 @@ export function inboxSummary(item) {
 export function relayDue(item, sessionId, now = Date.now()) {
   const delivery = item.deliveredToKim;
   if (!delivery || delivery.revision !== revisionOf(item)) return true;
-  if (item.kind === 'ask') return delivery.sessions?.[sessionId]?.day !== jstDay(now);
+  if (item.kind === 'ask') {
+    const today = jstDay(now);
+    const sessions = delivery.sessions || {};
+    return !Object.values(sessions).some(s => s.day === today);
+  }
   return item.kind !== 'info';
 }
 const withoutEmoji = text => text.replace(/[\p{Extended_Pictographic}️‍]/gu, '').trim();
@@ -224,7 +228,14 @@ export function recordPromptAnswers(home, sessionId, prompt, { listItems, answer
   const items = listItems(home), answers = [];
   for (const match of matches) {
     const receipt = delivered.find(d => match[1] === d.id || match[1] === String(d.number));
-    const item = items.find(i => i.id === receipt?.id && i.kind === 'ask' && i.status === 'open' && revisionOf(i) === receipt.revision);
+    let item;
+    if (receipt) {
+      item = items.find(i => i.id === receipt.id && i.kind === 'ask' && i.status === 'open' && revisionOf(i) === receipt.revision);
+    }
+    // ki- で始まる ID は、別セッションで受領記録が無くても直接探して回答できる
+    if (!item && match[1].startsWith('ki-')) {
+      item = items.find(i => i.id === match[1] && i.kind === 'ask' && i.status === 'open');
+    }
     if (!item || match[2] === '保留') continue;
     if (!match[1].startsWith('ki-') && (item.text.match(/^\s*\d+[.．、)）]/gm) || []).length > 1) continue;
     answers.push(answerItem(home, item.id, match[2], sessionId));

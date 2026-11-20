@@ -73,7 +73,7 @@ export function listScheduledTaskDetails({ spawnImpl = spawnSync } = {}) {
     $t=$_;$i=$t|Get-ScheduledTaskInfo
     $last=if($i.LastRunTime){$i.LastRunTime.ToUniversalTime().ToString('o')}else{$null}
     $next=if($i.NextRunTime){$i.NextRunTime.ToUniversalTime().ToString('o')}else{$null}
-    [pscustomobject]@{taskName=($t.TaskPath+$t.TaskName);state=[string]$t.State;lastRunTime=$last;lastTaskResult=$i.LastTaskResult;nextRunTime=$next;settings=@{startWhenAvailable=$t.Settings.StartWhenAvailable};triggers=@($t.Triggers|ForEach-Object{[pscustomobject]@{type=$_.CimClass.CimClassName;enabled=$_.Enabled;daysInterval=$_.DaysInterval;weeksInterval=$_.WeeksInterval;repetition=@{interval=$_.Repetition.Interval}}})}
+    [pscustomobject]@{taskName=($t.TaskPath+$t.TaskName);state=[string]$t.State;lastRunTime=$last;lastTaskResult=$i.LastTaskResult;nextRunTime=$next;settings=@{startWhenAvailable=$t.Settings.StartWhenAvailable};triggers=@($t.Triggers|ForEach-Object{[pscustomobject]@{type=$_.CimClass.CimClassName;enabled=$_.Enabled;daysInterval=$_.DaysInterval;weeksInterval=$_.WeeksInterval;repetition=@{interval=$_.Repetition.Interval;duration=$_.Repetition.Duration}}})}
   })|ConvertTo-Json -Depth 6 -Compress`, spawnImpl);
   return result ? (Array.isArray(result) ? result : [result]) : [];
 }

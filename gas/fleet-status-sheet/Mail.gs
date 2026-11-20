@@ -38,11 +38,17 @@ function fleetMailHop(value) {
   if (!Number.isSafeInteger(hop) || hop < 0) throw new Error('invalid_hop');
   return hop;
 }
+function fleetMailSameAddress(a, b) {
+  const left = _fleetMailCellText_(a);
+  const right = _fleetMailCellText_(b);
+  if (left === right) return true;
+  return /^\d+$/.test(left) && /^\d+$/.test(right) && Number(left) === Number(right);
+}
 function fleetMailMatches(mail, label, hostname, now, legacy) {
   // Broadcast replies set done as usual, but must not consume delivery to other PCs.
   return (mail.status === 'new' || (mail.to === 'all' && ['delivered', 'seen', 'done'].indexOf(mail.status) >= 0)) &&
     Date.parse(mail.expiresAt) > now && !!mail.to &&
-    (mail.to === 'all' || label === mail.to || String(hostname || '').toLowerCase() === mail.to.toLowerCase() ||
+    (mail.to === 'all' || fleetMailSameAddress(label, mail.to) || String(hostname || '').toLowerCase() === mail.to.toLowerCase() ||
       (legacy && (String(label || '').indexOf(mail.to) >= 0 || String(hostname || '').toLowerCase().indexOf(mail.to.toLowerCase()) >= 0)));
 }
 function fleetMailPrunable(mail, now) {
@@ -74,6 +80,8 @@ function _fleetMailCellText_(value) {
 function _fleetMailWrite_(sheet, row, values) {
   if (_fleetMailTiming_) _fleetMailTiming_.writes++;
   const range = sheet.getRange(row, 1, 1, FLEET_MAIL_HEADERS_.length);
+  // Sheets otherwise coerces numeric-only seat labels such as "018" to 18.
+  sheet.getRange(row, FLEET_MAIL_HEADERS_.indexOf('to') + 1, 1, 1).setNumberFormat('@');
   // Literal rich text prevents messages beginning with '=' becoming formulas.
   const expected = values.map(_fleetMailCellText_);
   range.setRichTextValues([expected.map(function(value) { return SpreadsheetApp.newRichTextValue().setText(value).build(); })]);

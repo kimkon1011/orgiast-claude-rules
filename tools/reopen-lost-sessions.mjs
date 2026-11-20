@@ -1113,10 +1113,10 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
             if (isWaitingTitle(session.title)) { result.skipped.standby++; continue; }
             if ((session.title ?? '').includes('【閉じて可】')) { result.skipped.closable++; continue; }
             const local = locals.get(session.id);
-            if (!local || seenIds.has(local.id)) continue;
             // ユーザーがアーカイブ・クローズしたものは除外（closed ledger / VSCode hidden）
             const reason = exclusion(local, closed, living, hiddenSessionIds);
             if (reason) { result.skipped[reason]++; continue; }
+            if (!local || seenIds.has(local.id)) continue;
             if (reopenCounts[local.id] >= 3) { result.skipped.reopenLoop++; continue; }
             if (repeatCounts[local.id] >= 3) { result.skipped.reopenRepeat++; continue; }
             if (unverifiedCounts[local.id] >= 2) { result.skipped.unverifiedStreak++; continue; }

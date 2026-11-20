@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getLoadGuardStatus, hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord, measureUserIdleSec, DEFAULT_REOPEN_MAX_CLAUDE } from './reopen-lost-sessions.mjs';
+import { getLoadGuardStatus, hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord, measureUserIdleSec, DEFAULT_REOPEN_MAX_CLAUDE, isWaitingTitle, RECENT_ACTIVE_HARD_CAP } from './reopen-lost-sessions.mjs';
 import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
 import { unverifiedStreakCounts, isSessionProcessRunning, connectedRcSessionIds, recordApiResult, fetchWithRetry, readFailState, writeFailState, FAIL_STATE_FILE, CONSECUTIVE_FAIL_THRESHOLD } from './reopen-lost-sessions.mjs';
 
@@ -2412,4 +2412,298 @@ test('recordApiResult: 初回はカウンターが 1 になる', t => {
   fs.mkdirSync(base, { recursive: true });
   assert.equal(recordApiResult(base, 'error'), false);
   assert.equal(readFailState(base).consecutiveFails, 1);
+});
+
+// ── --recent-active（直近の切断セッションつなぎ直し） ──
+
+function raFixture(t, entries) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-recent-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  for (const [id, lines] of Object.entries(entries)) {
+    fs.writeFileSync(path.join(base, 'projects', 'proj', `${id}.jsonl`), lines.map(JSON.stringify).join('\n'));
+  }
+  return { root, base };
+}
+function raLocal(bridgeId, cwd = 'C:\\work') {
+  return [
+    { type: 'bridge-session', bridgeSessionId: bridgeId },
+    { type: 'user', cwd, message: { content: 'hello' } },
+  ];
+}
+const raSpawn = (cmd, args) => {
+  if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+  const cmdStr = args?.[args.length - 1] ?? '';
+  if (typeof cmdStr === 'string' && cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
+    return { status: 0, stdout: '0' };
+  }
+  return { status: 0, stdout: '' };
+};
+
+test('isWaitingTitle: 待機タブの3パターンに一致し、通常題名は一致しない', () => {
+  assert.equal(isWaitingTitle('011-resilient-steele'), true);
+  assert.equal(isWaitingTitle('019｜待機中'), true);
+  assert.equal(isWaitingTitle('待機中'), false); // 「｜待機中$」には一致しない（末尾でなければ）
+  assert.equal(isWaitingTitle('remote-control-abc-123'), true);
+  assert.equal(isWaitingTitle('011｜毎日議事録から改善'), false);
+  assert.equal(isWaitingTitle('Cocolive リニューアル相談'), false);
+  assert.equal(isWaitingTitle(''), false);
+  assert.equal(isWaitingTitle(null), false);
+});
+
+test('parseOptions: --recent-active は since/until 不要・既定 hours=24・既定 max=5', () => {
+  const noSpawn = () => { throw Error('ps should not be called'); };
+  const o = parseOptions(['--recent-active'], noSpawn);
+  assert.equal(o.recentActive, true);
+  assert.equal(o.recentActiveHours, 24);
+  assert.equal(o.max, 5);
+  assert.equal(o.maxSet, undefined);
+  assert.equal(o.since, undefined);
+  assert.equal(o.until, undefined);
+  const withHours = parseOptions(['--recent-active', '12', '--max', '3'], noSpawn);
+  assert.equal(withHours.recentActiveHours, 12);
+  assert.equal(withHours.max, 3);
+  assert.equal(withHours.maxSet, true);
+  const noHours = parseOptions(['--recent-active', '--dry-run'], noSpawn);
+  assert.equal(noHours.recentActiveHours, 24);
+  assert.equal(noHours.dryRun, true);
+  assert.throws(() => parseOptions(['--watch', '--recent-active'], noSpawn));
+  assert.throws(() => parseOptions(['--recent-active', '0'], noSpawn));
+  assert.throws(() => parseOptions(['--recent-active', 'abc'], () => ({})));
+});
+
+test('recent-active: updated_at 新しい順に上位 max 件が候補になる（7件→5件）', async t => {
+  const entries = {};
+  for (let i = 1; i <= 7; i++) entries[`f${i}`] = raLocal(`cse_f${i}`, `C:\\w${i}`);
+  const { base } = raFixture(t, entries);
+  const nowTime = Date.parse('2026-11-20T12:00:00.000Z');
+  const sessions = [];
+  for (let i = 1; i <= 7; i++) {
+    // f1 が一番新しい意図で逆順に並べて返す（ソート確認）
+    sessions.push({ id: `cse_f${i}`, status: 'active', connection_status: 'disconnected',
+      updated_at: new Date(nowTime - i * 3600000).toISOString(), title: `Session ${i}` });
+  }
+  sessions.reverse(); // 古い順に API が返す
+  const result = await reopenLost({
+    base, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, recentActive: true, recentActiveHours: 24,
+    fetchImpl: async url => {
+      assert.ok(!url.includes('/events'), 'recent-active は events API を呼ばない');
+      return { ok: true, json: async () => ({ data: sessions }) };
+    },
+    spawn: raSpawn,
+  });
+  assert.equal(result.candidates.length, 5);
+  assert.equal(result.candidates[0].id, 'f1');
+  assert.equal(result.candidates[0].source, 'recent-active');
+  assert.equal(result.candidates[0].updatedAt, new Date(nowTime - 3600000).toISOString());
+  assert.deepEqual(result.candidates.map(c => c.id), ['f1', 'f2', 'f3', 'f4', 'f5']);
+  assert.equal(result.recentActiveConsidered, 7);
+  assert.equal(result.error, undefined);
+  assert.equal(result.apiError, undefined);
+});
+
+test('recent-active: 待機タブ・24h超・接続中・archived・ローカル無し・空・closed は除外される', async t => {
+  const { base } = raFixture(t, {
+    f_standby1: raLocal('cse_standby1'), f_standby2: raLocal('cse_standby2'), f_standby3: raLocal('cse_standby3'),
+    f_old: raLocal('cse_old'), f_conn: raLocal('cse_conn'), f_arch: raLocal('cse_arch'),
+    f_nolocal: raLocal('cse_nolocal'), f_empty: raLocal('cse_empty'), f_closed: raLocal('cse_closed'),
+    f_ok: raLocal('cse_ok'),
+  });
+  // f_empty はユーザー発言なし（空）
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'f_empty.jsonl'), [
+    JSON.stringify({ type: 'bridge-session', bridgeSessionId: 'cse_empty' }),
+  ].join('\n'));
+  fs.writeFileSync(path.join(base, 'closed-sessions.json'), JSON.stringify({ ids: ['f_closed'] }));
+  const nowTime = Date.parse('2026-11-20T12:00:00.000Z');
+  const recent = new Date(nowTime - 3600000).toISOString();
+  const old = new Date(nowTime - 30 * 3600000).toISOString();
+  const sessions = [
+    { id: 'cse_standby1', status: 'active', connection_status: 'disconnected', updated_at: recent, title: '019-resilient-steele' },
+    { id: 'cse_standby2', status: 'active', connection_status: 'disconnected', updated_at: recent, title: '018｜待機中' },
+    { id: 'cse_standby3', status: 'active', connection_status: 'disconnected', updated_at: recent, title: 'remote-control-x7k2' },
+    { id: 'cse_old', status: 'active', connection_status: 'disconnected', updated_at: old, title: 'Old work' },
+    { id: 'cse_conn', status: 'active', connection_status: 'connected', updated_at: recent, title: 'Connected' },
+    { id: 'cse_arch', status: 'archived', connection_status: 'disconnected', updated_at: recent, title: 'Archived' },
+    { id: 'cse_nolocal', status: 'active', connection_status: 'disconnected', updated_at: recent, title: 'No local file' },
+    { id: 'cse_empty', status: 'active', connection_status: 'disconnected', updated_at: recent, title: 'Empty transcript' },
+    { id: 'cse_closed', status: 'active', connection_status: 'disconnected', updated_at: recent, title: 'Closed by user' },
+    { id: 'cse_ok', status: 'active', connection_status: 'disconnected', updated_at: recent, title: 'Real work' },
+  ];
+  const result = await reopenLost({
+    base, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, recentActive: true, recentActiveHours: 24,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: sessions }) }),
+    spawn: raSpawn,
+  });
+  assert.deepEqual(result.candidates.map(c => c.id), ['f_ok']);
+  assert.equal(result.skipped.standby, 3);
+  assert.equal(result.skipped.noLocal, 1);
+  assert.equal(result.skipped.empty, 1);
+  assert.equal(result.skipped.closed, 1);
+});
+
+test('recent-active: --recent-active 12 の窗口外（20h前）は対象にならない', async t => {
+  const { base } = raFixture(t, { f_a: raLocal('cse_a'), f_b: raLocal('cse_b') });
+  const nowTime = Date.parse('2026-11-20T12:00:00.000Z');
+  const sessions = [
+    { id: 'cse_a', status: 'active', connection_status: 'disconnected', updated_at: new Date(nowTime - 20 * 3600000).toISOString(), title: 'A' },
+    { id: 'cse_b', status: 'active', connection_status: 'disconnected', updated_at: new Date(nowTime - 10 * 3600000).toISOString(), title: 'B' },
+  ];
+  const result = await reopenLost({
+    base, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, recentActive: true, recentActiveHours: 12,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ data: sessions }) }),
+    spawn: raSpawn,
+  });
+  assert.deepEqual(result.candidates.map(c => c.id), ['f_b']);
+});
+
+test('recent-active: ページ全体が窗口より古ければ以降のページを取得しない', async t => {
+  const { base } = raFixture(t, { f_new: raLocal('cse_new') });
+  const nowTime = Date.parse('2026-11-20T12:00:00.000Z');
+  let calls = 0;
+  const result = await reopenLost({
+    base, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, recentActive: true, recentActiveHours: 24,
+    fetchImpl: async url => {
+      calls++;
+      if (calls === 1) return { ok: true, json: async () => ({ data: [
+        { id: 'cse_new', status: 'active', connection_status: 'disconnected', updated_at: new Date(nowTime - 3600000).toISOString(), title: 'New' },
+      ], next_cursor: 'page2' }) };
+      if (calls === 2) return { ok: true, json: async () => ({ data: [
+        { id: 'cse_old1', status: 'active', connection_status: 'disconnected', updated_at: new Date(nowTime - 72 * 3600000).toISOString(), title: 'Old1' },
+        { id: 'cse_old2', status: 'active', connection_status: 'disconnected', updated_at: new Date(nowTime - 96 * 3600000).toISOString(), title: 'Old2' },
+      ] }) };
+      throw Error('page3 should not be fetched');
+    },
+    spawn: raSpawn,
+  });
+  assert.equal(calls, 2);
+  assert.deepEqual(result.candidates.map(c => c.id), ['f_new']);
+});
+
+test('recent-active: dry-run は何も開かずログも書かない', async t => {
+  const { base } = raFixture(t, { f_one: raLocal('cse_one') });
+  const nowTime = Date.parse('2026-11-20T12:00:00.000Z');
+  const result = await reopenLost({
+    base, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, recentActive: true,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ data: [
+      { id: 'cse_one', status: 'active', connection_status: 'disconnected', updated_at: new Date(nowTime - 3600000).toISOString(), title: 'Work' },
+    ] }) }),
+    spawn: raSpawn,
+  });
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.reopened.length, 0);
+  assert.equal(fs.existsSync(path.join(base, 'reopen-lost-sessions.log')), false);
+  assert.equal(fs.existsSync(path.join(base, 'reopen-lost-sessions.lock')), false);
+});
+
+test('recent-active: 既存 claude プロセス数（VSCode で人が開いている分）ではブロックしない', async t => {
+  const { base } = raFixture(t, { f_one: raLocal('cse_one') });
+  const nowTime = Date.parse('2026-11-20T12:00:00.000Z');
+  const manyClaude = Array(10).fill('"claude.exe","1234","Console","1","100,000 K"').join('\n');
+  const result = await reopenLost({
+    base, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => nowTime,
+    recentActive: true, checkClaude: true, checkCpu: false, checkIdle: false,
+    env: { APPDATA: path.join(base, 'no-appdata') },
+    fetchImpl: async () => ({ ok: true, json: async () => ({ data: [
+      { id: 'cse_one', status: 'active', connection_status: 'disconnected', updated_at: new Date(nowTime - 3600000).toISOString(), title: 'Work' },
+    ] }) }),
+    spawn: (cmd, args) => {
+      if (cmd === 'tasklist') return { status: 0, stdout: manyClaude };
+      return raSpawn(cmd, args);
+    },
+    windowReady: () => true,
+    wait: async () => {},
+  });
+  assert.equal(result.reopened.length, 1);
+  assert.equal(result.skipped.loadGuard, 0);
+  assert.equal(result.reopened[0].source, 'recent-active');
+});
+
+test('recent-active: --max 7 を渡してもハード上限 5 件まで', async t => {
+  assert.equal(RECENT_ACTIVE_HARD_CAP, 5);
+  const entries = {};
+  for (let i = 1; i <= 7; i++) entries[`f${i}`] = raLocal(`cse_f${i}`, `C:\\w${i}`);
+  const { base } = raFixture(t, entries);
+  const nowTime = Date.parse('2026-11-20T12:00:00.000Z');
+  const sessions = [];
+  for (let i = 1; i <= 7; i++) {
+    sessions.push({ id: `cse_f${i}`, status: 'active', connection_status: 'disconnected',
+      updated_at: new Date(nowTime - i * 3600000).toISOString(), title: `Session ${i}` });
+  }
+  const result = await reopenLost({
+    base, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, recentActive: true, max: 7,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ data: sessions }) }),
+    spawn: raSpawn,
+  });
+  assert.equal(result.candidates.length, 5);
+});
+
+// ── claude CLI 解決（Windows の npm shim 対策） ──
+
+const shimPaths = () => ([
+  'C:\\Users\\user\\AppData\\Roaming\\npm\\claude',
+  'C:\\Users\\user\\AppData\\Roaming\\npm\\claude.cmd',
+]);
+
+test('resolveClaudeCli: where.exe が拡張子なし shim を先に返しても .cmd を選ぶ', t => {
+  const [shim, cmd] = shimPaths();
+  const exe = resolveClaudeCli({
+    env: {},
+    exists: p => p === cmd,
+    spawn: (cmdName, args) => cmdName === 'where.exe' && args[0] === 'claude'
+      ? { status: 0, stdout: `${shim}\r\n${cmd}\r\n` }
+      : { status: 1 },
+  });
+  assert.equal(exe, cmd);
+});
+
+test('resolveClaudeCli: where.exe が .cmd/.exe を返さなければ採用しない', t => {
+  const [shim] = shimPaths();
+  assert.throws(() => resolveClaudeCli({
+    env: {},
+    exists: () => false,
+    readdir: () => [],
+    spawn: (cmdName, args) => cmdName === 'where.exe' && args[0] === 'claude'
+      ? { status: 0, stdout: `${shim}\r\n` }
+      : { status: 1 },
+  }), /claude CLI not found/);
+});
+
+test('resolveClaudeCli: where.exe の .exe 行も選べる', t => {
+  const [shim, cmd] = shimPaths();
+  const exePath = 'C:\\Users\\user\\.local\\bin\\claude.exe';
+  const exe = resolveClaudeCli({
+    env: {},
+    exists: p => p === exePath,
+    spawn: (cmdName, args) => cmdName === 'where.exe' && args[0] === 'claude'
+      ? { status: 0, stdout: `${shim}\r\n${cmd}\r\n${exePath}\r\n` }
+      : { status: 1 },
+  });
+  assert.equal(exe, exePath);
+});
+
+test('resolveClaudeCli: npm グローバルの claude.cmd を直接解決できる（Windows）', { skip: process.platform !== 'win32' }, t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-npm-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const npmDir = path.join(root, 'npm');
+  fs.mkdirSync(npmDir, { recursive: true });
+  fs.writeFileSync(path.join(npmDir, 'claude.cmd'), '@echo off', 'utf8');
+  const exe = resolveClaudeCli({
+    env: { APPDATA: root },
+    exists: p => p === path.join(npmDir, 'claude.cmd'),
+    spawn: () => ({ status: 1 }),
+  });
+  assert.equal(exe, path.join(npmDir, 'claude.cmd'));
+});
+
+test('resolveClaudeCli: 見つからないエラーは検索場所を列挙する', t => {
+  try {
+    resolveClaudeCli({ env: {}, exists: () => false, readdir: () => [], spawn: () => ({ status: 1 }) });
+    assert.fail('should throw');
+  } catch (e) {
+    assert.match(e.message, /claude CLI not found/);
+    assert.match(e.message, /where\.exe|which/);
+  }
 });

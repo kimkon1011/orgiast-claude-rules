@@ -86,7 +86,7 @@ test('旧seedのメッセージIDからスレッドを取得して返信完了�
   assert.match(calls[1],/threads\/actual-thread/);
 });
 
-test('Gmailの完了照合に失敗しても期限通知を届け、失敗として記録する', async t => {
+test('Gmailの完了照合に失敗しても期限通知を届け、警告だけを記録する', async t => {
   const row = { ...base, due: '2026-11-05', source: 'Gmail', detectedAt: '2026-11-03', notes: '{"mailbox":"kim@orgiast.jp","threadId":"thread"}' };
   const changes = [], notices = [];
   const result = await runWatch({ home: homeFor(t), config, rows: [row], today: '2026-11-04',
@@ -97,7 +97,20 @@ test('Gmailの完了照合に失敗しても期限通知を届け、失敗とし
   assert.equal(notices.length, 1); assert.ok(!notices[0].close);
   assert.ok(changes.some(change => change.notifyCount === 1));
   assert.ok(changes.every(change => change.status !== '完了'));
-  assert.deepEqual(result.errors, [{ id: row.id, phase: 'auto-close', error: 'Gmail unavailable' }]);
+  assert.deepEqual(result.warnings, [{ id: row.id, phase: 'auto-close', error: 'Gmail unavailable' }]);
+  assert.deepEqual(result.errors, []);
+});
+
+test('Gmailの完了照合だけが失敗してもmainは終了コード0を返す', async t => {
+  const home = homeFor(t), output = [];
+  const row = { ...base, due: '2026-11-05', source: 'Gmail', detectedAt: '2026-11-03', notes: '{"mailbox":"kim@orgiast.jp","threadId":"missing"}' };
+  const code = await main(['--dry-run'], { home, config, skipSeatCheck: true, stdout: value => output.push(value),
+    ledger: { read: async () => [row], patch: async () => assert.fail('dry-run must not write') }, sheets: { get: async () => [] },
+    request: async () => { throw Object.assign(Error('Google GET HTTP 404'), { status: 404 }); }, notify: async () => assert.fail('dry-run must not notify') });
+  assert.equal(code, 0);
+  const result = JSON.parse(output[0]);
+  assert.deepEqual(result.warnings, [{ id: row.id, phase: 'auto-close', error: 'Google GET HTTP 404' }]);
+  assert.deepEqual(result.errors, []);
 });
 
 test('不存在のfixtureで本番の読取へfallbackしない', async t => {

@@ -136,14 +136,14 @@ export async function runWatch({ home, config, ledger, sheets, request, today, d
   const rows = suppliedRows || await loadRows({ config, ledger, sheets });
   const openKeys = new Set(dryRun ? [] : listItems(home, { status: 'open' }).filter(i => i.kind === 'deadline').map(i => i.key));
   const persist = () => saveJson(dataPath(home, 'state.json'), state);
-  const decisions = [], errors = [];
+  const decisions = [], errors = [], warnings = [];
   for (const original of rows) {
     let row = { ...original };
     try {
       let completionEvidence = row.kind === '支払' && row.completedAt;
       if (!closed(row) && !row.readOnly && !completionEvidence) {
         try { completionEvidence = await hasSentReply(row, request); }
-        catch (e) { errors.push({ id: row.id, phase: 'auto-close', error: e.message }); }
+        catch (e) { warnings.push({ id: row.id, phase: 'auto-close', error: e.message }); }
       }
       // An unavailable completion check must not suppress an outstanding deadline.
       if (!closed(row) && !row.readOnly && completionEvidence) {
@@ -170,7 +170,7 @@ export async function runWatch({ home, config, ledger, sheets, request, today, d
     } catch (e) { errors.push({ id: row.id, error: e.message }); }
   }
   if (!dryRun) { state.lastWatchAt = new Date().toISOString(); persist(); saveJson(dataPath(home, 'digest.json'), { at: state.lastWatchAt, today, text: formatDigest(rows, today, config) }); }
-  return { today, dryRun, decisions, errors };
+  return { today, dryRun, decisions, warnings, errors };
 }
 export async function readDigest({ home = defaultHome(), today = jstDate(), ...deps } = {}) {
   const config = deps.config || loadConfig(home);

@@ -177,19 +177,19 @@ function Get-RcloneRemoteName {
 }
 
 function Send-ToRclone {
-  param([string]$ZipPath, [string]$RemoteName, [string]$HostName)
+  param([string]$ZipPath, [string]$RemoteName, [string]$HostName, [string]$ZipName)
   $destPath = '{0}:Claude-Backups/{1}/' -f $RemoteName, $HostName
   $rcloneExe = Get-RcloneExe
   if (-not $rcloneExe) { return $false }
   $extraArgs = if ($DryRun) { @('--dry-run') } else { @() }
   try {
-    $result = & $rcloneExe copy $ZipPath $destPath @extraArgs 2>&1
+    $result = & $rcloneExe copyto $ZipPath ('{0}{1}' -f $destPath, $ZipName) @extraArgs 2>&1
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
       foreach ($line in $result) { Write-Event ('WARN rclone-output: {0}' -f $line) }
       throw "exit code: $exitCode"
     }
-    Write-Event ('rclone-copy=ok remote={0} file={1}' -f $RemoteName, [IO.Path]::GetFileName($ZipPath))
+    Write-Event ('rclone-copy=ok remote={0} file={1}' -f $RemoteName, $ZipName)
     return $true
   } catch {
     Write-Event ('WARN rclone-copy=failed remote={0} reason={1}' -f $RemoteName, $_.Exception.Message)
@@ -197,17 +197,38 @@ function Send-ToRclone {
   }
 }
 
+function Parse-RcloneLine([string]$Line) {
+  $trimmed = $Line.Trim()
+  if (-not $trimmed) { return $null }
+  $parts = $trimmed -split '\s+', 2
+  if ($parts.Count -lt 2) { return $null }
+  return [ordered]@{ name = $parts[1].Trim(); size = [long]$parts[0] }
+}
+
 function Test-RcloneBackup {
-  param([string]$RemoteName, [string]$HostName, [string]$ZipName)
+  param([string]$RemoteName, [string]$HostName, [string]$ZipName, [long]$ExpectedSize = 0)
   $destPath = '{0}:Claude-Backups/{1}/' -f $RemoteName, $HostName
   $rcloneExe = Get-RcloneExe
   if (-not $rcloneExe) { return $false }
   try {
     $files = & $rcloneExe ls $destPath 2>$null | Out-String
-    if (-not $files) { return $false }
-    $found = @($files -split "`n" | Where-Object { $_ -match [regex]::Escape($ZipName) }).Count -gt 0
-    if ($found) {
-      Write-Event ('rclone-verify=ok zip={0}' -f $ZipName)
+    if (-not $files) {
+      Write-Event ('WARN rclone-verify=failed zip={0} not-found' -f $ZipName)
+      return $false
+    }
+    foreach ($line in ($files -split "`n")) {
+      $parsed = Parse-RcloneLine($line)
+      if (-not $parsed) { continue }
+      if ($parsed.name -ne $ZipName) { continue }
+      if ($ExpectedSize -gt 0 -and $parsed.size -ne $ExpectedSize) {
+        Write-Event ('WARN rclone-verify=failed zip={0} size-mismatch remote={1} local={2}' -f $ZipName, $parsed.size, $ExpectedSize)
+        return $false
+      }
+      if ($ExpectedSize -gt 0) {
+        Write-Event ('rclone-verify=ok zip={0} bytes={1}' -f $ZipName, $parsed.size)
+      } else {
+        Write-Event ('rclone-verify=ok zip={0}' -f $ZipName)
+      }
       return $true
     }
     Write-Event ('WARN rclone-verify=failed zip={0} not-found' -f $ZipName)
@@ -585,12 +606,12 @@ try {
       } else { Write-Event ('WARN rclone-restore-set-copy=skipped source={0} reason=not-found' -f $restoreFile) }
     }
 
-    if (-not (Send-ToRclone -ZipPath $localZip -RemoteName $rcloneRemote -HostName $hostname)) {
+    if (-not (Send-ToRclone -ZipPath $localZip -RemoteName $rcloneRemote -HostName $hostname -ZipName $rcloneZipName)) {
       throw 'rclone へのバックアップコピーに失敗しました'
     }
     $script:driveZipWritten = $true
 
-    if (-not (Test-RcloneBackup -RemoteName $rcloneRemote -HostName $hostname -ZipName $rcloneZipName)) {
+    if (-not (Test-RcloneBackup -RemoteName $rcloneRemote -HostName $hostname -ZipName $rcloneZipName -ExpectedSize $zipSize)) {
       throw 'rclone バックアップの読み戻し検証に失敗しました'
     }
 

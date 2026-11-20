@@ -7,7 +7,7 @@ import { run, hasFutureOpenCheck } from './stop-gate-runner.mjs';
 import { addCheck } from './auto-progress.mjs';
 
 delete process.env.CLAUDE_HEADLESS;
-const open = '**[本セッションの目的]** 進捗確認を修正する\n次に kim がすること: なし\nこの後の自動進行: 残っている作業を進め結果を報告します\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）';
+const open = '**[本セッションの目的]** 進捗確認を修正する\n次に kim がすること: なし\nこの後の自動進行: 残っている作業を進め結果を報告します\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ／納期なし: 相手の回答時期が未定）';
 for (const kind of ['success', 'failure', 'missing-footer', 'ordinary']) test(`警告のみなら即登録、他違反は上限到達時に登録: ${kind}`, async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-wait-check-'));
   const prior = process.env.ORGIAST_HOME;

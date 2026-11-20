@@ -39,6 +39,7 @@
 **🔴 判断材料は聞かれる前に調べる。費用・プラン・契約・招待・手作業の提案は、2案以上の比較表（月額・得られる枠・手間）＋出典＋推奨を付けて出す。decision-research-gate が差し戻す。**
 **🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PR は作った席が自分で着地させる。pr-land.mjs --title "<題>" --body-file <本文> でbaseへpushし着地させる（通常はautomerge、安全弁パスはCI合格後pr-merge、workflow変更は停止）。権限・鍵・マージを kim-PC に頼まない。不足時は `node tools/access-doctor.mjs --fix`。内部Gmail下書き禁止。**社内DMは承認不要。秘密値非記載。社外全文承認後。
 **🔴 kim 宛 Discord DM は全廃・例外なし（緊急を含む・全PC全アカウント）。kim-inbox（~/.claude/kim-inbox、node tools/kim-inbox.mjs）へ積みセッションで回収。ask は --answer まで毎プロンプト再提示、info は伝えたら --seen。クローズを止めず台帳を次セッションへ引き継ぐ。Discord MCP 直接送信はゲートが拒否し、旧 config/kim-discord-allowlist.json のカテゴリも廃止。詳細 docs/kim-inbox.md。**
+**🔴 期日は返答に【予定】行で書く（rules/schedule-autopilot.md）。**
 **🔴 社内ツールが Drive に作成・コピーするファイルには kim@orgiast.jp の編集権限を必ず付け、読み戻して確認する。失敗を握りつぶさない。作成 hook と毎日05:50のスイープで補完する。巡回は直近7日・共有制作アカウントと fleet の自動作成識別済みファイルだけを対象にし、社員個人の私物には付与しない。**
 **🔴 人への連絡・共有は、受け手がその1通だけで用が済む形で送る（2026-10-29 nishi 指示・全アカウント全PC）**。Gmail・Drive・別チャットを開きに行かせない。受け手の手間は Claude Code の効率より優先する。
 **🔴 メールの送信・下書きはすべて seisaku-team@orgiast.jp。送信指示時は重複・矛盾照会**
@@ -81,8 +82,8 @@ effortLevelの既定は **medium**（kim 2026-09-17 改定）、lowは禁止。`
 ### 1.14 permission mode と安全装置
 permission mode の既定は `bypassPermissions`。
 ### 1.15 自律進行・セッション引継ぎ
-**自動再開は廃止。
-**🔴 セッションは1目的。完了時はClaudeが確認なしで /session-close し、引継ぎ後に次セッションを自動起動する。早朝に未クローズの全セッションを確認する。リモートコントロールは常時有効、スマホ用の空きセッションを3つ確保する。タイトル先頭にPC番号（fleet-pc-map、例018｜）と状態【閉じて可】／【MM/DD/HH:MMまで】を付ける。閉じて可は終了定型文かつuserの残作業なしの場合のみ。詳細は本節「クローズ・待機タイトル」。**
+**時刻起点の一律再開は廃止。
+**🔴 セッションは1目的。完了時は確認なしで /session-close し次を自動起動。早朝に未クローズ全件確認。リモート常時有効・スマホ用空きセッションを3つ。タイトル頭にPC番号と【閉じて可】／【MM/DD/HH:MMまで】。閉じて可は終了定型文＋user残作業なし。待機フッターに納期と残作業（不明なら理由）。期限=min(返信見込み,納期−残作業−予備)。期限切れはClaude外で監視し、check達成か納期危険時のみ再開。書式は§1.15。**
 ### 案件の引き継ぎ（全アカウント共通）
 kim が操作する対象アカウントの案件作業は、案件ID・案件一覧の名前から自動で紐付き、Drive ハブの `case-sessions/<案件ID>/` に残る。
 **🔴 案件引継ぎ: kim操作席の案件は case-sessions に自動保存。別席は /case-resume <案件ID/案件名>（初回6KB以内）、明示紐付けは /case <案件ID>。全文は必要箇所だけ同期してGrepし、閉じる前に case-handoff.mjs flush でSTATE更新を確認（§1.15）。**

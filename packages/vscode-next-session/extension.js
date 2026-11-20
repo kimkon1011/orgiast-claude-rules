@@ -6,6 +6,7 @@ const {
   readConfig, createOwnershipLease, createPool, isWaitingTab, decideRefresh,
   readRefreshConfig, readLastRefreshAt, inRefreshHours, isWorktreeFolder, decideWorktreeCleanup,
   decideTrimExcess, selectExcessEmptySpares, EMPTY_SPARE_KEEP,
+  DEFAULT_AUTO_TITLE_PREFIXES, setAutoTitlePrefixes,
 } = require('./mobile-pool');
 const { resolveClaudeShellPath } = require('./shell-path');
 const { decideAction, orderMobileOpenMethods } = require('./route');
@@ -440,8 +441,21 @@ async function ensureMobileTabs({ count = readConfig(mobileHome, process.env, vs
   return maintainSpares(count);
 }
 
+function configureAutoTitlePrefixes() {
+  const key = 'CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX';
+  const variables = vscode.workspace.getConfiguration('claudeCode').get('environmentVariables');
+  const configuredPrefix = Array.isArray(variables)
+    ? variables.find(variable => variable?.name === key)?.value
+    : variables?.[key];
+  setAutoTitlePrefixes([configuredPrefix, process.env[key], ...DEFAULT_AUTO_TITLE_PREFIXES]);
+}
+
 function activate(context) {
   extensionContext = context;
+  configureAutoTitlePrefixes();
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
+    if (event.affectsConfiguration('claudeCode')) configureAutoTitlePrefixes();
+  }));
   const handler = vscode.window.registerUriHandler({
     async handleUri(uri) {
       try {

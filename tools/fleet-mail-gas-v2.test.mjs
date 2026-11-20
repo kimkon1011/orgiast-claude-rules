@@ -437,7 +437,7 @@ test('J read-back normalizes all cell types without trimming strings or hiding m
   }) };
   h._fleetMailWrite_(sheet, 1, row);
   assert.deepEqual(stored.slice(0, expected.length), expected);
-  sheet.getRange = () => ({ setRichTextValues() {}, getValues: () => [stored.map(value => value === ' padded ' ? value.trim() : value)] });
+  sheet.getRange = () => ({ setNumberFormat() { return this; }, setRichTextValues() {}, getValues: () => [stored.map(value => value === ' padded ' ? value.trim() : value)] });
   assert.throws(() => h._fleetMailWrite_(sheet, 1, row), /read-back mismatch/);
 });
 

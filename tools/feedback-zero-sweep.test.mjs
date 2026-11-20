@@ -417,3 +417,9 @@ test('一部のアプリだけurl未設定なら従来どおり警告する', as
     assert.equal(notifyCalls.length, 1, 'notify must still be called');
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
+
+test('巡回設定が無い席では unknown_rows を1行へ畳む', () => {
+  const rows=[{appName:'a',status:'未取得',errors:['url 参照キー未設定']},{appName:'b',status:'未取得',errors:['url 参照キー未設定']}];
+  assert.equal(unknownRowsLine({unassigned:true,rows}),'sweep_skipped=この席に巡回設定（url 参照キー）が無いため担当外としてスキップ');
+  assert.match(unknownRowsLine({unassigned:false,rows}),/^unknown_rows=a:url 参照キー未設定; b:/);
+});

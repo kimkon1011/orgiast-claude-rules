@@ -220,6 +220,8 @@ export function sweepExitCode(result) {
 
 // 夜間ログは末尾8行しか残らないため、失敗理由を1行で最後に出す（JSON の直後）。
 export function unknownRowsLine(result) {
+  // 巡回設定が無い席は全行が「url 参照キー未設定」になる。全行並べると設定漏れと誤読されるので1行へ畳む。
+  if(result?.unassigned)return 'sweep_skipped=この席に巡回設定（url 参照キー）が無いため担当外としてスキップ';
   const rows=(result?.rows || []).filter(r=>r.status!=='取得済' || (r.errors && r.errors.length));
   if(!rows.length)return '';
   return 'unknown_rows='+rows.map(r=>`${r.appName}:${(r.errors?.length?[...new Set(r.errors)].join('、'):r.status)}`).join('; ');

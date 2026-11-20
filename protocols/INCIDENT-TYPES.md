@@ -39,6 +39,7 @@
 | ツール不在の弱検証渡し型 | ツール不在を理由に、代替の弱い検証（テキスト・件数）でPDF資料を渡し、kim に「区切り・余白がおかしい」を3回指摘させた（2026-11-05〜15 三共精機） | §2.6.3・design-deck §6・pdf-page-check を使用しないPDF納品経路（html-to-pdf・Chrome直接PDF化） | pdf-deliverable-visual-gate（PreToolUse）がsha256証跡・全ページRead記録・機械チェック（社内向け語）を確認 |
 | 外部チャネル未監視型 | セッションが「返信が届いたら」と宣言した外部チャネル（LINEグループ等）を自動照会する仕組みがなく、resumeSession の連続 timeout で沈黙。kim が「進捗どう？」と聞く羽目に（2026-11-12 e50bea8a LINE エイト様グループ）。Gmail は external-waiting.mjs がカバー済みだが LINE/Discord/Beeper は未対応。再開失敗も kim-inbox に通知されず握りつぶされていた | 「返信待ち」「返事待ち」「返信が届いたら」の promise を持つ auto-progress 行。Supabase channel_messages を読みに行く check が未登録のセッション。resumeOutcome が error/timeout で failureCount>=3 の行 | `auto-progress-external-check.mjs`（新設: LINE Supabase 新着照会 check ツール）。watch の resume-failed 通知（連続3回失敗で kim-inbox🔴）。`auto-progress.mjs --add-check` 登録時に外部チャネル ID を埋め込む標準手順 |
 | 再開レーン誤配送型 | セッション再開（auto-progress-watch / stalled-session-resume が runChild に resumeSessionId を渡す）が、既定の実行者 cheap-code に流れて --resume が捨てられ、元の会話に何も届かず「blocked: 成果記録なし」のまま放置された（2026-11-09 セッション 834dfc9c） | runChild の resumeSessionId 分岐（auto-progress-watch.mjs、stalled-session-resume.mjs）。--resume を無視する実行レーン | runChild は resumeSessionId 指定時に claude レーンへ固定（PR #1879、2026-11-11 マージ）。結果 JSON 欠落は error 扱いで再試行。auto-session.test.mjs / auto-progress-watch.test.mjs のテスト |
+| 短い返事＋巨大な注入で人の入力を無視して無応答終了 | 短い返事への応答が空、または `No response requested.` のみで終了した（2026-11-19 kim 集計） | transcript 末尾の応答と直前の user エントリ | no-response-gate |
 
 追記ルール: 型名は構造を表す語にする。症状は1行、日付と出典を付ける。ゲート列が空の行は未完了として扱い、埋まるまで消さない。
 

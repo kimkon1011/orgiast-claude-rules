@@ -18,7 +18,7 @@ CLAUDE.md §1.13 の補足。claude-token-efficient プロジェクトの 11 ル
 - CLAUDE.md は恒久ルールのみ、進行中タスク・今日の数字を書かない（§1.13）
 
 ### 4. モデルを使い分ける
-実装=Codex、設計=Opus/Fable、軽い確認=Sonnet/Haiku。
+GitHub リポジトリのまとまった修正=Cursor レーン（§1.17.3）、数行と PC ローカル=Codex、設計=Opus/Fable、軽い確認=Sonnet/Haiku。
 - §1.17 費用対効果の階層: ①自動化(消費ゼロ)→②Codex/Manus(定額)→③従量最小→④Opus5は品質差を実測・正当化
 
 ### 5. 探索は軽量に

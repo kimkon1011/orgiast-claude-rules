@@ -4,6 +4,7 @@ import { mkdirSync, rmdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectAwaiting, readJson, saveJson, ageLabel, COLLECT_BUDGET_MS } from './kim-awaiting.mjs';
+import { readAnswers } from './lib/external-waiting-state.mjs';
 import { readManualLedger, findManualWaiting } from './outbound-reply-chase.mjs';
 import { DAY } from './lib/fleet-chase-policy.mjs';
 import { isUnattendedRow } from './auto-progress-ledger.mjs';
@@ -44,6 +45,19 @@ export function context(input, { home = process.env.ORGIAST_HOME || os.homedir()
     if (!['SessionStart', 'UserPromptSubmit'].includes(event)) return null;
     const sessionId = String(input.session_id || input.sessionId || '');
     const items = collect({ home, now, budgetMs: COLLECT_BUDGET_MS, sessionId });
+    // 回答済みの社外返信を検出（セッション開始時に1回だけ通知）
+    let answersBlock = '';
+    if (event === 'SessionStart' && !isLoopWake(input, { home, now, hook: 'kim-awaiting-context' })) {
+      const answers = readAnswers(home);
+      const shownAnswersFile = path.join(home, '.claude', 'state', 'external-answers-shown.json');
+      const shownAnswers = (() => { try { return JSON.parse(fs.readFileSync(shownAnswersFile, 'utf8')); } catch { return []; } })();
+      const freshAnswers = answers.filter(a => !shownAnswers.includes(a.id));
+      if (freshAnswers.length > 0) {
+        const lines = freshAnswers.map(a => `・${a.id}: ${a.who}「${a.subject}」→ kim の回答: 「${String(a.answer).slice(0, 100)}」`);
+        answersBlock = `✅ kim が社外返信に回答しました（${freshAnswers.length} 件）。返信下書きを作って提示し、送信は kim に確認してから行ってください。\n${lines.join('\n')}\n\n`;
+        saveJson(shownAnswersFile, [...shownAnswers, ...freshAnswers.map(a => a.id)]);
+      }
+    }
     const discord = discordWaitingContext({ home, now });
     const discordOnly = () => discord ? { hookSpecificOutput: { hookEventName: event, additionalContext: discord } } : null;
     // loop 起床は discord 以外何も注入しない
@@ -81,7 +95,7 @@ export function context(input, { home = process.env.ORGIAST_HOME || os.homedir()
     const routes = [...shownExternal, ...shownInternal].map(item => `id=${item.id} | ${item.title}`).join('\n');
     const redInstruction = external.length ? '🔴 の項目は本文を get_thread で読み、返信下書きまで作って提示せよ。送信は kim が明示した時だけ。\n' : '';
     const knownLine = known > 0 ? `\nほか既出 ${known} 件（一覧は node tools/kim-awaiting.mjs で表示）\n` : '';
-    return { hookSpecificOutput: { hookEventName: event, additionalContext: `${discord}${FINAL_ONLY_INSTRUCTION}\n${externalBlock}${internalBlock}${knownLine}${redInstruction}kim がこのどれかに答えたら、その答えを本文ファイルに書いて node "${repo}/tools/kim-awaiting.mjs" --answer <id> --body-file <file> で届けよ。kim が「不要」と言ったものは --skip <id> --reason ...。以下の id は kim に見せない。\n${routes}` } };
+    return { hookSpecificOutput: { hookEventName: event, additionalContext: `${discord}${answersBlock}${FINAL_ONLY_INSTRUCTION}\n${externalBlock}${internalBlock}${knownLine}${redInstruction}kim がこのどれかに答えたら、その答えを本文ファイルに書いて node "${repo}/tools/kim-awaiting.mjs" --answer <id> --body-file <file> で届けよ。kim が「不要」と言ったものは --skip <id> --reason ...。以下の id は kim に見せない。\n${routes}` } };
   } catch { return null; }
 }
 if (isEntry(import.meta.url)) { try { const out = context(JSON.parse(await readStdinWithTimeout(500))); if (out) console.log(JSON.stringify(out)); } catch {} }

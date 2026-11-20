@@ -36,3 +36,45 @@ export function saveAnswer(home, id, body, now = Date.now()) {
   if (!item) throw new Error('external item not found');
   writeJsonAtomic(path.join(answersDir(home), `${id.slice(3)}.json`), { id, answer: body, at: new Date(now).toISOString(), mailbox: item.mailbox, threadId: item.threadId, subject: item.subject, who: item.who });
 }
+export function readAnswers(home) {
+  const dir = answersDir(home);
+  try { return fs.readdirSync(dir).filter(f => f.endsWith('.json')).map(f => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))); }
+  catch { return []; }
+}
+export function hasAnswer(home, id) {
+  if (!/^ex:[0-9a-f]{12}$/.test(id)) return false;
+  const file = path.join(answersDir(home), `${id.slice(3)}.json`);
+  try { return fs.existsSync(file); } catch { return false; }
+}
+
+// 同じ who の下書きをまとめ、新しいものだけ残す。returns { kept, replaced[] }
+export function groupDrafts(items) {
+  const drafts = items.filter(item => item.kind === 'draft');
+  const nonDrafts = items.filter(item => item.kind !== 'draft');
+  const groups = new Map();
+  for (const item of drafts) {
+    const key = item.who || '';
+    if (!groups.has(key)) { groups.set(key, []); }
+    groups.get(key).push(item);
+  }
+  const kept = [];
+  const replaced = [];
+  for (const [, group] of groups) {
+    if (group.length <= 1) { kept.push(group[0]); continue; }
+    group.sort((a, b) => Date.parse(a.since) - Date.parse(b.since));
+    kept.push(group[group.length - 1]);
+    for (let i = 0; i < group.length - 1; i++) replaced.push(group[i].id);
+  }
+  return { kept: [...nonDrafts, ...kept], replacedIds: replaced };
+}
+
+export function markAnsweredActionDone(home, id) {
+  if (!/^ex:[0-9a-f]{12}$/.test(id)) return;
+  const file = path.join(answersDir(home), `${id.slice(3)}.json`);
+  try {
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    data.actionDone = true;
+    data.actionDoneAt = new Date().toISOString();
+    writeJsonAtomic(file, data);
+  } catch {}
+}

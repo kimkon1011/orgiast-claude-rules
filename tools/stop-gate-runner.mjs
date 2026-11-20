@@ -60,6 +60,7 @@ import { STOP_RETRY_INSTRUCTION, withStopRetryInstruction } from './lib/stop-ret
 import { evaluateClaudeFallbackReport } from './claude-fallback-report-gate.mjs';
 import { evaluatePendingDecision } from './pending-decision-ask-gate.mjs';
 import { evaluateSilentCheckFailure } from './silent-check-failure-gate.mjs';
+import { evaluateAnswerRecording } from './kim-answer-recording-gate.mjs';
 import { evaluateExternalChannelPromise } from './external-channel-unmonitored-gate.mjs';
 import { buildRecord, extractPromise, ledgerFile as progressLedgerFile, readLedger, writeLedger, applyPromise, latestOpenPromises, rollingSessionFields } from './auto-progress-ledger.mjs';
 import { appendInbox } from './lib/auto-progress-inbox.mjs';
@@ -75,7 +76,7 @@ export const SPECIAL_GATE_MAX_BLOCKS_PER_TURN = 2;
 // preface are never independent blocking reasons. Keep permission guards and
 // separately registered mail-send-approval/delete-approval/api-billing/
 // app-llm-cost/lane-repair-first gates blocking, outside this rewrite budget.
-export const LIGHT_GATES = ['report-length-gate', 'url-account-gate', 'message-locator-gate', 'third-party-nudge-gate', 'seat-name-gate', 'shallow-answer-gate', 'unregistered-promise-gate', 'silent-check-failure-gate'];
+export const LIGHT_GATES = ['report-length-gate', 'url-account-gate', 'message-locator-gate', 'third-party-nudge-gate', 'seat-name-gate', 'shallow-answer-gate', 'unregistered-promise-gate', 'silent-check-failure-gate', 'kim-answer-recording-gate'];
 export const FORM_GATES = ['handoff-quality-gate', 'manual-request-fullsteps-gate', 'manual-request-evidence-gate', 'handoff-info-guard', 'handoff-branch-coverage-gate', 'user-burden-gate', 'handoff-investigation-gate'];
 // Exempt presentation/repetition only. Permission, evidence, outstanding work and
 // other operational checks must still run on automatic periodic turns.
@@ -139,6 +140,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['third-party-nudge-gate', () => judgeThirdPartyNudge(ctx.assistantText)],
     ['unregistered-promise-gate', () => evaluateUnregisteredPromise(ctx.assistantText, { sessionId: ctx.sessionId, transcriptRaw: ctx.transcriptRaw, home: home() })],
     ['external-channel-unmonitored-gate', () => evaluateExternalChannelPromise(ctx.assistantText)],
+    ['kim-answer-recording-gate', () => evaluateAnswerRecording(ctx.humanText || ctx.lastUserPrompt || '', { home: home(), now: Date.now() })],
     ['progress-cron-gate', () => evaluateProgressCron(ctx.input, { home: home() })],
     ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw, { ...ctx.input, session_id: ctx.sessionId }, { turnText: ctx.turnText })],
     ['user-burden-gate', () => judgeUserBurden(ctx.assistantText, ctx.humanText)],

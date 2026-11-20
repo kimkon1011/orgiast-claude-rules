@@ -62,6 +62,60 @@ function matchColumn(name, patterns) {
   return patterns.some(p => n.includes(p));
 }
 
+/** 列名パターン定数 */
+const COL_PATTERNS = {
+  budgetItem: ['予算', '予算項目', '予算区分', 'budget'],
+  clientName: ['クライアント', 'client', '顧客', '顧客名', 'お客様'],
+  caseName: ['案件名', '案件', 'case', 'project', 'プロジェクト'],
+  sales: ['営業', '営業担当', 'sales', 'セールス'],
+  production: ['制作', '制作担当', 'production', 'クリエイティブ'],
+};
+
+/** ヘッダから最初にマッチする列インデックスを探す */
+function findFirstMatch(headers, patterns) {
+  return headers.findIndex(h => matchColumn(h, patterns));
+}
+
+/** 行データを列で集計（value → count、件数降順） */
+function aggregateByColumn(rows, colIdx) {
+  const counts = {};
+  for (const r of rows) {
+    const v = (r[colIdx] ?? '').toString().trim() || '(未設定)';
+    counts[v] = (counts[v] || 0) + 1;
+  }
+  return Object.fromEntries(
+    Object.entries(counts).sort((a, b) => b[1] - a[1])
+  );
+}
+
+/** 指定月に該当する予定エントリを抽出 */
+function extractScheduleEntries(rows, dateIndices, headers, targetMonths) {
+  const entries = [];
+  for (const r of rows) {
+    for (const di of dateIndices) {
+      const v = (r[di] ?? '').toString().trim();
+      if (!v) continue;
+      const d = v.replace(/\//g, '-');
+      if (targetMonths.some(m => d.startsWith(m))) {
+        entries.push({ date: d, dateCol: headers[di], row: r });
+      }
+    }
+  }
+  entries.sort((a, b) => a.date.localeCompare(b.date) || a.dateCol.localeCompare(b.dateCol));
+  return entries;
+}
+
+/** 予定表に表示する列のインデックス一覧（予算項目・クライアント・案件名・営業・制作） */
+function getScheduleColumnIndices(headers) {
+  return [
+    findFirstMatch(headers, COL_PATTERNS.budgetItem),
+    findFirstMatch(headers, COL_PATTERNS.clientName),
+    findFirstMatch(headers, COL_PATTERNS.caseName),
+    findFirstMatch(headers, COL_PATTERNS.sales),
+    findFirstMatch(headers, COL_PATTERNS.production),
+  ].filter(i => i >= 0);
+}
+
 /** Google Sheets シリアル値 → YYYY-MM-DD 文字列 */
 function serialToDate(serial) {
   if (typeof serial !== 'number' || serial < 20000 || serial > 80000) return String(serial);
@@ -152,6 +206,13 @@ function generateHtml({ headers, types, choiceMap, rows }) {
   // 日付列名→値の一覧を作る
   const dateColumnNames = dateIndices.map(i => headers[i]);
 
+  // 予定表の表示列（予算項目・クライアント・案件名・営業・制作）
+  const scheduleColIdxs = getScheduleColumnIndices(headers);
+  // カード集計用（予算項目列）
+  const budgetIdx = findFirstMatch(headers, COL_PATTERNS.budgetItem);
+  // 担当者別件数用（営業列）
+  const salesIdx = findFirstMatch(headers, COL_PATTERNS.sales);
+
   // データ行のJSON
   const dataJson = safeJson(rows);
 
@@ -174,7 +235,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}
 th{background:#f0f2f5;text-align:left;padding:8px;font-weight:600;cursor:pointer;user-select:none;white-space:nowrap;position:relative;border-bottom:1px solid #ddd}
 th:hover{background:#e4e7ec}
 th .arrow{font-size:10px;margin-left:4px;color:#999}
-td{padding:6px 8px;border-bottom:1px solid #eee;max-width:300px;overflow:hidden;text-overflow:ellipsis}
+td{padding:6px 8px;border-bottom:1px solid #eee;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 tr:hover td{background:#fafbfc}
 .filter-row{margin-bottom:8px;display:flex;flex-wrap:wrap;gap:6px}
 .filter-row input,.filter-row select{padding:4px 8px;border:1px solid #ccc;border-radius:4px;font-size:12px}
@@ -198,20 +259,21 @@ tr:hover td{background:#35354c}.section h2{color:#e0e0e0;border-bottom-color:#44
   const js = `
 const DATA = ${dataJson};
 const HEADERS = ${headersJson};
-const STATUS_IDX = ${statusIdx};
-const PERSON_IDX = ${personIdx};
 const DATE_IDXS = ${safeJson(dateIndices)};
+const BUDGET_IDX = ${budgetIdx};
+const SALES_IDX = ${salesIdx};
+const SCHEDULE_COL_IDXS = ${safeJson(scheduleColIdxs)};
 
 let filteredData = [...DATA];
 let sortCol = -1, sortAsc = true;
 
 function renderCards() {
-  if (STATUS_IDX < 0) return;
+  if (BUDGET_IDX < 0) return;
   const el = document.getElementById('status-cards');
   if (!el) return;
   const counts = {};
   for (const r of filteredData) {
-    const v = (r[STATUS_IDX] || '').trim() || '(未設定)';
+    const v = (r[BUDGET_IDX] || '').trim() || '(未設定)';
     counts[v] = (counts[v] || 0) + 1;
   }
   el.innerHTML = Object.entries(counts).map(([k, v]) =>
@@ -220,16 +282,16 @@ function renderCards() {
 }
 
 function renderPersonChart() {
-  if (PERSON_IDX < 0) return;
+  if (SALES_IDX < 0) return;
   const el = document.getElementById('person-chart');
   if (!el) return;
   const counts = {};
   for (const r of filteredData) {
-    const v = (r[PERSON_IDX] || '').trim() || '(未設定)';
+    const v = (r[SALES_IDX] || '').trim() || '(未設定)';
     if (!v) continue;
     counts[v] = (counts[v] || 0) + 1;
   }
-  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 10);
   if (!entries.length) { el.innerHTML = '<p class="empty">データがありません</p>'; return; }
   const max = entries[0][1];
   el.innerHTML = entries.map(([k, v]) =>
@@ -263,10 +325,10 @@ function renderSchedule() {
   if (!schedules.length) { el.innerHTML = '<p class="empty">今月〜来月の予定はありません</p>'; return; }
   const rows = schedules.map(s =>
     '<tr><td>' + esc(s.date) + '</td><td>' + esc(s.dateCol) + '</td>' +
-    HEADERS.map((h, i) => '<td>' + esc(s.row[i] || '') + '</td>').join('') + '</tr>'
+    SCHEDULE_COL_IDXS.map(i => '<td>' + esc(s.row[i] || '') + '</td>').join('') + '</tr>'
   ).join('');
   el.innerHTML = '<table><thead><tr><th>日付</th><th>列</th>' +
-    HEADERS.map(h => '<th>' + esc(h) + '</th>').join('') + '</tr></thead><tbody>' + rows + '</tbody></table>';
+    SCHEDULE_COL_IDXS.map(i => '<th>' + esc(HEADERS[i]) + '</th>').join('') + '</tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
 function renderTable() {
@@ -343,8 +405,8 @@ renderTable();
 `.trim();
 
   // ── セクション有無の判定 ──
-  const hasStatus = statusIdx >= 0;
-  const hasPerson = personIdx >= 0;
+  const hasStatus = budgetIdx >= 0;
+  const hasPerson = salesIdx >= 0;
   const hasDate  = dateIndices.length > 0;
 
   return `<!DOCTYPE html>
@@ -360,9 +422,9 @@ renderTable();
 <h1>案件ダッシュボード</h1>
 <p class="subtitle">${escapeHtml(TAB_NAME)} · ${rows.length}件</p>
 
-${hasStatus ? `<div class="section"><h2>状態別件数</h2><div class="cards" id="status-cards"></div></div>` : ''}
+${hasStatus ? `<div class="section"><h2>予算項目別件数</h2><div class="cards" id="status-cards"></div></div>` : ''}
 
-${hasPerson ? `<div class="section"><h2>担当者別件数</h2><div id="person-chart"></div></div>` : ''}
+${hasPerson ? `<div class="section"><h2>営業別件数</h2><div id="person-chart"></div></div>` : ''}
 
 ${hasDate ? `<div class="section"><h2>今月〜来月の予定</h2><div id="schedule"></div></div>` : ''}
 
@@ -479,4 +541,4 @@ async function main() {
 const isMain = process.argv[1] && (process.argv[1] === import.meta.filename || path.resolve(process.argv[1]) === import.meta.filename);
 if (isMain) main().catch(err => { console.error(err.message); process.exit(1); });
 
-export { inferType, choiceValues, matchColumn, serialToDate, buildSchema, generateHtml, SHEET_ID, TAB_NAME };
+export { inferType, choiceValues, matchColumn, serialToDate, buildSchema, generateHtml, SHEET_ID, TAB_NAME, findFirstMatch, aggregateByColumn, extractScheduleEntries, getScheduleColumnIndices, COL_PATTERNS };

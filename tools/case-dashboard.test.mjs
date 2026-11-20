@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { inferType, choiceValues, matchColumn, serialToDate, buildSchema, generateHtml } from './case-dashboard.mjs';
+import { inferType, choiceValues, matchColumn, serialToDate, buildSchema, generateHtml, findFirstMatch, aggregateByColumn, extractScheduleEntries, getScheduleColumnIndices, COL_PATTERNS } from './case-dashboard.mjs';
 
 test('inferType date', () => {
   assert.equal(inferType(['2024-01-15', '2024-02-20', '2024/03/10', '']), 'date');
@@ -133,14 +133,14 @@ test('generateHtml no status column', () => {
   assert.ok(html.includes('Test'));
 });
 
-test('generateHtml with status column', () => {
+test('generateHtml with budget column', () => {
   const html = generateHtml({
-    headers: ['ID', '状態', 'Name'],
+    headers: ['ID', '予算項目', 'Name'],
     types: ['string', 'choice', 'string'],
-    choiceMap: { 1: ['確定', '進行中'] },
-    rows: [['C001', '確定', 'A'], ['C002', '進行中', 'B']],
+    choiceMap: { 1: ['A企画', 'B企画'] },
+    rows: [['C001', 'A企画', 'Test'], ['C002', 'B企画', '']],
   });
-  assert.ok(html.includes('状態別件数'));
+  assert.ok(html.includes('予算項目別件数'));
 });
 
 test('generateHtml skips #REF! and empty header columns', () => {
@@ -166,4 +166,89 @@ test('generateHtml converts date serial values', () => {
   });
   assert.ok(html.includes('2025-11-19'), 'シリアル値 45980 → 2025-11-19');
   assert.ok(html.includes('2025-11-20'), 'シリアル値 45981 → 2025-11-20');
+});
+
+test('findFirstMatch matches budget column', () => {
+  assert.equal(findFirstMatch(['ID', '予算項目', 'Name'], COL_PATTERNS.budgetItem), 1);
+});
+
+test('findFirstMatch returns -1 for no match', () => {
+  assert.equal(findFirstMatch(['ID', 'Name'], COL_PATTERNS.budgetItem), -1);
+});
+
+test('getScheduleColumnIndices filters to matched columns only', () => {
+  const idxs = getScheduleColumnIndices(['ID', '案件名', '予算項目', '営業担当', 'メモ']);
+  assert.deepEqual(idxs, [2, 1, 3], '予算項目(2)・案件名(1)・営業(3) のみ');
+});
+
+test('aggregateByColumn counts values descending', () => {
+  const rows = [
+    ['C001', 'A企画'],
+    ['C002', 'B企画'],
+    ['C003', 'A企画'],
+  ];
+  assert.deepEqual(aggregateByColumn(rows, 1), { 'A企画': 2, 'B企画': 1 });
+});
+
+test('aggregateByColumn handles empty values', () => {
+  const rows = [
+    ['C001', ''],
+    ['C002', null],
+  ];
+  const result = aggregateByColumn(rows, 1);
+  assert.equal(result['(未設定)'], 2);
+});
+
+test('extractScheduleEntries finds entries in target months', () => {
+  const rows = [
+    ['C01', '2026-11-15'],
+    ['C02', '2026-12-01'],
+    ['C03', '2026-10-01'],
+  ];
+  const headers = ['id', 'date'];
+  const entries = extractScheduleEntries(rows, [1], headers, ['2026-11']);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].date, '2026-11-15');
+});
+
+test('extractScheduleEntries sorts by date then column', () => {
+  const rows = [
+    { arr: ['C002', '2026-11-20'] },
+    { arr: ['C001', '2026-11-15'] },
+  ];
+  const entries = extractScheduleEntries(
+    rows.map(r => r.arr), [1], ['id', 'date'], ['2026-11']
+  );
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].row[0], 'C001');
+  assert.equal(entries[1].row[0], 'C002');
+});
+
+test('generateHtml JSON embedded in <script> escapes </script>', () => {
+  const html = generateHtml({
+    headers: ['案件名'],
+    types: ['string'],
+    choiceMap: {},
+    rows: [['</script><script>alert("break")</script>']],
+  });
+  // 埋め込みJSON内の </script> が <script> タグを途中で切らない
+  assert.ok(html.includes('\\u003C/script\\u003E') || !html.includes('</script>alert'),
+    '</script> がエスケープされていない');
+  // <script> から </script> までの範囲が閉じていること
+  const scriptClose = html.lastIndexOf('</script>');
+  assert.ok(scriptClose >= 0, '最後の </script> が存在する');
+  assert.ok(html.indexOf('<script>') < scriptClose, '<script> の対応が取れている');
+});
+
+test('generateHtml JSON handles U+2028 line separator', () => {
+  const withLS = 'line\u2028separator';
+  const html = generateHtml({
+    headers: ['メモ'],
+    types: ['string'],
+    choiceMap: {},
+    rows: [[withLS]],
+  });
+  // U+2028 がテンプレートリテラルを壊さない
+  assert.ok(!html.includes('\u2028'));
+  assert.ok(html.includes('\\u2028'));
 });

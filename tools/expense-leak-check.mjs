@@ -331,7 +331,10 @@ export async function runCheck(opts, injected = {}) {
       result.issues.push(msg);
     } else {
       const httpMatch = msg.match(/HTTP\s+(\d{3})/);
-      result.issues.push(`Run failed: ${error.name || 'Error'}${httpMatch ? ` HTTP ${httpMatch[1]}` : ''}`);
+      const qualifiers = [error.name || 'Error'];
+      if (httpMatch) qualifiers.push(`HTTP ${httpMatch[1]}`);
+      if (error.code && typeof error.code === 'string') qualifiers.push(`code=${error.code}`);
+      result.issues.push(`Run failed: ${qualifiers.join(' ')}`);
     }
     if (opts.verbose) console.error(`[expense-leak-check] ${error.name || 'Error'}: ${error.message}\n${error.stack || '(no stack)'}`);
     result.failed = true;

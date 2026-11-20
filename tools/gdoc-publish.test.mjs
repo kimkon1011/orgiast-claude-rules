@@ -72,7 +72,7 @@ function mockApi(rendered, { existing = document('古い本文\n'), missingLinks
   return {
     calls,
     ensure: async () => {},
-    getToken: async options => { assert.deepEqual(options, { impersonate: 'kim@orgiast.jp' }); return 'mock-token'; },
+    getToken: async () => 'mock-token',
     api: async (token, url, options) => {
       assert.equal(token, 'mock-token');
       const body = options.body ? JSON.parse(options.body) : undefined;
@@ -311,6 +311,40 @@ test('--private と --share 併用で exit 2 となる', async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('GWS proxy unsupported Google endpoint triggers Drive conversion fallback', async () => {
+  const mock = fallbackApi({ error: 'GWS proxy: unsupported Google endpoint' });
+  const result = await publishDocument({ title: '題名', source: '# 題名\n[設定](https://example.test/?a=1&b=2)', authuser: 'kim@orgiast.jp' }, mock);
+  assert.equal(result.id, 'converted');
+  assert.equal(result.verification, 'drive-text-export');
+  const upload = mock.calls.find(c => c.url.includes('/upload/'));
+  assert.equal(upload.method, 'POST');
+  assert.match(upload.body, /text\/html/);
+  assert.match(upload.body, /<a href="https:\/\/example.test\/\?a=1&amp;b=2">設定<\/a>/);
+  assert.match(upload.body, /application\/vnd.google-apps.document/);
+  assert.deepEqual(mock.grants, ['converted']);
+  assert.equal(mock.warnings.length, 1);
+  assert.ok(mock.calls.at(-1).url.includes('/export?'));
+});
+
+test('keyless: ensureKimEditor receives actingUser=seisaku-team@orgiast.jp', async t => {
+  const prev = process.env.GOOGLE_IMPERSONATE;
+  process.env.GOOGLE_IMPERSONATE = 'seisaku-team@orgiast.jp';
+  t.after(() => {
+    if (prev === undefined) delete process.env.GOOGLE_IMPERSONATE;
+    else process.env.GOOGLE_IMPERSONATE = prev;
+  });
+  const source = '本文';
+  const rendered = renderDocument(source);
+  const mock = mockApi(rendered, { existing: document('\n') });
+  const captured = [];
+  mock.getToken = async () => 'mock-token';
+  mock.ensure = async (id, opts) => { captured.push({ id, actingUser: opts.actingUser }); };
+  await publishDocument({ authuser: 'reader@example.com', title: '題名', source }, mock);
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].actingUser, 'seisaku-team@orgiast.jp');
+  assert.equal(captured[0].id, 'doc-id');
 });
 
 test('--private 読み戻しで owner 以外があれば exit 4 となる', async () => {

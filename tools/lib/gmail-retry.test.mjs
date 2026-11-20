@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isRetryableError, retryAfterMs, backoffDelayMs, gmailFetchWithRetry } from './gmail-retry.mjs';
+import { isRetryableError, isRetryableFetchError, retryAfterMs, backoffDelayMs, gmailFetchWithRetry } from './gmail-retry.mjs';
 
 function fakeResponse(status, body, headers = {}) {
   return {
@@ -38,6 +38,46 @@ test('isRetryableError: 200 はリトライ対象外', () => {
 });
 test('isRetryableError: 404 はリトライ対象外', () => {
   assert.ok(!isRetryableError(fakeResponse(404, 'Not Found'), 'Not Found'));
+});
+
+test('isRetryableFetchError: TimeoutError はリトライ対象', () => {
+  const err = new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+  assert.ok(isRetryableFetchError(err));
+});
+test('isRetryableFetchError: AbortError はリトライ対象', () => {
+  const err = new DOMException('The operation was aborted', 'AbortError');
+  assert.ok(isRetryableFetchError(err));
+});
+test('isRetryableFetchError: TypeError (fetch failed) はリトライ対象', () => {
+  assert.ok(isRetryableFetchError(new TypeError('fetch failed')));
+});
+test('isRetryableFetchError: ECONNRESET はリトライ対象', () => {
+  const err = new Error('read ECONNRESET');
+  err.code = 'ECONNRESET';
+  assert.ok(isRetryableFetchError(err));
+});
+test('isRetryableFetchError: ETIMEDOUT はリトライ対象', () => {
+  const err = new Error('connect ETIMEDOUT');
+  err.code = 'ETIMEDOUT';
+  assert.ok(isRetryableFetchError(err));
+});
+test('isRetryableFetchError: EAI_AGAIN はリトライ対象', () => {
+  const err = new Error('getaddrinfo EAI_AGAIN');
+  err.code = 'EAI_AGAIN';
+  assert.ok(isRetryableFetchError(err));
+});
+test('isRetryableFetchError: UND_ERR_ で始まる code はリトライ対象', () => {
+  const err = new Error('UND_ERR_SOCKET');
+  const cause = new Error('socket error');
+  cause.code = 'UND_ERR_SOCKET';
+  err.cause = cause;
+  assert.ok(isRetryableFetchError(err));
+});
+test('isRetryableFetchError: 一般の Error はリトライ対象外', () => {
+  assert.ok(!isRetryableFetchError(new Error('boom')));
+});
+test('isRetryableFetchError: SyntaxError はリトライ対象外', () => {
+  assert.ok(!isRetryableFetchError(new SyntaxError('unexpected token')));
 });
 
 test('retryAfterMs: Retry-After ヘッダーからミリ秒を取得', () => {
@@ -137,6 +177,76 @@ test('gmailFetchWithRetry: 待ち合計が90秒を超えたら打ち切る', asy
   );
   // 45s + 45s = 90s で上限に達するので2回目で打ち切り
   assert.ok(sleeps.length <= 2, '90秒上限で打ち切られる');
+});
+
+test('gmailFetchWithRetry: 1回目 TimeoutError → 2回目 200 で成功し onRetry が1回呼ばれる', async () => {
+  let attempt = 0;
+  const fetchImpl = async () => {
+    attempt++;
+    if (attempt === 1) throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    return fakeResponse(200, '{"data":"ok"}');
+  };
+  const retries = [];
+  const onRetry = (n, d) => { retries.push({ n, d }); };
+  const response = await gmailFetchWithRetry('https://example.com', {}, { fetchImpl, sleep: async () => {}, onRetry });
+  const body = await response.json();
+  assert.deepEqual(body, { data: 'ok' });
+  assert.equal(retries.length, 1);
+  assert.equal(retries[0].n, 1);
+});
+
+test('gmailFetchWithRetry: 1回目 TypeError(fetch failed) → 2回目 200 で成功し onRetry が1回呼ばれる', async () => {
+  let attempt = 0;
+  const fetchImpl = async () => {
+    attempt++;
+    if (attempt === 1) throw new TypeError('fetch failed');
+    return fakeResponse(200, '{"data":"ok"}');
+  };
+  const retries = [];
+  const onRetry = (n, d) => { retries.push({ n, d }); };
+  const response = await gmailFetchWithRetry('https://example.com', {}, { fetchImpl, sleep: async () => {}, onRetry });
+  const body = await response.json();
+  assert.deepEqual(body, { data: 'ok' });
+  assert.equal(retries.length, 1);
+});
+
+test('gmailFetchWithRetry: 常に TimeoutError → 最大試行後、元の例外 message のまま throw', async () => {
+  let count = 0;
+  const fetchImpl = async () => {
+    count++;
+    throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+  };
+  const sleeps = [];
+  const sleep = ms => { sleeps.push(ms); };
+  await assert.rejects(
+    () => gmailFetchWithRetry('https://example.com', {}, { fetchImpl, sleep }),
+    error => {
+      assert.equal(error.name, 'TimeoutError');
+      assert.match(error.message, /The operation was aborted due to timeout/);
+      return true;
+    }
+  );
+  assert.equal(count, 4, '最大4回試行する');
+  assert.equal(sleeps.length, 3, '3回リトライしたので sleep は3回');
+});
+
+test('gmailFetchWithRetry: リトライ対象外の例外（Error boom）は1回で throw', async () => {
+  let count = 0;
+  const fetchImpl = async () => {
+    count++;
+    throw new Error('boom');
+  };
+  const sleeps = [];
+  const sleep = ms => { sleeps.push(ms); };
+  await assert.rejects(
+    () => gmailFetchWithRetry('https://example.com', {}, { fetchImpl, sleep }),
+    error => {
+      assert.equal(error.message, 'boom');
+      return true;
+    }
+  );
+  assert.equal(count, 1, 'リトライしないので1回だけ');
+  assert.equal(sleeps.length, 0, 'sleep は呼ばれない');
 });
 
 test('gmailFetchWithRetry: リトライ毎に新しい AbortSignal が使われる', async () => {

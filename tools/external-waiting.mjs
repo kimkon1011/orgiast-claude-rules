@@ -15,7 +15,7 @@ import { gmailNotificationOwned } from './lib/external-monitor-state.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
 import { draftBody, nonHumanRecipient, mailboxDraftLabel, allPages, filterClearedDrafts, notifyClearedDrafts, deleteClearedDrafts } from './lib/drafts-auto-cleared.mjs';
 import { defaultHome, externalFile, stateDir, readJsonSafe, writeJsonAtomic, readSkips, isSkipped, addSkip } from './lib/external-waiting-state.mjs';
-import { gmailFetchWithRetry } from './lib/gmail-retry.mjs';
+import { gmailFetchWithRetry, isRetryableFetchError } from './lib/gmail-retry.mjs';
 
 export const MAILBOXES = ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'];
 export const KIM = 'kim@orgiast.jp';
@@ -125,8 +125,22 @@ async function mapLimit(values, limit, fn) {
   return out;
 }
 
+// getToken をタイムアウト/ネットワーク失敗時に最大2回リトライする（初回含め計3回）。
+async function getTokenWithRetry(getToken, mailbox, { sleep = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
+  const MAX_ATTEMPTS = 3;
+  const RETRY_DELAY = 5000;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await getToken({ scope: SCOPE, impersonate: mailbox, signal: AbortSignal.timeout(20_000) });
+    } catch (error) {
+      if (!isRetryableFetchError(error) || attempt >= MAX_ATTEMPTS - 1) throw error;
+      await sleep(RETRY_DELAY);
+    }
+  }
+}
+
 export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = getDriveToken, staff, now = Date.now(), stats = { answeredElsewhere: 0 }, sleep, random } = {}) {
-  const token = await getToken({ scope: SCOPE, impersonate: mailbox, signal: AbortSignal.timeout(20_000) });
+  const token = await getTokenWithRetry(getToken, mailbox, { sleep });
   const get = async (route, { optional = false } = {}) => {
     try {
       const response = await gmailFetchWithRetry(`${API}${route}`, { headers: { Authorization: `Bearer ${token}` } }, { fetchImpl, sleep, random, onRetry: () => { stats.gmailRetries = (stats.gmailRetries || 0) + 1; } });

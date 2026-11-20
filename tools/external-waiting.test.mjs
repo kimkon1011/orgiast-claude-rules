@@ -162,3 +162,18 @@ test('通知文は失敗系の語を伏せる', () => {
   assert.doesNotMatch(text, /エラー/); assert.match(text, /30時間待ち/);
 });
 test('同梱の staff-addresses.json が読める', () => { assert.ok(loadStaff().has('meropp.16@gmail.com')); });
+
+test('getToken が1回 TimeoutError → 2回目成功で scanMailbox が成功する', async t => {
+  const home = fixture(t);
+  let tokenAttempts = 0;
+  const threads = [thread(message('m1'))];
+  const getToken = async () => {
+    tokenAttempts++;
+    if (tokenAttempts === 1) throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    return 'token';
+  };
+  const result = await scan({ home, now: NOW, deps: { fetchImpl: fakeGmail({ threads }), getToken, sleep: async () => {} }, staff: new Set(), mailboxes: [MB], push: false });
+  assert.equal(result.state.sources[MB].ok, true);
+  assert.equal(result.state.items.length, 1);
+  assert.equal(tokenAttempts, 2, '2回呼ばれる（初回失敗＋2回目成功）');
+});

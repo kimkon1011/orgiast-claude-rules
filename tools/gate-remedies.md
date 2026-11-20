@@ -229,7 +229,7 @@ node tools/lane-doctor.mjs --probe で状態更新し、node tools/codex-do.mjs 
 
 ## settings-quality-guard
 
-effortLevel を medium/high、model を既定監督モデルに戻す。
+effortLevel を high、model を既定監督モデルに戻す。
 
 ## stop-gate
 

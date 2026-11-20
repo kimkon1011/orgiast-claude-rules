@@ -325,7 +325,13 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
     const rawText = result.text || '', text = laneErrorText(rawText, p), stamp = new Date(now).toISOString();
     const viaChain = Boolean(result.viaChain || probeViaChain(rawText, p));
     if (viaChain) {
-      health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: 'probe_inconclusive', probedAt: stamp, viaChain: true, probeResult: 'inconclusive', billingProbeStreak: 0, error: text };
+      // WRITE_OK は codex が実際にファイルを作成・読み戻しまで完了した証拠 → alive 扱い
+      // それ以外の chain 出力（429/402 等）はプロバイダ異常を示すので probe_inconclusive
+      if (rawText === 'WRITE_OK') {
+        health.lanes[p] = { alive: true, reason: 'probe_ok', probedAt: stamp, viaChain: true, probeResult: 'alive', probeEvidence: 'WRITE_OK', billingProbeStreak: 0, lastProbeOkAt: stamp, probeReason: 'probe_ok' };
+      } else {
+        health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: 'probe_inconclusive', probedAt: stamp, viaChain: true, probeResult: 'inconclusive', billingProbeStreak: 0, error: text };
+      }
       continue;
     }
     const nativeRepair = 'codex: WSL 不在のため Windows ネイティブ(danger-full-access)に切替';

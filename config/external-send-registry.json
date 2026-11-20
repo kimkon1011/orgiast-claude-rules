@@ -1,0 +1,15 @@
+{
+  "tools/gmail-draft.mjs": { "channel": "gmail", "protection": "send-dedupe" },
+  "tools/seisaku-mail.mjs": { "channel": "gmail", "protection": "send-dedupe" },
+  "tools/line-group-send.mjs": { "channel": "line", "protection": "mail-send-approval-gate" },
+  "tools/beeper-send.mjs": {
+    "channel": "beeper",
+    "protection": "send-context-check",
+    "details": "approved/edited 状態・receipt ID・有効期限を検証し、新着確認と assertContextApproved を実施。常設承認では本文・宛先・日付・承認根拠を照合し、非同期の文脈確認後に承認範囲と receipt を再検証して当日の送信試行を永続予約する。"
+  },
+  "tools/discord-autoreply.mjs": { "channel": "discord", "protection": "tool-send-dedupe" },
+  "tools/discord-beeper-autoreply.mjs": { "channel": "discord", "protection": "tool-send-dedupe" },
+  "tools/discord-dm.mjs": { "channel": "discord", "protection": "send-context-check" },
+  "tools/feedback-nag.mjs": { "channel": "discord", "protection": "internal-only" },
+  "tools/notify-kim.mjs": { "channel": "discord", "protection": "internal-only" }
+}

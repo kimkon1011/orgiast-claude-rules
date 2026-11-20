@@ -4,7 +4,7 @@ import path from 'node:path';
 import { calcSessionCost, collectSessionLogUsage, formatGeminiBudgetStatus, runGeminiBudgetGuard, summarizeGeminiBudget } from './gemini-budget-guard.mjs';
 import { memoryFs } from './gemini-test-fs.mjs';
 
-const now = new Date('2026-09-14T00:00:00Z');
+const now = new Date('2026-09-14T12:00:00Z');
 const home = path.resolve('/mock-gemini-home'), dir = path.join(home, '.claude');
 const row = (usd, extra = {}) => ({ t: now.toISOString(), provider: 'gemini', usd, ...extra });
 const options = { now, budgetJpy: 100, usdJpy: 1 };
@@ -13,8 +13,8 @@ function fixture(rows, config = { budgetJpy: 100, usdPerJpy: 1 }, more = {}) {
 }
 
 // ── Threshold tests (70/90 instead of old 60/85) ──
-test('70 and 90 percent boundaries: 70–89 inclusive warn, >90 stop', () => {
-  for (const [usd, expected] of [[69.99, 'ok'], [70, 'warn'], [89.99, 'warn'], [90, 'warn'], [90.01, 'stop']]) assert.equal(summarizeGeminiBudget([row(usd)], options).level, expected);
+test('70 and 90 percent boundaries: 70–89 warn, >=90 stop', () => {
+  for (const [usd, expected] of [[69.99, 'ok'], [70, 'warn'], [89.99, 'warn'], [90, 'stop'], [90.01, 'stop']]) assert.equal(summarizeGeminiBudget([row(usd)], options).level, expected);
 });
 
 test('unmeasured >20% is unknown, exactly 20% is not', () => {
@@ -61,7 +61,7 @@ function sessionLogFs(projects, dirHome = home) {
   // Build readdirSync/statSync mock
   const tree = {};
   for (const [fp, content] of Object.entries(files)) {
-    const parts = fp.replace(/\\/g, '/').split('/');
+    const parts = fp.replace(/\\/g, '/').split('/').filter(Boolean);
     let node = tree;
     for (const part of parts) {
       if (!part) continue;
@@ -151,17 +151,22 @@ test('collectSessionLogUsage skips non-Gemini types, out-of-month rows, and inva
     'nightly-repo': {
       'session-x.jsonl': [
         { type: 'gemini', model: 'gemini-3.6-flash', tokens: { input: 100, output: 50, cached: 0 }, timestamp: '2026-09-14T00:00:00Z' },
-        { type: 'gemini', model: null, tokens: { input: 100, output: 50, cached: 0 }, timestamp: '2026-09-14T00:00:00Z' }, // null model → skip
+        { type: 'gemini', model: null, tokens: { input: 100, output: 50, cached: 0 }, timestamp: '2026-09-14T00:00:00Z' },
         { type: 'text', content: 'hello' }, // not gemini type → skip
-        { type: 'gemini', tokens: { input: 100, output: 50, cached: 0 }, timestamp: '2026-09-14T00:00:00Z' }, // no model → skip
+        { type: 'gemini', tokens: { input: 100, output: 50, cached: 0 }, timestamp: '2026-09-14T00:00:00Z' },
         { type: 'gemini', model: 'gemini-3.6-flash', tokens: { input: 100, output: 50, cached: 0 }, timestamp: '2026-08-31T12:00:00Z' }, // 21:00 JST Aug 31 → skip (different month)
         'not json',
       ],
     },
   });
   const result = collectSessionLogUsage({ home, fsImpl: mock, now });
-  assert.equal(result.length, 1);
+  assert.equal(result.length, 3);
   assert.equal(result[0].input, 100);
+  assert.deepEqual(result.slice(1).map(entry => entry.model), [null, null]);
+  const pricing = { models: { 'gemini-3.6-flash': { inputUsdPerMillion: 0.75, outputUsdPerMillion: 3.75 } } };
+  const status = summarizeGeminiBudget([], { ...options, sessionLogRows: result, pricing });
+  assert.equal(status.invalidRows, 1);
+  assert.equal(status.unmeasuredCalls, 2);
 });
 
 test('collectSessionLogUsage recovers from missing tmp dir', () => {
@@ -202,13 +207,13 @@ test('sessionLogRows are deduplicated against ledger by sessionId', () => {
   assert.equal(status.byProject.length, 2);
 });
 
-test('sessionLogRows dedup also prevents duplicate sessionIds within session logs', () => {
+test('every response in the same session is counted', () => {
   const pricing = { models: { 'gemini-3.6-flash': { inputUsdPerMillion: 0.75, outputUsdPerMillion: 3.75 } } };
   const status = summarizeGeminiBudget([], { ...options, sessionLogRows: [
     { project: 'p1', model: 'gemini-3.6-flash', input: 1_000_000, output: 0, cached: 0, sessionId: 's1' },
-    { project: 'p2', model: 'gemini-3.6-flash', input: 500_000, output: 0, cached: 0, sessionId: 's1' }, // same sessionId → skip
+    { project: 'p2', model: 'gemini-3.6-flash', input: 500_000, output: 0, cached: 0, sessionId: 's1' },
   ], pricing });
-  assert.equal(status.spentUsd, 0.75); // only first counted
+  assert.equal(status.spentUsd, 1.125); // both responses counted
 });
 
 test('sessionLogRows with no sessionId are never deduped (each counted)', () => {
@@ -292,16 +297,16 @@ test('critical merges demote with existing overrides, expiry is next month JST',
   assert.equal(corrupt.files.get(file), '{broken');
 });
 
-test('unknown still demotes if known spending exceeds 90%', async () => {
+test('known spending above 90% triggers stop and demotion even with unmeasured calls', async () => {
   const fsImpl = fixture([row(91), row(null)]);
   const result = await runGeminiBudgetGuard({ home, now, fsImpl, notifyImpl: async () => ({ delivered: 'dm' }) });
-  assert.equal(result.level, 'unknown'); assert.ok(fsImpl.files.has(path.join(dir, 'routing-overrides.json')));
+  assert.equal(result.level, 'stop'); assert.ok(fsImpl.files.has(path.join(dir, 'routing-overrides.json')));
 });
 
 test('dry-run has no filesystem writes or notifications even for critical/unknown', async () => {
   const fsImpl = fixture([row(91), row(null)]), initial = new Map(fsImpl.files);
   const result = await runGeminiBudgetGuard({ home, now, fsImpl, dryRun: true, notifyImpl: async () => { assert.fail('must not send Discord'); } });
-  assert.equal(result.spentUsd, 91); assert.equal(result.level, 'unknown'); assert.deepEqual(fsImpl.files, initial); assert.deepEqual(fsImpl.writes, []);
+  assert.equal(result.spentUsd, 91); assert.equal(result.level, 'stop'); assert.deepEqual(fsImpl.files, initial); assert.deepEqual(fsImpl.writes, []);
 });
 
 test('missing/empty/corrupt ledger cannot report ok; default budget and rate are used', async () => {
@@ -350,4 +355,61 @@ test('runGeminiBudgetGuard gracefully handles missing session log directory', as
   const fsImpl = fixture([row(10)]);
   const result = await runGeminiBudgetGuard({ home: path.resolve('/no-such-home'), now, fsImpl, dryRun: true });
   assert.equal(result.spentUsd, 0);
+});
+test('real JSONL: all turns, ledger priority, broken lines, month boundaries and read-only dry-run', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'gemini-meter-'));
+  try {
+    const claude = path.join(temp, '.claude');
+    const chats = path.join(temp, '.gemini', 'tmp', 'mission', 'chats');
+    fs.mkdirSync(chats, { recursive: true });
+    fs.mkdirSync(claude, { recursive: true });
+    fs.writeFileSync(path.join(claude, 'executor-usage.jsonl'), JSON.stringify(row(1, { sessionId: 'covered' })) + '\n');
+    fs.writeFileSync(path.join(claude, 'gemini-budget.json'), JSON.stringify({ budgetJpy: 100, usdJpy: 1 }));
+    const response = (timestamp = now.toISOString()) => ({ type: 'gemini', timestamp, model: 'gemini-3.6-flash', tokens: { input: 1_000_000, output: 0, cached: 0, thoughts: 100_000, tool: 0, total: 1_100_000 } });
+    const file = path.join(chats, 'session-new.jsonl');
+    const transcript = { type: 'gemini', id: 'transcript', timestamp: now.toISOString(), content: '', thoughts: [], tokens: null };
+    const content = [response(), transcript, response(), response('2026-08-31T14:59:59Z'), response('2026-09-30T00:00:00Z')].map(JSON.stringify).join('\n') + '\n{broken\n';
+    fs.writeFileSync(file, content);
+    fs.writeFileSync(path.join(chats, 'session-dated-covered.jsonl'), [response(), response()]
+      .map(entry => JSON.stringify({ ...entry, sessionId: 'covered' })).join('\n') + '\n');
+    const status = await runGeminiBudgetGuard({ home: temp, now, dryRun: true });
+    assert.equal(status.spentUsd, 3.25);
+    assert.equal(status.totalCalls, 3);
+    assert.equal(status.invalidRows, 1);
+    assert.equal(status.byProject.find(p => p.project === 'mission').usd, 2.25);
+    assert.equal(fs.readFileSync(file, 'utf8'), content);
+    assert.equal(fs.existsSync(path.join(claude, 'gemini-budget-status.json')), false);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test('90 percent writes budget cooldown, preserving other providers', async () => {
+  const file = path.join(dir, 'provider-cooldown.json');
+  const fsImpl = fixture([row(90)], undefined, { [file]: JSON.stringify({ groq: { until: 123 } }) });
+  const status = await runGeminiBudgetGuard({ home, now, fsImpl, notifyImpl: async () => ({ delivered: 'dm' }) });
+  const state = JSON.parse(fsImpl.files.get(file));
+  assert.equal(status.level, 'stop');
+  assert.deepEqual(state.groq, { until: 123 });
+  assert.equal(state.gemini.until, Date.parse('2026-09-30T15:00:00Z'));
+});
+
+// ── Default config fallback ──
+test('falls back to config/gemini-budget.default.json when ~/.claude config lacks budgetJpy', async () => {
+  const defaultUrl = new URL('../config/gemini-budget.default.json', import.meta.url);
+  const fsImpl = memoryFs();
+  fsImpl.files.set(path.join(dir, 'executor-usage.jsonl'), '');
+  fsImpl.files.set(defaultUrl.href, JSON.stringify({ budgetJpy: 10000 }));
+  const status = await runGeminiBudgetGuard({ home, now, fsImpl, dryRun: true });
+  assert.equal(status.budgetJpy, 10000);
+});
+
+test('~/.claude/gemini-budget.json budgetJpy takes priority over repo default', async () => {
+  const defaultUrl = new URL('../config/gemini-budget.default.json', import.meta.url);
+  const fsImpl = memoryFs();
+  fsImpl.files.set(path.join(dir, 'executor-usage.jsonl'), '');
+  fsImpl.files.set(path.join(dir, 'gemini-budget.json'), JSON.stringify({ budgetJpy: 100 }));
+  fsImpl.files.set(defaultUrl.href, JSON.stringify({ budgetJpy: 10000 }));
+  const status = await runGeminiBudgetGuard({ home, now, fsImpl, dryRun: true });
+  assert.equal(status.budgetJpy, 100); // ~/.claude wins
 });

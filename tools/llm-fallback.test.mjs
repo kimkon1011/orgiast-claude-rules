@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -604,7 +605,7 @@ test('transcript で DeepSeek しかない場合も禁止を解除しない', as
 });
 
 test('parseQuotaResetTime: 本文から reset 時刻を解析', () => {
-  const now = Date.now();
+  const now = Date.parse("2026-11-19T00:00:00Z"); // 固定: Date.now() だと記載日時を過ぎると必ず失敗する
   // "Your limit will reset at 2026-11-19 19:53:29"
   const result = parseQuotaResetTime('Your limit will reset at 2026-11-19 19:53:29', now);
   assert.ok(result > now, '未来の時刻を返す');
@@ -669,4 +670,35 @@ test('台帳行には category と caller が必ず入る', async (t) => {
   assert.equal(row.in, 3);
   assert.equal(row.out, 4);
   assert.equal(row.status, 'ok');
+});
+
+test('台帳の http_429 はレーンの失敗率に入らない', (t) => {
+  const files = temporaryFiles(t);
+  const home = path.dirname(files.ledgerFile);
+  const claudeDir = path.join(home, '.claude');
+  const ledgerFile = path.join(claudeDir, 'executor-usage.jsonl');
+  const now = new Date().toISOString();
+  const rows = [
+    ...Array.from({ length: 4 }, () => ({ t: now, provider: 'groq', status: 'http_429' })),
+    ...['timeout', 'http_500', 'fail', 'ok', 'ok'].map((status) => ({ t: now, provider: 'cerebras', status })),
+  ];
+  fs.mkdirSync(claudeDir);
+  fs.writeFileSync(ledgerFile, rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+
+  // node --test 中に無効化される候補の健康判定を、一時ホームの子プロセスで通す。
+  const env = { ...process.env, HOME: home, USERPROFILE: home, ORGIAST_HOME: home };
+  delete env.NODE_TEST_CONTEXT;
+  execFileSync(process.execPath, ['--input-type=module', '--eval', `
+    import { callWithFallback } from ${JSON.stringify(new URL('./llm-fallback.mjs', import.meta.url).href)};
+    await callWithFallback({
+      start: ${JSON.stringify(start)}, chain: [],
+      ...${JSON.stringify({ ...files, ledgerFile })},
+      payloadFor: () => ({ url: 'https://example.invalid', init: {} }),
+      fetchImpl: async () => new Response('{}', { status: 200 }),
+    });
+  `], { env });
+
+  const disabled = JSON.parse(fs.readFileSync(path.join(claudeDir, 'lanes-disabled.json'), 'utf8'));
+  assert.equal(disabled.cerebras.reason, 'failure_rate');
+  assert.equal(disabled.groq, undefined);
 });

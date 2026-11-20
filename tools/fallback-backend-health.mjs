@@ -135,10 +135,13 @@ export function deprioritizeUnreliableBackends(backends, history, {
   return [...reliable, ...unreliable];
 }
 
-// name が cooling に含まれる backend を除いた配列を返す。
-// keepAtLeastOne が true（既定）で除外した結果が空になる場合は、元の配列をそのまま返す
-// （＝候補ゼロで詰むのを防ぐ）。除外した backend は1件につき1行 console.error で出す。
+// 回数制限・枠切れの outcome かどうかを判定する。大文字小文字を区別しない。
+export function isQuotaOutcome(outcome) {
+  return /429|rate.?limit|quota|usage.?limit|^deferred$|^cooldown$|daily_limit/i.test(String(outcome ?? ''));
+}
+
 // 24h で 5 回以上かつ失敗が過半数、または品質検証の失敗が 3 連続なら一時停止の対象。
+// 回数制限・枠切れは failure_rate の calls にも failures にも数えない。
 export function unhealthyCandidates(rows, { now = Date.now(), windowMs = 24 * 60 * 60 * 1000 } = {}) {
   const groups = new Map();
   for (const row of Array.isArray(rows) ? rows : []) {
@@ -153,9 +156,10 @@ export function unhealthyCandidates(rows, { now = Date.now(), windowMs = 24 * 60
   const hits = [];
   for (const [name, list] of groups) {
     list.sort((a, b) => a.t - b.t);
-    const failures = list.filter((row) => row.outcome !== 'ok' && row.outcome !== 'success');
-    if (list.length >= 5 && failures.length / list.length > 0.5) {
-      hits.push({ name, reason: 'failure_rate', calls: list.length, failures: failures.length });
+    const nonQuota = list.filter((row) => !isQuotaOutcome(row.outcome));
+    const failures = nonQuota.filter((row) => row.outcome !== 'ok' && row.outcome !== 'success');
+    if (nonQuota.length >= 5 && failures.length / nonQuota.length > 0.5) {
+      hits.push({ name, reason: 'failure_rate', calls: nonQuota.length, failures: failures.length });
       continue;
     }
     const tail = list.slice(-3);
@@ -170,15 +174,22 @@ export function applyCandidateHealth(homeDir, { rows, now = Date.now(), force = 
   return disableLanesTemporarily(homeDir, unhealthyCandidates(source, { now }), now);
 }
 
-export function skipCoolingBackends(backends, cooling, { keepAtLeastOne = true } = {}) {
+// name が cooling に含まれる backend を除いた配列を返す。
+// keepAtLeastOne が true（既定）で除外した結果が空になる場合は、元の配列をそのまま返す
+// （＝候補ゼロで詰むのを防ぐ）。除外した backend は1件につき1行 console.error で出す。
+export function skipCoolingBackends(backends, cooling, { keepAtLeastOne = true, keepNames = [] } = {}) {
   const list = Array.isArray(backends) ? backends : [];
   const names = cooling instanceof Set ? cooling : new Set(cooling || []);
+  const keep = new Set(keepNames || []);
   const kept = [];
   for (const backend of list) {
     const name = backend && backend.name;
-    if (names.has(name)) {
+    if (names.has(name) && !keep.has(name)) {
       console.error(`[codex-do] fallback backend=${name} は直近でタイムアウトしたため冷却中としてスキップします`);
       continue;
+    }
+    if (names.has(name) && keep.has(name)) {
+      console.error(`[codex-do] fallback backend=${name} は冷却中ですが定額レーンのため候補に残します`);
     }
     kept.push(backend);
   }

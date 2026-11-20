@@ -96,9 +96,11 @@ test('detached は非Windows分岐・可視セッション・明示許可され�
       // sessionstart-lane-health launches a one-shot lane probe that must outlive the SessionStart hook.
       // codex-do qwen auto-install fires a detached npm install that must survive the parent's Windows job.
       // meet-cue-scheduler launches background Meet bot sessions that outlive the 5-min scheduler run.
-      const oneShotPurge = ['tools/purge-sessions.mjs', 'tools/plan-usage-report.mjs', 'tools/case-handoff.mjs', 'tools/sessionstart-lane-health.mjs', 'tools/codex-do.mjs', 'tools/meet-cue-scheduler.mjs'].includes(name) &&
+      const oneShotPurge = ['tools/purge-sessions.mjs', 'tools/plan-usage-report.mjs', 'tools/case-handoff.mjs', 'tools/sessionstart-lane-health.mjs', 'tools/codex-do.mjs'].includes(name) &&
         /detached:\s*true, windowsHide:\s*true, stdio:\s*'ignore'/.test(context);
-      if (!platformGuarded && !visibleSession && !oneShotPurge) violations.push(`${name}:${line}`);
+      const loggedMeetBot = name === 'tools/meet-cue-scheduler.mjs' &&
+        /detached:\s*true, windowsHide:\s*true, stdio:\s*\['ignore', logFd, logFd\]/.test(context);
+      if (!platformGuarded && !visibleSession && !oneShotPurge && !loggedMeetBot) violations.push(`${name}:${line}`);
     }
   }
   assert.deepEqual(violations, [], `無条件の detached: true:\n${violations.join('\n')}`);

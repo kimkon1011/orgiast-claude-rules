@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { machineIdentity, getClaudeAccountEmail } from './machine-identity.mjs';
 import { parseHandoff } from './auto-session.mjs';
 import { isEntry } from './is-entry.mjs';
+import { redactForShare } from './lib/share-secrets.mjs';
 import { resolveClaudeExecutableFromDisk, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 
 const ALLOWED_KINDS = new Set(['status', 'prompt', 'enable-auto-session', 'run']);
@@ -197,6 +198,7 @@ export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, s
     const started = Date.now();
     let stdout = '';
     let stderr = '';
+    let stderrHead = '';
     let settled = false;
     // 自動実行（fleet 指示の実行）の既定は Opus（2026-11-17 kim 指示）。readOnly の定型確認は Sonnet。
     const args = ['-p', '--model', automationModel(), ...(resumeSessionId ? ['--resume', resumeSessionId] : [])];
@@ -208,9 +210,24 @@ export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, s
     });
     child.stdin.end();
     child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr += chunk; if (stderr.length > 100_000) stderr = stderr.slice(-100_000); });
+    child.stderr.on('data', (chunk) => {
+      const text = String(chunk);
+      if (stderrHead.length < 4000) stderrHead += text.slice(0, 4000 - stderrHead.length);
+      stderr = (stderr + text).slice(-100_000);
+    });
     let timer;
-    const finish = (result) => { if (settled) return; settled = true; clearTimer(timer); resolve({ ...result, durationSeconds: Math.round((Date.now() - started) / 100) / 10, stdoutTail: truncateAnswer(redactSecrets(stdout)), stderrTail: redactSecrets(stderr).slice(-4000), outputTail: `${stdout}${stderr}`.slice(-10_000) }); };
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimer(timer);
+      const head = stderrHead.length === 4000 ? stderrHead.slice(0, stderrHead.lastIndexOf('\n') + 1) : stderrHead;
+      resolve({
+        ...result, durationSeconds: Math.round((Date.now() - started) / 100) / 10,
+        stdoutTail: truncateAnswer(redactSecrets(stdout)),
+        ...(result.exitCode !== 0 && head ? { stderrHead: redactSecrets(redactForShare(head)) } : {}),
+        stderrTail: redactSecrets(redactForShare(stderr)).slice(-4000), outputTail: `${stdout}${stderr}`.slice(-10_000),
+      });
+    };
     child.on('error', (error) => finish({ exitCode: null, error: String(error?.message ?? error), timedOut: false }));
     child.on('close', (code) => finish({ exitCode: code, timedOut: false }));
     timer = setTimer(() => { finish({ exitCode: null, timedOut: true, error: 'タイムアウトで停止' }); child.kill('SIGKILL'); }, Math.max(1, Number(timeoutSeconds)) * 1000);

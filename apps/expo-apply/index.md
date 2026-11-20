@@ -1,12 +1,14 @@
 # Japan Trade Show Intake
 
-Japan Trade Show Intake is a bilingual web application for overseas companies to record requirements for exhibiting at a trade show in Japan. It combines an intake form with a small, browser-local application manager.
+Japan Trade Show Intake is a bilingual web form for overseas companies to request support from Orgiast / Re:Booth when exhibiting at a trade show in Japan.
+
+Public URL (planned): https://rebooth.co.jp/en/expo-apply/
 
 ## Intended use
 
-Use the application to capture an exhibitor's company and contact details, target exhibition, preferred booth size and dates, requested support services, and additional questions. The interface is available in English and Japanese.
+Use the form to share company and contact details, the target exhibition, preferred booth size and dates, requested support services, and additional questions. The interface is available in English and Japanese.
 
-This build is a planning and demonstration tool. Completing the form does **not** transmit an application to a trade show organizer or confirm a booth reservation.
+Submitting the form emails the inquiry to Orgiast. It does **not** apply to a trade show organizer or reserve a booth.
 
 ## Information collected
 
@@ -21,31 +23,26 @@ This build is a planning and demonstration tool. Completing the form does **not*
 
 1. Select English or Japanese.
 2. Enter the exhibition requirements and submit the form.
-3. Review the locally generated reference ID.
-4. Manage the entry as new, contacted, accepted, or cancelled.
-5. Export records as CSV or Markdown when they need to be backed up or shared.
+3. Orgiast is notified by email, and the submitter receives an automated confirmation with a reference number.
+4. An Orgiast staff member follows up by email.
 
 ## Privacy and data handling
 
-All records are stored only in the current browser's `localStorage`, using the key `expo-apply-data` and schema version 1. This version has no backend submission endpoint and makes no external API request. Data is not synchronized between browsers, devices, hostnames, or ports. Clearing browser data removes the records.
-
-Users should avoid treating the local copy as a durable system of record and should export necessary records regularly. Anyone with access to the same browser profile may be able to view the saved entries.
+Inquiries are emailed to `seisaku-team@orgiast.jp`. The submitter receives an automated confirmation at the address they entered. Optional Google Analytics 4 can be enabled at publish time via `config.js` and is off by default.
 
 ## Technical requirements
 
-The application needs a modern browser with JavaScript, ES modules, `localStorage`, and standard Web APIs. It has no package dependency, CDN, or web-font dependency. It should be served over HTTP or HTTPS rather than opened directly as a file.
+The application needs a modern browser with JavaScript and ES modules. It should be served over HTTPS. It has no package dependency.
 
 ## Limitations and claim boundaries
 
 - No pricing, event availability, booth acceptance, organizer affiliation, or response time is promised.
-- Status labels are local workflow labels, not statements by an exhibition organizer.
-- The application does not provide legal, customs, safety, tax, or event-specific compliance advice.
-- Current behavior should be verified against the interactive application and source before relying on it operationally.
+- The form does not provide legal, customs, safety, tax, or event-specific compliance advice.
 
 ## Related resources
 
-- [Open the interactive application](./)
-- [Frequently asked questions](faq.html)
-- [Research and source notes](research.html)
-- [AI index](llms.txt)
-- [AI interpretation policy](ai.txt)
+- [Open the interactive application](https://rebooth.co.jp/en/expo-apply/)
+- [Frequently asked questions](https://rebooth.co.jp/en/expo-apply/faq.html)
+- [Research and source notes](https://rebooth.co.jp/en/expo-apply/research.html)
+- [AI index](https://rebooth.co.jp/en/expo-apply/llms.txt)
+- [AI interpretation policy](https://rebooth.co.jp/en/expo-apply/ai.txt)

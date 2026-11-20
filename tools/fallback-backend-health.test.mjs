@@ -14,6 +14,7 @@ const {
   deprioritizeUnreliableBackends,
   unhealthyCandidates,
   applyCandidateHealth,
+  isQuotaOutcome,
 } = await import('./fallback-backend-health.mjs');
 
 function tmpHome() {
@@ -239,4 +240,102 @@ test('24h で 5 回以上かつ失敗が過半数、または品質失敗 3 連�
   assert.equal(kept.gemini.until, undefined);
   assert.equal(kept['cheap-code:glm'].reason, 'quality_validation');
   assert.equal(kept['cheap-code:glm'].until, now + 6 * 60 * 60 * 1000);
+});
+
+// --- isQuotaOutcome ---
+
+test('isQuotaOutcome は 429 を含む文字列を true と判定する', () => {
+  assert.equal(isQuotaOutcome('http_429'), true);
+  assert.equal(isQuotaOutcome('HTTP 429 Too Many Requests'), true);
+  assert.equal(isQuotaOutcome('QUOTA_EXCEEDED'), true);
+});
+
+test('isQuotaOutcome は daily_limit を true と判定する', () => {
+  assert.equal(isQuotaOutcome('daily_limit'), true);
+});
+
+test('isQuotaOutcome は deferred を true と判定する', () => {
+  assert.equal(isQuotaOutcome('deferred'), true);
+});
+
+test('isQuotaOutcome は cooldown を true と判定する', () => {
+  assert.equal(isQuotaOutcome('cooldown'), true);
+});
+
+test('isQuotaOutcome は rate limit を含む文字列を true と判定する', () => {
+  assert.equal(isQuotaOutcome('rate_limit'), true);
+  assert.equal(isQuotaOutcome('rate-limit exceeded'), true);
+});
+
+test('isQuotaOutcome は quota を含む文字列を true と判定する', () => {
+  assert.equal(isQuotaOutcome('quota_exceeded'), true);
+});
+
+test('isQuotaOutcome は usage limit を含む文字列を true と判定する', () => {
+  assert.equal(isQuotaOutcome('usage_limit'), true);
+  assert.equal(isQuotaOutcome('usage-limit reached'), true);
+});
+
+test('isQuotaOutcome は ok / fail / timeout / quality_fail を false と判定する', () => {
+  assert.equal(isQuotaOutcome('ok'), false);
+  assert.equal(isQuotaOutcome('success'), false);
+  assert.equal(isQuotaOutcome('fail'), false);
+  assert.equal(isQuotaOutcome('timeout'), false);
+  assert.equal(isQuotaOutcome('quality_fail'), false);
+  assert.equal(isQuotaOutcome('blocked'), false);
+  assert.equal(isQuotaOutcome(''), false);
+  assert.equal(isQuotaOutcome(null), false);
+  assert.equal(isQuotaOutcome(undefined), false);
+});
+
+// --- unhealthyCandidates のクォータ除外 ---
+
+test('http_429 が5件中4件でも failure_rate にならない', () => {
+  const now = 10_000_000;
+  const rows = [
+    { t: now - 1000, backend: 'groq', outcome: 'ok' },
+    { t: now - 2000, backend: 'groq', outcome: 'http_429' },
+    { t: now - 3000, backend: 'groq', outcome: 'http_429' },
+    { t: now - 4000, backend: 'groq', outcome: 'http_429' },
+    { t: now - 5000, backend: 'groq', outcome: 'http_429' },
+  ];
+  assert.deepEqual(unhealthyCandidates(rows, { now }), []);
+});
+
+test('timeout/fail が5件中3件なら従来どおり failure_rate になる（回帰）', () => {
+  const now = 10_000_000;
+  const rows = [
+    { t: now - 1000, backend: 'groq', outcome: 'ok' },
+    { t: now - 2000, backend: 'groq', outcome: 'ok' },
+    { t: now - 3000, backend: 'groq', outcome: 'timeout' },
+    { t: now - 4000, backend: 'groq', outcome: 'fail' },
+    { t: now - 5000, backend: 'groq', outcome: 'timeout' },
+  ];
+  const hits = unhealthyCandidates(rows, { now });
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].reason, 'failure_rate');
+  assert.equal(hits[0].calls, 5);
+  assert.equal(hits[0].failures, 3);
+});
+
+test('429 を除いた残りで判定される（ok1 + fail1 + http_429×5 → calls 2 なので停止しない）', () => {
+  const now = 10_000_000;
+  const rows = [
+    { t: now - 1000, backend: 'groq', outcome: 'ok' },
+    { t: now - 2000, backend: 'groq', outcome: 'fail' },
+    { t: now - 3000, backend: 'groq', outcome: 'http_429' },
+    { t: now - 4000, backend: 'groq', outcome: 'http_429' },
+    { t: now - 5000, backend: 'groq', outcome: 'http_429' },
+    { t: now - 6000, backend: 'groq', outcome: 'http_429' },
+    { t: now - 7000, backend: 'groq', outcome: 'http_429' },
+  ];
+  // nonQuota = 2件（ok + fail）→ calls=2 < 5 なので停止しない
+  assert.deepEqual(unhealthyCandidates(rows, { now }), []);
+});
+
+test('skipCoolingBackends は keepNames で指定した定額レーンは冷却中でも残す', () => {
+  const backends = [{ name: 'cursor-agent' }, { name: 'cheap-code:deepseek' }, { name: 'qwen' }];
+  const cooling = new Set(['cursor-agent', 'qwen']);
+  const kept = skipCoolingBackends(backends, cooling, { keepNames: ['cursor-agent'] });
+  assert.deepEqual(kept.map((b) => b.name), ['cursor-agent', 'cheap-code:deepseek']);
 });

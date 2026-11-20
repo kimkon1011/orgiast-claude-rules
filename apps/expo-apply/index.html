@@ -9,9 +9,10 @@
   <meta name="author" content="Orgiast">
   <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large">
   <meta name="keywords" content="Japan trade show, exhibition booth, overseas exhibitor, trade show application Japan, exhibition services Tokyo, expo intake portal">
-  <link rel="canonical" href="./">
-  <link rel="alternate" hreflang="en" href="./">
-  <link rel="alternate" hreflang="ja" href="./?hl=ja">
+  <link rel="canonical" href="https://rebooth.co.jp/en/expo-apply/">
+  <link rel="alternate" hreflang="en" href="https://rebooth.co.jp/en/expo-apply/">
+  <link rel="alternate" hreflang="ja" href="https://rebooth.co.jp/en/expo-apply/?hl=ja">
+  <link rel="alternate" hreflang="x-default" href="https://rebooth.co.jp/en/expo-apply/">
   <link rel="alternate" type="text/markdown" href="index.md" title="AI-readable application overview">
   <link rel="help" href="faq.html" title="Frequently asked questions about the trade show application">
   <link rel="author" href="research.html" title="Research and source notes">
@@ -19,7 +20,7 @@
   <meta property="og:type" content="website">
   <meta property="og:title" content="Japan Trade Show &amp; Exhibition Application | Overseas Exhibitor Booth Intake">
   <meta property="og:description" content="Plan a trade show exhibit in Japan with a bilingual intake form for booth, staffing, logistics, and promotional requirements for overseas companies.">
-  <meta property="og:url" content="./">
+  <meta property="og:url" content="https://rebooth.co.jp/en/expo-apply/">
   <meta property="og:locale" content="en_US">
   <meta property="og:locale:alternate" content="ja_JP">
   <meta name="twitter:card" content="summary_large_image">
@@ -31,34 +32,34 @@
     "@graph": [
       {
         "@type": "WebApplication",
-        "@id": "./#application",
+        "@id": "https://rebooth.co.jp/en/expo-apply/#application",
         "name": "Japan Trade Show Intake",
         "alternateName": "Japan Exhibition Application",
-        "description": "A bilingual browser-based intake and consultation tool for overseas companies planning to exhibit at trade shows in Japan.",
-        "url": "./",
+        "description": "A bilingual intake form for overseas companies planning to exhibit at trade shows in Japan. Submissions are emailed to Orgiast.",
+        "url": "https://rebooth.co.jp/en/expo-apply/",
         "applicationCategory": "BusinessApplication",
         "operatingSystem": "Any operating system with a modern web browser",
-        "browserRequirements": "Requires JavaScript, ES modules, and localStorage",
+        "browserRequirements": "Requires JavaScript and ES modules",
         "inLanguage": ["en", "ja"],
         "isAccessibleForFree": true,
         "featureList": [
           "English and Japanese interface",
           "Exhibition requirement intake",
-          "Local application status management",
-          "CSV and Markdown export"
+          "Inquiry email to Orgiast",
+          "Automated confirmation email"
         ],
         "privacyPolicy": "index.md#privacy-and-data-handling"
       },
       {
         "@type": "FAQPage",
-        "@id": "faq.html#faq",
-        "url": "faq.html",
+        "@id": "https://rebooth.co.jp/en/expo-apply/faq.html#faq",
+        "url": "https://rebooth.co.jp/en/expo-apply/faq.html",
         "inLanguage": "en",
         "mainEntity": [
           {
             "@type": "Question",
             "name": "Does submitting the form send my application to an organizer?",
-            "acceptedAnswer": {"@type": "Answer", "text": "No. This version stores entries only in the current browser's localStorage and does not send data to an external server."}
+            "acceptedAnswer": {"@type": "Answer", "text": "Yes. The form sends your inquiry to Orgiast. You will receive an automated confirmation email."}
           },
           {
             "@type": "Question",
@@ -67,18 +68,18 @@
           },
           {
             "@type": "Question",
-            "name": "Can application data be exported?",
-            "acceptedAnswer": {"@type": "Answer", "text": "Yes. Entries can be copied or downloaded as CSV, or copied as Markdown."}
+            "name": "How will I hear back?",
+            "acceptedAnswer": {"@type": "Answer", "text": "Orgiast follows up by email. You will also receive an automated confirmation."}
           }
         ]
       },
       {
         "@type": "BreadcrumbList",
-        "@id": "./#breadcrumb",
+        "@id": "https://rebooth.co.jp/en/expo-apply/#breadcrumb",
         "itemListElement": [
-          {"@type": "ListItem", "position": 1, "item": {"@id": "./", "name": "Trade Show Intake"}},
-          {"@type": "ListItem", "position": 2, "item": {"@id": "faq.html", "name": "FAQ"}},
-          {"@type": "ListItem", "position": 3, "item": {"@id": "research.html", "name": "Research & Source Notes"}}
+          {"@type": "ListItem", "position": 1, "item": {"@id": "https://rebooth.co.jp/en/expo-apply/", "name": "Trade Show Intake"}},
+          {"@type": "ListItem", "position": 2, "item": {"@id": "https://rebooth.co.jp/en/expo-apply/faq.html", "name": "FAQ"}},
+          {"@type": "ListItem", "position": 3, "item": {"@id": "https://rebooth.co.jp/en/expo-apply/research.html", "name": "Research & Source Notes"}}
         ]
       }
     ]
@@ -502,12 +503,30 @@
       margin-top: 0.5rem;
     }
 
+    .hp-field{position:absolute;left:-9999px;height:0;overflow:hidden;}
     .resource-links a {
       color: var(--color-primary);
       margin: 0 0.4rem;
     }
   </style>
+
+  <!-- GA4 placeholder: set GA4_MEASUREMENT_ID in config.js at publish time. Empty = no tag. -->
+  <script type="module" id="expo-apply-ga4">
+    import { GA4_MEASUREMENT_ID } from './config.js';
+    if (GA4_MEASUREMENT_ID && /^G-[A-Z0-9]+$/.test(GA4_MEASUREMENT_ID)) {
+      const src = document.createElement('script');
+      src.async = true;
+      src.src = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(GA4_MEASUREMENT_ID);
+      document.head.appendChild(src);
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){ window.dataLayer.push(arguments); }
+      window.gtag = gtag;
+      gtag('js', new Date());
+      gtag('config', GA4_MEASUREMENT_ID);
+    }
+  </script>
 </head>
+
 <body>
 
   <header>
@@ -641,6 +660,12 @@
             </div>
           </div>
 
+
+          <div class="hp-field" aria-hidden="true">
+            <label for="websiteExtra">Company website (leave blank)</label>
+            <input type="text" id="websiteExtra" name="websiteExtra" tabindex="-1" autocomplete="off">
+          </div>
+
           <!-- Message -->
           <div class="form-group full-width">
             <label for="message"><span id="lblMessage">Additional Requests / Questions</span></label>
@@ -655,66 +680,6 @@
       </form>
     </div>
 
-    <!-- Submissions & Management Card -->
-    <div class="card">
-      <h2 class="card-title" id="manageHeader">Submitted Applications Management</h2>
-
-      <!-- Stats -->
-      <div class="stats-bar">
-        <div class="stat-card">
-          <div class="stat-val" id="statTotal">0</div>
-          <div class="stat-lbl" id="lblStatTotal">Total</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-val" id="statNew">0</div>
-          <div class="stat-lbl" id="lblStatNew">New</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-val" id="statContacted">0</div>
-          <div class="stat-lbl" id="lblStatContacted">Contacted</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-val" id="statAccepted">0</div>
-          <div class="stat-lbl" id="lblStatAccepted">Accepted</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-val" id="statCancelled">0</div>
-          <div class="stat-lbl" id="lblStatCancelled">Cancelled</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-val" id="statRecent">0</div>
-          <div class="stat-lbl" id="lblStatRecent">Last 7 Days</div>
-        </div>
-      </div>
-
-      <!-- Table -->
-      <div class="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th id="thRef">Ref ID</th>
-              <th id="thCompany">Company</th>
-              <th id="thShow">Exhibition</th>
-              <th id="thBooth">Booth Size</th>
-              <th id="thStatus">Status</th>
-              <th id="thDate">Submitted</th>
-              <th id="thAction">Actions</th>
-            </tr>
-          </thead>
-          <tbody id="appTableBody">
-            <!-- Table rows populated dynamically -->
-          </tbody>
-        </table>
-      </div>
-
-      <!-- Export Buttons -->
-      <div class="action-bar">
-        <button type="button" class="btn btn-secondary btn-sm" id="btnCopyCsv">Copy CSV</button>
-        <button type="button" class="btn btn-secondary btn-sm" id="btnDownloadCsv">Download CSV</button>
-        <button type="button" class="btn btn-secondary btn-sm" id="btnCopyMd">Copy Markdown</button>
-      </div>
-    </div>
-
     <nav class="resource-links" aria-label="About this service">
       <a href="faq.html">FAQ</a>
       <a href="research.html">Research &amp; source notes</a>
@@ -724,36 +689,10 @@
 
   </main>
 
-  <!-- Details Modal -->
-  <div id="detailModal" class="modal-overlay hidden">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h3 id="modalTitle">Application Details</h3>
-        <button type="button" class="btn btn-secondary btn-sm" id="btnCloseModal">✕</button>
-      </div>
-      <div class="modal-body" id="modalBody">
-        <!-- Details populated dynamically -->
-      </div>
-    </div>
-  </div>
+  <script type="module" id="expo-apply-app">
+    import { SERVICE_KEYS, validateEntry, normalizeEntry } from './expo-apply-core.mjs';
+    import { FORM_ENDPOINT } from './config.js';
 
-  <script type="module">
-    import {
-      STATUS_VALUES,
-      SERVICE_KEYS,
-      BOOTH_OPTIONS,
-      validateEntry,
-      normalizeEntry,
-      parseData,
-      serializeData,
-      entryStats,
-      toCsv,
-      toMarkdown
-    } from './expo-apply-core.mjs';
-
-    const STORAGE_KEY = 'expo-apply-data';
-
-    // i18n Dictionary
     const i18n = {
       en: {
         brandTitle: "Japan Trade Show Intake",
@@ -777,28 +716,11 @@
         lblServices: "Services Needed (Multiple Choice)",
         lblMessage: "Additional Requests / Questions",
         btnSubmit: "Submit Application",
-        manageHeader: "Submitted Applications Management",
-        lblStatTotal: "Total",
-        lblStatNew: "New",
-        lblStatContacted: "Contacted",
-        lblStatAccepted: "Accepted",
-        lblStatCancelled: "Cancelled",
-        lblStatRecent: "Last 7 Days",
-        thRef: "Ref ID",
-        thCompany: "Company",
-        thShow: "Exhibition",
-        thBooth: "Booth Size",
-        thStatus: "Status",
-        thDate: "Submitted",
-        thAction: "Actions",
-        btnCopyCsv: "Copy CSV",
-        btnDownloadCsv: "Download CSV",
-        btnCopyMd: "Copy Markdown",
+        btnSending: "Sending…",
         confTitle: "Application Received!",
         confBodyText: "Thank you for submitting your exhibition request. Your reference number is ",
-        noData: "No applications registered yet.",
-        confirmDelete: "Are you sure you want to delete this application?",
-        copiedSuccess: "Copied to clipboard!",
+        sendError: "We could not send your request. Please try again, or email seisaku-team@orgiast.jp.",
+        endpointMissing: "The inquiry form is not connected yet. Please email seisaku-team@orgiast.jp.",
         services: {
           booth_design: "Booth design & construction",
           equipment_rental: "Equipment rental",
@@ -809,12 +731,6 @@
           shipping_storage: "Shipping & storage",
           marketing_printing: "Marketing material printing",
           other: "Other"
-        },
-        status: {
-          new: "New",
-          contacted: "Contacted",
-          accepted: "Accepted",
-          cancelled: "Cancelled"
         },
         errors: {
           required: "This field is required.",
@@ -846,28 +762,11 @@
         lblServices: "手配希望サービス（複数選択可）",
         lblMessage: "その他ご要望・ご質問",
         btnSubmit: "出展申込を送信する",
-        manageHeader: "受付済み申込一覧・管理",
-        lblStatTotal: "全件",
-        lblStatNew: "新規受付",
-        lblStatContacted: "連絡済み",
-        lblStatAccepted: "受諾済み",
-        lblStatCancelled: "キャンセル",
-        lblStatRecent: "直近7日間",
-        thRef: "受付ID",
-        thCompany: "会社名",
-        thShow: "展示会名",
-        thBooth: "ブース規模",
-        thStatus: "ステータス",
-        thDate: "受付日",
-        thAction: "操作",
-        btnCopyCsv: "CSVコピー",
-        btnDownloadCsv: "CSVダウンロード",
-        btnCopyMd: "Markdownコピー",
+        btnSending: "送信中…",
         confTitle: "出展申込を受け付けました！",
         confBodyText: "お問い合わせありがとうございます。受付番号は ",
-        noData: "登録された申込データはありません。",
-        confirmDelete: "この申込データを削除してもよろしいですか？",
-        copiedSuccess: "クリップボードにコピーしました！",
+        sendError: "送信できませんでした。時間をおいて再度お試しください。または seisaku-team@orgiast.jp へご連絡ください。",
+        endpointMissing: "フォームの送信先がまだ接続されていません。seisaku-team@orgiast.jp へご連絡ください。",
         services: {
           booth_design: "ブースデザイン・装飾工事",
           equipment_rental: "機材・AV機器レンタル",
@@ -879,12 +778,6 @@
           marketing_printing: "販促物・印刷",
           other: "その他"
         },
-        status: {
-          new: "新規",
-          contacted: "連絡済み",
-          accepted: "受諾済み",
-          cancelled: "キャンセル"
-        },
         errors: {
           required: "必須項目です。",
           email: "正しいメールアドレスを入力してください。",
@@ -895,233 +788,61 @@
       }
     };
 
-    let currentLang = 'en';
-    let appState = { version: 1, applications: [] };
-
-    // Load State
-    function loadStorageData() {
-      try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-          const res = parseData(raw);
-          appState = res.data;
-          if (res.warnings.length > 0) {
-            showAlert(res.warnings.join(' '), 'alert-error');
-          }
-        }
-      } catch (err) {
-        showAlert('Failed to read from localStorage: ' + err.message, 'alert-error');
-      }
-    }
-
-    function saveStorageData() {
-      try {
-        const json = serializeData(appState);
-        localStorage.setItem(STORAGE_KEY, json);
-        return true;
-      } catch (err) {
-        showAlert('Failed to save to localStorage: ' + err.message, 'alert-error');
-        return false;
-      }
-    }
+    let currentLang = new URLSearchParams(location.search).get('hl') === 'ja' ? 'ja' : 'en';
 
     function showAlert(msg, type = 'alert-error') {
       const el = document.getElementById('alertBanner');
       el.className = `alert ${type}`;
       el.textContent = msg;
       el.classList.remove('hidden');
-      setTimeout(() => el.classList.add('hidden'), 6000);
+      setTimeout(() => el.classList.add('hidden'), 8000);
     }
 
-    // UI Translation Renderer
     function applyLanguage(lang) {
       currentLang = lang;
       const dict = i18n[lang];
-
+      document.documentElement.lang = lang === 'ja' ? 'ja' : 'en';
       document.getElementById('btnLangEn').classList.toggle('active', lang === 'en');
       document.getElementById('btnLangJa').classList.toggle('active', lang === 'ja');
-
-      // Static UI elements
       for (const [key, text] of Object.entries(dict)) {
         if (typeof text === 'string') {
           const el = document.getElementById(key);
           if (el) el.textContent = text;
         }
       }
-
-      // Re-populate service checkboxes
       renderServiceCheckboxes();
-
-      // Re-render submissions table & stats
-      renderTableAndStats();
     }
 
     function renderServiceCheckboxes() {
       const container = document.getElementById('servicesContainer');
+      const checked = new Set([...container.querySelectorAll('input[name="servicesNeeded"]:checked')].map(cb => cb.value));
       container.innerHTML = '';
       const dict = i18n[currentLang].services;
-
       SERVICE_KEYS.forEach(key => {
         const label = document.createElement('label');
         label.className = 'checkbox-label';
-
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.name = 'servicesNeeded';
         cb.value = key;
-
+        if (checked.has(key)) cb.checked = true;
         const span = document.createElement('span');
         span.textContent = dict[key] || key;
-
         label.appendChild(cb);
         label.appendChild(span);
         container.appendChild(label);
       });
     }
 
-    // Render Stats and Table
-    function renderTableAndStats() {
-      const stats = entryStats(appState.applications);
-      document.getElementById('statTotal').textContent = stats.total;
-      document.getElementById('statNew').textContent = stats.new;
-      document.getElementById('statContacted').textContent = stats.contacted;
-      document.getElementById('statAccepted').textContent = stats.accepted;
-      document.getElementById('statCancelled').textContent = stats.cancelled;
-      document.getElementById('statRecent').textContent = stats.recentCount;
-
-      const tbody = document.getElementById('appTableBody');
-      tbody.innerHTML = '';
-
-      if (appState.applications.length === 0) {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td colspan="7" style="text-align:center; color:var(--color-text-muted); padding:2rem;">${i18n[currentLang].noData}</td>`;
-        tbody.appendChild(tr);
-        return;
-      }
-
-      appState.applications.forEach(item => {
-        const tr = document.createElement('tr');
-
-        const ref = item.id.slice(0, 8);
-        const createdDate = item.createdAt ? item.createdAt.slice(0, 10) : '-';
-
-        let boothText = item.boothSize;
-        if (item.boothSize === 'other') boothText = item.boothSizeOther || 'Other';
-        else if (item.boothSize === 'undecided') boothText = i18n[currentLang].optBoothUndecided;
-
-        const statusLabel = i18n[currentLang].status[item.status] || item.status;
-
-        tr.innerHTML = `
-          <td><code>${ref}</code></td>
-          <td><strong>${escapeHtml(item.companyName)}</strong></td>
-          <td>${escapeHtml(item.exhibitionName)}</td>
-          <td>${escapeHtml(boothText)}</td>
-          <td>
-            <select class="status-select" data-id="${item.id}" style="padding:0.2rem 0.4rem; font-size:0.8rem;">
-              ${STATUS_VALUES.map(s => `<option value="${s}" ${s === item.status ? 'selected' : ''}>${i18n[currentLang].status[s]}</option>`).join('')}
-            </select>
-          </td>
-          <td>${createdDate}</td>
-          <td>
-            <button type="button" class="btn btn-secondary btn-sm btn-view" data-id="${item.id}">View</button>
-            <button type="button" class="btn btn-danger btn-sm btn-del" data-id="${item.id}">Del</button>
-          </td>
-        `;
-
-        tbody.appendChild(tr);
-      });
-
-      // Bind status select change events
-      tbody.querySelectorAll('.status-select').forEach(select => {
-        select.addEventListener('change', (e) => {
-          const id = e.target.dataset.id;
-          const newStatus = e.target.value;
-          const idx = appState.applications.findIndex(a => a.id === id);
-          if (idx !== -1) {
-            appState.applications[idx].status = newStatus;
-            saveStorageData();
-            renderTableAndStats();
-          }
-        });
-      });
-
-      // Bind view details button
-      tbody.querySelectorAll('.btn-view').forEach(btn => {
-        btn.addEventListener('click', () => showDetailsModal(btn.dataset.id));
-      });
-
-      // Bind delete button
-      tbody.querySelectorAll('.btn-del').forEach(btn => {
-        btn.addEventListener('click', () => {
-          if (confirm(i18n[currentLang].confirmDelete)) {
-            const id = btn.dataset.id;
-            appState.applications = appState.applications.filter(a => a.id !== id);
-            saveStorageData();
-            renderTableAndStats();
-          }
-        });
-      });
-    }
-
-    function escapeHtml(str) {
-      return String(str || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-    }
-
-    // Modal view
-    function showDetailsModal(id) {
-      const item = appState.applications.find(a => a.id === id);
-      if (!item) return;
-
-      const modal = document.getElementById('detailModal');
-      const body = document.getElementById('modalBody');
-
-      const dict = i18n[currentLang];
-      const serviceText = item.servicesNeeded.map(s => dict.services[s] || s).join(', ') || 'None';
-
-      body.innerHTML = `
-        <dl>
-          <dt>ID:</dt><dd><code>${item.id}</code></dd>
-          <dt>${dict.lblCompanyName}:</dt><dd>${escapeHtml(item.companyName)}</dd>
-          <dt>${dict.lblCompanyNameJa}:</dt><dd>${escapeHtml(item.companyNameJa || '-')}</dd>
-          <dt>${dict.lblCountry}:</dt><dd>${escapeHtml(item.country)}</dd>
-          <dt>${dict.lblWebsite}:</dt><dd>${item.website ? `<a href="${escapeHtml(item.website)}" target="_blank" rel="noopener">${escapeHtml(item.website)}</a>` : '-'}</dd>
-          <dt>${dict.lblContactPerson}:</dt><dd>${escapeHtml(item.contactPerson)}</dd>
-          <dt>${dict.lblEmail}:</dt><dd>${escapeHtml(item.email)}</dd>
-          <dt>${dict.lblPhone}:</dt><dd>${escapeHtml(item.phone || '-')}</dd>
-          <dt>${dict.lblExhibitionName}:</dt><dd>${escapeHtml(item.exhibitionName)}</dd>
-          <dt>${dict.lblBoothSize}:</dt><dd>${item.boothSize === 'other' ? escapeHtml(item.boothSizeOther) : escapeHtml(item.boothSize)}</dd>
-          <dt>${dict.lblExhibitPeriod}:</dt><dd>${item.periodUndecided ? 'Undecided' : `${item.startDate || '-'} ~ ${item.endDate || '-'}`}</dd>
-          <dt>${dict.lblServices}:</dt><dd>${escapeHtml(serviceText)}</dd>
-          <dt>${dict.lblMessage}:</dt><dd>${escapeHtml(item.message || '-')}</dd>
-          <dt>${dict.thStatus}:</dt><dd>${dict.status[item.status]}</dd>
-          <dt>${dict.thDate}:</dt><dd>${item.createdAt}</dd>
-        </dl>
-      `;
-
-      modal.classList.remove('hidden');
-    }
-
-    document.getElementById('btnCloseModal').addEventListener('click', () => {
-      document.getElementById('detailModal').classList.add('hidden');
-    });
-
-    // Form Event Listeners
     document.getElementById('boothSize').addEventListener('change', (e) => {
-      const isOther = e.target.value === 'other';
-      document.getElementById('groupBoothOther').classList.toggle('hidden', !isOther);
+      document.getElementById('groupBoothOther').classList.toggle('hidden', e.target.value !== 'other');
     });
 
     document.getElementById('periodUndecided').addEventListener('change', (e) => {
-      const checked = e.target.checked;
-      document.getElementById('startDate').disabled = checked;
-      document.getElementById('endDate').disabled = checked;
+      document.getElementById('startDate').disabled = e.target.checked;
+      document.getElementById('endDate').disabled = e.target.checked;
     });
 
-    // Clear Errors
     function clearFormErrors() {
       document.querySelectorAll('.error-msg').forEach(el => {
         el.textContent = '';
@@ -1130,14 +851,58 @@
       document.querySelectorAll('.input-error').forEach(el => el.classList.remove('input-error'));
     }
 
-    // Submit Handler
-    document.getElementById('applyForm').addEventListener('submit', (e) => {
+    function showValidationErrors(errors) {
+      const dict = i18n[currentLang].errors;
+      errors.forEach(err => {
+        const msg = dict[err.messageKey.replace('errors.', '')] || err.messageKey;
+        if (err.field === 'startDate' || err.field === 'endDate') {
+          const errEl = document.getElementById('errDates');
+          errEl.textContent = msg;
+          errEl.classList.remove('hidden');
+        } else {
+          const inputEl = document.getElementById(err.field);
+          const errEl = document.getElementById('err' + err.field.charAt(0).toUpperCase() + err.field.slice(1));
+          if (inputEl) inputEl.classList.add('input-error');
+          if (errEl) {
+            errEl.textContent = msg;
+            errEl.classList.remove('hidden');
+          }
+        }
+      });
+    }
+
+    function showConfirmation(id) {
+      const confCard = document.getElementById('confirmationCard');
+      document.getElementById('confRef').textContent = String(id || '').slice(0, 8);
+      confCard.classList.remove('hidden');
+      window.scrollTo({ top: confCard.offsetTop - 20, behavior: 'smooth' });
+    }
+
+    async function submitToEndpoint(payload) {
+      if (!FORM_ENDPOINT) {
+        throw new Error('endpoint_missing');
+      }
+      const res = await fetch(FORM_ENDPOINT, {
+        method: 'POST',
+        redirect: 'follow',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+      });
+      let json = null;
+      try { json = await res.json(); } catch (err) { json = null; }
+      if (!res.ok || !json || !json.ok) {
+        throw new Error((json && json.error) || 'send_failed');
+      }
+      return json.id || payload.id;
+    }
+
+    document.getElementById('applyForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       clearFormErrors();
+      document.getElementById('confirmationCard').classList.add('hidden');
 
       const form = e.target;
       const formData = new FormData(form);
-
       const servicesNeeded = [];
       form.querySelectorAll('input[name="servicesNeeded"]:checked').forEach(cb => {
         servicesNeeded.push(cb.value);
@@ -1162,87 +927,44 @@
       };
 
       const valResult = validateEntry(inputPayload);
-
       if (!valResult.ok) {
-        valResult.errors.forEach(err => {
-          const dict = i18n[currentLang].errors;
-          const msg = dict[err.messageKey.replace('errors.', '')] || err.messageKey;
-
-          if (err.field === 'startDate' || err.field === 'endDate') {
-            const errEl = document.getElementById('errDates');
-            errEl.textContent = msg;
-            errEl.classList.remove('hidden');
-          } else {
-            const fieldId = err.field;
-            const inputEl = document.getElementById(fieldId);
-            const errEl = document.getElementById('err' + fieldId.charAt(0).toUpperCase() + fieldId.slice(1));
-            if (inputEl) inputEl.classList.add('input-error');
-            if (errEl) {
-              errEl.textContent = msg;
-              errEl.classList.remove('hidden');
-            }
-          }
-        });
+        showValidationErrors(valResult.errors);
         return;
       }
 
-      // Valid: normalize & store
       const id = crypto.randomUUID ? crypto.randomUUID() : 'app-' + Date.now();
-      const nowISO = new Date().toISOString();
-      const normalized = normalizeEntry(inputPayload, id, nowISO);
+      const normalized = normalizeEntry(inputPayload, id, new Date().toISOString());
+      const honeypot = String(formData.get('websiteExtra') || '').trim();
+      const btn = document.getElementById('btnSubmit');
+      const originalLabel = i18n[currentLang].btnSubmit;
+      btn.disabled = true;
+      btn.textContent = i18n[currentLang].btnSending;
 
-      appState.applications.unshift(normalized);
-
-      if (saveStorageData()) {
+      try {
+        if (honeypot) {
+          showConfirmation(id);
+          form.reset();
+          return;
+        }
+        const ref = await submitToEndpoint({ ...normalized, lang: currentLang, honeypot: '' });
         form.reset();
         document.getElementById('groupBoothOther').classList.add('hidden');
         document.getElementById('startDate').disabled = false;
         document.getElementById('endDate').disabled = false;
         renderServiceCheckboxes();
-
-        // Confirmation
-        const confCard = document.getElementById('confirmationCard');
-        document.getElementById('confRef').textContent = id.slice(0, 8);
-        confCard.classList.remove('hidden');
-        window.scrollTo({ top: confCard.offsetTop - 20, behavior: 'smooth' });
-
-        renderTableAndStats();
+        showConfirmation(ref);
+      } catch (err) {
+        const key = err && err.message === 'endpoint_missing' ? 'endpointMissing' : 'sendError';
+        showAlert(i18n[currentLang][key], 'alert-error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = originalLabel;
       }
     });
 
-    // Language Toggle
     document.getElementById('btnLangEn').addEventListener('click', () => applyLanguage('en'));
     document.getElementById('btnLangJa').addEventListener('click', () => applyLanguage('ja'));
-
-    // Export Action Listeners
-    document.getElementById('btnCopyCsv').addEventListener('click', () => {
-      const csv = toCsv(appState.applications);
-      navigator.clipboard.writeText(csv).then(() => {
-        showAlert(i18n[currentLang].copiedSuccess, 'alert-success');
-      });
-    });
-
-    document.getElementById('btnDownloadCsv').addEventListener('click', () => {
-      const csv = toCsv(appState.applications);
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `expo-apply-export-${new Date().toISOString().slice(0, 10)}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
-    });
-
-    document.getElementById('btnCopyMd').addEventListener('click', () => {
-      const md = toMarkdown(appState.applications, currentLang);
-      navigator.clipboard.writeText(md).then(() => {
-        showAlert(i18n[currentLang].copiedSuccess, 'alert-success');
-      });
-    });
-
-    // Initialize App
-    loadStorageData();
-    applyLanguage('en');
+    applyLanguage(currentLang);
   </script>
 </body>
 </html>

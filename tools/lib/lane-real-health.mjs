@@ -15,12 +15,41 @@ export function laneErrorText(text, lane) {
 // ここに並ぶ他レーン名を連鎖の証拠にすると、自レーンが答えた probe まで判定不能に落ちる
 // （2026-11-17 実測: openrouter が答えているのに冒頭の [routing] gemini… で probe_inconclusive）。
 const DIAGNOSTIC_LINE = /^\s*\[(?:routing|cooldown|codex-do)\]/i;
-const CHAIN_MARKER = /cheap-first:|fallback backend=|ack backend=|\[routing\].*(?:fallback|switch|chain)/i;
+// [routing] の demote 診断行（provider 名 fallback）で誤判定した 2026-11-17 実測。
+// 実際の連鎖は cheap-first: / fallback backend= / ack backend= で表れる。
+const CHAIN_MARKER = /cheap-first:|fallback backend=|ack backend=/i;
+// [openrouter:deepseek/deepseek-v4-flash] は OpenRouter 経由の正規経路レーンを示すタグ。
+// そのレーン自身が OpenRouter 経由で答えたなら連鎖ではないので、タグを除去してから判定する。
+const OPENROUTER_TAG = /\[openrouter:([^\]\s]+)\]/gi;
+function stripOpenrouterTag(line, lane) {
+  return line.replace(OPENROUTER_TAG, (tag, model) =>
+    lane === 'openrouter' || model.toLowerCase().includes(String(lane).toLowerCase()) ? '' : tag);
+}
+// 2026-11-20 実測: codex 書き込み probe が成功していても、再掲された MEMORY.md 索引の
+// deepseek 等を拾って probe_inconclusive になったため、入力の再掲部分だけを除く。
+export function stripCodexPromptEcho(text) {
+  const value = String(text);
+  const newline = value.includes('\r\n') ? '\r\n' : '\n';
+  const lines = value.split(/\r?\n/);
+  let separatorSeen = false;
+  let changed = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*--------\s*$/.test(lines[i])) separatorSeen = true;
+    if (!separatorSeen || !/^\s*user\s*$/.test(lines[i])) continue;
+    const end = lines.findIndex((line, index) => index > i
+      && /^\s*(?:codex|exec|thinking|tokens used)\s*$/.test(line));
+    lines.splice(i, end === -1 ? lines.length - i : end - i);
+    changed = true;
+    if (end === -1) break;
+    i--;
+  }
+  return changed ? lines.join(newline) : value;
+}
 export function probeViaChain(text, lane) {
-  return String(text).split(/\r?\n/).some(line =>
+  return stripCodexPromptEcho(text).split(/\r?\n/).some(line =>
     CHAIN_MARKER.test(line)
     || (!DIAGNOSTIC_LINE.test(line)
-      && LANE_NAMES.some(other => other !== lane && new RegExp(`\\b${other}\\b`, 'i').test(line))));
+      && LANE_NAMES.some(other => other !== lane && new RegExp(`\\b${other}\\b`, 'i').test(stripOpenrouterTag(line, lane)))));
 }
 
 const AUTH_DOMINANT_RATIO = 0.9;

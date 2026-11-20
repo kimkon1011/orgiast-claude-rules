@@ -2,6 +2,30 @@
 
 値そのものは記載しない。取得: `node tools/onboarding-sync.mjs --keys-only --force`。
 
+## external-channel-unmonitored-gate
+
+Stop gate: 外部チャネル（LINE/Discord/Beeper）の返信待ち promise を検出し、auto-progress の監視が未登録の場合に block する。
+
+- block されたら、返信待ちの外部チャネルに対して `auto-progress-external-check.mjs` を使った監視を事前に登録する。
+- 既に監視済みで block が誤検出の場合は、応答にその説明を加えて再送する。
+- 詳細: `docs/x-0045-missing-gates.md` 優先3「外部チャネル未監視型」
+
+## silent-check-failure-gate
+
+Stop gate: auto-progress check の応答に障害信号（exit code 1以上／MODULE_NOT_FOUND）が含まれているのに成功を主張している場合に warn する。
+
+- warn されたら、当該 check の実ログ（Vercel/gh run view）を直接照会し、沈黙故障か否かを確認す��。
+- 本当に成功している場合は、障害信号が誤検出である根拠を応答に含める。
+- 詳細: `docs/x-0045-missing-gates.md` 優先1「見張りの沈黙故障型」
+
+## stale-worktree-gate
+
+PreToolUse gate: 実行元の cwd が nightly-repo 以外の古い worktree/別クローンで、かつ定期ジョブ系コマンドを実行しようとしている場合に block する。
+
+- block されたら、cwd を nightly-repo に変更して再実行する。
+- 意図的に別ツリーで実行する必要がある場合は、読み取り専用コマンド／管理操作／dry-run に限定する。
+- 詳細: `docs/x-0045-missing-gates.md` 優先2「実行元ツリー固着型」
+
 ## calendar-external-guest-gate
 
 社外のメールアドレスをカレンダーの参加者（attendees）に追加する Calendar MCP / Bash / PowerShell の操作をブロックする。社内（@orgiast.jp または config/staff-addresses.json のアドレス）のみ通す。
@@ -221,6 +245,8 @@ Workspace の URL は authuser=開く人のメール を付け、本文の同じ
 
 ## decision-research-gate
 
+費用案の前に無料・既存経路を実測し、無料案を比較の先頭に置く。同じ応答に `[FREE-ALT-CHECKED: 調べた無料経路と結果（20文字以上）]` が必要。kim の課金指示があるときだけ `[PAID-OK: 「指示の引用」]`。RESEARCH-OKでは無料確認を免除しない。
+
 他メンバーへの DM で再送を頼む案を推奨するだけの比較表は不可。
 人に作業・再送・確認を頼む案がある場合は、Claude 自身が実行する案（自動経路）を先頭に置き、試した経路と結果を書く。
 
@@ -295,6 +321,10 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 また、外部待ち（第三者待ち・本番反映待ち等）がある場合は、末尾に『このセッション: まだ閉じない（<何を待つか>・YYYY-MM-DD HH:MM まで待つ）』の待機期限フッターを必ず記載する（期限切れは kim-inbox に通知される）。待ちの進捗確認は node tools/auto-progress.mjs --start-when "<到着を判定するコマンド>" --next-claude "<届いたらやること>"（または --add-check --check "<完了判定>"）で登録する。session 内の run_in_background の見張りや CronCreate はセッション終了で消えるため使わない。
 
 コードブロック・引用行は対象外。既存 Stop runner から呼ぶため Stop hook 設定の追加登録は不要。`ORGIAST_THIRD_PARTY_NUDGE_GATE=0` で無効化できる。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
+
+## no-response-gate
+
+差し戻されたら、直近の入力を読み、依頼を進めるか質問に答える。同じゲートの Stop フィードバックに対する再試行では、再度の差し戻しを行わない。
 
 ## unregistered-promise-gate
 

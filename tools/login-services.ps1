@@ -1,11 +1,11 @@
-﻿# GitHub / Google / Vercel / Codex を1つの画面で順番にログインする。
+﻿# GitHub / Google / Vercel / Codex / Cursor を1つの画面で順番にログインする。
 $ErrorActionPreference = 'Continue'
 $OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding
 function Say($m, $c = 'White') { Write-Host $m -ForegroundColor $c }
 function Title($m) { Say "`n■ $m" 'Cyan' }
 function Have($name) { $null -ne (Get-Command $name -ErrorAction SilentlyContinue) }
 # 導入直後でも gh/codex を見つけられるよう PATH を読み直す。
-$env:Path = (@([Environment]::GetEnvironmentVariable('Path','Machine'), [Environment]::GetEnvironmentVariable('Path','User'), 'C:\Program Files\GitHub CLI', (Join-Path $env:APPDATA 'npm')) | Where-Object { $_ }) -join ';'
+$env:Path = (@([Environment]::GetEnvironmentVariable('Path','Machine'), [Environment]::GetEnvironmentVariable('Path','User'), 'C:\Program Files\GitHub CLI', (Join-Path $env:APPDATA 'npm'), (Join-Path $env:LOCALAPPDATA 'cursor-agent')) | Where-Object { $_ }) -join ';'
 
 $account = 'seisaku-team@orgiast.jp'
 $homeDir = $env:USERPROFILE
@@ -27,13 +27,24 @@ function Test-CodexLogin {
   if (-not (Test-Path $file)) { return $false }
   try { return [bool]((Get-Content $file -Raw | ConvertFrom-Json).tokens.id_token) } catch { return $false }
 }
+function Test-CursorLogin {
+  if ($env:CURSOR_API_KEY) { return $true }
+  foreach ($rel in @('.cursor\cli-config.json', '.cursor\auth.json')) {
+    if (Test-Path (Join-Path $homeDir $rel)) { return $true }
+  }
+  if (Have 'agent') {
+    & agent status *> $null
+    return $LASTEXITCODE -eq 0
+  }
+  return $false
+}
 function Show-LoopbackNotice {
   Say "Windows Defender ファイアウォールの警告は『キャンセル』で構いません。PC内の localhost 通信だけなので許可不要です。" 'Yellow'
 }
 
-Say "4サービスを $account でログインします。済みのものは自動で飛ばします。" 'Green'
+Say "5サービスを $account でログインします。済みのものは自動で飛ばします。" 'Green'
 
-Title '1/4 GitHub'
+Title '1/5 GitHub'
 if (Test-GitHubLogin) { Say 'ログイン済みのためスキップします。' 'Green' }
 elseif (-not (Have 'gh')) { Say 'gh が見つかりません。インストーラをもう一度実行してください。' 'Red' }
 else {
@@ -44,7 +55,7 @@ else {
 }
 $results.GitHub = Test-GitHubLogin
 
-Title '2/4 Google (clasp)'
+Title '2/5 Google (clasp)'
 if (Test-ClaspLogin) { Say 'ログイン済みのためスキップします。' 'Green' }
 elseif (-not (Have 'npx')) { Say 'npx が見つかりません。' 'Red' }
 else {
@@ -71,7 +82,7 @@ else {
 }
 $results.Google = Test-ClaspLogin
 
-Title '3/4 Vercel'
+Title '3/5 Vercel'
 if (Test-VercelLogin) { Say 'ログイン済みのためスキップします。' 'Green' }
 elseif (-not (Have 'npx')) { Say 'npx が見つかりません。' 'Red' }
 else {
@@ -81,7 +92,7 @@ else {
 }
 $results.Vercel = Test-VercelLogin
 
-Title '4/4 Codex'
+Title '4/5 Codex'
 if (Test-CodexLogin) { Say 'ログイン済みのためスキップします。' 'Green' }
 elseif (-not (Have 'codex')) { Say 'codex が見つかりません。' 'Red' }
 else {
@@ -91,12 +102,22 @@ else {
 }
 $results.Codex = Test-CodexLogin
 
+Title '5/5 Cursor'
+if (Test-CursorLogin) { Say 'ログイン済みのためスキップします。' 'Green' }
+elseif (-not (Have 'agent')) { Say 'agent が見つかりません。インストーラをもう一度実行してください。' 'Red' }
+else {
+  Say "Cursor アプリでも $account でログインできます。CLI は次のブラウザ画面で同じアカウントを承認します。"
+  Say 'ブラウザが開かないときは、表示された URL を開いてください。'
+  & agent login
+}
+$results.Cursor = Test-CursorLogin
+
 Title '最終結果'
 $allOk = $true
 foreach ($entry in $results.GetEnumerator()) {
   if ($entry.Value) { Say ("[OK] " + $entry.Key) 'Green' }
   else { Say ("[NG] " + $entry.Key) 'Red'; $allOk = $false }
 }
-if ($allOk) { Say 'ログイン4件がすべて完了しました。不要な AI Studio / localhost エラーのタブは閉じて構いません。' 'Green'; exit 0 }
+if ($allOk) { Say 'ログイン5件がすべて完了しました。不要な AI Studio / localhost エラーのタブは閉じて構いません。' 'Green'; exit 0 }
 Say 'NG のサービスを確認し、このランチャーをもう一度実行してください。' 'Yellow'
 exit 1

@@ -8,6 +8,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { redactForShare } from './lib/share-secrets.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { machineIdentity } from './machine-identity.mjs';
 import { addDecision, listDecisions } from './pending-decisions.mjs';
@@ -810,7 +811,11 @@ export async function waitForReply(id, seconds, { request, now = Date.now, sleep
     try {
       const result = await request('mail-get', { id }, Math.min(60_000, deadline - now()));
       if (waitFor === 'seen' && (result.mail?.seenAt || ['seen', 'done'].includes(result.mail?.status))) return { exitCode: 0, text: `既読（id=${id}）` };
-      if (['failed', 'expired'].includes(result.mail?.status)) return { exitCode: 1, text: `${result.mail.status}（id=${id}）` };
+      if (['failed', 'expired'].includes(result.mail?.status)) {
+        const { status, failReason } = result.mail;
+        const detail = status === 'failed' && failReason ? `\n${redactSecrets(redactForShare(failReason))}` : '';
+        return { exitCode: 1, text: `${status}（id=${id}）${detail}` };
+      }
       if (result.mail?.status === 'done') return { exitCode: 0, text: redactSecrets(result.mail.resultBody || '[ack のみ・本文なし]') };
     } catch (error) { if (now() < deadline) throw error; }
     if (now() < deadline) await sleepImpl(Math.min(15_000, deadline - now()));
@@ -882,9 +887,16 @@ export function classifyExecutionResult(result, { exec } = {}) {
 }
 export async function sendExecutionFailure(args) {
   const { result, label } = args;
-  const diagnostic = redactSecrets(result.stderrTail || result.error || '').slice(-600);
-  return sendHubFailure({ ...args, result: { ...result,
-    outputTail: `${label} の自動回答が完了しなかった（${result.reason}）。${label} の対話セッションで回答する` + (diagnostic ? `\n${diagnostic}` : '') } });
+  const diagnostic = [result.stderrHead, result.stderrTail, result.error]
+    .map(value => stripClaudeWarnings(redactSecrets(redactForShare(value ?? ''))).split('\n')[0].trim())
+    .find(Boolean)?.slice(0, 600);
+  const reason = redactSecrets(redactForShare(result.reason));
+  // 実行エラーは送信側の --wait にも表示する。未承諾や中断は既存の状態コードを保つ。
+  const executionError = (result.exitCode != null && result.exitCode !== 0) || (result.error && !result.timedOut);
+  return sendHubFailure({ ...args, result: { ...result, reason,
+    failReason: diagnostic && executionError ? `${reason} — ${diagnostic}` : reason,
+    outputTail: `${label} の自動回答が完了しなかった（${reason}）。${label} の対話セッションで回答する` +
+      (diagnostic ? `\n診断: ${diagnostic}` : '') } });
 }
 // Rejection is a reply note plus a fail transition. mail-reply would mark the
 // original done, after which the server correctly refuses a done -> failed change.
@@ -895,7 +907,7 @@ export async function sendHubFailure({ home, mail, result, request, label, now =
     why: '[報告・返信不要] 実行拒否', auto: true, hop: nextHop(mail), priority: 'normal', reason: result.reason,
     expiresAt: new Date(now() + 72 * 3600000).toISOString()
   }));
-  await syncMailState({ home, id: mail.id, action: 'fail', reason: result.reason, from: label, request, now, stderr });
+  await syncMailState({ home, id: mail.id, action: 'fail', reason: result.failReason ?? result.reason, from: label, request, now, stderr });
 }
 // 受信1回分。--poll のみが呼ぶ。提示 hook はこの処理を別プロセスで起動する。
 // 受信タスク(OrgiastFleetMail)が死んでいても対話セッションが受信を代替するための exports（2026-10-10 事故）。
@@ -1266,8 +1278,8 @@ export async function pollOnce(deps = {}) {
           }
         }
         result = classifyExecutionResult({ ...result, stderrTail: result.stderrTail ?? (result.exitCode == null ? result.outputTail : '') }, { exec: exec.exec });
-        if (result.stderrTail) result.stderrTail = redactSecrets(result.stderrTail);
-        if (result.error) result.error = redactSecrets(result.error);
+        if (result.stderrTail) result.stderrTail = redactSecrets(redactForShare(result.stderrTail));
+        if (result.error) result.error = redactSecrets(redactForShare(result.error));
         if (result.stdoutTail !== undefined) result.stdoutTail = redactSecrets(result.stdoutTail);
         writeJson(resultFile, result);
         // A failed reply retains its result and retries transport without executing again.

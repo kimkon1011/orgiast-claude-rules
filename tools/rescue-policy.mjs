@@ -34,6 +34,24 @@ function nestedRoot(tree, name) {
   }
   return null;
 }
+// `status` と `git add` の間に作られた入れ子クローンは gitlink (mode 160000) として
+// index に入る。宣言済み submodule ではない gitlink が rescue コミットに入ると、その
+// ブランチの checkout が以後すべて壊れる（2026-11-17 rescue/auto-session-20261117-153005）。
+// staging 後の index を実測して落とす後段ガード。
+export function unstageUndeclaredGitlinks(tree, env = process.env) {
+  const stagedLinks = git(tree, ['ls-files', '--stage'], undefined, env)
+    .split(/\r?\n/).filter(Boolean)
+    .filter(line => line.startsWith('160000 '))
+    .map(line => line.slice(line.indexOf('\t') + 1));
+  if (!stagedLinks.length) return [];
+  // HEAD に既にある gitlink は正規の submodule。落とすのは新規に入った分だけ。
+  const known = new Set(git(tree, ['ls-tree', '-r', 'HEAD'], undefined, env)
+    .split(/\r?\n/).filter(line => line.startsWith('160000 '))
+    .map(line => line.slice(line.indexOf('\t') + 1)));
+  const drop = stagedLinks.filter(p => !known.has(p));
+  if (drop.length) git(tree, ['rm', '--cached', '-f', '-q', '--', ...drop], undefined, env);
+  return drop;
+}
 export function dirtyStatus(tree) {
   const records = git(tree, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=all']).split('\0');
   const kept = [], paths = [], snapshotPaths = [];
@@ -68,6 +86,48 @@ function rescuedTrees(tree) {
   return new Map(byTree.filter(([t]) => t));
 }
 
+// A rescue whose diff against origin/main adds no line holds nothing main lacks,
+// even when its blobs never landed verbatim (a locally edited copy of a file main
+// has since improved). numstat counts added lines per path; binary paths report
+// "-" and are treated as unknown.
+function mainIsSuperset(tree, sha, paths) {
+  let rows;
+  // Without a pathspec this compares whole trees, so main's own newer work on
+  // untouched files counts as added lines and hides a genuinely stale rescue
+  // (measured on 9ed741f0, 2026-11-20).
+  try { rows = git(tree, ['diff', '--numstat', 'origin/main', sha, '--', ...paths]).split(/\r?\n/).filter(Boolean); }
+  catch { return false; }
+  if (!rows.length) return false;
+  return rows.every(row => row.split('\t')[0] === '0');
+}
+
+// A rescue branch whose every changed path already exists verbatim somewhere in
+// origin/main's history is a stale copy of work that already landed. Flagging it
+// in the handoff stops the reviewer from re-reading the same superseded diff every
+// night. Deleting the branch stays a human decision, so this only annotates.
+export function supersededByMain(tree, sha, { limit = 50 } = {}) {
+  let changed;
+  try {
+    changed = git(tree, ['diff-tree', '--no-commit-id', '--name-only', '-r', sha]).split(/\r?\n/).filter(Boolean);
+  } catch { return false; }
+  if (!changed.length) return false;
+  if (mainIsSuperset(tree, sha, changed)) return true;
+  for (const file of changed) {
+    let blob;
+    // A path the rescue commit deleted has no blob to match; treat it as unseen.
+    try { blob = git(tree, ['rev-parse', `${sha}:${file}`]).trim(); } catch { return false; }
+    let history;
+    try {
+      history = git(tree, ['rev-list', '-n', String(limit), 'origin/main', '--', file]).split(/\r?\n/).filter(Boolean);
+    } catch { return false; }
+    const landed = history.some(commit => {
+      try { return git(tree, ['rev-parse', `${commit}:${file}`]).trim() === blob; } catch { return false; }
+    });
+    if (!landed) return false;
+  }
+  return true;
+}
+
 export function snapshotTree(tree, status) {
   // A private index snapshots changes without changing HEAD, the real index or files.
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-rescue-index-'));
@@ -77,6 +137,7 @@ export function snapshotTree(tree, status) {
     git(tree, ['read-tree', parent], undefined, env);
     if (status.snapshotPaths.length) git(tree, ['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'],
       status.snapshotPaths.map(p => `:(top,literal)${p}\0`).join(''), env);
+    unstageUndeclaredGitlinks(tree, env);
     return git(tree, ['write-tree'], undefined, env).trim();
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 }
@@ -193,11 +254,16 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
         // pathspecs as errors, and cannot sweep up a clone created after status.
         if (status.paths.length) git(tree, ['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'],
           status.paths.map(p => `:(top,literal)${p}\0`).join(''));
+        const droppedLinks = unstageUndeclaredGitlinks(tree);
+        if (droppedLinks.length) log('RESCUE_GITLINK_DROPPED', droppedLinks.join(' '));
         git(tree, ['-c', 'user.name=Auto Session Rescue', '-c', 'user.email=auto-session-rescue@localhost', 'commit', '-m', `auto-session-rescue-${stamp}`]);
         sha = git(tree, ['rev-parse', 'HEAD']).trim();
       }
       log('RESCUE_LOCAL_OK', `${tree} ${branch} ${sha}`);
-      try { fs.appendFileSync(path.join(dir, 'next-session.md'), `\n- [ ] rescue ブランチ ${branch} に退避した変更のレビューが必要（${tree}; ${sha}）\n`); }
+      let landedNote = '';
+      try { if (supersededByMain(tree, sha)) landedNote = '（判定: 変更内容はすべて origin/main の履歴に存在。着地済みの可能性が高い）'; }
+      catch { /* annotation only; a failed probe must not block the handoff line */ }
+      try { fs.appendFileSync(path.join(dir, 'next-session.md'), `\n- [ ] rescue ブランチ ${branch} に退避した変更のレビューが必要（${tree}; ${sha}）${landedNote}\n`); }
       catch (e) { log('RESCUE_HANDOFF_FAILED', e.message); }
       try { git(tree, ['push', '-u', 'origin', branch]); }
       catch { log('RESCUE_PUSH_FAILED_LOCAL_SAVED', branch); }

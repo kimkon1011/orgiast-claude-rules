@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { dirtyStatus, rescueTree } from './nightly-rescue.mjs';
-import { snapshotTree } from './rescue-policy.mjs';
+import { snapshotTree, unstageUndeclaredGitlinks, supersededByMain } from './rescue-policy.mjs';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nightly-rescue-'));
@@ -199,4 +199,88 @@ test('auto-session rescues skip a snapshot tree a rescue branch already holds', 
   const third = await rescueTree(f.repo, f.home, { ...f, now: f.now + 12 * 3600000 });
   assert.ok(third.events.some(e => e.step === 'RESCUE_LOCAL_OK'), JSON.stringify(third.events));
   assert.equal(branches(f).length, 2);
+});
+
+test('unstageUndeclaredGitlinks removes a gitlink that is not a declared submodule', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rescue-gitlink-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const repo = path.join(root, 'repo');
+  fs.mkdirSync(repo);
+  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  git('init', '-b', 'main');
+  git('config', 'user.name', 'Test');
+  git('config', 'user.email', 'test@example.invalid');
+  fs.writeFileSync(path.join(repo, 'tracked'), 'original');
+  git('add', '.'); git('commit', '-m', 'initial');
+  // Create a nested git repo inside the parent (gitlink candidate).
+  fs.mkdirSync(path.join(repo, 'nested'));
+  const ngit = (...args) => execFileSync('git', ['-C', path.join(repo, 'nested'), ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  ngit('init', '-b', 'main');
+  ngit('config', 'user.name', 'Test');
+  ngit('config', 'user.email', 'test@example.invalid');
+  fs.writeFileSync(path.join(repo, 'nested', 'file'), 'content');
+  ngit('add', '.'); ngit('commit', '-m', 'nested initial');
+  // Stage the nested repo — this creates a gitlink (mode 160000) in the index.
+  git('add', '--', 'nested');
+  const before = git('ls-files', '--stage');
+  assert.ok(before.split(/\r?\n/).some(line => line.startsWith('160000 ')), 'gitlink should be staged');
+  // Call the function.
+  const dropped = unstageUndeclaredGitlinks(repo);
+  assert.ok(dropped.includes('nested'), `dropped should include 'nested', got: ${JSON.stringify(dropped)}`);
+  const after = git('ls-files', '--stage');
+  assert.equal(after.split(/\r?\n/).filter(Boolean).filter(line => line.startsWith('160000 ')).length, 0,
+    `160000 entries should be empty, got: ${after}`);
+});
+
+test('supersededByMain: main 履歴に同一内容があるブランチだけ true', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superseded-'));
+  const run = (...args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+  try {
+    run('init', '-q', '-b', 'main');
+    run('config', 'user.email', 't @example.com');
+    run('config', 'user.name', 'Test');
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'v1\n');
+    run('add', '-A'); run('commit', '-qm', 'v1');
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'v2\n');
+    run('add', '-A'); run('commit', '-qm', 'v2');
+    run('update-ref', 'refs/remotes/origin/main', run('rev-parse', 'HEAD').trim());
+
+    // 古い版へ戻しただけの rescue = main 履歴に同一 blob がある
+    run('switch', '-qc', 'rescue/x');
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'v1\n');
+    run('add', '-A'); run('commit', '-qm', 'stale copy');
+    assert.equal(supersededByMain(dir, run('rev-parse', 'HEAD').trim()), true);
+
+    // main に一度も存在しないファイルが混じれば false
+    fs.writeFileSync(path.join(dir, 'b.txt'), 'stray\n');
+    run('add', '-A'); run('commit', '-qm', 'stray file');
+    assert.equal(supersededByMain(dir, run('rev-parse', 'HEAD').trim()), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('supersededByMain: blob が main 履歴に無くても追加行ゼロなら true', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superset-'));
+  const run = (...args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+  try {
+    run('init', '-q', '-b', 'main');
+    run('config', 'user.email', 't @example.com');
+    run('config', 'user.name', 'Test');
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'one\ntwo\nthree\n');
+    run('add', '-A'); run('commit', '-qm', 'base');
+    // main だけが進んだ無関係ファイルは判定に混ぜない（全ツリー比較の退行ガード）
+    fs.writeFileSync(path.join(dir, 'unrelated.txt'), 'main only\nsecond line\n');
+    run('add', '-A'); run('commit', '-qm', 'main advances elsewhere');
+    run('update-ref', 'refs/remotes/origin/main', run('rev-parse', 'HEAD').trim());
+
+    // main の一部を消しただけの版 = main に無い行をひとつも持たない
+    run('switch', '-qc', 'rescue/subset', 'HEAD~1');
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'one\nthree\n');
+    run('add', '-A'); run('commit', '-qm', 'older local copy');
+    assert.equal(supersededByMain(dir, run('rev-parse', 'HEAD').trim()), true);
+
+    // main に無い行を1行でも足せば false
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'one\nthree\nfour\n');
+    run('add', '-A'); run('commit', '-qm', 'adds a line');
+    assert.equal(supersededByMain(dir, run('rev-parse', 'HEAD').trim()), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

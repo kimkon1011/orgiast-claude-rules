@@ -19,6 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execSync, execFileSync, spawn } from 'node:child_process';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
+import { isMcpOptedOut } from './lib/mcp-optout.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { codexSessionDirs } from './cost-work-loop.mjs';
 import { checkVersionDrift, formatDriftLine } from './version-drift.mjs';
@@ -301,6 +302,8 @@ function addGeminiKeyHumanTask() {
 }
 function ensureGeminiMcp() {
   // ~/.claude.json の mcpServers.gemini-cli を保証(無ければ追加)。env で GEMINI_API_KEY を渡す。
+  // kim が外すと決めた場合は登録も修復もしない（~/.claude/mcp-optout.json、2026-11-19）。
+  if (isMcpOptedOut(HOME, 'gemini-cli')) return false;
   const p = path.join(HOME, '.claude.json');
   let d; try { d = JSON.parse(fs.readFileSync(p, 'utf-8')); } catch { return false; }
   const key = geminiApiKey();

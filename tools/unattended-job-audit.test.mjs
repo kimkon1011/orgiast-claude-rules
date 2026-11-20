@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { expectedPeriodHours, auditTasks, healTasks, unresolvedTasks, runAudit, launchAudit, notifyUnresolved, main } from './unattended-job-audit.mjs';
+import { stamp, expectedPeriodHours, auditTasks, healTasks, unresolvedTasks, runAudit, launchAudit, notifyUnresolved, auditContext, main } from './unattended-job-audit.mjs';
 import { listScheduledTaskDetails, enableScheduledTask, startScheduledTask } from './lib/scheduled-task.mjs';
 const now = Date.parse('2026-10-18T20:00:00+09:00');
 const daily = { type: 'MSFT_TaskDailyTrigger', daysInterval: 1 };
@@ -24,6 +24,14 @@ test('CostImproveLoop fixture: formula is 37h; 36h override detects missed run a
   assert.deepEqual(auditTasks([task()], {}, now), []);
   assert.equal(auditTasks([task()], { OrgiastCostImproveLoop: { maxAgeHours: 36 } }, now)[0].kind, 'missed');
   assert.equal(auditTasks([task()], {}, now + 3600000)[0].kind, 'missed');
+});
+test('finite daily repetition window uses the overnight gap as cadence', () => {
+  const auditAt = Date.parse('2026-11-20T03:20:00+09:00');
+  const trigger = { ...daily, repetition: { interval: 'PT1H', duration: 'PT13H30M' } };
+  const lastRunTime = '2026-11-19T21:00:00+09:00';
+  assert.deepEqual(auditTasks([task({ triggers: [trigger], lastRunTime })], {}, auditAt), []);
+  assert.equal(auditTasks([task({ triggers: [trigger], lastRunTime: '2026-11-18T21:00:00+09:00' })], {}, auditAt)[0].kind, 'missed');
+  assert.equal(auditTasks([task({ triggers: [{ ...daily, repetition: { interval: 'PT1H' } }], lastRunTime })], {}, auditAt)[0].kind, 'missed');
 });
 test('missed never-run, failed codes, MorningBatch interrupted is not failed', () => {
   assert.equal(auditTasks([task({ lastRunTime: '1999-01-01' })], {}, now)[0].kind, 'missed');
@@ -55,11 +63,25 @@ test('healing once per day, enable then start, converge only once and catch fail
   const result = await healTasks([{ name: 'z', kind: 'failed' }], { ...options, startScheduledTask: () => { throw new Error('private'); } });
   assert.equal(result[0].error, '修復の起動に失敗'); assert.ok(state.heals.z);
 });
-test('next audit escalates even when the original finding disappeared; successful progress clears', () => {
+test('next audit clears a healthy task or successful progress; missing task stays unresolved', () => {
   const state = { heals: { OrgiastCostImproveLoop: { at: new Date(now).toISOString(), kind: 'missed' } } };
-  assert.equal(unresolvedTasks([task()], [], state, now + 1).length, 1);
+  assert.equal(unresolvedTasks([task()], [], state, now + 1).length, 0);
   assert.equal(unresolvedTasks([task({ lastRunTime: new Date(now + 1).toISOString() })], [], state, now + 2).length, 0);
   assert.equal(unresolvedTasks([], [], state, now + 1).length, 1);
+});
+test('healthy task clears heal even when lastRunTime is unparseable', () => {
+  const state = { heals: { OrgiastCostImproveLoop: { at: new Date(now).toISOString(), kind: 'failed' } } };
+  assert.deepEqual(unresolvedTasks([task({ lastRunTime: 'not-a-date', lastTaskResult: 0 })], [], state, now + 1), []);
+});
+test('failed task remains unresolved after heal', () => {
+  const state = { heals: { OrgiastCostImproveLoop: { at: new Date(now).toISOString(), kind: 'failed' } } };
+  assert.equal(unresolvedTasks([task({ lastRunTime: 'not-a-date', lastTaskResult: 1 })], [], state, now + 1).length, 1);
+});
+test('stamp parses ISO, .NET JSON, local scheduler time, and preserves never-run dates', () => {
+  assert.equal(stamp('2026-11-17T15:02:47Z'), Date.parse('2026-11-17T15:02:47Z'));
+  assert.equal(stamp('/Date(1763391767000)/'), 1763391767000);
+  assert.equal(stamp('2026/11/18 0:02:47'), new Date(2026, 10, 18, 0, 2, 47).getTime());
+  assert.ok(new Date(stamp('1999/11/30 0:00:00')).getUTCFullYear() <= 1999);
 });
 test('persistent repair, unresolved daily notification, recovery and dry-run', async t => {
   const home = temp(t), notifications = [], starts = [];
@@ -104,6 +126,29 @@ test('shared guard enforces 6h and 24h launch intervals', t => {
   assert.equal(launchAudit({ ...options, intervalHours: 24, now: now + 7 * 3600000 }), false);
   assert.equal(launchAudit({ ...options, now: now + 6 * 3600000 }), true);
   assert.equal(calls.length, 2); assert.ok(calls[0][1].includes('--quiet'));
+});
+test('cached SessionStart context labels stale findings with their age', t => {
+  const home = temp(t), root = path.join(home, '.claude'), file = path.join(root, 'unattended-job-audit-last.txt');
+  fs.mkdirSync(root);
+  fs.writeFileSync(file, '🚨 未修復: \\OrgiastExternalWaiting（missed）');
+  fs.utimesSync(file, new Date(now - 7.25 * 3600000), new Date(now - 7.25 * 3600000));
+  assert.match(auditContext(home, { now }), /（7\.3時間前の判定）/);
+  assert.doesNotMatch(auditContext(home, { now: now - 2 * 3600000 }), /時間前の判定/);
+});
+test('Disabled non-required task with heal is resolved (intentionally retired)', () => {
+  const state = { heals: { OrgiastRetired: { at: new Date(now).toISOString(), kind: 'failed' } } };
+  const retired = [{ taskName: '\\OrgiastRetired', state: 'Disabled', lastRunTime: '1999-01-01', lastTaskResult: 0, triggers: [daily] }];
+  assert.equal(unresolvedTasks(retired, [], state, now + 1).length, 0);
+  assert.equal(unresolvedTasks(retired, [], state, now + 1, { required: ['OrgiastCostImproveLoop'] }).length, 0);
+  // Existing heuristics (task missing, or task ran since heal) still apply
+  assert.equal(unresolvedTasks([], [], state, now + 1).length, 1, 'missing tasks stay unresolved');
+  const ran = [{ ...retired[0], lastRunTime: new Date(now + 1).toISOString(), state: 'Ready' }];
+  assert.equal(unresolvedTasks(ran, [], state, now + 2).length, 0, 'post-heal run clears');
+});
+test('Disabled required task with heal remains unresolved', () => {
+  const state = { heals: { OrgiastRetired: { at: new Date(now).toISOString(), kind: 'failed' } } };
+  const tasks = [{ taskName: '\\OrgiastRetired', state: 'Disabled', lastRunTime: '1999-01-01', lastTaskResult: 0, triggers: [daily] }];
+  assert.equal(unresolvedTasks(tasks, [], state, now + 1, { required: ['OrgiastRetired'] }).length, 1);
 });
 test('notification DM success and missing-token / thrown DM fallback use fleet mail', async t => {
   const home = temp(t), calls = [], spawnImpl = spawnStub(calls);

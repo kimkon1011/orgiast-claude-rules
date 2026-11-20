@@ -17,7 +17,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getDriveToken, defaultDriveKeyPath } from './lib/drive-auth.mjs';
 import { relayStatePath } from './lib/seisaku-gmail-token.mjs';
-import { gwsFetch } from './lib/gws-proxy.mjs';
+import { gwsFetch, proxyCredential } from './lib/gws-proxy.mjs';
 import { isEntry } from './is-entry.mjs';
 
 export function hasAnyCredential({ env = process.env, exists = fs.existsSync, home = os.homedir() } = {}) {
@@ -37,7 +37,11 @@ export function resolveKeyPath({ env = process.env, exists = fs.existsSync, home
   return found ?? candidates[0];
 }
 
-const defaultToken = options => getDriveToken({ ...options, keyPath: resolveKeyPath() });
+const defaultToken = options => {
+  const keyPath = resolveKeyPath();
+  return proxyCredential({ keyPath, impersonate: options.impersonate, scope: options.scope })
+    ?? getDriveToken({ ...options, keyPath });
+};
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 export const LABEL = '⚠送信前に確認_古い下書き';

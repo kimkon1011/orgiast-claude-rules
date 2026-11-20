@@ -6,6 +6,7 @@ import { evaluateKimInboxRelay, commitKimInboxDelivery } from './kim-inbox-relay
 import { evaluatePastLogSearch, listPlaybookNames, classifyHandoff } from './past-log-search-gate.mjs';
 import { judgeDeliverableDriveLink, registerDeliverableCheck } from './deliverable-drive-link-gate.mjs';
 import { evaluateInvitePermissions } from './hooks/discord-invite-permission-gate.mjs';
+import { evaluateNoResponse } from './no-response-gate.mjs';
 import { applyNamedGatePolicy } from './gate-runtime.mjs';
 import os from 'node:os';
 import { evaluateProgressCron } from './progress-cron-gate.mjs';
@@ -59,6 +60,8 @@ import { stripInboxSection } from './lib/inbox-section-filter.mjs';
 import { STOP_RETRY_INSTRUCTION, withStopRetryInstruction } from './lib/stop-retry-message.mjs';
 import { evaluateClaudeFallbackReport } from './claude-fallback-report-gate.mjs';
 import { evaluatePendingDecision } from './pending-decision-ask-gate.mjs';
+import { evaluateSilentCheckFailure } from './silent-check-failure-gate.mjs';
+import { evaluateExternalChannelPromise } from './external-channel-unmonitored-gate.mjs';
 import { buildRecord, extractPromise, ledgerFile as progressLedgerFile, readLedger, writeLedger, applyPromise, latestOpenPromises, rollingSessionFields } from './auto-progress-ledger.mjs';
 import { appendInbox } from './lib/auto-progress-inbox.mjs';
 import { isUnchangedPeriodicReport } from './lib/unchanged-periodic-report.mjs';
@@ -73,7 +76,7 @@ export const SPECIAL_GATE_MAX_BLOCKS_PER_TURN = 2;
 // preface are never independent blocking reasons. Keep permission guards and
 // separately registered mail-send-approval/delete-approval/api-billing/
 // app-llm-cost/lane-repair-first gates blocking, outside this rewrite budget.
-export const LIGHT_GATES = ['report-length-gate', 'url-account-gate', 'message-locator-gate', 'third-party-nudge-gate', 'seat-name-gate', 'shallow-answer-gate', 'unregistered-promise-gate'];
+export const LIGHT_GATES = ['report-length-gate', 'url-account-gate', 'message-locator-gate', 'third-party-nudge-gate', 'seat-name-gate', 'shallow-answer-gate', 'unregistered-promise-gate', 'silent-check-failure-gate'];
 export const FORM_GATES = ['handoff-quality-gate', 'manual-request-fullsteps-gate', 'manual-request-evidence-gate', 'handoff-info-guard', 'handoff-branch-coverage-gate', 'user-burden-gate', 'handoff-investigation-gate'];
 // Exempt presentation/repetition only. Permission, evidence, outstanding work and
 // other operational checks must still run on automatic periodic turns.
@@ -115,6 +118,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['decision-research-gate', () => { const result = judgeDecisionResearch(ctx.assistantText); return result.triggered ? { decision: 'block', reason: decisionResearchReason(result.missing), code: 'RESEARCH-FIRST' } : { decision: 'pass' }; }],
     ['negative-claim-gate', () => { const result = evaluateNegativeClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && configuredMode() !== 'block' ? { ...result, decision: 'warn' } : result; }],
     ['external-state-claim-gate', () => { const result = evaluateExternalStateClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && externalStateMode() !== 'block' ? { ...result, decision: 'warn' } : result; }],
+    ['silent-check-failure-gate', () => evaluateSilentCheckFailure(ctx.assistantText)],
     ['claude-fallback-report-gate', () => evaluateClaudeFallbackReport(ctx.assistantText)],
     ['control-group-gate', () => runControlGroup({ cwd: ctx.input?.cwd })],
     ['pr-handoff-gate', () => evaluatePrHandoff(ctx.assistantText)],
@@ -135,6 +139,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['urgent-blocker-wait-gate', () => judgeUrgentBlockerWait(ctx.assistantText, { sessionId: ctx.sessionId, home: home() })],
     ['third-party-nudge-gate', () => judgeThirdPartyNudge(ctx.assistantText)],
     ['unregistered-promise-gate', () => evaluateUnregisteredPromise(ctx.assistantText, { sessionId: ctx.sessionId, transcriptRaw: ctx.transcriptRaw, home: home() })],
+    ['external-channel-unmonitored-gate', () => evaluateExternalChannelPromise(ctx.assistantText)],
     ['progress-cron-gate', () => evaluateProgressCron(ctx.input, { home: home() })],
     ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw, { ...ctx.input, session_id: ctx.sessionId }, { turnText: ctx.turnText })],
     ['user-burden-gate', () => judgeUserBurden(ctx.assistantText, ctx.humanText)],
@@ -243,7 +248,24 @@ async function runWithRelay(input, context, auditOptions = {}) {
       }
       ledger({ sessionId, verdict: 'warn_repeat', blockedBy: [], warned: ['kim-inbox-relay'], reasonCodes: [relay.code] });
     }
+    const noResponse = evaluateNoResponse({
+      transcriptRaw: context.raw,
+      stopHookActive: input.stop_hook_active,
+      lastAssistantMessage: input.last_assistant_message ?? input.assistant_text,
+    });
+    const name = 'no-response-gate';
+    const policy = noResponse.decision === 'block'
+      ? await applyNamedGatePolicy(name, noResponse, { home: home(), ...auditOptions.policyOptions })
+      : noResponse;
+    if (policy.decision === 'block') {
+      const record = { sessionId, verdict: 'block', blockedBy: [name], reasonCodes: [policy.code] };
+      ledger(record);
+      return { ...policy, record };
+    }
     const result = await runOtherGates(input, context, auditOptions);
+    if (policy.decision === 'warn') {
+      result.systemMessage = [result.systemMessage, policy.reason].filter(Boolean).join('\n');
+    }
     if (result.decision !== 'block' && !relayRepeated) commitKimInboxDelivery(home(), sessionId, relay.receipts, auditOptions.now ?? Date.now());
     if (relayRepeated && result.decision !== 'block') return { ...result, systemMessage: [`kim-inbox-relay（同じターンで上限超えのため警告のみ）: ${relay.reason || relay.code}`, result.systemMessage].filter(Boolean).join('\n') };
     return result;

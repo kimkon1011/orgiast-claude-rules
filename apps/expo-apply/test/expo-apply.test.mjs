@@ -253,3 +253,41 @@ test('no i18n string key targets an element that wraps child elements', () => {
     `i18n keys would overwrite containers and delete their children: ${offenders.join(', ')}`,
   );
 });
+
+test('public page uses absolute canonical, og, and sitemap URLs under rebooth.co.jp', () => {
+  const html = readFileSync(indexPath, 'utf8');
+  const base = 'https://rebooth.co.jp/en/expo-apply/';
+  assert.match(html, new RegExp(`rel="canonical" href="${base.replace(/[./]/g, '\\$&')}"`));
+  assert.match(html, new RegExp(`property="og:url" content="${base.replace(/[./]/g, '\\$&')}"`));
+  assert.doesNotMatch(html, /id="manageHeader"|Submitted Applications Management|受付済み申込一覧/);
+  assert.match(html, /FORM_ENDPOINT/);
+  assert.match(html, /GA4_MEASUREMENT_ID/);
+});
+
+test('config.js keeps the form endpoint and GA4 id empty in the repository', () => {
+  const configPath = fileURLToPath(new URL('../config.js', import.meta.url));
+  const src = readFileSync(configPath, 'utf8');
+  assert.match(src, /export const PUBLIC_BASE_URL = 'https:\/\/rebooth\.co\.jp\/en\/expo-apply\/'/);
+  assert.match(src, /export const FORM_ENDPOINT = ''/);
+  assert.match(src, /export const GA4_MEASUREMENT_ID = ''/);
+});
+
+test('sitemap and robots use absolute public URLs', () => {
+  const sitemap = readFileSync(fileURLToPath(new URL('../sitemap.xml', import.meta.url)), 'utf8');
+  const robots = readFileSync(fileURLToPath(new URL('../robots.txt', import.meta.url)), 'utf8');
+  assert.match(sitemap, /<loc>https:\/\/rebooth\.co\.jp\/en\/expo-apply\/<\/loc>/);
+  assert.doesNotMatch(sitemap, /<loc>\.\//);
+  assert.match(robots, /Sitemap: https:\/\/rebooth\.co\.jp\/en\/expo-apply\/sitemap\.xml/);
+});
+
+test('freebies index does not link to missing markdown files', () => {
+  const html = readFileSync(fileURLToPath(new URL('../freebies/index.html', import.meta.url)), 'utf8');
+  assert.doesNotMatch(html, /booth-design\.md|services\.md|booth-specifications\.md/);
+  assert.match(html, /research\.html/);
+});
+
+test('FAQ states that submissions are emailed to Orgiast', () => {
+  const html = readFileSync(fileURLToPath(new URL('../faq.html', import.meta.url)), 'utf8');
+  assert.match(html, /seisaku-team@orgiast\.jp/);
+  assert.doesNotMatch(html, /localStorage/);
+});

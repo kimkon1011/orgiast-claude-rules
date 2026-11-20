@@ -1,28 +1,42 @@
 import { getDriveToken } from './drive-auth.mjs';
+import { withAbort } from './deadline-budget.mjs';
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 export const quoteTab = (title) => `'${title.replaceAll("'", "''")}'`;
 
 // No mutation retries: an ambiguous append response must be read back by id.
-export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken } = {}) {
+export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken, timeoutMs = Number(process.env.DEADLINE_FETCH_TIMEOUT_MS) || 60_000, onStage = () => {}, signal } = {}) {
   let token;
   let expires = 0;
   async function request(id, suffix = '', method = 'GET', body) {
-    if (!token || Date.now() >= expires) {
-      try { token = await getToken({ scope: SCOPE, impersonate: 'kim@orgiast.jp', signal: AbortSignal.timeout(30_000) }); }
-      catch {
-        // Fallback: use 'drive' scope (supported by DWD proxy) instead of 'spreadsheets'
-        token = await getToken({ scope: 'https://www.googleapis.com/auth/drive', impersonate: 'seisaku-team@orgiast.jp', signal: AbortSignal.timeout(30_000) });
+    const requestSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
+    return withAbort(requestSignal, async () => {
+      if (!token || Date.now() >= expires) {
+        onStage('token start (sheets)');
+        try { token = await getToken({ scope: SCOPE, impersonate: 'kim@orgiast.jp', signal: requestSignal }); }
+        catch (primaryError) {
+          requestSignal.throwIfAborted();
+          // Fallback: use 'drive' scope (supported by DWD proxy) instead of 'spreadsheets'
+          try { token = await getToken({ scope: 'https://www.googleapis.com/auth/drive', impersonate: 'seisaku-team@orgiast.jp', signal: requestSignal }); }
+          catch (fallbackError) { throw new Error(`Sheets token failed: ${fallbackError.message}`, { cause: fallbackError.cause || primaryError }); }
+        }
+        onStage('token end (sheets)');
+        expires = Date.now() + 50 * 60_000;
       }
-      expires = Date.now() + 50 * 60_000;
-    }
-    const response = await fetchImpl(`${API}/${encodeURIComponent(id)}${suffix}`, {
-      method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30_000),
+      let response;
+      try {
+        response = await fetchImpl(`${API}/${encodeURIComponent(id)}${suffix}`, {
+          method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          ...(body ? { body: JSON.stringify(body) } : {}), signal: requestSignal,
+        });
+      } catch (error) { throw new Error(`Sheets ${method} fetch failed: ${error.message}`, { cause: error }); }
+      if (!response.ok) throw new Error(`Sheets ${method} HTTP ${response.status}`);
+      return response.json();
+    }).catch(error => {
+      if (requestSignal.aborted) throw new Error(`Sheets ${method} fetch failed: ${error.message}`, { cause: error });
+      throw error;
     });
-    if (!response.ok) throw new Error(`Sheets ${method} HTTP ${response.status}`);
-    return response.json();
   }
   const metadata = (id) => request(id, '?fields=spreadsheetId,spreadsheetUrl,sheets(properties)');
   const get = async (id, range) => (await request(id, `/values/${encodeURIComponent(range)}?valueRenderOption=UNFORMATTED_VALUE`)).values ?? [];

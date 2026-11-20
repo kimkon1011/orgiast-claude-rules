@@ -72,6 +72,15 @@ function firstFiniteNumber(...values) {
   return null;
 }
 
+function latestClaudeUsd(cost, reporter) {
+  const costAt = Date.parse(cost.t);
+  const reporterAt = Date.parse(reporter.measuredAt ?? reporter.lastRun);
+  // cost-loop が止まっても、新しい reporter の実測値を古い数値で隠さない。
+  return Number.isFinite(reporterAt) && (!Number.isFinite(costAt) || reporterAt > costAt)
+    ? firstFiniteNumber(reporter.mtdUsd, cost.claudeUSD)
+    : firstFiniteNumber(cost.claudeUSD, reporter.mtdUsd);
+}
+
 function formatRatio(value) {
   return value === null ? '' : `${(Math.round(value * 1000) / 10).toFixed(1)}%`;
 }
@@ -140,7 +149,8 @@ async function main() {
   // 空振りさせ続けていた（実測: low_delegation の自動改善は17件全滅・人間エスカレーション多発）。
   // 判定に使う行ベース比を主セルに載せ、未計測のときだけ従来のトークン比へフォールバックする。
   const linesRatio = firstFiniteNumber(cost.linesRatio, enforce.linesRatio);
-  const claudeUsd = firstFiniteNumber(cost.claudeUSD, reporter.mtdUsd);
+  const claudeUsd = latestClaudeUsd(cost, reporter);
+  const planUnavailable = planUsage.available ? null : `計測不能(${planUsage.reason})`;
   const payload = {
     token: fleetEnv.FLEET_SHEET_TOKEN,
     ...dialogMetrics(home),
@@ -159,8 +169,8 @@ async function main() {
     // 主セルは判定に使う行ベース比(#186)。未計測なら従来どおりトークン比へフォールバック。
     delegRatio: formatRatio(linesRatio === null ? nonClaudeRatio : linesRatio),
     delegRatioLegacy: formatRatio(legacyRatio),
-    planFiveHourPct: planUsage.available ? planUsage.fiveHour.utilization : null,
-    planSevenDayPct: planUsage.available ? planUsage.sevenDay.utilization : null,
+    planFiveHourPct: planUsage.available ? planUsage.fiveHour.utilization : planUnavailable,
+    planSevenDayPct: planUsage.available ? planUsage.sevenDay.utilization : planUnavailable,
     budgetPacePct: budget.budgetPacePct,
     settingsModel: typeof settings.model === 'string' && settings.model.trim() ? settings.model.trim() : '未設定(=Opus)',
     cheapAiUse: Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([provider, count]) => `${provider}:${count}`).join(', ') || 'なし',

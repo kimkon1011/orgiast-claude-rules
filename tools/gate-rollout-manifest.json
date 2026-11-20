@@ -1,8 +1,7 @@
 {
   "version": 1,
   "pilotHosts": [
-    "kim-PC",
-    "DESKTOP-2D0R4LI"
+    "kim-PC"
   ],
   "gates": {
     "pdf-deliverable-visual-gate": { "rollout": "deny", "immediatePolicy": "2026-11-15 user 指示: 全席でPDF納品前に描画後の全ページ目視を必須化" },
@@ -272,7 +271,11 @@
     "mail-send-approval-gate": {"rollout": "deny", "distributedAt": "2026-11-05T00:00:00Z", "immediatePolicy": "2026-11-05 kim 承認: 組織指示11 メール送信は本文確認＋明示承認後のみ"},
     "delete-approval-gate": {"rollout": "deny", "distributedAt": "2026-11-05T00:00:00Z", "immediatePolicy": "2026-11-05 kim 承認: 組織指示12 削除は user 許可後のみ"},
     "session-close-target-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-11T00:00:00Z", "denyAfter": "2026-11-18T00:00:00Z" },
-    "unattended-elevation-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-13T00:00:00Z", "denyAfter": "2026-11-20T00:00:00Z" }
+    "unattended-elevation-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-13T00:00:00Z", "denyAfter": "2026-11-20T00:00:00Z" },
+    "external-channel-unmonitored-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-18T00:00:00Z", "denyAfter": "2026-11-25T00:00:00Z" },
+    "silent-check-failure-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-18T00:00:00Z", "denyAfter": "2026-11-25T00:00:00Z" },
+    "stale-worktree-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-18T00:00:00Z", "denyAfter": "2026-11-25T00:00:00Z" },
+    "no-response-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-19T00:00:00Z", "denyAfter": "2026-11-26T00:00:00Z" }
   },
   "pilotHostsEvidence": "fleet-pc-map.json: kim-PC.hostname (2026-08-27 recorded observation)"
 }

@@ -6,6 +6,20 @@ import { ensureKimEditor, KIM_EMAIL } from './lib/kim-editor.mjs';
 import { addItem } from './kim-inbox.mjs';
 import { isEntry } from './is-entry.mjs';
 
+const transientDriveError = error => /(?:\b(?:408|429|5\d\d)\b|fetch failed|timed? ?out|timeout|ECONN(?:RESET|REFUSED)|EAI_AGAIN|ENETUNREACH|socket hang up)/i.test(String(error?.message ?? error));
+export async function retryTransientDrive(operation, { attempts = 3, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try { return await operation(); }
+    catch (error) {
+      lastError = error;
+      if (attempt === attempts || !transientDriveError(error)) throw error;
+      await sleep(500 * 2 ** (attempt - 1));
+    }
+  }
+  throw lastError;
+}
+
 // Only fleet execution accounts, never people discovered in a directory or permission list.
 export function sweepAccounts(map) {
   return [...new Set(['seisaku-team@orgiast.jp', KIM_EMAIL, ...Object.entries(map)
@@ -41,17 +55,17 @@ export async function sweep({
   }
   for (const account of sweepAccounts(map)) {
     try {
-      const token = await getToken({ impersonate: account });
+      const token = await retryTransientDrive(() => getToken({ impersonate: account }));
       let pageToken;
       do {
         const params = new URLSearchParams({ q: sweepQuery(account, now), fields: 'nextPageToken,files(id,owners(emailAddress),properties)', pageSize: '100', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true' });
         if (pageToken) params.set('pageToken', pageToken);
-        const page = await (await api(token, `https://www.googleapis.com/drive/v3/files?${params}`, { signal: AbortSignal.timeout(30_000) })).json();
+        const page = await retryTransientDrive(async () => (await api(token, `https://www.googleapis.com/drive/v3/files?${params}`, { signal: AbortSignal.timeout(30_000) })).json());
         for (const file of page.files ?? []) {
           if (!file.owners?.some(owner => owner.emailAddress?.toLowerCase() === account)) continue;
           result.checked++;
           try {
-            if ((await ensure(file.id, { actingUser: account, token, api })).changed) result.granted++;
+            if ((await retryTransientDrive(() => ensure(file.id, { actingUser: account, token, api }))).changed) result.granted++;
             if (file.properties?.orgiastKimInbox === 'pending') {
               const endpoint = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.id)}`;
               const item = await (await api(token, `${endpoint}?alt=media`, { signal: AbortSignal.timeout(30_000) })).json();
@@ -60,11 +74,11 @@ export async function sweep({
               await api(token, `${endpoint}?supportsAllDrives=true`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ properties: { orgiastKimInbox: 'delivered' } }), signal: AbortSignal.timeout(30_000) });
             }
           }
-          catch { result.errors.push(`${account}: ${file.id} の編集権限確認に失敗`); }
+          catch (error) { result.errors.push(`${account}: ${file.id} の編集権限確認に失敗 (${String(error?.message ?? error).slice(0, 500)})`); }
         }
         pageToken = page.nextPageToken;
       } while (pageToken);
-    } catch { result.errors.push(`${account}: Drive の巡回に失敗`); }
+    } catch (error) { result.errors.push(`${account}: Drive の巡回に失敗 (${String(error?.message ?? error).slice(0, 500)})`); }
   }
   await inbox(home, { kind: 'info', source: 'kim-editor-sweep', text: `kim 編集権限の日次確認: 確認 ${result.checked}件 / 付与 ${result.granted}件 / 失敗 ${result.errors.length}件${result.errors.length ? '\n' + result.errors.join('\n') : ''}` });
   if (result.errors.length) throw new Error(result.errors.join('; '));

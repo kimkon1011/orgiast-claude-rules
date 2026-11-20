@@ -153,6 +153,8 @@ function statusFor(score) {
 
 function analyze(file, headRaw, tailRaw, headEvents, tailEvents, tailBytes) {
   const combined = headEvents.concat(tailEvents);
+  const sdkStarted = combined.some((event) =>
+    /^sdk(?:-|$)/i.test(String(event?.entrypoint || '')));
   let firstPrompt = '';
   let cwd = '';
   let gitBranch = '';
@@ -237,6 +239,7 @@ function analyze(file, headRaw, tailRaw, headEvents, tailEvents, tailBytes) {
     lastAssistantText: shorten(lastAssistantText, 1500), ageDays: Number(ageDays.toFixed(1)),
     messageCountEstimate: messageCount, score, status: status.name, emoji: status.emoji, reasons,
     signals: {
+      sdkStarted,
       lastUserUnanswered: lastRole === 'user',
       lastUserUnansweredByApiError: lastRole === 'user' && endedWithError,
       interrupted: /\[Request interrupted by user\]|request interrupted|interrupted by user|リクエストはユーザーにより中断/i.test(interruptionText),
@@ -302,10 +305,22 @@ export async function inspect(file) {
     const firstTailNewline = tailRaw.indexOf('\n');
     const tailParseRaw = file.size > TAIL_BYTES && firstTailNewline >= 0 ? tailRaw.slice(firstTailNewline + 1) : tailRaw;
     const head = parseLines(headParseRaw);
-    const tail = parseLines(tailParseRaw);
+    let tail = parseLines(tailParseRaw);
+    let effectiveTailRaw = tailRaw;
+    // prompt_snapshot などの巨大な単一行が末尾64KiBを占有すると、その直前の
+    // assistant 応答が窓外になり「末尾テキストなし」と誤判定される。会話イベントが
+    // 1件も無い場合だけ窓を広げ、通常ケースのI/O量は増やさない。
+    if (!tail.events.some((event) => isActualUser(event) || (event?.type === 'assistant' && event?.message?.role === 'assistant')) && file.size > TAIL_BYTES) {
+      effectiveTailRaw = await readWindow(file, Math.min(file.size, 1024 * 1024), true);
+      const firstExpandedNewline = effectiveTailRaw.indexOf('\n');
+      const expandedParseRaw = file.size > Buffer.byteLength(effectiveTailRaw) && firstExpandedNewline >= 0
+        ? effectiveTailRaw.slice(firstExpandedNewline + 1)
+        : effectiveTailRaw;
+      tail = parseLines(expandedParseRaw);
+    }
     if (!head.events.length && !tail.events.length) { stats.emptyFiles++; return null; }
     stats.scanned++;
-    return analyze(file, headRaw, tailRaw, head.events, tail.events, tail.bytes);
+    return analyze(file, headRaw, effectiveTailRaw, head.events, tail.events, tail.bytes);
   } catch { stats.readErrors++; return null; }
 }
 
@@ -330,6 +345,24 @@ export function parseLlmResult(stdout) {
   }
   // 正当な verdict=不明 と解析失敗を分離し、呼び出し側で次の provider を試せるようにする。
   return null;
+}
+
+export function isEmptySession(record) {
+  return !record.lastAssistantText && record.firstPrompt === '(プロンプトなし)';
+}
+
+export function selectRecords(filtered, top, llmMode) {
+  if (!llmMode) return filtered.slice(0, top);
+  const conversations = [];
+  const empties = [];
+  for (const r of filtered) {
+    if (isEmptySession(r)) {
+      empties.push(r);
+    } else {
+      conversations.push(r);
+    }
+  }
+  return conversations.slice(0, top).concat(empties);
 }
 
 function applyLlmResult(record, result) {
@@ -363,12 +396,11 @@ async function addLlmJudgments(records) {
     for (const record of records) failRecord(record, 'tools/llm-ask.mjs が見つかりません');
     return llmStats;
   }
-  // 既定は多段。1段だけだとフォールバック鎖が名前だけになる（実測 2026-09-14: 直近7日で
-  // groq は 16回中13回が 429、openrouter と grok は 0%失敗）。鍵が無い provider は
-  // 例外になって catch から次段へ進むので、未設定の機体でも1段のときより悪くならない。
-  const providerChain = (provider || process.env.SESSION_TRIAGE_LLM_PROVIDERS || 'groq,openrouter,grok')
+  // session-triage が生存確認済みの安いレーンを明示順で試す。llm-ask 側の汎用連鎖は
+  // 停止中レーンも含むため、この呼び出しでは無効化して外側の順序を正にする。
+  const providerChain = (provider || process.env.SESSION_TRIAGE_LLM_PROVIDERS || 'deepseek,openrouter,mistral')
     .split(',').map((value) => value.trim()).filter(Boolean);
-  if (!providerChain.length) providerChain.push('groq');
+  if (!providerChain.length) providerChain.push('deepseek');
   const errorDetail = (error) => String(error?.stderr || error?.message || error).trim().split('\n').slice(-1)[0].slice(0, 200);
   let cursor = 0;
   async function worker() {
@@ -388,11 +420,29 @@ async function addLlmJudgments(records) {
 出力形式: {"verdict":"未完了|完了|不明","confidence":0-100,"next":"次にやるべき1アクション(40字以内、完了なら空文字)"}\n\n当初の依頼: ${record.llmTitle}\n末尾assistantテキスト: ${shorten(record.lastAssistantText || '(なし)', 900)}\n構造上の事実: ${facts.join('、') || '特になし'}`;
       // 外部プロバイダへ渡す直前にも必ず全ペイロードを再マスクする。
       prompt = redactSecrets(prompt);
+      // 対話の無いセッション（lastAssistantTextが空かつfirstPromptが無し）は
+      // LLM呼び出しを省略して完了扱いにする。
+      // LLMに渡しても「末尾assistantテキストが空の時だけ不明」の指示で
+      // 常に不明が返り、LLMコストだけ消費して何も進まないため。
+      if (isEmptySession(record)) {
+        const defaultResult = { verdict: '完了', confidence: 90, next: '' };
+        applyLlmResult(record, defaultResult);
+        llmStats.success++;
+        continue;
+      }
+      if (!String(record.lastAssistantText || '').trim()) {
+        const defaultResult = record.signals.sdkStarted
+          ? { verdict: '完了', confidence: 80, next: '' }
+          : { verdict: '未完了', confidence: 70, next: 'セッションを再開して依頼に着手する' };
+        applyLlmResult(record, defaultResult);
+        llmStats.success++;
+        continue;
+      }
       let result;
       let failure = '';
       for (const selectedProvider of providerChain) {
         try {
-          const { stdout } = await execFileAsync(process.execPath, [helper, '--provider', selectedProvider, '--max', '200', prompt], { timeout: 60_000, maxBuffer: 256 * 1024 });
+          const { stdout } = await execFileAsync(process.execPath, [helper, '--provider', selectedProvider, '--prefer-provider', '--no-fallback', '--max', '200', prompt], { timeout: 60_000, maxBuffer: 256 * 1024 });
           result = parseLlmResult(stdout);
           if (process.env.SESSION_TRIAGE_DEBUG) console.error(`DBG ${record.sessionId.slice(0, 8)} provider=${selectedProvider} promptLen=${prompt.length} raw=${JSON.stringify(String(stdout).slice(0, 300))}`);
           if (result) break;
@@ -455,7 +505,7 @@ if (isMain) {
     const files = await listFiles();
     const records = (await Promise.all(files.map(inspect))).filter(Boolean).sort((a, b) => b.score - a.score || a.ageDays - b.ageDays);
     const filtered = statusFilter ? records.filter((r) => r.status === statusFilter) : records;
-    let selected = filtered.slice(0, top);
+    let selected = selectRecords(filtered, top, llmMode);
     let llmStats;
     if (llmMode) {
       llmStats = await addLlmJudgments(selected);

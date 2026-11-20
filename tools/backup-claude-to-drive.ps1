@@ -138,6 +138,113 @@ function Stop-ProcessTree([int]$ProcessId) {
   try { Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue } catch {}
 }
 
+function Get-RcloneExe {
+  $candidates = @(Get-Command rclone -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Extension -eq '.exe' })
+  if ($candidates.Count -gt 0) { return $candidates[0].Source }
+  $candidate = Get-Command rclone -ErrorAction SilentlyContinue
+  if ($candidate) { return $candidate.Source }
+  return $null
+}
+
+function Get-RcloneRemoteName {
+  <#
+    .SYNOPSIS
+      Returns an rclone remote name if available, type=drive, and not readonly.
+      Returns $null if not available.
+  #>
+  $rcloneExe = Get-RcloneExe
+  if (-not $rcloneExe) { Write-Event 'WARN rclone-remote=skipped reason=rclone-not-found'; return $null }
+  $candidates = if ($env:CLAUDE_BACKUP_RCLONE_REMOTE) { @($env:CLAUDE_BACKUP_RCLONE_REMOTE) } else { @('claude-backup', 'aujust') }
+  foreach ($remoteName in $candidates) {
+    try {
+      $configOutput = & $rcloneExe config show $remoteName 2>$null | Out-String
+      if (-not $configOutput -or $configOutput -notmatch 'type\s*=\s*drive') {
+        if ($env:CLAUDE_BACKUP_RCLONE_REMOTE) { Write-Event ('WARN rclone-remote=skipped remote={0} reason=not-drive-type' -f $remoteName) }
+        continue
+      }
+      if ($configOutput -match 'scope\s*=\s*drive\.readonly') {
+        if ($env:CLAUDE_BACKUP_RCLONE_REMOTE) { Write-Event ('WARN rclone-remote=skipped remote={0} reason=readonly-scope' -f $remoteName) }
+        continue
+      }
+      Write-Event ('rclone-remote=found remote={0}' -f $remoteName); return $remoteName
+    } catch {
+      if ($env:CLAUDE_BACKUP_RCLONE_REMOTE) { Write-Event ('WARN rclone-remote=skipped remote={0} reason={1}' -f $remoteName, $_.Exception.Message) }
+      continue
+    }
+  }
+  if (-not $env:CLAUDE_BACKUP_RCLONE_REMOTE) { Write-Event 'WARN rclone-remote=skipped reason=no-writable-drive-remote' }
+  return $null
+}
+
+function Send-ToRclone {
+  param([string]$ZipPath, [string]$RemoteName, [string]$HostName)
+  $destPath = '{0}:Claude-Backups/{1}/' -f $RemoteName, $HostName
+  $rcloneExe = Get-RcloneExe
+  if (-not $rcloneExe) { return $false }
+  $extraArgs = if ($DryRun) { @('--dry-run') } else { @() }
+  try {
+    $result = & $rcloneExe copy $ZipPath $destPath @extraArgs 2>&1
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+      foreach ($line in $result) { Write-Event ('WARN rclone-output: {0}' -f $line) }
+      throw "exit code: $exitCode"
+    }
+    Write-Event ('rclone-copy=ok remote={0} file={1}' -f $RemoteName, [IO.Path]::GetFileName($ZipPath))
+    return $true
+  } catch {
+    Write-Event ('WARN rclone-copy=failed remote={0} reason={1}' -f $RemoteName, $_.Exception.Message)
+    return $false
+  }
+}
+
+function Test-RcloneBackup {
+  param([string]$RemoteName, [string]$HostName, [string]$ZipName)
+  $destPath = '{0}:Claude-Backups/{1}/' -f $RemoteName, $HostName
+  $rcloneExe = Get-RcloneExe
+  if (-not $rcloneExe) { return $false }
+  try {
+    $files = & $rcloneExe ls $destPath 2>$null | Out-String
+    if (-not $files) { return $false }
+    $found = @($files -split "`n" | Where-Object { $_ -match [regex]::Escape($ZipName) }).Count -gt 0
+    if ($found) {
+      Write-Event ('rclone-verify=ok zip={0}' -f $ZipName)
+      return $true
+    }
+    Write-Event ('WARN rclone-verify=failed zip={0} not-found' -f $ZipName)
+    return $false
+  } catch {
+    Write-Event ('WARN rclone-verify=failed reason={0}' -f $_.Exception.Message)
+    return $false
+  }
+}
+
+function Remove-OldRcloneBackups {
+  param([string]$RemoteName, [string]$HostName)
+  $destPath = '{0}:Claude-Backups/{1}/' -f $RemoteName, $HostName
+  $rcloneExe = Get-RcloneExe
+  if (-not $rcloneExe) { return }
+  $today = (Get-Date).Date
+  try {
+    $files = & $rcloneExe ls $destPath 2>$null | Out-String
+    if (-not $files) { return }
+    foreach ($line in ($files -split "`n")) {
+      if ($line -match 'claude-.+-(\d{4}-\d{2}-\d{2})\.zip') {
+        $backupDate = [DateTime]::MinValue
+        if (-not [DateTime]::TryParseExact($Matches[1], 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$backupDate)) { continue }
+        $age = ($today - $backupDate.Date).TotalDays
+        $delete = ($age -gt 180) -or ($age -gt 14 -and $backupDate.Day -ne 1)
+        if ($delete) {
+          $fileName = ($line -split '\s+', 2)[-1].Trim()
+          & $rcloneExe deletefile ('{0}{1}' -f $destPath, $fileName) 2>$null
+          Write-Event ('rclone-retention=deleted file={0}' -f $fileName)
+        }
+      }
+    }
+  } catch {
+    Write-Event ('WARN rclone-retention=failed reason={0}' -f $_.Exception.Message)
+  }
+}
+
 function Push-KimInboxInfo([string]$Body) {
   # kim への「Drive 未導入」通知は kim-inbox の info 積みで行う（Discord DM は全社廃止）。
   # 非 kim 席では --add が fleet-mail 経由で kim-PC へ転送する。転送は 60 秒上限・fail-open のため
@@ -150,9 +257,27 @@ function Push-KimInboxInfo([string]$Body) {
   $bodyFile = Join-Path $env:TEMP ('drive-missing-notice-{0}.txt' -f $hostname)
   try {
     [IO.File]::WriteAllText($bodyFile, $Body, (New-Object Text.UTF8Encoding($false)))
-    $p = Start-Process -FilePath $node.Source -ArgumentList @($kimInbox, '--add', '--kind', 'info', '--body-file', $bodyFile, '--source', 'backup-claude-to-drive') -PassThru -NoNewWindow
-    if (-not $p.WaitForExit(60000)) { Stop-ProcessTree $p.Id; Write-Event 'WARN kim-inbox-notice=failed reason=timeout'; return $false }
-    if ($p.ExitCode -ne 0) { Write-Event ('WARN kim-inbox-notice=failed exit={0}' -f $p.ExitCode); return $false }
+    # & (call operator) を Start-Process -NoNewWindow の代わりに使う。
+    # スケジュールタスクからの実行で Start-Process -NoNewWindow が $p.ExitCode を空にする不具合があるため。
+    $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $processInfo.FileName = $node.Source
+    $processInfo.Arguments = "`"$kimInbox`" --add --kind info --body-file `"$bodyFile`" --source backup-claude-to-drive"
+    $processInfo.UseShellExecute = $false
+    $processInfo.CreateNoWindow = $true
+    $processInfo.RedirectStandardOutput = $true
+    $processInfo.RedirectStandardError = $true
+    $p = [System.Diagnostics.Process]::Start($processInfo)
+    # RedirectStandardOutput/Error=true では、出力バッファが詰まると子プロセスがブロックする。
+    # WaitForExit より先に非同期読み取りを開始しデッドロックを回避する。
+    $stdoutTask = $p.StandardOutput.ReadToEndAsync()
+    $stderrTask = $p.StandardError.ReadToEndAsync()
+    $exited = $p.WaitForExit(60000)
+    if (-not $exited) { $p.Kill(); Write-Event 'WARN kim-inbox-notice=failed reason=timeout'; return $false }
+    # WaitForExit 完了後も ExitCode が未設定のケースがあるため、HasExited 確認後に再度待つ。
+    if (-not $p.HasExited) { $p.WaitForExit(1000) | Out-Null }
+    $exitCode = $p.ExitCode
+    if ($exitCode -ne 0) { Write-Event ('WARN kim-inbox-notice=failed exit={0}' -f $exitCode); return $false }
+    $p.Close()
     Write-Event 'kim-inbox-notice=stacked'
     return $true
   } catch { Write-Event ('WARN kim-inbox-notice=failed reason={0}' -f $_.Exception.Message); return $false }
@@ -319,13 +444,28 @@ try {
 
   $driveProcess = Get-Process -Name 'GoogleDriveFS' -ErrorAction SilentlyContinue
   $driveRoot = Find-GoogleDrive
-  if ($DryRun -and -not $driveRoot) { $driveRoot = 'H:\'; Write-Event 'plan drive-root=H:\ reason=no-mounted-drive-dry-run-fallback' }
-  if (-not $DryRun -and (-not $driveProcess -or -not $driveRoot)) { Stop-DriveNotAvailable }
-  if (-not $driveRoot) { throw 'Google Drive のマウントが見つかりません' }
+  $rcloneRemote = Get-RcloneRemoteName
+  if ($DryRun -and -not $driveRoot) {
+    if ($rcloneRemote) { Write-Event ('plan rclone-fallback=available remote={0}' -f $rcloneRemote) }
+    $driveRoot = 'H:\'
+    Write-Event 'plan drive-root=H:\ reason=no-mounted-drive-dry-run-fallback'
+  }
+  $useRclone = (-not $driveProcess -or -not $driveRoot) -and $rcloneRemote
+  if (-not $DryRun -and -not $driveRoot -and -not $useRclone) { Stop-DriveNotAvailable }
+  if (-not $driveRoot -and -not $useRclone) { throw 'Google Drive のマウントも rclone リモートも利用できません' }
+  if (-not $driveRoot -and $useRclone) { $driveRoot = 'H:\' }
 
-  $myDriveName = if (Test-Path -LiteralPath (Join-Path $driveRoot 'マイドライブ')) { 'マイドライブ' } elseif (Test-Path -LiteralPath (Join-Path $driveRoot 'My Drive')) { 'My Drive' } else { 'マイドライブ' }
-  $script:driveBackup = Join-Path (Join-Path (Join-Path $driveRoot $myDriveName) 'Claude-Backups') $hostname
-  $driveZip = Join-Path $script:driveBackup ('claude-{0}-{1}.zip' -f $hostname, (Get-Date).ToString('yyyy-MM-dd'))
+  # DryRun / useRclone 時は Join-Path が実在ドライブを要求してクラッシュするため
+  # プレースホルダパスを直書きで設定する（不存ドライブの H:\ では Join-Path が例外を投げる）。
+  if ($useRclone -or $DryRun) {
+    $myDriveName = 'マイドライブ'
+    $script:driveBackup = 'H:\マイドライブ\Claude-Backups\{0}' -f $hostname
+    $driveZip = '{0}\claude-{1}-{2}.zip' -f $script:driveBackup, $hostname, (Get-Date).ToString('yyyy-MM-dd')
+  } else {
+    $myDriveName = if (Test-Path -LiteralPath (Join-Path $driveRoot 'マイドライブ')) { 'マイドライブ' } elseif (Test-Path -LiteralPath (Join-Path $driveRoot 'My Drive')) { 'My Drive' } else { 'マイドライブ' }
+    $script:driveBackup = Join-Path (Join-Path (Join-Path $driveRoot $myDriveName) 'Claude-Backups') $hostname
+    $driveZip = Join-Path $script:driveBackup ('claude-{0}-{1}.zip' -f $hostname, (Get-Date).ToString('yyyy-MM-dd'))
+  }
   Write-Event ('plan staging={0} destination={1}' -f $stagingDir, $driveZip)
   Write-Event ('plan structure={0}<=~/.claude; {1}<=home files/directories/tasks/repo/npm/manifest; {2}<=~/.codex' -f $stagingClaudeDir, $stagingHomeDir, $stagingCodexDir)
 
@@ -334,7 +474,8 @@ try {
     Write-Event 'plan home-files=.claude.json(retry=2,warn-only),.claude.json.backup(optional); excludes=.claude.json.tmp.*,.bak*'
     Write-Event 'plan extras=.gitconfig,.clasprc.json,.ssh,.gemini,AppData/gh,orgiast-claude-rules,scheduled-tasks,npm-global-packages.json,backup-manifest.json'
     Write-Event 'plan restore-set=RESTORE-claude-backup.md,restore-claude-from-drive.ps1,復元する.bat'
-    Write-Event 'plan compress=local-zip copy=drive readBack=min-5000+required-core+home/backup-manifest.json+scheduled-task-if-any retention=14-days+monthly-day-1/180-days'
+    $backupMethod = if ($driveProcess) { 'drive' } elseif ($rcloneRemote) { 'rclone' } else { 'none' }
+    Write-Event ('plan compress=local-zip copy={0} readBack=min-5000+required-core+home/backup-manifest.json+scheduled-task-if-any retention=14-days+monthly-day-1/180-days' -f $backupMethod)
     Write-Event ('complete dryRun=true elapsedSeconds={0}' -f [Math]::Round(((Get-Date) - $startedAt).TotalSeconds, 1))
     exit 0
   }
@@ -428,40 +569,71 @@ try {
   $zipSize = (Get-Item -LiteralPath $localZip).Length
   Write-Event ('zip-created bytes={0}' -f $zipSize)
 
-  New-Item -ItemType Directory -Path $script:driveBackup -Force | Out-Null
-  Copy-Item -LiteralPath $localZip -Destination $driveZip -Force
-  $script:driveZipWritten = $true
-  Copy-Item -LiteralPath $restoreSource -Destination (Join-Path $script:driveBackup 'RESTORE-claude-backup.md') -Force
-  foreach ($restoreFile in @($restoreScriptSource, $restoreLauncherSource)) {
-    if (Test-Path -LiteralPath $restoreFile) { Copy-Item -LiteralPath $restoreFile -Destination (Join-Path $script:driveBackup ([IO.Path]::GetFileName($restoreFile))) -Force }
-    else { Write-Event ('WARN restore-set-copy=skipped source={0} reason=not-found' -f $restoreFile) }
-  }
+  if ($useRclone) {
+    # Rclone fallback path: upload zip and restore files to rclone remote
+    $rcloneZipName = 'claude-{0}-{1}.zip' -f $hostname, (Get-Date).ToString('yyyy-MM-dd')
+    $rcloneDest = '{0}:Claude-Backups/{1}/' -f $rcloneRemote, $hostname
+    $rcloneExePath = Get-RcloneExe
 
-  $archive = [IO.Compression.ZipFile]::OpenRead($driveZip)
-  try {
-    $names = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
-    $hasClaude = @($names | Where-Object { $_ -eq '.claude/CLAUDE.md' }).Count -gt 0
-    $hasSettings = @($names | Where-Object { $_ -eq '.claude/settings.json' }).Count -gt 0
-    $hasProjects = @($names | Where-Object { $_ -like '.claude/projects/*' }).Count -gt 0
-    $hasClaudeJson = @($names | Where-Object { $_ -eq 'home/.claude.json' }).Count -gt 0
-    $hasManifest = @($names | Where-Object { $_ -eq 'home/backup-manifest.json' }).Count -gt 0
-    $hasBackupTask = @($names | Where-Object { $_ -eq 'home/scheduled-tasks/ClaudeDailyDriveBackup.xml' }).Count -gt 0
-    $taskRequirementMet = ($taskCount -eq 0) -or $hasBackupTask
-    if ($names.Count -lt 5000 -or -not $hasClaude -or -not $hasSettings -or -not $hasProjects -or -not $hasClaudeJson -or -not $hasManifest -or -not $taskRequirementMet) {
-      $claudeJsonHint = if (-not $hasClaudeJson) { ' Claude Code が書き込み中で .claude.json を取得できなかった可能性があります。' } else { '' }
-      throw ('read-back 不合格 entries={0} .claude/CLAUDE.md={1} .claude/settings.json={2} .claude/projects={3} home/.claude.json={4} manifest={5} backupTask={6}.{7}' -f $names.Count, $hasClaude, $hasSettings, $hasProjects, $hasClaudeJson, $hasManifest, $taskRequirementMet, $claudeJsonHint)
+    if ($rcloneExePath -and (Test-Path -LiteralPath $restoreSource)) {
+      & $rcloneExePath copy $restoreSource $rcloneDest 2>$null | Out-Null
+      Write-Event ('rclone-restore-set-copied url={0}' -f $restoreSource)
     }
-    Write-Event ('verified entries={0} .claude/CLAUDE.md={1} .claude/settings.json={2} .claude/projects={3} home/.claude.json={4} manifest={5} backupTask={6}' -f $names.Count, $hasClaude, $hasSettings, $hasProjects, $hasClaudeJson, $hasManifest, $taskRequirementMet)
-  } finally { $archive.Dispose() }
+    foreach ($restoreFile in @($restoreScriptSource, $restoreLauncherSource)) {
+      if ($rcloneExePath -and (Test-Path -LiteralPath $restoreFile)) {
+        & $rcloneExePath copy $restoreFile $rcloneDest 2>$null | Out-Null
+      } else { Write-Event ('WARN rclone-restore-set-copy=skipped source={0} reason=not-found' -f $restoreFile) }
+    }
 
-  $today = (Get-Date).Date
-  foreach ($file in @(Get-ChildItem -LiteralPath $script:driveBackup -File -Filter ('claude-{0}-*.zip' -f $hostname))) {
-    if ($file.Name -notmatch '^claude-.+-(\d{4}-\d{2}-\d{2})\.zip$') { continue }
-    $backupDate = [DateTime]::MinValue
-    if (-not [DateTime]::TryParseExact($Matches[1], 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$backupDate)) { continue }
-    $age = ($today - $backupDate.Date).TotalDays
-    $delete = ($age -gt 180) -or ($age -gt 14 -and $backupDate.Day -ne 1)
-    if ($delete) { Remove-Item -LiteralPath $file.FullName -Force; Write-Event ('retention-deleted file={0}' -f $file.Name) }
+    if (-not (Send-ToRclone -ZipPath $localZip -RemoteName $rcloneRemote -HostName $hostname)) {
+      throw 'rclone へのバックアップコピーに失敗しました'
+    }
+    $script:driveZipWritten = $true
+
+    if (-not (Test-RcloneBackup -RemoteName $rcloneRemote -HostName $hostname -ZipName $rcloneZipName)) {
+      throw 'rclone バックアップの読み戻し検証に失敗しました'
+    }
+
+    Remove-OldRcloneBackups -RemoteName $rcloneRemote -HostName $hostname
+
+    $names = @()  # for state saving below
+  } else {
+    # Drive path: copy/verify/retention on Google Drive mount
+    New-Item -ItemType Directory -Path $script:driveBackup -Force | Out-Null
+    Copy-Item -LiteralPath $localZip -Destination $driveZip -Force
+    $script:driveZipWritten = $true
+    Copy-Item -LiteralPath $restoreSource -Destination (Join-Path $script:driveBackup 'RESTORE-claude-backup.md') -Force
+    foreach ($restoreFile in @($restoreScriptSource, $restoreLauncherSource)) {
+      if (Test-Path -LiteralPath $restoreFile) { Copy-Item -LiteralPath $restoreFile -Destination (Join-Path $script:driveBackup ([IO.Path]::GetFileName($restoreFile))) -Force }
+      else { Write-Event ('WARN restore-set-copy=skipped source={0} reason=not-found' -f $restoreFile) }
+    }
+
+    $archive = [IO.Compression.ZipFile]::OpenRead($driveZip)
+    try {
+      $names = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+      $hasClaude = @($names | Where-Object { $_ -eq '.claude/CLAUDE.md' }).Count -gt 0
+      $hasSettings = @($names | Where-Object { $_ -eq '.claude/settings.json' }).Count -gt 0
+      $hasProjects = @($names | Where-Object { $_ -like '.claude/projects/*' }).Count -gt 0
+      $hasClaudeJson = @($names | Where-Object { $_ -eq 'home/.claude.json' }).Count -gt 0
+      $hasManifest = @($names | Where-Object { $_ -eq 'home/backup-manifest.json' }).Count -gt 0
+      $hasBackupTask = @($names | Where-Object { $_ -eq 'home/scheduled-tasks/ClaudeDailyDriveBackup.xml' }).Count -gt 0
+      $taskRequirementMet = ($taskCount -eq 0) -or $hasBackupTask
+      if ($names.Count -lt 5000 -or -not $hasClaude -or -not $hasSettings -or -not $hasProjects -or -not $hasClaudeJson -or -not $hasManifest -or -not $taskRequirementMet) {
+        $claudeJsonHint = if (-not $hasClaudeJson) { ' Claude Code が書き込み中で .claude.json を取得できなかった可能性があります。' } else { '' }
+        throw ('read-back 不合格 entries={0} .claude/CLAUDE.md={1} .claude/settings.json={2} .claude/projects={3} home/.claude.json={4} manifest={5} backupTask={6}.{7}' -f $names.Count, $hasClaude, $hasSettings, $hasProjects, $hasClaudeJson, $hasManifest, $taskRequirementMet, $claudeJsonHint)
+      }
+      Write-Event ('verified entries={0} .claude/CLAUDE.md={1} .claude/settings.json={2} .claude/projects={3} home/.claude.json={4} manifest={5} backupTask={6}' -f $names.Count, $hasClaude, $hasSettings, $hasProjects, $hasClaudeJson, $hasManifest, $taskRequirementMet)
+    } finally { $archive.Dispose() }
+
+    $today = (Get-Date).Date
+    foreach ($file in @(Get-ChildItem -LiteralPath $script:driveBackup -File -Filter ('claude-{0}-*.zip' -f $hostname))) {
+      if ($file.Name -notmatch '^claude-.+-(\d{4}-\d{2}-\d{2})\.zip$') { continue }
+      $backupDate = [DateTime]::MinValue
+      if (-not [DateTime]::TryParseExact($Matches[1], 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$backupDate)) { continue }
+      $age = ($today - $backupDate.Date).TotalDays
+      $delete = ($age -gt 180) -or ($age -gt 14 -and $backupDate.Day -ne 1)
+      if ($delete) { Remove-Item -LiteralPath $file.FullName -Force; Write-Event ('retention-deleted file={0}' -f $file.Name) }
+    }
   }
 
   $previousSuccess = Get-PreviousSuccess

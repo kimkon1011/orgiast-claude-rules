@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 
 function run(command, spawnImpl = spawnSync) {
-  const result = spawnImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::OutputEncoding=[Text.Encoding]::UTF8;$ErrorActionPreference='Stop';${command}`], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
+  const result = spawnImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::OutputEncoding=[Text.Encoding]::UTF8;$ErrorActionPreference='Stop';${command}`], { encoding: 'utf8', windowsHide: true, timeout: 60000 });
   if (result.error || result.status !== 0) throw result.error || new Error(result.stderr || `powershell exit ${result.status}`);
   const text = String(result.stdout || '').trim();
   return text ? JSON.parse(text) : null;
@@ -9,7 +9,7 @@ function run(command, spawnImpl = spawnSync) {
 
 export function getScheduledTaskInfo(taskName, { spawnImpl = spawnSync } = {}) {
   const name = String(taskName).replaceAll("'", "''");
-  const command = `try{$t=Get-ScheduledTask -TaskName '${name}' -ErrorAction Stop;$i=Get-ScheduledTaskInfo -TaskName '${name}' -ErrorAction Stop;[pscustomobject]@{taskName=$t.TaskName;state=[string]$t.State;lastRunTime=$i.LastRunTime.ToString('o');nextRunTime=$i.NextRunTime.ToString('o');lastTaskResult=$i.LastTaskResult;neverRun=($i.LastRunTime.Year -le 1999)}|ConvertTo-Json -Compress}catch{if($_.FullyQualifiedErrorId -match 'NoMatchingMSFT_ScheduledTaskFound'){Write-Output 'null'}else{throw}}`;
+  const command = `try{$t=Get-ScheduledTask -TaskName '${name}' -ErrorAction Stop;$i=Get-ScheduledTaskInfo -TaskName '${name}' -ErrorAction Stop;[pscustomobject]@{taskName=$t.TaskName;state=[string]$t.State;lastRunTime=$i.LastRunTime.ToString('o');nextRunTime=$i.NextRunTime.ToString('o');lastTaskResult=$i.LastTaskResult;neverRun=($i.LastRunTime.Year -le 1999)}|ConvertTo-Json -Compress}catch{if($_.FullyQualifiedErrorId -match 'NoMatchingMSFT_ScheduledTaskFound|CmdletizationQuery_NotFound_TaskName'){Write-Output 'null'}else{throw}}`;
   return Promise.resolve(run(command, spawnImpl));
 }
 
@@ -73,7 +73,7 @@ export function listScheduledTaskDetails({ spawnImpl = spawnSync } = {}) {
     $t=$_;$i=$t|Get-ScheduledTaskInfo
     $last=if($i.LastRunTime){$i.LastRunTime.ToUniversalTime().ToString('o')}else{$null}
     $next=if($i.NextRunTime){$i.NextRunTime.ToUniversalTime().ToString('o')}else{$null}
-    [pscustomobject]@{taskName=($t.TaskPath+$t.TaskName);state=[string]$t.State;lastRunTime=$last;lastTaskResult=$i.LastTaskResult;nextRunTime=$next;settings=@{startWhenAvailable=$t.Settings.StartWhenAvailable};triggers=@($t.Triggers|ForEach-Object{[pscustomobject]@{type=$_.CimClass.CimClassName;enabled=$_.Enabled;daysInterval=$_.DaysInterval;weeksInterval=$_.WeeksInterval;repetition=@{interval=$_.Repetition.Interval}}})}
+    [pscustomobject]@{taskName=($t.TaskPath+$t.TaskName);state=[string]$t.State;lastRunTime=$last;lastTaskResult=$i.LastTaskResult;nextRunTime=$next;settings=@{startWhenAvailable=$t.Settings.StartWhenAvailable};triggers=@($t.Triggers|ForEach-Object{[pscustomobject]@{type=$_.CimClass.CimClassName;enabled=$_.Enabled;daysInterval=$_.DaysInterval;weeksInterval=$_.WeeksInterval;repetition=@{interval=$_.Repetition.Interval;duration=$_.Repetition.Duration}}})}
   })|ConvertTo-Json -Depth 6 -Compress`, spawnImpl);
   return result ? (Array.isArray(result) ? result : [result]) : [];
 }

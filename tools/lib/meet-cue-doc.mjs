@@ -5,7 +5,7 @@
 
 import { getDriveToken, driveApi, DRIVE_SCOPE } from './drive-auth.mjs';
 import { ensureKimEditor, KIM_EMAIL } from './kim-editor.mjs';
-import { buildDocHeaderRequests, buildDocCueRequests, formatJstDateTime, formatJstTime } from './meet-cue-core.mjs';
+import { buildDocHeaderRequests, buildDocCueRequests, formatJstDateTime, formatJstTime, GREETING_LINE } from './meet-cue-core.mjs';
 
 const SEISAKU_TEAM = 'seisaku-team@orgiast.jp';
 
@@ -165,3 +165,50 @@ export async function findHeaderInsertIndex({
   return 1;
 }
 
+/**
+ * F: Doc の冒頭に greeting 行がなければ挿入する（重複防止）
+ * 戻り値: { inserted: boolean } — greeting 行を挿入したか、もともとあったか
+ */
+export async function insertGreetingIfNeeded({
+  docId,
+  impersonate = SEISAKU_TEAM,
+  getToken = getDriveToken,
+  api = driveApi,
+} = {}) {
+  const token = await getToken({ impersonate, scope: DRIVE_SCOPE });
+  const url = `https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}`;
+  const doc = await (await api(token, url)).json();
+  const paragraphs = (doc.body?.content || []).filter(elem => elem.paragraph?.elements);
+  const textOf = elem => elem.paragraph.elements.map(e => e.textRun?.content || '').join('');
+  if (paragraphs.some(elem => textOf(elem).trim() === GREETING_LINE)) return { inserted: false };
+
+  const heading = paragraphs.find(elem => textOf(elem).startsWith('【Meetカンペ】'));
+  if (!heading?.endIndex) throw new Error('カンペの見出しが見つかりません');
+  // Docs requires the insertion point to precede the final newline.
+  const atEnd = heading === doc.body.content.at(-1);
+  const index = heading.endIndex - Number(atEnd);
+  const startIndex = index + Number(atEnd);
+  await api(token, `${url}:batchUpdate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...(doc.revisionId && { writeControl: { requiredRevisionId: doc.revisionId } }),
+      requests: [
+        {
+          insertText: {
+            location: { index },
+            text: atEnd ? `\n${GREETING_LINE}` : `${GREETING_LINE}\n\n`,
+          },
+        },
+        {
+          updateTextStyle: {
+            range: { startIndex, endIndex: startIndex + GREETING_LINE.length },
+            textStyle: { bold: true, fontSize: { magnitude: 14, unit: 'PT' } },
+            fields: 'bold,fontSize',
+          },
+        },
+      ],
+    }),
+  });
+  return { inserted: true };
+}

@@ -57,7 +57,11 @@ Gmailは各箱80通/日まで、件名とsnippetで期限関連語を選別し�
 
 源ごとに10件単位で抽出。明日・1週間以内などは送信日を日本時間にして絶対日へ直す。引用が原文にない応答はエラー、日付の裏付けがない応答は候補に留める。年の省略などを解決できない場合も候補で確認する。確信度0.8以上かつ根拠のある期限は未着手へ、法務・行政・補助金または確信度0.5以上は候補へ。候補増加のお知らせは日ごとにinfo 1件だけ。
 
-出典ID一致、または正規化した件名一致かつ期限差2日以内なら重複。完了・不要も照合対象。源の取得・抽出・追記が成功するまでその源の透かしを進めない。ページ上限ではカーソルを保存して次の日に続ける。別の源は処理を続け、失敗をJSONに残して終了コード1にする。
+出典ID一致、または正規化した件名一致かつ期限差2日以内なら重複。完了・不要も照合対象。源の取得・抽出・追記が成功するまでその源の透かしを進めない。ページ上限ではカーソルを保存して次の日に続ける。
+
+Driveは1回240秒の時間予算（`DEADLINE_DRIVE_BUDGET_MS`）を超えると新しいファイルの処理を止め、取得済み本文をpartial成功として返す。1ファイルは45秒（`DEADLINE_DRIVE_FILE_TIMEOUT_MS`、OCRコピーの後始末を含む）で打ち切ってskippedへ入れる。既存の `state.json` に固定検索条件・ページ内の処理済みIDと `pending` の抽出待ち本文を保存する。次回は未抽出batchを先に処理してから未処理ファイルを読み、日次50件上限は維持する。台帳に期限が追加されなかった本文も再OCRしない。
+
+プロセス開始から540秒で取得・抽出を止め、残りsourceをskipする（`DEADLINE_TOTAL_BUDGET_MS` で短縮可能、540秒を超える指定は不可）。処理済みbatchと再開位置を書き込み、書込待機も開始から590秒までに打ち切る。partial・一部skippedは終了コード0。source単位の失敗も他sourceが処理できていれば0にし、heartbeatのsummaryへpartial/skipped件数と実際の理由を残す。台帳read/token取得、台帳・状態書込など全体が成立しない失敗は終了コード1。
 
 実データの `--dry-run` も台帳・状態・inbox・カレンダーを書き換えない。PDF・画像のOCRコピー作成は省略する。フィクスチャのdry-runはネットワークも鍵も不要。
 
@@ -106,7 +110,7 @@ kim-inboxは期限を先頭・残日数順・最大5行・各140字で表示。�
 
 未着手・対応中・延期の有効な期限を終日予定 `【期限】件名` としてupsert。7日前・1日前のpopup、説明に台帳URL。`extendedProperties.private.deadlineId` と決定的なイベントIDで重複を防ぐ。完了・不要は次の追跡時に予定を削除する。403では一度だけログを出し、`state.json` の `calendarSync:false` で以後停止する。権限修復を検証した担当者がこの値を削除した場合に再開する。
 
-毎回ローカルheartbeatを記録し、`logs/deadline-detect.log` / `logs/deadline-watch.log` とタスク結果で稼働確認する。ヘルス期待は36時間。部分失敗も成功扱いにせず終了コード1。初回は `LastRunTime` と `LastTaskResult`、heartbeatの `ok` を合わせて確認する。
+毎回ローカルheartbeatを記録し、`logs/deadline-detect.log` / `logs/deadline-watch-app.log`（vbs リダイレクト先は `deadline-watch.log`） とタスク結果で稼働確認する。ヘルス期待は36時間。detectのpartial・一部skippedは `ok=true` と理由付きsummary、致命的失敗は `ok=false` と実際の理由を記録する。watchの失敗時終了コードは従来どおり1。初回は `LastRunTime` と `LastTaskResult`、heartbeatの `ok` を合わせて確認する。
 
 ## 登録と配布
 

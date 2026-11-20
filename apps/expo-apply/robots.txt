@@ -15,4 +15,4 @@ User-agent: *
 Allow: /
 Disallow: /test/
 
-Sitemap: https://orgiast.jp/apps/expo-apply/sitemap.xml
+Sitemap: https://rebooth.co.jp/en/expo-apply/sitemap.xml

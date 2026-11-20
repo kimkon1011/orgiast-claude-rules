@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { assertContextApproved, writeContextMarker } from './lib/send-context.mjs';
-import { classifyMessage, fetchHistory, labelHistory, loadInternalSenders, main, parseKimApprovedNote, resolveKimApprovedRecipient, runLlm } from './send-context-check.mjs';
+import { classifyMessage, fetchHistory, labelHistory, loadInternalSenders, main, matchBeeperInternalChat, parseKimApprovedNote, resolveKimApprovedRecipient, runLlm } from './send-context-check.mjs';
 
 const tmp = t => { const p=fs.mkdtempSync(path.join(os.tmpdir(),'send-context-')); t.after(()=>fs.rmSync(p,{recursive:true,force:true})); return p; };
 test('LINE履歴は実テーブルの列名を使って整形する', async t => {
@@ -37,6 +37,18 @@ test('自社の質問と相手未回答の実データ形をLLMへ正しいラ�
   assert.match(prompt,/\[自社\]の質問を相手の要望と解釈しない/);
   assert.equal(verdict.ok,true);
   assert.match(verdict.reason,/自社質問を相手要望としていない/);
+});
+test('通常・定期報告のLLMプロンプト先頭に注入した日本時間の送信予定日時を含む', () => {
+  for (const periodicReport of [false, { recipient: '佐藤優奈' }]) {
+    let prompt='';
+    runLlm([], '送信本文', {
+      now: new Date('2026-11-19T05:20:00.000Z'),
+      periodicReport,
+      spawn: (_exe,args) => { prompt=fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8'); return {status:0,stdout:'{"verdict":"OK","reason":"整合","warnings":[]}',stderr:''}; },
+    });
+    assert.match(prompt, /^送信予定日時（日本時間）: 2026-11-19（木）14:20\n/);
+    assert.match(prompt, /履歴の最終日時と送信予定日時の間に起きた出来事.*履歴に記録がないことだけを理由に NG にしない/);
+  }
 });
 test('定期報告モードは同じ未対応項目の再掲をNGにせず、質問と食い違いだけNGにする（2026-11-13の再現）', () => {
   let prompt='';
@@ -413,4 +425,67 @@ test('resolveKimApprovedRecipient はギルドメンバーID照会でも許可�
   assert.equal(result.allowed,true);
   assert.equal(result.resolvedId,'958259895327686656');
   assert.equal(result.source,'discord-member-directory');
+});
+
+const NISHIDA_CHAT = '!BOwKKifdLGec7wJCYH5d:beeper.local';
+
+test('社内Beeperチャットは lineDisplayNames に載せない', () => {
+  const senders = loadInternalSenders();
+  assert.equal(senders.lineDisplayNames.has('西田直哉'), false);
+  const match = matchBeeperInternalChat(NISHIDA_CHAT, senders);
+  assert.equal(match?.chatId, NISHIDA_CHAT);
+  assert.equal(match?.email, 'nishi@orgiast.jp');
+  assert.equal(classifyMessage({side:'inbound',sender:'西田直哉',text:'報告です'},'line',senders).party,'external');
+  assert.equal(classifyMessage({side:'external',sender:'西田直哉',text:'報告です'},'beeper',senders).party,'external');
+});
+
+test('resolveKimApprovedRecipient はBeeperの社内チャットIDを許可する', async () => {
+  const result = await resolveKimApprovedRecipient('beeper', NISHIDA_CHAT, { internalSenders: loadInternalSenders() });
+  assert.equal(result.allowed, true);
+  assert.equal(result.resolvedId, NISHIDA_CHAT);
+  assert.equal(result.source, 'beeper-internal-chats');
+});
+
+test('resolveKimApprovedRecipient はBeeperの社内メンバー名をチャットIDへ解決する', async () => {
+  const result = await resolveKimApprovedRecipient('beeper', '西田直哉', { internalSenders: loadInternalSenders() });
+  assert.equal(result.allowed, true);
+  assert.equal(result.resolvedId, NISHIDA_CHAT);
+  assert.equal(result.source, 'beeper-internal-chats');
+});
+
+test('resolveKimApprovedRecipient は未登録のBeeperチャットIDを拒否する', async () => {
+  const result = await resolveKimApprovedRecipient('beeper', '!unknown:beeper.local', { internalSenders: loadInternalSenders() });
+  assert.equal(result.allowed, false);
+  assert.equal(result.source, null);
+});
+
+test('resolveKimApprovedRecipient は社内メールでないBeeper対応を拒否する', async () => {
+  const senders = loadInternalSenders();
+  senders.beeperInternalChats = [{ chatId: '!ext:beeper.local', name: '顧客', email: 'customer@example.com' }];
+  const result = await resolveKimApprovedRecipient('beeper', '!ext:beeper.local', { internalSenders: senders });
+  assert.equal(result.allowed, false);
+});
+
+test('--kim-approved はBeeperの社内チャットIDならLLMがNGでもマーカーを作る', async t => {
+  const home = tmp(t), file = path.join(home, 'body.txt');
+  fs.writeFileSync(file, '004 FAX復旧報告');
+  const note = '2026-11-18 13:05 金さんがグロボのチャットで承認';
+  const code = await main(['--channel', 'beeper', '--target', NISHIDA_CHAT, '--text-file', file, '--kim-approved', note], {
+    home,
+    fetchHistory: async () => ({ target: NISHIDA_CHAT, messages: [{ id: 'm1', at: '2026-11-17T08:12:48.752Z', side: 'external', party: 'external', sender: '西田直哉', text: '写真でもあれば見てみたい' }] }),
+    runLlm: () => ({ ok: false, reason: '2026-10-25 の未回答質問が残っています', warnings: ['未回答'] }),
+  });
+  assert.equal(code, 0);
+  const markers = fs.readdirSync(path.join(home, '.claude', 'send-context-checks'));
+  assert.equal(markers.length, 1);
+  const marker = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'send-context-checks', markers[0]), 'utf8'));
+  assert.equal(marker.kimApproved, note);
+  assert.equal(marker.llmOk, false);
+  assert.equal(marker.target, NISHIDA_CHAT);
+  const row = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'logs', 'send-context-kim-approved.jsonl'), 'utf8').trim());
+  assert.equal(row.allowed, true);
+  assert.equal(row.source, 'beeper-internal-chats');
+  assert.equal(row.resolvedUserId, NISHIDA_CHAT);
+  assert.equal(row.llmOk, false);
+  assert.equal(row.kimApproved, note);
 });

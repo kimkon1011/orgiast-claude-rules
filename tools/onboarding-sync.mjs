@@ -68,6 +68,28 @@ export function missingDeclaredKeys(files, exists) {
     .sort();
 }
 
+// keyserve の配布ファイルのうち、~/.claude 以外の場所でツールが読むものを追記マージで写す。
+// 既存の他キー（例: GEMINI_CLI_TRUST_WORKSPACE）は残す。値はログに出さない。
+export const KEY_FILE_MIRRORS = Object.freeze({ 'gemini.env': ['.gemini', '.env'] });
+export function mirrorKeyFiles(home, files, log = () => {}) {
+  const mirrored = [];
+  for (const [name, rel] of Object.entries(KEY_FILE_MIRRORS)) {
+    const contents = files && typeof files[name] === 'string' ? files[name].replace(/^\uFEFF/, '') : '';
+    if (!contents.trim()) continue;
+    try {
+      const destination = path.join(home, ...rel);
+      const existing = fs.existsSync(destination) ? fs.readFileSync(destination, 'utf8') : '';
+      const updated = existing ? mergeEnvFile(existing, contents) : contents;
+      if (updated === existing) continue;
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.writeFileSync(destination, updated, { encoding: 'utf8', mode: 0o600 });
+      mirrored.push(rel.join("/"));
+      log(`mirrored: ${name} -> ~/${rel.join("/")}`);
+    } catch (e) { log(`key mirror failed (${name}): ${e.message}`); }
+  }
+  return mirrored;
+}
+
 export function mergeEnvFile(existingText, incomingText, preserveKeys = PRESERVE_LOCAL_KEYS) {
   const existing = String(existingText ?? '');
   const incoming = String(incomingText ?? '').replace(/^\uFEFF/, '');
@@ -610,6 +632,7 @@ export async function provisionKeys(now, options = {}) {
         log(`provisioned: ${name}`);
       } catch (e) { enrollWriteFailed = true; log(`key write failed (${name}): ${e.message}`); }
     }
+    mirrorKeyFiles(home, payload.files, log);
     const missing = missingDeclaredKeys(payload.files, (name) => fs.existsSync(path.join(home, '.claude', name)));
     if (missing.length) console.error(`[onboarding-sync] 未取得の鍵: ${missing.join(', ')}`);
     else saveKeysState(now);

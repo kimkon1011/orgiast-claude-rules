@@ -98,6 +98,22 @@ const LANE_STATUS_WAIT = /(?:セッション|Codex|codex-do|他AI|レーン)[^\n
 // お客様・取引先など外部の返事待ちは Claude が実装で解消できない正当な待機なので除外する
 // （自分のサブエージェント待ちも同様）。
 const REPLY_WAIT = /(?:返事|返答)を待って(?:います|いる|おります)/;
+// 2026-11-18 実測（96bfba6f / d5fa33a8）: kim-inbox の info 通知を【受信箱】形式で転記した文が
+// 「のを待って」に当たっていた。通知文面の言い換えであって Claude 自身の先送りではない。
+// 受信箱ブロックの見出し語が一致位置の手前 200 字以内にある場合だけ採用しない。
+const INBOX_RELAY = /(?:【受信箱】|起きたこと[:：]|判断してほしいこと[:：]|返事の例[:：])/;
+// 2026-11-18 実測（e88a780c / 8b21d815）: 当ターンで指示書を書いて codex-do を起動した直後の
+// 「完了を待っています」「完了を待ちます」が W に当たっていた。委譲を起動した上での待機は
+// Claude 側の作業が終わっている正当な状態で、委譲せずに待つ放置とは区別する。
+// 委譲を起動したと明記した語が一致位置の手前 120 字以内にある場合だけ採用しない。
+// （委譲の報告が無いまま待つ形 — 2026-10-21 の 7 ターン言い換え待機 — は従来どおり検出する）
+const DELEGATION_STARTED = /(?:codex-do|cheap-code|llm-ask|指示書を(?:作成|書|渡|用意)|(?:Codex|Gemini|DeepSeek|Groq|OpenRouter|Mistral|サブエージェント)[ \t]*(?:に|へ|を)[^。\n]{0,24}(?:委譲|依頼|渡し|投げ|起動|実行させ))/;
+// 2026-11-18 実測（e88a780c / 2026-11-17T04:04:04.337Z）: 3行フッターだけのメッセージ
+// 「次に kim がすること: なし（Codex の生成完了を待っています）」が W に当たっていた。
+// 人の作業がゼロ（なし）で、待つ相手が自動レーンなら、委譲済みの正当な待機なので除外する。
+// 委譲の起動語が同じメッセージに無くてもよい（フッターだけの応答は起動を別ターンで報告している）。
+const HANDOFF_NONE_LINE = /次に\s*kim\s*がすること[:：][ \t*_`]*(?:なし|特になし|ありません|無し)/;
+const LANE_NAME = /(Codex|codex-do|cheap-code|llm-ask|Gemini|DeepSeek|Groq|OpenRouter|Mistral|Kimi|GLM|サブエージェント)/;
 const EXTERNAL_WAIT_SUBJECT = /(お客様|客様|顧客|取引先|先方|問い?合わ?せ|サブエージェント)/;
 // 2026-11-02T04:31:09.948Z（handoff-audit:9b11ce35d2bc6d3a / 6b41b59b / W）の原文は
 // 「雇保の喪失届は、10月度の給与データが取り込まれるのを待っている状態です」で拾えたが、
@@ -126,7 +142,10 @@ const W  = {
     for (const match of text.matchAll(new RegExp(`(数分|しばらく|少し|少々)[^」"'\\n]{0,20}(お?待ち|待って)|完了を?待って|完了を待ち(?:ます|、)|完了待ちで|[^\\s」"'\\n]{0,30}?のを待って(?:います|ます|いる|おります)|${REPLY_WAIT.source}|${ARRIVAL_WAIT.source}|${LANE_STATUS_WAIT.source}|${DATA_WAIT}`, 'g'))) {
       if (isAuditCitation(text, match.index) || isPatternNameQuote(text, match.index)) continue;
       if (REPLY_WAIT.test(match[0]) && EXTERNAL_WAIT_SUBJECT.test(text.slice(Math.max(0, match.index - 60), match.index))) continue;
-	      if (DATA_WAIT_RE.test(match[0]) && EXTERNAL_WAIT_SUBJECT.test(text.slice(Math.max(0, match.index - 40), match.index))) continue;
+      if (INBOX_RELAY.test(text.slice(Math.max(0, match.index - 200), match.index))) continue;
+      if (DELEGATION_STARTED.test(text.slice(Math.max(0, match.index - 120), match.index))) continue;
+      if (LANE_NAME.test(text.slice(Math.max(0, match.index - 60), match.index + match[0].length + 60)) && HANDOFF_NONE_LINE.test(text.slice(Math.max(0, match.index - 200), match.index))) continue;
+      if (DATA_WAIT_RE.test(match[0]) && EXTERNAL_WAIT_SUBJECT.test(text.slice(Math.max(0, match.index - 40), match.index))) continue;
       return match;
     }
     return null;
@@ -196,14 +215,20 @@ export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null 
       if (!entry) continue;
       const at = Date.parse(entry.ts);
       if (!(at >= Date.parse(since)) || (until !== null && !(at < Date.parse(until)))) continue;
-      const quotes = index === 0 ? [String(entry.excerpt ?? '')]
-        : (Array.isArray(entry.violations) ? entry.violations : []).map(v => String(v?.quote ?? ''));
+      const candidates = index === 0
+        ? [{ text: String(entry.excerpt ?? ''), field: 'quote' }]
+        : [
+            ...(Array.isArray(entry.violations) ? entry.violations : []).map(v => ({ text: String(v?.quote ?? ''), field: 'quote' })),
+            { text: String(entry.excerpt ?? ''), field: 'excerpt' }
+          ];
       let text = '';
       let found = null;
-      for (const quote of quotes) {
-        found = detect(quote)[0];
+      let foundField = 'quote';
+      for (const { text: t, field } of candidates) {
+        found = detect(t)[0];
         if (found) {
-          text = quote;
+          text = t;
+          foundField = field;
           break;
         }
       }
@@ -212,7 +237,7 @@ export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null 
       byPattern[pattern]++;
       const day = new Date(entry.ts).toISOString().slice(0, 10);
       counts[day] = (counts[day] || 0) + 1;
-      rows.push({ pattern, ts: entry.ts, verdict: entry.verdict ?? entry.decision ?? '', sessionId: String(entry.sessionId ?? ''),
+      rows.push({ pattern, field: foundField, ts: entry.ts, verdict: entry.verdict ?? entry.decision ?? '', sessionId: String(entry.sessionId ?? ''),
         match: text.slice(Math.max(0, match.index - 45), match.index + match[0].length + 110).replace(/[\r\n]+/g, ' ') });
     }
     return { name, file, total: lines.length, hits: rows.length, byPattern, byDay: Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b))), rows };

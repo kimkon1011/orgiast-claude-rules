@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>X-0062 ⑤ 運用案 — 要求定義</title>
+  <link rel="stylesheet" href="../../docs/assets/design-system.css">
+</head>
+<body>
+  <main>
+    <p><a href="../../docs/index.html">← インデックス</a></p>
+    <h1>X-0062 ⑤ 運用案（GAS定期実行化の検討含む） — 要求定義</h1>
+    <p>作成: 2026-11-18 | ステータス: 初版</p>
+
+    <h2>1. 目的</h2>
+    <p>AIニューステーマ提案ワークフロー（docs/news-theme-workflow.md）を、月次で確実に実行できる運用体制に落とし込む。具体的には以下を決定する：</p>
+    <ul>
+      <li>各Phaseの実行主体（人間／自動／GAS／cron）</li>
+      <li>定期実行のスケジュールとトリガー</li>
+      <li>GASを利用する場合のアーキテクチャ設計</li>
+      <li>成果物の保存・管理・通知方法</li>
+      <li>障害や遅延が発生した場合のエスカレーション</li>
+    </ul>
+
+    <h2>2. ユーザーストーリー</h2>
+    <ul>
+      <li><strong>運用担当者として</strong>、毎月最初の営業日にAIニューステーマ提案のパイプラインが自動実行され、最新のトレンドKWが収集されていることを望む。</li>
+      <li><strong>編集担当者として</strong>、ChatGPT評価結果を元に記事化判断ができる状態になっていることを望む。そのために、収集済みKWが提案ファイルとして整形されていることを望む。</li>
+      <li><strong>経営者として</strong>、運用の各ステップが可視化され、遅延や停滞が起こったら通知が来ることを望む。</li>
+      <li><strong>監督AIとして</strong>、定期実行の成否がログとして残り、障害時には別の自動経路（他AI）へのフォールバックが効くことを望む。</li>
+    </ul>
+
+    <h2>3. 受け入れ条件</h2>
+    <ol>
+      <li>月次パイプライン（Phase 1→3）がcronまたはGASトリガーで自動起動する</li>
+      <li>Phase 1のGoogle Trends収集結果が提案ファイルとして出力される</li>
+      <li>Phase 2のChatGPT入力用フォーマットが自動生成される</li>
+      <li>Phase 3の提案ファイルが所定の場所に保存され、GitHubに自動commitされる</li>
+      <li>運用の各Phaseの状態（未着手／進行中／完了／遅延）がトラッキングされる</li>
+      <li>GASを使用する場合、Google Sheets上で提案一覧を管理できる</li>
+      <li>障害発生時に通知が送られる</li>
+    </ol>
+
+    <h2>4. 制約事項</h2>
+    <ul>
+      <li>Phase 2（ChatGPT評価）は人間の操作が必要 — 自動化不可</li>
+      <li>Phase 4（記事化判断）は人間の判断が必要 — 自動化不可</li>
+      <li>GASのトリガーは6時間間隔以上の間隔が推奨（無料枠制限）</li>
+      <li>外部API（Google Trends）の呼び出し頻度は月1回で十分</li>
+      <li>秘匿値（APIキー等）はGASスクリプトプロパティで管理し、コード内に書かない</li>
+    </ul>
+
+    <h2>5. スコープ外</h2>
+    <ul>
+      <li>提案されたテーマの記事本文作成 — 別プロセス</li>
+      <li>SEO効果測定の自動ダッシュボード — X-0057参照</li>
+      <li>他社サイトの競合分析 — 別提案</li>
+    </ul>
+  </main>
+</body>
+</html>

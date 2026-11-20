@@ -211,12 +211,31 @@ export function compute({ home = os.homedir(), now = Date.now(), executorUsageFi
   return result;
 }
 
-export function saveResult(result, home = os.homedir()) {
-  const file = path.join(home, '.claude', 'delegation-ratio-watch.json');
-  const tmp = `${file}.${Math.random().toString(16).slice(2)}.tmp`;
-  try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(tmp, JSON.stringify(result, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(tmp, file); }
-  finally { try { fs.unlinkSync(tmp); } catch {} }
+// Duplicate scheduled tasks/readers can briefly deny replacement on Windows.
+// Retry only rename: keep the previous JSON intact and never replay delivery.
+// 上限 8 回・1回最大 2 秒・合計約 9 秒（100ms×2^attempt、capped at 2000ms）。
+function saveJson(file, value, { fsImpl = fs, sleepImpl = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
+  const pid = process.pid;
+  const tmp = `${file}.${pid}.${Math.random().toString(16).slice(2)}.tmp`;
+  try {
+    fsImpl.mkdirSync(path.dirname(file), { recursive: true });
+    fsImpl.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+    for (let attempt = 0; ; attempt++) {
+      try { fsImpl.renameSync(tmp, file); break; }
+      catch (error) {
+        if (!['EPERM', 'EBUSY', 'EACCES'].includes(error.code) || attempt >= 8) {
+          console.error(`[saveJson] rename failed after ${attempt} retries: ${error.code} ${error.message}`);
+          throw error;
+        }
+        sleepImpl(Math.min(100 * (2 ** attempt), 2000));
+      }
+    }
+  } finally { try { fsImpl.unlinkSync(tmp); } catch {} }
   return file;
+}
+
+export function saveResult(result, home = os.homedir(), deps) {
+  return saveJson(path.join(home, '.claude', 'delegation-ratio-watch.json'), result, deps);
 }
 
 // kim-inbox に送る本文を組み立てる
@@ -261,7 +280,7 @@ export function notifyInbox(result, home = os.homedir(), execImpl = execFileSync
 }
 
 // 次回 auto-session 用の根本修正起票
-export function writeFixTicket(result, home = os.homedir()) {
+export function writeFixTicket(result, home = os.homedir(), deps) {
   if (!result.alert) return null;
   const fixFile = path.join(home, '.claude', 'delegation-ratio-watch-fix.json');
   const fix = {
@@ -275,10 +294,7 @@ export function writeFixTicket(result, home = os.homedir()) {
       '復帰まで llm-fallback の quota_wait スキップに任せる',
     ],
   };
-  const tmp = `${fixFile}.${Math.random().toString(16).slice(2)}.tmp`;
-  try { fs.mkdirSync(path.dirname(fixFile), { recursive: true }); fs.writeFileSync(tmp, JSON.stringify(fix, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(tmp, fixFile); }
-  finally { try { fs.unlinkSync(tmp); } catch {} }
-  return fixFile;
+  return saveJson(fixFile, fix, deps);
 }
 
 if (isEntry(import.meta.url)) {
@@ -286,7 +302,8 @@ if (isEntry(import.meta.url)) {
   const now = Date.now();
   const dryRun = process.argv.includes('--dry-run');
   const result = compute({ home, now });
-  saveResult(result, home);
+  // saveResult が EPERM で失敗しても exit 1 にしない（次回のタスク起動で再試行）。
+  try { saveResult(result, home); } catch (e) { console.error(`[delegation-ratio-watch] saveResult skipped: ${e.message}`); }
   if (result.alert) {
     if (dryRun) {
       console.log('【kim-inbox に積む本文（--dry-run）】');
@@ -295,7 +312,7 @@ if (isEntry(import.meta.url)) {
     } else {
       const ok = notifyInbox(result, home);
       if (!ok) process.exitCode = 1;
-      writeFixTicket(result, home);
+      try { writeFixTicket(result, home); } catch (e) { console.error(`[delegation-ratio-watch] writeFixTicket skipped: ${e.message}`); }
     }
     for (const r of result.reasons) console.error(`[delegation-ratio-watch] 🔴 ${r}`);
   } else {

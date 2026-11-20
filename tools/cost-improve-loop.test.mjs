@@ -25,7 +25,8 @@ import {
   writeAutoSessionExecutorEnv,
   writeBudgetPressure,
   splitWhitelistedCommand,
-  runEntry
+  runEntry,
+  refreshCostDirective
 } from './cost-improve-loop.mjs';
 
 const main = (args, io = {}) => mainImpl(args, { scanAiReceipts: async () => ({ errors: [] }), receiptLedgerAgeHours: () => 0, alertAiReceipts: async () => {}, ...io });
@@ -1028,6 +1029,32 @@ test('receipt signals: success is clean; stale boundary and missing ledger are d
     const violations = evaluateReceiptSignals({ errors: [] }, { ageHours });
     assert.equal(violations.length, 1);
     assert.match(violations[0].evidence, /領収書台帳が .*h 更新されていない/);
+  }
+});
+
+test('refreshCostDirective: unattended child ignores stdin and captures bounded output', () => {
+  const home = path.join(os.tmpdir(), 'cost-refresh-home');
+  const message = refreshCostDirective({ home, spawn: (command, args, options) => {
+    assert.equal(command, process.execPath);
+    assert.equal(path.basename(args[0]), 'cost-work-loop.mjs');
+    assert.equal(options.cwd, path.resolve(import.meta.dirname, '..'));
+    assert.equal(options.env.ORGIAST_HOME, home);
+    assert.deepEqual(options.stdio, ['ignore', 'pipe', 'pipe']);
+    assert.equal(options.encoding, 'utf8');
+    assert.equal(options.windowsHide, true);
+    assert.equal(options.timeout, 300_000);
+    assert.equal(options.maxBuffer, 4 * 1024 * 1024);
+    return { status: 0, stderr: '' };
+  } });
+  assert.equal(message, `cost-directive refreshed: ${path.join(home, '.claude', 'cost-directive.md')} (exit 0)`);
+});
+
+test('refreshCostDirective: timeout and nonzero exit are not reported as refreshed', () => {
+  for (const result of [
+    { error: new Error('spawnSync node ETIMEDOUT'), status: null, stderr: '' },
+    { status: 1, stderr: 'cost-directive write failed' },
+  ]) {
+    assert.throws(() => refreshCostDirective({ home: os.tmpdir(), spawn: () => result }), /cost-directive refresh failed/);
   }
 });
 

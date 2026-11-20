@@ -1752,6 +1752,8 @@ export function refreshCostDirective({ home, spawn = defaultSpawnSync } = {}) {
   const result = spawn(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], {
     cwd: path.resolve(import.meta.dirname, '..'), env: { ...process.env, ORGIAST_HOME: home },
     encoding: 'utf8', windowsHide: true, timeout: 300_000,
+    // 無人更新では入力を待たせず、指針の stdout/stderr だけを回収する。
+    stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 4 * 1024 * 1024,
   });
   if (result.error || result.status !== 0) throw new Error(`cost-directive refresh failed: ${result.error?.message || `exit ${result.status}`} ${String(result.stderr || '').slice(-1000)}`);
   return `cost-directive refreshed: ${path.join(home, '.claude', 'cost-directive.md')} (exit 0)`;

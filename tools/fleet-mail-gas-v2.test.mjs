@@ -11,8 +11,9 @@ function harness({ beaconRows = [['label'], ['receiver'], ['cr-PC']], statusRows
   let time = now;
   const triggers = [], webhooks = [], warnings = [], faults = {};
   const lock = { held: false, releases: 0, hasLock() { return this.held; }, tryLock() { this.held = true; return true; }, releaseLock() { this.held = false; this.releases++; } };
-  const cellValue = value => {
+  const cellValue = (value, cellRow, cellCol) => {
     if (!sheetsTypes || typeof value !== 'string') return value;
+    if (formats.some(f => f.format === '@' && cellRow >= f.row && cellRow < f.row + f.count && cellCol >= f.col && cellCol < f.col + f.width)) return value;
     if (/^(true|false)$/i.test(value)) return value.toLowerCase() === 'true';
     if (/^-?\d+(?:\.\d+)?$/.test(value)) return Number(value);
     return value;
@@ -26,7 +27,7 @@ function harness({ beaconRows = [['label'], ['receiver'], ['cr-PC']], statusRows
         if (rows === alertRows && count === 1 && row === faults.readBackRow) return [Array(width).fill('mismatch')];
         return Array.from({ length: count }, (_, i) => Array.from({ length: width }, (_, j) => rows[row - 1 + i]?.[col - 1 + j] ?? '')); },
       setValues(values) {
-        values.forEach((values, i) => { rows[row - 1 + i] ??= []; values.forEach((v, j) => { rows[row - 1 + i][col - 1 + j] = cellValue(v); }); });
+        values.forEach((values, i) => { rows[row - 1 + i] ??= []; values.forEach((v, j) => { rows[row - 1 + i][col - 1 + j] = cellValue(v, row + i, col + j); }); });
       },
       setRichTextValues(values) {
         if (rows === alertRows && faults.onAlertWrite) faults.onAlertWrite(row);
@@ -234,7 +235,7 @@ test('C1 changed replies after automatic receipt get distinct ids and retry idem
   assert.equal(retry.reply.id, answer.reply.id); assert.equal(get(h).resultBody, '本回答'); assert.equal(h.rows.length, 4);
 });
 test('C2 batch ack accepts at most the server limit and returns per-id recipient outcomes', () => {
-  const h = harness();
+  const h = harness({ sheetsTypes: true });
   for (let i = 0; i < h.ackLimit; i++) {
     send(h, { id: `mail-batch-${i}` }); h.rows.at(-1)[h.headers.indexOf('deliveredBy')] = 'receiver';
   }
@@ -413,7 +414,7 @@ test('J mail-send succeeds with Sheets boolean and numeric coercion and preserve
   }
 });
 test('numeric-only destination is formatted as text and legacy numeric rows match zero-padded labels', () => {
-  const h = harness({ sheetsTypes: true });
+  const h = harness();
   send(h, { to: '018' });
   assert.ok(h.formats.some(call => call.col === h.headers.indexOf('to') + 1 && call.format === '@'));
   h.rows[1][h.headers.indexOf('to')] = 18;
@@ -430,6 +431,7 @@ test('J read-back normalizes all cell types without trimming strings or hiding m
   const row = h.headers.map((_, i) => values[i]);
   let stored;
   const sheet = { getRange: () => ({
+    setNumberFormat() { return this; },
     setRichTextValues: cells => { stored = cells[0].map(cell => cell.text); },
     getValues: () => [stored.map((value, i) => i < values.length ? values[i] : value)]
   }) };

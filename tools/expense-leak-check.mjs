@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Read-only freee/Gmail/Yahoo reconciliation. Only the dedicated Sheet tab and kim DM are written.
+import { existsSync, readFileSync } from 'node:fs';
 import { readFile, writeFile, mkdir, rename, open, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -35,8 +36,8 @@ export const shiftDay = (day, count) => new Date(Date.parse(`${day}T00:00:00Z`) 
 export const projectCode = (day) => `${day.slice(2, 4)}${day.slice(5, 7)}01OR`;
 function validDay(day) { return /^\d{4}-\d{2}-\d{2}$/.test(day) && !Number.isNaN(Date.parse(day)) && shiftDay(day, 0) === day; }
 export function parseArgs(argv, env = process.env) {
-  const opts = { today: env.EXPENSE_LEAK_TODAY || jstDay(), dryRun: false, weekly: false, noYahoo: false, noGmail: false, limit: Infinity, verification: false };
-  const flags = { '--dry-run': 'dryRun', '--weekly': 'weekly', '--no-yahoo': 'noYahoo', '--no-gmail': 'noGmail', '--verification': 'verification' };
+  const opts = { today: env.EXPENSE_LEAK_TODAY || jstDay(), dryRun: false, weekly: false, noYahoo: false, noGmail: false, limit: Infinity, verification: false, verbose: false };
+  const flags = { '--dry-run': 'dryRun', '--weekly': 'weekly', '--no-yahoo': 'noYahoo', '--no-gmail': 'noGmail', '--verification': 'verification', '--verbose': 'verbose' };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (flags[arg]) opts[flags[arg]] = true;
@@ -140,7 +141,7 @@ export function childSearch(script, args, timeout) {
 }
 export async function makeFreeeGet() {
   let token;
-  try { token = await getAccessToken(); } catch (e) { process.stderr.write(`[TEMP-DEBUG] makeFreeeGet: getAccessToken() failed: ${e.message}${e.code ? ` (code=${e.code})` : ''}\n`); throw new Error('freee authentication failed (check DB/token configuration)'); }
+  try { token = await getAccessToken(); } catch { throw new Error('freee authentication failed (check DB/token configuration)'); }
   return async (path, params = {}) => {
     if (!/^\/api\/1\/(walletables|wallet_txns(?:\/\d+)?)$/.test(path)) throw new Error('Unsupported freee read');
     const url = new URL(`https://api.freee.co.jp${path}`);
@@ -324,25 +325,38 @@ export async function runCheck(opts, injected = {}) {
     await checkpoint();
     return result;
   } catch (error) {
-    // TEMP DEBUG: print full error details to stderr
-    process.stderr.write(`[TEMP-DEBUG] expense-leak-check catch block\n`);
-    process.stderr.write(`[TEMP-DEBUG] error.message: ${error.message}\n`);
-    process.stderr.write(`[TEMP-DEBUG] error.code: ${error.code}\n`);
-    process.stderr.write(`[TEMP-DEBUG] error.name: ${error.name}\n`);
-    const stackLines = (error.stack || '').split('\n').slice(0, 5);
-    process.stderr.write(`[TEMP-DEBUG] error.stack (first 5 lines):\n${stackLines.map(l => `  ${l}`).join('\n')}\n`);
-    if (error.cause) {
-      process.stderr.write(`[TEMP-DEBUG] error.cause: ${String(error.cause)}\n`);
+    // Preserve error class, safe status hints and the processing stage for diagnosis.
+    // Never log secrets (tokens, DB connection strings, email addresses).
+    const safeMessage = /^(freee |Invalid |Unsupported |Sheets |Sheet |Output tab |Discord |Cannot read)/.test(error.message) ? error.message : null;
+    if (safeMessage) {
+      result.issues.push(safeMessage);
+    } else {
+      // Build a minimal diagnostic label: class name + HTTP status hint + truncated message prefix.
+      const statusHint = error.message?.includes('HTTP ') ? ` HTTP${error.message.match(/HTTP\s+\d+/)?.[0]?.slice(4) || ''}` : '';
+      const prefix = String(error.message ?? '').slice(0, 80).replace(/\s+/g, ' ').trim();
+      const label = `Run failed: ${error.name || 'Error'}${statusHint} "${prefix}…"`;
+      result.issues.push(label);
+      if (opts.verbose) process.stderr.write(`[verbose] expense-leak-check: ${label}\n  stack: ${(error.stack || '').split('\n').slice(1, 3).map(l => l.trim()).join(' → ')}\n`);
     }
-    // Only our controlled messages are safe to persist; low-level errors can include secrets.
-    result.issues.push(/^(freee |Invalid |Unsupported |Sheets |Sheet |Output tab |Discord |Cannot read)/.test(error.message) ? error.message : 'Run failed (network, filesystem or response error)');
     result.failed = true;
     await checkpoint();
     return result;
   }
 }
+function hasFreeeDbConfig() {
+  // Check whether freee token storage (Supabase) is configured for this environment.
+  if (process.env.PURCHASING_APP_DATABASE_URL) return true;
+  try {
+    const candidates = [join(HERE, '..', '.env.local'), join(homedir(), 'orgiast-main', '.env.local')];
+    const found = candidates.find((f) => existsSync(f));
+    if (!found) return false;
+    const text = readFileSync(found, 'utf8');
+    return text.includes('PURCHASING_APP_DATABASE_URL');
+  } catch { return false; }
+}
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  if (!hasFreeeDbConfig()) { console.log('skip: expense-leak-check requires freee DB config (PURCHASING_APP_DATABASE_URL)'); return; }
   // Lock dry runs too: all processes share the Yahoo browser profile and state.
   await mkdir(dirname(opts.statePath), { recursive: true });
   const lockPath = `${opts.statePath}.lock`;
@@ -358,4 +372,4 @@ async function main() {
     if (result.failed) process.exitCode = 1;
   } finally { await lock.close(); await unlink(lockPath); }
 }
-if (isEntry(import.meta.url)) main().catch((error) => { console.error('expense-leak-check: configuration/state/filesystem error; no credential details logged'); process.stderr.write(`[TEMP-DEBUG] main().catch: ${error.message}\n`); process.stderr.write(`[TEMP-DEBUG] main().catch stack: ${(error.stack || '').split('\n').slice(0,3).join('\n')}\n`); process.exitCode = 1; });
+if (isEntry(import.meta.url)) main().catch(() => { console.error('expense-leak-check: configuration/state/filesystem error; no credential details logged'); process.exitCode = 1; });

@@ -42,6 +42,7 @@ test('CLI uses JST window, validates dates, and bounds verification to five', ()
   assert.throws(() => opts(['--limit', '0']));
   assert.throws(() => opts(['--verification']));
   assert.equal(opts(['--verification', '--limit', '5']).verification, true);
+  assert.equal(opts(['--verbose']).verbose, true);
 });
 test('private and expense expectations derive from exported RULES', () => {
   for (const rule of RULES.alwaysPrivate) for (const term of rule.terms) for (const amount of rule.amounts || [1599]) {
@@ -214,7 +215,7 @@ test('Sheets helper resets a dragged freeze line back to one header row', async 
 });
 test('real CLI weekly skip exits 0 without credentials and leaves state unchanged', async () => {
   const home = await mkdtemp(join(tmpdir(), 'expense-weekly-'));
-  const env = { ...process.env, EXPENSE_LEAK_HOME: home, EXPENSE_LEAK_TODAY: '2026-10-13' };
+  const env = { ...process.env, EXPENSE_LEAK_HOME: home, EXPENSE_LEAK_TODAY: '2026-10-13', PURCHASING_APP_DATABASE_URL: 'postgres://test@localhost/test' };
   const o = parseArgs(['--weekly'], env);
   const state = { lastRunAt: '2026-10-13T03:00:00+09:00', txns: {} };
   await atomicJson(o.statePath, state);

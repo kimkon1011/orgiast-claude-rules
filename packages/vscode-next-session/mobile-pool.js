@@ -58,7 +58,14 @@ function createOwnershipLease(port = 39741) {
   };
 }
 
-const AUTO_TITLE_RE = /^(?:remote-control-|\d{3}[-｜|])+[a-z]+-[a-z]+$/i;
+function buildAutoTitleRe(prefix) {
+  if (!prefix) {
+    return /^(?:remote-control-|\d{3}[-｜|])+[a-z]+-[a-z]+$/i;
+  }
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^(?:remote-control-|${escaped}[-｜|]|\\d{3}[-｜|])+[a-z]+-[a-z]+$`, 'i');
+}
+const AUTO_TITLE_RE = buildAutoTitleRe(process.env.CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX || '');
 // No custom title: Claude changes its natural title after the first prompt. Custom
 // names suppress that signal and renameSessionTab now opens an interactive dialog.
 function isWaitingTab(tab) {
@@ -182,7 +189,7 @@ function selectExcessEmptySpares(sessions, { keep = EMPTY_SPARE_KEEP } = {}) {
 }
 
 module.exports = {
-  AUTO_TITLE_RE, targetCount, readConfig, readSnapshot, createOwnershipLease, isWaitingTab, createPool,
+  AUTO_TITLE_RE, buildAutoTitleRe, targetCount, readConfig, readSnapshot, createOwnershipLease, isWaitingTab, createPool,
   REFRESH_MIN_AGE_MS, RC_IN_USE_THRESHOLD_MS, decideRefresh, readRefreshConfig, readLastRefreshAt, inRefreshHours,
   isWorktreeFolder, decideWorktreeCleanup, decideTrimExcess, EMPTY_SPARE_KEEP, selectExcessEmptySpares,
 };

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createPool, createOwnershipLease, readConfig, readSnapshot, isWorktreeFolder, decideRefresh, decideWorktreeCleanup, REFRESH_MIN_AGE_MS, AUTO_TITLE_RE, isWaitingTab, decideTrimExcess, EMPTY_SPARE_KEEP, selectExcessEmptySpares } = require('./mobile-pool');
+const { createPool, createOwnershipLease, readConfig, readSnapshot, isWorktreeFolder, decideRefresh, decideWorktreeCleanup, REFRESH_MIN_AGE_MS, AUTO_TITLE_RE, isWaitingTab, decideTrimExcess, EMPTY_SPARE_KEEP, selectExcessEmptySpares, buildAutoTitleRe } = require('./mobile-pool');
 
 // git worktree を模した一時フォルダ（.git ファイルが gitdir: .../worktrees/... を指す）
 function makeWorktree(t) {
@@ -243,9 +243,10 @@ test('decideWorktreeCleanup は openedTabs 無指定なら閉鎖しない', () =
   assert.equal(result, null);
 });
 
-test('AUTO_TITLE_RE source is byte-identical in tools/sync-remote-titles.mjs and mobile-pool.js', async () => {
+test('AUTO_TITLE_RE の基本パターンは tools/sync-remote-titles.mjs と一致する（env var 有無にかかわらず base 部分を比較）', async () => {
   const toolsModule = await import('../../tools/sync-remote-titles.mjs');
-  assert.equal(toolsModule.AUTO_TITLE_RE.source, AUTO_TITLE_RE.source);
+  // buildAutoTitleRe('') は env var の有無に関係なく元の正規表現を返す
+  assert.equal(toolsModule.AUTO_TITLE_RE.source, buildAutoTitleRe('').source);
 });
 
 test('isWaitingTab recognizes Claude Code and auto title patterns', () => {
@@ -257,6 +258,52 @@ test('isWaitingTab recognizes Claude Code and auto title patterns', () => {
   assert.equal(isWaitingTab('remote-control-mossy-island'), true);
   assert.equal(isWaitingTab('2026年10月の重大脆弱性への対応'), false);
   assert.equal(isWaitingTab({ label: '018のバグ修正について' }), false);
+});
+
+test('buildAutoTitleRe は prefix 未設定で従来の正規表現を返す', () => {
+  const re = buildAutoTitleRe('');
+  assert.equal(re.source, /^(?:remote-control-|\d{3}[-｜|])+[a-z]+-[a-z]+$/i.source);
+  // AUTO_TITLE_RE は env var が設定されていると拡張される（個別の source 比較はしない）
+  // env var 設定時も isWaitingTab の既存動作は維持されることを別テストで検証
+});
+
+test('buildAutoTitleRe は prefix=KimPC で KimPC 接頭辞を認識する', () => {
+  const re = buildAutoTitleRe('KimPC');
+  assert.equal(re.test('KimPC｜gentle-otter'), true);
+  assert.equal(re.test('KimPC-gentle-otter'), true);
+  assert.equal(re.test('KimPC|gentle-otter'), true);
+  assert.equal(re.test('remote-control-KimPC｜gentle-otter'), true);
+  assert.equal(re.test('remote-control-KimPC|gentle-otter'), true);
+  // 既存の 3 桁パターンも引き続き認識
+  assert.equal(re.test('018｜resilient-steele'), true);
+  assert.equal(re.test('018-resilient-steele'), true);
+  assert.equal(re.test('remote-control-mossy-island'), true);
+  // 別ラベルは false
+  assert.equal(re.test('OtherPC｜a-b'), false);
+  // 日本語や会話タイトルは false
+  assert.equal(re.test('KimPC｜【閉じて可】セッション'), false);
+  assert.equal(re.test('2026年10月の重大脆弱性への対応'), false);
+});
+
+test('buildAutoTitleRe は正規表現特殊文字を含む接頭辞をエスケープする', () => {
+  const re = buildAutoTitleRe('A.B');
+  assert.equal(re.test('A.B-gentle-otter'), true);
+  // エスケープされていない '.' は任意の1文字にマッチするため 'AXB-gentle-otter' は false でなければならない
+  assert.equal(re.test('AXB-gentle-otter'), false);
+});
+
+test('buildAutoTitleRe は prefix に英数字以外を含むラベルでも正しく動作する', () => {
+  const re = buildAutoTitleRe('My-PC_2');
+  assert.equal(re.test('My-PC_2｜gentle-otter'), true);
+  assert.equal(re.test('My-PC_2-gentle-otter'), true);
+});
+
+test('isWaitingTab は環境変数未設定時、従来の 3 桁・remote-control のみ認識し KimPC は false', () => {
+  // このテストは env var 未設定の既定状態で実行されることを前提とする
+  assert.equal(isWaitingTab('Claude Code'), true);
+  assert.equal(isWaitingTab('018-resilient-steele'), true);
+  assert.equal(isWaitingTab('remote-control-mossy-island'), true);
+  assert.equal(isWaitingTab('KimPC｜gentle-otter'), false);
 });
 
 test('decideTrimExcess: 待機タブ数が target 超過の時、10分以上経った会話なし・非アクティブな待機タブを古い順に閉じる', () => {

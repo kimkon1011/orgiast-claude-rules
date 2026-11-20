@@ -48,6 +48,9 @@ URI、起動時、タブ変更、5秒ごとの補充は同じ処理で直列化�
 
 URI は外部プロセスやブラウザからも開けるため、`claude` パラメータは実在する絶対パスかつファイル名が `claude` / `claude.exe` の場合だけ実行します。
 
+## 0.4.6
+PC ラベルが 3 桁番号でない PC（例: KimPC）でも、待機タブの接頭辞を環境変数 `CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX` から読み取り正しく認識する。`buildAutoTitleRe(prefix)` を純粋関数として export し、特殊文字を含む接頭辞も正規表現エスケープで安全に処理する。
+
 ## 0.4.5
 空の Remote Control 予備は 3 本まで。それを超える空の予備は、補充の前に古いものから `close-session.mjs --session <id> --no-launch` で閉じる。会話があるセッションと、オーナーの返事待ち（台帳 status が waiting_user）は閉じない。自動補充の目標も 3 本を超えない。
 

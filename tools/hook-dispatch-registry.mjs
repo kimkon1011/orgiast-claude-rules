@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
@@ -37,10 +38,12 @@ export function repositoryHooks(repo = defaultRepo, home) {
   }
   return hooks;
 }
-export function collapseHooks(hooks, repo = defaultRepo) {
+export function collapseHooks(hooks, repo = defaultRepo, home = process.env.ORGIAST_HOME || os.homedir()) {
   const canonical = JSON.parse(fs.readFileSync(path.join(repo, 'tools/hook-dispatch-manifest.json'), 'utf8'));
   const settingsHooks = {}, events = {}, legacyDuplicatesRemoved = {};
   const basename = file => path.posix.basename(file.replace(/\\/g, '/')).toLowerCase();
+  const pathKey = file => process.platform === 'win32' ? file.toLowerCase() : file;
+  const legacyDir = pathKey(path.resolve(home, '.claude', 'hooks'));
   for (const event of EVENTS) {
     const replacements = new Set((canonical.events[event] || []).map(h => {
       const [, first = '', second = ''] = tokens(h.command);
@@ -56,8 +59,14 @@ export function collapseHooks(hooks, repo = defaultRepo) {
         else {
           if (hook.type && hook.type !== 'command') throw new Error(`Cannot dispatch synchronous ${hook.type} hook in ${event}; existing settings must be preserved`);
           const described = describeHook(hook, group.matcher || '*', repo);
-          const legacyScript = !described.node && tokens(hook.command).find(word => /\.ps1$/i.test(word));
-          if (legacyScript && replacements.has(basename(legacyScript).slice(0, -4))) {
+          const words = described.node ? [] : tokens(hook.command);
+          const fileIndex = words.findIndex(word => /^-File$/i.test(word));
+          const legacyScript = fileIndex > 0 && /(?:^|[\\/])(?:pwsh|powershell)(?:\.exe)?$/i.test(words[0])
+            ? words[fileIndex + 1] : undefined;
+          // Only migrate old installer copies in this registration's home.
+          if (legacyScript && /\.ps1$/i.test(legacyScript) && path.isAbsolute(legacyScript) &&
+            pathKey(path.dirname(path.resolve(legacyScript))) === legacyDir &&
+            replacements.has(basename(legacyScript).slice(0, -4))) {
             legacyDuplicatesRemoved[event] = (legacyDuplicatesRemoved[event] || 0) + 1;
           } else events[event].push(described);
         }
@@ -83,7 +92,7 @@ export function readDispatchManifest(home, repo = defaultRepo) {
     const saved = JSON.parse(fs.readFileSync(runtimeManifestPath(home), 'utf8'));
     if (saved.version === 1 && sameRepo(saved.repo, repo) && saved.events) return saved;
   } catch {}
-  return collapseHooks(repositoryHooks(repo, home), repo).manifest;
+  return collapseHooks(repositoryHooks(repo, home), repo, home).manifest;
 }
 export function effectiveHooks(settings, manifest) {
   const result = structuredClone(settings.hooks || {});

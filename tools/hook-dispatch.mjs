@@ -195,9 +195,8 @@ function workerSlot(options) {
 function spawnExternal(hook, options) {
   const parts = tokens(hook.command);
   const powershell = /(?:^|[\\/])(?:pwsh|powershell)(?:\.exe)?$/i.test(parts[0]);
-  const settings = { windowsHide: true, ...options };
-  return powershell ? spawn(parts[0], parts.slice(1), settings)
-    : spawn(hook.command, { ...settings, shell: true });
+  return powershell ? spawn(parts[0], parts.slice(1), { ...options, windowsHide: true })
+    : spawn(hook.command, { ...options, windowsHide: true, shell: true });
 }
 function detachedHook(hook, raw, home, options) {
   const command = process.platform === 'win32' ? hook.command.toLowerCase() : hook.command;
@@ -237,10 +236,13 @@ function detachedHook(hook, raw, home, options) {
     }
     child.once('error', () => {});
     child.unref();
-    if (!child.pid) return { status: 1, error: 'Could not start detached hook' };
+    // This metric reports a background launch, including Windows launches
+    // where backgroundSpawnOptions deliberately omits the OS detach flag.
+    const detached = Number.isSafeInteger(child.pid) && child.pid > 0;
+    if (!detached) return { status: 1, error: 'Could not start detached hook' };
     fs.writeFileSync(owner, JSON.stringify({ pid: child.pid, at: Date.now() }));
     options.onSpawn?.(child, hook);
-    return { detached: true };
+    return { detached };
   } finally { removeReclaimDirectory(claim); }
 }
 function externalHook(hook, raw, timeoutMs, options) {

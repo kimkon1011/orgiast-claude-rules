@@ -126,7 +126,8 @@ test('registration converges twice byte-identically, preserves custom/async hook
   const runtimeFile = runtimeManifestPath(home);
   const previous = JSON.parse(fs.readFileSync(runtimeFile, 'utf8'));
   delete previous.legacyDuplicatesRemoved;
-  previous.events.Stop.push(describeHook({ command: 'pwsh -NoProfile -File "C:\\url-format-guard.ps1"' }));
+  const oldCopy = path.join(home, '.claude', 'hooks', 'url-format-guard.ps1');
+  previous.events.Stop.push(describeHook({ command: `pwsh -NoProfile -File "${oldCopy}"` }));
   fs.writeFileSync(runtimeFile, JSON.stringify(previous));
   run(); const first = fs.readFileSync(file, 'utf8'), manifest = fs.readFileSync(runtimeManifestPath(home), 'utf8');
   run(); assert.equal(fs.readFileSync(file, 'utf8'), first); assert.equal(fs.readFileSync(runtimeManifestPath(home), 'utf8'), manifest);
@@ -173,15 +174,18 @@ test('all event rolling-hour budgets and midnight rotation; alert once per day e
 
 test('collapse removes legacy PowerShell duplicates only in canonical events and records the count', async t => {
   const home = fixture(t);
-  const duplicate = { type: 'command', command: 'pwsh -NoProfile -File "C:\\custom hooks\\URL-FORMAT-GUARD.PS1"' };
+  const command = file => ({ type: 'command', command: `pwsh -NoProfile -File "${file}"` });
+  const duplicate = command(path.join(home, '.claude', 'hooks', 'URL-FORMAT-GUARD.PS1'));
+  const custom = command(path.join(home, 'Downloads', 'claude-mobile', 'hooks', 'url-format-guard.ps1'));
   const unique = { type: 'command', command: 'pwsh -NoProfile -File "/custom/local-only.ps1"' };
   const hooks = repositoryHooks(repo, home);
-  hooks.Stop.push({ hooks: [duplicate, unique] });
+  hooks.Stop.push({ hooks: [duplicate, unique, custom] });
   hooks.Notification.push({ hooks: [duplicate] });
-  const { manifest } = collapseHooks(hooks, repo);
+  const { manifest } = collapseHooks(hooks, repo, home);
   assert.ok(manifest.events.Stop.some(hook => hook.name === 'url-format-guard.mjs'));
   assert.ok(!manifest.events.Stop.some(hook => hook.command === duplicate.command));
   assert.ok(manifest.events.Stop.some(hook => hook.command === unique.command));
+  assert.ok(manifest.events.Stop.some(hook => hook.command === custom.command));
   assert.ok(manifest.events.Notification.some(hook => hook.command === duplicate.command));
   const result = await dispatch('Stop', '{}', { home, manifest, overloaded: false, execute: () => ({ status: 0 }) });
   assert.equal(result.metrics.legacyDuplicatesRemoved, 1);

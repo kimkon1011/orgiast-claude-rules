@@ -273,7 +273,7 @@ try {
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
     fs.closeSync(fs.openSync(path.join(home, '.claude', 'share-ledger.jsonl'), 'a'));
   }
-  const collapsed = collapseHooks(settings.hooks, repo);
+  const collapsed = collapseHooks(settings.hooks, repo, home);
   // Keep the cumulative migration count available to dispatch metrics after
   // later converge runs, when the removed hooks are no longer in the input.
   for (const [event, count] of Object.entries(previousManifest?.legacyDuplicatesRemoved || {})) {

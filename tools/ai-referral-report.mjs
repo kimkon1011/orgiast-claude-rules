@@ -587,10 +587,14 @@ export {
   GA4_SCOPE,
 };
 
-// 直接実行
-main()
-  .then((code) => process.exit(code))
-  .catch((e) => {
-    console.error(`fatal: ${e.stack ?? e.message}`);
-    process.exit(1);
-  });
+// 直接実行時のみ main() を呼ぶ (import 時は実行しない)
+import { pathToFileURL } from 'node:url';
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main()
+    .then((code) => process.exit(code))
+    .catch((e) => {
+      console.error(`fatal: ${e.stack ?? e.message}`);
+      process.exit(1);
+    });
+}

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate, evaluateGateSkips, evaluateTop3Delivery, parseDunningSummary, evaluateDunningDelivery } from './cron-liveness-check.mjs';
+import { evaluate, evaluateGateSkips, evaluateTop3Delivery, evaluateTop3DeliveryForHost, parseDunningSummary, evaluateDunningDelivery } from './cron-liveness-check.mjs';
 
 const now = Date.parse('2026-08-21T00:00:00.000Z');
 const entry = { label: '日次', repo: 'owner/repo', workflow: 'daily.yml', everyDays: 1 };
@@ -155,6 +155,21 @@ test('7日より古いgateスキップは要調査件数に数えない', () => 
 // 日次TOP3 は workflow の成否ではなくローカル着地(asOf)で測る。
 // 取りこぼしは top3-catchup が artifact から回収するため、run が赤くても届いていることがある。
 const top3Now = Date.parse('2026-09-02T07:00:00.000Z'); // = 2026-09-02 16:00 JST
+
+test('日次TOP3: タスク未登録かつstateファイルなしなら対象外', () => {
+  const actual = evaluateTop3DeliveryForHost({ taskRegistered: false, stateFileExists: false, asOf: null }, top3Now);
+  assert.equal(actual, null);
+});
+
+test('日次TOP3: タスク登録ありならstateファイルなしでもnever', () => {
+  const actual = evaluateTop3DeliveryForHost({ taskRegistered: true, stateFileExists: false, asOf: null }, top3Now);
+  assert.equal(actual.status, 'never');
+});
+
+test('日次TOP3: タスク未登録でもstateファイルがあれば従来どおり評価', () => {
+  const actual = evaluateTop3DeliveryForHost({ taskRegistered: false, stateFileExists: true, asOf: '2026-09-02' }, top3Now);
+  assert.equal(actual.status, 'ok');
+});
 
 test('日次TOP3: 当日ぶんが届いていればok', () => {
   const actual = evaluateTop3Delivery('2026-09-02', top3Now);

@@ -19,6 +19,20 @@ export function decisionAge(row, now) {
 export function escalationText(row, now) {
   return `【要対応・kim の判断待ち ${Math.floor(decisionAge(row, now) / DAY_MS)}日】${String(row.nextKim || '').slice(0, 2000)}\n（元の約束: ${String(row.promise || '').slice(0, 80)} / PC ${row.pc || ''} / セッション ${String(row.sessionId || '').slice(0, 8)} / 台帳 ts ${row.ts || ''}）`;
 }
+/** nextKim が kim の操作不要を表すか判定する */
+export function isNoKimAction(text) {
+  const trimmed = (text ?? '').replace(/^[\s　]+|[\s　]+$/g, '');
+  if (!trimmed) return true;
+  const keywords = ['なし', '無し', '特になし', '不要', '対応不要'];
+  for (const kw of keywords) {
+    if (trimmed === kw) return true;
+    if (trimmed.startsWith(kw)) {
+      const next = trimmed[kw.length];
+      if (/^[（(【［〔｛「『）)】］〕｝」』、。，,：:—\-ー\s　\[]/.test(next)) return true;
+    }
+  }
+  return false;
+}
 
 export async function escalateKimDecisions({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), dryRun = false, io = {} } = {}) {
   const file = path.join(home, '.claude', 'auto-progress-escalated.json');
@@ -39,7 +53,7 @@ export async function escalateKimDecisions({ home = process.env.ORGIAST_HOME || 
     for (const row of rows) {
       if (!OPEN_STATUSES.has(row.status) || decisionOwnerOf(row) !== 'kim' || !(decisionAge(row, now) >= 2 * DAY_MS)) continue;
       const escalatedNextKim = String(row.nextKim ?? '').replace(/^[\s　]+|[\s　]+$/g, '');
-      if (!escalatedNextKim || ['なし', '無し', '特になし', '不要', '対応不要'].includes(escalatedNextKim)) continue;
+      if (isNoKimAction(escalatedNextKim)) continue;
       const key = escalationRowKey(row);
       const lastSent = Date.parse(state[key]);
       if (seen.has(key) || (Number.isFinite(lastSent) && now - lastSent < DAY_MS)) continue;

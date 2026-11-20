@@ -258,6 +258,20 @@ test('web23 zero-count warning is fail-open, never pins an outage as zero', asyn
   assert.equal((await checkWeb23Delivery({ ...call('{"messages":[]}'), search: async () => ({ code: 1, stdout: '' }) })).status, 'unverified');
   assert.deepEqual(await checkWeb23Delivery({ ...call('{"messages":[]}'), timeLeft: () => false }), { status: 'unverified', reason: '時間上限' });
 });
+test('Discord DM failure with zero candidates does not set failed=true (exit 0)', async () => {
+  const h = harness([]);
+  h.injected.notify = async () => { throw new Error('Discord DM not delivered'); };
+  const r = await runCheck(opts(), h.injected);
+  assert.equal(r.failed, undefined);
+  assert.equal(r.failReason, '');
+});
+test('real Sheets failure with candidates sets failed=true and failReason', async () => {
+  const h = harness([txn(1)]);
+  h.injected.sheets.append = async () => { throw new Error('Sheets POST HTTP 503'); };
+  const r = await runCheck(opts(), h.injected);
+  assert.equal(r.failed, true);
+  assert.ok(r.failReason);
+});
 test('DM reports web23 zero and unverified separately', () => {
   const base = { today: '2026-10-19', candidateTotal: 0, results: [], issues: [], yahooUnavailable: false };
   assert.ok(dmText({ ...base, web23: { status: 'zero', count: 0 } }).includes('0件'));

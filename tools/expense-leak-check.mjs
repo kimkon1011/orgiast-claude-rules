@@ -267,7 +267,7 @@ export async function runCheck(opts, injected = {}) {
   const save = injected.save || atomicJson;
   const state = injected.state || await readState(opts.statePath);
   if (opts.weekly && weeklySkip(opts.today, state.lastRunAt)) return { skip: true };
-  const result = { today: opts.today, from: opts.from, to: opts.to, dryRun: opts.dryRun, wallets: [], statusCounts: {}, candidateTotal: 0, results: [], cacheHits: 0, yahooUnavailable: false, issues: [], appended: 0, complete: false };
+  const result = { today: opts.today, from: opts.from, to: opts.to, dryRun: opts.dryRun, wallets: [], statusCounts: {}, candidateTotal: 0, results: [], cacheHits: 0, yahooUnavailable: false, issues: [], appended: 0, complete: false, failReason: '' };
   const budget = { gmail: Object.fromEntries(USERS.map((u) => [u, 0])), yahoo: 0, yahooUnavailable: false, yahooFailed: false, yahooUnverified: 0 };
   result.searches = budget;
   async function checkpoint() { await save(opts.out, result); if (!opts.dryRun) await save(opts.statePath, state); }
@@ -337,7 +337,11 @@ export async function runCheck(opts, injected = {}) {
       result.issues.push(`Run failed: ${qualifiers.join(' ')}`);
     }
     if (opts.verbose) console.error(`[expense-leak-check] ${error.name || 'Error'}: ${error.message}\n${error.stack || '(no stack)'}`);
-    result.failed = true;
+    // Discord DM delivery failure with no candidates/results is not a real failure; exit 0.
+    if (!(msg.includes('Discord DM not delivered') && result.candidateTotal === 0 && result.results.length === 0)) {
+      result.failed = true;
+      result.failReason = msg.replace(/^(freee |Invalid |Unsupported |Sheets |Sheet |Output tab |Discord |Cannot read)/, '').trim().slice(0, 60) || 'unknown';
+    }
     await checkpoint();
     return result;
   }
@@ -373,7 +377,7 @@ async function main() {
     const result = await runCheck(opts);
     if (result.skip) console.log('skip: weekly expense-leak-check');
     else if (opts.dryRun) console.log(JSON.stringify(result, null, 2));
-    else console.log(`expense-leak-check: candidates=${result.candidateTotal} processed=${result.results.length} cached=${result.cacheHits} deferred=${result.deferredTotal || 0} appended=${result.appended} dm=${result.notification?.delivered || 'none'} yahooFailed=${result.searches.yahooFailed} failed=${!!result.failed}`);
+    else console.log(`expense-leak-check: candidates=${result.candidateTotal} processed=${result.results.length} cached=${result.cacheHits} deferred=${result.deferredTotal || 0} appended=${result.appended} dm=${result.notification?.delivered || 'none'} yahooFailed=${result.searches.yahooFailed} failed=${!!result.failed}${result.failReason ? ` failReason=${result.failReason}` : ''}`);
     if (result.failed) process.exitCode = 1;
   } finally { await lock.close(); await unlink(lockPath); }
 }

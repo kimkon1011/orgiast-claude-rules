@@ -106,16 +106,26 @@ test('不存在のfixtureで本番の読取へfallbackしない', async t => {
   assert.match(errors[0],/fixture/); assert.deepEqual(fs.readdirSync(home),[]);
 });
 
-test('鍵なし席はseat checkでスキップされる', async t => {
+test('鍵なし席はseat checkでスキップされる（注入seatCheck）', async t => {
   const home=homeFor(t), output=[], heartbeats=[];
-  fs.writeFileSync(path.join(home,'.claude.json'), JSON.stringify({oauthAccount:{emailAddress:'seisaku-team@orgiast.jp'}}));
-  const code = await main(['--now','2026-11-04'], { home, stdout: x => output.push(x), skipSeatCheck: false, sheets: { get: () => assert.fail('no network') }, request: () => assert.fail('no network'), heartbeat: async (info) => heartbeats.push(info), notify: () => assert.fail('no notify') });
+  const code = await main(['--now','2026-11-04'], { home, stdout: x => output.push(x), skipSeatCheck: false, seatCheck: () => ({ kim: false }), sheets: { get: () => assert.fail('no network') }, request: () => assert.fail('no network'), heartbeat: async (info) => heartbeats.push(info), notify: () => assert.fail('no notify') });
   assert.equal(code, 0);
   const result = JSON.parse(output[0]);
   assert.equal(result.skip, true);
-  assert.match(result.reason, /DWD key/);
+  assert.equal(result.reason, '鍵なし席のためスキップ');
   assert.equal(heartbeats.length, 1);
+  assert.equal(heartbeats[0].ok, true);
   assert.match(heartbeats[0].summary, /スキップ/);
+});
+
+test('例外時はheartbeatがok=falseでsummaryに期限追跡エラーを含む', async t => {
+  const home=homeFor(t), output=[], heartbeats=[];
+  const code = await main(['--now','2026-11-04'], { home, stdout: x => output.push(x), skipSeatCheck: false, seatCheck: () => ({ kim: true }), config: { sheetId: 'test' }, sheets: { get: () => { throw Error('シート読取失敗'); } }, request: () => assert.fail('no network'), heartbeat: async (info) => heartbeats.push(info), notify: () => assert.fail('no notify') });
+  assert.equal(code, 1);
+  assert.equal(heartbeats.length, 1);
+  assert.equal(heartbeats[0].ok, false);
+  assert.match(heartbeats[0].summary, /期限追跡エラー/);
+  assert.doesNotMatch(heartbeats[0].summary, /スキップ/);
 });
 
 test('鍵持ちのkim席はfixtureモードで通常動作（fixtureはseat checkをスキップ）', async t => {

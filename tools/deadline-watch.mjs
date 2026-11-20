@@ -197,12 +197,12 @@ export function parseArgs(argv) {
 }
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const home = deps.home || defaultHome(), stdout = deps.stdout || console.log, stderr = deps.stderr || console.error;
-  let args; const startedAt = new Date().toISOString(); let ok = false;
+  let args; const startedAt = new Date().toISOString(); let ok = false; let resultSummary = '';
   try {
     args = parseArgs(argv); const today = args.now || jstDate();
     if (!args.fixture && deps.skipSeatCheck !== true) {
-      const seat = seatCheck(home);
-      if (!seat.kim) { stdout(JSON.stringify({ skip: true, reason: 'deadline jobs run only on the seat with the kim DWD key', seat })); return 0; }
+      const seat = deps.seatCheck ? deps.seatCheck(home) : seatCheck(home);
+      if (!seat.kim) { resultSummary = '鍵なし席のためスキップ'; stdout(JSON.stringify({ skip: true, reason: resultSummary, seat })); ok = true; return 0; }
     }
     const fixture = args.fixture ? readJson(args.fixture) : null;
     if (args.fixture && (!fixture || !Array.isArray(fixture.rows))) throw new Error('fixture の台帳JSONがありません、または形式が不正です');
@@ -226,12 +226,15 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       stdout(JSON.stringify(result, null, 2)); return result;
     };
     const result = args['dry-run'] || args.digest ? await work() : await withLedgerLock(home, work);
-    ok = !result.errors.length; return ok ? 0 : 1;
-  } catch (e) { stderr(`deadline-watch: ${e.message}`); return 1; }
+    ok = !result.errors.length;
+    if (result.errors.length) resultSummary = `期限追跡エラー: ${result.errors.map(e => e.id || e.message || String(e)).join(', ')}`;
+    else resultSummary = '期限追跡完了';
+    return ok ? 0 : 1;
+  } catch (e) { resultSummary = `期限追跡エラー: ${e.message}`; stderr(`deadline-watch: ${e.message}`); return 1; }
   finally {
     if (args && !args['dry-run'] && !args.digest) {
-      await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineWatch', startedAt, finishedAt: new Date().toISOString(), ok, summary: ok ? '期限追跡完了' : '鍵なし席のためスキップ', cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
-      try { const log = path.join(home, '.claude/logs/deadline-watch-app.log'); fs.mkdirSync(path.dirname(log), { recursive: true }); fs.appendFileSync(log, `${new Date().toISOString()} deadline-watch ${ok ? 'ok' : 'skipped'}\n`); } catch (e) { stderr(`deadline-watch: log write failed (${e.code || e.message})`); }
+      await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineWatch', startedAt, finishedAt: new Date().toISOString(), ok, summary: resultSummary || (ok ? '期限追跡完了' : '期限追跡エラー'), cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
+      try { const log = path.join(home, '.claude/logs/deadline-watch-app.log'); fs.mkdirSync(path.dirname(log), { recursive: true }); fs.appendFileSync(log, `${new Date().toISOString()} deadline-watch ${ok ? 'ok' : (resultSummary || 'error')}\n`); } catch (e) { stderr(`deadline-watch: log write failed (${e.code || e.message})`); }
     }
   }
 }

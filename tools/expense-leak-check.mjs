@@ -140,7 +140,7 @@ export function childSearch(script, args, timeout) {
 }
 export async function makeFreeeGet() {
   let token;
-  try { token = await getAccessToken(); } catch { throw new Error('freee authentication failed (check DB/token configuration)'); }
+  try { token = await getAccessToken(); } catch (e) { process.stderr.write(`[TEMP-DEBUG] makeFreeeGet: getAccessToken() failed: ${e.message}${e.code ? ` (code=${e.code})` : ''}\n`); throw new Error('freee authentication failed (check DB/token configuration)'); }
   return async (path, params = {}) => {
     if (!/^\/api\/1\/(walletables|wallet_txns(?:\/\d+)?)$/.test(path)) throw new Error('Unsupported freee read');
     const url = new URL(`https://api.freee.co.jp${path}`);
@@ -324,6 +324,16 @@ export async function runCheck(opts, injected = {}) {
     await checkpoint();
     return result;
   } catch (error) {
+    // TEMP DEBUG: print full error details to stderr
+    process.stderr.write(`[TEMP-DEBUG] expense-leak-check catch block\n`);
+    process.stderr.write(`[TEMP-DEBUG] error.message: ${error.message}\n`);
+    process.stderr.write(`[TEMP-DEBUG] error.code: ${error.code}\n`);
+    process.stderr.write(`[TEMP-DEBUG] error.name: ${error.name}\n`);
+    const stackLines = (error.stack || '').split('\n').slice(0, 5);
+    process.stderr.write(`[TEMP-DEBUG] error.stack (first 5 lines):\n${stackLines.map(l => `  ${l}`).join('\n')}\n`);
+    if (error.cause) {
+      process.stderr.write(`[TEMP-DEBUG] error.cause: ${String(error.cause)}\n`);
+    }
     // Only our controlled messages are safe to persist; low-level errors can include secrets.
     result.issues.push(/^(freee |Invalid |Unsupported |Sheets |Sheet |Output tab |Discord |Cannot read)/.test(error.message) ? error.message : 'Run failed (network, filesystem or response error)');
     result.failed = true;
@@ -348,4 +358,4 @@ async function main() {
     if (result.failed) process.exitCode = 1;
   } finally { await lock.close(); await unlink(lockPath); }
 }
-if (isEntry(import.meta.url)) main().catch(() => { console.error('expense-leak-check: configuration/state/filesystem error; no credential details logged'); process.exitCode = 1; });
+if (isEntry(import.meta.url)) main().catch((error) => { console.error('expense-leak-check: configuration/state/filesystem error; no credential details logged'); process.stderr.write(`[TEMP-DEBUG] main().catch: ${error.message}\n`); process.stderr.write(`[TEMP-DEBUG] main().catch stack: ${(error.stack || '').split('\n').slice(0,3).join('\n')}\n`); process.exitCode = 1; });

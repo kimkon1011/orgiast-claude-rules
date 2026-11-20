@@ -8,7 +8,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
-import { validId, classifyExecutionResult, sendExecutionFailure, parseExecMarkers, createClient, resolveFleetLabel, updateInbox, syncMailState, acquireLock, TERMINAL_STATUSES, isMissingClaudeError, missingClaudeMessage } from './fleet-mail.mjs';
+import { isExecutionHub, validId, classifyExecutionResult, sendExecutionFailure, parseExecMarkers, createClient, resolveFleetLabel, updateInbox, syncMailState, acquireLock, TERMINAL_STATUSES, isMissingClaudeError, missingClaudeMessage } from './fleet-mail.mjs';
 import { loadOptin, consentCommand, runPrompt, validExecCwd, redactSecrets, truncateAnswer } from './fleet-agent.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
@@ -119,7 +119,7 @@ export async function runClaudeTask({ id, home, spawnImpl = spawn, now = Date.no
     if (!result) {
       let executable = 'claude', candidates = [];
       try {
-        const reason = !config.FLEET_HUB || mail.from !== config.FLEET_HUB ? 'not-hub' : !validExecCwd(exec.cwd) ? 'bad-cwd' : null;
+        const reason = !isExecutionHub(mail.from, config) ? 'not-hub' : !validExecCwd(exec.cwd) ? 'bad-cwd' : null;
         if (reason) result = { exitCode: null, reason, outputTail: `reason: ${reason}` };
         else if (!loadOptin(path.join(dir, 'fleet-agent-optin.json')).includes('claude-resume')) result = { exitCode: null, outputTail: `未オプトイン。承諾コマンド: ${consentCommand('claude-resume')}` };
         else {

@@ -14,7 +14,8 @@ try {
   const command = String(j.tool_input?.command || '');
   if (classifyBashCommand(command) !== 'inline-program') return;
   const size = command.length;
-  if (size < 6000) return;
+  // 6000 だと実測の大きな inline 書き込み（5728 字の cat>json 等）が素通りし行ベース委譲を削る（999genba 14.4% 帯）。
+  if (size < 2000) return;
   // 標準出力だけの集計・調査は委譲警告の対象外。書き込みを示す構文があれば対象に残す。
   if (!/>|\btee\b|\bSet-Content\b|\bOut-File\b|\bfs\s*\.\s*writeFile/i.test(command)) return;
   const home = process.env.ORGIAST_HOME || os.homedir();

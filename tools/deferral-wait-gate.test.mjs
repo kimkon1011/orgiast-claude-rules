@@ -200,3 +200,40 @@ const nextSessionNonDeferrals = [
 for (const [index, text] of nextSessionNonDeferrals.entries()) {
   test(`次のセッション先送りで例外は pass する ${index + 1}`, () => assert.deepEqual(judge(text), { decision: 'pass' }));
 }
+
+// 2026-11-16 実測（kim 指摘）: 承認不要の作業を「返信があれば進めます」で止めた実害1と、
+// 「このまま進めます」と宣言だけしてツール実行前に応答を終えた実害2。
+const replyIfDeferrals = [
+  'この後の自動進行: なし（次に kim から返信があれば、008・014 への Tailscale 導入と設定ファイルの配布に進みます）',
+  '返信は不要です。待つ必要のない作業だったので、このまま進めます。まず 008・014 に配布する経路を確認します。',
+  'OKがもらえれば本番に反映します。',
+  'ご指示をいただければ着手します。',
+];
+
+for (const [index, text] of replyIfDeferrals.entries()) {
+  test(`返信があれば型・宣言だけで止まる型を block する ${index + 1}`, () => {
+    const result = judge(text);
+    assert.equal(result.decision, 'block');
+    assert.equal(result.code, 'DEFERRAL-WAIT');
+    assert.match(result.reason, /返信があれば進めます」で止めず|宣言した作業を当ターン内で実行/);
+  });
+}
+
+const replyIfNonDeferrals = [
+  'お客様から返信があれば自動で kim-inbox に積む仕組みにしました。',
+  '社員から返信があれば台帳に記録します。回収ジョブは毎朝 8 時に動きます。',
+  '返信があれば教えてください、という一文は削除しました。',
+  // 【kim 確認用の全文】＋承認必須の語（社外送信）が近くにある本当の承認待ち。
+  '【kim 確認用の全文】\n以下の社外送信メールの本文です。この内容で送信してよければ、返信があれば送信します。',
+  // 「返信は不要」＋作業結果の表で終わる応答。
+  '返信は不要です。\n\n| 項目 | 結果 |\n|---|---|\n| テスト | 84/84 PASS |',
+  '返信は不要です。',
+  // コードブロック内の「返信があれば進めます」は例示なので pass。
+  '```\n返信があれば進めます\n```\n作業は完了しました。',
+  // 宣言ではなく結果の報告で終わる応答。
+  'このまま進めました。008・014 への配布は完了し、fleet-status で配布済みを確認しています。',
+];
+
+for (const [index, text] of replyIfNonDeferrals.entries()) {
+  test(`返信があれば型・宣言だけで止まる型の除外は pass する ${index + 1}`, () => assert.deepEqual(judge(text), { decision: 'pass' }));
+}

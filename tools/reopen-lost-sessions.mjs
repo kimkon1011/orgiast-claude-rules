@@ -918,7 +918,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
         throw Error(`Missing accessToken in ${credFile}: topKeys=${topKeys.join(',')} oauthKeys=${oauthKeys.join(',')}`);
       }
     } catch (e) {
-      if (e.code === 'ENOENT') throw Error(`RC credentials file not found: ${credFile}`);
+      if (e.code === 'ENOENT') { result.rcAvailable = false; return result; }
       throw e;
     }
     try {

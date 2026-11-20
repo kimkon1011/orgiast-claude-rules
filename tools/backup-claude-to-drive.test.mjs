@@ -128,3 +128,33 @@ test('Test-RcloneBackup: 先頭空白ありの rclone ls 出力行から name �
   // Test-RcloneBackup が Parse-RcloneLine を呼んでいる
   assert.ok(source.includes('Parse-RcloneLine('), 'Test-RcloneBackup が Parse-RcloneLine を呼んでいる');
 });
+
+// ---- local-fallback 検証テスト ---- //
+
+test('local-fallback: $localFallback 変数が定義されている', () => {
+  assert.ok(source.includes('$localFallback'), '$localFallback が見つからない');
+});
+
+test('local-fallback: 既定の退避先は D:\\claude-backups', () => {
+  const match = source.match(/\$localBackupDir = if \(\$env:CLAUDE_BACKUP_LOCAL_DIR\) \{ \$env:CLAUDE_BACKUP_LOCAL_DIR \} else \{ '([^']+)' \}/);
+  assert.ok(match, 'CLAUDE_BACKUP_LOCAL_DIR のフォールバックパターンが見つからない');
+  assert.equal(match[1], 'D:\\claude-backups');
+});
+
+test('local-fallback: local-fallback=ok のログ行がある', () => {
+  assert.ok(source.includes('local-fallback=ok'), 'local-fallback=ok のログ行が見つからない');
+});
+
+test('local-fallback: ローテーション（Remove-Item）を新規追加していない（Drive/rclone パスのみ）', () => {
+  // retention 削除は既存の Drive パスと rclone パスのみ — local fallback ブロックに Remove-Item が無いことを確認する
+  const localFallbackBlock = source.match(/if \(\$localFallback\) \{([\s\S]*?)\} elseif \(\$useRclone\)/);
+  assert.ok(localFallbackBlock, 'local-fallback ブロックが見つからない');
+  const block = localFallbackBlock[1];
+  // ディレクトリ作成 (New-Item) と zip コピー (Copy-Item) は許容するが Remove-Item は禁止
+  assert.ok(!block.includes('Remove-Item'), 'local-fallback 内に Remove-Item が見つかる（ローテーション禁止）');
+});
+
+test('local-fallback: 不存ドライブなら従来どおり失敗（Stop-DriveNotAvailable にフォールスルー）する', () => {
+  const match = source.match(/localFallback = \$false[\s\S]*?Stop-DriveNotAvailable/);
+  assert.ok(match, 'ドライブ不在時の Stop-DriveNotAvailable へのフォールスルーが見つからない');
+});

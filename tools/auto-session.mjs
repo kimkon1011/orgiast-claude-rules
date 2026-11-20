@@ -615,7 +615,7 @@ ${issue.body || '（本文なし）'}
 ## 実行環境
 - 実リポジトリは ${repoCwd}。git は \`git -C "${repoCwd}"\`、実装委譲は \`node tools/codex-do.mjs "<指示>" --cwd "${repoCwd}" --origin unattended\`（調査・分類・要約だけなら \`--kind investigate|classify|summarize\`）のように対象を明示する。終了コード75は失敗ではなく保留で、\`retryAt\` まで再試行しない。
 - このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。codex-doや他AIの委譲結果が得られなかったときに「待つ/待ち/完了を待って/結果を待っています」と書いてターンを終えてはいけない。代わりに「【継続】<説明>（次セッションで再実行）」の形式で ${summaryFile} に記録する。
-- \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。codex-doを起動する前に残り時間を確認する。残り${Math.max(1, timeoutMin - 10)}分未満ならcodex-doを起動しない。代わりに継続項目として${summaryFile}に「【継続】codex-do: <説明>（残り時間不足のため次セッションで実行）」と記録し、次のTODOへ進む。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、次回へ引き継いで終了する。
+- \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。codex-doを起動する前に残り時間を確認する。まとめ開始（開始から${Math.max(1, timeoutMin - 10)}分）まで30分未満ならcodex-doを起動しない。代わりに継続項目として${summaryFile}に「【継続】codex-do: <説明>（残り時間不足のため次セッションで実行）」と記録し、次のTODOへ進む。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、次回へ引き継いで終了する。
 - 作業経過を ${summaryFile} に逐次追記する。PR URL・PRタイトル・CI結果を必ず最後に記録する。
 - 5分を超える長時間ポーリングをしてはいけない。開始から ${Math.max(1, timeoutMin - 10)} 分でまとめに入る。
 

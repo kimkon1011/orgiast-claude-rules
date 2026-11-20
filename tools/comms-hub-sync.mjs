@@ -16,6 +16,7 @@ import { collectPlaudForHub } from './plaud-to-tldv.mjs';
 import { isEntry } from './is-entry.mjs';
 export const SOURCES = ['inquiry-sheet', 'gmail-kim', 'gmail-seisaku', 'discord', 'line', 'line-chat', 'plaud', 'tldv'];
 const DAY = 86400000;
+const TRANSCRIPT_RETRY_MS = 14 * DAY;
 const iso = n => new Date(n).toISOString();
 const digest = v => crypto.createHash('sha256').update(v).digest('hex');
 const norm = v => String(v || '').normalize('NFKC').toLowerCase();
@@ -80,6 +81,8 @@ export function writeLastRun(statePath, report, { error, phases, clock, elapsedM
       if (v.accepted !== undefined) r.accepted = v.accepted;
       if (v.excluded !== undefined) r.excluded = v.excluded;
       if (v.fetched !== undefined) r.fetched = v.fetched;
+      if (v.transcriptFailures !== undefined) r.transcriptFailures = v.transcriptFailures;
+      if (v.pending) r.pending = v.pending;
       return [k, r];
     })),
     budgetExhausted: !!report.budgetExhausted,
@@ -148,15 +151,24 @@ export function render(m, full = false) {
   const stamp = new Date(m.ts).toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' });
   return `[${stamp}][${m.source}][${m.sender || ''}] ${m.subject || ''}\n${full ? String(m.text || '') : String(m.text || '').slice(0, 800)}\n${m.url || (m.source === 'line-chat' ? `LINE（Beeper）: ${m.chat || ''}` : '元リンクなし（通知保存データ）')}\n`;
 }
-export async function processPage({ source, page, state, cases, config, sink, save = () => {}, live }) {
+// Older entries lack firstFailedAt. Use the meeting date, since lastAttempt
+// was overwritten on every retry and cannot show how long they have waited.
+function firstTranscriptFailure(failure) {
+  return failure?.firstFailedAt || failure?.ts || failure?.lastAttempt;
+}
+
+export async function processPage({ source, page, state, cases, config, sink, save = () => {}, live, now = Date.now() }) {
   const s = state.sources[source]; s.processed ||= {};
+  if (live) s.transcriptFailures ||= {};
   const counts = { fetched: page.messages.length, accepted: 0, excluded: 0, duplicate: 0 };
   for (const m of page.messages) {
     if (!m.id || !Number.isFinite(Date.parse(m.ts))) throw new Error('invalid source message id/date');
     const key = messageKey(m);
-    if (s.processed[key] && !s.transcriptFailures?.[m.id]) { counts.duplicate++; continue; }
+    const failure = s.transcriptFailures?.[m.id];
+    if (failure?.abandonedAt || (s.processed[key] && !failure)) { counts.duplicate++; continue; }
     const c = matchCase(m, cases, config);
-    if (exclusion(m, config, c)) { counts.excluded++; if (live) sink.remove?.(key); }
+    const excluded = exclusion(m, config, c);
+    if (excluded) { counts.excluded++; if (live) sink.remove?.(key); }
     else {
       if (live) {
         const day = new Date(Date.parse(m.ts) + 9 * 3600000).toISOString().slice(0, 10);
@@ -168,15 +180,17 @@ export async function processPage({ source, page, state, cases, config, sink, sa
       }
       counts.accepted++;
     }
-    if (live) { s.processed[key] = iso(Date.now()); save(); }
+    if (live) {
+      if (m.transcriptError && !excluded) {
+        s.transcriptFailures[m.id] = { id: m.id, title: m.subject || '', ts: m.ts, url: m.url, reason: m.transcriptError,
+          firstFailedAt: firstTranscriptFailure(failure) || iso(now), lastAttempt: iso(now) };
+      } else delete s.transcriptFailures[m.id];
+      s.processed[key] = iso(now);
+      save();
+    }
   }
   if (live) {
     s.cursor = page.cursor;
-    s.transcriptFailures ||= {};
-    for (const m of page.messages) {
-      if (m.transcriptError && !exclusion(m, config, matchCase(m, cases, config))) s.transcriptFailures[m.id] = { id: m.id, title: m.subject || '', ts: m.ts, url: m.url, reason: m.transcriptError, lastAttempt: iso(Date.now()) };
-      else delete s.transcriptFailures[m.id];
-    }
     save();
   }
   return counts;
@@ -428,9 +442,9 @@ export async function collectSource(source, ctx) {
   const p = await jsonFetch(`${base}?${new URLSearchParams({ from: iso(since), to: iso(end), page, limit })}`, { headers }, fetchImpl);
   if (!Array.isArray(p.results)) throw new Error('tl;dv invalid list response');
   const messages = [];
-  const pending = Object.values(state.transcriptFailures || {}).sort((a, b) => (a.lastAttempt || '').localeCompare(b.lastAttempt || '')).slice(0, Math.max(1, Math.floor(limit / 2)));
+  const pending = Object.values(state.transcriptFailures || {}).filter(r => !r.abandonedAt).sort((a, b) => (a.lastAttempt || '').localeCompare(b.lastAttempt || '')).slice(0, Math.max(1, Math.floor(limit / 2)));
   const records = new Map(pending.map(r => [r.id, { id: r.id, name: r.title, happenedAt: r.ts, url: r.url }]));
-  for (const r of p.results) records.set(r.id, r);
+  for (const r of p.results) if (!state.transcriptFailures?.[r.id]?.abandonedAt) records.set(r.id, r);
   for (const r of records.values()) {
     const m = { source, id: r.id, ts: r.happenedAt, subject: r.name, sender: r.organizer?.name || '', text: '', url: r.url || `https://tldv.io/app/meetings/${encodeURIComponent(r.id)}` };
     try {
@@ -659,7 +673,7 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
         sources: Object.fromEntries(SOURCES.map(source => {
           const s = state.sources[source] || {};
           return [source, { lastSuccess: s.lastSuccess || s.lastSync || null, lastSync: s.lastSuccess || s.lastSync || null,
-            lastAttempt: s.lastAttempt || null, error: s.error || null, failedAt: s.failedAt || null,
+            lastAttempt: s.lastAttempt || null, error: s.error || null, failedAt: s.failedAt || null, pending: s.pending || null,
             transcriptFailures: Object.values(s.transcriptFailures || {}), cursor: s.cursor || null }];
         })), publicationErrors: failures };
       const indexText = JSON.stringify(index, null, 2);
@@ -805,15 +819,18 @@ async function runLocked(options = {}, deps = {}) {
       const requestSignal = source.startsWith('gmail') ? AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, Math.min(config.sourceTimeoutMs, collectionDeadline - clock()) - 5000))]) : signal;
       phaseTracker.start(`collect:${source}`);
       try {
+        for (const failure of Object.values(s.transcriptFailures || {})) {
+          if (!failure.abandonedAt && now - Date.parse(firstTranscriptFailure(failure)) > TRANSCRIPT_RETRY_MS) failure.abandonedAt = iso(now);
+        }
         const page = await (deps.collect || collectSource)(source, { config, home, since, until: now, cursor: options.since ? {} : s.cursor, signal: requestSignal, fetchImpl: boundedFetch(requestSignal), state: s, cases,
           commitMessage: live ? m => {
-            const commit = () => processPage({ source, page: { messages: [m], cursor: s.cursor }, state, cases, config, sink, save, live });
+            const commit = () => processPage({ source, page: { messages: [m], cursor: s.cursor }, state, cases, config, sink, save, live, now });
             // Serialize local commits while the five network workers continue.
             commits = commits.then(commit).then(counts => {
               for (const key of Object.keys(committed)) committed[key] += counts[key];
             }); return commits;
           } : undefined });
-        report.sources[source] = await processPage({ source, page, state, cases, config, sink, save, live });
+        report.sources[source] = await processPage({ source, page, state, cases, config, sink, save, live, now });
         if (committed.fetched) {
           // The final page replays already committed Gmail messages only to save its cursor.
           for (const key of ['accepted', 'excluded']) report.sources[source][key] += committed[key];
@@ -821,11 +838,14 @@ async function runLocked(options = {}, deps = {}) {
         }
         if (live) {
           s.lastAttempt = iso(now);
-          const failures = Object.values(s.transcriptFailures || {});
           if (page.partial) { s.error = page.error || 'Gmail source budget exhausted; pending messages saved'; s.failedAt = iso(now); report.sources[source].partial = true; }
-          else if (failures.length) { s.error = `${failures.length} transcript(s) unavailable: ${[...new Set(failures.map(f => f.reason))].join('; ')}`.slice(0, 300); s.failedAt = iso(now); }
           else { s.lastSuccess = s.lastSync = iso(now); delete s.error; delete s.failedAt; }
+          const failures = Object.values(s.transcriptFailures || {}).filter(f => !f.abandonedAt);
           report.sources[source].transcriptFailures = failures.length;
+          if (failures.length) {
+            s.pending = `${failures.length} transcript(s) pending: ${[...new Set(failures.map(f => f.reason))].join('; ')}`.slice(0, 300);
+            report.sources[source].pending = s.pending;
+          } else delete s.pending;
           save();
         }
         phaseTracker.end();

@@ -24,6 +24,8 @@ const SUPPORTED_EXTENSIONS = new Set(['.mp3', '.mp4', '.wav', '.m4a', '.mkv', '.
 const FIVE_MINUTES = 5 * 60;
 const RENEW_AHEAD = 7 * 24 * 60 * 60;
 const THREE_HOURS = 3 * 60 * 60;
+const PLAUD_V4 = '/file-app/v4';
+const MIGRATED_TO_V4 = -1800907;
 
 export function selectPlaudCookies(setCookies, current = {}) {
   const selected = { ut: current.ut || '', urt: current.urt || '' };
@@ -136,6 +138,10 @@ export function proxyExtensionFor(upstreamUrl, oggAs = 'ogg') {
   return (ext === 'ogg' || ext === 'opus') ? oggAs : ext;
 }
 
+function plaudV4FileId(id) {
+  return /^(of_|f_)/.test(id) ? id : `of_${id}`;
+}
+
 /**
  * 更新トークンの期限切れは「気付けないまま止まる」のが最悪なので Discord に出す。
  * 15分ごとに走るので同じ用件は24時間に1回だけ送る。
@@ -201,7 +207,7 @@ export function redactSecret(value) {
 }
 
 export function defaultState() {
-  return { version: 1, session: { ut: '', utExp: 0, urt: '', urtExp: 0, region: 'aws:us-west-2', workspaceId: '', wt: '', wtExp: 0 }, firstSeenAt: 0, imported: {}, skipped: {}, notifiedAt: {}, lastRun: 0 };
+  return { version: 1, plaudApiVersion: 3, session: { ut: '', utExp: 0, urt: '', urtExp: 0, region: 'aws:us-west-2', workspaceId: '', wt: '', wtExp: 0 }, firstSeenAt: 0, imported: {}, skipped: {}, notifiedAt: {}, lastRun: 0 };
 }
 
 export function mergeState(raw = {}, bootstrap = {}) {
@@ -384,7 +390,82 @@ function makePlaudClient(state, persist, log, fetchImpl = fetch) {
     envelopeError(body, label);
     return { response, body };
   }
-  return { call };
+  function workspaceCall(endpoint, label, init = {}) {
+    return withFreshWorkspaceToken(state, client, persist, async () => {
+      const { body } = await call(endpoint, { ...init, headers: authHeaders(state.session.wt, init.headers) }, label);
+      return body;
+    });
+  }
+
+  async function recordingCall(legacy, v4) {
+    if (state.plaudApiVersion !== 4) {
+      try { return await legacy(); }
+      catch (error) {
+        if (Number(error.envelope?.status) !== MIGRATED_TO_V4) throw error;
+        state.plaudApiVersion = 4;
+        persist();
+        log.info('Plaud 4.0 API に切り替えました');
+      }
+    }
+    return v4();
+  }
+
+  async function recordingPage({ skip = 0, plaudV4Cursor } = {}, limit) {
+    return recordingCall(async () => {
+      const body = await workspaceCall(`/file/simple/web?skip=${skip}&limit=${limit}&is_trash=2&sort_by=start_time&is_desc=true`, '録音一覧');
+      const rows = body.data_file_list;
+      if (!Array.isArray(rows)) throw new Error('Plaud 録音一覧の data_file_list が不正です');
+      const next = rows.length === limit && skip + rows.length < Number(body.data_file_total ?? Infinity);
+      return { rows, next: next ? { skip: skip + rows.length } : undefined };
+    }, async () => {
+      const query = new URLSearchParams({ sort_by: 'created', sort_order: 'desc', page_size: String(limit) });
+      if (plaudV4Cursor) query.set('cursor', plaudV4Cursor);
+      const { data } = await workspaceCall(`${PLAUD_V4}/recordings/all?${query}`, '録音一覧');
+      if (!Array.isArray(data?.items)) throw new Error('Plaud 4.0 録音一覧の items が不正です');
+      const next = data.next_cursor;
+      if (next && (typeof next !== 'string' || next === plaudV4Cursor)) throw new Error('Plaud 4.0 録音一覧の cursor が不正です');
+      return { rows: data.items.map(normalizePlaudV4Recording), next: next ? { plaudV4Cursor: next } : undefined };
+    });
+  }
+
+  async function artifactUrl(id, types, label) {
+    const { data } = await workspaceCall(`${PLAUD_V4}/files/detail/${encodeURIComponent(plaudV4FileId(id))}`, label);
+    if (!Array.isArray(data?.objects)) throw new Error('Plaud 4.0 ファイル詳細の objects が不正です');
+    for (const type of types) {
+      const object = data.objects.find(obj => obj?.object_type === type && (obj.task_status == null || obj.task_status === 1));
+      if (object?.content_url) return object.content_url;
+      if (object?.content_id) {
+        const { data } = await workspaceCall(`${PLAUD_V4}/files/content/url`, label, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content_ids: [object.content_id] }),
+        });
+        if (!data?.url_map || typeof data.url_map !== 'object' || Array.isArray(data.url_map)) throw new Error('Plaud 4.0 の url_map が不正です');
+        const url = data.url_map[object.content_id];
+        if (url) return url;
+      }
+    }
+  }
+
+  const audioUrl = id => recordingCall(async () => {
+    const body = await workspaceCall(`/file/temp-url/${encodeURIComponent(id)}`, '音声URL取得');
+    return body.temp_url;
+  }, () => artifactUrl(id, ['AUDIO_TRANSCODED', 'AUDIO'], '音声URL取得'));
+  const transcriptUrl = id => recordingCall(async () => {
+    const body = await workspaceCall(`/file/detail/${encodeURIComponent(id)}`, 'hub detail');
+    return body.data?.content_list?.find(x => x.data_type === 'transaction' && x.data_link)?.data_link;
+  }, () => artifactUrl(id, ['TRANSCRIPT'], 'hub detail'));
+
+  const client = { call, recordingPage, audioUrl, transcriptUrl };
+  return client;
+}
+
+export function normalizePlaudV4Recording(item) {
+  const id = typeof item?.file_id === 'string' ? item.file_id.replace(/^of_/, '') : '';
+  const start = Number(item?.created_at_show_ms);
+  const duration = Number(item?.duration_ms);
+  if (!id || !epochToIso(start) || start <= 1e12 || item.duration_ms == null || !Number.isFinite(duration) || duration < 0) {
+    throw new Error('Plaud 4.0 の録音に有効な ID・開始時刻・長さがありません');
+  }
+  return { id, filename: item.name || '', start_time: start, end_time: start + duration, duration, is_trash: false };
 }
 
 function needsRefresh(exp) { return !Number(exp) || Number(exp) <= Math.floor(Date.now() / 1000) + FIVE_MINUTES; }
@@ -483,14 +564,17 @@ async function withFreshWorkspaceToken(state, client, persist, run) {
   }
 }
 
-async function listRecordings(state, client) {
+async function listRecordings(client) {
   const all = [];
+  const seen = new Set();
+  let cursor;
   for (let page = 0; page < 20; page += 1) {
-    const skip = page * 50;
-    const { body } = await client.call(`/file/simple/web?skip=${skip}&limit=50&is_trash=2&sort_by=start_time&is_desc=true`, { headers: authHeaders(state.session.wt) }, '録音一覧');
-    const items = body?.data_file_list || [];
-    all.push(...items);
-    if (!items.length || all.length >= Number(body?.data_file_total || 0)) break;
+    const { rows, next } = await client.recordingPage(cursor, 50);
+    all.push(...rows);
+    if (!next) break;
+    if (seen.has(next.plaudV4Cursor)) throw new Error('Plaud 4.0 録音一覧の cursor が循環しています');
+    if (next.plaudV4Cursor) seen.add(next.plaudV4Cursor);
+    cursor = next;
   }
   return all;
 }
@@ -589,7 +673,7 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
       return 0;
     }
 
-    const records = await withFreshWorkspaceToken(state, client, persist, () => listRecordings(state, client));
+    const records = await listRecordings(client);
     const firstRun = !state.firstSeenAt;
     if (firstRun && !options.backfill) {
       const now = Date.now();
@@ -615,14 +699,23 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
       if (attempted >= options.limit) { summary.skipped += 1; continue; }
       attempted += 1;
       try {
-        const { body: urlBody } = await withFreshWorkspaceToken(state, client, persist, () => client.call(`/file/temp-url/${encodeURIComponent(record.id)}`, { headers: authHeaders(state.session.wt) }, '音声URL取得'));
-        const tempUrl = urlBody.temp_url;
-        // 中継が設定されていれば、tl;dv に渡すのは中継URL。素の署名URLは HEAD で
-        // 403 になり取り込まれないため、設定がある限りこちらを優先する。
+        const tempUrl = await client.audioUrl(record.id);
+        if (typeof tempUrl !== 'string' || !tempUrl.startsWith('https://')) throw new Error('Plaud 音声の一時URLがありません');
+        const v4 = state.plaudApiVersion === 4;
         const useProxy = Boolean(config.proxyBase && config.proxySecret);
-        const targetUrl = useProxy
-          ? buildProxyUrl({ base: config.proxyBase, secret: config.proxySecret, apiBase: apiBaseFor(state.session.region), workspaceToken: state.session.wt, fileId: record.id, ext: proxyExtensionFor(tempUrl, options.proxyExt) })
+        let targetUrl = useProxy
+          ? buildProxyUrl({ base: config.proxyBase, secret: config.proxySecret, apiBase: apiBaseFor(state.session.region), workspaceToken: state.session.wt, fileId: v4 ? plaudV4FileId(record.id) : record.id, ext: proxyExtensionFor(tempUrl, options.proxyExt) })
           : tempUrl;
+        if (v4) {
+          // 旧 API 固定の中継や署名 URL の HEAD 拒否による見かけ上の成功を防ぐ。
+          const headRequest = url => fetchImpl(url, { method: 'HEAD', signal: AbortSignal.timeout(20000) }).catch(() => null);
+          let head = await headRequest(targetUrl);
+          if (!head?.ok && useProxy) {
+            targetUrl = tempUrl;
+            head = await headRequest(targetUrl);
+          }
+          if (!head?.ok) throw new Error(`Plaud 4.0 音声URLの HEAD に失敗しました (${head?.status ?? '接続エラー'})。v4 対応の音声中継が必要です`);
+        }
         if (!options.allowUnsupported && !isTldvSupportedUrl(targetUrl)) {
           const extension = extensionFromUrl(targetUrl) || '(拡張子なし)';
           log.warn(`${record.filename || record.id}: 非対応拡張子 ${extension}`);
@@ -670,23 +763,24 @@ export async function collectPlaudForHub({ home, since, until, cursor = {}, conf
   catch (e) { if (e.code !== 'ENOENT') throw e; }
   const envFile = path.join(home, '.claude', 'plaud.env');
   const state = mergeState(raw);
+  if (sourceState.plaudApiVersion === 4) state.plaudApiVersion = 4;
   state.session.ut ||= process.env.PLAUD_UT || readEnvValue(envFile, 'PLAUD_UT');
   state.session.urt ||= process.env.PLAUD_URT || readEnvValue(envFile, 'PLAUD_URT');
   if (!state.session.ut) throw new Error('Plaud session missing');
   state.session.region = regionFromToken(state.session.ut) || state.session.region;
   // Let the existing owner task refresh UT/URT; do not rotate its refresh token.
   if (needsRefresh(jwtExp(state.session.ut))) throw new Error('Plaud session expired; owner plaud-to-tldv refresh required');
-  const persist = () => {};
+  const persist = () => { if (state.plaudApiVersion === 4) sourceState.plaudApiVersion = 4; };
   const client = makePlaudClient(state, persist, { warn() {}, info() {} }, fetchImpl);
   await ensureWorkspace(state, client, persist);
-  const skip = cursor.skip || 0, limit = config.maxPerSource;
-  const { body } = await client.call(`/file/simple/web?skip=${skip}&limit=${limit}&is_trash=2&sort_by=start_time&is_desc=true`, { headers: authHeaders(state.session.wt) }, 'hub recordings');
-  if (!Array.isArray(body.data_file_list)) throw new Error('Plaud invalid listing');
-  const rows = body.data_file_list, messages = [];
+  const limit = config.maxPerSource;
+  const { rows, next } = await client.recordingPage(cursor, limit);
+  const messages = [];
   const end = cursor.end || until;
-  const pending = Object.values(sourceState.transcriptFailures || {}).sort((a, b) => (a.lastAttempt || '').localeCompare(b.lastAttempt || '')).slice(0, Math.max(1, Math.floor(limit / 2)));
+  const pending = Object.values(sourceState.transcriptFailures || {}).filter(r => !r.abandonedAt).sort((a, b) => (a.lastAttempt || '').localeCompare(b.lastAttempt || '')).slice(0, Math.max(1, Math.floor(limit / 2)));
   const records = new Map(pending.map(r => [r.id, { id: r.id, filename: r.title, start_time: Date.parse(r.ts) / 1000 }]));
   for (const r of rows) {
+    if (sourceState.transcriptFailures?.[r.id]?.abandonedAt) continue;
     const ts = epochToIso(r.start_time);
     if (ts && Date.parse(ts) >= since && Date.parse(ts) <= end) records.set(r.id, r);
   }
@@ -694,8 +788,7 @@ export async function collectPlaudForHub({ home, since, until, cursor = {}, conf
     const m = { source: 'plaud', id: r.id, ts: epochToIso(r.start_time), subject: r.filename || '', sender: 'Plaud', text: '', url: 'https://web.plaud.ai/' };
     try {
       // Only read existing artifacts. Never request transcription or audio import.
-      const { body: detail } = await client.call(`/file/detail/${encodeURIComponent(r.id)}`, { headers: authHeaders(state.session.wt) }, 'hub detail');
-      const link = detail.data?.content_list?.find(x => x.data_type === 'transaction' && x.data_link)?.data_link;
+      const link = await client.transcriptUrl(r.id);
       if (!link || !/^https:\/\//.test(link)) throw new Error('Plaud transcript not ready (artifact missing)');
       const response = await fetchImpl(link); // Never attach bearer tokens to signed links.
       if (!response.ok) throw new Error(`Plaud transcript download HTTP ${response.status}`);
@@ -704,13 +797,14 @@ export async function collectPlaudForHub({ home, since, until, cursor = {}, conf
       try { raw = gunzipSync(buffer, { maxOutputLength: 10000000 }).toString('utf8'); } catch { raw = buffer.toString('utf8'); }
       let decoded;
       try { decoded = JSON.parse(raw); } catch { throw new Error('Plaud transcript invalid JSON'); }
-      const segments = Array.isArray(decoded) ? decoded : decoded && typeof decoded === 'object' ? Object.values(decoded) : [];
+      const transcript = decoded?.trans_result ?? decoded?.segments ?? decoded;
+      const segments = Array.isArray(transcript) ? transcript : transcript && typeof transcript === 'object' ? Object.values(transcript) : [];
       const usable = segments.filter(x => x && typeof (x.content || x.text) === 'string' && (x.content || x.text).trim());
       if (!usable.length) throw new Error('Plaud transcript not ready or unsupported schema');
       m.text = usable.map(x => `${x.speaker || x.original_speaker || ''}: ${x.content || x.text}`).join('\n');
     } catch (e) { m.transcriptError = String(e.message).slice(0, 300); }
     messages.push(m);
   }
-  const more = rows.length === limit && skip + rows.length < Number(body.data_file_total || Infinity) && !rows.some(r => Date.parse(epochToIso(r.start_time)) < since);
-  return { messages, cursor: more ? { since, end, skip: skip + rows.length } : { since: end } };
+  const more = next && !rows.some(r => Date.parse(epochToIso(r.start_time)) < since);
+  return { messages, cursor: more ? { since, end, ...next } : { since: end } };
 }

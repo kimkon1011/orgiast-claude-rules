@@ -184,22 +184,25 @@ export async function sweep({registryFile=path.join(here,'feedback-zero-registry
         }
       } catch(e){row.status='未取得';row.errors.push(e.message);}
     }
-    if(!dryRun) {
+    // Every app failing only on url resolution means this machine was never given the sweep config.
+    const unassigned=rows.length>0 && rows.every(r=>r.status==='未取得' && r.errors.length===1 && r.errors[0]==='url 参照キー未設定');
+    if(!dryRun && !unassigned) {
       // Existing completion notifier uses Issue CLOSED and submitter identity, never executor exit 0.
       try {await done(['--recipient-only'],{home,fetchImpl});}catch {rows.push({appName:'完了報告',remaining:null,status:'未取得',errors:['done-notify失敗']});}
       const notified=readJson(path.join(stateDir,'feedback-done-notified.json'),{items:[]});
       const unnotified=Object.values(state.jobs).filter(job=>job.status==='closed' && !notified.items.some(n=>n.message_id===job.issue.message_id));
       if(unnotified.length)rows.push({appName:'完了報告',remaining:unnotified.length,status:'未取得',errors:['投稿者へのDM未達']});
     }
-    const remaining=rows.reduce((n,r)=>n+(r.remaining || 0),0), unknown=rows.filter(r=>r.status!=='取得済' || r.errors.length).length;
+    const remaining=rows.reduce((n,r)=>n+(r.remaining || 0),0);
+    const unknown=unassigned?0:rows.filter(r=>r.status!=='取得済' || r.errors.length).length;
     let notification={delivered:'none'};
-    if(!dryRun && (remaining>0 || unknown>0)) {
+    if(!dryRun && !unassigned && (remaining>0 || unknown>0)) {
       // 宛先は FEEDBACK_KIM_DISCORD_ID を優先し、未設定なら notify-kim の既定解決（環境変数 or txt）に任せる。
       const userId=config.FEEDBACK_KIM_DISCORD_ID || undefined;
       notification=await notify('不具合・要望 日次巡回\n'+rows.map(r=>`${r.appName}: ${r.remaining===null?'未取得':r.remaining+'件'} / ${r.status}${r.errors.length?' / '+[...new Set(r.errors)].join('、'):''}`).join('\n'),{home,userId,webhookFallback:false,fetchImpl});
       if(notification.delivered==='none' && !notification.reason) notification={delivered:'none',reason:'宛先未設定（FEEDBACK_KIM_DISCORD_ID / ORGIAST_DISCORD_USER_ID / ~/.claude/orgiast-discord-user-id.txt）'};
     }
-    return {dryRun,remaining,unknown,launched,rows,notification};
+    return {dryRun,remaining,unknown,launched,rows,notification,unassigned};
   } finally {if(locked)fs.rmSync(lock,{force:true});}
 }
 export function sweepExitCode(result) {

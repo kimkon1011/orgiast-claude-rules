@@ -2490,8 +2490,10 @@ for (const count of [25, 19, 0]) {
 
     const result = await reopenLost(opts);
     const expectedOpens = Math.min(2, Math.max(0, 20 - count));
-    assert.equal(snapshots, 1);
-    assert.equal(uriCalls, expectedOpens);
+    // 拡張再試行の前再確認（isSessionProcessRunning）は共有スナップショットを使わず現時点を取り直す:
+    // この fixture は opened 全員 unverified → 全員拡張再試行 → スナップショットは 1 + retried 回
+    assert.equal(snapshots, 1 + expectedOpens);
+    assert.equal(uriCalls, expectedOpens * 2); // 初回オープン + 全員拡張再試行
     assert.equal(result.candidates.length, 2);
     assert.equal(result.reopened.length, expectedOpens);
     if (expectedOpens < 2) {

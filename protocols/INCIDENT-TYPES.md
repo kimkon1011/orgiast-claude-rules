@@ -66,3 +66,4 @@
 - 型: コマンドラインの引用符の違いで正規のプロセスを別物と判定し、再起動を拒否する（2026-11-19 kim-PC、secretary-restart.ps1 の 3939/3940 実測） → 対策: 引数単位でパスとポートを照合し、Next.js の子プロセスは親も確認する。ゲート: tools/secretary-server-process.test.ps1
 | 送信ゲート経路漏れ型 | ゲートをコマンド名に結びつけ、同じ操作をする別経路を見落とす | 送信 API・Actions の `mode=send`・送信関数の呼び出しを `tools/` 全体で走査 | 送信ツール本体で防御＋送信経路の網羅テスト |
 - 型: 故障レーンの修理を「次のセッションで直します」と最終応答で先送りする型（2026-11-15 kim 指摘: deepseek・qwen の故障を次セッションへ回した。deferral-wait-gate に「次のセッション／明日／後で＋直す」の型が無く、lane-repair-first-gate は PreToolUse でツール実行しか止めないため最終文面を素通り。原因の実体は codex-do が警告行 [claude-code:unrecognized_model] だけで失敗判定していた誤判定と、qwen 0.22.3 が自動メモリ抽出で終了しない不具合） → 横展開の検索: deferral-wait-gate の全先送りパターン、codex-do の isLaneIncompatible・cheapFirstFailureReason の呼出し全箇所、buildQwenArgs → ゲート: deferral-wait-gate NEXT_SESSION_DEFERRAL（Stop・人待ち例外つき）+ isLaneIncompatible の警告行除外判定 + buildQwenArgs に --bare
+- 型: 手間依頼の回避策未検討型（2026-11-16 同日2回目。kim「何回言ったらわかるのかな」）→ 横展開の検索: user へ電話・操作を依頼する報告文・手順書 → ゲート: user-burden-gate の「Claude で回避できる策:」検査

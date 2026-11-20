@@ -68,6 +68,11 @@ function run(args, options = {}) {
       // 既存テストは全て Codex 先行（sol/astra/既定モデル）を前提としているため、
       // cheap-first を既定で無効にする。cheap-first のテストだけ options.env で上書きする。
       CODEX_DO_CHEAP_FIRST: '0',
+      // 実機に Cursor がログイン済みでも、既存 cheap-first モック連鎖を横取りしない。
+      // Cursor 挿入そのものを見るテストは CODEX_DO_SKIP_CURSOR_AGENT=0 で上書きする。
+      CODEX_DO_SKIP_CURSOR_AGENT: '1',
+      // 実機の CURSOR_API_KEY を子プロセスへ持ち込まない（値は使わず空文字で覆う）。
+      CURSOR_API_KEY: '',
       // 裏での npm install はテストでは起動しない（shouldAutoInstallQwen のテストは直接関数を呼ぶ）
       CODEX_DO_NO_AUTOINSTALL: '1',
       ...options.env
@@ -1610,7 +1615,7 @@ test('cheap-first: implement with zero changed files starts Codex', () => {
 test('cheap-first: 先頭レーンが unrecognized_model なら incompatible を記録して次レーンを呼ぶ', () => {
   const home = workDir();
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
-  // local.json を書いて cursor-agent の自動挿入を抑制
+  // テスト対象は deepseek→gemini の連鎖なので Cursor 挿入を明示的に外す
   fs.writeFileSync(path.join(home, '.claude', 'codex-fallback-order.local.json'), JSON.stringify(['cheap-code:deepseek', 'gemini-cli']), 'utf8');
   fs.writeFileSync(path.join(home, '.claude', 'codex-fallback-order.json'), JSON.stringify(['cheap-code:deepseek', 'gemini-cli']), 'utf8');
   const result = run(['--force-native', '--cwd', home, '--kind', 'implement', 'implement feature'], {
@@ -1618,6 +1623,7 @@ test('cheap-first: 先頭レーンが unrecognized_model なら incompatible を
     env: {
       ...geminiOnPathEnv(),
       CODEX_DO_CHEAP_FIRST: '1',
+      CODEX_DO_SKIP_CURSOR_AGENT: '1',
       GEMINI_API_KEY: 'gemini-test',
       OPENROUTER_API_KEY: 'openrouter-test',
       CODEX_DO_MOCK_RESULTS: JSON.stringify([
@@ -3308,10 +3314,10 @@ test('openrouter-free は summarize/classify のみ、implement は openrouter-c
       'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
       'codex-fallback-order.json': JSON.stringify(['openrouter-free', 'cheap-code:deepseek']),
     });
-    const options = { executableAvailable: () => true };
+    const options = { executableAvailable: () => true, env: { CODEX_DO_SKIP_CURSOR_AGENT: '1' } };
     assert.deepEqual(resolveFallbackBackends(dir, { ...options, taskKind: 'summarize' }).map((b) => b.name), ['openrouter-free', 'cheap-code:deepseek']);
     assert.deepEqual(resolveFallbackBackends(dir, { ...options, taskKind: 'classify' }).map((b) => b.name), ['openrouter-free', 'cheap-code:deepseek']);
-    const paid = resolveFallbackBackends(dir, { ...options, taskKind: 'implement', env: { CODEX_DO_PAID_CODE_MODEL: 'qwen/qwen3-coder-custom' } });
+    const paid = resolveFallbackBackends(dir, { ...options, taskKind: 'implement', env: { ...options.env, CODEX_DO_PAID_CODE_MODEL: 'qwen/qwen3-coder-custom' } });
     assert.equal(paid[0].name, 'openrouter-code');
     assert.equal(paid[0].model, 'qwen/qwen3-coder-custom');
     assert.equal(paid.some((b) => b.name === 'openrouter-free'), false);
@@ -3446,7 +3452,7 @@ test('resolveFallbackBackends は implement/verify でログイン済みの curs
 
 test('resolveFallbackBackends は未ログインや CLI 無し、summarize/classify では cursor-agent を使わない（従来順）', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
-  const unsigned = resolveFallbackBackends(dir, { executableAvailable: () => true, taskKind: 'implement' }).map((b) => b.name);
+  const unsigned = resolveFallbackBackends(dir, { executableAvailable: () => true, taskKind: 'implement', env: {} }).map((b) => b.name);
   assert.ok(!unsigned.includes('cursor-agent'));
   assert.deepEqual(unsigned, ['cheap-code:deepseek', 'openrouter-code']);
   const noCli = resolveFallbackBackends(dir, {
@@ -3461,7 +3467,7 @@ test('resolveFallbackBackends は未ログインや CLI 無し、summarize/class
   assert.ok(!summarized.includes('cursor-agent'));
 });
 
-test('resolveFallbackBackends は local.json があるとき cursor-agent を自動挿入せず、共有ファイルへは先頭に足す', () => {
+test('resolveFallbackBackends は local.json があっても implement/verify では cursor-agent を先頭に置く', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
   const claude = path.join(dir, '.claude');
   fs.mkdirSync(claude, { recursive: true });
@@ -3469,9 +3475,47 @@ test('resolveFallbackBackends は local.json があるとき cursor-agent を自
   fs.writeFileSync(path.join(claude, 'codex-fallback-order.json'), JSON.stringify(['cheap-code:deepseek', 'openrouter-code']) + '\n');
   assert.deepEqual(resolveFallbackBackends(dir, options).map((b) => b.name), ['cursor-agent', 'cheap-code:deepseek', 'openrouter-code']);
   fs.writeFileSync(path.join(claude, 'codex-fallback-order.local.json'), JSON.stringify(['cheap-code:deepseek', 'openrouter-code']) + '\n');
-  assert.deepEqual(resolveFallbackBackends(dir, options).map((b) => b.name), ['cheap-code:deepseek', 'openrouter-code']);
+  assert.deepEqual(resolveFallbackBackends(dir, options).map((b) => b.name), ['cursor-agent', 'cheap-code:deepseek', 'openrouter-code']);
+  assert.deepEqual(resolveFallbackBackends(dir, { ...options, env: { CODEX_DO_SKIP_CURSOR_AGENT: '1' } }).map((b) => b.name), ['cheap-code:deepseek', 'openrouter-code']);
 });
 
 test('buildCursorAgentArgs は非対話の -p --force --trust と workspace を付ける', () => {
   assert.deepEqual(buildCursorAgentArgs({ workspace: 'C:/work' }), ['-p', '--force', '--trust', '--workspace', 'C:/work']);
+});
+
+test('backendSpecificTimeoutSecs は cursor-agent に implement/verify 1800 秒、それ以外 600 秒', () => {
+  assert.equal(backendSpecificTimeoutSecs('cursor-agent', {}, { kind: 'implement' }), 1800);
+  assert.equal(backendSpecificTimeoutSecs('cursor-agent', {}, { kind: 'verify' }), 1800);
+  assert.equal(backendSpecificTimeoutSecs('cursor-agent', {}), 600);
+  assert.equal(backendSpecificTimeoutSecs('cursor-agent', { CODEX_DO_CURSOR_TIMEOUT_SECS: '2400' }, { kind: 'implement' }), 2400);
+});
+
+test('chainBackendBudgetSecs は cursor-agent implement で 900 秒キャップを使わず 1800 秒まで与える', () => {
+  assert.equal(chainBackendBudgetSecs(1800, 0, {}, { backendName: 'cursor-agent', kind: 'implement' }), 1800);
+  assert.equal(chainBackendBudgetSecs(1800, 200, {}, { backendName: 'cursor-agent', kind: 'implement' }), 1600);
+  assert.equal(chainBackendBudgetSecs(1800, 0, {}, { backendName: 'cheap-code:deepseek', kind: 'implement' }), 720);
+  assert.equal(chainBackendBudgetSecs(1800, 0, {}), 900);
+});
+
+test('isCursorAgentLoggedIn は ~/.claude/cursor.env の CURSOR_API_KEY でもログイン済みとみなす（値は出さない）', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-env-login-'));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'cursor.env'), 'CURSOR_API_KEY=test-cursor-key-not-used\n', 'utf8');
+  assert.equal(isCursorAgentLoggedIn(home, { env: {} }), true);
+  assert.equal(isCursorAgentLoggedIn(home + '-missing', { env: {} }), false);
+});
+
+test('findCursorAgentCommand は homeDir 指定時に ~/.claude/bin のラッパーを公式 CLI より優先する', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-wrapper-home-'));
+  const wrapper = path.join(home, '.claude', 'bin', process.platform === 'win32' ? 'cursor-agent.cmd' : 'cursor-agent');
+  fs.mkdirSync(path.dirname(wrapper), { recursive: true });
+  fs.writeFileSync(wrapper, 'rem wrapper\n', 'utf8');
+  const found = findCursorAgentCommand({
+    homeDir: home,
+    executableAvailable: (cmd) => cmd === 'cursor-agent',
+    existsImpl: (p) => p === wrapper || fs.existsSync(p),
+    platform: process.platform,
+    env: {},
+  });
+  assert.equal(found, wrapper);
 });

@@ -614,6 +614,13 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env, { kin
     if (Number.isFinite(raw) && raw > 0) return raw;
     return kind === 'implement' ? 720 : 400;
   }
+  if (backendName === 'cursor-agent') {
+    const raw = Number(env.CODEX_DO_CURSOR_TIMEOUT_SECS);
+    if (Number.isFinite(raw) && raw > 0) return raw;
+    // 2026-11-20 実測: cursor-agent の成功実装は 80〜943 秒。連鎖上限の既定 900 秒だと
+    // 長い成功が timeout 扱いになり、6時間冷却で定額枠が使われなくなる。
+    return kind === 'implement' || kind === 'verify' ? 1800 : 600;
+  }
   return null;
 }
 
@@ -679,10 +686,11 @@ export function killProcessTree(child, { spawnImpl = spawn, platform = process.p
 // 与えると、--timeout 600 で2バックエンドなら最大1200秒＝指定した全体枠の2倍を消費しうる。
 // 先に走った分を差し引き、残りが無ければ 0 を返して打ち切る（低成果のタイムアウトで
 // 時間を捨て続けるのを止める。2026-10-15）。
-export function chainBackendBudgetSecs(timeoutSeconds, elapsedSecs, env = process.env) {
+export function chainBackendBudgetSecs(timeoutSeconds, elapsedSecs, env = process.env, { backendName, kind } = {}) {
   const remaining = Math.floor(Number(timeoutSeconds) - Number(elapsedSecs));
   if (!Number.isFinite(remaining) || remaining <= 0) return 0;
-  return Math.min(fallbackBackendTimeoutSecs(timeoutSeconds, env), remaining);
+  const specific = backendName ? backendSpecificTimeoutSecs(backendName, env, { kind }) : null;
+  return Math.min(specific ?? fallbackBackendTimeoutSecs(timeoutSeconds, env), remaining);
 }
 
 export function buildQwenEnv(baseEnv, apiKey, { model = GATEWAY_MODELS.deepseek, baseUrl = OPENROUTER_BASE } = {}) {
@@ -844,7 +852,19 @@ export function findCursorAgentCommand({
   platform = process.platform,
   existsImpl = fs.existsSync,
   executableAvailable,
+  homeDir,
 } = {}) {
+  // homeDir を明示したときだけラッパーを優先する（テストの PATH 優先ケースを壊さない）。
+  // resolveCursorAgentBackend は必ず homeDir を渡す。
+  if (homeDir) {
+    const wrapperNames = platform === 'win32'
+      ? ['cursor-agent.cmd', 'agent.cmd']
+      : ['cursor-agent', 'agent'];
+    for (const name of wrapperNames) {
+      const wrapper = path.join(homeDir, '.claude', 'bin', name);
+      if (existsImpl(wrapper)) return wrapper;
+    }
+  }
   const names = ['cursor-agent', 'agent'];
   for (const name of names) {
     if (typeof executableAvailable === 'function') {
@@ -867,6 +887,24 @@ export function findCursorAgentCommand({
   return '';
 }
 
+export function readCursorApiKeyFromEnvFile(homeDir, { readFileImpl = fs.readFileSync } = {}) {
+  try {
+    const content = readFileImpl(path.join(homeDir, '.claude', 'cursor.env'), 'utf8');
+    for (const rawLine of String(content).split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      const match = line.match(/^(?:export\s+)?CURSOR_API_KEY\s*=\s*(.*)$/);
+      if (!match) continue;
+      let value = match[1].trim();
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      return value;
+    }
+  } catch { /* ファイルが無い */ }
+  return '';
+}
+
 export function isCursorAgentLoggedIn(homeDir, {
   env = process.env,
   existsImpl = fs.existsSync,
@@ -875,11 +913,12 @@ export function isCursorAgentLoggedIn(homeDir, {
   if (cursorAgentLoggedIn === true) return true;
   if (cursorAgentLoggedIn === false) return false;
   if (String(env.CURSOR_API_KEY || '').trim()) return true;
+  if (String(readCursorApiKeyFromEnvFile(homeDir) || '').trim()) return true;
   return cursorAgentAuthPaths(homeDir, env).some((p) => existsImpl(p));
 }
 
 export function resolveCursorAgentBackend(homeDir, options = {}) {
-  const command = findCursorAgentCommand(options);
+  const command = findCursorAgentCommand({ ...options, homeDir });
   if (!command) return null;
   if (!isCursorAgentLoggedIn(homeDir, options)) return null;
   const env = options.env || process.env;
@@ -929,10 +968,15 @@ export function resolveFallbackBackends(homeDir, options = {}) {
     'openrouter-free': () => openrouter,
     'openrouter-code': () => openrouterCode,
   };
-  const usedLocalOrder = readFallbackOrderFile(path.join(homeDir, '.claude', 'codex-fallback-order.local.json')) !== undefined;
+  const skipCursorAgent = String((options.env || process.env).CODEX_DO_SKIP_CURSOR_AGENT || '') === '1';
   function withCursorAgentFirst(backends) {
+    // 定額の Cursor Ultra は local.json があっても implement/verify の先頭に置く。
+    // local は残りの安価レーン順だけを上書きする（2026-11-20: 019 の local が
+    // withCursorAgentFirst を丸ごと無効化し、Codex 枠切れ後に deepseek だけが走った）。
+    // テストや明示オプトアウトは CODEX_DO_SKIP_CURSOR_AGENT=1 で、既定順に含まれる分も外す。
+    if (skipCursorAgent) return backends.filter((b) => b.name !== 'cursor-agent');
     const usesCursor = taskKind === 'implement' || taskKind === 'verify';
-    if (!usesCursor || usedLocalOrder) return backends;
+    if (!usesCursor) return backends;
     const ready = acceptBackend(cursorAgent);
     if (!ready || backends.some((b) => b.name === 'cursor-agent')) return backends;
     return uniqueBackendsByName([ready, ...backends]);
@@ -983,7 +1027,7 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   ordered.push(ccDeepseek, ccGlm, gemini);
   if (taskKind === 'implement' || taskKind === 'verify') ordered.push(openrouterCode);
   if (taskKind === 'summarize' || taskKind === 'classify') ordered.push(openrouter);
-  return uniqueBackendsByName(ordered.map((backend) => acceptBackend(backend)).filter(Boolean));
+  return withCursorAgentFirst(uniqueBackendsByName(ordered.map((backend) => acceptBackend(backend)).filter(Boolean)));
 }
 
 export function detectOutsideScopeChanges(beforePorcelain, afterPorcelain, instructionText) {
@@ -1695,11 +1739,20 @@ if (!useCodex) {
   process.exit(routedStatus);
 }
 
+function cursorAgentChildEnv(homeDir, baseEnv = process.env) {
+  const env = { ...baseEnv };
+  if (!String(env.CURSOR_API_KEY || '').trim()) {
+    const key = readCursorApiKeyFromEnvFile(homeDir);
+    if (key) env.CURSOR_API_KEY = key;
+  }
+  return env;
+}
+
 async function executeCursorAgent(backend, { timeoutSecs, promptText, cwd: runCwd = cwd } = {}) {
   const cmd = backend.command || 'cursor-agent';
   return execute(cmd, buildCursorAgentArgs({ workspace: runCwd }), {
     cwd: runCwd,
-    env: process.env,
+    env: cursorAgentChildEnv(home, process.env),
     shell: process.platform === 'win32',
     timeoutSecs,
     promptText: `${GEMINI_CWD_GUARD}${promptText}`,
@@ -1710,7 +1763,7 @@ async function tryCheapFirstFallback() {
   if (!cheapFirst) return null;
   const resolvedBackends = resolveFallbackBackends(home, { taskKind });
   const cooling = coolingBackendNames(home);
-  const backends = deprioritizeUnreliableBackends(skipCoolingBackends(resolvedBackends, cooling), readFallbackBackendHistory(home));
+  const backends = deprioritizeUnreliableBackends(skipCoolingBackends(resolvedBackends, cooling, { keepNames: ['cursor-agent'] }), readFallbackBackendHistory(home));
   if (backends.length === 0) return { succeeded: false, result: null, chainResult: [], lastBackend: null };
   const chainResult = [];
   let lastBackend = null, lastResult = null, cheapSucceeded = false;
@@ -1718,7 +1771,7 @@ async function tryCheapFirstFallback() {
   for (const [bi, backend] of backends.entries()) {
     const isLast = bi === backends.length - 1;
     const bt = effectiveBackendTimeoutSecs(backend.name, {
-      chainBudget: chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000),
+      chainBudget: chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000, process.env, { backendName: backend.name, kind: taskKind }),
       cooling: cooling.has(backend.name), isLastBackend: isLast, kind: taskKind,
     });
     if (bt <= 0) break;
@@ -2015,7 +2068,7 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
 
     const resolvedBackends = resolveFallbackBackends(home, { taskKind });
     const cooling = coolingBackendNames(home);
-    const backends = deprioritizeUnreliableBackends(skipCoolingBackends(resolvedBackends, cooling), readFallbackBackendHistory(home));
+    const backends = deprioritizeUnreliableBackends(skipCoolingBackends(resolvedBackends, cooling, { keepNames: ['cursor-agent'] }), readFallbackBackendHistory(home));
     if (backends.length === 0) {
       console.error('GEMINI_API_KEY、OPENROUTER_API_KEY、ZAI_API_KEY が無いためフォールバックを実行できません');
       result.status = 1;
@@ -2095,7 +2148,7 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
         }
         // 全冷却で戻されたチェーンも末尾には通常予算を残す（1件だけの場合も同じ）。
         const backendTimeout = effectiveBackendTimeoutSecs(backend.name, {
-          chainBudget: chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000),
+          chainBudget: chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000, process.env, { backendName: backend.name, kind: taskKind }),
           cooling: effectiveCooling,
           isLastBackend: isLast,
           kind: taskKind

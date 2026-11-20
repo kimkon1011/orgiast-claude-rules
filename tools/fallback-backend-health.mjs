@@ -177,15 +177,19 @@ export function applyCandidateHealth(homeDir, { rows, now = Date.now(), force = 
 // name が cooling に含まれる backend を除いた配列を返す。
 // keepAtLeastOne が true（既定）で除外した結果が空になる場合は、元の配列をそのまま返す
 // （＝候補ゼロで詰むのを防ぐ）。除外した backend は1件につき1行 console.error で出す。
-export function skipCoolingBackends(backends, cooling, { keepAtLeastOne = true } = {}) {
+export function skipCoolingBackends(backends, cooling, { keepAtLeastOne = true, keepNames = [] } = {}) {
   const list = Array.isArray(backends) ? backends : [];
   const names = cooling instanceof Set ? cooling : new Set(cooling || []);
+  const keep = new Set(keepNames || []);
   const kept = [];
   for (const backend of list) {
     const name = backend && backend.name;
-    if (names.has(name)) {
+    if (names.has(name) && !keep.has(name)) {
       console.error(`[codex-do] fallback backend=${name} は直近でタイムアウトしたため冷却中としてスキップします`);
       continue;
+    }
+    if (names.has(name) && keep.has(name)) {
+      console.error(`[codex-do] fallback backend=${name} は冷却中ですが定額レーンのため候補に残します`);
     }
     kept.push(backend);
   }

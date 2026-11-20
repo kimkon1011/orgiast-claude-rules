@@ -249,64 +249,140 @@ function runProcessNotices(listPath) {
   return true;
 }
 
+// clasp OAuth トークンを Drive API クライアントとして使いシート作成
+async function createSheetViaClaspDriveApi() {
+  const claspRc = path.join(os.homedir(), '.clasprc.json');
+  if (!fs.existsSync(claspRc)) throw new Error('CLASPRC not found; cannot create sheet');
+  const rc = JSON.parse(fs.readFileSync(claspRc, 'utf8'));
+  const creds = rc.tokens?.default;
+  if (!creds?.refresh_token) throw new Error('CLASPRC has no refresh_token');
+  const refreshRes = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: creds.client_id,
+      client_secret: creds.client_secret,
+      refresh_token: creds.refresh_token,
+      grant_type: 'refresh_token',
+    }),
+  });
+  const refreshData = await refreshRes.json();
+  if (!refreshRes.ok) throw new Error(`Clasp refresh: ${JSON.stringify(refreshData)}`);
+  const claspToken = refreshData.access_token;
+
+  // Drive API で spreadsheet MIME のファイルを作成
+  const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${claspToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: '官公庁入札 候補台帳', mimeType: 'application/vnd.google-apps.spreadsheet' }),
+  });
+  const file = await createRes.json();
+  if (!createRes.ok) throw new Error(`Drive create: ${JSON.stringify(file)}`);
+  const spreadsheetId = file.id;
+
+  // CSV アップロードでヘッダー行を初期化
+  const csvHeader = '﻿' + SHEET_COLS.join(',') + '\n';
+  await fetch(`https://www.googleapis.com/upload/drive/v3/files/${spreadsheetId}?uploadType=media`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${claspToken}`, 'Content-Type': 'text/csv' },
+    body: csvHeader,
+  });
+
+  // SA と kim@ を writer に追加
+  for (const email of [SA_EMAIL, 'kim@orgiast.jp']) {
+    await fetch(`https://www.googleapis.com/drive/v3/files/${spreadsheetId}/permissions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${claspToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'user', role: 'writer', emailAddress: email }),
+    });
+  }
+  // anyone reader
+  await fetch(`https://www.googleapis.com/drive/v3/files/${spreadsheetId}/permissions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${claspToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'anyone', role: 'reader', allowFileDiscovery: false }),
+  });
+
+  // シート名を '候補台帳' にリネーム（SA の Sheets API を使用）
+  const saToken = await getSAToken('https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive');
+  const metaRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties`, {
+    headers: { Authorization: `Bearer ${saToken}` },
+  });
+  const meta = await metaRes.json();
+  if (metaRes.ok && meta.sheets?.[0]) {
+    const sheetNumId = meta.sheets[0].properties.sheetId;
+    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${saToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requests: [{ updateSheetProperties: { properties: { title: '候補台帳', sheetId: sheetNumId }, fields: 'title' } }] }),
+    });
+  }
+
+  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
+  const cfgPath = path.join(root, 'config/sheet.json');
+  fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+  fs.writeFileSync(cfgPath, JSON.stringify({ spreadsheetId, url, sheetTitle: '候補台帳', createdWith: 'clasp-drive-api-fallback' }, null, 2) + '\n', 'utf8');
+  log('sheet created via clasp Drive API', url);
+  return { spreadsheetId, url, created: true, token: saToken };
+}
+
+// SA の JWT トークン取得（DWD/sub なし）
+function getSAToken(scope) {
+  const key = JSON.parse(fs.readFileSync(SA_KEY, 'utf8'));
+  const now = Math.floor(Date.now() / 1000);
+  const payload = JSON.stringify({ iss: SA_EMAIL, scope, aud: 'https://oauth2.googleapis.com/token', exp: now + 3600, iat: now });
+  const header = JSON.stringify({ alg: 'RS256', typ: 'JWT' });
+  const b64 = (s) => Buffer.from(s).toString('base64url');
+  const sig = crypto.createSign('RSA-SHA256').update(`${b64(header)}.${b64(payload)}`).sign(key.private_key, 'base64url');
+  const jwt = `${b64(header)}.${b64(payload)}.${sig}`;
+  return fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: jwt }),
+  }).then(r => r.json()).then(d => { if (!d.access_token) throw new Error(`SA token: ${JSON.stringify(d)}`); return d.access_token; });
+}
+
 async function ensureSheet() {
   const cfgPath = path.join(root, 'config/sheet.json');
   if (fs.existsSync(cfgPath)) {
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     return { spreadsheetId: cfg.spreadsheetId, url: cfg.url || `https://docs.google.com/spreadsheets/d/${cfg.spreadsheetId}/edit`, created: false };
   }
-  const key = JSON.parse(fs.readFileSync(SA_KEY, 'utf8'));
-  const now = Math.floor(Date.now() / 1000);
-  const payload = JSON.stringify({
-    iss: SA_EMAIL,
-    scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive',
-    aud: 'https://oauth2.googleapis.com/token',
-    exp: now + 3600,
-    iat: now,
-  });
-  const header = JSON.stringify({ alg: 'RS256', typ: 'JWT' });
-  const b64 = (s) => Buffer.from(s).toString('base64url');
-  const sig = crypto.createSign('RSA-SHA256').update(`${b64(header)}.${b64(payload)}`).sign(key.private_key, 'base64url');
-  const jwt = `${b64(header)}.${b64(payload)}.${sig}`;
-  const tokRes = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: jwt }),
-  });
-  const tok = await tokRes.json();
-  if (!tokRes.ok) throw new Error(`Sheet token: ${JSON.stringify(tok)}`);
-  const token = tok.access_token;
-  const createRes = await fetch('https://sheets.googleapis.com/v4/spreadsheets', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      properties: { title: '官公庁入札 候補台帳' },
-      sheets: [{ properties: { title: '候補台帳' } }],
-    }),
-  });
-  const sheet = await createRes.json();
-  if (!createRes.ok) throw new Error(`Sheet create: ${JSON.stringify(sheet)}`);
-  const spreadsheetId = sheet.spreadsheetId;
-  await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/候補台帳!A1`, {
-    method: 'PUT',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ range: '候補台帳!A1', majorDimension: 'ROWS', values: [SHEET_COLS] }),
-  });
-  await fetch(`https://www.googleapis.com/drive/v3/files/${spreadsheetId}/permissions`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type: 'user', role: 'writer', emailAddress: 'kim@orgiast.jp' }),
-  });
-  const permRes = await fetch(`https://www.googleapis.com/drive/v3/files/${spreadsheetId}/permissions?fields=permissions(id,emailAddress,role)`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const perms = await permRes.json();
-  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
-  fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
-  fs.writeFileSync(cfgPath, JSON.stringify({ spreadsheetId, url, permissions: perms.permissions || [] }, null, 2) + '\n', 'utf8');
-  log('sheet created', url);
-  log('permissions', JSON.stringify(perms.permissions || [], null, 2));
-  return { spreadsheetId, url, created: true, permissions: perms.permissions, token };
+  try {
+    // まず SA 自身の identity で Sheets API 作成を試行
+    const token = await getSAToken('https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive');
+    const createRes = await fetch('https://sheets.googleapis.com/v4/spreadsheets', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ properties: { title: '官公庁入札 候補台帳' }, sheets: [{ properties: { title: '候補台帳' } }] }),
+    });
+    const sheet = await createRes.json();
+    if (!createRes.ok) throw new Error(`Sheet create SA: ${JSON.stringify(sheet)}`);
+    const spreadsheetId = sheet.spreadsheetId;
+    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/候補台帳!A1`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ range: '候補台帳!A1', majorDimension: 'ROWS', values: [SHEET_COLS] }),
+    });
+    await fetch(`https://www.googleapis.com/drive/v3/files/${spreadsheetId}/permissions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'user', role: 'writer', emailAddress: 'kim@orgiast.jp' }),
+    });
+    const permRes = await fetch(`https://www.googleapis.com/drive/v3/files/${spreadsheetId}/permissions?fields=permissions(id,emailAddress,role)`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const perms = await permRes.json();
+    const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
+    fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+    fs.writeFileSync(cfgPath, JSON.stringify({ spreadsheetId, url, sheetTitle: '候補台帳', permissions: perms.permissions || [] }, null, 2) + '\n', 'utf8');
+    log('sheet created via SA identity', url);
+    return { spreadsheetId, url, created: true, permissions: perms.permissions, token };
+  } catch (e) {
+    log('SA sheet create failed:', e.message);
+    log('falling back to clasp OAuth + Drive API');
+    return createSheetViaClaspDriveApi();
+  }
 }
 
 async function appendSheetRows(spreadsheetId, rows, tokenHint) {

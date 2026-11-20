@@ -10,8 +10,9 @@
  */
 import { shareAndRecord, shareRecipients } from './lib/drive-share.mjs';
 import { workspaceUrl } from './lib/workspace-url.mjs';
-import { readFileSync } from 'node:fs';
-import { getDriveToken, driveApi } from './lib/drive-auth.mjs';
+import { readFileSync, existsSync } from 'node:fs';
+import { getDriveToken, driveApi, defaultDriveKeyPath } from './lib/drive-auth.mjs';
+import { GWS_USER } from './lib/gws-proxy.mjs';
 import { isEntry } from './is-entry.mjs';
 import { ensureKimEditor } from './lib/kim-editor.mjs';
 import { randomUUID } from 'node:crypto';
@@ -174,7 +175,8 @@ export async function publishDocument({ title, source, folder, update, authuser,
   workspaceUrl('https://docs.google.com/', authuser);
   if (share) shareRecipients(share, shareRole);
   const rendered = renderDocument(source);
-  const token = await getToken({ impersonate: 'kim@orgiast.jp' });
+  const actingUser = process.env.GOOGLE_IMPERSONATE ?? (existsSync(defaultDriveKeyPath()) ? 'kim@orgiast.jp' : GWS_USER);
+  const token = await getToken();
   const request = async (url, method = 'GET', body) => {
     try {
       return await (await api(token, url, {
@@ -182,7 +184,10 @@ export async function publishDocument({ title, source, folder, update, authuser,
         ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
       })).json();
     } catch (error) {
-      if (url.startsWith(DOCS) && /\b403\b/.test(error.message) && /SERVICE_DISABLED|PERMISSION_DENIED/.test(error.message)) error.docsUnavailable = true;
+      if (url.startsWith(DOCS) && (
+        /\b403\b/.test(error.message) && /SERVICE_DISABLED|PERMISSION_DENIED/.test(error.message) ||
+        /GWS proxy: unsupported Google endpoint/.test(error.message)
+      )) error.docsUnavailable = true;
       throw error;
     }
   };
@@ -199,7 +204,7 @@ export async function publishDocument({ title, source, folder, update, authuser,
     if (!id) {
       id = (await request(DOCS, 'POST', { title })).documentId;
       if (!id) throw new Error('作成レスポンスに documentId がありません');
-      await ensure(id, { actingUser: 'kim@orgiast.jp', token, api, created: !update });
+      await ensure(id, { actingUser, token, api, created: !update });
     }
     const docEndpoint = `${DOCS}/${encodeURIComponent(id)}`;
     const doc = await request(`${docEndpoint}?includeTabsContent=true`);
@@ -220,7 +225,7 @@ export async function publishDocument({ title, source, folder, update, authuser,
     })).json();
     if (!created.id || (id && created.id !== id)) throw new Error('Drive 変換結果の ID が不正です');
     id = created.id;
-    await ensure(id, { actingUser: 'kim@orgiast.jp', token, api, created: !update });
+    await ensure(id, { actingUser, token, api, created: !update });
   }
   if (share) await shareAndRecord({ fileId: id, emails: share, role: shareRole, auth: token, name: title });
   // Docs API は親フォルダ/既存タイトル変更を扱わないため、Drive API で設定する。

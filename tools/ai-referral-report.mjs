@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { defaultDriveKeyPath } from './lib/drive-auth.mjs';
+import { isEntry } from './is-entry.mjs';
 
 // --- 定数 ----------------------------------------------------------------
 
@@ -588,9 +589,8 @@ export {
 };
 
 // 直接実行時のみ main() を呼ぶ (import 時は実行しない)
-import { pathToFileURL } from 'node:url';
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntry(import.meta.url)) {
   main()
     .then((code) => process.exit(code))
     .catch((e) => {

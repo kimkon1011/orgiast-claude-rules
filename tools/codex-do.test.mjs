@@ -9,7 +9,7 @@ import { skipCoolingBackends } from './fallback-backend-health.mjs';
 import { runGeminiBudgetGuard } from './gemini-budget-guard.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend, parseWslDistros } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -2062,6 +2062,25 @@ test('wslCodexLaunchPlan: ネイティブが解決できるときネイティブ
   assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: false, versionOk: false, installAttempted: true, retried: false, nativeAvailable: true }), 'native');
 });
 
+test('parseWslDistros: WSL1 だけの出力からは all にのみ名前が入り、wsl2 は空になる', () => {
+  const wsl1Only = '  NAME      STATE           VERSION\n* Ubuntu    Stopped         1\n';
+  const result = parseWslDistros(wsl1Only);
+  assert.deepEqual(result, { all: ['Ubuntu'], wsl2: [] });
+});
+
+test('parseWslDistros: WSL1 と WSL2 が混在する出力からは wsl2 に WSL2 の名前だけが入る', () => {
+  const mixed = '  NAME      STATE           VERSION\n* Ubuntu    Stopped         1\n  Debian    Running         2\n';
+  const result = parseWslDistros(mixed);
+  assert.deepEqual(result.all, ['Ubuntu', 'Debian']);
+  assert.deepEqual(result.wsl2, ['Debian']);
+});
+
+test('parseWslDistros: UTF-16 由来の NUL 文字とヘッダ行が混ざっていても壊れない', () => {
+  const withNul = '  NAME\0      STATE\0           VERSION\0\n* Ubuntu\0    Stopped\0         1\0\n';
+  const result = parseWslDistros(withNul);
+  assert.deepEqual(result, { all: ['Ubuntu'], wsl2: [] });
+});
+
 test('WSL codex のプローブはコールドスタートを待てる', () => {
   assert.ok(WSL_PROBE_TIMEOUT_MS >= 60000);
 });
@@ -2240,7 +2259,8 @@ test('probeChatGptAuth: 読めない・壊れている場合は null を返し�
 test('probeChatGptAuth: Windows/WSL 経路は distro 一覧と auth.json 読取を spawnImpl に注入できる', () => {
   const spawnImpl = (cmd, args) => {
     assert.equal(cmd, 'wsl');
-    if (args[0] === '-l') return { status: 0, stdout: 'Ubuntu\0\r\n\0' };
+    // wsl -l -v の出力形式: '  NAME      STATE           VERSION\n* Ubuntu    Running         2\n'
+    if (args[0] === '-l') return { status: 0, stdout: '  NAME      STATE           VERSION\n* Ubuntu    Running         2\n' };
     assert.deepEqual(args.slice(0, 2), ['-d', 'Ubuntu']);
     return { status: 0, stdout: JSON.stringify({ tokens: { id_token: 'x' } }) };
   };

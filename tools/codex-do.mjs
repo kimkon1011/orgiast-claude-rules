@@ -91,10 +91,12 @@ export function probeChatGptAuth({ forceNative = false, env = process.env, spawn
       // WSL VM が Stopped から起きる時のコールドスタートに間に合わず、実際は ChatGPT
       // 認証なのに毎回 null(判定不能)に落ちて sol/astra が試され続ける(2026-09-21 実測:
       // 3000ms 固定にしていた版は初回だけ間に合わず誤フォールバックした)。
-      const listed = spawnImpl('wsl', ['-l', '-q'], { windowsHide: true, encoding: 'utf16le', timeout: WSL_PROBE_TIMEOUT_MS });
+      // WSL2 のディストリのみ auth.json 読み取り対象とする（WSL1 は bubblewrap 非対応で
+      // codex 自体が動かないため、auth.json を読んでも意味がない）。
+      const listed = spawnImpl('wsl', ['-l', '-v'], { windowsHide: true, encoding: 'utf16le', timeout: WSL_PROBE_TIMEOUT_MS });
       if (listed.status !== 0) return null;
-      const distros = String(listed.stdout || '').split(/\r?\n/).map((x) => x.replace(/\0/g, '').trim()).filter(Boolean);
-      const distro = distros.find((x) => x.toLowerCase() === 'ubuntu') || distros[0];
+      const parsed = parseWslDistros(listed.stdout);
+      const distro = parsed.wsl2.find((x) => x.toLowerCase() === 'ubuntu') || parsed.wsl2[0];
       if (!distro) return null;
       const probe = spawnImpl('wsl', ['-d', distro, '--', 'bash', '-lc', 'cat "$HOME/.codex/auth.json" 2>/dev/null'], { windowsHide: true, encoding: 'utf8', timeout: WSL_PROBE_TIMEOUT_MS });
       if (probe.status !== 0) return null;
@@ -1269,6 +1271,26 @@ export function recordLaneMode(mode, sandbox, { home = process.env.ORGIAST_HOME 
   try { fs.unlinkSync(tmp); } catch {}
 }
 
+// `wsl -l -v` の出力から、WSL2 のディストリ名だけを拾う。WSL1 は Codex の bubblewrap
+// サンドボックスが動かない(user namespace を作れない)ため、起動候補から外す。
+export function parseWslDistros(stdout) {
+  const all = [];
+  const wsl2 = [];
+  for (const raw of String(stdout || '').split(/\r?\n/)) {
+    const line = raw.replace(/\0/g, '').trim();
+    if (!line) continue;
+    const body = line.startsWith('*') ? line.slice(1).trim() : line;
+    const cols = body.split(/\s{1,}/).filter(Boolean);
+    if (cols.length < 3) continue;
+    const name = cols[0];
+    const version = Number(cols[cols.length - 1]);
+    if (!Number.isFinite(version)) continue; // ヘッダ行 (NAME STATE VERSION) はここで落ちる
+    all.push(name);
+    if (version >= 2) wsl2.push(name);
+  }
+  return { all, wsl2 };
+}
+
 export function wslCodexLaunchPlan({ distroFound, codexPresent, versionOk, installAttempted, retried, nativeAvailable = false, requireWsl = false, allowNative = false }) {
   if (versionOk) return 'wsl';
   if (distroFound && codexPresent && !retried) return 'retry';
@@ -1840,12 +1862,21 @@ async function launchCodex(codexArgs, primaryStarted = Date.now()) {
   if (process.platform === 'win32' && !forceNative) {
     // 実機の distro 有無で分岐が変わると abort 経路のテストが非決定的になるため、
     // CODEX_DO_MOCK_RESULTS と同じ流儀でプローブ結果を注入できるようにする。
+    // - 'absent': status 1 (WSL 無し)
+    // - 'wsl1':   status 0, stdout は WSL1 の出力（bubblewrap 非対応）
+    // - その他:   status 0, stdout は WSL2 の出力（正常動作想定）
     const fakeWslProbe = process.env.CODEX_DO_WSL_PROBE;
-    const listed = fakeWslProbe
-      ? { status: fakeWslProbe === 'absent' ? 1 : 0, stdout: '' }
-      : spawnSync('wsl', ['-l', '-q'], { windowsHide: true, encoding: 'utf16le', timeout: WSL_PROBE_TIMEOUT_MS });
-    const distros = listed.status === 0 ? listed.stdout.split(/\r?\n/).map((x) => x.replace(/\0/g, '').trim()).filter(Boolean) : [];
+    const listed = fakeWslProbe === 'absent'
+      ? { status: 1, stdout: '' }
+      : fakeWslProbe === 'wsl1'
+        ? { status: 0, stdout: '  NAME      STATE           VERSION\n* Ubuntu    Stopped         1\n' }
+        : fakeWslProbe
+          ? { status: 0, stdout: '  NAME      STATE           VERSION\n* Ubuntu    Running         2\n' }
+          : spawnSync('wsl', ['-l', '-v'], { windowsHide: true, encoding: 'utf16le', timeout: WSL_PROBE_TIMEOUT_MS });
+    const parsed = listed.status === 0 ? parseWslDistros(listed.stdout) : { all: [], wsl2: [] };
+    const distros = parsed.wsl2; // WSL2 のみ起動候補にする(WSL1 は bubblewrap 非対応)
     const distro = distros.find((x) => x.toLowerCase() === 'ubuntu') || distros[0];
+    const wsl1Only = !distro && parsed.all.length > 0;
     let usable = false;
     // WSL が無くてもネイティブ Windows codex が起動できるなら、codex レーンをそこで成立させる。
     // 2026-10-12 実測(codex-cli 0.162.1): `-s danger-full-access` なら実ファイルが保存される。
@@ -1854,7 +1885,9 @@ async function launchCodex(codexArgs, primaryStarted = Date.now()) {
     const nativeProbe = process.env.CODEX_DO_NATIVE_PROBE;
     const nativeOk = nativeProbe === 'absent' ? false : nativeProbe === 'present' ? true : nativeCodexAvailable();
     const nativeUsable = nativeOk;
-    let failureReason = 'WSL ディストリが見つかりませんでした';
+    let failureReason = wsl1Only
+      ? `WSL2 のディストリがありません（${parsed.all.join(', ')} は WSL1 で bubblewrap 非対応）`
+      : 'WSL ディストリが見つかりませんでした';
     let finalStep = wslCodexLaunchPlan({ distroFound: Boolean(distro), codexPresent: false, versionOk: false, installAttempted: false, retried: false, nativeAvailable: nativeUsable, requireWsl });
     if (distro) {
       const versionProbe = () => {
@@ -1909,7 +1942,11 @@ async function launchCodex(codexArgs, primaryStarted = Date.now()) {
         launchUnavailable = true;
         return { status: 3, outputChars: 0, output: '', stderr: failureReason, timedOut: false, launched: false };
       }
-      console.error('codex: WSL ディストリ不在のため Windows ネイティブ(danger-full-access)で実行します');
+      if (wsl1Only) {
+        console.error('codex: WSL1 (bubblewrap 非対応) のため Windows ネイティブ(danger-full-access)で実行します');
+      } else {
+        console.error('codex: WSL ディストリ不在のため Windows ネイティブ(danger-full-access)で実行します');
+      }
       recordLaneMode('native', nativeSandboxMode({ review }));
       const native = resolveNativeCodex();
       const nativeArgs = applyNativeSandbox(codexArgs, { review });

@@ -340,7 +340,28 @@ test('鍵なし席はseat checkでスキップされる', async t => {
   assert.equal(result.skip, true);
   assert.match(result.reason, /スキップ/);
   assert.equal(heartbeats.length, 1);
+  assert.equal(heartbeats[0].ok, true);
   assert.match(heartbeats[0].summary, /スキップ/);
+});
+
+test('期限検出の例外は失敗のheartbeatに実際の理由を残す', async t => {
+  const home = homeFor(t), heartbeats = [];
+  const code = await main([], {
+    home,
+    config: { ...DEFAULT_CONFIG, sheetId: 'test' },
+    seatCheck: () => ({ kim: true }),
+    sources: [],
+    ledger: { read: async () => { throw new Error('台帳を読み込めません'); } },
+    stage: () => {},
+    stderr: () => {},
+    heartbeat: async info => heartbeats.push(info),
+  });
+
+  assert.equal(code, 1);
+  assert.equal(heartbeats.length, 1);
+  assert.equal(heartbeats[0].ok, false);
+  assert.match(heartbeats[0].summary, /^期限検出エラー: 台帳を読み込めません$/);
+  assert.doesNotMatch(heartbeats[0].summary, /鍵なし席/);
 });
 
 test('引用不一致1件混ざってもdryRun:falseでnextが保存される', async t => {

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { RULES, LIMITS, HEADER, TAB, parseArgs, ruleVerdict, merchantToken, amountVariants, gmailQuery, parseYahoo, weeklySkip, collectTxns, searchEvidence, runCheck, sheetRows, dmText, atomicJson, web23Query, checkWeb23Delivery, WEB23_ADDRESS, WEB23_LOOKBACK_DAYS } from './expense-leak-check.mjs';
+import { RULES, LIMITS, HEADER, TAB, parseArgs, ruleVerdict, merchantToken, amountVariants, gmailQuery, parseYahoo, weeklySkip, collectTxns, searchEvidence, runCheck, reportResult, sheetRows, dmText, atomicJson, web23Query, checkWeb23Delivery, WEB23_ADDRESS, WEB23_LOOKBACK_DAYS } from './expense-leak-check.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 
 const opts = (args = []) => parseArgs(args, { EXPENSE_LEAK_TODAY: '2026-10-09', EXPENSE_LEAK_HOME: '/tmp/expense-test' });
@@ -257,6 +257,23 @@ test('web23 zero-count warning is fail-open, never pins an outage as zero', asyn
   assert.equal((await checkWeb23Delivery(call('not json'))).status, 'unverified');
   assert.equal((await checkWeb23Delivery({ ...call('{"messages":[]}'), search: async () => ({ code: 1, stdout: '' }) })).status, 'unverified');
   assert.deepEqual(await checkWeb23Delivery({ ...call('{"messages":[]}'), timeLeft: () => false }), { status: 'unverified', reason: '時間上限' });
+});
+test('Discord DM failure with zero candidates does not set failed=true (exit 0)', async () => {
+  const h = harness([]);
+  h.injected.notify = async () => { throw new Error('Connector unavailable'); };
+  const r = await runCheck(opts(), h.injected);
+  assert.equal(r.failed, undefined);
+  assert.equal(r.failReason, '');
+  assert.equal(reportResult(r, (line) => assert.match(line, /failed=false failReason=$/)), 0);
+  assert.equal(h.state.lastRunAt, `${opts().today}T03:00:00+09:00`);
+});
+test('real Sheets failure with candidates sets failed=true and failReason', async () => {
+  const h = harness([txn(1)]);
+  h.injected.sheets.append = async () => { throw new Error('Sheets POST HTTP 503'); };
+  const r = await runCheck(opts(), h.injected);
+  assert.equal(r.failed, true);
+  assert.equal(r.failReason, 'sheets-write');
+  assert.equal(reportResult(r, (line) => assert.match(line, /failed=true failReason=sheets-write$/)), 1);
 });
 test('DM reports web23 zero and unverified separately', () => {
   const base = { today: '2026-10-19', candidateTotal: 0, results: [], issues: [], yahooUnavailable: false };

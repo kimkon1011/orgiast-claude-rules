@@ -714,7 +714,7 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 ### 1.13.1 effortLevelと品質（kim 2026-09-17 改定）
 
-effortLevelの既定は **medium**（kim 2026-09-17 改定）、lowは禁止。`settings-quality-guard` がlowへの変更をblockし、SessionStartでmediumへ復元する。highへの引き上げは設計・横断調査の時だけ、セッション単位で行う。thinking予算・監督モデル・実装先（Codex）を節約目的で下げないルールは維持し、節約は委譲・レスポンス数削減・無人ジョブの非Claude化・キャッシュ維持で行う。
+effortLevelの既定は **high**（kim 2026-11-18 改定。Artificial Analysis 322タスク実測: high 58点 $7.51/タスク 31分に対し max 56点 $44.22/2.2hと6倍コストで低品質、low 48点 $2.49/13分。highが最良値）。medium/lowは禁止。`settings-quality-guard` がmedium/lowへの変更をblockし、SessionStartでhighへ復元する。thinking予算・監督モデル・実装先（Codex）を節���目的で下げないルールは維持し、節約は委譲・レスポンス数削減・無人ジョブの非Claude化・キャッシュ維持で行う。
 
 **🔴 大事な判断の前は必ず /advisor に相談してから決めて。**
 

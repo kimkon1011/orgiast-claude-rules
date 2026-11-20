@@ -5,7 +5,7 @@
 2. Claude Code は Team シート（定額）だけで動かす。APIキー・Console（従量）ログインは禁止。検知したら全ツールを止め `claude /login` で subscription を選び直す。extra usage は OFF、クレジットの手動購入はしない。
 3. Console の組織を新設しない。APIキーは kim @orgiast.jp の組織「オージャスト」で発行し、キー名にアプリ名。共有アカウントにカードを登録しない。従量AIは上限付きオートチャージだけ可。
 4. 例外は kim がプロンプトに [CLAUDE-IMPL-OK]／[API-BILLING-OK] と書いた同一セッション60分だけ。自分から解除しない。
-5. Fable は fable-policy.json の planIncluded=true のアカウントで監督にだけ使用可。実装・量産・分類・サブエージェントは禁止。false なら全用途禁止。effortLevel 既定は medium（low 禁止、high は設計・横断調査のみ）。
+5. Fable は fable-policy.json の planIncluded=true のアカウントで監督にだけ使用可。実装・量産・分類・サブエージェントは禁止。false なら全用途禁止。effortLevel 既定は high（medium/low 禁止）。
 6. classifier に拒否されたら言い換え再試行せず「classifier 拒否: <カテゴリ>」と1行報告して次へ。settings.json の変更は setup --converge で配布。
 7. 応答は日本語。完了報告は依頼範囲の全要素を実データで検証した表。user に手作業を頼む前に Claude 側の手段（MCP/CLI/keyserve/過去ログ）を全部試し、頼むなら非エンジニアが迷わない完全手順にする。
 8. user に渡すものは全て Google ドライブの URL。作るものは Google スプレッドシート／スライド／ドキュメント、無理なら PDF。ローカルパス・claude.ai の URL で渡さない。

@@ -356,3 +356,64 @@ test('queued/deferredが0でもAPI恒久失敗はdry-run・通常ともexit 1', 
     } finally { fs.rmSync(home, { recursive: true, force: true }); }
   }
 });
+
+test('全アプリがurl未設定ならこの席は担当外としてスキップする', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fzs-'));
+  let doneCalled = 0, notifyCalled = 0, executeCalled = 0, ensureIssueCalled = 0, ghCalled = 0;
+  try {
+    // Registry with one app that has no url reference key configured.
+    const registryFile = path.join(home, 'registry.json');
+    fs.writeFileSync(registryFile, JSON.stringify({
+      version: 1,
+      apps: [{ appName: 'no-url-app', intake: 'relay', kind: 'next', refs: { secret: 'SECRET', repo: 'REPO', appDir: 'DIR' } }],
+    }));
+    const result = await sweep({
+      registryFile, home,
+      config: { SECRET: 's', REPO: 'o/r', DIR: home },
+      fetchImpl: async () => { throw new Error('unreachable'); },
+      gh: () => { ghCalled++; return { status: 0, stdout: '{}' }; },
+      ensureIssue: () => { ensureIssueCalled++; return {}; },
+      execute: async () => { executeCalled++; return {}; },
+      notify: async () => { notifyCalled++; return { delivered: 'dm' }; },
+      done: async () => { doneCalled++; },
+    });
+    assert.equal(result.unassigned, true);
+    assert.equal(result.unknown, 0);
+    assert.equal(sweepExitCode(result), 0);
+    assert.equal(doneCalled, 0, 'done must not be called when unassigned');
+    assert.equal(notifyCalled, 0, 'notify must not be called when unassigned');
+    assert.equal(executeCalled, 0);
+    assert.equal(ensureIssueCalled, 0);
+    assert.equal(ghCalled, 0);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('一部のアプリだけurl未設定なら従来どおり警告する', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fzs-'));
+  const work = path.join(home, 'work'); fs.mkdirSync(work);
+  const notifyCalls = [];
+  try {
+    // Two apps: one can resolve url, one cannot.
+    const registryFile = path.join(home, 'registry.json');
+    fs.writeFileSync(registryFile, JSON.stringify({
+      version: 1,
+      apps: [
+        { appName: 'ok-app', intake: 'relay', kind: 'next', refs: { url: 'URL', secret: 'SECRET', repo: 'REPO', appDir: 'DIR' } },
+        { appName: 'no-url-app', intake: 'relay', kind: 'next', refs: { secret: 'SECRET', repo: 'REPO', appDir: 'DIR' } },
+      ],
+    }));
+    const result = await sweep({
+      registryFile, home,
+      config: { URL: 'https://relay.invalid/x', SECRET: 's', REPO: 'o/r', DIR: work },
+      fetchImpl: async () => ({ ok: true, json: async () => ({ ok: true, items: [] }) }),
+      gh: () => ({ status: 0, stdout: JSON.stringify({ state: 'OPEN', url: 'u', title: 't' }) }),
+      ensureIssue: () => ({}),
+      execute: async () => ({ status: 0, stdout: '' }),
+      notify: async (text) => { notifyCalls.push(text); return { delivered: 'test' }; },
+      done: async () => {},
+    });
+    assert.equal(result.unassigned, false);
+    assert.notEqual(sweepExitCode(result), 0, 'unassigned is false so exit code must be non-zero (unknown > 0)');
+    assert.equal(notifyCalls.length, 1, 'notify must still be called');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});

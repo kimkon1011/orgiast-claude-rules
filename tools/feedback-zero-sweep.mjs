@@ -206,6 +206,8 @@ export async function sweep({registryFile=path.join(here,'feedback-zero-registry
   } finally {if(locked)fs.rmSync(lock,{force:true});}
 }
 export function sweepExitCode(result) {
+  // A machine with no sweep config at all is not an error; the owning machine still reports.
+  if(result.unassigned) return 0;
   // Empty queues do not prove success: intake/configuration failures count as unknown.
   if(result.unknown > 0) return 1;
   if(!result.dryRun) {

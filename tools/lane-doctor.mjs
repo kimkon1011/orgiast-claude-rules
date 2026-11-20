@@ -219,7 +219,7 @@ export async function runNativeWriteProbe({ home, timeoutMs, workDir = laneProbe
     const result = await run(process.execPath, nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }));
     let ok = false;
     try { ok = fs.readFileSync(path.join(cwd, 'WRITE_OK.txt'), 'utf8').trim() === 'WRITE_OK'; } catch {}
-    return { viaChain: result.code === 0 && ok ? false : probeViaChain(result.text, 'codex'), code: result.code === 0 && ok ? 0 : 1, text: ok ? 'WRITE_OK' : `書き込み確認失敗 ${result.text || ''}` };
+    return { viaChain: probeViaChain(result.text, 'codex'), code: result.code === 0 && ok ? 0 : 1, text: ok ? 'WRITE_OK' : `書き込み確認失敗 ${result.text || ''}` };
   } finally { try { resetLaneProbeWorkDir(cwd); } catch {} }
 }
 export function runProbe(provider, { home, timeoutMs, dryRun = false, execFileImpl = execFile } = {}) {

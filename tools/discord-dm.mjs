@@ -82,7 +82,7 @@ export async function sendDiscordDm(target, body, options = {}) {
     if (!dm.ok) throw new Error(`DMチャンネル作成が HTTP ${dm.status}`);
     const channelId = (await dm.json()).id;
     if (!channelId) throw new Error('DMチャンネルIDを取得できません');
-    await (options.assertContextApproved ?? assertContextApproved)({ channel: 'discord', target: channelId, text: body, home, getLatest: async () => {
+    await (options.assertContextApproved ?? assertContextApproved)({ channel: 'discord', target: channelId, text: body, home, ...(options.internalOptIn === true ? { internalOptIn: true } : {}), getLatest: async () => {
       const history = await fetchImpl(`${API}/channels/${channelId}/messages?limit=1`, { headers });
       if (!history.ok) throw new Error(`Discord 履歴取得が HTTP ${history.status}`);
       return latestOf((await history.json()).map(m => ({ id: m.id, at: m.timestamp })));
@@ -116,6 +116,7 @@ function parseArgs(args) {
   let noCopyKim = false;
   let kimActionRequired = false;
   let noReplyFooter = false;
+  let internalOptIn = false;
   for (let i = 1; i < args.length; i += 1) {
     if (args[i] === '--body') body = args[++i];
     else if (args[i] === '--body-file') bodyFile = args[++i];
@@ -123,12 +124,13 @@ function parseArgs(args) {
     else if (args[i] === '--no-copy-kim') noCopyKim = true;
     else if (args[i] === '--kim-action-required') kimActionRequired = true;
     else if (args[i] === '--no-reply-footer') noReplyFooter = true;
+    else if (args[i] === '--internal-opt-in') internalOptIn = true;
     else throw new Error(`不明な引数です: ${args[i]}`);
   }
   if (!target || (body === undefined) === (bodyFile === undefined)) {
-    throw new Error('usage: discord-dm.mjs <名前 or メール> (--body <本文> | --body-file <path>) [--dry-run] [--no-copy-kim] [--no-reply-footer] [--kim-action-required]');
+    throw new Error('usage: discord-dm.mjs <名前 or メール> (--body <本文> | --body-file <path>) [--dry-run] [--no-copy-kim] [--no-reply-footer] [--kim-action-required] [--internal-opt-in]');
   }
-  return { target, body: bodyFile === undefined ? body : fs.readFileSync(bodyFile, 'utf8'), dryRun, noCopyKim, noReplyFooter, kimActionRequired };
+  return { target, body: bodyFile === undefined ? body : fs.readFileSync(bodyFile, 'utf8'), dryRun, noCopyKim, noReplyFooter, kimActionRequired, internalOptIn };
 }
 
 export async function main(args = process.argv.slice(2), options = {}) {
@@ -136,7 +138,7 @@ export async function main(args = process.argv.slice(2), options = {}) {
   try { parsed = parseArgs(args); }
   catch (error) { console.error(`discord-dm: ${error.message}`); return 1; }
   try {
-    const result = await sendDiscordDm(parsed.target, parsed.body, { ...options, dryRun: parsed.dryRun, noCopyKim: parsed.noCopyKim, noReplyFooter: parsed.noReplyFooter, kimActionRequired: parsed.kimActionRequired });
+    const result = await sendDiscordDm(parsed.target, parsed.body, { ...options, dryRun: parsed.dryRun, noCopyKim: parsed.noCopyKim, noReplyFooter: parsed.noReplyFooter, kimActionRequired: parsed.kimActionRequired, internalOptIn: parsed.internalOptIn });
     console.log(JSON.stringify(result));
     return result.delivered === 'blocked' ? 3 : 0;
   } catch (error) {

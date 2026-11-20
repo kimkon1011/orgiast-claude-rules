@@ -201,14 +201,26 @@ export function detect(text) {
 const DEFAULT_SINCE = '1970-01-01T00:00:00Z';
 const NAMES = ['stop-gate-runner-ledger.jsonl', 'handoff-audit-ledger.jsonl', 'handoff-audit-nightly-ledger.jsonl'];
 
-function findTranscript(projectsDir, sessionId) {
+function findTranscript(projectsDir, sessionId, archiveDir) {
   if (!sessionId) return null;
   let projects;
   try { projects = fs.readdirSync(projectsDir, { withFileTypes: true }); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (projects) {
+    for (const project of projects) {
+      if (!project.isDirectory()) continue;
+      const file = path.join(projectsDir, project.name, `${sessionId}.jsonl`);
+      if (fs.existsSync(file)) return file;
+    }
+  }
+  // Fall back to archive directory (projects-archive sibling)
+  if (!archiveDir) return null;
+  let archiveProjects;
+  try { archiveProjects = fs.readdirSync(archiveDir, { withFileTypes: true }); }
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-  for (const project of projects) {
+  for (const project of archiveProjects) {
     if (!project.isDirectory()) continue;
-    const file = path.join(projectsDir, project.name, `${sessionId}.jsonl`);
+    const file = path.join(archiveDir, project.name, `${sessionId}.jsonl`);
     if (fs.existsSync(file)) return file;
   }
   return null;
@@ -232,7 +244,11 @@ function resolvedWait(transcript, rowTs) {
 }
 
 export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null,
-  projectsDir = process.env.CLAUDE_PROJECTS_DIR || path.join(home, '.claude', 'projects') } = {}) {
+  projectsDir = process.env.CLAUDE_PROJECTS_DIR || path.join(home, '.claude', 'projects'),
+  archiveDir } = {}) {
+  if (archiveDir === undefined) {
+    archiveDir = process.env.CLAUDE_PROJECTS_ARCHIVE_DIR || path.join(path.dirname(projectsDir), 'projects-archive');
+  }
   const transcriptCache = new Map();
   const sources = NAMES.map((name, index) => {
     const file = path.join(home, '.claude', name);
@@ -269,7 +285,7 @@ export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null,
       const row = { pattern, field: foundField, ts: entry.ts, verdict: entry.verdict ?? entry.decision ?? '', sessionId: String(entry.sessionId ?? ''),
         match: text.slice(Math.max(0, match.index - 45), match.index + match[0].length + 110).replace(/[\r\n]+/g, ' ') };
       if (pattern === 'W') {
-        if (!transcriptCache.has(row.sessionId)) transcriptCache.set(row.sessionId, findTranscript(projectsDir, row.sessionId));
+        if (!transcriptCache.has(row.sessionId)) transcriptCache.set(row.sessionId, findTranscript(projectsDir, row.sessionId, archiveDir));
         const transcript = transcriptCache.get(row.sessionId);
         // 2026-11-19T18:06Z / 6a5e38de は通知後に最終報告まで進んだため、
         // 同一セッション内で解消した一時的な委譲待ちは監査件数から外す。

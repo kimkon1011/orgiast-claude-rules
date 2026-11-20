@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { addCheck, main } from './auto-progress.mjs';
-import { checkPromise, executeCheck, preflightCheck, hasBashEnvExpansion, hasCheckError, CHECK_ERROR_PATTERNS, resolveCheckShell, CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS, CHECK_MAX_BUFFER_BYTES, pendingAction } from './auto-progress-check.mjs';
+import { checkPromise, executeCheck, preflightCheck, hasBashEnvExpansion, isUnauthenticatedHtmlGrepCheck, hasScriptHtmlGrepPattern, hasCheckError, CHECK_ERROR_PATTERNS, resolveCheckShell, CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS, CHECK_MAX_BUFFER_BYTES, pendingAction } from './auto-progress-check.mjs';
 import { readLedger, writeLedger, ledgerFile } from './auto-progress-ledger.mjs';
 import { run as watch } from './auto-progress-watch.mjs';
 import { run as digest } from './auto-progress-digest.mjs';

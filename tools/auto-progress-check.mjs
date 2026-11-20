@@ -61,6 +61,54 @@ export function hasBashEnvExpansion(command) {
   return /(?<!\\)\$env:/i.test(command);
 }
 
+/** SPA の HTML シェルを直接 grep するパターンを静的検出。
+ * curl/Invoke-WebRequest/fetch で取得した HTML を grep/.includes で検索し、
+ * JS チャンクや API エンドポイントを一切見ていない場合、実装状態を正しく判定できない。
+ * Next.js 等の SPA では初期 HTML はローディングシェルのみのため、
+ * アプリの実装は JS チャンクを直接 grep しないと検出できない。
+ */
+export function isUnauthenticatedHtmlGrepCheck(command) {
+  const text = String(command || '');
+  // 必須: HTTP GET で HTML を取得する
+  const hasHttpGet = /\bcurl\s+(?:-[sS]+\s+|-s\b)/i.test(text) ||
+    /\bInvoke-WebRequest\b/i.test(text) ||
+    /\bfetch\(\s*["']https?:\/\//i.test(text);
+  if (!hasHttpGet) return false;
+  // 必須: 応答本文を grep または .includes() で検索する
+  const hasContentSearch = /\bgrep\b/i.test(text) ||
+    /\bSelect-String\b/i.test(text) ||
+    /\.includes\(\s*["']/i.test(text);
+  if (!hasContentSearch) return false;
+  // 除外: JS チャンクや API エンドポイントも確認している場合は正当
+  if (/\/_next\/static\/chunks\//i.test(text)) return false;
+  if (/\/api\//i.test(text)) return false;
+  // 除外: Content-Type: application/json の API 呼び出し
+  if(/--header\s+["'](?:Accept|Content-Type):\s*application\/json/i.test(text)) return false;
+  if(/-H\s+["'](?:Accept|Content-Type):\s*application\/json/i.test(text)) return false;
+  return true;
+}
+
+/** スクリプトファイル内の fetch+grep パターンを検出。
+ * 外部コマンドから参照されているスクリプトをロードし、中身で
+ * fetch(url) + .includes(marker) のパターンを使いながら JS チャンクや
+ * API エンドポイントを参照していない場合に検出する。
+ */
+export function hasScriptHtmlGrepPattern(row, { home } = {}) {
+  const tokens = String(row.check || '').match(/"[^"\n]*"|'[^'\n]*'|[^\s;|&<>]+/g) || [];
+  for (const token of tokens) {
+    let file = token.replace(/^(['"])(.*)\1$/, '$2');
+    if (!/\.(?:mjs|js|ps1|py)$/i.test(file)) continue;
+    file = file.replace(/\\/g, '/');
+    if (home && file.startsWith('~/')) file = path.join(home, file.slice(2));
+    file = path.resolve(row.checkCwd || row.cwd || process.cwd(), file);
+    let source;
+    try { source = fs.readFileSync(file, 'utf8'); }
+    catch { continue; }
+    if (/\bfetch\s*\(/i.test(source) && /\.includes\s*\(/i.test(source) && !/\/_next\/static\/chunks\//i.test(source) && !/\/api\//i.test(source)) return file;
+  }
+  return null;
+}
+
 /** Quoted/relative script paths are resolved against the check's working directory.
  * This is a literal source scan, not a shell parser or an audit of imported files.
  */
@@ -118,6 +166,28 @@ export function preflightCheck(row, { home, forceCheck = false, allowSessionStat
       `例: powershell -NoProfile -Command "if ((Get-Item \\$env:USERPROFILE\\\\.claude\\\\...))"`,
     ].join('\n');
     return { ok: false, code: 2, text: msg, stderr: msg, preflight: 'static_error' };
+  }
+  if (!forceCheck && isUnauthenticatedHtmlGrepCheck(row.check)) {
+    const msg = [
+      `静的検査に失敗しました。check が SPA の HTML シェルを直接 grep するパターンを検出しました。`,
+      `Next.js 等の SPA では初期 HTML はローディングシェルのみで、アプリの実装は JS チャンクに含まれます。`,
+      `HTML の grep 結果は常に 0 件になり、実装状態を正しく判定できません。`,
+      `代わりに JS チャンク（/_next/static/chunks/）を直接 grep するか、API エンドポイントを照会してください。`,
+      `例: curl -s https://example.com/_next/static/chunks/main.js | grep -c 'data-marker'`,
+    ].join('\n');
+    return { ok: false, code: 2, text: msg, stderr: msg, preflight: 'static_error' };
+  }
+  if (!forceCheck) {
+    const scriptFile = hasScriptHtmlGrepPattern(row, { home });
+    if (scriptFile) {
+      const msg = [
+        `静的検査に失敗しました。スクリプト (${path.basename(scriptFile)}) が SPA の HTML シェルを直接 fetch/grep するパターンを検出しました。`,
+        `Next.js 等の SPA では初期 HTML はローディングシェルのみで、アプリの実装は JS チャンクに含まれます。`,
+        `HTML の grep 結果は常に 0 件になり、実装状態を正しく判定できません。`,
+        `代わりに JS チャンク（/_next/static/chunks/）を直接 grep するか、API エンドポイントを照会してください。`,
+      ].join('\n');
+      return { ok: false, code: 2, text: msg, stderr: msg, preflight: 'static_error' };
+    }
   }
   // 試し実行
   const result = executeCheck(row, { home, spawnImpl, shellPath });

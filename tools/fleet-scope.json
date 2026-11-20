@@ -35,6 +35,7 @@
     {"path": "tools/lib/deadline-sources.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
     {"path": "tools/setup-deadline-watch.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
     {"path": "tools/register-deadline-watch-tasks.ps1", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
+    {"path": "tools/register-schedule-autopilot-task.ps1", "scope": "fleet", "step": "deadline-watch", "reason": "予定の逆算プッシュの共通実装。タスク登録はkim操作席(000)だけで実行"},
     {"path": "tools/delegation-ratio-watch.mjs", "scope": "fleet", "step": "task:delegation-ratio-watch", "reason": "委譲率ウォッチドッグ（毎日05:40実行）。Claudeの重み付き消費・安いAIの実作業件数・保留件数・quota_wait呼出を集計"},
     {"path": "tools/delegation-ratio-watch-register.mjs", "scope": "fleet", "step": "task:delegation-ratio-watch", "reason": "委譲率ウォッチドッグのschtasks登録"},
     {"path": "tools/lib/fleet-chase-ledger.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "watchdogが未達通知をkimへ送らず追跡台帳へ保存する共通依存"},

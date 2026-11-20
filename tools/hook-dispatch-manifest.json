@@ -698,6 +698,13 @@
         "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/check-e2e-before-stop.mjs\"",
         "timeout": 15
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/schedule-autopilot.mjs\" capture",
+        "timeout": 30,
+        "async": true
       }
     ],
     "SessionEnd": [

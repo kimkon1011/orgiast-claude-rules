@@ -1,0 +1,17 @@
+{
+  "measuredAt": "2026-11-11T15:49:08.710Z",
+  "daysSinceBaseline": 8,
+  "indexStatus": {
+    "/booth": "OK",
+    "/event": "OK",
+    "/rebooth": "OK",
+    "/works": "OK",
+    "/company": "OK"
+  },
+  "faqRichResults": {
+    "impressions": 91,
+    "clicks": 14
+  },
+  "aiOverviewTrend": "stable",
+  "spotCheckResults": []
+}

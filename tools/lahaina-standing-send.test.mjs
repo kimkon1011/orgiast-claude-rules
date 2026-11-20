@@ -28,10 +28,10 @@ function fixture(t) {
   const notices = [], calls = [];
   let sends = 0, sentText;
   const readChats = async () => ({ items: [{ id: 'fixture-chat', title: TITLE }], hasMore: false });
-  const readMessages = async () => ({ items: sentText ? [{ id: 'delivered', isSender: true, text: sentText, timestamp: new Date().toISOString(), chatID: 'fixture-chat' }] : [] });
+  const readMessages = async () => ({ items: sentText ? [f.readback({ id: 'delivered', isSender: true, senderID: '@kimkon1011:beeper.com', text: sentText, timestamp: new Date().toISOString(), chatID: 'fixture-chat' })] : [] });
   const f = { home, dir, date, text, calendarPath, sentPath, quotaPath, policy, now: new Date(`${date}T00:00:00Z`), readChats, readMessages,
     inbox: async (_, notice) => { notices.push(notice); return { id: 'notice' }; }, notices, calls, log: () => {},
-    sends: () => sends,
+    sends: () => sends, readback: message => message,
     transport: { readChats, readMessages, readMessage: async () => null, clock: () => f.now, sleep: async () => {}, readbackMs: 10,
       send: async (_, body) => { sends++; sentText = body; return { pendingMessageID: 'pending', chatID: 'fixture-chat' }; } },
   };
@@ -68,7 +68,48 @@ test('standing approval uses real decision, context marker, receipt, rate limit,
   assert.deepEqual(f.notices, []);
   await run({ ...f, fallback, sender: () => assert.fail('must not resend') });
   assert.equal(f.sends(), 1);
-  assert.equal(f.notices[0].kind, 'info');
+  assert.deepEqual(f.notices, [], 'an already delivered daily post is not a send failure');
+});
+
+test('HTML readback records message ID/time in the ledger without a failure info and never resends', async t => {
+  const f = fixture(t);
+  let deliveredAt;
+  f.readback = message => {
+    deliveredAt = message.timestamp;
+    return { ...message, mentions: null, text: '<p>' + message.text.replace(/\n\n/g, '</p>\n<p>').replace(/(?<!>)\n/g, '<br>') + '</p>' };
+  };
+  fs.writeFileSync(f.quotaPath, JSON.stringify({ until: '2026-12-01' }));
+  const fallback = opts => sendStandingDaily({ ...f, ...opts });
+  await run({ ...f, fallback, sender: () => assert.fail('must not use bot') });
+  const row = JSON.parse(fs.readFileSync(f.sentPath, 'utf8'));
+  assert.equal(row.messageID, 'delivered');
+  assert.equal(row.sentAt, deliveredAt);
+  assert.equal(row.chatID, 'fixture-chat');
+  assert.equal(listItems(f.home)[0].state, 'sent');
+  const attempt = fs.readFileSync(attemptPath(f.home, f.date), 'utf8');
+  await run({ ...f, fallback, sender: () => assert.fail('must not resend') });
+  assert.equal(f.sends(), 1);
+  assert.equal(fs.readFileSync(attemptPath(f.home, f.date), 'utf8'), attempt);
+  assert.deepEqual(f.notices, []);
+});
+
+for (const [label, mutate] of [
+  ['different body', m => ({ ...m, text: m.text + '追加' })],
+  ['other sender', m => ({ ...m, isSender: false, senderID: '@other:beeper.com' })],
+  ['wrong senderID despite isSender', m => ({ ...m, senderID: '@other:beeper.com' })],
+  ['old timestamp', m => ({ ...m, timestamp: '2026-11-01T00:00:00Z' })],
+  ['future timestamp', m => ({ ...m, timestamp: '2099-01-01T00:00:00Z' })],
+  ['additional mention', m => ({ ...m, mentions: ['@other:beeper.com'] })],
+]) test(`readback rejects ${label}, leaves uncertain and cannot resend`, async t => {
+  const f = fixture(t); f.readback = mutate;
+  const r = await sendStandingDaily(f);
+  assert.equal(r.state, 'blocked');
+  assert.equal(getItem(f.home, r.queueID).state, 'uncertain');
+  assert.equal(fs.existsSync(f.sentPath), false);
+  await sendStandingDaily(f);
+  await run({ ...f, sender: () => assert.fail('must not retry via bot') });
+  assert.equal(f.sends(), 1);
+  assert.ok(fs.existsSync(attemptPath(f.home, f.date)));
 });
 
 for (const [label, mutate] of [

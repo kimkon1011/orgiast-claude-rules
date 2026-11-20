@@ -123,6 +123,33 @@ function verifyReceipt(home, queueID, receiptID) {
 
 // ── メイン送信処理 ───────────────────────────────────────────────────
 
+// Desktop API returns the LINE body as HTML: <p>...<br>...</p>\n<p>...</p>.
+// Recognize only that lossless representation, never strip arbitrary markup,
+// collapse whitespace, remove mentions or compare a prefix.
+export function matchesBeeperText(actual, expected) {
+  if (typeof actual !== 'string' || typeof expected !== 'string') return false;
+  if (actual === expected) return true;
+  let body = actual;
+  if (body.startsWith('<p>') && body.endsWith('</p>')) {
+    body = body.slice(3, -4).replace(/<\/p>\n<p>/g, '\n\n');
+  }
+  body = body.replace(/<br\s*\/?\s*>/g, '\n');
+  if (/[<>]/.test(body)) return false;
+  const entities = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", '#39': "'" };
+  body = body.replace(/&(amp|lt|gt|quot|apos|#39);/g, (_, name) => entities[name]);
+  return body === expected;
+}
+
+export function matchesStandingReadback(message, { text, chatID, dispatchedAt, observedAt }) {
+  const at = Date.parse(message?.timestamp);
+  return message?.isSender === true && message.senderID === '@kimkon1011:beeper.com'
+    && typeof message.id === 'string' && message.id.length > 0
+    && message.chatID === chatID && message.isDeleted !== true
+    && (message.mentions == null || (Array.isArray(message.mentions) && message.mentions.length === 0))
+    && Number.isFinite(at) && at >= dispatchedAt && at <= observedAt
+    && matchesBeeperText(message.text, text);
+}
+
 export async function beeperSend(options, { readMessages = listMessages, readChats = listChats, send = sendMessage, readMessage = (...args) => beeperApi.getMessage?.(...args), clock = () => new Date(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), readbackMs = 15000 } = {}) {
   const { chatID, bodyFile, replyTo, queueID, receiptID, home } = options;
 
@@ -190,6 +217,7 @@ export async function beeperSend(options, { readMessages = listMessages, readCha
 
   // 5. 読み戻し（最大 15 秒待つ）
   let messageID = null;
+  let sentAt;
   const deadline = Date.now() + readbackMs;
   while (Date.now() < deadline) {
     // 少し待ってから読み戻す
@@ -197,11 +225,12 @@ export async function beeperSend(options, { readMessages = listMessages, readCha
     try {
       const msgResult = await readMessages(chatID, { limit: 5, direction: 'before' });
       const matchesSent = m => m?.isSender === true && m.id && (standing
-        ? m.text === text && Date.parse(m.timestamp) >= dispatchedAt && (!m.chatID || m.chatID === chatID)
+        ? matchesStandingReadback(m, { text, chatID, dispatchedAt, observedAt: Math.min(Date.now(), deadline) })
         : m.text && text.includes(m.text.slice(0, 40)));
       const sent = (msgResult.items || []).find(matchesSent);
       if (sent) {
         messageID = sent.id;
+        sentAt = sent.timestamp;
         break;
       }
       // pendingMessageID で直接 lookup
@@ -209,6 +238,7 @@ export async function beeperSend(options, { readMessages = listMessages, readCha
         const resolved = await readMessage(chatID, result.pendingMessageID);
         if (standing ? matchesSent(resolved) : resolved && resolved.id && resolved.isSender) {
           messageID = resolved.id;
+          sentAt = resolved.timestamp;
           break;
         }
       } catch { /* still pending, try again */ }
@@ -233,6 +263,7 @@ export async function beeperSend(options, { readMessages = listMessages, readCha
   return {
     ok: true,
     messageID,
+    sentAt,
     pendingMessageID: result.pendingMessageID,
     chatID: result.chatID || chatID,
   };

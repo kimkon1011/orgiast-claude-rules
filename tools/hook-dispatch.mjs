@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { EVENTS, defaultRepo, readDispatchManifest, tokens, isDispatcher } from './hook-dispatch-registry.mjs';
+import { acknowledgeRecovery, journalPrompt, markHandled } from './prompt-journal.mjs';
 import { dedupeContext } from './lib/context-dedupe.mjs';
 
 export function matches(matcher, event, input) {
@@ -29,7 +30,7 @@ export function mergeResults(event, results, { home, sessionId } = {}) {
   let permission, updatedInput, continueValue, stopReason, sessionTitle, legacyBlock = false;
   for (const [index, result] of results.entries()) {
     const addContext = text => {
-      const fresh = ['PostToolUse', 'UserPromptSubmit'].includes(event)
+      const fresh = result.name !== 'lost-prompt-context.mjs' && ['PostToolUse', 'UserPromptSubmit'].includes(event)
         ? dedupeContext(text, { home, sessionId, source: `dispatch:${result.name || index}` }) : text;
       if (fresh) contexts.push(fresh);
     };
@@ -224,6 +225,7 @@ export async function dispatch(event, raw, options = {}) {
     appendMetrics(home, metrics);
     return { ...mergeResults(event, []), metrics, results: [] };
   }
+  const journalId = event === 'UserPromptSubmit' ? journalPrompt(input, { home }) : undefined;
   // The CLI event is authoritative, even if a client omitted hook_event_name.
   raw = JSON.stringify({ ...input, hook_event_name: event });
   const start = Date.now();
@@ -299,7 +301,14 @@ export async function dispatch(event, raw, options = {}) {
       timedOut: results.filter(r => r.timedOut).length, skipped: results.filter(r => r.skipped).length,
       hooks: results.map(({ name, critical, durationMs, queueMs, timedOut, skipped, status, error, criticalUnfinished }) => ({ name, critical, durationMs, queueMs, timedOut: !!timedOut, skipped, status, error, criticalUnfinished })) };
     appendMetrics(home, record);
-    return { ...mergeResults(event, results, { home, sessionId: input.session_id || input.sessionId }), metrics: record, results };
+    const merged = mergeResults(event, results, { home, sessionId: input.session_id || input.sessionId });
+    if (journalId && (merged.payload.decision === 'block' || merged.payload.continue === false)) {
+      markHandled(home, input.session_id, journalId);
+    }
+    if (event === 'Stop' && merged.payload.decision !== 'block' && merged.payload.continue !== false) {
+      acknowledgeRecovery(home, input);
+    }
+    return { ...merged, metrics: record, results };
   } finally { for (const slot of slots) slot.close(); lease.release(); }
 }
 export async function hookMain(raw, event = process.argv[2]) {

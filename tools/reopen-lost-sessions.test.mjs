@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { getLoadGuardStatus, hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord, measureUserIdleSec, DEFAULT_REOPEN_MAX_CLAUDE } from './reopen-lost-sessions.mjs';
 import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
+import { CLAUDE_PROCESS_SCRIPT } from './lib/windows-process.mjs';
 import { unverifiedStreakCounts, isSessionProcessRunning, connectedRcSessionIds, recordApiResult, fetchWithRetry, readFailState, writeFailState, FAIL_STATE_FILE, CONSECUTIVE_FAIL_THRESHOLD } from './reopen-lost-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
@@ -2413,3 +2414,50 @@ test('recordApiResult: 初回はカウンターが 1 になる', t => {
   assert.equal(recordApiResult(base, 'error'), false);
   assert.equal(readFailState(base).consecutiveFails, 1);
 });
+
+for (const count of [25, 19, 0]) {
+  test(`Windows reconnection uses one shared process snapshot with ${count} open sessions`, async t => {
+    const base = fixture(t);
+    fs.writeFileSync(path.join(base, 'projects', 'proj', 'two.jsonl'), [
+      { type: 'bridge-session', bridgeSessionId: 'cse_two' },
+      { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+    ].map(JSON.stringify).join('\n'));
+
+    const opts = guardOptions(base, {
+      concurrencyPlatform: 'win32', checkClaude: true,
+      env: { APPDATA: path.join(base, 'no-appdata'), REOPEN_MAX_CLAUDE: '30' },
+      fetchImpl: async url => ({
+        ok: true,
+        json: async () => url.includes('/events?') ? { data: [exit] } : {
+          data: ['cse_one', 'cse_two'].map(id => ({ id })),
+        },
+      }),
+    });
+    let snapshots = 0;
+    let uriCalls = 0;
+    const spawn = opts.spawn;
+    opts.spawn = (cmd, args) => {
+      if (args.at(-1) === CLAUDE_PROCESS_SCRIPT) {
+        snapshots++;
+        return { status: 0, stdout: JSON.stringify(Array.from({ length: count }, (_, index) => ({
+          Name: 'claude.exe', ProcessId: index + 100, CommandLine: 'claude.exe --resume=other',
+        }))) };
+      }
+      if (args.at(-1).includes('--open-url')) uriCalls++;
+      return spawn(cmd, args);
+    };
+
+    const result = await reopenLost(opts);
+    const expectedOpens = Math.min(2, Math.max(0, 20 - count));
+    assert.equal(snapshots, 1);
+    assert.equal(uriCalls, expectedOpens);
+    assert.equal(result.candidates.length, 2);
+    assert.equal(result.reopened.length, expectedOpens);
+    if (expectedOpens < 2) {
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(base, 'reopen-lost-sessions.log'), 'utf8')).sessionConcurrencyCap,
+        { ok: false, reason: 'session_concurrency_cap', count: count + expectedOpens, limit: 20 });
+    } else {
+      assert.equal(result.sessionConcurrencyCap, undefined);
+    }
+  });
+}

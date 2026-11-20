@@ -342,7 +342,7 @@ function normalizeInbox(mail) {
   // Once v2 fields exist, status alone controls completion, including seen records.
   const legacyRead = mail.readAt && !Object.hasOwn(mail, 'presentedAt') && !Object.hasOwn(mail, 'pendingServer') && !mail.seenAt && !mail.ackAt;
   const status = terminal(mail) ? mail.status : legacyRead ? 'done' : !mail.status || mail.status === 'new' ? 'delivered' : mail.status;
-  return { ...mail, status,
+  return { ...mail, to: mail?.to == null ? '' : String(mail.to), status,
     presentedAt: mail.presentedAt ?? null, presentedSession: mail.presentedSession ?? null };
 }
 export const INBOX_LOCK_RETRIES = 10;
@@ -1475,7 +1475,7 @@ async function runMain(argv, deps) {
     const id = options['--answer'];
     commandInbox(id, current => current, { home });
     const original = checked(await request('mail-get', { id })).mail;
-    if (original?.to !== label) { err('fleet-mail: 回答対象の宛先が自ラベルと一致しません'); return 2; }
+    if (!sameFleetAddress(original?.to, label)) { err('fleet-mail: 回答対象の宛先が自ラベルと一致しません'); return 2; }
     let meta = original?.meta;
     if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch { meta = null; } }
     const relay = meta?.relay;

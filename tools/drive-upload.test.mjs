@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseArgs, driveViewUrl, mimeFor, buildMultipartBody, resolveAs, uploadPlan, uploadedFileUrl } from './drive-upload.mjs';
+import { parseArgs, driveViewUrl, mimeFor, buildMultipartBody, resolveAs, uploadPlan, uploadedFileUrl, prepareProxySafeUpload } from './drive-upload.mjs';
+import { GWS_MARKER } from './lib/gws-proxy.mjs';
 
 test('parseArgs: 必須と任意引数', () => {
   assert.deepEqual(parseArgs(['--file', 'a.pdf', '--folder', 'F1', '--name', 'x.pdf', '--as', 'u@e.jp']), { file: 'a.pdf', folder: 'F1', name: 'x.pdf', as: 'u@e.jp' });
@@ -57,4 +58,23 @@ test('resolveAs: --as > 環境変数 > git config、全部無ければエラー'
   assert.equal(resolveAs({}, { GOOGLE_IMPERSONATE: 'e@x.jp' }, () => 'g@x.jp'), 'e@x.jp');
   assert.equal(resolveAs({}, {}, () => 'g@x.jp'), 'g@x.jp');
   assert.throws(() => resolveAs({}, {}, () => ''), /impersonate/);
+});
+
+test('GWS proxy の大容量本文は gzip にし、Google 形式変換は行わない', () => {
+  const content = Buffer.alloc(3_120_120, 0x61);
+  const result = prepareProxySafeUpload({ token: GWS_MARKER, plan: uploadPlan('listing.csv'), content, requestedName: 'listing.csv' });
+  assert.equal(result.compressed, true);
+  assert.equal(result.plan.metadata.name, 'listing.csv.gz');
+  assert.equal(result.plan.sourceMimeType, 'application/gzip');
+  assert.equal(result.plan.converted, false);
+  assert.ok(result.content.length < 2_500_000);
+});
+
+test('GWS proxy 以外は大容量でも元の upload plan を保つ', () => {
+  const content = Buffer.alloc(3_120_120, 0x61);
+  const plan = uploadPlan('listing.csv');
+  const result = prepareProxySafeUpload({ token: 'real-google-token', plan, content, requestedName: 'listing.csv' });
+  assert.equal(result.compressed, false);
+  assert.equal(result.content, content);
+  assert.equal(result.plan, plan);
 });

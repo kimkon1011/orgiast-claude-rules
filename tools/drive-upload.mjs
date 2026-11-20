@@ -9,8 +9,12 @@ import { workspaceUrl } from './lib/workspace-url.mjs';
 import { readFileSync, existsSync } from 'node:fs';
 import { basename, extname } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { gzipSync } from 'node:zlib';
 import { isEntry } from './is-entry.mjs';
 import { getDriveToken, driveApi, defaultDriveKeyPath } from './lib/drive-auth.mjs';
+import { GWS_MARKER } from './lib/gws-proxy.mjs';
+
+const GWS_SAFE_BODY_BYTES = 2_500_000;
 
 const MIME = {
   '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
@@ -79,6 +83,20 @@ export function buildMultipartBody({ metadata, content, mimeType, boundary }) {
   return Buffer.concat([head, content, Buffer.from(`\r\n--${boundary}--`)]);
 }
 
+export function prepareProxySafeUpload({ token, plan, content, requestedName }) {
+  if (token !== GWS_MARKER || content.length <= GWS_SAFE_BODY_BYTES) return { plan, content, compressed: false };
+  const compressedContent = gzipSync(content, { level: 9 });
+  return {
+    plan: {
+      converted: false,
+      sourceMimeType: 'application/gzip',
+      metadata: { name: `${requestedName}.gz` },
+    },
+    content: compressedContent,
+    compressed: true,
+  };
+}
+
 export function resolveAs(args, env = process.env, gitEmail = () => execFileSync('git', ['config', 'user.email'], { encoding: 'utf8', windowsHide: true }).trim()) {
   const email = args.as || env.GOOGLE_IMPERSONATE || (() => { try { return gitEmail(); } catch { return ''; } })();
   if (!email) throw new Error('impersonate 先が不明: --as <email> か GOOGLE_IMPERSONATE か git config user.email を設定する');
@@ -88,10 +106,12 @@ export function resolveAs(args, env = process.env, gitEmail = () => execFileSync
 export async function upload({ file, folder, name, as, authuser = as, keyPath, share, 'share-role': shareRole, 'keep-format': keepFormat = false }) {
   workspaceUrl('https://drive.google.com/', authuser);
   if (share) shareRecipients(share, shareRole);
-  const content = readFileSync(file);
+  let content = readFileSync(file);
   const token = await getDriveToken({ impersonate: as, keyPath });
   const boundary = `drive-upload-${Date.now().toString(36)}`;
-  const plan = uploadPlan(file, name || basename(file), keepFormat);
+  let plan = uploadPlan(file, name || basename(file), keepFormat);
+  let compressed = false;
+  ({ plan, content, compressed } = prepareProxySafeUpload({ token, plan, content, requestedName: name || basename(file) }));
   const body = buildMultipartBody({
     metadata: { ...plan.metadata, parents: [folder] },
     content,
@@ -106,7 +126,7 @@ export async function upload({ file, folder, name, as, authuser = as, keyPath, s
   const json = await res.json();
   await ensureKimEditor(json.id, { actingUser: as, token, created: true });
   if (share) await shareAndRecord({ fileId: json.id, emails: share, role: shareRole, auth: token, name: json.name });
-  return { id: json.id, name: json.name, converted: plan.converted, url: uploadedFileUrl(json.id, plan.metadata.mimeType, authuser), accountInstruction: `${authuser} で開いてください` };
+  return { id: json.id, name: json.name, converted: plan.converted, compressed, url: uploadedFileUrl(json.id, plan.metadata.mimeType, authuser), accountInstruction: `${authuser} で開いてください` };
 }
 
 async function main() {

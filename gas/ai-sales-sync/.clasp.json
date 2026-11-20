@@ -1,0 +1,10 @@
+{
+  "scriptId": "__SET_AFTER_CREATION__",
+  "rootDir": "",
+  "parentId": "__SET_PARENT_SPREADSHEET_ID__",
+  "scriptExtensions": [".js", ".gs"],
+  "htmlExtensions": [".html"],
+  "jsonExtensions": [".json"],
+  "filePushOrder": [],
+  "skipSubdirectories": false
+}

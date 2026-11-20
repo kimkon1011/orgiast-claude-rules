@@ -452,9 +452,11 @@ export function decideExecutionPolicy({ instruction = '', noFallback = false } =
 
 // A zero exit code alone does not prove that an implementation was delivered.
 export function cheapFirstFailureReason({ kind, result, treeChanged, irreversible = false }) {
-  const output = String(result.output || '');
-  const combined = output + '\n' + (result.stderr || '');
-  if (/unrecognized_model/i.test(combined)) return 'unrecognized_model';
+  const combined = `${result.output || ''}\n${result.stderr || ''}`;
+  if (isLaneIncompatible(result.output, result.stderr, result.status)) return 'unrecognized_model';
+  const warned = hasModelWarning(combined);
+  const output = warned ? modelWarningRemainder(result.output, result.stderr) : String(result.output || '');
+  if (/unrecognized_model/i.test(warned ? output : combined)) return 'unrecognized_model';
   if (!output.trim()) return 'empty_output';
   // Replacement characters, invalid controls and common UTF-8-as-Latin-1 sequences.
   if (/[\uFFFD\u0000-\u0008\u000B\u000C\u000E-\u001F]/u.test(output)
@@ -511,6 +513,7 @@ export function buildQwenArgs({ model = GATEWAY_MODELS.deepseek, timeoutSecs = 1
     '--auth-type', 'openai',
     '-m', model,
     '-y',
+    '--bare',
     '--max-wall-time', String(timeoutSecs),
     '--max-tool-calls', String(maxToolCalls),
     '-p', marker
@@ -1107,9 +1110,22 @@ export function isBackendExhausted(output, stderr) {
   return merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '429') || isHttpStatusCodeLine(line, '413'));
 }
 
-export function isLaneIncompatible(output, stderr) {
-  const merged = `${output || ''}\n${stderr || ''}`;
-  return /\[claude-code:unrecognized_model\]/.test(merged);
+const MODEL_WARNING_LINE = /^\s*\[claude-code:unrecognized_model\]/;
+const CHEAP_CODE_BANNER = /^\[(?:openrouter|glm):[^\]\r\n]+\]$/;
+
+function modelWarningRemainder(output, stderr) {
+  // cheap-code は回答の有無にかかわらず provider と model を stderr に出す。
+  const stdoutLines = String(output || '').split(/\r?\n/);
+  const stderrLines = String(stderr || '').split(/\r?\n/).filter(line => !CHEAP_CODE_BANNER.test(line));
+  return [...stdoutLines, ...stderrLines].filter(line => !MODEL_WARNING_LINE.test(line)).join('\n').trim();
+}
+
+function hasModelWarning(text) {
+  return String(text || '').split(/\r?\n/).some(line => MODEL_WARNING_LINE.test(line));
+}
+
+export function isLaneIncompatible(output, stderr, status) {
+  return (hasModelWarning(output) || hasModelWarning(stderr)) && (status !== 0 || !modelWarningRemainder(output, stderr));
 }
 
 export function isBackendBillingFailure(output, stderr) {
@@ -1723,7 +1739,7 @@ async function tryCheapFirstFallback() {
     const billingFailure = isBackendBillingFailure(res.output, res.stderr);
     if (backend.name === 'gemini-cli' && billingFailure) rememberProviderBillingFailure(home, 'gemini');
     const exhausted = isBackendExhausted(res.output, res.stderr) || (backend.kind === 'cheap-code' && res.status === 3);
-    const laneIncompatible = isLaneIncompatible(res.output, res.stderr);
+    const laneIncompatible = isLaneIncompatible(res.output, res.stderr, res.status);
     const dec = shouldAdvanceToNextBackend({ timedOut: res.timedOut === true, status: res.status, exhausted, cliMissing, aborted: res.aborted === 'policy_stall', laneIncompatible });
     const diffNow = dec.outcome === 'ok' && (backend.name === 'openrouter-free' || backend.name === 'openrouter-code')
       ? spawnSync('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' })
@@ -2121,7 +2137,7 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
         if (backend.name === 'gemini-cli' && billingFailure) rememberProviderBillingFailure(home, 'gemini');
         const exhausted = isBackendExhausted(result.output, result.stderr)
           || (backend.kind === 'cheap-code' && result.status === 3);
-        const laneIncompatible = isLaneIncompatible(result.output, result.stderr);
+        const laneIncompatible = isLaneIncompatible(result.output, result.stderr, result.status);
         const decision = shouldAdvanceToNextBackend({ timedOut: result.timedOut === true, status: result.status, exhausted, cliMissing, aborted: result.aborted === 'policy_stall', laneIncompatible });
         const outcome = decision.outcome;
 

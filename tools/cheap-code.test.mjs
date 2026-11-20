@@ -292,3 +292,23 @@ test('OpenRouter pins coding model slots and GLM sets ANTHROPIC_MODEL but leaves
   assert.equal(glmEnv.ANTHROPIC_DEFAULT_SONNET_MODEL, undefined);
   assert.equal(glmEnv.CLAUDE_CODE_SUBAGENT_MODEL, undefined);
 });
+
+test('DeepSeek のモデル警告と回答を別々に転送し、終了コードを維持する', { skip: process.platform === 'win32' }, t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-warning-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const cli = path.join(home, 'fake-claude');
+  const warning = '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash"}';
+  fs.writeFileSync(cli, `#!/bin/sh
+cat >/dev/null
+printf '%s\\n' '${warning}' >&2
+printf '%s\\n' OK
+exit 0
+`, { mode: 0o755 });
+  const result = spawnSync(process.execPath, [tool, '--provider', 'deepseek', '--cwd', home, '確認する'], {
+    encoding: 'utf8',
+    env: { ...process.env, ORGIAST_HOME: home, OPENROUTER_API_KEY: 'test-key', CLAUDE_CLI: cli },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), 'OK');
+  assert.ok(result.stderr.split(/\r?\n/).includes(warning));
+});

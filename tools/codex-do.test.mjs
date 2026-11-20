@@ -1007,6 +1007,15 @@ test('buildQwenArgs は -y を含み、run_shell_command を除外しない', ()
   assert.ok(!args.includes('run_shell_command'));
 });
 
+test('buildQwenArgs は --bare を含み、managed-auto-memory-extractor を抑制する', () => {
+  const args = buildQwenArgs();
+  assert.ok(args.includes('--bare'));
+  // --bare は -y の直後に置かれる
+  const yIndex = args.indexOf('-y');
+  assert.ok(yIndex >= 0);
+  assert.equal(args[yIndex + 1], '--bare');
+});
+
 test('buildQwenArgs は --approval-mode を含まない', () => {
   const args = buildQwenArgs();
   assert.ok(!args.includes('--approval-mode'));
@@ -1041,6 +1050,7 @@ test('buildQwenArgs は既定値と上書き値の両方で正しい引数を返
     '--auth-type', 'openai',
     '-m', 'deepseek/deepseek-v4-flash',
     '-y',
+    '--bare',
     '--max-wall-time', '1800',
     '--max-tool-calls', '80',
     '-p', 'Follow-the-instructions-provided-on-stdin.'
@@ -1050,6 +1060,7 @@ test('buildQwenArgs は既定値と上書き値の両方で正しい引数を返
     '--auth-type', 'openai',
     '-m', 'deepseek-flash',
     '-y',
+    '--bare',
     '--max-wall-time', '300',
     '--max-tool-calls', '40',
     '-p', 'Follow-the-instructions-provided-on-stdin.'
@@ -1599,6 +1610,8 @@ test('cheap-first: implement with zero changed files starts Codex', () => {
 test('cheap-first: 先頭レーンが unrecognized_model なら incompatible を記録して次レーンを呼ぶ', () => {
   const home = workDir();
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  // local.json を書いて cursor-agent の自動挿入を抑制
+  fs.writeFileSync(path.join(home, '.claude', 'codex-fallback-order.local.json'), JSON.stringify(['cheap-code:deepseek', 'gemini-cli']), 'utf8');
   fs.writeFileSync(path.join(home, '.claude', 'codex-fallback-order.json'), JSON.stringify(['cheap-code:deepseek', 'gemini-cli']), 'utf8');
   const result = run(['--force-native', '--cwd', home, '--kind', 'implement', 'implement feature'], {
     home,
@@ -1774,10 +1787,14 @@ test('isBackendExhausted は unrecognized_model 警告では false を返す（�
   assert.equal(isBackendExhausted('', 'Unrecognized_Model'), false);
 });
 
-test('isLaneIncompatible は unrecognized_model エラーで true を返す', () => {
-  assert.equal(isLaneIncompatible('', '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}'), true);
-  assert.equal(isLaneIncompatible('', ''), false);
-  assert.equal(isLaneIncompatible('', 'normal failure'), false);
+test('isLaneIncompatible はモデル警告と残りの出力、終了コードを判定する', () => {
+  const warning = '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash"}';
+  assert.equal(isLaneIncompatible('', warning, 0), true);
+  assert.equal(isLaneIncompatible('', '[openrouter:deepseek/deepseek-v4-flash]\n' + warning, 0), true);
+  assert.equal(isLaneIncompatible('OK', warning, 0), false);
+  assert.equal(isLaneIncompatible('', warning + '\r\nprocessed', 0), false);
+  assert.equal(isLaneIncompatible('OK', warning, 1), true);
+  assert.equal(isLaneIncompatible('', 'normal failure', 1), false);
 });
 
 test('shouldAdvanceToNextBackend は laneIncompatible=true で incompatible を返す', () => {
@@ -3157,9 +3174,15 @@ test('cheap-first validation: actual changes succeed; invalid output fails even 
   }
   assert.equal(check('[claude-code:unrecognized_model] {}'), 'unrecognized_model');
   assert.equal(check('done', { result: { output: 'done', stderr: '[claude-code:unrecognized_model]' } }), 'unrecognized_model');
+  // 警告行＋OK＋status 0 → 失敗ではない
+  assert.equal(check('OK', { result: { output: '[claude-code:unrecognized_model] {"model":"x"}\nOK', stderr: '', status: 0 } }), '');
+  // 警告行のみ＋status 0 → 'unrecognized_model'（空出力）
+  assert.equal(cheapFirstFailureReason({ kind: 'implement', treeChanged: true, result: { output: '[claude-code:unrecognized_model] {}', stderr: '', status: 0 } }), 'unrecognized_model');
+  // 警告行＋出力あり＋status 1 → 'unrecognized_model'
+  assert.equal(check('done', { result: { output: 'done', stderr: '[claude-code:unrecognized_model]', status: 1 } }), 'unrecognized_model');
 });
 
-for (const output of ['', '\uFFFD\uFFFD', '[claude-code:unrecognized_model] {}']) {
+for (const output of ['', '\uFFFD\uFFFD']) {
   test('cheap-first: invalid output ' + JSON.stringify(output) + ' starts Codex', () => {
     const home = workDir();
     const result = run(['--force-native', '--cwd', home, '--kind', 'implement', 'implement feature'], {
@@ -3175,6 +3198,46 @@ for (const output of ['', '\uFFFD\uFFFD', '[claude-code:unrecognized_model] {}']
     assert.doesNotMatch(result.stderr, /代替 AI が成功したため/);
   });
 }
+
+test('cheap-first: unrecognized_model warning + "OK" + status 0 は次レーンに進まない', () => {
+  const home = workDir();
+  const init = spawnSync('git', ['init', home], { encoding: 'utf8' });
+  assert.equal(init.status, 0, init.stderr);
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude', 'codex-fallback-order.local.json'), JSON.stringify(['gemini-cli']));
+  const result = run(['--force-native', '--cwd', home, '--kind', 'implement', 'implement feature'], {
+    home, env: {
+      ...fakeGeminiEnv(`
+        import { writeFileSync } from 'node:fs';
+        writeFileSync('feature.txt', 'implemented');
+        console.error('[claude-code:unrecognized_model] {"model":"test-model"}');
+        console.log('OK');
+      `),
+      CODEX_DO_CHEAP_FIRST: '1', GEMINI_API_KEY: 'gemini-test',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify([{ real: true }]),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /代替 AI が成功したため/);
+  assert.doesNotMatch(result.stdout, /executor=codex/);
+});
+
+test('cheap-first: unrecognized_model warning + 回答あり + status 1 は失敗', () => {
+  const home = workDir();
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude', 'codex-fallback-order.local.json'), JSON.stringify(['cheap-code:deepseek']));
+  const result = run(['--force-native', '--cwd', home, '--kind', 'implement', 'implement feature'], {
+    home, env: {
+      CODEX_DO_CHEAP_FIRST: '1', GEMINI_API_KEY: '', OPENROUTER_API_KEY: 'sk-test',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify([
+        { status: 1, output: 'OK', stderr: '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash"}' },
+        { status: 0, output: 'Codex completed.' },
+      ]),
+    },
+  });
+  assert.match(result.stderr, /cheap-code:deepseek はモデル非対応/);
+  assert.match(result.stdout, /executor=codex/);
+});
 
 test('cheap-first enabled: investigate succeeds with zero changed files', () => {
   const home = workDir();

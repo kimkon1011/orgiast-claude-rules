@@ -1590,7 +1590,7 @@ test('countWindowsClaudeProcesses: orphan claude processes (parent PID not alive
   assert.equal(count, 3, 'orphan process should be excluded');
 });
 
-test('loadGuard: credential diagnostics show missing file/field details', async t => {
+test('loadGuard: missing credential file is graceful; malformed credential/config diagnostics remain', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-cred-diag-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const base = path.join(root, '.claude');
@@ -1599,8 +1599,8 @@ test('loadGuard: credential diagnostics show missing file/field details', async 
   // Case A: Missing .credentials.json
   let result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe',
     fetchImpl: async () => assert.fail(), spawn: () => { throw Error('should not spawn'); } });
-  assert.ok(result.error, 'should have error');
-  assert.match(result.error, /credentials file not found/, `missing cred file: ${result.error}`);
+  assert.equal(result.error, undefined, 'missing credential file should not be an error');
+  assert.equal(result.rcAvailable, false, 'missing credential file should mark RC unavailable');
 
   // Case B: Missing .claude.json
   fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));

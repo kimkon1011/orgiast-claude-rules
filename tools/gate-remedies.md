@@ -2,6 +2,14 @@
 
 値そのものは記載しない。取得: `node tools/onboarding-sync.mjs --keys-only --force`。
 
+## unrequested-automation-gate
+
+PreToolUse gate: 人へ自動で届く通知と定期実行を同時に新設する変更を、依頼元の記録がない場合に block する。
+
+- 依頼済みなら、同じ追加ブロックへ `REQUESTED-BY: <依頼者> YYYY-MM-DD` または `<依頼者> 指定 YYYY-MM-DD` を記録する。
+- 依頼が確認できない場合は実装せず、kim に可否を確認する。
+- ログ出力や内部処理だけの定期実行、手動送信だけの変更は対象外。
+
 ## external-channel-unmonitored-gate
 
 Stop gate: 外部チャネル（LINE/Discord/Beeper）の返信待ち promise を検出し、auto-progress の監視が未登録の場合に block する。

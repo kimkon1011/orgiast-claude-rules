@@ -85,10 +85,21 @@ export async function scan({ home = process.env.ORGIAST_HOME || process.env.USER
   await source('stalled-sessions', () => {
     const ledger=readJson(path.join(dir,'stalled-session-resume.json'));
     const closed=readJson(path.join(dir,'session-closed-ledger.json'),{sessions:{}});
-    for (const [id,s] of Object.entries(ledger.sessions || {})) if (!closed.sessions?.[id] && (s.noProgress>0 || s.attempts?.at(-1)?.outcome==='error')) rows.push(row('session_stalled','再開しても進まない会話',`session=${id}; noProgress=${s.noProgress}; last=${JSON.stringify(s.attempts?.at(-1) || {})}`,'再開先の失敗・会話の進展なし','stalled-session-resume の台帳と停止条件を確認'));
+    const stalledMaxAgeMs=72*3600000, stalled=[];
+    for (const [id,s] of Object.entries(ledger.sessions || {})) {
+      if (closed.sessions?.[id] || !(s.noProgress>0 || s.attempts?.at(-1)?.outcome==='error')) continue;
+      const lastAt=Date.parse(s.attempts?.at(-1)?.startedAt || '');
+      if (Number.isFinite(lastAt) && now-lastAt>stalledMaxAgeMs) continue; // 最終試行から72時間超の古い停滞は再報告しない
+      stalled.push({id,lastAt:Number.isFinite(lastAt)?lastAt:null});
+    }
+    if (stalled.length) {
+      const withAt=stalled.filter(x=>x.lastAt).sort((a,b)=>a.lastAt-b.lastAt), oldest=withAt[0];
+      rows.push(row('session_stalled','再開しても進まない会話',`count=${stalled.length}; sessions=${stalled.slice(0,5).map(x=>x.id).join(',')}${stalled.length>5?' ほか':''}; 最終試行=${oldest?new Date(oldest.lastAt).toISOString():'不明'}`,'再開先の失敗・会話の進展なし','stalled-session-resume の台帳と停止条件を確認'));
+    }
     const file=path.join(dir,'stall-sweeper-log.jsonl'), latest=new Map();
     for (const s of jsonLines(file)) latest.set(s.id,s);
-    for (const s of latest.values()) if (s.kind==='stalled_session' && (s.result==='失敗' || (s.result==='実行中' && now-Date.parse(s.t)>3600000))) rows.push(row('session_stalled','停滞会話の処理が未完了',`${file}: ${s.id} ${s.t} ${s.result} ${s.error || ''}`,'再開失敗・処理中断','stall-sweeper が次回の巡回で再確認'));
+    const unfinished=[...latest.values()].filter(s=>s.kind==='stalled_session' && (s.result==='失敗' || (s.result==='実行中' && now-Date.parse(s.t)>3600000)));
+    if (unfinished.length) rows.push(row('session_stalled','停滞会話の処理が未完了',`${file}: count=${unfinished.length}; ${unfinished.slice(0,5).map(s=>`${s.id} ${s.t} ${s.result}`).join(' | ')}`,'再開失敗・処理中断','stall-sweeper が次回の巡回で再確認'));
   });
   const result={ at:new Date(now).toISOString(), rows, sources };
   if(save) writeJson(path.join(dir,'stall-scan.json'),result);

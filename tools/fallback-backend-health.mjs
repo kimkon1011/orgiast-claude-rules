@@ -4,6 +4,7 @@
 // 状態は homeDir/.claude/fallback-backend-history.jsonl に1行 JSON で追記する。
 import fs from 'node:fs';
 import path from 'node:path';
+import { billingFailure } from './lib/lane-real-health.mjs';
 import { disableLanesTemporarily } from './lib/lane-disabled.mjs';
 
 export const FALLBACK_BACKEND_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6時間
@@ -16,7 +17,7 @@ export function fallbackBackendHistoryFile(homeDir) {
 // backend が空文字/undefined のときは何もせず false を返す。
 export function recordFallbackBackendOutcome(homeDir, { backend, outcome, now = Date.now() }) {
   const name = typeof backend === 'string' ? backend.trim() : '';
-  if (!name) return false;
+  if (!name || outcome == null || !String(outcome).trim()) return false;
   const file = fallbackBackendHistoryFile(homeDir);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.appendFileSync(file, `${JSON.stringify({ t: now, backend: name, outcome: String(outcome) })}\n`, 'utf8');
@@ -141,25 +142,26 @@ export function isQuotaOutcome(outcome) {
 }
 
 // 24h で 5 回以上かつ失敗が過半数、または品質検証の失敗が 3 連続なら一時停止の対象。
-// 回数制限・枠切れは failure_rate の calls にも failures にも数えない。
+// 結果不明・回数制限・残高切れは failure_rate の分母・分子から除外する。
 export function unhealthyCandidates(rows, { now = Date.now(), windowMs = 24 * 60 * 60 * 1000 } = {}) {
   const groups = new Map();
   for (const row of Array.isArray(rows) ? rows : []) {
     const name = String(row?.backend || row?.name || row?.provider || '').trim();
-    if (!name) continue;
+    const outcome = String(row?.outcome || row?.status || '').trim();
+    if (!name || !outcome || /^(?:undefined|null)$/i.test(outcome)) continue;
     const t = typeof row.t === 'number' ? row.t : Date.parse(row.t);
     if (!Number.isFinite(t) || t < now - windowMs || t > now) continue;
     const list = groups.get(name) || [];
-    list.push({ t, outcome: String(row.outcome || row.status || '') });
+    list.push({ t, outcome });
     groups.set(name, list);
   }
   const hits = [];
   for (const [name, list] of groups) {
     list.sort((a, b) => a.t - b.t);
-    const nonQuota = list.filter((row) => !isQuotaOutcome(row.outcome));
-    const failures = nonQuota.filter((row) => row.outcome !== 'ok' && row.outcome !== 'success');
-    if (nonQuota.length >= 5 && failures.length / nonQuota.length > 0.5) {
-      hits.push({ name, reason: 'failure_rate', calls: nonQuota.length, failures: failures.length });
+    const measured = list.filter((row) => !isQuotaOutcome(row.outcome) && !billingFailure(row.outcome));
+    const failures = measured.filter((row) => row.outcome !== 'ok' && row.outcome !== 'success');
+    if (measured.length >= 5 && failures.length / measured.length > 0.5) {
+      hits.push({ name, reason: 'failure_rate', calls: measured.length, failures: failures.length });
       continue;
     }
     const tail = list.slice(-3);

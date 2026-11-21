@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readDisabledEntries, restoreExpiredDisabledLanes } from './lib/lane-disabled.mjs';
+import { isAutoDisabled, readDisabledEntries, restoreExpiredDisabledLanes } from './lib/lane-disabled.mjs';
 import { wslInstalled } from './lib/wsl-present.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -68,7 +68,7 @@ function keyserveEnrolled(home, env = process.env) {
   const secret = env.ORGIAST_KEYSERVE_SECRET || readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
   return Boolean(secret && !isEnrollToken(secret));
 }
-// PC ごとの恒久無効化（lanes-disabled.json）。probe も通知もせず、順番から外す（2026-11-15 kim 指示: 008 の Gemini 停止）。
+// 手動停止と未診断の自動停止をルーティング候補から外す。
 // quick と probe の両経路で、実績反映（applyRealLaneHealth）の後に必ず掛け直す。
 export function applyDisabledLanes(health, home = laneHome(), now = Date.now()) {
   if (!health.lanes) return health;
@@ -79,7 +79,11 @@ export function applyDisabledLanes(health, home = laneHome(), now = Date.now()) 
     const targets = [name];
     if (name === 'gemini') targets.push('gemini-cli');
     if (name === 'openrouter') targets.push('openrouter-free', 'openrouter-code');
-    for (const p of targets) if (health.lanes[p]) health.lanes[p] = state;
+    for (const p of targets) {
+      const lane = health.lanes[p];
+      if (!lane || (isAutoDisabled(entry) && ['billing', 'quota_wait'].includes(lane.reason))) continue;
+      health.lanes[p] = state;
+    }
   }
   return health;
 }
@@ -163,7 +167,7 @@ const paymentFresh = old.lanes?.[p]?.reason === 'dead:payment_required' && Numbe
   applyRealLaneHealth(health, home, now);
   // API key の生存と CLI の有無は別条件。CLI が無い場合は実装候補にしない。
   health.lanes['gemini-cli'] = directGeminiCliState(health.lanes.gemini, executable('gemini'));
-  applyDisabledLanes(health, home);
+  applyDisabledLanes(health, home, now);
 orders(health, home);
   if (!health.lanes.deepseek.alive && health.lanes.deepseek.reason === 'dead:payment_required' && health.lanes.openrouter?.alive) health.lanes.deepseek.via = 'openrouter';
   if (save) { demoteBilling(health, home, now); persist(path.join(dir, 'lane-health.json'), health, health); }
@@ -222,11 +226,11 @@ export async function runNativeWriteProbe({ home, timeoutMs, workDir = laneProbe
     return { viaChain: result.code === 0 && ok ? false : probeViaChain(result.text, 'codex'), code: result.code === 0 && ok ? 0 : 1, text: ok ? 'WRITE_OK' : `書き込み確認失敗 ${result.text || ''}` };
   } finally { try { resetLaneProbeWorkDir(cwd); } catch {} }
 }
-export function runProbe(provider, { home, timeoutMs, dryRun = false, execFileImpl = execFile } = {}) {
+export function runProbe(provider, { home, timeoutMs, dryRun = false, probeAutoDisabled = false, execFileImpl = execFile } = {}) {
   const args = provider === 'codex'
     ? [path.join(repo, 'tools/codex-do.mjs'), 'Reply with exactly: PONG. Do not modify any files.', '--cwd', repo, '--kind', 'implement', '--no-fallback', '--no-escalate', ...(needsNativeCodexProbe() ? ['--allow-native'] : []), ...(dryRun ? ['--dry-run'] : ['--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))])]
     : [path.join(repo, 'tools/llm-ask.mjs'), '--provider', provider, 'Reply with exactly: PONG', '--max', '64', '--no-fallback'];
-  return new Promise(resolve => execFileImpl(process.execPath, args, { cwd: repo, env: { ...process.env, ORGIAST_HOME: home, CODEX_DO_CHEAP_FIRST: '0' }, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 256 * 1024, windowsHide: true }, (e, stdout, stderr) => resolve({ code: e ? e.code || 1 : 0, text: redactAll(`${stdout}\n${stderr}`) })));
+  return new Promise(resolve => execFileImpl(process.execPath, args, { cwd: repo, env: { ...process.env, ORGIAST_HOME: home, CODEX_DO_CHEAP_FIRST: '0', ORGIAST_LANE_DOCTOR_PROBE_PROVIDER: probeAutoDisabled ? provider : '' }, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 256 * 1024, windowsHide: true }, (e, stdout, stderr) => resolve({ code: e ? e.code || 1 : 0, text: redactAll(`${stdout}\n${stderr}`) })));
 }
 export function notificationText(item, home) {
   if (item.reason === 'keyserve_unenrolled') {
@@ -283,9 +287,12 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   const probeBudget = Math.max(1, budgetMs - 5000);
   // 各 provider を並行実測し、一つの停止レーンで90秒枠を使い切らない。
   const probeProviders = providers.length ? providers : [...PROVIDERS, ...OPTIONAL_PROVIDERS.filter(o => health.lanes[o])];
+  const disabled = readDisabledEntries(home);
+  const autoProbes = new Set(probeProviders.filter(p => isAutoDisabled(disabled[p])));
   const results = await Promise.all(probeProviders.map(async p => {
-    if (!health.lanes[p] || shouldSkipLiveProbe(health.lanes[p], now) || (p === 'codex' && !codexAuthStatusAny(home, { platform, spawnImpl }).login)) return [p, null];
-    let dryOk = true;
+    const state = health.lanes[p];
+    const bypassDisabled = autoProbes.has(p) && state?.reason === 'disabled';
+    if (!state || (!bypassDisabled && shouldSkipLiveProbe(state, now)) || (p === 'codex' && !codexAuthStatusAny(home, { platform, spawnImpl }).login)) return [p, null];
     if (p === 'codex') {
       const wslDistros = platform === 'win32' ? await listWsl() : undefined;
       if (platform === 'win32' && (wslDistros === '' || wslDistros == null)) {
@@ -306,19 +313,20 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
         return [p, { ...result, nativeRepair: true, probeErrorText, wslDistros }];
       }
       const dry = await probe(p, { home, timeoutMs: Math.min(15000, probeBudget), dryRun: true });
-      dryOk = dry.code === 0;
+      const dryOk = dry.code === 0;
       // 再利用は成功結果だけ。失敗を30分使い回すと直後に直ったレーンが停止のまま残る（2026-10-25 実測: 直接実行は PONG なのに probe_failed）。
-      if (dryOk && previous.lanes?.codex?.alive && previous.lanes.codex.viaChain !== true && freshProbe(previous.lanes.codex.probedAt, now)) return [p, { cached: previous.lanes.codex, wslDistros }];
+      if (!autoProbes.has(p) && dryOk && previous.lanes?.codex?.alive && previous.lanes.codex.viaChain !== true && freshProbe(previous.lanes.codex.probedAt, now)) return [p, { cached: previous.lanes.codex, wslDistros }];
       const full = await probe(p, { home, timeoutMs: Math.max(1, probeBudget - (Date.now() - started)) });
       return [p, { ...full, ...(dryOk ? { authOk: true } : {}), wslDistros }];
     }
     // dry 失敗（コールド起動が15秒上限を超える等）で即 probe_failed にしない。残り予算の本番 probe で判定する
     // （2026-11-06/07 連日再発: 直接実行は PONG・24h実績0失敗のレーンが dry タイムアウトで停止扱いになった）。
-    return [p, { ...await probe(p, { home, timeoutMs: Math.max(1, probeBudget - (Date.now() - started)) }), ...(p === 'codex' && dryOk ? { authOk: true } : {}) }];
+    return [p, { ...await probe(p, { home, timeoutMs: Math.max(1, probeBudget - (Date.now() - started)), probeAutoDisabled: autoProbes.has(p) }) }];
   }));
   // probe subprocess が cooldown を更新することがあるため、完了後に再読込する。
   const cooldown = readJson(path.join(dir, 'provider-cooldown.json')), routing = readJson(path.join(dir, 'routing-overrides.json'));
   let cooldownChanged = false, routingChanged = false;
+  const recovered = new Set(), classifiedAutoProbes = new Set();
   for (const [p, result] of results) {
     if (!result) continue;
     if (result.cached && !result.cached.alive) { health.lanes[p] = { ...result.cached, ...probeHistory(result.cached) }; continue; }
@@ -331,6 +339,8 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
     const nativeRepair = 'codex: WSL 不在のため Windows ネイティブ(danger-full-access)に切替';
     if (result.nativeRepair && result.code === 0 && !health.repairs.includes(nativeRepair)) health.repairs.push(nativeRepair);
     if (result.code === 0 || result.cached?.alive) {
+      if (!result.cached) recovered.add(p);
+      if (autoProbes.has(p)) classifiedAutoProbes.add(p);
       health.lanes[p] = result.cached
         ? { ...result.cached, ...probeHistory(result.cached) }
         : { alive: true, reason: result.nativeRepair ? 'native_ok' : p === 'codex' ? 'auth_ok:probe_ok' : 'probe_ok', probedAt: stamp, viaChain: false, probeResult: 'alive', probeEvidence: 'exit 0', billingProbeStreak: 0, lastProbeOkAt: stamp, probeReason: result.nativeRepair ? 'native_ok' : p === 'codex' ? 'auth_ok:probe_ok' : 'probe_ok' };
@@ -341,7 +351,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       const stats = health.lanes[p]?.real24h;
       const streak = billing ? (previous.lanes?.[p]?.billingProbeStreak || 0) + 1 : 0;
       const recentSuccess = stats && stats.billingCalls === 0 && stats.lastOkAt <= now && stats.lastOkAt >= now - 6 * 3600_000;
-      const uncertain = billing && recentSuccess && streak < 2;
+      const uncertain = billing && !autoProbes.has(p) && recentSuccess && streak < 2;
       const payment = billing && !uncertain;
       const limited = !billing && quotaFailure(text);
       // codex-do が利用枠クールダウンで保留(exit 75)した場合は WSL 問題ではなく枠切れ。クールダウン自体は既存のまま触らない。
@@ -361,18 +371,28 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
         tried: 'Codex probe と WSL ディストリビューション列挙で WSL サービス状態を確認',
         userFix: '管理者 PowerShell で LxssManager サービスを開始するか、wsl.exe --install --no-distribution を実行して Windows を再起動する。'
       });
-      health.lanes[p].probeReason = health.lanes[p].reason;
       if (deferred && cooldown[p]?.until) health.lanes[p].until = cooldown[p].until;
       if (limited && !payment) { const daily = isDailyQuotaResponse(429, text); const until = daily ? nextUtcMidnight(new Date(now)) : providerResetUntil(text, now); cooldown[p] = { until, at: now, reason: daily ? 'daily_limit' : 'lane_doctor_usage_limit' }; cooldownChanged = true; health.lanes[p].until = until; }
+      if (autoProbes.has(p) && (payment || limited)) {
+        if (limited && !deferred) health.lanes[p].reason = 'quota_wait';
+        classifiedAutoProbes.add(p);
+      }
+      health.lanes[p].probeReason = health.lanes[p].reason;
     }
   }
   if (routingChanged && !persist(path.join(dir, 'routing-overrides.json'), routing, health)) health.repairs = health.repairs.filter(r => r.action !== 'demote_removed' || r.detail !== '実測成功');
   if (cooldownChanged && !persist(path.join(dir, 'provider-cooldown.json'), cooldown, health)) health.repairs = health.repairs.filter(r => r.action !== 'cooldown_removed' || r.detail !== '実測成功');
   health.probedAt = new Date(now).toISOString();
-  applyRealLaneHealth(health, home, now);
+  applyRealLaneHealth(health, home, now, classifiedAutoProbes);
   health.lanes['gemini-cli'] = directGeminiCliState(health.lanes.gemini, executable('gemini'));
-  restoreExpiredDisabledLanes(health, home, now);
-  applyDisabledLanes(health, home);
+  // billing は既存の OpenRouter 代替経路を使う。設定済みだけの状態では解除しない。
+  if (health.lanes.openrouter?.alive && freshProbe(health.lanes.openrouter.lastProbeOkAt, now)) {
+    for (const provider of classifiedAutoProbes) {
+      if (health.lanes[provider].reason === 'billing') recovered.add(provider);
+    }
+  }
+  restoreExpiredDisabledLanes(health, home, now, recovered);
+  applyDisabledLanes(health, home, now);
   orders(health, home);
   demoteBilling(health, home, now);
   await notifyLaneStops(health, { home, now, notify, budgetMs, started, platform, spawnImpl });

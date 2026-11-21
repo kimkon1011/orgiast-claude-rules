@@ -67,18 +67,32 @@ export function isStaleOverdue(task, { now = new Date(), graceDays = 7 } = {}) {
   return jstDayNumber(now) - jstDayNumber(deadline) > graceDays;
 }
 
+export function isExpiredSameDay(task, { now = new Date() } = {}) {
+  if (!ACTIVE_STATES.has(task.status) || !/^\d{4}-\d{2}-\d{2}$/.test(task.deadline)) return false;
+  const deadline = new Date(`${task.deadline}T00:00:00Z`);
+  if (!Number.isFinite(deadline.getTime()) || deadline.toISOString().slice(0, 10) !== task.deadline) return false;
+  const created = String(task.createdAt ?? '').match(/^(\d{4}-\d{2}-\d{2})/);
+  if (!created) return false;
+  const createdDate = new Date(`${created[1]}T00:00:00Z`);
+  if (!Number.isFinite(createdDate.getTime())) return false;
+  const deadlineDay = jstDayNumber(deadline);
+  return deadlineDay <= jstDayNumber(createdDate) && jstDayNumber(now) > deadlineDay;
+}
+
 export function pickTop(tasks, { now = new Date(), limit = 5, graceDays = 7 } = {}) {
-  const top = [], staleOverdue = [];
+  const top = [], staleOverdue = [], expiredSameDay = [];
   for (const task of tasks) {
     const { id, rank, title, deadline } = task;
     if (isStaleOverdue(task, { now, graceDays })) {
       if (staleOverdue.length < limit) staleOverdue.push({ id, rank, title, deadline });
+    } else if (isExpiredSameDay(task, { now })) {
+      if (expiredSameDay.length < limit) expiredSameDay.push({ id, rank, title, deadline });
     } else if (top.length < limit) {
       top.push({ id, rank, title });
     }
-    if (top.length >= limit && staleOverdue.length >= limit) break;
+    if (top.length >= limit && staleOverdue.length >= limit && expiredSameDay.length >= limit) break;
   }
-  return { top, staleOverdue };
+  return { top, staleOverdue, expiredSameDay };
 }
 
 export function priorityScore(item, { now = new Date() } = {}) {

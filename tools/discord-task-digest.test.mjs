@@ -6,6 +6,7 @@ import test from 'node:test';
 import {
   dedupeKey,
   isNearDuplicate,
+  isExpiredSameDay,
   isStaleOverdue,
   mergeTasks,
   pickTop,
@@ -53,6 +54,40 @@ test('pickTop は入力順を保ち、通常枠と期限超過枠にそれぞれ
   assert.deepEqual(pickTop(tasks, { now: NOW, limit: 2 }), {
     top: [first, second],
     staleOverdue: [stale, { ...stale, id: 'T-0004' }],
+    expiredSameDay: [],
+  });
+});
+
+test('isExpiredSameDay は期限が起票日以前で JST の期限日を過ぎた未完了タスクを判定する', () => {
+  const now = new Date('2026-11-20T03:00:00Z');
+  const born = { status: '未着手', deadline: '2026-11-19', createdAt: '2026-11-20 06:33' };
+  assert.equal(isExpiredSameDay(born, { now }), true);
+  const sameDay = { status: '進行中', deadline: '2026-11-18', createdAt: '2026-11-18 6:32' };
+  assert.equal(isExpiredSameDay(sameDay, { now }), true);
+  assert.equal(isExpiredSameDay(sameDay, { now: new Date('2026-11-18T03:00:00Z') }), false);
+  assert.equal(isExpiredSameDay({ ...born, deadline: '2026-11-10', createdAt: '2026-11-05 10:00' }, { now }), false);
+  assert.equal(isExpiredSameDay({ ...born, createdAt: '' }, { now }), false);
+  assert.equal(isExpiredSameDay({ ...born, status: '完了' }, { now }), false);
+  assert.equal(isExpiredSameDay({ ...born, deadline: '2026-11-31' }, { now }), false);
+  assert.equal(isExpiredSameDay(sameDay, { now: new Date('2026-11-18T14:59:00Z') }), false);
+  assert.equal(isExpiredSameDay(sameDay, { now: new Date('2026-11-18T15:00:00Z') }), true);
+});
+
+test('pickTop は通常・期限超過・当日系期限切れの3枠に分け、入力順を保つ', () => {
+  const active = { status: '進行中' };
+  const stale = { id: 'S-001', rank: 'P1', title: '古い期限切れ', deadline: '2026-11-10' };
+  const born = { id: 'E-001', rank: 'P1', title: '当日系期限切れ', deadline: '2026-11-19' };
+  const regular = { id: 'R-001', rank: 'P2', title: '通常タスク' };
+  const tasks = [
+    { ...born, ...active, createdAt: '2026-11-20 06:33' },
+    { ...stale, ...active, createdAt: '2026-11-01 06:30' },
+    { ...regular, ...active, createdAt: '2026-11-19 06:30' },
+    { ...born, ...active, id: 'E-002', createdAt: '2026-11-20 06:33' },
+  ];
+  assert.deepEqual(pickTop(tasks, { now: new Date('2026-11-20T03:00:00Z'), limit: 3 }), {
+    top: [regular],
+    staleOverdue: [stale],
+    expiredSameDay: [born, { ...born, id: 'E-002' }],
   });
 });
 

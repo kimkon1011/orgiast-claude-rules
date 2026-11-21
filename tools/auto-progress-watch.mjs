@@ -20,7 +20,7 @@ import { completionActions } from './lib/auto-progress-artifact.mjs';
 import { reportCheckProgress } from './lib/auto-progress-heartbeat.mjs';
 import { checkPromise, checkProgressSummary, executeCheck, isTimeOnlyCheck, queueCheckFollowup, pendingAction, resolveCheckTimeout } from './auto-progress-check.mjs';
 import { addItem } from './kim-inbox.mjs';
-import { autoResumeAllowed } from './lib/auto-resume-policy.mjs';
+import { autoResumeAllowed, autoResumeDisabledByConfig } from './lib/auto-resume-policy.mjs';
 import { externalSpec } from './lib/external-monitor-state.mjs';
 import { pollExternal, drainExternalQueue } from './auto-progress-external-monitor.mjs';
 import { main as writeProgressPush } from './progress-push.mjs';
@@ -915,16 +915,21 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     if (!patch(rowKey(row), { status: 'stalled', verdict: 'stalled', resumeOutcome: 'disabled',
       reason: '自動再開は廃止（config/auto-resume.json）', lastCheckedAt: at })) return true;
     if (!row.autoResumeDisabledNotifiedAt) {
-      try {
-        if (row.startWhen && (row.checkResult === 'ready' || row.checkText)) {
-          await queueReservationAsk(row, '自動再開は行いません。続けるときはこのセッションを開いて指示してください。');
-        } else {
-          await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-auto-resume-disabled', sessionId: row.sessionId,
-            dedupeKey: `auto-progress-auto-resume-disabled:${rowKey(row)}`,
-            text: `自動再開は行いません。続けるときはこのセッションを開いて指示してください: claude --resume ${row.sessionId}` });
-        }
-        patch(rowKey(row), { autoResumeDisabledNotifiedAt: at });
-      } catch (error) { summary.errors.push(`auto-resume-disabled-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
+      if (autoResumeDisabledByConfig()) {
+        console.log(`[auto-progress-watch] auto-resume disabled by config, skipping kim-inbox notification for session ${row.sessionId}`);
+        patch(rowKey(row), { autoResumeDisabledNotifiedAt: new Date(now).toISOString() });
+      } else {
+        try {
+          if (row.startWhen && (row.checkResult === 'ready' || row.checkText)) {
+            await queueReservationAsk(row, '自動再開は行いません。続けるときはこのセッションを開いて指示してください。');
+          } else {
+            await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-auto-resume-disabled', sessionId: row.sessionId,
+              dedupeKey: `auto-progress-auto-resume-disabled:${rowKey(row)}`,
+              text: `自動再開は行いません。続けるときはこのセッションを開いて指示してください: claude --resume ${row.sessionId}` });
+          }
+          patch(rowKey(row), { autoResumeDisabledNotifiedAt: at });
+        } catch (error) { summary.errors.push(`auto-resume-disabled-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
+      }
     }
     return true;
   };
@@ -1241,10 +1246,15 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         current = { ...row, status: 'stalled', verdict: 'stalled', reason: outcome.reason };
         patch(rowKey(row), { status: 'stalled', verdict: 'stalled', reason: outcome.reason, resumedAt: row.resumedAt ?? '', resumeCount: row.resumeCount ?? 0, resumeOutcome: 'disabled', lastCheckedAt: new Date(now).toISOString() });
         if (!row.autoResumeDisabledNotifiedAt) {
-          try {
-            await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-auto-resume-disabled', sessionId: row.sessionId, dedupeKey: `auto-progress-auto-resume-disabled:${row.sessionId || rowKey(row)}`, text: `自動再開は行いません。続けるときはこのセッションを開いて指示してください: claude --resume ${row.sessionId}` });
+          if (autoResumeDisabledByConfig()) {
+            console.log(`[auto-progress-watch] auto-resume disabled by config, skipping kim-inbox notification for session ${row.sessionId}`);
             patch(rowKey(row), { autoResumeDisabledNotifiedAt: new Date(now).toISOString() });
-          } catch (error) { summary.errors.push(`auto-resume-disabled-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
+          } else {
+            try {
+              await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-auto-resume-disabled', sessionId: row.sessionId, dedupeKey: `auto-progress-auto-resume-disabled:${row.sessionId || rowKey(row)}`, text: `自動再開は行いません。続けるときはこのセッションを開いて指示してください: claude --resume ${row.sessionId}` });
+              patch(rowKey(row), { autoResumeDisabledNotifiedAt: new Date(now).toISOString() });
+            } catch (error) { summary.errors.push(`auto-resume-disabled-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
+          }
         }
       } else if (outcome.deferred) {
         patch(rowKey(row), { status: row.status, resumedAt: row.resumedAt ?? '', resumeCount: row.resumeCount ?? 0,

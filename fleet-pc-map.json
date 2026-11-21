@@ -137,5 +137,18 @@
       "DESKTOP-63MQR3L"
     ],
     "_evidence": "2026-11-14 操作者が『このPCは015』と明言。hostname は DESKTOP-63MQR3L→015CAFE に変更済み（同一機体 Thirdwave ZG）。PR #1782 の 008 は推定による誤登録"
+  },
+  "008XPS8300": {
+    "hostname": "008XPS8300",
+    "account": "seisaku-team@orgiast.jp",
+    "remoteName": "008XPS8300",
+    "notifyDiscordId": "715210673642012733",
+    "notifyTo": "kim@orgiast.jp（金功勇）",
+    "aliases": [
+      "008XPS8300",
+      "user-PC"
+    ],
+    "_evidence": "2026-11-21 hostname が user-PC→008XPS8300 に変更。auto-progress-ledger に 2135件の実績（pc=008XPS8300）。seisaku-team@orgiast.jp の共用席。進捗通知宛先は DESKTOP-BDOAK99 / DELL と同じく kim 宛て（notify-owner.mjs:29 の fallback と同じ）。本PR",
+    "sheetName": "008XPS8300"
   }
 }

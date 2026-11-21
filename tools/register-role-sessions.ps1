@@ -9,7 +9,7 @@ if (-not (Test-Path $script)) { throw "script not found: $script" }
 $node = (Get-Command node -ErrorAction SilentlyContinue).Source
 if (-not $node) { throw 'node not found. Install Node.js first.' }
 
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 40)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -WakeToRun -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 40)
 $definitions = @(
   @{ Name = 'OrgiastRoleTester'; Role = 'tester'; Days = @('Monday', 'Thursday'); At = '04:10'; Description = 'Run tester role loop twice weekly' },
   @{ Name = 'OrgiastRoleReview'; Role = 'system-review'; Days = @('Sunday'); At = '04:30'; Description = 'Run system review role loop weekly' },

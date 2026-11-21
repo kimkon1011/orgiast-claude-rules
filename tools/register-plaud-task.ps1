@@ -26,7 +26,7 @@ if (-not $node) { throw 'node not found. Install Node.js first.' }
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, '--limit', '50') -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).Date.AddMinutes(8)) -RepetitionInterval (New-TimeSpan -Hours 1) -RandomDelay (New-TimeSpan -Minutes 2)
 # PC ga suimin/dengen off datta bawai wa tsugi ni okita toki ni oikake de jikkou suru.
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 
 Register-ScheduledTask -TaskName 'OrgiastPlaudToTldv' -Action $action -Trigger $trigger -Settings $settings -Description 'Import new Plaud recordings into tl;dv (hourly at :08, random delay up to 2 minutes)' -Force | Out-Null
 

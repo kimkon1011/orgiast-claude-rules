@@ -81,7 +81,7 @@ Write-Host ('Arguments: -NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $scri
 if ($DryRun) { Write-Host 'OK: DryRun のためタスク登録をスキップしました'; exit 0 }
 $trigger = New-ScheduledTaskTrigger -Daily -At '03:40'
 # 夜間にスリープしていても次回起動時に回収し、バッテリー移行でも途中停止させない。
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
 # Google Drive の仮想ドライブは Drive アプリが動く対話ログオン中だけ存在するため、対話セッションに限定する。
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 

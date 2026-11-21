@@ -8,7 +8,7 @@ $repo = Resolve-RegisterRepoRoot -Fallback (Split-Path -Parent (Split-Path -Pare
 $node = (Get-Command node -ErrorAction Stop).Source
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @((Join-Path $repo 'tools\discord-dm-drafts.mjs'), 'scan') -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(15) -RepetitionInterval (New-TimeSpan -Minutes 15)
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 14) -MultipleInstances IgnoreNew
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 14) -MultipleInstances IgnoreNew
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName 'OrgiastDiscordDmDrafts' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Prepare Discord DM reply drafts when idle; never auto-send' -Force | Out-Null
 Write-Output 'OK: OrgiastDiscordDmDrafts registered (15 minutes)'

@@ -12,7 +12,7 @@ $bootstrap = Join-Path $env:USERPROFILE '.claude\tools\nightly-bootstrap.ps1'
 if (-not (Test-Path $bootstrap)) { throw "nightly bootstrap not found: $bootstrap" }
 $action = New-HiddenScheduledTaskAction -Execute $powershell -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $bootstrap, '-Target', 'tools\ledger-stale-nag.mjs') -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At 9:13am
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 $taskName = 'OrgiastLedgerStaleNag'
 if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop

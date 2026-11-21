@@ -24,7 +24,7 @@ foreach ($spec in $specs) {
   $hidden = Join-Path $env:USERPROFILE '.claude\tools\run-hidden.vbs'
   $wscript = Join-Path $env:SystemRoot 'System32\wscript.exe'
   $expectedArgs = '//nologo "{0}" "{1}" "{2}"' -f $hidden, $node, $scriptPath
-  $matches = $current -and @($current.Actions).Count -eq 1 -and
+  $matches = $current -and $current.Settings.Priority -eq 4 -and @($current.Actions).Count -eq 1 -and
     $current.Actions[0].Execute -ieq $wscript -and
     $current.Actions[0].Arguments -eq $expectedArgs -and
     $current.Actions[0].WorkingDirectory -eq $repo -and
@@ -35,9 +35,9 @@ foreach ($spec in $specs) {
   if ($DryRun) { Write-Host "[DRY] $($spec.TaskName): $scriptPath every 30 minutes"; continue }
   $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument (@($scriptPath) + $spec.ScriptArgs) -WorkingDirectory $repo
   $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes 30)
-  $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 25)
+  $settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 25)
   Register-ScheduledTask -TaskName $spec.TaskName -Action $action -Trigger $trigger -Settings $settings -Description 'Sync LINE, Discord and Gmail appointments to kim primary calendar every 30 minutes' -Force | Out-Null
   $actual = Get-ScheduledTask -TaskName $spec.TaskName -ErrorAction Stop
-  if ($actual.Actions[0].Arguments -ne $expectedArgs -or $actual.Triggers[0].Repetition.Interval -ne 'PT30M') { throw 'schedule-sync task read-back failed' }
+  if ($actual.Settings.Priority -ne 4 -or $actual.Actions[0].Arguments -ne $expectedArgs -or $actual.Triggers[0].Repetition.Interval -ne 'PT30M') { throw 'schedule-sync task read-back failed' }
   Write-Host 'ok: OrgiastScheduleSync registered (30 minutes, synced main)'
 }

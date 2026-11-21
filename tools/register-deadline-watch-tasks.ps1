@@ -44,7 +44,7 @@ foreach ($spec in $specs) {
   $hidden = Join-Path $env:USERPROFILE '.claude\tools\run-hidden.vbs'
   $expectedArgs = '//nologo "{0}" "{1}" "{2}"' -f $hidden, $node, $script
   $wscript = Join-Path $env:WINDIR 'System32\wscript.exe'
-  $matches = $current -and @($current.Actions).Count -eq 1 -and
+  $matches = $current -and $current.Settings.Priority -eq 4 -and @($current.Actions).Count -eq 1 -and
     $current.Actions[0].Execute -ieq $wscript -and
     $current.Actions[0].Arguments -eq $expectedArgs -and
     $current.Actions[0].WorkingDirectory -eq $repo -and
@@ -54,9 +54,9 @@ foreach ($spec in $specs) {
   if ($DryRun) { Write-Host "[DRY] $($spec.Name) $($spec.At): $script"; continue }
   $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script) -WorkingDirectory $repo
   $trigger = New-ScheduledTaskTrigger -Daily -At $spec.At
-  $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 55)
+  $settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 55)
   Register-ScheduledTask -TaskName $spec.Name -Action $action -Trigger $trigger -Settings $settings -Description 'Track obligations in the deadline ledger; deliver to session inbox.' -Force | Out-Null
   $actual = Get-ScheduledTask -TaskName $spec.Name -ErrorAction Stop
-  if ($actual.Actions[0].Arguments -ne $expectedArgs -or $actual.Actions[0].Execute -ine $wscript -or $actual.Triggers[0].StartBoundary -notmatch $boundary) { throw "read-back failed: $($spec.Name)" }
+  if ($actual.Settings.Priority -ne 4 -or $actual.Actions[0].Arguments -ne $expectedArgs -or $actual.Actions[0].Execute -ine $wscript -or $actual.Triggers[0].StartBoundary -notmatch $boundary) { throw "read-back failed: $($spec.Name)" }
   Write-Host "registered: $($spec.Name) daily $($spec.At)"
 }

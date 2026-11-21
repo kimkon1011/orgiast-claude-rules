@@ -21,7 +21,7 @@ $wake = New-CimInstance -CimClass $class -ClientOnly
 $wake.Subscription = $query
 $wake.Delay = 'PT1M'
 $wake.Enabled = $true
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 150)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 150)
 Register-ScheduledTask -TaskName 'OrgiastQuotaSweep' -Action $action -Trigger @($trigger,$wake) -Settings $settings -Description 'Claude/Codex の枠リセット直前に残枠を makeloop で消化(15分ごと判定)' -Force | Out-Null
 $task = Get-ScheduledTask -TaskName 'OrgiastQuotaSweep' -ErrorAction Stop
 if ($task.Settings.ExecutionTimeLimit -ne 'PT2H30M' -or $task.Actions.Arguments -notlike '*quota-sweep.mjs*' -or $task.Triggers.Repetition.Interval -notcontains 'PT15M') { throw '登録後の読戻し検証に失敗しました' }

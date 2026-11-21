@@ -142,8 +142,49 @@ test('Gmail窓queryは初回だけnewer_thanを使い旧queryを救済する', a
 test('config上限をloaderから渡しDrive pageSizeにも反映する', async () => {
   const state = { sources: {} }, config = { mailboxes: ['mail'], driveUsers: ['drive'], lineSheets: [], gmailDailyLimit: 5, driveDailyLimit: 7 };
   const loaders = sourceLoaders({ home: '', config, state, now, sheets: {}, request: async url => { assert.match(url, /pageSize=7/); return { files: [] }; }, search: async o => { assert.equal(o.max, 25); return { messages: [{ subject: '通常連絡' }] }; } });
-  assert.equal((await loaders[0].load()).next.limit, 5); assert.equal((await loaders[0].load()).next.used, 0);
-  assert.equal((await loaders[1].load()).next.limit, 7);
+  const gmail = await loaders.find(loader => loader.key === 'gmail:mail').load();
+  assert.equal(gmail.next.limit, 5); assert.equal(gmail.next.used, 0);
+  assert.equal((await loaders.find(loader => loader.key === 'drive:drive').load()).next.limit, 7);
+});
+
+test('LINEとDiscordはGmailが時間上限に達する前に処理される', async t => {
+  const home = homeFor(t), state = {}, stages = [];
+  const config = { ...DEFAULT_CONFIG, lineSheets: ['line'], mailboxes: ['mail'], driveUsers: ['drive'] };
+  let elapsed = 0;
+  const sources = sourceLoaders({ home, config, state, now, sheets: { get: async () => [['id', 'ts', 'text']] },
+    search: async () => { elapsed = 100; return { messages: [] }; }, request: () => assert.fail('Drive after cutoff') });
+  const result = await runDetect({ home, config, ledger: { read: async () => [] }, state, sources, now, dryRun: true,
+    ask: () => assert.fail('no documents'), stage: value => stages.push(value), nowMs: () => elapsed, deadlineMs: 100 });
+  assert.deepEqual(stages.filter(value => /^source (line:|discord |gmail:|drive:).*start$/.test(value)),
+    ['source line:line start', 'source discord start', 'source gmail:mail start']);
+  assert.deepEqual(result.errors, []);
+  assert.ok(result.partial.some(entry => entry.source === 'drive:drive'));
+});
+
+test('DriveはOCR対応MIMEだけを検索し、HEICをAPI呼び出しなしでスキップする', async () => {
+  await collectDrive({ user: 'drive', state: {}, now, request: async url => {
+    const query = new URL(url).searchParams.get('q');
+    assert.deepEqual([...query.matchAll(/mimeType = '([^']+)'/g)].map(match => match[1]),
+      ['application/vnd.google-apps.document', 'application/pdf', 'image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/webp']);
+    assert.doesNotMatch(query, /mimeType contains|image\/heic/);
+    return { files: [] };
+  } });
+  assert.equal(await readDriveText({ id: 'iphone', mimeType: 'image/heic' }, { request: () => assert.fail('unsupported MIME reached Drive') }), '');
+});
+
+test('Driveの旧MIME条件とページトークンを捨て、取込窓と使用数を維持する', async () => {
+  const state = { day: '2026-11-04', used: 7, watermark: '2026-11-03T12:00:00Z',
+    until: '2026-11-04T00:00:00Z', query: "mimeType contains 'image/'", pageToken: 'old' };
+  const { next } = await collectDrive({ user: 'drive', state, now, request: async url => {
+    const params = new URL(url).searchParams;
+    assert.equal(params.has('pageToken'), false);
+    assert.match(params.get('q'), /mimeType = 'image\/png'/);
+    assert.doesNotMatch(params.get('q'), /mimeType contains/);
+    assert.ok(params.get('q').includes(`modifiedTime > '${state.watermark}' and modifiedTime <= '${state.until}'`));
+    return { files: [], nextPageToken: 'new' };
+  } });
+  assert.equal(next.pageToken, 'new');
+  for (const key of ['watermark', 'until', 'used']) assert.equal(next[key], state[key]);
 });
 
 test('Drive OCRはコピーだけ削除、export失敗でも後始末、dry-runはコピーなし', async () => {

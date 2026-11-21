@@ -170,3 +170,17 @@ test('existing getDriveToken path still uses sub (impersonation)', async (t) => 
   });
   assert.equal(token, ACCESS_TOKEN);
 });
+
+test('DWD tokenの非JSONエラーもHTTPステータスを返す', async t => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'drive-auth-test-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const keyPath = path.join(tmpDir, 'test-sa.json');
+  fs.writeFileSync(keyPath, SA_JSON, 'utf8');
+
+  const { getDriveToken } = await import('./drive-auth.mjs');
+  await assert.rejects(getDriveToken({
+    keyPath,
+    impersonate: 'user@test.com',
+    fetchImpl: async () => new Response('temporarily unavailable', { status: 503 }),
+  }), error => error.status === 503);
+});

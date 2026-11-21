@@ -6,7 +6,7 @@ $repo = Resolve-RegisterRepoRoot -Fallback (Split-Path -Parent $PSScriptRoot) -R
 $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $bootstrap = Join-Path $env:USERPROFILE '.claude\tools\nightly-bootstrap.ps1'
 if (-not (Test-Path $bootstrap)) { throw $bootstrap }
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15) -MultipleInstances IgnoreNew
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15) -MultipleInstances IgnoreNew
 $jobs = @(
     @{ Name = 'OrgiastSgaDmWatch'; Command = 'watch-dm'; Description = 'SGA autopilot: watch kim DM every 10 min'; Trigger = (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes 10)) },
     @{ Name = 'OrgiastSgaDailySync'; Command = 'sync'; Description = 'SGA autopilot: sync accounting data daily'; Trigger = (New-ScheduledTaskTrigger -Daily -At '05:40') },

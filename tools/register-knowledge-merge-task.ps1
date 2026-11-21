@@ -28,7 +28,7 @@ $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script)
 $next = (Get-Date).Date.AddHours((Get-Date).Hour).AddMinutes(42)
 if ($next -le (Get-Date)) { $next = $next.AddHours(1) }
 $trigger = New-ScheduledTaskTrigger -Once -At $next -RepetitionInterval (New-TimeSpan -Hours 1)
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description '(kim-PC only) Merge inbox knowledge to Drive master hourly' -Force | Out-Null
 Write-Host "OK: task $taskName registered (hourly at :42, limit 15 min)"

@@ -1,5 +1,6 @@
 // 各PCの AI レーン健全性を kim-PC に集めるための純関数群（送信側 fleet-mail.mjs と集計側 fleet-lane-health-report.mjs が共有）。
 // 2026-10-15 事故: nishi@/cr@ のPCで Codex が使えず deepseek へ無言退避し続け、誰も気づかなかった。
+// 2026-11-21: 代替稼働中の deepseek billing と groq quota_wait が人の操作として毎日起票された。
 import { createHash } from 'node:crypto';
 
 export const LANE_HEALTH_TAG = '[lane-health]';
@@ -22,17 +23,24 @@ export function deadLanes(health) {
   for (const [lane, state] of Object.entries(health?.lanes ?? {})) {
     if (lane === 'gemini-cli' || state?.alive !== false) continue;
     if (lane !== 'codex' && SKIP_REASONS.test(String(state.reason ?? ''))) continue;
-    out.push({ lane, reason: String(state.reason || 'unknown'), ...(state.error ? { error: String(state.error).slice(-300) } : {}) });
+    const via = lane !== 'codex' && typeof state.via === 'string' && health.lanes[state.via]?.alive !== false ? state.via : undefined;
+    out.push({
+      lane, reason: String(state.reason || 'unknown'),
+      ...(via !== undefined ? { via } : {}),
+      ...(state.error ? { error: String(state.error).slice(-300) } : {}),
+    });
   }
   return out;
 }
 
 // 推奨対処。fixNow=true は fleet-fix-now.ps1 -NoLogin で受信側PC自身が直せる試行、human は人の操作が要る理由。
-export function repairAdvice(lane, reason) {
+export function repairAdvice(lane, reason, { via } = {}) {
+  if (lane !== 'codex' && via) return { fixNow: false, auto: true, silent: true, human: null, note: `${via} 経由で代替稼働中。人の操作は不要` };
   const r = String(reason ?? '');
   if (/payment_required/.test(r)) return { fixNow: false, auto: false, human: 'まず無料枠・既存契約内の他AIレーンを実測して切り替える。追加費用案は代替不可の証拠と比較表がある場合だけ最後に提示' };
   if (/physical_operation/.test(r)) return { fixNow: false, auto: false, human: '管理者 PowerShell で wsl.exe --install --no-distribution を実行して Windows を再起動する（管理者権限が必要）' };
   if (/^cooldown|demoted/.test(r)) return { fixNow: false, auto: true, human: null, note: '利用上限のクールダウン中。期限が来れば自動復帰する' };
+  if (/^(?:quota_wait|usage_limit|rate_limit)/.test(r)) return { fixNow: false, auto: true, silent: true, human: null, note: '利用上限・レート制限の一時待ち。自動再確認で復帰する' };
   if (lane === 'codex') {
     if (/oauth_consent|login|not_logged|unauthorized|auth/i.test(r)) return { fixNow: true, auto: false, human: 'Codex の OAuth 同意が必要。そのPCで担当アカウントの ChatGPT にブラウザーでログインして許可する' };
     if (/plan.?free|free/i.test(r)) return { fixNow: true, auto: false, human: 'ChatGPT が free プラン。有料プラン契約のアカウントでログインし直す' };
@@ -81,10 +89,10 @@ export function laneHealthRows(reports, { account = () => '' } = {}) {
   const rows = [];
   for (const report of latestByPc(reports)) {
     for (const d of report.dead) {
-      const advice = repairAdvice(d.lane, d.reason);
+      const advice = repairAdvice(d.lane, d.reason, { via: d.via });
       const fixed = advice.auto ? `自動修復${report.autoFix === 'launched' ? '済み（fix-now 起動）' : 'を試行'}: ${advice.note}（人の操作は不要）` : null;
       rows.push({
-        pc: report.pc, lane: d.lane, state: 'dead', reason: d.reason, at: report.at,
+        pc: report.pc, lane: d.lane, state: 'dead', reason: d.reason, via: d.via, at: report.at,
         action: fixed || `人の操作が要る: ${advice.human}`,
         auto: !!advice.auto, silent: !!advice.silent, human: advice.human, fixNow: advice.fixNow, account: account(report.pc),
         key: `${report.pc}|${d.lane}|${d.reason}`,

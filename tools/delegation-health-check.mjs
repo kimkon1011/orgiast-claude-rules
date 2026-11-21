@@ -10,6 +10,7 @@ import { normalizeExecutorStatus } from './executor-status.mjs';
 import { isEntry } from './is-entry.mjs';
 import { judgeTimeoutRows } from './timeout-waste-judge.mjs';
 import { isPermanentBillingDetail } from './llm-fallback.mjs';
+import { pickDistro } from './lib/codex-wsl-auth-sync.mjs';
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -74,15 +75,37 @@ export function authRestoredAfter(home, failures, options = {}) {
   const lastFailureTime = Math.max(...failureTimes);
   const statImpl = options.statImpl || fs.statSync;
   const readFile = options.readFile || fs.readFileSync;
+  const spawnImpl = options.spawnImpl || spawnSync;
+  const checkWsl = options.checkWsl === true || (options.checkWsl !== false && process.platform === 'win32' && home === os.homedir());
+  // Check Windows auth.json first (mtime must be newer than last failure).
   try {
     const authFile = path.join(home, '.codex', 'auth.json');
-    if (!(statImpl(authFile).mtimeMs > lastFailureTime)) return false;
-    const auth = JSON.parse(String(readFile(authFile, 'utf8')).replace(/^\uFEFF/, ''));
-    return [auth?.tokens?.id_token, auth?.tokens?.access_token]
-      .some((token) => typeof token === 'string' && token.length > 0);
-  } catch {
-    return false;
+    if (statImpl(authFile).mtimeMs > lastFailureTime) {
+      const auth = JSON.parse(String(readFile(authFile, 'utf8')).replace(/^\uFEFF/, ''));
+      if ([auth?.tokens?.id_token, auth?.tokens?.access_token].some((token) => typeof token === 'string' && token.length > 0)) {
+        return true;
+      }
+    }
+  } catch {}
+  // Fallback: check WSL auth.json. codex-do runs in WSL and syncs auth at startup,
+  // so WSL may have a current auth.json even when Windows auth.json mtime is stale
+  // (2026-11-22: Windows auth.json from Sep, WSL auth.json from today).
+  // Only check WSL when home matches the real user home (avoids test interference).
+  if (checkWsl) {
+    try {
+      const listed = spawnImpl('wsl', ['-l', '-q'], { encoding: 'utf16le', windowsHide: true, timeout: 15000 });
+      const distro = listed?.status === 0 ? pickDistro(listed.stdout) : null;
+      if (!distro) return false;
+      const result = spawnImpl('wsl', ['-d', distro, '--', 'sh', '-c', 'stat -c "%Y" "$HOME/.codex/auth.json" && cat "$HOME/.codex/auth.json"'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+      if (result?.status !== 0) return false;
+      const lines = String(result.stdout).split('\n');
+      const mtimeSec = Number(lines[0]);
+      if (!Number.isFinite(mtimeSec) || mtimeSec * 1000 <= lastFailureTime) return false;
+      const auth = JSON.parse(lines.slice(1).join('\n').replace(/^\uFEFF/, ''));
+      return [auth?.tokens?.id_token, auth?.tokens?.access_token].some((token) => typeof token === 'string' && token.length > 0);
+    } catch {}
   }
+  return false;
 }
 
 function measured(value) {

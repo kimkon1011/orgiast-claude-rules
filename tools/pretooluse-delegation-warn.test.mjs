@@ -65,9 +65,11 @@ test('warn/override cannot bypass; only current session approval can', () => {
   assert.match(run({ ...edit, session_id: 's' }, home).stdout, /additionalContext/);
   assert.match(run({ ...edit, session_id: 'other' }, home).stdout, /permissionDecision.*deny/);
 });
-test('small edits and excluded paths still pass', () => {
+test('small edits and excluded paths still pass; tools/ code is denied', () => {
   const home = homeWithMode();
-  for (const file_path of ['/project/tools/x.js', '/project/docs/x.js', '/project/tests/x.js', 'C:\\project\\.claude\\x.js', '/project/x.md']) assert.equal(run({ ...edit, tool_input: { file_path } }, home).stdout, '');
+  for (const file_path of ['/project/docs/x.js', '/project/tests/x.js', 'C:\\project\\.claude\\x.js', '/project/x.md']) assert.equal(run({ ...edit, tool_input: { file_path } }, home).stdout, '');
+  assert.match(run({ ...edit, tool_input: { file_path: '/project/tools/x.js' } }, home).stdout, /permissionDecision.*deny/);
+  assert.match(run({ ...edit, tool_input: { file_path: 'C:\\repo\\tools\\hook.mjs', content: 'code' } }, home).stdout, /permissionDecision.*deny/);
   for (const size of [400, 401]) {
     const r = run({ tool_name: 'Edit', tool_input: { file_path: '/project/src/x.js', new_string: 'x'.repeat(size) } }, home);
     if (size === 400) assert.equal(r.stdout, ''); else assert.match(r.stdout, /permissionDecision.*deny/);

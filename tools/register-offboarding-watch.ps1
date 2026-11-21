@@ -19,7 +19,7 @@ if (-not (Test-Path -LiteralPath $script -PathType Leaf)) { throw 'offboarding-w
 . (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, '--notify', '--apply-revoke') -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At '07:10'
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 20) -MultipleInstances IgnoreNew
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 20) -MultipleInstances IgnoreNew
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'kim-PC: 退職者監視・PC失効(毎日07:10)' -Force | Out-Null
 Write-Host "OK: task $taskName registered (daily 07:10, limit 20 min)"

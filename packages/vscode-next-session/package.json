@@ -58,6 +58,7 @@
   "files": [
     "extension.js",
     "route.js",
+    "reopen-tabs.cjs",
     "shell-path.js",
     "mobile-pool.js",
     "mobile-state.cjs",

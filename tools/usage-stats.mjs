@@ -404,12 +404,29 @@ export function countAuthoredLines(value) {
   const text = typeof value === 'string' ? value : '';
   return text.length ? text.split(/\r?\n/).length : 0;
 }
+const NON_CODE_EXTS = new Set(['.md', '.txt']);
+function isNonCodePath(p) {
+  if (!p || typeof p !== 'string') return false;
+  const dot = p.lastIndexOf('.');
+  if (dot < 0) return false;
+  return NON_CODE_EXTS.has(p.slice(dot).toLowerCase());
+}
 function authoredLinesFromToolUse(block) {
   if (block?.type !== 'tool_use') return 0;
   const input = block.input || {};
-  if (block.name === 'Edit') return countAuthoredLines(input.new_string);
-  if (block.name === 'MultiEdit') return (Array.isArray(input.edits) ? input.edits : []).reduce((sum, edit) => sum + countAuthoredLines(edit?.new_string), 0);
-  if (block.name === 'Write') return countAuthoredLines(input.content);
+  const filePath = input.path || input.file_path || '';
+  if (block.name === 'Edit') {
+    if (isNonCodePath(filePath)) return 0;
+    return countAuthoredLines(input.new_string);
+  }
+  if (block.name === 'MultiEdit') {
+    if (isNonCodePath(filePath)) return 0;
+    return (Array.isArray(input.edits) ? input.edits : []).reduce((sum, edit) => sum + countAuthoredLines(edit?.new_string), 0);
+  }
+  if (block.name === 'Write') {
+    if (isNonCodePath(filePath)) return 0;
+    return countAuthoredLines(input.content);
+  }
   if (block.name === 'NotebookEdit') return countAuthoredLines(input.new_source);
   if (block.name === 'Bash' || block.name === 'PowerShell') return extractInlineProgram(input.command)?.lines || 0;
   return 0;

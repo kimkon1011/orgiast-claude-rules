@@ -116,11 +116,13 @@ export function realLaneStats(home, now = Date.now()) {
   return providers;
 }
 
-export function applyRealLaneHealth(health, home, now = Date.now()) {
+export function applyRealLaneHealth(health, home, now = Date.now(), classifiedAutoProbes) {
   const stats = realLaneStats(home, now);
   for (const [lane, state] of Object.entries(health.lanes)) {
     const s = stats[lane];
     if (s) state.real24h = s;
+    // A fresh probe of an auto-disabled lane supersedes the events that disabled it.
+    if (classifiedAutoProbes?.has(lane)) continue;
     if (state.error && probeViaChain(state.error, lane)) { state.viaChain = true; state.reason = 'probe_inconclusive'; }
     if (state.error !== undefined) state.error = laneErrorText(state.error, lane);
     if (state.reason === 'billing' && s?.billingCalls === 0 && s.lastOkAt >= now - 6 * 3600_000 && s.lastOkAt <= now && (state.billingProbeStreak || 0) < 2) state.reason = 'probe_inconclusive';

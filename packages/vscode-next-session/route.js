@@ -17,6 +17,9 @@ function decideAction({ path, query }) {
     // refresh=1: 待機タブ最古の 1 本を即時に作り直す（時間帯・間隔は無視）。
     return { kind: 'mobile', count, name: params.get('name') || 'スマホ用セッション', ...(params.get('refresh') === '1' ? { refresh: true } : {}) };
   }
+  if (normalizedPath === '/reopen') {
+    return { kind: 'reopen', session: params.get('session') || '' };
+  }
   return { kind: 'start' };
 }
 

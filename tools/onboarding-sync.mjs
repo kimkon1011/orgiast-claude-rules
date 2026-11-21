@@ -47,6 +47,12 @@ export function executionPlan(argv = []) {
   return { syncRepository: !onlyKeys, provisionKeys: true, syncRules: !onlyKeys };
 }
 
+export function readHead(tgtRepo) {
+  try {
+    return execFileSync('git', ['-C', tgtRepo, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8', timeout: 60000 }).trim();
+  } catch { return ''; }
+}
+
 export function shouldRunKeys(previous, now = new Date(), forced = false) {
   if (forced) return true;
   if (!previous?.lastRunAt) return true;
@@ -487,10 +493,14 @@ async function syncRepository(now) {
     // ここを1つの try に入れていたため、pull が1回失敗した PC は配布が静かに止まっていた(実測 2026-08-19)。
     try {
     if (fs.existsSync(path.join(repoPath, '.git'))) {
-      const before = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8', timeout: 60000 }).trim();
+      const before = readHead(repoPath);
       const result = await updateRepositoryFiles(repoPath);
-      const after = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8', timeout: 60000 }).trim();
-      changed = result.ok && (result.method === 'zip' ? result.changed : before !== after);
+      const after = readHead(repoPath);
+      if (before && after) {
+        changed = result.ok && (result.method === 'zip' ? result.changed : before !== after);
+      } else {
+        changed = result.ok && result.changed !== false;
+      }
     } else {
       const result = await updateRepositoryFiles(repoPath);
       changed = result.ok && result.changed;

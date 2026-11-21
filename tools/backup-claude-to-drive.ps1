@@ -529,7 +529,15 @@ try {
     'DawnGraphiteCache', 'DawnWebGPUCache', 'ShaderCache', 'GrShaderCache')
   # fleet-mail removes its transient request file after each poll; copying it races with that removal.
   $excludeFiles = @('*.tmp', '*.lock', '*.tmp[0-9]*', '*.heartbeat', '.fleet-mail-poll.json')
-  $roboArgs = @($claudeDir, $stagingClaudeDir, '/MIR', '/R:2', '/W:2', '/XJ', '/NP', '/NFL', '/NDL', '/NJH', '/NJS', '/XD') + $excludeDirs + @('/XF') + $excludeFiles
+  # ~/.claude 直下の git 作業ツリーとその置き場は GitHub から再取得できるので zip に含めない。
+  # 2026-11-21 実測: 除外前は staging 199,062 ファイルで zip 作成が 2 時間の上限内に終わらなかった。
+  # 未コミットの作業は rescue/auto-session-* ブランチ機構が別途保全する。
+  $repoContainerNames = @('tmp-worktrees', 'wt', 'worktrees', 'repo-backups')
+  $repoDirsToSkip = @(Get-ChildItem -LiteralPath $claudeDir -Directory -Force -ErrorAction SilentlyContinue |
+    Where-Object { (Test-Path -LiteralPath (Join-Path $_.FullName '.git')) -or ($_.Name -in $repoContainerNames) } |
+    ForEach-Object { $_.FullName })
+  Write-Event ('plan repo-dirs-excluded count={0} names={1}' -f $repoDirsToSkip.Count, (($repoDirsToSkip | Split-Path -Leaf) -join ','))
+  $roboArgs = @($claudeDir, $stagingClaudeDir, '/MIR', '/R:2', '/W:2', '/XJ', '/NP', '/NFL', '/NDL', '/NJH', '/NJS', '/XD') + $excludeDirs + $repoDirsToSkip + @('/XF') + $excludeFiles
   & robocopy @roboArgs
   $robocopyCode = $LASTEXITCODE
   if ($robocopyCode -ge 8) { throw "~/.claude の robocopy が失敗しました (exit=$robocopyCode)" }

@@ -32,7 +32,7 @@ $action = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument
 $trigger = New-ScheduledTaskTrigger -Daily -At '00:00'
 $repetition = New-ScheduledTaskTrigger -Once -At '00:00' -RepetitionInterval (New-TimeSpan -Minutes 2) -RepetitionDuration (New-TimeSpan -Hours 24)
 $trigger.Repetition = $repetition.Repetition
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 40)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 40)
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 
 try {
@@ -64,7 +64,7 @@ if ($watchdogEnabled) {
   $watchdogTrigger = New-ScheduledTaskTrigger -Daily -At '00:05'
   $watchdogRepetition = New-ScheduledTaskTrigger -Once -At '00:05' -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Hours 24)
   $watchdogTrigger.Repetition = $watchdogRepetition.Repetition
-  $watchdogSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 20) -MultipleInstances IgnoreNew
+  $watchdogSettings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 20) -MultipleInstances IgnoreNew
   Register-ScheduledTask -TaskName $watchdogTask -Action $watchdogAction -Trigger $watchdogTrigger -Settings $watchdogSettings -Principal $principal -Description 'fleet-mail の未配達メッセージを毎時監視し Discord #claude-code と kim DM へ通知する' -Force | Out-Null
   Write-Host "OK: task $watchdogTask registered (every hour, limit 20 min)"
 }

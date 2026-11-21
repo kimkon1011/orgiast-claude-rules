@@ -4,11 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   executionPlan, makeIndex, mergeEnvFile, missingDeclaredKeys, PRESERVE_LOCAL_KEYS,
-  shouldRunKeys, keySyncIsStale, updateRepositoryFiles,
+  readHead, shouldRunKeys, keySyncIsStale, updateRepositoryFiles,
 } from './onboarding-sync.mjs';
 import { gitBlobSha } from './version-drift.mjs';
 
@@ -597,6 +597,39 @@ test('the next sync automatically uses the received primary without an enroll he
   assert.equal(headers['x-orgiast-enroll'], undefined);
   const { createHmac } = await import('node:crypto');
   assert.equal(headers['x-orgiast-auth'], createHmac('sha256', 'new-primary').update(headers['x-orgiast-ts']).digest('hex'));
+});
+
+test('readHead returns empty string for empty git repo', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'readhead-'));
+  try {
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo, { recursive: true });
+    execFileSync('git', ['init', repo], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
+    assert.equal(readHead(repo), '');
+    // エラーを投げないこと（rev-parse HEAD が fatal になる空リポジトリ）
+    const result = readHead(repo);
+    assert.equal(typeof result, 'string');
+    assert.equal(result, '');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('readHead returns commit hash for a non-empty git repo', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'readhead-'));
+  try {
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo, { recursive: true });
+    execFileSync('git', ['init', repo], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
+    fs.writeFileSync(path.join(repo, 'test.txt'), 'hello');
+    execFileSync('git', ['-C', repo, 'add', 'test.txt'], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
+    execFileSync('git', ['-C', repo, 'commit', '-m', 'init'], { windowsHide: true, encoding: 'utf8', timeout: 30000, env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test' } });
+    const hash = readHead(repo);
+    assert.equal(typeof hash, 'string');
+    assert.match(hash, /^[a-f0-9]{40}$/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('zip fallback は packages（同梱 VSIX）も配る', async () => {

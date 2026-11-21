@@ -102,7 +102,17 @@ export { update as updateInboxItem };
 export const isHighInfo = item => item.kind === 'info' && (item.priority === 'high' || /^auto-progress-(done|heartbeat)$/.test(item.source) || /完了|進捗|進んでいる|承認待ち|✅|未達|確認エラー|判断待ち|自動進行|まとめ/.test(item.text));
 const hasWorkId = item => /作業ID:\s*[a-f0-9]{8}(?![a-f0-9])/i.test(item.text);
 const newestFirst = (a, b) => (b.lastAt || b.createdAt).localeCompare(a.lastAt || a.createdAt) || b.id.localeCompare(a.id);
-export const normalizeInboxText = text => String(text ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+export const normalizeInboxText = text => String(text ?? '')
+  .normalize('NFKC')
+  .trim()
+  .replace(/^(?:【[^】]*】\s*)+/, '')
+  .replace(/\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b|\b\d{1,2}\/\d{1,2}\b|\d{1,2}月\d{1,2}日/g, '')
+  .replace(/\d+(日|件|時間)/g, 'N$1')
+  .replace(/(?:\bkim\b|キムさん|キム|金さん|金功勇)\s*/gi, 'KIM')
+  .replace(/[\p{Extended_Pictographic}\uFE0E\uFE0F\u200D]/gu, '')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .toLowerCase();
 const contentDedupeKey = item => `${item.kind}\n${normalizeInboxText(item.text)}`;
 const legacyInfoKey = text => text.replace(/^【[^\r\n]*】[^\S\r\n]*(?:\r?\n|$)/, '')
   .replace(/\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?/g, '#')

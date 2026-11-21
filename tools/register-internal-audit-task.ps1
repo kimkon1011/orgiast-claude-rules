@@ -11,7 +11,7 @@ $stateDir = Join-Path $env:USERPROFILE '.claude\internal-audit'
 $report = Join-Path $stateDir 'reports\latest.md'
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, '--notify', '--state-dir', $stateDir, '--out', $report) -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 7:00am
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 60) -MultipleInstances IgnoreNew
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 60) -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName 'OrgiastInternalAudit' -Action $action -Trigger $trigger -Settings $settings -Description 'Read-only internal audit (Monday 07:00), summary DM to kim' -Force | Out-Null
 Write-Host 'OK: OrgiastInternalAudit registered (Monday 07:00 local time)'
 Get-ScheduledTask -TaskName 'OrgiastInternalAudit' | Select-Object TaskName, State

@@ -1591,7 +1591,7 @@ test('countWindowsClaudeProcesses: orphan claude processes (parent PID not alive
   assert.equal(count, 3, 'orphan process should be excluded');
 });
 
-test('loadGuard: credential diagnostics show missing file/field details', async t => {
+test('loadGuard: missing credential file is graceful; malformed credential/config diagnostics remain', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-cred-diag-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const base = path.join(root, '.claude');
@@ -1600,8 +1600,8 @@ test('loadGuard: credential diagnostics show missing file/field details', async 
   // Case A: Missing .credentials.json
   let result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe',
     fetchImpl: async () => assert.fail(), spawn: () => { throw Error('should not spawn'); } });
-  assert.ok(result.error, 'should have error');
-  assert.match(result.error, /credentials file not found/, `missing cred file: ${result.error}`);
+  assert.equal(result.error, undefined, 'missing credential file should not be an error');
+  assert.equal(result.rcAvailable, false, 'missing credential file should mark RC unavailable');
 
   // Case B: Missing .claude.json
   fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
@@ -2415,6 +2415,47 @@ test('recordApiResult: 初回はカウンターが 1 になる', t => {
   assert.equal(readFailState(base).consecutiveFails, 1);
 });
 
+for (const scenario of ['verified', 'recovered by RC', 'still unverified', 'dispatch failure', 'closed meanwhile', 'alive meanwhile']) {
+  test(`拡張再試行: ${scenario}`, async t => {
+    const base = fixture(t), opts = guardOptions(base);
+    const { spawn, fetchImpl } = opts;
+    let waits = 0, attempts = 0, verificationAgentChecks = 0;
+    opts.wait = async ms => { if (ms === 90000) waits++; };
+    opts.spawn = (cmd, args) => {
+      if (waits && args[0] === 'agents') {
+        verificationAgentChecks++;
+        if (scenario === 'alive meanwhile' && verificationAgentChecks >= 2) {
+          return { status: 0, stdout: JSON.stringify([{ kind: 'interactive', sessionId: 'one' }]) };
+        }
+      }
+      if (args.at(-1).includes('vscode://orgiast.next-session/reopen?session=one')) {
+        attempts++;
+        if (scenario === 'dispatch failure') return { status: 1, stdout: '', stderr: 'mock failure' };
+      }
+      return spawn(cmd, args);
+    };
+    opts.fetchImpl = async url => {
+      if (!waits) return fetchImpl(url);
+      if (scenario === 'closed meanwhile') {
+        fs.writeFileSync(path.join(base, 'closed-sessions.json'), JSON.stringify({ ids: ['one'] }));
+      }
+      const connected = scenario === 'verified' || (scenario === 'recovered by RC' && waits === 2);
+      return { ok: true, json: async () => ({ data: [{ id: 'cse_one', connection_status: connected ? 'connected' : 'disconnected' }] }) };
+    };
+    const result = await reopenLost(opts);
+    const retried = ['recovered by RC', 'still unverified'].includes(scenario);
+    const verified = ['verified', 'recovered by RC'].includes(scenario);
+    assert.equal(result.reopened.length, 1);
+    assert.equal(attempts, Number(retried || scenario === 'dispatch failure'));
+    assert.equal(waits, retried ? 2 : 1);
+    assert.deepEqual(result.retriedViaExtension, retried ? ['one'] : []);
+    assert.deepEqual(result.verified, verified ? ['one'] : []);
+    assert.deepEqual(result.unverified, verified ? [] : ['one']);
+    if (scenario === 'dispatch failure') assert.equal(result.extensionRetryFailed[0].id, 'one');
+    if (scenario === 'closed meanwhile') assert.equal(result.skipped.closed, 1);
+    if (scenario === 'alive meanwhile') assert.equal(result.skipped.alive, 1);
+  });
+}
 for (const count of [25, 19, 0]) {
   test(`Windows reconnection uses one shared process snapshot with ${count} open sessions`, async t => {
     const base = fixture(t);
@@ -2449,8 +2490,10 @@ for (const count of [25, 19, 0]) {
 
     const result = await reopenLost(opts);
     const expectedOpens = Math.min(2, Math.max(0, 20 - count));
-    assert.equal(snapshots, 1);
-    assert.equal(uriCalls, expectedOpens);
+    // 拡張再試行の前再確認（isSessionProcessRunning）は共有スナップショットを使わず現時点を取り直す:
+    // この fixture は opened 全員 unverified → 全員拡張再試行 → スナップショットは 1 + retried 回
+    assert.equal(snapshots, 1 + expectedOpens);
+    assert.equal(uriCalls, expectedOpens * 2); // 初回オープン + 全員拡張再試行
     assert.equal(result.candidates.length, 2);
     assert.equal(result.reopened.length, expectedOpens);
     if (expectedOpens < 2) {

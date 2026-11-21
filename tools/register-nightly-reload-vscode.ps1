@@ -45,7 +45,7 @@ function Register-NightlyReloadTask(
     }
     $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value) -LogonType Interactive -RunLevel Limited
     # No catch-up outside the night window; no overlapping restart attempts.
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 19)
+    $settings = New-ScheduledTaskSettingsSet -Priority 4 -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 19)
     $desired = New-ScheduledTask -Action $action -Trigger $triggers -Principal $principal -Settings $settings
     $current = & $GetTask $name
     if ($current -and (Get-NightlyTaskDefinition $current) -ceq (Get-NightlyTaskDefinition $desired)) {

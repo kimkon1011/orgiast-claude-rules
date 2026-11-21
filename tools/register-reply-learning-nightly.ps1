@@ -20,7 +20,7 @@ if ($Unregister) {
 }
 $action = New-HiddenScheduledTaskAction -Execute $nodeExe -ChildArgument @($script, 'nightly') -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At '04:40'
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 40)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 40)
 Register-ScheduledTask -TaskName 'OrgiastReplyLearningNightly' -Action $action -Trigger @($trigger) -Settings $settings -Description 'Reply-learning nightly loop: Gmail sent-diff intake, rule promotion, weekly metrics, Discord gap check (daily 04:40)' -Force | Out-Null
 $task = Get-ScheduledTask -TaskName 'OrgiastReplyLearningNightly' -ErrorAction Stop
 if ($task.Settings.ExecutionTimeLimit -ne 'PT40M' -or $task.Actions.Arguments -notlike '*reply-learning.mjs*' -or $task.Actions.Arguments -notlike '*nightly*' -or $task.Triggers[0].StartBoundary -notlike '*T04:40:00*') { throw 'read-back failed: OrgiastReplyLearningNightly' }

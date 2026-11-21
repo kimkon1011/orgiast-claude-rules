@@ -439,7 +439,7 @@ test('shouldSkipLiveProbe: 回数制限・課金中は until まで実測しな�
 
 test('期限切れの一時停止は probe 成功で戻り、失敗なら 6 時間延ばし、until 無しは残す', () => {
   const source = fs.readFileSync(new URL('./lane-doctor.mjs', import.meta.url), 'utf8');
-  assert.match(source, /restoreExpiredDisabledLanes\(health, home, now\);\n\s*applyDisabledLanes\(health, home\);/);
+  assert.match(source, /restoreExpiredDisabledLanes\(health, home, now, recovered\);\n\s*applyDisabledLanes\(health, home, now\);/);
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-restore-'));
   fs.mkdirSync(path.join(home, '.claude'));
   const now = 1_700_000_000_000;
@@ -530,4 +530,61 @@ test('chain success and quota cannot prove the requested Codex lane is alive or 
     assert.equal(result.lanes.codex.viaChain, true);
     assert.equal(result.lanes.codex.probeResult, 'inconclusive');
   }
+});
+
+test('自動停止中も probe し、残高切れと枠切れを記録する。手動停止は probe しない', async t => {
+  const home = fixture(t);
+  const until = now + 3600_000;
+  const entries = {
+    gemini: { reason: 'failure_rate', until },
+    deepseek: { reason: 'quality_validation', until },
+    groq: { reason: 'manual', until },
+  };
+  write(home, 'lanes-disabled.json', entries);
+  assert.equal(laneDoctorQuick({ home, now, save: false }).lanes.gemini.reason, 'disabled');
+  const probed = [];
+  await laneDoctorProbe({
+    home, now, providers: ['gemini', 'deepseek', 'groq'],
+    probe: async (provider, options) => {
+      probed.push(provider);
+      assert.equal(options.probeAutoDisabled, true);
+      return { code: 1, text: provider === 'gemini' ? 'HTTP 402 prepayment credits are depleted' : 'HTTP 429 rate limit' };
+    },
+    notify: async () => ({ delivered: 'test' }),
+  });
+  assert.deepEqual(probed, ['gemini', 'deepseek']);
+  const { lanes } = read(home, 'lane-health.json');
+  assert.equal(lanes.gemini.reason, 'billing');
+  assert.equal(lanes.deepseek.reason, 'quota_wait');
+  assert.equal(lanes.groq.reason, 'disabled');
+  assert.deepEqual(read(home, 'lanes-disabled.json'), entries);
+  const quick = laneDoctorQuick({ home, now: now + 1, save: false });
+  assert.equal(quick.lanes.gemini.reason, 'billing');
+  assert.equal(quick.lanes.deepseek.reason, 'quota_wait');
+});
+
+test('直結または OpenRouter 経由で生存を確認した自動停止を解除する', async t => {
+  const home = fixture(t);
+  const until = now + 3600_000;
+  const manual = { reason: 'manual', until };
+  const untouched = { reason: 'failure_rate', until };
+  write(home, 'lanes-disabled.json', {
+    gemini: { reason: 'failure_rate', until },
+    deepseek: { reason: 'quality_validation', until },
+    'cheap-code:deepseek': { reason: 'quality_validation', until },
+    glm: untouched,
+    groq: manual,
+  });
+  const result = await laneDoctorProbe({
+    home, now, providers: ['gemini', 'deepseek', 'openrouter'],
+    probe: async provider => ({
+      code: provider === 'gemini' ? 1 : 0,
+      text: provider === 'gemini' ? 'HTTP 402 prepayment credits are depleted' : 'PONG',
+    }),
+    notify: async () => ({ delivered: 'test' }),
+  });
+  assert.equal(result.lanes.deepseek.alive, true);
+  assert.equal(result.lanes.gemini.reason, 'billing');
+  assert.equal(result.lanes.gemini.via, 'openrouter');
+  assert.deepEqual(read(home, 'lanes-disabled.json'), { glm: untouched, groq: manual });
 });

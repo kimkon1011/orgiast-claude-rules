@@ -16,7 +16,7 @@ if ($Unregister) {
   foreach ($n in $names) { if (Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue) { if ($DryRun) { Write-Host "[DRY] unregister $n" } else { Unregister-ScheduledTask -TaskName $n -Confirm:$false } } }
   return
 }
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 20) -MultipleInstances IgnoreNew
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 20) -MultipleInstances IgnoreNew
 $specs = @(
   [pscustomobject]@{ Name = $names[0]; Slot = 'morning'; Trigger = (New-ScheduledTaskTrigger -Daily -At '08:00'); Desc = 'schedule-autopilot morning digest to kim-inbox and mobile push' },
   [pscustomobject]@{ Name = $names[1]; Slot = 'tick'; Trigger = (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes 15)); Desc = 'schedule-autopilot 15-minute tick: hours-before pushes and answers' }

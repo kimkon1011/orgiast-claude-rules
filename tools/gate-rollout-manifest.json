@@ -4,6 +4,8 @@
     "kim-PC"
   ],
   "gates": {
+    "bash-cd-chain-guard": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-21T00:00:00Z", "denyAfter": "2026-11-28T00:00:00Z" },
+    "shared-worktree-git-guard": { "rollout": "deny", "immediatePolicy": "2026-11-21 user 指示: 共有作業ツリーで他セッションの変更を巻き込む Git 操作を拒否" },
     "pdf-deliverable-visual-gate": { "rollout": "deny", "immediatePolicy": "2026-11-15 user 指示: 全席でPDF納品前に描画後の全ページ目視を必須化" },
     "knowledge-guard": { "rollout": "deny", "immediatePolicy": "2026-10-29 user 指示: 公開鍵有効化後は契約外アカウントの蓄積アクセスを拒否" },
     "bg-turn-report-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-05T00:00:00Z", "denyAfter": "2026-11-12T00:00:00Z" },

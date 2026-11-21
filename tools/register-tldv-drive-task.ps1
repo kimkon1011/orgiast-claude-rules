@@ -25,7 +25,7 @@ if (-not $node) { throw 'node not found. Install Node.js first.' }
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, '--all') -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).Date.AddMinutes(20)) -RepetitionInterval (New-TimeSpan -Hours 1) -RandomDelay (New-TimeSpan -Minutes 2)
 # PC ga suimin/dengen off datta bawai wa tsugi ni okita toki ni oikake de jikkou suru.
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 
 Register-ScheduledTask -TaskName 'OrgiastTldvDriveSync' -Action $action -Trigger $trigger -Settings $settings -Description 'Save new tl;dv meetings into Google Drive (hourly at :20, random delay up to 2 minutes)' -Force | Out-Null
 

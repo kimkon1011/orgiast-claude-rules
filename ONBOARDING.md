@@ -50,6 +50,8 @@ user に操作・確認・入力を頼むときは、その依頼と同じ応答
 
 **社員・他PCに状況を聞く前も、user に聞く前と同じく自分で照会する（応募・メール・シート・Discord は Claude が読める）。**
 
+要対応一覧（TODO・未返信）を金さんに出す前に、Gmail・LINE・Discord など全チャネルで対応状況を照会し、対応済みの項目を除く。
+
 **🔴 判断の土台は基本理念（@~/.claude/orgiast-mission.md）。目的は user の生産性・長期的利益が最優先。乖離時は理念優先で rules repo へ修正提案。承認必須事項（送信・削除・課金等）は理念を理由に飛ばさない。**
 **🔴 応答は常に日本語（コード・識別子は原文可）。Stop hook の書き直しも日本語を保つ。response-language-gate が検査し、setup --converge が language: japanese を配布する。**
 
@@ -1140,7 +1142,7 @@ Astra クールダウン中は Sol を使う。明示の `--model astra`（ま�
 - **委譲規律の"仕組み化"**: 監督が実装を抱えていないか(Opus高消費×Codex未使用)を per-PC の tool-adoption-check が日次で🚨検知（§3.0.4）。🚨が出たら即、実装をCodexへ移す。監視だけで是正しないのは違反。
 - 効果は per-PC コストレポーターのモデル別内訳で実測して調整（憶測で決めない）。
 - ※各PCの既定モデルは settings.json `"model"` と claude.ai 組織設定の両方が効く。組織設定側の「既定モデル/カスタム指示」も管理者kimが Opus 監督方針に合わせて更新すること（配布ルールだけでは system-prompt 側の旧記述は変わらない）。
-- **この規律は hook で機械的に強制される**: UserPromptSubmit の cost-routing-gate が実装依頼を検知し、応答冒頭での `[委譲判定]` 宣言を要求する（宣言せず実装を書き始めるのは違反）。PreToolUse の pretooluse-delegation-warn / pretooluse-bash-delegation / pretooluse-lane-guard は、まとまった実装コードの直接書き込み・6000字超の使い捨てインラインプログラム・1ターン8回超の直接ツール実行を **モデルを問わず（Fable/Opus/Sonnet/Haiku 全部）常に deny する**（2026-10-17 kim 厳命「Claude だけで絶対に行わない」）。
+- **この規律は hook で機械的に強制される**: UserPromptSubmit の cost-routing-gate が実装依頼を検知し、応答冒頭での `[委譲判定]` 宣言を要求する（宣言せず実装を書き始めるのは違反）。PreToolUse の pretooluse-delegation-warn / pretooluse-bash-delegation / pretooluse-lane-guard は、まとまった実装コードの直接書き込み・2000字超の使い捨てインラインプログラム（書き込みを伴うもの）・1ターン8回超の直接ツール実行を **モデルを問わず（Fable/Opus/Sonnet/Haiku 全部）常に deny する**（2026-10-17 kim 厳命「Claude だけで絶対に行わない」）。
 - **解除できるのは user のプロンプトだけ**: user が同じ指示に `[CLAUDE-IMPL-OK]`（または `[LANE-OK]`）と書いたとき、UserPromptSubmit の `claude-impl-approval` が **そのセッション・60分限り**の許可を発行する。`~/.claude/cost-enforce-override` ファイル・委譲率の観測・Codex クールダウン中の自動解除は **廃止**（Claude 自身が作れる抜け道は全部塞ぐ）。Codex が上限中でも `codex-do` は deepseek/glm/gemini へ内蔵フォールバックするので、そのまま委譲する。全滅なら実装を止めて費用見込みを kim に提示し、承認マーカーを待つ。
 - **実装サブエージェントも禁止**: `model-agent-guard` は Fable 指定に加え、実装依頼を Explore/Plan 以外のサブエージェントへ渡す Agent 呼び出しを deny する（例外は同じ `[CLAUDE-IMPL-OK]`）。
 - **1セッション=1目的は hook で機械的に担保する**: SessionStart の `session-purpose-gate` が「このセッションの目的を1行宣言せよ」と要求し、最初の依頼をそのセッションの目的として記録する。以後 UserPromptSubmit で**目的ドリフト**（別目的の依頼＝キーワードの重なりが薄い／「別件」「ところで」「次は」等）を検知したら、**着手前に**『ここで /session-close して新セッションで』と1行提案することを強制する（ブロックはしない。userが「続けて」と言えばそのまま継続）。16ターンを超えたセッションには区切り提案のナッジも出る。判定は純ローカル（API課金ゼロ・状態は `~/.claude/session-purpose/<session_id>.json`）。
@@ -1292,6 +1294,7 @@ Bashは1呼出1コマンド、専用ツール・allow済み経路を使う。
 - bypass 移行後も Bash 規約は維持する（allow 不一致で止まらなくなっても、連結・パイプは Codex hang と読みにくさの原因）。
 
 1. `cd X && cmd` の連結は禁止。絶対パスか `git -C <path>` / ツールの `--cwd` を使う。
+   PreToolUse の `bash-cd-chain-guard` が先頭の `cd` と後続コマンドの連結を止める。
 2. `2>&1 | tail` / `| head` などのパイプ後処理を付けない（allowルール不一致とCodex hangの原因）。
 3. 使い捨てスクリプトはheredocで流さず、scratchpadにファイルとして書き `node <file>` で実行する。
 4. `until … sleep` ポーリングは禁止。`run_in_background` か Monitorを使う。
@@ -1345,6 +1348,7 @@ Stop ゲートは差し戻し後の書き直しも検査する（素通り禁止
 - 配布対象を手書きの一覧で持たない。新しいフォルダを足したら配布カバレッジのテストが落ちる形にする。
 - 全PC反映の完了報告は **`node tools/fleet-status.mjs`（各PCの converge ビーコン）の実データ**で出す。ビーコンの無い PC は「未確認」と書く。自分の PC で動いたことを全PC反映の証拠にしない。
 - 定期タスク（Orgiast*）は `nightly-bootstrap.ps1 -Target tools\<script>` 経由でだけ登録する。worktree・一時ブランチ・別クローンのパスを焼き込まない（一時回避で固定したら回避終了時に register-*.ps1 で戻す）。直したはずの不具合の再発や安いAIの 402 は、まずタスクの実行元ツリーの鮮度（`git log -1` が origin/main より古いか）を疑う。型: 実行元ツリー固着型（`protocols/INCIDENT-TYPES.md`）。
+- `New-ScheduledTaskSettingsSet` には `-Priority 4` 以上を必ず付ける。`scheduled-task-priority.test.mjs` が検査する。
 
 **C. Claude Code 間のやり取り（fleet-mail）**
 - 送信前に宛先の最終受信時刻（`--sent-status` や fleet-status）を確認する。長く受信が無い宛先には、先に Discord へ同報する。
@@ -1561,6 +1565,18 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
   - **ふわは動ける**。日次・週次・自由間隔の定期タスク（例: 日次の確認、週次サマリー）を作れる。 [Meta Help: reminders and scheduled tasks](https://www.meta.com/help/superintelligence/1484325780075655/)。アプリを閉じたあとも作業を続けられる、との公式案内もある。 [Introducing Muse](https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/)。
   - **ドットは動ける**。リマインダーや定期タスクを組み、時刻や対応するイベントを指定できる。Scheduled で管理する。 [Getting started with your dot](https://help.openai.com/en/articles/20001530-getting-started-with-your-dot)、[Tasks and memory](https://learn.chatgpt.com/docs/dots/tasks-and-memory)。
   - 定期タスクが未設定なら、グロボの夜間ルーティンが台帳に積んだ作業を代わりに進める。カスタム指示への書き込みと定期タスク作成は GB-35。
+
+**2.8.7 Cursor Ultra を既定の担当にする（2026-11-21 kim指示）**
+
+Cursor Ultra（定額 $200/月）は「上限のときの代わり」ではなく、次の作業の既定の担当とする。品質を落とす格下げはしない。
+
+
+
+- **Cursor が既定**: 無人の定期ジョブ（見回りの集計、期日の回収、くらしのマーケットの見回りなど）、調べ物・集計・整形・要約・下書きのたたき台、コード修正の PR。`codex-do` は implement / verify / investigate / summarize / classify で、ログイン済みの cursor-agent を Codex や llm-ask より先に起動する。
+- **Claude Code に残すもの**: 金さん向けの最終判断と、社外文面の最終確認だけ。指示にその旨を書くか、`lane: claude` / `[CLAUDE-FINAL]` を付ける。
+- **ペース点検（毎日 19:30、推奨は 000）**: `tools/cursor-usage-pace.mjs` が Cursor Models と Other Models の使用量を測る。測り方は Cursor の公式 API（Team API キーがあるとき）または明示値。画面の自動操作はしない。理想ペースは周期（2026-11-18〜2026-12-18）の「経過÷周期」に、期末目標 90〜95% を掛けた値。遅れているときは待ち作業（夜間キュー、脆弱性点検、コード改善 PR、調べ物）を Cursor に追加で回す。ペースを超えたら追加回しをやめる。従量課金に入りそうなら止めて通知する。
+- **書き出し（グロボの毎日 20 時の使用量点検が読む）**: 000 では `C:/Users/uers/.claude` 配下の `reports` にある `cursor-usage-pace.txt`（最新1行）。他 PC では `%USERPROFILE%/.claude` 配下の同じファイル名。履歴は同じ場所の `cursor-usage-pace.jsonl`。状態は `~/.claude/cursor-usage-pace-state.json`。
+- **毎朝の件数（全 PC、07:10）**: `tools/cursor-agent-run-counts.mjs` が各 PC の cursor-agent 実行件数を数え、`~/.claude 配下 reports の cursor-agent-runs.txt` に1行書く。
 
 ### 2.9 Drive・共通知識・社内アプリ・イベント（§2.9〜2.12）
 

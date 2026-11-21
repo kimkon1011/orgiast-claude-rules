@@ -43,7 +43,7 @@ if (Test-Path -LiteralPath $hiddenActionHelper) {
 $trigger = New-ScheduledTaskTrigger -Daily -At '08:30'
 $repetitionTemplate = New-ScheduledTaskTrigger -Once -At '08:30' -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Hours 12)
 $trigger.Repetition = $repetitionTemplate.Repetition
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 20)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 20)
 # S4U は非 elevated 登録で Access Denied (0x80070005) になるため、対話ログオンの権限で実行する。
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 

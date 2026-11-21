@@ -116,3 +116,6 @@ PR_BODY.md
 # tools/*.bak-20261117 の 4 ファイル 574 行のみ＝実変更ゼロの空救済）。
 *.bak-*
 *.bak.*
+# PR本文の一時ファイル（rescue コミットへの混入防止）
+/.pr-body.md
+/pr-body*.md

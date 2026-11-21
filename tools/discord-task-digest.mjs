@@ -79,21 +79,33 @@ export function isExpiredSameDay(task, { now = new Date() } = {}) {
   return deadlineDay <= jstDayNumber(createdDate) && jstDayNumber(now) > deadlineDay;
 }
 
-export function pickTop(tasks, { now = new Date(), limit = 5, graceDays = 7 } = {}) {
-  const top = [], staleOverdue = [], expiredSameDay = [];
+export function isStaleUndated(task, { now = new Date(), maxAgeDays = 14 } = {}) {
+  if (!ACTIVE_STATES.has(task.status)) return false;
+  if (String(task.deadline ?? '').trim()) return false;
+  const created = String(task.createdAt ?? '').match(/^(\d{4}-\d{2}-\d{2})/);
+  if (!created) return false;
+  const createdDate = new Date(`${created[1]}T00:00:00Z`);
+  if (!Number.isFinite(createdDate.getTime())) return false;
+  return jstDayNumber(now) - jstDayNumber(createdDate) > maxAgeDays;
+}
+
+export function pickTop(tasks, { now = new Date(), limit = 5, graceDays = 7, undatedDays = 14 } = {}) {
+  const top = [], staleOverdue = [], expiredSameDay = [], staleUndated = [];
   for (const task of tasks) {
     if (!ACTIVE_STATES.has(task.status)) continue;
-    const { id, rank, title, deadline } = task;
+    const { id, rank, title, deadline, createdAt } = task;
     if (isStaleOverdue(task, { now, graceDays })) {
       if (staleOverdue.length < limit) staleOverdue.push({ id, rank, title, deadline });
     } else if (isExpiredSameDay(task, { now })) {
       if (expiredSameDay.length < limit) expiredSameDay.push({ id, rank, title, deadline });
+    } else if (isStaleUndated(task, { now, maxAgeDays: undatedDays })) {
+      if (staleUndated.length < limit) staleUndated.push({ id, rank, title, createdAt });
     } else if (top.length < limit) {
       top.push({ id, rank, title });
     }
-    if (top.length >= limit && staleOverdue.length >= limit && expiredSameDay.length >= limit) break;
+    if (top.length >= limit && staleOverdue.length >= limit && expiredSameDay.length >= limit && staleUndated.length >= limit) break;
   }
-  return { top, staleOverdue, expiredSameDay };
+  return { top, staleOverdue, expiredSameDay, staleUndated };
 }
 
 export function priorityScore(item, { now = new Date() } = {}) {

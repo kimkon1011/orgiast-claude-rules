@@ -125,8 +125,14 @@ if (!Number.isFinite(cronCheckedAt) || Date.now() - cronCheckedAt >= 2 * 864e5) 
   flags.push('⚠️ cron生存点検が未実行(node tools/cron-liveness-check.mjs)');
 } else {
   for (const result of cronLiveness?.results || []) {
-    if (result.status === 'never') flags.push(`🚨 cron停止: ${result.label} — schedule の成功履歴なし。gh run list --event=schedule で確認し permissions:{actions:read} を点検`);
-    if (result.status === 'stale') flags.push(`🚨 cron停止: ${result.label} — schedule の最終成功 ${String(result.lastSuccess).slice(0, 10)}(${Math.floor(result.ageDays)}日前)。gh run list --event=schedule で確認し permissions:{actions:read} を点検`);
+    // local# キーは GitHub workflow ではなくローカルファイルの状態で測っている
+    // → cron-liveness-check.mjs が作ったそのままの line を使う（schedule 点検は誤り）
+    if (result.key?.startsWith('local#')) {
+      if (result.status === 'never' || result.status === 'stale') flags.push(result.line);
+    } else {
+      if (result.status === 'never') flags.push(`🚨 cron停止: ${result.label} — schedule の成功履歴なし。gh run list --event=schedule で確認し permissions:{actions:read} を点検`);
+      if (result.status === 'stale') flags.push(`🚨 cron停止: ${result.label} — schedule の最終成功 ${String(result.lastSuccess).slice(0, 10)}(${Math.floor(result.ageDays)}日前)。gh run list --event=schedule で確認し permissions:{actions:read} を点検`);
+    }
   }
 }
 const TARGET_DELEG = 0.50;

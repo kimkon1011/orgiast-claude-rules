@@ -12,6 +12,7 @@ import {
   extractPlanPercents,
   formatPaceLine,
   idealBand,
+  isCursorUsageFill,
   writePaceOutputs,
   cursorUsagePaceTxtPath,
 } from './cursor-usage-pace.mjs';
@@ -60,10 +61,13 @@ test('writePaceOutputs は1行ファイルと状態を書き、halt 時だけ通
   assert.equal(line, written.line);
   assert.equal(fs.existsSync(path.join(home, '.claude', 'cursor-usage-pace-state.json')), true);
   assert.equal(written.alert, null);
+  assert.equal(isCursorUsageFill(home, {}), true);
+  assert.equal(isCursorUsageFill(home, { CURSOR_USAGE_FILL: '1' }), true);
   const halted = decideCursorPace({ cursorModelsPct: 98, otherModelsPct: 1, now, ...CYCLE });
   const alerted = writePaceOutputs(home, { ...halted, now, ...CYCLE, source: 'api' });
   assert.ok(alerted.alert);
   assert.match(fs.readFileSync(alerted.alert, 'utf8'), /従量課金/);
+  assert.equal(isCursorUsageFill(home, {}), false);
 });
 
 test('extractPlanPercents は dashboard 形式の auto/api を Cursor/Other に写す', () => {

@@ -1,14 +1,15 @@
 {
-  "runId": "rules-resync-2026-10-15-memory-share",
+  "runId": "rules-resync-cursor-default-lane-20261122",
   "task": "rules-resync",
   "targets": "all",
-  "_why": "kim-PC の memory 全件配布(orgiast-memoryserve)を開始。各PCで onboarding-sync --force を1回実行し ~/.claude/shared-memory を初回受信する。",
-  "_note": "全PCへ承認済みタスクを配る中央キュー。kim/Claudeが task と runId(毎回ユニーク) を更新→各PCが夜間03:15の実行時に1回だけ処理しDiscordへ結果を返す。task を空にすると何もしない。",
+  "_why": "PR #2530（Cursor Ultra 既定化＋ペース点検）と fill 追補を全PC nightly-repo へ同期する。各PCで onboarding-sync --force を1回。",
+  "_note": "全PCへ承認済みタスクを配る中央キュー。kim/Claudeが task と runId(毎回ユニーク) を更新→各PCが夜間03:15の実行時に1回だけ処理しDiscordへ結果を返す。task を空にすると何もしない。登録タスク register-cursor-agent-run-counts は別 runId で後続実行可。",
   "_allowed_tasks": [
     "verify-setup",
     "rules-resync",
     "cost-report",
-    "register-fleet-agent"
+    "register-fleet-agent",
+    "register-cursor-agent-run-counts"
   ],
   "_targets": "all=全PC / PC名の一部文字列=そのPCだけ"
 }

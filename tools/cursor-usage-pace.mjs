@@ -155,7 +155,14 @@ export async function runCursorUsagePace({
     local,
     line,
   });
-  return { ...decided, ...written, local, source, path: written.txt };
+  let fillDispatch = null;
+  try {
+    const { dispatchCursorFill } = await import('./cursor-fill-dispatch.mjs');
+    fillDispatch = dispatchCursorFill({ home });
+  } catch (err) {
+    console.error(`cursor-fill-dispatch failed: ${err?.message || err}`);
+  }
+  return { ...decided, ...written, local, source, path: written.txt, fillDispatch };
 }
 
 export async function main(args = process.argv.slice(2)) {

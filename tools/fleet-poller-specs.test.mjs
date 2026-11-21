@@ -61,6 +61,18 @@ test('fleet-poller.mjs は register-fleet-agent.ps1 を実行する', () => {
   assert.match(branch[0], /register-fleet-agent\.ps1/);
 });
 
+test('fleet-poller.mjs は register-cursor-agent-run-counts を許可する', () => {
+  const allowed = pollerSource.match(/const allowed = new Set\(\[([^\]]+)\]\)/);
+  assert.ok(allowed, '許可タスク一覧が見つからない');
+  assert.match(allowed[1], /['"]register-cursor-agent-run-counts['"]/);
+});
+
+test('fleet-poller.mjs は register-cursor-agent-run-counts-task.ps1 を実行する', () => {
+  const branch = pollerSource.match(/if \(task === 'register-cursor-agent-run-counts'\)[\s\S]*?\n  }/);
+  assert.ok(branch, 'register-cursor-agent-run-counts の分岐が見つからない');
+  assert.match(branch[0], /register-cursor-agent-run-counts-task\.ps1/);
+});
+
 test('fleet-poller.mjs の既存5タスクが許可リストに残っている', () => {
   const allowed = pollerSource.match(/const allowed = new Set\(\[([^\]]+)\]\)/);
   assert.ok(allowed, '許可タスク一覧が見つからない');

@@ -19,6 +19,12 @@ export function cursorUsagePaceStatePath(home) {
 export function cursorUsagePaceAlertPath(home) {
   return path.join(home, '.claude', 'reports', 'cursor-usage-pace-alert.txt');
 }
+export function cursorFillEnabledPath(home) {
+  return path.join(home, '.claude', 'cursor-fill.enabled');
+}
+export function cursorFillQueuePath(home) {
+  return path.join(home, '.claude', 'reports', 'cursor-fill-queue.jsonl');
+}
 
 export function jstStamp(now = Date.now()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -152,6 +158,10 @@ export function readPaceState(home) {
 export function isCursorUsageHalted(home, env = process.env) {
   if (String(env.CURSOR_USAGE_HALT || '') === '1') return true;
   return readPaceState(home).halt === true;
+}
+export function isCursorUsageFill(home, env = process.env) {
+  if (String(env.CURSOR_USAGE_FILL || '') === '1') return true;
+  return readPaceState(home).fill === true;
 }
 
 function ensureDir(file) {

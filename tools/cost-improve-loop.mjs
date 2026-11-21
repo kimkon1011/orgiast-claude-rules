@@ -640,9 +640,10 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
         nextStaleRetry[pc] = { sentAt: now.toISOString(), count: 1, mode };
         actions.push({ id: `action-${nowMs}-stale_report-${pc}`, kind, pc, mode, dispatchedAt: now.toISOString(), baseline: { metric: 'reportAge', value: 0 }, result: 'sent', verifiedAt: null, note: `fleet-sheet-report 再送 (${mode})` });
         continue;
-      } catch {
-        // 外部例外には認証情報を含む git 出力があり得るので、固定の理由だけを記録する。
-        console.error(`stale_report: ${mode === 'local' ? 'ローカル再送に失敗（終了異常またはタイムアウト）' : '再送指令の送信に失敗（利用不可または push 失敗）'}。人へエスカレーションします。`);
+      } catch (error) {
+        // 外部例外には認証情報を含む git 出力があり得るので、redacted 短縮メッセージだけを記録する。
+        const wrapped = `stale_report(${pc}): ${mode === 'local' ? 'ローカル再送失敗' : '再送指令失敗'}: ${String(error?.message || error).replace(/[A-Za-z0-9+/]{40,}/g, '…').slice(0, 200)}。人へエスカレーションします。`;
+        console.error(wrapped);
         retryFailed = true;
       }
     }

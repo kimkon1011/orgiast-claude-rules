@@ -195,10 +195,23 @@ export function isOpusHeavy(row, localState) {
       if (match) {
         return parseFloat(match[1]) > 50;
       }
-      return true;
+      // %無しの model 名だけでは過多と判定しない（2026-11-17 以降の既定は Opus 監督）
+      return false;
     }
   }
   return false;
+}
+
+export function opusRatioFromMainModel(mainModel) {
+  if (typeof mainModel !== 'string') return null;
+  const lower = mainModel.toLowerCase();
+  if (!lower.includes('opus')) return null;
+  const match = lower.match(/(\d+(?:\.\d+)?)\s*%/);
+  if (match) {
+    const pct = parseFloat(match[1]);
+    return pct >= 0 && pct <= 100 ? pct / 100 : null;
+  }
+  return null;
 }
 
 export function parseCheapAiUseCount(text) {
@@ -354,7 +367,7 @@ export function evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis = 
           severity: 'warning',
           evidence: `Main model contains Opus (> 50% ratio)`,
           measuredAt,
-          actualValue: isSelf && typeof localState?.opusRatio === 'number' ? localState.opusRatio : 1,
+          actualValue: isSelf && typeof localState?.opusRatio === 'number' ? localState.opusRatio : opusRatioFromMainModel(row.mainModel) ?? 1,
           targetValue: 0.5,
           trusted: true
         });

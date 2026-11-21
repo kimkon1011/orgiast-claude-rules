@@ -271,6 +271,8 @@ test('手間削減hook 8本を正しいイベントへ登録しstop-gateは登�
   const names = (event) => settings.hooks[event].flatMap((group) => group.hooks || []).map((hook) => path.basename([...String(hook.command).matchAll(/"([^"]+\.mjs)"/g)].at(-1)?.[1] || ''));
   assert.deepEqual(['automation-first-reminder.mjs', 'credentials-reminder.mjs', 'playbook-inject.mjs'].every((name) => names('UserPromptSubmit').includes(name)), true);
   assert.deepEqual(['pretooluse-headless-background.mjs', 'shared-worktree-git-guard.mjs', 'pretooluse-line-broadcast-guard.mjs', 'exec-tree-edit-guard.mjs', 'pretooluse-serial-investigation.mjs', 'pipe-stage-permissions.mjs'].every((name) => names('PreToolUse').includes(name)), true);
+  const cdGuard = settings.hooks.PreToolUse.find(group => group.hooks.some(hook => hook.command.includes('bash-cd-chain-guard.mjs')));
+  assert.equal(cdGuard?.matcher, 'Bash');
   const sharedGuard = settings.hooks.PreToolUse.find(group => group.hooks.some(hook => hook.command.includes('shared-worktree-git-guard.mjs')));
   assert.equal(sharedGuard.matcher, 'Bash|PowerShell');
   const editGuard = settings.hooks.PreToolUse.find(group => group.hooks.some(hook => hook.command.includes('exec-tree-edit-guard.mjs')));

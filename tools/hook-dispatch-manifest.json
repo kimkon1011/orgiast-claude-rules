@@ -509,6 +509,12 @@
         "timeout": 15
       },
       {
+        "matcher": "Bash",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/bash-cd-chain-guard.mjs\"",
+        "timeout": 15
+      },
+      {
         "matcher": "Bash|PowerShell|ScheduleWakeup",
         "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/pretooluse-headless-background.mjs\"",

@@ -189,6 +189,10 @@ node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> で大規模イン
 
 node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> で実装を依頼。
 
+## bash-cd-chain-guard
+
+ONBOARDING §1.20 に従い、絶対パス、`git -C <dir>`、`npm --prefix <dir>`、またはツールの `--cwd` を使う。
+
 ## shared-worktree-git-guard
 
 - `git add <自分のパス>` → `git commit -F <msg> -- <自分のパス>` で自分の変更を確定する。

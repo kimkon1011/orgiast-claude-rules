@@ -1292,6 +1292,7 @@ Bashは1呼出1コマンド、専用ツール・allow済み経路を使う。
 - bypass 移行後も Bash 規約は維持する（allow 不一致で止まらなくなっても、連結・パイプは Codex hang と読みにくさの原因）。
 
 1. `cd X && cmd` の連結は禁止。絶対パスか `git -C <path>` / ツールの `--cwd` を使う。
+   PreToolUse の `bash-cd-chain-guard` が先頭の `cd` と後続コマンドの連結を止める。
 2. `2>&1 | tail` / `| head` などのパイプ後処理を付けない（allowルール不一致とCodex hangの原因）。
 3. 使い捨てスクリプトはheredocで流さず、scratchpadにファイルとして書き `node <file>` で実行する。
 4. `until … sleep` ポーリングは禁止。`run_in_background` か Monitorを使う。

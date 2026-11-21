@@ -1259,7 +1259,7 @@ export async function pollOnce(deps = {}) {
         if (!result) {
           if (mail.executionStartedAt) continue; // Never start an interrupted execution a second time.
           const kind = hubExecution ? 'claude-resume' : exec.exec === 'codex' ? 'codex' : 'prompt';
-          if (!loadOptin(path.join(dir, 'fleet-agent-optin.json')).includes(kind)) result = { exitCode: null, outputTail: `未オプトイン。承諾コマンド: ${consentCommand(kind)}` };
+          if (!loadOptin(path.join(dir, 'fleet-agent-optin.json')).includes(kind)) result = { exitCode: null, reason: 'not-opted-in', outputTail: `未オプトイン。承諾コマンド: ${consentCommand(kind)}` };
           else {
             if (promptHandled) continue;
             if (hubExecution && exec.resumeSessionId) {

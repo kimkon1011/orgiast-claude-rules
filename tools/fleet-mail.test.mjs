@@ -108,7 +108,7 @@ test('prompt without opt-in never spawns and returns exact existing consent comm
   f.deps.request = async (kind, payload) => { f.calls.push({ kind, payload }); return kind === 'mail-poll' ? { messages: [mail({ kind: 'prompt' })] } : { mail: {} }; };
   await main(['--poll'], f.deps);
   assert.ok(f.calls.find(c => c.kind === 'mail-send').payload.body.includes('未オプトイン'));
-  assert.equal(f.calls.find(c => c.kind === 'mail-fail').payload.reason, 'exit-unknown');
+  assert.equal(f.calls.find(c => c.kind === 'mail-fail').payload.reason, 'not-opted-in');
 });
 test('opted-in prompt uses fixed header, local executable/cwd, bounded redacted result, no side-effect tools', async t => {
   const f = fixture(t); const spawns = [];
@@ -501,7 +501,7 @@ test('exec codex without opt-in replies with consent command and never spawns', 
   await main(['--poll'], f.deps);
   const reply = f.calls.find(c => c.kind === 'mail-send');
   assert.ok(reply.p.body.includes('未オプトイン'));
-  assert.equal(f.calls.find(c => c.kind === 'mail-fail').p.reason, 'exit-unknown');
+  assert.equal(f.calls.find(c => c.kind === 'mail-fail').p.reason, 'not-opted-in');
   // v2 saves consent responses too, so transport retries cannot regenerate work.
   assert.equal(fs.existsSync(path.join(f.dir, 'fleet-agent-results', `${execMail().id}.json`)), true);
 });

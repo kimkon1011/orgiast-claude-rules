@@ -1135,6 +1135,30 @@ test('--sent-status does not present lookup-failure metadata as a cached mail', 
   assert.deepEqual(f.output, []);
 });
 
+for (const status of ['done', 'failed', 'expired']) {
+  test(`--sent-status は終端状態 ${status} のキャッシュがあれば hub を照会せず即返す`, async t => {
+    const f = fixture(t);
+    const cached = { id: 'mail-1', to: recipient, status, createdAt: '2026-11-02T01:27:22.841Z', expiresAt: '2026-11-03T01:27:19.955Z', deliveredAt: '2026-11-02T01:27:37.548Z' };
+    fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent-status.json'), JSON.stringify({ 'mail-1': cached }));
+    f.deps.request = async () => assert.fail('終端状態のキャッシュがある時は hub を照会しない');
+    assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 0);
+    assert.deepEqual(f.calls, []);
+    assert.deepEqual(f.errors, []);
+    assert.match(f.output[0], /^id: mail-1$/m);
+    assert.match(f.output[0], new RegExp(`^status: ${status}$`, 'm'));
+    assert.match(f.output[0], /^deliveredAt: 2026-11-02T01:27:37.548Z$/m);
+  });
+}
+
+test('--sent-status は非終端のキャッシュでは従来どおり hub を照会する', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent-status.json'), JSON.stringify({ 'mail-1': { id: 'mail-1', status: 'seen', seenBy: 'other-PC' } }));
+  f.deps.request = async (kind, p) => { f.calls.push({ kind, p }); return { mail: { id: p.id, status: 'delivered' } }; };
+  assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 0);
+  assert.deepEqual(f.calls, [{ kind: 'mail-get', p: { id: 'mail-1' } }]);
+  assert.match(f.output[0], /^status: delivered$/m);
+});
+
 test('mail-get retries a timeout while reading the response body', async () => {
   let calls = 0; const delays = [];
   const request = createClient({ url: 'https://example.invalid', token: 'test', sleepImpl: async ms => delays.push(ms),

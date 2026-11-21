@@ -1449,6 +1449,10 @@ async function runMain(argv, deps) {
     }
     const statusFile = path.join(dir, 'fleet-mail-sent-status.json');
     const showStatus = mail => out([`id: ${mail.id || id}`, ...['to', 'status', 'createdAt', 'expiresAt', 'deliveredAt', 'deliveredBy', 'seenAt', 'seenBy', 'resultAt', 'ackAt', 'failedAt', 'failReason'].map(key => `${key}: ${redactSecrets(String(mail[key] || '(なし)'))}`)].join('\n'));
+    // 終端状態（done/failed/expired）はローカル送信記録に残っていれば確定しており、以後変わらない。
+    // 毎回の GAS 照会（ロック待ちで数十秒）を省き、auto-progress の check が既定30秒上限で「判定不能」になるのを防ぐ。
+    const cached = readJson(statusFile, {})[id];
+    if (cached && terminal(cached)) { showStatus(cached); return 0; }
     let result;
     try { result = await request('mail-get', { id }, 60_000, { retries: 2 }); }
     catch (error) {

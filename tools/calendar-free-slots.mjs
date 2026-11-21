@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import { isEntry } from './is-entry.mjs';
 import { getDriveToken } from './lib/drive-auth.mjs';
 
-const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly';
 const HOUR_MS = 3600000;
 const DAY_MS = 86400000;
 const JST = 9 * HOUR_MS;

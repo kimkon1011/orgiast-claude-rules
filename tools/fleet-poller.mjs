@@ -67,9 +67,30 @@ function taskOutput(task) {
     // 「install時にコピーされて以後一度も更新されない凍結コピー」を実行することになり、
     // 中央キューから配っても古い実装のまま＝配布が届かない端末を治せない(2026-08-25 実測)。
     const mjs = path.join(repo, 'tools', 'onboarding-sync.mjs');
-    if (fs.existsSync(mjs)) return run('node', [mjs, '--force']);
-    if (process.platform === 'win32') return run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(home, '.claude', 'hooks', 'onboarding-sync.ps1'), '-Force']);
-    return '';
+    let out = '';
+    let syncOk = false;
+    if (fs.existsSync(mjs)) {
+      out = run('node', [mjs, '--force']);
+      syncOk = true;
+    } else if (process.platform === 'win32') {
+      out = run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(home, '.claude', 'hooks', 'onboarding-sync.ps1'), '-Force']);
+      syncOk = true;
+    }
+    if (syncOk && process.platform === 'win32') {
+      const registerPs1 = path.join(repo, 'tools', 'register-cursor-agent-run-counts-task.ps1');
+      if (fs.existsSync(registerPs1)) {
+        const registerOut = run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', registerPs1]);
+        if (registerOut) out = out ? `${out}\n${registerOut}` : registerOut;
+        const countsMjs = path.join(repo, 'tools', 'cursor-agent-run-counts.mjs');
+        if (fs.existsSync(countsMjs)) {
+          try {
+            const countsOut = run(process.execPath, [countsMjs]);
+            if (countsOut) out = out ? `${out}\n${countsOut}` : countsOut;
+          } catch {}
+        }
+      }
+    }
+    return out;
   }
   if (task === 'cost-report') return run('node', [path.join(repo, 'tools', 'claude-cost-reporter.mjs')]);
   // 熱監視の常駐登録(5分ごと)。管理者権限は不要＝現在ユーザーのタスクとして作る。

@@ -73,6 +73,14 @@ test('fleet-poller.mjs は register-cursor-agent-run-counts-task.ps1 を実行�
   assert.match(branch[0], /register-cursor-agent-run-counts-task\.ps1/);
 });
 
+test('fleet-poller.mjs の rules-resync は register-cursor-agent-run-counts-task.ps1 を呼ぶ', () => {
+  const idx = pollerSource.indexOf("if (task === 'rules-resync')");
+  assert.ok(idx >= 0, 'rules-resync の分岐が見つからない');
+  const next = pollerSource.indexOf("if (task === '", idx + 1);
+  const branch = pollerSource.slice(idx, next > idx ? next : undefined);
+  assert.match(branch, /register-cursor-agent-run-counts-task\.ps1/);
+});
+
 test('fleet-poller.mjs の既存5タスクが許可リストに残っている', () => {
   const allowed = pollerSource.match(/const allowed = new Set\(\[([^\]]+)\]\)/);
   assert.ok(allowed, '許可タスク一覧が見つからない');

@@ -20,6 +20,8 @@ import { isCursorUsageHalted } from './lib/cursor-usage-pace.mjs';
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { EX_TEMPFAIL, budgetSummary, claudeFile, decideCodexGate, deferredPayload, isUsageLimitText, parseUsageLimitUntil, providerLimitedUntil, writeCodexCooldownFile } from './lib/executor-gate.mjs';
 import { applyCandidateHealth, coolingBackendNames, deprioritizeUnreliableBackends, readFallbackBackendHistory, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
+import { readGeminiBudgetStatus } from './gemini-budget-guard.mjs';
+import { acquireLock } from './lib/progress-file-lock.mjs';
 import { scanDiffForClaudeApi } from './app-llm-cost-gate.mjs';
 
 // Windows の shell 経由起動では引数がクォートされないため、この値に空白を入れると
@@ -941,6 +943,67 @@ export function buildCursorAgentArgs({ workspace } = {}) {
   return args;
 }
 
+const GEMINI_LAUNCH_WINDOW_MS = 6 * 60 * 60 * 1000;
+const GEMINI_LAUNCH_LIMIT = 2;
+const geminiLaunchFile = (homeDir) => claudeFile(homeDir, 'codex-do-gemini-launches.json');
+
+function geminiCwdKey(cwd) {
+  let resolved = path.resolve(cwd);
+  try { resolved = fs.realpathSync(resolved); } catch {}
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function readGeminiLaunches(file, now) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8')).filter(({ at }) => at > now - GEMINI_LAUNCH_WINDOW_MS);
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+function geminiLaunchLimitReached(history, cwd, log) {
+  if (history.filter((entry) => entry.cwd === cwd).length < GEMINI_LAUNCH_LIMIT) return false;
+  log('[codex-do] 同一 cwd で6時間に2回起動済みのため gemini-cli を候補から外します');
+  return true;
+}
+
+// 候補の作成後に別プロセスが起動する場合に備え、起動直前にロック内で再判定する。
+export function reserveGeminiLaunch(homeDir, { cwd, now = Date.now(), log = console.error }) {
+  const file = geminiLaunchFile(homeDir);
+  try {
+    const release = acquireLock(`${file}.lock`);
+    if (!release) throw new Error('別プロセスが起動履歴を更新中');
+    try {
+      const history = readGeminiLaunches(file, now);
+      const key = geminiCwdKey(cwd);
+      if (geminiLaunchLimitReached(history, key, log)) return false;
+      history.push({ cwd: key, at: now });
+      const temp = `${file}.${process.pid}.tmp`;
+      fs.writeFileSync(temp, `${JSON.stringify(history)}\n`, { mode: 0o600 });
+      fs.renameSync(temp, file);
+      return true;
+    } finally {
+      release();
+    }
+  } catch (error) {
+    log(`[codex-do] Gemini CLI の起動履歴を更新できないため候補から外します: ${String(error.message).replace(/\s+/g, ' ')}`);
+    return false;
+  }
+}
+
+function geminiBlockedByBudget(homeDir, { now, fsImpl, readBudget, log }) {
+  try {
+    const status = readBudget({ home: homeDir, now, fsImpl });
+    if (status.level !== 'stop') return false;
+    log(`[codex-do] Gemini 予算ガードが level=stop（今月 $${status.spentUsd.toFixed(2)}）のため gemini-cli を候補から外します`);
+    return true;
+  } catch (error) {
+    log(`[codex-do] Gemini 予算ガードの判定に失敗したため gemini-cli は候補に残します: ${String(error.message).replace(/\s+/g, ' ')}`);
+    return false;
+  }
+}
+
 export function resolveFallbackBackends(homeDir, options = {}) {
   const executableAvailable = options.executableAvailable || ((cmd) => Boolean(findExecutable(cmd, options)));
   const geminiKey = loadGeminiKey(homeDir);
@@ -960,7 +1023,19 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   const env = options.env || process.env;
   const geminiDisabled = disabledNames.has('gemini-cli');
   if (geminiKey && geminiDisabled) console.error('[codex-do] gemini-cli は lanes-disabled.json で無効化されているため候補から外します');
-  const gemini = geminiKey && geminiAvailable && !geminiCooling && !geminiBillingBlocked && !geminiDisabled && { kind: 'gemini', name: 'gemini-cli', model: env.CODEX_DO_GEMINI_MODEL || 'gemini-3.6-flash', apiKey: geminiKey };
+  const { now = Date.now(), cwd = process.cwd(), fsImpl, readBudget = readGeminiBudgetStatus, log = console.error } = options;
+  const geminiBudgetBlocked = geminiKey && geminiBlockedByBudget(homeDir, { now, fsImpl, readBudget, log });
+  let gemini = false;
+  let geminiLaunchBlocked = false;
+  if (geminiKey && geminiAvailable && !geminiCooling && !geminiBillingBlocked && !geminiDisabled && !geminiBudgetBlocked) {
+    try {
+      geminiLaunchBlocked = geminiLaunchLimitReached(readGeminiLaunches(geminiLaunchFile(homeDir), Number(now)), geminiCwdKey(cwd), log);
+    } catch (error) {
+      geminiLaunchBlocked = true;
+      log(`[codex-do] Gemini CLI の起動履歴を読めないため候補から外します: ${String(error.message).replace(/\s+/g, ' ')}`);
+    }
+    if (!geminiLaunchBlocked) gemini = { kind: 'gemini', name: 'gemini-cli', model: env.CODEX_DO_GEMINI_MODEL || 'gemini-3.6-flash', apiKey: geminiKey };
+  }
   const deepseek = deepseekKey && qwenAvailable && { kind: 'qwen', name: 'deepseek', model: GATEWAY_MODELS.deepseek, baseUrl: OPENROUTER_BASE, apiKey: deepseekKey };
   const openrouter = openrouterKey && qwenAvailable && { kind: 'qwen', name: 'openrouter-free', model: env.CODEX_DO_FREE_MODEL || 'cohere/north-mini-code:free', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
   const openrouterCode = openrouterKey && qwenAvailable && { kind: 'qwen', name: 'openrouter-code', model: env.CODEX_DO_PAID_CODE_MODEL || 'qwen/qwen3-coder', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
@@ -1019,7 +1094,7 @@ export function resolveFallbackBackends(homeDir, options = {}) {
       const raw = requested.startsWith('cheap-code:') ? cheapCodeBackend(requested, homeDir) : byName[requested]?.();
       const backend = acceptBackend(raw);
       if (backend) backends.push(backend);
-      else if (!raw) console.error(`[codex-do] codex-fallback-order.json の ${name} はキー未設定か未知の名前のためスキップ`);
+      else if (!raw && !(requested === 'gemini-cli' && (geminiBudgetBlocked || geminiLaunchBlocked))) console.error(`[codex-do] codex-fallback-order.json の ${name} はキー未設定か未知の名前のためスキップ`);
     }
     if (backends.length) return withCursorAgentFirst(uniqueBackendsByName(backends));
     console.error('[codex-do] codex-fallback-order.json に使えるバックエンドが無いため従来順へ戻します');
@@ -1538,7 +1613,7 @@ function recordDeferred(gate) {
     } else if (gate.reason === 'all_backends_failed') {
       fallbackSkipped = 'all_backends_failed';
     } else {
-      fallbackSkipped = resolveFallbackBackends(home, { taskKind }).length === 0 ? 'no_backends' : undefined;
+      fallbackSkipped = resolveFallbackBackends(home, { taskKind, cwd }).length === 0 ? 'no_backends' : undefined;
     }
     fs.appendFileSync(ledger, `${JSON.stringify({ t: new Date().toISOString(), provider: 'codex', model: `codex-cli/${selectedLane.slug || 'default'}`, status: 'deferred', reason: gate.reason, retryAt: gate.retryAt, origin, kind: taskKind, launched: false, cwd, ...(fallbackSkipped ? { fallbackSkipped } : {}) })}\n`, 'utf8');
   } catch {}
@@ -1556,7 +1631,7 @@ if (useCodex) {
   cooldownRecheck = gate.recheck === true;
   // 全ての deferred 理由（codex_cooldown / usage_limit / unattended_budget 等）で、
   // --no-fallback が無ければ既定で代替バックエンドへ回す。終了コード75は代替が全滅した時だけ。
-  if (gate.deferred && !noFallback && resolveFallbackBackends(home, { taskKind }).length > 0) {
+  if (gate.deferred && !noFallback && resolveFallbackBackends(home, { taskKind, cwd }).length > 0) {
     cooldownSkipCodex = true;
     skipCodexReason = gate.reason;
     launchUnavailable = true;
@@ -1802,7 +1877,7 @@ async function executeCursorAgent(backend, { timeoutSecs, promptText, cwd: runCw
 
 async function tryCheapFirstFallback() {
   if (!cheapFirst) return null;
-  const resolvedBackends = resolveFallbackBackends(home, { taskKind });
+  const resolvedBackends = resolveFallbackBackends(home, { taskKind, cwd });
   const cooling = coolingBackendNames(home);
   const backends = deprioritizeUnreliableBackends(skipCoolingBackends(resolvedBackends, cooling, { keepNames: ['cursor-agent'] }), readFallbackBackendHistory(home));
   if (backends.length === 0) return { succeeded: false, result: null, chainResult: [], lastBackend: null };
@@ -1816,6 +1891,7 @@ async function tryCheapFirstFallback() {
       cooling: cooling.has(backend.name), isLastBackend: isLast, kind: taskKind,
     });
     if (bt <= 0) break;
+    if (backend.kind === 'gemini' && !reserveGeminiLaunch(home, { cwd })) continue;
     const as = Date.now();
     const backendTreeBefore = treeSnapshot();
     lastBackend = backend;
@@ -1867,7 +1943,7 @@ async function tryCheapFirstFallback() {
 async function tryCursorDefaultFirst() {
   const halt = isCursorUsageHalted(home, process.env);
   if (!shouldPreferCursorAgent({ kind: taskKind, instruction, env: process.env, halt })) return null;
-  const resolvedBackends = resolveFallbackBackends(home, { taskKind, instruction, env: process.env });
+  const resolvedBackends = resolveFallbackBackends(home, { taskKind, cwd, instruction, env: process.env });
   const backend = resolvedBackends.find((b) => b.name === 'cursor-agent');
   if (!backend) return null;
   const bt = effectiveBackendTimeoutSecs('cursor-agent', {
@@ -2191,7 +2267,7 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
     if (quotaCheck.matched) console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
     console.error(`[codex-do] Falling back to an agentic CLI...`);
 
-    const resolvedBackends = resolveFallbackBackends(home, { taskKind });
+    const resolvedBackends = resolveFallbackBackends(home, { taskKind, cwd });
     const cooling = coolingBackendNames(home);
     const backends = deprioritizeUnreliableBackends(skipCoolingBackends(resolvedBackends, cooling, { keepNames: ['cursor-agent'] }), readFallbackBackendHistory(home));
     if (backends.length === 0) {
@@ -2247,6 +2323,8 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
         // 確認に成功したら冷却扱いを外して通常予算で実行する。
         let effectiveCooling = isCooling;
         if (isCooling && !isLast) {
+          // 一時ディレクトリでのプローブも依頼元 cwd の起動枠を消費する。
+          if (backend.kind === 'gemini' && !reserveGeminiLaunch(home, { cwd })) continue;
           console.log(`[codex-do] backend=${backend.name} の信号確認中...`);
           const probeAttemptStarted = Date.now();
           const probeResult = await probeBackendAlive(backend);
@@ -2282,6 +2360,7 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
           console.error(`[codex-do] フォールバック全体の時間枠(${timeoutSeconds}秒)を使い切ったため、残りのバックエンドは実行しません`);
           break;
         }
+        if (backend.kind === 'gemini' && !reserveGeminiLaunch(home, { cwd })) continue;
         const attemptStarted = Date.now();
         lastBackend = backend;
         console.log(`[codex-do] fallback backend=${backend.name} model=${backend.model}`);

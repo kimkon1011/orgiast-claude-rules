@@ -9,7 +9,7 @@ import { skipCoolingBackends } from './fallback-backend-health.mjs';
 import { runGeminiBudgetGuard } from './gemini-budget-guard.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, reserveGeminiLaunch, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -3400,13 +3400,13 @@ test('openrouter-code は空差分・構文エラー・関連テスト失敗で�
   }), 'tests');
 });
 
-test('Gemini budget stop excludes CLI even as the only fallback, expiry restores it', async ({ mock }) => {
+test('Gemini budget stop excludes CLI even as the only fallback, a new month restores it', async ({ mock }) => {
   const home = workDir();
   const dir = path.join(home, '.claude');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'gemini.env'), 'GEMINI_API_KEY=test-budget-key\n');
-  const file = path.join(dir, 'provider-cooldown.json');
-  const options = { executableAvailable: () => true };
+  const logs = [];
+  const options = { executableAvailable: () => true, log: (line) => logs.push(line) };
   fs.writeFileSync(path.join(dir, 'codex-fallback-order.json'), JSON.stringify(['gemini-cli']));
   fs.writeFileSync(path.join(dir, 'gemini-budget.json'), JSON.stringify({ budgetJpy: 100, usdJpy: 1 }));
   const now = new Date('2026-11-18T00:00:00Z');
@@ -3414,11 +3414,66 @@ test('Gemini budget stop excludes CLI even as the only fallback, expiry restores
   fs.writeFileSync(path.join(dir, 'executor-usage.jsonl'), JSON.stringify({ provider: 'gemini', t: now.toISOString(), usd: 90 }) + '\n');
   const status = await runGeminiBudgetGuard({ home, now, notifyImpl: async () => ({ delivered: 'dm' }) });
   assert.equal(status.level, 'stop', JSON.stringify(status));
+  fs.writeFileSync(path.join(dir, 'provider-cooldown.json'), '{}');
   assert.ok(!resolveFallbackBackends(home, options).some(b => b.name === 'gemini-cli'));
-  fs.writeFileSync(file, JSON.stringify({ gemini: { until: Date.now() - 1000, reason: 'gemini-budget' } }));
+  assert.deepEqual(logs, ['[codex-do] Gemini 予算ガードが level=stop（今月 $90.00）のため gemini-cli を候補から外します']);
+  mock.method(Date, 'now', () => Date.parse('2026-12-01T00:00:00+09:00'));
   assert.ok(resolveFallbackBackends(home, options).some(b => b.name === 'gemini-cli'));
 });
 
+
+test('Gemini 予算の warn と判定例外では CLI が候補に残る', () => {
+  const home = workDir();
+  const dir = path.join(home, '.claude');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'gemini.env'), 'GEMINI_API_KEY=test-budget-key\n');
+  const logs = [];
+  const options = { executableAvailable: () => true, log: (line) => logs.push(line) };
+  const hasGemini = (readBudget) => resolveFallbackBackends(home, { ...options, readBudget })
+    .some((backend) => backend.name === 'gemini-cli');
+  assert.ok(hasGemini(() => ({ level: 'warn', spentUsd: 80 })));
+  assert.deepEqual(logs, []);
+  assert.ok(hasGemini(() => { throw new Error('設定が不正'); }));
+  assert.deepEqual(logs, ['[codex-do] Gemini 予算ガードの判定に失敗したため gemini-cli は候補に残します: 設定が不正']);
+});
+
+test('Gemini キーが無いと予算を判定しない', ({ mock }) => {
+  const env = { ...process.env };
+  delete env.GEMINI_API_KEY;
+  mock.property(process, 'env', env);
+  const readBudget = mock.fn();
+  const backends = resolveFallbackBackends(workDir(), { readBudget });
+  assert.ok(!backends.some((backend) => backend.name === 'gemini-cli'));
+  assert.equal(readBudget.mock.callCount(), 0);
+});
+
+test('Gemini CLI は cwd ごとに6時間で2回まで起動できる', () => {
+  const home = workDir();
+  const dir = path.join(home, '.claude');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'gemini.env'), 'GEMINI_API_KEY=test-budget-key\n');
+  const logs = [];
+  const cwd = home;
+  const now = Date.parse('2026-11-18T00:00:00Z');
+  const log = (line) => logs.push(line);
+  const options = { executableAvailable: () => true, cwd, now, log };
+  const hasGemini = (overrides = {}) => resolveFallbackBackends(home, { ...options, ...overrides })
+    .some((backend) => backend.name === 'gemini-cli');
+  assert.ok(hasGemini());
+  assert.ok(reserveGeminiLaunch(home, { cwd, now, log }));
+  assert.ok(hasGemini());
+  assert.ok(reserveGeminiLaunch(home, { cwd, now, log }));
+  assert.equal(hasGemini(), false);
+  assert.match(logs[0], /同一 cwd で6時間に2回起動済み/);
+  assert.equal(reserveGeminiLaunch(home, { cwd, now, log }), false);
+  assert.ok(hasGemini({ cwd: dir }));
+
+  const later = now + 6 * 60 * 60 * 1000;
+  assert.ok(hasGemini({ now: later }));
+  assert.ok(reserveGeminiLaunch(home, { cwd, now: later, log }));
+  const history = JSON.parse(fs.readFileSync(path.join(dir, 'codex-do-gemini-launches.json'), 'utf8'));
+  assert.deepEqual(history.map(({ at }) => at), [later]);
+});
 
 test('findCursorAgentCommand は PATH 上の cursor-agent を優先し、無ければ Windows の既定ディレクトリを見る', () => {
   const found = findCursorAgentCommand({ executableAvailable: (cmd) => cmd === 'cursor-agent' });

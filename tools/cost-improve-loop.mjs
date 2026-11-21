@@ -1108,6 +1108,30 @@ export function readLedgerCounts(filePath, now) {
   return counts;
 }
 
+// run-hidden.vbs がプライマリログをロックしているとき、同じ命名規約の
+// 退避ログを使う。fsOps は Windows の共有違反を決定的にテストするための注入点。
+export function resolveEffectiveLogPath(claudeDir, fsOps = fs) {
+  const logDir = path.join(claudeDir, 'logs');
+  const primary = path.join(logDir, 'cost-improve-loop.log');
+  try {
+    fsOps.mkdirSync(logDir, { recursive: true });
+    fsOps.appendFileSync(primary, '', 'utf8');
+    return primary;
+  } catch { /* primary locked -- fallback を探す */ }
+  try {
+    const files = fsOps.readdirSync(logDir)
+      .filter((file) => /^cost-improve-loop\.locked-\d{8}-\d{6}-[a-zA-Z0-9]+\.log$/.test(file))
+      .sort()
+      .reverse();
+    if (files.length > 0) return path.join(logDir, files[0]);
+  } catch { /* logDir 不在など */ }
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, '0');
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const random = Math.random().toString(16).slice(2, 10);
+  return path.join(logDir, `cost-improve-loop.locked-${stamp}-${random}.log`);
+}
+
 export function localProviderEnv(homeDir) {
   const providers = [
     { name: 'groq', envKey: 'GROQ_API_KEY', envFile: 'groq.env' },
@@ -1731,8 +1755,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     }
     const logLine = `${formatJst(now)} / ${status} / ${metrics} notify=${heartbeat} state=${stateWriteFailed ? 'failed' : 'ok'}${reason ? ` reason=${reason}` : ''}`;
     try {
-      fs.mkdirSync(path.join(claudeDir, 'logs'), { recursive: true });
-      await appendLineWithRetry(path.join(claudeDir, 'logs', 'cost-improve-loop.log'), logLine);
+      const effectiveLog = resolveEffectiveLogPath(claudeDir);
+      await appendLineWithRetry(effectiveLog, logLine);
     } catch (error) { console.error(`cost-improve-loop ログ書き込み失敗: ${String(error?.message ?? error)}`); }
   }
 

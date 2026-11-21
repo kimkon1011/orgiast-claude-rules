@@ -1,0 +1,36 @@
+# Required repository secrets: DISCORD_BOT_TOKEN, APP_URL, and CRON_SECRET.
+# APP_URL example: https://aujust-sales-automation.vercel.app
+name: Discord capture
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: discord-capture
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Capture Discord messages
+        run: node tools/discord-capture.mjs
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DISCORD_CAPTURE_CHANNEL_IDS: ${{ vars.DISCORD_CAPTURE_CHANNEL_IDS }}

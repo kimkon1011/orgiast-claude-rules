@@ -4,6 +4,8 @@
 
 # Codex CLI が作業ごとに置く一時ファイル(コミット対象外)
 .codex-task.md
+# ~/.codex/agents の写し。リポジトリ内に置かれると夜間の退避ブランチになる(2026-11-21 rescue/auto-session-20261121-203005)
+/.codex/agents/
 memory-shared/
 
 # gpage-fetch.mjs 用の playwright-core をローカルで npm install したときの成果物

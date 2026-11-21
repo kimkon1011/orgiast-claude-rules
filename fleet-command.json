@@ -1,8 +1,8 @@
 {
-  "runId": "rules-resync-cursor-default-lane-20261122",
+  "runId": "rules-resync-cursor-counts-20261122b",
   "task": "rules-resync",
   "targets": "all",
-  "_why": "PR #2530（Cursor Ultra 既定化＋ペース点検）と fill 追補を全PC nightly-repo へ同期する。各PCで onboarding-sync --force を1回。",
+  "_why": "PR #2530/#2535/#2542 反映。rules-resync 後に OrgiastCursorAgentRunCounts 登録＋1回実行まで含む。",
   "_note": "全PCへ承認済みタスクを配る中央キュー。kim/Claudeが task と runId(毎回ユニーク) を更新→各PCが夜間03:15の実行時に1回だけ処理しDiscordへ結果を返す。task を空にすると何もしない。登録タスク register-cursor-agent-run-counts は別 runId で後続実行可。",
   "_allowed_tasks": [
     "verify-setup",

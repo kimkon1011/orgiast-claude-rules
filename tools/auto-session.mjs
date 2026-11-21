@@ -712,7 +712,7 @@ export function boundedCount(value) {
 }
 
 export function parseArgs(argv) {
-  const options = { count: 1, slaCount: 4, feedbackCount: 1, timeoutMin: 60, deadline: '', role: '', dry: false, list: false };
+  const options = { count: 1, slaCount: 4, feedbackCount: 1, timeoutMin: 60, deadline: '', role: '', dry: false, list: false, help: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--dry') options.dry = true;
     else if (argv[i] === '--list') options.list = true;
@@ -729,9 +729,27 @@ export function parseArgs(argv) {
       options.deadline = argv[++i] ?? '';
       if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(options.deadline)) throw new Error('--deadline は HH:MM（24時間表記）で指定してください');
     }
+    else if (argv[i] === '--help' || argv[i] === '-h') options.help = true;
     else throw new Error(`不明な引数: ${argv[i]}`);
   }
   return options;
+}
+
+export function usageText() {
+  return `Usage: node tools/auto-session.mjs [options]
+
+Options:
+  --dry                 Dry-run (show selected TODOs/prompt, do not launch)
+  --list                List TODOs / feedback issues
+  --count N             Next-session TODO count (default 1)
+  --sla-count N         SLA lane count (default 4)
+  --feedback-count N    Feedback issue count (default 1)
+  --role <tester|system-review|cost-check>
+                        Run one role session
+  --timeout-min N       Timeout minutes (default 60)
+  --deadline HH:MM      Stop before this clock time
+  --help, -h            Show this help and exit
+`;
 }
 
 export function deadlineDecision(deadline, timeoutMin, now = new Date(), startedAt = now) {
@@ -1140,6 +1158,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const sendNotification = io.notify ?? notify;
   const sendFeedbackNotification = io.notifyFeedback ?? notifyFeedback;
   const options = parseArgs(argv);
+  if (options.help) { console.log(usageText()); return 0; }
   const batchStartedAt = new Date();
   const home = homeDir();
   const listTaskLedgerItems = io.listTaskLedgerItems ?? (async (filters) => {

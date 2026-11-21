@@ -1,0 +1,43 @@
+# n8n C4 隔離インポート検証
+# このワークフローは認証情報を登録せず、import/export のみを行う。
+# n8n ワークフロー自体は実行されないため外部送信は発生しない。
+
+name: n8n C4 Verify
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify-import-export
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Resolve workflow JSONs and run import/export verification
+        env:
+          N8N_DIAGNOSTICS_ENABLED: "false"
+          N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+          N8N_TELEMETRY_DISABLED: "true"
+        run: |
+          set -euo pipefail
+          WORKDIR="${{ runner.temp }}/n8n-c4"; mkdir -p "${WORKDIR}"; echo "Workdir: ${WORKDIR}"
+          WORKDIR="${WORKDIR}" node "${GITHUB_WORKSPACE}/.github/scripts/n8n-c4-verify.mjs"
+
+      - name: Upload n8n logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: n8n-c4-logs
+          path: ${{ runner.temp }}/n8n-c4
+          retention-days: 7

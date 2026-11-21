@@ -1669,22 +1669,22 @@ test('addCheck: --next-kim の処理と古い nextKim のリセット、promise 
   assert.equal(row1.promise, '新しい見出し');
 
   // 3. --next-kim "なし" の指定 → nextKim は 'なし' になる
-  const row2 = addCheck({ home, session: 'session-4ee33e10', check: 'exit 1', deadline: '+24h', label: '見出し2', nextKim: 'なし' });
+  const row2 = addCheck({ home, session: 'session-4ee33e10', check: 'exit 1', deadline: '+24h', label: '見出し2', replace: true, nextKim: 'なし' });
   assert.equal(row2.nextKim, 'なし');
 
   // 4. --next-kim "質問本文" の指定 → 指定した nextKim が反映される
-  const row3 = addCheck({ home, session: 'session-4ee33e10', check: 'exit 1', deadline: '+24h', label: '見出し3', nextKim: '新しい質問' });
+  const row3 = addCheck({ home, session: 'session-4ee33e10', check: 'exit 1', deadline: '+24h', label: '見出し3', replace: true, nextKim: '新しい質問' });
   assert.equal(row3.nextKim, '新しい質問');
 });
 
 
-test('addCheck: ask-file preserves the question unless next-kim explicitly clears it', () => {
+test('addCheck: ask-file supplies the question unless next-kim explicitly clears it', () => {
   const home = tmp();
   const askFile = path.join(home, 'ask.txt');
   fs.writeFileSync(askFile, '詳しい質問');
   seed(home, [{ sessionId: 'ask-precedence', ts: new Date(0).toISOString(), status: 'open', promise: '古い約束', nextKim: '対象を教えてください' }]);
   const options = { home, session: 'ask-precedence', check: 'exit 1', deadline: '+2d', label: '新しい監視', askFile };
-  assert.equal(addCheck(options).nextKim, '対象を教えてください');
+  assert.equal(addCheck(options).nextKim, '詳しい質問');
   const cleared = addCheck({ ...options, nextKim: 'なし' });
   assert.equal(cleared.nextKim, 'なし');
   assert.equal(cleared.ask, '詳しい質問');

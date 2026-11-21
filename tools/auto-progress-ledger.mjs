@@ -145,7 +145,7 @@ export function latestOpenPromises(rows) {
 
 // 同一 sessionId の通常行、または同一 sessionId + label の check 行は最新で置換する。
 // 同じ session に open の自動確認行があるときは、新しい約束行に予約・check 情報を引き継ぐ。
-export function applyPromise(rows, record) {
+export function applyPromise(rows, record, { replace = false } = {}) {
   let toAdd = record;
   if (!toAdd.check && !toAdd.startWhen && !toAdd.autoRegisteredCheck) {
     const existing = rows
@@ -176,7 +176,7 @@ export function applyPromise(rows, record) {
   toAdd = { ...toAdd, ...rollingSessionFields(toAdd, Date.parse(record.ts) || 0) };
   const replaces = (row) => {
     if (row.sessionId !== toAdd.sessionId || !OPEN_STATUSES.has(row.status)) return false;
-    if (row.check) return Boolean(toAdd.check) && row.label === toAdd.label;
+    if (row.check && !replace) return Boolean(toAdd.check) && row.label?.trim() === toAdd.label?.trim();
     return true;
   };
   const next = rows.map((row) => (replaces(row) ? { ...row, supersededFromStatus: row.status, status: 'superseded' } : row));

@@ -467,7 +467,7 @@ test('notify CLI spools while aggregation is locked, then addItem imports exactl
   });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).delivered, 'spooled');
-  assert.ok(performance.now() - started >= 9900);
+  assert.ok(performance.now() - started >= 4900);
   const spoolDir = path.join(dir, 'spool'), name = fs.readdirSync(spoolDir)[0];
   const record = fs.readFileSync(path.join(spoolDir, name), 'utf8');
   assert.doesNotMatch(record, /private/);

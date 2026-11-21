@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { classifyTaskHealth, buildWatchdogMessage, main, WATCHED_TASKS } from './night-watchdog.mjs';
 
 const NOW = new Date('2026-09-18T00:00:00.000Z');
@@ -94,6 +95,31 @@ test('main: 全て正常なら通知せず ok', async () => {
   assert.equal(result.found.length, 0);
   assert.equal(calls.notified.length, 0);
   assert.ok(logs.lines.some((line) => line.includes('found=0')), '正常でもログは必ず書く');
+});
+
+test('main: 既定ログ経路はログ行を stdout に出す', async () => {
+  const lines = [];
+  const originalLog = console.log;
+  console.log = (line) => lines.push(String(line));
+  try {
+    await main([], {
+      now: NOW,
+      home: 'C:/fake-home',
+      setExitCode: () => {},
+      queryTask: async (name) => healthy(name),
+      notifyFn: async () => {}
+    });
+  } finally {
+    console.log = originalLog;
+  }
+  assert.ok(lines.some((line) => line.includes('found=0')), 'ログ行が stdout に出る');
+});
+
+test('run-hidden.vbs は night-watchdog の stdout/stderr を対象名ログへ追記する', () => {
+  const runner = fs.readFileSync(new URL('./run-hidden.vbs', import.meta.url), 'utf8');
+  assert.match(runner, /baseName = fso\.GetBaseName\(args\(i\)\)/);
+  assert.match(runner, /logPath = logDir & "\\" & baseName & "\.log"/);
+  assert.match(runner, /inner & " >> """ & logPath & """ 2>&1"/);
 });
 
 test('main: Disabled を有効化し、再取得で確認できたものだけ fixed に数える', async () => {

@@ -11,6 +11,7 @@ import {
   sortViolationsBySeverity,
   verifyPreviousActions,
   readLedgerCounts,
+  resolveEffectiveLogPath,
   atomicWrite,
   buildCombinedCodexSpec,
   main as mainImpl,
@@ -71,6 +72,32 @@ function cleanTempDir(dir) {
 }
 
 const NOW = new Date('2026-09-06T12:00:00Z');
+
+test('resolveEffectiveLogPath は書けるプライマリログを返す', () => {
+  const home = createTempDir();
+  const claudeDir = path.join(home, '.claude');
+  assert.equal(resolveEffectiveLogPath(claudeDir), path.join(claudeDir, 'logs', 'cost-improve-loop.log'));
+  cleanTempDir(home);
+});
+
+test('resolveEffectiveLogPath はプライマリがロック中なら最新の退避ログを返す', () => {
+  const claudeDir = path.join('C:', 'fake-home', '.claude');
+  const fsOps = {
+    mkdirSync() {},
+    appendFileSync() { const error = new Error('resource busy'); error.code = 'EBUSY'; throw error; },
+    readdirSync() {
+      return [
+        'cost-improve-loop.locked-20261122-010000-old1.log',
+        'cost-improve-loop.locked-20261122-020000-new2.log',
+        'unrelated.log'
+      ];
+    }
+  };
+  assert.equal(
+    resolveEffectiveLogPath(claudeDir, fsOps),
+    path.join(claudeDir, 'logs', 'cost-improve-loop.locked-20261122-020000-new2.log')
+  );
+});
 
 test('strict percent and date parsing rejects ambiguous or impossible values', () => {
   assert.equal(parsePercent('0'), 0); assert.equal(parsePercent('1'), 1); assert.equal(parsePercent('50%'), .5);

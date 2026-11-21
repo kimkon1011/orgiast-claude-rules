@@ -15,6 +15,8 @@ import { executorExitStatus } from './executor-status.mjs';
 import { verifyExternalWork } from './codex-work-evidence.mjs';
 import { parseCodexResetUntil, providerCooldownMs, writeCodexCooldown } from './codex-cooldown.mjs';
 import { classifyTaskKind, CODEX_KINDS, TASK_KINDS } from './lib/task-kind.mjs';
+import { isCursorLongTimeoutKind, shouldPreferCursorAgent } from './lib/cursor-default-lane.mjs';
+import { isCursorUsageHalted } from './lib/cursor-usage-pace.mjs';
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { EX_TEMPFAIL, budgetSummary, claudeFile, decideCodexGate, deferredPayload, isUsageLimitText, parseUsageLimitUntil, providerLimitedUntil, writeCodexCooldownFile } from './lib/executor-gate.mjs';
 import { applyCandidateHealth, coolingBackendNames, deprioritizeUnreliableBackends, readFallbackBackendHistory, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
@@ -621,7 +623,7 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env, { kin
     if (Number.isFinite(raw) && raw > 0) return raw;
     // 2026-11-20 実測: cursor-agent の成功実装は 80〜943 秒。連鎖上限の既定 900 秒だと
     // 長い成功が timeout 扱いになり、6時間冷却で定額枠が使われなくなる。
-    return kind === 'implement' || kind === 'verify' ? 1800 : 600;
+    return isCursorLongTimeoutKind(kind) ? 1800 : 600;
   }
   return null;
 }
@@ -770,7 +772,7 @@ export function codexFallbackOrderFile(homeDir) {
 function readFallbackOrderFile(file) {
   if (!fs.existsSync(file)) return undefined;
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
     if (parsed === 'none') return [];
     if (!Array.isArray(parsed)) return [];
     const entries = parsed.map((x) => String(x).trim()).filter(Boolean);
@@ -972,12 +974,19 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   };
   const skipCursorAgent = String((options.env || process.env).CODEX_DO_SKIP_CURSOR_AGENT || '') === '1';
   function withCursorAgentFirst(backends) {
-    // 定額の Cursor Ultra は local.json があっても implement/verify の先頭に置く。
+    // 定額の Cursor Ultra は「上限のときの代わり」ではなく既定の担当。
+    // local.json があっても implement/verify/investigate/summarize/classify の先頭に置く。
     // local は残りの安価レーン順だけを上書きする（2026-11-20: 019 の local が
     // withCursorAgentFirst を丸ごと無効化し、Codex 枠切れ後に deepseek だけが走った）。
     // テストや明示オプトアウトは CODEX_DO_SKIP_CURSOR_AGENT=1 で、既定順に含まれる分も外す。
+    // 金さん向け最終判断・社外文面の最終確認、または従量課金停止中は入れない。
     if (skipCursorAgent) return backends.filter((b) => b.name !== 'cursor-agent');
-    const usesCursor = taskKind === 'implement' || taskKind === 'verify';
+    const usesCursor = shouldPreferCursorAgent({
+      kind: taskKind,
+      instruction: options.instruction,
+      env: options.env || process.env,
+      halt: isCursorUsageHalted(homeDir, options.env || process.env),
+    });
     if (!usesCursor) return backends;
     const ready = acceptBackend(cursorAgent);
     if (!ready || backends.some((b) => b.name === 'cursor-agent')) return backends;
@@ -1750,8 +1759,18 @@ async function runLlmAsk() {
 }
 if (!useCodex) {
   const llmAskWarning = '[codex-do] 注意: llm-ask 経路のためコマンドは実行していません。出力中の「実行結果」は検証されていません';
-  console.log(llmAskWarning);
   const started2 = Date.now();
+  const halt = isCursorUsageHalted(home, process.env);
+  if (shouldPreferCursorAgent({ kind: taskKind, instruction, env: process.env, halt })) {
+    const cursorFirst = await tryCursorDefaultFirst();
+    if (cursorFirst?.succeeded) {
+      recordUsage(cursorFirst.result, `cursor-agent/${cursorFirst.lastBackend?.model || 'cursor-agent'}`, (Date.now() - started2) / 1000, 'fallback', 1, cursorFirst.chainResult);
+      console.log(`[codex-do] executor=cursor-agent kind=${taskKind}`);
+      process.exit(cursorFirst.result.status ?? 0);
+    }
+    if (cursorFirst?.chainResult?.length) console.error('[codex-do] cursor-agent が既定担当として失敗したため llm-ask へ控えます');
+  }
+  console.log(llmAskWarning);
   const routed = await runLlmAsk();
   const routedStatus = irreversible ? (routed.result.status ?? 1) : (routed.provider ? 0 : (routed.result.status || 1));
   recordUsage({ ...routed.result, status: routedStatus }, `llm-ask/${routed.provider || 'none'}`, (Date.now() - started2) / 1000, 'llm-ask', routed.chain.length, routed.chain);
@@ -1843,6 +1862,49 @@ async function tryCheapFirstFallback() {
   }
   try { applyCandidateHealth(home); } catch {}
   return { succeeded: cheapSucceeded, result: lastResult || { status: 1, outputChars: 0, output: '', stderr: '' }, chainResult, lastBackend };
+}
+
+async function tryCursorDefaultFirst() {
+  const halt = isCursorUsageHalted(home, process.env);
+  if (!shouldPreferCursorAgent({ kind: taskKind, instruction, env: process.env, halt })) return null;
+  const resolvedBackends = resolveFallbackBackends(home, { taskKind, instruction, env: process.env });
+  const backend = resolvedBackends.find((b) => b.name === 'cursor-agent');
+  if (!backend) return null;
+  const bt = effectiveBackendTimeoutSecs('cursor-agent', {
+    chainBudget: timeoutSeconds,
+    cooling: false,
+    isLastBackend: false,
+    kind: taskKind,
+  });
+  if (bt <= 0) return null;
+  const as = Date.now();
+  const backendTreeBefore = treeSnapshot();
+  console.log(`[codex-do] cursor-default: cursor-agent を既定の担当として起動します（${bt}秒）`);
+  const res = await executeCursorAgent(backend, { timeoutSecs: bt, promptText: prompt });
+  if (res.status === null) res.status = 1;
+  const invalid = res.timedOut || res.status !== 0
+    ? ''
+    : cheapFirstFailureReason({
+      kind: taskKind, result: res, treeChanged: backendTreeBefore.trim() !== treeSnapshot().trim(), irreversible,
+    });
+  const outcome = res.timedOut ? 'timeout' : invalid ? invalid : (res.status === 0 ? 'ok' : `exit_${res.status}`);
+  if (invalid) {
+    res.status = 1;
+    console.error('[codex-do] cursor-default: cursor-agent failed validation (' + invalid + ')');
+  }
+  const chainResult = [{
+    backend: 'cursor-agent',
+    model: backend.model,
+    status: res.status ?? null,
+    timedOut: res.timedOut === true,
+    out: Math.ceil((res.outputChars || 0) / 4),
+    outChars: res.outputChars || 0,
+    secs: Number(((Date.now() - as) / 1000).toFixed(3)),
+    budgetSecs: bt,
+    outcome,
+  }];
+  recordFallbackBackendOutcome(home, { backend: 'cursor-agent', outcome: outcome === 'ok' ? 'ok' : (res.timedOut ? 'timeout' : 'error') });
+  return { succeeded: outcome === 'ok', result: res, chainResult, lastBackend: backend };
 }
 
 const primaryLimitSecs = primaryTimeoutLimitSecs(timeoutSeconds, explicitTimeout);
@@ -2022,6 +2084,32 @@ let quotaResetUntil = 0;
 let escalationFailed = false;
 let astraRetreated = false;
 let cheapFirstFallbackDone = false;
+const preferCursorDefault = shouldPreferCursorAgent({
+  kind: taskKind,
+  instruction,
+  env: process.env,
+  halt: isCursorUsageHalted(home, process.env),
+});
+if (!cheapFirst && preferCursorDefault) {
+  const cursorFirst = await tryCursorDefaultFirst();
+  if (cursorFirst?.succeeded) {
+    const secs2 = (Date.now() - started) / 1000;
+    result = cursorFirst.result;
+    executorName = 'fallback';
+    fallbackBackend = cursorFirst.lastBackend;
+    lastBackend = cursorFirst.lastBackend;
+    fallbackChain = cursorFirst.chainResult;
+    recordUsage(result, `${cursorFirst.lastBackend?.name ?? 'cursor-agent'}/${cursorFirst.lastBackend?.model ?? 'cursor-agent'}`, secs2, 'fallback', 1, cursorFirst.chainResult);
+    quotaCheck = { matched: false };
+    cheapFirstFallbackDone = true;
+    console.error('[codex-do] cursor-default: 既定の担当が成功したため Codex は起動しません');
+  } else if (cursorFirst?.chainResult?.length) {
+    fallbackChain = cursorFirst.chainResult;
+    fallbackBackend = cursorFirst.lastBackend || null;
+    lastBackend = cursorFirst.lastBackend || null;
+    console.error('[codex-do] cursor-default: cursor-agent が失敗したため従来の経路へ進みます');
+  }
+}
 if (cheapFirst) {
   const cheapResult = await tryCheapFirstFallback();
   cheapFirstFallbackDone = true;

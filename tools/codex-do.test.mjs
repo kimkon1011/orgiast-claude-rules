@@ -9,7 +9,7 @@ import { skipCoolingBackends } from './fallback-backend-health.mjs';
 import { runGeminiBudgetGuard } from './gemini-budget-guard.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend, parseWslDistros } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -3356,7 +3356,7 @@ test('lanes-disabled は openrouter-free と cheap-code:* も候補から外す'
       'codex-fallback-order.json': JSON.stringify(['openrouter-free', 'cheap-code:glm', 'cheap-code:deepseek', 'gemini-cli']),
       'lanes-disabled.json': JSON.stringify({ openrouter: { until: Date.now() + 1000, reason: 'failure_rate' }, 'cheap-code:glm': { until: Date.now() + 1000, reason: 'quality_validation' } }),
     });
-    const names = resolveFallbackBackends(dir, { executableAvailable: () => true, taskKind: 'summarize' }).map((b) => b.name);
+    const names = resolveFallbackBackends(dir, { executableAvailable: () => true, taskKind: 'summarize', env: { CODEX_DO_SKIP_CURSOR_AGENT: '1' } }).map((b) => b.name);
     assert.deepEqual(names, ['cheap-code:deepseek', 'gemini-cli']);
   });
 });
@@ -3470,7 +3470,16 @@ test('resolveFallbackBackends は implement/verify でログイン済みの curs
     < resolveFallbackBackends(dir, { ...options, taskKind: 'implement' }).findIndex((b) => b.name === 'openrouter-code'), true);
 });
 
-test('resolveFallbackBackends は未ログインや CLI 無し、summarize/classify では cursor-agent を使わない（従来順）', () => {
+test('resolveFallbackBackends は summarize/classify/investigate でもログイン済みなら cursor-agent を先頭に置く', () => {
+  const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
+  const options = { executableAvailable: () => true, cursorAgentLoggedIn: true };
+  for (const taskKind of ['summarize', 'classify', 'investigate']) {
+    const names = resolveFallbackBackends(dir, { ...options, taskKind }).map((b) => b.name);
+    assert.equal(names[0], 'cursor-agent', taskKind);
+  }
+});
+
+test('resolveFallbackBackends は未ログインや CLI 無しでは cursor-agent を使わない（従来順）', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
   const unsigned = resolveFallbackBackends(dir, { executableAvailable: () => true, taskKind: 'implement', env: {} }).map((b) => b.name);
   assert.ok(!unsigned.includes('cursor-agent'));
@@ -3483,7 +3492,7 @@ test('resolveFallbackBackends は未ログインや CLI 無し、summarize/class
     existsImpl: () => false,
   }).map((b) => b.name);
   assert.ok(!noCli.includes('cursor-agent'));
-  const summarized = resolveFallbackBackends(dir, { executableAvailable: () => true, cursorAgentLoggedIn: true, taskKind: 'summarize' }).map((b) => b.name);
+  const summarized = resolveFallbackBackends(dir, { executableAvailable: () => true, cursorAgentLoggedIn: true, taskKind: 'summarize', env: { CODEX_DO_SKIP_CURSOR_AGENT: '1' } }).map((b) => b.name);
   assert.ok(!summarized.includes('cursor-agent'));
 });
 
@@ -3503,9 +3512,12 @@ test('buildCursorAgentArgs は非対話の -p --force --trust と workspace を�
   assert.deepEqual(buildCursorAgentArgs({ workspace: 'C:/work' }), ['-p', '--force', '--trust', '--workspace', 'C:/work']);
 });
 
-test('backendSpecificTimeoutSecs は cursor-agent に implement/verify 1800 秒、それ以外 600 秒', () => {
+test('backendSpecificTimeoutSecs は cursor-agent に実装・調べ物・要約 1800 秒、分類は 600 秒', () => {
   assert.equal(backendSpecificTimeoutSecs('cursor-agent', {}, { kind: 'implement' }), 1800);
   assert.equal(backendSpecificTimeoutSecs('cursor-agent', {}, { kind: 'verify' }), 1800);
+  assert.equal(backendSpecificTimeoutSecs('cursor-agent', {}, { kind: 'investigate' }), 1800);
+  assert.equal(backendSpecificTimeoutSecs('cursor-agent', {}, { kind: 'summarize' }), 1800);
+  assert.equal(backendSpecificTimeoutSecs('cursor-agent', {}, { kind: 'classify' }), 600);
   assert.equal(backendSpecificTimeoutSecs('cursor-agent', {}), 600);
   assert.equal(backendSpecificTimeoutSecs('cursor-agent', { CODEX_DO_CURSOR_TIMEOUT_SECS: '2400' }, { kind: 'implement' }), 2400);
 });
@@ -3538,4 +3550,12 @@ test('findCursorAgentCommand は homeDir 指定時に ~/.claude/bin のラッパ
     env: {},
   });
   assert.equal(found, wrapper);
+});
+
+test('readCodexFallbackOrder は UTF-8 BOM 付きの順序ファイルを読める', () => {
+  const dir = makeHomeWithEnv({});
+  const claude = path.join(dir, '.claude');
+  fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, 'codex-fallback-order.json'), '\uFEFF' + JSON.stringify(['cursor-agent', 'qwen']) + '\n');
+  assert.deepEqual(readCodexFallbackOrder(dir), ['cursor-agent', 'qwen']);
 });

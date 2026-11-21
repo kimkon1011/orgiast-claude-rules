@@ -175,6 +175,17 @@ foreach ($snapshot in $snapshots) {
       if ($staleWd) { $newWorkingDirectory = $synced }
     } elseif ($staleWd -or $invalidWd) {
       if ($bootstrap) { $newWorkingDirectory = $synced }
+      elseif ($staleWd) {
+        # WorkingDirectory contains a stale repo root; rewrite it.
+        $newWorkingDirectory = Replace-Roots $workingDirectory $repairRoots $synced
+        $expandedNewWd = [Environment]::ExpandEnvironmentVariables($newWorkingDirectory)
+        if ($expandedNewWd -and -not [IO.Directory]::Exists($expandedNewWd)) {
+          $warning = $true
+          $newWorkingDirectory = $workingDirectory
+          $newExecute = $execute
+          $newArguments = $arguments
+        }
+      }
       else {
         $warning = $true
         $newExecute = $execute

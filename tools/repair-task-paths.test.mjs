@@ -215,10 +215,29 @@ for (const scriptName of ['auto-session-launcher.mjs', 'auto-session-verify.mjs'
 }
 
 test('non-script suffix is not pinned', { skip: !hasPowerShell }, () => {
-  const { result, plan } = runPlan('suffix', {
+  const { result, plan, synced } = runPlan('suffix', {
     actions: stale => [{ Execute: 'node.exe', Arguments: 'auto-session-launcher.mjs.bak', WorkingDirectory: stale }],
   });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(plan[0].Pinned, false);
-  assert.equal(plan[0].Status, 'warning:working-directory');
+  assert.equal(plan[0].Status, 'planned');
+  assert.equal(plan[0].NewWorkingDirectory, synced);
+});
+
+test('stale working directory that exists is rewritten for non-bootstrap tasks', { skip: !hasPowerShell }, () => {
+  const { result, plan, synced, stale } = runPlan('stale-wd-rewrite', {
+    presentTools: ['worker.mjs'],
+    actions: stale => [{
+      Execute: String.raw`C:\WINDOWS\System32\wscript.exe`,
+      Arguments: String.raw`//nologo "${stale}\tools\worker.mjs"`,
+      WorkingDirectory: stale,
+    }],
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(plan.length, 1);
+  assert.equal(plan[0].Status, 'planned');
+  assert.equal(plan[0].NewWorkingDirectory, synced);
+  assert.ok(plan[0].OldArguments.includes(stale), `OldArguments should contain stale root: ${plan[0].OldArguments}`);
+  assert.ok(plan[0].NewArguments.includes(synced), `NewArguments should contain synced root: ${plan[0].NewArguments}`);
+  assert.ok(!plan[0].NewArguments.includes(stale), 'NewArguments should NOT contain stale root');
 });

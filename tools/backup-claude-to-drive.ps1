@@ -526,9 +526,12 @@ try {
   # Chrome 系プロファイルがブラウザ起動中に排他ロックする揮発ディレクトリ。Cookies は復元時に再ログインが必要。
   $excludeDirs = @('cache', 'shell-snapshots', 'statsig', '__pycache__', 'ide', 'node_modules', '.git',
     'Network', 'Sessions', 'Sessions_Encrypted', 'GPUPersistentCache', 'GPUCache', 'Code Cache',
-    'DawnGraphiteCache', 'DawnWebGPUCache', 'ShaderCache', 'GrShaderCache')
+    'DawnGraphiteCache', 'DawnWebGPUCache', 'ShaderCache', 'GrShaderCache',
+    # browser profile Session Storage dir (locked while Chrome running)
+    'Session Storage')
   # fleet-mail removes its transient request file after each poll; copying it races with that removal.
-  $excludeFiles = @('*.tmp', '*.lock', '*.tmp[0-9]*', '*.heartbeat', '.fleet-mail-poll.json')
+  $excludeFiles = @('*.tmp', '*.lock', '*.tmp[0-9]*', '*.heartbeat', '.fleet-mail-poll.json',
+    'LocalStorage', 'SessionStorage', 'SessionStorage-wal')
   # ~/.claude 直下の git 作業ツリーとその置き場は GitHub から再取得できるので zip に含めない。
   # 2026-11-21 実測: 除外前は staging 199,062 ファイルで zip 作成が 2 時間の上限内に終わらなかった。
   # 未コミットの作業は rescue/auto-session-* ブランチ機構が別途保全する。

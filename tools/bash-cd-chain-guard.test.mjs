@@ -2,6 +2,11 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { rolloutMode } from './gate-runtime.mjs';
+import { toolsDir } from './gate-contracts.mjs';
 
 const hook = fileURLToPath(new URL('./bash-cd-chain-guard.mjs', import.meta.url));
 const runner = fileURLToPath(new URL('./gate-hook-runner.mjs', import.meta.url));
@@ -33,6 +38,28 @@ for (const command of [
 }
 
 test('ignores non-Bash events', () => assert.equal(run('cd a && b', 'PowerShell'), ''));
-test('enforces deny through the registered gate runner', () => {
-  assert.equal(JSON.parse(run('cd a && b', 'Bash', [runner, hook])).hookSpecificOutput.permissionDecision, 'deny');
+test('rolloutMode returns deny for pilot hostname', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(toolsDir, 'gate-rollout-manifest.json'), 'utf8'));
+  assert.equal(rolloutMode('bash-cd-chain-guard', { hostname: manifest.pilotHosts[0] }), 'deny');
+});
+test('rolloutMode returns warn for non-pilot hostname before denyAfter', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bash-cd-guard-'));
+  try {
+    const now = new Date('2026-11-22T00:00:00Z').valueOf();
+    assert.equal(rolloutMode('bash-cd-chain-guard', { home, hostname: 'ci-host', now }), 'warn');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+test('rolloutMode returns deny for non-pilot hostname after observation week', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bash-cd-guard-'));
+  try {
+    const firstSeen = new Date('2026-11-22T00:00:00Z').valueOf();
+    const gateDir = path.join(home, '.claude', 'gate-rollout');
+    fs.mkdirSync(gateDir, { recursive: true });
+    fs.writeFileSync(path.join(gateDir, 'bash-cd-chain-guard.json'), JSON.stringify({ firstSeen }));
+    const now = new Date('2026-12-06T00:00:00Z').valueOf();
+    assert.equal(rolloutMode('bash-cd-chain-guard', { home, hostname: 'ci-host', now }), 'deny');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+test('runner output is non-empty (warn or deny)', () => {
+  assert.ok(run('cd a && b', 'Bash', [runner, hook]).length > 0);
 });

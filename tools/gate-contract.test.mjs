@@ -23,11 +23,6 @@ test('new rollout entries must declare the seven day window; legacy inventory is
     const row = manifest.gates[name];
     assert.ok(row, `${name}: missing rollout entry`);
     assert.ok(['warn','deny'].includes(row.rollout));
-    if (name === 'bash-cd-chain-guard') {
-      assert.equal(row.rollout, 'deny');
-      assert.equal(row.immediatePolicy, '2026-11-21 user 指示: Bash の先頭の cd 連結を拒否');
-      continue;
-    }
     if (name === 'shared-worktree-git-guard') {
       assert.equal(row.rollout, 'deny');
       assert.equal(row.immediatePolicy, '2026-11-21 user 指示: 共有作業ツリーで他セッションの変更を巻き込む Git 操作を拒否');

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate, evaluateGateSkips, evaluateTop3Delivery, parseDunningSummary, evaluateDunningDelivery } from './cron-liveness-check.mjs';
+import { evaluate, evaluateGateSkips, evaluateTop3Delivery, isLocalJobSeat, parseDunningSummary, evaluateDunningDelivery } from './cron-liveness-check.mjs';
 
 const now = Date.parse('2026-08-21T00:00:00.000Z');
 const entry = { label: '日次', repo: 'owner/repo', workflow: 'daily.yml', everyDays: 1 };
@@ -180,4 +180,24 @@ test('日次TOP3: asOfが日付として読めなければunknown', () => {
   const actual = evaluateTop3Delivery('not-a-date', top3Now);
   assert.equal(actual.status, 'unknown');
   assert.match(actual.line, /^⚠️/);
+});
+
+test('日次TOP3: 担当外席で一度も届いていなくてもskip', () => {
+  const actual = evaluateTop3Delivery(null, top3Now, false);
+  assert.equal(actual.status, 'skip');
+  assert.doesNotMatch(actual.line, /🚨/);
+});
+
+test('日次TOP3: 担当外席で10日前の着地でもskip', () => {
+  assert.equal(evaluateTop3Delivery('2026-08-23', top3Now, false).status, 'skip');
+});
+
+test('日次TOP3: 担当席で一度も届いていなければ従来どおりnever', () => {
+  assert.equal(evaluateTop3Delivery(null, top3Now, true).status, 'never');
+});
+
+test('日次TOP3: ローカルジョブ席はスケジュールタスクの問い合わせ結果で判定する', () => {
+  if (process.platform === 'win32') assert.equal(isLocalJobSeat('task', () => ({ status: 0 })), true);
+  assert.equal(isLocalJobSeat('task', () => ({ status: 1 })), false);
+  assert.equal(isLocalJobSeat('task', () => { throw new Error('boom'); }), false);
 });

@@ -88,7 +88,7 @@ export async function askProvider(provider, documents, { home, execImpl = exec, 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-llm-'));
   try {
     const file = path.join(dir, 'prompt.txt'); fs.writeFileSync(file, extractionPrompt(documents), { mode: 0o600 });
-    const args = [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', provider, '--prefer-provider', '--no-fallback', '--category','extraction','--prompt-file',file,'--per-provider-timeout-ms','45000'];
+    const args = [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', provider, '--prefer-provider', '--no-fallback', '--category','extraction','--prompt-file',file,'--per-provider-timeout-ms','45000','--max','8192'];
     // Pin the fallback to a non-Claude model even if llm-ask's defaults change.
     if (provider === 'openrouter') args.push('--model','openai/gpt-oss-120b');
     const { stdout } = await execImpl(process.execPath, args, { encoding: 'utf8', windowsHide: true, signal, timeout: 55000, maxBuffer: 2 * 1024 * 1024, env: { ...process.env, ORGIAST_HOME: home } });

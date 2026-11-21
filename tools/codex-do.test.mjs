@@ -9,7 +9,7 @@ import { skipCoolingBackends } from './fallback-backend-health.mjs';
 import { runGeminiBudgetGuard } from './gemini-budget-guard.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, reserveGeminiLaunch, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, reserveGeminiLaunch, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder, hasAbortCondition, isIntentionalAbort } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -1549,6 +1549,64 @@ test('外部操作の no_changes を失敗にせず実行結果を改変しな�
     assert.equal(result.status, status);
   }
   assert.equal(cheapFirstFailureReason({ kind: 'implement', result: { status: 0, output: '完了' }, treeChanged: false }), 'no_changes');
+});
+
+// ── 中止条件（abort-on-failure）テスト ──────────────────────────────
+// 2026-11-21 実害: Codex が指示どおり「テスト失敗のため中止」した結果を empty_diff 扱いにして
+// astra→cursor-agent→deepseek へ回し、deepseek が禁止事項を破って PR #2510 を作った。
+
+test('hasAbortCondition: 中止条件を含む指示を検出する', () => {
+  for (const instruction of [
+    '中止条件: テスト失敗なら中止',
+    'abort if tests fail',
+    'abort on test failure',
+    'abort when tests fail',
+    'テスト失敗で中止',
+    'テスト失敗なら中止すること',
+    'test failure should abort',
+    'abort tests on failure',
+  ]) {
+    assert.equal(hasAbortCondition(instruction), true, instruction);
+  }
+});
+
+test('hasAbortCondition: 通常の指示では false', () => {
+  for (const instruction of [
+    '', undefined, null,
+    'tools/foo.mjs に関数を追加しテストする',
+    'バグを修正する',
+    'レビューして',
+    'テストを通すように修正',
+  ]) {
+    assert.equal(hasAbortCondition(instruction), false, String(instruction));
+  }
+});
+
+test('isIntentionalAbort: 中止条件あり + 出力にテスト失敗＋中止 → true', () => {
+  for (const [output, instruction] of [
+    ['テスト失敗のため中止しました', '中止条件: テスト失敗なら中止'],
+    ['Tests failed, aborting as instructed', 'abort if tests fail'],
+    ['Aborting: tests failed', 'abort on test failure'],
+    ['tests failed, stopping per condition', 'abort when tests fail'],
+    ['テストが失敗したので中止します', 'テスト失敗で中止'],
+  ]) {
+    assert.equal(isIntentionalAbort(output, instruction), true, `output="${output}" instruction="${instruction}"`);
+  }
+});
+
+test('isIntentionalAbort: 中止条件なし → 常に false', () => {
+  assert.equal(isIntentionalAbort('テスト失敗のため中止しました', '通常の実装指示'), false);
+  assert.equal(isIntentionalAbort('Tests failed, aborting', '修正してテスト'), false);
+});
+
+test('isIntentionalAbort: 中止条件ありでも出力に中止の証拠なし → false', () => {
+  assert.equal(isIntentionalAbort('実装完了しました', '中止条件: テスト失敗なら中止'), false);
+  assert.equal(isIntentionalAbort('正常に終了', 'abort if tests fail'), false);
+});
+
+test('isIntentionalAbort: 中止条件ありでも出力にテスト失敗なし → false', () => {
+  assert.equal(isIntentionalAbort('エラーが発生したため中止', '中止条件: テスト失敗なら中止'), false);
+  assert.equal(isIntentionalAbort('aborting for other reason', 'abort if tests fail'), false);
 });
 
 // ── cheap-first テスト ───────────────────────────────────────────────

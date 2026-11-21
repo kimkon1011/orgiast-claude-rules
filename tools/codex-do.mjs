@@ -422,6 +422,23 @@ export function detectCheapFirstUnsuitable(text) {
 }
 
 // 副作用はファイル差分では検証できない。指示中の操作名を保守的に検出する。
+// 指示文に「テスト失敗なら中止」のような中止条件が含まれているか検出する。
+// Codex が条件どおりに中止した結果を empty_diff 扱いにしてフォールバックさせないために使う。
+// 2026-11-21 実害: deepseek が禁止事項を破って PR #2510 を作った。
+export function hasAbortCondition(instruction) {
+  const text = String(instruction || '');
+  return /中止条件|abort\s+(?:if|on|when)|テスト失敗.*中止|中止.*テスト失敗|test.*fail.*abort|abort.*test/i.test(text);
+}
+
+// Codex の出力が、指示文の中止条件に従った意図的な中止を示しているかを判定する。
+// 指示文に中止条件があり、かつ出力にテスト失敗＋中止の文言がある場合のみ true。
+export function isIntentionalAbort(output, instruction) {
+  if (!hasAbortCondition(instruction)) return false;
+  const text = String(output || '');
+  return /テスト失敗.*(?:中止|停止|abort)|(?:abort|cancel|stop).*test.*fail|tests?\s+failed.*(?:abort|停止|cancel|stop)/i.test(text)
+    || /中止.*(?:テスト失敗|test fail)|テスト.*失敗.*(?:ため|ので).*(?:中止|停止)/i.test(text);
+}
+
 export function detectIrreversibleSideEffect(text) {
   const value = String(text ?? '');
   const has = (pattern) => pattern.test(value);
@@ -2152,9 +2169,17 @@ function hasExternalWork(result) {
   }));
   return Boolean(workEvidence.get(result));
 }
-const failureReason = (result) => result.timedOut ? 'timedOut'
-  : result.status !== 0 ? `exit_${result.status}`
-  : wantedEdit && treeBefore.trim() === treeSnapshot().trim() && !hasExternalWork(result) ? 'empty_diff' : '';
+const failureReason = (result, resultOutput = '', instructionText = '') => {
+  if (result.timedOut) return 'timedOut';
+  if (result.status !== 0) return `exit_${result.status}`;
+  if (wantedEdit && treeBefore.trim() === treeSnapshot().trim() && !hasExternalWork(result)) {
+    // 指示文に中止条件があり、Codex がそれに従って意図的に中止した場合は成功扱い。
+    // フォールバックさせると禁止事項を破る代替AIに渡るリスクがある（PR #2510）。
+    if (isIntentionalAbort(resultOutput || result.output || '', instructionText)) return '';
+    return 'empty_diff';
+  }
+  return '';
+};
 let quotaCheck;
 let quotaResetUntil = 0;
 let escalationFailed = false;
@@ -2222,7 +2247,7 @@ while (!(cheapFirstFallbackDone && executorName === 'fallback')) {
     selectedLane = { slug: SOL, effort, reason: 'astra_usage_limit' };
     continue;
   }
-  const failure = failureReason(result);
+  const failure = failureReason(result, result?.output, prompt);
   if (executionPolicy.allowModelRetry && !quotaCheck.matched && failure && !launchUnavailable && !authFailed && selectedLane.slug === SOL && lane === 'auto' && !model && !noEscalate && !escalated && !astraRetreated && providerCooldownMs('codex-astra') === 0) {
     console.log(`[codex-do] sol 失敗 → astra へ昇格 (理由: ${failure})`);
     escalated = true;

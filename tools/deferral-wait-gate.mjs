@@ -73,6 +73,27 @@ const NEXT_SESSION_UNFIXABLE = /直せない|\bunfixable\b|試した/i;
 const NEXT_SESSION_ERROR = /(?:エラー(?:本文)?|\b(?:error|failed|fatal))\s*[:：]\s*[「『`"]?[^\s。！？!?「」『』`"]|\b(?:HTTP\s+[45]\d{2}|EACCES|EPERM|ENOENT|EROFS|ETIMEDOUT|ECONNREFUSED)\b/i;
 const NEXT_SESSION_DEFERRAL_REASON = '直せる作業を次のセッション・後日へ先送りしています。このターンで直すか、直せない証拠（試した手段とエラー本文）を書いてください。';
 
+// 2026-11-16 実測（kim 指摘）: 「次に kim から返信があれば、008・014 への配布に進みます」と
+// 承認不要の作業を返信待ちで止め、kim に「なにを返信したら良いの？」と聞き返させた。
+// 「返信があれば＋後続作業」の形を直接拾う。REPLY_WAIT の「返信が来たら」とは別形。
+const REPLY_IF = /(?:返信|返事|連絡|指示|合図|OK|ＯＫ)(?:が|を)?(?:あれば|あったら|もらえれば|いただければ|頂ければ|くれれば|もらったら|いただいたら)/g;
+// ACTION_AFTER は「進みます」（みます）や「着手」「配布」等を含まないため、後続作業の語彙を広く取る。
+const REPLY_IF_ACTION = /進みます|進めます|着手します|着手する|実行します|配布します|反映します|取りかかります|対応します|作業に入ります/;
+const REPLY_IF_AUTOMATION = /自動|仕組み|定期|cron|スイープ|ジョブ/;
+const REPLY_IF_THIRD_PARTY = /お客様|先方|相手|社員|スタッフ|取引先/;
+const REPLY_IF_WINDOW = 160;
+// 本当に承認待ち（社外送信・削除・課金・権限・契約）のときだけ例外とする。
+const REPLY_IF_APPROVAL_FORM = /【kim 確認用の全文】/;
+const REPLY_IF_APPROVAL_WORDS = /送信|削除|課金|支払|権限|契約|社外/;
+const REPLY_IF_APPROVAL_WINDOW = 200;
+const REPLY_IF_REASON = '承認・判断が不要な作業を「返信があれば進めます」で止めず、当ターン内で完了まで実行して結果を報告してください。止めてよいのは承認必須（社外送信・削除・課金・権限変更）か人にしかできない操作だけで、その場合は理由と kim の1操作を書いてください。';
+
+// 2026-11-16 実測（kim 指摘）: 「返信は不要です。このまま進めます。まず配布する経路を確認します。」
+// と宣言だけしてツール実行の途中で応答を終え、何も進まなかった。最後の非空段落が宣言だけで
+// 実行結果を伴わない形を直接拾う（コードブロック・引用行は proseLines で既に除外済み）。
+const ANNOUNCE_STOP = /(?:このまま|これから|続けて|引き続き|次に|まず)[^。\n]{0,60}(?:進めます|確認します|始めます|取りかかります|着手します|実行します|対応します)。?\s*$/;
+const ANNOUNCE_STOP_REASON = '『このまま進めます』等の宣言で応答を終えず、宣言した作業を当ターン内で実行し、結果（実データ）まで書いてから終えてください。';
+
 export function enabled() {
   return process.env.ORGIAST_DEFERRAL_WAIT_GATE !== '0';
 }
@@ -137,6 +158,23 @@ export function judge(text) {
       return { decision: 'block', code: 'DEFERRAL-WAIT', reason: MERGE_DEFERRAL_REASON };
     }
   }
+  for (const match of [...prose.matchAll(REPLY_IF)]) {
+    if (inAuditQuote(prose, match.index)) continue;
+    const after = prose.slice(match.index + match[0].length, match.index + match[0].length + REPLY_IF_WINDOW);
+    if (!REPLY_IF_ACTION.test(after)) continue;
+    if (REPLY_IF_AUTOMATION.test(after)) continue;
+    const before = prose.slice(Math.max(0, match.index - 30), match.index);
+    if (REPLY_IF_THIRD_PARTY.test(before)) continue;
+    // 【kim 確認用の全文】があり、かつ承認必須の語が近傍にある場合は本当に承認待ちなので除外する。
+    if (REPLY_IF_APPROVAL_FORM.test(prose)) {
+      const near = prose.slice(
+        Math.max(0, match.index - REPLY_IF_APPROVAL_WINDOW),
+        match.index + match[0].length + REPLY_IF_APPROVAL_WINDOW,
+      );
+      if (REPLY_IF_APPROVAL_WORDS.test(near)) continue;
+    }
+    return { decision: 'block', code: 'DEFERRAL-WAIT', reason: REPLY_IF_REASON };
+  }
   // 引用内の日時や動作を除外し、文中の位置は元の本文とそろえる。
   const unquoted = prose.replace(/「(?:[^「」]|「[^「」]*」)*」|『[^『』]*』|`+[^`\n]+`+/g,
     quote => quote.replace(/[^\r\n]/g, ' '));
@@ -171,6 +209,12 @@ export function judge(text) {
         reason: '完了を待つのではなく、当ターン内に完了まで進めてください。待機が不要なら、待たずに次の作業へ進めて結果まで報告してください。',
       };
     }
+  }
+  // 最後の非空段落が「このまま進めます」等の宣言だけで終わっている場合（実行結果が無い）。
+  // 既存のどの検出にも該当しなかった応答だけに適用するため、最後に判定する。
+  const lastParagraph = prose.split('\n').map(line => line.trim()).filter(Boolean).at(-1);
+  if (lastParagraph && ANNOUNCE_STOP.test(lastParagraph)) {
+    return { decision: 'block', code: 'DEFERRAL-WAIT', reason: ANNOUNCE_STOP_REASON };
   }
   return { decision: 'pass' };
 }

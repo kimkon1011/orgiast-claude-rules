@@ -1568,7 +1568,7 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 Cursor Ultra（定額 $200/月）は「上限のときの代わり」ではなく、次の作業の既定の担当とする。品質を落とす格下げはしない。
 
-**🔴 Cursor Ultra は無人の定期ジョブ・調べ物／集計／整形／要約／下書きのたたき台・コード修正 PR の既定の担当。Claude Code に残すのは金さん向けの最終判断と社外文面の最終確認だけ。使用量は 000 の ~/.claude 配下 reports にある cursor-usage-pace.txt を毎日測り、期末 90〜95% を目指して余力を残しすぎない（§2.8.7）。**
+
 
 - **Cursor が既定**: 無人の定期ジョブ（見回りの集計、期日の回収、くらしのマーケットの見回りなど）、調べ物・集計・整形・要約・下書きのたたき台、コード修正の PR。`codex-do` は implement / verify / investigate / summarize / classify で、ログイン済みの cursor-agent を Codex や llm-ask より先に起動する。
 - **Claude Code に残すもの**: 金さん向けの最終判断と、社外文面の最終確認だけ。指示にその旨を書くか、`lane: claude` / `[CLAUDE-FINAL]` を付ける。

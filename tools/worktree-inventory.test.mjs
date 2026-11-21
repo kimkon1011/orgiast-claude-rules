@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { classifyWorktree } from './worktree-inventory.mjs';
+import '../tests/worktree-inventory.test.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const now = Date.parse('2026-11-21T12:00:00Z');

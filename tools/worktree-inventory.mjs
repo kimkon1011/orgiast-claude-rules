@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
-import { readdirSync, statSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
@@ -8,7 +8,7 @@ import { isEntry } from './is-entry.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const categories = [
-  'keep-main', 'keep-protected', 'prune', 'keep-dirty',
+  'keep-main', 'keep-protected', 'keep-repair', 'prune', 'keep-dirty',
   'keep-recent', 'keep-unpushed', 'safe', 'keep-error',
 ];
 
@@ -24,6 +24,9 @@ export function classifyWorktree(info) {
   if (info.error) return result('keep-error', `点検に失敗しました（${info.error}）。`);
   if (info.main) return result('keep-main', 'メイン作業ツリーです。');
   if (isProtected(info.path)) return result('keep-protected', '保護対象のパスです。');
+  if (info.resolvedPath) {
+    return result('keep-repair', 'gitdir が相対パスで Git の表示とずれています。`git worktree repair <実パス>` で直してから再点検してください。');
+  }
   if (info.prunable) return result('prune', 'Git が登録を整理可能と判定しています。');
   if (info.exists === false) return result('prune', '作業ツリーのディレクトリが存在しません。');
   if (info.dirty) return result('keep-dirty', '未コミットの変更または未追跡ファイルがあります。');
@@ -61,6 +64,64 @@ function parseWorktrees(output) {
       prunable: fields.has('prunable'),
       main: index === 0,
     };
+  });
+}
+
+function ifExists(read) {
+  try {
+    return read();
+  } catch (error) {
+    if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+    return undefined;
+  }
+}
+
+function pathKey(value) {
+  const normalized = path.normalize(value);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+export function resolveWorktreePaths(repo, commonDir, worktrees) {
+  const realCommonDir = realpathSync.native(commonDir);
+  // Git can report a path calculated using the spelling of the repository alias.
+  const repoAlias = path.resolve(repo, path.relative(realpathSync.native(repo), realCommonDir));
+  const displayBases = new Set([commonDir, realCommonDir, repoAlias]);
+  const adminRoot = path.join(realCommonDir, 'worktrees');
+  const candidates = new Map();
+
+  for (const entry of ifExists(() => readdirSync(adminRoot)) ?? []) {
+    const adminDir = path.join(adminRoot, entry);
+    const gitdir = ifExists(() => readFileSync(path.join(adminDir, 'gitdir'), 'utf8'))?.trimEnd();
+    if (!gitdir || path.isAbsolute(gitdir) || path.win32.isAbsolute(gitdir)) continue;
+    if (path.basename(gitdir) !== '.git') continue;
+
+    const realAdminDir = ifExists(() => realpathSync.native(adminDir));
+    if (!realAdminDir) continue;
+    const dotGit = path.resolve(realAdminDir, gitdir);
+    if (!ifExists(() => statSync(dotGit).isFile())) continue;
+    const backlink = ifExists(() => readFileSync(dotGit, 'utf8'));
+    const adminLink = /^gitdir: ([^\r\n]+)\r?\n?$/.exec(backlink ?? '')?.[1];
+    if (!adminLink) continue;
+    const resolvedPath = ifExists(() => realpathSync.native(path.dirname(dotGit)));
+    if (!resolvedPath) continue;
+    const linkedAdmin = ifExists(() => realpathSync.native(path.resolve(resolvedPath, adminLink)));
+    if (!linkedAdmin || pathKey(linkedAdmin) !== pathKey(realAdminDir)) continue;
+
+    const displayPaths = [...displayBases].map((base) =>
+      path.dirname(path.resolve(base, 'worktrees', entry, gitdir)));
+    for (const key of new Set(displayPaths.map(pathKey))) {
+      // Ambiguous display paths cannot identify a specific registration.
+      candidates.set(key, candidates.has(key) ? null : resolvedPath);
+    }
+  }
+
+  return worktrees.map((worktree) => {
+    if (worktree.main) return worktree;
+    const resolvedPath = candidates.get(pathKey(worktree.path));
+    if (!resolvedPath) return worktree;
+    const displayedPath = ifExists(() => realpathSync.native(worktree.path));
+    if (displayedPath && pathKey(displayedPath) === pathKey(resolvedPath)) return worktree;
+    return { ...worktree, resolvedPath };
   });
 }
 
@@ -104,16 +165,11 @@ function hasMergedPr(slug, branch) {
   return prs.length > 0;
 }
 
-function inspectWorktree(worktree, now, checkAncestor, checkPr) {
+export function inspectWorktree(worktree, now, checkAncestor, checkPr) {
   const info = { ...worktree, now };
   try {
-    try {
-      info.exists = statSync(info.path).isDirectory();
-    } catch (error) {
-      if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
-      info.exists = false;
-    }
-    if (info.exists && !info.prunable) {
+    info.exists = ifExists(() => statSync(info.path).isDirectory()) ?? false;
+    if (info.exists && !info.prunable && !info.resolvedPath) {
       info.updatedAt = latestUpdate(info.path);
       if (!info.main && !isProtected(info.path)) {
         info.dirty = Boolean(git(info.path, 'status', '--porcelain', '--untracked-files=all').trim());
@@ -128,6 +184,7 @@ function inspectWorktree(worktree, now, checkAncestor, checkPr) {
   }
   return {
     path: info.path,
+    ...(info.resolvedPath && { resolvedPath: info.resolvedPath }),
     branch: info.branch ?? '(detached)',
     head: info.head?.slice(0, 12) ?? '',
     ...classifyWorktree(info),
@@ -143,10 +200,10 @@ function markdown(groups) {
   const lines = ['# Git worktree 棚卸し', ''];
   for (const [category, rows] of groups) {
     lines.push(`## ${category}（${rows.length}件）`, '',
-      '| パス | ブランチ | HEAD | 区分 | 理由 | 最終更新日時 |',
-      '| --- | --- | --- | --- | --- | --- |');
+      '| パス | 実パス | ブランチ | HEAD | 区分 | 理由 | 最終更新日時 |',
+      '| --- | --- | --- | --- | --- | --- | --- |');
     for (const row of rows) {
-      const cells = [row.path, row.branch, row.head, row.category, row.reason, row.updatedAt];
+      const cells = [row.path, row.resolvedPath, row.branch, row.head, row.category, row.reason, row.updatedAt];
       lines.push(`| ${cells.map(markdownCell).join(' | ')} |`);
     }
     lines.push('');
@@ -172,7 +229,9 @@ function main() {
   };
   let slug;
   const checkPr = values.gh ? (branch) => hasMergedPr(slug ??= originSlug(repo), branch) : null;
-  const rows = worktrees.map((worktree) => inspectWorktree(worktree, now, checkAncestor, checkPr));
+  const commonDir = git(repo, 'rev-parse', '--path-format=absolute', '--git-common-dir').trimEnd();
+  const rows = resolveWorktreePaths(repo, commonDir, worktrees)
+    .map((worktree) => inspectWorktree(worktree, now, checkAncestor, checkPr));
   const groups = categories.map((category) => [category, rows.filter((row) => row.category === category)]);
   for (const [category, group] of groups) console.log(`${category}: ${group.length}`);
   console.log(`合計: ${rows.length}`);

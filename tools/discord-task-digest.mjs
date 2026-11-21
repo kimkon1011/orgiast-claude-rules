@@ -82,6 +82,7 @@ export function isExpiredSameDay(task, { now = new Date() } = {}) {
 export function pickTop(tasks, { now = new Date(), limit = 5, graceDays = 7 } = {}) {
   const top = [], staleOverdue = [], expiredSameDay = [];
   for (const task of tasks) {
+    if (!ACTIVE_STATES.has(task.status)) continue;
     const { id, rank, title, deadline } = task;
     if (isStaleOverdue(task, { now, graceDays })) {
       if (staleOverdue.length < limit) staleOverdue.push({ id, rank, title, deadline });

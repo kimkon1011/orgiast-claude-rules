@@ -91,6 +91,26 @@ test('pickTop は通常・期限超過・当日系期限切れの3枠に分け�
   });
 });
 
+test('pickTop は完了・クローズのタスクを top に入れず、アクティブなタスクだけを抽出する', () => {
+  const active = { status: '進行中' };
+  const done = { status: '完了' };
+  const closed = { status: 'クローズ' };
+  const tasks = [
+    { id: 'T-0001', rank: 'P1', title: '完了タスク', ...done },
+    { id: 'T-0002', rank: 'P2', title: 'アクティブ', ...active },
+    { id: 'T-0003', rank: 'P1', title: 'クローズタスク', ...closed },
+    { id: 'T-0004', rank: 'P3', title: 'アクティブその2', ...active },
+  ];
+  assert.deepEqual(pickTop(tasks, { now: NOW, limit: 5 }), {
+    top: [
+      { id: 'T-0002', rank: 'P2', title: 'アクティブ' },
+      { id: 'T-0004', rank: 'P3', title: 'アクティブその2' },
+    ],
+    staleOverdue: [],
+    expiredSameDay: [],
+  });
+});
+
 test('snowflakeToMs は既知の snowflake を時刻に変換する', () => {
   assert.equal(snowflakeToMs('175928847299117063'), 1462015105796);
   assert.equal(snowflakeToMs(snowflake(NOW.getTime(), 123n)), NOW.getTime());

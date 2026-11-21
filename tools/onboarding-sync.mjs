@@ -496,7 +496,11 @@ async function syncRepository(now) {
       const before = readHead(repoPath);
       const result = await updateRepositoryFiles(repoPath);
       const after = readHead(repoPath);
-      changed = result.ok && (result.method === 'zip' ? result.changed : before !== after);
+      if (before && after) {
+        changed = result.ok && (result.method === 'zip' ? result.changed : before !== after);
+      } else {
+        changed = result.ok && result.changed !== false;
+      }
     } else {
       const result = await updateRepositoryFiles(repoPath);
       changed = result.ok && result.changed;

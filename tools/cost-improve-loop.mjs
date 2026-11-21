@@ -640,9 +640,10 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
         nextStaleRetry[pc] = { sentAt: now.toISOString(), count: 1, mode };
         actions.push({ id: `action-${nowMs}-stale_report-${pc}`, kind, pc, mode, dispatchedAt: now.toISOString(), baseline: { metric: 'reportAge', value: 0 }, result: 'sent', verifiedAt: null, note: `fleet-sheet-report 再送 (${mode})` });
         continue;
-      } catch {
-        // 外部例外には認証情報を含む git 出力があり得るので、固定の理由だけを記録する。
-        console.error(`stale_report: ${mode === 'local' ? 'ローカル再送に失敗（終了異常またはタイムアウト）' : '再送指令の送信に失敗（利用不可または push 失敗）'}。人へエスカレーションします。`);
+      } catch (error) {
+        // 外部例外には認証情報を含む git 出力があり得るので、redacted 短縮メッセージだけを記録する。
+        const wrapped = `stale_report(${pc}): ${mode === 'local' ? 'ローカル再送失敗' : '再送指令失敗'}: ${String(error?.message || error).replace(/[A-Za-z0-9+/]{40,}/g, '…').slice(0, 200)}。人へエスカレーションします。`;
+        console.error(wrapped);
         retryFailed = true;
       }
     }
@@ -1106,6 +1107,32 @@ export function readLedgerCounts(filePath, now) {
     counts[prov] = (counts[prov] || 0) + 1;
   }
   return counts;
+}
+
+// run-hidden.vbs がプライマリログをロックしているとき、退避先ログを探す。
+// naming は run-hidden.vbs と揃えている（cost-improve-loop.locked-<yyyymmdd>-<hhnnss>-<rand>.log）。
+export function resolveEffectiveLogPath(claudeDir) {
+  const logDir = path.join(claudeDir, 'logs');
+  const primary = path.join(logDir, 'cost-improve-loop.log');
+  try {
+    fs.mkdirSync(logDir, { recursive: true });
+    // プライマリが書き込み可能か試す
+    fs.appendFileSync(primary, '', 'utf8');
+    return primary;
+  } catch { /* primary locked — fallback 探しへ */ }
+  try {
+    const files = fs.readdirSync(logDir)
+      .filter(f => /^cost-improve-loop\.locked-\d{8}-\d{6}-[a-zA-Z0-9]+\.log$/.test(f))
+      .sort()
+      .reverse();
+    if (files.length > 0) return path.join(logDir, files[0]);
+  } catch { /* logDir 不在など */ }
+  // 退避先が見つからなければ run-hidden 規約に従って自前で作る
+  const ts = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const stamp = `${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}-${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}`;
+  const rand = Math.random().toString(16).slice(2, 10);
+  return path.join(logDir, `cost-improve-loop.locked-${stamp}-${rand}.log`);
 }
 
 export function localProviderEnv(homeDir) {
@@ -1731,8 +1758,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     }
     const logLine = `${formatJst(now)} / ${status} / ${metrics} notify=${heartbeat} state=${stateWriteFailed ? 'failed' : 'ok'}${reason ? ` reason=${reason}` : ''}`;
     try {
-      fs.mkdirSync(path.join(claudeDir, 'logs'), { recursive: true });
-      await appendLineWithRetry(path.join(claudeDir, 'logs', 'cost-improve-loop.log'), logLine);
+      const effectiveLog = resolveEffectiveLogPath(claudeDir);
+      await appendLineWithRetry(effectiveLog, logLine);
     } catch (error) { console.error(`cost-improve-loop ログ書き込み失敗: ${String(error?.message ?? error)}`); }
   }
 

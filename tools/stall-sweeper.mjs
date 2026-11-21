@@ -89,8 +89,9 @@ export function detectFailedJob(rows, now = Date.now()) {
     // ジョブ付帯の無いプロバイダ単位のLLM呼び出し行(executor-usageのgroq等)で直近が http_429 の場合は
     // RPD・TPM 等のレート上限到達による一時的な流量制限であり、ジョブ失敗ではない(2026-11-07 確定、
     // `groq:不明` アーティファクト)。フォールバックチェーンが負荷を吸収するため再実行対象にしない。
-    // 実ジョブ(taskName/job/cwd 付帯)の http_429 は従来どおり失敗として拾う。
-    if (r.taskName == null && r.job == null && r.cwd == null && /^http_429$/.test(String(r.status))) return [];
+    // http_402(残高不足)・http_403(月額上限/権限)もプロバイダ単体行は failover が吸収するため除外(2026-11-22)。
+    // 実ジョブ(taskName/job/cwd 付帯)の http_429/402/403 は従来どおり失敗として拾う。
+    if (r.taskName == null && r.job == null && r.cwd == null && /^http_(?:402|403|429)$/.test(String(r.status))) return [];
     // テンポラリディレクトリ（Codex の lane-codex-write-* 等）を cwd とするエントリで、
     // そのディレクトリが既に存在しない場合は正常にクリーンアップ済みであり再実行不能。
     // 本物の失敗ではなく、毎回再試行してノイズになるだけなので除外する(2026-11-16)。

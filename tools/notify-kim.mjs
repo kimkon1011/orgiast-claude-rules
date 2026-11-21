@@ -191,7 +191,7 @@ function benignQuotaSweepReport(text) {
 
 async function persistKim(home, options) {
   try {
-    const item = await addItem(home, options);
+    const item = await addItem(home, options, { lockWaitMs: 10_000 });
     return { delivered: 'session-inbox', id: item.id, kind: item.kind };
   } catch (error) {
     try { return spoolItem(home, options); }

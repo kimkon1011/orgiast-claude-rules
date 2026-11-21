@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
-import { listItems, supersedeAsk, withInboxGroupLock } from './kim-inbox.mjs';
+import { listInboxMatches, supersedeAsk, withInboxGroupLock } from './kim-inbox.mjs';
 import { parseEscalation, syncEscalationAnswer } from './lib/escalation-answer-sync.mjs';
 
 function groupKey(item) {
@@ -22,8 +22,7 @@ const byResolution = byNewest(item => item.answeredAt || item.lastAt || item.cre
 function reconcile(home, apply) {
   const groups = new Map();
   const result = { openAsks: 0, groups: 0, superseded: 0, answerInherited: 0, ledgerRowsSynced: 0, backupDir: null };
-  for (const item of listItems(home)) {
-    if (item.kind !== 'ask' || !['open', 'answered', 'dropped'].includes(item.status)) continue;
+  for (const item of listInboxMatches(home, item => item.kind === 'ask' && ['open', 'answered', 'dropped'].includes(item.status))) {
     const key = groupKey(item);
     if (!groups.has(key)) groups.set(key, { open: [], resolved: [] });
     const group = groups.get(key);

@@ -1,7 +1,7 @@
 import { externalSpec, eventKey, readEvents, saveEvent, MONITOR_DAYS } from './lib/external-monitor-state.mjs';
 import { rowKey } from './auto-progress-ledger.mjs';
 import { fetchMessages } from './auto-progress-external-check.mjs';
-import { addItem, listItems, updateInboxItem, inboxDedupeKey } from './kim-inbox.mjs';
+import { addItem, listInboxMatches, updateInboxItem, inboxDedupeKey } from './kim-inbox.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { autoResumeAllowed } from './lib/auto-resume-policy.mjs';
 
@@ -15,7 +15,7 @@ function inboxOptions(event) {
 // already have advanced and the resume may be done, so repair durable receipts
 // independently of polling. Keep genuine prior notices (and their answers).
 export async function repairExternalInboxReceipts({ home, now = Date.now(), io = {} }) {
-  const items = new Map(listItems(home).map(item => [item.id, item]));
+  const items = new Map(listInboxMatches(home, item => item.source === 'auto-progress-external').map(item => [item.id, item]));
   const result = { rekeyed: 0, requeued: 0 };
   const retained = new Set();
   for (const event of readEvents(home).sort((a, b) => Date.parse(a.queuedAt) - Date.parse(b.queuedAt))) {

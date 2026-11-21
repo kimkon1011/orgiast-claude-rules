@@ -7,7 +7,7 @@ import { decisionOwnerOf } from './auto-progress-decision-owner.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { acquireLock } from './lib/progress-file-lock.mjs';
 import { isEntry } from './is-entry.mjs';
-import { listItems } from './kim-inbox.mjs';
+import { listInboxMatches } from './kim-inbox.mjs';
 import { priorEscalations, syncEscalationAnswer, escalationDedupeKey } from './lib/escalation-answer-sync.mjs';
 
 const DAY_MS = 86400000;
@@ -31,7 +31,7 @@ export async function escalateKimDecisions({ home = process.env.ORGIAST_HOME || 
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error('invalid escalation state');
     const rows = (io.readLedger ?? readLedger)(ledgerFile(home));
-    const inbox = (io.listInbox ?? listItems)(home);
+    const inbox = io.listInbox ? io.listInbox(home) : listInboxMatches(home, item => item.kind === 'ask');
     const targets = [];
     const suppressed = [];
     let sent = 0;

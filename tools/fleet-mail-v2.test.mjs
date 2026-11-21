@@ -7,7 +7,7 @@ import { Worker } from 'node:worker_threads';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
-import { writeJson, windowsLockBusy, WRITE_JSON_RENAME_RETRIES } from './fleet-mail.mjs';
+import { writeJson, windowsLockBusy, WRITE_JSON_RENAME_RETRIES, isHubSender } from './fleet-mail.mjs';
 import { main, pollOnce, readInbox, syncMailState, resolveMailTarget, mailId, parseArgs, waitForReply, createClient, TERMINAL_STATUSES, hasDecisionRequest, updateInbox, presentMail, ACK_BATCH_LIMIT, SERVER_MAX_ATTEMPTS, CAPABILITY_BACKOFF_MS, INTERRUPTED_PROMPT_MS, INTERRUPTED_PROMPT_BODY, INBOX_LOCK_RETRIES, INBOX_LOCK_DELAY_MS, INBOX_LOCK_STALE_MS, COMMAND_LOCK_RETRIES, COMMAND_LOCK_DELAY_MS, LOCK_BUSY_EXIT, notifyPendingArrivals } from './fleet-mail.mjs';
 // --answer は headless 実行中（CLAUDE_HEADLESS=1 / ORGIAST_HEADLESS_JOB）に判断代行を拒否して 2 を返す。
 // このテストを headless セッション（夜間 auto-session / CI 外の手動実行）から回すと answer 系だけが
@@ -36,6 +36,63 @@ function fixture(t) {
   return { home, dir, inbox, body, deps, calls, output, errors, spawns, save, read };
 }
 const sendArgs = (f, to = sender, extra = []) => ['--send', '--to', to, '--kind', 'note', '--body-file', f.body, '--why', 'test', ...extra];
+
+// ---- isHubSender tests ----
+test('isHubSender は FLEET_HUB と完全一致するラベルを許容', () => {
+  const config = { FLEET_HUB: 'kim-PC' };
+  assert.equal(isHubSender('kim-PC', config, {}), true);
+});
+
+test('isHubSender は FLEET_HUB=kim-PC で 000KimPC を許容（pcMap の hostname）', () => {
+  const config = { FLEET_HUB: 'kim-PC' };
+  const pcMap = { 'kim-PC': { hostname: '000KIMPC', aliases: ['DESKTOP-2D0R4LI'] } };
+  assert.equal(isHubSender('000KimPC', config, pcMap), true);
+});
+
+test('isHubSender は FLEET_HUB=kim-PC で 000KIMPC（大文字）を許容', () => {
+  const config = { FLEET_HUB: 'kim-PC' };
+  const pcMap = { 'kim-PC': { hostname: '000KIMPC', aliases: ['DESKTOP-2D0R4LI'] } };
+  assert.equal(isHubSender('000KIMPC', config, pcMap), true);
+});
+
+test('isHubSender は FLEET_HUB=kim-PC で DESKTOP-2D0R4LI（aliases）を許容', () => {
+  const config = { FLEET_HUB: 'kim-PC' };
+  const pcMap = { 'kim-PC': { hostname: '000KIMPC', aliases: ['DESKTOP-2D0R4LI'] } };
+  assert.equal(isHubSender('DESKTOP-2D0R4LI', config, pcMap), true);
+});
+
+test('isHubSender は FLEET_HUB=kim-PC で他PC（other-PC）を拒否', () => {
+  const config = { FLEET_HUB: 'kim-PC' };
+  const pcMap = { 'kim-PC': { hostname: '000KIMPC', aliases: ['DESKTOP-2D0R4LI'] } };
+  assert.equal(isHubSender('other-PC', config, pcMap), false);
+});
+
+test('isHubSender は FLEET_HUB 未設定で false', () => {
+  assert.equal(isHubSender('kim-PC', {}, {}), false);
+  assert.equal(isHubSender('kim-PC', { FLEET_HUB: '' }, {}), false);
+});
+
+test('isHubSender は FLEET_HUB が kim-PC 以外なら完全一致のみ許容', () => {
+  const config = { FLEET_HUB: 'nishi-PC' };
+  const pcMap = { 'nishi-PC': { hostname: 'OTHERHOST' } };
+  assert.equal(isHubSender('nishi-PC', config, pcMap), true);
+  assert.equal(isHubSender('OTHERHOST', config, pcMap), false);
+});
+
+test('isHubSender は空 pcMap でも FLEET_HUB 完全一致は許容', () => {
+  const config = { FLEET_HUB: 'kim-PC' };
+  assert.equal(isHubSender('kim-PC', config, {}), true);
+  assert.equal(isHubSender('000KimPC', config, {}), false);
+});
+
+test('isHubSender は実際の fleet-pc-map.json で 000KimPC を許容', () => {
+  const config = { FLEET_HUB: 'kim-PC' };
+  const realPcMap = JSON.parse(fs.readFileSync(new URL('../fleet-pc-map.json', import.meta.url), 'utf8'));
+  assert.equal(isHubSender('000KimPC', config, realPcMap), true);
+  assert.equal(isHubSender('000KIMPC', config, realPcMap), true);
+  assert.equal(isHubSender('DESKTOP-2D0R4LI', config, realPcMap), true);
+  assert.equal(isHubSender('other-PC', config, realPcMap), false);
+});
 
 test('writeJson writes JSON and removes its temporary file', t => {
   const f = fixture(t), dir = path.join(f.home, 'json'), file = path.join(dir, 'state.json');

@@ -7,15 +7,15 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'pretooluse-bash-delegation.mjs');
-test('2000文字境界と標準出力のみの調査を区別する', (t) => {
+test('900文字境界と標準出力のみの調査を区別する', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bash-deleg-boundary-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   for (const writer of ['> out', '>> out', '| tee out', 'Set-Content out', 'Out-File out', 'fs.writeFileSync()']) {
     const prefix = `node -e "${writer};`;
-    for (const size of [1999, 2000]) {
+    for (const size of [899, 900]) {
       const command = prefix + 'x'.repeat(size - prefix.length - 1) + '"';
       const output = run({ tool_name: 'Bash', tool_input: { command } }, home).stdout;
-      if (size === 1999) assert.equal(output, '');
+      if (size === 899) assert.equal(output, '');
       else assert.match(output, /permissionDecision/, writer);
     }
   }
@@ -26,7 +26,7 @@ test('2000文字境界と標準出力のみの調査を区別する', (t) => {
 function run(input, home) { return spawnSync(process.execPath, [script], { input: typeof input === 'string' ? input : JSON.stringify(input), encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } }); }
 test('long node eval denies', () => { const r = run({ tool_name: 'Bash', tool_input: { command: `node -e "fs.writeFileSync('out', 'data');${'x'.repeat(2100)}"` } }); assert.equal(r.status, 0); assert.match(r.stdout, /permissionDecision/); });
 test('plain, short and delegated commands do not warn', () => { for (const command of ['git log --oneline', 'node -e "1+1"', `node tools/llm-ask.mjs "${'x'.repeat(2100)}"`]) assert.equal(run({ tool_name: 'Bash', tool_input: { command } }).stdout, ''); });
-test('block denies over 2000 chars, override cannot disable deny', () => { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bash-deleg-')); fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude', 'cost-enforce.json'), '{"mode":"block"}'); const input = { tool_name: 'Bash', tool_input: { command: `node -e "fs.writeFileSync('out', 'data');${'x'.repeat(2100)}"` } }; assert.match(run(input, home).stdout, /permissionDecision.*deny/); fs.writeFileSync(path.join(home, '.claude', 'cost-enforce-override'), '1'); const output = run(input, home).stdout; assert.match(output, /permissionDecision.*deny/); assert.match(output, /permissionDecision/); });
+test('block denies over 900 chars, override cannot disable deny', () => { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bash-deleg-')); fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude', 'cost-enforce.json'), '{"mode":"block"}'); const input = { tool_name: 'Bash', tool_input: { command: `node -e "fs.writeFileSync('out', 'data');${'x'.repeat(2100)}"` } }; assert.match(run(input, home).stdout, /permissionDecision.*deny/); fs.writeFileSync(path.join(home, '.claude', 'cost-enforce-override'), '1'); const output = run(input, home).stdout; assert.match(output, /permissionDecision.*deny/); assert.match(output, /permissionDecision/); });
 test('mode=block で Codex クールダウン中でも Gemini があれば deny を維持する', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bash-deleg-cooldown-'));
   fs.mkdirSync(path.join(home, '.claude'));

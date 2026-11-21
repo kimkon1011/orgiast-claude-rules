@@ -25,6 +25,22 @@ export { codexSessionDirs, collectCodexUsage } from './usage-stats.mjs';
 export const EXECUTOR_PRICING = COST_PER_MILLION;
 
 // Legacy consumers also use ledger USD; old token-only rows are unmeasured.
+export function buildCronFlags(results) {
+  const flags = [];
+  for (const result of results || []) {
+    if (result.status === 'ok' || result.status === 'skip' || result.status === 'unknown') continue;
+    const isGitHubWorkflow = !result.key?.startsWith('local#') && !result.key?.endsWith('#delivery');
+    if (isGitHubWorkflow) {
+      if (result.status === 'never') flags.push(`🚨 cron停止: ${result.label} — schedule の成功履歴なし。gh run list --event=schedule で確認し permissions:{actions:read} を点検`);
+      else if (result.status === 'stale') flags.push(`🚨 cron停止: ${result.label} — schedule の最終成功 ${String(result.lastSuccess).slice(0, 10)}(${Math.floor(result.ageDays)}日前)。gh run list --event=schedule で確認し permissions:{actions:read} を点検`);
+      else flags.push(result.line || `🚨 ${result.label}: 状態 ${result.status}`);
+    } else {
+      flags.push(result.line || `🚨 ${result.label}: 状態 ${result.status}`);
+    }
+  }
+  return flags;
+}
+
 export function summarizeGeminiMonth(rows, { now = new Date(), usdJpy = 150 } = {}) {
   const status = summarizeGeminiBudget(rows, { now, usdJpy });
   const searches = rows.filter((r) => r?.provider === 'gemini' && Number.isFinite(Date.parse(r.t)) && new Date(r.t).getTime() <= new Date(now).getTime() && new Date(Date.parse(r.t) + 9 * 3600000).toISOString().slice(0, 7) === status.month).reduce((n, r) => n + (r.searches ?? (r.grounded ? 1 : 0)), 0);
@@ -124,10 +140,7 @@ const cronCheckedAt = Date.parse(cronLiveness?.t || '');
 if (!Number.isFinite(cronCheckedAt) || Date.now() - cronCheckedAt >= 2 * 864e5) {
   flags.push('⚠️ cron生存点検が未実行(node tools/cron-liveness-check.mjs)');
 } else {
-  for (const result of cronLiveness?.results || []) {
-    if (result.status === 'never') flags.push(`🚨 cron停止: ${result.label} — schedule の成功履歴なし。gh run list --event=schedule で確認し permissions:{actions:read} を点検`);
-    if (result.status === 'stale') flags.push(`🚨 cron停止: ${result.label} — schedule の最終成功 ${String(result.lastSuccess).slice(0, 10)}(${Math.floor(result.ageDays)}日前)。gh run list --event=schedule で確認し permissions:{actions:read} を点検`);
-  }
+  flags.push(...buildCronFlags(cronLiveness?.results || []));
 }
 const TARGET_DELEG = 0.50;
 const TARGET_LINES = 0.50;

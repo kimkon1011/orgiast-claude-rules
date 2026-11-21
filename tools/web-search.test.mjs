@@ -459,7 +459,7 @@ test('DeepSeek Search は count 8 で問い合わせ、スコア降順に整形�
   assert.ok(result.elapsedMs >= 0);
 });
 
-test('auto は gemini→groq→openrouter→deepseek→gsk、空 results もフォールバックする', async () => {
+test('auto は openrouter→deepseek→gsk→groq→gemini、空 results もフォールバックする', async () => {
   const calls = [];
   const result = await search('q', {
     env: {}, homeDir: isolatedHome,
@@ -467,7 +467,7 @@ test('auto は gemini→groq→openrouter→deepseek→gsk、空 results もフ�
     fetchImpl: async url => { calls.push(new URL(url).hostname); return url.includes('deepseek') ? response({ results: [] }) : response({}, 403); },
     spawnImpl: fakeSpawnWith({ stdout: gskSuccess }, 0, () => calls.push('gsk')),
   });
-  assert.deepEqual(calls, ['generativelanguage.googleapis.com', 'api.groq.com', 'openrouter.ai', 'api.deepseek.com', 'gsk']);
+  assert.deepEqual(calls, ['openrouter.ai', 'api.deepseek.com', 'gsk']);
   assert.equal(result.provider, 'gsk');
   assert.match(result.failures.at(-1), /results が空/);
 });

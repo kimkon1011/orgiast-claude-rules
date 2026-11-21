@@ -49,5 +49,5 @@ test('lanes-disabled.json は quick・probe の両経路で掛け直され、質
   assert.equal(health.lanes['gemini-cli'].reason, 'disabled');
   assert.equal(health.lanes.deepseek.alive, true);
   const source = fs.readFileSync(new URL('./lane-doctor.mjs', import.meta.url), 'utf8');
-  assert.equal(source.match(/applyDisabledLanes\(health, home\);\n\s*orders\(health, home\);/g)?.length, 2, 'quick と probe の両方で orders の直前に掛ける');
+  assert.equal(source.match(/applyDisabledLanes\(health, home(?:, now)?\);\n\s*orders\(health, home\);/g)?.length, 2, 'quick と probe の両方で orders の直前に掛ける');
 });

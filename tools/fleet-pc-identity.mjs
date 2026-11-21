@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+
 const clean = (value) => String(value ?? '').trim();
 const identityKey = (value) => clean(value).toLocaleLowerCase('ja');
 
@@ -16,6 +18,23 @@ export function buildPcIdentityIndex(pcMap = {}) {
     for (const name of identity.names) byName.set(identityKey(name), identity);
   }
   return { byName, find: (name) => byName.get(identityKey(name)) || null };
+}
+
+let repoIdentityIndex;
+
+export function sameFleetPc(left, right) {
+  const leftKey = identityKey(left);
+  const rightKey = identityKey(right);
+  if (!leftKey || !rightKey) return false;
+  if (leftKey === rightKey) return true;
+  if (!repoIdentityIndex) {
+    try {
+      const pcMap = JSON.parse(fs.readFileSync(new URL('../fleet-pc-map.json', import.meta.url), 'utf8'));
+      repoIdentityIndex = buildPcIdentityIndex(pcMap);
+    } catch { return false; }
+  }
+  const identity = repoIdentityIndex.find(leftKey);
+  return Boolean(identity && identity === repoIdentityIndex.find(rightKey));
 }
 
 function manualName(row) { return clean(row?.pcName); }

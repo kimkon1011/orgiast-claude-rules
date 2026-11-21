@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { GAKKAI_CALENDAR, isAcademicEvent, PREPARATION_PREFIX, sanitizeAttendees } from './lib/calendar-shared.mjs';
 import { ensureKimEditor } from './lib/kim-editor.mjs';
 import { INQUIRY_SHEET, INQUIRY_TAB, matchMeetingInquiries } from './lib/inquiry-sheet.mjs';
 import fs from 'node:fs';
@@ -45,7 +46,7 @@ export function excludeCalendar(c, config, state = {}) {
     /#holiday@/.test(c.id || '') || config.excludedCalendarPrefixes.some(p => c.id.startsWith(p));
 }
 export function isMeeting(e, date) {
-  if (e.extendedProperties?.private?.meetingPrepSourceId || e.extendedProperties?.private?.meetingPrepKey) return false;
+  if (e.summary?.startsWith(PREPARATION_PREFIX) || e.extendedProperties?.private?.meetingPrepSourceId || e.extendedProperties?.private?.meetingPrepKey) return false;
   if (!e.start?.dateTime || !e.end?.dateTime || e.status === 'cancelled') return false;
   const b = dayBounds(date), t = Date.parse(e.start.dateTime);
   if (t < Date.parse(b.timeMin) || t >= Date.parse(b.timeMax)) return false;
@@ -334,7 +335,9 @@ export async function upsertPreparation(g, calendarId, job, result = {}, now = n
   if (job.kind !== 'meeting') return;
   const id = `mp${hash(`${job.event.calendarId}/${job.event.id}`).slice(0, 48)}`;
   if (id === job.event.id) throw new Error('元の予定への書込禁止');
-  const url = `${CAL}/calendars/${enc(calendarId)}/events/${id}`;
+  const academic = isAcademicEvent(job.event.summary);
+  const eventsUrl = `${CAL}/calendars/${enc(academic ? GAKKAI_CALENDAR : calendarId)}/events`;
+  let url = `${eventsUrl}/${id}`;
   const status = result.status === 'ready' ? (result.skipped?.length ? `一部完了（skip ${result.skipped.length}件: ${result.skipped.map(s => s.reason).join('; ')}）` : '完了') : ['failed', 'needsReview'].includes(result.status) ? `失敗: ${result.summary || '要確認'}` : '準備中';
   const links = new Map([...(job.materialLinks || []), ...(result.links || [])].map(link => [link.label, link]));
   const folder = job.case?.projectFolderId || job.case?.folderId;
@@ -345,15 +348,31 @@ export async function upsertPreparation(g, calendarId, job, result = {}, now = n
     ...[...links.values()].filter(x => !['実施計画書', '確認シート', '提出フォーマット', '制作フォルダ', 'アジェンダ'].includes(x.label)).map(x => `${x.label}: ${workspaceUrl(x.url)}`),
     job.executedOn ? `実行PC: ${job.executedOn}` : '',
     `担当PC: ${job.route.pc?.remoteName || job.route.requested} (${job.route.pc?.label || '未解決'})`, job.route.note, `最終更新: ${now}`].filter(Boolean).join('\n');
-  const body = { summary: `📋 準備: ${job.event.summary || '(名称なし)'}`, description, start: job.event.start, end: job.event.end,
-    attendees: [], colorId: '8', reminders: { useDefault: false, overrides: [] },
+  const body = { summary: `${PREPARATION_PREFIX}${job.event.summary || '(名称なし)'}`, description, start: job.event.start, end: job.event.end,
+    attendees: sanitizeAttendees([]), colorId: '8', reminders: { useDefault: false, overrides: [] },
     visibility: 'private', transparency: 'transparent', extendedProperties: { private: { meetingPrepSourceId: job.event.id, sourceEventId: job.event.id, sourceCalendarId: job.event.calendarId, meetingPrepKey: job.key } } };
   let existing;
   try { existing = await g.request('calendar.events', url); } catch (e) { if (e.status !== 404) throw e; }
-  if (existing && (existing.extendedProperties?.private?.meetingPrepSourceId !== job.event.id || existing.extendedProperties?.private?.sourceCalendarId !== job.event.calendarId)) throw new Error('準備予定IDの衝突');
+  if (existing) {
+    const source = existing.extendedProperties?.private;
+    const sameSource = source?.meetingPrepSourceId === job.event.id && source?.sourceCalendarId === job.event.calendarId;
+    const sameAcademicMeeting = academic && source?.meetingPrepKey === job.key && existing.summary?.startsWith(PREPARATION_PREFIX);
+    if (!sameSource && !sameAcademicMeeting) throw new Error('準備予定IDの衝突');
+  }
+  if (!existing && academic) {
+    // The source can move calendars independently of its preparation event.
+    const params = new URLSearchParams({ privateExtendedProperty: `meetingPrepKey=${job.key}` });
+    const matches = await g.pages('calendar.events', `${eventsUrl}?${params}`);
+    if (matches.length > 1) throw new Error('学会の準備予定が重複');
+    [existing] = matches;
+    if (existing) {
+      if (!existing.id || existing.id === job.event.id || !existing.summary?.startsWith(PREPARATION_PREFIX)) throw new Error('準備予定IDの衝突');
+      url = `${eventsUrl}/${enc(existing.id)}`;
+    }
+  }
   if (existing) await g.request('calendar.events', url, 'PATCH', body);
   else {
-    try { await g.request('calendar.events', `${CAL}/calendars/${enc(calendarId)}/events`, 'POST', { id, ...body }); }
+    try { await g.request('calendar.events', eventsUrl, 'POST', { id, ...body }); }
     catch (e) { if (e.status !== 409) throw e; return upsertPreparation(g, calendarId, job, result, now); }
   }
   const actual = await g.request('calendar.events', url);

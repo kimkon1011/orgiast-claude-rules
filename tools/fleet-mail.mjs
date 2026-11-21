@@ -8,6 +8,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { redactForShare } from './lib/share-secrets.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { machineIdentity } from './machine-identity.mjs';
 import { addDecision, listDecisions } from './pending-decisions.mjs';
@@ -24,6 +25,13 @@ import { isKimOperated } from './lib/kim-operated.mjs';
 import { reapStalePolls } from './lib/fleet-poll-reaper.mjs';
 export { resolveFleetLabel, dailyRuleCompliance };
 export { RECLAIM_STALE_MS } from './lib/reclaim-lock.mjs';
+
+export function sameFleetAddress(a, b) {
+  const left = a == null ? '' : String(a);
+  const right = b == null ? '' : String(b);
+  if (left === right) return true;
+  return /^\d+$/.test(left) && /^\d+$/.test(right) && Number(left) === Number(right);
+}
 
 export function isFleetHub(label, config) {
   return label === (config.FLEET_HUB || HUB_LABEL);
@@ -334,7 +342,7 @@ function normalizeInbox(mail) {
   // Once v2 fields exist, status alone controls completion, including seen records.
   const legacyRead = mail.readAt && !Object.hasOwn(mail, 'presentedAt') && !Object.hasOwn(mail, 'pendingServer') && !mail.seenAt && !mail.ackAt;
   const status = terminal(mail) ? mail.status : legacyRead ? 'done' : !mail.status || mail.status === 'new' ? 'delivered' : mail.status;
-  return { ...mail, status,
+  return { ...mail, to: mail?.to == null ? '' : String(mail.to), status,
     presentedAt: mail.presentedAt ?? null, presentedSession: mail.presentedSession ?? null };
 }
 export const INBOX_LOCK_RETRIES = 10;
@@ -810,7 +818,11 @@ export async function waitForReply(id, seconds, { request, now = Date.now, sleep
     try {
       const result = await request('mail-get', { id }, Math.min(60_000, deadline - now()));
       if (waitFor === 'seen' && (result.mail?.seenAt || ['seen', 'done'].includes(result.mail?.status))) return { exitCode: 0, text: `既読（id=${id}）` };
-      if (['failed', 'expired'].includes(result.mail?.status)) return { exitCode: 1, text: `${result.mail.status}（id=${id}）` };
+      if (['failed', 'expired'].includes(result.mail?.status)) {
+        const { status, failReason } = result.mail;
+        const detail = status === 'failed' && failReason ? `\n${redactSecrets(redactForShare(failReason))}` : '';
+        return { exitCode: 1, text: `${status}（id=${id}）${detail}` };
+      }
       if (result.mail?.status === 'done') return { exitCode: 0, text: redactSecrets(result.mail.resultBody || '[ack のみ・本文なし]') };
     } catch (error) { if (now() < deadline) throw error; }
     if (now() < deadline) await sleepImpl(Math.min(15_000, deadline - now()));
@@ -882,9 +894,16 @@ export function classifyExecutionResult(result, { exec } = {}) {
 }
 export async function sendExecutionFailure(args) {
   const { result, label } = args;
-  const diagnostic = redactSecrets(result.stderrTail || result.error || '').slice(-600);
-  return sendHubFailure({ ...args, result: { ...result,
-    outputTail: `${label} の自動回答が完了しなかった（${result.reason}）。${label} の対話セッションで回答する` + (diagnostic ? `\n${diagnostic}` : '') } });
+  const diagnostic = [result.stderrHead, result.stderrTail, result.error]
+    .map(value => stripClaudeWarnings(redactSecrets(redactForShare(value ?? ''))).split('\n')[0].trim())
+    .find(Boolean)?.slice(0, 600);
+  const reason = redactSecrets(redactForShare(result.reason));
+  // 実行エラーは送信側の --wait にも表示する。未承諾や中断は既存の状態コードを保つ。
+  const executionError = (result.exitCode != null && result.exitCode !== 0) || (result.error && !result.timedOut);
+  return sendHubFailure({ ...args, result: { ...result, reason,
+    failReason: diagnostic && executionError ? `${reason} — ${diagnostic}` : reason,
+    outputTail: `${label} の自動回答が完了しなかった（${reason}）。${label} の対話セッションで回答する` +
+      (diagnostic ? `\n診断: ${diagnostic}` : '') } });
 }
 // Rejection is a reply note plus a fail transition. mail-reply would mark the
 // original done, after which the server correctly refuses a done -> failed change.
@@ -895,7 +914,7 @@ export async function sendHubFailure({ home, mail, result, request, label, now =
     why: '[報告・返信不要] 実行拒否', auto: true, hop: nextHop(mail), priority: 'normal', reason: result.reason,
     expiresAt: new Date(now() + 72 * 3600000).toISOString()
   }));
-  await syncMailState({ home, id: mail.id, action: 'fail', reason: result.reason, from: label, request, now, stderr });
+  await syncMailState({ home, id: mail.id, action: 'fail', reason: result.failReason ?? result.reason, from: label, request, now, stderr });
 }
 // 受信1回分。--poll のみが呼ぶ。提示 hook はこの処理を別プロセスで起動する。
 // 受信タスク(OrgiastFleetMail)が死んでいても対話セッションが受信を代替するための exports（2026-10-10 事故）。
@@ -1097,8 +1116,9 @@ export async function pollOnce(deps = {}) {
       if (now() - saveStartedAt >= saveBudgetMs) { undurable++; break; }
       if (raw?.id && ((batch.successfulIds?.includes(raw.id) && fs.existsSync(fileOf(raw.id))) || batch.quarantinedIds?.includes(raw.id))) continue;
       try {
-        const exact = raw && (raw.to === 'all' || raw.to === label || (typeof raw.to === 'string' && raw.to.toLowerCase() === identity.hostname?.toLowerCase()));
-        const legacyTo = !exact && typeof raw?.to === 'string' && !!raw.to && (label.includes(raw.to) || identity.hostname?.toLowerCase().includes(raw.to.toLowerCase()));
+        const to = raw?.to == null ? '' : String(raw.to);
+        const exact = raw && (to === 'all' || sameFleetAddress(to, label) || to.toLowerCase() === identity.hostname?.toLowerCase());
+        const legacyTo = !exact && !!to && (label.includes(to) || identity.hostname?.toLowerCase().includes(to.toLowerCase()));
         if (!/^mail-[A-Za-z0-9-]{1,180}$/.test(raw?.id || '') || (!exact && !legacyTo) || !['note', 'prompt'].includes(raw.kind)
           || typeof raw.body !== 'string' || !raw.from || !Number.isFinite(Date.parse(raw.expiresAt))) throw Object.assign(new Error('invalid incoming mail'), { code: 'INVALID_INCOMING_MAIL' });
         let created = false;
@@ -1266,8 +1286,8 @@ export async function pollOnce(deps = {}) {
           }
         }
         result = classifyExecutionResult({ ...result, stderrTail: result.stderrTail ?? (result.exitCode == null ? result.outputTail : '') }, { exec: exec.exec });
-        if (result.stderrTail) result.stderrTail = redactSecrets(result.stderrTail);
-        if (result.error) result.error = redactSecrets(result.error);
+        if (result.stderrTail) result.stderrTail = redactSecrets(redactForShare(result.stderrTail));
+        if (result.error) result.error = redactSecrets(redactForShare(result.error));
         if (result.stdoutTail !== undefined) result.stdoutTail = redactSecrets(result.stdoutTail);
         writeJson(resultFile, result);
         // A failed reply retains its result and retries transport without executing again.
@@ -1455,7 +1475,7 @@ async function runMain(argv, deps) {
     const id = options['--answer'];
     commandInbox(id, current => current, { home });
     const original = checked(await request('mail-get', { id })).mail;
-    if (original?.to !== label) { err('fleet-mail: 回答対象の宛先が自ラベルと一致しません'); return 2; }
+    if (!sameFleetAddress(original?.to, label)) { err('fleet-mail: 回答対象の宛先が自ラベルと一致しません'); return 2; }
     let meta = original?.meta;
     if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch { meta = null; } }
     const relay = meta?.relay;

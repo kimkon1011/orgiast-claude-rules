@@ -15,7 +15,7 @@ if ($ValidateOnly) {
 $node = (Get-Command node -ErrorAction Stop).Source
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, '--apply') -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At '04:10'
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 4)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -WakeToRun -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 4)
 Register-ScheduledTask -TaskName 'OrgiastStallSweeper' -Action $action -Trigger $trigger -Settings $settings -Description '停滞作業を最大5件再開。Claude不使用・自動マージなし。毎日04:10。' -Force | Out-Null
 $task = Get-ScheduledTask -TaskName 'OrgiastStallSweeper' -ErrorAction Stop
 if ($task.Actions.Arguments -notlike '*stall-sweeper.mjs*' -or $task.Triggers.StartBoundary -notmatch 'T04:10:00') { throw '登録後の読戻し検証に失敗しました' }

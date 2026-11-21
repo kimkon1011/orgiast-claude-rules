@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { sameFleetPc } from './fleet-pc-identity.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -46,10 +47,13 @@ if (name === 'mail-send-approval-gate' && entry?.rollout === 'deny' && entry.imm
     && entry.immediatePolicy === '2026-10-26 cr 指示: Stop hook の書き直しで英語へ逸脱した実害') return 'deny';
   if (name === 'org-instructions-char-gate' && entry?.rollout === 'deny'
     && entry.immediatePolicy === '2026-11-17 user 指示: 組織指示案の全体字数実測を Stop で必須化') return 'deny';
+  if (name === 'shared-worktree-git-guard' && entry?.rollout === 'deny'
+    && entry.immediatePolicy === '2026-11-21 user 指示: 共有作業ツリーで他セッションの変更を巻き込む Git 操作を拒否') return 'deny';
   if (entry?.legacy === true && entry.rollout === 'deny') return 'deny';
-  if (entry?.pilotDeny === true && (manifest?.pilotHosts || []).some(h => h.toLowerCase() === hostname.toLowerCase())) return 'deny';
+  const isPilot = Array.isArray(manifest?.pilotHosts) && manifest.pilotHosts.some(host => sameFleetPc(host, hostname));
+  if (entry?.pilotDeny === true && isPilot) return 'deny';
   if (entry?.rollout === 'warn') return 'warn';
-  if ((Array.isArray(manifest?.pilotHosts) ? manifest.pilotHosts : []).some(h => h.toLowerCase() === hostname.toLowerCase())) return entry?.rollout === 'deny' ? 'deny' : 'warn';
+  if (isPilot) return entry?.rollout === 'deny' ? 'deny' : 'warn';
   // First receipt is per PC, so an offline PC never skips its observation week.
   const file = path.join(home, '.claude', 'gate-rollout', `${name}.json`);
   let firstSeen;

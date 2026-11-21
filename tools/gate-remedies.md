@@ -189,6 +189,16 @@ node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> で大規模イン
 
 node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> で実装を依頼。
 
+## bash-cd-chain-guard
+
+ONBOARDING §1.20 に従い、絶対パス、`git -C <dir>`、`npm --prefix <dir>`、またはツールの `--cwd` を使う。
+
+## shared-worktree-git-guard
+
+- `git add <自分のパス>` → `git commit -F <msg> -- <自分のパス>` で自分の変更を確定する。
+- commit 後は `git show --stat --format="" HEAD` でファイル名を確認する。
+- stash の代わりに `git worktree add -b <branch> <別dir> origin/main` で専用ツリーを作る。
+
 ## pretooluse-headless-background
 
 run_in_background を外し前景実行、ScheduleWakeup を使わず timeout を指定する。
@@ -244,6 +254,8 @@ effortLevel を medium/high、model を既定監督モデルに戻す。
 Workspace の URL は authuser=開く人のメール を付け、本文の同じ行か直前に「<同じメール> で開いてください」と書く。自分宛は userEmail、他人宛は共有済みの相手メール。script.google.com/home/ 系は例外。他サービスはアカウント名を直前の行に書いて URL を単独行に置き、既定と違う場合はシークレットウィンドウも指定。名簿にないログイン画面（auth./login./accounts./manager. 等、/device・/oauth・/login 等）と、手順で「開いて」と渡す URL も対象。アカウントは開いた後の行ではなく、URL と同じ行か直前の行に書く。ランチャーで開くなら tools/open-url-as.ps1 -Account <メール> -Url <URL>。
 
 ## decision-research-gate
+
+費用案の前に無料・既存経路を実測し、無料案を比較の先頭に置く。同じ応答に `[FREE-ALT-CHECKED: 調べた無料経路と結果（20文字以上）]` が必要。kim の課金指示があるときだけ `[PAID-OK: 「指示の引用」]`。RESEARCH-OKでは無料確認を免除しない。
 
 他メンバーへの DM で再送を頼む案を推奨するだけの比較表は不可。
 人に作業・再送・確認を頼む案がある場合は、Claude 自身が実行する案（自動経路）を先頭に置き、試した経路と結果を書く。
@@ -319,6 +331,10 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 また、外部待ち（第三者待ち・本番反映待ち等）がある場合は、末尾に『このセッション: まだ閉じない（<何を待つか>・YYYY-MM-DD HH:MM まで待つ）』の待機期限フッターを必ず記載する（期限切れは kim-inbox に通知される）。待ちの進捗確認は node tools/auto-progress.mjs --start-when "<到着を判定するコマンド>" --next-claude "<届いたらやること>"（または --add-check --check "<完了判定>"）で登録する。session 内の run_in_background の見張りや CronCreate はセッション終了で消えるため使わない。
 
 コードブロック・引用行は対象外。既存 Stop runner から呼ぶため Stop hook 設定の追加登録は不要。`ORGIAST_THIRD_PARTY_NUDGE_GATE=0` で無効化できる。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
+
+## no-response-gate
+
+差し戻されたら、直近の入力を読み、依頼を進めるか質問に答える。同じゲートの Stop フィードバックに対する再試行では、再度の差し戻しを行わない。
 
 ## unregistered-promise-gate
 

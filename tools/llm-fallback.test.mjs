@@ -605,7 +605,7 @@ test('transcript で DeepSeek しかない場合も禁止を解除しない', as
 });
 
 test('parseQuotaResetTime: 本文から reset 時刻を解析', () => {
-  const now = Date.now();
+  const now = Date.parse("2026-11-19T00:00:00Z"); // 固定: Date.now() だと記載日時を過ぎると必ず失敗する
   // "Your limit will reset at 2026-11-19 19:53:29"
   const result = parseQuotaResetTime('Your limit will reset at 2026-11-19 19:53:29', now);
   assert.ok(result > now, '未来の時刻を返す');

@@ -26,9 +26,9 @@ test('contextHook: 同一セッションで既出件数行を繰り返さない'
   );
   assert.ok(first);
   assert.match(first.hookSpecificOutput.additionalContext, /🚨 割り込み/);
-  // 同一セッション2回目（fresh 0件）→ null
+  // 機械プロンプトは返事として記録せず、表示もしない
   const second = contextHook(
-    { hook_event_name: 'UserPromptSubmit', session_id: 'sess-B', prompt: 'second' },
+    { hook_event_name: 'UserPromptSubmit', session_id: 'sess-B', prompt: '[cron] progress' },
     { home: h, now: () => 2000, env }
   );
   assert.equal(second, null);
@@ -125,7 +125,7 @@ test('contextHook: 別セッションの blocker を割り込み表示し、同�
   assert.equal(contextHook({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-B', prompt: 'x' }, { home: h, now: () => Date.now(), env: { CLAUDE_HEADLESS: '1' } }), null);
 });
 
-test('contextHook: 一度表示した blocker は同じセッションへ再表��しない（INTERRUPT_REPEAT_MS 廃止）', t => {
+test('contextHook: 一度表示した blocker は同じセッションへ再表示しない（INTERRUPT_REPEAT_MS 廃止）', t => {
   const h = home(t);
   addItem(h, { session: 'sess-A', title: 't', ask: 'a' });
   const env = {};
@@ -172,7 +172,7 @@ test('markShown は対象 id の shownSessions だけを更新する', t => {
 test('context: known count across sessions and changed ask becomes fresh', t => {
   const h = home(t), env = {}, now = () => Date.now();
   addItem(h, { session: 'origin', title: 'blocked', ask: 'first ask' });
-  const input = { session_id: 'viewer', prompt: 'first' };
+  const input = { hook_event_name: 'SessionStart', session_id: 'viewer' };
   const first = contextHook(input, { home: h, now, env });
   assert.ok(first);
   const known = contextHook({ ...input, session_id: 'other' }, { home: h, now, env });
@@ -180,5 +180,78 @@ test('context: known count across sessions and changed ask becomes fresh', t => 
   assert.doesNotMatch(known.hookSpecificOutput.additionalContext, /first ask|応答の冒頭/);
   const file = path.join(h, '.claude', 'urgent-blocker.json');
   const state = JSON.parse(fs.readFileSync(file)); state.items[0].ask = 'changed ask'; fs.writeFileSync(file, JSON.stringify(state));
-  assert.match(contextHook({ ...input, prompt: 'second' }, { home: h, now, env }).hookSpecificOutput.additionalContext, /changed ask/);
+  assert.match(contextHook({ ...input, hook_event_name: 'UserPromptSubmit', prompt: 'second' }, { home: h, now, env }).hookSpecificOutput.additionalContext, /changed ask/);
+});
+
+test('contextHook: 割り込みを見たセッションの次の返事を記録して登録元へ配達する', t => {
+  const h = home(t);
+  const item = addItem(h, { session: 'origin', title: '配布先の確認', ask: 'どこに配る？' });
+  const submit = (session_id, prompt, now) =>
+    contextHook({ session_id, prompt }, { home: h, now, env: {} });
+
+  assert.match(submit('viewer', '進捗確認', 1000).hookSpecificOutput.additionalContext, /配布先の確認/);
+  const shown = listItems(h)[0];
+  assert.deepEqual(shown.lastShownPrompt, { session: 'viewer', at: new Date(1000).toISOString() });
+  assert.deepEqual(shown.shownSessions, { viewer: new Date(1000).toISOString() });
+
+  assert.match(submit('other', '別件', 2000).hookSpecificOutput.additionalContext, /既出 1 件/);
+  assert.equal(submit('other', '続けて', 3000), null);
+  const text = '008 と 014 に配って ' + 'あ'.repeat(600);
+  const captured = submit('viewer', '  ' + text.replace(' と ', '\nと\t'), 4000);
+  assert.match(captured.hookSpecificOutput.additionalContext, new RegExp(`配布先の確認.*--reopen ${item.id}`));
+
+  const [answered] = listItems(h, { status: 'answered' });
+  assert.deepEqual(answered.replies, [{ session: 'viewer', at: new Date(4000).toISOString(), text: text.slice(0, 600) }]);
+  assert.equal(answered.lastShownPrompt, undefined);
+  assert.equal(submit('viewer', '追加の別件', 5000), null);
+  assert.equal(submit('new', '新しいセッション', 25 * 3600_000), null);
+
+  const delivered = submit('origin', '作業に戻る', 25 * 3600_000 + 1000).hookSpecificOutput.additionalContext;
+  assert.ok(delivered.includes(`別セッションで kim が返事済み: 配布先の確認 ／ 返事: ${text.slice(0, 600)}（${answered.replies[0].at}）`));
+  assert.ok(delivered.includes(`--resolve ${item.id}`));
+  assert.equal(resolveById(h, item.id).status, 'resolved');
+  assert.equal(submit('origin', '完了', 25 * 3600_000 + 2000), null);
+});
+
+test('contextHook: 機械プロンプトを挟んだ後の発言は直前の返事として記録しない', t => {
+  const h = home(t);
+  addItem(h, { session: 'origin', title: '確認', ask: '選んで' });
+  const submit = (prompt, now) => contextHook({ session_id: 'viewer', prompt }, { home: h, now, env: {} });
+
+  assert.ok(submit('最初の発言', 1000));
+  assert.equal(submit('【定期】自動実行', 2000), null);
+  assert.equal(submit('別の依頼', 3000), null);
+  const [item] = listItems(h);
+  assert.equal(item.status, 'open');
+  assert.equal(item.lastShownPrompt, undefined);
+  assert.equal(item.replies, undefined);
+});
+
+test('CLI: 手動回答、回答済みの一覧、最新の返事の取り消し', async t => {
+  const h = home(t);
+  const { id } = addItem(h, { session: 'origin', title: '配布先', ask: '選んで' });
+  addItem(h, { session: 'origin', title: '別件', ask: '確認して' });
+  const out = [];
+  const run = (...args) => main(args, { home: h, stdout: s => out.push(s), stderr: () => {} });
+
+  assert.equal(await run('--answer', id), 1);
+  assert.equal(await run('--answer', id, '--text', '最初の\n返事'), 0);
+  assert.deepEqual(JSON.parse(out.pop()), { id, status: 'answered' });
+  assert.equal(await run('--answer', id, '--text', '訂正'), 0);
+  assert.equal(await run('--list', '--answered', '--json'), 0);
+  const answered = JSON.parse(out.pop());
+  assert.equal(answered.length, 1);
+  assert.equal(answered[0].id, id);
+  assert.deepEqual(answered[0].replies.map(r => [r.session, r.text]), [['manual', '最初の 返事'], ['manual', '訂正']]);
+
+  assert.equal(await run('--reopen', id), 0);
+  assert.deepEqual(JSON.parse(out.pop()), { id, status: 'open' });
+  const reopened = listItems(h, { status: 'open' }).find(i => i.id === id);
+  assert.deepEqual(reopened.replies, [answered[0].replies[0]]);
+  assert.equal(reopened.lastShownPrompt, undefined);
+  assert.equal(await run('--list', '--answered', '--json'), 0);
+  assert.deepEqual(JSON.parse(out.pop()), []);
+  assert.equal(await run('--reopen', id), 1);
+  assert.equal(await run('--resolve', id), 0);
+  assert.equal(await run('--answer', id, '--text', '遅い返事'), 1);
 });

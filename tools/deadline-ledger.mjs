@@ -16,6 +16,7 @@ export const KINDS = ['車検','訴訟・法務','行政・消防','補助金・
 export const STATUSES = ['候補','未着手','対応中','完了','不要','延期'];
 export const DEFAULT_CONFIG = {
   sheetId: '', mailboxes: ['kim@orgiast.jp','seisaku-team@orgiast.jp'], driveUsers: ['kim@orgiast.jp','seisaku-team@orgiast.jp'],
+  gmailDailyLimit: 400, driveDailyLimit: 150,
   lineSheets: ['1sCzmIvFmd2ZnDR2ZUMXmiIKjMJ21O9yMR6trY5e9JGo','1RRBNc_2Dvf5v0vdP2M7OHb6b9KhaNy9AoNo1MhZkUDI'],
   vehicleSheetId: '1mo8-hSCA-qDgblGBND-mjPEAF5fZ73etoz_mPeMZMLA', kimNames: ['kim','金','金功勇',''],
   calendar: { enabled: true, calendarId: 'kim@orgiast.jp' },
@@ -58,7 +59,7 @@ export async function withLedgerLock(home, fn) {
 export function googleClient({ getToken = getDriveToken, fetchImpl = gwsFetch } = {}) {
   const tokens = new Map();
   const tokenRoutes = new Map();
-  return async function request(url, { user = 'kim@orgiast.jp', scope = 'https://www.googleapis.com/auth/drive', method = 'GET', body, rawBody, contentType, text = false, buffer = false } = {}) {
+  return async function request(url, { user = 'kim@orgiast.jp', scope = 'https://www.googleapis.com/auth/drive', method = 'GET', body, rawBody, contentType, text = false, buffer = false, signal } = {}) {
     const requestedKey = `${user}|${scope}`;
     const key = tokenRoutes.get(requestedKey) || requestedKey;
     let token = tokens.get(key);
@@ -66,20 +67,23 @@ export function googleClient({ getToken = getDriveToken, fetchImpl = gwsFetch } 
       let tokenUser = user;
       let tokenScope = scope;
       let value;
-      try { value = await getToken({ impersonate: tokenUser, scope: tokenScope, signal: AbortSignal.timeout(30000) }); }
+      try { value = await getToken({ impersonate: tokenUser, scope: tokenScope, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) }); }
       catch (e) {
         if (e.message !== `鍵なし経路は ${GWS_USER} 固定です`) throw e;
         tokenUser = GWS_USER;
         if (tokenScope === 'https://www.googleapis.com/auth/spreadsheets') tokenScope = 'https://www.googleapis.com/auth/drive';
-        value = await getToken({ impersonate: tokenUser, scope: tokenScope, signal: AbortSignal.timeout(30000) });
+        value = await getToken({ impersonate: tokenUser, scope: tokenScope, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) });
       }
       token = { value, expires: Date.now() + 45 * 60000 };
       const tokenKey = `${tokenUser}|${tokenScope}`;
       tokens.set(tokenKey, token);
       tokenRoutes.set(requestedKey, tokenKey);
     }
-    const timeout = scope === 'https://www.googleapis.com/auth/drive' ? 90000 : 30000;
-    const response = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${token.value}`, 'Content-Type': rawBody ? contentType : 'application/json' }, body: rawBody || (body ? JSON.stringify(body) : undefined), signal: AbortSignal.timeout(timeout) });
+    const timeout = Number(process.env.DEADLINE_FETCH_TIMEOUT_MS) || 60_000;
+    const requestSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout);
+    let response;
+    try { response = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${token.value}`, 'Content-Type': rawBody ? contentType : 'application/json' }, body: rawBody || (body ? JSON.stringify(body) : undefined), signal: requestSignal }); }
+    catch (error) { throw new Error(`Google ${method} fetch failed: ${error.message}`, { cause: error }); }
     if (!response.ok) { const e = new Error(`Google ${method} HTTP ${response.status}`); e.status = response.status; throw e; }
     if (response.status === 204) return null;
     return buffer ? Buffer.from(await response.arrayBuffer()) : text ? response.text() : response.json();

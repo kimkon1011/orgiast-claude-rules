@@ -48,6 +48,9 @@ URI、起動時、タブ変更、5秒ごとの補充は同じ処理で直列化�
 
 URI は外部プロセスやブラウザからも開けるため、`claude` パラメータは実在する絶対パスかつファイル名が `claude` / `claude.exe` の場合だけ実行します。
 
+## 0.4.6
+VS Code の `claudeCode.environmentVariables` と拡張ホストの環境変数から `CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX` を読み取り、既定の「スマホ用セッション」「待機」と合わせて待機タブの自動タイトルを判定する。拡張の起動時と `claudeCode` の設定変更時に接頭辞の一覧を更新する。
+
 ## 0.4.5
 空の Remote Control 予備は 3 本まで。それを超える空の予備は、補充の前に古いものから `close-session.mjs --session <id> --no-launch` で閉じる。会話があるセッションと、オーナーの返事待ち（台帳 status が waiting_user）は閉じない。自動補充の目標も 3 本を超えない。
 
@@ -74,3 +77,7 @@ code --uninstall-extension orgiast.next-session
 
 ## 0.3.9
 git worktree フォルダで開かれた VS Code ウィンドウが待機タブのリースを取得・補充しないようにし、起動時・定期処理で未使用の待機タブだけを閉じて通常ウィンドウへ委譲します（会話中タブは保持）。また PC 再起動後の再接続（reopen-lost-sessions）では worktree パスで新規 VS Code ウィンドウが開かないよう制御します。
+
+### セッションの再オープン
+
+`vscode://orgiast.next-session/reopen?session=<ID>` は、保存済みセッション ID と一意なタイトルなどで対象の Claude Code タブを照合し、対象があれば閉じてから公式拡張のセッション URI を開きます。対象が見つからない場合は公式 URI のみを開きます。

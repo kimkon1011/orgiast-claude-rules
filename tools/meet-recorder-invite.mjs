@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { sanitizeAttendees } from './lib/calendar-shared.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
@@ -106,7 +107,7 @@ function isTargetEvent(event) {
   return !isInternalOnly(attendees);
 }
 
-function buildPatchBody(event) {
+function buildPatchBody(event, log) {
   const existing = (event.attendees || []).map(a => {
     const entry = { email: a.email };
     if (a.displayName) entry.displayName = a.displayName;
@@ -119,7 +120,10 @@ function buildPatchBody(event) {
     return entry;
   });
   existing.push({ email: RECORDER_EMAIL });
-  return { attendees: existing };
+  const attendees = sanitizeAttendees(existing, { log });
+  // Calendar replaces the whole array. Skip the patch to preserve existing invitations.
+  if (attendees.length !== existing.length || event.attendeesOmitted) return null;
+  return { attendees };
 }
 
 async function listAllEvents(token, days, fetchImpl = globalThis.fetch) {
@@ -220,7 +224,11 @@ export async function run(options = {}, deps = {}) {
       }
 
       try {
-        const body = buildPatchBody(event);
+        const body = buildPatchBody(event, log);
+        if (!body) {
+          result.details.push({ ...detail, skipped: 'attendees-cannot-be-safely-replaced' });
+          continue;
+        }
         await patchEvent(id, body, token, fetchImpl);
 
         // Read-back verification

@@ -8,6 +8,7 @@ import { notifyKim } from './notify-kim.mjs';
 // Existing ORGIAST_USDJPY / budget-fixed.json convention is JPY per USD.
 // usdPerJpy is retained as the requested config spelling and uses that same unit.
 const FIXED_BUDGET = new URL('./budget-fixed.json', import.meta.url);
+const DEFAULT_BUDGET = new URL('../config/gemini-budget.default.json', import.meta.url);
 export function geminiMonth(now = new Date()) { return new Date(new Date(now).getTime() + 9 * 3600000).toISOString().slice(0, 7); }
 export function calcSessionCost({ model, input, output, cached, thoughts = 0 }, pricing = {}, now = new Date()) {
   if (typeof model !== 'string' || !model) return null;
@@ -166,7 +167,9 @@ export async function runGeminiBudgetGuard({ home = geminiHome(), now = new Date
   try {
     sessionLogRows = collectSessionLogUsage({ home, fsImpl, now });
   } catch { /* session logs unavailable, proceed without */ }
-  const status = summarizeGeminiBudget(rows, { now, budgetJpy: Number(config.budgetJpy ?? 50000), usdJpy, ledgerAvailable, invalidRows, sessionLogRows, pricing });
+  const defaultConfig = readJson(DEFAULT_BUDGET, fsImpl, {});
+  const defaultBudgetJpy = Number(defaultConfig.budgetJpy ?? 50000);
+  const status = summarizeGeminiBudget(rows, { now, budgetJpy: Number(config.budgetJpy ?? defaultBudgetJpy), usdJpy, ledgerAvailable, invalidRows, sessionLogRows, pricing });
   if (dryRun) return status;
   writeJson(path.join(dir, 'gemini-budget-status.json'), status, fsImpl);
   // Stop at 90%, retaining the existing direct-API demotion as well.

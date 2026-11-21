@@ -72,6 +72,8 @@ can be stronger than its top edge, so a passing Sobel score alone is insufficien
 
 Regression check: `python tools/booth-3d/check-underlay-edge.test.py`.
 
+寸法下絵は `blender -b --python tools/booth-3d/render-dimension-underlay.py -- <output.png> <meta.json> --width 13.5 --depth 9 --height 3.6 --open front,right` のように生成する。寸法の既定は 6m × 6m × 3.6m、開放面の既定は `front,left,right`。出力した下絵を `booth-perse-gen.mjs --base <output.png>` に渡すと、同じフォルダの `<base>.json`（画像名に `.json` を付加）、画像と同名の `.json`、または `underlay-meta.json` から寸法・開放面を読み、明示した `--width`、`--depth`、`--open` を優先する。
+
 After three rejected image attempts, the deterministic GridBeyond renderer retains
 the 6m x 6m x 3.6m envelope and the underlay camera. Use a persistent output directory
 outside any disposable worktree, containing `underlay-meta.json` from

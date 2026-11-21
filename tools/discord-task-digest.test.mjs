@@ -6,7 +6,10 @@ import test from 'node:test';
 import {
   dedupeKey,
   isNearDuplicate,
+  isExpiredSameDay,
+  isStaleOverdue,
   mergeTasks,
+  pickTop,
   preprocessForTasks,
   priorityScore,
   runDiscordTaskDigest,
@@ -23,6 +26,90 @@ function snowflake(ms, increment = 0n) {
 }
 
 const NOW = new Date('2026-09-02T03:00:00.000Z');
+
+test('isStaleOverdue は JST で期限を7日超過した未完了タスクを判定する', () => {
+  const now = new Date('2026-09-01T15:00:00Z');
+  const task = { status: '未着手', deadline: '2026-08-25' };
+  assert.equal(isStaleOverdue(task, { now }), true);
+  assert.equal(isStaleOverdue({ ...task, deadline: '2026-08-26' }, { now }), false);
+  assert.equal(isStaleOverdue({ ...task, deadline: '' }, { now }), false);
+  assert.equal(isStaleOverdue({ ...task, deadline: '2026/08/25' }, { now }), false);
+  assert.equal(isStaleOverdue({ ...task, deadline: '2026-02-30' }, { now }), false);
+  assert.equal(isStaleOverdue({ ...task, status: '完了' }, { now }), false);
+});
+
+test('pickTop は入力順を保ち、通常枠と期限超過枠にそれぞれ上限を適用する', () => {
+  const stale = { id: 'T-0001', rank: 'P1', title: '発送手配', deadline: '2026-08-25' };
+  const first = { id: 'T-0002', rank: 'P2', title: '見積作成' };
+  const second = { id: 'T-0003', rank: 'P1', title: '確認連絡' };
+  const active = { status: '進行中' };
+  const tasks = [
+    { ...stale, ...active },
+    { ...first, ...active },
+    { ...stale, ...active, id: 'T-0004' },
+    { ...second, ...active },
+    { ...stale, ...active, id: 'T-0005' },
+    { ...second, ...active, id: 'T-0006' },
+  ];
+  assert.deepEqual(pickTop(tasks, { now: NOW, limit: 2 }), {
+    top: [first, second],
+    staleOverdue: [stale, { ...stale, id: 'T-0004' }],
+    expiredSameDay: [],
+  });
+});
+
+test('isExpiredSameDay は期限が起票日以前で JST の期限日を過ぎた未完了タスクを判定する', () => {
+  const now = new Date('2026-11-20T03:00:00Z');
+  const born = { status: '未着手', deadline: '2026-11-19', createdAt: '2026-11-20 06:33' };
+  assert.equal(isExpiredSameDay(born, { now }), true);
+  const sameDay = { status: '進行中', deadline: '2026-11-18', createdAt: '2026-11-18 6:32' };
+  assert.equal(isExpiredSameDay(sameDay, { now }), true);
+  assert.equal(isExpiredSameDay(sameDay, { now: new Date('2026-11-18T03:00:00Z') }), false);
+  assert.equal(isExpiredSameDay({ ...born, deadline: '2026-11-10', createdAt: '2026-11-05 10:00' }, { now }), false);
+  assert.equal(isExpiredSameDay({ ...born, createdAt: '' }, { now }), false);
+  assert.equal(isExpiredSameDay({ ...born, status: '完了' }, { now }), false);
+  assert.equal(isExpiredSameDay({ ...born, deadline: '2026-11-31' }, { now }), false);
+  assert.equal(isExpiredSameDay(sameDay, { now: new Date('2026-11-18T14:59:00Z') }), false);
+  assert.equal(isExpiredSameDay(sameDay, { now: new Date('2026-11-18T15:00:00Z') }), true);
+});
+
+test('pickTop は通常・期限超過・当日系期限切れの3枠に分け、入力順を保つ', () => {
+  const active = { status: '進行中' };
+  const stale = { id: 'S-001', rank: 'P1', title: '古い期限切れ', deadline: '2026-11-10' };
+  const born = { id: 'E-001', rank: 'P1', title: '当日系期限切れ', deadline: '2026-11-19' };
+  const regular = { id: 'R-001', rank: 'P2', title: '通常タスク' };
+  const tasks = [
+    { ...born, ...active, createdAt: '2026-11-20 06:33' },
+    { ...stale, ...active, createdAt: '2026-11-01 06:30' },
+    { ...regular, ...active, createdAt: '2026-11-19 06:30' },
+    { ...born, ...active, id: 'E-002', createdAt: '2026-11-20 06:33' },
+  ];
+  assert.deepEqual(pickTop(tasks, { now: new Date('2026-11-20T03:00:00Z'), limit: 3 }), {
+    top: [regular],
+    staleOverdue: [stale],
+    expiredSameDay: [born, { ...born, id: 'E-002' }],
+  });
+});
+
+test('pickTop は完了・クローズのタスクを top に入れず、アクティブなタスクだけを抽出する', () => {
+  const active = { status: '進行中' };
+  const done = { status: '完了' };
+  const closed = { status: 'クローズ' };
+  const tasks = [
+    { id: 'T-0001', rank: 'P1', title: '完了タスク', ...done },
+    { id: 'T-0002', rank: 'P2', title: 'アクティブ', ...active },
+    { id: 'T-0003', rank: 'P1', title: 'クローズタスク', ...closed },
+    { id: 'T-0004', rank: 'P3', title: 'アクティブその2', ...active },
+  ];
+  assert.deepEqual(pickTop(tasks, { now: NOW, limit: 5 }), {
+    top: [
+      { id: 'T-0002', rank: 'P2', title: 'アクティブ' },
+      { id: 'T-0004', rank: 'P3', title: 'アクティブその2' },
+    ],
+    staleOverdue: [],
+    expiredSameDay: [],
+  });
+});
 
 test('snowflakeToMs は既知の snowflake を時刻に変換する', () => {
   assert.equal(snowflakeToMs('175928847299117063'), 1462015105796);

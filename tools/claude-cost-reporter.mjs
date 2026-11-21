@@ -265,10 +265,10 @@ function shouldSkipByGuard() {
   } catch { /* no state yet */ }
   return false;
 }
-function saveGuardState(fields = {}) {
+function saveGuardState(fields = {}, { updateGuard = true } = {}) {
   let current = {};
   try { current = JSON.parse(fs.readFileSync(statePath(), 'utf-8')); } catch { /* no state yet */ }
-  try { fs.writeFileSync(statePath(), JSON.stringify({ ...current, lastRun: new Date().toISOString(), ...fields })); } catch { /* ignore */ }
+  try { fs.writeFileSync(statePath(), JSON.stringify({ ...current, ...(updateGuard ? { lastRun: new Date().toISOString() } : {}), ...fields })); } catch { /* ignore */ }
 }
 
 // 6時間ガード中の挙動を決める純関数。
@@ -303,14 +303,14 @@ async function runCostReporter() {
   }
   const willPost = decision === 'post';
   // 競合防止: 実際に投稿するときだけ即座に状態を書く(近接して複数回発火しても2回目以降はスキップされ重複投稿しない)
-  if (!DRY_RUN && willPost) saveGuardState();
-
   if (!webhook && !DRY_RUN) {
     const message = 'DISCORD_COST_WEBHOOK が未設定です。~/.claude/cost-reporter.env を作成してください。';
     if (CACHED || REFRESH_CACHE) throw new Error(message);
     console.error(message);
     return;
   }
+
+  if (!DRY_RUN && willPost) saveGuardState();
 
   const now = new Date();
   const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
@@ -331,12 +331,13 @@ async function runCostReporter() {
   const opusOut = sorted.filter(([m]) => /opus/i.test(m)).reduce((a, [, v]) => a + v.outTok, 0);
   const opusRatio = totalOut ? opusOut / totalOut : 0;
   const reportState = {
+    measuredAt: now.toISOString(),
     mtdUsd: total,
     topModels: sorted.map(([model, value]) => ({ model, outTok: value.outTok, usd: value.cost })),
     fable5Detected: fableUsed,
     opusRatio,
   };
-  if (!DRY_RUN && willPost) saveGuardState(reportState);
+  if (!DRY_RUN) saveGuardState(reportState, { updateGuard: willPost });
 
   let msg = `**💻 Claude Code ローカル利用トークン** — ${label}\n`;
   // 識別行はヘッダ直後に置く。本文は 1950 文字で切って送るため、末尾だとモデル一覧が長いPCで欠落する。

@@ -12,7 +12,7 @@ $bootstrap = Join-Path $env:USERPROFILE '.claude\tools\nightly-bootstrap.ps1'
 if (-not (Test-Path $bootstrap)) { throw "nightly bootstrap not found: $bootstrap" }
 $action = New-HiddenScheduledTaskAction -Execute $powershell -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $bootstrap, '-Target', 'tools\feedback-nag.mjs') -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At 9:00am
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 $taskName = 'OrgiastFeedbackNag'
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description 'Send unresolved feedback by Discord DM every day at 09:00' -Force -ErrorAction Stop | Out-Null
 $registered = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue

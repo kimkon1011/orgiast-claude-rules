@@ -11,7 +11,7 @@ if (-not $node) { throw 'node not found. Install Node.js first.' }
 
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script) -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At 09:15
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
 Register-ScheduledTask -TaskName 'OrgiastFurukawaFeePost' -Action $action -Trigger $trigger -Settings $settings -Description 'Daily 09:15 JST: Post Furukawa M iho s monthly freelance fee to the assistant task ledger' -Force | Out-Null
 Write-Host ("OK: task OrgiastFurukawaFeePost registered (daily 09:15)")
 Get-ScheduledTask -TaskName 'OrgiastFurukawaFeePost' | Select-Object TaskName, State

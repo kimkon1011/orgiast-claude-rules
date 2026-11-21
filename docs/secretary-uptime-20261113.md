@@ -17,15 +17,15 @@
 
 `secretary-uptime.mjs` が外部URL、3939、3940をHTTPで検査する。停止したTailscaleを再接続してFunnelを復元し、HTTP不応答のサーバーだけを再起動する。ポート所有者が想定外なら停止しない。外部未復旧、24時間で同じ障害が3回以上の場合はkim-inboxのaskに原因を保存する。連続した1障害を5分ごとに新規障害として数えない。通知保存に失敗した場合は次回再試行する。
 
-`register-secretary-uptime.ps1` は既存OrgiastFunnelProbeを5分周期＋起動時に置き換え、WebServer/LINE監視の競合する再起動を無効にする。アイドル条件なし、電池停止なし、隠し起動、同時実行禁止。S4Uでログアウト後も実行する。S4U登録に必要なWindows権限がない場合は失敗を明示し、変更した旧タスクの有効状態を戻す。ネットワークが壊れていても復旧が走るよう、実行直前のgit同期は行わない。
+`register-secretary-uptime.ps1` は既存OrgiastFunnelProbeを5分周期＋ユーザーのログオン時に置き換える。タスクは対話ログオン中に標準権限で実行する。アイドル条件なし、電池停止なし、隠し起動、同時実行禁止。ネットワーク障害でも復旧が走るよう、起動直前のgit同期を省く。
+
+旧タスクは無効化を試みる。11/15 は `ClaudeMobile-WebServer` の無効化がアクセス拒否になった。アクセス拒否時は、ブート・ログオンをトリガーとし `0.0.0.0:3939` で Next を起動する既知の定義だけ共存を許す。見張り側も同じアドレスを使うため、起動が重なってもポートを確保できるのは一方だけ。無効化エラーと取得できたタスクのセキュリティ記述子を `registration-evidence.json` に記録する。タスク登録前の処理で失敗した場合は、この処理で無効化したタスクを再有効化する。
 
 秘書コードはローカルGit管理のみでremoteがないため、`tools/secretary-progress`に適用する7ファイルとSHA256マニフェストを含める。実データのJSONL台帳とJSON inboxを読み、label・deadlineAt・lastCheckedAt・verdict・lastCheckOutputを表示する。完了/置換済みを進行中に復活させない。対象の「東邦2階HP 使用量把握」は11/13 13:30 JSTにdoneであり、「最近完了した見張り」に出す。未回答askは1112件、進行中は166件を実読取済み。検索とスクロール領域で表示する。APIは既存の認証を必須にし、読み込み失敗・401を空欄にしない。
 
 ## 適用と証跡
 
-今回のCodex実行はscratchpadと/tmpだけに書き込み可能。Downloadsと.claudeへのファイル反映・タスク導入は、この環境から実行していない。予定起動の成功も未確認。コードのテスト成功を本番反映成功と扱わない。
-
-書き込み範囲に `C:\Users\uers` が含まれ、S4U登録が可能なWindows実行で、マージ済みリポジトリから実行する。既存のproduction buildが揃っていれば、次の登録だけで予定起動・3経路のHTTP成功まで検証できる。buildがなければ旧タスクを変更する前に停止する。
+kim-PC の標準ユーザーで、同期済みの nightly-repo から実行する。既存のproduction buildが揃っていれば、次の登録だけで予定起動と3経路のHTTP結果まで検証できる。buildがなければ旧タスクを変更する前に停止する。
 
 ```powershell
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\Users\uers\.claude\nightly-repo\tools\register-secretary-uptime.ps1
@@ -39,7 +39,7 @@ powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\Users
 
 適用スクリプトは現在の7ファイルがレビュー時のハッシュまたは適用済みハッシュと一致する場合だけ更新し、変更前をバックアップする。稼働中ビルドに触れず別ディレクトリでテスト・buildを完了してから切り替える。旧起動ショートカットも共通監視のロックを使う。最初の予定起動を待ち、LastRunTimeとLastTaskResult=0を読み戻す。既存コードが並行変更されていたら上書きせず停止する。
 
-最終確認は外部 `/secretary` のHTTP200と、ゲートウェイ用Bearer認証を付けた外部 `/secretary/api/watches` のJSONで行う。`recentCompleted[].label` に「東邦2階HP 使用量把握」が含まれること、`warnings`が空、`inboxAsks`に未回答だけが含まれることを確認する。トークンはURL・ログ・PRに書かない。最後に予定起動の実績を報告する。
+最終確認は外部 `/secretary` のHTTP200と、ゲートウェイ用Bearer認証を付けた外部 `/secretary/api/watches` のHTTP200で行う。認証付き一覧の応答は毎回5秒未満を確認する。台帳が読み込み中なら短時間だけ再試行し、`warnings` が空で、進行中か直近7日間の完了一覧に対象ラベルがあることを確認する。最後に予定起動の実績を報告する。
 
 ## テスト
 
@@ -48,6 +48,6 @@ node --test tools/secretary-uptime.test.mjs tools/secretary-progress-deploy.test
 powershell.exe -NoProfile -NonInteractive -File tools/secretary-uptime-registration.test.ps1
 ```
 
-登録スクリプトの6ケースはタスク操作・状態ファイルをすべてmockに置き換えて実行する。成功、予定起動なし、結果1、状態ファイルが古い、外部HTTP異常、build欠落を検証し、実タスクには触れない。
+登録スクリプトはタスク操作と状態ファイルをモック化し、成功、予定起動なし、結果1、古い状態ファイル、外部HTTP異常、build欠落、既知の旧タスクとの共存、想定外のトリガー・コマンドの拒否を検証する。
 
 秘書側は `node --test tests/watches.test.mjs tests/trip.test.mjs`、`npm run build`、Playwright `tests/e2e/watches.spec.ts`。Playwrightのfixtureテストは画面ロジック検証用であり、本番の対象ラベル表示の証拠ではない。

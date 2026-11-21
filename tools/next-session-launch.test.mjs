@@ -314,6 +314,7 @@ function fakeIo(overrides = {}) {
     io: {
       env: { CLAUDE_CLI_PATH: claude },
       countClaudeProcesses: () => null,
+      concurrencyOptions: { platform: 'win32', list: () => [] },
       homedir: () => home,
       exists: (file) => file === claude || file === 'C:\\work',
       readdir: () => [],
@@ -1235,4 +1236,49 @@ test('countClaudeProcesses counts inaccessible CLI metadata and filters executab
   ];
   assert.equal(countClaudeProcesses(() => JSON.stringify(rows)), 2);
   assert.equal(countClaudeProcesses(command => { assert.equal(command, 'powershell.exe'); return '[]'; }), 0);
+});
+
+test('concurrency cap preserves the handoff for each new-process route, even with --force-launch', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'next-session-cap-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const claude = path.join(home, '.claude');
+  fs.mkdirSync(claude);
+  const handoff = path.join(claude, 'next-session.md');
+  fs.writeFileSync(handoff, '# Next');
+  for (const route of ['vscode', 'vscode-ext', 'terminal']) {
+    const logs = [];
+    await launchNextSession(['--target', route, '--force-launch'], {
+      env: {}, homedir: home, countClaudeProcesses: () => 0,
+      log: line => logs.push(line), spawn() { assert.fail('spawn at capacity'); },
+      concurrencyOptions: { platform: 'win32', list: () => Array.from({ length: 25 }, (_, index) => ({
+        Name: 'claude.exe', ProcessId: index + 100, CommandLine: 'claude.exe --resume=id',
+      })) },
+    });
+    assert.ok(logs.some(line => line.includes('session_concurrency_cap count=25 limit=20')), route);
+    assert.equal(fs.readFileSync(handoff, 'utf8'), '# Next');
+    assert.equal(fs.existsSync(path.join(claude, 'next-session-launch.json')), false);
+  }
+});
+
+test('headless runs in print mode without checking interactive session capacity', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'next-session-headless-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const claude = path.join(home, '.claude');
+  fs.mkdirSync(claude);
+  fs.writeFileSync(path.join(claude, 'next-session.md'), '# Next');
+  const { calls, spawnImpl } = headlessSpawnRecorder([0]);
+  let capacityChecks = 0;
+  await launchNextSession(['--target', 'headless'], {
+    env: { ORGIAST_AUTO_SESSION_EXECUTOR: 'claude' }, homedir: home,
+    countClaudeProcesses: () => 0, log() {}, spawn: spawnImpl,
+    checkSessionConcurrency() {
+      capacityChecks++;
+      return { ok: false, reason: 'session_concurrency_cap', count: 20, limit: 20 };
+    },
+  });
+  assert.equal(capacityChecks, 0);
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].args.includes('-p'));
+  const state = JSON.parse(fs.readFileSync(path.join(claude, 'next-session-launch.json'), 'utf8'));
+  assert.equal(state.lastHeadless.status, 'success');
 });

@@ -159,8 +159,32 @@ test('合成APIエラー行はassistant返答に数えず末尾user未応答に�
   assert.equal(session.lastRole, 'user'); assert.equal(session.signals.lastUserUnanswered, true);
 });
 
+test('末尾の巨大prompt_snapshotより前にあるassistant応答を拡張窓で拾う', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-triage-large-tail-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const project = path.join(root, 'projects', 'fixture');
+  await fs.mkdir(project, { recursive: true });
+  const id = 'f84f4059-586b-4161-a9ab-c026ad9adb80';
+  const transcript = [
+    { type: 'user', timestamp: '2026-11-01T00:00:00Z', message: { role: 'user', content: 'OK とだけ返してください' } },
+    { type: 'assistant', timestamp: '2026-11-01T00:01:00Z', message: { role: 'assistant', content: [{ type: 'text', text: 'OK' }] } },
+    { type: 'attachment', timestamp: '2026-11-01T00:02:00Z', attachment: { type: 'prompt_snapshot', systemPrompt: ['x'.repeat(80 * 1024)] } },
+    { type: 'last-prompt', lastPrompt: 'OK とだけ返してください' },
+  ];
+  await fs.writeFile(path.join(project, `${id}.jsonl`), `${transcript.map(JSON.stringify).join('\n')}\n`);
+  const { stdout } = await execFileAsync(process.execPath, [fileURLToPath(new URL('./session-triage.mjs', import.meta.url)), '--all', '--include-current', '--include-closed', '--include-completed', '--json'], {
+    env: { ...process.env, CLAUDE_PROJECTS_DIR: path.join(root, 'projects') },
+  });
+  const session = JSON.parse(stdout).sessions[0];
+  assert.equal(session.lastRole, 'assistant');
+  assert.equal(session.lastAssistantText, 'OK');
+});
+
 // 実CLIと変更していないworkerを動かし、外部LLMだけを固定応答に差し替える。
-async function triageFixture(t) {
+async function triageFixture(t, transcript = [
+  { type: 'user', message: { role: 'user', content: '資料を作成する' } },
+  { type: 'assistant', message: { role: 'assistant', content: '残TODOを確認する' } },
+]) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-triage-contract-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const script = path.join(root, 'session-triage.mjs');
@@ -177,13 +201,10 @@ async function triageFixture(t) {
   const project = path.join(root, 'projects', 'fixture');
   await fs.mkdir(project, { recursive: true });
   const id = 'f84f4059-586b-4161-a9ab-c026ad9adb7e';
-  const transcript = [
-    { type: 'user', cwd: root, message: { role: 'user', content: '資料を作成する' } },
-    { type: 'assistant', message: { role: 'assistant', content: '残TODOを確認する' } },
-  ];
+  const fixtureTranscript = transcript.map((event) => event.type === 'user' ? { cwd: root, ...event } : event);
   await fs.writeFile(
     path.join(project, `${id}.jsonl`),
-    `${transcript.map((event) => JSON.stringify(event)).join('\n')}\n`,
+    `${fixtureTranscript.map((event) => JSON.stringify(event)).join('\n')}\n`,
     'utf8',
   );
   const callsPath = path.join(root, 'calls.jsonl');
@@ -192,11 +213,11 @@ import { appendFile } from 'node:fs/promises';
 const args = process.argv.slice(2);
 const provider = args[args.indexOf('--provider') + 1];
 await appendFile(process.env.TRIAGE_TEST_CALLS, JSON.stringify(provider) + '\\n', 'utf8');
-if (provider === 'broken') console.log('応答形式が壊れています');
+if (provider === 'broken' || provider === process.env.TRIAGE_TEST_BROKEN) console.log('応答形式が壊れています');
 else if (provider === 'unknown') console.log('{"verdict":"不明","confidence":0,"next":""}');
 else console.log('{"verdict":"未完了","confidence":85,"next":"残作業を確認する"}');
 `, 'utf8');
-  return async (providers) => {
+  return async (providers, brokenProvider = '') => {
     await fs.writeFile(callsPath, '', 'utf8');
     const { stdout } = await execFileAsync(process.execPath, [
       script, '--all', '--include-current', '--include-closed',
@@ -209,6 +230,7 @@ else console.log('{"verdict":"未完了","confidence":85,"next":"残作業を確
         SESSION_TRIAGE_LLM_PROVIDERS: providers,
         SESSION_TRIAGE_DEBUG: '',
         TRIAGE_TEST_CALLS: callsPath,
+        TRIAGE_TEST_BROKEN: brokenProvider,
       },
     });
     const calls = (await fs.readFile(callsPath, 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);
@@ -225,6 +247,15 @@ test('解析失敗は次のproviderへ進み、成功した判定だけを成功
   assert.deepEqual(result.summary.llm.failureReasons, []);
   assert.deepEqual(result.sessions[0].llm, expected);
   assert.ok(result.summary.llm.providerNotes.includes('broken: LLM応答を解析できません'));
+});
+
+test('deepseek失敗時は指定順の次段openrouterを呼ぶ', async (t) => {
+  const run = await triageFixture(t);
+  const result = await run('deepseek,openrouter,mistral', 'deepseek');
+  assert.deepEqual(result.calls, ['deepseek', 'openrouter']);
+  assert.equal(result.summary.llm.success, 1);
+  assert.equal(result.summary.llm.failure, 0);
+  assert.deepEqual(result.sessions[0].llm, expected);
 });
 
 test('全providerの解析失敗はerror付きの失敗として計上する', async (t) => {
@@ -247,6 +278,50 @@ test('正当な不明はproviderフォールバックせず解析成功として
   assert.equal(result.summary.llm.success, 1);
   assert.equal(result.summary.llm.failure, 0);
   assert.deepEqual(result.sessions[0].llm, { verdict: '不明', confidence: 0, next: '' });
+});
+
+test('SDK起動でassistant返答が空ならLLMを呼ばず完了80にする', async (t) => {
+  const run = await triageFixture(t, [
+    { type: 'attachment', entrypoint: 'sdk-cli' },
+    { type: 'user', message: { role: 'user', content: '資料を作成する' } },
+  ]);
+  const result = await run('good');
+  assert.deepEqual(result.calls, []);
+  assert.equal(result.summary.llm.success, 1);
+  assert.deepEqual(result.sessions[0].llm, { verdict: '完了', confidence: 80, next: '' });
+});
+
+test('VSCode対話のpromptSourceがsdkでもassistant返答が空なら未完了70にする', async (t) => {
+  const run = await triageFixture(t, [
+    { type: 'attachment', entrypoint: 'claude-vscode' },
+    {
+      type: 'user',
+      promptSource: 'sdk',
+      message: { role: 'user', content: '資料を作成する' },
+    },
+  ]);
+  const result = await run('good');
+  assert.deepEqual(result.calls, []);
+  assert.equal(result.summary.llm.success, 1);
+  assert.deepEqual(result.sessions[0].llm, {
+    verdict: '未完了',
+    confidence: 70,
+    next: 'セッションを再開して依頼に着手する',
+  });
+});
+
+test('対話起動でassistant返答が空ならLLMを呼ばず未完了70にする', async (t) => {
+  const run = await triageFixture(t, [
+    { type: 'user', message: { role: 'user', content: '資料を作成する' } },
+  ]);
+  const result = await run('good');
+  assert.deepEqual(result.calls, []);
+  assert.equal(result.summary.llm.success, 1);
+  assert.deepEqual(result.sessions[0].llm, {
+    verdict: '未完了',
+    confidence: 70,
+    next: 'セッションを再開して依頼に着手する',
+  });
 });
 
 test('対話の無いセッションはLLM呼び出しを省略して完了扱いにする', async (t) => {

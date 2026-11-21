@@ -28,6 +28,7 @@ import { bodyHash, checkConsistency, statePath, mimeText, render as renderConsis
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
 import { validateWeekdays } from './lib/weekday-validator.mjs';
 import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
+import { acquireSendDedupe, SendDedupeError } from './lib/send-dedupe.mjs';
 
 export const GMAIL_COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
 export const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -297,7 +298,7 @@ async function fetchDraftBody({ user, id, fetchImpl, getToken }) {
 }
 
 /** Read the existing MIME headers before sending; include hidden Bcc recipients. */
-export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger(), fetchImpl = gwsFetch, getToken, draft: suppliedDraft }) {
+export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger(), fetchImpl = gwsFetch, getToken, draft: suppliedDraft, allowRepeat, home, acquireDedupe = acquireSendDedupe }) {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(id)) throw configError();
   const token = await (getToken ?? (args => mintDwdToken({ ...args, fetchImpl })))({ user, scope: GMAIL_COMPOSE_SCOPE });
   const request = async (url, options = {}) => {
@@ -318,11 +319,15 @@ export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger()
   const internal = recipients.filter(addr => isInternal(addr, ledger));
   const isForward = values('x-orgiast-forward').some(value => /^[A-Za-z0-9_-]+$/u.test(value));
   if (shouldBlockInternal(recipientFields, ledger) && !isForward) throw Object.assign(new Error('内部宛は Discord で連絡してください。'), { errorKind: 'internal_recipient', internal });
-  const sent = await request('https://gmail.googleapis.com/gmail/v1/users/me/drafts/send', {
-    method: 'POST', body: JSON.stringify({ id }),
-  });
-  if (!sent?.id || !sent?.threadId) throw new Error('送信結果の ID がありません');
-  return { sentMessageId: sent.id, threadId: sent.threadId, to: values('to').join(', '), subject: values('subject').join(' ') };
+  const guard = await acquireDedupe({ recipients: values('to'), body: mimeText(draft?.message?.payload).text, allowRepeat, home });
+  try {
+    const sent = await request('https://gmail.googleapis.com/gmail/v1/users/me/drafts/send', {
+      method: 'POST', body: JSON.stringify({ id }),
+    });
+    if (!sent?.id || !sent?.threadId) throw new Error('送信結果の ID がありません');
+    guard.recordSuccess({ channel: 'gmail', transport: 'gmail-draft', messageId: sent.id, threadId: sent.threadId, draftId: id });
+    return { sentMessageId: sent.id, threadId: sent.threadId, to: values('to').join(', '), subject: values('subject').join(' ') };
+  } catch (error) { guard.release(); throw error; }
 }
 
 function parseArgs(argv) {
@@ -330,7 +335,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const name = argv[i];
     if (['--check', '--json', '--dry-run'].includes(name)) { args[name.slice(2)] = true; continue; }
-    if (!['--to', '--cc', '--subject', '--body', '--body-file', '--user', '--delete', '--send', '--forward', '--thread-id', '--in-reply-to', '--attach', '--ack-consistency'].includes(name) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw configError();
+    if (!['--to', '--cc', '--subject', '--body', '--body-file', '--user', '--delete', '--send', '--forward', '--thread-id', '--in-reply-to', '--attach', '--ack-consistency', '--allow-repeat'].includes(name) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw configError();
     const field = name.slice(2);
     const value = argv[++i];
     if (field === 'to' || field === 'cc' || field === 'attach') (args[field] ??= []).push(value);
@@ -435,7 +440,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         return latestOf((thread.messages || []).filter(m => !(m.labelIds || []).includes('DRAFT')).map(m => ({ id: m.id, at: new Date(Number(m.internalDate)).toISOString() })));
         }});
       }
-      const result = await sendDraft({ user, id: args.send, ledger: (deps.loadLedger ?? loadLedger)(), fetchImpl, getToken, draft,
+      const result = await sendDraft({ user, id: args.send, ledger: (deps.loadLedger ?? loadLedger)(), fetchImpl, getToken, draft, allowRepeat: args['allow-repeat'], home: deps.home, acquireDedupe: deps.acquireDedupe,
       });
       if (!deps.skipContextCheck) recordOutbound({ channel: 'gmail', target: result.threadId, mailbox: user, text: draftText, messageId: result.sentMessageId }, deps.home);
       emit({ ok: true, ...(isForward ? { consistency } : {}), ...result }, `送信しました: ${result.sentMessageId} (${user})`);
@@ -499,6 +504,10 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     emit({ ok: true, ...result }, `下書きを作成しました: ${result.id} (${user})`);
     return 0;
   } catch (error) {
+    if (error instanceof SendDedupeError) {
+      emit({ ok: false, errorKind: 'send_duplicate', error: error.message }, error.message);
+      return 4;
+    }
     if (error?.errorKind === 'internal_recipient') {
       emit({ ok: false, errorKind: error.errorKind, internal: error.internal }, error.message);
       return 3;

@@ -11,7 +11,7 @@ if (-not $node) { throw 'node not found. Install Node.js first.' }
 
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script) -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At 09:07
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
 Register-ScheduledTask -TaskName 'OrgiastGakkaiPhoneDigest' -Action $action -Trigger $trigger -Settings $settings -Description 'Daily 09:07 JST: Digest of gakkai phone location signals from Discord, posted to the gakkai phone channel' -Force | Out-Null
 Write-Host ("OK: task OrgiastGakkaiPhoneDigest registered (daily 09:07)")
 Get-ScheduledTask -TaskName 'OrgiastGakkaiPhoneDigest' | Select-Object TaskName, State

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Clock-time reminders (calls, meetings, same-day windows) are handled by tools/schedule-push.mjs, a sibling of this GB-63 date-level detect/watch flow.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

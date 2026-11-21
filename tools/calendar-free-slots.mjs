@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import { isEntry } from './is-entry.mjs';
 import { getDriveToken } from './lib/drive-auth.mjs';
+import { gwsFetch } from './lib/gws-proxy.mjs';
 
 const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly';
 const HOUR_MS = 3600000;
@@ -104,7 +105,7 @@ function mergeIntervals(ivs) {
 
 // === カレンダーAPI ===
 
-async function fetchCalendar(token, email, from, to) {
+async function fetchCalendar(token, email, from, to, gwsFetchImpl = gwsFetch) {
   const items = [];
   let pageToken;
   const params = new URLSearchParams({
@@ -116,7 +117,7 @@ async function fetchCalendar(token, email, from, to) {
   do {
     if (pageToken) params.set('pageToken', pageToken);
     const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`;
-    const res = await fetch(url, {
+    const res = await gwsFetchImpl(url, {
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(30000),
     });
@@ -128,13 +129,63 @@ async function fetchCalendar(token, email, from, to) {
   return items;
 }
 
+// === 公開APIフォールバック ===
+
+const SECRETARY_PUBLIC_DEFAULT = 'https://claude-pc.tailc5d751.ts.net/secretary/api/public/free';
+
+function isGwsRejection(err) {
+  const msg = err.message || '';
+  return /HTTP 40[13]/.test(msg) || msg.includes('GWS request rejected') || msg.includes('unsupported scope');
+}
+
+async function fetchPublicSecretary({ days, mode, durationMin, calendars, deps = {} }) {
+  const baseUrl = process.env.SECRETARY_PUBLIC_BASE_URL || SECRETARY_PUBLIC_DEFAULT;
+  const url = new URL(baseUrl);
+  url.searchParams.set('days', String(days));
+  if (mode) url.searchParams.set('mode', mode);
+  url.searchParams.set('durationMin', String(durationMin));
+  if (calendars?.length) url.searchParams.set('calendars', calendars.join(','));
+  const fetchImpl = deps.fetchImpl || globalThis.fetch;
+  const res = await fetchImpl(url.href, { signal: deps.signal || AbortSignal.timeout(30000) });
+  if (!res.ok) throw new Error(`Secretary public API: HTTP ${res.status}`);
+  return res.json();
+}
+
+function publicDataToDaySlots(data, opts) {
+  const { fromMs, toMs, region, startMs, endMs, minMs, weekends } = opts;
+  const result = [];
+  for (const day of data.days || []) {
+    const d = jstMidnight(day.date);
+    if (d < fromMs || d >= toMs) continue;
+    const dow = new Date(d + JST).getDay();
+    if (!weekends && (dow === 0 || dow === 6)) continue;
+    const slots = (day.slots || []).filter(s => {
+      const ss = d + toMS(s.start);
+      const se = d + toMS(s.end);
+      return se > ss && (se - ss) >= minMs && ss >= (d + startMs) && se <= (d + endMs);
+    }).map(s => [d + toMS(s.start), d + toMS(s.end)]);
+    if (!slots.length) continue;
+    result.push({ date: day.date, weekday: jpDay(dow), region: region || '大阪', free: slots, _dayStart: d });
+  }
+  return result;
+}
+
 // === メイン ===
 
 export async function runCalendarFreeSlots(options, deps = {}) {
-  const { from, to, mode, region, start, end, min, calendars, json, fixture, weekends } = options;
+  const { from, to, mode, region, start, end, min, calendars, json, fixture, weekends, source = 'auto' } = options;
   const warn = deps.warn || console.error;
   const fromMs = jstMidnight(from);
   const toMs = jstMidnight(to) + DAY_MS;
+  const startMs = toMS(start);
+  const endMs = toMS(end);
+  const minMs = min * 60000;
+
+  // 公開API直接モード
+  if (source === 'public') {
+    return await runPublicApiFallback({ fromMs, toMs, mode, region, startMs, endMs, minMs, weekends, calendars, json, deps, warnings: ['public API 使用'] });
+  }
+
   // API取得範囲を拡張: 前日・翌日の終日予定も取得
   const fetchFrom = ymdJST(fromMs - DAY_MS);
   const fetchTo = ymdJST(toMs);
@@ -147,15 +198,24 @@ export async function runCalendarFreeSlots(options, deps = {}) {
     if (Array.isArray(parsed)) rawItems = parsed;
     else { rawItems = parsed.events || []; Object.assign(sourceCounts, parsed.sourceCounts || {}); }
   } else {
-    for (const email of calendars) {
-      const token = deps.token || await getDriveToken({ impersonate: email, scope: CALENDAR_SCOPE, signal: deps.signal });
-      const events = await fetchCalendar(token, email, fetchFrom, fetchTo);
-      sourceCounts[email] = events.length;
-      for (const e of events) { e._source = email; }
-      rawItems.push(...events);
-    }
-    if (Object.keys(sourceCounts).length < calendars.length) {
-      throw new Error('カレンダー取得失敗: 片方しか取得できませんでした');
+    try {
+      for (const email of calendars) {
+        const token = deps.token || await getDriveToken({ impersonate: email, scope: CALENDAR_SCOPE, signal: deps.signal });
+        const gwsFetchImpl = deps.gwsFetchImpl || gwsFetch;
+        const events = await fetchCalendar(token, email, fetchFrom, fetchTo, gwsFetchImpl);
+        sourceCounts[email] = events.length;
+        for (const e of events) { e._source = email; }
+        rawItems.push(...events);
+      }
+      if (Object.keys(sourceCounts).length < calendars.length) {
+        throw new Error('カレンダー取得失敗: 片方しか取得できませんでした');
+      }
+    } catch (err) {
+      if (source === 'auto' && isGwsRejection(err)) {
+        warn('[fallback] secretary public API を使用（GWS proxy が Calendar を拒否）');
+        return await runPublicApiFallback({ fromMs, toMs, mode, region, startMs, endMs, minMs, weekends, calendars, json, deps, warnings: ['public API 使用（GWS proxy が Calendar を拒否）'] });
+      }
+      throw err;
     }
   }
 
@@ -193,9 +253,6 @@ export async function runCalendarFreeSlots(options, deps = {}) {
 
   // 日ごと計算
   const daySlots = [];
-  const startMs = toMS(start);
-  const endMs = toMS(end);
-  const minMs = min * 60000;
 
   for (let d = fromMs; d < toMs; d += DAY_MS) {
     const key = ymdJST(d);
@@ -237,7 +294,15 @@ export async function runCalendarFreeSlots(options, deps = {}) {
     daySlots.push({ date: key, weekday: jpDay(dow), region: curRegion, free, _dayStart: d });
   }
 
-  // 出力
+  return formatOutput(daySlots, sourceCounts, json, mode, region);
+}
+
+function toMS(s) {
+  const [h, m] = s.split(':').map(Number);
+  return (h * 60 + m) * 60000;
+}
+
+function formatOutput(daySlots, sourceCounts, json, mode, region, warnings = []) {
   if (json) {
     return {
       generatedAt: new Date().toISOString(),
@@ -246,7 +311,7 @@ export async function runCalendarFreeSlots(options, deps = {}) {
         date: d.date, weekday: d.weekday, region: d.region,
         slots: d.free.map(f => ({ start: fmtTimeJST(f[0], d._dayStart), end: fmtTimeJST(f[1], d._dayStart) })),
       })),
-      sources: sourceCounts, warnings: [],
+      sources: sourceCounts, warnings,
     };
   }
 
@@ -265,9 +330,12 @@ export async function runCalendarFreeSlots(options, deps = {}) {
   return lines.join('\n');
 }
 
-function toMS(s) {
-  const [h, m] = s.split(':').map(Number);
-  return (h * 60 + m) * 60000;
+async function runPublicApiFallback({ fromMs, toMs, mode, region, startMs, endMs, minMs, weekends, calendars, json, deps, warnings }) {
+  const nowJST = jstMidnight(ymdJST(Date.now()));
+  const daysNeeded = Math.max(1, Math.ceil((toMs - Math.max(fromMs, nowJST)) / DAY_MS));
+  const publicData = await fetchPublicSecretary({ days: daysNeeded, durationMin: Math.round(minMs / 60000), mode, calendars, deps });
+  const daySlots = publicDataToDaySlots(publicData, { fromMs, toMs, region, startMs, endMs, minMs, weekends });
+  return formatOutput(daySlots, {}, json, mode, region, warnings);
 }
 
 export function parseArgs(argv) {
@@ -275,10 +343,12 @@ export function parseArgs(argv) {
   const now = new Date();
   const nowJST = jstMidnight(ymdJST(now.getTime()));
   const from = get('--from') || ymdJST(now.getTime());
-  let to = get('--to');
-  if (!to) {
-    const d = nowJST + 6 * DAY_MS;
-    to = ymdJST(d);
+  const daysOpt = get('--days');
+  let to;
+  if (daysOpt) {
+    to = ymdJST(nowJST + Number(daysOpt) * DAY_MS);
+  } else {
+    to = get('--to') || ymdJST(nowJST + 6 * DAY_MS);
   }
   return {
     from, to, mode: get('--mode') || 'online', region: get('--region') || '大阪',
@@ -286,6 +356,7 @@ export function parseArgs(argv) {
     slot: Number(get('--slot') || 30), min: Number(get('--min') || 30),
     calendars: (get('--calendars') || 'kim@orgiast.jp,seisaku-team@orgiast.jp').split(','),
     json: argv.includes('--json'), fixture: get('--fixture'), weekends: argv.includes('--weekends'),
+    source: get('--source') || 'auto',
   };
 }
 

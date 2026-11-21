@@ -20,6 +20,9 @@
 param([switch]$DryRun, [switch]$FunctionsOnly)
 
 $ErrorActionPreference = 'Stop'
+# claude agents --json は UTF-8。PowerShell 5.1 既定の cp932 で読むと日本語セッション名が化けて JSON 解析に失敗する（2026-11-13〜15 毎晩再起動中止）。
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 # SetThreadExecutionState flags. Decimal literals keep these UInt32 values valid in Windows PowerShell 5.1.
 $script:ES_CONTINUOUS_SYSTEM_AWAYMODE_REQUIRED = [uint32]2147483713 # ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED

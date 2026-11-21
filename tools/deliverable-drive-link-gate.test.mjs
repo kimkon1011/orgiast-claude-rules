@@ -179,6 +179,7 @@ test('承認コンテキスト: 成果物語が無い承認質問は対象外', 
   assert.equal(judge({ text: 'この内容でよいですか？' }).decision, 'pass');
   assert.equal(judge({ text: 'どちらがよいですか？' }).decision, 'pass');
   assert.equal(judge({ text: '承認してください' }).decision, 'pass');
+  assert.equal(judge({ text: 'A案とB案、どちらがよいですか？' }).decision, 'pass');
 });
 
 test('承認コンテキスト: 提案書の確認依頼にURLなし→block', () => {
@@ -203,12 +204,12 @@ test('承認コンテキスト: 見積の確認依頼にURLなし→block', () =
   assert.equal(judge({ text: '見積もりを確認してください。' }).decision, 'block');
 });
 
-test('承認コンテキスト: A案B案の選択依頼にURLなし→block', () => {
-  assert.equal(judge({ text: 'A案とB案、どちらがよいですか？' }).decision, 'block');
+test('承認コンテキスト: A案・B案のパース選択依頼にURLなし→block', () => {
+  assert.equal(judge({ text: 'A案とB案のパース、どちらがよいですか？' }).decision, 'block');
 });
 
-test('承認コンテキスト: A案B案の選択依頼にURLあり→pass', () => {
-  assert.equal(judge({ text: 'A案 https://drive.google.com/file/d/a/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください\nB案 https://drive.google.com/file/d/b/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください\nどちらがよいですか？' }).decision, 'pass');
+test('承認コンテキスト: A案・B案のパース選択依頼にURLあり→pass', () => {
+  assert.equal(judge({ text: 'A案のパース https://drive.google.com/file/d/a/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください\nB案のパース https://drive.google.com/file/d/b/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください\nどちらがよいですか？' }).decision, 'pass');
 });
 
 test('承認コンテキスト: コードブロック内は対象外', () => {
@@ -243,7 +244,7 @@ test('GridBeyond: 草案Docだけでは梅竹松のパースと提案書PDFを�
 
 test('全承認語・行末の成果物語・全角案名を検出する', () => {
   for (const action of ['承認', 'よいですか', 'いいですか', '送ってよい', 'どれ', '選んで', '確認してください', 'OK', '判断']) {
-    for (const item of ['梅竹松', 'A案B案', '案12', '案Ｎ', 'Ａ案', 'パース', '提案書', '見積', 'スライド', 'メール本文', '草案', 'PDF', '画像', 'Doc']) {
+    for (const item of ['梅竹松パース', 'A案B案のパース', '案12の画像', '案ＮのPDF', 'Ａ案のデザイン', 'パース', '提案書', '見積', 'スライド', 'メール本文', '草案', 'PDF', '画像', 'Doc']) {
       assert.equal(judge({ text: `${action}\n${item}` }).decision, 'block', `${action}: ${item}`);
     }
   }
@@ -267,14 +268,14 @@ test('次の成果物のURLや例外理由は流用できない', () => {
 });
 
 test('異なる種類の成果物にも別URLが必要で、複合名は1件として扱う', () => {
-  for (const items of ['パース画像と提案書PDF', '提案書／見積', 'メール本文、スライド', '案10・案11']) {
+  for (const items of ['パース画像と提案書PDF', '提案書／見積', 'メール本文、スライド', '案10・案11のパース']) {
     assert.equal(judge({ text: `承認してください。${items} ${approvalUrl('a')} ${openAccount}` }).decision, 'block');
     assert.equal(judge({ text: `承認してください。${items} ${approvalUrl('a')} ${approvalUrl('b')} ${openAccount}` }).decision, 'pass');
   }
   for (const item of ['提案書PDF', 'メール本文の草案Doc', '梅パース画像']) {
     assert.equal(judge({ text: `承認してください。${item} ${approvalUrl('a')} ${openAccount}` }).decision, 'pass');
   }
-  assert.equal(judge({ text: `A案とB案を選んで ${approvalUrl('a')} ${approvalUrl('a')}&usp=sharing ${openAccount}` }).decision, 'block');
+  assert.equal(judge({ text: `A案とB案のパースを選んで ${approvalUrl('a')} ${approvalUrl('a')}&usp=sharing ${openAccount}` }).decision, 'block');
 });
 
 test('引用ブロック・コード・日本語引用を承認検査から除外する', () => {
@@ -302,7 +303,7 @@ test('URLのauthuserはメール、開くアカウント案内と一致、URL内
   assert.equal(judge({ text: `PDFを承認してください ${approvalUrl('a', 'kim%40orgiast.jp')}#preview ${openAccount}` }).decision, 'pass');
   assert.equal(judge({ text: `PDFを承認してください ${approvalUrl('a')} で開いてください` }).decision, 'block');
   assert.equal(judge({ text: `PDFを承認してください ${approvalUrl('a')} xkim@orgiast.jp で開いてください` }).decision, 'block');
-  assert.equal(judge({ text: `A案とB案を選んで https://drive.google.com/open?id=a&authuser=kim@orgiast.jp https://drive.google.com/open?id=b&authuser=kim@orgiast.jp ${openAccount}` }).decision, 'pass');
+  assert.equal(judge({ text: `A案とB案のパースを選んで https://drive.google.com/open?id=a&authuser=kim@orgiast.jp https://drive.google.com/open?id=b&authuser=kim@orgiast.jp ${openAccount}` }).decision, 'pass');
 });
 
 test('runner: 最終まとめなしの承認依頼も既存Stop登録からblockする', async t => {

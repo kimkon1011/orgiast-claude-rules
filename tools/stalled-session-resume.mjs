@@ -644,13 +644,14 @@ export async function run(config = options(), io = {}) {
           if (!ledger.autoResumeDisabledNotified[record.sessionId]) {
             if (autoResumeDisabledByConfig()) {
               console.log(`[stalled-session-resume] auto-resume disabled by config, skipping kim-inbox notification for session ${record.sessionId}`);
+              ledger.autoResumeDisabledNotified[record.sessionId] = new Date(now()).toISOString();
             } else {
               try {
                 const { addItem } = await import('./kim-inbox.mjs');
                 await (io.addItem ?? addItem)(home, { kind: 'info', source: 'stalled-session-auto-resume-disabled', sessionId: record.sessionId, dedupeKey: `stalled-session-auto-resume-disabled:${record.sessionId}`, text: `自動再開は行いません。続けるときはこのセッションを開いて指示してください: claude --resume ${record.sessionId}` });
+                ledger.autoResumeDisabledNotified[record.sessionId] = new Date(now()).toISOString();
               } catch { /* 通知失敗時は次回再試行する */ }
             }
-            ledger.autoResumeDisabledNotified[record.sessionId] = new Date(now()).toISOString();
           }
           await save(ledger);
           continue;

@@ -250,3 +250,27 @@ test('postToDiscordWebhook: HTTP 400のときエラーメッセージにステ�
     console.error = originalConsoleError;
   }
 });
+
+test('postToDiscordWebhook: 送信失敗しても process.exitCode を変更しない', async () => {
+  const originalExitCode = process.exitCode;
+  try {
+    const fetchImpl = async () => ({ ok: false, status: 400, text: async () => 'error body' });
+    const ok = await postToDiscordWebhook('https://hook.example.com', 'x'.repeat(2500), { fetchImpl });
+    assert.equal(ok, false);
+    assert.equal(process.exitCode, originalExitCode, 'process.exitCode が変更されていないこと');
+  } finally {
+    process.exitCode = originalExitCode;
+  }
+});
+
+test('postToDiscordWebhook: ネットワークエラーでも process.exitCode を変更しない', async () => {
+  const originalExitCode = process.exitCode;
+  try {
+    const fetchImpl = async () => { throw new Error('ECONNREFUSED'); };
+    const ok = await postToDiscordWebhook('https://hook.example.com', '短い本文', { fetchImpl });
+    assert.equal(ok, false);
+    assert.equal(process.exitCode, originalExitCode, 'process.exitCode が変更されていないこと');
+  } finally {
+    process.exitCode = originalExitCode;
+  }
+});

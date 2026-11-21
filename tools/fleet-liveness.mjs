@@ -371,7 +371,6 @@ export async function postToDiscordWebhook(webhook, content, { fetchImpl = globa
 
   if (errors.length) {
     console.error(`fleet-liveness: Discord送信に${errors.length}件失敗しました`);
-    process.exitCode = 1;
   }
   return errors.length === 0;
 }

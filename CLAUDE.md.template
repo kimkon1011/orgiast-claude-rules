@@ -102,7 +102,6 @@ Codex実装、Claude設計・指示・レビュー・検証、追加費用ゼロ
 Claude Code・Codex・安いLLMは**APIがあるものしか触れない**。
 ### 1.18.4 着手前のレーン生存確認と「体制不備を先に直す」原則
 - Fable 5.1（および Opus）の担当は設計・タスク分解・指示・レビュー・検証だけ。
-**🔴 Cursor Ultra は無人の定期ジョブ・調べ物／集計／整形／要約／下書きのたたき台・コード修正 PR の既定の担当。Claude Code に残すのは金さん向けの最終判断と社外文面の最終確認だけ。使用量は 000 の `~/.claude/reports/cursor-usage-pace.txt` を毎日測り、期末 90〜95% を目指して余力を残しすぎない（ONBOARDING §2.8.7）。**
 **🔴 他AI（Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM）は使うのが既定、Claudeだけは理由が必要。残高切れは入金（オートチャージON）、キー失効/403は再発行、429は別の他AIへ。「外す／やめる／縮小」を選択肢にせず、障害は別の他AIで吸収し復旧後に戻す。割り振りは先に具体名で書く（要約=Gemini、下書き=Kimi、実装=Codex、Claude=verify）。「必要なら使う」は禁止。**
 **🔴 故障レーンは全PC・無人でも同じセッションで最優先修復し、Claude は作業を肩代わりしない。codex-do 失敗時は lane-health.json の次の安いレーンへ渡し直し、全レーン停止なら止めて `~/.claude/lane-watch/status.md` の理由と kim の操作を報告する。人にしかできない操作は kim へ直接頼み実呼び出し成功まで確認。lane-repair-first-gate が未修復の通常作業を止める。node tools/lane-doctor.mjs --probe か lane-repair-log.mjs --lane <名> --tried "<試行>" --result fixed|unfixable（6時間有効）で記録し [LANE-REPAIR] を書く。reset 既知の429/usage_limitは quota_wait として別の安いレーンへ。Codex probe失敗はWSL終了コードでも切り分け、「生存 ✅」だけを信用しない。**
 ### 1.19 マキモノとハイブリッド企画書
@@ -128,6 +127,7 @@ Bashは1呼出1コマンド、専用ツール・allow済み経路を使う。
 用途別費用最適化、遅延可能処理は夜間へ、無人処理は試行上限・監視必須。
 **🔴 アプリ（デプロイ済み・Actions・cron・GAS・スクリプト）のLLM/検索は他AIが既定。Claude API（@anthropic-ai/sdk・api.anthropic.com・claude-*）の新規利用・Claudeへの自動フォールバックも禁止。旧 LLM-PROVIDER-REASON は新規利用の許可にならない（2026-11-05）。検索収集=Gemini Flash grounding、分類/抽出/要約=Groq/DeepSeek/Gemini Flash。他AIを3社以上同じ評価セットで比較（取得項目数・一致率・1件実費）し、1社だけでClaudeへ戻さない。障害は別の他AIへ、全滅なら停止・通知。「当面Claude」「入金不要」で済ませずキー登録・デプロイ・入金依頼・他AI実動確認まで行う。既存アプリも呼び先を確認しClaudeなら置換案を先に出す。有料一括20件超は1〜10件の実費実測→[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z]→承認→コードの予算超過自動停止。オートチャージは上限ではない。app-llm-cost-gate が検査（§2.8.0）。**
 **2.8.0 🔴 最優先: アプリが呼ぶ LLM/検索 API も他AIが既定・一括実行は実測と予算上限が先**
+**🔴 Cursor Ultra は無人の定期ジョブ・調べ物／集計／整形／要約／下書きのたたき台・コード修正 PR の既定の担当。Claude Code に残すのは金さん向けの最終判断と社外文面の最終確認だけ。使用量は 000 の ~/.claude 配下 reports にある cursor-usage-pace.txt を毎日測り、期末 90〜95% を目指して余力を残しすぎない（§2.8.7）。**
 ### 2.9 Drive・共通知識・社内アプリ・イベント（§2.9〜2.12）
 #### 制作・営業ナレッジ（全アカウント・全PC）
 ### 3.0 自動取込・巡回・自己更新（§3.0〜3.0.5）

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, CONTEXT_LIMIT, oneScreenSummary, autoCloseByGmail } from './kim-inbox.mjs';
+import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, CONTEXT_LIMIT, oneScreenSummary, autoCloseByGmail, normalizeInboxText } from './kim-inbox.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { loadAllowlist, discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { inboxDedupeKey, spoolItem, drainSpool } from './kim-inbox.mjs';
@@ -11,6 +11,14 @@ import { redactSecrets } from './webhook-health.mjs';
 import { formatInboxBrief } from './lib/kim-inbox-relay-state.mjs';
 // The hook intentionally skips sdk-cli sessions; these tests exercise interactive delivery.
 delete process.env.CLAUDE_CODE_ENTRYPOINT;
+test('content dedupe normalization folds changing metadata without merging distinct requests', () => {
+  assert.equal(normalizeInboxText('判断待ち11日'), normalizeInboxText('判断待ち34日'));
+  assert.equal(normalizeInboxText('kim に確認'), normalizeInboxText('キムさんに確認'));
+  assert.equal(normalizeInboxText('kim に確認'), normalizeInboxText('金さんに確認'));
+  assert.equal(normalizeInboxText('【要対応】Xの承認'), normalizeInboxText('【至急】Xの承認'));
+  assert.equal(normalizeInboxText('🔴 2026-11-22 対応3件'), normalizeInboxText('🚨 11/23 対応8件'));
+  assert.notEqual(normalizeInboxText('Aの承認'), normalizeInboxText('Bの承認'));
+});
 test('--show reads the complete original without changing delivery or inbox data', async t => {
   const home = seat(t), item = await addItem(home, { kind: 'ask', text: '資料の確認\n' + '詳細'.repeat(500) + '\n末尾' });
   const file = path.join(home, '.claude/kim-inbox', item.id + '.json');
@@ -811,7 +819,8 @@ test('answer closes open asks for the same ledger row or dedupe key', async t =>
   const sessionId = 'abcdef12-full-session';
   const text = (days, time = ts) => `【要対応・kim の判断待ち ${days}日】確認（元の約束: 作業 / セッション abcdef12 / 台帳 ts ${time}）`;
   const original = await addItem(home, { kind: 'ask', text: text(2), sessionId });
-  const sameRow = await addItem(home, { kind: 'ask', text: text(3) });
+  const sameRow = await addItem(home, { kind: 'ask', text: '旧台帳に残った別表記' });
+  fs.writeFileSync(path.join(home, '.claude/kim-inbox', sameRow.id + '.json'), JSON.stringify({ ...sameRow, text: text(3) }));
   const sameKey = await addItem(home, { kind: 'ask', text: '旧形式', dedupeKey: `auto-progress-escalate:${sessionId}${ts}` });
   const otherRow = await addItem(home, { kind: 'ask', text: text(2, '2026-11-17T00:00:00.000Z') });
 

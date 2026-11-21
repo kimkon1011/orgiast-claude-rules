@@ -71,6 +71,8 @@ test('相対 gitdir と逆参照を確認できる作業ツリーを keep-repair
   const relative = (from, to) => path.relative(from, to).split(path.sep).join('/');
   writeFileSync(path.join(adminDir, 'gitdir'), `${relative(adminDir, dotGit)}\n`);
   const originalBacklink = readFileSync(dotGit, 'utf8');
+  // Git for Windows creates a hidden file, which cannot be opened with 'w'.
+  rmSync(dotGit);
   writeFileSync(dotGit, `gitdir: ${relative(worktree, adminDir)}\r\n`);
 
   // Model Git's display when it resolves against the repository alias.

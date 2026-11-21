@@ -173,6 +173,15 @@ test('ジョブ付帯なしLLM行の直近http_429はレート上限で失敗扱
   // 実ジョブ付帯の http_429 は従来どおり失敗として拾う。
   assert.equal(detectFailedJob([{ taskName: 'a', t: ago(4), status: 'http_429', cwd: 'C:/x' }], now).length, 1);
 });
+test('プロバイダ単体 http_402(残高不足)は失敗扱いしない', () => {
+  assert.equal(detectFailedJob([{ provider: 'gemini', t: ago(4), status: 'http_402' }], now).length, 0);
+});
+test('プロバイダ単体 http_403(月額上限/権限)は失敗扱いしない', () => {
+  assert.equal(detectFailedJob([{ provider: 'grok', t: ago(4), status: 'http_403' }], now).length, 0);
+});
+test('taskName 付き http_403 は従来どおり拾う', () => {
+  assert.equal(detectFailedJob([{ taskName: 'classify', t: ago(4), status: 'http_403', cwd: 'C:/x' }], now).length, 1);
+});
 test('日々再生成されるTODOは初回観測を保持する', () => {
   const f = { file: '/next-actions.md', mtimeMs: now, text: '## 推奨アクション\n1. 作業を直す\n' };
   const observed = detectOpenTodo([f], now, {}, 0);

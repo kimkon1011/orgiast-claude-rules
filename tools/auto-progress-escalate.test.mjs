@@ -63,6 +63,21 @@ test('nextKim が空または なし の行は owner が kim でも escalate 対
   assert.equal(result.targets.length, 1);
   assert.ok(result.targets[0].text.includes('kim の承認が必要'));
 });
+test('nextKim が「なし（説明）」形式の行も escalate 対象外（先頭一致＋区切り文字）', async t => {
+  const opts = setup(t, [
+    { ...row(60), owner: 'kim-PC', nextKim: 'なし（kim-PC の電源を入れたままにしておけば自動で進む）' },
+    { ...row(61), owner: 'kim-PC', nextKim: 'なし (自動)' },
+    { ...row(62), owner: 'kim-PC', nextKim: '不要。自動で進む' },
+    { ...row(63), owner: 'kim-PC', nextKim: 'なしで良いか確認してください' },
+    { ...row(64), owner: 'kim-PC', nextKim: '不要品の処分を判断' },
+    { ...row(65), owner: 'kim-PC', nextKim: 'なし' },
+    { ...row(66), owner: 'kim-PC', nextKim: 'kim の承認が必要です' },
+  ]);
+  const result = await escalateKimDecisions({ ...opts, dryRun: true });
+  // 除外: なし（説明）, なし (自動), 不要。, なし => 4件
+  // 非除外: なしで..., 不要品..., kim の承認が必要 => 3件
+  assert.equal(result.targets.length, 3);
+});
 test('message preserves decision text and caps context lengths', () => {
   const text = escalationText(row(60, { nextKim: 'あ'.repeat(2001), promise: '約'.repeat(81) }), now);
   assert.match(text, /判断待ち 2日/);

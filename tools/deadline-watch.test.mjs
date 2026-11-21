@@ -23,22 +23,89 @@ test('段階、担当、対応中、延期、完了を正しく判定', () => {
   assert.throws(() => parseArgs(['--fixture','x']));
 });
 
-test('Calendarは日付・privateキーで更新、403を一度だけ記録し再試行しない', async () => {
+test('Calendar: 403直後の2回目はリクエストを出さない（バックオフ）、until過去で再試行、成功で復帰', async () => {
   const calls = [], state = {}; let saved = 0, logs = 0;
+  const persist = () => saved++;
+  const log = () => logs++;
   const calendarConfig = { ...config, calendar: { enabled: true, calendarId: 'kim@orgiast.jp' } };
   const request = async (url, options) => { calls.push([url, options]); return options.method ? {} : { items: [] }; };
-  await syncCalendar(base, { config: calendarConfig, state, request });
+  // 通常の追加
+  await syncCalendar(base, { config: calendarConfig, state, request, persist, log });
   const body = calls.at(-1)[1].body;
   assert.deepEqual(body.start, { date: '2026-11-06' }); assert.deepEqual(body.end, { date: '2026-11-07' });
   assert.equal(body.extendedProperties.private.deadlineId, base.id);
   assert.deepEqual(body.reminders.overrides.map(x => x.minutes), [10080,1440]);
   assert.match(calls[0][0], /privateExtendedProperty=deadlineId%3AD|privateExtendedProperty=deadlineId%3D/);
-  const blocked = { config: calendarConfig, state, persist: () => saved++, log: () => logs++, request: async () => { throw Object.assign(Error('scope'), { status: 403 }); } };
-  await syncCalendar(base, blocked); await syncCalendar(base, blocked);
-  assert.equal(saved, 1); assert.equal(logs, 1); assert.equal(state.calendarSync, false);
+  // 1回目: 403 → until が未来に設定される
+  saved = 0; logs = 0;
+  const failReq = async () => { throw Object.assign(Error('scope'), { status: 403 }); };
+  await syncCalendar(base, { config: calendarConfig, state, request: failReq, persist, log });
+  const c0 = saved; const l0 = logs;
+  assert.equal(state.calendar403.count, 1);
+  assert.ok(state.calendar403.until > Date.now());
+  // 2回目: until が未来なのでリクエストを出さない（公式1: スキップ、saved/logs 増えない）
+  await syncCalendar(base, { config: calendarConfig, state, request: failReq, persist, log });
+  assert.equal(saved, c0); assert.equal(logs, l0);
+  assert.equal(state.calendar403.count, 1); // count も増えない
+  // 3回目: until を過去に巻き戻して呼ぶ → 再試行する（公式2）
+  state.calendar403.until = 0;
+  const callCountBefore = calls.length;
+  await syncCalendar(base, { config: calendarConfig, state, request: failReq, persist, log });
+  assert.equal(state.calendar403.count, 2);
+  assert.equal(state.calendar403.until > Date.now(), true);
+  // 4回目: 再び until を過去に巻き戻し成功させる → calendar403 が消える（公式3: 自動復帰）
+  state.calendar403.until = 0;
+  state.calendar403.count = 2;
+  delete state.calendar403.notified;
+  await syncCalendar(base, { config: calendarConfig, state, request, persist, log });
+  assert.equal(state.calendar403, undefined, '成功時に calendar403 が削除される');
+  // 完了行の DELETE は従来通り
   const closedCalls = [];
   await syncCalendar({ ...base, status: '完了' }, { config: calendarConfig, state: {}, request: async (u,o) => { closedCalls.push(o); return { items: [{ id: 'old' }] }; } });
   assert.equal(closedCalls.at(-1).method, 'DELETE');
+});
+
+test('Calendar: 3回連続403でnotifyKimがちょうど1回、4回目は呼ばれない', async () => {
+  const state = {}; const notifyCalls = [];
+  const failReq = async () => { throw Object.assign(Error('scope'), { status: 403 }); };
+  const notifyKim = async home => { notifyCalls.push(home); };
+  const calendarConfig = { ...config, calendar: { enabled: true, calendarId: 'kim@orgiast.jp' } };
+  // 1回目（count 1）
+  await syncCalendar(base, { config: calendarConfig, state, request: failReq, persist: () => {}, log: () => {}, notifyKim });
+  assert.equal(notifyCalls.length, 0);
+  // 2回目（count 2）
+  state.calendar403.until = 0;
+  await syncCalendar(base, { config: calendarConfig, state, request: failReq, persist: () => {}, log: () => {}, notifyKim });
+  assert.equal(notifyCalls.length, 0);
+  // 3回目（count 3）→ notifyKim が初めて呼ばれる
+  state.calendar403.until = 0;
+  await syncCalendar(base, { config: calendarConfig, state, request: failReq, persist: () => {}, log: () => {}, notifyKim });
+  assert.equal(notifyCalls.length, 1);
+  assert.equal(state.calendar403.notified, true);
+  // 4回目（count 4、notified 済み）→ notifyKim は呼ばれない（公式4）
+  state.calendar403.until = 0;
+  await syncCalendar(base, { config: calendarConfig, state, request: failReq, persist: () => {}, log: () => {}, notifyKim });
+  assert.equal(notifyCalls.length, 1);
+});
+
+test('Calendar: 旧形式 state.calendarSync=false を後方互換で calendar403 に変換', async () => {
+  const state = { calendarSync: false }; let saved = 0;
+  const persist = () => saved++;
+  const calendarConfig = { ...config, calendar: { enabled: true, calendarId: 'kim@orgiast.jp' } };
+  await syncCalendar(base, { config: calendarConfig, state, request: async () => { throw Object.assign(Error('no call'), { status: 403 }); }, persist, log: () => {} });
+  assert.equal(state.calendarSync, undefined, '旧フラグが削除される');
+  assert.ok(state.calendar403, 'calendar403 が作成される');
+  assert.equal(state.calendar403.count, 3);
+  assert.ok(state.calendar403.until > Date.now());
+  assert.equal(state.calendar403.notified, false);
+  // 変換直後は until が未来なのでリクエストを出さない
+  const reqCalls = [];
+  await syncCalendar(base, { config: calendarConfig, state, request: async (u, o) => reqCalls.push(o), persist, log: () => {} });
+  assert.equal(reqCalls.length, 0, 'until 未来のためスキップ');
+  // until を過去に巻き戻すと再試行される（公式5）
+  state.calendar403.until = 0;
+  await syncCalendar(base, { config: calendarConfig, state, request: async () => { throw Object.assign(Error('scope'), { status: 403 }); }, persist, log: () => {} });
+  assert.equal(state.calendar403.count, 4);
 });
 
 test('同スレッドの検出後SENTのみ完了証拠とする', async () => {

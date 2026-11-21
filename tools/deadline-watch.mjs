@@ -79,8 +79,26 @@ export async function hasSentReply(row, request) {
   const thread = await request(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=metadata`, { user: meta.mailbox, scope: 'https://www.googleapis.com/auth/gmail.readonly' });
   return (thread.messages || []).some(m => m.labelIds?.includes('SENT') && Number(m.internalDate) > Date.parse(row.detectedAt));
 }
-export async function syncCalendar(row, { config, state, request, persist = () => {}, log = console.error }) {
-  if (!config.calendar.enabled || state.calendarSync === false) return;
+function backoffMs(count) {
+  const hours = count === 1 ? 1 : count === 2 ? 6 : 24;
+  return hours * 3_600_000;
+}
+function notifyCalendar403({ home, state, persist, notifyKim }) {
+  if (!notifyKim || state.calendar403.notified) return;
+  state.calendar403.notified = true;
+  persist();
+  notifyKim(home, state);
+}
+export async function syncCalendar(row, { config, state, request, persist = () => {}, log = console.error, home = '', notifyKim }) {
+  if (!config.calendar.enabled) return;
+  // 後方互換: 旧形式 state.calendarSync === false を calendar403 に変換
+  if (state.calendarSync === false) {
+    delete state.calendarSync;
+    state.calendar403 = { count: 3, until: Date.now() + 3_600_000, notified: false };
+    persist();
+  }
+  // 指数バックオフ: until が未来ならスキップ
+  if (state.calendar403?.until && state.calendar403.until > Date.now()) return;
   const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(config.calendar.calendarId)}/events`;
   const opts = { user: 'kim@orgiast.jp', scope: 'https://www.googleapis.com/auth/calendar.events' };
   try {
@@ -90,6 +108,8 @@ export async function syncCalendar(row, { config, state, request, persist = () =
     const events = existing.items || [];
     if (closed(row) || !due || row.status === '候補') {
       for (const e of events) await request(`${base}/${encodeURIComponent(e.id)}`, { ...opts, method: 'DELETE' });
+      // 成功したら calendar403 を削除して復帰
+      if (state.calendar403) { delete state.calendar403; persist(); }
       return;
     }
     const end = new Date(Date.parse(due) + 86400000).toISOString().slice(0, 10);
@@ -101,10 +121,28 @@ export async function syncCalendar(row, { config, state, request, persist = () =
       try { await request(base, { ...opts, method: 'POST', body: { ...body, id } }); }
       catch (e) { if (e.status !== 409) throw e; await request(`${base}/${id}`, { ...opts, method: 'PATCH', body }); }
     }
+    // 成功: calendar403 を削除して自動復帰
+    if (state.calendar403) { delete state.calendar403; persist(); }
   } catch (e) {
     if (e.status !== 403) throw e;
-    state.calendarSync = false; persist(); log('deadline-watch: Calendar HTTP 403、以降の同期を停止しました');
+    state.calendar403 ??= { count: 0, notified: false };
+    state.calendar403.count += 1;
+    state.calendar403.until = Date.now() + backoffMs(state.calendar403.count);
+    persist();
+    const untilJst = new Date(state.calendar403.until).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+    log(`deadline-watch: Calendar HTTP 403 (${state.calendar403.count}回目)、次回再試行: ${untilJst}`);
+    // 3回目以降で未通知なら kim-inbox へ 1 回だけ通知
+    if (state.calendar403.count >= 3) notifyCalendar403({ home, state, persist, notifyKim });
   }
+}
+async function notifyKimDefault(home) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-calendar-'));
+  try {
+    const body = 'Calendar 同期が 403 で 3 回連続失敗しました。\nDWD scope `https://www.googleapis.com/auth/calendar.events` が許可されているか確認してください。\n許可済みなら何もしなくてよい（自動で再試行し続けます）。';
+    const file = path.join(dir, 'body.txt'); fs.writeFileSync(file, body, { mode: 0o600 });
+    await exec(process.execPath, [inboxScript, '--add', '--kind', 'ask', '--body-file', file],
+      { windowsHide: true, timeout: 60000, env: { ...process.env, ORGIAST_HOME: home } });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 export async function manualOperation({ operation, id, until, note, ledger, home, today, config, notify = inboxAction, dryRun = false }) {
   if (operation === 'approve') {
@@ -165,7 +203,7 @@ export async function runWatch({ home, config, ledger, sheets, request, today, d
             else await ledger.patch(row.id, { lastNotified: today, notifyCount: Number(row.notifyCount || 0) + 1 });
           }
         }
-        await syncCalendar(row, { config, state, request, persist, log: stderr });
+        await syncCalendar(row, { config, state, request, persist, log: stderr, home, notifyKim: notifyKimDefault });
       }
     } catch (e) { errors.push({ id: row.id, error: e.message }); }
   }

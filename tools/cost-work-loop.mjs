@@ -113,20 +113,27 @@ const geminiMonth = summarizeGeminiMonth(ledgerRows, { usdJpy: Number.isFinite(p
 flags.push(...geminiMonth.flags);
 let geminiBudgetStatus = null;
 try { geminiBudgetStatus = JSON.parse(fs.readFileSync(path.join(HOME, '.claude', 'gemini-budget-status.json'), 'utf8')); } catch {}
-// 日次ループのたびにschedule実績を更新する。gh未導入・認証失敗・cron停止でも本体は継続する。
-spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), 'cron-liveness-check.mjs')], { windowsHide: true,
-  env: { ...process.env, ORGIAST_HOME: HOME }, stdio: 'ignore', timeout: 30000,
-});
 const cronLivenessFile = path.join(HOME, '.claude', 'cron-liveness.json');
 let cronLiveness = null;
 try { cronLiveness = JSON.parse(fs.readFileSync(cronLivenessFile, 'utf8')); } catch { }
+// 日次ループのたびにschedule実績を更新する。gh未導入・認証失敗・cron停止でも本体は継続する。
+// ファイル読み取り後に更新する（テストの fixture が spawn で上書きされる前に読むため）。
+spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), 'cron-liveness-check.mjs')], { windowsHide: true,
+  env: { ...process.env, ORGIAST_HOME: HOME }, stdio: 'ignore', timeout: 30000,
+});
 const cronCheckedAt = Date.parse(cronLiveness?.t || '');
 if (!Number.isFinite(cronCheckedAt) || Date.now() - cronCheckedAt >= 2 * 864e5) {
   flags.push('⚠️ cron生存点検が未実行(node tools/cron-liveness-check.mjs)');
 } else {
   for (const result of cronLiveness?.results || []) {
-    if (result.status === 'never') flags.push(`🚨 cron停止: ${result.label} — schedule の成功履歴なし。gh run list --event=schedule で確認し permissions:{actions:read} を点検`);
-    if (result.status === 'stale') flags.push(`🚨 cron停止: ${result.label} — schedule の最終成功 ${String(result.lastSuccess).slice(0, 10)}(${Math.floor(result.ageDays)}日前)。gh run list --event=schedule で確認し permissions:{actions:read} を点検`);
+    // local# キーは GitHub workflow ではなくローカルファイルの状態で測っている
+    // → cron-liveness-check.mjs が作ったそのままの line を使う（schedule 点検は誤り）
+    if (result.key?.startsWith('local#')) {
+      if (result.status === 'never' || result.status === 'stale') flags.push(result.line);
+    } else {
+      if (result.status === 'never') flags.push(`🚨 cron停止: ${result.label} — schedule の成功履歴なし。gh run list --event=schedule で確認し permissions:{actions:read} を点検`);
+      if (result.status === 'stale') flags.push(`🚨 cron停止: ${result.label} — schedule の最終成功 ${String(result.lastSuccess).slice(0, 10)}(${Math.floor(result.ageDays)}日前)。gh run list --event=schedule で確認し permissions:{actions:read} を点検`);
+    }
   }
 }
 const TARGET_DELEG = 0.50;

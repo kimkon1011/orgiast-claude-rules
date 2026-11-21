@@ -108,3 +108,30 @@ test('Gemini reports ledger USD without repricing old token counts', () => {
   assert.equal(result.totalJpy, 3000);
   assert.equal(result.unmeasuredCalls, 0);
 });
+
+test('local# cron result uses original line, not GitHub schedule advice', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cost-work-loop-local-'));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'delegation-health.md'), '## 🩺 委譲ヘルス（直近24h）\n- high / テスト所見\n');
+  // cron-liveness.json に local# の result を仕込む（asOf はなく status:never）
+  const liveness = {
+    t: new Date().toISOString(),
+    results: [
+      { key: 'local#top3-delivery', label: '日次TOP3(配達)', status: 'never', lastSuccess: null, ageDays: null, line: '🚨 日次TOP3(配達): 一度も届いていません' },
+    ],
+  };
+  fs.writeFileSync(path.join(home, '.claude', 'cron-liveness.json'), JSON.stringify(liveness));
+  // executor-usage.jsonl と codex ダミーが必要（既存テストから流用）
+  fs.writeFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), JSON.stringify({ t: new Date().toISOString(), provider: 'skipped', status: 'no-cheap-executor' }) + '\n');
+  const codexDir = path.join(home, '.codex', 'sessions');
+  fs.mkdirSync(codexDir, { recursive: true });
+  fs.writeFileSync(path.join(codexDir, 'run.jsonl'), JSON.stringify({ timestamp: new Date().toISOString(), model: 'gpt-6.1-sol', payload: { info: { total_token_usage: { output_tokens: 1200 } } } }));
+  const run = spawnSync(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], { cwd: home, env: { ...process.env, ORGIAST_HOME: home, COST_WORK_REPOS: home, CODEX_SESSIONS_DIRS: codexDir }, encoding: 'utf8', timeout: 120_000 });
+  assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+  const directive = fs.readFileSync(path.join(home, '.claude', 'cost-directive.md'), 'utf8');
+  // local# の行は cron-liveness-check.mjs の元の文言がそのまま出る（schedule 点検は出ない）
+  assert.ok(directive.indexOf('一度も届いていません') >= 0, 'local line が見つからない');
+  assert.ok(directive.indexOf('schedule の成功履歴なし') < 0, 'GitHub schedule 点検が出ている（誤り）');
+  assert.ok(directive.indexOf('permissions:{actions:read}') < 0, 'permissions 点検が出ている（誤り）');
+  fs.rmSync(home, { recursive: true, force: true });
+});

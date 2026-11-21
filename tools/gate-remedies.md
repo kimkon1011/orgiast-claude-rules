@@ -189,6 +189,12 @@ node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> で大規模イン
 
 node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> で実装を依頼。
 
+## shared-worktree-git-guard
+
+- `git add <自分のパス>` → `git commit -F <msg> -- <自分のパス>` で自分の変更を確定する。
+- commit 後は `git show --stat --format="" HEAD` でファイル名を確認する。
+- stash の代わりに `git worktree add -b <branch> <別dir> origin/main` で専用ツリーを作る。
+
 ## pretooluse-headless-background
 
 run_in_background を外し前景実行、ScheduleWakeup を使わず timeout を指定する。

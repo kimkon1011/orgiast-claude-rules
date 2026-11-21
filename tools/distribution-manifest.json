@@ -76,6 +76,7 @@
     "outputs": { "reason": "PR作業の成果物出力。配布先PCの実行時参照なし" },
     "tasks": { "reason": "Codex への実装指示ファイル。配布先PCの実行時参照なし" },
     "runs": { "reason": "session-fold bench 等の計測の出力（runs/c041-timeseries）。配布先PCの実行時参照なし" },
+    "test": { "reason": "テストスクリプト（test/session-claims-self.test.js 等）。配布先PCの実行時参照なし", "docRefOk": true },
     "tests": { "reason": "テストフィクスチャ。tools/session-fold-bench.mjs 等の実行時参照のみで配布不要", "runtimeRefOk": true },
     "research": { "reason": "AIニュース提案の調査レポート。配布先PCの実行時参照なし" },
     ".steering": { "reason": "設計ドキュメント。配布先PCの実行時参照なし" },

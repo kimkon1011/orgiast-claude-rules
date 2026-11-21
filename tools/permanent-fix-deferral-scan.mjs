@@ -230,15 +230,31 @@ function hasTextContent(content) {
   return Array.isArray(content) && content.some(item => item?.type === 'text' && typeof item.text === 'string' && item.text.length > 0);
 }
 
-function resolvedWait(transcript, rowTs) {
-  let notifiedAt = null;
+export function resolvedWait(transcript, rowTs) {
+  const rowTime = Date.parse(rowTs);
+  const entries = [];
   for (const line of fs.readFileSync(transcript, 'utf8').split(/\r?\n/)) {
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
     const at = Date.parse(entry?.timestamp);
-    if (!(at > Date.parse(rowTs))) continue;
-    if (entry.type === 'user' && JSON.stringify(entry.message?.content ?? '').includes('task-notification')) notifiedAt = at;
-    else if (notifiedAt !== null && at > notifiedAt && entry.type === 'assistant' && hasTextContent(entry.message?.content)) return true;
+    if (!(at > rowTime)) continue;
+    entries.push({ entry, at });
+  }
+  // Two-pass because transcript timestamps aren't monotonically increasing per
+  // line order (e.g. attachment with queued_command appears later but has an
+  // earlier timestamp). First pass: find the earliest notification timestamp.
+  let notifiedAt = null;
+  for (const { entry, at } of entries) {
+    const isNotification =
+      (entry.type === 'user' && JSON.stringify(entry.message?.content ?? '').includes('task-notification')) ||
+      (entry.type === 'queue-operation' && typeof entry.content === 'string' && entry.content.includes('task-notification')) ||
+      (entry.type === 'attachment' && entry.attachment?.type === 'queued_command' && typeof entry.attachment?.prompt === 'string' && entry.attachment.prompt.includes('task-notification'));
+    if (isNotification && (notifiedAt === null || at < notifiedAt)) notifiedAt = at;
+  }
+  if (notifiedAt === null) return false;
+  // Second pass: check for assistant text response after the notification.
+  for (const { entry, at } of entries) {
+    if (at > notifiedAt && entry.type === 'assistant' && hasTextContent(entry.message?.content)) return true;
   }
   return false;
 }

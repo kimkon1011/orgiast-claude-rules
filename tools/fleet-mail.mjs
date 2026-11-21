@@ -37,6 +37,28 @@ export function isFleetHub(label, config) {
   return label === (config.FLEET_HUB || HUB_LABEL);
 }
 
+/**
+ * 送信元ラベルが FLEET_HUB の PC からのものかを判定（別名対応）。
+ * @param {string} from - 送信元ラベル（mail.from）
+ * @param {object} config - fleet-sheet.env のパース結果（FLEET_HUB を含む）
+ * @param {object} [pcMap] - fleet-pc-map.json の内容（別名解決に使用）
+ * @returns {boolean}
+ */
+export function isHubSender(from, config, pcMap = {}) {
+  if (!config.FLEET_HUB) return false;
+  if (from === config.FLEET_HUB) return true;
+  // FLEET_HUB が HUB_LABEL（kim-PC）の場合、pcMap の別名も許容（大小文字無視）
+  if (config.FLEET_HUB === HUB_LABEL && pcMap && typeof pcMap === 'object') {
+    const hubEntry = pcMap[HUB_LABEL];
+    if (!hubEntry || typeof hubEntry !== 'object') return false;
+    const hostname = String(hubEntry.hostname || '').toLowerCase();
+    const aliases = (Array.isArray(hubEntry.aliases) ? hubEntry.aliases : []).map(a => String(a).toLowerCase());
+    const fromLower = String(from).toLowerCase();
+    return fromLower === hostname || aliases.includes(fromLower);
+  }
+  return false;
+}
+
 export function seatSendGate({ to, kimOperated, subject = '', why = '', body = '', reason = '' }) {
   const matches = /マージ|merge|push\s*権限|権限|招待|鍵|キー|token|トークン|DWD|Vercel|Supabase|kim-PC\s*(?:にしか|でしか|でないと)/i;
   const blocked = /^kim-PC(?:$|[/:@])/i.test(String(to).trim()) && kimOperated && matches.test(`${subject}\n${why}\n${body}`);
@@ -1248,7 +1270,7 @@ export async function pollOnce(deps = {}) {
         const resultFile = path.join(dir, 'fleet-agent-results', `${validId(mail.id)}.json`);
         let result = readJson(resultFile);
         if (hubExecution && !result && !mail.executionStartedAt) {
-          const reason = !config.FLEET_HUB || mail.from !== config.FLEET_HUB ? 'not-hub' : !validExecCwd(exec.cwd) ? 'bad-cwd' : null;
+          const reason = !isHubSender(mail.from, config, fleetMembers) ? 'not-hub' : !validExecCwd(exec.cwd) ? 'bad-cwd' : null;
           if (reason) result = { exitCode: null, reason, outputTail: `reason: ${reason}` };
         }
         if (mail.executionStartedAt && !result) {

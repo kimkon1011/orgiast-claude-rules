@@ -37,6 +37,11 @@ export function isFleetHub(label, config) {
   return label === (config.FLEET_HUB || HUB_LABEL);
 }
 
+// 実行型は明示されたハブだけを許可する（通常のハブ機能の既定値とは別）。
+export function isExecutionHub(label, config) {
+  return !!config.FLEET_HUB && isFleetHub(label, config);
+}
+
 export function seatSendGate({ to, kimOperated, subject = '', why = '', body = '', reason = '' }) {
   const matches = /マージ|merge|push\s*権限|権限|招待|鍵|キー|token|トークン|DWD|Vercel|Supabase|kim-PC\s*(?:にしか|でしか|でないと)/i;
   const blocked = /^kim-PC(?:$|[/:@])/i.test(String(to).trim()) && kimOperated && matches.test(`${subject}\n${why}\n${body}`);
@@ -735,7 +740,12 @@ export function parseArgs(argv) {
   if (options['--send']) {
     if (options['--kim-pc-only-resource'] !== undefined && (!options['--kim-pc-only-resource'].trim() || options['--kim-pc-only-resource'].length > 1000)) throw new Error('--kim-pc-only-resource には具体的理由（1〜1000文字）が必要');
     for (const key of ['--to', '--kind', '--body-file', '--why']) if (!options[key]?.trim()) throw new Error(`${key} 必須`);
-    if (!['prompt', 'note'].includes(options['--kind'])) throw new Error('--kind must be prompt or note');
+    if (!['prompt', 'question', 'note'].includes(options['--kind'])) throw new Error('--kind must be prompt, question or note');
+    // 質問は既存の prompt 配信・自動回答経路を使う。
+    if (options['--kind'] === 'question') {
+      if (options['--exec']) throw new Error('--kind question と --exec は併用できません');
+      options['--kind'] = 'prompt';
+    }
     if (options['--kind'] === 'note' && /^\s*\[作業依頼\]/.test(options['--why'])) throw new Error('[作業依頼] は受信側で実行されるよう --kind prompt で送ってください（note は表示のみで実行されません）');
     if (options['--to'].length > 128 || options['--why'].length > 1000) throw new Error('宛先または理由が長すぎます');
     if (options['--exec'] !== undefined) {
@@ -1248,7 +1258,7 @@ export async function pollOnce(deps = {}) {
         const resultFile = path.join(dir, 'fleet-agent-results', `${validId(mail.id)}.json`);
         let result = readJson(resultFile);
         if (hubExecution && !result && !mail.executionStartedAt) {
-          const reason = !config.FLEET_HUB || mail.from !== config.FLEET_HUB ? 'not-hub' : !validExecCwd(exec.cwd) ? 'bad-cwd' : null;
+          const reason = !isExecutionHub(mail.from, config) ? 'not-hub' : !validExecCwd(exec.cwd) ? 'bad-cwd' : null;
           if (reason) result = { exitCode: null, reason, outputTail: `reason: ${reason}` };
         }
         if (mail.executionStartedAt && !result) {
@@ -1384,6 +1394,11 @@ async function runMain(argv, deps) {
   const configured = !!(config.FLEET_SHEET_URL && config.FLEET_SHEET_TOKEN);
   const identity = deps.identity ?? machineIdentity();
   const label = resolveFleetLabel(home, identity);
+  const rejectNonHubExecution = exec => {
+    if (exec !== 'claude' || isExecutionHub(label, config)) return false;
+    err('この席はハブではないため実行型は受信側で not-hub として拒否されます。--kind question で送ってください');
+    return true;
+  };
   const request = configured ? deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch, sleepImpl: deps.sleep })
     : async () => { throw new Error('fleet-sheet.env 未設定'); };
   const state = (id, action, extra = {}) => syncMailState({ home, id, action, request, now, from: label, stderr: err, ...extra });
@@ -1486,6 +1501,7 @@ async function runMain(argv, deps) {
     validSessionId(relay.sessionId);
     if (!original.from) throw new Error('invalid relay metadata');
     if (!validExecCwd(relay.cwd) || /[\r\n]|-->/.test(relay.cwd)) { err('fleet-mail: bad-cwd（存在する .git 付きディレクトリが必要）'); return 2; }
+    if (rejectNonHubExecution('claude')) return 2;
     const answerFile = path.join(dir, 'fleet-answers', `${id}.json`);
     if (terminal(original) && (original.status !== 'done' || !readJson(answerFile))) {
       saveLocalCompletion(home, id, { status: original.status, ...(original.ackAt ? { ackAt: original.ackAt } : {}) }, ['ack'], err);
@@ -1526,6 +1542,7 @@ async function runMain(argv, deps) {
   }
   if (options['--send']) {
     const rawBody = fs.readFileSync(options['--body-file'], 'utf8');
+    if (options['--kind'] === 'prompt' && rejectNonHubExecution(options['--exec'] || parseExecMarkers(rawBody).exec)) return 2;
     const exceptionReason = redactSecrets(options['--kim-pc-only-resource'] || '').trim();
     const gate = to => seatSendGate({ to, kimOperated: isKimOperated(home), why: options['--why'], body: rawBody, reason: exceptionReason });
     const denied = to => {

@@ -760,6 +760,7 @@ test('E failed relay response retries with the same id, dry-run never relays', a
 });
 test('E answer sends a Claude resume then acks the original, and retry keeps the same answer id', async t => {
   const f = fixture(t), q = questionFixture(f); const original = mail({ why: '[判断依頼]', meta: JSON.stringify({ relay: q }) }); f.save(original);
+  fs.appendFileSync(path.join(f.dir, 'fleet-sheet.env'), `FLEET_HUB=${receiver}\n`);
   const request = f.deps.request; let failAck = true;
   f.deps.request = async (kind, payload) => { const result = await request(kind, payload); if (kind === 'mail-get') return { ok: true, mail: original }; if (kind === 'mail-ack' && failAck) throw new Error('offline'); return result; };
   await assert.rejects(main(['--answer', original.id, '--body-file', f.body], f.deps), /offline/);
@@ -775,6 +776,7 @@ test('E manual decision cannot use answer and is given a note command without mu
 });
 test('E send claude resume carries body markers, structured execution fields and six hour expiry', async t => {
   const f = fixture(t);
+  fs.appendFileSync(path.join(f.dir, 'fleet-sheet.env'), `FLEET_HUB=${receiver}\n`);
   const args = ['--send', '--to', sender, '--kind', 'prompt', '--exec', 'claude', '--resume', 'session-hub', '--exec-cwd', f.home, '--body-file', f.body, '--why', '再開'];
   assert.equal(await main(args, f.deps), 0);
   const sent = f.calls.find(c => c.kind === 'mail-send').payload;
@@ -877,6 +879,7 @@ for (const action of ['reply', 'ack', 'answer']) test(`F2 ${action} lock content
 });
 for (const action of ['reply', 'ack', 'answer']) for (const fault of ['lock', 'write']) test(`F2 ${action} successful send with ${fault} failure queues pendingLocal and poll never resends`, async t => {
   const f = fixture(t), q = questionFixture(f, { relayedAt: iso(0) });
+  fs.appendFileSync(path.join(f.dir, 'fleet-sheet.env'), `FLEET_HUB=${receiver}\n`);
   const original = mail({ why: '[判断依頼]', meta: { relay: q } }); f.save(original);
   const lock = path.join(f.inbox, `${original.id}.json.lock`), target = path.join(f.inbox, `${original.id}.json`);
   let failedWrite = false;
@@ -954,6 +957,7 @@ test('F3 concurrent notification passes share one durable reservation', async t 
 
 test('F2 answer payload lock retries then exits 6 without sending or acknowledging', async t => {
   const f = fixture(t), q = questionFixture(f, { relayedAt: iso(0) });
+  fs.appendFileSync(path.join(f.dir, 'fleet-sheet.env'), `FLEET_HUB=${receiver}\n`);
   const original = mail({ why: '[判断依頼]', meta: { relay: q } }); f.save(original);
   const answerDir = path.join(f.dir, 'fleet-answers'); fs.mkdirSync(answerDir);
   const lock = path.join(answerDir, `${original.id}.json.lock`); fs.writeFileSync(lock, 'owner');
@@ -1103,6 +1107,7 @@ test('G7 failed execution sends a redacted diagnostic and exposes it to the wait
 });
 test('G9 answer rejects other recipients and detects changed retries unless forced', async t => {
   const f = fixture(t), q = questionFixture(f); let original = mail({ why: '[判断依頼]', to: sender, meta: { relay: q } });
+  fs.appendFileSync(path.join(f.dir, 'fleet-sheet.env'), `FLEET_HUB=${receiver}\n`);
   const request = f.deps.request;
   f.deps.request = async (kind, payload) => { const response = await request(kind, payload); return kind === 'mail-get' ? { ok: true, mail: original } : response; };
   const args = ['--answer', original.id, '--body-file', f.body];
@@ -1166,6 +1171,7 @@ test('G6 detached spawn failure is reported once without retrying execution', as
 
 test('G9 answer detects differences beyond the transmitted length', async t => {
   const f = fixture(t), q = questionFixture(f), original = mail({ why: '[判断依頼]', meta: { relay: q } });
+  fs.appendFileSync(path.join(f.dir, 'fleet-sheet.env'), `FLEET_HUB=${receiver}\n`);
   const request = f.deps.request;
   f.deps.request = async (kind, payload) => { const result = await request(kind, payload); return kind === 'mail-get' ? { ok: true, mail: original } : result; };
   const body = 'x'.repeat(20000);
@@ -1400,4 +1406,42 @@ test('slow receipt scan still receives mail and defers historical processing aft
   assert.equal(timing.outcome, 'ok');
   assert.equal(timing.receiptScan.partial, true);
   assert.ok(timing.phases.pollReceiptScan >= 0);
+});
+
+// Sender preflight: all transports are fixture doubles, never fleet requests.
+for (const hub of ['other', 'unset', 'empty']) for (const mode of ['flag', 'marker', 'answer']) {
+  test(`sender not-hub rejects ${mode} with ${hub} hub`, async t => {
+    const f = fixture(t);
+    if (hub !== 'unset') fs.appendFileSync(path.join(f.dir, 'fleet-sheet.env'), `FLEET_HUB=${hub === 'empty' ? '' : sender}\n`);
+    const original = mail({ why: '[判断依頼]', meta: { relay: { sessionId: 'test-session', cwd: f.home } } });
+    f.deps.request = async (kind, payload) => {
+      f.calls.push({ kind, payload });
+      assert.equal(kind, 'mail-get');
+      return { ok: true, mail: original };
+    };
+    f.deps.fetchBeacons = () => assert.fail('preflight must precede beacon lookup');
+    const args = ['--send', '--to', sender, '--kind', 'prompt', '--body-file', f.body, '--why', 'test', '--force'];
+    if (mode === 'flag') args.push('--exec', 'claude', '--exec-cwd', f.home);
+    if (mode === 'marker') fs.writeFileSync(f.body, `<!-- fleet-exec: claude -->\n<!-- fleet-exec-cwd: ${f.home} -->\nbody`);
+    assert.equal(await main(mode === 'answer' ? ['--answer', original.id, '--body-file', f.body] : args, f.deps), 2);
+    assert.deepEqual(f.errors, ['この席はハブではないため実行型は受信側で not-hub として拒否されます。--kind question で送ってください']);
+    assert.equal(fs.existsSync(path.join(f.dir, 'fleet-mail-sent.jsonl')), false);
+    assert.equal(fs.existsSync(path.join(f.dir, 'fleet-answers')), false);
+  });
+}
+for (const kind of ['question', 'note']) test(`non-hub may send ${kind}`, async t => {
+  const f = fixture(t);
+  fs.appendFileSync(path.join(f.dir, 'fleet-sheet.env'), `FLEET_HUB=${sender}\n`);
+  const args = sendArgs(f).map(value => value === 'note' ? kind : value);
+  assert.equal(await main(args, f.deps), 0);
+  const sent = f.calls.find(c => c.kind === 'mail-send').payload;
+  assert.equal(sent.messageKind, kind === 'question' ? 'prompt' : 'note');
+  assert.equal(sent.exec, undefined);
+  assert.equal(sent.body, 'nonempty test body');
+});
+test('non-hub reply remains a note even with an execution marker', async t => {
+  const f = fixture(t); f.save(mail({ status: 'failed' }));
+  fs.writeFileSync(f.body, '<!-- fleet-exec: claude -->\nanswer');
+  assert.equal(await main(['--reply', 'mail-original', '--body-file', f.body], f.deps), 0);
+  assert.equal(f.calls.find(c => c.kind === 'mail-send').payload.messageKind, 'note');
 });

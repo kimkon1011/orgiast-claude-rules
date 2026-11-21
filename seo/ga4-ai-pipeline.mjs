@@ -35,7 +35,7 @@ const CONFIG = {
   siteUrl: 'https://www.orgiast.jp',
   businessType: '展示会ブース制作・イベント企画制作',
   // AIプロバイダ: gemini | groq | claude
-  provider: process.env.AI_PROVIDER || 'gemini',
+  provider: process.env.AI_PROVIDER || 'deepseek',
   // モデル
   models: {
     gemini: 'gemini-2.0-flash',

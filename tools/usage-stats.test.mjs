@@ -230,3 +230,33 @@ test('legacy codex 37/150 and gemini missing status exclude unrouted without rew
   assert.deepEqual(result.unrouted, { calls: 24, reasons: { 'no-cheap-executor': 24 } });
   assert.equal(fs.readFileSync(file, 'utf8'), text);
 });
+
+test('Write to .md file does not add to authoredLines', () => {
+  const { home, file } = fixture(), now = Date.now();
+  const content = [
+    { type: 'tool_use', name: 'Write', input: { path: 'docs/NOTES.md', content: 'line1\nline2\nline3' } },
+    { type: 'tool_use', name: 'Write', input: { path: 'src/index.mjs', content: 'a\nb' } },
+  ];
+  fs.writeFileSync(file, JSON.stringify({ timestamp: new Date(now).toISOString(), type: 'assistant', message: { role: 'assistant', content } }));
+  assert.equal(collectClaudeLines({ home, now }), 2);
+});
+
+test('Write to .txt file does not add to authoredLines', () => {
+  const { home, file } = fixture(), now = Date.now();
+  const content = [
+    { type: 'tool_use', name: 'Write', input: { path: 'notes.txt', content: 'line1\nline2' } },
+    { type: 'tool_use', name: 'Edit', input: { path: 'src/app.js', new_string: 'x\ny\nz' } },
+  ];
+  fs.writeFileSync(file, JSON.stringify({ timestamp: new Date(now).toISOString(), type: 'assistant', message: { role: 'assistant', content } }));
+  assert.equal(collectClaudeLines({ home, now }), 3);
+});
+
+test('Write and Edit without file path still count lines (preserve existing behavior)', () => {
+  const { home, file } = fixture(), now = Date.now();
+  const content = [
+    { type: 'tool_use', name: 'Write', input: { content: 'a\nb' } },
+    { type: 'tool_use', name: 'Edit', input: { new_string: 'c\nd\ne' } },
+  ];
+  fs.writeFileSync(file, JSON.stringify({ timestamp: new Date(now).toISOString(), type: 'assistant', message: { role: 'assistant', content } }));
+  assert.equal(collectClaudeLines({ home, now }), 5);
+});

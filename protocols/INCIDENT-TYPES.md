@@ -15,6 +15,7 @@
 ## カタログ
 | 型 | 症状（初出） | 横展開の検索 | ゲート |
 |---|---|---|---|
+| 社外共有リンクの検証不足型 | 手順書リンクが相手側で開けない（2026-11-19 大庭様。共有成功ログ・送信文字列に異常なし、端末側原因は未確定） | `drive.google.com` / `docs.google.com` / `rtpof=true` / curama送信クリック | share-before-send-gate の社外本文モードでMIME・anyoneWithLink reader・未ログインHTTPを毎回確認。curama-share-gate-adapterを送信直前にawait |
 | 共有作業ツリーの Git 全体操作 | 共有作業ツリーで index/stash を全体操作して他セッション作業を巻き込む | `git add -A`、パススペック無しの `git commit`、書き込みを伴う `git stash` | shared-worktree-git-guard |
 | paid-option-before-free-route | 無料の既存経路を調べず費用案を先頭に提示（2026-11-18）。横展開11箇所（通知10＋日次配信1） | tools/ の quota・429・枠切れ・残高不足 と 有料・課金・入金・チャージ | decision-research-gate（無料案先頭＋FREE-ALT-CHECKED）、daily-beeper-approval / lahaina-daily-post の回帰テスト |
 | 本番常駐サーバーの開発モード起動型 | kim-PC のログオン後に SessionStart フックが秘書アプリを `next dev` で起動し、認証付き一覧 API に28.6秒（2026-11-19、`secretary-pc-ensure.log`） | タスクの Actions・WorkingDirectory、Startup、Run キー、SessionStart フック、起動スクリプトの `npm run dev`・`next dev`・`3940` | `tools/secretary-registration.test.mjs` で管理下の本番起動コマンドを検証し、実機のログオン後に 3940 番の待受プロセスと親コマンドを照合 |

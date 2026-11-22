@@ -52,6 +52,11 @@ const customerAddress = address => {
     !FREE_MAIL_DOMAINS.has(domain) && !/^(?:no-?reply|notifications?|mailer-daemon|bounce)(?:[+._-]|$)/.test(local) &&
     !/^(?:no-?reply|notifications?)\./.test(domain);
 };
+export const isBotSender = (raw) => {
+  // Returns true for automated notification/bot senders that should not be treated as customer mail.
+  const { name, email } = sender(String(raw || ""));
+  return /\[bot\]/i.test(name) || /^notifications?@github\.com$/.test(email);
+};
 const emailAddress = value => sender(String(value || "")).email.toLowerCase();
 const emailDomain = value => emailAddress(value).split("@")[1] || "";
 const clientKey = value => norm(value).replace(/株式会社|合同会社|有限会社|一般社団法人|医療法人/g, "").replace(/㈱/g, "");
@@ -277,7 +282,7 @@ export function classifyDepartmentStoreThread(messages = []) {
 }
 async function mail(deps = {}) {
   const q =
-      'newer_than:2d ((from:satou@orgiast.jp OR to:satou@orgiast.jp OR cc:satou@orgiast.jp OR "佐藤 優奈" OR "佐藤優奈" OR from:imitsu.jp) OR ("社内イベント百貨店" OR to:info@event-shop.jp OR from:event-shop.jp)) -from:saiyo@orgiast.jp -to:saiyo@orgiast.jp',
+      'newer_than:4d ((from:satou@orgiast.jp OR to:satou@orgiast.jp OR cc:satou@orgiast.jp OR "佐藤 優奈" OR "佐藤優奈" OR from:imitsu.jp) OR ("社内イベント百貨店" OR to:info@event-shop.jp OR from:event-shop.jp)) -from:saiyo@orgiast.jp -to:saiyo@orgiast.jp',
     r = await (deps.searchGmail || searchGmail)({
       user: USER,
       query: q,
@@ -314,7 +319,7 @@ async function mail(deps = {}) {
         ...item,
         unanswered: classification.unanswered,
       });
-    else if (w.email && !/@orgiast\.jp$/i.test(w.email)) unanswered.push(item);
+    else if (w.email && !/@orgiast\.jp$/i.test(w.email) && !isBotSender(c.from)) unanswered.push(item);
   }
   return {
     messages,
@@ -401,6 +406,26 @@ export function isInPreviousJstDay(value, now = new Date()) {
     d = value instanceof Date ? value : new Date(Number(value) || value);
   return d >= start && d < end;
 }
+export function previousBusinessJstDayRange(now = new Date()) {
+  // Returns the JST day range for the most recent business day (skipping Sat/Sun).
+  // E.g. Monday → previous Friday, Sunday → previous Friday, Saturday → previous Friday.
+  // Uses getUTCDay() with a +9h offset so the result is independent of the process TZ.
+  const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Tokyo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(now),
+    v = Object.fromEntries(parts.map((x) => [x.type, x.value])),
+    today = new Date(`${v.year}-${v.month}-${v.day}T00:00:00+09:00`),
+    // JST day of week: add 9h so getUTCDay() reflects JST, not the process TZ
+    jstDay = new Date(today.getTime() + 9 * 3600e3).getUTCDay(),
+    // 0=Sun,1=Mon,6=Sat.  Mon→Fri(3back), Sun→Fri(2back), Tue-Sat→prev(1back)
+    daysBack = jstDay === 1 ? 3 : jstDay === 0 ? 2 : 1,
+    start = new Date(today.getTime() - daysBack * 864e5),
+    end = new Date(today.getTime() - (daysBack - 1) * 864e5);
+  return { start, end, date: fmt(start) };
+}
 const baseCode = (x) => txt(x).replace(/_\d+$/, "");
 export function aggregateActiveCases(cases = []) {
   const by = new Map();
@@ -486,6 +511,16 @@ export function caseForMessage(message, cases) {
       .some((v) => norm(v).length >= 3 && blob.includes(norm(v))),
   );
 }
+const movementCase = (message, cases) => {
+  const matched = caseForMessage(message, cases);
+  if (matched) return matched;
+  const from = emailAddress(message.from);
+  if (!/^(?:satou|seisaku-team)@orgiast\.jp$/i.test(from)) return undefined;
+  const hasExternalRecipient = addresses(`${message.to || ""} ${message.cc || ""}`)
+    .some(address => !address.endsWith("@orgiast.jp"));
+  if (!hasExternalRecipient) return undefined;
+  return { code: "", client: txt(message.subject) || "案件未紐付けメール" };
+};
 function fallbackMovement(messages) {
   return `${txt(messages.at(-1)?.subject) || "メールの更新あり"}。`;
 }
@@ -591,12 +626,16 @@ export async function buildDailyReport(
   deps = {},
 ) {
   const counted = aggregateActiveCases(cases),
-    yesterday = messages.filter((x) => isInPreviousJstDay(x.internalDate, now) && caseForMessage(x, cases) &&
-      addresses(`${x.from || ""} ${x.to || ""} ${x.cc || ""}`).some(a => !a.endsWith("@orgiast.jp")) &&
-      !/^\s*Fwd?:|\bLEAD\s*:/i.test(x.subject || "")),
+    { start: yesterdayStart, end: yesterdayEnd } = previousBusinessJstDayRange(now),
+    yesterday = messages.filter((x) => {
+      const d = new Date(Number(x.internalDate) || x.internalDate);
+      return d >= yesterdayStart && d < yesterdayEnd && movementCase(x, cases) &&
+        addresses(`${x.from || ""} ${x.to || ""} ${x.cc || ""}`).some(a => !a.endsWith("@orgiast.jp")) &&
+        !/^\s*Fwd?:|\bLEAD\s*:/i.test(x.subject || "");
+    }),
     groups = new Map();
   for (const m of yesterday) {
-    const c = caseForMessage(m, cases),
+    const c = movementCase(m, cases),
       participants = `${m.from || ""} ${m.to || ""} ${m.cc || ""}`,
       internalOnly = [...participants.matchAll(/[\w.+-]+@[\w.-]+/g)].every(x => /@orgiast\.jp$/i.test(x[0]));
     if (!c || internalOnly || /^\s*Fwd:/i.test(m.subject || "") || /\bLEAD\s*:/i.test(m.subject || "")) continue;
@@ -734,7 +773,7 @@ export async function buildDailyReport(
       month: "numeric",
       day: "numeric",
       weekday: "short",
-    }).format(jstDayRange(now).start),
+    }).format(yesterdayStart),
     visibleMovements = movements.slice(0, 8),
     movementLines =
       movements.length > 8
@@ -780,6 +819,8 @@ export async function buildDailyReport(
     details,
     counted,
     llmErrors,
+    // Keep the per-run report filename on the previous calendar day. Using the
+    // previous business day here makes Saturday and Sunday overwrite Friday's file.
     date: jstDayRange(now).date,
   };
 }

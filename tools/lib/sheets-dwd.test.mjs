@@ -74,6 +74,26 @@ test('400は再試行しない', async () => {
 const connectTimeout = () => Object.assign(new TypeError('fetch failed'), {
   cause: { code: 'UND_ERR_CONNECT_TIMEOUT' },
 });
+const putTimeout = () => Object.assign(new Error('The operation was aborted due to timeout'), {
+  name: 'TimeoutError',
+});
+
+test('PUTは1回目のタイムアウトから再試行して成功する', async () => {
+  const { client, calls, sleeps } = clientFor([
+    putTimeout(),
+    jsonResponse(200, { updatedRows: 1 }),
+  ]);
+  await client.update('sheet', 'Tab!A1', [['value']]);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(sleeps, [2_000]);
+});
+
+test('PUTは3回連続でタイムアウトすると従来どおりエラーになる', async () => {
+  const { client, calls, sleeps } = clientFor([putTimeout(), putTimeout(), putTimeout()]);
+  await assert.rejects(client.update('sheet', 'Tab!A1', [['value']]), /Sheets PUT fetch failed: The operation was aborted due to timeout/);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(sleeps, [2_000, 4_000]);
+});
 
 test('GETは一時的な通信例外から指数待機で再試行して成功する', async () => {
   const { client, calls, sleeps } = clientFor([

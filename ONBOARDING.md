@@ -1575,6 +1575,8 @@ Cursor Ultra（定額 $200/月）は「上限のときの代わり」ではな�
 - **Cursor が既定**: 無人の定期ジョブ（見回りの集計、期日の回収、くらしのマーケットの見回りなど）、調べ物・集計・整形・要約・下書きのたたき台、コード修正の PR。`codex-do` は implement / verify / investigate / summarize / classify で、ログイン済みの cursor-agent を Codex や llm-ask より先に起動する。
 - **Claude Code に残すもの**: 金さん向けの最終判断と、社外文面の最終確認だけ。指示にその旨を書くか、`lane: claude` / `[CLAUDE-FINAL]` を付ける。
 - **ペース点検（毎日 19:30、推奨は 000）**: `tools/cursor-usage-pace.mjs` が Cursor Models と Other Models の使用量を測る。測り方は Cursor の公式 API（Team API キーがあるとき）または明示値。画面の自動操作はしない。理想ペースは周期（2026-11-18〜2026-12-18）の「経過÷周期」に、期末目標 90〜95% を掛けた値。遅れているときは待ち作業（夜間キュー、脆弱性点検、コード改善 PR、調べ物）を Cursor に追加で回す。ペースを超えたら追加回しをやめる。従量課金に入りそうなら止めて通知する。
+- **取得順**: ①引数 --cursor-models/--other-models ②Team/Admin API ③公式CLI(未実装) ④owner-report(~/.claude/reports/cursor-usage-owner-report.json) ⑤前回成功値(carry-forward)。④⑤は「前回値(<元source>, <N>h前)(推定)」表示、48h超でfill停止、7日超で未取得扱い。
+- **owner-report の置き場所**: `~/.claude/reports/cursor-usage-owner-report.json`（リポ外、コミットしない）。形式: {"cursorModelsPct":5,"otherModelsPct":1,"onDemandUsed":false,"at":"2026-11-21T23:17:00+09:00","by":"kim"}
 - **書き出し（グロボの毎日 20 時の使用量点検が読む）**: 000 では `C:/Users/uers/.claude` 配下の `reports` にある `cursor-usage-pace.txt`（最新1行）。他 PC では `%USERPROFILE%/.claude` 配下の同じファイル名。履歴は同じ場所の `cursor-usage-pace.jsonl`。状態は `~/.claude/cursor-usage-pace-state.json`。
 - **毎朝の件数（全 PC、07:10）**: `tools/cursor-agent-run-counts.mjs` が各 PC の cursor-agent 実行件数を数え、`~/.claude 配下 reports の cursor-agent-runs.txt` に1行書く。
 

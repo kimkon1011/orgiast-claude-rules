@@ -17,6 +17,10 @@ import {
   formatPaceLine,
   writePaceOutputs,
   cursorUsagePaceTxtPath,
+  readOwnerReport,
+  findLastGoodFromState,
+  hoursAgo,
+  ownerReportPath,
 } from './lib/cursor-usage-pace.mjs';
 
 function argValue(args, name, fallback = '') {
@@ -117,6 +121,7 @@ export async function runCursorUsagePace({
   let otherModelsPct = otherArg === '' ? NaN : Number(otherArg);
   let source = sourceArg;
   let onDemandUsed = args.includes('--on-demand');
+  let decidedFillOverride = null; // null=auto, false=force-no-fill
   if (!Number.isFinite(cursorModelsPct) || !Number.isFinite(otherModelsPct)) {
     const fetched = await (fetchPlanImpl || fetchCursorPlanUsage)({ home });
     if (fetched?.ok) {
@@ -126,6 +131,40 @@ export async function runCursorUsagePace({
       source = source || fetched.source;
     } else {
       source = source || fetched?.source || 'unavailable';
+      // ④ Owner report fallback
+      if (!Number.isFinite(cursorModelsPct) || !Number.isFinite(otherModelsPct)) {
+        const owner = readOwnerReport(home);
+        if (owner) {
+          const elapsedH = hoursAgo(Date.parse(owner.at));
+          if (elapsedH > 168) { // 7日超 → 使わない
+            source = 'owner-report(7d超)';
+          } else {
+            cursorModelsPct = owner.cursorModelsPct;
+            otherModelsPct = owner.otherModelsPct;
+            onDemandUsed = onDemandUsed || owner.onDemandUsed;
+            const hLabel = elapsedH < 48 ? `${Math.round(elapsedH)}h前` : `${Math.round(elapsedH / 24)}d前`;
+            source = `前回値(owner-report, ${hLabel})(推定)`;
+            if (elapsedH > 48) decidedFillOverride = false; // 48h超 → fill しない
+          }
+        }
+      }
+      // ⑤ Carry-forward from state
+      if (!Number.isFinite(cursorModelsPct) || !Number.isFinite(otherModelsPct)) {
+        const lastGood = findLastGoodFromState(home);
+        if (lastGood) {
+          const elapsedH = hoursAgo(Date.parse(lastGood.at));
+          if (elapsedH > 168) { // 7日超 → 使わない
+            source = 'carry-forward(7d超)';
+          } else {
+            cursorModelsPct = lastGood.cursorModelsPct;
+            otherModelsPct = lastGood.otherModelsPct;
+            onDemandUsed = onDemandUsed || Boolean(lastGood.onDemandUsed);
+            const hLabel = elapsedH < 48 ? `${Math.round(elapsedH)}h前` : `${Math.round(elapsedH / 24)}d前`;
+            source = `前回値(${lastGood.source}, ${hLabel})(推定)`;
+            if (elapsedH > 48) decidedFillOverride = false; // 48h超 → fill しない
+          }
+        }
+      }
     }
   }
 
@@ -137,6 +176,8 @@ export async function runCursorUsagePace({
     cycleStart,
     cycleEnd,
   });
+  // Apply fill override from staleness rules
+  if (decidedFillOverride === false) decided.fill = false;
   const line = formatPaceLine({
     ...decided,
     now,

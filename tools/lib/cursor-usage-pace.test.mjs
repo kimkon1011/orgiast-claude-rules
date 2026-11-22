@@ -15,6 +15,11 @@ import {
   isCursorUsageFill,
   writePaceOutputs,
   cursorUsagePaceTxtPath,
+  readOwnerReport,
+  findLastGoodFromState,
+  hoursAgo,
+  ownerReportPath,
+  cursorUsagePaceStatePath,
 } from './cursor-usage-pace.mjs';
 
 const CYCLE = { cycleStart: DEFAULT_CYCLE_START, cycleEnd: DEFAULT_CYCLE_END };
@@ -97,4 +102,69 @@ test('countCursorAgentRuns は executor-usage と history の cursor 行を数�
   const counted = countCursorAgentRuns(home, { sinceMs: since, untilMs: Date.parse('2026-11-22T00:00:00+09:00') });
   assert.equal(counted.ok, 2);
   assert.equal(counted.attempts, 2);
+});
+
+test('readOwnerReport は owner-report JSON を読んでパースする', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-owner-'));
+  const dir = path.join(home, '.claude', 'reports');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(ownerReportPath(home), JSON.stringify({
+    cursorModelsPct: 5, otherModelsPct: 1, onDemandUsed: false, at: '2026-11-21T23:17:00+09:00', by: 'kim',
+  }));
+  const report = readOwnerReport(home);
+  assert.equal(report.cursorModelsPct, 5);
+  assert.equal(report.otherModelsPct, 1);
+  assert.equal(report.onDemandUsed, false);
+  assert.equal(report.at, '2026-11-21T23:17:00+09:00');
+  assert.equal(report.by, 'kim');
+  // 存在しない場合は null
+  const home2 = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-owner-miss-'));
+  assert.equal(readOwnerReport(home2), null);
+});
+
+test('findLastGoodFromState は lastGood を state から読み出す', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-lastgood-'));
+  const dir = path.join(home, '.claude');
+  fs.mkdirSync(dir, { recursive: true });
+  // lastGood なし → null
+  fs.writeFileSync(cursorUsagePaceStatePath(home), JSON.stringify({ fill: false, halt: false }));
+  assert.equal(findLastGoodFromState(home), null);
+  // lastGood あり → 値を返す
+  const lastGood = { cursorModelsPct: 5, otherModelsPct: 1, source: 'owner-report', at: '2026-11-21T23:17:00+09:00' };
+  fs.writeFileSync(cursorUsagePaceStatePath(home), JSON.stringify({ fill: false, halt: false, lastGood }));
+  const found = findLastGoodFromState(home);
+  assert.equal(found.cursorModelsPct, 5);
+  assert.equal(found.otherModelsPct, 1);
+  assert.equal(found.source, 'owner-report');
+  // source=unavailable は無視
+  const bad = { cursorModelsPct: 5, otherModelsPct: 1, source: 'unavailable', at: '2026-11-21T23:17:00+09:00' };
+  fs.writeFileSync(cursorUsagePaceStatePath(home), JSON.stringify({ fill: false, halt: false, lastGood: bad }));
+  assert.equal(findLastGoodFromState(home), null);
+});
+
+test('writePaceOutputs は lastGood を state に保存する', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-lastgood-write-'));
+  const now = Date.parse('2026-11-21T23:17:00+09:00');
+  const decided = decideCursorPace({ cursorModelsPct: 5, otherModelsPct: 1, now, ...CYCLE });
+  writePaceOutputs(home, { ...decided, now, ...CYCLE, source: 'owner-report' });
+  const state = JSON.parse(fs.readFileSync(cursorUsagePaceStatePath(home), 'utf8'));
+  assert.ok(state.lastGood);
+  assert.equal(state.lastGood.cursorModelsPct, 5);
+  assert.equal(state.lastGood.otherModelsPct, 1);
+  assert.equal(state.lastGood.source, 'owner-report');
+  // source=unavailable では lastGood を維持
+  const unknown = decideCursorPace({ now, ...CYCLE });
+  writePaceOutputs(home, { ...unknown, now, ...CYCLE, source: 'unavailable' });
+  const state2 = JSON.parse(fs.readFileSync(cursorUsagePaceStatePath(home), 'utf8'));
+  assert.ok(state2.lastGood);
+  assert.equal(state2.lastGood.cursorModelsPct, 5);
+});
+
+test('hoursAgo は経過時間を正しく計算する', () => {
+  const oneHourAgo = Date.now() - 3_600_000;
+  const h = hoursAgo(oneHourAgo);
+  assert.ok(h > 0.9 && h < 1.1, `hoursAgo=${h}`);
+  const twoDaysAgo = Date.now() - 172_800_000;
+  const h2 = hoursAgo(twoDaysAgo);
+  assert.ok(h2 > 47 && h2 < 49, `hoursAgo(2d)=${h2}`);
 });

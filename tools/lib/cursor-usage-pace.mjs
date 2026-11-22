@@ -19,6 +19,43 @@ export function cursorUsagePaceStatePath(home) {
 export function cursorUsagePaceAlertPath(home) {
   return path.join(home, '.claude', 'reports', 'cursor-usage-pace-alert.txt');
 }
+export function ownerReportPath(home) {
+  return path.join(home, '.claude', 'reports', 'cursor-usage-owner-report.json');
+}
+
+export function readOwnerReport(home) {
+  try {
+    const raw = fs.readFileSync(ownerReportPath(home), 'utf8').replace(/^\uFEFF/, '');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' &&
+        Number.isFinite(Number(parsed.cursorModelsPct)) &&
+        Number.isFinite(Number(parsed.otherModelsPct))) {
+      return {
+        cursorModelsPct: Number(parsed.cursorModelsPct),
+        otherModelsPct: Number(parsed.otherModelsPct),
+        onDemandUsed: Boolean(parsed.onDemandUsed),
+        at: parsed.at || '',
+        by: parsed.by || '',
+      };
+    }
+  } catch { /* not found or invalid */ }
+  return null;
+}
+
+export function hoursAgo(ms) {
+  return (Date.now() - ms) / 3_600_000;
+}
+
+export function findLastGoodFromState(home) {
+  const state = readPaceState(home);
+  if (state.lastGood && typeof state.lastGood === 'object' &&
+      Number.isFinite(state.lastGood.cursorModelsPct) &&
+      Number.isFinite(state.lastGood.otherModelsPct) &&
+      state.lastGood.source && state.lastGood.source !== 'unavailable') {
+    return state.lastGood;
+  }
+  return null;
+}
 export function cursorFillEnabledPath(home) {
   return path.join(home, '.claude', 'cursor-fill.enabled');
 }
@@ -186,6 +223,21 @@ export function writePaceOutputs(home, record) {
     source: record.source || '',
     updatedAt: jstStamp(record.now || Date.now()),
   };
+  // Save lastGood when we have valid percentages from a non-unavailable source
+  if (Number.isFinite(record.cursorModelsPct) && Number.isFinite(record.otherModelsPct) &&
+      record.source && record.source !== 'unavailable') {
+    stateDoc.lastGood = {
+      cursorModelsPct: record.cursorModelsPct,
+      otherModelsPct: record.otherModelsPct,
+      onDemandUsed: Boolean(record.onDemandUsed),
+      source: record.source,
+      at: new Date(record.now || Date.now()).toISOString(),
+    };
+  } else {
+    // Preserve existing lastGood from previous state
+    const prev = readPaceState(home);
+    if (prev.lastGood) stateDoc.lastGood = prev.lastGood;
+  }
   fs.writeFileSync(state, `${JSON.stringify(stateDoc, null, 2)}\n`, 'utf8');
   if (record.halt) {
     fs.writeFileSync(alert, `${line}\nCursor の従量課金に入りそうなので追加利用を止めました。ダッシュボードを確認してください。\n`, 'utf8');

@@ -357,7 +357,7 @@ export async function runCollect(options = {}) {
 }
 export async function runCli(args, options = {}) {
   const log = options.log || console.log;
-  try { const result = await runCollect({ ...options, ...parseArgs(args), log }); if (result.status !== CREDIT_BLOCKED_STATUS) log(result.status); return result.status.startsWith('error:') ? 1 : 0; }
+  try { const result = await runCollect({ ...options, ...parseArgs(args), log }); log(result.status); return result.status.startsWith('error:') ? 1 : 0; }
   catch (error) { log(`error:${String(error.message).replace(/[\r\n]+/g, ' ')}`); return 1; }
 }
 if (isEntry(import.meta.url)) process.exitCode = await runCli(process.argv.slice(2));

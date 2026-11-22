@@ -19,5 +19,10 @@ export function resolvePcNumber({ env = process.env, hostname = os.hostname(), m
       if (typeof entry.titleLabel === 'string' && /^[A-Za-z][A-Za-z0-9-]{1,15}$/.test(entry.titleLabel)) return entry.titleLabel;
     }
   } catch { /* Missing or invalid map still permits hostname fallback. */ }
-  return String(hostname).match(/(?:作業|カフェ)用(\d{3})/)?.[1] || '';
+  const nameStr = String(hostname);
+  const conventionName = nameStr.match(/(?:作業|カフェ)用(\d{3})/);
+  if (conventionName) return conventionName[1];
+  const hostnameDigits = nameStr.match(/^(\d{3})(?!\d)/);
+  if (hostnameDigits) return hostnameDigits[1];
+  return '';
 }

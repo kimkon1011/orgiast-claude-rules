@@ -50,6 +50,10 @@ const HANDOFF = /接続し[て、]|接続して確認|どれを選|選んでほ�
 // また起票される自己増殖ループになる（2026-10-24 実測: 06:15 と 12:05 の完了DMが
 // next-session.md の第5・第6ブロックとして起票され、同じ目的のセッションが繰り返された）。
 const STATUS_REPORT = /^【進捗まとめ】|✅\s*自動進行が完了しました|^【[^\n]*の自動進行】\s*完了/m;
+// 判断不要と明記した完了報告の題名に「タイムアウト」があっても修復TODOにしない
+// （2026-11-22 実測: notify-kim:2acbb896）。
+const NO_ACTION_REPORT = /あなたが決めることはありません|決めることはありません|判断不要|対応不要|やることはありません|kim\s*の操作は不要/i;
+const CURRENT_FAILURE = /失敗|エラー|停止|異常|failed|failure|取得不可|未計測/i;
 // 既に起票した本文（マーカー付き）を別経路が再通知しても二重起票しない。
 const ALREADY_FILED = /<!--\s*notify-kim:[0-9a-f]{20}\s*-->/;
 // notify-owner.mjs は本文の先頭に「宛先: ...」行を付ける。これは通知経路のメタ情報で、
@@ -88,7 +92,7 @@ export async function notifyKim(text, options = {}) {
   options = { ...options, kind: options.kimActionRequired === true || ['ask', 'action'].includes(options.kind) ? 'ask' : 'info' };
   const raw = redactSecrets(String(text ?? ''));
   const bodyText = stripOwnerAddress(raw);
-  if (STATUS_REPORT.test(bodyText) || ALREADY_FILED.test(bodyText) || isSuccessfulResumeReport(bodyText) || AUTO_RESUME_NOTICE.test(bodyText)) return deliverKim(raw, options);
+  if (STATUS_REPORT.test(bodyText) || (options.kind === 'info' && NO_ACTION_REPORT.test(bodyText) && !CURRENT_FAILURE.test(bodyText)) || ALREADY_FILED.test(bodyText) || isSuccessfulResumeReport(bodyText) || AUTO_RESUME_NOTICE.test(bodyText)) return deliverKim(raw, options);
   const judgment = JUDGMENT_REQUEST.test(bodyText);
   const humanEvidence = /^(?:試行|試した内容|試した修復)[:：][ \t]*\S.+$/m.test(bodyText)
     && /^証拠[:：][ \t]*\S.+$/m.test(bodyText) && /^必要な操作[:：][ \t]*\S.+$/m.test(bodyText);

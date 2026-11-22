@@ -1,0 +1,452 @@
+Comparing files C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\TOOLS\satou-secretary-daily.mjs and C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\.WT\SATOU-SECRETARY\TOOLS\SATOU-SECRETARY-DAILY.MJS
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\TOOLS\satou-secretary-daily.mjs
+   61:  eplace(/a?Å}/g, "");
+   62:  export function isSatouCustomerMail(message = {}) {
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\.WT\SATOU-SECRETARY\TOOLS\SATOU-SECRETARY-DAILY.MJS
+   61:  eplace(/a?Å}/g, "");
+   62:  const satouKey = value => norm(value).toLowerCase();
+   63:  const isSatouName = value => /a??e??(?:a?aa\?|a??)|satou/.test(satouKey(value));
+   64:  const evidenceText = message => norm(
+   65:    `${message.subject || ""} ${message.snippet || ""} ${message.body || ""} ${message.from || ""} ${message.to || ""} ${message.
+   66:  cc || ""}`,
+   67:  ).toLowerCase();
+   68:  const comparableClientKey = value => clientKey(value)
+   69:    .replace(/i??/g, "&")
+   70:    .replace(/a?3a?ÅPa?É a??a?!a??a?Åía?Åë/g, "a??e??a?!a??a?Åía?Åë")
+   71:    .toLowerCase();
+   72:  const evidenceGroups = messages => {
+   73:    const groups = new Map();
+   74:    for (const message of messages) {
+   75:      const key = message.threadId || message.id || Symbol();
+   76:      const group = groups.get(key) || [];
+   77:      group.push(message);
+   78:      groups.set(key, group);
+   79:    }
+   80:    return [...groups.values()].map(group => ({
+   81:      text: group.map(evidenceText).join(" "),
+   82:      addresses: addresses(group.map(message => `${message.from || ""},${message.to || ""},${message.cc || ""}`).join(",")),
+   83:    }));
+   84:  };
+   85:  export function isSatouCustomerMail(message = {}) {
+*****
+
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\TOOLS\satou-secretary-daily.mjs
+   95:        route: col(m, "a!?aÅ‚Å˜a?Å·a??a??"),
+   96:        revenue: col(m, "aÅí2aÅC?"),
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\.WT\SATOU-SECRETARY\TOOLS\SATOU-SECRETARY-DAILY.MJS
+  118:        route: col(m, "a!?aÅ‚Å˜a?Å·a??a??"),
+  119:        note: col(m, "a??eÄ?"),
+  120:        revenue: col(m, "aÅí2aÅC?"),
+*****
+
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\TOOLS\satou-secretary-daily.mjs
+  113:    const staff = STAFF.map((x) => col(m, x)).filter((x) => x >= 0),
+  114:      cut = new Date(now);
+  115:    cut.setDate(cut.getDate() - 30);
+  116:    return rows.slice(1).flatMap((r, n) => {
+  117:      const state = txt(r[i.state]),
+  118:        sales = norm(r[i.sales]).includes("a??e??a?aa\?"),
+  119:        production = norm(r[i.prod]).includes("a??e??a?aa\?"),
+  120:        departmentStore = /c??a??a??a??a?3a??c??e2ÅNao?|event-shop/i.test(txt(r[i.route])),
+  121:        secondary = staff.some((x) => norm(r[x]).includes("a??e??a?aa\?")),
+  122:        emailOwner = emailEvidence.some((x) => {
+  123:          if (!isSatouCustomerMail(x)) return false;
+  124:          const blob = norm(
+  125:            `${x.subject || ""} ${x.snippet || ""} ${x.from || ""} ${x.to || ""}`,
+  126:          ),
+  127:            customerKey = clientKey(r[i.client]),
+  128:            codeKey = norm(txt(r[i.code])).replace(/_\d+$/, "");
+  129:          if (!customerKey || /a?aa??a?ÅCa?Åía?1a??/.test(customerKey)) return false;
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\.WT\SATOU-SECRETARY\TOOLS\SATOU-SECRETARY-DAILY.MJS
+  137:    const staff = STAFF.map((x) => col(m, x)).filter((x) => x >= 0),
+  138:      mailGroups = evidenceGroups(emailEvidence),
+  139:      cut = new Date(now),
+  140:      specialHorizon = new Date(now);
+  141:    cut.setDate(cut.getDate() - 30);
+  142:    specialHorizon.setDate(specialHorizon.getDate() + 180);
+  143:    const extracted = rows.slice(1).flatMap((r, n) => {
+  144:      const state = txt(r[i.state]),
+  145:        sales = isSatouName(r[i.sales]),
+  146:        production = isSatouName(r[i.prod]),
+  147:        departmentStore = /c??a??a??a??a?3a??c??e2ÅNao?|event-shop/i.test(txt(r[i.route])),
+  148:        webInquiry = /a?Åëa??a??a??|e?ac??WEB/i.test(txt(r[i.route])),
+  149:        ipo = /aÅC?a?ÅL|IPO/i.test(`${txt(r[i.name])} ${txt(r[i.client])} ${i.note >= 0 ? txt(r[i.note]) : ""}`),
+  150:        secondary = staff.some((x) => isSatouName(r[x])),
+  151:        emailOwner = mailGroups.some((group) => {
+  152:          const targetMailbox = group.addresses.some(address => TARGET_MAILBOXES.has(address));
+  153:          if (!targetMailbox || !isSatouName(group.text)) return false;
+  154:          const customerKey = comparableClientKey(r[i.client]),
+  155:            codeKey = norm(txt(r[i.code])).replace(/_\d+$/, "").toLowerCase();
+  156:          if (!customerKey || /a?aa??a?ÅCa?Åía?1a??/.test(customerKey)) return false;
+*****
+
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\TOOLS\satou-secretary-daily.mjs
+  130:          return (
+  131:            ((codeKey.length >= 5 && blob.includes(codeKey)) ||
+  132:              (customerKey.length >= 4 && blob.includes(customerKey))) &&
+  133:            emailAddress(x.from) === "satou@orgiast.jp"
+  134:          );
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\.WT\SATOU-SECRETARY\TOOLS\SATOU-SECRETARY-DAILY.MJS
+  157:          return (
+  158:            (codeKey.length >= 5 && group.text.includes(codeKey)) ||
+  159:            (customerKey.length >= 4 && group.text.includes(customerKey))
+  160:          );
+*****
+
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\TOOLS\satou-secretary-daily.mjs
+  139:        secondaryOwner = secondary && workloadWindow,
+  140:        recentEmailOwner = emailOwner && workloadWindow;
+  141:      if (
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\.WT\SATOU-SECRETARY\TOOLS\SATOU-SECRETARY-DAILY.MJS
+  165:        secondaryOwner = secondary && workloadWindow,
+  166:        recentEmailOwner = emailOwner,
+  167:        specialClosed = /a?Å}a3ÅN|cÅL?a??aR?ao?|a?-a?Åía?3a?Å‚a?Å·|aÅC-a-Åë|cÉ ?ao?|a??aÅ˜?|a??a??aÅ˜?a??/.test(norm(state)),
+  168:        specialWindow = !d || (d >= cut && d <= specialHorizon),
+  169:        ownCompany = /a?aa??a?ÅCa?Åía?1a??/.test(norm(r[i.client])),
+  170:        specialEligible = (webInquiry || ipo) && !ownCompany && !specialClosed && specialWindow;
+  171:      if (
+*****
+
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\TOOLS\satou-secretary-daily.mjs
+  144:          !departmentStore &&
+  145:          !(secondaryOwner && ACTIVE.has(state)) &&
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\.WT\SATOU-SECRETARY\TOOLS\SATOU-SECRETARY-DAILY.MJS
+  174:          !departmentStore &&
+  175:          !specialEligible &&
+  176:          !(secondaryOwner && ACTIVE.has(state)) &&
+*****
+
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\TOOLS\satou-secretary-daily.mjs
+  146:          !recentEmailOwner) ||
+  147:        (CLOSED.has(state) && d && d < cut)
+  148:      )
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\.WT\SATOU-SECRETARY\TOOLS\SATOU-SECRETARY-DAILY.MJS
+  177:          !recentEmailOwner) ||
+  178:        (CLOSED.has(state) && d && d < cut) ||
+  179:        (state === "cÅL?a??aR?ao?" && d && d < now && !sales && !production)
+  180:      )
+*****
+
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\TOOLS\satou-secretary-daily.mjs
+  153:        departmentStore && "c??e2ÅNao?a?Å·a??a??",
+  154:        secondaryOwner && "a??a??eÄ?a??",
+  155:        recentEmailOwner && "a?!a??a?Å·a??a??",
+  156:      ]
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\.WT\SATOU-SECRETARY\TOOLS\SATOU-SECRETARY-DAILY.MJS
+  185:        departmentStore && "c??e2ÅNao?a?Å·a??a??",
+  186:        specialEligible && webInquiry && "a?Åëa??a??a??/e?ac??WEBa?Å·a??a??",
+  187:        specialEligible && ipo && "aÅC?a?ÅL/IPO",
+  188:        secondaryOwner && "a??a??eÄ?a??",
+  189:        recentEmailOwner && "a?!a??a?Å·e?ÅëaÅC?",
+  190:      ]
+*****
+
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\TOOLS\satou-secretary-daily.mjs
+  177:    });
+  178:  }
+  179:  const gmailUrl = (id) =>
+  180:    `https://mail.google.com/mail/?authuser=${encodeURIComponent(USER)}#all/${id}`;
+  181:  export function extractAimitsu(ms) {
+  182:    const out = [],
+  183:      seen = new Set();
+  184:    for (const x of ms) {
+  185:      if (!/@imitsu\.jp/i.test(x.from || "")) continue;
+  186:      const h = `${x.subject || ""}\n${x.snippet || ""}\n${x.body || ""}`,
+  187:        no = h.match(/a!?aÅ‚Å˜\s*(?:No|c?aa?ÅE)\s*[:i??#]?\s*([\w-]+)/i)?.[1] || "",
+  188:        company =
+  189:          h.match(/a??a\-a??\s*[:i??]\s*([^\n]+)/)?.[1]?.trim() ||
+  190:          h.match(/([^\n]{1,80})aÅò?a??a??a?Ra?!a??a?Å‚a??a?ÅC/)?.[1]?.trim() ||
+  191:          "",
+  192:        unanswered = /a?aa??c-?a!?aÅ‚Å˜|a?aa??c-?|a??c-?a??e??/.test(h),
+  193:        k = `${x.threadId}|${no}|${company}`;
+  194:      if ((no || company || unanswered) && !seen.has(k)) {
+  195:        seen.add(k);
+  196:        out.push({
+  197:          caseNo: no,
+  198:          company,
+  199:          unanswered,
+  200:          subject: x.subject || "",
+  201:          threadId: x.threadId,
+  202:          url: gmailUrl(x.threadId),
+  203:        });
+  204:      }
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\.WT\SATOU-SECRETARY\TOOLS\SATOU-SECRETARY-DAILY.MJS
+  211:    });
+  212:    const unique = new Map();
+  213:    for (const item of extracted) {
+  214:      const key = [item.code, item.client, item.name].map(norm).join("\0");
+  215:      const previous = unique.get(key);
+  216:      if (!previous) unique.set(key, item);
+  217:      else unique.set(key, {
+  218:        ...previous,
+  219:        reason: [...new Set(`${previous.reason || ""}a?Å‚${item.reason || ""}`.split("a?Å‚").filter(Boolean))].join("a?Å‚"),
+  220:      });
+  221:    }
+  222:    return [...unique.values()];
+  223:  }
+  224:  const baseCaseCode = value => norm(value).replace(/_\d+$/, "");
+  225:  const mailText = message => `${message.subject || ""}\n${message.snippet || ""}\n${String(message.body || "").slice(0, 2000)}`;
+  226:  const ignoredMailbox = value => addresses(value).some(address => {
+  227:    const [local, domain] = address.split("@");
+  228:    return /^(?:no-?reply|notifications?|mailer-daemon|bounce)(?:[+._-]|$)/.test(local || "") ||
+  229:      /^(?:no-?reply|notifications?)\./.test(domain || "");
+  230:  });
+  231:  const outsideAddress = address => {
+  232:    const domain = address.split("@")[1] || "";
+  233:    return domain && !/(^|\.)(orgiast\.jp|event-shop\.jp|github\.com|google\.com|slack\.com|discord\.com)$/.test(domain);
+  234:  };
+  235:  const CASE_MAIL_WORDS = /e|?cc?|a??e|?cc?|a??c?Å‚|a??a!?|e3?a??|a??a??a??a??|MTG|a??a??e??/i;
+  236:  const CUSTOMER_INTENT = /a??e??|c?ÅCeÅ·?|a??a??a??a??a??|e|?cc?|a??e|?cc?|a??a!?|a??c?Å‚|e3?a??[\s\S]{0,80}(?:eÄ?|a??a?o|aÅEÅ‚aÅ‚?)|a
+  237:  ??a?!?a??a??a??|a??a??a??a?Åía?3a?Åã|MTG|a?\cÅN?(?:ea?a?ÅL|aÄ?eÅí?)/i;
+  238:  const BULK_OR_AUTO_MAIL = /e?aa??e??a?!|e?aa??eÄ?a?!|a??aÅ‚?aR?ao?|a??a??aÅ‚?a??a??a??a??|a??a??a??a??a??a??(?:a??a??a??a??|a??a?
+  239:  ?a??a?ÅNa??)|a?!a?Å·a??a?Å |a?aa?3a?ca??a?3a?Å‚a??a??a??|EXPO|a?oaÅ}?(?:a??|a?Ra??a!?a??)|a?3e?ÅCa?3a?3a??a?3a??|a?Åãc?Äe3?a??|e??e?ÅE|
+  240:  e??e??|e??eÄ?|c?oeÄ?|ao?a??|a?-a?Åía?3a??a??a?3|c??a??eÄ?c?\|aÄ??e??e|?aÄ??/i;
+  241:  const EXCLUDED_VENDOR = /a??a??a??e??e?ÅC|a?ÅPa?-a??a?3|a??aÅE?|a?\a?Å e?É a??|alibaba|aliyun|amazon|a\?a?c|eÅ·?e?ÅëeÄ?a??aR?a?Åãe??|aÅP
+  242:  ?e??a??a?o/i;
+  243:  const EXCLUDED_DOMAIN = /(^|\.)(?:kuronekoyamato\.co\.jp|kuronekoyamato\.jp|sagawa-exp\.co\.jp|post\.japanpost\.jp|alibaba\.com
+  244:  |aliyun\.com|amazon\.[a-z.]+|rakuten\.[a-z.]+|imitsu\.jp|proni\.jp|hikakubiz\.jp)$/i;
+  245:  const KNOWN_MASTER_CLIENT = /TAO|TOKIUM|a??e??a?!a??a?Åía?Åë|a?3a?ÅPa?É a??a?!a??a?Åía?Åë|e?!a?ÅNa??|MAC|e1?a2?|a??a??a?Åãa?Å}a??|GridBe
+  246:  yond|a?Åãa?aa??a??a??a?ÅNa?3a??|Cocolive|GROWTH\s*VERSE/i;
+  247:  const LODGING_MAIL = /a??a??a?Å·|a??e?ÅN|aR?a3?|aRÅëaR?|aRÅLa??a?ÅL|aÅ}Å}aÅãÅLe??|a?É a?3a??a?Å a??|a?ÅNa??a??|a?Åãa?ca?3a??a??a?ÅP|grandpark
+  248:  |fukushimagp/i;
+  249:  const INTERNAL_EXPENSE_MAIL = /(?:^|\.)(?:freee\.co\.jp|moneyforward\.com|moneyforward\.jp|mfcloud\.jp|yayoi-kk\.co\.jp)$|cÉ ?e2
+  250:  Å‚c?3eÅ·?|cÅ·?a??(?:e??|a??)?|e??a??a?ÅC|eÅ·?aÅ}?a?ÅC(?:a?R)?eÅ‚ÅëeÄ?/i;
+  251:  const LODGING_DOMAIN = /(?:^|\.)(?:hotel|hotels|ryokan|onsen|sansuiso|sunvalley|fukushimagp)(?:[.-]|$)/i;
+  252:  const LODGING_SENDER = /(?:a??a??a?Å·|a??e?ÅN|aR?|aÅCca3?|aÅ}Å}aÅãÅLe??|a?É a?3a??a?Å a??)|aÄ?[^aÄ?]*(?:a??a??a?Å·|a??e?ÅN|aR?|aÅCca3?|aÅ}Å}a
+  253:  ÅãÅLe??|a?É a?3a??a?Å a??)[^aÄ?]*aÄ?/i;
+  254:  const CUSTOMER_INQUIRY_ACK = /(?:a??a?Rao|a?ÅP|a??a?Å‚a?ca?ÅP)?(?:a???a??(?:a??)?a??(?:a??)?a??|a??c?ÅCeÅ·?)(?:a??)?a??a??a??a??|a??
+  255:  ?a??(?:a??)?a??(?:a??)?a??a??a??a??a?ÅNa??a??a??a??a??a??/i;
+  256:  const OUR_REQUEST = /(?:e|?cc?|ccoaR?|ccoa??|a??e??|ao?cÅL?|a??e??).*(?:a??e!?a??|a??e??|a??a??a?||cÅëoea?)|a??a??a??a??a??a??(?:
+  257:  a??a??a??a??a??|a??a??a??a??)/i;
+  258:  const TARGET_MAILBOXES = new Set(["satou@orgiast.jp", "seisaku-team@orgiast.jp"]);
+  259:  const domainStem = value => String(value || "").toLowerCase().split(".").filter(Boolean).slice(0, -1).join("");
+  260:  const cleanCompany = value => txt(value).replace(/^(?:\s*>+\s*)+/, "").replace(/^<|>$/g, "").trim();
+  261:  const companyFromMail = (message, domain) => {
+  262:    const from = sender(message.from || ""), display = cleanCompany(from.name).replace(/[aÄ?aÄ?]/g, ""),
+  263:      body = String(message.body || ""),
+  264:      signature = body.split(/\r?\n/).map(txt).find(line =>
+  265:        /(?:a?aa??a??c??|a??e??a??c??|a??a??a??c??|aÅCÄe?Å c??a?Åía3?aoo|a?Å})/.test(line) &&
+  266:        !/a?aa??a?ÅCa?Åía?1a??/.test(line) && line.length <= 80 && !/[aÄ?]$/.test(line));
+  267:    if (/(?:a?aa??a??c??|a??e??a??c??|a??a??a??c??|aÅCÄe?Å c??a?Åía3?aoo|a?Å})/.test(display)) return cleanCompany(display);
+  268:    if (signature) return cleanCompany(signature.replace(/^(?:a??c??a??\s*[:i??]\s*)/, "").replace(/\s*(?:a??a??a??eÄ?|a??a??eÄ?)
+  269:  ?aÅò?.*$/, ""));
+  270:    if (display && !/@/.test(display) && !/^(?:a??a??|a?Å˜a\-|ao?a??aÅ}Ä|[\w.+-]+)$/i.test(display) && !/^[^\saÄÄ]{1,12}\s*aÅò??$/.t
+  271:  est(display)) return display;
+  272:    return domain || "";
+  273:  };
+  274:  export function detectMailCases(messages = [], masterRows = [], { limit = 10 } = {}) {
+  275:    const masterCodes = new Set(), masterClients = new Set(), masterText = norm(masterRows.flat().join(" ")).toLowerCase();
+  276:    if (masterRows.length) {
+  277:      const map = headerMap(masterRows[0]), codeColumn = col(map, "i?oi?Åãi??i??", "a?3a??a??"),
+  278:        clientColumn = col(map, "a?ÅPa?ca??a?Åëa?3a??a??");
+  279:      for (const row of masterRows.slice(1)) {
+  280:        if (codeColumn >= 0) masterCodes.add(baseCaseCode(row[codeColumn]));
+  281:        if (clientColumn >= 0 && clientKey(row[clientColumn])) masterClients.add(clientKey(row[clientColumn]));
+  282:      }
+*****
+
+Resync Failed.  Files are too different.
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\TOOLS\satou-secretary-daily.mjs
+  205:    }
+  206:    return out;
+  207:  }
+  208:  async function api(
+  209:    url,
+  210:    { token, method = "GET", body, fetchImpl = gwsFetch } = {},
+  211:  ) {
+  212:    const r = await fetchImpl(url, {
+  213:        method,
+  214:        headers: {
+  215:          Authorization: `Bearer ${token}`,
+  216:          "Content-Type": "application/json",
+  217:        },
+  218:        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  219:        signal: AbortSignal.timeout(3e4),
+  220:      }),
+  221:      s = await r.text();
+  222:    if (!r.ok) {
+  223:      const target = new URL(url),
+  224:        detail = body?.requests
+  225:          ? ` requests=${body.requests.map((x, i) => `${i}:${Object.keys(x)[0]}`).join(",")}`
+  226:          : "";
+  227:      throw Error(
+  228:        `Google API ${r.status} ${method} ${target.pathname}${target.search}: ${s.slice(0, 500)}${detail}`,
+  229:      );
+  230:    }
+  231:    return s ? JSON.parse(s) : {};
+  232:  }
+  233:  const token = (scope, user = USER) =>
+  234:    getDriveToken({ scope, impersonate: user, signal: AbortSignal.timeout(3e4) });
+  235:  export async function readSheet(id, range, deps = {}) {
+  236:    const t = await (
+  237:      deps.getSheetsToken ||
+  238:      (() => token("https://www.googleapis.com/auth/spreadsheets"))
+  239:    )();
+  240:    return (
+  241:      (
+  242:        await api(
+  243:          `https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(range)}?valueRenderOption=UNFORMATTED_
+  244:  VALUE`,
+  245:          { token: t, fetchImpl: deps.fetchImpl },
+  246:        )
+  247:      ).values || []
+  248:    );
+  249:  }
+  250:  const sender = (s) => ({
+  251:    name: (s.match(/^(.*?)\s*</)?.[1] || s).replace(/^"|"$/g, ""),
+  252:    email: s.match(/[\w.+-]+@[\w.-]+/)?.[0] || "",
+  253:  });
+  254:  export function classifyDepartmentStoreThread(messages = []) {
+  255:    const ordered = [...messages].sort(
+  256:        (a, b) => +a.internalDate - +b.internalDate,
+  257:      ),
+  258:      compact = ordered.map((x) => (x.payload ? compactMessage(x) : x)),
+  259:      outgoing = compact.filter((x) =>
+  260:        /@(?:orgiast\.jp)/i.test(sender(x.from).email),
+  261:      ),
+  262:      customer = outgoing.some((x) =>
+  263:        /c??a??a??a??a?3a??c??e2ÅNao?a?RaÅíR|a??e??/.test(x.from || ""),
+  264:      ),
+  265:      addressedToInfo = compact.some((x) =>
+  266:        /info@event-shop\.jp/i.test(x.to || ""),
+  267:      ),
+  268:      last = compact.at(-1),
+  269:      lastSender = sender(last?.from || "");
+  270:    return {
+  271:      isDepartmentStore: compact.some((x) =>
+  272:        /c??a??a??a??a?3a??c??e2ÅNao?|event-shop\.jp/i.test(
+  273:          `${x.from || ""} ${x.to || ""} ${x.subject || ""} ${x.snippet || ""}`,
+  274:        ),
+  275:      ),
+  276:      judgment: addressedToInfo && !outgoing.length,
+  277:      customer,
+  278:      last,
+  279:      lastSender,
+  280:      unanswered: !!lastSender.email && !/@orgiast\.jp$/i.test(lastSender.email),
+  281:    };
+  282:  }
+  283:  async function mail(deps = {}) {
+  284:    const q =
+  285:        'newer_than:2d ((from:satou@orgiast.jp OR to:satou@orgiast.jp OR cc:satou@orgiast.jp OR "a??e?? a?aa\?" OR "a??e??a?aa\?"
+  286:   OR from:imitsu.jp) OR ("c??a??a??a??a?3a??c??e2ÅNao?" OR to:info@event-shop.jp OR from:event-shop.jp)) -from:saiyo@orgiast.jp -
+  287:  to:saiyo@orgiast.jp',
+  288:      r = await (deps.searchGmail || searchGmail)({
+  289:        user: USER,
+  290:        query: q,
+  291:        max: 100,
+  292:        withBody: true,
+  293:        bodyLimit: 8000,
+  294:        concurrency: 3,
+  295:      }),
+  296:      t = await token("https://www.googleapis.com/auth/gmail.readonly"),
+  297:      threads = [
+  298:        ...new Map(r.messages.map((x) => [x.threadId, x])).values(),
+  299:      ].map((x) => ({ ...x, url: gmailUrl(x.threadId) })),
+  300:      messages = [],
+  301:      unanswered = [],
+  302:      departmentStoreJudgment = [],
+  303:      departmentStoreCustomers = [];
+  304:    for (const x of threads) {
+***** C:\USERS\USER\.CLAUDE\NIGHTLY-REPO\.WT\SATOU-SECRETARY\TOOLS\SATOU-SECRETARY-DAILY.MJS
+  283:    }
+  284:    const coded = new Map(), inquiries = new Map(), threads = new Map();
+  285:    for (const message of messages) {
+  286:      if (ignoredMailbox(message.from)) continue;
+  287:      const participants = addresses(`${message.from || ""},${message.to || ""},${message.cc || ""}`),
+  288:        external = participants.filter(outsideAddress);
+  289:      if (!external.length) continue;
+  290:      const blob = mailText(message), subject = txt(message.subject), from = sender(message.from || ""),
+  291:        fromDomain = from.email.toLowerCase().split("@")[1] || "",
+  292:        counterpart = outsideAddress(from.email.toLowerCase())
+  293:          ? (from.name || fromDomain)
+  294:          : (external[0].split("@")[1] || ""),
+  295:        codes = [...new Set((blob.match(/\b\d{6}[A-Z]{3,5}\b/g) || []).map(baseCaseCode))],
+  296:        stamp = Number(message.internalDate) || 0,
+  297:        url = message.url || gmailUrl(message.threadId || message.id || "");
+  298:      const imitsu = /(^|\.)(?:imitsu|proni)\.jp$/i.test(fromDomain),
+  299:        hp = /Weba?É a??a??a??a??a??a??a??a??a??a??|a??a??a??a??a??a?ÅCa?Ra??a??a??a??a??a??|a??a??a??a??a??a??a??a?ca??a??/i.test(
+  300:  subject),
+  301:        departmentStore = /event-shop\.jp/i.test(`${message.to || ""} ${message.cc || ""}`) || /c??a??a??a??a?3a??c??e2ÅNao?/i.tes
+  302:  t(blob),
+  303:        ipo = /aÅC?a?ÅL|IPO|a??a?Å·a?Åëa??a?\a?!a?3a??/i.test(blob);
+  304:      const internalExpense = INTERNAL_EXPENSE_MAIL.test(`${fromDomain}\n${blob}`),
+  305:        lodgingFacility = LODGING_DOMAIN.test(fromDomain) || LODGING_SENDER.test(from.name || "");
+  306:      if (!internalExpense && !lodgingFacility && (imitsu || hp || departmentStore || ipo)) {
+  307:        const key = fromDomain || norm(subject).toLowerCase(), old = inquiries.get(key);
+  308:        if (!old || stamp >= old.stamp) inquiries.set(key, {
+  309:          kind: "a??a??a??a??a??aÄ?eÅí?", code: "", client: counterpart, subject,
+  310:          url, threadId: message.threadId || "", stamp,
+  311:        });
+  312:      }
+  313:      if (internalExpense || lodgingFacility || EXCLUDED_DOMAIN.test(fromDomain) || EXCLUDED_VENDOR.test(blob)) continue;
+  314:      if (!BULK_OR_AUTO_MAIL.test(subject))
+  315:        for (const code of codes) {
+  316:          if (masterCodes.has(code)) continue;
+  317:          const old = coded.get(code);
+  318:          if (!old || stamp >= old.stamp) coded.set(code, {
+  319:            kind: "a??a?1a??a??a?ac?Å‚e?2", code, client: cleanCompany(counterpart) || fromDomain, subject,
+  320:            url, threadId: message.threadId || "", stamp,
+  321:          });
+  322:        }
+  323:      const targetInvolved = participants.some(address => TARGET_MAILBOXES.has(address)),
+  324:        domain = external.filter(customerAddress).map(address => address.split("@")[1]).find(Boolean);
+  325:      if (targetInvolved && domain) {
+  326:        const key = message.threadId || message.id || `${domain}:${subject}`,
+  327:          group = threads.get(key) || { domain, messages: [], substantiveIncoming: false, outgoing: false };
+  328:        group.messages.push(message);
+  329:        const incoming = customerAddress(emailAddress(message.from));
+  330:        const actualMailingList = message.listUnsubscribe && !/groups\.google\.com\/a\/orgiast\.jp/i.test(message.listUnsubscribe
+  331:  );
+  332:        const personalReply = /^\s*Re:/i.test(subject) && !actualMailingList;
+  333:        group.substantiveIncoming ||= incoming && !actualMailingList && CUSTOMER_INTENT.test(blob) &&
+  334:          (!BULK_OR_AUTO_MAIL.test(blob) || personalReply);
+  335:        group.outgoing ||= TARGET_MAILBOXES.has(emailAddress(message.from));
+  336:        threads.set(key, group);
+  337:      }
+  338:    }
+  339:    const uncoded = new Map();
+  340:    for (const group of threads.values()) {
+  341:      const ordered = [...group.messages].sort((a, b) => (Number(a.internalDate) || 0) - (Number(b.internalDate) || 0));
+  342:      const first = ordered[0], firstIncoming = customerAddress(emailAddress(first.from)),
+  343:        inferredIncomingOrigin = !firstIncoming && group.substantiveIncoming && CUSTOMER_INQUIRY_ACK.test(mailText(first)),
+  344:        ourRequest = !firstIncoming && (OUR_REQUEST.test(mailText(first)) || (LODGING_MAIL.test(mailText(first)) && CASE_MAIL_WOR
+  345:  DS.test(mailText(first)))),
+  346:        lodgingReply = LODGING_MAIL.test(`${group.domain}\n${group.messages.map(mailText).join("\n")}`) && /(?:Re:|RE:|a??a??a?R)
+  347:  \s*.*a??a??a??a??a??a??|a??a??a??a??a??a??.*(?:a??c-?|e??a?!)/i.test(group.messages.map(mailText).join("\n")),
+  348:        requiredJr = group.domain === "jcomm.co.jp";
+  349:      if (!group.substantiveIncoming || (!group.outgoing && !requiredJr) || (!firstIncoming && !inferredIncomingOrigin) || ourReq
+  350:  uest || lodgingReply) continue;
+  351:      const latest = ordered.at(-1),
+  352:        incoming = [...ordered].reverse().find(message => customerAddress(emailAddress(message.from))) || latest,
+  353:        client = companyFromMail(incoming, group.domain), key = clientKey(client),
+  354:        codes = [...new Set(group.messages.flatMap(message =>
+  355:          (mailText(message).match(/\b\d{6}[A-Z]{3,5}\b/g) || []).map(baseCaseCode)))],
+  356:        code = codes.find(value => !masterCodes.has(value)) || "";
+  357:      if (codes.length && !code) continue;
+  358:      const domainKey = domainStem(group.domain);
+  359:      if (!client || client.includes("@") || client === emailAddress(incoming.from).split("@")[0] || KNOWN_MASTER_CLIENT.test(cli
+  360:  ent)) continue;
+  361:      if ([...masterClients].some(existing => existing === key ||
+  362:        (Math.min(existing.length, key.length) >= 4 && (existing.includes(key) || key.includes(existing))) ||
+  363:        (domainKey.length >= 4 && (existing.includes(domainKey) || domainKey.includes(existing)))) ||
+  364:        masterText.includes(group.domain.toLowerCase())) continue;
+  365:      const stamp = Number(latest.internalDate) || 0, old = uncoded.get(group.domain);
+  366:      if (!old || stamp >= old.stamp) uncoded.set(group.domain, {
+  367:        kind: "a??a?1a??a??a?ac?Å‚e?2", code, client, subject: txt(latest.subject),
+  368:        url: latest.url || gmailUrl(latest.threadId || latest.id || ""),
+  369:        threadId: latest.threadId || "", domain: group.domain, count: group.messages.length,
+  370:        reason: "a?!a??a?Å·a??a?o(a?3a??a??c?!a??)", stamp,
+  371:      });
+  372:    }
+  373:    const unregistered = [...coded.values(), ...uncoded.values()],
+  374:      unregisteredThreads = new Set(unregistered.map(item => item.threadId).filter(Boolean));
+  375:    return [...unregistered, ...[...inquiries.values()].filter(item => !unregisteredThreads.has(item.threadId))]
+  376:      .sort((a, b) => (a.kind === "a??a?1a??a??a?ac?Å‚e?2" ? 0 : 1) - (b.kind === "a??a?1a??a??a?ac?Å‚e?2" ? 0 : 1) || b.stamp - a.
+  377:  stamp)
+  378:      .slice(0, limit)
+  379:      .map(({ stamp, ...candidate }) => candidate);
+  380:  }
+  381:  const gmailUrl = (id) =>
+  382:    `https://mail.google.com/mail/?authuser=${encodeURIComponent(USER)}#all/${id}`;
+*****
+

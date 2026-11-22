@@ -107,7 +107,7 @@ const INBOX_RELAY = /(?:【受信箱】|起きたこと[:：]|判断してほし
 // Claude 側の作業が終わっている正当な状態で、委譲せずに待つ放置とは区別する。
 // 委譲を起動したと明記した語が一致位置の手前 120 字以内にある場合だけ採用しない。
 // （委譲の報告が無いまま待つ形 — 2026-10-21 の 7 ターン言い換え待機 — は従来どおり検出する）
-const DELEGATION_STARTED = /(?:codex-do|cheap-code|llm-ask|指示書を(?:作成|書|渡|用意)|(?:Codex|Gemini|DeepSeek|Groq|OpenRouter|Mistral|サブエージェント)[ \t]*(?:に|へ|を)[^。\n]{0,24}(?:委譲|依頼|渡し|投げ|起動|実行させ))/;
+const DELEGATION_STARTED = /(?:codex-do|cheap-code|llm-ask|バックグラウンドで(?:実行|動い|走っ|動か)|指示書を(?:作成|書|渡|用意)|(?:Codex|Gemini|DeepSeek|Groq|OpenRouter|Mistral|サブエージェント)[ \t]*(?:に|へ|を|が|の)[^。\n]{0,24}(?:委譲|依頼|渡し|投げ|起動|実行させ|実行中|調査中|完了待ち|作業中))/;
 // 2026-11-18 実測（e88a780c / 2026-11-17T04:04:04.337Z）: 3行フッターだけのメッセージ
 // 「次に kim がすること: なし（Codex の生成完了を待っています）」が W に当たっていた。
 // 人の作業がゼロ（なし）で、待つ相手が自動レーンなら、委譲済みの正当な待機なので除外する。
@@ -143,7 +143,8 @@ const W  = {
       if (isAuditCitation(text, match.index) || isPatternNameQuote(text, match.index)) continue;
       if (REPLY_WAIT.test(match[0]) && EXTERNAL_WAIT_SUBJECT.test(text.slice(Math.max(0, match.index - 60), match.index))) continue;
       if (INBOX_RELAY.test(text.slice(Math.max(0, match.index - 200), match.index))) continue;
-      if (DELEGATION_STARTED.test(text.slice(Math.max(0, match.index - 120), match.index))) continue;
+      // 委譲語が一致の手前だけでなく一致本文自体にある場合も除外する（一致が先頭から始まる場合など）
+	      if (DELEGATION_STARTED.test(text.slice(Math.max(0, match.index - 120), match.index + match[0].length))) continue;
       if (LANE_NAME.test(text.slice(Math.max(0, match.index - 60), match.index + match[0].length + 60)) && HANDOFF_NONE_LINE.test(text.slice(Math.max(0, match.index - 200), match.index))) continue;
       if (DATA_WAIT_RE.test(match[0]) && EXTERNAL_WAIT_SUBJECT.test(text.slice(Math.max(0, match.index - 40), match.index))) continue;
       return match;

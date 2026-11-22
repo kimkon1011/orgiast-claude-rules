@@ -424,6 +424,13 @@ test('codex dry failure with real 401 still classifies oauth_consent', async t =
   assert.equal(result.lanes.codex.reason, 'dead:oauth_consent');
 });
 
+test('minified JS の長大な1行に含まれる unauthorized は oauth_consent に分類しない', async t => {
+  const home = fixture(t);
+  const text = `${'x'.repeat(2494)}unauthorized${'x'.repeat(2494)}`;
+  const result = await laneDoctorProbe({ home, now, platform: 'linux', providers: ['codex'], probe: async () => ({ code: 1, text }), notify: async () => ({ delivered: 'test' }) });
+  assert.equal(result.lanes.codex.reason, 'probe_failed');
+});
+
 test('shouldSkipLiveProbe: 回数制限・課金中は until まで実測しない', () => {
   const now = 1_700_000_000_000;
   assert.equal(shouldSkipLiveProbe({ reason: 'quota_wait', until: now + 1000 }, now), true);
@@ -515,11 +522,28 @@ test('recent real success requires two consecutive direct billing probes; succes
 test('Codex probe bypasses cheap-first and task routing with no fallback', async () => {
   const result = await runProbe('codex', { home: '/tmp/unused', timeoutMs: 1000, execFileImpl(exe, args, options, done) {
     assert.equal(options.env.CODEX_DO_CHEAP_FIRST, '0');
+    assert.equal(options.env.CODEX_DO_SKIP_CURSOR_AGENT, '1');
     assert.ok(args.includes('--no-fallback'));
     assert.equal(args[args.indexOf('--kind') + 1], 'implement');
     done(null, 'PONG', '');
   } });
   assert.equal(result.code, 0);
+});
+
+test('non-Codex probe does not skip cursor-agent through its environment', async () => {
+  const previous = process.env.CODEX_DO_SKIP_CURSOR_AGENT;
+  process.env.CODEX_DO_SKIP_CURSOR_AGENT = '1';
+  try {
+    const result = await runProbe('gemini', { home: '/tmp/unused', timeoutMs: 1000, execFileImpl(exe, args, options, done) {
+      assert.equal(options.env.CODEX_DO_CHEAP_FIRST, '0');
+      assert.equal(options.env.CODEX_DO_SKIP_CURSOR_AGENT, undefined);
+      done(null, 'PONG', '');
+    } });
+    assert.equal(result.code, 0);
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_DO_SKIP_CURSOR_AGENT;
+    else process.env.CODEX_DO_SKIP_CURSOR_AGENT = previous;
+  }
 });
 
 test('chain success and quota cannot prove the requested Codex lane is alive or quota-limited', async t => {

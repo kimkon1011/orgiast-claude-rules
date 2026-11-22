@@ -211,7 +211,7 @@ export function resetLaneProbeWorkDir(dir) {
 }
 export async function runNativeWriteProbe({ home, timeoutMs, workDir = laneProbeWorkDir() }) {
   const cwd = resetLaneProbeWorkDir(workDir);
-  const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home, CODEX_DO_CHEAP_FIRST: '0' }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e, stdout, stderr) => {
+  const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home, CODEX_DO_CHEAP_FIRST: '0', CODEX_DO_SKIP_CURSOR_AGENT: '1' }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e, stdout, stderr) => {
     const output = `${stdout || ''}\n${stderr || ''}`.trim();
     if (e?.killed || e?.signal) return resolve({ code: 1, timedOut: true, text: `タイムアウト(${Math.ceil(timeoutMs / 1000)}s) ${output}`.trim() });
     resolve({ code: e ? 1 : 0, text: output });
@@ -230,7 +230,9 @@ export function runProbe(provider, { home, timeoutMs, dryRun = false, probeAutoD
   const args = provider === 'codex'
     ? [path.join(repo, 'tools/codex-do.mjs'), 'Reply with exactly: PONG. Do not modify any files.', '--cwd', repo, '--kind', 'implement', '--no-fallback', '--no-escalate', ...(needsNativeCodexProbe() ? ['--allow-native'] : []), ...(dryRun ? ['--dry-run'] : ['--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))])]
     : [path.join(repo, 'tools/llm-ask.mjs'), '--provider', provider, 'Reply with exactly: PONG', '--max', '64', '--no-fallback'];
-  return new Promise(resolve => execFileImpl(process.execPath, args, { cwd: repo, env: { ...process.env, ORGIAST_HOME: home, CODEX_DO_CHEAP_FIRST: '0', ORGIAST_LANE_DOCTOR_PROBE_PROVIDER: probeAutoDisabled ? provider : '' }, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 256 * 1024, windowsHide: true }, (e, stdout, stderr) => resolve({ code: e ? e.code || 1 : 0, text: redactAll(`${stdout}\n${stderr}`) })));
+  const { CODEX_DO_SKIP_CURSOR_AGENT: _skipCursorAgent, ...baseEnv } = process.env;
+  const env = { ...baseEnv, ORGIAST_HOME: home, CODEX_DO_CHEAP_FIRST: '0', ORGIAST_LANE_DOCTOR_PROBE_PROVIDER: probeAutoDisabled ? provider : '', ...(provider === 'codex' ? { CODEX_DO_SKIP_CURSOR_AGENT: '1' } : {}) };
+  return new Promise(resolve => execFileImpl(process.execPath, args, { cwd: repo, env, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 256 * 1024, windowsHide: true }, (e, stdout, stderr) => resolve({ code: e ? e.code || 1 : 0, text: redactAll(`${stdout}\n${stderr}`) })));
 }
 export function notificationText(item, home) {
   if (item.reason === 'keyserve_unenrolled') {
@@ -356,7 +358,8 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       const limited = !billing && quotaFailure(text);
       // codex-do が利用枠クールダウンで保留(exit 75)した場合は WSL 問題ではなく枠切れ。クールダウン自体は既存のまま触らない。
       const deferred = /codex_cooldown/.test(text);
-      health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: uncertain ? 'probe_inconclusive' : payment ? 'billing' : (limited || deferred) ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired/i.test(text) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, viaChain: false, probeResult: uncertain ? 'inconclusive' : 'fail', probeEvidence: `exit ${result.code}`, billingProbeStreak: streak, ...(result.authOk ? { authOk: true } : {}) };
+      const authText = text.split(/\r?\n/).filter(line => line.length <= 2000).join('\n');
+      health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: uncertain ? 'probe_inconclusive' : payment ? 'billing' : (limited || deferred) ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired/i.test(authText) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, viaChain: false, probeResult: uncertain ? 'inconclusive' : 'fail', probeEvidence: `exit ${result.code}`, billingProbeStreak: streak, ...(result.authOk ? { authOk: true } : {}) };
       // 失敗の中身を必ず残す（2026-10-15 作業用011: 理由が記録されず原因を追えなかった）
       health.lanes[p].error = String(text || '').replace(/(sk-|eyJ)[A-Za-z0-9._-]{8,}/g, '$1***').replace(/\s+/g, ' ').trim().slice(-400);
       // native の失敗でも、認証・上限・課金が原因なら physical_operation（再起動が要る）と誤判定しない

@@ -17,7 +17,8 @@ try {
   const fp = String(j.tool_input?.file_path || '');
   if (!fp) return;
   const lower = fp.toLowerCase().replaceAll('/', '\\');
-  const exclude = ['\\memory\\','\\.claude\\','rules-extracted','onboarding-compress','\\docs\\','node_modules','\\tools\\','\\.git\\','scratchpad','\\test\\','\\tests\\','\\__tests__\\','.test.','.spec.','.stories.'];
+  // tools/ は除外しない。rules リポの実装ほぼ全てが tools/*.mjs で、除外すると行ベース委譲率が 0% 付近に張り付く（004minpaku 実測）。
+  const exclude = ['\\memory\\','\\.claude\\','rules-extracted','onboarding-compress','\\docs\\','node_modules','\\.git\\','scratchpad','\\test\\','\\tests\\','\\__tests__\\','.test.','.spec.','.stories.'];
   if (exclude.some((x) => lower.includes(x))) return;
   const codeExt = ['.ts','.tsx','.js','.jsx','.mjs','.cjs','.py','.go','.rs','.java','.gs','.vue','.svelte','.php','.rb','.cs','.kt','.swift','.ps1'];
   if (!codeExt.includes(path.extname(lower))) return;

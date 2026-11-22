@@ -591,26 +591,27 @@ for (const dirty of [true, false]) test(`real git bootstrap preserves dirty tree
   skip: !hasPowerShell || !existsSync(windowsGit),
 }, () => {
   const fix = fixture(`real-git-${dirty}`);
+  const gitRun = (dir, args) => execFileSync(windowsGit, ['-C', toWindowsPath(dir), ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] });
   const git = (dir, args) => execFileSync(windowsGit, ['-C', toWindowsPath(dir), ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   const remote = join(fix.dir, 'remote.git');
-  git(fix.dir, ['init', '--bare', toWindowsPath(remote)]);
-  git(fix.repo, ['init', '-b', 'main']);
-  git(fix.repo, ['config', 'user.name', 'Test']);
-  git(fix.repo, ['config', 'user.email', 'test@example.invalid']);
+  gitRun(fix.dir, ['init', '--bare', toWindowsPath(remote)]);
+  gitRun(fix.repo, ['init', '-b', 'main']);
+  gitRun(fix.repo, ['config', 'user.name', 'Test']);
+  gitRun(fix.repo, ['config', 'user.email', 'test@example.invalid']);
   const target = join(fix.repo, 'target.ps1');
   writeFileSync(target, 'exit 0\r\n');
   writeFileSync(join(fix.repo, 'tracked'), 'original');
-  git(fix.repo, ['add', 'tracked', 'target.ps1']);
-  git(fix.repo, ['commit', '-m', 'initial']);
-  git(fix.repo, ['remote', 'add', 'origin', toWindowsPath(remote)]);
-  git(fix.repo, ['push', '-u', 'origin', 'main']);
+  gitRun(fix.repo, ['add', 'tracked', 'target.ps1']);
+  gitRun(fix.repo, ['commit', '-m', 'initial']);
+  gitRun(fix.repo, ['remote', 'add', 'origin', toWindowsPath(remote)]);
+  gitRun(fix.repo, ['push', '-u', '--quiet', 'origin', 'main']);
   if (dirty) {
     writeFileSync(join(fix.repo, 'tracked'), 'changed');
     writeFileSync(join(fix.repo, 'untracked'), 'precious');
   } else {
-    git(fix.repo, ['commit', '--allow-empty', '-m', 'upstream']);
-    git(fix.repo, ['push', 'origin', 'main']);
-    git(fix.repo, ['checkout', '--detach', 'HEAD~1']);
+    gitRun(fix.repo, ['commit', '--allow-empty', '-m', 'upstream']);
+    gitRun(fix.repo, ['push', '--quiet', 'origin', 'main']);
+    gitRun(fix.repo, ['checkout', '--detach', 'HEAD~1']);
   }
   const shim = join(fix.dir, 'real-shim');
   mkdirSync(shim);

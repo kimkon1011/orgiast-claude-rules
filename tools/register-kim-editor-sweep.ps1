@@ -14,7 +14,7 @@ if ($ValidateOnly) {
 }
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script) -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At '05:50'
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 Register-ScheduledTask -TaskName 'OrgiastKimEditorSweep' -Action $action -Trigger $trigger -Settings $settings -Description 'Ensure kim editor permission on automation files from the last seven days.' -Force | Out-Null
 $task = Get-ScheduledTask -TaskName 'OrgiastKimEditorSweep' -ErrorAction Stop
 if (-not $task.Actions.Arguments.Contains($script) -or $task.Triggers[0].StartBoundary.Substring(11,5) -ne '05:50') { throw 'read-back failed: OrgiastKimEditorSweep' }

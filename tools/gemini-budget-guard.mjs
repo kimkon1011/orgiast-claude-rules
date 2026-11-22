@@ -147,7 +147,7 @@ export function formatGeminiBudgetStatus(status, { now = new Date(), unmeasuredC
   return `- Gemini 従量: 台帳・CLI計測分 $${status.spentUsd.toFixed(2)}（≒¥${Math.round(status.spentJpy).toLocaleString('ja-JP')}） / 月予算¥${status.budgetJpy.toLocaleString('ja-JP')} に対し ${status.pct.toFixed(1)}% / ${stale ? 'unknown（予算状態が古い）' : status.level}${missing}${status.level === 'unknown' ? ' / 未計測あり・実費総額と利用余裕は判断不能' : ''}`;
 }
 
-export async function runGeminiBudgetGuard({ home = geminiHome(), now = new Date(), dryRun = false, fsImpl = fs, notifyImpl = notifyKim } = {}) {
+export function readGeminiBudgetStatus({ home = geminiHome(), now = new Date(), fsImpl = fs } = {}) {
   const dir = path.join(home, '.claude');
   const config = readJson(path.join(dir, 'gemini-budget.json'), fsImpl, {});
   if (!object(config)) throw new Error('gemini-budget.json はJSONオブジェクトが必要です');
@@ -169,8 +169,13 @@ export async function runGeminiBudgetGuard({ home = geminiHome(), now = new Date
   } catch { /* session logs unavailable, proceed without */ }
   const defaultConfig = readJson(DEFAULT_BUDGET, fsImpl, {});
   const defaultBudgetJpy = Number(defaultConfig.budgetJpy ?? 50000);
-  const status = summarizeGeminiBudget(rows, { now, budgetJpy: Number(config.budgetJpy ?? defaultBudgetJpy), usdJpy, ledgerAvailable, invalidRows, sessionLogRows, pricing });
+  return summarizeGeminiBudget(rows, { now, budgetJpy: Number(config.budgetJpy ?? defaultBudgetJpy), usdJpy, ledgerAvailable, invalidRows, sessionLogRows, pricing });
+}
+
+export async function runGeminiBudgetGuard({ home = geminiHome(), now = new Date(), dryRun = false, fsImpl = fs, notifyImpl = notifyKim } = {}) {
+  const status = readGeminiBudgetStatus({ home, now, fsImpl });
   if (dryRun) return status;
+  const dir = path.join(home, '.claude');
   writeJson(path.join(dir, 'gemini-budget-status.json'), status, fsImpl);
   // Stop at 90%, retaining the existing direct-API demotion as well.
   if (status.pct >= 90) {

@@ -15,6 +15,7 @@
 ## カタログ
 | 型 | 症状（初出） | 横展開の検索 | ゲート |
 |---|---|---|---|
+| 共有作業ツリーの Git 全体操作 | 共有作業ツリーで index/stash を全体操作して他セッション作業を巻き込む | `git add -A`、パススペック無しの `git commit`、書き込みを伴う `git stash` | shared-worktree-git-guard |
 | paid-option-before-free-route | 無料の既存経路を調べず費用案を先頭に提示（2026-11-18）。横展開11箇所（通知10＋日次配信1） | tools/ の quota・429・枠切れ・残高不足 と 有料・課金・入金・チャージ | decision-research-gate（無料案先頭＋FREE-ALT-CHECKED）、daily-beeper-approval / lahaina-daily-post の回帰テスト |
 | 本番常駐サーバーの開発モード起動型 | kim-PC のログオン後に SessionStart フックが秘書アプリを `next dev` で起動し、認証付き一覧 API に28.6秒（2026-11-19、`secretary-pc-ensure.log`） | タスクの Actions・WorkingDirectory、Startup、Run キー、SessionStart フック、起動スクリプトの `npm run dev`・`next dev`・`3940` | `tools/secretary-registration.test.mjs` で管理下の本番起動コマンドを検証し、実機のログオン後に 3940 番の待受プロセスと親コマンドを照合 |
 | PC名の直書き照合 | kim-PC のホスト名変更で秘書アプリの本番反映が停止（2026-11-19） | ps1 / mjs / json / gs の旧ホスト名・COMPUTERNAME・seatHostname・pilotHosts | fleet-pc-map の代表名と別名で判定し、新旧名と対象外PCを回帰テスト |
@@ -39,6 +40,7 @@
 | ツール不在の弱検証渡し型 | ツール不在を理由に、代替の弱い検証（テキスト・件数）でPDF資料を渡し、kim に「区切り・余白がおかしい」を3回指摘させた（2026-11-05〜15 三共精機） | §2.6.3・design-deck §6・pdf-page-check を使用しないPDF納品経路（html-to-pdf・Chrome直接PDF化） | pdf-deliverable-visual-gate（PreToolUse）がsha256証跡・全ページRead記録・機械チェック（社内向け語）を確認 |
 | 外部チャネル未監視型 | セッションが「返信が届いたら」と宣言した外部チャネル（LINEグループ等）を自動照会する仕組みがなく、resumeSession の連続 timeout で沈黙。kim が「進捗どう？」と聞く羽目に（2026-11-12 e50bea8a LINE エイト様グループ）。Gmail は external-waiting.mjs がカバー済みだが LINE/Discord/Beeper は未対応。再開失敗も kim-inbox に通知されず握りつぶされていた | 「返信待ち」「返事待ち」「返信が届いたら」の promise を持つ auto-progress 行。Supabase channel_messages を読みに行く check が未登録のセッション。resumeOutcome が error/timeout で failureCount>=3 の行 | `auto-progress-external-check.mjs`（新設: LINE Supabase 新着照会 check ツール）。watch の resume-failed 通知（連続3回失敗で kim-inbox🔴）。`auto-progress.mjs --add-check` 登録時に外部チャネル ID を埋め込む標準手順 |
 | 再開レーン誤配送型 | セッション再開（auto-progress-watch / stalled-session-resume が runChild に resumeSessionId を渡す）が、既定の実行者 cheap-code に流れて --resume が捨てられ、元の会話に何も届かず「blocked: 成果記録なし」のまま放置された（2026-11-09 セッション 834dfc9c） | runChild の resumeSessionId 分岐（auto-progress-watch.mjs、stalled-session-resume.mjs）。--resume を無視する実行レーン | runChild は resumeSessionId 指定時に claude レーンへ固定（PR #1879、2026-11-11 マージ）。結果 JSON 欠落は error 扱いで再試行。auto-session.test.mjs / auto-progress-watch.test.mjs のテスト |
+| 短い返事＋巨大な注入で人の入力を無視して無応答終了 | 短い返事への応答が空、または `No response requested.` のみで終了した（2026-11-19 kim 集計） | transcript 末尾の応答と直前の user エントリ | no-response-gate |
 
 追記ルール: 型名は構造を表す語にする。症状は1行、日付と出典を付ける。ゲート列が空の行は未完了として扱い、埋まるまで消さない。
 
@@ -64,3 +66,6 @@
 - 型: hook 注入の一覧を毎ターン冒頭表示させ同一セッションで大量再掲 → 新着差分・最終メッセージのみ・loop抑止を inbox-display-policy で強制
 - 型: コマンドラインの引用符の違いで正規のプロセスを別物と判定し、再起動を拒否する（2026-11-19 kim-PC、secretary-restart.ps1 の 3939/3940 実測） → 対策: 引数単位でパスとポートを照合し、Next.js の子プロセスは親も確認する。ゲート: tools/secretary-server-process.test.ps1
 | 送信ゲート経路漏れ型 | ゲートをコマンド名に結びつけ、同じ操作をする別経路を見落とす | 送信 API・Actions の `mode=send`・送信関数の呼び出しを `tools/` 全体で走査 | 送信ツール本体で防御＋送信経路の網羅テスト |
+- 型: 故障レーンの修理を「次のセッションで直します」と最終応答で先送りする型（2026-11-15 kim 指摘: deepseek・qwen の故障を次セッションへ回した。deferral-wait-gate に「次のセッション／明日／後で＋直す」の型が無く、lane-repair-first-gate は PreToolUse でツール実行しか止めないため最終文面を素通り。原因の実体は codex-do が警告行 [claude-code:unrecognized_model] だけで失敗判定していた誤判定と、qwen 0.22.3 が自動メモリ抽出で終了しない不具合） → 横展開の検索: deferral-wait-gate の全先送りパターン、codex-do の isLaneIncompatible・cheapFirstFailureReason の呼出し全箇所、buildQwenArgs → ゲート: deferral-wait-gate NEXT_SESSION_DEFERRAL（Stop・人待ち例外つき）+ isLaneIncompatible の警告行除外判定 + buildQwenArgs に --bare
+- 型: 手間依頼の回避策未検討型（2026-11-16 同日2回目。kim「何回言ったらわかるのかな」）→ 横展開の検索: user へ電話・操作を依頼する報告文・手順書 → ゲート: user-burden-gate の「Claude で回避できる策:」検査
+- 型: 数字だけの識別子を表計算が数値化し、先頭0が消えて厳密比較から脱落する（2026-11-20 fleet-mail `018`→`18` 未配達）→ 横展開の検索: Sheets 経由の ID・ラベル保存と `to` の厳密比較 → ゲート: 宛先列をプレーンテキスト書式に固定、読み出しを文字列化、数字ラベルは数値同値比較（tools/fleet-mail-address.test.mjs / fleet-mail-gas-v2.test.mjs）

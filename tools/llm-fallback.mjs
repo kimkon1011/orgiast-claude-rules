@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { budgetVerdict, estimateTokens, noteResponse, readBudget, writeBudget } from './rate-budget.mjs';
 import { isDailyQuotaResponse, nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
 import { providerLimitedUntil } from './lib/executor-gate.mjs';
-import { applyCandidateHealth, isQuotaOutcome } from './fallback-backend-health.mjs';
+import { isAutoDisabled, readDisabledEntries } from './lib/lane-disabled.mjs';
+import { applyCandidateHealth } from './fallback-backend-health.mjs';
 
 export const FALLBACK_CHAIN = Object.freeze([
   { provider: 'groq', model: 'openai/gpt-oss-120b' },
@@ -264,6 +265,10 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
   if (cooldownFile != null || !process.env.NODE_TEST_CONTEXT) {
     try { disabled = new Set(Object.keys(JSON.parse(fs.readFileSync(cooldownFile ? path.join(path.dirname(cooldownFile), 'lanes-disabled.json') : path.join(home, '.claude', 'lanes-disabled.json'), 'utf8').replace(/^\uFEFF/, '')) || {}).map(p => p.toLowerCase())); } catch {}
   }
+  // A lane-doctor probe may measure its own automatically disabled provider.
+  const probeProvider = process.env.ORGIAST_LANE_DOCTOR_PROBE_PROVIDER;
+  if (probeProvider && !chain.length && start?.provider === probeProvider &&
+      isAutoDisabled(readDisabledEntries(home)[probeProvider])) disabled.delete(probeProvider);
   const candidates = [];
   const seen = new Set();
   // Gateway selection is routing, not failover; --no-fallback still uses OpenRouter.
@@ -422,8 +427,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
         try {
           const row = JSON.parse(line);
           if (!row.provider || row.status === 'unrouted') return [];
-          const outcome = row.outcome || (row.status === 'ok' ? 'ok' : isQuotaOutcome(row.status) ? row.status : 'fail');
-          return [{ t: row.t, backend: row.backend || row.provider, outcome }];
+          return [row];
         } catch { return []; }
       });
       applyCandidateHealth(tracked, { rows });

@@ -19,6 +19,7 @@ function harness({ withMail = true, withBeacon = true } = {}) {
       getLastRow: () => rows.length, setFrozenRows: () => {}, deleteRow: n => rows.splice(n - 1, 1),
       getRange(row, col, count, width) {
         return {
+          setNumberFormat() { return this; },
           getValues: () => Array.from({ length: count }, (_, i) => Array.from({ length: width }, (_, j) => rows[row - 1 + i]?.[col - 1 + j] || '')),
           setRichTextValues(values) { assert.equal(locked, true); if (!silent) values.forEach((v, i) => { rows[row - 1 + i] = v.map(x => x.text); }); }
         };

@@ -5,12 +5,14 @@ import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { notifyKim } from './notify-kim.mjs';
+import { listItems } from './kim-inbox.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 
 import { formatKimNotice } from './lib/kim-notice.mjs';
 import { clearStaleIndexLock } from './dirty-worktree-guard.mjs';
 
 const RETRY_MS = 6 * 60 * 60 * 1000;
+const RESCUE_REVIEW_KEY = 'rescue-branch-review';
 export const WORK_DIRECTORY_EXCLUDES = ['scratch/', '.work/', '.work-*/', '.fleet-mail-work/'];
 const excluded = name => WORK_DIRECTORY_EXCLUDES.some(pattern => {
   const root = name.split('/')[0];
@@ -84,6 +86,48 @@ function rescuedTrees(tree) {
     'refs/heads/rescue/', 'refs/remotes/origin/rescue/']).split(/\r?\n/).filter(Boolean);
   const byTree = refs.map(line => { const i = line.indexOf(' '); return [line.slice(0, i), line.slice(i + 1).trim()]; });
   return new Map(byTree.filter(([t]) => t));
+}
+
+// A rescue whose diff against origin/main adds no line holds nothing main lacks,
+// even when its blobs never landed verbatim (a locally edited copy of a file main
+// has since improved). numstat counts added lines per path; binary paths report
+// "-" and are treated as unknown.
+function mainIsSuperset(tree, sha, paths) {
+  let rows;
+  // Without a pathspec this compares whole trees, so main's own newer work on
+  // untouched files counts as added lines and hides a genuinely stale rescue
+  // (measured on 9ed741f0, 2026-11-20).
+  try { rows = git(tree, ['diff', '--numstat', 'origin/main', sha, '--', ...paths]).split(/\r?\n/).filter(Boolean); }
+  catch { return false; }
+  if (!rows.length) return false;
+  return rows.every(row => row.split('\t')[0] === '0');
+}
+
+// A rescue branch whose every changed path already exists verbatim somewhere in
+// origin/main's history is a stale copy of work that already landed. Flagging it
+// in the handoff stops the reviewer from re-reading the same superseded diff every
+// night. Deleting the branch stays a human decision, so this only annotates.
+export function supersededByMain(tree, sha, { limit = 50 } = {}) {
+  let changed;
+  try {
+    changed = git(tree, ['diff-tree', '--no-commit-id', '--name-only', '-r', sha]).split(/\r?\n/).filter(Boolean);
+  } catch { return false; }
+  if (!changed.length) return false;
+  if (mainIsSuperset(tree, sha, changed)) return true;
+  for (const file of changed) {
+    let blob;
+    // A path the rescue commit deleted has no blob to match; treat it as unseen.
+    try { blob = git(tree, ['rev-parse', `${sha}:${file}`]).trim(); } catch { return false; }
+    let history;
+    try {
+      history = git(tree, ['rev-list', '-n', String(limit), 'origin/main', '--', file]).split(/\r?\n/).filter(Boolean);
+    } catch { return false; }
+    const landed = history.some(commit => {
+      try { return git(tree, ['rev-parse', `${commit}:${file}`]).trim() === blob; } catch { return false; }
+    });
+    if (!landed) return false;
+  }
+  return true;
 }
 
 export function snapshotTree(tree, status) {
@@ -218,11 +262,23 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
         sha = git(tree, ['rev-parse', 'HEAD']).trim();
       }
       log('RESCUE_LOCAL_OK', `${tree} ${branch} ${sha}`);
-      try { fs.appendFileSync(path.join(dir, 'next-session.md'), `\n- [ ] rescue ブランチ ${branch} に退避した変更のレビューが必要（${tree}; ${sha}）\n`); }
+      let landedNote = '';
+      try { if (supersededByMain(tree, sha)) landedNote = '（判定: 変更内容はすべて origin/main の履歴に存在。着地済みの可能性が高い）'; }
+      catch { /* annotation only; a failed probe must not block the handoff line */ }
+      try { fs.appendFileSync(path.join(dir, 'next-session.md'), `\n- [ ] rescue ブランチ ${branch} に退避した変更のレビューが必要（${tree}; ${sha}）${landedNote}\n`); }
       catch (e) { log('RESCUE_HANDOFF_FAILED', e.message); }
       try { git(tree, ['push', '-u', 'origin', branch]); }
       catch { log('RESCUE_PUSH_FAILED_LOCAL_SAVED', branch); }
-      if (!preserveTree) await sendOnce(`rescue:${day}`, `nightly-bootstrap: 変更を ${branch} に退避しました。レビューが必要です。`);
+      if (!preserveTree) {
+        const existing = listItems(home).find(item => item.dedupeKey === RESCUE_REVIEW_KEY);
+        const known = String(existing?.text || '').match(/rescue\/auto-session-\d{8}-\d{6}(?:-\d+)?/g) || [];
+        state.rescueBranches = [...new Set([...(state.rescueBranches || []), ...known, branch])].sort();
+        state.rescueCount = (state.rescueCount ?? existing?.count ?? existing?.repeatCount ?? 0) + 1;
+        save();
+        const all = state.rescueBranches;
+        const message = `rescue ブランチのレビュー・削除承認待ち（最新: ${branch} ／ 計 ${state.rescueCount} 件）\n対象ブランチ:\n${all.map(name => `- ${name}`).join('\n')}`;
+        await notify(message, { home, kind: 'ask', kimActionRequired: true, source: 'nightly-bootstrap', dedupeKey: RESCUE_REVIEW_KEY, replaceExisting: true, incrementExisting: true, plainJa: false });
+      }
     } catch (e) {
       // A shared index lock (or a timed-out commit hook) must not prevent a
       // snapshot. Preserve the real index/HEAD and commit with a private index.

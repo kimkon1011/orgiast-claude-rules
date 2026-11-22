@@ -108,7 +108,7 @@ test('prompt without opt-in never spawns and returns exact existing consent comm
   f.deps.request = async (kind, payload) => { f.calls.push({ kind, payload }); return kind === 'mail-poll' ? { messages: [mail({ kind: 'prompt' })] } : { mail: {} }; };
   await main(['--poll'], f.deps);
   assert.ok(f.calls.find(c => c.kind === 'mail-send').payload.body.includes('未オプトイン'));
-  assert.equal(f.calls.find(c => c.kind === 'mail-fail').payload.reason, 'exit-unknown');
+  assert.equal(f.calls.find(c => c.kind === 'mail-fail').payload.reason, 'not-opted-in');
 });
 test('opted-in prompt uses fixed header, local executable/cwd, bounded redacted result, no side-effect tools', async t => {
   const f = fixture(t); const spawns = [];
@@ -501,7 +501,7 @@ test('exec codex without opt-in replies with consent command and never spawns', 
   await main(['--poll'], f.deps);
   const reply = f.calls.find(c => c.kind === 'mail-send');
   assert.ok(reply.p.body.includes('未オプトイン'));
-  assert.equal(f.calls.find(c => c.kind === 'mail-fail').p.reason, 'exit-unknown');
+  assert.equal(f.calls.find(c => c.kind === 'mail-fail').p.reason, 'not-opted-in');
   // v2 saves consent responses too, so transport retries cannot regenerate work.
   assert.equal(fs.existsSync(path.join(f.dir, 'fleet-agent-results', `${execMail().id}.json`)), true);
 });
@@ -1133,6 +1133,30 @@ test('--sent-status does not present lookup-failure metadata as a cached mail', 
   f.deps.request = async () => { throw new DOMException('timeout', 'TimeoutError'); };
   assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 3);
   assert.deepEqual(f.output, []);
+});
+
+for (const status of ['done', 'failed', 'expired']) {
+  test(`--sent-status は終端状態 ${status} のキャッシュがあれば hub を照会せず即返す`, async t => {
+    const f = fixture(t);
+    const cached = { id: 'mail-1', to: recipient, status, createdAt: '2026-11-02T01:27:22.841Z', expiresAt: '2026-11-03T01:27:19.955Z', deliveredAt: '2026-11-02T01:27:37.548Z' };
+    fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent-status.json'), JSON.stringify({ 'mail-1': cached }));
+    f.deps.request = async () => assert.fail('終端状態のキャッシュがある時は hub を照会しない');
+    assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 0);
+    assert.deepEqual(f.calls, []);
+    assert.deepEqual(f.errors, []);
+    assert.match(f.output[0], /^id: mail-1$/m);
+    assert.match(f.output[0], new RegExp(`^status: ${status}$`, 'm'));
+    assert.match(f.output[0], /^deliveredAt: 2026-11-02T01:27:37.548Z$/m);
+  });
+}
+
+test('--sent-status は非終端のキャッシュでは従来どおり hub を照会する', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent-status.json'), JSON.stringify({ 'mail-1': { id: 'mail-1', status: 'seen', seenBy: 'other-PC' } }));
+  f.deps.request = async (kind, p) => { f.calls.push({ kind, p }); return { mail: { id: p.id, status: 'delivered' } }; };
+  assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 0);
+  assert.deepEqual(f.calls, [{ kind: 'mail-get', p: { id: 'mail-1' } }]);
+  assert.match(f.output[0], /^status: delivered$/m);
 });
 
 test('mail-get retries a timeout while reading the response body', async () => {

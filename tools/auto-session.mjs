@@ -554,8 +554,8 @@ export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 6
 - セッションの作業ディレクトリは履歴を揃えるためのフォルダであり、実際の作業対象リポジトリは ${repoCwd} である。git は必ず \`git -C "${repoCwd}"\` の形で実行し、codex-do.mjs は \`--cwd "${repoCwd}"\` を付ける。裸の \`git status\` / \`git checkout\` は使わない。
 - Windows パスをシェルに渡すときは必ずダブルクォートで囲む。bash はクォート無しの \\ を食うため、--cwd C:\\... は壊れた相対パスになる（2026-10-20 に spawn_failed 6件の実害）。
 - 実装本体は \`node tools/codex-do.mjs "<指示>" --cwd "${repoCwd}" --origin unattended\` で Codex に委譲する（§1.18）。監督は設計・レビュー・検証だけ。調査・分類・要約だけの作業は \`--kind investigate|classify|summarize\` を付けて llm-ask(gemini/deepseek/groq)へ回し、Codex は実装・テスト実行だけに使う。終了コード75（stdout が \`{"status":"deferred"}\`）は失敗ではなく保留（Codex 上限中または無人割当超過）なので、\`retryAt\` 以降まで同じ項目を再試行せず、${summaryFile} に「保留」と記録して次の項目へ進む。
-- このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。「バックグラウンドで走らせて完了を待つ」と書いてターンを終えてはいけない。
-- \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、作りかけのブランチを push して draft PR にするか、次回へ引き継いで終了する。
+- このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。codex-doや他AIの委譲結果が得られなかったときに「待つ/待ち/完了を待って/結果を待っています」と書いてターンを終えてはいけない。それらの文を残すと stop-gate が W 型（委譲完了待ち）として記録し、毎晩の再発検証で恒久未解決扱いになる。代わりに「【継続】<説明>（次セッションで再実行）」の形式で ${summaryFile} に記録する。
+- \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。codex-doを起動する前に残り時間を確認する。まとめ開始（開始から${Math.max(0, timeoutMin - 10)}分）まで30分未満ならcodex-doを起動しない。代わりに継続項目として${summaryFile}に「【継続】codex-do: <説明>（残り時間不足のため次セッションで実行）」と記録し、次のTODOへ進む。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、作りかけのブランチを push して draft PR にするか、次回へ引き継いで終了する。
 - 他セッションと作業ツリーを共有している。\`git add -A\` / \`git commit -a\` / \`git stash\` / \`git checkout -- .\` は禁止。自分が作成・変更したファイルだけをパス指定で \`git add\` する。着手前とコミット直前に \`git status --porcelain\` を撮り、差分が自分の変更だけであることを確認する。
 - ブランチは必ず main から切る。ブランチ名は \`auto/${day}-<短いスラグ>\`。
 - \`node --test tools/*.test.mjs\` が緑になるまで直す。
@@ -614,8 +614,8 @@ ${issue.body || '（本文なし）'}
 
 ## 実行環境
 - 実リポジトリは ${repoCwd}。git は \`git -C "${repoCwd}"\`、実装委譲は \`node tools/codex-do.mjs "<指示>" --cwd "${repoCwd}" --origin unattended\`（調査・分類・要約だけなら \`--kind investigate|classify|summarize\`）のように対象を明示する。終了コード75は失敗ではなく保留で、\`retryAt\` まで再試行しない。
-- このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。「バックグラウンドで走らせて完了を待つ」と書いてターンを終えてはいけない。
-- \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、作りかけのブランチを push して draft PR にするか、次回へ引き継いで終了する。
+- このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。codex-doや他AIの委譲結果が得られなかったときに「待つ/待ち/完了を待って/結果を待っています」と書いてターンを終えてはいけない。代わりに「【継続】<説明>（次セッションで再実行）」の形式で ${summaryFile} に記録する。
+- \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。codex-doを起動する前に残り時間を確認する。まとめ開始（開始から${Math.max(1, timeoutMin - 10)}分）まで30分未満ならcodex-doを起動しない。代わりに継続項目として${summaryFile}に「【継続】codex-do: <説明>（残り時間不足のため次セッションで実行）」と記録し、次のTODOへ進む。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、次回へ引き継いで終了する。
 - 作業経過を ${summaryFile} に逐次追記する。PR URL・PRタイトル・CI結果を必ず最後に記録する。
 - 5分を超える長時間ポーリングをしてはいけない。開始から ${Math.max(1, timeoutMin - 10)} 分でまとめに入る。
 

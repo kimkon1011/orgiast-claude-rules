@@ -13,3 +13,12 @@ export function autoResumeAllowed({ source, repoRoot = DEFAULT_REPO_ROOT } = {})
     return false;
   }
 }
+
+export function eventResumeAllowed({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
+  try {
+    const policy = JSON.parse(fs.readFileSync(path.join(repoRoot, 'config', 'auto-resume.json'), 'utf8'));
+    return policy?.eventResume === true;
+  } catch {
+    return false;
+  }
+}

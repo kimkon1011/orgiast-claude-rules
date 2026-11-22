@@ -24,15 +24,15 @@ function fixture(t) {
   return { home, digestFile, stateFile, calls, logs, run };
 }
 
-test('minpaku 初回送信の前置き・区間・既定宛先作業用004・mail idを保持し一時ファイルを削除', async (t) => {
+test('minpaku 初回送信の前置き・区間・既定宛先004minpaku・mail idを保持し一時ファイルを削除', async (t) => {
   const f = fixture(t), result = await f.run();
   assert.deepEqual(result, { status: 'ok:送信 mail-20261111-9999', exitCode: 0 });
   const call = f.calls[0];
   assert.equal(call.command, process.execPath);
   assert.equal(path.basename(call.args[0]), 'fleet-mail.mjs');
-  assert.deepEqual(call.args.slice(1, 6), ['--send', '--to', '作業用004', '--kind', 'note']);
+  assert.deepEqual(call.args.slice(1, 6), ['--send', '--to', '004minpaku', '--kind', 'note']);
   assert.equal(call.options.shell, false);
-  assert.ok(call.body.startsWith('# 🏠 民泊改善ダイジェスト（kim-PC → 作業用004 自動配達）\n'));
+  assert.ok(call.body.startsWith('# 🏠 民泊改善ダイジェスト（000KimPC → 004minpaku 自動配達）\n'));
   assert.match(call.body, /他のオーナーの伝聞で未検証/);
   assert.match(call.body, /nf-minpaku-automation\/analysis\/0openchat\//);
   assert.match(call.body, /全室稼働95%・月次黒字/);

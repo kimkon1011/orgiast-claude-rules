@@ -365,16 +365,21 @@ export function markUncertain(home, id, { reason, now = new Date() }) {
   });
 }
 
-export function reconcile(home, id, { messageId, now = new Date() }) {
+export function reconcile(home, id, { messageId, sentAt, evidence, now = new Date() }) {
+  if (typeof messageId !== 'string' || !messageId.trim()) throw new Error('reply-queue: 照合した messageId が必要です');
+  if (sentAt !== undefined && (!Number.isFinite(Date.parse(sentAt)) || Date.parse(sentAt) > now.getTime())) throw new Error('reply-queue: 送信時刻が不正です');
+  if (evidence !== undefined && (typeof evidence !== 'string' || !evidence.trim())) throw new Error('reply-queue: 照合根拠が必要です');
   return update(home, id, item => {
     if (item.state !== 'uncertain') throw new Error(`reply-queue: uncertain からのみ reconcile できます (現在: ${item.state})`);
     item.sent = {
       messageId,
-      at: item.sent?.at || now.toISOString(),
+      at: sentAt || item.sent?.at || now.toISOString(),
       receiptId: item.sent?.receiptId || '',
+      reconciledAt: now.toISOString(),
+      ...(evidence === undefined ? {} : { evidence }),
     };
     item.state = 'sent';
-    item.history.push({ at: now.toISOString(), state: 'sent', note: 'reconciled' });
+    item.history.push({ at: now.toISOString(), state: 'sent', note: evidence ? `reconciled: ${evidence}` : 'reconciled' });
   });
 }
 

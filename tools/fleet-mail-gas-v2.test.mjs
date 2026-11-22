@@ -7,11 +7,13 @@ const source = fs.readFileSync(new URL('../gas/fleet-status-sheet/Mail.gs', impo
 const now = Date.parse('2026-10-14T00:00:00Z');
 function harness({ beaconRows = [['label'], ['receiver'], ['cr-PC']], statusRows = [['label', 'hostname'], ['receiver', 'host']], statusHeaders, rosterFault = false, sheetsTypes = false } = {}) {
   const rows = [], alertRows = [], properties = { SHEET_ID: 'fixture' };
+  const formats = [];
   let time = now;
   const triggers = [], webhooks = [], warnings = [], faults = {};
   const lock = { held: false, releases: 0, hasLock() { return this.held; }, tryLock() { this.held = true; return true; }, releaseLock() { this.held = false; this.releases++; } };
-  const cellValue = value => {
+  const cellValue = (value, cellRow, cellCol) => {
     if (!sheetsTypes || typeof value !== 'string') return value;
+    if (formats.some(f => f.format === '@' && cellRow >= f.row && cellRow < f.row + f.count && cellCol >= f.col && cellCol < f.col + f.width)) return value;
     if (/^(true|false)$/i.test(value)) return value.toLowerCase() === 'true';
     if (/^-?\d+(?:\.\d+)?$/.test(value)) return Number(value);
     return value;
@@ -20,11 +22,12 @@ function harness({ beaconRows = [['label'], ['receiver'], ['cr-PC']], statusRows
     maxColumns: 26, getMaxColumns() { return this.maxColumns; }, insertColumnsAfter(_after, count) { this.maxColumns += count; },
     getLastRow: () => rows.length, getLastColumn: () => Math.max(0, ...rows.map(row => row.length)), setFrozenRows() {}, deleteRow: n => rows.splice(n - 1, 1),
     getRange(row, col, count, width) { if (col + width - 1 > this.maxColumns) throw new Error('range exceeds grid'); return {
+      setNumberFormat(format) { formats.push({ row, col, count, width, format }); return this; },
       getValues: () => {
         if (rows === alertRows && count === 1 && row === faults.readBackRow) return [Array(width).fill('mismatch')];
         return Array.from({ length: count }, (_, i) => Array.from({ length: width }, (_, j) => rows[row - 1 + i]?.[col - 1 + j] ?? '')); },
       setValues(values) {
-        values.forEach((values, i) => { rows[row - 1 + i] ??= []; values.forEach((v, j) => { rows[row - 1 + i][col - 1 + j] = cellValue(v); }); });
+        values.forEach((values, i) => { rows[row - 1 + i] ??= []; values.forEach((v, j) => { rows[row - 1 + i][col - 1 + j] = cellValue(v, row + i, col + j); }); });
       },
       setRichTextValues(values) {
         if (rows === alertRows && faults.onAlertWrite) faults.onAlertWrite(row);
@@ -49,7 +52,7 @@ function harness({ beaconRows = [['label'], ['receiver'], ['cr-PC']], statusRows
   };
   const names = [...source.matchAll(/^function (\w+)\(/gm)].map(m => m[1]);
   const api = new Function(...Object.keys(deps), `${source}\nreturn { ${names.join(', ')}, headers: FLEET_MAIL_HEADERS_, alertHeaders: FLEET_MAIL_ALERT_HEADERS_, renotifyMs: FLEET_MAIL_RENOTIFY_MS_, sla: FLEET_MAIL_SLA_, ackLimit: FLEET_MAIL_ACK_LIMIT_, terminalStatuses: FLEET_MAIL_TERMINAL_STATUSES_, pollLimit: FLEET_MAIL_POLL_LIMIT_ };`)(...Object.values(deps));
-  return { ...api, rows, alertRows, properties, triggers, webhooks, faults, warnings, lock, advance: ms => { time += ms; } };
+  return { ...api, rows, alertRows, properties, triggers, webhooks, faults, warnings, formats, lock, advance: ms => { time += ms; } };
 }
 const send = (h, overrides = {}) => h.sendFleetMail({ id: 'mail-original', from: 'sender', to: 'receiver', messageKind: 'note', why: 'test', body: 'body', ...overrides });
 const poll = (h, overrides = {}) => h.pollFleetMail({ to: 'receiver', hostname: 'host', ...overrides });
@@ -232,7 +235,7 @@ test('C1 changed replies after automatic receipt get distinct ids and retry idem
   assert.equal(retry.reply.id, answer.reply.id); assert.equal(get(h).resultBody, '本回答'); assert.equal(h.rows.length, 4);
 });
 test('C2 batch ack accepts at most the server limit and returns per-id recipient outcomes', () => {
-  const h = harness();
+  const h = harness({ sheetsTypes: true });
   for (let i = 0; i < h.ackLimit; i++) {
     send(h, { id: `mail-batch-${i}` }); h.rows.at(-1)[h.headers.indexOf('deliveredBy')] = 'receiver';
   }
@@ -410,6 +413,15 @@ test('J mail-send succeeds with Sheets boolean and numeric coercion and preserve
     assert.equal(send(h, { id, auto }).duplicate, true);
   }
 });
+test('numeric-only destination is formatted as text and legacy numeric rows match zero-padded labels', () => {
+  const h = harness();
+  send(h, { to: '018' });
+  assert.ok(h.formats.some(call => call.col === h.headers.indexOf('to') + 1 && call.format === '@'));
+  h.rows[1][h.headers.indexOf('to')] = 18;
+  assert.equal(h.getFleetMail({ id: 'mail-original' }).mail.to, '18');
+  assert.equal(h.fleetMailMatches(h.getFleetMail({ id: 'mail-original' }).mail, '018', '', now, false), true);
+  assert.equal(h.fleetMailMatches(h.getFleetMail({ id: 'mail-original' }).mail, '019', '', now, false), false);
+});
 test('J read-back normalizes all cell types without trimming strings or hiding mismatches', () => {
   const h = harness({ sheetsTypes: true });
   const date = new Date(now);
@@ -419,12 +431,13 @@ test('J read-back normalizes all cell types without trimming strings or hiding m
   const row = h.headers.map((_, i) => values[i]);
   let stored;
   const sheet = { getRange: () => ({
+    setNumberFormat() { return this; },
     setRichTextValues: cells => { stored = cells[0].map(cell => cell.text); },
     getValues: () => [stored.map((value, i) => i < values.length ? values[i] : value)]
   }) };
   h._fleetMailWrite_(sheet, 1, row);
   assert.deepEqual(stored.slice(0, expected.length), expected);
-  sheet.getRange = () => ({ setRichTextValues() {}, getValues: () => [stored.map(value => value === ' padded ' ? value.trim() : value)] });
+  sheet.getRange = () => ({ setNumberFormat() { return this; }, setRichTextValues() {}, getValues: () => [stored.map(value => value === ' padded ' ? value.trim() : value)] });
   assert.throws(() => h._fleetMailWrite_(sheet, 1, row), /read-back mismatch/);
 });
 

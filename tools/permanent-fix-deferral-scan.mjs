@@ -201,7 +201,71 @@ export function detect(text) {
 const DEFAULT_SINCE = '1970-01-01T00:00:00Z';
 const NAMES = ['stop-gate-runner-ledger.jsonl', 'handoff-audit-ledger.jsonl', 'handoff-audit-nightly-ledger.jsonl'];
 
-export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null } = {}) {
+function findTranscript(projectsDir, sessionId, archiveDir) {
+  if (!sessionId) return null;
+  let projects;
+  try { projects = fs.readdirSync(projectsDir, { withFileTypes: true }); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (projects) {
+    for (const project of projects) {
+      if (!project.isDirectory()) continue;
+      const file = path.join(projectsDir, project.name, `${sessionId}.jsonl`);
+      if (fs.existsSync(file)) return file;
+    }
+  }
+  // Fall back to archive directory (projects-archive sibling)
+  if (!archiveDir) return null;
+  let archiveProjects;
+  try { archiveProjects = fs.readdirSync(archiveDir, { withFileTypes: true }); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  for (const project of archiveProjects) {
+    if (!project.isDirectory()) continue;
+    const file = path.join(archiveDir, project.name, `${sessionId}.jsonl`);
+    if (fs.existsSync(file)) return file;
+  }
+  return null;
+}
+
+function hasTextContent(content) {
+  return Array.isArray(content) && content.some(item => item?.type === 'text' && typeof item.text === 'string' && item.text.length > 0);
+}
+
+export function resolvedWait(transcript, rowTs) {
+  const rowTime = Date.parse(rowTs);
+  const entries = [];
+  for (const line of fs.readFileSync(transcript, 'utf8').split(/\r?\n/)) {
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    const at = Date.parse(entry?.timestamp);
+    if (!(at > rowTime)) continue;
+    entries.push({ entry, at });
+  }
+  // Two-pass because transcript timestamps aren't monotonically increasing per
+  // line order (e.g. attachment with queued_command appears later but has an
+  // earlier timestamp). First pass: find the earliest notification timestamp.
+  let notifiedAt = null;
+  for (const { entry, at } of entries) {
+    const isNotification =
+      (entry.type === 'user' && JSON.stringify(entry.message?.content ?? '').includes('task-notification')) ||
+      (entry.type === 'queue-operation' && typeof entry.content === 'string' && entry.content.includes('task-notification')) ||
+      (entry.type === 'attachment' && entry.attachment?.type === 'queued_command' && typeof entry.attachment?.prompt === 'string' && entry.attachment.prompt.includes('task-notification'));
+    if (isNotification && (notifiedAt === null || at < notifiedAt)) notifiedAt = at;
+  }
+  if (notifiedAt === null) return false;
+  // Second pass: check for assistant text response after the notification.
+  for (const { entry, at } of entries) {
+    if (at > notifiedAt && entry.type === 'assistant' && hasTextContent(entry.message?.content)) return true;
+  }
+  return false;
+}
+
+export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null,
+  projectsDir = process.env.CLAUDE_PROJECTS_DIR || path.join(home, '.claude', 'projects'),
+  archiveDir } = {}) {
+  if (archiveDir === undefined) {
+    archiveDir = process.env.CLAUDE_PROJECTS_ARCHIVE_DIR || path.join(path.dirname(projectsDir), 'projects-archive');
+  }
+  const transcriptCache = new Map();
   const sources = NAMES.map((name, index) => {
     const file = path.join(home, '.claude', name);
     let lines = [];
@@ -234,13 +298,23 @@ export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null 
       }
       if (!found) continue;
       const { pattern, match } = found;
+      const row = { pattern, field: foundField, ts: entry.ts, verdict: entry.verdict ?? entry.decision ?? '', sessionId: String(entry.sessionId ?? ''),
+        match: text.slice(Math.max(0, match.index - 45), match.index + match[0].length + 110).replace(/[\r\n]+/g, ' ') };
+      if (pattern === 'W') {
+        if (!transcriptCache.has(row.sessionId)) transcriptCache.set(row.sessionId, findTranscript(projectsDir, row.sessionId, archiveDir));
+        const transcript = transcriptCache.get(row.sessionId);
+        // 2026-11-19T18:06Z / 6a5e38de は通知後に最終報告まで進んだため、
+        // 同一セッション内で解消した一時的な委譲待ちは監査件数から外す。
+        if (!transcript) row.resolved = 'unknown';
+        else if (resolvedWait(transcript, row.ts)) row.resolved = 'in-session';
+      }
+      rows.push(row);
+      if (row.resolved === 'in-session') continue;
       byPattern[pattern]++;
       const day = new Date(entry.ts).toISOString().slice(0, 10);
       counts[day] = (counts[day] || 0) + 1;
-      rows.push({ pattern, field: foundField, ts: entry.ts, verdict: entry.verdict ?? entry.decision ?? '', sessionId: String(entry.sessionId ?? ''),
-        match: text.slice(Math.max(0, match.index - 45), match.index + match[0].length + 110).replace(/[\r\n]+/g, ' ') });
     }
-    return { name, file, total: lines.length, hits: rows.length, byPattern, byDay: Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b))), rows };
+    return { name, file, total: lines.length, hits: rows.filter(row => row.resolved !== 'in-session').length, byPattern, byDay: Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b))), rows };
   });
   return { since, sources };
 }
@@ -252,13 +326,14 @@ function validIso(value) {
   return date.toISOString().slice(0, 10) === value.slice(0, 10);
 }
 export function main(args = process.argv.slice(2)) {
-  let since = DEFAULT_SINCE, until = null, json = false;
+  let since = DEFAULT_SINCE, until = null, json = false, showResolved = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--json') json = true;
+    else if (args[i] === '--show-resolved') showResolved = true;
     else if (args[i] === '--since' && validIso(args[i + 1] ?? '')) since = args[++i];
     else if (args[i] === '--until' && validIso(args[i + 1] ?? '')) until = args[++i];
     else {
-      console.error('Usage: node tools/permanent-fix-deferral-scan.mjs [--since <ISO>] [--until <ISO>] [--json]');
+      console.error('Usage: node tools/permanent-fix-deferral-scan.mjs [--since <ISO>] [--until <ISO>] [--json] [--show-resolved]');
       return 2;
     }
   }
@@ -269,7 +344,10 @@ export function main(args = process.argv.slice(2)) {
       console.log(`${source.name}: hits=${source.hits} / ${source.total}`);
       console.log(Object.entries(source.byPattern).map(([pattern, count]) => `${pattern}:${count}`).join(' '));
       console.log(Object.entries(source.byDay).map(([day, count]) => `${day}:${count}`).join(' '));
-      for (const row of source.rows) console.log(`${row.ts} ${row.verdict} ${row.sessionId.slice(0, 8)}  …${row.match}…`);
+      for (const row of source.rows) {
+        if (row.resolved === 'in-session' && !showResolved) continue;
+        console.log(`${row.ts} ${row.verdict} ${row.sessionId.slice(0, 8)}${row.resolved ? ` resolved=${row.resolved}` : ''}  …${row.match}…`);
+      }
     }
   } catch (error) { console.error(`permanent-fix-deferral-scan: ${error.message}`); }
   return 0;

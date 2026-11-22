@@ -83,8 +83,12 @@ async function runUnlocked({
   try { sentText = readFileSync(sentPath, 'utf8'); } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  if (wasSent(sentText, date) || existsSync(attemptPath(home, date))) {
-    const reason = wasSent(sentText, date) ? '当日は送信済みです（1日1通）' : '当日のBeeper送信試行記録があります。自動再送禁止';
+  if (wasSent(sentText, date)) {
+    log('当日は送信済みです（1日1通）');
+    return 0;
+  }
+  if (existsSync(attemptPath(home, date))) {
+    const reason = '当日のBeeper送信試行記録があります。自動再送禁止';
     log(reason);
     if (!dryRun) await notifyStandingInfo(home, date, reason, inbox);
     return 0;
@@ -95,7 +99,8 @@ async function runUnlocked({
   const requestBeeper = async () => {
     const result = await fallback({ text, date, dryRun, now, calendarPath, sentPath, home, inbox });
     log(JSON.stringify(result));
-    if (result.state === 'sent' && !dryRun) appendFileSync(sentPath, JSON.stringify({ date, route: 'beeper', queueID: result.queueID, sentAt: new Date().toISOString() }) + '\n', 'utf8');
+    if (result.state === 'sent' && !dryRun) appendFileSync(sentPath, JSON.stringify({ date, route: 'beeper', queueID: result.queueID,
+      messageID: result.messageID, chatID: result.chatID, sentAt: result.sentAt || new Date().toISOString() }) + '\n', 'utf8');
     return 0;
   };
   if (quota && quota.until > date) return requestBeeper();

@@ -147,9 +147,18 @@ export function runOverlay(options, { runner = claspRunner, syncMaster = syncGas
     const work = makeWorkspace();
     call(['pull'], work);
     const workRoot = inside(work, rootDir, true);
+    // clasp 3 pulls server-side .gs files as .js even when the repository keeps
+    // the canonical source as .gs. Overlay the pulled filename so we update the
+    // existing script instead of creating a duplicate Apps Script file.
+    const pulledFile = (root, file) => {
+      const exact = inside(root, file);
+      if (fs.existsSync(exact) || path.extname(file).toLowerCase() !== '.gs') return file;
+      const js = file.slice(0, -3) + '.js';
+      return fs.existsSync(inside(root, js)) ? js : file;
+    };
     const changed = [];
     for (const file of files) {
-      const target = inside(workRoot, file);
+      const target = inside(workRoot, pulledFile(workRoot, file));
       const exists = fs.existsSync(target);
       const before = exists ? fs.readFileSync(target, 'utf8') : '';
       const after = snapshots.get(file);
@@ -173,7 +182,8 @@ export function runOverlay(options, { runner = claspRunner, syncMaster = syncGas
       call(['pull'], readBack);
       const mismatched = [];
       for (const file of files) {
-        const target = inside(inside(readBack, rootDir, true), file);
+        const readBackRoot = inside(readBack, rootDir, true);
+        const target = inside(readBackRoot, pulledFile(readBackRoot, file));
         const exists = fs.existsSync(target);
         const actual = exists ? fs.readFileSync(target, 'utf8') : '';
         if (!exists || normalize(actual) !== normalize(snapshots.get(file))) {

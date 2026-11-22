@@ -166,3 +166,37 @@ const mergeNonDeferrals = [
 for (const [index, text] of mergeNonDeferrals.entries()) {
   test(`マージ済み報告・否定・引用は pass する ${index + 1}`, () => assert.deepEqual(judge(text), { decision: 'pass' }));
 }
+
+const nextSessionDeferrals = [
+  'deepseek と qwen の2つがエラーで、まだ直っていません。次のセッションで最初に修理します。',
+  'この不具合は明日直します。',
+  '残りは後で対応します。',
+  '明日直します。kim に報告済みです。',
+  '修復を試した際にエラーが出たため、後日直します。',
+  `明日${'あ'.repeat(40)}修理します。`,
+];
+
+for (const [index, text] of nextSessionDeferrals.entries()) {
+  test(`次のセッション先送りを block する ${index + 1}`, () => {
+    const result = judge(text);
+    assert.equal(result.decision, 'block');
+    assert.equal(result.code, 'DEFERRAL-WAIT');
+    assert.match(result.reason, /先送り/);
+  });
+}
+
+const nextSessionNonDeferrals = [
+  'kim の返事が来たら次のセッションで対応します。',
+  '次のセッションは /session-start で始められます。',
+  '明日確認します。いま修理します。',
+  '明日直しますが、この環境で再試行を試した結果はエラー本文: Permission denied です。',
+  '[handoff-audit:d1237245b7711cd0] 原文「明日直します。」',
+  '> 明日直します。',
+  '例文は「明日直します。」です。',
+  '```text\n明日直します。\n```',
+  `明日${'あ'.repeat(41)}修理します。`,
+];
+
+for (const [index, text] of nextSessionNonDeferrals.entries()) {
+  test(`次のセッション先送りで例外は pass する ${index + 1}`, () => assert.deepEqual(judge(text), { decision: 'pass' }));
+}

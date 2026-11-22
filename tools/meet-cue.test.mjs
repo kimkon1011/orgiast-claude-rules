@@ -23,6 +23,7 @@ import {
   formatJstTime,
   formatJstSessionDate,
   resolveBotDisplayName,
+  shouldCallJev,
 } from './lib/meet-cue-core.mjs';
 
 import {
@@ -37,6 +38,9 @@ import {
   isProfileSignedIn,
   copyMeetBotProfile,
   startMeetBot,
+  buildMeetBotArgs,
+  writeSilentMeetAudio,
+  prepareMeetMedia,
   checkPlaywrightAvailable,
   detectMeetJoinState,
   dismissMeetPopups,
@@ -335,6 +339,55 @@ test('CLI start の必須引数チェック（未指定時 exit 2）', async () 
   assert.equal(exitCode, 2);
 });
 
+test('C: shouldCallJev — 15文字以上かつ20秒経過で true、不足時は false', () => {
+  // 15文字未満 → false
+  assert.equal(shouldCallJev({ newCharsSinceLastCheck: 14, lastJevCallTime: 0, now: 1000 }), false);
+  // 15文字以上、初回呼び出し → true
+  assert.equal(shouldCallJev({ newCharsSinceLastCheck: 15, lastJevCallTime: 0, now: 1000 }), true);
+  // 20文字、前回から20秒未満 → false（20秒未満）
+  assert.equal(shouldCallJev({ newCharsSinceLastCheck: 20, lastJevCallTime: 1000, now: 20999 }), false);
+  // 20文字、前回から20秒以上経過 → true
+  assert.equal(shouldCallJev({ newCharsSinceLastCheck: 20, lastJevCallTime: 1000, now: 21000 }), true);
+  // 0文字 → false
+  assert.equal(shouldCallJev({ newCharsSinceLastCheck: 0, lastJevCallTime: 0, now: 50000 }), false);
+});
+
+test('A: 本番は無音 WAV を使い、テスト時は指定ファイルと自動許可を使う', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-audio-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const silentAudio = writeSilentMeetAudio(directory);
+  const prodArgs = buildMeetBotArgs({ silentAudio });
+  assert.ok(prodArgs.includes('--use-fake-device-for-media-stream'));
+  assert.ok(!prodArgs.includes('--use-fake-ui-for-media-stream'));
+  assert.ok(prodArgs.includes(`--use-file-for-fake-audio-capture=${silentAudio}`));
+  const wav = fs.readFileSync(silentAudio);
+  assert.equal(wav.toString('ascii', 0, 4), 'RIFF');
+  assert.equal(wav.toString('ascii', 8, 12), 'WAVE');
+  assert.equal(wav.readUInt16LE(20), 1);
+  assert.equal(wav.readUInt16LE(22), 1);
+  assert.equal(wav.readUInt32LE(24), 16000);
+  assert.equal(wav.readUInt16LE(34), 16);
+  assert.equal(wav.readUInt32LE(40), 16000 * 2 * 30);
+  assert.deepEqual(wav.subarray(44), Buffer.alloc(16000 * 2 * 30));
+
+  const testAudio = '/test/sample.wav';
+  const testArgs = buildMeetBotArgs({ testAudio });
+  assert.ok(testArgs.includes('--use-fake-device-for-media-stream'));
+  assert.ok(testArgs.includes('--use-fake-ui-for-media-stream'));
+  assert.ok(testArgs.includes(`--use-file-for-fake-audio-capture=${testAudio}`));
+});
+
+test('F: 新規カンペの見出し直下に承認済みの案内を太字で入れる', () => {
+  const { requests } = buildDocHeaderRequests({ title: '打合せ' });
+  const { text } = requests[0].insertText;
+  const [heading, greeting] = text.split('\n');
+  assert.equal(heading, '【Meetカンペ】打合せ');
+  assert.equal(greeting, '冒頭で『本日は記録のため、オージャストAIが同席しております』とお客様に一言お伝えください');
+  const style = requests[2].updateTextStyle;
+  assert.equal(style.textStyle.bold, true);
+  assert.equal(text.slice(style.range.startIndex - 1, style.range.endIndex - 1), greeting);
+});
+
 test('runDecisionRound: スタブで予算懸念 -> budget カードが Doc 差し込み関数に渡り、40秒以内の2回目は出ないこと', async () => {
   const assembler = new CaptionAssembler();
   assembler.pushMutation({ speaker: 'お客様', text: '予算が厳しくて費用が高すぎます', timestamp: 1000 });
@@ -469,9 +522,10 @@ function stubMeetDom({ url = meetingUrl, buttons = [], texts = [], inCall = fals
     url: () => url,
     viewportSize: () => ({ width: 1280, height: 720 }),
     locator: () => ({ first: () => ({ isVisible: async () => inCall }) }),
-    getByText: (pattern) => ({
-      all: async () => texts.filter(({ text }) => pattern.test(text)).map(item => ({
+    getByText: (pattern, { exact } = {}) => ({
+      all: async () => texts.filter(({ text }) => exact ? text === pattern : pattern.test(text)).map(item => ({
         isVisible: async () => !item.hidden,
+        click: async () => item.click?.(),
         evaluate: async fn => fn({ closest: () => item.button ? {} : null }),
       })),
     }),
@@ -520,6 +574,146 @@ test('会議コードと表示中の UI から参加状態を判定する', asyn
   ]) {
     assert.equal(await detectMeetJoinState(stubMeetDom(dom), meetCode), expected);
   }
+});
+
+test('参加前にマイクとカメラのオフを確認できなくても診断を保存し in_call に進む', async (t) => {
+  const sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-prejoin-'));
+  t.after(() => fs.rmSync(sessionDir, { recursive: true, force: true }));
+  const states = [];
+  const logs = [];
+  let inCall = false;
+  const dom = () => stubMeetDom({
+    inCall,
+    buttons: [{ text: 'Join now', click: () => { inCall = true; } }],
+  });
+  const page = {
+    goto: async () => {},
+    url: () => meetingUrl,
+    locator: (...args) => dom().locator(...args),
+    getByText: (...args) => dom().getByText(...args),
+    getByRole: (role) => ({
+      ...dom().getByRole(role),
+      and: () => ({
+        first: () => ({
+          isVisible: async () => false,
+          waitFor: async () => { throw new Error('Timeout'); },
+        }),
+      }),
+      evaluateAll: async fn => fn([{ getAttribute: () => 'Unknown microphone label' }]),
+    }),
+    screenshot: async ({ path: file }) => fs.writeFileSync(file, 'screenshot'),
+  };
+  assert.equal(await joinMeetPage(page, {
+    url: meetingUrl,
+    preparePrejoin: () => prepareMeetMedia(page, { sessionDir, log: line => logs.push(line) }),
+    onJoinState: state => states.push(state),
+    log: () => {},
+    uiTimeoutMs: 1000,
+  }), null);
+  assert.equal(states.at(-1), 'in_call');
+  assert.ok(logs.some(line => line.includes('警告: マイクのオフを確認できなかったが、無音の偽マイクなので参加を続ける')));
+  assert.ok(logs.some(line => line.includes('警告: カメラのオフを確認できなかった')));
+  assert.ok(fs.existsSync(path.join(sessionDir, 'prejoin-mic.png')));
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(sessionDir, 'prejoin-buttons.json'))), ['Unknown microphone label']);
+});
+
+test('本番の参加前ダイアログでは日英の完全一致でメディアなしを選び、テスト音声では触らない', async () => {
+  for (const { declineLabel, useLabel, appearsDuringSearch, testAudio } of [
+    { declineLabel: 'マイクとカメラを使用せずに続行', useLabel: 'マイクとカメラの使用' },
+    {
+      declineLabel: 'Continue without microphone and camera',
+      useLabel: 'Use microphone and camera',
+      appearsDuringSearch: true,
+    },
+    {
+      declineLabel: 'Continue without microphone and camera',
+      useLabel: 'Use microphone and camera',
+      testAudio: '/test-audio.wav',
+    },
+  ]) {
+    let dialogVisible = !appearsDuringSearch;
+    let inCall = false;
+    const clicks = [];
+    const logs = [];
+    const mediaModes = [];
+    const getDom = () => stubMeetDom({
+      inCall,
+      texts: dialogVisible ? [
+        { text: useLabel, click: () => clicks.push('use media') },
+        { text: declineLabel + '…', click: () => clicks.push('partial match') },
+        { text: declineLabel, click: () => { clicks.push(declineLabel); dialogVisible = false; } },
+      ] : [],
+      buttons: !dialogVisible || testAudio
+        ? [{ text: 'Join now', click: () => { clicks.push('join'); inCall = true; } }]
+        : [{ text: useLabel, click: () => clicks.push('use media') }],
+    });
+    const page = {
+      goto: async () => {},
+      url: () => meetingUrl,
+      locator: (...args) => getDom().locator(...args),
+      getByText: (...args) => getDom().getByText(...args),
+      getByRole: (...args) => {
+        if (appearsDuringSearch && clicks.length === 0) dialogVisible = true;
+        return getDom().getByRole(...args);
+      },
+      waitForTimeout: async () => {
+        assert.ok(!dialogVisible, '再試行前にダイアログを閉じる');
+      },
+    };
+    assert.equal(await joinMeetPage(page, {
+      url: meetingUrl,
+      preparePrejoin: async () => {},
+      onJoinState: () => {},
+      onMediaMode: mode => mediaModes.push(mode),
+      log: line => logs.push(line),
+      uiTimeoutMs: 1000,
+      testAudio,
+    }), null);
+    assert.deepEqual(clicks, testAudio ? ['join'] : [declineLabel, 'join']);
+    assert.deepEqual(mediaModes, testAudio ? [] : ['none']);
+    assert.equal(logs.some(line => line.endsWith(declineLabel)), !testAudio);
+  }
+});
+
+test('使用せずに続行のクリックが detached でも例外にならず参加へ進む', async () => {
+  const declineLabel = 'マイクとカメラを使用せずに続行';
+  let dialogVisible = true;
+  let inCall = false;
+  const clicks = [];
+  const mediaModes = [];
+  const getDom = () => stubMeetDom({
+    inCall,
+    texts: dialogVisible ? [{
+      text: declineLabel,
+      click: () => {
+        clicks.push(declineLabel);
+        dialogVisible = false;
+        throw new Error('locator.click: Timeout 2000ms exceeded.\n  - element was detached from the DOM, retrying');
+      },
+    }] : [],
+    buttons: dialogVisible
+      ? [{ text: 'マイクとカメラの使用', click: () => clicks.push('use media') }]
+      : [{ text: 'Join now', click: () => { clicks.push('join'); inCall = true; } }],
+  });
+  const page = {
+    goto: async () => {},
+    url: () => meetingUrl,
+    locator: (...args) => getDom().locator(...args),
+    getByText: (...args) => getDom().getByText(...args),
+    getByRole: (...args) => getDom().getByRole(...args),
+    waitForTimeout: async () => {},
+  };
+  assert.equal(await joinMeetPage(page, {
+    url: meetingUrl,
+    preparePrejoin: async () => {},
+    onJoinState: () => {},
+    onMediaMode: mode => mediaModes.push(mode),
+    log: () => {},
+    uiTimeoutMs: 1000,
+  }), null);
+  assert.deepEqual(clicks, [declineLabel, 'join']);
+  assert.deepEqual(mediaModes, ['none']);
+  assert.equal(inCall, true);
 });
 
 test('/new のリダイレクト先を保持し、ホームへ戻ったときだけ一度開き直す', async () => {
@@ -603,25 +797,48 @@ test('字幕ボタンのラベルまたは aria-pressed でオンを確認し、
   }
 });
 
-test('実測した字幕の話者と本文を保持し、アイコン名と空行を除外する', () => {
+test('B: normalizeCaptionRows で話者が「あなた」「You」の行を除外する', () => {
+  // 「あなた」の行はすべて除外される
+  const youRows = normalizeCaptionRows([
+    { speaker: 'あなた', text: '本日はお時間を', rowId: '1:0' },
+    { speaker: 'あなた', text: 'よろしくお願いします', rowId: '2:0' },
+  ]);
+  assert.equal(youRows.length, 0, '「あなた」の行は除外');
+
+  // 「You」の行もすべて除外される
+  const youEnRows = normalizeCaptionRows([
+    { speaker: 'You', text: 'Hello', rowId: '3:0' },
+  ]);
+  assert.equal(youEnRows.length, 0, '「You」の行は除外');
+
+  // 他の話者は維持される
+  const otherRows = normalizeCaptionRows([
+    { speaker: 'お客様', text: '予算を伺います', rowId: '4:0' },
+    { speaker: '田中', text: '承知しました', rowId: '5:0' },
+  ]);
+  assert.equal(otherRows.length, 2, '他の話者は維持');
+  assert.equal(otherRows[0].speaker, 'お客様');
+  assert.equal(otherRows[1].speaker, '田中');
+});
+
+test('実測した字幕の話者と本文を保持し、アイコン名と空行を除外する（「あなた」以外の話者）', () => {
   const html = fs.readFileSync(new URL('./test-fixtures/meet-cue-captions-ja.html', import.meta.url), 'utf8');
-  const speaker = html.match(/<span class="NWpY1d">([^<]+)<\/span>/)[1];
   const text = html.match(/<div class="ygicle [^"]+">([^<]+)<\/div>/)[1];
   const icon = html.match(/<i [^>]*>(translate_cc)<\/i>/)[1];
   assert.deepEqual(normalizeCaptionRows([
-    { speaker, text: ` ${text} `, rowId: '1:0' },
-    { speaker, text: '承知しました', rowId: '2:0', fromFallback: true },
-    { speaker, text: 'hello', rowId: '3:0' },
-    { speaker, text: 'noise', fromFallback: true },
-    ...[icon, 'closed_caption', 'mic_off', 'icon_123', ' '].map(text => ({ speaker, text })),
+    { speaker: 'お客様', text: ` ${text} `, rowId: '1:0' },
+    { speaker: 'お客様', text: '承知しました', rowId: '2:0', fromFallback: true },
+    { speaker: 'お客様', text: 'hello', rowId: '3:0' },
+    { speaker: 'お客様', text: 'noise', fromFallback: true },
+    ...[icon, 'closed_caption', 'mic_off', 'icon_123', ' '].map(text => ({ speaker: 'お客様', text })),
   ]), [
     {
-      speaker: 'あなた',
+      speaker: 'お客様',
       text: '本日はお時間をいただきありがとうございます。展示会のブースについて、ご予算はどのくらいをお考えでしょうか。過去の事例もご紹介できます。',
       rowId: '1:0',
     },
-    { speaker: 'あなた', text: '承知しました', rowId: '2:0' },
-    { speaker: 'あなた', text: 'hello', rowId: '3:0' },
+    { speaker: 'お客様', text: '承知しました', rowId: '2:0' },
+    { speaker: 'お客様', text: 'hello', rowId: '3:0' },
   ]);
 });
 
@@ -656,7 +873,7 @@ test('字幕監視: 遅れて現れた領域をポーリングし、Observer と
     t.mock.timers.tick(1500);
     await new Promise(resolve => setImmediate(resolve));
   };
-  const insert = text => {
+  const makeRow = (text, speaker) => {
     const body = {
       textContent: text,
       closest: () => null,
@@ -666,9 +883,13 @@ test('字幕監視: 遅れて現れた領域をポーリングし、Observer と
     };
     const row = {
       closest: () => null,
-      querySelector: selector => selector === '.ygicle' ? body : { textContent: 'あなた' },
+      querySelector: selector => selector === '.ygicle' ? body : { textContent: speaker },
     };
-    const region = { closest: () => null, querySelectorAll: () => [row] };
+    return { row, body };
+  };
+  const insert = (text, ...otherRows) => {
+    const { row, body } = makeRow(text, 'お客様');
+    const region = { closest: () => null, querySelectorAll: () => [row, ...otherRows] };
     regions = [region];
     return { region, body };
   };
@@ -679,13 +900,14 @@ test('字幕監視: 遅れて現れた領域をポーリングし、Observer と
   first.body.textContent = '本日はお時間を';
   notify();
   await poll();
-  const second = insert('展示会の');
+  const second = insert('展示会の', makeRow('確かに', '社員').row, makeRow('自分の声', 'あなた').row);
   await poll();
   assert.deepEqual([...observed], [second.region]);
   second.body.textContent = '展示会のご予算を';
   await stop();
 
-  assert.deepEqual(received.map(row => row.text), ['本日は', '本日はお時間を', '', '展示会の', '展示会のご予算を']);
+  assert.deepEqual(received.map(row => row.text), ['本日は', '本日はお時間を', '', '展示会の', '確かに', '展示会のご予算を']);
+  assert.equal(received[4].speaker, '社員');
   assert.equal(received[0].rowId, received[1].rowId);
   assert.notEqual(received[0].rowId, received[3].rowId);
   assert.equal(observed.size, 0);

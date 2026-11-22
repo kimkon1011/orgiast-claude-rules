@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { realLaneStats, applyRealLaneHealth, billingFailure, billingWithQuotaHint, probeViaChain } from './lib/lane-real-health.mjs';
+import { realLaneStats, applyRealLaneHealth, billingFailure, billingWithQuotaHint, quotaFailure, chatgptUsageLimit, probeViaChain, stripCodexPromptEcho } from './lib/lane-real-health.mjs';
+import { repairable } from './lib/lane-repair-state.mjs';
 import { laneDoctorQuick, laneDoctorProbe } from './lane-doctor.mjs';
 const now = Date.parse('2026-10-29T12:00:00Z');
 function fixture(t, rows) {
@@ -458,6 +459,33 @@ test('通常の本文に他レーン名が出たら従来どおり viaChain', t 
   assert.equal(probeViaChain(text, 'codex'), true);
 });
 
+test('Codex CLI のプロンプト再掲内の他レーン名を viaChain 判定に使わない', t => {
+  const withoutUser = '--------\nprovider: openai\nGemini response';
+  assert.equal(stripCodexPromptEcho(withoutUser), withoutUser);
+  const prefix = [
+    '[codex-do] executor=codex',
+    'OpenAI Codex v0.162.1',
+    '--------',
+    'provider: openai',
+    '--------',
+    'user',
+    'Gemini と DeepSeek は入力に書かれただけ',
+  ];
+  const direct = [...prefix, 'codex', 'WRITE_OK を確認しました。'].join('\n');
+  assert.equal(probeViaChain(direct, 'codex'), false);
+  assert.equal(stripCodexPromptEcho(direct).includes('Gemini'), false);
+
+  const fallback = [...prefix, 'codex', 'fallback backend=deepseek'].join('\n');
+  assert.equal(probeViaChain(fallback, 'codex'), true);
+
+  const otherLaneResponse = [...prefix, 'exec', 'deepseek answered'].join('\n');
+  assert.equal(probeViaChain(otherLaneResponse, 'codex'), true);
+
+  const promptOnly = prefix.join('\n');
+  assert.equal(probeViaChain(promptOnly, 'codex'), false);
+  assert.equal(stripCodexPromptEcho(promptOnly), prefix.slice(0, 5).join('\n'));
+});
+
 test('[routing] の demote 診断行（provider 名 fallback）を連鎖と誤認しない 2026-11-17 実測', t => {
   const text = [
     '[cost] 本日の安いAI実行者 概算 $3.24 が警告値 $1.00 を超過',
@@ -479,4 +507,48 @@ test('[routing] の demote 診断行（provider 名 fallback）を連鎖と誤�
 
 test('cheap-first: を含む出力は viaChain のまま（回帰）', t => {
   assert.equal(probeViaChain('cheap-first: gemini → deepseek', 'deepseek'), true);
+});
+
+test('stopped lane auth evidence is superseded by a later ledger or probe success', t => {
+  for (const ledgerSuccess of [false, true]) {
+    const home = fixture(t, [
+      { status: 'error', reason: 'HTTP 401 unauthorized', t: now - 3000 },
+      ...(ledgerSuccess ? [{ status: 'ok', t: now - 2000 }] : []),
+    ]);
+    const health = { lanes: { deepseek: {
+      alive: false, reason: 'quota_wait', until: now + 1000,
+      error: 'HTTP 401 unauthorized', probedAt: now - 3000,
+      lastProbeOkAt: now - (ledgerSuccess ? 4000 : 2000),
+    } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.deepseek.reason, 'quota_wait');
+    fs.appendFileSync(path.join(home, '.claude/executor-usage.jsonl'), '\n' + JSON.stringify({
+      provider: 'deepseek', status: 'cooldown', reason: 'HTTP 401 unauthorized', t: now - 1000,
+    }));
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.deepseek.reason, 'auth_invalid');
+    assert.equal(health.lanes.deepseek.until, undefined);
+  }
+});
+
+test('ChatGPT の定額枠切れ文言は quota であって real_fail_rate ではない', t => {
+  const upgrade = 'Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 10:23 PM. tokens used 62,031';
+  assert.equal(chatgptUsageLimit(upgrade), true);
+  assert.equal(quotaFailure(upgrade), true);
+  // 枠切れは残高不足ではない。billing に落ちると自動復帰を待たずに修復を迫られる。
+  assert.equal(billingFailure(upgrade), false);
+  assert.equal(quotaFailure("You've hit your usage limit for GPT-5."), true);
+  assert.equal(quotaFailure('You have reached your weekly limit.'), true);
+  // 枠と無関係な失敗まで quota に倒さない
+  assert.equal(chatgptUsageLimit('HTTP 500 internal error'), false);
+  assert.equal(chatgptUsageLimit('upgrade to pro plan for more features'), false);
+});
+
+test('ChatGPT 枠切れの行は失敗ではなく quotaCalls に入り gate が修復を要求しない', t => {
+  const stderr = 'Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 10:23 PM.';
+  const home = fixture(t, Array.from({ length: 6 }, () => ({ provider: 'codex', status: 'error', stderr })));
+  const stats = realLaneStats(home, now);
+  assert.equal(stats.codex.failures, 0);
+  assert.equal(stats.codex.quotaCalls, 6);
+  assert.equal(repairable({ alive: false, reason: 'real_fail_rate', error: stderr }), false);
 });

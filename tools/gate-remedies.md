@@ -189,6 +189,16 @@ node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> で大規模イン
 
 node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> で実装を依頼。
 
+## bash-cd-chain-guard
+
+ONBOARDING §1.20 に従い、絶対パス、`git -C <dir>`、`npm --prefix <dir>`、またはツールの `--cwd` を使う。
+
+## shared-worktree-git-guard
+
+- `git add <自分のパス>` → `git commit -F <msg> -- <自分のパス>` で自分の変更を確定する。
+- commit 後は `git show --stat --format="" HEAD` でファイル名を確認する。
+- stash の代わりに `git worktree add -b <branch> <別dir> origin/main` で専用ツリーを作る。
+
 ## pretooluse-headless-background
 
 run_in_background を外し前景実行、ScheduleWakeup を使わず timeout を指定する。
@@ -322,6 +332,10 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 
 コードブロック・引用行は対象外。既存 Stop runner から呼ぶため Stop hook 設定の追加登録は不要。`ORGIAST_THIRD_PARTY_NUDGE_GATE=0` で無効化できる。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
 
+## no-response-gate
+
+差し戻されたら、直近の入力を読み、依頼を進めるか質問に答える。同じゲートの Stop フィードバックに対する再試行では、再度の差し戻しを行わない。
+
 ## unregistered-promise-gate
 
 「この後の自動進行」に Claude の残作業がある場合は、同じセッションでこのターン中に `node tools/auto-progress.mjs --add-check --session <id> --check "<達成判定>" --deadline +2d --label "<作業名>" --next-claude "<次の作業>"` を実行する。宣言だけ、過去ターンの登録、バックグラウンド起動だけでは通らない。登録時刻 `checkRegisteredAt` は Stop の台帳更新でも引き継ぎ、現在ターンの開始以降かを照合する。memory の5回目の注意: check を時刻判定にしない。成果物があるときだけ exit 0。例外は `[AUTOPROGRESS-CHECK-OK: <理由>]`。
@@ -385,6 +399,17 @@ PR のマージを人に頼む文（本文の「次に kim がすること」・
 - 全手段が失敗した場合は `[DRIVE-UPLOAD-FAILED: <20字以上の実際のエラー本文>]` を記載する。
 
 SendUserFile、コードブロック内のローカルパス、チャット添付だけでは完了しない。形式ゲートの降格・一般 retry cap・close-steps より先に判定する。専用状態ファイルでセッションごとの連続 block を数え、3回後の4回目だけ警告付き pass（台帳 verdict: `deliverable-cap`）とする。合格または上限通過で連続数をリセットする。
+
+### 承認コンテキスト（2026-11-15 GridBeyond実害追加）
+承認・確認・選択を求める語（承認／よいですか／どれ／選んで／確認してください／OK／判断）と成果物語（パース・提案書・見積・スライド・メール本文・草案・PDF・画像・Doc等）が最終メッセージに出た場合、各成果物の行または直後2行以内に Drive/Docs の URL（authuser=開く人のメール付き）と「<メール> で開いてください」が無いと block する。
+- 案名だけの方針選択や見積金額の据え置き・値引きの判断、Claude 側の進行予定は承認対象の成果物に含めない。②・③の通常の確認依頼には既存の引き渡し検査が適用される。
+- 承認依頼のパース案梅竹松には各々のURLを書く。1本のURLを複数案のURLとして数えない。
+- 成果物ごとの実物URLが見つからなければ Drive へアップし直す。
+- 次の成果物・箇条書き・見出しに属するURLや例外理由は前の成果物に流用しない。提案書と見積など異なる成果物にも別URLが必要。同じファイルのURLの繰り返しは1件と数える。
+- `URLなし（理由: …）` は該当項目か直後2行以内の継続行に、空でない理由を明示する。承認対象にはアップロード失敗ログだけでは代用できない。
+- 引用（「」『』・Markdown引用ブロック）とコード内は承認検査の対象外。ただし既存のローカルファイル引渡し検査は維持する。
+- アカウント案内はURLの同じ行または前後1行に置く。authuserと案内のメールは一致させる。共有権限そのものはこのテキスト検査で検証できないため、既存の共有・読み戻し手順を先に実行する。
+- 既存ゲートと統合されており、ゲート名・GATE_CONTRACT・状態管理は共有。
 
 ## bg-turn-report-gate
 

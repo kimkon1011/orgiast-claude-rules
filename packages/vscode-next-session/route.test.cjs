@@ -25,6 +25,11 @@ test('未知のパスは start を返す（後方互換）', () => {
   assert.deepEqual(decideAction({ path: '/foo', query: '' }), { kind: 'start' });
 });
 
+test('/reopen は session ID を取得し、ID なしでも reopen に振り分ける', () => {
+  assert.deepEqual(decideAction({ path: '/reopen', query: 'session=cse_abc123' }), { kind: 'reopen', session: 'cse_abc123' });
+  assert.deepEqual(decideAction({ path: '/reopen', query: '' }), { kind: 'reopen', session: '' });
+});
+
 test('空のパスは start を返す', () => {
   assert.deepEqual(decideAction({ path: '', query: '' }), { kind: 'start' });
 });

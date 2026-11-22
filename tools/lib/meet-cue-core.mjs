@@ -6,11 +6,13 @@
 import { sameFleetPc } from '../fleet-pc-identity.mjs';
 
 export function normalizeCaptionRows(rows) {
-  return rows.flatMap(({ text: rawText, fromFallback, ...row }) => {
+  return rows.flatMap(({ text: rawText, fromFallback, speaker, ...row }) => {
+    // B: Bot 自身（「あなた」「You」）の話者行は記録しない
+    if (speaker && (speaker === 'あなた' || speaker === 'You')) return [];
     const text = rawText.trim();
     if (!text || /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(text)) return [];
     if (fromFallback && /^[a-z0-9_]+$/.test(text)) return [];
-    return [{ ...row, text }];
+    return [{ ...row, text, speaker }];
   });
 }
 
@@ -453,14 +455,32 @@ export class CueTracker {
 }
 
 /**
+ * C: Jev 呼び出し条件を判定する
+ * minChars 以上の新規文字があり、かつ cooldownMs 以上経過していれば true
+ */
+export function shouldCallJev({ newCharsSinceLastCheck, lastJevCallTime, now, minChars = 15, cooldownMs = 20000 }) {
+  if (newCharsSinceLastCheck < minChars) return false;
+  if (lastJevCallTime && (now - lastJevCallTime < cooldownMs)) return false;
+  return true;
+}
+
+/**
  * Google Docs batchUpdate request builders
  */
 
+export const GREETING_LINE = '冒頭で『本日は記録のため、オージャストAIが同席しております』とお客様に一言お伝えください';
+
 export function buildDocHeaderRequests({ title = '', staff = '', dateStr = '' }) {
-  const text = `【Meetカンペ】${title ? `${title}` : '打合せ'}\n` +
+  const titleLine = `【Meetカンペ】${title ? `${title}` : '打合せ'}`;
+  // F: カンペの冒頭の一言（見出し直下、太字）
+  const text = `${titleLine}\n${GREETING_LINE}\n\n` +
     `日時: ${dateStr} / 参加社員: ${staff}\n` +
     `※ 使い方: 最新の指示は一番上に出ます。kim はこの Doc に直接書き込めば社員に届きます。Bot は字幕を読んでいるだけで発言しません。\n` +
     `----------------------------------------\n\n`;
+
+  const titleEndIndex = 1 + titleLine.length; // 1 は insertIndex
+  const greetingStartIndex = titleEndIndex + 1; // 改行の次
+  const greetingEndIndex = greetingStartIndex + GREETING_LINE.length;
 
   const requests = [
     {
@@ -471,8 +491,15 @@ export function buildDocHeaderRequests({ title = '', staff = '', dateStr = '' })
     },
     {
       updateTextStyle: {
-        range: { startIndex: 1, endIndex: 1 + `【Meetカンペ】${title ? `${title}` : '打合せ'}`.length },
+        range: { startIndex: 1, endIndex: titleEndIndex },
         textStyle: { bold: true, fontSize: { magnitude: 18, unit: 'PT' } },
+        fields: 'bold,fontSize',
+      },
+    },
+    {
+      updateTextStyle: {
+        range: { startIndex: greetingStartIndex, endIndex: greetingEndIndex },
+        textStyle: { bold: true, fontSize: { magnitude: 14, unit: 'PT' } },
         fields: 'bold,fontSize',
       },
     },

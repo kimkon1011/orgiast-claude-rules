@@ -45,7 +45,7 @@ Copy-Item -LiteralPath $bootstrapSource -Destination $bootstrap -Force
 . (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
 $action = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $bootstrap, '-Target', $target) -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At '06:30'
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description 'TETSUKO growth loop (daily 06:30; generates content and rewrites TETSUKO_DAILY_BRIEFING.md)' -Force -ErrorAction Stop | Out-Null
 Write-Host "OK: task $taskName registered (daily 06:30)"
 Get-ScheduledTask -TaskName $taskName | Select-Object TaskName, State

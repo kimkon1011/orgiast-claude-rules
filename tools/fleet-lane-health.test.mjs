@@ -81,12 +81,67 @@ test('repairAdvice: 自動修復と人の操作の区別', () => {
   assert.equal(repairAdvice('codex', 'dead:oauth_consent').fixNow, true);
   assert.match(repairAdvice('codex', 'dead:physical_operation').human, /wsl/);
   assert.equal(repairAdvice('deepseek', 'dead:payment_required').fixNow, false);
+  assert.match(repairAdvice('codex', 'oauth_consent', { via: 'x' }).human, /OAuth/);
+  for (const reason of ['quota_wait', 'usage_limit:daily', 'rate_limit:retry', 'daily_limit', 'lane_doctor_usage_limit']) {
+    assert.deepEqual(repairAdvice('codex', reason), {
+      fixNow: false, auto: true, silent: true, human: null,
+      note: '利用上限・レート制限の一時待ち。自動再確認で復帰する',
+    });
+  }
+  assert.deepEqual(repairAdvice('groq', 'daily_limit'), {
+    fixNow: false, auto: true, silent: true, human: null,
+    note: '利用上限・レート制限の一時待ち。自動再確認で復帰する',
+  });
 });
 
 function mailFor(pc, dead, at, extra = {}) {
   const { why, body } = buildLaneHealthMail({ pc, dead, at, recovered: !dead.length, ...extra });
   return { id: `mail-${pc}-${at}`, why, body, createdAt: at };
 }
+
+test('代替稼働と一時待ちは集計表に残し、対応が必要な停止だけ通知する', async t => {
+  const home = tmp(t); fs.mkdirSync(path.join(home, '.claude'));
+  const at = '2026-11-21T10:00:00Z';
+  const now = () => Date.parse(at);
+  const deepseek = { alive: false, reason: 'billing', via: 'openrouter' };
+  const dead = deadLanes({ lanes: {
+    deepseek, openrouter: alive, groq: { alive: false, reason: 'quota_wait' },
+    codex: { alive: false, reason: 'oauth_consent', via: 'x' },
+  } });
+  assert.deepEqual(dead, [
+    { lane: 'deepseek', reason: 'billing', via: 'openrouter' },
+    { lane: 'groq', reason: 'quota_wait' },
+    { lane: 'codex', reason: 'oauth_consent' },
+  ]);
+  const backupDown = deadLanes({ lanes: { deepseek, openrouter: { alive: false, reason: 'missing_key' } } });
+  assert.deepEqual(backupDown, [{ lane: 'deepseek', reason: 'billing' }]);
+  const mail = mailFor('nishi-PC', dead, at);
+  assert.deepEqual(parseLaneHealthMail(mail).dead, dead);
+
+  const dms = [];
+  const { rows, table } = await runLaneHealthWatch({
+    home, now, selfLabel: 'kim-PC', pcMap: {},
+    readInboxImpl: () => [mail, mailFor('cr-PC', backupDown, at)],
+    notify: async text => { dms.push(text); return { delivered: 'dm' }; },
+  });
+  const [fallback, quota, codex, unbacked] = rows;
+  assert.equal(fallback.via, 'openrouter');
+  for (const row of [fallback, quota]) {
+    assert.equal(row.silent, true);
+    assert.equal(row.auto, true);
+    assert.equal(row.fixNow, false);
+    assert.equal(row.human, null);
+  }
+  assert.match(table, /openrouter 経由で代替稼働中/);
+  assert.match(table, /groq \| dead \| quota_wait/);
+  assert.match(codex.human, /OAuth/);
+  assert.equal(unbacked.silent, false);
+  assert.ok(unbacked.human);
+  assert.equal(dms.length, 2);
+  assert.ok(dms.some(dm => dm.startsWith('nishi-PC の codex')));
+  assert.ok(dms.some(dm => dm.startsWith('cr-PC の deepseek')));
+});
+
 test('集計表: PC×レーン×状態×理由×推奨対処、最新報告のみ、recovered は消える、DMは1件1回', async t => {
   const home = tmp(t); fs.mkdirSync(path.join(home, '.claude'));
   const now = () => Date.parse('2026-10-15T13:00:00Z');

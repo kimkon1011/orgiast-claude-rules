@@ -6,7 +6,9 @@ import test from 'node:test';
 import {
   dedupeKey,
   isNearDuplicate,
+  isExpiredSameDay,
   isStaleOverdue,
+  isStaleUndated,
   mergeTasks,
   pickTop,
   preprocessForTasks,
@@ -53,6 +55,129 @@ test('pickTop は入力順を保ち、通常枠と期限超過枠にそれぞれ
   assert.deepEqual(pickTop(tasks, { now: NOW, limit: 2 }), {
     top: [first, second],
     staleOverdue: [stale, { ...stale, id: 'T-0004' }],
+    expiredSameDay: [],
+    staleUndated: [],
+  });
+});
+
+test('isExpiredSameDay は期限が起票日以前で JST の期限日を過ぎた未完了タスクを判定する', () => {
+  const now = new Date('2026-11-20T03:00:00Z');
+  const born = { status: '未着手', deadline: '2026-11-19', createdAt: '2026-11-20 06:33' };
+  assert.equal(isExpiredSameDay(born, { now }), true);
+  const sameDay = { status: '進行中', deadline: '2026-11-18', createdAt: '2026-11-18 6:32' };
+  assert.equal(isExpiredSameDay(sameDay, { now }), true);
+  assert.equal(isExpiredSameDay(sameDay, { now: new Date('2026-11-18T03:00:00Z') }), false);
+  assert.equal(isExpiredSameDay({ ...born, deadline: '2026-11-10', createdAt: '2026-11-05 10:00' }, { now }), false);
+  assert.equal(isExpiredSameDay({ ...born, createdAt: '' }, { now }), false);
+  assert.equal(isExpiredSameDay({ ...born, status: '完了' }, { now }), false);
+  assert.equal(isExpiredSameDay({ ...born, deadline: '2026-11-31' }, { now }), false);
+  assert.equal(isExpiredSameDay(sameDay, { now: new Date('2026-11-18T14:59:00Z') }), false);
+  assert.equal(isExpiredSameDay(sameDay, { now: new Date('2026-11-18T15:00:00Z') }), true);
+});
+
+test('pickTop は通常・期限超過・当日系期限切れの3枠に分け、入力順を保つ', () => {
+  const active = { status: '進行中' };
+  const stale = { id: 'S-001', rank: 'P1', title: '古い期限切れ', deadline: '2026-11-10' };
+  const born = { id: 'E-001', rank: 'P1', title: '当日系期限切れ', deadline: '2026-11-19' };
+  const regular = { id: 'R-001', rank: 'P2', title: '通常タスク' };
+  const tasks = [
+    { ...born, ...active, createdAt: '2026-11-20 06:33' },
+    { ...stale, ...active, createdAt: '2026-11-01 06:30' },
+    { ...regular, ...active, createdAt: '2026-11-19 06:30' },
+    { ...born, ...active, id: 'E-002', createdAt: '2026-11-20 06:33' },
+  ];
+  assert.deepEqual(pickTop(tasks, { now: new Date('2026-11-20T03:00:00Z'), limit: 3 }), {
+    top: [regular],
+    staleOverdue: [stale],
+    expiredSameDay: [born, { ...born, id: 'E-002' }],
+    staleUndated: [],
+  });
+});
+
+test('pickTop は完了・クローズのタスクを top に入れず、アクティブなタスクだけを抽出する', () => {
+  const active = { status: '進行中' };
+  const done = { status: '完了' };
+  const closed = { status: 'クローズ' };
+  const tasks = [
+    { id: 'T-0001', rank: 'P1', title: '完了タスク', ...done },
+    { id: 'T-0002', rank: 'P2', title: 'アクティブ', ...active },
+    { id: 'T-0003', rank: 'P1', title: 'クローズタスク', ...closed },
+    { id: 'T-0004', rank: 'P3', title: 'アクティブその2', ...active },
+  ];
+  assert.deepEqual(pickTop(tasks, { now: NOW, limit: 5 }), {
+    top: [
+      { id: 'T-0002', rank: 'P2', title: 'アクティブ' },
+      { id: 'T-0004', rank: 'P3', title: 'アクティブその2' },
+    ],
+    staleOverdue: [],
+    expiredSameDay: [],
+    staleUndated: [],
+  });
+});
+
+test('isStaleUndated は期限なしで14日超起票の未完了タスクを判定する', () => {
+  const now = new Date('2026-11-21T03:00:00Z');
+  const old = { status: '未着手', deadline: '', createdAt: '2026-11-06 10:00' };
+  assert.equal(isStaleUndated(old, { now }), true);
+  assert.equal(isStaleUndated({ ...old, createdAt: '2026-11-07 10:00' }, { now }), false);
+  assert.equal(isStaleUndated({ ...old, deadline: '2026-11-20' }, { now }), false);
+  assert.equal(isStaleUndated({ ...old, createdAt: '' }, { now }), false);
+  assert.equal(isStaleUndated({ ...old, status: '完了' }, { now }), false);
+  assert.equal(isStaleUndated({ ...old, createdAt: '不正な日付' }, { now }), false);
+  assert.equal(isStaleUndated({ ...old, deadline: '  ' }, { now }), true);
+});
+
+test('isStaleUndated は maxAgeDays で閾値を変更できる', () => {
+  const now = new Date('2026-11-21T03:00:00Z');
+  const task = { status: '進行中', deadline: '', createdAt: '2026-11-07 10:00' };
+  assert.equal(isStaleUndated(task, { now, maxAgeDays: 13 }), true);
+  assert.equal(isStaleUndated(task, { now, maxAgeDays: 14 }), false);
+});
+
+test('pickTop は期限なし起票14日超のタスクを staleUndated に入れ top から外す', () => {
+  const active = { status: '進行中' };
+  const undated = { id: 'U-001', rank: 'P1', title: '期限なし古タスク', createdAt: '2026-10-01 10:00' };
+  const regular = { id: 'R-001', rank: 'P2', title: '通常タスク', createdAt: '2026-11-21 10:00' };
+  const tasks = [
+    { ...undated, ...active, deadline: '' },
+    { ...regular, ...active, deadline: '' },
+  ];
+  assert.deepEqual(pickTop(tasks, { now: new Date('2026-11-21T03:00:00Z'), limit: 5 }), {
+    top: [{ id: 'R-001', rank: 'P2', title: '通常タスク' }],
+    staleOverdue: [],
+    expiredSameDay: [],
+    staleUndated: [{ id: 'U-001', rank: 'P1', title: '期限なし古タスク', createdAt: '2026-10-01 10:00' }],
+  });
+});
+
+test('pickTop は期限なし14日以内のタスクを top に入れる', () => {
+  const active = { status: '保留' };
+  const recent = { id: 'R-001', rank: 'P3', title: '最近のタスク', createdAt: '2026-11-21 10:00', deadline: '' };
+  assert.deepEqual(pickTop([{ ...recent, ...active }], { now: new Date('2026-11-21T03:00:00Z'), limit: 5 }), {
+    top: [{ id: 'R-001', rank: 'P3', title: '最近のタスク' }],
+    staleOverdue: [],
+    expiredSameDay: [],
+    staleUndated: [],
+  });
+});
+
+test('pickTop は期限なしで完了タスクをどこにも入れない', () => {
+  const done = { id: 'D-001', rank: 'P1', title: '完了期限なし', createdAt: '2026-10-01 10:00', deadline: '', status: '完了' };
+  assert.deepEqual(pickTop([done], { now: new Date('2026-11-21T03:00:00Z'), limit: 5 }), {
+    top: [],
+    staleOverdue: [],
+    expiredSameDay: [],
+    staleUndated: [],
+  });
+});
+
+test('pickTop は createdAt が不正な期限なしタスクを top に入れる', () => {
+  const bad = { id: 'B-001', rank: 'P3', title: '作成日不明', createdAt: '', deadline: '', status: '未着手' };
+  assert.deepEqual(pickTop([bad], { now: new Date('2026-11-21T03:00:00Z'), limit: 5 }), {
+    top: [{ id: 'B-001', rank: 'P3', title: '作成日不明' }],
+    staleOverdue: [],
+    expiredSameDay: [],
+    staleUndated: [],
   });
 });
 

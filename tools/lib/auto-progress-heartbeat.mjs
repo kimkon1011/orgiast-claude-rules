@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
-import { addItem, listItems } from '../kim-inbox.mjs';
+import { addItem, readInboxItem } from '../kim-inbox.mjs';
 import { rowKey } from '../auto-progress-ledger.mjs';
 import { checkLogPaths } from './auto-progress-artifact.mjs';
 export const HEARTBEAT_MS = 6 * 3600000;
@@ -23,7 +23,7 @@ export async function reportCheckProgress(home, row, result, { now, patch, io = 
   const text = `途中経過: ${row.label || row.promise}\n最終確認: ${row.lastCheckedAt || at}\n判定: ${verdict}\n${signature === row.progressSignature ? '変化なし' : `確認結果: ${String(result.text || '').slice(-600)}\nログ末尾: ${tail || '参照先の指定なし'}`}\n作業ID: ${row.sessionId}`;
   const dedupeKey = 'auto-progress-heartbeat:' + createHash('sha256').update(rowKey(row)).digest('hex').match(/.{8}/g).join('-');
   const item = await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', priority: 'high', source: 'auto-progress-heartbeat', dedupeKey, refresh: true, text });
-  const stored = (io.listKimInboxItems ?? listItems)(home).find(i => i.id === item?.id);
+  const stored = io.listKimInboxItems ? io.listKimInboxItems(home).find(i => i.id === item?.id) : readInboxItem(home, item?.id);
   if (!stored || stored.text !== item.text || stored.forwardError) throw new Error('progress inbox read-back failed');
   const change = { progressNotifiedAt: at, progressSignature: signature };
   if (patch(rowKey(row), change) !== false) Object.assign(row, change);

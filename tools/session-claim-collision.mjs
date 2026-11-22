@@ -4,44 +4,16 @@ import { isEntry } from './is-entry.mjs';
 import { purposeTokens, jaccard } from './lib/purpose-tokens.mjs';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { syncClaims } from './session-claims.mjs';
+import { openSessionClaimCache } from './lib/session-claim-cache.mjs';
 
 // 2026-09-17: 無関係な目的同士の実測最大0.04。その5倍を安全側の閾値に採用。
 export const COLLISION_THRESHOLD = 0.20;
 const ACTIVE_AGE_MS = 8 * 60 * 60 * 1000;
-const PURPOSE_MARKER = '**[本セッションの目的]**';
+const UNDECLARED_TTL_MS = 60_000;
 
 function argValue(name) { const index = process.argv.indexOf(name); return index >= 0 ? process.argv[index + 1] : ''; }
-
-function assistantText(record) {
-  const content = record?.message?.content ?? record?.content;
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content.filter((part) => part?.type === 'text' && typeof part.text === 'string').map((part) => part.text).join('\n');
-}
-
-// 目的は transcript の assistant 行の宣言だけから取る。user 行やフックの additionalContext は拾わない。
-function purposeFromTranscript(file) {
-  let purpose = '';
-  let raw;
-  try { raw = fs.readFileSync(file, 'utf8'); } catch { return ''; }
-  for (const line of raw.split(/\r?\n/)) {
-    // 2026-09-30: 全行 JSON.parse は活動中 transcript 合計100MB級で6秒超かかるため、マーカー行だけ解析する。
-    if (!line.includes(PURPOSE_MARKER)) continue;
-    let record;
-    try { record = JSON.parse(line); } catch { continue; }
-    if (record?.type !== 'assistant') continue;
-    for (const textLine of assistantText(record).split(/\r?\n/)) {
-      // 同じ本文行に複数の宣言があっても最後を採用する。
-      const markerAt = textLine.lastIndexOf(PURPOSE_MARKER);
-      if (markerAt >= 0) purpose = textLine.slice(markerAt + PURPOSE_MARKER.length).trim();
-    }
-  }
-  if (purpose.length < 4 || purpose.includes('<目的>')) return '';
-  return purpose;
-}
 
 function localMinute(timestamp) {
   const date = new Date(timestamp);
@@ -53,12 +25,19 @@ function localMinute(timestamp) {
 // 着手印の台帳を更新する。この hook は SessionStart / UserPromptSubmit に登録済みなので、
 // 目的を宣言した次の発話で claim が自動的に載る（手で印を書く運用にしない）。
 // 台帳が書けなくても衝突警告の邪魔をしないよう、失敗は完全に握り潰す。
-function persistClaimsQuietly() {
-  try { syncClaims(path.join(os.homedir(), '.claude')); } catch { /* fail-open */ }
+function persistClaimsQuietly(base, now, cache) {
+  try { syncClaims(base, [], now, cache); } catch { /* fail-open */ }
 }
 
 function latchFile(home, sessionId) {
   return path.join(home, '.claude', 'session-claim-latch', sessionId.replace(/[^\w-]/g, '_'));
+}
+
+function recentlyUndeclared(file, now) {
+  try {
+    const age = now - fs.statSync(file).mtimeMs;
+    return age >= 0 && age < UNDECLARED_TTL_MS;
+  } catch { return false; }
 }
 
 async function main() {
@@ -69,37 +48,49 @@ async function main() {
     try { if (raw) input = JSON.parse(raw); } catch { return; }
     const sessionId = String(argValue('--session-id') || process.env.CLAUDE_SESSION_ID || input.session_id || '');
     const home = process.env.ORGIAST_HOME || os.homedir();
-    // PreToolUse はツール呼び出しのたびに走るため、目的確認が済んだセッションでは即終了する（latch）。
     const preToolUse = input.hook_event_name === 'PreToolUse';
-    if (preToolUse && sessionId && fs.existsSync(latchFile(home, sessionId))) return;
-    persistClaimsQuietly();
-    if (!sessionId) return;
-    const projectsDir = process.env.CLAUDE_PROJECTS_DIR || path.join(home, '.claude', 'projects');
     const now = Date.now();
+    const latch = latchFile(home, sessionId);
+    const undeclaredLatch = `${latch}.undeclared`;
+    if (preToolUse && sessionId && (fs.existsSync(latch) || recentlyUndeclared(undeclaredLatch, now))) return;
+
+    const base = path.resolve(home, '.claude');
+    const cache = openSessionClaimCache(base, now, ACTIVE_AGE_MS);
+    persistClaimsQuietly(base, now, cache);
+    if (!sessionId) { cache.save(); return; }
+    const projectsDir = path.resolve(process.env.CLAUDE_PROJECTS_DIR || path.join(base, 'projects'));
     let slugs;
-    try { slugs = fs.readdirSync(projectsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()); } catch { return; }
+    try { slugs = cache.readDirectory(projectsDir).filter((entry) => entry.isDirectory()); } catch { cache.save(); return; }
 
     const sessions = [];
     for (const slug of slugs) {
       const dir = path.join(projectsDir, slug.name);
       let names;
-      try { names = fs.readdirSync(dir).filter((name) => name.endsWith('.jsonl')); } catch { continue; }
+      try { names = cache.readDirectory(dir).map((entry) => entry.name).filter((name) => name.endsWith('.jsonl')); } catch { continue; }
       for (const name of names) {
         const file = path.join(dir, name);
         let stat;
-        try { stat = fs.statSync(file); } catch { continue; }
-        if (!stat.isFile() || now - stat.mtimeMs > ACTIVE_AGE_MS) continue;
-        const purpose = purposeFromTranscript(file);
-        if (!purpose) continue;
+        try { stat = cache.stat(file); } catch { continue; }
+        if (!stat.isFile() || now - stat.mtimeMs > ACTIVE_AGE_MS) {
+          cache.discard(file);
+          continue;
+        }
+        let purpose;
+        try { purpose = cache.purpose(file, stat); } catch { continue; }
+        if (purpose.length < 4 || purpose.includes('<目的>')) continue;
         sessions.push({ sessionId: path.basename(name, '.jsonl'), purpose, tokens: purposeTokens(purpose), mtimeMs: stat.mtimeMs });
       }
     }
 
+    cache.save();
     const own = sessions.filter((entry) => entry.sessionId === sessionId).sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
-    if (!own) return;
     if (preToolUse) {
-      try { fs.mkdirSync(path.dirname(latchFile(home, sessionId)), { recursive: true }); fs.writeFileSync(latchFile(home, sessionId), own.purpose); } catch { /* fail-open */ }
+      try {
+        fs.mkdirSync(path.dirname(latch), { recursive: true });
+        fs.writeFileSync(own ? latch : undeclaredLatch, own?.purpose ?? '');
+      } catch { /* fail-open */ }
     }
+    if (!own) return;
     const collisions = [];
     for (const candidate of sessions) {
       if (candidate.sessionId === sessionId) continue;

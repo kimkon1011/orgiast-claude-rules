@@ -54,7 +54,14 @@ export async function channelRequest(route, { query, body, home = process.env.OR
     signal: signal || AbortSignal.timeout(30000),
     headers: { ...keyserveAuthHeaders(secret, Date.now(), requireKeyservePcId(home, env)), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  if (!response.ok) throw Object.assign(Error(`channel ${route}: HTTP ${response.status}`), { status: response.status });
+  if (!response.ok) {
+    const responseBody = await response.text();
+    const requestId = response.headers.get('x-vercel-id') || response.headers.get('x-request-id') || '';
+    throw Object.assign(
+      Error(`channel ${route}: HTTP ${response.status}${responseBody ? ` ${responseBody}` : ''}${requestId ? ` (request-id: ${requestId})` : ''}`),
+      { status: response.status, responseBody, requestId },
+    );
+  }
   return response.json();
 }
 export function googleRoute(raw, marker = GWS_MARKER) {

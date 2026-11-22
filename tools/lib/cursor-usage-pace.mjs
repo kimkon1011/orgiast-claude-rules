@@ -42,8 +42,8 @@ export function readOwnerReport(home) {
   return null;
 }
 
-export function hoursAgo(ms) {
-  return (Date.now() - ms) / 3_600_000;
+export function hoursAgo(ms, now = Date.now()) {
+  return (now - ms) / 3_600_000;
 }
 
 export function findLastGoodFromState(home) {
@@ -223,9 +223,10 @@ export function writePaceOutputs(home, record) {
     source: record.source || '',
     updatedAt: jstStamp(record.now || Date.now()),
   };
-  // Save lastGood when we have valid percentages from a non-unavailable source
+  // Save lastGood only when we have actual measurements (not estimates)
   if (Number.isFinite(record.cursorModelsPct) && Number.isFinite(record.otherModelsPct) &&
-      record.source && record.source !== 'unavailable') {
+      record.source && record.source !== 'unavailable' &&
+      !record.source.startsWith('前回値(') && !record.source.includes('(推定)')) {
     stateDoc.lastGood = {
       cursorModelsPct: record.cursorModelsPct,
       otherModelsPct: record.otherModelsPct,

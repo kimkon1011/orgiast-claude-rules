@@ -168,3 +168,32 @@ test('hoursAgo は経過時間を正しく計算する', () => {
   const h2 = hoursAgo(twoDaysAgo);
   assert.ok(h2 > 47 && h2 < 49, `hoursAgo(2d)=${h2}`);
 });
+
+test('hoursAgo は now 引数を受け付ける', () => {
+  const now = Date.parse('2026-11-22T20:00:00+09:00');
+  const threeHoursAgo = now - 3 * 3_600_000;
+  const h = hoursAgo(threeHoursAgo, now);
+  assert.equal(h, 3);
+  const fortyNineHoursAgo = now - 49 * 3_600_000;
+  const h2 = hoursAgo(fortyNineHoursAgo, now);
+  assert.equal(h2, 49);
+});
+
+test('writePaceOutputs は推定値で lastGood を更新しない', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-lastgood-est-'));
+  const now = Date.parse('2026-11-21T23:17:00+09:00');
+  // まず実測で lastGood を書き込む
+  const decided = decideCursorPace({ cursorModelsPct: 5, otherModelsPct: 1, now, ...CYCLE });
+  writePaceOutputs(home, { ...decided, now, ...CYCLE, source: 'team-api' });
+  const state1 = JSON.parse(fs.readFileSync(cursorUsagePaceStatePath(home), 'utf8'));
+  const originalAt = state1.lastGood.at;
+  assert.ok(originalAt);
+  // 推定値で上書き → lastGood.at が変わらない
+  writePaceOutputs(home, { ...decided, now, ...CYCLE, source: '前回値(team-api, 20h前)(推定)' });
+  const state2 = JSON.parse(fs.readFileSync(cursorUsagePaceStatePath(home), 'utf8'));
+  assert.equal(state2.lastGood.at, originalAt, '推定値で lastGood.at は変わらない');
+  // unavailable でも変わらない
+  writePaceOutputs(home, { ...decided, now, ...CYCLE, source: 'unavailable' });
+  const state3 = JSON.parse(fs.readFileSync(cursorUsagePaceStatePath(home), 'utf8'));
+  assert.equal(state3.lastGood.at, originalAt, 'unavailable でも lastGood.at は変わらない');
+});

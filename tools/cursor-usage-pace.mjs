@@ -135,9 +135,10 @@ export async function runCursorUsagePace({
       if (!Number.isFinite(cursorModelsPct) || !Number.isFinite(otherModelsPct)) {
         const owner = readOwnerReport(home);
         if (owner) {
-          const elapsedH = hoursAgo(Date.parse(owner.at));
-          if (elapsedH > 168) { // 7日超 → 使わない
-            source = 'owner-report(7d超)';
+          const ownerAt = Date.parse(owner.at);
+          const elapsedH = Number.isFinite(ownerAt) ? hoursAgo(ownerAt, now) : 999;
+          if (!Number.isFinite(ownerAt) || elapsedH > 168) { // 7日超 → 使わない
+            source = !Number.isFinite(ownerAt) ? 'owner-report(at不正)' : 'owner-report(7d超)';
           } else {
             cursorModelsPct = owner.cursorModelsPct;
             otherModelsPct = owner.otherModelsPct;
@@ -152,9 +153,10 @@ export async function runCursorUsagePace({
       if (!Number.isFinite(cursorModelsPct) || !Number.isFinite(otherModelsPct)) {
         const lastGood = findLastGoodFromState(home);
         if (lastGood) {
-          const elapsedH = hoursAgo(Date.parse(lastGood.at));
-          if (elapsedH > 168) { // 7日超 → 使わない
-            source = 'carry-forward(7d超)';
+          const lastGoodAt = Date.parse(lastGood.at);
+          const elapsedH = Number.isFinite(lastGoodAt) ? hoursAgo(lastGoodAt, now) : 999;
+          if (!Number.isFinite(lastGoodAt) || elapsedH > 168) {
+            source = !Number.isFinite(lastGoodAt) ? 'carry-forward(at不正)' : 'carry-forward(7d超)';
           } else {
             cursorModelsPct = lastGood.cursorModelsPct;
             otherModelsPct = lastGood.otherModelsPct;

@@ -117,6 +117,26 @@ test('7日超の前回値は％を使わず判定:未取得', async () => {
   assert.match(result.line, /判定:未取得/);
 });
 
+test('owner-report の at が不正なら％を使わず判定:未取得', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-pace-badat-'));
+  const dir = path.join(home, '.claude', 'reports');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(ownerReportPath(home), JSON.stringify({
+    cursorModelsPct: 5, otherModelsPct: 1, onDemandUsed: false, at: 'invalid-date', by: 'kim',
+  }));
+  const now = Date.parse('2026-11-22T20:00:00+09:00');
+  const result = await runCursorUsagePace({
+    home,
+    now,
+    fetchPlanImpl: async () => ({ ok: false, source: 'unavailable' }),
+  });
+  assert.equal(result.decision, 'unknown');
+  assert.equal(result.fill, false);
+  assert.match(result.line, /Cursor Models —%/);
+  assert.match(result.line, /判定:未取得/);
+  assert.match(result.line, /取得:owner-report\(at不正\)/);
+});
+
 test('halt 時に alert ファイルを書き、halt でなければ書かない', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-pace-alert-'));
   const dir = path.join(home, '.claude', 'reports');

@@ -74,7 +74,7 @@ test('scanner CLI delivers deduplicated info and matches each transcript occurre
   assert.equal(others.length, 0);
   assert.equal(item.kind, 'info');
   assert.equal(item.sessionId, session);
-  assert.equal(item.text.split('\n').at(-1), [...prompt].slice(0, 80).join(''));
+  assert.match(item.text, new RegExp(`\\d+件: ${[...prompt].slice(0, 80).join('')}`));
   assert.deepEqual(fs.readFileSync(transcript), before);
 });
 

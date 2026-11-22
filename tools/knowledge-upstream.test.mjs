@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runKnowledgeUpstream, scanUpstreamCandidates, sourcePcIdentity } from './knowledge-upstream.mjs';
+import { runKnowledgeUpstream, scanUpstreamCandidates, sourcePcIdentity, isProxyUploadLimitError } from './knowledge-upstream.mjs';
 
 function createMockEnv() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'upstream-test-'));
@@ -177,4 +177,58 @@ test('register-knowledge-upstream-task.ps1 uses -RepetitionInterval parameter an
   assert.match(script, /-RepetitionInterval \(New-TimeSpan -Hours 1\)/);
   assert.match(script, /Get-ScheduledTask -TaskName \$taskName/);
   assert.match(script, /Repetition\.Interval/);
+});
+
+test('HTTP 403 during Drive folder setup uploads queued content through rclone fallback', async () => {
+  const { tmpDir, cleanup } = createMockEnv();
+  try {
+    const rcloneUploads = [];
+    const res = await runKnowledgeUpstream({
+      home: tmpDir,
+      repoPath: tmpDir,
+      getDriveTokenFn: async () => 'mock_token',
+      findOrCreateFolderFn: async () => { throw new Error('Drive API HTTP 403: forbidden'); },
+      uploadViaRcloneFn: async opts => { rcloneUploads.push(opts); },
+      now: new Date('2026-11-22T01:00:00Z'),
+    });
+
+    assert.equal(res.sent, 1);
+    assert.equal(res.queued, 0);
+    assert.equal(rcloneUploads.length, 1);
+    assert.match(rcloneUploads[0].fileName, /^20261122-/);
+    const state = JSON.parse(fs.readFileSync(path.join(tmpDir, '.claude', 'knowledge-upstream-state.json'), 'utf8'));
+    assert.equal(state.lastRunAt, '2026-11-22T01:00:00.000Z');
+    assert.equal(state.unsentQueue.length, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test('HTTP 413 during item upload retries that item through rclone fallback', async () => {
+  const { tmpDir, cleanup } = createMockEnv();
+  try {
+    let fallbackCount = 0;
+    const res = await runKnowledgeUpstream({
+      home: tmpDir,
+      repoPath: tmpDir,
+      getDriveTokenFn: async () => 'mock_token',
+      findOrCreateFolderFn: async () => ({ id: 'folder_123' }),
+      findByTitleFn: async () => [],
+      uploadFileContentFn: async () => { throw new Error('HTTP 413 payload too large'); },
+      uploadViaRcloneFn: async () => { fallbackCount++; },
+      now: new Date('2026-11-22T02:00:00Z'),
+    });
+
+    assert.equal(res.sent, 1);
+    assert.equal(res.queued, 0);
+    assert.equal(fallbackCount, 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test('rclone fallback is limited to HTTP 403 and 413 errors', () => {
+  assert.equal(isProxyUploadLimitError(new Error('HTTP 403 forbidden')), true);
+  assert.equal(isProxyUploadLimitError(new Error('proxy returned 413')), true);
+  assert.equal(isProxyUploadLimitError(new Error('HTTP 500 unavailable')), false);
 });

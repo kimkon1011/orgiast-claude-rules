@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { getDriveToken } from './lib/drive-auth.mjs';
 import { uploadFileContent, findOrCreateFolder, findByTitle } from './lib/drive-files.mjs';
 import { findSharedSecret, parseMemoryFrontmatter, redactForShare } from './lib/share-content.mjs';
@@ -15,6 +16,7 @@ import { installFromDriveMaster } from './memory-share.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const INBOX_FOLDER_ID = '1AyZcrlK9JCNPUkhKCBOezet9a2QoSwK2';
+const RCLONE_REMOTE = 'claude-backup';
 const CUSTOMER_PATTERNS = [
   ['案件ID', /C0\d{3,}/],
   ['法人名', /株式会社|有限会社|合同会社/],
@@ -30,6 +32,30 @@ function safeReadJson(file, fallback = null) {
   } catch {
     return fallback;
   }
+}
+
+export function isProxyUploadLimitError(err) {
+  return /(?:HTTP\s*)?(?:403|413)\b/i.test(String(err?.message || err));
+}
+
+export function uploadViaRclone({ folderName, fileName, content, spawnFn = spawn }) {
+  const destination = `${RCLONE_REMOTE}:${folderName}/${fileName}`;
+  return new Promise((resolve, reject) => {
+    const child = spawnFn('rclone', [
+      'rcat', destination,
+      '--drive-root-folder-id', INBOX_FOLDER_ID,
+    ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    let stderr = '';
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', chunk => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', code => {
+      if (code === 0) resolve({ destination });
+      else reject(new Error(`rclone exited ${code}: ${stderr.trim() || 'no error output'}`));
+    });
+    child.stdin.on('error', reject);
+    child.stdin.end(Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8'));
+  });
 }
 
 export function sourcePcIdentity(home, env = process.env) {
@@ -231,12 +257,18 @@ export async function runKnowledgeUpstream(options = {}) {
   const findOrCreateFolderFn = options.findOrCreateFolderFn || findOrCreateFolder;
   const uploadFileContentFn = options.uploadFileContentFn || uploadFileContent;
   const findByTitleFn = options.findByTitleFn || findByTitle;
+  const uploadViaRcloneFn = options.uploadViaRcloneFn || uploadViaRclone;
+  let useRcloneFallback = false;
 
   try {
     token = await getDriveTokenFn({ home });
     const pcFolder = await findOrCreateFolderFn(token, identity.folderName, INBOX_FOLDER_ID);
     targetFolderId = pcFolder.id;
   } catch (err) {
+    if (isProxyUploadLimitError(err)) {
+      useRcloneFallback = true;
+      emit(`[knowledge-upstream] Drive setup failed with HTTP 403/413; using rclone ${RCLONE_REMOTE} fallback`);
+    } else {
     const errorMsg = `Failed Drive auth/folder setup: ${err.message}`;
     emit(`[knowledge-upstream] ${errorMsg}`);
     result.errors.push(errorMsg);
@@ -247,6 +279,7 @@ export async function runKnowledgeUpstream(options = {}) {
       fs.writeFileSync(stateFile, JSON.stringify(state, null, 2) + '\n');
     }
     return result;
+    }
   }
 
   // 3. Upload items one by one
@@ -254,6 +287,13 @@ export async function runKnowledgeUpstream(options = {}) {
   for (const item of itemsList) {
     const fileName = `${dateStr}-${item.title}`;
     try {
+      if (useRcloneFallback) {
+        await uploadViaRcloneFn({
+          folderName: identity.folderName,
+          fileName,
+          content: Buffer.from(item.content, 'utf8'),
+        });
+      } else {
       // Check if file with title exists in pcFolder
       const existing = await findByTitleFn(token, fileName, targetFolderId);
       const fileId = existing?.[0]?.id;
@@ -264,11 +304,27 @@ export async function runKnowledgeUpstream(options = {}) {
         parentId: targetFolderId,
         content: Buffer.from(item.content, 'utf8'),
       });
+      }
 
       state.sentHashes[item.id] = { sha256: item.sha256, sentAt: now.toISOString(), name: fileName };
       result.sent++;
       emit(`[sent] ${item.id} -> ${identity.folderName}/${fileName}`);
     } catch (err) {
+      if (!useRcloneFallback && isProxyUploadLimitError(err)) {
+        try {
+          await uploadViaRcloneFn({
+            folderName: identity.folderName,
+            fileName,
+            content: Buffer.from(item.content, 'utf8'),
+          });
+          state.sentHashes[item.id] = { sha256: item.sha256, sentAt: now.toISOString(), name: fileName };
+          result.sent++;
+          emit(`[sent:rclone] ${item.id} -> ${identity.folderName}/${fileName}`);
+          continue;
+        } catch (fallbackErr) {
+          err = new Error(`${err.message}; rclone fallback failed: ${fallbackErr.message}`);
+        }
+      }
       const errorMsg = `Failed to send ${item.id}: ${err.message}`;
       emit(`[error] ${errorMsg}`);
       result.errors.push(errorMsg);

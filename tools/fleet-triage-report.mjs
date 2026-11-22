@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { isEntry } from './is-entry.mjs';
+import { postToDiscordWebhook } from './discord-webhook-post.mjs';
 
 function parseJst(value) {
   const match = String(value ?? '').trim().match(/^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}):(\d{2}))?$/);
@@ -87,7 +88,6 @@ async function main() {
       console.log(text);
       return;
     }
-    const { postToDiscordWebhook } = await import('./fleet-liveness.mjs');
     const ok = await postToDiscordWebhook(webhook, text, { label: 'fleet-triage', fetchImpl });
     if (!ok) process.exitCode = 1;
   } catch (error) {
@@ -100,7 +100,6 @@ async function main() {
     const webhook = process.env.DISCORD_COST_WEBHOOK;
     if (webhook && !process.argv.includes('--dry-run')) {
       try {
-        const { postToDiscordWebhook } = await import('./fleet-liveness.mjs');
         await postToDiscordWebhook(webhook, `🚨 **フリート生存digest 取得失敗** — ${reason}（フリートシートの doGet を確認してください）`, { label: 'fleet-triage', fetchImpl });
       } catch {}
     }

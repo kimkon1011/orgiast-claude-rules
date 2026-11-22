@@ -183,6 +183,19 @@ test('完了報告に failed/失敗 が引用されても修復TODOを起票し�
   assert.doesNotMatch(s.messages[0], /自動起票:/);
 });
 
+test('PRタイトル内だけの失敗語では修復TODOを起票しない', async () => {
+  const dir = home(), s = sender(dir);
+  const done = '【015 無人】PR #2413（DeadlineDetect Gmail タイムアウト対策）と #2450（X-0032 案件ダッシュボード）を CI 4/4・Windows テスト全合格で squash マージ済み（a590b7c4 / 758028e9）。判断不要。';
+  assert.equal((await notifyKim(done, s.options)).delivered, 'dm');
+  assert.equal(fs.existsSync(path.join(dir, '.claude/next-session.md')), false);
+});
+
+test('PRタイトル外にも失敗語があれば従来どおり修復TODOを起票する', async () => {
+  const dir = home(), s = sender(dir);
+  await notifyKim('#2413（タイムアウト対策）をマージしました。ただし DeadlineWatch が タイムアウト で失敗しました', s.options);
+  assert.match(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8'), /通知の原因調査・修復:/);
+});
+
 test('定時ダイジェストは失敗語を含んでも起票しない', async () => {
   const dir = home(), s = sender(dir);
   const digest = '【DESKTOP-BDOAK99 の自動進行】 完了 1件・止まっている 1件・あなたの判断待ち 0件\n・止まっている: p — 前回の失敗から自動再開していません';

@@ -47,3 +47,19 @@ test('期日がちょうど今日の項目を含める', () => {
     elapsedDays: 0,
   }]);
 });
+
+test('notice uses the final-only instruction and suppresses loop and repeated prompts', async t => {
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const { pendingActionsContext } = await import('./pending-actions-notice.mjs');
+  const { FINAL_ONLY_INSTRUCTION } = await import('./lib/inbox-display-policy.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pending-notice-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude/pending-user-actions.md'), '- [ ] 2020-01-01 | action');
+  const input = { session_id: 's', prompt: 'request' };
+  const out = pendingActionsContext(input, { home });
+  assert.ok(out.hookSpecificOutput.additionalContext.includes(FINAL_ONLY_INSTRUCTION));
+  assert.doesNotMatch(out.hookSpecificOutput.additionalContext, /応答の冒頭/);
+  assert.equal(pendingActionsContext(input, { home }), null);
+  assert.equal(pendingActionsContext({ ...input, prompt: '<<autonomous-loop-dynamic>>' }, { home }), null);
+});

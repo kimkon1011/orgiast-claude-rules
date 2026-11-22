@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseHandoff } from './auto-session.mjs';
-import { applyAutoHeal, authRestoredAfter, collectFindings, dedupeLimitEvents, emptyOutputReason, isCooldownSkippedRow, isDeferredSkippedRow, isEmptyDiffEscalationRow, isQuotaLimitedRow, lowYieldBackends, metricFromLaterWindow, parseRateLimitsFromText, POLICY_STALL_SINCE, policyStallAttempts, quotaSweepPartialProgressRow, quotaSweepProgressRow, readCodexUsedPercent, timeoutWasteSummary, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
+import { applyAutoHeal, authRestoredAfter, collectFindings, dedupeLimitEvents, emptyOutputReason, isCooldownSkippedRow, isDeferredSkippedRow, isEmptyDiffEscalationRow, isGeminiBillingProbeRow, isQuotaLimitedRow, lowYieldBackends, metricFromLaterWindow, parseRateLimitsFromText, POLICY_STALL_SINCE, policyStallAttempts, quotaSweepPartialProgressRow, quotaSweepProgressRow, readCodexUsedPercent, timeoutWasteSummary, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
 import { TIMEOUT_KILL_FIX_MERGED_AT } from './timeout-waste-judge.mjs';
 
 const NOW = new Date('2026-09-09T12:00:00.000Z');
@@ -513,6 +513,53 @@ test('authRestoredAfter は有効な t が無ければ false、statImpl 注入�
   assert.equal(authRestoredAfter('unused', [{ t: '2026-09-09T10:00:00Z' }], {
     statImpl: () => ({ mtimeMs: Date.parse('2026-09-09T09:00:00Z') }),
     readFile: () => '{"tokens":{"id_token":"x"}}',
+  }), false);
+});
+
+test('authRestoredAfter は Windows auth.json が古くても WSL に新しい auth があれば true を返す', () => {
+  const oldMtime = Date.parse('2026-09-10T00:00:00Z');
+  const failureTime = '2026-11-21T12:00:00Z';
+  const recentSec = Math.floor(Date.parse('2026-11-22T01:45:00Z') / 1000);
+  let spawnCalls = [];
+  const spawnImpl = (cmd, args) => {
+    spawnCalls.push({ cmd, args });
+    if (args[0] === '-l') return { status: 0, stdout: 'Ubuntu\r\n' };
+    return { status: 0, stdout: `${recentSec}\n${JSON.stringify({ tokens: { id_token: 'valid-wsl-token' } })}` };
+  };
+  assert.equal(authRestoredAfter('unused', [{ t: failureTime }], {
+    statImpl: () => ({ mtimeMs: oldMtime }),
+    readFile: () => '{"tokens":{"id_token":"old-token"}}',
+    spawnImpl,
+    checkWsl: true,
+  }), true);
+  assert.equal(spawnCalls.length, 2);
+  assert.equal(spawnCalls[0].args[0], '-l');
+  assert.equal(spawnCalls[1].args[0], '-d');
+  // WSL mtime older than failure → false
+  spawnCalls = [];
+  assert.equal(authRestoredAfter('unused', [{ t: failureTime }], {
+    statImpl: () => ({ mtimeMs: oldMtime }),
+    readFile: () => '{"tokens":{"id_token":"old-token"}}',
+    spawnImpl: (cmd, args) => {
+      spawnCalls.push({ cmd, args });
+      if (args[0] === '-l') return { status: 0, stdout: 'Ubuntu\r\n' };
+      return { status: 0, stdout: `${Math.floor(Date.parse('2026-09-09T00:00:00Z') / 1000)}\n${JSON.stringify({ tokens: { id_token: 'old-wsl-token' } })}` };
+    },
+    checkWsl: true,
+  }), false);
+  // No WSL distro → false
+  assert.equal(authRestoredAfter('unused', [{ t: failureTime }], {
+    statImpl: () => ({ mtimeMs: oldMtime }),
+    readFile: () => '{"tokens":{"id_token":"old-token"}}',
+    spawnImpl: () => ({ status: 0, stdout: '' }),
+    checkWsl: true,
+  }), false);
+  // WSL cat fails → false
+  assert.equal(authRestoredAfter('unused', [{ t: failureTime }], {
+    statImpl: () => ({ mtimeMs: oldMtime }),
+    readFile: () => '{"tokens":{"id_token":"old-token"}}',
+    spawnImpl: (cmd, args) => args[0] === '-l' ? { status: 0, stdout: 'Ubuntu\r\n' } : { status: 1 },
+    checkWsl: true,
   }), false);
 });
 
@@ -1631,4 +1678,36 @@ test('deferred 行に本物の失敗（上限以外の exit_1）が混ざれば�
   assert.ok(outage, '上限以外の実失敗が3件以上残れば high の全滅 finding を出す');
   assert.equal(outage.provider, 'codex');
   assert.equal(outage.severity, 'high');
+});
+
+test('isGeminiBillingProbeRow は gemini の予算ガード行のみ true にする', () => {
+  // gemini 予算ガード行: provider=gemini, status無し, in=0, out=0, secs<0.01
+  assert.equal(isGeminiBillingProbeRow({ provider: 'gemini', in: 0, out: 0, secs: 0.001 }), true);
+  assert.equal(isGeminiBillingProbeRow({ provider: 'gemini', in: 0, out: 0, secs: 0.001, status: undefined }), true);
+  // 対照群: 他の provider は false
+  assert.equal(isGeminiBillingProbeRow({ provider: 'deepseek', in: 0, out: 0, secs: 0.001 }), false);
+  // 実 API 失敗を含む行は false
+  assert.equal(isGeminiBillingProbeRow({ provider: 'gemini', in: 0, out: 0, secs: 0.585, status: 'http_402' }), false);
+  assert.equal(isGeminiBillingProbeRow({ provider: 'gemini', in: 7, out: 2, secs: 1.737, status: 'ok' }), false);
+  // status: ''（空文字）は undefined/null と同じく予算ガード行と判定する
+  assert.equal(isGeminiBillingProbeRow({ provider: 'gemini', in: 0, out: 0, secs: 0.001, status: '' }), true);
+  assert.equal(isGeminiBillingProbeRow({}), false);
+  assert.equal(isGeminiBillingProbeRow(null), false);
+});
+
+test('gemini 予算ガード行が http_402 失敗と混ざっても lane_outage_unrepaired でなく low の可視化にする', () => {
+  const dir = home();
+  // gemini 予算ガード行2件 + http_402 12件（実測 2026-11-21〜11-22 の再現）
+  const billingRows = [0, 1].map((i) => ({ t: `2026-11-21T16:0${i}:00.000Z`, provider: 'gemini', model: 'gemini-3.6-flash', in: 0, out: 0, secs: 0.001 }));
+  const quotaRows = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((i) => ({
+    t: `2026-11-21T19:2${i}:00.000Z`, provider: 'gemini', model: 'gemini-3.6-flash', status: 'http_402', in: null, out: null, secs: 0.5,
+  }));
+  write(dir, 'executor-usage.jsonl', [...billingRows, ...quotaRows].map(row).join(''));
+  const findings = collectFindings({ home: dir, now: new Date('2026-11-22T00:00:00.000Z'), codexUsedPercent: null });
+  assert.ok(!findings.some((f) => f.id === 'lane_outage_unrepaired'), JSON.stringify(findings.map((f) => f.id)));
+  // 全件が quota_limited なので provider_usage_limit (low) になる
+  const limitFinding = findings.find((f) => f.id === 'provider_usage_limit');
+  assert.ok(limitFinding, 'provider_usage_limit が出ること');
+  assert.equal(limitFinding.severity, 'low');
+  assert.equal(limitFinding.fixTask, undefined);
 });

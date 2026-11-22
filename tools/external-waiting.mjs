@@ -15,6 +15,7 @@ import { gmailNotificationOwned } from './lib/external-monitor-state.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
 import { draftBody, nonHumanRecipient, mailboxDraftLabel, allPages, filterClearedDrafts, notifyClearedDrafts, deleteClearedDrafts } from './lib/drafts-auto-cleared.mjs';
 import { defaultHome, externalFile, stateDir, readJsonSafe, writeJsonAtomic, readSkips, isSkipped, addSkip } from './lib/external-waiting-state.mjs';
+import { gmailFetchWithRetry, isRetryableFetchError } from './lib/gmail-retry.mjs';
 
 export const MAILBOXES = ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'];
 export const KIM = 'kim@orgiast.jp';
@@ -124,13 +125,30 @@ async function mapLimit(values, limit, fn) {
   return out;
 }
 
-export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = getDriveToken, staff, now = Date.now(), stats = { answeredElsewhere: 0 } }) {
-  const token = await getToken({ scope: SCOPE, impersonate: mailbox, signal: AbortSignal.timeout(20_000) });
+// getToken をタイムアウト/ネットワーク失敗時に最大2回リトライする（初回含め計3回）。
+async function getTokenWithRetry(getToken, mailbox, { sleep = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
+  const MAX_ATTEMPTS = 3;
+  const RETRY_DELAY = 5000;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await getToken({ scope: SCOPE, impersonate: mailbox, signal: AbortSignal.timeout(20_000) });
+    } catch (error) {
+      if (!isRetryableFetchError(error) || attempt >= MAX_ATTEMPTS - 1) throw error;
+      await sleep(RETRY_DELAY);
+    }
+  }
+}
+
+export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = getDriveToken, staff, now = Date.now(), stats = { answeredElsewhere: 0 }, sleep, random } = {}) {
+  const token = await getTokenWithRetry(getToken, mailbox, { sleep });
   const get = async (route, { optional = false } = {}) => {
-    const response = await fetchImpl(`${API}${route}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) });
-    if (optional && [404, 410].includes(response.status)) return null;
-    if (!response.ok) throw new Error(`Gmail API ${response.status}: ${(await response.text()).slice(0, 200)}`);
-    return response.json();
+    try {
+      const response = await gmailFetchWithRetry(`${API}${route}`, { headers: { Authorization: `Bearer ${token}` } }, { fetchImpl, sleep, random, onRetry: () => { stats.gmailRetries = (stats.gmailRetries || 0) + 1; } });
+      return response.json();
+    } catch (error) {
+      if (optional && error.status && [404, 410].includes(error.status)) return null;
+      throw error;
+    }
   };
   const stubs = []; let pageToken = '';
   for (let page = 0; page < MAX_PAGES; page++) {
@@ -138,21 +156,21 @@ export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = ge
     stubs.push(...(list.threads || []));
     if (!(pageToken = list.nextPageToken || '')) break;
   }
-  const threads = (await mapLimit(stubs, 5, stub => get(`/threads/${stub.id}?format=metadata&${META}`, { optional: true }))).filter(Boolean);
+  const threads = (await mapLimit(stubs, 3, stub => get(`/threads/${stub.id}?format=metadata&${META}`, { optional: true }))).filter(Boolean);
   const items = threads.map(thread => analyzeThread(thread, { mailbox, staff })).filter(Boolean);
   // 別スレッドで返信済み: 同じ相手宛ての送信済みが since より後にあれば除外する（相手ごとに1回検索）。
   const bySender = new Map();
   for (const item of items) bySender.set(item.sender, [...(bySender.get(item.sender) || []), item]);
   const answered = new Set();
-  await mapLimit([...bySender], 5, async ([sender, group]) => {
+  await mapLimit([...bySender], 3, async ([sender, group]) => {
     const earliest = Math.min(...group.map(item => Date.parse(item.since)));
     const list = await get(`/messages?q=${encodeURIComponent(`in:sent to:${sender} after:${Math.floor(earliest / 1000)}`)}&maxResults=50`);
-    const sent = (await mapLimit(list.messages || [], 5, stub => get(`/messages/${stub.id}?format=minimal`, { optional: true }))).filter(Boolean).map(m => Number(m.internalDate) || 0);
+    const sent = (await mapLimit(list.messages || [], 3, stub => get(`/messages/${stub.id}?format=minimal`, { optional: true }))).filter(Boolean).map(m => Number(m.internalDate) || 0);
     for (const item of group) if (sent.some(at => at > Date.parse(item.since))) answered.add(item.id);
   });
   stats.answeredElsewhere += answered.size;
   const replies = items.filter(item => item.kind === 'reply' && !answered.has(item.id));
-  await mapLimit(replies, 5, async item => {
+  await mapLimit(replies, 3, async item => {
     const full = await get(`/messages/${item.lastMessageId}?format=full`, { optional: true });
     const body = full ? extractBody(full.payload, 4000) : '';
     if (mailbox !== KIM) item.assignee = addressee(body);
@@ -161,7 +179,7 @@ export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = ge
   });
   items.splice(0, items.length, ...items.filter(item => !answered.has(item.id)));
   const drafts = await allPages(get, '/drafts?maxResults=100', 'drafts');
-  const detailed = await mapLimit(drafts, 5, stub => get(`/drafts/${stub.id}?format=full`, { optional: true }));
+  const detailed = await mapLimit(drafts, 3, stub => get(`/drafts/${stub.id}?format=full`, { optional: true }));
   items.push(...detailed.filter(Boolean).map(draft => analyzeDraft(draft, { mailbox, now, includeNonHuman: true })).filter(Boolean));
   return items;
 }
@@ -202,7 +220,7 @@ export async function scan({ home = defaultHome(), now = Date.now(), mailboxes =
   const previous = readJsonSafe(externalFile(home), {});
   const cacheFile = path.join(stateDir(home), 'external-waiting-llm-cache.json');
   const cache = readJsonSafe(cacheFile, {});
-  const sources = {}, collected = [], stats = { llmCalls: 0, llmFailures: 0, ackSkipped: 0, answeredElsewhere: 0 };
+  const sources = {}, collected = [], stats = { llmCalls: 0, llmFailures: 0, ackSkipped: 0, answeredElsewhere: 0, gmailRetries: 0 };
   for (const mailbox of mailboxes) {
     try { collected.push(...await scanMailbox(mailbox, { ...deps, staff, now, stats })); sources[mailbox] = { ok: true }; }
     catch (error) {

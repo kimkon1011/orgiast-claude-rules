@@ -15,7 +15,9 @@ test('比較表・費用・枠・出典・推奨があれば通す', () => {
   const text = [
     '| 案 | 月額 | Codex 枠 | 手間 |',
     '|---|---|---|---|',
+    '| 案1. 既存契約の無料枠 | 0円 | 利用枠内 | なし |',
     '| A. 個別 Plus | +$40 | Plus 3つ分 | 2台で再ログイン |',
+    '[FREE-ALT-CHECKED: 既存契約の無料枠を本日実測し、上限到達で今すぐ使えないと確認した]',
     '| C. Pro 5x | +$80 | Plus 5つ分 | なし |',
     'おすすめは C。出典: https://chatgpt.com/codex/pricing/',
     '次に kim がすること: A か C かを一言で返す（プランを変更）',
@@ -25,7 +27,7 @@ test('比較表・費用・枠・出典・推奨があれば通す', () => {
 
 test('費用判断を求めていない応答・明示の例外は対象外', () => {
   assert.equal(judge('テストは 89 件 pass。次に kim がすること: なし').triggered, false);
-  assert.equal(judge('有料プランに切り替えてください [RESEARCH-OK] 契約は既に kim が決定済み').triggered, false);
+  assert.equal(judge('有料プランに切り替えてください [PAID-OK: 「この有料プランに切り替えてください」]').triggered, false);
 });
 
 test('コードブロック内の語は数えない', () => {

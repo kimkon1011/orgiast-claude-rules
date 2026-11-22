@@ -5,6 +5,19 @@
       {
         "matcher": "*",
         "type": "command",
+        "command": "node \"${repo}/tools/lost-prompt-context.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/event-shop-inquiry-triage.mjs\"",
+        "timeout": 30,
+        "async": true
+      },
+      {
+        "matcher": "*",
+        "type": "command",
         "command": "node \"${repo}/tools/plaud-renewal-notice.mjs\"",
         "timeout": 300,
         "scope": "kim-only"
@@ -195,6 +208,12 @@
       {
         "matcher": "*",
         "type": "command",
+        "command": "node \"${repo}/tools/lost-prompt-context.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
         "command": "node \"${repo}/tools/case-handoff.mjs\" hook",
         "timeout": 60
       },
@@ -370,6 +389,12 @@
         "timeout": 15
       },
       {
+        "matcher": "Bash|PowerShell|Edit|Write|MultiEdit",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/unrequested-automation-gate.mjs\"",
+        "timeout": 15
+      },
+      {
         "matcher": "*",
         "type": "command",
         "command": "node \"${repo}/tools/api-billing-guard.mjs\"",
@@ -481,6 +506,18 @@
         "matcher": "mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|update_draft|send_message|reply|forward)",
         "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/gmail-connector-url-gate.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/shared-worktree-git-guard.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Bash",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/bash-cd-chain-guard.mjs\"",
         "timeout": 15
       },
       {
@@ -679,6 +716,13 @@
         "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/check-e2e-before-stop.mjs\"",
         "timeout": 15
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/schedule-autopilot.mjs\" capture",
+        "timeout": 30,
+        "async": true
       }
     ],
     "SessionEnd": [

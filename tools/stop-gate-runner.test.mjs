@@ -293,7 +293,7 @@ const desktopAudit = '手間監査: ①Claude の実行は classifier に拒否�
 // 形式検査の既存ケースは明示的な操作依頼に揃える（報告・返信は新仕様で降格するため）。
 const burdenCases = [
   ['pwsh 単独は block', `実行してください。\n\`\`\`pwsh\npwsh -File task.ps1\n\`\`\`\n${burdenAudit}`, true, /make-desktop-launcher/],
-  ['Desktop cmd と二経路の監査', `次に kim がすること: ダブルクリックする\n${desktopPath}\n${desktopAudit}`, false],
+  ['Desktop cmd と二経路の監査', `次に kim がすること: ダブルクリックする\n${desktopPath}\nClaude で回避できる策: curl で直接 API を叩く代替経路があります。\n${desktopAudit}`, false],
   ['Desktop cmd だけは監査不足', `次に kim がすること: ダブルクリックする\n${desktopPath}\n${burdenAudit}`, true, /①Claude/],
   ['Claude 自身の実行説明', 'Claude 自身が実行しました。\n```pwsh\npwsh -File task.ps1\n```', false],
   ['遡り参照の実例', '次に kim がすること: 前に送った PowerShell の1行を実行してください', true, /遡り参照/],
@@ -308,7 +308,7 @@ const burdenCases = [
   ['監査に操作回数なし', '次に kim がすること: 同意ボタンを押す\nhttps://example.com\n手間監査: OAuth 本人同意のため。', true, /手間監査/],
   ['根拠は同じ監査行に必要', '次に kim がすること: 同意ボタンを押す\nhttps://example.com\n手間監査: 1クリック\nOAuth 本人同意のため。', true, /手間監査/],
   ['理由なしの例外は無効', '次に kim がすること: 実行してください\n[BURDEN-OK]', true],
-  ['URL同梱', `次に kim がすること: 本人同意ボタンを押す\nhttps://example.com/consent\n${burdenAudit}`, false],
+  ['URL同梱', `次に kim がすること: 本人同意ボタンを押す\nhttps://example.com/consent\nClaude で回避できる策: consent API を curl で直接叩く代替経路があります。\n${burdenAudit}`, false],
   ['Desktopファイルパスは完成品でない', `次に kim がすること: ショートカットを開く\nC:\\Users\\kim\\Desktop\\consent.lnk\n${burdenAudit}`, true, /Google Drive/],
   ['コード中の依頼では発火しない', '```text\n次に kim がすること: 実行してください\n```\n修正済みです。', false],
   ['コード中の監査は無効', `次に kim がすること: 同意ボタンを押す\n\`\`\`text\n${burdenAudit}\n\`\`\``, true, /手間監査/],
@@ -450,7 +450,7 @@ test('user-burden-gate: transcript の最後の assistant だけを監査する'
 test('desktop handoff does not require the old three-step paste instructions', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-desktop-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const result = invoke(home, 'desktop', `ダブルクリックしてください。\n${desktopPath}\n${desktopAudit}`);
+  const result = invoke(home, 'desktop', `ダブルクリックしてください。\n${desktopPath}\nClaude で回避できる策: curl で直接 API を叩く代替経路があります。\n${desktopAudit}`);
   assert.equal(result.status, 0, result.stderr);
   const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim());
   assert.ok(!record.blockedBy.includes('manual-request-fullsteps-gate'));

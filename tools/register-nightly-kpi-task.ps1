@@ -18,7 +18,7 @@ Copy-Item -LiteralPath $bootstrapSource -Destination $bootstrap -Force
 
 $action = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $bootstrap, '-Target', $target) -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At '07:05'
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 
 Register-ScheduledTask -TaskName 'OrgiastNightlyKpi' -Action $action -Trigger $trigger -Settings $settings -Description '夜間作業のKPI集計・異常検知・改善起票（毎日07:05）' -Force | Out-Null
 Write-Host 'OK: task OrgiastNightlyKpi registered (daily 07:05)'

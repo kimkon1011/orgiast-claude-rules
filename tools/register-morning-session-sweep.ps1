@@ -14,7 +14,7 @@ if ($ValidateOnly) {
 }
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script) -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At '06:30'
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 Register-ScheduledTask -TaskName 'OrgiastMorningSessionSweep' -Action $action -Trigger $trigger -Settings $settings -Description 'Report all unclosed sessions from the last seven days to kim-inbox via fleet.' -Force | Out-Null
 $task = Get-ScheduledTask -TaskName 'OrgiastMorningSessionSweep' -ErrorAction Stop
 if (-not $task.Actions.Arguments.Contains($script) -or $task.Triggers[0].StartBoundary.Substring(11,5) -ne '06:30') { throw 'read-back failed: OrgiastMorningSessionSweep' }

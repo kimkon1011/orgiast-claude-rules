@@ -5,47 +5,27 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { purposeTokens, jaccard } from './lib/purpose-tokens.mjs';
+import { diagnosticTranscriptPurpose, openSessionClaimCache } from './lib/session-claim-cache.mjs';
 
 export const COLLISION_THRESHOLD = 0.20;
 const ACTIVE_AGE_MS = 8 * 60 * 60 * 1000;
 const debug = message => { if (process.argv.includes('--debug')) console.error(`[session-claims] ${String(message).replace(/[\r\n]+/g, ' ')}`); };
 const caught = (context, error) => debug(`${context}: ${error?.code || error?.name || 'Error'} ${error?.message || error}`);
 
-const PURPOSE_MARKER = '**[本セッションの目的]**';
-
 function readJSON(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (error) { caught(file, error); return null; }
 }
 
-function files(dir, suffix, recursive = false) {
+function files(dir, suffix, recursive = false, sharedCache) {
   const found = [];
   let entries;
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (error) { caught(dir, error); return found; }
+  try { entries = sharedCache ? sharedCache.readDirectory(dir) : fs.readdirSync(dir, { withFileTypes: true }); } catch (error) { caught(dir, error); return found; }
   for (const entry of entries) {
     const file = path.join(dir, entry.name);
-    if (recursive && entry.isDirectory()) found.push(...files(file, suffix, true));
+    if (recursive && entry.isDirectory()) found.push(...files(file, suffix, true, sharedCache));
     else if (entry.isFile() && entry.name.endsWith(suffix)) found.push(file);
   }
   return found;
-}
-
-function transcriptPurpose(file) {
-  let purpose = '';
-  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-    let rec;
-    // マーカー無し行は解析を省く。ただし閉じていない（壊れた）行は従来どおり parse して debug に出す。
-    if (!line.includes(PURPOSE_MARKER) && (!line.trim() || line.trimEnd().endsWith('}'))) continue;
-    try { rec = JSON.parse(line); } catch (error) { caught(file, error); continue; }
-    if (rec?.type !== 'assistant') continue;
-    const content = rec.message?.content ?? rec.content;
-    const text = typeof content === 'string' ? content : Array.isArray(content)
-      ? content.filter(p => p?.type === 'text' && typeof p.text === 'string').map(p => p.text).join('\n') : '';
-    for (const textLine of text.split(/\r?\n/)) {
-      const at = textLine.lastIndexOf(PURPOSE_MARKER);
-      if (at >= 0) purpose = textLine.slice(at + PURPOSE_MARKER.length).trim();
-    }
-  }
-  return !purpose || purpose.includes('<目的>') ? '' : purpose;
 }
 
 // Physical line order is authoritative, including claim after release.
@@ -78,7 +58,9 @@ function claim(sessionId, purpose, time, source) {
     claimedAt: time, lastActivity: time, source, released: false, releasedReason: null };
 }
 
-export function syncClaims(base, previous = [], now = Date.now()) {
+export function syncClaims(base, previous = [], now = Date.now(), sharedCache) {
+  const diagnostics = process.argv.includes('--debug');
+  const cache = sharedCache ?? (diagnostics ? null : openSessionClaimCache(base, now, ACTIVE_AGE_MS));
   const stats = { gateFiles: 0, gatePurposes: 0, transcripts: 0, recent: 0, declarations: 0 };
   const gates = new Map();
   for (const file of files(path.join(base, 'session-purpose'), '.json')) {
@@ -100,22 +82,29 @@ export function syncClaims(base, previous = [], now = Date.now()) {
   }
   debug(`session-purpose 走査 = ${stats.gateFiles} / purpose 取得 = ${stats.gatePurposes}`);
   const transcripts = new Map();
-  for (const file of files(path.join(base, 'projects'), '.jsonl', true)) {
+  for (const file of files(path.join(base, 'projects'), '.jsonl', true, sharedCache)) {
     stats.transcripts++;
     try {
       const id = path.basename(file, '.jsonl');
-      const mtime = fs.statSync(file).mtimeMs;
+      const stat = sharedCache ? sharedCache.stat(file) : fs.statSync(file);
+      const mtime = stat.mtimeMs;
       if (now - mtime <= ACTIVE_AGE_MS) stats.recent++;
+      else cache?.discard(file);
       if (!transcripts.has(id) || transcripts.get(id).mtime < mtime) {
         // Expired transcripts only supply activity; reading their entire history
         // can dominate a sync on a real multi-session home.
-        const purpose = now - mtime > ACTIVE_AGE_MS ? ''
-          : transcriptPurpose(file);
+        let purpose = '';
+        if (now - mtime <= ACTIVE_AGE_MS) {
+          purpose = cache ? cache.purpose(file, stat)
+            : diagnosticTranscriptPurpose(file, (error) => caught(file, error));
+          if (purpose.includes('<目的>')) purpose = '';
+        }
         if (purpose) stats.declarations++;
         transcripts.set(id, { mtime, purpose });
       }
     } catch (error) { caught(file, error); }
   }
+  if (!sharedCache) cache?.save();
   // Rebuild inferred claims from declarations; never retain legacy prompt-derived claims.
   // Explicit --claim/--release operations retain their existing log semantics.
   const result = new Map(previous.filter(c => c.logOp).map(c => [c.sessionId, { ...c }]));
@@ -151,17 +140,26 @@ export function syncClaims(base, previous = [], now = Date.now()) {
   return [...result.values()];
 }
 
+export function resolveSelf(command, rawSelf) {
+  const self = rawSelf || '';
+  if (command === '--filter' && !self) {
+    return { self: 'none', warning: '[session-claims] --self も CLAUDE_SESSION_ID も無いため self=none として続行します' };
+  }
+  if (['--claim', '--release'].includes(command) && !self) {
+    return { self: '', warning: '[session-claims] CLAUDE_SESSION_ID 未設定のため着手印を記録しません（--self を渡してください）' };
+  }
+  return { self, warning: null };
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const value = name => { const i = args.indexOf(name); return i < 0 ? '' : args[i + 1] || ''; };
-  const self = value('--self') || process.env.CLAUDE_SESSION_ID || '';
   const command = ['--sync', '--claim', '--release', '--filter', '--list'].find(c => args.includes(c));
   if (!command) return;
+  const selfRaw = value('--self') || process.env.CLAUDE_SESSION_ID || '';
+  const { self, warning } = resolveSelf(command, selfRaw);
+  if (warning) console.error(warning);
   if (['--claim', '--release'].includes(command) && !self) return;
-  if (command === '--filter' && !self) {
-    console.error('--self <session-id> が必要です（不明なら --self none）');
-    process.exit(2);
-  }
   const base = path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude');
   debug(`home = ${os.homedir()} / base = ${base} / command = ${command}`);
   const file = path.join(base, 'session-claims.json');

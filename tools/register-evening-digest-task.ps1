@@ -12,7 +12,7 @@ $node = (Get-Command node -ErrorAction SilentlyContinue).Source
 if (-not $node) { throw 'node not found. Install Node.js first.' }
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script) -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At 6:00pm
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 Register-ScheduledTask -TaskName 'OrgiastEveningDigest' -Action $action -Trigger $trigger -Settings $settings -Description 'Post the consolidated evening digest (daily 18:00)' -Force | Out-Null
 Write-Host 'OK: task OrgiastEveningDigest registered (daily 18:00)'
 Get-ScheduledTask -TaskName 'OrgiastEveningDigest' | Select-Object TaskName, State

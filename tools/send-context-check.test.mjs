@@ -38,6 +38,18 @@ test('自社の質問と相手未回答の実データ形をLLMへ正しいラ�
   assert.equal(verdict.ok,true);
   assert.match(verdict.reason,/自社質問を相手要望としていない/);
 });
+test('通常・定期報告のLLMプロンプト先頭に注入した日本時間の送信予定日時を含む', () => {
+  for (const periodicReport of [false, { recipient: '佐藤優奈' }]) {
+    let prompt='';
+    runLlm([], '送信本文', {
+      now: new Date('2026-11-19T05:20:00.000Z'),
+      periodicReport,
+      spawn: (_exe,args) => { prompt=fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8'); return {status:0,stdout:'{"verdict":"OK","reason":"整合","warnings":[]}',stderr:''}; },
+    });
+    assert.match(prompt, /^送信予定日時（日本時間）: 2026-11-19（木）14:20\n/);
+    assert.match(prompt, /履歴の最終日時と送信予定日時の間に起きた出来事.*履歴に記録がないことだけを理由に NG にしない/);
+  }
+});
 test('定期報告モードは同じ未対応項目の再掲をNGにせず、質問と食い違いだけNGにする（2026-11-13の再現）', () => {
   let prompt='';
   const repeated='PRONIアイミツ事務局への返信が24時間以上未対応';

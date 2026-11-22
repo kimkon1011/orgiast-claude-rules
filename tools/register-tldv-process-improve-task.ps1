@@ -18,7 +18,7 @@ if (-not $node) { throw 'node not found. Install Node.js first.' }
 # Console window 対策: run-hidden.vbs 経由で起動
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script) -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At '01:40' -RandomDelay (New-TimeSpan -Minutes 5)
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 60)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 60)
 
 Register-ScheduledTask -TaskName 'OrgiastTldvProcessImprove' -Action $action -Trigger $trigger -Settings $settings -Description 'Extract process improvements from tl;dv meetings daily at 01:40 (random delay up to 5 minutes)' -Force | Out-Null
 

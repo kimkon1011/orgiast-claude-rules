@@ -517,7 +517,7 @@ export function buildCombinedCodexSpec(actions) {
 function humanTodoMessage(violation, now, retryCount = 0, retryMode = 'directive') {
   const pc = violation.pc;
   if (violation.kind === 'balance_low') {
-    if (violation.provider === 'genspark') return `【このPC】Genspark の前払いクレジットが ${Math.round(Number(violation.actualValue))} です（閾値 ${CREDIT_LOW_THRESHOLD}）。Genspark にチャージするか、画像生成を止めるかの判断が必要です。`;
+    if (violation.provider === 'genspark') return `【このPC】Genspark の前払いクレジットが ${Math.round(Number(violation.actualValue))} です（閾値 ${CREDIT_LOW_THRESHOLD}）。まず無料枠・既存契約内の画像生成経路を実測します。追加費用案は代替不可の証拠と比較表がある場合だけ最後に提示します。`;
     const switched = ['deepseek', 'kimi'].includes(violation.provider) ? '切替済み' : '未切替';
     return `【このPC】${violation.provider} の残高が $${Number(violation.actualValue).toFixed(2)} です。自動チャージが無いプロバイダです。OpenRouter 経由へ${switched}。`;
   }
@@ -642,7 +642,7 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
         continue;
       } catch {
         // 外部例外には認証情報を含む git 出力があり得るので、固定の理由だけを記録する。
-        console.error(`stale_report: ${mode === 'local' ? 'ローカル再送に失敗（終了異常またはタイムアウト）' : '再送指令の送信に失敗（利用不可または push 失敗）'}。人へエスカレーションします。`);
+        console.error(`stale_report(${pc}): ${mode === 'local' ? 'ローカル再送に失敗（終了異常またはタイムアウト）' : '再送指令の送信に失敗（利用不可または push 失敗）'}。人へエスカレーションします。`);
         retryFailed = true;
       }
     }
@@ -725,11 +725,11 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
     if (violation.provider) action.provider = violation.provider;
     if (mode === 'human' && hasThreeConsecutiveFailures) action.humanSince = now.toISOString();
     if (kind === 'provider_unhealthy') {
-      // DM 本文の1行: 無料枠の上限が原因なら有料枠で即解消できることを示す。
-      action.reportNote = '有料枠で解消可(例: Groq Dev tier)';
+      // 既存経路を実測する前に支出を提案しない。
+      action.reportNote = 'まず無料枠・既存契約内の他AIレーンを実測。追加費用案は代替不可の証拠と比較表がある場合だけ最後に提示';
     }
     if (kind === 'spend_anomaly') action.durationHours = 24;
-    if (kind === 'balance_low') action.reportNote = action.provider === 'genspark' ? '前払い枠が残り少。チャージまたは画像生成レーンの停止を判断' : `自動チャージが無いプロバイダです。OpenRouter 経由へ切替${['deepseek', 'kimi'].includes(action.provider) ? '済み' : '未'}`;
+    if (kind === 'balance_low') action.reportNote = action.provider === 'genspark' ? '前払い枠が残り少。まず無料枠・既存契約内の画像生成経路を実測。追加費用案は代替不可の場合だけ比較表の最後に提示' : `自動チャージが無いプロバイダです。OpenRouter 経由へ切替${['deepseek', 'kimi'].includes(action.provider) ? '済み' : '未'}`;
 
     if (mode === 'auto-local') {
       if (playbook.command) action.command = playbook.command;
@@ -1106,6 +1106,32 @@ export function readLedgerCounts(filePath, now) {
     counts[prov] = (counts[prov] || 0) + 1;
   }
   return counts;
+}
+
+// run-hidden.vbs がプライマリログをロックしているとき、退避先ログを探す。
+// naming は run-hidden.vbs と揃えている（cost-improve-loop.locked-<yyyymmdd>-<hhnnss>-<rand>.log）。
+export function resolveEffectiveLogPath(claudeDir) {
+  const logDir = path.join(claudeDir, 'logs');
+  const primary = path.join(logDir, 'cost-improve-loop.log');
+  try {
+    fs.mkdirSync(logDir, { recursive: true });
+    // プライマリが書き込み可能か試す
+    fs.appendFileSync(primary, '', 'utf8');
+    return primary;
+  } catch { /* primary locked — fallback 探しへ */ }
+  try {
+    const files = fs.readdirSync(logDir)
+      .filter(f => /^cost-improve-loop\.locked-\d{8}-\d{6}-[a-zA-Z0-9]+\.log$/.test(f))
+      .sort()
+      .reverse();
+    if (files.length > 0) return path.join(logDir, files[0]);
+  } catch { /* logDir 不在など */ }
+  // 退避先が見つからなければ run-hidden 規約に従って自前で作る
+  const ts = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const stamp = `${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}-${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}`;
+  const rand = Math.random().toString(16).slice(2, 10);
+  return path.join(logDir, `cost-improve-loop.locked-${stamp}-${rand}.log`);
 }
 
 export function localProviderEnv(homeDir) {
@@ -1731,8 +1757,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     }
     const logLine = `${formatJst(now)} / ${status} / ${metrics} notify=${heartbeat} state=${stateWriteFailed ? 'failed' : 'ok'}${reason ? ` reason=${reason}` : ''}`;
     try {
-      fs.mkdirSync(path.join(claudeDir, 'logs'), { recursive: true });
-      await appendLineWithRetry(path.join(claudeDir, 'logs', 'cost-improve-loop.log'), logLine);
+      const effectiveLog = resolveEffectiveLogPath(claudeDir);
+      await appendLineWithRetry(effectiveLog, logLine);
     } catch (error) { console.error(`cost-improve-loop ログ書き込み失敗: ${String(error?.message ?? error)}`); }
   }
 
@@ -1757,14 +1783,30 @@ export function refreshCostDirective({ home, spawn = defaultSpawnSync } = {}) {
   return `cost-directive refreshed: ${path.join(home, '.claude', 'cost-directive.md')} (exit 0)`;
 }
 
-if (isEntry(import.meta.url)) {
-  Promise.resolve().then(() => {
-    // Run before fleet/network/notification work: a successful daily task must
-    // also refresh the local directive. Dry runs keep their read-only contract.
-    if (!process.argv.includes('--dry-run')) console.error(refreshCostDirective({ home: path.dirname(getClaudeDir(process.argv.slice(2))) }));
-    return main();
+export function runEntry({ argv, refresh, run }) {
+  return Promise.resolve().then(() => {
+    // directive の更新に失敗しても本体(run)は必ず走らせる。
+    // 019 で cost-work-loop.mjs が 300s timeout になり、main() が 2026-11-09 以降
+    // 一度も実行されていなかった（nightly-bootstrap ログ 所要=300.832 / 終了コード=1）。
+    if (!argv.includes('--dry-run')) {
+      try {
+        console.error(refresh());
+      } catch (err) {
+        console.error(`WARN cost-directive refresh failed (本体は続行): ${err?.message || err}`);
+        process.exitCode = 1;
+      }
+    }
+    return run();
   }).catch((err) => {
     console.error(err);
     process.exitCode = 1;
+  });
+}
+
+if (isEntry(import.meta.url)) {
+  runEntry({
+    argv: process.argv,
+    refresh: () => refreshCostDirective({ home: path.dirname(getClaudeDir(process.argv.slice(2))) }),
+    run: main,
   });
 }

@@ -6,6 +6,7 @@ import { evaluateKimInboxRelay, commitKimInboxDelivery } from './kim-inbox-relay
 import { evaluatePastLogSearch, listPlaybookNames, classifyHandoff } from './past-log-search-gate.mjs';
 import { judgeDeliverableDriveLink, registerDeliverableCheck } from './deliverable-drive-link-gate.mjs';
 import { evaluateInvitePermissions } from './hooks/discord-invite-permission-gate.mjs';
+import { evaluateNoResponse } from './no-response-gate.mjs';
 import { applyNamedGatePolicy } from './gate-runtime.mjs';
 import os from 'node:os';
 import { evaluateProgressCron } from './progress-cron-gate.mjs';
@@ -247,7 +248,24 @@ async function runWithRelay(input, context, auditOptions = {}) {
       }
       ledger({ sessionId, verdict: 'warn_repeat', blockedBy: [], warned: ['kim-inbox-relay'], reasonCodes: [relay.code] });
     }
+    const noResponse = evaluateNoResponse({
+      transcriptRaw: context.raw,
+      stopHookActive: input.stop_hook_active,
+      lastAssistantMessage: input.last_assistant_message ?? input.assistant_text,
+    });
+    const name = 'no-response-gate';
+    const policy = noResponse.decision === 'block'
+      ? await applyNamedGatePolicy(name, noResponse, { home: home(), ...auditOptions.policyOptions })
+      : noResponse;
+    if (policy.decision === 'block') {
+      const record = { sessionId, verdict: 'block', blockedBy: [name], reasonCodes: [policy.code] };
+      ledger(record);
+      return { ...policy, record };
+    }
     const result = await runOtherGates(input, context, auditOptions);
+    if (policy.decision === 'warn') {
+      result.systemMessage = [result.systemMessage, policy.reason].filter(Boolean).join('\n');
+    }
     if (result.decision !== 'block' && !relayRepeated) commitKimInboxDelivery(home(), sessionId, relay.receipts, auditOptions.now ?? Date.now());
     if (relayRepeated && result.decision !== 'block') return { ...result, systemMessage: [`kim-inbox-relay（同じターンで上限超えのため警告のみ）: ${relay.reason || relay.code}`, result.systemMessage].filter(Boolean).join('\n') };
     return result;

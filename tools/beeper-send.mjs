@@ -15,9 +15,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
-import { BeeperApiError, sendMessage, listMessages } from './beeper-api.mjs';
+import { BeeperApiError, sendMessage, listMessages, listChats } from './beeper-api.mjs';
+import * as beeperApi from './beeper-api.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
 import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
+
+import { TITLE, assertStandingScope, claimStandingAttempt, findChat } from './lahaina-standing-policy.mjs';
 
 // ── レート制限 ───────────────────────────────────────────────────────
 
@@ -120,7 +123,34 @@ function verifyReceipt(home, queueID, receiptID) {
 
 // ── メイン送信処理 ───────────────────────────────────────────────────
 
-async function beeperSend(options) {
+// Desktop API returns the LINE body as HTML: <p>...<br>...</p>\n<p>...</p>.
+// Recognize only that lossless representation, never strip arbitrary markup,
+// collapse whitespace, remove mentions or compare a prefix.
+export function matchesBeeperText(actual, expected) {
+  if (typeof actual !== 'string' || typeof expected !== 'string') return false;
+  if (actual === expected) return true;
+  let body = actual;
+  if (body.startsWith('<p>') && body.endsWith('</p>')) {
+    body = body.slice(3, -4).replace(/<\/p>\n<p>/g, '\n\n');
+  }
+  body = body.replace(/<br\s*\/?\s*>/g, '\n');
+  if (/[<>]/.test(body)) return false;
+  const entities = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", '#39': "'" };
+  body = body.replace(/&(amp|lt|gt|quot|apos|#39);/g, (_, name) => entities[name]);
+  return body === expected;
+}
+
+export function matchesStandingReadback(message, { text, chatID, dispatchedAt, observedAt }) {
+  const at = Date.parse(message?.timestamp);
+  return message?.isSender === true && message.senderID === '@kimkon1011:beeper.com'
+    && typeof message.id === 'string' && message.id.length > 0
+    && message.chatID === chatID && message.isDeleted !== true
+    && (message.mentions == null || (Array.isArray(message.mentions) && message.mentions.length === 0))
+    && Number.isFinite(at) && at >= dispatchedAt && at <= observedAt
+    && matchesBeeperText(message.text, text);
+}
+
+export async function beeperSend(options, { readMessages = listMessages, readChats = listChats, send = sendMessage, readMessage = (...args) => beeperApi.getMessage?.(...args), clock = () => new Date(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), readbackMs = 15000 } = {}) {
   const { chatID, bodyFile, replyTo, queueID, receiptID, home } = options;
 
   if (!chatID) throw new Error('--chat が必要です');
@@ -129,12 +159,26 @@ async function beeperSend(options) {
   if (!receiptID) throw new Error('--receipt が必要です');
 
   // 本文は必ずファイルから
-  const text = fs.readFileSync(bodyFile, 'utf8').trim();
+  const rawText = fs.readFileSync(bodyFile, 'utf8');
+  const text = rawText.trim();
   if (!text) throw new Error('本文が空です');
   if (findSecretaryBookingUrls(text).length) throw Object.assign(new Error(SECRETARY_BOOKING_URL_REASON), { exitCode: 1 });
 
   // 1. Receipt 検証
   const item = verifyReceipt(home, queueID, receiptID);
+  const standing = item.decision?.reason?.includes('"type":"standing-approval"');
+  if (standing && rawText !== text) throw new Error('常設承認の本文が変更されています');
+  const validateStanding = async () => {
+    const date = item.message?.replace(/^daily-post:/, '');
+    const chat = await findChat(TITLE, readChats);
+    const { evidence } = assertStandingScope({ home, date, text, now: clock() });
+    if (item.category !== 'daily-post' || item.channel !== 'line' || item.from?.name !== TITLE || chat.id !== chatID || item.thread !== chatID
+      || item.body !== text || item.draft?.text !== text || item.decision?.finalText !== text || item.decision?.reason !== evidence) {
+      throw new Error('常設承認の本文・宛先・根拠が一致しません');
+    }
+    return date;
+  };
+  if (standing) await validateStanding();
 
   // 2. レート制限チェック
   checkRateLimit(chatID, home);
@@ -143,7 +187,7 @@ async function beeperSend(options) {
   //    基準時刻はキュー項目の receivedAt、無ければ receipt 発行時刻を使う
   const referenceAt = item.receivedAt || item.receipt?.issuedAt;
   if (referenceAt) {
-    const latest = await listMessages(chatID, { limit: 10 });
+    const latest = await readMessages(chatID, { limit: 10 });
     const newerFromOther = (latest.items || []).some(m =>
       !m.isSender && m.timestamp && new Date(m.timestamp) > new Date(referenceAt),
     );
@@ -153,12 +197,19 @@ async function beeperSend(options) {
   }
 
   await assertContextApproved({ channel: 'beeper', target: chatID, text, home, getLatest: async () => {
-    const latest = await listMessages(chatID, { limit: 1 });
+    const latest = await readMessages(chatID, { limit: 1 });
     return latestOf((latest.items || []).map(m => ({ id: m.id, at: m.timestamp })));
   }});
 
+  // Recheck after all asynchronous context checks, then reserve the date durably.
+  if (standing) {
+    const date = await validateStanding();
+    verifyReceipt(home, queueID, receiptID);
+    claimStandingAttempt(home, date, queueID, clock());
+  }
+  const dispatchedAt = Date.now();
   // 4. 送信
-  const result = await sendMessage(chatID, text, replyTo ? { replyToMessageID: replyTo } : {});
+  const result = await send(chatID, text, replyTo ? { replyToMessageID: replyTo } : {});
 
   if (!result || !result.pendingMessageID) {
     throw Object.assign(new Error('送信結果に pendingMessageID がありません'), { exitCode: 3 });
@@ -166,23 +217,28 @@ async function beeperSend(options) {
 
   // 5. 読み戻し（最大 15 秒待つ）
   let messageID = null;
-  const deadline = Date.now() + 15_000;
+  let sentAt;
+  const deadline = Date.now() + readbackMs;
   while (Date.now() < deadline) {
     // 少し待ってから読み戻す
-    await new Promise(r => setTimeout(r, 2000));
+    await sleep(2000);
     try {
-      const msgResult = await listMessages(chatID, { limit: 5, direction: 'before' });
-      const sent = (msgResult.items || []).find(m => m.isSender === true && m.text && text.includes(m.text.slice(0, 40)));
+      const msgResult = await readMessages(chatID, { limit: 5, direction: 'before' });
+      const matchesSent = m => m?.isSender === true && m.id && (standing
+        ? matchesStandingReadback(m, { text, chatID, dispatchedAt, observedAt: Math.min(Date.now(), deadline) })
+        : m.text && text.includes(m.text.slice(0, 40)));
+      const sent = (msgResult.items || []).find(matchesSent);
       if (sent) {
         messageID = sent.id;
+        sentAt = sent.timestamp;
         break;
       }
       // pendingMessageID で直接 lookup
       try {
-        const { getMessage } = await import('./beeper-api.mjs');
-        const resolved = await getMessage(chatID, result.pendingMessageID);
-        if (resolved && resolved.id && resolved.isSender) {
+        const resolved = await readMessage(chatID, result.pendingMessageID);
+        if (standing ? matchesSent(resolved) : resolved && resolved.id && resolved.isSender) {
           messageID = resolved.id;
+          sentAt = resolved.timestamp;
           break;
         }
       } catch { /* still pending, try again */ }
@@ -191,7 +247,6 @@ async function beeperSend(options) {
 
   if (!messageID) {
     // 読み戻せなかった
-    process.exitCode = 3;
     return {
       ok: false,
       uncertain: true,
@@ -208,6 +263,7 @@ async function beeperSend(options) {
   return {
     ok: true,
     messageID,
+    sentAt,
     pendingMessageID: result.pendingMessageID,
     chatID: result.chatID || chatID,
   };

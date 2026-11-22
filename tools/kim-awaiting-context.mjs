@@ -3,12 +3,13 @@ import os from 'node:os';
 import { mkdirSync, rmdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { collectAwaiting, shownFile, readJson, saveJson, ageLabel, COLLECT_BUDGET_MS } from './kim-awaiting.mjs';
+import { collectAwaiting, readJson, saveJson, ageLabel, COLLECT_BUDGET_MS } from './kim-awaiting.mjs';
 import { readManualLedger, findManualWaiting } from './outbound-reply-chase.mjs';
 import { DAY } from './lib/fleet-chase-policy.mjs';
 import { isUnattendedRow } from './auto-progress-ledger.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
+import { FINAL_ONLY_INSTRUCTION, selectNew, isLoopWake } from './lib/inbox-display-policy.mjs';
 export const REPEAT_MS = 3 * 3600_000;
 export const SESSION_TTL = 30 * DAY;
 export const DISPLAY_LIMIT = 5;
@@ -45,47 +46,42 @@ export function context(input, { home = process.env.ORGIAST_HOME || os.homedir()
     const items = collect({ home, now, budgetMs: COLLECT_BUDGET_MS, sessionId });
     const discord = discordWaitingContext({ home, now });
     const discordOnly = () => discord ? { hookSpecificOutput: { hookEventName: event, additionalContext: discord } } : null;
-    const state = readJson(shownFile(home), {}), session = sessionId || 'unknown';
-    for (const [key, value] of Object.entries(state)) if (now - value.at > SESSION_TTL) delete state[key];
-    const ids = items.map(item => item.id).sort(), prior = Object.hasOwn(state, session) ? state[session] : null;
-    if (event !== 'SessionStart' && prior && now - prior.at < REPEAT_MS && JSON.stringify(ids) === JSON.stringify(prior.ids)) return discordOnly();
-    Object.defineProperty(state, session, { value: { at: now, ids }, enumerable: true, configurable: true, writable: true });
-    saveJson(shownFile(home), state);
-    if (!items.length) return discordOnly();
+    // loop 起床は discord 以外何も注入しない
+    if (isLoopWake(input, { home, now, hook: 'kim-awaiting-context' })) return discordOnly();
+    const allIds = items.map(item => item.id);
+    // 新着選別
+    const { fresh, known, knownFromOtherSessions } = selectNew({ home, hook: 'kim-awaiting', sessionId, ids: allIds, now });
+    const freshSet = new Set(fresh);
+    const freshItems = items.filter(item => freshSet.has(item.id));
+    if (!freshItems.length) {
+      if (!knownFromOtherSessions) return discordOnly();
+      const additionalContext = `${discord}${FINAL_ONLY_INSTRUCTION}\nほか既出 ${knownFromOtherSessions} 件`;
+      return { hookSpecificOutput: { hookEventName: event, additionalContext } };
+    }
     const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url))).replace(/^\/mnt\/([a-z])\//i, (_, drive) => `${drive.toUpperCase()}:/`);
-    // 2026-11-15 kim 指示: 注入を圧縮（件数＋上位3件の1行要約・各100字以内）
-    // 答えてほしいこと（質問文）は必ず残す。100字に収めるため title/age/progress を先に削る
     const briefLine = item => {
-      const askPart = `答えてほしいこと: ${item.ask}`;
-      const suffixParts = [ageLabel(item), item.progress].filter(Boolean);
+      const oneLine = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+      const askPart = ` ／ 答えてほしいこと: ${oneLine(item.ask)}`;
+      const suffixParts = [ageLabel(item), item.progress].map(oneLine).filter(Boolean);
       const suffix = suffixParts.length ? ` ／ ${suffixParts.join(' ／ ')}` : '';
-      const head = `・${item.title}`;
-      let line = `${head} ／ ${askPart}${suffix}`;
-      if ([...line].length <= 100) return line;
-      // 100字超: title から削り、足りなければ ask 末尾を落とす
-      const suffixLen = [...suffix].length;
-      const reserved = 100 - suffixLen;
-      const askBudget = Math.min([...` ／ ${askPart}`].length, Math.max(40, reserved - 3));
-      const titleBudget = Math.max(3, reserved - askBudget);
-      const briefTitle = [...head].slice(0, titleBudget).join('');
-      const surplus = 100 - suffixLen;
-      let core = [...`${briefTitle} ／ ${askPart}`].slice(0, surplus).join('');
-      return `${core}${suffix}`;
+      const head = `・${oneLine(item.title)}`;
+      const askLength = [...askPart].length;
+      const headLength = Math.min([...head].length, Math.max(3, 100 - askLength));
+      const core = [...head].slice(0, headLength).join('') + askPart + suffix;
+      return [...core].slice(0, 100).join('');
     };
-    const TOP = 3;
-    const external = items.filter(item => item.external), internal = items.filter(item => !item.external);
+    const external = freshItems.filter(item => item.external), internal = freshItems.filter(item => !item.external);
     const isCurrent = item => sessionId && item.source === 'auto-progress' && item.route?.sessionId === sessionId;
     const current = internal.filter(isCurrent);
     const shownExternal = external.slice(0, TOP);
-    const shownInternal = [...current, ...internal.filter(item => !isCurrent(item)).slice(0, TOP)];
+    const shownInternal = [...current, ...internal.filter(item => !isCurrent(item))].slice(0, TOP);
     const waiting = external.filter(item => !item.warning).length;
-    const listCmd = `node "${repo}/tools/kim-awaiting.mjs" --list`;
     const externalBlock = external.length ? `🔴 社外の人を待たせています ${waiting} 件（古い順）\n${shownExternal.map(briefLine).join('\n')}${external.length > TOP ? `\nほか ${external.length - TOP} 件` : ''}\n` : '';
     const internalBlock = internal.length ? `📌 kim の返事待ち ${internal.length} 件（${current.length ? '現セッション優先・ほかは古い順' : '古い順'}）\n${shownInternal.map(briefLine).join('\n')}${internal.length > shownInternal.length ? `\nほか ${internal.length - shownInternal.length} 件` : ''}\n` : '';
     const routes = [...shownExternal, ...shownInternal].map(item => `id=${item.id} | ${item.title}`).join('\n');
     const redInstruction = external.length ? '🔴 の項目は本文を get_thread で読み、返信下書きまで作って提示せよ。送信は kim が明示した時だけ。\n' : '';
-    const helpNote = `全件確認: ${listCmd} ／ 回答: node "${repo}/tools/kim-awaiting.mjs" --answer <id> --body-file <file> ／ 不要: --skip <id>\n`;
-    return { hookSpecificOutput: { hookEventName: event, additionalContext: `${discord}【kim の返事待ち】${helpNote}${externalBlock}${internalBlock}${redInstruction}以下の id は kim に見せない。\n${routes}` } };
+    const knownLine = known > 0 ? `\nほか既出 ${known} 件（一覧は node tools/kim-awaiting.mjs で表示）\n` : '';
+    return { hookSpecificOutput: { hookEventName: event, additionalContext: `${discord}${FINAL_ONLY_INSTRUCTION}\n${externalBlock}${internalBlock}${knownLine}${redInstruction}kim がこのどれかに答えたら、その答えを本文ファイルに書いて node "${repo}/tools/kim-awaiting.mjs" --answer <id> --body-file <file> で届けよ。kim が「不要」と言ったものは --skip <id> --reason ...。以下の id は kim に見せない。\n${routes}` } };
   } catch { return null; }
 }
 if (isEntry(import.meta.url)) { try { const out = context(JSON.parse(await readStdinWithTimeout(500))); if (out) console.log(JSON.stringify(out)); } catch {} }

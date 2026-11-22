@@ -8,6 +8,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { redactForShare } from './lib/share-secrets.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { machineIdentity } from './machine-identity.mjs';
 import { addDecision, listDecisions } from './pending-decisions.mjs';
@@ -25,8 +26,37 @@ import { reapStalePolls } from './lib/fleet-poll-reaper.mjs';
 export { resolveFleetLabel, dailyRuleCompliance };
 export { RECLAIM_STALE_MS } from './lib/reclaim-lock.mjs';
 
+export function sameFleetAddress(a, b) {
+  const left = a == null ? '' : String(a);
+  const right = b == null ? '' : String(b);
+  if (left === right) return true;
+  return /^\d+$/.test(left) && /^\d+$/.test(right) && Number(left) === Number(right);
+}
+
 export function isFleetHub(label, config) {
   return label === (config.FLEET_HUB || HUB_LABEL);
+}
+
+/**
+ * 送信元ラベルが FLEET_HUB の PC からのものかを判定（別名対応）。
+ * @param {string} from - 送信元ラベル（mail.from）
+ * @param {object} config - fleet-sheet.env のパース結果（FLEET_HUB を含む）
+ * @param {object} [pcMap] - fleet-pc-map.json の内容（別名解決に使用）
+ * @returns {boolean}
+ */
+export function isHubSender(from, config, pcMap = {}) {
+  if (!config.FLEET_HUB) return false;
+  if (from === config.FLEET_HUB) return true;
+  // FLEET_HUB が HUB_LABEL（kim-PC）の場合、pcMap の別名も許容（大小文字無視）
+  if (config.FLEET_HUB === HUB_LABEL && pcMap && typeof pcMap === 'object') {
+    const hubEntry = pcMap[HUB_LABEL];
+    if (!hubEntry || typeof hubEntry !== 'object') return false;
+    const hostname = String(hubEntry.hostname || '').toLowerCase();
+    const aliases = (Array.isArray(hubEntry.aliases) ? hubEntry.aliases : []).map(a => String(a).toLowerCase());
+    const fromLower = String(from).toLowerCase();
+    return fromLower === hostname || aliases.includes(fromLower);
+  }
+  return false;
 }
 
 export function seatSendGate({ to, kimOperated, subject = '', why = '', body = '', reason = '' }) {
@@ -334,7 +364,7 @@ function normalizeInbox(mail) {
   // Once v2 fields exist, status alone controls completion, including seen records.
   const legacyRead = mail.readAt && !Object.hasOwn(mail, 'presentedAt') && !Object.hasOwn(mail, 'pendingServer') && !mail.seenAt && !mail.ackAt;
   const status = terminal(mail) ? mail.status : legacyRead ? 'done' : !mail.status || mail.status === 'new' ? 'delivered' : mail.status;
-  return { ...mail, status,
+  return { ...mail, to: mail?.to == null ? '' : String(mail.to), status,
     presentedAt: mail.presentedAt ?? null, presentedSession: mail.presentedSession ?? null };
 }
 export const INBOX_LOCK_RETRIES = 10;
@@ -810,7 +840,11 @@ export async function waitForReply(id, seconds, { request, now = Date.now, sleep
     try {
       const result = await request('mail-get', { id }, Math.min(60_000, deadline - now()));
       if (waitFor === 'seen' && (result.mail?.seenAt || ['seen', 'done'].includes(result.mail?.status))) return { exitCode: 0, text: `既読（id=${id}）` };
-      if (['failed', 'expired'].includes(result.mail?.status)) return { exitCode: 1, text: `${result.mail.status}（id=${id}）` };
+      if (['failed', 'expired'].includes(result.mail?.status)) {
+        const { status, failReason } = result.mail;
+        const detail = status === 'failed' && failReason ? `\n${redactSecrets(redactForShare(failReason))}` : '';
+        return { exitCode: 1, text: `${status}（id=${id}）${detail}` };
+      }
       if (result.mail?.status === 'done') return { exitCode: 0, text: redactSecrets(result.mail.resultBody || '[ack のみ・本文なし]') };
     } catch (error) { if (now() < deadline) throw error; }
     if (now() < deadline) await sleepImpl(Math.min(15_000, deadline - now()));
@@ -882,9 +916,16 @@ export function classifyExecutionResult(result, { exec } = {}) {
 }
 export async function sendExecutionFailure(args) {
   const { result, label } = args;
-  const diagnostic = redactSecrets(result.stderrTail || result.error || '').slice(-600);
-  return sendHubFailure({ ...args, result: { ...result,
-    outputTail: `${label} の自動回答が完了しなかった（${result.reason}）。${label} の対話セッションで回答する` + (diagnostic ? `\n${diagnostic}` : '') } });
+  const diagnostic = [result.stderrHead, result.stderrTail, result.error]
+    .map(value => stripClaudeWarnings(redactSecrets(redactForShare(value ?? ''))).split('\n')[0].trim())
+    .find(Boolean)?.slice(0, 600);
+  const reason = redactSecrets(redactForShare(result.reason));
+  // 実行エラーは送信側の --wait にも表示する。未承諾や中断は既存の状態コードを保つ。
+  const executionError = (result.exitCode != null && result.exitCode !== 0) || (result.error && !result.timedOut);
+  return sendHubFailure({ ...args, result: { ...result, reason,
+    failReason: diagnostic && executionError ? `${reason} — ${diagnostic}` : reason,
+    outputTail: `${label} の自動回答が完了しなかった（${reason}）。${label} の対話セッションで回答する` +
+      (diagnostic ? `\n診断: ${diagnostic}` : '') } });
 }
 // Rejection is a reply note plus a fail transition. mail-reply would mark the
 // original done, after which the server correctly refuses a done -> failed change.
@@ -895,7 +936,7 @@ export async function sendHubFailure({ home, mail, result, request, label, now =
     why: '[報告・返信不要] 実行拒否', auto: true, hop: nextHop(mail), priority: 'normal', reason: result.reason,
     expiresAt: new Date(now() + 72 * 3600000).toISOString()
   }));
-  await syncMailState({ home, id: mail.id, action: 'fail', reason: result.reason, from: label, request, now, stderr });
+  await syncMailState({ home, id: mail.id, action: 'fail', reason: result.failReason ?? result.reason, from: label, request, now, stderr });
 }
 // 受信1回分。--poll のみが呼ぶ。提示 hook はこの処理を別プロセスで起動する。
 // 受信タスク(OrgiastFleetMail)が死んでいても対話セッションが受信を代替するための exports（2026-10-10 事故）。
@@ -1097,8 +1138,9 @@ export async function pollOnce(deps = {}) {
       if (now() - saveStartedAt >= saveBudgetMs) { undurable++; break; }
       if (raw?.id && ((batch.successfulIds?.includes(raw.id) && fs.existsSync(fileOf(raw.id))) || batch.quarantinedIds?.includes(raw.id))) continue;
       try {
-        const exact = raw && (raw.to === 'all' || raw.to === label || (typeof raw.to === 'string' && raw.to.toLowerCase() === identity.hostname?.toLowerCase()));
-        const legacyTo = !exact && typeof raw?.to === 'string' && !!raw.to && (label.includes(raw.to) || identity.hostname?.toLowerCase().includes(raw.to.toLowerCase()));
+        const to = raw?.to == null ? '' : String(raw.to);
+        const exact = raw && (to === 'all' || sameFleetAddress(to, label) || to.toLowerCase() === identity.hostname?.toLowerCase());
+        const legacyTo = !exact && !!to && (label.includes(to) || identity.hostname?.toLowerCase().includes(to.toLowerCase()));
         if (!/^mail-[A-Za-z0-9-]{1,180}$/.test(raw?.id || '') || (!exact && !legacyTo) || !['note', 'prompt'].includes(raw.kind)
           || typeof raw.body !== 'string' || !raw.from || !Number.isFinite(Date.parse(raw.expiresAt))) throw Object.assign(new Error('invalid incoming mail'), { code: 'INVALID_INCOMING_MAIL' });
         let created = false;
@@ -1228,7 +1270,7 @@ export async function pollOnce(deps = {}) {
         const resultFile = path.join(dir, 'fleet-agent-results', `${validId(mail.id)}.json`);
         let result = readJson(resultFile);
         if (hubExecution && !result && !mail.executionStartedAt) {
-          const reason = !config.FLEET_HUB || mail.from !== config.FLEET_HUB ? 'not-hub' : !validExecCwd(exec.cwd) ? 'bad-cwd' : null;
+          const reason = !isHubSender(mail.from, config, fleetMembers) ? 'not-hub' : !validExecCwd(exec.cwd) ? 'bad-cwd' : null;
           if (reason) result = { exitCode: null, reason, outputTail: `reason: ${reason}` };
         }
         if (mail.executionStartedAt && !result) {
@@ -1239,7 +1281,7 @@ export async function pollOnce(deps = {}) {
         if (!result) {
           if (mail.executionStartedAt) continue; // Never start an interrupted execution a second time.
           const kind = hubExecution ? 'claude-resume' : exec.exec === 'codex' ? 'codex' : 'prompt';
-          if (!loadOptin(path.join(dir, 'fleet-agent-optin.json')).includes(kind)) result = { exitCode: null, outputTail: `未オプトイン。承諾コマンド: ${consentCommand(kind)}` };
+          if (!loadOptin(path.join(dir, 'fleet-agent-optin.json')).includes(kind)) result = { exitCode: null, reason: 'not-opted-in', outputTail: `未オプトイン。承諾コマンド: ${consentCommand(kind)}` };
           else {
             if (promptHandled) continue;
             if (hubExecution && exec.resumeSessionId) {
@@ -1266,8 +1308,8 @@ export async function pollOnce(deps = {}) {
           }
         }
         result = classifyExecutionResult({ ...result, stderrTail: result.stderrTail ?? (result.exitCode == null ? result.outputTail : '') }, { exec: exec.exec });
-        if (result.stderrTail) result.stderrTail = redactSecrets(result.stderrTail);
-        if (result.error) result.error = redactSecrets(result.error);
+        if (result.stderrTail) result.stderrTail = redactSecrets(redactForShare(result.stderrTail));
+        if (result.error) result.error = redactSecrets(redactForShare(result.error));
         if (result.stdoutTail !== undefined) result.stdoutTail = redactSecrets(result.stdoutTail);
         writeJson(resultFile, result);
         // A failed reply retains its result and retries transport without executing again.
@@ -1429,6 +1471,10 @@ async function runMain(argv, deps) {
     }
     const statusFile = path.join(dir, 'fleet-mail-sent-status.json');
     const showStatus = mail => out([`id: ${mail.id || id}`, ...['to', 'status', 'createdAt', 'expiresAt', 'deliveredAt', 'deliveredBy', 'seenAt', 'seenBy', 'resultAt', 'ackAt', 'failedAt', 'failReason'].map(key => `${key}: ${redactSecrets(String(mail[key] || '(なし)'))}`)].join('\n'));
+    // 終端状態（done/failed/expired）はローカル送信記録に残っていれば確定しており、以後変わらない。
+    // 毎回の GAS 照会（ロック待ちで数十秒）を省き、auto-progress の check が既定30秒上限で「判定不能」になるのを防ぐ。
+    const cached = readJson(statusFile, {})[id];
+    if (cached && terminal(cached)) { showStatus(cached); return 0; }
     let result;
     try { result = await request('mail-get', { id }, 60_000, { retries: 2 }); }
     catch (error) {
@@ -1455,7 +1501,7 @@ async function runMain(argv, deps) {
     const id = options['--answer'];
     commandInbox(id, current => current, { home });
     const original = checked(await request('mail-get', { id })).mail;
-    if (original?.to !== label) { err('fleet-mail: 回答対象の宛先が自ラベルと一致しません'); return 2; }
+    if (!sameFleetAddress(original?.to, label)) { err('fleet-mail: 回答対象の宛先が自ラベルと一致しません'); return 2; }
     let meta = original?.meta;
     if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch { meta = null; } }
     const relay = meta?.relay;
@@ -1518,6 +1564,12 @@ async function runMain(argv, deps) {
     if (pcMap === undefined) {
       try { pcMap = readJson(new URL('../fleet-pc-map.json', import.meta.url)); }
       catch { /* Beacon labels can still resolve exact targets when the roster is unavailable. */ }
+    }
+
+    if (options['--exec'] === 'claude' && !options['--force'] && config.FLEET_HUB
+        && !isHubSender(label, config, pcMap || {})) {
+      err(`fleet-mail: --exec claude はハブ席（FLEET_HUB=${config.FLEET_HUB}）からのみ実行されます。この席（${label}）から送ると宛先で not-hub として実行されません。相談は --kind note、意図的に送るときだけ --force`);
+      return 7;
     }
 
     // 再試行・キャッシュを含む同じスナップショットを解決と鮮度表示で共有する。

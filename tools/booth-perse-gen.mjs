@@ -4,16 +4,20 @@
 //   プラン定義.json = [{"id":"ume","label":"シンプル","add":"PLAN \"SIMPLE\": ..."}, {...}, {...}]（3件）
 //   各プランの画像は <出力フォルダ>/perse-<id>-<provider>.png に保存し、結果を <出力フォルダ>/perse-result.json に書く
 // 鍵は ~/.claude/openrouter.env の OPENROUTER_API_KEY（既存配布物）。1枚あたり約 0.15 ドル（2026-10 実測）。
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
-const USAGE = '使い方: node tools/booth-perse-gen.mjs --brief <brief.txt> --plans <plans.json> --out <dir> [--only <plan-id>] [--providers <openai,gemini>] [--model <OpenRouter model>] [--base <寸法どおりの下絵.png>] [--text <許可する文字> ...] [--ref <image> ...] [--blender-out <dir>] [--max-height <m>（会場の装飾高さ上限・既定3.6）]';
+const USAGE = '使い方: node tools/booth-perse-gen.mjs --brief <brief.txt> --plans <plans.json> --out <dir> [--only <plan-id>] [--providers <openai,gemini>] [--model <OpenRouter model>] [--base <寸法どおりの下絵.png>] [--width <m>] [--depth <m>] [--open <front,right,left,back の部分集合>] [--text <許可する文字> ...] [--ref <image> ...] [--blender-out <dir>] [--max-height <m>（会場の装飾高さ上限・既定3.6）]';
 const DEFAULT_MODEL = 'openai/gpt-5.4-image-2';
 const PROVIDER_MODELS = { openai: DEFAULT_MODEL, gemini: 'google/gemini-3-pro-image' };
 const DEFAULT_PROVIDERS = ['openai', 'gemini'];
 const DEFAULT_MAX_HEIGHT = 3.6;
+const DEFAULT_WIDTH = 6;
+const DEFAULT_DEPTH = 6;
+const DEFAULT_OPEN_SIDES = ['front', 'left', 'right'];
+const VALID_SIDES = ['front', 'right', 'left', 'back'];
 const BLENDER_PERSP_FILES = ['persp_front_left.png', 'persp_front_right.png'];
 
 function findBlenderRefs(dir) {
@@ -25,7 +29,7 @@ function findBlenderRefs(dir) {
 }
 
 export function parseArgs(argv) {
-  const opts = { refs: [], texts: [], maxHeight: DEFAULT_MAX_HEIGHT, providers: [...DEFAULT_PROVIDERS] };
+  const opts = { refs: [], texts: [], maxHeight: DEFAULT_MAX_HEIGHT, width: DEFAULT_WIDTH, depth: DEFAULT_DEPTH, openSides: [...DEFAULT_OPEN_SIDES], providers: [...DEFAULT_PROVIDERS], explicitDimensions: {} };
   let providersSpecified = false;
   let modelSpecified = false;
   for (let i = 0; i < argv.length; i += 1) {
@@ -40,6 +44,9 @@ export function parseArgs(argv) {
     else if (a === '--ref') { opts.refs.push(v); i += 1; }
     else if (a === '--blender-out') { opts.blenderOut = v; i += 1; }
     else if (a === '--max-height') { opts.maxHeight = Number(v); i += 1; }
+    else if (a === '--width') { opts.width = Number(v); opts.explicitDimensions.width = true; i += 1; }
+    else if (a === '--depth') { opts.depth = Number(v); opts.explicitDimensions.depth = true; i += 1; }
+    else if (a === '--open') { opts.openSides = (v || '').split(',').map((s) => s.trim()).filter(Boolean); opts.explicitDimensions.openSides = true; i += 1; }
     else if (a === '--model') { modelSpecified = true; opts.model = v; i += 1; }
     else if (a === '--providers') {
       providersSpecified = true;
@@ -50,12 +57,26 @@ export function parseArgs(argv) {
   }
   for (const k of ['brief', 'plans', 'out']) if (!opts[k]) throw new Error(`--${k} is required\n${USAGE}`);
   if (!(opts.maxHeight > 0)) throw new Error(`--max-height は数値（m）で指定する\n${USAGE}`);
+  if (!(opts.width > 0) || !(opts.depth > 0)) throw new Error(`--width と --depth は正の数値（m）で指定する\n${USAGE}`);
+  if (opts.openSides.length !== new Set(opts.openSides).size || opts.openSides.some((s) => !VALID_SIDES.includes(s))) throw new Error(`--open は front,right,left,back の部分集合をカンマ区切りで指定する\n${USAGE}`);
   if (modelSpecified && !opts.model) throw new Error(`--model は空にできません\n${USAGE}`);
   if (modelSpecified && providersSpecified) throw new Error(`--model と --providers は同時に指定できません\n${USAGE}`);
   if (!opts.providers.length || opts.providers.some((p) => !Object.hasOwn(PROVIDER_MODELS, p))) {
     throw new Error(`--providers は openai,gemini から1つ以上指定する\n${USAGE}`);
   }
   if (opts.model) opts.providers = undefined;
+  return opts;
+}
+
+export function applyBaseMetadata(opts) {
+  if (!opts.base) return opts;
+  const candidates = [`${opts.base}.json`, path.join(path.dirname(opts.base), `${path.parse(opts.base).name}.json`), path.join(path.dirname(opts.base), 'underlay-meta.json')];
+  const metaFile = candidates.find(existsSync);
+  if (!metaFile) return opts;
+  const meta = JSON.parse(readFileSync(metaFile, 'utf8'));
+  if (!opts.explicitDimensions.width && Number(meta.width_m) > 0) opts.width = Number(meta.width_m);
+  if (!opts.explicitDimensions.depth && Number(meta.depth_m) > 0) opts.depth = Number(meta.depth_m);
+  if (!opts.explicitDimensions.openSides && Array.isArray(meta.open_sides) && meta.open_sides.every((s) => VALID_SIDES.includes(s))) opts.openSides = [...meta.open_sides];
   return opts;
 }
 
@@ -74,22 +95,25 @@ export function requireDimensionReference(opts) {
 }
 
 // 高さと明るさは提案の柱なので、ブリーフに書き忘れても全案へ必ず足す（kim 2026-10-27・サポリス案が2.7mで低かった）。
-export function heightLightClause(maxHeight = DEFAULT_MAX_HEIGHT) {
+export function heightLightClause(maxHeight = DEFAULT_MAX_HEIGHT, width = DEFAULT_WIDTH, depth = DEFAULT_DEPTH) {
   return `MANDATORY HEIGHT & LIGHT (applies to this plan, overrides any taller height above): this is a SINGLE-STOREY exhibition stand. Its overall structure/truss height is about ${maxHeight} m and MUST NOT exceed ${maxHeight} m. It must look like a normal single-level booth within a ${maxHeight} m decoration limit - NEVER a double-height, two-storey or 5-6 m tall hall structure. Keep headers and the top logo sign low, around ${maxHeight} m. The booth must also look BRIGHT - noticeably brighter than the neighbouring booths (spotlights and/or backlit light boxes), graphics evenly lit, no dark corners.
 
 MANDATORY HUMAN SCALE: show multiple people about 1.7 m tall in the foreground as explicit scale references. The highest point of the booth (top edge of any truss or upper logo sign) must be only about twice a person's height (${maxHeight} m) and never higher. The clear space from the people's heads to the ceiling truss should be about one person's height.
 
-MANDATORY PROPORTIONS: the booth footprint is 6 m wide by 6 m deep. Its 6 m width is about 1.7 times its ${maxHeight} m height. From the front, the overall silhouette must look distinctly wider than tall, never vertically elongated.
+MANDATORY PROPORTIONS: the booth footprint is ${width} m wide by ${depth} m deep. Its ${width} m width is about ${(width / maxHeight).toFixed(1)} times its ${maxHeight} m height. From the front, the overall silhouette must look distinctly wider than tall, never vertically elongated.
 
 MANDATORY HALL SCALE: the exhibition hall ceiling is more than 10 m high and must appear far above the booth. Adjacent exhibition booths are only about 2.7-3.6 m high, similar in height to this booth. Preserve a large visible vertical gap between every booth and the hall ceiling.`;
 }
 
-export function buildPrompt(common, plan, maxHeight = DEFAULT_MAX_HEIGHT, texts = []) {
+export function buildPrompt(common, plan, maxHeight = DEFAULT_MAX_HEIGHT, texts = [], width = DEFAULT_WIDTH, depth = DEFAULT_DEPTH, openSides = DEFAULT_OPEN_SIDES) {
   const textRule = texts.length
     ? `The only readable text allowed anywhere is: ${texts.map((text) => `"${text.replaceAll('"', '\\"')}"`).join(', ')}.`
     : 'The only readable text allowed is the text explicitly quoted in the brief above. Do not invent brand names or logos.';
-  return `${common}\n${plan.add}\n${heightLightClause(maxHeight)}\n
-MANDATORY BASE-IMAGE FIDELITY: The FIRST reference image is a dimensionally accurate 3D underlay. Preserve its composition, camera position and perspective, booth outer envelope, truss top edge, all four column positions, wall position, and every person's size and position EXACTLY. Paint in materials, lighting and brand treatment only. Do NOT make the booth envelope, canopy, columns, signs, or infinity feature taller or larger than the underlay. Keep the three open sides open.
+  const defaultOpen = openSides.length === 3 && DEFAULT_OPEN_SIDES.every((side) => openSides.includes(side));
+  const closedSides = VALID_SIDES.filter((side) => !openSides.includes(side));
+  const opennessRule = defaultOpen ? 'Keep the three open sides open.' : `Keep the ${openSides.length ? openSides.join(' and ') : 'no'} sides open. Keep the ${closedSides.join(' and ')} sides closed by walls.`;
+  return `${common}\n${plan.add}\n${heightLightClause(maxHeight, width, depth)}\n
+MANDATORY BASE-IMAGE FIDELITY: The FIRST reference image is a dimensionally accurate 3D underlay. Preserve its composition, camera position and perspective, booth outer envelope, truss top edge, all four column positions, wall position, and every person's size and position EXACTLY. Paint in materials, lighting and brand treatment only. Do NOT make the booth envelope, canopy, columns, signs, or infinity feature taller or larger than the underlay. ${opennessRule}
 
 MANDATORY TEXT: Do not draw Japanese text or Japanese signs. ${textRule} No invented words, numbers, prices, or pseudo-lettering.\n`;
 }
@@ -127,7 +151,7 @@ export async function generate({ key, text, refs, out, model, fetchImpl = fetch 
   return { model: j.model || model, cost: j.usage?.cost ?? null, endpoint: imageApi ? 'images' : 'chat/completions' };
 }
 
-export async function runAll({ plans, providers = DEFAULT_PROVIDERS, model, key, common, texts = [], refs = [], maxHeight = DEFAULT_MAX_HEIGHT, outDir, fetchImpl = fetch }) {
+export async function runAll({ plans, providers = DEFAULT_PROVIDERS, model, key, common, texts = [], refs = [], maxHeight = DEFAULT_MAX_HEIGHT, width = DEFAULT_WIDTH, depth = DEFAULT_DEPTH, openSides = DEFAULT_OPEN_SIDES, outDir, fetchImpl = fetch }) {
   const jobs = model
     ? plans.map((plan) => ({ plan, provider: null, model }))
     : plans.flatMap((plan) => providers.map((provider) => ({ plan, provider, model: PROVIDER_MODELS[provider] })));
@@ -135,7 +159,7 @@ export async function runAll({ plans, providers = DEFAULT_PROVIDERS, model, key,
     const suffix = provider ? `-${provider}` : '';
     const out = path.join(outDir, `perse-${plan.id}${suffix}.png`);
     try {
-      const generated = await generate({ key, text: buildPrompt(common, plan, maxHeight, texts), refs, out, model: jobModel, fetchImpl });
+      const generated = await generate({ key, text: buildPrompt(common, plan, maxHeight, texts, width, depth, openSides), refs, out, model: jobModel, fetchImpl });
       return { id: plan.id, label: plan.label, provider, model: generated.model, endpoint: generated.endpoint, cost: generated.cost, out, ok: true, error: null };
     } catch (e) {
       return { id: plan.id, label: plan.label, provider, model: jobModel, endpoint: jobModel.startsWith('openai/') ? 'images' : 'chat/completions', cost: null, out, ok: false, error: String(e.message || e) };
@@ -160,6 +184,9 @@ export function buildRetryCommand(opts, result) {
   for (const text of opts.texts) args.push('--text', text);
   for (const ref of opts.refs) args.push('--ref', ref);
   if (opts.maxHeight !== DEFAULT_MAX_HEIGHT) args.push('--max-height', opts.maxHeight);
+  if (opts.width !== DEFAULT_WIDTH) args.push('--width', opts.width);
+  if (opts.depth !== DEFAULT_DEPTH) args.push('--depth', opts.depth);
+  if (opts.openSides.join(',') !== DEFAULT_OPEN_SIDES.join(',')) args.push('--open', opts.openSides.join(','));
   args.push('--only', result.id);
   if (result.provider) args.push('--providers', result.provider);
   else args.push('--model', result.model);
@@ -167,7 +194,7 @@ export function buildRetryCommand(opts, result) {
 }
 
 async function main() {
-  const opts = parseArgs(process.argv.slice(2));
+  const opts = applyBaseMetadata(parseArgs(process.argv.slice(2)));
   requireDimensionReference(opts);
   const originalRefs = [...opts.refs];
   if (opts.blenderOut) {
@@ -190,7 +217,7 @@ async function main() {
   if (opts.base) opts.refs.unshift(opts.base);
   const key = loadKey();
   mkdirSync(opts.out, { recursive: true });
-  const results = await runAll({ plans, providers: opts.providers, model: opts.model, key, common, texts: opts.texts, refs: opts.refs, maxHeight: opts.maxHeight, outDir: opts.out });
+  const results = await runAll({ plans, providers: opts.providers, model: opts.model, key, common, texts: opts.texts, refs: opts.refs, maxHeight: opts.maxHeight, width: opts.width, depth: opts.depth, openSides: opts.openSides, outDir: opts.out });
   writeFileSync(path.join(opts.out, 'perse-result.json'), JSON.stringify(results, null, 2));
   for (const r of results) {
     if (r.ok) console.log(`saved ${r.out} cost ${r.cost}`);

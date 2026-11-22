@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { escalateKimDecisions, escalationRowKey, escalationText } from './auto-progress-escalate.mjs';
+import { escalateKimDecisions, escalationRowKey, escalationText, isNoKimAction } from './auto-progress-escalate.mjs';
 const H = 3600000;
 const now = Date.parse('2026-11-04T10:00:00Z');
 const row = (hours, extra = {}) => ({ ts: new Date(now - hours * H).toISOString(), sessionId: `session-${hours}`, status: 'waiting_user', nextKim: 'kim の承認が必要です', promise: '返信を確認して報告', pc: 'test-PC', ...extra });
@@ -42,6 +42,49 @@ test('blocked and throwing deliveries continue without recording success', async
   const state = JSON.parse(fs.readFileSync(path.join(opts.home, '.claude/auto-progress-escalated.json')));
   assert.deepEqual(Object.keys(state), [escalationRowKey(rows[2])]);
 });
+test('isNoKimAction: 空・なし系は真', () => {
+  assert.ok(isNoKimAction(''));
+  assert.ok(isNoKimAction('なし'));
+  assert.ok(isNoKimAction('無し'));
+  assert.ok(isNoKimAction('特になし'));
+  assert.ok(isNoKimAction('不要'));
+  assert.ok(isNoKimAction('対応不要'));
+  assert.ok(isNoKimAction('　なし　'));
+});
+test('isNoKimAction: 補足付きなしは真（括弧・句読点・ダッシュ・空白）', () => {
+  assert.ok(isNoKimAction('なし（kim-PC の電源を入れたままにしておけば自動で進む）'));
+  assert.ok(isNoKimAction('不要。自動で進む'));
+  assert.ok(isNoKimAction('なし - 自動'));
+  assert.ok(isNoKimAction('なし: 自動'));
+  assert.ok(isNoKimAction('なし、自動'));
+  assert.ok(isNoKimAction('なし（補足）'));
+  assert.ok(isNoKimAction('無し（補足）'));
+  assert.ok(isNoKimAction('なし【補足】'));
+  assert.ok(isNoKimAction('なし[補足]'));
+  assert.ok(isNoKimAction('特になし（自動）'));
+  assert.ok(isNoKimAction('不要（自動）'));
+  assert.ok(isNoKimAction('対応不要（自動）'));
+  assert.ok(isNoKimAction('なし。'));
+  assert.ok(isNoKimAction('なし,自動'));
+  assert.ok(isNoKimAction('不要：自動'));
+  assert.ok(isNoKimAction('無し—'));
+  assert.ok(isNoKimAction('なしー'));
+});
+test('isNoKimAction: なしで始まっても文意が続くのは偽', () => {
+  assert.ok(!isNoKimAction('なしで進めてよいか判断してください'));
+  assert.ok(!isNoKimAction('無しにするか決めてください'));
+  assert.ok(!isNoKimAction('不要な下書きを削除してよいか'));
+  assert.ok(!isNoKimAction('対応不要とするか決めて'));
+});
+test('escalateKimDecisions: 補足付き「なし（…）」行はエスカレーション対象外', async t => {
+  const opts = setup(t, [
+    { ...row(60), nextKim: 'なし（kim-PC の電源を入れたままにしておけば自動で進む）' },
+    { ...row(61), nextKim: 'kim の承認が必要' },
+  ]);
+  const result = await escalateKimDecisions({ ...opts, dryRun: true });
+  assert.equal(result.targets.length, 1);
+  assert.ok(result.targets[0].text.includes('kim の承認が必要'));
+});
 test('dry-run never sends or modifies existing state', async t => {
   const opts = setup(t, [row(60)]);
   opts.io.notifyKim = () => assert.fail('dry-run must not send');
@@ -70,4 +113,21 @@ test('message preserves decision text and caps context lengths', () => {
   assert.ok(!text.includes('あ'.repeat(2001)));
   assert.ok(!text.includes('約'.repeat(81)));
   assert.match(text, /PC test-PC \/ セッション session- \/ 台帳 ts/);
+});
+
+test('同じ行の ask が受信箱にあれば新しく積まず、回答済みなら台帳へ書き戻す（2026-11-19 重複質問）', async t => {
+  const open = row(60), answered = row(70, { sessionId: 'abcdef12-0000' }), fresh = row(80);
+  const opts = setup(t, [open, answered, fresh]);
+  const ask = (r, extra) => ({ id: 'ki-x', kind: 'ask', text: escalationText(r, now - 24 * H), ...extra });
+  const synced = [], sentOptions = [];
+  opts.io.listInbox = () => [ask(open, { status: 'open' }), ask(answered, { status: 'answered', answer: '既製品ですすめて', answeredAt: new Date(now - H).toISOString() })];
+  opts.io.syncAnswer = (home, item) => { synced.push(item.answer); return true; };
+  opts.io.notifyKim = async (text, options) => { sentOptions.push(options); return { delivered: 'session-inbox' }; };
+  const result = await escalateKimDecisions(opts);
+  assert.equal(result.sent, 1);
+  assert.deepEqual(result.targets.map(target => target.rowKey), [escalationRowKey(fresh)]);
+  assert.deepEqual(result.suppressed.map(entry => entry.reason).sort(), ['already-open', 'answered']);
+  assert.deepEqual(synced, ['既製品ですすめて']);
+  assert.equal(sentOptions[0].dedupeKey, `auto-progress-escalate:${escalationRowKey(fresh)}`);
+  assert.equal(sentOptions[0].source, 'auto-progress-escalate');
 });

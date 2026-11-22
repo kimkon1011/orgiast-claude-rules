@@ -563,3 +563,21 @@ test('buildPrompt(repo) と buildPrompt(repo, { preFile }) の出力に deadline
   assert.doesNotMatch(promptWithPreFile, /強制終了される/);
   assert.doesNotMatch(promptWithPreFile, /残り秒数 − 480/);
 });
+
+test('runOnce records runMs in run.log for main invoke and watch', async (t) => {
+  const opts = fixture(t);
+  await runAutopilot('start', { objective: 'test runMs' }, opts);
+  await runOnce({
+    ...opts,
+    invokeImpl: async (invocation) => {
+      await runAutopilot('post', { summary: 'done', progress: 10 }, opts);
+      return { exitCode: 0 };
+    },
+  });
+  const log = fs.readFileSync(path.join(opts.dir, 'run.log'), 'utf8');
+  const lines = log.trim().split('\n').map(JSON.parse);
+  const resultLine = lines.find(l => l.model && l.authLane);
+  assert.ok(resultLine, 'expected a result line in run.log');
+  assert.ok(Number.isFinite(resultLine.runMs), 'runMs should be a finite number');
+  assert.ok(resultLine.runMs >= 0, 'runMs should be >= 0');
+});

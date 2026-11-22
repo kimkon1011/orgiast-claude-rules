@@ -5,6 +5,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "node \"${CLAUDE_PROJECT_DIR}/tools/event-shop-inquiry-triage.mjs\"",
+            "async": true,
+            "timeout": 30
+          },
+          {
+            "type": "command",
             "command": "node \"${CLAUDE_PROJECT_DIR}/tools/session-bootstrap.mjs\"",
             "async": true,
             "timeout": 360

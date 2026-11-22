@@ -15,8 +15,12 @@ import { isEntry } from './is-entry.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
 import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, recordNaturalLanguageAnswers, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
 import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
+import { matchesRow, parseEscalation, syncEscalationAnswer } from './lib/escalation-answer-sync.mjs';
 const exec = promisify(execFile);
 const directory = home => path.join(home, '.claude/kim-inbox');
+const archiveDirectory = home => path.join(directory(home), '.archive');
+const archiveIndex = home => path.join(archiveDirectory(home), 'index.jsonl');
+const DAY_MS = 86_400_000;
 const clean = value => redactSecrets(String(value ?? '')).slice(0, 4000);
 // Redaction/truncation is lossy and must not collapse distinct producer identities.
 // Hash only affected keys; short chunks keep the opaque digest stable through spooling.
@@ -66,7 +70,7 @@ function save(home, item) {
   finally { fs.rmSync(temp, { force: true }); }
 }
 // 同じ項目の回答・表示更新を直列化し、古い表示更新が回答を上書きしない。
-function acquireInboxLock(home, key, waitMs = 10_000) {
+function acquireInboxLock(home, key, waitMs = 60_000) {
   fs.mkdirSync(directory(home), { recursive: true });
   const lock = path.join(directory(home), `${key}.lock`);
   let fd;
@@ -86,29 +90,45 @@ function acquireInboxLock(home, key, waitMs = 10_000) {
   if (fd === undefined) throw new Error('kim-inbox: 台帳が使用中です');
   return () => { fs.closeSync(fd); fs.unlinkSync(lock); };
 }
-function locked(home, key, fn) {
-  const release = acquireInboxLock(home, key);
+function locked(home, key, fn, waitMs) {
+  const release = acquireInboxLock(home, key, waitMs);
   try { return fn(); } finally { release(); }
 }
 function update(home, id, fn) {
   if (!validId(id)) throw new Error('kim-inbox: ID が不正です');
   return locked(home, id, () => {
-    const item = JSON.parse(fs.readFileSync(path.join(directory(home), `${id}.json`), 'utf8'));
-    fn(item); save(home, item); return item;
+    const file = path.join(directory(home), `${id}.json`);
+    const archived = !fs.existsSync(file) && archivedItemPath(home, id);
+    const item = JSON.parse(fs.readFileSync(archived || file, 'utf8'));
+    fn(item);
+    // Bring a record back before updating it. A live file takes precedence over the index.
+    if (archived) fs.renameSync(archived, file);
+    save(home, item);
+    return item;
   });
 }
 export { update as updateInboxItem };
 export const isHighInfo = item => item.kind === 'info' && (item.priority === 'high' || /^auto-progress-(done|heartbeat)$/.test(item.source) || /完了|進捗|進んでいる|承認待ち|✅|未達|確認エラー|判断待ち|自動進行|まとめ/.test(item.text));
 const hasWorkId = item => /作業ID:\s*[a-f0-9]{8}(?![a-f0-9])/i.test(item.text);
 const newestFirst = (a, b) => (b.lastAt || b.createdAt).localeCompare(a.lastAt || a.createdAt) || b.id.localeCompare(a.id);
-function normalizationKey(text) {
-  return text.replace(/^【[^\r\n]*】[^\S\r\n]*(?:\r?\n|$)/, '')
-    .replace(/\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?/g, '#')
-    .replace(/\b(?:0x[a-f0-9]+|[a-f0-9]{8,})\b/gi, '#')
-    .replace(/\d+/g, '#').slice(0, 120);
-}
+export const normalizeInboxText = text => String(text ?? '')
+  .normalize('NFKC')
+  .trim()
+  .replace(/^(?:【[^】]*】\s*)+/, '')
+  .replace(/\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b|\b\d{1,2}\/\d{1,2}\b|\d{1,2}月\d{1,2}日/g, '')
+  .replace(/\d+(日|件|時間)/g, 'N$1')
+  .replace(/(?:\bkim\b|キムさん|キム|金さん|金功勇)\s*/gi, 'KIM')
+  .replace(/[\p{Extended_Pictographic}\uFE0E\uFE0F\u200D]/gu, '')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .toLowerCase();
+const contentDedupeKey = item => `${item.kind}\n${normalizeInboxText(item.text)}`;
+const legacyInfoKey = text => text.replace(/^【[^\r\n]*】[^\S\r\n]*(?:\r?\n|$)/, '')
+  .replace(/\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?/g, '#')
+  .replace(/\b(?:0x[a-f0-9]+|[a-f0-9]{8,})\b/gi, '#')
+  .replace(/\d+/g, '#').slice(0, 120);
 // 集約の検索と作成を同じロックで守り、同時追加も取りこぼさない。
-function create(home, options) {
+function create(home, options, lockWaitMs) {
   return locked(home, 'info-aggregation', () => {
     const text = clean(options.text);
     if (options.kind === 'deadline') {
@@ -122,7 +142,8 @@ function create(home, options) {
     // Durable producers retry after a crash between inbox delivery and ledger update.
     // Keep distinct jobs separate even when their text normalizes to the same prefix.
     if (options.dedupeKey) {
-      const existing = listItems(home).find(item => item.dedupeKey === inboxDedupeKey(options.dedupeKey));
+      const key = inboxDedupeKey(options.dedupeKey);
+      const existing = listInboxMatches(home, item => item.dedupeKey === key)[0];
       if (existing && options.progressAt && options.kind === 'info') {
         return update(home, existing.id, current => {
           if ((Date.parse(current.progressAt) || 0) >= Date.parse(options.progressAt)) return;
@@ -144,10 +165,15 @@ function create(home, options) {
         current.forwardMailId = options.forwardMailId || null; current.forwardError = null;
       });
       if (existing && options.replaceExisting) return update(home, existing.id, current => {
-        const changed = current.text !== text || (options.revision !== undefined && current.revision !== options.revision) || (options.dailyProgress && (!current.dailyProgress || current.progressDay !== options.progressDay));
+        const changed = current.text !== text || (options.kind && current.kind !== options.kind) || (options.revision !== undefined && current.revision !== options.revision) || (options.dailyProgress && (!current.dailyProgress || current.progressDay !== options.progressDay));
         if (options.forwardMailId) current.forwardMailId = options.forwardMailId;
         if (!changed) return;
-        current.text = text; current.lastAt = new Date().toISOString(); current.status = 'open';
+        current.text = text; current.kind = options.kind ?? current.kind; current.lastAt = new Date().toISOString(); current.status = 'open';
+        if (options.incrementExisting) {
+          current.count = (current.count ?? current.repeatCount ?? 1) + 1;
+          current.lastSeenAt = current.lastAt;
+          if (current.kind === 'info') current.repeatCount = current.count;
+        }
         if (options.revision !== undefined) current.revision = options.revision;
         current.answer = null; current.answeredAt = null; current.answerSession = null;
         current.shownSessions = []; current.shownCount = 0;
@@ -157,17 +183,21 @@ function create(home, options) {
           current.progressVersion = (current.progressVersion || 0) + 1;
         }
       });
-      return existing || createNew(home, options);
+      if (!existing) return createNew(home, options);
+      return existing.shownSessions ? existing : readInboxItem(home, existing.id, [existing]);
     }
-    if ((options.kind ?? 'info') === 'info') {
-      const key = normalizationKey(text);
-      const matches = listItems(home, { status: 'open' }).filter(i => !i.dedupeKey && i.kind === 'info' && normalizationKey(i.text) === key).sort(newestFirst);
+    const kind = options.kind ?? 'info';
+    if (['ask', 'info'].includes(kind)) {
+      const key = `${kind}\n${normalizeInboxText(text)}`;
+      const matches = listItems(home, { status: 'open' }).filter(i => !i.dedupeKey && contentDedupeKey(i) === key).sort(newestFirst);
       for (const match of matches) {
         let merged = false;
         const item = update(home, match.id, current => {
           if (current.status !== 'open') return;
-          current.repeatCount = (current.repeatCount ?? 1) + 1;
-          current.lastAt = new Date().toISOString(); current.text = text;
+          const now = new Date().toISOString();
+          current.count = (current.count ?? current.repeatCount ?? 1) + 1;
+          current.lastSeenAt = now;
+          if (current.kind === 'info') { current.repeatCount = current.count; current.lastAt = now; current.text = text; }
           // 進捗の再送（まとめの明示再送など）は既表示でも kim にもう一度出す。
           if (isHighInfo(current)) { current.shownSessions = []; current.shownCount = 0; }
           if (options.forwardMailId) current.forwardMailId = options.forwardMailId;
@@ -177,14 +207,14 @@ function create(home, options) {
       }
     }
     return createNew(home, options);
-  });
+  }, lockWaitMs);
 }
 export function compactItems(home) {
   return locked(home, 'info-aggregation', () => {
     const groups = new Map();
     for (const item of listItems(home, { status: 'open' })) {
       if (item.dedupeKey || item.kind !== 'info' || isHighInfo(item) || hasWorkId(item)) continue;
-      const key = normalizationKey(item.text);
+      const key = legacyInfoKey(item.text);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(item);
     }
@@ -207,6 +237,72 @@ export function compactItems(home) {
     return result;
   });
 }
+export function dedupeExisting(home, { apply = false } = {}) {
+  const inspect = () => {
+    const open = listItems(home, { status: 'open' }).filter(item => ['ask', 'info'].includes(item.kind));
+    const groups = new Map();
+    for (const item of open) {
+      const key = contentDedupeKey(item);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    }
+    const duplicateGroups = [...groups.values()].filter(items => items.length > 1);
+    const merged = duplicateGroups.reduce((total, items) => total + items.length - 1, 0);
+    if (apply) for (const items of duplicateGroups) {
+      const [kept, ...duplicates] = items;
+      const totalCount = items.reduce((total, item) => total + (item.count ?? item.repeatCount ?? 1), 0);
+      const lastSeenAt = items.map(item => item.lastSeenAt || item.lastAt || item.createdAt).sort().at(-1);
+      update(home, kept.id, current => {
+        if (current.status !== 'open') return;
+        current.count = totalCount;
+        current.lastSeenAt = lastSeenAt;
+        if (current.kind === 'info') { current.repeatCount = totalCount; current.lastAt = lastSeenAt; }
+      });
+      for (const duplicate of duplicates) update(home, duplicate.id, current => {
+        if (current.status !== 'open') return;
+        current.status = 'merged'; current.mergedInto = kept.id;
+      });
+    }
+    return { before: open.length, after: open.length - merged, groups: duplicateGroups.length, merged, applied: apply };
+  };
+  return apply ? locked(home, 'info-aggregation', inspect) : inspect();
+}
+
+const rescueBranches = items => [...new Set(items.flatMap(item => String(item.text || '').match(/rescue\/(?:auto-session|sync-orgiast-main)-\d{8}-\d{6}(?:-\d+)?/g) || []))];
+export function mergeItemsInto(home, dedupeKey, ids) {
+  if (!dedupeKey) throw new Error('--merge-into にはキーが必要です');
+  const requested = [...new Set(ids.map(id => String(id).trim()).filter(Boolean))];
+  if (requested.length < 2 || requested.some(id => !validId(id))) throw new Error('--ids には有効な ID を2件以上指定してください');
+  return withInboxGroupLock(home, () => {
+    const byId = new Map(listItems(home).map(item => [item.id, item]));
+    const items = requested.map(id => byId.get(id));
+    if (items.some(item => !item)) throw new Error('指定された受信箱IDが見つかりません');
+    const kept = [...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))[0];
+    const branches = rescueBranches(items);
+    const total = items.reduce((sum, item) => sum + (item.count ?? item.repeatCount ?? 1), 0);
+    const lastSeenAt = items.map(item => item.lastSeenAt || item.lastAt || item.createdAt).sort().at(-1);
+    const latest = branches.slice().sort().at(-1) || '不明';
+    const text = `rescue ブランチのレビュー・削除承認待ち（最新: ${latest} ／ 計 ${total} 件）\n対象ブランチ:\n${branches.map(branch => `- ${branch}`).join('\n')}`;
+    update(home, kept.id, current => {
+      current.status = 'open';
+      current.kind = 'ask';
+      current.dedupeKey = inboxDedupeKey(dedupeKey);
+      current.text = clean(text);
+      current.count = total;
+      current.lastSeenAt = lastSeenAt;
+      current.lastAt = lastSeenAt;
+    });
+    for (const item of items) {
+      if (item.id === kept.id) continue;
+      update(home, item.id, current => {
+        current.status = 'superseded';
+        current.answer = `集約先: ${kept.id}`;
+        current.answeredAt = new Date().toISOString();
+      });
+    }
+    return { keptId: kept.id, superseded: items.length - 1, count: total, branches };
+  });
+}
 function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen, progressAt }) {
   if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');
   if (doneWhen && kind !== 'ask') throw new Error('--done-when-gmail は ask 専用です');
@@ -214,7 +310,7 @@ function createNew(home, { kind = 'info', text, source = '', from = resolveFleet
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     if (revision !== undefined) item.revision = revision;
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -245,7 +341,7 @@ export function spoolItem(home, options) {
   } finally { fs.rmSync(temp, { force: true }); }
   return { delivered: 'spooled', id };
 }
-export async function drainSpool(home, { stderr = console.error, execImpl, signal } = {}) {
+export async function drainSpool(home, { stderr = console.error, execImpl, signal, lockWaitMs } = {}) {
   const dir = path.join(directory(home), 'spool');
   if (!fs.existsSync(dir)) return [];
   let release;
@@ -259,7 +355,7 @@ export async function drainSpool(home, { stderr = console.error, execImpl, signa
       try {
         const record = JSON.parse(fs.readFileSync(file, 'utf8'));
         if (!['ask', 'info'].includes(record.kind) || typeof record.text !== 'string' || !record.dedupeKey) throw new Error('invalid spool record');
-        const item = await addItem(home, { ...record, execImpl, signal }, { drain: false });
+        const item = await addItem(home, { ...record, execImpl, signal }, { drain: false, lockWaitMs });
         if (item.status === 'open' && item.forwardError) break; // Retry forwarding on the next pass as well.
         fs.unlinkSync(file);
         imported.push(item);
@@ -271,11 +367,11 @@ export async function drainSpool(home, { stderr = console.error, execImpl, signa
   } finally { release(); }
   return imported;
 }
-export async function addItem(home, options, { drain = true } = {}) {
-  if (drain) await drainSpool(home, { execImpl: options.execImpl, signal: options.signal });
+export async function addItem(home, options, { drain = true, localOnly = false, lockWaitMs } = {}) {
+  if (drain) await drainSpool(home, { execImpl: options.execImpl, signal: options.signal, lockWaitMs });
   if (isInboxNoise(options)) return { id: null, status: 'suppressed', kind: options.kind || 'info' };
-  const item = create(home, options);
-  if (item.kind === 'deadline' || isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;
+  const item = create(home, options, lockWaitMs);
+  if (localOnly || item.kind === 'deadline' || isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-inbox-'));
   try {
     const file = path.join(temp, 'body.txt');
@@ -288,6 +384,152 @@ export async function addItem(home, options, { drain = true } = {}) {
     return update(home, item.id, current => { current.forwardError = clean(error.message); });
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 }
+const byCreation = (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+
+function readArchiveIndex(home) {
+  try {
+    return fs.readFileSync(archiveIndex(home), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+const archiveMonth = item => new Date(item.createdAt).toISOString().slice(0, 7);
+
+function archivedItemPath(home, id, index = readArchiveIndex(home)) {
+  const entry = index.find(item => item.id === id);
+  return entry && path.join(archiveDirectory(home), archiveMonth(entry), `${id}.json`);
+}
+
+export function readInboxItem(home, id, index) {
+  if (!validId(id)) return undefined;
+  const file = path.join(directory(home), `${id}.json`);
+  const read = target => {
+    if (!target) return undefined;
+    try { return JSON.parse(fs.readFileSync(target, 'utf8')); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  };
+  return read(file) ?? read(archivedItemPath(home, id, index)) ?? read(file);
+}
+
+// Index rows contain the fields used by history-based matching, while the
+// original remains available for explicit reads and updates.
+export function listInboxMatches(home, matches, { originals = false } = {}) {
+  const live = listItems(home);
+  const liveIds = new Set(live.map(item => item.id));
+  const archived = readArchiveIndex(home).filter(item => !liveIds.has(item.id) && matches(item));
+  const history = originals ? archived.map(item => readInboxItem(home, item.id, [item])).filter(Boolean) : archived;
+  return live.filter(matches).concat(history).sort(byCreation);
+}
+
+function archiveEntry(item) {
+  const { id, createdAt, kind, status, dedupeKey, source, forwardMailId, forwardError,
+    answeredAt, lastAt, answer, text, sessionId, dailyProgress } = item;
+  return { id, createdAt, kind, status, dedupeKey, source, forwardMailId, forwardError, answeredAt, lastAt,
+    contentKey: kind === 'ask' ? contentDedupeKey(item) : undefined,
+    ...(kind === 'ask' ? { answer, text, sessionId } : {}),
+    ...(source?.startsWith('auto-progress-human:') ? { hasText: Boolean(text) } : {}),
+    ...(dailyProgress ? { dailyProgress } : {}) };
+}
+
+function writeArchiveFile(file, text) {
+  const temp = `${file}.${randomBytes(8).toString('hex')}.tmp`;
+  const fd = fs.openSync(temp, 'wx', 0o600);
+  try {
+    fs.writeFileSync(fd, text);
+    fs.fsyncSync(fd);
+  } finally { fs.closeSync(fd); }
+  fs.renameSync(temp, file);
+}
+
+function moveLockDebris(home, now) {
+  const dir = directory(home), archive = archiveDirectory(home);
+  let moved = 0;
+  const files = fs.readdirSync(dir, { withFileTypes: true }).filter(entry => entry.isFile()
+    && (/\.stale-.+$/.test(entry.name) || entry.name.endsWith('.tmp'))).map(entry => path.join(dir, entry.name));
+  for (const entry of fs.readdirSync(archive, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith('.tmp')) files.push(path.join(archive, entry.name));
+  }
+  for (const file of files) {
+    const name = path.basename(file);
+    const id = /^(ki-\d{14}-[a-f0-9]{4})\.json\./.exec(name)?.[1];
+    const move = () => {
+      try {
+        // Item temps are protected by the item lock. Generic temps may have an active writer.
+        if (!id && path.dirname(file) === dir && name.endsWith('.tmp')
+          && now - fs.statSync(file).mtimeMs < STALE_LOCK_MS) return;
+        const targetDir = path.join(archive, 'lock-debris');
+        fs.mkdirSync(targetDir, { recursive: true });
+        fs.renameSync(file, path.join(targetDir, `${randomBytes(8).toString('hex')}-${name}`));
+        moved++;
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    };
+    if (!id) move();
+    else {
+      const release = tryArchiveItemLock(home, id);
+      if (release) try { move(); } finally { release(); }
+    }
+  }
+  return moved;
+}
+
+function tryArchiveItemLock(home, id) {
+  try { return acquireInboxLock(home, id, 0); }
+  catch (error) {
+    if (error.message !== 'kim-inbox: 台帳が使用中です') throw error;
+    return undefined;
+  }
+}
+
+export function archiveClosed(home, { apply = false, olderThanDays = 3, now = Date.now(), daily = false } = {}) {
+  if (!Number.isSafeInteger(olderThanDays) || olderThanDays < 0) throw new Error('--older-than-days には 0 以上の整数を指定してください');
+  const dir = directory(home), archive = archiveDirectory(home);
+  const day = new Date(now + 9 * 3600000).toISOString().slice(0, 10);
+  const stamp = path.join(archive, 'last-daily-run');
+  const result = { applied: apply, eligible: 0, moved: 0, debrisMoved: 0 };
+  const ranToday = () => daily && fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8').trim() === day;
+  if (ranToday()) return result;
+  const run = () => {
+    if (ranToday()) return result;
+    const cutoff = now - olderThanDays * DAY_MS;
+    const candidates = listItems(home).filter(item => {
+      if (!item.status || item.status === 'open') return false;
+      const file = path.join(dir, `${item.id}.json`);
+      const mtime = fs.statSync(file, { throwIfNoEntry: false })?.mtimeMs;
+      return mtime !== undefined && Math.max(mtime, ...[item.createdAt, item.answeredAt, item.lastAt]
+        .map(Date.parse).filter(Number.isFinite)) <= cutoff;
+    });
+    result.eligible = candidates.length;
+    if (!apply) return result;
+    fs.mkdirSync(archive, { recursive: true, mode: 0o700 });
+    if (candidates.length) {
+      const index = new Map(readArchiveIndex(home).map(entry => [entry.id, entry]));
+      for (const item of candidates) index.set(item.id, archiveEntry(item));
+      // Commit the index first. An interrupted move leaves the live item authoritative.
+      writeArchiveFile(archiveIndex(home), [...index.values()].map(entry => JSON.stringify(entry) + '\n').join(''));
+      for (const item of candidates) {
+        const release = tryArchiveItemLock(home, item.id);
+        if (!release) continue;
+        try {
+          const file = path.join(dir, `${item.id}.json`);
+          // An answer, relay update or reopen may have happened since the scan.
+          if (JSON.stringify(readInboxItem(home, item.id)) !== JSON.stringify(item)
+            || fs.statSync(file).mtimeMs > cutoff) continue;
+          const month = path.join(archive, archiveMonth(item));
+          fs.mkdirSync(month, { recursive: true });
+          fs.renameSync(file, path.join(month, path.basename(file)));
+          result.moved++;
+        } finally { release(); }
+      }
+    }
+    result.debrisMoved = moveLockDebris(home, now);
+    if (daily) writeArchiveFile(stamp, day + '\n');
+    return result;
+  };
+  return apply ? withInboxGroupLock(home, run) : run();
+}
+
 export function listItems(home, { status } = {}) {
   let files;
   try { files = fs.readdirSync(directory(home)); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
@@ -300,10 +542,69 @@ export function listItems(home, { status } = {}) {
       return valid && (!status || item.status === status) ? [item] : [];
     }
     catch { return []; } // 破損した1件で他の未回収項目を隠さない。
-  }).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  }).sort(byCreation);
 }
+// Share the creation lock so a duplicate cannot be added during a group update.
+export function withInboxGroupLock(home, fn) {
+  const rawWaitMs = process.env.ORGIAST_INBOX_GROUP_LOCK_WAIT_MS;
+  const waitMs = rawWaitMs?.trim() ? Number(rawWaitMs) : undefined;
+  return locked(home, 'info-aggregation', fn, Number.isFinite(waitMs) && waitMs >= 0 ? waitMs : undefined);
+}
+
+export function supersedeAsk(home, id, target) {
+  let changed = false;
+  update(home, id, current => {
+    if (current.kind !== 'ask' || current.status !== 'open') return;
+    Object.assign(current, {
+      status: 'superseded', supersededInto: target.id,
+      answer: target.answer ?? null, answeredAt: target.answeredAt ?? null,
+    });
+    changed = true;
+  });
+  return changed;
+}
+
+function resolveItem(home, id, fields) {
+  const item = update(home, id, current => Object.assign(current, fields, { answeredAt: new Date().toISOString() }));
+  syncLedger(home, item);
+  if (item.kind !== 'ask') return item;
+
+  const parsed = parseEscalation(item);
+  if (!parsed && !item.dedupeKey) return item;
+  try {
+    withInboxGroupLock(home, () => {
+      const row = parsed && (readLedger(ledgerFile(home)).find(candidate => matchesRow(item, candidate))
+        || { ts: parsed.ts, sessionId: item.sessionId?.slice(0, 8) === parsed.session ? item.sessionId : parsed.session });
+      for (const candidate of listItems(home, { status: 'open' })) {
+        if (candidate.kind !== 'ask') continue;
+        if ((item.dedupeKey && candidate.dedupeKey === item.dedupeKey) || (row && matchesRow(candidate, row))) {
+          supersedeAsk(home, candidate.id, item);
+        }
+      }
+    });
+  } catch (error) {
+    console.error('kim-inbox: 同じ質問の整理に失敗（回答は記録済み、次回 dedupe-backfill で整理）: ' + clean(error?.message ?? error));
+  }
+  return item;
+}
+
 export function answerItem(home, id, answer, sessionId = '') {
-  return update(home, id, item => { item.status = 'answered'; item.answer = clean(answer); item.answeredAt = new Date().toISOString(); item.answerSession = clean(sessionId); });
+  return resolveItem(home, id, { status: 'answered', answer: clean(answer), answerSession: clean(sessionId) });
+}
+// 質問を出す前の照合（2026-11-19）: 語をすべて含む回答済み・取り下げ済みの ask を新しい順に返す。
+// 別セッションが同じ質問を kim に出し直さないよう、質問前に `--lookup "<語> <語>"` で確かめる。
+export function lookupAnswers(home, query, { now = Date.now(), days = 60 } = {}) {
+  const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) throw new Error('--lookup には検索語が必要です');
+  return listInboxMatches(home, item => item.kind === 'ask' && ['answered', 'dropped'].includes(item.status)
+    && now - (Date.parse(item.answeredAt || item.lastAt || item.createdAt) || 0) < days * 86400000
+    && words.every(word => `${item.text}\n${item.answer || ''}`.toLowerCase().includes(word)))
+    .sort((a, b) => String(b.answeredAt || b.createdAt).localeCompare(String(a.answeredAt || a.createdAt)))
+    .slice(0, 20).map(item => ({ id: item.id, status: item.status, answeredAt: item.answeredAt || null, answer: item.answer, question: item.text.slice(0, 300) }));
+}
+// 判断待ちエスカレーションへの回答・取り下げは自動進行台帳の行にも書き戻す（翌日の再質問を止める）。
+function syncLedger(home, item) {
+  try { syncEscalationAnswer(home, item); } catch (error) { console.error(`kim-inbox: 台帳への回答書き戻しに失敗: ${clean(error?.message || String(error))}`); }
 }
 export function markSeen(home, id) {
   return update(home, id, item => { if (item.kind !== 'info') throw new Error('ask は --answer で返答を記録してください'); item.status = 'seen'; });
@@ -360,7 +661,7 @@ export function deadlineSheetUrl(home) {
 }
 export function dropItem(home, id, reason) {
   if (!String(reason ?? '').trim()) throw new Error('取り下げ理由が必要です');
-  return update(home, id, item => { item.status = 'dropped'; item.answer = clean(reason); });
+  return resolveItem(home, id, { status: 'dropped', answer: clean(reason) });
 }
 const inboxDir = home => path.join(home, '.claude/fleet-inbox');
 const readJsonFile = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
@@ -418,7 +719,7 @@ export async function ingestFleetMail(home) {
       // 作成直後に終了しても forwardMailId から再発見し、二重起票を防ぐ。
       const daily = /^【進捗・毎朝】/.test(mail.body || '');
       const progressId = daily && mail.body.match(/作業ID:\s*([^\r\n]+)/)?.[1];
-      const item = listItems(home).find(i => i.forwardMailId === id) ?? (isInboxNoise({ kind, text: mail.body }) ? { id: 'suppressed', status: 'suppressed' } : create(home, { kind, text: mail.body, from: mail.from, source, ...(producerKey ? { dedupeKey: `fleet:${mail.from}:${producerKey}`, refresh: true } : {}), forwardMailId: id, ...(progressId ? { dedupeKey: `auto-progress-daily:${progressId}`, replaceExisting: true, dailyProgress: true, progressDay: new Date((Date.parse(mail.createdAt || mail.ts) || Date.now()) + 9 * 3600000).toISOString().slice(0, 10) } : {}) }));
+      const item = listInboxMatches(home, i => i.forwardMailId === id)[0] ?? (isInboxNoise({ kind, text: mail.body }) ? { id: 'suppressed', status: 'suppressed' } : create(home, { kind, text: mail.body, from: mail.from, source, ...(producerKey ? { dedupeKey: `fleet:${mail.from}:${producerKey}`, refresh: true } : {}), forwardMailId: id, ...(progressId ? { dedupeKey: `auto-progress-daily:${progressId}`, replaceExisting: true, dailyProgress: true, progressDay: new Date((Date.parse(mail.createdAt || mail.ts) || Date.now()) + 9 * 3600000).toISOString().slice(0, 10) } : {}) }));
       fs.mkdirSync(path.dirname(marker), { recursive: true });
       fs.writeFileSync(marker, item.id, { flag: 'wx', mode: 0o600 });
       imported.push(item);
@@ -543,8 +844,8 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
 }
 export function oneScreenSummary(items) {
   const openItems = items.filter(i => i.status === 'open');
-  const asks = openItems.filter(i => i.kind === 'ask').sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
-  const infos = openItems.filter(i => i.kind === 'info').sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const asks = openItems.filter(i => i.kind === 'ask').sort(byCreation);
+  const infos = openItems.filter(i => i.kind === 'info').sort(byCreation);
   const lines = [];
   const askCount = asks.length;
   lines.push(`📌 kim の返事待ち ${askCount}件`);
@@ -588,7 +889,8 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       await drainSpool(home);
       if (kim) await ingestFleetMail(home);
       await autoCloseByGmail(home);
-      const items = listItems(home).filter(i => (i.status === 'open' || (i.dailyProgress && i.status === 'seen')) && (kim || i.forwardError));
+      const active = i => (i.status === 'open' || (i.dailyProgress && i.status === 'seen')) && (kim || i.forwardError);
+      const items = listInboxMatches(home, active, { originals: true });
       const counts = new Map(items.map(i => [i.id, i.shownCount]));
       const context = selectContext(items, { sessionId: String(input.session_id ?? ''), sheetUrl: deadlineSheetUrl(home), home, event });
       if (kim) recordInjection(home, sessionId, items.filter(i => i.shownCount !== counts.get(i.id) && (i.kind === 'ask' || isHighInfo(i))), { event });
@@ -603,7 +905,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       });
     } else if (args.includes('--show')) {
       // The brief's fallback must offer a read-only path to the complete original.
-      const item = listItems(home).find(item => item.id === value('--show'));
+      const item = readInboxItem(home, value('--show'));
       if (!item) throw new Error('指定された受信箱IDが見つかりません');
       stdout(args.includes('--json') ? JSON.stringify(item) : redactSecrets(item.text));
     } else if (args.includes('--add')) {
@@ -614,21 +916,39 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
         if (pipe === -1) throw new Error('--done-when-gmail は "user|query" 形式で指定してください');
         doneWhen = { gmail: { user: raw.slice(0, pipe).trim(), query: raw.slice(pipe + 1).trim() } };
       }
-      const item = await addItem(home, { urgent: args.includes('--urgent'), text: fs.readFileSync(value('--body-file'), 'utf8'), kind: args.includes('--kind') ? value('--kind') : 'info', key: args.includes('--key') ? value('--key') : undefined, due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '', ...(doneWhen ? { doneWhen } : {}) });
+      const item = await addItem(home, { urgent: args.includes('--urgent'), text: fs.readFileSync(value('--body-file'), 'utf8'), kind: args.includes('--kind') ? value('--kind') : 'info', key: args.includes('--key') ? value('--key') : undefined, dedupeKey: args.includes('--dedupe-key') ? value('--dedupe-key') : undefined, replaceExisting: args.includes('--replace-existing'), due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '', ...(doneWhen ? { doneWhen } : {}) });
       stdout(JSON.stringify({ id: item.id, status: item.status, forwarded: item.status === 'forwarded' }));
     } else if (args.includes('--answer')) stdout(JSON.stringify(answerItem(home, value('--answer'), fs.readFileSync(value('--body-file'), 'utf8'), process.env.CLAUDE_SESSION_ID || '')));
+    else if (args.includes('--lookup')) stdout(JSON.stringify(lookupAnswers(home, value('--lookup')), null, 2));
     else if (args.includes('--seen-matching')) stdout(JSON.stringify(seenMatching(home, value('--seen-matching'), args.includes('--kind') ? value('--kind') : 'info')));
     else if (args.includes('--seen')) stdout(JSON.stringify(markSeen(home, value('--seen'))));
     else if (args.includes('--close-key')) stdout(JSON.stringify(closeKey(home, value('--close-key'))));
     else if (args.includes('--drop')) stdout(JSON.stringify(dropItem(home, value('--drop'), args.includes('--reason') ? value('--reason') : '')));
     else if (args.includes('--compact')) stdout(JSON.stringify(compactItems(home)));
-    else if (args.includes('--auto-close')) stdout(JSON.stringify(await autoCloseByGmail(home)));
+    else if (args.includes('--merge-into')) stdout(JSON.stringify(mergeItemsInto(home, value('--merge-into'), value('--ids').split(','))));
+    else if (args.includes('--dedupe-existing')) {
+      const result = dedupeExisting(home, { apply: args.includes('--apply') });
+      stdout(`kim-inbox dedupe-existing${result.applied ? ' (apply)' : ' (dry)'}: ${result.before}件 → ${result.after}件（重複 ${result.merged}件、${result.groups}グループ）`);
+    }
+    else if (args.includes('--archive-closed')) {
+      const apply = args.includes('--apply');
+      if (apply && args.includes('--dry')) throw new Error('--dry と --apply は併用できません');
+      const raw = args.includes('--older-than-days') ? value('--older-than-days') : '3';
+      if (!/^\d+$/.test(raw ?? '')) throw new Error('--older-than-days には 0 以上の整数を指定してください');
+      stdout(JSON.stringify(archiveClosed(home, { apply, olderThanDays: Number(raw) })));
+    }
+    else if (args.includes('--auto-close')) {
+      const result = await autoCloseByGmail(home);
+      archiveClosed(home, { apply: true, daily: true });
+      stdout(JSON.stringify(result));
+    }
     else if (args.includes('--status') || args.includes('--list')) {
       await autoCloseByGmail(home);
-      const items = listItems(home, { status: args.includes('--open') || args.includes('--status') ? 'open' : undefined });
+      const items = args.includes('--open') || args.includes('--status') ? listItems(home, { status: 'open' })
+        : listInboxMatches(home, () => true, { originals: true });
       if (args.includes('--status')) stdout(`kim-inbox: open ask ${items.filter(i => i.kind === 'ask').length} / open info ${items.filter(i => i.kind === 'info').length}\n最古: ${items.length ? `${items[0].id} ${items[0].text.split(/\r?\n/)[0].slice(0, 120)}` : 'なし'}`);
-      else stdout(args.includes('--json') ? JSON.stringify(items) : displayPcNames(items.map(i => `${i.id} ${i.kind} ${i.status} ${i.text.split(/\r?\n/)[0]}`).join('\n'), { home }));
-    } else throw new Error('--add / --answer / --seen / --drop / --show / --list / --status / --context / --compact / --auto-close を指定してください');
+      else stdout(args.includes('--json') ? JSON.stringify(items) : displayPcNames(items.map(i => `${i.id} ${i.kind} ${i.status} ${i.text.split(/\r?\n/)[0]}${(i.count ?? i.repeatCount ?? 1) >= 2 ? ` (同じ内容 ${i.count ?? i.repeatCount} 件)` : ''}`).join('\n'), { home }));
+    } else throw new Error('--add / --answer / --seen / --drop / --show / --list / --status / --context / --compact / --merge-into <key> --ids <id,...> / --dedupe-existing [--dry|--apply] / --auto-close を指定してください');
     return 0;
   } catch (error) { stderr(`kim-inbox: ${clean(error.message).replace(/[\r\n]+/g, ' ')}`); return args.includes('--context') ? 0 : 1; }
 }

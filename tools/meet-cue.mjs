@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { finished } from 'node:stream/promises';
 import { randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -35,6 +36,9 @@ import {
   formatJstSessionDate,
   sanitizeCardData,
   resolveBotDisplayName,
+  matchesSeatHostname,
+  resolveSeatHostnames,
+  shouldCallJev,
 } from './lib/meet-cue-core.mjs';
 
 import {
@@ -49,6 +53,7 @@ import {
   checkPlaywrightAvailable,
   checkProfileLoggedIn,
   isProfileSignedIn,
+  REQUIRED_GOOGLE_COOKIES,
 } from './lib/meet-cue-browser.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -274,8 +279,8 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'doctor') {
     const playwrightInfo = await checkPlaywrightAvailable();
     const profileDir = path.join(os.homedir(), '.claude', 'browser-profiles', 'meet-bot-seisaku');
-    const loggedIn = await checkProfileLoggedIn(profileDir);
-    const signedIn = await isProfileSignedIn(profileDir);
+    const profileDiag = await checkProfileLoggedIn(profileDir);
+    const signInDiag = await isProfileSignedIn(profileDir);
 
     let jevDoctor = { ok: false };
     try {
@@ -288,12 +293,100 @@ export async function main(argv = process.argv.slice(2)) {
       dwdTokenOk = Boolean(token);
     } catch { /* ignore */ }
 
+    // Check bot-login.json
+    let botLoginInfo = null;
+    const botLoginPath = path.join(meetCueBaseDir(), 'bot-login.json');
+    try {
+      if (fs.existsSync(botLoginPath)) {
+        botLoginInfo = JSON.parse(fs.readFileSync(botLoginPath, 'utf8'));
+      }
+    } catch { /* ignore */ }
+
+    // Check seat hostname match
+    let seatHostnameMatch = false;
+    let configSeatHostnames = [];
+    try {
+      const configPath = fileURLToPath(new URL('../config/meet-cue.json', import.meta.url));
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        configSeatHostnames = resolveSeatHostnames(config);
+        seatHostnameMatch = matchesSeatHostname(configSeatHostnames, os.hostname());
+      }
+    } catch { /* ignore */ }
+
+    // Build actionable guidance
+    const issues = [];
+    const guidance = [];
+
+    if (!playwrightInfo.available) {
+      issues.push('playwright_unavailable');
+      guidance.push('npm install playwright-core を実行し、npx playwright install chromium でブラウザをインストールしてください。');
+    }
+
+    if (!profileDiag.exists) {
+      issues.push('profile_not_found');
+      guidance.push('meet-cue login を実行して Google ログインプロファイルを作成してください。');
+    } else if (profileDiag.summary === 'no_cookie_files') {
+      issues.push('profile_no_cookies');
+      guidance.push('meet-cue login を実行して Google アカウントでログインしてください。');
+    } else if (!signInDiag.signedIn) {
+      issues.push('profile_not_signed_in');
+      const missing = signInDiag.missingCookies.join(', ');
+      guidance.push(`プロファイルに Google セッション cookie が不足しています（不足: ${missing}）。meet-cue login を実行して再ログインしてください。`);
+    }
+
+    if (!jevDoctor.ok) {
+      issues.push('jev_unavailable');
+      guidance.push('Jev (TypeSafe Jev) が利用できません。jev doctor の出力を確認してください。');
+    }
+
+    if (!dwdTokenOk) {
+      issues.push('dwd_token_missing');
+      guidance.push('Google Docs API トークンが取得できません。dwd の認証を確認してください。');
+    }
+
+    if (!seatHostnameMatch) {
+      issues.push('seat_hostname_mismatch');
+      guidance.push(`config/meet-cue.json の seatHostnames (${configSeatHostnames.join(', ') || '未設定'}) がこの PC の hostname (${os.hostname()}) と一致しません。スケジューラーはこの PC で起動しません。`);
+    }
+
     const report = {
-      playwrightAvailable: playwrightInfo.available,
-      chromeExecutable: playwrightInfo.executablePath || null,
-      botProfileLoggedIn: loggedIn,
-      botProfileSignedIn: signedIn,
-      jev: jevDoctor,
+      ok: issues.length === 0,
+      issues,
+      guidance: guidance.length > 0 ? guidance : ['全ての診断に合格しています。'],
+      playwright: {
+        available: playwrightInfo.available,
+        executablePath: playwrightInfo.executablePath || null,
+      },
+      profile: {
+        dir: profileDir,
+        exists: profileDiag.exists,
+        subDirs: profileDiag.subDirs,
+        cookieFiles: profileDiag.cookieFiles.map(f => ({
+          path: f.path,
+          sizeBytes: f.sizeBytes,
+          mtime: f.mtime,
+        })),
+        summary: profileDiag.summary,
+        signedIn: signInDiag.signedIn,
+        foundCookies: signInDiag.foundCookies,
+        missingCookies: signInDiag.missingCookies,
+      },
+      botLogin: botLoginInfo ? {
+        account: botLoginInfo.account,
+        profile: botLoginInfo.profile,
+        at: botLoginInfo.at,
+      } : null,
+      seat: {
+        hostname: os.hostname(),
+        configSeatHostname: configSeatHostnames.join(', ') || null,
+        configSeatHostnames,
+        match: seatHostnameMatch,
+      },
+      jev: {
+        ok: jevDoctor.ok,
+        ...(jevDoctor.ok ? {} : { reason: jevDoctor.reason || 'unknown' }),
+      },
       dwdToken: dwdTokenOk,
     };
 
@@ -456,7 +549,6 @@ export async function main(argv = process.argv.slice(2)) {
 
     for (let i = 0; i < parsedLines.length; i++) {
       const line = parsedLines[i];
-      simulatedTime += 4000;
 
       assembler.pushMutation({
         speaker: line.speaker,
@@ -464,7 +556,8 @@ export async function main(argv = process.argv.slice(2)) {
         timestamp: simulatedTime,
       });
 
-      assembler.tick(simulatedTime);
+      simulatedTime += 4000;
+      assembler.flush(simulatedTime);
 
       await runDecisionRound({
         assembler,
@@ -508,80 +601,123 @@ export async function main(argv = process.argv.slice(2)) {
         'doc-id': { type: 'string' },
         mode: { type: 'string' },
         'max-minutes': { type: 'string' },
+        'session-id': { type: 'string' },
+        'event-key': { type: 'string' },
         'interval-sec': { type: 'string' },
         'debug-dom': { type: 'boolean' },
+        'test-audio': { type: 'string' },
       },
     });
 
     if (!values.url || !values.staff) {
       console.error('Error: --url <Meet URL> と --staff <社員メール> は必須です。');
-      console.error('使い方: node tools/meet-cue.mjs start --url <Meet URL> --staff <メール> [--title <名>] [--brief <本文>]');
+      console.error('使い方: node tools/meet-cue.mjs start --url <Meet URL> --staff <メール> [--title <名>] [--brief <本文>] [--test-audio <WAV の絶対パス>]');
       process.exit(2);
     }
 
-    const sessionId = generateSessionId();
+    const testAudio = values['test-audio'];
+    if (testAudio !== undefined && (!path.isAbsolute(testAudio) ||
+        path.extname(testAudio).toLowerCase() !== '.wav' ||
+        !fs.statSync(testAudio, { throwIfNoEntry: false })?.isFile())) {
+      throw new Error('--test-audio には実在する WAV ファイルの絶対パスを指定してください。');
+    }
+
+    const sessionId = values['session-id'] ?? generateSessionId();
+    if (!/^\d{8}-\d{6}-[a-f0-9]{4}$/.test(sessionId)) {
+      throw new Error('無効な --session-id です。');
+    }
     const sessionDir = path.join(meetCueBaseDir(), sessionId);
     fs.mkdirSync(sessionDir, { recursive: true });
     saveLatestSessionId(sessionId);
 
     console.log(`[meet-cue start] セッション開始: ${sessionId}`);
 
-    let brief = values.brief || '';
-    if (values['brief-file']) {
-      brief = fs.readFileSync(values['brief-file'], 'utf8');
-    }
-
-    // 1. Setup or reuse Cue Doc
-    let docInfo;
-    if (values['doc-id']) {
-      const docId = values['doc-id'];
-      const headerInsertIndex = await findHeaderInsertIndex({ docId });
-      docInfo = {
-        docId,
-        docName: values.title || '打合せ',
-        staffUrl: `https://docs.google.com/document/d/${docId}/edit?authuser=${encodeURIComponent(values.staff)}`,
-        kimUrl: `https://docs.google.com/document/d/${docId}/edit?authuser=kim@orgiast.jp`,
-        headerInsertIndex,
-      };
-      console.log(`[meet-cue start] 既存 Doc ID を使用: ${docId} (headerInsertIndex: ${headerInsertIndex})`);
-    } else {
-      console.log(`[meet-cue start] カンペ Doc を作成中...`);
-      docInfo = await setupCueDocument({
-        title: values.title || '打合せ',
-        staff: values.staff,
-      });
-    }
-
-    console.log(`\n==================================================`);
-    console.log(`カンペ Doc (社員用): ${docInfo.staffUrl}`);
-    console.log(`カンペ Doc (kim用):   ${docInfo.kimUrl}`);
-    console.log(`==================================================\n`);
-
-    // 2. Prepare Cards
-    let cards = [...STANDARD_CARDS];
-    if (values['cards-file']) {
-      cards = JSON.parse(fs.readFileSync(values['cards-file'], 'utf8'));
-    } else if (brief) {
-      console.log('[meet-cue start] 事前情報からカンペカードを生成中...');
-      cards = await generateCardsFromBrief(brief);
-    }
-
-    fs.writeFileSync(path.join(sessionDir, 'cards.json'), JSON.stringify(cards, null, 2));
-
     const sessionState = {
       sessionId,
+      eventKey: values['event-key'],
+      pid: process.pid,
       url: values.url,
       staff: values.staff,
       title: values.title || '打合せ',
-      docId: docInfo.docId,
-      docName: docInfo.docName,
-      staffUrl: docInfo.staffUrl,
-      kimUrl: docInfo.kimUrl,
-      headerInsertIndex: docInfo.headerInsertIndex,
       startTime: new Date().toISOString(),
+      joinState: 'joining',
+      captionsOn: false,
     };
 
-    fs.writeFileSync(path.join(sessionDir, 'session.json'), JSON.stringify(sessionState, null, 2));
+    const sessionFile = path.join(sessionDir, 'session.json');
+    const saveSessionState = () => {
+      const tmp = `${sessionFile}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(sessionState, null, 2), 'utf8');
+      fs.renameSync(tmp, sessionFile);
+    };
+    saveSessionState();
+
+    const logBot = message => {
+      fs.appendFileSync(path.join(sessionDir, 'bot.log'),
+        `[meet-cue] ${message}\n`, { mode: 0o600 });
+    };
+    const recordEnd = reason => {
+      sessionState.endReason = reason;
+      logBot(`終了処理を開始します（理由: ${reason}）`);
+      saveSessionState();
+    };
+    let brief;
+    let docInfo;
+    let cards;
+    try {
+      brief = values.brief || '';
+      if (values['brief-file']) {
+        brief = fs.readFileSync(values['brief-file'], 'utf8');
+      }
+
+      // 1. Setup or reuse Cue Doc
+      if (values['doc-id']) {
+        const docId = values['doc-id'];
+        const headerInsertIndex = await findHeaderInsertIndex({ docId });
+        docInfo = {
+          docId,
+          docName: values.title || '打合せ',
+          staffUrl: `https://docs.google.com/document/d/${docId}/edit?authuser=${encodeURIComponent(values.staff)}`,
+          kimUrl: `https://docs.google.com/document/d/${docId}/edit?authuser=kim@orgiast.jp`,
+          headerInsertIndex,
+        };
+        console.log(`[meet-cue start] 既存 Doc ID を使用: ${docId} (headerInsertIndex: ${headerInsertIndex})`);
+      } else {
+        console.log(`[meet-cue start] カンペ Doc を作成中...`);
+        docInfo = await setupCueDocument({
+          title: values.title || '打合せ',
+          staff: values.staff,
+        });
+      }
+
+      console.log(`\n==================================================`);
+      console.log(`カンペ Doc (社員用): ${docInfo.staffUrl}`);
+      console.log(`カンペ Doc (kim用):   ${docInfo.kimUrl}`);
+      console.log(`==================================================\n`);
+
+      // 2. Prepare Cards
+      cards = [...STANDARD_CARDS];
+      if (values['cards-file']) {
+        cards = JSON.parse(fs.readFileSync(values['cards-file'], 'utf8'));
+      } else if (brief) {
+        console.log('[meet-cue start] 事前情報からカンペカードを生成中...');
+        cards = await generateCardsFromBrief(brief);
+      }
+
+      fs.writeFileSync(path.join(sessionDir, 'cards.json'), JSON.stringify(cards, null, 2));
+
+      Object.assign(sessionState, {
+        docId: docInfo.docId,
+        docName: docInfo.docName,
+        staffUrl: docInfo.staffUrl,
+        kimUrl: docInfo.kimUrl,
+        headerInsertIndex: docInfo.headerInsertIndex,
+      });
+      saveSessionState();
+    } catch (err) {
+      recordEnd(`準備の例外: ${err.message}`);
+      throw err;
+    }
 
     const assembler = new CaptionAssembler();
     const tracker = new CueTracker();
@@ -589,7 +725,17 @@ export async function main(argv = process.argv.slice(2)) {
     const cuesStream = fs.createWriteStream(path.join(sessionDir, 'cues.jsonl'), { flags: 'a' });
 
     let jevCallCount = 0;
+    let lastJevCallTime = 0;
     let newCharsSinceLastCheck = 0;
+    let detectedCaption = false;
+    const logCaptionCount = (event) => logBot(`${event} 確定字幕行数: ${assembler.finalizedLines.length}`);
+    const recordCaptions = (lines) => {
+      for (const line of lines) {
+        transcriptStream.write(JSON.stringify(line) + '\n');
+        newCharsSinceLastCheck += line.text.length;
+      }
+    };
+
 
     // 3. Start Meet Bot
     // Read config for botDisplayName
@@ -606,26 +752,42 @@ export async function main(argv = process.argv.slice(2)) {
     try {
       bot = await startMeetBot({
         url: values.url,
+        testAudio,
         mode: values.mode || 'profile',
         maxMinutes: parseInt(values['max-minutes'] || '120', 10),
         debugDom: Boolean(values['debug-dom']),
         sessionDir,
         botDisplayName,
-        onCaption: ({ speaker, text, timestamp }) => {
-          const newlyFinalized = assembler.pushMutation({ speaker, text, timestamp });
-          for (const line of newlyFinalized) {
-            transcriptStream.write(JSON.stringify(line) + '\n');
-            newCharsSinceLastCheck += line.text.length;
+        getCaptionLineCount: () => assembler.finalizedLines.length,
+        onJoinState: (joinState) => {
+          sessionState.joinState = joinState;
+          saveSessionState();
+        },
+        onMediaMode: (mediaMode) => {
+          sessionState.mediaMode = mediaMode;
+          saveSessionState();
+        },
+        onCaptionsOn: (captionsOn) => {
+          sessionState.captionsOn = captionsOn;
+          saveSessionState();
+        },
+        onCaption: (caption) => {
+          recordCaptions(assembler.pushMutation(caption));
+          if (!detectedCaption && caption.text) {
+            detectedCaption = true;
+            logCaptionCount('字幕を初検出');
           }
         },
-        log: console.log,
+        log: logBot,
       });
     } catch (err) {
       const reason = err.reason || err.message || 'unknown';
       console.error(`[meet-cue start] Meet 参加エラー (${reason}):`, err.message);
 
+      transcriptStream.end();
+      cuesStream.end();
       sessionState.joinError = reason;
-      fs.writeFileSync(path.join(sessionDir, 'session.json'), JSON.stringify(sessionState, null, 2), 'utf8');
+      recordEnd(`参加失敗: ${err.message || reason}`);
 
       // 1-day rate limit notification
       const todayStr = new Date().toISOString().slice(0, 10);
@@ -661,17 +823,23 @@ export async function main(argv = process.argv.slice(2)) {
       return { ok: false, code: 3, joinError: reason };
     }
 
+    const captionTick = setInterval(() => recordCaptions(assembler.tick()), 250);
+    const captionLog = setInterval(() => logCaptionCount('経過'), 60000);
+
     // Handle Ctrl+C
     let isTerminating = false;
-    const cleanup = async () => {
+    const cleanup = async (reason = 'unknown') => {
       if (isTerminating) return;
       isTerminating = true;
-      console.log('\n[meet-cue start] 終了処理を開始します...');
+      recordEnd(reason);
+      console.log(`\n[meet-cue start] 終了処理を開始します...（理由: ${reason}）`);
 
+      clearInterval(captionTick);
+      clearInterval(captionLog);
       await bot.stop();
 
-      transcriptStream.end();
-      cuesStream.end();
+      recordCaptions(assembler.flush());
+      await Promise.all([finished(transcriptStream.end()), finished(cuesStream.end())]);
 
       const summary = {
         sessionId,
@@ -679,6 +847,7 @@ export async function main(argv = process.argv.slice(2)) {
         staff: values.staff,
         startTime: sessionState.startTime,
         endTime: new Date().toISOString(),
+        endReason: reason,
         captionLineCount: assembler.finalizedLines.length,
         jevCallCount,
         presentedCuesCount: tracker.history.length,
@@ -703,8 +872,12 @@ export async function main(argv = process.argv.slice(2)) {
       process.exit(0);
     };
 
-    process.on('SIGINT', cleanup);
-    process.on('SIGTERM', cleanup);
+    const logCleanupFailure = err => {
+      logBot(`終了処理の例外: ${err.message}`);
+      process.exit(1);
+    };
+    process.on('SIGINT', () => cleanup('SIGINT').catch(logCleanupFailure));
+    process.on('SIGTERM', () => cleanup('SIGTERM').catch(logCleanupFailure));
 
     // 4. Decision Loop
     const intervalSec = parseInt(values['interval-sec'] || '12', 10);
@@ -716,46 +889,55 @@ export async function main(argv = process.argv.slice(2)) {
         if (isTerminating) break;
 
         const now = Date.now();
-        const newlyFinalized = assembler.tick(now);
-        for (const line of newlyFinalized) {
-          transcriptStream.write(JSON.stringify(line) + '\n');
-          newCharsSinceLastCheck += line.text.length;
-        }
-
-        // Trigger Jev if interval passed or >= 60 new chars accumulated
-        if (assembler.finalizedLines.length > 0 && (newCharsSinceLastCheck >= 60 || jevCallCount === 0)) {
+        // C: 確定字幕が直前から 15 文字以上増え、かつ 20 秒以上経過していれば Jev 呼び出し
+        if (shouldCallJev({ newCharsSinceLastCheck, lastJevCallTime, now })) {
+          const charCount = newCharsSinceLastCheck;
           newCharsSinceLastCheck = 0;
+          lastJevCallTime = now;
           jevCallCount++;
+          const calledAt = new Date(now).toISOString();
+          logBot(`${calledAt} Jev 呼び出し（確定字幕 ${charCount} 文字, 呼び出し回数 ${jevCallCount}）`);
 
-          await runDecisionRound({
-            assembler,
-            tracker,
-            cards,
-            brief,
-            now,
-            askJev: (opts) => askJev({ ...opts, label: 'meet-cue-loop' }),
-            generateHelpCue,
-            insertCue: async (cueToPresent) => {
-              await insertCueToDocument({
-                docId: docInfo.docId,
-                cue: cueToPresent,
-                insertIndex: docInfo.headerInsertIndex,
-              });
-            },
-            label: 'meet-cue-loop',
-            onCue: async ({ timestamp, action, cue }) => {
-              cuesStream.write(JSON.stringify({ timestamp, action, cue }) + '\n');
-            },
-            log: (decision, cueToPresent) => {
-              console.log(`\n[meet-cue] カンペ差し込み [${decision.phase}]: ${cueToPresent.title || '助け舟'} -> "${cueToPresent.say}"`);
-            },
-          });
+          let result;
+          try {
+            result = await runDecisionRound({
+              assembler,
+              tracker,
+              cards,
+              brief,
+              now,
+              askJev: (opts) => askJev({ ...opts, label: 'meet-cue-loop' }),
+              generateHelpCue,
+              insertCue: async (cueToPresent) => {
+                await insertCueToDocument({
+                  docId: docInfo.docId,
+                  cue: cueToPresent,
+                  insertIndex: docInfo.headerInsertIndex,
+                });
+              },
+              label: 'meet-cue-loop',
+              onCue: async ({ timestamp, action, cue }) => {
+                if (!isTerminating) cuesStream.write(JSON.stringify({ timestamp, action, cue }) + '\n');
+              },
+              log: (decision, cueToPresent) => {
+                console.log(`\n[meet-cue] カンペ差し込み [${decision.phase}]: ${cueToPresent.title || '助け舟'} -> "${cueToPresent.say}"`);
+              },
+            });
+          } catch (err) {
+            logBot(`${calledAt} Jev 結果: 出さない（${err.message}）`);
+            continue;
+          }
+          const { action, reason } = result.decision;
+          const outcome = result.presented ? result.cue.title || '助け舟' : '表示なし';
+          logBot(`${calledAt} Jev 結果: ${action} / ${outcome}${reason ? ` (${reason})` : ''}`);
         }
       }
     };
 
     // Run decision loop concurrently with bot monitor
-    Promise.race([bot.monitorPromise, decisionLoop()]).then(cleanup);
+    Promise.race([bot.monitorPromise, decisionLoop()])
+      .then(reason => cleanup(reason || 'decision_loop_end'), err => cleanup(`exception: ${err.message}`))
+      .catch(logCleanupFailure);
     return { ok: true, sessionId };
   }
 

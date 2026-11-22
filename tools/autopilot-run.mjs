@@ -151,9 +151,13 @@ export async function runOnce(options = {}) {
         const model = auth.model || supervisorModel(paths.objective, policy);
         const repo = options.repo || REPO;
         const executable = options.executable || (await resolveClaudeExecutableFromDisk()).executable;
+        const watchRawStart = typeof options.now === 'function' ? options.now() : options.now;
+        const watchStartMs = watchRawStart ? new Date(watchRawStart).getTime() : Date.now();
         const checked = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'], prompt: buildWatchPrompt(watch, repo), cwd: repo,
           timeoutMs: options.timeoutMs ?? 15 * 60_000, onProgress: progress => record({ watch: watch.id, progress }), env: { ...auth.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
-        const result = { skipped: pre.reason || pre.verdict, watchChecked: watch.id, model, authLane: auth.lane, exitCode: checked.exitCode, timedOut: checked.timedOut, stdout: String(checked.stdout || '').slice(-2000) };
+        const watchRawEnd = typeof options.now === 'function' ? options.now() : options.now;
+        const watchEndMs = watchRawEnd ? new Date(watchRawEnd).getTime() : Date.now();
+        const result = { skipped: pre.reason || pre.verdict, watchChecked: watch.id, model, authLane: auth.lane, exitCode: checked.exitCode, timedOut: checked.timedOut, runMs: Math.max(0, watchEndMs - watchStartMs), stdout: String(checked.stdout || '').slice(-2000) };
         record(result);
         await safeDigest();
         return result;
@@ -192,7 +196,9 @@ export async function runOnce(options = {}) {
     const deadline = new Date(startMs + timeoutMs).toISOString();
     const result = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'], prompt: buildPrompt(repo, { preFile, deadline }) + (pre.jevDecision?.action === 'RETRY' ? '\n前回の Jev 判断: RETRY。直前の作業を検証し、必要な修正をやり直す。\n' : ''), cwd: repo, timeoutMs, onProgress: progress => record({ progress }),
       env: { ...auth.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
-    record({ model, authLane: auth.lane, ...result, stdout: String(result.stdout || '').slice(-4000) });
+    const endRawNow = typeof options.now === 'function' ? options.now() : options.now;
+    const endMs = endRawNow ? new Date(endRawNow).getTime() : Date.now();
+    record({ model, authLane: auth.lane, ...result, runMs: Math.max(0, endMs - startMs), stdout: String(result.stdout || '').slice(-4000) });
     const after = await runAutopilot('status', {}, options);
     const postRecorded = after.state?.totalIterations > before.state?.totalIterations;
     // Failed/empty Claude turns still consume an iteration and trip the watchdog.

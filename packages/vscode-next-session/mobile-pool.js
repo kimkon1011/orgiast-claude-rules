@@ -58,12 +58,29 @@ function createOwnershipLease(port = 39741) {
   };
 }
 
-const AUTO_TITLE_RE = /^(?:remote-control-|\d{3}[-｜|])+[a-z]+-[a-z]+$/i;
+const DEFAULT_AUTO_TITLE_PREFIXES = Object.freeze(['スマホ用セッション', '待機']);
+
+function buildAutoTitleRe(prefixes) {
+  const unique = [...new Set((Array.isArray(prefixes) ? prefixes : [prefixes])
+    .filter(prefix => typeof prefix === 'string' && prefix.trim()))];
+  if (!unique.length) {
+    return /^(?:remote-control-|\d{3}[-｜|])+[a-z]+-[a-z]+$/i;
+  }
+  const escaped = unique.map(prefix => prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .map(prefix => `${prefix}[-｜|]`).join('|');
+  return new RegExp(`^(?:remote-control-|${escaped}|\\d{3}[-｜|])+[a-z]+-[a-z]+$`, 'i');
+}
+let autoTitleRe = buildAutoTitleRe(DEFAULT_AUTO_TITLE_PREFIXES);
+
+function setAutoTitlePrefixes(prefixes = DEFAULT_AUTO_TITLE_PREFIXES) {
+  autoTitleRe = buildAutoTitleRe(prefixes);
+}
+
 // No custom title: Claude changes its natural title after the first prompt. Custom
 // names suppress that signal and renameSessionTab now opens an interactive dialog.
 function isWaitingTab(tab) {
   const label = typeof tab === 'string' ? tab : String(tab?.label ?? '');
-  return label === 'Claude Code' || AUTO_TITLE_RE.test(label);
+  return label === 'Claude Code' || autoTitleRe.test(label);
 }
 function createPool({ tabs, open, publish, own = () => true, stopped = () => false, now = Date.now }) {
   let running;
@@ -182,7 +199,8 @@ function selectExcessEmptySpares(sessions, { keep = EMPTY_SPARE_KEEP } = {}) {
 }
 
 module.exports = {
-  AUTO_TITLE_RE, targetCount, readConfig, readSnapshot, createOwnershipLease, isWaitingTab, createPool,
+  get AUTO_TITLE_RE() { return autoTitleRe; },
+  DEFAULT_AUTO_TITLE_PREFIXES, buildAutoTitleRe, setAutoTitlePrefixes, targetCount, readConfig, readSnapshot, createOwnershipLease, isWaitingTab, createPool,
   REFRESH_MIN_AGE_MS, RC_IN_USE_THRESHOLD_MS, decideRefresh, readRefreshConfig, readLastRefreshAt, inRefreshHours,
   isWorktreeFolder, decideWorktreeCleanup, decideTrimExcess, EMPTY_SPARE_KEEP, selectExcessEmptySpares,
 };

@@ -24,7 +24,7 @@ if (Test-Path $mail) {
 $actions += New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($discord, '--since', '24h', '--max-channels', '120') -WorkingDirectory $repo
 
 $trigger = New-ScheduledTaskTrigger -Daily -At 6:30am
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 60)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 60)
 Register-ScheduledTask -TaskName 'OrgiastDiscordTaskDigest' -Action $actions -Trigger $trigger -Settings $settings -Description 'Refresh the prioritized task ledger from seisaku-team mail and all Discord channels (daily 06:30)' -Force | Out-Null
 Write-Host ("OK: task OrgiastDiscordTaskDigest registered (daily 06:30, " + $actions.Count + " action(s))")
 Get-ScheduledTask -TaskName 'OrgiastDiscordTaskDigest' | Select-Object TaskName, State

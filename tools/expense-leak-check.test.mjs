@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { RULES, LIMITS, HEADER, TAB, parseArgs, ruleVerdict, merchantToken, amountVariants, gmailQuery, parseYahoo, weeklySkip, collectTxns, searchEvidence, runCheck, sheetRows, dmText, atomicJson, web23Query, checkWeb23Delivery, WEB23_ADDRESS, WEB23_LOOKBACK_DAYS } from './expense-leak-check.mjs';
+import { RULES, LIMITS, HEADER, TAB, parseArgs, ruleVerdict, merchantToken, amountVariants, gmailQuery, parseYahoo, weeklySkip, collectTxns, searchEvidence, runCheck, reportResult, sheetRows, dmText, atomicJson, web23Query, checkWeb23Delivery, WEB23_ADDRESS, WEB23_LOOKBACK_DAYS } from './expense-leak-check.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 
 const opts = (args = []) => parseArgs(args, { EXPENSE_LEAK_TODAY: '2026-10-09', EXPENSE_LEAK_HOME: '/tmp/expense-test' });
@@ -42,6 +42,7 @@ test('CLI uses JST window, validates dates, and bounds verification to five', ()
   assert.throws(() => opts(['--limit', '0']));
   assert.throws(() => opts(['--verification']));
   assert.equal(opts(['--verification', '--limit', '5']).verification, true);
+  assert.equal(opts(['--verbose']).verbose, true);
 });
 test('private and expense expectations derive from exported RULES', () => {
   for (const rule of RULES.alwaysPrivate) for (const term of rule.terms) for (const amount of rule.amounts || [1599]) {
@@ -214,7 +215,7 @@ test('Sheets helper resets a dragged freeze line back to one header row', async 
 });
 test('real CLI weekly skip exits 0 without credentials and leaves state unchanged', async () => {
   const home = await mkdtemp(join(tmpdir(), 'expense-weekly-'));
-  const env = { ...process.env, EXPENSE_LEAK_HOME: home, EXPENSE_LEAK_TODAY: '2026-10-13' };
+  const env = { ...process.env, EXPENSE_LEAK_HOME: home, EXPENSE_LEAK_TODAY: '2026-10-13', PURCHASING_APP_DATABASE_URL: 'postgres://test@localhost/test' };
   const o = parseArgs(['--weekly'], env);
   const state = { lastRunAt: '2026-10-13T03:00:00+09:00', txns: {} };
   await atomicJson(o.statePath, state);
@@ -256,6 +257,49 @@ test('web23 zero-count warning is fail-open, never pins an outage as zero', asyn
   assert.equal((await checkWeb23Delivery(call('not json'))).status, 'unverified');
   assert.equal((await checkWeb23Delivery({ ...call('{"messages":[]}'), search: async () => ({ code: 1, stdout: '' }) })).status, 'unverified');
   assert.deepEqual(await checkWeb23Delivery({ ...call('{"messages":[]}'), timeLeft: () => false }), { status: 'unverified', reason: '時間上限' });
+});
+test('hasFreeeDbConfig returns false without config and true with env var', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'expense-dbcfg-'));
+  const freeeAuthUrl = new URL('./lib/freee-auth.mjs', import.meta.url).href;
+  const scriptPath = join(home, 'test-has-freee-db.mjs');
+  await writeFile(scriptPath, `import { hasFreeeDbConfig } from ${JSON.stringify(freeeAuthUrl)}; process.stdout.write(String(hasFreeeDbConfig()));`);
+  // No config: HOME/USERPROFILE to temp dir, no PURCHASING_APP_DATABASE_URL
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  delete env.PURCHASING_APP_DATABASE_URL;
+  const r1 = execFileSync(process.execPath, [scriptPath], { env, encoding: 'utf8' });
+  assert.equal(r1.trim(), 'false');
+  // With env var set
+  const env2 = { ...env, PURCHASING_APP_DATABASE_URL: 'postgres://test:test@localhost/test' };
+  const r2 = execFileSync(process.execPath, [scriptPath], { env: env2, encoding: 'utf8' });
+  assert.equal(r2.trim(), 'true');
+  await rm(home, { recursive: true });
+});
+
+test('main skips with message when no freee DB config', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'expense-main-skip-'));
+  const env = { ...process.env, EXPENSE_LEAK_HOME: home, EXPENSE_LEAK_TODAY: '2026-10-09', HOME: home, USERPROFILE: home };
+  delete env.PURCHASING_APP_DATABASE_URL;
+  const stdout = execFileSync(process.execPath, [fileURLToPath(new URL('./expense-leak-check.mjs', import.meta.url)), '--dry-run'], { env, encoding: 'utf8' });
+  assert.match(stdout.trim(), /skip: expense-leak-check requires freee DB config/);
+  await rm(home, { recursive: true });
+});
+
+test('Discord DM failure with zero candidates does not set failed=true (exit 0)', async () => {
+  const h = harness([]);
+  h.injected.notify = async () => { throw new Error('Connector unavailable'); };
+  const r = await runCheck(opts(), h.injected);
+  assert.equal(r.failed, undefined);
+  assert.equal(r.failReason, '');
+  assert.equal(reportResult(r, (line) => assert.match(line, /failed=false failReason=$/)), 0);
+  assert.equal(h.state.lastRunAt, `${opts().today}T03:00:00+09:00`);
+});
+test('real Sheets failure with candidates sets failed=true and failReason', async () => {
+  const h = harness([txn(1)]);
+  h.injected.sheets.append = async () => { throw new Error('Sheets POST HTTP 503'); };
+  const r = await runCheck(opts(), h.injected);
+  assert.equal(r.failed, true);
+  assert.equal(r.failReason, 'sheets-write');
+  assert.equal(reportResult(r, (line) => assert.match(line, /failed=true failReason=sheets-write$/)), 1);
 });
 test('DM reports web23 zero and unverified separately', () => {
   const base = { today: '2026-10-19', candidateTotal: 0, results: [], issues: [], yahooUnavailable: false };

@@ -204,3 +204,113 @@ test('台帳取得失敗でも理由を1行出して推奨アクションを保�
   assert.match(fs.readFileSync(result.outputFile, 'utf8'), /台帳取得失敗: API down/);
   assert.equal(result.actions.length, 1);
 });
+
+// --- バックアップ裏取り（欠陥1） ---
+
+function ghRcloneExec(ghData, rcloneOutput) {
+  return (file, args, opts, cb) => {
+    if (file === 'gh') return cb(null, JSON.stringify(ghData));
+    if (file === 'rclone') return cb(null, rcloneOutput);
+    cb(new Error(`unexpected: ${file}`));
+  };
+}
+
+test('バックアップ成功確認時はバックアップ関連タスクを除外する', async () => {
+  const root = home();
+  const rcloneOutput = '2363054344 2026-11-22 04:52:29.730000000 019/claude-019-2026-11-22.zip\n2357842328 2026-11-21 04:51:29.283000000 019/claude-019-2026-11-21.zip';
+  const logs = [];
+  const result = await runNextActions({
+    home: root, now: new Date('2026-11-22T05:00:00+09:00'),
+    execImpl: ghRcloneExec([], rcloneOutput),
+    llm: llmActions([action('ClaudeDailyDriveBackup 失敗調査', 'P1タスク'), action('PR確認', 'PR#1')]),
+    log: (line) => logs.push(line),
+    listLedger: async () => ({ ok: true, rows: [] })
+  });
+  assert.equal(result.actions.length, 1);
+  assert.equal(result.actions[0].title, 'PR確認');
+  assert.ok(logs.some((l) => l.includes('next-actions: バックアップ成功を確認')));
+});
+
+test('バックアップ非関連タスクはrcloneを呼ばずそのまま通す', async () => {
+  const root = home();
+  let rcloneCalled = false;
+  const execImpl = (file, args, opts, cb) => {
+    if (file === 'gh') return cb(null, '[]');
+    if (file === 'rclone') { rcloneCalled = true; return cb(null, ''); }
+    cb(new Error(`unexpected: ${file}`));
+  };
+  await runNextActions({ home: root, now: NOW, execImpl, llm: llmActions([action('通常タスク', 'TODO')]), log() {}, listLedger: async () => ({ ok: true, rows: [] }) });
+  assert.equal(rcloneCalled, false);
+});
+
+test('rclone失敗時はバックアップタスクを除外しない（未確認扱い）', async () => {
+  const root = home();
+  const result = await runNextActions({
+    home: root, now: NOW,
+    execImpl: (file, args, opts, cb) => {
+      if (file === 'gh') return cb(null, '[]');
+      if (file === 'rclone') return cb(new Error('rclone not available'));
+      cb(new Error(`unexpected: ${file}`));
+    },
+    llm: llmActions([action('ClaudeDailyDriveBackup 確認', 'P1タスク')]),
+    log() {},
+    listLedger: async () => ({ ok: true, rows: [] })
+  });
+  assert.equal(result.actions.length, 1);
+  assert.equal(result.actions[0].title, 'ClaudeDailyDriveBackup 確認');
+});
+
+test('昨日のバックアップのみでも成功とみなし除外する', async () => {
+  const root = home();
+  // 今日のバックアップなし・昨日のみ
+  const rcloneOutput = '2357842328 2026-11-21 04:51:29.283000000 019/claude-019-2026-11-21.zip';
+  const logs = [];
+  const result = await runNextActions({
+    home: root, now: new Date('2026-11-22T05:00:00+09:00'),
+    execImpl: ghRcloneExec([], rcloneOutput),
+    llm: llmActions([action('backup 異常調査', '夜間ログ'), action('別の作業', 'TODO')]),
+    log: (line) => logs.push(line),
+    listLedger: async () => ({ ok: true, rows: [] })
+  });
+  assert.equal(result.actions.length, 1);
+  assert.equal(result.actions[0].title, '別の作業');
+  assert.ok(logs.some((l) => l.includes('next-actions: バックアップ成功を確認')));
+});
+
+// --- first_step 文脈混入（欠陥2） ---
+
+test('first_stepに無関係な絶対パスがあれば空にする', async () => {
+  const root = home();
+  const contaminated = { title: 'Drive定期保存の確認', why: '確認が必要', first_step: 'D:\\Claude\\gas\\event-shop-mail-relay のログを確認', source: 'P1タスク' };
+  const result = await runNextActions({
+    home: root, now: NOW, execImpl: gh(),
+    llm: llmActions([contaminated, action('別のタスク', 'TODO')]),
+    log() {}, listLedger: async () => ({ ok: true, rows: [] })
+  });
+  const target = result.actions.find((a) => a.title === 'Drive定期保存の確認');
+  assert.ok(target);
+  assert.equal(target.first_step, '');
+});
+
+test('first_stepの絶対パスがタイトルと関連していれば空にしない', async () => {
+  const root = home();
+  const valid = { title: 'event-shop-mail-relay 確認', why: '確認が必要', first_step: 'D:\\Claude\\gas\\event-shop-mail-relay のログを確認', source: 'TODO' };
+  const result = await runNextActions({
+    home: root, now: NOW, execImpl: gh(),
+    llm: llmActions([valid]), log() {}, listLedger: async () => ({ ok: true, rows: [] })
+  });
+  assert.equal(result.actions.length, 1);
+  assert.equal(result.actions[0].first_step, 'D:\\Claude\\gas\\event-shop-mail-relay のログを確認');
+});
+
+test('絶対パスを含まないfirst_stepはそのまま通す', async () => {
+  const root = home();
+  const clean = action('PR確認', 'PR#1');
+  clean.first_step = 'gh pr view 12';
+  const result = await runNextActions({
+    home: root, now: NOW, execImpl: gh(),
+    llm: llmActions([clean]), log() {}, listLedger: async () => ({ ok: true, rows: [] })
+  });
+  assert.equal(result.actions.length, 1);
+  assert.equal(result.actions[0].first_step, 'gh pr view 12');
+});

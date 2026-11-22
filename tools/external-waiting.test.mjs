@@ -89,7 +89,7 @@ function fakeGmail({ threads = [], drafts = [], fail = false, bodies = {}, sent 
     return json(200, { payload: { headers: [] } });
   };
 }
-const deps = (over = {}) => ({ fetchImpl: fakeGmail(over), getToken: async () => 'token' });
+const deps = (over = {}) => ({ fetchImpl: fakeGmail(over), getToken: async () => 'token', sleep: async () => {} });
 const run = (home, over = {}, options = {}) => scan({ home, now: NOW, deps: deps(over), staff: new Set(), mailboxes: [MB], push: false, ...options });
 
 test('scan は状態ファイルを書き、取得失敗のメールボックスは ok:false で 0 件扱いにしない', async t => {
@@ -134,10 +134,10 @@ test('引用・署名を除いた本文が短いメールは LLM が no なら�
   const threads = [thread(message('m1'))];
   const ack = { m1: '11月6日（金）14:00〜15:00で押さえておりますので、宜しくお願いいたします。\n\n> 元の長い引用\n> ' + 'あ'.repeat(400) };
   let r = await run(fixture(t), { threads, bodies: ack }, { classify: () => assert.fail('了承だけと判る文は LLM を呼ばない') });
-  assert.equal(r.state.items.length, 0); assert.deepEqual(r.state.stats, { llmCalls: 0, llmFailures: 0, ackSkipped: 1, answeredElsewhere: 0 });
+  assert.equal(r.state.items.length, 0); assert.deepEqual(r.state.stats, { llmCalls: 0, llmFailures: 0, ackSkipped: 1, answeredElsewhere: 0, gmailRetries: 0 });
   const other = { m1: 'では来週の水曜にお伺いします。' };
   r = await run(fixture(t), { threads, bodies: other }, { classify: () => false });
-  assert.equal(r.state.items.length, 0); assert.deepEqual(r.state.stats, { llmCalls: 1, llmFailures: 0, ackSkipped: 1, answeredElsewhere: 0 });
+  assert.equal(r.state.items.length, 0); assert.deepEqual(r.state.stats, { llmCalls: 1, llmFailures: 0, ackSkipped: 1, answeredElsewhere: 0, gmailRetries: 0 });
   r = await run(fixture(t), { threads, bodies: other }, { classify: () => true });
   assert.equal(r.state.items.length, 1);
   r = await run(fixture(t), { threads, bodies: other }, { classify: () => null });
@@ -162,3 +162,18 @@ test('通知文は失敗系の語を伏せる', () => {
   assert.doesNotMatch(text, /エラー/); assert.match(text, /30時間待ち/);
 });
 test('同梱の staff-addresses.json が読める', () => { assert.ok(loadStaff().has('meropp.16@gmail.com')); });
+
+test('getToken が1回 TimeoutError → 2回目成功で scanMailbox が成功する', async t => {
+  const home = fixture(t);
+  let tokenAttempts = 0;
+  const threads = [thread(message('m1'))];
+  const getToken = async () => {
+    tokenAttempts++;
+    if (tokenAttempts === 1) throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    return 'token';
+  };
+  const result = await scan({ home, now: NOW, deps: { fetchImpl: fakeGmail({ threads }), getToken, sleep: async () => {} }, staff: new Set(), mailboxes: [MB], push: false });
+  assert.equal(result.state.sources[MB].ok, true);
+  assert.equal(result.state.items.length, 1);
+  assert.equal(tokenAttempts, 2, '2回呼ばれる（初回失敗＋2回目成功）');
+});

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { detectChanges, normalizeModels, selectCandidates, selectFrontierCandidates, FRONTIER_VENDORS, frontierLimit, proposeEvaluated, proposeSavedEvaluations, runScout, formatDm, main } from './model-scout.mjs';
+import { detectChanges, normalizeModels, selectCandidates, selectFrontierCandidates, FRONTIER_VENDORS, APP_FORBIDDEN_VENDORS, frontierLimit, isAppForbiddenModel, proposeEvaluated, proposeSavedEvaluations, runScout, formatDm, main } from './model-scout.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { evaluationCost, readConfig } from './eval-harness.mjs';
 import { runModelScoutStep } from './cost-weekly-improve.mjs';
@@ -319,4 +319,45 @@ test('現行の配送種別 (session-inbox, spooled, webhook, suppressed, dm) �
     assert.equal(result.ok, true, `delivered=${delivered} should succeed`);
     assert.equal(fs.existsSync(path.join(f.dir, 'model-scout-state.json')), true, `state should be saved for delivered=${delivered}`);
   }
+});
+
+test('isAppForbiddenModel は anthropic/ 系を true、他を false と判定する', () => {
+  assert.equal(isAppForbiddenModel('anthropic/claude-sonnet-5'), true);
+  assert.equal(isAppForbiddenModel('~anthropic/claude-x'), true);
+  assert.equal(isAppForbiddenModel('openai/gpt-5'), false);
+  assert.equal(isAppForbiddenModel('google/gemini-3'), false);
+  assert.equal(isAppForbiddenModel('deepseek/deepseek-v4'), false);
+  assert.equal(isAppForbiddenModel('anthropic/'), true);
+  assert.equal(isAppForbiddenModel('~anthropic/'), true);
+});
+
+test('selectFrontierCandidates は anthropic 系モデルを除外する', () => {
+  const now = new Date('2026-10-09T00:00:00Z');
+  const base = (id) => ({ id, name: id, created: now.getTime() / 1000 - 1 * 86400, pricing: { prompt: 0.000001, completion: 0.000002 }, context_length: 128000, modality: 'text->text', reason: '新規モデル' });
+  const changes = [base('anthropic/claude-x'), base('openai/gpt-x')];
+  const result = selectFrontierCandidates(changes);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].id, 'openai/gpt-x');
+});
+
+test('selectCandidates は anthropic 系モデルを安価候補に入れない', () => {
+  const now = new Date('2026-10-09T00:00:00Z');
+  const base = (id, prompt = 0.000001, completion = 0.000002) => ({ id, name: id, created: now.getTime() / 1000 - 30 * 86400, pricing: { prompt, completion }, context_length: 128000, modality: 'text->text' });
+  const cheap = (id, prompt = 0.0000005, completion = 0.000001) => ({ id, name: id, created: now.getTime() / 1000 - 1 * 86400, pricing: { prompt, completion }, context_length: 128000, modality: 'text->text' });
+  const routing = { categories: { code: { provider: 'openrouter', model: 'vendor/current' } } };
+  const result = selectCandidates([cheap('anthropic/claude-x'), cheap('openai/gpt-x')], [base('vendor/current')], routing);
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 'openai/gpt-x');
+});
+
+test('proposeEvaluated は anthropic 候補を提案しない', async (t) => {
+  const f = fixture(t);
+  const candidate = { ...model('anthropic/claude-sonnet-5', 1, 0.1e-6, 0.2e-6),
+    replacements: [{ category: 'summarize', route: { provider: 'openrouter', model: 'vendor/current', rate: 0.8 }, price: [1, 2] }] };
+  fs.writeFileSync(path.join(f.dir, 'eval-results.jsonl'), JSON.stringify({ t: now.toISOString(), provider: 'openrouter', model: candidate.id,
+    byCategory: { summarize: { n: 100, graded: 100, pass: 90, errors: 0, truncated: 0 } } }) + '\n');
+  const proposals = [];
+  const count = await proposeEvaluated([candidate], { home: f.home, log: () => {}, submit: async p => { proposals.push(p); return { ok: true }; } });
+  assert.equal(count, 0);
+  assert.equal(proposals.length, 0);
 });

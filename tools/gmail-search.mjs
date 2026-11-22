@@ -2,10 +2,16 @@
 // DWD の SA で任意の orgiast.jp ユーザーの Gmail を読む（読み取り専用）。
 // seisaku-team@ のような共有アカウントは kim の Gmail コネクタからは見えないため、
 // impersonate してこちらから読む。書き込み系は一切持たせない。
+import dns from 'node:dns';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { withAbort } from './lib/deadline-budget.mjs';
 import { getDriveToken } from './lib/drive-auth.mjs';
-import { gwsFetch } from './lib/gws-proxy.mjs';
+import { gwsFetch, isTransientSourceError } from './lib/gws-proxy.mjs';
 import { routeMailbox } from './lib/mail-groups.mjs';
 import { isEntry } from './is-entry.mjs';
+
+// Prefer IPv4 because a slow IPv6 route caused connection timeouts (see tools/lib/sheets-dwd.mjs).
+dns.setDefaultResultOrder('ipv4first');
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -52,27 +58,42 @@ export function extractBody(payload, limit = 4000) {
   return text.replace(/&nbsp;/g, ' ').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, limit);
 }
 
-async function gmail(token, path, fetchImpl, signal) {
-  const response = await fetchImpl(`${API}${path}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.any([AbortSignal.timeout(20_000), ...(signal ? [signal] : [])]) });
-  if (!response.ok) {
-    const error = new Error(`Gmail API ${response.status}: ${(await response.text()).slice(0, 200)}`);
-    error.status = response.status;
-    throw error;
+async function retryGmail(operation, { signal, timeoutMs, sleepImpl }) {
+  for (let attempt = 0; ; attempt++) {
+    signal?.throwIfAborted();
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    try {
+      return await withAbort(requestSignal, () => operation(requestSignal));
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (attempt >= 2 || (error?.status !== 429 && !isTransientSourceError(error))) throw error;
+      await withAbort(signal, () => sleepImpl(2_000 * (2 ** attempt), undefined, { signal }));
+    }
   }
-  return response.json();
 }
 
-export async function searchGmail({ user, query, max = 10, withBody = false, bodyLimit = 4000, pageToken, fetchImpl = gwsFetch, getToken = getDriveToken, signal, concurrency = 1, shouldFetchBody, pendingIds, resumeNext, onMessage, skipId = () => false, allowPartial = false }) {
+function gmail(token, path, fetchImpl, retryOptions) {
+  return retryGmail(async signal => {
+    const response = await fetchImpl(`${API}${path}`, { headers: { Authorization: `Bearer ${token}` }, signal });
+    if (response.ok) return response.json();
+    throw Object.assign(new Error(`Gmail API ${response.status}: ${(await response.text()).slice(0, 200)}`), { status: response.status });
+  }, retryOptions);
+}
+
+export async function searchGmail({ user, query, max = 10, withBody = false, bodyLimit = 4000, pageToken, fetchImpl = gwsFetch, getToken = getDriveToken, signal, concurrency = 1, shouldFetchBody, pendingIds, resumeNext, onMessage, skipId = () => false, allowPartial = false, timeoutMs = 8_000, sleepImpl = sleep }) {
   const routed = routeMailbox(user, query);
   user = routed.user; query = routed.query;
   if (routed.notice) console.error(routed.notice);
+  const retryOptions = { signal, timeoutMs, sleepImpl };
   let token;
-  try { token = await getToken({ scope: SCOPE, impersonate: user, signal: signal || AbortSignal.timeout(20_000) }); }
-  catch (error) {
+  try {
+    token = await retryGmail(requestSignal => getToken({ scope: SCOPE, impersonate: user, signal: requestSignal }), retryOptions);
+  } catch (error) {
     if (/unauthorized_client/.test(error.message)) throw new Error(`${error.message}。そのアドレスはグループの可能性がある。seisaku-team@orgiast.jp で to:${user} 検索すること`);
     throw error;
   }
-  const list = pendingIds ? { messages: pendingIds.map(id => ({ id })), nextPageToken: resumeNext } : await gmail(token, `/messages?q=${encodeURIComponent(query)}&maxResults=${Math.min(100, max)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`, fetchImpl, signal);
+  const list = pendingIds ? { messages: pendingIds.map(id => ({ id })), nextPageToken: resumeNext } : await gmail(token, `/messages?q=${encodeURIComponent(query)}&maxResults=${Math.min(100, max)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`, fetchImpl, retryOptions);
   const results = [], stubs = (list.messages || []).slice(0, max);
   const pending = new Set((list.messages || []).map(s => s.id));
   let skipped = 0, offset = 0, failure;
@@ -83,10 +104,10 @@ export async function searchGmail({ user, query, max = 10, withBody = false, bod
       try {
         if (skipId(stub.id)) { pending.delete(stub.id); continue; }
         const metadata = !withBody || !!shouldFetchBody;
-        let message = await gmail(token, `/messages/${stub.id}?format=${metadata ? 'metadata' : 'full'}${metadata ? '&metadataHeaders=Date&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=List-Unsubscribe' : ''}`, fetchImpl, signal);
+        let message = await gmail(token, `/messages/${stub.id}?format=${metadata ? 'metadata' : 'full'}${metadata ? '&metadataHeaders=Date&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=List-Unsubscribe' : ''}`, fetchImpl, retryOptions);
         let compact = compactMessage(message);
         if (withBody && (!shouldFetchBody || shouldFetchBody(compact))) {
-          if (metadata) message = await gmail(token, `/messages/${stub.id}?format=full`, fetchImpl, signal);
+          if (metadata) message = await gmail(token, `/messages/${stub.id}?format=full`, fetchImpl, retryOptions);
           compact = { ...compactMessage(message), body: extractBody(message.payload, bodyLimit) };
         }
         retrieved = true;

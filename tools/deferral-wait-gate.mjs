@@ -65,6 +65,14 @@ const DECISION_DEFERRAL_REASON = '提案の採否を user の返信に委ねて�
 const MERGE_DEFERRAL = /(?:マージ|merge)[^\n。]{0,40}?通常(?:の)?(?:PR|プルリク|マージ)?運用(?:に|へ)(?:任せ|委ね|回し)(?!ず|ない)/gi;
 const MERGE_DEFERRAL_REASON = 'PR のマージを「通常運用に任せる」として止まらず、当ターン内に gh pr view で状態を確認し、条件を満たすなら tools/pr-merge.mjs（または gh pr merge）で完了まで進めてください。条件を満たさない場合は、その具体的な理由（未通過のチェック・必要なラベル等）を実測値つきで書いてください。';
 
+// 2026-11-15 実測: 「次のセッションで最初に修理します。」の文面を検出する。
+// 直せる作業を次のセッション・後日へ先送りする文面を直接拾う。
+const NEXT_SESSION_DEFERRAL = /(?:次のセッション|次回(?:のセッション)?|別のセッション|新しいセッション|明日|後日|後で|あとで).{0,40}?(?:修理|修復|直し|直す|対応します|着手します|実施します|やります)/gu;
+const NEXT_SESSION_EXCEPTION = /\bkim\b|金さん|お客様|返事|承認/i;
+const NEXT_SESSION_UNFIXABLE = /直せない|\bunfixable\b|試した/i;
+const NEXT_SESSION_ERROR = /(?:エラー(?:本文)?|\b(?:error|failed|fatal))\s*[:：]\s*[「『`"]?[^\s。！？!?「」『』`"]|\b(?:HTTP\s+[45]\d{2}|EACCES|EPERM|ENOENT|EROFS|ETIMEDOUT|ECONNREFUSED)\b/i;
+const NEXT_SESSION_DEFERRAL_REASON = '直せる作業を次のセッション・後日へ先送りしています。このターンで直すか、直せない証拠（試した手段とエラー本文）を書いてください。';
+
 export function enabled() {
   return process.env.ORGIAST_DEFERRAL_WAIT_GATE !== '0';
 }
@@ -127,6 +135,19 @@ export function judge(text) {
   for (const match of [...prose.matchAll(MERGE_DEFERRAL)]) {
     if (!inAuditQuote(prose, match.index)) {
       return { decision: 'block', code: 'DEFERRAL-WAIT', reason: MERGE_DEFERRAL_REASON };
+    }
+  }
+  // 引用内の日時や動作を除外し、文中の位置は元の本文とそろえる。
+  const unquoted = prose.replace(/「(?:[^「」]|「[^「」]*」)*」|『[^『』]*』|`+[^`\n]+`+/g,
+    quote => quote.replace(/[^\r\n]/g, ' '));
+  for (const sentence of unquoted.matchAll(/(?:[^\n。！？!?\r.]|\.(?!\s|$))+/g)) {
+    const body = prose.slice(sentence.index, sentence.index + sentence[0].length);
+    if (NEXT_SESSION_EXCEPTION.test(body)) continue;
+    if (NEXT_SESSION_UNFIXABLE.test(body) && NEXT_SESSION_ERROR.test(body)) continue;
+    for (const match of sentence[0].matchAll(NEXT_SESSION_DEFERRAL)) {
+      const beforeMatch = unquoted.slice(0, sentence.index + match.index);
+      if (inAuditQuote(beforeMatch, beforeMatch.length)) continue;
+      return { decision: 'block', code: 'DEFERRAL-WAIT', reason: NEXT_SESSION_DEFERRAL_REASON };
     }
   }
   for (const match of [...prose.matchAll(AGENT_WAIT_THEN)]) {

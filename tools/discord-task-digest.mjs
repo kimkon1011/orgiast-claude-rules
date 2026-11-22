@@ -60,6 +60,54 @@ function jstDayNumber(value) {
   return Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day)) / 864e5;
 }
 
+export function isStaleOverdue(task, { now = new Date(), graceDays = 7 } = {}) {
+  if (!ACTIVE_STATES.has(task.status) || !/^\d{4}-\d{2}-\d{2}$/.test(task.deadline)) return false;
+  const deadline = new Date(`${task.deadline}T00:00:00Z`);
+  if (!Number.isFinite(deadline.getTime()) || deadline.toISOString().slice(0, 10) !== task.deadline) return false;
+  return jstDayNumber(now) - jstDayNumber(deadline) > graceDays;
+}
+
+export function isExpiredSameDay(task, { now = new Date() } = {}) {
+  if (!ACTIVE_STATES.has(task.status) || !/^\d{4}-\d{2}-\d{2}$/.test(task.deadline)) return false;
+  const deadline = new Date(`${task.deadline}T00:00:00Z`);
+  if (!Number.isFinite(deadline.getTime()) || deadline.toISOString().slice(0, 10) !== task.deadline) return false;
+  const created = String(task.createdAt ?? '').match(/^(\d{4}-\d{2}-\d{2})/);
+  if (!created) return false;
+  const createdDate = new Date(`${created[1]}T00:00:00Z`);
+  if (!Number.isFinite(createdDate.getTime())) return false;
+  const deadlineDay = jstDayNumber(deadline);
+  return deadlineDay <= jstDayNumber(createdDate) && jstDayNumber(now) > deadlineDay;
+}
+
+export function isStaleUndated(task, { now = new Date(), maxAgeDays = 14 } = {}) {
+  if (!ACTIVE_STATES.has(task.status)) return false;
+  if (String(task.deadline ?? '').trim()) return false;
+  const created = String(task.createdAt ?? '').match(/^(\d{4}-\d{2}-\d{2})/);
+  if (!created) return false;
+  const createdDate = new Date(`${created[1]}T00:00:00Z`);
+  if (!Number.isFinite(createdDate.getTime())) return false;
+  return jstDayNumber(now) - jstDayNumber(createdDate) > maxAgeDays;
+}
+
+export function pickTop(tasks, { now = new Date(), limit = 5, graceDays = 7, undatedDays = 14 } = {}) {
+  const top = [], staleOverdue = [], expiredSameDay = [], staleUndated = [];
+  for (const task of tasks) {
+    if (!ACTIVE_STATES.has(task.status)) continue;
+    const { id, rank, title, deadline, createdAt } = task;
+    if (isStaleOverdue(task, { now, graceDays })) {
+      if (staleOverdue.length < limit) staleOverdue.push({ id, rank, title, deadline });
+    } else if (isExpiredSameDay(task, { now })) {
+      if (expiredSameDay.length < limit) expiredSameDay.push({ id, rank, title, deadline });
+    } else if (isStaleUndated(task, { now, maxAgeDays: undatedDays })) {
+      if (staleUndated.length < limit) staleUndated.push({ id, rank, title, createdAt });
+    } else if (top.length < limit) {
+      top.push({ id, rank, title });
+    }
+    if (top.length >= limit && staleOverdue.length >= limit && expiredSameDay.length >= limit && staleUndated.length >= limit) break;
+  }
+  return { top, staleOverdue, expiredSameDay, staleUndated };
+}
+
 export function priorityScore(item, { now = new Date() } = {}) {
   const urgency = Math.max(0, Math.min(3, Number(item.urgency) || 0));
   const impact = Math.max(0, Math.min(3, Number(item.impact) || 0));
@@ -348,7 +396,7 @@ export async function runDiscordTaskDigest(options = {}) {
     fs.writeFileSync(path.join(base, 'state.json'), `${JSON.stringify(state, null, 2)}\n`);
     appendJsonLines(path.join(base, 'tasks.jsonl'), merged.added);
   }
-  const result = { ok: true, tokenSource, channelsScanned: textChannels.length, channelsActive: active.length, skipped, messages: messageCount, extracted: extracted.length, added: merged.added.length, suppressed: merged.suppressed, held, totalRows: rows.length, top: merged.tasks.slice(0, 5).map((task) => ({ id: task.id, rank: task.rank, title: task.title })) };
+  const result = { ok: true, tokenSource, channelsScanned: textChannels.length, channelsActive: active.length, skipped, messages: messageCount, extracted: extracted.length, added: merged.added.length, suppressed: merged.suppressed, held, totalRows: rows.length, ...pickTop(merged.tasks, { now }) };
   (options.log || console.log)(JSON.stringify(result));
   (options.log || console.log)(`discord-task-digest: 走査${textChannels.length}ch / 新規${merged.added.length}件 / 重複除外${merged.suppressed}件 / P1 ${merged.tasks.filter((task) => task.rank === 'P1').length}件`);
   return result;

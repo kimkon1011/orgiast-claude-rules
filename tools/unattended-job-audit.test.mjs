@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { stamp, expectedPeriodHours, auditTasks, healTasks, unresolvedTasks, runAudit, launchAudit, notifyUnresolved, main } from './unattended-job-audit.mjs';
+import { stamp, expectedPeriodHours, auditTasks, healTasks, unresolvedTasks, runAudit, launchAudit, notifyUnresolved, auditContext, main } from './unattended-job-audit.mjs';
 import { listScheduledTaskDetails, enableScheduledTask, startScheduledTask } from './lib/scheduled-task.mjs';
 const now = Date.parse('2026-10-18T20:00:00+09:00');
 const daily = { type: 'MSFT_TaskDailyTrigger', daysInterval: 1 };
@@ -24,6 +24,14 @@ test('CostImproveLoop fixture: formula is 37h; 36h override detects missed run a
   assert.deepEqual(auditTasks([task()], {}, now), []);
   assert.equal(auditTasks([task()], { OrgiastCostImproveLoop: { maxAgeHours: 36 } }, now)[0].kind, 'missed');
   assert.equal(auditTasks([task()], {}, now + 3600000)[0].kind, 'missed');
+});
+test('finite daily repetition window uses the overnight gap as cadence', () => {
+  const auditAt = Date.parse('2026-11-20T03:20:00+09:00');
+  const trigger = { ...daily, repetition: { interval: 'PT1H', duration: 'PT13H30M' } };
+  const lastRunTime = '2026-11-19T21:00:00+09:00';
+  assert.deepEqual(auditTasks([task({ triggers: [trigger], lastRunTime })], {}, auditAt), []);
+  assert.equal(auditTasks([task({ triggers: [trigger], lastRunTime: '2026-11-18T21:00:00+09:00' })], {}, auditAt)[0].kind, 'missed');
+  assert.equal(auditTasks([task({ triggers: [{ ...daily, repetition: { interval: 'PT1H' } }], lastRunTime })], {}, auditAt)[0].kind, 'missed');
 });
 test('missed never-run, failed codes, MorningBatch interrupted is not failed', () => {
   assert.equal(auditTasks([task({ lastRunTime: '1999-01-01' })], {}, now)[0].kind, 'missed');
@@ -118,6 +126,14 @@ test('shared guard enforces 6h and 24h launch intervals', t => {
   assert.equal(launchAudit({ ...options, intervalHours: 24, now: now + 7 * 3600000 }), false);
   assert.equal(launchAudit({ ...options, now: now + 6 * 3600000 }), true);
   assert.equal(calls.length, 2); assert.ok(calls[0][1].includes('--quiet'));
+});
+test('cached SessionStart context labels stale findings with their age', t => {
+  const home = temp(t), root = path.join(home, '.claude'), file = path.join(root, 'unattended-job-audit-last.txt');
+  fs.mkdirSync(root);
+  fs.writeFileSync(file, '🚨 未修復: \\OrgiastExternalWaiting（missed）');
+  fs.utimesSync(file, new Date(now - 7.25 * 3600000), new Date(now - 7.25 * 3600000));
+  assert.match(auditContext(home, { now }), /（7\.3時間前の判定）/);
+  assert.doesNotMatch(auditContext(home, { now: now - 2 * 3600000 }), /時間前の判定/);
 });
 test('Disabled non-required task with heal is resolved (intentionally retired)', () => {
   const state = { heals: { OrgiastRetired: { at: new Date(now).toISOString(), kind: 'failed' } } };

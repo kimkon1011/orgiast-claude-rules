@@ -1,0 +1,4 @@
+{
+  "_comment": "Default Gemini monthly budget. Override via ~/.claude/gemini-budget.json. To restore previous default (50000), change budgetJpy here.",
+  "budgetJpy": 10000
+}

@@ -73,7 +73,7 @@ export function publishSeatPr({ cwd = process.cwd(), home = process.env.ORGIAST_
     out(`PR #${pr.number}: CI 合格後、この席で gh pr merge --squash を実行（pr-merge の検証を使用）`);
     waitForCi(pr.number, target.base, { ...ci, run });
     mergePr({ pr: pr.number, repo: cwd, githubRepo: target.base, method: 'squash', keepBranch: true }, {
-      exec: (file, args) => run(file, args),
+      exec: run,
     });
   }
   return { ...pr, route, repo: target.base };

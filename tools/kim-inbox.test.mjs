@@ -3,12 +3,23 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, CONTEXT_LIMIT, oneScreenSummary, autoCloseByGmail } from './kim-inbox.mjs';
+import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, mergeItemsInto, CONTEXT_LIMIT, oneScreenSummary, autoCloseByGmail, normalizeInboxText } from './kim-inbox.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { loadAllowlist, discordAllowed } from './lib/kim-discord-allowlist.mjs';
-import { inboxDedupeKey, spoolItem, drainSpool } from './kim-inbox.mjs';
+import { backfill } from './kim-inbox-dedupe-backfill.mjs';
+import { archiveClosed, lookupAnswers, inboxDedupeKey, spoolItem, drainSpool } from './kim-inbox.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { formatInboxBrief } from './lib/kim-inbox-relay-state.mjs';
+// The hook intentionally skips sdk-cli sessions; these tests exercise interactive delivery.
+delete process.env.CLAUDE_CODE_ENTRYPOINT;
+test('content dedupe normalization folds changing metadata without merging distinct requests', () => {
+  assert.equal(normalizeInboxText('判断待ち11日'), normalizeInboxText('判断待ち34日'));
+  assert.equal(normalizeInboxText('kim に確認'), normalizeInboxText('キムさんに確認'));
+  assert.equal(normalizeInboxText('kim に確認'), normalizeInboxText('金さんに確認'));
+  assert.equal(normalizeInboxText('【要対応】Xの承認'), normalizeInboxText('【至急】Xの承認'));
+  assert.equal(normalizeInboxText('🔴 2026-11-22 対応3件'), normalizeInboxText('🚨 11/23 対応8件'));
+  assert.notEqual(normalizeInboxText('Aの承認'), normalizeInboxText('Bの承認'));
+});
 test('--show reads the complete original without changing delivery or inbox data', async t => {
   const home = seat(t), item = await addItem(home, { kind: 'ask', text: '資料の確認\n' + '詳細'.repeat(500) + '\n末尾' });
   const file = path.join(home, '.claude/kim-inbox', item.id + '.json');
@@ -18,6 +29,79 @@ test('--show reads the complete original without changing delivery or inbox data
   assert.equal(fs.readFileSync(file, 'utf8'), before);
   assert.equal(await main(['--show', 'missing'], { home, stdout: () => assert.fail('missing item'), stderr: () => {} }), 1);
 });
+test('archive retains producer keys, answered questions and original ID reads', async t => {
+  const home = seat(t);
+  const dir = path.join(home, '.claude/kim-inbox');
+  const local = { drain: false, localOnly: true };
+  const infoOptions = { kind: 'info', text: '月次報告', dedupeKey: 'monthly-report' };
+  const info = await addItem(home, infoOptions, local);
+  markSeen(home, info.id);
+  const askOptions = { kind: 'ask', text: '次回見積の確認', dedupeKey: 'estimate-ask' };
+  const ask = await addItem(home, askOptions, local);
+  answerItem(home, ask.id, '承認済み');
+  const legacyOptions = { kind: 'ask', text: '既存の照合手順を確認' };
+  const legacy = await addItem(home, legacyOptions, local);
+  answerItem(home, legacy.id, '承認済み');
+  const open = await addItem(home, { text: '未回収のお知らせ' }, local);
+  const lookup = lookupAnswers(home, '見積 承認済み');
+  const archivedFile = path.join(dir, '.archive', info.createdAt.slice(0, 7), info.id + '.json');
+  const original = fs.readFileSync(path.join(dir, info.id + '.json'), 'utf8');
+  const stale = 'info-aggregation.lock.stale-1';
+  const temp = info.id + '.json.abandoned.tmp';
+  for (const name of [stale, temp]) fs.writeFileSync(path.join(dir, name), name);
+  const now = Date.now() + 4 * 86_400_000;
+
+  assert.equal(archiveClosed(home, { now: Date.now() }).eligible, 0);
+  assert.equal(archiveClosed(home, { now }).eligible, 3);
+  assert.equal(fs.existsSync(path.join(dir, '.archive')), false);
+  assert.deepEqual(archiveClosed(home, { apply: true, now }), { applied: true, eligible: 3, moved: 3, debrisMoved: 2 });
+  assert.deepEqual(listItems(home).map(item => item.id), [open.id]);
+  assert.equal(fs.readFileSync(archivedFile, 'utf8'), original);
+  assert.deepEqual(fs.readdirSync(path.join(dir, '.archive/lock-debris'))
+    .map(name => name.slice(17)).sort(), [stale, temp].sort());
+
+  assert.equal((await addItem(home, infoOptions, local)).id, info.id);
+  assert.equal((await addItem(home, askOptions, local)).status, 'answered');
+  // Lookup and backfill can match resolved questions even without opening their originals.
+  for (const archivedAsk of [ask, legacy]) {
+    const file = path.join(dir, '.archive', archivedAsk.createdAt.slice(0, 7), archivedAsk.id + '.json');
+    fs.renameSync(file, file + '.held');
+  }
+  assert.deepEqual(lookupAnswers(home, '見積 承認済み'), lookup);
+  assert.equal(lookup[0].id, ask.id);
+  const repeat = await addItem(home, legacyOptions, local);
+  assert.equal(backfill(home, { apply: true }).answerInherited, 1);
+  assert.equal(listItems(home).find(item => item.id === repeat.id).supersededInto, legacy.id);
+
+  const output = [];
+  assert.equal(await main(['--show', info.id, '--json'], { home, stdout: value => output.push(value) }), 0);
+  assert.deepEqual(JSON.parse(output[0]), JSON.parse(original));
+
+  const refreshed = await addItem(home, { ...infoOptions, progressAt: new Date().toISOString() }, local);
+  assert.equal(refreshed.id, info.id);
+  assert.equal(refreshed.status, 'open');
+  assert.equal(fs.existsSync(archivedFile), false);
+  assert.equal((await addItem(home, infoOptions, local)).status, 'open');
+});
+
+test('--archive-closed validates options and daily archive runs once per JST date', async t => {
+  const home = seat(t);
+  const dir = path.join(home, '.claude/kim-inbox');
+  const item = await addItem(home, { text: '保管対象' }, { drain: false, localOnly: true });
+  markSeen(home, item.id);
+  const io = { home, stderr: () => {}, stdout: () => {} };
+  assert.equal(await main(['--archive-closed', '--older-than-days', '-1', '--apply'], io), 1);
+  assert.equal(await main(['--archive-closed', '--dry', '--apply'], io), 1);
+  assert.equal(await main(['--archive-closed', '--older-than-days', '0'], io), 0);
+  assert.ok(fs.existsSync(path.join(dir, item.id + '.json')));
+  const now = Date.now() + 4 * 86_400_000;
+  assert.equal(archiveClosed(home, { daily: true, apply: true, now }).moved, 1);
+  const stale = path.join(dir, 'info-aggregation.lock.stale-2');
+  fs.writeFileSync(stale, 'debris');
+  assert.equal(archiveClosed(home, { daily: true, apply: true, now }).debrisMoved, 0);
+  assert.equal(archiveClosed(home, { daily: true, apply: true, now: now + 86_400_000 }).debrisMoved, 1);
+});
+
 test('mixed context has unique numbers, complete briefs, accurate omitted count and shown-only bookkeeping', async t => {
   const home = seat(t), base = await addItem(home, { text: '完了: 確認済み', priority: 'high' });
   const sessionId = 'abcdef12-current';
@@ -60,6 +144,44 @@ function seat(t, label = 'kim-PC') {
   t.after(() => fs.rmSync(home, { force: true, recursive: true })); return home;
 }
 
+test('同じ本文の ask は空白・改行・大文字小文字を正規化して count を増やす', async t => {
+  const home = seat(t);
+  const first = await addItem(home, { kind: 'ask', text: '  Approve\n\tThis  ' });
+  const second = await addItem(home, { kind: 'ask', text: 'approve this' });
+  assert.equal(second.id, first.id);
+  const items = listItems(home);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].count, 2);
+  assert.ok(Date.parse(items[0].lastSeenAt) >= Date.parse(items[0].createdAt));
+});
+
+test('本文が異なる ask は別レコードになる', async t => {
+  const home = seat(t);
+  await addItem(home, { kind: 'ask', text: '承認してください A' });
+  await addItem(home, { kind: 'ask', text: '承認してください B' });
+  assert.equal(listItems(home).length, 2);
+});
+
+test('answer 済み ask と同じ本文は新規 open ask になる', async t => {
+  const home = seat(t);
+  const answered = await addItem(home, { kind: 'ask', text: '再確認してください' });
+  answerItem(home, answered.id, '承認');
+  const reopened = await addItem(home, { kind: 'ask', text: '再確認してください' });
+  assert.notEqual(reopened.id, answered.id);
+  assert.equal(listItems(home).length, 2);
+  assert.equal(listItems(home, { status: 'open' }).length, 1);
+});
+
+test('info の同文集約も count と repeatCount を維持する', async t => {
+  const home = seat(t);
+  const first = await addItem(home, { kind: 'info', text: '完了 しました' });
+  const second = await addItem(home, { kind: 'info', text: ' 完了\nしました ' });
+  assert.equal(second.id, first.id);
+  assert.equal(listItems(home).length, 1);
+  assert.equal(listItems(home)[0].count, 2);
+  assert.equal(listItems(home)[0].repeatCount, 2);
+});
+
 test('durable producer keys survive aggregation, seen state and retries', async t => {
   const home = seat(t);
   const a = await addItem(home, { text: '同じ作業 1', dedupeKey: 'job:1' });
@@ -70,6 +192,32 @@ test('durable producer keys survive aggregation, seen state and retries', async 
   assert.equal(retry.id, a.id); assert.equal(retry.status, 'seen');
   const unkeyed = await addItem(home, { text: '同じ作業 3' });
   assert.notEqual(unkeyed.id, b.id); assert.equal(listItems(home).length, 3);
+});
+
+test('--dedupe-key reuses one entry and --replace-existing refreshes its text', async t => {
+  const home = seat(t), body = path.join(home, 'body.txt'), output = [];
+  fs.writeFileSync(body, 'first');
+  assert.equal(await main(['--add', '--kind', 'ask', '--dedupe-key', 'rescue-branch-review', '--body-file', body], { home, stdout: value => output.push(value) }), 0);
+  fs.writeFileSync(body, 'second');
+  assert.equal(await main(['--add', '--kind', 'ask', '--dedupe-key', 'rescue-branch-review', '--replace-existing', '--body-file', body], { home, stdout: value => output.push(value) }), 0);
+  assert.equal(new Set(output.map(value => JSON.parse(value).id)).size, 1);
+  assert.equal(listItems(home).length, 1);
+  assert.equal(listItems(home)[0].text, 'second');
+});
+
+test('mergeItemsInto keeps the newest rescue open and supersedes files without deleting them', async t => {
+  const home = seat(t);
+  const first = await addItem(home, { kind: 'ask', text: 'nightly-bootstrap: 変更を rescue/auto-session-20261120-010101 に退避しました。レビューが必要です。' });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const second = await addItem(home, { kind: 'info', text: 'rescue ブランチ rescue/auto-session-20261121-020202 の削除承認待ち' });
+  const result = mergeItemsInto(home, 'rescue-branch-review', [first.id, second.id]);
+  assert.equal(result.keptId, second.id);
+  assert.equal(fs.readdirSync(path.join(home, '.claude/kim-inbox')).filter(name => name.endsWith('.json')).length, 2);
+  const kept = listItems(home).find(item => item.id === second.id);
+  const old = listItems(home).find(item => item.id === first.id);
+  assert.equal(kept.status, 'open'); assert.equal(kept.dedupeKey, 'rescue-branch-review');
+  assert.match(kept.text, /計 2 件/); assert.match(kept.text, /20261120-010101/); assert.match(kept.text, /20261121-020202/);
+  assert.equal(old.status, 'superseded'); assert.equal(old.answer, `集約先: ${second.id}`);
 });
 
 test('redacted and truncated keys retain unique identities through direct delivery and spool retries', async t => {
@@ -178,7 +326,7 @@ test('手作業依頼を ask に分類し台帳に依頼本文を残す', async 
   const result = await notifyKim('接続して確認してください', { home, plainJa: false, fetchImpl: async () => assert.fail('Discord 禁止') });
   assert.equal(result.kind, 'ask'); assert.match(listItems(home)[0].text, /接続して確認してください/);
 });
-test('複数プロセスの info は集約し ask は全件保存する', async t => {
+test('複数プロセスの info と ask はそれぞれ1件に集約する', async t => {
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const { fileURLToPath } = await import('node:url');
@@ -187,8 +335,9 @@ test('複数プロセスの info は集約し ask は全件保存する', async 
   assert.equal(new Set(results.map(r => JSON.parse(r.stdout).id)).size, 1);
   assert.equal(listItems(home).length, 1); assert.equal(listItems(home)[0].repeatCount, 4);
   const asks = await Promise.all(Array.from({ length: 4 }, () => promisify(execFile)(process.execPath, [fileURLToPath(new URL('./kim-inbox.mjs', import.meta.url)), '--add', '--kind', 'ask', '--body-file', file], { env: { ...process.env, ORGIAST_HOME: home }, windowsHide: true })));
-  assert.equal(new Set(asks.map(r => JSON.parse(r.stdout).id)).size, 4);
-  assert.equal(listItems(home).filter(i => i.kind === 'ask').length, 4);
+  assert.equal(new Set(asks.map(r => JSON.parse(r.stdout).id)).size, 1);
+  assert.equal(listItems(home).filter(i => i.kind === 'ask').length, 1);
+  assert.equal(listItems(home).find(i => i.kind === 'ask').count, 4);
 });
 
 test('破損・欠損フィールドのあるファイルで正常な未回収項目を隠さない', async t => {
@@ -212,7 +361,7 @@ test('fleet 受信ファイルが使用中でも項目を表示でき、次回�
 function writeItem(home, item) {
   fs.writeFileSync(path.join(home, '.claude/kim-inbox', `${item.id}.json`), JSON.stringify(item));
 }
-test('同文 info 30件は1件に集約し、見出し・日時・ID・PC番号の差も吸収する', async t => {
+test('同文 info 30件は1件に集約し、異なる本文は別件として残す', async t => {
   const home = seat(t);
   for (let n = 0; n < 30; n++) await addItem(home, { text: '連絡が届いていません' });
   const [item] = listItems(home, { status: 'open' });
@@ -220,7 +369,7 @@ test('同文 info 30件は1件に集約し、見出し・日時・ID・PC番号�
   assert.ok(Number.isFinite(Date.parse(item.lastAt)));
   const first = await addItem(home, { text: '【送信元A】\nPC011 2026-11-02T14:04:00Z 作業 0c1acc2f 連絡失敗' });
   const latest = await addItem(home, { text: '【送信元B】\nPC022 2026-11-04T15:05:12Z 作業 abcdefab 連絡失敗' });
-  assert.equal(first.id, latest.id); assert.equal(latest.repeatCount, 2);
+  assert.notEqual(first.id, latest.id); assert.equal(latest.repeatCount, 1);
   assert.match(latest.text, /PC022/);
   assert.ok(selectContext([latest]).includes(latest.id), 'context should include the latest item');
   markSeen(home, latest.id);
@@ -762,4 +911,74 @@ test('CLI --auto-close prints JSON of closed items', async t => {
   const output = [];
   await main(['--auto-close'], { home, stdout: s => output.push(JSON.parse(s)) });
   assert.ok(Array.isArray(output[0]));
+});
+
+test('answer closes open asks for the same ledger row or dedupe key', async t => {
+  const home = seat(t);
+  const ts = '2026-11-18T00:00:00.000Z';
+  const sessionId = 'abcdef12-full-session';
+  const text = (days, time = ts) => `【要対応・kim の判断待ち ${days}日】確認（元の約束: 作業 / セッション abcdef12 / 台帳 ts ${time}）`;
+  const original = await addItem(home, { kind: 'ask', text: text(2), sessionId });
+  const sameRow = await addItem(home, { kind: 'ask', text: '旧台帳に残った別表記' });
+  fs.writeFileSync(path.join(home, '.claude/kim-inbox', sameRow.id + '.json'), JSON.stringify({ ...sameRow, text: text(3) }));
+  const sameKey = await addItem(home, { kind: 'ask', text: '旧形式', dedupeKey: `auto-progress-escalate:${sessionId}${ts}` });
+  const otherRow = await addItem(home, { kind: 'ask', text: text(2, '2026-11-17T00:00:00.000Z') });
+
+  const answered = answerItem(home, original.id, '承認');
+  const items = new Map(listItems(home).map(item => [item.id, item]));
+  for (const duplicate of [sameRow, sameKey]) {
+    const saved = items.get(duplicate.id);
+    assert.equal(saved.status, 'superseded');
+    assert.equal(saved.supersededInto, answered.id);
+    assert.equal(saved.answer, answered.answer);
+    assert.equal(saved.answeredAt, answered.answeredAt);
+  }
+  assert.equal(items.get(otherRow.id).status, 'open');
+});
+
+test('answer is persisted while the aggregation lock is held', async t => {
+  const home = seat(t);
+  const ask = await addItem(home, { kind: 'ask', text: '確認', dedupeKey: 'job:1' });
+  const lock = path.join(home, '.claude/kim-inbox/info-aggregation.lock');
+  fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
+  const waitSetting = 'ORGIAST_INBOX_GROUP_LOCK_WAIT_MS';
+  const previousWait = process.env[waitSetting];
+  process.env[waitSetting] = '0';
+  t.after(() => {
+    if (previousWait === undefined) delete process.env[waitSetting];
+    else process.env[waitSetting] = previousWait;
+  });
+  const log = t.mock.method(console, 'error', () => {});
+
+  const answered = answerItem(home, ask.id, '承認');
+
+  assert.equal(answered.status, 'answered');
+  assert.deepEqual(listItems(home, { status: 'answered' }), [answered]);
+  assert.equal(answered.answer, '承認');
+  assert.equal(fs.readFileSync(lock, 'utf8'), String(process.pid));
+  assert.equal(log.mock.callCount(), 1);
+  assert.match(log.mock.calls[0].arguments[0], /回答は記録済み.*台帳が使用中です/);
+});
+
+test('drop closes only open asks with the matching key for ordinary questions', async t => {
+  const home = seat(t);
+  const original = await addItem(home, { kind: 'ask', text: '確認', dedupeKey: 'job:1' });
+  const duplicate = await addItem(home, { kind: 'ask', text: '別文面' });
+  const sameText = await addItem(home, { kind: 'ask', text: original.text });
+  const info = await addItem(home, { kind: 'info', text: '報告', dedupeKey: 'job:2' });
+  for (const item of [duplicate, info]) {
+    const file = path.join(home, '.claude/kim-inbox', item.id + '.json');
+    fs.writeFileSync(file, JSON.stringify({ ...item, dedupeKey: original.dedupeKey }));
+  }
+
+  const dropped = dropItem(home, original.id, '不要');
+  const items = new Map(listItems(home).map(item => [item.id, item]));
+  const saved = items.get(duplicate.id);
+  assert.equal(saved.status, 'superseded');
+  assert.equal(saved.supersededInto, dropped.id);
+  assert.equal(saved.answer, '不要');
+  assert.ok(dropped.answeredAt);
+  assert.equal(saved.answeredAt, dropped.answeredAt);
+  assert.equal(items.get(sameText.id).status, 'open');
+  assert.equal(items.get(info.id).status, 'open');
 });

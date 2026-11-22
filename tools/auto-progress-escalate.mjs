@@ -7,6 +7,8 @@ import { decisionOwnerOf } from './auto-progress-decision-owner.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { acquireLock } from './lib/progress-file-lock.mjs';
 import { isEntry } from './is-entry.mjs';
+import { listInboxMatches } from './kim-inbox.mjs';
+import { priorEscalations, syncEscalationAnswer, escalationDedupeKey } from './lib/escalation-answer-sync.mjs';
 
 const DAY_MS = 86400000;
 export const escalationRowKey = row => `${row.sessionId || ''}${row.ts || ''}`;
@@ -16,6 +18,20 @@ export function decisionAge(row, now) {
 }
 export function escalationText(row, now) {
   return `【要対応・kim の判断待ち ${Math.floor(decisionAge(row, now) / DAY_MS)}日】${String(row.nextKim || '').slice(0, 2000)}\n（元の約束: ${String(row.promise || '').slice(0, 80)} / PC ${row.pc || ''} / セッション ${String(row.sessionId || '').slice(0, 8)} / 台帳 ts ${row.ts || ''}）`;
+}
+/** nextKim が kim の操作不要を表すか判定する */
+export function isNoKimAction(text) {
+  const trimmed = (text ?? '').replace(/^[\s　]+|[\s　]+$/g, '');
+  if (!trimmed) return true;
+  const keywords = ['なし', '無し', '特になし', '不要', '対応不要'];
+  for (const kw of keywords) {
+    if (trimmed === kw) return true;
+    if (trimmed.startsWith(kw)) {
+      const next = trimmed[kw.length];
+      if (/^[（(【［〔｛「『）)】］〕｝」』、。，,：:—\-ー\s　\[]/.test(next)) return true;
+    }
+  }
+  return false;
 }
 
 export async function escalateKimDecisions({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), dryRun = false, io = {} } = {}) {
@@ -29,22 +45,36 @@ export async function escalateKimDecisions({ home = process.env.ORGIAST_HOME || 
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error('invalid escalation state');
     const rows = (io.readLedger ?? readLedger)(ledgerFile(home));
+    const inbox = io.listInbox ? io.listInbox(home) : listInboxMatches(home, item => item.kind === 'ask');
     const targets = [];
+    const suppressed = [];
     let sent = 0;
     const seen = new Set();
     for (const row of rows) {
       if (!OPEN_STATUSES.has(row.status) || decisionOwnerOf(row) !== 'kim' || !(decisionAge(row, now) >= 2 * DAY_MS)) continue;
       const escalatedNextKim = String(row.nextKim ?? '').replace(/^[\s　]+|[\s　]+$/g, '');
-      if (!escalatedNextKim || ['なし', '無し', '特になし', '不要', '対応不要'].includes(escalatedNextKim)) continue;
+      if (isNoKimAction(escalatedNextKim)) continue;
       const key = escalationRowKey(row);
       const lastSent = Date.parse(state[key]);
       if (seen.has(key) || (Number.isFinite(lastSent) && now - lastSent < DAY_MS)) continue;
       seen.add(key);
+      // 同じ行の ask が受信箱にあれば新しく積まない。回答済みなら台帳へ書き戻して二度と聞かない（2026-11-19）。
+      const prior = priorEscalations(inbox, row);
+      if (prior.closed.length || prior.open.length) {
+        const reason = prior.closed.length ? 'answered' : 'already-open';
+        suppressed.push({ rowKey: key, reason, items: prior.matched.map(item => item.id) });
+        if (!dryRun && prior.closed.length) {
+          const closedItem = prior.answered || prior.closed[0];
+          try { (io.syncAnswer ?? syncEscalationAnswer)(home, closedItem, { now }); }
+          catch (error) { (io.stderr ?? console.error)(`auto-progress-escalate: ${key}: 回答の書き戻しに失敗: ${error?.message || error}`); }
+        }
+        continue;
+      }
       const text = escalationText(row, now);
       targets.push({ rowKey: key, text });
       if (dryRun) continue;
       try {
-        const result = await (io.notifyKim ?? notifyKim)(text, { kind: 'ask', kimActionRequired: true, sessionId: row.sessionId || '', home, now });
+        const result = await (io.notifyKim ?? notifyKim)(text, { kind: 'ask', kimActionRequired: true, sessionId: row.sessionId || '', home, now, source: 'auto-progress-escalate', dedupeKey: escalationDedupeKey(key) });
         if (!['dm', 'webhook', 'session-inbox'].includes(result?.delivered)) {
           (io.stderr ?? console.error)(`auto-progress-escalate: ${key}: ${result?.delivered || 'none'}: ${result?.reason || 'not delivered'}`);
           continue;
@@ -58,7 +88,7 @@ export async function escalateKimDecisions({ home = process.env.ORGIAST_HOME || 
         (io.stderr ?? console.error)(`auto-progress-escalate: ${key}: ${error?.message || error}`);
       }
     }
-    return { targets, sent };
+    return { targets, sent, suppressed };
   } finally { release(); }
 }
 

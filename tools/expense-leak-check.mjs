@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // Read-only freee/Gmail/Yahoo reconciliation. Only the dedicated Sheet tab and kim DM are written.
 import { readFile, writeFile, mkdir, rename, open, unlink } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
-import { getAccessToken } from './lib/freee-auth.mjs';
+import { getAccessToken, hasFreeeDbConfig } from './lib/freee-auth.mjs';
 import { sheetsMetadata, sheetsGet, sheetsAppend, ensureSheetTab, quoteTab } from './lib/sheets-dwd.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -35,8 +36,8 @@ export const shiftDay = (day, count) => new Date(Date.parse(`${day}T00:00:00Z`) 
 export const projectCode = (day) => `${day.slice(2, 4)}${day.slice(5, 7)}01OR`;
 function validDay(day) { return /^\d{4}-\d{2}-\d{2}$/.test(day) && !Number.isNaN(Date.parse(day)) && shiftDay(day, 0) === day; }
 export function parseArgs(argv, env = process.env) {
-  const opts = { today: env.EXPENSE_LEAK_TODAY || jstDay(), dryRun: false, weekly: false, noYahoo: false, noGmail: false, limit: Infinity, verification: false };
-  const flags = { '--dry-run': 'dryRun', '--weekly': 'weekly', '--no-yahoo': 'noYahoo', '--no-gmail': 'noGmail', '--verification': 'verification' };
+  const opts = { today: env.EXPENSE_LEAK_TODAY || jstDay(), dryRun: false, weekly: false, noYahoo: false, noGmail: false, limit: Infinity, verification: false, verbose: false };
+  const flags = { '--dry-run': 'dryRun', '--weekly': 'weekly', '--no-yahoo': 'noYahoo', '--no-gmail': 'noGmail', '--verification': 'verification', '--verbose': 'verbose' };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (flags[arg]) opts[flags[arg]] = true;
@@ -266,17 +267,21 @@ export async function runCheck(opts, injected = {}) {
   const save = injected.save || atomicJson;
   const state = injected.state || await readState(opts.statePath);
   if (opts.weekly && weeklySkip(opts.today, state.lastRunAt)) return { skip: true };
-  const result = { today: opts.today, from: opts.from, to: opts.to, dryRun: opts.dryRun, wallets: [], statusCounts: {}, candidateTotal: 0, results: [], cacheHits: 0, yahooUnavailable: false, issues: [], appended: 0, complete: false };
+  const result = { today: opts.today, from: opts.from, to: opts.to, dryRun: opts.dryRun, wallets: [], statusCounts: {}, candidateTotal: 0, results: [], cacheHits: 0, yahooUnavailable: false, issues: [], appended: 0, complete: false, failReason: '' };
   const budget = { gmail: Object.fromEntries(USERS.map((u) => [u, 0])), yahoo: 0, yahooUnavailable: false, yahooFailed: false, yahooUnverified: 0 };
   result.searches = budget;
   async function checkpoint() { await save(opts.out, result); if (!opts.dryRun) await save(opts.statePath, state); }
+  let stage = 'db-connect';
   try {
     const get = injected.freeeGet || await makeFreeeGet();
+    stage = 'freee-read';
     const inventory = await collectTxns(get, opts, state, timeLeft);
     Object.assign(result, { wallets: inventory.wallets, statusCounts: inventory.statusCounts, candidateTotal: inventory.candidates.length });
+    stage = 'sheets-read';
     const metadata = await sheets.metadata(SPREADSHEET_ID);
     const privateTab = metadata.sheets?.find((s) => s.properties.title === '毎回私的利用')?.properties;
     const privateTerms = privateTab ? (await sheets.get(SPREADSHEET_ID, `${quoteTab(privateTab.title)}!A1:A${privateTab.gridProperties.rowCount}`)).flat().map(String).filter((s) => s.trim() && !['項目名', '利用先', '内容', '毎回私的利用'].includes(s.trim())) : [];
+    stage = 'expense-check';
     for (const txn of inventory.candidates.slice(0, opts.limit)) {
       const cached = state.txns[String(txn.id)];
       if (cached?.verdict) {
@@ -294,7 +299,9 @@ export async function runCheck(opts, injected = {}) {
       // Deferred entries deliberately have no verdict: retry next run; never pin an outage as unknown.
       state.txns[String(txn.id)] = deferred ? { evidence: search.evidence, checkedAt, searchStatus: search.deferred } : { verdict, evidence: search.evidence, checkedAt };
       result.yahooUnavailable = budget.yahooUnavailable;
+      stage = 'checkpoint-write';
       await checkpoint();
+      stage = 'expense-check';
     }
     result.yahooUnavailable = budget.yahooUnavailable;
     if (opts.weekly) {
@@ -304,6 +311,7 @@ export async function runCheck(opts, injected = {}) {
     result.complete = inventory.complete && !result.results.some((r) => r.deferred) && result.results.length === inventory.candidates.length;
     result.deferredTotal = result.results.filter((r) => r.deferred).length;
     if (!opts.dryRun) {
+      stage = 'sheets-write';
       const tab = await sheets.ensure(SPREADSHEET_ID, TAB, HEADER);
       const existing = await sheets.get(SPREADSHEET_ID, `${quoteTab(TAB)}!L2:L${Math.max(2, tab.gridProperties.rowCount)}`);
       const ids = new Set(existing.flat().map(String));
@@ -317,22 +325,55 @@ export async function runCheck(opts, injected = {}) {
         if (verified.length !== rows.length || verified.some((row, i) => HEADER.some((_, c) => String(row[c] ?? '') !== String(rows[i][c])))) throw new Error('Sheet append read-back mismatch');
         result.appendedRange = range;
       }
+      stage = 'discord-dm';
       result.notification = await (injected.notify || notifyKim)(dmText(result), { webhookFallback: false });
-      if (!['dm', 'session-inbox'].includes(result.notification.delivered)) throw new Error('Discord DM not delivered');
+      if (!['dm', 'session-inbox'].includes(result.notification?.delivered)) throw new Error('Discord DM not delivered');
       state.lastRunAt = `${opts.today}T03:00:00+09:00`;
     }
+    stage = 'checkpoint-write';
     await checkpoint();
     return result;
   } catch (error) {
-    // Only our controlled messages are safe to persist; low-level errors can include secrets.
-    result.issues.push(/^(freee |Invalid |Unsupported |Sheets |Sheet |Output tab |Discord |Cannot read)/.test(error.message) ? error.message : 'Run failed (network, filesystem or response error)');
-    result.failed = true;
+    // Only exception class and HTTP status are logged; messages may contain credentials.
+    const msg = String(error.message ?? '');
+    if (/^(freee |Invalid |Unsupported |Sheets |Sheet |Output tab |Discord |Cannot read)/.test(msg)) {
+      result.issues.push(msg);
+    } else {
+      const httpMatch = msg.match(/HTTP\s+(\d{3})/);
+      const qualifiers = [error.name || 'Error'];
+      if (httpMatch) qualifiers.push(`HTTP ${httpMatch[1]}`);
+      if (error.code && typeof error.code === 'string') qualifiers.push(`code=${error.code}`);
+      result.issues.push(`Run failed: ${qualifiers.join(' ')}`);
+    }
+    if (opts.verbose) console.error(`[expense-leak-check] ${error.name || 'Error'}: ${error.message}\n${error.stack || '(no stack)'}`);
+    // Incomplete scans can still have unseen candidates. Keep those failures retryable.
+    if (stage === 'discord-dm' && result.complete && result.candidateTotal === 0) {
+      state.lastRunAt = `${opts.today}T03:00:00+09:00`;
+    } else {
+      result.failed = true;
+      result.failReason = stage;
+    }
     await checkpoint();
     return result;
   }
 }
+function formatSummary(result) {
+  return `expense-leak-check: candidates=${result.candidateTotal} processed=${result.results.length} cached=${result.cacheHits} deferred=${result.deferredTotal || 0} appended=${result.appended} dm=${result.notification?.delivered || 'none'} yahooFailed=${result.searches.yahooFailed} failed=${!!result.failed} failReason=${result.failReason}`;
+}
+
+export function reportResult(result, log = console.log) {
+  if (result.skip) log('skip: weekly expense-leak-check');
+  else if (result.dryRun) log(JSON.stringify(result, null, 2));
+  else log(formatSummary(result));
+  return result.failed ? 1 : 0;
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  if (!hasFreeeDbConfig()) {
+    console.log('skip: expense-leak-check requires freee DB config (PURCHASING_APP_DATABASE_URL)');
+    return;
+  }
   // Lock dry runs too: all processes share the Yahoo browser profile and state.
   await mkdir(dirname(opts.statePath), { recursive: true });
   const lockPath = `${opts.statePath}.lock`;
@@ -342,10 +383,7 @@ async function main() {
   try {
     await lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
     const result = await runCheck(opts);
-    if (result.skip) console.log('skip: weekly expense-leak-check');
-    else if (opts.dryRun) console.log(JSON.stringify(result, null, 2));
-    else console.log(`expense-leak-check: candidates=${result.candidateTotal} processed=${result.results.length} cached=${result.cacheHits} deferred=${result.deferredTotal || 0} appended=${result.appended} dm=${result.notification?.delivered || 'none'} yahooFailed=${result.searches.yahooFailed} failed=${!!result.failed}`);
-    if (result.failed) process.exitCode = 1;
+    process.exitCode = reportResult(result);
   } finally { await lock.close(); await unlink(lockPath); }
 }
-if (isEntry(import.meta.url)) main().catch(() => { console.error('expense-leak-check: configuration/state/filesystem error; no credential details logged'); process.exitCode = 1; });
+if (isEntry(import.meta.url)) main().catch(() => { console.error('expense-leak-check: configuration/state/filesystem error; no credential details logged failReason=config-state-filesystem'); process.exitCode = 1; });

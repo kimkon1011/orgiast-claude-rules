@@ -44,6 +44,22 @@ test('Google client explicitly impersonates kim and preserves HTTP error status'
   await assert.rejects(client('https://example.invalid'), e => e.status === 403);
 });
 
+test('Google client includes at most 300 redacted characters of an HTTP error body', async () => {
+  const header = 'OCR conversion failed: ';
+  const body = `${header}Bearer echoed-token {"access_token":"fake-json-value"} ${'x'.repeat(300)}tail`;
+  const client = googleClient({ getToken: async () => 'request-token',
+    fetchImpl: async () => ({ ok: false, status: 400, text: async () => body }) });
+  await assert.rejects(client('https://example.invalid', { method: 'POST' }), error => {
+    const prefix = 'Google POST HTTP 400: ';
+    assert.equal(error.status, 400);
+    assert.ok(error.message.startsWith(prefix + header));
+    assert.equal(error.message.slice(prefix.length).length, 300);
+    assert.match(error.message, /REDACTED/);
+    assert.doesNotMatch(error.message, /echoed-token|fake-json-value|tail/);
+    return true;
+  });
+});
+
 test('Google client retries with seisaku-team only for the keyless-route error', async () => {
   const tokenRequests = [];
   const client = googleClient({

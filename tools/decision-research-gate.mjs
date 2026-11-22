@@ -18,14 +18,50 @@ function optionRows(text) {
   return rows.slice(1);
 }
 
+// Only recommendations/options count; quoted incidents and completed/negative facts do not.
+function proposalBody(text) {
+  return text.replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, '')
+    .replace(/^\s*>.*$/gm, '').replace(/「[^」]*」|『[^』]*』|“[^”]*”|"[^"\n]*"/g, '')
+    .replace(/\[(?:FREE-ALT-CHECKED|PAID-OK):[^\]\n]*\]/g, '');
+}
+const PAID = /有料|課金|アップグレード|契約|購入|月額|年額/;
+const OPTION = /(?:案\s*[A-ZＡ-Ｚ\d０-９①-⑨]|選択肢|おすすめ|推奨|提案|検討|判断待ち|してください|しませんか|しましょう|する方法|に切り替|へ変更|にする必要)|^\s*(?:\||[-*+]\s|\d+[.)、]\s*)/i;
+const NOT_PROPOSAL = /不要|提案しない|勧めない|見送|却下|禁止|契約済み|購入済み|支払済み|判断済み|解約済み|提案した|案内した|勧めた|検討した/;
+const FREE_ROUTE = /無料|追加費用(?:なし|ゼロ|0)|既存(?:経路|ツール|契約|枠)|Beeper|他AIレーン/i;
+const paidConsent = text => /\[PAID-OK:\s*[^\]\n]*[「『“"][^」』”"\n]{4,}[」』”"][^\]\n]*\]/.test(text);
+
+export function judgeFreeAlternatives(text) {
+  const raw = String(text || '').replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, '').replace(/^\s*>.*$/gm, '');
+  const body = proposalBody(raw);
+  const lines = body.split(/[\r\n。]+/).filter(line => !NOT_PROPOSAL.test(line));
+  const options = lines.filter(line => OPTION.test(line) && !/^\s*\|[\s:|-]+\|\s*$/.test(line));
+  // A table's price column alone is not a paid option (e.g. 月額 in the header).
+  const hasPrice = line => /(?:[¥$￥]\s*\+?[1-9][\d,.]*|[1-9][\d,]*\s*円)/.test(line);
+  const paidOptions = options.filter(line => (PAID.test(line) || hasPrice(line)) && !/^\s*\|\s*(?:案|選択肢|方法)\s*\|/.test(line));
+  if (!paidOptions.length) return [];
+  if (paidConsent(raw)) return [];
+  const missing = [];
+  const rows = optionRows(body);
+  const numbered = options.filter(line => /^\s*(?:[-*+]\s*)?(?:案\s*[A-ZＡ-Ｚ\d０-９①-⑨]|\d+[.)、])/i.test(line));
+  const comparison = rows.length ? rows : numbered;
+  if (comparison.length < 2 || !FREE_ROUTE.test(comparison[0]) || /有料|課金|アップグレード|購入/.test(comparison[0]) || hasPrice(comparison[0])) {
+    missing.push('無料・既存経路を先頭にした比較（無料案を案1に置く）');
+  }
+  const evidence = raw.match(/\[FREE-ALT-CHECKED:\s*([^\]\n]+)\]/)?.[1]?.trim();
+  if (!evidence || [...evidence].length < 20) missing.push('[FREE-ALT-CHECKED: 調べた無料経路と実測結果を20文字以上]');
+  return missing;
+}
+
 export function judge(text) {
   const body = String(text || '').replace(/```[\s\S]*?```/g, '');
-  if (/\[RESEARCH-OK\]/.test(body)) return { triggered: false, missing: [] };
-  const rows = optionRows(body);
-  const costDecision = COST_DECISION.test(body) && ASKS_USER.test(body);
+  const freeMissing = judgeFreeAlternatives(body);
+  if (/\[RESEARCH-OK\]/.test(body)) return { triggered: freeMissing.length > 0, missing: freeMissing };
+  const proposals = proposalBody(body).split(/[\r\n。]+/).filter(line => !NOT_PROPOSAL.test(line)).join('\n');
+  const rows = optionRows(proposals);
+  const costDecision = !paidConsent(body) && COST_DECISION.test(proposals) && ASKS_USER.test(proposals);
   const humanRequest = rows.some(row => HUMAN_REQUEST.test(row));
-  if (!costDecision && !humanRequest) return { triggered: false, missing: [] };
-  const missing = [];
+  if (!costDecision && !humanRequest) return { triggered: freeMissing.length > 0, missing: freeMissing };
+  const missing = [...freeMissing];
   if (humanRequest) {
     if (!/Claude.{0,20}(?:自身|実行|取得|復元|自動)/i.test(rows[0]) || !AUTO_ROUTE.test(rows[0])) {
       missing.push('Claude 自身が実行する案（自動経路）を比較表の先頭に置く');
@@ -49,5 +85,6 @@ export function judge(text) {
 export function formatReason(missing) {
   return `[RESEARCH-FIRST] 費用・プラン・契約・アカウント・人への作業依頼の判断材料の先回り調査が足りません: ${missing.join('・')}。`
     + ' user に聞かれる前に Claude が調べ、比較表（案・月額・得られる枠や効果・user の手間）＋出典＋推奨を付けてから提案すること'
-    + '（料金は ~/.claude/pricing-brief.md → 無ければ WebSearch）。人（user・他メンバー）に作業・再送・確認を頼む案を含むなら、Claude 自身が実行する案（自動経路）を先頭に置き、試した経路と結果を書く。本当に比較不要なら [RESEARCH-OK] <理由>。';
+    + '（料金は ~/.claude/pricing-brief.md → 無ければ WebSearch）。費用案は無料・既存経路を実測し、無料案を先頭、費用案を最後に置く。[FREE-ALT-CHECKED: 調べた無料経路と結果を20文字以上] が必要。kim がその課金を指示済みなら [PAID-OK: 「kim の指示の引用」]。'
+    + '人（user・他メンバー）に作業・再送・確認を頼む案を含むなら、Claude 自身が実行する案（自動経路）を先頭に置き、試した経路と結果を書く。本当に比較不要なら [RESEARCH-OK] <理由>（無料経路確認の免除にはならない）。';
 }

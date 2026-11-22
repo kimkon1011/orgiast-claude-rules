@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import { judgeUserBurden } from './user-burden-gate.mjs';
 const audit = '手間監査: ①Claude の PowerShell 実行は classifier に拒否された。②MCP と fleet の自己修復を試したが権限不足で失敗。user は1操作。';
 const launcher = 'C:\\Users\\日本語 user\\OneDrive\\Desktop\\登録（ダブルクリック）.cmd';
+const avoidancePlan = 'Claude で回避できる策: curl で直接 API を叩く代替経路があります。';
 for (const cli of ['pwsh -File x.ps1', 'powershell -File x.ps1', 'node x.mjs', 'npm run setup', 'git pull', './登録.ps1', 'bash setup.sh']) {
   test(`blocks command handoff: ${cli}`, () => assert.equal(judgeUserBurden(`実行してください。\n\`\`\`\n${cli}\n\`\`\`\n${audit}`).decision, 'block'));
 }
 test('launcher with both attempted routes passes', () => {
-  assert.equal(judgeUserBurden(`次に kim がすること: ダブルクリックする\n${launcher}\n${audit}`).decision, 'pass');
+  assert.equal(judgeUserBurden(`次に kim がすること: ダブルクリックする\n${launcher}\n${avoidancePlan}\n${audit}`).decision, 'pass');
 });
 test('no request: Claude command explanation does not trigger', () => {
   assert.equal(judgeUserBurden('Claude 自身が次を実行しました。\n```pwsh\nnode check.mjs\n```').triggered, false);
@@ -26,7 +27,7 @@ test('explicit request and justified override; incidental command mention is no 
 
 test('path-only handoff still requires audit evidence', () => {
   assert.equal(judgeUserBurden(launcher).decision, 'block');
-  assert.equal(judgeUserBurden(`${launcher}\n${audit}`).decision, 'pass');
+  assert.equal(judgeUserBurden(`${launcher}\n${avoidancePlan}\n${audit}`).decision, 'pass');
 });
 
 test('手渡し内の未確認事項を block する', () => {
@@ -39,11 +40,11 @@ test('手渡し内の未確認事項を block する', () => {
 });
 
 test('手渡し外の未確認は対象外', () => {
-  assert.equal(judgeUserBurden(`調査報告: 契約日は未確認です。\n次に kim がすること: ダブルクリックする\n${launcher}\n${audit}`).decision, 'pass');
+  assert.equal(judgeUserBurden(`調査報告: 契約日は未確認です。\n次に kim がすること: ダブルクリックする\n${launcher}\n${avoidancePlan}\n${audit}`).decision, 'pass');
 });
 
 test('未確認事項のない手渡しは従来どおり通過', () => {
-  assert.equal(judgeUserBurden(`次に kim がすること: ダブルクリックする\n${launcher}\n${audit}`).decision, 'pass');
+  assert.equal(judgeUserBurden(`次に kim がすること: ダブルクリックする\n${launcher}\n${avoidancePlan}\n${audit}`).decision, 'pass');
 });
 
 test('本番デプロイのターミナル手渡しは手順が揃っていても block する', () => {
@@ -80,7 +81,7 @@ test('誤止め放置: [BURDEN-OK] がある場合は通す', () => {
   assert.equal(judgeUserBurden(text).decision, 'pass');
 });
 test('誤止め放置: 止められた表現なしの通常依頼は既存判定に従う', () => {
-  const text = `次に kim がすること: ダブルクリックする\n${launcher}\n${audit}`;
+  const text = `次に kim がすること: ダブルクリックする\n${launcher}\n${avoidancePlan}\n${audit}`;
   assert.equal(judgeUserBurden(text).decision, 'pass');
 });
 
@@ -88,4 +89,24 @@ test('Claude が実行した報告と、user 自身が実行すると明示し�
   assert.equal(judgeUserBurden('Claude 側で `npx vercel deploy --prod --yes` を実行しました。`vercel inspect` で新しい id と alias を確認済みです。\n次に kim がすること: なし').triggered, false);
   const explicit = `user がご自身で実行すると仰ったので手順を再掲します。\n\`\`\`bash\nnpx vercel deploy --prod --yes\n\`\`\`\n実行してください。\n[PROD-DEPLOY-HANDOFF-OK] 「自分でデプロイしたい」と user が明示\n${audit}`;
   assert.equal(judgeUserBurden(explicit, 'コマンドを教えて').decision, 'pass');
+});
+
+test('手作業依頼に回避策なしは block', () => {
+  const result = judgeUserBurden(`${launcher}\n${audit}`);
+  assert.equal(result.decision, 'block');
+  assert.ok(result.missing.some(m => m.includes('回避できる策')));
+});
+
+test('手作業依頼に「Claude で回避できる策:」ありは pass', () => {
+  const text = `次に kim がすること: ダブルクリックする\n${launcher}\n${avoidancePlan}\n${audit}`;
+  assert.equal(judgeUserBurden(text).decision, 'pass');
+});
+
+test('[BURDEN-OK] は回避策チェックをバイパスする', () => {
+  const text = `次に kim がすること: ダブルクリックする\n${launcher}\n[BURDEN-OK] 人にしかできない操作\n${audit}`;
+  assert.equal(judgeUserBurden(text).decision, 'pass');
+});
+
+test('手作業依頼なしは回避策チェック不要', () => {
+  assert.equal(judgeUserBurden('以上で報告を終わります。').triggered, false);
 });

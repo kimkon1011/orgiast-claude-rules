@@ -5,11 +5,32 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { closeRecord, llmFailureReason } from './session-auto-close.mjs';
+import {
+  closeRecord,
+  DEFAULT_MAX,
+  llmFailureReason,
+  MAX_TRIAGE_TIMEOUT_MS,
+  TRIAGE_TIMEOUT_PER_ITEM_MS,
+  triageTimeoutMs,
+} from './session-auto-close.mjs';
 
 const execFileAsync = promisify(execFile);
 const sessionId = 'f84f4059-586b-4161-a9ab-c026ad9adb7e';
 const closedAt = '2026-09-14T00:00:00.000Z';
+
+test('既定 --max は滞留を1回で消化できる360件', () => {
+  assert.equal(DEFAULT_MAX, 360);
+});
+
+test('triage timeoutは実測ベースの8.1秒/件、最小30秒、360件分を上限とする', () => {
+  assert.equal(TRIAGE_TIMEOUT_PER_ITEM_MS, 8_100);
+  assert.equal(MAX_TRIAGE_TIMEOUT_MS, 2_916_000);
+  assert.equal(triageTimeoutMs(0), 30_000);
+  assert.equal(triageTimeoutMs(1), 30_000);
+  assert.equal(triageTimeoutMs(40), 324_000);
+  assert.equal(triageTimeoutMs(DEFAULT_MAX), MAX_TRIAGE_TIMEOUT_MS);
+  assert.equal(triageTimeoutMs(1_000), MAX_TRIAGE_TIMEOUT_MS);
+});
 
 function record(overrides = {}) {
   return {
@@ -251,4 +272,25 @@ test('CLI: 4種類の失敗理由を行ごとに表示し、集計には内訳�
   assert.match(result.stdout, /LLM判定失敗 \(verdict=不明\)/);
   assert.match(result.stdout, /LLM判定失敗 \(confidence=42 <60\)/);
   assert.match(result.stderr, /LLM判定失敗 4件 \(llmフィールド無し 1件、失敗 1件、不明 1件、confidence<60 1件\)/);
+});
+
+test('CLI: triageが完了/confidence=90を返す対話無しセッションはexit 0で完了記帳される', async (t) => {
+  const fixture = await autoCloseFixture(t);
+  const sessions = [
+    record({ sessionId: '11111111-1111-4111-8111-111111111111', llm: { verdict: '完了', confidence: 90, next: '' } }),
+    record({ sessionId: '22222222-2222-4222-8222-222222222222', llm: { verdict: '完了', confidence: 90, next: '' } }),
+    record({ sessionId: '33333333-3333-4333-8333-333333333333', llm: { verdict: '完了', confidence: 90, next: '' } }),
+  ];
+  const result = await fixture.run(sessions);
+  assert.equal(result.code, 0, `exit code 0 (stderr: ${result.stderr})`);
+  assert.doesNotMatch(result.stderr, /⚠️/, 'stderr に警告が無いこと');
+  assert.match(result.stdout, /完了 3件/);
+  assert.match(result.stdout, /LLM判定失敗 0件/);
+  assert.match(result.stdout, /LLMフォールバック 0件/);
+  const ledger = await fixture.readLedger();
+  assert.equal(Object.keys(ledger.sessions).length, 3);
+  for (const [id, entry] of Object.entries(ledger.sessions)) {
+    assert.equal(entry.reason, 'completed');
+    assert.equal(entry.llmFallback, undefined);
+  }
 });

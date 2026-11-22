@@ -85,7 +85,7 @@ const P2 = { find: text => auditAwareFind(/(次セッション|次回セッシ�
 // **完了通知の到着待ち・マージ待ちの言い回し自体**を W に含める。
 // 2026-10-27 quota-sweep 再監査（91cd4fa3）: 「検証は Codex に任せています。結果が出たらここに報告します。」が
 // 待機語を含まず素通りしたため、結果到着後の報告約束そのものも W に含める。
-const ARRIVAL_WAIT = /(?:終わる|終わった|完了する|完了した|マージされ(?:る|た))[^」"'\n]{0,20}(?:自動で)?(?:知らせ|通知|連絡)が(?:届|来|着)|(?:知らせ|通知|連絡)が(?:届|来|着)[^」"'\n]{0,20}(?:まで)?待|届き次第(?:検証|確認|対応|報告)|(?:結果|完了|終了)(?:が|を)?(?:出|戻っ|返っ|揃っ|届い|着い)(?:たら|次第)[^」"'\n]{0,20}(?:報告|お知らせ|共有|連絡)|(?:終わり|完了|終了)次第[^」"'\n]{0,20}(?:報告|お伝え|お知らせ|共有|連絡)|(?:PR|マージ|取り込み)[^」"'\n]{0,20}を待って(?:います|いる|ます|おります)/;
+const ARRIVAL_WAIT = /(?:終わる|終わった|完了する|完了した|マージされ(?:る|た))[^」"'\n]{0,20}(?:自動で)?(?:知らせ|通知|連絡)が(?:届|来|着)|(?:知らせ|通知|連絡)が(?:届|来|着)[^」"'\n]{0,20}(?:まで)?待|(?:通知|連絡)がまだ(?:来て|届いて|着いて)いません|届き次第(?:検証|確認|対応|報告)|(?:結果|完了|終了)(?:が|を)?(?:出|戻っ|返っ|揃っ|届い|着い)(?:たら|次第)[^」"'\n]{0,20}(?:報告|お知らせ|共有|連絡)|(?:終わり|完了|終了)次第[^」"'\n]{0,20}(?:報告|お伝え|お知らせ|共有|連絡)|(?:PR|マージ|取り込み)[^」"'\n]{0,20}を待って(?:います|いる|ます|おります)/;
 // 116827928ab09de7: 他レーンが「修正中で、まだ確かめられる状態にない」
 // と再テストを後続へ残す表現。レーン名と未検証理由が揃う場合に限る。
 const LANE_STATUS_WAIT = /(?:セッション|Codex|codex-do|他AI|レーン)[^\n」"']{0,60}?(?:完了は?まだ|まだ完了|まだ実行中|完了待ち|結果を待って|(?:している|ている|待っている|動いている|走っている)ところです|(?:している|ている)最中|(?:修正|実装|改修|検証)中(?:で|のため|なので)[、, ]*まだ(?:確かめ|確認|検証)(?:られる状態にない|できない|できません)|を待っています|を待っている)/;
@@ -141,6 +141,25 @@ const W  = {
   find(text) {
     for (const match of text.matchAll(new RegExp(`(数分|しばらく|少し|少々)[^」"'\\n]{0,20}(お?待ち|待って)|完了を?待って|完了を待ち(?:ます|、)|完了待ちで|[^\\s」"'\\n]{0,30}?のを待って(?:います|ます|いる|おります)|${REPLY_WAIT.source}|${ARRIVAL_WAIT.source}|${LANE_STATUS_WAIT.source}|${DATA_WAIT}`, 'g'))) {
       if (isAuditCitation(text, match.index) || isPatternNameQuote(text, match.index)) continue;
+      // 別セッションの待機文を引用した検証・報告と、待機対象が無い旨の否定は W にしない。
+      // 一方、返事や完了通知が未着、作業が未完了という否定は待機継続なので残す。
+      const lineStart = text.lastIndexOf('\n', match.index - 1) + 1;
+      const lineEndAt = text.indexOf('\n', match.index);
+      const lineEnd = lineEndAt < 0 ? text.length : lineEndAt;
+      const line = text.slice(lineStart, lineEnd);
+      const quoteStart = text.lastIndexOf('「', match.index);
+      const quoteEnd = quoteStart < 0 ? -1 : text.indexOf('」', match.index);
+      const inQuote = quoteStart >= lineStart && quoteEnd >= match.index && quoteEnd < lineEnd;
+      const clauseStart = Math.max(lineStart, text.lastIndexOf('。', match.index - 1) + 1, text.lastIndexOf('|', match.index - 1) + 1);
+      const periodEnd = text.indexOf('。', match.index);
+      const pipeEnd = text.indexOf('|', match.index);
+      const clauseEnd = Math.min(lineEnd, periodEnd < 0 ? lineEnd : periodEnd, pipeEnd < 0 ? lineEnd : pipeEnd);
+      const clause = text.slice(clauseStart, clauseEnd).trim();
+      const sessionId = /\b[0-9a-f]{8}\b/i;
+      if (inQuote && sessionId.test(clause)) continue;
+      if (line.includes('|') && sessionId.test(line)) continue;
+      if (/(?:ありません|ない|なし|いません)$/.test(clause)
+          && !/(?:返事|返答|回答)[^。|\n]{0,20}(?:ありません|ない)$|(?:通知|連絡)[^。|\n]{0,20}(?:来て|届いて|着いて)いません$|(?:まだ[^。|\n]{0,12})?(?:終わって|完了して)いません$/.test(clause)) continue;
       if (REPLY_WAIT.test(match[0]) && EXTERNAL_WAIT_SUBJECT.test(text.slice(Math.max(0, match.index - 60), match.index))) continue;
       if (INBOX_RELAY.test(text.slice(Math.max(0, match.index - 200), match.index))) continue;
       if (DELEGATION_STARTED.test(text.slice(Math.max(0, match.index - 120), match.index))) continue;

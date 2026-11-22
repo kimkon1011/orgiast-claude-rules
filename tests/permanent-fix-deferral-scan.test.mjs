@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { scan } from '../tools/permanent-fix-deferral-scan.mjs';
+import { detect, scan } from '../tools/permanent-fix-deferral-scan.mjs';
 
 function jsonl(file, entries) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -134,4 +134,28 @@ test('archive ディレクトリが存在しない → 例外なく従来どお�
   assert.equal(source.hits, 1);
   assert.equal(source.byPattern.W, 1);
   assert.equal(source.rows[0].resolved, 'unknown');
+});
+
+test('待機語を含む節が作業なしの否定で終わる場合は W にしない', () => {
+  const text = 'タブは開けていません。普段の起動先は VSCode です（vscode・有効） | このセッションで新たに止まっている作業や、金さんを待っている作業はありません';
+  assert.equal(detect(text).some(hit => hit.pattern === 'W'), false);
+});
+
+test('別セッションの待機文を引用した検証表は W にしない', () => {
+  const text = 'いう報告はない | | 3da37415 | 74a11b05 | **実再発** | 「Codex の作業が終わるのを待っています」のあと、完了通知も応答もな';
+  assert.equal(detect(text).some(hit => hit.pattern === 'W'), false);
+});
+
+test('別セッションの待機文を引用した完了報告は W にしない', () => {
+  const text = '【最終まとめ】 ① 報告 212coffee の無料掲載の準備（11/21 に「Codex の作業が終わるのを待っています」で止まったセッション 74a11b05';
+  assert.equal(detect(text).some(hit => hit.pattern === 'W'), false);
+});
+
+test('実際に継続している待機文は W のまま検出する', () => {
+  const texts = [
+    'Codex がテスト・PR 着地・読み戻しを進めています。終わると自動で通知が来るので、それまで待ちます。',
+    '公式ページの確認結果が届くのを待っています。届いたらマニュアルと移行計画を書き上げます。',
+    '完了通知がまだ来ていません。届いたら締めます。'
+  ];
+  for (const text of texts) assert.equal(detect(text).some(hit => hit.pattern === 'W'), true, text);
 });

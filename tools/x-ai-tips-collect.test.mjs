@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runCollect, runCli, parseArgs, estimateCost, canonicalUrl, weeklySummary, validateConfig } from './x-ai-tips-collect.mjs';
+import { runCollect, runCli, parseArgs, estimateCost, canonicalUrl, weeklySummary, validateConfig, validateState, classifyApiError } from './x-ai-tips-collect.mjs';
 const defaults = JSON.parse(fs.readFileSync(new URL('../config/x-ai-tips-topics.json', import.meta.url)));
 const now = new Date('2026-11-03T12:00:00Z');
 const item = { url: 'https://x.com/test/status/123?s=20', author: '@test', title: 'キャッシュを使う', summary: '固定部分を共通化', steps: '共通の指示を先頭に置き、usageを比較する', purpose: 'cost', category: 'cost', postedAt: '2026-11-03T10:00:00Z', likes: 20 };
@@ -82,13 +82,40 @@ for (const status of [401, 429]) test(`HTTP ${status} 即時打ち切り・予�
   const result = await runCollect(ctx.options); assert.equal(result.calls, 1); assert.equal(result.status, `error:API HTTP ${status}`);
   assert.equal(JSON.parse(fs.readFileSync(ctx.file('x-ai-tips/runs.jsonl'))).reserved, true);
 });
-test('HTTP 403 のクレジット切れ本文を安全な案内に変換', async t => {
-  const ctx = setup(t, { fetchFn: async () => ({
+test('HTTP 403 のクレジット切れはstateへ記録して残トピックを呼ばず正常スキップ', async t => {
+  const logs = []; let calls = 0;
+  const ctx = setup(t, { log: line => logs.push(line), fetchFn: async () => {
+    calls++;
+    return {
     ok: false,
     status: 403,
     text: async () => JSON.stringify({ code: 'permission-denied', error: 'Your team has either used all available credits or reached its monthly spending limit.' }),
-  }) });
-  assert.equal((await runCollect(ctx.options)).status, 'error:API HTTP 403 xAIクレジット切れまたは月額上限（console.x.ai の Billing で追加/上限変更）');
+    };
+  } });
+  ctx.options.config.topics = defaults.topics;
+  assert.equal((await runCollect(ctx.options)).status, 'skip:支払い待ち');
+  assert.equal(calls, 1);
+  assert.equal(readState(ctx).creditBlockedAt, now.toISOString());
+  assert.deepEqual(logs, ['x.ai チームの残高切れ・月次上限のためスキップしました（支払いの承認待ち）。鍵は正常です。']);
+});
+test('同日のcreditBlockedAtはAPIを呼ばず1行だけ出して正常スキップ', async t => {
+  const logs = [];
+  const ctx = setup(t, { log: line => logs.push(line), fetchFn: () => assert.fail('API禁止') });
+  fs.mkdirSync(ctx.file('x-ai-tips'), { recursive: true });
+  fs.writeFileSync(ctx.file('x-ai-tips/state.json'), JSON.stringify({ creditBlockedAt: now.toISOString() }));
+  assert.equal((await runCollect(ctx.options)).status, 'skip:支払い待ち');
+  assert.equal(logs.length, 1);
+});
+test('APIエラー分類は403の残高・上限だけをcredit-blockedにする', () => {
+  assert.equal(classifyApiError(403, '{"code":"permission-denied","error":"...credits..."}'), 'credit-blocked');
+  assert.equal(classifyApiError(403, 'Your team has reached its monthly spending limit.'), 'credit-blocked');
+  assert.equal(classifyApiError(403, '{"code":"invalid-api-key"}'), 'fatal');
+  assert.equal(classifyApiError(500, 'oops'), 'fatal');
+  assert.equal(classifyApiError(403, ''), 'fatal');
+});
+test('validateStateは文字列のcreditBlockedAtだけを受理', () => {
+  assert.doesNotThrow(() => validateState({ creditBlockedAt: now.toISOString() }));
+  assert.throws(() => validateState({ creditBlockedAt: 123 }), /creditBlockedAt/);
 });
 test('HTTP 401 は応答本文の code だけをエラー文に付加', async t => {
   const ctx = setup(t, { fetchFn: async () => ({ ok: false, status: 401, text: async () => '{"code":"unauthenticated"}' }) });

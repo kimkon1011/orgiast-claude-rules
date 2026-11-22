@@ -41,8 +41,16 @@ export function validateState(state) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error('state形式不正');
   for (const key of ['urls', 'hashes']) if (state[key] !== undefined && (!Array.isArray(state[key]) || state[key].some(x => typeof x !== 'string'))) throw new Error(`state形式不正: ${key}`);
   if (state.lastId !== undefined && (!Number.isSafeInteger(state.lastId) || state.lastId < 0)) throw new Error('state形式不正: lastId');
+  if (state.creditBlockedAt !== undefined && typeof state.creditBlockedAt !== 'string') throw new Error('state形式不正: creditBlockedAt');
   if (state.night && (!/^\d{4}-\d{2}-\d{2}$/.test(state.night.date) || !Number.isSafeInteger(state.night.calls) || state.night.calls < 0 || !Number.isFinite(state.night.costUsd) || state.night.costUsd < 0)) throw new Error('state形式不正: night');
   return state;
+}
+export function classifyApiError(status, bodyText) {
+  if (status !== 403) return 'fatal';
+  const text = String(bodyText ?? '');
+  let code;
+  try { code = JSON.parse(text)?.code; } catch {}
+  return code === 'permission-denied' || /credits|spending limit/i.test(text) ? 'credit-blocked' : 'fatal';
 }
 export function canonicalUrl(value) {
   try {
@@ -137,6 +145,11 @@ export async function runCollect(options = {}) {
     const startTopicIndex = state.nextTopicIndex;
     const date = japanDate(now);
     if (state.night?.date !== date) state.night = { date, calls: 0, costUsd: 0 };
+    const creditBlockedMessage = 'x.ai チームの残高切れ・月次上限のためスキップしました（支払いの承認待ち）。鍵は正常です。';
+    if (state.creditBlockedAt && Number.isFinite(Date.parse(state.creditBlockedAt)) && japanDate(new Date(state.creditBlockedAt)) === date) {
+      log(creditBlockedMessage);
+      return { status: 'skip:支払い待ち', calls, cost, added, duplicates };
+    }
     // 送信直前に予約する。配送後クラッシュでも同じ週に二重送信しない。
     if (new Date(`${date}T00:00:00Z`).getUTCDay() === 1 && state.weekly?.date !== date) {
       const body = weeklySummary(lines(read(proposalFile, '')), now);
@@ -155,6 +168,7 @@ export async function runCollect(options = {}) {
     if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('--limit は正の整数');
     const simulated = [];
     let failedTopics = 0;
+    let creditBlocked = false;
     save(state);
     for (let offset = 0; offset < Math.min(topicCount, limit); offset++) {
       const topicIndex = (startTopicIndex + offset) % topicCount;
@@ -178,10 +192,16 @@ export async function runCollect(options = {}) {
             const parsed = JSON.parse(responseBody);
             if (typeof parsed?.code === 'string' && parsed.code) code = parsed.code;
           } catch {}
-          const creditLimit = response.status === 403 && /credits|spending limit/i.test(responseBody);
-          throw new Error(creditLimit
-            ? 'API HTTP 403 xAIクレジット切れまたは月額上限（console.x.ai の Billing で追加/上限変更）'
-            : `API HTTP ${response.status}${code ? ` (${code})` : ''}`);
+          if (classifyApiError(response.status, responseBody) === 'credit-blocked') {
+            state.creditBlockedAt = now.toISOString();
+            save(state);
+            log(creditBlockedMessage);
+            creditBlocked = true;
+            const error = new Error('支払い待ち');
+            error.creditBlocked = true;
+            throw error;
+          }
+          throw new Error(`API HTTP ${response.status}${code ? ` (${code})` : ''}`);
         }
         const json = await response.json(); awaitingResponse = false; usage = json.usage;
         actual = estimateCost(usage, config.estimatedRates);
@@ -201,14 +221,18 @@ export async function runCollect(options = {}) {
         added += result.added.length; save(state);
       } catch (error) {
         failure = error.message;
-        const timedOut = awaitingResponse && (signal?.aborted || ['TimeoutError', 'AbortError'].includes(error.name));
-        if (!serverError && !timedOut) throw error;
-        failedTopics++;
+        if (!error.creditBlocked) {
+          const timedOut = awaitingResponse && (signal?.aborted || ['TimeoutError', 'AbortError'].includes(error.name));
+          if (!serverError && !timedOut) throw error;
+          failedTopics++;
+        }
       }
       finally {
-        if (!dryRun) fs.appendFileSync(path.join(dir, 'runs.jsonl'), JSON.stringify({ at: now.toISOString(), night: date, topic, model: 'grok-4.6', usage, costUsd: actual ?? config.reservePerCallUsd, estimated: usage?.cost_in_usd_ticks == null, reserved: actual == null, status: failure ? `error:${failure}` : 'ok', nightCalls: state.night.calls, nightCostUsd: state.night.costUsd }) + '\n');
+        if (!dryRun) fs.appendFileSync(path.join(dir, 'runs.jsonl'), JSON.stringify({ at: now.toISOString(), night: date, topic, model: 'grok-4.6', usage, costUsd: actual ?? config.reservePerCallUsd, estimated: usage?.cost_in_usd_ticks == null, reserved: actual == null, status: creditBlocked ? 'skip:支払い待ち' : failure ? `error:${failure}` : 'ok', nightCalls: state.night.calls, nightCostUsd: state.night.costUsd }) + '\n');
       }
+      if (creditBlocked) break;
     }
+    if (creditBlocked) return { status: 'skip:支払い待ち', calls, cost, added, duplicates };
     if (failedTopics) throw new Error(`テーマ失敗${failedTopics}件（残りのテーマは処理継続）`);
     return { status: `ok:取得${acquired}件 追加${added}件 重複${duplicates}件 費用$${cost.toFixed(2)}`, calls, cost, added, duplicates };
   } catch (error) {

@@ -64,7 +64,13 @@ export function auditTasks(tasks, overrides = {}, now = Date.now(), { required =
     const maxAgeHours = override.maxAgeHours ?? (period === null ? null : Math.max(2, period * 1.5 + 1));
     if (!(maxAgeHours > 0)) continue;
     const last = stamp(task.lastRunTime);
-    if (['Ready', 'Running'].includes(task.state) && (!Number.isFinite(last) || new Date(last).getUTCFullYear() <= 1999 || +now - last > maxAgeHours * HOUR)) add('missed');
+    const next = stamp(task.nextRunTime);
+    if (['Ready', 'Running'].includes(task.state) && (!Number.isFinite(last) || new Date(last).getUTCFullYear() <= 1999 || +now - last > maxAgeHours * HOUR)) {
+      // Don't mark as missed if there's a future scheduled run
+      if (!Number.isFinite(next) || next > now) {
+        add('missed');
+      }
+    }
     if (task.lastTaskResult != null && !SUCCESS_RESULTS.includes(Number(task.lastTaskResult))) add('failed');
     for (const artifact of override.artifacts || []) {
       const mtime = artifactMtimes[artifact];

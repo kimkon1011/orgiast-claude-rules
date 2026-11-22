@@ -70,7 +70,7 @@ test('Send-ToRclone の rclone コマンドは copyto を使い $ZipName を宛�
 
   assert.ok(body.includes('copyto'), 'rclone コマンドが copy ではなく copyto を使っている');
   assert.ok(body.includes('$ZipName'), 'copyto の宛先に $ZipName が含まれている');
-  assert.match(body, /& node \$copyHelper \$rcloneExe \$ZipPath/);
+  assert.match(body, /& \$nodeExe \$copyHelper \$rcloneExe \$ZipPath/);
   assert.match(body, /lib\\rclone-copy\.mjs/);
 });
 

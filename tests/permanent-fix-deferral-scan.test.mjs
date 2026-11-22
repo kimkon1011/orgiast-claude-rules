@@ -151,6 +151,11 @@ test('別セッションの待機文を引用した完了報告は W にしな�
   assert.equal(detect(text).some(hit => hit.pattern === 'W'), false);
 });
 
+test('表内の8桁の日付はセッションIDと扱わず W のまま検出する', () => {
+  const text = '| 11/23 | 20261123 | Codex の完了を待っています |';
+  assert.equal(detect(text).some(hit => hit.pattern === 'W'), true);
+});
+
 test('実際に継続している待機文は W のまま検出する', () => {
   const texts = [
     'Codex がテスト・PR 着地・読み戻しを進めています。終わると自動で通知が来るので、それまで待ちます。',

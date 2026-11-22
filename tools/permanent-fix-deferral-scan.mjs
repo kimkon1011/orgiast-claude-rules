@@ -155,7 +155,7 @@ const W  = {
       const pipeEnd = text.indexOf('|', match.index);
       const clauseEnd = Math.min(lineEnd, periodEnd < 0 ? lineEnd : periodEnd, pipeEnd < 0 ? lineEnd : pipeEnd);
       const clause = text.slice(clauseStart, clauseEnd).trim();
-      const sessionId = /\b[0-9a-f]{8}\b/i;
+      const sessionId = /\b(?=[0-9a-f]{0,7}[a-f])[0-9a-f]{8}\b/i;
       if (inQuote && sessionId.test(clause)) continue;
       if (line.includes('|') && sessionId.test(line)) continue;
       if (/(?:ありません|ない|なし|いません)$/.test(clause)

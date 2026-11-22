@@ -14,6 +14,11 @@ import { clearStaleIndexLock } from './dirty-worktree-guard.mjs';
 const RETRY_MS = 6 * 60 * 60 * 1000;
 const RESCUE_REVIEW_KEY = 'rescue-branch-review';
 export const WORK_DIRECTORY_EXCLUDES = ['scratch/', '.work/', '.work-*/', '.fleet-mail-work/'];
+
+export function buildRescueReviewMessage(branch, branches) {
+  const all = [...branches].sort();
+  return `rescue ブランチのレビュー・削除承認待ち（最新: ${branch} ／ 計 ${all.length} 件）\n対象ブランチ:\n${all.map(name => `- ${name}`).join('\n')}`;
+}
 const excluded = name => WORK_DIRECTORY_EXCLUDES.some(pattern => {
   const root = name.split('/')[0];
   const directory = pattern.slice(0, -1);
@@ -273,10 +278,10 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
         const existing = listItems(home).find(item => item.dedupeKey === RESCUE_REVIEW_KEY);
         const known = String(existing?.text || '').match(/rescue\/auto-session-\d{8}-\d{6}(?:-\d+)?/g) || [];
         state.rescueBranches = [...new Set([...(state.rescueBranches || []), ...known, branch])].sort();
-        state.rescueCount = (state.rescueCount ?? existing?.count ?? existing?.repeatCount ?? 0) + 1;
+        state.rescueCount = state.rescueBranches.length;
         save();
         const all = state.rescueBranches;
-        const message = `rescue ブランチのレビュー・削除承認待ち（最新: ${branch} ／ 計 ${state.rescueCount} 件）\n対象ブランチ:\n${all.map(name => `- ${name}`).join('\n')}`;
+        const message = buildRescueReviewMessage(branch, all);
         await notify(message, { home, kind: 'ask', kimActionRequired: true, source: 'nightly-bootstrap', dedupeKey: RESCUE_REVIEW_KEY, replaceExisting: true, incrementExisting: true, plainJa: false });
       }
     } catch (e) {

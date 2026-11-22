@@ -15,6 +15,9 @@ Assert ($r.changed -and $script:writes -eq 2) 'initial registration of two tasks
 $task1 = $script:stored['OrgiastReopenLostSessions']
 Assert ($task1.Triggers[0].Delay -eq 'PT3M') 'task1 three minute logon delay'
 Assert ($task1.Triggers[0].CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger') 'task1 logon trigger'
+Assert ($task1.Triggers.Count -eq 2) 'task1 has logon and polling triggers'
+Assert ($task1.Triggers[1].CimClass.CimClassName -eq 'MSFT_TaskTimeTrigger') 'task1 polling trigger is time based'
+Assert ($task1.Triggers[1].Repetition.Interval -eq 'PT15M') 'task1 polls every 15 minutes'
 Assert ($task1.Actions[0].Execute -like '*wscript.exe') 'task1 hidden action'
 Assert ($task1.Actions[0].Arguments -like '*run-hidden.vbs*node.exe*reopen-lost-sessions.mjs*') 'task1 hidden node invocation'
 

@@ -14,6 +14,7 @@ function Get-ReopenDefinition($Task) {
         Enabled = $Task.Settings.Enabled; Instances = [string]$Task.Settings.MultipleInstances
         Limit = $Task.Settings.ExecutionTimeLimit; Battery = $Task.Settings.DisallowStartIfOnBatteries
         StopBattery = $Task.Settings.StopIfGoingOnBatteries; Priority = [string]$Task.Settings.Priority
+        RestartCount = [string]$Task.Settings.RestartCount; RestartInterval = [string]$Task.Settings.RestartInterval
     } | ConvertTo-Json -Depth 5 -Compress
 }
 # マシンローカルの reopen-lost-sessions-*.mjs ラッパー。正本 reopen-lost-sessions.mjs は含めない。
@@ -72,9 +73,12 @@ function Register-ReopenLostTask(
     $action1 = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\wscript.exe') -Argument ('//nologo "{0}" "{1}" "{2}"' -f $hidden, $node, $file)
     $trigger1 = New-ScheduledTaskTrigger -AtLogOn -User $user
     $trigger1.Delay = 'PT3M'
+    # The action is a bounded one-shot. Polling makes it self-healing without a
+    # resident process whose death would otherwise go unnoticed until logon.
+    $trigger1b = New-ScheduledTaskTrigger -Once -At '2026-01-01T00:05:00' -RepetitionInterval (New-TimeSpan -Minutes 15)
     $principal1 = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
     $settings1 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit ([timespan]::Zero) -Priority 5
-    $desired1 = New-ScheduledTask -Action $action1 -Trigger $trigger1 -Principal $principal1 -Settings $settings1
+    $desired1 = New-ScheduledTask -Action $action1 -Trigger @($trigger1, $trigger1b) -Principal $principal1 -Settings $settings1
 
     $current1 = & $GetTask $name1
     $changed1 = $false

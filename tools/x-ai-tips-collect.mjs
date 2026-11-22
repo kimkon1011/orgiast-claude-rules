@@ -172,7 +172,16 @@ export async function runCollect(options = {}) {
         if (!response.ok) {
           awaitingResponse = false;
           serverError = response.status >= 500 && response.status < 600;
-          throw new Error(`API HTTP ${response.status}`);
+          let responseBody = '', code;
+          try {
+            responseBody = (await response.text()).slice(0, 2000);
+            const parsed = JSON.parse(responseBody);
+            if (typeof parsed?.code === 'string' && parsed.code) code = parsed.code;
+          } catch {}
+          const creditLimit = response.status === 403 && /credits|spending limit/i.test(responseBody);
+          throw new Error(creditLimit
+            ? 'API HTTP 403 xAIクレジット切れまたは月額上限（console.x.ai の Billing で追加/上限変更）'
+            : `API HTTP ${response.status}${code ? ` (${code})` : ''}`);
         }
         const json = await response.json(); awaitingResponse = false; usage = json.usage;
         actual = estimateCost(usage, config.estimatedRates);

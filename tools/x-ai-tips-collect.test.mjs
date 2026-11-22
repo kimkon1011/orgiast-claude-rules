@@ -82,6 +82,18 @@ for (const status of [401, 429]) test(`HTTP ${status} 即時打ち切り・予�
   const result = await runCollect(ctx.options); assert.equal(result.calls, 1); assert.equal(result.status, `error:API HTTP ${status}`);
   assert.equal(JSON.parse(fs.readFileSync(ctx.file('x-ai-tips/runs.jsonl'))).reserved, true);
 });
+test('HTTP 403 のクレジット切れ本文を安全な案内に変換', async t => {
+  const ctx = setup(t, { fetchFn: async () => ({
+    ok: false,
+    status: 403,
+    text: async () => JSON.stringify({ code: 'permission-denied', error: 'Your team has either used all available credits or reached its monthly spending limit.' }),
+  }) });
+  assert.equal((await runCollect(ctx.options)).status, 'error:API HTTP 403 xAIクレジット切れまたは月額上限（console.x.ai の Billing で追加/上限変更）');
+});
+test('HTTP 401 は応答本文の code だけをエラー文に付加', async t => {
+  const ctx = setup(t, { fetchFn: async () => ({ ok: false, status: 401, text: async () => '{"code":"unauthenticated"}' }) });
+  assert.equal((await runCollect(ctx.options)).status, 'error:API HTTP 401 (unauthenticated)');
+});
 test('usage不足・JSON破損・タイムアウトが成功扱いにならない', async t => {
   for (const fetchFn of [async () => response([], {}), async () => ({ ok: true, json: async () => ({ output_text: 'invalid', usage: { cost_in_usd_ticks: 1 } }) }), async () => { throw new Error('timeout'); }]) {
     const ctx = setup(t, { fetchFn }); assert.match((await runCollect(ctx.options)).status, /^error:/);

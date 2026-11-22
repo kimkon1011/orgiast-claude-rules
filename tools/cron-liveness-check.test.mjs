@@ -64,12 +64,21 @@ test('dunning: 対象0件でチャンネル未投稿でもerrorsが空ならok',
   assert.equal(actual.line, '✅ aujust督促(配達): 対象 0件 / DM 0 / チャンネル false / 請求 false');
 });
 
-test('dunning: 取得失敗と要約なしは異なるunknown文言', () => {
-  for (const [summary, message] of [[undefined, '実行ログを取得できません'], [null, '実行ログから配達結果を読めません']]) {
-    const actual = evaluateDunningDelivery(summary);
-    assert.equal(actual.status, 'unknown');
-    assert.equal(actual.line, `⚠️ aujust督促(配達): ${message}`);
-  }
+test('dunning: 要約なしはStep1未実行の疑いとしてalert', () => {
+  const actual = evaluateDunningDelivery(null, now);
+  assert.equal(actual.status, 'alert');
+  assert.equal(actual.line, '🚨 aujust督促(配達): 直近runで配達結果の JSON が出ていません（Step1 未実行の疑い）');
+});
+
+test('dunning: ログ取得失敗はunknownのまま', () => {
+  const actual = evaluateDunningDelivery(undefined, now);
+  assert.equal(actual.status, 'unknown');
+  assert.equal(actual.line, '⚠️ aujust督促(配達): 実行ログを取得できません');
+});
+
+test('dunning: 配達成功はok', () => {
+  const actual = evaluateDunningDelivery({ evaluated: 3, items: [1, 2, 3], errors: [], dmSent: 1, channelPosted: true, invoicePosted: true }, now);
+  assert.equal(actual.status, 'ok');
 });
 
 test('dunning: 正常時の件数・DM・投稿結果を表示し不正な型は?にする', () => {
@@ -89,6 +98,18 @@ test('dunning: 顧客名や要約内のトークンをlineに含めない', () =
 function result(value) {
   return evaluate([entry], { [key]: value }, now)[0];
 }
+
+test('deliveryProbe付きエントリはworkflow成否の評価対象から外す', () => {
+  const dunningEntry = { label: '督促', repo: 'owner/dunning', workflow: 'dunning.yml', everyDays: 1, deliveryProbe: 'dunning-json' };
+  const dunningKey = 'owner/dunning#dunning.yml';
+  const actual = evaluate(
+    [dunningEntry, entry],
+    { [dunningKey]: '2026-08-01T00:00:00.000Z', [key]: '2026-08-20T00:00:00.000Z' },
+    now,
+  );
+  assert.deepEqual(actual.map((item) => item.key), [key]);
+  assert.equal(actual[0].status, 'ok');
+});
 
 test('直近のschedule成功はok', () => {
   const actual = result('2026-08-20T00:00:00.000Z');

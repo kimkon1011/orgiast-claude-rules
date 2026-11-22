@@ -27,7 +27,7 @@ export function evaluateTop3Delivery(asOf, nowMs) {
 }
 
 export function evaluate(entries, lastSuccessByKey, nowMs) {
-  return entries.map((entry) => {
+  return entries.filter((entry) => !entry.deliveryProbe).map((entry) => {
     const key = `${entry.repo}#${entry.workflow}`;
     const raw = lastSuccessByKey[key];
     let lastSuccess = raw ?? null;
@@ -88,8 +88,8 @@ export function evaluateDunningDelivery(summary, nowMs) {
     status = 'unknown';
     line = `⚠️ ${label}: 実行ログを取得できません`;
   } else if (summary === null) {
-    status = 'unknown';
-    line = `⚠️ ${label}: 実行ログから配達結果を読めません`;
+    status = 'alert';
+    line = `🚨 ${label}: 直近runで配達結果の JSON が出ていません（Step1 未実行の疑い）`;
   } else if (summary.errors.length > 0) {
     status = 'alert';
     const firstError = String(summary.errors[0]).replace(/[\r\n]+/g, ' ').slice(0, 120);

@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { fetchMessages, parseSince } from './discord-digest.mjs';
 import { createLlmClient, parseEnvText, PROVIDERS } from './line-digest.mjs';
 import { getDriveToken } from './lib/drive-auth.mjs';
@@ -15,6 +16,7 @@ const DEFAULT_SHEET_ID = '1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24';
 const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 const ACTIVE_STATES = new Set(['未着手', '進行中', '保留']);
 const TYPES = new Set(['改善', 'タスク', '締切', '決定待ち', 'リスク']);
+const EXCLUDE_CONFIG_PATH = fileURLToPath(new URL('../config/discord-task-digest-exclude.json', import.meta.url));
 
 export function snowflakeToMs(id) {
   try { return Number((BigInt(String(id)) >> 22n) + 1420070400000n); } catch { return NaN; }
@@ -47,6 +49,30 @@ export function preprocessForTasks(messages) {
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
+  });
+}
+
+export function loadExcludeConfig(configPath) {
+  try {
+    const data = JSON.parse(fs.readFileSync(configPath || EXCLUDE_CONFIG_PATH, 'utf8'));
+    if (!Array.isArray(data?.rules)) return [];
+    return data.rules.map((rule) => ({
+      channelId: String(rule.channelId),
+      patterns: Array.isArray(rule.patterns) ? rule.patterns.map((p) => new RegExp(p)) : [],
+      reason: String(rule.reason || ''),
+    }));
+  } catch { return []; }
+}
+
+export function filterExcludedMessages(messages, channelId, rules) {
+  if (!rules?.length) return messages;
+  const channelRules = rules.filter((rule) => rule.channelId === String(channelId));
+  if (!channelRules.length) return messages;
+  return messages.filter((message) => {
+    const content = String(message?.content ?? message?.text ?? '');
+    return !channelRules.some((rule) =>
+      rule.patterns.some((pattern) => pattern.test(content))
+    );
   });
 }
 
@@ -277,12 +303,13 @@ async function extractTasks(messages, channel, { guildId, provider, llm }) {
 }
 
 function parseArgs(argv) {
-  const opts = { since: '24h', guild: DEFAULT_GUILD_ID, sheet: process.env.DISCORD_TASK_SHEET_ID?.trim() || DEFAULT_SHEET_ID, provider: 'groq', maxChannels: 120, dryRun: false, fixture: '', noLlm: false };
-  const valued = new Set(['since', 'guild', 'sheet', 'provider', 'max-channels', 'fixture']);
+  const opts = { since: '24h', guild: DEFAULT_GUILD_ID, sheet: process.env.DISCORD_TASK_SHEET_ID?.trim() || DEFAULT_SHEET_ID, provider: 'groq', maxChannels: 120, dryRun: false, fixture: '', noLlm: false, closeMatchingExcluded: false, excludeConfig: '' };
+  const valued = new Set(['since', 'guild', 'sheet', 'provider', 'max-channels', 'fixture', 'exclude-config']);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--dry-run') { opts.dryRun = true; continue; }
     if (arg === '--no-llm') { opts.noLlm = true; continue; }
+    if (arg === '--close-matching-excluded') { opts.closeMatchingExcluded = true; continue; }
     if (!arg.startsWith('--') || !valued.has(arg.slice(2)) || argv[i + 1] == null) throw new Error(`不正な引数: ${arg}`);
     const key = arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     opts[key] = argv[++i];
@@ -342,18 +369,19 @@ export async function runDiscordTaskDigest(options = {}) {
   let fixture = null, token = '';
   if (opts.fixture) fixture = JSON.parse(fs.readFileSync(opts.fixture, 'utf8'));
   let tokenSource = 'fixture';
-  if (!fixture) {
+  if (!fixture && !opts.closeMatchingExcluded) {
     const resolved = readToken(home);
     if (!resolved.token) throw new Error('Discord Bot トークンが見つかりません');
     token = resolved.token; tokenSource = resolved.source;
     if (!resolved.admin) console.error(`[警告] Administrator を持たない Bot (${resolved.source}) を使っています。private チャンネルは 403 で読めず台帳が空になります。node tools/discord-admin-token-install.mjs を先に実行してください`);
   }
-  const channels = fixture?.channels || await discordChannels(opts.guild, token, fetchImpl);
+  const channels = fixture?.channels || (opts.closeMatchingExcluded ? [] : await discordChannels(opts.guild, token, fetchImpl));
   if (!Array.isArray(channels)) throw new Error('fixture.channels は配列で指定してください');
   const textChannels = channels.filter((channel) => channel?.type === 0 || channel?.type === 5);
   const active = selectActiveChannels(channels, since, opts.maxChannels);
   const llm = options.llm || (opts.noLlm ? null : createLlmClient({ home, fetchImpl, usageFile: path.join(home, '.claude', 'executor-usage.jsonl') }));
-  const extracted = []; let skipped = 0, messageCount = 0, held = 0;
+  const excludeRules = loadExcludeConfig(opts.excludeConfig || EXCLUDE_CONFIG_PATH);
+  const extracted = []; let skipped = 0, messageCount = 0, held = 0, excludedCount = 0;
   const state = { lastRunAt: now.toISOString(), channels: {} };
   for (const channel of active) {
     let messages;
@@ -367,8 +395,10 @@ export async function runDiscordTaskDigest(options = {}) {
     messageCount += recent.length;
     state.channels[channel.id] = { lastMessageId: String(channel.last_message_id || recent[0]?.id || ''), lastSeenAt: now.toISOString() };
     const prepared = preprocessForTasks(recent);
-    if (!prepared.length || opts.noLlm) continue;
-    const result = await extractTasks(prepared, channel, { guildId: opts.guild, provider: opts.provider, llm });
+    const filtered = filterExcludedMessages(prepared, channel.id, excludeRules);
+    excludedCount += prepared.length - filtered.length;
+    if (!filtered.length || opts.noLlm) continue;
+    const result = await extractTasks(filtered, channel, { guildId: opts.guild, provider: opts.provider, llm });
     extracted.push(...result.items); held += result.held;
   }
   let existingRows = options.existingRows || [];
@@ -377,6 +407,40 @@ export async function runDiscordTaskDigest(options = {}) {
     sheetsToken = await (options.getToken || getDriveToken)({ scope: SHEETS_SCOPE });
     const read = await sheetsRequest(fetchImpl, sheetsToken, valuesUrl(opts.sheet, 'タスク!A2:O'));
     existingRows = Array.isArray(read.values) ? read.values : [];
+  }
+  if (opts.closeMatchingExcluded) {
+    const closeMemo = '民泊スタッフ間の定型連絡（電話担当が対応）・自動クローズ 2026-11-21';
+    const closeStatus = '対応不要';
+    const closeRules = loadExcludeConfig(opts.excludeConfig || EXCLUDE_CONFIG_PATH);
+    let closed = 0;
+    const updatedRows = existingRows.map((row) => {
+      const task = rowToTask(row);
+      if (!ACTIVE_STATES.has(task.status)) return row;
+      const channelRules = closeRules.filter((rule) => rule.channelId === task.channelId);
+      if (!channelRules.length) return row;
+      const matched = channelRules.some((rule) =>
+        rule.patterns.some((pattern) => pattern.test(task.title))
+      );
+      if (!matched) return row;
+      closed++;
+      const updated = [...row];
+      updated[12] = closeStatus;
+      updated[13] = closeMemo;
+      return updated;
+    });
+    if (opts.dryRun) {
+      (options.log || console.log)(JSON.stringify({ closeMatchingExcluded: closed }));
+    } else {
+      const writeCount = Math.max(existingRows.length, updatedRows.length);
+      const writeRows = [...updatedRows, ...Array.from({ length: writeCount - updatedRows.length }, () => Array(15).fill(''))];
+      if (writeCount > 0) {
+        const range = `タスク!A2:O${writeCount + 1}`;
+        await sheetsRequest(fetchImpl, sheetsToken, `${valuesUrl(opts.sheet, range)}?valueInputOption=USER_ENTERED`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ range, majorDimension: 'ROWS', values: writeRows }) });
+      }
+    }
+    const result = { ok: true, closeMatchingExcluded: closed };
+    (options.log || console.log)(JSON.stringify(result));
+    return result;
   }
   const merged = mergeTasks(existingRows, extracted, { now });
   const rows = merged.tasks.map(taskToRow);
@@ -396,7 +460,7 @@ export async function runDiscordTaskDigest(options = {}) {
     fs.writeFileSync(path.join(base, 'state.json'), `${JSON.stringify(state, null, 2)}\n`);
     appendJsonLines(path.join(base, 'tasks.jsonl'), merged.added);
   }
-  const result = { ok: true, tokenSource, channelsScanned: textChannels.length, channelsActive: active.length, skipped, messages: messageCount, extracted: extracted.length, added: merged.added.length, suppressed: merged.suppressed, held, totalRows: rows.length, ...pickTop(merged.tasks, { now }) };
+  const result = { ok: true, tokenSource, channelsScanned: textChannels.length, channelsActive: active.length, skipped, messages: messageCount, extracted: extracted.length, added: merged.added.length, suppressed: merged.suppressed, excluded: excludedCount, held, totalRows: rows.length, ...pickTop(merged.tasks, { now }) };
   (options.log || console.log)(JSON.stringify(result));
   (options.log || console.log)(`discord-task-digest: 走査${textChannels.length}ch / 新規${merged.added.length}件 / 重複除外${merged.suppressed}件 / P1 ${merged.tasks.filter((task) => task.rank === 'P1').length}件`);
   return result;

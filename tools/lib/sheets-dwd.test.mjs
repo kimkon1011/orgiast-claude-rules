@@ -89,7 +89,7 @@ test('PUTは1回目のタイムアウトから再試行して成功する', asyn
 });
 
 test('PUTは3回連続でタイムアウトすると従来どおりエラーになる', async () => {
-  const { client, calls, sleeps } = clientFor([putTimeout(), putTimeout(), putTimeout()]);
+  const { client, calls, sleeps } = clientFor([putTimeout(), putTimeout(), putTimeout()], { maxRetries: 2 });
   await assert.rejects(client.update('sheet', 'Tab!A1', [['value']]), /Sheets PUT fetch failed: The operation was aborted due to timeout/);
   assert.equal(calls.length, 3);
   assert.deepEqual(sleeps, [2_000, 4_000]);

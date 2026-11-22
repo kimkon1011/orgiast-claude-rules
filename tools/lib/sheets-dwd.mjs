@@ -11,7 +11,7 @@ export const quoteTab = (title) => `'${title.replaceAll("'", "''")}'`;
 
 // POST is not retried: an ambiguous append response must be read back by id.
 // GET and PUT are idempotent, so wait and retry them on 429/5xx responses and transient network failures.
-export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), maxRetries = 2, timeoutMs = Number(process.env.DEADLINE_FETCH_TIMEOUT_MS) || 60_000, onStage = () => {}, signal } = {}) {
+export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), maxRetries = 5, timeoutMs = Number(process.env.DEADLINE_FETCH_TIMEOUT_MS) || 60_000, onStage = () => {}, signal } = {}) {
   let token;
   let expires = 0;
   async function request(id, suffix = '', method = 'GET', body) {

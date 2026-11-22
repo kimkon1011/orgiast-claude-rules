@@ -399,16 +399,17 @@ test('fixture + dry-run + スタブLLMで除外フィルタが効くことを確
   assert.equal(result.top[0].title, 'テレビリモコンの件');
 });
 
-test('--close-matching-excluded は既存タスクの status/memo を更新する（dry-run）', async (t) => {
+test('--close-matching-excluded は closeTaskIds の既存タスクの status/memo を更新する（dry-run）', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'discord-close-test-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const excludeConfig = path.join(dir, 'exclude.json');
   fs.writeFileSync(excludeConfig, JSON.stringify({
-    rules: [{ channelId: '1382814215013793943', patterns: ['チェックイン案内', 'SMS送信'], reason: '民泊定型' }],
+    rules: [{ channelId: '1382814215013793943', patterns: ['チェックイン案内受取確認ができておりません'], closeTaskIds: ['T-1917', 'T-3471'], reason: '民泊定型' }],
   }));
   const existingRows = [
     ['T-1917', '2026-11-10 10:00', 'P1', 60, 'タスク', 'チェックイン案内受取確認', '確認する', '', '2026-11-15', '民泊接客', '根拠', 'https://discord.com/channels/1/1382814215013793943/99', '未着手', '', '2026-11-10 10:00'],
     ['T-3471', '2026-11-11 10:00', 'P2', 50, 'タスク', 'SMS送信のお願い', '送信する', '', '2026-11-16', '民泊接客', '根拠', 'https://discord.com/channels/1/1382814215013793943/100', '進行中', '', '2026-11-11 10:00'],
+    ['T-8800', '2026-11-12 10:00', 'P3', 30, 'タスク', 'Hsuan Hung ShenへのSMS送信', '対応する', '', '', '民泊接客', '根拠', 'https://discord.com/channels/1/1382814215013793943/102', '未着手', '', '2026-11-12 10:00'],
     ['T-9999', '2026-11-12 10:00', 'P3', 30, 'タスク', '通常のタスク', '対応する', '', '', '経理', '根拠', 'https://discord.com/channels/1/10/101', '未着手', '', '2026-11-12 10:00'],
   ];
   const logs = [];
@@ -416,4 +417,33 @@ test('--close-matching-excluded は既存タスクの status/memo を更新す�
   assert.equal(result.closeMatchingExcluded, 2);
   const output = JSON.parse(logs[0]);
   assert.equal(output.closeMatchingExcluded, 2);
+});
+
+test('--close-matching-excluded --dry-run は injected rows が無くても台帳を読んで件数を出す（書き込みしない）', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'discord-close-real-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const excludeConfig = path.join(dir, 'exclude.json');
+  fs.writeFileSync(excludeConfig, JSON.stringify({
+    rules: [{ channelId: '1382814215013793943', patterns: ['チェックイン案内受取確認ができておりません'], closeTaskIds: ['T-1917', 'T-3471'], reason: '民泊定型' }],
+  }));
+  const sheetRows = [
+    ['T-1917', '2026-11-10 10:00', 'P1', 60, 'タスク', 'チェックイン案内受取確認', '確認する', '', '2026-11-15', '民泊接客', '根拠', 'https://discord.com/channels/1/1382814215013793943/99', '未着手', '', '2026-11-10 10:00'],
+    ['T-3471', '2026-11-11 10:00', 'P2', 50, 'タスク', 'SMS送信のお願い', '送信する', '', '2026-11-16', '民泊接客', '根拠', 'https://discord.com/channels/1/1382814215013793943/100', '進行中', '', '2026-11-11 10:00'],
+    ['T-8800', '2026-11-12 10:00', 'P3', 30, 'タスク', 'Hsuan Hung ShenへのSMS送信', '対応する', '', '', '民泊接客', '根拠', 'https://discord.com/channels/1/1382814215013793943/102', '未着手', '', '2026-11-12 10:00'],
+    ['T-9999', '2026-11-12 10:00', 'P3', 30, 'タスク', '通常のタスク', '対応する', '', '', '経理', '根拠', 'https://discord.com/channels/1/10/101', '未着手', '', '2026-11-12 10:00'],
+  ];
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({ url: String(url), method: init.method || 'GET' });
+    return { ok: true, json: async () => ({ values: sheetRows }), text: async () => '' };
+  };
+  const logs = [];
+  const result = await runDiscordTaskDigest({
+    args: ['--close-matching-excluded', '--dry-run', '--sheet', 'test-sheet-id', '--exclude-config', excludeConfig],
+    now: NOW, home: dir, fetchImpl, getToken: async () => 'token', log: (line) => logs.push(line),
+  });
+  assert.equal(result.closeMatchingExcluded, 2);
+  const sheetReads = calls.filter((call) => call.url.includes('test-sheet-id') && call.method === 'GET');
+  assert.equal(sheetReads.length, 1, 'dry-run でも台帳を1回読む');
+  assert.equal(calls.filter((call) => call.method === 'PUT').length, 0, 'dry-run では書き込まない');
 });

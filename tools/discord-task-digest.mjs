@@ -59,6 +59,7 @@ export function loadExcludeConfig(configPath) {
     return data.rules.map((rule) => ({
       channelId: String(rule.channelId),
       patterns: Array.isArray(rule.patterns) ? rule.patterns.map((p) => new RegExp(p)) : [],
+      closeTaskIds: Array.isArray(rule.closeTaskIds) ? rule.closeTaskIds.map((id) => String(id)) : [],
       reason: String(rule.reason || ''),
     }));
   } catch { return []; }
@@ -403,7 +404,7 @@ export async function runDiscordTaskDigest(options = {}) {
   }
   let existingRows = options.existingRows || [];
   let sheetsToken = '';
-  if (!opts.dryRun && !options.existingRows) {
+  if ((!opts.dryRun || opts.closeMatchingExcluded) && !options.existingRows) {
     sheetsToken = await (options.getToken || getDriveToken)({ scope: SHEETS_SCOPE });
     const read = await sheetsRequest(fetchImpl, sheetsToken, valuesUrl(opts.sheet, 'タスク!A2:O'));
     existingRows = Array.isArray(read.values) ? read.values : [];
@@ -418,8 +419,10 @@ export async function runDiscordTaskDigest(options = {}) {
       if (!ACTIVE_STATES.has(task.status)) return row;
       const channelRules = closeRules.filter((rule) => rule.channelId === task.channelId);
       if (!channelRules.length) return row;
+      // LLM 要約されたタイトルは定型文と字面がずれるため、
+      // 一回限りの移行は設定ファイルの closeTaskIds（対象IDの明示リスト）で正確に照合する
       const matched = channelRules.some((rule) =>
-        rule.patterns.some((pattern) => pattern.test(task.title))
+        rule.closeTaskIds.includes(task.id)
       );
       if (!matched) return row;
       closed++;

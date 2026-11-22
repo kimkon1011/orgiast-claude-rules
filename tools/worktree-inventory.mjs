@@ -13,9 +13,13 @@ const categories = [
 ];
 
 function isProtected(worktreePath) {
-  const normalized = worktreePath.replaceAll('\\', '/').toLowerCase();
-  return ['nightly-repo', 'auto-session-repo', 'auto-session-tree', 'downloads/orgiast-claude-rules']
-    .some((part) => normalized.includes(part))
+  const normalized = worktreePath.replaceAll('\\', '/').toLowerCase().replace(/\/+$/, '');
+  const segments = normalized.split('/').filter(Boolean);
+  const last = segments.at(-1) ?? '';
+  const parent = segments.at(-2) ?? '';
+  return ['nightly-repo', 'auto-session-repo', 'auto-session-tree']
+    .some((name) => last.startsWith(name))
+    || (parent === 'downloads' && last.startsWith('orgiast-claude-rules'))
     || /^(?:c:|\/mnt\/c)\/users\/orgiast-main(?:\/|$)/.test(normalized);
 }
 

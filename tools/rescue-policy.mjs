@@ -276,7 +276,7 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
         state.rescueCount = (state.rescueCount ?? existing?.count ?? existing?.repeatCount ?? 0) + 1;
         save();
         const all = state.rescueBranches;
-        const message = `rescue ブランチのレビュー・削除承認待ち（最新: ${branch} ／ 計 ${state.rescueCount} 件）\n対象ブランチ:\n${all.map(name => `- ${name}`).join('\n')}`;
+        const message = `rescue ブランチのレビュー・削除承認待ち（最新: ${branch} ／ 計 ${all.length} 件）\n対象ブランチ:\n${all.map(name => `- ${name}`).join('\n')}`;
         await notify(message, { home, kind: 'ask', kimActionRequired: true, source: 'nightly-bootstrap', dedupeKey: RESCUE_REVIEW_KEY, replaceExisting: true, incrementExisting: true, plainJa: false });
       }
     } catch (e) {

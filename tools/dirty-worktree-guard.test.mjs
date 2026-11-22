@@ -28,6 +28,7 @@ function fixture(t) {
   gitRun(repo, ['remote', 'add', 'origin', remote]);
   gitRun(repo, ['push', '-u', '--quiet', 'origin', 'main']);
   return { root, repo, remote, git, gitRun };
+}
 
 for (const pushFails of [false, true]) test(`dirty guard preserves and commits tracked/untracked changes; pushFails=${pushFails}`, (t) => {
   const { root, repo, remote, git, gitRun } = fixture(t);

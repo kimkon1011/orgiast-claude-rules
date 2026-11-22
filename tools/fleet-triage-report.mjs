@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { isEntry } from './is-entry.mjs';
+import { postToDiscordWebhook } from './discord-webhook-post.mjs';
 
 function parseJst(value) {
   const match = String(value ?? '').trim().match(/^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}):(\d{2}))?$/);
@@ -87,16 +88,8 @@ async function main() {
       console.log(text);
       return;
     }
-    const posted = await fetch(webhook, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'User-Agent': 'orgiast-fleet-triage/1.0' },
-      body: JSON.stringify({ content: text }),
-      signal: AbortSignal.timeout(20_000),
-    });
-    if (!posted.ok) {
-      console.error(`fleet-triage: Discord送信が HTTP ${posted.status}`);
-      process.exitCode = 1;
-    }
+    const ok = await postToDiscordWebhook(webhook, text, { label: 'fleet-triage', fetchImpl });
+    if (!ok) process.exitCode = 1;
   } catch (error) {
     // 失敗を握り潰して exit 0 にすると、Actions は success なのに投稿ゼロになり
     // 「digest が来ない」ことに誰も気づけない(実測: TimeoutError で success 表示)。
@@ -107,12 +100,7 @@ async function main() {
     const webhook = process.env.DISCORD_COST_WEBHOOK;
     if (webhook && !process.argv.includes('--dry-run')) {
       try {
-        await fetch(webhook, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'User-Agent': 'orgiast-fleet-triage/1.0' },
-          body: JSON.stringify({ content: `🚨 **フリート生存digest 取得失敗** — ${reason}（フリートシートの doGet を確認してください）` }),
-          signal: AbortSignal.timeout(20_000),
-        });
+        await postToDiscordWebhook(webhook, `🚨 **フリート生存digest 取得失敗** — ${reason}（フリートシートの doGet を確認してください）`, { label: 'fleet-triage', fetchImpl });
       } catch {}
     }
   }

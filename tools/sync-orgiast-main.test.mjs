@@ -12,21 +12,22 @@ function fixture(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const repo = path.join(root, 'repo'), home = path.join(root, 'home');
   fs.mkdirSync(repo); fs.mkdirSync(home);
+  const gitRun = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] });
   const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  git('init', '-b', 'main'); git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.invalid');
+  gitRun('init', '-b', 'main'); gitRun('config', 'user.name', 'Test'); gitRun('config', 'user.email', 'test@example.invalid');
   fs.writeFileSync(path.join(repo, 'tracked'), 'original');
-  git('add', '.'); git('commit', '-m', 'initial');
-  git('init', '--bare', path.join(root, 'remote.git')); git('remote', 'add', 'origin', path.join(root, 'remote.git'));
-  git('push', '-u', 'origin', 'main');
+  gitRun('add', '.'); gitRun('commit', '-m', 'initial');
+  gitRun('init', '--bare', path.join(root, 'remote.git')); gitRun('remote', 'add', 'origin', path.join(root, 'remote.git'));
+  gitRun('push', '-u', '--quiet', 'origin', 'main');
   const messages = [];
   const notify = async (message, options) => { messages.push({ message, options }); return { delivered: 'dm' }; };
-  return { root, repo, home, git, messages, notify, pc: 'test-PC', now: new Date(2026, 9, 9, 12).getTime() };
+  return { root, repo, home, git, gitRun, messages, notify, pc: 'test-PC', now: new Date(2026, 9, 9, 12).getTime() };
 }
 const branches = f => f.git('for-each-ref', '--format=%(refname:short)', 'refs/heads/rescue/').trim().split('\n').filter(Boolean);
 
 test('same dirty status creates one remote branch, preserving HEAD, index and worktree; an unchanged snapshot never duplicates', async t => {
   const f = fixture(t);
-  fs.writeFileSync(path.join(f.repo, 'tracked'), 'staged'); f.git('add', 'tracked');
+  fs.writeFileSync(path.join(f.repo, 'tracked'), 'staged'); f.gitRun('add', 'tracked');
   fs.writeFileSync(path.join(f.repo, 'tracked'), 'unstaged');
   fs.writeFileSync(path.join(f.repo, 'untracked'), 'precious');
   const before = f.git('status', '--porcelain=v1', '-z');

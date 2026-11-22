@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
-import { getAccessToken } from './lib/freee-auth.mjs';
+import { getAccessToken, hasFreeeDbConfig } from './lib/freee-auth.mjs';
 import { sheetsMetadata, sheetsGet, sheetsAppend, ensureSheetTab, quoteTab } from './lib/sheets-dwd.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -357,20 +357,6 @@ export async function runCheck(opts, injected = {}) {
     return result;
   }
 }
-function hasFreeeDbConfig() {
-  if (process.env.PURCHASING_APP_DATABASE_URL) return true;
-  try {
-    const paths = [
-      join(HERE, '..', '.env.local'),
-      join(homedir(), 'orgiast-main', '.env.local'),
-    ];
-    for (const path of paths) {
-      if (existsSync(path) && readFileSync(path, 'utf8').includes('PURCHASING_APP_DATABASE_URL')) return true;
-    }
-  } catch { /* ignore */ }
-  return false;
-}
-
 function formatSummary(result) {
   return `expense-leak-check: candidates=${result.candidateTotal} processed=${result.results.length} cached=${result.cacheHits} deferred=${result.deferredTotal || 0} appended=${result.appended} dm=${result.notification?.delivered || 'none'} yahooFailed=${result.searches.yahooFailed} failed=${!!result.failed} failReason=${result.failReason}`;
 }

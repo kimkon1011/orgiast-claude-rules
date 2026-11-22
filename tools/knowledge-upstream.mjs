@@ -13,6 +13,7 @@ import { findSharedSecret, parseMemoryFrontmatter, redactForShare } from './lib/
 import { machineIdentity } from './machine-identity.mjs';
 import { installFromDriveMaster } from './memory-share.mjs';
 import { isEntry } from './is-entry.mjs';
+import { isDriveWriteBlocked, uploadKnowledgeWithRclone } from './lib/knowledge-rclone.mjs';
 
 const INBOX_FOLDER_ID = '1AyZcrlK9JCNPUkhKCBOezet9a2QoSwK2';
 const CUSTOMER_PATTERNS = [
@@ -227,32 +228,48 @@ export async function runKnowledgeUpstream(options = {}) {
   // 2. Drive Authentication & Folder Resolution
   let token;
   let targetFolderId;
+  let useRclone = false;
   const getDriveTokenFn = options.getDriveTokenFn || getDriveToken;
   const findOrCreateFolderFn = options.findOrCreateFolderFn || findOrCreateFolder;
   const uploadFileContentFn = options.uploadFileContentFn || uploadFileContent;
   const findByTitleFn = options.findByTitleFn || findByTitle;
+  const uploadKnowledgeWithRcloneFn = options.uploadKnowledgeWithRcloneFn || uploadKnowledgeWithRclone;
 
   try {
     token = await getDriveTokenFn({ home });
     const pcFolder = await findOrCreateFolderFn(token, identity.folderName, INBOX_FOLDER_ID);
     targetFolderId = pcFolder.id;
   } catch (err) {
-    const errorMsg = `Failed Drive auth/folder setup: ${err.message}`;
-    emit(`[knowledge-upstream] ${errorMsg}`);
-    result.errors.push(errorMsg);
-    // Keep all unsent in queue
-    state.unsentQueue = itemsList;
-    if (!dryRun) {
+    if (isDriveWriteBlocked(err)) {
+      useRclone = true;
+      emit(`[knowledge-upstream] Drive setup blocked; using rclone: ${err.message}`);
+    } else {
+      const errorMsg = `Failed Drive auth/folder setup: ${err.message}`;
+      emit(`[knowledge-upstream] ${errorMsg}`);
+      result.errors.push(errorMsg);
+      // Keep all unsent in queue
+      state.unsentQueue = itemsList;
+      result.queued = itemsList.length;
       fs.mkdirSync(path.dirname(stateFile), { recursive: true });
       fs.writeFileSync(stateFile, JSON.stringify(state, null, 2) + '\n');
+      return result;
     }
-    return result;
   }
 
   // 3. Upload items one by one
   const remainingQueue = [];
+  const rcloneItems = [];
+  const markSent = (item, fileName) => {
+    state.sentHashes[item.id] = { sha256: item.sha256, sentAt: now.toISOString(), name: fileName };
+    result.sent++;
+    emit(`[sent] ${item.id} -> ${identity.folderName}/${fileName}`);
+  };
   for (const item of itemsList) {
     const fileName = `${dateStr}-${item.title}`;
+    if (useRclone) {
+      rcloneItems.push({ ...item, name: fileName });
+      continue;
+    }
     try {
       // Check if file with title exists in pcFolder
       const existing = await findByTitleFn(token, fileName, targetFolderId);
@@ -265,10 +282,14 @@ export async function runKnowledgeUpstream(options = {}) {
         content: Buffer.from(item.content, 'utf8'),
       });
 
-      state.sentHashes[item.id] = { sha256: item.sha256, sentAt: now.toISOString(), name: fileName };
-      result.sent++;
-      emit(`[sent] ${item.id} -> ${identity.folderName}/${fileName}`);
+      markSent(item, fileName);
     } catch (err) {
+      if (isDriveWriteBlocked(err)) {
+        useRclone = true;
+        rcloneItems.push({ ...item, name: fileName });
+        emit(`[knowledge-upstream] Drive upload blocked; using rclone: ${err.message}`);
+        continue;
+      }
       const errorMsg = `Failed to send ${item.id}: ${err.message}`;
       emit(`[error] ${errorMsg}`);
       result.errors.push(errorMsg);
@@ -276,8 +297,28 @@ export async function runKnowledgeUpstream(options = {}) {
     }
   }
 
+  if (rcloneItems.length) {
+    let verified = new Set();
+    let errors = new Map();
+    let failure;
+    try {
+      ({ verified, errors } = await uploadKnowledgeWithRcloneFn({
+        items: rcloneItems, folderName: identity.folderName, inboxFolderId: INBOX_FOLDER_ID, emit,
+      }));
+    } catch (err) { failure = err.message; }
+    for (const { name, ...item } of rcloneItems) {
+      if (verified.has(name)) markSent(item, name);
+      else {
+        remainingQueue.push(item);
+        const errorMsg = `Failed to send ${item.id}: ${failure || errors.get(name) || 'rclone verification failed'}`;
+        result.errors.push(errorMsg);
+        emit(`[error] ${errorMsg}`);
+      }
+    }
+  }
+
   state.unsentQueue = remainingQueue;
-  state.lastRunAt = now.toISOString();
+  if (result.sent > 0) state.lastRunAt = now.toISOString();
   result.queued = remainingQueue.length;
 
   if (!dryRun) {

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { realLaneStats, applyRealLaneHealth, billingFailure, billingWithQuotaHint, probeViaChain, stripCodexPromptEcho } from './lib/lane-real-health.mjs';
+import { realLaneStats, applyRealLaneHealth, billingFailure, billingWithQuotaHint, quotaFailure, chatgptUsageLimit, probeViaChain, stripCodexPromptEcho } from './lib/lane-real-health.mjs';
+import { repairable } from './lib/lane-repair-state.mjs';
 import { laneDoctorQuick, laneDoctorProbe } from './lane-doctor.mjs';
 const now = Date.parse('2026-10-29T12:00:00Z');
 function fixture(t, rows) {
@@ -528,4 +529,26 @@ test('stopped lane auth evidence is superseded by a later ledger or probe succes
     assert.equal(health.lanes.deepseek.reason, 'auth_invalid');
     assert.equal(health.lanes.deepseek.until, undefined);
   }
+});
+
+test('ChatGPT の定額枠切れ文言は quota であって real_fail_rate ではない', t => {
+  const upgrade = 'Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 10:23 PM. tokens used 62,031';
+  assert.equal(chatgptUsageLimit(upgrade), true);
+  assert.equal(quotaFailure(upgrade), true);
+  // 枠切れは残高不足ではない。billing に落ちると自動復帰を待たずに修復を迫られる。
+  assert.equal(billingFailure(upgrade), false);
+  assert.equal(quotaFailure("You've hit your usage limit for GPT-5."), true);
+  assert.equal(quotaFailure('You have reached your weekly limit.'), true);
+  // 枠と無関係な失敗まで quota に倒さない
+  assert.equal(chatgptUsageLimit('HTTP 500 internal error'), false);
+  assert.equal(chatgptUsageLimit('upgrade to pro plan for more features'), false);
+});
+
+test('ChatGPT 枠切れの行は失敗ではなく quotaCalls に入り gate が修復を要求しない', t => {
+  const stderr = 'Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 10:23 PM.';
+  const home = fixture(t, Array.from({ length: 6 }, () => ({ provider: 'codex', status: 'error', stderr })));
+  const stats = realLaneStats(home, now);
+  assert.equal(stats.codex.failures, 0);
+  assert.equal(stats.codex.quotaCalls, 6);
+  assert.equal(repairable({ alive: false, reason: 'real_fail_rate', error: stderr }), false);
 });

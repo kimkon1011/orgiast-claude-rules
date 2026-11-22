@@ -60,14 +60,19 @@ const http402 = text => /(?<!\d)402(?!\d)/.test(String(text));
 const http403 = text => /(?<!\d)403(?!\d)/.test(String(text));
 const http429 = text => /(?<!\d)429(?!\d)/.test(String(text));
 export const authFailurePattern = /basic authentication|HTTP\s*401|\b401\b|unauthorized|login required|token.*expired|Missing bearer|Failed to refresh token|access token could not be refreshed|log out and sign in again|sign in again|refresh_token|token_revoked|invalid_grant|invalid_api_key|not logged in/i;
-export const quotaFailure = text => http429(text) || /cooldown|(?:usage|weekly|monthly)[_ /.-]*limit|limit[^\n]{0,60}exhausted|rate[_ .-]?limit|RESOURCE_EXHAUSTED|codex_cooldown/i.test(String(text));
+// ChatGPT/Codex の定額枠切れは 429 も "usage limit" も含まず
+// 「Upgrade to Pro ... purchase more credits or try again at <時刻>」という散文で届く。
+// 2026-11-22 実測: これを quota と読めず real_fail_rate に積み上がり、
+// lane-repair-first-gate が全セッションの編集・シェルを封鎖した。
+export const chatgptUsageLimit = text => /chatgpt\.com\/settings\/usage|upgrade to pro[^\n]{0,300}try again at|you(?:['’]ve| have) (?:hit|reached)[^\n]{0,60}limit/i.test(String(text));
+export const quotaFailure = text => http429(text) || chatgptUsageLimit(text) || /cooldown|(?:usage|weekly|monthly)[_ /.-]*limit|limit[^\n]{0,60}exhausted|rate[_ .-]?limit|RESOURCE_EXHAUSTED|codex_cooldown/i.test(String(text));
 // billing は 402 / insufficient balance|quota|credits / payment_required のみ。
 // 429 や rate limit 由来の "Insufficient credits" を billing と誤判定しない（quotaFailure と順序で分離）。
 export const billingFailure = text => http402(text)
   || (/outstanding balance|billing account[^\n]{0,80}(?:disabled|closed|suspended|outstanding|not active)/i.test(String(text)) && http403(text))
   || /insufficient[_ ](?:balance|quota|credits?)|(?:credits?|balance)[ _-]*(?:are[ _-]*)?(?:depleted|exhausted|insufficient)|(?:out of|no|not enough|low) credits?|credit[_ -](?:balance|limit)[^\n]{0,40}(?:low|exceed|insufficient|depleted|exhausted)|payment_required/i.test(String(text));
 // 文言に 429 を含む billing は偽の billing（実際は quota）。判定補助。
-export const billingWithQuotaHint = text => billingFailure(text) && (http429(text) || /rate[_ .-]?limit|cooldown/i.test(String(text)));
+export const billingWithQuotaHint = text => billingFailure(text) && (http429(text) || chatgptUsageLimit(text) || /rate[_ .-]?limit|cooldown/i.test(String(text)));
 // Provider timestamps without an offset are interpreted in the host timezone.
 export function quotaReset(text) {
   return Date.parse(String(text).match(/(?:reset(?:s|ting)?(?: at)?|retry at)\s*[:=]?\s*(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:?\d\d)?)/i)?.[1]);

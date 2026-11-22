@@ -99,7 +99,7 @@ export async function drainExternalQueue({ home, now, resume, io = {} }) {
     for (const sessionId of new Set(pending.map(e => e.row.sessionId))) {
       if (!events.some(e => e.row.sessionId === sessionId && e.state === 'disabled')) {
         await (io.addKimInboxItem || addItem)(home, { kind: 'info', source: 'auto-progress-auto-resume-disabled', sessionId,
-          dedupeKey: `external-auto-resume-disabled:${sessionId}`,
+          dedupeKey: `auto-resume-disabled:${sessionId}`,
           text: `自動再開は行いません。続けるときはこのセッションを開いて指示してください: claude --resume ${sessionId}` });
       }
       for (const event of pending.filter(e => e.row.sessionId === sessionId)) { event.state = 'disabled'; saveEvent(home, event); }

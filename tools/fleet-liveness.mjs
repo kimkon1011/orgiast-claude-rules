@@ -7,6 +7,8 @@ import { auditFleet, extractIdentity, maskEmailAddress } from './fleet-discord-a
 import { fetchFleetSheetRows } from './fleet-triage-report.mjs';
 import { buildPcIdentityIndex, emptyFleetStateCounts, fleetRowState, pcMapEntries, pcMapNames, reconcileFleetRows } from './fleet-pc-identity.mjs';
 import { isEntry } from './is-entry.mjs';
+import { splitDiscordContent, postToDiscordWebhook } from './discord-webhook-post.mjs';
+export { splitDiscordContent, postToDiscordWebhook };
 
 const DAY_MS = 86_400_000;
 const DEFAULT_CHANNEL_ID = '1508437329247862794';
@@ -271,8 +273,8 @@ export async function main(argv = process.argv.slice(2), now = new Date()) {
   if (argv.includes('--post')) {
     const webhook = costEnv.DISCORD_COST_WEBHOOK;
     if (!webhook) { console.error('DISCORD_COST_WEBHOOK が未設定です'); return 1; }
-    const response = await fetch(webhook, { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': 'orgiast-fleet-liveness/1.0' }, body: JSON.stringify({ content: output }), signal: AbortSignal.timeout(20_000) });
-    if (!response.ok) { console.error(`Discord送信が HTTP ${response.status}`); return 1; }
+    const ok = await postToDiscordWebhook(webhook, output, { label: 'fleet-liveness' });
+    if (!ok) return 1;
   }
   if (argv.includes('--post-sheet')) {
     if (!fleetEnv.FLEET_SHEET_URL || !fleetEnv.FLEET_SHEET_TOKEN) { console.error('FLEET_SHEET_URL/TOKEN が未設定です'); return 1; }

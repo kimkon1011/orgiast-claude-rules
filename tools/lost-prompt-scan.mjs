@@ -104,12 +104,21 @@ export async function scanLostPrompts({ home = journalHome(), ...options } = {})
   const lost = await findLostPrompts({ home, ...options });
   if (!lost.length) return 0;
   const { addItem } = await import('./kim-inbox.mjs');
+  // Group by session so one entry covers all lost prompts for a single session.
+  const bySession = new Map();
   for (const row of lost) {
     if (hasJournalMarker(home, row.session_id, row.id, 'handled')) continue;
+    if (!bySession.has(row.session_id)) bySession.set(row.session_id, []);
+    bySession.get(row.session_id).push(row);
+    // Per-prompt pending marker so findLostPrompts still accounts for them.
     markJournal(home, row.session_id, row.id, 'pending');
+  }
+  for (const [sessionId, rows] of bySession) {
+    const latest = rows.reduce((a, b) => Date.parse(a.at) > Date.parse(b.at) ? a : b);
+    const promptPreview = [...latest.prompt].slice(0, 80).join('');
     await addItem(home, {
-      kind: 'info', source: 'lost-prompt-scan', sessionId: row.session_id, dedupeKey: 'lost-prompt:' + row.id,
-      text: `Claude Code 未達の返答 (${row.session_id})\n${[...row.prompt].slice(0, 80).join('')}`,
+      kind: 'info', source: 'lost-prompt-scan', sessionId, dedupeKey: 'lost-prompt:' + sessionId,
+      text: `Claude Code 未達の返答 (${sessionId})\n${rows.length}件: ${promptPreview}`,
     }, { drain: false, localOnly: true });
   }
   return lost.length;

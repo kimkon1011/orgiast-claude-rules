@@ -183,7 +183,10 @@ function Send-ToRclone {
   if (-not $rcloneExe) { return $false }
   $extraArgs = if ($DryRun) { @('--dry-run') } else { @() }
   try {
-    $result = & $rcloneExe copyto $ZipPath ('{0}{1}' -f $destPath, $ZipName) @extraArgs 2>&1
+    # Shared copyto transport; knowledge-upstream uses the same helper for its fallback.
+    $copyHelper = Join-Path $PSScriptRoot 'lib\rclone-copy.mjs'
+    $nodeExe = (Get-Command node -CommandType Application -ErrorAction Stop | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source
+    $result = & $nodeExe $copyHelper $rcloneExe $ZipPath ('{0}{1}' -f $destPath, $ZipName) @extraArgs 2>&1
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
       foreach ($line in $result) { Write-Event ('WARN rclone-output: {0}' -f $line) }

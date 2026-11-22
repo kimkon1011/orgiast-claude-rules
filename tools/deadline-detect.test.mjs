@@ -73,7 +73,7 @@ test('応答しないfetchはAbortSignalでrejectされハングしない', asyn
   const fetchImpl = (_url, { signal }) => new Promise((_resolve, reject) => {
     signal.addEventListener('abort', () => reject(signal.reason), { once: true });
   });
-  const sheets = createSheetsClient({ fetchImpl, getToken: async () => 'token', timeoutMs: 25 });
+  const sheets = createSheetsClient({ fetchImpl, getToken: async () => 'token', timeoutMs: 25, sleep: async () => {} });
   await assert.rejects(sheets.get('sheet', 'A1'), /fetch failed.*aborted|fetch failed.*timeout/i);
   assert.ok(Date.now() - started < 1000);
 });

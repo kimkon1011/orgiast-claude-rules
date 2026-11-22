@@ -6,12 +6,14 @@
     "hostname": "000KIMPC",
     "titleLabel": "KimPC",
     "person": "金功勇",
+    "account": "kim@orgiast.jp",
+    "notifyDiscordId": "715210673642012733",
     "aliases": [
       "DESKTOP-2D0R4LI",
       "kim-PC(開発機/kim)",
       "000KimPC"
     ],
-    "_evidence": "報告本文の 🖥 hostname=DESKTOP-2D0R4LI / user=uers / git=kim@orgiast.jp（2026-08-27 実測）。kim 明示回答『18行目(kim-PC)と22行目(DESKTOP-2D0R4LI)は同じパソコン』（2026-08-27）。kim が DESKTOP-2D0R4LI を『作業用004民泊用』行から独立行へ移動済み＝作業用004民泊用 は開発機ではないことが確定。2026-11-19 に PC 名を 000KIMPC に変更（DNS 表記 000KimPC）。\n  【追記 2026-11-22】account 追加: codexAccount は既に kim@orgiast.jp で _evidence に git=kim@orgiast.jp の実測があるため確実。これが無いと「台帳外アカウントで報告」が出る。aliases に 000KimPC 追加: 台帳の hostname は既に 000KIMPC。表記ゆれ吸収のため",
+    "_evidence": "報告本文の 🖥 hostname=DESKTOP-2D0R4LI / user=uers / git=kim@orgiast.jp（2026-08-27 実測）。kim 明示回答『18行目(kim-PC)と22行目(DESKTOP-2D0R4LI)は同じパソコン』（2026-08-27）。kim が DESKTOP-2D0R4LI を『作業用004民泊用』行から独立行へ移動済み＝作業用004民泊用 は開発機ではないことが確定。2026-11-19 に PC 名を 000KIMPC に変更（DNS 表記 000KimPC）。\n  【追記 2026-11-22】account 追記取り下げ（notifyDiscordId 未設定のためテスト抵触）。\n  【追記 2026-11-23】account + notifyDiscordId を同時設定。git=kim@orgiast.jp の実測あり。他の金功勇担当PC（作業用011等）と同じ kim 宛 Discord ID を設定",
     "codexAccount": "kim@orgiast.jp"
   },
   "kimko-PC": {
@@ -165,9 +167,12 @@
   },
   "GROKBOT-VM": {
     "hostname": "grok-bot-vm-447105645",
+    "account": "kim@orgiast.jp",
+    "notifyDiscordId": "715210673642012733",
+    "person": "金功勇",
     "aliases": [
       "grok-bot-vm-447105645"
     ],
-    "_evidence": "2026-11-22 fleet-liveness の実報告で hostname=grok-bot-vm-447105645 / Claude=kim@orgiast.jp を観測。ONBOARDING §1.18.2 のブラウザ実操作委譲用 Grok Bot の VM で、人が常用する席ではない account は通知先(notifyDiscordId)必須の規約に当たるため未記入（人の常用席ではない）。"
+    "_evidence": "2026-11-22 fleet-liveness の実報告で hostname=grok-bot-vm-447105645 / Claude=kim@orgiast.jp を観測。ONBOARDING §1.18.2 のブラウザ実操作委譲用 Grok Bot の VM。\n  【追記 2026-11-23】account + notifyDiscordId を設定。Claude=kim@orgiast.jp の実測により、通知先は kim の Discord ID（715210673642012733）。person 追加: 動作アカウント kim@ に基づく"
   }
 }

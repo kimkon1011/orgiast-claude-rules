@@ -17,10 +17,10 @@ function fixture(t) {
   fs.writeFileSync(path.join(repo, 'tracked'), 'original');
   git('add', '.'); git('commit', '-m', 'initial');
   git('init', '--bare', path.join(root, 'remote.git')); git('remote', 'add', 'origin', path.join(root, 'remote.git'));
-  const messages = [];
-  const notify = async message => { messages.push(message); return { delivered: 'dm' }; };
+  const messages = [], noticeOptions = [];
+  const notify = async (message, options) => { messages.push(message); noticeOptions.push(options); return { delivered: 'dm' }; };
   const now = new Date(2026, 9, 9, 12).getTime();
-  return { root, repo, home, git, messages, notify, now };
+  return { root, repo, home, git, messages, noticeOptions, notify, now };
 }
 const branches = f => f.git('for-each-ref', '--format=%(refname:short)', 'refs/heads/rescue/').trim().split('\n').filter(Boolean);
 
@@ -63,14 +63,17 @@ test('scratch and nested git directories/files are ignored; real changes are res
   assert.ok(fs.existsSync(path.join(f.repo, 'linked clone', '.git')));
 });
 
-test('successful rescues notify only once daily, with a fresh allowance next day', async t => {
+test('successful rescues use one fixed key and refresh the complete branch list', async t => {
   const f = fixture(t);
   for (const [i, offset] of [0, 120000, 86400000].entries()) {
     fs.writeFileSync(path.join(f.repo, `new-${i}`), 'change');
     await rescueTree(f.repo, f.home, { ...f, now: f.now + offset });
   }
   assert.equal(branches(f).length, 3);
-  assert.equal(f.messages.length, 2);
+  assert.equal(f.messages.length, 3);
+  assert.ok(f.noticeOptions.every(options => options.dedupeKey === 'rescue-branch-review' && options.replaceExisting === true && options.incrementExisting === true));
+  assert.match(f.messages.at(-1), /計 3 件/);
+  for (const branch of branches(f)) assert.match(f.messages.at(-1), new RegExp(branch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
 test('three failures in an hour send one loop notification, not a rescue notification', async t => {

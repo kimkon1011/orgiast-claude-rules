@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, CONTEXT_LIMIT, oneScreenSummary, autoCloseByGmail, normalizeInboxText } from './kim-inbox.mjs';
+import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, mergeItemsInto, CONTEXT_LIMIT, oneScreenSummary, autoCloseByGmail, normalizeInboxText } from './kim-inbox.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { loadAllowlist, discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { inboxDedupeKey, spoolItem, drainSpool } from './kim-inbox.mjs';
@@ -118,6 +118,32 @@ test('durable producer keys survive aggregation, seen state and retries', async 
   assert.equal(retry.id, a.id); assert.equal(retry.status, 'seen');
   const unkeyed = await addItem(home, { text: '同じ作業 3' });
   assert.notEqual(unkeyed.id, b.id); assert.equal(listItems(home).length, 3);
+});
+
+test('--dedupe-key reuses one entry and --replace-existing refreshes its text', async t => {
+  const home = seat(t), body = path.join(home, 'body.txt'), output = [];
+  fs.writeFileSync(body, 'first');
+  assert.equal(await main(['--add', '--kind', 'ask', '--dedupe-key', 'rescue-branch-review', '--body-file', body], { home, stdout: value => output.push(value) }), 0);
+  fs.writeFileSync(body, 'second');
+  assert.equal(await main(['--add', '--kind', 'ask', '--dedupe-key', 'rescue-branch-review', '--replace-existing', '--body-file', body], { home, stdout: value => output.push(value) }), 0);
+  assert.equal(new Set(output.map(value => JSON.parse(value).id)).size, 1);
+  assert.equal(listItems(home).length, 1);
+  assert.equal(listItems(home)[0].text, 'second');
+});
+
+test('mergeItemsInto keeps the newest rescue open and supersedes files without deleting them', async t => {
+  const home = seat(t);
+  const first = await addItem(home, { kind: 'ask', text: 'nightly-bootstrap: 変更を rescue/auto-session-20261120-010101 に退避しました。レビューが必要です。' });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const second = await addItem(home, { kind: 'info', text: 'rescue ブランチ rescue/auto-session-20261121-020202 の削除承認待ち' });
+  const result = mergeItemsInto(home, 'rescue-branch-review', [first.id, second.id]);
+  assert.equal(result.keptId, second.id);
+  assert.equal(fs.readdirSync(path.join(home, '.claude/kim-inbox')).filter(name => name.endsWith('.json')).length, 2);
+  const kept = listItems(home).find(item => item.id === second.id);
+  const old = listItems(home).find(item => item.id === first.id);
+  assert.equal(kept.status, 'open'); assert.equal(kept.dedupeKey, 'rescue-branch-review');
+  assert.match(kept.text, /計 2 件/); assert.match(kept.text, /20261120-010101/); assert.match(kept.text, /20261121-020202/);
+  assert.equal(old.status, 'superseded'); assert.equal(old.answer, `集約先: ${second.id}`);
 });
 
 test('redacted and truncated keys retain unique identities through direct delivery and spool retries', async t => {

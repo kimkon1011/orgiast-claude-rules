@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { readEnvValue } from './env-kv.mjs';
@@ -35,6 +36,9 @@ export function validateConfig(config) {
   for (const key of ['maxCostUsd', 'reservePerCallUsd', 'minLikes']) if (!Number.isFinite(config[key]) || config[key] <= 0) throw new Error(`設定不正: ${key}`);
   for (const key of ['inputPerMillion', 'outputPerMillion', 'post', 'profile']) if (!Number.isFinite(config.estimatedRates?.[key]) || config.estimatedRates[key] < 0) throw new Error(`設定不正: estimatedRates.${key}`);
   if (!Array.isArray(config.topics) || config.topics.some(t => !PURPOSES.includes(t.purpose) || typeof t.query !== 'string' || !t.query.trim())) throw new Error('設定不正: topics');
+  if (config.fallback !== undefined && config.fallback !== null) {
+    if (typeof config.fallback !== 'object' || Array.isArray(config.fallback) || typeof config.fallback.provider !== 'string' || !config.fallback.provider.trim() || typeof config.fallback.category !== 'string' || !config.fallback.category.trim()) throw new Error('設定不正: fallback');
+  }
   return config;
 }
 export function validateState(state) {
@@ -51,6 +55,9 @@ export function canonicalUrl(value) {
     const match = url.pathname.match(/^\/(?:[\w]+|i\/web)\/status\/(\d+)\/?$/);
     return match ? `https://x.com/i/web/status/${match[1]}` : null;
   } catch { return null; }
+}
+export function fallbackUrl(value) {
+  try { const url = new URL(value); return url.protocol === 'https:' ? value : null; } catch { return null; }
 }
 export function estimateCost(usage, rates) {
   if (Number.isFinite(usage?.cost_in_usd_ticks) && usage.cost_in_usd_ticks >= 0) return usage.cost_in_usd_ticks / 1e10;

@@ -140,3 +140,18 @@ test('ledgerRows は items/tasks/配列も受け、未知の形は空配列に�
   assert.deepEqual(ledgerRows(null), []);
   assert.deepEqual(ledgerRows(undefined), []);
 });
+
+test('missing env file throws TASK_SHEET_NOT_CONFIGURED', async () => {
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), 'ledger-test-'));
+  await mkdir(path.join(homeDir, '.claude'));
+  // deliberately NOT creating task-sheet.env
+  let caught;
+  try {
+    await runTaskLedger(parseLedgerArgs(['list']), { homeDir, fetchImpl: () => assert.fail('fetch called') });
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(caught, 'should have thrown');
+  assert.match(caught.message, /task-sheet.env could not be read/);
+  assert.equal(caught.code, 'TASK_SHEET_NOT_CONFIGURED');
+});

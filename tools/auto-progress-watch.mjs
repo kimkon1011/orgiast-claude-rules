@@ -924,7 +924,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
             await queueReservationAsk(row, '自動再開は行いません。続けるときはこのセッションを開いて指示してください。');
           } else {
             await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-auto-resume-disabled', sessionId: row.sessionId,
-              dedupeKey: `auto-progress-auto-resume-disabled:${rowKey(row)}`,
+              dedupeKey: `auto-resume-disabled:${row.sessionId || rowKey(row)}`,
               text: `自動再開は行いません。続けるときはこのセッションを開いて指示してください: claude --resume ${row.sessionId}` });
           }
           patch(rowKey(row), { autoResumeDisabledNotifiedAt: at });
@@ -1251,7 +1251,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
             patch(rowKey(row), { autoResumeDisabledNotifiedAt: new Date(now).toISOString() });
           } else {
             try {
-              await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-auto-resume-disabled', sessionId: row.sessionId, dedupeKey: `auto-progress-auto-resume-disabled:${row.sessionId || rowKey(row)}`, text: `自動再開は行いません。続けるときはこのセッションを開いて指示してください: claude --resume ${row.sessionId}` });
+              await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-auto-resume-disabled', sessionId: row.sessionId, dedupeKey: `auto-resume-disabled:${row.sessionId || rowKey(row)}`, text: `自動再開は行いません。続けるときはこのセッションを開いて指示してください: claude --resume ${row.sessionId}` });
               patch(rowKey(row), { autoResumeDisabledNotifiedAt: new Date(now).toISOString() });
             } catch (error) { summary.errors.push(`auto-resume-disabled-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
           }

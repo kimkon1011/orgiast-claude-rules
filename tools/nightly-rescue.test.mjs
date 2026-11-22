@@ -12,15 +12,16 @@ function fixture(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const repo = path.join(root, 'repo'), home = path.join(root, 'home');
   fs.mkdirSync(repo); fs.mkdirSync(home);
+  const gitRun = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] });
   const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  git('init', '-b', 'main'); git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.invalid');
+  gitRun('init', '-b', 'main'); gitRun('config', 'user.name', 'Test'); gitRun('config', 'user.email', 'test@example.invalid');
   fs.writeFileSync(path.join(repo, 'tracked'), 'original');
-  git('add', '.'); git('commit', '-m', 'initial');
-  git('init', '--bare', path.join(root, 'remote.git')); git('remote', 'add', 'origin', path.join(root, 'remote.git'));
-  const messages = [];
-  const notify = async message => { messages.push(message); return { delivered: 'dm' }; };
+  gitRun('add', '.'); gitRun('commit', '-m', 'initial');
+  gitRun('init', '--bare', path.join(root, 'remote.git')); gitRun('remote', 'add', 'origin', path.join(root, 'remote.git'));
+  const messages = [], noticeOptions = [];
+  const notify = async (message, options) => { messages.push(message); noticeOptions.push(options); return { delivered: 'dm' }; };
   const now = new Date(2026, 9, 9, 12).getTime();
-  return { root, repo, home, git, messages, notify, now };
+  return { root, repo, home, git, gitRun, messages, noticeOptions, notify, now };
 }
 const branches = f => f.git('for-each-ref', '--format=%(refname:short)', 'refs/heads/rescue/').trim().split('\n').filter(Boolean);
 
@@ -42,12 +43,12 @@ test('failed commit is attempted once per dirty status, including staging; retry
 test('scratch and nested git directories/files are ignored; real changes are rescued without them', async t => {
   const f = fixture(t);
   fs.writeFileSync(path.join(f.repo, '.gitignore'), 'scratch/\n');
-  f.git('add', '.gitignore'); f.git('commit', '-m', 'ignore scratch');
+  f.gitRun('add', '.gitignore'); f.gitRun('commit', '-m', 'ignore scratch');
   fs.mkdirSync(path.join(f.repo, 'scratch'), { recursive: true });
   fs.writeFileSync(path.join(f.repo, 'scratch', 'result'), 'precious');
-  f.git('init', path.join(f.repo, 'nested clone'));
+  f.gitRun('init', path.join(f.repo, 'nested clone'));
   fs.writeFileSync(path.join(f.repo, 'nested clone', 'file'), 'nested');
-  f.git('worktree', 'add', '--detach', path.join(f.repo, 'linked clone'));
+  f.gitRun('worktree', 'add', '--detach', path.join(f.repo, 'linked clone'));
   assert.equal(dirtyStatus(f.repo).clean, true);
   assert.equal((await rescueTree(f.repo, f.home, f)).clean, true);
   assert.equal(branches(f).length, 0);
@@ -57,20 +58,23 @@ test('scratch and nested git directories/files are ignored; real changes are res
   assert.equal(f.git('show', 'HEAD:tracked'), 'real change');
   assert.equal(f.git('ls-tree', '--name-only', 'HEAD'), '.gitignore\ntracked\n');
   assert.equal(f.messages.length, 1);
-  f.git('clean', '-qfd', '-e', 'scratch/');
+  f.gitRun('clean', '-qfd', '-e', 'scratch/');
   assert.equal(fs.readFileSync(path.join(f.repo, 'scratch', 'result'), 'utf8'), 'precious');
   assert.ok(fs.existsSync(path.join(f.repo, 'nested clone', '.git')));
   assert.ok(fs.existsSync(path.join(f.repo, 'linked clone', '.git')));
 });
 
-test('successful rescues notify only once daily, with a fresh allowance next day', async t => {
+test('successful rescues use one fixed key and refresh the complete branch list', async t => {
   const f = fixture(t);
   for (const [i, offset] of [0, 120000, 86400000].entries()) {
     fs.writeFileSync(path.join(f.repo, `new-${i}`), 'change');
     await rescueTree(f.repo, f.home, { ...f, now: f.now + offset });
   }
   assert.equal(branches(f).length, 3);
-  assert.equal(f.messages.length, 2);
+  assert.equal(f.messages.length, 3);
+  assert.ok(f.noticeOptions.every(options => options.dedupeKey === 'rescue-branch-review' && options.replaceExisting === true && options.incrementExisting === true));
+  assert.match(f.messages.at(-1), /計 3 件/);
+  for (const branch of branches(f)) assert.match(f.messages.at(-1), new RegExp(branch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
 test('three failures in an hour send one loop notification, not a rescue notification', async t => {
@@ -105,7 +109,7 @@ test('unreadable state fails closed without making a branch', async t => {
  test('literal staging handles renames, deletions and pathspec-looking filenames', async t => {
   const f = fixture(t);
   fs.renameSync(path.join(f.repo, 'tracked'), path.join(f.repo, 'renamed file'));
-  f.git('add', '-A');
+  f.gitRun('add', '-A');
   fs.writeFileSync(path.join(f.repo, '[literal]'), 'keep');
   const snapshot = snapshotTree(f.repo, dirtyStatus(f.repo));
   const result = await rescueTree(f.repo, f.home, f);
@@ -119,7 +123,7 @@ test('unreadable state fails closed without making a branch', async t => {
 for (const staged of [false, true]) test(`rescues a deletion: staged=${staged}`, async t => {
   const f = fixture(t);
   fs.unlinkSync(path.join(f.repo, 'tracked'));
-  if (staged) f.git('add', '-A');
+  if (staged) f.gitRun('add', '-A');
   const snapshot = snapshotTree(f.repo, dirtyStatus(f.repo));
   const result = await rescueTree(f.repo, f.home, f);
   assert.equal(f.git('rev-parse', 'HEAD^{tree}').trim(), snapshot);
@@ -184,7 +188,7 @@ test('auto-session rescues skip a snapshot tree a rescue branch already holds', 
   const handoff = path.join(f.home, '.claude', 'next-session.md');
   const before = fs.readFileSync(handoff, 'utf8');
   const messages = [...f.messages];
-  f.git('switch', 'main');
+  f.gitRun('switch', 'main');
   fs.writeFileSync(path.join(f.repo, 'tracked'), 'changed');
   const status = f.git('status', '--porcelain');
   const second = await rescueTree(f.repo, f.home, { ...f, now: f.now + 6 * 3600000 });
@@ -206,22 +210,24 @@ test('unstageUndeclaredGitlinks removes a gitlink that is not a declared submodu
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const repo = path.join(root, 'repo');
   fs.mkdirSync(repo);
+  const gitRun = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] });
   const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  git('init', '-b', 'main');
-  git('config', 'user.name', 'Test');
-  git('config', 'user.email', 'test@example.invalid');
+  gitRun('init', '-b', 'main');
+  gitRun('config', 'user.name', 'Test');
+  gitRun('config', 'user.email', 'test@example.invalid');
   fs.writeFileSync(path.join(repo, 'tracked'), 'original');
-  git('add', '.'); git('commit', '-m', 'initial');
+  gitRun('add', '.'); gitRun('commit', '-m', 'initial');
   // Create a nested git repo inside the parent (gitlink candidate).
   fs.mkdirSync(path.join(repo, 'nested'));
+  const ngitRun = (...args) => execFileSync('git', ['-C', path.join(repo, 'nested'), ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] });
   const ngit = (...args) => execFileSync('git', ['-C', path.join(repo, 'nested'), ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  ngit('init', '-b', 'main');
-  ngit('config', 'user.name', 'Test');
-  ngit('config', 'user.email', 'test@example.invalid');
+  ngitRun('init', '-b', 'main');
+  ngitRun('config', 'user.name', 'Test');
+  ngitRun('config', 'user.email', 'test@example.invalid');
   fs.writeFileSync(path.join(repo, 'nested', 'file'), 'content');
-  ngit('add', '.'); ngit('commit', '-m', 'nested initial');
+  ngitRun('add', '.'); ngitRun('commit', '-m', 'nested initial');
   // Stage the nested repo — this creates a gitlink (mode 160000) in the index.
-  git('add', '--', 'nested');
+  gitRun('add', '--', 'nested');
   const before = git('ls-files', '--stage');
   assert.ok(before.split(/\r?\n/).some(line => line.startsWith('160000 ')), 'gitlink should be staged');
   // Call the function.

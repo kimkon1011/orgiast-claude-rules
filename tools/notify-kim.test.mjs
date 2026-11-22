@@ -190,6 +190,25 @@ test('定時ダイジェストは失敗語を含んでも起票しない', async
   assert.equal(fs.existsSync(path.join(dir, '.claude/next-session.md')), false);
 });
 
+test('判断不要と明記した完了報告は題名にタイムアウトを含んでも起票しない', async () => {
+  const dir = home(), s = sender(dir);
+  const report = '2つの変更をまとめて取り込みました（DeadlineDetect Gmail タイムアウト対策）（X-0032 案件ダッシュボード）。すべての確認とWindowsでのテストに合格しています（a590b7c4 / 758028e9）。あなたが決めることはありません。';
+  assert.equal((await notifyKim(report, s.options)).delivered, 'dm');
+  assert.equal(fs.existsSync(path.join(dir, '.claude/next-session.md')), false);
+});
+
+test('判断不要と書いてあっても失敗状態の報告は起票する', async () => {
+  const dir = home(), s = sender(dir);
+  await notifyKim('夜間ジョブが失敗しました。判断不要です。', s.options);
+  assert.match(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8'), /通知の原因調査・修復:/);
+});
+
+test('判断不要の明記がないタイムアウト報告は起票する', async () => {
+  const dir = home(), s = sender(dir);
+  await notifyKim('Gmail API がタイムアウトしました', s.options);
+  assert.match(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8'), /通知の原因調査・修復:/);
+});
+
 test('起票済みマーカーを含む本文を再通知しても二重起票しない', async () => {
   const dir = home(), s = sender(dir);
   await notifyKim('収集失敗', { ...s.options, cause: '一次原因' });

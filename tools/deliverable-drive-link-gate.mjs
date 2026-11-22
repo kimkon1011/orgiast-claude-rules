@@ -14,6 +14,58 @@ const reviewAction = /見て|見せ|確認|チェック|レビュー|開いて|�
 const explicitNoUrl = /URLなし\s*[（(]\s*理由\s*[:：]\s*[^）)]+[）)]/i;
 const reason = '成果物を Drive にアップし、最終メッセージの③の依頼と同じ箇所に URL（authuser=開く人のメール付き）を書いてください。② と ③ で見てもらう成果物は、その行に Drive の URL を書く（例: - チラシ初稿 PDF https://drive.google.com/file/d/…/view）。例: node tools/drive-upload.mjs --file <path> --folder <folderId> --authuser <開く人のメール>。鍵が無い PC は rclone copyto <file> <remote>:<name> --drive-root-folder-id <folderId>（drive リモート）、または Drive MCP。全部失敗したら [DRIVE-UPLOAD-FAILED: <エラー本文>] を書いてください。';
 
+const approvalWord = /承認|よいですか|いいですか|送ってよい|どれ|選ん[でだ]|確認してください|確認をお願い|判断|\bOK\b/i;
+const planName = /[梅竹松]|案\s*(?:[0-9０-９]+|[A-ZＡ-Ｚ])|[A-ZＡ-Ｚ]\s*案/gi;
+const deliverableApprovalItem = /パース|提案書|見積(?!も?り?金額|を(?:据え置|値引き))|スライド|メール本文|草案|案文|\bPDF\b|画像|\bDocs?\b|ドキュメント|デザイン|図面|レイアウト|チラシ|フライヤー|企画書/i;
+const standalonePlanName = /^\s*(?:[梅竹松]|案\s*(?:[0-9０-９]+|[A-ZＡ-Ｚ])|[A-ZＡ-Ｚ]\s*案)\s*$/i;
+const claudeFollowup = /^\s*(?:[-*+]\s*)?\**(?:この後の自動進行|このセッション|恒久策|障害時アナログ運営)[:：]/;
+const approvalNoUrl = /URLなし\s*[（(]\s*理由\s*[:：]\s*[^\s）)][^）)]*[）)]/i;
+const approvalReason = '成果物ごとの実物URL（Drive）を承認項目の同じ行（または直後2行以内）に書いてください。見つからなければ Drive へアップし直す。URLには authuser=<開く人のメール> を付け、近傍に「<メール> で開いてください」と書いてください。例外は「URLなし（理由: …）」と明記します。';
+
+function validApprovalUrls(text, guidance) {
+  const accountGuidance = guidance.replace(/https?:\/\/[^\s<>"`\]）)]+/g, '');
+  return urls(text).flatMap(raw => {
+    try {
+      const url = new URL(raw);
+      if (!['drive.google.com', 'docs.google.com'].includes(url.hostname) || url.username || url.password) return [];
+      const account = url.searchParams.get('authuser');
+      if (!account || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(account)) return [];
+      const escaped = account.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (!new RegExp(`(?<![\\w.+@-])${escaped}\\s*で開いてください`, 'i').test(accountGuidance)) return [];
+      // 同一ファイルのURLを繰り返して複数成果物の代わりにはできない。
+      const id = url.pathname.match(/\/d\/([^/]+)/)?.[1]
+        || (url.hostname === 'drive.google.com' && url.pathname === '/open' ? url.searchParams.get('id') : null);
+      return id ? [id] : [];
+    } catch { return []; }
+  });
+}
+
+function requiredApprovalUrlCount(line) {
+  // 複合名（提案書PDF・メール本文の草案Doc）は1成果物として扱う。
+  return line.split(/[。、,／/・＆&＋+]|および|及び|ならびに|と/).reduce((count, item) => {
+    if (!deliverableApprovalItem.test(item) && !standalonePlanName.test(item)) return count;
+    const plans = [...item.matchAll(planName)].map(match => match[0].normalize('NFKC').replace(/\s/g, '').toUpperCase());
+    return count + Math.max(1, new Set(plans).size);
+  }, 0);
+}
+
+function approvalText(text) {
+  const blank = value => value.replace(/[^\r\n]/g, ' ');
+  // 引用の行数を保持し、遠いURLが「直後2行」に繰り上がらないようにする。
+  let fence = null;
+  text = text.split(/\r?\n/).map(line => {
+    if (fence) {
+      if (new RegExp(`^ {0,3}${fence.char}{${fence.length},}\\s*$`).test(line)) fence = null;
+      return blank(line);
+    }
+    const start = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (start) { fence = { char: start[1][0], length: start[1].length }; return blank(line); }
+    return /^\s*>/.test(line) ? blank(line) : line;
+  }).join('\n');
+  return text.replace(/“[^”]*”|"[^"]*"|「[^」]*」|『[^』]*』|`[^`]*`/g,
+    quoted => stripQuoted(quoted) === quoted ? quoted : blank(quoted));
+}
+
 function summaryUnits(text) {
   const start = text.indexOf('【最終まとめ】');
   if (start < 0) return [];
@@ -47,6 +99,54 @@ function summaryUnits(text) {
   return units;
 }
 
+/**
+ * 承認コンテキストのチェック:
+ * 最終メッセージに承認語があれば成果物の各行を確認する。
+ * 次の項目のURL・例外理由を流用せず、直後2行までの継続行だけを使う。
+ */
+function judgeApprovalContext(text) {
+  const hasSummary = text.includes('【最終まとめ】');
+  const rows = text.split(/\r?\n/).map(line => claudeFollowup.test(line) ? '' : line);
+  const hasApprovalRequest = rows.some(line => approvalWord.test(line));
+  const approvalHeading = /^\s*(?:#+\s+)?\**【kim 確認用の全文】\**\s*$/i;
+  if (!hasApprovalRequest && !rows.some(line => approvalHeading.test(line))) return 'pass';
+  let summarySection = '';
+  let inApprovalBlock = false;
+  const lines = rows.map(line => {
+    const section = line.match(/^[ \t#*_]*([①②③])/);
+    if (section) summarySection = section[1];
+    if (section || /^\s*(?:#+\s|\**【[^】]+】\**\s*$)/.test(line)) {
+      inApprovalBlock = approvalHeading.test(line);
+      return line;
+    }
+    if ((!hasApprovalRequest && !inApprovalBlock) || (summarySection === '①' && !inApprovalBlock)) return '';
+    // ②・③の通常の確認依頼は、従来の引き渡し検査で扱う。
+    if (!hasApprovalRequest && hasSummary && /[②③]/.test(summarySection)
+      && deliverable.test(line) && reviewAction.test(line)) return '';
+    return line;
+  });
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].replace(/https?:\/\/[^\s<>"`\]）)]+/g, '');
+    if (/^\s*(?:#+\s|【[^】]+】\s*$|[\t#*_]*[①②③])/.test(line) || !deliverableApprovalItem.test(line)) continue;
+    let end = i + 1;
+    while (end < Math.min(i + 3, lines.length)) {
+      const next = lines[end].replace(/https?:\/\/[^\s<>"`\]）)]+/g, '');
+      if (deliverableApprovalItem.test(next) || /^\s*(?:[-*+]\s|\d+[.)]\s|[#【①②③])/.test(next)) break;
+      end++;
+    }
+    const context = lines.slice(i, end).join('\n');
+    if (approvalNoUrl.test(context)) continue;
+    const identities = new Set();
+    for (let row = i; row < end; row++) {
+      for (const id of validApprovalUrls(lines[row], lines.slice(Math.max(0, row - 1), row + 2).join('\n'))) identities.add(id);
+    }
+    if (identities.size < requiredApprovalUrlCount(line)) {
+      return 'block';
+    }
+  }
+  return 'pass';
+}
+
 export function judgeDeliverableDriveLink({ text = '', toolUses = [] } = {}) {
   const files = new Set();
   for (const tool of toolUses) {
@@ -59,8 +159,9 @@ export function judgeDeliverableDriveLink({ text = '', toolUses = [] } = {}) {
   }
   for (const match of text.matchAll(localFiles)) files.add(canonicalFile(match[0]));
   const result = { decision: 'pass', code: 'DELIVERABLE-DRIVE-LINK', files: [...files] };
+  if (judgeApprovalContext(approvalText(text)) === 'block') return { ...result, decision: 'block', reason: approvalReason };
   if ([...text.matchAll(/\[DRIVE-UPLOAD-FAILED:([^\]]*)\]/g)].some(m => [...m[1].trim()].length >= 20)) return result;
-  const scannable = stripQuoted(text);
+  const scannable = stripQuoted(text.replace(/^\s*>[^\r\n]*/gm, ''));
   const attachment = /端末[にへ]送りました|添付しました|添付のPDF|SendUserFile|チャットに送りました/i.test(scannable);
   const summary = scannable.indexOf('【最終まとめ】');
   const sections = summary < 0 ? [] : [...scannable.slice(summary).matchAll(/③[^\n]*(?:\n(?![ \t#*]*[①②③])[^\n]*)*/g)].map(m => m[0]);

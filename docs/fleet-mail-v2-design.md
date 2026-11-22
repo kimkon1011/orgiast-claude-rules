@@ -54,6 +54,7 @@ new ──poll──▶ delivered ──注入/閲覧/実行開始──▶ seen
 
 - 正本: `tools/fleet-pc-map.json`（作業用番号⇔ラベル⇔hostname）＋ビーコンのラベル一覧。
 - CLI `--to` の解決順: ①作業用番号→ラベル ②ラベル完全一致 ③hostname 完全一致（map か beacon に存在するもの） ④`all`。**部分一致は廃止。** 解決できなければ送らず exit 4 で候補（前方一致上位 5 件）を表示。
+- `--send --exec claude` は、`FLEET_HUB` 設定済みのとき非ハブ席からの送信を exit 7 で拒否する。`--dry-run` でも判定し、`--force` で送信前の判定をスキップできる。
 - CLI は解決後の **正規ラベル** を `to` に入れて送る。GAS の poll 側も `label === to || hostname === to` の完全一致のみ。
 - 返信先は原本 `from`（送信時に正規ラベルで記録）なので一致する。
 - 同一 hostname の複数ラベル（kimko-PC/作業用004）は従来 PR #751 の付替えを維持。

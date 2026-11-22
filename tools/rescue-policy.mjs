@@ -5,12 +5,15 @@ import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { notifyKim } from './notify-kim.mjs';
+import { listItems } from './kim-inbox.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 
 import { formatKimNotice } from './lib/kim-notice.mjs';
 import { clearStaleIndexLock } from './dirty-worktree-guard.mjs';
+import { scanRescuePaths } from './lib/secret-scan.mjs';
 
 const RETRY_MS = 6 * 60 * 60 * 1000;
+const RESCUE_REVIEW_KEY = 'rescue-branch-review';
 export const WORK_DIRECTORY_EXCLUDES = ['scratch/', '.work/', '.work-*/', '.fleet-mail-work/'];
 const excluded = name => WORK_DIRECTORY_EXCLUDES.some(pattern => {
   const root = name.split('/')[0];
@@ -214,6 +217,19 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
       if (key in state.dirtySince) { delete state.dirtySince[key]; save(); }
       return { clean: true, dirtyCount, events };
     }
+    const scan = scanRescuePaths(tree, status.snapshotPaths);
+    const excludedPaths = new Set(scan.excluded.map(item => item.path));
+    status.snapshotPaths = scan.safePaths;
+    status.paths = status.paths.filter(filePath => !excludedPaths.has(filePath));
+    if (scan.excluded.length) {
+      const summary = scan.excluded.map(item => `${item.path} (${item.types.join(',')})`).join(', ');
+      log('RESCUE_SECRET_EXCLUDED', summary);
+      await sendOnce(`secret-scan:${key}:${day}`, `nightly-bootstrap: rescue から秘密値候補を除外しました。\n対象: ${summary}\nローカルファイルは変更していません。`);
+    }
+    if (!status.snapshotPaths.length) {
+      log('RESCUE_EMPTY_AFTER_SECRET_SCAN', 'all dirty paths excluded; commit and push skipped');
+      return { clean: false, dirtyCount, events };
+    }
     if (preserveTree) {
       state.dirtySince[key] ??= now;
       save();
@@ -267,7 +283,16 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
       catch (e) { log('RESCUE_HANDOFF_FAILED', e.message); }
       try { git(tree, ['push', '-u', 'origin', branch]); }
       catch { log('RESCUE_PUSH_FAILED_LOCAL_SAVED', branch); }
-      if (!preserveTree) await sendOnce(`rescue:${day}`, `nightly-bootstrap: 変更を ${branch} に退避しました。レビューが必要です。`);
+      if (!preserveTree) {
+        const existing = listItems(home).find(item => item.dedupeKey === RESCUE_REVIEW_KEY);
+        const known = String(existing?.text || '').match(/rescue\/auto-session-\d{8}-\d{6}(?:-\d+)?/g) || [];
+        state.rescueBranches = [...new Set([...(state.rescueBranches || []), ...known, branch])].sort();
+        state.rescueCount = (state.rescueCount ?? existing?.count ?? existing?.repeatCount ?? 0) + 1;
+        save();
+        const all = state.rescueBranches;
+        const message = `rescue ブランチのレビュー・削除承認待ち（最新: ${branch} ／ 計 ${all.length} 件）\n対象ブランチ:\n${all.map(name => `- ${name}`).join('\n')}`;
+        await notify(message, { home, kind: 'ask', kimActionRequired: true, source: 'nightly-bootstrap', dedupeKey: RESCUE_REVIEW_KEY, replaceExisting: true, incrementExisting: true, plainJa: false });
+      }
     } catch (e) {
       // A shared index lock (or a timed-out commit hook) must not prevent a
       // snapshot. Preserve the real index/HEAD and commit with a private index.

@@ -82,12 +82,16 @@ test('repairAdvice: 自動修復と人の操作の区別', () => {
   assert.match(repairAdvice('codex', 'dead:physical_operation').human, /wsl/);
   assert.equal(repairAdvice('deepseek', 'dead:payment_required').fixNow, false);
   assert.match(repairAdvice('codex', 'oauth_consent', { via: 'x' }).human, /OAuth/);
-  for (const reason of ['quota_wait', 'usage_limit:daily', 'rate_limit:retry']) {
+  for (const reason of ['quota_wait', 'usage_limit:daily', 'rate_limit:retry', 'daily_limit', 'lane_doctor_usage_limit']) {
     assert.deepEqual(repairAdvice('codex', reason), {
       fixNow: false, auto: true, silent: true, human: null,
       note: '利用上限・レート制限の一時待ち。自動再確認で復帰する',
     });
   }
+  assert.deepEqual(repairAdvice('groq', 'daily_limit'), {
+    fixNow: false, auto: true, silent: true, human: null,
+    note: '利用上限・レート制限の一時待ち。自動再確認で復帰する',
+  });
 });
 
 function mailFor(pc, dead, at, extra = {}) {

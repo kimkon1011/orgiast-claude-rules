@@ -70,6 +70,13 @@ test('Send-ToRclone の rclone コマンドは copyto を使い $ZipName を宛�
 
   assert.ok(body.includes('copyto'), 'rclone コマンドが copy ではなく copyto を使っている');
   assert.ok(body.includes('$ZipName'), 'copyto の宛先に $ZipName が含まれている');
+  assert.match(body, /& \$nodeExe \$copyHelper --timeout-ms \$RcloneCopyTimeoutMs \$rcloneExe \$ZipPath/);
+  assert.match(body, /lib\\rclone-copy\.mjs/);
+});
+
+test('rclone copy timeout は既定6時間で呼び出し側から上書きできる', () => {
+  assert.match(source, /\[long\]\$RcloneCopyTimeoutMs = 21600000/);
+  assert.match(source, /\[ValidateRange\(1, \[long\]::MaxValue\)\]/);
 });
 
 test('Parse-RcloneLine: 先頭空白のサイズ右寄せ行を正しくパースする', () => {

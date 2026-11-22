@@ -11,6 +11,13 @@ const CONFIG = fileURLToPath(new URL('../config/x-ai-tips-topics.json', import.m
 const PURPOSES = ['cost', 'site', 'business'];
 const CATEGORIES = ['cost', 'quality', 'model-release', 'tool', 'prompt-technique', 'other'];
 const DAY = 86400000;
+
+const VERIFY_TIMEOUT = 8000;
+const MAX_VERIFY = 10;
+
+const CREDIT_BLOCKED_STATUS = 'skip:支払い待ち';
+const CREDIT_BLOCKED_MESSAGE = 'x.ai チームの残高切れ・月次上限のためスキップしました（支払いの承認待ち）。鍵は正常です。';
+
 const read = (file, fallback) => { try { return fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
 const lines = text => text.split(/\r?\n/).filter(x => x.trim()).map(JSON.parse);
 const normalized = text => String(text).normalize('NFKC').toLowerCase().replace(/\s+/gu, '');
@@ -35,14 +42,23 @@ export function validateConfig(config) {
   for (const key of ['maxCostUsd', 'reservePerCallUsd', 'minLikes']) if (!Number.isFinite(config[key]) || config[key] <= 0) throw new Error(`設定不正: ${key}`);
   for (const key of ['inputPerMillion', 'outputPerMillion', 'post', 'profile']) if (!Number.isFinite(config.estimatedRates?.[key]) || config.estimatedRates[key] < 0) throw new Error(`設定不正: estimatedRates.${key}`);
   if (!Array.isArray(config.topics) || config.topics.some(t => !PURPOSES.includes(t.purpose) || typeof t.query !== 'string' || !t.query.trim())) throw new Error('設定不正: topics');
+  if (config.fallback !== undefined && config.fallback !== null && config.fallback !== 'web-search') throw new Error('設定不正: fallback（null または "web-search" のみ可）');
   return config;
 }
 export function validateState(state) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error('state形式不正');
   for (const key of ['urls', 'hashes']) if (state[key] !== undefined && (!Array.isArray(state[key]) || state[key].some(x => typeof x !== 'string'))) throw new Error(`state形式不正: ${key}`);
   if (state.lastId !== undefined && (!Number.isSafeInteger(state.lastId) || state.lastId < 0)) throw new Error('state形式不正: lastId');
+  if (state.creditBlockedAt !== undefined && typeof state.creditBlockedAt !== 'string') throw new Error('state形式不正: creditBlockedAt');
   if (state.night && (!/^\d{4}-\d{2}-\d{2}$/.test(state.night.date) || !Number.isSafeInteger(state.night.calls) || state.night.calls < 0 || !Number.isFinite(state.night.costUsd) || state.night.costUsd < 0)) throw new Error('state形式不正: night');
   return state;
+}
+export function classifyApiError(status, bodyText) {
+  if (status !== 403) return 'fatal';
+  const text = String(bodyText ?? '');
+  let code;
+  try { code = JSON.parse(text)?.code; } catch {}
+  return code === 'permission-denied' || /credits|spending limit/i.test(text) ? 'credit-blocked' : 'fatal';
 }
 export function canonicalUrl(value) {
   try {
@@ -52,6 +68,69 @@ export function canonicalUrl(value) {
     return match ? `https://x.com/i/web/status/${match[1]}` : null;
   } catch { return null; }
 }
+export async function verifyUrls(urls, { fetchFn = globalThis.fetch, log = console.log } = {}) {
+  const verified = [];
+  for (const url of urls) {
+    if (verified.length >= MAX_VERIFY) break;
+    if (typeof url !== 'string' || !url.startsWith('http')) continue;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), VERIFY_TIMEOUT);
+      try {
+        let res = await fetchFn(url, { method: 'HEAD', redirect: 'follow', signal: controller.signal });
+        if (res.status === 405 || res.status === 403) {
+          res = await fetchFn(url, { method: 'GET', redirect: 'follow', signal: controller.signal });
+        }
+        if (res.ok || (res.status >= 300 && res.status < 400)) verified.push(url);
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {
+      log(`x-ai-tips-collect: URL 実在確認失敗（スキップ）: ${url.replace(/[?#].*/g, '')}`);
+    }
+  }
+  return verified;
+}
+
+export async function collectFallback(topicQuery, topicPurpose, now, config, { fetchFn = globalThis.fetch, log = console.log, searchImpl } = {}) {
+  if (config.fallback !== 'web-search') return { items: [], source: null };
+  const searchFn = searchImpl || (await import('./web-search.mjs')).search;
+  log('x-ai-tips-collect: fallback → web-search grounding');
+  // キーは search() が環境変数・設定ファイルから自動読み込みする。テストでは searchImpl で差し替え可能。
+  const result = await searchFn(topicQuery, {
+    provider: 'auto',
+    fetchImpl: fetchFn,
+    appendUsage: () => {},
+    stderr: { write: () => {} },
+  });
+  const answer = result.answer || '';
+  let candidateUrls = [];
+  if (Array.isArray(result.urls)) candidateUrls.push(...result.urls.map(u => u.url || u));
+  // answer 内の URL も候補に加える
+  for (const match of answer.matchAll(/https?:\/\/[^\s"'<>\[\]]+/g)) {
+    candidateUrls.push(match[0].replace(/[),.;:\]}）。、，]+$/g, ''));
+  }
+  candidateUrls = [...new Set(candidateUrls)];
+  log(`x-ai-tips-collect: 取得URL候補${candidateUrls.length}件、実在確認中`);
+  const validUrls = await verifyUrls(candidateUrls, { fetchFn, log });
+  log(`x-ai-tips-collect: 実在確認通過${validUrls.length}件`);
+  if (validUrls.length === 0) return { items: [], source: result.provider };
+  // answer から簡易項目を作る（search は1クエリなので全 result を1件にまとめる）
+  const from = new Date(+now - 2 * DAY).toISOString();
+  const items = [{
+    url: validUrls[0],
+    author: `@search-${result.provider}`,
+    title: `検索結果: ${topicQuery.slice(0, 60)}`,
+    summary: answer.slice(0, 300),
+    steps: `参照: ${validUrls[0]}`,
+    purpose: topicPurpose,
+    category: 'other',
+    postedAt: now.toISOString(),
+    likes: 10,
+  }];
+  return { items, source: result.provider };
+}
+
 export function estimateCost(usage, rates) {
   if (Number.isFinite(usage?.cost_in_usd_ticks) && usage.cost_in_usd_ticks >= 0) return usage.cost_in_usd_ticks / 1e10;
   const detail = usage?.server_side_tool_usage_details;
@@ -129,6 +208,10 @@ export async function runCollect(options = {}) {
   let locked = false;
   const save = state => { if (!dryRun) { const tmp = `${stateFile}.tmp`; fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n'); fs.renameSync(tmp, stateFile); } };
   let acquired = 0, added = 0, duplicates = 0, calls = 0, cost = 0;
+  const skipCreditBlocked = () => {
+    log(CREDIT_BLOCKED_MESSAGE);
+    return { status: CREDIT_BLOCKED_STATUS, calls, cost, added, duplicates };
+  };
   try {
     if (!dryRun) { fs.mkdirSync(dir, { recursive: true }); const fd = fs.openSync(lock, 'wx'); fs.closeSync(fd); locked = true; }
     const state = validateState(JSON.parse(read(stateFile, '{}')));
@@ -136,6 +219,8 @@ export async function runCollect(options = {}) {
     if (!Number.isSafeInteger(state.nextTopicIndex) || state.nextTopicIndex < 0 || state.nextTopicIndex >= topicCount) state.nextTopicIndex = 0;
     const startTopicIndex = state.nextTopicIndex;
     const date = japanDate(now);
+    const blockedAt = Date.parse(state.creditBlockedAt);
+    if (Number.isFinite(blockedAt) && japanDate(new Date(blockedAt)) === date) return skipCreditBlocked();
     if (state.night?.date !== date) state.night = { date, calls: 0, costUsd: 0 };
     // 送信直前に予約する。配送後クラッシュでも同じ週に二重送信しない。
     if (new Date(`${date}T00:00:00Z`).getUTCDay() === 1 && state.weekly?.date !== date) {
@@ -165,14 +250,26 @@ export async function runCollect(options = {}) {
       // 未実行の次テーマを予約と同時に保存。全件回れた夜も翌夜の先頭を1つずらす。
       state.nextTopicIndex = (offset === topicCount - 1 ? startTopicIndex + 1 : topicIndex + 1) % topicCount;
       state.night.calls++; state.night.costUsd += config.reservePerCallUsd; calls++; cost += config.reservePerCallUsd; save(state);
-      let usage, actual, failure, signal, serverError = false, awaitingResponse = true;
+      let usage, actual, failure, signal, serverError = false, awaitingResponse = true, creditBlocked = false;
       try {
         signal = AbortSignal.timeout(config.timeoutMs);
         const response = await fetchFn('https://api.x.ai/v1/responses', { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(buildRequest(topic, now, config)), signal });
         if (!response.ok) {
           awaitingResponse = false;
           serverError = response.status >= 500 && response.status < 600;
-          throw new Error(`API HTTP ${response.status}`);
+          let responseBody = '', code;
+          try {
+            responseBody = await response.text();
+            const parsed = JSON.parse(responseBody.slice(0, 2000));
+            if (typeof parsed?.code === 'string' && parsed.code) code = parsed.code.replaceAll(key, '[REDACTED]').replace(/[\r\n]+/g, ' ');
+          } catch {}
+          if (classifyApiError(response.status, responseBody) === 'credit-blocked') {
+            state.creditBlockedAt = now.toISOString();
+            save(state);
+            creditBlocked = true;
+            return skipCreditBlocked();
+          }
+          throw new Error(`API HTTP ${response.status}${code ? ` (${code})` : ''}`);
         }
         const json = await response.json(); awaitingResponse = false; usage = json.usage;
         actual = estimateCost(usage, config.estimatedRates);
@@ -193,11 +290,62 @@ export async function runCollect(options = {}) {
       } catch (error) {
         failure = error.message;
         const timedOut = awaitingResponse && (signal?.aborted || ['TimeoutError', 'AbortError'].includes(error.name));
-        if (!serverError && !timedOut) throw error;
+        // 401/402/403 は serverError 扱いにして打ち切らず次テーマへ進む
+        const httpStatus = Number(error.message.replace('API HTTP ', ''));
+        const authOrBilling = [401, 402, 403].includes(httpStatus);
+        if (!serverError && !timedOut && !authOrBilling) throw error;
         failedTopics++;
+        // 401/402/403 のときは検索付き収集へフォールバック
+        if (authOrBilling && config.fallback === 'web-search') {
+          try {
+            log('x-ai-tips-collect: x.ai API HTTP', httpStatus, '→ fallback web-search grounding へ切替');
+            const fallbackResult = await collectFallback(topic.query, topic.purpose, now, config, { fetchFn, log, searchImpl: options.searchImpl });
+            if (fallbackResult.source && fallbackResult.items.length) {
+              const records = [...lines(read(proposalFile, '')), ...simulated];
+              const deduped = [];
+              const recordIds = new Set(records.map(r => r.id));
+              const recordHashes = new Set(records.map(r => r.contentHash).filter(Boolean));
+              let next = Math.max(0, state.lastId || 0, ...records.map(r => Number(/^X-(\d+)$/.exec(r.id)?.[1]) || 0)) + 1;
+              for (const rawItem of fallbackResult.items) {
+                const hash = contentHash(rawItem);
+                if (recordHashes.has(hash)) continue;
+                recordHashes.add(hash);
+                const title = rawItem.title?.trim() || '';
+                const summary = rawItem.summary?.trim() || '';
+                const steps = rawItem.steps?.trim() || '';
+                deduped.push({
+                  id: `X-${String(next++).padStart(4, '0')}`,
+                  createdAt: now.toISOString(),
+                  status: 'pending',
+                  title: title.slice(0, 200),
+                  action: steps.slice(0, 500),
+                  evidence: `${rawItem.url || ''} ${rawItem.author ? `${rawItem.author}: ` : ''}${summary.slice(0, 200)}`,
+                  category: CATEGORIES.includes(rawItem.category) ? rawItem.category : 'other',
+                  confidence: 'low',
+                  purpose: topic.purpose,
+                  source: `fallback:${fallbackResult.source}`,
+                  author: rawItem.author || '',
+                  postedAt: rawItem.postedAt || now.toISOString(),
+                  likes: Number.isFinite(rawItem.likes) ? rawItem.likes : 0,
+                  summary: summary.slice(0, 500),
+                  contentHash: hash,
+                });
+              }
+              state.lastId = next - 1;
+              if (dryRun) { simulated.push(...deduped); for (const record of deduped) log(`[dry-run] ${JSON.stringify(record)}`); }
+              else if (deduped.length) {
+                const existing = read(proposalFile, '');
+                fs.appendFileSync(proposalFile, (existing && !existing.endsWith('\n') ? '\n' : '') + deduped.map(JSON.stringify).join('\n') + '\n');
+              }
+              added += deduped.length; save(state);
+            }
+          } catch (fbError) {
+            log('x-ai-tips-collect: fallback も失敗', String(fbError.message).slice(0, 200));
+          }
+        }
       }
       finally {
-        if (!dryRun) fs.appendFileSync(path.join(dir, 'runs.jsonl'), JSON.stringify({ at: now.toISOString(), night: date, topic, model: 'grok-4.6', usage, costUsd: actual ?? config.reservePerCallUsd, estimated: usage?.cost_in_usd_ticks == null, reserved: actual == null, status: failure ? `error:${failure}` : 'ok', nightCalls: state.night.calls, nightCostUsd: state.night.costUsd }) + '\n');
+        if (!dryRun) fs.appendFileSync(path.join(dir, 'runs.jsonl'), JSON.stringify({ at: now.toISOString(), night: date, topic, model: 'grok-4.6', usage, costUsd: actual ?? config.reservePerCallUsd, estimated: usage?.cost_in_usd_ticks == null, reserved: actual == null, status: creditBlocked ? CREDIT_BLOCKED_STATUS : failure ? `error:${failure}` : 'ok', nightCalls: state.night.calls, nightCostUsd: state.night.costUsd }) + '\n');
       }
     }
     if (failedTopics) throw new Error(`テーマ失敗${failedTopics}件（残りのテーマは処理継続）`);

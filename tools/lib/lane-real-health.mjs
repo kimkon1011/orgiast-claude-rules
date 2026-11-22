@@ -59,14 +59,20 @@ const AUTH_MIN_FAILURES = 5;
 const http402 = text => /(?<!\d)402(?!\d)/.test(String(text));
 const http403 = text => /(?<!\d)403(?!\d)/.test(String(text));
 const http429 = text => /(?<!\d)429(?!\d)/.test(String(text));
-export const quotaFailure = text => http429(text) || /cooldown|(?:usage|weekly|monthly)[_ /.-]*limit|limit[^\n]{0,60}exhausted|rate[_ .-]?limit|RESOURCE_EXHAUSTED|codex_cooldown/i.test(String(text));
+export const authFailurePattern = /basic authentication|HTTP\s*401|\b401\b|unauthorized|login required|token.*expired|Missing bearer|Failed to refresh token|access token could not be refreshed|log out and sign in again|sign in again|refresh_token|token_revoked|invalid_grant|invalid_api_key|not logged in/i;
+// ChatGPT/Codex の定額枠切れは 429 も "usage limit" も含まず
+// 「Upgrade to Pro ... purchase more credits or try again at <時刻>」という散文で届く。
+// 2026-11-22 実測: これを quota と読めず real_fail_rate に積み上がり、
+// lane-repair-first-gate が全セッションの編集・シェルを封鎖した。
+export const chatgptUsageLimit = text => /chatgpt\.com\/settings\/usage|upgrade to pro[^\n]{0,300}try again at|you(?:['’]ve| have) (?:hit|reached)[^\n]{0,60}limit/i.test(String(text));
+export const quotaFailure = text => http429(text) || chatgptUsageLimit(text) || /cooldown|(?:usage|weekly|monthly)[_ /.-]*limit|limit[^\n]{0,60}exhausted|rate[_ .-]?limit|RESOURCE_EXHAUSTED|codex_cooldown/i.test(String(text));
 // billing は 402 / insufficient balance|quota|credits / payment_required のみ。
 // 429 や rate limit 由来の "Insufficient credits" を billing と誤判定しない（quotaFailure と順序で分離）。
 export const billingFailure = text => http402(text)
   || (/outstanding balance|billing account[^\n]{0,80}(?:disabled|closed|suspended|outstanding|not active)/i.test(String(text)) && http403(text))
   || /insufficient[_ ](?:balance|quota|credits?)|(?:credits?|balance)[ _-]*(?:are[ _-]*)?(?:depleted|exhausted|insufficient)|(?:out of|no|not enough|low) credits?|credit[_ -](?:balance|limit)[^\n]{0,40}(?:low|exceed|insufficient|depleted|exhausted)|payment_required/i.test(String(text));
 // 文言に 429 を含む billing は偽の billing（実際は quota）。判定補助。
-export const billingWithQuotaHint = text => billingFailure(text) && (http429(text) || /rate[_ .-]?limit|cooldown/i.test(String(text)));
+export const billingWithQuotaHint = text => billingFailure(text) && (http429(text) || chatgptUsageLimit(text) || /rate[_ .-]?limit|cooldown/i.test(String(text)));
 // Provider timestamps without an offset are interpreted in the host timezone.
 export function quotaReset(text) {
   return Date.parse(String(text).match(/(?:reset(?:s|ting)?(?: at)?|retry at)\s*[:=]?\s*(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:?\d\d)?)/i)?.[1]);
@@ -92,14 +98,15 @@ export function realLaneStats(home, now = Date.now()) {
     s.events.push(event);
     if (status === 'ok') { s.lastOkAt = Math.max(s.lastOkAt, at); continue; }
     const detail = laneErrorText([row.status, row.httpStatus, row.http_status, row.reason, row.error, row.stderr, row.stderrTail, row.spawnError].filter(Boolean).join('\n'), row.provider);
-    // cooldown 状態の行は常に quota 扱い（実機: glm が 70 件の cooldown 行を持ち real_fail_rate と誤判定）。
+    const authFailure = authFailurePattern.test(detail);
+    // 認証切れを先に判定し、それ以外の cooldown は quota 扱い（実機: glm が 70 件の cooldown 行を持ち real_fail_rate と誤判定）。
     // 402 は RESOURCE_EXHAUSTED を伴うことがある。429 も同居する場合だけ quota を優先する。
-    if (row.status !== 'cooldown' && billingFailure(detail) && !billingWithQuotaHint(detail)) {
+    if (!authFailure && row.status !== 'cooldown' && billingFailure(detail) && !billingWithQuotaHint(detail)) {
       s.billingCalls++;
       s.lastBillingAt = Math.max(s.lastBillingAt, at);
       continue;
     }
-    if (row.status === 'cooldown' || quotaFailure(detail)) {
+    if (!authFailure && (row.status === 'cooldown' || quotaFailure(detail))) {
       s.quotaCalls++;
       s.lastQuotaAt = Math.max(s.lastQuotaAt, at);
       const until = millis(row.retryAt ?? row.until ?? row.resetAt) || quotaReset(detail);
@@ -108,7 +115,8 @@ export function realLaneStats(home, now = Date.now()) {
     }
     s.failures++;
     const http = detail.match(/(?:HTTP[ _:]*|(?:^|\s))([45]\d\d)\b/i)?.[1];
-    const reason = redactAll(http ? `HTTP ${http}` : laneErrorText(row.reason || row.stderr || row.stderrTail || row.spawnError || row.status, row.provider).split(/\r?\n/)[0]).slice(0, 180);
+    const reason = authFailure && /\b401\b/.test(detail) ? 'HTTP 401' : redactAll(http ? `HTTP ${http}` : laneErrorText(row.reason || row.stderr || row.stderrTail || row.spawnError || row.status, row.provider).split(/\r?\n/)[0]).slice(0, 180);
+    if (authFailure) event.authFailure = true;
     event.reason = reason;
     s.reasons[reason] = (s.reasons[reason] || 0) + 1;
   }
@@ -147,8 +155,15 @@ export function applyRealLaneHealth(health, home, now = Date.now(), classifiedAu
     const lastOkAt = Math.max(s?.lastOkAt || 0, probeOkAt);
     const calls = s?.events.filter(event => event.at > lastOkAt) || [];
     const failures = calls.filter(event => event.reason !== undefined);
-    if (calls.length >= 5 && failures.length / calls.length >= .5) {
-      const isAuth = event => /basic authentication|HTTP\s*401|\b401\b|unauthorized|login required|token.*expired|Missing bearer|Failed to refresh token|access token could not be refreshed|log out and sign in again|sign in again/i.test(event.reason || '');
+    const isAuth = event => event.authFailure || authFailurePattern.test(event.reason || '');
+    const freshAuth = !state.alive && (
+      failures.some(isAuth)
+      || (authFailurePattern.test(String(state.error || '')) && (!lastOkAt || millis(state.probedAt) > lastOkAt))
+    );
+    if (freshAuth) {
+      state.reason = lane === 'codex' ? 'dead:oauth_consent' : 'auth_invalid';
+      delete state.until;
+    } else if (calls.length >= 5 && failures.length / calls.length >= .5) {
       const authFailures = failures.filter(isAuth);
       const authDominant = authFailures.length >= AUTH_MIN_FAILURES && authFailures.length / failures.length >= AUTH_DOMINANT_RATIO;
       if (authDominant) {

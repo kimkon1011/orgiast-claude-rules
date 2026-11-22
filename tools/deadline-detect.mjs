@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { seatCheck } from './lib/deadline-seat.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
-import { gwsFetch } from './lib/gws-proxy.mjs';
+import { gwsFetch, isTransientSourceError } from './lib/gws-proxy.mjs';
 import { reportHeartbeat } from './lib/heartbeat.mjs';
 import { addItem } from './kim-inbox.mjs';
 import { DEFAULT_CONFIG, KINDS, createLedger, loadConfig, defaultHome, dataPath, readJson, saveJson, googleClient, withLedgerLock, parseSheetDate, jstDate, isDuplicate, nextId, sheetUrl, initialize } from './deadline-ledger.mjs';
@@ -88,7 +88,7 @@ export async function askProvider(provider, documents, { home, execImpl = exec, 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-llm-'));
   try {
     const file = path.join(dir, 'prompt.txt'); fs.writeFileSync(file, extractionPrompt(documents), { mode: 0o600 });
-    const args = [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', provider, '--prefer-provider', '--no-fallback', '--category','extraction','--prompt-file',file,'--per-provider-timeout-ms','45000'];
+    const args = [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', provider, '--prefer-provider', '--no-fallback', '--category','extraction','--prompt-file',file,'--per-provider-timeout-ms','45000','--max','8192'];
     // Pin the fallback to a non-Claude model even if llm-ask's defaults change.
     if (provider === 'openrouter') args.push('--model','openai/gpt-oss-120b');
     const { stdout } = await execImpl(process.execPath, args, { encoding: 'utf8', windowsHide: true, signal, timeout: 55000, maxBuffer: 2 * 1024 * 1024, env: { ...process.env, ORGIAST_HOME: home } });
@@ -252,7 +252,7 @@ export async function runDetect({ home, config, ledger, state, sources, now, dry
       }
       if (sourceComplete) {
         result.completedSources++;
-        if (!dryRun) { state.sources ||= {}; state.sources[source.key] = next; delete state.pending[source.key]; persist(); }
+        if (!dryRun) { state.sources ||= {}; state.sources[source.key] = next; delete state.pending[source.key]; if (state.transientErrors) delete state.transientErrors[source.key]; persist(); }
         if (resumedPending && !dryRun) queue.splice(sourceIndex + 1, 0, source);
       }
     } catch (e) {
@@ -263,7 +263,23 @@ export async function runDetect({ home, config, ledger, state, sources, now, dry
         result.partial.push({ source: source.key, reason: '全体時間上限到達（取得済みdocumentは次回へ繰越）' });
         result.skipped.push({ source: source.key, reason: '全体時間上限到達' });
       } else if (isQuotaError(e)) result.skipped.push({ source: source.key, reason: `quota retry exhausted: ${reason}` });
-      else result.errors.push({ source: source.key, error: reason });
+      else if (isTransientSourceError(e)) {
+        if (!dryRun) {
+          const transientErrors = (state.transientErrors ||= {});
+          const count = (transientErrors[source.key] || 0) + 1;
+          transientErrors[source.key] = count;
+          persist();
+          if (count >= 3) {
+            result.errors.push({ source: source.key, error: `一時的エラーが${count}回連続: ${reason}` });
+          } else {
+            result.partial.push({ source: source.key, reason: `一時的エラー（${count}回目/次回再試行）: ${reason}` });
+            result.skipped.push({ source: source.key, reason: `一時的エラー: ${reason}` });
+          }
+        } else {
+          result.partial.push({ source: source.key, reason: `一時的エラー: ${reason}` });
+          result.skipped.push({ source: source.key, reason: `一時的エラー: ${reason}` });
+        }
+      } else result.errors.push({ source: source.key, error: reason });
     }
   }
   if (!dryRun && state.candidateNoticePending && !processSignal?.aborted && nowMs() < deadlineMs) {

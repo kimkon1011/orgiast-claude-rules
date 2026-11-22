@@ -1,7 +1,12 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/login-health.mjs", "scope": "fleet", "step": "task:login-health", "reason": "全PCのログイン状態を点検する共通タスク"},
+    {"path": "tools/register-login-health.mjs", "scope": "fleet", "step": "task:login-health", "reason": "全PCのログイン点検タスク登録入口"},
+    {"path": "tools/register-login-health.ps1", "scope": "fleet", "step": "task:login-health", "reason": "全PCのログイン点検タスクを2時間ごとに登録する"},
     {"path": "tools/fleet-scope.json", "scope": "fleet", "step": "settings:setup-converge", "reason": "fleet scope 定義ファイル。setup --converge の配布対象判定に使われる"},
+    {"path": "tools/cron-liveness-check.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "SessionStart のcron生存点検を全PCで実行し、担当席だけの配達タスク有無をローカル判定する"},
+    {"path":"tools/unrequested-automation-gate.mjs","scope":"fleet","step":"settings:unrequested-automation-gate","reason":"全PCで未依頼の自動通知・定期実行追加を遮断するPreToolUseゲート"},
     {"path":"tools/register-beeper-gateway.ps1","scope":"kim-only","reason":"Beeper 本体がある 000（kim-PC）だけで中継の常駐タスクを登録する。他PCは beeper-gateway-client.ps1 を使う"},
     {"path":"tools/register-secretary-uptime.ps1","scope":"kim-only","reason":"kim-PCの秘書ゲートウェイ3939と秘書3940を監視するタスク登録。他PCには登録しない"},
     {"path":"tools/secretary-uptime-registration.test.ps1","scope":"kim-only","reason":"秘書監視の登録結果をmockで検証するテスト。実タスクは作成しない"},

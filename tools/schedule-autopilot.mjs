@@ -423,7 +423,8 @@ export async function run({ home = defaultHome(), slot = 'tick', now = new Date(
   }
   if (!dryRun) {
     try {
-      const { listItems } = deps.listItems ? { listItems: deps.listItems } : await import('./kim-inbox.mjs');
+      const { listInboxMatches } = await import('./kim-inbox.mjs');
+      const listItems = deps.listItems ?? ((home, { status }) => listInboxMatches(home, item => item.status === status));
       out.answers = await applyAnswers({ home, ledger: ld.ledger, state, listItems, plansById, sendPrompt: deps.sendPrompt || ((to, body) => defaultSendPrompt(home, to, body)) });
     } catch (e) { out.errors.push({ phase: 'answers', error: e.message }); }
     if (config.calendar?.enabled && slot === 'morning') {

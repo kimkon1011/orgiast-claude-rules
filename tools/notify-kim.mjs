@@ -50,6 +50,10 @@ const HANDOFF = /接続し[て、]|接続して確認|どれを選|選んでほ�
 // また起票される自己増殖ループになる（2026-10-24 実測: 06:15 と 12:05 の完了DMが
 // next-session.md の第5・第6ブロックとして起票され、同じ目的のセッションが繰り返された）。
 const STATUS_REPORT = /^【進捗まとめ】|✅\s*自動進行が完了しました|^【[^\n]*の自動進行】\s*完了/m;
+// 判断不要と明記した完了報告の題名に「タイムアウト」があっても修復TODOにしない
+// （2026-11-22 実測: notify-kim:2acbb896）。
+const NO_ACTION_REPORT = /あなたが決めることはありません|決めることはありません|判断不要|対応不要|やることはありません|kim\s*の操作は不要/i;
+const CURRENT_FAILURE = /失敗|エラー|停止|異常|failed|failure|取得不可|未計測/i;
 // 既に起票した本文（マーカー付き）を別経路が再通知しても二重起票しない。
 const ALREADY_FILED = /<!--\s*notify-kim:[0-9a-f]{20}\s*-->/;
 // notify-owner.mjs は本文の先頭に「宛先: ...」行を付ける。これは通知経路のメタ情報で、
@@ -88,7 +92,7 @@ export async function notifyKim(text, options = {}) {
   options = { ...options, kind: options.kimActionRequired === true || ['ask', 'action'].includes(options.kind) ? 'ask' : 'info' };
   const raw = redactSecrets(String(text ?? ''));
   const bodyText = stripOwnerAddress(raw);
-  if (STATUS_REPORT.test(bodyText) || ALREADY_FILED.test(bodyText) || isSuccessfulResumeReport(bodyText) || AUTO_RESUME_NOTICE.test(bodyText)) return deliverKim(raw, options);
+  if (STATUS_REPORT.test(bodyText) || (options.kind === 'info' && NO_ACTION_REPORT.test(bodyText) && !CURRENT_FAILURE.test(bodyText)) || ALREADY_FILED.test(bodyText) || isSuccessfulResumeReport(bodyText) || AUTO_RESUME_NOTICE.test(bodyText)) return deliverKim(raw, options);
   const judgment = JUDGMENT_REQUEST.test(bodyText);
   const humanEvidence = /^(?:試行|試した内容|試した修復)[:：][ \t]*\S.+$/m.test(bodyText)
     && /^証拠[:：][ \t]*\S.+$/m.test(bodyText) && /^必要な操作[:：][ \t]*\S.+$/m.test(bodyText);
@@ -191,7 +195,7 @@ function benignQuotaSweepReport(text) {
 
 async function persistKim(home, options) {
   try {
-    const item = await addItem(home, options);
+    const item = await addItem(home, options, { lockWaitMs: 10_000 });
     return { delivered: 'session-inbox', id: item.id, kind: item.kind };
   } catch (error) {
     try { return spoolItem(home, options); }
@@ -214,7 +218,7 @@ export async function deliverKim(text, {
   plainJaImpl = toPlainJa,
   suffix = '',
   allowHumanRequest = false,
-  kind = 'info', source = '', sessionId = '', discordAllowed: discordAllowedOption,
+  kind = 'info', source = '', sessionId = '', dedupeKey, replaceExisting = false, incrementExisting = false, discordAllowed: discordAllowedOption,
 } = {}) {
   if (isInboxNoise({ kind, source, text: String(text ?? '') })) return { delivered: 'suppressed', reason: 'fleet-ledger-or-gate-statistics' };
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
@@ -229,7 +233,7 @@ export async function deliverKim(text, {
   let inboxResult = null;
   // kim 宛 Discord DM 全廃（2026-10-27 / 2026-11-10 kim 再指示）。kim への通知は kim-inbox のみ。
   if (isKimRecipient({ id: resolvedUserId, defaultKim: userId == null || String(userId).trim() === '' })) {
-    inboxResult = await persistKim(home, { kind: ['ask', 'action'].includes(kind) ? 'ask' : 'info', text: String(body) + suffix, source, sessionId, signal });
+    inboxResult = await persistKim(home, { kind: ['ask', 'action'].includes(kind) ? 'ask' : 'info', text: String(body) + suffix, source, sessionId, dedupeKey, replaceExisting, incrementExisting, signal });
     return { ...inboxResult, channel: 'kim-inbox' };
   }
   const content = suffix ? String(body).slice(0, Math.max(0, MAX_CONTENT - suffix.length)) + suffix : clipDiscordContent(body);
@@ -281,7 +285,7 @@ export async function deliverKim(text, {
   // Discord/webhook が使えない kim 宛通知は kim-inbox に保存する（2026-11-04）
   // これにより Discord Bot トークンが無い PC でも通知が失われない。
   if (resolvedUserId === KIM_DISCORD_USER_ID || String(userId) === KIM_DISCORD_USER_ID) {
-    return persistKim(home, { kind, text: String(body) + suffix, source, sessionId, signal });
+    return persistKim(home, { kind, text: String(body) + suffix, source, sessionId, dedupeKey, replaceExisting, incrementExisting, signal });
   }
   console.error(`notify-kim: 通知先を解決できず送信しません (${dmReason})`);
   return { delivered: 'none', reason: dmReason };

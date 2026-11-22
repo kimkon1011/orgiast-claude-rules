@@ -140,17 +140,26 @@ export function syncClaims(base, previous = [], now = Date.now(), sharedCache) {
   return [...result.values()];
 }
 
+export function resolveSelf(command, rawSelf) {
+  const self = rawSelf || '';
+  if (command === '--filter' && !self) {
+    return { self: 'none', warning: '[session-claims] --self も CLAUDE_SESSION_ID も無いため self=none として続行します' };
+  }
+  if (['--claim', '--release'].includes(command) && !self) {
+    return { self: '', warning: '[session-claims] CLAUDE_SESSION_ID 未設定のため着手印を記録しません（--self を渡してください）' };
+  }
+  return { self, warning: null };
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const value = name => { const i = args.indexOf(name); return i < 0 ? '' : args[i + 1] || ''; };
-  const self = value('--self') || process.env.CLAUDE_SESSION_ID || '';
   const command = ['--sync', '--claim', '--release', '--filter', '--list'].find(c => args.includes(c));
   if (!command) return;
+  const selfRaw = value('--self') || process.env.CLAUDE_SESSION_ID || '';
+  const { self, warning } = resolveSelf(command, selfRaw);
+  if (warning) console.error(warning);
   if (['--claim', '--release'].includes(command) && !self) return;
-  if (command === '--filter' && !self) {
-    console.error('--self <session-id> が必要です（不明なら --self none）');
-    process.exit(2);
-  }
   const base = path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude');
   debug(`home = ${os.homedir()} / base = ${base} / command = ${command}`);
   const file = path.join(base, 'session-claims.json');

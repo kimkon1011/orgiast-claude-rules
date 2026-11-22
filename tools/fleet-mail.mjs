@@ -37,6 +37,28 @@ export function isFleetHub(label, config) {
   return label === (config.FLEET_HUB || HUB_LABEL);
 }
 
+/**
+ * 送信元ラベルが FLEET_HUB の PC からのものかを判定（別名対応）。
+ * @param {string} from - 送信元ラベル（mail.from）
+ * @param {object} config - fleet-sheet.env のパース結果（FLEET_HUB を含む）
+ * @param {object} [pcMap] - fleet-pc-map.json の内容（別名解決に使用）
+ * @returns {boolean}
+ */
+export function isHubSender(from, config, pcMap = {}) {
+  if (!config.FLEET_HUB) return false;
+  if (from === config.FLEET_HUB) return true;
+  // FLEET_HUB が HUB_LABEL（kim-PC）の場合、pcMap の別名も許容（大小文字無視）
+  if (config.FLEET_HUB === HUB_LABEL && pcMap && typeof pcMap === 'object') {
+    const hubEntry = pcMap[HUB_LABEL];
+    if (!hubEntry || typeof hubEntry !== 'object') return false;
+    const hostname = String(hubEntry.hostname || '').toLowerCase();
+    const aliases = (Array.isArray(hubEntry.aliases) ? hubEntry.aliases : []).map(a => String(a).toLowerCase());
+    const fromLower = String(from).toLowerCase();
+    return fromLower === hostname || aliases.includes(fromLower);
+  }
+  return false;
+}
+
 export function seatSendGate({ to, kimOperated, subject = '', why = '', body = '', reason = '' }) {
   const matches = /マージ|merge|push\s*権限|権限|招待|鍵|キー|token|トークン|DWD|Vercel|Supabase|kim-PC\s*(?:にしか|でしか|でないと)/i;
   const blocked = /^kim-PC(?:$|[/:@])/i.test(String(to).trim()) && kimOperated && matches.test(`${subject}\n${why}\n${body}`);
@@ -1197,7 +1219,7 @@ export async function pollOnce(deps = {}) {
             }
             updateInbox(mail.id, current => current && ({ ...current, decisionRegisteredAt: new Date(now()).toISOString(), decisionId: record.id }), { home });
             log('decision-request-skipped', { id: mail.id, from: mail.from });
-            if (mail.kind === 'prompt') writeJson(path.join(dir, 'fleet-agent-results', `${mail.id}.json`), { exitCode: null, outputTail: '判断依頼を含むためヘッドレス実行では回答しません（decision-request-skipped）。kim の判断待ちです。' });
+            if (mail.kind === 'prompt') writeJson(path.join(dir, 'fleet-agent-results', `${mail.id}.json`), { exitCode: null, reason: 'decision-request-skipped', outputTail: '判断依頼を含むためヘッドレス実行では回答しません（decision-request-skipped）。kim の判断待ちです。' });
           }
           const latest = readJson(fileOf(mail.id));
           if (!latest.decisionAckAt && !automatic(mail) && nextHop(mail) < 3) {
@@ -1248,7 +1270,7 @@ export async function pollOnce(deps = {}) {
         const resultFile = path.join(dir, 'fleet-agent-results', `${validId(mail.id)}.json`);
         let result = readJson(resultFile);
         if (hubExecution && !result && !mail.executionStartedAt) {
-          const reason = !config.FLEET_HUB || mail.from !== config.FLEET_HUB ? 'not-hub' : !validExecCwd(exec.cwd) ? 'bad-cwd' : null;
+          const reason = !isHubSender(mail.from, config, fleetMembers) ? 'not-hub' : !validExecCwd(exec.cwd) ? 'bad-cwd' : null;
           if (reason) result = { exitCode: null, reason, outputTail: `reason: ${reason}` };
         }
         if (mail.executionStartedAt && !result) {
@@ -1259,7 +1281,7 @@ export async function pollOnce(deps = {}) {
         if (!result) {
           if (mail.executionStartedAt) continue; // Never start an interrupted execution a second time.
           const kind = hubExecution ? 'claude-resume' : exec.exec === 'codex' ? 'codex' : 'prompt';
-          if (!loadOptin(path.join(dir, 'fleet-agent-optin.json')).includes(kind)) result = { exitCode: null, outputTail: `未オプトイン。承諾コマンド: ${consentCommand(kind)}` };
+          if (!loadOptin(path.join(dir, 'fleet-agent-optin.json')).includes(kind)) result = { exitCode: null, reason: 'not-opted-in', outputTail: `未オプトイン。承諾コマンド: ${consentCommand(kind)}` };
           else {
             if (promptHandled) continue;
             if (hubExecution && exec.resumeSessionId) {
@@ -1272,7 +1294,7 @@ export async function pollOnce(deps = {}) {
             if (!hubExecution) await state(mail.id, 'seen', { seenBy: 'headless' });
             const runnerArgs = [path.join(ownRepo, 'tools', 'fleet-task-runner.mjs'), '--id', mail.id, '--home', home];
             const failedStart = () => {
-              writeJson(resultFile, { exitCode: null, outputTail: '実行失敗: runner 起動失敗' });
+              writeJson(resultFile, { exitCode: null, reason: 'runner-start-failed', outputTail: '実行失敗: runner 起動失敗' });
               err('fleet-mail: runner 起動失敗=1');
             };
             try {
@@ -1449,6 +1471,10 @@ async function runMain(argv, deps) {
     }
     const statusFile = path.join(dir, 'fleet-mail-sent-status.json');
     const showStatus = mail => out([`id: ${mail.id || id}`, ...['to', 'status', 'createdAt', 'expiresAt', 'deliveredAt', 'deliveredBy', 'seenAt', 'seenBy', 'resultAt', 'ackAt', 'failedAt', 'failReason'].map(key => `${key}: ${redactSecrets(String(mail[key] || '(なし)'))}`)].join('\n'));
+    // 終端状態（done/failed/expired）はローカル送信記録に残っていれば確定しており、以後変わらない。
+    // 毎回の GAS 照会（ロック待ちで数十秒）を省き、auto-progress の check が既定30秒上限で「判定不能」になるのを防ぐ。
+    const cached = readJson(statusFile, {})[id];
+    if (cached && terminal(cached)) { showStatus(cached); return 0; }
     let result;
     try { result = await request('mail-get', { id }, 60_000, { retries: 2 }); }
     catch (error) {
@@ -1538,6 +1564,12 @@ async function runMain(argv, deps) {
     if (pcMap === undefined) {
       try { pcMap = readJson(new URL('../fleet-pc-map.json', import.meta.url)); }
       catch { /* Beacon labels can still resolve exact targets when the roster is unavailable. */ }
+    }
+
+    if (options['--exec'] === 'claude' && !options['--force'] && config.FLEET_HUB
+        && !isHubSender(label, config, pcMap || {})) {
+      err(`fleet-mail: --exec claude はハブ席（FLEET_HUB=${config.FLEET_HUB}）からのみ実行されます。この席（${label}）から送ると宛先で not-hub として実行されません。相談は --kind note、意図的に送るときだけ --force`);
+      return 7;
     }
 
     // 再試行・キャッシュを含む同じスナップショットを解決と鮮度表示で共有する。

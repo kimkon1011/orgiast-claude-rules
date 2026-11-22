@@ -9,7 +9,7 @@ import { isEntry } from './is-entry.mjs';
 // （先送りする/した/にする）は前後が「の」でも「文」でもないので引き続き検出する。
 // 量化子は非貪欲（`{0,60}?`）。貪欲だと1つの文に先送り語が2回出るとき最後の語まで飲み込み、
 // 引用の判定（一致の直後が閉じ括弧か）が後ろの語にずれる。
-const P1_BASE = /(恒久|改修|実装|修正|対応|恒久化)[^」"'\n]{0,60}?(次セッション|次回セッション|次回に|後日|来週|(?<!の)先送り(?!文))/;
+const P1_BASE = /(恒久|改修|実装|修正|対応|恒久化)[^」"'\n]{0,60}?(次(?:の)?セッション|次回セッション|次回に|後日|来週|(?<!の)先送り(?!文))/;
 // 監査項目名の引用は P1 から除く。例: 「`59f6caca0d69166e`（event-shop.jp「AUJUST」誤記の
 // 恒久修正先送り）の実物検証と記録」。括弧で閉じた先送り語は「先送りを名詞句として名指しした」
 // だけで、先送りを実行した文ではない（行為形は必ず 先送りする/した/にする と続く）。
@@ -67,7 +67,7 @@ function auditAwareFind(regex, text) {
   }
   return null;
 }
-const P2 = { find: text => auditAwareFind(/(次セッション|次回セッション|次回に|後日)[^」"'\n]{0,60}(実装|対応|修正|改修|恒久)/, text) };
+const P2 = { find: text => auditAwareFind(/(次(?:の)?セッション|次回セッション|次回に|後日)[^」"'\n]{0,60}(実装|対応|修正|改修|恒久)/, text) };
 // 2026-10-19 の実測3件で「〜のを待っています」と「終わると知らせが届きます」が素通りしたため、
 // 名詞化した待機と完了通知待ちも W に含める。
 // 2026-10-21T05:14:03.146Z（handoff-audit:38fe891783fc6ce2 / 4d7e4383）の原文は
@@ -85,7 +85,7 @@ const P2 = { find: text => auditAwareFind(/(次セッション|次回セッシ�
 // **完了通知の到着待ち・マージ待ちの言い回し自体**を W に含める。
 // 2026-10-27 quota-sweep 再監査（91cd4fa3）: 「検証は Codex に任せています。結果が出たらここに報告します。」が
 // 待機語を含まず素通りしたため、結果到着後の報告約束そのものも W に含める。
-const ARRIVAL_WAIT = /(?:終わる|終わった|完了する|完了した|マージされ(?:る|た))[^」"'\n]{0,20}(?:自動で)?(?:知らせ|通知|連絡)が(?:届|来|着)|(?:知らせ|通知|連絡)が(?:届|来|着)[^」"'\n]{0,20}(?:まで)?待|届き次第(?:検証|確認|対応|報告)|(?:結果|完了|終了)(?:が|を)?(?:出|戻っ|返っ|揃っ|届い|着い)(?:たら|次第)[^」"'\n]{0,20}(?:報告|お知らせ|共有|連絡)|(?:終わり|完了|終了)次第[^」"'\n]{0,20}(?:報告|お伝え|お知らせ|共有|連絡)|(?:PR|マージ|取り込み)[^」"'\n]{0,20}を待って(?:います|いる|ます|おります)/;
+const ARRIVAL_WAIT = /(?:終わる|終わった|完了する|完了した|マージされ(?:る|た))[^」"'\n]{0,20}(?:自動で)?(?:知らせ|通知|連絡)が(?:届|来|着)|(?:知らせ|通知|連絡)が(?:届|来|着)[^」"'\n]{0,20}(?:まで)?待|(?:通知|連絡)がまだ(?:来て|届いて|着いて)いません|届き次第(?:検証|確認|対応|報告)|(?:結果|完了|終了)(?:が|を)?(?:出|戻っ|返っ|揃っ|届い|着い)(?:たら|次第)[^」"'\n]{0,20}(?:報告|お知らせ|共有|連絡)|(?:終わり|完了|終了)次第[^」"'\n]{0,20}(?:報告|お伝え|お知らせ|共有|連絡)|(?:PR|マージ|取り込み)[^」"'\n]{0,20}を待って(?:います|いる|ます|おります)/;
 // 116827928ab09de7: 他レーンが「修正中で、まだ確かめられる状態にない」
 // と再テストを後続へ残す表現。レーン名と未検証理由が揃う場合に限る。
 const LANE_STATUS_WAIT = /(?:セッション|Codex|codex-do|他AI|レーン)[^\n」"']{0,60}?(?:完了は?まだ|まだ完了|まだ実行中|完了待ち|結果を待って|(?:している|ている|待っている|動いている|走っている)ところです|(?:している|ている)最中|(?:修正|実装|改修|検証)中(?:で|のため|なので)[、, ]*まだ(?:確かめ|確認|検証)(?:られる状態にない|できない|できません)|を待っています|を待っている)/;
@@ -107,7 +107,7 @@ const INBOX_RELAY = /(?:【受信箱】|起きたこと[:：]|判断してほし
 // Claude 側の作業が終わっている正当な状態で、委譲せずに待つ放置とは区別する。
 // 委譲を起動したと明記した語が一致位置の手前 120 字以内にある場合だけ採用しない。
 // （委譲の報告が無いまま待つ形 — 2026-10-21 の 7 ターン言い換え待機 — は従来どおり検出する）
-const DELEGATION_STARTED = /(?:codex-do|cheap-code|llm-ask|指示書を(?:作成|書|渡|用意)|(?:Codex|Gemini|DeepSeek|Groq|OpenRouter|Mistral|サブエージェント)[ \t]*(?:に|へ|を)[^。\n]{0,24}(?:委譲|依頼|渡し|投げ|起動|実行させ))/;
+const DELEGATION_STARTED = /(?:codex-do|cheap-code|llm-ask|指示書を(?:作成|書|渡|用意)|(?:Codex|Gemini|DeepSeek|Groq|OpenRouter|Mistral|サブエージェント)[ \t]*(?:に|へ|を)[^。\n]{0,24}(?:委譲|依頼|渡し|投げ|起動|実行させ)|`[a-z0-9]{6,12}`[^。\n]{0,80}(?:完了待ち|完了後|push|CI[^。\n]{0,20}結果を待|結果を待って))/i;
 // 2026-11-18 実測（e88a780c / 2026-11-17T04:04:04.337Z）: 3行フッターだけのメッセージ
 // 「次に kim がすること: なし（Codex の生成完了を待っています）」が W に当たっていた。
 // 人の作業がゼロ（なし）で、待つ相手が自動レーンなら、委譲済みの正当な待機なので除外する。
@@ -141,9 +141,28 @@ const W  = {
   find(text) {
     for (const match of text.matchAll(new RegExp(`(数分|しばらく|少し|少々)[^」"'\\n]{0,20}(お?待ち|待って)|完了を?待って|完了を待ち(?:ます|、)|完了待ちで|[^\\s」"'\\n]{0,30}?のを待って(?:います|ます|いる|おります)|${REPLY_WAIT.source}|${ARRIVAL_WAIT.source}|${LANE_STATUS_WAIT.source}|${DATA_WAIT}`, 'g'))) {
       if (isAuditCitation(text, match.index) || isPatternNameQuote(text, match.index)) continue;
+      // 別セッションの待機文を引用した検証・報告と、待機対象が無い旨の否定は W にしない。
+      // 一方、返事や完了通知が未着、作業が未完了という否定は待機継続なので残す。
+      const lineStart = text.lastIndexOf('\n', match.index - 1) + 1;
+      const lineEndAt = text.indexOf('\n', match.index);
+      const lineEnd = lineEndAt < 0 ? text.length : lineEndAt;
+      const line = text.slice(lineStart, lineEnd);
+      const quoteStart = text.lastIndexOf('「', match.index);
+      const quoteEnd = quoteStart < 0 ? -1 : text.indexOf('」', match.index);
+      const inQuote = quoteStart >= lineStart && quoteEnd >= match.index && quoteEnd < lineEnd;
+      const clauseStart = Math.max(lineStart, text.lastIndexOf('。', match.index - 1) + 1, text.lastIndexOf('|', match.index - 1) + 1);
+      const periodEnd = text.indexOf('。', match.index);
+      const pipeEnd = text.indexOf('|', match.index);
+      const clauseEnd = Math.min(lineEnd, periodEnd < 0 ? lineEnd : periodEnd, pipeEnd < 0 ? lineEnd : pipeEnd);
+      const clause = text.slice(clauseStart, clauseEnd).trim();
+      const sessionId = /\b(?=[0-9a-f]{0,7}[a-f])[0-9a-f]{8}\b/i;
+      if (inQuote && sessionId.test(clause)) continue;
+      if (line.includes('|') && sessionId.test(line)) continue;
+      if (/(?:ありません|ない|なし|いません)$/.test(clause)
+          && !/(?:返事|返答|回答)[^。|\n]{0,20}(?:ありません|ない)$|(?:通知|連絡)[^。|\n]{0,20}(?:来て|届いて|着いて)いません$|(?:まだ[^。|\n]{0,12})?(?:終わって|完了して)いません$/.test(clause)) continue;
       if (REPLY_WAIT.test(match[0]) && EXTERNAL_WAIT_SUBJECT.test(text.slice(Math.max(0, match.index - 60), match.index))) continue;
       if (INBOX_RELAY.test(text.slice(Math.max(0, match.index - 200), match.index))) continue;
-      if (DELEGATION_STARTED.test(text.slice(Math.max(0, match.index - 120), match.index))) continue;
+      if (DELEGATION_STARTED.test(text.slice(Math.max(0, match.index - 120), match.index + match[0].length + 120))) continue;
       if (LANE_NAME.test(text.slice(Math.max(0, match.index - 60), match.index + match[0].length + 60)) && HANDOFF_NONE_LINE.test(text.slice(Math.max(0, match.index - 200), match.index))) continue;
       if (DATA_WAIT_RE.test(match[0]) && EXTERNAL_WAIT_SUBJECT.test(text.slice(Math.max(0, match.index - 40), match.index))) continue;
       return match;
@@ -164,6 +183,7 @@ const HANDOFF_EMPTY = /^[\s*_`]*(?:なし|ありません|ありません。|特
 const LANDING_DEFERRAL = /(マージ|着地|取り込|merge)/i;
 const LANDING_TARGET = /\b[0-9a-f]{7,40}\b|[\w.-]+\/[\w.-]+/;
 const LANDING_APPROVAL = /(承認|判断|決め|指示|ください|返す|据え置き|待ち)/;
+const REQUIRED_APPROVAL_CONTEXT = /(?:automerge[^。\n]{0,30}(?:ラベル)?(?:が|は)?(?:無い|ない|無し)|(?:全PC|全アカウント)[^。\n]{0,40}(?:配られ|配布され)|draft(?:\s*PR)?[^。\n]{0,50}(?:merge|マージ)[^。\n]{0,20}(?:拒否|できない|不可))/i;
 export function isLandingDeferral(value) {
   const text = String(value ?? '');
   return LANDING_DEFERRAL.test(text) && LANDING_TARGET.test(text) && LANDING_APPROVAL.test(text);
@@ -175,7 +195,8 @@ const ASK_CONTEXT = /(恒久|配布|自動修復|実装|修正|改修|恒久化)
 const P3 = {
   find(text) {
     for (const match of text.matchAll(new RegExp(HANDOFF_LINE, 'g'))) {
-      if (!isAuditCitation(text, match.index) && !HANDOFF_EMPTY.test(match[1]) && (new RegExp(FIX).test(match[1]) || isLandingDeferral(match[1]))) return match;
+      const context = text.slice(Math.max(0, match.index - 400), match.index + match[0].length + 400);
+      if (!isAuditCitation(text, match.index) && !REQUIRED_APPROVAL_CONTEXT.test(context) && !HANDOFF_EMPTY.test(match[1]) && (new RegExp(FIX).test(match[1]) || isLandingDeferral(match[1]))) return match;
     }
     return null;
   }
@@ -184,7 +205,8 @@ const P4 = {
   find(text) {
     for (const match of text.matchAll(new RegExp(ASK_PERMISSION, 'g'))) {
       const context = text.slice(Math.max(0, match.index - 60), match.index + match[0].length + 60);
-      if (!isAuditCitation(text, match.index) && ASK_CONTEXT.test(context)) return match;
+      const approvalContext = text.slice(Math.max(0, match.index - 400), match.index + match[0].length + 400);
+      if (!isAuditCitation(text, match.index) && !REQUIRED_APPROVAL_CONTEXT.test(approvalContext) && ASK_CONTEXT.test(context)) return match;
     }
     return null;
   }
@@ -200,8 +222,167 @@ export function detect(text) {
 
 const DEFAULT_SINCE = '1970-01-01T00:00:00Z';
 const NAMES = ['stop-gate-runner-ledger.jsonl', 'handoff-audit-ledger.jsonl', 'handoff-audit-nightly-ledger.jsonl'];
+const CROSS_SESSION_WINDOW_MS = 72 * 60 * 60 * 1000;
+const COMPLETION_WORD = /(?:マージ済み|MERGED|着地|merged|squash)/i;
+const BRANCH_PREFIX = '(?:fix|feat|feature|chore|refactor|hotfix|bugfix|release|revert|docs|test|ci|perf|build)';
 
-export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null } = {}) {
+export function extractIdentifiers(text) {
+  const identifiers = new Set();
+  const value = String(text ?? '');
+  for (const match of value.matchAll(/(?:#(\d+)|\bPR\s*#?(\d+)\b|\bpull\/(\d+)\b)/gi)) {
+    identifiers.add(`pr:${match[1] ?? match[2] ?? match[3]}`);
+  }
+  for (const match of value.matchAll(new RegExp(`(?:^|[\\s\`'\"\uff08(])(${BRANCH_PREFIX}\/[A-Za-z0-9._/-]+)`, 'gi'))) {
+    identifiers.add(`branch:${match[1].replace(/[.,;:!?)\uff09\u3001\u3002]+$/, '')}`);
+  }
+  return [...identifiers];
+}
+
+function identifierAppears(text, identifier) {
+  return extractIdentifiers(text).some(value => value.toLowerCase() === identifier.toLowerCase());
+}
+
+function assistantTexts(transcript, { before = Infinity, limit = Infinity } = {}) {
+  const messages = [];
+  for (const line of fs.readFileSync(transcript, 'utf8').split(/\r?\n/)) {
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    const at = Date.parse(entry?.timestamp);
+    if (entry?.type !== 'assistant' || !Number.isFinite(at) || at > before) continue;
+    const text = Array.isArray(entry.message?.content)
+      ? entry.message.content.map(item => {
+          if (item?.type === 'text' && typeof item.text === 'string') return item.text;
+          // Branch/PR identifiers often first appear in the assistant's tool
+          // invocation rather than its prose. Task IDs remain excluded because
+          // extractIdentifiers only accepts PR and conservative branch forms.
+          if (item?.type === 'tool_use' && item.input) return JSON.stringify(item.input);
+          return '';
+        }).filter(Boolean).join('\n')
+      : typeof entry.message?.content === 'string' ? entry.message.content : '';
+    if (text) messages.push({ at, text });
+  }
+  messages.sort((a, b) => a.at - b.at);
+  return messages.slice(-limit);
+}
+
+function listTranscripts(projectsDir, archiveDir) {
+  const files = [];
+  for (const root of [projectsDir, archiveDir]) {
+    let projects;
+    try { projects = fs.readdirSync(root, { withFileTypes: true }); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    for (const project of projects) {
+      if (!project.isDirectory()) continue;
+      const dir = path.join(root, project.name);
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isFile() && entry.name.endsWith('.jsonl')) files.push(path.join(dir, entry.name));
+      }
+    }
+  }
+  return files;
+}
+
+function findTranscript(projectsDir, sessionId, archiveDir) {
+  if (!sessionId) return null;
+  let projects;
+  try { projects = fs.readdirSync(projectsDir, { withFileTypes: true }); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (projects) {
+    for (const project of projects) {
+      if (!project.isDirectory()) continue;
+      const file = path.join(projectsDir, project.name, `${sessionId}.jsonl`);
+      if (fs.existsSync(file)) return file;
+    }
+  }
+  // Fall back to archive directory (projects-archive sibling)
+  if (!archiveDir) return null;
+  let archiveProjects;
+  try { archiveProjects = fs.readdirSync(archiveDir, { withFileTypes: true }); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  for (const project of archiveProjects) {
+    if (!project.isDirectory()) continue;
+    const file = path.join(archiveDir, project.name, `${sessionId}.jsonl`);
+    if (fs.existsSync(file)) return file;
+  }
+  return null;
+}
+
+function hasTextContent(content) {
+  return Array.isArray(content) && content.some(item => item?.type === 'text' && typeof item.text === 'string' && item.text.length > 0);
+}
+
+export function resolvedWait(transcript, rowTs) {
+  const rowTime = Date.parse(rowTs);
+  const entries = [];
+  for (const line of fs.readFileSync(transcript, 'utf8').split(/\r?\n/)) {
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    const at = Date.parse(entry?.timestamp);
+    if (!(at > rowTime)) continue;
+    entries.push({ entry, at });
+  }
+  // Two-pass because transcript timestamps aren't monotonically increasing per
+  // line order (e.g. attachment with queued_command appears later but has an
+  // earlier timestamp). First pass: find the earliest notification timestamp.
+  let notifiedAt = null;
+  for (const { entry, at } of entries) {
+    const isNotification =
+      (entry.type === 'user' && JSON.stringify(entry.message?.content ?? '').includes('task-notification')) ||
+      (entry.type === 'queue-operation' && typeof entry.content === 'string' && entry.content.includes('task-notification')) ||
+      (entry.type === 'attachment' && entry.attachment?.type === 'queued_command' && typeof entry.attachment?.prompt === 'string' && entry.attachment.prompt.includes('task-notification'));
+    if (isNotification && (notifiedAt === null || at < notifiedAt)) notifiedAt = at;
+  }
+  if (notifiedAt === null) return false;
+  // Second pass: check for assistant text response after the notification.
+  for (const { entry, at } of entries) {
+    if (at > notifiedAt && entry.type === 'assistant' && hasTextContent(entry.message?.content)) return true;
+  }
+  return false;
+}
+
+export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null,
+  projectsDir = process.env.CLAUDE_PROJECTS_DIR || path.join(home, '.claude', 'projects'),
+  archiveDir } = {}) {
+  if (archiveDir === undefined) {
+    archiveDir = process.env.CLAUDE_PROJECTS_ARCHIVE_DIR || path.join(path.dirname(projectsDir), 'projects-archive');
+  }
+  const transcriptCache = new Map();
+  let allTranscripts = null;
+  const assistantTextCache = new Map();
+  function crossSessionResolution(row, waitContext, originTranscript) {
+    const rowTime = Date.parse(row.ts);
+    let identifiers = extractIdentifiers(waitContext);
+    // A quoted wait from another session is evidence being discussed, not the
+    // current work. Do not borrow an unrelated identifier from nearby turns.
+    const referencesAnotherSession = /セッション\s+[0-9a-f]{8}\b/i.test(waitContext);
+    if (identifiers.length === 0 && originTranscript && !referencesAnotherSession) {
+      const recent = assistantTexts(originTranscript, { before: rowTime, limit: 20 });
+      for (let i = recent.length - 1; i >= 0; i--) {
+        identifiers = extractIdentifiers(recent[i].text);
+        if (identifiers.length > 0) break;
+      }
+    }
+    if (identifiers.length === 0) return null;
+    allTranscripts ??= listTranscripts(projectsDir, archiveDir);
+    const originPath = originTranscript ? path.resolve(originTranscript).toLowerCase() : null;
+    let best = null;
+    for (const transcript of allTranscripts) {
+      if ((originPath && path.resolve(transcript).toLowerCase() === originPath)
+          || path.basename(transcript, '.jsonl') === row.sessionId) continue;
+      let messages = assistantTextCache.get(transcript);
+      if (!messages) {
+        messages = assistantTexts(transcript);
+        assistantTextCache.set(transcript, messages);
+      }
+      for (const message of messages) {
+        if (!(message.at > rowTime && message.at <= rowTime + CROSS_SESSION_WINDOW_MS) || !COMPLETION_WORD.test(message.text)) continue;
+        const identifier = identifiers.find(value => identifierAppears(message.text, value));
+        if (!identifier || (best && best.at <= message.at)) continue;
+        best = { at: message.at, identifier, resolvedBy: path.basename(transcript, '.jsonl') };
+      }
+    }
+    return best;
+  }
   const sources = NAMES.map((name, index) => {
     const file = path.join(home, '.claude', name);
     let lines = [];
@@ -234,13 +415,32 @@ export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null 
       }
       if (!found) continue;
       const { pattern, match } = found;
+      const row = { pattern, field: foundField, ts: entry.ts, verdict: entry.verdict ?? entry.decision ?? '', sessionId: String(entry.sessionId ?? ''),
+        match: text.slice(Math.max(0, match.index - 45), match.index + match[0].length + 110).replace(/[\r\n]+/g, ' ') };
+      if (pattern === 'W') {
+        if (!transcriptCache.has(row.sessionId)) transcriptCache.set(row.sessionId, findTranscript(projectsDir, row.sessionId, archiveDir));
+        const transcript = transcriptCache.get(row.sessionId);
+        // 2026-11-19T18:06Z / 6a5e38de は通知後に最終報告まで進んだため、
+        // 同一セッション内で解消した一時的な委譲待ちは監査件数から外す。
+        if (!transcript) row.resolved = 'unknown';
+        else if (resolvedWait(transcript, row.ts)) row.resolved = 'in-session';
+        if (row.resolved !== 'in-session') {
+          const waitContext = text.slice(Math.max(0, match.index - 300), match.index + match[0].length + 300);
+          const resolution = crossSessionResolution(row, waitContext, transcript);
+          if (resolution) {
+            row.resolved = 'cross-session';
+            row.resolvedBy = resolution.resolvedBy;
+            row.identifier = resolution.identifier;
+          }
+        }
+      }
+      rows.push(row);
+      if (row.resolved === 'in-session' || row.resolved === 'cross-session') continue;
       byPattern[pattern]++;
       const day = new Date(entry.ts).toISOString().slice(0, 10);
       counts[day] = (counts[day] || 0) + 1;
-      rows.push({ pattern, field: foundField, ts: entry.ts, verdict: entry.verdict ?? entry.decision ?? '', sessionId: String(entry.sessionId ?? ''),
-        match: text.slice(Math.max(0, match.index - 45), match.index + match[0].length + 110).replace(/[\r\n]+/g, ' ') });
     }
-    return { name, file, total: lines.length, hits: rows.length, byPattern, byDay: Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b))), rows };
+    return { name, file, total: lines.length, hits: rows.filter(row => !['in-session', 'cross-session'].includes(row.resolved)).length, byPattern, byDay: Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b))), rows };
   });
   return { since, sources };
 }
@@ -252,13 +452,14 @@ function validIso(value) {
   return date.toISOString().slice(0, 10) === value.slice(0, 10);
 }
 export function main(args = process.argv.slice(2)) {
-  let since = DEFAULT_SINCE, until = null, json = false;
+  let since = DEFAULT_SINCE, until = null, json = false, showResolved = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--json') json = true;
+    else if (args[i] === '--show-resolved') showResolved = true;
     else if (args[i] === '--since' && validIso(args[i + 1] ?? '')) since = args[++i];
     else if (args[i] === '--until' && validIso(args[i + 1] ?? '')) until = args[++i];
     else {
-      console.error('Usage: node tools/permanent-fix-deferral-scan.mjs [--since <ISO>] [--until <ISO>] [--json]');
+      console.error('Usage: node tools/permanent-fix-deferral-scan.mjs [--since <ISO>] [--until <ISO>] [--json] [--show-resolved]');
       return 2;
     }
   }
@@ -269,7 +470,11 @@ export function main(args = process.argv.slice(2)) {
       console.log(`${source.name}: hits=${source.hits} / ${source.total}`);
       console.log(Object.entries(source.byPattern).map(([pattern, count]) => `${pattern}:${count}`).join(' '));
       console.log(Object.entries(source.byDay).map(([day, count]) => `${day}:${count}`).join(' '));
-      for (const row of source.rows) console.log(`${row.ts} ${row.verdict} ${row.sessionId.slice(0, 8)}  …${row.match}…`);
+      for (const row of source.rows) {
+        if (['in-session', 'cross-session'].includes(row.resolved) && !showResolved) continue;
+        const resolution = row.resolvedBy ? ` resolvedBy=${row.resolvedBy} identifier=${row.identifier}` : '';
+        console.log(`${row.ts} ${row.verdict} ${row.sessionId.slice(0, 8)}${row.resolved ? ` resolved=${row.resolved}` : ''}${resolution}  …${row.match}…`);
+      }
     }
   } catch (error) { console.error(`permanent-fix-deferral-scan: ${error.message}`); }
   return 0;

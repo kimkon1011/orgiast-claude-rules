@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runCollect, runCli, parseArgs, estimateCost, canonicalUrl, weeklySummary, validateConfig } from './x-ai-tips-collect.mjs';
+import { runCollect, runCli, parseArgs, estimateCost, canonicalUrl, weeklySummary, validateConfig, validateState, classifyApiError } from './x-ai-tips-collect.mjs';
 const defaults = JSON.parse(fs.readFileSync(new URL('../config/x-ai-tips-topics.json', import.meta.url)));
 const now = new Date('2026-11-03T12:00:00Z');
 const item = { url: 'https://x.com/test/status/123?s=20', author: '@test', title: 'キャッシュを使う', summary: '固定部分を共通化', steps: '共通の指示を先頭に置き、usageを比較する', purpose: 'cost', category: 'cost', postedAt: '2026-11-03T10:00:00Z', likes: 20 };
@@ -79,8 +79,134 @@ test('実費が上限超過したら提案保存せず打ち切り、費用は�
 for (const status of [401, 429]) test(`HTTP ${status} 即時打ち切り・予約維持・再試行なし`, async t => {
   const ctx = setup(t); ctx.options.config.topics = defaults.topics;
   ctx.options.fetchFn = async () => ({ ok: false, status });
-  const result = await runCollect(ctx.options); assert.equal(result.calls, 1); assert.equal(result.status, `error:API HTTP ${status}`);
-  assert.equal(JSON.parse(fs.readFileSync(ctx.file('x-ai-tips/runs.jsonl'))).reserved, true);
+  const result = await runCollect(ctx.options);
+  // 401 全テーマ処理 + fallback 試行（source:null のため追加なし）。429 は即座に throw。
+  if (status === 429) { assert.equal(result.calls, 1); assert.equal(result.status, `error:API HTTP ${status}`); }
+  else { assert.equal(result.calls, defaults.topics.length); assert.match(result.status, /テーマ失敗/); }
+  const run = JSON.parse(fs.readFileSync(ctx.file('x-ai-tips/runs.jsonl'), 'utf8').trim().split('\n')[0]); assert.equal(run.reserved, true);
+});
+test('HTTP 403 の残高切れは残トピックを止め、予約を維持し、最後にskip statusを出して終了コード0', async t => {
+  const logs = []; let calls = 0;
+  const ctx = setup(t, { log: line => logs.push(line), fetchFn: async () => { calls++; return {
+    ok: false,
+    status: 403,
+    text: async () => JSON.stringify({ code: 'permission-denied', error: 'Your team has either used all available credits or reached its monthly spending limit.' }),
+  }; } });
+  ctx.options.config.topics = defaults.topics;
+  assert.equal(await runCli([], ctx.options), 0);
+  assert.equal(calls, 1);
+  assert.deepEqual(logs, [creditBlockedMessage, 'skip:支払い待ち']);
+  assert.equal(logs.at(-1), 'skip:支払い待ち');
+  assert.equal(readState(ctx).creditBlockedAt, now.toISOString());
+  assert.equal(readState(ctx).night.calls, 1);
+  assert.equal(readState(ctx).night.costUsd, defaults.reservePerCallUsd);
+  const [run] = readRuns(ctx);
+  assert.equal(run.status, 'skip:支払い待ち');
+  assert.equal(run.reserved, true);
+  assert.equal(run.costUsd, defaults.reservePerCallUsd);
+  assert.equal(fs.existsSync(ctx.file('x-ai-tips/collect.lock')), false);
+});
+
+const creditBlockedMessage = 'x.ai チームの残高切れ・月次上限のためスキップしました（支払いの承認待ち）。鍵は正常です。';
+for (const [label, status, body, expected] of [
+  ['JSONの残高切れ', 403, '{"code":"permission-denied","error":"...credits..."}', 'credit-blocked'],
+  ['非JSONの月次上限', 403, 'Your team has reached its monthly spending limit.', 'credit-blocked'],
+  ['code単独', 403, '{"code":"permission-denied"}', 'credit-blocked'],
+  ['無効な鍵', 403, '{"code":"invalid-api-key"}', 'fatal'],
+  ['サーバーエラー', 500, 'oops', 'fatal'],
+  ['空本文', 403, '', 'fatal'],
+  ['403以外は残高文言でもfatal', 500, '{"code":"permission-denied","error":"credits"}', 'fatal'],
+  ['JSONのnull', 403, 'null', 'fatal'],
+  ['壊れたJSONの大文字CREDITS', 403, '{broken CREDITS', 'credit-blocked'],
+]) test(`classifyApiError: ${label}`, () => {
+  assert.equal(classifyApiError(status, body), expected);
+});
+
+test('validateStateはcreditBlockedAtの文字列・undefinedを受理し数値を拒否', () => {
+  for (const state of [{}, { creditBlockedAt: undefined }, { creditBlockedAt: now.toISOString() }]) {
+    assert.equal(validateState(state), state);
+  }
+  assert.throws(() => validateState({ creditBlockedAt: 123 }), /state形式不正: creditBlockedAt/);
+});
+
+test('同日JSTの再実行はログ1行のみでAPI・通知・state・実行記録を更新しない', async t => {
+  const logs = [];
+  const ctx = setup(t, { now: new Date('2026-11-02T00:00:00Z'), log: line => logs.push(line),
+    fetchFn: () => assert.fail('API禁止'), notifyFn: () => assert.fail('通知禁止') });
+  fs.mkdirSync(ctx.file('x-ai-tips'), { recursive: true });
+  const saved = JSON.stringify({ creditBlockedAt: '2026-11-01T15:00:00Z', night: { date: '2026-11-02', calls: defaults.maxCalls, costUsd: defaults.maxCostUsd } });
+  fs.writeFileSync(ctx.file('x-ai-tips/state.json'), saved);
+  assert.equal(await runCli([], ctx.options), 0);
+  assert.deepEqual(logs, [creditBlockedMessage, 'skip:支払い待ち']);
+  assert.equal(fs.readFileSync(ctx.file('x-ai-tips/state.json'), 'utf8'), saved);
+  assert.equal(fs.existsSync(ctx.file('x-ai-tips/runs.jsonl')), false);
+  assert.equal(fs.existsSync(ctx.file('x-ai-tips/collect.lock')), false);
+});
+
+test('JSTの翌日には収集を再開し、不正な日時文字列でも永続停止しない', async t => {
+  for (const creditBlockedAt of ['2026-11-03T14:59:59Z', 'invalid-date']) {
+    let calls = 0;
+    const ctx = setup(t, { now: new Date('2026-11-03T15:00:00Z'), fetchFn: async () => { calls++; return response([]); } });
+    fs.mkdirSync(ctx.file('x-ai-tips'), { recursive: true });
+    fs.writeFileSync(ctx.file('x-ai-tips/state.json'), JSON.stringify({ creditBlockedAt, night: { date: '2026-11-03', calls: defaults.maxCalls, costUsd: defaults.maxCostUsd } }));
+    assert.match((await runCollect(ctx.options)).status, /^ok:/);
+    assert.equal(calls, 1);
+    assert.equal(readState(ctx).night.calls, 1);
+  }
+});
+
+test('通常の403は終了コード1・即時打ち切りを維持し秘密値を記録しない', async t => {
+  const logs = []; let calls = 0;
+  const ctx = setup(t, { log: line => logs.push(line), fetchFn: async () => { calls++; return {
+    ok: false, status: 403, text: async () => JSON.stringify({ code: 'invalid-api-key', error: 'fake-key', Authorization: 'Bearer fake-key', private: 'private-marker' }),
+  }; } });
+  ctx.options.config.topics = defaults.topics;
+  assert.equal(await runCli([], ctx.options), 1);
+  assert.equal(calls, 1);
+  assert.deepEqual(logs, ['error:API HTTP 403 (invalid-api-key)']);
+  assert.equal(readState(ctx).creditBlockedAt, undefined);
+  assert.equal(readRuns(ctx)[0].status, 'error:API HTTP 403 (invalid-api-key)');
+  assert.doesNotMatch(JSON.stringify(readRuns(ctx)), /fake-key|Authorization|private-marker/);
+});
+
+test('残高切れの長い本文も分類し本文・認証情報をログへ出さない', async t => {
+  const logs = [];
+  const ctx = setup(t, { log: line => logs.push(line), fetchFn: async () => ({ ok: false, status: 403,
+    text: async () => JSON.stringify({ private: 'x'.repeat(2100), code: 'permission-denied', error: 'fake-key', Authorization: 'Bearer fake-key' }),
+  }) });
+  assert.equal(await runCli([], ctx.options), 0);
+  assert.deepEqual(logs, [creditBlockedMessage, 'skip:支払い待ち']);
+  assert.doesNotMatch(JSON.stringify(readRuns(ctx)), /fake-key|Authorization|xxx/);
+});
+
+test('残高切れのdry-runはstateも実行記録も書かない', async t => {
+  const ctx = setup(t, { dryRun: true, fetchFn: async () => ({ ok: false, status: 403, text: async () => 'credits exhausted' }) });
+  assert.equal((await runCollect(ctx.options)).status, 'skip:支払い待ち');
+  assert.equal(fs.existsSync(ctx.base), false);
+});
+
+test('先行トピックの成果と費用は後続の残高切れでも保持する', async t => {
+  let calls = 0;
+  const ctx = setup(t, { fetchFn: async () => ++calls === 1 ? response() : { ok: false, status: 403, text: async () => 'spending limit' } });
+  ctx.options.config.topics = defaults.topics;
+  const result = await runCollect(ctx.options);
+  assert.equal(result.status, 'skip:支払い待ち');
+  assert.equal(result.added, 1);
+  assert.equal(calls, 2);
+  assert.equal(ctx.records().length, 1);
+  assert.equal(readState(ctx).night.costUsd, .01 + defaults.reservePerCallUsd);
+  assert.deepEqual(readRuns(ctx).map(run => run.status), ['ok', 'skip:支払い待ち']);
+});
+
+test('エラーcodeに混入した鍵は実行記録でも伏せる', async t => {
+  const logs = [];
+  const ctx = setup(t, { log: line => logs.push(line), fetchFn: async () => ({ ok: false, status: 401, text: async () => '{"code":"invalid-fake-key"}' }) });
+  assert.equal(await runCli([], ctx.options), 1);
+  assert.doesNotMatch(JSON.stringify({ logs, runs: readRuns(ctx) }), /fake-key/);
+});
+test('HTTP 401 は応答本文の code だけをエラー文に付加', async t => {
+  const ctx = setup(t, { fetchFn: async () => ({ ok: false, status: 401, text: async () => '{"code":"unauthenticated"}' }) });
+  assert.equal((await runCollect(ctx.options)).status, 'error:API HTTP 401 (unauthenticated)');
 });
 test('usage不足・JSON破損・タイムアウトが成功扱いにならない', async t => {
   for (const fetchFn of [async () => response([], {}), async () => ({ ok: true, json: async () => ({ output_text: 'invalid', usage: { cost_in_usd_ticks: 1 } }) }), async () => { throw new Error('timeout'); }]) {
@@ -221,6 +347,151 @@ test('失敗時の予約費用でも上限を守り未実行テーマの位置�
   assert.equal(readState(ctx).night.costUsd, defaults.reservePerCallUsd);
   assert.equal(readState(ctx).nextTopicIndex, 1);
 });
+// ----- fallback web-search 系テスト -----
+
+test('verifyUrls: HEAD 2xx/3xx を通し、404 を除外、403 は GET 再確認', async t => {
+  const heads = [];
+  const fetchFn = async (url, init) => {
+    heads.push({ url, method: init?.method || 'GET' });
+    if (url.includes('/valid')) return { ok: true, status: 200 };
+    if (url.includes('/redirect')) return { ok: false, status: 301 };
+    if (url.includes('/not-found')) return { ok: false, status: 404 };
+    // HEAD 403 → GET で 200 を返す
+    if (url.includes('/forbidden')) {
+      const method = init?.method || 'GET';
+      if (method === 'HEAD') return { ok: false, status: 403 };
+      return { ok: true, status: 200 };
+    }
+    return { ok: false, status: 403 };
+  };
+  const { verifyUrls } = await import('./x-ai-tips-collect.mjs');
+  const result = await verifyUrls(['https://example.com/valid', 'https://example.com/not-found', 'https://example.com/redirect', 'https://example.com/forbidden'], { fetchFn });
+  assert.deepEqual(result, ['https://example.com/valid', 'https://example.com/redirect', 'https://example.com/forbidden']);
+  assert.equal(heads.filter(h => h.method === 'GET').length, 1); // /forbidden: HEAD 403 → GET 1回
+  assert.equal(heads.filter(h => h.method === 'HEAD').length, 4); // 4 URL を HEAD
+});
+
+test('verifyUrls: 403 は GET で再確認、2xx なら通す', async t => {
+  let tries = 0;
+  const fetchFn = async (url, init) => {
+    tries++;
+    const method = init?.method || 'GET';
+    if (method === 'HEAD') return { ok: false, status: 403 };
+    return { ok: true, status: 200, url };
+  };
+  const { verifyUrls } = await import('./x-ai-tips-collect.mjs');
+  const result = await verifyUrls(['https://example.com/test'], { fetchFn });
+  assert.deepEqual(result, ['https://example.com/test']);
+  assert.equal(tries, 2);
+});
+
+test('verifyUrls: タイムアウトはスキップ、残りは通す', async t => {
+  const fetchFn = async (url) => {
+    if (url.includes('/timeout')) throw new Error('timeout');
+    return { ok: true, status: 200 };
+  };
+  const { verifyUrls } = await import('./x-ai-tips-collect.mjs');
+  const result = await verifyUrls(['https://example.com/ok', 'https://example.com/timeout'], { fetchFn });
+  assert.deepEqual(result, ['https://example.com/ok']);
+});
+
+test('verifyUrls: 最大10件まで', async t => {
+  let count = 0;
+  const fetchFn = async () => { count++; return { ok: true, status: 200 }; };
+  const { verifyUrls } = await import('./x-ai-tips-collect.mjs');
+  const urls = Array.from({ length: 20 }, (_, i) => `https://example.com/${i}`);
+  const result = await verifyUrls(urls, { fetchFn });
+  assert.equal(result.length, 10);
+  assert.equal(count, 10);
+});
+
+test('x.ai 403 → fallback search を呼び、実在確認が通った URL だけ項目化される', async t => {
+  const ctx = setup(t);
+  ctx.options.config.topics = defaults.topics.slice(0, 1);
+  let xaiCalled = false;
+  let searchCalled = false;
+  ctx.options.searchImpl = async () => {
+    searchCalled = true;
+    return { answer: '最新のAIコスト削減手法については https://example.com/cost-tips を参照', urls: [{ url: 'https://example.com/cost-tips', title: 'コスト削減' }], provider: 'gemini', model: 'gemini-3.6-flash', elapsedMs: 100, failures: [] };
+  };
+  ctx.options.fetchFn = async (url, init) => {
+    if (url.includes('x.ai')) { xaiCalled = true; return { ok: false, status: 403 }; }
+    // URL 実在確認用 — すべて 200
+    return { ok: true, status: 200 };
+  };
+  const result = await runCollect(ctx.options);
+  assert.ok(xaiCalled);
+  assert.ok(searchCalled);
+  assert.ok(result.added >= 1);
+  const records = ctx.records();
+  const fallbackRecords = records.filter(r => r.source?.startsWith('fallback:'));
+  assert.ok(fallbackRecords.length >= 1);
+});
+
+test('x.ai 403 → search は返るが全 URL が 404 → 項目0件・例外なし', async t => {
+  const ctx = setup(t);
+  ctx.options.config.topics = defaults.topics.slice(0, 1);
+  const logs = [];
+  ctx.options.searchImpl = async () => {
+    return { answer: '調査結果', urls: [{ url: 'https://example.com/article' }], provider: 'gemini', model: 'gemini-3.6-flash', elapsedMs: 100, failures: [] };
+  };
+  ctx.options.fetchFn = async (url) => {
+    if (url.includes('x.ai')) return { ok: false, status: 403 };
+    // URL 実在確認: 全部 404
+    return { ok: false, status: 404 };
+  };
+  const result = await runCollect({ ...ctx.options, log: x => logs.push(x) });
+  assert.equal(result.added, 0);
+  assert.match(result.status, /error/);
+});
+
+test('x.ai 429 → fallback search を呼ばない', async t => {
+  const ctx = setup(t);
+  let searchCalled = false;
+  let xaiCalled = false;
+  ctx.options.fetchFn = async (url) => {
+    if (url.includes('x.ai')) { xaiCalled = true; return { ok: false, status: 429 }; }
+    searchCalled = true;
+    return { ok: true, status: 200 };
+  };
+  await runCollect(ctx.options);
+  assert.ok(xaiCalled);
+  assert.ok(!searchCalled);
+});
+
+test('x.ai 500 → fallback search を呼ばない', async t => {
+  const ctx = setup(t);
+  let searchCalled = false;
+  ctx.options.fetchFn = async (url) => {
+    if (url.includes('x.ai')) return { ok: false, status: 500 };
+    searchCalled = true;
+    return { ok: true, status: 200 };
+  };
+  await runCollect(ctx.options);
+  assert.ok(!searchCalled);
+});
+
+test('config fallback null → 403 でも search を呼ばない', async t => {
+  const ctx = setup(t);
+  ctx.options.config.fallback = null;
+  let searchCalled = false;
+  ctx.options.fetchFn = async (url) => {
+    if (url.includes('x.ai')) return { ok: false, status: 403 };
+    searchCalled = true;
+    return { ok: true, status: 200 };
+  };
+  await runCollect(ctx.options);
+  assert.ok(!searchCalled);
+});
+
+test('config fallback 不正値は validateConfig で拒否', () => {
+  assert.throws(() => validateConfig({ ...defaults, fallback: 'invalid' }), /fallback/);
+  const withNull = validateConfig({ ...defaults, fallback: null });
+  assert.equal(withNull.fallback, null);
+  const withWebSearch = validateConfig({ ...defaults, fallback: 'web-search' });
+  assert.equal(withWebSearch.fallback, 'web-search');
+});
+
 test('nextTopicIndex が範囲外・欠落・不正型なら0から再開', async t => {
   for (const nextTopicIndex of [-1, defaults.topics.length, 999, 1.5, '2', null, undefined]) {
     const ctx = setup(t); ctx.options.config.topics = defaults.topics; ctx.options.limit = 1;

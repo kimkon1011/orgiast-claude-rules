@@ -1172,6 +1172,8 @@ export async function runImprove(options = {}, dependencies = {}) {
   const opts = { ...options };
   const config = loadConfig();
   let state = readState(getStatePath());
+  // llmCallsToday は前回の実行から持ち越さない（毎回リセットして MAX_LLM_CALLS を新たに使えるようにする）
+  state.llmCallsToday = 0;
   // dry-run では状態を更新しない
   const persistState = !opts.dryRun && state;
 

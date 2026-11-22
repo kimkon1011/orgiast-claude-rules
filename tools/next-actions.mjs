@@ -167,6 +167,60 @@ function makePrompt(inputs) {
   return `以下のローカル情報から、明日やるべきことを優先順位順に最大3件選んでください。JSONだけを返してください。\n形式: {"actions":[{"title":"40字以内","why":"なぜ今これかを60字以内","first_step":"最初の1コマンド/1操作を80字以内","source":"PR#123|TODO|P1タスク|夜間ログ"}]}\n\n[未処理PR]\n${JSON.stringify(inputs.prs)}\n\n[残TODO]\n${inputs.todo || '(なし)'}\n\n[夜間ジョブの異常]\n${inputs.errors.join('\n') || '(なし)'}\n\n[P1タスク]\n${JSON.stringify(inputs.p1)}`;
 }
 
+const BACKUP_TITLE_RE = /(?:backup|バックアップ|ClaudeDailyDriveBackup|DailyDriveBackup)/i;
+
+/**
+ * バックアップ系タスクを推奨アクションに出す前に、成果物の実在で裏取りする。
+ * rclone が使えない環境では例外で落とさず「未確認」として従来どおり出す。
+ */
+async function filterBackupActions(actions, execImpl, log) {
+  const backupActions = actions.filter((a) => BACKUP_TITLE_RE.test(a.title));
+  if (!backupActions.length) return actions;
+  let hasRecentBackup = false;
+  try {
+    const raw = await runExec(execImpl, 'rclone', ['lsl', 'claude-backup:Claude-Backups']);
+    const today = new Date().toISOString().slice(0, 10);
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    hasRecentBackup = raw.split(/\r?\n/).some((line) => line.includes(today) || line.includes(yesterday));
+  } catch {
+    // rclone が使えない環境では「未確認」として除外しない
+    return actions;
+  }
+  if (hasRecentBackup) {
+    const filtered = actions.filter((a) => !BACKUP_TITLE_RE.test(a.title));
+    for (const a of backupActions) {
+      log(`next-actions: バックアップ成功を確認したため「${a.title}」を除外`);
+    }
+    return filtered;
+  }
+  return actions;
+}
+
+/**
+ * first_step がそのタスクに無関係な絶対パスを含む場合（LLM の文脈混入）、
+ * first_step を空にする。
+ */
+function sanitizeFirstStep(actions) {
+  return actions.map((a) => {
+    const step = a.first_step || '';
+    // Windows 絶対パス (X:\...) を検出
+    const driveMatch = step.match(/([A-Za-z]):\\/);
+    if (!driveMatch) return a;
+    // パス文字列を抽出（次の空白まで）
+    const pathStart = step.indexOf(driveMatch[0]);
+    const afterPath = step.slice(pathStart).match(/\s/);
+    const fullPath = afterPath ? step.slice(pathStart, pathStart + afterPath.index) : step.slice(pathStart);
+    // パスのセグメント（ドライブレター以外）を抽出
+    const segments = fullPath.split(/[\\/]/).filter((s) => s.length > 0 && !/^[A-Za-z]:$/.test(s));
+    const title = (a.title || '').toLowerCase();
+    const hasMatch = segments.some((seg) => title.includes(seg.toLowerCase()));
+    if (!hasMatch) {
+      return { ...a, first_step: '' };
+    }
+    return a;
+  });
+}
+
 export function replaceNextActionsSection(existing, body) {
   const section = `${BEGIN}\n${body.trim()}\n${END}`;
   const start = existing.indexOf(BEGIN), end = existing.indexOf(END, start + BEGIN.length);
@@ -210,6 +264,8 @@ export async function runNextActions(options = {}) {
   }
   const log = options.log || console.log;
   actions = await filterStalePrActions(actions, prs, execImpl, log);
+  actions = await filterBackupActions(actions, execImpl, log);
+  actions = sanitizeFirstStep(actions);
   if (!actions.length) {
     actions = [{
       title: '新しい依頼と未処理事項を確認',
@@ -229,7 +285,13 @@ export async function runNextActions(options = {}) {
       ledgerLines.push(`- [${oneLine(row.taskId)}] ${oneLine(row.件名)} / 担当PC: ${oneLine(row.担当PC)} / 停滞: ${elapsed} / ${oneLine(row.成果物リンク)}`);
     }
     if (ledgerLines.length === 1) ledgerLines.push('該当なし');
-  } catch (error) { ledgerLines.push(`台帳取得失敗: ${oneLine(error.message)}`); }
+  } catch (error) {
+    if (error.code === 'TASK_SHEET_NOT_CONFIGURED') {
+      ledgerLines.push('この席は台帳未設定（~/.claude/task-sheet.env が無い）。他PCへの依頼一覧はこの席では表示しない。');
+    } else {
+      ledgerLines.push(`台帳取得失敗: ${oneLine(error.message)}`);
+    }
+  }
   const body = `${render(actions, now)}\n\n${ledgerLines.join('\n')}`, outputFile = path.join(base, 'next-actions.md');
   if (!cli.dryRun) { fs.mkdirSync(base, { recursive: true }); fs.writeFileSync(outputFile, replaceNextActionsSection(readFile(outputFile), body), 'utf8'); }
   if (cli.json) log(JSON.stringify({ actions }, null, 2));

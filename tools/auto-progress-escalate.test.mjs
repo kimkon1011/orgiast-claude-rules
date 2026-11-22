@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { escalateKimDecisions, escalationRowKey, escalationText } from './auto-progress-escalate.mjs';
+import { escalateKimDecisions, escalationRowKey, escalationText, isNoKimAction } from './auto-progress-escalate.mjs';
 const H = 3600000;
 const now = Date.parse('2026-11-04T10:00:00Z');
 const row = (hours, extra = {}) => ({ ts: new Date(now - hours * H).toISOString(), sessionId: `session-${hours}`, status: 'waiting_user', nextKim: 'kim の承認が必要です', promise: '返信を確認して報告', pc: 'test-PC', ...extra });
@@ -41,6 +41,49 @@ test('blocked and throwing deliveries continue without recording success', async
   assert.match(errors[1], /offline/);
   const state = JSON.parse(fs.readFileSync(path.join(opts.home, '.claude/auto-progress-escalated.json')));
   assert.deepEqual(Object.keys(state), [escalationRowKey(rows[2])]);
+});
+test('isNoKimAction: 空・なし系は真', () => {
+  assert.ok(isNoKimAction(''));
+  assert.ok(isNoKimAction('なし'));
+  assert.ok(isNoKimAction('無し'));
+  assert.ok(isNoKimAction('特になし'));
+  assert.ok(isNoKimAction('不要'));
+  assert.ok(isNoKimAction('対応不要'));
+  assert.ok(isNoKimAction('　なし　'));
+});
+test('isNoKimAction: 補足付きなしは真（括弧・句読点・ダッシュ・空白）', () => {
+  assert.ok(isNoKimAction('なし（kim-PC の電源を入れたままにしておけば自動で進む）'));
+  assert.ok(isNoKimAction('不要。自動で進む'));
+  assert.ok(isNoKimAction('なし - 自動'));
+  assert.ok(isNoKimAction('なし: 自動'));
+  assert.ok(isNoKimAction('なし、自動'));
+  assert.ok(isNoKimAction('なし（補足）'));
+  assert.ok(isNoKimAction('無し（補足）'));
+  assert.ok(isNoKimAction('なし【補足】'));
+  assert.ok(isNoKimAction('なし[補足]'));
+  assert.ok(isNoKimAction('特になし（自動）'));
+  assert.ok(isNoKimAction('不要（自動）'));
+  assert.ok(isNoKimAction('対応不要（自動）'));
+  assert.ok(isNoKimAction('なし。'));
+  assert.ok(isNoKimAction('なし,自動'));
+  assert.ok(isNoKimAction('不要：自動'));
+  assert.ok(isNoKimAction('無し—'));
+  assert.ok(isNoKimAction('なしー'));
+});
+test('isNoKimAction: なしで始まっても文意が続くのは偽', () => {
+  assert.ok(!isNoKimAction('なしで進めてよいか判断してください'));
+  assert.ok(!isNoKimAction('無しにするか決めてください'));
+  assert.ok(!isNoKimAction('不要な下書きを削除してよいか'));
+  assert.ok(!isNoKimAction('対応不要とするか決めて'));
+});
+test('escalateKimDecisions: 補足付き「なし（…）」行はエスカレーション対象外', async t => {
+  const opts = setup(t, [
+    { ...row(60), nextKim: 'なし（kim-PC の電源を入れたままにしておけば自動で進む）' },
+    { ...row(61), nextKim: 'kim の承認が必要' },
+  ]);
+  const result = await escalateKimDecisions({ ...opts, dryRun: true });
+  assert.equal(result.targets.length, 1);
+  assert.ok(result.targets[0].text.includes('kim の承認が必要'));
 });
 test('dry-run never sends or modifies existing state', async t => {
   const opts = setup(t, [row(60)]);

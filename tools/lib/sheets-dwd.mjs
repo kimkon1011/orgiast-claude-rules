@@ -15,15 +15,16 @@ export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken
   let token;
   let expires = 0;
   async function request(id, suffix = '', method = 'GET', body) {
-    const requestSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
-    return withAbort(requestSignal, async () => {
+    const timedSignal = () => signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
+    try {
       if (!token || Date.now() >= expires) {
+        const tokenSignal = timedSignal();
         onStage('token start (sheets)');
-        try { token = await getToken({ scope: SCOPE, impersonate: 'kim@orgiast.jp', signal: requestSignal }); }
+        try { token = await withAbort(tokenSignal, () => getToken({ scope: SCOPE, impersonate: 'kim@orgiast.jp', signal: tokenSignal })); }
         catch (primaryError) {
-          requestSignal.throwIfAborted();
+          tokenSignal.throwIfAborted();
           // Fallback: use 'drive' scope (supported by DWD proxy) instead of 'spreadsheets'
-          try { token = await getToken({ scope: 'https://www.googleapis.com/auth/drive', impersonate: 'seisaku-team@orgiast.jp', signal: requestSignal }); }
+          try { token = await withAbort(tokenSignal, () => getToken({ scope: 'https://www.googleapis.com/auth/drive', impersonate: 'seisaku-team@orgiast.jp', signal: tokenSignal })); }
           catch (fallbackError) { throw new Error(`Sheets token failed: ${fallbackError.message}`, { cause: fallbackError.cause || primaryError }); }
         }
         onStage('token end (sheets)');
@@ -37,14 +38,19 @@ export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken
       ]);
       for (let retries = 0; ; retries++) {
         let response;
+        const requestSignal = timedSignal();
         try {
-          response = await fetchImpl(`${API}/${encodeURIComponent(id)}${suffix}`, {
+          response = await withAbort(requestSignal, () => fetchImpl(`${API}/${encodeURIComponent(id)}${suffix}`, {
             method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
             ...(body ? { body: JSON.stringify(body) } : {}), signal: requestSignal,
-          });
+          }));
         } catch (error) {
+          if (signal?.aborted) throw error;
           const retryableError = (error?.name === 'TypeError' && error?.message === 'fetch failed')
+            || error?.name === 'AbortError'
             || error?.name === 'TimeoutError'
+            || /aborted due to timeout/i.test(error?.message || '')
+            || retryableNetworkCodes.has(error?.code)
             || retryableNetworkCodes.has(error?.cause?.code);
           if (!retryableMethod || !retryableError || retries >= maxRetries) throw error;
           await sleep(Math.min(2_000 * (2 ** retries), 60_000));
@@ -61,14 +67,17 @@ export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken
           : 2_000 * (2 ** retries);
         await sleep(Math.min(delay, 60_000));
       }
-    }).catch(error => {
-      if (requestSignal.aborted) throw new Error(`Sheets ${method} fetch failed: ${error.message}`, { cause: error });
+    } catch (error) {
+      if (signal?.aborted || error?.name === 'AbortError' || error?.name === 'TimeoutError' || /aborted due to timeout/i.test(error?.message || '')) {
+        throw new Error(`Sheets ${method} fetch failed: ${error.message}`, { cause: error });
+      }
       throw error;
-    });
+    }
   }
   const metadata = (id) => request(id, '?fields=spreadsheetId,spreadsheetUrl,sheets(properties)');
   const get = async (id, range) => (await request(id, `/values/${encodeURIComponent(range)}?valueRenderOption=UNFORMATTED_VALUE`)).values ?? [];
   const append = (id, range, rows) => request(id, `/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, 'POST', { range, majorDimension: 'ROWS', values: rows });
+  // PUT overwrites the same range with the same values, so retrying the write is idempotent.
   const update = (id, range, rows) => request(id, `/values/${encodeURIComponent(range)}?valueInputOption=RAW`, 'PUT', { range, majorDimension: 'ROWS', values: rows });
   async function ensure(id, title, header) {
     const meta = await metadata(id);

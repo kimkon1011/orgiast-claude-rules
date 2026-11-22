@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { scan, detect } from './permanent-fix-deferral-scan.mjs';
+import { scan, detect, resolvedWait } from './permanent-fix-deferral-scan.mjs';
 
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'deferral-scan-'));
@@ -95,6 +95,22 @@ test('既知の実違反原文を検出する', () => {
   for (const quote of quotes) assert.ok(detect(quote).length >= 1, quote);
   assert.equal(detect(quotes[0])[0].pattern, 'P4');
   assert.equal(detect(quotes[1])[0].pattern, 'P3');
+});
+test('実測6件の委譲済み待機・正当な承認待ちは検出しない', () => {
+  const falsePositives = [
+    'Codex に締め処理を委譲済みです。締め処理を実行中のため、まだ閉じない（タスク `by7gvg7th`）。完了待ちです。',
+    'この repo は全PCに配布される共通ルールです。次に kim がすること: PR #2573 を取り込んでよいか一言返す',
+    'draft PR のため GitHub 側が merge を拒否している。次に kim がすること: PR #8 のマージ可否と修正の作り直し可否に答える',
+    '人にしかできない操作で止まってはおらず、Claude 側の自動進行（Codex 実行中）を待っているだけ。タスク `abc12345` の完了待ちです。',
+    '変更は全アカウントに配られる。次に kim がすること: ②の5つの質問に短く答える。恒久修正を進めてよいか判断してください。',
+    'Codex(`bged1hp4t`)の push と CI の結果を待っています。'
+  ];
+  for (const excerpt of falsePositives) assert.deepEqual(detect(excerpt), [], excerpt);
+});
+test('委譲証拠も承認制約もない本物の先送りは引き続き検出する', () => {
+  for (const excerpt of ['この修正は次のセッションで対応します', '恒久対応は後日']) {
+    assert.ok(detect(excerpt).some(found => /^P[1-4]$/.test(found.pattern)), excerpt);
+  }
 });
 test('手渡しなし・進捗報告・修正完了は検出しない', () => {
   for (const quote of [
@@ -570,6 +586,74 @@ test('同じ行でquoteとexcerptの両方がヒットしたら1件に数える'
       assert.equal(source.hits, 0, `${source.name}: should not hit`);
     }
   }
+});
+
+// ================================================================
+// 2026-11-22: resolvedWait が queue-operation / attachment 形式の
+// task-notification も認識するか
+// ================================================================
+function transcriptFixture(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resolved-wait-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+function writeTranscript(dir, lines) {
+  const file = path.join(dir, 'transcript.jsonl');
+  fs.writeFileSync(file, lines.map(l => JSON.stringify(l)).join('\n') + '\n');
+  return file;
+}
+
+test('resolvedWait: queue-operation 通知＋後続 assistant text → in-session', t => {
+  const dir = transcriptFixture(t);
+  // queue-operation に task-notification が含まれ、後に assistant の text 応答がある
+  const transcript = writeTranscript(dir, [
+    { type: 'assistant', timestamp: '2026-11-20T22:07:30.000Z', message: { content: [{ type: 'text', text: '待っています' }] } },
+    { type: 'queue-operation', timestamp: '2026-11-20T22:10:30.000Z', content: '<task-notification>\n<task-id>abc</task-id>\n</task-notification>' },
+    { type: 'assistant', timestamp: '2026-11-20T22:11:00.000Z', message: { content: [{ type: 'text', text: '通知が届きました。結果を確認します。' }] } },
+  ]);
+  assert.equal(resolvedWait(transcript, '2026-11-20T22:07:00.000Z'), true);
+});
+
+test('resolvedWait: attachment queued_command 通知＋後続 assistant text → in-session', t => {
+  const dir = transcriptFixture(t);
+  // attachment queued_command の prompt に task-notification が含まれる
+  const transcript = writeTranscript(dir, [
+    { type: 'assistant', timestamp: '2026-11-20T22:07:30.000Z', message: { content: [{ type: 'text', text: '委譲します' }] } },
+    { type: 'attachment', timestamp: '2026-11-20T22:10:30.000Z', attachment: { type: 'queued_command', prompt: '<task-notification>\n<task-id>def</task-id>\n</task-notification>' } },
+    { type: 'assistant', timestamp: '2026-11-20T22:11:00.000Z', message: { content: [{ type: 'text', text: '結果を確認します。' }] } },
+  ]);
+  assert.equal(resolvedWait(transcript, '2026-11-20T22:07:00.000Z'), true);
+});
+
+test('resolvedWait: 通知の後に assistant text が無い → 解消扱いにしない', t => {
+  const dir = transcriptFixture(t);
+  const transcript = writeTranscript(dir, [
+    { type: 'assistant', timestamp: '2026-11-20T22:07:30.000Z', message: { content: [{ type: 'text', text: '委譲します' }] } },
+    { type: 'queue-operation', timestamp: '2026-11-20T22:10:30.000Z', content: '<task-notification>\n<task-id>ghi</task-id>\n</task-task-notification>' },
+  ]);
+  assert.equal(resolvedWait(transcript, '2026-11-20T22:07:00.000Z'), false);
+});
+
+test('resolvedWait: type:user の既存判定は維持', t => {
+  const dir = transcriptFixture(t);
+  const transcript = writeTranscript(dir, [
+    { type: 'user', timestamp: '2026-11-20T22:10:30.000Z', message: { content: 'task-notification が届きました' } },
+    { type: 'assistant', timestamp: '2026-11-20T22:11:00.000Z', message: { content: [{ type: 'text', text: '確認します' }] } },
+  ]);
+  assert.equal(resolvedWait(transcript, '2026-11-20T22:07:00.000Z'), true);
+});
+
+test('resolvedWait: attachment が後続の行にあり時刻が少し前でも検出する（非単調増加）', t => {
+  const dir = transcriptFixture(t);
+  // attachment の timestamp が assistant 応答より前（行順では後ろ）でも検出できるか
+  const transcript = writeTranscript(dir, [
+    { type: 'assistant', timestamp: '2026-11-20T22:07:30.000Z', message: { content: [{ type: 'text', text: '委譲します' }] } },
+    { type: 'assistant', timestamp: '2026-11-20T22:11:00.000Z', message: { content: [{ type: 'text', text: '結果を確認します。' }] } },
+    { type: 'attachment', timestamp: '2026-11-20T22:10:30.000Z', attachment: { type: 'queued_command', prompt: '<task-notification>\n<task-id>jkl</task-id>\n</task-notification>' } },
+  ]);
+  // attachment の timestamp (22:10:30) は assistant 応答 (22:11:00) より前なので in-session
+  assert.equal(resolvedWait(transcript, '2026-11-20T22:07:00.000Z'), true);
 });
 
 test('先送り文の無いexcerptはhandoff-auditで0件', t => {

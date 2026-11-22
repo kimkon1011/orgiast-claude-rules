@@ -5,6 +5,7 @@
 ## 収集とデータ
 
 - `config/x-ai-tips-topics.json` の各テーマについて、xAI `/v1/responses` に `model: grok-4.6`、`input`、`tools:[{type:"x_search"}]` を1回送る。既定は3目的×日英の6テーマ。Claude API や別プロバイダーへのフォールバックはない。
+- x.ai が HTTP 401/402/403 を返したときのみ、`tools/web-search.mjs` の `search()` による検索付き収集へフォールバックする。設定の `fallback` が `"web-search"`（既定）のとき有効、`null` で無効。フォールバックは各テーマにつき1回まで。search の結果 URL は実在確認（HEAD→GET）を通ったものだけ採用、0件なら捏造しない。
 - 直近48時間の再現できる手順・数値を最大5件/テーマ抽出。宣伝・感想だけ・出典不明の数値を除外するよう指示する。投稿URL、投稿者、要約、手順、目的、投稿時刻、likes を検査し、likes 不明または既定10未満の投稿も除外する。反応数と投稿内容はモデル取得値なので、事実確認は既存 triage が担う。
 - `~/.claude/ai-news-proposals.jsonl` に `X-0001` 形式のID、`status:pending`、`confidence:low`、既存互換 category、`purpose:cost|site|business`、`source:x` を追記する。evidence に投稿URL・投稿者・要約を残す。
 - `~/.claude/x-ai-tips/state.json` に正規化URL、内容ハッシュ、最終連番、日別予算、週次配送結果を保存する。既存提案のタイトルは処理状態に関係なく照合。URLは twitter.com/x.com・投稿者名・クエリ文字列の違いを吸収する。

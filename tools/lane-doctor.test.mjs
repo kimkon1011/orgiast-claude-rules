@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runProbe, laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, needsNativeCodexProbe, nativeWriteProbeArgs, directGeminiCliState , shouldSkipLiveProbe } from './lane-doctor.mjs';
+import { runProbe, laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, needsNativeCodexProbe, nativeWriteProbeArgs, nativeWriteProbeResult, directGeminiCliState , shouldSkipLiveProbe } from './lane-doctor.mjs';
 import { restoreExpiredDisabledLanes } from './lib/lane-disabled.mjs';
 import { classifyTaskKind } from './lib/task-kind.mjs';
 import { nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
@@ -39,6 +39,18 @@ test('native write probe forces implement routing while preserving its arguments
   assert.ok(args.includes('--timeout'));
   assert.ok(args.includes(instruction));
   assert.equal(classifyTaskKind(instruction), 'investigate');
+});
+test('native write probe treats a successful read-back as alive even when the process exits 1', () => {
+  const result = nativeWriteProbeResult({ code: 1, text: '[routing] fallback backend=gemini\nWRITE_OK' }, true);
+  assert.equal(result.code, 0);
+  assert.equal(result.viaChain, false);
+  assert.match(result.text, /WRITE_OK/);
+  assert.match(result.text, /exit=1/);
+});
+test('native write probe fails when read-back fails even when the process exits 0', () => {
+  const result = nativeWriteProbeResult({ code: 0, text: 'PONG' }, false);
+  assert.equal(result.code, 1);
+  assert.match(result.text, /書き込み確認失敗/);
 });
 test('quick removes expired demote/cooldown atomically, preserves unrelated providers and reads history', t => {
   const h = fixture(t);
@@ -424,6 +436,13 @@ test('codex dry failure with real 401 still classifies oauth_consent', async t =
   assert.equal(result.lanes.codex.reason, 'dead:oauth_consent');
 });
 
+test('minified JS の長大な1行に含まれる unauthorized は oauth_consent に分類しない', async t => {
+  const home = fixture(t);
+  const text = `${'x'.repeat(2494)}unauthorized${'x'.repeat(2494)}`;
+  const result = await laneDoctorProbe({ home, now, platform: 'linux', providers: ['codex'], probe: async () => ({ code: 1, text }), notify: async () => ({ delivered: 'test' }) });
+  assert.equal(result.lanes.codex.reason, 'probe_failed');
+});
+
 test('shouldSkipLiveProbe: 回数制限・課金中は until まで実測しない', () => {
   const now = 1_700_000_000_000;
   assert.equal(shouldSkipLiveProbe({ reason: 'quota_wait', until: now + 1000 }, now), true);
@@ -515,11 +534,28 @@ test('recent real success requires two consecutive direct billing probes; succes
 test('Codex probe bypasses cheap-first and task routing with no fallback', async () => {
   const result = await runProbe('codex', { home: '/tmp/unused', timeoutMs: 1000, execFileImpl(exe, args, options, done) {
     assert.equal(options.env.CODEX_DO_CHEAP_FIRST, '0');
+    assert.equal(options.env.CODEX_DO_SKIP_CURSOR_AGENT, '1');
     assert.ok(args.includes('--no-fallback'));
     assert.equal(args[args.indexOf('--kind') + 1], 'implement');
     done(null, 'PONG', '');
   } });
   assert.equal(result.code, 0);
+});
+
+test('non-Codex probe does not skip cursor-agent through its environment', async () => {
+  const previous = process.env.CODEX_DO_SKIP_CURSOR_AGENT;
+  process.env.CODEX_DO_SKIP_CURSOR_AGENT = '1';
+  try {
+    const result = await runProbe('gemini', { home: '/tmp/unused', timeoutMs: 1000, execFileImpl(exe, args, options, done) {
+      assert.equal(options.env.CODEX_DO_CHEAP_FIRST, '0');
+      assert.equal(options.env.CODEX_DO_SKIP_CURSOR_AGENT, undefined);
+      done(null, 'PONG', '');
+    } });
+    assert.equal(result.code, 0);
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_DO_SKIP_CURSOR_AGENT;
+    else process.env.CODEX_DO_SKIP_CURSOR_AGENT = previous;
+  }
 });
 
 test('chain success and quota cannot prove the requested Codex lane is alive or quota-limited', async t => {

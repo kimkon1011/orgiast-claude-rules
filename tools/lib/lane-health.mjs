@@ -40,7 +40,7 @@ export function repairAdvice(lane, reason, { via } = {}) {
   if (/payment_required/.test(r)) return { fixNow: false, auto: false, human: 'まず無料枠・既存契約内の他AIレーンを実測して切り替える。追加費用案は代替不可の証拠と比較表がある場合だけ最後に提示' };
   if (/physical_operation/.test(r)) return { fixNow: false, auto: false, human: '管理者 PowerShell で wsl.exe --install --no-distribution を実行して Windows を再起動する（管理者権限が必要）' };
   if (/^cooldown|demoted/.test(r)) return { fixNow: false, auto: true, human: null, note: '利用上限のクールダウン中。期限が来れば自動復帰する' };
-  if (/^(?:quota_wait|usage_limit|rate_limit)/.test(r)) return { fixNow: false, auto: true, silent: true, human: null, note: '利用上限・レート制限の一時待ち。自動再確認で復帰する' };
+  if (/^(?:quota_wait|usage_limit|rate_limit|daily_limit|lane_doctor_usage_limit)/.test(r)) return { fixNow: false, auto: true, silent: true, human: null, note: '利用上限・レート制限の一時待ち。自動再確認で復帰する' };
   if (lane === 'codex') {
     if (/oauth_consent|login|not_logged|unauthorized|auth/i.test(r)) return { fixNow: true, auto: false, human: 'Codex の OAuth 同意が必要。そのPCで担当アカウントの ChatGPT にブラウザーでログインして許可する' };
     if (/plan.?free|free/i.test(r)) return { fixNow: true, auto: false, human: 'ChatGPT が free プラン。有料プラン契約のアカウントでログインし直す' };

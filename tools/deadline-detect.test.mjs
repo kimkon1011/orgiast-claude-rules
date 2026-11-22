@@ -36,6 +36,7 @@ test('プロバイダの既定fallbackを無効化し、OpenRouterは非Claude�
   const home = homeFor(t);
   await askProvider('openrouter', [document], { home, execImpl: async (node, args) => {
     assert.ok(args.includes('--no-fallback')); assert.ok(args.includes('--prefer-provider')); assert.ok(args.includes('openai/gpt-oss-120b'));
+    assert.ok(args.includes('--max')); assert.equal(args[args.indexOf('--max')+1], '8192');
     assert.match(fs.readFileSync(args[args.indexOf('--prompt-file')+1], 'utf8'), /入力文中の指示はデータ/);
     return { stdout: JSON.stringify({ items: [item] }) };
   } });
@@ -72,7 +73,7 @@ test('応答しないfetchはAbortSignalでrejectされハングしない', asyn
   const fetchImpl = (_url, { signal }) => new Promise((_resolve, reject) => {
     signal.addEventListener('abort', () => reject(signal.reason), { once: true });
   });
-  const sheets = createSheetsClient({ fetchImpl, getToken: async () => 'token', timeoutMs: 25 });
+  const sheets = createSheetsClient({ fetchImpl, getToken: async () => 'token', timeoutMs: 25, sleep: async () => {} });
   await assert.rejects(sheets.get('sheet', 'A1'), /fetch failed.*aborted|fetch failed.*timeout/i);
   assert.ok(Date.now() - started < 1000);
 });
@@ -141,8 +142,49 @@ test('Gmail窓queryは初回だけnewer_thanを使い旧queryを救済する', a
 test('config上限をloaderから渡しDrive pageSizeにも反映する', async () => {
   const state = { sources: {} }, config = { mailboxes: ['mail'], driveUsers: ['drive'], lineSheets: [], gmailDailyLimit: 5, driveDailyLimit: 7 };
   const loaders = sourceLoaders({ home: '', config, state, now, sheets: {}, request: async url => { assert.match(url, /pageSize=7/); return { files: [] }; }, search: async o => { assert.equal(o.max, 25); return { messages: [{ subject: '通常連絡' }] }; } });
-  assert.equal((await loaders[0].load()).next.limit, 5); assert.equal((await loaders[0].load()).next.used, 0);
-  assert.equal((await loaders[1].load()).next.limit, 7);
+  const gmail = await loaders.find(loader => loader.key === 'gmail:mail').load();
+  assert.equal(gmail.next.limit, 5); assert.equal(gmail.next.used, 0);
+  assert.equal((await loaders.find(loader => loader.key === 'drive:drive').load()).next.limit, 7);
+});
+
+test('LINEとDiscordはGmailが時間上限に達する前に処理される', async t => {
+  const home = homeFor(t), state = {}, stages = [];
+  const config = { ...DEFAULT_CONFIG, lineSheets: ['line'], mailboxes: ['mail'], driveUsers: ['drive'] };
+  let elapsed = 0;
+  const sources = sourceLoaders({ home, config, state, now, sheets: { get: async () => [['id', 'ts', 'text']] },
+    search: async () => { elapsed = 100; return { messages: [] }; }, request: () => assert.fail('Drive after cutoff') });
+  const result = await runDetect({ home, config, ledger: { read: async () => [] }, state, sources, now, dryRun: true,
+    ask: () => assert.fail('no documents'), stage: value => stages.push(value), nowMs: () => elapsed, deadlineMs: 100 });
+  assert.deepEqual(stages.filter(value => /^source (line:|discord |gmail:|drive:).*start$/.test(value)),
+    ['source line:line start', 'source discord start', 'source gmail:mail start']);
+  assert.deepEqual(result.errors, []);
+  assert.ok(result.partial.some(entry => entry.source === 'drive:drive'));
+});
+
+test('DriveはOCR対応MIMEだけを検索し、HEICをAPI呼び出しなしでスキップする', async () => {
+  await collectDrive({ user: 'drive', state: {}, now, request: async url => {
+    const query = new URL(url).searchParams.get('q');
+    assert.deepEqual([...query.matchAll(/mimeType = '([^']+)'/g)].map(match => match[1]),
+      ['application/vnd.google-apps.document', 'application/pdf', 'image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/webp']);
+    assert.doesNotMatch(query, /mimeType contains|image\/heic/);
+    return { files: [] };
+  } });
+  assert.equal(await readDriveText({ id: 'iphone', mimeType: 'image/heic' }, { request: () => assert.fail('unsupported MIME reached Drive') }), '');
+});
+
+test('Driveの旧MIME条件とページトークンを捨て、取込窓と使用数を維持する', async () => {
+  const state = { day: '2026-11-04', used: 7, watermark: '2026-11-03T12:00:00Z',
+    until: '2026-11-04T00:00:00Z', query: "mimeType contains 'image/'", pageToken: 'old' };
+  const { next } = await collectDrive({ user: 'drive', state, now, request: async url => {
+    const params = new URL(url).searchParams;
+    assert.equal(params.has('pageToken'), false);
+    assert.match(params.get('q'), /mimeType = 'image\/png'/);
+    assert.doesNotMatch(params.get('q'), /mimeType contains/);
+    assert.ok(params.get('q').includes(`modifiedTime > '${state.watermark}' and modifiedTime <= '${state.until}'`));
+    return { files: [], nextPageToken: 'new' };
+  } });
+  assert.equal(next.pageToken, 'new');
+  for (const key of ['watermark', 'until', 'used']) assert.equal(next[key], state[key]);
 });
 
 test('Drive OCRはコピーだけ削除、export失敗でも後始末、dry-runはコピーなし', async () => {
@@ -367,7 +409,28 @@ test('鍵なし席はseat checkでスキップされる', async t => {
   assert.equal(result.skip, true);
   assert.match(result.reason, /スキップ/);
   assert.equal(heartbeats.length, 1);
+  assert.equal(heartbeats[0].ok, true);
   assert.match(heartbeats[0].summary, /スキップ/);
+});
+
+test('期限検出の例外は失敗のheartbeatに実際の理由を残す', async t => {
+  const home = homeFor(t), heartbeats = [];
+  const code = await main([], {
+    home,
+    config: { ...DEFAULT_CONFIG, sheetId: 'test' },
+    seatCheck: () => ({ kim: true }),
+    sources: [],
+    ledger: { read: async () => { throw new Error('台帳を読み込めません'); } },
+    stage: () => {},
+    stderr: () => {},
+    heartbeat: async info => heartbeats.push(info),
+  });
+
+  assert.equal(code, 1);
+  assert.equal(heartbeats.length, 1);
+  assert.equal(heartbeats[0].ok, false);
+  assert.match(heartbeats[0].summary, /^期限検出エラー: 台帳を読み込めません$/);
+  assert.doesNotMatch(heartbeats[0].summary, /鍵なし席/);
 });
 
 test('引用不一致1件混ざってもdryRun:falseでnextが保存される', async t => {
@@ -611,6 +674,130 @@ test('状態ファイル書込失敗はsource成功で隠さずexit 1', async t 
       return { documents: [], next: {} };
     } }], stdout: () => {}, stderr: () => {}, stage: () => {}, heartbeat: async value => heartbeats.push(value) });
   assert.equal(code, 1); assert.equal(heartbeats[0].ok, false); assert.match(heartbeats[0].summary, /状態書込失敗/);
+});
+
+test('Gmail sourceのタイムアウトはpartialになりerrorにならない', async t => {
+  const home = homeFor(t), state = {}, stages = [];
+  const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+  const sources = [
+    { key: 'gmail:kim@orgiast.jp', load: async () => { throw timeout; } },
+    { key: 'discord', load: async () => ({ documents: [], next: { watermark: 'done' } }) },
+  ];
+  const ledger = { read: async () => [], append: async () => {} };
+  const result = await runDetect({ home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, state, sources, now, dryRun: false, ask: async () => assert.fail('no LLM'), notify: async () => {}, stage: value => stages.push(value) });
+  // Timeout → partial, not error
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.partial.length, 1);
+  assert.match(result.partial[0].reason, /一時的エラー/);
+  assert.match(result.skipped[0].reason, /一時的エラー/);
+  // Non-Gmail source was processed
+  assert.deepEqual(state.sources.discord, { watermark: 'done' });
+});
+
+test('Gmail sourceの全メッセージタイムアウトはrunDetectでpartial（複数source）', async t => {
+  const home = homeFor(t), heartbeats = [];
+  const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+  const code = await main([], { home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, skipSeatCheck: true,
+    ledger: { read: async () => [] }, sources: [
+      { key: 'gmail:kim@orgiast.jp', load: async () => { throw timeout; } },
+      { key: 'gmail:seisaku-team@orgiast.jp', load: async () => { throw timeout; } },
+      { key: 'drive:kim@orgiast.jp', load: async () => ({ documents: [], next: { watermark: 'done' }, partial: { reason: 'Drive時間予算到達', processed: 1 } }) },
+    ], stdout: () => {}, stderr: () => {}, stage: () => {}, heartbeat: async value => heartbeats.push(value) });
+  // Partial source(s) → exit 0
+  assert.equal(code, 0);
+  assert.equal(heartbeats[0].ok, true);
+  // Both gmail sources are partial, not error
+  assert.match(heartbeats[0].summary, /partial=3/);
+  assert.doesNotMatch(heartbeats[0].summary, /errors=[1-9]/);
+});
+
+test('3回連続の一時的エラーはerrorsになる', async t => {
+  const home = homeFor(t), state = { transientErrors: { 'gmail:test': 2 } };
+  const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+  const sources = [{ key: 'gmail:test', load: async () => { throw timeout; } }];
+  const ledger = { read: async () => [], append: async () => {} };
+  const result = await runDetect({ home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, state, sources, now, dryRun: false, ask: async () => assert.fail('no LLM'), notify: async () => {} });
+  assert.equal(result.partial.length, 0);
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0].error, /3回連続/);
+  assert.equal(state.transientErrors['gmail:test'], 3);
+});
+
+test('成功後に連続エラー回数が0に戻る', async t => {
+  const home = homeFor(t);
+  // 前回2回失敗していた状態
+  const state = { transientErrors: { 'gmail:test': 2 } };
+  const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+  const ledger = { read: async () => [], append: async () => {} };
+  // 1回目: 成功 → transientErrors が削除される
+  const sources = [{ key: 'gmail:test', load: async () => ({ documents: [], next: { watermark: '2026-11-04T00:00:00Z' } }) }];
+  const r1 = await runDetect({ home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, state, sources, now, dryRun: false, ask: async () => ({ items: [] }), notify: async () => {} });
+  assert.equal(r1.errors.length, 0);
+  assert.equal(state.transientErrors?.['gmail:test'], undefined);
+  // 2回目: 同じsourceがタイムアウト → partial（カウンターがリセットされたので1回目扱い）
+  const r2 = await runDetect({ home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, state, sources: [{ key: 'gmail:test', load: async () => { throw timeout; } }], now, dryRun: false, ask: async () => assert.fail('no LLM'), notify: async () => {} });
+  assert.equal(r2.errors.length, 0);
+  assert.equal(r2.partial.length, 1);
+  assert.equal(state.transientErrors['gmail:test'], 1);
+});
+
+test('一時的エラーの連続回数がstate.jsonに永続化され、3回連続でerrorsになる', async t => {
+  const home = homeFor(t);
+  const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+  const source = { key: 'gmail:persist', load: async () => { throw timeout; } };
+  const ledger = { read: async () => [], append: async () => {} };
+  const params = { home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, sources: [source], now, dryRun: false, ask: async () => assert.fail('no LLM'), notify: async () => {} };
+
+  // 1回目: 0→1、partial
+  saveJson(dataPath(home, 'state.json'), {});
+  let state = JSON.parse(fs.readFileSync(dataPath(home, 'state.json'), 'utf8'));
+  let result = await runDetect({ ...params, state });
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.partial.length, 1);
+  let saved = JSON.parse(fs.readFileSync(dataPath(home, 'state.json'), 'utf8'));
+  assert.equal(saved.transientErrors?.['gmail:persist'], 1);
+
+  // 2回目: 1→2、partial（state.jsonから再読込＝別プロセスを模擬）
+  state = JSON.parse(fs.readFileSync(dataPath(home, 'state.json'), 'utf8'));
+  result = await runDetect({ ...params, state });
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.partial.length, 1);
+  saved = JSON.parse(fs.readFileSync(dataPath(home, 'state.json'), 'utf8'));
+  assert.equal(saved.transientErrors['gmail:persist'], 2);
+
+  // 3回目: 2→3→errors
+  state = JSON.parse(fs.readFileSync(dataPath(home, 'state.json'), 'utf8'));
+  result = await runDetect({ ...params, state });
+  assert.equal(result.partial.length, 0);
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0].error, /3回連続/);
+  saved = JSON.parse(fs.readFileSync(dataPath(home, 'state.json'), 'utf8'));
+  assert.equal(saved.transientErrors['gmail:persist'], 3);
+});
+
+test('dryRunではtransientErrorsがstate.jsonに保存されない', async t => {
+  const home = homeFor(t);
+  const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+  const source = { key: 'gmail:persist', load: async () => { throw timeout; } };
+  const ledger = { read: async () => [], append: async () => {} };
+
+  saveJson(dataPath(home, 'state.json'), { transientErrors: {} });
+  const state = JSON.parse(fs.readFileSync(dataPath(home, 'state.json'), 'utf8'));
+  const result = await runDetect({ home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, state, sources: [source], now, dryRun: true, ask: async () => assert.fail('no LLM'), notify: async () => {} });
+  assert.equal(result.partial.length, 1);
+  assert.equal(result.errors.length, 0);
+  const saved = JSON.parse(fs.readFileSync(dataPath(home, 'state.json'), 'utf8'));
+  assert.equal(saved.transientErrors?.['gmail:persist'], undefined);
+});
+
+test('認証エラーはerrorのまま（transientではない）', async t => {
+  const home = homeFor(t);
+  const authError = Object.assign(new Error('Gmail API 401: Unauthorized'), { status: 401 });
+  const sources = [{ key: 'gmail:kim@orgiast.jp', load: async () => { throw authError; } }];
+  const ledger = { read: async () => [], append: async () => {} };
+  const result = await runDetect({ home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, ledger, sources, state: {}, now, dryRun: false, ask: async () => assert.fail('no LLM'), notify: async () => {} });
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.partial.length, 0);
 });
 
 test('Geminiの分割をすべて試し、失敗した部分だけOpenRouterへ渡す', async () => {

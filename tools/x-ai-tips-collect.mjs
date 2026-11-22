@@ -36,6 +36,9 @@ export function validateConfig(config) {
   for (const key of ['maxCostUsd', 'reservePerCallUsd', 'minLikes']) if (!Number.isFinite(config[key]) || config[key] <= 0) throw new Error(`設定不正: ${key}`);
   for (const key of ['inputPerMillion', 'outputPerMillion', 'post', 'profile']) if (!Number.isFinite(config.estimatedRates?.[key]) || config.estimatedRates[key] < 0) throw new Error(`設定不正: estimatedRates.${key}`);
   if (!Array.isArray(config.topics) || config.topics.some(t => !PURPOSES.includes(t.purpose) || typeof t.query !== 'string' || !t.query.trim())) throw new Error('設定不正: topics');
+  if (config.fallback !== undefined && config.fallback !== null) {
+    if (typeof config.fallback !== 'object' || Array.isArray(config.fallback) || typeof config.fallback.provider !== 'string' || !config.fallback.provider.trim() || typeof config.fallback.category !== 'string' || !config.fallback.category.trim()) throw new Error('設定不正: fallback');
+  }
   return config;
 }
 export function validateState(state) {
@@ -52,6 +55,9 @@ export function canonicalUrl(value) {
     const match = url.pathname.match(/^\/(?:[\w]+|i\/web)\/status\/(\d+)\/?$/);
     return match ? `https://x.com/i/web/status/${match[1]}` : null;
   } catch { return null; }
+}
+export function fallbackUrl(value) {
+  try { const url = new URL(value); return url.protocol === 'https:' ? value : null; } catch { return null; }
 }
 export function estimateCost(usage, rates) {
   if (Number.isFinite(usage?.cost_in_usd_ticks) && usage.cost_in_usd_ticks >= 0) return usage.cost_in_usd_ticks / 1e10;
@@ -80,7 +86,9 @@ export function parseItems(json) {
   if (!Array.isArray(parsed.items)) throw new Error('JSON形式不正: items');
   return parsed.items;
 }
-export function selectProposals(items, records, state, topic, now, config) {
+export function selectProposals(items, records, state, topic, now, config, options = {}) {
+  const { isFallback = false } = options;
+  const urlValidator = isFallback ? fallbackUrl : canonicalUrl;
   const urls = new Set(state.urls || []), hashes = new Set(state.hashes || []);
   const titles = new Set(records.map(r => normalized(r.title || '')));
   for (const record of records) {
@@ -91,14 +99,15 @@ export function selectProposals(items, records, state, topic, now, config) {
   const added = [];
   let duplicates = 0, invalid = 0;
   for (const item of items) {
-    const url = canonicalUrl(item?.url), posted = Date.parse(item?.postedAt);
-    if (!url || ['author', 'title', 'summary', 'steps'].some(k => typeof item[k] !== 'string' || !item[k].trim()) || item.purpose !== topic.purpose || !Number.isFinite(posted) || posted < +now - 2 * DAY || posted > +now || !Number.isFinite(item.likes) || item.likes < config.minLikes) { invalid++; continue; }
+    const url = urlValidator(item?.url), posted = Date.parse(item?.postedAt);
+    const likesOk = isFallback || (Number.isFinite(item.likes) && item.likes >= config.minLikes);
+    if (!url || ['author', 'title', 'summary', 'steps'].some(k => typeof item[k] !== 'string' || !item[k].trim()) || item.purpose !== topic.purpose || !Number.isFinite(posted) || posted < +now - 2 * DAY || posted > +now || !likesOk) { invalid++; continue; }
     const hash = contentHash(item), title = normalized(item.title);
     const duplicate = urls.has(url) || hashes.has(hash) || titles.has(title);
     urls.add(url); hashes.add(hash);
     if (duplicate) { duplicates++; continue; }
     titles.add(title);
-    added.push({ id: `X-${String(next++).padStart(4, '0')}`, createdAt: now.toISOString(), status: 'pending', title: item.title.trim(), action: item.steps.trim(), evidence: `${url} ${item.author}: ${item.summary}`, category: CATEGORIES.includes(item.category) ? item.category : 'other', confidence: 'low', purpose: topic.purpose, source: 'x', author: item.author, postedAt: item.postedAt, likes: item.likes, summary: item.summary, contentHash: hash });
+    added.push({ id: `X-${String(next++).padStart(4, '0')}`, createdAt: now.toISOString(), status: 'pending', title: item.title.trim(), action: item.steps.trim(), evidence: `${url} ${item.author}: ${item.summary}`, category: CATEGORIES.includes(item.category) ? item.category : 'other', confidence: isFallback ? 'low' : (item.confidence || 'low'), purpose: topic.purpose, source: isFallback ? 'web' : 'x', author: item.author, postedAt: item.postedAt, likes: item.likes ?? 0, summary: item.summary, contentHash: hash });
   }
   state.urls = [...urls]; state.hashes = [...hashes]; state.lastId = next - 1;
   return { added, duplicates, invalid };
@@ -117,9 +126,26 @@ export function weeklySummary(records, now) {
   body.push(...(top.length ? top.map(r => `[${r.purpose}] ${r.title.slice(0, 90)}\n${r.action.slice(0, 110)}\n${String(r.evidence).match(/https:\/\/[^\s]+/)?.[0] || ''}`) : ['該当なし']));
   return body.join('\n');
 }
+export async function runFallback(topic, now, config, options = {}) {
+  const { log = console.log } = options;
+  const prompt = buildRequest(topic, now, config).input[0].content;
+  const { provider, category } = config.fallback;
+  log(`[fallback] ${provider}/${category} で代替収集`);
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', provider, '--category', category, '--max', String(config.maxOutputTokens), prompt], { timeout: config.timeoutMs }, (err, stdout) => {
+      if (err) { reject(new Error(`代替レーン失敗: ${err.message}`)); return; }
+      try {
+        const parsed = JSON.parse(stdout.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+        if (!Array.isArray(parsed.items)) throw new Error('代替レーンからの応答形式不正: items');
+        for (const item of parsed.items) { item.source = 'web'; item.confidence = 'low'; delete item.likes; }
+        resolve(parsed.items);
+      } catch (e) { reject(e); }
+    });
+  });
+}
 export async function runCollect(options = {}) {
   const { home = process.env.ORGIAST_HOME || os.homedir(), now = new Date(), dryRun = false, fetchFn = globalThis.fetch, log = console.log,
-    notifyFn = async (body, opts) => (await import('./notify-kim.mjs')).notifyKim(body, opts) } = options;
+    notifyFn = async (body, opts) => (await import('./notify-kim.mjs')).notifyKim(body, opts), fallbackFn = runFallback } = options;
   const config = validateConfig(options.config || JSON.parse(fs.readFileSync(CONFIG, 'utf8')));
   if (config.enabled === false) return { status: 'skip:設定で停止中' };
   const base = path.join(home, '.claude'), dir = path.join(base, 'x-ai-tips');
@@ -173,6 +199,25 @@ export async function runCollect(options = {}) {
         if (!response.ok) {
           awaitingResponse = false;
           serverError = response.status >= 500 && response.status < 600;
+          if ([401, 402, 403].includes(response.status)) {
+            if (config.fallback) {
+              log(`x.ai HTTP ${response.status} → fallback へ切替`);
+              const fallbackItems = await fallbackFn(topic, now, config, { ...options, log });
+              const records = [...lines(read(proposalFile, '')), ...simulated];
+              const result = selectProposals(fallbackItems, records, state, topic, now, config, { isFallback: true });
+              duplicates += result.duplicates;
+              if (result.invalid) log(`除外:代替レーン結果で条件外${result.invalid}件`);
+              if (dryRun) { simulated.push(...result.added); for (const rec of result.added) log(`[dry-run] ${JSON.stringify(rec)}`); }
+              else if (result.added.length) {
+                const existing = read(proposalFile, '');
+                fs.appendFileSync(proposalFile, (existing && !existing.endsWith('\n') ? '\n' : '') + result.added.map(JSON.stringify).join('\n') + '\n');
+              }
+              added += result.added.length; acquired += fallbackItems.length; save(state);
+              continue;
+            }
+            log(`x.ai が ${response.status}。config/x-ai-tips-topics.json の fallback を設定すれば別レーンで収集できる`);
+            throw new Error(`API HTTP ${response.status}`);
+          }
           throw new Error(`API HTTP ${response.status}`);
         }
         const json = await response.json(); awaitingResponse = false; usage = json.usage;

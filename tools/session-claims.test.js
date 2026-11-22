@@ -436,13 +436,13 @@ test('last assistant declaration wins across records and text blocks, including 
   assert.equal(f.ledger().claims[0].purpose, '〇〇');
 });
 
-test('--filter without --self and without CLAUDE_SESSION_ID exits 2 with message', t => {
+test('--filter without --self and without CLAUDE_SESSION_ID continues with self=none and warns', t => {
   const f = fixture(t);
   const r = spawnSync(process.execPath, [script, '--filter', '--candidates', f.candidates('test')],
     { cwd: f.home, env: f.env, encoding: 'utf8' });
-  assert.equal(r.status, 2);
-  assert.match(r.stderr, /--self/);
-  assert.equal(r.stdout, '');
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, 'test\n');
+  assert.match(r.stderr, /self=none として続行します/);
 });
 
 test('--filter without --self with CLAUDE_SESSION_ID env works normally', t => {

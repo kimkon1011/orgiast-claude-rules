@@ -8,6 +8,22 @@ const TOKEN_URL = 'https://accounts.secure.freee.co.jp/public_api/token';
 const EXPIRY_MARGIN_MS = 120 * 1000;
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
+export function hasFreeeDbConfig() {
+  if (process.env.PURCHASING_APP_DATABASE_URL) return true;
+  const candidates = [join(ROOT, '.env.local'), join(homedir(), 'orgiast-main', '.env.local')];
+  for (const envPath of candidates) {
+    if (!existsSync(envPath)) continue;
+    try {
+      const text = readFileSync(envPath, 'utf8');
+      for (const line of text.split(/\r?\n/)) {
+        const m = line.match(/^\s*(?:export\s+)?PURCHASING_APP_DATABASE_URL\s*=\s*(.*)$/);
+        if (m && m[1].trim()) return true;
+      }
+    } catch { /* permission errors etc. are just "not found" */ }
+  }
+  return false;
+}
+
 function loadDbUrl() {
   if (process.env.PURCHASING_APP_DATABASE_URL) return process.env.PURCHASING_APP_DATABASE_URL;
   // nightly-repo (~/.claude/nightly-repo) has no .env.local: fall back to the main working tree.

@@ -90,6 +90,16 @@ function geminiOnPathEnv() {
   return { PATH: `${dir}${path.delimiter}${process.env[pathKey] || ''}` };
 }
 
+function cursorAgentOnPathEnv() {
+  const dir = workDir();
+  fs.writeFileSync(path.join(dir, process.platform === 'win32' ? 'cursor-agent.CMD' : 'cursor-agent'), '', {
+    encoding: 'utf8',
+    mode: 0o755,
+  });
+  const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH') || 'PATH';
+  return { PATH: `${dir}${path.delimiter}${process.env[pathKey] || ''}` };
+}
+
 function writePrompt(body) {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-')), 'prompt.md');
   fs.writeFileSync(file, body, 'utf8');
@@ -3273,6 +3283,7 @@ test('cursor-default: Hook blocked を成功扱いせず Codex へフォール�
   const result = run(['--force-native', '--cwd', home, '--kind', 'implement', '原因を調査して'], {
     home,
     env: {
+      ...cursorAgentOnPathEnv(),
       CODEX_DO_SKIP_CURSOR_AGENT: '0', CURSOR_API_KEY: 'cursor-test',
       CODEX_DO_MOCK_RESULTS: JSON.stringify([
         { status: 0, output: 'Hook blocked: syntax error near unexpected token `(' },
@@ -3292,6 +3303,7 @@ test('cursor-default: lane: codex は cursor-agent を起動しない', () => {
   const result = run(['--force-native', '--cwd', home, '--kind', 'implement', 'lane: codex\n原因を調査して'], {
     home,
     env: {
+      ...cursorAgentOnPathEnv(),
       CODEX_DO_SKIP_CURSOR_AGENT: '0', CURSOR_API_KEY: 'cursor-test',
       CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: 'Codex completed.' }]),
     },

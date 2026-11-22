@@ -66,7 +66,7 @@ export function detectChanges(models, previous, now = new Date()) {
 
 export function selectFrontierCandidates(changes, { max = frontierLimit() } = {}) {
   return changes.filter(m => m.reason === '新規モデル' && FRONTIER_VENDORS.includes(m.id.split('/')[0]) &&
-    !isAppForbiddenModel(m.id) && !/:batch$/.test(m.id) && // :batch はバッチ専用エンドポイントのため同期評価不可
+    !m.id.startsWith('~') && !isAppForbiddenModel(m.id) && !/:batch$/.test(m.id) && // :batch はバッチ専用エンドポイントのため同期評価不可
     m.modality.split('->')[0]?.split('+').includes('text') && m.modality.split('->')[1] === 'text' &&
     validNumber(m.pricing?.prompt) && validNumber(m.pricing?.completion))
     .sort((a, b) => (b.created || 0) - (a.created || 0) || a.id.localeCompare(b.id))

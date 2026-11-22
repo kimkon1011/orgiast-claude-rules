@@ -11,6 +11,8 @@ const CONFIG = fileURLToPath(new URL('../config/x-ai-tips-topics.json', import.m
 const PURPOSES = ['cost', 'site', 'business'];
 const CATEGORIES = ['cost', 'quality', 'model-release', 'tool', 'prompt-technique', 'other'];
 const DAY = 86400000;
+const CREDIT_BLOCKED_STATUS = 'skip:支払い待ち';
+const CREDIT_BLOCKED_MESSAGE = 'x.ai チームの残高切れ・月次上限のためスキップしました（支払いの承認待ち）。鍵は正常です。';
 const read = (file, fallback) => { try { return fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
 const lines = text => text.split(/\r?\n/).filter(x => x.trim()).map(JSON.parse);
 const normalized = text => String(text).normalize('NFKC').toLowerCase().replace(/\s+/gu, '');
@@ -41,8 +43,16 @@ export function validateState(state) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error('state形式不正');
   for (const key of ['urls', 'hashes']) if (state[key] !== undefined && (!Array.isArray(state[key]) || state[key].some(x => typeof x !== 'string'))) throw new Error(`state形式不正: ${key}`);
   if (state.lastId !== undefined && (!Number.isSafeInteger(state.lastId) || state.lastId < 0)) throw new Error('state形式不正: lastId');
+  if (state.creditBlockedAt !== undefined && typeof state.creditBlockedAt !== 'string') throw new Error('state形式不正: creditBlockedAt');
   if (state.night && (!/^\d{4}-\d{2}-\d{2}$/.test(state.night.date) || !Number.isSafeInteger(state.night.calls) || state.night.calls < 0 || !Number.isFinite(state.night.costUsd) || state.night.costUsd < 0)) throw new Error('state形式不正: night');
   return state;
+}
+export function classifyApiError(status, bodyText) {
+  if (status !== 403) return 'fatal';
+  const text = String(bodyText ?? '');
+  let code;
+  try { code = JSON.parse(text)?.code; } catch {}
+  return code === 'permission-denied' || /credits|spending limit/i.test(text) ? 'credit-blocked' : 'fatal';
 }
 export function canonicalUrl(value) {
   try {
@@ -129,6 +139,10 @@ export async function runCollect(options = {}) {
   let locked = false;
   const save = state => { if (!dryRun) { const tmp = `${stateFile}.tmp`; fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n'); fs.renameSync(tmp, stateFile); } };
   let acquired = 0, added = 0, duplicates = 0, calls = 0, cost = 0;
+  const skipCreditBlocked = () => {
+    log(CREDIT_BLOCKED_MESSAGE);
+    return { status: CREDIT_BLOCKED_STATUS, calls, cost, added, duplicates };
+  };
   try {
     if (!dryRun) { fs.mkdirSync(dir, { recursive: true }); const fd = fs.openSync(lock, 'wx'); fs.closeSync(fd); locked = true; }
     const state = validateState(JSON.parse(read(stateFile, '{}')));
@@ -136,6 +150,8 @@ export async function runCollect(options = {}) {
     if (!Number.isSafeInteger(state.nextTopicIndex) || state.nextTopicIndex < 0 || state.nextTopicIndex >= topicCount) state.nextTopicIndex = 0;
     const startTopicIndex = state.nextTopicIndex;
     const date = japanDate(now);
+    const blockedAt = Date.parse(state.creditBlockedAt);
+    if (Number.isFinite(blockedAt) && japanDate(new Date(blockedAt)) === date) return skipCreditBlocked();
     if (state.night?.date !== date) state.night = { date, calls: 0, costUsd: 0 };
     // 送信直前に予約する。配送後クラッシュでも同じ週に二重送信しない。
     if (new Date(`${date}T00:00:00Z`).getUTCDay() === 1 && state.weekly?.date !== date) {
@@ -165,7 +181,7 @@ export async function runCollect(options = {}) {
       // 未実行の次テーマを予約と同時に保存。全件回れた夜も翌夜の先頭を1つずらす。
       state.nextTopicIndex = (offset === topicCount - 1 ? startTopicIndex + 1 : topicIndex + 1) % topicCount;
       state.night.calls++; state.night.costUsd += config.reservePerCallUsd; calls++; cost += config.reservePerCallUsd; save(state);
-      let usage, actual, failure, signal, serverError = false, awaitingResponse = true;
+      let usage, actual, failure, signal, serverError = false, awaitingResponse = true, creditBlocked = false;
       try {
         signal = AbortSignal.timeout(config.timeoutMs);
         const response = await fetchFn('https://api.x.ai/v1/responses', { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(buildRequest(topic, now, config)), signal });
@@ -174,14 +190,17 @@ export async function runCollect(options = {}) {
           serverError = response.status >= 500 && response.status < 600;
           let responseBody = '', code;
           try {
-            responseBody = (await response.text()).slice(0, 2000);
-            const parsed = JSON.parse(responseBody);
-            if (typeof parsed?.code === 'string' && parsed.code) code = parsed.code;
+            responseBody = await response.text();
+            const parsed = JSON.parse(responseBody.slice(0, 2000));
+            if (typeof parsed?.code === 'string' && parsed.code) code = parsed.code.replaceAll(key, '[REDACTED]').replace(/[\r\n]+/g, ' ');
           } catch {}
-          const creditLimit = response.status === 403 && /credits|spending limit/i.test(responseBody);
-          throw new Error(creditLimit
-            ? 'API HTTP 403 xAIクレジット切れまたは月額上限（console.x.ai の Billing で追加/上限変更）'
-            : `API HTTP ${response.status}${code ? ` (${code})` : ''}`);
+          if (classifyApiError(response.status, responseBody) === 'credit-blocked') {
+            state.creditBlockedAt = now.toISOString();
+            save(state);
+            creditBlocked = true;
+            return skipCreditBlocked();
+          }
+          throw new Error(`API HTTP ${response.status}${code ? ` (${code})` : ''}`);
         }
         const json = await response.json(); awaitingResponse = false; usage = json.usage;
         actual = estimateCost(usage, config.estimatedRates);
@@ -206,7 +225,7 @@ export async function runCollect(options = {}) {
         failedTopics++;
       }
       finally {
-        if (!dryRun) fs.appendFileSync(path.join(dir, 'runs.jsonl'), JSON.stringify({ at: now.toISOString(), night: date, topic, model: 'grok-4.6', usage, costUsd: actual ?? config.reservePerCallUsd, estimated: usage?.cost_in_usd_ticks == null, reserved: actual == null, status: failure ? `error:${failure}` : 'ok', nightCalls: state.night.calls, nightCostUsd: state.night.costUsd }) + '\n');
+        if (!dryRun) fs.appendFileSync(path.join(dir, 'runs.jsonl'), JSON.stringify({ at: now.toISOString(), night: date, topic, model: 'grok-4.6', usage, costUsd: actual ?? config.reservePerCallUsd, estimated: usage?.cost_in_usd_ticks == null, reserved: actual == null, status: creditBlocked ? CREDIT_BLOCKED_STATUS : failure ? `error:${failure}` : 'ok', nightCalls: state.night.calls, nightCostUsd: state.night.costUsd }) + '\n');
       }
     }
     if (failedTopics) throw new Error(`テーマ失敗${failedTopics}件（残りのテーマは処理継続）`);
@@ -218,7 +237,7 @@ export async function runCollect(options = {}) {
 }
 export async function runCli(args, options = {}) {
   const log = options.log || console.log;
-  try { const result = await runCollect({ ...options, ...parseArgs(args), log }); log(result.status); return result.status.startsWith('error:') ? 1 : 0; }
+  try { const result = await runCollect({ ...options, ...parseArgs(args), log }); if (result.status !== CREDIT_BLOCKED_STATUS) log(result.status); return result.status.startsWith('error:') ? 1 : 0; }
   catch (error) { log(`error:${String(error.message).replace(/[\r\n]+/g, ' ')}`); return 1; }
 }
 if (isEntry(import.meta.url)) process.exitCode = await runCli(process.argv.slice(2));

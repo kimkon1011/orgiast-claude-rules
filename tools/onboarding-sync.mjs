@@ -736,37 +736,69 @@ export function measureIndexBytes(index) {
   return { optionalBytes, mandatoryBytes: totalBytes - optionalBytes, totalBytes };
 }
 
+const indexSummaryPattern = /^\s*<!-- index-summary: (.+?) -->\s*$/u;
+
+function compactIndexRule(line, previousLine, compact = true) {
+  const summary = /^\*{0,2}\s*🔴/u.test(line) && previousLine?.match(indexSummaryPattern)?.[1];
+  if (summary) return `**🔴 ${summary}**`;
+  if (!compact) return line;
+  // Keep actionable compound rules whose conditions span multiple sentences.
+  if (/kim が読むのは「本当に最後|全プロジェクトは「後で別アカウント|メールの送信・下書きはすべて|判断軸はオージャスト/u.test(line)) {
+    return line.replace(/（2026-10-30 kim 厳命・全PC全アカウント）/u, '');
+  }
+  const first = (line.match(/^.*?。/u)?.[0] ?? line)
+    .replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/gu, '')
+    .replace(/\*\*(?=。?$)/u, '');
+  const chars = [...first];
+  const concise = chars.length > 120 ? chars.slice(0, 117).join('') + '…' : first;
+  return line.startsWith('**') ? concise + '**' : concise;
+}
+
 export function makeIndex(body) {
   let fence = null;
-  const lines = body.replace(/\r\n/g, '\n').split('\n').filter(line => {
+  const lines = body.replace(/\r\n/g, '\n').split('\n').map(line => {
     const marker = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
     if (fence) {
       if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
-      return false;
+      return '';
     }
-    if (!marker) return true;
+    if (!marker) return line;
     fence = marker[1];
-    return false;
+    return '';
   });
-  const kept = [indexLead];
+  // Older or standalone rule documents retain their full mandatory lines.
+  const compact = lines.some(line => /^# オージャスト Claude Code 共通ルール/u.test(line));
+  const prefacePrefixes = ['応答は常に日本語', 'Workspace の URL は', '人の手間はAIの効率より上', 'トークン効率:'];
+  const preface = compact ? prefacePrefixes.flatMap(prefix => {
+    const i = lines.findIndex(value => value.startsWith(`**🔴 ${prefix}`));
+    return i >= 0 ? [compactIndexRule(lines[i], lines[i - 1])] : [];
+  }) : [];
+  const kept = [indexLead, ...preface];
   const conclusions = new Map();
   let previousNonempty = '';
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (indexSummaryPattern.test(line)) continue;
+    if (compact && line.startsWith('effortLevelの既定')) {
+      kept.push('effortLevel は medium。low 禁止、設計・横断調査のみセッション単位で high。');
+    }
+    if (compact && /^(?:FableはplanIncluded|各PCで自動取込)/u.test(line)) kept.push(line);
     // 絶対ルール直後の太字小見出しは参照先として残す。通常の詳細見出しは展開しない。
     if (/^\*\*\d+(?:\.\d+)+\s+.+\*\*$/.test(line)
+      && (!compact || !/^\*\*(?:1\.3|1\.13|2\.1)\s/u.test(line))
       && /^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(previousNonempty)) {
       kept.push(line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, ''));
     }
     if (line.trim()) previousNonempty = line;
     if (/^#{1,3}(?:\s|$)/.test(line)) {
       // 実文書のタイトルと章見出しは全文へ委ね、参照先になる個別規約の見出しを優先する。
-      const broadOnboardingHeading = /^# オージャスト Claude Code 共通ルール/.test(line) || /^##(?:\s|$)/.test(line);
+      const broadOnboardingHeading = /^# オージャスト Claude Code 共通ルール/.test(line)
+        || /^##(?:\s|$)/.test(line) || (compact && /^### 人の手間はAIの効率より優先/u.test(line));
       if (!broadOnboardingHeading) kept.push(line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, ''));
       // 大見出しは案内だけにし、個別規約（###）の結論と絶対ルールを優先する。
-      for (let j = i + 1; /^###\s/.test(line) && j < lines.length && !/^#{1,3}(?:\s|$)/.test(lines[j]); j++) {
+      for (let j = i + 1; !compact && /^###\s/.test(line) && j < lines.length && !/^#{1,3}(?:\s|$)/.test(lines[j]); j++) {
         const candidate = lines[j].trim();
-        if (!candidate) continue;
+        if (!candidate || indexSummaryPattern.test(candidate)) continue;
         // Absolute rules are emitted in full by the outer loop. A first-sentence
         // preview would duplicate (and sometimes truncate) the same obligation.
         if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(candidate)) break;
@@ -784,13 +816,11 @@ export function makeIndex(body) {
         break;
       }
     }
-    // 絶対ルール・上限規定の行は全文のまま残す。原文は `**🛑 上限…` のように強調記号が先に来るので
-    // 先頭の `*` を許容する(ここを `**🔴` だけにすると 🛑/⚙️/🔁 の4行が索引から落ちる)。
-    // 通常は行末の由来を全文へ委ねる。判断軸は ONBOARDING と配布先で同じ一文を参照する要件のため原文を保つ。
-    if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line) && kept.at(-1) !== line) {
-      kept.push(line.includes('判断軸はオージャストの長期的利益の最大化')
-        ? line
-        : line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）(?=。?\*\*$)/u, ''));
+    if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line)) {
+      // The managed block already links the mission and the preface sets the handoff priority.
+      if (compact && /^\*\*🔴 (?:判断の土台は基本理念|user の操作はゼロが原則|最上位原則: ユーザーの手作業|user の時間は有限)/u.test(line)) continue;
+      const rule = compactIndexRule(line, lines[i - 1], compact);
+      if (!kept.includes(rule)) kept.push(rule);
     }
   }
   const original = kept.join('\n');
@@ -840,9 +870,12 @@ export async function syncMission({ repoDir = repoPath, targetHome = home, isDry
   return true;
 }
 
-export function build(current, body, label) {
+export function build(current, body, label, { sharedMemoryAvailable = true } = {}) {
   current = dedupePreferences(current, body);
-  const block = `${beginPrefix} (自動同期 ${label}) -->\n- 基本理念・判断基準（毎セッション読み込み・迷ったらここに戻る）: @~/.claude/orgiast-mission.md\n${body}\n- 全社共有の知見（kim-PC の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n- 制作・営業・見積・案件の着手前: ~/.claude/knowledge/production-sales/00_INDEX.md を読み、必要な節だけ Grep。全文を丸読みしない。\n${endMarker}`;
+  const sharedMemory = sharedMemoryAvailable
+    ? '@~/.claude/shared-memory/MEMORY.md ／ 詳細は index/*.md と個別ファイルを参照'
+    : '~/.claude/shared-memory/ の *.md を必要時に Grep';
+  const block = `${beginPrefix} (自動同期 ${label}) -->\n- 基本理念・判断基準（毎セッション読み込み・迷ったらここに戻る）: @~/.claude/orgiast-mission.md\n${body}\n- 全社共有の知見（読み取り専用）: ${sharedMemory}\n- 制作・営業・見積・案件の着手前: ~/.claude/knowledge/production-sales/00_INDEX.md を読み、必要な節だけ Grep。全文を丸読みしない。\n${endMarker}`;
   if (current === null) return { updated: block, action: '新規作成' };
   // 行全体が開始マーカー形式そのものである場合だけ対象にする(部分一致は自己言及文書に誤爆する)。
   // ラベル部分の形式は縛らない: 日付形式を固定すると、別形式で導入されたPCで置換に失敗し
@@ -941,7 +974,9 @@ async function main() { try {
   const hash = crypto.createHash('sha256').update(bodyBytes).digest('hex');
   const body = bodyBytes.toString('utf8');
   const current = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
-  const result = build(current, makeIndex(body), now.toISOString().slice(0, 10));
+  const result = build(current, makeIndex(body), now.toISOString().slice(0, 10), {
+    sharedMemoryAvailable: fs.existsSync(path.join(home, '.claude', 'shared-memory', 'MEMORY.md')),
+  });
   const rulesCurrent = fs.existsSync(rulesPath) ? fs.readFileSync(rulesPath) : null;
   if (!dryRun && current === result.updated && rulesCurrent?.equals(bodyBytes)) { save(hash, now); return; }
   if (dryRun) {

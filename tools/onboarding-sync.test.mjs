@@ -7,7 +7,7 @@ import http from 'node:http';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  executionPlan, makeIndex, mergeEnvFile, missingDeclaredKeys, PRESERVE_LOCAL_KEYS,
+  build, executionPlan, makeIndex, mergeEnvFile, missingDeclaredKeys, PRESERVE_LOCAL_KEYS,
   readHead, shouldRunKeys, keySyncIsStale, updateRepositoryFiles,
 } from './onboarding-sync.mjs';
 import { gitBlobSha } from './version-drift.mjs';
@@ -186,6 +186,46 @@ test('index retains critical emoji lines', () => {
   const f = setup(null); run(f); const output = fs.readFileSync(f.target, 'utf8');
   assert.match(output, /🔴 絶対ルール全文/); assert.match(output, /🛑 上限規定/); assert.doesNotMatch(output, /二番目/);
 });
+test('index uses the summary immediately before a red rule', () => {
+  const index = makeIndex([
+    '# オージャスト Claude Code 共通ルール',
+    '<!-- index-summary: 配布用の要約。 -->',
+    '**🔴 規定の本文。続きの文。**',
+  ].join('\n'));
+  assert.ok(index.split('\n').includes('**🔴 配布用の要約。**'));
+  assert.doesNotMatch(index, /規定の本文/);
+});
+test('index shortens unannotated red rules to their first sentence and preserves the length cap', () => {
+  const index = makeIndex([
+    '# オージャスト Claude Code 共通ルール',
+    `**🔴 最初の文。${'続き'.repeat(100)}。**`,
+    `**🔴 ${'長'.repeat(130)}。**`,
+  ].join('\n'));
+  assert.deepEqual(index.split('\n').slice(1), [
+    '**🔴 最初の文。**',
+    `**🔴 ${'長'.repeat(113)}…**`,
+  ]);
+});
+test('index skips summary comments in section previews and requires physical adjacency', () => {
+  const index = makeIndex([
+    '### 個別規定',
+    '<!-- index-summary: 離れた要約。 -->',
+    '```',
+    'サンプル',
+    '```',
+    '**🔴 規定の本文。**',
+  ].join('\n'));
+  assert.deepEqual(index.split('\n').slice(1), ['### 個別規定', '**🔴 規定の本文。**']);
+});
+test('preface uses the adjacent summary and emits the rule only once', () => {
+  const index = makeIndex([
+    '# オージャスト Claude Code 共通ルール',
+    '**🔴 通常の規定。**',
+    '<!-- index-summary: 日本語で回答する。 -->',
+    '**🔴 応答は常に日本語。コードは原文可。**',
+  ].join('\n'));
+  assert.deepEqual(index.split('\n').slice(1), ['**🔴 日本語で回答する。**', '**🔴 通常の規定。**']);
+});
 test('two runs are idempotent', () => {
   const f = setup('外側\n'); run(f); const once = fs.readFileSync(f.target); run(f); const twice = fs.readFileSync(f.target);
   assert.ok(once.equals(twice));
@@ -193,6 +233,38 @@ test('two runs are idempotent', () => {
 test('CLAUDE.md without markers is preserved and receives one block', () => {
   const f = setup(Buffer.from('個人ルール\r\nそのまま', 'utf8')); run(f); const output = fs.readFileSync(f.target, 'utf8');
   assert.ok(output.startsWith('個人ルール\r\nそのまま')); assert.equal((output.match(/BEGIN: オージャスト共通ルール/g) || []).length, 1);
+});
+
+test('配布済みの旧2節は索引があると除去し、1文字編集した節は保持する', () => {
+  const legacy = JSON.parse(fs.readFileSync(new URL('./claude-md-legacy.json', import.meta.url), 'utf8'));
+  const fixtures = [
+    ['## 変更後の検証', '通してから完了報告。\n\n---', '通してから完了報告！\n\n---'],
+    ['## トークン効率', '迷ったら Auto', '迷ったら auto'],
+  ].map(([heading, original, replacement]) => {
+    const entry = legacy.find(({ kind, text }) =>
+      kind === 'section' && text.startsWith(heading + '\n') && text.includes(original) && !text.includes(replacement));
+    assert.ok(entry, heading);
+    return { original: entry.text, edited: entry.text.replace(original, replacement) };
+  });
+
+  const onboarding = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
+  const index = makeIndex(onboarding);
+  const label = '2026-11-19';
+  const local = '個人ルール\r\n\r\n';
+  const { updated: managed } = build(null, index, label);
+  const { updated: previous } = build(null, '', label);
+  const withSections = (...sections) =>
+    local + sections.map(section => section.replaceAll('\n', '\r\n') + '\r\n\r\n').join('');
+
+  const [verify, efficiency] = fixtures;
+  assert.equal(build(withSections(verify.original, efficiency.original) + previous, index, label).updated,
+    local + managed);
+  assert.equal(build(withSections(verify.edited, efficiency.original) + previous, index, label).updated,
+    withSections(verify.edited) + managed);
+  assert.equal(build(withSections(verify.original, efficiency.edited) + previous, index, label).updated,
+    withSections(efficiency.edited) + managed);
+  assert.equal(build(withSections(verify.original, efficiency.original) + previous, '', label).updated,
+    withSections(verify.original, efficiency.original) + previous);
 });
 
 test('mergeEnvFile updates distributed keys and preserves local values and layout', () => {

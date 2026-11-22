@@ -319,3 +319,13 @@ test('knowledge-lock: cache miss verifies server signature before installing and
   await installSharedMemories(options);
   assert.equal(calls, 1);
 });
+
+test('install generates a compact local index when the remote only carries notes', async t => {
+  const f = receiver(t);
+  const source = remote({ 'note.md': 'shared note' });
+  await installSharedMemories({ ...f.options, fetchImpl: source.fetchImpl });
+  const index = path.join(f.dir, 'MEMORY.md');
+  assert.match(fs.readFileSync(index, 'utf8'), /index\/\*\.md.*Grep/);
+  await installSharedMemories({ ...f.options, fetchImpl: source.fetchImpl });
+  assert.match(fs.readFileSync(index, 'utf8'), /index\/\*\.md.*Grep/);
+});

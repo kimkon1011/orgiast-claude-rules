@@ -16,3 +16,53 @@ test('16 レポートはbypassedCount未指定でも0件を表示',()=>{const re
 test('17 レポートはunreadableと要調査を分けて表示',()=>{const results=Object.fromEntries(registry.rules.map(r=>[r.id,{applicable:0,violation:0,bypass:0,examples:[]}]));const enforcement=Object.fromEntries(registry.rules.map(r=>[r.id,{mode:'warn'}]));const report=makeReport(registry,results,enforcement,7,{skipInfo:{available:true,records:[{reasonCode:'unreadable',reason:'read error'},{reasonCode:'no-path',reason:'path missing'}]}});assert.match(report,/判定対象なし（transcript未生成・既知\/対応不要）1件/);assert.match(report,/要調査 1件（直近: path missing）/);});
 test('18 レポートで要調査0件なら直近理由を付けない',()=>{const results=Object.fromEntries(registry.rules.map(r=>[r.id,{applicable:0,violation:0,bypass:0,examples:[]}]));const enforcement=Object.fromEntries(registry.rules.map(r=>[r.id,{mode:'warn'}]));const report=makeReport(registry,results,enforcement,7,{skipInfo:{available:true,records:[{reasonCode:'unreadable',reason:'known'}]}});assert.match(report,/要調査 0件/);assert.doesNotMatch(report,/（直近:/);});
 test('19 reasonCodeなしの旧記録は要調査と分けて表示',()=>{const results=Object.fromEntries(registry.rules.map(r=>[r.id,{applicable:0,violation:0,bypass:0,examples:[]}]));const enforcement=Object.fromEntries(registry.rules.map(r=>[r.id,{mode:'warn'}]));const report=makeReport(registry,results,enforcement,7,{skipInfo:{available:true,records:[{reason:'legacy'}]}});assert.match(report,/旧記録 1件/);assert.match(report,/要調査 0件/);assert.doesNotMatch(report,/（直近:/);});
+
+test('最終応答の品質未達だけを違反に数え、passed とブロックされた下書きは除く', async () => {
+  const { auditSessions } = await import('./rule-compliance-loop.mjs');
+  const handoff = 'Supabase Dashboardを開いて SQL を実行してください。';
+  const message = (type, content) => ({ type, message: { content } });
+  const session = (sessionId, ...events) => ({ sessionId, events });
+  const record = (sessionId, verdict) => ({ sessionId, verdict, excerpt: handoff });
+  const sessions = [
+    session('rewritten', message('assistant', handoff),
+      message('user', 'Stop hook feedback: 修正してください'),
+      message('assistant', 'こちらで対応済みです。')),
+    session('blocked', message('assistant', handoff)),
+    session('passed', message('assistant', handoff)),
+    session('cap', message('assistant', handoff)),
+    session('no-record', message('assistant', handoff)),
+    session('intermediate', message('assistant', handoff),
+      message('assistant', [{ type: 'tool_use', name: 'Bash' }])),
+  ];
+  const ledger = [record('rewritten', 'blocked'), record('blocked', 'blocked'),
+    record('passed', 'passed'), record('cap', 'blocked'), record('cap', 'bypassed')];
+  const result = auditSessions(sessions, registry, catalog, ledger)['handoff-quality-only'];
+  assert.equal(result.applicable, 3);
+  assert.equal(result.violation, 2);
+  assert.equal(result.unmeasured, 1);
+  assert.deepEqual(result.examples.map(example => example.sessionId), ['cap', 'no-record']);
+});
+
+test('Stop ランナーの通常通過と再試行上限を区別する', async t => {
+  const { runAudit } = await import('./rule-compliance-loop.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'handoff-audit-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const claude = path.join(home, '.claude');
+  const projects = path.join(claude, 'projects', 'fixture');
+  fs.mkdirSync(projects, { recursive: true });
+  const excerpt = 'Supabase Dashboardを開いて SQL を実行してください。';
+  const ts = new Date().toISOString();
+  const runner = [];
+  for (const [sessionId, verdict] of [['normal', 'pass'], ['cap', 'pass_after_cap']]) {
+    const event = { type: 'assistant', timestamp: ts, message: { content: excerpt } };
+    fs.writeFileSync(path.join(projects, `${sessionId}.jsonl`), JSON.stringify(event) + '\n');
+    runner.push({ sessionId, verdict, excerpt, ts,
+      blockedBy: sessionId === 'cap' ? ['handoff-quality-gate'] : [] });
+  }
+  fs.writeFileSync(path.join(claude, 'stop-gate-runner-ledger.jsonl'),
+    runner.map(row => JSON.stringify(row)).join('\n') + '\n');
+  const result = runAudit({ home }).results['handoff-quality-only'];
+  assert.equal(result.applicable, 2);
+  assert.equal(result.violation, 1);
+  assert.deepEqual(result.examples.map(example => example.sessionId), ['cap']);
+});

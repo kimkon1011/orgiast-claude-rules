@@ -909,6 +909,9 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       if (!item) throw new Error('指定された受信箱IDが見つかりません');
       stdout(args.includes('--json') ? JSON.stringify(item) : redactSecrets(item.text));
     } else if (args.includes('--add')) {
+      const positionalKind = args[args.indexOf('--add') + 1];
+      const kind = args.includes('--kind') ? value('--kind')
+        : ['ask', 'info', 'deadline'].includes(positionalKind) ? positionalKind : 'info';
       let doneWhen;
       if (args.includes('--done-when-gmail')) {
         const raw = value('--done-when-gmail');
@@ -916,7 +919,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
         if (pipe === -1) throw new Error('--done-when-gmail は "user|query" 形式で指定してください');
         doneWhen = { gmail: { user: raw.slice(0, pipe).trim(), query: raw.slice(pipe + 1).trim() } };
       }
-      const item = await addItem(home, { urgent: args.includes('--urgent'), text: fs.readFileSync(value('--body-file'), 'utf8'), kind: args.includes('--kind') ? value('--kind') : 'info', key: args.includes('--key') ? value('--key') : undefined, dedupeKey: args.includes('--dedupe-key') ? value('--dedupe-key') : undefined, replaceExisting: args.includes('--replace-existing'), due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '', ...(doneWhen ? { doneWhen } : {}) });
+      const item = await addItem(home, { urgent: args.includes('--urgent'), text: fs.readFileSync(value('--body-file'), 'utf8'), kind, key: args.includes('--key') ? value('--key') : undefined, dedupeKey: args.includes('--dedupe-key') ? value('--dedupe-key') : undefined, replaceExisting: args.includes('--replace-existing'), due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '', ...(doneWhen ? { doneWhen } : {}) });
       stdout(JSON.stringify({ id: item.id, status: item.status, forwarded: item.status === 'forwarded' }));
     } else if (args.includes('--answer')) stdout(JSON.stringify(answerItem(home, value('--answer'), fs.readFileSync(value('--body-file'), 'utf8'), process.env.CLAUDE_SESSION_ID || '')));
     else if (args.includes('--lookup')) stdout(JSON.stringify(lookupAnswers(home, value('--lookup')), null, 2));

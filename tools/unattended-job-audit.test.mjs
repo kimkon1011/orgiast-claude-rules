@@ -39,6 +39,37 @@ test('missed never-run, failed codes, MorningBatch interrupted is not failed', (
   for (const lastTaskResult of [0, 267009, 267011, 267014]) assert.deepEqual(auditTasks([task({ taskName: 'OrgiastMorningBatch', lastTaskResult })], {}, now), []);
   assert.deepEqual(auditTasks([task({ triggers: [{ type: 'MSFT_TaskLogonTrigger' }], lastTaskResult: 1 })], {}, now), []);
 });
+
+test('not missed if nextRunTime is in the future', () => {
+  // Simulate the real case: last run was recent but next run is in the future
+  const auditTime = Date.parse('2026-11-22T16:07:00+09:00'); // Current time
+  const lastRunTime = '2026-11-22T16:06:00+09:00'; // Just 1 minute ago
+  const nextRunTime = '2026-11-22T18:05:59+09:00'; // In the future (2 hours)
+
+  // This should NOT be marked as missed because there's a future scheduled run
+  const taskWithFutureRun = task({
+    taskName: '\\OrgiastLoginHealth',
+    state: 'Ready',
+    lastRunTime,
+    nextRunTime,
+    lastTaskResult: 0
+  });
+
+  // Should be empty array (no findings) because task is not actually missed
+  assert.deepEqual(auditTasks([taskWithFutureRun], {}, auditTime), []);
+
+  // Contrast: if there's no future run time, it would be marked as missed if too old
+  const taskWithoutFutureRun = task({
+    taskName: '\\OrgiastLoginHealth',
+    state: 'Ready',
+    lastRunTime: '2026-11-20T10:00:00+09:00', // Very old
+    nextRunTime: null,
+    lastTaskResult: 0
+  });
+
+  // This SHOULD be marked as missed because it's old and has no future run scheduled
+  assert.equal(auditTasks([taskWithoutFutureRun], {}, auditTime)[0].kind, 'missed');
+});
 test('disabled / missing required and ignored optional tasks', () => {
   const opts = { required: ['OrgiastCostImproveLoop', 'OrgiastMissing'] };
   assert.deepEqual(auditTasks([task({ state: 'Disabled' })], {}, now, opts).map(f => f.kind), ['disabled_required', 'missing_required']);

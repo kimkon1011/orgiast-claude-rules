@@ -123,6 +123,23 @@ export const normalizeInboxText = text => String(text ?? '')
   .replace(/\s+/g, ' ')
   .trim()
   .toLowerCase();
+const explicitQuestion = text => /^(?:【要対応・kim の判断待ち[^】]*】|【早めの対応が必要[^】]*】)/.test(text)
+  || /(?:^|\n)(?:あなたの返事待ち|kim (?:の判断待ち|がすること)|判断してほしいこと)[:：]/i.test(text)
+  || /(?:A\s*[\/／]\s*B|AかB|A・B).{0,80}(?:返答|回答|選択|選ん|判断)/is.test(text);
+export function isNonQuestionAsk(body) {
+  const text = String(body ?? '').trim();
+  if (!text || explicitQuestion(text)) return false;
+  return /^✅\s*check 達成:/.test(text)
+    || (text.includes('セッションの目的:') && text.includes('作業ID:'))
+    || (text.includes('gate pc=') && text.includes('verdict='));
+}
+function nonQuestionPattern(body) {
+  const text = String(body ?? '').trim();
+  if (/^✅\s*check 達成:/.test(text)) return 'check-achieved';
+  if (text.includes('セッションの目的:') && text.includes('作業ID:')) return 'session-status';
+  if (text.includes('gate pc=') && text.includes('verdict=')) return 'gate-diagnostic';
+  return 'unknown';
+}
 const contentDedupeKey = item => `${item.kind}\n${normalizeInboxText(item.text)}`;
 const legacyInfoKey = text => text.replace(/^【[^\r\n]*】[^\S\r\n]*(?:\r?\n|$)/, '')
   .replace(/\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?/g, '#')
@@ -265,6 +282,29 @@ export function dedupeExisting(home, { apply = false } = {}) {
       });
     }
     return { before: open.length, after: open.length - merged, groups: duplicateGroups.length, merged, applied: apply };
+  };
+  return apply ? locked(home, 'info-aggregation', inspect) : inspect();
+}
+
+function backupStamp(now = new Date()) {
+  const part = value => String(value).padStart(2, '0');
+  return `${now.getFullYear()}${part(now.getMonth() + 1)}${part(now.getDate())}-${part(now.getHours())}${part(now.getMinutes())}${part(now.getSeconds())}`;
+}
+export function sweepNonQuestions(home, { apply = false, now = new Date() } = {}) {
+  const inspect = () => {
+    const matches = listItems(home, { status: 'open' }).filter(item => item.kind === 'ask' && isNonQuestionAsk(item.text));
+    const patterns = { 'check-achieved': 0, 'session-status': 0, 'gate-diagnostic': 0 };
+    for (const item of matches) patterns[nonQuestionPattern(item.text)]++;
+    let backup = null;
+    if (apply && matches.length) {
+      backup = path.join(home, '.claude', `kim-inbox.bak.${backupStamp(now)}`);
+      // cpSync throws before any ledger mutation; never continue without a complete backup.
+      fs.cpSync(directory(home), backup, { recursive: true, errorOnExist: true, force: false });
+      for (const match of matches) update(home, match.id, current => {
+        if (current.status === 'open' && current.kind === 'ask' && isNonQuestionAsk(current.text)) current.status = 'seen';
+      });
+    }
+    return { count: matches.length, patterns, preview: matches.slice(0, 20).map(item => ({ id: item.id, text: String(item.text || '').replace(/[\r\n]+/g, ' ').slice(0, 60) })), applied: apply, backup };
   };
   return apply ? locked(home, 'info-aggregation', inspect) : inspect();
 }
@@ -1000,6 +1040,13 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       const result = dedupeExisting(home, { apply: args.includes('--apply') });
       stdout(`kim-inbox dedupe-existing${result.applied ? ' (apply)' : ' (dry)'}: ${result.before}件 → ${result.after}件（重複 ${result.merged}件、${result.groups}グループ）`);
     }
+    else if (args.includes('--sweep-nonquestions')) {
+      const result = sweepNonQuestions(home, { apply: args.includes('--apply') });
+      stdout(`kim-inbox sweep-nonquestions${result.applied ? ' (apply)' : ' (dry-run)'}: ${result.count}件`);
+      stdout(`内訳: check-achieved=${result.patterns['check-achieved']} / session-status=${result.patterns['session-status']} / gate-diagnostic=${result.patterns['gate-diagnostic']}`);
+      for (const item of result.preview) stdout(`${item.id} ${item.text}`);
+      if (result.backup) stdout(`backup: ${result.backup}`);
+    }
     else if (args.includes('--archive-closed')) {
       const apply = args.includes('--apply');
       if (apply && args.includes('--dry')) throw new Error('--dry と --apply は併用できません');
@@ -1050,7 +1097,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
         for (const [source, count] of sourceTop) lines.push(`  ${source}: ${count}件`);
         stdout(lines.join('\n'));
       }
-    } else throw new Error('--add / --answer / --seen / --drop / --show / --list / --status / --context / --compact / --merge-into <key> --ids <id,...> / --dedupe-existing [--dry|--apply] / --sweep-info [--apply] / --auto-close を指定してください');
+    } else throw new Error('--add / --answer / --seen / --drop / --show / --list / --status / --context / --compact / --merge-into <key> --ids <id,...> / --dedupe-existing [--dry|--apply] / --sweep-info [--apply] / --sweep-nonquestions [--apply] / --auto-close を指定してください');
     return 0;
   } catch (error) { stderr(`kim-inbox: ${clean(error.message).replace(/[\r\n]+/g, ' ')}`); return args.includes('--context') ? 0 : 1; }
 }

@@ -1219,7 +1219,7 @@ export async function pollOnce(deps = {}) {
             }
             updateInbox(mail.id, current => current && ({ ...current, decisionRegisteredAt: new Date(now()).toISOString(), decisionId: record.id }), { home });
             log('decision-request-skipped', { id: mail.id, from: mail.from });
-            if (mail.kind === 'prompt') writeJson(path.join(dir, 'fleet-agent-results', `${mail.id}.json`), { exitCode: null, outputTail: '判断依頼を含むためヘッドレス実行では回答しません（decision-request-skipped）。kim の判断待ちです。' });
+            if (mail.kind === 'prompt') writeJson(path.join(dir, 'fleet-agent-results', `${mail.id}.json`), { exitCode: null, reason: 'decision-request-skipped', outputTail: '判断依頼を含むためヘッドレス実行では回答しません（decision-request-skipped）。kim の判断待ちです。' });
           }
           const latest = readJson(fileOf(mail.id));
           if (!latest.decisionAckAt && !automatic(mail) && nextHop(mail) < 3) {
@@ -1294,7 +1294,7 @@ export async function pollOnce(deps = {}) {
             if (!hubExecution) await state(mail.id, 'seen', { seenBy: 'headless' });
             const runnerArgs = [path.join(ownRepo, 'tools', 'fleet-task-runner.mjs'), '--id', mail.id, '--home', home];
             const failedStart = () => {
-              writeJson(resultFile, { exitCode: null, outputTail: '実行失敗: runner 起動失敗' });
+              writeJson(resultFile, { exitCode: null, reason: 'runner-start-failed', outputTail: '実行失敗: runner 起動失敗' });
               err('fleet-mail: runner 起動失敗=1');
             };
             try {

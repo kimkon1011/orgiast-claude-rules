@@ -13,21 +13,21 @@ function fixture(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const repo = path.join(root, 'repo');
   const remote = path.join(root, 'remote.git');
+  const gitRun = (dir, args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] });
   const git = (dir, args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   fs.mkdirSync(repo);
-  git(root, ['init', '--bare', remote]);
-  git(repo, ['init', '-b', 'main']);
-  git(repo, ['config', 'user.name', 'Test']);
-  git(repo, ['config', 'user.email', 'test@example.invalid']);
+  gitRun(root, ['init', '--bare', remote]);
+  gitRun(repo, ['init', '-b', 'main']);
+  gitRun(repo, ['config', 'user.name', 'Test']);
+  gitRun(repo, ['config', 'user.email', 'test@example.invalid']);
   fs.mkdirSync(path.join(repo, 'tools'));
   fs.writeFileSync(path.join(repo, 'tools', 'auto-session.mjs'), '');
   fs.writeFileSync(path.join(repo, 'tracked'), 'original');
-  git(repo, ['add', 'tracked', 'tools/auto-session.mjs']);
-  git(repo, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'initial']);
-  git(repo, ['remote', 'add', 'origin', remote]);
-  git(repo, ['push', '-u', 'origin', 'main']);
+  gitRun(repo, ['add', 'tracked', 'tools/auto-session.mjs']);
+  gitRun(repo, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'initial']);
+  gitRun(repo, ['remote', 'add', 'origin', remote]);
+  gitRun(repo, ['push', '-u', '--quiet', 'origin', 'main']);
   return { root, repo, remote, git };
-}
 
 for (const pushFails of [false, true]) test(`dirty guard preserves and commits tracked/untracked changes; pushFails=${pushFails}`, (t) => {
   const { root, repo, remote, git } = fixture(t);

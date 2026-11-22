@@ -81,8 +81,11 @@ export function buildWatchdogMessage({ found, fixed, problems, dryRun = false, n
 
 function appendLogLine(logFile) {
   return (line) => {
-    fs.mkdirSync(path.dirname(logFile), { recursive: true });
-    fs.appendFileSync(logFile, `${line}\n`, 'utf8');
+    // run-hidden.vbs already redirects stdout/stderr to the same logFile path
+    // via cmd.exe >> ... 2>&1. fs.appendFileSync would conflict with the open
+    // handle held by cmd.exe, causing EBUSY on Windows. Use console.log instead
+    // (it goes to stdout, which run-hidden.vbs captures to the log file).
+    console.log(line);
   };
 }
 

@@ -49,9 +49,6 @@ user に操作・確認・入力を頼むときは、その依頼と同じ応答
 ### 1.1 自動化・手渡しの原則
 
 **社員・他PCに状況を聞く前も、user に聞く前と同じく自分で照会する（応募・メール・シート・Discord は Claude が読める）。**
-
-要対応一覧（TODO・未返信）を金さんに出す前に、Gmail・LINE・Discord など全チャネルで対応状況を照会し、対応済みの項目を除く。
-
 **🔴 判断の土台は基本理念（@~/.claude/orgiast-mission.md）。目的は user の生産性・長期的利益が最優先。乖離時は理念優先で rules repo へ修正提案。承認必須事項（送信・削除・課金等）は理念を理由に飛ばさない。**
 **🔴 応答は常に日本語（コード・識別子は原文可）。Stop hook の書き直しも日本語を保つ。response-language-gate が検査し、setup --converge が language: japanese を配布する。**
 
@@ -1542,8 +1539,6 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 5. **共有アカウント（seisaku-team@ 等）の Console にカードを登録しない**。アプリの API キーは原則 kim@ の監視済み組織で発行し、キー名にアプリ名を付ける（§1.12 の所有権宣言に「Anthropic 組織名」を含める）。
 6. **自動チャージ（auto-reload）は「上限付き」でだけ ON にする**。Anthropic Console は Settings → Limits の月間上限を必ず設定し、上限の無い自動チャージを放置しない（§2.8.4 の「オートチャージ ON」はこの上限とセット）。
 
-
-
 **2.8.6 日中と夜間の作業振り分け（グロボ・ふわ・ドット・Claude Code / 2026-11-19 kim指示）**
 
 **急ぎでない作業と、金さんの返事が不要な作業は夜間に回し、日中は承認・返事が要るものと急ぎのものに集中する。** 対象はグロボ（Grok Bot）・ふわ（Meta Muse）・ドット（ChatGPT の Dots）・各PCの Claude Code。やり取りを減らし、日中の稼働を上げるため。
@@ -1569,8 +1564,6 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 **2.8.7 Cursor Ultra を既定の担当にする（2026-11-21 kim指示）**
 
 Cursor Ultra（定額 $200/月）は「上限のときの代わり」ではなく、次の作業の既定の担当とする。品質を落とす格下げはしない。
-
-
 
 - **Cursor が既定**: 無人の定期ジョブ（見回りの集計、期日の回収、くらしのマーケットの見回りなど）、調べ物・集計・整形・要約・下書きのたたき台、コード修正の PR。`codex-do` は implement / verify / investigate / summarize / classify で、ログイン済みの cursor-agent を Codex や llm-ask より先に起動する。
 - **Claude Code に残すもの**: 金さん向けの最終判断と、社外文面の最終確認だけ。指示にその旨を書くか、`lane: claude` / `[CLAUDE-FINAL]` を付ける。

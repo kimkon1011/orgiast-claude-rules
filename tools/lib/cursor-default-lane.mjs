@@ -43,6 +43,7 @@ export function shouldPreferCursorAgent({
   if (String(env.CODEX_DO_SKIP_CURSOR_AGENT || '') === '1') return false;
   if (String(env.CURSOR_USAGE_HALT || '') === '1') return false;
   if (halt) return false;
+  if (/lane:\s*codex\b/i.test(String(instruction || ''))) return false;
   if (isClaudeFinalOnly(instruction)) return false;
   return isCursorDefaultKind(kind);
 }

@@ -3264,6 +3264,41 @@ test('cheap-first validation: actual changes succeed; invalid output fails even 
   assert.equal(cheapFirstFailureReason({ kind: 'implement', treeChanged: true, result: { output: '[claude-code:unrecognized_model] {}', stderr: '', status: 0 } }), 'unrecognized_model');
   // 警告行＋出力あり＋status 1 → 'unrecognized_model'
   assert.equal(check('done', { result: { output: 'done', stderr: '[claude-code:unrecognized_model]', status: 1 } }), 'unrecognized_model');
+  assert.equal(check('Hook blocked: syntax error near unexpected token `('), 'hook_blocked');
+  assert.equal(check('PreToolUse フックで拒否され、ツールを実行できませんでした'), 'hook_blocked');
+});
+
+test('cursor-default: Hook blocked を成功扱いせず Codex へフォールバックする', () => {
+  const home = workDir();
+  const result = run(['--force-native', '--cwd', home, '--kind', 'implement', '原因を調査して'], {
+    home,
+    env: {
+      CODEX_DO_SKIP_CURSOR_AGENT: '0', CURSOR_API_KEY: 'cursor-test',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify([
+        { status: 0, output: 'Hook blocked: syntax error near unexpected token `(' },
+        { status: 0, output: 'Codex completed.' },
+      ]),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /cursor-agent failed validation \(hook_blocked\)/);
+  assert.match(result.stderr, /cursor-agent が失敗したため従来の経路へ進みます/);
+  assert.match(result.stdout, /executor=codex/);
+  assert.equal(readLedger(home).at(-1).provider, 'codex');
+});
+
+test('cursor-default: lane: codex は cursor-agent を起動しない', () => {
+  const home = workDir();
+  const result = run(['--force-native', '--cwd', home, '--kind', 'implement', 'lane: codex\n原因を調査して'], {
+    home,
+    env: {
+      CODEX_DO_SKIP_CURSOR_AGENT: '0', CURSOR_API_KEY: 'cursor-test',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: 'Codex completed.' }]),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout + result.stderr, /cursor-default/);
+  assert.match(result.stdout, /executor=codex/);
 });
 
 for (const output of ['', '\uFFFD\uFFFD']) {
@@ -3573,7 +3608,7 @@ test('isCursorAgentLoggedIn はフラグ・CURSOR_API_KEY・認証ファイル�
 
 test('resolveFallbackBackends は implement/verify でログイン済みの cursor-agent を有料 OpenRouter より前に置く', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
-  const options = { executableAvailable: () => true, cursorAgentLoggedIn: true };
+  const options = { executableAvailable: () => true, cursorAgentLoggedIn: true, env: {} };
   assert.deepEqual(resolveFallbackBackends(dir, { ...options, taskKind: 'implement' }).map((b) => b.name), [
     'cursor-agent', 'cheap-code:deepseek', 'openrouter-code',
   ]);
@@ -3585,7 +3620,7 @@ test('resolveFallbackBackends は implement/verify でログイン済みの curs
 
 test('resolveFallbackBackends は summarize/classify/investigate でもログイン済みなら cursor-agent を先頭に置く', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
-  const options = { executableAvailable: () => true, cursorAgentLoggedIn: true };
+  const options = { executableAvailable: () => true, cursorAgentLoggedIn: true, env: {} };
   for (const taskKind of ['summarize', 'classify', 'investigate']) {
     const names = resolveFallbackBackends(dir, { ...options, taskKind }).map((b) => b.name);
     assert.equal(names[0], 'cursor-agent', taskKind);
@@ -3613,7 +3648,7 @@ test('resolveFallbackBackends は local.json があっても implement/verify �
   const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
   const claude = path.join(dir, '.claude');
   fs.mkdirSync(claude, { recursive: true });
-  const options = { executableAvailable: () => true, cursorAgentLoggedIn: true, taskKind: 'implement' };
+  const options = { executableAvailable: () => true, cursorAgentLoggedIn: true, taskKind: 'implement', env: {} };
   fs.writeFileSync(path.join(claude, 'codex-fallback-order.json'), JSON.stringify(['cheap-code:deepseek', 'openrouter-code']) + '\n');
   assert.deepEqual(resolveFallbackBackends(dir, options).map((b) => b.name), ['cursor-agent', 'cheap-code:deepseek', 'openrouter-code']);
   fs.writeFileSync(path.join(claude, 'codex-fallback-order.local.json'), JSON.stringify(['cheap-code:deepseek', 'openrouter-code']) + '\n');

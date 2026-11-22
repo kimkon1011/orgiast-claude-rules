@@ -476,6 +476,11 @@ export function decideExecutionPolicy({ instruction = '', noFallback = false } =
 // A zero exit code alone does not prove that an implementation was delivered.
 export function cheapFirstFailureReason({ kind, result, treeChanged, irreversible = false }) {
   const combined = `${result.output || ''}\n${result.stderr || ''}`;
+  // Cursor Agent imports Claude Code hooks from ~/.claude/settings.json. On Windows it can
+  // run their PowerShell-prefixed command through bash, reject every tool, then still exit 0.
+  if (/\bHook blocked\b|\bpretooluse\b[^\r\n]*(?:blocked|denied|refused)|(?:blocked|denied|refused)[^\r\n]*\bpretooluse\b|PreToolUse\s*フック[^\r\n]*(?:拒否|ブロック)/i.test(combined)) {
+    return 'hook_blocked';
+  }
   if (isLaneIncompatible(result.output, result.stderr, result.status)) return 'unrecognized_model';
   const warned = hasModelWarning(combined);
   const output = warned ? modelWarningRemainder(result.output, result.stderr) : String(result.output || '');

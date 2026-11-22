@@ -27,8 +27,8 @@ test('dirOf の解決結果は絶対パスで実在し cwd に依存しない', 
 });
 
 // 実 git を叩く既定実装と同じシグネチャ (dir, args) の関数。
-function realGit(dir, args) {
-  return execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+function realGit(dir, args, stdio) {
+  return execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: stdio ?? ['ignore', 'pipe', 'pipe'] });
 }
 
 function fixture(t, { featureBranch = false, squashedMerge = false, cherryPickedFirst = false, ignoredArtifact = false } = {}) {
@@ -36,49 +36,50 @@ function fixture(t, { featureBranch = false, squashedMerge = false, cherryPicked
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const repo = path.join(root, 'repo');
   fs.mkdirSync(repo);
+  const gitRun = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] });
   const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  git('init', '-b', 'main');
-  git('config', 'user.name', 'Test');
-  git('config', 'user.email', 'test@example.invalid');
+  gitRun('init', '-b', 'main');
+  gitRun('config', 'user.name', 'Test');
+  gitRun('config', 'user.email', 'test@example.invalid');
   fs.writeFileSync(path.join(repo, 'a.txt'), 'base');
-  git('add', '.');
-  git('commit', '-m', 'base');
+  gitRun('add', '.');
+  gitRun('commit', '-m', 'base');
 
   if (ignoredArtifact) {
     fs.writeFileSync(path.join(repo, '.gitignore'), '.stall-sweeper/\n');
-    git('add', '.gitignore');
-    git('commit', '-m', 'ignore runtime artifacts');
-    git('checkout', '-b', 'rescue/ignored', 'main');
+    gitRun('add', '.gitignore');
+    gitRun('commit', '-m', 'ignore runtime artifacts');
+    gitRun('checkout', '-b', 'rescue/ignored', 'main');
     fs.mkdirSync(path.join(repo, '.stall-sweeper'));
     fs.writeFileSync(path.join(repo, '.stall-sweeper', 'probe.evidence.md'), 'runtime evidence\n');
-    git('add', '-f', '.stall-sweeper/probe.evidence.md');
-    git('commit', '-m', 'rescue ignored artifact');
-    git('checkout', 'main');
+    gitRun('add', '-f', '.stall-sweeper/probe.evidence.md');
+    gitRun('commit', '-m', 'rescue ignored artifact');
+    gitRun('checkout', 'main');
   }
 
   // rescue/u1: a.txt を x に変更
-  git('checkout', '-b', 'rescue/u1', 'main');
+  gitRun('checkout', '-b', 'rescue/u1', 'main');
   fs.writeFileSync(path.join(repo, 'a.txt'), 'x');
-  git('add', '.');
-  git('commit', '-m', 'u1 change');
-  git('checkout', 'main');
+  gitRun('add', '.');
+  gitRun('commit', '-m', 'u1 change');
+  gitRun('checkout', 'main');
 
   // rescue/u2: u1 と同一変更(内容が同じなのでパッチが一致し duplicate になる)
-  git('checkout', '-b', 'rescue/u2', 'main');
+  gitRun('checkout', '-b', 'rescue/u2', 'main');
   fs.writeFileSync(path.join(repo, 'a.txt'), 'x');
-  git('add', '.');
-  git('commit', '-m', 'u2 same change');
-  git('checkout', 'main');
+  gitRun('add', '.');
+  gitRun('commit', '-m', 'u2 same change');
+  gitRun('checkout', 'main');
 
   // rescue/cov: main と同一位置(変更コミット無し)
-  git('branch', 'rescue/cov', 'main');
+  gitRun('branch', 'rescue/cov', 'main');
 
   // rescue/u3: b.txt を新規追加
-  git('checkout', '-b', 'rescue/u3', 'main');
+  gitRun('checkout', '-b', 'rescue/u3', 'main');
   fs.writeFileSync(path.join(repo, 'b.txt'), 'new');
-  git('add', '.');
-  git('commit', '-m', 'u3 add b');
-  git('checkout', 'main');
+  gitRun('add', '.');
+  gitRun('commit', '-m', 'u3 add b');
+  gitRun('checkout', 'main');
 
   // feat/f1: u3 と同一変更(別名の枝に保全されている = covered-by-branch の材料)
   if (featureBranch) {

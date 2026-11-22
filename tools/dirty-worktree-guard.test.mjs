@@ -27,13 +27,13 @@ function fixture(t) {
   gitRun(repo, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'initial']);
   gitRun(repo, ['remote', 'add', 'origin', remote]);
   gitRun(repo, ['push', '-u', '--quiet', 'origin', 'main']);
-  return { root, repo, remote, git };
+  return { root, repo, remote, git, gitRun };
 
 for (const pushFails of [false, true]) test(`dirty guard preserves and commits tracked/untracked changes; pushFails=${pushFails}`, (t) => {
-  const { root, repo, remote, git } = fixture(t);
+  const { root, repo, remote, git, gitRun } = fixture(t);
   fs.writeFileSync(path.join(repo, 'tracked'), 'changed');
   fs.writeFileSync(path.join(repo, 'untracked'), 'precious');
-  if (pushFails) git(repo, ['remote', 'set-url', 'origin', path.join(root, 'missing')]);
+  if (pushFails) gitRun(repo, ['remote', 'set-url', 'origin', path.join(root, 'missing')]);
   const logs = [];
   const guard = createDirtyWorktreeGuard({ home: root, log: s => logs.push(s) });
   assert.equal(guard(repo), false);
@@ -63,19 +63,19 @@ test('status and commit errors fail closed and preserve untracked files', t => {
 });
 
 for (const dirty of [true, false]) test(`launcher real git integration: dirty=${dirty}`, async t => {
-  const { root, repo, git } = fixture(t);
+  const { root, repo, git, gitRun } = fixture(t);
   const pinned = path.join(root, 'pinned');
   const oldFallback = `${pinned}-fallback-20000101-000000`;
-  git(repo, ['worktree', 'add', '--detach', pinned, 'origin/main']);
-  if (dirty) git(repo, ['worktree', 'add', '--detach', oldFallback, 'origin/main']);
+  gitRun(repo, ['worktree', 'add', '--detach', pinned, 'origin/main']);
+  if (dirty) gitRun(repo, ['worktree', 'add', '--detach', oldFallback, 'origin/main']);
   if (dirty) for (const dir of [repo, pinned, oldFallback]) {
     fs.writeFileSync(path.join(dir, 'tracked'), 'changed');
     fs.writeFileSync(path.join(dir, 'untracked'), 'precious');
   }
   if (!dirty) {
-    git(repo, ['commit', '--allow-empty', '-m', 'upstream']);
-    git(repo, ['push', 'origin', 'main']);
-    git(repo, ['checkout', '--detach', 'HEAD~1']);
+    gitRun(repo, ['commit', '--allow-empty', '-m', 'upstream']);
+    gitRun(repo, ['push', '--quiet', 'origin', 'main']);
+    gitRun(repo, ['checkout', '--detach', 'HEAD~1']);
   }
   const previous = [process.env.ORGIAST_REPO, process.env.ORGIAST_AUTO_SESSION_TREE];
   process.env.ORGIAST_REPO = repo;
@@ -113,7 +113,7 @@ for (const dirty of [true, false]) test(`launcher real git integration: dirty=${
 });
 
 test('recheck before each destructive command catches a new edit after checkout', async t => {
-  const { root, repo, git } = fixture(t);
+  const { root, repo, git, gitRun } = fixture(t);
   const previous = [process.env.ORGIAST_REPO, process.env.ORGIAST_AUTO_SESSION_TREE];
   const pinned = path.join(root, 'pinned');
   process.env.ORGIAST_REPO = repo;
@@ -130,7 +130,7 @@ test('recheck before each destructive command catches a new edit after checkout'
     run: async (cmd, args, options) => {
       if (cmd !== 'git') return 0;
       calls.push({ args, cwd: options.cwd });
-      git(options.cwd, args);
+      gitRun(options.cwd, args);
       if (options.cwd === repo && args[0] === 'checkout') fs.writeFileSync(path.join(repo, 'late-edit'), 'saved');
       return 0;
     },
@@ -141,10 +141,10 @@ test('recheck before each destructive command catches a new edit after checkout'
 });
 
 test('gitignored generated files do not trigger rescue', t => {
-  const { root, repo, git } = fixture(t);
+  const { root, repo, git, gitRun } = fixture(t);
   fs.writeFileSync(path.join(repo, '.gitignore'), 'generated.json\n');
-  git(repo, ['add', '.gitignore']);
-  git(repo, ['commit', '-m', 'ignore generated']);
+  gitRun(repo, ['add', '.gitignore']);
+  gitRun(repo, ['commit', '-m', 'ignore generated']);
   fs.writeFileSync(path.join(repo, 'generated.json'), '{"builtAt":"x"}');
   const guard = createDirtyWorktreeGuard({ home: root, log: () => {} });
   assert.equal(guard(repo), true, 'ignored file must not dirty/block the tree');

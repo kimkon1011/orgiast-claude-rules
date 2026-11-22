@@ -9,7 +9,7 @@ import { isEntry } from './is-entry.mjs';
 // （先送りする/した/にする）は前後が「の」でも「文」でもないので引き続き検出する。
 // 量化子は非貪欲（`{0,60}?`）。貪欲だと1つの文に先送り語が2回出るとき最後の語まで飲み込み、
 // 引用の判定（一致の直後が閉じ括弧か）が後ろの語にずれる。
-const P1_BASE = /(恒久|改修|実装|修正|対応|恒久化)[^」"'\n]{0,60}?(次セッション|次回セッション|次回に|後日|来週|(?<!の)先送り(?!文))/;
+const P1_BASE = /(恒久|改修|実装|修正|対応|恒久化)[^」"'\n]{0,60}?(次(?:の)?セッション|次回セッション|次回に|後日|来週|(?<!の)先送り(?!文))/;
 // 監査項目名の引用は P1 から除く。例: 「`59f6caca0d69166e`（event-shop.jp「AUJUST」誤記の
 // 恒久修正先送り）の実物検証と記録」。括弧で閉じた先送り語は「先送りを名詞句として名指しした」
 // だけで、先送りを実行した文ではない（行為形は必ず 先送りする/した/にする と続く）。
@@ -67,7 +67,7 @@ function auditAwareFind(regex, text) {
   }
   return null;
 }
-const P2 = { find: text => auditAwareFind(/(次セッション|次回セッション|次回に|後日)[^」"'\n]{0,60}(実装|対応|修正|改修|恒久)/, text) };
+const P2 = { find: text => auditAwareFind(/(次(?:の)?セッション|次回セッション|次回に|後日)[^」"'\n]{0,60}(実装|対応|修正|改修|恒久)/, text) };
 // 2026-10-19 の実測3件で「〜のを待っています」と「終わると知らせが届きます」が素通りしたため、
 // 名詞化した待機と完了通知待ちも W に含める。
 // 2026-10-21T05:14:03.146Z（handoff-audit:38fe891783fc6ce2 / 4d7e4383）の原文は
@@ -107,7 +107,7 @@ const INBOX_RELAY = /(?:【受信箱】|起きたこと[:：]|判断してほし
 // Claude 側の作業が終わっている正当な状態で、委譲せずに待つ放置とは区別する。
 // 委譲を起動したと明記した語が一致位置の手前 120 字以内にある場合だけ採用しない。
 // （委譲の報告が無いまま待つ形 — 2026-10-21 の 7 ターン言い換え待機 — は従来どおり検出する）
-const DELEGATION_STARTED = /(?:codex-do|cheap-code|llm-ask|指示書を(?:作成|書|渡|用意)|(?:Codex|Gemini|DeepSeek|Groq|OpenRouter|Mistral|サブエージェント)[ \t]*(?:に|へ|を)[^。\n]{0,24}(?:委譲|依頼|渡し|投げ|起動|実行させ))/;
+const DELEGATION_STARTED = /(?:codex-do|cheap-code|llm-ask|指示書を(?:作成|書|渡|用意)|(?:Codex|Gemini|DeepSeek|Groq|OpenRouter|Mistral|サブエージェント)[ \t]*(?:に|へ|を)[^。\n]{0,24}(?:委譲|依頼|渡し|投げ|起動|実行させ)|`[a-z0-9]{6,12}`[^。\n]{0,80}(?:完了待ち|完了後|push|CI[^。\n]{0,20}結果を待|結果を待って))/i;
 // 2026-11-18 実測（e88a780c / 2026-11-17T04:04:04.337Z）: 3行フッターだけのメッセージ
 // 「次に kim がすること: なし（Codex の生成完了を待っています）」が W に当たっていた。
 // 人の作業がゼロ（なし）で、待つ相手が自動レーンなら、委譲済みの正当な待機なので除外する。
@@ -143,7 +143,7 @@ const W  = {
       if (isAuditCitation(text, match.index) || isPatternNameQuote(text, match.index)) continue;
       if (REPLY_WAIT.test(match[0]) && EXTERNAL_WAIT_SUBJECT.test(text.slice(Math.max(0, match.index - 60), match.index))) continue;
       if (INBOX_RELAY.test(text.slice(Math.max(0, match.index - 200), match.index))) continue;
-      if (DELEGATION_STARTED.test(text.slice(Math.max(0, match.index - 120), match.index))) continue;
+      if (DELEGATION_STARTED.test(text.slice(Math.max(0, match.index - 120), match.index + match[0].length + 120))) continue;
       if (LANE_NAME.test(text.slice(Math.max(0, match.index - 60), match.index + match[0].length + 60)) && HANDOFF_NONE_LINE.test(text.slice(Math.max(0, match.index - 200), match.index))) continue;
       if (DATA_WAIT_RE.test(match[0]) && EXTERNAL_WAIT_SUBJECT.test(text.slice(Math.max(0, match.index - 40), match.index))) continue;
       return match;
@@ -164,6 +164,7 @@ const HANDOFF_EMPTY = /^[\s*_`]*(?:なし|ありません|ありません。|特
 const LANDING_DEFERRAL = /(マージ|着地|取り込|merge)/i;
 const LANDING_TARGET = /\b[0-9a-f]{7,40}\b|[\w.-]+\/[\w.-]+/;
 const LANDING_APPROVAL = /(承認|判断|決め|指示|ください|返す|据え置き|待ち)/;
+const REQUIRED_APPROVAL_CONTEXT = /(?:automerge[^。\n]{0,30}(?:ラベル)?(?:が|は)?(?:無い|ない|無し)|(?:全PC|全アカウント)[^。\n]{0,40}(?:配られ|配布され)|draft(?:\s*PR)?[^。\n]{0,50}(?:merge|マージ)[^。\n]{0,20}(?:拒否|できない|不可))/i;
 export function isLandingDeferral(value) {
   const text = String(value ?? '');
   return LANDING_DEFERRAL.test(text) && LANDING_TARGET.test(text) && LANDING_APPROVAL.test(text);
@@ -175,7 +176,8 @@ const ASK_CONTEXT = /(恒久|配布|自動修復|実装|修正|改修|恒久化)
 const P3 = {
   find(text) {
     for (const match of text.matchAll(new RegExp(HANDOFF_LINE, 'g'))) {
-      if (!isAuditCitation(text, match.index) && !HANDOFF_EMPTY.test(match[1]) && (new RegExp(FIX).test(match[1]) || isLandingDeferral(match[1]))) return match;
+      const context = text.slice(Math.max(0, match.index - 400), match.index + match[0].length + 400);
+      if (!isAuditCitation(text, match.index) && !REQUIRED_APPROVAL_CONTEXT.test(context) && !HANDOFF_EMPTY.test(match[1]) && (new RegExp(FIX).test(match[1]) || isLandingDeferral(match[1]))) return match;
     }
     return null;
   }
@@ -184,7 +186,8 @@ const P4 = {
   find(text) {
     for (const match of text.matchAll(new RegExp(ASK_PERMISSION, 'g'))) {
       const context = text.slice(Math.max(0, match.index - 60), match.index + match[0].length + 60);
-      if (!isAuditCitation(text, match.index) && ASK_CONTEXT.test(context)) return match;
+      const approvalContext = text.slice(Math.max(0, match.index - 400), match.index + match[0].length + 400);
+      if (!isAuditCitation(text, match.index) && !REQUIRED_APPROVAL_CONTEXT.test(approvalContext) && ASK_CONTEXT.test(context)) return match;
     }
     return null;
   }

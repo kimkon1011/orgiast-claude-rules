@@ -96,6 +96,22 @@ test('既知の実違反原文を検出する', () => {
   assert.equal(detect(quotes[0])[0].pattern, 'P4');
   assert.equal(detect(quotes[1])[0].pattern, 'P3');
 });
+test('実測6件の委譲済み待機・正当な承認待ちは検出しない', () => {
+  const falsePositives = [
+    'Codex に締め処理を委譲済みです。締め処理を実行中のため、まだ閉じない（タスク `by7gvg7th`）。完了待ちです。',
+    'この repo は全PCに配布される共通ルールです。次に kim がすること: PR #2573 を取り込んでよいか一言返す',
+    'draft PR のため GitHub 側が merge を拒否している。次に kim がすること: PR #8 のマージ可否と修正の作り直し可否に答える',
+    '人にしかできない操作で止まってはおらず、Claude 側の自動進行（Codex 実行中）を待っているだけ。タスク `abc12345` の完了待ちです。',
+    '変更は全アカウントに配られる。次に kim がすること: ②の5つの質問に短く答える。恒久修正を進めてよいか判断してください。',
+    'Codex(`bged1hp4t`)の push と CI の結果を待っています。'
+  ];
+  for (const excerpt of falsePositives) assert.deepEqual(detect(excerpt), [], excerpt);
+});
+test('委譲証拠も承認制約もない本物の先送りは引き続き検出する', () => {
+  for (const excerpt of ['この修正は次のセッションで対応します', '恒久対応は後日']) {
+    assert.ok(detect(excerpt).some(found => /^P[1-4]$/.test(found.pattern)), excerpt);
+  }
+});
 test('手渡しなし・進捗報告・修正完了は検出しない', () => {
   for (const quote of [
     '次に kim がすること: なし',

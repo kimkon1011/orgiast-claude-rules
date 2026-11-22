@@ -43,30 +43,55 @@ export function splitDiscordContent(text, maxLen = 2000) {
   return chunks;
 }
 
-export async function postToDiscordWebhook(webhook, content, { fetchImpl = globalThis.fetch, label = 'fleet-liveness', maxLen = 2000 } = {}) {
+export async function postToDiscordWebhook(webhook, content, {
+  fetchImpl = globalThis.fetch,
+  label = 'fleet-liveness',
+  maxLen = 2000,
+  delayMs = 1000,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  maxRetries = 3,
+} = {}) {
   const chunks = splitDiscordContent(content, maxLen);
   const errors = [];
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
-    try {
-      const response = await fetchImpl(webhook, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'User-Agent': `orgiast-${label}/1.0` },
-        body: JSON.stringify({ content: chunk }),
-        signal: AbortSignal.timeout(20_000),
-      });
-      if (!response.ok) {
+    if (i > 0) await sleep(delayMs);
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await fetchImpl(webhook, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'User-Agent': `orgiast-${label}/1.0` },
+          body: JSON.stringify({ content: chunk }),
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (response.ok) break;
+
         let bodyText = '';
         try { bodyText = await response.text(); } catch {}
+        if (response.status === 429 && attempt < maxRetries) {
+          let retryAfterSeconds;
+          try { retryAfterSeconds = JSON.parse(bodyText)?.retry_after; } catch {}
+          if (retryAfterSeconds == null) {
+            retryAfterSeconds = response.headers?.get?.('Retry-After');
+          }
+          const parsedRetryAfter = Number(retryAfterSeconds);
+          const retryDelayMs = Math.min((Number.isFinite(parsedRetryAfter) ? parsedRetryAfter : 1) * 1000 + 100, 10_000);
+          await sleep(retryDelayMs);
+          continue;
+        }
+
         const msg = `Discord送信(${i + 1}/${chunks.length})が HTTP ${response.status}${bodyText ? ` — ${bodyText}` : ''}`;
         console.error(`fleet-liveness: ${msg}`);
         errors.push(msg);
+        break;
+      } catch (error) {
+        const msg = `Discord送信(${i + 1}/${chunks.length})が ${error?.name || 'error'}${error?.message ? `: ${error.message}` : ''}`;
+        console.error(`fleet-liveness: ${msg}`);
+        errors.push(msg);
+        break;
       }
-    } catch (error) {
-      const msg = `Discord送信(${i + 1}/${chunks.length})が ${error?.name || 'error'}${error?.message ? `: ${error.message}` : ''}`;
-      console.error(`fleet-liveness: ${msg}`);
-      errors.push(msg);
     }
   }
 

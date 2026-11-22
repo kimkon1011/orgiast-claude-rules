@@ -1,5 +1,7 @@
 ﻿param(
-  [switch]$DryRun
+  [switch]$DryRun,
+  [ValidateRange(1, [long]::MaxValue)]
+  [long]$RcloneCopyTimeoutMs = 21600000
 )
 
 # 使用中の transcript を直接圧縮すると一部だけ欠けるため、差分ミラーを静止点として使う。
@@ -186,7 +188,7 @@ function Send-ToRclone {
     # Shared copyto transport; knowledge-upstream uses the same helper for its fallback.
     $copyHelper = Join-Path $PSScriptRoot 'lib\rclone-copy.mjs'
     $nodeExe = (Get-Command node -CommandType Application -ErrorAction Stop | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source
-    $result = & $nodeExe $copyHelper $rcloneExe $ZipPath ('{0}{1}' -f $destPath, $ZipName) @extraArgs 2>&1
+    $result = & $nodeExe $copyHelper --timeout-ms $RcloneCopyTimeoutMs $rcloneExe $ZipPath ('{0}{1}' -f $destPath, $ZipName) @extraArgs 2>&1
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
       foreach ($line in $result) { Write-Event ('WARN rclone-output: {0}' -f $line) }

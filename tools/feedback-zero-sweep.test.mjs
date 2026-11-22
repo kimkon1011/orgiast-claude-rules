@@ -423,3 +423,82 @@ test('巡回設定が無い席では unknown_rows を1行へ畳む', () => {
   assert.equal(unknownRowsLine({unassigned:true,rows}),'sweep_skipped=この席に巡回設定（url 参照キー）が無いため担当外としてスキップ');
   assert.match(unknownRowsLine({unassigned:false,rows}),/^unknown_rows=a:url 参照キー未設定; b:/);
 });
+
+test('到達不能 repo は Issue 化をスキップし失敗扱いにしない', async () => {
+  const { home, opts, calls } = setup(pending);
+  const ghArgs = [];
+  try {
+    const result = await sweep({
+      ...opts,
+      gh: (args) => {
+        ghArgs.push(args);
+        if (args[0] === 'api' && String(args[1]).startsWith('repos/')) {
+          return { status: 1, stderr: 'HTTP 404: Not Found' };
+        }
+        return { status: 0, stdout: JSON.stringify({ state: 'OPEN', url: 'u', title: 't' }) };
+      },
+    });
+    assert.equal(calls.issue, 0);
+    assert.equal(calls.exec, 0);
+    assert.equal(result.rows[0].status, 'repo_unreachable');
+    assert.equal(result.rows[0].remaining, 1);
+    assert.match(result.rows[0].errors[0], /repo に届かない（o\/r・gh アカウントに権限なし or 名前違い）→Issue化スキップ/);
+    assert.equal(result.unknown, 0);
+    assert.equal(unknownRowsLine(result), '');
+    assert.equal(calls.notify.length, 1);
+    assert.match(calls.notify[0], /repo に届かない/);
+    assert.doesNotMatch(calls.notify[0], /Issue化失敗/);
+    assert.equal(sweepExitCode(result), 0);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('到達確認 probe は repo ごとに1回', async () => {
+  const items = [
+    { message_id: 'a1', app_name: 'テストアプリ', kind: 'bug', title: 't1', body: 'x' },
+    { message_id: 'a2', app_name: 'テストアプリ', kind: 'bug', title: 't2', body: 'x' },
+  ];
+  const { home, opts, calls } = setup(items);
+  const ghArgs = [];
+  try {
+    await sweep({
+      ...opts,
+      gh: (args) => {
+        ghArgs.push(args);
+        if (args[0] === 'api' && String(args[1]).startsWith('repos/')) {
+          return { status: 1, stderr: 'HTTP 404' };
+        }
+        return { status: 0, stdout: JSON.stringify({ state: 'OPEN', url: 'u', title: 't' }) };
+      },
+    });
+    const probes = ghArgs.filter(args => args[0] === 'api' && String(args[1]).startsWith('repos/'));
+    assert.equal(probes.length, 1);
+    assert.deepEqual(probes[0], ['api', 'repos/o/r']);
+    assert.equal(calls.issue, 0);
+    assert.equal(new Set(probes.map(args => args[1])).size, 1);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('到達可能 repo は従来どおり Issue 化する', async () => {
+  const { home, opts, calls } = setup(pending);
+  const ghArgs = [];
+  try {
+    const result = await sweep({
+      ...opts,
+      gh: (args) => {
+        ghArgs.push(args);
+        if (args[0] === 'api' && String(args[1]).startsWith('repos/')) {
+          return { status: 0, stdout: '{"id":1}' };
+        }
+        return { status: 0, stdout: JSON.stringify({ state: 'OPEN', url: 'u', title: 't' }) };
+      },
+    });
+    const probes = ghArgs.filter(args => args[0] === 'api' && String(args[1]).startsWith('repos/'));
+    assert.equal(probes.length, 1);
+    assert.equal(calls.issue, 1);
+    assert.equal(calls.exec, 1);
+    assert.equal(result.launched, 1);
+    assert.equal(result.rows[0].status, '取得済');
+    assert.deepEqual(result.rows[0].errors, []);
+    assert.equal(result.unknown, 0);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});

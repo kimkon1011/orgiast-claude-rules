@@ -285,7 +285,13 @@ export async function runNextActions(options = {}) {
       ledgerLines.push(`- [${oneLine(row.taskId)}] ${oneLine(row.件名)} / 担当PC: ${oneLine(row.担当PC)} / 停滞: ${elapsed} / ${oneLine(row.成果物リンク)}`);
     }
     if (ledgerLines.length === 1) ledgerLines.push('該当なし');
-  } catch (error) { ledgerLines.push(`台帳取得失敗: ${oneLine(error.message)}`); }
+  } catch (error) {
+    if (error.code === 'TASK_SHEET_NOT_CONFIGURED') {
+      ledgerLines.push('この席は台帳未設定（~/.claude/task-sheet.env が無い）。他PCへの依頼一覧はこの席では表示しない。');
+    } else {
+      ledgerLines.push(`台帳取得失敗: ${oneLine(error.message)}`);
+    }
+  }
   const body = `${render(actions, now)}\n\n${ledgerLines.join('\n')}`, outputFile = path.join(base, 'next-actions.md');
   if (!cli.dryRun) { fs.mkdirSync(base, { recursive: true }); fs.writeFileSync(outputFile, replaceNextActionsSection(readFile(outputFile), body), 'utf8'); }
   if (cli.json) log(JSON.stringify({ actions }, null, 2));

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const execFileAsync = promisify(execFile);
 const DAY_MS = 86_400_000;
@@ -170,6 +170,6 @@ export async function main(args = process.argv.slice(2)) {
   console.log(format === 'json' ? JSON.stringify(report, null, 2) : formatTable(report));
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+if (isEntry(import.meta.url)) {
   main().catch(error => { console.error(`kim-inbox-triage: ${error.message}`); process.exitCode = 1; });
 }

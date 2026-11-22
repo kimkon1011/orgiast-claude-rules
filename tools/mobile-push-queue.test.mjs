@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { appendMobilePush, markMobilePushSent, mobilePushInstruction, mobilePushQueueFile, pendingMobilePush } from './lib/mobile-push-queue.mjs';
+import { appendMobilePush, ATTEMPT_LIMIT, markMobilePushAttempt, markMobilePushSent, mobilePushInstruction, mobilePushQueueFile, pendingMobilePush } from './lib/mobile-push-queue.mjs';
 import { main as cliMain } from './mobile-push-queue.mjs';
 import { consumeInbox } from './auto-progress-inbox-hook.mjs';
 
@@ -89,6 +89,37 @@ test('CLI --mark-sent は該当行だけ送信済みにし未知 id は異常終
   assert.throws(() => cliMain(['--bogus'], { home, out: () => {} }), /不明な引数/);
 });
 
+test('markMobilePushAttempt は attempts と lastAttemptAt を更新して本文を未送信のまま残す', t => {
+  const home = tempHome(t);
+  const item = appendMobilePush(home, { owner: 'x', title: '報告', body: '本文' }, { id: 'attempt-id' });
+  const now = Date.UTC(2026, 10, 23, 3, 5);
+  assert.deepEqual(markMobilePushAttempt(home, [item.id], { now }), { bumped: [item.id], unknown: [] });
+  let row = readRow(home, item.id);
+  assert.equal(row.attempts, 1);
+  assert.equal(row.lastAttemptAt, new Date(now).toISOString());
+  assert.equal(row.sent, false);
+  markMobilePushAttempt(home, [item.id], { now: now + 1000 });
+  row = readRow(home, item.id);
+  assert.equal(row.attempts, 2);
+  assert.equal(row.sent, false);
+  assert.deepEqual(markMobilePushAttempt(home, ['unknown-id']), { bumped: [], unknown: ['unknown-id'] });
+});
+
+test('CLI --mark-attempt は試行回数を増やし mark-sent との併用を拒否する', t => {
+  const home = tempHome(t);
+  const item = appendMobilePush(home, { owner: 'x', title: '報告', body: '本文' });
+  let printed = '';
+  assert.equal(cliMain(['--mark-attempt', item.id], { home, out: value => { printed = value; } }), 0);
+  assert.deepEqual(JSON.parse(printed), { bumped: [item.id], unknown: [] });
+  assert.equal(readRow(home, item.id).attempts, 1);
+  assert.throws(() => cliMain(['--mark-sent', item.id, '--mark-attempt', item.id], { home, out: () => {} }), /同時に指定できません/);
+  assert.throws(() => cliMain(['--mark-attempt'], { home, out: () => {} }), /id が1つ必要/);
+});
+
+function readRow(home, id) {
+  return fs.readFileSync(mobilePushQueueFile(home), 'utf8').trim().split('\n').map(JSON.parse).find(row => row.id === id);
+}
+
 test('hook は未送信の push 要求だけを指示に出す（送信済み・他人ownerは出さない）', t => {
   const home = tempHome(t);
   const options = hookOptions(home);
@@ -152,6 +183,20 @@ test('表示上限を超える未送信も1件にまとめて指示が膨らま�
   assert.ok(!text.includes('本文10'), '上限外の古い報告は本文を展開しない');
   assert.ok(!text.includes('本文11'));
   assert.ok(text.indexOf('報告00') < text.indexOf('報告02'), '個別表示は新しい順');
+});
+
+test('試行上限に達した未送信は個別表示せずまとめ行に数え mark-attempt を案内する', t => {
+  const home = tempHome(t);
+  const now = Date.now();
+  const limited = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '上限到達', body: '個別には出さない本文' }, { now });
+  for (let i = 0; i < ATTEMPT_LIMIT; i++) markMobilePushAttempt(home, [limited.id], { now: now + i });
+  const fresh = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '新着', body: '新着本文' }, { now });
+  const text = mobilePushInstruction(home, { now, owner: 'cr@orgiast.jp', cliPath });
+  assert.match(text, /古い未送信 1 件/);
+  assert.ok(!text.includes('個別には出さない本文'));
+  assert.match(text, /新着本文/);
+  assert.ok(text.includes(`--mark-attempt ${limited.id}`));
+  assert.ok(text.includes(`--mark-attempt ${fresh.id}`));
 });
 
 test('本文の改行は1行に整形して指示に出す', t => {

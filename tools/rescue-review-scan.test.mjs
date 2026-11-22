@@ -83,33 +83,33 @@ function fixture(t, { featureBranch = false, squashedMerge = false, cherryPicked
 
   // feat/f1: u3 と同一変更(別名の枝に保全されている = covered-by-branch の材料)
   if (featureBranch) {
-    git('checkout', '-b', 'feat/f1', 'main');
+    gitRun('checkout', '-b', 'feat/f1', 'main');
     fs.writeFileSync(path.join(repo, 'b.txt'), 'new');
-    git('add', '.');
-    git('commit', '-m', 'f1 same as u3');
-    git('checkout', 'main');
+    gitRun('add', '.');
+    gitRun('commit', '-m', 'f1 same as u3');
+    gitRun('checkout', 'main');
   }
 
   if (squashedMerge) {
-    git('checkout', '-b', 'rescue/squashed', 'main');
+    gitRun('checkout', '-b', 'rescue/squashed', 'main');
     fs.writeFileSync(path.join(repo, 'a.txt'), 'squashed');
-    git('add', '.');
-    git('commit', '-m', 'squashed change');
-    git('checkout', 'main');
-    git('merge', '--squash', 'rescue/squashed');
-    git('commit', '-m', 'squash merged');
+    gitRun('add', '.');
+    gitRun('commit', '-m', 'squashed change');
+    gitRun('checkout', 'main');
+    gitRun('merge', '--squash', 'rescue/squashed');
+    gitRun('commit', '-m', 'squash merged');
   }
   if (cherryPickedFirst) {
-    git('checkout', '-b', 'rescue/partial', 'main');
+    gitRun('checkout', '-b', 'rescue/partial', 'main');
     fs.writeFileSync(path.join(repo, 'a.txt'), 'p1');
-    git('add', '.');
-    git('commit', '-m', 'partial first');
+    gitRun('add', '.');
+    gitRun('commit', '-m', 'partial first');
     const first = git('rev-parse', 'HEAD').trim();
     fs.writeFileSync(path.join(repo, 'c.txt'), 'p2');
-    git('add', '.');
-    git('commit', '-m', 'partial second');
-    git('checkout', 'main');
-    git('cherry-pick', first);
+    gitRun('add', '.');
+    gitRun('commit', '-m', 'partial second');
+    gitRun('checkout', 'main');
+    gitRun('cherry-pick', first);
   }
 
   return { root, repo, git };
@@ -249,30 +249,31 @@ test('unique でも全ファイルがノイズなら既定出力にレビュー�
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const repo = path.join(root, 'repo');
   fs.mkdirSync(repo);
+  const gitRun = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] });
   const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  git('init', '-b', 'main');
-  git('config', 'user.name', 'Test');
-  git('config', 'user.email', 'test@example.invalid');
+  gitRun('init', '-b', 'main');
+  gitRun('config', 'user.name', 'Test');
+  gitRun('config', 'user.email', 'test@example.invalid');
   fs.writeFileSync(path.join(repo, 'a.txt'), 'base');
-  git('add', '.');
-  git('commit', '-m', 'base');
+  gitRun('add', '.');
+  gitRun('commit', '-m', 'base');
 
   // ノイズのみ: tools/handoff-audit-knowledge.json
-  git('checkout', '-b', 'rescue/knowledge-only', 'main');
+  gitRun('checkout', '-b', 'rescue/knowledge-only', 'main');
   fs.mkdirSync(path.join(repo, 'tools'));
   fs.writeFileSync(path.join(repo, 'tools', 'handoff-audit-knowledge.json'), '[]\n');
-  git('add', '.');
-  git('commit', '-m', 'knowledge only');
-  git('checkout', 'main');
+  gitRun('add', '.');
+  gitRun('commit', '-m', 'knowledge only');
+  gitRun('checkout', 'main');
 
   // ノイズ + 通常ファイル: 印を付けてはいけない
-  git('checkout', '-b', 'rescue/mixed', 'main');
+  gitRun('checkout', '-b', 'rescue/mixed', 'main');
   fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
   fs.writeFileSync(path.join(repo, 'tools', 'handoff-audit-knowledge.json'), '[1]\n');
   fs.writeFileSync(path.join(repo, 'a.txt'), 'changed');
-  git('add', '.');
-  git('commit', '-m', 'mixed');
-  git('checkout', 'main');
+  gitRun('add', '.');
+  gitRun('commit', '-m', 'mixed');
+  gitRun('checkout', 'main');
 
   const script = path.join(dirOf(import.meta.url), 'rescue-review-scan.mjs');
   const out = execFileSync(process.execPath, [script, '--repo', repo, '--main', 'main'], { encoding: 'utf8' });
@@ -530,19 +531,20 @@ test('CLI --todo は実対象が無ければ (なし) を出す', t => {
   // 全 unique がノイズ相当になる枝だけのリポジトリ
   const g = fs.mkdtempSync(path.join(os.tmpdir(), 'rescue-review-scan-todo-'));
   t.after(() => fs.rmSync(g, { recursive: true, force: true }));
+  const gitRun = (...args) => execFileSync('git', ['-C', g, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] });
   const git = (...args) => execFileSync('git', ['-C', g, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  git('init', '-b', 'main');
-  git('config', 'user.name', 'Test');
-  git('config', 'user.email', 'test@example.invalid');
+  gitRun('init', '-b', 'main');
+  gitRun('config', 'user.name', 'Test');
+  gitRun('config', 'user.email', 'test@example.invalid');
   fs.writeFileSync(path.join(g, 'a.txt'), 'base');
-  git('add', '.');
-  git('commit', '-m', 'base');
-  git('checkout', '-b', 'rescue/onlynoise', 'main');
+  gitRun('add', '.');
+  gitRun('commit', '-m', 'base');
+  gitRun('checkout', '-b', 'rescue/onlynoise', 'main');
   fs.mkdirSync(path.join(g, '.work'));
   fs.writeFileSync(path.join(g, '.work', 'scratch.md'), 'x\n');
-  git('add', '-f', '.');
-  git('commit', '-m', 'only noise');
-  git('checkout', 'main');
+  gitRun('add', '-f', '.');
+  gitRun('commit', '-m', 'only noise');
+  gitRun('checkout', 'main');
   const empty = execFileSync(process.execPath, [script, '--repo', g, '--main', 'main', '--todo'], { encoding: 'utf8' });
   assert.deepEqual(empty.trim().split('\n'), ['## rescue レビュー TODO (unique 1 → 実対象 0)', '- (なし)']);
 });

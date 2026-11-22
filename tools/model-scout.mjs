@@ -13,6 +13,11 @@ import { routeCandidate } from './provider-routing.mjs';
 import { COST_PER_MILLION } from './llm-fallback.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+// §2.8.0: アプリ経路で Claude を使わない
+export const APP_FORBIDDEN_VENDORS = ['anthropic'];
+export function isAppForbiddenModel(id) {
+  return APP_FORBIDDEN_VENDORS.some(v => id.startsWith(v + '/') || id.startsWith('~' + v + '/'));
+}
 export const FRONTIER_VENDORS = ['anthropic', 'openai', 'google', 'meta', 'meta-llama', 'x-ai', 'deepseek', 'moonshotai', 'qwen', 'mistralai', 'z-ai',
   // 中国系の安価モデル。安価軸は「現行より安い」比較に依存し初回14日より古いモデルを拾えないため、ここで毎日見る。
   'xiaomi', 'minimax', 'stepfun', 'bytedance-seed', 'tencent', 'inclusionai', 'meituan'];
@@ -61,7 +66,7 @@ export function detectChanges(models, previous, now = new Date()) {
 
 export function selectFrontierCandidates(changes, { max = frontierLimit() } = {}) {
   return changes.filter(m => m.reason === '新規モデル' && FRONTIER_VENDORS.includes(m.id.split('/')[0]) &&
-    !m.id.startsWith('~') && !/:batch$/.test(m.id) && // :batch はバッチ専用エンドポイントのため同期評価不可
+    !isAppForbiddenModel(m.id) && !/:batch$/.test(m.id) && // :batch はバッチ専用エンドポイントのため同期評価不可
     m.modality.split('->')[0]?.split('+').includes('text') && m.modality.split('->')[1] === 'text' &&
     validNumber(m.pricing?.prompt) && validNumber(m.pricing?.completion))
     .sort((a, b) => (b.created || 0) - (a.created || 0) || a.id.localeCompare(b.id))
@@ -82,7 +87,7 @@ export function selectCandidates(changes, models, routing, { includeQuality = fa
     if (!price || (!includeQuality && !context)) { warnings.push(`${category}: ${route.provider}/${route.model} の単価または文脈長が不明のため比較保留。`); continue; }
     baselines.push({ category, route, price, context });
   }
-  const candidates = changes.filter((m) => !/:batch$/.test(m.id) && m.modality.split('->')[0]?.split('+').includes('text') && m.modality.split('->')[1] === 'text') // :batch はバッチ専用エンドポイントのため同期評価不可
+  const candidates = changes.filter((m) => !isAppForbiddenModel(m.id) && !/:batch$/.test(m.id) && m.modality.split('->')[0]?.split('+').includes('text') && m.modality.split('->')[1] === 'text') // :batch はバッチ専用エンドポイントのため同期評価不可
     .map((model) => ({ ...model, replacements: baselines.filter(({ route, price, context }) =>
       !(route.provider === 'openrouter' && route.model === model.id) &&
       (includeQuality || (model.context_length >= context && model.pricing.prompt * 1e6 <= price[0] && model.pricing.completion * 1e6 <= price[1] &&
@@ -142,6 +147,7 @@ export async function proposeEvaluated(candidates, { home, dryRun = false, resul
   catch (e) { if (e.code !== 'ENOENT') throw e; }
   let proposed = 0;
   for (const candidate of candidates) {
+    if (isAppForbiddenModel(candidate.id)) continue;
     for (const { category, route, price } of candidate.replacements || []) {
       const measurements = aggregateMeasurements(rows, category);
       const measured = measurements.find(x => x.provider === 'openrouter' && x.model === candidate.id);

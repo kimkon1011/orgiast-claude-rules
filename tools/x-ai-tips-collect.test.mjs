@@ -85,7 +85,7 @@ for (const status of [401, 429]) test(`HTTP ${status} 即時打ち切り・予�
   else { assert.equal(result.calls, defaults.topics.length); assert.match(result.status, /テーマ失敗/); }
   const run = JSON.parse(fs.readFileSync(ctx.file('x-ai-tips/runs.jsonl'), 'utf8').trim().split('\n')[0]); assert.equal(run.reserved, true);
 });
-test('HTTP 403 の残高切れは残トピックを止め、予約を維持して正常スキップ', async t => {
+test('HTTP 403 の残高切れは残トピックを止め、予約を維持し、最後にskip statusを出して終了コード0', async t => {
   const logs = []; let calls = 0;
   const ctx = setup(t, { log: line => logs.push(line), fetchFn: async () => { calls++; return {
     ok: false,
@@ -95,7 +95,8 @@ test('HTTP 403 の残高切れは残トピックを止め、予約を維持し�
   ctx.options.config.topics = defaults.topics;
   assert.equal(await runCli([], ctx.options), 0);
   assert.equal(calls, 1);
-  assert.deepEqual(logs, [creditBlockedMessage]);
+  assert.deepEqual(logs, [creditBlockedMessage, 'skip:支払い待ち']);
+  assert.equal(logs.at(-1), 'skip:支払い待ち');
   assert.equal(readState(ctx).creditBlockedAt, now.toISOString());
   assert.equal(readState(ctx).night.calls, 1);
   assert.equal(readState(ctx).night.costUsd, defaults.reservePerCallUsd);
@@ -136,7 +137,7 @@ test('同日JSTの再実行はログ1行のみでAPI・通知・state・実行�
   const saved = JSON.stringify({ creditBlockedAt: '2026-11-01T15:00:00Z', night: { date: '2026-11-02', calls: defaults.maxCalls, costUsd: defaults.maxCostUsd } });
   fs.writeFileSync(ctx.file('x-ai-tips/state.json'), saved);
   assert.equal(await runCli([], ctx.options), 0);
-  assert.deepEqual(logs, [creditBlockedMessage]);
+  assert.deepEqual(logs, [creditBlockedMessage, 'skip:支払い待ち']);
   assert.equal(fs.readFileSync(ctx.file('x-ai-tips/state.json'), 'utf8'), saved);
   assert.equal(fs.existsSync(ctx.file('x-ai-tips/runs.jsonl')), false);
   assert.equal(fs.existsSync(ctx.file('x-ai-tips/collect.lock')), false);
@@ -174,7 +175,7 @@ test('残高切れの長い本文も分類し本文・認証情報をログへ�
     text: async () => JSON.stringify({ private: 'x'.repeat(2100), code: 'permission-denied', error: 'fake-key', Authorization: 'Bearer fake-key' }),
   }) });
   assert.equal(await runCli([], ctx.options), 0);
-  assert.deepEqual(logs, [creditBlockedMessage]);
+  assert.deepEqual(logs, [creditBlockedMessage, 'skip:支払い待ち']);
   assert.doesNotMatch(JSON.stringify(readRuns(ctx)), /fake-key|Authorization|xxx/);
 });
 

@@ -79,8 +79,11 @@ test('実費が上限超過したら提案保存せず打ち切り、費用は�
 for (const status of [401, 429]) test(`HTTP ${status} 即時打ち切り・予約維持・再試行なし`, async t => {
   const ctx = setup(t); ctx.options.config.topics = defaults.topics;
   ctx.options.fetchFn = async () => ({ ok: false, status });
-  const result = await runCollect(ctx.options); assert.equal(result.calls, 1); assert.equal(result.status, `error:API HTTP ${status}`);
-  assert.equal(JSON.parse(fs.readFileSync(ctx.file('x-ai-tips/runs.jsonl'))).reserved, true);
+  const result = await runCollect(ctx.options);
+  // 401 全テーマ処理 + fallback 試行（source:null のため追加なし）。429 は即座に throw。
+  if (status === 429) { assert.equal(result.calls, 1); assert.equal(result.status, `error:API HTTP ${status}`); }
+  else { assert.equal(result.calls, defaults.topics.length); assert.match(result.status, /テーマ失敗/); }
+  const run = JSON.parse(fs.readFileSync(ctx.file('x-ai-tips/runs.jsonl'), 'utf8').trim().split('\n')[0]); assert.equal(run.reserved, true);
 });
 test('usage不足・JSON破損・タイムアウトが成功扱いにならない', async t => {
   for (const fetchFn of [async () => response([], {}), async () => ({ ok: true, json: async () => ({ output_text: 'invalid', usage: { cost_in_usd_ticks: 1 } }) }), async () => { throw new Error('timeout'); }]) {
@@ -221,6 +224,151 @@ test('失敗時の予約費用でも上限を守り未実行テーマの位置�
   assert.equal(readState(ctx).night.costUsd, defaults.reservePerCallUsd);
   assert.equal(readState(ctx).nextTopicIndex, 1);
 });
+// ----- fallback web-search 系テスト -----
+
+test('verifyUrls: HEAD 2xx/3xx を通し、404 を除外、403 は GET 再確認', async t => {
+  const heads = [];
+  const fetchFn = async (url, init) => {
+    heads.push({ url, method: init?.method || 'GET' });
+    if (url.includes('/valid')) return { ok: true, status: 200 };
+    if (url.includes('/redirect')) return { ok: false, status: 301 };
+    if (url.includes('/not-found')) return { ok: false, status: 404 };
+    // HEAD 403 → GET で 200 を返す
+    if (url.includes('/forbidden')) {
+      const method = init?.method || 'GET';
+      if (method === 'HEAD') return { ok: false, status: 403 };
+      return { ok: true, status: 200 };
+    }
+    return { ok: false, status: 403 };
+  };
+  const { verifyUrls } = await import('./x-ai-tips-collect.mjs');
+  const result = await verifyUrls(['https://example.com/valid', 'https://example.com/not-found', 'https://example.com/redirect', 'https://example.com/forbidden'], { fetchFn });
+  assert.deepEqual(result, ['https://example.com/valid', 'https://example.com/redirect', 'https://example.com/forbidden']);
+  assert.equal(heads.filter(h => h.method === 'GET').length, 1); // /forbidden: HEAD 403 → GET 1回
+  assert.equal(heads.filter(h => h.method === 'HEAD').length, 4); // 4 URL を HEAD
+});
+
+test('verifyUrls: 403 は GET で再確認、2xx なら通す', async t => {
+  let tries = 0;
+  const fetchFn = async (url, init) => {
+    tries++;
+    const method = init?.method || 'GET';
+    if (method === 'HEAD') return { ok: false, status: 403 };
+    return { ok: true, status: 200, url };
+  };
+  const { verifyUrls } = await import('./x-ai-tips-collect.mjs');
+  const result = await verifyUrls(['https://example.com/test'], { fetchFn });
+  assert.deepEqual(result, ['https://example.com/test']);
+  assert.equal(tries, 2);
+});
+
+test('verifyUrls: タイムアウトはスキップ、残りは通す', async t => {
+  const fetchFn = async (url) => {
+    if (url.includes('/timeout')) throw new Error('timeout');
+    return { ok: true, status: 200 };
+  };
+  const { verifyUrls } = await import('./x-ai-tips-collect.mjs');
+  const result = await verifyUrls(['https://example.com/ok', 'https://example.com/timeout'], { fetchFn });
+  assert.deepEqual(result, ['https://example.com/ok']);
+});
+
+test('verifyUrls: 最大10件まで', async t => {
+  let count = 0;
+  const fetchFn = async () => { count++; return { ok: true, status: 200 }; };
+  const { verifyUrls } = await import('./x-ai-tips-collect.mjs');
+  const urls = Array.from({ length: 20 }, (_, i) => `https://example.com/${i}`);
+  const result = await verifyUrls(urls, { fetchFn });
+  assert.equal(result.length, 10);
+  assert.equal(count, 10);
+});
+
+test('x.ai 403 → fallback search を呼び、実在確認が通った URL だけ項目化される', async t => {
+  const ctx = setup(t);
+  ctx.options.config.topics = defaults.topics.slice(0, 1);
+  let xaiCalled = false;
+  let searchCalled = false;
+  ctx.options.searchImpl = async () => {
+    searchCalled = true;
+    return { answer: '最新のAIコスト削減手法については https://example.com/cost-tips を参照', urls: [{ url: 'https://example.com/cost-tips', title: 'コスト削減' }], provider: 'gemini', model: 'gemini-3.6-flash', elapsedMs: 100, failures: [] };
+  };
+  ctx.options.fetchFn = async (url, init) => {
+    if (url.includes('x.ai')) { xaiCalled = true; return { ok: false, status: 403 }; }
+    // URL 実在確認用 — すべて 200
+    return { ok: true, status: 200 };
+  };
+  const result = await runCollect(ctx.options);
+  assert.ok(xaiCalled);
+  assert.ok(searchCalled);
+  assert.ok(result.added >= 1);
+  const records = ctx.records();
+  const fallbackRecords = records.filter(r => r.source?.startsWith('fallback:'));
+  assert.ok(fallbackRecords.length >= 1);
+});
+
+test('x.ai 403 → search は返るが全 URL が 404 → 項目0件・例外なし', async t => {
+  const ctx = setup(t);
+  ctx.options.config.topics = defaults.topics.slice(0, 1);
+  const logs = [];
+  ctx.options.searchImpl = async () => {
+    return { answer: '調査結果', urls: [{ url: 'https://example.com/article' }], provider: 'gemini', model: 'gemini-3.6-flash', elapsedMs: 100, failures: [] };
+  };
+  ctx.options.fetchFn = async (url) => {
+    if (url.includes('x.ai')) return { ok: false, status: 403 };
+    // URL 実在確認: 全部 404
+    return { ok: false, status: 404 };
+  };
+  const result = await runCollect({ ...ctx.options, log: x => logs.push(x) });
+  assert.equal(result.added, 0);
+  assert.match(result.status, /error/);
+});
+
+test('x.ai 429 → fallback search を呼ばない', async t => {
+  const ctx = setup(t);
+  let searchCalled = false;
+  let xaiCalled = false;
+  ctx.options.fetchFn = async (url) => {
+    if (url.includes('x.ai')) { xaiCalled = true; return { ok: false, status: 429 }; }
+    searchCalled = true;
+    return { ok: true, status: 200 };
+  };
+  await runCollect(ctx.options);
+  assert.ok(xaiCalled);
+  assert.ok(!searchCalled);
+});
+
+test('x.ai 500 → fallback search を呼ばない', async t => {
+  const ctx = setup(t);
+  let searchCalled = false;
+  ctx.options.fetchFn = async (url) => {
+    if (url.includes('x.ai')) return { ok: false, status: 500 };
+    searchCalled = true;
+    return { ok: true, status: 200 };
+  };
+  await runCollect(ctx.options);
+  assert.ok(!searchCalled);
+});
+
+test('config fallback null → 403 でも search を呼ばない', async t => {
+  const ctx = setup(t);
+  ctx.options.config.fallback = null;
+  let searchCalled = false;
+  ctx.options.fetchFn = async (url) => {
+    if (url.includes('x.ai')) return { ok: false, status: 403 };
+    searchCalled = true;
+    return { ok: true, status: 200 };
+  };
+  await runCollect(ctx.options);
+  assert.ok(!searchCalled);
+});
+
+test('config fallback 不正値は validateConfig で拒否', () => {
+  assert.throws(() => validateConfig({ ...defaults, fallback: 'invalid' }), /fallback/);
+  const withNull = validateConfig({ ...defaults, fallback: null });
+  assert.equal(withNull.fallback, null);
+  const withWebSearch = validateConfig({ ...defaults, fallback: 'web-search' });
+  assert.equal(withWebSearch.fallback, 'web-search');
+});
+
 test('nextTopicIndex が範囲外・欠落・不正型なら0から再開', async t => {
   for (const nextTopicIndex of [-1, defaults.topics.length, 999, 1.5, '2', null, undefined]) {
     const ctx = setup(t); ctx.options.config.topics = defaults.topics; ctx.options.limit = 1;

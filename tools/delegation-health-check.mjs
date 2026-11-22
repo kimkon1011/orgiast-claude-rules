@@ -196,6 +196,18 @@ export function isQuotaLimitedRow(row = {}) {
   return /^(?:http_?)?(402|429)$/.test(String(row?.status ?? '').toLowerCase());
 }
 
+// Gemini 予算ガードのプローブ行は、status が無く in=0/out=0/secs~0.001 の記録行。
+// これらは API の失敗ではなく、予算超過による呼出抑制の痕跡なので全滅判定に
+// 含めると billing が lane_outage_unrepaired になる（2026-11-23 実測: gemini 14件中
+// 2件がこれに該当し、残り12件の http_402 と混ざって high の修理タスクになった）。
+export function isGeminiBillingProbeRow(row = {}) {
+  if (row?.provider !== 'gemini') return false;
+  // status が無い・in=0/out=0・secs < 0.01 が gemini 予算ガードの特徴
+  if (row.status != null && row.status !== '') return false;
+  if (row.in !== 0 || row.out !== 0) return false;
+  return typeof row.secs === 'number' && row.secs < 0.01;
+}
+
 export function isBillingSuspendedRow(row = {}) {
   return /^(?:http_?)?(402|429)$/.test(String(row?.status ?? '').toLowerCase())
     && isPermanentBillingDetail(row?.reason);
@@ -631,7 +643,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
           || /クールダウン中|起動を省略しました/.test(String(other.stderrTail || ''));
       });
     };
-    const allNonSkipped = rows.filter((row) => !isCooldownSkippedRow(row) && !isDeferredSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !skippedDuringCheapOutage(row) && !isEmptyDiffEscalationRow(row) && !isFallbackCooldownSkipRow(row) && !isQuotaSweepBenignRow(row) && emptyOutputReason(row) !== 'preflight_blocked');
+    const allNonSkipped = rows.filter((row) => !isCooldownSkippedRow(row) && !isDeferredSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !skippedDuringCheapOutage(row) && !isEmptyDiffEscalationRow(row) && !isFallbackCooldownSkipRow(row) && !isQuotaSweepBenignRow(row) && emptyOutputReason(row) !== 'preflight_blocked' && !isGeminiBillingProbeRow(row));
 	    // status:'ok' は API 呼出成功。out=0 でもレーン障害ではない（gemini プローブ行実測 2026-10-30〜11-01）。
 	    const attempts = allNonSkipped.filter((row) => emptyOutputReason(row) !== 'ok');
     // 24h 窓が cooldown だけで埋まる＝上限中で一度も試行していない。レーンは止まっているが

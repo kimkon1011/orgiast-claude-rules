@@ -164,3 +164,53 @@ test('実際に継続している待機文は W のまま検出する', () => {
   ];
   for (const text of texts) assert.equal(detect(text).some(hit => hit.pattern === 'W'), true, text);
 });
+
+function crossSessionFixture(t, { excerpt = 'PR #2577 のマージを待っています', completedText, completedAt = '2026-11-20T18:00:00.000Z' }) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'deferral-cross-session-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'home');
+  const projectsDir = path.join(root, 'projects');
+  jsonl(path.join(home, '.claude', 'handoff-audit-ledger.jsonl'), [
+    { ts: '2026-11-19T18:00:00.000Z', sessionId: 'waiting-session', excerpt }
+  ]);
+  jsonl(path.join(projectsDir, 'project-a', 'waiting-session.jsonl'), [
+    { type: 'assistant', timestamp: '2026-11-19T17:59:00.000Z', message: { content: [{ type: 'text', text: excerpt }] } }
+  ]);
+  if (completedText) jsonl(path.join(projectsDir, 'project-a', 'completed-session.jsonl'), [
+    { type: 'assistant', timestamp: completedAt, message: { content: [{ type: 'text', text: completedText }] } }
+  ]);
+  return scan({ home, projectsDir }).sources[1];
+}
+
+test('別セッションの同じPR番号と完了語で cross-session resolved にする', t => {
+  const source = crossSessionFixture(t, { completedText: 'PR #2577 はマージ済みです。' });
+  assert.equal(source.hits, 0);
+  assert.equal(source.byPattern.W, 0);
+  assert.equal(source.rows[0].resolved, 'cross-session');
+  assert.equal(source.rows[0].resolvedBy, 'completed-session');
+  assert.equal(source.rows[0].identifier, 'pr:2577');
+});
+
+test('別セッションに同じPR番号だけあっても完了語なしなら起票のまま', t => {
+  const source = crossSessionFixture(t, { completedText: 'PR #2577 の CI を確認中です。' });
+  assert.equal(source.hits, 1);
+  assert.equal(source.rows[0].resolved, undefined);
+});
+
+test('同じPRの完了報告でも72時間超なら起票のまま', t => {
+  const source = crossSessionFixture(t, {
+    completedText: 'PR #2577 はマージ済みです。',
+    completedAt: '2026-11-22T18:00:00.001Z'
+  });
+  assert.equal(source.hits, 1);
+  assert.equal(source.rows[0].resolved, undefined);
+});
+
+test('識別子のないWは別セッションに完了語があっても起票のまま', t => {
+  const source = crossSessionFixture(t, {
+    excerpt: 'CI の完了を待っています',
+    completedText: '修正はマージ済みです。'
+  });
+  assert.equal(source.hits, 1);
+  assert.equal(source.rows[0].resolved, undefined);
+});

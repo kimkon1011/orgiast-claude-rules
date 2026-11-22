@@ -642,7 +642,7 @@ export async function run(config = options(), io = {}) {
           entries[entryKey] = entry;
           ledger.autoResumeDisabledNotified ??= {};
           if (!ledger.autoResumeDisabledNotified[record.sessionId]) {
-            if (autoResumeDisabledByConfig()) {
+            if ((io.autoResumeDisabledByConfig ?? autoResumeDisabledByConfig)()) {
               console.log(`[stalled-session-resume] auto-resume disabled by config, skipping kim-inbox notification for session ${record.sessionId}`);
               ledger.autoResumeDisabledNotified[record.sessionId] = new Date(now()).toISOString();
             } else {

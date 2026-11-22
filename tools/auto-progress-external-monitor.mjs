@@ -98,7 +98,7 @@ export async function drainExternalQueue({ home, now, resume, io = {} }) {
   if (!autoResumeAllowed()) {
     for (const sessionId of new Set(pending.map(e => e.row.sessionId))) {
       if (!events.some(e => e.row.sessionId === sessionId && e.state === 'disabled')) {
-        if (autoResumeDisabledByConfig()) {
+        if ((io.autoResumeDisabledByConfig ?? autoResumeDisabledByConfig)()) {
           console.log(`[auto-progress-external-monitor] auto-resume disabled by config, skipping kim-inbox notification for session ${sessionId}`);
         } else {
           await (io.addKimInboxItem || addItem)(home, { kind: 'info', source: 'auto-progress-auto-resume-disabled', sessionId,

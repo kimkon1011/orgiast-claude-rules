@@ -915,7 +915,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     if (!patch(rowKey(row), { status: 'stalled', verdict: 'stalled', resumeOutcome: 'disabled',
       reason: '自動再開は廃止（config/auto-resume.json）', lastCheckedAt: at })) return true;
     if (!row.autoResumeDisabledNotifiedAt) {
-      if (autoResumeDisabledByConfig()) {
+      if ((io.autoResumeDisabledByConfig ?? autoResumeDisabledByConfig)()) {
         console.log(`[auto-progress-watch] auto-resume disabled by config, skipping kim-inbox notification for session ${row.sessionId}`);
         patch(rowKey(row), { autoResumeDisabledNotifiedAt: new Date(now).toISOString() });
       } else {
@@ -1246,7 +1246,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         current = { ...row, status: 'stalled', verdict: 'stalled', reason: outcome.reason };
         patch(rowKey(row), { status: 'stalled', verdict: 'stalled', reason: outcome.reason, resumedAt: row.resumedAt ?? '', resumeCount: row.resumeCount ?? 0, resumeOutcome: 'disabled', lastCheckedAt: new Date(now).toISOString() });
         if (!row.autoResumeDisabledNotifiedAt) {
-          if (autoResumeDisabledByConfig()) {
+          if ((io.autoResumeDisabledByConfig ?? autoResumeDisabledByConfig)()) {
             console.log(`[auto-progress-watch] auto-resume disabled by config, skipping kim-inbox notification for session ${row.sessionId}`);
             patch(rowKey(row), { autoResumeDisabledNotifiedAt: new Date(now).toISOString() });
           } else {

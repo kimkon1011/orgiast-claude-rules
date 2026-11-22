@@ -362,26 +362,57 @@ function appendJsonLines(file, values) {
   fs.appendFileSync(file, `${values.map(JSON.stringify).join('\n')}\n`);
 }
 
+async function closeMatchingExcluded(opts, rules, options, fetchImpl) {
+  const token = options.existingRows ? '' : await (options.getToken || getDriveToken)({ scope: SHEETS_SCOPE });
+  const read = options.existingRows
+    ? { values: options.existingRows }
+    : await sheetsRequest(fetchImpl, token, valuesUrl(opts.sheet, 'タスク!A2:O'));
+  const rows = Array.isArray(read.values) ? read.values : [];
+  const updates = [];
+  for (const [index, row] of rows.entries()) {
+    const task = rowToTask(row);
+    if (!ACTIVE_STATES.has(task.status)) continue;
+    // LLM によるタイトルの要約に依存せず、チャンネルと指定 ID で照合する。
+    if (!rules.some((rule) => rule.channelId === task.channelId && rule.closeTaskIds.includes(task.id))) continue;
+    const rowNumber = index + 2;
+    updates.push({
+      range: `タスク!M${rowNumber}:N${rowNumber}`,
+      values: [['対応不要', '民泊スタッフ間の定型連絡（電話担当が対応）・自動クローズ 2026-11-21']],
+    });
+  }
+  if (!opts.dryRun && updates.length) {
+    await sheetsRequest(fetchImpl, token, `${SHEETS_API}/${encodeURIComponent(opts.sheet)}/values:batchUpdate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ valueInputOption: 'RAW', data: updates }),
+    });
+  }
+  const result = { ok: true, closeMatchingExcluded: updates.length };
+  (options.log || console.log)(JSON.stringify(result));
+  return result;
+}
+
 export async function runDiscordTaskDigest(options = {}) {
   const argv = options.args || [], opts = { ...parseArgs(argv), ...(options.cli || {}) };
   const now = options.now || new Date(), since = parseSince(opts.since, now.getTime());
   if (since == null) throw new Error('--since の形式が不正です');
   const home = options.home || os.homedir(), fetchImpl = options.fetchImpl || globalThis.fetch;
+  const excludeRules = loadExcludeConfig(opts.excludeConfig);
+  if (opts.closeMatchingExcluded) return closeMatchingExcluded(opts, excludeRules, options, fetchImpl);
   let fixture = null, token = '';
   if (opts.fixture) fixture = JSON.parse(fs.readFileSync(opts.fixture, 'utf8'));
   let tokenSource = 'fixture';
-  if (!fixture && !opts.closeMatchingExcluded) {
+  if (!fixture) {
     const resolved = readToken(home);
     if (!resolved.token) throw new Error('Discord Bot トークンが見つかりません');
     token = resolved.token; tokenSource = resolved.source;
     if (!resolved.admin) console.error(`[警告] Administrator を持たない Bot (${resolved.source}) を使っています。private チャンネルは 403 で読めず台帳が空になります。node tools/discord-admin-token-install.mjs を先に実行してください`);
   }
-  const channels = fixture?.channels || (opts.closeMatchingExcluded ? [] : await discordChannels(opts.guild, token, fetchImpl));
+  const channels = fixture?.channels || await discordChannels(opts.guild, token, fetchImpl);
   if (!Array.isArray(channels)) throw new Error('fixture.channels は配列で指定してください');
   const textChannels = channels.filter((channel) => channel?.type === 0 || channel?.type === 5);
   const active = selectActiveChannels(channels, since, opts.maxChannels);
   const llm = options.llm || (opts.noLlm ? null : createLlmClient({ home, fetchImpl, usageFile: path.join(home, '.claude', 'executor-usage.jsonl') }));
-  const excludeRules = loadExcludeConfig(opts.excludeConfig || EXCLUDE_CONFIG_PATH);
   const extracted = []; let skipped = 0, messageCount = 0, held = 0, excludedCount = 0;
   const state = { lastRunAt: now.toISOString(), channels: {} };
   for (const channel of active) {
@@ -395,55 +426,19 @@ export async function runDiscordTaskDigest(options = {}) {
     const recent = messages.filter((message) => Date.parse(message?.timestamp || '') >= since);
     messageCount += recent.length;
     state.channels[channel.id] = { lastMessageId: String(channel.last_message_id || recent[0]?.id || ''), lastSeenAt: now.toISOString() };
-    const prepared = preprocessForTasks(recent);
-    const filtered = filterExcludedMessages(prepared, channel.id, excludeRules);
-    excludedCount += prepared.length - filtered.length;
-    if (!filtered.length || opts.noLlm) continue;
-    const result = await extractTasks(filtered, channel, { guildId: opts.guild, provider: opts.provider, llm });
+    const filtered = filterExcludedMessages(recent, channel.id, excludeRules);
+    excludedCount += recent.length - filtered.length;
+    const prepared = preprocessForTasks(filtered);
+    if (!prepared.length || opts.noLlm) continue;
+    const result = await extractTasks(prepared, channel, { guildId: opts.guild, provider: opts.provider, llm });
     extracted.push(...result.items); held += result.held;
   }
   let existingRows = options.existingRows || [];
   let sheetsToken = '';
-  if ((!opts.dryRun || opts.closeMatchingExcluded) && !options.existingRows) {
+  if (!opts.dryRun && !options.existingRows) {
     sheetsToken = await (options.getToken || getDriveToken)({ scope: SHEETS_SCOPE });
     const read = await sheetsRequest(fetchImpl, sheetsToken, valuesUrl(opts.sheet, 'タスク!A2:O'));
     existingRows = Array.isArray(read.values) ? read.values : [];
-  }
-  if (opts.closeMatchingExcluded) {
-    const closeMemo = '民泊スタッフ間の定型連絡（電話担当が対応）・自動クローズ 2026-11-21';
-    const closeStatus = '対応不要';
-    const closeRules = loadExcludeConfig(opts.excludeConfig || EXCLUDE_CONFIG_PATH);
-    let closed = 0;
-    const updatedRows = existingRows.map((row) => {
-      const task = rowToTask(row);
-      if (!ACTIVE_STATES.has(task.status)) return row;
-      const channelRules = closeRules.filter((rule) => rule.channelId === task.channelId);
-      if (!channelRules.length) return row;
-      // LLM 要約されたタイトルは定型文と字面がずれるため、
-      // 一回限りの移行は設定ファイルの closeTaskIds（対象IDの明示リスト）で正確に照合する
-      const matched = channelRules.some((rule) =>
-        rule.closeTaskIds.includes(task.id)
-      );
-      if (!matched) return row;
-      closed++;
-      const updated = [...row];
-      updated[12] = closeStatus;
-      updated[13] = closeMemo;
-      return updated;
-    });
-    if (opts.dryRun) {
-      (options.log || console.log)(JSON.stringify({ closeMatchingExcluded: closed }));
-    } else {
-      const writeCount = Math.max(existingRows.length, updatedRows.length);
-      const writeRows = [...updatedRows, ...Array.from({ length: writeCount - updatedRows.length }, () => Array(15).fill(''))];
-      if (writeCount > 0) {
-        const range = `タスク!A2:O${writeCount + 1}`;
-        await sheetsRequest(fetchImpl, sheetsToken, `${valuesUrl(opts.sheet, range)}?valueInputOption=USER_ENTERED`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ range, majorDimension: 'ROWS', values: writeRows }) });
-      }
-    }
-    const result = { ok: true, closeMatchingExcluded: closed };
-    (options.log || console.log)(JSON.stringify(result));
-    return result;
   }
   const merged = mergeTasks(existingRows, extracted, { now });
   const rows = merged.tasks.map(taskToRow);

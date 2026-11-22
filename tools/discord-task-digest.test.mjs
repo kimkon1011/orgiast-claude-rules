@@ -376,24 +376,21 @@ test('fixture + dry-run + スタブLLMで除外フィルタが効くことを確
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const channel = { id: '1382814215013793943', name: '民泊接客', type: 0, last_message_id: snowflake(NOW.getTime()) };
   const fixture = path.join(dir, 'fixture.json');
-  const excludeConfig = path.join(dir, 'exclude.json');
-  fs.writeFileSync(excludeConfig, JSON.stringify({
-    rules: [{ channelId: '1382814215013793943', patterns: ['チェックイン案内受取確認ができておりません', 'SMS送信をお願い'], reason: '民泊定型' }],
-  }));
   fs.writeFileSync(fixture, JSON.stringify({
     channels: [channel],
     messages: {
       '1382814215013793943': [
         { id: '100', timestamp: NOW.toISOString(), content: '本日チェックイン予定の田中様、チェックイン案内受取確認ができておりません', author: { username: '長澤' } },
-        { id: '101', timestamp: NOW.toISOString(), content: '佐藤様もチェックイン案内受取確認ができておりませんので、SMS送信をお願い致します', author: { username: '長澤' } },
+        { id: '101', timestamp: NOW.toISOString(), content: '佐藤様からチェックイン案内受取の連絡がきていないとのことです', author: { username: '長澤' } },
+        { id: '103', timestamp: NOW.toISOString(), content: 'SMS送信をお願い致します', author: { username: '長澤' } },
         { id: '102', timestamp: NOW.toISOString(), content: '803のテレビのリモコンが見当たらないので、ゲストにお伝えいただけますか', author: { username: '長澤' } },
       ],
     },
   }));
   const logs = [];
   const llm = async () => ({ text: JSON.stringify({ items: [{ i: 0, type: 'タスク', title: 'テレビリモコンの件', action: 'ゲストにリモコンについて伝える', owner: '', deadline: '', urgency: 1, impact: 1, evidence: '803のテレビのリモコンが見当たらない' }] }) });
-  const result = await runDiscordTaskDigest({ args: ['--fixture', fixture, '--dry-run', '--exclude-config', excludeConfig], now: NOW, home: dir, llm, existingRows: [], log: (line) => logs.push(line) });
-  assert.equal(result.excluded, 2);
+  const result = await runDiscordTaskDigest({ args: ['--fixture', fixture, '--dry-run'], now: NOW, home: dir, llm, existingRows: [], log: (line) => logs.push(line) });
+  assert.equal(result.excluded, 3);
   assert.equal(result.extracted, 1);
   assert.equal(result.added, 1);
   assert.equal(result.top[0].title, 'テレビリモコンの件');
@@ -434,7 +431,7 @@ test('--close-matching-excluded --dry-run は injected rows が無くても台�
   ];
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
-    calls.push({ url: String(url), method: init.method || 'GET' });
+    calls.push({ url: String(url), method: init.method || 'GET', body: init.body });
     return { ok: true, json: async () => ({ values: sheetRows }), text: async () => '' };
   };
   const logs = [];
@@ -445,5 +442,18 @@ test('--close-matching-excluded --dry-run は injected rows が無くても台�
   assert.equal(result.closeMatchingExcluded, 2);
   const sheetReads = calls.filter((call) => call.url.includes('test-sheet-id') && call.method === 'GET');
   assert.equal(sheetReads.length, 1, 'dry-run でも台帳を1回読む');
-  assert.equal(calls.filter((call) => call.method === 'PUT').length, 0, 'dry-run では書き込まない');
+  assert.equal(calls.length, 1, 'dry-run では書き込まない');
+
+  calls.length = 0;
+  await runDiscordTaskDigest({
+    args: ['--close-matching-excluded', '--sheet', 'test-sheet-id', '--exclude-config', excludeConfig],
+    now: NOW, home: dir, fetchImpl, getToken: async () => 'token', log: () => {},
+  });
+  assert.deepEqual(calls.map(({ method }) => method), ['GET', 'POST']);
+  assert.match(calls[1].url, /test-sheet-id\/values:batchUpdate$/);
+  const values = [['対応不要', '民泊スタッフ間の定型連絡（電話担当が対応）・自動クローズ 2026-11-21']];
+  assert.deepEqual(JSON.parse(calls[1].body), {
+    valueInputOption: 'RAW',
+    data: [{ range: 'タスク!M2:N2', values }, { range: 'タスク!M3:N3', values }],
+  });
 });

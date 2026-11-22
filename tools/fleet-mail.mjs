@@ -1566,6 +1566,12 @@ async function runMain(argv, deps) {
       catch { /* Beacon labels can still resolve exact targets when the roster is unavailable. */ }
     }
 
+    if (options['--exec'] === 'claude' && !options['--force'] && config.FLEET_HUB
+        && !isHubSender(label, config, pcMap || {})) {
+      err(`fleet-mail: --exec claude はハブ席（FLEET_HUB=${config.FLEET_HUB}）からのみ実行されます。この席（${label}）から送ると宛先で not-hub として実行されません。相談は --kind note、意図的に送るときだけ --force`);
+      return 7;
+    }
+
     // 再試行・キャッシュを含む同じスナップショットを解決と鮮度表示で共有する。
     let beaconPromise;
     const sharedBeacons = async args => {

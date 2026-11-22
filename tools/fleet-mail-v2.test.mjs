@@ -37,6 +37,35 @@ function fixture(t) {
 }
 const sendArgs = (f, to = sender, extra = []) => ['--send', '--to', to, '--kind', 'note', '--body-file', f.body, '--why', 'test', ...extra];
 
+for (const { name, label = 'other-PC', hub = 'kim-PC', exec = 'claude', extra = [], exitCode = 0 } of [
+  { name: '非ハブ席の Claude 送信を拒否', exitCode: 7 },
+  { name: '非ハブ席の Claude dry-run を拒否', extra: ['--dry-run'], exitCode: 7 },
+  { name: 'ハブ席の hostname を許可', label: '000KimPC' },
+  { name: '非ハブ席の Codex 送信を許可', exec: 'codex' },
+  { name: '非ハブ席の note 送信を許可', exec: '' },
+  { name: '非ハブ席の Claude 送信を --force で許可', extra: ['--force'] },
+  { name: 'FLEET_HUB 未設定時の Claude 送信を許可', hub: '' },
+]) {
+  test(`--send は${name}する`, async t => {
+    const f = fixture(t);
+    fs.writeFileSync(path.join(f.dir, 'cost-reporter.env'), `REPORTER_LABEL=${label}\n`);
+    if (hub) fs.appendFileSync(path.join(f.dir, 'fleet-sheet.env'), `FLEET_HUB=${hub}\n`);
+    f.deps.pcMap = { ...pcMap, 'kim-PC': { ...pcMap['kim-PC'], hostname: '000KimPC' } };
+    const args = ['--send', '--to', sender, '--kind', exec ? 'prompt' : 'note', '--body-file', f.body, '--why', 'test', ...extra];
+    if (exec) args.push('--exec', exec, '--exec-cwd', f.home);
+
+    assert.equal(await main(args, f.deps), exitCode);
+    const sends = f.calls.filter(call => call.kind === 'mail-send');
+    assert.equal(sends.length, exitCode === 7 ? 0 : 1);
+    if (exitCode === 7) {
+      assert.match(f.errors.join('\n'), /FLEET_HUB=kim-PC.*other-PC.*not-hub.*--kind note.*--force/);
+      assert.deepEqual(f.output, []);
+    } else {
+      assert.equal(sends[0].payload.from, label);
+    }
+  });
+}
+
 // ---- isHubSender tests ----
 test('isHubSender は FLEET_HUB と完全一致するラベルを許容', () => {
   const config = { FLEET_HUB: 'kim-PC' };

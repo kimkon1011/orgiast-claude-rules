@@ -10,6 +10,7 @@ import { redactSecrets } from './webhook-health.mjs';
 
 import { formatKimNotice } from './lib/kim-notice.mjs';
 import { clearStaleIndexLock } from './dirty-worktree-guard.mjs';
+import { scanRescuePaths } from './lib/secret-scan.mjs';
 
 const RETRY_MS = 6 * 60 * 60 * 1000;
 const RESCUE_REVIEW_KEY = 'rescue-branch-review';
@@ -215,6 +216,19 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
     if (status.clean) {
       if (key in state.dirtySince) { delete state.dirtySince[key]; save(); }
       return { clean: true, dirtyCount, events };
+    }
+    const scan = scanRescuePaths(tree, status.snapshotPaths);
+    const excludedPaths = new Set(scan.excluded.map(item => item.path));
+    status.snapshotPaths = scan.safePaths;
+    status.paths = status.paths.filter(filePath => !excludedPaths.has(filePath));
+    if (scan.excluded.length) {
+      const summary = scan.excluded.map(item => `${item.path} (${item.types.join(',')})`).join(', ');
+      log('RESCUE_SECRET_EXCLUDED', summary);
+      await sendOnce(`secret-scan:${key}:${day}`, `nightly-bootstrap: rescue から秘密値候補を除外しました。\n対象: ${summary}\nローカルファイルは変更していません。`);
+    }
+    if (!status.snapshotPaths.length) {
+      log('RESCUE_EMPTY_AFTER_SECRET_SCAN', 'all dirty paths excluded; commit and push skipped');
+      return { clean: false, dirtyCount, events };
     }
     if (preserveTree) {
       state.dirtySince[key] ??= now;

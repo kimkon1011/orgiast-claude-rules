@@ -209,6 +209,12 @@ export function resetLaneProbeWorkDir(dir) {
   for (const name of fs.readdirSync(dir)) fs.rmSync(path.join(dir, name), { recursive: true, force: true });
   return dir;
 }
+// Codex の書き込み結果を read-back の成否で評価する。exit code が 0 でなくても
+// read-back が成功していれば生存と判定する（2026-11-18 PR#2331）。
+export function nativeWriteProbeResult(result, readBackOk) {
+  if (readBackOk) return { viaChain: false, code: 0, text: `WRITE_OK${result.code === 0 ? '' : ` exit=${result.code}`}` };
+  return { viaChain: probeViaChain(result.text, 'codex'), code: 1, text: `書き込み確認失敗 ${result.text || ''}` };
+}
 export async function runNativeWriteProbe({ home, timeoutMs, workDir = laneProbeWorkDir() }) {
   const cwd = resetLaneProbeWorkDir(workDir);
   const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home, CODEX_DO_CHEAP_FIRST: '0', CODEX_DO_SKIP_CURSOR_AGENT: '1' }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e, stdout, stderr) => {
@@ -223,7 +229,7 @@ export async function runNativeWriteProbe({ home, timeoutMs, workDir = laneProbe
     const result = await run(process.execPath, nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }));
     let ok = false;
     try { ok = fs.readFileSync(path.join(cwd, 'WRITE_OK.txt'), 'utf8').trim() === 'WRITE_OK'; } catch {}
-    return { viaChain: probeViaChain(result.text, 'codex'), code: result.code === 0 && ok ? 0 : 1, text: ok ? 'WRITE_OK' : `書き込み確認失敗 ${result.text || ''}` };
+    return nativeWriteProbeResult(result, ok);
   } finally { try { resetLaneProbeWorkDir(cwd); } catch {} }
 }
 export function runProbe(provider, { home, timeoutMs, dryRun = false, probeAutoDisabled = false, execFileImpl = execFile } = {}) {

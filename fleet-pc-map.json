@@ -7,12 +7,13 @@
     "titleLabel": "KimPC",
     "person": "金功勇",
     "account": "kim@orgiast.jp",
+    "notifyDiscordId": "715210673642012733",
     "aliases": [
       "DESKTOP-2D0R4LI",
       "kim-PC(開発機/kim)",
       "000KimPC"
     ],
-    "_evidence": "報告本文の 🖥 hostname=DESKTOP-2D0R4LI / user=uers / git=kim@orgiast.jp（2026-08-27 実測）。kim 明示回答『18行目(kim-PC)と22行目(DESKTOP-2D0R4LI)は同じパソコン』（2026-08-27）。kim が DESKTOP-2D0R4LI を『作業用004民泊用』行から独立行へ移動済み＝作業用004民泊用 は開発機ではないことが確定。2026-11-19 に PC 名を 000KIMPC に変更（DNS 表記 000KimPC）。\n  【追記 2026-11-22】account 追加: codexAccount は既に kim@orgiast.jp で _evidence に git=kim@orgiast.jp の実測があるため確実。これが無いと「台帳外アカウントで報告」が出る。aliases に 000KimPC 追加: 台帳の hostname は既に 000KIMPC。表記ゆれ吸収のため\n  【追記 2026-11-23】account 追加: git=kim@orgiast.jp の実測あり。これにより「台帳外アカウントで報告」が解消",
+    "_evidence": "報告本文の 🖥 hostname=DESKTOP-2D0R4LI / user=uers / git=kim@orgiast.jp（2026-08-27 実測）。kim 明示回答『18行目(kim-PC)と22行目(DESKTOP-2D0R4LI)は同じパソコン』（2026-08-27）。kim が DESKTOP-2D0R4LI を『作業用004民泊用』行から独立行へ移動済み＝作業用004民泊用 は開発機ではないことが確定。2026-11-19 に PC 名を 000KIMPC に変更（DNS 表記 000KimPC）。\n  【追記 2026-11-22】account 追記取り下げ（notifyDiscordId 未設定のためテスト抵触）。\n  【追記 2026-11-23】account + notifyDiscordId を同時設定。git=kim@orgiast.jp の実測あり。他の金功勇担当PC（作業用011等）と同じ kim 宛 Discord ID を設定",
     "codexAccount": "kim@orgiast.jp"
   },
   "kimko-PC": {
@@ -80,6 +81,14 @@
       "remoteName": "作業用018",
       "account": "cr@orgiast.jp",
       "_evidence": "kim 明示回答『018 は cr@orgiast.jp』(2026-10-08)＝アカウントは確定。hostname・Claude Code 導入状況・報告実績は未確認"
+    },
+    "増田MacBookAir": {
+      "account": "cr@orgiast.jp",
+      "person": "増田裕子",
+      "model": "MacBook Air 13\"",
+      "os": "macOS 14.8.9",
+      "serial": "C02YK73PJK77",
+      "_evidence": "kim 申告 2026-10-13: このMacは cr@orgiast.jp の Claude Code を使用、使用者は増田裕子さん。機種・OS・シリアルは kim のスクリーンショット（デバイス情報画面、Macを探す=オフ）。hostname・REPORTER_LABEL は未報告のため宛先解決には使わない。フリートシートの『MacBook-Air』『macBook』行のどちらかの可能性があるが未照合"
     }
   },
   "w018-PC": {
@@ -113,7 +122,7 @@
       "作業用008",
       "999genba"
     ],
-    "_evidence": "2026-11-04 利用者申告「このパソコンは999」で作業用999に訂正。旧登録(PR #1401)の作業用008は、kim-PC が 008 前提で送った引継ぎメールに本PCの Claude が「作業用008で受け取りました」と返した自己申告が根拠で、作業用番号はローカルで検証不能だった（誤登録）。作業用008 宛の既存経路（鹿沼案件引継ぎ・meeting-prep-routing）を切らないため aliases に残す。実在の作業用008 が別にあるかは kim 確認待ち。旧 作業用999 行の記録: remoteName 根拠: 既存 sheetName=作業用999(シートD列表記)。ただし hostname 未報告のため fleet-mail では照合値=キー名『作業用999』になり、実機の label/hostname と一致する保証なし。配布インストーラ完走(結果 OK 29 / NG 3)と claude --version 2.1.258 を kim のスクリーンショットで実機確認(2026-09-03)。hostname は未報告のため未記入。fleet-sheet.env 未取得で未報告 → PR #285 の自己修復待ち。\n  【追記 2026-11-22】999genba alias 追加: 台帳の remoteName/sheetName が「作業用999」。番号 999 が一致。台帳の _identityConflict にある kim 回答「作業用999で genbateam.toho@gmail.com で行っているはず」と、999genba の報告アカウントが gmail.com ドメインである点が一致\n  【追記 2026-11-23】account は seisaku-team@ のまま維持。gmail アカウントは TETSUKO 作業用であって Claude アカウントではない（kim 回答「作業用999で genbateam.toho@gmail.com で行っているはず」は作業用アカウントの話）",
+    "_evidence": "2026-11-04 利用者申告「このパソコンは999」で作業用999に訂正。旧登録(PR #1401)の作業用008は、kim-PC が 008 前提で送った引継ぎメールに本PCの Claude が「作業用008で受け取りました」と返した自己申告が根拠で、作業用番号はローカルで検証不能だった（誤登録）。作業用008 宛の既存経路（鹿沼案件引継ぎ・meeting-prep-routing）を切らないため aliases に残す。実在の作業用008 が別にあるかは kim 確認待ち。旧 作業用999 行の記録: remoteName 根拠: 既存 sheetName=作業用999(シートD列表記)。ただし hostname 未報告のため fleet-mail では照合値=キー名『作業用999』になり、実機の label/hostname と一致する保証なし。配布インストーラ完走(結果 OK 29 / NG 3)と claude --version 2.1.258 を kim のスクリーンショットで実機確認(2026-09-03)。hostname は未報告のため未記入。fleet-sheet.env 未取得で未報告 → PR #285 の自己修復待ち。\n  【追記 2026-11-22】999genba alias 追加: 台帳の remoteName/sheetName が「作業用999」。番号 999 が一致。台帳の _identityConflict にある kim 回答「作業用999で genbateam.toho@gmail.com で行っているはず」と、999genba の報告アカウントが gmail.com ドメインである点が一致",
     "sheetName": "作業用999"
   },
   "DELL": {
@@ -139,10 +148,9 @@
     "person": "金功勇",
     "aliases": [
       "015CAFE",
-      "DESKTOP-63MQR3L",
-      "cafe015-PC"
+      "DESKTOP-63MQR3L"
     ],
-    "_evidence": "2026-11-14 操作者が『このPCは015』と明言。hostname は DESKTOP-63MQR3L→015CAFE に変更済み（同一機体 Thirdwave ZG）。PR #1782 の 008 は推定による誤登録\n  【追記 2026-11-23】cafe015-PC alias 追加: fleet-liveness で cafe015-PC の報告が台帳未登録になるため別表記として追加"
+    "_evidence": "2026-11-14 操作者が『このPCは015』と明言。hostname は DESKTOP-63MQR3L→015CAFE に変更済み（同一機体 Thirdwave ZG）。PR #1782 の 008 は推定による誤登録"
   },
   "008XPS8300": {
     "hostname": "008XPS8300",
@@ -160,32 +168,11 @@
   "GROKBOT-VM": {
     "hostname": "grok-bot-vm-447105645",
     "account": "kim@orgiast.jp",
+    "notifyDiscordId": "715210673642012733",
     "person": "金功勇",
     "aliases": [
       "grok-bot-vm-447105645"
     ],
-    "_evidence": "2026-11-22 fleet-liveness の実報告で hostname=grok-bot-vm-447105645 / Claude=kim@orgiast.jp を観測。ONBOARDING §1.18.2 のブラウザ実操作委譲用 Grok Bot の VM で、人が常用する席ではない account は通知先(notifyDiscordId)必須の規約に当たるため未記入（人の常用席ではない）。\n  【追記 2026-11-23】account 追加: fleet-liveness で Claude=kim@orgiast.jp を実測"
-  },
-  "DESKTOP-S3MPM6T": {
-    "hostname": "DESKTOP-S3MPM6T",
-    "account": "seisaku-team@orgiast.jp",
-    "remoteName": "DESKTOP-S3MPM6T",
-    "aliases": ["DESKTOP-S3MPM6T"],
-    "_evidence": "2026-11-22 Fleet triage digest で観測: hostname=DESKTOP-S3MPM6T / Claude=s***@orgiast.jp（seisaku-team@）。詳細は未確認。自動報告のみで人による申告なし"
-  },
-  "LAPTOP-21BPBOMF": {
-    "hostname": "LAPTOP-21BPBOMF",
-    "account": "seisaku-team@orgiast.jp",
-    "remoteName": "LAPTOP-21BPBOMF",
-    "aliases": ["LAPTOP-21BPBOMF"],
-    "_evidence": "2026-11-22 Fleet triage digest で観測: hostname=LAPTOP-21BPBOMF / Claude=g***@gmail.com。DESKTOP-BDOAK99 と同じ genbateamtoho@gmail.com の可能性。詳細は未確認"
-  },
-  "増田MacBookAir": {
-    "account": "cr@orgiast.jp",
-    "person": "増田裕子",
-    "model": "MacBook Air 13\"",
-    "os": "macOS 14.8.9",
-    "serial": "C02YK73PJK77",
-    "_evidence": "kim 申告 2026-10-13: このMacは cr@orgiast.jp の Claude Code を使用、使用者は増田裕子さん。機種・OS・シリアルは kim のスクリーンショット（デバイス情報画面、Macを探す=オフ）。hostname・REPORTER_LABEL は未報告のため宛先解決には使わない。フリートシートの『MacBook-Air』『macBook』行のどちらかの可能性があるが未照合\n  【追記 2026-11-23】_unverified から昇格。fleet-liveness で macBook / 百瀬かなうのMacBook Air として観測されている可能性あり（同一機かは未確認）"
+    "_evidence": "2026-11-22 fleet-liveness の実報告で hostname=grok-bot-vm-447105645 / Claude=kim@orgiast.jp を観測。ONBOARDING §1.18.2 のブラウザ実操作委譲用 Grok Bot の VM。\n  【追記 2026-11-23】account + notifyDiscordId を設定。Claude=kim@orgiast.jp の実測により、通知先は kim の Discord ID（715210673642012733）。person 追加: 動作アカウント kim@ に基づく"
   }
 }

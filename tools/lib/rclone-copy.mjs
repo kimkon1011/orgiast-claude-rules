@@ -17,12 +17,28 @@ export async function copyToRclone({ source, destination, directory = false, ext
   return run([directory ? 'copy' : 'copyto', source, destination, ...extraArgs]);
 }
 
+export function parseCliArgs(argv) {
+  const args = [...argv];
+  let timeout = 6 * 60 * 60 * 1000;
+  if (args[0] === '--timeout-ms') {
+    const value = args.splice(0, 2)[1];
+    timeout = Number(value);
+    if (!Number.isSafeInteger(timeout) || timeout <= 0) {
+      throw new Error('rclone-copy --timeout-ms requires a positive safe integer');
+    }
+  }
+  const [executable, source, destination, ...extraArgs] = args;
+  if (!executable || !source || !destination) {
+    throw new Error('rclone-copy requires executable, source and destination');
+  }
+  return { executable, source, destination, extraArgs, timeout };
+}
+
 if (isEntry(import.meta.url)) {
-  const [executable, source, destination, ...extraArgs] = process.argv.slice(2);
   try {
-    if (!executable || !source || !destination) throw new Error('rclone-copy requires executable, source and destination');
+    const { executable, source, destination, extraArgs, timeout } = parseCliArgs(process.argv.slice(2));
     await copyToRclone({ source, destination, extraArgs,
-      run: args => runRclone(args, { executable, timeout: 6 * 60 * 60 * 1000 }),
+      run: args => runRclone(args, { executable, timeout }),
     });
   } catch (error) {
     console.error(error.message);

@@ -66,7 +66,7 @@ test('rescue still works when hundreds of rescue refs have accumulated (no ENAME
   const head = f.git('rev-parse', 'HEAD').trim();
   const script = Array.from({ length: 700 }, (_, i) => `update refs/heads/rescue/bulk-${i} ${head}\n`).join('');
   execFileSync('git', ['-C', f.repo, 'update-ref', '--stdin'], { input: script, encoding: 'utf8' });
-  f.git('push', 'origin', 'refs/heads/rescue/*:refs/heads/rescue/*');
+  f.gitRun('push', '--quiet', 'origin', 'refs/heads/rescue/*:refs/heads/rescue/*');
   fs.writeFileSync(path.join(f.repo, 'tracked'), 'changed');
   const result = await syncTree(f.repo, f.home, f);
   assert.ok(result.events.some(e => e.step === 'RESCUE_LOCAL_OK'), JSON.stringify(result));
@@ -78,7 +78,7 @@ test('shared exclusions alone are clean, retained during sync and absent from re
   for (const name of ['scratch', '.work', '.work-eval', '.fleet-mail-work']) {
     fs.mkdirSync(path.join(f.repo, name)); fs.writeFileSync(path.join(f.repo, name, 'keep'), 'precious');
   }
-  f.git('init', path.join(f.repo, 'nested clone'));
+  f.gitRun('init', path.join(f.repo, 'nested clone'));
   fs.writeFileSync(path.join(f.repo, 'nested clone', 'keep'), 'precious');
   assert.equal(dirtyStatus(f.repo).clean, true);
   assert.equal((await rescueTree(f.repo, f.home, f)).clean, true);
@@ -134,7 +134,7 @@ test('state contention or corruption fails closed', async t => {
 for (const staged of [false, true]) test(`snapshot handles deletions and renames: staged=${staged}`, async t => {
   const f = fixture(t);
   fs.renameSync(path.join(f.repo, 'tracked'), path.join(f.repo, 'renamed file'));
-  if (staged) f.git('add', '-A');
+  if (staged) f.gitRun('add', '-A');
   const before = f.git('status', '--porcelain');
   const result = await syncTree(f.repo, f.home, f);
   assert.ok(result.events.some(e => e.step === 'RESCUE_LOCAL_OK'), JSON.stringify(result));

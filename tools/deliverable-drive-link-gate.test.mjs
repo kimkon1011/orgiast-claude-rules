@@ -54,7 +54,8 @@ test('②で確認してもらう成果物にも同じ単位のDrive URLが必�
 **③ kim がやること**
 - 上の2つの確認事項に返信する。`;
   assert.equal(judge({ text }).decision, 'block');
-  assert.equal(judge({ text: text.replace('見せてよいですか？', '見せてよいですか？ https://drive.google.com/file/d/example/view') }).decision, 'pass');
+  assert.equal(judge({ text: text.replace('見せてよいですか？', '見せてよいですか？ https://drive.google.com/file/d/example/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください') }).decision, 'block');
+  assert.equal(judge({ text: text.replace('見せてよいですか？', '見せてよいですか？ https://drive.google.com/file/d/flyer/view?authuser=kim@orgiast.jp https://drive.google.com/file/d/images/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください') }).decision, 'pass');
 });
 
 test('対象外の報告と成果物を参照しない返信は通す', () => {
@@ -133,4 +134,192 @@ test('専用カウントは合格でリセットし、別セッションへ持�
   assert.equal(check('b', true).count, 1);
   assert.equal(check('a', false).count, 0);
   assert.equal(check('a', true).count, 1);
+});
+
+// ===== 承認コンテキストのテスト（2026-11-15 GridBeyond実害） =====
+
+test('承認コンテキスト: 梅竹松プラン承認依頼にURLなし→block', () => {
+  const text = '梅・竹・松のパース、どれを載せるか決めてください。';
+  assert.equal(judge({ text }).decision, 'block');
+});
+
+test('承認コンテキスト: 梅竹松プラン承認依頼に成果物ごとのURLと開き方があればpass', () => {
+  const text = `梅のパース https://drive.google.com/file/d/ume/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください
+竹のパース https://drive.google.com/file/d/take/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください
+松のパース https://drive.google.com/file/d/matsu/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください
+どれを載せるか決めてください。`;
+  assert.equal(judge({ text }).decision, 'pass');
+});
+
+test('承認コンテキスト: 複数成果物にURLが1本だけならblock', () => {
+  const text = `梅のパース、竹のパース、松のパース、どれがよいですか？
+https://drive.google.com/file/d/ume/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください`;
+  assert.equal(judge({ text }).decision, 'block');
+});
+
+test('承認コンテキスト: 3行以上離れたURLは不十分→block', () => {
+  const text = `梅のパース、竹のパース、松のパース、どれがよいですか？
+
+
+https://drive.google.com/file/d/ume/view?authuser=kim@orgiast.jp`;
+  assert.equal(judge({ text }).decision, 'block');
+});
+
+test('承認コンテキスト: 引用内の承認文は対象外', () => {
+  assert.equal(judge({ text: '「梅竹松のどれがよいですか？」' }).decision, 'pass');
+  assert.equal(judge({ text: '『梅竹松のどれがよいですか？』' }).decision, 'pass');
+});
+
+test('承認コンテキスト: URLなし（理由: …）の明記でpass', () => {
+  const text = '梅のパース、竹のパース、松のパース、どれを載せるか決めてください。URLなし（理由: 未生成のため）';
+  assert.equal(judge({ text }).decision, 'pass');
+});
+
+test('承認コンテキスト: 成果物語が無い承認質問は対象外', () => {
+  assert.equal(judge({ text: 'この内容でよいですか？' }).decision, 'pass');
+  assert.equal(judge({ text: 'どちらがよいですか？' }).decision, 'pass');
+  assert.equal(judge({ text: '承認してください' }).decision, 'pass');
+  assert.equal(judge({ text: 'A案とB案、どちらがよいですか？' }).decision, 'pass');
+});
+
+test('承認コンテキスト: 提案書の確認依頼にURLなし→block', () => {
+  assert.equal(judge({ text: '提案書を確認してください。' }).decision, 'block');
+});
+
+test('承認コンテキスト: 提案書の確認依頼にURLあり→pass', () => {
+  assert.equal(judge({ text: '提案書を確認してください。 https://docs.google.com/document/d/proposal/edit?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください' }).decision, 'pass');
+});
+
+test('承認コンテキスト: authuser欠落または開くアカウント案内欠落→block', () => {
+  assert.equal(judge({ text: '提案書を確認してください。 https://docs.google.com/document/d/proposal/edit kim@orgiast.jp で開いてください' }).decision, 'block');
+  assert.equal(judge({ text: '提案書を確認してください。 https://docs.google.com/document/d/proposal/edit?authuser=kim@orgiast.jp' }).decision, 'block');
+  assert.equal(judge({ text: '提案書を確認してください。 https://docs.google.com/document/d/proposal/edit?authuser=other@orgiast.jp kim@orgiast.jp で開いてください' }).decision, 'block');
+});
+
+test('承認コンテキスト: メール本文の草案承認依頼→block', () => {
+  assert.equal(judge({ text: 'メール本文の草案を確認してください。' }).decision, 'block');
+});
+
+test('承認コンテキスト: 見積の確認依頼にURLなし→block', () => {
+  assert.equal(judge({ text: '見積もりを確認してください。' }).decision, 'block');
+});
+
+test('承認コンテキスト: A案・B案のパース選択依頼にURLなし→block', () => {
+  assert.equal(judge({ text: 'A案とB案のパース、どちらがよいですか？' }).decision, 'block');
+});
+
+test('承認コンテキスト: A案・B案のパース選択依頼にURLあり→pass', () => {
+  assert.equal(judge({ text: 'A案のパース https://drive.google.com/file/d/a/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください\nB案のパース https://drive.google.com/file/d/b/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください\nどちらがよいですか？' }).decision, 'pass');
+});
+
+test('承認コンテキスト: コードブロック内は対象外', () => {
+  const text = '```\n梅竹松のどれがよいですか？\n```';
+  assert.equal(judge({ text }).decision, 'pass');
+});
+
+test('承認コンテキスト: 既存の通すケースを壊さない', () => {
+  assert.equal(judge({ text: '【最終まとめ】\n① 報告\n- チラシを保存しました。\n② 確認事項\nなし\n③ やること\nなし' }).decision, 'pass');
+  assert.equal(judge({ text: 'テストは全件成功しました。' }).decision, 'pass');
+  assert.equal(judge({ text: '【最終まとめ】\n② 確認事項\n- 日程は明日でよいですか？\n③ やること\n- 上の2つの確認事項に返信する。' }).decision, 'pass');
+});
+
+const approvalUrl = (id, account = 'kim@orgiast.jp') => `https://drive.google.com/file/d/${id}/view?authuser=${account}`;
+const openAccount = 'kim@orgiast.jp で開いてください';
+
+test('GridBeyond: 草案Docだけでは梅竹松のパースと提案書PDFを承認できない', () => {
+  const text = `梅・竹・松のどれを載せるか／金額／メール本文を承認してください。
+提案書PDF
+メール本文の草案Doc ${approvalUrl('draft')} ${openAccount}`;
+  assert.equal(judge({ text }).decision, 'block');
+  const fixed = `次の成果物と金額を承認してください。
+梅パース画像 ${approvalUrl('ume')} ${openAccount}
+竹パース画像 ${approvalUrl('take')} ${openAccount}
+松パース画像 ${approvalUrl('matsu')} ${openAccount}
+提案書PDF ${approvalUrl('proposal')} ${openAccount}
+メール本文の草案Doc ${approvalUrl('draft')} ${openAccount}`;
+  assert.equal(judge({ text: fixed }).decision, 'pass');
+  assert.match(judge({ text }).reason, /成果物ごとの実物URL.*同じ行/);
+  assert.match(judge({ text }).reason, /見つからなければ Drive へアップし直す/);
+});
+
+test('全承認語・行末の成果物語・全角案名を検出する', () => {
+  for (const action of ['承認', 'よいですか', 'いいですか', '送ってよい', 'どれ', '選んで', '確認してください', 'OK', '判断']) {
+    for (const item of ['梅竹松パース', 'A案B案のパース', '案12の画像', '案ＮのPDF', 'Ａ案のデザイン', 'パース', '提案書', '見積', 'スライド', 'メール本文', '草案', 'PDF', '画像', 'Doc']) {
+      assert.equal(judge({ text: `${action}\n${item}` }).decision, 'block', `${action}: ${item}`);
+    }
+  }
+});
+
+test('同じ行と直後1〜2行のURLを認め、3行後・引用で距離が縮むURLは拒否', () => {
+  for (const gap of ['', '\n', '\n\n']) {
+    assert.equal(judge({ text: `PDFを承認してください ${gap}${approvalUrl('pdf')} ${openAccount}` }).decision, 'pass');
+  }
+  for (const gap of ['\n\n\n', '\n『引用\n引用\n引用』\n']) {
+    assert.equal(judge({ text: `PDFを承認してください ${gap}${approvalUrl('pdf')} ${openAccount}` }).decision, 'block');
+  }
+  assert.equal(judge({ text: `${openAccount}\nPDFを承認してください ${approvalUrl('pdf')}` }).decision, 'pass');
+});
+
+test('次の成果物のURLや例外理由は流用できない', () => {
+  for (const following of [`草案 ${approvalUrl('draft')} ${openAccount}`, '草案 URLなし（理由: 未作成）']) {
+    assert.equal(judge({ text: `承認してください\n提案書PDF\n${following}` }).decision, 'block');
+  }
+  assert.equal(judge({ text: `承認してください\n提案書PDF\n## 別件\n${approvalUrl('draft')} ${openAccount}` }).decision, 'block');
+});
+
+test('異なる種類の成果物にも別URLが必要で、複合名は1件として扱う', () => {
+  for (const items of ['パース画像と提案書PDF', '提案書／見積', 'メール本文、スライド', '案10・案11のパース']) {
+    assert.equal(judge({ text: `承認してください。${items} ${approvalUrl('a')} ${openAccount}` }).decision, 'block');
+    assert.equal(judge({ text: `承認してください。${items} ${approvalUrl('a')} ${approvalUrl('b')} ${openAccount}` }).decision, 'pass');
+  }
+  for (const item of ['提案書PDF', 'メール本文の草案Doc', '梅パース画像']) {
+    assert.equal(judge({ text: `承認してください。${item} ${approvalUrl('a')} ${openAccount}` }).decision, 'pass');
+  }
+  assert.equal(judge({ text: `A案とB案のパースを選んで ${approvalUrl('a')} ${approvalUrl('a')}&usp=sharing ${openAccount}` }).decision, 'block');
+});
+
+test('引用ブロック・コード・日本語引用を承認検査から除外する', () => {
+  for (const text of ['> PDFを承認してください', '~~~text\nPDFを承認してください\n~~~', '```js\nconst x = `PDFを承認してください`;\n```', '`PDFを承認してください`', '『PDFを承認してください』']) {
+    assert.equal(judge({ text }).decision, 'pass', text);
+  }
+  for (const link of [`> ${approvalUrl('a')} ${openAccount}`, `\`${approvalUrl('a')} ${openAccount}\``]) {
+    assert.equal(judge({ text: `PDFを承認してください\n${link}` }).decision, 'block');
+  }
+  const summary = `【最終まとめ】\n③ 確認事項\n提案書を承認してください ${approvalUrl('a')} ${openAccount}\n\n【kim 確認用の全文】\n> 提案書を添付してお送りします。確認してください。`;
+  assert.equal(judge({ text: summary }).decision, 'pass');
+});
+
+test('URLなし例外は理由必須、アップロード失敗だけでは承認検査を免除しない', () => {
+  assert.equal(judge({ text: '承認してください\nPDF URLなし（理由: 未生成の比較案）' }).decision, 'pass');
+  assert.equal(judge({ text: '承認してください\nPDF URLなし（理由: ）' }).decision, 'block');
+  assert.equal(judge({ text: 'PDFを承認してください\n[DRIVE-UPLOAD-FAILED: rclone: 403 insufficientPermissions for folder]' }).decision, 'block');
+});
+
+test('URLのauthuserはメール、開くアカウント案内と一致、URL内の文字列は成果物にしない', () => {
+  for (const account of ['0', 'other@orgiast.jp', 'kim@orgiast']) {
+    assert.equal(judge({ text: `PDFを承認してください ${approvalUrl('a', account)} ${openAccount}` }).decision, 'block');
+  }
+  assert.equal(judge({ text: `PDFを承認してください\n${approvalUrl('Doc-PDF')} ${openAccount}` }).decision, 'pass');
+  assert.equal(judge({ text: `PDFを承認してください ${approvalUrl('a', 'kim%40orgiast.jp')}#preview ${openAccount}` }).decision, 'pass');
+  assert.equal(judge({ text: `PDFを承認してください ${approvalUrl('a')} で開いてください` }).decision, 'block');
+  assert.equal(judge({ text: `PDFを承認してください ${approvalUrl('a')} xkim@orgiast.jp で開いてください` }).decision, 'block');
+  assert.equal(judge({ text: `A案とB案のパースを選んで https://drive.google.com/open?id=a&authuser=kim@orgiast.jp https://drive.google.com/open?id=b&authuser=kim@orgiast.jp ${openAccount}` }).decision, 'pass');
+});
+
+test('runner: 最終まとめなしの承認依頼も既存Stop登録からblockする', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'approval-stop-'));
+  const previous = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  t.after(() => { if (previous === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = previous; fs.rmSync(home, { recursive: true, force: true }); });
+  const text = '梅竹松のパースと提案書PDFを承認してください。';
+  const result = await run({ session_id: 'approval', assistant_text: text }, { raw: '', assistantText: text });
+  assert.equal(result.decision, 'block');
+  assert.deepEqual(result.record.blockedBy, ['deliverable-drive-link-gate']);
+});
+
+test('承認見出しだけで発火し、Driveトップでは成果物を開けない', () => {
+  const text = '【kim 確認用の全文】\n- 提案書PDF';
+  assert.equal(judge({ text }).decision, 'block');
+  assert.equal(judge({ text: `${text} https://drive.google.com/?authuser=kim@orgiast.jp ${openAccount}` }).decision, 'block');
+  assert.equal(judge({ text: `${text} ${approvalUrl('proposal')} ${openAccount}` }).decision, 'pass');
 });

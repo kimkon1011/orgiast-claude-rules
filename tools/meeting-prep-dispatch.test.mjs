@@ -91,13 +91,36 @@ function calendarMock() {
     request: async (scope, url, method = 'GET', body) => {
       assert.equal(scope, 'calendar.events');
       calls.push({ url, method, body });
-      assert.match(url, /\/calendars\/(primary|prep)\/events/);
+      assert.match(url, /\/calendars\/(primary|prep|seisaku-team%40orgiast\.jp)\/events/);
       assert.ok(!url.endsWith('/event1'), '元予定にはアクセスしない');
       const id = method === 'POST' ? body.id : url.split('/').at(-1);
       if (method === 'GET') { if (!events.has(id)) throw Object.assign(Error('404'), { status: 404 }); return events.get(id); }
       const result = { ...events.get(id), ...body }; events.set(id, result); return result;
     } };
 }
+test('学会の準備予定を制作カレンダーに作成し、元予定の移行後も同じ準備予定を更新する', async () => {
+  const g = calendarMock(), destination = 'seisaku-team@orgiast.jp';
+  const job = plan()[0];
+  job.event = { ...job.event, calendarId: 'kim@orgiast.jp', summary: '【自動】【福岡NXA】設営' };
+  g.pages = async (scope, url) => {
+    assert.equal(scope, 'calendar.events');
+    const lookup = new URL(url);
+    assert.match(lookup.pathname, /seisaku-team%40orgiast\.jp\/events$/);
+    assert.equal(lookup.searchParams.get('privateExtendedProperty'), `meetingPrepKey=${job.key}`);
+    return [...g.events.values()];
+  };
+
+  const original = await upsertPreparation(g, 'primary', job, { summary: '初回' });
+  const movedJob = { ...job, event: { ...job.event, calendarId: destination } };
+  const updated = await upsertPreparation(g, 'primary', movedJob, { summary: '移行後' });
+  assert.equal(updated.id, original.id);
+  assert.match(updated.description, /移行後/);
+  assert.equal(updated.extendedProperties.private.sourceCalendarId, destination);
+  assert.equal(g.events.size, 1);
+  assert.equal(g.calls.filter(c => c.method === 'POST').length, 1);
+  assert.ok(g.calls.every(c => c.url.includes('/calendars/seisaku-team%40orgiast.jp/events')));
+});
+
 test('準備予定を同じIDで更新し元予定を変更しない・read-back不一致検出', async () => {
   const g = calendarMock(), job = plan()[0];
   await upsertPreparation(g, 'primary', job, { summary: '初回' });

@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { addItem, listItems, isKimSeat } from '../kim-inbox.mjs';
+import { addItem, readInboxItem, isKimSeat } from '../kim-inbox.mjs';
 import { completionActions } from './auto-progress-artifact.mjs';
+import { inboxBrief } from './kim-inbox-relay-state.mjs';
 import { rowKey } from '../auto-progress-ledger.mjs';
 
 export const usesKimDoneInbox = (row, home) => isKimSeat(home) || String(row.owner || '').toLowerCase() === 'kim@orgiast.jp';
@@ -16,12 +17,17 @@ export async function deliverDoneInbox(home, rows, text, { now = Date.now(), io 
     const dedupeKey = 'auto-progress-done:' + createHash('sha256')
       .update(rows.map(rowKey).sort().join('\n')).digest('hex').match(/.{8}/g).join('-');
     const details = rows.map(row => completionActions(row, { home }));
-    const kind = details.some(detail => detail.kind === 'ask') ? 'ask' : 'info';
+    const kind = (() => {
+      if (!details.some(detail => detail.kind === 'ask')) return 'info';
+      const actionText = details.map(detail => detail.text).join('\n');
+      const brief = inboxBrief({ kind: 'info', text: actionText, source: 'auto-progress-done' });
+      return brief.decide && brief.decide !== '判断不要（報告のみ）' ? 'ask' : 'info';
+    })();
     const actionText = details.map(detail => detail.text).join('\n');
     text = text.replace(/kim がすること: なし[^\n]*/g, '').trim();
     if (!text.includes(actionText)) text = text.slice(0, Math.max(0, 3999 - actionText.length)) + '\n' + actionText;
     const item = await (io.addKimInboxItem ?? addItem)(home, { kind, refresh: true, priority: 'high', source: 'auto-progress-done', text, dedupeKey });
-    const stored = (io.listKimInboxItems ?? listItems)(home).find(saved => saved.id === item?.id);
+    const stored = io.listKimInboxItems ? io.listKimInboxItems(home).find(saved => saved.id === item?.id) : readInboxItem(home, item?.id);
     if (!stored || stored.kind !== kind || stored.dedupeKey !== dedupeKey || !stored.text || stored.text !== item.text || stored.forwardError) {
       throw new Error('kim-inbox delivery read-back failed');
     }
@@ -42,10 +48,10 @@ export async function deliverDoneInbox(home, rows, text, { now = Date.now(), io 
 
 // Recover old 'no action' notices without creating a second notification or reopening answered asks.
 export async function refreshDoneApprovals(home, rows, { now, io = {}, patch } = {}) {
-  const items = (io.listKimInboxItems ?? listItems)(home);
+  const items = io.listKimInboxItems?.(home);
   for (const row of rows) {
     if (row.status !== 'done' || !hasDoneInboxReceipt(row)) continue;
-    const item = items.find(item => item.id === row.doneInboxId);
+    const item = items ? items.find(item => item.id === row.doneInboxId) : readInboxItem(home, row.doneInboxId);
     if (!item || item.kind !== 'info' || !['open', 'seen'].includes(item.status)) continue;
     if (completionActions(row, { home }).kind !== 'ask') continue;
     const result = await deliverDoneInbox(home, [row], item.text, { now, io });

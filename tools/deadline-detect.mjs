@@ -71,18 +71,24 @@ export function parseExtraction(value) {
       try { return JSON.parse(fixed); } catch { throw error; }
     }
   })() : value;
-  if (!parsed || !Array.isArray(parsed.items) || parsed.items.length > 100 || parsed.items.some(i => !i || typeof i !== 'object' || Array.isArray(i))) throw new Error('抽出応答のitemsが不正です');
+  if (!parsed || !Array.isArray(parsed.items) || parsed.items.length > 100) throw new Error('抽出応答のitemsが不正です');
+  const valid = [];
+  const skipped = [];
   for (const i of parsed.items) {
-    if (!i || typeof i.title !== 'string' || !i.title.trim() || typeof i.sourceRef !== 'string' || typeof i.confidence !== 'number' || i.confidence < 0 || i.confidence > 1 || !Number.isFinite(i.confidence) || typeof i.quote !== 'string' || !KINDS.includes(i.kind) || i.due !== null && (typeof i.due !== 'string' || parseSheetDate(i.due) !== i.due)) throw new Error('抽出項目の形式が不正です');
+    if (!i || typeof i !== 'object' || Array.isArray(i) || typeof i.title !== 'string' || !i.title.trim() || typeof i.sourceRef !== 'string' || typeof i.confidence !== 'number' || i.confidence < 0 || i.confidence > 1 || !Number.isFinite(i.confidence) || typeof i.quote !== 'string' || !KINDS.includes(i.kind) || i.due !== null && (typeof i.due !== 'string' || parseSheetDate(i.due) !== i.due)) {
+      skipped.push({ sourceRef: typeof i?.sourceRef === 'string' ? i.sourceRef : '', title: typeof i?.title === 'string' ? i.title : '', reason: '抽出項目の形式が不正' });
+      continue;
+    }
+    valid.push(i);
   }
-  return parsed;
+  return { items: valid, skipped };
 }
 export async function askProvider(provider, documents, { home, execImpl = exec, signal } = {}) {
   if (!['gemini','openrouter'].includes(provider)) throw new Error('未許可のプロバイダ');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-llm-'));
   try {
     const file = path.join(dir, 'prompt.txt'); fs.writeFileSync(file, extractionPrompt(documents), { mode: 0o600 });
-    const args = [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', provider, '--prefer-provider', '--no-fallback', '--category','extraction','--prompt-file',file,'--per-provider-timeout-ms','45000'];
+    const args = [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', provider, '--prefer-provider', '--no-fallback', '--category','extraction','--prompt-file',file,'--per-provider-timeout-ms','45000','--max','8192'];
     // Pin the fallback to a non-Claude model even if llm-ask's defaults change.
     if (provider === 'openrouter') args.push('--model','openai/gpt-oss-120b');
     const { stdout } = await execImpl(process.execPath, args, { encoding: 'utf8', windowsHide: true, signal, timeout: 55000, maxBuffer: 2 * 1024 * 1024, env: { ...process.env, ORGIAST_HOME: home } });
@@ -90,25 +96,38 @@ export async function askProvider(provider, documents, { home, execImpl = exec, 
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 export async function extractBatch(documents, { ask = askProvider, home, signal } = {}) {
-  let failure;
-  for (const provider of ['gemini','openrouter']) {
+  async function tryProvider(provider, batch) {
     try {
-      const result = parseExtraction(await withAbort(signal, () => ask(provider, documents, { home, signal })));
-      // Per-item sourceRef validation: items whose sourceRef is not in the input
-      // are dropped individually rather than failing the whole batch.
-      const valid = [];
-      const skipped = [];
-      for (const item of result.items) {
-        if (!documents.some(d => d.sourceRef === item.sourceRef)) {
-          skipped.push({ sourceRef: item.sourceRef, title: item.title, reason: '出典IDが入力にありません' });
-        } else {
-          valid.push(item);
-        }
+      const parsed = parseExtraction(await withAbort(signal, () => ask(provider, batch, { home, signal })));
+      const skipped = [...(parsed.skipped || [])], items = [];
+      for (const item of parsed.items) {
+        if (batch.some(d => d.sourceRef === item.sourceRef)) items.push(item);
+        else skipped.push({ sourceRef: item.sourceRef, title: item.title, reason: '出典IDが入力にありません' });
       }
-      return { items: valid, skipped };
-    } catch (e) { signal?.throwIfAborted(); failure = e; }
+      return [{ items, skipped }];
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (error instanceof SyntaxError && batch.length > 1) {
+        const mid = Math.ceil(batch.length / 2);
+        return [
+          ...await tryProvider(provider, batch.slice(0, mid)),
+          ...await tryProvider(provider, batch.slice(mid)),
+        ];
+      }
+      return [{ batch, error }];
+    }
   }
-  throw new Error(`Gemini/OpenRouterで抽出できません: ${failure.message}`);
+
+  const result = { items: [], skipped: [] };
+  for (const gemini of await tryProvider('gemini', documents)) {
+    const parts = gemini.error ? await tryProvider('openrouter', gemini.batch) : [gemini];
+    for (const part of parts) {
+      if (part.error) throw new Error(`Gemini/OpenRouterで抽出できません: ${part.error.message}`);
+      result.items.push(...part.items);
+      result.skipped.push(...part.skipped);
+    }
+  }
+  return result;
 }
 export function evidencedDue(quote, date, proposed) {
   if (!proposed || !Number.isFinite(Date.parse(date))) return null;
@@ -320,6 +339,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     if (opts.fixture && (!fixture || !Array.isArray(fixture.rows))) throw new Error('fixture の台帳JSONがありません、または形式が不正です');
     const config = fixture ? { ...DEFAULT_CONFIG, ...fixture.config } : deps.config || loadConfig(home);
     if (!config.sheetId) {
+      if (dryRun) throw new Error('deadline-ledger 未初期化のため dry-run を実行できません');
       stderr('deadline-detect: deadline-ledger 未初期化のため自動初期化します');
       const request = deps.request || googleClient();
       const result = await withAbort(processSignal, () => initialize({ home, sheets: deps.sheets || createSheetsClient({ fetchImpl: gwsFetch, onStage: stage, signal: processSignal }), request: (url, options) => request(url, { ...options, signal: processSignal }) }));

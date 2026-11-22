@@ -28,7 +28,7 @@ $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script,
 $next = (Get-Date).Date.AddHours((Get-Date).Hour).AddMinutes(17)
 if ($next -le (Get-Date)) { $next = $next.AddHours(1) }
 $trigger = New-ScheduledTaskTrigger -Once -At $next -RepetitionInterval (New-TimeSpan -Hours 1)
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 try {
   $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
   Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Auto-send local memory/playbook/incident knowledge to Drive inbox and sync Drive master knowledge down (hourly, all PCs)' -Force | Out-Null

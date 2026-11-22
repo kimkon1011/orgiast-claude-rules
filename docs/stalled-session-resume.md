@@ -1,10 +1,10 @@
 # 停滞セッションの夜間再開
 
-自動再開は廃止（kim 2026-11-14）。期限切れ・停滞は kim-inbox 通知のみ行う。
+時刻起点の一律再開は廃止（kim 2026-11-14）。夜間の停滞セッション確認は kim-inbox 通知を行う。待機セッションの期限切れは専用モードで判定する。
 
 `tools/stalled-session-resume.mjs` は `session-triage.mjs` の `listFiles` / `inspect` の結果を使う。両関数を export にしただけで、検出規則は変更していない。
 
-`auto-session.runChild` の再開経路は `config/auto-resume.json` の共通ポリシーで遮断する。定期タスクは検出と kim-inbox 通知のために残すが、Claude の子プロセスは起動しない。
+`auto-session.runChild` の再開経路は `config/auto-resume.json` の共通ポリシーで遮断する。夜間タスクは検出と kim-inbox 通知を担当する。
 
 ## 上限と状態
 
@@ -42,11 +42,16 @@
 
 ## 待機期限切れ専用モード（--overdue）
 
-`node tools/stalled-session-resume.mjs --overdue` または `STALLED_SESSION_MODE=overdue` で、タイトル頭の待機期限が現在以前のセッションだけを扱う。既定は1回2件、並列1。件数は既存の `--limit` / `STALLED_SESSION_LIMIT` で変更でき、夜間07:30の締切は適用しない。closed ledger・閉じて可・直近10分activeを除外し、既存の共有ロックとcwd排他を使う。夜間も期限切れタイトルを最優先にする。
+待機フッターは `まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ／納期 YYYY-MM-DD[ HH:MM]・残り作業 <数値><分|時間|日>）`。待機期限は返信見込みと「納期 − 残り作業 − 予備」の早い方。予備は残り作業の20%と1時間の大きい方で、日時はPCのローカル時刻、日付だけの納期は当日の23:59。納期不明の場合は `／納期なし: 相手の回答時期が未定` のように理由を5文字以上書く。
 
-台帳の `overdue` に `(sessionId, 期限文字列)` 別の試行履歴を保存する。エラー以外（中断含む）は同一期限で再実行せず、エラーだけ終了から30分後に最大3回まで再試行する。期限が更新されれば新しいキーで対象になる。夜間の `sessions` / `nights`・連続エラー中止とは独立。実行した結果がある場合だけ既存 `notifyKim`（session-inbox）へ1回まとめる。個別のDiscord送信は追加しない。
+`node tools/stalled-session-resume.mjs --overdue` または `STALLED_SESSION_MODE=overdue` は、期限を迎えたセッションについて Claude を起動する前に次の条件を確認する。
 
-再開時は元会話と前回成果に加えて期限文脈を渡し、待っていた事項の直接照会、作業と検証、kim-inboxへのaskと新期限、完了時の/session-closeを指示する。期限の書換えだけでは終えない。
+- 対象セッションの auto-progress 台帳の open check を実行し、終了コード0で達成した。
+- 納期から残り作業と予備を引いた作業開始限界に達した。
+
+どちらかを満たし、`config/auto-resume.json` の `eventResume` が true のときだけ再開する。`enabled` は false のままにする。どちらも満たさない場合は、次の確認時刻と作業開始限界の早い方にタイトルの待機印を延長する。納期付きの印は `【MM/DD/HH:MMまで・納期MM/DD】`。期限経過だけの inbox 通知は行わず、再開できず人の判断・操作だけが残る場合は ask を記録する。
+
+再開はアカウントの台帳全体で直近1時間に2件、同一セッションはローカル日付ごとに2回まで。上限到達の info は重複を抑える。既定で1回2件、並列1。夜間07:30の締切は適用せず、closed ledger・閉じて可・直近10分activeを除外する。台帳の `overdue` にセッションと期限別の履歴を保存し、失敗後の再試行は30分以上あける。
 
 必須タスク `OrgiastWaitDeadlineResume` は既存登録スクリプトで登録・action/trigger/settingsを読戻し検証する。15分ごと、hidden runner、StartWhenAvailable、バッテリー可、IgnoreNew、最大2時間。`setup --converge` の既存修復経路で全Windows PC・アカウントへ配布する。既存sweepはnightly-health-expectations / cron-watchに登録されていないため、その形式の架空ログ監視は追加せず、setupの必須タスク監視（最終実行2時間以内）で検出する。
 

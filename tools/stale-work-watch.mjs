@@ -49,6 +49,8 @@ export function classifyPr(pr) {
 }
 const quote = value => `'${String(value).replaceAll("'", "''")}'`; // PowerShell resume commands
 const clean = value => String(value).replace(/[\r\n]+/g, ' ');
+const isGeneratedNotificationTodo = line => line.includes('<!-- notify-kim:')
+  && line.includes('通知の原因調査・修復:');
 export function renderReport(result) {
   const lines = ['# 停滞作業', '', `更新: ${result.generatedAt} / 閾値: ${result.staleDays}日超`,
     'TODOは初回にファイル更新日時、以降は行内容の変更を基準に計測。ブランチ照合は取得した直近100 PRの範囲。', ''];
@@ -132,7 +134,8 @@ export async function runWatch({ home = os.homedir(), repo = ROOT, staleDays = 3
     for (const [index, line] of fs.readFileSync(file, 'utf8').split(/\r?\n/).entries()) {
       if (/^##\s+残TODO(?:\s|$)/.test(line)) { inside = true; continue; }
       if (/^#{1,2}\s/.test(line)) inside = false;
-      if (inside && line.trim() && !/^\s*#/.test(line) && !line.includes('~~') && !/^\s*[-*]\s+\[[xX]\]/.test(line)) {
+      if (inside && line.trim() && !/^\s*#/.test(line) && !line.includes('~~')
+        && !/^\s*[-*]\s+\[[xX]\]/.test(line) && !isGeneratedNotificationTodo(line)) {
         const key = createHash('sha256').update(line.trim()).digest('hex');
         const prior = previousTodos[key];
         const unchangedSince = typeof prior === 'string' && Number.isFinite(Date.parse(prior)) ? prior : updatedAt;

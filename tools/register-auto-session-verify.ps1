@@ -16,7 +16,7 @@ if (-not $node) { throw 'node not found. Install Node.js first.' }
 
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script) -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At '07:45'
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 
 Register-ScheduledTask -TaskName 'OrgiastAutoSessionVerify' -Action $action -Trigger $trigger -Settings $settings -Description '前夜の自動セッションを検証・自己修復して Discord へ通知' -Force | Out-Null
 Write-Host 'OK: task OrgiastAutoSessionVerify registered (daily 07:45)'

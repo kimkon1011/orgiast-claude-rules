@@ -9,7 +9,7 @@ import { skipCoolingBackends } from './fallback-backend-health.mjs';
 import { runGeminiBudgetGuard } from './gemini-budget-guard.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, reserveGeminiLaunch, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder, hasAbortCondition, isIntentionalAbort } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -68,6 +68,11 @@ function run(args, options = {}) {
       // 既存テストは全て Codex 先行（sol/astra/既定モデル）を前提としているため、
       // cheap-first を既定で無効にする。cheap-first のテストだけ options.env で上書きする。
       CODEX_DO_CHEAP_FIRST: '0',
+      // 実機に Cursor がログイン済みでも、既存 cheap-first モック連鎖を横取りしない。
+      // Cursor 挿入そのものを見るテストは CODEX_DO_SKIP_CURSOR_AGENT=0 で上書きする。
+      CODEX_DO_SKIP_CURSOR_AGENT: '1',
+      // 実機の CURSOR_API_KEY を子プロセスへ持ち込まない（値は使わず空文字で覆う）。
+      CURSOR_API_KEY: '',
       // 裏での npm install はテストでは起動しない（shouldAutoInstallQwen のテストは直接関数を呼ぶ）
       CODEX_DO_NO_AUTOINSTALL: '1',
       ...options.env
@@ -1007,6 +1012,15 @@ test('buildQwenArgs は -y を含み、run_shell_command を除外しない', ()
   assert.ok(!args.includes('run_shell_command'));
 });
 
+test('buildQwenArgs は --bare を含み、managed-auto-memory-extractor を抑制する', () => {
+  const args = buildQwenArgs();
+  assert.ok(args.includes('--bare'));
+  // --bare は -y の直後に置かれる
+  const yIndex = args.indexOf('-y');
+  assert.ok(yIndex >= 0);
+  assert.equal(args[yIndex + 1], '--bare');
+});
+
 test('buildQwenArgs は --approval-mode を含まない', () => {
   const args = buildQwenArgs();
   assert.ok(!args.includes('--approval-mode'));
@@ -1041,6 +1055,7 @@ test('buildQwenArgs は既定値と上書き値の両方で正しい引数を返
     '--auth-type', 'openai',
     '-m', 'deepseek/deepseek-v4-flash',
     '-y',
+    '--bare',
     '--max-wall-time', '1800',
     '--max-tool-calls', '80',
     '-p', 'Follow-the-instructions-provided-on-stdin.'
@@ -1050,6 +1065,7 @@ test('buildQwenArgs は既定値と上書き値の両方で正しい引数を返
     '--auth-type', 'openai',
     '-m', 'deepseek-flash',
     '-y',
+    '--bare',
     '--max-wall-time', '300',
     '--max-tool-calls', '40',
     '-p', 'Follow-the-instructions-provided-on-stdin.'
@@ -1535,7 +1551,88 @@ test('外部操作の no_changes を失敗にせず実行結果を改変しな�
   assert.equal(cheapFirstFailureReason({ kind: 'implement', result: { status: 0, output: '完了' }, treeChanged: false }), 'no_changes');
 });
 
+// ── 中止条件（abort-on-failure）テスト ──────────────────────────────
+// 2026-11-21 実害: Codex が指示どおり「テスト失敗のため中止」した結果を empty_diff 扱いにして
+// astra→cursor-agent→deepseek へ回し、deepseek が禁止事項を破って PR #2510 を作った。
+
+test('hasAbortCondition: 中止条件を含む指示を検出する', () => {
+  for (const instruction of [
+    '中止条件: テスト失敗なら中止',
+    'abort if tests fail',
+    'abort on test failure',
+    'abort when tests fail',
+    'テスト失敗で中止',
+    'テスト失敗なら中止すること',
+    'test failure should abort',
+    'abort tests on failure',
+  ]) {
+    assert.equal(hasAbortCondition(instruction), true, instruction);
+  }
+});
+
+test('hasAbortCondition: 通常の指示では false', () => {
+  for (const instruction of [
+    '', undefined, null,
+    'tools/foo.mjs に関数を追加しテストする',
+    'バグを修正する',
+    'レビューして',
+    'テストを通すように修正',
+  ]) {
+    assert.equal(hasAbortCondition(instruction), false, String(instruction));
+  }
+});
+
+test('isIntentionalAbort: 中止条件あり + 出力にテスト失敗＋中止 → true', () => {
+  for (const [output, instruction] of [
+    ['テスト失敗のため中止しました', '中止条件: テスト失敗なら中止'],
+    ['Tests failed, aborting as instructed', 'abort if tests fail'],
+    ['Aborting: tests failed', 'abort on test failure'],
+    ['tests failed, stopping per condition', 'abort when tests fail'],
+    ['テストが失敗したので中止します', 'テスト失敗で中止'],
+  ]) {
+    assert.equal(isIntentionalAbort(output, instruction), true, `output="${output}" instruction="${instruction}"`);
+  }
+});
+
+test('isIntentionalAbort: 中止条件なし → 常に false', () => {
+  assert.equal(isIntentionalAbort('テスト失敗のため中止しました', '通常の実装指示'), false);
+  assert.equal(isIntentionalAbort('Tests failed, aborting', '修正してテスト'), false);
+});
+
+test('isIntentionalAbort: 中止条件ありでも出力に中止の証拠なし → false', () => {
+  assert.equal(isIntentionalAbort('実装完了しました', '中止条件: テスト失敗なら中止'), false);
+  assert.equal(isIntentionalAbort('正常に終了', 'abort if tests fail'), false);
+});
+
+test('isIntentionalAbort: 中止条件ありでも出力にテスト失敗なし → false', () => {
+  assert.equal(isIntentionalAbort('エラーが発生したため中止', '中止条件: テスト失敗なら中止'), false);
+  assert.equal(isIntentionalAbort('aborting for other reason', 'abort if tests fail'), false);
+});
+
 // ── cheap-first テスト ───────────────────────────────────────────────
+
+test('detectCheapFirstUnsuitable: デザイン・PR着地・ルール文を検出し通常実装は許可する', () => {
+  for (const instruction of [
+    'チラシ裏面の住所を1行直して',
+    'node tools/pr-land.mjs --title x で着地',
+    'ONBOARDING.md の §1.17 に1行追記',
+  ]) {
+    assert.equal(detectCheapFirstUnsuitable(instruction), true, instruction);
+  }
+  assert.equal(detectCheapFirstUnsuitable('tools/foo.mjs の引数パースのバグを直す'), false);
+});
+
+test('isCheapFirstEnabled: unsuitable 指示は無効、通常実装は有効、env=0 は従来どおり無効', () => {
+  for (const instruction of [
+    'チラシ裏面の住所を1行直して',
+    'node tools/pr-land.mjs --title x で着地',
+    'ONBOARDING.md の §1.17 に1行追記',
+  ]) {
+    assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction, env: { CODEX_DO_CHEAP_FIRST: '1' } }), false, instruction);
+  }
+  assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction: 'tools/foo.mjs の引数パースのバグを直す', env: { CODEX_DO_CHEAP_FIRST: '1' } }), true);
+  assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction: 'tools/foo.mjs の引数パースのバグを直す', env: { CODEX_DO_CHEAP_FIRST: '0' } }), false);
+});
 
 test('isCheapFirstEnabled: implement 既定で有効、review では無効、lane:codex 記載で無効、env=0 で無効', () => {
   // implement 既定: 有効
@@ -1576,12 +1673,15 @@ test('cheap-first: implement with zero changed files starts Codex', () => {
 test('cheap-first: 先頭レーンが unrecognized_model なら incompatible を記録して次レーンを呼ぶ', () => {
   const home = workDir();
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  // テスト対象は deepseek→gemini の連鎖なので Cursor 挿入を明示的に外す
+  fs.writeFileSync(path.join(home, '.claude', 'codex-fallback-order.local.json'), JSON.stringify(['cheap-code:deepseek', 'gemini-cli']), 'utf8');
   fs.writeFileSync(path.join(home, '.claude', 'codex-fallback-order.json'), JSON.stringify(['cheap-code:deepseek', 'gemini-cli']), 'utf8');
   const result = run(['--force-native', '--cwd', home, '--kind', 'implement', 'implement feature'], {
     home,
     env: {
       ...geminiOnPathEnv(),
       CODEX_DO_CHEAP_FIRST: '1',
+      CODEX_DO_SKIP_CURSOR_AGENT: '1',
       GEMINI_API_KEY: 'gemini-test',
       OPENROUTER_API_KEY: 'openrouter-test',
       CODEX_DO_MOCK_RESULTS: JSON.stringify([
@@ -1751,10 +1851,14 @@ test('isBackendExhausted は unrecognized_model 警告では false を返す（�
   assert.equal(isBackendExhausted('', 'Unrecognized_Model'), false);
 });
 
-test('isLaneIncompatible は unrecognized_model エラーで true を返す', () => {
-  assert.equal(isLaneIncompatible('', '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}'), true);
-  assert.equal(isLaneIncompatible('', ''), false);
-  assert.equal(isLaneIncompatible('', 'normal failure'), false);
+test('isLaneIncompatible はモデル警告と残りの出力、終了コードを判定する', () => {
+  const warning = '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash"}';
+  assert.equal(isLaneIncompatible('', warning, 0), true);
+  assert.equal(isLaneIncompatible('', '[openrouter:deepseek/deepseek-v4-flash]\n' + warning, 0), true);
+  assert.equal(isLaneIncompatible('OK', warning, 0), false);
+  assert.equal(isLaneIncompatible('', warning + '\r\nprocessed', 0), false);
+  assert.equal(isLaneIncompatible('OK', warning, 1), true);
+  assert.equal(isLaneIncompatible('', 'normal failure', 1), false);
 });
 
 test('shouldAdvanceToNextBackend は laneIncompatible=true で incompatible を返す', () => {
@@ -2016,6 +2120,25 @@ test('wslCodexLaunchPlan: ネイティブが解決できるときネイティブ
   assert.equal(wslCodexLaunchPlan({ distroFound: true, codexPresent: false, versionOk: false, installAttempted: true, retried: false, nativeAvailable: true }), 'native');
 });
 
+test('parseWslDistros: WSL1 だけの出力からは all にのみ名前が入り、wsl2 は空になる', () => {
+  const wsl1Only = '  NAME      STATE           VERSION\n* Ubuntu    Stopped         1\n';
+  const result = parseWslDistros(wsl1Only);
+  assert.deepEqual(result, { all: ['Ubuntu'], wsl2: [] });
+});
+
+test('parseWslDistros: WSL1 と WSL2 が混在する出力からは wsl2 に WSL2 の名前だけが入る', () => {
+  const mixed = '  NAME      STATE           VERSION\n* Ubuntu    Stopped         1\n  Debian    Running         2\n';
+  const result = parseWslDistros(mixed);
+  assert.deepEqual(result.all, ['Ubuntu', 'Debian']);
+  assert.deepEqual(result.wsl2, ['Debian']);
+});
+
+test('parseWslDistros: UTF-16 由来の NUL 文字とヘッダ行が混ざっていても壊れない', () => {
+  const withNul = '  NAME\0      STATE\0           VERSION\0\n* Ubuntu\0    Stopped\0         1\0\n';
+  const result = parseWslDistros(withNul);
+  assert.deepEqual(result, { all: ['Ubuntu'], wsl2: [] });
+});
+
 test('WSL codex のプローブはコールドスタートを待てる', () => {
   assert.ok(WSL_PROBE_TIMEOUT_MS >= 60000);
 });
@@ -2194,7 +2317,8 @@ test('probeChatGptAuth: 読めない・壊れている場合は null を返し�
 test('probeChatGptAuth: Windows/WSL 経路は distro 一覧と auth.json 読取を spawnImpl に注入できる', () => {
   const spawnImpl = (cmd, args) => {
     assert.equal(cmd, 'wsl');
-    if (args[0] === '-l') return { status: 0, stdout: 'Ubuntu\0\r\n\0' };
+    // wsl -l -v の出力形式: '  NAME      STATE           VERSION\n* Ubuntu    Running         2\n'
+    if (args[0] === '-l') return { status: 0, stdout: '  NAME      STATE           VERSION\n* Ubuntu    Running         2\n' };
     assert.deepEqual(args.slice(0, 2), ['-d', 'Ubuntu']);
     return { status: 0, stdout: JSON.stringify({ tokens: { id_token: 'x' } }) };
   };
@@ -3134,9 +3258,15 @@ test('cheap-first validation: actual changes succeed; invalid output fails even 
   }
   assert.equal(check('[claude-code:unrecognized_model] {}'), 'unrecognized_model');
   assert.equal(check('done', { result: { output: 'done', stderr: '[claude-code:unrecognized_model]' } }), 'unrecognized_model');
+  // 警告行＋OK＋status 0 → 失敗ではない
+  assert.equal(check('OK', { result: { output: '[claude-code:unrecognized_model] {"model":"x"}\nOK', stderr: '', status: 0 } }), '');
+  // 警告行のみ＋status 0 → 'unrecognized_model'（空出力）
+  assert.equal(cheapFirstFailureReason({ kind: 'implement', treeChanged: true, result: { output: '[claude-code:unrecognized_model] {}', stderr: '', status: 0 } }), 'unrecognized_model');
+  // 警告行＋出力あり＋status 1 → 'unrecognized_model'
+  assert.equal(check('done', { result: { output: 'done', stderr: '[claude-code:unrecognized_model]', status: 1 } }), 'unrecognized_model');
 });
 
-for (const output of ['', '\uFFFD\uFFFD', '[claude-code:unrecognized_model] {}']) {
+for (const output of ['', '\uFFFD\uFFFD']) {
   test('cheap-first: invalid output ' + JSON.stringify(output) + ' starts Codex', () => {
     const home = workDir();
     const result = run(['--force-native', '--cwd', home, '--kind', 'implement', 'implement feature'], {
@@ -3152,6 +3282,46 @@ for (const output of ['', '\uFFFD\uFFFD', '[claude-code:unrecognized_model] {}']
     assert.doesNotMatch(result.stderr, /代替 AI が成功したため/);
   });
 }
+
+test('cheap-first: unrecognized_model warning + "OK" + status 0 は次レーンに進まない', () => {
+  const home = workDir();
+  const init = spawnSync('git', ['init', home], { encoding: 'utf8' });
+  assert.equal(init.status, 0, init.stderr);
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude', 'codex-fallback-order.local.json'), JSON.stringify(['gemini-cli']));
+  const result = run(['--force-native', '--cwd', home, '--kind', 'implement', 'implement feature'], {
+    home, env: {
+      ...fakeGeminiEnv(`
+        import { writeFileSync } from 'node:fs';
+        writeFileSync('feature.txt', 'implemented');
+        console.error('[claude-code:unrecognized_model] {"model":"test-model"}');
+        console.log('OK');
+      `),
+      CODEX_DO_CHEAP_FIRST: '1', GEMINI_API_KEY: 'gemini-test',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify([{ real: true }]),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /代替 AI が成功したため/);
+  assert.doesNotMatch(result.stdout, /executor=codex/);
+});
+
+test('cheap-first: unrecognized_model warning + 回答あり + status 1 は失敗', () => {
+  const home = workDir();
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude', 'codex-fallback-order.local.json'), JSON.stringify(['cheap-code:deepseek']));
+  const result = run(['--force-native', '--cwd', home, '--kind', 'implement', 'implement feature'], {
+    home, env: {
+      CODEX_DO_CHEAP_FIRST: '1', GEMINI_API_KEY: '', OPENROUTER_API_KEY: 'sk-test',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify([
+        { status: 1, output: 'OK', stderr: '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash"}' },
+        { status: 0, output: 'Codex completed.' },
+      ]),
+    },
+  });
+  assert.match(result.stderr, /cheap-code:deepseek はモデル非対応/);
+  assert.match(result.stdout, /executor=codex/);
+});
 
 test('cheap-first enabled: investigate succeeds with zero changed files', () => {
   const home = workDir();
@@ -3222,10 +3392,10 @@ test('openrouter-free は summarize/classify のみ、implement は openrouter-c
       'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
       'codex-fallback-order.json': JSON.stringify(['openrouter-free', 'cheap-code:deepseek']),
     });
-    const options = { executableAvailable: () => true };
+    const options = { executableAvailable: () => true, env: { CODEX_DO_SKIP_CURSOR_AGENT: '1' } };
     assert.deepEqual(resolveFallbackBackends(dir, { ...options, taskKind: 'summarize' }).map((b) => b.name), ['openrouter-free', 'cheap-code:deepseek']);
     assert.deepEqual(resolveFallbackBackends(dir, { ...options, taskKind: 'classify' }).map((b) => b.name), ['openrouter-free', 'cheap-code:deepseek']);
-    const paid = resolveFallbackBackends(dir, { ...options, taskKind: 'implement', env: { CODEX_DO_PAID_CODE_MODEL: 'qwen/qwen3-coder-custom' } });
+    const paid = resolveFallbackBackends(dir, { ...options, taskKind: 'implement', env: { ...options.env, CODEX_DO_PAID_CODE_MODEL: 'qwen/qwen3-coder-custom' } });
     assert.equal(paid[0].name, 'openrouter-code');
     assert.equal(paid[0].model, 'qwen/qwen3-coder-custom');
     assert.equal(paid.some((b) => b.name === 'openrouter-free'), false);
@@ -3244,7 +3414,7 @@ test('lanes-disabled は openrouter-free と cheap-code:* も候補から外す'
       'codex-fallback-order.json': JSON.stringify(['openrouter-free', 'cheap-code:glm', 'cheap-code:deepseek', 'gemini-cli']),
       'lanes-disabled.json': JSON.stringify({ openrouter: { until: Date.now() + 1000, reason: 'failure_rate' }, 'cheap-code:glm': { until: Date.now() + 1000, reason: 'quality_validation' } }),
     });
-    const names = resolveFallbackBackends(dir, { executableAvailable: () => true, taskKind: 'summarize' }).map((b) => b.name);
+    const names = resolveFallbackBackends(dir, { executableAvailable: () => true, taskKind: 'summarize', env: { CODEX_DO_SKIP_CURSOR_AGENT: '1' } }).map((b) => b.name);
     assert.deepEqual(names, ['cheap-code:deepseek', 'gemini-cli']);
   });
 });
@@ -3288,13 +3458,13 @@ test('openrouter-code は空差分・構文エラー・関連テスト失敗で�
   }), 'tests');
 });
 
-test('Gemini budget stop excludes CLI even as the only fallback, expiry restores it', async ({ mock }) => {
+test('Gemini budget stop excludes CLI even as the only fallback, a new month restores it', async ({ mock }) => {
   const home = workDir();
   const dir = path.join(home, '.claude');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'gemini.env'), 'GEMINI_API_KEY=test-budget-key\n');
-  const file = path.join(dir, 'provider-cooldown.json');
-  const options = { executableAvailable: () => true };
+  const logs = [];
+  const options = { executableAvailable: () => true, log: (line) => logs.push(line) };
   fs.writeFileSync(path.join(dir, 'codex-fallback-order.json'), JSON.stringify(['gemini-cli']));
   fs.writeFileSync(path.join(dir, 'gemini-budget.json'), JSON.stringify({ budgetJpy: 100, usdJpy: 1 }));
   const now = new Date('2026-11-18T00:00:00Z');
@@ -3302,11 +3472,66 @@ test('Gemini budget stop excludes CLI even as the only fallback, expiry restores
   fs.writeFileSync(path.join(dir, 'executor-usage.jsonl'), JSON.stringify({ provider: 'gemini', t: now.toISOString(), usd: 90 }) + '\n');
   const status = await runGeminiBudgetGuard({ home, now, notifyImpl: async () => ({ delivered: 'dm' }) });
   assert.equal(status.level, 'stop', JSON.stringify(status));
+  fs.writeFileSync(path.join(dir, 'provider-cooldown.json'), '{}');
   assert.ok(!resolveFallbackBackends(home, options).some(b => b.name === 'gemini-cli'));
-  fs.writeFileSync(file, JSON.stringify({ gemini: { until: Date.now() - 1000, reason: 'gemini-budget' } }));
+  assert.deepEqual(logs, ['[codex-do] Gemini 予算ガードが level=stop（今月 $90.00）のため gemini-cli を候補から外します']);
+  mock.method(Date, 'now', () => Date.parse('2026-12-01T00:00:00+09:00'));
   assert.ok(resolveFallbackBackends(home, options).some(b => b.name === 'gemini-cli'));
 });
 
+
+test('Gemini 予算の warn と判定例外では CLI が候補に残る', () => {
+  const home = workDir();
+  const dir = path.join(home, '.claude');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'gemini.env'), 'GEMINI_API_KEY=test-budget-key\n');
+  const logs = [];
+  const options = { executableAvailable: () => true, log: (line) => logs.push(line) };
+  const hasGemini = (readBudget) => resolveFallbackBackends(home, { ...options, readBudget })
+    .some((backend) => backend.name === 'gemini-cli');
+  assert.ok(hasGemini(() => ({ level: 'warn', spentUsd: 80 })));
+  assert.deepEqual(logs, []);
+  assert.ok(hasGemini(() => { throw new Error('設定が不正'); }));
+  assert.deepEqual(logs, ['[codex-do] Gemini 予算ガードの判定に失敗したため gemini-cli は候補に残します: 設定が不正']);
+});
+
+test('Gemini キーが無いと予算を判定しない', ({ mock }) => {
+  const env = { ...process.env };
+  delete env.GEMINI_API_KEY;
+  mock.property(process, 'env', env);
+  const readBudget = mock.fn();
+  const backends = resolveFallbackBackends(workDir(), { readBudget });
+  assert.ok(!backends.some((backend) => backend.name === 'gemini-cli'));
+  assert.equal(readBudget.mock.callCount(), 0);
+});
+
+test('Gemini CLI は cwd ごとに6時間で2回まで起動できる', () => {
+  const home = workDir();
+  const dir = path.join(home, '.claude');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'gemini.env'), 'GEMINI_API_KEY=test-budget-key\n');
+  const logs = [];
+  const cwd = home;
+  const now = Date.parse('2026-11-18T00:00:00Z');
+  const log = (line) => logs.push(line);
+  const options = { executableAvailable: () => true, cwd, now, log };
+  const hasGemini = (overrides = {}) => resolveFallbackBackends(home, { ...options, ...overrides })
+    .some((backend) => backend.name === 'gemini-cli');
+  assert.ok(hasGemini());
+  assert.ok(reserveGeminiLaunch(home, { cwd, now, log }));
+  assert.ok(hasGemini());
+  assert.ok(reserveGeminiLaunch(home, { cwd, now, log }));
+  assert.equal(hasGemini(), false);
+  assert.match(logs[0], /同一 cwd で6時間に2回起動済み/);
+  assert.equal(reserveGeminiLaunch(home, { cwd, now, log }), false);
+  assert.ok(hasGemini({ cwd: dir }));
+
+  const later = now + 6 * 60 * 60 * 1000;
+  assert.ok(hasGemini({ now: later }));
+  assert.ok(reserveGeminiLaunch(home, { cwd, now: later, log }));
+  const history = JSON.parse(fs.readFileSync(path.join(dir, 'codex-do-gemini-launches.json'), 'utf8'));
+  assert.deepEqual(history.map(({ at }) => at), [later]);
+});
 
 test('findCursorAgentCommand は PATH 上の cursor-agent を優先し、無ければ Windows の既定ディレクトリを見る', () => {
   const found = findCursorAgentCommand({ executableAvailable: (cmd) => cmd === 'cursor-agent' });
@@ -3358,9 +3583,18 @@ test('resolveFallbackBackends は implement/verify でログイン済みの curs
     < resolveFallbackBackends(dir, { ...options, taskKind: 'implement' }).findIndex((b) => b.name === 'openrouter-code'), true);
 });
 
-test('resolveFallbackBackends は未ログインや CLI 無し、summarize/classify では cursor-agent を使わない（従来順）', () => {
+test('resolveFallbackBackends は summarize/classify/investigate でもログイン済みなら cursor-agent を先頭に置く', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
-  const unsigned = resolveFallbackBackends(dir, { executableAvailable: () => true, taskKind: 'implement' }).map((b) => b.name);
+  const options = { executableAvailable: () => true, cursorAgentLoggedIn: true };
+  for (const taskKind of ['summarize', 'classify', 'investigate']) {
+    const names = resolveFallbackBackends(dir, { ...options, taskKind }).map((b) => b.name);
+    assert.equal(names[0], 'cursor-agent', taskKind);
+  }
+});
+
+test('resolveFallbackBackends は未ログインや CLI 無しでは cursor-agent を使わない（従来順）', () => {
+  const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
+  const unsigned = resolveFallbackBackends(dir, { executableAvailable: () => true, taskKind: 'implement', env: {} }).map((b) => b.name);
   assert.ok(!unsigned.includes('cursor-agent'));
   assert.deepEqual(unsigned, ['cheap-code:deepseek', 'openrouter-code']);
   const noCli = resolveFallbackBackends(dir, {
@@ -3371,11 +3605,11 @@ test('resolveFallbackBackends は未ログインや CLI 無し、summarize/class
     existsImpl: () => false,
   }).map((b) => b.name);
   assert.ok(!noCli.includes('cursor-agent'));
-  const summarized = resolveFallbackBackends(dir, { executableAvailable: () => true, cursorAgentLoggedIn: true, taskKind: 'summarize' }).map((b) => b.name);
+  const summarized = resolveFallbackBackends(dir, { executableAvailable: () => true, cursorAgentLoggedIn: true, taskKind: 'summarize', env: { CODEX_DO_SKIP_CURSOR_AGENT: '1' } }).map((b) => b.name);
   assert.ok(!summarized.includes('cursor-agent'));
 });
 
-test('resolveFallbackBackends は local.json があるとき cursor-agent を自動挿入せず、共有ファイルへは先頭に足す', () => {
+test('resolveFallbackBackends は local.json があっても implement/verify では cursor-agent を先頭に置く', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
   const claude = path.join(dir, '.claude');
   fs.mkdirSync(claude, { recursive: true });
@@ -3383,9 +3617,58 @@ test('resolveFallbackBackends は local.json があるとき cursor-agent を自
   fs.writeFileSync(path.join(claude, 'codex-fallback-order.json'), JSON.stringify(['cheap-code:deepseek', 'openrouter-code']) + '\n');
   assert.deepEqual(resolveFallbackBackends(dir, options).map((b) => b.name), ['cursor-agent', 'cheap-code:deepseek', 'openrouter-code']);
   fs.writeFileSync(path.join(claude, 'codex-fallback-order.local.json'), JSON.stringify(['cheap-code:deepseek', 'openrouter-code']) + '\n');
-  assert.deepEqual(resolveFallbackBackends(dir, options).map((b) => b.name), ['cheap-code:deepseek', 'openrouter-code']);
+  assert.deepEqual(resolveFallbackBackends(dir, options).map((b) => b.name), ['cursor-agent', 'cheap-code:deepseek', 'openrouter-code']);
+  assert.deepEqual(resolveFallbackBackends(dir, { ...options, env: { CODEX_DO_SKIP_CURSOR_AGENT: '1' } }).map((b) => b.name), ['cheap-code:deepseek', 'openrouter-code']);
 });
 
 test('buildCursorAgentArgs は非対話の -p --force --trust と workspace を付ける', () => {
   assert.deepEqual(buildCursorAgentArgs({ workspace: 'C:/work' }), ['-p', '--force', '--trust', '--workspace', 'C:/work']);
+});
+
+test('backendSpecificTimeoutSecs は cursor-agent に実装・調べ物・要約 1800 秒、分類は 600 秒', () => {
+  assert.equal(backendSpecificTimeoutSecs('cursor-agent', {}, { kind: 'implement' }), 1800);
+  assert.equal(backendSpecificTimeoutSecs('cursor-agent', {}, { kind: 'verify' }), 1800);
+  assert.equal(backendSpecificTimeoutSecs('cursor-agent', {}, { kind: 'investigate' }), 1800);
+  assert.equal(backendSpecificTimeoutSecs('cursor-agent', {}, { kind: 'summarize' }), 1800);
+  assert.equal(backendSpecificTimeoutSecs('cursor-agent', {}, { kind: 'classify' }), 600);
+  assert.equal(backendSpecificTimeoutSecs('cursor-agent', {}), 600);
+  assert.equal(backendSpecificTimeoutSecs('cursor-agent', { CODEX_DO_CURSOR_TIMEOUT_SECS: '2400' }, { kind: 'implement' }), 2400);
+});
+
+test('chainBackendBudgetSecs は cursor-agent implement で 900 秒キャップを使わず 1800 秒まで与える', () => {
+  assert.equal(chainBackendBudgetSecs(1800, 0, {}, { backendName: 'cursor-agent', kind: 'implement' }), 1800);
+  assert.equal(chainBackendBudgetSecs(1800, 200, {}, { backendName: 'cursor-agent', kind: 'implement' }), 1600);
+  assert.equal(chainBackendBudgetSecs(1800, 0, {}, { backendName: 'cheap-code:deepseek', kind: 'implement' }), 720);
+  assert.equal(chainBackendBudgetSecs(1800, 0, {}), 900);
+});
+
+test('isCursorAgentLoggedIn は ~/.claude/cursor.env の CURSOR_API_KEY でもログイン済みとみなす（値は出さない）', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-env-login-'));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'cursor.env'), 'CURSOR_API_KEY=test-cursor-key-not-used\n', 'utf8');
+  assert.equal(isCursorAgentLoggedIn(home, { env: {} }), true);
+  assert.equal(isCursorAgentLoggedIn(home + '-missing', { env: {} }), false);
+});
+
+test('findCursorAgentCommand は homeDir 指定時に ~/.claude/bin のラッパーを公式 CLI より優先する', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-wrapper-home-'));
+  const wrapper = path.join(home, '.claude', 'bin', process.platform === 'win32' ? 'cursor-agent.cmd' : 'cursor-agent');
+  fs.mkdirSync(path.dirname(wrapper), { recursive: true });
+  fs.writeFileSync(wrapper, 'rem wrapper\n', 'utf8');
+  const found = findCursorAgentCommand({
+    homeDir: home,
+    executableAvailable: (cmd) => cmd === 'cursor-agent',
+    existsImpl: (p) => p === wrapper || fs.existsSync(p),
+    platform: process.platform,
+    env: {},
+  });
+  assert.equal(found, wrapper);
+});
+
+test('readCodexFallbackOrder は UTF-8 BOM 付きの順序ファイルを読める', () => {
+  const dir = makeHomeWithEnv({});
+  const claude = path.join(dir, '.claude');
+  fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, 'codex-fallback-order.json'), '\uFEFF' + JSON.stringify(['cursor-agent', 'qwen']) + '\n');
+  assert.deepEqual(readCodexFallbackOrder(dir), ['cursor-agent', 'qwen']);
 });

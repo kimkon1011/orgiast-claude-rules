@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { checkSessionConcurrency, sessionConcurrencyLog } from './lib/session-concurrency.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import pool from './lib/mobile-state.cjs';
@@ -63,11 +64,18 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     return 0;
   }
   const codeCli = resolveVscodeCli({ env, exists, homedir: home });
-  const plan = planMobileSessionsLaunch({ codeCli, ...options });
-  if (!plan) {
+  if (!codeCli) {
     log('[mobile-sessions] VSCode CLI (code.cmd) が見つかりません');
     return 1;
   }
+  const capacity = (io.checkSessionConcurrency ?? checkSessionConcurrency)({ ...io.concurrencyOptions, env });
+  if (!capacity.ok) {
+    log(`[mobile-sessions] ${sessionConcurrencyLog(capacity)}`);
+    return 0;
+  }
+  // The extension may open the whole requested pool if there are no waiting tabs.
+  const count = capacity.count === null ? options.count : Math.min(options.count, capacity.limit - capacity.count);
+  const plan = planMobileSessionsLaunch({ codeCli, ...options, count });
   const spawnProcess = io.spawn ?? spawn;
   const child = spawnProcess(plan.command, plan.args, {
     stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true,

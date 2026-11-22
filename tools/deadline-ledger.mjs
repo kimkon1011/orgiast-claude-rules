@@ -9,6 +9,7 @@ import { GWS_USER, gwsFetch } from './lib/gws-proxy.mjs';
 import { createSheetsClient, quoteTab } from './lib/sheets-dwd.mjs';
 import { parseSheetDate, jstDate, daysUntil, columnLetter } from './vehicle-inspection-watch.mjs';
 import { isEntry } from './is-entry.mjs';
+import { redactSecrets } from './redact-secrets.mjs';
 export { parseSheetDate, jstDate, daysUntil };
 export const HEADERS = ['ID','件名','種別','会社','期限日','残日数','状態','担当','やること','根拠','出典','出典ID','検出日','最終通知日','通知回数','完了日','備考'];
 export const FIELDS = ['id','title','kind','company','due','remainingDays','status','assignee','action','quote','source','sourceId','detectedAt','lastNotified','notifyCount','completedAt','notes'];
@@ -84,7 +85,17 @@ export function googleClient({ getToken = getDriveToken, fetchImpl = gwsFetch } 
     let response;
     try { response = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${token.value}`, 'Content-Type': rawBody ? contentType : 'application/json' }, body: rawBody || (body ? JSON.stringify(body) : undefined), signal: requestSignal }); }
     catch (error) { throw new Error(`Google ${method} fetch failed: ${error.message}`, { cause: error }); }
-    if (!response.ok) { const e = new Error(`Google ${method} HTTP ${response.status}`); e.status = response.status; throw e; }
+    if (!response.ok) {
+      let detail = '';
+      try {
+        detail = redactSecrets((await response.text())
+          .replaceAll(token.value, '***REDACTED***')
+          .replace(/\bBearer\s+[\w.~/+\-=]+|\bya29\.[\w.-]+/gi, '***REDACTED***')
+          .replace(/("(?:access_token|refresh_token|id_token|token|api_key|client_secret)"\s*:\s*)"(?:\\.|[^"\\])*"/gi, '$1"***REDACTED***"'))
+          .slice(0, 300);
+      } catch { /* Preserve the HTTP status if the body cannot be read. */ }
+      throw Object.assign(new Error(`Google ${method} HTTP ${response.status}${detail ? `: ${detail}` : ''}`), { status: response.status });
+    }
     if (response.status === 204) return null;
     return buffer ? Buffer.from(await response.arrayBuffer()) : text ? response.text() : response.json();
   };

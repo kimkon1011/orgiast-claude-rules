@@ -263,3 +263,31 @@ test('非 kim 席の写しは転送失敗でもローカル台帳へ残す', asy
   const item = listItems(remote)[0]; assert.equal(item.kind, 'info'); assert.match(item.text, /（写し）百瀬 へ送信: 報告本文/);
   assert.equal(item.status, 'open'); assert.ok(item.forwardError);
 });
+test('--internal-opt-in 付き実行は assertContextApproved へ internalOptIn: true を渡す', async () => {
+  let received;
+  const originalLog = console.log; const originalError = console.error;
+  console.log = () => {}; console.error = () => {};
+  try {
+    const code = await main(['百瀬', '--body', '社内定期連絡', '--internal-opt-in', '--no-copy-kim'], {
+      home, token: 'test-token', resolve, noCopyKim: true,
+      assertContextApproved: async (opts) => { received = opts; return { reason: 'test' }; },
+      fetchImpl: async () => response({ json: { id: 'dm' } }),
+    });
+    assert.equal(code, 0);
+    assert.equal(received.internalOptIn, true);
+  } finally { console.log = originalLog; console.error = originalError; }
+});
+test('--internal-opt-in 無し実行は internalOptIn を渡さない（従来挙動）', async () => {
+  let received;
+  const originalLog = console.log; const originalError = console.error;
+  console.log = () => {}; console.error = () => {};
+  try {
+    const code = await main(['百瀬', '--body', '社内定期連絡', '--no-copy-kim'], {
+      home, token: 'test-token', resolve, noCopyKim: true,
+      assertContextApproved: async (opts) => { received = opts; return { reason: 'test' }; },
+      fetchImpl: async () => response({ json: { id: 'dm' } }),
+    });
+    assert.equal(code, 0);
+    assert.equal(received.internalOptIn, undefined);
+  } finally { console.log = originalLog; console.error = originalError; }
+});

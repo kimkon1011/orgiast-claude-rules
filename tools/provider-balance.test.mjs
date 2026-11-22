@@ -76,7 +76,7 @@ test('low→1通、同日再実行は抑止、翌日再通知、ok復旧は1回'
   const io = alertFixture(t);
   await alertProviderBalances([lowRow], io);
   assert.equal(io.messages.length, 1);
-  assert.match(io.messages[0], /残高注意: openrouter \$0.00（オートチャージ OFF）。チャージ画面: https:\/\/openrouter.ai\/credits/);
+  assert.match(io.messages[0], /残高注意: openrouter \$0.00（オートチャージ OFF）。まず無料枠・既存契約内の他AIレーンを実測。残高の読取確認: https:\/\/openrouter.ai\/credits/);
   await alertProviderBalances([{ ...lowRow, balanceUsd: 1 }], io);
   assert.equal(io.messages.length, 1);
   const next = { ...io, now: new Date('2026-10-10T13:00:00Z') };

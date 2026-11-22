@@ -47,6 +47,12 @@ export function executionPlan(argv = []) {
   return { syncRepository: !onlyKeys, provisionKeys: true, syncRules: !onlyKeys };
 }
 
+export function readHead(tgtRepo) {
+  try {
+    return execFileSync('git', ['-C', tgtRepo, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8', timeout: 60000 }).trim();
+  } catch { return ''; }
+}
+
 export function shouldRunKeys(previous, now = new Date(), forced = false) {
   if (forced) return true;
   if (!previous?.lastRunAt) return true;
@@ -195,7 +201,7 @@ function copyTreeExcluding(source, destination, excluded, hashes, relative = '')
   }
   return copied;
 }
-export const DEFAULT_DISTRIBUTION = { dirs: ['tools', 'rules-extracted', 'skills', 'packages', 'protocols'], files: [] };
+export const DEFAULT_DISTRIBUTION = { dirs: ['tools', 'rules-extracted', 'skills', 'agents', 'packages', 'protocols'], files: [] };
 // 配布定義: ダウンロードした最新 zip → ローカル repo → 組み込み既定の順で読む（壊れていれば次へ）。
 export function loadDistribution(...roots) {
   for (const root of roots) {
@@ -428,6 +434,42 @@ export function deploySkills(sourceRepo, targetHome, options = {}) {
     return [...updated];
   } catch (e) { if (options.onError) options.onError(e); return []; }
 }
+export function deployAgents(sourceRepo, targetHome, options = {}) {
+  const updated = [];
+  try {
+    const iso = (options.now || new Date()).toISOString();
+    const stamp = `${iso.slice(0, 10).replace(/-/g, '')}-${iso.slice(11, 19).replace(/:/g, '')}`;
+    const targetDir = path.join(targetHome, '.claude', 'agents');
+    for (const name of ['Explore.md']) {
+      const from = path.join(sourceRepo, 'agents', name);
+      if (!fs.existsSync(from)) continue;
+      const to = path.join(targetDir, name);
+      const content = fs.readFileSync(from);
+      const exists = fs.existsSync(to);
+      if (exists && content.equals(fs.readFileSync(to))) continue;
+      fs.mkdirSync(targetDir, { recursive: true });
+      const pending = `${to}.tmp.${crypto.randomUUID()}`;
+      try {
+        fs.writeFileSync(pending, content, { flag: 'wx' });
+        if (exists) {
+          const backup = `${to}.bak.${stamp}`;
+          try {
+            fs.copyFileSync(to, backup, fs.constants.COPYFILE_EXCL);
+          } catch (error) {
+            if (error.code !== 'EEXIST') throw error;
+            fs.copyFileSync(to, `${backup}.${crypto.randomUUID()}`, fs.constants.COPYFILE_EXCL);
+          }
+        }
+        fs.renameSync(pending, to);
+      } finally {
+        fs.rmSync(pending, { force: true });
+      }
+      updated.push(name);
+    }
+    if (updated.length && !options.quiet) console.log(`[onboarding-sync] agents updated: ${updated.join(', ')}`);
+    return updated;
+  } catch (e) { if (options.onError) options.onError(e); return updated; }
+}
 // syncRepository が用意し、main の finally（CLAUDE.md 更新後）で実行する hook 登録。
 let deferredHookRegistration = null;
 async function syncRepository(now) {
@@ -451,10 +493,14 @@ async function syncRepository(now) {
     // ここを1つの try に入れていたため、pull が1回失敗した PC は配布が静かに止まっていた(実測 2026-08-19)。
     try {
     if (fs.existsSync(path.join(repoPath, '.git'))) {
-      const before = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8', timeout: 60000 }).trim();
+      const before = readHead(repoPath);
       const result = await updateRepositoryFiles(repoPath);
-      const after = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8', timeout: 60000 }).trim();
-      changed = result.ok && (result.method === 'zip' ? result.changed : before !== after);
+      const after = readHead(repoPath);
+      if (before && after) {
+        changed = result.ok && (result.method === 'zip' ? result.changed : before !== after);
+      } else {
+        changed = result.ok && result.changed !== false;
+      }
     } else {
       const result = await updateRepositoryFiles(repoPath);
       changed = result.ok && result.changed;
@@ -463,6 +509,8 @@ async function syncRepository(now) {
     if (changed) { console.log('[onboarding-sync] updated repository tools/rules/skills'); log('updated repository tools/rules/skills'); }
     const skills = deploySkills(repoPath, home, { now, onError: (e) => log(`skill deployment failed: ${e.message}`) });
     if (skills.length) log(`skills updated: ${skills.join(', ')}`);
+    const agents = deployAgents(repoPath, home, { now, onError: (e) => log(`agent deployment failed: ${e.message}`) });
+    if (agents.length) log(`agents updated: ${agents.join(', ')}`);
     try {
       const memory = await installSharedMemories({ home, emit: (line) => log(line) });
       log(`memory-share install: generatedAt=${memory.generatedAt} installed=${memory.installed} updated=${memory.updated} removed=${memory.removed} unchanged=${memory.unchanged} (dir=${memory.dir})`);

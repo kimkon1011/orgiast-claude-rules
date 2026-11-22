@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 
-const INTRO = `# 🏠 民泊改善ダイジェスト（kim-PC → 作業用004 自動配達）
+const INTRO = `# 🏠 民泊改善ダイジェスト（000KimPC → 004minpaku 自動配達）
 出典: LINE オープンチャット「民泊オーナー雑談ルーム」。他のオーナーの伝聞で未検証。
 受け取った Claude は本文を nf-minpaku-automation/analysis/0openchat/<配達日 YYYY-MM-DD>.md に保存し、各提案を全室稼働95%・月次黒字の目標に照らして「試す／見送る（理由1行）」を付ける。kim の判断が要るものは kim-inbox（node tools/kim-inbox.mjs）に積む。Discord の DM は使わない。特区民泊の最低2泊を下回る提案は法令違反のため即却下する。`;
 
@@ -15,7 +15,7 @@ export async function runDeliver({ home = os.homedir(), args = [], spawn = spawn
   let tempDir;
   try {
     const toIndex = args.indexOf('--to');
-    const to = toIndex < 0 ? '作業用004' : args[toIndex + 1];
+    const to = toIndex < 0 ? '004minpaku' : args[toIndex + 1];
     if (!to || to.startsWith('--')) throw new Error('--to の宛先がありません');
     const base = path.join(home, '.claude');
     const digestFile = path.join(base, 'minpaku-digest.md');

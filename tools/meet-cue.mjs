@@ -38,6 +38,7 @@ import {
   resolveBotDisplayName,
   matchesSeatHostname,
   resolveSeatHostnames,
+  shouldCallJev,
 } from './lib/meet-cue-core.mjs';
 
 import {
@@ -601,6 +602,7 @@ export async function main(argv = process.argv.slice(2)) {
         mode: { type: 'string' },
         'max-minutes': { type: 'string' },
         'session-id': { type: 'string' },
+        'event-key': { type: 'string' },
         'interval-sec': { type: 'string' },
         'debug-dom': { type: 'boolean' },
         'test-audio': { type: 'string' },
@@ -630,64 +632,92 @@ export async function main(argv = process.argv.slice(2)) {
 
     console.log(`[meet-cue start] セッション開始: ${sessionId}`);
 
-    let brief = values.brief || '';
-    if (values['brief-file']) {
-      brief = fs.readFileSync(values['brief-file'], 'utf8');
-    }
-
-    // 1. Setup or reuse Cue Doc
-    let docInfo;
-    if (values['doc-id']) {
-      const docId = values['doc-id'];
-      const headerInsertIndex = await findHeaderInsertIndex({ docId });
-      docInfo = {
-        docId,
-        docName: values.title || '打合せ',
-        staffUrl: `https://docs.google.com/document/d/${docId}/edit?authuser=${encodeURIComponent(values.staff)}`,
-        kimUrl: `https://docs.google.com/document/d/${docId}/edit?authuser=kim@orgiast.jp`,
-        headerInsertIndex,
-      };
-      console.log(`[meet-cue start] 既存 Doc ID を使用: ${docId} (headerInsertIndex: ${headerInsertIndex})`);
-    } else {
-      console.log(`[meet-cue start] カンペ Doc を作成中...`);
-      docInfo = await setupCueDocument({
-        title: values.title || '打合せ',
-        staff: values.staff,
-      });
-    }
-
-    console.log(`\n==================================================`);
-    console.log(`カンペ Doc (社員用): ${docInfo.staffUrl}`);
-    console.log(`カンペ Doc (kim用):   ${docInfo.kimUrl}`);
-    console.log(`==================================================\n`);
-
-    // 2. Prepare Cards
-    let cards = [...STANDARD_CARDS];
-    if (values['cards-file']) {
-      cards = JSON.parse(fs.readFileSync(values['cards-file'], 'utf8'));
-    } else if (brief) {
-      console.log('[meet-cue start] 事前情報からカンペカードを生成中...');
-      cards = await generateCardsFromBrief(brief);
-    }
-
-    fs.writeFileSync(path.join(sessionDir, 'cards.json'), JSON.stringify(cards, null, 2));
-
     const sessionState = {
       sessionId,
+      eventKey: values['event-key'],
+      pid: process.pid,
       url: values.url,
       staff: values.staff,
       title: values.title || '打合せ',
-      docId: docInfo.docId,
-      docName: docInfo.docName,
-      staffUrl: docInfo.staffUrl,
-      kimUrl: docInfo.kimUrl,
-      headerInsertIndex: docInfo.headerInsertIndex,
       startTime: new Date().toISOString(),
       joinState: 'joining',
       captionsOn: false,
     };
 
-    fs.writeFileSync(path.join(sessionDir, 'session.json'), JSON.stringify(sessionState, null, 2));
+    const sessionFile = path.join(sessionDir, 'session.json');
+    const saveSessionState = () => {
+      const tmp = `${sessionFile}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(sessionState, null, 2), 'utf8');
+      fs.renameSync(tmp, sessionFile);
+    };
+    saveSessionState();
+
+    const logBot = message => {
+      fs.appendFileSync(path.join(sessionDir, 'bot.log'),
+        `[meet-cue] ${message}\n`, { mode: 0o600 });
+    };
+    const recordEnd = reason => {
+      sessionState.endReason = reason;
+      logBot(`終了処理を開始します（理由: ${reason}）`);
+      saveSessionState();
+    };
+    let brief;
+    let docInfo;
+    let cards;
+    try {
+      brief = values.brief || '';
+      if (values['brief-file']) {
+        brief = fs.readFileSync(values['brief-file'], 'utf8');
+      }
+
+      // 1. Setup or reuse Cue Doc
+      if (values['doc-id']) {
+        const docId = values['doc-id'];
+        const headerInsertIndex = await findHeaderInsertIndex({ docId });
+        docInfo = {
+          docId,
+          docName: values.title || '打合せ',
+          staffUrl: `https://docs.google.com/document/d/${docId}/edit?authuser=${encodeURIComponent(values.staff)}`,
+          kimUrl: `https://docs.google.com/document/d/${docId}/edit?authuser=kim@orgiast.jp`,
+          headerInsertIndex,
+        };
+        console.log(`[meet-cue start] 既存 Doc ID を使用: ${docId} (headerInsertIndex: ${headerInsertIndex})`);
+      } else {
+        console.log(`[meet-cue start] カンペ Doc を作成中...`);
+        docInfo = await setupCueDocument({
+          title: values.title || '打合せ',
+          staff: values.staff,
+        });
+      }
+
+      console.log(`\n==================================================`);
+      console.log(`カンペ Doc (社員用): ${docInfo.staffUrl}`);
+      console.log(`カンペ Doc (kim用):   ${docInfo.kimUrl}`);
+      console.log(`==================================================\n`);
+
+      // 2. Prepare Cards
+      cards = [...STANDARD_CARDS];
+      if (values['cards-file']) {
+        cards = JSON.parse(fs.readFileSync(values['cards-file'], 'utf8'));
+      } else if (brief) {
+        console.log('[meet-cue start] 事前情報からカンペカードを生成中...');
+        cards = await generateCardsFromBrief(brief);
+      }
+
+      fs.writeFileSync(path.join(sessionDir, 'cards.json'), JSON.stringify(cards, null, 2));
+
+      Object.assign(sessionState, {
+        docId: docInfo.docId,
+        docName: docInfo.docName,
+        staffUrl: docInfo.staffUrl,
+        kimUrl: docInfo.kimUrl,
+        headerInsertIndex: docInfo.headerInsertIndex,
+      });
+      saveSessionState();
+    } catch (err) {
+      recordEnd(`準備の例外: ${err.message}`);
+      throw err;
+    }
 
     const assembler = new CaptionAssembler();
     const tracker = new CueTracker();
@@ -695,12 +725,9 @@ export async function main(argv = process.argv.slice(2)) {
     const cuesStream = fs.createWriteStream(path.join(sessionDir, 'cues.jsonl'), { flags: 'a' });
 
     let jevCallCount = 0;
+    let lastJevCallTime = 0;
     let newCharsSinceLastCheck = 0;
     let detectedCaption = false;
-    const logBot = (message) => {
-      fs.appendFileSync(path.join(sessionDir, 'bot.log'),
-        `[meet-cue] ${message}\n`, { mode: 0o600 });
-    };
     const logCaptionCount = (event) => logBot(`${event} 確定字幕行数: ${assembler.finalizedLines.length}`);
     const recordCaptions = (lines) => {
       for (const line of lines) {
@@ -734,11 +761,15 @@ export async function main(argv = process.argv.slice(2)) {
         getCaptionLineCount: () => assembler.finalizedLines.length,
         onJoinState: (joinState) => {
           sessionState.joinState = joinState;
-          fs.writeFileSync(path.join(sessionDir, 'session.json'), JSON.stringify(sessionState, null, 2), 'utf8');
+          saveSessionState();
+        },
+        onMediaMode: (mediaMode) => {
+          sessionState.mediaMode = mediaMode;
+          saveSessionState();
         },
         onCaptionsOn: (captionsOn) => {
           sessionState.captionsOn = captionsOn;
-          fs.writeFileSync(path.join(sessionDir, 'session.json'), JSON.stringify(sessionState, null, 2), 'utf8');
+          saveSessionState();
         },
         onCaption: (caption) => {
           recordCaptions(assembler.pushMutation(caption));
@@ -747,7 +778,7 @@ export async function main(argv = process.argv.slice(2)) {
             logCaptionCount('字幕を初検出');
           }
         },
-        log: console.log,
+        log: logBot,
       });
     } catch (err) {
       const reason = err.reason || err.message || 'unknown';
@@ -755,9 +786,8 @@ export async function main(argv = process.argv.slice(2)) {
 
       transcriptStream.end();
       cuesStream.end();
-      if (sessionState.joinState === 'joining') sessionState.joinState = 'failed';
       sessionState.joinError = reason;
-      fs.writeFileSync(path.join(sessionDir, 'session.json'), JSON.stringify(sessionState, null, 2), 'utf8');
+      recordEnd(`参加失敗: ${err.message || reason}`);
 
       // 1-day rate limit notification
       const todayStr = new Date().toISOString().slice(0, 10);
@@ -798,10 +828,11 @@ export async function main(argv = process.argv.slice(2)) {
 
     // Handle Ctrl+C
     let isTerminating = false;
-    const cleanup = async () => {
+    const cleanup = async (reason = 'unknown') => {
       if (isTerminating) return;
       isTerminating = true;
-      console.log('\n[meet-cue start] 終了処理を開始します...');
+      recordEnd(reason);
+      console.log(`\n[meet-cue start] 終了処理を開始します...（理由: ${reason}）`);
 
       clearInterval(captionTick);
       clearInterval(captionLog);
@@ -816,6 +847,7 @@ export async function main(argv = process.argv.slice(2)) {
         staff: values.staff,
         startTime: sessionState.startTime,
         endTime: new Date().toISOString(),
+        endReason: reason,
         captionLineCount: assembler.finalizedLines.length,
         jevCallCount,
         presentedCuesCount: tracker.history.length,
@@ -840,8 +872,12 @@ export async function main(argv = process.argv.slice(2)) {
       process.exit(0);
     };
 
-    process.on('SIGINT', cleanup);
-    process.on('SIGTERM', cleanup);
+    const logCleanupFailure = err => {
+      logBot(`終了処理の例外: ${err.message}`);
+      process.exit(1);
+    };
+    process.on('SIGINT', () => cleanup('SIGINT').catch(logCleanupFailure));
+    process.on('SIGTERM', () => cleanup('SIGTERM').catch(logCleanupFailure));
 
     // 4. Decision Loop
     const intervalSec = parseInt(values['interval-sec'] || '12', 10);
@@ -853,12 +889,14 @@ export async function main(argv = process.argv.slice(2)) {
         if (isTerminating) break;
 
         const now = Date.now();
-        if (newCharsSinceLastCheck >= 40) {
+        // C: 確定字幕が直前から 15 文字以上増え、かつ 20 秒以上経過していれば Jev 呼び出し
+        if (shouldCallJev({ newCharsSinceLastCheck, lastJevCallTime, now })) {
           const charCount = newCharsSinceLastCheck;
           newCharsSinceLastCheck = 0;
+          lastJevCallTime = now;
           jevCallCount++;
           const calledAt = new Date(now).toISOString();
-          logBot(`${calledAt} Jev 呼び出し（確定字幕 ${charCount} 文字）`);
+          logBot(`${calledAt} Jev 呼び出し（確定字幕 ${charCount} 文字, 呼び出し回数 ${jevCallCount}）`);
 
           let result;
           try {
@@ -889,13 +927,17 @@ export async function main(argv = process.argv.slice(2)) {
             logBot(`${calledAt} Jev 結果: 出さない（${err.message}）`);
             continue;
           }
-          logBot(`${calledAt} Jev 結果: ${result.presented ? result.cue.title || '助け舟' : '出さない'}`);
+          const { action, reason } = result.decision;
+          const outcome = result.presented ? result.cue.title || '助け舟' : '表示なし';
+          logBot(`${calledAt} Jev 結果: ${action} / ${outcome}${reason ? ` (${reason})` : ''}`);
         }
       }
     };
 
     // Run decision loop concurrently with bot monitor
-    Promise.race([bot.monitorPromise, decisionLoop()]).then(cleanup);
+    Promise.race([bot.monitorPromise, decisionLoop()])
+      .then(reason => cleanup(reason || 'decision_loop_end'), err => cleanup(`exception: ${err.message}`))
+      .catch(logCleanupFailure);
     return { ok: true, sessionId };
   }
 

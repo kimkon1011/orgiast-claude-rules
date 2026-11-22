@@ -13,9 +13,25 @@ const DAY_MS = 864e5;
 // 完全な生成物が残っており tools/top3-catchup.mjs が後から回収して届ける。
 // 逆に workflow が緑でも届いていない、という状態は POST 失敗が job 失敗になるので起きない。
 // つまり真実は「ローカルキャッシュの asOf がいつのものか」だけなので、そちらを見る。
-export function evaluateTop3Delivery(asOf, nowMs) {
+export function isLocalJobSeat(taskName, runner = spawnSync) {
+  if (process.platform !== 'win32') return false;
+  try {
+    const result = runner('schtasks', ['/query', '/tn', taskName], {
+      windowsHide: true,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 10000,
+    });
+    return !result.error && result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+export function evaluateTop3Delivery(asOf, nowMs, isDeliverySeat = true) {
   const key = 'local#top3-delivery';
   const label = '日次TOP3(配達)';
+  if (!isDeliverySeat) return { key, label, lastSuccess: null, ageDays: null, status: 'skip', line: `⚪ ${label}: この席は配達担当外（OrgiastTop3Catchup 未登録）のため評価しません` };
   if (!asOf) return { key, label, lastSuccess: null, ageDays: null, status: 'never', line: `🚨 ${label}: 一度も届いていません` };
   const asOfMs = Date.parse(`${asOf}T00:00:00+09:00`);
   if (!Number.isFinite(asOfMs)) return { key, label, lastSuccess: asOf, ageDays: null, status: 'unknown', line: `⚠️ ${label}: asOf を日付として読めません (${asOf})` };
@@ -27,7 +43,7 @@ export function evaluateTop3Delivery(asOf, nowMs) {
 }
 
 export function evaluate(entries, lastSuccessByKey, nowMs) {
-  return entries.map((entry) => {
+  return entries.filter((entry) => !entry.deliveryProbe).map((entry) => {
     const key = `${entry.repo}#${entry.workflow}`;
     const raw = lastSuccessByKey[key];
     let lastSuccess = raw ?? null;
@@ -88,8 +104,8 @@ export function evaluateDunningDelivery(summary, nowMs) {
     status = 'unknown';
     line = `⚠️ ${label}: 実行ログを取得できません`;
   } else if (summary === null) {
-    status = 'unknown';
-    line = `⚠️ ${label}: 実行ログから配達結果を読めません`;
+    status = 'alert';
+    line = `🚨 ${label}: 直近runで配達結果の JSON が出ていません（Step1 未実行の疑い）`;
   } else if (summary.errors.length > 0) {
     status = 'alert';
     const firstError = String(summary.errors[0]).replace(/[\r\n]+/g, ' ').slice(0, 120);
@@ -109,13 +125,13 @@ function fetchDunningLog(entry) {
     const result = spawnSync('gh', [
       'run', 'list', '--repo', entry.repo, '--workflow', entry.workflow,
       '--event=schedule', '--limit', '1', '--json', 'databaseId',
-    ], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    ], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20000 });
     if (result.error || result.status !== 0) return undefined;
     const runs = JSON.parse(result.stdout);
     const id = Array.isArray(runs) ? runs[0]?.databaseId : undefined;
     if (!Number.isSafeInteger(id) || id <= 0) return undefined;
     const log = spawnSync('gh', ['run', 'view', String(id), '--repo', entry.repo, '--log'],
-      { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20000 });
     if (log.error || log.status !== 0) return undefined;
     return log.stdout;
   } catch {
@@ -127,7 +143,7 @@ function fetchLastSuccess(entry) {
   const result = spawnSync('gh', [
     'run', 'list', '--repo', entry.repo, '--workflow', entry.workflow,
     '--event=schedule', '--status', 'success', '--limit', '1', '--json', 'updatedAt',
-  ], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  ], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20000 });
   if (result.error || result.status !== 0) return undefined;
   try {
     const runs = JSON.parse(result.stdout);
@@ -158,7 +174,7 @@ function main() {
   results.push({ key: 'local#rule-compliance-loop', label: 'ルール遵守監査', lastSuccess: complianceLastRun, ageDays: complianceAge, status: complianceAge >= 2 ? (complianceLastRun ? 'stale' : 'never') : 'ok', line: complianceAge >= 2 ? `🚨 ルール遵守監査: ${complianceLastRun ? `最終実行 ${complianceLastRun.slice(0, 10)}` : '実行記録なし'}` : `✅ ルール遵守監査: 最終実行 ${complianceLastRun.slice(0, 10)}` });
   let top3AsOf = null;
   try { top3AsOf = JSON.parse(fs.readFileSync(path.join(outputDir, 'secretary-state', 'top3.json'), 'utf8')).asOf || null; } catch { }
-  results.push(evaluateTop3Delivery(top3AsOf, nowMs));
+  results.push(evaluateTop3Delivery(top3AsOf, nowMs, isLocalJobSeat('OrgiastTop3Catchup')));
   let skipRecords = [];
   try { skipRecords = fs.readFileSync(path.join(outputDir, 'handoff-gate-skips.jsonl'), 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse); } catch { }
   const skipAlert = evaluateGateSkips(skipRecords, nowMs);

@@ -2,11 +2,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 import { getAccessToken } from './lib/freee-auth.mjs';
 import { buildRawMessage, createDraft, deleteDraft } from './gmail-draft.mjs';
-import { sendDiscordDm } from './discord-dm.mjs';
 
 export const SPREADSHEET_ID = '1q1qM9cwtCX4W-E_ONyJZqWgfOCvmY83Axwqf_LLbwtA';
 const RECORDS = "'紹介料支払記録'";
@@ -124,7 +125,16 @@ function saveMarker(file, marker) {
 }
 export async function runMonthly({ dryRun = false, force = false, now = new Date(), home = process.env.ORGIAST_HOME || os.homedir(), claudeDir = path.join(home, '.claude') } = {}, deps = {}) {
   const file = path.join(claudeDir, 'origuchi-referral-monthly.json');
-  const notify = deps.sendDm || ((target, body) => sendDiscordDm(target, body, { home }));
+  const notify = deps.sendDm || ((_target, body) => {
+      const bodyFile = path.join(os.tmpdir(), `origuchi-referral-${Date.now()}-${Math.random().toString(16).slice(2, 8)}.txt`);
+      try {
+        fs.writeFileSync(bodyFile, body, 'utf8');
+        const res = spawnSync(process.execPath, [fileURLToPath(new URL('./kim-inbox.mjs', import.meta.url)), '--add', '--kind', 'info', '--body-file', bodyFile], {
+          cwd: path.dirname(fileURLToPath(import.meta.url)), windowsHide: true, encoding: 'utf8', timeout: 30_000,
+        });
+        if (res.error || res.status !== 0) throw new Error(res.stderr?.trim() || res.error?.message || `exit ${res.status}`);
+      } finally { try { fs.rmSync(bodyFile); } catch {} }
+    });
   let stage = '月次マーカー確認', locked = false, createdDraftId;
   try {
     if (!dryRun) {

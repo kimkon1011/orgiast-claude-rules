@@ -15,7 +15,7 @@ if (-not $node) { throw 'node.exe not found' }
 if ($ValidateOnly) { & $node --check $script; if ($LASTEXITCODE -ne 0) { throw 'syntax check failed' }; return }
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script) -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Once -At '00:17' -RepetitionInterval (New-TimeSpan -Hours 3)
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 170)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 170)
 Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $settings -Description 'Repair stalled own PRs, at most two attempts per PR; decisions go to kim-inbox.' -Force | Out-Null
 $task = Get-ScheduledTask -TaskName $name -ErrorAction Stop
 if (-not $task.Actions.Arguments.Contains($script) -or $task.Triggers.Repetition.Interval -ne 'PT3H') { throw "read-back failed: $name" }

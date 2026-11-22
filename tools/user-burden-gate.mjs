@@ -105,6 +105,12 @@ export function judgeUserBurden(text, humanText = '') {
   const missing = [];
   const hasLauncher = desktopLauncherPattern.test(source);
   const explicit = explicitCommandRequest.test(String(humanText));
+  // 2026-11-16: user への手作業依頼には「Claude で回避できる策:」行が必要（kim 最上位ルール）
+  // user が自らコマンドを依頼した場合（explicit=true）は回避策不要
+  const hasAvoidancePlan = /^[ \t]*Claude で回避できる策[:：][ \t]*\S/m.test(prose);
+  if (!hasAvoidancePlan && !explicit) {
+    missing.push('「Claude で回避できる策:」で始まる行に、Claude が実行できる具体策（別経路・代行・修復）を書いてください。本当に人にしかできない場合は [BURDEN-OK] <理由> を使ってください');
+  }
   if (commandPattern.test(source) && !hasLauncher && !explicit) {
     missing.push('tools/make-desktop-launcher.mjs でデスクトップのワンクリック・ファイルにして、その \\Desktop\\ の .cmd パスを示す。PowerShell への貼り付けは頼まない');
   }

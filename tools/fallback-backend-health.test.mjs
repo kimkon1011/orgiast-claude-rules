@@ -332,3 +332,25 @@ test('429 を除いた残りで判定される（ok1 + fail1 + http_429×5 → c
   // nonQuota = 2件（ok + fail）→ calls=2 < 5 なので停止しない
   assert.deepEqual(unhealthyCandidates(rows, { now }), []);
 });
+
+test('skipCoolingBackends は keepNames で指定した定額レーンは冷却中でも残す', () => {
+  const backends = [{ name: 'cursor-agent' }, { name: 'cheap-code:deepseek' }, { name: 'qwen' }];
+  const cooling = new Set(['cursor-agent', 'qwen']);
+  const kept = skipCoolingBackends(backends, cooling, { keepNames: ['cursor-agent'] });
+  assert.deepEqual(kept.map((b) => b.name), ['cursor-agent', 'cheap-code:deepseek']);
+});
+
+test('status/outcome が欠けた行と HTTP 402 では failure_rate 停止にしない', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fallback-health-missing-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const now = Date.now();
+  const rows = [
+    { status: 'ok' }, { status: 'http_400' },
+    {}, { status: null }, { outcome: 'undefined' },
+  ].map(row => ({ t: now, provider: 'groq', ...row }));
+  const billing = rows.map((row, i) => i < 2 ? row : { ...row, outcome: 'http_402' });
+  for (const source of [rows, billing, [...rows, ...billing]]) {
+    assert.deepEqual(applyCandidateHealth(home, { rows: source, now, force: true }), []);
+  }
+  assert.equal(fs.existsSync(path.join(home, '.claude/lanes-disabled.json')), false);
+});

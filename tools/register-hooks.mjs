@@ -187,6 +187,7 @@ try {
   added += removeDailySessionHooks(settings);
   added += removeKimDiscordReportHooks(settings);
   // Repository manifest is the canonical set, including matcher, args and budgets.
+  // Shell guards such as shared-worktree-git-guard are registered through this manifest.
   // PostToolUse Discord request registration is defined there for new and existing PCs.
   // The old individual definitions are retained only in per-home migration input.
   for (const [event, groups] of Object.entries(repositoryHooks(repo, home))) {
@@ -273,7 +274,15 @@ try {
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
     fs.closeSync(fs.openSync(path.join(home, '.claude', 'share-ledger.jsonl'), 'a'));
   }
-  const collapsed = collapseHooks(settings.hooks, repo);
+  const collapsed = collapseHooks(settings.hooks, repo, home);
+  // Keep the cumulative migration count available to dispatch metrics after
+  // later converge runs, when the removed hooks are no longer in the input.
+  for (const [event, count] of Object.entries(previousManifest?.legacyDuplicatesRemoved || {})) {
+    if (Object.hasOwn(collapsed.manifest.events, event) && Number.isSafeInteger(count) && count > 0) {
+      const removed = collapsed.manifest.legacyDuplicatesRemoved;
+      removed[event] = (removed[event] || 0) + count;
+    }
+  }
   const manifestFile = runtimeManifestPath(home);
   const manifestChanged = JSON.stringify(load(manifestFile)) !== JSON.stringify(collapsed.manifest);
   if (manifestChanged) write(manifestFile, collapsed.manifest);

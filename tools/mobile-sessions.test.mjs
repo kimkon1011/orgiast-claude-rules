@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { buildMobileSessionsUri, parseMobileArgs, planMobileSessionsLaunch } from './mobile-sessions.mjs';
 
 test('mobile-sessions の引数は既定値と明示値を解釈する', () => {
@@ -55,4 +56,43 @@ test('unknown snapshot is not reported as zero', async (t) => {
   const output = [];
   assert.equal(await main(['--dry-run'], { env: { CI: '1' }, homedir: home, log: (s) => output.push(s) }), 0);
   assert.match(output[0], /現在の待機数: 不明/);
+});
+
+test('mobile session request keeps the pool snapshot and skips URI at capacity', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-cap-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'));
+  const snapshot = path.join(home, '.claude', 'mobile-sessions-state.json');
+  const original = JSON.stringify({ waiting: 2, target: 3, updatedAt: Date.now() });
+  fs.writeFileSync(snapshot, original);
+  const logs = [];
+  assert.equal(await main([], {
+    env: { VSCODE_CLI_PATH: 'C:\\Code\\bin\\code.cmd' }, homedir: home,
+    log: line => logs.push(line), exists: () => true,
+    concurrencyOptions: { platform: 'win32', list: () => Array.from({ length: 25 }, (_, index) => ({
+      Name: 'claude.exe', ProcessId: index + 100, CommandLine: 'claude.exe --resume=id',
+    })) },
+    spawn() { assert.fail('URI dispatched'); },
+  }), 0);
+  assert.deepEqual(logs, ['[mobile-sessions] session_concurrency_cap count=25 limit=20']);
+  assert.equal(fs.readFileSync(snapshot, 'utf8'), original);
+});
+
+test('mobile session request fits the remaining capacity even with an empty pool', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-cap-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const calls = [];
+  assert.equal(await main(['--count', '3'], {
+    env: { VSCODE_CLI_PATH: 'C:\\Code\\bin\\code.cmd' }, homedir: home,
+    exists: () => true,
+    checkSessionConcurrency: () => ({ ok: true, reason: 'available', count: 19, limit: 20 }),
+    spawn(command, args) {
+      calls.push({ command, args });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit('exit', 0));
+      return child;
+    },
+  }), 0);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].args[1], /\/mobile\?count=1&/);
 });

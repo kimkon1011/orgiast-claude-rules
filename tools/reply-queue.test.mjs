@@ -12,6 +12,7 @@ import {
   decide,
   issueReceipt,
   markSent,
+  markUncertain,
   reconcile,
   status
 } from './reply-queue.mjs';
@@ -19,6 +20,34 @@ import {
 function createTempHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rq-test-'));
 }
+
+test('manual reconciliation records evidence and delivery time without issuing or changing approval/receipt', async t => {
+  const home = createTempHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const id = enqueueItems(home, [{ channel: 'line', thread: 'chat', message: 'daily-post:2026-11-20', body: 'body', from: { name: 'fixture' } }]).added[0];
+  saveDraft(home, id, { text: 'body' });
+  await decide(home, id, { verdict: 'approved', reason: 'fixture approval' });
+  issueReceipt(home, id, { fetchLatest: () => [], now: new Date('2026-11-20T00:00:00Z') });
+  markUncertain(home, id, { reason: 'readback failed' });
+  const before = getItem(home, id);
+  for (const invalid of [{ messageId: '' }, { sentAt: 'invalid' }, { sentAt: '2099-01-01T00:00:00Z' }, { evidence: '' }]) {
+    assert.throws(() => reconcile(home, id, { messageId: '17763', ...invalid }));
+    assert.equal(getItem(home, id).state, 'uncertain');
+  }
+  const now = new Date('2026-11-20T01:00:00Z');
+  const evidence = '手動照合・台帳訂正: Beeper listMessages, id=17763, 全文・送信者・試行時間範囲一致';
+  const after = reconcile(home, id, { messageId: '17763', sentAt: '2026-11-20T00:00:13.453Z', evidence, now });
+  assert.equal(after.state, 'sent');
+  assert.equal(after.sent.at, '2026-11-20T00:00:13.453Z');
+  assert.equal(after.sent.reconciledAt, now.toISOString());
+  assert.equal(after.sent.receiptId, '', 'reconciliation does not pretend to have used an approval receipt');
+  assert.equal(after.sent.evidence, evidence);
+  assert.match(after.history.at(-1).note, /手動照合・台帳訂正/);
+  assert.deepEqual(after.decision, before.decision);
+  assert.deepEqual(after.receipt, before.receipt);
+  assert.deepEqual(after.failure, before.failure, 'original failure remains in the audit trail');
+  assert.throws(() => reconcile(home, id, { messageId: '17763' }), /uncertain/);
+});
 
 test('1. 同じ 2 件の items を 2 回 enqueue', async t => {
   const home = createTempHome();

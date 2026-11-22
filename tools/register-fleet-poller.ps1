@@ -28,7 +28,7 @@ Copy-Item -LiteralPath $bootstrapSource -Destination $bootstrap -Force
 . (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
 $action = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $bootstrap, '-Target', $target) -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At '03:15'
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force -ErrorAction Stop | Out-Null
 Write-Host "OK: task $taskName registered (daily 03:15)"
 Get-ScheduledTask -TaskName $taskName | Select-Object TaskName, State

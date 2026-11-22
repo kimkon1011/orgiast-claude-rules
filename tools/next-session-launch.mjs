@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { checkSessionConcurrency, sessionConcurrencyLog } from './lib/session-concurrency.mjs';
 import { automationModel } from './lib/automation-model.mjs';
 import { countWindowsClaudeProcesses } from './lib/windows-process.mjs';
 import { readHandoff, handoffLockEnabled } from './lib/handoff-store.mjs';
@@ -387,6 +388,11 @@ export async function runHeadlessNextSession({ env, hostname, home, cwd, prompt,
   const result = await launch(false);
   try { fs.rmSync(promptFile, { force: true }); } catch {}
   const line = `${now().toISOString()} executor=${result.executor} exit=${result.exitCode} status=${result.status} fallback=${result.fallbackToClaude} cwd=${cwd}`;
+  appendNextSessionLog(home, line, appendLog);
+  return result;
+}
+
+function appendNextSessionLog(home, line, appendLog) {
   if (appendLog) appendLog(line);
   else {
     try {
@@ -394,14 +400,13 @@ export async function runHeadlessNextSession({ env, hostname, home, cwd, prompt,
       fs.appendFileSync(path.join(home, '.claude', 'logs', 'next-session-launch.log'), `${line}\n`, 'utf8');
     } catch {}
   }
-  return result;
 }
 
 
 // 親セッションの環境変数をそのまま渡すと、新しいセッションが「今のセッションの子」として
 // 起動してしまう(CLAUDE_CODE_SESSION_ID / CLAUDECODE / CLAUDE_CODE_MESSAGING_SOCKET を継承し、
 // VSCode 拡張の IPC に相乗りする)。CLAUDE* は原則すべて落とし、必要なものだけ残す。
-export const KEPT_CLAUDE_ENV = new Set(['CLAUDE_CLI_PATH', 'CLAUDE_CONFIG_DIR']);
+export const KEPT_CLAUDE_ENV = new Set(['CLAUDE_CLI_PATH', 'CLAUDE_CONFIG_DIR', 'CLAUDE_MAX_CONCURRENT_SESSIONS']);
 
 export function sanitizeEnv(env) {
   const clean = {};
@@ -766,6 +771,16 @@ export async function launchNextSession(argv = [], io = {}) {
       await rename(tmpPath, statePath);
       log(`[next-session] headless で次セッションの開始処理を実行しました: executor=${result.executor} status=${result.status}${result.fallbackToClaude ? ' (cheap-code失敗のためclaudeへ落下・台帳記録済み)' : ''}`);
       return 0;
+    }
+
+    if (!flags.dryRun) {
+      const capacity = (io.checkSessionConcurrency ?? checkSessionConcurrency)({ ...io.concurrencyOptions, env });
+      if (!capacity.ok) {
+        const detail = sessionConcurrencyLog(capacity);
+        appendNextSessionLog(home, `${new Date().toISOString()} route=${route} ${detail}`, io.appendHeadlessLog);
+        log(`[next-session] ${detail}`);
+        return 0;
+      }
     }
 
     if (route === 'vscode-ext') {

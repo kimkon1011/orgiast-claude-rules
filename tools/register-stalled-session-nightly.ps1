@@ -13,7 +13,7 @@ $nb = Join-Path $installed 'nightly-bootstrap.ps1'
 Copy-Item -LiteralPath (Join-Path $repo 'tools\nightly-bootstrap.ps1') -Destination $nb -Force
 $act = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $nb, '-Target', 'tools\nightly-batch.ps1') -WorkingDirectory $repo
 $trg = New-ScheduledTaskTrigger -Daily -At 3:00am -RandomDelay (New-TimeSpan -Minutes 2)
-$set = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 5)
+$set = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 5)
 Register-ScheduledTask -TaskName 'OrgiastNightlyBatch' -Action $act -Trigger $trg -Settings $set -Force | Out-Null
 $task = Get-ScheduledTask -TaskName 'OrgiastNightlyBatch'
 if (-not ($task.Actions.Arguments -match 'nightly-bootstrap')) { throw 'Nightly action verification failed' }
@@ -26,7 +26,7 @@ if (-not ($sweep.Actions.Arguments -match 'stalled-session-resume')) { throw 'St
 
 $waitAction = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($sweepScript, '--overdue') -WorkingDirectory $repo
 $waitTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 15)
-$waitSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+$waitSettings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 2)
 Register-ScheduledTask -TaskName 'OrgiastWaitDeadlineResume' -Action $waitAction -Trigger $waitTrigger -Settings $waitSettings -Force | Out-Null
 $waitTask = Get-ScheduledTask -TaskName 'OrgiastWaitDeadlineResume'
 if ($waitTask.Actions.Count -ne 1 -or $waitTask.Actions.Execute -ne $waitAction.Execute -or $waitTask.Actions.Arguments -ne $waitAction.Arguments -or $waitTask.Actions.WorkingDirectory -ne $waitAction.WorkingDirectory) { throw 'Wait deadline action verification failed' }

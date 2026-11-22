@@ -21,10 +21,10 @@ export async function tryRelayToken({ keyPath, impersonate, scope, signal, fetch
   if (saved && saved.until > Date.now()) return saved.token;
   let res;
   try { res = await fetchImpl(state.webAppUrl, { method: 'POST', signal: signal ?? AbortSignal.timeout(25000), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ secret: state.secret }) }); }
-  catch { throw failure('通信エラー'); }
+  catch (cause) { throw Object.assign(failure('通信エラー'), { cause }); }
   let body;
-  try { body = await res.json(); } catch { throw failure('JSON 以外の応答・権限承認が必要'); }
-  if (!res.ok || body.ok !== true || body.user !== RELAY_USER || typeof body.accessToken !== 'string' || !body.accessToken || !Number.isFinite(body.expiresInSec) || body.expiresInSec <= 0) throw failure(`HTTP ${res.status}・認証応答不正`);
+  try { body = await res.json(); } catch (cause) { throw Object.assign(failure('JSON 以外の応答・権限承認が必要'), { cause, status: res.status }); }
+  if (!res.ok || body.ok !== true || body.user !== RELAY_USER || typeof body.accessToken !== 'string' || !body.accessToken || !Number.isFinite(body.expiresInSec) || body.expiresInSec <= 0) throw Object.assign(failure(`HTTP ${res.status}・認証応答不正`), { status: res.status });
   cache.set(cacheKey, { token: body.accessToken, until: Date.now() + Math.max(0, Math.min(body.expiresInSec, 3300) - 30) * 1000 });
   return body.accessToken;
 }

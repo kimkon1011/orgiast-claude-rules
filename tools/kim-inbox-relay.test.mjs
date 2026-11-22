@@ -60,7 +60,7 @@ test('decorated inbox headings, trailing labels and paraphrases pass; missing ID
     assert.equal(f.judge(`${heading}\n${a.id}`).decision, 'block');
   }
 });
-test('receipts suppress same-session asks until next JST day, high info until refreshed, other sessions still see asks', async t => {
+test('receipts suppress asks across all sessions until next JST day, high info until refreshed', async t => {
   const f = fixture(t);
   const ask = await addItem(f.home, { kind: 'ask', text: '承認をお願いします' });
   const info = await addItem(f.home, { kind: 'info', text: '進捗: PR のテスト成功', priority: 'high', dedupeKey: 'progress' });
@@ -72,7 +72,7 @@ test('receipts suppress same-session asks until next JST day, high info until re
   assert.equal(f.judge('別の作業の結果').decision, 'pass');
   assert.equal(relayDue(a, f.input.session_id, now + 3600000), false);
   assert.equal(relayDue(a, f.input.session_id, now + 86400000), true);
-  assert.equal(relayDue(a, 'another-session', now), true);
+  assert.equal(relayDue(a, 'another-session', now), false);
   assert.equal(relayDue(i, 'another-session', now + 86400000), false);
   assert.equal(relayDue({ ...i, lastAt: new Date(now + 1).toISOString() }, 'another-session', now), false);
   assert.equal(relayDue({ ...i, text: '進捗: PR をマージ済み' }, 'another-session', now), true);
@@ -117,6 +117,42 @@ test('1 可 records the shown ask via answerItem; quoted, ambiguous, stale and o
   commitKimInboxDelivery(f.home, f.input.session_id, f.judge(f.section([multi])).receipts, now);
   assert.equal(answer('1 可').length, 0);
 });
+test('ki- ID from other session records answer; number-only from other session still requires receipt', async t => {
+  const f = fixture(t), a = await addItem(f.home, { kind: 'ask', text: '資料公開の承認' });
+  f.inject([a]);
+  commitKimInboxDelivery(f.home, f.input.session_id, f.judge(f.section([a])).receipts, now);
+  // ki- ID from other session → records
+  assert.equal(recordPromptAnswers(f.home, 'other-session', `${a.id} 可`, { listItems, answerItem }).length, 1);
+  assert.equal(listItems(f.home)[0].answer, '可');
+  // Number-only from other session → does not record
+  const b = await addItem(f.home, { kind: 'ask', text: '別の承認' }); f.inject([b]);
+  commitKimInboxDelivery(f.home, f.input.session_id, f.judge(f.section([b])).receipts, now);
+  // ki- ID on item not yet delivered (no receipt) → still records
+  const c = await addItem(f.home, { kind: 'ask', text: '未配達の承認' });
+  assert.equal(recordPromptAnswers(f.home, 'yet-another', `${c.id} 可`, { listItems, answerItem }).length, 1);
+  assert.equal(listItems(f.home).find(i => i.id === c.id).answer, '可');
+});
+
+test('relayDue checks all sessions: any session delivered today blocks, next JST day resets, revision change unblocks', async t => {
+  const f = fixture(t);
+  const ask = await addItem(f.home, { kind: 'ask', text: '承認をお願いします' });
+  const info = await addItem(f.home, { kind: 'info', text: '進捗: テスト成功', priority: 'high', dedupeKey: 'progress' });
+  f.inject([ask, info]);
+  const result = f.judge(f.section([ask, info]));
+  commitKimInboxDelivery(f.home, f.input.session_id, result.receipts, now);
+  const saved = listItems(f.home), a = saved.find(i => i.id === ask.id);
+  // a different session on the same day → due=false (change 2: any session blocks)
+  assert.equal(relayDue(a, 'another-session', now), false);
+  // next JST day → due=true
+  assert.equal(relayDue(a, 'another-session', now + 86400000), true);
+  // revision change → due=true (different text)
+  const a2 = { ...a, text: '別の承認をお願いします' };
+  assert.equal(relayDue(a2, 'another-session', now), true);
+  // info with no sessions today → due=false (info delivered → no re-display)
+  const i_saved = saved.find(i => i.id === info.id);
+  assert.equal(relayDue(i_saved, 'another-session', now), false);
+});
+
 test('runner relay precedes retry/close bypasses, and another gate rejecting a draft prevents receipt', async t => {
   const f = fixture(t), a = await addItem(f.home, { kind: 'ask', text: '登録の承認をお願いします' }); f.inject([a]);
   const old = process.env.ORGIAST_HOME; process.env.ORGIAST_HOME = f.home;

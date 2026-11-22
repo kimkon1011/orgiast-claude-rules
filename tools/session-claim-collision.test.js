@@ -33,7 +33,7 @@ function run(projects) {
   return spawnSync(process.execPath, [script], {
     cwd: projects,
     input: JSON.stringify({ hook_event_name: 'SessionStart', session_id: selfId }), encoding: 'utf8',
-    env: { ...process.env, CLAUDE_SESSION_ID: '', CLAUDE_PROJECTS_DIR: projects },
+    env: { ...process.env, ORGIAST_HOME: path.dirname(projects), CLAUDE_SESSION_ID: '', CLAUDE_PROJECTS_DIR: projects },
   });
 }
 

@@ -36,7 +36,7 @@ export function launchLaneAutoProbes(health, { home = laneHome(), now = Date.now
 }
 export function sessionLaneHealth(options) {
   const home = options?.home || laneHome();
-  const context = auditContext(home);
+  const context = auditContext(home, { now: options?.now });
   (options?.auditLaunch || launchAudit)({ ...options, home, intervalHours: 6 });
   const health = laneDoctorQuick(options);
 launchLaneAutoProbes(health, { ...options, home });

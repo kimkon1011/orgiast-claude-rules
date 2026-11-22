@@ -178,3 +178,71 @@ test('register-knowledge-upstream-task.ps1 uses -RepetitionInterval parameter an
   assert.match(script, /Get-ScheduledTask -TaskName \$taskName/);
   assert.match(script, /Repetition\.Interval/);
 });
+
+for (const stage of ['folder', 'lookup', 'upload']) {
+  for (const status of [403, 413]) {
+    test(`rclone fallback verifies and clears queue after ${stage} HTTP ${status}`, async () => {
+      const { tmpDir, cleanup } = createMockEnv();
+      try {
+        const stateFile = path.join(tmpDir, '.claude', 'knowledge-upstream-state.json');
+        const queued = { id: 'memory:queued.md', title: 'queued.md', content: 'queued knowledge', sha256: 'queued-hash' };
+        fs.writeFileSync(stateFile, JSON.stringify({ lastRunAt: '', sentHashes: {}, unsentQueue: [queued] }));
+        let fallbackCalls = 0;
+        const fail = () => { throw new Error(`channel gws: HTTP ${status} blocked`); };
+        const result = await runKnowledgeUpstream({
+          home: tmpDir, repoPath: tmpDir, emit: () => {}, env: { ORGIAST_KEYSERVE_PC: 'PC02' },
+          now: new Date('2026-11-22T10:00:00Z'), getDriveTokenFn: async () => 'token',
+          findOrCreateFolderFn: stage === 'folder' ? fail : async () => ({ id: 'folder' }),
+          findByTitleFn: stage === 'lookup' ? fail : async () => [],
+          uploadFileContentFn: stage === 'upload' ? fail : async () => assert.fail('Unexpected primary upload'),
+          uploadKnowledgeWithRcloneFn: async ({ items, folderName, inboxFolderId }) => {
+            fallbackCalls++;
+            assert.equal(items.length, 2);
+            assert.equal(folderName, 'PC02-unknown');
+            assert.equal(inboxFolderId, '1AyZcrlK9JCNPUkhKCBOezet9a2QoSwK2');
+            assert.ok(items.every(item => item.name.startsWith('20261122-')));
+            return { verified: new Set(items.map(item => item.name)), errors: new Map() };
+          },
+        });
+        assert.equal(fallbackCalls, 1);
+        assert.equal(result.sent, 2);
+        assert.equal(result.queued, 0);
+        assert.deepEqual(result.errors, []);
+        const saved = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+        assert.equal(saved.unsentQueue.length, 0);
+        assert.equal(Object.keys(saved.sentHashes).length, 2);
+        assert.equal(saved.lastRunAt, '2026-11-22T10:00:00.000Z');
+      } finally { cleanup(); }
+    });
+  }
+}
+
+for (const mode of ['unavailable', 'unverified', 'other-error', 'dry-run']) {
+  test(`${mode} does not record a successful rclone upload`, async () => {
+    const { tmpDir, cleanup } = createMockEnv();
+    try {
+      let fallbackCalls = 0;
+      const stateFile = path.join(tmpDir, '.claude', 'knowledge-upstream-state.json');
+      const result = await runKnowledgeUpstream({
+        home: tmpDir, repoPath: tmpDir, emit: () => {}, dryRun: mode === 'dry-run',
+        getDriveTokenFn: async () => 'token',
+        findOrCreateFolderFn: async () => { throw Object.assign(new Error('blocked'), { status: mode === 'other-error' ? 500 : 403 }); },
+        uploadKnowledgeWithRcloneFn: async () => {
+          fallbackCalls++;
+          if (mode === 'unavailable') throw new Error('rclone remote claude-backup is unavailable');
+          return { verified: new Set(), errors: new Map() };
+        },
+      });
+      assert.equal(result.sent, 0);
+      assert.equal(fallbackCalls, ['other-error', 'dry-run'].includes(mode) ? 0 : 1);
+      if (mode === 'dry-run') assert.equal(fs.existsSync(stateFile), false);
+      else {
+        assert.equal(result.queued, 1);
+        const saved = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+        assert.equal(saved.unsentQueue.length, 1);
+        assert.deepEqual(saved.sentHashes, {});
+        assert.equal(saved.lastRunAt, '');
+      }
+    } finally { cleanup(); }
+  });
+}

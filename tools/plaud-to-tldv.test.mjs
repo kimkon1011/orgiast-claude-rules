@@ -5,8 +5,97 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   apiBaseFor, regionFromToken, isWorkspaceTokenExpired, buildProxyUrl, proxyExtensionFor, tokensFromRefresh, shouldNotify, renewalMessage, renewalNoticePath, durationToSeconds, epochToIso, extensionFromUrl, isTldvSupportedUrl, meetsMinimumDuration,
-  mergeState, readState, redactSecret, regionFromRedirect, selectPlaudCookies, shouldImport, userTokenRefreshMode,
+  mergeState, normalizePlaudV4Recording, readState, redactSecret, regionFromRedirect, run, selectPlaudCookies, shouldImport, userTokenRefreshMode,
 } from './plaud-to-tldv.mjs';
+
+test('Plaud 4.0 の一覧を正規化し、移行前 ID とミリ秒単位を維持する', () => {
+  const start = 1_800_000_000_000;
+  const raw = { file_id: 'of_old', name: '見積会議', created_at_show_ms: start, duration_ms: 90_000 };
+  const record = normalizePlaudV4Recording(raw);
+  assert.deepEqual(record, { id: 'old', filename: '見積会議', start_time: start, end_time: start + 90_000, duration: 90_000, is_trash: false });
+  assert.equal(normalizePlaudV4Recording({ ...raw, file_id: 'f_new' }).id, 'f_new');
+  assert.equal(durationToSeconds(record.duration, record), 90);
+  assert.throws(() => normalizePlaudV4Recording({ ...raw, file_id: undefined }), /有効な ID/);
+});
+
+test('旧 API から v4 に切り替え、既存録音を再投入せず次回は v4 を直接使う', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'plaud-v4-test-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  t.mock.method(console, 'log', () => {});
+  t.mock.method(console, 'error', () => {});
+  const priorHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  t.after(() => {
+    if (priorHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = priorHome;
+  });
+  const start = Date.now() - 60_000;
+  const statePath = path.join(home, 'state.json');
+  const exp = Math.floor(Date.now() / 1000) + 30 * 86400;
+  fs.writeFileSync(statePath, JSON.stringify({ firstSeenAt: 1, imported: { old: { at: 1 } },
+    session: { utExp: exp, wt: 'mock', wtExp: exp, workspaceId: 'personal' } }));
+  const calls = [], urls = [];
+  let listMode = 'valid', headStatus = 403;
+  const config = { apiKey: 'mock', statePath, proxyBase: 'https://legacy-proxy.example.test', proxySecret: 'mock' };
+  const deps = { config, maintenance: { reauth: async () => false, readRecord: () => ({}) }, fetch: async (value, init) => {
+    const url = new URL(value);
+    calls.push(url.pathname);
+    if (url.pathname === '/file/simple/web') return Response.json({ status: -1800907 });
+    if (url.pathname === '/file-app/v4/recordings/all') {
+      assert.equal(init.headers.authorization, 'Bearer mock');
+      if (listMode === 'malformed') return Response.json({ status: 0, data: {} });
+      if (listMode === 'error') return Response.json({ status: -1234, data: { items: [] } });
+      const next = url.searchParams.get('cursor');
+      assert.equal(next, calls.filter(p => p === url.pathname).length % 2 ? null : 'second');
+      return Response.json({ status: 0, data: {
+        items: [{ file_id: next ? 'of_old' : 'f_new', name: '見積会議', created_at_show_ms: start, duration_ms: 300_000 }],
+        next_cursor: next ? null : 'second',
+      } });
+    }
+    if (url.pathname === '/file-app/v4/files/detail/f_new') {
+      return Response.json({ status: 0, data: { objects: [{ object_type: 'AUDIO_TRANSCODED', content_id: 'audio' }] } });
+    }
+    if (url.pathname === '/file-app/v4/files/content/url') {
+      assert.equal(init.method, 'POST');
+      assert.deepEqual(JSON.parse(init.body), { content_ids: ['audio'] });
+      return Response.json({ status: 0, data: { url_map: { audio: 'https://media.example.test/audio.mp3' } } });
+    }
+    if (url.hostname === 'legacy-proxy.example.test') {
+      assert.equal(init.method, 'HEAD');
+      assert.match(url.pathname, /^\/a\/[\w-]+\/audio\.mp3$/);
+      return new Response(null, { status: 502 });
+    }
+    if (url.pathname === '/audio.mp3') {
+      assert.equal(init.method, 'HEAD');
+      assert.equal(init.headers, undefined);
+      return new Response(null, { status: headStatus });
+    }
+    if (url.pathname === '/v1alpha1/meetings/import') {
+      urls.push(JSON.parse(init.body).url);
+      return Response.json({ success: true });
+    }
+    assert.fail(`予期しないリクエスト ${url.pathname}`);
+  } };
+  assert.equal(await run([], deps), 1);
+  assert.deepEqual(urls, []);
+  assert.match(console.error.mock.calls.at(-1).arguments[0], /HEAD.*403/);
+  assert.equal(readState(statePath).state.plaudApiVersion, 4);
+  assert.equal(readState(statePath).state.imported.f_new, undefined);
+  headStatus = 200;
+  assert.equal(await run(['--json'], deps), 0);
+  assert.deepEqual(urls, ['https://media.example.test/audio.mp3']);
+  assert.deepEqual(Object.keys(readState(statePath).state.imported).sort(), ['f_new', 'old']);
+  assert.equal(await run(['--json'], deps), 0);
+  assert.equal(urls.length, 1);
+  assert.equal(calls.filter(p => p === '/file/simple/web').length, 1);
+  assert.equal(calls.filter(p => p === '/file-app/v4/files/detail/f_new').length, 2);
+  listMode = 'malformed';
+  assert.equal(await run(['--json'], deps), 1);
+  assert.match(console.error.mock.calls.at(-1).arguments[0], /items/);
+  listMode = 'error';
+  assert.equal(await run(['--json'], deps), 1);
+  assert.match(console.error.mock.calls.at(-1).arguments[0], /status=-1234/);
+});
 
 test('UT は残り7日で前倒し更新する(UT と URT が同時に切れるため、5分前では毎時実行が間に合わない)', () => {
   const now = 1_800_000_000;

@@ -88,11 +88,21 @@ function excludeOrphans(rows) {
   });
 }
 
+function parseClaudeProcessSnapshot(raw) {
+  const rows = JSON.parse(String(raw).replace(/^\uFEFF/, ''));
+  if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== 'object' || !row.Name)) throw new Error('Invalid process snapshot');
+  return rows;
+}
+
+export function listWindowsClaudeProcesses(exec) {
+  const raw = exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', CLAUDE_PROCESS_SCRIPT], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+  if (raw instanceof Promise) return raw.then(parseClaudeProcessSnapshot);
+  return parseClaudeProcessSnapshot(raw);
+}
+
 export function countWindowsClaudeProcesses(exec, { sessionsDir, isWaitingSession, now = Date.now, fsImpl } = {}) {
   try {
-    const raw = exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', CLAUDE_PROCESS_SCRIPT], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
-    const rows = JSON.parse(String(raw).replace(/^\uFEFF/, ''));
-    if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== 'object' || !row.Name)) throw new Error('Invalid process snapshot');
+    const rows = listWindowsClaudeProcesses(exec);
     const cliProcs = rows.filter(isClaudeCodeCliProcess);
     const nonOrphan = excludeOrphans(cliProcs);
 

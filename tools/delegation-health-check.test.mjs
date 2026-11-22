@@ -516,6 +516,53 @@ test('authRestoredAfter は有効な t が無ければ false、statImpl 注入�
   }), false);
 });
 
+test('authRestoredAfter は Windows auth.json が古くても WSL に新しい auth があれば true を返す', () => {
+  const oldMtime = Date.parse('2026-09-10T00:00:00Z');
+  const failureTime = '2026-11-21T12:00:00Z';
+  const recentSec = Math.floor(Date.parse('2026-11-22T01:45:00Z') / 1000);
+  let spawnCalls = [];
+  const spawnImpl = (cmd, args) => {
+    spawnCalls.push({ cmd, args });
+    if (args[0] === '-l') return { status: 0, stdout: 'Ubuntu\r\n' };
+    return { status: 0, stdout: `${recentSec}\n${JSON.stringify({ tokens: { id_token: 'valid-wsl-token' } })}` };
+  };
+  assert.equal(authRestoredAfter('unused', [{ t: failureTime }], {
+    statImpl: () => ({ mtimeMs: oldMtime }),
+    readFile: () => '{"tokens":{"id_token":"old-token"}}',
+    spawnImpl,
+    checkWsl: true,
+  }), true);
+  assert.equal(spawnCalls.length, 2);
+  assert.equal(spawnCalls[0].args[0], '-l');
+  assert.equal(spawnCalls[1].args[0], '-d');
+  // WSL mtime older than failure → false
+  spawnCalls = [];
+  assert.equal(authRestoredAfter('unused', [{ t: failureTime }], {
+    statImpl: () => ({ mtimeMs: oldMtime }),
+    readFile: () => '{"tokens":{"id_token":"old-token"}}',
+    spawnImpl: (cmd, args) => {
+      spawnCalls.push({ cmd, args });
+      if (args[0] === '-l') return { status: 0, stdout: 'Ubuntu\r\n' };
+      return { status: 0, stdout: `${Math.floor(Date.parse('2026-09-09T00:00:00Z') / 1000)}\n${JSON.stringify({ tokens: { id_token: 'old-wsl-token' } })}` };
+    },
+    checkWsl: true,
+  }), false);
+  // No WSL distro → false
+  assert.equal(authRestoredAfter('unused', [{ t: failureTime }], {
+    statImpl: () => ({ mtimeMs: oldMtime }),
+    readFile: () => '{"tokens":{"id_token":"old-token"}}',
+    spawnImpl: () => ({ status: 0, stdout: '' }),
+    checkWsl: true,
+  }), false);
+  // WSL cat fails → false
+  assert.equal(authRestoredAfter('unused', [{ t: failureTime }], {
+    statImpl: () => ({ mtimeMs: oldMtime }),
+    readFile: () => '{"tokens":{"id_token":"old-token"}}',
+    spawnImpl: (cmd, args) => args[0] === '-l' ? { status: 0, stdout: 'Ubuntu\r\n' } : { status: 1 },
+    checkWsl: true,
+  }), false);
+});
+
 test('認証失敗と本物の出力ゼロが混在しても codex_empty_output は本物だけを数える', () => {
   const dir = home();
   write(dir, 'executor-usage.jsonl',

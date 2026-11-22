@@ -14,6 +14,14 @@ const execFileAsync = promisify(execFile);
 const isMain = isEntry(import.meta.url);
 const args = isMain ? process.argv.slice(2) : [];
 
+export const DEFAULT_MAX = 360;
+// 2026-11-19 実測: 2並列で40件を108秒 = 5.4秒/件。安全係数1.5で8.1秒/件。
+export const TRIAGE_TIMEOUT_PER_ITEM_MS = 8_100;
+export const MAX_TRIAGE_TIMEOUT_MS = DEFAULT_MAX * TRIAGE_TIMEOUT_PER_ITEM_MS;
+export function triageTimeoutMs(max) {
+  return Math.min(MAX_TRIAGE_TIMEOUT_MS, Math.max(30_000, max * TRIAGE_TIMEOUT_PER_ITEM_MS));
+}
+
 function usage(message) {
   if (message) console.error(`エラー: ${message}`);
   console.error('使い方: node tools/session-auto-close.mjs [--days N] [--max N] [--dry] [--force] [--provider name] [--no-llm] [--redact-existing]');
@@ -29,7 +37,7 @@ function option(name) {
 
 if (args.includes('--help') || args.includes('-h')) usage();
 const days = Number(option('--days') ?? 7);
-const max = Number(option('--max') ?? 40);
+const max = Number(option('--max') ?? DEFAULT_MAX);
 const provider = option('--provider');
 const dry = args.includes('--dry');
 const force = args.includes('--force');
@@ -163,7 +171,7 @@ if (isMain) {
       if (force) triageArgs.push('--include-closed');
       if (!noLlm) triageArgs.push('--llm');
       if (provider) triageArgs.push('--provider', provider);
-      const { stdout, stderr } = await execFileAsync(process.execPath, triageArgs, { maxBuffer: 16 * 1024 * 1024, timeout: Math.max(30_000, max * 35_000) });
+      const { stdout, stderr } = await execFileAsync(process.execPath, triageArgs, { maxBuffer: 16 * 1024 * 1024, timeout: triageTimeoutMs(max) });
       if (stderr.trim()) process.stderr.write(redactSecrets(stderr));
       const result = redactObject(JSON.parse(redactSecrets(stdout)));
       const totalEligible = Object.values(result.summary?.counts || {}).reduce((sum, count) => sum + Number(count || 0), 0);

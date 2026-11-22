@@ -19,7 +19,7 @@ if (-not $node) { throw 'node.exe not found' }
 if ($ValidateOnly) { & $node --check $script; if ($LASTEXITCODE -ne 0) { throw 'syntax check failed' }; return }
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script) -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At '09:07'
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 20)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 20)
 Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $settings -Description 'Watch vehicle inspection expiry daily at 09:07; notify kim and the assignee, chase until renewed.' -Force | Out-Null
 $task = Get-ScheduledTask -TaskName $name -ErrorAction Stop
 if (-not $task.Actions.Arguments.Contains($script)) { throw "read-back failed: action does not run $script" }

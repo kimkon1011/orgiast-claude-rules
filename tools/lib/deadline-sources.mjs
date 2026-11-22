@@ -33,19 +33,40 @@ export async function collectGmail({ user, state, now, search = searchGmail, lim
   current.query = query;
   const documents = [], behind = isBehind(current, now);
   for (let page = 0; page < (behind ? 50 : 1); page++) {
-    const result = await search({ user, query, max: 100, pageToken: current.pageToken, withBody: true, bodyLimit: 30000, shouldFetchBody: wantsBody, concurrency: 3, signal });
+    const partial = reason => ({ documents, next: current, partial: { reason, remaining: current.pendingIds?.length } });
+    if (signal?.aborted) return partial('Gmail取得の時間上限到達');
+    let result;
+    try {
+      result = await search({
+        user, query, max: 25, pageToken: current.pageToken, withBody: true, bodyLimit: 30000,
+        shouldFetchBody: wantsBody, concurrency: 5, signal, allowPartial: true,
+        pendingIds: current.pendingIds, resumeNext: current.resumeNext,
+      });
+    } catch (error) {
+      if (signal?.aborted) return partial('Gmail取得の時間上限到達');
+      if (page === 0) throw error;
+      return partial(error.message);
+    }
     const messages = result.messages || [], used = messages.filter(wantsBody).length;
     documents.push(...messages.filter(m => wantsBody(m) && m.body).map(m => ({
       source: 'Gmail', sourceRef: `gmail:${user}:${m.id}`, text: trimBytes(`${m.subject}\n${m.body}`),
       date: new Date(Number(m.internalDate) || Date.parse(m.date)).toISOString(), url: `https://mail.google.com/mail/u/${encodeURIComponent(user)}/#all/${m.threadId || m.id}`,
       mailbox: user, threadId: m.threadId, to: m.to,
     })));
+    if (result.pendingIds?.length) {
+      current = { ...current, used: current.used + used, pendingIds: result.pendingIds, resumeNext: result.nextPageToken };
+      return partial(result.error || 'Gmail未取得メールを次回へ繰越');
+    }
+    delete current.pendingIds;
+    delete current.resumeNext;
     current = finishWindow(current, result.nextPageToken, used);
     if (!result.nextPageToken || current.used >= limit) break;
   }
   return { documents, next: current };
 }
+const DRIVE_TEXT_MIME_TYPES = ['application/vnd.google-apps.document', 'application/pdf', 'image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/webp'];
 export async function readDriveText(file, { user, request, dryRun, signal, cleanupSignal }) {
+  if (!DRIVE_TEXT_MIME_TYPES.includes(file.mimeType)) return '';
   let id = file.id, temporary;
   if (file.mimeType !== 'application/vnd.google-apps.document') {
     if (dryRun) return ''; // OCR copies are mutations; fixture dry-run supplies extracted text.
@@ -65,12 +86,17 @@ export async function readDriveText(file, { user, request, dryRun, signal, clean
 }
 export async function collectDrive({ user, state, now, request, dryRun = false, limit = 150, signal, onStage = () => {}, budgetMs = positiveBudget(process.env.DEADLINE_DRIVE_BUDGET_MS, 240_000), perFileTimeoutMs = positiveBudget(process.env.DEADLINE_DRIVE_FILE_TIMEOUT_MS, 45_000), nowMs = Date.now }) {
   let current = windowState(state, now, limit);
+  if (current.query?.includes("mimeType contains 'image/'")) {
+    delete current.query;
+    delete current.pageToken;
+  }
   let max = Math.max(0, limit - current.used);
   if (!max) return { documents: [], next: current, skipped: [{ reason: `Drive日次${limit}件上限（次回日付更新後に再開）` }] };
   const started = nowMs();
   const processedIds = new Set(current.processedIds || []);
   const since = current.watermark || new Date(now.getTime() - 3 * 86400000).toISOString();
-  const q = current.query || `trashed = false and modifiedTime > '${since}' and modifiedTime <= '${current.until}' and (mimeType = 'application/vnd.google-apps.document' or mimeType = 'application/pdf' or mimeType contains 'image/') and not appProperties has { key='deadlineWatchOCR' and value='1' }`;
+  const mimeQuery = DRIVE_TEXT_MIME_TYPES.map(mimeType => `mimeType = '${mimeType}'`).join(' or ');
+  const q = current.query || `trashed = false and modifiedTime > '${since}' and modifiedTime <= '${current.until}' and (${mimeQuery}) and not appProperties has { key='deadlineWatchOCR' and value='1' }`;
   current.query = q;
   const makeUrl = pageToken => {
     const params = new URLSearchParams({ q, orderBy: 'modifiedTime', pageSize: String(Math.min(1000, max)), fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)', ...(pageToken ? { pageToken } : {}) });
@@ -157,10 +183,10 @@ export async function collectDiscord({ home, state = {}, now }) {
 export function sourceLoaders({ home, config, state, now, sheets, request, search, dryRun, onStage = () => {}, processSignal }) {
   const sourceSignal = () => processSignal ? AbortSignal.any([processSignal, AbortSignal.timeout(Number(process.env.DEADLINE_SOURCE_TIMEOUT_MS) || 60_000)]) : AbortSignal.timeout(Number(process.env.DEADLINE_SOURCE_TIMEOUT_MS) || 60_000);
   return [
-    ...config.mailboxes.map(user => ({ key: `gmail:${user}`, load: () => collectGmail({ user, state: state.sources?.[`gmail:${user}`], now, search, limit: config.gmailDailyLimit, signal: sourceSignal() }) })),
-    ...config.driveUsers.map(user => ({ key: `drive:${user}`, handlesAbort: true, load: () => collectDrive({ user, state: state.sources?.[`drive:${user}`], now, request, dryRun, limit: config.driveDailyLimit, signal: processSignal, onStage }) })),
     ...config.lineSheets.map(sheetId => ({ key: `line:${sheetId}`, load: () => collectLine({ sheetId, state: state.sources?.[`line:${sheetId}`], now, sheets }) })),
     { key: 'discord', load: () => collectDiscord({ home, state: state.sources?.discord, now }) },
+    ...config.mailboxes.map(user => ({ key: `gmail:${user}`, handlesAbort: true, load: () => collectGmail({ user, state: state.sources?.[`gmail:${user}`], now, search, limit: config.gmailDailyLimit, signal: sourceSignal() }) })),
+    ...config.driveUsers.map(user => ({ key: `drive:${user}`, handlesAbort: true, load: () => collectDrive({ user, state: state.sources?.[`drive:${user}`], now, request, dryRun, limit: config.driveDailyLimit, signal: processSignal, onStage }) })),
   ];
 }
 export function fixtureLoaders(dir) {

@@ -277,6 +277,94 @@ export async function dismissMeetPopups(page) {
   }
 }
 
+/** 本番で押す「マイク・カメラなしで続行」の表示テキスト（完全一致） */
+const CONTINUE_WITHOUT_MEDIA_LABELS = [
+  'マイクとカメラを使用せずに続行',
+  'Continue without microphone and camera',
+];
+
+/**
+ * 要素が短いタイムアウト内で見えているか。例外は false。
+ */
+async function isBrieflyVisible(target, timeout = 500) {
+  try {
+    return await target.isVisible({ timeout });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 本番設定ではメディア許可ダイアログの「使用せずに続行」だけ押す。
+ * --test-audio 時は触らない（従来どおりマイクを使う）。
+ * クリック失敗でもダイアログが消えていれば成功。例外は外へ出さない。
+ * @returns {Promise<boolean>} 押した／ダイアログが閉じたとみなしたら true
+ */
+async function declineMeetMediaPermission(page, {
+  testAudio, log = () => {}, onMediaMode = () => {},
+} = {}) {
+  if (testAudio) return false;
+
+  try {
+    for (const label of CONTINUE_WITHOUT_MEDIA_LABELS) {
+      let targets;
+      try {
+        targets = await page.getByText(label, { exact: true }).all();
+      } catch {
+        continue;
+      }
+      for (const target of targets) {
+        if (!(await isBrieflyVisible(target))) continue;
+        try {
+          await target.click({ timeout: 2000 });
+        } catch (err) {
+          // detached 後の古い locator は信用せず、同じラベルが今も見えるか再照会する。
+          let stillVisible = false;
+          try {
+            for (const again of await page.getByText(label, { exact: true }).all()) {
+              if (await isBrieflyVisible(again)) {
+                stillVisible = true;
+                break;
+              }
+            }
+          } catch { /* 再照会失敗＝見えない扱い */ }
+          if (stillVisible) {
+            log(`[meet-cue-browser] メディア許可ダイアログのクリック失敗: ${err.message}`);
+            continue;
+          }
+        }
+        log(`[meet-cue-browser] メディア許可を拒否: ${label}`);
+        onMediaMode('none');
+        return true;
+      }
+    }
+  } catch (err) {
+    log(`[meet-cue-browser] メディア許可ダイアログ処理をスキップ: ${err.message}`);
+  }
+  return false;
+}
+
+/** 「使用せずに続行」が見えなくなるまで最大 waitMs 待つ（例外は握る） */
+async function waitForMediaDeclineGone(page, waitMs = 5000) {
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    let visible = false;
+    for (const label of CONTINUE_WITHOUT_MEDIA_LABELS) {
+      try {
+        for (const target of await page.getByText(label, { exact: true }).all()) {
+          if (await isBrieflyVisible(target, 200)) {
+            visible = true;
+            break;
+          }
+        }
+      } catch { /* 次のラベルへ */ }
+      if (visible) break;
+    }
+    if (!visible) return;
+    await page.waitForTimeout(100);
+  }
+}
+
 export async function enableMeetCaptions(page) {
   const buttons = 'button, [role="button"]';
   const enableCandidates = page.locator(buttons).filter({
@@ -371,11 +459,30 @@ export function readMeetCaptions(root, selectors, excludedContainer, identifyRow
 
 export async function joinMeetPage(page, {
   url, preparePrejoin, onJoinState, log, uiTimeoutMs,
+  testAudio, onMediaMode,
 }) {
   let meetingUrl = url;
   let code = meetingCode(url);
   const createsMeeting = parseMeetUrl(url)?.pathname === '/new';
   let previousState;
+  // 一度「使用せずに続行」を押したら、この参加フローでは再クリックしない。
+  let mediaDeclined = false;
+  const declineMedia = async () => {
+    if (mediaDeclined) return false;
+    try {
+      const declined = await declineMeetMediaPermission(page, {
+        testAudio, log, onMediaMode,
+      });
+      if (declined) {
+        mediaDeclined = true;
+        await waitForMediaDeclineGone(page, 5000);
+      }
+      return declined;
+    } catch (err) {
+      log(`[meet-cue-browser] メディア許可ダイアログ処理をスキップ: ${err.message}`);
+      return false;
+    }
+  };
   for (let attempt = 0; attempt < 2; attempt++) {
     log(`[meet-cue-browser] Meet URL へ移動中: ${meetingUrl}`);
     await page.goto(meetingUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
@@ -417,6 +524,8 @@ export async function joinMeetPage(page, {
         lobbyDeadline = undefined;
         if (Date.now() >= uiDeadline) return clicked ? 'join_confirmation_timeout' : 'join_button_not_found';
         if (!clicked) {
+          // 参加ボタン探索の前にメディア許可ダイアログを処理する。
+          await declineMedia();
           const choice = await findMeetJoinButton(page, code, { requireEnabled: prepared });
           if (choice && !prepared) {
             prepared = true;
@@ -434,11 +543,50 @@ export async function joinMeetPage(page, {
             // クリック直後の遷移を次の判定で確認する。
             continue;
           }
+          // 参加ボタンが見つからないときは再試行前にもう一度ダイアログを処理する。
+          await declineMedia();
         }
       }
       await page.waitForTimeout(500);
     }
   }
+}
+
+export function writeSilentMeetAudio(directory) {
+  const sampleRate = 16000;
+  const sampleBytes = 2;
+  const dataBytes = sampleRate * sampleBytes * 30;
+  const wav = Buffer.alloc(44 + dataBytes);
+  wav.write('RIFF', 0);
+  wav.writeUInt32LE(wav.length - 8, 4);
+  wav.write('WAVEfmt ', 8);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20); // PCM
+  wav.writeUInt16LE(1, 22); // モノラル
+  wav.writeUInt32LE(sampleRate, 24);
+  wav.writeUInt32LE(sampleRate * sampleBytes, 28);
+  wav.writeUInt16LE(sampleBytes, 32);
+  wav.writeUInt16LE(sampleBytes * 8, 34);
+  wav.write('data', 36);
+  wav.writeUInt32LE(dataBytes, 40);
+  const file = path.join(directory, 'silence.wav');
+  fs.writeFileSync(file, wav);
+  return file;
+}
+
+export function buildMeetBotArgs({ testAudio, silentAudio } = {}) {
+  const audio = testAudio || silentAudio;
+  if (!audio) throw new Error('偽マイク用の音声ファイルが必要です');
+  return [
+    ...(testAudio ? ['--use-fake-ui-for-media-stream'] : []),
+    `--use-file-for-fake-audio-capture=${audio}`,
+    '--use-fake-device-for-media-stream',
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-notifications',
+    '--disable-infobars',
+    '--disable-session-crashed-bubble',
+  ];
 }
 
 export function copyMeetBotProfile(source, destination) {
@@ -464,6 +612,7 @@ export async function startMeetBot({
   botDisplayName = 'オージャストAI',
   onCaption = () => {},
   onJoinState = () => {},
+  onMediaMode = () => {},
   onCaptionsOn = () => {},
   getCaptionLineCount = () => 0,
   log = console.error,
@@ -479,11 +628,19 @@ export async function startMeetBot({
     : fs.mkdtempSync(path.join(os.tmpdir(), 'meet-bot-profile-'));
   let ownsProfile = !sessionDir;
   let context;
+  let audioDir;
   const close = async () => {
     try {
       await context?.close();
     } catch (err) {
       log(`[meet-cue-browser] ブラウザ終了失敗: ${err.message}`);
+    }
+    if (audioDir) {
+      try {
+        fs.rmSync(audioDir, { recursive: true, force: true, maxRetries: 3 });
+      } catch (err) {
+        log(`[meet-cue-browser] 無音 WAV の削除失敗: ${err.message}`);
+      }
     }
     if (ownsProfile) {
       try {
@@ -511,27 +668,18 @@ export async function startMeetBot({
     }
 
     log(`[meet-cue-browser] プロファイル: ${profileDir} (mode: ${mode})`);
+    if (!testAudio) audioDir = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-bot-audio-'));
+    const silentAudio = audioDir && writeSilentMeetAudio(audioDir);
     context = await chromium.launchPersistentContext(profileDir, {
       executablePath,
       headless: false,
       viewport: { width: 1280, height: 720 },
-      args: [
-        '--use-fake-ui-for-media-stream',
-        ...(testAudio ? [
-          '--use-fake-device-for-media-stream',
-          `--use-file-for-fake-audio-capture=${testAudio}`,
-        ] : []),
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-notifications',
-        '--disable-infobars',
-        '--disable-session-crashed-bubble',
-      ],
+      args: buildMeetBotArgs({ testAudio, silentAudio }),
     });
 
     return await runMeetBot(context, close, {
       url, mode, maxMinutes, debugDom, sessionDir, botDisplayName, testAudio,
-      onCaption, onJoinState, onCaptionsOn, getCaptionLineCount, log, uiTimeoutMs,
+      onCaption, onJoinState, onMediaMode, onCaptionsOn, getCaptionLineCount, log, uiTimeoutMs,
     });
   } catch (err) {
     await close();
@@ -539,26 +687,80 @@ export async function startMeetBot({
   }
 }
 
+const micOff = /^(マイクをオンにする|Turn on microphone|Unmute microphone|マイクのミュートを解除)(?:$|[（( ])/i;
+const micOn = /^(マイクをオフにする|Turn off microphone|Mute microphone|マイクをミュート(?:する)?)(?:$|[（( ])/i;
+const camOff = /^(カメラをオンにする|Turn on camera)(?:$|[（( ])/i;
+const camOn = /^(カメラをオフにする|Turn off camera)(?:$|[（( ])/i;
+const mediaButton = (page, name) => page.getByRole('button', { name }).and(page.locator('[aria-label]:visible')).first();
+
+async function turnOffMeetMedia(page, on, off, shortcut) {
+  const button = mediaButton(page, on);
+  const offButton = mediaButton(page, off);
+  const wasOn = await button.isVisible();
+  const verifyOff = async () => {
+    await offButton.waitFor({ state: 'visible', timeout: 3000 });
+    if (!off.test(await offButton.getAttribute('aria-label') || '')) {
+      throw new Error('オフ状態のボタンを確認できません');
+    }
+  };
+  try {
+    if (wasOn) await button.click({ timeout: 2000 });
+    await verifyOff();
+    return wasOn;
+  } catch (err) {
+    // 状態不明のときはショートカットでオンにしてしまう可能性がある。
+    if (!(await button.isVisible()) || await offButton.isVisible()) throw err;
+    await page.keyboard.press(shortcut);
+    await verifyOff();
+    return true;
+  }
+}
+
+async function enableTestMic(page) {
+  const button = mediaButton(page, micOff);
+  if (await button.isVisible()) await button.click({ timeout: 2000 });
+}
+
+async function confirmMeetMediaOff(page, on, off, shortcut, warning, log) {
+  try {
+    return await turnOffMeetMedia(page, on, off, shortcut);
+  } catch (err) {
+    log(`[meet-cue-browser] 警告: ${warning} (${err.message})`);
+    return null;
+  }
+}
+
+const silentMicWarning = 'マイクのオフを確認できなかったが、無音の偽マイクなので参加を続ける';
+
+export async function prepareMeetMedia(page, { testAudio, sessionDir, log }) {
+  if (testAudio) await enableTestMic(page);
+  const mic = testAudio ? false
+    : await confirmMeetMediaOff(page, micOn, micOff, 'Control+d', silentMicWarning, log);
+  const cam = await confirmMeetMediaOff(page, camOn, camOff, 'Control+e',
+    'カメラのオフを確認できなかったが、偽デバイスで参加を続ける', log);
+  if (!sessionDir || (mic !== null && cam !== null)) return;
+
+  try {
+    await page.screenshot({ path: path.join(sessionDir, 'prejoin-mic.png'), timeout: 5000 });
+  } catch (err) {
+    log(`[meet-cue-browser] 参加前のスクリーンショット保存失敗: ${err.message}`);
+  }
+  try {
+    const labels = await page.getByRole('button').evaluateAll(buttons =>
+      buttons.map(button => button.getAttribute('aria-label')).filter(label => label !== null));
+    fs.writeFileSync(path.join(sessionDir, 'prejoin-buttons.json'), JSON.stringify(labels, null, 2) + '\n');
+  } catch (err) {
+    log(`[meet-cue-browser] 参加前のボタン一覧保存失敗: ${err.message}`);
+  }
+}
+
 async function runMeetBot(context, close, {
   url, mode, maxMinutes, debugDom, sessionDir, botDisplayName, testAudio,
-  onCaption, onJoinState, onCaptionsOn, getCaptionLineCount, log, uiTimeoutMs,
+  onCaption, onJoinState, onMediaMode, onCaptionsOn, getCaptionLineCount, log, uiTimeoutMs,
 }) {
-  const page = context.pages()[0] || await context.newPage();
-
-  const enableTestMic = async () => {
-    const mutedMic = page.getByRole('button', {
-      name: /^(Turn on microphone|Unmute microphone|マイクをオンにする|マイクのミュートを解除)(?:$|[（( ])/i,
-    }).and(page.locator(':visible')).first();
-    if (await mutedMic.isVisible()) await mutedMic.click({ timeout: 2000 });
-  };
+  let page = context.pages()[0] || await context.newPage();
   const preparePrejoin = async () => {
-    try {
-      if (!testAudio) await page.keyboard.press('Control+d');
-      await page.waitForTimeout(500);
-      await page.keyboard.press('Control+e');
-    } catch { /* 無効なショートカットは無視する */ }
-
-    if (testAudio) await enableTestMic();
+    await prepareMeetMedia(page, { testAudio, sessionDir, log });
 
     if (mode === 'guest') {
       for (const selector of MEET_SELECTORS.guestNameInput) {
@@ -570,7 +772,9 @@ async function runMeetBot(context, close, {
       }
     }
   };
-  const reason = await joinMeetPage(page, { url, preparePrejoin, onJoinState, log, uiTimeoutMs });
+  const reason = await joinMeetPage(page, {
+    url, preparePrejoin, onJoinState, log, uiTimeoutMs, testAudio, onMediaMode,
+  });
   if (reason) {
     log(`[meet-cue-browser] Meet 参加失敗 (理由: ${reason}, URL: ${page.url()})`);
     if (sessionDir) {
@@ -584,13 +788,19 @@ async function runMeetBot(context, close, {
   }
 
   const joinedAt = Date.now();
-  await dismissMeetPopups(page);
-  const captionsOn = await enableMeetCaptions(page);
-  onCaptionsOn(captionsOn);
-  log(`[meet-cue-browser] 字幕オンの確認: ${captionsOn}`);
-
-  if (testAudio) await enableTestMic();
-  const stopCaptions = await watchMeetCaptions(page, { onCaption, log });
+  const setupInCall = async () => {
+    await dismissMeetPopups(page);
+    if (testAudio) await enableTestMic(page);
+    else if (await confirmMeetMediaOff(page, micOn, micOff, 'Control+d', silentMicWarning, log)) log('[meet-cue-browser] マイクをオフにしました');
+    const captionsOn = await enableMeetCaptions(page);
+    onCaptionsOn(captionsOn);
+    log(`[meet-cue-browser] 字幕オンの確認: ${captionsOn}`);
+    return watchMeetCaptions(page, { onCaption, log });
+  };
+  // Keep the persistent Chrome context alive if its Meet tab is closed.
+  await context.newPage();
+  await page.bringToFront();
+  let stopCaptions = await setupInCall();
 
   // Debug DOM Timer
   let debugInterval = null;
@@ -617,16 +827,19 @@ async function runMeetBot(context, close, {
   let isStopped = false;
   const startTime = Date.now();
   const maxMs = maxMinutes * 60 * 1000;
+  let nextMicCheck = joinedAt + 60000;
+  let rejoinAttempted = false;
 
   const monitorPromise = (async () => {
     while (!isStopped) {
-      if (Date.now() - startTime >= maxMs) {
+      const now = Date.now();
+      if (now - startTime >= maxMs) {
         log('[meet-cue-browser] maxMinutes 到達により終了します。');
-        break;
+        return 'maxMinutes';
       }
 
       if (sessionDir) {
-        const elapsed = Date.now() - joinedAt;
+        const elapsed = now - joinedAt;
         try {
           if (captionDebugPending && elapsed >= 180000) {
             captionDebugPending = false;
@@ -647,22 +860,53 @@ async function runMeetBot(context, close, {
         }
       }
 
-      // Check if left call
       try {
-        await dismissMeetPopups(page);
-        const bodyText = await page.evaluate(() => document.body.innerText || '');
-        if (MEET_SELECTORS.leftCallTexts.some(t => bodyText.includes(t))) {
-          log('[meet-cue-browser] 通話から退出した画面を検知しました。');
-          break;
+        if (!page.isClosed()) {
+          await dismissMeetPopups(page);
+          if (!(await page.locator(inCallSelector).first().isVisible())) {
+            const bodyText = await page.evaluate(() => document.body.innerText || '');
+            if (/会議から退出させられ|通話から退出させられ|you (?:were|have been) removed/i.test(bodyText)) {
+              return 'removed_from_meeting';
+            }
+            if (/会議が終了しました|通話が終了しました|meeting (?:has )?ended|ended the (?:call|meeting)/i.test(bodyText)) {
+              return 'meeting_ended';
+            }
+            if (MEET_SELECTORS.leftCallTexts.some(t => bodyText.includes(t))) return 'left_call';
+          }
+          if (!testAudio && now >= nextMicCheck) {
+            nextMicCheck = now + 60000;
+            if (await confirmMeetMediaOff(page, micOn, micOff, 'Control+d', silentMicWarning, log)) log('[meet-cue-browser] マイクがオンになっていたためオフにしました');
+          }
         }
-      } catch {
-        // Page closed
-        log('[meet-cue-browser] ページ閉鎖を検知しました。');
-        break;
+      } catch (err) {
+        if (!page.isClosed()) return `exception: ${err.message}`;
+      }
+
+      if (page.isClosed()) {
+        if (isStopped || rejoinAttempted) return 'page_closed';
+        rejoinAttempted = true;
+        log('[meet-cue-browser] ページが閉じたため、1回だけ参加し直します');
+        try {
+          await stopCaptions();
+          const rejoinUrl = meetingCode(page.url()) ? page.url() : url;
+          if (isStopped) return 'stopped';
+          page = await context.newPage();
+          const reason = await joinMeetPage(page, {
+            url: rejoinUrl, preparePrejoin, onJoinState, log, uiTimeoutMs, testAudio, onMediaMode,
+          });
+          if (isStopped) return 'stopped';
+          if (reason) return `page_closed: 再参加失敗 (${reason})`;
+          stopCaptions = await setupInCall();
+          nextMicCheck = Date.now() + 60000;
+          log('[meet-cue-browser] 再参加しました');
+        } catch (err) {
+          return `page_closed: 再参加失敗 (${err.message})`;
+        }
       }
 
       await new Promise(r => setTimeout(r, 5000));
     }
+    return 'stopped';
   })();
 
   const stop = async () => {

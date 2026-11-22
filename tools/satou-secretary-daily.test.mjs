@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   headerMap,
   extractCases,
@@ -225,6 +226,59 @@ test("previousBusinessJstDayRange: 土曜は金曜（前日）", () => {
   const r = previousBusinessJstDayRange(sat);
   assert.equal(r.date, "2026-11-13"); // Friday
   assert.equal(r.end.getTime() - r.start.getTime(), 864e5);
+});
+test("previousBusinessJstDayRange: UTC環境でもJST曜日で正しく判定", async () => {
+  // 子プロセスを TZ=UTC で起動し、関数の結果が環境TZに依存しないことを確認
+  const { execFile } = await import("node:child_process");
+  const scriptUrl = new URL("./satou-secretary-daily.mjs", import.meta.url).href;
+  const testCode = `
+import { previousBusinessJstDayRange } from ${JSON.stringify(scriptUrl)};
+const tests = [
+  { now: new Date("2026-11-16T06:30:00+09:00"), expect: "2026-11-13", label: "Mon→Fri" },
+  { now: new Date("2026-11-15T06:30:00+09:00"), expect: "2026-11-13", label: "Sun→Fri" },
+  { now: new Date("2026-11-14T06:30:00+09:00"), expect: "2026-11-13", label: "Sat→Fri" },
+  { now: new Date("2026-11-10T06:30:00+09:00"), expect: "2026-11-09", label: "Tue→Mon" },
+  { now: new Date("2026-11-11T06:30:00+09:00"), expect: "2026-11-10", label: "Wed→Tue" },
+  { now: new Date("2026-11-12T06:30:00+09:00"), expect: "2026-11-11", label: "Thu→Wed" },
+  { now: new Date("2026-11-13T06:30:00+09:00"), expect: "2026-11-12", label: "Fri→Thu" },
+];
+for (const { now, expect, label } of tests) {
+  const r = previousBusinessJstDayRange(now);
+  if (r.date !== expect) {
+    console.error(\`FAIL \${label}: got \${r.date}, expected \${expect}\`);
+    process.exit(1);
+  }
+}
+// Edge: Sunday in JST = Saturday in UTC — should still return Friday
+const edge = previousBusinessJstDayRange(new Date("2026-11-01T06:30:00+09:00"));
+if (edge.date !== "2026-10-30") { console.error("FAIL Sun edge: " + edge.date); process.exit(1); }
+console.log("ALL PASS");
+`;
+  const { stdout, stderr } = await new Promise((resolve, reject) => {
+    const child = execFile(
+      process.execPath,
+      ["--input-type=module", "--eval", testCode],
+      { env: { ...process.env, TZ: "UTC" } }
+    );
+    let out = "", err = "";
+    child.stdout.on("data", d => out += d);
+    child.stderr.on("data", d => err += d);
+    child.on("close", code => resolve({ stdout: out, stderr: err, code }));
+    child.on("error", reject);
+  });
+  assert.equal(stderr, "");
+  assert.equal(stdout.trim(), "ALL PASS");
+});
+test("previousBusinessJstDayRange: 自環境TZでも正しい（JST環境での回帰防止）", () => {
+  // プロセスTZがAsia/Tokyoの場合でも正しいことを確認
+  const mon = new Date("2026-11-16T06:30:00+09:00");
+  assert.equal(previousBusinessJstDayRange(mon).date, "2026-11-13");
+  const sun = new Date("2026-11-15T06:30:00+09:00");
+  assert.equal(previousBusinessJstDayRange(sun).date, "2026-11-13");
+  const sat = new Date("2026-11-14T06:30:00+09:00");
+  assert.equal(previousBusinessJstDayRange(sat).date, "2026-11-13");
+  const tue = new Date("2026-11-10T06:30:00+09:00");
+  assert.equal(previousBusinessJstDayRange(tue).date, "2026-11-09");
 });
 test("月曜実行で金曜のメールを昨日の動きに含める", async () => {
   // Monday with Friday's emails should appear as "昨日の動き"

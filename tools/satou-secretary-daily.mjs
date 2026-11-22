@@ -55,7 +55,6 @@ const customerAddress = address => {
 export const isBotSender = (raw) => {
   // Returns true for automated notification/bot senders that should not be treated as customer mail.
   const { name, email } = sender(String(raw || ""));
-  const domain = email.split("@")[1] || "";
   return /\[bot\]/i.test(name) || /^notifications?@github\.com$/.test(email);
 };
 const emailAddress = value => sender(String(value || "")).email.toLowerCase();
@@ -410,6 +409,7 @@ export function isInPreviousJstDay(value, now = new Date()) {
 export function previousBusinessJstDayRange(now = new Date()) {
   // Returns the JST day range for the most recent business day (skipping Sat/Sun).
   // E.g. Monday → previous Friday, Sunday → previous Friday, Saturday → previous Friday.
+  // Uses getUTCDay() with a +9h offset so the result is independent of the process TZ.
   const parts = new Intl.DateTimeFormat("en-CA", {
       timeZone: "Asia/Tokyo",
       year: "numeric",
@@ -418,8 +418,10 @@ export function previousBusinessJstDayRange(now = new Date()) {
     }).formatToParts(now),
     v = Object.fromEntries(parts.map((x) => [x.type, x.value])),
     today = new Date(`${v.year}-${v.month}-${v.day}T00:00:00+09:00`),
+    // JST day of week: add 9h so getUTCDay() reflects JST, not the process TZ
+    jstDay = new Date(today.getTime() + 9 * 3600e3).getUTCDay(),
     // 0=Sun,1=Mon,6=Sat.  Mon→Fri(3back), Sun→Fri(2back), Tue-Sat→prev(1back)
-    daysBack = today.getDay() === 1 ? 3 : today.getDay() === 0 ? 2 : 1,
+    daysBack = jstDay === 1 ? 3 : jstDay === 0 ? 2 : 1,
     start = new Date(today.getTime() - daysBack * 864e5),
     end = new Date(today.getTime() - (daysBack - 1) * 864e5);
   return { start, end, date: fmt(start) };

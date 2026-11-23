@@ -6,13 +6,14 @@ import { filterCollapsedWindowsPaths, isCollapsedWindowsPath } from './lib/colla
 
 export { filterCollapsedWindowsPaths } from './lib/collapsed-win-path.mjs';
 
-function statusPaths(status) {
+export function statusPaths(status) {
   const entries = status.split('\0').filter(Boolean);
   const paths = [];
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
     paths.push(entry.slice(3));
-    if (/^[ RC]/.test(entry.slice(0, 2)) && entries[i + 1]) paths.push(entries[++i]);
+    const x = entry[0];
+    if ((x === 'R' || x === 'C') && entries[i + 1] !== undefined) paths.push(entries[++i]);
   }
   return paths;
 }

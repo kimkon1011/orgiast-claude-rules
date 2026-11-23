@@ -1,7 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isCollapsedWindowsPath } from '../tools/lib/collapsed-win-path.mjs';
-import { filterCollapsedWindowsPaths } from '../tools/dirty-worktree-guard.mjs';
+import { filterCollapsedWindowsPaths, statusPaths } from '../tools/dirty-worktree-guard.mjs';
+
+test('porcelain -z の通常変更と rename を正しくパースする', () => {
+  const modified = statusPaths(' M a.txt\0 M b.txt\0');
+  assert.deepEqual(modified, ['a.txt', 'b.txt']);
+  assert.deepEqual(statusPaths('R  new.txt\0old.txt\0'), ['new.txt', 'old.txt']);
+  assert.deepEqual(statusPaths('?? C:UserskimkoAppDataLocalTempscan-before.json\0'), [
+    'C:UserskimkoAppDataLocalTempscan-before.json',
+  ]);
+  assert.deepEqual(filterCollapsedWindowsPaths(modified), ['a.txt', 'b.txt']);
+});
 
 test('潰れた Windows 絶対パス名だけを判定する', () => {
   assert.equal(isCollapsedWindowsPath('C:UserskimkoAppDataLocalTempscan-before.json'), true);

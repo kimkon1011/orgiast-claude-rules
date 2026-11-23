@@ -228,19 +228,11 @@ function writeState(state) {
   fs.renameSync(tmp, STATE_FILE);
 }
 
-/**
- * Determines the exit code based on the summary of the backfill operation.
- * Returns 0 if there were no failures or all failures were due to HTTP 403 errors.
- * Otherwise, returns 1.
- *
- * @param {{failed: number, reasons: Record<string, number>}} summary - Summary object from runBackfill
- * @returns {number} Exit code (0 for success, 1 for failure)
- */
+// 失敗理由はコロンを含むキー（stage:code 形式）。transcript-empty 等のスキップ理由はコロンを含まない。
 export function exitCodeFor(summary) {
   if (summary.failed === 0) return 0;
-  // Check if all failures are HTTP 403 errors
-  const failureReasons = Object.keys(summary.reasons).filter(reason => reason.startsWith('transcript:') || reason.startsWith('notes:') || reason.startsWith('create:'));
-  const all403 = failureReasons.every(reason => summary.reasons[reason] > 0 && reason.endsWith('http-403'));
+  const failureReasons = Object.keys(summary.reasons).filter(r => r.includes(':'));
+  const all403 = failureReasons.every(r => r.endsWith('http-403'));
   return all403 ? 0 : 1;
 }
 
@@ -322,7 +314,7 @@ export async function main(argv = process.argv.slice(2)) {
     } catch { throw new BackfillError('drive-auth-module-unavailable'); }
     const client = createClient({ apiKey, getToken: auth.getDriveToken, driveFetch: proxy.gwsFetch });
     const summary = await runBackfill({ client, ...options });
-    // Use the new exitCodeFor function to determine the exit code
+    // 終了コードを判定（403 のみの失敗は 0、それ以外は 1）
     return exitCodeFor(summary);
   } catch (error) { console.error(`tldv-drive-backfill: ${safeReason(error)}`); return 1; }
 }

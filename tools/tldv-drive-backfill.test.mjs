@@ -393,3 +393,39 @@ test('exitCodeFor handles cases with only transcript-empty and existing skips', 
   };
   assert.equal(exitCodeFor(summary), 0);
 });
+
+test('exitCodeFor: existing:drive-http-500 が1件＋transcript-empty 3件で failed:1 → 1', () => {
+  const summary = {
+    failed: 1,
+    reasons: {
+      'existing:drive-http-500': 1,
+      'transcript-empty': 3,
+    },
+  };
+  assert.equal(exitCodeFor(summary), 1);
+});
+
+test('runBackfill 統合テスト: 空transcript・403・既存・成功の4件で exitCodeFor が 0', async () => {
+  const client = {
+    listMeetings: async () => [
+      { id: 'a', happenedAt: '2026-11-04T15:30:00Z', name: 'a', invitees: [] },
+      { id: 'b', happenedAt: '2026-11-04T15:30:00Z', name: 'b', invitees: [] },
+      { id: 'c', happenedAt: '2026-11-04T15:30:00Z', name: 'c', invitees: [] },
+      { id: 'd', happenedAt: '2026-11-04T15:30:00Z', name: 'd', invitees: [] },
+    ],
+    findExisting: async id => id === 'c' ? { id: 'doc-c' } : undefined,
+    transcript: async id => {
+      if (id === 'a') return { data: [] }; // empty
+      if (id === 'b') throw new BackfillError('tldv-http-403');
+      return { data: [{ speaker: '田中', text: 'こんにちは' }] };
+    },
+    notes: async () => notes,
+    createDocument: async () => ({ id: 'doc' }),
+  };
+  const summary = await runBackfill({ client, out: quiet, stateFile: null });
+  assert.equal(summary.created, 1);
+  assert.equal(summary.existing, 1);
+  assert.equal(summary.empty, 1);
+  assert.equal(summary.failed, 1);
+  assert.equal(exitCodeFor(summary), 0);
+});

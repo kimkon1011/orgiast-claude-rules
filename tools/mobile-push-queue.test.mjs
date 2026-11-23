@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { appendMobilePush, ATTEMPT_LIMIT, markMobilePushAttempt, markMobilePushSent, mobilePushInstruction, mobilePushQueueFile, pendingMobilePush } from './lib/mobile-push-queue.mjs';
+import { appendMobilePush, ATTEMPT_LIMIT, markMobilePushAttempt, markMobilePushSent, mobilePushInstruction, mobilePushQueueFile, pendingMobilePush, readMobilePushQueue, sweepMobilePushQueue } from './lib/mobile-push-queue.mjs';
 import { main as cliMain } from './mobile-push-queue.mjs';
 import { consumeInbox } from './auto-progress-inbox-hook.mjs';
 
@@ -123,11 +123,12 @@ function readRow(home, id) {
 test('hook は未送信の push 要求だけを指示に出す（送信済み・他人ownerは出さない）', t => {
   const home = tempHome(t);
   const options = hookOptions(home);
-  const sent = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '送信済みの報告', body: '古い' });
-  const unsent = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '未送信の報告', body: '完了しました' });
-  const other = appendMobilePush(home, { owner: 'nishi@orgiast.jp', title: '別PCの持ち主', body: '届かない' });
+  const now = Date.now();
+  const sent = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '送信済みの報告', body: '古い' }, { now });
+  const unsent = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '未送信の報告', body: '完了しました' }, { now });
+  const other = appendMobilePush(home, { owner: 'nishi@orgiast.jp', title: '別PCの持ち主', body: '届かない' }, { now });
   markMobilePushSent(home, [sent.id]);
-  const context = consumeInbox({ session_id: 's1', hook_event_name: 'UserPromptSubmit' }, options).hookSpecificOutput.additionalContext;
+  const context = consumeInbox({ session_id: 's1', hook_event_name: 'UserPromptSubmit' }, { ...options, now }).hookSpecificOutput.additionalContext;
   assert.match(context, /未送信 1 件/);
   assert.match(context, /未送信の報告/);
   assert.match(context, /完了しました/);
@@ -155,6 +156,7 @@ test('mark-sent 後は hook が指示を出さない', t => {
 test('24時間超の未送信は1件にまとめ、個別本文を展開しない', t => {
   const home = tempHome(t);
   const now = Date.now();
+  // TTL expire されないように、現在時刻から72時間以内の時間を使用
   appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '26時間前の報告', body: '古い本文' }, { now: now - 26 * hour });
   appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '25時間前の報告', body: '古い本文2' }, { now: now - 25 * hour });
   const fresh = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '新しい報告', body: '新しい本文' }, { now: now - hour });
@@ -175,6 +177,7 @@ test('24時間超の未送信は1件にまとめ、個別本文を展開しな�
 test('表示上限を超える未送信も1件にまとめて指示が膨らまない', t => {
   const home = tempHome(t);
   const now = Date.now();
+  // TTL expire されないように、現在時刻から72時間以内の時間を使用
   for (let i = 0; i < 12; i++) appendMobilePush(home, { owner: 'cr@orgiast.jp', title: `報告${String(i).padStart(2, '0')}`, body: `本文${String(i).padStart(2, '0')}` }, { now: now - i * 60 * 1000 }); // i=0 が最新
   const text = mobilePushInstruction(home, { now, owner: 'cr@orgiast.jp', cliPath });
   assert.match(text, /未送信 12 件/);
@@ -188,6 +191,7 @@ test('表示上限を超える未送信も1件にまとめて指示が膨らま�
 test('試行上限に達した未送信は個別表示せずまとめ行に数え mark-attempt を案内する', t => {
   const home = tempHome(t);
   const now = Date.now();
+  // TTL expire されないように、現在時刻から72時間以内の時間を使用
   const limited = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '上限到達', body: '個別には出さない本文' }, { now });
   for (let i = 0; i < ATTEMPT_LIMIT; i++) markMobilePushAttempt(home, [limited.id], { now: now + i });
   const fresh = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '新着', body: '新着本文' }, { now });
@@ -201,7 +205,105 @@ test('試行上限に達した未送信は個別表示せずまとめ行に数�
 
 test('本文の改行は1行に整形して指示に出す', t => {
   const home = tempHome(t);
-  appendMobilePush(home, { owner: 'cr@orgiast.jp', title: 'タイトル', body: '1行目\n2行目\n\n3行目' });
-  const text = mobilePushInstruction(home, { owner: 'cr@orgiast.jp', cliPath });
+  const now = Date.now();
+  // TTL expire されないように、現在時刻から72時間以内の時間を使用
+  appendMobilePush(home, { owner: 'cr@orgiast.jp', title: 'タイトル', body: '1行目\n2行目\n\n3行目' }, { now });
+  const text = mobilePushInstruction(home, { owner: 'cr@orgiast.jp', cliPath, now });
   assert.ok(text.includes('1行目 2行目 3行目'));
+});
+
+test('重複圧縮: 同じ title+body のエントリは1つにまとまり occurrences が増える', async t => {
+  const home = tempHome(t);
+  const now = Date.now();
+
+  // 同じ内容のエントリを3回追加
+  appendMobilePush(home, { owner: 'test', title: '重複タイトル', body: '重複本文' }, { now: now - 1000 });
+  appendMobilePush(home, { owner: 'test', title: '重複タイトル', body: '重複本文' }, { now: now });
+  appendMobilePush(home, { owner: 'test', title: '重複タイトル', body: '重複本文' }, { now: now + 1000 });
+
+  // sweep を実行
+  const result = await sweepMobilePushQueue(home);
+  assert.equal(result.deduplicated, 2); // 2件が圧縮される
+
+  const queue = readMobilePushQueue(home);
+  assert.equal(queue.length, 1); // エントリ数は1つ
+
+  const item = queue[0];
+  assert.equal(item.title, '重複タイトル');
+  assert.equal(item.body, '重複本文');
+  assert.equal(item.occurrences, 3);
+  assert.ok(item.lastQueuedAt); // lastQueuedAt が更新されている
+});
+
+test('TTL expire: 期限切れのエントリは status: "expired" になるが削除はしない', async t => {
+  const home = tempHome(t);
+  const now = Date.now();
+  const ttlMs = 72 * 60 * 60 * 1000; // 72時間
+
+  // 期限切れのエントリ
+  appendMobilePush(home, { owner: 'test', title: '古いエントリ', body: '本文' }, { now: now - ttlMs - 1000 });
+  // 期限内のエントリ
+  appendMobilePush(home, { owner: 'test', title: '新しいエントリ', body: '本文' }, { now: now - 1000 });
+
+  // sweep を実行
+  const result = await sweepMobilePushQueue(home, { now });
+  assert.equal(result.expired, 1); // 1件が expire される
+
+  const queue = readMobilePushQueue(home);
+  assert.equal(queue.length, 2); // エントリ数は2つ（削除されていない）
+
+  const expiredItem = queue.find(item => item.title === '古いエントリ');
+  const validItem = queue.find(item => item.title === '新しいエントリ');
+
+  assert.ok(expiredItem);
+  assert.equal(expiredItem.status, 'expired');
+  assert.ok(expiredItem.expiredAt);
+
+  assert.ok(validItem);
+  assert.notEqual(validItem.status, 'expired');
+
+  // pendingMobilePush からは expired なものは除外される
+  const pending = pendingMobilePush(home);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].title, '新しいエントリ');
+});
+
+test('CLI --sweep --dry-run はファイルを変更しない', async t => {
+  const home = tempHome(t);
+  const now = Date.now();
+  const ttlMs = 72 * 60 * 60 * 1000; // 72時間
+
+  // 期限切れのエントリ
+  const expiredItem = appendMobilePush(home, { owner: 'test', title: '古いエントリ', body: '本文' }, { now: now - ttlMs - 1000 });
+  // 同じ内容のエントリを2回追加（重複圧縮対象）
+  const firstItem = appendMobilePush(home, { owner: 'test', title: '重複タイトル', body: '重複本文' }, { now: now - 1000 });
+  const secondItem = appendMobilePush(home, { owner: 'test', title: '重複タイトル', body: '重複本文' }, { now: now });
+
+  // dry-run で sweep を実行前のファイル内容を保存
+  const beforeContent = fs.readFileSync(mobilePushQueueFile(home), 'utf8');
+
+  // dry-run で sweep を実行
+  let output = '';
+  const exitCode = cliMain(['--sweep', '--dry-run'], { home, out: (line) => output += line });
+
+  assert.equal(exitCode, 0);
+  const result = JSON.parse(output);
+  assert.equal(result.deduplicated, 1);
+  assert.equal(result.expired, 1);
+
+  // ファイルの中身が変わっていないことを確認
+  const afterContent = fs.readFileSync(mobilePushQueueFile(home), 'utf8');
+  assert.equal(afterContent, beforeContent);
+
+  // 再度通常の sweep を実行して、実際に変更されることを確認
+  cliMain(['--sweep'], { home, out: () => {} });
+
+  const queue = readMobilePushQueue(home);
+  const expiredQueueItem = queue.find(item => item.id === expiredItem.id);
+  const dedupedQueueItem = queue.find(item => item.title === '重複タイトル');
+
+  assert.ok(expiredQueueItem);
+  assert.equal(expiredQueueItem.status, 'expired');
+  assert.ok(dedupedQueueItem);
+  assert.equal(dedupedQueueItem.occurrences, 2);
 });

@@ -9,13 +9,19 @@ import os from 'node:os';
 import { isEntry } from './is-entry.mjs';
 import { readMobilePushQueue, pendingMobilePush, markMobilePushAttempt, markMobilePushSent } from './lib/mobile-push-queue.mjs';
 
+import { sweepMobilePushQueue } from './lib/mobile-push-queue.mjs';
+
 export function main(args = process.argv.slice(2), { home = process.env.ORGIAST_HOME || os.homedir(), out = console.log } = {}) {
   let all = false;
+  let sweep = false;
+  let dryRun = false;
   const sentIds = [];
   const attemptIds = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--list') { /* 一覧は既定の動作 */ }
     else if (args[i] === '--all') all = true;
+    else if (args[i] === '--sweep') sweep = true;
+    else if (args[i] === '--dry-run') dryRun = true;
     else if (args[i] === '--mark-sent') {
       const id = args[++i];
       if (!id || id.startsWith('--')) throw new Error('--mark-sent には id が1つ必要です');
@@ -29,6 +35,11 @@ export function main(args = process.argv.slice(2), { home = process.env.ORGIAST_
       if (!value) throw new Error('--home にはパスが必要です');
       home = value;
     } else throw new Error(`不明な引数: ${args[i]}`);
+  }
+  if (sweep) {
+    const result = sweepMobilePushQueue(home, { dryRun });
+    out(JSON.stringify(result));
+    return 0;
   }
   if (sentIds.length && attemptIds.length) throw new Error('--mark-sent と --mark-attempt は同時に指定できません');
   if (sentIds.length) {

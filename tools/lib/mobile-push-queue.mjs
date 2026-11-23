@@ -12,9 +12,93 @@ export const mobilePushQueueFile = home => path.join(home, '.claude', 'mobile-pu
 export function appendMobilePush(home, { owner, title, body }, { now = Date.now(), id = randomUUID() } = {}) {
   const file = mobilePushQueueFile(home);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const row = { id, ts: new Date(now).toISOString(), owner: String(owner || ''), title: String(title || '').slice(0, 100), body: String(body || ''), sent: false };
+  const row = { id, queuedAt: new Date(now).toISOString(), ts: new Date(now).toISOString(), owner: String(owner || ''), title: String(title || '').slice(0, 100), body: String(body || ''), sent: false };
   fs.appendFileSync(file, JSON.stringify(row) + '\n', { mode: 0o600 });
   return row;
+}
+
+export function sweepMobilePushQueue(home, { dryRun = false, now = Date.now() } = {}) {
+  const file = mobilePushQueueFile(home);
+  const ttlHours = parseInt(process.env.MOBILE_PUSH_TTL_HOURS, 10) || 72;
+  const ttlMs = ttlHours * 60 * 60 * 1000;
+
+  // ロック取得
+  const lock = `${file}.lock`;
+  let fd;
+  for (let retry = 0; retry < 100; retry++) {
+    try { fd = fs.openSync(lock, 'wx', 0o600); break; }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (retry === 99) throw new Error('mobile-push queue is locked');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+
+  try {
+    const queue = readMobilePushQueue(home);
+    const deduplicated = {};
+    const sweepResult = { deduplicated: 0, expired: 0 };
+
+    // 重複圧縮
+    const processedQueue = queue.map(row => {
+      if (row.status === 'expired' || row.sent === true) return row;
+
+      const key = `${row.title}||${row.body}`;
+      if (deduplicated[key]) {
+        const existing = deduplicated[key];
+        existing.occurrences = (existing.occurrences || 1) + 1;
+        // lastQueuedAt を更新 (新しい方を使う)
+        const currentQueuedAt = row.queuedAt || row.ts;
+        if (currentQueuedAt && (!existing.lastQueuedAt || Date.parse(currentQueuedAt) > Date.parse(existing.lastQueuedAt))) {
+          existing.lastQueuedAt = currentQueuedAt;
+        }
+        sweepResult.deduplicated++;
+        return null; // マージ済みのため削除対象
+      } else {
+        deduplicated[key] = row;
+        if (!row.queuedAt) {
+          // 古いエントリには queuedAt を追加
+          row.queuedAt = row.ts;
+        }
+        if (!row.occurrences) {
+          row.occurrences = 1;
+        }
+        // lastQueuedAt がない場合は queuedAt または ts を使う
+        if (!row.lastQueuedAt) {
+          row.lastQueuedAt = row.queuedAt;
+        }
+        return row;
+      }
+    }).filter(row => row !== null);
+
+    // TTL expire
+    const finalQueue = processedQueue.map(row => {
+      if (row.status === 'expired' || row.sent === true) return row;
+
+      const queuedTime = row.queuedAt ? Date.parse(row.queuedAt) : Date.parse(row.ts);
+      if (isNaN(queuedTime)) return row;
+
+      if ((now - queuedTime) > ttlMs) {
+        if (row.status !== 'expired') {
+          row.status = 'expired';
+          row.expiredAt = new Date(now).toISOString();
+          sweepResult.expired++;
+        }
+      }
+      return row;
+    });
+
+    if (!dryRun) {
+      const temporary = `${file}.${process.pid}.tmp`;
+      fs.writeFileSync(temporary, finalQueue.map(JSON.stringify).join('\n') + (finalQueue.length ? '\n' : ''), { mode: 0o600 });
+      fs.renameSync(temporary, file);
+    }
+
+    return sweepResult;
+  } finally {
+    fs.closeSync(fd);
+    try { fs.unlinkSync(lock); } catch { /* already removed */ }
+  }
 }
 
 export function readMobilePushQueue(home) {
@@ -26,7 +110,7 @@ export function readMobilePushQueue(home) {
 export function pendingMobilePush(home, { owners } = {}) {
   const wanted = owners?.map(owner => String(owner).trim().toLowerCase());
   return readMobilePushQueue(home)
-    .filter(row => row && row.id && row.sent !== true)
+    .filter(row => row && row.id && row.sent !== true && row.status !== 'expired')
     .filter(row => !wanted || wanted.includes(String(row.owner || '').trim().toLowerCase()))
     .sort((a, b) => (Date.parse(a.ts) || 0) - (Date.parse(b.ts) || 0));
 }

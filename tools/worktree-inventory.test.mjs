@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { classifyWorktree, inspectWorktree, resolveWorktreePaths } from './worktree-inventory.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -115,7 +116,7 @@ test('git リポジトリでない対象をスキップして他の対象を棚�
     '-c', 'commit.gpgsign=false', 'commit', '-qm', 'Initial', '--allow-empty']);
 
   const result = spawnSync(process.execPath, [
-    new URL('./worktree-inventory.mjs', import.meta.url),
+    fileURLToPath(new URL('./worktree-inventory.mjs', import.meta.url)),
     '--repo', invalid,
     '--repo', repo,
   ], { encoding: 'utf8' });
@@ -123,5 +124,6 @@ test('git リポジトリでない対象をスキップして他の対象を棚�
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr.trim(), `skipped: ${invalid} (not a git repository)`);
   assert.match(result.stdout, /keep-main: 1/);
-  assert.match(result.stdout, new RegExp(repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(result.stdout.replaceAll('/', path.sep),
+    new RegExp(repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });

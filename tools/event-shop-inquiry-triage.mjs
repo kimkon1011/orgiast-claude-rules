@@ -4,8 +4,10 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { GMAIL_READONLY_SCOPE, mintDwdToken } from './gmail-draft.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
+import { listItems } from './kim-inbox.mjs';
 
 const DAY = 86400000;
+const freeMail = /^(gmail\.com|googlemail\.com|yahoo\.(com|co\.jp)|ymail\.com|icloud\.com|me\.com|mac\.com|outlook\.(com|jp)|hotmail\.(com|co\.jp)|live\.(com|jp)|msn\.com|aol\.com)$/i;
 const dateKey = value => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo' }).format(new Date(value));
 const time = value => new Date(value).getTime();
 
@@ -84,7 +86,24 @@ export async function classifyLead(lead, messages, now = new Date(), deps = {}) 
   } else {
     category = '🟡 顧客待ち';
     const days = Math.max(0, Math.floor((time(now) - time(lastOut.received_at)) / DAY));
-    nextAction = `顧客の返信待ち（最終送信から ${days} 日）${days >= 7 ? '・追客候補' : ''}`;
+    const waiting = `顧客の返信待ち（最終送信から ${days} 日）`;
+    nextAction = days >= 7 ? `${waiting}・追客候補` : waiting;
+    if (days >= 7 && deps.gmailDraftCheck && deps.kimInboxCheck) {
+      let draft, inbox, draftError = false, inboxError = false;
+      try { draft = await deps.gmailDraftCheck(lead.email); draftError = Boolean(draft?.error); }
+      catch { draftError = true; }
+      try { inbox = await deps.kimInboxCheck(lead); }
+      catch { inboxError = true; }
+      if (draft?.found && inbox?.id) nextAction = `${waiting}・追客下書き済み・kim 承認待ち（下書き: ${draft.account} / inbox: ${inbox.id}）`;
+      else {
+        const details = [];
+        if (draftError) details.push('下書き: 未確認');
+        else if (draft?.found) details.push(`下書きあり: ${draft.account}${inboxError ? '・kim-inbox 未確認' : '・kim-inbox 未登録'}`);
+        if (inbox?.id && !draft?.found) details.push(`kim-inbox 承認待ち: ${inbox.id}${draftError ? '' : '・下書きなし'}`);
+        else if (inboxError) details.push('kim-inbox: 未確認');
+        if (details.length) nextAction = `${waiting}・追客候補（${details.join('・')}）`;
+      }
+    }
   }
   return { ...lead, category, nextAction, lastIn: lastIn ?? null, lastOut: lastOut ?? null };
 }
@@ -130,7 +149,15 @@ export async function loadCredentials(env = process.env) {
   }
   return { url: values.NEXT_PUBLIC_SUPABASE_URL || values.SUPABASE_URL, key: values.SUPABASE_SERVICE_ROLE_KEY || values.SUPABASE_SECRET_KEY, path: filePath || candidates.join(', ') };
 }
-const freeMail = /^(gmail\.com|googlemail\.com|yahoo\.(com|co\.jp)|ymail\.com|icloud\.com|me\.com|mac\.com|outlook\.(com|jp)|hotmail\.(com|co\.jp)|live\.(com|jp)|msn\.com|aol\.com)$/i;
+export function findOpenInboxAsk(lead, { items } = {}) {
+  const email = String(lead.email ?? '').trim().toLowerCase();
+  const domain = email.split('@')[1] || '';
+  const company = String(lead.company_name ?? '').replace(/株式会社|有限会社|合同会社|合資会社|合名会社|一般社団法人|一般財団法人|公益社団法人|公益財団法人|医療法人|社会福祉法人|学校法人|宗教法人|NPO法人/gi, '').replace(/\s+/g, '');
+  const needles = [email, ...(!freeMail.test(domain) && domain ? [domain] : []), ...(company.length >= 3 ? [company] : [])].filter(Boolean);
+  const match = (Array.isArray(items) ? items : []).find(item => item?.status === 'open' && item?.kind === 'ask'
+    && needles.some(needle => String(item.text ?? '').toLowerCase().includes(needle.toLowerCase())));
+  return match ? { id: match.id } : null;
+}
 export function messageQuery(lead) {
   const domain = String(lead.email ?? '').split('@')[1] || '';
   const pattern = encodeURIComponent(freeMail.test(domain) ? lead.email : domain);
@@ -169,12 +196,22 @@ export async function main({ env = process.env, args = process.argv.slice(2), no
       return await checkGmailDrafts(email);
     } catch { return { found: false, error: 'error' }; }
   });
+  let inboxItems, inboxReadError = false, inboxRead = false;
+  const kimInboxCheck = deps.kimInboxCheck ?? (async lead => {
+    if (!inboxRead) {
+      inboxRead = true;
+      try { inboxItems = listItems(os.homedir(), { status: 'open' }); }
+      catch { inboxReadError = true; }
+    }
+    if (inboxReadError) throw new Error('kim-inbox read failed');
+    return findOpenInboxAsk(lead, { items: inboxItems });
+  });
   try {
     const since = dateKey(new Date(time(now) - 120 * DAY));
     const data = await request(credentials, `/rest/v1/quote_requests?select=id,company_name,contact_name,email,event_name,preferred_date,created_at,status,raw_payload&source=eq.event-shop.jp&created_at=gte.${since}&order=created_at.desc&limit=200`, fetchImpl);
     const { leads, duplicateCount } = deduplicateLeads(data);
     const results = [];
-    for (const lead of leads) results.push(await classifyLead(lead, await request(credentials, messageQuery(lead), fetchImpl), now, { gmailDraftCheck }));
+    for (const lead of leads) results.push(await classifyLead(lead, await request(credentials, messageQuery(lead), fetchImpl), now, { gmailDraftCheck, kimInboxCheck }));
     const sorted = sortLeads(results);
     if (args.includes('--quiet') && !sorted.some(l => l.category === '🔴 要返信')) return 0;
     log(args.includes('--json') ? JSON.stringify(sorted, null, 2) : renderMarkdown(sorted, duplicateCount, now));

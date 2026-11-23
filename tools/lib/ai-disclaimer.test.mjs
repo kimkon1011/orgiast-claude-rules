@@ -30,6 +30,9 @@ test('Beeper チャット情報から channel を決める', () => {
   assert.equal(channelFromBeeperChat({ accountID: 'LINE-main' }), 'line');
   assert.equal(channelFromBeeperChat({ network: 'discord' }), 'discord');
   assert.equal(channelFromBeeperChat(null), 'other');
+  assert.equal(channelFromBeeperChat({ accountID: 'line', network: 'LINE' }), 'line');
+  assert.equal(channelFromBeeperChat({ accountID: 'discordgo', title: 'online 会議' }), 'discord');
+  assert.equal(channelFromBeeperChat({ accountID: 'whatsapp', title: 'online' }), 'other');
 });
 
 test('CLI は出力ファイルと標準出力を同じ最終本文にする', () => {

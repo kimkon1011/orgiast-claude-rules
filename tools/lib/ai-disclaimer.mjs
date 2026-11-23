@@ -36,9 +36,11 @@ export function withAiDisclaimer(text, { channel = 'other' } = {}) {
 }
 
 export function channelFromBeeperChat(chat) {
-  const haystack = JSON.stringify(chat ?? {}).toLowerCase();
-  if (haystack.includes('line')) return 'line';
-  if (haystack.includes('discord')) return 'discord';
+  // 全体を文字列化すると "online" 等にも当たるため、ネットワークを表す項目だけを見る。
+  const c = chat ?? {};
+  const fields = [c.accountID, c.network, c.networkID, c.service, c.platform].filter(v => typeof v === 'string').map(v => v.toLowerCase());
+  if (fields.some(v => v.includes('discord'))) return 'discord';
+  if (fields.some(v => /^line\b|^line[._:-]|\bline$/u.test(v))) return 'line';
   return 'other';
 }
 

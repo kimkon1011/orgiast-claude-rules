@@ -20,8 +20,13 @@ const base = {
 const fixtures = [
   ['メインが保護と prune に優先する', { main: true, path: '/nightly-repo', prunable: true }, 'keep-main'],
   ['夜間用パスが prune に優先する', { path: '/nightly-repo-fleet', prunable: true }, 'keep-protected'],
+  ['夜間用リポジトリを保護する', { path: 'C:/Users/user/.claude/nightly-repo', main: false }, 'keep-protected'],
+  ['夜間用リポジトリ配下の壊れた作業ツリーを prune にする', { path: 'C:/Users/user/.claude/nightly-repo/UsersuserAppDataLocalTempwt-mpq', main: false, prunable: true }, 'prune'],
+  ['夜間用リポジトリ配下の存在しない作業ツリーを prune にする', { path: 'C:/Users/user/.claude/nightly-repo/.claude/worktrees/agent-a688b0297b0362202', main: false, exists: false }, 'prune'],
   ['自動セッション用リポジトリを保護する', { path: '/tmp/auto-session-repo' }, 'keep-protected'],
+  ['指定された自動セッション用リポジトリを保護する', { path: 'C:/Users/user/.claude/auto-session-repo', main: false }, 'keep-protected'],
   ['自動セッション用ツリーを保護する', { path: '/tmp/auto-session-tree-2' }, 'keep-protected'],
+  ['末尾スラッシュ付きの保護対象を保護する', { path: '/tmp/auto-session-tree/' }, 'keep-protected'],
   ['Windows の配布リポジトリを保護する', { path: 'C:\\Users\\kim\\Downloads\\orgiast-claude-rules' }, 'keep-protected'],
   ['orgiast-main ディレクトリそのものを保護する', { path: 'C:/Users/orgiast-main' }, 'keep-protected'],
   ['orgiast-main 配下を保護する', { path: 'C:/Users/orgiast-main/worktree' }, 'keep-protected'],

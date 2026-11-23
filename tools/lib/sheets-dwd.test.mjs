@@ -22,6 +22,7 @@ function clientFor(responses, options = {}) {
     fetchImpl,
     getToken: async () => 'token',
     sleep: async (ms) => sleeps.push(ms),
+    random: () => 0,
     ...options,
   });
   return { client, calls, sleeps };
@@ -56,10 +57,38 @@ test('POSTは429でも再試行しない', async () => {
   assert.deepEqual(sleeps, []);
 });
 
-test('GETはmaxRetriesを使い切ると従来のエラーを投げる', async () => {
+test('429が6回続いても専用再試行枠で成功する', async () => {
+  const { client, calls, sleeps } = clientFor([
+    ...Array.from({ length: 6 }, () => jsonResponse(429)),
+    jsonResponse(200, { updatedRows: 1 }),
+  ]);
+  await client.update('sheet', 'Tab!A1', [['value']]);
+  assert.equal(calls.length, 7);
+  assert.deepEqual(sleeps, [2_000, 4_000, 8_000, 16_000, 32_000, 60_000]);
+  assert.ok(sleeps.reduce((sum, ms) => sum + ms, 0) >= 120_000);
+});
+
+test('429が9回続くと専用再試行枠を使い切って失敗する', async () => {
+  const { client, calls, sleeps } = clientFor([jsonResponse(429)]);
+  await assert.rejects(client.update('sheet', 'Tab!A1', [['value']]), /Sheets PUT HTTP 429/);
+  assert.equal(calls.length, 9);
+  assert.equal(sleeps.length, 8);
+});
+
+test('values batchUpdateは429を再試行する', async () => {
+  const { client, calls, sleeps } = clientFor([jsonResponse(429), jsonResponse(200, { totalUpdatedCells: 1 })]);
+  const data = [{ range: 'Tab!A1', values: [['value']] }];
+  await client.batchUpdate('sheet', data);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(sleeps, [2_000]);
+  assert.match(calls[0][0], /\/values:batchUpdate$/);
+  assert.deepEqual(JSON.parse(calls[0][1].body), { valueInputOption: 'RAW', data });
+});
+
+test('GETの5xxはmaxRetriesを使い切ると従来のエラーを投げる', async () => {
   const maxRetries = 2;
-  const { client, calls, sleeps } = clientFor([jsonResponse(429)], { maxRetries });
-  await assert.rejects(client.get('sheet', 'Tab!A1'), /Sheets GET HTTP 429/);
+  const { client, calls, sleeps } = clientFor([jsonResponse(503)], { maxRetries });
+  await assert.rejects(client.get('sheet', 'Tab!A1'), /Sheets GET HTTP 503/);
   assert.equal(calls.length, maxRetries + 1);
   assert.deepEqual(sleeps, [2_000, 4_000]);
 });

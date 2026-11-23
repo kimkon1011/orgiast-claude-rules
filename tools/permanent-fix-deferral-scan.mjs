@@ -222,6 +222,65 @@ export function detect(text) {
 
 const DEFAULT_SINCE = '1970-01-01T00:00:00Z';
 const NAMES = ['stop-gate-runner-ledger.jsonl', 'handoff-audit-ledger.jsonl', 'handoff-audit-nightly-ledger.jsonl'];
+const CROSS_SESSION_WINDOW_MS = 72 * 60 * 60 * 1000;
+const COMPLETION_WORD = /(?:マージ済み|MERGED|着地|merged|squash)/i;
+const BRANCH_PREFIX = '(?:fix|feat|feature|chore|refactor|hotfix|bugfix|release|revert|docs|test|ci|perf|build)';
+
+export function extractIdentifiers(text) {
+  const identifiers = new Set();
+  const value = String(text ?? '');
+  for (const match of value.matchAll(/(?:#(\d+)|\bPR\s*#?(\d+)\b|\bpull\/(\d+)\b)/gi)) {
+    identifiers.add(`pr:${match[1] ?? match[2] ?? match[3]}`);
+  }
+  for (const match of value.matchAll(new RegExp(`(?:^|[\\s\`'\"\uff08(])(${BRANCH_PREFIX}\/[A-Za-z0-9._/-]+)`, 'gi'))) {
+    identifiers.add(`branch:${match[1].replace(/[.,;:!?)\uff09\u3001\u3002]+$/, '')}`);
+  }
+  return [...identifiers];
+}
+
+function identifierAppears(text, identifier) {
+  return extractIdentifiers(text).some(value => value.toLowerCase() === identifier.toLowerCase());
+}
+
+function assistantTexts(transcript, { before = Infinity, limit = Infinity } = {}) {
+  const messages = [];
+  for (const line of fs.readFileSync(transcript, 'utf8').split(/\r?\n/)) {
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    const at = Date.parse(entry?.timestamp);
+    if (entry?.type !== 'assistant' || !Number.isFinite(at) || at > before) continue;
+    const text = Array.isArray(entry.message?.content)
+      ? entry.message.content.map(item => {
+          if (item?.type === 'text' && typeof item.text === 'string') return item.text;
+          // Branch/PR identifiers often first appear in the assistant's tool
+          // invocation rather than its prose. Task IDs remain excluded because
+          // extractIdentifiers only accepts PR and conservative branch forms.
+          if (item?.type === 'tool_use' && item.input) return JSON.stringify(item.input);
+          return '';
+        }).filter(Boolean).join('\n')
+      : typeof entry.message?.content === 'string' ? entry.message.content : '';
+    if (text) messages.push({ at, text });
+  }
+  messages.sort((a, b) => a.at - b.at);
+  return messages.slice(-limit);
+}
+
+function listTranscripts(projectsDir, archiveDir) {
+  const files = [];
+  for (const root of [projectsDir, archiveDir]) {
+    let projects;
+    try { projects = fs.readdirSync(root, { withFileTypes: true }); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    for (const project of projects) {
+      if (!project.isDirectory()) continue;
+      const dir = path.join(root, project.name);
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isFile() && entry.name.endsWith('.jsonl')) files.push(path.join(dir, entry.name));
+      }
+    }
+  }
+  return files;
+}
 
 function findTranscript(projectsDir, sessionId, archiveDir) {
   if (!sessionId) return null;
@@ -288,6 +347,42 @@ export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null,
     archiveDir = process.env.CLAUDE_PROJECTS_ARCHIVE_DIR || path.join(path.dirname(projectsDir), 'projects-archive');
   }
   const transcriptCache = new Map();
+  let allTranscripts = null;
+  const assistantTextCache = new Map();
+  function crossSessionResolution(row, waitContext, originTranscript) {
+    const rowTime = Date.parse(row.ts);
+    let identifiers = extractIdentifiers(waitContext);
+    // A quoted wait from another session is evidence being discussed, not the
+    // current work. Do not borrow an unrelated identifier from nearby turns.
+    const referencesAnotherSession = /セッション\s+[0-9a-f]{8}\b/i.test(waitContext);
+    if (identifiers.length === 0 && originTranscript && !referencesAnotherSession) {
+      const recent = assistantTexts(originTranscript, { before: rowTime, limit: 20 });
+      for (let i = recent.length - 1; i >= 0; i--) {
+        identifiers = extractIdentifiers(recent[i].text);
+        if (identifiers.length > 0) break;
+      }
+    }
+    if (identifiers.length === 0) return null;
+    allTranscripts ??= listTranscripts(projectsDir, archiveDir);
+    const originPath = originTranscript ? path.resolve(originTranscript).toLowerCase() : null;
+    let best = null;
+    for (const transcript of allTranscripts) {
+      if ((originPath && path.resolve(transcript).toLowerCase() === originPath)
+          || path.basename(transcript, '.jsonl') === row.sessionId) continue;
+      let messages = assistantTextCache.get(transcript);
+      if (!messages) {
+        messages = assistantTexts(transcript);
+        assistantTextCache.set(transcript, messages);
+      }
+      for (const message of messages) {
+        if (!(message.at > rowTime && message.at <= rowTime + CROSS_SESSION_WINDOW_MS) || !COMPLETION_WORD.test(message.text)) continue;
+        const identifier = identifiers.find(value => identifierAppears(message.text, value));
+        if (!identifier || (best && best.at <= message.at)) continue;
+        best = { at: message.at, identifier, resolvedBy: path.basename(transcript, '.jsonl') };
+      }
+    }
+    return best;
+  }
   const sources = NAMES.map((name, index) => {
     const file = path.join(home, '.claude', name);
     let lines = [];
@@ -329,14 +424,23 @@ export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null,
         // 同一セッション内で解消した一時的な委譲待ちは監査件数から外す。
         if (!transcript) row.resolved = 'unknown';
         else if (resolvedWait(transcript, row.ts)) row.resolved = 'in-session';
+        if (row.resolved !== 'in-session') {
+          const waitContext = text.slice(Math.max(0, match.index - 300), match.index + match[0].length + 300);
+          const resolution = crossSessionResolution(row, waitContext, transcript);
+          if (resolution) {
+            row.resolved = 'cross-session';
+            row.resolvedBy = resolution.resolvedBy;
+            row.identifier = resolution.identifier;
+          }
+        }
       }
       rows.push(row);
-      if (row.resolved === 'in-session') continue;
+      if (row.resolved === 'in-session' || row.resolved === 'cross-session') continue;
       byPattern[pattern]++;
       const day = new Date(entry.ts).toISOString().slice(0, 10);
       counts[day] = (counts[day] || 0) + 1;
     }
-    return { name, file, total: lines.length, hits: rows.filter(row => row.resolved !== 'in-session').length, byPattern, byDay: Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b))), rows };
+    return { name, file, total: lines.length, hits: rows.filter(row => !['in-session', 'cross-session'].includes(row.resolved)).length, byPattern, byDay: Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b))), rows };
   });
   return { since, sources };
 }
@@ -367,8 +471,9 @@ export function main(args = process.argv.slice(2)) {
       console.log(Object.entries(source.byPattern).map(([pattern, count]) => `${pattern}:${count}`).join(' '));
       console.log(Object.entries(source.byDay).map(([day, count]) => `${day}:${count}`).join(' '));
       for (const row of source.rows) {
-        if (row.resolved === 'in-session' && !showResolved) continue;
-        console.log(`${row.ts} ${row.verdict} ${row.sessionId.slice(0, 8)}${row.resolved ? ` resolved=${row.resolved}` : ''}  …${row.match}…`);
+        if (['in-session', 'cross-session'].includes(row.resolved) && !showResolved) continue;
+        const resolution = row.resolvedBy ? ` resolvedBy=${row.resolvedBy} identifier=${row.identifier}` : '';
+        console.log(`${row.ts} ${row.verdict} ${row.sessionId.slice(0, 8)}${row.resolved ? ` resolved=${row.resolved}` : ''}${resolution}  …${row.match}…`);
       }
     }
   } catch (error) { console.error(`permanent-fix-deferral-scan: ${error.message}`); }

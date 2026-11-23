@@ -59,7 +59,7 @@ test('saveJson cleans up and preserves the original error when rename fails', as
 test('0 stalled: no execution or notification', async t => {
   const f = await fixture(t, 0); await run(options([], {}), f.io); assert.equal(f.calls(), 0); assert.equal(f.notices(), 0);
 });
-test('自動再開無効時は起動せず同じセッションを1回だけ通知する', async t => {
+test('自動再開無効時（恒久設定）は起動せず kim-inbox 通知も行わない', async t => {
   const f = await fixture(t, 1);
   await fs.mkdir(path.dirname(f.file), { recursive: true });
   await fs.writeFile(f.file, JSON.stringify({ version: 1, nights: {}, sessions: { 'session-0': { attempts: [], noProgress: 3 } } }));
@@ -71,7 +71,7 @@ test('自動再開無効時は起動せず同じセッションを1回だけ通�
     await run(options(['--limit', '0'], {}), f.io);
     await run(options([], {}), f.io);
     assert.equal(f.calls(), 0);
-    assert.equal(inbox, 1);
+    assert.equal(inbox, 0);
     assert.ok((await f.ledger()).autoResumeDisabledNotified['session-0']);
   } finally { process.env.ORGIAST_AUTO_RESUME = before; }
 });

@@ -173,14 +173,14 @@ const BACKUP_TITLE_RE = /(?:backup|バックアップ|ClaudeDailyDriveBackup|Dai
  * バックアップ系タスクを推奨アクションに出す前に、成果物の実在で裏取りする。
  * rclone が使えない環境では例外で落とさず「未確認」として従来どおり出す。
  */
-async function filterBackupActions(actions, execImpl, log) {
+async function filterBackupActions(actions, execImpl, log, now = new Date()) {
   const backupActions = actions.filter((a) => BACKUP_TITLE_RE.test(a.title));
   if (!backupActions.length) return actions;
   let hasRecentBackup = false;
   try {
     const raw = await runExec(execImpl, 'rclone', ['lsl', 'claude-backup:Claude-Backups']);
-    const today = new Date().toISOString().slice(0, 10);
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const today = now.toISOString().slice(0, 10);
+    const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
     hasRecentBackup = raw.split(/\r?\n/).some((line) => line.includes(today) || line.includes(yesterday));
   } catch {
     // rclone が使えない環境では「未確認」として除外しない
@@ -264,7 +264,7 @@ export async function runNextActions(options = {}) {
   }
   const log = options.log || console.log;
   actions = await filterStalePrActions(actions, prs, execImpl, log);
-  actions = await filterBackupActions(actions, execImpl, log);
+  actions = await filterBackupActions(actions, execImpl, log, now);
   actions = sanitizeFirstStep(actions);
   if (!actions.length) {
     actions = [{
@@ -285,7 +285,13 @@ export async function runNextActions(options = {}) {
       ledgerLines.push(`- [${oneLine(row.taskId)}] ${oneLine(row.件名)} / 担当PC: ${oneLine(row.担当PC)} / 停滞: ${elapsed} / ${oneLine(row.成果物リンク)}`);
     }
     if (ledgerLines.length === 1) ledgerLines.push('該当なし');
-  } catch (error) { ledgerLines.push(`台帳取得失敗: ${oneLine(error.message)}`); }
+  } catch (error) {
+    if (error.code === 'TASK_SHEET_NOT_CONFIGURED') {
+      ledgerLines.push('この席は台帳未設定（~/.claude/task-sheet.env が無い）。他PCへの依頼一覧はこの席では表示しない。');
+    } else {
+      ledgerLines.push(`台帳取得失敗: ${oneLine(error.message)}`);
+    }
+  }
   const body = `${render(actions, now)}\n\n${ledgerLines.join('\n')}`, outputFile = path.join(base, 'next-actions.md');
   if (!cli.dryRun) { fs.mkdirSync(base, { recursive: true }); fs.writeFileSync(outputFile, replaceNextActionsSection(readFile(outputFile), body), 'utf8'); }
   if (cli.json) log(JSON.stringify({ actions }, null, 2));

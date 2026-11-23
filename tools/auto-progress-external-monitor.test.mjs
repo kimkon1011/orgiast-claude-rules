@@ -275,3 +275,19 @@ test('Gmail notified message IDs shared with external-waiting', async t => {
   assert.ok(notifiedGmailIds(home).has('seisaku-team@orgiast.jp|m1'));
   assert.ok(!notifiedGmailIds(home).has('seisaku-team@orgiast.jp|m2'));
 });
+test('恒久無効時は drainExternalQueue が kim-inbox 通知を行わない', async t => {
+  const before = process.env.ORGIAST_AUTO_RESUME;
+  delete process.env.ORGIAST_AUTO_RESUME;
+  t.after(() => { before === undefined ? delete process.env.ORGIAST_AUTO_RESUME : process.env.ORGIAST_AUTO_RESUME = before; });
+  const home = fixture(t);
+  const now = Date.now();
+  const event = { key: 'c'.repeat(64), channel: 'gmail', message: { sender: 'test', at: new Date(now).toISOString(), text: 'new message' },
+    row: { sessionId: 's' }, inboxId: 'receipt', state: 'pending', queuedAt: new Date(now).toISOString() };
+  saveEvent(home, event);
+  let inboxCalls = 0;
+  const options = { home, now, resume: () => assert.fail('no resume'), io: { addKimInboxItem: async () => { inboxCalls++; return { id: 'notice' }; },
+    autoResumeDisabledByConfig: () => true } };
+  await drainExternalQueue(options);
+  assert.equal(inboxCalls, 0);
+  assert.ok(readEvents(home).every(e => e.state === 'disabled'));
+});

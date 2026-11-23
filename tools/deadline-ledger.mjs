@@ -118,9 +118,13 @@ export function createLedger({ sheets = createSheetsClient({ fetchImpl: gwsFetch
     if (!row) throw new Error(`${tab}: ${id} が見つかりません`);
     // Commit status last: a failed deferral must never hide the old deadline.
     const entries = Object.entries(changes).sort(([a], [b]) => Number(a === 'status') - Number(b === 'status'));
-    for (const [key, value] of entries) {
+    const data = entries.map(([key, value]) => {
       const field = FIELDS.indexOf(key); if (field < 0) throw new Error(`未知の列: ${key}`);
-      await sheets.update(config.sheetId, `${quoteTab(tab)}!${columnLetter(row.header.indexOf(HEADERS[field]))}${row.rowNumber}`, [[value ?? '']]);
+      return { range: `${quoteTab(tab)}!${columnLetter(row.header.indexOf(HEADERS[field]))}${row.rowNumber}`, values: [[value ?? '']] };
+    });
+    if (typeof sheets.batchUpdate === 'function') await sheets.batchUpdate(config.sheetId, data);
+    else {
+      for (const { range, values } of data) await sheets.update(config.sheetId, range, values);
     }
     return { ...row, ...changes };
   }

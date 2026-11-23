@@ -98,3 +98,18 @@ test('延期先などの書込成功後に状態を更新し、途中失敗で�
   const failed=createLedger({config:{sheetId:'test'},sheets:{...sheets,update:async(_,range)=>{assert.doesNotMatch(range,/!G2$/);throw Error('offline');}}});
   await assert.rejects(failed.patch('D-001',{status:'延期',notes:'延期先: 2026-11-20'}),/offline/);
 });
+
+test('patchは従来と同じ範囲と値をbatchUpdate 1回に集約する', async () => {
+  const batches = [];
+  const sheets = {
+    get: async () => [HEADERS, serializeRow({ id: 'D-001', title: '提出', due: '2026-11-06', status: '未着手' })],
+    update: async () => assert.fail('update fallback should not be used'),
+    batchUpdate: async (id, data) => batches.push([id, data]),
+  };
+  await createLedger({ config: { sheetId: 'test' }, sheets }).patch('D-001', { status: '延期', notes: '延期先: 2026-11-20', lastNotified: '' });
+  assert.deepEqual(batches, [['test', [
+    { range: "'期限台帳'!Q2", values: [['延期先: 2026-11-20']] },
+    { range: "'期限台帳'!N2", values: [['']] },
+    { range: "'期限台帳'!G2", values: [['延期']] },
+  ]]]);
+});

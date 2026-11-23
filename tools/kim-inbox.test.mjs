@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, mergeItemsInto, CONTEXT_LIMIT, oneScreenSummary, autoCloseByGmail, normalizeInboxText, appendPullRequestUrls, enrichPullRequestUrls } from './kim-inbox.mjs';
+import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, mergeItemsInto, CONTEXT_LIMIT, oneScreenSummary, autoCloseByGmail, normalizeInboxText, appendPullRequestUrls, enrichPullRequestUrls, resolvePrRefs, hasFullPrUrl } from './kim-inbox.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { loadAllowlist, discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { backfill } from './kim-inbox-dedupe-backfill.mjs';
@@ -1157,4 +1157,72 @@ test('computeSweepInfoSummary: 全件が対象のとき残る = 0', () => {
   assert.equal(summary.total, 2);
   assert.equal(summary.toSeen, 2, '両方とも配信済み古い');
   assert.equal(summary.remaining, 0, '全件 seen になるので残りは0');
+});
+
+// resolvePrRefs resolves "PR #N" to full GitHub URLs, but skips entries that already have URLs.
+// When gh is unavailable, the text is returned unchanged (fails silently).
+// Tests use a mock exec that returns a known URL.
+test('resolvePrRefs skips text without PR references', async () => {
+  const text = 'これは通常の報告です。承認をお願いします。';
+  const fn = async () => { throw new Error('should not be called'); };
+  assert.equal(await resolvePrRefs(text, { execImpl: fn }), text);
+});
+test('resolvePrRefs skips text that already has full GitHub URLs', async () => {
+  const text = 'PR https://github.com/kimkon1011/repo/pull/123 は MERGED 済みです。';
+  const fn = async () => { throw new Error('should not be called'); };
+  assert.equal(await resolvePrRefs(text, { execImpl: fn }), text);
+});
+test('resolvePrRefs skips text when gh fails (no gh, wrong repo)', async () => {
+  const text = 'PR #99999 を確認してください。';
+  const fn = async (cmd, args) => { throw new Error('gh not available'); };
+  assert.equal(await resolvePrRefs(text, { execImpl: fn, stderr: () => {} }), text, 'gh 失敗時は元のテキストを返す');
+});
+test('resolvePrRefs resolves PR #N to full URL when gh succeeds', async () => {
+  const text = 'PR #123 を確認してください。';
+  const mockGh = async (cmd, args) => {
+    assert.equal(cmd, 'gh');
+    assert.equal(args[0], 'pr');
+    assert.equal(args[1], 'view');
+    assert.equal(args[2], '123');
+    return { stdout: '{"url":"https://github.com/kimkon1011/repo/pull/123"}' };
+  };
+  const resolved = await resolvePrRefs(text, { execImpl: mockGh });
+  assert.match(resolved, /PR\s*#123/, 'PR #123 が残っている');
+  assert.match(resolved, /https:\/\/github\.com\/kimkon1011\/repo\/pull\/123/, 'URL が含まれている');
+});
+test('resolvePrRefs resolves multiple unique PR numbers', async () => {
+  const text = 'PR #814 と PR #1403 の両方を確認してください。';
+  const calls = [];
+  const mockGh = async (cmd, args) => {
+    calls.push(args[2]);
+    const url = `https://github.com/kimkon1011/repo/pull/${args[2]}`;
+    return { stdout: JSON.stringify({ url }) };
+  };
+  const resolved = await resolvePrRefs(text, { execImpl: mockGh });
+  assert.equal(calls.sort().join(','), '1403,814');
+  assert.match(resolved, /https:\/\/github\.com\/kimkon1011\/repo\/pull\/814/);
+  assert.match(resolved, /https:\/\/github\.com\/kimkon1011\/repo\/pull\/1403/);
+});
+test('resolvePrRefs resolves PR#N (without space) format', async () => {
+  const text = 'PR#14 は MERGED 済みです。';
+  const mockGh = async (cmd, args) => ({
+    stdout: `{"url":"https://github.com/kimkon1011/repo/pull/14"}`,
+  });
+  const resolved = await resolvePrRefs(text, { execImpl: mockGh });
+  assert.match(resolved, /https:\/\/github\.com\/kimkon1011\/repo\/pull\/14/);
+  assert.doesNotMatch(resolved, /PR#14/, 'PR#14 は PR #14 に変換される');
+});
+test('resolvePrRefs does not double-add URLs when called twice', async () => {
+  const text = 'PR #123 を確認してください。';
+  const mockGh = async () => ({ stdout: '{"url":"https://github.com/kimkon1011/repo/pull/123"}' });
+  const once = await resolvePrRefs(text, { execImpl: mockGh });
+  const twice = await resolvePrRefs(once, { execImpl: mockGh });
+  // Should find "PR #123 (https://...)" only once
+  assert.equal(twice.match(/PR #123/g).length, 1, 'PR #123 は1回だけ出現');
+  assert.equal(twice.match(/https:\/\/github\.com/g).length, 1, 'URL は1回だけ出現');
+});
+test('hasFullPrUrl detects existing PR URLs', () => {
+  assert.equal(hasFullPrUrl('https://github.com/kimkon1011/repo/pull/123 完了'), true);
+  assert.equal(hasFullPrUrl('PR #123'), false);
+  assert.equal(hasFullPrUrl(''), false);
 });

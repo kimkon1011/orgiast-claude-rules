@@ -18,6 +18,43 @@ import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mj
 import { matchesRow, parseEscalation, syncEscalationAnswer } from './lib/escalation-answer-sync.mjs';
 import { looksLikeApprovalRequest } from './lib/kim-inbox-kind.mjs';
 const exec = promisify(execFile);
+const execGh = promisify(execFile);
+const PR_REF_RE = /PR\s*#(\d+)/gi;
+const PR_URL_RE = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/gi;
+// Separate regex without global flag for boolean check (global .test() mutates lastIndex).
+const PR_URL_BOOL = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/;
+export function hasFullPrUrl(text) {
+  return PR_URL_BOOL.test(text);
+}
+export async function resolvePrRefs(text, { execImpl = execGh, stderr = console.error } = {}) {
+  const matches = [...text.matchAll(PR_REF_RE)];
+  if (!matches.length) return text;
+  // Exclude matches that already have a full URL nearby (within 100 chars)
+  const candidates = matches.filter(m => {
+    const idx = m.index;
+    const slice = text.slice(Math.max(0, idx - 80), idx + 120);
+    return !PR_URL_RE.test(slice);
+  });
+  if (!candidates.length) return text;
+  const unique = [...new Set(candidates.map(m => m[1]))];
+  let result = text;
+  for (const num of unique) {
+    try {
+      const { stdout } = await execImpl('gh', ['pr', 'view', num, '--json', 'url'], {
+        encoding: 'utf8', timeout: 5000, windowsHide: true,
+      });
+      const url = JSON.parse(stdout).url;
+      if (url && typeof url === 'string' && url.startsWith('https://github.com/')) {
+        result = result.replace(new RegExp(`PR\\s*#${num}(?!\\s*\\(https?:)`, 'g'), `PR #${num} (${url})`);
+        result = result.replace(new RegExp(`PR#${num}(?!\\s*\\(https?:)`, 'g'), `PR #${num} (${url})`);
+      }
+    } catch (error) {
+      stderr(`[kim-inbox] PR #${num} のURL解決に失敗しました: ${error.message?.slice(0, 100) || String(error).slice(0, 100)}`);
+    }
+  }
+  return result;
+}
+
 const directory = home => path.join(home, '.claude/kim-inbox');
 const archiveDirectory = home => path.join(directory(home), '.archive');
 const archiveIndex = home => path.join(archiveDirectory(home), 'index.jsonl');
@@ -450,6 +487,9 @@ export async function addItem(home, options, { drain = true, localOnly = false, 
   }
   if (drain) await drainSpool(home, { execImpl: normalizedOptions.execImpl, signal: normalizedOptions.signal, lockWaitMs });
   if (isInboxNoise(normalizedOptions)) return { id: null, status: 'suppressed', kind: normalizedOptions.kind || 'info' };
+  if (normalizedOptions.text) {
+    normalizedOptions = { ...normalizedOptions, text: await resolvePrRefs(normalizedOptions.text, { stderr: normalizedOptions.stderr || console.error }) };
+  }
   const item = create(home, normalizedOptions, lockWaitMs);
   if (localOnly || item.kind === 'deadline' || isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-inbox-'));

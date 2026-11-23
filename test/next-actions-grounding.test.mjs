@@ -57,8 +57,8 @@ test('正常な推奨アクション出力は従来どおり', async () => {
     now: new Date('2026-11-24T00:00:00+09:00'),
     llm: async () => ({ provider: 'groq', text: JSON.stringify({ actions: [action] }) }),
     execImpl: (_file, args, _options, callback) => callback(null,
-      args[0] === 'pr' && args[1] === 'list' && args.includes('--state')
-        ? JSON.stringify([{ number: 2567, state: 'OPEN' }])
+      args[0] === 'pr' && args[1] === 'view'
+        ? JSON.stringify({ number: parseInt(args[2]), state: 'OPEN' })
         : '[]'),
     listLedger: async () => ({ ok: true, rows: [] }),
     log: value => output.push(value),

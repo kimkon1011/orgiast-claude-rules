@@ -124,37 +124,86 @@ function fallbackActions({ p1, errors, prs, todo }) {
   return choices.slice(0, 3);
 }
 
-async function filterStalePrActions(actions, execImpl, errorLog) {
-  const actionNumbers = actions.map((action) => new Set(
-    [...Object.values(action).join(' ').matchAll(/PR#(\d+)/g)].map((match) => Number(match[1]))
-  ));
-  const candidateNumbers = new Set(actionNumbers.flatMap((numbers) => [...numbers]));
-  if (!candidateNumbers.size) return actions;
+/**
+ * アクションオブジェクトから PR 番号を抽出する。
+ * 全フィールドから PR#<数字> を、first_step から gh pr <サブコマンド> <数字> を検出する。
+ */
+function extractPrNumbers(action) {
+  const text = Object.values(action).join(' ');
+  const fromPrHash = [...text.matchAll(/PR#(\d+)/g)].map((m) => Number(m[1]));
+  const fromGhPr = [...(action.first_step || '').matchAll(/gh pr \w+ (\d+)/g)].map((m) => Number(m[1]));
+  return new Set([...fromPrHash, ...fromGhPr]);
+}
 
-  let states;
+/**
+ * 単一PRの状態を gh pr view で取得する。10秒でタイムアウトする。
+ * @returns {Promise<string>} state（'OPEN'/'MERGED'/'CLOSED' 等）または 'FETCH_FAILED'
+ */
+async function prStateView(execImpl, number) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
   try {
-    const raw = await runExec(execImpl, 'gh', [
-      'pr', 'list', '--repo', 'kimkon1011/orgiast-claude-rules', '--state', 'all',
-      '--json', 'number,state', '--limit', '100'
-    ]);
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) throw new Error('PR一覧の応答が配列ではありません');
-    states = new Map(parsed.map((pr) => [Number(pr.number), pr.state]));
-  } catch (error) {
-    errorLog(`next-actions: PR状態を取得できないため候補を除外しません: ${String(error?.message || error).replace(/\s+/g, ' ').trim()}`);
-    return actions;
+    const raw = await new Promise((resolve, reject) => {
+      execImpl('gh', ['pr', 'view', String(number), '--repo', 'kimkon1011/orgiast-claude-rules', '--json', 'state'],
+        { encoding: 'utf8', signal: controller.signal },
+        (error, stdout) => error ? reject(error) : resolve(String(stdout || ''))
+      );
+    });
+    return JSON.parse(raw)?.state;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * 推奨アクションから、MERGED または CLOSED の PR を含むものを除外する。
+ * PR の状態取得に失敗した場合はそのアクションを残し、note を付与する。
+ * 同じ番号への gh 呼び出しは1回だけ行う。
+ */
+async function filterStalePrActions(actions, execImpl, errorLog) {
+  const actionNumbers = actions.map(extractPrNumbers);
+  const allNumbers = new Set(actionNumbers.flatMap((numbers) => [...numbers]));
+  if (!allNumbers.size) return actions;
+
+  const states = new Map();   // number -> 'OPEN'|'MERGED'|'CLOSED'|'FETCH_FAILED'
+  const fetchErrors = new Map(); // number -> error message
+
+  for (const number of allNumbers) {
+    try {
+      const state = await prStateView(execImpl, number);
+      states.set(number, state);
+    } catch (error) {
+      states.set(number, 'FETCH_FAILED');
+      fetchErrors.set(number, String(error?.message || error).replace(/\s+/g, ' ').trim());
+    }
   }
 
   const excludedNumbers = new Set();
-  const filtered = actions.filter((_action, index) => {
-    const closed = [...actionNumbers[index]].filter((number) => ['MERGED', 'CLOSED'].includes(states.get(number)));
-    for (const number of closed) excludedNumbers.add(number);
-    return closed.length === 0;
-  });
+  const result = actions.map((action, i) => {
+    const numbers = [...actionNumbers[i]];
+    const mergedOrClosed = numbers.filter((n) => ['MERGED', 'CLOSED'].includes(states.get(n)));
+    const failed = numbers.filter((n) => states.get(n) === 'FETCH_FAILED');
+
+    if (mergedOrClosed.length > 0) {
+      for (const n of mergedOrClosed) excludedNumbers.add(n);
+      return null; // 除外
+    }
+
+    if (failed.length > 0) {
+      const reasons = failed.map((n) => {
+        const reason = fetchErrors.get(n) || '不明なエラー';
+        return `変更依頼 #${n} の状態を確認できませんでした（${reason}）`;
+      }).join(' / ');
+      return { ...action, note: reasons };
+    }
+
+    return action;
+  }).filter(Boolean);
+
   if (excludedNumbers.size) {
-    errorLog(`next-actions: MERGED/CLOSED のPRを含む候補を${actions.length - filtered.length}件除外: ${[...excludedNumbers].sort((a, b) => a - b).map((number) => `PR#${number}`).join(', ')}`);
+    errorLog(`next-actions: MERGED/CLOSED のPRを含む候補を${actions.length - result.length}件除外: ${[...excludedNumbers].sort((a, b) => a - b).map((n) => `PR#${n}`).join(', ')}`);
   }
-  return filtered;
+  return result;
 }
 
 function isNightlyError(line) {
@@ -273,7 +322,10 @@ export function replaceNextActionsSection(existing, body) {
 
 function render(actions, now) {
   const stamp = now.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
-  const items = actions.map((a, i) => `${i + 1}. ${a.title} [${a.source}]\n   - why: ${a.why}\n   - first_step: ${a.first_step}`).join('\n');
+  const items = actions.map((a, i) => {
+    const noteLine = a.note ? `\n   - note: ${a.note}` : '';
+    return `${i + 1}. ${a.title} [${a.source}]\n   - why: ${a.why}\n   - first_step: ${a.first_step}${noteLine}`;
+  }).join('\n');
   return `## 明日の推奨アクション（${stamp}）\n\n${items}\n\nこの節は夜間に自動生成。古い場合は \`node tools/next-actions.mjs\` で再生成`;
 }
 

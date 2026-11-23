@@ -9,7 +9,9 @@ $AE = [System.Windows.Automation.AutomationElement]
 $Scope = [System.Windows.Automation.TreeScope]
 $tmp = [System.IO.Path]::GetTempFileName()
 try {
-  $body = (& node (Join-Path $PSScriptRoot 'lib/ai-disclaimer.mjs') --channel discord --in $BodyFile --out $tmp | Out-String).TrimEnd()
+  $nodeExe = (Get-Command node -CommandType Application -ErrorAction Stop | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source
+  if (-not $nodeExe) { throw 'node.exe not found' }
+  $body = (& $nodeExe (Join-Path $PSScriptRoot 'lib/ai-disclaimer.mjs') --channel discord --in $BodyFile --out $tmp | Out-String).TrimEnd()
   if ($LASTEXITCODE -ne 0) { throw 'AI作成の一文を付与できません' }
   $body = [System.IO.File]::ReadAllText($tmp, [System.Text.Encoding]::UTF8).TrimEnd()
 } finally { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue }

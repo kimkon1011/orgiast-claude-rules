@@ -306,8 +306,14 @@ async function main(args = process.argv.slice(2)) {
 
   if (has('--dry-run')) {
     if (!chatID || !bodyFile) { console.error('--dry-run にも --chat と --body-file が必要です'); return 1; }
-    const chats = await listChats({ limit: 200 });
-    const chat = (chats?.items || chats || []).find(candidate => candidate.id === chatID || candidate.chatID === chatID);
+    let chat;
+    try {
+      const chats = await listChats({ limit: 200 });
+      chat = (chats?.items || chats || []).find(candidate => candidate.id === chatID || candidate.chatID === chatID);
+    } catch {
+      // dry-run は外部送信しないため、Beeper が無い環境ではチャネル不明のまま本文だけ検証する。
+      chat = undefined;
+    }
     const dryText = withAiDisclaimer(fs.readFileSync(bodyFile, 'utf8').trim(), { channel: channelFromBeeperChat(chat) });
     if (findSecretaryBookingUrls(dryText).length) { console.error(SECRETARY_BOOKING_URL_REASON); return 1; }
     console.log(JSON.stringify({ dryRun: true, chatID, textLength: dryText.length, text: dryText }));

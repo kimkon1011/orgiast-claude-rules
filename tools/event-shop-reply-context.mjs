@@ -65,8 +65,13 @@ export function checkDraft(draft, context) {
     if (!nums.length) { prior = []; subtotal = net = tax = undefined; return []; }
     const ps = products.filter(p => matches(line, p, 1));
     const sum = prior.reduce((a, b) => a + b, 0);
+    const isSubtotal = /小計/.test(line);
+    const isStandaloneTotal = /合計|総額/.test(line) && !/小計|税抜|消費税/.test(line) && net === undefined && tax === undefined;
+    const detailDifference = prior.length && (isSubtotal || isStandaloneTotal) && Math.abs(nums[0] - sum) >= .01
+      ? { status: 'NG', reason: `明細の和 ${sum.toLocaleString('en-US')} 円に対し記載 ${nums[0].toLocaleString('en-US')} 円（差額 ${Math.abs(nums[0] - sum).toLocaleString('en-US')} 円）` }
+      : null;
     const computed = /小計/.test(line) ? sum : /手数料/.test(line) ? subtotal * .2 : /税抜/.test(line) ? subtotal * 1.2 : /消費税/.test(line) ? net * .1 : /合計|税込/.test(line) ? net + tax : NaN;
-    const judgments = nums.map(n => {
+    const judgments = detailDifference ? [detailDifference] : nums.map(n => {
       if (ps.length) {
         if (ps.some(p => byProduct.get(p.slug)?.has(n))) return { status: 'OK', reason: '社内返信案と一致' };
         const priced = ps.filter(p => p.price === n);
@@ -83,7 +88,7 @@ export function checkDraft(draft, context) {
     if (/小計/.test(line)) subtotal = nums[0];
     else if (/税抜/.test(line)) net = nums[0];
     else if (/消費税/.test(line)) tax = nums[0];
-    prior.push(...nums);
+    if (!isSubtotal) prior.push(...nums);
     return [{ line: i + 1, text: line, status, reason }];
   });
 }

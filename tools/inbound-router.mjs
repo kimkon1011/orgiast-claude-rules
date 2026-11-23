@@ -19,10 +19,38 @@ const itemKey = i => `${i.source}:${i.id}`;
 const threadKey = i => i.kind === 'beeper' ? `beeper:${i.chatId}` : `gmail:${i.mailbox}:${i.threadId}`;
 export const initialState = () => ({ version: 1, sources: {}, seen: {}, threadRoutes: {}, dispatches: [], unknown: [], digests: {} });
 
-export function isGmailNoise(m) {
+// Clean up old state entries
+export function cleanupState(state, now) {
+  // Remove seen entries older than 14 days
+  const fourteenDaysAgo = now - 14 * 24 * 60 * 60_000;
+  for (const [key, timestamp] of Object.entries(state.seen)) {
+    if (timestamp < fourteenDaysAgo) {
+      delete state.seen[key];
+    }
+  }
+
+  // Remove unknown entries older than 14 days based on reportedAt
+  state.unknown = state.unknown.filter(entry => {
+    const reportedAt = entry.reportedAt || entry.time;
+    if (!reportedAt) return true; // Keep entries without timestamps
+    return Date.parse(reportedAt) >= fourteenDaysAgo;
+  });
+}
+
+export function isGmailNoise(m, config) {
   const from = String(m.from || '').toLowerCase();
+  const subject = String(m.subject || '');
   const labels = (m.labels || []).map(x => String(x).toUpperCase());
-  return !!m.listUnsubscribe || /(^|[<@._+-])(no-?reply|noreply|do-?not-?reply)/i.test(from) || labels.some(x => x === 'CATEGORY_PROMOTIONS' || x === 'CATEGORY_SOCIAL');
+  const selfSenders = ['seisaku-team@orgiast.jp', 'kim@orgiast.jp'];
+  if (selfSenders.some(s => from.includes(s))) return false;
+  if (!!m.listUnsubscribe) return true;
+  if (/(^|[<@._+-])(no-?reply|noreply|do-?not-?reply)/i.test(from)) return true;
+  if (labels.some(x => x === 'CATEGORY_PROMOTIONS' || x === 'CATEGORY_SOCIAL')) return true;
+  const senders = config.noiseSenders || [];
+  if (senders.some(p => new RegExp(p, 'i').test(from))) return true;
+  const subjects = config.noiseSubjects || [];
+  if (subjects.some(p => new RegExp(p, 'i').test(subject))) return true;
+  return false;
 }
 
 export async function collectNew({ state, config, since, until, deps, checkpoint = () => {}, stop = () => {} }) {
@@ -71,7 +99,7 @@ export async function collectNew({ state, config, since, until, deps, checkpoint
           const at = Number(m.internalDate) || Date.parse(m.date); if (!Number.isFinite(at) || at < from - 60_000 || at > until) continue;
           const base = { kind: 'gmail', source, id: m.id, mailbox, threadId: m.threadId, title: m.subject || '', sender: m.from || '', time: new Date(at).toISOString(), text: String(m.body || m.snippet || '') };
           state.seen[itemKey(base)] = until;
-          if (isGmailNoise(m)) counts.noise++; else { items.push(base); counts.gmail++; }
+          if (isGmailNoise(m, config)) counts.noise++; else { items.push(base); counts.gmail++; }
         }
         checkpoint(); pageToken = result.nextPageToken;
         if (pageToken && pageTokens.has(pageToken)) throw new Error('repeated_gmail_cursor');
@@ -85,27 +113,50 @@ export async function collectNew({ state, config, since, until, deps, checkpoint
 
 export function ruleRoute(item, config, state) {
   const known = state.threadRoutes[threadKey(item)]; if (known && config.routes[known]) return known;
-  const haystack = `${item.title}\n${item.sender}\n${item.text}`.toLowerCase();
-  for (const rule of config.rules || []) if ((rule.chatIds || []).includes(item.chatId) || (rule.includes || []).some(v => haystack.includes(String(v).toLowerCase()))) return rule.route;
+  const titleAndSender = `${item.title}\n${item.sender}`.toLowerCase();
+  const fullText = `${item.title}\n${item.sender}\n${item.text}`.toLowerCase();
+  for (const rule of config.rules || []) {
+    if (rule.networks?.length && !rule.networks.some(v => String(v).toLowerCase() === String(item.network || '').toLowerCase())) continue;
+    if ((rule.chatIds || []).includes(item.chatId)) return rule.route;
+    const haystack = rule.matchBody ? fullText : titleAndSender;
+    if (!(rule.includes || []).length || rule.includes.some(v => haystack.includes(String(v).toLowerCase()))) return rule.route;
+  }
   return null;
 }
 
 export function parseRoute(raw, config) {
-  try { const data = JSON.parse(String(raw).match(/\{[\s\S]*\}/)?.[0] || raw); return config.routes[data.route] ? data.route : 'unknown'; } catch { return 'unknown'; }
+  try {
+    const data = JSON.parse(String(raw).match(/\{[\s\S]*\}/)?.[0] || raw);
+    // Check confidence level - if less than 0.7, treat as unknown
+    if (!Number.isFinite(Number(data.confidence)) || Number(data.confidence) < 0.7) return 'unknown';
+    return config.routes[data.route] ? data.route : 'unknown';
+  } catch { return 'unknown'; }
 }
 
 export async function routeItems(items, { config, state, classify, stop = () => {} }) {
   const groups = {}, unknown = [];
+  const threadGroups = {}, routesByItem = new Map();
   for (const item of items) {
     stop();
-    let route = ruleRoute(item, config, state);
-    if (!route) {
-      try { route = parseRoute(await classify(item, Object.keys(config.routes)), config); } catch { route = 'unknown'; }
-    }
-    if (route === 'unknown') { unknown.push(item); continue; }
-    state.threadRoutes[threadKey(item)] = route; (groups[route] ||= []).push(item);
+    const route = ruleRoute(item, config, state);
+    if (route) { routesByItem.set(item, route); continue; }
+    const key = threadKey(item);
+    if (!threadGroups[key]) threadGroups[key] = [];
+    threadGroups[key].push(item);
   }
-  return { groups, unknown };
+  for (const [key, threadItems] of Object.entries(threadGroups)) {
+    let route;
+    try { route = parseRoute(await classify(threadItems[0], config), config); } catch { route = 'unknown'; }
+    if (route !== 'unknown') state.threadRoutes[key] = route;
+    for (const item of threadItems) routesByItem.set(item, route);
+  }
+  for (const item of items) {
+    const route = routesByItem.get(item);
+    if (route === 'unknown') { unknown.push(item); continue; }
+    if (config.routes[route]?.dispatch === false) continue;
+    (groups[route] ||= []).push(item);
+  }
+  return { groups, unknown, routesByItem };
 }
 
 export function dispatchBody(route, items) {
@@ -113,11 +164,30 @@ export function dispatchBody(route, items) {
   return `受信ルーターが ${route} 宛ての新着を検出しました。\n\n${lines.join('\n\n')}\n\n経緯を確認し、返信案または次の行動を作る。社外への送信はしない（既存ルールどおり reply-queue / gmail-draft の下書き・承認経由。AI作成の一文は送信ツールが自動付与）。社内連絡も既存ルールに従う。完了したら fleet-mail の返信で「返信案あり/次の行動/不要」を1行で返す。\n`;
 }
 
+export function buildClassifyPrompt(item, config) {
+  const routes = Object.entries(config.routes).map(([name, route]) => `${name}: ${route.description}`).join('\n');
+  return `次の受信を担当分類してください。説明に明確に当てはまる業務の連絡だけ route を返してください。個人・家族・友人・雑談・判断がつかないものは unknown としてください。JSON {"route":"...","confidence":0.0} のみを返し、confidence は 0-1 の数値にしてください。\n\n利用可能なルート:\n${routes}\n\n件名:${item.title}\n送信者:${item.sender}\n本文:${item.text.slice(0, 3000)}`;
+}
+
 export function makeRuntimeDeps({ home, root = repoRoot } = {}) {
   const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true, timeout: 90_000, ...opts });
   return {
     getAccounts, listChats, listMessages, searchGmail,
-    classify: (item, routes) => { const dir = path.join(home, '.claude', 'inbound-router', 'prompts'); fs.mkdirSync(dir, { recursive: true }); const file = path.join(dir, `classify-${process.pid}.txt`); fs.writeFileSync(file, `次の受信を担当分類してください。route は ${routes.join(', ')} または unknown。JSON {"route":"..."} のみ。\n件名:${item.title}\n送信者:${item.sender}\n本文:${item.text.slice(0, 3000)}`); try { for (const provider of ['glm', 'deepseek', 'groq']) { const r = run(process.execPath, [path.join(root, 'tools', 'llm-ask.mjs'), '--provider', provider, '--prefer-provider', '--no-fallback', '--category', 'classification', '--max', '200', '--per-provider-timeout-ms', '18000', '--prompt-file', file]); if (r.status === 0) return r.stdout; } throw new Error('llm_failed'); } finally { try { fs.unlinkSync(file); } catch {} } },
+    classify: (item, config) => {
+      const dir = path.join(home, '.claude', 'inbound-router', 'prompts');
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `classify-${process.pid}.txt`);
+      fs.writeFileSync(file, buildClassifyPrompt(item, config));
+      try {
+        for (const provider of ['glm', 'deepseek', 'groq']) {
+          const r = run(process.execPath, [path.join(root, 'tools', 'llm-ask.mjs'), '--provider', provider, '--prefer-provider', '--no-fallback', '--category', 'classification', '--max', '300', '--per-provider-timeout-ms', '18000', '--prompt-file', file]);
+          if (r.status === 0) return r.stdout;
+        }
+        throw new Error('llm_failed');
+      } finally {
+        try { fs.unlinkSync(file); } catch {}
+      }
+    },
     sendFleet: ({ route, routeConfig, bodyFile }) => { const args = [path.join(root, 'tools', 'fleet-mail.mjs'), '--send', '--to', routeConfig.target, '--kind', 'prompt', '--exec', 'claude', '--exec-cwd', routeConfig.cwd, '--body-file', bodyFile, '--why', `[作業依頼] inbound-router ${route}`]; if (routeConfig.session) args.push('--resume', routeConfig.session); const r = run(process.execPath, args); if (r.status !== 0) throw new Error(`fleet_mail_${r.status}`); const id = r.stdout.match(/送信済み:\s*([A-Za-z0-9._-]+)/)?.[1]; if (!id) throw new Error('fleet_mail_id_missing'); return { id, method: 'fleet-mail' }; },
     statusFleet: id => { const r = run(process.execPath, [path.join(root, 'tools', 'fleet-mail.mjs'), '--sent-status', id]); if (r.status !== 0) return 'failed'; if (/^reply:/m.test(r.stdout) || /^status:\s*done\s*$/mi.test(r.stdout)) return 'done'; if (/^status:\s*expired\s*$/mi.test(r.stdout)) return 'expired'; if (/^status:\s*failed\s*$/mi.test(r.stdout)) return 'failed'; return 'pending'; }
   };
@@ -150,6 +220,28 @@ export function writeDigest({ state, now, reportDir, force = false }) {
   const jst = new Date(now + 9 * 3600_000), pad = n => String(n).padStart(2, '0'), short = `${pad(jst.getUTCMonth() + 1)}-${pad(jst.getUTCDate())} ${pad(jst.getUTCHours())}:${pad(jst.getUTCMinutes())}`, full = `${jst.getUTCFullYear()}-${pad(jst.getUTCMonth() + 1)}-${pad(jst.getUTCDate())} ${pad(jst.getUTCHours())}:${pad(jst.getUTCMinutes())}`;
   const pcFile = path.join(path.dirname(reportDir), 'gb-offload', 'pc-label.txt'), pc = fs.existsSync(pcFile) ? fs.readFileSync(pcFile, 'utf8').trim() : os.hostname();
   const rows = pending.map(x => { const i = x.item || x; return `### ${i.title || i.reason || '要判断'}\n- 送信元: ${i.kind === 'gmail' ? i.mailbox : i.network || i.source || ''}\n- 送信者: ${i.sender || ''}\n- 時刻: ${i.time || ''}\n- 本文: ${String(i.text || '').slice(0, 200)}\n- 候補ルート: ${x.candidates?.join(', ') || x.route || 'unknown'}`; }); const status = pending.length ? '要判断' : 'OK', body = `# inbound-router  PC=${pc}  ${full} JST  status=${status}  要判断=${pending.length}\n\n## 🚩要判断\n\n${rows.join('\n\n') || 'なし'}\n`; fs.writeFileSync(file, body); fs.copyFileSync(file, path.join(reportDir, 'latest-inbound-router.md'));
+
+  // Try to use PowerShell mutex locking if common.ps1 exists
+  const commonPs1 = path.join(path.dirname(reportDir), 'gb-offload', 'common.ps1');
+  if (fs.existsSync(commonPs1)) {
+    // Use PowerShell to write the report with mutex locking
+    const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true, timeout: 90_000, ...opts });
+    const tempBodyFile = path.join(os.tmpdir(), `inbound-router-body-${process.pid}.txt`);
+    fs.writeFileSync(tempBodyFile, body);
+    try {
+      const psResult = run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `& { . '${commonPs1}'; GB-WriteReport -Job 'inbound-router' -Body (Get-Content -Path '${tempBodyFile}' -Raw) -Flags ${pending.length} -Status '${status}' }`]);
+      if (psResult.status === 0) {
+        pending.forEach(x => { x.reportedAt = now; });
+        state.digests[slot] = now;
+        return file;
+      }
+      throw new Error(`GB-WriteReport failed: ${String(psResult.stderr || psResult.stdout).trim().slice(0, 200)}`);
+    } finally {
+      try { fs.unlinkSync(tempBodyFile); } catch {}
+    }
+  }
+
+  // Original implementation as fallback
   const summary = path.join(reportDir, 'summary.md'); withFileLock(`${summary}.lock`, () => { const old = fs.existsSync(summary) ? fs.readFileSync(summary, 'utf8') : '', summaryRows = new Map(); for (const line of old.split(/\r?\n/)) { const match = line.match(/^\|\s*([a-z][\w-]*)\s*\|/); if (match && match[1] !== 'job') summaryRows.set(match[1], line); } summaryRows.set('inbound-router', `| inbound-router | ${short} | ${status} | ${pending.length} | ${name} |`); const next = `# gb-reports summary  PC=${pc}  updated ${full} JST\n(要判断>0 の行だけ latest-<job>.md の「🚩要判断」を読めばよい)\n\n| job | last | status | 要判断 | file |\n|---|---|---|---|---|\n${[...summaryRows].sort(([a],[b]) => a.localeCompare(b)).map(([,line]) => line).join('\n')}\n`; const tmp = `${summary}.${process.pid}.tmp`; fs.writeFileSync(tmp, next); fs.renameSync(tmp, summary); }); pending.forEach(x => { x.reportedAt = now; }); state.digests[slot] = now; return file;
 }
 
@@ -162,7 +254,12 @@ export async function run(options = {}, injected = {}) {
   const state = readJson(stateFile, initialState()); state.__file = stateFile; const save = () => { const clean = { ...state }; delete clean.__file; writeJson(stateFile, clean); }; const deadline = started + 13 * 60_000; const stop = () => { if (Date.now() > deadline) throw Object.assign(new Error('budget'), { code: 'budget' }); };
   const plans = [];
   try {
-    const since = now - (options.sinceMinutes || 60) * 60_000; const collected = await collectNew({ state, config, since, until: now, deps, checkpoint: options.dryRun ? () => {} : save, stop });
+    const since = now - (options.sinceMinutes || 60) * 60_000;
+
+    // Clean up old state entries
+    cleanupState(state, now);
+
+    const collected = await collectNew({ state, config, since, until: now, deps, checkpoint: options.dryRun ? () => {} : save, stop });
     if (collected.items.length === 0 && !state.dispatches.some(d => !['done', 'abandoned'].includes(d.status))) {
       let digestFile = null; if (!options.dryRun) digestFile = writeDigest({ state, now, reportDir: options.reportDir || path.join(home, 'gb-reports'), force: options.digestNow });
       const report = { status: collected.failures.length ? 'partial' : 'ok', new: collected.counts, routed: {}, dispatches: 0, unknown: 0, failures: collected.failures, digestFile: digestFile ? path.basename(digestFile) : null, durationMs: Date.now() - started, plans };
@@ -181,7 +278,8 @@ export async function run(options = {}, injected = {}) {
     }
     await retryDispatches(state, { now, deps, config, dryRun: options.dryRun, plans });
     let digestFile = null; if (!options.dryRun) digestFile = writeDigest({ state, now, reportDir: options.reportDir || path.join(home, 'gb-reports'), force: options.digestNow });
-    const report = { status: collected.failures.length ? 'partial' : 'ok', new: collected.counts, routed: Object.fromEntries(Object.entries(routed.groups).map(([k,v]) => [k,v.length])), dispatches: plans.length, unknown: routed.unknown.length, failures: collected.failures, digestFile: digestFile ? path.basename(digestFile) : null, durationMs: Date.now() - started, plans };
+    const preview = options.dryRun ? collected.items.map(item => ({ route: routed.routesByItem.get(item), title: item.title.slice(0, 30), sender: item.sender.slice(0, 20) })) : undefined;
+    const report = { status: collected.failures.length ? 'partial' : 'ok', new: collected.counts, routed: Object.fromEntries(Object.entries(routed.groups).map(([k,v]) => [k,v.length])), dispatches: plans.length, unknown: routed.unknown.length, failures: collected.failures, digestFile: digestFile ? path.basename(digestFile) : null, durationMs: Date.now() - started, plans, ...(preview ? { preview } : {}) };
     if (!options.dryRun) { save(); fs.mkdirSync(path.dirname(logFile), { recursive: true }); if (!options.runnerLog) fs.appendFileSync(logFile, `${JSON.stringify(report)}\n`); }
     return report;
   } catch (e) {

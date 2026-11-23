@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * seisaku-team@ mail via GitHub Actions (Node standard library + gh only).
- * draft|send --to addr --subject text --body-file path [--cc a,b]
+ * draft|send --to addr --subject text --body-file path [--cc a,b] [--booth]
  *   [--reply-to-thread-of addr] [--attach-drive id1,id2] [--yes] [--wait 600] [--json]
  * search --query 'gmail query' [--max 10] [--user seisaku-team@orgiast.jp]
  * thread|message|delete-draft --id ID / drafts (also accept --wait and --json).
@@ -15,6 +15,9 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { acquireSendDedupe, duplicateMessage, normalizeRecipients, SendDedupeError } from './lib/send-dedupe.mjs';
+import { applyBoothCc } from './lib/booth-sales-cc.mjs';
+
+const BOOTH_CC = 'satou@orgiast.jp';
 
 const REPO = 'kimkon1011/aujust-sales-automation';
 const WRITE_WORKFLOW = 'seisaku-mail.yml';
@@ -26,12 +29,12 @@ function parse(argv) {
   const [action, ...rest] = argv;
   if (!['draft', 'send', ...READ_ACTIONS].includes(action)) throw new UsageError('Expected draft, send, search, thread, message, drafts or delete-draft');
   const write = ['draft', 'send'].includes(action);
-  const allowed = new Set(['wait', 'json', ...(write ? ['to', 'subject', 'body-file', 'cc', 'reply-to-thread-of', 'attach-drive', 'yes', 'allow-repeat'] : ['query', 'max', 'user', 'id'])]);
+  const allowed = new Set(['wait', 'json', ...(write ? ['to', 'subject', 'body-file', 'cc', 'reply-to-thread-of', 'attach-drive', 'yes', 'allow-repeat', 'booth'] : ['query', 'max', 'user', 'id'])]);
   const opts = {};
   for (let i = 0; i < rest.length; i++) {
     const key = rest[i].startsWith('--') ? rest[i].slice(2) : '';
     if (!allowed.has(key) || Object.hasOwn(opts, key)) throw new UsageError(`Invalid or duplicate option: ${rest[i]}`);
-    if (['yes', 'json'].includes(key)) opts[key] = true;
+    if (['yes', 'json', 'booth'].includes(key)) opts[key] = true;
     else {
       if (!rest[i + 1] || rest[i + 1].startsWith('--')) throw new UsageError(`Missing value: --${key}`);
       opts[key] = rest[++i];
@@ -69,6 +72,9 @@ export function createCli({ spawnSync = nativeSpawnSync, env = process.env, home
       if (write) {
         try { body = readFileSync(opts['body-file'], 'utf8'); }
         catch { throw new UsageError('Cannot read --body-file as UTF-8'); }
+        const boothCc = applyBoothCc({ to: opts.to, cc: opts.cc, subject: opts.subject, body, booth: opts.booth });
+        opts.cc = boothCc.cc.join(',');
+        opts.boothCcAdded = boothCc.added;
       }
       if (action === 'send' && !opts.yes) {
         output({ ok: false, error: 'send requires --yes', to: opts.to, cc: opts.cc || '', subject: opts.subject, preview: body.split(/\r?\n/).slice(0, 3).join('\n'), attachmentDriveIds: opts['attach-drive'] || '' });
@@ -150,7 +156,7 @@ export function createCli({ spawnSync = nativeSpawnSync, env = process.env, home
         dedupeGuard.recordSuccess({ channel: 'gmail', transport: 'seisaku-mail', messageId: result.messageId, threadId: result.threadId });
         dedupeGuard = undefined;
       }
-      output(result);
+      output({ ...result, ...(opts.boothCcAdded ? { boothCcAdded: BOOTH_CC } : {}) });
       return result.ok === true ? 0 : 1;
     } catch (error) {
       dedupeGuard?.release();

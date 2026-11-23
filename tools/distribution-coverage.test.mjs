@@ -104,6 +104,14 @@ test('(a) manifest は JSON として読め dirs/files/notDistributed を持つ'
   }
 });
 
+test('(a2) PR 説明文の作業ファイルは名前ごとの追記なしで配布対象外に分類される', () => {
+  const manifest = readManifest();
+  assert.ok(matchesNotDistributed(manifest, '.pr-body-x0074.md'));
+  assert.ok(matchesNotDistributed(manifest, '.pr-body-x0052-llmo-multi-platform-ranking.md'));
+  assert.ok(matchesNotDistributed(manifest, 'pr-body-x0019.md'));
+  assert.ok(!matchesNotDistributed(manifest, '.pr-body-x0074.txt'));
+});
+
 test('(b) リポジトリ直下の全項目が dirs/files/notDistributed のどれかに分類されている', () => {
   const manifest = readManifest();
   const dirs = new Set(manifest.dirs);

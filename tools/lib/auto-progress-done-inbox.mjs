@@ -26,7 +26,7 @@ export async function deliverDoneInbox(home, rows, text, { now = Date.now(), io 
     const actionText = details.map(detail => detail.text).join('\n');
     text = text.replace(/kim がすること: なし[^\n]*/g, '').trim();
     if (!text.includes(actionText)) text = text.slice(0, Math.max(0, 3999 - actionText.length)) + '\n' + actionText;
-    const item = await (io.addKimInboxItem ?? addItem)(home, { kind, refresh: true, priority: 'high', source: 'auto-progress-done', text, dedupeKey });
+    const item = await (io.addKimInboxItem ?? addItem)(home, { kind, forceKind: true, refresh: true, priority: 'high', source: 'auto-progress-done', text, dedupeKey });
     const stored = io.listKimInboxItems ? io.listKimInboxItems(home).find(saved => saved.id === item?.id) : readInboxItem(home, item?.id);
     if (!stored || stored.kind !== kind || stored.dedupeKey !== dedupeKey || !stored.text || stored.text !== item.text || stored.forwardError) {
       throw new Error('kim-inbox delivery read-back failed');

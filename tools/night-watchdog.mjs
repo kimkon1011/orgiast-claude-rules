@@ -10,9 +10,7 @@
 // あちらは「ログの鮮度」と「既存プレイブック」を見るのに対し、`state === 'Disabled'`
 // （誰かがタスクを無効化した＝起動要求すら発生しない状態）は repo 全体でどこも扱っていない。
 // ここはその空白だけを埋める。既存2ファイルには手を入れない。
-import fs from 'node:fs';
 import os from 'node:os';
-import path from 'node:path';
 import { getScheduledTaskInfo, enableScheduledTask } from './lib/scheduled-task.mjs';
 import { findWebhook, notify } from './auto-session.mjs';
 import { isEntry } from './is-entry.mjs';

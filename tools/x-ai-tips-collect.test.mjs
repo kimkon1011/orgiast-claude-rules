@@ -93,7 +93,7 @@ test('x.ai 403 は OpenRouter grok へフォールバックして成功する', 
   } });
   const result = await runCollect(ctx.options);
   assert.match(result.status, /^ok:/); assert.equal(result.added, 1);
-  assert.equal(calls[1].body.model, 'x-ai/grok-3');
+  assert.equal(calls[1].body.model, 'x-ai/grok-4.6');
   assert.equal(calls[1].body.messages[0].content, calls[0].body.input[0].content);
   assert.deepEqual(errors, ['[LANE-FALLBACK] x.ai -> openrouter grok (reason: HTTP 403 credit/quota response)']);
 });

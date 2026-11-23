@@ -277,7 +277,8 @@
     "external-channel-unmonitored-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-18T00:00:00Z", "denyAfter": "2026-11-25T00:00:00Z" },
     "silent-check-failure-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-18T00:00:00Z", "denyAfter": "2026-11-25T00:00:00Z" },
     "stale-worktree-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-18T00:00:00Z", "denyAfter": "2026-11-25T00:00:00Z" },
-    "no-response-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-19T00:00:00Z", "denyAfter": "2026-11-26T00:00:00Z" }
+    "no-response-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-19T00:00:00Z", "denyAfter": "2026-11-26T00:00:00Z" },
+    "delegation-readback-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-23T00:00:00Z", "denyAfter": "2026-11-30T00:00:00Z" }
   },
   "pilotHostsEvidence": "fleet-pc-map.json: kim-PC.hostname (2026-08-27 recorded observation)"
 }

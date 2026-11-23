@@ -59,6 +59,7 @@ import { appendStopLedger, registerStopViolation, CAP_CONTEXT, splitRepeatedGate
 import { stripInboxSection } from './lib/inbox-section-filter.mjs';
 import { STOP_RETRY_INSTRUCTION, withStopRetryInstruction } from './lib/stop-retry-message.mjs';
 import { evaluateClaudeFallbackReport } from './claude-fallback-report-gate.mjs';
+import { evaluateDelegationReadback } from './delegation-readback-gate.mjs';
 import { evaluatePendingDecision } from './pending-decision-ask-gate.mjs';
 import { evaluateSilentCheckFailure } from './silent-check-failure-gate.mjs';
 import { evaluateExternalChannelPromise } from './external-channel-unmonitored-gate.mjs';
@@ -120,6 +121,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['external-state-claim-gate', () => { const result = evaluateExternalStateClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && externalStateMode() !== 'block' ? { ...result, decision: 'warn' } : result; }],
     ['silent-check-failure-gate', () => evaluateSilentCheckFailure(ctx.assistantText)],
     ['claude-fallback-report-gate', () => evaluateClaudeFallbackReport(ctx.assistantText)],
+    ['delegation-readback-gate', () => evaluateDelegationReadback(ctx.assistantText)],
     ['control-group-gate', () => runControlGroup({ cwd: ctx.input?.cwd })],
     ['pr-handoff-gate', () => evaluatePrHandoff(ctx.assistantText)],
     ['merge-handoff-gate', () => evaluateMergeHandoff(ctx.assistantText, blocks(currentTurnEntries(ctx.transcriptRaw), 'tool_use'))],

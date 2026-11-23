@@ -48,13 +48,13 @@ test('default execution plan retains repository, keys, and rules sync', () => {
 });
 
 test('repository guard runs once per local calendar day despite less than 24 hours elapsed', () => {
-  const previous = { last: '2026-11-23T03:29:00+09:00' };
-  assert.equal(shouldRunRepositorySync(previous, new Date('2026-11-23T23:59:00+09:00')), false);
-  assert.equal(shouldRunRepositorySync(previous, new Date('2026-11-24T03:04:00+09:00')), true);
+  const previous = { last: new Date(2026, 10, 23, 3, 29).toISOString() };
+  assert.equal(shouldRunRepositorySync(previous, new Date(2026, 10, 23, 23, 59)), false);
+  assert.equal(shouldRunRepositorySync(previous, new Date(2026, 10, 24, 3, 4)), true);
 });
 
 test('repository guard runs when state is missing or invalid', () => {
-  const now = new Date('2026-11-24T03:04:00+09:00');
+  const now = new Date(2026, 10, 24, 3, 4);
   assert.equal(shouldRunRepositorySync(null, now), true);
   assert.equal(shouldRunRepositorySync({ last: 'invalid' }, now), true);
 });

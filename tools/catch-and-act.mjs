@@ -153,6 +153,9 @@ export async function collect({ state, checkpoint, until, since, stop = () => {}
     counts.line = 0;
     for (const chat of allChats.values()) {
       const channel = `line:${chat.id}`, from = state.sources[channel] ?? since;
+      // Beeper also lists address-book-only chats (no timeline / no activity / zero unread).
+      // Keep listing them every run; once a message arrives lastActivity/unread makes them eligible.
+      if (!chat.lastActivity && chat.unreadCount === 0 && !chat.isMarkedUnread) continue;
       if (Date.parse(chat.lastActivity) < from - 60000) continue;
       try {
         let msgCursor; const pages = new Set();

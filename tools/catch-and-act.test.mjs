@@ -102,6 +102,16 @@ test('repeated pagination cursor is an error rather than silently skipping messa
   assert.equal(result.failures.length, 1); assert.equal(result.failures[0].source, 'line');
 });
 
+test('empty address-book chat is listed every run and becomes eligible as soon as it has activity', async () => {
+  const state = { sources: {}, items: {} }; let active = false, reads = 0, lists = 0;
+  const deps = { state, checkpoint: () => {}, until: now, since: now - 3600000, gmail: async () => ({ messages: [] }),
+    accounts: async () => [{ accountID: 'a', network: 'LINE' }],
+    chats: async () => { lists++; return { items: [{ id: 'c', accountID: 'a', unreadCount: 0, ...(active ? { lastActivity: new Date(now).toISOString() } : {}) }] }; },
+    messages: async () => { reads++; return { items: [{ id: 'new', timestamp: new Date(now).toISOString() }] }; } };
+  await collect(deps); assert.equal(reads, 0);
+  active = true; await collect(deps); assert.equal(reads, 1); assert.equal(lists, 2); assert.ok(state.items['line:c:new']);
+});
+
 test('watch matches time-only KAZUAKII reply, rejects expired/wrong-sender/unsubstantiated dates', () => {
   const m = msg({ sender: 'KAZUAKII', text: '午後3時でお願いします' });
   const plan = schedulePlan(m, classification({ date: null, title: '' }), DEFAULT_WATCH, now);

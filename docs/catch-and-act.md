@@ -10,7 +10,7 @@ LINE・メールは、言われる前にキャッチして、日程更新・提�
 
 - `node tools/catch-and-act.mjs [--classifier llm-ask|cursor]`。GLM → DeepSeek → Groq を各18秒（子プロセス22秒）で試し、失敗したプロバイダはその実行中休止する。全失敗時はキーワード判定。内部の自動フォールバックは無効で、Claude API/モデルには回さない。Cursor は ask モード・GPT-5 を明示する。
 - `powershell -NoProfile -File tools/register-catch-and-act.ps1` で OrgiastCatchAndAct を15分おきに登録する。既定は同期済み nightly-repo。検証用だけ `-RepoRoot <専用worktree>` が使える。非表示実行、重複起動禁止、14分上限。
-- Gmail は kim@ / seisaku-team@、LINE は既読・ミュート・アーカイブにかかわらず全チャットをページ送りで確認する。送信済みメール・本人のLINE送信は対象外。初回は24時間前から。以後は各箱・チャットの読取位置に60秒重ね、チャネル＋メッセージIDで重複排除する。
+- Gmail は kim@ / seisaku-team@、LINE は既読・ミュート・アーカイブにかかわらず全チャットをページ送りで確認する。Beeper がアドレス帳から作る履歴なしのチャット（lastActivityなし・未読0）は本文取得せず、新着で活動日時または未読が付けば取得する。送信済みメール・本人のLINE送信は対象外。初回は24時間前から。以後は各箱・チャットの読取位置に60秒重ね、チャネル＋メッセージIDで重複排除する。
 - `~/.claude/catch-and-act/state.json` に受信内容・分類・処理結果・通知履歴を保存。取得ページごとに保存し、取得に失敗したソースの位置を進めない。処理失敗は次回再試行。1回40件・10分を目安とし、残件数はログに記録する。既存の comms-hub（保管）と deadline-watch/detect（期限台帳）は継続する。
 - `watch.json` の events に送信者・イベントID・対象日・有効期限を設定する。初期値は KAZUAKII / 2026-11-25 / `o1kpj57ak6e1s845184ci4q0kk`。時刻だけの返信にも対応。用途が変わったら設定を見直す。
 - 「株式会社ラハイナ」の写真は受信日のお題に結び付け、`insta-queue/*.json` と隣の画像ファイルへ保存。期限は受信日20:00 JST。本文は写真を見ていない下書きとして金さんが確認する。画像加工や投稿は実行しない。お題送信用 standing-approval.json は投稿許可として扱わない。

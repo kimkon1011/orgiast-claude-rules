@@ -779,7 +779,7 @@ try {
                 $xTipsResult = 'error:終了コード' + $xTipsExitCode + ': ' + (Format-NightlyDetail $xTipsOutput)
             } else {
                 $xTipsResult = @($xTipsOutput | Where-Object { $_ -match '^(ok:取得\d+件 追加\d+件 重複\d+件 費用\$[0-9.]+|skip:.+|error:.+)$' } | Select-Object -Last 1)
-                if ($xTipsResult.Count -eq 0) { $xTipsResult = 'error:状態不明' } else { $xTipsResult = [string]$xTipsResult[0] }
+                if ($xTipsResult.Count -eq 0) { $xTipsResult = 'error:状態不明: ' + (Format-NightlyDetail $xTipsOutput) } else { $xTipsResult = [string]$xTipsResult[0] }
             }
             $summary['x-ai-tips-collect'] = $xTipsResult
             Write-NightlyLog 'x-ai-tips-collect' $xTipsResult

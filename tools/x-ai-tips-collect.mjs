@@ -16,7 +16,6 @@ const VERIFY_TIMEOUT = 8000;
 const MAX_VERIFY = 10;
 
 const CREDIT_BLOCKED_STATUS = 'skip:支払い待ち';
-const CREDIT_BLOCKED_FALLBACK_STATUS = 'skip:支払い待ち(fallback)';
 const CREDIT_BLOCKED_MESSAGE = 'x.ai チームの残高切れ・月次上限のためスキップしました（支払いの承認待ち）。鍵は正常です。';
 
 const read = (file, fallback) => { try { return fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
@@ -24,6 +23,11 @@ const lines = text => text.split(/\r?\n/).filter(x => x.trim()).map(JSON.parse);
 const normalized = text => String(text).normalize('NFKC').toLowerCase().replace(/\s+/gu, '');
 export const contentHash = item => createHash('sha256').update(normalized(`${item.summary}\n${item.steps}`)).digest('hex');
 export const japanDate = now => new Date(+now + 9 * 3600000).toISOString().slice(0, 10);
+export const creditBlockedStatusWithDate = (blockedAt, hasFallback = false) => {
+  const datePart = blockedAt ? `（x.ai 残高切れ・${japanDate(new Date(blockedAt))}から）` : '';
+  const fallbackPart = hasFallback ? '(fallback)' : '';
+  return `skip:支払い待ち${datePart}${fallbackPart}`;
+};
 export function parseArgs(args) {
   const result = { dryRun: false };
   for (let i = 0; i < args.length; i++) {
@@ -208,14 +212,15 @@ export async function runCollect(options = {}) {
   const lock = path.join(dir, 'collect.lock');
   let locked = false;
   const save = state => { if (!dryRun) { const tmp = `${stateFile}.tmp`; fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n'); fs.renameSync(tmp, stateFile); } };
-  let acquired = 0, added = 0, duplicates = 0, calls = 0, cost = 0;
+  let acquired = 0, added = 0, duplicates = 0, calls = 0, cost = 0, state;
   const skipCreditBlocked = (fallbackAdded = 0) => {
     log(CREDIT_BLOCKED_MESSAGE);
-    return { status: fallbackAdded > 0 ? CREDIT_BLOCKED_FALLBACK_STATUS : CREDIT_BLOCKED_STATUS, calls, cost, added, duplicates };
+    const status = creditBlockedStatusWithDate(state?.creditBlockedAt, fallbackAdded > 0);
+    return { status, calls, cost, added, duplicates };
   };
   try {
     if (!dryRun) { fs.mkdirSync(dir, { recursive: true }); const fd = fs.openSync(lock, 'wx'); fs.closeSync(fd); locked = true; }
-    const state = validateState(JSON.parse(read(stateFile, '{}')));
+    state = validateState(JSON.parse(read(stateFile, '{}')));
     const topicCount = config.topics.length;
     if (!Number.isSafeInteger(state.nextTopicIndex) || state.nextTopicIndex < 0 || state.nextTopicIndex >= topicCount) state.nextTopicIndex = 0;
     const startTopicIndex = state.nextTopicIndex;

@@ -95,8 +95,8 @@ test('HTTP 403 の残高切れは残トピックを止め、予約を維持し�
   ctx.options.config.topics = defaults.topics;
   assert.equal(await runCli([], ctx.options), 0);
   assert.equal(calls, 1);
-  assert.deepEqual(logs, ['x-ai-tips-collect: fallback → web-search grounding', 'x-ai-tips-collect: fallback も失敗', creditBlockedMessage, 'skip:支払い待ち']);
-  assert.equal(logs.at(-1), 'skip:支払い待ち');
+  assert.deepEqual(logs.slice(0, 3), ['x-ai-tips-collect: fallback → web-search grounding', 'x-ai-tips-collect: fallback も失敗', creditBlockedMessage]);
+  assert.equal(logs[3], 'skip:支払い待ち（x.ai 残高切れ・2026-11-03から）');
   assert.equal(readState(ctx).creditBlockedAt, now.toISOString());
   assert.equal(readState(ctx).night.calls, 1);
   assert.equal(readState(ctx).night.costUsd, defaults.reservePerCallUsd);
@@ -137,7 +137,8 @@ test('同日JSTの再実行はfallback失敗を捕捉し予算・通知・実行
   const saved = JSON.stringify({ creditBlockedAt: '2026-11-01T15:00:00Z', night: { date: '2026-11-02', calls: defaults.maxCalls, costUsd: defaults.maxCostUsd } });
   fs.writeFileSync(ctx.file('x-ai-tips/state.json'), saved);
   assert.equal(await runCli([], ctx.options), 0);
-  assert.deepEqual(logs, ['x-ai-tips-collect: fallback → web-search grounding', 'x-ai-tips-collect: fallback も失敗', creditBlockedMessage, 'skip:支払い待ち']);
+  assert.deepEqual(logs.slice(0, 3), ['x-ai-tips-collect: fallback → web-search grounding', 'x-ai-tips-collect: fallback も失敗', creditBlockedMessage]);
+  assert.equal(logs[3], 'skip:支払い待ち（x.ai 残高切れ・2026-11-02から）');
   const state = readState(ctx);
   assert.equal(state.night.calls, defaults.maxCalls);
   assert.equal(state.night.costUsd, defaults.maxCostUsd);
@@ -178,13 +179,15 @@ test('残高切れの長い本文も分類し本文・認証情報をログへ�
     text: async () => JSON.stringify({ private: 'x'.repeat(2100), code: 'permission-denied', error: 'fake-key', Authorization: 'Bearer fake-key' }),
   }) });
   assert.equal(await runCli([], ctx.options), 0);
-  assert.deepEqual(logs, ['x-ai-tips-collect: fallback → web-search grounding', 'x-ai-tips-collect: fallback も失敗', creditBlockedMessage, 'skip:支払い待ち']);
+  assert.deepEqual(logs.slice(0, 3), ['x-ai-tips-collect: fallback → web-search grounding', 'x-ai-tips-collect: fallback も失敗', creditBlockedMessage]);
+  assert.equal(logs[3], 'skip:支払い待ち（x.ai 残高切れ・2026-11-03から）');
   assert.doesNotMatch(JSON.stringify(readRuns(ctx)), /fake-key|Authorization|xxx/);
 });
 
 test('残高切れのdry-runはstateも実行記録も書かない', async t => {
   const ctx = setup(t, { dryRun: true, fetchFn: async () => ({ ok: false, status: 403, text: async () => 'credits exhausted' }) });
-  assert.equal((await runCollect(ctx.options)).status, 'skip:支払い待ち');
+  const result = await runCollect(ctx.options);
+  assert.equal(result.status, 'skip:支払い待ち（x.ai 残高切れ・2026-11-03から）');
   assert.equal(fs.existsSync(ctx.base), false);
 });
 
@@ -193,7 +196,7 @@ test('先行トピックの成果と費用は後続の残高切れでも保持�
   const ctx = setup(t, { fetchFn: async url => !url.includes('x.ai') ? { ok: false, status: 404 } : ++calls === 1 ? response() : { ok: false, status: 403, text: async () => 'spending limit' } });
   ctx.options.config.topics = defaults.topics;
   const result = await runCollect(ctx.options);
-  assert.equal(result.status, 'skip:支払い待ち');
+  assert.equal(result.status, 'skip:支払い待ち（x.ai 残高切れ・2026-11-03から）');
   assert.equal(result.added, 1);
   assert.equal(calls, 2);
   assert.equal(ctx.records().length, 1);
@@ -369,7 +372,7 @@ test('当日credit-blocked済みなら現在トピック1件をfallback収集し
   };
   const result = await runCollect(ctx.options);
   assert.equal(searchCalled, 1);
-  assert.equal(result.status, 'skip:支払い待ち(fallback)');
+  assert.equal(result.status, 'skip:支払い待ち（x.ai 残高切れ・2026-11-03から）(fallback)');
   assert.ok(ctx.records().length >= 1);
   assert.equal(ctx.records()[0].source, 'fallback:gemini');
   assert.equal(readState(ctx).nextTopicIndex, 0);
@@ -387,7 +390,7 @@ test('当日credit-blocked済みのfallbackではx.ai fetchを一度も呼ばな
   ctx.options.searchImpl = async () => ({ answer: 'URLなし', urls: [], provider: 'gemini' });
   const result = await runCollect(ctx.options);
   assert.equal(fetchCalls, 0);
-  assert.equal(result.status, 'skip:支払い待ち');
+  assert.equal(result.status, 'skip:支払い待ち（x.ai 残高切れ・2026-11-03から）');
 });
 
 test('当日credit-blocked済みでもfallback nullなら検索せず従来status', async t => {
@@ -397,7 +400,7 @@ test('当日credit-blocked済みでもfallback nullなら検索せず従来statu
   fs.writeFileSync(ctx.file('x-ai-tips/state.json'), JSON.stringify({ creditBlockedAt: now.toISOString() }));
   ctx.options.fetchFn = () => assert.fail('x.ai API禁止');
   ctx.options.searchImpl = () => assert.fail('検索禁止');
-  assert.equal((await runCollect(ctx.options)).status, 'skip:支払い待ち');
+  assert.equal((await runCollect(ctx.options)).status, 'skip:支払い待ち（x.ai 残高切れ・2026-11-03から）');
 });
 
 test('verifyUrls: HEAD 2xx/3xx を通し、404 を除外、403 は GET 再確認', async t => {

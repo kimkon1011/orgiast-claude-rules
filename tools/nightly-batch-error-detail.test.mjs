@@ -33,3 +33,9 @@ test('captured nightly node steps save LASTEXITCODE on the following line', () =
     assert.match(lines[index + 1] ?? '', /=\s*\$LASTEXITCODE\b/, line.trim());
   }
 });
+
+test('x-ai-tips unknown status includes captured output detail', () => {
+  const block = source.match(/if \(\$xTips\)[\s\S]*?Write-NightlyLog 'x-ai-tips-collect' 'skip:ファイルなし'/)?.[0];
+  assert.ok(block, 'x-ai-tips nightly block');
+  assert.match(block, /error:状態不明: ' \+ \(Format-NightlyDetail \$xTipsOutput\)/);
+});

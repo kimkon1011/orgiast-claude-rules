@@ -61,15 +61,30 @@ test('--add info で承認要求の本文 → kind が ask に昇格し kindProm
   const home = seat(t);
   const bodyFile = path.join(home, 'body.txt');
   fs.writeFileSync(bodyFile, 'この案件の承認をお願いします');
+  const errors = [];
   await main(['--add', 'info', '--body-file', bodyFile], {
     home,
     stdout: () => {},
-    stderr: () => {},
+    stderr: message => errors.push(message),
   });
   const items = listItems(home, { status: 'open' });
   assert.equal(items.length, 1);
   assert.equal(items[0].kind, 'ask', 'kind が ask に昇格している');
   assert.equal(items[0].kindPromotedFrom, 'info', 'kindPromotedFrom が info に設定されている');
+  assert.deepEqual(errors, ['[kim-inbox] kind=info で登録されましたが本文が承認を求めているため ask に昇格しました']);
+});
+
+test('addItem 直接呼び出しでも承認要求の info を ask に昇格する', async t => {
+  const home = seat(t);
+  const errors = [];
+  const item = await addItem(home, {
+    kind: 'info',
+    text: 'この案件の判断をお願いします',
+    stderr: message => errors.push(message),
+  });
+  assert.equal(item.kind, 'ask');
+  assert.equal(item.kindPromotedFrom, 'info');
+  assert.equal(errors.length, 1);
 });
 
 test('--add info + --force-kind で承認要求の本文 → kind は info のまま', async t => {

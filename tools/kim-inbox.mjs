@@ -369,15 +369,20 @@ export async function drainSpool(home, { stderr = console.error, execImpl, signa
   return imported;
 }
 export async function addItem(home, options, { drain = true, localOnly = false, lockWaitMs } = {}) {
-  if (drain) await drainSpool(home, { execImpl: options.execImpl, signal: options.signal, lockWaitMs });
-  if (isInboxNoise(options)) return { id: null, status: 'suppressed', kind: options.kind || 'info' };
-  const item = create(home, options, lockWaitMs);
+  let normalizedOptions = options;
+  if ((options.kind || 'info') === 'info' && !options.forceKind && looksLikeApprovalRequest(options.text)) {
+    normalizedOptions = { ...options, kind: 'ask', kindPromotedFrom: 'info' };
+    (options.stderr || console.error)('[kim-inbox] kind=info で登録されましたが本文が承認を求めているため ask に昇格しました');
+  }
+  if (drain) await drainSpool(home, { execImpl: normalizedOptions.execImpl, signal: normalizedOptions.signal, lockWaitMs });
+  if (isInboxNoise(normalizedOptions)) return { id: null, status: 'suppressed', kind: normalizedOptions.kind || 'info' };
+  const item = create(home, normalizedOptions, lockWaitMs);
   if (localOnly || item.kind === 'deadline' || isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-inbox-'));
   try {
     const file = path.join(temp, 'body.txt');
     fs.writeFileSync(file, item.text, { mode: 0o600 });
-    const { stdout } = await (options.execImpl ?? exec)(process.execPath, [fileURLToPath(new URL('./fleet-mail.mjs', import.meta.url)), '--send', '--to', 'kim-PC', '--kind', 'note', '--why', `[kim-inbox:${item.kind}] ${/^(?:auto-progress-(?:done|heartbeat)|morning-session-sweep)$/.test(item.source) ? `[source:${item.source}] ${item.dedupeKey ? `[key:${item.dedupeKey}] ` : ''}` : ''}${item.source === 'morning-session-sweep' ? '[報告・返信不要] ' : ''}${item.text.split(/\r?\n/)[0].slice(0, 60)}`, '--body-file', file], { encoding: 'utf8', windowsHide: true, timeout: 60000, signal: options.signal, env: { ...process.env, ORGIAST_HOME: home } });
+    const { stdout } = await (normalizedOptions.execImpl ?? exec)(process.execPath, [fileURLToPath(new URL('./fleet-mail.mjs', import.meta.url)), '--send', '--to', 'kim-PC', '--kind', 'note', '--why', `[kim-inbox:${item.kind}] ${/^(?:auto-progress-(?:done|heartbeat)|morning-session-sweep)$/.test(item.source) ? `[source:${item.source}] ${item.dedupeKey ? `[key:${item.dedupeKey}] ` : ''}` : ''}${item.source === 'morning-session-sweep' ? '[報告・返信不要] ' : ''}${item.text.split(/\r?\n/)[0].slice(0, 60)}`, '--body-file', file], { encoding: 'utf8', windowsHide: true, timeout: 60000, signal: normalizedOptions.signal, env: { ...process.env, ORGIAST_HOME: home } });
     const id = stdout.trim().match(/^(?:送信済み: )?(mail-[A-Za-z0-9-]+)$/m)?.[1];
     if (!id) throw new Error('転送先のメールIDを取得できません');
     return update(home, item.id, current => { current.status = 'forwarded'; current.forwardMailId = id; current.forwardError = null; });
@@ -971,19 +976,9 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       stdout(args.includes('--json') ? JSON.stringify(item) : redactSecrets(item.text));
     } else if (args.includes('--add')) {
       const positionalKind = args[args.indexOf('--add') + 1];
-      let kind = args.includes('--kind') ? value('--kind')
+      const kind = args.includes('--kind') ? value('--kind')
         : ['ask', 'info', 'deadline'].includes(positionalKind) ? positionalKind : 'info';
-      let kindPromotedFrom;
-      let body;
-      if (!args.includes('--force-kind')) {
-        body = fs.readFileSync(value('--body-file'), 'utf8');
-        if (kind === 'info' && looksLikeApprovalRequest(body)) {
-          kindPromotedFrom = 'info';
-          kind = 'ask';
-          process.stderr.write('[kim-inbox] kind=info で登録されましたが本文が承認を求めているため ask に昇格しました\n');
-        }
-      }
-      if (body === undefined) body = fs.readFileSync(value('--body-file'), 'utf8');
+      const body = fs.readFileSync(value('--body-file'), 'utf8');
       let doneWhen;
       if (args.includes('--done-when-gmail')) {
         const raw = value('--done-when-gmail');
@@ -991,7 +986,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
         if (pipe === -1) throw new Error('--done-when-gmail は "user|query" 形式で指定してください');
         doneWhen = { gmail: { user: raw.slice(0, pipe).trim(), query: raw.slice(pipe + 1).trim() } };
       }
-      const item = await addItem(home, { urgent: args.includes('--urgent'), text: body, kind, key: args.includes('--key') ? value('--key') : undefined, dedupeKey: args.includes('--dedupe-key') ? value('--dedupe-key') : undefined, replaceExisting: args.includes('--replace-existing'), due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '', kindPromotedFrom, ...(doneWhen ? { doneWhen } : {}) });
+      const item = await addItem(home, { urgent: args.includes('--urgent'), text: body, kind, forceKind: args.includes('--force-kind'), stderr, key: args.includes('--key') ? value('--key') : undefined, dedupeKey: args.includes('--dedupe-key') ? value('--dedupe-key') : undefined, replaceExisting: args.includes('--replace-existing'), due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '', ...(doneWhen ? { doneWhen } : {}) });
       stdout(JSON.stringify({ id: item.id, status: item.status, forwarded: item.status === 'forwarded' }));
     } else if (args.includes('--answer')) stdout(JSON.stringify(answerItem(home, value('--answer'), fs.readFileSync(value('--body-file'), 'utf8'), process.env.CLAUDE_SESSION_ID || '')));
     else if (args.includes('--lookup')) stdout(JSON.stringify(lookupAnswers(home, value('--lookup')), null, 2));

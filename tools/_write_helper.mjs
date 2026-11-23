@@ -1,0 +1,1 @@
+import fs from 'fs';import process from 'process';fs.writeFileSync(process.argv[1],fs.readFileSync(process.stdin.fd,'utf-8'),'utf-8');

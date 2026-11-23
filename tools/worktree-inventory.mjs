@@ -55,6 +55,15 @@ function git(repo, ...args) {
   return run('git', ['--no-optional-locks', '-C', repo, ...args]);
 }
 
+function isGitRepository(repo) {
+  try {
+    git(repo, 'rev-parse', '--git-dir');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function parseWorktrees(output) {
   return output.split('\0\0').filter(Boolean).map((record, index) => {
     const fields = new Map(record.split('\0').map((field) => {
@@ -217,28 +226,42 @@ function markdown(groups) {
 
 function main() {
   const { values } = parseArgs({ options: {
-    repo: { type: 'string', default: path.join(homedir(), 'orgiast-claude-rules') },
+    repo: { type: 'string', multiple: true, default: [
+      path.join(homedir(), 'orgiast-claude-rules'),
+      path.join(homedir(), '.claude', 'nightly-repo'),
+    ] },
     json: { type: 'string' },
     md: { type: 'string' },
     gh: { type: 'boolean' },
   } });
-  const repo = path.resolve(values.repo);
-  const worktrees = parseWorktrees(git(repo, 'worktree', 'list', '--porcelain', '-z'));
   const now = Date.now();
-  const ancestors = new Map();
-  const checkAncestor = (head) => {
-    if (!head) throw new Error('HEAD を取得できません');
-    if (!ancestors.has(head)) ancestors.set(head, isAncestor(repo, head));
-    return ancestors.get(head);
-  };
-  let slug;
-  const checkPr = values.gh ? (branch) => hasMergedPr(slug ??= originSlug(repo), branch) : null;
-  const commonDir = git(repo, 'rev-parse', '--path-format=absolute', '--git-common-dir').trimEnd();
-  const rows = resolveWorktreePaths(repo, commonDir, worktrees)
-    .map((worktree) => inspectWorktree(worktree, now, checkAncestor, checkPr));
+  const rows = [];
+  let scanned = 0;
+  for (const value of values.repo) {
+    const repo = path.resolve(value);
+    if (!isGitRepository(repo)) {
+      console.error(`skipped: ${repo} (not a git repository)`);
+      continue;
+    }
+    scanned += 1;
+    const worktrees = parseWorktrees(git(repo, 'worktree', 'list', '--porcelain', '-z'));
+    const ancestors = new Map();
+    const checkAncestor = (head) => {
+      if (!head) throw new Error('HEAD を取得できません');
+      if (!ancestors.has(head)) ancestors.set(head, isAncestor(repo, head));
+      return ancestors.get(head);
+    };
+    let slug;
+    const checkPr = values.gh ? (branch) => hasMergedPr(slug ??= originSlug(repo), branch) : null;
+    const commonDir = git(repo, 'rev-parse', '--path-format=absolute', '--git-common-dir').trimEnd();
+    rows.push(...resolveWorktreePaths(repo, commonDir, worktrees)
+      .map((worktree) => inspectWorktree(worktree, now, checkAncestor, checkPr)));
+  }
+  if (scanned === 0) throw new Error('no git repositories could be scanned');
   const groups = categories.map((category) => [category, rows.filter((row) => row.category === category)]);
   for (const [category, group] of groups) console.log(`${category}: ${group.length}`);
   console.log(`合計: ${rows.length}`);
+  for (const row of rows) console.log(`${row.path}\t${row.branch}\t${row.updatedAt ?? ''}`);
   if (values.json) writeFileSync(values.json, `${JSON.stringify(rows, null, 2)}\n`);
   if (values.md) writeFileSync(values.md, markdown(groups));
 }

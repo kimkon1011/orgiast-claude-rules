@@ -9,6 +9,7 @@ import { classifyWorktree, inspectWorktree, resolveWorktreePaths } from './workt
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const now = Date.parse('2026-11-21T12:00:00Z');
+const normalizePath = (value) => value.replaceAll('\\', '/').toLowerCase();
 const base = {
   path: '/tmp/worktree',
   branch: 'feat/example',
@@ -98,8 +99,8 @@ test('相対 gitdir と逆参照を確認できる作業ツリーを keep-repair
   for (const prunable of [false, true]) {
     const row = inspect({ ...listed, prunable });
     assert.equal(row.category, 'keep-repair');
-    assert.equal(row.path, displayPath);
-    assert.equal(row.resolvedPath, worktree);
+    assert.equal(normalizePath(row.path), normalizePath(displayPath));
+    assert.equal(normalizePath(row.resolvedPath), normalizePath(worktree));
   }
 
   const [healthy] = resolveWorktreePaths(repoAlias, commonDir, [{ path: worktree }]);
@@ -113,7 +114,7 @@ test('相対 gitdir と逆参照を確認できる作業ツリーを keep-repair
 });
 
 test('git リポジトリでない対象をスキップして他の対象を棚卸しする', (t) => {
-  const temp = mkdtempSync(path.join(tmpdir(), 'wt-inventory-repos-'));
+  const temp = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'wt-inventory-repos-')));
   t.after(() => rmSync(temp, { recursive: true, force: true }));
   const invalid = path.join(temp, 'deployed-copy');
   const repo = path.join(temp, 'repo');
@@ -132,6 +133,5 @@ test('git リポジトリでない対象をスキップして他の対象を棚�
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr.trim(), `skipped: ${invalid} (not a git repository)`);
   assert.match(result.stdout, /keep-main: 1/);
-  assert.match(result.stdout.replaceAll('/', path.sep),
-    new RegExp(repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.equal(normalizePath(result.stdout).includes(normalizePath(repo)), true);
 });

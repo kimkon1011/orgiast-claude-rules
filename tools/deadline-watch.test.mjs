@@ -205,6 +205,7 @@ test('鍵なし席はseat checkでスキップされる', async t => {
   assert.equal(result.skip, true);
   assert.match(result.reason, /DWD key/);
   assert.equal(heartbeats.length, 1);
+  assert.equal(heartbeats[0].ok, true);
   assert.match(heartbeats[0].summary, /スキップ/);
 });
 

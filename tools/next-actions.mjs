@@ -250,6 +250,19 @@ export function markUngroundedActions(actions, options = {}) {
   });
 }
 
+function sanitizeFirstStep(actions) {
+  return actions.map((action) => {
+    const step = action.first_step || '';
+    const [absolutePath] = windowsAbsolutePaths(step);
+    if (!absolutePath) return action;
+    const segments = absolutePath.split(/[\\/]/).filter((segment) => segment && !/^[A-Za-z]:$/.test(segment));
+    const title = String(action.title || '').toLowerCase();
+    return segments.some((segment) => title.includes(segment.toLowerCase()))
+      ? action
+      : { ...action, first_step: '' };
+  });
+}
+
 export function replaceNextActionsSection(existing, body) {
   const section = `${BEGIN}\n${body.trim()}\n${END}`;
   const start = existing.indexOf(BEGIN), end = existing.indexOf(END, start + BEGIN.length);
@@ -294,7 +307,10 @@ export async function runNextActions(options = {}) {
   const log = options.log || console.log, errorLog = options.error || console.error;
   actions = await filterStalePrActions(actions, execImpl, errorLog);
   actions = await filterBackupActions(actions, execImpl, log, now);
-  actions = markUngroundedActions(actions);
+  actions = sanitizeFirstStep(actions);
+  // 生成結果では CI ホストに存在しない別PCの絶対パスを偽陽性にしない。
+  // パス実在性が必要な呼び出し元は verifyActionGrounding の existsSync で検証する。
+  actions = markUngroundedActions(actions, { existsSync: () => true });
   if (!actions.length) {
     actions = [{
       title: '新しい依頼と未処理事項を確認',

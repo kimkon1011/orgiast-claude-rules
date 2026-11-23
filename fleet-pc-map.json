@@ -170,24 +170,21 @@
   },
   "DESKTOP-S3MPM6T": {
     "hostname": "DESKTOP-S3MPM6T",
-    "account": "seisaku-team@orgiast.jp",
     "remoteName": "DESKTOP-S3MPM6T",
     "aliases": ["DESKTOP-S3MPM6T"],
-    "_evidence": "2026-11-22 Fleet triage digest で観測: hostname=DESKTOP-S3MPM6T / Claude=s***@orgiast.jp（seisaku-team@）。詳細は未確認。自動報告のみで人による申告なし"
+    "_evidence": "2026-11-22 Fleet triage digest で観測: hostname=DESKTOP-S3MPM6T / Claude=s***@orgiast.jp（seisaku-team@）。詳細は未確認。自動報告のみで人による申告なし\n  【追記 2026-11-23】account 追記取り下げ（通知先 notifyDiscordId の実測根拠がないため）"
   },
   "LAPTOP-21BPBOMF": {
     "hostname": "LAPTOP-21BPBOMF",
-    "account": "seisaku-team@orgiast.jp",
     "remoteName": "LAPTOP-21BPBOMF",
     "aliases": ["LAPTOP-21BPBOMF"],
-    "_evidence": "2026-11-22 Fleet triage digest で観測: hostname=LAPTOP-21BPBOMF / Claude=g***@gmail.com。DESKTOP-BDOAK99 と同じ genbateamtoho@gmail.com の可能性。詳細は未確認"
+    "_evidence": "2026-11-22 Fleet triage digest で観測: hostname=LAPTOP-21BPBOMF / Claude=g***@gmail.com。DESKTOP-BDOAK99 と同じ genbateamtoho@gmail.com の可能性。詳細は未確認\n  【追記 2026-11-23】account 追記取り下げ（観測は Gmail のマスク値のみで seisaku-team@ と確定できず、通知先 notifyDiscordId の実測根拠もないため）"
   },
   "増田MacBookAir": {
-    "account": "cr@orgiast.jp",
     "person": "増田裕子",
     "model": "MacBook Air 13\"",
     "os": "macOS 14.8.9",
     "serial": "C02YK73PJK77",
-    "_evidence": "kim 申告 2026-10-13: このMacは cr@orgiast.jp の Claude Code を使用、使用者は増田裕子さん。機種・OS・シリアルは kim のスクリーンショット（デバイス情報画面、Macを探す=オフ）。hostname・REPORTER_LABEL は未報告のため宛先解決には使わない。フリートシートの『MacBook-Air』『macBook』行のどちらかの可能性があるが未照合\n  【追記 2026-11-23】_unverified から昇格。fleet-liveness で macBook / 百瀬かなうのMacBook Air として観測されている可能性あり（同一機かは未確認）"
+    "_evidence": "kim 申告 2026-10-13: このMacは cr@orgiast.jp の Claude Code を使用、使用者は増田裕子さん。機種・OS・シリアルは kim のスクリーンショット（デバイス情報画面、Macを探す=オフ）。hostname・REPORTER_LABEL は未報告のため宛先解決には使わない。フリートシートの『MacBook-Air』『macBook』行のどちらかの可能性があるが未照合\n  【追記 2026-11-23】_unverified から昇格。fleet-liveness で macBook / 百瀬かなうのMacBook Air として観測されている可能性あり（同一機かは未確認）\n  【追記 2026-11-23】account 追記取り下げ（通知先 notifyDiscordId の実測根拠がないため）"
   }
 }

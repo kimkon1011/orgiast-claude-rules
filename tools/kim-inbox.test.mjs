@@ -986,7 +986,7 @@ test('drop closes only open asks with the matching key for ordinary questions', 
 // ============================================================
 // sweepInfoCandidates のテスト
 // ============================================================
-import { sweepInfoCandidates } from './kim-inbox.mjs';
+import { sweepInfoCandidates, computeSweepInfoSummary } from './kim-inbox.mjs';
 
 function makeItem(overrides) {
   return {
@@ -1110,4 +1110,44 @@ test('sweepInfoCandidates: 未配信・配信済みが混在するケース', ()
   assert.equal(targetIds.has('a4'), true, 'a4 未配信60日 → 対象');
   assert.equal(targetIds.size, 2);
   assert.equal(excludedReasons.length, 2);
+});
+
+test('computeSweepInfoSummary: 対象 + 残る = 全 open info を満たす', () => {
+  const items = [
+    makeItem({ id: 'a1', kind: 'info', text: 'delivered old', createdAt: new Date(Date.now() - 60 * 86400000).toISOString(), deliveredToKim: true }),
+    makeItem({ id: 'a2', kind: 'info', text: 'delivered with 承認', createdAt: new Date(Date.now() - 60 * 86400000).toISOString(), deliveredToKim: true }),
+    makeItem({ id: 'a3', kind: 'ask', text: 'this is an ask' }),
+    makeItem({ id: 'a4', kind: 'info', text: 'old undelivered', createdAt: new Date(Date.now() - 60 * 86400000).toISOString(), deliveredToKim: undefined }),
+  ];
+  const { targetIds, excludedReasons } = sweepInfoCandidates(items);
+  const summary = computeSweepInfoSummary(items, targetIds, excludedReasons);
+  assert.equal(summary.total, 3, 'info 3件');
+  assert.equal(summary.toSeen + summary.remaining, summary.total, 'toSeen + remaining = total');
+  assert.equal(summary.toSeen, 2, 'a1(配信済み古い) + a4(未配信60日) = 2件');
+  assert.equal(summary.remaining, 1, 'a2(承認キーワード) = 1件が残る');
+});
+
+test('computeSweepInfoSummary: 対象が0件のとき残る = 全件', () => {
+  const items = [
+    makeItem({ id: 'a1', kind: 'info', text: '承認が必要な件', deliveredToKim: true }),
+    makeItem({ id: 'a2', kind: 'info', text: '判断してほしい', deliveredToKim: true }),
+  ];
+  const { targetIds, excludedReasons } = sweepInfoCandidates(items);
+  const summary = computeSweepInfoSummary(items, targetIds, excludedReasons);
+  assert.equal(summary.total, 2);
+  assert.equal(summary.toSeen, 0, '両方とも承認キーワードで対象外');
+  assert.equal(summary.remaining, summary.total, '全件が残る');
+});
+
+test('computeSweepInfoSummary: 全件が対象のとき残る = 0', () => {
+  const sixtyDaysAgo = new Date(Date.now() - 60 * 86400000).toISOString();
+  const items = [
+    makeItem({ id: 'a1', kind: 'info', text: '完了通知1', createdAt: sixtyDaysAgo, deliveredToKim: true }),
+    makeItem({ id: 'a2', kind: 'info', text: '完了通知2', createdAt: sixtyDaysAgo, deliveredToKim: true }),
+  ];
+  const { targetIds, excludedReasons } = sweepInfoCandidates(items);
+  const summary = computeSweepInfoSummary(items, targetIds, excludedReasons);
+  assert.equal(summary.total, 2);
+  assert.equal(summary.toSeen, 2, '両方とも配信済み古い');
+  assert.equal(summary.remaining, 0, '全件 seen になるので残りは0');
 });

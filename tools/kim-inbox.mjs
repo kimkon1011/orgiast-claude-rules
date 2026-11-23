@@ -708,6 +708,21 @@ export function sweepInfoCandidates(items, { now = Date.now() } = {}) {
   }
   return { targetIds, excludedReasons };
 }
+/** 掃除サマリーを純粋関数として計算する。
+ * @param {Array} allItems - 全 open 項目（listItems の返値）
+ * @param {Set<string>} targetIds - seen にする対象 ID
+ * @param {Array<{id:string,reason:string}>} excludedReasons - 除外理由リスト
+ * @returns {{ total: number, toSeen: number, remaining: number }}
+ *   total: open info の総数
+ *   toSeen: seen にする件数（= targetIds.size）
+ *   remaining: sweep 後も open のまま残る件数（= total - toSeen）
+ */
+export function computeSweepInfoSummary(allItems, targetIds, excludedReasons) {
+  const total = allItems.filter(i => i.kind === 'info' && i.status === 'open').length;
+  const toSeen = targetIds.size;
+  const remaining = total - toSeen;
+  return { total, toSeen, remaining };
+}
 const inboxDir = home => path.join(home, '.claude/fleet-inbox');
 const readJsonFile = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 // fleet-mail.mjs と同じロック（<file>.lock を wx で取得）で受信ファイルを完了にし、サーバー同期は
@@ -1000,9 +1015,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       const apply = args.includes('--apply');
       const allItems = listItems(home, { status: 'open' });
       const { targetIds, excludedReasons } = sweepInfoCandidates(allItems);
-      const remainingIds = new Set(allItems.filter(i => i.kind === 'info' && i.status === 'open').map(i => i.id));
-      for (const id of targetIds) remainingIds.delete(id);
-      for (const { id } of excludedReasons) remainingIds.delete(id);
+      const summary = computeSweepInfoSummary(allItems, targetIds, excludedReasons);
       // 内訳（登録元別）
       const targetItems = allItems.filter(i => targetIds.has(i.id));
       const sourceBreakdown = {};
@@ -1020,7 +1033,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       } else {
         const lines = [
           `kim-inbox sweep-info (dry-run):`,
-          `対象: ${targetIds.size} 件 / 除外: ${excludedReasons.length} 件 / 残る open info: ${remainingIds.size} 件`,
+          `open info ${summary.total} 件 → seen にする ${summary.toSeen} 件 / open のまま残る ${summary.remaining} 件`,
           '',
           '除外の内訳:',
         ];
@@ -1034,5 +1047,5 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
     return 0;
   } catch (error) { stderr(`kim-inbox: ${clean(error.message).replace(/[\r\n]+/g, ' ')}`); return args.includes('--context') ? 0 : 1; }
 }
-export const __test = { sweepInfoCandidates, listItems, markSeen };
+export const __test = { sweepInfoCandidates, computeSweepInfoSummary, listItems, markSeen };
 if (isEntry(import.meta.url)) process.exitCode = await main();

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -223,7 +224,7 @@ export function sweepExitCode(result) {
   if(!result.dryRun) {
     const {delivered,reason}=result.notification;
     // A clean empty sweep intentionally skips notification (none without a reason).
-    if(!['dm', 'session-inbox'].includes(delivered) && (result.remaining>0 || delivered!=='none' || reason)) return 1;
+    if(!isKimDelivered(result.notification) && (result.remaining>0 || delivered!=='none' || reason)) return 1;
   }
   return 0;
 }

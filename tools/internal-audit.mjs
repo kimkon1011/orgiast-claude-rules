@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Read-only audit; --notify permits our report upload and a DM to kim.
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -275,7 +276,7 @@ export async function main(argv = process.argv.slice(2)) {
     if (options.notify) {
       const location = await reportLocation(options.out ? path.resolve(options.out) : daily, { keyPath, date });
       const result = await notifyKim(safeText(notificationText(findings, location, date), secrets), { home: defaultHome, token, webhookFallback: false });
-      if (!['dm', 'session-inbox'].includes(result.delivered)) throw auditError('レポート保存済み。kim への DM 配信失敗');
+      if (!isKimDelivered(result)) throw auditError('レポート保存済み。kim への DM 配信失敗');
     }
     if (!options.out) process.stdout.write(report);
     return options['fail-on-high'] && findings.some(f => f.severity === 'high') ? 2 : 0;

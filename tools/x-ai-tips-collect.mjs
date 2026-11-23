@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -299,10 +300,10 @@ export async function runCollect(options = {}) {
         state.weekly = { date, status: 'sending', body }; save(state);
         const delivery = await notifyFn(body, { home, kind: 'info', source: 'x-ai-tips-weekly', plainJa: false });
         state.weekly.delivery = delivery;
-        state.weekly.status = ['dm', 'webhook', 'session-inbox'].includes(delivery.delivered) ? 'sent' : 'failed';
+        state.weekly.status = isKimDelivered(delivery, { extra: ['webhook'] }) ? 'sent' : 'failed';
         if (state.weekly.status === 'sent') { state.weekly.sentAt = now.toISOString(); log(`週次送信本文（添付なし）:\n${body}`); }
         save(state);
-        if (state.weekly.status !== 'sent') throw new Error('週次通知未配送');
+        if (state.weekly.status !== 'sent') throw new Error(`週次通知未配送 (delivered=${delivery?.delivered ?? 'unknown'} reason=${delivery?.reason ?? 'unknown'})`);
       }
     }
     const limit = options.limit ?? config.maxCalls;

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -103,7 +104,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       try {
         result = await (deps.notify ?? notifyKim)(body, { home, token, fetchImpl, webhookFallback: false, kind: 'ask', source: 'decision-watch' });
       } catch { result = { delivered: 'none' }; }
-      if (['dm', 'session-inbox'].includes(result?.delivered)) {
+      if (isKimDelivered(result)) {
         state.seen[message.id] = new Date(now()).toISOString();
         delete state.failures[message.id];
       } else {

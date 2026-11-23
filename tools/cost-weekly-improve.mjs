@@ -5,6 +5,7 @@
 // 許可リストに載っている command だけを自動適用し、残りは kim へ DM する。
 // 適用した提案は ~/.claude/cost-improve-state.json の actions に mode:'auto-weekly' で登録し、
 // 日次ループの verifyPreviousActions(効果検証)に載せる。翌週 no_effect なら同種提案を4週間抑止する。
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -402,7 +403,7 @@ export async function runWeekly({ home, provider = 'deepseek', dryRun = false, n
     const dmText = `**📈 週次コスト改善**\n\n${sections.join('\n\n')}`;
     try {
       const notifyResult = await (io.notifyKim || notifyKim)(dmText, { home, webhookFallback: false });
-      if (!notifyResult || !['dm', 'session-inbox'].includes(notifyResult.delivered)) throw new Error(notifyResult?.reason || 'kim の DM に配信されませんでした');
+      if (!isKimDelivered(notifyResult)) throw new Error(notifyResult?.reason || 'kim の DM に配信されませんでした');
     } catch (error) {
       status = 'NG';
       console.error(`週次提案 DM 送信失敗: ${String(error?.message ?? error)}`);

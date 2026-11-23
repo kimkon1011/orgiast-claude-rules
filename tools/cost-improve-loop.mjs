@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import { publishSeatPr } from './pr-land.mjs';
 import fs from 'node:fs';
 import { writeHandoff } from './next-session-rotate.mjs';
@@ -1715,7 +1716,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   if (!dryRun && !noNotify && !io.noNotify) {
     try {
       const notifyResult = await (io.notifyKim ?? notifyKim)(reportText, { home, webhookFallback: false });
-      if (!notifyResult || !['dm', 'session-inbox'].includes(notifyResult.delivered)) {
+      if (!isKimDelivered(notifyResult)) {
         throw new Error(notifyResult?.reason || 'kim の DM に配信されませんでした');
       }
       delete finalState.lastNotifyError;
@@ -1745,7 +1746,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       if (await (io.shouldSendMonthlyReport || shouldSendMonthlyReport)({ home, now, claudeDir })) {
         const reportText = buildMonthlyReport({ home, now });
         const monthlyResult = await (io.notifyKim ?? notifyKim)(reportText, { home, webhookFallback: false });
-        if (['dm', 'session-inbox'].includes(monthlyResult?.delivered)) await (io.markMonthlyReportSent || markMonthlyReportSent)({ home, now, claudeDir });
+        if (isKimDelivered(monthlyResult)) await (io.markMonthlyReportSent || markMonthlyReportSent)({ home, now, claudeDir });
         console.log('月次レポートを kim へ DM 送信しました');
       }
     } catch (error) {

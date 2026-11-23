@@ -1,4 +1,5 @@
 // Node 20+, no external dependencies. Registration is explicit; see the companion PS1.
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -437,7 +438,7 @@ export async function runOnce(options = {}) {
       home, token, userId: read(path.join(home, '.claude', 'orgiast-discord-user-id.txt')).trim() || '715210673642012733',
       fetchImpl: options.fetchImpl ?? fetch, plainJa: false, webhookFallback: false,
     });
-    if (!['dm', 'session-inbox'].includes(sent?.delivered)) throw new Error('kim health notification failed');
+    if (!isKimDelivered(sent)) throw new Error('kim health notification failed');
   };
   const errorText = e => String(e.message || e).replaceAll(token || '\0', '[redacted]').slice(0, 1000);
   try {

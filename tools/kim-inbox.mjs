@@ -370,7 +370,7 @@ export async function drainSpool(home, { stderr = console.error, execImpl, signa
 }
 export async function addItem(home, options, { drain = true, localOnly = false, lockWaitMs } = {}) {
   if (drain) await drainSpool(home, { execImpl: options.execImpl, signal: options.signal, lockWaitMs });
-  
+
   // kind の自動昇格処理
   let { kind = 'info', text } = options;
   if (kind === 'info' && looksLikeApprovalRequest(text)) {
@@ -379,7 +379,7 @@ export async function addItem(home, options, { drain = true, localOnly = false, 
     options.kindPromotedFrom = 'info';
   }
   options.kind = kind;
-  
+
   if (isInboxNoise(options)) return { id: null, status: 'suppressed', kind: options.kind || 'info' };
   const item = create(home, options, lockWaitMs);
   if (localOnly || item.kind === 'deadline' || isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;

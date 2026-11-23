@@ -16,6 +16,7 @@ const homeDefault = () => process.env.ORGIAST_HOME || os.homedir();
 const read = (file, fallback) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
 const key = name => String(name).replace(/^\\/, '').toLowerCase();
 const SUCCESS_RESULTS = [0, 267009, 267011, 267014];
+const REQUEST_REFUSED = 0x800710E0;
 export const stamp = value => {
   if (typeof value === 'number') return value;
   const text = String(value ?? '').trim();
@@ -65,7 +66,8 @@ export function auditTasks(tasks, overrides = {}, now = Date.now(), { required =
     if (!(maxAgeHours > 0)) continue;
     const last = stamp(task.lastRunTime);
     if (['Ready', 'Running'].includes(task.state) && (!Number.isFinite(last) || new Date(last).getUTCFullYear() <= 1999 || +now - last > maxAgeHours * HOUR)) add('missed');
-    if (task.lastTaskResult != null && !SUCCESS_RESULTS.includes(Number(task.lastTaskResult))) add('failed');
+    const runningRequestRefused = task.state === 'Running' && (Number(task.lastTaskResult) >>> 0) === REQUEST_REFUSED;
+    if (task.lastTaskResult != null && !SUCCESS_RESULTS.includes(Number(task.lastTaskResult)) && !runningRequestRefused) add('failed');
     for (const artifact of override.artifacts || []) {
       const mtime = artifactMtimes[artifact];
       if (!Number.isFinite(mtime) || +now - mtime > maxAgeHours * HOUR) add('artifact_stale', { artifact });

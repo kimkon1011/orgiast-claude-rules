@@ -39,6 +39,12 @@ test('missed never-run, failed codes, MorningBatch interrupted is not failed', (
   for (const lastTaskResult of [0, 267009, 267011, 267014]) assert.deepEqual(auditTasks([task({ taskName: 'OrgiastMorningBatch', lastTaskResult })], {}, now), []);
   assert.deepEqual(auditTasks([task({ triggers: [{ type: 'MSFT_TaskLogonTrigger' }], lastTaskResult: 1 })], {}, now), []);
 });
+test('running task ignores request-refused result in signed and unsigned forms', () => {
+  for (const lastTaskResult of [2147946720, -2147020576]) {
+    assert.deepEqual(auditTasks([task({ state: 'Running', lastTaskResult })], {}, now), []);
+  }
+  assert.equal(auditTasks([task({ state: 'Ready', lastTaskResult: 2147946720 })], {}, now)[0].kind, 'failed');
+});
 test('disabled / missing required and ignored optional tasks', () => {
   const opts = { required: ['OrgiastCostImproveLoop', 'OrgiastMissing'] };
   assert.deepEqual(auditTasks([task({ state: 'Disabled' })], {}, now, opts).map(f => f.kind), ['disabled_required', 'missing_required']);

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { classifyLead, checkGmailDrafts, deduplicateLeads, deduplicateMessages, sortLeads, main, messageQuery, renderMarkdown, loadCredentials, findOpenInboxAsk } from './event-shop-inquiry-triage.mjs';
+import { classifyLead, checkGmailDrafts, checkExistingFollowupDraft, deduplicateLeads, deduplicateMessages, sortLeads, main, messageQuery, renderMarkdown, loadCredentials, findOpenInboxAsk } from './event-shop-inquiry-triage.mjs';
 const now = new Date('2026-10-27T03:00:00Z');
 const lead = { id: 'a', email: 'client@example.com', company_name: '会社', contact_name: '担当', created_at: '2026-10-21T03:00:00Z', preferred_date: '2026-11-18', raw_payload: { product: '展示会' } };
 const msg = (direction, day, body = '') => ({ direction, received_at: `2026-10-${day}T03:00:00Z`, body });
@@ -26,24 +26,31 @@ test('4: 10日経過で追客候補', async () => {
   assert.equal(result.category, '🟡 顧客待ち');
   assert.match(result.nextAction, /10 日.*追客候補/);
 });
-test('4b: 追客候補に下書きとkim-inboxの状態を併記', async () => {
+test('4b: 既存下書きまたはopen askがあれば追客候補から外す', async () => {
   const messages = [msg('outbound', '17')];
   const classify = deps => classifyLead(lead, messages, now, deps);
-  assert.equal((await classify({ gmailDraftCheck: async () => ({ found: true, account: 'seisaku-team@orgiast.jp' }), kimInboxCheck: async () => ({ id: 'ask-both' }) })).nextAction,
-    '顧客の返信待ち（最終送信から 10 日）・追客下書き済み・kim 承認待ち（下書き: seisaku-team@orgiast.jp / inbox: ask-both）');
-  assert.match((await classify({ gmailDraftCheck: async () => ({ found: true, account: 'kim@orgiast.jp' }), kimInboxCheck: async () => null })).nextAction, /下書きあり: kim@orgiast.jp・kim-inbox 未登録/);
-  assert.match((await classify({ gmailDraftCheck: async () => ({ found: false }), kimInboxCheck: async () => ({ id: 'ask-only' }) })).nextAction, /kim-inbox 承認待ち: ask-only・下書きなし/);
+  assert.equal((await classify({ gmailDraftCheck: async () => ({ found: true, draftId: 'draft-both' }), kimInboxCheck: async () => ({ id: 'ask-both' }) })).nextAction,
+    '顧客の返信待ち（最終送信から 10 日）・下書き済み（承認待ち: ask-both）');
+  assert.equal((await classify({ gmailDraftCheck: async () => ({ found: true, draftId: 'draft-only' }), kimInboxCheck: async () => null })).nextAction,
+    '顧客の返信待ち（最終送信から 10 日）・下書き済み（承認待ち: draft-only）');
+  assert.equal((await classify({ gmailDraftCheck: async () => ({ found: false }), kimInboxCheck: async () => ({ id: 'ask-only' }) })).nextAction,
+    '顧客の返信待ち（最終送信から 10 日）・下書き済み（承認待ち: ask-only）');
   assert.equal((await classify({ gmailDraftCheck: async () => ({ found: false }), kimInboxCheck: async () => null })).nextAction, '顧客の返信待ち（最終送信から 10 日）・追客候補');
 });
 test('4c: 追客候補の照会エラーは未確認とし、7日未満では照会しない', async () => {
   const fail = async () => { throw new Error('failure'); };
-  assert.match((await classifyLead(lead, [msg('outbound', '17')], now, { gmailDraftCheck: fail, kimInboxCheck: async () => null })).nextAction, /下書き: 未確認/);
-  assert.match((await classifyLead(lead, [msg('outbound', '17')], now, { gmailDraftCheck: async () => ({ found: false }), kimInboxCheck: fail })).nextAction, /kim-inbox: 未確認/);
+  assert.match((await classifyLead(lead, [msg('outbound', '17')], now, { gmailDraftCheck: fail, kimInboxCheck: async () => null })).nextAction, /追客候補（下書き照合: 未確認）$/);
+  assert.match((await classifyLead(lead, [msg('outbound', '17')], now, { gmailDraftCheck: async () => ({ found: false }), kimInboxCheck: fail })).nextAction, /追客候補（下書き照合: 未確認）$/);
   let calls = 0;
   await classifyLead(lead, [msg('outbound', '25')], now, { gmailDraftCheck: async () => { calls++; }, kimInboxCheck: async () => { calls++; } });
   assert.equal(calls, 0);
   assert.equal((await classifyLead(lead, [msg('outbound', '17')], now, { gmailDraftCheck: async () => ({ found: true }) })).nextAction,
     '顧客の返信待ち（最終送信から 10 日）・追客候補');
+});
+test('checkExistingFollowupDraft: Gmailとkim-inboxを依存注入で照合する', async () => {
+  assert.deepEqual(await checkExistingFollowupDraft(lead, { gmailDraftCheck: async () => ({ found: true, draftId: 'draft-1' }), kimInboxCheck: async () => null }), { found: true, id: 'draft-1' });
+  assert.deepEqual(await checkExistingFollowupDraft(lead, { gmailDraftCheck: async () => ({ found: false }), kimInboxCheck: async () => ({ id: 'ask-1' }) }), { found: true, id: 'ask-1' });
+  assert.deepEqual(await checkExistingFollowupDraft(lead, { gmailDraftCheck: async () => ({ found: false, error: 'failed' }), kimInboxCheck: async () => null }), { found: false, unchecked: true });
 });
 test('findOpenInboxAsk: email・企業ドメイン・法人格除去社名に一致し、対象外を除く', () => {
   const item = (id, text, overrides = {}) => ({ id, text, status: 'open', kind: 'ask', ...overrides });

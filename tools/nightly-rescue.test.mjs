@@ -36,6 +36,32 @@ test('rescue branch does not create a nested rescue', async t => {
   assert.deepEqual(branches(f), ['rescue/x']);
 });
 
+test('detached HEAD on a rescue commit: dirty tracked file is not rescued (no new branch)', async t => {
+  const f = fixture(t);
+  // Commit a rescue commit on main, then detach HEAD to it.
+  const rescueCommit = f.git('commit-tree', `${f.git('rev-parse', 'HEAD^{tree}').trim()}`, '-p', `${f.git('rev-parse', 'HEAD').trim()}`, '-m', 'auto-session-rescue-20261123-231404').trim();
+  f.gitRun('checkout', '--detach', rescueCommit);
+  assert.equal(f.git('branch', '--show-current'), '');
+  // Now introduce a dirty file.
+  fs.writeFileSync(path.join(f.repo, 'tracked'), 'changed');
+  const result = await rescueTree(f.repo, f.home, f);
+  assert.equal(result.clean, false);
+  assert.equal(result.dirtyCount, 1);
+  assert.ok(result.events.some(e => e.step === 'RESCUE_SKIP_ON_RESCUE_COMMIT'), JSON.stringify(result.events));
+  assert.equal(branches(f).length, 0, 'no new rescue branch should be created');
+});
+
+test('detached HEAD on a normal commit: dirty tracked file is rescued as usual', async t => {
+  const f = fixture(t);
+  // Detach HEAD to a normal commit (the initial main commit).
+  f.gitRun('checkout', '--detach', 'main');
+  assert.equal(f.git('branch', '--show-current'), '');
+  fs.writeFileSync(path.join(f.repo, 'tracked'), 'changed');
+  const result = await rescueTree(f.repo, f.home, f);
+  assert.ok(result.events.some(e => e.step === 'RESCUE_LOCAL_OK'), JSON.stringify(result.events));
+  assert.equal(branches(f).length, 1, 'a normal rescue branch should be created');
+});
+
 test('an untracked underscore-prefixed temporary file alone is not rescued', async t => {
   const f = fixture(t);
   fs.mkdirSync(path.join(f.repo, 'tools'));

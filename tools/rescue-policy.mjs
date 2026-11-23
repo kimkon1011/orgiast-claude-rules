@@ -229,6 +229,16 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
       log('RESCUE_SKIP_ON_RESCUE_BRANCH', `current branch is ${branchAtStart}; nested rescue skipped`);
       return { clean: false, dirtyCount, events };
     }
+    // Detached HEAD on a rescue commit: currentBranch returns '', so the branch
+    // guard above passes through.  Check the HEAD commit subject to avoid
+    // chaining a new rescue onto a previous rescue commit (observed with
+    // auto-session-rescue-20261123-231404 on 2026-11-23).
+    let headSubject;
+    try { headSubject = git(tree, ['log', '-1', '--format=%s', 'HEAD']).trim(); } catch { headSubject = ''; }
+    if (headSubject.startsWith('auto-session-rescue-')) {
+      log('RESCUE_SKIP_ON_RESCUE_COMMIT', `HEAD commit is ${headSubject}; detached rescue skipped`);
+      return { clean: false, dirtyCount, events };
+    }
     const key = path.resolve(tree);
     state.dirtySince ||= {};
     if (status.clean) {

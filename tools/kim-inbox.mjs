@@ -16,6 +16,7 @@ import { displayPcNames } from './lib/pc-display.mjs';
 import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, recordNaturalLanguageAnswers, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
 import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
 import { matchesRow, parseEscalation, syncEscalationAnswer } from './lib/escalation-answer-sync.mjs';
+import { looksLikeApprovalRequest } from './lib/kim-inbox-kind.mjs';
 const exec = promisify(execFile);
 const directory = home => path.join(home, '.claude/kim-inbox');
 const archiveDirectory = home => path.join(directory(home), '.archive');
@@ -303,14 +304,14 @@ export function mergeItemsInto(home, dedupeKey, ids) {
     return { keptId: kept.id, superseded: items.length - 1, count: total, branches };
   });
 }
-function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen, progressAt }) {
+function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen, progressAt, kindPromotedFrom }) {
   if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');
   if (doneWhen && kind !== 'ask') throw new Error('--done-when-gmail は ask 専用です');
   fs.mkdirSync(directory(home), { recursive: true });
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), ...(kindPromotedFrom ? { kindPromotedFrom } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     if (revision !== undefined) item.revision = revision;
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -678,7 +679,7 @@ export function sweepInfoCandidates(items, { now = Date.now() } = {}) {
   const dedupeGroups = new Map(); // dedupeKey -> [{item, index}]
   for (const item of openInfos) {
     // Exclude: 承認キーワードを含むもの
-    if (/承認|判断|どちら|YES|決めて/.test(item.text || '')) {
+    if (looksLikeApprovalRequest(item.text)) {
       excludedReasons.push({ id: item.id, reason: '承認キーワードを含む' });
       continue;
     }
@@ -970,8 +971,19 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       stdout(args.includes('--json') ? JSON.stringify(item) : redactSecrets(item.text));
     } else if (args.includes('--add')) {
       const positionalKind = args[args.indexOf('--add') + 1];
-      const kind = args.includes('--kind') ? value('--kind')
+      let kind = args.includes('--kind') ? value('--kind')
         : ['ask', 'info', 'deadline'].includes(positionalKind) ? positionalKind : 'info';
+      let kindPromotedFrom;
+      let body;
+      if (!args.includes('--force-kind')) {
+        body = fs.readFileSync(value('--body-file'), 'utf8');
+        if (kind === 'info' && looksLikeApprovalRequest(body)) {
+          kindPromotedFrom = 'info';
+          kind = 'ask';
+          process.stderr.write('[kim-inbox] kind=info で登録されましたが本文が承認を求めているため ask に昇格しました\n');
+        }
+      }
+      if (body === undefined) body = fs.readFileSync(value('--body-file'), 'utf8');
       let doneWhen;
       if (args.includes('--done-when-gmail')) {
         const raw = value('--done-when-gmail');
@@ -979,7 +991,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
         if (pipe === -1) throw new Error('--done-when-gmail は "user|query" 形式で指定してください');
         doneWhen = { gmail: { user: raw.slice(0, pipe).trim(), query: raw.slice(pipe + 1).trim() } };
       }
-      const item = await addItem(home, { urgent: args.includes('--urgent'), text: fs.readFileSync(value('--body-file'), 'utf8'), kind, key: args.includes('--key') ? value('--key') : undefined, dedupeKey: args.includes('--dedupe-key') ? value('--dedupe-key') : undefined, replaceExisting: args.includes('--replace-existing'), due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '', ...(doneWhen ? { doneWhen } : {}) });
+      const item = await addItem(home, { urgent: args.includes('--urgent'), text: body, kind, key: args.includes('--key') ? value('--key') : undefined, dedupeKey: args.includes('--dedupe-key') ? value('--dedupe-key') : undefined, replaceExisting: args.includes('--replace-existing'), due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '', kindPromotedFrom, ...(doneWhen ? { doneWhen } : {}) });
       stdout(JSON.stringify({ id: item.id, status: item.status, forwarded: item.status === 'forwarded' }));
     } else if (args.includes('--answer')) stdout(JSON.stringify(answerItem(home, value('--answer'), fs.readFileSync(value('--body-file'), 'utf8'), process.env.CLAUDE_SESSION_ID || '')));
     else if (args.includes('--lookup')) stdout(JSON.stringify(lookupAnswers(home, value('--lookup')), null, 2));

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, mergeItemsInto, CONTEXT_LIMIT, oneScreenSummary, autoCloseByGmail, normalizeInboxText } from './kim-inbox.mjs';
+import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, mergeItemsInto, CONTEXT_LIMIT, oneScreenSummary, autoCloseByGmail, normalizeInboxText, appendPullRequestUrls, enrichPullRequestUrls } from './kim-inbox.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { loadAllowlist, discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { backfill } from './kim-inbox-dedupe-backfill.mjs';
@@ -12,6 +12,13 @@ import { redactSecrets } from './webhook-health.mjs';
 import { formatInboxBrief } from './lib/kim-inbox-relay-state.mjs';
 // The hook intentionally skips sdk-cli sessions; these tests exercise interactive delivery.
 delete process.env.CLAUDE_CODE_ENTRYPOINT;
+test('short PR references are expanded with a resolved repository', async () => {
+  const expected = 'PR: https://github.com/kimkon1011/orgiast-claude-rules/pull/2646';
+  assert.match(await enrichPullRequestUrls('判断 PR #2646', { env: {}, execImpl: async () => ({ stdout: 'git@github.com:kimkon1011/orgiast-claude-rules.git\n' }) }), new RegExp(expected));
+  assert.equal((appendPullRequestUrls(`#2646\n${expected}\n`, 'kimkon1011/orgiast-claude-rules').match(/pull\/2646/g) || []).length, 1);
+  assert.equal(appendPullRequestUrls('#1234567', 'kimkon1011/orgiast-claude-rules'), '#1234567');
+  assert.equal(await enrichPullRequestUrls('判断 PR #2646', { env: {}, execImpl: async () => { throw new Error('no remote'); } }), '判断 PR #2646');
+});
 test('content dedupe normalization folds changing metadata without merging distinct requests', () => {
   assert.equal(normalizeInboxText('判断待ち11日'), normalizeInboxText('判断待ち34日'));
   assert.equal(normalizeInboxText('kim に確認'), normalizeInboxText('キムさんに確認'));

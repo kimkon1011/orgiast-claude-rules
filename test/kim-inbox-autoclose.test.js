@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { findAutocloseCandidates, runAutoclose } from '../tools/kim-inbox-autoclose.mjs';
+import { USAGE, main, findAutocloseCandidates, runAutoclose, extractShortPullRequestNumbers, findBackfillCandidates, runBackfill } from '../tools/kim-inbox-autoclose.mjs';
 
 const url = number => `https://github.com/acme/widgets/pull/${number}`;
 const item = (id, text, extra = {}) => ({ id, text, title: '', kind: 'ask', status: 'open', ...extra });
@@ -12,6 +12,23 @@ const fetchWith = states => async pr => {
   if (value instanceof Error) throw value;
   return { number: pr.number, state: value, mergedAt: value === 'MERGED' ? '2026-11-20T00:00:00Z' : null, closedAt: value === 'CLOSED' ? '2026-11-21T00:00:00Z' : null };
 };
+
+for (const args of [['--help'], ['-h'], ['--help', '--apply']]) {
+  test(`${args.join(' ')} は使い方を表示して副作用なく終了する`, async () => {
+    const output = [];
+    let ghCalls = 0;
+    let readCalls = 0;
+    const code = await main(args, {
+      stdout: value => output.push(value),
+      fetchState: async () => { ghCalls++; throw new Error('gh must not run'); },
+      readItems: () => { readCalls++; return []; },
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(output, [USAGE]);
+    assert.equal(ghCalls, 0);
+    assert.equal(readCalls, 0);
+  });
+}
 
 test('PR URL が無い ask はスキップされる', async () => {
   const result = await findAutocloseCandidates([item('ki-none', '判断してください')], { fetchState: fetchWith({}) });
@@ -71,4 +88,36 @@ test('gh 取得失敗は対象外になり理由を保持する', async () => {
   assert.equal(result.candidates.length, 0);
   assert.equal(result.failures.length, 1);
   assert.match(result.failures[0].reason, /gh timeout/);
+});
+
+test('backfill の短縮番号抽出は完全 URL 付き ask を除外する', () => {
+  assert.deepEqual(extractShortPullRequestNumbers(item('ki-short', 'PR #2646 の判断')), [2646]);
+  assert.deepEqual(extractShortPullRequestNumbers(item('ki-url', `${url(2646)} と #2646`)), []);
+});
+
+test('backfill は PR タイトルの共通手がかりがある候補だけを採用する', async () => {
+  const rows = await findBackfillCandidates([item('ki-a', 'kim-inbox autoclose の PR #2646 を判断')], {
+    fetchPr: async () => ({ title: 'kim-inbox autoclose: PR URL を補完', state: 'MERGED' }),
+  });
+  assert.equal(rows[0].apply, true);
+  assert.match(rows[0].reason, /共通語/);
+});
+
+test('backfill は短い一般語ひとつの一致を根拠にしない', async () => {
+  const rows = await findBackfillCandidates([item('ki-a', 'lane の PR #877 を判断')], {
+    fetchPr: async () => ({ title: 'lane maintenance', state: 'MERGED' }),
+  });
+  assert.equal(rows[0].apply, false);
+});
+
+test('backfill は曖昧・取得失敗を skip し dry-run では更新しない', async () => {
+  const items = [item('ki-a', '無関係な判断 PR #12'), item('ki-b', '取得失敗 PR #13')];
+  let updates = 0;
+  const result = await runBackfill({ readItems: () => items, updateItem: () => { updates++; }, fetchPr: async pr => {
+    if (pr.number === 13) throw new Error('not found');
+    return { title: '全く別の変更', state: 'OPEN' };
+  } });
+  assert.equal(result.candidates, 0);
+  assert.equal(result.skipped, 2);
+  assert.equal(updates, 0);
 });

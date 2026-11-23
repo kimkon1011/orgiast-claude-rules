@@ -23,6 +23,40 @@ const archiveDirectory = home => path.join(directory(home), '.archive');
 const archiveIndex = home => path.join(archiveDirectory(home), 'index.jsonl');
 const DAY_MS = 86_400_000;
 const clean = value => redactSecrets(String(value ?? '')).slice(0, 4000);
+const GITHUB_PR_URL_RE = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/(\d+)/g;
+const SHORT_PR_RE = /#(\d{1,6})(?!\w)/g;
+
+export function parseGitHubRepo(remote) {
+  const match = String(remote ?? '').trim().match(/^(?:https:\/\/github\.com\/|git@github\.com:)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
+  return match ? `${match[1]}/${match[2]}` : null;
+}
+
+export function appendPullRequestUrls(text, repo) {
+  const original = String(text ?? '');
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo ?? '')) return original;
+  const existing = new Set([...original.matchAll(GITHUB_PR_URL_RE)].map(match => Number(match[1])));
+  const numbers = [];
+  for (const match of original.matchAll(SHORT_PR_RE)) {
+    const digits = match[1];
+    if (digits.length === 6) continue;
+    const number = Number(digits);
+    if (!existing.has(number) && !numbers.includes(number)) numbers.push(number);
+  }
+  if (!numbers.length) return original;
+  const suffix = numbers.map(number => `PR: https://github.com/${repo}/pull/${number}`).join('\n');
+  return `${original}${original.endsWith('\n') || !original ? '' : '\n'}${suffix}\n`;
+}
+
+export async function enrichPullRequestUrls(text, { env = process.env, cwd = process.cwd(), execImpl = exec } = {}) {
+  let repo = /^[\w.-]+\/[\w.-]+$/.test(env.KIM_INBOX_PR_REPO ?? '') ? env.KIM_INBOX_PR_REPO : null;
+  if (!repo) {
+    try {
+      const { stdout } = await execImpl('git', ['remote', 'get-url', 'origin'], { cwd, encoding: 'utf8', windowsHide: true });
+      repo = parseGitHubRepo(stdout);
+    } catch { /* Preserve the original body when the repository cannot be resolved. */ }
+  }
+  return appendPullRequestUrls(text, repo);
+}
 // Redaction/truncation is lossy and must not collapse distinct producer identities.
 // Hash only affected keys; short chunks keep the opaque digest stable through spooling.
 export function inboxDedupeKey(value) {
@@ -1018,7 +1052,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       const positionalKind = args[args.indexOf('--add') + 1];
       const kind = args.includes('--kind') ? value('--kind')
         : ['ask', 'info', 'deadline'].includes(positionalKind) ? positionalKind : 'info';
-      const body = fs.readFileSync(value('--body-file'), 'utf8');
+      const body = await enrichPullRequestUrls(fs.readFileSync(value('--body-file'), 'utf8'));
       let doneWhen;
       if (args.includes('--done-when-gmail')) {
         const raw = value('--done-when-gmail');

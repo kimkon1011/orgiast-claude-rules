@@ -28,7 +28,7 @@ export async function deliverDoneInbox(home, rows, text, { now = Date.now(), io 
     if (!text.includes(actionText)) text = text.slice(0, Math.max(0, 3999 - actionText.length)) + '\n' + actionText;
     // Session/check status reports can contain approval-like words in quoted
     // artifacts. Only an explicit question may keep those notices as ask.
-    if (isNonQuestionAsk(text)) kind = 'info';
+    if (isNonQuestionAsk(actionText)) kind = 'info';
     const item = await (io.addKimInboxItem ?? addItem)(home, { kind, forceKind: true, refresh: true, priority: 'high', source: 'auto-progress-done', text, dedupeKey });
     const stored = io.listKimInboxItems ? io.listKimInboxItems(home).find(saved => saved.id === item?.id) : readInboxItem(home, item?.id);
     if (!stored || stored.kind !== kind || stored.dedupeKey !== dedupeKey || !stored.text || stored.text !== item.text || stored.forwardError) {

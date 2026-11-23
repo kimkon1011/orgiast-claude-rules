@@ -175,6 +175,10 @@ export async function searchMessages(query, { limit = 20 } = {}, options = {}) {
 export async function downloadAttachment(attachment, options = {}) {
   let url = attachment.srcURL || attachment.url;
   if (!url) throw new Error('添付URLなし');
+  // The gateway accepts only Matrix media identifiers, never client-supplied host file paths.
+  if (!options.token && resolveBeeperTarget({ env: options.env || process.env }).via === 'gateway') {
+    return beeperFetch('/gateway/attachment', { ...options, method: 'POST', body: { url }, binary: true });
+  }
   if (/^(local)?mxc:\/\//.test(url)) {
     const downloaded = await beeperFetch('/v1/assets/download', { ...options, method: 'POST', body: { url } });
     if (downloaded.error || !downloaded.srcURL) throw new Error('Beeper asset download failed');

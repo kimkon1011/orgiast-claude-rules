@@ -97,11 +97,11 @@ export function createCalendarClient(token, fetchImpl = globalThis.fetch, signal
     return response.json();
   }
   return {
-    async list(start) {
+    async list(start, { end, timeMin } = {}) {
       const items = [];
       let pageToken;
       do {
-        const params = new URLSearchParams({ timeMin: iso(Date.parse(start) - 3 * HOUR), timeMax: iso(Date.parse(start) + 3 * HOUR), singleEvents: 'true', maxResults: '2500' });
+        const params = new URLSearchParams({ timeMin: timeMin || iso(Date.parse(start) - 3 * HOUR), timeMax: end || iso(Date.parse(start) + 3 * HOUR), singleEvents: 'true', maxResults: '2500' });
         if (pageToken) params.set('pageToken', pageToken);
         const page = await request(`?${params}`);
         items.push(...(page.items || []));
@@ -117,6 +117,12 @@ export function createCalendarClient(token, fetchImpl = globalThis.fetch, signal
       const safeBody = Object.hasOwn(body, 'attendees') ? { ...body, attendees: sanitizeAttendees(body.attendees) } : body;
       try { return await request('?sendUpdates=none', { method: 'POST', body: JSON.stringify(safeBody) }); }
       catch (error) { if (error.status !== 409) throw error; return request(`/${body.id}`); }
+    },
+    // Only calendar fields may change; callers cannot add guests or notifications.
+    async reschedule(id, body) {
+      const allowed = ['summary', 'start', 'end', 'transparency', 'extendedProperties'];
+      const patch = Object.fromEntries(Object.entries(body).filter(([key]) => allowed.includes(key)));
+      return request(`/${encodeURIComponent(id)}?sendUpdates=none`, { method: 'PATCH', body: JSON.stringify(patch) });
     },
   };
 }

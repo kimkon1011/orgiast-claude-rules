@@ -488,7 +488,7 @@ export async function addItem(home, options, { drain = true, localOnly = false, 
   if (drain) await drainSpool(home, { execImpl: normalizedOptions.execImpl, signal: normalizedOptions.signal, lockWaitMs });
   if (isInboxNoise(normalizedOptions)) return { id: null, status: 'suppressed', kind: normalizedOptions.kind || 'info' };
   if (normalizedOptions.text) {
-    normalizedOptions = { ...normalizedOptions, text: await resolvePrRefs(normalizedOptions.text, { stderr: normalizedOptions.stderr || console.error }) };
+    normalizedOptions = { ...normalizedOptions, text: await resolvePrRefs(normalizedOptions.text, { execImpl: normalizedOptions.execImpl, stderr: normalizedOptions.stderr || console.error }) };
   }
   const item = create(home, normalizedOptions, lockWaitMs);
   if (localOnly || item.kind === 'deadline' || isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;

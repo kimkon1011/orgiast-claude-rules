@@ -201,28 +201,52 @@ async function filterBackupActions(actions, execImpl, log, now = new Date()) {
   return actions;
 }
 
+const SYSTEM_PATTERNS = [
+  ['backup', /(?:backup|バックアップ|rclone|ClaudeDailyDriveBackup|DailyDriveBackup)/i],
+  ['mail-relay', /(?:event-shop-mail-relay|mail[ -]?relay|メール中継)/i],
+  ['pr', /(?:PR\s*#?\d+|pull request|プルリク|PR(?:の|を|へ|マージ|確認))/i],
+];
+
+function systemsIn(text) {
+  return new Set(SYSTEM_PATTERNS.filter(([, pattern]) => pattern.test(String(text || ''))).map(([name]) => name));
+}
+
+function windowsAbsolutePaths(text) {
+  return [...String(text || '').matchAll(/[A-Za-z]:\\[^\s、。]+/g)].map((match) => match[0].replace(/[)）\]】"']+$/, ''));
+}
+
 /**
- * first_step がそのタスクに無関係な絶対パスを含む場合（LLM の文脈混入）、
- * first_step を空にする。
+ * 推奨アクション内の対象システムの不一致と、first_step の絶対パス実在性を検算する。
+ * LLM は使わず、既知システムの語彙とパスから決定的に判定する。
  */
-function sanitizeFirstStep(actions) {
-  return actions.map((a) => {
-    const step = a.first_step || '';
-    // Windows 絶対パス (X:\...) を検出
-    const driveMatch = step.match(/([A-Za-z]):\\/);
-    if (!driveMatch) return a;
-    // パス文字列を抽出（次の空白まで）
-    const pathStart = step.indexOf(driveMatch[0]);
-    const afterPath = step.slice(pathStart).match(/\s/);
-    const fullPath = afterPath ? step.slice(pathStart, pathStart + afterPath.index) : step.slice(pathStart);
-    // パスのセグメント（ドライブレター以外）を抽出
-    const segments = fullPath.split(/[\\/]/).filter((s) => s.length > 0 && !/^[A-Za-z]:$/.test(s));
-    const title = (a.title || '').toLowerCase();
-    const hasMatch = segments.some((seg) => title.includes(seg.toLowerCase()));
-    if (!hasMatch) {
-      return { ...a, first_step: '' };
-    }
-    return a;
+export function verifyActionGrounding(action, options = {}) {
+  const existsSync = options.existsSync || fs.existsSync;
+  const titleSystems = systemsIn(action?.title);
+  const whySystems = systemsIn(action?.why);
+  const stepSystems = systemsIn(action?.first_step);
+  const tagSystems = systemsIn([action?.source, action?.tag, action?.tags].flat().filter(Boolean).join(' '));
+  const issues = [];
+  const intersection = (left, right) => [...left].some((value) => right.has(value));
+
+  if (titleSystems.size && whySystems.size && !intersection(titleSystems, whySystems)) {
+    issues.push(`title の対象（${[...titleSystems].join(', ')}）と why の対象（${[...whySystems].join(', ')}）が不一致`);
+  }
+  const statedSystems = new Set([...titleSystems, ...whySystems, ...tagSystems]);
+  if (stepSystems.size && statedSystems.size && !intersection(stepSystems, statedSystems)) {
+    issues.push(`first_step の対象（${[...stepSystems].join(', ')}）が title / why の対象と不一致`);
+  }
+  for (const absolutePath of windowsAbsolutePaths(action?.first_step)) {
+    if (!existsSync(absolutePath)) issues.push(`first_step の絶対パスが存在しない: ${absolutePath}`);
+  }
+  return { ok: issues.length === 0, issues };
+}
+
+export function markUngroundedActions(actions, options = {}) {
+  return actions.map((action) => {
+    const verification = verifyActionGrounding(action, options);
+    if (verification.ok) return action;
+    const warning = `【裏取り未済】${verification.issues.join(' / ')}`;
+    return { ...action, why: warning, first_step: warning };
   });
 }
 
@@ -270,7 +294,7 @@ export async function runNextActions(options = {}) {
   const log = options.log || console.log, errorLog = options.error || console.error;
   actions = await filterStalePrActions(actions, execImpl, errorLog);
   actions = await filterBackupActions(actions, execImpl, log, now);
-  actions = sanitizeFirstStep(actions);
+  actions = markUngroundedActions(actions);
   if (!actions.length) {
     actions = [{
       title: '新しい依頼と未処理事項を確認',

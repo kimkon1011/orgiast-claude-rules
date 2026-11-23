@@ -16,6 +16,7 @@ import { resolveDiscordLink } from './discord-beeper-link.mjs';
 import { collectReadableContent } from './lib/autoreply-attachments.mjs';
 import { extractSearchTerms, searchRelated } from './lib/autoreply-related.mjs';
 import { beeperFetch as beeperFetchFn } from './beeper-api.mjs';
+import { withAiDisclaimer } from './lib/ai-disclaimer.mjs';
 
 export const DISCORD_ACCOUNT = 'discordgo.715210673642012733';
 const HOUR = 3600000;
@@ -397,7 +398,7 @@ export async function runOnce(options = {}) {
           continue;
         }
 
-        const content = contentFor(decision.answer);
+        let content = contentFor(decision.answer);
         state.hourly = state.hourly.filter(t => t > now - HOUR);
         if (attempts >= 5 || state.hourly.length >= 30) {
           if (state.hourly.length >= 30 && !dryRun && !fs.existsSync(path.join(dir, 'PAUSE'))) {
@@ -419,6 +420,7 @@ export async function runOnce(options = {}) {
         const replyTarget = selectReplyTarget(pending);
         // A compound group question can contain proposals or objections from several people.
         const approvalMessage = replyTarget?.id === latest.id && pending.length === 1 ? plainText(latest.text) : undefined;
+        content = withAiDisclaimer(content, { channel: 'discord' });
         state.chats[chat.id] = { ...mark(latest), status: 'sending', content, question, senderName: latest.senderName, link, approvalMessage };
         const sendStarted = now;
         state.hourly.push(sendStarted);

@@ -7,7 +7,12 @@ Add-Type -AssemblyName System.Windows.Forms
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $AE = [System.Windows.Automation.AutomationElement]
 $Scope = [System.Windows.Automation.TreeScope]
-$body = [System.IO.File]::ReadAllText($BodyFile, [System.Text.Encoding]::UTF8).TrimEnd()
+$tmp = [System.IO.Path]::GetTempFileName()
+try {
+  $body = (& node (Join-Path $PSScriptRoot 'lib/ai-disclaimer.mjs') --channel discord --in $BodyFile --out $tmp | Out-String).TrimEnd()
+  if ($LASTEXITCODE -ne 0) { throw 'AI作成の一文を付与できません' }
+  $body = [System.IO.File]::ReadAllText($tmp, [System.Text.Encoding]::UTF8).TrimEnd()
+} finally { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue }
 # Discord の UIA テキストには見えない文字が混ざる（実測: 空行に U+FEFF、画面テキストに U+FFFC）。
 # 消してから空白を1つにまとめて比べる。tools/discord-post.test.mjs がこの関数を直接検証する。
 function Normalize-DiscordText([string]$s) { (($s -replace '[\uFEFF\u200B\u200C\u200D\u2060\uFFFC]', '') -replace '\s+', ' ').Trim() }

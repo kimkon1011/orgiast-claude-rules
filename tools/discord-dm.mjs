@@ -8,6 +8,7 @@ import { clipDiscordContent, KIM_DISCORD_USER_ID, resolveDiscordBotToken } from 
 import { addItem, isKimSeat } from './kim-inbox.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
+import { withAiDisclaimer } from './lib/ai-disclaimer.mjs';
 
 const API = 'https://discord.com/api/v10';
 const USER_AGENT = 'orgiast-discord-dm/1.0';
@@ -52,7 +53,11 @@ export async function sendDiscordDm(target, body, options = {}) {
   const isKim = isKimRecipient({ id: recipient.id, name: recipientName });
   const inbox = isKim;
   if (!options.noCopyKim && !isKim) copyToKim = isKimSeat(home) ? 'in-session' : 'session-inbox';
-  const finalBody = isKim || options.noReplyFooter ? String(body ?? '').trimEnd() : withReplyToKimFooter(body);
+  const originalBody = String(body ?? '').trimEnd();
+  const bodyWithoutReplyFooter = !isKim && originalBody.endsWith(REPLY_TO_KIM_FOOTER)
+    ? originalBody.slice(0, -REPLY_TO_KIM_FOOTER.length).trimEnd() : originalBody;
+  const disclosedBody = isKim ? originalBody : withAiDisclaimer(bodyWithoutReplyFooter, { channel: 'discord' });
+  const finalBody = isKim || options.noReplyFooter ? disclosedBody : withReplyToKimFooter(disclosedBody);
   const content = safeContent(finalBody);
   // 秘匿除去で本文が変わる場合は送らず停止（切り詰めだけの変化は対象外）
   const redactedOnly = redactSecrets(finalBody).replace(/([?&]Authorization=)[^&\s]+/gi, '$1[REDACTED]');
@@ -82,7 +87,7 @@ export async function sendDiscordDm(target, body, options = {}) {
     if (!dm.ok) throw new Error(`DMチャンネル作成が HTTP ${dm.status}`);
     const channelId = (await dm.json()).id;
     if (!channelId) throw new Error('DMチャンネルIDを取得できません');
-    await (options.assertContextApproved ?? assertContextApproved)({ channel: 'discord', target: channelId, text: body, home, ...(options.internalOptIn === true ? { internalOptIn: true } : {}), getLatest: async () => {
+    await (options.assertContextApproved ?? assertContextApproved)({ channel: 'discord', target: channelId, text: finalBody, home, ...(options.internalOptIn === true ? { internalOptIn: true } : {}), getLatest: async () => {
       const history = await fetchImpl(`${API}/channels/${channelId}/messages?limit=1`, { headers });
       if (!history.ok) throw new Error(`Discord 履歴取得が HTTP ${history.status}`);
       return latestOf((await history.json()).map(m => ({ id: m.id, at: m.timestamp })));
@@ -93,7 +98,7 @@ export async function sendDiscordDm(target, body, options = {}) {
     });
     if (!sent.ok) throw Object.assign(new Error(`DM送信が HTTP ${sent.status}`), { deliveryUncertain: sent.status >= 500 });
     const sentMessage = await sent.json();
-    recordOutbound({ channel: 'discord', target: channelId, text: body, messageId: sentMessage.id }, home);
+    recordOutbound({ channel: 'discord', target: channelId, text: finalBody, messageId: sentMessage.id }, home);
     return { channelId, messageId: sentMessage.id };
   };
   const { channelId, messageId } = await deliver(recipient, content);

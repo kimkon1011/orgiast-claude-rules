@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { hasAiDisclaimer } from './lib/ai-disclaimer.mjs';
 import { listMessages } from './beeper-api.mjs';
 import { loadSecrets, resolveGroup } from './line-group-send.mjs';
 import { latestOf, readOutbound, textHash, writeContextMarker, writeKimApprovedAudit } from './lib/send-context.mjs';
@@ -291,6 +292,7 @@ export async function main(argv=process.argv.slice(2), deps={}) {
   if(!['line','gmail','discord','beeper'].includes(channel)||!target||!file) throw new Error('使い方: node tools/send-context-check.mjs --channel line|gmail|discord|beeper --target <宛先IDまたはメール> --text-file <送る本文> [--intended-change "<変更内容>"] [--periodic-report --recipient <宛先名>] [--kim-approved "<承認の根拠メモ>"]');
   const kimApproved = parseKimApprovedNote(argv);
   const text=fs.readFileSync(file,'utf8').trim();
+  console.log(`AI作成の一文: ${hasAiDisclaimer(text) ? 'あり' : '送信時に自動で付与'}`);
   const pcoBan=findPcoContactBan({target,text});
   if(pcoBan && !isPcoSendLifted(kimApproved)){
     const detail=pcoBan.address||pcoBan.domain||pcoBan.name||target;

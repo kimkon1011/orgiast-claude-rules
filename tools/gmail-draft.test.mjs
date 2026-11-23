@@ -7,6 +7,7 @@ import {
   GMAIL_COMPOSE_SCOPE, DEFAULT_USER, buildRawMessage, buildForwardRaw, guardRecipients,
   renderChatDisplay, classifyTokenError, probeScopes, createDraft, deleteDraft, runCli,
 } from './gmail-draft.mjs';
+import { withAiDisclaimer } from './lib/ai-disclaimer.mjs';
 
 const ledger = { domains: ['orgiast.jp', 'toho-kogyo.com'], addresses: ['staff@gmail.com'] };
 const input = { from: DEFAULT_USER, to: 'customer@example.com', subject: '制作のお見積り', body: 'こんにちは。\nよろしくお願いします。' };
@@ -695,7 +696,7 @@ test('thread-id なしは取得を行わず従来と同一の MIME を POST す�
     getToken: async () => 't', fetchImpl: async (url, options) => {
       calls++;
       assert.equal(url, 'https://gmail.googleapis.com/gmail/v1/users/me/drafts');
-      assert.deepEqual(JSON.parse(options.body), { message: { raw: buildRawMessage(input) } });
+      assert.deepEqual(JSON.parse(options.body), { message: { raw: buildRawMessage({ ...input, body: withAiDisclaimer(input.body, { channel: 'mail' }) }) } });
       return response({ id: 'draft' });
     },
   });

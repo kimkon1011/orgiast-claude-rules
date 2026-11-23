@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
+import { withAiDisclaimer } from './lib/ai-disclaimer.mjs';
 
 const VALID_CHANNELS = new Set(['discord', 'email', 'line', 'messenger', 'whatsapp', 'sms']);
 
@@ -205,8 +206,9 @@ export function getItem(home, id) {
 export function saveDraft(home, id, { text, basedOn, examples = [], voiceVersion, now = new Date() }) {
   return update(home, id, item => {
     validateTransition(item.state, 'drafted');
+    const channel = item.channel === 'line' ? 'line' : item.channel === 'email' ? 'mail' : item.channel === 'discord' ? 'discord' : 'other';
     item.draft = {
-      text,
+      text: item.category === 'daily-post' ? text : withAiDisclaimer(text, { channel }),
       createdAt: now.toISOString(),
       basedOnMessageId: basedOn || item.message,
       examplesUsed: examples,

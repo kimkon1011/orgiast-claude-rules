@@ -227,7 +227,8 @@ test('判断が必要ならneeds_reply=falseでも暫定回答、dry-runではas
   assert.equal(preview.wouldSend.length, 1); assert.equal(items.length, 0);
   const result = await runOnce(f.options);
   assert.equal(result.replied, 1);
-  assert.equal(f.posts()[0].body.content, contentFor('資料を確認します。\n\n（kim 本人が確認後、訂正する場合があります）'));
+  assert.match(f.posts()[0].body.content, /^【kimのClaudeによる代理回答】/u);
+  assert.match(f.posts()[0].body.content, /金の指示でAIが作成・送信しています/u);
   assert.deepEqual(items.map(i => i.kind), ['ask', 'info']);
 });
 

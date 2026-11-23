@@ -11,11 +11,13 @@ test.after(() => fs.rmSync(home, { recursive: true, force: true }));
 import { fileURLToPath } from 'node:url';
 import { makeIndex } from './onboarding-sync.mjs';
 import { main as realMain, REPLY_TO_KIM_FOOTER, sendDiscordDm as realSendDiscordDm } from './discord-dm.mjs';
+import { MESSAGE_AI_DISCLAIMER } from './lib/ai-disclaimer.mjs';
 const contextApproved = async () => ({ reason: 'test' });
 const sendDiscordDm = (target, body, options={}) => realSendDiscordDm(target, body, { assertContextApproved: contextApproved, ...options });
 const main = (args, options={}) => realMain(args, { assertContextApproved: contextApproved, ...options });
 
-const withFooter = text => `${text}\n\n${REPLY_TO_KIM_FOOTER}`;
+const withDisclosure = text => `${text}\n\n${MESSAGE_AI_DISCLAIMER}`;
+const withFooter = text => `${withDisclosure(text)}\n\n${REPLY_TO_KIM_FOOTER}`;
 
 const recipient = { id: '123456789', label: '百瀬' };
 const resolve = async () => recipient;
@@ -65,7 +67,7 @@ test('kim 以外への代筆は返答先の一文を末尾に1回だけ付ける
 test('--no-reply-footer は返答先の一文を付けない', async () => {
   const bodies=[];
   await sendDiscordDm('百瀬','日次報告',{token:'test-token',resolve,noCopyKim:true,noReplyFooter:true,fetchImpl:async (_url,init)=>{bodies.push(JSON.parse(init.body));return bodies.length===1?response({json:{id:'dm'}}):response({json:{id:'message'}});}});
-  assert.equal(bodies[1].content,'日次報告');
+  assert.equal(bodies[1].content,withDisclosure('日次報告'));
 });
 
 test('本文は書き換えず、そのまま送る（LLM平易化を通さない）', async () => {

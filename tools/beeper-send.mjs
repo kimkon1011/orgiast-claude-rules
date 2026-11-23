@@ -19,6 +19,7 @@ import { BeeperApiError, sendMessage, listMessages, listChats } from './beeper-a
 import * as beeperApi from './beeper-api.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
 import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
+import { withAiDisclaimer, channelFromBeeperChat } from './lib/ai-disclaimer.mjs';
 
 import { TITLE, assertStandingScope, claimStandingAttempt, findChat } from './lahaina-standing-policy.mjs';
 
@@ -160,20 +161,29 @@ export async function beeperSend(options, { readMessages = listMessages, readCha
 
   // 本文は必ずファイルから
   const rawText = fs.readFileSync(bodyFile, 'utf8');
-  const text = rawText.trim();
+  const sourceText = rawText.trim();
+  let text = sourceText;
   if (!text) throw new Error('本文が空です');
   if (findSecretaryBookingUrls(text).length) throw Object.assign(new Error(SECRETARY_BOOKING_URL_REASON), { exitCode: 1 });
 
   // 1. Receipt 検証
   const item = verifyReceipt(home, queueID, receiptID);
+  let chat;
+  try {
+    const chats = await readChats({ limit: 200 });
+    chat = (chats?.items || chats || []).find(candidate => candidate.id === chatID || candidate.chatID === chatID);
+  } catch { /* チャット情報が取れなくても other 文言で送信安全性を保つ */ }
+  const detectedChannel = channelFromBeeperChat(chat);
+  const queueChannel = item.channel === 'line' ? 'line' : item.channel === 'discord' ? 'discord' : 'other';
+  text = withAiDisclaimer(text, { channel: detectedChannel === 'other' ? queueChannel : detectedChannel });
   const standing = item.decision?.reason?.includes('"type":"standing-approval"');
-  if (standing && rawText !== text) throw new Error('常設承認の本文が変更されています');
+  if (standing && rawText !== sourceText) throw new Error('常設承認の本文が変更されています');
   const validateStanding = async () => {
     const date = item.message?.replace(/^daily-post:/, '');
     const chat = await findChat(TITLE, readChats);
-    const { evidence } = assertStandingScope({ home, date, text, now: clock() });
+    const { evidence } = assertStandingScope({ home, date, text: sourceText, now: clock() });
     if (item.category !== 'daily-post' || item.channel !== 'line' || item.from?.name !== TITLE || chat.id !== chatID || item.thread !== chatID
-      || item.body !== text || item.draft?.text !== text || item.decision?.finalText !== text || item.decision?.reason !== evidence) {
+      || item.body !== sourceText || item.draft?.text !== sourceText || item.decision?.finalText !== sourceText || item.decision?.reason !== evidence) {
       throw new Error('常設承認の本文・宛先・根拠が一致しません');
     }
     return date;
@@ -209,7 +219,7 @@ export async function beeperSend(options, { readMessages = listMessages, readCha
   }
   const dispatchedAt = Date.now();
   // 4. 送信
-  const result = await send(chatID, text, replyTo ? { replyToMessageID: replyTo } : {});
+  const result = await send(chatID, text, { ...(replyTo ? { replyToMessageID: replyTo } : {}), aiDisclaimer: false });
 
   if (!result || !result.pendingMessageID) {
     throw Object.assign(new Error('送信結果に pendingMessageID がありません'), { exitCode: 3 });
@@ -296,9 +306,11 @@ async function main(args = process.argv.slice(2)) {
 
   if (has('--dry-run')) {
     if (!chatID || !bodyFile) { console.error('--dry-run にも --chat と --body-file が必要です'); return 1; }
-    const dryText = fs.readFileSync(bodyFile, 'utf8').trim();
+    const chats = await listChats({ limit: 200 });
+    const chat = (chats?.items || chats || []).find(candidate => candidate.id === chatID || candidate.chatID === chatID);
+    const dryText = withAiDisclaimer(fs.readFileSync(bodyFile, 'utf8').trim(), { channel: channelFromBeeperChat(chat) });
     if (findSecretaryBookingUrls(dryText).length) { console.error(SECRETARY_BOOKING_URL_REASON); return 1; }
-    console.log(JSON.stringify({ dryRun: true, chatID, textLength: dryText.length }));
+    console.log(JSON.stringify({ dryRun: true, chatID, textLength: dryText.length, text: dryText }));
     return 0;
   }
 

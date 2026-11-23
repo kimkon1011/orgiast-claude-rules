@@ -398,7 +398,6 @@ export function wantsEdit(kind, instruction, review = false) {
 // review や非 implement では常に false。
 export function isCheapFirstEnabled({ kind, instruction, review = false, env = process.env } = {}) {
   if (kind !== 'implement') return false;
-  if (detectIrreversibleSideEffect(instruction)) return false;
   if (detectCheapFirstUnsuitable(instruction)) return false;
   if (review) return false;
   if (/lane:\s*codex/i.test(String(instruction || ''))) return false;
@@ -439,32 +438,52 @@ export function isIntentionalAbort(output, instruction) {
     || /中止.*(?:テスト失敗|test fail)|テスト.*失敗.*(?:ため|ので).*(?:中止|停止)/i.test(text);
 }
 
-export function detectIrreversibleSideEffect(text) {
+export function detectSideEffectRisk(text) {
   const value = String(text ?? '');
-  const has = (pattern) => pattern.test(value);
-  return (has(/\bseisaku-mail\.mjs\b/i) && has(/\bsend\b/i))
-    || (has(/\bgmail-draft\.mjs\b/i) && has(/--send\b/i))
-    || has(/\bsend_(?:message|dm)\b/i)
-    || (has(/\bfleet-mail\.mjs\b/i) && has(/--send\b/i))
-    || has(/\bnotify-kim\b/i)
-    || (has(/\bdiscord\b/i) && has(/\bsend\b/i))
-    || (has(/\bcurl\b/i) && has(/(?:^|\s)(?:-X\s*|--request(?:\s+|=))["']?POST\b/i)
-      && [...value.matchAll(/https?:\/\/[^\s"'`]+/gi)]
-        .some(([url]) => {
-          try { return !['localhost', '127.0.0.1', '[::1]'].includes(new URL(url).hostname.toLowerCase()); }
-          catch { return true; } // URL を判別できないときも再送を避ける。
-        }))
-    || has(/\bdelete-draft\b/i)
-    || has(/\bgh\s+pr\s+merge\b/i)
-    || has(/\bgit\s+push\b/i)
-    || (has(/\bvercel\s+deploy\b/i) && has(/--prod\b/i));
+  const patterns = [
+    /\bkim-inbox\.mjs\b[^\r\n]*(?:--add|--answer|--seen)\b/gi,
+    /\burgent-blocker\.mjs\b[^\r\n]*(?:--add|--resolve)\b/gi,
+    /\bfleet-mail\.mjs\b[^\r\n]*(?:--send|--reply)\b/gi,
+    /\bgmail-draft\.mjs\b[\s\S]{0,200}?--send\b/gi,
+    /\bseisaku-mail\.mjs\b[^\r\n]*(?:--send|\bsend\b)/gi,
+    /\bnotify-kim\b[^\r\n]*/gi,
+    /\bdiscord\b[^\r\n]*(?:--send|\bsend\b|\bpost\b)/gi,
+    /\bwebhook\b[^\r\n]*(?:--send|\bsend\b|\bpost\b|\btrigger\b)/gi,
+    /\bsend_(?:message|dm)\b/gi,
+    /\bdelete-draft\b/gi,
+    /\bgh\s+pr\s+(?:create|merge)\b/gi,
+    /\bgh\s+issue\s+create\b/gi,
+    /\bpr-(?:land|merge)\.mjs\b/gi,
+    /\bgit\s+push\b/gi,
+    /\bnpm\s+publish\b/gi,
+    /\bvercel\b[^\r\n]*--prod\b/gi,
+  ];
+  const matches = [];
+  for (const pattern of patterns) {
+    for (const match of value.matchAll(pattern)) matches.push(match[0].trim());
+  }
+  const curlPost = /\bcurl\b[^\r\n]*(?:(?:-X\s*|--request(?:\s+|=))["']?POST\b)[^\r\n]*/gi;
+  for (const match of value.matchAll(curlPost)) {
+    const urls = [...match[0].matchAll(/https?:\/\/[^\s"'`]+/gi)].map((item) => item[0]);
+    if (urls.some((url) => {
+      try { return !['localhost', '127.0.0.1', '[::1]'].includes(new URL(url).hostname.toLowerCase()); }
+      catch { return true; }
+    })) matches.push(match[0].trim());
+  }
+  return { detected: matches.length > 0, matches: [...new Set(matches)] };
+}
+
+export function detectIrreversibleSideEffect(text) {
+  return detectSideEffectRisk(text).detected;
 }
 
 // 全再実行経路で共有する I/O のない判定。失敗・タイムアウトでも2人目に渡さない。
-export function decideExecutionPolicy({ instruction = '', noFallback = false } = {}) {
-  const irreversible = detectIrreversibleSideEffect(instruction);
+export function decideExecutionPolicy({ instruction = '', noFallback = false, allowFallback = false, sideEffects = false } = {}) {
+  const detection = detectSideEffectRisk(instruction);
+  const irreversible = !allowFallback && (sideEffects || detection.detected);
   return {
     irreversible,
+    sideEffectReasons: sideEffects && !detection.detected ? ['--side-effects'] : detection.matches,
     noFallback: noFallback || irreversible,
     cheapFirstAllowed: !irreversible,
     maxAttempts: irreversible ? 1 : 2,
@@ -1453,6 +1472,8 @@ if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
+const allowFallback = args.includes('--allow-fallback');
+const forceSideEffects = args.includes('--side-effects');
 const forceNative = args.includes('--force-native') && !args.includes('--require-wsl') && process.env.ORGIAST_CODEX_REQUIRE_WSL !== '1';
 const allowNative = args.includes('--allow-native'); // 互換用の no-op。
 const requireWsl = args.includes('--require-wsl') || process.env.ORGIAST_CODEX_REQUIRE_WSL === '1';
@@ -1497,6 +1518,8 @@ if (!cwdValidation.ok) {
 // cwdIndex が -1 のとき cwdIndex+1 が 0 になり、指示文(第1引数)を捨ててしまうので条件付きで除外する。
 const omitted = new Set();
 if (dryRun) omitted.add(args.indexOf('--dry-run'));
+if (allowFallback) omitted.add(args.indexOf('--allow-fallback'));
+if (forceSideEffects) omitted.add(args.indexOf('--side-effects'));
 if (args.includes('--force-native')) omitted.add(args.indexOf('--force-native'));
 if (allowNative) omitted.add(args.indexOf('--allow-native'));
 if (args.includes('--require-wsl')) omitted.add(args.indexOf('--require-wsl'));
@@ -1510,7 +1533,7 @@ for (const index of [modelIndex, effortIndex, laneIndex, originIndex, kindIndex]
 if (cwdIndex >= 0) { omitted.add(cwdIndex); omitted.add(cwdIndex + 1); }
 if (promptFileIndex >= 0) { omitted.add(promptFileIndex); omitted.add(promptFileIndex + 1); }
 if (timeoutIndex >= 0) { omitted.add(timeoutIndex); omitted.add(timeoutIndex + 1); }
-const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--review] [--timeout <秒>] [--model <slug|astra|sol>] [--effort <low|medium|high|xhigh|max>] [--lane <sol|astra|auto>] [--no-escalate] [--dry-run] [--no-fallback] [--force-native] [--allow-native] [--require-wsl] [--origin <unattended|interactive>] [--kind <implement|verify|investigate|classify|summarize>] [--budget]';
+const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--review] [--timeout <秒>] [--model <slug|astra|sol>] [--effort <low|medium|high|xhigh|max>] [--lane <sol|astra|auto>] [--no-escalate] [--dry-run] [--no-fallback] [--allow-fallback] [--side-effects] [--force-native] [--allow-native] [--require-wsl] [--origin <unattended|interactive>] [--kind <implement|verify|investigate|classify|summarize>] [--budget]';
 
 if ((modelIndex >= 0 && (!model || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(model))) ||
     (effortIndex >= 0 && !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) ||
@@ -1554,9 +1577,12 @@ if (promptFileIndex >= 0) {
   }
 }
 if (!instruction.trim()) { console.error(usage); process.exit(2); }
-const executionPolicy = decideExecutionPolicy({ instruction, noFallback });
+const executionPolicy = decideExecutionPolicy({ instruction, noFallback, allowFallback, sideEffects: forceSideEffects });
 const { irreversible } = executionPolicy;
 noFallback = executionPolicy.noFallback;
+if (irreversible) {
+  console.error(`[codex-do] 副作用を含む指示のためフォールバックを抑止します: ${executionPolicy.sideEffectReasons.join(', ')}`);
+}
 
 const home = process.env.ORGIAST_HOME || os.homedir();
 const slug = cwd.replace(/[^a-z0-9]/gi, '-').toLowerCase();

@@ -43,6 +43,11 @@ async function postWebhook(url, content, fetchImpl, signal, silent) {
 }
 
 const FAILURE = /failed|failure|失敗|停止|異常|エラー|timeout|timed out|タイムアウト|未計測|取得不可/i;
+// 2026-11-22 実測: 完了通知の PR タイトル内「タイムアウト」が失敗扱いされ、修復TODOを誤起票した。
+// 失敗判定に限り、PR番号直後の括弧書きタイトルを除外する。
+function stripPrTitles(text) {
+  return String(text ?? '').replace(/(#[0-9]+)(?:（[^\r\n）]{0,120}）|\([^\r\n)]{0,120}\))/g, '$1');
+}
 const HANDOFF = /接続し[て、]|接続して確認|どれを選|選んでほしい|原因調査.*(?:選択|選ん)|(?:ログ|結果|接続|認証).*確認(?:して|するよう|してください)/;
 // 完了報告・定時ダイジェストは「結果の知らせ」であって失敗通知ではない。本文には経過説明として
 // failed / 失敗 が引用されることが多く、それを失敗とみなして next-session.md へ修復TODOを起票すると、
@@ -97,7 +102,8 @@ export async function notifyKim(text, options = {}) {
   const humanEvidence = /^(?:試行|試した内容|試した修復)[:：][ \t]*\S.+$/m.test(bodyText)
     && /^証拠[:：][ \t]*\S.+$/m.test(bodyText) && /^必要な操作[:：][ \t]*\S.+$/m.test(bodyText);
   const benignQuotaReport = benignQuotaSweepReport(bodyText);
-  const failure = !judgment && !benignQuotaReport && (FAILURE.test(bodyText) || (RESUME_REPORT.test(bodyText) && RESUME_ERROR.test(bodyText)));
+  const failureText = stripPrTitles(bodyText);
+  const failure = !judgment && !benignQuotaReport && (FAILURE.test(failureText) || (RESUME_REPORT.test(bodyText) && RESUME_ERROR.test(bodyText)));
   const handoff = !judgment && !benignQuotaReport && !humanEvidence && HANDOFF.test(bodyText);
   if (judgment || handoff) options.kind = 'ask';
   if (!judgment && !failure && !handoff) return deliverKim(raw, options);

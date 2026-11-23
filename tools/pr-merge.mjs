@@ -19,7 +19,7 @@ export function parseArgs(args) {
   return options;
 }
 
-export function mergePr(options, { exec = execFileSync } = {}) {
+export async function mergePr(options, { exec = execFileSync, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   const { pr, repo, method } = parseArgs([String(options.pr), '--repo', options.repo || process.cwd(), '--method', options.method || 'squash']);
   const configuredTimeout = process.env.PR_MERGE_GH_TIMEOUT_MS?.trim() || '';
   const timeoutMs = Number(configuredTimeout);
@@ -42,13 +42,21 @@ export function mergePr(options, { exec = execFileSync } = {}) {
     }
   };
   const ghRead = args => gh(args, true);
-  const view = JSON.parse(ghRead(['pr', 'view', pr, '--json', 'state,mergeable,reviewDecision,statusCheckRollup,headRefOid,headRefName']));
+  const view = JSON.parse(ghRead(['pr', 'view', pr, '--json', 'state,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid,headRefName']));
   const repository = options.githubRepo || JSON.parse(ghRead(['repo', 'view', '--json', 'nameWithOwner'])).nameWithOwner;
   // --json files は上限があるため REST の全ページで workflow 変更を確認する。
   const files = JSON.parse(ghRead(['api', '--paginate', '--slurp', `repos/${repository}/pulls/${pr}/files?per_page=100`]));
   if (!Array.isArray(files) || files.some(page => !Array.isArray(page))) throw new Error('PR 変更パスを確認できません');
   if (files.flat().some(file => [file.filename, file.previous_filename].some(name => name?.startsWith('.github/workflows/')))) throw new Error('.github/workflows/ を含む PR は専用経路で扱うため停止');
   if (view.state !== 'OPEN') throw new Error(`PR #${pr}: state=${view.state}（OPEN が必要）`);
+  for (let attempt = 0; view.mergeable === 'UNKNOWN' && attempt < 5; attempt++) {
+    await sleep(3_000);
+    const refreshed = JSON.parse(ghRead(['pr', 'view', pr, '--json', 'number,mergeable,mergeStateStatus']));
+    view.mergeable = refreshed.mergeable;
+    view.mergeStateStatus = refreshed.mergeStateStatus;
+  }
+  if (view.mergeable === 'UNKNOWN') throw new Error(`PR #${pr}: mergeable 未確定 (mergeStateStatus=${view.mergeStateStatus || '未取得'})`);
+  if (view.mergeable === 'CONFLICTING') throw new Error(`PR #${pr}: 衝突 (mergeStateStatus=${view.mergeStateStatus || '未取得'})`);
   if (view.mergeable !== 'MERGEABLE') throw new Error(`PR #${pr}: mergeable=${view.mergeable}`);
   if (view.reviewDecision === 'CHANGES_REQUESTED') throw new Error(`PR #${pr}: CHANGES_REQUESTED`);
   const rollup = view.statusCheckRollup;
@@ -80,9 +88,9 @@ export function mergePr(options, { exec = execFileSync } = {}) {
   return { pr, ...result };
 }
 
-export function main(args = process.argv.slice(2), dependencies) {
+export async function main(args = process.argv.slice(2), dependencies) {
   try {
-    const result = mergePr(parseArgs(args), dependencies);
+    const result = await mergePr(parseArgs(args), dependencies);
     console.log(`PR #${result.pr}: MERGED (${result.mergedAt})`);
     return 0;
   } catch (error) {
@@ -90,4 +98,4 @@ export function main(args = process.argv.slice(2), dependencies) {
     return 1;
   }
 }
-if (isEntry(import.meta.url)) process.exitCode = main();
+if (isEntry(import.meta.url)) process.exitCode = await main();

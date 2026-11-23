@@ -99,7 +99,7 @@ for (const value of [undefined, null]) {
 
 for (const [label, model, allow, expected] of [
   ['fable', 'FaBlE-5', '', 'opus'], ['1m', 'opus[1m]', '', 'opus[1m]'],
-  ['unset', undefined, '', 'opus'], ['opus', 'opus', '', 'opus'], ['sonnet', 'sonnet', '', 'opus'],
+  ['unset', undefined, '', 'opus'], ['opus', 'opus', '', 'opus'], ['sonnet', 'sonnet', '', 'sonnet'],
   ['haiku', 'haiku', '', 'haiku'],
   ['allow', 'fable', '1', 'fable'], ['allow unset', undefined, '1', undefined],
 ]) {

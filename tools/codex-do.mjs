@@ -444,7 +444,7 @@ export function detectSideEffectRisk(text) {
     /\bkim-inbox\.mjs\b[^\r\n]*(?:--add|--answer|--seen)\b/gi,
     /\burgent-blocker\.mjs\b[^\r\n]*(?:--add|--resolve)\b/gi,
     /\bfleet-mail\.mjs\b[^\r\n]*(?:--send|--reply)\b/gi,
-    /\bgmail-draft\.mjs\b[^\r\n]*--send\b/gi,
+    /\bgmail-draft\.mjs\b[\s\S]{0,200}?--send\b/gi,
     /\bseisaku-mail\.mjs\b[^\r\n]*(?:--send|\bsend\b)/gi,
     /\bnotify-kim\b[^\r\n]*/gi,
     /\bdiscord\b[^\r\n]*(?:--send|\bsend\b|\bpost\b)/gi,

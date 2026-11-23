@@ -9,7 +9,7 @@ import { isEntry } from './is-entry.mjs';
 import {
   DEFAULT_MAX_REPLY_AGE, classifyReply, contentFor, createLlm, ensureTaskPriority, decisionReport, sentReport,
   isWithinAllowedTimeWindow, recordSentReply, flushUnreportedSentLogs, recordDecisionPending, readSentLog,
-  retryForbiddenAnswer, FORBIDDEN_REPLY_PTN, inventedAmounts, CANT_READ_REPLY_PTN
+  retryForbiddenAnswer, isForbiddenReply, inventedAmounts, CANT_READ_REPLY_PTN
 } from './discord-autoreply.mjs';
 import { addItem as addKimInboxItem } from './kim-inbox.mjs';
 import { resolveDiscordLink } from './discord-beeper-link.mjs';
@@ -251,7 +251,7 @@ export async function runOnce(options = {}) {
             state.chats[chat.id] = { ...prior, status: 'sent', replyId: found.id };
             await recordSentReply(home, {
               where: 'dm',
-              ts: new Date(now).toISOString(),
+              ts: new Date(timestamp(found)).toISOString(),
               channelId: chat.id,
               channelName: chat.title || chat.id,
               senderName: prior.senderName || 'User',
@@ -259,7 +259,8 @@ export async function runOnce(options = {}) {
               content: prior.content,
               link: messageLink(chat, found),
               replyId: found.id
-            }, { addItemImpl });
+            }, { addItemImpl, registerCommitment: options.registerCommitment,
+              approvalMessage: prior.approvalMessage, approvalTs: timestamp(prior) });
           } else {
             latest = prior; question = prior.question || ''; link = prior.link || messageLink(chat, prior);
             await decide('前回の送信結果が未確定。Discord で確認してください', 'uncertain');
@@ -342,7 +343,7 @@ export async function runOnce(options = {}) {
           continue;
         }
         // 禁止表現（代表への確認を約束する文/転送/確認待ち等）が含まれていたら1回だけ再生成
-        if (decision.answer?.trim() && FORBIDDEN_REPLY_PTN.test(decision.answer)) {
+        if (decision.answer?.trim() && isForbiddenReply(decision.answer)) {
           const origNeedsKim = decision.needs_kim_decision;
           const retry = await retryForbiddenAnswer(llm, decision, classifyInput);
           if (retry) {
@@ -415,7 +416,10 @@ export async function runOnce(options = {}) {
         if (dryRun) { result.wouldSend.push({ chatID: chat.localChatID || chat.id, messageId: latest.id, content, link }); attempts++; continue; }
         if (fs.existsSync(path.join(dir, 'PAUSE'))) { result.paused = true; break; }
 
-        state.chats[chat.id] = { ...mark(latest), status: 'sending', content, question, senderName: latest.senderName, link };
+        const replyTarget = selectReplyTarget(pending);
+        // A compound group question can contain proposals or objections from several people.
+        const approvalMessage = replyTarget?.id === latest.id && pending.length === 1 ? plainText(latest.text) : undefined;
+        state.chats[chat.id] = { ...mark(latest), status: 'sending', content, question, senderName: latest.senderName, link, approvalMessage };
         const sendStarted = now;
         state.hourly.push(sendStarted);
         state.hourlyByChat[chat.id].push(sendStarted);
@@ -423,7 +427,6 @@ export async function runOnce(options = {}) {
 
         let sent;
         // 返信先は pending の最新（本物メッセージ）、合成メッセージは避ける
-        const replyTarget = selectReplyTarget(pending);
         try { sent = await api.sendMessage(chat.id, content, replyTarget ? { replyToMessageID: replyTarget.id } : {}); }
         catch { await decide('送信結果が不明。再送せず Discord で確認してください', 'uncertain'); continue; }
         if (sent?.chatID && sent.chatID !== chat.id) { await decide('送信結果の会話IDが一致しません', 'uncertain'); continue; }
@@ -457,7 +460,8 @@ export async function runOnce(options = {}) {
           content,
           link: messageLink(chat, found),
           replyId: found.id
-        }, { addItemImpl });
+        }, { addItemImpl, registerCommitment: options.registerCommitment,
+          approvalMessage, approvalTs: timestamp(latest) });
         result.replied++;
       } catch (error) {
         await decide(`読み取り・分類を確認できません: ${error.code || error.name || 'Error'}`);

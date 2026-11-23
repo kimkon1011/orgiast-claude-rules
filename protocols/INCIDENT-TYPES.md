@@ -15,6 +15,7 @@
 ## カタログ
 | 型 | 症状（初出） | 横展開の検索 | ゲート |
 |---|---|---|---|
+| 代理返答の約束が実行経路なしで消える | Discord の代理返答が予定変更・会議URL送付を約束したが実行も記録もなかった（2026-11-23） | 代理返答の送信経路、設定します・送ります・運用化しました | 送信前の完了主張チェック、約束台帳、Calendar 読み戻し、24時間超の監査 |
 | 共有作業ツリーの Git 全体操作 | 共有作業ツリーで index/stash を全体操作して他セッション作業を巻き込む | `git add -A`、パススペック無しの `git commit`、書き込みを伴う `git stash` | shared-worktree-git-guard |
 | paid-option-before-free-route | 無料の既存経路を調べず費用案を先頭に提示（2026-11-18）。横展開11箇所（通知10＋日次配信1） | tools/ の quota・429・枠切れ・残高不足 と 有料・課金・入金・チャージ | decision-research-gate（無料案先頭＋FREE-ALT-CHECKED）、daily-beeper-approval / lahaina-daily-post の回帰テスト |
 | 本番常駐サーバーの開発モード起動型 | kim-PC のログオン後に SessionStart フックが秘書アプリを `next dev` で起動し、認証付き一覧 API に28.6秒（2026-11-19、`secretary-pc-ensure.log`） | タスクの Actions・WorkingDirectory、Startup、Run キー、SessionStart フック、起動スクリプトの `npm run dev`・`next dev`・`3940` | `tools/secretary-registration.test.mjs` で管理下の本番起動コマンドを検証し、実機のログオン後に 3940 番の待受プロセスと親コマンドを照合 |

@@ -6,6 +6,8 @@ import crypto from 'node:crypto';
 import { request as httpsRequest } from 'node:https';
 import { isEntry } from './is-entry.mjs';
 
+import { extractCommitments, hasUnsupportedDoneClaim, trackCommitments } from './autoreply-commitments.mjs';
+
 export function ensureTaskPriority({ platform = process.platform, setPriority = os.setPriority } = {}) {
   if (platform === 'win32') setPriority(0, os.constants.priority.PRIORITY_NORMAL);
 }
@@ -77,7 +79,15 @@ export function isWithinAllowedTimeWindow(nowMs = Date.now()) {
   return hour >= 8 && hour < 21;
 }
 
-export async function recordSentReply(home, entry, { addItemImpl = addKimInboxItem } = {}) {
+export async function recordSentReply(home, entry, {
+  addItemImpl = addKimInboxItem, registerCommitment, approvalMessage, approvalTs
+} = {}) {
+  const prior = String(entry.content).includes('同日')
+    ? readSentLog(home).findLast(row => row.where === entry.where && row.channelId === entry.channelId
+      && row.replyId !== entry.replyId && Date.parse(row.ts) < Date.parse(entry.ts))
+    : undefined;
+  const previousDay = prior && extractCommitments(prior.content, { now: Date.parse(prior.ts) })
+    .findLast(item => item.kind === 'meeting' && item.date)?.date;
   const sentLogFile = path.join(home, '.claude', 'discord-autoreply', 'sent-log.jsonl');
   let reported = false;
   try {
@@ -95,6 +105,9 @@ export async function recordSentReply(home, entry, { addItemImpl = addKimInboxIt
   const record = { ...entry, reported };
   fs.mkdirSync(path.dirname(sentLogFile), { recursive: true });
   appendLog(sentLogFile, JSON.stringify(record) + '\n');
+  await trackCommitments(home, { ...entry, approvalMessage, approvalTs, previousDay }, {
+    addItemImpl, register: registerCommitment
+  });
   return record;
 }
 
@@ -201,15 +214,18 @@ export async function classifyReply(llm, input) {
   }
   return decision;
 }
+export function isForbiddenReply(answer) {
+  return FORBIDDEN_REPLY_PTN.test(answer) || hasUnsupportedDoneClaim(answer);
+}
 export async function retryForbiddenAnswer(llm, decision, input) {
   const retryRaw = await llm({
     category: 'jp_reply',
-    system: REPLY_SYSTEM + '\n\n直前の回答に禁止表現（代表への確認を約束する文/転送/確認待ち/少々お待ち/個人DM/カレンダー招待への社外の人の追加）が含まれていました。その場で具体的に判断して回答してください。判断を先送りする文は書かないでください。',
+    system: REPLY_SYSTEM + '\n\n直前の回答に禁止表現（代表への確認を約束する文/転送/確認待ち/少々お待ち/個人DM/カレンダー招待への社外の人の追加/裏付けのない完了報告）が含まれていました。その場で具体的に判断して回答してください。判断を先送りする文は書かないでください。',
     input: { ...input, forbiddenRetry: true, previousAnswer: decision.answer }
   });
   let retry;
   try { retry = replyJson(retryRaw); } catch { return null; }
-  if (retry && retry.answer?.trim() && !FORBIDDEN_REPLY_PTN.test(retry.answer) && !CANT_READ_REPLY_PTN.test(retry.answer)) {
+  if (retry && retry.answer?.trim() && !isForbiddenReply(retry.answer) && !CANT_READ_REPLY_PTN.test(retry.answer)) {
     return retry;
   }
   return null;
@@ -352,6 +368,7 @@ function botIdFromToken(token) {
 }
 
 const REPLY_SYSTEM = `あなたはkim（代表）の代理で社内メンバーに一次回答する秘書です。丁寧だが簡潔、原則300字以内。
+打合せ・電話・送付を約束するとき、相手の都合を確認していない日時を「設定します」と断定せず、候補日時を2〜3つ出して選んでもらう。会議URLは「追って送ります」と書かず、既に取得できていれば本文に記載する。実行していないことを「しました」と書かない。根拠のURLやeventIdを作らない。
 needs_reply: 質問・依頼・確認求め=true、報告・連絡のみ=false。
 needs_kim_decision: related・documents・context 等の根拠が食い違う・見つからない時だけ=true。
 needs_kim_decision=trueでもneeds_reply=trueとし、暫定回答（answer）を必ず書く。あなたはその場で決めて答えること。質問には会話・knowledge・rulesから最も妥当な具体的な答え（数量・可否・進め方・どの部屋か等）を暫定で書く。迷う時は安全側・小さく取り消せる案を具体的に示す（例: 「まず1個購入で進めてください」「〜は保留で、先に〜を進めてください」）。判断を先送りするだけの文は書かない。
@@ -612,7 +629,7 @@ export async function runOnce(options = {}) {
             continue;
           }
           // 禁止表現（代表への確認を約束する文/転送/確認待ち等）が含まれていたら1回だけ再生成
-          if (decision.answer?.trim() && FORBIDDEN_REPLY_PTN.test(decision.answer)) {
+          if (decision.answer?.trim() && isForbiddenReply(decision.answer)) {
             const origNeedsKim = decision.needs_kim_decision;
             const retry = await retryForbiddenAnswer(llm, decision, llmInput);
             if (retry) {
@@ -694,7 +711,8 @@ export async function runOnce(options = {}) {
             content,
             link: `https://discord.com/channels/${guildId}/${m.channel_id}/${sent.id}`,
             replyId: sent.id
-          }, { addItemImpl: options.addItemImpl || addKimInboxItem });
+          }, { addItemImpl: options.addItemImpl || addKimInboxItem, registerCommitment: options.registerCommitment,
+            approvalMessage: m.content, approvalTs: Date.parse(m.timestamp) });
           if (await emergency()) break;
         } catch (e) { result.errors.push(`${m.id}: ${errorText(e)}`); }
       }

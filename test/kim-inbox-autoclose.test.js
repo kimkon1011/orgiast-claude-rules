@@ -46,6 +46,27 @@ test('MERGED の ask は対象', async () => {
   assert.deepEqual(result.candidates.map(row => row.id), ['ki-merged']);
 });
 
+test('着地済み PR の URL を含む承認待ちは対象外', async () => {
+  const text = `kim-inbox の「判断不要な完了通知 29件」を自動クローズしてよいか（--apply の実行可否）\n…${url(2661)}`;
+  const result = await findAutocloseCandidates([item('ki-approval', text)], { fetchState: fetchWith({ 2661: 'MERGED' }) });
+  assert.deepEqual(result.candidates, []);
+  assert.equal(result.approvalRequestExcludedCount, 1);
+  assert.equal(result.skipped[0].reason, '承認待ち');
+});
+
+test('完了通知の定型は承認語を含んでも従来どおり対象', async () => {
+  const text = `✅ check 達成: pr-2646-merge\n達成を確認\n承認済み\n${url(2646)}`;
+  const result = await findAutocloseCandidates([item('ki-completion', text)], { fetchState: fetchWith({ 2646: 'MERGED' }) });
+  assert.deepEqual(result.candidates.map(row => row.id), ['ki-completion']);
+  assert.equal(result.approvalRequestExcludedCount, 0);
+});
+
+test('承認語を含まない通常の ask は従来どおり対象', async () => {
+  const result = await findAutocloseCandidates([item('ki-normal', `PR #2500 の作業が終わりました\n${url(2500)}`)], { fetchState: fetchWith({ 2500: 'MERGED' }) });
+  assert.deepEqual(result.candidates.map(row => row.id), ['ki-normal']);
+  assert.equal(result.approvalRequestExcludedCount, 0);
+});
+
 test('CLOSED の ask も対象', async () => {
   const result = await findAutocloseCandidates([item('ki-closed', url(3))], { fetchState: fetchWith({ 3: 'CLOSED' }) });
   assert.deepEqual(result.candidates.map(row => row.id), ['ki-closed']);

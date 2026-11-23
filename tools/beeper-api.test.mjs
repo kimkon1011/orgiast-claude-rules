@@ -160,7 +160,7 @@ test('8. sendMessage: 正常系', async t => {
   const result = await sendMessage('!line_1:localhost', 'こんにちは', { replyToMessageID: '101' }, {
     env: { BEEPER_API_BASE: `http://127.0.0.1:${port}`, BEEPER_ACCESS_TOKEN: 'test' },
   });
-  assert.equal(requestBody.text, 'こんにちは');
+  assert.equal(requestBody.text, 'こんにちは\n\nこのメッセージは、金の指示でAIが作成・送信しています。');
   assert.equal(requestBody.replyToMessageID, '101');
   assert.equal(result.pendingMessageID, 'pending-123');
 });

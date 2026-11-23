@@ -48,7 +48,7 @@ kim 宛の Discord（@メンション・kim の発言への返信・「金さん
 
 **案を作る前に必ず** `node tools/reply-learning.mjs context --from <相手の名前> --category <question|request|confirm|report|other> --channel <ch> --item <id>` を実行し、返ってくる `examples`（同じ相手 → 同じ分類 → 全体の順で、kim が過去に承認・修正した最終文 最大5件）と `voiceRules`（`~/.claude/reply-learning/kim-voice.md`、口調と判断のルール集）に合わせて書く。使った例は usage.jsonl に残る。
 
-案ができたら `node tools/reply-queue.mjs draft <id> --file <案.txt>`、提示したら `present <id> <id> ...`。
+案ができたら `node tools/reply-queue.mjs draft <id> --file <案.txt>`、提示したら `present <id> <id> ...`。返信案は提示時点で「金の指示でAIが作成・送信」の一文を含む全文を見せ、送信時の自動付与後の表示と一致させる。
 
 1件ごとに `番号 / id / チャネル / 相手 / 日時 / 要旨 / 返信案（そのまま送れる完成文）/ 要判断` を並べる。
 - 文面は kim の口調に合わせる。社員には短く丁寧に、社外には敬語で署名つき。

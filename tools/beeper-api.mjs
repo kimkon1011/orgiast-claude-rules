@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
+import { withAiDisclaimer, channelFromBeeperChat } from './lib/ai-disclaimer.mjs';
 
 export class BeeperApiError extends Error {
   constructor(message, code, status) {
@@ -154,8 +155,9 @@ export async function listMessages(chatID, { limit, cursor, direction } = {}, op
   return await beeperFetch(`/v1/chats/${encodeURIComponent(chatID)}/messages`, { method: 'GET', query, ...options });
 }
 
-export async function sendMessage(chatID, text, { replyToMessageID, attachment } = {}, options = {}) {
-  const body = { text };
+export async function sendMessage(chatID, text, { replyToMessageID, attachment, aiDisclaimer = true, chat, channel } = {}, options = {}) {
+  const finalText = aiDisclaimer ? withAiDisclaimer(text, { channel: channel || channelFromBeeperChat(chat) }) : text;
+  const body = { text: finalText };
   if (replyToMessageID) body.replyToMessageID = replyToMessageID;
   if (attachment) body.attachment = attachment;
   return await beeperFetch(`/v1/chats/${encodeURIComponent(chatID)}/messages`, { method: 'POST', body, ...options });

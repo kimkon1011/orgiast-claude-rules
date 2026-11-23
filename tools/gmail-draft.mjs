@@ -30,6 +30,7 @@ import { validateWeekdays } from './lib/weekday-validator.mjs';
 import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 import { acquireSendDedupe, SendDedupeError } from './lib/send-dedupe.mjs';
 import { applyBoothCc } from './lib/booth-sales-cc.mjs';
+import { hasAiDisclaimer, withAiDisclaimer } from './lib/ai-disclaimer.mjs';
 
 const BOOTH_CC = 'satou@orgiast.jp';
 
@@ -41,6 +42,7 @@ const DEFAULT_KEY = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath();
 const SCOPES = ['gmail.readonly', 'gmail.compose', 'gmail.send'].map(s => `https://www.googleapis.com/auth/${s}`);
 const b64url = value => Buffer.from(value).toString('base64url');
 const configError = () => Object.assign(new Error('設定を確認してください（引数・入力ファイル・SA キー）。'), { errorKind: 'configuration_error' });
+const KIM_EMAILS = new Set(['kim@orgiast.jp']);
 
 function addresses(value, required = false) {
   const list = (Array.isArray(value) ? value : [value ?? '']).flatMap(v => {
@@ -50,6 +52,15 @@ function addresses(value, required = false) {
   if (!required && (!list.length || (list.length === 1 && !list[0]))) return [];
   if (!list.length || list.some(s => !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/iu.test(s))) throw configError();
   return list;
+}
+
+function isOnlyKimRecipient({ to, cc, bcc } = {}) {
+  const recipients = extractAddresses({ to: Array.isArray(to) ? to : [to], cc: Array.isArray(cc) ? cc : [cc], bcc: Array.isArray(bcc) ? bcc : [bcc] });
+  return recipients.length > 0 && recipients.every(value => KIM_EMAILS.has(value));
+}
+
+function disclosedMailBody(body, recipients) {
+  return isOnlyKimRecipient(recipients) ? body : withAiDisclaimer(body, { channel: 'mail' });
 }
 
 const MIME_TYPES = { '.pdf':'application/pdf','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.csv':'text/csv','.txt':'text/plain','.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.docx':'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
@@ -137,7 +148,8 @@ export function buildForwardRaw({ from, to, cc, preface = '', messageId, origina
   const forwardedSubject = /^Fwd:/iu.test(subject) ? subject : `Fwd: ${subject}`;
   const fields = [['From', 'from'], ['Date', 'date'], ['Subject', 'subject'], ['To', 'to'], ['Cc', 'cc']]
     .flatMap(([label, key]) => headers.has(key) ? [`${label}: ${decodeHeader(headers.get(key))}`] : []);
-  const body = `${preface ? `${preface.replace(/\r\n|\r|\n/gu, '\n')}\n\n` : ''}---------- Forwarded message ---------\n${fields.join('\n')}\n\n${findPlainText(source)}`;
+  const undecorated = `${preface ? `${preface.replace(/\r\n|\r|\n/gu, '\n')}\n\n` : ''}---------- Forwarded message ---------\n${fields.join('\n')}\n\n${findPlainText(source)}`;
+  const body = disclosedMailBody(undecorated, { to, cc });
   const safeName = subject.replace(/[\\/:*?"<>|\x00-\x1f]/gu, '_').slice(0, 120) || 'forwarded-message';
   const raw = buildRawMessage({ from, to, cc, subject: forwardedSubject, body,
     attachments: [{ name: `${safeName}.eml`, type: 'message/rfc822', data: original }],
@@ -300,6 +312,15 @@ async function fetchDraftBody({ user, id, fetchImpl, getToken }) {
   return mimeText((await res.json())?.message?.payload).text;
 }
 
+function rebuildSimpleTextDraft(draft, text) {
+  const payload = draft?.message?.payload;
+  if ((payload?.mimeType && payload.mimeType !== 'text/plain') || payload?.parts?.length) throw new Error('一文が無い下書きです。gmail-draft.mjs で作り直してください');
+  const headers = (payload.headers || []).filter(header => !/^content-transfer-encoding$/iu.test(header.name));
+  const headerText = [...headers.map(header => `${header.name}: ${header.value}`), 'Content-Transfer-Encoding: base64'].join('\r\n');
+  const encoded = Buffer.from(text.replace(/\r\n|\r|\n/gu, '\r\n')).toString('base64').match(/.{1,76}/gu)?.join('\r\n') ?? '';
+  return b64url(`${headerText}\r\n\r\n${encoded}\r\n`);
+}
+
 /** Read the existing MIME headers before sending; include hidden Bcc recipients. */
 export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger(), fetchImpl = gwsFetch, getToken, draft: suppliedDraft, allowRepeat, home, acquireDedupe = acquireSendDedupe }) {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(id)) throw configError();
@@ -403,7 +424,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         const current = await (deps.getDraftBody ?? (options => fetchDraftBody({ ...options, fetchImpl, getToken })))({ user, id: args.send });
         consistency = age <= 86400000 && cached.bodyHash === bodyHash(current) ? cached : await inspect();
       } catch { consistency = await inspect(); }
-      const draftText = mimeText(draft?.message?.payload).text;
+      let draftText = mimeText(draft?.message?.payload).text;
       const draftHeader = name => (headers ?? []).filter(header => String(header.name).toLowerCase() === name).map(header => header.value);
       const boothCc = applyBoothCc({ to: draftHeader('to'), cc: draftHeader('cc'), subject: draftHeader('subject').join(' '), body: draftText, booth: args.booth });
       if (boothCc.added) {
@@ -414,6 +435,18 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       if (bookingUrls.length) {
         emit({ ok: false, errorKind: 'secretary_booking_url', matches: bookingUrls }, `${SECRETARY_BOOKING_URL_REASON}\n検出: ${bookingUrls.join('、')}`);
         return 2;
+      }
+      const draftHeadersForDisclosure = Object.fromEntries((draft?.message?.payload?.headers || []).map(h => [String(h.name).toLowerCase(), h.value]));
+      const draftRecipients = { to: draftHeadersForDisclosure.to, cc: draftHeadersForDisclosure.cc, bcc: draftHeadersForDisclosure.bcc };
+      if (draftText.trim() && !isOnlyKimRecipient(draftRecipients) && !hasAiDisclaimer(draftText)) {
+        draftText = withAiDisclaimer(draftText, { channel: 'mail' });
+        const raw = rebuildSimpleTextDraft(draft, draftText);
+        const updated = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/drafts/${args.send}`, {
+          method: 'PUT', signal: AbortSignal.timeout(25000), headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: args.send, message: { raw, ...(draft?.message?.threadId ? { threadId: draft.message.threadId } : {}) } }),
+        });
+        if (!updated.ok) throw new Error('Gmail 下書きへ AI 作成の一文を追加できません');
+        draft.message.payload.body = { ...(draft.message.payload.body || {}), data: Buffer.from(draftText).toString('base64url') };
       }
       if (!isForward && !consistency.ok && !args['ack-consistency']) { emit({ ok: false, errorKind: 'consistency_block', findings: consistency.findings }, renderConsistency(consistency)); return 2; }
       if (!isForward && args['ack-consistency']) {
@@ -484,7 +517,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     if (args['thread-id'] !== undefined && !/^[A-Za-z0-9_-]+$/u.test(args['thread-id'])) throw configError();
     const attachments = (args.attach ?? []).map(file => { try { return { name: path.basename(file), data: (deps.readAttachment ?? fs.readFileSync)(file) }; } catch { throw configError(); } });
     const boothCc = applyBoothCc({ to: args.to, cc: args.cc, subject: args.subject ?? '', body, booth: args.booth });
-    const input = { inReplyTo: args['in-reply-to'], from: user, to: args.to, cc: boothCc.cc, subject: args.subject ?? 'Re: (取得予定)', body, attachments };
+    const input = { inReplyTo: args['in-reply-to'], from: user, to: args.to, cc: boothCc.cc, subject: args.subject ?? 'Re: (取得予定)', body: disclosedMailBody(body, { to: args.to, cc: boothCc.cc }), attachments };
     const boothReport = boothCc.added ? { boothCcAdded: BOOTH_CC } : {};
     const guard = guardRecipients(input, (deps.loadLedger ?? loadLedger)());
     if (guard.blocked) {

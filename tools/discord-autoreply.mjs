@@ -6,6 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { request as httpsRequest } from 'node:https';
 import { isEntry } from './is-entry.mjs';
+import { withAiDisclaimer } from './lib/ai-disclaimer.mjs';
 
 import { extractCommitments, hasUnsupportedDoneClaim, trackCommitments } from './autoreply-commitments.mjs';
 
@@ -661,7 +662,7 @@ export async function runOnce(options = {}) {
           }
           // 空本文ガード（念のため）
           if (!finalAnswer) { handled(m, 'decision'); continue; }
-          const content = contentFor(finalAnswer);
+          const content = withAiDisclaimer(contentFor(finalAnswer), { channel: 'discord' });
           if (dryRun) { result.wouldSend.push({ msgId: m.id, channelId: m.channel_id, content }); continue; }
           const sent = await api(`/channels/${m.channel_id}/messages`, { method: 'POST', body: {
             content, message_reference: { message_id: m.id }, allowed_mentions: { parse: [], replied_user: true },
@@ -698,7 +699,7 @@ export async function runOnce(options = {}) {
       try {
         if (reply.pendingEdit) {
           if (!dryRun) {
-            await api(`/channels/${reply.channelId}/messages/${reply.replyId}`, { method: 'PATCH', body: { content: contentFor(reply.answer, true), allowed_mentions: { parse: [], replied_user: false } } });
+            await api(`/channels/${reply.channelId}/messages/${reply.replyId}`, { method: 'PATCH', body: { content: withAiDisclaimer(contentFor(reply.answer, true), { channel: 'discord' }), allowed_mentions: { parse: [], replied_user: false } } });
             delete reply.pendingEdit; save();
           }
           continue;
@@ -726,7 +727,7 @@ export async function runOnce(options = {}) {
             }
             reply.outcome = outcome; reply.learned = true; save();
             if (reply.pendingEdit) {
-              await api(`/channels/${reply.channelId}/messages/${reply.replyId}`, { method: 'PATCH', body: { content: contentFor(reply.answer, true), allowed_mentions: { parse: [], replied_user: false } } });
+              await api(`/channels/${reply.channelId}/messages/${reply.replyId}`, { method: 'PATCH', body: { content: withAiDisclaimer(contentFor(reply.answer, true), { channel: 'discord' }), allowed_mentions: { parse: [], replied_user: false } } });
               delete reply.pendingEdit; save();
             }
           }

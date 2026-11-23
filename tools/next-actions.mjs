@@ -173,14 +173,14 @@ const BACKUP_TITLE_RE = /(?:backup|バックアップ|ClaudeDailyDriveBackup|Dai
  * バックアップ系タスクを推奨アクションに出す前に、成果物の実在で裏取りする。
  * rclone が使えない環境では例外で落とさず「未確認」として従来どおり出す。
  */
-async function filterBackupActions(actions, execImpl, log) {
+async function filterBackupActions(actions, execImpl, log, now = new Date()) {
   const backupActions = actions.filter((a) => BACKUP_TITLE_RE.test(a.title));
   if (!backupActions.length) return actions;
   let hasRecentBackup = false;
   try {
     const raw = await runExec(execImpl, 'rclone', ['lsl', 'claude-backup:Claude-Backups']);
-    const today = new Date().toISOString().slice(0, 10);
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const today = now.toISOString().slice(0, 10);
+    const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
     hasRecentBackup = raw.split(/\r?\n/).some((line) => line.includes(today) || line.includes(yesterday));
   } catch {
     // rclone が使えない環境では「未確認」として除外しない
@@ -264,7 +264,7 @@ export async function runNextActions(options = {}) {
   }
   const log = options.log || console.log;
   actions = await filterStalePrActions(actions, prs, execImpl, log);
-  actions = await filterBackupActions(actions, execImpl, log);
+  actions = await filterBackupActions(actions, execImpl, log, now);
   actions = sanitizeFirstStep(actions);
   if (!actions.length) {
     actions = [{

@@ -55,8 +55,8 @@ for (const [name, overrides, expected] of fixtures) {
 }
 
 test('相対 gitdir と逆参照を確認できる作業ツリーを keep-repair にする', (t) => {
-  const temp = mkdtempSync(path.join(tmpdir(), 'wt-inventory-'));
-  t.after(() => rmSync(temp, { recursive: true, force: true }));
+  const tempRoot = path.resolve(tmpdir());
+  const temp = mkdtempSync(path.join(tempRoot, 'wt-inventory-'));
   const root = realpathSync.native(temp);
   const downloads = path.join(root, 'Downloads');
   const repo = path.join(downloads, 'repo');
@@ -64,6 +64,14 @@ test('相対 gitdir と逆参照を確認できる作業ツリーを keep-repair
   const worktree = path.join(downloads, 'linked');
   const displayPath = path.join(root, 'linked');
   const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' });
+  t.after(() => {
+    if (path.isAbsolute(worktree)) {
+      spawnSync('git', ['-C', repo, 'worktree', 'remove', '--force', worktree], { encoding: 'utf8' });
+    }
+    rmSync(temp, { recursive: true, force: true });
+  });
+  assert.equal(path.isAbsolute(root), true);
+  assert.equal(path.relative(tempRoot, root).startsWith(`..${path.sep}`), false);
   mkdirSync(repo, { recursive: true });
   git('init', '-q');
   git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',

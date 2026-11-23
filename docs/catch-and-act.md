@@ -4,6 +4,8 @@ LINE・メールは、言われる前にキャッチして、日程更新・提�
 
 日程変更は kim@orgiast.jp の Google カレンダーを更新する。時刻未定は「【仮】…（時間未定）」の終日・予定なし（transparent）として登録し、確定したら時刻付きに更新する。招待通知は送らず、社外の参加者を追加しない。対象が複数ある、日付が不明などの場合は ask に記録する。
 
+引用された過去日付は自動更新しない。既存の確定時刻は「時間未定」等の明示がない限り解除しない。書き込み前のイベント全体を `~/.claude/catch-and-act/calendar-journal/` に保存する。
+
 見張り・仕分けは Cursor（Ultra）、使えない PC では llm-ask の安い AI を使う。015 は App Control / フックで cursor-agent が使えないため `llm-ask` を既定とする。画像・動画調整は Muse（Claude Code 配下）が担当する。
 
 ## 運用
@@ -18,6 +20,7 @@ LINE・メールは、言われる前にキャッチして、日程更新・提�
 - kim-inbox の ask に写真のパス・投稿文全文・期限を保存。期限2時間前と超過時に、それぞれ一度 urgent を積む。承認回答だけでは投稿済みとせず、投稿担当が既存 `instagram/post.mjs` / `verify-post.mjs` で承認・投稿・読み戻しを行い、キューの status を `published`（不要なら `cancelled`）にする。
 - 返信案は ask、作業依頼は info。LINE・メール・Instagram への送信経路は持たない。通知は kim-inbox の既存転送経路を使い、Discord DM は使わない。
 - `~/.claude/logs/catch-and-act.log` に1実行1行のJSON。本文・秘密値は含めず、件数・分類・動作・失敗コード・残件数を記録する。`status:error` は次回再試行対象。キーワード代替は `keywordFallback` で確認する。
+- 登録タスクは `--runner-log` を付ける。この場合はJSONを標準出力に一度だけ書き、run-hidden.vbs に同ログへの追記を任せる（Windowsのログ共有違反を避ける）。直接CLI起動では本体がログを保存する。
 
 ## 検証
 

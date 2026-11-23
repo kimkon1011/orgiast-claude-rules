@@ -137,6 +137,27 @@ test('calendar creates tentative free all-day event and updates it to timed with
   assert.equal(writes[1].transparency, 'opaque'); assert.equal(writes[1].summary, '定例会議');
 });
 
+test('quoted historical event cannot change calendar; uncertain timing cannot clear a confirmed time', async () => {
+  const old = msg({ text: '次回も出展をご希望でしょうか。日程:11月14日 学会名:第41回総会' });
+  assert.equal(schedulePlan(old, classification({ date: '2026-11-14' }), {}, now), null);
+  const calendar = { list: async () => [{ id: 'e', summary: '定例会議', start: { dateTime: '2026-11-25T15:00:00+09:00' }, end: { dateTime: '2026-11-25T16:00:00+09:00' } }], reschedule: async () => assert.fail('must not clear time') };
+  const result = await changeSchedule(msg({ text: '11/25の定例会議について確認です' }), classification(), { watch: {}, now, calendar, key: 'key' });
+  assert.equal(result.pending, true);
+});
+
+test('calendar saves before-image journal before first mutation and preserves it across retry', async t => {
+  const d = setup(t), m = msg({ text: '11/25 定例会議を15時に変更' }), key = messageKey(m);
+  const original = { id: 'event', summary: '定例会議', start: { date: '2026-11-25' }, end: { date: '2026-11-26' } };
+  const calendar = { list: async () => [original], reschedule: async () => {
+    const files = fs.readdirSync(path.join(d.root, 'calendar-journal'));
+    assert.equal(files.length, 1); const journal = JSON.parse(fs.readFileSync(path.join(d.root, 'calendar-journal', files[0])));
+    assert.deepEqual(journal.before, original); throw new Error('timeout');
+  } };
+  const item = { message: m, classification: classification({ start: '2026-11-25T15:00:00+09:00' }) };
+  await assert.rejects(act(item, key, { ...d, calendar: async () => calendar }), /timeout/);
+  await assert.rejects(act(item, key, { ...d, calendar: async () => calendar }), /timeout/);
+});
+
 test('existing original-date event moves, ambiguous matches ask, older retried update cannot reverse newer update', async () => {
   const m = msg({ text: '11/24の定例会議を11/25 15時に変更' }), c = classification({ originalDate: '2026-11-24', start: '2026-11-25T15:00:00+09:00' });
   let patches = 0;
@@ -244,6 +265,14 @@ test('run protects live lock and bounds work while leaving backlog durable', asy
     collect: async ({ state }) => { for (const id of ['1', '2']) state.items[id] = { message: msg({ id }), status: 'new' }; return { counts: {}, failures: [] }; },
     classify: async () => ({ kind: 'none', method: 'keywords' }) });
   assert.equal(result.processed, 1); assert.equal(result.deferred, 1); assert.equal(result.keywordFallback, 1);
+});
+
+test('hidden runner logging writes one JSON record to stdout without opening its redirected log', async t => {
+  const d = setup(t), lines = []; t.mock.method(console, 'log', value => lines.push(value));
+  const report = await run({ home: d.home, now, runnerLog: true }, { ...d, readItem: () => null, collect: async () => ({ counts: {}, failures: [] }) });
+  assert.equal(lines.length, 1); assert.deepEqual(JSON.parse(lines[0]), report);
+  assert.equal(fs.existsSync(path.join(d.home, '.claude/logs/catch-and-act.log')), false);
+  assert.equal(fs.existsSync(path.join(d.root, '.lock')), false);
 });
 
 test('gateway downloads only Matrix assets using trusted upstream URL; binary survives read-only gateway', async t => {

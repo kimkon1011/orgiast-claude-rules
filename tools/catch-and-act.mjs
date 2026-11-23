@@ -191,6 +191,8 @@ export function schedulePlan(m, c, watch, now) {
   const date = pinned && !evidence.dates.length ? pinned.date : c.date || pinned?.date || (evidence.dates.length === 1 ? evidence.dates[0] : null);
   // AI dates/times must be supported by the message or the explicit local watch configuration.
   if (!date || (!evidence.dates.includes(date) && pinned?.date !== date)) return null;
+  // Quoted past events (e.g. "would you exhibit again?") are not schedule changes.
+  if (date < tokyoToday(new Date(m.ts)) || date < tokyoToday(new Date(now))) return null;
   let start = pinned && !evidence.dates.length ? null : c.start;
   if (!start && evidence.times.length === 1) start = `${date}T${evidence.times[0]}:00+09:00`;
   if (start && (tokyoToday(new Date(start)) !== date || !evidence.times.includes(new Date(Date.parse(start) + 9 * HOUR).toISOString().slice(11, 16)))) return null;
@@ -201,7 +203,7 @@ export function schedulePlan(m, c, watch, now) {
   return { date, start, end, originalDate: evidence.dates.includes(c.originalDate) ? c.originalDate : null, title, eventId: pinned?.eventId };
 }
 
-export async function changeSchedule(m, c, { watch, now, calendar, key }) {
+export async function changeSchedule(m, c, { watch, now, calendar, key, beforeChange = () => {} }) {
   const plan = schedulePlan(m, c, watch, now);
   if (!plan) return { pending: true, reason: '日付・時刻・対象予定の確認が必要' };
   let existing;
@@ -223,6 +225,7 @@ export async function changeSchedule(m, c, { watch, now, calendar, key }) {
   }
   const oldStamp = existing?.extendedProperties?.private?.catchReceivedAt;
   if (oldStamp && Date.parse(oldStamp) >= Date.parse(m.ts)) return { done: true, action: 'calendar_already_applied', eventId: existing.id };
+  if (existing?.start?.dateTime && !plan.start && !/時間未定|時刻未定|時間は未定|時刻は未定/.test(m.text)) return { pending: true, reason: '既存の確定時刻を解除する根拠がないため確認が必要' };
   const summary = plan.start ? plan.title.replace(/^【仮】/, '').replace(/[（(][^）)]*(?:未定|調整中)[^）)]*[）)]/g, '') : `【仮】${plan.title.replace(/^【仮】/, '')}（時間未定）`;
   let end = plan.end;
   const oldDuration = Date.parse(existing?.end?.dateTime) - Date.parse(existing?.start?.dateTime);
@@ -232,6 +235,7 @@ export async function changeSchedule(m, c, { watch, now, calendar, key }) {
     end: plan.start ? { date: null, dateTime: end, timeZone: 'Asia/Tokyo' } : { date: dayAfter(plan.date), dateTime: null, timeZone: null },
     transparency: plan.start ? 'opaque' : 'transparent',
     extendedProperties: { private: { ...existing?.extendedProperties?.private, catchReceivedAt: m.ts, catchKey: hash(key) } } };
+  await beforeChange(existing || null, body);
   const event = existing ? await calendar.reschedule(existing.id, body) : await calendar.create({ ...body, id: `caa${hash(key)}` });
   return { done: true, action: existing ? 'calendar_updated' : 'calendar_created', eventId: event.id };
 }
@@ -246,7 +250,10 @@ export async function act(item, key, { home, root, watch, now, calendar, inbox, 
   if (c.kind === 'none') return { status: 'done', action: 'none' };
   if (c.kind === 'schedule_change') {
     const result = schedulePlan(m, c, watch, now)
-      ? await changeSchedule(m, c, { watch, now, calendar: await calendar(), key })
+      ? await changeSchedule(m, c, { watch, now, calendar: await calendar(), key, beforeChange: (event, proposed) => {
+        const journal = path.join(root, 'calendar-journal', hash(key) + '.json');
+        if (!fs.existsSync(journal)) save(journal, { key, at: new Date(now).toISOString(), before: event, proposed });
+      } })
       : { pending: true, reason: '日付・時刻・対象予定の確認が必要' };
     if (result.done) return { ...result, status: 'done' };
     const inboxId = await notify('ask', `日程確認: ${c.title}\n${result.reason}\n受信: ${m.ts}\n${short(m.text)}`);
@@ -305,7 +312,7 @@ export async function remind(state, { now, root, inbox, readItem, checkpoint }) 
   return count;
 }
 
-export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), classifier = 'llm-ask', now = Date.now(), maxItems = 40, budgetMs = 10 * 60_000 } = {}, deps = {}) {
+export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), classifier = 'llm-ask', now = Date.now(), maxItems = 40, budgetMs = 10 * 60_000, runnerLog = false } = {}, deps = {}) {
   const root = path.join(home, '.claude/catch-and-act'), stateFile = path.join(root, 'state.json'), logFile = path.join(home, '.claude/logs/catch-and-act.log');
   fs.mkdirSync(root, { recursive: true });
   const lock = path.join(root, '.lock');
@@ -379,9 +386,11 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), cla
     state.lastRun = report; checkpoint();
   } catch (e) { report.status = 'error'; report.failures.push({ stage: 'run', code: e.code || 'run_failed' }); }
   finally {
-    fs.mkdirSync(path.dirname(logFile), { recursive: true });
-    fs.appendFileSync(logFile, JSON.stringify(report) + '\n');
-    fs.closeSync(fd); fs.unlinkSync(lock);
+    try {
+      // run-hidden.vbs already owns this exact log via cmd redirection on Windows.
+      if (runnerLog) console.log(JSON.stringify(report));
+      else { fs.mkdirSync(path.dirname(logFile), { recursive: true }); fs.appendFileSync(logFile, JSON.stringify(report) + '\n'); }
+    } finally { fs.closeSync(fd); fs.unlinkSync(lock); }
   }
   return report;
 }
@@ -390,5 +399,5 @@ if (isEntry(import.meta.url)) {
   const args = process.argv.slice(2);
   const classifier = args.includes('--classifier') ? args[args.indexOf('--classifier') + 1] : 'llm-ask';
   if (!['cursor', 'llm-ask'].includes(classifier)) { console.error('Use --classifier cursor|llm-ask'); process.exitCode = 2; }
-  else run({ classifier }).then(report => { console.log(JSON.stringify(report)); if (report.status !== 'ok') process.exitCode = 1; }).catch(() => { console.error('catch-and-act failed; inspect local state/log'); process.exitCode = 1; });
+  else run({ classifier, runnerLog: args.includes('--runner-log') }).then(report => { if (!args.includes('--runner-log')) console.log(JSON.stringify(report)); if (report.status !== 'ok') process.exitCode = 1; }).catch(() => { console.error('catch-and-act failed; inspect local state/log'); process.exitCode = 1; });
 }

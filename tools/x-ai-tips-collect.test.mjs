@@ -85,26 +85,28 @@ for (const status of [401, 429]) test(`HTTP ${status} 即時打ち切り・予�
   else { assert.equal(result.calls, defaults.topics.length); assert.match(result.status, /テーマ失敗/); }
   const run = JSON.parse(fs.readFileSync(ctx.file('x-ai-tips/runs.jsonl'), 'utf8').trim().split('\n')[0]); assert.equal(run.reserved, true);
 });
-test('HTTP 403 の残高切れは残トピックを止め、予約を維持し、最後にskip statusを出して終了コード0', async t => {
-  const logs = []; let calls = 0;
-  const ctx = setup(t, { log: line => logs.push(line), fetchFn: async () => { calls++; return {
-    ok: false,
-    status: 403,
-    text: async () => JSON.stringify({ code: 'permission-denied', error: 'Your team has either used all available credits or reached its monthly spending limit.' }),
-  }; } });
-  ctx.options.config.topics = defaults.topics;
-  assert.equal(await runCli([], ctx.options), 0);
-  assert.equal(calls, 1);
-  assert.deepEqual(logs, [creditBlockedMessage, 'skip:支払い待ち']);
-  assert.equal(logs.at(-1), 'skip:支払い待ち');
-  assert.equal(readState(ctx).creditBlockedAt, now.toISOString());
-  assert.equal(readState(ctx).night.calls, 1);
-  assert.equal(readState(ctx).night.costUsd, defaults.reservePerCallUsd);
-  const [run] = readRuns(ctx);
-  assert.equal(run.status, 'skip:支払い待ち');
-  assert.equal(run.reserved, true);
-  assert.equal(run.costUsd, defaults.reservePerCallUsd);
-  assert.equal(fs.existsSync(ctx.file('x-ai-tips/collect.lock')), false);
+test('x.ai 403 は OpenRouter grok へフォールバックして成功する', async t => {
+  const errors = []; const calls = [];
+  const ctx = setup(t, { openRouterKey: 'or-test', errorLog: line => errors.push(line), fetchFn: async (url, init) => {
+    calls.push({ url, body: JSON.parse(init.body) });
+    if (url === 'https://api.x.ai/v1/responses') return { ok: false, status: 403, text: async () => 'insufficient credits' };
+    assert.equal(url, 'https://openrouter.ai/api/v1/chat/completions');
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [item] }) } }], usage: { cost: .02 } }));
+  } });
+  const result = await runCollect(ctx.options);
+  assert.match(result.status, /^ok:/); assert.equal(result.added, 1);
+  assert.equal(calls[1].body.model, 'x-ai/grok-3');
+  assert.equal(calls[1].body.messages[0].content, calls[0].body.input[0].content);
+  assert.deepEqual(errors, ['[LANE-FALLBACK] x.ai -> openrouter grok (reason: HTTP 403 credit/quota response)']);
+});
+
+test('x.ai 401 は OpenRouter へフォールバックせず失敗する', async t => {
+  let calls = 0; const errors = [];
+  const ctx = setup(t, { openRouterKey: 'or-test', errorLog: line => errors.push(line), fetchFn: async () => {
+    calls++; return { ok: false, status: 401, text: async () => 'invalid api key' };
+  } });
+  assert.equal(await runCli([], ctx.options), 1);
+  assert.equal(calls, 1); assert.deepEqual(errors, []);
 });
 
 const creditBlockedMessage = 'x.ai チームの残高切れ・月次上限のためスキップしました（支払いの承認待ち）。鍵は正常です。';

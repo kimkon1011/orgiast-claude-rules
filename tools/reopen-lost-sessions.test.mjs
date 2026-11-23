@@ -270,7 +270,6 @@ test('watch CLI logs a live lock as a successful skip and preserves watch state'
   const base = fixture(t);
   const lock = path.join(base, 'reopen-lost-sessions.lock');
   fs.writeFileSync(lock, String(process.pid));
-  fs.utimesSync(lock, new Date(0), new Date(0));
   const stateFile = path.join(base, 'reopen-lost-sessions-state.json');
   const state = JSON.stringify({ watermark: since });
   fs.writeFileSync(stateFile, state);
@@ -279,14 +278,33 @@ test('watch CLI logs a live lock as a successful skip and preserves watch state'
   const run = runReopenCli(base, '--watch');
   assert.equal(run.status, 0, run.stderr || run.stdout);
   const log = fs.readFileSync(path.join(base, 'reopen-lost-sessions.log'), 'utf8').trim();
-  const { at, skipped, holderPid, lockAgeSec } = JSON.parse(log);
+  const { at, skipped, holderPid, lockAgeSec, stale } = JSON.parse(log);
   assert.equal(new Date(at).toISOString(), at);
   assert.equal(skipped, 'locked');
   assert.equal(holderPid, process.pid);
-  assert.ok(lockAgeSec > 600);
+  assert.ok(lockAgeSec >= 0 && lockAgeSec <= 600);
+  assert.equal(stale, false);
   assert.equal(fs.readFileSync(lock, 'utf8'), String(process.pid));
   assert.equal(fs.readFileSync(stateFile, 'utf8'), state);
   assert.equal(readFailState(base).consecutiveFails, 7);
+});
+
+test('acquireLock reclaims an 11-minute-old lock with a live PID', t => {
+  const base = fixture(t);
+  const lock = path.join(base, 'reopen-lost-sessions.lock');
+  const now = Date.now();
+  const staleTime = new Date(now - 11 * 60_000);
+  fs.writeFileSync(lock, String(process.pid));
+  fs.utimesSync(lock, staleTime, staleTime);
+
+  const release = acquireLock(lock, now);
+  assert.equal(typeof release, 'function');
+  try {
+    assert.ok(fs.statSync(lock).mtimeMs > staleTime.getTime());
+  } finally {
+    release();
+  }
+  assert.equal(fs.existsSync(lock), false);
 });
 
 test('acquireLock reclaims a fresh lock left by a dead PID', t => {

@@ -849,12 +849,14 @@ function readLockHolder(file, now) {
     const text = fs.readFileSync(file, 'utf8').trim();
     if (/^[1-9]\d*$/.test(text) && Number(text) <= 0x7fffffff) pid = Number(text);
   } catch { /* Reclaim a lock whose PID cannot be read. */ }
+  const ageMs = Math.max(0, now - stat.mtimeMs);
+  const stale = ageMs > 600_000;
   let alive = false;
-  if (pid) {
+  if (pid && !stale) {
     try { process.kill(pid, 0); alive = true; }
     catch (error) { alive = error.code !== 'ESRCH'; }
   }
-  return { stat, alive, holderPid: pid, lockAgeSec: Math.max(0, Math.floor((now - stat.mtimeMs) / 1000)) };
+  return { stat, alive, holderPid: pid, lockAgeSec: Math.floor(ageMs / 1000), stale };
 }
 
 export function acquireLock(file, now = Date.now(), onContention = () => {}) {
@@ -958,10 +960,10 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
   let lockHolder;
   const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'), now(), holder => { lockHolder = holder; });
   if (!release) {
-    const { alive, holderPid, lockAgeSec } = lockHolder;
+    const { alive, holderPid, lockAgeSec, stale } = lockHolder;
     const entry = alive
-      ? { at: result.at, skipped: 'locked', holderPid, lockAgeSec }
-      : { at: result.at, error: 'locked', holderPid, lockAgeSec };
+      ? { at: result.at, skipped: 'locked', holderPid, lockAgeSec, stale }
+      : { at: result.at, error: 'locked', holderPid, lockAgeSec, stale };
     appendReopenLog(base, entry);
     if (alive) return { ...result, locked: true };
     return { ...result, error: 'locked' };

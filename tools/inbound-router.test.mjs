@@ -173,7 +173,7 @@ test('AI判定プロンプトに全routeの説明・unknown条件・confidence�
   assert.match(prompt, /個人・家族・友人・雑談/); assert.match(prompt, /confidence/);
 });
 
-test('common.ps1がある時はGB-WriteReport経由でsummaryを更新する', () => {
+test('common.ps1がある時はGB-WriteReport経由でsummaryを更新する', { skip: process.platform !== 'win32' }, () => {
   const home = temp(), reportDir = path.join(home, 'gb-reports'), offloadDir = path.join(home, 'gb-offload');
   fs.mkdirSync(offloadDir); fs.writeFileSync(path.join(offloadDir, 'common.ps1'), "function GB-WriteReport { param($Job,$Body,$Flags,$Status) Set-Content -Path (Join-Path $PSScriptRoot 'called.txt') -Value \"$Job|$Flags|$Status\" }");
   const state = initialState(); state.unknown.push({ id: 'u', item: { kind: 'gmail', mailbox: 'x', title: '要確認', sender: 'a', time: new Date(NOW).toISOString(), text: 'x' } });

@@ -1,7 +1,8 @@
 param([switch]$DryRun, [string]$RepoRoot)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
-$repo = if ($RepoRoot) { [IO.Path]::GetFullPath($RepoRoot) } else { Join-Path $env:USERPROFILE '.claude\nightly-repo' }
+. (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
+$repo = if ($RepoRoot) { [IO.Path]::GetFullPath($RepoRoot) } else { Resolve-RegisterRepoRoot -Fallback (Split-Path -Parent $PSScriptRoot) -RequiredPaths @('tools\inbound-router.mjs', 'config\inbound-router.json') }
 $script = Join-Path $repo 'tools\inbound-router.mjs'
 if (-not (Test-Path -LiteralPath $script -PathType Leaf)) { throw "inbound-router not found: $script" }
 if ($DryRun) { Write-Host "[DRY] OrgiastInboundRouter: $script every 15 minutes"; exit 0 }

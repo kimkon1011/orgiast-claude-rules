@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getAccounts, listChats, listMessages } from './beeper-api.mjs';
 import { searchGmail } from './gmail-search.mjs';
+import { isEntry } from './is-entry.mjs';
 
 export const MAILBOXES = ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'];
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -303,7 +304,7 @@ export async function run(options = {}, injected = {}) {
   } finally { if (fd !== undefined) fs.closeSync(fd); try { fs.unlinkSync(lock); } catch {} }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isEntry(import.meta.url)) {
   const args = process.argv.slice(2), value = (f, d) => { const i = args.indexOf(f); return i >= 0 ? Number(args[i + 1]) : d; };
   run({ dryRun: args.includes('--dry-run'), runnerLog: args.includes('--runner-log'), digestNow: args.includes('--digest-now'), sinceMinutes: value('--since-minutes', undefined) }).then(r => { console.log(JSON.stringify(r)); if (!['ok', 'locked'].includes(r.status)) process.exitCode = 1; }).catch(e => { console.error(`inbound-router failed: ${safeCode(e)}`); process.exitCode = 1; });
 }

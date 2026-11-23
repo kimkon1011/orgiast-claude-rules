@@ -2,7 +2,7 @@ param([switch]$DryRun, [string]$RepoRoot, [ValidateSet('cursor', 'llm-ask')][str
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
 . (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
-$repo = if ($RepoRoot) { [IO.Path]::GetFullPath($RepoRoot) } else { Get-SyncedRepoRoot }
+$repo = if ($RepoRoot) { [IO.Path]::GetFullPath($RepoRoot) } else { Resolve-RegisterRepoRoot -Fallback (Get-SyncedRepoRoot) -RequiredPaths @('tools\catch-and-act.mjs') }
 $script = Join-Path $repo 'tools\catch-and-act.mjs'
 if (-not (Test-Path -LiteralPath $script -PathType Leaf)) { throw "Merge and sync main first, or specify -RepoRoot for verification: $script" }
 if ($DryRun) { Write-Host "[DRY] OrgiastCatchAndAct: $script every 15 minutes ($Classifier)"; exit 0 }

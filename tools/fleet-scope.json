@@ -1,6 +1,7 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/register-catch-and-act.ps1", "scope": "kim-only", "step": "task:catch-and-act", "reason": "015でkimのLINE・メールを読み、個人カレンダー更新と承認キューを処理するため明示登録のみ"},
     {"path": "tools/login-health.mjs", "scope": "fleet", "step": "task:login-health", "reason": "全PCのログイン状態を点検する共通タスク"},
     {"path": "tools/register-login-health.mjs", "scope": "fleet", "step": "task:login-health", "reason": "全PCのログイン点検タスク登録入口"},
     {"path": "tools/register-login-health.ps1", "scope": "fleet", "step": "task:login-health", "reason": "全PCのログイン点検タスクを2時間ごとに登録する"},

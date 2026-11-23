@@ -2,8 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
-import { GMAIL_READONLY_SCOPE, mintDwdToken } from './gmail-draft.mjs';
-import { gwsFetch } from './lib/gws-proxy.mjs';
+import { searchGmail } from './gmail-search.mjs';
 import { listItems } from './kim-inbox.mjs';
 
 const DAY = 86400000;
@@ -12,34 +11,33 @@ const dateKey = value => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Toky
 const time = value => new Date(value).getTime();
 
 /**
- * Check whether the given customer email has a Gmail draft in the specified user's mailbox.
- * Only checks seisaku-team@orgiast.jp and kim@orgiast.jp.
+ * Check whether the given customer email has a Gmail draft in seisaku-team@orgiast.jp.
  * Returns { found: true, account, draftId } on match, { found: false } when no draft exists,
  * or { found: false, error: 'string' } on API failure (never throws).
  */
-export async function checkGmailDrafts(customerEmail, { fetchImpl = gwsFetch, getToken = mintDwdToken } = {}) {
-  const accounts = ['seisaku-team@orgiast.jp', 'kim@orgiast.jp'];
-  let lastError = null;
-  for (const account of accounts) {
-    try {
-      const token = await getToken({ user: account, scope: GMAIL_READONLY_SCOPE, fetchImpl });
-      const res = await fetchImpl(
-        `https://gmail.googleapis.com/gmail/v1/users/me/drafts?q=${encodeURIComponent(`to:${customerEmail} in:drafts`)}`,
-        { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000) },
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = await res.json();
-      if (Array.isArray(body.drafts) && body.drafts.length > 0) {
-        return { found: true, account, draftId: body.drafts[0].id };
-      }
-    } catch (err) {
-      lastError = { account, reason: err.message || String(err) };
-    }
+export async function checkGmailDrafts(customerEmail, { search = searchGmail } = {}) {
+  const account = 'seisaku-team@orgiast.jp';
+  try {
+    const result = await search({ user: account, query: `in:drafts to:${customerEmail}`, max: 1 });
+    const draft = result.messages?.[0];
+    return draft ? { found: true, account, draftId: draft.id } : { found: false };
+  } catch (err) {
+    return { found: false, error: `${account}: ${err.message || String(err)}` };
   }
-  if (lastError) {
-    return { found: false, error: `${lastError.account}: ${lastError.reason}` };
-  }
-  return { found: false };
+}
+
+export async function checkExistingFollowupDraft(lead, { gmailDraftCheck, kimInboxCheck }) {
+  let draft;
+  let inbox;
+  let failed = false;
+  try {
+    draft = await gmailDraftCheck(lead.email);
+    failed ||= Boolean(draft?.error);
+  } catch { failed = true; }
+  try { inbox = await kimInboxCheck(lead); }
+  catch { failed = true; }
+  if (inbox?.id || draft?.found) return { found: true, id: inbox?.id || draft.draftId };
+  return { found: false, unchecked: failed };
 }
 const bodyLines = message => String(message?.body ?? '').split(/\r?\n/).filter(line => !/^\s*>/.test(line)).map(line => line.trim()).filter(Boolean);
 const autoReplyBodyPattern = /自動返信|自動応答|auto-?reply|automatic\s*reply|out\s*of\s*(?:the\s*)?office/i;
@@ -89,20 +87,9 @@ export async function classifyLead(lead, messages, now = new Date(), deps = {}) 
     const waiting = `顧客の返信待ち（最終送信から ${days} 日）`;
     nextAction = days >= 7 ? `${waiting}・追客候補` : waiting;
     if (days >= 7 && deps.gmailDraftCheck && deps.kimInboxCheck) {
-      let draft, inbox, draftError = false, inboxError = false;
-      try { draft = await deps.gmailDraftCheck(lead.email); draftError = Boolean(draft?.error); }
-      catch { draftError = true; }
-      try { inbox = await deps.kimInboxCheck(lead); }
-      catch { inboxError = true; }
-      if (draft?.found && inbox?.id) nextAction = `${waiting}・追客下書き済み・kim 承認待ち（下書き: ${draft.account} / inbox: ${inbox.id}）`;
-      else {
-        const details = [];
-        if (draftError) details.push('下書き: 未確認');
-        else if (draft?.found) details.push(`下書きあり: ${draft.account}${inboxError ? '・kim-inbox 未確認' : '・kim-inbox 未登録'}`);
-        if (inbox?.id && !draft?.found) details.push(`kim-inbox 承認待ち: ${inbox.id}${draftError ? '' : '・下書きなし'}`);
-        else if (inboxError) details.push('kim-inbox: 未確認');
-        if (details.length) nextAction = `${waiting}・追客候補（${details.join('・')}）`;
-      }
+      const existing = await checkExistingFollowupDraft(lead, deps);
+      if (existing.found) nextAction = `${waiting}・下書き済み（承認待ち: ${existing.id}）`;
+      else if (existing.unchecked) nextAction = `${nextAction}（下書き照合: 未確認）`;
     }
   }
   return { ...lead, category, nextAction, lastIn: lastIn ?? null, lastOut: lastOut ?? null };

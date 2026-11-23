@@ -137,6 +137,12 @@ function log(message) {
 }
 function state() { try { return JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch { return null; } }
 function repoState() { try { return JSON.parse(fs.readFileSync(repoStatePath, 'utf8')); } catch { return null; } }
+export function shouldRunRepositorySync(previous, now = new Date()) {
+  const last = previous?.last ? new Date(previous.last) : null;
+  if (!last || !Number.isFinite(last.getTime())) return true;
+  const localDay = (date) => `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+  return localDay(last) !== localDay(now);
+}
 function keysState() {
   for (const file of [keysStatePath, legacyKeysStatePath]) {
     try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
@@ -476,7 +482,9 @@ async function syncRepository(now) {
   try {
     if (!fs.existsSync(repoPath)) return;
     const previous = repoState();
-    if (!force && previous?.last && now - new Date(previous.last) < 24 * 60 * 60 * 1000) return;
+    // 経過24時間だと、前日の実行が03:29、当日のSessionStartが03:04のように少し早まるだけで
+    // その日を丸ごと無言スキップする。ローカル日付ごとの1回にして日次ジョブの時刻揺れを許容する。
+    if (!force && !shouldRunRepositorySync(previous, now)) return;
     if (dryRun) { console.log(`[dry-run] リポ日次更新対象: ${repoPath} (書き込み・取得なし)`); return; }
     saveRepoState(now);
     // バックアップはリポ外(~/.claude/repo-backups)に置く: リポ内だと git status を汚し、毎日積み上がる

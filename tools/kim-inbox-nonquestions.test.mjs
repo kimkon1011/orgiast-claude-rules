@@ -14,6 +14,38 @@ test('isNonQuestionAsk preserves genuine questions', () => {
   assert.equal(isNonQuestionAsk('参考ログには「セッションの目的: 配布 ／ 作業ID: ac64d324」とあります。A/B のどちらかを回答してください'), false);
 });
 
+test('isNonQuestionAsk preserves asks containing decision request terms', () => {
+  const terms = [
+    '判断待ち',
+    '判断してください',
+    '決めて',
+    '決めてください',
+    '選んで',
+    '選んでください',
+    'どれにしますか',
+    'どちらにしますか',
+    '承認',
+    '可否',
+    '返事をください',
+    '返事の例',
+  ];
+  for (const term of terms) {
+    const body = `✅ check 達成: 状況確認\n${term}`;
+    assert.equal(isNonQuestionAsk(body), false, term);
+  }
+});
+
+test('isNonQuestionAsk preserves the remote desktop decision-wait regression case', () => {
+  assert.equal(
+    isNonQuestionAsk('Chromeリモートデスクトップが切断。判断待ち。対処を1つに決めてください\nセッションの目的: 復旧 ／ 作業ID: 2f14'),
+    false,
+  );
+});
+
+test('isNonQuestionAsk still sweeps pure status reports', () => {
+  assert.equal(isNonQuestionAsk('✅ check 達成: Chromeリモートデスクトップの接続状態を確認済み'), true);
+});
+
 test('isNonQuestionAsk safely rejects empty values', () => {
   for (const value of ['', undefined, '\n\r\n']) assert.equal(isNonQuestionAsk(value), false);
 });

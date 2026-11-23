@@ -8,7 +8,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   executionPlan, makeIndex, mergeEnvFile, missingDeclaredKeys, PRESERVE_LOCAL_KEYS,
-  readHead, shouldRunKeys, keySyncIsStale, updateRepositoryFiles,
+  readHead, shouldRunKeys, shouldRunRepositorySync, keySyncIsStale, updateRepositoryFiles,
 } from './onboarding-sync.mjs';
 import { gitBlobSha } from './version-drift.mjs';
 
@@ -45,6 +45,18 @@ test('--keys-only runs only key provisioning', () => {
 
 test('default execution plan retains repository, keys, and rules sync', () => {
   assert.deepEqual(executionPlan([]), { syncRepository: true, provisionKeys: true, syncRules: true });
+});
+
+test('repository guard runs once per local calendar day despite less than 24 hours elapsed', () => {
+  const previous = { last: new Date(2026, 10, 23, 3, 29).toISOString() };
+  assert.equal(shouldRunRepositorySync(previous, new Date(2026, 10, 23, 23, 59)), false);
+  assert.equal(shouldRunRepositorySync(previous, new Date(2026, 10, 24, 3, 4)), true);
+});
+
+test('repository guard runs when state is missing or invalid', () => {
+  const now = new Date(2026, 10, 24, 3, 4);
+  assert.equal(shouldRunRepositorySync(null, now), true);
+  assert.equal(shouldRunRepositorySync({ last: 'invalid' }, now), true);
 });
 
 test('key guard skips at 19 hours and runs at 21 hours', () => {

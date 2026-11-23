@@ -228,6 +228,14 @@ function writeState(state) {
   fs.renameSync(tmp, STATE_FILE);
 }
 
+// 失敗理由はコロンを含むキー（stage:code 形式）。transcript-empty 等のスキップ理由はコロンを含まない。
+export function exitCodeFor(summary) {
+  if (summary.failed === 0) return 0;
+  const failureReasons = Object.keys(summary.reasons).filter(r => r.includes(':'));
+  const all403 = failureReasons.every(r => r.endsWith('http-403'));
+  return all403 ? 0 : 1;
+}
+
 export async function runBackfill({ client, limit = Infinity, dryRun = false, all = false, out = console.log, stateFile = STATE_FILE } = {}) {
   let targets;
   if (all) {
@@ -306,12 +314,8 @@ export async function main(argv = process.argv.slice(2)) {
     } catch { throw new BackfillError('drive-auth-module-unavailable'); }
     const client = createClient({ apiKey, getToken: auth.getDriveToken, driveFetch: proxy.gwsFetch });
     const summary = await runBackfill({ client, ...options });
-    // 403 だけの失敗は許容（権限不足の会議はスキップ）、それ以外の失敗があれば 1
-    if (summary.failed > 0) {
-      const all403 = Object.keys(summary.reasons).every(r => r.endsWith('http-403'));
-      return all403 ? 0 : 1;
-    }
-    return 0;
+    // 終了コードを判定（403 のみの失敗は 0、それ以外は 1）
+    return exitCodeFor(summary);
   } catch (error) { console.error(`tldv-drive-backfill: ${safeReason(error)}`); return 1; }
 }
 

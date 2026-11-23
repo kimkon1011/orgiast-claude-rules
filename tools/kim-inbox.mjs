@@ -196,6 +196,7 @@ export const normalizeInboxText = text => String(text ?? '')
   .toLowerCase();
 const explicitQuestion = text => /^(?:【要対応・kim の判断待ち[^】]*】|【早めの対応が必要[^】]*】)/.test(text)
   || /(?:^|\n)(?:あなたの返事待ち|kim (?:の判断待ち|がすること)|判断してほしいこと)[:：]/i.test(text)
+  || /判断待ち|判断してください|決めて(?:ください)?|選んで(?:ください)?|どれにしますか|どちらにしますか|承認|可否|返事をください|返事の例/.test(text)
   || /(?:A\s*[\/／]\s*B|AかB|A・B).{0,80}(?:返答|回答|選択|選ん|判断)/is.test(text);
 export function isNonQuestionAsk(body) {
   const text = String(body ?? '').trim();

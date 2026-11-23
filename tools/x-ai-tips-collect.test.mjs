@@ -155,47 +155,55 @@ test('JSTの翌日には収集を再開し、不正な日時文字列でも永�
   }
 });
 
-test.skip('旧仕様: 通常の403は終了コード1・即時打ち切りを維持', async t => {
-  const logs = []; let calls = 0;
-  const ctx = setup(t, { log: line => logs.push(line), fetchFn: async () => { calls++; return {
-    ok: false, status: 403, text: async () => JSON.stringify({ code: 'invalid-api-key', error: 'fake-key', Authorization: 'Bearer fake-key', private: 'private-marker' }),
-  }; } });
-  ctx.options.config.topics = defaults.topics;
-  assert.equal(await runCli([], ctx.options), 1);
-  assert.equal(calls, 1);
-  assert.deepEqual(logs, ['error:API HTTP 403 (invalid-api-key)']);
-  assert.equal(readState(ctx).creditBlockedAt, undefined);
-  assert.equal(readRuns(ctx)[0].status, 'error:API HTTP 403 (invalid-api-key)');
-  assert.doesNotMatch(JSON.stringify(readRuns(ctx)), /fake-key|Authorization|private-marker/);
-});
-
-test.skip('旧仕様: 残高切れは支払い待ちで終了', async t => {
-  const logs = [];
-  const ctx = setup(t, { log: line => logs.push(line), fetchFn: async () => ({ ok: false, status: 403,
-    text: async () => JSON.stringify({ private: 'x'.repeat(2100), code: 'permission-denied', error: 'fake-key', Authorization: 'Bearer fake-key' }),
-  }) });
+test('通常の403はOpenRouterへフォールバックし、秘密値を記録しない', async t => {
+  const logs = [], errors = [], calls = [];
+  const ctx = setup(t, { openRouterKey: 'or-test-secret', log: line => logs.push(line), errorLog: line => errors.push(line), fetchFn: async (url, init) => {
+    calls.push({ url, authorization: init.headers.Authorization });
+    if (url.includes('api.x.ai')) return { ok: false, status: 403, text: async () => JSON.stringify({ code: 'invalid-api-key', error: 'fake-key', Authorization: 'Bearer fake-key', private: 'private-marker' }) };
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [item] }) } }], usage: { cost: .02 } }));
+  } });
   assert.equal(await runCli([], ctx.options), 0);
-  assert.deepEqual(logs, [creditBlockedMessage, 'skip:支払い待ち']);
-  assert.doesNotMatch(JSON.stringify(readRuns(ctx)), /fake-key|Authorization|xxx/);
+  assert.deepEqual(calls.map(call => call.url), ['https://api.x.ai/v1/responses', 'https://openrouter.ai/api/v1/chat/completions']);
+  const persisted = JSON.stringify({ logs, errors, runs: readRuns(ctx) });
+  assert.doesNotMatch(persisted, /fake-key|or-test-secret|Authorization|private-marker/);
 });
 
-test.skip('旧仕様: 残高切れdry-runはskip', async t => {
-  const ctx = setup(t, { dryRun: true, fetchFn: async () => ({ ok: false, status: 403, text: async () => 'credits exhausted' }) });
-  assert.equal((await runCollect(ctx.options)).status, 'skip:支払い待ち');
+test('長い残高切れ応答もOpenRouterへフォールバックし、本文と認証情報を記録しない', async t => {
+  const logs = [], errors = [];
+  const ctx = setup(t, { openRouterKey: 'or-long-secret', log: line => logs.push(line), errorLog: line => errors.push(line), fetchFn: async url => {
+    if (url.includes('api.x.ai')) return { ok: false, status: 403, text: async () => JSON.stringify({ private: 'private-marker'.repeat(200), code: 'permission-denied', error: 'fake-key', Authorization: 'Bearer fake-key' }) };
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [] }) } }], usage: { cost: .02 } }));
+  } });
+  assert.equal(await runCli([], ctx.options), 0);
+  assert.doesNotMatch(JSON.stringify({ logs, errors, runs: readRuns(ctx) }), /fake-key|or-long-secret|Authorization|private-marker/);
+});
+
+test('残高切れdry-runもOpenRouterへフォールバックし、stateと実行記録を書かない', async t => {
+  let calls = 0;
+  const ctx = setup(t, { dryRun: true, openRouterKey: 'or-dry-run', fetchFn: async url => {
+    calls++;
+    if (url.includes('api.x.ai')) return { ok: false, status: 403, text: async () => 'credits exhausted' };
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [item] }) } }], usage: { cost: .02 } }));
+  } });
+  assert.match((await runCollect(ctx.options)).status, /^ok:/);
+  assert.equal(calls, 2);
   assert.equal(fs.existsSync(ctx.base), false);
 });
 
-test.skip('旧仕様: 後続の残高切れはskip', async t => {
-  let calls = 0;
-  const ctx = setup(t, { fetchFn: async () => ++calls === 1 ? response() : { ok: false, status: 403, text: async () => 'spending limit' } });
-  ctx.options.config.topics = defaults.topics;
+test('後続の残高切れはOpenRouterへ切り替え、先行成果と費用を保持する', async t => {
+  let xaiCalls = 0;
+  const second = { ...item, url: 'https://x.com/test/status/124', title: '二件目', summary: '別の成果', steps: '別の手順' };
+  const ctx = setup(t, { openRouterKey: 'or-second', fetchFn: async url => {
+    if (url.includes('api.x.ai')) return ++xaiCalls === 1 ? response() : { ok: false, status: 403, text: async () => 'spending limit' };
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [second] }) } }], usage: { cost: .02 } }));
+  } });
+  ctx.options.config.topics = [defaults.topics[0], defaults.topics[0]];
   const result = await runCollect(ctx.options);
-  assert.equal(result.status, 'skip:支払い待ち');
-  assert.equal(result.added, 1);
-  assert.equal(calls, 2);
-  assert.equal(ctx.records().length, 1);
-  assert.equal(readState(ctx).night.costUsd, .01 + defaults.reservePerCallUsd);
-  assert.deepEqual(readRuns(ctx).map(run => run.status), ['ok', 'skip:支払い待ち']);
+  assert.match(result.status, /^ok:/);
+  assert.equal(result.added, 2);
+  assert.equal(ctx.records().length, 2);
+  assert.equal(readState(ctx).night.costUsd, .03);
+  assert.deepEqual(readRuns(ctx).map(run => [run.status, run.costUsd]), [['ok', .01], ['ok', .02]]);
 });
 
 test('エラーcodeに混入した鍵は実行記録でも伏せる', async t => {
@@ -405,23 +413,23 @@ test('verifyUrls: 最大10件まで', async t => {
   assert.equal(count, 10);
 });
 
-test.skip('旧仕様: x.ai 403 → fallback search', async t => {
+test('x.ai 403はOpenRouterを先に試し、その失敗後にweb-searchへ落ちる', async t => {
   const ctx = setup(t);
   ctx.options.config.topics = defaults.topics.slice(0, 1);
-  let xaiCalled = false;
-  let searchCalled = false;
+  ctx.options.openRouterKey = 'or-priority';
+  const order = [];
   ctx.options.searchImpl = async () => {
-    searchCalled = true;
+    order.push('web-search');
     return { answer: '最新のAIコスト削減手法については https://example.com/cost-tips を参照', urls: [{ url: 'https://example.com/cost-tips', title: 'コスト削減' }], provider: 'gemini', model: 'gemini-3.6-flash', elapsedMs: 100, failures: [] };
   };
   ctx.options.fetchFn = async (url, init) => {
-    if (url.includes('x.ai')) { xaiCalled = true; return { ok: false, status: 403 }; }
+    if (url.includes('api.x.ai')) { order.push('x.ai'); return { ok: false, status: 403, text: async () => 'credits exhausted' }; }
+    if (url.includes('openrouter.ai')) { order.push('openrouter'); return new Response('wallet empty', { status: 402 }); }
     // URL 実在確認用 — すべて 200
     return { ok: true, status: 200 };
   };
   const result = await runCollect(ctx.options);
-  assert.ok(xaiCalled);
-  assert.ok(searchCalled);
+  assert.deepEqual(order, ['x.ai', 'openrouter', 'web-search']);
   assert.ok(result.added >= 1);
   const records = ctx.records();
   const fallbackRecords = records.filter(r => r.source?.startsWith('fallback:'));

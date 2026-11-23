@@ -281,7 +281,14 @@ export async function runCollect(options = {}) {
           if (classifyApiError(response.status, responseBody) === 'credit-blocked') {
             const reason = `HTTP ${response.status} credit/quota response`;
             errorLog(`[LANE-FALLBACK] x.ai -> openrouter grok (reason: ${reason})`);
-            const fallback = await callOpenRouterGrok(request.input[0].content, { key: openRouterKey, fetchFn, signal });
+            let fallback;
+            try {
+              fallback = await callOpenRouterGrok(request.input[0].content, { key: openRouterKey, fetchFn, signal });
+            } catch {
+              // 元の x.ai status を保ち、既存の web-search fallback 判定へ渡す。
+              // OpenRouter の応答本文や認証情報はエラーへ連結しない。
+              throw new Error(`API HTTP ${response.status} (OpenRouter fallback failed)`);
+            }
             json = { output_text: fallback.text, usage: fallback.usage };
             usage = fallback.usage;
             actual = Number.isFinite(usage.cost) ? usage.cost : config.reservePerCallUsd;
@@ -311,7 +318,7 @@ export async function runCollect(options = {}) {
         failure = safeError(error.message, [key, openRouterKey]);
         const timedOut = awaitingResponse && (signal?.aborted || ['TimeoutError', 'AbortError'].includes(error.name));
         // 401/402/403 は serverError 扱いにして打ち切らず次テーマへ進む
-        const httpStatus = Number(error.message.replace('API HTTP ', ''));
+        const httpStatus = Number(/^API HTTP (\d+)/.exec(error.message)?.[1]);
         const authOrBilling = [402, 403].includes(httpStatus);
         if (!serverError && !timedOut && !authOrBilling) throw error;
         failedTopics++;

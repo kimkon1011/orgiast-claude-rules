@@ -182,11 +182,11 @@ PR は作った席が `node tools/pr-land.mjs --title "<題>" --body-file <本�
 - Discord の2,000字を超えたら分割して全文を送る。
 - 根拠（2026-10-28）: パレス様へのメール送信を佐藤さんに DM で共有した際、要約→「送りました」だけ、と送り、どちらも佐藤さんが Gmail を見に行く手間が残った。
 
-**🔴 メールの送信・下書きはすべて seisaku-team@orgiast.jp。送信指示時は重複・矛盾照会**
+メールの送信・下書きはすべて seisaku-team@orgiast.jp。送信指示時は重複・矛盾照会。
 
 🔴 ブース営業（展示会ブース・Reブース・出展関連）の社外メールは佐藤優奈さん（satou@orgiast.jp）を必ずCCに入れる。gmail-draft.mjs 等が config/booth-sales-cc.json で自動付与し、既存下書きの送信でCC欠落なら止める（2026-11-23 kim 指示）。
-**🔴 メールは送信前に本文全文を提示し明示承認後のみ送る。多数宛は1社ずつ YES を得る。gmail-draft.mjs --send の自動チェック（スレッド全体の合意×見積明細：金額・数量・人件費・納品形態・日程等）を通し、block は修正する。生の Gmail API 送信は禁止。送信後は本文全文・添付の中身・送信日時/元/先/件名をチャットに表示する。**
-**🔴 送信前、自社分も宛先全履歴を読み、聞き直し/未回答/矛盾・重複をsend-context-checkで確認結果を承認全文で提示（2026-11-10 C0039 事故）。**
+**🔴 メールは本文全文を提示し明示承認後のみ送る（多数宛は1社ずつYES）。gmail-draft.mjs --send のスレッド合意・見積明細（金額/数量/人件費/納品形態/日程）チェックを通しblockを修正。生Gmail API送信禁止。送信後は本文・添付内容・日時/元/先/件名を表示。**
+**🔴 送信前に自社分を含む宛先全履歴を読み、聞き直し/未回答/矛盾/重複のsend-context-check結果を承認全文で提示。**
 - 確定済み条件を変更する連絡は `--intended-change "<変更内容>"`（複数可）を付けて実行する。例: `node tools/send-context-check.mjs --channel discord --target <ID> --text-file <本文> --intended-change "設営時間 9:00-13:00→9:00-18:00" --intended-change "報酬 5,200円→10,400円"`。本文で変更であることを明示し、変更前の値が履歴と一致すれば、その変更自体は矛盾・重複としてNGにしない。
 - 金さんがチャットで明示承認した社内宛だけ、`--kim-approved "<承認の根拠メモ>"` を付けて LLM が NG でも承認マーカーを作れる（2026-11-16）。宛先は既存の社内リスト（`config/internal-senders.json` の Discord/メール/LINE 表示名、または `beeperInternalChats` の Beeper チャットID・メンバー名、または Discord メンバーディレクトリ）にある人に限る。`lineDisplayNames` に社内の相手を足して判定しない（履歴の自社/相手分類が崩れる）。判定結果・承認根拠・日時・送信先・本文ハッシュは `~/.claude/logs/send-context-kim-approved.jsonl` に残す。オプション無しの既定動作は変えない。例: `node tools/send-context-check.mjs --channel discord --target <名前またはID> --text-file <本文> --kim-approved "2026-11-16 23:04 金さんがグロボのチャットで承認"`。
 多数宛は `node tools/mail-bulk-approve.mjs --input <JSON> --project-dir <新規clasp管理dir>` で承認シートを作り、初回の setupOnce 設定後、kim が1社ずつ「送信」にチェックして送る（本文確認＋YES承認、二重送信防止）。

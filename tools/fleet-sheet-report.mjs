@@ -129,6 +129,7 @@ async function main() {
   const counts = cheapAiCounts(path.join(claudeDir, 'executor-usage.jsonl'));
   const mappedName = Object.prototype.hasOwnProperty.call(map, label) && typeof map[label] === 'string' ? map[label] : null;
   const topModel = Array.isArray(reporter.topModels) && reporter.topModels[0] ? reporter.topModels[0].model : '';
+  const opusRatio = finiteNumber(reporter.opusRatio);
   const identity = machineIdentity();
   const projects = collectProjectInventory({ projectsDir: path.join(claudeDir, 'projects') });
   let interaction = { version: '判定不能', selftest: '判定不能', lastRun: '判定不能' };
@@ -164,7 +165,7 @@ async function main() {
     // 追加識別(Claude ログインアカウント・OS・Macシリアル)。受け側GASが未知フィールドを無視しても壊れない加算のみ。
     ...reportExtras(home),
     claudeUsd: claudeUsd === null ? '' : Math.round(claudeUsd * 100) / 100,
-    mainModel: topModel,
+    mainModel: opusRatio !== null ? `${topModel} (${formatRatio(opusRatio)})` : topModel,
     // 既存行が "0%" 表記なので、人が読む列で表記が混ざらないようパーセント文字列にする。
     // 主セルは判定に使う行ベース比(#186)。未計測なら従来どおりトークン比へフォールバック。
     delegRatio: formatRatio(linesRatio === null ? nonClaudeRatio : linesRatio),

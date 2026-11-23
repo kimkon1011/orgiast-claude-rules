@@ -1,3 +1,4 @@
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -49,7 +50,7 @@ export async function runDailyNotices({ home = process.env.ORGIAST_HOME || os.ho
     };
     for (; sent < chunks.length;) {
       const result = await notify(chunks[sent], { home, webhookFallback: false });
-      if (!['dm', 'session-inbox'].includes(result?.delivered)) throw new Error('日次通知のDiscord DM送信に失敗');
+      if (!isKimDelivered(result)) throw new Error(`日次通知の kim-inbox 保存に失敗 (delivered=${result?.delivered ?? 'unknown'} reason=${result?.reason ?? 'unknown'})`);
       sent++;
       save(sent === chunks.length);
     }

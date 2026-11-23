@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import { publishSeatPr } from './pr-land.mjs';
 import fs from 'node:fs';
 import { writeHandoff } from './next-session-rotate.mjs';
@@ -195,10 +196,23 @@ export function isOpusHeavy(row, localState) {
       if (match) {
         return parseFloat(match[1]) > 50;
       }
-      return true;
+      // %無しの model 名だけでは過多と判定しない（2026-11-17 以降の既定は Opus 監督）
+      return false;
     }
   }
   return false;
+}
+
+export function opusRatioFromMainModel(mainModel) {
+  if (typeof mainModel !== 'string') return null;
+  const lower = mainModel.toLowerCase();
+  if (!lower.includes('opus')) return null;
+  const match = lower.match(/(\d+(?:\.\d+)?)\s*%/);
+  if (match) {
+    const pct = parseFloat(match[1]);
+    return pct >= 0 && pct <= 100 ? pct / 100 : null;
+  }
+  return null;
 }
 
 export function parseCheapAiUseCount(text) {
@@ -354,7 +368,7 @@ export function evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis = 
           severity: 'warning',
           evidence: `Main model contains Opus (> 50% ratio)`,
           measuredAt,
-          actualValue: isSelf && typeof localState?.opusRatio === 'number' ? localState.opusRatio : 1,
+          actualValue: isSelf && typeof localState?.opusRatio === 'number' ? localState.opusRatio : opusRatioFromMainModel(row.mainModel) ?? 1,
           targetValue: 0.5,
           trusted: true
         });
@@ -1702,7 +1716,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   if (!dryRun && !noNotify && !io.noNotify) {
     try {
       const notifyResult = await (io.notifyKim ?? notifyKim)(reportText, { home, webhookFallback: false });
-      if (!notifyResult || !['dm', 'session-inbox'].includes(notifyResult.delivered)) {
+      if (!isKimDelivered(notifyResult)) {
         throw new Error(notifyResult?.reason || 'kim の DM に配信されませんでした');
       }
       delete finalState.lastNotifyError;
@@ -1732,7 +1746,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       if (await (io.shouldSendMonthlyReport || shouldSendMonthlyReport)({ home, now, claudeDir })) {
         const reportText = buildMonthlyReport({ home, now });
         const monthlyResult = await (io.notifyKim ?? notifyKim)(reportText, { home, webhookFallback: false });
-        if (['dm', 'session-inbox'].includes(monthlyResult?.delivered)) await (io.markMonthlyReportSent || markMonthlyReportSent)({ home, now, claudeDir });
+        if (isKimDelivered(monthlyResult)) await (io.markMonthlyReportSent || markMonthlyReportSent)({ home, now, claudeDir });
         console.log('月次レポートを kim へ DM 送信しました');
       }
     } catch (error) {

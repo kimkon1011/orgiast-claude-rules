@@ -94,6 +94,20 @@ test('委譲率セルは判定に使う行ベース比(#186)を優先し、無�
   assert.equal(withoutLines.delegRatio, '38.1%');
 });
 
+test('opusRatio が有限数のとき mainModel にパーセントが含まれる', () => {
+  const payload = reportPayload({
+    '.cost-reporter-state.json': { topModels: [{ model: 'claude-opus-4' }], opusRatio: 0.724 },
+  });
+  assert.equal(payload.mainModel, 'claude-opus-4 (72.4%)');
+});
+
+test('opusRatio が無いとき mainModel は素の model 名', () => {
+  const payload = reportPayload({
+    '.cost-reporter-state.json': { topModels: [{ model: 'claude-sonnet-4' }] },
+  });
+  assert.equal(payload.mainModel, 'claude-sonnet-4');
+});
+
 test('keyserve status を既存 status payload に相乗りさせる', () => {
   const checkedAt = '2026-09-12T00:00:00.000Z';
   const old = process.env.ORGIAST_KEYSERVE_STATUS_JSON;

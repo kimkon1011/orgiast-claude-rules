@@ -86,7 +86,7 @@ test('stamp parses ISO, .NET JSON, local scheduler time, and preserves never-run
 test('persistent repair, unresolved daily notification, recovery and dry-run', async t => {
   const home = temp(t), notifications = [], starts = [];
   let tasks = [task({ lastRunTime: '1999-01-01' })];
-  const options = { home, platform: 'win32', now, required: [], overrides: {}, listTasks: () => tasks, start: n => starts.push(n), notify: async body => notifications.push(body) };
+  const options = { home, platform: 'win32', now, required: [], overrides: {}, listTasks: () => tasks, start: n => starts.push(n), notify: async body => notifications.push(body), recheckDelayMs: 0 };
   await runAudit({ ...options, dryRun: true });
   assert.equal(fs.existsSync(path.join(home, '.claude')), false);
   await runAudit(options); assert.equal(starts.length, 1);
@@ -109,6 +109,55 @@ test('unsupported platform and failed PowerShell are safe; quiet/json output', a
   const lines = [], old = console.log; console.log = s => lines.push(s);
   try { await main(['--quiet'], { platform: 'linux' }); await main(['--json'], { platform: 'linux' }); } finally { console.log = old; }
   assert.equal(lines[0], 'skip: unsupported platform'); assert.equal(JSON.parse(lines[1]).skip, 'unsupported platform');
+});
+test('successful heal is rechecked once, marked recovered, and hidden from SessionStart', async t => {
+  const home = temp(t), sleeps = [], output = [], old = console.log;
+  let calls = 0;
+  console.log = line => output.push(line);
+  let result;
+  try {
+    result = await main(['--quiet'], {
+      home, platform: 'win32', now, required: [], overrides: {}, start: () => {},
+      sleep: async ms => sleeps.push(ms), recheckDelayMs: 12,
+      listTasks: () => ++calls === 1
+        ? [task({ lastTaskResult: 1 })]
+        : [task({ lastTaskResult: 0, lastRunTime: new Date(now + 1).toISOString() })]
+    });
+  } finally { console.log = old; }
+  assert.equal(result.lines.at(-1), '✅ 回復: OrgiastCostImproveLoop（failed → 再実行で成功）');
+  assert.equal(result.heals[0].recovered, true);
+  assert.deepEqual(sleeps, [12]);
+  assert.deepEqual(output, []);
+  assert.equal(fs.readFileSync(path.join(home, '.claude/unattended-job-audit-last.txt'), 'utf8'), '');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude/unattended-job-audit-state.json'))).heals.OrgiastCostImproveLoop.resolved, true);
+});
+test('failed heal recheck exhausts attempts and keeps the repair line cached', async t => {
+  const home = temp(t), sleeps = [];
+  const result = await runAudit({ home, platform: 'win32', now, required: [], overrides: {}, start: () => {},
+    listTasks: () => [task({ lastTaskResult: 1 })], recheckAttempts: 3, sleep: async () => sleeps.push(true) });
+  assert.equal(result.lines.at(-1), '🔧 再実行: OrgiastCostImproveLoop（failed）');
+  assert.equal(sleeps.length, 3);
+  assert.equal(fs.readFileSync(path.join(home, '.claude/unattended-job-audit-last.txt'), 'utf8'), result.lines.join('\n'));
+});
+test('a failed recheck is ignored without making the audit unmeasurable', async t => {
+  let calls = 0;
+  const result = await runAudit({ home: temp(t), platform: 'win32', now, required: [], overrides: {}, start: () => {}, sleep: async () => {},
+    listTasks: () => { if (++calls > 1) throw new Error('recheck failed'); return [task({ lastTaskResult: 1 })]; } });
+  assert.equal(result.lines.at(-1), '🔧 再実行: OrgiastCostImproveLoop（failed）');
+  assert.equal(result.error, undefined);
+});
+test('missing required repairs are not rechecked', async t => {
+  let calls = 0;
+  const result = await runAudit({ home: temp(t), platform: 'win32', now, required: ['OrgiastMissing'], overrides: {},
+    listTasks: () => { calls++; return []; }, spawnImpl: spawnStub([]), sleep: async () => assert.fail('must not sleep') });
+  assert.equal(calls, 1);
+  assert.equal(result.heals[0].kind, 'missing_required');
+});
+test('dry-run never sleeps or rechecks', async t => {
+  let calls = 0;
+  await runAudit({ home: temp(t), platform: 'win32', now, dryRun: true, required: [], overrides: {},
+    listTasks: () => { calls++; return [task({ lastTaskResult: 1 })]; }, sleep: async () => assert.fail('must not sleep') });
+  assert.equal(calls, 1);
 });
 test('details use one PowerShell call; enabling suppresses CIM output; folder selectors', () => {
   const commands = [];

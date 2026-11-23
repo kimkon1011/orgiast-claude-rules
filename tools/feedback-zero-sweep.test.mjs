@@ -73,6 +73,23 @@ function setup(items, { fail = false } = {}) {
 }
 const pending = [{ message_id: 'a1', app_name: 'テストアプリ', kind: 'bug', title: '壊れた', body: 'x' }];
 
+test('Issue化でリポジトリが参照できない場合は反映先と取得できたアカウントを表示する', async (t) => {
+  for (const login of ['runner', '']) {
+    const { home, opts, calls } = setup(pending);
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    opts.ensureIssue = () => { throw new Error("Issue lookup failed (GraphQL: Could not resolve to a Repository with the name 'o/r'.)"); };
+    opts.gh = (args) => {
+      assert.deepEqual(args, ['api', 'user', '-q', '.login']);
+      return login ? { status: 0, stdout: login+'\n' } : { status: 1, stdout: '' };
+    };
+    const result = await sweep(opts);
+    const expected = `Issue化失敗: 反映先 o/r を実行アカウント${login ? ' '+login : ''} が参照できない（招待待ち）`;
+    assert.deepEqual(result.rows[0].errors, [expected]);
+    assert.ok(calls.notify[0].includes(expected));
+    assert.equal(sweepExitCode(result), 1);
+  }
+});
+
 test('終了コードは正常な0件を成功とし、実際の失敗を維持する', () => {
   const empty = { dryRun: false, remaining: 0, unknown: 0, notification: { delivered: 'dm' } };
   const cases = [

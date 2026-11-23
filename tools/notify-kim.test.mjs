@@ -323,6 +323,8 @@ test('PRマージ依頼はDiscordに送信せず同じ本文をinboxへ保存す
     const dir = home(); fs.mkdirSync(path.join(dir, '.claude')); fs.writeFileSync(path.join(dir, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
     const result = await realNotifyKim('PR #943 をマージしてください', { home: dir,
       fetchImpl: async () => { fetches += 1; throw new Error('unexpected fetch'); },
+      execImpl: async () => { throw new Error('no gh'); },
+      stderr: () => {},
     });
     assert.equal(result.delivered, 'session-inbox'); assert.equal(result.discordBlocked, true);
     const saved = JSON.parse(fs.readFileSync(path.join(dir, '.claude/kim-inbox', result.id + '.json'), 'utf8'));

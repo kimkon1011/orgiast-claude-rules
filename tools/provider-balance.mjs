@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -207,7 +208,7 @@ export async function alertProviderBalances(rows, {
       // 切り詰めで残高注意を失わない。現在の全プロバイダをまとめても2,000文字未満。
       if (text.length > 2000) throw new Error('DM too long');
       const result = await notify(text, { home, webhookFallback: false });
-      if (!['dm', 'session-inbox'].includes(result?.delivered)) throw new Error('DM not delivered');
+      if (!isKimDelivered(result)) throw new Error('DM not delivered');
       delivered = result.delivered;
     }
     if (notifiedChanged) {

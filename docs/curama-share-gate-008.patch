@@ -1,0 +1,72 @@
+--- C:\Users\user\.claude\browser-tools\curama-ask.mjs
++++ C:\Users\user\.claude\browser-tools\curama-ask.mjs
+@@ -1,2 +1,3 @@
++import { assertCuramaLinks } from 'file:///C:/Users/user/wt-share-gate-20261122/tools/curama-share-gate-adapter.mjs';
+ // くらしのマーケット（saiyo@orgiast.jp）の出店者サービスページから「このサービスについて質問する」で新規メッセージを送る
+ // 使い方: node curama-ask.mjs <カテゴリ/SER番号> <本文ファイル> [--send]
+@@ -99,4 +100,5 @@
+       process.exit(exitCode);
+     }
++    await assertCuramaLinks(page);
+     await sendBtn.click();
+     await page.waitForTimeout(5000);
+--- C:\Users\user\.claude\browser-tools\curama-send.mjs
++++ C:\Users\user\.claude\browser-tools\curama-send.mjs
+@@ -1,2 +1,3 @@
++import { assertCuramaLinks } from 'file:///C:/Users/user/wt-share-gate-20261122/tools/curama-share-gate-adapter.mjs';
+ // くらしのマーケット（saiyo@orgiast.jp）の指定 SER のメッセージ画面に、ファイルの本文を送信して読み戻す。
+ // 使い方: node curama-send.mjs <SER番号> <本文ファイル>   ログイン済みプロファイル前提（未ログインなら中止）
+@@ -16,4 +17,5 @@
+ const box = page.locator('textarea[placeholder="メッセージを入力"]');
+ await box.fill(body);
++await assertCuramaLinks(page);
+ await page.locator('button[aria-label="送信する"]').click();
+ await page.waitForTimeout(5000);
+--- C:\Users\user\.claude\browser-tools\curama-ask-with-images-uehon.mjs
++++ C:\Users\user\.claude\browser-tools\curama-ask-with-images-uehon.mjs
+@@ -1,2 +1,3 @@
++import { assertCuramaLinks } from 'file:///C:/Users/user/wt-share-gate-20261122/tools/curama-share-gate-adapter.mjs';
+ import { chromium } from 'playwright';
+ import path from 'node:path';
+@@ -67,4 +68,5 @@
+       const sendBtn = page.locator('button[aria-label="送信する"]');
+       await sendBtn.waitFor({ state: 'visible', timeout: 8000 });
++      await assertCuramaLinks(page);
+       await sendBtn.click();
+       console.log('CLICKED_SEND');
+--- C:\Users\user\.claude\browser-tools\curama-batch-send-replace.mjs
++++ C:\Users\user\.claude\browser-tools\curama-batch-send-replace.mjs
+@@ -1,2 +1,3 @@
++import { assertCuramaLinks } from 'file:///C:/Users/user/wt-share-gate-20261122/tools/curama-share-gate-adapter.mjs';
+ ﻿import { chromium } from 'playwright';
+ import path from 'node:path';
+@@ -65,4 +66,5 @@
+       const sendBtn = page.locator('button[aria-label="送信する"]');
+       await sendBtn.waitFor({ state: 'visible', timeout: 8000 });
++      await assertCuramaLinks(page);
+       await sendBtn.click();
+       await page.waitForTimeout(6000);
+--- C:\Users\user\.claude\browser-tools\curama-watch-replace.mjs
++++ C:\Users\user\.claude\browser-tools\curama-watch-replace.mjs
+@@ -1,2 +1,3 @@
++import { assertCuramaLinks } from 'file:///C:/Users/user/wt-share-gate-20261122/tools/curama-share-gate-adapter.mjs';
+ import { chromium } from 'playwright';
+ import path from 'node:path';
+@@ -219,4 +220,5 @@
+           await page.waitForTimeout(3000);
+         }
++        await assertCuramaLinks(page);
+         await page.locator('button[aria-label="送信する"]').click();
+         await page.waitForTimeout(6000);
+--- C:\Users\user\terminals\uehon\replace-20261121\curama-watch-replace-gb.mjs
++++ C:\Users\user\terminals\uehon\replace-20261121\curama-watch-replace-gb.mjs
+@@ -1,2 +1,3 @@
++import { assertCuramaLinks } from 'file:///C:/Users/user/wt-share-gate-20261122/tools/curama-share-gate-adapter.mjs';
+ import { createRequire } from 'node:module';
+ const { chromium } = createRequire('C:/Users/user/.claude/browser-tools/curama-watch-replace.mjs')('playwright');
+@@ -224,4 +225,5 @@
+           await page.waitForTimeout(3000);
+         }
++        await assertCuramaLinks(page);
+         await page.locator('button[aria-label="送信する"]').click();
+         await page.waitForTimeout(6000);

@@ -197,6 +197,14 @@ test('dry-run はキーなしで raw とヘッダを返し user 指定も反映'
   }
 });
 
+test('ブース件名の dry-run は佐藤さんをCCし追加をJSONで報告する', async () => {
+  const result = await cli(['--to', 'customer@example.com', '--subject', '展示会ブースのご提案', '--body', 'test', '--dry-run', '--json']);
+  assert.equal(result.code, 0);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.boothCcAdded, 'satou@orgiast.jp');
+  assert.match(report.headers, /Cc: satou@orgiast\.jp/u);
+});
+
 test('--check は3スコープの認証のみ。Gmail API を呼ばない', async () => {
   const seen = [];
   const result = await cli(['--check', '--json'], { mintToken: async ({ scope }) => {
@@ -392,6 +400,18 @@ test('返信ヘッダと threadId を作成 API に渡す・注入を拒否す�
 const draftHeaders = (extra, to = 'Customer <customer@example.com>') => ({ message: { payload: { headers: [
   { name: 'To', value: to }, { name: 'Subject', value: '確認' }, ...extra,
 ] } } });
+test('既存のブース営業下書きは佐藤さんのCC欠落時に送信を停止する', async () => {
+  let calls = 0;
+  const result = await cli(['--send', 'draft', '--json'], {
+    getToken: async () => 't',
+    fetchImpl: async () => { calls++; return response(draftHeaders([{ name: 'Subject', value: '展示会ブースのご提案' }])); },
+  });
+  assert.equal(result.code, 2);
+  assert.equal(calls, 1);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.errorKind, 'booth_cc_missing');
+  assert.equal(report.boothCcAdded, 'satou@orgiast.jp');
+});
 test('--send は秘書の空き日程URLを承認上書きでも送らない', async () => {
   const data = Buffer.from('11月20日 10:00\nhttps://claude-pc.tailc5d751.ts.net/secretary/book').toString('base64url');
   const draft = { message: { threadId: 't', payload: { mimeType: 'text/plain', body: { data }, headers: [{ name: 'To', value: 'customer@example.com' }] } } };

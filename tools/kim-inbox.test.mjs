@@ -982,3 +982,132 @@ test('drop closes only open asks with the matching key for ordinary questions', 
   assert.equal(items.get(sameText.id).status, 'open');
   assert.equal(items.get(info.id).status, 'open');
 });
+
+// ============================================================
+// sweepInfoCandidates のテスト
+// ============================================================
+import { sweepInfoCandidates } from './kim-inbox.mjs';
+
+function makeItem(overrides) {
+  return {
+    id: overrides.id || `ki-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+    kind: overrides.kind ?? 'info',
+    status: overrides.status ?? 'open',
+    text: overrides.text ?? 'test info',
+    source: overrides.source ?? 'test',
+    createdAt: overrides.createdAt ?? new Date().toISOString(),
+    lastAt: overrides.lastAt ?? overrides.createdAt ?? new Date().toISOString(),
+    deliveredToKim: overrides.deliveredToKim ?? undefined,
+    dedupeKey: overrides.dedupeKey ?? undefined,
+    ...overrides,
+  };
+}
+
+test('sweepInfoCandidates: ask は対象にならない', () => {
+  const items = [
+    makeItem({ id: 'a1', kind: 'ask', text: 'this is an ask', deliveredToKim: true }),
+  ];
+  const { targetIds, excludedReasons } = sweepInfoCandidates(items);
+  assert.equal(targetIds.size, 0);
+});
+
+test('sweepInfoCandidates: 配信済み info は対象になる', () => {
+  const items = [
+    makeItem({ id: 'a1', kind: 'info', text: 'delivered info', deliveredToKim: true }),
+  ];
+  const { targetIds, excludedReasons } = sweepInfoCandidates(items);
+  assert.equal(targetIds.has('a1'), true);
+  assert.equal(excludedReasons.length, 0);
+});
+
+test('sweepInfoCandidates: 未配信・5日前の info は対象にならない', () => {
+  const fiveDaysAgo = new Date(Date.now() - 5 * 86400000).toISOString();
+  const items = [
+    makeItem({ id: 'a1', kind: 'info', text: 'recent undelivered', createdAt: fiveDaysAgo, deliveredToKim: undefined }),
+  ];
+  const { targetIds, excludedReasons } = sweepInfoCandidates(items);
+  assert.equal(targetIds.has('a1'), false);
+  assert.ok(excludedReasons.some(r => r.id === 'a1' && r.reason.includes('30日未満')));
+});
+
+test('sweepInfoCandidates: 未配信・60日前の info は対象になる', () => {
+  const sixtyDaysAgo = new Date(Date.now() - 60 * 86400000).toISOString();
+  const items = [
+    makeItem({ id: 'a1', kind: 'info', text: 'old undelivered', createdAt: sixtyDaysAgo, deliveredToKim: undefined }),
+  ];
+  const { targetIds, excludedReasons } = sweepInfoCandidates(items);
+  assert.equal(targetIds.has('a1'), true);
+});
+
+test('sweepInfoCandidates: 同一 dedupeKey が3件あるとき、最新1件は残り2件だけ対象になる', () => {
+  const base = new Date(Date.now() - 10 * 86400000);
+  const items = [
+    makeItem({ id: 'a1', kind: 'info', text: 'dup1', createdAt: new Date(base.getTime() + 1000).toISOString(), lastAt: new Date(base.getTime() + 1000).toISOString(), dedupeKey: 'group1', deliveredToKim: true }),
+    makeItem({ id: 'a2', kind: 'info', text: 'dup2', createdAt: new Date(base.getTime() + 2000).toISOString(), lastAt: new Date(base.getTime() + 2000).toISOString(), dedupeKey: 'group1', deliveredToKim: true }),
+    makeItem({ id: 'a3', kind: 'info', text: 'dup3', createdAt: new Date(base.getTime() + 3000).toISOString(), lastAt: new Date(base.getTime() + 3000).toISOString(), dedupeKey: 'group1', deliveredToKim: true }),
+  ];
+  const { targetIds } = sweepInfoCandidates(items);
+  assert.equal(targetIds.has('a3'), false, '最新は対象外');
+  assert.equal(targetIds.has('a2'), true, '重複2は対象');
+  assert.equal(targetIds.has('a1'), true, '重複1は対象');
+  assert.equal(targetIds.size, 2);
+});
+
+test('sweepInfoCandidates: 本文に「承認」を含む info は対象にならない', () => {
+  const items = [
+    makeItem({ id: 'a1', kind: 'info', text: 'この件の承認をお願いします', deliveredToKim: true }),
+  ];
+  const { targetIds, excludedReasons } = sweepInfoCandidates(items);
+  assert.equal(targetIds.has('a1'), false);
+  assert.ok(excludedReasons.some(r => r.id === 'a1' && r.reason.includes('承認キーワード')));
+});
+
+test('sweepInfoCandidates: 本文に「判断」を含む info は対象にならない', () => {
+  const items = [
+    makeItem({ id: 'a1', kind: 'info', text: '判断が必要な件', deliveredToKim: true }),
+  ];
+  const { targetIds } = sweepInfoCandidates(items);
+  assert.equal(targetIds.has('a1'), false);
+});
+
+test('sweepInfoCandidates: 本文に「どちら」を含む info は対象にならない', () => {
+  const items = [
+    makeItem({ id: 'a1', kind: 'info', text: 'どちらにするか決めてください', deliveredToKim: true }),
+  ];
+  const { targetIds } = sweepInfoCandidates(items);
+  assert.equal(targetIds.has('a1'), false);
+});
+
+test('sweepInfoCandidates: 本文に「YES」を含む info は対象にならない', () => {
+  const items = [
+    makeItem({ id: 'a1', kind: 'info', text: 'YES or NO で答えて', deliveredToKim: true }),
+  ];
+  const { targetIds } = sweepInfoCandidates(items);
+  assert.equal(targetIds.has('a1'), false);
+});
+
+test('sweepInfoCandidates: 本文に「決めて」を含む info は対象にならない', () => {
+  const items = [
+    makeItem({ id: 'a1', kind: 'info', text: '決めてください', deliveredToKim: true }),
+  ];
+  const { targetIds } = sweepInfoCandidates(items);
+  assert.equal(targetIds.has('a1'), false);
+});
+
+test('sweepInfoCandidates: 未配信・配信済みが混在するケース', () => {
+  const sixtyDaysAgo = new Date(Date.now() - 60 * 86400000).toISOString();
+  const fiveDaysAgo = new Date(Date.now() - 5 * 86400000).toISOString();
+  const items = [
+    makeItem({ id: 'a1', kind: 'info', text: 'delivered old', createdAt: sixtyDaysAgo, deliveredToKim: true }),
+    makeItem({ id: 'a2', kind: 'info', text: 'delivered with 承認', createdAt: sixtyDaysAgo, deliveredToKim: true }),
+    makeItem({ id: 'a3', kind: 'info', text: 'recent', createdAt: fiveDaysAgo, deliveredToKim: undefined }),
+    makeItem({ id: 'a4', kind: 'info', text: 'old undelivered', createdAt: sixtyDaysAgo, deliveredToKim: undefined }),
+  ];
+  const { targetIds, excludedReasons } = sweepInfoCandidates(items);
+  assert.equal(targetIds.has('a1'), true, 'a1 配信済み古い → 対象');
+  assert.equal(targetIds.has('a2'), false, 'a2 承認キーワード → 対象外');
+  assert.equal(targetIds.has('a3'), false, 'a3 未配信5日 → 対象外');
+  assert.equal(targetIds.has('a4'), true, 'a4 未配信60日 → 対象');
+  assert.equal(targetIds.size, 2);
+  assert.equal(excludedReasons.length, 2);
+});

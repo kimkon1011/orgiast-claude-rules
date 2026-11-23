@@ -663,6 +663,51 @@ export function dropItem(home, id, reason) {
   if (!String(reason ?? '').trim()) throw new Error('取り下げ理由が必要です');
   return resolveItem(home, id, { status: 'dropped', answer: clean(reason) });
 }
+// 自動 seen の候補を選ぶ純粋関数（副作用なし）。
+// 条件（AND; 全条件を満たすものが対象）:
+//   1. kind === 'info'（ask は絶対に対象外）
+//   2. deliveredToKim が立っている、または createdAt から 30 日以上経過
+// 除外（OR; 1つでも該当で対象外）:
+//   - 未配信かつ 30 日未満
+//   - 本文に承認・判断を求める語（承認/判断/どちら/YES/決めて）が含まれる
+// 重複: 同一 dedupeKey のグループは最新1件を残し残りを対象
+export function sweepInfoCandidates(items, { now = Date.now() } = {}) {
+  const openInfos = items.filter(i => i.kind === 'info' && i.status === 'open');
+  const targetIds = new Set();
+  const excludedReasons = [];
+  const dedupeGroups = new Map(); // dedupeKey -> [{item, index}]
+  for (const item of openInfos) {
+    // Exclude: 承認キーワードを含むもの
+    if (/承認|判断|どちら|YES|決めて/.test(item.text || '')) {
+      excludedReasons.push({ id: item.id, reason: '承認キーワードを含む' });
+      continue;
+    }
+    // Exclude: 未配信かつ 30 日未満
+    const days = (now - Date.parse(item.createdAt)) / 86_400_000;
+    if (!item.deliveredToKim && days < 30) {
+      excludedReasons.push({ id: item.id, reason: '未配信かつ30日未満' });
+      continue;
+    }
+    // 対象候補
+    targetIds.add(item.id);
+    // dedupeKey でグループ化
+    if (item.dedupeKey) {
+      if (!dedupeGroups.has(item.dedupeKey)) dedupeGroups.set(item.dedupeKey, []);
+      dedupeGroups.get(item.dedupeKey).push(item);
+    }
+  }
+  // dedupeKey 重複: 最新1件だけ残し、残りを対象に追加
+  for (const [, group] of dedupeGroups) {
+    if (group.length < 2) continue;
+    group.sort((a, b) => (b.lastAt || b.createdAt).localeCompare(a.lastAt || a.createdAt));
+    const keep = group[0];
+    targetIds.delete(keep.id); // 最新1件は対象外
+    for (const dup of group.slice(1)) {
+      targetIds.add(dup.id); // 重複行は対象
+    }
+  }
+  return { targetIds, excludedReasons };
+}
 const inboxDir = home => path.join(home, '.claude/fleet-inbox');
 const readJsonFile = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 // fleet-mail.mjs と同じロック（<file>.lock を wx で取得）で受信ファイルを完了にし、サーバー同期は
@@ -951,8 +996,43 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
         : listInboxMatches(home, () => true, { originals: true });
       if (args.includes('--status')) stdout(`kim-inbox: open ask ${items.filter(i => i.kind === 'ask').length} / open info ${items.filter(i => i.kind === 'info').length}\n最古: ${items.length ? `${items[0].id} ${items[0].text.split(/\r?\n/)[0].slice(0, 120)}` : 'なし'}`);
       else stdout(args.includes('--json') ? JSON.stringify(items) : displayPcNames(items.map(i => `${i.id} ${i.kind} ${i.status} ${i.text.split(/\r?\n/)[0]}${(i.count ?? i.repeatCount ?? 1) >= 2 ? ` (同じ内容 ${i.count ?? i.repeatCount} 件)` : ''}`).join('\n'), { home }));
-    } else throw new Error('--add / --answer / --seen / --drop / --show / --list / --status / --context / --compact / --merge-into <key> --ids <id,...> / --dedupe-existing [--dry|--apply] / --auto-close を指定してください');
+    } else if (args.includes('--sweep-info')) {
+      const apply = args.includes('--apply');
+      const allItems = listItems(home, { status: 'open' });
+      const { targetIds, excludedReasons } = sweepInfoCandidates(allItems);
+      const remainingIds = new Set(allItems.filter(i => i.kind === 'info' && i.status === 'open').map(i => i.id));
+      for (const id of targetIds) remainingIds.delete(id);
+      for (const { id } of excludedReasons) remainingIds.delete(id);
+      // 内訳（登録元別）
+      const targetItems = allItems.filter(i => targetIds.has(i.id));
+      const sourceBreakdown = {};
+      for (const item of targetItems) {
+        const s = item.source || '(empty)';
+        sourceBreakdown[s] = (sourceBreakdown[s] || 0) + 1;
+      }
+      const sourceTop = Object.entries(sourceBreakdown).sort((a, b) => b[1] - a[1]).slice(0, 10);
+      // 除外の内訳
+      const excludedByReason = {};
+      for (const { reason } of excludedReasons) excludedByReason[reason] = (excludedByReason[reason] || 0) + 1;
+      if (apply) {
+        for (const id of targetIds) markSeen(home, id);
+        stdout(`kim-inbox sweep-info: ${targetIds.size} 件を seen にしました`);
+      } else {
+        const lines = [
+          `kim-inbox sweep-info (dry-run):`,
+          `対象: ${targetIds.size} 件 / 除外: ${excludedReasons.length} 件 / 残る open info: ${remainingIds.size} 件`,
+          '',
+          '除外の内訳:',
+        ];
+        for (const [reason, count] of Object.entries(excludedByReason)) lines.push(`  ${reason}: ${count}件`);
+        lines.push('');
+        lines.push('対象の内訳（登録元 上位10）:');
+        for (const [source, count] of sourceTop) lines.push(`  ${source}: ${count}件`);
+        stdout(lines.join('\n'));
+      }
+    } else throw new Error('--add / --answer / --seen / --drop / --show / --list / --status / --context / --compact / --merge-into <key> --ids <id,...> / --dedupe-existing [--dry|--apply] / --sweep-info [--apply] / --auto-close を指定してください');
     return 0;
   } catch (error) { stderr(`kim-inbox: ${clean(error.message).replace(/[\r\n]+/g, ' ')}`); return args.includes('--context') ? 0 : 1; }
 }
+export const __test = { sweepInfoCandidates, listItems, markSeen };
 if (isEntry(import.meta.url)) process.exitCode = await main();

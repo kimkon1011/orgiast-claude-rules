@@ -1,5 +1,5 @@
 export function isCollapsedWindowsPath(name) {
-  return /^[A-Za-z]:/.test(name) && !/[\\/]/.test(name);
+  return /^[A-Za-z][:\uF03A]/.test(name) && !/[\\/\uF05C]/.test(name);
 }
 
 export function filterCollapsedWindowsPaths(names, { log = console.error } = {}) {

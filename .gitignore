@@ -122,5 +122,6 @@ PR_BODY.md
 /.pr-body.md
 /pr-body*.md
 
-# Git Bash でバックスラッシュが失われ、repo 直下へ落ちた Windows 一時パス
-/[A-Za-z]:Users*
+# Git Bash で区切りが失われ、repo 直下へ落ちた Windows 一時パス
+/[A-Za-z]:*
+/[A-Za-z]*

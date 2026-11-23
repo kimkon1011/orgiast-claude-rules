@@ -7,6 +7,41 @@ import { answerItem, listItems, updateInboxItem } from './kim-inbox.mjs';
 
 const execFileAsync = promisify(execFile);
 export const PR_URL_RE = /https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/g;
+
+// Allowlisted sources for judgment-free automatic notifications (A-type).
+// Matches exactly on item.source. Add new sources here when they join the known set.
+//
+// Sources intentionally excluded — do NOT re-add without verifying each ask
+// is truly judgment-free against real inbox data:
+//
+// - login-health: 本文「🔑 ログイン切れ検知: ai-lane:gemini / 状態: gemini 停止 (billing) / 直し方: node tools/lane-doctor.mjs --probe」
+//   → kim の入金・再ログインが必要な通知。自動クローズ禁止。
+//
+// - auto-progress-start-expired: 本文「セッション 15e481c1 / 対象: リーダー報酬 単価行自動追加の承認待ち」
+//   → kim の承認待ちセッション。自動クローズ禁止。
+//
+// - auto-progress-periodic: 定期進捗報告だが「確認結果: 未達」を含み追跡が必要。ask は 1 件のみ。
+//   → C 寄り。自動クローズから外す。
+//
+// - auto-progress-heartbeat: open ask に実例が 0 件（2026-11-24 時点）。A と確認できていない。
+//   → 確認できていないものは入れない。
+export const AUTO_CLOSE_SOURCES = new Set([
+  'auto-progress-done',
+]);
+
+// Allowlisted text patterns for A-type detection. Used as a secondary check
+// when the source is not in AUTO_CLOSE_SOURCES but the text clearly matches a
+// known notification pattern. Each regex must be specific enough to avoid
+// false positives on judgment-requesting items.
+//
+// login-health pattern (/^🔑\s*ログイン切れ検知:/) was removed because the
+// notification requires kim to take action (payment / re-login). See the
+// source-blocking comment above for the real text that proves this.
+export const AUTO_CLOSE_TEXT_PATTERNS = [
+  /^✅\s*check\s+達成:/,
+  /^✅\s*自動進行が完了しました/,
+  /^📋\s*未通知だった自動進行の完了一覧/,
+];
 export const USAGE = `Usage: node tools/kim-inbox-autoclose.mjs [options]
 
 Options:
@@ -140,6 +175,28 @@ export function formatBackfillResult(result) {
   return lines.join('\n');
 }
 
+export function findAutoCloseCandidatesBySource(items) {
+  const candidates = [];
+  for (const item of items) {
+    if (item.kind !== 'ask' || item.status !== 'open') continue;
+    const source = item.source || '';
+    const text = item.text || '';
+    // Source-based allowlist (exact match). This is the primary detection path.
+    if (AUTO_CLOSE_SOURCES.has(source)) {
+      candidates.push({ id: item.id, source, reason: `source=${source}`, text: text.slice(0, 80) });
+      continue;
+    }
+    // Text pattern allowlist (secondary). Only checked when source didn't match.
+    for (const pattern of AUTO_CLOSE_TEXT_PATTERNS) {
+      if (pattern.test(text)) {
+        candidates.push({ id: item.id, source, reason: `text-pattern=${pattern.source}`, text: text.slice(0, 80) });
+        break;
+      }
+    }
+  }
+  return candidates;
+}
+
 export async function findAutocloseCandidates(items, { fetchState = fetchPullRequestState } = {}) {
   const cache = new Map();
   const failures = [];
@@ -182,19 +239,29 @@ function closeMessage(prs) {
   }).join('\n');
 }
 
+function sourceCloseMessage(candidate) {
+  return `自動通知のため自動クローズしました（${candidate.reason}）`;
+}
+
 export async function runAutoclose({
   home = process.env.ORGIAST_HOME || os.homedir(), apply = false,
   fetchState = fetchPullRequestState, readItems = listItems, answer = answerItem,
 } = {}) {
-  const result = await findAutocloseCandidates(readItems(home, { status: 'open' }), { fetchState });
+  const items = readItems(home, { status: 'open' });
+  const prResult = await findAutocloseCandidates(items, { fetchState });
+  const sourceCandidates = findAutoCloseCandidatesBySource(items);
   const closed = [];
   if (apply) {
-    for (const candidate of result.candidates) {
+    for (const candidate of prResult.candidates) {
       answer(home, candidate.id, closeMessage(candidate.prs), 'kim-inbox-autoclose');
       closed.push(candidate.id);
     }
+    for (const candidate of sourceCandidates) {
+      answer(home, candidate.id, sourceCloseMessage(candidate), 'kim-inbox-autoclose');
+      closed.push(candidate.id);
+    }
   }
-  return { ...result, apply, closed };
+  return { ...prResult, apply, closed, sourceCandidates };
 }
 
 export function formatResult(result, { json = false } = {}) {
@@ -204,7 +271,10 @@ export function formatResult(result, { json = false } = {}) {
     const prs = row.prs.map(pr => `#${pr.number} ${pr.state} ${pr.mergedAt || pr.closedAt || '日時不明'}`).join(', ');
     lines.push(`${row.id} ${prs}`);
   }
-  lines.push(`kim-inbox autoclose ${result.apply ? '(apply)' : '(dry-run)'}: 対象 ${result.candidates.length}件 / PR取得 ${result.fetchedPrCount}件 / 取得失敗 ${result.failures.length}件`);
+  for (const row of result.sourceCandidates || []) {
+    lines.push(`${row.id} [自動通知] ${row.reason} | ${row.text}`);
+  }
+  lines.push(`kim-inbox autoclose ${result.apply ? '(apply)' : '(dry-run)'}: PR対象 ${result.candidates.length}件 / 自動通知 ${(result.sourceCandidates || []).length}件 / PR取得 ${result.fetchedPrCount}件 / 取得失敗 ${result.failures.length}件`);
   return lines.join('\n');
 }
 

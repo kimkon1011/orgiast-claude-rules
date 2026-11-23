@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { USAGE, main, findAutocloseCandidates, runAutoclose, extractShortPullRequestNumbers, findBackfillCandidates, runBackfill } from '../tools/kim-inbox-autoclose.mjs';
+import { USAGE, main, findAutocloseCandidates, findAutoCloseCandidatesBySource, runAutoclose, extractShortPullRequestNumbers, findBackfillCandidates, runBackfill } from '../tools/kim-inbox-autoclose.mjs';
 
 const url = number => `https://github.com/acme/widgets/pull/${number}`;
 const item = (id, text, extra = {}) => ({ id, text, title: '', kind: 'ask', status: 'open', ...extra });
@@ -120,4 +120,140 @@ test('backfill は曖昧・取得失敗を skip し dry-run では更新しな�
   assert.equal(result.candidates, 0);
   assert.equal(result.skipped, 2);
   assert.equal(updates, 0);
+});
+
+// ── Source-based auto-close (A-type) tests ──
+
+test('source: auto-progress-done は自動クローズ対象になる', () => {
+  const result = findAutoCloseCandidatesBySource([
+    item('ki-apsrc', '✅ check 達成: 何かの完了', { source: 'auto-progress-done' }),
+  ]);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].id, 'ki-apsrc');
+  assert.match(result[0].reason, /source=auto-progress-done/);
+});
+
+test('source: login-health は自動クローズ対象にならない（kimの入金・再ログインが必要）', () => {
+  const result = findAutoCloseCandidatesBySource([
+    item('ki-health', '🔑 ログイン切れ検知: ai-lane:gemini | 状態: 停止', { source: 'login-health' }),
+  ]);
+  assert.equal(result.length, 0, 'login-health は本当は kim の操作が必要な通知であり自動クローズ禁止');
+});
+
+test('source: auto-progress-start-expired は自動クローズ対象にならない（kimの承認待ちセッション）', () => {
+  const result = findAutoCloseCandidatesBySource([
+    item('ki-expired', 'セッション abc | 対象: リーダー報酬 単価行自動追加の承認待ち', { source: 'auto-progress-start-expired' }),
+  ]);
+  assert.equal(result.length, 0, 'auto-progress-start-expired は kim の承認待ちであり自動クローズ禁止');
+});
+
+test('source: auto-progress-periodic は自動クローズ対象にならない（確認結果: 未達を含む）', () => {
+  const result = findAutoCloseCandidatesBySource([
+    item('ki-periodic', '定期進捗報告', { source: 'auto-progress-periodic' }),
+  ]);
+  assert.equal(result.length, 0, 'auto-progress-periodic は追跡が必要であり自動クローズ禁止');
+});
+
+test('source: auto-progress-heartbeat は自動クローズ対象にならない（実データでAと確認できていない）', () => {
+  const result = findAutoCloseCandidatesBySource([
+    item('ki-hb', 'heartbeat', { source: 'auto-progress-heartbeat' }),
+  ]);
+  assert.equal(result.length, 0, 'auto-progress-heartbeat は確認ができていないため自動クローズ禁止');
+});
+
+test('text pattern: ✅ check 達成: で始まるテキストは source が allowlist 外でも対象', () => {
+  const result = findAutoCloseCandidatesBySource([
+    item('ki-pattern', '✅ check 達成: 何かの確認が完了'),
+  ]);
+  assert.equal(result.length, 1);
+  assert.match(result[0].reason, /text-pattern/);
+});
+
+test('text pattern: ✅ 自動進行が完了しました で始まるテキストは source が allowlist 外でも対象', () => {
+  const result = findAutoCloseCandidatesBySource([
+    item('ki-done-text', '✅ 自動進行が完了しました', { source: 'some-other-source' }),
+  ]);
+  assert.equal(result.length, 1);
+  assert.match(result[0].reason, /text-pattern/);
+});
+
+test('text pattern: 📋 未通知だった自動進行の完了一覧 で始まるテキストは対象', () => {
+  const result = findAutoCloseCandidatesBySource([
+    item('ki-notified', '📋 未通知だった自動進行の完了一覧 | 過去に完了していたもの'),
+  ]);
+  assert.equal(result.length, 1);
+});
+
+test('判断を求める C 型は自動クローズ対象にならない', () => {
+  const result = findAutoCloseCandidatesBySource([
+    item('ki-c1', '【承認依頼】PR #222 をマージしてよいか'),
+    item('ki-c2', '【要対応・kimの判断待ち】操作が必要です', { source: 'quota-sweep' }),
+    item('ki-c3', 'スタッフ評価・ブラックリスト機能の実装に入ってよいか、返事をください。', { source: '' }),
+  ]);
+  assert.equal(result.length, 0);
+});
+
+test('info アイテムは kind=ask 以外なので自動クローズ対象にならない', () => {
+  const result = findAutoCloseCandidatesBySource([
+    { id: 'ki-info', text: '✅ check 達成: 完了', kind: 'info', status: 'open', source: 'auto-progress-done' },
+  ]);
+  assert.equal(result.length, 0);
+});
+
+test('既に seen の ask は自動クローズ対象にならない', () => {
+  const result = findAutoCloseCandidatesBySource([
+    { id: 'ki-seen', text: '✅ check 達成: 完了', kind: 'ask', status: 'seen', source: 'auto-progress-done' },
+  ]);
+  assert.equal(result.length, 0);
+});
+
+test('runAutoclose dry-run は source 候補をファイルに書き込まない', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-inbox-autoclose-src-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const dir = path.join(home, '.claude', 'kim-inbox');
+  fs.mkdirSync(dir, { recursive: true });
+  const id = 'ki-20261124000000-1234';
+  const file = path.join(dir, `${id}.json`);
+  const record = { id, text: '✅ check 達成: テスト完了', title: '', kind: 'ask', status: 'open', source: 'auto-progress-done', createdAt: '2026-11-24T00:00:00Z', shownSessions: [], shownCount: 0 };
+  fs.writeFileSync(file, JSON.stringify(record, null, 2) + '\n');
+  const before = fs.readFileSync(file, 'utf8');
+  let answers = 0;
+  const result = await runAutoclose({ home, fetchState: async () => ({ state: 'OPEN', number: 0 }), answer: () => { answers++; } });
+  assert.equal(result.sourceCandidates.length, 1);
+  assert.equal(answers, 0);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+});
+
+test('runAutoclose --apply は source 候補を回答記録する', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-inbox-autoclose-src2-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const dir = path.join(home, '.claude', 'kim-inbox');
+  fs.mkdirSync(dir, { recursive: true });
+  const id = 'ki-20261124000000-5678';
+  const file = path.join(dir, `${id}.json`);
+  const record = { id, text: '✅ check 達成: 完了', title: '', kind: 'ask', status: 'open', source: 'auto-progress-done', createdAt: '2026-11-24T00:00:00Z', shownSessions: [], shownCount: 0 };
+  fs.writeFileSync(file, JSON.stringify(record, null, 2) + '\n');
+  let answers = [];
+  const result = await runAutoclose({
+    home, apply: true,
+    fetchState: async () => ({ state: 'OPEN', number: 0 }),
+    answer: (h, id, msg, sid) => { answers.push({ id, msg, sid }); },
+  });
+  assert.equal(result.sourceCandidates.length, 1);
+  assert.equal(answers.length, 1);
+  assert.equal(answers[0].id, id);
+  assert.match(answers[0].msg, /自動通知のため自動クローズ/);
+  assert.equal(answers[0].sid, 'kim-inbox-autoclose');
+});
+
+test('formatResult の出力に自動通知件数が表示される', async () => {
+  const { formatResult } = await import('../tools/kim-inbox-autoclose.mjs');
+  const result = {
+    candidates: [],
+    sourceCandidates: [{ id: 'ki-src', source: 'auto-progress-done', reason: 'source=auto-progress-done', text: '✅ check 達成: 完了' }],
+    fetchedPrCount: 0, failures: [], skipped: [], apply: false, closed: [],
+  };
+  const output = formatResult(result);
+  assert.match(output, /自動通知.*1件/);
+  assert.match(output, /auto-progress-done/);
 });

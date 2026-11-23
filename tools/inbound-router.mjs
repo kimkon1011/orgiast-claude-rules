@@ -193,10 +193,14 @@ export function makeRuntimeDeps({ home, root = repoRoot } = {}) {
   };
 }
 
+function dispatchDue(d, now) {
+  return !['done', 'abandoned'].includes(d.status) && d.sentAt !== now
+    && (['failed', 'expired'].includes(d.status) || now - d.sentAt >= 60 * 60_000);
+}
+
 export async function retryDispatches(state, { now, deps, config, dryRun, plans }) {
   for (const d of state.dispatches) {
-    if (d.status === 'done' || d.status === 'abandoned') continue;
-    if (d.sentAt === now) continue;
+    if (!dispatchDue(d, now)) continue;
     let status = await deps.statusFleet(d.id);
     if (status === 'done') { d.status = 'done'; continue; }
     if (now - d.sentAt < 60 * 60_000 && status !== 'failed' && status !== 'expired') continue;
@@ -248,6 +252,11 @@ export function writeDigest({ state, now, reportDir, force = false }) {
 export async function run(options = {}, injected = {}) {
   const started = Date.now(), now = options.now ?? started, home = options.home || process.env.ORGIAST_HOME || os.homedir(), root = options.root || repoRoot;
   const dir = path.join(home, '.claude', 'inbound-router'), stateFile = options.stateFile || path.join(dir, 'state.json'), logFile = path.join(home, '.claude', 'logs', 'inbound-router.log'), config = options.config || readJson(path.join(root, 'config', 'inbound-router.json'), {}), deps = { ...makeRuntimeDeps({ home, root }), ...injected };
+  const calls = { classify: 0, fleetSend: 0, fleetStatus: 0 };
+  for (const [method, counter] of [['classify', 'classify'], ['sendFleet', 'fleetSend'], ['statusFleet', 'fleetStatus']]) {
+    const original = deps[method];
+    deps[method] = (...args) => { calls[counter]++; return original(...args); };
+  }
   fs.mkdirSync(dir, { recursive: true }); const lock = path.join(dir, '.lock'); let fd;
   for (let attempt = 0; attempt < 2; attempt++) { try { fd = fs.openSync(lock, 'wx', 0o600); fs.writeFileSync(fd, String(process.pid)); break; } catch (e) { if (e.code !== 'EEXIST') throw e; let pid; try { pid = Number(fs.readFileSync(lock, 'utf8')); process.kill(pid, 0); return { status: 'locked' }; } catch (check) { if (check.code === 'ESRCH' || !Number.isSafeInteger(pid)) { try { fs.unlinkSync(lock); } catch {} continue; } throw check; } } }
   if (fd === undefined) return { status: 'locked' };
@@ -255,14 +264,19 @@ export async function run(options = {}, injected = {}) {
   const plans = [];
   try {
     const since = now - (options.sinceMinutes || 60) * 60_000;
+    if (Number.isFinite(options.sinceMinutes) && options.sinceMinutes > 0) {
+      for (const source of ['beeper', ...MAILBOXES.map(mailbox => `gmail:${mailbox}`)]) {
+        state.sources[source] = Math.min(state.sources[source] ?? since, since);
+      }
+    }
 
     // Clean up old state entries
     cleanupState(state, now);
 
     const collected = await collectNew({ state, config, since, until: now, deps, checkpoint: options.dryRun ? () => {} : save, stop });
-    if (collected.items.length === 0 && !state.dispatches.some(d => !['done', 'abandoned'].includes(d.status))) {
+    if (collected.items.length === 0 && !state.dispatches.some(d => dispatchDue(d, now))) {
       let digestFile = null; if (!options.dryRun) digestFile = writeDigest({ state, now, reportDir: options.reportDir || path.join(home, 'gb-reports'), force: options.digestNow });
-      const report = { status: collected.failures.length ? 'partial' : 'ok', new: collected.counts, routed: {}, dispatches: 0, unknown: 0, failures: collected.failures, digestFile: digestFile ? path.basename(digestFile) : null, durationMs: Date.now() - started, plans };
+      const report = { status: collected.failures.length ? 'partial' : 'ok', new: collected.counts, routed: {}, dispatches: 0, unknown: 0, failures: collected.failures, digestFile: digestFile ? path.basename(digestFile) : null, durationMs: Date.now() - started, calls, plans };
       if (!options.dryRun) { save(); fs.mkdirSync(path.dirname(logFile), { recursive: true }); if (!options.runnerLog) fs.appendFileSync(logFile, `${JSON.stringify(report)}\n`); }
       return report;
     }
@@ -279,11 +293,11 @@ export async function run(options = {}, injected = {}) {
     await retryDispatches(state, { now, deps, config, dryRun: options.dryRun, plans });
     let digestFile = null; if (!options.dryRun) digestFile = writeDigest({ state, now, reportDir: options.reportDir || path.join(home, 'gb-reports'), force: options.digestNow });
     const preview = options.dryRun ? collected.items.map(item => ({ route: routed.routesByItem.get(item), title: item.title.slice(0, 30), sender: item.sender.slice(0, 20) })) : undefined;
-    const report = { status: collected.failures.length ? 'partial' : 'ok', new: collected.counts, routed: Object.fromEntries(Object.entries(routed.groups).map(([k,v]) => [k,v.length])), dispatches: plans.length, unknown: routed.unknown.length, failures: collected.failures, digestFile: digestFile ? path.basename(digestFile) : null, durationMs: Date.now() - started, plans, ...(preview ? { preview } : {}) };
+    const report = { status: collected.failures.length ? 'partial' : 'ok', new: collected.counts, routed: Object.fromEntries(Object.entries(routed.groups).map(([k,v]) => [k,v.length])), dispatches: plans.length, unknown: routed.unknown.length, failures: collected.failures, digestFile: digestFile ? path.basename(digestFile) : null, durationMs: Date.now() - started, calls, plans, ...(preview ? { preview } : {}) };
     if (!options.dryRun) { save(); fs.mkdirSync(path.dirname(logFile), { recursive: true }); if (!options.runnerLog) fs.appendFileSync(logFile, `${JSON.stringify(report)}\n`); }
     return report;
   } catch (e) {
-    const report = { status: 'failed', new: { beeper: 0, gmail: 0, noise: 0 }, routed: {}, dispatches: 0, unknown: 0, failures: [{ source: 'run', code: safeCode(e) }], digestFile: null, durationMs: Date.now() - started, plans };
+    const report = { status: 'failed', new: { beeper: 0, gmail: 0, noise: 0 }, routed: {}, dispatches: 0, unknown: 0, failures: [{ source: 'run', code: safeCode(e) }], digestFile: null, durationMs: Date.now() - started, calls, plans };
     if (!options.dryRun) { try { save(); } catch {} try { fs.mkdirSync(path.dirname(logFile), { recursive: true }); if (!options.runnerLog) fs.appendFileSync(logFile, `${JSON.stringify(report)}\n`); } catch {} }
     return report;
   } finally { if (fd !== undefined) fs.closeSync(fd); try { fs.unlinkSync(lock); } catch {} }
@@ -291,5 +305,5 @@ export async function run(options = {}, injected = {}) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2), value = (f, d) => { const i = args.indexOf(f); return i >= 0 ? Number(args[i + 1]) : d; };
-  run({ dryRun: args.includes('--dry-run'), runnerLog: args.includes('--runner-log'), digestNow: args.includes('--digest-now'), sinceMinutes: value('--since-minutes', 60) }).then(r => { console.log(JSON.stringify(r)); if (!['ok', 'locked'].includes(r.status)) process.exitCode = 1; }).catch(e => { console.error(`inbound-router failed: ${safeCode(e)}`); process.exitCode = 1; });
+  run({ dryRun: args.includes('--dry-run'), runnerLog: args.includes('--runner-log'), digestNow: args.includes('--digest-now'), sinceMinutes: value('--since-minutes', undefined) }).then(r => { console.log(JSON.stringify(r)); if (!['ok', 'locked'].includes(r.status)) process.exitCode = 1; }).catch(e => { console.error(`inbound-router failed: ${safeCode(e)}`); process.exitCode = 1; });
 }

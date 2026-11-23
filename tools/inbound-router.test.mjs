@@ -31,6 +31,37 @@ test('新着0件で llm-ask と fleet-mail を呼ばない', async () => {
   assert.equal(result.new.beeper + result.new.gmail, 0); assert.equal(classify, 0); assert.equal(fleet, 0);
 });
 
+test('送信直後の新着0件では状態照会を含めfleet-mailを呼ばない', async () => {
+  const home = temp(), stateFile = path.join(home, 'state.json'), state = initialState();
+  state.dispatches.push({ id: 'recent', route: 'sales', status: 'sent', sentAt: NOW - 60_000, attempts: 1 });
+  fs.writeFileSync(stateFile, JSON.stringify(state));
+  let calls = 0;
+  const result = await run({ ...options(home), stateFile }, baseDeps({
+    classify: async () => { calls++; }, sendFleet: async () => { calls++; }, statusFleet: async () => { calls++; return 'pending'; }
+  }));
+  assert.equal(calls, 0);
+  assert.deepEqual(result.calls, { classify: 0, fleetSend: 0, fleetStatus: 0 });
+  assert.deepEqual(result.routed, {});
+});
+
+test('明示したsinceMinutesは読取位置を遡り既読IDを重複配送しない', async () => {
+  const home = temp(), stateFile = path.join(home, 'state.json'), state = initialState();
+  state.sources = { beeper: NOW - 60_000, 'gmail:kim@orgiast.jp': NOW - 60_000, 'gmail:seisaku-team@orgiast.jp': NOW - 60_000 };
+  state.seen['gmail:kim@orgiast.jp:seen'] = NOW - 60_000;
+  fs.writeFileSync(stateFile, JSON.stringify(state));
+  const queries = [];
+  const result = await run({ ...options(home), stateFile, sinceMinutes: 240 }, baseDeps({
+    searchGmail: async ({ query, user, skipId }) => {
+      queries.push(query);
+      if (user !== 'kim@orgiast.jp') return { messages: [] };
+      return { messages: ['seen', 'unseen'].filter(id => !skipId(id)).map(id => ({ id, threadId: id, internalDate: NOW - 120 * 60_000, from: 'a@example.com', subject: '石井塾', body: '' })) };
+    }
+  }));
+  assert.ok(queries.every(query => query.includes(`after:${Math.floor((NOW - 241 * 60_000) / 1000)}`)));
+  assert.equal(result.new.gmail, 1);
+  assert.equal(result.routed.learning, 1);
+});
+
 test('Messenger 講師グループ chatID は learning の 000 session 付き', async () => {
   const state = initialState(), item = { kind: 'beeper', source: 'beeper:x', id: 'm1', chatId: '!ChIBuV99wU4lPhmKYZzu:beeper.local', title: '講師', sender: '陽介', text: '日程', time: new Date(NOW).toISOString() };
   const routed = await routeItems([item], { config, state, classify: async () => { throw new Error('unexpected'); } });

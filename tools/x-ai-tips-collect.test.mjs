@@ -85,7 +85,7 @@ for (const status of [401, 429]) test(`HTTP ${status} 即時打ち切り・予�
   else { assert.equal(result.calls, defaults.topics.length); assert.match(result.status, /テーマ失敗/); }
   const run = JSON.parse(fs.readFileSync(ctx.file('x-ai-tips/runs.jsonl'), 'utf8').trim().split('\n')[0]); assert.equal(run.reserved, true);
 });
-test('HTTP 403 の残高切れは残トピックを止め、予約を維持し、最後にskip statusを出して終了コード0', async t => {
+test('HTTP 403 の残高切れは残トピックを止め、予約を維持し、最後にskip status（日付入り）を出して終了コード0', async t => {
   const logs = []; let calls = 0;
   const ctx = setup(t, { log: line => logs.push(line), fetchFn: async url => { if (url.includes('x.ai')) calls++; return {
     ok: false,
@@ -95,8 +95,8 @@ test('HTTP 403 の残高切れは残トピックを止め、予約を維持し�
   ctx.options.config.topics = defaults.topics;
   assert.equal(await runCli([], ctx.options), 0);
   assert.equal(calls, 1);
-  assert.deepEqual(logs, ['x-ai-tips-collect: fallback → web-search grounding', 'x-ai-tips-collect: fallback も失敗', creditBlockedMessage, 'skip:支払い待ち']);
-  assert.equal(logs.at(-1), 'skip:支払い待ち');
+  assert.deepEqual(logs.slice(0, 3), ['x-ai-tips-collect: fallback → web-search grounding', 'x-ai-tips-collect: fallback も失敗', creditBlockedMessage]);
+  assert.match(logs[3], /^skip:支払い待ち（x\.ai 残高切れ・2026-11-03から）$/);
   assert.equal(readState(ctx).creditBlockedAt, now.toISOString());
   assert.equal(readState(ctx).night.calls, 1);
   assert.equal(readState(ctx).night.costUsd, defaults.reservePerCallUsd);

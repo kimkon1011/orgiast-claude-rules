@@ -42,6 +42,16 @@ export const AUTO_CLOSE_TEXT_PATTERNS = [
   /^✅\s*自動進行が完了しました/,
   /^📋\s*未通知だった自動進行の完了一覧/,
 ];
+const APPROVAL_REQUEST_PATTERNS = [
+  /してよいか/,
+  /実行可否/,
+  /可否/,
+  /承認/,
+  /どちらにする/,
+  /判断してください/,
+  /やってよい/,
+  /進めてよい/,
+];
 export const USAGE = `Usage: node tools/kim-inbox-autoclose.mjs [options]
 
 Options:
@@ -202,6 +212,7 @@ export async function findAutocloseCandidates(items, { fetchState = fetchPullReq
   const failures = [];
   const skipped = [];
   const candidates = [];
+  let approvalRequestExcludedCount = 0;
 
   async function stateFor(pr) {
     const key = `${pr.owner}/${pr.repo}#${pr.number}`.toLowerCase();
@@ -227,9 +238,16 @@ export async function findAutocloseCandidates(items, { fetchState = fetchPullReq
       skipped.push({ id: item.id, reason: 'OPENのPRあり', prs: states });
       continue;
     }
+    const text = item.text || '';
+    const isKnownCompletionNotification = AUTO_CLOSE_TEXT_PATTERNS.some(pattern => pattern.test(text));
+    if (!isKnownCompletionNotification && APPROVAL_REQUEST_PATTERNS.some(pattern => pattern.test(text))) {
+      approvalRequestExcludedCount++;
+      skipped.push({ id: item.id, reason: '承認待ち', prs: states });
+      continue;
+    }
     candidates.push({ id: item.id, prs: states });
   }
-  return { candidates, skipped, failures, fetchedPrCount: cache.size };
+  return { candidates, skipped, failures, fetchedPrCount: cache.size, approvalRequestExcludedCount };
 }
 
 function closeMessage(prs) {
@@ -274,7 +292,7 @@ export function formatResult(result, { json = false } = {}) {
   for (const row of result.sourceCandidates || []) {
     lines.push(`${row.id} [自動通知] ${row.reason} | ${row.text}`);
   }
-  lines.push(`kim-inbox autoclose ${result.apply ? '(apply)' : '(dry-run)'}: PR対象 ${result.candidates.length}件 / 自動通知 ${(result.sourceCandidates || []).length}件 / PR取得 ${result.fetchedPrCount}件 / 取得失敗 ${result.failures.length}件`);
+  lines.push(`kim-inbox autoclose ${result.apply ? '(apply)' : '(dry-run)'}: PR対象 ${result.candidates.length}件 / 自動通知 ${(result.sourceCandidates || []).length}件 / PR取得 ${result.fetchedPrCount}件 / 取得失敗 ${result.failures.length}件 / 承認待ちのため除外 ${result.approvalRequestExcludedCount || 0}件`);
   return lines.join('\n');
 }
 

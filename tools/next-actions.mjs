@@ -124,30 +124,35 @@ function fallbackActions({ p1, errors, prs, todo }) {
   return choices.slice(0, 3);
 }
 
-async function filterStalePrActions(actions, prs, execImpl, log) {
-  const openSet = new Set(prs.map((pr) => pr.number));
-  const states = new Map(), filtered = [];
-  for (const action of actions) {
-    let stale = false;
-    const numbers = new Set([...`${action.title} ${action.source}`.matchAll(/PR\s*#?(\d{1,6})/g)].map((match) => Number(match[1])));
-    for (const number of numbers) {
-      if (openSet.has(number)) continue;
-      if (!states.has(number)) {
-        let state;
-        try {
-          const raw = await runExec(execImpl, 'gh', ['pr', 'view', String(number), '--repo', 'kimkon1011/orgiast-claude-rules', '--json', 'number,state']);
-          state = JSON.parse(raw)?.state;
-        } catch {}
-        states.set(number, state);
-      }
-      const state = states.get(number);
-      if (state === 'MERGED' || state === 'CLOSED') {
-        log(`next-actions: PR#${number} は${state}のため除外`);
-        stale = true;
-        break;
-      }
-    }
-    if (!stale) filtered.push(action);
+async function filterStalePrActions(actions, execImpl, errorLog) {
+  const actionNumbers = actions.map((action) => new Set(
+    [...Object.values(action).join(' ').matchAll(/PR#(\d+)/g)].map((match) => Number(match[1]))
+  ));
+  const candidateNumbers = new Set(actionNumbers.flatMap((numbers) => [...numbers]));
+  if (!candidateNumbers.size) return actions;
+
+  let states;
+  try {
+    const raw = await runExec(execImpl, 'gh', [
+      'pr', 'list', '--repo', 'kimkon1011/orgiast-claude-rules', '--state', 'all',
+      '--json', 'number,state', '--limit', '100'
+    ]);
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) throw new Error('PR一覧の応答が配列ではありません');
+    states = new Map(parsed.map((pr) => [Number(pr.number), pr.state]));
+  } catch (error) {
+    errorLog(`next-actions: PR状態を取得できないため候補を除外しません: ${String(error?.message || error).replace(/\s+/g, ' ').trim()}`);
+    return actions;
+  }
+
+  const excludedNumbers = new Set();
+  const filtered = actions.filter((_action, index) => {
+    const closed = [...actionNumbers[index]].filter((number) => ['MERGED', 'CLOSED'].includes(states.get(number)));
+    for (const number of closed) excludedNumbers.add(number);
+    return closed.length === 0;
+  });
+  if (excludedNumbers.size) {
+    errorLog(`next-actions: MERGED/CLOSED のPRを含む候補を${actions.length - filtered.length}件除外: ${[...excludedNumbers].sort((a, b) => a - b).map((number) => `PR#${number}`).join(', ')}`);
   }
   return filtered;
 }
@@ -173,14 +178,14 @@ const BACKUP_TITLE_RE = /(?:backup|バックアップ|ClaudeDailyDriveBackup|Dai
  * バックアップ系タスクを推奨アクションに出す前に、成果物の実在で裏取りする。
  * rclone が使えない環境では例外で落とさず「未確認」として従来どおり出す。
  */
-async function filterBackupActions(actions, execImpl, log) {
+async function filterBackupActions(actions, execImpl, log, now = new Date()) {
   const backupActions = actions.filter((a) => BACKUP_TITLE_RE.test(a.title));
   if (!backupActions.length) return actions;
   let hasRecentBackup = false;
   try {
     const raw = await runExec(execImpl, 'rclone', ['lsl', 'claude-backup:Claude-Backups']);
-    const today = new Date().toISOString().slice(0, 10);
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const today = now.toISOString().slice(0, 10);
+    const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
     hasRecentBackup = raw.split(/\r?\n/).some((line) => line.includes(today) || line.includes(yesterday));
   } catch {
     // rclone が使えない環境では「未確認」として除外しない
@@ -262,9 +267,9 @@ export async function runNextActions(options = {}) {
     actions = fallbackActions(inputs);
     (options.error || console.error)(`next-actions: LLM応答をJSONとして解釈できずフォールバック: ${lastError?.message || lastError || '不明なエラー'}`);
   }
-  const log = options.log || console.log;
-  actions = await filterStalePrActions(actions, prs, execImpl, log);
-  actions = await filterBackupActions(actions, execImpl, log);
+  const log = options.log || console.log, errorLog = options.error || console.error;
+  actions = await filterStalePrActions(actions, execImpl, errorLog);
+  actions = await filterBackupActions(actions, execImpl, log, now);
   actions = sanitizeFirstStep(actions);
   if (!actions.length) {
     actions = [{

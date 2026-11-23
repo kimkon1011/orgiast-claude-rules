@@ -183,7 +183,7 @@ const HANDOFF_EMPTY = /^[\s*_`]*(?:なし|ありません|ありません。|特
 const LANDING_DEFERRAL = /(マージ|着地|取り込|merge)/i;
 const LANDING_TARGET = /\b[0-9a-f]{7,40}\b|[\w.-]+\/[\w.-]+/;
 const LANDING_APPROVAL = /(承認|判断|決め|指示|ください|返す|据え置き|待ち)/;
-const REQUIRED_APPROVAL_CONTEXT = /(?:automerge[^。\n]{0,30}(?:ラベル)?(?:が|は)?(?:無い|ない|無し)|(?:全PC|全アカウント)[^。\n]{0,40}(?:配られ|配布され)|draft(?:\s*PR)?[^。\n]{0,50}(?:merge|マージ)[^。\n]{0,20}(?:拒否|できない|不可))/i;
+const REQUIRED_APPROVAL_CONTEXT = /(?:automerge[^。\n]{0,30}(?:ラベル)?(?:が|は)?(?:無い|ない|無し)|(?:全PC|全アカウント)[^。\n]{0,40}(?:配られ|配布され)|draft(?:\s*PR)?[^。\n]{0,50}(?:(?:merge|マージ)[^。\n]{0,20})?(?:拒否|できない|不可))/i;
 export function isLandingDeferral(value) {
   const text = String(value ?? '');
   return LANDING_DEFERRAL.test(text) && LANDING_TARGET.test(text) && LANDING_APPROVAL.test(text);
@@ -192,11 +192,14 @@ export function isLandingDeferral(value) {
 // 許可要求の形（疑問節「か」＋可否）に限定する。
 const ASK_PERMISSION = /(やりますか|進めますか|進めてよいか|よろしいですか|(?<=か)の?可否|判断してください|決めてください|選んでください)/;
 const ASK_CONTEXT = /(恒久|配布|自動修復|実装|修正|改修|恒久化)/;
+const NON_BLOCKING_ANSWER = /(?:答え|回答)(?:が|が来|が無く|なく|なくて|なくとも)[^。\n]{0,50}(?:修正|実装)[^。\n]{0,30}(?:自動|進み|進め)/;
 const P3 = {
   find(text) {
     for (const match of text.matchAll(new RegExp(HANDOFF_LINE, 'g'))) {
-      const context = text.slice(Math.max(0, match.index - 400), match.index + match[0].length + 400);
-      if (!isAuditCitation(text, match.index) && !REQUIRED_APPROVAL_CONTEXT.test(context) && !HANDOFF_EMPTY.test(match[1]) && (new RegExp(FIX).test(match[1]) || isLandingDeferral(match[1]))) return match;
+      // A final report can put the approval constraint in section 1 and the
+      // handoff in section 3, well beyond a fixed character window.
+      const context = text;
+      if (!isAuditCitation(text, match.index) && !REQUIRED_APPROVAL_CONTEXT.test(context) && !NON_BLOCKING_ANSWER.test(context) && !HANDOFF_EMPTY.test(match[1]) && (new RegExp(FIX).test(match[1]) || isLandingDeferral(match[1]))) return match;
     }
     return null;
   }
@@ -205,7 +208,7 @@ const P4 = {
   find(text) {
     for (const match of text.matchAll(new RegExp(ASK_PERMISSION, 'g'))) {
       const context = text.slice(Math.max(0, match.index - 60), match.index + match[0].length + 60);
-      const approvalContext = text.slice(Math.max(0, match.index - 400), match.index + match[0].length + 400);
+      const approvalContext = text;
       if (!isAuditCitation(text, match.index) && !REQUIRED_APPROVAL_CONTEXT.test(approvalContext) && ASK_CONTEXT.test(context)) return match;
     }
     return null;
@@ -263,6 +266,13 @@ function assistantTexts(transcript, { before = Infinity, limit = Infinity } = {}
   }
   messages.sort((a, b) => a.at - b.at);
   return messages.slice(-limit);
+}
+
+function assistantTextImmediatelyBefore(transcript, rowTs, maxAgeMs = 2 * 60 * 1000) {
+  const rowTime = Date.parse(rowTs);
+  const messages = assistantTexts(transcript, { before: rowTime });
+  const latest = messages.at(-1);
+  return latest && rowTime - latest.at <= maxAgeMs ? latest.text : null;
 }
 
 function listTranscripts(projectsDir, archiveDir) {
@@ -407,6 +417,19 @@ export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null,
       let foundField = 'quote';
       for (const { text: t, field } of candidates) {
         found = detect(t)[0];
+        if (found?.pattern === 'P3') {
+          const sessionId = String(entry.sessionId ?? '');
+          if (!transcriptCache.has(sessionId)) transcriptCache.set(sessionId, findTranscript(projectsDir, sessionId, archiveDir));
+          const transcript = transcriptCache.get(sessionId);
+          const fullMessage = transcript && assistantTextImmediatelyBefore(transcript, entry.ts);
+          // The ledger excerpt is truncated around the match. Re-evaluate P3 on
+          // the originating assistant message so approval constraints earlier
+          // in the same message (draft / all-PC rollout / no automerge) survive.
+          if (fullMessage && !detect(fullMessage).some(hit => hit.pattern === 'P3')) {
+            found = null;
+            continue;
+          }
+        }
         if (found) {
           text = t;
           foundField = field;

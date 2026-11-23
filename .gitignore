@@ -121,3 +121,7 @@ PR_BODY.md
 # PR本文の一時ファイル（rescue コミットへの混入防止）
 /.pr-body.md
 /pr-body*.md
+
+# Git Bash で区切りが失われ、repo 直下へ落ちた Windows 一時パス
+/[A-Za-z]:*
+/[A-Za-z]*

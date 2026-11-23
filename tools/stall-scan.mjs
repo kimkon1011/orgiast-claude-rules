@@ -25,11 +25,19 @@ function jsonLines(file) {
   if (!fs.existsSync(file)) return [];
   return fs.readFileSync(file,'utf8').split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
 }
+function expectationTask(exp) {
+  if (exp.task) return exp.task;
+  // Registration scripts consistently name log-backed jobs Orgiast + the
+  // kebab-case log basename in PascalCase (for example fleet-agent.log).
+  if (!exp.log?.endsWith('.log')) return null;
+  return `Orgiast${exp.log.slice(0, -4).split('-').filter(Boolean).map(part => part[0].toUpperCase() + part.slice(1)).join('')}`;
+}
 export async function scan({ home = process.env.ORGIAST_HOME || process.env.USERPROFILE || os.homedir(), now = Date.now(), platform = process.platform,
   expectations = readJson(new URL('./nightly-health-expectations.json',import.meta.url), []), taskQuery = listScheduledTasks, probe = probePort,
   label = resolveFleetLabel(home), save = false } = {}) {
   now = Number(now);
   const rows = [], sources = [], dir = path.join(home,'.claude');
+  let scheduledTasks = null;
   const source = async (name, fn) => {
     try { await fn(); sources.push({ name, ok: true }); }
     catch(e) { rows.push(row('scan_error','診断できない項目',`${name}: ${e.message}`,'設定破損・権限不足・照会失敗','nightly-health-remediate で照会失敗を調査')); sources.push({name,ok:false}); }
@@ -44,6 +52,7 @@ export async function scan({ home = process.env.ORGIAST_HOME || process.env.USER
   await source('scheduled-tasks', async () => {
     if (platform !== 'win32') return;
     const tasks = (await taskQuery()).filter(t => /(?:^|\\)Orgiast/.test(t.taskName));
+    scheduledTasks = tasks;
     for (const failure of detectFailedJob(tasks, now)) rows.push(row('task_failed',failure.title,`${failure.reason}; ${failure.eventTime}; ${failure.location}`,'前回実行が異常終了','nightly-health-remediate でログと終了コードを調査',{expectation: expectations.find(e => failure.taskName.endsWith(e.task || '\0'))}));
     for (const t of tasks) {
       const exp = expectations.find(e => t.taskName.endsWith(e.task || '\0'));
@@ -56,6 +65,8 @@ export async function scan({ home = process.env.ORGIAST_HOME || process.env.USER
   for (const exp of expectations.filter(e => !e.ignore && (!e.fleetLabel || e.fleetLabel === label) && (!e.platform || e.platform === platform))) {
     await source(`log:${exp.label}`, () => {
       const log = expectationLog(home,exp);
+      const task = expectationTask(exp);
+      if (!log && task && scheduledTasks && !scheduledTasks.some(t => t.taskName.endsWith(task))) return;
       if (!log || logIsStale(log.mtimeMs,exp.maxAgeHours,now)) rows.push(row('log_stale',`${exp.label}のログ停止`,`${log?.file || exp.log || exp.pattern}: 更新=${log ? new Date(log.mtimeMs).toISOString() : '未作成'}; 期待=${exp.maxAgeHours}時間以内`,'未実行・起動直後の停止・出力先変更','nightly-health の既存ログ修復経路で確認',{expectation:exp}));
     });
   }

@@ -23,6 +23,7 @@ export const DEFAULT_ALLOWED_CIDRS = ['127.0.0.0/8', '192.168.0.0/24', '100.64.0
 const MAX_BODY_BYTES = 64 * 1024;
 
 export const ROUTES = [
+  { method: 'POST', re: /^\/gateway\/attachment$/, kind: 'attachment' },
   { method: 'GET', re: /^\/v1\/accounts$/ },
   { method: 'GET', re: /^\/v1\/chats$/ },
   { method: 'GET', re: /^\/v1\/chats\/search$/ },
@@ -144,6 +145,33 @@ export function createGatewayServer(opts) {
 
     const upstreamToken = getUpstreamToken();
     if (!upstreamToken) { log(502, { reason: 'beeper-token' }); return send(502, { message: 'Beeper on gateway host is not signed in' }); }
+    if (route.kind === 'attachment') {
+      let media;
+      try { media = JSON.parse(body || '{}').url; } catch { /* rejected below */ }
+      if (typeof media !== 'string' || !/^(?:local)?mxc:\/\/[^\s?#]+\/[^\s?#]+$/.test(media) || media.length > 2000) {
+        log(400, { kind: 'attachment' }); return send(400, { message: 'Matrix media URL required' });
+      }
+      try {
+        const base = upstreamBase.replace(/\/+$/, '');
+        const headers = { Authorization: `Bearer ${upstreamToken}` };
+        const downloaded = await fetchImpl(`${base}/v1/assets/download`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ url: media }), signal: AbortSignal.timeout(20000) });
+        if (!downloaded.ok) throw new Error('download failed');
+        const asset = await downloaded.json();
+        if (asset.error || typeof asset.srcURL !== 'string') throw new Error('missing asset');
+        const served = await fetchImpl(`${base}/v1/assets/serve?${new URLSearchParams({ url: asset.srcURL })}`, { headers, signal: AbortSignal.timeout(20000) });
+        if (!served.ok) throw new Error('serve failed');
+        // Only a URL returned by Beeper itself can reach assets/serve.
+        const chunks = []; let size = 0;
+        for await (const chunk of served.body) {
+          size += chunk.length;
+          if (size > 30 * 1024 * 1024) throw new Error('attachment too large');
+          chunks.push(chunk);
+        }
+        log(200, { kind: 'attachment', bytes: size });
+        res.writeHead(200, { 'Content-Type': served.headers.get('content-type') || 'application/octet-stream' });
+        return res.end(Buffer.concat(chunks));
+      } catch { log(502, { kind: 'attachment' }); return send(502, { message: 'Beeper attachment download failed' }); }
+    }
     let up;
     try {
       up = await fetchImpl(`${upstreamBase.replace(/\/+$/, '')}${url.pathname}${url.search}`, {

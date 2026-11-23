@@ -18,6 +18,7 @@ const VERIFY_TIMEOUT = 8000;
 const MAX_VERIFY = 10;
 
 const CREDIT_BLOCKED_STATUS = 'skip:支払い待ち';
+const CREDIT_BLOCKED_FALLBACK_STATUS = 'skip:支払い待ち(fallback)';
 const CREDIT_BLOCKED_MESSAGE = 'x.ai チームの残高切れ・月次上限のためスキップしました（支払いの承認待ち）。鍵は正常です。';
 
 const read = (file, fallback) => { try { return fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
@@ -223,9 +224,9 @@ export async function runCollect(options = {}) {
   let locked = false;
   const save = state => { if (!dryRun) { const tmp = `${stateFile}.tmp`; fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n'); fs.renameSync(tmp, stateFile); } };
   let acquired = 0, added = 0, duplicates = 0, calls = 0, cost = 0;
-  const skipCreditBlocked = () => {
+  const skipCreditBlocked = (fallbackAdded = 0) => {
     log(CREDIT_BLOCKED_MESSAGE);
-    return { status: CREDIT_BLOCKED_STATUS, calls, cost, added, duplicates };
+    return { status: fallbackAdded > 0 ? CREDIT_BLOCKED_FALLBACK_STATUS : CREDIT_BLOCKED_STATUS, calls, cost, added, duplicates };
   };
   try {
     if (!dryRun) { fs.mkdirSync(dir, { recursive: true }); const fd = fs.openSync(lock, 'wx'); fs.closeSync(fd); locked = true; }
@@ -234,8 +235,61 @@ export async function runCollect(options = {}) {
     if (!Number.isSafeInteger(state.nextTopicIndex) || state.nextTopicIndex < 0 || state.nextTopicIndex >= topicCount) state.nextTopicIndex = 0;
     const startTopicIndex = state.nextTopicIndex;
     const date = japanDate(now);
+    const simulated = [];
+    const appendFallbackItems = (topic, fallbackResult) => {
+      if (!fallbackResult.source || !fallbackResult.items.length) return 0;
+      const records = [...lines(read(proposalFile, '')), ...simulated];
+      const deduped = [];
+      const recordHashes = new Set(records.map(r => r.contentHash).filter(Boolean));
+      let next = Math.max(0, state.lastId || 0, ...records.map(r => Number(/^X-(\d+)$/.exec(r.id)?.[1]) || 0)) + 1;
+      for (const rawItem of fallbackResult.items) {
+        const hash = contentHash(rawItem);
+        if (recordHashes.has(hash)) continue;
+        recordHashes.add(hash);
+        const title = rawItem.title?.trim() || '';
+        const summary = rawItem.summary?.trim() || '';
+        const steps = rawItem.steps?.trim() || '';
+        deduped.push({
+          id: `X-${String(next++).padStart(4, '0')}`,
+          createdAt: now.toISOString(),
+          status: 'pending',
+          title: title.slice(0, 200),
+          action: steps.slice(0, 500),
+          evidence: `${rawItem.url || ''} ${rawItem.author ? `${rawItem.author}: ` : ''}${summary.slice(0, 200)}`,
+          category: CATEGORIES.includes(rawItem.category) ? rawItem.category : 'other',
+          confidence: 'low',
+          purpose: topic.purpose,
+          source: `fallback:${fallbackResult.source}`,
+          author: rawItem.author || '',
+          postedAt: rawItem.postedAt || now.toISOString(),
+          likes: Number.isFinite(rawItem.likes) ? rawItem.likes : 0,
+          summary: summary.slice(0, 500),
+          contentHash: hash,
+        });
+      }
+      state.lastId = next - 1;
+      if (dryRun) { simulated.push(...deduped); for (const record of deduped) log(`[dry-run] ${JSON.stringify(record)}`); }
+      else if (deduped.length) {
+        const existing = read(proposalFile, '');
+        fs.appendFileSync(proposalFile, (existing && !existing.endsWith('\n') ? '\n' : '') + deduped.map(JSON.stringify).join('\n') + '\n');
+      }
+      added += deduped.length; save(state);
+      return deduped.length;
+    };
+    const collectCreditBlockedFallback = async (topic, advanceTopic = true) => {
+      if (config.fallback !== 'web-search') return skipCreditBlocked();
+      if (advanceTopic) state.nextTopicIndex = (state.nextTopicIndex + 1) % topicCount;
+      save(state);
+      try {
+        const fallbackResult = await collectFallback(topic.query, topic.purpose, now, config, { fetchFn, log, searchImpl: options.searchImpl });
+        return skipCreditBlocked(appendFallbackItems(topic, fallbackResult));
+      } catch (fbError) {
+        log('x-ai-tips-collect: fallback も失敗', String(fbError.message).slice(0, 200));
+        return skipCreditBlocked();
+      }
+    };
     const blockedAt = Date.parse(state.creditBlockedAt);
-    if (Number.isFinite(blockedAt) && japanDate(new Date(blockedAt)) === date) return skipCreditBlocked();
+    if (Number.isFinite(blockedAt) && japanDate(new Date(blockedAt)) === date) return collectCreditBlockedFallback(config.topics[startTopicIndex]);
     if (state.night?.date !== date) state.night = { date, calls: 0, costUsd: 0 };
     // 送信直前に予約する。配送後クラッシュでも同じ週に二重送信しない。
     if (new Date(`${date}T00:00:00Z`).getUTCDay() === 1 && state.weekly?.date !== date) {
@@ -253,7 +307,6 @@ export async function runCollect(options = {}) {
     }
     const limit = options.limit ?? config.maxCalls;
     if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('--limit は正の整数');
-    const simulated = [];
     let failedTopics = 0;
     save(state);
     for (let offset = 0; offset < Math.min(topicCount, limit); offset++) {
@@ -285,9 +338,11 @@ export async function runCollect(options = {}) {
             try {
               fallback = await callOpenRouterGrok(request.input[0].content, { key: openRouterKey, fetchFn, signal });
             } catch {
-              // 元の x.ai status を保ち、既存の web-search fallback 判定へ渡す。
-              // OpenRouter の応答本文や認証情報はエラーへ連結しない。
-              throw new Error(`API HTTP ${response.status} (OpenRouter fallback failed)`);
+              // OpenRouter の応答本文や認証情報は記録せず、既存の web-search 経路へ進む。
+              state.creditBlockedAt = now.toISOString();
+              save(state);
+              creditBlocked = true;
+              return collectCreditBlockedFallback(topic, false);
             }
             json = { output_text: fallback.text, usage: fallback.usage };
             usage = fallback.usage;
@@ -327,45 +382,7 @@ export async function runCollect(options = {}) {
           try {
             log('x-ai-tips-collect: x.ai API HTTP', httpStatus, '→ fallback web-search grounding へ切替');
             const fallbackResult = await collectFallback(topic.query, topic.purpose, now, config, { fetchFn, log, searchImpl: options.searchImpl });
-            if (fallbackResult.source && fallbackResult.items.length) {
-              const records = [...lines(read(proposalFile, '')), ...simulated];
-              const deduped = [];
-              const recordIds = new Set(records.map(r => r.id));
-              const recordHashes = new Set(records.map(r => r.contentHash).filter(Boolean));
-              let next = Math.max(0, state.lastId || 0, ...records.map(r => Number(/^X-(\d+)$/.exec(r.id)?.[1]) || 0)) + 1;
-              for (const rawItem of fallbackResult.items) {
-                const hash = contentHash(rawItem);
-                if (recordHashes.has(hash)) continue;
-                recordHashes.add(hash);
-                const title = rawItem.title?.trim() || '';
-                const summary = rawItem.summary?.trim() || '';
-                const steps = rawItem.steps?.trim() || '';
-                deduped.push({
-                  id: `X-${String(next++).padStart(4, '0')}`,
-                  createdAt: now.toISOString(),
-                  status: 'pending',
-                  title: title.slice(0, 200),
-                  action: steps.slice(0, 500),
-                  evidence: `${rawItem.url || ''} ${rawItem.author ? `${rawItem.author}: ` : ''}${summary.slice(0, 200)}`,
-                  category: CATEGORIES.includes(rawItem.category) ? rawItem.category : 'other',
-                  confidence: 'low',
-                  purpose: topic.purpose,
-                  source: `fallback:${fallbackResult.source}`,
-                  author: rawItem.author || '',
-                  postedAt: rawItem.postedAt || now.toISOString(),
-                  likes: Number.isFinite(rawItem.likes) ? rawItem.likes : 0,
-                  summary: summary.slice(0, 500),
-                  contentHash: hash,
-                });
-              }
-              state.lastId = next - 1;
-              if (dryRun) { simulated.push(...deduped); for (const record of deduped) log(`[dry-run] ${JSON.stringify(record)}`); }
-              else if (deduped.length) {
-                const existing = read(proposalFile, '');
-                fs.appendFileSync(proposalFile, (existing && !existing.endsWith('\n') ? '\n' : '') + deduped.map(JSON.stringify).join('\n') + '\n');
-              }
-              added += deduped.length; save(state);
-            }
+            appendFallbackItems(topic, fallbackResult);
           } catch (fbError) {
             log('x-ai-tips-collect: fallback も失敗', String(fbError.message).slice(0, 200));
           }

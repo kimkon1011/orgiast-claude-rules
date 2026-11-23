@@ -46,7 +46,7 @@ for (const kind of ['stalled', 'waiting_user', 'overdue-check', 'overdue-start',
       resume: () => assert.fail('no resume'), addKimInboxItem: async (_home, item) => {
         if (++attempts === 1) throw new Error('temporary inbox failure');
         notices.push(item); return { id: 'notice' };
-      } };
+      }, autoResumeDisabledByConfig: () => false };
     const dry = await run({ home, now, dryRun: true, io });
     assert.equal(dry.resumed, 0);
     assert.equal(attempts, 0);
@@ -91,11 +91,31 @@ test('外部新着キューも再開せず、同じセッションへの通知�
     row: { sessionId: 's' }, inboxId: 'receipt', state: 'pending', queuedAt: new Date(now).toISOString() };
   saveEvent(home, event);
   let notices = 0;
-  const options = { home, now, resume: () => assert.fail('no resume'), io: { addKimInboxItem: async () => { notices++; return { id: 'notice' }; } } };
+  const options = { home, now, resume: () => assert.fail('no resume'), io: { addKimInboxItem: async () => { notices++; return { id: 'notice' }; },
+    autoResumeDisabledByConfig: () => false } };
   await drainExternalQueue(options);
   saveEvent(home, { ...event, key: 'b'.repeat(64) });
   await drainExternalQueue(options);
   await drainExternalQueue({ ...options, now: now + 3600000 });
   assert.equal(notices, 1);
   assert.ok(readEvents(home).every(e => e.state === 'disabled'));
+});
+
+test('恒久無効時は kim-inbox 通知を行わない', async t => {
+  const home = fixture(t);
+  let now = Date.parse('2026-11-14T05:00:00Z');
+  const row = { sessionId: 's', ts: new Date(now - 4 * 3600000).toISOString(), cwd: home,
+    promise: '成果物を仕上げる', label: '成果物', nextKim: 'なし', status: 'open' };
+  writeLedger(ledgerFile(home), [row]);
+  let inboxCalls = 0;
+  const io = { ...notificationMocks, clock: () => now, transcriptFiles: [], sheetConfig: () => null,
+    digest: async () => ({}), escalateKimDecisions: async () => ({}),
+    transcriptEvidence: () => ({ count: 0, lastAt: 0, snippets: [] }),
+    recentFiles: () => ({ names: [], lastAt: 0 }), autoSessionRuns: () => ({ names: [], lastAt: 0 }),
+    judge: () => ({ verdict: 'stalled', reason: '停滞' }),
+    executeCheck: async () => ({ code: 1, text: '未完了' }),
+    resume: () => assert.fail('no resume'), addKimInboxItem: async () => { inboxCalls++; return { id: 'notice' }; },
+    autoResumeDisabledByConfig: () => true };
+  await run({ home, now, io });
+  assert.equal(inboxCalls, 0);
 });

@@ -74,12 +74,17 @@ export function publishSeatPr({ cwd = process.cwd(), home = process.env.ORGIAST_
   const remote = JSON.parse(run('gh', ['pr', 'view', String(pr.number), '--repo', target.base, '--json', 'headRefOid,isDraft']));
   if (remote.headRefOid !== head || remote.isDraft) throw new Error('PR の HEAD 不一致または draft のため着地を停止');
   if (route === 'automerge') {
-    run('gh', ['pr', 'edit', String(pr.number), '--repo', target.base, '--add-label', 'automerge']);
+    run('gh', ['api', '-X', 'POST', `repos/${target.base}/issues/${pr.number}/labels`, '-f', 'labels[]=automerge']);
     const labels = JSON.parse(run('gh', ['pr', 'view', String(pr.number), '--repo', target.base, '--json', 'labels'])).labels;
     if (!labels?.some(label => label.name === 'automerge')) throw new Error('automerge ラベルの read-back 不一致');
   } else {
     // 既存PRのラベルも外し、CI全成功後に既存レビュー・SHA固定・read-backを通す。
-    run('gh', ['pr', 'edit', String(pr.number), '--repo', target.base, '--remove-label', 'automerge']);
+    try {
+      run('gh', ['api', '-X', 'DELETE', `repos/${target.base}/issues/${pr.number}/labels/automerge`]);
+    } catch (error) {
+      const message = String(error?.message ?? '');
+      if (!/404/i.test(message) || !/Label does not exist/i.test(message)) throw error;
+    }
     out(`PR #${pr.number}: CI 合格後、この席で gh pr merge --squash を実行（pr-merge の検証を使用）`);
     waitForCi(pr.number, target.base, { ...ci, run });
     mergePr({ pr: pr.number, repo: cwd, githubRepo: target.base, method: 'squash', keepBranch: true }, {

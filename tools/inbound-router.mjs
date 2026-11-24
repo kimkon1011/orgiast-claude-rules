@@ -15,7 +15,7 @@ export function writeJson(file, value) { fs.mkdirSync(path.dirname(file), { recu
 function withFileLock(file, action) { let fd; for (let i = 0; i < 300; i++) { try { fd = fs.openSync(file, 'wx', 0o600); break; } catch (e) { if (e.code !== 'EEXIST') throw e; try { if (Date.now() - fs.statSync(file).mtimeMs > 60_000) fs.unlinkSync(file); } catch {} Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100); } } if (fd === undefined) throw new Error('summary_lock_busy'); try { return action(); } finally { fs.closeSync(fd); try { fs.unlinkSync(file); } catch {} } }
 const arr = v => Array.isArray(v) ? v : v?.items || [];
 const ts = v => Number.isFinite(Number(v)) ? Number(v) : Date.parse(v);
-const safeCode = e => String(e?.status || e?.code || 'read_failed').slice(0, 80);
+const safeCode = e => String(e?.status || e?.code || e?.message || 'read_failed').slice(0, 80);
 const itemKey = i => `${i.source}:${i.id}`;
 const threadKey = i => i.kind === 'beeper' ? `beeper:${i.chatId}` : `gmail:${i.mailbox}:${i.threadId}`;
 export const initialState = () => ({ version: 1, sources: {}, seen: {}, threadRoutes: {}, dispatches: [], unknown: [], digests: {} });
@@ -189,7 +189,7 @@ export function makeRuntimeDeps({ home, root = repoRoot } = {}) {
         try { fs.unlinkSync(file); } catch {}
       }
     },
-    sendFleet: ({ route, routeConfig, bodyFile }) => { const args = [path.join(root, 'tools', 'fleet-mail.mjs'), '--send', '--to', routeConfig.target, '--kind', 'prompt', '--exec', 'claude', '--exec-cwd', routeConfig.cwd, '--body-file', bodyFile, '--why', `[作業依頼] inbound-router ${route}`]; if (routeConfig.session) args.push('--resume', routeConfig.session); const r = run(process.execPath, args); if (r.status !== 0) throw new Error(`fleet_mail_${r.status}`); const id = r.stdout.match(/送信済み:\s*([A-Za-z0-9._-]+)/)?.[1]; if (!id) throw new Error('fleet_mail_id_missing'); return { id, method: 'fleet-mail' }; },
+    sendFleet: ({ route, routeConfig, bodyFile }) => { const args = [path.join(root, 'tools', 'fleet-mail.mjs'), '--send', '--to', routeConfig.target, '--kind', 'prompt', '--exec', 'claude', '--exec-cwd', routeConfig.cwd, '--body-file', bodyFile, '--why', `[作業依頼] inbound-router ${route}`]; if (routeConfig.session) args.push('--resume', routeConfig.session); const r = run(process.execPath, args); if (r.status !== 0) throw new Error(`fleet_mail_${r.status}: ${String(r.stderr || '').slice(0, 200)}`); const id = r.stdout.match(/送信済み:\s*([A-Za-z0-9._-]+)/)?.[1]; if (!id) throw new Error('fleet_mail_id_missing'); return { id, method: 'fleet-mail' }; },
     statusFleet: id => { const r = run(process.execPath, [path.join(root, 'tools', 'fleet-mail.mjs'), '--sent-status', id]); if (r.status !== 0) return 'failed'; if (/^reply:/m.test(r.stdout) || /^status:\s*done\s*$/mi.test(r.stdout)) return 'done'; if (/^status:\s*expired\s*$/mi.test(r.stdout)) return 'expired'; if (/^status:\s*failed\s*$/mi.test(r.stdout)) return 'failed'; return 'pending'; }
   };
 }
@@ -199,7 +199,7 @@ function dispatchDue(d, now) {
     && (['failed', 'expired'].includes(d.status) || now - d.sentAt >= 60 * 60_000);
 }
 
-export async function retryDispatches(state, { now, deps, config, dryRun, plans }) {
+export async function retryDispatches(state, { now, deps, config, dryRun, plans, failures = [] }) {
   for (const d of state.dispatches) {
     if (!dispatchDue(d, now)) continue;
     let status = await deps.statusFleet(d.id);
@@ -207,7 +207,18 @@ export async function retryDispatches(state, { now, deps, config, dryRun, plans 
     if (now - d.sentAt < 60 * 60_000 && status !== 'failed' && status !== 'expired') continue;
     if (d.attempts >= 3) { d.status = 'abandoned'; state.unknown.push({ id: `abandoned:${d.id}`, reason: '渡したが未着手', route: d.route, itemKeys: d.itemKeys, time: new Date(now).toISOString() }); continue; }
     plans.push({ type: 'retry', route: d.route, itemKeys: d.itemKeys });
-    if (!dryRun) { const sent = await dispatchGroup(d.route, d.items, { state, config, deps, now }); d.id = sent.id; d.method = sent.method; d.sentAt = now; d.attempts++; d.status = 'sent'; }
+    if (!dryRun) {
+      try {
+        const sent = await dispatchGroup(d.route, d.items, { state, config, deps, now });
+        d.id = sent.id; d.method = sent.method; d.sentAt = now; d.attempts++; d.status = 'sent';
+      } catch (e) {
+        d.attempts++;
+        d.status = 'failed';
+        d.lastError = String(e.message || e).slice(0, 200);
+        d.sentAt = now;
+        failures.push({ source: `retry:${d.route}`, code: safeCode(e) });
+      }
+    }
   }
 }
 
@@ -291,7 +302,8 @@ export async function run(options = {}, injected = {}) {
         catch (e) { collected.failures.push({ source: `dispatch:${route}`, code: safeCode(e) }); save(); }
       }
     }
-    await retryDispatches(state, { now, deps, config, dryRun: options.dryRun, plans });
+    const failures = collected.failures;
+    await retryDispatches(state, { now, deps, config, dryRun: options.dryRun, plans, failures });
     let digestFile = null; if (!options.dryRun) digestFile = writeDigest({ state, now, reportDir: options.reportDir || path.join(home, 'gb-reports'), force: options.digestNow });
     const preview = options.dryRun ? collected.items.map(item => ({ route: routed.routesByItem.get(item), title: item.title.slice(0, 30), sender: item.sender.slice(0, 20) })) : undefined;
     const report = { status: collected.failures.length ? 'partial' : 'ok', new: collected.counts, routed: Object.fromEntries(Object.entries(routed.groups).map(([k,v]) => [k,v.length])), dispatches: plans.length, unknown: routed.unknown.length, failures: collected.failures, digestFile: digestFile ? path.basename(digestFile) : null, durationMs: Date.now() - started, calls, plans, ...(preview ? { preview } : {}) };

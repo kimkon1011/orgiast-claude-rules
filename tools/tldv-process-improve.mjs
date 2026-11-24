@@ -613,6 +613,8 @@ export async function extractImprovements(meeting, { config, state, fetchImpl = 
       state.llmCallsToday = (state.llmCallsToday || 0) + 1;
     }
   }
+  // 本文が空でチャンク0（改善項目なし）の会議を後から判別できるように記録する
+  appendLog({ event: 'meeting-extracted', meetingId: meeting.id, chunks: chunks.length, items: allItems.length });
   return allItems;
 }
 
@@ -1184,7 +1186,7 @@ export async function runImprove(options = {}, dependencies = {}) {
     fetched: 0, processed: 0, extracted: 0, duplicates: 0, skippedOld: 0,
     skippedDuplicateSource: 0, skippedExcluded: 0, skippedExisting: 0,
     sheetWritten: 0, feedbackSent: 0, knowhowAdded: 0, templateReflected: 0, failed: 0,
-    totalItems: 0, error: '',
+    attempted: 0, totalItems: 0, error: '',
     timeBudgetSkipped: 0, knowhowSkipped: 0,
   };
   const allItems = [];
@@ -1295,7 +1297,10 @@ export async function runImprove(options = {}, dependencies = {}) {
     const excludePatterns = config.excludeTitlePatterns || [];
     const targetMeetings = newMeetings.slice(0, opts.limit || Infinity);
     for (const [index, meeting] of targetMeetings.entries()) {
-      if (state && state.llmCallsToday >= MAX_LLM_CALLS) break;
+      if (state && state.llmCallsToday >= MAX_LLM_CALLS) {
+        appendLog({ event: 'llm-limit-reached', phase: 'meeting-loop', meetingId: meeting.id });
+        break;
+      }
       // 時間予算を超えたら残りの会議をスキップして正常終了へ移行
       if (!hasTimeBudget(deadline)) {
         summary.timeBudgetSkipped = targetMeetings.length - index;
@@ -1311,6 +1316,8 @@ export async function runImprove(options = {}, dependencies = {}) {
         continue;
       }
 
+      // 除外・時間予算・LLM上限のスキップを除いた「実際に LLM 処理を試みた」会議数
+      summary.attempted++;
       try {
         const items = await extractImprovements(meeting, { config, state, fetchImpl, execFileImpl });
         for (const item of items) {
@@ -1333,10 +1340,12 @@ export async function runImprove(options = {}, dependencies = {}) {
 
     summary.totalItems = allItems.length;
 
-    // -- 全会議が process-error で成功0なら exit 2 --
-    if (summary.processed > 0 && summary.extracted === 0 && summary.totalItems === 0) {
+    // -- 実際に LLM 処理を試みた全会議が例外（summary.failed）で成功0なら exit 2 --
+    // 除外・時間予算・LLM上限のスキップは attempted に数えない。LLM が正常に空配列（改善項目なし）を
+    // 返した会議は failed ではなく processedIds に入ったまま通常終了する。
+    if (summary.attempted > 0 && summary.failed === summary.attempted && summary.extracted === 0 && summary.totalItems === 0) {
       summary.error = 'all-meetings-process-error';
-      appendLog({ event: 'all-meetings-process-error', processed: summary.processed, failed: summary.failed });
+      appendLog({ event: 'all-meetings-process-error', processed: summary.processed, attempted: summary.attempted, failed: summary.failed });
       return 2;
     }
 

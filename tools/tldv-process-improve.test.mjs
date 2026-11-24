@@ -446,7 +446,8 @@ async function withTempKey(fn) {
 
 test('runImprove exits 2 when all meetings have process-error', async () => {
   await withTempKey(async (keyPath, tmpDir) => {
-    const mockExecFile = (file, args, opts, cb) => cb(null, 'this is not valid JSON', '');
+    // 全プロバイダが空 stdout で失敗 → callLlm が llm-failed を throw → extractImprovements が例外 → summary.failed に計上
+    const mockExecFile = (file, args, opts, cb) => cb({ code: 1 }, '', '');
     const mockFetch = async (url, init) => {
       if (url.includes('oauth2.googleapis.com/token')) {
         return new Response(JSON.stringify({ access_token: 'mock-token' }));
@@ -474,6 +475,106 @@ test('runImprove exits 2 when all meetings have process-error', async () => {
 
     const exitCode = await runImprove({ dryRun: true, limit: 1 }, { fetch: mockFetch, execFile: mockExecFile });
     assert.equal(exitCode, 2);
+  });
+});
+
+// ===== 修正: LLM が正常に空配列（改善項目なし）を返した会議は失敗扱いにならない =====
+test('runImprove exits 0 and saves processedIds when LLM returns empty array', async () => {
+  await withTempKey(async (keyPath, tmpDir) => {
+    // LLM が全会議で [] を返す → 抽出0は正常（exit 2 にしない）→ processedIds が state に保存される
+    const mockExecFile = (file, args, opts, cb) => cb(null, '[]', '');
+    const logSheetId = 'abcdefghijklmnopqrstuvwxyz123456';
+    const mockFetch = async (url, init) => {
+      if (url.includes('oauth2.googleapis.com/token')) {
+        return new Response(JSON.stringify({ access_token: 'mock-token' }));
+      }
+      if (url.includes('/export?mimeType=text/plain')) {
+        return new Response('会議の本文', { status: 200 });
+      }
+      // drive 権限付与POST／権限確認GET（権限URLは drive/v3/files を含むため先に判定）
+      if (url.includes('/permissions')) {
+        return new Response(JSON.stringify({ permissions: [{ emailAddress: 'kim@orgiast.jp', role: 'writer' }] }));
+      }
+      if (url.includes('drive/v3/files')) {
+        return new Response(JSON.stringify({
+          files: [{
+            id: 'doc1', name: '会議1', modifiedTime: new Date(Date.now() - 3600000).toISOString(),
+            webViewLink: 'https://docs.google.com/document/d/doc1',
+            appProperties: { tldvMeetingId: 'mtg1' },
+          }],
+        }), { status: 200 });
+      }
+      if (url.includes('gmail.googleapis.com')) {
+        return new Response(JSON.stringify({ messages: [] }));
+      }
+      // 既存改善項目のタブ名解決 → 値取得（improvementTabGid=354072335 に一致させる）
+      if (url.includes('fields=sheets.properties')) {
+        return new Response(JSON.stringify({ sheets: [{ properties: { sheetId: 354072335, title: '改善項目登録シート' } }] }));
+      }
+      if (url.includes('values/')) {
+        return new Response(JSON.stringify({ values: [] }));
+      }
+      // ログシート初回作成
+      if (url.includes('fields=spreadsheetId,spreadsheetUrl')) {
+        return new Response(JSON.stringify({ spreadsheetId: logSheetId }));
+      }
+      // ログシートヘッダー／実行サマリへの書き込み（append URL は values/ を含むため先に判定）
+      if (url.includes(':append')) {
+        return new Response(JSON.stringify({}));
+      }
+      return new Response(JSON.stringify({}));
+    };
+
+    const exitCode = await runImprove({ limit: 1 }, { fetch: mockFetch, execFile: mockExecFile });
+    assert.equal(exitCode, 0);
+
+    const statePath = path.join(process.env.TLDV_PROCESS_IMPROVE_STATE_DIR, 'tldv-process-improve.json');
+    assert.ok(fs.existsSync(statePath), 'state file should be written on non-dry-run');
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.ok(state.processedMeetings && state.processedMeetings['mtg1'], 'processedIds should be saved to state');
+  });
+});
+
+// ===== 修正: 一部失敗・一部成功の会議は exit 0 =====
+test('runImprove exits 0 with partial success and partial failure', async () => {
+  await withTempKey(async (keyPath, tmpDir) => {
+    // 会議1 = 3プロバイダ分の呼び出しが全失敗 → 例外。会議2 = 4回目の呼び出しで成功 → 項目抽出
+    let llmCalls = 0;
+    const mockExecFile = (file, args, opts, cb) => {
+      llmCalls++;
+      if (llmCalls <= 3) return cb({ code: 1 }, '', '');
+      cb(null, JSON.stringify([{ kind: 'process', event: 'test event', confidence: 0.9 }]), '');
+    };
+    const mockFetch = async (url, init) => {
+      if (url.includes('oauth2.googleapis.com/token')) {
+        return new Response(JSON.stringify({ access_token: 'mock-token' }));
+      }
+      if (url.includes('/export?mimeType=text/plain')) {
+        return new Response('会議の本文', { status: 200 });
+      }
+      if (url.includes('drive/v3/files')) {
+        return new Response(JSON.stringify({
+          files: [
+            { id: 'doc1', name: '会議1', modifiedTime: new Date(Date.now() - 3600000).toISOString(), webViewLink: 'https://docs.google.com/document/d/doc1', appProperties: { tldvMeetingId: 'mtg1' } },
+            { id: 'doc2', name: '会議2', modifiedTime: new Date(Date.now() - 3600000).toISOString(), webViewLink: 'https://docs.google.com/document/d/doc2', appProperties: { tldvMeetingId: 'mtg2' } },
+          ],
+        }), { status: 200 });
+      }
+      if (url.includes('gmail.googleapis.com')) {
+        return new Response(JSON.stringify({ messages: [] }));
+      }
+      // 既存改善項目のタブ名解決 → 値取得（improvementTabGid=354072335 に一致させる）
+      if (url.includes('fields=sheets.properties')) {
+        return new Response(JSON.stringify({ sheets: [{ properties: { sheetId: 354072335, title: '改善項目登録シート' } }] }));
+      }
+      if (url.includes('values/')) {
+        return new Response(JSON.stringify({ values: [] }));
+      }
+      return new Response(JSON.stringify({}));
+    };
+
+    const exitCode = await runImprove({ dryRun: true, limit: 2 }, { fetch: mockFetch, execFile: mockExecFile });
+    assert.equal(exitCode, 0);
   });
 });
 

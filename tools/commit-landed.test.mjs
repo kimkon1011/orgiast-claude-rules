@@ -142,3 +142,34 @@ test('gh が成功したら REST は呼ばない', () => {
   assert.equal(commitLanded('abc', { run }).landed, false);
   assert.equal(calls.some(([exe]) => exe === 'node'), false);
 });
+
+test('認証・ネットワーク呼び出しは非対話 env と 8 秒 timeout、ローカル git は 60 秒 timeout', () => {
+  const captured = [];
+  const run = (exe, args, options) => {
+    captured.push({ exe, args: [...args], env: options.env, timeout: options.timeout });
+    if (exe === 'gh') return { status: 1 };
+    if (args[0] === 'remote') return ok('https://github.com/kimkon1011/orgiast-claude-rules.git\n');
+    if (args[0] === 'credential') return ok('protocol=https\nhost=github.com\nusername=x-access-token\npassword=ghs_secret\n');
+    if (args[0] === 'merge-base') return args[1] === '--is-ancestor' ? { status: 1 } : ok('fork');
+    if (args[0] === 'rev-parse') return ok('abc1111111111111111111111111111111111111\n');
+    if (exe === 'node') return ok(JSON.stringify({ status: 200, body: JSON.stringify([{ number: 1, merged_at: '2026-11-01', merge_commit_sha: 'abc' }]) }));
+    return { status: 1 };
+  };
+  assert.equal(commitLanded('abc', { run }).landed, true);
+  for (const call of captured) {
+    // env vars on all calls
+    assert.equal(call.env.GCM_INTERACTIVE, 'never', `${call.exe} ${call.args[0]} env.GCM_INTERACTIVE`);
+    assert.equal(call.env.GIT_TERMINAL_PROMPT, '0', `${call.exe} ${call.args[0]} env.GIT_TERMINAL_PROMPT`);
+    // network/auth calls: 8s timeout
+    if (call.exe === 'gh') {
+      assert.equal(call.timeout, 8000, `gh should have 8s timeout`);
+    } else if (call.exe === 'node') {
+      assert.equal(call.timeout, 8000, `node REST should have 8s timeout`);
+    } else if (call.exe === 'git' && call.args[0] === 'credential') {
+      assert.equal(call.timeout, 8000, `git credential should have 8s timeout`);
+    } else if (call.exe === 'git') {
+      // local git calls: 60s timeout (ancestor check, remote get-url, rev-parse, merge-base)
+      assert.equal(call.timeout, 60000, `git ${call.args[0]} should have 60s timeout`);
+    }
+  }
+});

@@ -8,11 +8,12 @@ import { proxyCredential, gwsFetch, GWS_MARKER } from './lib/gws-proxy.mjs';
  * 使い方:
  *   node tools/gmail-draft.mjs --check [--user <addr>] [--json]
  *   node tools/gmail-draft.mjs --send <draftId> [--user <addr>] [--booth] [--ack-consistency <理由>] [--json]
- *   node tools/gmail-draft.mjs --forward <messageId> --to <addr> [--cc <addr>] [--body <前置き> | --body-file <path>] [--user <addr>] [--booth] [--dry-run] [--json]
+ *   node tools/gmail-draft.mjs --forward <messageId> --to <addr> [--cc <addr>] [--body <前置き> | --body-file <path>] [--user <addr>] [--from <addr>] [--booth] [--dry-run] [--json]
  *   返信作成: --thread-id <threadId>（返信先ヘッダ・省略時の件名を自動取得）
  *   node tools/gmail-draft.mjs --delete <draftId> [--user <addr>] [--json]
  *   node tools/gmail-draft.mjs --to <addr> [--cc <addr>] --subject <件名>
- *     (--body <本文> | --body-file <path>) [--attach <path>]... [--thread-id <threadId>] [--user <addr>] [--booth] [--dry-run] [--json]
+ *     (--body <本文> | --body-file <path>) [--attach <path>]... [--thread-id <threadId>] [--user <addr>] [--from <addr>] [--booth] [--dry-run] [--json]
+ *   --from は From ヘッダのみ差し替え（DWD の sub は --user のまま）。orgiast.jp ドメインのみ許可。
  *   宛先は裸のメールアドレス（複数はカンマ区切り、またはオプションを反復）。
  *   --check はトークン取得だけ。--send はスレッド全体との整合性を自動検査する。
  * 終了コード: 0 成功 / 3 内部宛 / 2 設定エラー / 1 その他。
@@ -338,7 +339,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const name = argv[i];
     if (['--check', '--json', '--dry-run', '--booth'].includes(name)) { args[name.slice(2)] = true; continue; }
-    if (!['--to', '--cc', '--subject', '--body', '--body-file', '--user', '--delete', '--send', '--forward', '--thread-id', '--in-reply-to', '--attach', '--ack-consistency', '--allow-repeat'].includes(name) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw configError();
+    if (!['--to', '--cc', '--subject', '--body', '--body-file', '--user', '--from', '--delete', '--send', '--forward', '--thread-id', '--in-reply-to', '--attach', '--ack-consistency', '--allow-repeat'].includes(name) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw configError();
     const field = name.slice(2);
     const value = argv[++i];
     if (field === 'to' || field === 'cc' || field === 'attach') (args[field] ??= []).push(value);
@@ -352,15 +353,23 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
   const stdout = deps.stdout ?? (text => console.log(text));
   const jsonMode = argv.includes('--json');
   let user = DEFAULT_USER;
+  let fromAddr = user;
   let action = argv.includes('--send') ? 'send' : argv.includes('--forward') ? 'forward' : argv.includes('--delete') ? 'delete' : argv.includes('--check') ? 'check' : argv.includes('--dry-run') ? 'dry-run' : 'create-draft';
   let deletionId;
-  const emit = (report, human) => stdout(jsonMode ? JSON.stringify({ action, user, ...report }) : human);
+  const emit = (report, human) => stdout(jsonMode ? JSON.stringify({ action, user, from: fromAddr, ...report }) : human);
   try {
     const args = parseArgs(argv);
     deletionId = args.delete;
     const senders = addresses(args.user ?? DEFAULT_USER, true);
     if (senders.length !== 1) throw configError();
     user = senders[0];
+    fromAddr = user;
+    if (Object.hasOwn(args, 'from')) {
+      const fromSenders = addresses(args.from, true);
+      if (fromSenders.length !== 1) throw configError();
+      if (!fromSenders[0].toLowerCase().endsWith('@orgiast.jp')) throw configError();
+      fromAddr = fromSenders[0];
+    }
     const fetchImpl = deps.fetchImpl ?? gwsFetch;
     const mintToken = deps.mintToken ?? (options => mintDwdToken({ ...options, fetchImpl }));
     if (Object.hasOwn(args, 'forward')) {
@@ -370,7 +379,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
       const originalRaw = await (deps.fetchMessageRaw ?? (options => fetchMessageRaw({ ...options, fetchImpl, getToken })))({ user, id: args.forward });
       const boothCc = applyBoothCc({ to: args.to, cc: args.cc, body: `${preface}\n${Buffer.from(originalRaw, 'base64url').toString('utf8')}`, booth: args.booth });
-      const raw = buildForwardRaw({ from: user, to: args.to, cc: boothCc.cc, preface, messageId: args.forward, originalRaw });
+      const raw = buildForwardRaw({ from: fromAddr, to: args.to, cc: boothCc.cc, preface, messageId: args.forward, originalRaw });
       const boothReport = boothCc.added ? { boothCcAdded: BOOTH_CC } : {};
       if (args['dry-run']) { emit({ ok: true, ...boothReport, raw, headers: Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0] }, `raw: ${raw}${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}`); return 0; }
       const result = await createDraft({ user, raw, fetchImpl, getToken });
@@ -484,7 +493,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     if (args['thread-id'] !== undefined && !/^[A-Za-z0-9_-]+$/u.test(args['thread-id'])) throw configError();
     const attachments = (args.attach ?? []).map(file => { try { return { name: path.basename(file), data: (deps.readAttachment ?? fs.readFileSync)(file) }; } catch { throw configError(); } });
     const boothCc = applyBoothCc({ to: args.to, cc: args.cc, subject: args.subject ?? '', body, booth: args.booth });
-    const input = { inReplyTo: args['in-reply-to'], from: user, to: args.to, cc: boothCc.cc, subject: args.subject ?? 'Re: (取得予定)', body, attachments };
+    const input = { inReplyTo: args['in-reply-to'], from: fromAddr, to: args.to, cc: boothCc.cc, subject: args.subject ?? 'Re: (取得予定)', body, attachments };
     const boothReport = boothCc.added ? { boothCcAdded: BOOTH_CC } : {};
     const guard = guardRecipients(input, (deps.loadLedger ?? loadLedger)());
     if (guard.blocked) {

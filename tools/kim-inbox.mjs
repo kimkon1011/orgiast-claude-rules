@@ -618,8 +618,13 @@ export function archiveClosed(home, { apply = false, olderThanDays = 3, now = Da
       if (!item.status || item.status === 'open') return false;
       const file = path.join(dir, `${item.id}.json`);
       const mtime = fs.statSync(file, { throwIfNoEntry: false })?.mtimeMs;
-      return mtime !== undefined && Math.max(mtime, ...[item.createdAt, item.answeredAt, item.lastAt]
-        .map(Date.parse).filter(Number.isFinite)) <= cutoff;
+      if (mtime === undefined) return false;
+      // For closed items, use the closed-at time when available so that
+      // later updates to lastAt/mtime do not prevent archiving.
+      const closedMs = item.answeredAt ? Date.parse(item.answeredAt) : NaN;
+      const refTime = Number.isFinite(closedMs) ? closedMs : Math.max(mtime, ...[item.createdAt, item.answeredAt, item.lastAt]
+        .map(Date.parse).filter(Number.isFinite));
+      return refTime <= cutoff;
     });
     result.eligible = candidates.length;
     if (!apply) return result;
@@ -635,8 +640,11 @@ export function archiveClosed(home, { apply = false, olderThanDays = 3, now = Da
         try {
           const file = path.join(dir, `${item.id}.json`);
           // An answer, relay update or reopen may have happened since the scan.
-          if (JSON.stringify(readInboxItem(home, item.id)) !== JSON.stringify(item)
-            || fs.statSync(file).mtimeMs > cutoff) continue;
+          if (JSON.stringify(readInboxItem(home, item.id)) !== JSON.stringify(item)) continue;
+          // For closed items, use answeredAt when available so that later mtime
+          // updates (e.g. re-delivery touching lastAt) do not prevent archiving.
+          const moveRef = item.answeredAt ? Date.parse(item.answeredAt) : NaN;
+          if (Number.isFinite(moveRef) ? moveRef > cutoff : fs.statSync(file).mtimeMs > cutoff) continue;
           const month = path.join(archive, archiveMonth(item));
           fs.mkdirSync(month, { recursive: true });
           fs.renameSync(file, path.join(month, path.basename(file)));

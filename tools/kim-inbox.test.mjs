@@ -109,6 +109,30 @@ test('--archive-closed validates options and daily archive runs once per JST dat
   assert.equal(archiveClosed(home, { daily: true, apply: true, now: now + 86_400_000 }).debrisMoved, 1);
 });
 
+test('archiveClosed は answeredAt を閉じた時刻として優先し、lastAt が後から更新されていても archive する', async t => {
+  const home = seat(t);
+  const dir = path.join(home, '.claude/kim-inbox');
+  const local = { drain: false, localOnly: true };
+  // Closed item: answeredAt は 5 日前だが lastAt は現在（後からの更新を模擬）。
+  const old = await addItem(home, { kind: 'ask', text: '古い質問' }, local);
+  answerItem(home, old.id, '対応済み');
+  const oldFile = path.join(dir, old.id + '.json');
+  const oldData = JSON.parse(fs.readFileSync(oldFile, 'utf8'));
+  oldData.answeredAt = new Date(Date.now() - 5 * 86_400_000).toISOString();
+  oldData.lastAt = new Date().toISOString();
+  fs.writeFileSync(oldFile, JSON.stringify(oldData, null, 2) + '\n');
+  // Open item: 絶対に archive されない。
+  const open = await addItem(home, { text: '未回収' }, local);
+  const now = Date.now();
+  const result = archiveClosed(home, { now, olderThanDays: 3 });
+  assert.equal(result.eligible, 1, 'answeredAt が古い closed item のみ対象');
+  assert.equal(result.moved, 0, 'apply=false なので移動しない');
+  const applied = archiveClosed(home, { apply: true, now, olderThanDays: 3 });
+  assert.equal(applied.moved, 1);
+  assert.equal(fs.existsSync(path.join(dir, open.id + '.json')), true, 'open item は archive されない');
+  assert.equal(fs.existsSync(path.join(dir, old.id + '.json')), false, 'closed item は archive された');
+});
+
 test('mixed context has unique numbers, complete briefs, accurate omitted count and shown-only bookkeeping', async t => {
   const home = seat(t), base = await addItem(home, { text: '完了: 確認済み', priority: 'high' });
   const sessionId = 'abcdef12-current';

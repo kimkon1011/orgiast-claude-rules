@@ -293,7 +293,13 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
 
   for (const row of rows) {
     if (row.status === CLOSED_STATUS) {
-      if (!args.dryRun) closeKey(home, row.id);
+      if (!args.dryRun) {
+        try {
+          closeKey(home, row.id);
+        } catch (error) {
+          errors.push(`${row.id}: closeKey 失敗 (${error.message})`);
+        }
+      }
       decisions.push(decision(row, 'skip', '売却済'));
       continue;
     }

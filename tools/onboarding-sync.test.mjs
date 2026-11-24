@@ -504,6 +504,7 @@ test('two fallback runs do not mistake previous zip output for human changes', a
   let run = 0;
   const git = (args) => {
     if (args.includes('pull')) throw new Error('diverged');
+    if (args.includes('fetch')) return '';
     return run++ === 0 ? '' : ' M tools/changed.mjs\0?? tools/added.mjs\0';
   };
   const first = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
@@ -705,15 +706,24 @@ test('zip fallback は packages（同梱 VSIX）も配る', async () => {
 
 test('origin/main 不在の .git がある写し(zip fallback): fetch URL から origin/main を取得し main 版と一致するファイルを更新できる', async () => {
   const f = repositoryFixture();
+  let fetchCalls = 0;
+  let fetchArgs = null;
   const git = (args) => {
     if (args.includes('pull')) throw new Error('no remote configured');
-    if (args.includes('fetch')) return '';
+    if (args.includes('fetch')) {
+      fetchCalls++;
+      fetchArgs = args;
+      return '';
+    }
     if (args.includes('status')) return ' M tools/changed.mjs\0';
     if (args.includes('rev-list')) return 'commit-a\n';
     if (args.includes('rev-parse')) return gitBlobSha(Buffer.from('old')) + '\n';
     return '';
   };
   const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
+  assert.equal(fetchCalls, 1);
+  assert.ok(fetchArgs.some((a) => a.startsWith('https://github.com/kimkon1011/orgiast-claude-rules.git')));
+  assert.ok(fetchArgs.includes('+main:refs/remotes/origin/main'));
   assert.equal(result.method, 'zip');
   assert.deepEqual(result.excluded, []);
   assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'utf8'), 'new');
@@ -723,15 +733,24 @@ test('origin/main 不在の .git がある写し(zip fallback): fetch URL から
 test('origin/main 不在の .git がある写し(zip fallback): fetch URL 成功後も main 履歴に無いファイルは保護される', async () => {
   const f = repositoryFixture();
   fs.writeFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'human work');
+  let fetchCalls = 0;
+  let fetchArgs = null;
   const git = (args) => {
     if (args.includes('pull')) throw new Error('no remote configured');
-    if (args.includes('fetch')) return '';
+    if (args.includes('fetch')) {
+      fetchCalls++;
+      fetchArgs = args;
+      return '';
+    }
     if (args.includes('status')) return ' M tools/changed.mjs\0';
     if (args.includes('rev-list')) return 'commit-a\n';
     if (args.includes('rev-parse')) return gitBlobSha(Buffer.from('old')) + '\n';
     return '';
   };
   const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
+  assert.equal(fetchCalls, 1);
+  assert.ok(fetchArgs.some((a) => a.startsWith('https://github.com/kimkon1011/orgiast-claude-rules.git')));
+  assert.ok(fetchArgs.includes('+main:refs/remotes/origin/main'));
   assert.equal(result.method, 'zip');
   assert.deepEqual(result.excluded, ['tools/changed.mjs']);
   assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'utf8'), 'human work');
@@ -739,13 +758,18 @@ test('origin/main 不在の .git がある写し(zip fallback): fetch URL 成功
 
 test('origin/main 不在の .git: fetch URL が失敗しても同期全体は止まらずファイルは保護される', async () => {
   const f = repositoryFixture();
+  let fetchCalls = 0;
   const git = (args) => {
     if (args.includes('pull')) throw new Error('no remote configured');
-    if (args.includes('fetch')) throw new Error('network error');
+    if (args.includes('fetch')) {
+      fetchCalls++;
+      throw new Error('network error');
+    }
     if (args.includes('status')) return ' M tools/changed.mjs\0';
     return '';
   };
   const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
+  assert.equal(fetchCalls, 1);
   assert.equal(result.ok, true);
   assert.equal(result.method, 'zip');
   assert.deepEqual(result.excluded, ['tools/changed.mjs']);

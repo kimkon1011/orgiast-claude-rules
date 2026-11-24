@@ -359,8 +359,8 @@ export async function updateRepositoryFiles(targetRepo, options = {}) {
     // .git はあるが remote が未設定の写しでも、正本から origin/main を取得して
     // matchesMainHistory が過去版を照合できるようにする。失敗は無視（保護側に倒す）。
     try {
-      execFileSync('git', ['fetch', 'https://github.com/kimkon1011/orgiast-claude-rules.git', '+main:refs/remotes/origin/main'],
-          { cwd: targetRepo, windowsHide: true, stdio: 'pipe', timeout: 60000 });
+      git(['-C', targetRepo, 'fetch', 'https://github.com/kimkon1011/orgiast-claude-rules.git', '+main:refs/remotes/origin/main'],
+          { stdio: 'pipe', timeout: 60000 });
     } catch { /* non-fatal: matchesMainHistory が origin/main 不在で保護側に倒す */ }
     try {
       // pull 失敗時だけ作業中ファイルを列挙し、zip がローカル作業を消さないよう個別に除外する。
@@ -509,7 +509,6 @@ async function syncRepository(now) {
     if (fs.existsSync(path.join(repoPath, '.git'))) {
       const before = readHead(repoPath);
       const result = await updateRepositoryFiles(repoPath);
-      if (result.excluded?.length) log("protected human changes: " + result.excluded.length + "件 " + result.excluded.slice(0, 10).join(", ") + (result.excluded.length > 10 ? " ...他" + (result.excluded.length - 10) + "件" : ""));
       const after = readHead(repoPath);
       if (before && after) {
         changed = result.ok && (result.method === 'zip' ? result.changed : before !== after);
@@ -518,9 +517,9 @@ async function syncRepository(now) {
       }
     } else {
       const result = await updateRepositoryFiles(repoPath);
-      if (result.excluded?.length) log("protected human changes: " + result.excluded.length + "件 " + result.excluded.slice(0, 10).join(", ") + (result.excluded.length > 10 ? " ...他" + (result.excluded.length - 10) + "件" : ""));
       changed = result.ok && result.changed;
     }
+    if (result?.excluded?.length) log("protected human changes: " + result.excluded.length + "件 " + result.excluded.slice(0, 10).join(", ") + (result.excluded.length > 10 ? " ...他" + (result.excluded.length - 10) + "件" : ""));
     } catch (e) { console.log(`[onboarding-sync] リポ取得に失敗（skill配布とhook登録は続行）: ${e.message.split('\n')[0]}`); log(`repo fetch failed(continue): ${e.message}`); }
     if (changed) { console.log('[onboarding-sync] updated repository tools/rules/skills'); log('updated repository tools/rules/skills'); }
     const skills = deploySkills(repoPath, home, { now, onError: (e) => log(`skill deployment failed: ${e.message}`) });

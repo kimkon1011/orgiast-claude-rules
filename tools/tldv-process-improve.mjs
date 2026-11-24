@@ -570,7 +570,7 @@ export async function extractImprovements(meeting, { config, state, fetchImpl = 
   const seenInCall = []; // 同一呼び出し内の重複除去用
   for (const chunk of chunks) {
     if (state && state.llmCallsToday >= MAX_LLM_CALLS) {
-      appendLog({ event: 'llm-limit-reached', meetingId: meeting.id });
+      appendLog({ event: 'llm-limit-reached', phase: 'chunk-loop', meetingId: meeting.id });
       break;
     }
 
@@ -1294,8 +1294,12 @@ export async function runImprove(options = {}, dependencies = {}) {
     // -- 各会議を LLM 解析 --
     const excludePatterns = config.excludeTitlePatterns || [];
     const targetMeetings = newMeetings.slice(0, opts.limit || Infinity);
+    let attempted = 0; // 実際に処理を試みた会議数（除外・スキップを除く）
     for (const [index, meeting] of targetMeetings.entries()) {
-      if (state && state.llmCallsToday >= MAX_LLM_CALLS) break;
+      if (state && state.llmCallsToday >= MAX_LLM_CALLS) {
+        appendLog({ event: 'llm-limit-reached', phase: 'meeting-loop', meetingId: meeting.id });
+        break;
+      }
       // 時間予算を超えたら残りの会議をスキップして正常終了へ移行
       if (!hasTimeBudget(deadline)) {
         summary.timeBudgetSkipped = targetMeetings.length - index;
@@ -1311,8 +1315,13 @@ export async function runImprove(options = {}, dependencies = {}) {
         continue;
       }
 
+      attempted++; // 処理を試みる会議としてカウント
+
       try {
         const items = await extractImprovements(meeting, { config, state, fetchImpl, execFileImpl });
+        // 各会議処理後にログを出す（本文が空でチャンク0の会議を後から判別できるように）
+        appendLog({ event: 'meeting-extracted', meetingId: meeting.id, chunks: items.chunks?.length || 0, items: items.length });
+        
         for (const item of items) {
           // 重複チェック
           if (isDuplicate(item, existingItems)) {
@@ -1333,10 +1342,10 @@ export async function runImprove(options = {}, dependencies = {}) {
 
     summary.totalItems = allItems.length;
 
-    // -- 全会議が process-error で成功0なら exit 2 --
-    if (summary.processed > 0 && summary.extracted === 0 && summary.totalItems === 0) {
+    // -- 実際に LLM 処理を試みた会議があり、そのすべてが例外（summary.failed）だった場合だけ exit 2 --
+    if (attempted > 0 && summary.extracted === 0 && summary.failed === attempted) {
       summary.error = 'all-meetings-process-error';
-      appendLog({ event: 'all-meetings-process-error', processed: summary.processed, failed: summary.failed });
+      appendLog({ event: 'all-meetings-process-error', processed: summary.processed, failed: summary.failed, attempted });
       return 2;
     }
 

@@ -16,7 +16,15 @@ export function resolveFleetLabel(home, identity = { hostname: os.hostname() }) 
     try {
       const fleetMap = JSON.parse(fs.readFileSync(fleetMapPath, 'utf8'));
       if (identity.hostname in fleetMap) {
-        return fleetMap[identity.hostname];
+        const entry = fleetMap[identity.hostname];
+        // entry may be a plain string label or an object with label/hostname/aliases
+        if (typeof entry === 'string') return entry;
+        if (typeof entry === 'object' && entry) {
+          if (typeof entry.label === 'string') return entry.label;
+          if (typeof entry.hostname === 'string') return entry.hostname;
+          if (Array.isArray(entry.aliases) && typeof entry.aliases[0] === 'string') return entry.aliases[0];
+        }
+        // entry found but no usable string; fall through to other resolution paths
       }
     } catch (e) {
       // Ignore invalid map file

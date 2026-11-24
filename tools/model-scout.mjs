@@ -18,6 +18,12 @@ export const APP_FORBIDDEN_VENDORS = ['anthropic'];
 export function isAppForbiddenModel(id) {
   return APP_FORBIDDEN_VENDORS.some(v => id.startsWith(v + '/') || id.startsWith('~' + v + '/'));
 }
+// 候補から提供終了モデルを除外する。models は normalizeModels の出力（カレントカタログ）。
+// 既知の提供終了リストとカタログ不在の両方をチェックする。
+export function filterAvailableCatalogModels(candidates, models) {
+  const available = new Set(models.map(m => m.id));
+  return candidates.filter(m => available.has(m.id) && !KNOWN_DEPRECATED_MODELS.includes(m.id) && !dynamicDeprecatedModels.has(m.id));
+}
 export const FRONTIER_VENDORS = ['anthropic', 'openai', 'google', 'meta', 'meta-llama', 'x-ai', 'deepseek', 'moonshotai', 'qwen', 'mistralai', 'z-ai',
   // 中国系の安価モデル。安価軸は「現行より安い」比較に依存し初回14日より古いモデルを拾えないため、ここで毎日見る。
   'xiaomi', 'minimax', 'stepfun', 'bytedance-seed', 'tencent', 'inclusionai', 'meituan'];
@@ -26,6 +32,64 @@ export function frontierLimit({ env = process.env } = {}) {
   return Number.isInteger(n) && n >= 0 ? n : 5;
 }
 export const MAX_FRONTIER_PER_RUN = frontierLimit();
+// 提供を終了したモデル。OpenRouter カタログから消えた、または 404 を返すことが確認されたモデル。
+// 動的選定の候補から常に除外する。追跡は tests と状態ファイルでも行う。
+export const KNOWN_DEPRECATED_MODELS = Object.freeze([
+  'qwen3-max', // 2026-11 実測: HTTP 404 を返す。OpenRouter カタログに存在せず再提供見込みなし。
+]);
+
+// 廃止モデルの状態ファイルを読み込む
+const DEPRECATED_MODELS_FILE = path.join(userHome(), '.claude', 'deprecated-models.json');
+let dynamicDeprecatedModels = new Set();
+let lastModifiedTime = 0;
+
+function loadDynamicDeprecatedModels() {
+  try {
+    const stat = fs.statSync(DEPRECATED_MODELS_FILE);
+    if (stat.mtimeMs > lastModifiedTime) {
+      const data = readJson(DEPRECATED_MODELS_FILE, []);
+      dynamicDeprecatedModels = new Set(data);
+      lastModifiedTime = stat.mtimeMs;
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.warn(`Warning: Could not load deprecated models file: ${error.message}`);
+    }
+    // If file doesn't exist, keep current dynamicDeprecatedModels
+  }
+}
+
+// 動的に選定されたモデルが実際に提供されているかを確認する
+export function isModelAvailable(provider, model) {
+  // 現在はOpenRouterのモデルのみを動的に選定していると仮定
+  if (provider !== 'openrouter') return true;
+
+  // ファイルの更新を確認して動的廃止モデルリストを更新
+  loadDynamicDeprecatedModels();
+
+  // 既知の廃止モデルは即時false
+  if (KNOWN_DEPRECATED_MODELS.includes(model)) return false;
+
+  // 動的に記録された廃止モデルも除外
+  if (dynamicDeprecatedModels.has(model)) return false;
+
+  return true;
+}
+
+// 廃止モデルを記録する
+export function recordDeprecatedModel(model) {
+  if (!dynamicDeprecatedModels.has(model)) {
+    dynamicDeprecatedModels.add(model);
+    try {
+      writeAtomic(DEPRECATED_MODELS_FILE, JSON.stringify([...dynamicDeprecatedModels], null, 2));
+    } catch (error) {
+      console.error(`Error saving deprecated model: ${error.message}`);
+    }
+  }
+}
+
+// 初回読み込み
+loadDynamicDeprecatedModels();
 const API = 'https://openrouter.ai/api/v1/models';
 const REFERENCE = 'スキップ: tools/llm-ask.mjs の Gemini 呼び出しは Web 検索に未対応。';
 function readJson(file, fallback) {
@@ -67,6 +131,7 @@ export function detectChanges(models, previous, now = new Date()) {
 export function selectFrontierCandidates(changes, { max = frontierLimit() } = {}) {
   return changes.filter(m => m.reason === '新規モデル' && FRONTIER_VENDORS.includes(m.id.split('/')[0]) &&
     !m.id.startsWith('~') && !isAppForbiddenModel(m.id) && !/:batch$/.test(m.id) && // :batch はバッチ専用エンドポイントのため同期評価不可
+    !KNOWN_DEPRECATED_MODELS.includes(m.id) &&
     m.modality.split('->')[0]?.split('+').includes('text') && m.modality.split('->')[1] === 'text' &&
     validNumber(m.pricing?.prompt) && validNumber(m.pricing?.completion))
     .sort((a, b) => (b.created || 0) - (a.created || 0) || a.id.localeCompare(b.id))
@@ -87,7 +152,8 @@ export function selectCandidates(changes, models, routing, { includeQuality = fa
     if (!price || (!includeQuality && !context)) { warnings.push(`${category}: ${route.provider}/${route.model} の単価または文脈長が不明のため比較保留。`); continue; }
     baselines.push({ category, route, price, context });
   }
-  const candidates = changes.filter((m) => !isAppForbiddenModel(m.id) && !/:batch$/.test(m.id) && m.modality.split('->')[0]?.split('+').includes('text') && m.modality.split('->')[1] === 'text') // :batch はバッチ専用エンドポイントのため同期評価不可
+  const candidates = changes.filter((m) => !isAppForbiddenModel(m.id) && !/:batch$/.test(m.id) && !KNOWN_DEPRECATED_MODELS.includes(m.id) &&
+    m.modality.split('->')[0]?.split('+').includes('text') && m.modality.split('->')[1] === 'text') // :batch はバッチ専用エンドポイントのため同期評価不可
     .map((model) => ({ ...model, replacements: baselines.filter(({ route, price, context }) =>
       !(route.provider === 'openrouter' && route.model === model.id) &&
       (includeQuality || (model.context_length >= context && model.pricing.prompt * 1e6 <= price[0] && model.pricing.completion * 1e6 <= price[1] &&

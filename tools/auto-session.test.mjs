@@ -8,7 +8,7 @@ import { PassThrough } from 'node:stream';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { BUILTIN_REPO_BY_KEYWORD, ROLE_NAMES, boundedCount, todoDoneDecision, DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, sectionsForTodo, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, buildRolePrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, isTodoAlreadyDone, taskClosedBeforeLaunch, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
+const { BUILTIN_REPO_BY_KEYWORD, ROLE_NAMES, boundedCount, todoDoneDecision, DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, sectionsForTodo, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, buildRolePrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, isTodoAlreadyDone, taskClosedBeforeLaunch, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main, usageText } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 const completedSummary = 'やったこと: 対象のコードを修正してコミットした。検証したこと: 回帰テストを実行し全件成功を確認した。残ったこと: なし';
 
@@ -53,6 +53,35 @@ test('boundedCount は all と数値を12件以内に制限する', () => {
 test('--role は有効なロールだけを受理する', () => {
   assert.equal(parseArgs(['--role', 'tester']).role, 'tester');
   assert.throws(() => parseArgs(['--role', 'unknown']), /--role は/);
+});
+
+test('parseArgs --help は help:true を返す', () => {
+  assert.equal(parseArgs(['--help']).help, true);
+  assert.equal(parseArgs(['-h']).help, true);
+  assert.equal(parseArgs(['--dry', '--help']).help, true);
+});
+
+test('usageText は auto-session と --dry を含む', () => {
+  const text = usageText();
+  assert.match(text, /auto-session/);
+  assert.match(text, /--dry/);
+  assert.match(text, /--help/);
+  assert.match(text, /--deadline/);
+});
+
+test('main --help は 0 を返し usage を出力する', async () => {
+  const lines = [];
+  const io = {
+    listFeedbackIssues: () => [],
+    resolveClaudeExe: () => 'claude.exe',
+    runChild: () => ({ status: 'success' }),
+    ensureFeedbackRepo: () => ({}),
+    setInProgress: () => {},
+    notify: () => {},
+    notifyFeedback: () => {},
+  };
+  const code = await main(['--help'], io);
+  assert.equal(code, 0);
 });
 
 test('buildRolePrompt はロール本文と実行環境を含み、不正名は空文字を返す', () => {

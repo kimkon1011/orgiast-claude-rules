@@ -14,6 +14,7 @@ import { batchDeadline } from './lib/batch-deadline.mjs';
 import { runEvalHarnessJobs } from './lib/eval-harness-coalesce.mjs';
 import { acquireLock } from './lib/single-instance.mjs';
 import { geminiUsage, recordGeminiUsage } from './gemini-usage-ledger.mjs';
+import { KNOWN_DEPRECATED_MODELS, recordDeprecatedModel, isModelAvailable } from './model-scout.mjs';
 
 function userHome() { const h = os.homedir(), m = process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i); return process.env.USERPROFILE || m?.[1] || h; }
 const home = userHome();
@@ -112,6 +113,12 @@ async function runStandard(job) {
       let usage = {};
       if (info.status === 'ok') usage = (await info.response.clone().json().catch(() => ({}))).usage || {};
       usageRecord(info.candidate.provider, info.candidate.model, usage, { status: info.status, attempt: info.attempt, failover: info.failover, secs: Number(info.secs.toFixed(3)) });
+
+      // 404エラーを受け取った場合、モデルを廃止として記録
+      if (info.status === 'error' && info.response?.status === 404) {
+        console.log(`RECORD DEPRECATED ${info.candidate.provider}:${info.candidate.model} (404 Not Found)`);
+        recordDeprecatedModel(info.candidate.model);
+      }
     },
     onFailover({ from, to, reason }) { console.error(`[failover] ${from.provider}:${from.model} ${reason} → ${to.provider}:${to.model}`); },
   });
@@ -166,7 +173,14 @@ let raw = '';
 try { raw = fs.readFileSync(pending, 'utf-8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
 const jobs = [];
 for (const line of raw.split(/\r?\n/).filter(Boolean)) {
-  try { const job = JSON.parse(line); if (!job.id || !PROVIDERS[job.provider]) throw new Error('必須項目不正'); jobs.push(job); }
+  try { const job = JSON.parse(line); if (!job.id || !PROVIDERS[job.provider]) throw new Error('必須項目不正');
+    // 廃止されたモデルをチェックし、該当する場合は既定モデルを使用
+    if (job.provider === 'openrouter' && !isModelAvailable(job.provider, job.model)) {
+      console.log(`モデル指定を変更 ${job.id} ${job.provider}:${job.model} → ${PROVIDERS[job.provider].model} 廃止されたモデル`);
+      job.model = PROVIDERS[job.provider].model;
+    }
+    jobs.push(job);
+  }
   catch (e) { console.error(`不正な行を保持します: ${e.message}`); }
 }
 if (!jobs.length) { console.log('pendingジョブはありません'); process.exit(0); }

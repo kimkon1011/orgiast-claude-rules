@@ -66,7 +66,7 @@ test('API回数上限は同日再実行でも維持、翌日リセット', async
   assert.equal((await runCollect(ctx.options)).calls, 1);
 });
 test('費用予約で次のAPI呼び出しを止める', async t => {
-  const ctx = setup(t); ctx.options.config.maxCostUsd = .3; ctx.options.config.topics = [defaults.topics[0], defaults.topics[0]];
+  const ctx = setup(t); ctx.options.config.maxCostUsd = .3; ctx.options.config.reservePerCallUsd = .25; ctx.options.config.topics = [defaults.topics[0], defaults.topics[0]];
   ctx.options.fetchFn = async () => response([], { cost_in_usd_ticks: 1000000000 });
   const result = await runCollect(ctx.options);
   assert.match(result.status, /^ok:.*打ち切り:夜間費用上限/); assert.equal(result.calls, 1);

@@ -74,7 +74,7 @@ export async function callOpenRouterGrok(prompt, { key, fetchFn = globalThis.fet
     payloadFor: () => ({
       url: `${OPENROUTER_BASE}/chat/completions`,
       init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast' },
-        body: JSON.stringify({ model: OPENROUTER_GROK_MODEL, messages: [{ role: 'user', content: prompt }], stream: false }), signal },
+        body: JSON.stringify({ model: OPENROUTER_GROK_MODEL, messages: [{ role: 'system', content: 'JSON のみを返す。説明文を付けない。' }, { role: 'user', content: prompt }], stream: false }), signal },
     }),
   });
   const json = await result.response.json();
@@ -171,10 +171,26 @@ export function buildRequest(topic, now, config) {
 JSONのみ: {"items":[{"url":"https://x.com/author/status/123","author":"@author","title":"短い提案名","summary":"要約","steps":"具体的手順や出典のある数値","purpose":"${topic.purpose}","category":"cost|quality|model-release|tool|prompt-technique|other","postedAt":"ISO8601","likes":10}]}` }],
   };
 }
+
+/** JSON 文字列をパースする。コードフェンス除去後に試し、失敗時は最初の {…} または […] を抽出して再試行する。パース不能なら null を返す。 */
+function tryParseJson(text) {
+  const cleaned = String(text || '').trim().replace(/^```(?:json)?\s*/im, '').replace(/\s*```$/, '');
+  try { return JSON.parse(cleaned); } catch { /* continue to bracket extraction */ }
+  for (const [open, close] of [['{', '}'], ['[', ']']]) {
+    const first = cleaned.indexOf(open);
+    if (first === -1) continue;
+    const last = cleaned.lastIndexOf(close);
+    if (last <= first) continue;
+    try { return JSON.parse(cleaned.slice(first, last + 1)); } catch { /* continue */ }
+  }
+  return null;
+}
+
 export function parseItems(json) {
   if (json.status && json.status !== 'completed') throw new Error(`API応答未完了: ${json.status}`);
   const text = json.output_text ?? json.output?.flatMap(x => x.content || []).filter(x => x.type === 'output_text').map(x => x.text).join('\n');
-  const parsed = JSON.parse(String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+  const parsed = tryParseJson(text);
+  if (parsed === null) return null;
   if (!Array.isArray(parsed.items)) throw new Error('JSON形式不正: items');
   return parsed.items;
 }
@@ -314,6 +330,7 @@ export async function runCollect(options = {}) {
     const limit = options.limit ?? config.maxCalls;
     if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('--limit は正の整数');
     let failedTopics = 0;
+    let parseFailedTopics = 0;
     let truncated = '';
     save(state);
     for (let offset = 0; offset < Math.min(topicCount, limit); offset++) {
@@ -325,7 +342,7 @@ export async function runCollect(options = {}) {
       // 未実行の次テーマを予約と同時に保存。全件回れた夜も翌夜の先頭を1つずらす。
       state.nextTopicIndex = (offset === topicCount - 1 ? startTopicIndex + 1 : topicIndex + 1) % topicCount;
       state.night.calls++; state.night.costUsd += config.reservePerCallUsd; calls++; cost += config.reservePerCallUsd; save(state);
-      let usage, actual, failure, signal, serverError = false, awaitingResponse = true, creditBlocked = false;
+      let usage, actual, failure, signal, serverError = false, awaitingResponse = true, creditBlocked = false, parseFailed = false;
       try {
         signal = AbortSignal.timeout(config.timeoutMs);
         const request = buildRequest(topic, now, config);
@@ -364,7 +381,12 @@ export async function runCollect(options = {}) {
         awaitingResponse = false;
         state.night.costUsd += actual - config.reservePerCallUsd; cost += actual - config.reservePerCallUsd; save(state);
         if (state.night.costUsd > config.maxCostUsd) throw new Error('夜間費用上限超過');
-        const items = parseItems(json); acquired += items.length;
+        const items = parseItems(json);
+if (items === null) {
+  errorLog(`[x-ai-tips] parse-failed provider=${creditBlocked ? 'openrouter' : 'x.ai'} head=${(json.output_text || '').replace(/[\r\n]/g, ' ').slice(0, 60)}`);
+  parseFailed = true; parseFailedTopics++; continue;
+}
+acquired += items.length;
         // 各呼び出し後に再読込して、他ソースが追記したタイトルも除外する。
         const records = [...lines(read(proposalFile, '')), ...simulated];
         const result = selectProposals(items, records, state, topic, now, config);
@@ -396,10 +418,13 @@ export async function runCollect(options = {}) {
         }
       }
       finally {
-        if (!dryRun) fs.appendFileSync(path.join(dir, 'runs.jsonl'), JSON.stringify({ at: now.toISOString(), night: date, topic, model: 'grok-4.6', usage, costUsd: actual ?? config.reservePerCallUsd, estimated: usage?.cost_in_usd_ticks == null, reserved: actual == null, status: creditBlocked ? CREDIT_BLOCKED_STATUS : failure ? `error:${failure}` : 'ok', nightCalls: state.night.calls, nightCostUsd: state.night.costUsd }) + '\n');
+        if (!dryRun) fs.appendFileSync(path.join(dir, 'runs.jsonl'), JSON.stringify({ at: now.toISOString(), night: date, topic, model: 'grok-4.6', usage, costUsd: actual ?? config.reservePerCallUsd, estimated: usage?.cost_in_usd_ticks == null, reserved: actual == null, status: creditBlocked ? CREDIT_BLOCKED_STATUS : parseFailed ? 'error:parse-failed' : failure ? `error:${failure}` : 'ok', nightCalls: state.night.calls, nightCostUsd: state.night.costUsd }) + '\n');
       }
     }
     if (!truncated && failedTopics) throw new Error(`テーマ失敗${failedTopics}件（残りのテーマは処理継続）`);
+    if (parseFailedTopics > 0 && acquired === 0 && added === 0 && !truncated) {
+      return { status: `skip:fallback応答がJSONでない(${parseFailedTopics}テーマ)`, calls, cost, added: 0, duplicates: 0 };
+    }
     return { status: `ok:取得${acquired}件 追加${added}件 重複${duplicates}件 費用$${cost.toFixed(2)}${truncated ? ` 打ち切り:${truncated}` : ''}`, calls, cost, added, duplicates };
   } catch (error) {
     // APIの応答本文・認証値はログに出さない。

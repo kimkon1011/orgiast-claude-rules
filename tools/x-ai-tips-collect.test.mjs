@@ -94,7 +94,7 @@ test('x.ai 403 は OpenRouter grok へフォールバックして成功する', 
   const result = await runCollect(ctx.options);
   assert.match(result.status, /^ok:/); assert.equal(result.added, 1);
   assert.equal(calls[1].body.model, 'x-ai/grok-4.6');
-  assert.equal(calls[1].body.messages[0].content, calls[0].body.input[0].content);
+  assert.equal(calls[1].body.messages[1].content, calls[0].body.input[0].content);
   assert.deepEqual(errors, ['[LANE-FALLBACK] x.ai -> openrouter grok (reason: HTTP 403 credit/quota response)']);
 });
 
@@ -243,10 +243,19 @@ test('HTTP 401 は応答本文の code だけをエラー文に付加', async t 
   const ctx = setup(t, { fetchFn: async () => ({ ok: false, status: 401, text: async () => '{"code":"unauthenticated"}' }) });
   assert.equal((await runCollect(ctx.options)).status, 'error:API HTTP 401 (unauthenticated)');
 });
-test('usage不足・JSON破損・タイムアウトが成功扱いにならない', async t => {
-  for (const fetchFn of [async () => response([], {}), async () => ({ ok: true, json: async () => ({ output_text: 'invalid', usage: { cost_in_usd_ticks: 1 } }) }), async () => { throw new Error('timeout'); }]) {
+test('usage不足・タイムアウトが成功扱いにならない', async t => {
+  for (const fetchFn of [async () => response([], {}), async () => { throw new Error('timeout'); }]) {
     const ctx = setup(t, { fetchFn }); assert.match((await runCollect(ctx.options)).status, /^error:/);
   }
+});
+
+test('JSON破損は例外で落ちず解析不能としてスキップ', async t => {
+  const errors = [];
+  const ctx = setup(t, { errorLog: line => errors.push(line), fetchFn: async () => ({ ok: true, json: async () => ({ output_text: 'invalid', usage: { cost_in_usd_ticks: 1 } }) }) });
+  const result = await runCollect(ctx.options);
+  assert.equal(result.added, 0);
+  assert.match(result.status, /^skip:fallback応答がJSONでない/);
+  assert.ok(errors.some(e => e.startsWith('[x-ai-tips] parse-failed')));
 });
 test('費用は請求ticks優先、fallbackはトークンと検索項目数を含む', () => {
   assert.equal(estimateCost({ cost_in_usd_ticks: 1e10 }, defaults.estimatedRates), 1);
@@ -584,4 +593,29 @@ test('nextTopicIndex が範囲外・欠落・不正型なら0から再開', asyn
     assert.equal((await runCollect(ctx.options)).calls, 1);
     assert.equal(readState(ctx).nextTopicIndex, 1);
   }
+});
+
+test('OpenRouter fallback 応答が JSON でない場合も例外で落ちない', async t => {
+  const errors = [];
+  const ctx = setup(t, { openRouterKey: 'or-nonjson', errorLog: line => errors.push(line), fetchFn: async url => {
+    if (url.includes('x.ai')) return { ok: false, status: 403, text: async () => 'insufficient credits' };
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'X検索を実行し、指定された内容について情報を収集し、報告します。AI活用例は見つかりませんでした。' } }], usage: { cost: .02 } }));
+  } });
+  const result = await runCollect(ctx.options);
+  assert.equal(result.added, 0);
+  assert.match(result.status, /^skip:fallback応答がJSONでない/);
+  assert.ok(errors.some(e => e.startsWith('[x-ai-tips] parse-failed')));
+  assert.equal(await runCli([], ctx.options), 0);
+});
+
+test('OpenRouter fallback 応答が前置き文＋JSONを含む場合は抽出できる', async t => {
+  const preambleItem = { ...item, title: '前置き付きJSON' };
+  const ctx = setup(t, { openRouterKey: 'or-preamble', fetchFn: async url => {
+    if (url.includes('x.ai')) return { ok: false, status: 403, text: async () => 'credits exhausted' };
+    return new Response(JSON.stringify({ choices: [{ message: { content: `以下は検索結果です。\n${JSON.stringify({ items: [preambleItem] })}\n以上です。` } }], usage: { cost: .02 } }));
+  } });
+  const result = await runCollect(ctx.options);
+  assert.equal(result.added, 1);
+  assert.match(result.status, /^ok:取得1件/);
+  assert.equal(ctx.records()[0].title, '前置き付きJSON');
 });

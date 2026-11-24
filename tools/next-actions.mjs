@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile as nodeExecFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { createLlmClient } from './line-digest.mjs';
 import { isEntry } from './is-entry.mjs';
 import { runTaskLedger } from './task-ledger.mjs';
@@ -10,6 +11,7 @@ import { runTaskLedger } from './task-ledger.mjs';
 const BEGIN = '<!-- NEXT-ACTIONS:BEGIN -->';
 const END = '<!-- NEXT-ACTIONS:END -->';
 const ALLOWED_PROVIDERS = new Set(['groq', 'deepseek']);
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function readFile(file) {
   try { return fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''); } catch { return ''; }
@@ -27,6 +29,64 @@ function runExec(execImpl, file, args) {
   return new Promise((resolve, reject) => {
     execImpl(file, args, { encoding: 'utf8' }, (error, stdout) => error ? reject(error) : resolve(String(stdout || '')));
   });
+}
+
+async function landedPrNumbersFromMain(execImpl, cwd) {
+  try {
+    const subjects = await new Promise((resolve, reject) => {
+      execImpl('git', ['log', 'origin/main', '--format=%s'], { encoding: 'utf8', cwd },
+        (error, stdout) => error ? reject(error) : resolve(String(stdout || '')));
+    });
+    return new Set([...subjects.matchAll(/\(#(\d+)\)/g)].map((match) => Number(match[1])));
+  } catch {
+    return null;
+  }
+}
+
+function loadSuppressRules(file) {
+  try {
+    const parsed = JSON.parse(readFile(file));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((rule) => {
+      try {
+        return typeof rule?.pattern === 'string' && typeof rule?.reason === 'string'
+          ? [{ ...rule, regex: new RegExp(rule.pattern, rule.flags || 'i') }]
+          : [];
+      } catch { return []; }
+    });
+  } catch { return []; }
+}
+
+function candidateText(action) {
+  return Object.values(action || {}).filter((value) => typeof value === 'string').join(' ');
+}
+
+function landedPrReferences(action) {
+  const text = candidateText(action);
+  const numbers = [...text.matchAll(/\bPR\s*#?\s*(\d+)/gi)].map((match) => Number(match[1]));
+  if (/(?:pull request|プルリク|マージ|レビュー)/i.test(text)) {
+    numbers.push(...[...text.matchAll(/#(\d+)/g)].map((match) => Number(match[1])));
+  }
+  return new Set(numbers);
+}
+
+/**
+ * origin/main に着地済みの PR、または設定済みの抑止ルールに一致する候補を分ける。
+ * landedPrNumbers が null の場合は git 照合を行わず、候補を素通しする。
+ */
+export function filterLandedAndSuppressed(candidates, { landedPrNumbers = null, suppressRules = [] } = {}) {
+  const actions = [], excluded = [];
+  for (const action of candidates) {
+    const landed = landedPrNumbers && [...landedPrReferences(action)].find((number) => landedPrNumbers.has(number));
+    const suppressed = suppressRules.find((rule) => {
+      rule.regex.lastIndex = 0;
+      return rule.regex.test(candidateText(action));
+    });
+    if (landed) excluded.push({ action, reason: `PR #${landed} は origin/main に着地済み` });
+    else if (suppressed) excluded.push({ action, reason: suppressed.reason });
+    else actions.push(action);
+  }
+  return { actions, excluded };
 }
 
 function parseArgs(args) {
@@ -356,6 +416,10 @@ export async function runNextActions(options = {}) {
     (options.error || console.error)(`next-actions: LLM応答をJSONとして解釈できずフォールバック: ${lastError?.message || lastError || '不明なエラー'}`);
   }
   const log = options.log || console.log, errorLog = options.error || console.error;
+  const landedPrNumbers = await landedPrNumbersFromMain(options.gitExecImpl || execImpl, options.cwd || REPO_ROOT);
+  const suppressRules = loadSuppressRules(options.suppressFile || path.join(REPO_ROOT, 'config', 'next-actions-suppress.json'));
+  const filtered = filterLandedAndSuppressed(actions, { landedPrNumbers, suppressRules });
+  actions = filtered.actions;
   actions = await filterStalePrActions(actions, execImpl, errorLog);
   actions = await filterBackupActions(actions, execImpl, log, now);
   actions = sanitizeFirstStep(actions);
@@ -388,7 +452,11 @@ export async function runNextActions(options = {}) {
       ledgerLines.push(`台帳取得失敗: ${oneLine(error.message)}`);
     }
   }
-  const body = `${render(actions, now)}\n\n${ledgerLines.join('\n')}`, outputFile = path.join(base, 'next-actions.md');
+  const excludedLines = ['## 除外した候補（着地済み・決定済み）'];
+  if (filtered.excluded.length) {
+    for (const item of filtered.excluded) excludedLines.push(`- ${oneLine(item.action.title)} — ${oneLine(item.reason)}`);
+  } else excludedLines.push('該当なし');
+  const body = `${render(actions, now)}\n\n${ledgerLines.join('\n')}\n\n${excludedLines.join('\n')}`, outputFile = path.join(base, 'next-actions.md');
   if (!cli.dryRun) { fs.mkdirSync(base, { recursive: true }); fs.writeFileSync(outputFile, replaceNextActionsSection(readFile(outputFile), body), 'utf8'); }
   if (cli.json) log(JSON.stringify({ actions }, null, 2));
   else if (cli.dryRun) log(body);

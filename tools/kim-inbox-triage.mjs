@@ -9,16 +9,6 @@ import { isEntry } from './is-entry.mjs';
 const execFileAsync = promisify(execFile);
 const DAY_MS = 86_400_000;
 
-// kim への未解決の問いかけを表す表現。
-// 疑問文そのものなので経緯の説明文に紛れて出ることは稀。本文全体を見てよい。
-const QUESTION_PATTERNS = [
-  /[？?]/,
-  /(?:てよい|て良い|てもよい|ても良い|していい|して良い)(?:です)?か/,
-  /いかがでしょうか/,
-  /(?:ご)?判断(?:を)?(?:お願いします|お願いいたします|ください|下さい)/,
-  /承認(?:を)?(?:お願いします|お願いいたします|ください|下さい)/,
-];
-
 // 「実行してよいか」を直接問う強い語。問い部分に出たときだけ問いとみなす。
 const APPROVAL_TERMS = [
   '--apply',
@@ -26,6 +16,7 @@ const APPROVAL_TERMS = [
   '実行可否',
   '適用してよい', '適用して良い',
   '削除してよい', '削除して良い',
+  'てよいですか', 'て良いですか',
 ];
 
 export function extractQuestionPart(text) {
@@ -33,17 +24,14 @@ export function extractQuestionPart(text) {
   // 1 行目はタイトル＝問いの本体であることが多いので必ず含める。
   const lines = String(text ?? '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   if (lines.length === 0) return '';
-  const asking = lines.filter(l => /[？?]|ください|下さい|よいか|良いか|可否|判断|承認/.test(l));
+  const asking = lines.filter(l => /[？?]|ください|下さい|よいか|良いか|可否|判断|承認|てよいですか|て良いですか/.test(l));
   const tail = asking.length > 0 ? asking.slice(-2) : lines.slice(-1);
   return [...new Set([lines[0], ...tail])].join('\n');
 }
 
 function hasApprovalRequest(text) {
-  const body = String(text ?? '');
-  // 疑問文パターンは本文全体を見て「問いあり」とみなす
-  if (QUESTION_PATTERNS.some(re => re.test(body))) return true;
   // 強い実行可否語は問い部分（extractQuestionPart）に限定して見る
-  const question = extractQuestionPart(body);
+  const question = extractQuestionPart(text);
   return APPROVAL_TERMS.some(term => question.includes(term));
 }
 

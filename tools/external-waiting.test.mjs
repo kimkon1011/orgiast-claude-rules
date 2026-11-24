@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { analyzeThread, analyzeDraft, addressee, dedupe, scan, notifyText, stripQuoted, isAckOnly, loadStaff, KIM, HOUR } from './external-waiting.mjs';
 import { externalFile, readJsonSafe, addSkip, readSkips, isSkipped } from './lib/external-waiting-state.mjs';
+import { filterClearedDrafts } from './lib/drafts-auto-cleared.mjs';
 
 const NOW = Date.parse('2026-11-04T03:00:00Z');
 const MB = 'seisaku-team@orgiast.jp';
@@ -162,6 +163,24 @@ test('通知文は失敗系の語を伏せる', () => {
   assert.doesNotMatch(text, /エラー/); assert.match(text, /30時間待ち/);
 });
 test('同梱の staff-addresses.json が読める', () => { assert.ok(loadStaff().has('meropp.16@gmail.com')); });
+
+test('下書きの送信済み照合は上限3件で並行実行する', async t => {
+  const home = fixture(t);
+  let active = 0, peak = 0;
+  const fetchImpl = async url => {
+    active++; peak = Math.max(peak, active);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    active--;
+    if (url.includes('/threads/')) return Response.json({ messages: [] });
+    return Response.json({ messages: [] });
+  };
+  const items = Array.from({ length: 6 }, (_, i) => ({
+    id: `d${i}`, kind: 'draft', mailbox: MB, draftId: `d${i}`,
+    draftMessage: message(`dm${i}`, { from: KIM, to: `customer${i}@example.com`, ageH: 48 }),
+  }));
+  await filterClearedDrafts(items, { home, now: NOW, deps: { fetchImpl, getToken: async () => 'token' }, stats: {} });
+  assert.equal(peak, 3);
+});
 
 test('getToken が1回 TimeoutError → 2回目成功で scanMailbox が成功する', async t => {
   const home = fixture(t);

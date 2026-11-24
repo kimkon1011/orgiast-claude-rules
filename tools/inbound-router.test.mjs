@@ -90,6 +90,69 @@ test('60分未完了で再投入、3回で unknown', async () => {
   state.dispatches[0].sentAt = NOW - 61 * 60_000; await retryDispatches(state, { now: NOW, deps: baseDeps({ statusFleet: async () => 'pending' }), config, dryRun: false, plans }); assert.equal(state.dispatches[0].status, 'abandoned'); assert.equal(state.unknown[0].reason, '渡したが未着手');
 });
 
+test('再送の sendFleet が throw しても run() は status=partial で返り failures に source retry:toho が載る', async () => {
+  const home = temp(), stateFile = path.join(home, 'state.json'), state = initialState();
+  state.dispatches.push({ id: 'd1', method: 'fleet-mail', route: 'toho', pc: '999', itemKeys: ['x'], items: [], sentAt: NOW - 61 * 60_000, attempts: 0, status: 'failed' });
+  fs.writeFileSync(stateFile, JSON.stringify(state));
+
+  const testConfig = {
+    ...config,
+    routes: {
+      ...config.routes,
+      toho: { pc: '999', target: '作業用999', cwd: 'C:\\work', description: '東邦鋼業' }
+    }
+  };
+
+  const result = await run({
+    ...options(home),
+    stateFile,
+    now: NOW + 61 * 60_000,
+    dryRun: false,
+    config: testConfig
+  }, baseDeps({
+    searchGmail: async () => ({ messages: [] }),
+    statusFleet: async () => 'failed',
+    sendFleet: async () => { throw new Error('fleet_mail_error: test error'); }
+  }));
+
+  assert.equal(result.status, 'partial');
+  assert.ok(result.failures.some(f => f.source === 'retry:toho'));
+
+  // dispatchesの状態も確認
+  const updatedState = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  const dispatch = updatedState.dispatches[0];
+  assert.equal(dispatch.attempts, 1);
+  assert.equal(dispatch.status, 'failed');
+});
+
+test('3回失敗後の次回で abandoned になり unknown に積まれる', async () => {
+  const state = initialState(); state.__file = path.join(temp(), 'state.json');
+  state.dispatches.push({ id: 'd1', method: 'fleet-mail', route: 'toho', pc: '011', itemKeys: ['x'], items: [], sentAt: NOW - 61 * 60_000, attempts: 3, status: 'failed' });
+
+  const plans = [];
+  await retryDispatches(state, { now: NOW, deps: baseDeps({ statusFleet: async () => 'pending' }), config, dryRun: false, plans });
+
+  assert.equal(state.dispatches[0].status, 'abandoned');
+  assert.equal(state.unknown.length, 1);
+  assert.equal(state.unknown[0].id, 'abandoned:d1');
+});
+
+test('code の無い Error の message が failures の code に残る', async () => {
+  const state = initialState(); state.__file = path.join(temp(), 'state.json');
+  state.dispatches.push({ id: 'd1', method: 'fleet-mail', route: 'toho', pc: '011', itemKeys: ['x'], items: [], sentAt: NOW - 61 * 60_000, attempts: 0, status: 'sent' });
+
+  const failures = [];
+  const plans = [];
+  await retryDispatches(state, { now: NOW, deps: baseDeps({
+    statusFleet: async () => 'pending',
+    sendFleet: async () => { throw new Error('test error message'); }
+  }), config, dryRun: false, plans, failures });
+
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].source, 'retry:toho');
+  assert.equal(failures[0].code, 'test error message');
+});
+
 test('9/15/21時の見回りで summary の他行を保持', () => {
   const dir = temp(), state = initialState(); state.unknown.push({ id: 'u', item: { kind: 'gmail', mailbox: 'kim@orgiast.jp', title: '要返信', sender: 'x', time: new Date(NOW).toISOString(), text: 'こんにちは' }, candidates: ['sales'] }); fs.writeFileSync(path.join(dir, 'summary.md'), '| name | last | status | count | file |\n|---|---|---|---:|---|\n| other | x | ok | 0 | a |\n');
   const file = writeDigest({ state, now: NOW, reportDir: dir }); assert.ok(file); const summary = fs.readFileSync(path.join(dir, 'summary.md'), 'utf8'); assert.match(summary, /\| other \|/); assert.match(summary, /\| inbound-router \|/); assert.ok(fs.existsSync(path.join(dir, 'latest-inbound-router.md')));

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { RULES, LIMITS, HEADER, TAB, parseArgs, ruleVerdict, merchantToken, amountVariants, gmailQuery, parseYahoo, weeklySkip, collectTxns, searchEvidence, runCheck, reportResult, sheetRows, dmText, atomicJson, web23Query, checkWeb23Delivery, WEB23_ADDRESS, WEB23_LOOKBACK_DAYS } from './expense-leak-check.mjs';
+import { RULES, LIMITS, HEADER, TAB, parseArgs, ruleVerdict, merchantToken, amountVariants, gmailQuery, parseYahoo, weeklySkip, collectTxns, searchEvidence, runCheck, reportResult, sheetRows, dmText, atomicJson, web23Query, checkWeb23Delivery, checkKimGmailAvailable, checkYahooAvailable, resolveAvailableUsers, isCompleteRun, WEB23_ADDRESS, WEB23_LOOKBACK_DAYS } from './expense-leak-check.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 
 const opts = (args = []) => parseArgs(args, { EXPENSE_LEAK_TODAY: '2026-10-09', EXPENSE_LEAK_HOME: '/tmp/expense-test' });
@@ -20,6 +20,7 @@ function harness(transactions, overrides = {}) {
   const state = overrides.state || { lastRunAt: null, txns: {} };
   const injected = {
     state,
+    availability: { available: ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'], unavailableReasons: {} },
     freeeGet: async (path) => path.endsWith('walletables') ? { walletables: [wallet] } : { wallet_txns: transactions },
     search: async (...args) => { calls.searches++; return emptySearch(...args); },
     sheets: {
@@ -70,6 +71,38 @@ test('weekly Tuesday skip, Monday run, same-day duplicate and old state', () => 
   assert.equal(weeklySkip('2026-10-12', '2026-10-12T03:00:00+09:00'), true);
   assert.equal(weeklySkip('2026-10-13', '2026-10-01T03:00:00+09:00'), false);
   assert.equal(weeklySkip('2026-10-13', null), false);
+});
+test('source probes record kim calendar-only and a missing Yahoo script without raw stderr', async () => {
+  const search = async () => ({ code: 1, stdout: 'secret child output' });
+  assert.deepEqual(await checkKimGmailAvailable({ search, timeout: () => 1000 }), {
+    available: false,
+    reason: 'kim@orgiast.jp Gmail unavailable: exit 1',
+  });
+  const missingYahoo = join(tmpdir(), 'expense-test-missing-yahoo.mjs');
+  const yahoo = await checkYahooAvailable(missingYahoo);
+  assert.equal(yahoo.available, false);
+  assert.match(yahoo.reason, /yahoo script not found/);
+  const resolved = await resolveAvailableUsers({ search, timeout: () => 1000, yahooScript: missingYahoo });
+  assert.deepEqual(resolved.available, ['seisaku-team@orgiast.jp']);
+  assert.ok(!JSON.stringify(resolved).includes('secret child output'));
+});
+test('unavailable kim and Yahoo sources do not make successful available-source work incomplete', async () => {
+  const h = harness([txn(1)], {
+    availability: {
+      available: ['seisaku-team@orgiast.jp'],
+      unavailableReasons: {
+        'kim@orgiast.jp': 'kim@orgiast.jp Gmail unavailable: exit 1',
+        yahoo: 'yahoo script not found',
+      },
+    },
+  });
+  const r = await runCheck(opts(['--dry-run']), h.injected);
+  assert.equal(r.complete, true);
+  assert.ok(!r.results[0].deferred);
+  assert.deepEqual(r.searches.gmail, { 'seisaku-team@orgiast.jp': 1 });
+  assert.equal(r.searches.yahooUnavailable, true);
+  assert.deepEqual(r.issues, []);
+  assert.equal(isCompleteRun({ ...r, completeFromFreee: true }), true);
 });
 test('paginates 100 + remainder, client-filters status, and verifies absent cached ids', async () => {
   const state = { txns: { '2': { verdict: 'x' }, '999': { verdict: 'x' }, '1000': { verdict: 'x' } } };

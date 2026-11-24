@@ -74,7 +74,7 @@ export function publishSeatPr({ cwd = process.cwd(), home = process.env.ORGIAST_
   const remote = JSON.parse(run('gh', ['pr', 'view', String(pr.number), '--repo', target.base, '--json', 'headRefOid,isDraft']));
   if (remote.headRefOid !== head || remote.isDraft) throw new Error('PR の HEAD 不一致または draft のため着地を停止');
   if (route === 'automerge') {
-    run('gh', ['pr', 'edit', String(pr.number), '--repo', target.base, '--add-label', 'automerge']);
+    run('gh', ['api', '-X', 'POST', `repos/${target.base}/issues/${pr.number}/labels`, '-f', 'labels[]=automerge']);
     const labels = JSON.parse(run('gh', ['pr', 'view', String(pr.number), '--repo', target.base, '--json', 'labels'])).labels;
     if (!labels?.some(label => label.name === 'automerge')) throw new Error('automerge ラベルの read-back 不一致');
   } else {

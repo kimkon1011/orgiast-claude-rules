@@ -1,0 +1,1 @@
+import { runTaskLedger } from '../nightly-repo/tools/task-ledger.mjs'; runTaskLedger({command:'list', taskId:'T-6854'}, { fetchImpl: async (url) = console.log('Fetching URL:', url); return { ok: true, json: async () => ({ok: true, rows: [], count: 0}) }; } }).then(console.log).catch(console.error); > C:\Users\uers\.claude\temp\check-task.js 

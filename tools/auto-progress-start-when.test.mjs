@@ -256,7 +256,7 @@ test('定期digestに開始予約と期限超過が出る', async t => {
 });
 
 process.env.ORGIAST_AUTO_RESUME = '1';
-test('静穏時間でも条件達成の ask を保存し、保存失敗時は通知だけを再試行する', async t => {
+test('恒久無効ではない場合は静穏時間でも条件達成の ask を保存し、保存失敗時は通知だけを再試行する', async t => {
   const before = process.env.ORGIAST_AUTO_RESUME;
   delete process.env.ORGIAST_AUTO_RESUME;
   t.after(() => { process.env.ORGIAST_AUTO_RESUME = before; });
@@ -264,7 +264,7 @@ test('静穏時間でも条件達成の ask を保存し、保存失敗時は通
   const night = Date.parse('2026-11-02T16:00:00Z');
   const checkText = '夜間に届いた回答' + 'あ'.repeat(700);
   let checks = 0, attempts = 0, resumes = 0;
-  const io = { ...ioBase, clock: () => night,
+  const io = { ...ioBase, clock: () => night, autoResumeDisabledByConfig: () => false,
     executeCheck: () => { checks++; return { code: 0, text: checkText }; },
     resume: async () => { resumes++; },
     addKimInboxItem: (home, options) => {

@@ -98,7 +98,13 @@ health.substituted = Object.entries(health.lanes).filter(([p, s]) => isLane(p) &
     .map(([provider]) => ({ provider, via: 'openrouter' }));
   for (const { provider, via } of health.substituted) health.lanes[provider].via = via;
   // 安い順。Gemini は恒久停止せず同列の受け皿。失敗・回数制限時だけ一時退避し、回復後に戻す。Claude 本体はこの順に含めない。
-  health.askOrder = ['groq', 'deepseek', 'openrouter', 'gemini'].filter(p => health.lanes[p]?.alive || health.lanes[p]?.via === 'openrouter' && health.lanes.openrouter?.alive);
+  health.askOrder = ['groq', 'deepseek', 'openrouter', 'gemini'].filter(p => {
+    const lane = health.lanes[p];
+    if (!lane) return false;
+    // billing は via chain で解決できない（Google 側の残高不足を OpenRouter が肩代わりできない）
+    if (lane.reason === 'billing') return false;
+    return lane.alive || lane.via === 'openrouter' && health.lanes.openrouter?.alive;
+  });
   health.deadNeedsUser = Object.entries(health.lanes).filter(needsUser)
     .map(([provider, s]) => ({ provider, reason: s.reason, tried: s.tried, fix: s.userFix || (s.reason.includes('payment') ? '無料枠・既存契約内の他AIレーンを実測して先に切り替える。追加費用案は代替不可の証拠と比較表がある場合だけ最後に提示。' : '本人アカウントで認証画面を開き OAuth 同意を完了する。') }));
   const missing = Object.entries(health.lanes).filter(([p, s]) => PROVIDERS.includes(p) && s.reason === 'missing_key' && s.via !== 'openrouter').map(([p]) => p);

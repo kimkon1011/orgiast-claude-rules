@@ -840,11 +840,60 @@ export function parseOptions(args, spawn = spawnSync) {
   }
   return options;
 }
-export function acquireLock(file, now = Date.now()) {
-  try { if (now - fs.statSync(file).mtimeMs > 600000) fs.unlinkSync(file); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+function readLockHolder(file, now) {
+  let stat;
+  try { stat = fs.statSync(file); }
+  catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
+  let pid;
+  try {
+    const text = fs.readFileSync(file, 'utf8').trim();
+    if (/^[1-9]\d*$/.test(text) && Number(text) <= 0x7fffffff) pid = Number(text);
+  } catch { /* Reclaim a lock whose PID cannot be read. */ }
+  const ageMs = Math.max(0, now - stat.mtimeMs);
+  const stale = ageMs > 600_000;
+  let alive = false;
+  if (pid && !stale) {
+    try { process.kill(pid, 0); alive = true; }
+    catch (error) { alive = error.code !== 'ESRCH'; }
+  }
+  return { stat, alive, holderPid: pid, lockAgeSec: Math.floor(ageMs / 1000), stale };
+}
+
+export function acquireLock(file, now = Date.now(), onContention = () => {}) {
+  // Publish a complete PID record so another run cannot reclaim an empty file
+  // between exclusive creation and writing the PID.
+  const tempDir = fs.mkdtempSync(`${file}.`);
+  const tempFile = path.join(tempDir, 'pid');
   let fd;
-  try { fd = fs.openSync(file, 'wx'); } catch (e) { if (e.code === 'EEXIST') return null; throw e; }
-  fs.writeSync(fd, String(process.pid));
+  try {
+    fd = fs.openSync(tempFile, 'wx');
+    fs.writeSync(fd, String(process.pid));
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try { fs.linkSync(tempFile, file); break; }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+      const holder = readLockHolder(file, now);
+      if (holder.alive || attempt === 1) {
+        onContention(holder);
+        return null;
+      }
+      if (!holder.stat) continue;
+      try {
+        const current = fs.statSync(file);
+        if (current.ino === holder.stat.ino && current.mtimeMs === holder.stat.mtimeMs && current.size === holder.stat.size) {
+          fs.unlinkSync(file);
+        }
+      } catch (error) {
+        if (error.code !== 'ENOENT') {
+          onContention(holder);
+          return null;
+        }
+      }
+    }
+  } finally {
+    try { if (fd !== undefined) fs.closeSync(fd); }
+    finally { fs.rmSync(tempDir, { recursive: true, force: true }); }
+  }
+  fd = fs.openSync(file, 'r+');
   const timer = setInterval(() => {
     const date = new Date();
     // Primary: fd-based futimesSync for mtime tracking
@@ -908,10 +957,19 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
     result.hiddenError = initialHidden.error;
   }
   // Dry run is strictly read-only: no lock or log mutation on the user's PC.
-  const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'));
-  if (!release) return { ...result, error: 'locked' };
-  progress('lock', 'acquired');
+  let lockHolder;
+  const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'), now(), holder => { lockHolder = holder; });
+  if (!release) {
+    const { alive, holderPid, lockAgeSec, stale } = lockHolder;
+    const entry = alive
+      ? { at: result.at, skipped: 'locked', holderPid, lockAgeSec, stale }
+      : { at: result.at, error: 'locked', holderPid, lockAgeSec, stale };
+    appendReopenLog(base, entry);
+    if (alive) return { ...result, locked: true };
+    return { ...result, error: 'locked' };
+  }
   try {
+    progress('lock', 'acquired');
     const credFile = path.join(base, '.credentials.json');
     const claudeJsonFile = path.join(base, '..', '.claude.json');
     let token, org;
@@ -1277,8 +1335,11 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
     }
   } catch (error) { result.error = error.message; }
   finally {
-    try { if (!dryRun) fs.appendFileSync(path.join(base, 'reopen-lost-sessions.log'), JSON.stringify(result) + '\n'); }
-    finally { progress('done', 'log written'); release(); }
+    try { if (!dryRun) appendReopenLog(base, result); }
+    finally {
+      try { progress('done', 'log written'); }
+      finally { release(); }
+    }
   }
   // Persistent failure notification: when loadGuard blocks everything or credentials fail,
   // notify once per 6h window via kim-inbox (deduped by error type + date).
@@ -1338,7 +1399,7 @@ export async function watchReopen(opts = {}, maxParam) {
     checkIdle, idleImpl, checkConcurrency: opts?.checkConcurrency, concurrencyPlatform: opts?.concurrencyPlatform,
     stateBased: true, checkClaude: true, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now: nowFn
   });
-  if (!result.error && !result.apiError && !result.deferredCpu && !result.deferredActive && !result.skipped?.loadGuard && !result.sessionConcurrencyCap && !dryRun) {
+  if (!result.locked && !result.error && !result.apiError && !result.deferredCpu && !result.deferredActive && !result.skipped?.loadGuard && !result.sessionConcurrencyCap && !dryRun) {
     fs.writeFileSync(stateFile, JSON.stringify({ watermark: until }) + '\n');
   }
   return result;
@@ -1361,34 +1422,38 @@ export function watchdogRecord(base, { exitImpl = process.exit } = {}) {
     exitImpl(2);
   }
 }
+function appendReopenLog(base, entry) {
+  fs.appendFileSync(path.join(base, 'reopen-lost-sessions.log'), JSON.stringify(entry) + '\n');
+}
+
 if (isEntry(import.meta.url)) {
+  const args = process.argv.slice(2);
+  let base = path.join(os.homedir(), '.claude');
+  let dryRun = args.includes('--dry-run');
+  let watchdogTimer;
   try {
-    const opts = parseOptions(process.argv.slice(2));
-    if (opts.watch) {
-      const base = opts.base || path.join(os.homedir(), '.claude');
-      const watchdogTimer = opts.dryRun ? null : setTimeout(() => {
-        watchdogRecord(base);
-      }, 20 * 60 * 1000);
-      const result = await watchReopen({
-        base: opts.base,
-        max: opts.maxSet ? opts.max : DEFAULT_MAX_REOPEN,
-        dryRun: opts.dryRun,
-      });
-      clearTimeout(watchdogTimer);
-      console.log(JSON.stringify(result));
-      if (result.error || result.failed?.length || result.unverified?.length) process.exitCode = 1;
-      // loadGuard blocked all candidates → not a clean run
-      if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) process.exitCode = 1;
-      // 連続失敗カウンター: API エラーが連続 8 回超でのみ exit 1（一時的ネットワーク不調は exit 0）
-      if (recordApiResult(base, result.apiError)) process.exitCode = 1;
-    } else {
-      const result = await reopenLost({ ...opts, checkClaude: true });
-      const base = opts.base || path.join(os.homedir(), '.claude');
-      console.log(JSON.stringify(result));
-      if (result.error || result.failed?.length || result.unverified?.length) process.exitCode = 1;
-      if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) process.exitCode = 1;
-      // 連続失敗カウンター: API エラーが連続 8 回超でのみ exit 1（一時的ネットワーク不調は exit 0）
-      if (recordApiResult(base, result.apiError)) process.exitCode = 1;
+    const opts = parseOptions(args);
+    base = opts.base ?? base;
+    dryRun = opts.dryRun;
+    if (opts.watch && !dryRun) {
+      watchdogTimer = setTimeout(() => watchdogRecord(base), 20 * 60 * 1000);
     }
-  } catch (error) { console.log(JSON.stringify({ error: error.message })); process.exitCode = 1; }
+    const result = opts.watch
+      ? await watchReopen({ base, max: opts.maxSet ? opts.max : DEFAULT_MAX_REOPEN, dryRun })
+      : await reopenLost({ ...opts, base, checkClaude: true });
+    console.log(JSON.stringify(result));
+    if (result.error || result.failed?.length || result.unverified?.length) process.exitCode = 1;
+    if (result.candidates?.length > 0 && !result.reopened?.length && result.skipped?.loadGuard > 0) process.exitCode = 1;
+    // 一時的な API エラーは連続失敗のしきい値まで exit 0。
+    if (!result.locked && !dryRun && recordApiResult(base, result.apiError)) process.exitCode = 1;
+  } catch (error) {
+    if (!dryRun) {
+      try { appendReopenLog(base, { at: new Date().toISOString(), error: error.message, stage: 'uncaught' }); }
+      catch {}
+    }
+    console.log(JSON.stringify({ error: error.message }));
+    process.exitCode = 1;
+  } finally {
+    clearTimeout(watchdogTimer);
+  }
 }

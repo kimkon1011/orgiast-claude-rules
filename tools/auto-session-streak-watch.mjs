@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -81,7 +82,7 @@ export function formatDecisionRequest(item) {
 async function defaultNotifyImpl(text, { home }) {
   const { notifyKim } = await import('./notify-kim.mjs');
   const result = await notifyKim(text, { home, webhookFallback: false });
-  if (!['dm', 'session-inbox'].includes(result.delivered)) throw new Error(`kim への DM 送信失敗: ${result.reason || '不明な理由'}`);
+  if (!isKimDelivered(result)) throw new Error(`kim への DM 送信失敗: ${result.reason || '不明な理由'}`);
   return result;
 }
 
@@ -152,7 +153,7 @@ export async function runAutoSessionStreakWatch({
     if (!dryRun) {
       try {
         const result = await notifyImpl(item.message, { home, item });
-        if (result?.delivered && !['dm', 'session-inbox'].includes(result.delivered)) throw new Error(`DM 未送信: ${result.reason || result.delivered}`);
+        if (result?.delivered && !isKimDelivered(result)) throw new Error(`DM 未送信: ${result.reason || result.delivered}`);
         state[item.jobKey] = { lastNotifiedDate: today, lastNotifiedStreak: item.streak };
         writeJsonAtomic(stateFile, state);
       } catch (error) {

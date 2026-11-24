@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Read-only freee/Gmail/Yahoo reconciliation. Only the dedicated Sheet tab and kim DM are written.
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import { readFile, writeFile, mkdir, rename, open, unlink } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -327,7 +328,7 @@ export async function runCheck(opts, injected = {}) {
       }
       stage = 'discord-dm';
       result.notification = await (injected.notify || notifyKim)(dmText(result), { webhookFallback: false });
-      if (!['dm', 'session-inbox'].includes(result.notification?.delivered)) throw new Error('Discord DM not delivered');
+      if (!isKimDelivered(result.notification)) throw new Error('Discord DM not delivered');
       state.lastRunAt = `${opts.today}T03:00:00+09:00`;
     }
     stage = 'checkpoint-write';

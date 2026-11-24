@@ -8,6 +8,12 @@
 /.codex/agents/
 memory-shared/
 
+# assign-app の clone と feedback-history-link の clone。repo 直下に置かれると
+# git add -A が submodule (mode 160000) として拾い、rescue ブランチを作る
+# (2026-11-22 rescue/auto-session-20261122-082606 = これら2ファイルのみ)。
+/_assign-app-clone/
+/assign-wip-feedback-history-link/
+
 # gpage-fetch.mjs 用の playwright-core をローカルで npm install したときの成果物
 node_modules/
 package-lock.json
@@ -121,3 +127,7 @@ PR_BODY.md
 # PR本文の一時ファイル（rescue コミットへの混入防止）
 /.pr-body.md
 /pr-body*.md
+
+# Git Bash で区切りが失われ、repo 直下へ落ちた Windows 一時パス
+/[A-Za-z]:*
+/[A-Za-z]*

@@ -94,7 +94,7 @@ test('メールの共有アカウント必須見出しを圧縮索引にも保�
 test('最後のメッセージにまとめる絶対ルールが実文書の索引に残る', async () => {
   const { makeIndex } = await import('./onboarding-sync.mjs');
   const body = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
-  const rule = body.split(/\r?\n/).find(line => line.startsWith('**🔴 kim が読むのは「本当に最後のメッセージ」'));
+  const rule = body.split(/\r?\n/).find(line => line.startsWith('**🔴 kim への報告は Stop ゲートの書き直し後'));
   assert.ok(rule);
   assert.ok(makeIndex(body).split('\n').includes(rule.replace('（2026-10-30 kim 厳命・全PC全アカウント）', '')));
 });

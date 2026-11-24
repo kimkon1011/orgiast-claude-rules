@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -75,7 +76,7 @@ export async function escalateKimDecisions({ home = process.env.ORGIAST_HOME || 
       if (dryRun) continue;
       try {
         const result = await (io.notifyKim ?? notifyKim)(text, { kind: 'ask', kimActionRequired: true, sessionId: row.sessionId || '', home, now, source: 'auto-progress-escalate', dedupeKey: escalationDedupeKey(key) });
-        if (!['dm', 'webhook', 'session-inbox'].includes(result?.delivered)) {
+        if (!isKimDelivered(result, { extra: ['webhook'] })) {
           (io.stderr ?? console.error)(`auto-progress-escalate: ${key}: ${result?.delivered || 'none'}: ${result?.reason || 'not delivered'}`);
           continue;
         }

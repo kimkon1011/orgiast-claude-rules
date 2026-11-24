@@ -10,5 +10,30 @@ function envFile(file) {
 }
 
 export function resolveFleetLabel(home, identity = { hostname: os.hostname() }) {
-  return envFile(path.join(home, '.claude', 'cost-reporter.env')).REPORTER_LABEL || identity.hostname;
+  // Check for custom fleet PC map first
+  const fleetMapPath = path.join(home, '.claude', 'fleet-pc-map.json');
+  if (fs.existsSync(fleetMapPath)) {
+    try {
+      const fleetMap = JSON.parse(fs.readFileSync(fleetMapPath, 'utf8'));
+      if (identity.hostname in fleetMap) {
+        return fleetMap[identity.hostname];
+      }
+    } catch (e) {
+      // Ignore invalid map file
+    }
+  }
+
+  // Check for REPORTER_LABEL in cost-reporter.env
+  const reporterLabel = envFile(path.join(home, '.claude', 'cost-reporter.env')).REPORTER_LABEL;
+  if (reporterLabel) return reporterLabel;
+
+  // Normalize hostname for known patterns
+  // If hostname starts with digits followed by 'KimPC', normalize to 'kim-PC'
+  const kimPCMatch = identity.hostname.match(/^\d+(\w+)/i);
+  if (kimPCMatch && kimPCMatch[1].toLowerCase() === 'kimpc') {
+    return 'kim-PC';
+  }
+
+  // Return original hostname as fallback
+  return identity.hostname;
 }

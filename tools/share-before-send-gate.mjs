@@ -15,6 +15,109 @@ const SHELL = /^(?:Bash|PowerShell)$/;
 export function fileIds(text) {
   return [...new Set((String(text).match(/https?:\/\/(?:docs|drive)\.google\.com\/[^\s<>"'\\)\]。]+/g) ?? []).map(extractFileId).filter(Boolean))];
 }
+/** Keep each URL: two URLs for the same ID can have different login/Office behavior. */
+export function driveUrls(text) {
+  return [...new Set(String(text).match(/https?:\/\/(?:docs|drive)\.google\.com(?=[/\s]|$)[^\s<>"'\\)\]。」、]+/gi) ?? [])];
+}
+
+const EXTERNAL_MIMES = new Set(['application/pdf', ...['document', 'spreadsheet', 'presentation', 'drawing', 'form'].map(type => `application/vnd.google-apps.${type}`)]);
+const loginUrl = url => /(?:^|\.)accounts\.google\.com$/i.test(url.hostname) || /\/ServiceLogin(?:[/?]|$)/i.test(url.pathname);
+const googleDownloadUrl = url => url.protocol === 'https:' && !url.username && !url.password && !url.port &&
+  /(?:^|\.)(?:google\.com|googleusercontent\.com)$/.test(url.hostname);
+
+/** Strict external delivery check. No ledger, individual shares or anonymous fallback prove permissions. */
+export async function checkExternalLinks(text, dependencies = {}) {
+  const urls = driveUrls(text);
+  if (!urls.length) return { decision: 'pass', checks: [] };
+  const { getDriveToken } = await import('./lib/drive-auth.mjs');
+  const { gwsFetch } = await import('./lib/gws-proxy.mjs');
+  const getToken = dependencies.getToken ?? getDriveToken;
+  const fetchImpl = dependencies.fetchImpl ?? globalThis.fetch;
+  const apiFetch = dependencies.apiFetch ?? ((url, options) => gwsFetch(url, options, { fetchImpl }));
+  const checks = [];
+  for (const originalUrl of urls) {
+    const check = { url: originalUrl };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), dependencies.timeoutMs ?? 15000);
+    const signal = controller.signal;
+    const json = async (url, token) => {
+      const response = await apiFetch(url, { headers: { Authorization: `Bearer ${token}` }, signal });
+      if (!response.ok) throw Error(`Drive API HTTP ${response.status}`);
+      return response.json();
+    };
+    try {
+      let current = new URL(originalUrl);
+      const id = extractFileId(originalUrl);
+      if (!id || current.protocol !== 'https:') throw Error('Drive/Docs URL が不正です');
+      if ([...current.searchParams].some(([key, value]) => key.toLowerCase() === 'rtpof' && value.toLowerCase() === 'true')) throw Error('rtpof=true の Office 表示URLは送れません');
+      const token = await getToken({ impersonate: 'seisaku-team@orgiast.jp', signal, fetchImpl });
+      const base = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`;
+      const meta = await json(`${base}?fields=mimeType,owners(emailAddress)&supportsAllDrives=true`, token);
+      check.mimeType = meta.mimeType;
+      if (!EXTERNAL_MIMES.has(meta.mimeType)) throw Error(`Google形式またはPDFが必要です（${meta.mimeType ?? 'MIME不明'}）`);
+      // A native file can still have a URL requesting an Office download.
+      if (/(?:\.|\/export\/)(?:pptx?|xlsx?|docx?)(?:$|[/?#])/i.test(current.pathname) ||
+          [...current.searchParams].some(([key, value]) => /^(?:format|exportFormat|mimeType)$/i.test(key) && /^(?:pptx?|xlsx?|docx?)$|officedocument|msword|ms-excel|ms-powerpoint/i.test(value))) throw Error('Office形式の書き出しURLは送れません');
+      const owner = meta.owners?.map(x => x.emailAddress).find(email => /@orgiast\.jp$/i.test(email));
+      const ownerToken = owner && owner !== 'seisaku-team@orgiast.jp' ? await getToken({ impersonate: owner, signal, fetchImpl }) : token;
+      const permissions = [];
+      let pageToken;
+      do {
+        const result = await json(`${base}/permissions?${new URLSearchParams({ fields: 'nextPageToken,permissions(type,role,allowFileDiscovery)', supportsAllDrives: 'true', ...(pageToken ? { pageToken } : {}) })}`, ownerToken);
+        permissions.push(...(result.permissions ?? [])); pageToken = result.nextPageToken;
+      } while (pageToken);
+      const publicPermissions = permissions.filter(p => p.type === 'anyone');
+      if (publicPermissions.length !== 1 || publicPermissions[0].role !== 'reader' || publicPermissions[0].allowFileDiscovery !== false) throw Error('anyoneWithLink reader（検索非公開）が必要です');
+      for (let hop = 0; ; hop++) {
+        if (loginUrl(current)) throw Error('ログイン画面への転送を検出しました');
+        if (!googleDownloadUrl(current)) throw Error('Google以外または不正な転送先です');
+        // Do not forward API headers or cookies, even across redirects.
+        const response = await fetchImpl(current.href, { redirect: 'manual', credentials: 'omit', signal });
+        const location = response.headers.get('location');
+        if (location && loginUrl(new URL(location, current))) throw Error('ログイン画面への転送を検出しました');
+        if ([301, 302, 303, 307, 308].includes(response.status)) {
+          await response.body?.cancel();
+          if (!location || hop >= 5) throw Error('転送回数超過またはLocationなし');
+          current = new URL(location, current); continue;
+        }
+        if (response.status !== 200) throw Error(`未ログイン取得 HTTP ${response.status}`);
+        if (response.url && loginUrl(new URL(response.url))) throw Error('ログイン画面を検出しました');
+        const type = response.headers.get('content-type') ?? '';
+        if (type.startsWith('text/') || type.includes('html') || !type) {
+          const html = await response.text();
+          // Public viewers include a Sign in link too; only a login page/form or redirect is a failure.
+          if (/<title[^>]*>\s*(?:Sign in|Google Accounts|ログイン)/i.test(html) ||
+              /<form\b[^>]*action=["'][^"']*(?:accounts\.google\.com|ServiceLogin|signin)/i.test(html) ||
+              /(?:location(?:\.href)?\s*=|http-equiv=["']refresh["'])[^\n]{0,300}ServiceLogin/i.test(html)) throw Error('HTTP 200 のログイン画面を検出しました');
+        } else await response.body?.cancel();
+        check.httpStatus = response.status; check.finalUrl = current.href; check.ok = true; break;
+      }
+    } catch (error) {
+      // Token/network error bodies can contain private information. Return only actionable categories.
+      check.ok = false;
+      check.reason = controller.signal.aborted || ['AbortError', 'TimeoutError'].includes(error?.name) ? '確認がタイムアウトしました' :
+        /^(?:Drive API HTTP \d{3}|Google形式|Office形式|rtpof=true|Drive\/Docs URL|anyoneWithLink|ログイン画面|Google以外|転送回数|未ログイン取得|HTTP 200)/.test(error?.message ?? '') ? error.message : 'Drive認証・権限照会または未ログイン取得に失敗しました';
+    } finally { clearTimeout(timer); }
+    checks.push(check);
+  }
+  const failures = checks.filter(x => !x.ok);
+  return { decision: failures.length ? 'block' : 'pass', checks, ...(failures.length ? { reason: failures.map(x => `${x.url}: ${x.reason}`).join('\n') } : {}) };
+}
+
+export async function assertExternalLinks(text, dependencies) {
+  const result = await checkExternalLinks(text, dependencies);
+  if (result.decision === 'block') throw Error(`[SHARE-BEFORE-SEND] ${result.reason}`);
+  return result;
+}
+
+export async function externalBodyFileMain(argv, dependencies) {
+  try {
+    if (argv.length !== 2 || argv[0] !== '--external-body-file' || !argv[1]) throw Error('Usage: --external-body-file <file>');
+    const result = await checkExternalLinks(fs.readFileSync(argv[1], 'utf8'), dependencies);
+    console.log(JSON.stringify(result));
+    return result.decision === 'block' ? 2 : 0;
+  } catch { console.error('[SHARE-BEFORE-SEND] 社外本文を検証できませんでした'); return 2; }
+}
 function tokens(command) {
   return (command.match(/(?:"[^"]*"|'[^']*'|[^\s"'])+/g) ?? []).map(t => t.replace(/(["'])(.*?)\1/g, '$2'));
 }
@@ -67,7 +170,7 @@ async function awaitOrThrow(checkFn, fileIds) {
   return { publicIds: pub, publicSet: new Set(pub), failures };
 }
 
-export async function judge(input, { ledgerPath = shareLedgerPath(), now = Date.now(), checkAnyone } = {}) {
+export async function judge(input, { ledgerPath = shareLedgerPath(), now = Date.now(), checkAnyone, checkExternal = checkExternalLinks } = {}) {
   if (!input || typeof input !== 'object') throw new Error('hook 入力が不正です');
   if (!TARGET.test(input.tool_name ?? '')) return { decision: 'pass' };
   const args = input.tool_input ?? {};
@@ -76,16 +179,25 @@ export async function judge(input, { ledgerPath = shareLedgerPath(), now = Date.
     text = String(args.command ?? '');
     if (!/\b(?:discord-dm|gmail-draft)\.mjs\b/.test(text)) return { decision: 'pass' };
     const argv = tokens(text);
+    const externalShell = /\bgmail-draft\.mjs\b/.test(text) && argv.some((arg, i) => /^--(?:to|cc|bcc)(?:=|$)/.test(arg) &&
+      (arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : argv[i + 1] ?? '').split(/[;,\s]+/).some(e => e.includes('@') && !/@orgiast\.jp$/i.test(e)));
     for (let i = 0; i < argv.length; i++) {
       const match = argv[i].match(/^--(?:body-file|message-file|content-file|text-file)(?:=(.*))?$/);
       if (!match) continue;
       const file = match[1] ?? argv[++i];
-      if (!file) throw new Error('本文ファイル指定が不正です');
-      text += '\n' + fs.readFileSync(path.resolve(input.cwd || process.cwd(), file), 'utf8');
+      try {
+        if (!file) throw new Error('本文ファイル指定が不正です');
+        text += '\n' + fs.readFileSync(path.resolve(input.cwd || process.cwd(), file), 'utf8');
+      } catch (error) {
+        if (externalShell) return { decision: 'block', checks: [], reason: '社外本文ファイルを読み取れないため送信を止めました' };
+        throw error;
+      }
     }
+    if (externalShell) return checkExternal(text);
   } else if (/Gmail/.test(input.tool_name)) {
     const recipients = extractAddresses(args);
     if (recipients.length && recipients.every(e => e === 'kim@orgiast.jp')) return { decision: 'pass' };
+    if (recipients.some(e => !/@orgiast\.jp$/i.test(e))) return checkExternal(Object.values(args).filter(x => typeof x === 'string').join('\n'));
   }
   const ids = fileIds(text);
   if (!ids.length) return { decision: 'pass' };
@@ -203,7 +315,13 @@ export async function main() {
     const raw = await readStdin();
     if (!raw.trim()) return;
     const result = await judge(JSON.parse(raw), { checkAnyone: checkAnyoneOnDrive });
-    if (result.decision === 'block') console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: result.reason } }));
+    if (result.decision === 'block') {
+      console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: result.reason } }));
+      if (result.checks) process.exitCode = 2;
+    }
   } catch (error) { console.error(`[SHARE-BEFORE-SEND] 判定をスキップ: ${String(error.message).replace(/[\r\n]+/g, ' ')}`); }
 }
-if (isEntry(import.meta.url)) await main();
+if (isEntry(import.meta.url)) {
+  if (process.argv.length > 2) process.exitCode = await externalBodyFileMain(process.argv.slice(2));
+  else await main();
+}

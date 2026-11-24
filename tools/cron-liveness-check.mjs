@@ -13,6 +13,8 @@ const DAY_MS = 864e5;
 // 完全な生成物が残っており tools/top3-catchup.mjs が後から回収して届ける。
 // 逆に workflow が緑でも届いていない、という状態は POST 失敗が job 失敗になるので起きない。
 // つまり真実は「ローカルキャッシュの asOf がいつのものか」だけなので、そちらを見る。
+// 配達担当のスケジュールタスクを持たない席ではローカルキャッシュが永久に生まれない。
+// そのため停止ではなく担当外として扱う。
 export function isLocalJobSeat(taskName, runner = spawnSync) {
   if (process.platform !== 'win32') return false;
   try {

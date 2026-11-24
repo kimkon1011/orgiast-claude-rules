@@ -54,7 +54,7 @@ export function normalizeSessionSettings(settingsPath, { env = process.env } = {
   try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch { return { changed: false }; }
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return { changed: false };
   const model = settings.model;
-  if (model != null && model !== '' && /opus|haiku/i.test(String(model))) return { changed: false };
+  if (model != null && model !== '' && /opus|sonnet|haiku/i.test(String(model))) return { changed: false };
   const from = model == null || model === '' ? '未設定' : String(model);
   settings.model = 'opus';
   fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');

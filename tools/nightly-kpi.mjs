@@ -217,7 +217,7 @@ export function parseBatchLog(content) {
   };
 }
 
-export function calculateKpi({ date, todoParse, runs, batch, taskInfo = null, pullRequests = { prsCreated: null, prNumbers: [] } }) {
+export function calculateKpi({ date, todoParse, runs, batch, taskInfo = null, now = new Date(), pullRequests = { prsCreated: null, prNumbers: [] } }) {
   const previousDate = previousKpiDate(date);
   const completed = todoParse.todos.filter((todo) => todo.completed);
   const closedOvernight = completed.filter((todo) => todo.completedDate === date || todo.completedDate === previousDate).length;
@@ -241,6 +241,15 @@ export function calculateKpi({ date, todoParse, runs, batch, taskInfo = null, pu
   const durations = selected.map((run) => (new Date(run.endedAt) - new Date(run.startedAt)) / 60_000).filter((v) => Number.isFinite(v) && v >= 0).sort((a, b) => a - b);
   const median = durations.length ? (durations.length % 2 ? durations[(durations.length - 1) / 2] : (durations[durations.length / 2 - 1] + durations[durations.length / 2]) / 2) : null;
   const backlogAtStart = backlogAtEnd + closedOvernight;
+
+  const dayStart = new Date(`${date}T00:00:00`);
+  const scheduledStart = new Date(`${date}T03:00:00`);
+  const lastRunTime = new Date(taskInfo?.lastRunTime ?? NaN);
+  const nextRunTime = new Date(taskInfo?.nextRunTime ?? NaN);
+  const batchNotStarted = !batch.batchRan && (taskInfo
+    ? lastRunTime < dayStart || (nextRunTime > now && localDate(nextRunTime) === date)
+    : now < scheduledStart);
+
   return {
     date,
     closeRate: backlogAtStart ? closedOvernight / backlogAtStart : null,
@@ -256,6 +265,7 @@ export function calculateKpi({ date, todoParse, runs, batch, taskInfo = null, pu
     prYieldRate: pullRequests.prsCreated === null || !sessions ? null : pullRequests.prsCreated / sessions,
     ...batch,
     scheduledTask: taskInfo,
+    batchNotStarted,
     nightCostUsd: round(nightCostUsd),
     supervisorEquivalentUsd: round(supervisorEquivalentUsd),
     modelSavingUsd: round(modelSavingUsd),
@@ -274,8 +284,11 @@ const usd = (value) => value === null ? '不明' : `$${value.toFixed(2)}`;
 
 export function improvementTodos(kpi, previous = null) {
   const todos = [];
-  if (!kpi.batchRan) todos.push(`P0: 夜間バッチが起動直後に死んでログを1行も書いていない（${kpi.date}）。OrgiastNightlyBatch と同時刻に走る他タスクとの競合を疑う`);
-  else if (!kpi.batchCompleted) todos.push(`P0: 夜間バッチは集計時点で完了未確認（サマリ行なし・実行中の可能性あり）。最終ステップ = ${kpi.lastStep ?? '不明'}`);
+  if (!kpi.batchRan && !kpi.batchNotStarted) {
+    todos.push(`P0: 夜間バッチが起動直後に死んでログを1行も書いていない（${kpi.date}）。OrgiastNightlyBatch と同時刻に走る他タスクとの競合を疑う`);
+  } else if (kpi.batchRan && !kpi.batchCompleted) {
+    todos.push(`P0: 夜間バッチは集計時点で完了未確認（サマリ行なし・実行中の可能性あり）。最終ステップ = ${kpi.lastStep ?? '不明'}`);
+  }
   if (kpi.failedSteps.length) todos.push(`P1: 夜間バッチのステップ失敗: ${kpi.failedSteps.join('、')}`);
   if (kpi.noOpRate !== null && kpi.noOpRate > 0.3) todos.push(`P1: 空回り率 ${pct(kpi.noOpRate)}。完了済みTODOが引き継ぎ票に残り再配布されている。next-session.md の ✅ 済みブロックを刈る`);
   const lowPrYieldStreak = [kpi, previous].slice(0, PR_YIELD_LOW_STREAK_DAYS).every((day) => (
@@ -312,22 +325,36 @@ export function appendImprovementTodos(markdown, additions) {
 export function queryScheduledTaskInfo(spawn = spawnSync) {
   if (process.platform !== 'win32' && spawn === spawnSync) return null;
   try {
-    const command = "$i=Get-ScheduledTaskInfo -TaskName 'OrgiastNightlyBatch' -ErrorAction Stop; @{LastRunTime=$i.LastRunTime.ToString('o');LastTaskResult=$i.LastTaskResult}|ConvertTo-Json -Compress";
+    const command = "$i=Get-ScheduledTaskInfo -TaskName 'OrgiastNightlyBatch' -ErrorAction Stop; @{LastRunTime=$i.LastRunTime.ToString('o');LastTaskResult=$i.LastTaskResult;NextRunTime=$i.NextRunTime.ToString('o') }|ConvertTo-Json -Compress";
     const result = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', timeout: 15_000, windowsHide: true });
     if (result.error || result.status !== 0) return null;
     const value = JSON.parse(String(result.stdout).replace(/^\uFEFF/, '').trim());
-    return { lastRunTime: value.LastRunTime ?? null, lastTaskResult: value.LastTaskResult ?? null };
+    return {
+      lastRunTime: value.LastRunTime ?? null,
+      lastTaskResult: value.LastTaskResult ?? null,
+      nextRunTime: value.NextRunTime ?? null,
+    };
   } catch { return null; }
 }
 
 export function formatText(kpi, previous = null, added = []) {
   const delta = (key, format) => previous && typeof kpi[key] === 'number' && typeof previous[key] === 'number' ? `（前日比 ${format(kpi[key] - previous[key])}）` : '';
+
+  let batchStatus = `ran=${kpi.batchRan} / completed=${kpi.batchCompleted} / ok=${kpi.batchStepsOk}/${kpi.batchStepsTotal}`;
+  if (kpi.batchNotStarted) {
+    const nextRunTime = new Date(kpi.scheduledTask?.nextRunTime ?? NaN);
+    const startTime = Number.isFinite(nextRunTime.getTime()) && localDate(nextRunTime) === kpi.date
+      ? nextRunTime.toTimeString().slice(0, 5)
+      : '03:00';
+    batchStatus = `未開始（開始予定 ${startTime}）`;
+  }
+
   return [
     `夜間KPI ${kpi.date}`,
     `主KPI: 消化率 ${pct(kpi.closeRate)}${delta('closeRate', (v) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}pt`)} / 空回り率 ${pct(kpi.noOpRate)}${delta('noOpRate', (v) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}pt`)} / 純削減 ${usd(kpi.netSavingUsd)}${delta('netSavingUsd', (v) => `${v >= 0 ? '+' : ''}$${v.toFixed(2)}`)}`,
     `消化: ${kpi.closedOvernight}/${kpi.backlogAtStart}件 / 残 ${kpi.backlogAtEnd}件 / 純減 ${kpi.netBurnDown}件 / 日付不明完了 ${kpi.dateUnknown}件`,
     `セッション: ${kpi.sessions}件（成功 ${kpi.succeeded} / 失敗 ${kpi.failed} / timeout ${kpi.timedOut} / 空回り ${kpi.noOpSessions}）/ 成果 ${kpi.prsCreated === null ? '不明' : `${kpi.prsCreated}PR/${kpi.sessions}セッション = ${pct(kpi.prYieldRate)}`}`,
-    `夜間バッチ: ran=${kpi.batchRan} / completed=${kpi.batchCompleted} / ok=${kpi.batchStepsOk}/${kpi.batchStepsTotal}${kpi.failedSteps.length ? ` / 失敗=${kpi.failedSteps.join('、')}` : ''}${kpi.warnSteps?.length ? ` / 警告=${kpi.warnSteps.join('、')}` : ''}`,
+    `夜間バッチ: ${batchStatus}${kpi.failedSteps.length ? ` / 失敗=${kpi.failedSteps.join('、')}` : ''}${kpi.warnSteps?.length ? ` / 警告=${kpi.warnSteps.join('、')}` : ''}`,
     `コスト: 夜間 ${usd(kpi.nightCostUsd)} / 監督相当 ${usd(kpi.supervisorEquivalentUsd)} / モデル削減 ${usd(kpi.modelSavingUsd)} / 空回り ${usd(kpi.wastedUsd)} / 完了1件あたり ${usd(kpi.savingPerClosedTodo)}`,
     `参考: 無人消化実時間の中央値 ${kpi.medianSessionMinutes === null ? '不明' : `${kpi.medianSessionMinutes.toFixed(1)}分`} × 完了件数 = ${kpi.humanMinutesSaved === null ? '不明' : `${kpi.humanMinutesSaved.toFixed(1)}分`}`,
     `注記: ${kpi.costNote}`,

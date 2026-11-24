@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { getLoadGuardStatus, hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord, measureUserIdleSec, DEFAULT_REOPEN_MAX_CLAUDE } from './reopen-lost-sessions.mjs';
 import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
 import { CLAUDE_PROCESS_SCRIPT } from './lib/windows-process.mjs';
@@ -254,6 +256,94 @@ test('unknown agents prevents API/open; concurrent lock and stale lock', async t
   assert.equal(acquireLock(file), null); release();
   fs.writeFileSync(file, 'stale'); fs.utimesSync(file, new Date(0), new Date(0));
   acquireLock(file)();
+});
+
+function runReopenCli(base, ...args) {
+  return spawnSync(process.execPath, [fileURLToPath(new URL('./reopen-lost-sessions.mjs', import.meta.url)), ...args], {
+    env: { ...process.env, HOME: path.dirname(base), USERPROFILE: path.dirname(base) },
+    encoding: 'utf8',
+    timeout: 5000,
+  });
+}
+
+test('watch CLI logs a live lock as a successful skip and preserves watch state', t => {
+  const base = fixture(t);
+  const lock = path.join(base, 'reopen-lost-sessions.lock');
+  fs.writeFileSync(lock, String(process.pid));
+  const stateFile = path.join(base, 'reopen-lost-sessions-state.json');
+  const state = JSON.stringify({ watermark: since });
+  fs.writeFileSync(stateFile, state);
+  writeFailState(base, { consecutiveFails: 7, lastFailAt: since });
+
+  const run = runReopenCli(base, '--watch');
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  const log = fs.readFileSync(path.join(base, 'reopen-lost-sessions.log'), 'utf8').trim();
+  const { at, skipped, holderPid, lockAgeSec, stale } = JSON.parse(log);
+  assert.equal(new Date(at).toISOString(), at);
+  assert.equal(skipped, 'locked');
+  assert.equal(holderPid, process.pid);
+  assert.ok(lockAgeSec >= 0 && lockAgeSec <= 600);
+  assert.equal(stale, false);
+  assert.equal(fs.readFileSync(lock, 'utf8'), String(process.pid));
+  assert.equal(fs.readFileSync(stateFile, 'utf8'), state);
+  assert.equal(readFailState(base).consecutiveFails, 7);
+});
+
+test('acquireLock reclaims an 11-minute-old lock with a live PID', t => {
+  const base = fixture(t);
+  const lock = path.join(base, 'reopen-lost-sessions.lock');
+  const now = Date.now();
+  const staleTime = new Date(now - 11 * 60_000);
+  fs.writeFileSync(lock, String(process.pid));
+  fs.utimesSync(lock, staleTime, staleTime);
+
+  const release = acquireLock(lock, now);
+  assert.equal(typeof release, 'function');
+  try {
+    assert.ok(fs.statSync(lock).mtimeMs > staleTime.getTime());
+  } finally {
+    release();
+  }
+  assert.equal(fs.existsSync(lock), false);
+});
+
+test('acquireLock reclaims a fresh lock left by a dead PID', t => {
+  const base = fixture(t);
+  const lock = path.join(base, 'reopen-lost-sessions.lock');
+  const child = spawnSync(process.execPath, ['-e', '']);
+  assert.equal(child.status, 0);
+  fs.writeFileSync(lock, String(child.pid));
+
+  const release = acquireLock(lock);
+  assert.equal(typeof release, 'function');
+  try { assert.equal(fs.readFileSync(lock, 'utf8'), String(process.pid)); }
+  finally { release(); }
+  assert.equal(fs.existsSync(lock), false);
+});
+
+test('watch CLI logs locked and exits 1 when the lock cannot be reclaimed', t => {
+  const base = fixture(t);
+  fs.mkdirSync(path.join(base, 'reopen-lost-sessions.lock'));
+
+  const run = runReopenCli(base, '--watch');
+  assert.equal(run.status, 1, run.stderr || run.stdout);
+  const entry = JSON.parse(fs.readFileSync(path.join(base, 'reopen-lost-sessions.log'), 'utf8'));
+  assert.equal(entry.error, 'locked');
+});
+
+test('CLI logs an uncaught error and exits 1, with no log writes in dry run', t => {
+  const base = fixture(t);
+  const log = path.join(base, 'reopen-lost-sessions.log');
+  const dry = runReopenCli(base, '--dry-run', '--unknown-option');
+  assert.equal(dry.status, 1, dry.stderr || dry.stdout);
+  assert.equal(fs.existsSync(log), false);
+
+  const run = runReopenCli(base, '--unknown-option');
+  assert.equal(run.status, 1, run.stderr || run.stdout);
+  const entry = JSON.parse(fs.readFileSync(log, 'utf8'));
+  assert.equal(new Date(entry.at).toISOString(), entry.at);
+  assert.equal(entry.stage, 'uncaught');
+  assert.equal(entry.error, 'Invalid option: --unknown-option');
 });
 
 test('API failure is explicit and partial candidates survive API-only deadline', async t => {

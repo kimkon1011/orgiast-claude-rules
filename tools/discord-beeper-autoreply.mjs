@@ -9,16 +9,20 @@ import { isEntry } from './is-entry.mjs';
 import {
   DEFAULT_MAX_REPLY_AGE, classifyReply, contentFor, createLlm, ensureTaskPriority, decisionReport, sentReport,
   isWithinAllowedTimeWindow, recordSentReply, flushUnreportedSentLogs, recordDecisionPending, readSentLog,
-  retryForbiddenAnswer, FORBIDDEN_REPLY_PTN, inventedAmounts, CANT_READ_REPLY_PTN
+  retryForbiddenAnswer, isForbiddenReply, inventedAmounts, CANT_READ_REPLY_PTN
 } from './discord-autoreply.mjs';
 import { addItem as addKimInboxItem } from './kim-inbox.mjs';
 import { resolveDiscordLink } from './discord-beeper-link.mjs';
 import { collectReadableContent } from './lib/autoreply-attachments.mjs';
 import { extractSearchTerms, searchRelated } from './lib/autoreply-related.mjs';
+import { LEARN_SYSTEM, learningJson, appendUnique } from './lib/autoreply-learning.mjs';
 import { beeperFetch as beeperFetchFn } from './beeper-api.mjs';
 
 export const DISCORD_ACCOUNT = 'discordgo.715210673642012733';
 const HOUR = 3600000;
+const LEARN_WINDOW = 72 * HOUR;
+const LEARN_QUEUE_LIMIT = 500;
+const AUTOREPLY_PREFIX = '【kimのClaudeによる代理回答】';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const read = file => { try { return fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return ''; throw e; } };
 const atomic = (file, value) => {
@@ -99,6 +103,41 @@ async function historyFor(api, chat) {
   }
   return { items: validMessages([...items.values()]), complete: false };
 }
+async function learningHistory(api, chatId, since) {
+  const messages = new Map(), cursors = new Set();
+  let cursor;
+  for (let page = 0; page < 20; page++) {
+    const data = await api.listMessages(chatId, { limit: 50, cursor, direction: 'before' });
+    if (!Array.isArray(data.items)) throw new Error('Beeper message response invalid');
+    const items = data.items.filter(m => !m.accountID || m.accountID === DISCORD_ACCOUNT);
+    for (const m of items) messages.set(m.id, m);
+    const covered = validMessages(items).some(m => timestamp(m) <= since);
+    if (covered || !data.hasMore) return { messages, covered, complete: true };
+    if (!data.oldestCursor || cursors.has(data.oldestCursor)) break;
+    cursor = data.oldestCursor;
+    cursors.add(cursor);
+  }
+  return { messages, covered: false, complete: false };
+}
+
+function loadState(file) {
+  const stored = read(file);
+  const state = stored ? JSON.parse(stored) : { version: 1, chats: {}, hourly: [], hourlyByChat: {} };
+  state.learnQueue ??= [];
+  if (state.version !== 1 || !state.chats || Array.isArray(state.chats)
+    || !Array.isArray(state.hourly) || !Array.isArray(state.learnQueue)) throw new Error('state.json invalid');
+  state.hourlyByChat ??= {};
+  return state;
+}
+
+function enqueueLearning(state, { channelId, replyId, question, content, ts, senderName }) {
+  if (state.learnQueue.some(entry => entry.replyId === replyId)) return;
+  state.learnQueue.push({ chatId: channelId, replyId, question, answer: content, ts, senderName,
+    evaluatedKimIds: [], learned: false });
+  state.learnQueue.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+  state.learnQueue.splice(0, Math.max(0, state.learnQueue.length - LEARN_QUEUE_LIMIT));
+}
+
 function acquire(dir) {
   const file = path.join(dir, 'lock');
   const pid = process.pid;
@@ -197,11 +236,24 @@ export async function runOnce(options = {}) {
       } catch { /* best-effort */ }
       return result;
     }
-    if (fs.existsSync(path.join(dir, 'PAUSE'))) return { ...result, paused: true };
-    const stored = read(stateFile);
-    state = stored ? JSON.parse(stored) : { version: 1, chats: {}, hourly: [], hourlyByChat: {} };
-    if (state.version !== 1 || !state.chats || Array.isArray(state.chats) || !Array.isArray(state.hourly)) throw new Error('state.json invalid');
-    state.hourlyByChat ??= {};
+    const pauseReason = read(path.join(dir, 'PAUSE'));
+    if (fs.existsSync(path.join(dir, 'PAUSE'))) {
+      result.paused = true;
+      if (pauseReason.trim() !== 'hourly reply limit') return result;
+    }
+    state = loadState(stateFile);
+    const finishSend = async (chat, found, entry) => {
+      const { question = '', content, senderName } = entry;
+      const sent = {
+        where: 'dm', ts: found.timestamp, channelId: chat.id, channelName: chat.title || chat.id,
+        senderName: senderName || 'User', question, content, link: messageLink(chat, found), replyId: found.id
+      };
+      state.chats[chat.id] = { ...entry, status: 'sent', replyId: found.id };
+      enqueueLearning(state, sent);
+      save();
+      await recordSentReply(home, sent, { addItemImpl, registerCommitment: options.registerCommitment,
+        approvalMessage: entry.approvalMessage, approvalTs: entry.approvalTs ?? timestamp(entry) });
+    };
 
     const accounts = await api.getAccounts();
     if (!Array.isArray(accounts)) throw new Error('Beeper account response invalid');
@@ -211,7 +263,7 @@ export async function runOnce(options = {}) {
     const llm = options.llm || createLlm({ home, fetchImpl: options.fetchImpl || fetch });
     let attempts = 0;
 
-    for (const chat of chats) {
+    for (const chat of result.paused ? [] : chats) {
       result.scanned++;
       let latest, question = '', link = `会話名: ${chat.title || chat.id}`;
       const prior = state.chats[chat.id];
@@ -248,18 +300,7 @@ export async function runOnce(options = {}) {
         if (prior?.status === 'sending') {
           const found = all.find(m => m.isSender && plainText(m.text) === prior.content && timestamp(m) >= timestamp(prior));
           if (found && !hasSendFailure(found)) {
-            state.chats[chat.id] = { ...prior, status: 'sent', replyId: found.id };
-            await recordSentReply(home, {
-              where: 'dm',
-              ts: new Date(now).toISOString(),
-              channelId: chat.id,
-              channelName: chat.title || chat.id,
-              senderName: prior.senderName || 'User',
-              question: prior.question || '',
-              content: prior.content,
-              link: messageLink(chat, found),
-              replyId: found.id
-            }, { addItemImpl });
+            if (!dryRun) await finishSend(chat, found, prior);
           } else {
             latest = prior; question = prior.question || ''; link = prior.link || messageLink(chat, prior);
             await decide('前回の送信結果が未確定。Discord で確認してください', 'uncertain');
@@ -330,7 +371,7 @@ export async function runOnce(options = {}) {
           message: { content: question },
           knowledge: read(path.join(home, '.claude', 'discord-autoreply', 'knowledge.md')),
           rules: read(path.join(home, '.claude', 'discord-autoreply', 'rules.md')),
-          corrections: readCorrections().slice(-30),
+          corrections: readCorrections().filter(row => row.outcome !== 'expired').slice(-30),
           ...(related.length ? { related } : {}),
           ...(collected.images.length ? { images: collected.images } : {}),
           ...(collected.documents.length ? { documents: collected.documents } : {}),
@@ -342,7 +383,7 @@ export async function runOnce(options = {}) {
           continue;
         }
         // 禁止表現（代表への確認を約束する文/転送/確認待ち等）が含まれていたら1回だけ再生成
-        if (decision.answer?.trim() && FORBIDDEN_REPLY_PTN.test(decision.answer)) {
+        if (decision.answer?.trim() && isForbiddenReply(decision.answer)) {
           const origNeedsKim = decision.needs_kim_decision;
           const retry = await retryForbiddenAnswer(llm, decision, classifyInput);
           if (retry) {
@@ -415,7 +456,10 @@ export async function runOnce(options = {}) {
         if (dryRun) { result.wouldSend.push({ chatID: chat.localChatID || chat.id, messageId: latest.id, content, link }); attempts++; continue; }
         if (fs.existsSync(path.join(dir, 'PAUSE'))) { result.paused = true; break; }
 
-        state.chats[chat.id] = { ...mark(latest), status: 'sending', content, question, senderName: latest.senderName, link };
+        const replyTarget = selectReplyTarget(pending);
+        // A compound group question can contain proposals or objections from several people.
+        const approvalMessage = replyTarget?.id === latest.id && pending.length === 1 ? plainText(latest.text) : undefined;
+        state.chats[chat.id] = { ...mark(latest), status: 'sending', content, question, senderName: latest.senderName, link, approvalMessage };
         const sendStarted = now;
         state.hourly.push(sendStarted);
         state.hourlyByChat[chat.id].push(sendStarted);
@@ -423,7 +467,6 @@ export async function runOnce(options = {}) {
 
         let sent;
         // 返信先は pending の最新（本物メッセージ）、合成メッセージは避ける
-        const replyTarget = selectReplyTarget(pending);
         try { sent = await api.sendMessage(chat.id, content, replyTarget ? { replyToMessageID: replyTarget.id } : {}); }
         catch { await decide('送信結果が不明。再送せず Discord で確認してください', 'uncertain'); continue; }
         if (sent?.chatID && sent.chatID !== chat.id) { await decide('送信結果の会話IDが一致しません', 'uncertain'); continue; }
@@ -446,18 +489,8 @@ export async function runOnce(options = {}) {
 
         if (hasSendFailure(found)) { await decide('送信失敗の印を検出。再送せず Discord で確認してください', 'uncertain'); continue; }
 
-        state.chats[chat.id] = { ...mark(latest), status: 'sent', replyId: found.id, content };
-        await recordSentReply(home, {
-          where: 'dm',
-          ts: new Date(sendStarted).toISOString(),
-          channelId: chat.id,
-          channelName: chat.title || chat.id,
-          senderName: latest.senderName || 'User',
-          question,
-          content,
-          link: messageLink(chat, found),
-          replyId: found.id
-        }, { addItemImpl });
+        await finishSend(chat, found, { ...mark(latest), content, question, senderName: latest.senderName,
+          approvalMessage, approvalTs: timestamp(latest) });
         result.replied++;
       } catch (error) {
         await decide(`読み取り・分類を確認できません: ${error.code || error.name || 'Error'}`);
@@ -465,19 +498,17 @@ export async function runOnce(options = {}) {
       }
     }
 
-    // ── Learning phase: detect deleted auto-replies and learn from kim's corrections ──
+    if (dryRun) return { ...result, ok: result.errors.length === 0 };
+
+    // Keep deletion detection independent of follow-up classification.
     const correctionsFile = path.join(home, '.claude', 'discord-autoreply', 'corrections.jsonl');
-    const readCorrections = () => {
-      try { return read(correctionsFile).split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line)); }
-      catch { return []; }
-    };
+    const recorded = correctionIds(correctionsFile);
     const recordCorrection = row => {
-      if (!readCorrections().some(x => x.msgId === row.msgId)) {
-        fs.mkdirSync(path.dirname(correctionsFile), { recursive: true });
-        fs.appendFileSync(correctionsFile, JSON.stringify(row) + '\n');
-      }
+      if (recorded.has(row.msgId)) return;
+      fs.mkdirSync(path.dirname(correctionsFile), { recursive: true });
+      fs.appendFileSync(correctionsFile, JSON.stringify(row) + '\n');
+      recorded.add(row.msgId);
     };
-    const AUTOREPLY_PREFIX = '【kimのClaudeによる代理回答】';
     const DELETION_LEARN_DAYS = 7;
     const DELETION_LEARN_HOURS = 24;
 
@@ -489,32 +520,9 @@ export async function runOnce(options = {}) {
         continue;
       }
       try {
-        // Fetch history with coverage check: don't stop at isSender, continue
-        // until we either find the auto-reply or cover its timestamp.
-        const fetchedItems = new Map();
-        let fetchCursor;
-        let historyCovered = false;
-
-        for (let page = 0; page < 20; page++) {
-          const data = await api.listMessages(chatId, { limit: 50, cursor: fetchCursor, direction: 'before' });
-          if (!Array.isArray(data.items)) break;
-          for (const m of data.items) {
-            if (m.accountID && m.accountID !== DISCORD_ACCOUNT) continue;
-            fetchedItems.set(m.id, m);
-          }
-          // Check if the oldest valid message's timestamp is <= the auto-reply's timestamp
-          const valid = validMessages([...fetchedItems.values()]);
-          if (valid.length > 0 && timestamp(valid[0]) <= entryTs) {
-            historyCovered = true;
-            break;
-          }
-          if (!data.hasMore || !data.oldestCursor) break;
-          fetchCursor = data.oldestCursor;
-        }
-
-        const all = validMessages([...fetchedItems.values()]);
-        // Find auto-reply in raw items (validMessages filters out isDeleted)
-        const autoReplyMsg = [...fetchedItems.values()].find(m => m.id === entry.replyId);
+        const { messages, covered: historyCovered } = await learningHistory(api, chatId, entryTs);
+        const all = validMessages([...messages.values()]);
+        const autoReplyMsg = messages.get(entry.replyId);
         // Deleted if: (a) isDeleted flag is set, or (b) history covers the
         // timestamp but the message is not found.
         const isDeleted = autoReplyMsg
@@ -541,6 +549,7 @@ export async function runOnce(options = {}) {
         // Save to corrections.jsonl
         recordCorrection({
           msgId: entry.replyId,
+          chatId,
           question: entry.question || '',
           autoAnswer: entry.content || '',
           kimAnswer: plainText(kimCorrection.text),
@@ -566,6 +575,70 @@ export async function runOnce(options = {}) {
         continue;
       }
     }
+    const oldestByChat = new Map(), histories = new Map();
+    for (const entry of state.learnQueue) {
+      const ts = Date.parse(entry.ts);
+      if (entry.learned || recorded.has(entry.replyId) || now - ts >= LEARN_WINDOW) continue;
+      oldestByChat.set(entry.chatId, Math.min(ts, oldestByChat.get(entry.chatId) ?? Infinity));
+    }
+
+    for (const entry of state.learnQueue) {
+      if (entry.learned) continue;
+      if (recorded.has(entry.replyId)) {
+        entry.learned = true;
+        continue;
+      }
+      const row = {
+        ts: new Date(now).toISOString(), where: 'dm', chatId: entry.chatId, msgId: entry.replyId,
+        question: entry.question, autoAnswer: entry.answer, kimAnswer: null, rule: null
+      };
+      const sentAt = Date.parse(entry.ts);
+      try {
+        let outcome = 'expired';
+        if (now - sentAt < LEARN_WINDOW) {
+          if (!histories.has(entry.chatId)) {
+            histories.set(entry.chatId, await learningHistory(api, entry.chatId, oldestByChat.get(entry.chatId)));
+          }
+          const { messages, complete } = histories.get(entry.chatId);
+          if (!complete) continue;
+          outcome = null;
+          const evaluated = new Set(entry.evaluatedKimIds);
+          for (const kim of validMessages([...messages.values()])) {
+            if (!kim.isSender || timestamp(kim) <= sentAt || timestamp(kim) > now || evaluated.has(kim.id)) continue;
+            const kimAnswer = plainText(kim.text);
+            if (!kimAnswer || kimAnswer.startsWith(AUTOREPLY_PREFIX) || hasSendFailure(kim)) continue;
+            const learned = learningJson(await llm({ category: 'classification', system: LEARN_SYSTEM,
+              input: { question: entry.question, autoAnswer: entry.answer, kimAnswer } }));
+            if (!learned.is_correction && !learned.is_confirmation) {
+              entry.evaluatedKimIds.push(kim.id);
+              continue;
+            }
+            row.kimAnswer = kimAnswer;
+            if (learned.is_correction) {
+              const dir = path.dirname(correctionsFile);
+              fs.mkdirSync(dir, { recursive: true });
+              appendUnique(path.join(dir, 'rules.md'), learned.rule);
+              appendUnique(path.join(dir, 'knowledge.md'), learned.fact);
+              await addItemImpl(home, {
+                kind: 'info', source: 'discord-beeper-autoreply',
+                text: `自動返信の訂正を学習: ${entry.senderName || entry.chatId}`,
+                dedupeKey: `dm-learn:${entry.replyId}`
+              });
+              row.rule = learned.rule;
+            }
+            outcome = learned.is_correction ? 'corrected' : 'confirmed';
+            break;
+          }
+        }
+        if (!outcome) continue;
+        recordCorrection({ ...row, outcome });
+        entry.learned = true;
+        result.learned ??= { corrected: 0, confirmed: 0, expired: 0, deletedAndCorrected: 0 };
+        result.learned[outcome]++;
+      } catch (error) {
+        result.errors.push(`dm learning ${entry.replyId}: ${error.code || error.name || 'Error'}`);
+      }
+    }
     save();
   } catch (error) { result.ok = false; result.errors.push(error.message); }
   finally {
@@ -578,11 +651,77 @@ export async function runOnce(options = {}) {
   return result;
 }
 
+function correctionIds(file) {
+  const ids = new Set();
+  for (const line of read(file).split(/\r?\n/).filter(Boolean)) {
+    try { ids.add(JSON.parse(line).msgId); } catch { /* Ignore malformed rows. */ }
+  }
+  return ids;
+}
+
+async function learnBackfill(home, args, options) {
+  const daysIndex = args.indexOf('--days');
+  const days = Number(args[daysIndex + 1]);
+  if (daysIndex < 0 || !Number.isSafeInteger(days) || days < 1) throw new Error('--days must be a positive integer');
+  const dryRun = args.includes('--dry-run');
+  const now = typeof options.now === 'function' ? options.now() : options.now ?? Date.now();
+  const since = now - days * 24 * HOUR;
+  const dir = path.join(home, '.claude', 'discord-beeper-autoreply');
+  const file = path.join(dir, 'state.json');
+  let release;
+  if (!dryRun) {
+    fs.mkdirSync(dir, { recursive: true });
+    const lock = acquire(dir);
+    if (!lock.release) return { ok: false, locked: true, holder: lock.holder };
+    release = lock.release;
+  }
+  try {
+    const state = loadState(file);
+    const recorded = correctionIds(path.join(home, '.claude', 'discord-autoreply', 'corrections.jsonl'));
+    const initialIds = new Set(state.learnQueue.map(entry => entry.replyId));
+    const api = options.api || beeper;
+    const histories = new Map();
+    const logs = readSentLog(home).filter(row => row.where === 'dm' && row.channelId
+      && Date.parse(row.ts) >= since && Date.parse(row.ts) <= now);
+    const resolvedIds = new Set(logs.map(row => row.replyId).filter(Boolean));
+    // Resolve repeated answer text against newer log rows first.
+    logs.sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts));
+    for (const row of logs) {
+      let { replyId, ts } = row;
+      if (!replyId && row.content) {
+        if (!histories.has(row.channelId)) {
+          const { messages } = await learningHistory(api, row.channelId, since);
+          histories.set(row.channelId, validMessages([...messages.values()]));
+        }
+        const logTime = Date.parse(ts);
+        const found = histories.get(row.channelId)
+          .filter(m => m.isSender && !hasSendFailure(m) && !resolvedIds.has(m.id) && plainText(m.text) === plainText(row.content))
+          .sort((a, b) => Math.abs(timestamp(a) - logTime) - Math.abs(timestamp(b) - logTime))[0];
+        if (!found) continue;
+        replyId = found.id;
+        ts = found.timestamp;
+        resolvedIds.add(replyId);
+      }
+      if (!replyId || recorded.has(replyId)) continue;
+      enqueueLearning(state, { ...row, ts, replyId });
+    }
+    const count = state.learnQueue.filter(entry => !initialIds.has(entry.replyId)).length;
+    if (!dryRun && count) atomic(file, state);
+    return { ok: true, dryRun, count };
+  } finally { release?.(); }
+}
+
 export async function main(args = process.argv.slice(2), options = {}) {
   ensureTaskPriority();
   const command = args[0]?.startsWith('--') ? 'once' : args[0] || 'once';
   const home = options.home || os.homedir();
   const print = options.print || (v => console.log(JSON.stringify(v)));
+
+  if (command === 'learn-backfill') {
+    const result = await learnBackfill(home, args, options);
+    print(result);
+    return result.ok ? 0 : 1;
+  }
 
   if (command === 'sent') {
     const sinceIndex = args.indexOf('--since');
@@ -592,7 +731,7 @@ export async function main(args = process.argv.slice(2), options = {}) {
     return 0;
   }
 
-  if (!['once', 'loop'].includes(command)) throw new Error('Use once|loop|sent [--dry-run]');
+  if (!['once', 'loop'].includes(command)) throw new Error('Use once|loop|sent|learn-backfill --days N [--dry-run]');
   const maxAgeHoursIndex = args.indexOf('--max-age-hours');
   let maxAgeMs;
   if (maxAgeHoursIndex >= 0) {

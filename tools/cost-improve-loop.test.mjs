@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import {
   evaluateReceiptSignals,
   evaluateFleet,
+  isOpusHeavy,
+  opusRatioFromMainModel,
   decideActions,
   sortViolationsBySeverity,
   verifyPreviousActions,
@@ -77,6 +79,29 @@ test('strict percent and date parsing rejects ambiguous or impossible values', (
   assert.equal(parsePercent('50'), null); assert.equal(parsePercent('12abc'), null);
   assert.equal(parseJstOrIsoDate('2026-02-30 12:00:00'), null);
   assert.equal(parseJstOrIsoDate('2026-01-01 24:00:00'), null);
+});
+
+test('isOpusHeavy / opusRatioFromMainModel', () => {
+  // %無しの model 名だけでは過多と判定しない
+  assert.equal(isOpusHeavy({ mainModel: 'claude-opus-4' }, null), false);
+  // > 50% → true
+  assert.equal(isOpusHeavy({ mainModel: 'claude-opus-4 (72%)' }, null), true);
+  // <= 50% → false
+  assert.equal(isOpusHeavy({ mainModel: 'claude-opus-4 (45%)' }, null), false);
+  // non-opus model → false
+  assert.equal(isOpusHeavy({ mainModel: 'claude-sonnet-4 (80%)' }, null), false);
+  // localState.opusRatio > 0.5 → true
+  assert.equal(isOpusHeavy({}, { opusRatio: 0.6 }), true);
+  // localState.opusRatio <= 0.5 → false
+  assert.equal(isOpusHeavy({}, { opusRatio: 0.4 }), false);
+
+  // opusRatioFromMainModel
+  assert.equal(opusRatioFromMainModel('claude-opus-4'), null);
+  assert.equal(opusRatioFromMainModel('claude-opus-4 (72%)'), 0.72);
+  assert.equal(opusRatioFromMainModel('claude-opus-4 (45%)'), 0.45);
+  assert.equal(opusRatioFromMainModel('claude-sonnet-4 (80%)'), null);
+  assert.equal(opusRatioFromMainModel(null), null);
+  assert.equal(opusRatioFromMainModel(undefined), null);
 });
 
 test('one untrusted PC does not stop another PC auto action', () => {

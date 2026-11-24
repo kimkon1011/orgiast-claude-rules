@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 // 社外の人を待たせている返信（受信の最後が社外）と、未送信のまま残った下書きを集めて状態ファイルへ書く。
 // 走査は DWD 読み取り専用。削除は --delete-cleared --approved-by kim の明示承認時だけ。
 import fs from 'node:fs';
@@ -26,7 +27,6 @@ const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 const META = ['From', 'To', 'Cc', 'Bcc', 'Subject', 'Date', 'Message-ID', 'List-Unsubscribe', 'Auto-Submitted', 'Precedence'].map(h => `metadataHeaders=${h}`).join('&');
 const MAX_PAGES = 5;
-const NOTIFY_OK = ['dm', 'webhook', 'session-inbox'];
 const toolsDir = path.dirname(fileURLToPath(import.meta.url));
 export const staffFile = path.join(toolsDir, '..', 'config', 'staff-addresses.json');
 
@@ -261,7 +261,7 @@ export async function scan({ home = defaultHome(), now = Date.now(), mailboxes =
     if (due.length) {
       const send = notify || (async text => (await import('./notify-kim.mjs')).notifyKim(text, { kind: 'info', source: 'external-waiting', plainJa: false }));
       notified = await send(notifyText(due, now));
-      if (NOTIFY_OK.includes(notified?.delivered)) for (const item of due) pushed[item.id] = now;
+      if (isKimDelivered(notified, { extra: ['webhook'] })) for (const item of due) pushed[item.id] = now;
     }
   }
   const state = { generatedAt: new Date(now).toISOString(), sources, stats, items: kept, pushed };

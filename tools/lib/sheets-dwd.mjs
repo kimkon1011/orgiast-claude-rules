@@ -1,5 +1,6 @@
 import dns from 'node:dns';
 import { getDriveToken } from './drive-auth.mjs';
+import { gwsFetch } from './gws-proxy.mjs';
 import { withAbort } from './deadline-budget.mjs';
 
 // Prefer IPv4 because a slow IPv6 route caused connection timeouts and deadline-watch exit 1 on this seat (2026-11-19).
@@ -9,12 +10,12 @@ const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 export const quoteTab = (title) => `'${title.replaceAll("'", "''")}'`;
 
-// POST is not retried: an ambiguous append response must be read back by id.
-// GET and PUT are idempotent, so wait and retry them on 429/5xx responses and transient network failures.
-export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), maxRetries = 5, timeoutMs = Number(process.env.DEADLINE_FETCH_TIMEOUT_MS) || 60_000, onStage = () => {}, signal } = {}) {
+// Append POST is not retried: an ambiguous append response must be read back by id.
+// GET, PUT, and idempotent values:batchUpdate wait and retry on 429/5xx responses and transient network failures.
+export function createSheetsClient({ fetchImpl = gwsFetch, getToken = getDriveToken, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), maxRetries = 5, max429Retries = 8, random = Math.random, timeoutMs = Number(process.env.DEADLINE_FETCH_TIMEOUT_MS) || 60_000, onStage = () => {}, signal } = {}) {
   let token;
   let expires = 0;
-  async function request(id, suffix = '', method = 'GET', body) {
+  async function request(id, suffix = '', method = 'GET', body, { retryablePost = false } = {}) {
     const timedSignal = () => signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
     try {
       if (!token || Date.now() >= expires) {
@@ -30,13 +31,15 @@ export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken
         onStage('token end (sheets)');
         expires = Date.now() + 50 * 60_000;
       }
-      const retryableMethod = method === 'GET' || method === 'PUT';
+      const retryableMethod = method === 'GET' || method === 'PUT' || retryablePost;
       const retryableStatuses = new Set([429, 500, 502, 503, 504]);
       const retryableNetworkCodes = new Set([
         'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'ECONNRESET', 'ETIMEDOUT',
         'ECONNREFUSED', 'EAI_AGAIN', 'ENETUNREACH',
       ]);
-      for (let retries = 0; ; retries++) {
+      let retries = 0;
+      let retries429 = 0;
+      for (;;) {
         let response;
         const requestSignal = timedSignal();
         try {
@@ -54,18 +57,24 @@ export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken
             || retryableNetworkCodes.has(error?.cause?.code);
           if (!retryableMethod || !retryableError || retries >= maxRetries) throw error;
           await sleep(Math.min(2_000 * (2 ** retries), 60_000));
+          retries++;
           continue;
         }
         if (response.ok) return response.json();
-        if (!retryableMethod || !retryableStatuses.has(response.status) || retries >= maxRetries) {
+        const is429 = response.status === 429;
+        const retryLimitReached = is429 ? retries429 >= max429Retries : retries >= maxRetries;
+        if (!retryableMethod || !retryableStatuses.has(response.status) || retryLimitReached) {
           throw new Error(`Sheets ${method} HTTP ${response.status}`);
         }
         const retryAfter = response.headers?.get?.('Retry-After');
         const retryAfterSeconds = retryAfter === null || retryAfter === undefined || retryAfter === '' ? NaN : Number(retryAfter);
-        const delay = Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
-          ? retryAfterSeconds * 1_000
-          : 2_000 * (2 ** retries);
-        await sleep(Math.min(delay, 60_000));
+        const hasRetryAfter = Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0;
+        const delay = hasRetryAfter
+          ? Math.min(retryAfterSeconds * 1_000, 60_000)
+          : Math.min(2_000 * (2 ** (is429 ? retries429 : retries)), 60_000) + (is429 ? Math.floor(random() * 1_001) : 0);
+        await sleep(delay);
+        if (is429) retries429++;
+        else retries++;
       }
     } catch (error) {
       if (signal?.aborted || error?.name === 'AbortError' || error?.name === 'TimeoutError' || /aborted due to timeout/i.test(error?.message || '')) {
@@ -79,6 +88,8 @@ export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken
   const append = (id, range, rows) => request(id, `/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, 'POST', { range, majorDimension: 'ROWS', values: rows });
   // PUT overwrites the same range with the same values, so retrying the write is idempotent.
   const update = (id, range, rows) => request(id, `/values/${encodeURIComponent(range)}?valueInputOption=RAW`, 'PUT', { range, majorDimension: 'ROWS', values: rows });
+  // Batch updates overwrite the same ranges with the same values, so POST is idempotent on this route.
+  const batchUpdate = (id, data) => request(id, '/values:batchUpdate', 'POST', { valueInputOption: 'RAW', data }, { retryablePost: true });
   async function ensure(id, title, header) {
     const meta = await metadata(id);
     let tab = meta.sheets?.find((s) => s.properties.title === title)?.properties;
@@ -101,7 +112,7 @@ export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken
     else if (JSON.stringify(existing[0]) !== JSON.stringify(header)) throw new Error('Output tab header mismatch; no rows changed');
     return tab;
   }
-  return { metadata, get, append, update, ensure };
+  return { metadata, get, append, update, batchUpdate, ensure };
 }
 const client = createSheetsClient();
 export const sheetsMetadata = client.metadata;

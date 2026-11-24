@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { createDirtyWorktreeGuard } from './dirty-worktree-guard.mjs';
+import { createDirtyWorktreeGuard, statusPaths } from './dirty-worktree-guard.mjs';
 import { main } from './auto-session-launcher.mjs';
 
 function fixture(t) {
@@ -150,6 +150,49 @@ test('gitignored generated files do not trigger rescue', t => {
   const guard = createDirtyWorktreeGuard({ home: root, log: () => {} });
   assert.equal(guard(repo), true, 'ignored file must not dirty/block the tree');
   assert.equal(git(repo, ['branch', '--list', 'rescue/*']).trim(), '');
+});
+
+test('case A: collapsed Windows path alone does not create a rescue branch or delete the file', t => {
+  const { root, repo, git, gitRun } = fixture(t);
+  const collapsed = 'C\uF03AUserskimkoAppDataLocalTempscan-before.json';
+  const ignorePatterns = '/[A-Za-z]:*\n/[A-Za-z]\uF03A*';
+  fs.writeFileSync(path.join(repo, '.gitignore'), `${ignorePatterns}\n`);
+  gitRun(repo, ['add', '.gitignore']);
+  gitRun(repo, ['commit', '-m', 'ignore collapsed Windows paths']);
+
+  fs.writeFileSync(path.join(repo, collapsed), 'temporary scan output');
+  assert.equal(fs.readdirSync(repo).includes(collapsed), true,
+    'the U+F03A form must be created as a real file');
+  assert.match(git(repo, ['check-ignore', '-v', '--', `./${collapsed}`]), /\/[[]A-Za-z].*\*/);
+
+  const guard = createDirtyWorktreeGuard({ home: root, log: () => {} });
+  assert.equal(git(repo, ['status', '--porcelain', '--untracked-files=all']).includes(collapsed), false,
+    'case C: .gitignore keeps the collapsed name out of porcelain status');
+  assert.equal(guard(repo), true, 'an ignored collapsed path must not block a clean worktree');
+  assert.equal(git(repo, ['branch', '--list', 'rescue/*']).trim(), '');
+  assert.equal(fs.readFileSync(path.join(repo, collapsed), 'utf8'), 'temporary scan output',
+    'the guard must not delete the ignored file');
+});
+
+test('case B: rescue commits real work but excludes a collapsed Windows path without git add failure', t => {
+  const { root, repo, git } = fixture(t);
+  const collapsed = 'C\uF03AUserskimkoAppDataLocalTempscan-before.json';
+  fs.writeFileSync(path.join(repo, 'real-work.txt'), 'precious result');
+  fs.writeFileSync(path.join(repo, collapsed), 'temporary scan output');
+  assert.equal(git(repo, ['status', '--porcelain', '-z', '--untracked-files=all']).includes(collapsed), true,
+    'the real U+F03A file must appear in git status before rescue');
+  const guard = createDirtyWorktreeGuard({ home: root, log: () => {}, git });
+
+  assert.equal(guard(repo), false);
+  const branch = git(repo, ['branch', '--show-current']).trim();
+  assert.match(branch, /^rescue\/auto-session-\d{8}-\d{6}/);
+  assert.equal(git(repo, ['show', `${branch}:real-work.txt`]), 'precious result');
+  const names = git(repo, ['show', '--format=', '--name-only', branch]);
+  assert.equal(names.includes(collapsed), false, 'collapsed path must not enter the rescue commit');
+  assert.deepEqual(statusPaths(git(repo, ['status', '--porcelain', '-z', '--untracked-files=all'])), [collapsed],
+    'real work is committed while the excluded collapsed file remains untracked');
+  assert.equal(fs.readFileSync(path.join(repo, collapsed), 'utf8'), 'temporary scan output',
+    'the excluded file must remain in the worktree');
 });
 
 // 2026-10-13〜16 の実事故: git 強制終了の置き土産 .git/index.lock があると `git add -A` が

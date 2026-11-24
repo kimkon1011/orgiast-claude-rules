@@ -1,3 +1,4 @@
+import { isKimDelivered } from './kim-delivery.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -195,7 +196,7 @@ export async function digest(ledger, ctx) {
   const text = digestText({ ...ledger, items: decisions }, ctx);
   if (ctx.dryRun) return { text, planned: true };
   const result = await ctx.notify(text);
-  if (['dm', 'session-inbox'].includes(result?.delivered)) {
+  if (isKimDelivered(result)) {
     ledger.digestDay = day;
     ctx.persist?.();
   }

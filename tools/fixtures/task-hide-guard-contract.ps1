@@ -76,8 +76,10 @@ Assert ($guard.Trigger.Count -eq 2 -and $guard.Trigger[0].Delay -eq 'PT1M' -and 
 Assert ($guard.Settings.ExecutionTimeLimit -eq 'PT10M') 'guard timeout'
 Assert ($watch.Settings.ExecutionTimeLimit -eq 'PT0S') 'watch timeout'
 Assert ($watch.Settings.MultipleInstances -eq 2) 'watch overlapping'
+Assert ($watch.Trigger.Count -eq 2 -and $watch.Trigger[0].CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' -and $watch.Trigger[1].CimClass.CimClassName -eq 'MSFT_TaskBootTrigger') 'watch logon/startup triggers'
+Assert ($watch.Settings.RestartCount -eq 999 -and $watch.Settings.RestartInterval -eq 'PT5M') 'watch restart policy'
 Assert ($guard.Principal.LogonType -eq 3 -and $guard.Principal.RunLevel -eq 0) 'principal'
-Assert (($global:contractStarted -join ',') -eq 'Claude-TaskHideGuard') 'startup must not restart watcher'
+Assert (($global:contractStarted -join ',') -eq 'OrgiastWindowSpawnWatch,Claude-TaskHideGuard') 'registration starts both tasks'
 $marker=Join-Path $TestHome '.claude\.task-hide-guard-v1'
 Assert (Test-Path $marker) 'manual task migration not marked'
 Remove-Item $marker

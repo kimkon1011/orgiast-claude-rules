@@ -222,7 +222,7 @@ test('postToDiscordWebhook: 本文が2000文字超なら複数回fetchし各チ�
   };
   const line = 'x'.repeat(1500);
   const text = `${line}\n${line}\n${line}`; // 約4503文字
-  const ok = await postToDiscordWebhook('https://hook.example.com', text, { fetchImpl });
+  const ok = await postToDiscordWebhook('https://hook.example.com', text, { fetchImpl, delayMs: 0 });
   assert.equal(ok, true);
   assert.ok(chunks.length >= 2);
   for (const chunk of chunks) {
@@ -240,7 +240,7 @@ test('postToDiscordWebhook: HTTP 400のときエラーメッセージにステ�
       status: 400,
       text: async () => '{"message": "Bad Request: content must be 2000 or fewer characters"}',
     });
-    const ok = await postToDiscordWebhook('https://hook.example.com', 'x'.repeat(2500), { fetchImpl });
+    const ok = await postToDiscordWebhook('https://hook.example.com', 'x'.repeat(2500), { fetchImpl, delayMs: 0 });
     assert.equal(ok, false);
     const errorMsg = errors.find((e) => e.includes('HTTP 400'));
     assert.ok(errorMsg, 'HTTP 400を含むエラーメッセージが必要');
@@ -255,7 +255,7 @@ test('postToDiscordWebhook: 送信失敗しても process.exitCode を変更し�
   const originalExitCode = process.exitCode;
   try {
     const fetchImpl = async () => ({ ok: false, status: 400, text: async () => 'error body' });
-    const ok = await postToDiscordWebhook('https://hook.example.com', 'x'.repeat(2500), { fetchImpl });
+    const ok = await postToDiscordWebhook('https://hook.example.com', 'x'.repeat(2500), { fetchImpl, delayMs: 0 });
     assert.equal(ok, false);
     assert.equal(process.exitCode, originalExitCode, 'process.exitCode が変更されていないこと');
   } finally {
@@ -273,4 +273,51 @@ test('postToDiscordWebhook: ネットワークエラーでも process.exitCode �
   } finally {
     process.exitCode = originalExitCode;
   }
+});
+
+test('postToDiscordWebhook: HTTP 429のretry_afterに従って再送する', async () => {
+  let callCount = 0;
+  const sleepCalls = [];
+  const fetchImpl = async () => {
+    callCount++;
+    if (callCount === 1) {
+      return { ok: false, status: 429, text: async () => '{"retry_after":0.3}' };
+    }
+    return { ok: true };
+  };
+  const ok = await postToDiscordWebhook('https://hook.example.com', '短い本文', {
+    fetchImpl,
+    sleep: async (ms) => { sleepCalls.push(ms); },
+  });
+  assert.equal(ok, true);
+  assert.equal(callCount, 2);
+  assert.deepEqual(sleepCalls, [400]);
+});
+
+test('postToDiscordWebhook: HTTP 429の再送はmaxRetries回まで', async () => {
+  let callCount = 0;
+  const fetchImpl = async () => {
+    callCount++;
+    return { ok: false, status: 429, text: async () => '{"retry_after":0.3}' };
+  };
+  const ok = await postToDiscordWebhook('https://hook.example.com', '短い本文', {
+    fetchImpl,
+    maxRetries: 3,
+    sleep: async () => {},
+  });
+  assert.equal(ok, false);
+  assert.equal(callCount, 4);
+});
+
+test('postToDiscordWebhook: 2通目以降の送信前にdelayMsだけ待つ', async () => {
+  const sleepCalls = [];
+  const line = 'x'.repeat(6);
+  const ok = await postToDiscordWebhook('https://hook.example.com', `${line}\n${line}\n${line}`, {
+    fetchImpl: async () => ({ ok: true }),
+    maxLen: 10,
+    delayMs: 1000,
+    sleep: async (ms) => { sleepCalls.push(ms); },
+  });
+  assert.equal(ok, true);
+  assert.deepEqual(sleepCalls, [1000, 1000]);
 });

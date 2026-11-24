@@ -9,6 +9,44 @@ import { isEntry } from './is-entry.mjs';
 const execFileAsync = promisify(execFile);
 const DAY_MS = 86_400_000;
 
+// kim への未解決の問いかけを表す表現。
+// 疑問文そのものなので経緯の説明文に紛れて出ることは稀。本文全体を見てよい。
+const QUESTION_PATTERNS = [
+  /[？?]/,
+  /(?:てよい|て良い|てもよい|ても良い|していい|して良い)(?:です)?か/,
+  /いかがでしょうか/,
+  /(?:ご)?判断(?:を)?(?:お願いします|お願いいたします|ください|下さい)/,
+  /承認(?:を)?(?:お願いします|お願いいたします|ください|下さい)/,
+];
+
+// 「実行してよいか」を直接問う強い語。問い部分に出たときだけ問いとみなす。
+const APPROVAL_TERMS = [
+  '--apply',
+  '実行してよい', '実行して良い', '実行してもよい', '実行してもいい',
+  '実行可否',
+  '適用してよい', '適用して良い',
+  '削除してよい', '削除して良い',
+];
+
+export function extractQuestionPart(text) {
+  // ask 本文のうち「kim への問いかけ」に当たる部分だけを返す。
+  // 1 行目はタイトル＝問いの本体であることが多いので必ず含める。
+  const lines = String(text ?? '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (lines.length === 0) return '';
+  const asking = lines.filter(l => /[？?]|ください|下さい|よいか|良いか|可否|判断|承認/.test(l));
+  const tail = asking.length > 0 ? asking.slice(-2) : lines.slice(-1);
+  return [...new Set([lines[0], ...tail])].join('\n');
+}
+
+function hasApprovalRequest(text) {
+  const body = String(text ?? '');
+  // 疑問文パターンは本文全体を見て「問いあり」とみなす
+  if (QUESTION_PATTERNS.some(re => re.test(body))) return true;
+  // 強い実行可否語は問い部分（extractQuestionPart）に限定して見る
+  const question = extractQuestionPart(body);
+  return APPROVAL_TERMS.some(term => question.includes(term));
+}
+
 export function normalizeForComparison(text) {
   return String(text ?? '').normalize('NFKC').toLowerCase()
     .replace(/^(?:【[^】]*】\s*)+/, '')
@@ -47,14 +85,19 @@ export function extractReferences(text) {
 
 function groupRule(item) {
   const text = item.text || '';
-  if (/\brescue\//i.test(text) && /削除|破棄|残す|レビュー|承認/i.test(text))
+
+  if (/\brescue\//i.test(text) && /削除|破棄|残す|レビュー|承認/i.test(text)) {
     return { key: 'rescue-branches', label: 'rescue ブランチの破棄可否', answer: 'rescue ブランチ一覧を「一括破棄可／残すID」に分けて1行で回答' };
-  if (/(?:PR|プルリク(?:エスト)?)\s*#\d+/i.test(text) && /マージ|merge|承認|着地/i.test(text))
+  }
+  if (/(?:PR|プルリク(?:エスト)?)\s*#\d+/i.test(text) && /マージ|merge|承認|着地/i.test(text)) {
     return { key: 'pr-merge-approval', label: 'PR のマージ承認', answer: 'PR番号を「一括マージ可／保留」に分けて1行で回答' };
-  if (/ログイン|OAuth|API.?key|secret|環境変数|認証/i.test(text) && /設定|登録|許可|承認|判断/i.test(text))
+  }
+  if (/ログイン|OAuth|API.?key|secret|環境変数|認証/i.test(text) && /設定|登録|許可|承認|判断/i.test(text)) {
     return { key: 'credential-config', label: '認証・設定の可否', answer: '設定対象を「設定可／保留」に分けて1行で回答' };
-  if (/セッション|作業ID/i.test(text) && /再開|続行|停止|破棄|クローズ|判断/i.test(text))
+  }
+  if (/セッション|作業ID/i.test(text) && /再開|続行|停止|破棄|クローズ|判断/i.test(text)) {
     return { key: 'session-disposition', label: '停滞セッションの扱い', answer: '作業IDを「再開／終了」に分けて1行で回答' };
+  }
   return null;
 }
 
@@ -97,16 +140,24 @@ export function classifyItems(items, evidence = { prStates: new Map(), branchSta
     const newer = newestByText.get(normalizeForComparison(item.text));
     if (newer && newer.id !== item.id && String(newer.createdAt) > String(item.createdAt))
       return { ...item, classification: 'A', reason: `同内容の新しい ask ${newer.id} が ${newer.createdAt} に登録済み` };
+
     for (const ref of refs.prs) {
       const state = evidence.prStates.get(`${ref.repo || ''}#${ref.number}`);
-      if (state?.state === 'MERGED') return { ...item, classification: 'A', reason: `PR #${ref.number} が MERGED（${state.url || ref.repo || '現在の origin'}）` };
+      if (state?.state !== 'MERGED') continue;
+      if (hasApprovalRequest(item.text || '')) {
+        return { ...item, classification: 'C', reason: `PR #${ref.number} は MERGED だが、実行可否を直接問うているため個別判断が必要` };
+      }
+      return { ...item, classification: 'A', reason: `PR #${ref.number} が MERGED（${state.url || ref.repo || '現在の origin'}）` };
     }
     for (const branch of refs.branches) {
       const state = evidence.branchStates.get(branch);
       if (state?.exists === false) return { ...item, classification: 'A', reason: `${branch} が origin に存在しない` };
     }
+
+    // groupRule による B 判定（PR/branch の実測より後。MERGED でもグループ回答に集約可能なものは B）
     const group = groupRule(item);
     if (group) return { ...item, classification: 'B', groupKey: group.key, groupLabel: group.label, suggestedAnswer: group.answer };
+
     return { ...item, classification: 'C', reason: '完了・失効を実測できず、共通回答の型にも安全に集約できない' };
   });
   const groups = [...Map.groupBy(classified.filter(item => item.classification === 'B'), item => item.groupKey)]

@@ -61,7 +61,7 @@ test('API回数上限は同日再実行でも維持、翌日リセット', async
   const ctx = setup(t); ctx.options.config.maxCalls = 1;
   await runCollect(ctx.options);
   ctx.options.fetchFn = () => assert.fail('上限後API禁止');
-  assert.match((await runCollect(ctx.options)).status, /error:夜間API回数上限/);
+  assert.match((await runCollect(ctx.options)).status, /^ok:.*打ち切り:夜間API回数上限/);
   ctx.options.now = new Date(+now + 86400000); ctx.options.fetchFn = async () => response([]);
   assert.equal((await runCollect(ctx.options)).calls, 1);
 });
@@ -69,7 +69,7 @@ test('費用予約で次のAPI呼び出しを止める', async t => {
   const ctx = setup(t); ctx.options.config.maxCostUsd = .3; ctx.options.config.topics = [defaults.topics[0], defaults.topics[0]];
   ctx.options.fetchFn = async () => response([], { cost_in_usd_ticks: 1000000000 });
   const result = await runCollect(ctx.options);
-  assert.match(result.status, /error:夜間費用上限/); assert.equal(result.calls, 1);
+  assert.match(result.status, /^ok:.*打ち切り:夜間費用上限/); assert.equal(result.calls, 1);
 });
 test('実費が上限超過したら提案保存せず打ち切り、費用は保存', async t => {
   const ctx = setup(t, { fetchFn: async () => response([item], { cost_in_usd_ticks: 30000000000 }) });
@@ -375,7 +375,7 @@ test('失敗時の予約費用でも上限を守り未実行テーマの位置�
   const ctx = setup(t); ctx.options.config.topics = defaults.topics; ctx.options.config.maxCostUsd = defaults.reservePerCallUsd;
   ctx.options.fetchFn = async () => ({ ok: false, status: 503 });
   const result = await runCollect(ctx.options);
-  assert.equal(result.calls, 1); assert.match(result.status, /error:夜間費用上限/);
+  assert.equal(result.calls, 1); assert.match(result.status, /^ok:.*打ち切り:夜間費用上限/);
   assert.equal(readState(ctx).night.costUsd, defaults.reservePerCallUsd);
   assert.equal(readState(ctx).nextTopicIndex, 1);
 });

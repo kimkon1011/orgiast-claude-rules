@@ -25,6 +25,13 @@ const baseDeps = overrides => ({
 });
 const options = home => ({ home, stateFile: path.join(home, '.claude', 'inbound-router', 'state.json'), config, now: NOW, dryRun: true });
 
+test('実設定は learning と discord-existing 以外を @rules-repo にする', () => {
+  const actual = JSON.parse(fs.readFileSync(new URL('../config/inbound-router.json', import.meta.url), 'utf8'));
+  for (const [name, route] of Object.entries(actual.routes)) {
+    if (!['learning', 'discord-existing'].includes(name)) assert.equal(route.cwd, '@rules-repo', name);
+  }
+});
+
 test('新着0件で llm-ask と fleet-mail を呼ばない', async () => {
   let classify = 0, fleet = 0; const home = temp();
   const result = await run(options(home), baseDeps({ classify: async () => { classify++; }, sendFleet: async () => { fleet++; }, statusFleet: async () => { fleet++; return 'pending'; } }));

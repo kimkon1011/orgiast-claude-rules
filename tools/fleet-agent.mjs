@@ -24,6 +24,7 @@ const DEFAULT_URL = 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude
 const SECRET_PATTERN = /(https?:\/\/[^\s]*?(?:webhook|token|key)[^\s]*|[A-Za-z0-9_]*(?:api[_-]?key|token|secret|webhook)\s*[=:]\s*[^\s]+|(?<![A-Za-z0-9_])(?:api[_-]?key|token|secret|webhook)\s+[^\s]+)/gi;
 const STATUS_TEXT_LIMIT = 1800;
 const NON_FAILURE_TASK_RESULTS = new Set([0, 267009, 267011]);
+const rulesRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 export function readEnv(file, io = fs) {
   const values = {};
@@ -243,6 +244,10 @@ export function consentCommand(kind) {
 export function validExecCwd(cwd) {
   try { return typeof cwd === 'string' && !!cwd.trim() && fs.statSync(cwd).isDirectory() && fs.existsSync(path.join(cwd, '.git')); }
   catch { return false; }
+}
+
+export function resolveExecCwd(cwd, repoRoot = rulesRepoRoot) {
+  return cwd === '@rules-repo' ? repoRoot : cwd;
 }
 
 export function hubReport(result) {

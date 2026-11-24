@@ -12,7 +12,7 @@ import { redactForShare } from './lib/share-secrets.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { machineIdentity } from './machine-identity.mjs';
 import { addDecision, listDecisions } from './pending-decisions.mjs';
-import { loadOptin, redactSecrets, consentCommand, validExecCwd, truncateAnswer } from './fleet-agent.mjs';
+import { loadOptin, redactSecrets, consentCommand, validExecCwd, resolveExecCwd, truncateAnswer } from './fleet-agent.mjs';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { relayQuestions, readQuestion, clearResume, reconcileResumes, collectQuestions, validSessionId, RESUME_LIMIT_MS, HUB_LABEL } from './fleet-question-relay.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
@@ -1265,6 +1265,7 @@ export async function pollOnce(deps = {}) {
         if (deps.executePrompts === false || automatic(mail) || nextHop(mail) >= 3) continue;
         const marked = parseExecMarkers(mail.body);
         const exec = { ...marked, exec: mail.exec || marked.exec, cwd: mail.execCwd || marked.cwd, resumeSessionId: mail.resumeSessionId || marked.resumeSessionId };
+        exec.cwd = resolveExecCwd(exec.cwd);
         const hubExecution = exec.exec === 'claude';
         if (exec.resumeSessionId) validSessionId(exec.resumeSessionId);
         const resultFile = path.join(dir, 'fleet-agent-results', `${validId(mail.id)}.json`);

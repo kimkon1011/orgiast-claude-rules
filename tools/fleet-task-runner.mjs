@@ -9,7 +9,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { validId, classifyExecutionResult, sendExecutionFailure, parseExecMarkers, createClient, resolveFleetLabel, updateInbox, syncMailState, acquireLock, TERMINAL_STATUSES, isMissingClaudeError, missingClaudeMessage, isHubSender } from './fleet-mail.mjs';
-import { loadOptin, consentCommand, runPrompt, validExecCwd, redactSecrets, truncateAnswer } from './fleet-agent.mjs';
+import { loadOptin, consentCommand, runPrompt, validExecCwd, resolveExecCwd, redactSecrets, truncateAnswer } from './fleet-agent.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
 import { updateQuestion, clearResume, RESUME_LIMIT_MS, validSessionId } from './fleet-question-relay.mjs';
@@ -112,6 +112,7 @@ export async function runClaudeTask({ id, home, spawnImpl = spawn, now = Date.no
     const label = resolveFleetLabel(home);
     const marked = parseExecMarkers(mail.body);
     const exec = { ...marked, exec: mail.exec || marked.exec, cwd: mail.execCwd || marked.cwd, resumeSessionId: mail.resumeSessionId || marked.resumeSessionId };
+    exec.cwd = resolveExecCwd(exec.cwd, ownRepo);
     if (exec.exec !== 'claude') return { skipped: 'not-claude' };
     sessionId = exec.resumeSessionId;
     if (sessionId && !autoResumeAllowed({ source: 'fleet-exec' })) return { skipped: 'auto-resume-disabled' };

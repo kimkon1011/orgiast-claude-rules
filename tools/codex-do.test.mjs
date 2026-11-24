@@ -1534,17 +1534,17 @@ test('decideExecutionPolicy は外部操作で全 chain・再試行・空差分�
   for (const noFallback of [false, true]) {
     const instruction = '修正してから node tools/seisaku-mail.mjs send --yes';
     assert.deepEqual(decideExecutionPolicy({ instruction, noFallback }), {
-      irreversible: true, noFallback: true, cheapFirstAllowed: false,
+      irreversible: true, sideEffectReasons: ['seisaku-mail.mjs send'], noFallback: true, cheapFirstAllowed: false,
       maxAttempts: 1, allowModelRetry: false, requireTreeChanges: false,
     });
-    assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction, env: { CODEX_DO_CHEAP_FIRST: '1' } }), false);
+    assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction, env: { CODEX_DO_CHEAP_FIRST: '1' } }), true);
   }
 });
 
 test('decideExecutionPolicy は通常の指示と明示 noFallback の既存動作を保つ', () => {
   for (const noFallback of [false, true]) {
     assert.deepEqual(decideExecutionPolicy({ instruction: '関数を実装して', noFallback }), {
-      irreversible: false, noFallback, cheapFirstAllowed: true,
+      irreversible: false, sideEffectReasons: [], noFallback, cheapFirstAllowed: true,
       maxAttempts: 2, allowModelRetry: true, requireTreeChanges: true,
     });
   }

@@ -1,5 +1,6 @@
 import dns from 'node:dns';
 import { getDriveToken } from './drive-auth.mjs';
+import { gwsFetch } from './gws-proxy.mjs';
 import { withAbort } from './deadline-budget.mjs';
 
 // Prefer IPv4 because a slow IPv6 route caused connection timeouts and deadline-watch exit 1 on this seat (2026-11-19).
@@ -11,7 +12,7 @@ export const quoteTab = (title) => `'${title.replaceAll("'", "''")}'`;
 
 // Append POST is not retried: an ambiguous append response must be read back by id.
 // GET, PUT, and idempotent values:batchUpdate wait and retry on 429/5xx responses and transient network failures.
-export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), maxRetries = 5, max429Retries = 8, random = Math.random, timeoutMs = Number(process.env.DEADLINE_FETCH_TIMEOUT_MS) || 60_000, onStage = () => {}, signal } = {}) {
+export function createSheetsClient({ fetchImpl = gwsFetch, getToken = getDriveToken, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), maxRetries = 5, max429Retries = 8, random = Math.random, timeoutMs = Number(process.env.DEADLINE_FETCH_TIMEOUT_MS) || 60_000, onStage = () => {}, signal } = {}) {
   let token;
   let expires = 0;
   async function request(id, suffix = '', method = 'GET', body, { retryablePost = false } = {}) {

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -63,7 +64,7 @@ export async function reconcileConvergence({ rows, state = {}, now = Date.now(),
       `${row.label || row.pcName || row.hostname} / OSユーザー ${row.username || '未確認'}: ${problems.join('・')}${unavailable ? '（宛先未確定）' : sendFailed ? '（送付失敗）' : ''}`).join('\n')
       + '\n最小手順: 対象ユーザーで配布リポを開きClaude Codeを起動。未導入なら tools/bootstrap.ps1（Windows）/ tools/bootstrap.sh（Mac/Linux）。鍵は既存enroll.envで日次再試行。未発行・期限切れは管理側でASCII PC名のenrollを再発行。';
     const result = await notify(text);
-    if (['dm', 'session-inbox'].includes(result?.delivered)) { next.notifiedAt = now; notified = true; persist(next); }
+    if (isKimDelivered(result)) { next.notifiedAt = now; notified = true; persist(next); }
   }
   if (!dryRun) persist(next);
   return { sent, issues, notified, state: next };

@@ -37,3 +37,18 @@ test('aliases・名前の優先順・未検証項目を無視・hostname fallbac
   assert.equal(resolve('カフェ用015'), '015');
   assert.equal(resolve('unknown'), '');
 });
+
+test('ホスト名先頭3桁フォールバック（台帳なし）', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-number-host-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'absent.json');
+  // file not created → map read fails → fallback only
+  const resolve = hostname => resolvePcNumber({ env: {}, hostname, mapPath: file });
+  assert.equal(resolve('999genba'), '999');
+  assert.equal(resolve('008XPS8300'), '008');
+  assert.equal(resolve('015CAFE'), '015');
+  assert.equal(resolve('DESKTOP-BDOAK99'), '');
+  assert.equal(resolve('1234host'), '');
+  // 台帳ありの場合はそちらが優先されることの確認（実マップ利用）
+  assert.equal(resolvePcNumber({ env: {}, hostname: '015CAFE', mapPath }), '015');
+});

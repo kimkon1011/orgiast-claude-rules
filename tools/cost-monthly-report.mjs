@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // cost-monthly-report.mjs — 毎月1日の日次ループ実行時に、前月の確定コスト・委譲率平均・headlessClaude出力・
 // 適用した提案と効果を1通のDMにまとめる(仕様C4)。失敗しても日次ループ本体を止めない。
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -155,7 +156,7 @@ export async function main(argv = process.argv.slice(2)) {
     const { notifyKim } = await import('./notify-kim.mjs');
     try {
       const result = await notifyKim(text, { home, webhookFallback: false });
-      if (['dm', 'session-inbox'].includes(result?.delivered)) { await markMonthlyReportSent({ home, now, claudeDir }); console.log('kim へ DM 送信OK'); }
+      if (isKimDelivered(result)) { await markMonthlyReportSent({ home, now, claudeDir }); console.log('kim へ DM 送信OK'); }
       else throw new Error(result?.reason || 'DM に配信されませんでした');
     } catch (error) {
       console.error(`月次レポートDM送信失敗: ${String(error?.message ?? error)}`);

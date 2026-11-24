@@ -112,6 +112,10 @@ test('委譲証拠も承認制約もない本物の先送りは引き続き検�
     assert.ok(detect(excerpt).some(found => /^P[1-4]$/.test(found.pattern)), excerpt);
   }
 });
+test('回答なしで実装が自動進行する質問はP3にしない', () => {
+  const excerpt = '次に kim がすること: ②の5つの質問に答える（答えなくても7台分の修正は自動で進みます）';
+  assert.deepEqual(detect(excerpt), []);
+});
 test('手渡しなし・進捗報告・修正完了は検出しない', () => {
   for (const quote of [
     '次に kim がすること: なし',

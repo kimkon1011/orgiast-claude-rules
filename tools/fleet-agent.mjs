@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { automationModel } from './lib/automation-model.mjs';
 import fs from 'node:fs';
+import { writeJson } from './lib/stuck-dialog-state.mjs';
 import { launchAudit } from './unattended-job-audit.mjs';
 import { codexAuthStatus } from './codex-auth-status.mjs';
 import os from 'node:os';
@@ -325,6 +326,7 @@ export async function processDirective(directive, context) {
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const dryRun = argv.includes('--dry-run');
+  const healthCheck = argv.includes('--health-check');
   const json = argv.includes('--json');
   const home = process.env.ORGIAST_HOME || os.homedir();
   const claudeDir = path.join(home, '.claude');
@@ -341,7 +343,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   });
   // Polls without directives (or with an offline hub) must still audit local jobs.
   const platform = dependencies.platform || process.platform;
-  if (!dryRun && platform === 'win32') {
+  if (!dryRun && !healthCheck && platform === 'win32') {
     scheduledTaskStatus(dependencies.run || runSync);
     (dependencies.auditLaunch || launchAudit)({ home, platform, intervalHours: 24 });
   }
@@ -350,9 +352,27 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     const base = process.env.ORGIAST_FLEET_DIRECTIVES_URL || DEFAULT_URL;
     const separator = base.includes('?') ? '&' : '?';
     const response = await (dependencies.fetch || fetch)(`${base}${separator}cb=${Date.now()}`, { signal: AbortSignal.timeout(20_000) });
-    if (!response.ok) return [];
+    if (!response.ok) throw new Error(`fleet directives HTTP ${response.status}`);
     payload = await response.json();
-  } catch { return []; }
+    if (!Array.isArray(payload?.directives)) throw new Error('fleet directives: missing directives array');
+    if (!dryRun) writeJson(path.join(claudeDir, 'heartbeat', 'fleet-agent.json'), {
+      job: 'fleet-agent', finishedAt: new Date().toISOString(), ok: true, cycleMinutes: 15,
+      phase: 'poll', directives: payload.directives.length,
+    });
+  } catch (error) {
+    if (!dryRun) writeJson(path.join(claudeDir, 'heartbeat', 'fleet-agent.json'), {
+      job: 'fleet-agent', finishedAt: new Date().toISOString(), ok: false, cycleMinutes: 15,
+      phase: 'poll', error: redactSecrets(String(error?.message || error)),
+    });
+    if (healthCheck) throw error;
+    return [];
+  }
+  // Explicit read-only check: fetch and record poll health without executing directives.
+  if (healthCheck) {
+    const result = { ok: true, directives: payload.directives.length };
+    if (json) console.log(JSON.stringify(result));
+    return result;
+  }
   const processedFile = path.join(claudeDir, '.fleet-agent-processed');
   const processed = new Set();
   try { for (const id of fs.readFileSync(processedFile, 'utf8').split(/\r?\n/)) if (id) processed.add(id); } catch {}

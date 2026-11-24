@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { addItem, readInboxItem, isKimSeat } from '../kim-inbox.mjs';
+import { addItem, readInboxItem, isKimSeat, isNonQuestionAsk } from '../kim-inbox.mjs';
 import { completionActions } from './auto-progress-artifact.mjs';
 import { inboxBrief } from './kim-inbox-relay-state.mjs';
 import { rowKey } from '../auto-progress-ledger.mjs';
@@ -17,7 +17,7 @@ export async function deliverDoneInbox(home, rows, text, { now = Date.now(), io 
     const dedupeKey = 'auto-progress-done:' + createHash('sha256')
       .update(rows.map(rowKey).sort().join('\n')).digest('hex').match(/.{8}/g).join('-');
     const details = rows.map(row => completionActions(row, { home }));
-    const kind = (() => {
+    let kind = (() => {
       if (!details.some(detail => detail.kind === 'ask')) return 'info';
       const actionText = details.map(detail => detail.text).join('\n');
       const brief = inboxBrief({ kind: 'info', text: actionText, source: 'auto-progress-done' });
@@ -26,7 +26,10 @@ export async function deliverDoneInbox(home, rows, text, { now = Date.now(), io 
     const actionText = details.map(detail => detail.text).join('\n');
     text = text.replace(/kim がすること: なし[^\n]*/g, '').trim();
     if (!text.includes(actionText)) text = text.slice(0, Math.max(0, 3999 - actionText.length)) + '\n' + actionText;
-    const item = await (io.addKimInboxItem ?? addItem)(home, { kind, refresh: true, priority: 'high', source: 'auto-progress-done', text, dedupeKey });
+    // Session/check status reports can contain approval-like words in quoted
+    // artifacts. Only an explicit question may keep those notices as ask.
+    if (isNonQuestionAsk(actionText)) kind = 'info';
+    const item = await (io.addKimInboxItem ?? addItem)(home, { kind, forceKind: true, refresh: true, priority: 'high', source: 'auto-progress-done', text, dedupeKey });
     const stored = io.listKimInboxItems ? io.listKimInboxItems(home).find(saved => saved.id === item?.id) : readInboxItem(home, item?.id);
     if (!stored || stored.kind !== kind || stored.dedupeKey !== dedupeKey || !stored.text || stored.text !== item.text || stored.forwardError) {
       throw new Error('kim-inbox delivery read-back failed');

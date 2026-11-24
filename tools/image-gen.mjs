@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 
@@ -78,7 +78,14 @@ function requestGsk({ args, timeoutSeconds, apiKey, spawnImpl, cleanup }) {
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.on('error', (error) => finish(() => reject(error)));
     child.on('close', (code) => finish(() => {
-      if (code !== 0) return reject(new Error(`Genspark CLI exit ${code}: ${stderr.slice(0, 300)}`));
+      if (code !== 0) {
+        const error = new Error(`Genspark CLI exit ${code}: ${stderr.slice(0, 300)}`);
+        if (shell && (code === 9009 || (code === 1 && spawnImpl === spawn &&
+          spawnSync('where.exe', ['gsk.cmd'], { stdio: 'ignore', windowsHide: true, timeout: 3000 }).status === 1))) {
+          error.code = 'ENOENT';
+        }
+        return reject(error);
+      }
       try { resolve(JSON.parse(stdout)); } catch (error) { reject(new Error(`Genspark CLI の JSON 応答を解析できません: ${error.message}`)); }
     }));
     timer = setTimeout(() => {
@@ -90,9 +97,9 @@ function requestGsk({ args, timeoutSeconds, apiKey, spawnImpl, cleanup }) {
   });
 }
 
-export async function generateImage({
+async function generateMedia({
   prompt, model = DEFAULT_MODEL, aspectRatio, imageSize, refUrls = [], outPath,
-  timeoutSeconds = DEFAULT_TIMEOUT_SECONDS, apiKey, spawnImpl = spawn, tmpDir,
+  timeoutSeconds = DEFAULT_TIMEOUT_SECONDS, apiKey, spawnImpl = spawn, tmpDir, precision, video = false,
 } = {}) {
   if (typeof prompt !== 'string' || !prompt.trim()) throw new Error('prompt が必要です');
   if (!Array.isArray(refUrls)) throw new Error('refUrls は配列で指定してください');
@@ -107,8 +114,9 @@ export async function generateImage({
     if (aspectRatio !== undefined) serverArgs.aspect_ratio = aspectRatio;
     if (imageSize !== undefined) serverArgs.image_size = imageSize;
     if (refUrls.length) serverArgs.image_urls = refUrls;
+    if (precision && precision !== 'auto') serverArgs.precision = precision;
     fs.writeFileSync(argsPath, JSON.stringify(serverArgs));
-    const args = ['img', '--args-file', argsPath, '--output', 'json', '--model', model];
+    const args = [video ? 'video' : 'img', '--args-file', argsPath, '--output', 'json', '--model', model];
     if (outPath) args.push('--output-file', outPath);
     raw = await requestGsk({
       args, timeoutSeconds, apiKey: resolvedApiKey, spawnImpl,
@@ -118,16 +126,34 @@ export async function generateImage({
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 
-  const generated = raw?.data?.generated_images?.[0];
-  if (!generated || generated.status !== 'SUCCESS') {
-    const reason = generated?.failure_reason || raw?.message || '生成画像がありません';
-    throw new Error(`Genspark image generation failed: ${reason}`);
+  const generated = video
+    ? raw?.data?.generated_videos?.[0] ?? raw?.data
+    : raw?.data?.generated_images?.[0];
+  const videoUrl = generated?.video_url || generated?.video_urls?.[0];
+  const success = video
+    ? videoUrl && (!generated.status || ['SUCCESS', 'ok'].includes(generated.status))
+    : generated?.status === 'SUCCESS';
+  if (!success) {
+    const reason = generated?.failure_reason || raw?.message || (video ? '生成動画がありません' : '生成画像がありません');
+    throw new Error(`Genspark ${video ? 'video' : 'image'} generation failed: ${reason}`);
   }
+  if (precision && precision !== 'auto' && (generated.precision ?? raw.data?.precision) !== precision) {
+    throw new Error(`Genspark の応答で精度 ${precision} の適用を確認できません`);
+  }
+  if (video) return { provider: 'gsk', model: generated.model || model, taskId: generated.task_id, videoUrl };
   return {
     provider: 'gsk', model: generated.model || model, taskId: generated.task_id,
     imageUrl: generated.image_urls?.[0], imageUrlNoWatermark: generated.image_urls_nowatermark?.[0],
     localPath: raw.data?.local_path || outPath, width: generated.width, height: generated.height,
   };
+}
+
+export function generateImage(options) {
+  return generateMedia({ ...options, video: false });
+}
+
+export function generateVideo(options) {
+  return generateMedia({ ...options, video: true });
 }
 
 export async function runCli(argv, dependencies = {}) {

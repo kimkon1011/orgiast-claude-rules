@@ -16,12 +16,84 @@ import { displayPcNames } from './lib/pc-display.mjs';
 import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, recordNaturalLanguageAnswers, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
 import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
 import { matchesRow, parseEscalation, syncEscalationAnswer } from './lib/escalation-answer-sync.mjs';
+import { looksLikeApprovalRequest } from './lib/kim-inbox-kind.mjs';
 const exec = promisify(execFile);
+const execGh = promisify(execFile);
+const PR_REF_RE = /PR\s*#(\d+)/gi;
+const PR_URL_RE = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/gi;
+// Separate regex without global flag for boolean check (global .test() mutates lastIndex).
+const PR_URL_BOOL = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/;
+export function hasFullPrUrl(text) {
+  return PR_URL_BOOL.test(text);
+}
+export async function resolvePrRefs(text, { execImpl = execGh, stderr = console.error } = {}) {
+  const matches = [...text.matchAll(PR_REF_RE)];
+  if (!matches.length) return text;
+  // Exclude matches that already have a full URL nearby (within 100 chars)
+  const candidates = matches.filter(m => {
+    const idx = m.index;
+    const slice = text.slice(Math.max(0, idx - 80), idx + 120);
+    return !PR_URL_RE.test(slice);
+  });
+  if (!candidates.length) return text;
+  const unique = [...new Set(candidates.map(m => m[1]))];
+  let result = text;
+  for (const num of unique) {
+    try {
+      const { stdout } = await execImpl('gh', ['pr', 'view', num, '--json', 'url'], {
+        encoding: 'utf8', timeout: 5000, windowsHide: true,
+      });
+      const url = JSON.parse(stdout).url;
+      if (url && typeof url === 'string' && url.startsWith('https://github.com/')) {
+        result = result.replace(new RegExp(`PR\\s*#${num}(?!\\s*\\(https?:)`, 'g'), `PR #${num} (${url})`);
+        result = result.replace(new RegExp(`PR#${num}(?!\\s*\\(https?:)`, 'g'), `PR #${num} (${url})`);
+      }
+    } catch (error) {
+      stderr(`[kim-inbox] PR #${num} のURL解決に失敗しました: ${error.message?.slice(0, 100) || String(error).slice(0, 100)}`);
+    }
+  }
+  return result;
+}
+
 const directory = home => path.join(home, '.claude/kim-inbox');
 const archiveDirectory = home => path.join(directory(home), '.archive');
 const archiveIndex = home => path.join(archiveDirectory(home), 'index.jsonl');
 const DAY_MS = 86_400_000;
 const clean = value => redactSecrets(String(value ?? '')).slice(0, 4000);
+const GITHUB_PR_URL_RE = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/(\d+)/g;
+const SHORT_PR_RE = /#(\d{1,6})(?!\w)/g;
+
+export function parseGitHubRepo(remote) {
+  const match = String(remote ?? '').trim().match(/^(?:https:\/\/github\.com\/|git@github\.com:)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
+  return match ? `${match[1]}/${match[2]}` : null;
+}
+
+export function appendPullRequestUrls(text, repo) {
+  const original = String(text ?? '');
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo ?? '')) return original;
+  const existing = new Set([...original.matchAll(GITHUB_PR_URL_RE)].map(match => Number(match[1])));
+  const numbers = [];
+  for (const match of original.matchAll(SHORT_PR_RE)) {
+    const digits = match[1];
+    if (digits.length === 6) continue;
+    const number = Number(digits);
+    if (!existing.has(number) && !numbers.includes(number)) numbers.push(number);
+  }
+  if (!numbers.length) return original;
+  const suffix = numbers.map(number => `PR: https://github.com/${repo}/pull/${number}`).join('\n');
+  return `${original}${original.endsWith('\n') || !original ? '' : '\n'}${suffix}\n`;
+}
+
+export async function enrichPullRequestUrls(text, { env = process.env, cwd = process.cwd(), execImpl = exec } = {}) {
+  let repo = /^[\w.-]+\/[\w.-]+$/.test(env.KIM_INBOX_PR_REPO ?? '') ? env.KIM_INBOX_PR_REPO : null;
+  if (!repo) {
+    try {
+      const { stdout } = await execImpl('git', ['remote', 'get-url', 'origin'], { cwd, encoding: 'utf8', windowsHide: true });
+      repo = parseGitHubRepo(stdout);
+    } catch { /* Preserve the original body when the repository cannot be resolved. */ }
+  }
+  return appendPullRequestUrls(text, repo);
+}
 // Redaction/truncation is lossy and must not collapse distinct producer identities.
 // Hash only affected keys; short chunks keep the opaque digest stable through spooling.
 export function inboxDedupeKey(value) {
@@ -122,6 +194,24 @@ export const normalizeInboxText = text => String(text ?? '')
   .replace(/\s+/g, ' ')
   .trim()
   .toLowerCase();
+const explicitQuestion = text => /^(?:【要対応・kim の判断待ち[^】]*】|【早めの対応が必要[^】]*】)/.test(text)
+  || /(?:^|\n)(?:あなたの返事待ち|kim (?:の判断待ち|がすること)|判断してほしいこと)[:：]/i.test(text)
+  || /判断待ち|判断してください|決めて(?:ください)?|選んで(?:ください)?|どれにしますか|どちらにしますか|承認|可否|返事をください|返事の例/.test(text)
+  || /(?:A\s*[\/／]\s*B|AかB|A・B).{0,80}(?:返答|回答|選択|選ん|判断)/is.test(text);
+export function isNonQuestionAsk(body) {
+  const text = String(body ?? '').trim();
+  if (!text || explicitQuestion(text)) return false;
+  return /^✅\s*check 達成:/.test(text)
+    || (text.includes('セッションの目的:') && text.includes('作業ID:'))
+    || (text.includes('gate pc=') && text.includes('verdict='));
+}
+function nonQuestionPattern(body) {
+  const text = String(body ?? '').trim();
+  if (/^✅\s*check 達成:/.test(text)) return 'check-achieved';
+  if (text.includes('セッションの目的:') && text.includes('作業ID:')) return 'session-status';
+  if (text.includes('gate pc=') && text.includes('verdict=')) return 'gate-diagnostic';
+  return 'unknown';
+}
 const contentDedupeKey = item => `${item.kind}\n${normalizeInboxText(item.text)}`;
 const legacyInfoKey = text => text.replace(/^【[^\r\n]*】[^\S\r\n]*(?:\r?\n|$)/, '')
   .replace(/\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?/g, '#')
@@ -268,6 +358,29 @@ export function dedupeExisting(home, { apply = false } = {}) {
   return apply ? locked(home, 'info-aggregation', inspect) : inspect();
 }
 
+function backupStamp(now = new Date()) {
+  const part = value => String(value).padStart(2, '0');
+  return `${now.getFullYear()}${part(now.getMonth() + 1)}${part(now.getDate())}-${part(now.getHours())}${part(now.getMinutes())}${part(now.getSeconds())}`;
+}
+export function sweepNonQuestions(home, { apply = false, now = new Date() } = {}) {
+  const inspect = () => {
+    const matches = listItems(home, { status: 'open' }).filter(item => item.kind === 'ask' && isNonQuestionAsk(item.text));
+    const patterns = { 'check-achieved': 0, 'session-status': 0, 'gate-diagnostic': 0 };
+    for (const item of matches) patterns[nonQuestionPattern(item.text)]++;
+    let backup = null;
+    if (apply && matches.length) {
+      backup = path.join(home, '.claude', `kim-inbox.bak.${backupStamp(now)}`);
+      // cpSync throws before any ledger mutation; never continue without a complete backup.
+      fs.cpSync(directory(home), backup, { recursive: true, errorOnExist: true, force: false });
+      for (const match of matches) update(home, match.id, current => {
+        if (current.status === 'open' && current.kind === 'ask' && isNonQuestionAsk(current.text)) current.status = 'seen';
+      });
+    }
+    return { count: matches.length, patterns, preview: matches.slice(0, 20).map(item => ({ id: item.id, text: String(item.text || '').replace(/[\r\n]+/g, ' ').slice(0, 60) })), applied: apply, backup };
+  };
+  return apply ? locked(home, 'info-aggregation', inspect) : inspect();
+}
+
 const rescueBranches = items => [...new Set(items.flatMap(item => String(item.text || '').match(/rescue\/(?:auto-session|sync-orgiast-main)-\d{8}-\d{6}(?:-\d+)?/g) || []))];
 export function mergeItemsInto(home, dedupeKey, ids) {
   if (!dedupeKey) throw new Error('--merge-into にはキーが必要です');
@@ -303,14 +416,14 @@ export function mergeItemsInto(home, dedupeKey, ids) {
     return { keptId: kept.id, superseded: items.length - 1, count: total, branches };
   });
 }
-function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen, progressAt }) {
+function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen, progressAt, kindPromotedFrom }) {
   if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');
   if (doneWhen && kind !== 'ask') throw new Error('--done-when-gmail は ask 専用です');
   fs.mkdirSync(directory(home), { recursive: true });
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), ...(kindPromotedFrom ? { kindPromotedFrom } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     if (revision !== undefined) item.revision = revision;
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -368,15 +481,23 @@ export async function drainSpool(home, { stderr = console.error, execImpl, signa
   return imported;
 }
 export async function addItem(home, options, { drain = true, localOnly = false, lockWaitMs } = {}) {
-  if (drain) await drainSpool(home, { execImpl: options.execImpl, signal: options.signal, lockWaitMs });
-  if (isInboxNoise(options)) return { id: null, status: 'suppressed', kind: options.kind || 'info' };
-  const item = create(home, options, lockWaitMs);
+  let normalizedOptions = options;
+  if ((options.kind || 'info') === 'info' && !options.forceKind && looksLikeApprovalRequest(options.text)) {
+    normalizedOptions = { ...options, kind: 'ask', kindPromotedFrom: 'info' };
+    (options.stderr || console.error)('[kim-inbox] kind=info で登録されましたが本文が承認を求めているため ask に昇格しました');
+  }
+  if (drain) await drainSpool(home, { execImpl: normalizedOptions.execImpl, signal: normalizedOptions.signal, lockWaitMs });
+  if (isInboxNoise(normalizedOptions)) return { id: null, status: 'suppressed', kind: normalizedOptions.kind || 'info' };
+  if (normalizedOptions.text) {
+    normalizedOptions = { ...normalizedOptions, text: await resolvePrRefs(normalizedOptions.text, { execImpl: normalizedOptions.execImpl, stderr: normalizedOptions.stderr || console.error }) };
+  }
+  const item = create(home, normalizedOptions, lockWaitMs);
   if (localOnly || item.kind === 'deadline' || isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-inbox-'));
   try {
     const file = path.join(temp, 'body.txt');
     fs.writeFileSync(file, item.text, { mode: 0o600 });
-    const { stdout } = await (options.execImpl ?? exec)(process.execPath, [fileURLToPath(new URL('./fleet-mail.mjs', import.meta.url)), '--send', '--to', 'kim-PC', '--kind', 'note', '--why', `[kim-inbox:${item.kind}] ${/^(?:auto-progress-(?:done|heartbeat)|morning-session-sweep)$/.test(item.source) ? `[source:${item.source}] ${item.dedupeKey ? `[key:${item.dedupeKey}] ` : ''}` : ''}${item.source === 'morning-session-sweep' ? '[報告・返信不要] ' : ''}${item.text.split(/\r?\n/)[0].slice(0, 60)}`, '--body-file', file], { encoding: 'utf8', windowsHide: true, timeout: 60000, signal: options.signal, env: { ...process.env, ORGIAST_HOME: home } });
+    const { stdout } = await (normalizedOptions.execImpl ?? exec)(process.execPath, [fileURLToPath(new URL('./fleet-mail.mjs', import.meta.url)), '--send', '--to', 'kim-PC', '--kind', 'note', '--why', `[kim-inbox:${item.kind}] ${/^(?:auto-progress-(?:done|heartbeat)|morning-session-sweep)$/.test(item.source) ? `[source:${item.source}] ${item.dedupeKey ? `[key:${item.dedupeKey}] ` : ''}` : ''}${item.source === 'morning-session-sweep' ? '[報告・返信不要] ' : ''}${item.text.split(/\r?\n/)[0].slice(0, 60)}`, '--body-file', file], { encoding: 'utf8', windowsHide: true, timeout: 60000, signal: normalizedOptions.signal, env: { ...process.env, ORGIAST_HOME: home } });
     const id = stdout.trim().match(/^(?:送信済み: )?(mail-[A-Za-z0-9-]+)$/m)?.[1];
     if (!id) throw new Error('転送先のメールIDを取得できません');
     return update(home, item.id, current => { current.status = 'forwarded'; current.forwardMailId = id; current.forwardError = null; });
@@ -663,6 +784,66 @@ export function dropItem(home, id, reason) {
   if (!String(reason ?? '').trim()) throw new Error('取り下げ理由が必要です');
   return resolveItem(home, id, { status: 'dropped', answer: clean(reason) });
 }
+// 自動 seen の候補を選ぶ純粋関数（副作用なし）。
+// 条件（AND; 全条件を満たすものが対象）:
+//   1. kind === 'info'（ask は絶対に対象外）
+//   2. deliveredToKim が立っている、または createdAt から 30 日以上経過
+// 除外（OR; 1つでも該当で対象外）:
+//   - 未配信かつ 30 日未満
+//   - 本文に承認・判断を求める語（承認/判断/どちら/YES/決めて）が含まれる
+// 重複: 同一 dedupeKey のグループは最新1件を残し残りを対象
+export function sweepInfoCandidates(items, { now = Date.now() } = {}) {
+  const openInfos = items.filter(i => i.kind === 'info' && i.status === 'open');
+  const targetIds = new Set();
+  const excludedReasons = [];
+  const dedupeGroups = new Map(); // dedupeKey -> [{item, index}]
+  for (const item of openInfos) {
+    // Exclude: 承認キーワードを含むもの
+    if (looksLikeApprovalRequest(item.text)) {
+      excludedReasons.push({ id: item.id, reason: '承認キーワードを含む' });
+      continue;
+    }
+    // Exclude: 未配信かつ 30 日未満
+    const days = (now - Date.parse(item.createdAt)) / 86_400_000;
+    if (!item.deliveredToKim && days < 30) {
+      excludedReasons.push({ id: item.id, reason: '未配信かつ30日未満' });
+      continue;
+    }
+    // 対象候補
+    targetIds.add(item.id);
+    // dedupeKey でグループ化
+    if (item.dedupeKey) {
+      if (!dedupeGroups.has(item.dedupeKey)) dedupeGroups.set(item.dedupeKey, []);
+      dedupeGroups.get(item.dedupeKey).push(item);
+    }
+  }
+  // dedupeKey 重複: 最新1件だけ残し、残りを対象に追加
+  for (const [, group] of dedupeGroups) {
+    if (group.length < 2) continue;
+    group.sort((a, b) => (b.lastAt || b.createdAt).localeCompare(a.lastAt || a.createdAt));
+    const keep = group[0];
+    targetIds.delete(keep.id); // 最新1件は対象外
+    for (const dup of group.slice(1)) {
+      targetIds.add(dup.id); // 重複行は対象
+    }
+  }
+  return { targetIds, excludedReasons };
+}
+/** 掃除サマリーを純粋関数として計算する。
+ * @param {Array} allItems - 全 open 項目（listItems の返値）
+ * @param {Set<string>} targetIds - seen にする対象 ID
+ * @param {Array<{id:string,reason:string}>} excludedReasons - 除外理由リスト
+ * @returns {{ total: number, toSeen: number, remaining: number }}
+ *   total: open info の総数
+ *   toSeen: seen にする件数（= targetIds.size）
+ *   remaining: sweep 後も open のまま残る件数（= total - toSeen）
+ */
+export function computeSweepInfoSummary(allItems, targetIds, excludedReasons) {
+  const total = allItems.filter(i => i.kind === 'info' && i.status === 'open').length;
+  const toSeen = targetIds.size;
+  const remaining = total - toSeen;
+  return { total, toSeen, remaining };
+}
 const inboxDir = home => path.join(home, '.claude/fleet-inbox');
 const readJsonFile = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 // fleet-mail.mjs と同じロック（<file>.lock を wx で取得）で受信ファイルを完了にし、サーバー同期は
@@ -912,6 +1093,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       const positionalKind = args[args.indexOf('--add') + 1];
       const kind = args.includes('--kind') ? value('--kind')
         : ['ask', 'info', 'deadline'].includes(positionalKind) ? positionalKind : 'info';
+      const body = await enrichPullRequestUrls(fs.readFileSync(value('--body-file'), 'utf8'));
       let doneWhen;
       if (args.includes('--done-when-gmail')) {
         const raw = value('--done-when-gmail');
@@ -919,7 +1101,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
         if (pipe === -1) throw new Error('--done-when-gmail は "user|query" 形式で指定してください');
         doneWhen = { gmail: { user: raw.slice(0, pipe).trim(), query: raw.slice(pipe + 1).trim() } };
       }
-      const item = await addItem(home, { urgent: args.includes('--urgent'), text: fs.readFileSync(value('--body-file'), 'utf8'), kind, key: args.includes('--key') ? value('--key') : undefined, dedupeKey: args.includes('--dedupe-key') ? value('--dedupe-key') : undefined, replaceExisting: args.includes('--replace-existing'), due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '', ...(doneWhen ? { doneWhen } : {}) });
+      const item = await addItem(home, { urgent: args.includes('--urgent'), text: body, kind, forceKind: args.includes('--force-kind'), stderr, key: args.includes('--key') ? value('--key') : undefined, dedupeKey: args.includes('--dedupe-key') ? value('--dedupe-key') : undefined, replaceExisting: args.includes('--replace-existing'), due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '', ...(doneWhen ? { doneWhen } : {}) });
       stdout(JSON.stringify({ id: item.id, status: item.status, forwarded: item.status === 'forwarded' }));
     } else if (args.includes('--answer')) stdout(JSON.stringify(answerItem(home, value('--answer'), fs.readFileSync(value('--body-file'), 'utf8'), process.env.CLAUDE_SESSION_ID || '')));
     else if (args.includes('--lookup')) stdout(JSON.stringify(lookupAnswers(home, value('--lookup')), null, 2));
@@ -932,6 +1114,13 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
     else if (args.includes('--dedupe-existing')) {
       const result = dedupeExisting(home, { apply: args.includes('--apply') });
       stdout(`kim-inbox dedupe-existing${result.applied ? ' (apply)' : ' (dry)'}: ${result.before}件 → ${result.after}件（重複 ${result.merged}件、${result.groups}グループ）`);
+    }
+    else if (args.includes('--sweep-nonquestions')) {
+      const result = sweepNonQuestions(home, { apply: args.includes('--apply') });
+      stdout(`kim-inbox sweep-nonquestions${result.applied ? ' (apply)' : ' (dry-run)'}: ${result.count}件`);
+      stdout(`内訳: check-achieved=${result.patterns['check-achieved']} / session-status=${result.patterns['session-status']} / gate-diagnostic=${result.patterns['gate-diagnostic']}`);
+      for (const item of result.preview) stdout(`${item.id} ${item.text}`);
+      if (result.backup) stdout(`backup: ${result.backup}`);
     }
     else if (args.includes('--archive-closed')) {
       const apply = args.includes('--apply');
@@ -951,8 +1140,41 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
         : listInboxMatches(home, () => true, { originals: true });
       if (args.includes('--status')) stdout(`kim-inbox: open ask ${items.filter(i => i.kind === 'ask').length} / open info ${items.filter(i => i.kind === 'info').length}\n最古: ${items.length ? `${items[0].id} ${items[0].text.split(/\r?\n/)[0].slice(0, 120)}` : 'なし'}`);
       else stdout(args.includes('--json') ? JSON.stringify(items) : displayPcNames(items.map(i => `${i.id} ${i.kind} ${i.status} ${i.text.split(/\r?\n/)[0]}${(i.count ?? i.repeatCount ?? 1) >= 2 ? ` (同じ内容 ${i.count ?? i.repeatCount} 件)` : ''}`).join('\n'), { home }));
-    } else throw new Error('--add / --answer / --seen / --drop / --show / --list / --status / --context / --compact / --merge-into <key> --ids <id,...> / --dedupe-existing [--dry|--apply] / --auto-close を指定してください');
+    } else if (args.includes('--sweep-info')) {
+      const apply = args.includes('--apply');
+      const allItems = listItems(home, { status: 'open' });
+      const { targetIds, excludedReasons } = sweepInfoCandidates(allItems);
+      const summary = computeSweepInfoSummary(allItems, targetIds, excludedReasons);
+      // 内訳（登録元別）
+      const targetItems = allItems.filter(i => targetIds.has(i.id));
+      const sourceBreakdown = {};
+      for (const item of targetItems) {
+        const s = item.source || '(empty)';
+        sourceBreakdown[s] = (sourceBreakdown[s] || 0) + 1;
+      }
+      const sourceTop = Object.entries(sourceBreakdown).sort((a, b) => b[1] - a[1]).slice(0, 10);
+      // 除外の内訳
+      const excludedByReason = {};
+      for (const { reason } of excludedReasons) excludedByReason[reason] = (excludedByReason[reason] || 0) + 1;
+      if (apply) {
+        for (const id of targetIds) markSeen(home, id);
+        stdout(`kim-inbox sweep-info: ${targetIds.size} 件を seen にしました`);
+      } else {
+        const lines = [
+          `kim-inbox sweep-info (dry-run):`,
+          `open info ${summary.total} 件 → seen にする ${summary.toSeen} 件 / open のまま残る ${summary.remaining} 件`,
+          '',
+          '除外の内訳:',
+        ];
+        for (const [reason, count] of Object.entries(excludedByReason)) lines.push(`  ${reason}: ${count}件`);
+        lines.push('');
+        lines.push('対象の内訳（登録元 上位10）:');
+        for (const [source, count] of sourceTop) lines.push(`  ${source}: ${count}件`);
+        stdout(lines.join('\n'));
+      }
+    } else throw new Error('--add / --answer / --seen / --drop / --show / --list / --status / --context / --compact / --merge-into <key> --ids <id,...> / --dedupe-existing [--dry|--apply] / --sweep-info [--apply] / --sweep-nonquestions [--apply] / --auto-close を指定してください');
     return 0;
   } catch (error) { stderr(`kim-inbox: ${clean(error.message).replace(/[\r\n]+/g, ' ')}`); return args.includes('--context') ? 0 : 1; }
 }
+export const __test = { sweepInfoCandidates, computeSweepInfoSummary, listItems, markSeen };
 if (isEntry(import.meta.url)) process.exitCode = await main();

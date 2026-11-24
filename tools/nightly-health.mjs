@@ -11,14 +11,14 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { redactSecrets } from './webhook-health.mjs';
-import { getScheduledTaskInfo } from './lib/scheduled-task.mjs';
+import { getScheduledTaskInfo, TASK_RESULTS } from './lib/scheduled-task.mjs';
 import { checkGasMasterDrift } from './gas-master-drift.mjs';
 import { runAutoSessionStreakWatch } from './auto-session-streak-watch.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_NOTIFICATION_ITEMS = 12;
 const INITIAL_TAIL_LINES = 200;
-const TASK_START_REFUSED = 2147946720; // 0x800710E0
+const TASK_START_REFUSED = TASK_RESULTS.START_REFUSED;
 
 export function formatDate(date) {
   const pad = (n) => String(n).padStart(2, '0');
@@ -385,8 +385,8 @@ export async function runNightlyHealth({
       registeredLogs.add(exp.log);
       if (logFiles.includes(exp.log)) matches = [exp.log];
     }
-    const logFile = expectationLog(home, exp)?.file;
-    if (!logFile) {
+    const resolvedLogPath = expectationLog(home, exp)?.file;
+    if (!resolvedLogPath) {
       const log = exp.log || exp.pattern;
       if (exp.ignore) continue;
       let taskInfo = null;
@@ -398,7 +398,8 @@ export async function runNightlyHealth({
       anomalies.push({ type: 'missing', label: exp.label, log, message: 'ログファイルが存在しません', expectation: exp });
       continue;
     }
-    const logPath = path.join(logsDir, logFile);
+    const logPath = resolvedLogPath;
+    const logFile = path.basename(resolvedLogPath);
     const stat = fs.statSync(logPath);
     if (logIsStale(stat.mtimeMs, exp.maxAgeHours, now.getTime())) {
       anomalies.push({ type: 'stale', label: exp.label, log: logFile, message: `ログ更新が滞っています（最終更新: ${formatDate(stat.mtime)}、期待: ${exp.maxAgeHours}時間以内）`, expectation: exp });

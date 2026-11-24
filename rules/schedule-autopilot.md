@@ -28,3 +28,9 @@
 ## 3. 守ること
 - 社外への送信・支払・削除はしない。承認が要るものは「承認依頼」を期限前に出すだけ。承認後の送信は担当PCが従来の送信ゲート（send-context-check 等）を通して行う。
 - 3億円計画・営業進捗などの集約元には書き込まない（読み取りのみ）。
+
+## 社外に送る Drive / Docs リンクの3点確認
+
+送信直前に `node tools/share-before-send-gate.mjs --external-body-file <本文ファイル>` を実行する。本文中の各URLについて、(1) DriveのMIMEがGoogle形式またはPDF（pptx/xlsx/docx等・Office書き出し・`rtpof=true`は不可）、(2) `anyoneWithLink` の `reader`（検索非公開）、(3) cookie・認証ヘッダーなしの取得がHTTP 200でログイン画面へ転送されない、の3点を確認する。どれかNG・確認不能なら非0終了し、送信しない。個人共有の履歴・過去の成功・単なるHTTP 200で代用しない。公開ビューア内の「ログイン」リンクとログイン必須画面は区別する。
+
+くらしのマーケットのローカル送信スクリプトは `tools/curama-share-gate-adapter.mjs` の `assertCuramaLinks(page)` を送信クリックの直前で `await` する。実際の入力欄を検証し、例外時はその送信を止める。ゲートの合格は送信許可を与えるものではなく、宛先・全文確認・既存の送信承認ルールは引き続き適用する。008での配線差分は `docs/curama-share-gate-008.patch` を参照。

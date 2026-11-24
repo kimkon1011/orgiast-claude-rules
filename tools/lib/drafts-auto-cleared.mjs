@@ -68,12 +68,14 @@ export async function filterClearedDrafts(items, { home, now, deps = {}, stats }
   const drafts = items.filter(item => item.kind === 'draft' && item.draftMessage);
   const clients = new Map();
   const get = async mailbox => {
-    if (!clients.has(mailbox)) clients.set(mailbox, await gmailClient(mailbox, { ...deps, onRetry: () => { stats.gmailRetries = (stats.gmailRetries || 0) + 1; } }));
-    return clients.get(mailbox);
+    // Parallel draft checks must share token acquisition and the resulting client.
+    if (!clients.has(mailbox)) clients.set(mailbox, gmailClient(mailbox, { ...deps, onRetry: () => { stats.gmailRetries = (stats.gmailRetries || 0) + 1; } }));
+    return await clients.get(mailbox);
   };
   const known = new Set(clearedRecords(home).filter(row => row.event === 'cleared').map(row => row.key));
   const excluded = new Set();
-  for (const item of drafts) {
+  let next = 0;
+  const checkDraft = async item => {
     const draft = item.draftMessage;
     const external = recipients(draft).filter(address => !/@orgiast\.jp$/.test(address));
     let reason = external.length && external.every(nonHumanRecipient) ? '人でない宛先' : null;
@@ -100,9 +102,9 @@ export async function filterClearedDrafts(items, { home, now, deps = {}, stats }
     } catch (error) {
       stats.draftCheckErrors = (stats.draftCheckErrors || 0) + 1;
       item.draftCheckError = String(error.message).slice(0, 200);
-      continue; // Unverified drafts remain visible, including after a prior exclusion.
+      return; // Unverified drafts remain visible, including after a prior exclusion.
     }
-    if (!reason) continue;
+    if (!reason) return;
     const fingerprint = draftFingerprint(draft), key = hash([item.mailbox, item.draftId, fingerprint]);
     if (!known.has(key)) {
       appendDurable(file(home), { event: 'cleared', key, at: new Date(now).toISOString(), mailbox: item.mailbox,
@@ -110,7 +112,12 @@ export async function filterClearedDrafts(items, { home, now, deps = {}, stats }
       known.add(key);
     }
     excluded.add(item.id);
-  }
+  };
+  // A mailbox can contain 100+ stale drafts. Checking them serially made a scan
+  // take over ten minutes even though every individual Gmail fetch had a timeout.
+  await Promise.all(Array.from({ length: Math.min(3, drafts.length) }, async () => {
+    while (next < drafts.length) await checkDraft(drafts[next++]);
+  }));
   if (drafts.length) { stats.draftsChecked = drafts.length; stats.draftsCleared = excluded.size; stats.draftsKept = drafts.length - excluded.size; }
   return items.filter(item => !excluded.has(item.id)).map(({ draftMessage, ...item }) => item);
 }

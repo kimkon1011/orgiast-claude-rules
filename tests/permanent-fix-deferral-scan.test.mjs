@@ -165,6 +165,32 @@ test('実際に継続している待機文は W のまま検出する', () => {
   for (const text of texts) assert.equal(detect(text).some(hit => hit.pattern === 'W'), true, text);
 });
 
+test('明示的な draft 制約と無人時の本番反映禁止は正当な承認待ちとして P3 から除外する', () => {
+  const texts = [
+    '作者が「この PR は draft です（マージしない）」と明記。次に kim がすること: PR #8 のマージ可否と修正の作り直し可否に答える',
+    '無人セッションでは本番反映は禁止・承認待ちにする。次に kim がすること: PR #2646 のマージ可否を返す'
+  ];
+  for (const text of texts) assert.equal(detect(text).some(hit => hit.pattern === 'P3'), false, text);
+});
+
+test('委譲実行中で同一セッションが着地まで続ける待機は W から除外する', () => {
+  const texts = [
+    '修正は Codex に任せて作成中で、まだ完了していません。このセッション: まだ閉じない（作業中）',
+    'Codex が background で実行中。Codex の結果を待って、PR 着地まで当セッションで進めます。',
+    '委譲実行中。この後の自動進行: commit と PR 作成の完了を待ち、着地を確認する。このセッション: まだ閉じない',
+    'Codex がマージ確定まで監視中。CI 監視の完了待ちです。このセッションで着地を確認して完了します。'
+  ];
+  for (const text of texts) assert.equal(detect(text).some(hit => hit.pattern === 'W'), false, text);
+});
+
+test('実装を次セッションの候補に残す文は P1 のまま検出する', () => {
+  assert.equal(detect('恒久策（次セッションの候補として残置）: cursor-agent の hook-dispatch 問題を修正する').some(hit => hit.pattern === 'P1'), true);
+});
+
+test('未委譲のテストと PR 着地を次セッションに残す文は P1 のまま検出する', () => {
+  assert.equal(detect('修正本体はコミット済み。テストの追加・テスト実行・PR の着地は次のセッションに残ります').some(hit => hit.pattern === 'P1'), true);
+});
+
 function crossSessionFixture(t, { excerpt = 'PR #2577 のマージを待っています', completedText, completedAt = '2026-11-20T18:00:00.000Z' }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'deferral-cross-session-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

@@ -170,6 +170,18 @@ test('nightly CLI deploy skips PCs other than kim-PC without any writes', async 
   assert.equal(result.skipped, 'not-kim-pc');
   assert.equal(fs.existsSync(path.join(f.home, '.claude/memory-publish-state.json')), false);
 });
+test('publisher selection chooses the newest live kim seat and rejects the old hostname', async () => {
+  const { run, selectMemoryPublisher } = await import('./memory-publish.mjs');
+  const f = fixture(), pcMap = { 'kim-PC': { hostname: '000KIMPC', aliases: ['DESKTOP-2D0R4LI', '000KimPC'] } };
+  const beacons = [
+    { label: 'kim-PC', hostname: 'DESKTOP-2D0R4LI', reportedAt: '2026-11-17T00:00:00Z' },
+    { label: 'kim-PC', hostname: '000KIMPC', reportedAt: '2026-11-24T00:00:00Z' },
+  ];
+  assert.equal(selectMemoryPublisher({ beacons, pcMap, now: Date.parse('2026-11-24T01:00:00Z') }).hostname, '000KIMPC');
+  const result = await run(['--deploy'], { home: f.home, fleetLabel: 'kim-PC', hostname: 'DESKTOP-2D0R4LI', pcMap, beacons,
+    nowMs: Date.parse('2026-11-24T01:00:00Z'), emit: () => {}, spawnSyncImpl: () => assert.fail('old seat must not deploy') });
+  assert.equal(result.skipped, 'not-latest-kim-seat');
+});
 test('Windows resolves vercel.cmd then runs its Node entry without a shell', async () => {
   const { vercelCommand } = await import('./memory-publish.mjs');
   const f = fixture();

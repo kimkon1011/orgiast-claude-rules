@@ -196,3 +196,27 @@ test('10. 接続不能: code = BEEPER_DOWN', async t => {
     assert.equal(err.code, 'BEEPER_DOWN');
   }
 });
+
+test('11. 中継の接続失敗時は hosts を順に試し、成功先だけを base に書き戻す', async t => {
+  const dir = createTempDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const cfg = path.join(dir, 'gateway.json');
+  fs.writeFileSync(cfg, JSON.stringify({ base: 'http://192.168.0.4:23380', hosts: ['http://000KimPC:23380'], token: 'secret-token' }));
+  const calls = [];
+  const result = await beeperFetch('/v1/accounts', { env: { BEEPER_GATEWAY_CONFIG: cfg }, fetchImpl: async url => {
+    calls.push(String(url));
+    if (String(url).startsWith('http://192.168.0.4')) throw new Error('connect refused');
+    return Response.json({ items: [] });
+  } });
+  assert.deepEqual(result, { items: [] });
+  assert.deepEqual(calls, ['http://192.168.0.4:23380/v1/accounts', 'http://000KimPC:23380/v1/accounts']);
+  const saved = JSON.parse(fs.readFileSync(cfg));
+  assert.equal(saved.base, 'http://000KimPC:23380'); assert.equal(saved.token, 'secret-token');
+});
+
+test('12. 中継候補が全滅したエラーは試行先と宛先IP変更の可能性を示す', async t => {
+  const dir = createTempDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const cfg = path.join(dir, 'gateway.json');
+  fs.writeFileSync(cfg, JSON.stringify({ base: 'http://old:23380', hosts: ['http://new:23380'], token: 'secret-token' }));
+  await assert.rejects(beeperFetch('/v1/accounts', { env: { BEEPER_GATEWAY_CONFIG: cfg }, fetchImpl: async () => { throw new Error('down'); } }),
+    error => error.code === 'BEEPER_DOWN' && /試行: http:\/\/old:23380, http:\/\/new:23380.*宛先IP変更の可能性/.test(error.message) && !error.message.includes('secret-token'));
+});

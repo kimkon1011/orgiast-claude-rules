@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,6 +7,8 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
+import { callWithFallback } from './llm-fallback.mjs';
+import { OPENROUTER_BASE, OPENROUTER_GROK_MODEL } from './provider-routing.mjs';
 
 const CONFIG = fileURLToPath(new URL('../config/x-ai-tips-topics.json', import.meta.url));
 const PURPOSES = ['cost', 'site', 'business'];
@@ -21,6 +24,7 @@ const CREDIT_BLOCKED_MESSAGE = 'x.ai チームの残高切れ・月次上限の�
 const read = (file, fallback) => { try { return fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
 const lines = text => text.split(/\r?\n/).filter(x => x.trim()).map(JSON.parse);
 const normalized = text => String(text).normalize('NFKC').toLowerCase().replace(/\s+/gu, '');
+const safeError = (text, secrets = []) => secrets.reduce((value, secret) => secret ? value.replaceAll(secret, '[REDACTED]') : value, String(text)).replace(/[\r\n]+/g, ' ');
 export const contentHash = item => createHash('sha256').update(normalized(`${item.summary}\n${item.steps}`)).digest('hex');
 export const japanDate = now => new Date(+now + 9 * 3600000).toISOString().slice(0, 10);
 export const creditBlockedStatusWithDate = (blockedAt, hasFallback = false) => {
@@ -59,11 +63,22 @@ export function validateState(state) {
   return state;
 }
 export function classifyApiError(status, bodyText) {
-  if (status !== 403) return 'fatal';
   const text = String(bodyText ?? '');
-  let code;
-  try { code = JSON.parse(text)?.code; } catch {}
-  return code === 'permission-denied' || /credits|spending limit/i.test(text) ? 'credit-blocked' : 'fatal';
+  return status === 402 || status === 403 || /credit|insufficient|quota/i.test(text) ? 'credit-blocked' : 'fatal';
+}
+export async function callOpenRouterGrok(prompt, { key, fetchFn = globalThis.fetch, signal } = {}) {
+  if (!key) throw new Error('OpenRouter API key 未設定');
+  const result = await callWithFallback({
+    start: { provider: 'openrouter', model: OPENROUTER_GROK_MODEL },
+    chain: [], allowGatewayFallback: false, persistState: false, fetchImpl: fetchFn,
+    payloadFor: () => ({
+      url: `${OPENROUTER_BASE}/chat/completions`,
+      init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast' },
+        body: JSON.stringify({ model: OPENROUTER_GROK_MODEL, messages: [{ role: 'user', content: prompt }], stream: false }), signal },
+    }),
+  });
+  const json = await result.response.json();
+  return { text: json.choices?.[0]?.message?.content ?? '', usage: json.usage ?? {} };
 }
 export function canonicalUrl(value) {
   try {
@@ -202,12 +217,13 @@ export function weeklySummary(records, now) {
 }
 export async function runCollect(options = {}) {
   const { home = process.env.ORGIAST_HOME || os.homedir(), now = new Date(), dryRun = false, fetchFn = globalThis.fetch, log = console.log,
-    notifyFn = async (body, opts) => (await import('./notify-kim.mjs')).notifyKim(body, opts) } = options;
+    errorLog = console.error, notifyFn = async (body, opts) => (await import('./notify-kim.mjs')).notifyKim(body, opts) } = options;
   const config = validateConfig(options.config || JSON.parse(fs.readFileSync(CONFIG, 'utf8')));
   if (config.enabled === false) return { status: 'skip:設定で停止中' };
   const base = path.join(home, '.claude'), dir = path.join(base, 'x-ai-tips');
   const key = options.key ?? (process.env.XAI_API_KEY || readEnvValue(path.join(base, 'xai.env'), 'XAI_API_KEY'));
   if (!key) return { status: 'skip:キー未設定' };
+  const openRouterKey = options.openRouterKey ?? (process.env.OPENROUTER_API_KEY || readEnvValue(path.join(base, 'openrouter.env'), 'OPENROUTER_API_KEY'));
   const stateFile = path.join(dir, 'state.json'), proposalFile = path.join(base, 'ai-news-proposals.jsonl');
   const lock = path.join(dir, 'collect.lock');
   let locked = false;
@@ -289,10 +305,10 @@ export async function runCollect(options = {}) {
         state.weekly = { date, status: 'sending', body }; save(state);
         const delivery = await notifyFn(body, { home, kind: 'info', source: 'x-ai-tips-weekly', plainJa: false });
         state.weekly.delivery = delivery;
-        state.weekly.status = ['dm', 'webhook', 'session-inbox'].includes(delivery.delivered) ? 'sent' : 'failed';
+        state.weekly.status = isKimDelivered(delivery, { extra: ['webhook'] }) ? 'sent' : 'failed';
         if (state.weekly.status === 'sent') { state.weekly.sentAt = now.toISOString(); log(`週次送信本文（添付なし）:\n${body}`); }
         save(state);
-        if (state.weekly.status !== 'sent') throw new Error('週次通知未配送');
+        if (state.weekly.status !== 'sent') throw new Error(`週次通知未配送 (delivered=${delivery?.delivered ?? 'unknown'} reason=${delivery?.reason ?? 'unknown'})`);
       }
     }
     const limit = options.limit ?? config.maxCalls;
@@ -311,26 +327,40 @@ export async function runCollect(options = {}) {
       let usage, actual, failure, signal, serverError = false, awaitingResponse = true, creditBlocked = false;
       try {
         signal = AbortSignal.timeout(config.timeoutMs);
-        const response = await fetchFn('https://api.x.ai/v1/responses', { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(buildRequest(topic, now, config)), signal });
+        const request = buildRequest(topic, now, config);
+        let response = await fetchFn('https://api.x.ai/v1/responses', { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(request), signal });
+        let json;
         if (!response.ok) {
           awaitingResponse = false;
           serverError = response.status >= 500 && response.status < 600;
-          let responseBody = '', code;
+          let responseBody = '';
           try {
             responseBody = await response.text();
-            const parsed = JSON.parse(responseBody.slice(0, 2000));
-            if (typeof parsed?.code === 'string' && parsed.code) code = parsed.code.replaceAll(key, '[REDACTED]').replace(/[\r\n]+/g, ' ');
           } catch {}
           if (classifyApiError(response.status, responseBody) === 'credit-blocked') {
-            state.creditBlockedAt = now.toISOString();
-            save(state);
-            creditBlocked = true;
-            return collectCreditBlockedFallback(topic, false);
+            const reason = `HTTP ${response.status} credit/quota response`;
+            errorLog(`[LANE-FALLBACK] x.ai -> openrouter grok (reason: ${reason})`);
+            let fallback;
+            try {
+              fallback = await callOpenRouterGrok(request.input[0].content, { key: openRouterKey, fetchFn, signal });
+            } catch {
+              // OpenRouter の応答本文や認証情報は記録せず、既存の web-search 経路へ進む。
+              state.creditBlockedAt = now.toISOString();
+              save(state);
+              creditBlocked = true;
+              return collectCreditBlockedFallback(topic, false);
+            }
+            json = { output_text: fallback.text, usage: fallback.usage };
+            usage = fallback.usage;
+            actual = Number.isFinite(usage.cost) ? usage.cost : config.reservePerCallUsd;
+          } else {
+            let code;
+            try { code = JSON.parse(responseBody)?.code; } catch {}
+            throw new Error(`API HTTP ${response.status}${code ? ` (${safeError(code, [key, openRouterKey])})` : ''}`);
           }
-          throw new Error(`API HTTP ${response.status}${code ? ` (${code})` : ''}`);
         }
-        const json = await response.json(); awaitingResponse = false; usage = json.usage;
-        actual = estimateCost(usage, config.estimatedRates);
+        if (!json) { json = await response.json(); usage = json.usage; actual = estimateCost(usage, config.estimatedRates); }
+        awaitingResponse = false;
         state.night.costUsd += actual - config.reservePerCallUsd; cost += actual - config.reservePerCallUsd; save(state);
         if (state.night.costUsd > config.maxCostUsd) throw new Error('夜間費用上限超過');
         const items = parseItems(json); acquired += items.length;
@@ -346,11 +376,11 @@ export async function runCollect(options = {}) {
         }
         added += result.added.length; save(state);
       } catch (error) {
-        failure = error.message;
+        failure = safeError(error.message, [key, openRouterKey]);
         const timedOut = awaitingResponse && (signal?.aborted || ['TimeoutError', 'AbortError'].includes(error.name));
         // 401/402/403 は serverError 扱いにして打ち切らず次テーマへ進む
-        const httpStatus = Number(error.message.replace('API HTTP ', ''));
-        const authOrBilling = [401, 402, 403].includes(httpStatus);
+        const httpStatus = Number(/^API HTTP (\d+)/.exec(error.message)?.[1]);
+        const authOrBilling = [402, 403].includes(httpStatus);
         if (!serverError && !timedOut && !authOrBilling) throw error;
         failedTopics++;
         // 401/402/403 のときは検索付き収集へフォールバック
@@ -372,7 +402,7 @@ export async function runCollect(options = {}) {
     return { status: `ok:取得${acquired}件 追加${added}件 重複${duplicates}件 費用$${cost.toFixed(2)}`, calls, cost, added, duplicates };
   } catch (error) {
     // APIの応答本文・認証値はログに出さない。
-    return { status: `error:${error.code === 'EEXIST' ? '収集中ロックあり' : String(error.message).replaceAll(key, '[REDACTED]').replace(/[\r\n]+/g, ' ')}`, calls, cost, added, duplicates };
+    return { status: `error:${error.code === 'EEXIST' ? '収集中ロックあり' : safeError(error.message, [key, openRouterKey])}`, calls, cost, added, duplicates };
   } finally { if (locked) fs.unlinkSync(lock); }
 }
 export async function runCli(args, options = {}) {

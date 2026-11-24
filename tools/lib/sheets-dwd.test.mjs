@@ -150,3 +150,27 @@ test('GETは通信例外でmaxRetriesを使い切ると最後の例外をその�
   assert.equal(calls.length, maxRetries + 1);
   assert.deepEqual(sleeps, [2_000, 4_000]);
 });
+
+test('既定のfetchImplはgwsFetch（既存のfetchImpl注入テストは全てそのまま合格する）', async () => {
+  // fetchImplを注入しないcreateSheetsClient()の既定値がgwsFetchであること、
+  // かつ既存テストのようにfetchImplを明示すれば完全にオーバーライドできることを確認する。
+  // 既定値へのアクセス手段がないので、gwsFetch経由でマーカーが渡ると
+  // プロキシルート（channelRequest）へ進むことをエラー種別で確認する。
+  // keyserve secretが無いPCでは channel エラー（GWS/LINE: keyserve）になる。
+  // ここでは「tokenは取れたがリクエストが通らなかった」のではなく
+  // 「マーカーを評価して中継ルートに入った結果のエラー」であることを確認する。
+  const markerClient = createSheetsClient({
+    getToken: async () => 'orgiast-server-side-gws',
+    sleep: async () => {},
+    maxRetries: 0,
+  });
+  await assert.rejects(markerClient.get('sheet', 'Tab!A1'), (err) => {
+    // keyserve secretが無ければchannelエラー、有れば別のネットワークエラー。
+    // いずれにせよ「Sheets GET HTTP 401」にはならないのが本修正の要点。
+    return !err.message.includes('Sheets GET HTTP 401');
+  });
+  // fetchImplを注入したclientForは既定値変更の影響を受けずに動く
+  const passThrough = clientFor([jsonResponse(200, { values: [['ok']] })]);
+  assert.deepEqual(await passThrough.client.get('sheet', 'Tab!A1'), [['ok']]);
+  assert.equal(passThrough.calls.length, 1);
+});

@@ -3,16 +3,27 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { exportMemories } from './memory-share.mjs';
 import { keyserveAuthHeaders, requireKeyservePcId, keyserveSecret } from './keyserve-auth.mjs';
 import { isEntry } from './is-entry.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
+import { fetchBeacons } from './fleet-beacon.mjs';
 
 function argValue(argv, name) { const at = argv.indexOf(name); return at >= 0 ? argv[at + 1] : undefined; }
 function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } }
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const serialize = bundle => '// 自動生成。編集しない。コミットしない。\nmodule.exports = ' + JSON.stringify(bundle, null, 2) + ';\n';
+
+export function selectMemoryPublisher({ beacons = [], pcMap = {}, now = Date.now(), maxAgeMs = 24 * 60 * 60 * 1000 } = {}) {
+  const kim = pcMap['kim-PC'] || {};
+  const names = new Set(['kim-PC', kim.hostname, ...(kim.aliases || [])].filter(Boolean).map(value => String(value).toLowerCase()));
+  return beacons.filter(beacon => [beacon.label, beacon.hostname, beacon.reporterLabel].filter(Boolean).some(value => names.has(String(value).toLowerCase())))
+    .map(beacon => ({ ...beacon, at: Date.parse(beacon.reportedAt || '') }))
+    .filter(beacon => Number.isFinite(beacon.at) && Number(now) - beacon.at <= maxAgeMs)
+    .sort((a, b) => b.at - a.at)[0] || null;
+}
 
 export function syncServerBeforeDeploy(repo, run = spawnSync) {
   // The trusted nightly checkout must follow merged server code, otherwise a
@@ -116,11 +127,22 @@ export async function publishMemories(options = {}) {
   return result;
 }
 
-export function run(argv = process.argv.slice(2), options = {}) {
+export async function run(argv = process.argv.slice(2), options = {}) {
   const home = options.home || process.env.ORGIAST_HOME || os.homedir();
   if (argv.includes('--deploy') && (options.fleetLabel ?? resolveFleetLabel(home)) !== 'kim-PC') {
     (options.emit || console.log)('memory-publish: files=0 deploy=skip (発信元 kim-PC 以外)');
     return { files: 0, deploy: 'skip', skipped: 'not-kim-pc' };
+  }
+  if (argv.includes('--deploy')) {
+    const pcMap = options.pcMap || readJson(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fleet-pc-map.json')) || {};
+    const fleet = options.beacons ? { ok: true, beacons: options.beacons } : await (options.fetchBeaconsImpl || fetchBeacons)({ home, fetchImpl: options.fetchImpl });
+    const publisher = fleet.ok && selectMemoryPublisher({ beacons: fleet.beacons, pcMap, now: options.nowMs || Date.now() });
+    const hostname = String(options.hostname || process.env.COMPUTERNAME || os.hostname()).toLowerCase();
+    const selectedNames = [publisher?.hostname, publisher?.reporterLabel].filter(Boolean).map(value => String(value).toLowerCase());
+    if (!publisher || !selectedNames.includes(hostname)) {
+      (options.emit || console.log)(`memory-publish: files=0 deploy=skip (最新の kim 本人席=${publisher?.hostname || '取得不能'})`);
+      return { files: 0, deploy: 'skip', skipped: 'not-latest-kim-seat' };
+    }
   }
   return publishMemories({ ...options, keyserveRepo: argValue(argv, '--keyserve-repo'), dryRun: argv.includes('--dry-run'), deploy: argv.includes('--deploy'), verify: argv.includes('--verify') });
 }

@@ -7,8 +7,8 @@ import http from 'node:http';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  executionPlan, makeIndex, mergeEnvFile, missingDeclaredKeys, PRESERVE_LOCAL_KEYS,
-  readHead, shouldRunKeys, keySyncIsStale, updateRepositoryFiles,
+  build, executionPlan, makeIndex, mergeEnvFile, missingDeclaredKeys, PRESERVE_LOCAL_KEYS,
+  readHead, shouldRunKeys, shouldRunRepositorySync, keySyncIsStale, updateRepositoryFiles,
 } from './onboarding-sync.mjs';
 import { gitBlobSha } from './version-drift.mjs';
 
@@ -45,6 +45,18 @@ test('--keys-only runs only key provisioning', () => {
 
 test('default execution plan retains repository, keys, and rules sync', () => {
   assert.deepEqual(executionPlan([]), { syncRepository: true, provisionKeys: true, syncRules: true });
+});
+
+test('repository guard runs once per local calendar day despite less than 24 hours elapsed', () => {
+  const previous = { last: new Date(2026, 10, 23, 3, 29).toISOString() };
+  assert.equal(shouldRunRepositorySync(previous, new Date(2026, 10, 23, 23, 59)), false);
+  assert.equal(shouldRunRepositorySync(previous, new Date(2026, 10, 24, 3, 4)), true);
+});
+
+test('repository guard runs when state is missing or invalid', () => {
+  const now = new Date(2026, 10, 24, 3, 4);
+  assert.equal(shouldRunRepositorySync(null, now), true);
+  assert.equal(shouldRunRepositorySync({ last: 'invalid' }, now), true);
 });
 
 test('key guard skips at 19 hours and runs at 21 hours', () => {
@@ -182,6 +194,55 @@ test('index lead points to the non-auto-loaded path', () => {
   assert.match(lead, /自動ロードされない/);
   assert.match(lead, /Read ツール/);
 });
+test('索引は読点で途切れる結論候補を飛ばす', () => {
+  const index = makeIndex('### コスト最適化\nコスト最適化（調査・報告）は、\n利用者の手間を増やさない。');
+  assert.doesNotMatch(index, /は、/);
+  assert.match(index, /### コスト最適化\n利用者の手間を増やさない。/);
+});
+
+test('索引は太字の途中で結論を切らない', () => {
+  const index = makeIndex([
+    '### 待機',
+    '**期限を確認する。期限切れを通知する。** 通知後の手順。',
+    '### 再開',
+    '**期限後に再開する。',
+    '**🔴 期限のないものは対象外。**',
+  ].join('\n'));
+  assert.match(index, /\*\*期限を確認する。期限切れを通知する。\*\*/);
+  assert.doesNotMatch(index, /通知後の手順|\*\*期限後に再開する。/);
+  assert.match(index, /\*\*🔴 期限のないものは対象外。\*\*/);
+});
+
+test('索引は同じ節の太字見出しを重ねず、別の参照先は保持する', () => {
+  const index = makeIndex([
+    '### 1.3 GAS の管理',
+    '**🔴 clasp で管理する。**',
+    '**1.3 GAS（Google Apps Script）は clasp + GitHub 統一**',
+    '**🔴 read-back で確認する。**',
+    '**1.3.1 検証の詳細**',
+    '検証の本文。',
+    '**🔴 完了を確認する。**',
+    '**1.3.1 検証の詳細**',
+  ].join('\n'));
+  assert.doesNotMatch(index, /\*\*1\.3 GAS/);
+  assert.equal(index.split('\n').filter(line => line === '**1.3.1 検証の詳細**').length, 1);
+});
+
+test('ONBOARDING.md と配布用 CLAUDE.md は軽量化後のサイズの110%以下', () => {
+  const body = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
+  const template = fs.readFileSync(new URL('../CLAUDE.md.template', import.meta.url), 'utf8');
+  const { updated } = build(template, makeIndex(body), 'ONBOARDING.md');
+  // ONBOARDING.md は改行を正規化して Windows / Linux で同じ内容を計測する。
+  const limits = [
+    ['ONBOARDING.md (LF)', body.replace(/\r\n/g, '\n'), 330795],
+    ['配布用 CLAUDE.md', updated, 28922],
+  ];
+  for (const [file, content, limit] of limits) {
+    const bytes = Buffer.byteLength(content);
+    assert.ok(bytes <= limit, `${file}: ${bytes} bytes > 上限 ${limit} bytes`);
+  }
+});
+
 test('index retains critical emoji lines', () => {
   const f = setup(null); run(f); const output = fs.readFileSync(f.target, 'utf8');
   assert.match(output, /🔴 絶対ルール全文/); assert.match(output, /🛑 上限規定/); assert.doesNotMatch(output, /二番目/);

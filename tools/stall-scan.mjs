@@ -6,7 +6,8 @@ import net from 'node:net';
 import { isEntry } from './is-entry.mjs';
 import { dialogMetrics, readJson, writeJson } from './lib/stuck-dialog-state.mjs';
 import { listScheduledTasks } from './lib/scheduled-task.mjs';
-import { expectationLog, logIsStale } from './lib/health-signals.mjs';
+import { expectationLog, expectationSuccess, logIsStale } from './lib/health-signals.mjs';
+import { sessionEvidence, resumeEvidence } from './lib/stall-session-evidence.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { providerCooldownMs } from './codex-cooldown.mjs';
 import { detectFailedJob } from './stall-sweeper.mjs';
@@ -36,7 +37,7 @@ export async function scan({ home = process.env.ORGIAST_HOME || process.env.USER
   expectations = readJson(new URL('./nightly-health-expectations.json',import.meta.url), []), taskQuery = listScheduledTasks, probe = probePort,
   label = resolveFleetLabel(home), save = false } = {}) {
   now = Number(now);
-  const rows = [], sources = [], dir = path.join(home,'.claude');
+  const rows = [], observations = [], sources = [], dir = path.join(home,'.claude');
   let scheduledTasks = null;
   const source = async (name, fn) => {
     try { await fn(); sources.push({ name, ok: true }); }
@@ -67,7 +68,9 @@ export async function scan({ home = process.env.ORGIAST_HOME || process.env.USER
       const log = expectationLog(home,exp);
       const task = expectationTask(exp);
       if (!log && task && scheduledTasks && !scheduledTasks.some(t => t.taskName.endsWith(task))) return;
-      if (!log || logIsStale(log.mtimeMs,exp.maxAgeHours,now)) rows.push(row('log_stale',`${exp.label}のログ停止`,`${log?.file || exp.log || exp.pattern}: 更新=${log ? new Date(log.mtimeMs).toISOString() : '未作成'}; 期待=${exp.maxAgeHours}時間以内`,'未実行・起動直後の停止・出力先変更','nightly-health の既存ログ修復経路で確認',{expectation:exp}));
+      const success = expectationSuccess(home, exp), stamp = Date.parse(success?.at);
+      const stateFresh = Number.isFinite(stamp) && stamp <= now && !logIsStale(stamp, exp.maxAgeHours, now);
+      if ((!log || logIsStale(log.mtimeMs,exp.maxAgeHours,now)) && !stateFresh) rows.push(row('log_stale',`${exp.label}の稼働確認が古い`,`${log?.file || exp.log || exp.pattern}: 更新=${log ? new Date(log.mtimeMs).toISOString() : '未作成'}; 成功state=${success?.at || '未確認'}; 期待=${exp.maxAgeHours}時間以内`,'ログと成功stateの両方が古い・未確認','nightly-health の既存ログ修復経路で確認',{expectation:exp}));
     });
   }
   await source('heartbeats', () => {
@@ -90,18 +93,23 @@ export async function scan({ home = process.env.ORGIAST_HOME || process.env.USER
     const file = path.join(dir,'provider-cooldown.json');
     for (const [provider, state] of Object.entries(readJson(file))) {
       if (providerCooldownMs(provider, now, file) <= 0) continue;
-      rows.push(row('cooldown',`${provider}の利用待ち`,`${file}: until=${new Date(Number(state.until)).toISOString()}; reason=${state.reason || 'limit'}`,'利用枠の上限','既存 executor-gate が期限まで保留し、利用可能な別レーンへ回す',{remediate:false}));
+      observations.push(row('cooldown',`${provider}の利用待ち`,`${file}: until=${new Date(Number(state.until)).toISOString()}; reason=${state.reason || 'limit'}`,'利用制限（故障とは別）','既存 executor-gate が期限まで保留し、利用可能な別レーンへ回す',{remediate:false}));
     }
   });
-  await source('stalled-sessions', () => {
+  await source('stalled-sessions', async () => {
     const ledger=readJson(path.join(dir,'stalled-session-resume.json'));
     const closed=readJson(path.join(dir,'session-closed-ledger.json'),{sessions:{}});
-    for (const [id,s] of Object.entries(ledger.sessions || {})) if (!closed.sessions?.[id] && (s.noProgress>0 || s.attempts?.at(-1)?.outcome==='error')) rows.push(row('session_stalled','再開しても進まない会話',`session=${id}; noProgress=${s.noProgress}; last=${JSON.stringify(s.attempts?.at(-1) || {})}`,'再開先の失敗・会話の進展なし','stalled-session-resume の台帳と停止条件を確認'));
+    const candidates = Object.entries(ledger.sessions || {}).filter(([id,s]) => !closed.sessions?.[id] && (s.noProgress>0 || s.attempts?.at(-1)?.outcome==='error'));
+    const transcripts = await sessionEvidence(home, candidates.map(([id]) => id));
+    for (const [id,s] of candidates) {
+      const evidence = resumeEvidence(s, transcripts.get(id));
+      (evidence.stalled ? rows : observations).push(row(evidence.kind,evidence.stalled ? '再開しても進まない会話' : '再開履歴の照合',`session=${id}; noProgress=${s.noProgress}; ${evidence.reason}; last=${JSON.stringify(s.attempts?.at(-1) || {})}`,'再開履歴と現在の会話を照合','履歴だけで現在の停滞・完了を断定しない',{remediate:evidence.stalled}));
+    }
     const file=path.join(dir,'stall-sweeper-log.jsonl'), latest=new Map();
     for (const s of jsonLines(file)) latest.set(s.id,s);
     for (const s of latest.values()) if (s.kind==='stalled_session' && (s.result==='失敗' || (s.result==='実行中' && now-Date.parse(s.t)>3600000))) rows.push(row('session_stalled','停滞会話の処理が未完了',`${file}: ${s.id} ${s.t} ${s.result} ${s.error || ''}`,'再開失敗・処理中断','stall-sweeper が次回の巡回で再確認'));
   });
-  const result={ at:new Date(now).toISOString(), rows, sources };
+  const result={ at:new Date(now).toISOString(), rows, observations, sources };
   if(save) writeJson(path.join(dir,'stall-scan.json'),result);
   return result;
 }
@@ -111,13 +119,14 @@ export function asAnomalies(result) {
 export function sessionSummary(home, now=Date.now()) {
   try {
     const cached=readJson(path.join(home,'.claude','stall-scan.json'));
-    if (!cached.rows?.length) return '';
+    if (!cached.rows?.length && !cached.observations?.length) return '';
     const age=now-Date.parse(cached.at);
-    return `停滞診断${age>30*3600000?'（古い結果・再確認が必要）':''}: ${cached.rows.length}件 / ${cached.rows.slice(0,3).map(r=>r.symptom).join('、')}。node tools/stall-scan.mjs で根拠を確認。`;
+    const rows = (cached.rows || []).filter(r => r.remediate !== false);
+    return `停滞診断${age>30*3600000?'（古い結果・再確認が必要）':''}: ${rows.length}件 / ${rows.slice(0,3).map(r=>r.symptom).join('、')}。参考情報=${(cached.observations?.length || 0) + (cached.rows?.length || 0) - rows.length}件。node tools/stall-scan.mjs で根拠を確認。`;
   } catch { return '停滞診断: 保存結果を読めません。node tools/stall-scan.mjs で再確認。'; }
 }
 export function formatTable(result) {
   const cell=s=>String(s).replace(/[\r\n|]/g,' ');
-  return ['| 症状 | 根拠(実データ) | 原因候補 | 自動で次にやること |','| --- | --- | --- | --- |',...result.rows.map(r=>`| ${[r.symptom,r.evidence,r.cause,r.nextAction].map(cell).join(' | ')} |`)].join('\n');
+  return ['| 症状 | 根拠(実データ) | 原因候補 | 自動で次にやること |','| --- | --- | --- | --- |',...[...result.rows, ...(result.observations || []).map(r => ({...r, symptom:`参考（停滞件数外）: ${r.symptom}`}))].map(r=>`| ${[r.symptom,r.evidence,r.cause,r.nextAction].map(cell).join(' | ')} |`)].join('\n');
 }
 if(isEntry(import.meta.url)) scan({save:true}).then(r=>console.log(process.argv.includes('--json')?JSON.stringify(r,null,2):formatTable(r))).catch(e=>{console.error(e.message);process.exitCode=1;});

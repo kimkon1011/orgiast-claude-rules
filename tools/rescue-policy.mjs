@@ -29,6 +29,18 @@ function git(tree, args, input, env = process.env) {
   }
   return r.stdout;
 }
+function currentBranch(tree) {
+  const r = spawnSync('git', ['-C', tree, 'symbolic-ref', '--short', '-q', 'HEAD'], {
+    encoding: 'utf8', timeout: 120000, maxBuffer: 16 * 1024 * 1024, windowsHide: true,
+  });
+  // Detached HEAD is the normal state of sync-orgiast-main and has no branch name.
+  if (r.status === 1 && !r.error) return '';
+  if (r.error || r.status !== 0) {
+    const first = (r.stderr || r.error?.message || `exit ${r.status}`).trim().split(/\r?\n/)[0];
+    throw new Error(`symbolic-ref: ${redactSecrets(first)}`);
+  }
+  return r.stdout.trim();
+}
 function nestedRoot(tree, name) {
   const parts = name.replace(/\/$/, '').split('/');
   for (let i = 1; i <= parts.length; i++) {
@@ -64,7 +76,8 @@ export function dirtyStatus(tree) {
     const name = entry.slice(3);
     const from = /[RC]/.test(entry.slice(0, 2)) ? records[++i] : null;
     const nested = entry.startsWith('?? ') && nestedRoot(tree, name);
-    if (excluded(name) || nested) continue;
+    const temporary = entry.startsWith('?? ') && path.posix.basename(name).startsWith('_');
+    if (excluded(name) || nested || temporary) continue;
     snapshotPaths.push(name);
     if (from && !excluded(from)) snapshotPaths.push(from);
     kept.push(entry + (from == null ? '' : `\0${from}`));
@@ -211,6 +224,21 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
     if (!preserveTree) await checkLoop();
     const status = dirtyStatus(tree);
     dirtyCount = status.count;
+    const branchAtStart = currentBranch(tree);
+    if (branchAtStart.startsWith('rescue/')) {
+      log('RESCUE_SKIP_ON_RESCUE_BRANCH', `current branch is ${branchAtStart}; nested rescue skipped`);
+      return { clean: false, dirtyCount, events };
+    }
+    // Detached HEAD on a rescue commit: currentBranch returns '', so the branch
+    // guard above passes through.  Check the HEAD commit subject to avoid
+    // chaining a new rescue onto a previous rescue commit (observed with
+    // auto-session-rescue-20261123-231404 on 2026-11-23).
+    let headSubject;
+    try { headSubject = git(tree, ['log', '-1', '--format=%s', 'HEAD']).trim(); } catch { headSubject = ''; }
+    if (headSubject.startsWith('auto-session-rescue-')) {
+      log('RESCUE_SKIP_ON_RESCUE_COMMIT', `HEAD commit is ${headSubject}; detached rescue skipped`);
+      return { clean: false, dirtyCount, events };
+    }
     const key = path.resolve(tree);
     state.dirtySince ||= {};
     if (status.clean) {

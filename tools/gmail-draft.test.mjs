@@ -334,7 +334,7 @@ test('CLI --delete は宛先ガード不要で JSON を1個出し、送信 URL �
     assert.equal(result.code, 0);
     assert.equal(result.output.length, 1);
     assert.deepEqual(JSON.parse(result.output[0]), {
-      action: 'delete', user: 'shared@orgiast.jp', ok: true, deleted: status === 204, id: 'draft',
+      action: 'delete', user: 'shared@orgiast.jp', from: 'shared@orgiast.jp', ok: true, deleted: status === 204, id: 'draft',
       ...(status === 404 ? { errorKind: 'not_found' } : {}),
     });
     assert.equal(requests.some(r => r.url.includes('/send')), false);

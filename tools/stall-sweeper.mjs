@@ -2,7 +2,7 @@
 // 既定は検出のみ。外部照会失敗は「未確認」として独立して報告する。
 import { publishSeatPr } from './pr-land.mjs';
 import fs from 'node:fs';
-import { listScheduledTasks } from './lib/scheduled-task.mjs';
+import { listScheduledTasks, taskResultIsNonFailure } from './lib/scheduled-task.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -85,7 +85,7 @@ export function detectFailedJob(rows, now = Date.now()) {
     if (!latest.has(key) || new Date(r.t) >= new Date(latest.get(key).t)) latest.set(key, r);
   }
   return [...latest].flatMap(([id, r]) => {
-    if (!Number.isFinite(new Date(r.t).getTime()) || r.running || r.status == null || Number(r.status) === 0 || ['ok', 'success', 'fallback', 'cooldown', 'deferred'].includes(String(r.status).toLowerCase()) || [267009, 267011].includes(Number(r.status))) return [];
+    if (!Number.isFinite(new Date(r.t).getTime()) || r.running || r.status == null || (r.taskName ? taskResultIsNonFailure(r.status, r) : Number(r.status) === 0) || ['ok', 'success', 'fallback', 'cooldown', 'deferred'].includes(String(r.status).toLowerCase())) return [];
     if (!Number.isFinite(Number(r.status)) && !/^(?:error|failed|failure|unusable|no-cheap-executor|http_[45]\d\d)$/.test(String(r.status))) return [];
     // ジョブ付帯の無いプロバイダ単位のLLM呼び出し行(executor-usageのgroq等)で直近が http_429 の場合は
     // RPD・TPM 等のレート上限到達による一時的な流量制限であり、ジョブ失敗ではない(2026-11-07 確定、

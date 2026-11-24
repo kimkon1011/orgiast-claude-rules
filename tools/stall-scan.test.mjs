@@ -20,10 +20,11 @@ test('aggregate actual signals with no notification or registration',async t=>{
  put(home,'stalled-session-resume.json',{sessions:{abc:{noProgress:2}}});
  put(home,'stall-scan-servers.json',{servers:[{name:'local',port:4321}]});
  const result=await scan({...opts(home),save:true,expectations:[{log:'missing.log',label:'job',maxAgeHours:1,task:'OrgiastJob'}],taskQuery:()=>[{taskName:'OrgiastJob',status:1,t:new Date(now-3600000).toISOString(),nextRunTime:new Date(now-1800000).toISOString(),state:'Ready',cycleMinutes:5}],probe:async()=>({listening:false,error:'ECONNREFUSED'})});
- assert.deepEqual(new Set(result.rows.map(r=>r.kind)),new Set(['stuck_dialog','heartbeat_stale','cooldown','session_stalled','log_stale','task_failed','task_missed','server_down']));
+ assert.deepEqual(new Set(result.rows.map(r=>r.kind)),new Set(['stuck_dialog','heartbeat_stale','log_stale','task_failed','task_missed','server_down']));
+ assert.deepEqual(new Set(result.observations.map(r=>r.kind)),new Set(['cooldown','session_unverified']));
  assert.match(formatTable(result),/根拠\(実データ\)/);assert.match(formatTable(result),/4321 ECONNREFUSED/);
  assert.ok(!asAnomalies(result).some(r=>['cooldown','log_stale'].includes(r.type)));
- assert.match(sessionSummary(home,now),/停滞診断: 8件/);assert.match(sessionSummary(home,now+31*3600000),/古い結果/);
+ assert.match(sessionSummary(home,now),/停滞診断: 6件.*参考情報=2件/);assert.match(sessionSummary(home,now+31*3600000),/古い結果/);
 });
 test('healthy empty scan is silent at SessionStart; no false failure for running/never-run future task',async t=>{
  const home=fixture(t);put(home,'heartbeat/stuck-dialog-watch.json',{finishedAt:new Date(now).toISOString(),ok:true});

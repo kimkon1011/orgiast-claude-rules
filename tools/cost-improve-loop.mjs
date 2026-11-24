@@ -1124,21 +1124,25 @@ export function readLedgerCounts(filePath, now) {
 
 // run-hidden.vbs がプライマリログをロックしているとき、退避先ログを探す。
 // naming は run-hidden.vbs と揃えている（cost-improve-loop.locked-<yyyymmdd>-<hhnnss>-<rand>.log）。
-export function resolveEffectiveLogPath(claudeDir) {
+export function resolveEffectiveLogPath(claudeDir, fsImpl = fs) {
   const logDir = path.join(claudeDir, 'logs');
   const primary = path.join(logDir, 'cost-improve-loop.log');
   try {
-    fs.mkdirSync(logDir, { recursive: true });
+    fsImpl.mkdirSync(logDir, { recursive: true });
     // プライマリが書き込み可能か試す
-    fs.appendFileSync(primary, '', 'utf8');
+    fsImpl.appendFileSync(primary, '', 'utf8');
     return primary;
   } catch { /* primary locked — fallback 探しへ */ }
   try {
-    const files = fs.readdirSync(logDir)
+    const files = fsImpl.readdirSync(logDir)
       .filter(f => /^cost-improve-loop\.locked-\d{8}-\d{6}-[a-zA-Z0-9]+\.log$/.test(f))
       .sort()
       .reverse();
-    if (files.length > 0) return path.join(logDir, files[0]);
+    for (const file of files) {
+      const candidate = path.join(logDir, file);
+      try { fsImpl.appendFileSync(candidate, '', 'utf8'); return candidate; }
+      catch { /* run-hidden may also hold the newest rotated log open */ }
+    }
   } catch { /* logDir 不在など */ }
   // 退避先が見つからなければ run-hidden 規約に従って自前で作る
   const ts = new Date();

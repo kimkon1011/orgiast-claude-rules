@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { listScheduledTaskDetails, startScheduledTask, enableScheduledTask } from './lib/scheduled-task.mjs';
+import { listScheduledTaskDetails, startScheduledTask, enableScheduledTask, taskResultIsNonFailure } from './lib/scheduled-task.mjs';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyKim } from './notify-kim.mjs';
@@ -15,8 +15,7 @@ const HOUR = 3600000, DAY = 24 * HOUR;
 const homeDefault = () => process.env.ORGIAST_HOME || os.homedir();
 const read = (file, fallback) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
 const key = name => String(name).replace(/^\\/, '').toLowerCase();
-const SUCCESS_RESULTS = [0, 267009, 267011, 267014];
-const REQUEST_REFUSED = 0x800710E0;
+const nonFailure = task => taskResultIsNonFailure(task.lastTaskResult, task) || Number(task.lastTaskResult) === 267014;
 export const stamp = value => {
   if (typeof value === 'number') return value;
   const text = String(value ?? '').trim();
@@ -66,8 +65,7 @@ export function auditTasks(tasks, overrides = {}, now = Date.now(), { required =
     if (!(maxAgeHours > 0)) continue;
     const last = stamp(task.lastRunTime);
     if (['Ready', 'Running'].includes(task.state) && (!Number.isFinite(last) || new Date(last).getUTCFullYear() <= 1999 || +now - last > maxAgeHours * HOUR)) add('missed');
-    const runningRequestRefused = task.state === 'Running' && (Number(task.lastTaskResult) >>> 0) === REQUEST_REFUSED;
-    if (task.lastTaskResult != null && !SUCCESS_RESULTS.includes(Number(task.lastTaskResult)) && !runningRequestRefused) add('failed');
+    if (task.lastTaskResult != null && !nonFailure(task)) add('failed');
     for (const artifact of override.artifacts || []) {
       const mtime = artifactMtimes[artifact];
       if (!Number.isFinite(mtime) || +now - mtime > maxAgeHours * HOUR) add('artifact_stale', { artifact });
@@ -86,7 +84,7 @@ export function unresolvedTasks(tasks, findings, state, now = Date.now(), { requ
     if (task && task.state === 'Disabled' && !requiredSet.has(key(name))) return [];
     const stillBad = findings.some(f => key(f.name) === key(name));
     const ranAfterHeal = task && stamp(task.lastRunTime) > stamp(heal.at);
-    const healthyNow = task && task.state !== 'Disabled' && !stillBad && SUCCESS_RESULTS.includes(Number(task.lastTaskResult));
+    const healthyNow = task && task.state !== 'Disabled' && !stillBad && nonFailure(task);
     return !task || stillBad || !(ranAfterHeal || healthyNow)
       ? [{ name, kind: 'unresolved', reason: heal.kind, at: heal.at }] : [];
   });
@@ -171,7 +169,7 @@ export async function runAudit({ home = homeDefault(), platform = process.platfo
         const currentTask = current.find(candidate => key(candidate.taskName) === key(heal.name));
         const healedAt = state.heals[heal.name]?.at;
         if (currentTask && stamp(currentTask.lastRunTime) > stamp(healedAt)
-          && SUCCESS_RESULTS.includes(Number(currentTask.lastTaskResult)) && currentTask.state !== 'Disabled') {
+          && nonFailure(currentTask) && currentTask.state !== 'Disabled') {
           heal.recovered = true;
           state.heals[heal.name].resolved = true;
           delete state.notified[heal.name];

@@ -1,5 +1,19 @@
 import { spawnSync } from 'node:child_process';
 
+export const TASK_RESULTS = Object.freeze({ SUCCESS: 0, RUNNING: 267009, NOT_RUN: 267011,
+  LEGACY_RESIDENT_REFUSAL: 2147942656, START_REFUSED: 0x800710e0 });
+// START_REFUSED is 2147946720, not 2147942656. A refusal is benign only
+// with independent evidence that the resident instance is still running.
+export function taskResultIsNonFailure(status, { running = false, state } = {}) {
+  if (status == null || status === '') return false;
+  // PowerShell may surface HRESULT values as either signed Int32 or unsigned
+  // numbers, so compare their shared 32-bit representation.
+  const code = Number(status) >>> 0;
+  return [TASK_RESULTS.SUCCESS, TASK_RESULTS.RUNNING, TASK_RESULTS.NOT_RUN].includes(code)
+    || ([TASK_RESULTS.LEGACY_RESIDENT_REFUSAL, TASK_RESULTS.START_REFUSED].includes(code)
+      && (running || state === 'Running'));
+}
+
 function run(command, spawnImpl = spawnSync) {
   const result = spawnImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::OutputEncoding=[Text.Encoding]::UTF8;$ErrorActionPreference='Stop';${command}`], { encoding: 'utf8', windowsHide: true, timeout: 60000 });
   if (result.error || result.status !== 0) throw result.error || new Error(result.stderr || `powershell exit ${result.status}`);

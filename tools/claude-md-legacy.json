@@ -3,7 +3,7 @@
     "kind": "paragraph",
     "text": "**🔴 kim への報告は Discord 禁止（kim 2026-10-27 厳命・全PC全アカウント）。kim 宛は kim-inbox（~/.claude/kim-inbox、`node tools/kim-inbox.mjs`）に積みセッションで回収。ask は返答を --answer で記録するまで毎プロンプト再提示、info は伝えたら --seen。セッションを閉じても台帳に残り次セッションで再提示（クローズは止めない）。Discord MCP の直接送信はゲートが拒否。例外は config/kim-discord-allowlist.json に kim が登録したカテゴリのみ。詳細 docs/kim-inbox.md**",
     "requires": [
-      "**🔴 kim 宛 Discord DM は全廃・例外なし（緊急を含む・全PC全アカウント）。kim-inbox（~/.claude/kim-inbox、node tools/kim-inbox.mjs）へ積みセッションで回収。ask は --answer まで毎プロンプト再提示、info は伝えたら --seen。クローズを止めず台帳を次セッションへ引き継ぐ。Discord MCP 直接送信はゲートが拒否し、旧 config/kim-discord-allowlist.json のカテゴリも廃止。詳細 docs/kim-inbox.md。**"
+      "**🔴 無人ジョブの kim 宛報告は kim-inbox（~/.claude/kim-inbox、node tools/kim-inbox.mjs）に積み、セッションで回収する。kim 宛 Discord DM は全廃・例外なし（緊急を含む・全PC全アカウント）。ask は --answer まで毎プロンプト再提示、info は伝えたら --seen。クローズを止めず台帳を次セッションへ引き継ぐ。Discord MCP 直接送信はゲートが拒否し、旧 config/kim-discord-allowlist.json のカテゴリも廃止。詳細 docs/kim-inbox.md。**"
     ]
   },
   {
@@ -60,7 +60,9 @@
     "kind": "section",
     "text": "## トークン効率\n\n- **出力は Caveman**: 前置きなし、完了報告 1〜3 行（output-styles/caveman.md）\n- **キャッシュ保護**: CLAUDE.md には恒久ルールだけ。実行中タスク・今日の数字・進行中障害は書かない（毎回キャッシュを壊す）。上部ほど静的に。セッション中のモデル切替を乱発しない\n- **モデルルーティング**: 単純編集/grep/確認系 → Sonnet/Haiku、設計/横断調査/複数仮説 → Opus/Fable。迷ったら Auto\n- **重い探索はサブエージェント委譲**: 「配下を全部読んで○○」型は Explore/general-purpose に投げ、「結果を200字以内・コード本体は含めない」と指定して親コンテキストを守る",
     "requires": [
-      "**🔴 トークン効率: 出力は Caveman（output-styles/caveman.md、前置きなし・完了結論1〜3行。必要な検証表・全文・末尾3行は省略しない）。CLAUDE.md は恒久ルールのみ、上部ほど静的にし、進行中タスク・今日の数字・障害を書かない。モデル切替を乱発しない。探索は Explore/general-purpose に「結果200字以内・コード本体なし」で委譲。実装は Codex、設計/横断調査/複数仮説は Opus/Fable（§1.16 の制約）、軽い確認・締めは Sonnet/Haiku、迷ったら Opus。**"
+      "**🔴 CLAUDE.md は恒久ルールのみ。静的な内容を上部に置き、進行中タスク・今日の数字・障害は載せない。報告は前置きなしで §1.1 に従う。モデル切替は乱発しない。探索は Agent ツールの Explore/general-purpose に「結果200字以内・コード本体なし」で委譲。実装は Codex、設計・横断調査・複数仮説は Opus/Fable（§1.16）、軽い確認・締めは Sonnet/Haiku。**",
+      "**🔴 既定モデルは Opus。/session-close・記録の追記だけの締め、定型の確認・一覧化・整形・転記だけ Sonnet。迷ったら Opus。旧「自動は Sonnet のみ・Opus 禁止」は廃止。**",
+      "**🔴 kim への報告は Stop ゲートの書き直し後、セッションの最後のメッセージに自己完結させる。結論1〜3行＋末尾3行「次に kim がすること／この後の自動進行／このセッション」が基本。検証表・手間監査・【最終まとめ】・【kim 確認用の全文】は該当時のみ付ける。【最終まとめ】には報告・確認事項の全文・kim の操作を載せ、操作に使う Drive URL は同じ行に書く。承認全文はフッター直前に置き、操作・手間監査・恒久策はその前に書く。過去の応答を参照させない。**"
     ]
   },
   {
@@ -69,11 +71,13 @@
     "requires": [
       "**🔴 故障レーンは全PC・無人でも同じセッションで最優先修復し、Claude は作業を肩代わりしない。codex-do 失敗時は lane-health.json の次の安いレーンへ渡し直し、全レーン停止なら止めて `~/.claude/lane-watch/status.md` の理由と kim の操作を報告する。人にしかできない操作は kim へ直接頼み実呼び出し成功まで確認。lane-repair-first-gate が未修復の通常作業を止める。node tools/lane-doctor.mjs --probe か lane-repair-log.mjs --lane <名> --tried \"<試行>\" --result fixed|unfixable（6時間有効）で記録し [LANE-REPAIR] を書く。reset 既知の429/usage_limitは quota_wait として別の安いレーンへ。Codex probe失敗はWSL終了コードでも切り分け、「生存 ✅」だけを信用しない。**",
       "**🔴 他AI（Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM）は使うのが既定、Claudeだけは理由が必要。残高切れは入金（オートチャージON）、キー失効/403は再発行、429は別の他AIへ。「外す／やめる／縮小」を選択肢にせず、障害は別の他AIで吸収し復旧後に戻す。割り振りは先に具体名で書く（要約=Gemini、下書き=Kimi、実装=Codex、Claude=verify）。「必要なら使う」は禁止。**",
-      "**🔴 Claudeだけで実装しない・従量課金でClaude Codeを動かさない。直接実装・大きなインラインプログラム・実装サブエージェントはモデルを問わずdeny。解除はuserの [CLAUDE-IMPL-OK]（または [LANE-OK]）のセッション限定60分だけ、overrideファイル・自動解除は廃止。APIキー/Consoleログインは api-billing-guard が全ツールを止める。全アカウントGmail領収書を毎日集計（§2.8.5）、通知は §1.1 の許可リスト規定。必須hook欠落は hook-selfcheck が修復。**",
+      "**🔴 Claudeだけで実装しない・従量課金でClaude Codeを動かさない。直接実装・大きなインラインプログラム・実装サブエージェントはモデルを問わずdeny。解除はuserの [CLAUDE-IMPL-OK] によるセッション限定60分だけ、overrideファイル・自動解除は廃止。APIキー/Consoleログインは api-billing-guard が全ツールを止める。全アカウントGmail領収書を毎日集計（§2.8.5）、kim への報告経路は §1.1 に従う。必須hook欠落は hook-selfcheck が修復。**",
       "**🔴 アプリ（デプロイ済み・Actions・cron・GAS・スクリプト）のLLM/検索は他AIが既定。Claude API（@anthropic-ai/sdk・api.anthropic.com・claude-*）の新規利用・Claudeへの自動フォールバックも禁止。旧 LLM-PROVIDER-REASON は新規利用の許可にならない（2026-11-05）。検索収集=Gemini Flash grounding、分類/抽出/要約=Groq/DeepSeek/Gemini Flash。他AIを3社以上同じ評価セットで比較（取得項目数・一致率・1件実費）し、1社だけでClaudeへ戻さない。障害は別の他AIへ、全滅なら停止・通知。「当面Claude」「入金不要」で済ませずキー登録・デプロイ・入金依頼・他AI実動確認まで行う。既存アプリも呼び先を確認しClaudeなら置換案を先に出す。有料一括20件超は1〜10件の実費実測→[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z]→承認→コードの予算超過自動停止。オートチャージは上限ではない。app-llm-cost-gate が検査（§2.8.0）。**",
       "**🔴 安いAIの利用状況（PC×Claudeアカウント×AI×契約アカウント）はクラウド台帳の「PCログイン」「クラウド契約」タブを正本とし、`fleet-sheet-report` が全PCから自動記録する。鍵の追加・差し替え時は `config/ai-key-owners.json` に鍵末尾4文字と契約アカウントを追記する。**",
       "**🔴 案件引継ぎ: kim操作席の案件は case-sessions に自動保存。別席は /case-resume <案件ID/案件名>（初回6KB以内）、明示紐付けは /case <案件ID>。全文は必要箇所だけ同期してGrepし、閉じる前に case-handoff.mjs flush でSTATE更新を確認（§1.15）。**",
-      "**🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PR は作った席が自分で着地させる。pr-land.mjs --title \"<題>\" --body-file <本文> でbaseへpushし着地させる（通常はautomerge、安全弁パスはCI合格後pr-merge、workflow変更は停止）。権限・鍵・マージを kim-PC に頼まない。不足時は `node tools/access-doctor.mjs --fix`。内部Gmail下書き禁止。**"
+      "**🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。PR は作った席が自分で着地させる。pr-land.mjs --title \"<題>\" --body-file <本文> でbaseへpushし着地させる（通常はautomerge、安全弁パスはCI合格後pr-merge、workflow変更は停止）。権限・鍵・マージを kim-PC に頼まない。不足時は `node tools/access-doctor.mjs --fix`。内部Gmail下書き禁止。**社内DMは承認不要。秘密値非記載。社外全文承認後。",
+      "**🔴 無人ジョブの kim 宛報告は kim-inbox（~/.claude/kim-inbox、node tools/kim-inbox.mjs）に積み、セッションで回収する。kim 宛 Discord DM は全廃・例外なし（緊急を含む・全PC全アカウント）。ask は --answer まで毎プロンプト再提示、info は伝えたら --seen。クローズを止めず台帳を次セッションへ引き継ぐ。Discord MCP 直接送信はゲートが拒否し、旧 config/kim-discord-allowlist.json のカテゴリも廃止。詳細 docs/kim-inbox.md。**",
+      "**🔴 kim への報告は Stop ゲートの書き直し後、セッションの最後のメッセージに自己完結させる。結論1〜3行＋末尾3行「次に kim がすること／この後の自動進行／このセッション」が基本。検証表・手間監査・【最終まとめ】・【kim 確認用の全文】は該当時のみ付ける。【最終まとめ】には報告・確認事項の全文・kim の操作を載せ、操作に使う Drive URL は同じ行に書く。承認全文はフッター直前に置き、操作・手間監査・恒久策はその前に書く。過去の応答を参照させない。**"
     ]
   }
 ]

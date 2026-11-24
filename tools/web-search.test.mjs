@@ -126,8 +126,8 @@ test('Gemini が成功したら Groq を呼ばない', async () => {
     calls.push(url);
     return response({ candidates: [{ content: { parts: [{ text: 'Gemini回答' }] } }] });
   };
-  const code = await runCli(['質問', '--json'], {
-    geminiApiKey: 'gemini-test', groqApiKey: 'groq-test', fetchImpl,
+  const code = await runCli(['質問', '--json', '--provider', 'gemini'], {
+    geminiApiKey: 'gemini-test', fetchImpl,
     stdout: out.stream, stderr: outputSink().stream,
   });
   assert.equal(code, 0);
@@ -136,16 +136,17 @@ test('Gemini が成功したら Groq を呼ばない', async () => {
   assert.equal(JSON.parse(out.read()).provider, 'gemini');
 });
 
-test('Gemini 429 はリトライせず Groq へフォールバックする', async () => {
+test('auto は OpenRouter 429 で Groq へフォールバックする', async () => {
   const out = outputSink();
   const calls = [];
   const fetchImpl = async (url) => {
     calls.push(url);
-    if (url.includes('generativelanguage.googleapis.com')) return response({ error: 'rate limit' }, 429);
+    if (url.includes('openrouter.ai')) return response({ error: 'rate limit' }, 429);
     return response({ choices: [{ message: { content: 'Groq回答' } }] });
   };
   const code = await runCli(['質問', '--json'], {
-    geminiApiKey: 'gemini-test', groqApiKey: 'groq-test', fetchImpl,
+    openrouterApiKey: 'openrouter-test', deepseekApiKey: '', gskApiKey: '',
+    groqApiKey: 'groq-test', geminiApiKey: '', fetchImpl,
     stdout: out.stream, stderr: outputSink().stream,
   });
   assert.equal(code, 0);
@@ -154,23 +155,19 @@ test('Gemini 429 はリトライせず Groq へフォールバックする', asy
   assert.equal(JSON.parse(out.read()).provider, 'groq');
 });
 
-test('Gemini が 200 でも本文が空なら Groq へフォールバックする', async () => {
+test('auto は OpenRouter が成功したら即座に OpenRouter 結果を返す', async () => {
   const out = outputSink();
   const calls = [];
   const fetchImpl = async (url) => {
     calls.push(url);
-    if (url.includes('generativelanguage.googleapis.com')) {
-      return response({ candidates: [{ content: { parts: [{ text: '   ' }] } }] });
-    }
-    return response({ choices: [{ message: { content: 'Groq回答' } }] });
+    return response({ choices: [{ message: { content: 'OpenRouter回答' } }] });
   };
   const code = await runCli(['質問', '--json'], {
-    geminiApiKey: 'gemini-test', groqApiKey: 'groq-test', fetchImpl,
+    openrouterApiKey: 'openrouter-test', fetchImpl,
     stdout: out.stream, stderr: outputSink().stream,
   });
   assert.equal(code, 0);
-  assert.equal(calls.length, 2);
-  assert.equal(JSON.parse(out.read()).provider, 'groq');
+  assert.equal(JSON.parse(out.read()).provider, 'openrouter');
 });
 
 test('--provider gemini で本文が空なら exit 1 になり理由を出す', async () => {
@@ -330,22 +327,23 @@ test('--provider openrouter で本文と annotations の URL を JSON で返す'
   });
 });
 
-test('auto は Gemini と Groq の 429 後に OpenRouter へフォールバックする', async () => {
-  const calls = [];
-  const result = await search('質問', {
+test('auto は OpenRouter 429 後 deepseek→gsk→groq→gemini へフォールバックし全滅する', async () => {
+  await assert.rejects(search('質問', {
     geminiApiKey: 'gemini-test', groqApiKey: 'groq-test', openrouterApiKey: 'openrouter-test',
+    deepseekApiKey: 'deepseek-test', gskApiKey: 'gsk-test',
     fetchImpl: async (url) => {
-      calls.push(url);
-      if (!url.includes('openrouter.ai')) return response({ error: 'rate limit' }, 429);
-      return response({ choices: [{ message: { content: '回答' } }] });
+      return response({ error: 'rate limit' }, 429);
     },
+    spawnImpl: async () => new Response('{}', { status: 429 }),
     appendUsage() {},
+  }), (error) => {
+    assert.equal(error.failures.length, 5);
+    assert.match(error.failures[0], /OpenRouter API HTTP 429/);
+    assert.match(error.failures[1], /DeepSeek API HTTP 429/);
+    assert.match(error.failures[3], /Groq API HTTP 429/);
+    assert.match(error.failures[4], /Gemini API HTTP 429/);
+    return true;
   });
-  assert.equal(calls.length, 3);
-  assert.equal(result.provider, 'openrouter');
-  assert.equal(result.failures.length, 2);
-  assert.match(result.failures[0], /gemini: Gemini API HTTP 429/);
-  assert.match(result.failures[1], /groq: Groq API HTTP 429/);
 });
 
 test('OpenRouter キーが無い auto は APIキーなしとしてスキップしクラッシュしない', async () => {
@@ -354,9 +352,9 @@ test('OpenRouter キーが無い auto は APIキーなしとしてスキップ�
     fetchImpl: async () => response({ error: 'down' }, 500), appendUsage() {},
   }), (error) => {
     assert.equal(error.failures.length, 5);
-    assert.equal(error.failures[2], 'openrouter: APIキーなし');
-    assert.equal(error.failures[3], 'deepseek: APIキーなし');
-    assert.equal(error.failures[4], 'gsk: APIキーなし');
+    assert.equal(error.failures[0], 'openrouter: APIキーなし');
+    assert.equal(error.failures[1], 'deepseek: APIキーなし');
+    assert.equal(error.failures[2], 'gsk: APIキーなし');
     return true;
   });
 });
@@ -459,7 +457,7 @@ test('DeepSeek Search は count 8 で問い合わせ、スコア降順に整形�
   assert.ok(result.elapsedMs >= 0);
 });
 
-test('auto は gemini→groq→openrouter→deepseek→gsk、空 results もフォールバックする', async () => {
+test('auto は openrouter→deepseek→gsk→groq→gemini、空 results もフォールバックする', async () => {
   const calls = [];
   const result = await search('q', {
     env: {}, homeDir: isolatedHome,
@@ -467,7 +465,7 @@ test('auto は gemini→groq→openrouter→deepseek→gsk、空 results もフ�
     fetchImpl: async url => { calls.push(new URL(url).hostname); return url.includes('deepseek') ? response({ results: [] }) : response({}, 403); },
     spawnImpl: fakeSpawnWith({ stdout: gskSuccess }, 0, () => calls.push('gsk')),
   });
-  assert.deepEqual(calls, ['generativelanguage.googleapis.com', 'api.groq.com', 'openrouter.ai', 'api.deepseek.com', 'gsk']);
+  assert.deepEqual(calls, ['openrouter.ai', 'api.deepseek.com', 'gsk']);
   assert.equal(result.provider, 'gsk');
   assert.match(result.failures.at(-1), /results が空/);
 });

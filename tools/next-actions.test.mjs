@@ -107,10 +107,10 @@ function ghPrStates(prs, states, stateQueries, stateError) {
   return (file, args, opts, cb) => {
     assert.equal(file, 'gh');
     assert.equal(opts.encoding, 'utf8');
-    if (args.includes('--state')) {
+    if (args[0] === 'pr' && args[1] === 'view') {
       stateQueries.push(args);
       if (stateError) return cb(stateError);
-      return cb(null, JSON.stringify(Object.entries(states).map(([number, state]) => ({ number: Number(number), state }))));
+      return cb(null, JSON.stringify({ state: states[args[2]] }));
     }
     assert.deepEqual(args, ['pr', 'list', '--repo', 'kimkon1011/orgiast-claude-rules', '--json', 'number,title,updatedAt,isDraft', '--limit', '30']);
     cb(null, JSON.stringify(prs));
@@ -130,7 +130,7 @@ test('MERGEDのPRを参照するLLMアクションは除外される', async () 
   assert.doesNotMatch(result.body, /297/);
   assert.doesNotMatch(fs.readFileSync(result.outputFile, 'utf8'), /297/);
   assert.equal(stateQueries.length, 1);
-  assert.deepEqual(stateQueries[0], ['pr', 'list', '--repo', 'kimkon1011/orgiast-claude-rules', '--state', 'all', '--json', 'number,state', '--limit', '100']);
+  assert.deepEqual(stateQueries[0], ['pr', 'view', '297', '--repo', 'kimkon1011/orgiast-claude-rules', '--json', 'state']);
   assert.deepEqual(errors, ['next-actions: MERGED/CLOSED のPRを含む候補を1件除外: PR#297']);
 });
 
@@ -162,7 +162,7 @@ test('GitHub問い合わせ失敗時は全候補を残して理由をstderrへ1�
   });
   assert.deepEqual(result.actions, candidates);
   assert.equal(stateQueries.length, 1);
-  assert.deepEqual(errors, ['next-actions: PR状態を取得できないため候補を除外しません: gh unavailable auth required']);
+  assert.deepEqual(errors, ['next-actions: 変更依頼 #297 の状態を確認できませんでした（gh unavailable auth required）']);
 });
 
 test('全滅したら既定アクション1件を出す', async () => {

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { auditCommitments } from './autoreply-commitments.mjs';
 import fs from 'node:fs';
 import { latestWaitDeadline, waitPrefix } from './session-wait-title.mjs';
 import path from 'node:path';
@@ -142,6 +143,7 @@ export async function runSweep({ home = process.env.ORGIAST_HOME || os.homedir()
   const sessions = await collectSessions({ home, now });
   const text = formatDigest(sessions, label);
   if (!dryRun) {
+    await auditCommitments({ home, now, post });
     const day = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo' }).format(now);
     const item = await post(home, { kind: 'info', source: 'morning-session-sweep', from: label, text,
       dedupeKey: `morning-session-sweep:${label}:${day}`, refresh: true });

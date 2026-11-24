@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -115,6 +116,16 @@ export function runCodex(job, dir, stateDir) {
   try {return spawnSync(process.execPath,[path.join(here,'codex-do.mjs'),'--prompt-file',promptFile,'--cwd',dir,'--origin','unattended','--kind','implement','--timeout','1800'],{encoding:'utf8',timeout:1850000,windowsHide:true,maxBuffer:4*1024*1024});}
   finally {fs.rmSync(promptFile,{force:true});}
 }
+function issueCreationError(error, repo, gh) {
+  if (!error.message.includes('Could not resolve to a Repository')) return 'Issue化失敗: '+error.message;
+  let login = '';
+  try {
+    const result = gh(['api','user','-q','.login']);
+    if (!result.error && result.status===0) login = String(result.stdout ?? '').trim();
+  } catch {}
+  return `Issue化失敗: 反映先 ${repo} を実行アカウント${login ? ` ${login}` : ''} が参照できない（招待待ち）`;
+}
+
 export async function sweep({registryFile=path.join(here,'feedback-zero-registry.json'),home=process.env.ORGIAST_HOME || os.homedir(),config=loadConfig(home),dryRun=false,fetchImpl=fetch,gh=runGh,ensureIssue=ensureFeedbackIssue,gate=decideCodexGate,execute=runCodex,notify=notifyKim,done=doneNotify,now=Date.now(),maxJobs=8}={}) {
   const registry=readJson(registryFile,null);
   if(!registry || !Array.isArray(registry.apps) || new Set(registry.apps.map(e=>e.appName)).size!==registry.apps.length)throw new Error('registry 不正または重複');
@@ -162,7 +173,7 @@ export async function sweep({registryFile=path.join(here,'feedback-zero-registry
           if(dryRun){if(!repo && !issue)row.errors.push('反映先 repo 参照キー未設定');else row.queued++;continue;}
           if(!issue) {
             if(!repo){row.errors.push('反映先 repo 参照キー未設定');continue;}
-            try {issue=ensureIssue(item,repo,{home,gh});}catch(e){row.errors.push('Issue化失敗: '+e.message);continue;}
+            try {issue=ensureIssue(item,repo,{home,gh});}catch(e){row.errors.push(issueCreationError(e,repo,gh));continue;}
           }
           job ||= {item,issue,status:'queued',createdAt:new Date(now).toISOString()};
           state.jobs[key]=job;persist();
@@ -190,7 +201,7 @@ export async function sweep({registryFile=path.join(here,'feedback-zero-registry
       // Existing completion notifier uses Issue CLOSED and submitter identity, never executor exit 0.
       try {await done(['--recipient-only'],{home,fetchImpl});}catch {rows.push({appName:'完了報告',remaining:null,status:'未取得',errors:['done-notify失敗']});}
       const notified=readJson(path.join(stateDir,'feedback-done-notified.json'),{items:[]});
-      const unnotified=Object.values(state.jobs).filter(job=>job.status==='closed' && !notified.items.some(n=>n.message_id===job.issue.message_id));
+      const unnotified=Object.values(state.jobs).filter(job=>job.status==='closed' && !notified.items.some(n=>String(n.message_id)===String(job.issue.message_id)));
       if(unnotified.length)rows.push({appName:'完了報告',remaining:unnotified.length,status:'未取得',errors:['投稿者へのDM未達']});
     }
     const remaining=rows.reduce((n,r)=>n+(r.remaining || 0),0);
@@ -213,7 +224,7 @@ export function sweepExitCode(result) {
   if(!result.dryRun) {
     const {delivered,reason}=result.notification;
     // A clean empty sweep intentionally skips notification (none without a reason).
-    if(!['dm', 'session-inbox'].includes(delivered) && (result.remaining>0 || delivered!=='none' || reason)) return 1;
+    if(!isKimDelivered(result.notification) && (result.remaining>0 || delivered!=='none' || reason)) return 1;
   }
   return 0;
 }

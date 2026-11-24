@@ -13,6 +13,7 @@ import { keyserveSecret, requireKeyservePcId, keyserveAuthHeaders } from './keys
 import { CASE_ID, resumeText } from './lib/case-handoff.mjs';
 import { redactSecrets } from './fleet-agent.mjs';
 import { SELFCHECK_PROMPT } from './lib/fleet-selfcheck-prompt.mjs';
+import { sharedMemoryFreshness } from './lib/shared-memory-freshness.mjs';
 
 const absent = message => Object.assign(new Error(message), { noRoute: true });
 function optional(file) {
@@ -67,6 +68,11 @@ export async function runSelfcheck({ home = process.env.ORGIAST_HOME || os.homed
   for (const name of ['orgiast-mission.md', 'shared-memory/MEMORY.md', 'knowledge/production-sales/00_INDEX.md', 'skills/case/SKILL.md', 'skills/case-resume/SKILL.md']) {
     await check(`配布物 / ${name}`, () => bytes(path.join(base, name)));
   }
+  await check('shared-memory:stale', () => {
+    const freshness = sharedMemoryFreshness(home, now());
+    if (freshness.stale) throw Error(`共有メモリが ${freshness.detail}で止まっている。memory の記述より repo の git log を優先`);
+    return `generatedAt=${freshness.generatedAt} / age=${freshness.detail}`;
+  });
   await check('配布物 / CLAUDE.md 制作・営業ナレッジ', () => {
     const file = path.join(home, '.claude', 'CLAUDE.md');
     const line = fs.readFileSync(file, 'utf8').split(/\r?\n/).find(line => line.includes('制作・営業ナレッジ'));

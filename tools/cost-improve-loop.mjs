@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import { publishSeatPr } from './pr-land.mjs';
 import fs from 'node:fs';
 import { writeHandoff } from './next-session-rotate.mjs';
@@ -195,10 +196,23 @@ export function isOpusHeavy(row, localState) {
       if (match) {
         return parseFloat(match[1]) > 50;
       }
-      return true;
+      // %無しの model 名だけでは過多と判定しない（2026-11-17 以降の既定は Opus 監督）
+      return false;
     }
   }
   return false;
+}
+
+export function opusRatioFromMainModel(mainModel) {
+  if (typeof mainModel !== 'string') return null;
+  const lower = mainModel.toLowerCase();
+  if (!lower.includes('opus')) return null;
+  const match = lower.match(/(\d+(?:\.\d+)?)\s*%/);
+  if (match) {
+    const pct = parseFloat(match[1]);
+    return pct >= 0 && pct <= 100 ? pct / 100 : null;
+  }
+  return null;
 }
 
 export function parseCheapAiUseCount(text) {
@@ -354,7 +368,7 @@ export function evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis = 
           severity: 'warning',
           evidence: `Main model contains Opus (> 50% ratio)`,
           measuredAt,
-          actualValue: isSelf && typeof localState?.opusRatio === 'number' ? localState.opusRatio : 1,
+          actualValue: isSelf && typeof localState?.opusRatio === 'number' ? localState.opusRatio : opusRatioFromMainModel(row.mainModel) ?? 1,
           targetValue: 0.5,
           trusted: true
         });
@@ -1110,21 +1124,25 @@ export function readLedgerCounts(filePath, now) {
 
 // run-hidden.vbs がプライマリログをロックしているとき、退避先ログを探す。
 // naming は run-hidden.vbs と揃えている（cost-improve-loop.locked-<yyyymmdd>-<hhnnss>-<rand>.log）。
-export function resolveEffectiveLogPath(claudeDir) {
+export function resolveEffectiveLogPath(claudeDir, fsImpl = fs) {
   const logDir = path.join(claudeDir, 'logs');
   const primary = path.join(logDir, 'cost-improve-loop.log');
   try {
-    fs.mkdirSync(logDir, { recursive: true });
+    fsImpl.mkdirSync(logDir, { recursive: true });
     // プライマリが書き込み可能か試す
-    fs.appendFileSync(primary, '', 'utf8');
+    fsImpl.appendFileSync(primary, '', 'utf8');
     return primary;
   } catch { /* primary locked — fallback 探しへ */ }
   try {
-    const files = fs.readdirSync(logDir)
+    const files = fsImpl.readdirSync(logDir)
       .filter(f => /^cost-improve-loop\.locked-\d{8}-\d{6}-[a-zA-Z0-9]+\.log$/.test(f))
       .sort()
       .reverse();
-    if (files.length > 0) return path.join(logDir, files[0]);
+    for (const file of files) {
+      const candidate = path.join(logDir, file);
+      try { fsImpl.appendFileSync(candidate, '', 'utf8'); return candidate; }
+      catch { /* run-hidden may also hold the newest rotated log open */ }
+    }
   } catch { /* logDir 不在など */ }
   // 退避先が見つからなければ run-hidden 規約に従って自前で作る
   const ts = new Date();
@@ -1702,7 +1720,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   if (!dryRun && !noNotify && !io.noNotify) {
     try {
       const notifyResult = await (io.notifyKim ?? notifyKim)(reportText, { home, webhookFallback: false });
-      if (!notifyResult || !['dm', 'session-inbox'].includes(notifyResult.delivered)) {
+      if (!isKimDelivered(notifyResult)) {
         throw new Error(notifyResult?.reason || 'kim の DM に配信されませんでした');
       }
       delete finalState.lastNotifyError;
@@ -1732,7 +1750,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       if (await (io.shouldSendMonthlyReport || shouldSendMonthlyReport)({ home, now, claudeDir })) {
         const reportText = buildMonthlyReport({ home, now });
         const monthlyResult = await (io.notifyKim ?? notifyKim)(reportText, { home, webhookFallback: false });
-        if (['dm', 'session-inbox'].includes(monthlyResult?.delivered)) await (io.markMonthlyReportSent || markMonthlyReportSent)({ home, now, claudeDir });
+        if (isKimDelivered(monthlyResult)) await (io.markMonthlyReportSent || markMonthlyReportSent)({ home, now, claudeDir });
         console.log('月次レポートを kim へ DM 送信しました');
       }
     } catch (error) {

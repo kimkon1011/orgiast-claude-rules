@@ -209,6 +209,10 @@ test('日次TOP3: 担当外席で一度も届いていなくてもskip', () => {
   assert.doesNotMatch(actual.line, /🚨/);
 });
 
+test('日次TOP3: 担当外席で10日前の着地でもskip', () => {
+  assert.equal(evaluateTop3Delivery('2026-08-23', top3Now, false).status, 'skip');
+});
+
 test('日次TOP3: 担当席で一度も届いていなければ従来どおりnever', () => {
   assert.equal(evaluateTop3Delivery(null, top3Now, true).status, 'never');
 });

@@ -79,26 +79,8 @@ export async function hasSentReply(row, request) {
   const thread = await request(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=metadata`, { user: meta.mailbox, scope: 'https://www.googleapis.com/auth/gmail.readonly' });
   return (thread.messages || []).some(m => m.labelIds?.includes('SENT') && Number(m.internalDate) > Date.parse(row.detectedAt));
 }
-function backoffMs(count) {
-  const hours = count === 1 ? 1 : count === 2 ? 6 : 24;
-  return hours * 3_600_000;
-}
-async function notifyCalendar403({ home, state, persist, notifyKim, log = console.error }) {
-  if (!notifyKim || state.calendar403.notified) return;
-  // 通知が成功してから notified を立てる（失敗を握りつぶして二度と通知しない事故を防ぐ）
-  try { await notifyKim(home, state); state.calendar403.notified = true; persist(); }
-  catch (e) { log(`deadline-watch: kim-inbox への Calendar 403 通知に失敗しました: ${e.message}`); }
-}
-export async function syncCalendar(row, { config, state, request, persist = () => {}, log = console.error, home = '', notifyKim }) {
-  if (!config.calendar.enabled) return;
-  // 後方互換: 旧形式 state.calendarSync === false を calendar403 に変換
-  if (state.calendarSync === false) {
-    delete state.calendarSync;
-    state.calendar403 = { count: 3, until: Date.now() + 3_600_000, notified: false };
-    persist();
-  }
-  // 指数バックオフ: until が未来ならスキップ
-  if (state.calendar403?.until && state.calendar403.until > Date.now()) return;
+export async function syncCalendar(row, { config, state, request, persist = () => {}, log = console.error }) {
+  if (!config.calendar.enabled || state.calendarSync === false) return;
   const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(config.calendar.calendarId)}/events`;
   const opts = { user: 'kim@orgiast.jp', scope: 'https://www.googleapis.com/auth/calendar.events' };
   try {
@@ -108,8 +90,6 @@ export async function syncCalendar(row, { config, state, request, persist = () =
     const events = existing.items || [];
     if (closed(row) || !due || row.status === '候補') {
       for (const e of events) await request(`${base}/${encodeURIComponent(e.id)}`, { ...opts, method: 'DELETE' });
-      // 成功したら calendar403 を削除して復帰
-      if (state.calendar403) { delete state.calendar403; persist(); }
       return;
     }
     const end = new Date(Date.parse(due) + 86400000).toISOString().slice(0, 10);
@@ -121,28 +101,10 @@ export async function syncCalendar(row, { config, state, request, persist = () =
       try { await request(base, { ...opts, method: 'POST', body: { ...body, id } }); }
       catch (e) { if (e.status !== 409) throw e; await request(`${base}/${id}`, { ...opts, method: 'PATCH', body }); }
     }
-    // 成功: calendar403 を削除して自動復帰
-    if (state.calendar403) { delete state.calendar403; persist(); }
   } catch (e) {
     if (e.status !== 403) throw e;
-    state.calendar403 ??= { count: 0, notified: false };
-    state.calendar403.count += 1;
-    state.calendar403.until = Date.now() + backoffMs(state.calendar403.count);
-    persist();
-    const untilJst = new Date(state.calendar403.until).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
-    log(`deadline-watch: Calendar HTTP 403 (${state.calendar403.count}回目)、次回再試行: ${untilJst}`);
-    // 3回目以降で未通知なら kim-inbox へ 1 回だけ通知
-    if (state.calendar403.count >= 3) await notifyCalendar403({ home, state, persist, notifyKim, log });
+    state.calendarSync = false; persist(); log('deadline-watch: Calendar HTTP 403、以降の同期を停止しました');
   }
-}
-async function notifyKimDefault(home) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-calendar-'));
-  try {
-    const body = 'Calendar 同期が 403 で 3 回連続失敗しました。\nDWD scope `https://www.googleapis.com/auth/calendar.events` が許可されているか確認してください。\n許可済みなら何もしなくてよい（自動で再試行し続けます）。';
-    const file = path.join(dir, 'body.txt'); fs.writeFileSync(file, body, { mode: 0o600 });
-    await exec(process.execPath, [inboxScript, '--add', '--kind', 'ask', '--key', 'deadline-watch-calendar-403', '--source', 'deadline-watch', '--body-file', file],
-      { windowsHide: true, timeout: 60000, env: { ...process.env, ORGIAST_HOME: home } });
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 export async function manualOperation({ operation, id, until, note, ledger, home, today, config, notify = inboxAction, dryRun = false }) {
   if (operation === 'approve') {
@@ -203,7 +165,7 @@ export async function runWatch({ home, config, ledger, sheets, request, today, d
             else await ledger.patch(row.id, { lastNotified: today, notifyCount: Number(row.notifyCount || 0) + 1 });
           }
         }
-        await syncCalendar(row, { config, state, request, persist, log: stderr, home, notifyKim: notifyKimDefault });
+        await syncCalendar(row, { config, state, request, persist, log: stderr });
       }
     } catch (e) { errors.push({ id: row.id, error: e.message }); }
   }
@@ -235,12 +197,12 @@ export function parseArgs(argv) {
 }
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const home = deps.home || defaultHome(), stdout = deps.stdout || console.log, stderr = deps.stderr || console.error;
-  let args; const startedAt = new Date().toISOString(); let ok = false;
+  let args; const startedAt = new Date().toISOString(); let ok = false; let resultSummary = '';
   try {
     args = parseArgs(argv); const today = args.now || jstDate();
     if (!args.fixture && deps.skipSeatCheck !== true) {
-      const seat = seatCheck(home);
-      if (!seat.kim) { stdout(JSON.stringify({ skip: true, reason: 'deadline jobs run only on the seat with the kim DWD key', seat })); return 0; }
+      const seat = deps.seatCheck ? deps.seatCheck(home) : seatCheck(home);
+      if (!seat.kim) { resultSummary = '鍵なし席のためスキップ'; stdout(JSON.stringify({ skip: true, reason: resultSummary, seat })); ok = true; return 0; }
     }
     const fixture = args.fixture ? readJson(args.fixture) : null;
     if (args.fixture && (!fixture || !Array.isArray(fixture.rows))) throw new Error('fixture の台帳JSONがありません、または形式が不正です');
@@ -264,12 +226,15 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       stdout(JSON.stringify(result, null, 2)); return result;
     };
     const result = args['dry-run'] || args.digest ? await work() : await withLedgerLock(home, work);
-    ok = !result.errors.length; return ok ? 0 : 1;
-  } catch (e) { stderr(`deadline-watch: ${e.message}`); return 1; }
+    ok = !result.errors.length;
+    if (result.errors.length) resultSummary = `期限追跡エラー: ${result.errors.map(e => e.id || e.message || String(e)).join(', ')}`;
+    else resultSummary = '期限追跡完了';
+    return ok ? 0 : 1;
+  } catch (e) { resultSummary = `期限追跡エラー: ${e.message}`; stderr(`deadline-watch: ${e.message}`); return 1; }
   finally {
     if (args && !args['dry-run'] && !args.digest) {
-      await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineWatch', startedAt, finishedAt: new Date().toISOString(), ok, summary: ok ? '期限追跡完了' : '鍵なし席のためスキップ', cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
-      try { const log = path.join(home, '.claude/logs/deadline-watch-app.log'); fs.mkdirSync(path.dirname(log), { recursive: true }); fs.appendFileSync(log, `${new Date().toISOString()} deadline-watch ${ok ? 'ok' : 'skipped'}\n`); } catch (e) { stderr(`deadline-watch: log write failed (${e.code || e.message})`); }
+      await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineWatch', startedAt, finishedAt: new Date().toISOString(), ok, summary: resultSummary || (ok ? '期限追跡完了' : '期限追跡エラー'), cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
+      try { const log = path.join(home, '.claude/logs/deadline-watch-app.log'); fs.mkdirSync(path.dirname(log), { recursive: true }); fs.appendFileSync(log, `${new Date().toISOString()} deadline-watch ${ok ? 'ok' : (resultSummary || 'error')}\n`); } catch (e) { stderr(`deadline-watch: log write failed (${e.code || e.message})`); }
     }
   }
 }

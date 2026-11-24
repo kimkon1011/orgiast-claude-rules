@@ -51,7 +51,7 @@ export async function deliverHumanProgress(home, row, { io = {} } = {}) {
     try { (io.markKimInboxSeen ?? markSeen)(home, old.id); } catch { /* best-effort */ }
   }
   const dedupeKey = previous?.dedupeKey?.endsWith(':' + fingerprint) ? previous.dedupeKey : `${source}:${previous?.id || 'initial'}:${fingerprint}`;
-  const item = await (io.addKimInboxItem ?? addItem)(home, { kind, source, text: humanProgressText(row), dedupeKey });
+  const item = await (io.addKimInboxItem ?? addItem)(home, { kind, forceKind: true, source, text: humanProgressText(row), dedupeKey });
   const saved = io.listKimInboxItems ? io.listKimInboxItems(home).find(saved => saved.id === item?.id) : readInboxItem(home, item?.id);
   if (!saved || saved.kind !== kind || saved.dedupeKey !== dedupeKey || !saved.text || saved.text !== item.text || saved.forwardError) throw new Error('kim-inbox progress read-back failed');
   return { delivered: 'session-inbox', channel: 'kim-inbox', ok: true, id: saved.id };

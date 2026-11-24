@@ -108,6 +108,11 @@ const INBOX_RELAY = /(?:【受信箱】|起きたこと[:：]|判断してほし
 // 委譲を起動したと明記した語が一致位置の手前 120 字以内にある場合だけ採用しない。
 // （委譲の報告が無いまま待つ形 — 2026-10-21 の 7 ターン言い換え待機 — は従来どおり検出する）
 const DELEGATION_STARTED = /(?:codex-do|cheap-code|llm-ask|指示書を(?:作成|書|渡|用意)|(?:Codex|Gemini|DeepSeek|Groq|OpenRouter|Mistral|サブエージェント)[ \t]*(?:に|へ|を)[^。\n]{0,24}(?:委譲|依頼|渡し|投げ|起動|実行させ)|`[a-z0-9]{6,12}`[^。\n]{0,80}(?:完了待ち|完了後|push|CI[^。\n]{0,20}結果を待|結果を待って))/i;
+// 委譲の報告と待機文が表やフッターで離れる中間報告もある。同じメッセージに
+// 「実行中」と「当セッションで着地まで進める／まだ閉じない」の両方がある場合に限り、
+// 未委譲の放置ではなく同一セッション内の一時待機とみなす。
+const ACTIVE_DELEGATION_CONTEXT = /(?:Codex|委譲)[^\n]{0,80}(?:作成中|実行中|監視中)/i;
+const SAME_SESSION_CONTINUATION = /(?:当|同一|この)セッションで[^。\n]{0,60}(?:進め|完了|着地)|このセッション[:：][^\n]{0,80}まだ閉じない/;
 // 2026-11-18 実測（e88a780c / 2026-11-17T04:04:04.337Z）: 3行フッターだけのメッセージ
 // 「次に kim がすること: なし（Codex の生成完了を待っています）」が W に当たっていた。
 // 人の作業がゼロ（なし）で、待つ相手が自動レーンなら、委譲済みの正当な待機なので除外する。
@@ -163,6 +168,9 @@ const W  = {
       if (REPLY_WAIT.test(match[0]) && EXTERNAL_WAIT_SUBJECT.test(text.slice(Math.max(0, match.index - 60), match.index))) continue;
       if (INBOX_RELAY.test(text.slice(Math.max(0, match.index - 200), match.index))) continue;
       if (DELEGATION_STARTED.test(text.slice(Math.max(0, match.index - 120), match.index + match[0].length + 120))) continue;
+      if (ACTIVE_DELEGATION_CONTEXT.test(text) && SAME_SESSION_CONTINUATION.test(text)) continue;
+      if (/CI\s*監視の完了待ち/.test(match[0])
+          && /PR[^\n]{0,500}(?:作成|auto-merge[^\n]{0,30}(?:有効|設定))/.test(text)) continue;
       if (LANE_NAME.test(text.slice(Math.max(0, match.index - 60), match.index + match[0].length + 60)) && HANDOFF_NONE_LINE.test(text.slice(Math.max(0, match.index - 200), match.index))) continue;
       if (DATA_WAIT_RE.test(match[0]) && EXTERNAL_WAIT_SUBJECT.test(text.slice(Math.max(0, match.index - 40), match.index))) continue;
       return match;
@@ -183,7 +191,13 @@ const HANDOFF_EMPTY = /^[\s*_`]*(?:なし|ありません|ありません。|特
 const LANDING_DEFERRAL = /(マージ|着地|取り込|merge)/i;
 const LANDING_TARGET = /\b[0-9a-f]{7,40}\b|[\w.-]+\/[\w.-]+/;
 const LANDING_APPROVAL = /(承認|判断|決め|指示|ください|返す|据え置き|待ち)/;
-const REQUIRED_APPROVAL_CONTEXT = /(?:automerge[^。\n]{0,30}(?:ラベル)?(?:が|は)?(?:無い|ない|無し)|(?:全PC|全アカウント)[^。\n]{0,40}(?:配られ|配布され)|draft(?:\s*PR)?[^。\n]{0,50}(?:(?:merge|マージ)[^。\n]{0,20})?(?:拒否|できない|不可))/i;
+const REQUIRED_APPROVAL_CONTEXT = /(?:automerge[^。\n]{0,30}(?:ラベル)?(?:が|は)?(?:無い|ない|無し)|(?:全PC|全アカウント)[^。\n]{0,40}(?:配られ|配布され)|draft(?:\s*PR)?[^。\n]{0,80}(?:(?:merge|マージ)[^。\n]{0,20})?(?:拒否|できない|不可|マージしない|解除してまで)|無人セッション[^。\n]{0,100}(?:本番反映|マージ)[^。\n]{0,50}(?:禁止|承認待ち|保留))/i;
+function hasRequiredApprovalContext(text) {
+  return REQUIRED_APPROVAL_CONTEXT.test(text)
+    || (/draft/i.test(text) && /マージしない/.test(text))
+    || (/本番反映/.test(text) && /(?:禁止|承認待ち)/.test(text))
+    || (/無人セッション/.test(text) && /本番反映[^。\n]{0,40}禁止/.test(text));
+}
 export function isLandingDeferral(value) {
   const text = String(value ?? '');
   return LANDING_DEFERRAL.test(text) && LANDING_TARGET.test(text) && LANDING_APPROVAL.test(text);
@@ -199,7 +213,7 @@ const P3 = {
       // A final report can put the approval constraint in section 1 and the
       // handoff in section 3, well beyond a fixed character window.
       const context = text;
-      if (!isAuditCitation(text, match.index) && !REQUIRED_APPROVAL_CONTEXT.test(context) && !NON_BLOCKING_ANSWER.test(context) && !HANDOFF_EMPTY.test(match[1]) && (new RegExp(FIX).test(match[1]) || isLandingDeferral(match[1]))) return match;
+      if (!isAuditCitation(text, match.index) && !hasRequiredApprovalContext(context) && !NON_BLOCKING_ANSWER.test(context) && !HANDOFF_EMPTY.test(match[1]) && (new RegExp(FIX).test(match[1]) || isLandingDeferral(match[1]))) return match;
     }
     return null;
   }
@@ -209,7 +223,7 @@ const P4 = {
     for (const match of text.matchAll(new RegExp(ASK_PERMISSION, 'g'))) {
       const context = text.slice(Math.max(0, match.index - 60), match.index + match[0].length + 60);
       const approvalContext = text;
-      if (!isAuditCitation(text, match.index) && !REQUIRED_APPROVAL_CONTEXT.test(approvalContext) && ASK_CONTEXT.test(context)) return match;
+      if (!isAuditCitation(text, match.index) && !hasRequiredApprovalContext(approvalContext) && ASK_CONTEXT.test(context)) return match;
     }
     return null;
   }
@@ -273,6 +287,12 @@ function assistantTextImmediatelyBefore(transcript, rowTs, maxAgeMs = 2 * 60 * 1
   const messages = assistantTexts(transcript, { before: rowTime });
   const latest = messages.at(-1);
   return latest && rowTime - latest.at <= maxAgeMs ? latest.text : null;
+}
+
+function assistantTextContaining(transcript, fragment) {
+  if (!fragment) return null;
+  const messages = assistantTexts(transcript);
+  return messages.findLast(message => message.text.includes(fragment))?.text ?? null;
 }
 
 function listTranscripts(projectsDir, archiveDir) {
@@ -421,7 +441,8 @@ export function scan({ home = os.homedir(), since = DEFAULT_SINCE, until = null,
           const sessionId = String(entry.sessionId ?? '');
           if (!transcriptCache.has(sessionId)) transcriptCache.set(sessionId, findTranscript(projectsDir, sessionId, archiveDir));
           const transcript = transcriptCache.get(sessionId);
-          const fullMessage = transcript && assistantTextImmediatelyBefore(transcript, entry.ts);
+          const fullMessage = transcript && (assistantTextImmediatelyBefore(transcript, entry.ts)
+            || assistantTextContaining(transcript, found.match[0]));
           // The ledger excerpt is truncated around the match. Re-evaluate P3 on
           // the originating assistant message so approval constraints earlier
           // in the same message (draft / all-PC rollout / no automerge) survive.

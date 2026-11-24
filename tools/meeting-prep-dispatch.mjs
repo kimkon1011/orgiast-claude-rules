@@ -1182,11 +1182,33 @@ export async function collectRun({ home, state, fleet, google, config, checkpoin
     google, checkpoint, home, now, runLocal, send: send || sender(home, path.join(home, '.claude/meeting-prep')),
     template: template ?? fs.readFileSync(path.join(ROOT, 'templates/meeting-prep-prompt.md'), 'utf8') }));
   for (const batch of pending.filter(b => ['failed', 'expired'].includes(b.status) && b.jobs.some(j => state.failed?.[jobStateKey(j)]?.batchId === b.id))) {
+    // Filter out batches where all failed jobs have already been finally reported
+    const unreportedFailures = batch.jobs.filter(j => {
+      const failure = state.failed?.[jobStateKey(j)];
+      return failure && !failure.finalReportedAt;
+    });
+    
+    if (unreportedFailures.length === 0) {
+      // All failures in this batch have already been reported, skip processing
+      continue;
+    }
+
     errors.push({ batchId: batch.id, error: batch.error || batch.status });
+    
     for (const job of batch.jobs) {
       if (calendarError) continue;
-      try { await upsertPreparation(google, state.calendarId, job, { status: 'failed', summary: batch.error || batch.status }); }
-      catch (e) { errors.push({ key: job.key, error: e.message }); }
+      
+      const failure = state.failed?.[jobStateKey(job)];
+      if (failure && !failure.finalReportedAt) {
+        // Mark this failure as finally reported
+        failure.finalReportedAt = now;
+      }
+      
+      try { 
+        await upsertPreparation(google, state.calendarId, job, { status: 'failed', summary: batch.error || batch.status }); 
+      } catch (e) { 
+        errors.push({ key: job.key, error: e.message }); 
+      }
     }
   }
   return { errors, results: answers.length, exitCode: errors.length ? 1 : 0 };

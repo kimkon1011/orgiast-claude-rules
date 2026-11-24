@@ -5,6 +5,12 @@
       {
         "matcher": "*",
         "type": "command",
+        "command": "node \"${repo}/tools/shared-memory-context.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
         "command": "node \"${repo}/tools/lost-prompt-context.mjs\"",
         "timeout": 5
       },

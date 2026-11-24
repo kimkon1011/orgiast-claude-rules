@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -240,7 +241,7 @@ export async function runMain({ args = process.argv.slice(2), home = process.env
   else {
     try {
       const result = await notifyImpl(report, { home, fetchImpl });
-      sent = ['dm', 'session-inbox'].includes(result?.delivered) || result?.delivered === 'webhook';
+      sent = isKimDelivered(result, { extra: ['webhook'] });
       if (!sent) io.stderr(`feedback-100oku: Discord 送信失敗: ${oneLine(result?.reason || '送信されませんでした')}`);
       if (options.json) io.stdout(JSON.stringify({ ok: true, sent, report, health: health.results }));
     } catch (error) { io.stderr(`feedback-100oku: Discord 送信失敗: ${oneLine(error?.message || error)}`); }

@@ -52,6 +52,21 @@ test('draft dispatch encodes UTF-8 body and accepts Drive attachments', async t 
   assert.equal(existsSync(f.downloaded()), false);
 });
 
+test('ブース件名は佐藤さんをCCへ自動追加しJSONで報告する', async t => {
+  const f = fixture(t);
+  const argv = writeArgs(f);
+  argv[argv.indexOf('件名')] = '展示会ブースのご提案';
+  assert.equal(await f.run(argv), 0);
+  assert.ok(f.calls[0].args.includes('cc=satou@orgiast.jp'));
+  assert.equal(JSON.parse(f.output()).boothCcAdded, 'satou@orgiast.jp');
+});
+
+test('--booth は非ブース件名でも佐藤さんをCCへ自動追加する', async t => {
+  const f = fixture(t);
+  assert.equal(await f.run([...writeArgs(f), '--booth']), 0);
+  assert.ok(f.calls[0].args.includes('cc=satou@orgiast.jp'));
+});
+
 test('send preview exits 64 before any gh call; --yes dispatches send', async t => {
   const f = fixture(t);
   assert.equal(await f.run([...writeArgs(f, 'send'), '--attach-drive', 'a,b']), 64);

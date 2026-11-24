@@ -127,6 +127,15 @@ try {
     } else { Write-NightlyLog 'hide-task-windows' 'skip:script missing' }
 
     Write-NightlyLog 'node確認' 'ok'
+    # PR 着地後に不要になった判断待ち ask を日次で回収する。
+    $inboxAutoclose = Join-Path $PSScriptRoot 'kim-inbox-autoclose.mjs'
+    if (Test-Path -LiteralPath $inboxAutoclose -PathType Leaf) {
+        try {
+            $inboxAutocloseOutput = @(& $node.Source $inboxAutoclose --apply 2>&1)
+            $inboxAutocloseExit = $LASTEXITCODE
+            Write-NightlyStepResult 'kim-inbox-autoclose' $inboxAutocloseExit $inboxAutocloseOutput
+        } catch { Write-NightlyLog 'kim-inbox-autoclose' ('error:' + $_.Exception.Message) }
+    } else { Write-NightlyLog 'kim-inbox-autoclose' 'skip:script missing' }
     try {
         $rotationOutput = @(& $node.Source (Join-Path $PSScriptRoot 'next-session-rotate.mjs') 2>&1)
         $rotationExit = $LASTEXITCODE

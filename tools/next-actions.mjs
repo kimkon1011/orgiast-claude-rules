@@ -124,37 +124,85 @@ function fallbackActions({ p1, errors, prs, todo }) {
   return choices.slice(0, 3);
 }
 
-async function filterStalePrActions(actions, execImpl, errorLog) {
-  const actionNumbers = actions.map((action) => new Set(
-    [...Object.values(action).join(' ').matchAll(/PR#(\d+)/g)].map((match) => Number(match[1]))
-  ));
-  const candidateNumbers = new Set(actionNumbers.flatMap((numbers) => [...numbers]));
-  if (!candidateNumbers.size) return actions;
+/**
+ * アクションオブジェクトから PR 番号を抽出する。
+ * 全フィールドから PR#<数字> を、first_step から gh pr <サブコマンド> <数字> を検出する。
+ */
+function extractPrNumbers(action) {
+  const text = Object.values(action).join(' ');
+  const fromPrHash = [...text.matchAll(/PR#(\d+)/g)].map((m) => Number(m[1]));
+  const fromGhPr = [...(action.first_step || '').matchAll(/gh pr \w+ (\d+)/g)].map((m) => Number(m[1]));
+  return new Set([...fromPrHash, ...fromGhPr]);
+}
 
-  let states;
+/**
+ * 単一PRの状態を gh pr view で取得する。10秒でタイムアウトする。
+ * @returns {Promise<string>} state（'OPEN'/'MERGED'/'CLOSED' 等）または 'FETCH_FAILED'
+ */
+async function prStateView(execImpl, number) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
   try {
-    const raw = await runExec(execImpl, 'gh', [
-      'pr', 'list', '--repo', 'kimkon1011/orgiast-claude-rules', '--state', 'all',
-      '--json', 'number,state', '--limit', '100'
-    ]);
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) throw new Error('PR一覧の応答が配列ではありません');
-    states = new Map(parsed.map((pr) => [Number(pr.number), pr.state]));
-  } catch (error) {
-    errorLog(`next-actions: PR状態を取得できないため候補を除外しません: ${String(error?.message || error).replace(/\s+/g, ' ').trim()}`);
-    return actions;
+    const raw = await new Promise((resolve, reject) => {
+      execImpl('gh', ['pr', 'view', String(number), '--repo', 'kimkon1011/orgiast-claude-rules', '--json', 'state'],
+        { encoding: 'utf8', signal: controller.signal },
+        (error, stdout) => error ? reject(error) : resolve(String(stdout || ''))
+      );
+    });
+    return JSON.parse(raw)?.state;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * 推奨アクションから、MERGED または CLOSED の PR を含むものを除外する。
+ * PR の状態取得に失敗した場合はそのアクションを残し、理由を標準エラーへ1行出す。
+ * 同じ番号への gh 呼び出しは1回だけ行う。
+ */
+async function filterStalePrActions(actions, execImpl, errorLog) {
+  const actionNumbers = actions.map(extractPrNumbers);
+  const allNumbers = new Set(actionNumbers.flatMap((numbers) => [...numbers]));
+  if (!allNumbers.size) return actions;
+
+  const states = new Map();   // number -> 'OPEN'|'MERGED'|'CLOSED'|'FETCH_FAILED'
+  const fetchErrors = new Map(); // number -> error message
+
+  for (const number of allNumbers) {
+    try {
+      const state = await prStateView(execImpl, number);
+      states.set(number, state);
+    } catch (error) {
+      states.set(number, 'FETCH_FAILED');
+      fetchErrors.set(number, String(error?.message || error).replace(/\s+/g, ' ').trim());
+    }
   }
 
   const excludedNumbers = new Set();
-  const filtered = actions.filter((_action, index) => {
-    const closed = [...actionNumbers[index]].filter((number) => ['MERGED', 'CLOSED'].includes(states.get(number)));
-    for (const number of closed) excludedNumbers.add(number);
-    return closed.length === 0;
-  });
-  if (excludedNumbers.size) {
-    errorLog(`next-actions: MERGED/CLOSED のPRを含む候補を${actions.length - filtered.length}件除外: ${[...excludedNumbers].sort((a, b) => a - b).map((number) => `PR#${number}`).join(', ')}`);
+  const result = actions.map((action, i) => {
+    const numbers = [...actionNumbers[i]];
+    const mergedOrClosed = numbers.filter((n) => ['MERGED', 'CLOSED'].includes(states.get(n)));
+
+    if (mergedOrClosed.length > 0) {
+      for (const n of mergedOrClosed) excludedNumbers.add(n);
+      return null; // 除外
+    }
+
+    return action;
+  }).filter(Boolean);
+
+  if (fetchErrors.size) {
+    const reasons = [...fetchErrors]
+      .sort(([a], [b]) => a - b)
+      .map(([number, reason]) => `変更依頼 #${number} の状態を確認できませんでした（${reason || '不明なエラー'}）`)
+      .join(' / ');
+    errorLog(`next-actions: ${reasons}`);
   }
-  return filtered;
+
+  if (excludedNumbers.size) {
+    errorLog(`next-actions: MERGED/CLOSED のPRを含む候補を${actions.length - result.length}件除外: ${[...excludedNumbers].sort((a, b) => a - b).map((n) => `PR#${n}`).join(', ')}`);
+  }
+  return result;
 }
 
 function isNightlyError(line) {
@@ -201,28 +249,65 @@ async function filterBackupActions(actions, execImpl, log, now = new Date()) {
   return actions;
 }
 
+const SYSTEM_PATTERNS = [
+  ['backup', /(?:backup|バックアップ|rclone|ClaudeDailyDriveBackup|DailyDriveBackup)/i],
+  ['mail-relay', /(?:event-shop-mail-relay|mail[ -]?relay|メール中継)/i],
+  ['pr', /(?:PR\s*#?\d+|pull request|プルリク|PR(?:の|を|へ|マージ|確認))/i],
+];
+
+function systemsIn(text) {
+  return new Set(SYSTEM_PATTERNS.filter(([, pattern]) => pattern.test(String(text || ''))).map(([name]) => name));
+}
+
+function windowsAbsolutePaths(text) {
+  return [...String(text || '').matchAll(/[A-Za-z]:\\[^\s、。]+/g)].map((match) => match[0].replace(/[)）\]】"']+$/, ''));
+}
+
 /**
- * first_step がそのタスクに無関係な絶対パスを含む場合（LLM の文脈混入）、
- * first_step を空にする。
+ * 推奨アクション内の対象システムの不一致と、first_step の絶対パス実在性を検算する。
+ * LLM は使わず、既知システムの語彙とパスから決定的に判定する。
  */
+export function verifyActionGrounding(action, options = {}) {
+  const existsSync = options.existsSync || fs.existsSync;
+  const titleSystems = systemsIn(action?.title);
+  const whySystems = systemsIn(action?.why);
+  const stepSystems = systemsIn(action?.first_step);
+  const tagSystems = systemsIn([action?.source, action?.tag, action?.tags].flat().filter(Boolean).join(' '));
+  const issues = [];
+  const intersection = (left, right) => [...left].some((value) => right.has(value));
+
+  if (titleSystems.size && whySystems.size && !intersection(titleSystems, whySystems)) {
+    issues.push(`title の対象（${[...titleSystems].join(', ')}）と why の対象（${[...whySystems].join(', ')}）が不一致`);
+  }
+  const statedSystems = new Set([...titleSystems, ...whySystems, ...tagSystems]);
+  if (stepSystems.size && statedSystems.size && !intersection(stepSystems, statedSystems)) {
+    issues.push(`first_step の対象（${[...stepSystems].join(', ')}）が title / why の対象と不一致`);
+  }
+  for (const absolutePath of windowsAbsolutePaths(action?.first_step)) {
+    if (!existsSync(absolutePath)) issues.push(`first_step の絶対パスが存在しない: ${absolutePath}`);
+  }
+  return { ok: issues.length === 0, issues };
+}
+
+export function markUngroundedActions(actions, options = {}) {
+  return actions.map((action) => {
+    const verification = verifyActionGrounding(action, options);
+    if (verification.ok) return action;
+    const warning = `【裏取り未済】${verification.issues.join(' / ')}`;
+    return { ...action, why: warning, first_step: warning };
+  });
+}
+
 function sanitizeFirstStep(actions) {
-  return actions.map((a) => {
-    const step = a.first_step || '';
-    // Windows 絶対パス (X:\...) を検出
-    const driveMatch = step.match(/([A-Za-z]):\\/);
-    if (!driveMatch) return a;
-    // パス文字列を抽出（次の空白まで）
-    const pathStart = step.indexOf(driveMatch[0]);
-    const afterPath = step.slice(pathStart).match(/\s/);
-    const fullPath = afterPath ? step.slice(pathStart, pathStart + afterPath.index) : step.slice(pathStart);
-    // パスのセグメント（ドライブレター以外）を抽出
-    const segments = fullPath.split(/[\\/]/).filter((s) => s.length > 0 && !/^[A-Za-z]:$/.test(s));
-    const title = (a.title || '').toLowerCase();
-    const hasMatch = segments.some((seg) => title.includes(seg.toLowerCase()));
-    if (!hasMatch) {
-      return { ...a, first_step: '' };
-    }
-    return a;
+  return actions.map((action) => {
+    const step = action.first_step || '';
+    const [absolutePath] = windowsAbsolutePaths(step);
+    if (!absolutePath) return action;
+    const segments = absolutePath.split(/[\\/]/).filter((segment) => segment && !/^[A-Za-z]:$/.test(segment));
+    const title = String(action.title || '').toLowerCase();
+    return segments.some((segment) => title.includes(segment.toLowerCase()))
+      ? action
+      : { ...action, first_step: '' };
   });
 }
 
@@ -236,7 +321,10 @@ export function replaceNextActionsSection(existing, body) {
 
 function render(actions, now) {
   const stamp = now.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
-  const items = actions.map((a, i) => `${i + 1}. ${a.title} [${a.source}]\n   - why: ${a.why}\n   - first_step: ${a.first_step}`).join('\n');
+  const items = actions.map((a, i) => {
+    const noteLine = a.note ? `\n   - note: ${a.note}` : '';
+    return `${i + 1}. ${a.title} [${a.source}]\n   - why: ${a.why}\n   - first_step: ${a.first_step}${noteLine}`;
+  }).join('\n');
   return `## 明日の推奨アクション（${stamp}）\n\n${items}\n\nこの節は夜間に自動生成。古い場合は \`node tools/next-actions.mjs\` で再生成`;
 }
 
@@ -271,6 +359,9 @@ export async function runNextActions(options = {}) {
   actions = await filterStalePrActions(actions, execImpl, errorLog);
   actions = await filterBackupActions(actions, execImpl, log, now);
   actions = sanitizeFirstStep(actions);
+  // 生成結果では CI ホストに存在しない別PCの絶対パスを偽陽性にしない。
+  // パス実在性が必要な呼び出し元は verifyActionGrounding の existsSync で検証する。
+  actions = markUngroundedActions(actions, { existsSync: () => true });
   if (!actions.length) {
     actions = [{
       title: '新しい依頼と未処理事項を確認',

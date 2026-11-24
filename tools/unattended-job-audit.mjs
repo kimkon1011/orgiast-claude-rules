@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { listScheduledTaskDetails, startScheduledTask, enableScheduledTask } from './lib/scheduled-task.mjs';
+import { listScheduledTaskDetails, startScheduledTask, enableScheduledTask, taskResultIsNonFailure } from './lib/scheduled-task.mjs';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyKim } from './notify-kim.mjs';
@@ -15,7 +15,7 @@ const HOUR = 3600000, DAY = 24 * HOUR;
 const homeDefault = () => process.env.ORGIAST_HOME || os.homedir();
 const read = (file, fallback) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
 const key = name => String(name).replace(/^\\/, '').toLowerCase();
-const SUCCESS_RESULTS = [0, 267009, 267011, 267014];
+const nonFailure = task => taskResultIsNonFailure(task.lastTaskResult, task) || Number(task.lastTaskResult) === 267014;
 export const stamp = value => {
   if (typeof value === 'number') return value;
   const text = String(value ?? '').trim();
@@ -65,7 +65,7 @@ export function auditTasks(tasks, overrides = {}, now = Date.now(), { required =
     if (!(maxAgeHours > 0)) continue;
     const last = stamp(task.lastRunTime);
     if (['Ready', 'Running'].includes(task.state) && (!Number.isFinite(last) || new Date(last).getUTCFullYear() <= 1999 || +now - last > maxAgeHours * HOUR)) add('missed');
-    if (task.lastTaskResult != null && !SUCCESS_RESULTS.includes(Number(task.lastTaskResult))) add('failed');
+    if (task.lastTaskResult != null && !nonFailure(task)) add('failed');
     for (const artifact of override.artifacts || []) {
       const mtime = artifactMtimes[artifact];
       if (!Number.isFinite(mtime) || +now - mtime > maxAgeHours * HOUR) add('artifact_stale', { artifact });
@@ -84,7 +84,7 @@ export function unresolvedTasks(tasks, findings, state, now = Date.now(), { requ
     if (task && task.state === 'Disabled' && !requiredSet.has(key(name))) return [];
     const stillBad = findings.some(f => key(f.name) === key(name));
     const ranAfterHeal = task && stamp(task.lastRunTime) > stamp(heal.at);
-    const healthyNow = task && task.state !== 'Disabled' && !stillBad && SUCCESS_RESULTS.includes(Number(task.lastTaskResult));
+    const healthyNow = task && task.state !== 'Disabled' && !stillBad && nonFailure(task);
     return !task || stillBad || !(ranAfterHeal || healthyNow)
       ? [{ name, kind: 'unresolved', reason: heal.kind, at: heal.at }] : [];
   });
@@ -131,7 +131,8 @@ export async function notifyUnresolved(body, { home, notify = notifyKim, spawnIm
 
 export async function runAudit({ home = homeDefault(), platform = process.platform, now = Date.now(), dryRun = false,
   listTasks = listScheduledTaskDetails, overrides, required, notify = notifyUnresolved,
-  start = startScheduledTask, enable = enableScheduledTask, spawnImpl = spawn } = {}) {
+  start = startScheduledTask, enable = enableScheduledTask, spawnImpl = spawn,
+  recheckDelayMs = 90000, recheckAttempts = 2, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   if (platform !== 'win32') return { skip: 'unsupported platform', findings: [], unresolved: [], lines: ['skip: unsupported platform'] };
   const root = path.join(home, '.claude'), stateFile = path.join(root, 'unattended-job-audit-state.json');
   let locked = false;
@@ -159,6 +160,23 @@ export async function runAudit({ home = homeDefault(), platform = process.platfo
     const unresolved = unresolvedTasks(tasks, findings, state, now, { required });
     for (const name of Object.keys(state.heals || {})) if (!unresolved.some(f => f.name === name) && +now > stamp(state.heals[name].at)) { state.heals[name].resolved = true; delete state.notified[name]; }
     const heals = dryRun ? [] : await healTasks(findings, { startScheduledTask: start, enableScheduledTask: enable, runConverge: () => background([path.join(dir, 'setup.mjs'), '--converge'], { home, spawnImpl, platform }), state, now, save });
+    const recheckable = heals.filter(heal => !heal.error && !['missing_required', 'disabled_required'].includes(heal.kind));
+    for (let attempt = 0; recheckable.some(heal => !heal.recovered) && attempt < recheckAttempts; attempt++) {
+      await sleep(recheckDelayMs);
+      let current;
+      try { current = await listTasks(); } catch { break; }
+      for (const heal of recheckable) {
+        const currentTask = current.find(candidate => key(candidate.taskName) === key(heal.name));
+        const healedAt = state.heals[heal.name]?.at;
+        if (currentTask && stamp(currentTask.lastRunTime) > stamp(healedAt)
+          && nonFailure(currentTask) && currentTask.state !== 'Disabled') {
+          heal.recovered = true;
+          state.heals[heal.name].resolved = true;
+          delete state.notified[heal.name];
+          save();
+        }
+      }
+    }
     const lines = unresolved.map(f => `🚨 未修復: ${f.name}（${f.reason}）`);
     if (!dryRun) {
       for (const finding of unresolved) {
@@ -168,10 +186,11 @@ export async function runAudit({ home = homeDefault(), platform = process.platfo
       }
       save();
     }
-    lines.push(...heals.map(f => `🔧 再実行: ${f.name}（${f.kind}${f.error ? ` / ${f.error}` : ''}）`));
+    lines.push(...heals.map(f => f.recovered ? `✅ 回復: ${f.name}（${f.kind} → 再実行で成功）` : `🔧 再実行: ${f.name}（${f.kind}${f.error ? ` / ${f.error}` : ''}）`));
     for (const f of findings) if (!heals.some(h => h.name === f.name) && !unresolved.some(u => u.name === f.name)) lines.push(`⚠️ 異常: ${f.name}（${f.kind}）`);
     if (!lines.length) lines.push(`✅ 監査 ${tasks.length}件: 異常なし`);
-    if (!dryRun) fs.writeFileSync(path.join(root, 'unattended-job-audit-last.txt'), findings.length || unresolved.length ? lines.join('\n') : '');
+    const hasActiveFinding = findings.some(finding => !heals.some(heal => key(heal.name) === key(finding.name) && heal.recovered));
+    if (!dryRun) fs.writeFileSync(path.join(root, 'unattended-job-audit-last.txt'), hasActiveFinding || unresolved.length ? lines.join('\n') : '');
     return { count: tasks.length, findings, unresolved, heals, lines };
   } catch {
     const result = { error: '計測不能', findings: [], unresolved: [], lines: ['無人ジョブ監査: 計測不能'] };
@@ -208,7 +227,9 @@ export function launchAudit({ home = homeDefault(), now = Date.now(), intervalHo
 export async function main(argv = process.argv.slice(2), options = {}) {
   const result = await runAudit({ ...options, dryRun: argv.includes('--dry-run') });
   if (argv.includes('--json')) console.log(JSON.stringify(result));
-  else if (!argv.includes('--quiet') || result.skip || result.error || result.findings.length || result.unresolved.length) console.log(result.lines.join('\n'));
+  else if (!argv.includes('--quiet') || result.skip || result.error
+    || result.findings.some(finding => !result.heals?.some(heal => key(heal.name) === key(finding.name) && heal.recovered))
+    || result.unresolved.length) console.log(result.lines.join('\n'));
   return result;
 }
 if (isEntry(import.meta.url)) await main();

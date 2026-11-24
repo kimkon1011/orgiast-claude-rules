@@ -2,7 +2,7 @@
 // 既定は検出のみ。外部照会失敗は「未確認」として独立して報告する。
 import { publishSeatPr } from './pr-land.mjs';
 import fs from 'node:fs';
-import { listScheduledTasks } from './lib/scheduled-task.mjs';
+import { listScheduledTasks, taskResultIsNonFailure } from './lib/scheduled-task.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -18,6 +18,7 @@ import { classifyTaskKind } from './lib/task-kind.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DAY = 86400000;
 export const KINDS = ['uncommitted', 'open_pr', 'stale_branch', 'open_todo', 'failed_job', 'stalled_session', 'unverified_delegation'];
+export const FAILED_JOB_STALE_DAYS = 7;
 const hash = value => crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 20);
 const age = (t, now) => Math.max(0, (now - new Date(t).getTime()) / DAY);
 const read = file => fs.readFileSync(file, 'utf8');
@@ -84,13 +85,18 @@ export function detectFailedJob(rows, now = Date.now()) {
     if (!latest.has(key) || new Date(r.t) >= new Date(latest.get(key).t)) latest.set(key, r);
   }
   return [...latest].flatMap(([id, r]) => {
-    if (!Number.isFinite(new Date(r.t).getTime()) || r.running || r.status == null || Number(r.status) === 0 || ['ok', 'success', 'fallback', 'cooldown', 'deferred'].includes(String(r.status).toLowerCase()) || [267009, 267011].includes(Number(r.status))) return [];
+    if (!Number.isFinite(new Date(r.t).getTime()) || r.running || r.status == null || (r.taskName && Number.isFinite(Number(r.status)) ? taskResultIsNonFailure(r.status, r) : Number(r.status) === 0) || ['ok', 'success', 'fallback', 'cooldown', 'deferred'].includes(String(r.status).toLowerCase())) return [];
     if (!Number.isFinite(Number(r.status)) && !/^(?:error|failed|failure|unusable|no-cheap-executor|http_[45]\d\d)$/.test(String(r.status))) return [];
     // ジョブ付帯の無いプロバイダ単位のLLM呼び出し行(executor-usageのgroq等)で直近が http_429 の場合は
     // RPD・TPM 等のレート上限到達による一時的な流量制限であり、ジョブ失敗ではない(2026-11-07 確定、
     // `groq:不明` アーティファクト)。フォールバックチェーンが負荷を吸収するため再実行対象にしない。
     // 実ジョブ(taskName/job/cwd 付帯)の http_429 は従来どおり失敗として拾う。
     if (r.taskName == null && r.job == null && r.cwd == null && /^http_429$/.test(String(r.status))) return [];
+    // provider:skipped で taskName/job が無い行は直前の codex-do 失敗に付随する集計行であり、
+    // 独立した再実行ジョブではない。failed_job にしない(2026-11-24)。
+    if (r.provider === 'skipped' && r.taskName == null && r.job == null) return [];
+    // キーの最新行が FAILED_JOB_STALE_DAYS 日以上前なら恒久エスカレーションを防ぐため除外する(2026-11-24)。
+    if (age(r.t, now) >= FAILED_JOB_STALE_DAYS) return [];
     // 存在しない cwd は再実行不能なので除外する。一時ディレクトリの片付け済みと、
     // シェルでバックスラッシュが消えた壊れたパス（2026-11-20、Userskimko.claudeauto-session-repo）の両方を除外する(2026-11-16)。
     if (r.cwd) {

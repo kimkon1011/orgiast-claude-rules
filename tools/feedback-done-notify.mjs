@@ -9,14 +9,40 @@ import { isEntry } from './is-entry.mjs';
 const DEFAULT_LIMIT = 20;
 
 function clean(value) { return String(value ?? '').trim(); }
+function normalizeSubmitter(value) { return String(value ?? '').normalize('NFKC').trim().toLowerCase(); }
+
+function loadSubmitterAliases() {
+  const aliases = new Map();
+  try {
+    const config = JSON.parse(fs.readFileSync(new URL('../config/feedback-submitter-aliases.json', import.meta.url), 'utf8'));
+    if (!config?.aliases || typeof config.aliases !== 'object' || Array.isArray(config.aliases)) throw new Error('aliases はオブジェクトで指定してください');
+    for (const [key, entry] of Object.entries(config.aliases)) {
+      const alias = normalizeSubmitter(key);
+      if (!alias || !/^\d+$/.test(entry?.id) || typeof entry.id !== 'string' || aliases.has(alias)) throw new Error('別名または Discord ID が不正です');
+      aliases.set(alias, { id: entry.id, label: clean(entry.name) || entry.id });
+    }
+    return aliases;
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.warn(`feedback-done-notify: 提出者別名表の読み込みに失敗 (${error.message})`);
+    return new Map();
+  }
+}
+
+function noRecipientReason(ledgerItem, issue) {
+  if (clean(ledgerItem?.title || issue?.title).startsWith('[install-verify]')) return 'install-verify';
+  const submitter = normalizeSubmitter(ledgerItem?.submitter);
+  if (!clean(ledgerItem?.submitter_discord_id) && (!submitter || submitter === '不明')) return 'unknown-submitter';
+  return '';
+}
+
 function readItems(file) {
   try { const value = JSON.parse(fs.readFileSync(file, 'utf8')); return Array.isArray(value?.items) ? value.items : []; } catch { return []; }
 }
 
-export function pickRecipient(ledgerItem, members) {
+export function pickRecipient(ledgerItem, members, aliases = loadSubmitterAliases()) {
   const direct = clean(ledgerItem?.submitter_discord_id);
   if (direct) return { id: direct, label: clean(ledgerItem?.submitter_discord_label) || direct };
-  return matchMember(ledgerItem?.submitter, members);
+  return aliases.get(normalizeSubmitter(ledgerItem?.submitter)) || matchMember(ledgerItem?.submitter, members);
 }
 
 export function buildDonePayload(ledgerItem, issue, overrides = {}) {
@@ -52,7 +78,7 @@ export function selectPending(ledgerItems, notified, issues, limit = DEFAULT_LIM
 
 export function formatUndeliverable(items) {
   if (!Array.isArray(items) || items.length === 0) return '';
-  return items.map(({ ledgerItem, issue } = {}) => `・[${clean(ledgerItem?.app_name) || '不明'}] ${clean(ledgerItem?.title) || '（無題）'} … 提出者「${clean(ledgerItem?.submitter) || '不明'}」を Discord で特定できず未返信 / ${clean(issue?.url) || clean(ledgerItem?.url)}`).join('\n');
+  return items.filter(({ ledgerItem, issue } = {}) => !noRecipientReason(ledgerItem, issue)).map(({ ledgerItem, issue } = {}) => `・[${clean(ledgerItem?.app_name) || '不明'}] ${clean(ledgerItem?.title) || '（無題）'} … 提出者「${clean(ledgerItem?.submitter) || '不明'}」を Discord で特定できず未返信 / ${clean(issue?.url) || clean(ledgerItem?.url)}`).join('\n');
 }
 
 export function relayEndpoint(base, endpoint) {
@@ -125,6 +151,7 @@ export async function main(args = process.argv.slice(2), { home = os.homedir(), 
     candidates = selectPending(ledgerItems, notified, issues, options.limit);
   }
 
+  const aliases = loadSubmitterAliases();
   const membersByQuery = new Map();
   const loadMembers = async (query) => {
     if (membersByQuery.has(query)) return membersByQuery.get(query);
@@ -139,8 +166,14 @@ export async function main(args = process.argv.slice(2), { home = os.homedir(), 
   const doneUrl = relayEndpoint(config.url, '/api/feedback-done');
   for (const candidate of candidates) {
     const { ledgerItem, issue } = candidate;
-    let recipient = pickRecipient(ledgerItem, []);
-    if (!recipient) recipient = pickRecipient(ledgerItem, await loadMembers(ledgerItem?.submitter));
+    const reason = noRecipientReason(ledgerItem, issue);
+    if (reason) {
+      if (!options.dry) appendNotified(notifiedFile, { message_id: ledgerItem.message_id, skipped: 'no-recipient', reason, notified_at: new Date().toISOString() });
+      console.log(`feedback-done-notify: 宛先不要のためスキップ message_id=${ledgerItem.message_id} (${reason})`);
+      continue;
+    }
+    let recipient = pickRecipient(ledgerItem, [], aliases);
+    if (!recipient) recipient = pickRecipient(ledgerItem, await loadMembers(ledgerItem?.submitter), aliases);
     if (!recipient) { undeliverable.push(candidate); console.log(`feedback-done-notify: 未達 message_id=${ledgerItem.message_id}`); continue; }
     const payload = buildDonePayload(ledgerItem, issue, { submitter_discord_id: recipient.id, summary: options.summary, url: options.url, notify_kim: !options.recipientOnly });
     if (options.dry) { console.log(`feedback-done-notify: dry message_id=${ledgerItem.message_id} payload=${JSON.stringify(payload)}`); continue; }

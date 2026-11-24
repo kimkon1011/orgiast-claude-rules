@@ -48,7 +48,7 @@ test('ambiguity, partial payments, missing evidence and unpaid remain review onl
 });
 test('DM contains account link, updates and internal review', () => {
   const body = buildDm(planUpdates(projects, records, [], now));
-  assert.match(body, /authuser=kim@orgiast.jp#drafts/); assert.match(body, /kim@orgiast.jp で開く/); assert.match(body, /freee 未登録/);
+  assert.match(body, /authuser=seisaku-team@orgiast.jp#drafts/); assert.match(body, /seisaku-team@orgiast.jp で開く/); assert.match(body, /freee 未登録/);
 });
 test('freee paginates all history with fetch stub and rejects HTTP failure', async () => {
   const calls = [];
@@ -73,9 +73,9 @@ function harness(t) {
     sheets: { get: async (_id, range) => range.includes('B2:R') ? projectRows : rows,
       update: async (_id, range, values) => { calls.push(range); const m = /!([BD])(\d+)$/.exec(range); assert.ok(m); rows[Number(m[2]) - 1][m[1] === 'B' ? 1 : 3] = values[0][0]; },
       append: async () => { throw new Error('unexpected append'); } },
-    fetchDeals: async () => [deal], createDraft: async opts => { calls.push('draft'); assert.equal(opts.user, 'kim@orgiast.jp'); return { id: 'draft1' }; },
+    fetchDeals: async () => [deal], createDraft: async opts => { calls.push('draft'); assert.equal(opts.user, 'seisaku-team@orgiast.jp'); return { id: 'draft1' }; },
     deleteDraft: async () => { calls.push('delete draft'); },
-    sendDm: async (_target, body) => { calls.push(body); },
+    notifyKim: async (body) => { calls.push(body); },
   };
   return { home, calls, deps };
 }
@@ -94,7 +94,7 @@ test('read failure sends stage DM and never creates a draft', async t => {
   assert.equal(h.calls.length, 1); assert.match(h.calls[0], /HTTP 503/);
 });
 test('DM failure deletes newly created draft and leaves month incomplete', async t => {
-  const h = harness(t); const send = h.deps.sendDm; h.deps.sendDm = async () => { throw new Error('offline'); };
+  const h = harness(t); const send = h.deps.notifyKim; h.deps.notifyKim = async () => { throw new Error('offline'); };
   await assert.rejects(runMonthly({ home: h.home, now }, h.deps), /Discord DM/);
   assert.ok(h.calls.includes('delete draft'));
   const marker = JSON.parse(fs.readFileSync(path.join(h.home, '.claude/origuchi-referral-monthly.json')));

@@ -59,7 +59,9 @@
       "file": "anthropic.env",
       "keys": [
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "distribute": false,
+      "note": "Team login へ切り替え。keyserve からは再配布しない。直接 API 呼び出し用の既存ファイルは残す。"
     },
     {
       "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",

@@ -296,7 +296,13 @@ export async function runCheck(opts, injected = {}) {
   const state = injected.state || await readState(opts.statePath);
   if (opts.weekly && weeklySkip(opts.today, state.lastRunAt)) return { skip: true };
   // Probe which sources are available at runtime (kim@ may be calendar-only on this PC, yahoo script may be missing).
-  const { available: availableUsers, unavailableReasons } = opts.noGmail ? { available: [], unavailableReasons: { 'kim@orgiast.jp': 'disabled by --no-gmail', 'seisaku-team@orgiast.jp': 'disabled by --no-gmail' } } : await resolveAvailableUsers({ search: injected.search || childSearch, timeout: () => 15_000, yahooScript: opts.yahooScript });
+  const availability = injected.availability || await resolveAvailableUsers({ search: injected.search || childSearch, timeout: () => 15_000, yahooScript: opts.yahooScript });
+  const availableUsers = opts.noGmail ? [] : availability.available;
+  const unavailableReasons = { ...availability.unavailableReasons };
+  if (opts.noGmail) {
+    unavailableReasons['kim@orgiast.jp'] = 'disabled by --no-gmail';
+    unavailableReasons['seisaku-team@orgiast.jp'] = 'disabled by --no-gmail';
+  }
   if (opts.verbose && Object.keys(unavailableReasons).length) console.error(`[expense-leak-check] unavailable: ${JSON.stringify(unavailableReasons)}`);
   const result = { today: opts.today, from: opts.from, to: opts.to, dryRun: opts.dryRun, wallets: [], statusCounts: {}, candidateTotal: 0, results: [], cacheHits: 0, yahooUnavailable: false, issues: [], appended: 0, complete: false, failReason: '', unavailableReasons };
   const budget = { gmail: Object.fromEntries(availableUsers.map((u) => [u, 0])), yahoo: 0, yahooUnavailable: false, yahooFailed: false, yahooUnverified: 0 };

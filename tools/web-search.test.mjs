@@ -145,12 +145,13 @@ test('auto は OpenRouter 429 で Groq へフォールバックする', async ()
     return response({ choices: [{ message: { content: 'Groq回答' } }] });
   };
   const code = await runCli(['質問', '--json'], {
-    openrouterApiKey: 'openrouter-test', groqApiKey: 'groq-test', fetchImpl,
+    openrouterApiKey: 'openrouter-test', deepseekApiKey: '', gskApiKey: '',
+    groqApiKey: 'groq-test', geminiApiKey: '', fetchImpl,
     stdout: out.stream, stderr: outputSink().stream,
   });
   assert.equal(code, 0);
-  assert.equal(calls.length, 3);
-  assert.match(calls[2], /api\.groq\.com/);
+  assert.equal(calls.length, 2);
+  assert.match(calls[1], /api\.groq\.com/);
   assert.equal(JSON.parse(out.read()).provider, 'groq');
 });
 

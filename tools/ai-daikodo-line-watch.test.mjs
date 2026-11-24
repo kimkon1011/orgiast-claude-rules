@@ -121,6 +121,13 @@ test('壊れたstateは上書きせず停止、並行監視は実行しない', 
   fs.writeFileSync(path.join(f.dir, 'watch.lock'), String(process.pid));
   assert.equal(await main({ ...f.opts, line: async () => assert.fail() }), 0);
 });
+test('原因が変わっても連続失敗を通知する', async t => {
+  const f = fixture(t);
+  for (const message of ['admin API HTTP 401', 'timeout']) {
+    assert.equal(await main({ ...f.opts, error: () => {}, line: async () => { throw Error(message); } }), 1);
+  }
+  assert.equal(f.notices.length, 1); assert.match(f.notices[0].body, /timeout/);
+});
 test('LLM不正JSONは次の他AIへ、Claudeも自動fallbackも禁止', async t => {
   const f = fixture(t), calls = [];
   const d = await generateDecision(f.home, 'guide', thread, { exec: (_, args) => {

@@ -174,9 +174,9 @@ export async function main({ home = os.homedir(), now = new Date(), line = lineR
     const cause = e.message.replace(/\b[0-9a-f]{32,}\b/gi, '[REDACTED]');
     // Do not overwrite corrupt delivery state with an empty ledger.
     if (!cause.startsWith('state.json')) {
-      state.consecutiveFailures = state.lastFailure === cause ? (state.consecutiveFailures || 0) + 1 : 1;
+      state.consecutiveFailures = (state.consecutiveFailures || 0) + 1;
       state.lastFailure = cause;
-      if (state.consecutiveFailures >= 2) queueNotice(state, { kind: 'ask', key: `ai-daikodo-line:failure:${uuidV5(cause)}`, body: `AI代行堂LINE監視が同じ原因で2回連続失敗しました。\n原因: ${cause}` });
+      if (state.consecutiveFailures >= 2) queueNotice(state, { kind: 'ask', key: `ai-daikodo-line:failure:${uuidV5(cause)}`, body: `AI代行堂LINE監視が2回以上連続失敗しました。\n直近の原因: ${cause}` });
       persist();
       try { await flushNotices(state, notify, persist); } catch { /* retained for the next run */ }
     }

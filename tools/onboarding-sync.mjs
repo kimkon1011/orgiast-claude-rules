@@ -356,6 +356,12 @@ export async function updateRepositoryFiles(targetRepo, options = {}) {
     return false;
   };
   if (hasGit) {
+    // .git はあるが remote が未設定の写しでも、正本から origin/main を取得して
+    // matchesMainHistory が過去版を照合できるようにする。失敗は無視（保護側に倒す）。
+    try {
+      git(['-C', targetRepo, 'fetch', 'https://github.com/kimkon1011/orgiast-claude-rules.git', '+main:refs/remotes/origin/main'],
+          { stdio: 'pipe', timeout: 60000 });
+    } catch { /* non-fatal: matchesMainHistory が origin/main 不在で保護側に倒す */ }
     try {
       // pull 失敗時だけ作業中ファイルを列挙し、zip がローカル作業を消さないよう個別に除外する。
       const status = git(['-C', targetRepo, 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { encoding: 'utf8', timeout: 60000 });
@@ -503,6 +509,7 @@ async function syncRepository(now) {
     if (fs.existsSync(path.join(repoPath, '.git'))) {
       const before = readHead(repoPath);
       const result = await updateRepositoryFiles(repoPath);
+      if (result.excluded?.length) log("protected human changes: " + result.excluded.length + "件 " + result.excluded.slice(0, 10).join(", ") + (result.excluded.length > 10 ? " ...他" + (result.excluded.length - 10) + "件" : ""));
       const after = readHead(repoPath);
       if (before && after) {
         changed = result.ok && (result.method === 'zip' ? result.changed : before !== after);
@@ -511,6 +518,7 @@ async function syncRepository(now) {
       }
     } else {
       const result = await updateRepositoryFiles(repoPath);
+      if (result.excluded?.length) log("protected human changes: " + result.excluded.length + "件 " + result.excluded.slice(0, 10).join(", ") + (result.excluded.length > 10 ? " ...他" + (result.excluded.length - 10) + "件" : ""));
       changed = result.ok && result.changed;
     }
     } catch (e) { console.log(`[onboarding-sync] リポ取得に失敗（skill配布とhook登録は続行）: ${e.message.split('\n')[0]}`); log(`repo fetch failed(continue): ${e.message}`); }

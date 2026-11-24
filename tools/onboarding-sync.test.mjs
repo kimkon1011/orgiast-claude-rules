@@ -702,3 +702,52 @@ test('zip fallback は packages（同梱 VSIX）も配る', async () => {
   assert.equal(result.method, 'zip');
   assert.equal(fs.readFileSync(path.join(f.repo, 'packages', 'vscode-next-session', 'orgiast-next-session-9.9.9.vsix'), 'utf8'), 'vsix');
 });
+
+test('origin/main 不在の .git がある写し(zip fallback): fetch URL から origin/main を取得し main 版と一致するファイルを更新できる', async () => {
+  const f = repositoryFixture();
+  const git = (args) => {
+    if (args.includes('pull')) throw new Error('no remote configured');
+    if (args.includes('fetch')) return '';
+    if (args.includes('status')) return ' M tools/changed.mjs\0';
+    if (args.includes('rev-list')) return 'commit-a\n';
+    if (args.includes('rev-parse')) return gitBlobSha(Buffer.from('old')) + '\n';
+    return '';
+  };
+  const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
+  assert.equal(result.method, 'zip');
+  assert.deepEqual(result.excluded, []);
+  assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'utf8'), 'new');
+  assert.match(f.output.join('\n'), /旧配布版と一致したため更新 1件/);
+});
+
+test('origin/main 不在の .git がある写し(zip fallback): fetch URL 成功後も main 履歴に無いファイルは保護される', async () => {
+  const f = repositoryFixture();
+  fs.writeFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'human work');
+  const git = (args) => {
+    if (args.includes('pull')) throw new Error('no remote configured');
+    if (args.includes('fetch')) return '';
+    if (args.includes('status')) return ' M tools/changed.mjs\0';
+    if (args.includes('rev-list')) return 'commit-a\n';
+    if (args.includes('rev-parse')) return gitBlobSha(Buffer.from('old')) + '\n';
+    return '';
+  };
+  const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
+  assert.equal(result.method, 'zip');
+  assert.deepEqual(result.excluded, ['tools/changed.mjs']);
+  assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'utf8'), 'human work');
+});
+
+test('origin/main 不在の .git: fetch URL が失敗しても同期全体は止まらずファイルは保護される', async () => {
+  const f = repositoryFixture();
+  const git = (args) => {
+    if (args.includes('pull')) throw new Error('no remote configured');
+    if (args.includes('fetch')) throw new Error('network error');
+    if (args.includes('status')) return ' M tools/changed.mjs\0';
+    return '';
+  };
+  const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
+  assert.equal(result.ok, true);
+  assert.equal(result.method, 'zip');
+  assert.deepEqual(result.excluded, ['tools/changed.mjs']);
+  assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'utf8'), 'old');
+});

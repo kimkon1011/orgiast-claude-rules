@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { configuration, main, parseArgs, run } from './ai-daikodo-line.mjs';
+import { configuration, main, parseArgs, run, pushLine } from './ai-daikodo-line.mjs';
 
 test('inbox date is encoded; only GET and no redirects carrying auth', async () => {
   let request;
@@ -16,6 +16,21 @@ test('inbox date is encoded; only GET and no redirects carrying auth', async () 
 test('load existing protected local credential file without printing it', () => {
   const cfg = configuration({ env: {}, home: '/test', readFile: () => 'TANOM_ADMIN_KEY=private-key\nTANOM_BASE=https://ai-daikodo.com\n' });
   assert.equal(cfg.key, 'private-key');
+});
+test('rotated saved key overrides an obsolete parent environment', () => {
+  assert.equal(configuration({ env: { TANOM_ADMIN_KEY: 'old', AI_DAIKODO_ADMIN_API_KEY: 'old' }, readFile: () => 'TANOM_ADMIN_KEY=new\n' }).key, 'new');
+});
+test('push uses POST and stable UUID; accepts LINE receipt or duplicate receipt only', async () => {
+  const message = { userId: 'Uabc', text: 'ありがとうございます', retryKey: '419516b3-4544-5a39-a54d-620404630264' };
+  for (const receipt of [{ lineStatus: 200, sentMessages: [{}] }, { lineStatus: 409, duplicate: true }]) {
+    await pushLine(message, { key: 'key', fetchImpl: async (url, init) => {
+      assert.equal(new URL(url).pathname, '/api/admin/line/push'); assert.equal(init.method, 'POST');
+      assert.deepEqual(JSON.parse(init.body), message); assert.equal(init.redirect, 'error');
+      return Response.json(receipt);
+    } });
+  }
+  await assert.rejects(pushLine(message, { key: 'key', fetchImpl: async () => Response.json({}) }), /acknowledgement/);
+  await assert.rejects(pushLine({ ...message, retryKey: 'not-a-uuid' }, { fetchImpl: () => assert.fail() }), /UUID/);
 });
 test('incomplete empty inbox never reports success', async () => {
   const body = { threads: [], incomplete: true, warnings: [{ status: 403 }] };

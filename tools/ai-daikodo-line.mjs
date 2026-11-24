@@ -27,24 +27,34 @@ export function configuration({ env = process.env, home = os.homedir(), readFile
   let saved = {};
   try { saved = parseEnv(readFile(path.join(home, '.claude', 'tanom-admin.env'), 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const key = env.AI_DAIKODO_ADMIN_API_KEY || env.TANOM_ADMIN_KEY || saved.TANOM_ADMIN_KEY;
+  // The protected local file is the rotation source of truth. Long-lived parent
+  // processes can retain an obsolete inherited variable after a key rotation.
+  const key = saved.TANOM_ADMIN_KEY || env.AI_DAIKODO_ADMIN_API_KEY || env.TANOM_ADMIN_KEY;
   const base = env.AI_DAIKODO_BASE_URL || env.TANOM_BASE || saved.TANOM_BASE || 'https://ai-daikodo.com';
   return { key, base };
 }
-export async function callAdmin(apiPath, { fetchImpl = fetch, key, base = 'https://ai-daikodo.com' } = {}) {
+export async function callAdmin(apiPath, { fetchImpl = fetch, key, base = 'https://ai-daikodo.com', method = 'GET', body } = {}) {
   if (!key) throw new Error('Set AI_DAIKODO_ADMIN_API_KEY or ~/.claude/tanom-admin.env');
   const url = new URL(base);
   if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Admin base must be an HTTPS URL without credentials');
   const response = await fetchImpl(new URL(apiPath, url), {
-    headers: { Authorization: `Bearer ${key}` }, redirect: 'error', signal: AbortSignal.timeout(120000),
+    ...(method === 'GET' ? {} : { method }), headers: { Authorization: `Bearer ${key}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+    body: body === undefined ? undefined : JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(120000),
   });
   const text = await response.text();
-  let body;
-  try { body = JSON.parse(text); } catch { throw new Error(`admin API HTTP ${response.status}: invalid JSON`); }
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { throw new Error(`admin API HTTP ${response.status}: invalid JSON`); }
   // Keep partial inbox data and diagnostics, but return a failing exit code.
-  if (body?.incomplete === true && Array.isArray(body.threads) && [206, 503].includes(response.status)) return body;
-  if (!response.ok) throw new Error(`admin API HTTP ${response.status}: ${JSON.stringify(body).split(key).join('[REDACTED]')}`);
-  return body;
+  if (parsed?.incomplete === true && Array.isArray(parsed.threads) && [206, 503].includes(response.status)) return parsed;
+  if (!response.ok) throw new Error(`admin API HTTP ${response.status}: ${JSON.stringify(parsed).split(key).join('[REDACTED]')}`);
+  return parsed;
+}
+export async function pushLine({ userId, text, retryKey }, options = {}) {
+  if (!/^U[0-9a-f]+$/i.test(userId || '') || typeof text !== 'string' || !text.trim() ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(retryKey || '')) throw new Error('push requires userId, text and UUID v5 retryKey');
+  const result = await callAdmin('/api/admin/line/push', { ...options, method: 'POST', body: { userId, text, retryKey } });
+  if (result?.lineStatus !== 200 && !(result?.lineStatus === 409 && result?.duplicate === true)) throw new Error('LINE push acknowledgement missing');
+  return result;
 }
 export async function run(argv, options = {}) {
   const args = parseArgs(argv);

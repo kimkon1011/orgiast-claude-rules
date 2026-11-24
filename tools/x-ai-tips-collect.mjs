@@ -309,12 +309,13 @@ export async function runCollect(options = {}) {
     const limit = options.limit ?? config.maxCalls;
     if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('--limit は正の整数');
     let failedTopics = 0;
+    let truncated = '';
     save(state);
     for (let offset = 0; offset < Math.min(topicCount, limit); offset++) {
       const topicIndex = (startTopicIndex + offset) % topicCount;
       const topic = config.topics[topicIndex];
-      if (state.night.calls >= config.maxCalls) throw new Error('夜間API回数上限');
-      if (state.night.costUsd + config.reservePerCallUsd > config.maxCostUsd + 1e-9) throw new Error('夜間費用上限');
+      if (state.night.calls >= config.maxCalls) { truncated = '夜間API回数上限'; break; }
+      if (state.night.costUsd + config.reservePerCallUsd > config.maxCostUsd + 1e-9) { truncated = '夜間費用上限'; break; }
       // タイムアウト・プロセス停止・usage欠落でも予算を消費したものとして扱う。
       // 未実行の次テーマを予約と同時に保存。全件回れた夜も翌夜の先頭を1つずらす。
       state.nextTopicIndex = (offset === topicCount - 1 ? startTopicIndex + 1 : topicIndex + 1) % topicCount;
@@ -393,8 +394,8 @@ export async function runCollect(options = {}) {
         if (!dryRun) fs.appendFileSync(path.join(dir, 'runs.jsonl'), JSON.stringify({ at: now.toISOString(), night: date, topic, model: 'grok-4.6', usage, costUsd: actual ?? config.reservePerCallUsd, estimated: usage?.cost_in_usd_ticks == null, reserved: actual == null, status: creditBlocked ? CREDIT_BLOCKED_STATUS : failure ? `error:${failure}` : 'ok', nightCalls: state.night.calls, nightCostUsd: state.night.costUsd }) + '\n');
       }
     }
-    if (failedTopics) throw new Error(`テーマ失敗${failedTopics}件（残りのテーマは処理継続）`);
-    return { status: `ok:取得${acquired}件 追加${added}件 重複${duplicates}件 費用$${cost.toFixed(2)}`, calls, cost, added, duplicates };
+    if (!truncated && failedTopics) throw new Error(`テーマ失敗${failedTopics}件（残りのテーマは処理継続）`);
+    return { status: `ok:取得${acquired}件 追加${added}件 重複${duplicates}件 費用$${cost.toFixed(2)}${truncated ? ` 打ち切り:${truncated}` : ''}`, calls, cost, added, duplicates };
   } catch (error) {
     // APIの応答本文・認証値はログに出さない。
     return { status: `error:${error.code === 'EEXIST' ? '収集中ロックあり' : safeError(error.message, [key, openRouterKey])}`, calls, cost, added, duplicates };

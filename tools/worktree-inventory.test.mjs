@@ -56,7 +56,7 @@ for (const [name, overrides, expected] of fixtures) {
 }
 
 test('相対 gitdir と逆参照を確認できる作業ツリーを keep-repair にする', (t) => {
-  const tempRoot = path.resolve(tmpdir());
+  const tempRoot = realpathSync.native(path.resolve(tmpdir()));
   const temp = mkdtempSync(path.join(tempRoot, 'wt-inventory-'));
   const root = realpathSync.native(temp);
   const downloads = path.join(root, 'Downloads');

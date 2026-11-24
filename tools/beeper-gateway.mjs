@@ -233,4 +233,7 @@ async function main(argv = process.argv.slice(2)) {
   return 1;
 }
 
-if (isEntry(import.meta.url)) process.exitCode = await main();
+if (isEntry(import.meta.url)) {
+  try { process.exitCode = await main(); }
+  catch (error) { console.error(`NG: ${error.message}`); process.exitCode = 1; }
+}

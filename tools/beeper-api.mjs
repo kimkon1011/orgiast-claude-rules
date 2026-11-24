@@ -37,7 +37,7 @@ export function getBeeperToken({ env = process.env, appData = process.env.APPDAT
 
 /**
  * 000 の Beeper 中継（tools/beeper-gateway.mjs）の設定を読む。
- * ~/.claude/secrets/beeper-gateway.json = { "base": "http://192.168.0.4:23380", "token": "..." }
+ * ~/.claude/secrets/beeper-gateway.json = { "base": "http://000KimPC:23380", "hosts": [...], "token": "..." }
  * NEVER logs, prints, or includes the token in exceptions.
  */
 export function getGatewayConfig({ env = process.env, home = env.ORGIAST_HOME || (env === process.env ? os.homedir() : null) } = {}) {
@@ -47,7 +47,10 @@ export function getGatewayConfig({ env = process.env, home = env.ORGIAST_HOME ||
   const p = env.BEEPER_GATEWAY_CONFIG || path.join(home, '.claude', 'secrets', 'beeper-gateway.json');
   try {
     const c = JSON.parse(fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, ''));
-    if (c && typeof c.base === 'string' && typeof c.token === 'string' && c.token) return { base: c.base, token: c.token };
+    if (c && typeof c.base === 'string' && typeof c.token === 'string' && c.token) {
+      const hosts = Array.isArray(c.hosts) ? c.hosts.filter(value => typeof value === 'string' && /^https?:\/\//i.test(value)) : [];
+      return { ...c, base: c.base, hosts, token: c.token, configPath: p };
+    }
   } catch { /* 設定なし */ }
   return null;
 }
@@ -62,10 +65,10 @@ export function resolveBeeperTarget({ env = process.env, appData = process.env.A
   const local = 'http://localhost:23373';
   if (env.BEEPER_API_BASE) return { via: 'env', baseUrl: env.BEEPER_API_BASE, token: getBeeperToken({ env, appData }) };
   const gw = getGatewayConfig({ env });
-  if (gw && env.BEEPER_PREFER_LOCAL !== '1') return { via: 'gateway', baseUrl: gw.base, token: gw.token };
+  if (gw && env.BEEPER_PREFER_LOCAL !== '1') return { via: 'gateway', baseUrl: gw.base, token: gw.token, hosts: gw.hosts, configPath: gw.configPath };
   const token = getBeeperToken({ env, appData });
   if (token) return { via: 'local', baseUrl: local, token };
-  if (gw) return { via: 'gateway', baseUrl: gw.base, token: gw.token };
+  if (gw) return { via: 'gateway', baseUrl: gw.base, token: gw.token, hosts: gw.hosts, configPath: gw.configPath };
   return { via: 'none', baseUrl: local, token: null };
 }
 
@@ -74,15 +77,15 @@ export function resolveBeeperTarget({ env = process.env, appData = process.env.A
  */
 export async function beeperFetch(endpoint, { method = 'GET', body, query, timeoutMs = 20000, env = process.env, token: customToken, binary = false, fetchImpl = globalThis.fetch } = {}) {
   const target = customToken ? { baseUrl: env.BEEPER_API_BASE || 'http://localhost:23373', token: customToken } : resolveBeeperTarget({ env });
-  const baseUrl = target.baseUrl;
   const token = target.token;
 
   if (!token) {
     throw new BeeperApiError('Beeper access token not found or unauthorized', 'BEEPER_UNAUTHORIZED', 401);
   }
 
-  let urlStr = `${baseUrl.replace(/\/+$/, '')}${endpoint}`;
-  if (query) {
+  const suffix = (() => {
+    let value = endpoint;
+    if (!query) return value;
     const searchParams = new URLSearchParams();
     for (const [k, v] of Object.entries(query)) {
       if (v === undefined || v === null) continue;
@@ -93,10 +96,9 @@ export async function beeperFetch(endpoint, { method = 'GET', body, query, timeo
       }
     }
     const qStr = searchParams.toString();
-    if (qStr) {
-      urlStr += `?${qStr}`;
-    }
-  }
+    if (qStr) value += `?${qStr}`;
+    return value;
+  })();
 
   const headers = {
     'Authorization': `Bearer ${token}`,
@@ -105,16 +107,26 @@ export async function beeperFetch(endpoint, { method = 'GET', body, query, timeo
     headers['Content-Type'] = 'application/json';
   }
 
-  let response;
-  try {
-    response = await fetchImpl(urlStr, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (err) {
-    throw new BeeperApiError('Beeper API server down or unreachable', 'BEEPER_DOWN', 0);
+  const bases = [...new Set([target.baseUrl, ...(target.via === 'gateway' ? (target.hosts?.length ? target.hosts : ['http://000KimPC:23380']) : [])]
+    .filter(Boolean).map(value => String(value).replace(/\/+$/, '')))];
+  let response, lastDown;
+  for (const baseUrl of bases) {
+    try {
+      response = await fetchImpl(`${baseUrl}${suffix}`, {
+        method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (target.via === 'gateway' && baseUrl !== target.baseUrl && target.configPath) {
+        try {
+          const current = JSON.parse(fs.readFileSync(target.configPath, 'utf8').replace(/^\uFEFF/, ''));
+          fs.writeFileSync(target.configPath, `${JSON.stringify({ ...current, base: baseUrl }, null, 2)}\n`, 'utf8');
+        } catch { /* 疎通成功は設定書き戻し失敗より優先する */ }
+      }
+      break;
+    } catch (err) { lastDown = err; }
+  }
+  if (!response) {
+    const error = new BeeperApiError(`Beeper API server down or unreachable (試行: ${bases.join(', ')} / 宛先IP変更の可能性)`, 'BEEPER_DOWN', 0);
+    error.triedBases = bases; error.cause = lastDown; throw error;
   }
 
   if (response.status === 401) {

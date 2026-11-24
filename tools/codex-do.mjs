@@ -671,6 +671,20 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env, { kin
   return null;
 }
 
+// cheap-code 経由と qwen 直結の deepseek は起動方法だけが異なり、同じ
+// OpenRouter / deepseek model を使う。同じ連鎖で片方が通常予算を使い切った後に
+// もう片方を実行しても upstream 障害を二重に待つだけなので、timeout は同一障害として扱う。
+export function fallbackBackendFailureDomain(backendName) {
+  if (backendName === 'cheap-code:deepseek' || backendName === 'deepseek') return 'deepseek-upstream';
+  return String(backendName || '');
+}
+
+export function shouldSkipFallbackBackendAfterTimeout(backendName, chain = []) {
+  const domain = fallbackBackendFailureDomain(backendName);
+  return Boolean(domain) && chain.some((attempt) => attempt?.outcome === 'timeout'
+    && fallbackBackendFailureDomain(attempt.backend) === domain);
+}
+
 // 冷却中(直近6時間に timeout/blocked)の backend を keepAtLeastOne でチェーンへ戻したときだけ使う
 // 「探り」の予算。全 backend が冷却中だと候補ゼロを避けるため元の配列がそのまま復活するが、
 // 同じ上限（gemini-cli 300秒 + deepseek 600秒）を再び与えると同じ 900 秒を毎回捨てる。
@@ -1933,6 +1947,10 @@ async function tryCheapFirstFallback() {
   let lastBackend = null, lastResult = null, cheapSucceeded = false;
   const chainStarted = Date.now();
   for (const [bi, backend] of backends.entries()) {
+    if (shouldSkipFallbackBackendAfterTimeout(backend.name, chainResult)) {
+      console.error(`[codex-do] cheap-first: ${backend.name} は同じ upstream の timeout 済み候補があるためスキップします`);
+      continue;
+    }
     const isLast = bi === backends.length - 1;
     const bt = effectiveBackendTimeoutSecs(backend.name, {
       chainBudget: chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000, process.env, { backendName: backend.name, kind: taskKind }),
@@ -2373,6 +2391,10 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
       const chainStarted = Date.now();
       fallbackChain = [];
       for (const [backendIndex, backend] of backends.entries()) {
+        if (shouldSkipFallbackBackendAfterTimeout(backend.name, fallbackChain)) {
+          console.error(`[codex-do] backend=${backend.name} は同じ upstream の timeout 済み候補があるためスキップします`);
+          continue;
+        }
         const isCooling = cooling.has(backend.name);
         const isLast = backendIndex === backends.length - 1;
         // 冷却中（かつ末尾以外）の backend は本番実行前に短い生存確認を行う。

@@ -9,7 +9,7 @@ import { skipCoolingBackends } from './fallback-backend-health.mjs';
 import { runGeminiBudgetGuard } from './gemini-budget-guard.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, reserveGeminiLaunch, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder, hasAbortCondition, isIntentionalAbort } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, fallbackBackendFailureDomain, shouldSkipFallbackBackendAfterTimeout, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, reserveGeminiLaunch, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder, hasAbortCondition, isIntentionalAbort } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -263,6 +263,18 @@ test('backendSpecificTimeoutSecs は kind=implement で deepseek は 720・gemin
   assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}, { kind: 'implement' }), 720);
   assert.equal(backendSpecificTimeoutSecs('deepseek', {}, { kind: 'implement' }), 720);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}, { kind: 'implement' }), 1200);
+});
+
+test('deepseek 系は同じ upstream の timeout 後に連鎖内で二重実行しない', () => {
+  assert.equal(fallbackBackendFailureDomain('cheap-code:deepseek'), 'deepseek-upstream');
+  assert.equal(fallbackBackendFailureDomain('deepseek'), 'deepseek-upstream');
+  assert.equal(fallbackBackendFailureDomain('gemini-cli'), 'gemini-cli');
+
+  const timedOut = [{ backend: 'cheap-code:deepseek', outcome: 'timeout' }];
+  assert.equal(shouldSkipFallbackBackendAfterTimeout('deepseek', timedOut), true);
+  assert.equal(shouldSkipFallbackBackendAfterTimeout('gemini-cli', timedOut), false);
+  assert.equal(shouldSkipFallbackBackendAfterTimeout('deepseek', [{ backend: 'cheap-code:deepseek', outcome: 'probe_timeout' }]), false);
+  assert.equal(shouldSkipFallbackBackendAfterTimeout('deepseek', [{ backend: 'cheap-code:deepseek', outcome: 'ok' }]), false);
 });
 
 test('backendSpecificTimeoutSecs は kind が無い・implement 以外の場合は従来どおり 400/200', () => {

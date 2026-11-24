@@ -873,12 +873,12 @@ test('--from 指定時は From ヘッダがエイリアス・DWD sub は --user 
   assert.match(report.headers, /From: keiri2@orgiast\.jp/u);
 });
 
-test('--from 未指定時は JSON の from = user（回帰）', async () => {
+test('--from 未指定時は従来どおり JSON に from を追加しない（回帰）', async () => {
   const result = await cli([...args, '--dry-run', '--json']);
   assert.equal(result.code, 0);
   const report = JSON.parse(result.output[0]);
-  assert.equal(report.from, report.user);
-  assert.equal(report.from, DEFAULT_USER);
+  assert.equal(report.user, DEFAULT_USER);
+  assert.equal(Object.hasOwn(report, 'from'), false);
 });
 
 test('--from の社外ドメインは configError で無通信', async () => {

@@ -356,7 +356,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
   let fromAddr = user;
   let action = argv.includes('--send') ? 'send' : argv.includes('--forward') ? 'forward' : argv.includes('--delete') ? 'delete' : argv.includes('--check') ? 'check' : argv.includes('--dry-run') ? 'dry-run' : 'create-draft';
   let deletionId;
-  const emit = (report, human) => stdout(jsonMode ? JSON.stringify({ action, user, from: fromAddr, ...report }) : human);
+  const emit = (report, human) => stdout(jsonMode ? JSON.stringify({ action, user, ...(fromAddr !== user ? { from: fromAddr } : {}), ...report }) : human);
   try {
     const args = parseArgs(argv);
     deletionId = args.delete;

@@ -2,9 +2,15 @@
 import os from 'node:os';
 import { isEntry } from './is-entry.mjs';
 import { isKimOperated } from './lib/kim-operated.mjs';
-import { command, repositoryTarget } from './lib/seat-github.mjs';
+import { command, repositoryTarget, nonInteractiveGitEnv } from './lib/seat-github.mjs';
 import { firstGuardedPath } from './pr-merge-eligibility.mjs';
 import { mergePr } from './pr-merge.mjs';
+
+// GCM が2アカウント以上管理する環境で git push が対話プロンプトで停止しないよう、
+// push URL にユーザー名を埋めてアカウントを固定する。
+// commit-landed.mjs の git credential fill + GCM_INTERACTIVE=never と同様の対策。
+// (2026-11-25 実測: GCM デフォルトでは対話プロンプトが最大30秒超・失敗→次セッションへ回らない)
+const GCM_PUSH_USERNAME = 'seisaku-team-org';
 
 export function landingRoute(files) {
   if (files.some(file => file.startsWith('.github/workflows/'))) return 'workflow-stop';
@@ -39,12 +45,16 @@ export function publishSeatPr({ cwd = process.cwd(), home = process.env.ORGIAST_
   run('git', ['check-ref-format', '--branch', base]);
   const head = run('git', ['rev-parse', 'HEAD']);
   if (!/^[a-f0-9]{40}$/i.test(head) || run('git', ['rev-parse', `refs/heads/${branch}`]) !== head) throw new Error('作業ブランチと HEAD が一致しません');
-  run('git', ['fetch', target.url, base]);
+  const gcmPushUrl = GCM_PUSH_USERNAME ? target.url.replace(/^https:\/\//, `https://${GCM_PUSH_USERNAME}@`) : target.url;
+  run('git', ['fetch', gcmPushUrl, base], { env: nonInteractiveGitEnv() });
   const files = run('git', ['diff', '--no-renames', '--name-only', '-z', `FETCH_HEAD...${head}`]).split('\0').filter(Boolean);
   const route = landingRoute(files);
   if (route === 'workflow-stop') throw new Error('.github/workflows/ を含むため停止。workflow 権限とレビューの専用経路で扱ってください');
   // origin が fork でも、確認した base に明示的に push。remote 設定には副作用を出さない。
-  run('git', ['push', target.url, `${head}:refs/heads/${branch}`]);
+  // GCM が2アカウント登録されている環境では対話プロンプトで停止するため、
+  // 非対話環境変数を設定（commit-landed.mjs 同様）し、push URL にユーザー名を埋めて
+  // GCM のアカウント選択を回避する（PR #2686 / PR #2695）。
+  run('git', ['push', gcmPushUrl, `${head}:refs/heads/${branch}`], { env: nonInteractiveGitEnv() });
   let existing = JSON.parse(run('gh', ['pr', 'list', '--repo', target.base, '--head', `${target.base.split('/')[0]}:${branch}`, '--base', base, '--state', 'open', '--json', 'number,url']));
   // gh/GitHub does not match owner:branch for a same-repository PR on every CLI/API version.
   // Fall back to the plain branch before trying to create a duplicate PR.

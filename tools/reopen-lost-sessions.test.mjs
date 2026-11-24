@@ -2346,7 +2346,9 @@ test('title containing 【閉じて可】 skips candidate and sets skipped.closa
   assert.equal(resultWatch.skipped.closable, 1);
 });
 
-test('measureUserIdleSec: Win32 実機で数値を返す（Add-Type 完全性の回帰防止）', { skip: process.platform !== 'win32' }, () => {
+// CI（GitHub Actions の windows runner）は対話セッションを持たず GetLastInputInfo が
+// 値を返せないため null になる。このテストは Win32 実機での Add-Type 回帰防止が目的なので CI では skip。
+test('measureUserIdleSec: Win32 実機で数値を返す（Add-Type 完全性の回帰防止）', { skip: process.platform !== 'win32' || !!process.env.CI }, () => {
   const sec = measureUserIdleSec();
   assert.ok(Number.isInteger(sec), `measureUserIdleSec() returned non-integer: ${sec}`);
   assert.ok(sec >= 0, `measureUserIdleSec() returned negative: ${sec}`);

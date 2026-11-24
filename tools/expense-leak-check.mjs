@@ -27,7 +27,6 @@ export const RULES = {
 export const LIMITS = { gmail: 300, yahoo: 150, runtimeMs: 40 * 60_000, reserveMs: 90_000 };
 export const WEB23_ADDRESS = 'web23@orgiast.jp';
 export const WEB23_LOOKBACK_DAYS = 7;
-const USERS = ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'];
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DAY = 86_400_000;
 export const normalize = (text) => String(text ?? '').normalize('NFKC').toLowerCase();
@@ -36,6 +35,34 @@ export const jstDay = (date = new Date()) => new Date(date.getTime() + 9 * 3_600
 export const shiftDay = (day, count) => new Date(Date.parse(`${day}T00:00:00Z`) + count * DAY).toISOString().slice(0, 10);
 export const projectCode = (day) => `${day.slice(2, 4)}${day.slice(5, 7)}01OR`;
 function validDay(day) { return /^\d{4}-\d{2}-\d{2}$/.test(day) && !Number.isNaN(Date.parse(day)) && shiftDay(day, 0) === day; }
+// Available Gmail users at runtime; kim@ may be calendar-only on this PC.
+const ALL_USERS = ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'];
+export async function checkKimGmailAvailable({ search = childSearch, timeout = () => 15_000 } = {}) {
+  const result = await search(join(HERE, 'gmail-search.mjs'), ['--user', 'kim@orgiast.jp', '--query', 'subject:test', '--max', '1'], timeout());
+  if (result.code !== 0) return { available: false, reason: `kim@orgiast.jp Gmail unavailable: exit ${result.code}` };
+  return { available: true };
+}
+export async function checkYahooAvailable(yahooScript) {
+  if (!existsSync(yahooScript)) return { available: false, reason: `yahoo script not found: ${yahooScript}` };
+  return { available: true };
+}
+export async function resolveAvailableUsers({ search, timeout, yahooScript } = {}) {
+  const available = ['seisaku-team@orgiast.jp'];
+  const unavailableReasons = {};
+  const kimCheck = await checkKimGmailAvailable({ search, timeout });
+  if (kimCheck.available) available.push('kim@orgiast.jp');
+  else unavailableReasons['kim@orgiast.jp'] = kimCheck.reason;
+  const yahooCheck = await checkYahooAvailable(yahooScript);
+  if (!yahooCheck.available) unavailableReasons.yahoo = yahooCheck.reason;
+  return { available, unavailableReasons };
+}
+export function isCompleteRun(result) {
+  // Permanently unavailable sources (calendar-only kim@, missing yahoo script) are
+  // excluded from availableUsers at startup, so no issues arise from them.
+  // Complete if freee fully fetched AND all candidates searched AND no errors
+  // from the sources that were available.
+  return result.completeFromFreee && !result.results.some((r) => r.deferred) && result.results.length === result.candidateTotal && result.issues.length === 0;
+}
 export function parseArgs(argv, env = process.env) {
   const opts = { today: env.EXPENSE_LEAK_TODAY || jstDay(), dryRun: false, weekly: false, noYahoo: false, noGmail: false, limit: Infinity, verification: false, verbose: false };
   const flags = { '--dry-run': 'dryRun', '--weekly': 'weekly', '--no-yahoo': 'noYahoo', '--no-gmail': 'noGmail', '--verification': 'verification', '--verbose': 'verbose' };
@@ -189,11 +216,11 @@ export async function collectTxns(get, opts, state, timeLeft = () => true) {
   }
   return { wallets, statusCounts, complete, candidates: [...seen.values()].filter((t) => t.status === 1).sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id) };
 }
-export async function searchEvidence(txn, opts, budget, deps) {
+export async function searchEvidence(txn, opts, budget, deps, availableUsers = ALL_USERS) {
   const evidence = [];
   const issues = [];
   let deferred = '';
-  for (const user of USERS) {
+  for (const user of availableUsers) {
     if (opts.noGmail) { deferred ||= '未検索(無効化)'; continue; }
     if (budget.gmail[user] >= LIMITS.gmail) { deferred = '未検索(上限)'; continue; }
     if (!deps.timeLeft()) { deferred = '未検索(時間上限)'; break; }
@@ -268,8 +295,12 @@ export async function runCheck(opts, injected = {}) {
   const save = injected.save || atomicJson;
   const state = injected.state || await readState(opts.statePath);
   if (opts.weekly && weeklySkip(opts.today, state.lastRunAt)) return { skip: true };
-  const result = { today: opts.today, from: opts.from, to: opts.to, dryRun: opts.dryRun, wallets: [], statusCounts: {}, candidateTotal: 0, results: [], cacheHits: 0, yahooUnavailable: false, issues: [], appended: 0, complete: false, failReason: '' };
-  const budget = { gmail: Object.fromEntries(USERS.map((u) => [u, 0])), yahoo: 0, yahooUnavailable: false, yahooFailed: false, yahooUnverified: 0 };
+  // Probe which sources are available at runtime (kim@ may be calendar-only on this PC, yahoo script may be missing).
+  const { available: availableUsers, unavailableReasons } = opts.noGmail ? { available: [], unavailableReasons: { 'kim@orgiast.jp': 'disabled by --no-gmail', 'seisaku-team@orgiast.jp': 'disabled by --no-gmail' } } : await resolveAvailableUsers({ search: injected.search || childSearch, timeout: () => 15_000, yahooScript: opts.yahooScript });
+  if (opts.verbose && Object.keys(unavailableReasons).length) console.error(`[expense-leak-check] unavailable: ${JSON.stringify(unavailableReasons)}`);
+  const result = { today: opts.today, from: opts.from, to: opts.to, dryRun: opts.dryRun, wallets: [], statusCounts: {}, candidateTotal: 0, results: [], cacheHits: 0, yahooUnavailable: false, issues: [], appended: 0, complete: false, failReason: '', unavailableReasons };
+  const budget = { gmail: Object.fromEntries(availableUsers.map((u) => [u, 0])), yahoo: 0, yahooUnavailable: false, yahooFailed: false, yahooUnverified: 0 };
+  budget.yahooUnavailable = !!unavailableReasons.yahoo;
   result.searches = budget;
   async function checkpoint() { await save(opts.out, result); if (!opts.dryRun) await save(opts.statePath, state); }
   let stage = 'db-connect';
@@ -290,7 +321,7 @@ export async function runCheck(opts, injected = {}) {
       }
       if (!timeLeft()) { result.results.push({ ...txn, verdict: '未検索(時間上限)', evidence: [], deferred: true }); continue; }
       const rule = ruleVerdict(txn, privateTerms);
-      const search = rule === '私用(自動)' ? { evidence: [], issues: [], deferred: '' } : await searchEvidence(txn, opts, budget, { search: injected.search || childSearch, timeLeft, timeout });
+      const search = rule === '私用(自動)' ? { evidence: [], issues: [], deferred: '' } : await searchEvidence(txn, opts, budget, { search: injected.search || childSearch, timeLeft, timeout }, availableUsers);
       result.issues.push(...search.issues);
       // A verified receipt is enough to ask for submission even when another mailbox is offline.
       const deferred = !!search.deferred && !search.evidence.length;
@@ -309,7 +340,8 @@ export async function runCheck(opts, injected = {}) {
       result.web23 = await checkWeb23Delivery({ search: injected.search || childSearch, timeLeft, timeout });
       if (result.web23.status === 'unverified') result.issues.push(`web23@: ${result.web23.reason}`);
     }
-    result.complete = inventory.complete && !result.results.some((r) => r.deferred) && result.results.length === inventory.candidates.length;
+    result.completeFromFreee = inventory.complete;
+    result.complete = isCompleteRun({ ...result, completeFromFreee: inventory.complete, candidateTotal: inventory.candidates.length });
     result.deferredTotal = result.results.filter((r) => r.deferred).length;
     if (!opts.dryRun) {
       stage = 'sheets-write';

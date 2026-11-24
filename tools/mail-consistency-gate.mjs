@@ -22,7 +22,18 @@ export async function judge(input, { warning = () => {} } = {}) {
     for(let i=0;i<argv.length;i++) {
       if(/^(?:cd|Set-Location)$/iu.test(argv[i])&&argv[i+1]) cwd=path.resolve(cwd,argv[i+1]);
       if(!/(?:^|[\\/])node(?:\.exe)?$/iu.test(argv[i])) continue;
-      let j=i+1; while(argv[j]?.startsWith('-')&&!/^(?:-e|--eval|-p|--print)/u.test(argv[j])) j++;
+      let j=i+1;
+      // node --test / --test-only loads fixtures; do not treat them as send scripts.
+      let testRunner=false;
+      for(let s=j;s<argv.length&&!/^[;|&\n]+$/u.test(argv[s]);s++){
+        const a=argv[s];
+        if(a==='--') break;
+        if(a==='--test'||a==='--test-only'){ testRunner=true; break; }
+        if(!a.startsWith('-')||/^(?:-e|--eval|-p|--print)/u.test(a)) break;
+        if(['--require','-r','--import','--loader','--experimental-loader'].includes(a)) s++;
+      }
+      if(testRunner) continue;
+      while(argv[j]?.startsWith('-')&&!/^(?:-e|--eval|-p|--print)/u.test(argv[j])) j++;
       if(!/\.(?:mjs|cjs|js)$/iu.test(argv[j]??'')) continue;
       const file=path.resolve(cwd,argv[j]); if(path.basename(file)==='gmail-draft.mjs') continue;
       if(SEND.test(await readLimited(file))) return {decision:'block',reason:'このスクリプトは生の Gmail API 送信を含みます。node tools/gmail-draft.mjs --send <draftId> --json を使ってください。'};

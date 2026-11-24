@@ -14,6 +14,26 @@ const warn = text => console.error(`[RECIPIENT-DOMAIN] ${String(text).replace(/[
 function tokens(command) {
   return (command.match(/(?:"[^"]*"|'[^']*'|[^\s"';|&])+|[;|&\n]+/g) ?? []).map(t => t.replace(/(["'])(.*?)\1/g, '$2'));
 }
+/** Exact Node test-runner flags only. --test-reporter alone must still inspect the entry script. */
+function nodeArgvIsTestRunner(argv, start) {
+  for (let j = start; j < argv.length && !/^[;|&\n]+$/.test(argv[j]); j++) {
+    const arg = argv[j];
+    if (arg === '--') break;
+    if (arg === '--test' || arg === '--test-only') return true;
+    if (!arg.startsWith('-')) break;
+    if (/^(?:-e|--eval|-p|--print)(?:=|$)/.test(arg)) break;
+    if (['--require', '-r', '--import', '--loader', '--experimental-loader'].includes(arg)) j++;
+  }
+  return false;
+}
+/** npm test / npm run test — package scripts, not a send-script loader. */
+function isNpmTestInvocation(argv, i) {
+  if (!/^(?:npm(?:\.cmd)?)$/i.test(argv[i])) return false;
+  const args = [];
+  for (let j = i + 1; j < argv.length && !/^[;|&\n]+$/.test(argv[j]); j++) args.push(argv[j]);
+  if (args[0] === 'test') return true;
+  return args[0] === 'run' && /^test(?:$|:)/.test(args[1] ?? '');
+}
 async function readLimited(file) {
   const handle = await fs.open(file, 'r');
   try {
@@ -39,9 +59,13 @@ async function recipients(input, signal) {
       const directory = /^-(?:Path|LiteralPath)$/i.test(argv[i + 1]) ? argv[i + 2] : argv[i + 1];
       if (directory) cwd = path.resolve(cwd, directory);
     }
+    // npm test does not load a send script; skip the whole segment.
+    if (isNpmTestInvocation(argv, i)) continue;
     const directDraft = /(?:^|[\\/])gmail-draft\.mjs$/.test(argv[i]);
     if (!directDraft && !/(?:^|[\\/])node(?:\.exe)?$/i.test(argv[i])) continue;
     let j = directDraft ? i : i + 1;
+    // node --test / --test-only loads fixtures, not production send scripts.
+    if (!directDraft && nodeArgvIsTestRunner(argv, j)) continue;
     // Common node flags; -e/-p execute source rather than a script file.
     while (argv[j]?.startsWith('-')) {
       if (/^(?:-e|--eval|-p|--print)(?:=|$)/.test(argv[j])) break;

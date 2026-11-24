@@ -126,6 +126,6 @@ Bashは1呼出1コマンド、専用ツール・allow済み経路を使う。
 ### 2.9 Drive・共通知識・社内アプリ・イベント（§2.9〜2.12）
 ### 3.0 自動取込・巡回・自己更新（§3.0〜3.0.5）
 各PCで自動取込・自己更新・コスト点検、setup --convergeでallow追加。
-- 全社共有の知見（kim-PC の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る
+- 全社共有の知見（kim 本人が操作する生存席の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る
 - 制作・営業・見積・案件の着手前: ~/.claude/knowledge/production-sales/00_INDEX.md を読み、必要な節だけ Grep。全文を丸読みしない。
 <!-- END: オージャスト共通ルール -->

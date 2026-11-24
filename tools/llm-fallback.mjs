@@ -169,6 +169,11 @@ export function parseQuotaResetTime(text, now = Date.now()) {
   return null;
 }
 
+function isQuotaExhaustedUntilReset(status, detail, now) {
+  if (status !== 429 || parseQuotaResetTime(detail, now) == null) return false;
+  return /(?:limit\s+exhausted|usage\s+limit|quota|weekly\s+limit|monthly\s+limit)/i.test(String(detail || ''));
+}
+
 // lane-health.json に quota_wait を書き込む（上限中レーンを他からも避けさせる）。
 function saveQuotaWaitToLaneHealth(provider, until, detail, hp, persist) {
   if (!persist) return;
@@ -228,7 +233,7 @@ function claudeHomeFrom(file) {
   return path.basename(dir) === '.claude' ? path.dirname(dir) : '';
 }
 
-export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category = '', caller = 'llm-fallback', allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, laneHealthFile, persistState = true, perProviderTimeoutMs, now = () => Date.now() }) {
+export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category = '', caller = 'llm-fallback', allowGatewayFallback = true, explicitStart = false, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, laneHealthFile, persistState = true, perProviderTimeoutMs, now = () => Date.now() }) {
   if (perProviderTimeoutMs != null && (!Number.isSafeInteger(perProviderTimeoutMs) || perProviderTimeoutMs <= 0 || perProviderTimeoutMs > 2147483647)) throw new Error('perProviderTimeoutMs must be a positive timer-safe integer');
   start = routeCandidate(start);
   chain = chain.map(routeCandidate);
@@ -327,6 +332,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
   }
   const available = useCooldown
     ? candidates.filter(({ provider }) => {
+        if (explicitStart && provider === start.provider) return true;
         const p = String(provider).toLowerCase();
         if (Number(cooldowns?.[p]?.until) > timestamp) return false;
         if (quotaWaitProviders.includes(p)) return false;
@@ -338,9 +344,15 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
   const revived = (available.length ? available : candidates).filter(({ provider }) => !directBlockedUntil(provider));
   const selectedCandidates = available.length ? available : (revived.length ? revived : (considerDirect ? revived : candidates));
   const skipped = [];
+  if (explicitStart) {
+    const p = String(start.provider).toLowerCase();
+    const reason = Number(cooldowns?.[p]?.until) > timestamp ? 'cooldown' : quotaWaitProviders.includes(p) ? 'quota_wait' : '';
+    if (reason) console.error(`[routing] 明示指定された ${start.provider} は ${reason} 中ですがスキップせず試行します`);
+  }
   if ((useCooldown && (available.length || quotaWaitProviders.length)) || candidates.some((candidate) => directBlockedUntil(candidate.provider))) {
     for (const candidate of candidates) {
       const p = String(candidate.provider).toLowerCase();
+      if (explicitStart && candidate.provider === start.provider && candidate.model === start.model) continue;
       const cd = cooldowns?.[p];
       if (Number(cd?.until) > timestamp && useCooldown) {
         const minutes = Math.max(1, Math.ceil((cd.until - timestamp) / 60000));
@@ -520,7 +532,8 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
       if (timedOut) break; // A hung candidate must not consume three timeout windows.
       const kind = classifyFailure(status);
       const dailyQuota = status === 429 && isDailyQuotaResponse(status, detail);
-      if (permanentBilling || dailyQuota || kind !== 'retry' || attempt === 2) break;
+      const exhaustedUntilReset = isQuotaExhaustedUntilReset(status, detail, now());
+      if (permanentBilling || dailyQuota || exhaustedUntilReset || kind !== 'retry' || attempt === 2) break;
       const specified = retryAfterMs(response);
       if (specified != null && specified > 60000) break;
       const delay = specified ?? 1000 * 2 ** attempt;

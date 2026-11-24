@@ -123,6 +123,7 @@ try {
   const result = await callWithFallback({
     persistState: !args.includes('--no-persist'),
     start: effectiveStart,
+    explicitStart: preferProvider || args.includes('--no-fallback'),
     category,
     perProviderTimeoutMs,
     chain: args.includes('--no-fallback') ? [] : effectiveChain,

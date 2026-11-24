@@ -201,6 +201,49 @@ test('lane-health.json の quota_wait 中のプロバイダは隔離ディレク
   assert.equal(result.candidate.provider, 'openrouter');
 });
 
+test('routing 先頭が quota_wait 中なら次の健全な候補を最初に呼ぶ', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000, attempted = [];
+  fs.writeFileSync(files.laneHealthFile, JSON.stringify({ lanes: { groq: { alive: false, reason: 'quota_wait', until: timestamp + 300_000 } } }));
+  const result = await callWithFallback({
+    start, chain: [second], ...files, now: () => timestamp,
+    payloadFor(candidate) { attempted.push(candidate.provider); return requestFor(); },
+    fetchImpl: async () => new Response('{}', { status: 200 }),
+  });
+  assert.deepEqual(attempted, ['openrouter']);
+  assert.equal(result.candidate.provider, 'openrouter');
+});
+
+test('全候補が quota_wait 中でも候補を復活させて呼ぶ', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000, attempted = [];
+  fs.writeFileSync(files.laneHealthFile, JSON.stringify({ lanes: {
+    groq: { alive: false, reason: 'quota_wait', until: timestamp + 300_000 },
+    openrouter: { alive: false, reason: 'quota_wait', until: timestamp + 300_000 },
+  } }));
+  const result = await callWithFallback({
+    start, chain: [second], ...files, now: () => timestamp,
+    payloadFor(candidate) { attempted.push(candidate.provider); return requestFor(); },
+    fetchImpl: async () => new Response('{}', { status: 200 }),
+  });
+  assert.deepEqual(attempted, ['groq']);
+  assert.equal(result.candidate.provider, 'groq');
+});
+
+test('明示指定した先頭候補は quota_wait 中でも警告して試行する', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000, attempted = [], errors = [];
+  fs.writeFileSync(files.laneHealthFile, JSON.stringify({ lanes: { groq: { alive: false, reason: 'quota_wait', until: timestamp + 300_000 } } }));
+  const original = console.error;
+  console.error = message => errors.push(String(message));
+  t.after(() => { console.error = original; });
+  const result = await callWithFallback({
+    start, chain: [second], explicitStart: true, ...files, now: () => timestamp,
+    payloadFor(candidate) { attempted.push(candidate.provider); return requestFor(); },
+    fetchImpl: async () => new Response('{}', { status: 200 }),
+  });
+  assert.deepEqual(attempted, ['groq']);
+  assert.equal(result.candidate.provider, 'groq');
+  assert.equal(errors.filter(line => line.includes('明示指定された groq は quota_wait 中')).length, 1);
+});
+
 test('429 で reset 時刻が本文から取れた場合 lane-health.json に quota_wait を書く', async (t) => {
   const files = temporaryFiles(t), timestamp = 1_700_000_000_000; let calls = 0;
   await callWithFallback({
@@ -214,6 +257,36 @@ test('429 で reset 時刻が本文から取れた場合 lane-health.json に qu
   assert.equal(health.lanes.groq.reason, 'quota_wait');
   assert.equal(health.lanes.groq.alive, false);
   assert.ok(health.lanes.groq.until > timestamp);
+});
+
+test('reset 時刻付きの枯渇系429は同一プロバイダを再試行しない', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000, attempted = [], waits = [];
+  const result = await callWithFallback({
+    start, chain: [second], ...files, now: () => timestamp,
+    payloadFor(candidate) { attempted.push(candidate.provider); return requestFor(); },
+    sleepImpl: async ms => waits.push(ms),
+    fetchImpl: async () => attempted.length === 1
+      ? new Response('{"error":{"message":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-11-26 19:53:29"}}', { status: 429 })
+      : new Response('{}', { status: 200 }),
+  });
+  assert.deepEqual(attempted, ['groq', 'openrouter']);
+  assert.deepEqual(waits, []);
+  assert.equal(result.candidate.provider, 'openrouter');
+});
+
+test('一時的な429は従来どおり同一プロバイダを再試行する', async (t) => {
+  const files = temporaryFiles(t); let calls = 0; const waits = [];
+  const result = await callWithFallback({
+    start, chain: [second], ...files,
+    payloadFor: requestFor, sleepImpl: async ms => waits.push(ms),
+    fetchImpl: async () => ++calls === 1
+      ? new Response('rate limit; retry shortly', { status: 429, headers: { 'Retry-After': '1' } })
+      : new Response('{}', { status: 200 }),
+  });
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, [1000]);
+  assert.equal(result.candidate.provider, 'groq');
+  assert.equal(result.attempt, 1);
 });
 
 test('402 はプロバイダを24時間クールダウンに記録する', async (t) => {

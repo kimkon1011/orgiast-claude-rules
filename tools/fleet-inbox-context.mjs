@@ -109,7 +109,8 @@ export async function main({ home = process.env.ORGIAST_HOME || os.homedir(), re
     try { status = questionContext(home, input.session_id, now()); } catch { stderr('fleet-inbox-context: 質問表示失敗=1'); }
     try {
       const sent = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'fleet-mail-sent-status.json'), 'utf8'));
-      status += Object.values(sent).filter(m => m.status === 'failed').slice(-3).map(m => redactSecrets(`${m.to} への質問 ${m.id} は相手の自動回答が失敗（${m.failReason}）。相手の対話回答待ち／必要なら再送\n`)).join('');
+      const label = resolveFleetLabel(home, { hostname: os.hostname() });
+      status += Object.values(sent).filter(m => m.status === 'failed').filter(m => m.from === label || (!m.from && m.to !== label)).slice(-3).map(m => redactSecrets(`${m.to} への質問 ${m.id} は相手の自動回答が失敗（${m.failReason}）。相手の対話回答待ち／必要なら再送\n`)).join('');
     } catch { /* no sent status yet */ }
     const { context, shown } = selectContext(readInbox(home, { unreadOnly: false }), { label: resolveFleetLabel(home, { hostname: os.hostname() }), sessionId: input.session_id, now: now(), headless, limit: CONTEXT_LIMIT - status.length });
     if (!context && !status) return;

@@ -54,9 +54,9 @@ function writeText(home, name, text) {
   fs.writeFileSync(file, text, { mode: 0o600 });
   return file;
 }
-function defaultNotify(home, item) {
+export function defaultNotify(home, item, { exec = spawnSync } = {}) {
   const file = writeText(home, `notices/${uuidV5(item.key)}.txt`, item.body);
-  const r = spawnSync(process.execPath, [tool('kim-inbox.mjs'), '--add', '--kind', item.kind, '--key', item.key, '--source', 'ai-daikodo-line-watch', '--body-file', file], { encoding: 'utf8', windowsHide: true, timeout: 60000 });
+  const r = exec(process.execPath, [tool('kim-inbox.mjs'), '--add', '--kind', item.kind, '--force-kind', '--dedupe-key', item.key, '--source', 'ai-daikodo-line-watch', '--body-file', file], { encoding: 'utf8', windowsHide: true, timeout: 60000 });
   if (r.status !== 0) throw new Error('kim-inbox登録失敗');
 }
 export async function generateDecision(home, guide, thread, { exec = spawnSync } = {}) {

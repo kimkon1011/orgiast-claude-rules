@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { customerPending, ESCALATION, generateDecision, guardReply, main, parseDecision, processThreads, uuidV5 } from './ai-daikodo-line-watch.mjs';
+import { customerPending, defaultNotify, ESCALATION, generateDecision, guardReply, main, parseDecision, processThreads, uuidV5 } from './ai-daikodo-line-watch.mjs';
 const now = new Date('2026-11-24T10:00:00Z');
 const thread = { threadId: 't1', lineUserId: 'Uabc', displayName: '顧客', messages: [{ id: 'm1', at: '2026-11-20T00:00:00Z', author: 'customer', text: '質問です' }] };
 function fixture(t) {
@@ -129,4 +129,13 @@ test('LLM不正JSONは次の他AIへ、Claudeも自動fallbackも禁止', async 
   assert.equal(d.category, 'normal'); assert.equal(calls.length, 3);
   for (const args of calls) { assert.ok(args.includes('--no-fallback')); assert.ok(args.includes('--prefer-provider')); assert.doesNotMatch(args[args.indexOf('--model') + 1], /claude|anthropic/i); }
   for (const value of ['{}', '{"reply":"x"}', '{"category":"normal","reply":""}']) assert.throws(() => parseDecision(value));
+});
+test('kim-inboxのdedupe-keyを使い、引用中の承認語でinfoがaskに変わらない', t => {
+  const f = fixture(t);
+  defaultNotify(f.home, { kind: 'info', key: 'sent:t1:m1', body: '顧客発言全文・送信全文' }, { exec: (_, args) => {
+    assert.ok(args.includes('--force-kind'));
+    assert.equal(args[args.indexOf('--dedupe-key') + 1], 'sent:t1:m1');
+    assert.equal(fs.readFileSync(args[args.indexOf('--body-file') + 1], 'utf8'), '顧客発言全文・送信全文');
+    return { status: 0 };
+  } });
 });

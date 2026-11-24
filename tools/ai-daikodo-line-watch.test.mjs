@@ -82,7 +82,7 @@ test('送信結果不明の再試行は本文とUUIDを固定、23時間後は�
   f.opts.send = async x => { attempts.push(x); throw Error('timeout'); };
   await assert.rejects(processThreads([thread], f.opts));
   f.opts.decide = async () => assert.fail('regenerated');
-  await assert.rejects(processThreads([thread], f.opts)); assert.deepEqual(attempts[0], attempts[1]);
+  await assert.rejects(processThreads([{ ...thread, threadId: 'discord-recovered' }], f.opts)); assert.deepEqual(attempts[0], attempts[1]);
   await processThreads([thread], { ...f.opts, now: new Date(+now + 24 * 3600000) });
   assert.equal(attempts.length, 2); assert.equal(f.notices[0].kind, 'ask');
 });

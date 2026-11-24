@@ -87,12 +87,16 @@ export async function processThreads(threads, { home = os.homedir(), now = new D
   for (const t of threads.filter(customerPending)) {
     const last = t.messages.at(-1), id = `${t.threadId}:${last.id}`, key = uuidV5(id);
     if (state.sent.some(x => x.id === id || (x.userId === t.lineUserId && x.messageId === last.id))) continue;
-    let rec = state.decisions[key];
+    // Storage recovery may later resolve to a Discord thread with a different ID.
+    // An uncertain delivery must keep the original retry key across that change.
+    let rec = state.decisions[key] || Object.values(state.decisions).find(x =>
+      x.userId === t.lineUserId && x.messageId === last.id);
     if (rec?.status === 'blocked') { outcomes.push({ id, action: 'blocked', reason: rec.reason }); continue; }
     if (!rec) {
       const d = parseDecision(await decide(t, last));
       if (needsEscalation(last.text)) d.category = 'escalation';
-      rec = state.decisions[key] = { ...d, reply: d.category === 'escalation' ? ESCALATION : d.reply, retryKey: key, status: 'draft' };
+      rec = state.decisions[key] = { ...d, userId: t.lineUserId, messageId: last.id,
+        reply: d.category === 'escalation' ? ESCALATION : d.reply, retryKey: key, status: 'draft' };
       persist();
     }
     const base = `顧客: ${t.displayName}\n顧客の発言全文:\n${last.text}\n\n返信全文:\n${rec.reply}\n時刻: ${now.toISOString()}`;

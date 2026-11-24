@@ -570,7 +570,7 @@ export async function extractImprovements(meeting, { config, state, fetchImpl = 
   const seenInCall = []; // 同一呼び出し内の重複除去用
   for (const chunk of chunks) {
     if (state && state.llmCallsToday >= MAX_LLM_CALLS) {
-      appendLog({ event: 'llm-limit-reached', meetingId: meeting.id });
+      appendLog({ event: 'llm-limit-reached', phase: 'chunk-loop', meetingId: meeting.id });
       break;
     }
 

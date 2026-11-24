@@ -43,6 +43,10 @@ async function postWebhook(url, content, fetchImpl, signal, silent) {
 }
 
 const FAILURE = /failed|failure|失敗|停止|異常|エラー|timeout|timed out|タイムアウト|未計測|取得不可/i;
+// 否定された失敗語で完了報告を修復TODOにしない（2026-11-24 実測: notify-kim:c4bb15633b4278676f96）。
+export function stripNegatedFailures(text) {
+  return String(text ?? '').replace(/(?:failedAt|failed|failure|失敗|エラー|異常|停止|timeout|タイムアウト|未計測|取得不可)(?:\s|[:：=])*(?:はありません|ありません|は無い|はない|なし|無し|0件|０件|ゼロ|null|none)(?!ではなかった)/gi, '');
+}
 const HANDOFF = /接続し[て、]|接続して確認|どれを選|選んでほしい|原因調査.*(?:選択|選ん)|(?:ログ|結果|接続|認証).*確認(?:して|するよう|してください)/;
 // 完了報告・定時ダイジェストは「結果の知らせ」であって失敗通知ではない。本文には経過説明として
 // failed / 失敗 が引用されることが多く、それを失敗とみなして next-session.md へ修復TODOを起票すると、
@@ -92,12 +96,13 @@ export async function notifyKim(text, options = {}) {
   options = { ...options, kind: options.kimActionRequired === true || ['ask', 'action'].includes(options.kind) ? 'ask' : 'info' };
   const raw = redactSecrets(String(text ?? ''));
   const bodyText = stripOwnerAddress(raw);
-  if (STATUS_REPORT.test(bodyText) || (options.kind === 'info' && NO_ACTION_REPORT.test(bodyText) && !CURRENT_FAILURE.test(bodyText)) || ALREADY_FILED.test(bodyText) || isSuccessfulResumeReport(bodyText) || AUTO_RESUME_NOTICE.test(bodyText)) return deliverKim(raw, options);
+  const failureText = stripNegatedFailures(bodyText);
+  if (STATUS_REPORT.test(bodyText) || (options.kind === 'info' && NO_ACTION_REPORT.test(bodyText) && !CURRENT_FAILURE.test(failureText)) || ALREADY_FILED.test(bodyText) || isSuccessfulResumeReport(bodyText) || AUTO_RESUME_NOTICE.test(bodyText)) return deliverKim(raw, options);
   const judgment = JUDGMENT_REQUEST.test(bodyText);
   const humanEvidence = /^(?:試行|試した内容|試した修復)[:：][ \t]*\S.+$/m.test(bodyText)
     && /^証拠[:：][ \t]*\S.+$/m.test(bodyText) && /^必要な操作[:：][ \t]*\S.+$/m.test(bodyText);
   const benignQuotaReport = benignQuotaSweepReport(bodyText);
-  const failure = !judgment && !benignQuotaReport && (FAILURE.test(bodyText) || (RESUME_REPORT.test(bodyText) && RESUME_ERROR.test(bodyText)));
+  const failure = !judgment && !benignQuotaReport && (FAILURE.test(failureText) || (RESUME_REPORT.test(bodyText) && RESUME_ERROR.test(bodyText)));
   const handoff = !judgment && !benignQuotaReport && !humanEvidence && HANDOFF.test(bodyText);
   if (judgment || handoff) options.kind = 'ask';
   if (!judgment && !failure && !handoff) return deliverKim(raw, options);
@@ -106,7 +111,7 @@ export async function notifyKim(text, options = {}) {
   const source = options.source ? stripOwnerAddress(options.source) : bodyText.split('\n').find(line => line.trim()) || '通知';
   const cause = options.cause || (judgment
     ? bodyText.match(/^自動進行が判断待ちです[:：][ \t]*([^\n]+)$/m)?.[1] || source
-    : bodyText.match(/原因[:：][ \t]*([^\n]+)/)?.[1] || bodyText.split('\n').filter(line => FAILURE.test(line)).join('\n') || source);
+    : bodyText.match(/原因[:：][ \t]*([^\n]+)/)?.[1] || bodyText.split('\n').filter(line => FAILURE.test(stripNegatedFailures(line))).join('\n') || source);
   const key = createHash('sha256').update(`${options.userId || KIM_DISCORD_USER_ID}\n${normalizeFailure(source)}\n${normalizeFailure(cause)}`).digest('hex').slice(0, 20);
   const dir = path.join(home, '.claude', 'notify-kim');
   const stateFile = path.join(dir, `${key}.json`);

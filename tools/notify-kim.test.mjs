@@ -209,6 +209,25 @@ test('判断不要の明記がないタイムアウト報告は起票する', as
   assert.match(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8'), /通知の原因調査・修復:/);
 });
 
+test('否定された失敗語を含む成功報告は修復TODOを起票しない', async () => {
+  for (const report of [
+    'カフェ用の棚卸し回収依頼に対して、報告書をすべて返信済み（sent-status resultAt 2026-11-24T01:10:00Z・failedAt なし・秘密値なし）。やりとりは終了しました。',
+    '失敗0件・エラーなし',
+  ]) {
+    const dir = home(), s = sender(dir);
+    await notifyKim(report, { ...s.options, kind: 'info' });
+    assert.equal(fs.existsSync(path.join(dir, '.claude/next-session.md')), false);
+  }
+});
+
+test('否定されていない失敗語は従来どおり修復TODOを起票する', async () => {
+  for (const report of ['送信に失敗しました', 'failedAt: 2026-11-24T01:00:00Z']) {
+    const dir = home(), s = sender(dir);
+    await notifyKim(report, { ...s.options, kind: 'info' });
+    assert.match(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8'), /通知の原因調査・修復:/);
+  }
+});
+
 test('起票済みマーカーを含む本文を再通知しても二重起票しない', async () => {
   const dir = home(), s = sender(dir);
   await notifyKim('収集失敗', { ...s.options, cause: '一次原因' });

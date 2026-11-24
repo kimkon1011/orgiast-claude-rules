@@ -133,10 +133,12 @@ export async function checkWeb23Delivery(deps, days = WEB23_LOOKBACK_DAYS) {
   return parsed.messages.length === 0 ? { status: 'zero', count: 0 } : { status: 'ok', count: parsed.messages.length };
 }
 export function childSearch(script, args, timeout) {
+  if (!existsSync(script)) return Promise.resolve({ code: 1, stdout: '', unavailableReason: `この席に検索ツールがありません (${script})` });
   return new Promise((resolveChild) => {
-    execFile(process.execPath, [script, ...args], { windowsHide: true, timeout, maxBuffer: 2 * 1024 * 1024 }, (error, stdout) => {
+    execFile(process.execPath, [script, ...args], { windowsHide: true, timeout, maxBuffer: 2 * 1024 * 1024 }, (error, stdout, stderr) => {
       // Do not propagate raw child stderr (may contain credentials or browser settings).
-      resolveChild({ code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout: stdout || '', timedOut: !!error?.killed });
+      const unavailableReason = /GWS proxy: kim is calendar-only/.test(stderr || '') ? 'この席では読めません（calendar-only。別席で要照合）' : '';
+      resolveChild({ code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout: stdout || '', timedOut: !!error?.killed, ...(unavailableReason ? { unavailableReason } : {}) });
     });
   });
 }
@@ -195,10 +197,16 @@ export async function searchEvidence(txn, opts, budget, deps) {
   let deferred = '';
   for (const user of USERS) {
     if (opts.noGmail) { deferred ||= '未検索(無効化)'; continue; }
+    if (budget.gmailUnavailable[user]) continue;
     if (budget.gmail[user] >= LIMITS.gmail) { deferred = '未検索(上限)'; continue; }
     if (!deps.timeLeft()) { deferred = '未検索(時間上限)'; break; }
     budget.gmail[user]++;
     const result = await deps.search(join(HERE, 'gmail-search.mjs'), ['--user', user, '--query', gmailQuery(txn), '--max', '20'], deps.timeout());
+    if (result.code !== 0 && result.unavailableReason) {
+      budget.gmailUnavailable[user] = result.unavailableReason;
+      issues.push(`Gmail ${user}: unavailable - ${result.unavailableReason}`);
+      continue;
+    }
     if (result.code !== 0) { issues.push(`Gmail ${user}: exit ${result.code}`); deferred ||= '未検索(障害)'; continue; }
     let messages;
     try { const parsed = JSON.parse(result.stdout); messages = parsed.messages; if (parsed.skipped) { deferred ||= '未検索(障害)'; issues.push(`Gmail ${user}: skipped ${parsed.skipped}`); } } catch { /* handled below */ }
@@ -211,7 +219,7 @@ export async function searchEvidence(txn, opts, budget, deps) {
   }
   if (opts.noYahoo) deferred ||= '未検索(無効化)';
   else if (budget.yahooFailed) deferred ||= '未検索(障害)';
-  else if (budget.yahooUnavailable) { /* Explicitly skip Yahoo after exit 2; Gmail results remain usable. */ }
+  else if (budget.yahooUnavailable) { /* Explicitly skip unavailable Yahoo; Gmail results remain usable. */ }
   else {
     const queries = [...amountVariants(txn.amount), merchantToken(txn.description)].filter(Boolean);
     // Await every browser child before launching another; never use --open.
@@ -220,7 +228,12 @@ export async function searchEvidence(txn, opts, budget, deps) {
       if (!deps.timeLeft()) { deferred = '未検索(時間上限)'; break; }
       budget.yahoo++;
       const result = await deps.search(opts.yahooScript, ['--query', query, '--max', '50'], deps.timeout());
-      if (result.code === 2) { budget.yahooUnavailable = true; break; }
+      if (result.code === 2 || result.unavailableReason) {
+        budget.yahooUnavailable = true;
+        budget.yahooUnavailableReason ||= result.unavailableReason || 'デスクトップ「ヤフオク再ログイン（ダブルクリック）」をお願いします';
+        issues.push(`Yahoo: unavailable - ${budget.yahooUnavailableReason}`);
+        break;
+      }
       if (result.code !== 0) { budget.yahooFailed = true; issues.push(`Yahoo: exit ${result.code}`); deferred ||= '未検索(障害)'; break; }
       const parsed = parseYahoo(result.stdout, txn, opts.today);
       evidence.push(...parsed.evidence);
@@ -228,7 +241,8 @@ export async function searchEvidence(txn, opts, budget, deps) {
       if (parsed.evidence.length) break;
     }
   }
-  return { evidence: [...new Map(evidence.map((e) => [`${e.box}:${e.link}:${e.subject}`, e])).values()], issues, deferred };
+  const unavailable = Object.keys(budget.gmailUnavailable).length > 0 || budget.yahooUnavailable;
+  return { evidence: [...new Map(evidence.map((e) => [`${e.box}:${e.link}:${e.subject}`, e])).values()], issues, deferred, unavailable };
 }
 export function sheetRows(results, today, verification = false) {
   return results.filter((r) => !r.deferred).map((r) => [today, r.date, r.account, r.description, r.amount, r.verdict,
@@ -242,7 +256,8 @@ export function dmText(result) {
     `${SHEET_LINK}?authuser=${encodeURIComponent('kim@orgiast.jp')}`, 'kim@orgiast.jp で開いてください'];
   if (result.web23?.status === 'zero') text.push(`⚠ ${WEB23_ADDRESS} 宛メールが過去${WEB23_LOOKBACK_DAYS}日0件。seisaku-team@ へのグループ配信が止まった可能性があり、Amazon 領収書の証跡が黙って抜けます。`);
   else if (result.web23?.status === 'unverified') text.push(`${WEB23_ADDRESS} の受信確認はできませんでした（${result.web23.reason}）。0件とは判定していません。`);
-  if (result.yahooUnavailable) text.push('デスクトップ『ヤフオク再ログイン（ダブルクリック）』をお願いします');
+  for (const [user, reason] of Object.entries(result.searches?.gmailUnavailable || {})) text.push(`${user} は ${reason}`);
+  if (result.yahooUnavailable) text.push(`Yahoo は ${result.searches?.yahooUnavailableReason || 'デスクトップ「ヤフオク再ログイン（ダブルクリック）」をお願いします'}`);
   if (result.issues.length) text.push(`一部検索を完了できませんでした (${result.issues.length}件)。結果JSONを確認してください。`);
   return text.join('\n');
 }
@@ -269,7 +284,7 @@ export async function runCheck(opts, injected = {}) {
   const state = injected.state || await readState(opts.statePath);
   if (opts.weekly && weeklySkip(opts.today, state.lastRunAt)) return { skip: true };
   const result = { today: opts.today, from: opts.from, to: opts.to, dryRun: opts.dryRun, wallets: [], statusCounts: {}, candidateTotal: 0, results: [], cacheHits: 0, yahooUnavailable: false, issues: [], appended: 0, complete: false, failReason: '' };
-  const budget = { gmail: Object.fromEntries(USERS.map((u) => [u, 0])), yahoo: 0, yahooUnavailable: false, yahooFailed: false, yahooUnverified: 0 };
+  const budget = { gmail: Object.fromEntries(USERS.map((u) => [u, 0])), gmailUnavailable: {}, yahoo: 0, yahooUnavailable: false, yahooUnavailableReason: '', yahooFailed: false, yahooUnverified: 0 };
   result.searches = budget;
   async function checkpoint() { await save(opts.out, result); if (!opts.dryRun) await save(opts.statePath, state); }
   let stage = 'db-connect';
@@ -296,9 +311,11 @@ export async function runCheck(opts, injected = {}) {
       const deferred = !!search.deferred && !search.evidence.length;
       const verdict = rule === '私用(自動)' ? rule : search.evidence.length ? '証跡あり(要申請)' : rule || (deferred ? search.deferred : '不明(要確認)');
       const checkedAt = new Date().toISOString();
-      result.results.push({ ...txn, verdict, evidence: search.evidence, checkedAt, ...(rule ? { ruleVerdict: rule } : {}), ...(deferred ? { deferred: true, searchStatus: search.deferred } : {}) });
+      result.results.push({ ...txn, verdict, evidence: search.evidence, checkedAt, ...(rule ? { ruleVerdict: rule } : {}), ...(search.unavailable ? { sourceUnavailable: true } : {}), ...(deferred ? { deferred: true, searchStatus: search.deferred } : {}) });
       // Deferred entries deliberately have no verdict: retry next run; never pin an outage as unknown.
-      state.txns[String(txn.id)] = deferred ? { evidence: search.evidence, checkedAt, searchStatus: search.deferred } : { verdict, evidence: search.evidence, checkedAt };
+      state.txns[String(txn.id)] = deferred || search.unavailable
+        ? { evidence: search.evidence, checkedAt, searchStatus: search.deferred || '一部受信箱 unavailable（別席で要照合）' }
+        : { verdict, evidence: search.evidence, checkedAt };
       result.yahooUnavailable = budget.yahooUnavailable;
       stage = 'checkpoint-write';
       await checkpoint();
@@ -309,7 +326,8 @@ export async function runCheck(opts, injected = {}) {
       result.web23 = await checkWeb23Delivery({ search: injected.search || childSearch, timeLeft, timeout });
       if (result.web23.status === 'unverified') result.issues.push(`web23@: ${result.web23.reason}`);
     }
-    result.complete = inventory.complete && !result.results.some((r) => r.deferred) && result.results.length === inventory.candidates.length;
+    const sourceUnavailable = Object.keys(budget.gmailUnavailable).length > 0 || budget.yahooUnavailable;
+    result.complete = inventory.complete && !sourceUnavailable && !result.results.some((r) => r.deferred) && result.results.length === inventory.candidates.length;
     result.deferredTotal = result.results.filter((r) => r.deferred).length;
     if (!opts.dryRun) {
       stage = 'sheets-write';

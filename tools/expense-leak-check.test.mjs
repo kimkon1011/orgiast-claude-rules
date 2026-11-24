@@ -11,7 +11,7 @@ import { createSheetsClient } from './lib/sheets-dwd.mjs';
 const opts = (args = []) => parseArgs(args, { EXPENSE_LEAK_TODAY: '2026-10-09', EXPENSE_LEAK_HOME: '/tmp/expense-test' });
 const wallet = { id: 7, type: 'credit_card', name: '金立替／テスト' };
 const txn = (id, extra = {}) => ({ id, walletable_id: wallet.id, walletable_type: wallet.type, status: 1, date: '2026-10-01', description: 'テスト商店', amount: 1599, account: wallet.name, ...extra });
-const budget = () => ({ gmail: { 'kim@orgiast.jp': 0, 'seisaku-team@orgiast.jp': 0 }, yahoo: 0, yahooUnavailable: false, yahooFailed: false, yahooUnverified: 0 });
+const budget = () => ({ gmail: { 'kim@orgiast.jp': 0, 'seisaku-team@orgiast.jp': 0 }, gmailUnavailable: {}, yahoo: 0, yahooUnavailable: false, yahooUnavailableReason: '', yahooFailed: false, yahooUnverified: 0 });
 const emptySearch = async (script) => ({ code: 0, stdout: script.includes('gmail-search') ? '{"messages":[]}' : '（該当なし）' });
 const metadata = { sheets: [{ properties: { title: TAB, gridProperties: { rowCount: 1000, frozenRowCount: 1 } } }] };
 function harness(transactions, overrides = {}) {
@@ -155,6 +155,28 @@ test('Gmail outage remains retryable and raw child error is not persisted', asyn
   assert.equal(h.state.txns['1'].verdict, undefined);
   assert.equal(r.appended, 0);
   assert.ok(!JSON.stringify(r).includes('secret must'));
+});
+test('unreadable mailbox is reported once while readable sources still produce appendable rows', async () => {
+  let kimCalls = 0;
+  const h = harness([txn(1), txn(2)], { search: async (script, args) => {
+    if (script.includes('gmail-search') && args.includes('kim@orgiast.jp')) {
+      kimCalls++;
+      return { code: 1, stdout: '', unavailableReason: 'この席では読めません（calendar-only。別席で要照合）' };
+    }
+    if (script.includes('yahoo')) return { code: 1, stdout: '', unavailableReason: 'この席に検索ツールがありません' };
+    return { code: 0, stdout: script.includes('gmail-search') ? '{"messages":[]}' : '（該当なし）' };
+  } });
+  const r = await runCheck(opts(), h.injected);
+  assert.equal(kimCalls, 1);
+  assert.equal(r.complete, false);
+  assert.equal(r.deferredTotal, 0);
+  assert.equal(r.appended, 2);
+  assert.equal(h.state.txns['1'].verdict, undefined);
+  assert.equal(r.results[0].sourceUnavailable, true);
+  assert.equal(r.issues.filter((issue) => issue.startsWith('Gmail kim@')).length, 1);
+  assert.equal(r.issues.filter((issue) => issue.startsWith('Yahoo:')).length, 1);
+  assert.match(dmText(r), /kim@orgiast\.jp.*別席で要照合/);
+  assert.match(dmText(r), /Yahoo.*検索ツールがありません/);
 });
 test('verified Gmail evidence survives Yahoo unavailable and uses account-specific thread link', async () => {
   const h = harness([txn(1)], { search: async (script) => script.includes('yahoo') ? { code: 2, stdout: '' } : { code: 0, stdout: JSON.stringify({ messages: [{ threadId: 'abc', date: '2026-10-01T12:00:00+09:00', subject: '領収書', from: 'shop@example.test' }] }) } });

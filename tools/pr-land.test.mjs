@@ -8,6 +8,11 @@ import { publishSeatPr, landingRoute, waitForCi } from './pr-land.mjs';
 const isAutomergeRestCall = call => call[0] === 'gh'
   && call[1] === 'api'
   && call.at(-1) === 'labels[]=automerge';
+const isAutomergeRestDeleteCall = call => call[0] === 'gh'
+  && call[1] === 'api'
+  && call[2] === '-X'
+  && call[3] === 'DELETE'
+  && call[4] === 'repos/kimkon1011/repo/issues/123/labels/automerge';
 
 function fixture(t, { files = ['tools/a.mjs'], push = true, account = 'nishi@orgiast.jp', existing = false } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'seat-pr-'));
@@ -60,11 +65,25 @@ test('鍵関連はラベルを外しCIを待ち既存pr-mergeの検証とSHA固�
     const f = fixture(t, { files: [file] });
     assert.equal(publishSeatPr(f).route, 'self-merge');
     assert(!f.calls.some(isAutomergeRestCall));
+    assert(f.calls.some(isAutomergeRestDeleteCall));
     assert(f.calls.some(c => c.includes('statusCheckRollup')));
     const merge = f.calls.find(c => c[2] === 'merge');
     assert(merge.includes('--squash')); assert(merge.includes('--match-head-commit')); assert(merge.includes('kimkon1011/repo'));
     assert(f.calls.some(c => c.includes('state,mergedAt')));
   }
+});
+test('automergeラベルがない404でもself-mergeを続行する', t => {
+  const f = fixture(t, { files: ['.env.example'] }), run = f.run;
+  f.run = (file, args) => {
+    if (isAutomergeRestDeleteCall([file, ...args])) {
+      f.calls.push([file, ...args]);
+      throw new Error('HTTP 404: Label does not exist');
+    }
+    return run(file, args);
+  };
+  assert.equal(publishSeatPr(f).route, 'self-merge');
+  assert(f.calls.some(isAutomergeRestDeleteCall));
+  assert(f.calls.some(c => c[2] === 'merge'));
 });
 test('workflow変更・権限なしはpush前に停止、非kim席は副作用なし', t => {
   for (const options of [{ files: ['.github/workflows/x.yml'] }, { push: false }]) {

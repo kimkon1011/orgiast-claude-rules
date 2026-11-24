@@ -1128,6 +1128,19 @@ export const policyStallMinElapsedSecs = (env = {}) => positiveEnv(env.CODEX_DO_
 // タイムアウトで kill してから 'close' を待つ猶予。超えたら pipe を破棄して打ち切る。
 export const timeoutKillGraceMs = (env = {}) => positiveEnv(env.CODEX_DO_TIMEOUT_KILL_GRACE_MS, 5000);
 
+// Windows の休止中は Node のタイマーが発火しない一方 Date.now() は壁時計ぶん進む。
+// timeout 後の台帳へ壁時計差をそのまま書くと、実際には CPU を使っていない休止時間まで
+// chain[].secs / 主経路 secs に加算される。timeout の契約（予算 + kill 猶予）で記録も上限化する。
+export function boundedAttemptElapsedSecs(observedSecs, timeoutSecs, timedOut, killGraceMs = 5000) {
+  const observed = Number(observedSecs);
+  if (!Number.isFinite(observed) || observed < 0) return 0;
+  if (timedOut !== true) return observed;
+  const budget = Number(timeoutSecs);
+  const grace = Number(killGraceMs) / 1000;
+  if (!Number.isFinite(budget) || budget <= 0 || !Number.isFinite(grace) || grace < 0) return observed;
+  return Math.min(observed, budget + grace);
+}
+
 export function remainingPrimaryBudgetSecs(budgetSecs, elapsedSecs) {
   return Math.max(1, budgetSecs - elapsedSecs);
 }
@@ -1524,7 +1537,10 @@ function execute(command, commandArgs, options = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timer); clearTimeout(forceTimer); clearInterval(stallTimer);
-      resolve(value);
+      const observedElapsedSecs = (Date.now() - callStarted) / 1000;
+      resolve({ ...value, observedElapsedSecs, elapsedSecs: boundedAttemptElapsedSecs(
+        observedElapsedSecs, callTimeoutSeconds, value?.timedOut === true, timeoutKillGraceMs(process.env)
+      ) });
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -1543,6 +1559,9 @@ function execute(command, commandArgs, options = {}) {
       // 親が先に終わって孫が pipe を握ったままだと taskkill /T の木から外れ 'close' が来ない
       // (2026-10-28 実測: 予算600秒の gemini-cli 試行が 1044 秒)。猶予後は close を待たず打ち切る。
       forceTimer = setTimeout(() => {
+        // 最初の taskkill が失敗・競合してもバックエンドを残さない。pipe の破棄だけでは
+        // 孫プロセス自体が走り続けるため、猶予終了時にもプロセス木を再 kill する。
+        killProcessTree(child);
         for (const stream of [child.stdin, child.stdout, child.stderr]) { try { stream?.destroy(); } catch { /* 既に閉じている */ } }
         settle({ status: 124, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null });
       }, timeoutKillGraceMs(process.env));
@@ -1714,7 +1733,7 @@ async function tryCheapFirstFallback() {
       console.error('[codex-do] cheap-first: ' + backend.name + ' failed validation (' + invalid + ')');
       if (quality) recordFallbackBackendOutcome(home, { backend: backend.name, outcome: 'quality_fail' });
     }
-    chainResult.push({ backend: backend.name, model: backend.model, status: res.status ?? null, timedOut: res.timedOut === true, out: Math.ceil((res.outputChars || 0) / 4), outChars: res.outputChars || 0, secs: Number(((Date.now() - as) / 1000).toFixed(3)), budgetSecs: bt, stderrTail: String(res.stderr || '').replace(/\s+/g, ' ').trim().slice(-200), outcome });
+    chainResult.push({ backend: backend.name, model: backend.model, status: res.status ?? null, timedOut: res.timedOut === true, out: Math.ceil((res.outputChars || 0) / 4), outChars: res.outputChars || 0, secs: Number((Number.isFinite(res?.elapsedSecs) ? res.elapsedSecs : (Date.now() - as) / 1000).toFixed(3)), budgetSecs: bt, stderrTail: String(res.stderr || '').replace(/\s+/g, ' ').trim().slice(-200), outcome });
     const toRecord = fallbackOutcomeToRecord(outcome, { cooling: cooling.has(backend.name), budgetSecs: bt, normalSecs: backendSpecificTimeoutSecs(backend.name, process.env, { kind: taskKind }) });
     if (outcome === 'timeout' && !toRecord) { chainResult.at(-1).outcome = 'probe_timeout'; console.error(`[codex-do] cheap-first: ${backend.name} は冷却中の短縮予算(${bt}秒)で timeout。本番失敗としては記録しません`); }
     if (dec.advance) { if (toRecord) recordFallbackBackendOutcome(home, { backend: backend.name, outcome: toRecord }); continue; }
@@ -1849,7 +1868,9 @@ async function executeCodex() {
     const attemptStarted = Date.now();
     logCodex();
     result = await launchCodex(codexArgs, primaryStarted);
-    const elapsed = (Date.now() - attemptStarted) / 1000;
+    const elapsed = Number.isFinite(result?.elapsedSecs)
+      ? result.elapsedSecs
+      : (Date.now() - attemptStarted) / 1000;
     seconds += elapsed;
     attempts = attempt;
     if (!executionPolicy.allowModelRetry) break;
@@ -2105,7 +2126,9 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
           // stderrTail は末尾200字のため拒否回数が欠ける。打ち切り判定と同じ実測値（全 stderr の拒否回数・出力文字数）を残す。
           policyDenials: countPolicyDenials(result.stderr),
           outChars: result.outputChars || 0,
-          secs: Number(((Date.now() - attemptStarted) / 1000).toFixed(3)),
+          secs: Number((Number.isFinite(result?.elapsedSecs)
+            ? result.elapsedSecs
+            : (Date.now() - attemptStarted) / 1000).toFixed(3)),
           // この試行に実際に与えた予算。delegation-health の timeout 判定が
           // 「900 秒固定」ではなく与えた予算で判定できるようにする（2026-10-22）。
           budgetSecs: backendTimeout,

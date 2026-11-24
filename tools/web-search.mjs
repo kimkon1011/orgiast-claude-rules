@@ -337,7 +337,7 @@ export async function search(query, options = {}) {
     deepseek: options.deepseekApiKey ?? loadDeepseekApiKey(keyOptions),
     gsk: options.gskApiKey ?? loadGskApiKey(keyOptions),
   };
-  const providers = options.crawlUrl ? (providerOption === 'auto' ? ['deepseek', 'gsk'] : [providerOption]) : providerOption === 'auto' ? ['gemini', 'groq', 'openrouter', 'deepseek', 'gsk'] : [providerOption];
+  const providers = options.crawlUrl ? (providerOption === 'auto' ? ['deepseek', 'gsk'] : [providerOption]) : providerOption === 'auto' ? ['openrouter', 'deepseek', 'gsk', 'groq', 'gemini'] : [providerOption];
   if (options.crawlUrl && providers.some(provider => !['deepseek', 'gsk'].includes(provider))) throw new Error('--crawl の --provider は auto|deepseek|gsk で指定してください');
   const keyNames = { gemini: 'GEMINI_API_KEY', groq: 'GROQ_API_KEY', openrouter: 'OPENROUTER_API_KEY', deepseek: 'DEEPSEEK_API_KEY', gsk: 'GSK_API_KEY' };
   if (providers.every((provider) => !keys[provider])) {

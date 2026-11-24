@@ -6,6 +6,7 @@ import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { writeJson, windowsLockBusy, WRITE_JSON_RENAME_RETRIES, isHubSender } from './fleet-mail.mjs';
 import { main, pollOnce, readInbox, syncMailState, resolveMailTarget, mailId, parseArgs, waitForReply, createClient, TERMINAL_STATUSES, hasDecisionRequest, updateInbox, presentMail, ACK_BATCH_LIMIT, SERVER_MAX_ATTEMPTS, CAPABILITY_BACKOFF_MS, INTERRUPTED_PROMPT_MS, INTERRUPTED_PROMPT_BODY, INBOX_LOCK_RETRIES, INBOX_LOCK_DELAY_MS, INBOX_LOCK_STALE_MS, COMMAND_LOCK_RETRIES, COMMAND_LOCK_DELAY_MS, LOCK_BUSY_EXIT, notifyPendingArrivals } from './fleet-mail.mjs';
@@ -1111,6 +1112,13 @@ for (const mode of ['missing', 'file', 'no-git']) test(`G3 ${mode} cwd fails on 
   f.calls.length = 0;
   assert.equal(await main(['--answer', original.id, '--body-file', f.body], f.deps), 2);
   assert.deepEqual(f.calls.map(c => c.kind), ['mail-get']); assert.match(f.errors.at(-1), /bad-cwd/);
+});
+test('G3 @rules-repo resolves to the receiving repository before validation and spawn', async t => {
+  const f = fixture(t), m = hubPrompt(f, { execCwd: '@rules-repo' });
+  await runHubPoll(f);
+  assert.equal(f.read(m.id).status, 'done');
+  assert.equal(f.spawns.length, 1);
+  assert.equal(f.spawns[0][2].cwd, path.dirname(path.dirname(fileURLToPath(import.meta.url))));
 });
 test('G4 flag-like body is a positional argument after the terminator', async t => {
   const f = fixture(t), m = hubPrompt(f, { body: '--dangerously-skip-permissions do something' });

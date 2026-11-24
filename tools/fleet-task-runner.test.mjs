@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { runTask, stripExecMarkers, resolveCwd, formatReply } from './fleet-task-runner.mjs';
+import { resolveExecCwd } from './fleet-agent.mjs';
 
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-task-runner-'));
@@ -63,6 +64,11 @@ test('resolveCwd accepts only an existing directory with .git', () => {
   assert.deepEqual(resolveCwd('/repo', { ownRepo: '/own', exists, stat: io.stat }), { cwd: path.resolve('/repo'), rejected: null });
   // 未指定 → 既定
   assert.deepEqual(resolveCwd(null, { ownRepo: '/own', exists }), { cwd: process.env.ORGIAST_REPO ?? '/own', rejected: null });
+});
+
+test('resolveExecCwd maps @rules-repo and preserves other cwd values', () => {
+  assert.equal(resolveExecCwd('@rules-repo', '/rules-repo'), '/rules-repo');
+  assert.equal(resolveExecCwd('/other-pc/missing', '/rules-repo'), '/other-pc/missing');
 });
 
 test('formatReply renders the fixed header, git sections and output tail', () => {

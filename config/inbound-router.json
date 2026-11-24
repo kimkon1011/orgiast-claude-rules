@@ -18,13 +18,13 @@
   ],
   "routes": {
     "learning": { "pc": "000", "target": "000KimPC", "session": "c63e6dd3-e36f-4242-8f55-95383c7b5088", "cwd": "C:\\Users\\uers\\Downloads\\CLAUDE.md配布", "description": "あつまる石井塾 ラーニング勉強会（陽介さん・健作さん）" },
-    "sales": { "pc": "011", "target": "作業用011", "cwd": "C:\\Users\\uers\\Downloads\\CLAUDE.md配布", "description": "新規問い合わせ・見積（ブース以外の営業案件）" },
-    "booth": { "pc": "014", "target": "作業用014", "cwd": "C:\\Users\\uers\\Downloads\\CLAUDE.md配布", "description": "展示会ブース・Reブースの出展" },
-    "event": { "pc": "008", "target": "008XPS8300", "cwd": "C:\\Users\\uers\\Downloads\\CLAUDE.md配布", "description": "その他イベント・式典の運営" },
-    "gakkai": { "pc": "018", "target": "作業用018", "cwd": "C:\\Users\\uers\\Downloads\\CLAUDE.md配布", "description": "学会出展獲得（医学会併設企業展示含む）" },
-    "minpaku": { "pc": "004", "target": "作業用004民泊用", "cwd": "C:\\Users\\uers\\Downloads\\CLAUDE.md配布", "description": "民泊運営に関する連絡" },
-    "lahaina": { "pc": "015", "target": "カフェ用015", "cwd": "C:\\Users\\uers\\Downloads\\CLAUDE.md配布", "description": "ラハイナ・カフェ運営" },
-    "toho": { "pc": "999", "target": "作業用999", "cwd": "C:\\Users\\uers\\Downloads\\CLAUDE.md配布", "description": "東邦鋼業の取引" },
+    "sales": { "pc": "011", "target": "作業用011", "cwd": "@rules-repo", "description": "新規問い合わせ・見積（ブース以外の営業案件）" },
+    "booth": { "pc": "014", "target": "作業用014", "cwd": "@rules-repo", "description": "展示会ブース・Reブースの出展" },
+    "event": { "pc": "008", "target": "008XPS8300", "cwd": "@rules-repo", "description": "その他イベント・式典の運営" },
+    "gakkai": { "pc": "018", "target": "作業用018", "cwd": "@rules-repo", "description": "学会出展獲得（医学会併設企業展示含む）" },
+    "minpaku": { "pc": "004", "target": "作業用004民泊用", "cwd": "@rules-repo", "description": "民泊運営に関する連絡" },
+    "lahaina": { "pc": "015", "target": "カフェ用015", "cwd": "@rules-repo", "description": "ラハイナ・カフェ運営" },
+    "toho": { "pc": "999", "target": "作業用999", "cwd": "@rules-repo", "description": "東邦鋼業の取引" },
     "discord-existing": { "pc": "000", "target": "000KimPC", "cwd": "C:\\Users\\uers\\Downloads\\CLAUDE.md配布", "description": "Discord の既存自動応答（OrgiastDiscordAutoReply が全件対応、二重配送防止のため dispatch:false）", "dispatch": false }
   },
   "rules": [

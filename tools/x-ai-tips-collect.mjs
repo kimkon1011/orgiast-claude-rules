@@ -383,7 +383,7 @@ export async function runCollect(options = {}) {
         if (state.night.costUsd > config.maxCostUsd) throw new Error('夜間費用上限超過');
         const items = parseItems(json);
 if (items === null) {
-  errorLog(`[x-ai-tips] parse-failed provider=openrouter head=${(json.output_text || '').replace(/[\r\n]/g, ' ').slice(0, 60)}`);
+  errorLog(`[x-ai-tips] parse-failed provider=${creditBlocked ? 'openrouter' : 'x.ai'} head=${(json.output_text || '').replace(/[\r\n]/g, ' ').slice(0, 60)}`);
   parseFailed = true; parseFailedTopics++; continue;
 }
 acquired += items.length;
@@ -422,6 +422,9 @@ acquired += items.length;
       }
     }
     if (!truncated && failedTopics) throw new Error(`テーマ失敗${failedTopics}件（残りのテーマは処理継続）`);
+    if (parseFailedTopics > 0 && acquired === 0 && added === 0 && !truncated) {
+      return { status: `skip:fallback応答がJSONでない(${parseFailedTopics}テーマ)`, calls, cost, added: 0, duplicates: 0 };
+    }
     return { status: `ok:取得${acquired}件 追加${added}件 重複${duplicates}件 費用$${cost.toFixed(2)}${truncated ? ` 打ち切り:${truncated}` : ''}`, calls, cost, added, duplicates };
   } catch (error) {
     // APIの応答本文・認証値はログに出さない。

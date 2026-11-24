@@ -14,7 +14,7 @@ test('403 は共有クライアントで OpenRouter grok に同じプロンプ�
   });
   assert.equal(request.url, 'https://openrouter.ai/api/v1/chat/completions');
   assert.equal(request.body.model, 'x-ai/grok-4.6');
-  assert.equal(request.body.messages[0].content, 'same prompt');
+  assert.equal(request.body.messages[1].content, 'same prompt');
   assert.equal(result.text, '{"items":[]}');
 });
 

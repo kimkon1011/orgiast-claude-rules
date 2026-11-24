@@ -227,7 +227,8 @@ test('新しい絶対ルール行はmakeIndexの出力に全文残る', () => {
   const rule = body.split(/\r?\n/).find((line) => line.startsWith(prefix));
   assert.ok(rule);
   assert.ok(index.includes(rule));
-  assert.match(rule, /kim宛報告=kim-inbox.*PR は作った席が自分で着地させる.*access-doctor\.mjs --fix/);
+  assert.match(rule, /PR は作った席が自分で着地させる.*access-doctor\.mjs --fix/);
+  assert.ok(index.some(line => line.startsWith('**🔴 無人ジョブの kim 宛報告は kim-inbox') && line.includes('kim 宛 Discord DM は全廃・例外なし')));
 });
 
 test('kim 宛 dry-run は台帳にも Discord にも書き込まない', async () => {

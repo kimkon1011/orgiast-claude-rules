@@ -744,6 +744,25 @@ export function measureIndexBytes(index) {
   return { optionalBytes, mandatoryBytes: totalBytes - optionalBytes, totalBytes };
 }
 
+const indexRuleStart = /^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u;
+const numberedIndexHeading = /^\*\*(\d+(?:\.\d+)+)\s+.+\*\*$/;
+const stripIndexDate = line => line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, '');
+
+function indexPreview(line) {
+  const clean = stripIndexDate(line);
+  for (const match of clean.matchAll(/。(?:\*\*)?/gu)) {
+    const sentence = clean.slice(0, match.index + match[0].length);
+    if (hasBalancedIndexMarkup(sentence)) return sentence;
+  }
+  if (!/[、，,:：]$/u.test(clean) && hasBalancedIndexMarkup(clean)) return clean;
+  return null;
+}
+
+function hasBalancedIndexMarkup(line) {
+  return (line.match(/\*\*/g) ?? []).length % 2 === 0
+    && (line.match(/`/g) ?? []).length % 2 === 0;
+}
+
 export function makeIndex(body) {
   let fence = null;
   const lines = body.replace(/\r\n/g, '\n').split('\n').filter(line => {
@@ -759,35 +778,32 @@ export function makeIndex(body) {
   const kept = [indexLead];
   const conclusions = new Map();
   let previousNonempty = '';
+  let currentSection;
+  const includedSubheadings = new Set();
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // 絶対ルール直後の太字小見出しは参照先として残す。通常の詳細見出しは展開しない。
-    if (/^\*\*\d+(?:\.\d+)+\s+.+\*\*$/.test(line)
-      && /^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(previousNonempty)) {
-      kept.push(line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, ''));
+    const subheading = line.match(numberedIndexHeading);
+    if (subheading && indexRuleStart.test(previousNonempty) && subheading[1] !== currentSection) {
+      const title = stripIndexDate(line);
+      if (!includedSubheadings.has(title)) {
+        includedSubheadings.add(title);
+        kept.push(title);
+      }
     }
     if (line.trim()) previousNonempty = line;
     if (/^#{1,3}(?:\s|$)/.test(line)) {
-      // 実文書のタイトルと章見出しは全文へ委ね、参照先になる個別規約の見出しを優先する。
+      currentSection = line.match(/^###\s+(\d+(?:\.\d+)+)(?=\s|$)/)?.[1];
       const broadOnboardingHeading = /^# オージャスト Claude Code 共通ルール/.test(line) || /^##(?:\s|$)/.test(line);
-      if (!broadOnboardingHeading) kept.push(line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, ''));
-      // 大見出しは案内だけにし、個別規約（###）の結論と絶対ルールを優先する。
-      for (let j = i + 1; /^###\s/.test(line) && j < lines.length && !/^#{1,3}(?:\s|$)/.test(lines[j]); j++) {
+      if (!broadOnboardingHeading) kept.push(stripIndexDate(line));
+      for (let j = i + 1; /^###\s/.test(line) && j < lines.length; j++) {
         const candidate = lines[j].trim();
         if (!candidate) continue;
-        // Absolute rules are emitted in full by the outer loop. A first-sentence
-        // preview would duplicate (and sometimes truncate) the same obligation.
-        if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(candidate)) break;
-        const end = candidate.indexOf('。');
-        // 結論文の日付付き由来も見出しと同じく全文へ委ねる(予算の常時の余裕を作る)。
-        const conclusion = isMandatoryIndexLine(candidate) ? candidate
-          : (end >= 0 ? candidate.slice(0, end + 1) : candidate).replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, '');
-        // 結論として拾った絶対ルール・太字小見出しも短縮対象にしない。
-        if (!/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(candidate)
-          && !/^\*\*\d+(?:\.\d+)+\s+.+\*\*$/.test(candidate)
-          && !INDEX_PROTECTED.some(pattern => pattern.test(conclusion))) {
-          conclusions.set(kept.length, [...conclusion]);
-        }
+        if (candidate.startsWith('<!--') || numberedIndexHeading.test(candidate)) continue;
+        if (candidate.startsWith('#') || indexRuleStart.test(candidate)) break;
+        const mandatory = isMandatoryIndexLine(candidate);
+        const conclusion = mandatory ? candidate : indexPreview(candidate);
+        if (!conclusion) continue;
+        if (!mandatory && !/\*\*|`|\[|\]/.test(conclusion)) conclusions.set(kept.length, [...conclusion]);
         kept.push(conclusion);
         break;
       }
@@ -795,7 +811,7 @@ export function makeIndex(body) {
     // 絶対ルール・上限規定の行は全文のまま残す。原文は `**🛑 上限…` のように強調記号が先に来るので
     // 先頭の `*` を許容する(ここを `**🔴` だけにすると 🛑/⚙️/🔁 の4行が索引から落ちる)。
     // 通常は行末の由来を全文へ委ねる。判断軸は ONBOARDING と配布先で同じ一文を参照する要件のため原文を保つ。
-    if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line) && kept.at(-1) !== line) {
+    if (indexRuleStart.test(line) && kept.at(-1) !== line) {
       kept.push(line.includes('判断軸はオージャストの長期的利益の最大化')
         ? line
         : line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）(?=。?\*\*$)/u, ''));

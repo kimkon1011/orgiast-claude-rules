@@ -157,7 +157,7 @@ async function prStateView(execImpl, number) {
 
 /**
  * 推奨アクションから、MERGED または CLOSED の PR を含むものを除外する。
- * PR の状態取得に失敗した場合はそのアクションを残し、note を付与する。
+ * PR の状態取得に失敗した場合はそのアクションを残し、理由を標準エラーへ1行出す。
  * 同じ番号への gh 呼び出しは1回だけ行う。
  */
 async function filterStalePrActions(actions, execImpl, errorLog) {
@@ -182,23 +182,22 @@ async function filterStalePrActions(actions, execImpl, errorLog) {
   const result = actions.map((action, i) => {
     const numbers = [...actionNumbers[i]];
     const mergedOrClosed = numbers.filter((n) => ['MERGED', 'CLOSED'].includes(states.get(n)));
-    const failed = numbers.filter((n) => states.get(n) === 'FETCH_FAILED');
 
     if (mergedOrClosed.length > 0) {
       for (const n of mergedOrClosed) excludedNumbers.add(n);
       return null; // 除外
     }
 
-    if (failed.length > 0) {
-      const reasons = failed.map((n) => {
-        const reason = fetchErrors.get(n) || '不明なエラー';
-        return `変更依頼 #${n} の状態を確認できませんでした（${reason}）`;
-      }).join(' / ');
-      return { ...action, note: reasons };
-    }
-
     return action;
   }).filter(Boolean);
+
+  if (fetchErrors.size) {
+    const reasons = [...fetchErrors]
+      .sort(([a], [b]) => a - b)
+      .map(([number, reason]) => `変更依頼 #${number} の状態を確認できませんでした（${reason || '不明なエラー'}）`)
+      .join(' / ');
+    errorLog(`next-actions: ${reasons}`);
+  }
 
   if (excludedNumbers.size) {
     errorLog(`next-actions: MERGED/CLOSED のPRを含む候補を${actions.length - result.length}件除外: ${[...excludedNumbers].sort((a, b) => a - b).map((n) => `PR#${n}`).join(', ')}`);

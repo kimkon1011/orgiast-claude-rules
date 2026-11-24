@@ -6,13 +6,19 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { userHome, readConfig } from './lib/eval-config.mjs';
-import { frontierLimit } from './model-scout.mjs';
+import { frontierLimit, KNOWN_DEPRECATED_MODELS } from './model-scout.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch (e) { if (e.code === 'ENOENT') return fallback; throw e; }
+}
+function writeAtomic(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temp = `${file}.${process.pid}.tmp`;
+  try { fs.writeFileSync(temp, text); fs.renameSync(temp, file); }
+  finally { fs.rmSync(temp, { force: true }); }
 }
 function evaluations(file) {
   try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).flatMap(line => {
@@ -125,24 +131,47 @@ export async function runDailyScout({ home = process.env.ORGIAST_HOME || userHom
     const resultsFile = path.join(dir, 'eval-results.jsonl');
     const configFile = path.join(dir, 'eval', 'providers.local.json');
     const pending = state.pendingCandidates || [];
+    // 提供終了・期限切れが確認されたモデルは候補から除外する。
+    const expired = new Set([...(state.expiredModels || []), ...KNOWN_DEPRECATED_MODELS]);
+    if (expired.size && pending.some(x => expired.has(x.id))) {
+      record(`model-scout 提供終了モデル除外: ${pending.filter(x => expired.has(x.id)).map(x => x.id.replace(/[\r\n\t]/g, ' ')).join(', ')}`);
+    }
     const rows = evaluations(resultsFile);
     const giveUps = unmeasuredGiveUpIds(rows, { now });
-    const live = pending.filter(x => !giveUps.has(x.id));
+    const live = pending.filter(x => !giveUps.has(x.id) && !expired.has(x.id));
     if (live.length < pending.length) {
-      record(`model-scout 再試行打ち切り（近期間に計測不能2回）: ${pending.filter(x => giveUps.has(x.id)).map(x => x.id.replace(/[\r\n\t]/g, ' ')).join(', ')}`);
+      const dropped = pending.filter(x => !live.includes(x) && !expired.has(x.id));
+      if (dropped.length) record(`model-scout 再試行打ち切り（近期間に計測不能2回）: ${dropped.map(x => x.id.replace(/[\r\n\t]/g, ' ')).join(', ')}`);
     }
     const targets = unevaluatedScoutModels(live, readConfig({ overlayFile: configFile }), rows, { max });
     let failed = false;
+    let newlyExpired = [];
     for (const candidate of targets) {
+      const candidateClean = candidate.id.replace(/[\r\n\t]/g, ' ');
       const result = run([path.join(HERE, 'eval-harness.mjs'), '--provider', 'openrouter', '--model', candidate.id]);
       const rowsAfter = evaluations(resultsFile);
       const remaining = unevaluatedScoutModels([candidate], readConfig({ overlayFile: configFile }), rowsAfter, { max: 1 });
-      const candidateClean = candidate.id.replace(/[\r\n\t]/g, ' ');
-      if (result.error || result.status !== 0 || (remaining.length && !unmeasuredGiveUpIds(rowsAfter, { now }).has(candidate.id))) {
+      // 404/model_not_found は永久障害。リトライせず期限切れとして記録する。
+      const stderr = String(result.stderr || '');
+      const stdout = String(result.stdout || '');
+      const modelNotFound = stderr.includes('404') || stderr.includes('model_not_found') || stderr.includes('model not found')
+        || (result.error && (String(result.error.message || result.error).includes('404')));
+      if (modelNotFound) {
+        record(`model-scout 期限切れモデル: eval が 404 を返したため以降の対象から除外 (${candidateClean})`);
+        newlyExpired.push(candidate.id);
+      } else if (result.error || result.status !== 0 || (remaining.length && !unmeasuredGiveUpIds(rowsAfter, { now }).has(candidate.id))) {
         failed = true;
         record(`model-scout error: 未評価候補を次回へ繰越 (${candidateClean})`);
       } else if (remaining.length) record(`model-scout 評価打ち切り（計測不能2回）: ${candidateClean}`);
       else record(`model-scout eval 完了: ${candidateClean}`);
+    }
+    // 期限切れモデルを状態に記録する（次回以降の scout で config も自動除去される）。
+    if (newlyExpired.length) {
+      try {
+        const current = readJson(stateFile, {});
+        const merged = [...new Set([...(current.expiredModels || []), ...newlyExpired])];
+        writeAtomic(stateFile, JSON.stringify({ ...current, expiredModels: merged }) + '\n');
+      } catch (e) { record(`model-scout error: 期限切れ記録失敗 (${String(e.message || e).replace(/[\r\n\t]/g, ' ')})`); }
     }
     // 提案は子プロセス(model-scout.mjs --once)の runScout 内で既に行われている。ここでは二重提案を防ぐため呼ばない。
     if (failed) throw new Error('未評価候補が残ったため未完了（次回1回だけ再試行）');

@@ -18,6 +18,12 @@ export const APP_FORBIDDEN_VENDORS = ['anthropic'];
 export function isAppForbiddenModel(id) {
   return APP_FORBIDDEN_VENDORS.some(v => id.startsWith(v + '/') || id.startsWith('~' + v + '/'));
 }
+// 候補から提供終了モデルを除外する。models は normalizeModels の出力（カレントカタログ）。
+// 既知の提供終了リストとカタログ不在の両方をチェックする。
+export function filterAvailableCatalogModels(candidates, models) {
+  const available = new Set(models.map(m => m.id));
+  return candidates.filter(m => available.has(m.id) && !KNOWN_DEPRECATED_MODELS.includes(m.id));
+}
 export const FRONTIER_VENDORS = ['anthropic', 'openai', 'google', 'meta', 'meta-llama', 'x-ai', 'deepseek', 'moonshotai', 'qwen', 'mistralai', 'z-ai',
   // 中国系の安価モデル。安価軸は「現行より安い」比較に依存し初回14日より古いモデルを拾えないため、ここで毎日見る。
   'xiaomi', 'minimax', 'stepfun', 'bytedance-seed', 'tencent', 'inclusionai', 'meituan'];
@@ -26,6 +32,11 @@ export function frontierLimit({ env = process.env } = {}) {
   return Number.isInteger(n) && n >= 0 ? n : 5;
 }
 export const MAX_FRONTIER_PER_RUN = frontierLimit();
+// 提供を終了したモデル。OpenRouter カタログから消えた、または 404 を返すことが確認されたモデル。
+// 動的選定の候補から常に除外する。追跡は tests と状態ファイルでも行う。
+export const KNOWN_DEPRECATED_MODELS = Object.freeze([
+  'qwen3-max', // 2026-11 実測: HTTP 404 を返す。OpenRouter カタログに存在せず再提供見込みなし。
+]);
 const API = 'https://openrouter.ai/api/v1/models';
 const REFERENCE = 'スキップ: tools/llm-ask.mjs の Gemini 呼び出しは Web 検索に未対応。';
 function readJson(file, fallback) {
@@ -228,6 +239,17 @@ export async function runScout({ home = process.env.ORGIAST_HOME || userHome(), 
     const frontierCandidates = selectFrontierCandidates(changes);
     const candidates = [...new Map([...cheapCandidates, ...frontierCandidates].map(m => [m.id, m])).values()];
     const action = enqueueCandidates(candidates, configFile, dryRun);
+    const availableIds = new Set(models.map(m => m.id));
+    // カタログに存在しない openrouter モデルを config から除去する。skip 済みは手動管理のため保持。
+    if (!dryRun) {
+      const cfg = readConfig({ overlayFile: configFile });
+      const stale = cfg.filter(x => x.provider === 'openrouter' && !x.skip && !availableIds.has(x.model) && !KNOWN_DEPRECATED_MODELS.includes(x.model));
+      if (stale.length) {
+        const cleaned = cfg.filter(x => !stale.includes(x));
+        writeAtomic(configFile, json(cleaned));
+        for (const s of stale) log(`model-scout: 提供終了モデルをconfigから除去: ${s.model}`);
+      }
+    }
     const config = readConfig({ overlayFile: configFile });
     // 既に差分を消費した候補も eval 完了時に再判定する（既存状態の移行も兼ねる）。
     const trackedIds = new Set([...(previous?.pendingCandidates || []).map(x => x.id), ...config.filter(x => x.provider === 'openrouter' && !x.skip).map(x => x.model), ...candidates.map(x => x.id)]);
@@ -271,7 +293,12 @@ export async function runScout({ home = process.env.ORGIAST_HOME || userHome(), 
       stage = 'save';
       // 通知失敗時は差分を消費せず、次回もう一度通知する。
       const snapshot = { ...previous?.models, ...Object.fromEntries(models.map((m) => [m.id, { pricing: m.pricing }])) };
-      writeAtomic(stateFile, json({ updatedAt: now.toISOString(), models: snapshot, pendingCandidates: evaluatedCandidates }));
+      // カタログ不在モデルを期限切れとみなし、次回からの追跡・eval を抑制する。
+      const prevExpired = previous?.expiredModels || [];
+      const newlyExpired = [...trackedIds].filter(id => !availableIds.has(id) && !skippedIds.has(id) && !prevExpired.includes(id) && !KNOWN_DEPRECATED_MODELS.includes(id));
+      const expiredModels = [...new Set([...prevExpired, ...newlyExpired])];
+      if (newlyExpired.length) for (const id of newlyExpired) log(`model-scout: 期限切れモデルを追跡対象から除外: ${id}`);
+      writeAtomic(stateFile, json({ updatedAt: now.toISOString(), models: snapshot, pendingCandidates: evaluatedCandidates, expiredModels }));
       log(dm);
     }
     return { ok: true, candidates, frontierCandidates, changes, report, dm, action, proposed };

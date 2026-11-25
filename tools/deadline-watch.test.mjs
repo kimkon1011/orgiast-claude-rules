@@ -39,6 +39,19 @@ test('Calendar: 通常の追加・完了行のDELETE', async () => {
   assert.equal(closedCalls.at(-1).method, 'DELETE');
 });
 
+test('Calendar: 既存説明欄の案件名を自動更新でも引き継ぐ', async () => {
+  const calls = [];
+  const calendarConfig = { ...config, calendar: { enabled: true, calendarId: 'kim@orgiast.jp' } };
+  const request = async (url, options) => {
+    calls.push([url, options]);
+    return options.method ? {} : { items: [{ id: 'old', summary: '【東邦鋼業・SC鋼板】【期限】回答', description: '案件: 東邦鋼業・SC鋼板\n旧説明' }] };
+  };
+  await syncCalendar({ ...base, company: '', caseName: '' }, { config: calendarConfig, state: {}, request });
+  const patch = calls.find(([, options]) => options.method === 'PATCH')[1].body;
+  assert.equal(patch.summary, '【東邦鋼業・SC鋼板】【期限】回答');
+  assert.equal(patch.description.split('\n')[0], '案件: 東邦鋼業・SC鋼板');
+});
+
 test('Calendar: 403でstate.calendarSync=falseになり後続はスキップ', async () => {
   const state = {}; let saved = 0, logs = 0;
   const persist = () => saved++;

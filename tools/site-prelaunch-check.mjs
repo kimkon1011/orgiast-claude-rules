@@ -3,7 +3,7 @@ import { readFile, stat, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const execFileAsync = promisify(execFile);
 const USER_AGENT = 'orgiast-prelaunch-check/1.0';
@@ -317,6 +317,5 @@ export async function main(argv = process.argv.slice(2)) {
   return reports.some((report) => report.checks.some((check) => check.verdict === 'NG')) ? 1 : 0;
 }
 
-const isCli = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
-if (isCli) main().then((code) => { process.exitCode = code; }).catch((error) => { console.error(`エラー: ${error.message}`); process.exitCode = 2; });
+if (isEntry(import.meta.url)) main().then((code) => { process.exitCode = code; }).catch((error) => { console.error(`エラー: ${error.message}`); process.exitCode = 2; });
 

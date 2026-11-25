@@ -207,7 +207,7 @@ PR は作った席が `node tools/pr-land.mjs --title "<題>" --body-file <本�
 
 #### 公開前チェックルール（kim 2026-11-23 決定・ふわ・グロボ・ドット・全PCのClaude Code共通）
 
-**🔴 公開前チェック: 社外向けGoogleファイルはanyoneWithLinkとログアウト状態での実表示を確かめてから共有する（同種も全部確認）。サイトは公開前に /site-prelaunch-check の25項目を通す。**
+**🔴 公開前: 社外向けGoogleファイルはanyoneWithLinkとログアウトで実表示確認後に共有（同種も全確認）。公開前は/site-prelaunch-check。**
 
 手間最優先・照合（送信前の矛盾・重複照会）・検証表（完了報告）と並ぶ共通ルール。社外の人が触るリンクやファイルすべてに適用する。
 

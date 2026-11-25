@@ -1231,7 +1231,7 @@ Claude Code・Codex・安いLLMは**APIがあるものしか触れない**。だ
 ## 他AIは「積極的に使う」のが既定（kim 2026-10-09 厳命・全PC全アカウント）
 
 **🔴 他AI（Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM）は使うのが既定、Claudeだけは理由が必要。残高切れは入金（オートチャージON）、キー失効/403は再発行、429は別の他AIへ。「外す／やめる／縮小」を選択肢にせず、障害は別の他AIで吸収し復旧後に戻す。割り振りは先に具体名で書く（要約=Gemini、下書き=Kimi、実装=Codex、Claude=verify）。「必要なら使う」は禁止。**
-**🔴 画像生成・PDF/動画/音声の読解・文字起こし・長い調査は gemini-api（/gemini-api-cli skill、安いGemini）へ振り、Claude の枠を使わない。文章の分類・要約・下書きは従来どおり llm-ask。使う前に --help と --dry-run、結果は --stream=false -o json で受け、返ったファイルパスと interaction ID を次の手順へ渡す。**
+**🔴 gemini-api[/gemini-api-cli skill]: 画像生成、PDF/動画/音声読解/文字起こし/長い調査。llm-ask: 分類/要約/下書き。先に --help/--dry-run。--stream=false -o json→ファイルpath+interaction ID→次工程。**
 - **🔴 この原則はアプリが実行時に呼ぶ LLM/検索 API にも適用する（§2.8.0・2026-10-17 追加）。** Claude Code の作業レーンだけの話ではない。
 
 #### 1.18.5 AIレーン放置禁止と手渡し前の代替検証
@@ -1472,7 +1472,7 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 用途別費用最適化、遅延可能処理は夜間へ、無人処理は試行上限・監視必須。
 
-**🔴 アプリ（デプロイ済み・Actions・cron・GAS・スクリプト）のLLM/検索は他AIが既定。Claude API（@anthropic-ai/sdk・api.anthropic.com・claude-*）の新規利用・Claudeへの自動フォールバックも禁止。旧 LLM-PROVIDER-REASON は新規利用の許可にならない（2026-11-05）。検索収集=Gemini Flash grounding、分類/抽出/要約=Groq/DeepSeek/Gemini Flash。他AIを3社以上同じ評価セットで比較（取得項目数・一致率・1件実費）し、1社だけでClaudeへ戻さない。障害は別の他AIへ、全滅なら停止・通知。「当面Claude」「入金不要」で済ませずキー登録・デプロイ・入金依頼・他AI実動確認まで行う。既存アプリも呼び先を確認しClaudeなら置換案を先に出す。有料一括20件超は1〜10件の実費実測→[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z]→承認→コードの予算超過自動停止。オートチャージは上限ではない。app-llm-cost-gate が検査（§2.8.0）。**
+**🔴 アプリ（デプロイ済み・Actions・cron・GAS・スクリプト）のLLM/検索は他AIが既定。Claude API（@anthropic-ai/sdk・api.anthropic.com・claude-*）の新規利用・Claudeへの自動フォールバックも禁止。旧 LLM-PROVIDER-REASON は許可でない。検索収集=Gemini Flash grounding、分類/抽出/要約=Groq/DeepSeek/Gemini Flash。他AI3社以上を取得数・一致率・1件実費で比較し、Claudeへ戻さない。障害は別の他AIへ、全滅なら停止・通知。「当面Claude」「入金不要」で済ませずキー登録・デプロイ・入金依頼・他AI実動確認まで行う。既存も呼び先を確認しClaudeなら置換案を先に出す。有料一括20件超は1〜10件の実費実測→[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z]→承認→コードの予算超過自動停止。オートチャージは上限ではない。app-llm-cost-gate が検査（§2.8.0）。**
 
 **2.8.0 🔴 最優先: アプリが呼ぶ LLM/検索 API も他AIが既定・一括実行は実測と予算上限が先（kim 2026-10-17 厳命・全PC全アカウント）**
 

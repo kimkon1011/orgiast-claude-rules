@@ -1793,9 +1793,11 @@ async function mainFetch(argv) {
 }
 
 export function refreshCostDirective({ home, spawn = defaultSpawnSync } = {}) {
+  const timeoutMs = Number.isSafeInteger(Number(process.env.COST_WORK_LOOP_TIMEOUT_MS)) && Number(process.env.COST_WORK_LOOP_TIMEOUT_MS) > 0
+    ? Number(process.env.COST_WORK_LOOP_TIMEOUT_MS) : 900_000;
   const result = spawn(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], {
     cwd: path.resolve(import.meta.dirname, '..'), env: { ...process.env, ORGIAST_HOME: home },
-    encoding: 'utf8', windowsHide: true, timeout: 300_000,
+    encoding: 'utf8', windowsHide: true, timeout: timeoutMs,
   });
   if (result.error || result.status !== 0) throw new Error(`cost-directive refresh failed: ${result.error?.message || `exit ${result.status}`} ${String(result.stderr || '').slice(-1000)}`);
   return `cost-directive refreshed: ${path.join(home, '.claude', 'cost-directive.md')} (exit 0)`;

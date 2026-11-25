@@ -27,7 +27,8 @@ import {
   writeAutoSessionExecutorEnv,
   writeBudgetPressure,
   splitWhitelistedCommand,
-  runEntry
+  runEntry,
+  refreshCostDirective
 } from './cost-improve-loop.mjs';
 
 const main = (args, io = {}) => mainImpl(args, { scanAiReceipts: async () => ({ errors: [] }), receiptLedgerAgeHours: () => 0, alertAiReceipts: async () => {}, ...io });
@@ -1122,4 +1123,27 @@ test('runEntry: run 自身が throw したら process.exitCode=1 になる', asy
   assert.equal(process.exitCode, 1, 'run の throw で exitCode=1');
 
   process.exitCode = savedExitCode;
+});
+
+test('refreshCostDirective: timeout は正の整数のみ採用する', t => {
+  const key = 'COST_WORK_LOOP_TIMEOUT_MS';
+  const saved = process.env[key];
+  t.after(() => {
+    if (saved === undefined) delete process.env[key];
+    else process.env[key] = saved;
+  });
+  for (const [value, expected] of [
+    [undefined, 900_000], ['600000', 600_000], ['0', 900_000],
+    ['-1', 900_000], ['1.5', 900_000], ['invalid', 900_000],
+    ['Infinity', 900_000], ['', 900_000],
+  ]) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+    let capturedTimeout;
+    refreshCostDirective({ home: os.tmpdir(), spawn: (cmd, args, opts) => {
+      capturedTimeout = opts.timeout;
+      return { status: 0, error: null, stderr: '' };
+    } });
+    assert.equal(capturedTimeout, expected, String(value));
+  }
 });

@@ -74,7 +74,7 @@ export async function callOpenRouterGrok(prompt, { key, fetchFn = globalThis.fet
     payloadFor: () => ({
       url: `${OPENROUTER_BASE}/chat/completions`,
       init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast' },
-        body: JSON.stringify({ model: OPENROUTER_GROK_MODEL, messages: [{ role: 'system', content: 'JSON のみを返す。説明文を付けない。' }, { role: 'user', content: prompt }], stream: false }), signal },
+        body: JSON.stringify({ model: OPENROUTER_GROK_MODEL, messages: [{ role: 'system', content: 'JSON のみを返す。説明文を付けない。' }, { role: 'user', content: prompt }], plugins: [{ id: 'web', engine: 'native', max_results: 5 }], stream: false }), signal },
     }),
   });
   const json = await result.response.json();

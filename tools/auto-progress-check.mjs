@@ -159,7 +159,7 @@ export function resolveCheckTimeout(row) {
       : isSessionProgressCheck(row) ? SESSION_CHECK_TIMEOUT_MS : CHECK_TIMEOUT_MS;
 }
 export function isNetworkCheck(command) {
-  return /(?:^|[;&|]\s*|\b)(?:git\s+(?:fetch|ls-remote)\b|gh\s+|curl\s+)/i.test(String(command || ''));
+  return /(?:^|[;&|]\s*|\b)(?:git(?:\s+-[a-zA-Z0-9=\s.:\/\\\-]+)*\s+(?:fetch|ls-remote|pull|push)\b|gh\s+|curl\s+)/i.test(String(command || ''));
 }
 export const oneLine = (value, limit = 240) => String(value || '').split(/\r?\n/, 1)[0].trim().slice(0, limit);
 export const lastLine = value => String(value || '').trim().split(/\r?\n/).at(-1)?.trim().slice(0, 240) || '';

@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { addCheck, main } from './auto-progress.mjs';
-import { checkPromise, executeCheck, preflightCheck, hasBashEnvExpansion, hasCheckError, CHECK_ERROR_PATTERNS, resolveCheckShell, CHECK_TIMEOUT_MS, NETWORK_CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS, CHECK_MAX_BUFFER_BYTES, pendingAction } from './auto-progress-check.mjs';
+import { checkPromise, executeCheck, preflightCheck, hasBashEnvExpansion, hasCheckError, isNetworkCheck, CHECK_ERROR_PATTERNS, resolveCheckShell, CHECK_TIMEOUT_MS, NETWORK_CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS, CHECK_MAX_BUFFER_BYTES, pendingAction } from './auto-progress-check.mjs';
 import { readLedger, writeLedger, ledgerFile } from './auto-progress-ledger.mjs';
 import { run as watch } from './auto-progress-watch.mjs';
 import { run as digest } from './auto-progress-digest.mjs';
@@ -107,6 +107,57 @@ test('executeCheck disables Git credential prompts and gives detected network ch
       assert.equal(options.timeout, NETWORK_CHECK_TIMEOUT_MS);
       assert.equal(options.env.GIT_TERMINAL_PROMPT, '0');
       assert.equal(options.env.GCM_INTERACTIVE, 'never');
+      return { status: 1, stdout: '' };
+    } });
+  }
+});
+test('executeCheck detects git commands with options between git and subcommand', () => {
+  // Test the regex pattern directly
+  const networkCheckRegex = /(?:^|[;&|]\s*|\b)(?:git(?:\s+-[a-zA-Z0-9=\s.:\/\\\-]+)*\s+(?:fetch|ls-remote|pull|push)\b|gh\s+|curl\s+)/i;
+
+  const positiveTests = [
+    'git fetch origin main',
+    'git ls-remote origin',
+    'git -C C:/x fetch -q origin main',
+    'git -c http.timeout=5 ls-remote origin',
+    'sh -c \'git -C C:/Users/kimko/.claude/nightly-repo fetch -q origin main && ...\'',
+    'git pull origin main',
+    'git push origin main'
+  ];
+
+  const negativeTests = [
+    'git -C x log',
+    'git status',
+    'git diff'
+  ];
+
+  for (const test of positiveTests) {
+    assert.equal(networkCheckRegex.test(test), true, `Expected regex to match: ${test}`);
+  }
+
+  for (const test of negativeTests) {
+    assert.equal(networkCheckRegex.test(test), false, `Expected regex to not match: ${test}`);
+  }
+
+  // Test cases for timeout assignment
+  const testCases = [
+    { check: 'git -C C:/x fetch -q origin main', expectedTimeout: NETWORK_CHECK_TIMEOUT_MS },
+    { check: 'git -c http.timeout=5 ls-remote origin', expectedTimeout: NETWORK_CHECK_TIMEOUT_MS },
+    { check: 'sh -c \'git -C C:/Users/kimko/.claude/nightly-repo fetch -q origin main && ...\'', expectedTimeout: NETWORK_CHECK_TIMEOUT_MS },
+    { check: 'git -C x log', expectedTimeout: CHECK_TIMEOUT_MS },
+  ];
+
+  for (const { check, expectedTimeout } of testCases) {
+    // First test isNetworkCheck directly
+    if (expectedTimeout === NETWORK_CHECK_TIMEOUT_MS) {
+      assert.equal(isNetworkCheck(check), true, `Expected ${check} to be recognized as network check`);
+    } else {
+      assert.equal(isNetworkCheck(check), false, `Expected ${check} to NOT be recognized as network check`);
+    }
+
+    // Then test executeCheck timeout assignment
+    executeCheck({ check }, { shellPath: null, spawnImpl: (_, options) => {
+      assert.equal(options.timeout, expectedTimeout, `Timeout mismatch for check: ${check}`);
       return { status: 1, stdout: '' };
     } });
   }

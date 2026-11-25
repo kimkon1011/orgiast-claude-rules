@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { parseArgs } from 'node:util';
 import { isEntry } from './is-entry.mjs';
 import { ledgerFile, readLedger, writeLedger, latestOpenPromises, applyPromise, isSessionProgressCheck, SESSION_CHECK_TIMEOUT_MS, SESSION_DEADLINE_MS } from './auto-progress-ledger.mjs';
-import { executeCheck, preflightCheck, sessionStateReference, MAX_CHECK_TIMEOUT_MS, isTimeOnlyCheck } from './auto-progress-check.mjs';
+import { executeCheck, preflightCheck, sessionStateReference, MAX_CHECK_TIMEOUT_MS, isTimeOnlyCheck, isSquashUnsafeLandingCheck } from './auto-progress-check.mjs';
 import { resolveOwner } from './notify-owner.mjs';
 import { hasReferencedApproval } from './lib/send-approval.mjs';
 import { externalSpec, MONITOR_DAYS } from './lib/external-monitor-state.mjs';
@@ -59,13 +59,15 @@ export function addCheck({ session, check, startWhen, deadline, label, nextClaud
 export function auditChecks({ home = process.env.ORGIAST_HOME || os.homedir(), execute = executeCheck } = {}) {
   const rows = readLedger(ledgerFile(home)).filter(row => row.status === 'open' && row.check);
   const errors = [];
+  const squashUnsafe = rows.filter(row => isSquashUnsafeLandingCheck(row.check))
+    .map(row => ({ label: row.label || row.promise || '' }));
   for (const row of rows) {
     let result;
     try { result = execute(row, { home }); }
     catch (error) { result = { code: null, stderr: error.message }; }
     if (result.code !== 0 && result.code !== 1 && result.code !== 3) errors.push({ label: row.label || row.promise || '', stderr: String(result.stderr || result.text || '').split(/\r?\n/, 1)[0] });
   }
-  return { checked: rows.length, errorCount: errors.length, errors };
+  return { checked: rows.length, errorCount: errors.length, errors, squashUnsafe };
 }
 export function main(argv = process.argv.slice(2)) {
   if (argv.length === 1 && argv[0] === '--audit-checks') return auditChecks();

@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { searchDriveFacts } from './autoreply-drive-facts.mjs';
+import { needsDriveFactSearch, searchDriveFacts } from './autoreply-drive-facts.mjs';
+
+test('PJコードだけのメッセージを連続判定しても常にDrive検索が必要になる', () => {
+  assert.equal(needsDriveFactSearch('260430EIGの請求について'), true);
+  assert.equal(needsDriveFactSearch('260430EIGの請求について'), true);
+});
 
 test('エイトを検索し、ファイル名の一意なPJコードを返す', async () => {
   const urls = [];

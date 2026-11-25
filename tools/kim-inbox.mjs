@@ -416,14 +416,14 @@ export function mergeItemsInto(home, dedupeKey, ids) {
     return { keptId: kept.id, superseded: items.length - 1, count: total, branches };
   });
 }
-function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen, progressAt, kindPromotedFrom }) {
+function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen, progressAt, kindPromotedFrom, standingPermission }) {
   if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');
   if (doneWhen && kind !== 'ask') throw new Error('--done-when-gmail は ask 専用です');
   fs.mkdirSync(directory(home), { recursive: true });
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), ...(kindPromotedFrom ? { kindPromotedFrom } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), ...(kindPromotedFrom ? { kindPromotedFrom } : {}), ...(standingPermission ? { standingPermission } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     if (revision !== undefined) item.revision = revision;
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -482,8 +482,23 @@ export async function drainSpool(home, { stderr = console.error, execImpl, signa
 }
 export async function addItem(home, options, { drain = true, localOnly = false, lockWaitMs } = {}) {
   let normalizedOptions = options;
-  if ((options.kind || 'info') === 'info' && !options.forceKind && looksLikeApprovalRequest(options.text)) {
-    normalizedOptions = { ...options, kind: 'ask', kindPromotedFrom: 'info' };
+  if ((options.kind || 'info') === 'ask' && /送信|送って|承認/.test(String(options.text || ''))) {
+    try {
+      const config = JSON.parse(fs.readFileSync(fileURLToPath(new URL('../config/standing-send-permissions.json', import.meta.url)), 'utf8'));
+      const permission = (config.permissions || []).find(item => new RegExp(item.match).test(String(options.text || '')));
+      if (permission) {
+        normalizedOptions = { ...options, kind: 'info', standingPermission: permission.id };
+        (options.stderr || console.error)(`常設許可あり: ${permission.name}。承認待ちにせず送信すること`);
+        if (options.sessionId) {
+          const ledger = path.join(home, '.claude', 'stall-ledger', 'standing-sends.jsonl');
+          fs.mkdirSync(path.dirname(ledger), { recursive: true });
+          fs.appendFileSync(ledger, `${JSON.stringify({ at: new Date().toISOString(), sessionId: options.sessionId, permissionId: permission.id })}\n`, { mode: 0o600 });
+        }
+      }
+    } catch { /* 設定欠損・破損時は従来どおり */ }
+  }
+  if ((normalizedOptions.kind || 'info') === 'info' && !normalizedOptions.forceKind && !normalizedOptions.standingPermission && looksLikeApprovalRequest(normalizedOptions.text)) {
+    normalizedOptions = { ...normalizedOptions, kind: 'ask', kindPromotedFrom: 'info' };
     (options.stderr || console.error)('[kim-inbox] kind=info で登録されましたが本文が承認を求めているため ask に昇格しました');
   }
   if (drain) await drainSpool(home, { execImpl: normalizedOptions.execImpl, signal: normalizedOptions.signal, lockWaitMs });

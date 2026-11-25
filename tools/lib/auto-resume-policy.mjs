@@ -23,6 +23,21 @@ export function eventResumeAllowed({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
   }
 }
 
+export function hourlyResumePolicy({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
+  try {
+    const policy = JSON.parse(fs.readFileSync(path.join(repoRoot, 'config', 'auto-resume.json'), 'utf8'));
+    return {
+      hourlyResume: policy?.hourlyResume === true,
+      hourlyCap: Number.isSafeInteger(policy?.hourlyCap) && policy.hourlyCap > 0 ? policy.hourlyCap : 4,
+      perSessionDailyCap: Number.isSafeInteger(policy?.perSessionDailyCap) && policy.perSessionDailyCap > 0 ? policy.perSessionDailyCap : 6,
+      planUsageStopPct: Number.isFinite(policy?.planUsageStopPct) ? policy.planUsageStopPct : 85,
+      reason: String(policy?.hourlyResumeReason ?? ''),
+    };
+  } catch {
+    return { hourlyResume: false, hourlyCap: 4, perSessionDailyCap: 6, planUsageStopPct: 85, reason: '' };
+  }
+}
+
 /**
  * Returns true only when the config file explicitly sets `enabled: false`,
  * i.e. auto-resume is *permanently disabled by configuration.

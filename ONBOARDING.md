@@ -1469,7 +1469,7 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 ### 2.8 AI費用・夜間処理・無人運転
 
-**定期処理の変化判定ゲート**: タスクスケジューラ・cron・常駐ループは、LLM の前に `tools/lib/change-gate.mjs` で新着件数と入力 fingerprint を確認する。変化なしなら LLM を起動せず、成功後だけ最終ID・時刻のカーソルを commit する（失敗時は未更新として次回再試行）。可能なら Gmail history・Webhook・ファイル監視へ寄せる。`tools/routine-usage-weekly.mjs` が週次で PC×ジョブ別の消費と「何も無かった率」を点検する。
+**🔴 定期処理（タスクスケジューラ・cron・ループ）は、LLM を起こす前に必ず安いスクリプトで新着・変化を判定し、変化なしなら LLM を起動しない。前回からの差分だけ読むカーソル（最終ID・時刻）を保存し、可能ならイベント駆動（ファイル監視・Gmail history・Webhook）にする。共通部品は tools/lib/change-gate.mjs、週次で routine-usage-weekly が PC×ジョブ別の消費と「何も無かった率」を点検する。**
 
 用途別費用最適化、遅延可能処理は夜間へ、無人処理は試行上限・監視必須。
 

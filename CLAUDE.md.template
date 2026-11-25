@@ -121,9 +121,7 @@ Bashは1呼出1コマンド、専用ツール・allow済み経路を使う。
 **2.6.2 業務の表・文書・スライドは Google Workspace で作る（Excel/Word/PowerPoint を作らない・絶対）**
 **🔴 納品前に全ページ画像を目視。**
 ### 2.8 AI費用・夜間処理・無人運転
-
 **🔴 定期処理（タスクスケジューラ・cron・ループ）は、LLM を起こす前に必ず安いスクリプトで新着・変化を判定し、変化なしなら LLM を起動しない。前回からの差分だけ読むカーソル（最終ID・時刻）を保存し、可能ならイベント駆動（ファイル監視・Gmail history・Webhook）にする。共通部品は tools/lib/change-gate.mjs、週次で routine-usage-weekly が PC×ジョブ別の消費と「何も無かった率」を点検する。**
-用途別費用最適化、遅延可能処理は夜間へ、無人処理は試行上限・監視必須。
 **🔴 アプリ（デプロイ済み・Actions・cron・GAS・スクリプト）のLLM/検索は他AIが既定。Claude API（@anthropic-ai/sdk・api.anthropic.com・claude-*）の新規利用・Claudeへの自動フォールバックも禁止。旧 LLM-PROVIDER-REASON は新規利用の許可にならない（2026-11-05）。検索収集=Gemini Flash grounding、分類/抽出/要約=Groq/DeepSeek/Gemini Flash。他AIを3社以上同じ評価セットで比較（取得項目数・一致率・1件実費）し、1社だけでClaudeへ戻さない。障害は別の他AIへ、全滅なら停止・通知。「当面Claude」「入金不要」で済ませずキー登録・デプロイ・入金依頼・他AI実動確認まで行う。既存アプリも呼び先を確認しClaudeなら置換案を先に出す。有料一括20件超は1〜10件の実費実測→[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z]→承認→コードの予算超過自動停止。オートチャージは上限ではない。app-llm-cost-gate が検査（§2.8.0）。**
 **2.8.0 🔴 最優先: アプリが呼ぶ LLM/検索 API も他AIが既定・一括実行は実測と予算上限が先**
 ### 2.9 Drive・共通知識・社内アプリ・イベント（§2.9〜2.12）

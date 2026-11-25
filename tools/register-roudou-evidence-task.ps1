@@ -1,11 +1,13 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
+. (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
 
 $node = (Get-Command node -ErrorAction SilentlyContinue).Source
 if (-not $node) { throw 'node not found. Install Node.js first.' }
 
+$resolvedTools = Resolve-RegisterToolsDir -Fallback $PSScriptRoot -RequiredPaths @('roudou-evidence-collect.mjs')
 $nightlyScript = 'C:/Users/uers/.claude/nightly-repo/tools/roudou-evidence-collect.mjs'
-$worktreeScript = 'C:/Users/uers/.claude/wt-roudou-evidence/tools/roudou-evidence-collect.mjs'
+$worktreeScript = (Join-Path $resolvedTools 'roudou-evidence-collect.mjs').Replace('\', '/')
 $launcher = "const fs=require('fs'),cp=require('child_process');const a='$nightlyScript',b='$worktreeScript',s=fs.existsSync(a)?a:b;const r=cp.spawnSync(process.execPath,[s],{stdio:'inherit',windowsHide:true});process.exit(r.status??1)"
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @('-e', $launcher) -WorkingDirectory 'C:\Users\uers\.claude'
 $triggers = @(

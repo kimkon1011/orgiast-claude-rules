@@ -32,11 +32,20 @@ import {
   refreshCostDirective
 } from './cost-improve-loop.mjs';
 
+// テストの未指定経路から実通知・プロセス起動・外部APIを呼ばない。
 // Proposal persistence stays real; every default proposal uses a mocked launcher,
 // including --no-notify runs (that flag does not suppress the real launcher).
 const launchNextSession = mock.fn(async () => 0);
 const submitTestProposal = (proposal, options) => submitProposal(proposal, { ...options, launch: launchNextSession });
-const main = (args, io = {}) => mainImpl(args, { scanAiReceipts: async () => ({ errors: [] }), receiptLedgerAgeHours: () => 0, alertAiReceipts: async () => {}, submitProposal: submitTestProposal, ...io });
+const main = (args, io = {}) => mainImpl(args, {
+  scanAiReceipts: async () => ({ errors: [] }), receiptLedgerAgeHours: () => 0,
+  alertAiReceipts: async () => {}, collectBudgetStatus: async () => ({ budgetPacePct: 0 }),
+  collectProviderBalances: async () => [], alertProviderBalances: async () => {},
+  spawnSync: () => ({ status: 0 }), submitProposal: submitTestProposal,
+  notifyKim: async () => ({ delivered: 'session-inbox' }), sendHeartbeat: async () => {},
+  runOriguchiReferralMonthly: async () => {}, shouldSendMonthlyReport: async () => false,
+  ...io
+});
 
 test('残高シグナル3種の境界とauto-local効果は固定許可リストだけ', () => {
   const rows = [
@@ -1109,6 +1118,15 @@ test('runEntry: refresh throw でも run 成功なら process.exitCode=0', async
   assert.ok(logs.some(line => line.includes('WARN') && line.includes('simulated timeout')));
 
   process.exitCode = savedExitCode;
+});
+
+test('directive 更新タイムアウトは既定900秒、環境変数で変更できる', () => {
+  for (const [env, expected] of [[{}, 900000], [{ COST_DIRECTIVE_TIMEOUT_SECONDS: '42' }, 42000], [{ COST_DIRECTIVE_TIMEOUT_SECONDS: 'invalid' }, 900000]]) {
+    refreshCostDirective({ home: os.tmpdir(), env, spawn: (_exe, _args, options) => {
+      assert.equal(options.timeout, expected);
+      return { status: 0 };
+    } });
+  }
 });
 
 test('runEntry: refresh 成功時は process.exitCode を変えず run が呼ばれる', async () => {

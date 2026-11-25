@@ -36,9 +36,13 @@ export async function repairPass(io, previous = {}, now = Date.now()) {
       if (typeof state !== 'string' || !state) throw new Error('BackendState を取得できません');
       backend = state;
     } catch (error) {
-      errors.push(`tailscale status: CLI を利用できないため Tailscale の修復を省略: ${error.message}`);
+      if (/Logged out|NeedsLogin/i.test(`${error.stderr || ''} ${error.message}`)) {
+        backend = 'NeedsLogin';
+      } else errors.push(`tailscale status: CLI を利用できないため Tailscale の修復を省略: ${error.message}`);
     }
-    if (backend) {
+    if (/^(NeedsLogin|Logged out)$/i.test(backend || '')) {
+      errors.push('Tailscale 再ログインが必要');
+    } else if (backend) {
       if (backend !== 'Running') await attempt('tailscale-up', io.up);
       await attempt('funnel', io.funnel);
     }

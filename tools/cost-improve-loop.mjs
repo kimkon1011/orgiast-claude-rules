@@ -1792,12 +1792,19 @@ async function mainFetch(argv) {
   return await fetchFleetKPIs({ sheetUrl: fleetEnv.FLEET_SHEET_URL, token: fleetEnv.FLEET_SHEET_TOKEN });
 }
 
-export function refreshCostDirective({ home, spawn = defaultSpawnSync } = {}) {
-  const timeoutMs = Number.isSafeInteger(Number(process.env.COST_WORK_LOOP_TIMEOUT_MS)) && Number(process.env.COST_WORK_LOOP_TIMEOUT_MS) > 0
-    ? Number(process.env.COST_WORK_LOOP_TIMEOUT_MS) : 900_000;
+export function refreshCostDirective({ home, spawn = defaultSpawnSync, env = process.env } = {}) {
+  // Prefer COST_WORK_LOOP_TIMEOUT_MS (ms); else COST_DIRECTIVE_TIMEOUT_SECONDS (default 900s).
+  const fromMs = Number(env.COST_WORK_LOOP_TIMEOUT_MS);
+  let timeout;
+  if (Number.isSafeInteger(fromMs) && fromMs > 0) {
+    timeout = fromMs;
+  } else {
+    const seconds = Number(env.COST_DIRECTIVE_TIMEOUT_SECONDS ?? 900);
+    timeout = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 900_000;
+  }
   const result = spawn(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], {
     cwd: path.resolve(import.meta.dirname, '..'), env: { ...process.env, ORGIAST_HOME: home },
-    encoding: 'utf8', windowsHide: true, timeout: timeoutMs,
+    encoding: 'utf8', windowsHide: true, timeout,
   });
   if (result.error || result.status !== 0) throw new Error(`cost-directive refresh failed: ${result.error?.message || `exit ${result.status}`} ${String(result.stderr || '').slice(-1000)}`);
   return `cost-directive refreshed: ${path.join(home, '.claude', 'cost-directive.md')} (exit 0)`;

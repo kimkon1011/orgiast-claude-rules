@@ -137,9 +137,6 @@ export async function collectFallback(topicQuery, topicPurpose, now, config, { f
   if (validUrls.length === 0) return { items: [], source: result.provider };
   // answer から簡易項目を作る（search は1クエリなので全 result を1件にまとめる）
   const from = new Date(+now - 2 * DAY).toISOString();
-  const likesCondition = isFallback
-    ? 'likes が確認できない場合は likes を省略してよい。ただし出典 URL（x.com の投稿 URL）は必須。'
-    : `${likesCondition}`;
   const items = [{
     url: validUrls[0],
     author: `@search-${result.provider}`,
@@ -349,7 +346,7 @@ export async function runCollect(options = {}) {
       // 未実行の次テーマを予約と同時に保存。全件回れた夜も翌夜の先頭を1つずらす。
       state.nextTopicIndex = (offset === topicCount - 1 ? startTopicIndex + 1 : topicIndex + 1) % topicCount;
       state.night.calls++; state.night.costUsd += config.reservePerCallUsd; calls++; cost += config.reservePerCallUsd; save(state);
-      let usage, actual, failure, signal, serverError = false, awaitingResponse = true, creditBlocked = false, parseFailed = false;
+      let usage, actual, failure, signal, serverError = false, awaitingResponse = true, creditBlocked = false, parseFailed = false, usingOpenRouterFallback = false;
       try {
         signal = AbortSignal.timeout(config.timeoutMs);
         const request = buildRequest(topic, now, config);
@@ -367,7 +364,7 @@ export async function runCollect(options = {}) {
             errorLog(`[LANE-FALLBACK] x.ai -> openrouter grok (reason: ${reason})`);
             let fallback;
             try {
-              fallback = await callOpenRouterGrok(request.input[0].content, { key: openRouterKey, fetchFn, signal });
+              fallback = await callOpenRouterGrok(buildRequest(topic, now, config, true).input[0].content, { key: openRouterKey, fetchFn, signal });
             } catch {
               // OpenRouter の応答本文や認証情報は記録せず、既存の web-search 経路へ進む。
               state.creditBlockedAt = now.toISOString();
@@ -375,6 +372,7 @@ export async function runCollect(options = {}) {
               creditBlocked = true;
               return collectCreditBlockedFallback(topic, false);
             }
+            usingOpenRouterFallback = true;
             json = { output_text: fallback.text, usage: fallback.usage };
             usage = fallback.usage;
             actual = Number.isFinite(usage.cost) ? usage.cost : config.reservePerCallUsd;
@@ -396,7 +394,7 @@ if (items === null) {
 acquired += items.length;
         // 各呼び出し後に再読込して、他ソースが追記したタイトルも除外する。
         const records = [...lines(read(proposalFile, '')), ...simulated];
-        const result = selectProposals(items, records, state, topic, now, config);
+        const result = selectProposals(items, records, state, topic, now, config, usingOpenRouterFallback);
         duplicates += result.duplicates;
         if (result.invalid) log(`除外:必須項目・期間・反応数の条件外${result.invalid}件`);
         if (dryRun) { simulated.push(...result.added); for (const record of result.added) log(`[dry-run] ${JSON.stringify(record)}`); }

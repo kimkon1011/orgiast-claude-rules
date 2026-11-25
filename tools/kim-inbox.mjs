@@ -191,6 +191,7 @@ export const normalizeInboxText = text => String(text ?? '')
   .replace(/\d+(日|件|時間)/g, 'N$1')
   .replace(/(?:\bkim\b|キムさん|キム|金さん|金功勇)\s*/gi, 'KIM')
   .replace(/[\p{Extended_Pictographic}\uFE0E\uFE0F\u200D]/gu, '')
+  .replace(/\b(?:0x[a-f0-9]+|[a-f0-9]{12,})\b/gi, '')
   .replace(/\s+/g, ' ')
   .trim()
   .toLowerCase();

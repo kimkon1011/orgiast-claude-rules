@@ -15,6 +15,19 @@ test('hourly の先送り表現と上限を判定する', () => {
   assert.equal(hourlyEventLimit([{ sessionId: 'a', at: now - 2 * 3600000 }, { sessionId: 'a', at: now - 3 * 3600000 }], 'a', now, { hourlyCap: 4, perSessionDailyCap: 2 }), 'daily');
 });
 
+test('hourlyEventLimit は起動しなかった disabled/no-executor を数えない', () => {
+  const now = Date.parse('2026-11-25T03:00:00Z');
+  const disabledAttempts = Array.from({ length: 4 }, (_, index) => ({
+    sessionId: `disabled-${index}`,
+    at: now - (index + 1) * 1000,
+    outcome: 'disabled',
+  }));
+  assert.equal(hourlyEventLimit(disabledAttempts, 'target', now), null);
+
+  const noExecutorAttempts = disabledAttempts.map((attempt) => ({ ...attempt, outcome: 'no-executor' }));
+  assert.equal(hourlyEventLimit(noExecutorAttempts, 'target', now), null);
+});
+
 async function fixture(t, count = 5) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'stalled-test-'));
   t.after(() => fs.rm(home, { recursive: true, force: true }));

@@ -227,10 +227,15 @@ function eventLimit(attempts, sessionId, now) {
 }
 
 export function hourlyEventLimit(attempts, sessionId, now, { hourlyCap = 4, perSessionDailyCap = 6 } = {}) {
-  const recent = attempts.filter(attempt => attempt.at > now - HOUR_MS);
+  // outcome が 'disabled' または 'no-executor' の試行は実際に Claude を起動していないのでカウントしない
+  const effectiveAttempts = attempts.filter(attempt => 
+    attempt.outcome !== 'disabled' && attempt.outcome !== 'no-executor'
+  );
+  
+  const recent = effectiveAttempts.filter(attempt => attempt.at > now - HOUR_MS);
   if (recent.length >= hourlyCap) return 'global';
   const today = localDate(new Date(now));
-  if (attempts.filter(attempt => attempt.sessionId === sessionId && localDate(new Date(attempt.at)) === today).length >= perSessionDailyCap) return 'daily';
+  if (effectiveAttempts.filter(attempt => attempt.sessionId === sessionId && localDate(new Date(attempt.at)) === today).length >= perSessionDailyCap) return 'daily';
   return null;
 }
 

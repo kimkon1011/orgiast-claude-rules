@@ -276,6 +276,12 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/claude-plan-usage.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-beacon.mjs が import する実行時依存（Claude プラン使用量取得）。D8 再帰検査の対象"
+    },
+    {
       "path": "tools/discord-admin-token-install.mjs",
       "scope": "kim-only",
       "step": null,

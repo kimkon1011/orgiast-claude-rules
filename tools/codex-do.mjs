@@ -913,6 +913,19 @@ export function findCursorAgentCommand({
   executableAvailable,
   homeDir,
 } = {}) {
+  // Windows の ~/.claude/bin ラッパーは USERPROFILE 配下の PowerShell を経由する。
+  // cursor-agent だけ専用 home で起動して Claude Code の user hooks を隔離できるよう、
+  // インストール本体を先に選ぶ。API key は cursorAgentChildEnv が明示的に引き継ぐ。
+  if (platform === 'win32' && homeDir) {
+    const localAppData = env.LOCALAPPDATA
+      || (env.USERPROFILE ? path.join(env.USERPROFILE, 'AppData', 'Local') : '');
+    if (localAppData) {
+      for (const name of ['cursor-agent.cmd', 'agent.cmd']) {
+        const candidate = path.join(localAppData, 'cursor-agent', name);
+        if (existsImpl(candidate)) return candidate;
+      }
+    }
+  }
   // homeDir を明示したときだけラッパーを優先する（テストの PATH 優先ケースを壊さない）。
   // resolveCursorAgentBackend は必ず homeDir を渡す。
   if (homeDir) {
@@ -994,6 +1007,25 @@ export function buildCursorAgentArgs({ workspace } = {}) {
   const args = ['-p', '--force', '--trust'];
   if (workspace) args.push('--workspace', workspace);
   return args;
+}
+
+export function cursorAgentChildEnv(homeDir, baseEnv = process.env, { mkdirImpl = fs.mkdirSync } = {}) {
+  const env = { ...baseEnv };
+  if (!String(env.CURSOR_API_KEY || '').trim()) {
+    const key = readCursorApiKeyFromEnvFile(homeDir);
+    if (key) env.CURSOR_API_KEY = key;
+  }
+  if (process.platform === 'win32') {
+    // Cursor Agent 2026.11.22 は ~/.claude/settings.json を互換読込し、Claude hook を
+    // PowerShell 文へ変換した後に bash eval へ渡すため、全ツールを fail-closed にする。
+    // Cursor 子プロセスだけ home を隔離し、Claude の user hooks を読ませない。
+    // LOCALAPPDATA / APPDATA は維持するので CLI 本体や通常の Cursor 設定は変えない。
+    const isolatedHome = path.join(os.tmpdir(), 'codex-do-cursor-agent-home');
+    mkdirImpl(isolatedHome, { recursive: true });
+    env.USERPROFILE = isolatedHome;
+    env.HOME = isolatedHome;
+  }
+  return env;
 }
 
 const GEMINI_LAUNCH_WINDOW_MS = 6 * 60 * 60 * 1000;
@@ -1913,15 +1945,6 @@ if (!useCodex) {
   console.log(`[codex-do] executor=llm-ask${routed.provider ? `:${routed.provider}` : ''} kind=${taskKind}`);
   console.log(llmAskWarning);
   process.exit(routedStatus);
-}
-
-function cursorAgentChildEnv(homeDir, baseEnv = process.env) {
-  const env = { ...baseEnv };
-  if (!String(env.CURSOR_API_KEY || '').trim()) {
-    const key = readCursorApiKeyFromEnvFile(homeDir);
-    if (key) env.CURSOR_API_KEY = key;
-  }
-  return env;
 }
 
 async function executeCursorAgent(backend, { timeoutSecs, promptText, cwd: runCwd = cwd } = {}) {

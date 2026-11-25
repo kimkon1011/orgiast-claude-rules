@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { addCheck, main } from './auto-progress.mjs';
-import { checkPromise, executeCheck, preflightCheck, hasBashEnvExpansion, hasCheckError, isNetworkCheck, CHECK_ERROR_PATTERNS, resolveCheckShell, CHECK_TIMEOUT_MS, NETWORK_CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS, CHECK_MAX_BUFFER_BYTES, pendingAction } from './auto-progress-check.mjs';
+import { checkPromise, executeCheck, preflightCheck, hasBashEnvExpansion, hasCheckError, isNetworkCheck, isSquashUnsafeLandingCheck, CHECK_ERROR_PATTERNS, resolveCheckShell, CHECK_TIMEOUT_MS, NETWORK_CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS, CHECK_MAX_BUFFER_BYTES, pendingAction } from './auto-progress-check.mjs';
 import { readLedger, writeLedger, ledgerFile } from './auto-progress-ledger.mjs';
 import { run as watch } from './auto-progress-watch.mjs';
 import { run as digest } from './auto-progress-digest.mjs';
@@ -419,6 +419,25 @@ test('preflightCheck: --force-check で静的検査をスキップできる', ()
   const badCheck = 'powershell -NoProfile -Command "if ((Get-Item $env:USERPROFILE\\.claude\\logs\\x.log -ErrorAction Stop).LastWriteTime -ge [datetime]\'2026-10-28 02:00\') { exit 0 } else { exit 1 }"';
   const pf = preflightCheck({ check: badCheck }, { home, forceCheck: true });
   assert.notEqual(pf.preflight, 'static_error');
+});
+
+test('isSquashUnsafeLandingCheck: squash 後に残らない SHA・件名の着地判定を検出する', () => {
+  assert.equal(isSquashUnsafeLandingCheck('git merge-base --is-ancestor d5242ab0 origin/main'), true);
+  assert.equal(isSquashUnsafeLandingCheck("git log origin/main --format=%s | grep -q 'reject PR merge approval asks'"), true);
+  assert.equal(isSquashUnsafeLandingCheck("git log origin/main --format=%s | grep -qF '(#2729)'"), false);
+  assert.equal(isSquashUnsafeLandingCheck('gh pr view 2729 --json state -q .state | grep -qx MERGED'), false);
+  assert.equal(isSquashUnsafeLandingCheck('test -f completed.json'), false);
+});
+
+test('preflightCheck: squash 非対応の着地判定を拒否し --force-check では迂回できる', () => {
+  const check = 'git merge-base --is-ancestor d5242ab0 origin/main';
+  const rejected = preflightCheck({ check }, { spawnImpl: () => assert.fail('静的拒否の前に実行してはならない') });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.preflight, 'static_error');
+  assert.match(rejected.text, /永久に未達/);
+  const forced = preflightCheck({ check }, { forceCheck: true, spawnImpl: () => ({ status: 1, stdout: '', stderr: '' }) });
+  assert.equal(forced.ok, true);
+  assert.equal(forced.preflight, 'unmet');
 });
 
 test('preflightCheck: 未達 check(exit 1・stderr無し)はそのまま通る', () => {

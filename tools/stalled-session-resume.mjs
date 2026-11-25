@@ -384,12 +384,18 @@ stuck=それ以外で進められなかった。
   return { outcome, reason: outcome === 'timeout' ? result.status : reason, ...(outcome === 'waiting-human' ? { askId: report.askId.trim() } : {}), ...execution };
 }
 
-export async function execute(record, { timeoutMs, resultFile, previous = [], wait = null, event }, io = {}) {
-  const allowed = wait ? ['check-met', 'due-risk'].includes(event) && eventResumeAllowed() : autoResumeAllowed();
+export async function execute(record, { timeoutMs, resultFile, previous = [], wait = null, event, hourly = false }, io = {}) {
+  let allowed;
+  if (hourly) {
+    const policy = io.hourlyResumePolicy ?? hourlyResumePolicy;
+    allowed = policy().hourlyResume;
+  } else {
+    allowed = wait ? ['check-met', 'due-risk'].includes(event) && eventResumeAllowed() : autoResumeAllowed();
+  }
   if (!allowed) return { outcome: 'disabled', reason: '自動再開は廃止（config/auto-resume.json）', executor: 'none' };
-  // overdue モードでは claude --resume でセッション自身を再開する
-  if (wait) {
-    return executeOverdue(record, { timeoutMs, resultFile, previous, wait }, io);
+  // hourly モード・overdue モードでは claude --resume でセッション自身を再開する
+  if (hourly || wait) {
+    return executeOverdue(record, { timeoutMs, resultFile, previous, wait: wait ?? { label: 'hourly' } }, io);
   }
   const prompt = `停滞セッション「${record.displayTitle}」(${record.sessionId})の承認済みの目的を1歩進めてください。
 元の会話全文を ${record.file} から読み、依頼・制約・成果物を確認して続行してください。推測で目的を広げないでください。
@@ -768,7 +774,7 @@ export async function run(config = options(), io = {}) {
               ledger.eventAttempts.push({ sessionId: record.sessionId, at });
               await save(ledger);
             }
-            result = await (io.execute ?? execute)(record, { timeoutMs: config.timeoutMs, resultFile, previous: entry.attempts.slice(-4, -1), wait: overdue ? wait : null, event });
+            result = await (io.execute ?? execute)(record, { timeoutMs: config.timeoutMs, resultFile, previous: entry.attempts.slice(-4, -1), wait: overdue ? wait : null, event, hourly });
             if (!['progressed', 'done', 'waiting-human', 'no-progress', 'no-report', 'timeout', 'error', 'no-executor', 'not-in-session', 'disabled'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
           } catch (error) { const msg = String(error.message ?? ''); result = { outcome: /timeout|timed out|ETIMEDOUT|aborted due to timeout/i.test(msg) ? 'timeout' : 'error', reason: msg }; }
           if (humanAsk && ['error', 'not-in-session', 'no-executor', 'disabled', 'timeout'].includes(result.outcome) && !entry.waitingHuman) {

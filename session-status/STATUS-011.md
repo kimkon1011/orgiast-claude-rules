@@ -1,4 +1,4 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-26 03:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-26 04:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
 - 案件数: 27
@@ -18,8 +18,8 @@
 - 011・kyou-kigen-exec-1125・完了・最終更新 11/25 15:23、STATUS.mdなし、DONEあり、REPORTあり、金さん待ちの記述あり・期限なし・次:なし
 - 011・loop-check-1125・金さん待ち・最終更新 11/25 16:23、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、次の手順が未着手、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・plan3oku-11-work・停止・最終更新 11/25 20:58、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 011・pr2745-ci・停止・最終更新 11/26 03:02、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 011・pr2745-ci-fix・停止・最終更新 11/26 03:05、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・pr2745-ci・停止・最終更新 11/26 03:34、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・pr2745-ci-fix・停止・最終更新 11/26 03:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・pr2768-ci-fix・停止・最終更新 11/26 02:11、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・reply-drafts-1125・完了・最終更新 11/25 19:28、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
 - 011・sales-14sha-1125・完了・最終更新 11/25 11:34、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし

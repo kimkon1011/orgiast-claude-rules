@@ -13,7 +13,7 @@ import { redactSecrets } from './webhook-health.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
-import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, recordNaturalLanguageAnswers, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
+import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, recordNaturalLanguageAnswers, interactiveInboxSession, groupInboxItems, readRelayState, writeRelayState } from './lib/kim-inbox-relay-state.mjs';
 import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
 import { matchesRow, parseEscalation, syncEscalationAnswer } from './lib/escalation-answer-sync.mjs';
 import { looksLikeApprovalRequest } from './lib/kim-inbox-kind.mjs';
@@ -1093,11 +1093,31 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       await drainSpool(home);
       if (kim) await ingestFleetMail(home);
       await autoCloseByGmail(home);
+      // 前回示した info を自動 seen にする（ask は対象外。表示予算に入ったものだけがカウントされる）
+      if (kim && sessionId) {
+        const state = readRelayState(home, sessionId);
+        if (state.seenAfterPending?.length) {
+          for (const id of state.seenAfterPending) {
+            try { markSeen(home, id); } catch { /* 既に seen または info 以外は無視 */ }
+          }
+          state.seenAfterPending = [];
+          writeRelayState(home, sessionId, state);
+        }
+      }
       const active = i => (i.status === 'open' || (i.dailyProgress && i.status === 'seen')) && (kim || i.forwardError);
       const items = listInboxMatches(home, active, { originals: true });
       const counts = new Map(items.map(i => [i.id, i.shownCount]));
       const context = selectContext(items, { sessionId: String(input.session_id ?? ''), sheetUrl: deadlineSheetUrl(home), home, event });
       if (kim) recordInjection(home, sessionId, items.filter(i => i.shownCount !== counts.get(i.id) && (i.kind === 'ask' || isHighInfo(i))), { event });
+      // 今回新たに示した info を次回の自動 seen に記録する
+      if (kim && sessionId) {
+        const newlyShownInfo = items.filter(i => i.shownCount !== counts.get(i.id) && i.kind === 'info');
+        if (newlyShownInfo.length) {
+          const state = readRelayState(home, sessionId);
+          state.seenAfterPending = [...new Set([...(state.seenAfterPending || []), ...newlyShownInfo.map(i => i.id)])];
+          writeRelayState(home, sessionId, state);
+        }
+      }
       const contextParts = [];
       if (context) contextParts.push(context);
       if (nlHints) contextParts.push(nlHints);

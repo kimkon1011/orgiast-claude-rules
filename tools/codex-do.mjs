@@ -1900,7 +1900,7 @@ let escalated = false;
 // などの情報行)だけが stderrTail に残り、delegation-health は「全滅」の原因を stderrTail から
 // 特定できない(2026-10-19 実測: fallback 3件の stderrTail は全て無害な情報行だった)。
 let ledgerReason = '';
-function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 1, chain = null) {
+function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 1, chain = null, reasonOverride = '') {
   try {
     const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
@@ -1908,7 +1908,7 @@ function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 
       result, model: modelName, seconds, provider, attempts, chain,
       timeoutSecs: timeoutSeconds, lane: selectedLane.reason, escalated,
       promptChars: prompt.length, origin, kind: taskKind, cwd,
-      reason: ledgerReason
+      reason: reasonOverride || ledgerReason
     });
     fs.appendFileSync(ledger, `${JSON.stringify(row)}\n`, 'utf8');
   } catch {}
@@ -2235,7 +2235,16 @@ async function executeCodex() {
     const tail = String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200);
     if (attempt === 1) console.error(`[codex-do] codex が ${elapsed.toFixed(1)} 秒で出力ゼロ(exit ${result.status})のため 1 回だけ再試行します${tail ? `: ${tail}` : ''}`);
   }
-  recordUsage(result, `codex-cli/${selectedLane.slug || 'default'}`, seconds, 'codex', attempts);
+  // Codex CLI が編集・テストまで進めた後、final 応答だけを書かず exit 1 になることがある。
+  // out=0 だけでは「何も実行されなかった」と区別できないため、作業証跡を台帳へ残す。
+  const completedWorkWithoutFinal = result?.timedOut !== true && Number(result?.status) !== 0
+    && (result?.outputChars || 0) === 0 && seconds >= FAST_FAIL_SECS
+    && (treeBefore.trim() !== treeSnapshot().trim() || Boolean(verifyExternalWork({
+      output: `${result?.output || ''}\n${result?.stderr || ''}`, cwd, started,
+      status: result?.status, timedOut: result?.timedOut,
+    })));
+  recordUsage(result, `codex-cli/${selectedLane.slug || 'default'}`, seconds, 'codex', attempts, null,
+    completedWorkWithoutFinal ? 'work_completed_no_final' : '');
   return result;
 }
 

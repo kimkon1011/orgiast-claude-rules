@@ -851,9 +851,9 @@ export function readCodexFallbackOrder(homeDir) {
   return shared === undefined ? null : shared;
 }
 
-function cheapCodeBackend(name, homeDir) {
+export function cheapCodeBackendWithReason(name, homeDir) {
   const provider = name.split(':')[1] || '';
-  if (!['glm', 'deepseek'].includes(provider)) return null;
+  if (!['glm', 'deepseek'].includes(provider)) return { backend: null, reason: 'unknown-provider' };
   // キーが無い機体で cheap-code を先頭にすると毎回即死するので、キーがある時だけ候補に入れる。
   const cooldownFile = path.join(homeDir, '.claude', 'provider-cooldown.json');
   // 仕様C2b: 定額レーン glm が usage_limit でクールダウン中のときは、同じ位置を deepseek へ自動差し替えする。
@@ -866,18 +866,22 @@ function cheapCodeBackend(name, homeDir) {
   const billingName = provider === 'deepseek' ? 'openrouter' : provider;
   const limitedByHistory = providerLimitedUntil(historyFile, billingName) > 0;
   const inCooldown = provider === 'deepseek' && providerCooldownMs(billingName, Date.now(), cooldownFile) > 0;
-  if (provider === 'deepseek' && (limitedByHistory || inCooldown)) return null;
+  if (provider === 'deepseek' && (limitedByHistory || inCooldown)) return { backend: null, reason: 'billing-openrouter' };
   if (provider === 'glm' && (limitedByHistory || providerCooldownMs('glm', Date.now(), cooldownFile) > 0)) {
-    if (!loadDeepseekKey(homeDir)) return null;
-    if (providerLimitedUntil(historyFile, 'openrouter') > 0) return null;
-    if (providerCooldownMs('openrouter', Date.now(), cooldownFile) > 0) return null;
+    if (!loadDeepseekKey(homeDir)) return { backend: null, reason: 'glm-limit-no-deepseek-fallback' };
+    if (providerLimitedUntil(historyFile, 'openrouter') > 0) return { backend: null, reason: 'glm-limit-no-deepseek-fallback' };
+    if (providerCooldownMs('openrouter', Date.now(), cooldownFile) > 0) return { backend: null, reason: 'glm-limit-no-deepseek-fallback' };
     console.error('[codex-do] cheap-code:glm は usage_limit クールダウン中のため cheap-code:deepseek へフォールバックします');
-    return { kind: 'cheap-code', name: 'cheap-code:deepseek', provider: 'deepseek', model: GATEWAY_MODELS.deepseek };
+    return { backend: { kind: 'cheap-code', name: 'cheap-code:deepseek', provider: 'deepseek', model: GATEWAY_MODELS.deepseek } };
   }
   const keyFile = provider === 'glm' ? 'zai.env' : 'openrouter.env';
   const keyEnv = provider === 'glm' ? 'ZAI_API_KEY' : 'OPENROUTER_API_KEY';
-  if (!loadEnvKey(homeDir, keyFile, keyEnv)) return null;
-  return { kind: 'cheap-code', name, provider, model: provider === 'glm' ? 'glm-5.3' : GATEWAY_MODELS.deepseek };
+  if (!loadEnvKey(homeDir, keyFile, keyEnv)) return { backend: null, reason: 'missing-key', keyFile, keyEnv };
+  return { backend: { kind: 'cheap-code', name, provider, model: provider === 'glm' ? 'glm-5.3' : GATEWAY_MODELS.deepseek } };
+}
+
+function cheapCodeBackend(name, homeDir) {
+  return cheapCodeBackendWithReason(name, homeDir).backend;
 }
 
 export function findExecutable(name, { env = process.env, platform = process.platform, existsImpl = fs.existsSync } = {}) {
@@ -1183,10 +1187,17 @@ export function resolveFallbackBackends(homeDir, options = {}) {
       let requested = name;
       if ((taskKind === 'implement' || taskKind === 'verify') && name === 'openrouter-free') requested = 'openrouter-code';
       if ((taskKind === 'summarize' || taskKind === 'classify') && name === 'openrouter-code') requested = 'openrouter-free';
-      const raw = requested.startsWith('cheap-code:') ? cheapCodeBackend(requested, homeDir) : byName[requested]?.();
+      const cheapCodeResult = requested.startsWith('cheap-code:') ? cheapCodeBackendWithReason(requested, homeDir) : null;
+      const raw = cheapCodeResult ? cheapCodeResult.backend : byName[requested]?.();
       const backend = acceptBackend(raw);
       if (backend) backends.push(backend);
-      else if (!raw && !(requested === 'gemini-cli' && (geminiBudgetBlocked || geminiLaunchBlocked))) console.error(`[codex-do] codex-fallback-order.json の ${name} はキー未設定か未知の名前のためスキップ`);
+      else if (!raw && !(requested === 'gemini-cli' && (geminiBudgetBlocked || geminiLaunchBlocked))) {
+        if (cheapCodeResult?.reason === 'billing-openrouter') console.error(`[codex-do] codex-fallback-order.json の ${name} は OpenRouter が残高切れ/クールダウン中のためスキップ（deepseek レーンは OpenRouter 経由。復帰まで待つか入金が必要）`);
+        else if (cheapCodeResult?.reason === 'missing-key') console.error(`[codex-do] codex-fallback-order.json の ${name} はキー未設定のためスキップ（${cheapCodeResult.keyFile} の ${cheapCodeResult.keyEnv}）`);
+        else if (cheapCodeResult?.reason === 'glm-limit-no-deepseek-fallback') console.error(`[codex-do] codex-fallback-order.json の ${name} は GLM が usage_limit 中で、deepseek への退避も利用できないためスキップ（GLM の復帰を待つか OpenRouter のキー・残高・クールダウンを確認）`);
+        else if (cheapCodeResult || !Object.hasOwn(byName, requested)) console.error(`[codex-do] codex-fallback-order.json の ${name} は未知の名前のためスキップ`);
+        else console.error(`[codex-do] codex-fallback-order.json の ${name} はキー未設定のためスキップ`);
+      }
     }
     if (backends.length) return withCursorAgentFirst(uniqueBackendsByName(backends));
     console.error('[codex-do] codex-fallback-order.json に使えるバックエンドが無いため従来順へ戻します');

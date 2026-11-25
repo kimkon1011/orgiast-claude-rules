@@ -140,14 +140,20 @@ export async function runWatch({ home, config, ledger, sheets, request, today, d
   const rows = suppliedRows || await loadRows({ config, ledger, sheets });
   const openKeys = new Set(dryRun ? [] : listItems(home, { status: 'open' }).filter(i => i.kind === 'deadline').map(i => i.key));
   const persist = () => saveJson(dataPath(home, 'state.json'), state);
-  const decisions = [], errors = [];
+  const decisions = [], errors = [], warnings = [];
   for (const original of rows) {
     let row = { ...original };
     try {
       let completionEvidence = row.kind === '支払' && row.completedAt;
       if (!closed(row) && !row.readOnly && !completionEvidence) {
         try { completionEvidence = await hasSentReply(row, request); }
-        catch (e) { errors.push({ id: row.id, phase: 'auto-close', error: e.message }); }
+        catch (e) {
+          if (e.status === 404 || (typeof e.message === 'string' && e.message.includes('HTTP 404'))) {
+            warnings.push({ id: row.id, phase: 'auto-close', warning: '元メールが見つからない（404）。返信済み判定をスキップ' });
+          } else {
+            errors.push({ id: row.id, phase: 'auto-close', error: e.message });
+          }
+        }
       }
       // An unavailable completion check must not suppress an outstanding deadline.
       if (!closed(row) && !row.readOnly && completionEvidence) {
@@ -174,7 +180,7 @@ export async function runWatch({ home, config, ledger, sheets, request, today, d
     } catch (e) { errors.push({ id: row.id, error: e.message }); }
   }
   if (!dryRun) { state.lastWatchAt = new Date().toISOString(); persist(); saveJson(dataPath(home, 'digest.json'), { at: state.lastWatchAt, today, text: formatDigest(rows, today, config) }); }
-  return { today, dryRun, decisions, errors };
+  return { today, dryRun, decisions, errors, warnings };
 }
 export async function readDigest({ home = defaultHome(), today = jstDate(), ...deps } = {}) {
   const config = deps.config || loadConfig(home);
@@ -232,7 +238,11 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     const result = args['dry-run'] || args.digest ? await work() : await withLedgerLock(home, work);
     ok = !result.errors.length;
     if (result.errors.length) resultSummary = `期限追跡エラー: ${result.errors.map(e => e.id || e.message || String(e)).join(', ')}`;
-    else resultSummary = '期限追跡完了';
+    else if (result.warnings?.length) {
+      const ids = result.warnings.map(w => w.id);
+      const suffix = ids.length === 1 ? ids[0] : `${ids[0]} ほか ${ids.length - 1}件`;
+      resultSummary = `期限追跡完了（警告: ${suffix} 元メール404）`;
+    } else resultSummary = '期限追跡完了';
     return ok ? 0 : 1;
   } catch (e) { resultSummary = `期限追跡エラー: ${e.message}`; stderr(`deadline-watch: ${e.message}`); return 1; }
   finally {

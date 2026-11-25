@@ -137,6 +137,34 @@ test('Gmailの完了照合に失敗しても期限通知を届け、失敗とし
   assert.deepEqual(result.errors, [{ id: row.id, phase: 'auto-close', error: 'Gmail unavailable' }]);
 });
 
+test('Gmail 404 は warnings に記録し exit 0', async t => {
+  const row = { ...base, due: '2026-11-05', source: 'Gmail', detectedAt: '2026-11-03', notes: '{"mailbox":"kim@orgiast.jp","threadId":"thread"}' };
+  const result = await runWatch({ home: homeFor(t), config, rows: [row], today: '2026-11-04',
+    ledger: { patch: async () => {} },
+    request: async () => { throw Object.assign(new Error('Google GET HTTP 404: Not found'), { status: 404 }); },
+    notify: async () => {}, state: {} });
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.warnings.length, 1);
+  assert.equal(result.warnings[0].id, row.id);
+  assert.equal(result.warnings[0].phase, 'auto-close');
+  assert.match(result.warnings[0].warning, /404/);
+  assert.equal(result.decisions[0]?.status, '未着手');
+  assert.equal(result.decisions[0]?.notify, true);
+});
+
+test('Gmail 500 は errors に記録し exit 1', async t => {
+  const row = { ...base, due: '2026-11-05', source: 'Gmail', detectedAt: '2026-11-03', notes: '{"mailbox":"kim@orgiast.jp","threadId":"thread"}' };
+  const result = await runWatch({ home: homeFor(t), config, rows: [row], today: '2026-11-04',
+    ledger: { patch: async () => {} },
+    request: async () => { throw Object.assign(new Error('Google GET HTTP 500: Server Error'), { status: 500 }); },
+    notify: async () => {}, state: {} });
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0].id, row.id);
+  assert.equal(result.errors[0].phase, 'auto-close');
+  assert.match(result.errors[0].error, /500/);
+  assert.equal(result.warnings.length, 0);
+});
+
 test('不存在のfixtureで本番の読取へfallbackしない', async t => {
   const home=homeFor(t), errors=[];
   assert.equal(await main(['--dry-run','--fixture',path.join(home,'missing.json')],{home,config,stderr:e=>errors.push(e),sheets:{get:()=>assert.fail('live read')}}),1);

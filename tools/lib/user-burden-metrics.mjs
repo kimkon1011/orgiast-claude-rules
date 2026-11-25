@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { transcriptMetricCache } from './transcript-metric-cache.mjs';
 import { entryText, isHumanEntry, transcriptEntries } from './human-turn.mjs';
 export const REPEAT_COMPLAINT_PATTERN = /(手間|前に(?:も)?試した|前にも|前回も|さっきも|何回も|何度も|また同じ|同じこと|言ったよね|言ったでしょ|繰り返し)/;
 export function sessionBurden(transcriptText) {
@@ -11,7 +12,8 @@ export function sessionBurden(transcriptText) {
   }
   return { humanTurns, roundTrips: Math.max(0, humanTurns - 1), stopBlocks, repeatComplaints };
 }
-export function collectUserBurdenMetrics({ home, days = 7, transcriptPath = '' }) {
+export function collectUserBurdenMetrics({ home, days = 7, transcriptPath = '', cacheDir }) {
+  const cache = transcriptMetricCache({ home, name: 'user-burden-v1', cacheDir });
   const metrics = { sessions: 0, roundTripsPerObjective: 0, maxRoundTrips: 0, maxRoundTripsSession: '', stopBlocks: 0, stopBlocksPerSession: 0, repeatComplaints: 0, current: null };
   let trips = 0;
   const cutoff = Date.now() - days * 86400000;
@@ -23,7 +25,7 @@ export function collectUserBurdenMetrics({ home, days = 7, transcriptPath = '' }
       if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
       try {
         if (fs.statSync(file).mtimeMs < cutoff) continue;
-        const burden = sessionBurden(fs.readFileSync(file, 'utf8'));
+        const burden = cache.read(file, sessionBurden);
         if (!burden.humanTurns) continue;
         metrics.sessions++; trips += burden.roundTrips;
         metrics.stopBlocks += burden.stopBlocks; metrics.repeatComplaints += burden.repeatComplaints;
@@ -33,7 +35,8 @@ export function collectUserBurdenMetrics({ home, days = 7, transcriptPath = '' }
   }
   visit(path.join(home, '.claude', 'projects'));
   if (metrics.sessions) { metrics.roundTripsPerObjective = Number((trips / metrics.sessions).toFixed(1)); metrics.stopBlocksPerSession = Number((metrics.stopBlocks / metrics.sessions).toFixed(1)); }
-  if (transcriptPath) try { metrics.current = sessionBurden(fs.readFileSync(transcriptPath, 'utf8')); } catch {}
+  if (transcriptPath) try { metrics.current = cache.read(transcriptPath, sessionBurden); } catch {}
+  cache.save();
   return metrics;
 }
 export function formatUserBurdenLines(metrics, days) {

@@ -280,6 +280,7 @@ export function publishHourlyHeartbeat({ home = process.env.ORGIAST_HOME || os.h
   fs.appendFileSync(localFile, line + '\n');
   const dir = path.join(home, '.claude', 'fleet-heartbeat-repo');
   const git = (cwd, args) => String(exec('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] })).trim();
+  const gitIdentity = ['-c', 'user.name=Orgiast heartbeat', '-c', 'user.email=heartbeat@orgiast.jp'];
   let release;
   try {
     release = acquireSessionLock('fleet-heartbeat-publish', { home });
@@ -298,12 +299,21 @@ export function publishHourlyHeartbeat({ home = process.env.ORGIAST_HOME || os.h
         git(dir, ['read-tree', '--empty']);
       }
     }
+    // Clear stale rebase state that would block subsequent operations.
+    for (const dirName of ['rebase-merge', 'rebase-apply']) {
+      try { if (fs.existsSync(path.join(dir, '.git', dirName))) git(dir, ['rebase', '--abort']); } catch { /* ignore abort failure */ }
+    }
     if (git(dir, ['branch', '--show-current']) !== 'fleet-heartbeat') throw new Error('heartbeat clone branch mismatch');
     const remote = git(dir, ['ls-remote', '--heads', 'origin', 'fleet-heartbeat']);
     const rebase = () => {
       git(dir, ['fetch', 'origin', 'fleet-heartbeat:refs/remotes/origin/fleet-heartbeat']);
       let common = true; try { git(dir, ['merge-base', 'HEAD', 'origin/fleet-heartbeat']); } catch { common = false; }
-      git(dir, common ? ['rebase', 'origin/fleet-heartbeat'] : ['rebase', '--onto', 'origin/fleet-heartbeat', '--root']);
+      try {
+        git(dir, common ? [...gitIdentity, 'rebase', 'origin/fleet-heartbeat'] : [...gitIdentity, 'rebase', '--onto', 'origin/fleet-heartbeat', '--root']);
+      } catch (error) {
+        try { git(dir, ['rebase', '--abort']); } catch { /* ignore abort failure */ }
+        throw error;
+      }
     };
     // Persist local data before fetching; failed pushes remain committed for next run.
     const relative = `stalled-sessions/${label}.log`, sharedFile = path.join(dir, relative);
@@ -318,7 +328,7 @@ export function publishHourlyHeartbeat({ home = process.env.ORGIAST_HOME || os.h
     fs.writeFileSync(sharedFile, merged.join('\n') + '\n');
     git(dir, ['add', '--', relative]);
     let changed = true; try { git(dir, ['diff', '--cached', '--quiet']); changed = false; } catch {}
-    if (changed) git(dir, ['-c', 'user.name=Orgiast heartbeat', '-c', 'user.email=heartbeat@orgiast.jp', 'commit', '-m', `heartbeat ${label}`]);
+    if (changed) git(dir, [...gitIdentity, 'commit', '-m', `heartbeat ${label}`]);
     if (remote) rebase();
     let pushed = false;
     for (let attempt = 0; attempt < 3; attempt++) {

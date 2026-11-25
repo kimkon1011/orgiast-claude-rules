@@ -292,9 +292,12 @@ export function skipReason(record, entry, night, closed, mtimeMs, now, activeMs)
 async function executeOverdue(record, { timeoutMs, resultFile, previous = [], wait }, io = {}) {
   const guardVerdict = io.guardVerdict ?? await (io.evaluateGuard ?? evaluateClaudeSeatGuard)({ home: io.home ?? process.env.ORGIAST_HOME ?? os.homedir(), env: process.env, caller: 'stalled-session-resume:wait-deadline' });
   if (guardVerdict.blocked) return { outcome: 'skipped', executor: 'none', reason: formatClaudeSeatGuardSkip(guardVerdict) };
+  const waitInstruction = wait.key === 'hourly-deferred'
+    ? 'このセッションは先送りしたまま止まっています。先送りした事項を確認し、'
+    : `このセッションの待機期限 ${wait.label} を過ぎました。待っていた事項（相手の返信・外部の状態・自動チェック）を直接照会し、`;
   const prompt = `停滞セッション「${record.displayTitle}」(${record.sessionId})の承認済みの目的を1歩進めてください。
 「次回やる」で終わらせない。先送りするなら、応答の「このセッション」行に新しい期限【MM/DD/HH:MMまで】を書く（毎時の再開ジョブが拾う）。常設許可がある送信（config/standing-send-permissions.json に列挙）は承認待ちに積まず、その許可の範囲で送信して結果を記録する。
-このセッションの待機期限 ${wait.label} を過ぎました。待っていた事項（相手の返信・外部の状態・自動チェック）を直接照会し、(a) 進められるなら最後まで進めて検証する (b) 人の判断や操作が必要なら kim-inbox に ask を積み（node tools/kim-inbox.mjs）、応答の「このセッション」行に新しい期限を書く (c) 目的が完了していれば /session-close を実行する。期限を書き換えるだけで終えない。
+${waitInstruction}(a) 進められるなら最後まで進めて検証する (b) 人の判断や操作が必要なら kim-inbox に ask を積み（node tools/kim-inbox.mjs）、応答の「このセッション」行に新しい期限を書く (c) 目的が完了していれば /session-close を実行する。期限を書き換えるだけで終えない。
 元の会話全文を ${record.file} から読み、依頼・制約・成果物を確認して続行してください。推測で目的を広げないでください。
 共有作業ツリーの他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。個別の通知は不要です。
 前回までの再開結果: ${JSON.stringify(previous)}。済んだ作業を繰り返さず、成果物の現状を検証してください。
@@ -384,18 +387,16 @@ stuck=それ以外で進められなかった。
   return { outcome, reason: outcome === 'timeout' ? result.status : reason, ...(outcome === 'waiting-human' ? { askId: report.askId.trim() } : {}), ...execution };
 }
 
-export async function execute(record, { timeoutMs, resultFile, previous = [], wait = null, event, hourly = false }, io = {}) {
-  let allowed;
-  if (hourly) {
-    const policy = io.hourlyResumePolicy ?? hourlyResumePolicy;
-    allowed = policy().hourlyResume;
-  } else {
-    allowed = wait ? ['check-met', 'due-risk'].includes(event) && eventResumeAllowed() : autoResumeAllowed();
-  }
+export async function execute(record, { timeoutMs, resultFile, previous = [], wait = null, event, hourly: hourlyOpt = false }, io = {}) {
+  const hourly = hourlyOpt === true || event === 'hourly';
+  const allowed = hourly
+    ? (io.hourlyResumePolicy ?? hourlyResumePolicy)().hourlyResume === true
+    : wait ? ['check-met', 'due-risk'].includes(event) && eventResumeAllowed() : autoResumeAllowed();
   if (!allowed) return { outcome: 'disabled', reason: '自動再開は廃止（config/auto-resume.json）', executor: 'none' };
   // hourly モード・overdue モードでは claude --resume でセッション自身を再開する
-  if (hourly || wait) {
-    return executeOverdue(record, { timeoutMs, resultFile, previous, wait: wait ?? { label: 'hourly' } }, io);
+  const overdueWait = wait ?? (hourly ? { key: 'hourly-deferred', label: '先送り（次回やる）', at: Date.now() } : null);
+  if (overdueWait) {
+    return executeOverdue(record, { timeoutMs, resultFile, previous, wait: overdueWait }, io);
   }
   const prompt = `停滞セッション「${record.displayTitle}」(${record.sessionId})の承認済みの目的を1歩進めてください。
 元の会話全文を ${record.file} から読み、依頼・制約・成果物を確認して続行してください。推測で目的を広げないでください。
@@ -650,7 +651,7 @@ export async function run(config = options(), io = {}) {
             row.skip = 'active';
             continue;
           }
-          event = met ? 'check-met' : safeStart && checkedAt >= safeStart.getTime() ? 'due-risk' : hourly ? 'hourly' : null;
+          event = hourly ? 'hourly' : met ? 'check-met' : safeStart && checkedAt >= safeStart.getTime() ? 'due-risk' : null;
           const footer = footerValues(String(record.lastAssistantText ?? '').replace(/：/g, ':'));
           if (!checks.length && footer?.nextAction && !NO_ACTION_PATTERN.test(footer.nextAction) &&
               /判断|承認|決裁|同意|支払|署名|押印|選択/.test(footer.nextAction)) {

@@ -970,6 +970,43 @@ test('overdue invokes claude --resume and removes API credentials', async t => {
   });
   assert.equal(calls.length, 2); assert.equal(result.outcome, 'progressed'); assert.equal(result.resumedInSession, true);
 });
+test('hourly with wait invokes claude --resume when hourly resume is enabled', async t => {
+  const f = await fixture(t, 1); let size = 10; const calls = [];
+  const result = await execute(f.records[0], { timeoutMs: 1000, event: 'hourly', wait: { key: 'deadline', label: '09/23 12:00' } }, {
+    hourlyResumePolicy: () => ({ hourlyResume: true }), executable: 'claude-fixture', stat: async () => ({ size }),
+    execFile: async (_, args) => {
+      calls.push(args);
+      if (args[0] === '--help') return { stdout: '--resume --print' };
+      size++;
+      return { stdout: '' };
+    },
+    runChild: () => assert.fail('fallback forbidden'), readReport: async () => ({ state: 'progressed', evidence: 'verified' }),
+  });
+  assert.deepEqual(calls[1].slice(0, 3), ['--resume', 'session-0', '-p']);
+  assert.equal(result.outcome, 'progressed');
+});
+test('hourly without wait invokes claude --resume with a natural deferred prompt', async t => {
+  const f = await fixture(t, 1); let size = 10; let prompt;
+  const result = await execute(f.records[0], { timeoutMs: 1000, event: 'hourly' }, {
+    hourlyResumePolicy: () => ({ hourlyResume: true }), executable: 'claude-fixture', stat: async () => ({ size }),
+    execFile: async (_, args) => {
+      if (args[0] === '--help') return { stdout: '--resume --print' };
+      prompt = args.at(-1); size++;
+      return { stdout: '' };
+    },
+    runChild: () => assert.fail('fallback forbidden'), readReport: async () => ({ state: 'progressed', evidence: 'verified' }),
+  });
+  assert.match(prompt, /先送りしたまま止まっています/);
+  assert.doesNotMatch(prompt, /待機期限 .* を過ぎました/);
+  assert.equal(result.outcome, 'progressed');
+});
+test('hourly remains disabled when hourly resume is disabled', async t => {
+  const f = await fixture(t, 1);
+  const result = await execute(f.records[0], { timeoutMs: 1000, event: 'hourly', wait: { key: 'deadline', label: '09/23 12:00' } }, {
+    hourlyResumePolicy: () => ({ hourlyResume: false }), execFile: () => assert.fail('no CLI'), runChild: () => assert.fail('no child'),
+  });
+  assert.equal(result.outcome, 'disabled');
+});
 test('fallback success without transcript growth remains eligible next tick', async t => {
   const f = await fixture(t, 1); f.records[0].displayTitle = '【09/23/12:00まで】Task';
   f.io.execute = (r, opts) => execute(r, opts, {

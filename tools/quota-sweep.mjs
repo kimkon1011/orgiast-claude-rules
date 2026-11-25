@@ -597,7 +597,7 @@ export async function runSweep(decision, context) {
       wsl = context.wsl ?? discoverWsl({ spawnImpl });
 
       executable = wsl ? 'wsl' : 'codex';
-      baseArgs = ['exec', '-s', 'workspace-write', '-c', 'model_provider=openai', '-c', 'forced_login_method=chatgpt', '--json', '-C', wsl ? wslPath(tree) : tree, '-'];
+      baseArgs = ['exec', '--approve-for-me', '-c', 'model_provider=openai', '-c', 'forced_login_method=chatgpt', '--json', '-C', wsl ? wslPath(tree) : tree, '-'];
     }
     const childEnv = { ...sanitizeClaudeSupervisorEnv(env), ORGIAST_HOME: home, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: `quota-sweep:${provider}` };
     // No API-key billing fallback. Both hosts must use their existing plan authentication.

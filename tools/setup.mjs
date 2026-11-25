@@ -91,7 +91,8 @@ function checkTaskDetails(spec, info) {
       }
     }
   }
-  if (typeof spec.maxRunAgeHours === 'number') {
+  // 意図的に無効化する必須タスクは実行されないため、最終実行の古さは見ない。
+  if (typeof spec.maxRunAgeHours === 'number' && !spec.expectDisabled) {
     const lastRun = Date.parse(info.lastRunTime);
     // 初回実行前は登録直後にも起こるため、修復対象ではなく NOTICE にする。
     if (!Number.isFinite(lastRun) || lastRun < Date.UTC(2000, 0, 1)) return null;

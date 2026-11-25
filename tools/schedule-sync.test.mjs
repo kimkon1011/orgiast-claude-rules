@@ -25,6 +25,7 @@ function setup(t) {
     },
     dm: async text => { dms.push(text); }, log: () => {},
   };
+  deps.aiCalendar = deps.calendar;
   const options = { now, stateDir: path.join(dir, 'state'), home: dir, sources: ['line'] };
   return { dir, creates, dms, calendars, deps, options, run: () => runScheduleSync(options, deps) };
 }
@@ -46,7 +47,7 @@ test('new appointment: automatic title, one hour, provenance, default reminders 
   assert.equal((await x.run()).counts.created, 1);
   assert.equal(x.creates[0].summary, '【自動】【ラハイナ】全社mtg');
   assert.equal(Date.parse(x.creates[0].end.dateTime) - Date.parse(x.creates[0].start.dateTime), 3600000);
-  assert.match(x.creates[0].description, /出典: LINE \/ ラハイナ PJ\n送信者: 担当者\n送信日時: 2026-10-16/);
+  assert.match(x.creates[0].description, /^案件: ラハイナ\n出典: LINE \/ ラハイナ PJ\n送信者: 担当者\n送信日時: 2026-10-16/);
   assert.ok(x.creates[0].description.endsWith(message.text));
   assert.deepEqual(x.creates[0].reminders, { useDefault: true });
   assert.match(x.dms[0], /2026-10-26 12:00.*全社mtg.*LINE.*https:\/\/calendar/);
@@ -722,7 +723,7 @@ for (const [chat, title, text] of [
 test('学会名・nxa を制作チームの Calendar に振り分ける', async t => {
   assert.equal(targetCalendarForGroup('1121福岡NXA'), 'seisaku-team@orgiast.jp');
   assert.equal(targetCalendarForGroup('日本早産学会'), 'seisaku-team@orgiast.jp');
-  assert.equal(targetCalendarForGroup('通常案件'), 'kim@orgiast.jp');
+  assert.equal(targetCalendarForGroup('通常案件'), 'primary');
   const x = setup(t);
   x.deps.collect = async () => ({ messages: [{ ...message, chat: '日本早産学会' }], stats: {} });
   x.deps.calendar.create = async () => assert.fail('kim のカレンダーへの登録');

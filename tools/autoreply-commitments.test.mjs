@@ -132,7 +132,7 @@ test('電話は Meet を付けず、通知の不一致を登録成功として�
     fetchImpl: async (_, init) => {
       if (init.method === 'POST') {
         body = JSON.parse(init.body);
-        assert.equal(body.summary, '【調整可】澤山さんに電話');
+        assert.equal(body.summary, '【案件未特定】【調整可】澤山さんに電話');
         assert.equal(body.conferenceData, undefined);
         return { ok: true };
       }

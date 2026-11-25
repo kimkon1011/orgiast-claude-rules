@@ -25,6 +25,7 @@ import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { latestAssistantText } from './lib/assistant-text.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
+import { AI_CALENDAR, routeCalendar, withCaseLabel } from './lib/calendar-shared.mjs';
 import { addDays, isBusinessDay, lastBusinessDayOnOrBefore, prevBusinessDay, nextBusinessDay, addBusinessDays, closedStreakAfter, holidayName } from './lib/jp-business-days.mjs';
 
 const exec = promisify(execFile);
@@ -111,7 +112,7 @@ export function planItem(row, config = {}) {
   const kimBy = needsKim ? `${actionDay}T${minus(actionTime, config.hoursBefore ?? 3)}` : null;
   return { id: row.id, title: row.title, type, due, time, actionDay, actionAt: `${actionDay}T${actionTime}`, startBy,
     prevDay: prevBusinessDay(actionDay, opts), kimBy, needsKim, recommend: meta.recommend || '', draftUrl: meta.draftUrl || '',
-    assignee: row.assignee || 'kim', pc: meta.pc || '', action: row.action || '', status: row.status || '',
+    assignee: row.assignee || 'kim', pc: meta.pc || '', action: row.action || '', status: row.status || '', company: row.company || '',
     moved: actionDay !== due ? `${due}（${holidayName(due, opts) || (isBusinessDay(due, opts) ? '' : '休み')}）→${actionDay}` : '' };
 }
 // 今どの段階か。push は段階が変わったときだけ（同じ内容の連打をしない）。
@@ -333,16 +334,25 @@ export async function defaultDeliver({ home, kind, text, title, dedupeKey, urgen
 }
 async function syncKimCalendar(plan, { config, request, state }) {
   if (!config.calendar?.enabled || !request || plan.assignee !== 'kim' || !plan.time || plan.type === 'send') return;
-  const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(config.calendar.calendarId || 'kim@orgiast.jp')}/events`;
   const opts = { user: 'kim@orgiast.jp', scope: 'https://www.googleapis.com/auth/calendar.events' };
   const key = `${plan.id}:${plan.actionAt}`; if (state.calendar?.[plan.id] === key) return;
   const start = new Date(Date.parse(`${plan.actionAt}:00+09:00`)), end = new Date(start.getTime() + 30 * 60000);
-  const body = { summary: `【調整可】${plan.title}`, start: { dateTime: start.toISOString(), timeZone: 'Asia/Tokyo' }, end: { dateTime: end.toISOString(), timeZone: 'Asia/Tokyo' },
-    description: [`やること: ${plan.action || plan.title}`, plan.needsKim ? `判断: ${plan.needsKim}${plan.recommend ? `（推奨: ${plan.recommend}）` : ''}` : '', plan.draftUrl ? `文面・資料: ${plan.draftUrl}` : '', `期限台帳 ${plan.id}`].filter(Boolean).join('\n'),
+  const labeled = withCaseLabel({ summary: `【調整可】${plan.title}`, description: [`やること: ${plan.action || plan.title}`, plan.needsKim ? `判断: ${plan.needsKim}${plan.recommend ? `（推奨: ${plan.recommend}）` : ''}` : '', plan.draftUrl ? `文面・資料: ${plan.draftUrl}` : '', `期限台帳 ${plan.id}`].filter(Boolean).join('\n') }, plan.company, 'schedule-autopilot');
+  const body = { ...labeled, start: { dateTime: start.toISOString(), timeZone: 'Asia/Tokyo' }, end: { dateTime: end.toISOString(), timeZone: 'Asia/Tokyo' },
     reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: config.calendar.reminderMinutes ?? 30 }] }, extendedProperties: { private: { autopilotId: plan.id } } };
-  const found = await request(`${base}?${new URLSearchParams({ privateExtendedProperty: `autopilotId=${plan.id}` })}`, opts);
-  if (found.items?.[0]) await request(`${base}/${encodeURIComponent(found.items[0].id)}?sendUpdates=none`, { ...opts, method: 'PATCH', body });
-  else await request(`${base}?sendUpdates=none`, { ...opts, method: 'POST', body });
+  const calendarIds = ['primary', AI_CALENDAR];
+  let found;
+  for (const calendarId of calendarIds) {
+    const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
+    const result = await request(`${base}?${new URLSearchParams({ privateExtendedProperty: `autopilotId=${plan.id}` })}`, opts);
+    if (result.items?.[0]) { found = { calendarId, event: result.items[0] }; break; }
+  }
+  const targetId = routeCalendar(body, { origin: 'ai' });
+  const targetBase = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(targetId)}/events`;
+  if (found) {
+    const foundBase = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(found.calendarId)}/events`;
+    await request(`${foundBase}/${encodeURIComponent(found.event.id)}?sendUpdates=none`, { ...opts, method: 'PATCH', body });
+  } else await request(`${targetBase}?sendUpdates=none`, { ...opts, method: 'POST', body });
   (state.calendar ||= {})[plan.id] = key;
 }
 // 金さんの回答を台帳に書き、担当PCへ次工程を依頼する（自動で次へ進む）。

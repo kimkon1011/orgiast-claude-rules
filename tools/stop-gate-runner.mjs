@@ -39,6 +39,7 @@ import { evaluateAudit } from './handoff-audit-gate.mjs';
 import { enabled as reportLengthEnabled, judgeReportLengthWithLlm } from './report-length-gate.mjs';
 import { hasRequiredFooter, judgeNextAction, reportsCloseSteps, hasOpenSessionCheck, hasSessionWakeup, WATCH_REGISTRATION_CODES, footerValues, openDeadline, WAIT_CHECK_CODES } from './next-action-gate.mjs';
 import { judgeSubstituteCapability } from './substitute-capability-gate.mjs';
+import { judgeUserCodeInput } from './user-code-input-gate.mjs';
 import { judgeUserBurden, desktopLauncherPattern } from './user-burden-gate.mjs';
 import { findOutsourcedInvestigation, formatViolationMessage as formatSelfCheck, scanToolUsesFromRaw } from './self-check-before-asking-guard.mjs';
 import { findLocalDocLinks, findBareLocalDocPaths, formatBarePathMessage, formatViolationMessage as formatDocLink } from './doc-link-drive-guard.mjs';
@@ -57,6 +58,7 @@ import { judgeTurnLanguage } from './response-language-gate.mjs';
 import { evaluateUnregisteredPromise } from './unregistered-promise-gate.mjs';
 import { appendStopLedger, registerStopViolation, CAP_CONTEXT, splitRepeatedGateBlocks } from './lib/stop-recheck.mjs';
 import { stripInboxSection } from './lib/inbox-section-filter.mjs';
+import { stripTrailingJournalAnswers } from './lib/strip-trailing-journal.mjs';
 import { STOP_RETRY_INSTRUCTION, withStopRetryInstruction } from './lib/stop-retry-message.mjs';
 import { evaluateClaudeFallbackReport } from './claude-fallback-report-gate.mjs';
 import { evaluateDelegationReadback } from './delegation-readback-gate.mjs';
@@ -144,6 +146,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['external-channel-unmonitored-gate', () => evaluateExternalChannelPromise(ctx.assistantText)],
     ['progress-cron-gate', () => evaluateProgressCron(ctx.input, { home: home() })],
     ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw, { ...ctx.input, session_id: ctx.sessionId }, { turnText: ctx.turnText })],
+    ['user-code-input-gate', () => judgeUserCodeInput(ctx.assistantText)],
     ['user-burden-gate', () => judgeUserBurden(ctx.assistantText, ctx.humanText)],
     ['substitute-capability-gate', () => judgeSubstituteCapability(ctx.assistantText)],
     ['session-close-target-gate', () => judgeLaunchTarget(ctx.assistantText, blocks(currentTurnEntries(ctx.transcriptRaw), 'tool_use'))],
@@ -361,7 +364,7 @@ async function runOtherGates(input, context, auditOptions = {}) {
       } else {
         const purpose = String(assistantText).match(/^\s*(?:\*\*)?\[本セッションの目的\](?:\*\*)?[ \t]*([^\r\n]+)(?:\r?\n|$)/)?.[1]?.trim();
         const label = purpose || [...String(context.lastUserPrompt || context.humanText || '')].slice(0, 60).join('');
-        const deadline = new Date(Math.max(openDeadline(footerValues(assistantText)?.session)?.getTime() || Date.now() + 24 * 3600000, Date.now() + 6 * 3600000)).toISOString();
+        const deadline = new Date(Math.max(openDeadline(footerValues(stripTrailingJournalAnswers(assistantText))?.session)?.getTime() || Date.now() + 24 * 3600000, Date.now() + 6 * 3600000)).toISOString();
         const script = fileURLToPath(new URL('./session-progress-check.mjs', import.meta.url)).replaceAll('\\', '/');
         // Double quotes work in both cmd.exe and the check executor's Bash shell.
         // Reject shell metacharacters that still expand within double quotes.
@@ -398,7 +401,7 @@ async function runOtherGates(input, context, auditOptions = {}) {
     const summaries = evaluated.results.filter(r => FORM_GATES.includes(r.name)).map(r => `- ${r.name}: ${String(r.reason || '').split(/\r?\n/).slice(0, 2).map(line => line.slice(0, 200)).join(' ')}`);
     sections.push(`### 手渡しの形式（1回の書き直しでまとめて直す）\n${summaries.join('\n')}`);
   }
-  if (!evaluated.unchangedPeriodicReport && !blockedBy.includes('next-action-gate') && !hasRequiredFooter(assistantText)) sections.push(`### ピギーバック・ヒント\n- ${HANDOFF_HINT}`);
+  if (!evaluated.unchangedPeriodicReport && !blockedBy.includes('next-action-gate') && !hasRequiredFooter(stripTrailingJournalAnswers(assistantText))) sections.push(`### ピギーバック・ヒント\n- ${HANDOFF_HINT}`);
   // A remaining operational violation can still block, without demanding that
   // the previous summary, questions or instructions be repeated in full.
   const reason = evaluated.unchangedPeriodicReport

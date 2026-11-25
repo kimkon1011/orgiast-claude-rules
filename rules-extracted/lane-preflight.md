@@ -7,7 +7,7 @@
 2. 主レーンが ❌ なら、理由別に対処する。
    - probe_failed（win32・WSL 無し）: codex-do に --allow-native を付けて 1 回実測する。通れば実装は進めてよい。lane-doctor の表示は PR で直す。
    - usage_limit: provider-cooldown.json の until まで待つか、implementOrder の次（deepseek / gemini-cli）を使う。
-   - auth: codex login --device-auth（URL＋コード）を人に手渡す（これは例外として許容）。
+   - auth: ①生きている auth.json を Windows／WSL 間で複製 → ②Claude が Windows／ネイティブの `codex login`（ブラウザ型）を先に起動し user は承認ボタン1回 → ③両方が実測で不可の場合だけ `--device-auth`。③は `[CODE-INPUT-UNAVOIDABLE: 試した経路と結果]`（理由10文字以上）を記し、発行直後にコードと残り期限を提示、期限切れなら自動再発行する。「今やりますか？」は先に聞かない。手順は [Codex 再ログイン](../playbooks/codex-delegate.md#再ログイン) を参照。
 3. 必要な連携（Gmail／Calendar／Discord／LINE／GAS）は、使う前に 1 回ずつ最小の読み取りで実測し、結果（可／reader のみ／未認証）を設計書か memory に書く。
 4. 修復が Claude 側で完結しないものは、人にしかできない操作を 1 件だけ「何を・どこで・なぜ」で手渡す。2 件以上になるときは設計を変えて減らす。
 5. 以上を終えるまで、Fable が実装・量産を肩代わりしない。

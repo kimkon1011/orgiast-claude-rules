@@ -874,3 +874,27 @@ test('待機期限は納期の根拠が必要', () => {
   assert.equal(judgeNextAction(prefix + '／納期 2026-10-27 18:00・残り作業 2時間）', '', input).code,
     'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
 });
+
+test('フッター後の prompt-journal-answered 行があっても footer を検出し、承認語で全文見出しが無ければ APPROVAL-INLINE', () => {
+  const journals = 'prompt-journal-answered: aad22899-8278-438d-b411-05baf15d1496\n\nprompt-journal-answered: 6174b9e4-c7b0-448f-b62f-ab7b5aaace10';
+  const missing = `${inlineReport('送ってよければ『送って』と返事する')}\n${journals}`;
+  assert.equal(judgeNextAction(missing).code, 'NEXT-ACTION-APPROVAL-INLINE');
+  assert.notEqual(judgeNextAction(missing).code, 'NEXT-ACTION-FOOTER');
+});
+
+test('STOP_RETRY 形（最終まとめ①③→確認用全文→3行フッター→journal）は pass', () => {
+  const journals = 'prompt-journal-answered: aad22899-8278-438d-b411-05baf15d1496\n\nprompt-journal-answered: 6174b9e4-c7b0-448f-b62f-ab7b5aaace10';
+  const text = `${body}
+【最終まとめ】
+①報告: LINE 下書きを用意した。検証済み。
+③kim がやること: 上の【kim 確認用の全文】を読んで『送って』か『やめて』で選ぶ
+恒久策: 一回限り: 今回の送信判断は本人の意思が必要
+【kim 確認用の全文】
+送ってよい本文:
+こんにちは。本日の予定をお知らせします。
+次に kim がすること: 上の【kim 確認用の全文】を読んで『送って』か『やめて』で選ぶ
+この後の自動進行: なし
+このセッション: ${SESSION_PHRASES.delete}
+${journals}`;
+  withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
+});

@@ -25,7 +25,7 @@ Disable-ScheduledTask -TaskName 'OrgiastStalledSessionSweep' | Out-Null
 $sweep = Get-ScheduledTask -TaskName 'OrgiastStalledSessionSweep'
 if (-not ($sweep.Actions.Arguments -match 'stalled-session-resume')) { throw 'Stalled session sweep action verification failed' }
 
-$waitAction = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($sweepScript, '--hourly') -WorkingDirectory $repo
+$waitAction = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $nb, '-Target', 'tools\stalled-session-resume.mjs', '--hourly') -WorkingDirectory $repo
 $nextTwenty = (Get-Date).Date.AddHours((Get-Date).Hour).AddMinutes(20)
 if ($nextTwenty -le (Get-Date)) { $nextTwenty = $nextTwenty.AddHours(1) }
 $waitTrigger = New-ScheduledTaskTrigger -Once -At $nextTwenty -RepetitionInterval (New-TimeSpan -Hours 1)

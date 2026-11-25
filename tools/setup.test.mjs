@@ -443,6 +443,8 @@ for (const [name, change, expected] of [
   ['thirty minute watch with bounded execution passes', { cadence: true, intervals: [30] }, 'OK'],
   ['unknown repetition interval must be repaired', { cadence: true }, 'NG'],
   ['execution longer than interval must be repaired', { cadence: true, intervals: [30], executionMinutes: 55 }, 'NG'],
+  ['old direct hourly action must be migrated to bootstrap', { requiredActionPattern: 'nightly-bootstrap\\.ps1.*--hourly' }, 'NG'],
+  ['expected action pattern accepts matching arguments', { requiredActionPattern: 'stall-sweeper\\.mjs.*--apply' }, 'OK'],
 ]) {
   test(`scheduled-task: ${name}`, (t) => {
     const home = temp('setup-task-info-');
@@ -453,7 +455,7 @@ for (const [name, change, expected] of [
     const script = path.join(home, 'space dir', 'stall-sweeper.mjs');
     write(wrapper, 'wrapper');
     if (!change.missing) write(script, 'script');
-    const spec = { name: 'TestTask', ...(change.legacy ? {} : { requireActionTarget: true, maxRunAgeHours: 50 }), ...(change.cadence ? { maxIntervalMinutes: 30 } : {}) };
+    const spec = { name: 'TestTask', ...(change.legacy ? {} : { requireActionTarget: true, maxRunAgeHours: 50 }), ...(change.cadence ? { maxIntervalMinutes: 30 } : {}), ...(change.requiredActionPattern ? { requiredActionPattern: change.requiredActionPattern } : {}) };
     write(mf, JSON.stringify(manifest([item('task:test', 'scheduled-task', spec)])));
     write(fixture, JSON.stringify(change.absent ? {} : { TestTask: {
       registered: change.registered ?? true,

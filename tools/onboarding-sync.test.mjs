@@ -614,6 +614,17 @@ test('enroll takes precedence over legacy and signs the timestamp with the opaqu
   assert.equal(fs.existsSync(path.join(claude, 'enroll.env')), false);
   assert.match(fs.readFileSync(path.join(claude, 'keyserve.env'), 'utf8'), /new-primary/);
 });
+test('minimal response records its tier and only the files declared by the server', (t) => {
+  const files = {
+    'keyserve.env': 'ORGIAST_KEYSERVE_SECRET=new-primary\n',
+    'deepseek.env': 'DEEPSEEK_API_KEY=test\n',
+    'openrouter.env': 'OPENROUTER_API_KEY=test\n',
+  };
+  const { claude } = runEnrollFixture(t, { body: { tier: 'minimal', files } });
+  const state = JSON.parse(fs.readFileSync(path.join(claude, '.keys-sync-state.json'), 'utf8'));
+  assert.equal(state.tier, 'minimal');
+  assert.deepEqual(state.files, ['deepseek.env', 'keyserve.env', 'openrouter.env']);
+});
 test('a 401 retries once with the previous secret and restores the one-line file', (t) => {
   const { claude, requests } = runEnrollFixture(t, { primary: 'derived-test', enroll: '', previous: 'old-test', statuses: [401, 200] });
   assert.equal(requests.length, 2);

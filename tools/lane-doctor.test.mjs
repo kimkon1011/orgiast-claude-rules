@@ -326,6 +326,17 @@ test('all missing-key lanes require immediate repair and keyserve enrollment not
   assert.match(summarize(r), /\n🛑 安価AIレーン停止/);
   assert.deepEqual(r.deadNeedsUser.filter(item => item.provider === 'keyserve').map(item => item.reason), ['keyserve_unenrolled']);
 });
+test('minimal tier accepts Codex plus DeepSeek and OpenRouter without repairing omitted providers', t => {
+  const h = fixture(t), stamp = new Date(now).toISOString();
+  write(h, '.keys-sync-state.json', { tier: 'minimal' });
+  for (const name of ['gemini.env', 'zai.env', 'groq.env']) fs.rmSync(path.join(h, '.claude', name));
+  fs.writeFileSync(path.join(h, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY=test\n');
+  fs.writeFileSync(path.join(h, '.claude', 'openrouter.env'), 'OPENROUTER_API_KEY=test\n');
+  write(h, 'lane-health.json', { lanes: Object.fromEntries(['codex', 'deepseek', 'openrouter'].map(provider => [provider, { alive: true, reason: 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp }])) });
+  const result = laneDoctorQuick({ home: h, now, save: false });
+  assert.equal(result.repairFirst.required, false);
+  assert.ok(['gemini', 'glm', 'groq'].every(provider => result.lanes[provider].reason === 'missing_key'));
+});
 test('all live lanes do not require repair or add a stop line', t => {
   const h = fixture(t), stamp = new Date(now).toISOString();
   write(h, 'lane-health.json', { lanes: Object.fromEntries(['codex','gemini','deepseek','glm','groq','openrouter'].map(provider => [provider, { alive: true, reason: 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: 'probe_ok' }])) });

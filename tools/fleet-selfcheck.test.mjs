@@ -63,6 +63,15 @@ test('complete selfcheck performs only GET reads, preserves files and reports by
   assert.equal(tokenCalls.length, 2);
   assert.deepEqual(snapshot(f.home), before);
 });
+test('minimal seats mark privileged services out of scope without network failures', async t => {
+  const f = fixture(t), calls = [];
+  f.put('.claude/.keys-sync-state.json', JSON.stringify({ tier: 'minimal' }));
+  const result = await runSelfcheck({ ...f, fetchImpl: async (...args) => { calls.push(args); throw Error('must not call privileged services'); }, getToken: async () => assert.fail('must not request Google token') });
+  const privileged = result.rows.filter(row => /^(?:case-handoff|Gmail|Drive|Discord|LINE)/.test(row.item));
+  assert.equal(privileged.length, 6);
+  assert.ok(privileged.every(row => row.status === '対象外'));
+  assert.equal(calls.length, 0);
+});
 test('shared-memory が72時間超なら selfcheck の失敗項目と SessionStart 文言を返す', async t => {
   const f = fixture(t);
   f.put('.claude/shared-memory/.state.json', JSON.stringify({ generatedAt: '2026-11-20T00:00:00Z', files: {} }));

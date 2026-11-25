@@ -12,6 +12,7 @@ import { repairEnvBom } from './env-repair.mjs';
 import { isEntry } from './is-entry.mjs';
 import { buildKeyserveAlert, shouldAlert } from './keyserve-alert.mjs';
 import { keyserveAuthHeaders, requireKeyservePcId, isEnrollToken } from './keyserve-auth.mjs';
+import { normalizeKeyserveTier } from './lib/keyserve-tier.mjs';
 import { installSharedMemories } from './memory-share.mjs';
 import { installKnowledge } from './knowledge-pack.mjs';
 import { resolveConvergenceRepo } from './fleet-convergence.mjs';
@@ -544,10 +545,13 @@ async function syncRepository(now) {
     }
   } catch (e) { log(`repo sync failed: ${e.message}`); }
 }
-function saveKeysState(now) {
+function saveKeysState(now, receipt = {}) {
   try {
     fs.mkdirSync(path.dirname(keysStatePath), { recursive: true });
-    fs.writeFileSync(keysStatePath, `${JSON.stringify({ last: now.toISOString(), lastRunAt: now.toISOString() }, null, 2)}\n`, 'utf8');
+    const previous = keysState() || {};
+    const tier = normalizeKeyserveTier(receipt.tier, normalizeKeyserveTier(previous.tier));
+    const files = Array.isArray(receipt.files) ? receipt.files.filter(name => /^[A-Za-z0-9._-]+$/.test(name)).sort() : previous.files;
+    fs.writeFileSync(keysStatePath, `${JSON.stringify({ ...previous, last: now.toISOString(), lastRunAt: now.toISOString(), tier, ...(files ? { files } : {}) }, null, 2)}\n`, 'utf8');
   } catch {}
 }
 function saveKeysAlertState(previous, now) {
@@ -698,7 +702,7 @@ export async function provisionKeys(now, options = {}) {
     mirrorKeyFiles(home, payload.files, log);
     const missing = missingDeclaredKeys(payload.files, (name) => fs.existsSync(path.join(home, '.claude', name)));
     if (missing.length) console.error(`[onboarding-sync] 未取得の鍵: ${missing.join(', ')}`);
-    else saveKeysState(now);
+    else saveKeysState(now, { tier: payload.tier, files: Object.keys(payload.files) });
     repairEnvBom({ home });
     const primaryWritten = [...provisioned, ...refreshed].includes('keyserve.env')
       && Boolean(readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET'));

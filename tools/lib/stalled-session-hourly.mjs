@@ -93,7 +93,7 @@ export function runningHourlyProcesses({ platform = process.platform, exec = exe
     const parsed = JSON.parse(raw || '[]');
     return Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
   }
-  const raw = exec('ps', ['-eo', 'pid=,comm=,args='], { encoding: 'utf8', timeout: 10_000 });
+  const raw = exec('ps', ['-eo', 'pid=,comm=,args='], { encoding: 'utf8', timeout: 10_000, windowsHide: true });
   return lines(raw).flatMap(line => {
     const match = /^\s*(\d+)\s+(\S+)\s+(.*)$/.exec(line);
     return match ? [{ ProcessId: Number(match[1]), Name: path.basename(match[2]), CommandLine: match[3] }] : [];

@@ -39,6 +39,7 @@ import { evaluateAudit } from './handoff-audit-gate.mjs';
 import { enabled as reportLengthEnabled, judgeReportLengthWithLlm } from './report-length-gate.mjs';
 import { hasRequiredFooter, judgeNextAction, reportsCloseSteps, hasOpenSessionCheck, hasSessionWakeup, WATCH_REGISTRATION_CODES, footerValues, openDeadline, WAIT_CHECK_CODES } from './next-action-gate.mjs';
 import { judgeSubstituteCapability } from './substitute-capability-gate.mjs';
+import { judgeUserCodeInput } from './user-code-input-gate.mjs';
 import { judgeUserBurden, desktopLauncherPattern } from './user-burden-gate.mjs';
 import { findOutsourcedInvestigation, formatViolationMessage as formatSelfCheck, scanToolUsesFromRaw } from './self-check-before-asking-guard.mjs';
 import { findLocalDocLinks, findBareLocalDocPaths, formatBarePathMessage, formatViolationMessage as formatDocLink } from './doc-link-drive-guard.mjs';
@@ -144,6 +145,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['external-channel-unmonitored-gate', () => evaluateExternalChannelPromise(ctx.assistantText)],
     ['progress-cron-gate', () => evaluateProgressCron(ctx.input, { home: home() })],
     ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw, { ...ctx.input, session_id: ctx.sessionId }, { turnText: ctx.turnText })],
+    ['user-code-input-gate', () => judgeUserCodeInput(ctx.assistantText)],
     ['user-burden-gate', () => judgeUserBurden(ctx.assistantText, ctx.humanText)],
     ['substitute-capability-gate', () => judgeSubstituteCapability(ctx.assistantText)],
     ['session-close-target-gate', () => judgeLaunchTarget(ctx.assistantText, blocks(currentTurnEntries(ctx.transcriptRaw), 'tool_use'))],

@@ -1,9 +1,9 @@
-# session-status SUMMARY  updated 2026-11-25 22:13 JST
+# session-status SUMMARY  updated 2026-11-25 23:13 JST
 
 000は他PCのディスクを直接読まない。各PCが fleet-heartbeat ブランチの session-status/ に STATUS を置き、000が集める。
 
 ## 到達（共有gitにSTATUSがあったか）
-- 000: ○ 最終更新 11/25 22:13
+- 000: ○ 最終更新 11/25 23:13
 - 004: ○ 最終更新 11/25 21:16
 - 008: × STATUSなし。原因: 未導入かオフライン、またはgit未同期。直し方: そのPCで gb-offload\\session-status.ps1 -Install を実行する。
 - 011: ○ 最終更新 11/25 21:11

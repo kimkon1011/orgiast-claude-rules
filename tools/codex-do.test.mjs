@@ -256,13 +256,12 @@ test('backendSpecificTimeoutSecs は gemini-cli に既定200秒・cheap-code:dee
   assert.equal(backendSpecificTimeoutSecs('openrouter-free', {}), null);
 });
 
-// 2026-11-18 修正: executor-usage.jsonl（2026-11-01以降）で deepseek 系 implement
-// 成功 722 件の p95=54 秒・p99=384 秒・最大 597 秒。720 秒で観測済み成功を切らず
-// timeout 1回あたりの廃棄を約 180 秒減らす。gemini は 1200 秒のまま。
-test('backendSpecificTimeoutSecs は kind=implement で deepseek は 720・gemini は 1200', () => {
-  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}, { kind: 'implement' }), 720);
-  assert.equal(backendSpecificTimeoutSecs('deepseek', {}, { kind: 'implement' }), 720);
-  assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}, { kind: 'implement' }), 1200);
+// 2026-11-25 修正: 直近4件で deepseek 系が合計1664秒を廃棄したため、連鎖時の
+// 既定を180秒に短縮する。長時間が必要な席は既存の環境変数で上書きできる。
+test('backendSpecificTimeoutSecs は kind=implement の連鎖を既定180秒に制限する', () => {
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}, { kind: 'implement' }), 180);
+  assert.equal(backendSpecificTimeoutSecs('deepseek', {}, { kind: 'implement' }), 180);
+  assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}, { kind: 'implement' }), 180);
 });
 
 test('deepseek 系は同じ upstream の timeout 後に連鎖内で二重実行しない', () => {
@@ -284,7 +283,7 @@ test('backendSpecificTimeoutSecs は kind が無い・implement 以外の場合�
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}, { kind: 'verify' }), 200);
 });
 
-test('backendSpecificTimeoutSecs は kind=implement でも env 指定を優先する（deepseek 720 基準でも env が勝つ）', () => {
+test('backendSpecificTimeoutSecs は kind=implement でも env 指定を優先する（既定180秒より env が勝つ）', () => {
   assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '450' }, { kind: 'implement' }), 450);
   assert.equal(backendSpecificTimeoutSecs('deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '900' }, { kind: 'implement' }), 900);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '180' }, { kind: 'implement' }), 180);
@@ -3697,7 +3696,7 @@ test('backendSpecificTimeoutSecs は cursor-agent に実装・調べ物・要約
 test('chainBackendBudgetSecs は cursor-agent implement で 900 秒キャップを使わず 1800 秒まで与える', () => {
   assert.equal(chainBackendBudgetSecs(1800, 0, {}, { backendName: 'cursor-agent', kind: 'implement' }), 1800);
   assert.equal(chainBackendBudgetSecs(1800, 200, {}, { backendName: 'cursor-agent', kind: 'implement' }), 1600);
-  assert.equal(chainBackendBudgetSecs(1800, 0, {}, { backendName: 'cheap-code:deepseek', kind: 'implement' }), 720);
+  assert.equal(chainBackendBudgetSecs(1800, 0, {}, { backendName: 'cheap-code:deepseek', kind: 'implement' }), 180);
   assert.equal(chainBackendBudgetSecs(1800, 0, {}), 900);
 });
 

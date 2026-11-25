@@ -19,7 +19,7 @@ import { isCursorLongTimeoutKind, shouldPreferCursorAgent } from './lib/cursor-d
 import { isCursorUsageHalted } from './lib/cursor-usage-pace.mjs';
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { EX_TEMPFAIL, budgetSummary, claudeFile, decideCodexGate, deferredPayload, isUsageLimitText, parseUsageLimitUntil, providerLimitedUntil, writeCodexCooldownFile } from './lib/executor-gate.mjs';
-import { applyCandidateHealth, coolingBackendNames, deprioritizeUnreliableBackends, readFallbackBackendHistory, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
+import { applyCandidateHealth, coolingBackendNames, deprioritizeRecentFailures, deprioritizeUnreliableBackends, readFallbackBackendHistory, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
 import { readGeminiBudgetStatus } from './gemini-budget-guard.mjs';
 import { acquireLock } from './lib/progress-file-lock.mjs';
 import { scanDiffForClaudeApi } from './app-llm-cost-gate.mjs';
@@ -645,21 +645,19 @@ export function fallbackBackendTimeoutSecs(timeoutSeconds, env = process.env) {
 // 2026-11-11 再調整: chain 実測（223件の chain 試行中成功46件/p95=524秒）より
 // cheap-code:deepseek を 500→400 秒に引き下げ。100秒/件の廃棄削減。
 // chain 上限を 700 秒から 600 秒に収める。
-// 2026-11-18 再調整: executor-usage.jsonl（2026-11-01以降）で deepseek 系 implement
-// 成功 722 件の p95=54 秒・p99=384 秒・最大 597 秒。1200 だと 900 秒 timeout 時の
-// 待機ロス（fallback_chain_timeout 経由）が 300 秒/件になる。720 秒で観測済み成功を
-// 1件も切らず、timeout 1回あたりの廃棄を約 180 秒減らす。
+// 連鎖では「遅い成功」より、障害時に次候補へ進めない損失が大きい。implement も
+// 既定180秒で打ち切る。既存のバックエンド別環境変数で必要な席だけ上書きできる。
 export function backendSpecificTimeoutSecs(backendName, env = process.env, { kind } = {}) {
   if (backendName === 'gemini-cli') {
     const raw = Number(env.CODEX_DO_GEMINI_TIMEOUT_SECS);
     if (Number.isFinite(raw) && raw > 0) return raw;
-    return kind === 'implement' ? 1200 : 200;
+    return kind === 'implement' ? 180 : 200;
   }
   // cheap-code:deepseek と qwen 直結の deepseek は同じ upstream（OpenRouter の deepseek model）なので同一扱い。
   if (backendName === 'cheap-code:deepseek' || backendName === 'deepseek') {
     const raw = Number(env.CODEX_DO_DEEPSEEK_TIMEOUT_SECS);
     if (Number.isFinite(raw) && raw > 0) return raw;
-    return kind === 'implement' ? 720 : 400;
+    return kind === 'implement' ? 180 : 400;
   }
   if (backendName === 'cursor-agent') {
     const raw = Number(env.CODEX_DO_CURSOR_TIMEOUT_SECS);
@@ -1941,7 +1939,8 @@ async function tryCheapFirstFallback() {
   if (!cheapFirst) return null;
   const resolvedBackends = resolveFallbackBackends(home, { taskKind, cwd });
   const cooling = coolingBackendNames(home);
-  const backends = deprioritizeUnreliableBackends(skipCoolingBackends(resolvedBackends, cooling, { keepNames: ['cursor-agent'] }), readFallbackBackendHistory(home));
+  const history = readFallbackBackendHistory(home);
+  const backends = deprioritizeUnreliableBackends(deprioritizeRecentFailures(skipCoolingBackends(resolvedBackends, cooling, { keepNames: ['cursor-agent'] }), history), history);
   if (backends.length === 0) return { succeeded: false, result: null, chainResult: [], lastBackend: null };
   const chainResult = [];
   let lastBackend = null, lastResult = null, cheapSucceeded = false;
@@ -2343,7 +2342,8 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
 
     const resolvedBackends = resolveFallbackBackends(home, { taskKind, cwd });
     const cooling = coolingBackendNames(home);
-    const backends = deprioritizeUnreliableBackends(skipCoolingBackends(resolvedBackends, cooling, { keepNames: ['cursor-agent'] }), readFallbackBackendHistory(home));
+    const history = readFallbackBackendHistory(home);
+    const backends = deprioritizeUnreliableBackends(deprioritizeRecentFailures(skipCoolingBackends(resolvedBackends, cooling, { keepNames: ['cursor-agent'] }), history), history);
     if (backends.length === 0) {
       console.error('GEMINI_API_KEY、OPENROUTER_API_KEY、ZAI_API_KEY が無いためフォールバックを実行できません');
       result.status = 1;

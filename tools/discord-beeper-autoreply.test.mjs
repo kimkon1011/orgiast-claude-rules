@@ -1383,3 +1383,59 @@ test('送信結果の復旧でも読み戻した返信をキューに追加す�
     senderName: '田中', evaluatedKimIds: [], learned: false
   }]);
 });
+
+for (const started of [false, true]) {
+  test(`トライアル本人辞退: 開始済み=${started} の定型文を dryRun で返す`, async t => {
+    const messages = [message({ senderName: 'テスト参加者', text: 'トライアルを辞退させてください' })];
+    if (started) messages.push(message({ senderName: 'テスト参加者', id: 'report', timestamp: new Date(NOW - 5000).toISOString(), text: 'トライアル 1日目 累計2時間' }));
+    const f = fixture(t, { messages });
+    f.options.llm = async ({ category }) => {
+      assert.equal(category, 'classification');
+      return '{"selfDecline":true}';
+    };
+    const result = await runOnce({ ...f.options, dryRun: true });
+    assert.equal(result.ok, true);
+    assert.equal(result.decisions.length, 0);
+    assert.equal(result.wouldSend.length, 1);
+    assert.equal(result.wouldSend[0].content.includes('まだ入社手続きをしていない場合は不要です。'), !started);
+    assert.match(result.wouldSend[0].content, /ご連絡ありがとうございます。承知いたしました。/);
+    assert.equal(f.sent.length, 0);
+    assert.equal(fs.existsSync(f.file), false);
+  });
+}
+
+for (const blocked of [{ isMessageRequest: true }, { isReadOnly: true }, { participants: { items: [{ isSelf: true, cannotMessage: true }] } }]) {
+  test('辞退でも送信不可の会話は判断待ち: ' + JSON.stringify(blocked), async t => {
+    const f = fixture(t, { chats: [chat(blocked)], messages: [message({ senderName: 'テスト参加者', text: '辞退します' })] });
+    f.options.llm = async () => { assert.fail('分類不要'); };
+    const result = await runOnce({ ...f.options, dryRun: true });
+    assert.equal(result.decisions.length, 1);
+    assert.equal(result.wouldSend.length, 0);
+  });
+}
+
+for (const text of ['こんにちは', '別の業務を辞めたいです']) {
+  test('本人辞退以外の初対面は従来処理: ' + text, async t => {
+    const f = fixture(t, { messages: [message({ senderName: 'テスト参加者', text })] });
+    let calls = 0;
+    f.options.llm = async () => { calls++; return '{"selfDecline":false}'; };
+    const result = await runOnce({ ...f.options, dryRun: true });
+    assert.equal(result.decisions[0].reason, '初対面または会話履歴を確認できません');
+    assert.equal(result.wouldSend.length, 0);
+    assert.equal(calls, text.includes('辞め') ? 1 : 0);
+  });
+}
+
+test('本人辞退の定型文は会話ごとに一度のみ、次回は従来分類', async t => {
+  const f = fixture(t, { messages: [message({ senderName: 'テスト参加者', text: '辞退します' })] });
+  f.options.llm = async ({ category }) => category === 'classification'
+    ? '{"selfDecline":true}' : JSON.stringify({ ...reply, needs_reply: false });
+  const first = await runOnce(f.options);
+  assert.equal(first.replied, 1);
+  assert.equal(f.state().trialSelfDeclined.chat1, true);
+  f.data.chat1.push(message({ senderName: 'テスト参加者', id: 'second-decline', timestamp: new Date(NOW + 1000).toISOString(), text: '辞退します' }));
+  const second = await runOnce({ ...f.options, now: NOW + 2000 });
+  assert.equal(second.replied, 0);
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.state().chats.chat1.status, 'fyi');
+});

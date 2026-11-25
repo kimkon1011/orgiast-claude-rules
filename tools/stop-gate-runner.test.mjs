@@ -692,7 +692,8 @@ test('差し戻し理由の先頭で前文を繰り返さないよう指示す�
   try {
     const result = invoke(home, 'retry-instruction', `${'本文です。'.repeat(50)}`);
     const output = JSON.parse(result.stdout);
-    assert.match(output.reason, /^前のメッセージの経緯・ログ・説明は繰り返さない。指摘分を直したうえで、この書き直しが kim の読む最後のメッセージになる前提で書く: 末尾3行の直前に【最終まとめ】を置き、①報告（結論・結果・検証）②kim の確認事項（文面・選択肢・URL は全文）③kim がやること をすべて載せ、前のメッセージを参照させない（「上記」「前述」禁止）。/);
+    assert.match(output.reason, /^前のメッセージの経緯・ログ・説明は繰り返さない。指摘分を直したうえで、この書き直しが kim の読む最後のメッセージになる前提で書く: 【最終まとめ】に①報告（結論・結果・検証）と③kim がやること を載せ、その直後かつ末尾3行フッターの直前（最後の節）に「【kim 確認用の全文】」見出しを置いて②kim の確認事項（文面・選択肢・URL は全文）を省略せず載せ、前のメッセージを参照させない（「上記」「前述」禁止）。/);
+    assert.match(output.reason, /全文をこの応答に載せたうえで/);
     // 書き直しで同じ質問を出し直して kim に「2回聞かれた」と思わせない（2026-11-03 ベンツ車検の実害）
     assert.match(output.reason, /このターン中に届いた kim の新着メッセージを確かめ、もう答えが来た質問は②から外して/);
     assert.match(output.reason, /（前のメッセージと同じ質問です。もう答えていれば不要です）/);
@@ -864,4 +865,48 @@ test('user-code-input-gate: shared runner blocks without form-gate demotion', as
     assert.equal(result.record.blockedBy.includes('user-code-input-gate'), index === 0);
     assert.ok(!result.record.reasonCodes.includes('error:user-code-input-gate'));
   }
+});
+
+test('フッター後 journal でも runner が footer を検出し、承認語で全文無しなら APPROVAL-INLINE', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-journal-footer-'));
+  try {
+    const body = '作業内容を整理し、関連箇所を確認しました。'.repeat(15);
+    const journals = 'prompt-journal-answered: aad22899-8278-438d-b411-05baf15d1496\n\nprompt-journal-answered: 6174b9e4-c7b0-448f-b62f-ab7b5aaace10';
+    const missing = `${body}\n恒久策: 一回限り: 今回の判断は本人の意思が必要\n次に kim がすること: 送ってよければ『送って』と返事する\nこの後の自動進行: なし\nこのセッション: /session-close は不要なので、このセッションを閉じてよい\n${journals}`;
+    const blocked = invoke(home, 'journal-approval-missing', missing);
+    assert.equal(blocked.status, 0, blocked.stderr);
+    const blockedOut = JSON.parse(blocked.stdout);
+    assert.equal(blockedOut.decision, 'block');
+    assert.match(blockedOut.reason, /NEXT-ACTION-APPROVAL-INLINE/);
+    assert.doesNotMatch(blockedOut.reason, /NEXT-ACTION-FOOTER/);
+    const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').at(-1));
+    assert.ok(record.reasonCodes.includes('NEXT-ACTION-APPROVAL-INLINE'));
+    assert.ok(!record.reasonCodes.includes('NEXT-ACTION-FOOTER'));
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('STOP_RETRY 形＋journal 行は runner で pass', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-journal-pass-'));
+  try {
+    const body = '作業内容を整理し、関連箇所を確認しました。'.repeat(15);
+    const journals = 'prompt-journal-answered: aad22899-8278-438d-b411-05baf15d1496\n\nprompt-journal-answered: 6174b9e4-c7b0-448f-b62f-ab7b5aaace10';
+    const text = `${body}
+【最終まとめ】
+①報告: LINE 下書きを用意した。検証済み。
+③kim がやること: 上の【kim 確認用の全文】を読んで『送って』か『やめて』で選ぶ
+恒久策: 一回限り: 今回の送信判断は本人の意思が必要
+[NO-AUTOCHECK-OK: チャットへの一言返信だけで完了するため]
+【kim 確認用の全文】
+送ってよい本文:
+こんにちは。本日の予定をお知らせします。
+次に kim がすること: 上の【kim 確認用の全文】を読んで『送って』か『やめて』で選ぶ
+この後の自動進行: なし
+このセッション: /session-close は不要なので、このセッションを閉じてよい
+${journals}`;
+    const result = invoke(home, 'journal-approval-pass', text);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, '');
+    const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').at(-1));
+    assert.equal(record.verdict, 'pass');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

@@ -64,6 +64,9 @@ test('正本の社員 Gmail を既定で社内扱いする', () => {
 
 test('AI・求人・学会の予定をタスクカレンダーへ振り分ける', () => {
   assert.equal(routeCalendar({ summary: '【自動】確認' }, { origin: 'sync' }), AI_CALENDAR);
+  assert.equal(routeCalendar({ summary: '【あらた様】【自動】【千葉倉庫】発送' }, { origin: 'sync' }), AI_CALENDAR);
+  assert.equal(routeCalendar({ summary: '【案件未特定】【期限】答弁書' }, { origin: 'sync' }), AI_CALENDAR);
+  assert.equal(routeCalendar({ summary: '【X社】【自動】【面談設定】山田様（中途）面談' }, { origin: 'sync' }), 'primary');
   assert.equal(routeCalendar({ summary: '急募 アルバイト応募' }, { origin: 'sync' }), AI_CALENDAR);
   assert.equal(routeCalendar({ summary: '学術集会 申込期限' }, { origin: 'sync' }), AI_CALENDAR);
   assert.equal(routeCalendar({ summary: '普通の作業' }, { origin: 'ai' }), AI_CALENDAR);

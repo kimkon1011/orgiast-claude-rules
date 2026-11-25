@@ -59,7 +59,8 @@ export function isKimMeeting(ev = {}) {
 export function routeCalendar(ev = {}, { origin } = {}) {
   if (isKimMeeting(ev)) return 'primary';
   const text = [ev.summary, ev.description, ev.location].filter(Boolean).join('\n');
-  const ai = /^(?:【期限】|【自動】|【仮】|【延長】)|DeadlineWatch|Codex|Claude|auto-progress|fleet-mail|担当[：:]\s*(?:Claude|Codex|夜間)/iu.test(text);
+  const summary = String(ev.summary || '');
+  const ai = /【(?:期限|自動|仮|延長)】/u.test(summary) || /DeadlineWatch|Codex|Claude|auto-progress|fleet-mail|担当[：:]\s*(?:Claude|Codex|夜間)/iu.test(text);
   const recruiting = /急募|時給|求人|応募|Indeed|アルバイト|バイト/iu.test(text);
   const academic = /学会|学術集会|協賛ナビ/iu.test(text);
   return origin === 'ai' || ai || recruiting || academic ? AI_CALENDAR : 'primary';

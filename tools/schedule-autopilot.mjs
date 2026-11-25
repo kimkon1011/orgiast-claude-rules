@@ -25,7 +25,7 @@ import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { latestAssistantText } from './lib/assistant-text.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
-import { AI_CALENDAR, routeCalendar, withCaseLabel } from './lib/calendar-shared.mjs';
+import { AI_CALENDAR, withCaseLabel } from './lib/calendar-shared.mjs';
 import { addDays, isBusinessDay, lastBusinessDayOnOrBefore, prevBusinessDay, nextBusinessDay, addBusinessDays, closedStreakAfter, holidayName } from './lib/jp-business-days.mjs';
 
 const exec = promisify(execFile);
@@ -347,7 +347,7 @@ async function syncKimCalendar(plan, { config, request, state }) {
     const result = await request(`${base}?${new URLSearchParams({ privateExtendedProperty: `autopilotId=${plan.id}` })}`, opts);
     if (result.items?.[0]) { found = { calendarId, event: result.items[0] }; break; }
   }
-  const targetId = routeCalendar(body, { origin: 'ai' });
+  const targetId = 'primary';
   const targetBase = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(targetId)}/events`;
   if (found) {
     const foundBase = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(found.calendarId)}/events`;

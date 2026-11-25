@@ -94,7 +94,9 @@ export async function syncCalendar(row, { config, state, request, persist = () =
       return;
     }
     const end = new Date(Date.parse(due) + 86400000).toISOString().slice(0, 10);
-    const labeled = withCaseLabel({ summary: `【期限】${row.title}`, description: `${row.id} 担当: ${row.assignee || 'kim'}\n${row.action || ''}\n期限台帳: ${sheetUrl(config)}` }, row.company || row.caseName, 'deadline-watch');
+    const existingCase = String(events[0]?.description || '').split(/\r?\n/, 1)[0].match(/^案件:\s*(.+)$/)?.[1]?.trim();
+    const caseName = row.company || row.caseName || (existingCase && !existingCase.includes('未特定') ? existingCase : '');
+    const labeled = withCaseLabel({ summary: `【期限】${row.title}`, description: `${row.id} 担当: ${row.assignee || 'kim'}\n${row.action || ''}\n期限台帳: ${sheetUrl(config)}` }, caseName, 'deadline-watch');
     const body = { ...labeled, start: { date: due }, end: { date: end },
       reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 10080 }, { method: 'popup', minutes: 1440 }] }, extendedProperties: { private: { deadlineId: row.id } } };
     if (events[0]) await request(`${base}/${encodeURIComponent(events[0].id)}`, { ...opts, method: 'PATCH', body });

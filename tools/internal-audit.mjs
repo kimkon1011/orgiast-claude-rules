@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Read-only audit; --notify permits our report upload and a DM to kim.
+// Read-only audit; --notify permits our report upload and a kim-inbox notification.
 import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -66,7 +66,7 @@ export function renderReport({ snapshot, findings, unverified = [], sources, can
   const missing = Object.entries(sources).filter(([, s]) => s.status !== 'ok');
   if (!missing.length) lines.push('なし（取得範囲内）');
   for (const [name, s] of missing) lines.push(`- ${cell(name)}: ${cell(s.reason)}`);
-  lines.push('', '## 取得範囲と制約', '', ...[...(snapshot.coverage?.limitations || []), `Gmail 未照合ユーザー（既知の権限制限のため試行しない）: ${UNAVAILABLE_USERS.join(', ')}`, 'Drive は指定3ユーザーの所有ファイルのみ。初回と走査未完了ユーザーはベースライン構築中。', 'レポートはローカル保存。--notify 時のみ自社 Drive にアップロードしてDMで通知。'].map(s => `- ${cell(s)}`));
+  lines.push('', '## 取得範囲と制約', '', ...[...(snapshot.coverage?.limitations || []), `Gmail 未照合ユーザー（既知の権限制限のため試行しない）: ${UNAVAILABLE_USERS.join(', ')}`, 'Drive は指定3ユーザーの所有ファイルのみ。初回と走査未完了ユーザーはベースライン構築中。', 'レポートはローカル保存。--notify 時のみ自社 Drive にアップロードしてkim-inboxに記録。'].map(s => `- ${cell(s)}`));
   lines.push('', '## ルール別件数', '', '| ルール | 件数 |', '|---|---:|');
   for (const rule of [...Array.from({ length: 18 }, (_, i) => `R${String(i + 1).padStart(2, '0')}`), 'exfil', 'exfil-admin', 'leak-search']) lines.push(`| ${rule} | ${findings.filter(f => f.rule === rule).length} |`);
   for (const severity of SEVERITIES.slice(0, SEVERITIES.indexOf(minSeverity) + 1)) {
@@ -136,7 +136,7 @@ async function checkPaths(options, daily) {
   if (options.json && options.out && (path.resolve(options.json) === path.resolve(options.out) || identities.has(path.resolve(options.json)) && identities.get(path.resolve(options.json)) === identities.get(path.resolve(options.out)))) throw auditError('JSON とレポートは別ファイルを指定');
 }
 async function optionalText(file) { try { return await fs.readFile(file, 'utf8'); } catch { return ''; } }
-export async function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2), { notify = notifyKim, locateReport = reportLocation } = {}) {
   const options = parseArgs(argv), now = new Date(), date = dateOnly(now), stateDir = path.resolve(options['state-dir']); options['state-dir'] = stateDir;
   const daily = path.join(stateDir, 'reports', `${date}.md`);
   await checkPaths(options, daily);
@@ -274,9 +274,9 @@ export async function main(argv = process.argv.slice(2)) {
     // Replays may discover public URLs, but never advance freee/admin/sharing baselines.
     await writePrivate(path.join(stateDir, 'state.json'), state, secrets);
     if (options.notify) {
-      const location = await reportLocation(options.out ? path.resolve(options.out) : daily, { keyPath, date });
-      const result = await notifyKim(safeText(notificationText(findings, location, date), secrets), { home: defaultHome, token, webhookFallback: false });
-      if (!isKimDelivered(result)) throw auditError('レポート保存済み。kim への DM 配信失敗');
+      const location = await locateReport(options.out ? path.resolve(options.out) : daily, { keyPath, date });
+      const result = await notify(safeText(notificationText(findings, location, date), secrets), { home: defaultHome, webhookFallback: false });
+      if (!isKimDelivered(result)) throw auditError(safeText(`レポート保存済み。kim-inbox 記録失敗: delivered=${result?.delivered ?? 'unknown'} reason=${result?.reason ?? 'unknown'}`, secrets));
     }
     if (!options.out) process.stdout.write(report);
     return options['fail-on-high'] && findings.some(f => f.severity === 'high') ? 2 : 0;

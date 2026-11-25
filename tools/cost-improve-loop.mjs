@@ -1813,7 +1813,6 @@ export function runEntry({ argv, refresh, run }) {
         console.error(refresh());
       } catch (err) {
         console.error(`WARN cost-directive refresh failed (本体は続行): ${err?.message || err}`);
-        process.exitCode = 1;
       }
     }
     return run();

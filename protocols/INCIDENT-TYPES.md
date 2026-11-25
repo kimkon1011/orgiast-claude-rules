@@ -15,6 +15,7 @@
 ## カタログ
 | 型 | 症状（初出） | 横展開の検索 | ゲート |
 |---|---|---|---|
+| 補助処理失敗の本体失敗混同型 | 元メール404・指示書更新timeout・通知先の旧表記で無人ジョブが毎回失敗（2026-11-26） | deadline-watch auto-close / cost-improve-loop runEntry / internal-audit notify / user-rework・user-burden JSONL再走査 | 3ジョブの回帰テスト＋2集計の永続キャッシュ更新・期限切れテスト（HTTP認証・5xx・本体・通知記録失敗は失敗を維持） |
 | 定期実行の無変化LLM確認型 | 定期実行が新着なしでもLLMを起動して枠とトークンを消費する | スケジュール登録される tools/*.mjs の llm-ask / codex-do / claude-ai-run / chat/completions 呼出 | change-gate ＋ routine-usage-weekly |
 | マージ可否の人頼み型 | PR #2460 のマージ承認が kim-inbox 経由で kim に届き、マージ後も3日残った（2026-11-20〜25 カフェ用015） | マージしてよい・マージ承認 | tools/kim-inbox.mjs、tools/lib/kim-inbox-relay-state.mjs、tools/kim-inbox-autoclose.mjs |
 | AI で回避できるコード入力を user に回し、Claude 側の遅延で期限切れを繰り返す | WSL device-auth の提示遅延で3回期限切れ（2026-11-25） | device-auth・login/device・ワンタイムコード | user-code-input-gate／pretooluse-codex-invocation |
@@ -79,3 +80,4 @@
 - 型: 照会できる事実（注文内容・届いた物）を記録を読まずに推測で断言する型（2026-11-24 VBM 部品「Oリングは注文していない」→実際はOリングを注文、店の確認メールへの返信も下書きのまま。kim「こういう嘘は二度とつくな」）→ 横展開の検索: 注文・配送・相手の返信に関する断言文 → ゲート: 未追加（Codex で Stop ゲート「注文/届いた/返信に関する断定文に確認元の記載が無ければ差し戻す」を実装予定）
 
 - 型: ゲート間の書式要求の矛盾／末尾付加行でフッター未検出→後段ゲート未評価。2026-11-25 015CAFE
+- 型: テストの相対fixtureが起動cwdに依存し、通知抑止だけでは提案経由の画面起動が残る → internal-audit/deadline-watchのfixtureはfileURLToPathで解決、cost-improve-loopは提案launcherを注入モック化 → ゲート: リポ外cwdで失敗5件の再検証＋kim席・非dry-runのlauncher呼出テスト。

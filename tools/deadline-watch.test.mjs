@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { evaluate, effectiveDue, formatDigest, syncCalendar, hasSentReply, manualOperation, runWatch, main, parseArgs, vehicleRows } from './deadline-watch.mjs';
 import { DEFAULT_CONFIG } from './deadline-ledger.mjs';
 const config = { ...DEFAULT_CONFIG, sheetId: 'test', vehicleSheetId: '', calendar: { enabled: false } };
 const base = { id: 'D-001', title: '回答', due: '2026-11-06', kind: '回答・返信', status: '未着手', assignee: 'kim' };
+const fixture = fileURLToPath(new URL('./fixtures/deadline/ledger.json', import.meta.url));
 function homeFor(t) { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-watch-')); t.after(() => fs.rmSync(home, { recursive: true, force: true })); return home; }
 
 test('段階、担当、対応中、延期、完了を正しく判定', () => {
@@ -108,7 +110,7 @@ test('支払完了を自動反映、車検は読取のみ、同日再実行は�
 
 test('fixture dry-runはネットワーク、ローカル書込、heartbeatを呼ばない', async t => {
   const home = homeFor(t), output = [];
-  const code = await main(['--dry-run','--now','2026-11-04','--fixture','tools/fixtures/deadline/ledger.json'], { home, stdout: x => output.push(x), request: async () => assert.fail('network'), heartbeat: async () => assert.fail('heartbeat'), notify: async () => assert.fail('notify') });
+  const code = await main(['--dry-run','--now','2026-11-04','--fixture',fixture], { home, stdout: x => output.push(x), request: async () => assert.fail('network'), heartbeat: async () => assert.fail('heartbeat'), notify: async () => assert.fail('notify') });
   assert.equal(code, 0); assert.deepEqual(fs.readdirSync(home), []);
   const result = JSON.parse(output[0]); assert.equal(result.errors.length, 0);
   assert.deepEqual(result.decisions.filter(x => x.notify).map(x => x.id), ['D-001','D-002','D-004','D-006','V01']);
@@ -195,9 +197,38 @@ for (const [sourceKey, message] of [
 
 test('鍵持ちのkim席はfixtureモードで通常動作（fixtureはseat checkをスキップ）', async t => {
   const home=homeFor(t), output=[];
-  const code = await main(['--dry-run','--now','2026-11-04','--fixture','tools/fixtures/deadline/ledger.json'], { home, stdout: x => output.push(x), skipSeatCheck: false, request: async () => assert.fail('network'), heartbeat: async () => assert.fail('heartbeat'), notify: async () => assert.fail('notify') });
+  const code = await main(['--dry-run','--now','2026-11-04','--fixture',fixture], { home, stdout: x => output.push(x), skipSeatCheck: false, request: async () => assert.fail('network'), heartbeat: async () => assert.fail('heartbeat'), notify: async () => assert.fail('notify') });
   assert.equal(code, 0);
   const result = JSON.parse(output[0]);
   assert.equal(result.skip, undefined);
   assert.deepEqual(result.decisions.filter(x => x.notify).map(x => x.id), ['D-001','D-002','D-004','D-006','V01']);
 });
+
+for (const sourceKey of ['messageId', 'threadId']) {
+  for (const status of [404, 401, 403, 500, undefined]) {
+    test(`auto-close ${sourceKey} HTTP ${status ?? 'network'}: 404だけ警告、期限は未完了で通知を継続`, async t => {
+      const row = { ...base, due: '2026-11-05', source: 'Gmail', detectedAt: '2026-11-03', notes: JSON.stringify({ mailbox: 'test@example.com', [sourceKey]: 'missing' }) };
+      const output = [], heartbeats = [], changes = [], notices = [];
+      const code = await main(['--now', '2026-11-04'], {
+        home: homeFor(t), config, skipSeatCheck: true,
+        ledger: { read: async () => [row], patch: async (id, change) => changes.push(change) },
+        sheets: { get: () => assert.fail('no Sheets API') },
+        request: async url => {
+          assert.ok(url.includes(sourceKey === 'messageId' ? '/messages/' : '/threads/'));
+          throw Object.assign(Error(`Google GET HTTP ${status ?? 'network'}`), { status });
+        },
+        notify: async args => notices.push(args), heartbeat: async info => heartbeats.push(info), stdout: text => output.push(text),
+      });
+      const result = JSON.parse(output[0]);
+      assert.equal(code, status === 404 ? 0 : 1);
+      assert.equal(heartbeats[0].ok, status === 404);
+      assert.deepEqual(result.warnings, status === 404 ? [{ id: row.id, phase: 'auto-close', warning: '元メールが見つからない(404)' }] : []);
+      assert.equal(result.errors.length, status === 404 ? 0 : 1);
+      assert.equal(row.status, '未着手');
+      assert.equal(result.decisions[0].status, '未着手');
+      assert.equal(notices.length, 1);
+      assert.ok(!notices[0].close);
+      assert.ok(changes.every(change => change.status !== '完了'));
+    });
+  }
+}

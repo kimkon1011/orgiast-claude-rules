@@ -252,8 +252,71 @@ test('ハートビート: orphan専用ブランチへpush、main非変更、000�
   assert.equal(retried.pushed, true, retried.line); assert.equal(pushes, 3);
 });
 
+test('ハートビート: rebaseにもcommitter identityを指定する', t => {
+  const root = homeFor(t), repo = path.join(root, 'remote.git'), seed = path.join(root, 'seed'), home = path.join(root, 'home');
+  const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  git(root, ['init', '--bare', repo]); git(root, ['clone', repo, seed]);
+  fs.mkdirSync(home);
+  publishHourlyHeartbeat({ home, repo: seed, hostname: '019PC', account: 'test@example.com' });
+  const calls = [];
+  publishHourlyHeartbeat({ home, repo: seed, hostname: '019PC', account: 'test@example.com', exec: (cmd, args, opts) => {
+    calls.push(args);
+    return execFileSync(cmd, args, opts);
+  } });
+  const rebase = calls.find(args => args.includes('rebase'));
+  assert.ok(rebase);
+  assert.deepEqual(rebase.slice(0, 4), ['-c', 'user.name=Orgiast heartbeat', '-c', 'user.email=heartbeat@orgiast.jp']);
+});
+
 test('push失敗もローカル1行を残し致命傷にしない', t => {
   const home = homeFor(t);
   const result = publishHourlyHeartbeat({ home, repo: home, label: '019', account: 'test@example.com', exec: () => { throw new Error('offline'); } });
   assert.equal(result.pushed, false); const rows = fs.readFileSync(result.localFile, 'utf8').trim().split('\n'); assert.equal(rows.length, 1); assert.match(JSON.parse(rows[0]).error, /offline/);
+});
+
+test('ハートビート: 起動時に古い rebase-merge を abort する', t => {
+  const root = homeFor(t), repo = path.join(root, 'remote.git'), seed = path.join(root, 'seed'), home = path.join(root, 'home');
+  const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  git(root, ['init', '--bare', repo]); git(root, ['clone', repo, seed]);
+  fs.mkdirSync(home);
+  // First heartbeat: create clone and push first entry
+  publishHourlyHeartbeat({ home, repo: seed, hostname: '019PC', account: 'test@example.com' });
+  const clone = path.join(home, '.claude', 'fleet-heartbeat-repo');
+  const rebaseMerge = path.join(clone, '.git', 'rebase-merge');
+  // Simulate stale rebase state by creating the marker directory
+  fs.mkdirSync(rebaseMerge, { recursive: true });
+  let aborted = false;
+  const result = publishHourlyHeartbeat({ home, repo: seed, hostname: '019PC', account: 'test@example.com', exec: (cmd, args, opts) => {
+    // Mock successful abort: clean up the directory to simulate what git would do
+    if (cmd === 'git' && args.includes('rebase') && args.includes('--abort')) {
+      aborted = true;
+      try { fs.rmSync(rebaseMerge, { recursive: true }); } catch {}
+      return '';
+    }
+    return execFileSync(cmd, args, opts);
+  } });
+  assert.equal(aborted, true, 'rebase --abort should be called on stale state');
+  assert.ok(!fs.existsSync(rebaseMerge), 'rebase-merge should be cleaned up');
+  assert.equal(result.pushed, true, result.line);
+});
+
+test('ハートビート: rebase 失敗時に abort してエラーログに記録する', t => {
+  const root = homeFor(t), repo = path.join(root, 'remote.git'), seed = path.join(root, 'seed'), home = path.join(root, 'home');
+  const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  git(root, ['init', '--bare', repo]); git(root, ['clone', repo, seed]);
+  fs.mkdirSync(home);
+  // First heartbeat: create clone and push first entry so remote branch exists
+  publishHourlyHeartbeat({ home, repo: seed, hostname: '019PC', account: 'test@example.com' });
+  let aborted = false;
+  const result = publishHourlyHeartbeat({ home, repo: seed, hostname: '019PC', account: 'test@example.com', exec: (cmd, args, opts) => {
+    // Fail the actual rebase command (not --abort)
+    if (cmd === 'git' && args.includes('rebase') && !args.includes('--abort') && args.indexOf('rebase') > 0) {
+      throw Object.assign(new Error('rebase conflict'), { stderr: 'conflict', status: 1 });
+    }
+    if (cmd === 'git' && args.includes('rebase') && args.includes('--abort')) aborted = true;
+    return execFileSync(cmd, args, opts);
+  } });
+  assert.equal(aborted, true, 'rebase --abort should clean up after failure');
+  assert.equal(result.pushed, false);
+  assert.match(JSON.parse(result.line).error, /rebase conflict/);
 });

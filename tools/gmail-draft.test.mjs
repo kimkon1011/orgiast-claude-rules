@@ -629,6 +629,54 @@ test('--send の getLatest は DRAFT メッセージを最新履歴から除外�
   assert.deepEqual(capturedLatest, { id: 'msg-1', at: new Date(1700000000000).toISOString() });
 });
 
+test('--send の履歴承認不足は理由と確認コマンドを返し、送信しない', async () => {
+  const requests = [];
+  const message = '送信前の履歴整合性チェックが必要です: 承認マーカーがありません\n実行: node tools/send-context-check.mjs --channel gmail';
+  const result = await cli(['--send', 'draft-123', '--json'], {
+    skipContextCheck: false,
+    getToken: async () => 't',
+    assertContextApproved: async () => {
+      throw Object.assign(new Error(message), { code: 'SEND_CONTEXT_REQUIRED' });
+    },
+    fetchImpl: async (url) => {
+      requests.push(url);
+      if (url.includes('/drafts/draft-123?format=full')) return response({
+        message: {
+          threadId: 'thread-99',
+          payload: { headers: [{ name: 'To', value: 'customer@example.com' }] },
+        },
+      });
+      throw new Error(`unexpected fetch: ${url}`);
+    },
+  });
+  assert.equal(result.code, 2);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.errorKind, 'send_context_required');
+  assert.equal(report.error, message);
+  assert.match(report.error, /send-context-check/u);
+  assert.equal(requests.some(url => url.includes('/drafts/send')), false);
+});
+
+test('--send の履歴チェック対象スレッドを特定できない場合は送信しない', async () => {
+  const requests = [];
+  const result = await cli(['--send', 'draft-123', '--json'], {
+    skipContextCheck: false,
+    getToken: async () => 't',
+    fetchImpl: async (url) => {
+      requests.push(url);
+      if (url.includes('/drafts/draft-123?format=full')) return response({
+        message: { payload: { headers: [{ name: 'Subject', value: '宛先なし' }] } },
+      });
+      throw new Error(`unexpected fetch: ${url}`);
+    },
+  });
+  assert.equal(result.code, 2);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.errorKind, 'send_context_required');
+  assert.match(report.error, /対象スレッドを特定できません/u);
+  assert.equal(requests.some(url => url.includes('/drafts/send')), false);
+});
+
 const replyMessage = (id, subject, references, labelIds = []) => ({ labelIds, payload: { headers: [
   { name: 'message-id', value: id }, { name: 'sUbJeCt', value: subject },
   ...(references ? [{ name: 'References', value: references }] : []),
@@ -804,6 +852,7 @@ test('--send の getLatest が threads.get 403 で httpStatus を含むエラー
   assert.equal(result.code, 1);
   const report = JSON.parse(result.output[0]);
   assert.equal(report.ok, false);
+  assert.match(report.error, /（HTTP 403）$/u);
   assert.equal(report.detail, 'threads.get 403');
 });
 

@@ -1470,9 +1470,11 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 ### 2.8 AI費用・夜間処理・無人運転
 
+**🔴 定期処理（タスクスケジューラ・cron・ループ）は、LLM を起こす前に `tools/lib/change-gate.mjs` で新着・変化を判定し、変化なしなら起動しない。差分カーソルを成功後だけ保存し、週次で `routine-usage-weekly` を点検する。**
+
 用途別費用最適化、遅延可能処理は夜間へ、無人処理は試行上限・監視必須。
 
-**🔴 アプリ（デプロイ済み・Actions・cron・GAS・スクリプト）のLLM/検索は他AIが既定。Claude API（@anthropic-ai/sdk・api.anthropic.com・claude-*）の新規利用・Claudeへの自動フォールバックも禁止。旧 LLM-PROVIDER-REASON は新規利用の許可にならない（2026-11-05）。検索収集=Gemini Flash grounding、分類/抽出/要約=Groq/DeepSeek/Gemini Flash。他AIを3社以上同じ評価セットで比較（取得項目数・一致率・1件実費）し、1社だけでClaudeへ戻さない。障害は別の他AIへ、全滅なら停止・通知。「当面Claude」「入金不要」で済ませずキー登録・デプロイ・入金依頼・他AI実動確認まで行う。既存アプリも呼び先を確認しClaudeなら置換案を先に出す。有料一括20件超は1〜10件の実費実測→[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z]→承認→コードの予算超過自動停止。オートチャージは上限ではない。app-llm-cost-gate が検査（§2.8.0）。**
+**🔴 アプリ（デプロイ済み・Actions・cron・GAS・スクリプト）のLLM/検索は他AIが既定。Claude API（@anthropic-ai/sdk・api.anthropic.com・claude-*）の新規利用・Claudeへの自動フォールバックも禁止。旧 LLM-PROVIDER-REASON は許可にならない。検索=Gemini Flash grounding、分類等=Groq/DeepSeek/Gemini Flashを基本に他AI3社以上を同一条件で実測し、障害時も別の他AIへ切替、全滅なら停止・通知する。既存Claude経路も置換する。有料一括20件超は1〜10件実測→[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z]→承認→予算超過自動停止。app-llm-cost-gate が検査（§2.8.0）。**
 
 **2.8.0 🔴 最優先: アプリが呼ぶ LLM/検索 API も他AIが既定・一括実行は実測と予算上限が先（kim 2026-10-17 厳命・全PC全アカウント）**
 

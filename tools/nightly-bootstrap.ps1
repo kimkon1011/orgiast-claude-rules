@@ -333,6 +333,13 @@ try {
     if ($forwardArgs.Count -gt 0 -and [string]$forwardArgs[0] -eq '--') {
         if ($forwardArgs.Count -eq 1) { $forwardArgs = @() } else { $forwardArgs = @($forwardArgs[1..($forwardArgs.Count - 1)]) }
     }
+    if ([string]::IsNullOrWhiteSpace($env:ORGIAST_JOB)) {
+        $jobName = [IO.Path]::GetFileNameWithoutExtension($targetPath)
+        if ($forwardArgs.Count -gt 0 -and [string]$forwardArgs[0] -match '^:?([A-Za-z0-9][A-Za-z0-9_-]*)$') {
+            $jobName += ':' + $Matches[1]
+        }
+        $env:ORGIAST_JOB = $jobName
+    }
 
     try {
         $heartbeatScript = Join-Path $repo 'tools\lib\heartbeat.mjs'

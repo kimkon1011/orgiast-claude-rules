@@ -17,6 +17,7 @@ import { displayPcNames } from './lib/pc-display.mjs';
 import { draftBody, nonHumanRecipient, mailboxDraftLabel, allPages, filterClearedDrafts, notifyClearedDrafts, deleteClearedDrafts } from './lib/drafts-auto-cleared.mjs';
 import { defaultHome, externalFile, stateDir, readJsonSafe, writeJsonAtomic, readSkips, isSkipped, addSkip } from './lib/external-waiting-state.mjs';
 import { gmailFetchWithRetry, isRetryableFetchError } from './lib/gmail-retry.mjs';
+import { recordRun } from './lib/change-gate.mjs';
 
 export const MAILBOXES = ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'];
 export const KIM = 'kim@orgiast.jp';
@@ -268,6 +269,7 @@ export async function scan({ home = defaultHome(), now = Date.now(), mailboxes =
   writeJsonAtomic(externalFile(home), state);
   // 通知失敗でも、照合済みの一覧は保存して次回に通知だけ再試行する。
   if (push) await notifyClearedDrafts(home, { now, add: deps.addKimInboxItem });
+  recordRun('external-waiting', { changed: kept.length > 0, llmInvoked: stats.llmCalls > 0, items: kept.length, note: kept.length ? 'waiting items' : 'no waiting items' });
   return { state, notified };
 }
 

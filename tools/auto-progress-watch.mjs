@@ -9,6 +9,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { commit as commitGate, fingerprint, gate, loadCursor, recordRun } from './lib/change-gate.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { ledgerFile, readLedger, writeLedger, cleanupOldLedgerTemps, OPEN_STATUSES, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES, originLine, rollingSessionFields, isSessionProgressCheck } from './auto-progress-ledger.mjs';
 export { MAX_RESUMES } from './auto-progress-ledger.mjs';
@@ -330,11 +331,25 @@ function judgeEvidence(row, evidence, now, io) {
   const exhausted = freshActivity ? null : exhaustedResumeVerdict(row);
   if (exhausted) return exhausted;
   if (!evidence.any) return deterministicVerdict(evidence, now); // 証拠ゼロは LLM に聞くまでもなく stalled
+  const gateJob = `auto-progress-${String(row.sessionId || rowKey(row)).replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 80)}`;
+  const evidenceFingerprint = fingerprint(evidence);
+  const change = gate(gateJob, { fingerprint: evidenceFingerprint, items: [evidence] });
+  if (!change.changed) {
+    const cached = loadCursor(gateJob)?.cursor?.verdict;
+    recordRun('auto-progress-watch', { changed: false, llmInvoked: false, items: 1, note: 'cached evidence verdict' });
+    if (cached) return { ...cached, source: 'cache' };
+  }
   const prompt = `次は AI セッションが「この後に自動で進める」と宣言した内容と、その後の証拠です。宣言が実行済みなら done、進行中なら in_progress、止まっているなら stalled と判定してください。\n出力は1行のみ: <done|in_progress|stalled> | <15字程度の理由>\n\n${evidenceSummary(row, evidence, now)}`;
   let parsed = null;
   try { parsed = parseVerdict((io.askLlm ?? askLlm)(prompt)); } catch { parsed = null; }
   if (parsed?.verdict === 'done' && !evidence.transcript.snippets.some(s => /(?:完了|完成|done|finished|公開済|提出済)/i.test(s))) parsed.verdict = 'in_progress';
-  return parsed ? { ...parsed, source: 'llm' } : deterministicVerdict(evidence, now);
+  if (parsed) {
+    const verdict = { ...parsed, source: 'llm' };
+    commitGate(gateJob, { fingerprint: evidenceFingerprint, cursor: { verdict } });
+    recordRun('auto-progress-watch', { changed: true, llmInvoked: true, items: 1, note: 'success' });
+    return verdict;
+  }
+  return deterministicVerdict(evidence, now);
 }
 
 // ---- 再開 ----------------------------------------------------------------

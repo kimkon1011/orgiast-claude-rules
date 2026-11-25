@@ -75,6 +75,21 @@ export function auditTasks(tasks, overrides = {}, now = Date.now(), { required =
   return findings;
 }
 
+export function auditChangeGateImports(tasks, { toolsDir = dir, readFile = (file) => fs.readFileSync(file, 'utf8') } = {}) {
+  const files = new Set();
+  for (const task of tasks) {
+    const text = JSON.stringify(task);
+    for (const match of text.matchAll(/(?:^|[\\/])([A-Za-z0-9._-]+\.mjs)\b/g)) files.add(match[1]);
+  }
+  const llm = /(?:llm-ask|codex-do|claude-ai-run|chat\/completions)/;
+  return [...files].flatMap((name) => {
+    try {
+      const source = readFile(path.join(toolsDir, name));
+      return llm.test(source) && !/lib[\\/]change-gate\.mjs/.test(source) ? [{ name, kind: 'missing_change_gate', severity: 'warn' }] : [];
+    } catch { return []; }
+  });
+}
+
 export function unresolvedTasks(tasks, findings, state, now = Date.now(), { required = [] } = {}) {
   const requiredSet = new Set(required.map(key));
   return Object.entries(state.heals || {}).flatMap(([name, heal]) => {
@@ -157,6 +172,7 @@ export async function runAudit({ home = homeDefault(), platform = process.platfo
     state.notified ??= {};
     const save = () => { fs.writeFileSync(`${stateFile}.tmp`, JSON.stringify(state, null, 2)); fs.renameSync(`${stateFile}.tmp`, stateFile); };
     const findings = auditTasks(tasks, overrides, now, { required, artifactMtimes });
+    const warnings = auditChangeGateImports(tasks);
     const unresolved = unresolvedTasks(tasks, findings, state, now, { required });
     for (const name of Object.keys(state.heals || {})) if (!unresolved.some(f => f.name === name) && +now > stamp(state.heals[name].at)) { state.heals[name].resolved = true; delete state.notified[name]; }
     const heals = dryRun ? [] : await healTasks(findings, { startScheduledTask: start, enableScheduledTask: enable, runConverge: () => background([path.join(dir, 'setup.mjs'), '--converge'], { home, spawnImpl, platform }), state, now, save });
@@ -188,10 +204,11 @@ export async function runAudit({ home = homeDefault(), platform = process.platfo
     }
     lines.push(...heals.map(f => f.recovered ? `✅ 回復: ${f.name}（${f.kind} → 再実行で成功）` : `🔧 再実行: ${f.name}（${f.kind}${f.error ? ` / ${f.error}` : ''}）`));
     for (const f of findings) if (!heals.some(h => h.name === f.name) && !unresolved.some(u => u.name === f.name)) lines.push(`⚠️ 異常: ${f.name}（${f.kind}）`);
+    for (const warning of warnings) lines.push(`⚠️ 警告: ${warning.name}（${warning.kind}）`);
     if (!lines.length) lines.push(`✅ 監査 ${tasks.length}件: 異常なし`);
     const hasActiveFinding = findings.some(finding => !heals.some(heal => key(heal.name) === key(finding.name) && heal.recovered));
     if (!dryRun) fs.writeFileSync(path.join(root, 'unattended-job-audit-last.txt'), hasActiveFinding || unresolved.length ? lines.join('\n') : '');
-    return { count: tasks.length, findings, unresolved, heals, lines };
+    return { count: tasks.length, findings, warnings, unresolved, heals, lines };
   } catch {
     const result = { error: '計測不能', findings: [], unresolved: [], lines: ['無人ジョブ監査: 計測不能'] };
     if (!dryRun) try { fs.writeFileSync(path.join(root, 'unattended-job-audit-last.txt'), result.lines[0]); } catch {}

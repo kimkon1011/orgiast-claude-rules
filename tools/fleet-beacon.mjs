@@ -64,6 +64,19 @@ export function mobileStandbySuffix(home, now = Date.now()) {
   } catch { /* 既定 3 */ }
   return `${waiting === null ? '待機数不明' : waiting}/${target}`;
 }
+
+export function localRoutineUsage7d(home, now = Date.now()) {
+  const since = Number(now) - 7 * 24 * 60 * 60 * 1000, pc = os.hostname(), map = new Map();
+  const readRows = (file) => { try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } }); } catch { return []; } };
+  const get = (job) => { if (!map.has(job)) map.set(job, { pc, job, llmCalls: 0, inputTokens: 0, outputTokens: 0, usd: 0, runs: 0, unchanged: 0 }); return map.get(job); };
+  for (const row of readRows(path.join(home, '.claude', 'executor-usage.jsonl'))) if (Date.parse(row.t) >= since) {
+    const item = get(row.job || row.caller || 'unknown'); item.llmCalls++; item.inputTokens += Number(row.in) || 0; item.outputTokens += Number(row.out) || 0; item.usd += Number(row.usd ?? row.costUsd) || 0;
+  }
+  for (const row of readRows(path.join(home, '.claude', 'change-gate', 'runs.jsonl'))) if (Date.parse(row.t) >= since) {
+    const item = get(row.job || 'unknown'); item.runs++; if (row.changed === false) item.unchanged++;
+  }
+  return [...map.values()].sort((a, b) => b.usd - a.usd || b.llmCalls - a.llmCalls).slice(0, 10);
+}
 export function buildBeacon({ home = process.env.ORGIAST_HOME || os.homedir(), label, results = [], now = Date.now(), pcMap, identity } = {}) {
   const resolvedLabel = label || resolveFleetLabel(home, identity ?? machineIdentity());
   const steps = results.map((result) => {
@@ -116,6 +129,7 @@ export function buildBeacon({ home = process.env.ORGIAST_HOME || os.homedir(), l
     unsentUpstreamCount,
     lastDownstreamAt,
     knowledgeMasterVersion,
+    routineUsage7d: localRoutineUsage7d(home, now),
     ...metrics
   };
 }

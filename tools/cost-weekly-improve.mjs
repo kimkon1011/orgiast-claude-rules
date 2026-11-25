@@ -16,6 +16,7 @@ import { atomicWrite } from './cost-improve-loop.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { collectProviderHealth, collectClaudeStats } from './usage-stats.mjs';
 import { collectBudgetStatus } from './budget-status.mjs';
+import { writeRoutineUsage } from './routine-usage-weekly.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
@@ -263,6 +264,7 @@ function formatListLine(kind, proposal) {
 export async function runWeekly({ home, provider = 'deepseek', dryRun = false, noNotify = false, approveId = '', now = new Date(), quiet = false, io = {} } = {}) {
   if (!isAllowedWeeklyProvider(provider)) throw new Error(`提案生成に ${provider} は使えません(deepseek/gemini 等の安いAIのみ。anthropic/claude は禁止)`);
   const claudeDir = path.join(home, '.claude');
+  const routineUsage = await (io.writeRoutineUsage || writeRoutineUsage)({ home, now: now.getTime(), includeFleet: io.includeFleet !== false, fetchImpl: io.fetchImpl }).catch(error => ({ error: String(error?.message || error), data: [] }));
   const startedJst = formatJst(now);
   let status = 'OK';
   let outcome = { proposals: 0, applied: 0, human: 0, rejected: 0, provider, approveId: approveId || undefined };
@@ -393,7 +395,7 @@ export async function runWeekly({ home, provider = 'deepseek', dryRun = false, n
 
   await appendActionsAndSave({ claudeDir, improveState, newActions, dryRun });
   const summary = `proposals=${outcome.proposals} applied=${outcome.applied} human=${outcome.human} rejected=${outcome.rejected} suppressed=${suppressedCount} provider=${provider}`;
-  const audit = { ok: status === 'OK', ranAt: now.toISOString(), provider, dryRun, outcome, proposals: proposalAudits, applied, human, rejected, rawResponse };
+  const audit = { ok: status === 'OK', ranAt: now.toISOString(), provider, dryRun, outcome, routineUsage: routineUsage.data || [], proposals: proposalAudits, applied, human, rejected, rawResponse };
   const auditFile = saveWeeklyAudit({ claudeDir, now, audit });
 
   if ((autoLines.length || humanLines.length) && !dryRun && !noNotify) {

@@ -18,6 +18,7 @@ import { extractSearchTerms, searchRelated } from './lib/autoreply-related.mjs';
 import { LEARN_SYSTEM, learningJson, appendUnique } from './lib/autoreply-learning.mjs';
 import { isTrialSelfDecline, hasTrialStarted, trialDeclineAnswer } from './lib/trial-self-decline.mjs';
 import { beeperFetch as beeperFetchFn } from './beeper-api.mjs';
+import { recordRun } from './lib/change-gate.mjs';
 
 export const DISCORD_ACCOUNT = 'discordgo.715210673642012733';
 const HOUR = 3600000;
@@ -660,6 +661,7 @@ export async function runOnce(options = {}) {
     }
   }
   if (result.errors.length) result.ok = false;
+  recordRun('discord-beeper-autoreply', { changed: result.replied > 0, llmInvoked: result.replied > 0 || result.decisions.length > 0, items: result.scanned, note: result.ok ? 'success' : 'failed' });
   return result;
 }
 

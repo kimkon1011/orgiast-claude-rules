@@ -19,6 +19,7 @@ import { findSharedSecret, parseMemoryFrontmatter, redactForShare } from './lib/
 import { machineIdentity, getClaudeAccountEmail } from './machine-identity.mjs';
 import { isKimOperated } from './lib/kim-operated.mjs';
 import { isEntry } from './is-entry.mjs';
+import { commit as commitGate, fingerprint, gate, recordRun } from './lib/change-gate.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -235,6 +236,15 @@ export async function runKnowledgeMerge(options = {}) {
 
   if (inboxFiles.length === 0) {
     emit('knowledge-merge: up-to-date (no new inbox items)');
+    recordRun('knowledge-merge', { changed: false, llmInvoked: false, items: 0, note: 'no new inbox items' });
+    return result;
+  }
+
+  const inputFingerprint = fingerprint(inboxFiles.map(({ id, name, modifiedTime }) => ({ id, name, modifiedTime })));
+  const gateJob = `knowledge-merge-${fingerprint(home)}`;
+  const change = gate(gateJob, { fingerprint: inputFingerprint, items: inboxFiles });
+  if (!change.changed) {
+    recordRun('knowledge-merge', { changed: false, llmInvoked: false, items: inboxFiles.length, note: change.reason });
     return result;
   }
 
@@ -340,7 +350,9 @@ export async function runKnowledgeMerge(options = {}) {
   if (!dryRun) {
     fs.mkdirSync(path.dirname(stateFile), { recursive: true });
     fs.writeFileSync(stateFile, JSON.stringify(state, null, 2) + '\n');
+    if (result.errors.length === 0) commitGate(gateJob, { fingerprint: inputFingerprint, cursor: inboxFiles.map(item => item.id) });
   }
+  recordRun('knowledge-merge', { changed: true, llmInvoked: result.processed > 0, items: inboxFiles.length, note: result.errors.length ? 'failed' : 'success' });
 
   emit(`knowledge-merge: processed=${result.processed} merged=${result.merged} updated=${result.updated} quarantined=${result.quarantined} promoted=${result.promoted}`);
   return result;

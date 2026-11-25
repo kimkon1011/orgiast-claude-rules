@@ -2927,6 +2927,10 @@ test('buildUsageRow は timeoutSecs が無ければ行に生やさない（旧�
   assert.equal('timeoutSecs' in row, false);
   assert.equal(row.status, 'ok');
 });
+test('buildUsageRow は ORGIAST_JOB 相当のjobを台帳へ残す', () => {
+  const row = buildUsageRow({ result: { status: 0, outputChars: 4 }, model: 'm', seconds: 1, job: 'messenger-watch:watch-dm' });
+  assert.equal(row.job, 'messenger-watch:watch-dm');
+});
 
 // 2026-10-23 実測: gemini が拒否を3回出して以後無音のまま600秒 timeout になった（打ち切り未発火3件）。
 // chunk 到着時だけの判定では再評価されないため、周期タイマーで無音停滞も打ち切る。

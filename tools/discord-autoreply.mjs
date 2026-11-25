@@ -29,9 +29,15 @@ import { collectReadableContent } from './lib/autoreply-attachments.mjs';
 import { extractSearchTerms, searchRelated } from './lib/autoreply-related.mjs';
 import { LEARN_SYSTEM, learningJson, appendUnique, parseJson, atomicWriteText as atomic } from './lib/autoreply-learning.mjs';
 import { beeperFetch } from './beeper-api.mjs';
+import { recordRun } from './lib/change-gate.mjs';
 export { parseJson };
 
 const HOUR = 3600000;
+export const MAX_LLM_ATTEMPTS = 3;
+export const LLM_RETRY_BACKOFF_MS = [60_000, 5 * 60_000, 30 * 60_000];
+export const CORRECTIONS_LIMIT = 10;
+export const RELATED_LIMIT = 5;
+export const RELATED_BYTES = 5000;
 export const DEFAULT_MAX_REPLY_AGE = 24 * HOUR;
 const REAUTHORIZE_URL = 'https://discord.com/oauth2/authorize?client_id=1511684767546871818&scope=bot&permissions=8';
 const due = (ts, now, interval) => !Number.isFinite(ts) || now - ts >= interval;
@@ -513,7 +519,8 @@ export async function runOnce(options = {}) {
       const mentions = [...new Map(search.messages.flat().filter(m => m.hit !== false && mentionsKim(m)).map(m => [m.id, m])).values()];
       for (const m of mentions) {
         result.scanned++;
-        if (state.handled[m.id]) continue;
+        const previous = state.handled[m.id];
+        if (previous && (previous.reason || previous.gaveUp || Number(previous.nextAttemptAt) > now)) continue;
         const skip = reason => { result.skipped[reason]++; };
         if (m.author?.bot || !m.author?.id || [kimId, runtime.selfId].includes(m.author.id)) { skip('bot'); continue; }
         const ts = millis(m.timestamp);
@@ -568,16 +575,19 @@ export async function runOnce(options = {}) {
             handled(m, 'decision'); continue;
           }
           // Search related conversations for context
+          state.searchTerms ??= {};
+          const terms = state.searchTerms[m.id] ?? await extractSearchTerms(m.content || '', collected.documents.map(d => d.text), llm);
+          if (!dryRun && !state.searchTerms[m.id]) { state.searchTerms[m.id] = terms; save(); }
           const related = await searchRelated({
-            terms: await extractSearchTerms(m.content || '', collected.documents.map(d => d.text), llm),
+            terms,
             question: m.content || '',
             llm,
             beeperFetch: options.beeperFetch || ((endpoint, init) => beeperFetch(endpoint, { ...init, fetchImpl: options.fetchImpl, timeoutMs: 5000 })),
             excludeMessageIds: new Set([m.id]),
-            sinceDays: 180, maxItems: 10, maxBytes: 10000,
+            sinceDays: 180, maxItems: RELATED_LIMIT, maxBytes: RELATED_BYTES,
           }).catch(() => []);
           const llmInput = {
-            knowledge: knowledge(), rules: read(file('rules.md')), corrections: corrections().filter(row => row.outcome !== 'expired').slice(-30),
+            knowledge: knowledge(), rules: read(file('rules.md')), corrections: corrections().filter(row => row.outcome !== 'expired').slice(-CORRECTIONS_LIMIT),
             channelName: channel.name, context: contextMessages, message: targetMessage,
             ...(related.length ? { related } : {}),
             ...(collected.images.length ? { images: collected.images } : {}),
@@ -586,7 +596,7 @@ export async function runOnce(options = {}) {
           const raw = await llm({ category: 'jp_reply', system: REPLY_SYSTEM, input: llmInput });
           let decision;
           try { decision = replyJson(raw); }
-          catch { handled(m, 'llm_parse_error'); result.errors.push(`llm_parse_error: ${m.id}`); continue; }
+          catch { throw new Error(`llm_parse_error: ${m.id}`); }
           if (!decision.needs_reply && !decision.needs_kim_decision) { handled(m, 'fyi'); skip('fyi'); continue; }
           // 「読めない」系の誤回答ガード
           if (decision.answer?.trim() && CANT_READ_REPLY_PTN.test(decision.answer)) {
@@ -688,7 +698,16 @@ export async function runOnce(options = {}) {
           }, { addItemImpl: options.addItemImpl || addKimInboxItem, registerCommitment: options.registerCommitment,
             approvalMessage: m.content, approvalTs: Date.parse(m.timestamp) });
           if (await emergency()) break;
-        } catch (e) { result.errors.push(`${m.id}: ${errorText(e)}`); }
+        } catch (e) {
+          const attempts = Number(state.handled[m.id]?.attempts || 0) + 1;
+          const lastError = errorText(e);
+          state.handled[m.id] = attempts >= MAX_LLM_ATTEMPTS
+            ? { attempts, lastError, gaveUp: true, ts: now }
+            : { attempts, lastError, nextAttemptAt: now + LLM_RETRY_BACKOFF_MS[attempts - 1], ts: now };
+          save();
+          appendLog(file('log.jsonl'), JSON.stringify({ t: new Date(now).toISOString(), messageId: m.id, attempts, lastError, gaveUp: attempts >= MAX_LLM_ATTEMPTS }) + '\n');
+          result.errors.push(`${m.id}: ${lastError}`);
+        }
       }
     }
 
@@ -779,6 +798,7 @@ export async function runOnce(options = {}) {
       release();
     }
   }
+  recordRun('discord-autoreply', { changed: result.replied > 0 || result.learned.corrected > 0 || result.learned.confirmed > 0, llmInvoked: result.scanned > 0, items: result.scanned, note: result.ok ? 'success' : 'failed' });
   return result;
 }
 

@@ -14,6 +14,7 @@ import { extractBody } from './gmail-search.mjs';
 import { autoProvider, resolveProvider, buildChildEnv } from './cheap-code.mjs';
 import { resolveClaudeExecutableFromDisk, isUnspawnable } from './claude-exe.mjs';
 import { readEnvValue } from './env-kv.mjs';
+import { recordRun } from './lib/change-gate.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const USER = 'kim@orgiast.jp';
@@ -1251,7 +1252,10 @@ export async function main(argv = process.argv.slice(2)) {
   const dir = path.join(home, '.claude/meeting-prep'), stateFile = path.join(dir, 'state.json');
   let release = () => {};
   let report = { dryRun, mode: options['--collect'] ? 'collect' : options['--identify-014'] ? 'identify' : 'dispatch', startedAt: new Date().toISOString(), errors: [] };
-  const finish = code => saveRunReport(options['--run-dir'] || path.join(dir, 'runs'), report, code);
+  const finish = code => {
+    recordRun('meeting-prep-dispatch', { changed: (report.targets?.length || report.results || 0) > 0, llmInvoked: (report.targets?.length || 0) > 0 && !dryRun, items: report.targets?.length || report.results || 0, note: code === 0 ? report.mode : 'failed' });
+    return saveRunReport(options['--run-dir'] || path.join(dir, 'runs'), report, code);
+  };
   try {
     if (!dryRun) release = lock(dir);
     const state = readJson(stateFile, { version: 1, sent: {}, batches: {}, reviewed: {} });

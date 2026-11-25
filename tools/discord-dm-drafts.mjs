@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
+import { recordRun } from './lib/change-gate.mjs';
 const dir = path.dirname(fileURLToPath(import.meta.url));
 export const home = process.env.ORGIAST_HOME || os.homedir();
 export const ledger = path.join(home, '.claude', 'discord-dm-drafts.jsonl');
@@ -65,6 +66,7 @@ export async function scan({ ui, generate, file = ledger, dryRun = false }) {
   const state = await ui.state();
   if (state.idleMs < 300000) return 'SKIP: kim 操作中（無操作5分未満）';
   if (dryRun) return `DRY-RUN: idle=${Math.floor(state.idleMs / 1000)}s / 未読会話=${state.unread.length}（切替・LLM・保存なし）`;
+  if (state.unread.length === 0) { recordRun('discord-dm-drafts', { changed: false, llmInvoked: false, items: 0, note: 'no unread' }); return '返信案 0件を保存'; }
   let count = 0;
   for (const chat of state.unread) {
     if ((await ui.idle()) < 300000) break;
@@ -79,6 +81,7 @@ export async function scan({ ui, generate, file = ledger, dryRun = false }) {
     }
     if (messages.length) append({ id: `checkpoint:${chat}`, chat, ts: messages.at(-1).ts, status: 'checkpoint' }, file);
   }
+  recordRun('discord-dm-drafts', { changed: count > 0, llmInvoked: count > 0, items: count, note: count ? 'success' : 'no candidates' });
   return `返信案 ${count}件を保存`;
 }
 export function edit(id, draft, file = ledger) {

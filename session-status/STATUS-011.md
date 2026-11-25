@@ -1,4 +1,4 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-25 23:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-26 00:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
 - 案件数: 23
@@ -21,7 +21,7 @@
 - 011・sales-14sha-1125・完了・最終更新 11/25 11:34、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 011・sales-followup・停止・最終更新 11/24 01:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-followup-1123・完了・最終更新 11/23 18:18、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
-- 011・sales-next-contact・進行中・最終更新 11/25 21:41、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
+- 011・sales-next-contact・停止・最終更新 11/25 21:41、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
 - 011・souko-kyujin-1125・完了・最終更新 11/25 19:40、STATUS.mdなし、DONEあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
 - 011・tangomuto-reply-1125・完了・最終更新 11/25 12:25、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 011・tasks・停止・最終更新 11/24 09:49、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

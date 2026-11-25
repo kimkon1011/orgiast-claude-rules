@@ -94,7 +94,10 @@ test('x.ai 403 は OpenRouter grok へフォールバックして成功する', 
   const result = await runCollect(ctx.options);
   assert.match(result.status, /^ok:/); assert.equal(result.added, 1);
   assert.equal(calls[1].body.model, 'x-ai/grok-4.6');
-  assert.equal(calls[1].body.messages[1].content, calls[0].body.input[0].content);
+  // Grok fallback には web 検索向けプロンプトを使う（X 固有の likes 制約・X URL 要求を含まない）
+  assert.doesNotMatch(calls[1].body.messages[1].content, /likes が/);
+  assert.doesNotMatch(calls[1].body.messages[1].content, /Search X for/);
+  assert.match(calls[1].body.messages[1].content, /Search the web for/);
   assert.deepEqual(errors, ['[LANE-FALLBACK] x.ai -> openrouter grok (reason: HTTP 403 credit/quota response)']);
 });
 

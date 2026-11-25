@@ -16,6 +16,7 @@ import {
   childEnv,
   KEPT_CLAUDE_ENV,
   launchNextSession,
+  loadClaudeExeHelpers,
   parseHandoffCwd,
   parseHandoffModel,
   pickAccountEmail,
@@ -38,6 +39,14 @@ import {
   shouldInstallBundledVsix,
   trustKeyVariants,
 } from './next-session-launch.mjs';
+
+test('旧 claude-exe に export が無くても起動モジュール全体は落ちない', async () => {
+  const warnings = [];
+  const helpers = await loadClaudeExeHelpers(async () => ({ sanitizeClaudeSupervisorEnv() {} }), (line) => warnings.push(line));
+  assert.equal(helpers.findClaudeInVersionedDir('unused', {}), null);
+  assert.deepEqual(helpers.sanitizeClaudeSupervisorEnv({ MCP_TEST: 'x', PATH: 'ok' }), { PATH: 'ok' });
+  assert.match(warnings[0], /実体探索だけスキップ/);
+});
 
 test('cwd は不在の先頭候補を記録し、次の実在候補で探索を止める', () => {
   const checked = [];

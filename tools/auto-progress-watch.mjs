@@ -9,6 +9,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { commit as commitGate, fingerprint, gate, loadCursor, recordRun } from './lib/change-gate.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { ledgerFile, readLedger, writeLedger, cleanupOldLedgerTemps, OPEN_STATUSES, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES, originLine, rollingSessionFields, isSessionProgressCheck } from './auto-progress-ledger.mjs';
 export { MAX_RESUMES } from './auto-progress-ledger.mjs';
@@ -25,6 +26,7 @@ import { externalSpec } from './lib/external-monitor-state.mjs';
 import { pollExternal, drainExternalQueue } from './auto-progress-external-monitor.mjs';
 import { main as writeProgressPush } from './progress-push.mjs';
 import { pushDailyProgress } from './lib/auto-progress-daily.mjs';
+import { sweepMobilePushQueue } from './lib/mobile-push-queue.mjs';
 import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { BLOCKER, readJson as readFleetJson, saveJson as saveFleetJson } from './lib/fleet-chase-ledger.mjs';
@@ -330,11 +332,25 @@ function judgeEvidence(row, evidence, now, io) {
   const exhausted = freshActivity ? null : exhaustedResumeVerdict(row);
   if (exhausted) return exhausted;
   if (!evidence.any) return deterministicVerdict(evidence, now); // 証拠ゼロは LLM に聞くまでもなく stalled
+  const gateJob = `auto-progress-${String(row.sessionId || rowKey(row)).replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 80)}`;
+  const evidenceFingerprint = fingerprint(evidence);
+  const change = gate(gateJob, { fingerprint: evidenceFingerprint, items: [evidence] });
+  if (!change.changed) {
+    const cached = loadCursor(gateJob)?.cursor?.verdict;
+    recordRun('auto-progress-watch', { changed: false, llmInvoked: false, items: 1, note: 'cached evidence verdict' });
+    if (cached) return { ...cached, source: 'cache' };
+  }
   const prompt = `次は AI セッションが「この後に自動で進める」と宣言した内容と、その後の証拠です。宣言が実行済みなら done、進行中なら in_progress、止まっているなら stalled と判定してください。\n出力は1行のみ: <done|in_progress|stalled> | <15字程度の理由>\n\n${evidenceSummary(row, evidence, now)}`;
   let parsed = null;
   try { parsed = parseVerdict((io.askLlm ?? askLlm)(prompt)); } catch { parsed = null; }
   if (parsed?.verdict === 'done' && !evidence.transcript.snippets.some(s => /(?:完了|完成|done|finished|公開済|提出済)/i.test(s))) parsed.verdict = 'in_progress';
-  return parsed ? { ...parsed, source: 'llm' } : deterministicVerdict(evidence, now);
+  if (parsed) {
+    const verdict = { ...parsed, source: 'llm' };
+    commitGate(gateJob, { fingerprint: evidenceFingerprint, cursor: { verdict } });
+    recordRun('auto-progress-watch', { changed: true, llmInvoked: true, items: 1, note: 'success' });
+    return verdict;
+  }
+  return deterministicVerdict(evidence, now);
 }
 
 // ---- 再開 ----------------------------------------------------------------
@@ -354,6 +370,7 @@ export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.hom
   const rateLimited = apiErrorResume && /rate.?limit|usage.?credits?|429/i.test([row.error, row.apiError, row.apiErrorStatus].join(' '));
   const runOptions = { resumeSessionId: row.sessionId, headlessJob: `auto-progress:${reason || 'resume'}`, ...(rateLimited ? { model: automationModel(process.env.AUTO_PROGRESS_RESUME_MODEL) } : {}) };
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, row.cwd, row.cwd, timeoutMs, runOptions);
+  if (result.skippedSeatGuard) return { status: 'deferred', deferred: true, reason: String(result.stdout || result.stderr || 'claude-seat-guard'), executorUsed: 'none' };
   if (result.status !== 'success') {
     const tail = String(result.stderr ?? '').split(/\r?\n/).filter(line => line.trim()).at(-1) || '';
     const detail = `${result.executorUsed} exit ${result.exitCode}`;
@@ -1350,6 +1367,14 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   }
   try { Object.assign(summary, await watchFleetMail({ home, now, dryRun, io })); }
   catch { summary.fleetExpired ??= 0; summary.fleetBlocked ??= 0; summary.errors.push('fleet-mail monitoring failed'); }
+  try {
+    const sweepResult = sweepMobilePushQueue(home, { now });
+    if (sweepResult.expired || sweepResult.deduplicated) {
+      summary.mobilePushSweep = sweepResult;
+    }
+  } catch (error) {
+    summary.errors.push(`mobile-push-sweep: ${String(error?.message ?? error).slice(0, 120)}`);
+  }
   endPhase('maintenance');
   await sendDeferredNotices();
   endPhase('deferred-notices');

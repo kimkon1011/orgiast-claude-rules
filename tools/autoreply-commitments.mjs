@@ -7,6 +7,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { getDriveToken } from './lib/drive-auth.mjs';
 import { isEntry } from './is-entry.mjs';
 import { addItem } from './kim-inbox.mjs';
+import { routeCalendar, withCaseLabel } from './lib/calendar-shared.mjs';
 
 const JST = 9 * 3600000;
 const DAY = 24 * 3600000;
@@ -109,16 +110,21 @@ async function report(home, row, post, suffix = '') {
 
 export async function registerCommitment(row, { getToken = getDriveToken, fetchImpl = globalThis.fetch, wait = sleep } = {}) {
   const token = await getToken({ impersonate: 'kim@orgiast.jp', scope: 'https://www.googleapis.com/auth/calendar.events', signal: AbortSignal.timeout(10000), fetchImpl });
-  const base = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   const withMeet = row.kind === 'meeting';
   const reminders = { useDefault: false, overrides: [{ method: 'popup', minutes: 30 }] };
+  const labeled = withCaseLabel({
+    summary: `【調整可】${withMeet ? `${row.channelName}との打ち合わせ` : `${row.senderName}さんに電話`}`,
+    description: `登録元: autoreply-commitments\n出典: ${row.channelName}`,
+  }, row.channelName, 'autoreply-commitments');
   const body = {
     id: row.id,
-    summary: `【調整可】${withMeet ? `${row.channelName}との打ち合わせ` : `${row.senderName}さんに電話`}`,
+    ...labeled,
     start: { dateTime: row.start }, end: { dateTime: row.end }, reminders,
     ...(withMeet ? { conferenceData: { createRequest: { requestId: row.id, conferenceSolutionKey: { type: 'hangoutsMeet' } } } } : {}),
   };
+  const calendarId = routeCalendar(body, { origin: 'ai' });
+  const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
   const inserted = await fetchImpl(`${base}?sendUpdates=none&conferenceDataVersion=1`, {
     method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(10000)
   });

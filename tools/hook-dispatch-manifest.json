@@ -521,6 +521,12 @@
         "timeout": 15
       },
       {
+        "matcher": "Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/gemini-api-budget-gate.mjs\"",
+        "timeout": 45
+      },
+      {
         "matcher": "Bash",
         "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/bash-cd-chain-guard.mjs\"",

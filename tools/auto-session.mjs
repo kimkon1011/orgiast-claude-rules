@@ -11,8 +11,38 @@ import { autoResumeAllowed } from './lib/auto-resume-policy.mjs';
 import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
 import { ledgerRows, runTaskLedger } from './task-ledger.mjs';
 import { alternateCheapProvider, autoSessionExecutor, buildClaudeHeadlessArgs, buildCheapCodeArgs, buildCodexDoArgs, cheapProvidersAllCooling, codexDoLaneEnabled, claudeFallbackEnabled, prepareExecutorRoot, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
-import { findClaudeInVersionedDir, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 import { sweepFile as sweepRescueTodoFile } from './rescue-todo-sweep.mjs';
+import { evaluateClaudeSeatGuard, formatClaudeSeatGuardSkip } from './lib/claude-seat-guard.mjs';
+
+function fallbackSanitizeClaudeSupervisorEnv(parentEnv = process.env) {
+  const clean = {};
+  for (const [key, value] of Object.entries(parentEnv || {})) {
+    const upper = String(key || '').toUpperCase();
+    const retained = upper === 'CLAUDE_CODE_GIT_BASH_PATH' || upper === 'CLAUDE_CLI'
+      || upper === 'CLAUDE_CLI_PATH' || upper === 'CLAUDE_BIN';
+    const inherited = upper.startsWith('ANTHROPIC_') || upper === 'CLAUDE_CONFIG_DIR';
+    const leaked = !retained && (upper === 'CLAUDECODE' || upper.startsWith('CLAUDE_CODE_')
+      || upper.startsWith('CLAUDE_AGENT_SDK_') || upper === 'CLAUDE_PID'
+      || upper.startsWith('CLAUDE_PREVIEW_') || upper.startsWith('MCP_'));
+    if (inherited || !leaked) clean[key] = value;
+  }
+  return clean;
+}
+
+export async function loadClaudeExeHelpers(importModule = (specifier) => import(specifier), warn = console.error) {
+  try {
+    const helpers = await importModule('./claude-exe.mjs');
+    if (typeof helpers.findClaudeInVersionedDir !== 'function' || typeof helpers.sanitizeClaudeSupervisorEnv !== 'function') {
+      throw new Error('必要な export がありません');
+    }
+    return helpers;
+  } catch (error) {
+    warn(`[auto-session] claude-exe.mjs を読み込めないため実体探索だけスキップします: ${String(error?.message || error).split(/\r?\n/)[0]}`);
+    return { findClaudeInVersionedDir: () => null, sanitizeClaudeSupervisorEnv: fallbackSanitizeClaudeSupervisorEnv };
+  }
+}
+
+const { findClaudeInVersionedDir, sanitizeClaudeSupervisorEnv } = await loadClaudeExeHelpers();
 
 export { autoSessionExecutor } from './auto-session-executor.mjs';
 
@@ -20,6 +50,7 @@ const __dirname = import.meta.dirname;
 const REPO_ROOT = path.resolve(__dirname, '..');
 const MARKER = '<!-- NEXT-SESSION v1 -->';
 const SIX_HOURS = 6 * 60 * 60 * 1000;
+let seatGuardCache = null;
 export const ROLE_NAMES = ['tester', 'system-review', 'cost-check'];
 export const DEFAULT_REPO = path.resolve(import.meta.dirname, '..');
 export const BUILTIN_REPO_BY_KEYWORD = {
@@ -764,6 +795,21 @@ function extensionExecutables() {
 }
 
 export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, runOptions = {}) {
+  const home = runOptions.home ?? process.env.ORGIAST_HOME ?? os.homedir();
+  let guardVerdict = runOptions.guardVerdict;
+  if (!guardVerdict) {
+    if (runOptions.evaluateGuard) guardVerdict = await runOptions.evaluateGuard({ home, env: process.env, caller: runOptions.headlessJob ?? 'auto-session' });
+    else {
+      const now = Date.now();
+      if (!seatGuardCache || seatGuardCache.home !== home || now - seatGuardCache.at > 60_000) seatGuardCache = { home, at: now, promise: evaluateClaudeSeatGuard({ home, env: process.env, caller: runOptions.headlessJob ?? 'auto-session' }) };
+      guardVerdict = await seatGuardCache.promise;
+    }
+  }
+  if (guardVerdict.blocked) {
+    const message = formatClaudeSeatGuardSkip(guardVerdict);
+    (runOptions.log ?? console.log)(message);
+    return { status: 'skipped', skippedSeatGuard: true, deferred: false, executorUsed: 'none', exitCode: 0, stdout: message, stderr: '' };
+  }
   if (runOptions.resumeSessionId && !autoResumeAllowed({ source: runOptions.resumeSource })) {
     return { status: 'skipped', skippedAutoResume: true, deferred: false, executorUsed: 'none', exitCode: null, stdout: '', stderr: 'auto-resume disabled by config/auto-resume.json' };
   }

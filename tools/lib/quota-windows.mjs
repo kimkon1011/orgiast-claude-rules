@@ -8,7 +8,15 @@ const MINUTE = 60_000;
 // Identity must survive that flip, so bucket to the nearest minute and compare
 // with a tolerance instead of an exact key.
 export const resetKey = value => Math.round(value / MINUTE) * MINUTE;
-export const sameReset = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 2 * MINUTE;
+
+export const sameReset = (a, b, toleranceMinutes = 2) =>
+  Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= toleranceMinutes * MINUTE;
+
+// 2026-11-25 実測: Codex primary(300分) の resets_at は同じ窓でも 5.6 分動いた。
+// windowMinutes がない Claude は従来の ±2 分、Codex は窓長の 5%（上限15分）まで許容する。
+export const resetToleranceMinutes = window => Number.isFinite(window?.windowMinutes)
+  ? Math.max(2, Math.min(15, window.windowMinutes * 0.05))
+  : 2;
 export function parseCodexRateLimits(text) {
   let latest = null;
   // Read structured telemetry only. Quoted examples inside a user/tool message
@@ -111,7 +119,7 @@ export function decideSweep({ windows, now = Date.now(), leadMinutes = 90, minRe
     const first = candidates.sort((a, b) => a.resetsAt - b.resetsAt)[0];
     const deadline = Math.min(...active.map(w => w.resetsAt)) - marginMinutes * MINUTE;
     if (deadline - now < minRunMinutes * MINUTE) continue;
-    decisions.push({ provider, window: first.window, resetsAt: resetKey(first.resetsAt), deadline, usedPercent: first.usedPercent,
+    decisions.push({ provider, window: first.window, ...(Number.isFinite(first.windowMinutes) ? { windowMinutes: first.windowMinutes } : {}), resetsAt: resetKey(first.resetsAt), deadline, usedPercent: first.usedPercent,
       remainingPercent: 100 - first.usedPercent, reason: `reset approaching${own.some(w => w.stale) ? '; stale: refresh before tick' : ''}` });
   }
   return decisions;

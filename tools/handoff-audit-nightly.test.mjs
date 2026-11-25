@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { mergeKnowledge, enqueueTodos, selectTargets, runNightly, readJsonl, promotionFile, deferralLedgerFile, deferralTodo, deferralDetectorFile, pruneReviewedCandidates, dequeueToolRouteReview, reviewedCandidatesFile } from './handoff-audit-nightly.mjs';
+import { mergeKnowledge, enqueueTodos, selectTargets, runNightly, readJsonl, promotionFile, deferralLedgerFile, deferralTodo, deferralDetectorFile, pruneReviewedCandidates, dequeueToolRouteReview, reviewedCandidatesFile, selectDeferralEnqueueRows } from './handoff-audit-nightly.mjs';
 import { parseHandoff } from './auto-session.mjs';
 import { isToolNameRoute, enqueueToolRouteReview } from './handoff-audit-nightly.mjs';
 const detectorSource = fs.readFileSync(new URL('./permanent-fix-deferral-scan.mjs', import.meta.url), 'utf8');
@@ -230,6 +230,36 @@ test('同一セッションの同じパターンが窓内で複数検出され�
   const handoff = fs.readFileSync(path.join(filed.dir, 'next-session.md'), 'utf8');
   assert.equal(parseHandoff(handoff).todos.length, 2);
   assert.equal(readJsonl(deferralLedgerFile(filed.home)).filter(r => r.kind === 'hit').length, 3);
+});
+test('selectDeferralEnqueueRows は in-session 解消済み行を除外する', () => {
+  assert.deepEqual(selectDeferralEnqueueRows([{ sessionId: 'one', pattern: 'P1', resolved: 'in-session' }]), []);
+});
+test('selectDeferralEnqueueRows は cross-session 解消済み行を除外する', () => {
+  assert.deepEqual(selectDeferralEnqueueRows([{ sessionId: 'one', pattern: 'P1', resolved: 'cross-session' }]), []);
+});
+test('selectDeferralEnqueueRows は未解消行を残す', () => {
+  const row = { sessionId: 'one', pattern: 'P1' };
+  assert.deepEqual(selectDeferralEnqueueRows([row]), [row]);
+});
+test('selectDeferralEnqueueRows は同じ sessionId と pattern の先頭だけを残す', () => {
+  const first = { sessionId: 'one', pattern: 'P1', match: 'first' };
+  const second = { sessionId: 'one', pattern: 'P1', match: 'second' };
+  assert.deepEqual(selectDeferralEnqueueRows([first, second]), [first]);
+});
+test('selectDeferralEnqueueRows は同じ sessionId でも異なる pattern を残す', () => {
+  const rows = [{ sessionId: 'one', pattern: 'P1' }, { sessionId: 'one', pattern: 'P2' }];
+  assert.deepEqual(selectDeferralEnqueueRows(rows), rows);
+});
+test('selectDeferralEnqueueRows は undefined を空配列として扱う', () => {
+  assert.deepEqual(selectDeferralEnqueueRows(undefined), []);
+});
+test('selectDeferralEnqueueRows は実データ由来の resolved 行だけを除外する', () => {
+  const rows = [
+    { ts: '2026-11-24T12:15:07.636Z', sessionId: '114ccd64-b1a9-44e0-8a9f-8d100d915a76', pattern: 'W', match: '92 次に kim がすること: なし この後の自動進行: PR #2692 の CI 完了を待ち', verdict: 'pass', resolved: 'in-session' },
+    { ts: '2026-11-23T15:46:55.952Z', sessionId: '05c63b55-7b5f-44b5-87fd-9f3aaed4e8a6', pattern: 'W', match: '2本目（PR #2651）ができました。', verdict: 'pass', resolved: 'cross-session', resolvedBy: '7e068083-729c-4076-9886-9c7cf6984d4e', identifier: 'pr:2651' },
+    { ts: '2026-11-24T11:38:20.140Z', sessionId: 'fda85b19-50be-48f9-b1fe-263cdceb1074', pattern: 'P2', match: 'BLOCKED は 53件のまま', verdict: 'pass' }
+  ];
+  assert.deepEqual(selectDeferralEnqueueRows(rows), [rows[2]]);
 });
 test('先送り文が無い窓でも hits:0 の実測行を残す', async t => {
   const filed = deferralHome(t, [{ ts: new Date(2026, 8, 11, 10).toISOString(), sessionId: 'feedface', verdict: 'pass', fired: false, excerpt: '修正が完了しました' }]);

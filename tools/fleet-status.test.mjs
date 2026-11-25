@@ -48,6 +48,12 @@ test('buildFleetStatus exposes failing ids and account', () => {
   assert.equal(row.account, 'x.jp');
 });
 
+test('buildFleetStatus は beacon の利用率を移管判定用に公開する', () => {
+  const [row] = buildFleetStatus({ pcMap: { pc: {} }, beacons: [{ label: 'pc', reportedAt: new Date(NOW).toISOString(), pollAt: new Date(NOW).toISOString(), planFiveHourPct: 20, planSevenDayPct: 40 }], now: NOW });
+  assert.equal(row.planFiveHourPct, 20);
+  assert.equal(row.planSevenDayPct, 40);
+});
+
 test('formatAge renders minutes, hours and days', () => {
   assert.equal(formatAge(30 * 60 * 1000), '30m');
   assert.equal(formatAge(3 * 3600 * 1000), '3h');

@@ -13,10 +13,11 @@ import { redactSecrets } from './webhook-health.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
-import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, recordNaturalLanguageAnswers, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
+import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, recordNaturalLanguageAnswers, interactiveInboxSession, groupInboxItems, readRelayState, writeRelayState } from './lib/kim-inbox-relay-state.mjs';
 import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
 import { matchesRow, parseEscalation, syncEscalationAnswer } from './lib/escalation-answer-sync.mjs';
 import { looksLikeApprovalRequest } from './lib/kim-inbox-kind.mjs';
+import { isPullRequestMergeApprovalRequest, MERGE_HANDOFF_REJECTION_MESSAGE } from './lib/kim-inbox-merge-handoff.mjs';
 const exec = promisify(execFile);
 const execGh = promisify(execFile);
 const PR_REF_RE = /PR\s*#(\d+)/gi;
@@ -191,6 +192,7 @@ export const normalizeInboxText = text => String(text ?? '')
   .replace(/\d+(日|件|時間)/g, 'N$1')
   .replace(/(?:\bkim\b|キムさん|キム|金さん|金功勇)\s*/gi, 'KIM')
   .replace(/[\p{Extended_Pictographic}\uFE0E\uFE0F\u200D]/gu, '')
+  .replace(/\b(?:0x[a-f0-9]+|[a-f0-9]{12,})\b/gi, '')
   .replace(/\s+/g, ' ')
   .trim()
   .toLowerCase();
@@ -416,14 +418,14 @@ export function mergeItemsInto(home, dedupeKey, ids) {
     return { keptId: kept.id, superseded: items.length - 1, count: total, branches };
   });
 }
-function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen, progressAt, kindPromotedFrom }) {
+function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen, progressAt, kindPromotedFrom, standingPermission, mergeHandoffReason }) {
   if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');
   if (doneWhen && kind !== 'ask') throw new Error('--done-when-gmail は ask 専用です');
   fs.mkdirSync(directory(home), { recursive: true });
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), ...(kindPromotedFrom ? { kindPromotedFrom } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), ...(kindPromotedFrom ? { kindPromotedFrom } : {}), ...(standingPermission ? { standingPermission } : {}), ...(mergeHandoffReason ? { mergeHandoffReason: clean(mergeHandoffReason) } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     if (revision !== undefined) item.revision = revision;
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -445,6 +447,7 @@ export function spoolItem(home, options) {
   const id = randomBytes(16).toString('hex');
   const file = path.join(dir, `${id}.json`), temp = `${file}.tmp`;
   const record = { ...(options.priority === 'high' ? { priority: 'high' } : {}), kind: options.kind || 'info', text: clean(options.text), source: clean(options.source),
+    ...(options.forceKind ? { forceKind: true } : {}),
     from: clean(options.from ?? resolveFleetLabel(home, { hostname: os.hostname() })),
     ...(options.progressAt ? { progressAt: options.progressAt } : {}), ...(options.sessionId ? { sessionId: clean(options.sessionId) } : {}),
     dedupeKey: options.dedupeKey ? inboxDedupeKey(options.dedupeKey) : `spool:${id}` };
@@ -482,9 +485,33 @@ export async function drainSpool(home, { stderr = console.error, execImpl, signa
 }
 export async function addItem(home, options, { drain = true, localOnly = false, lockWaitMs } = {}) {
   let normalizedOptions = options;
-  if ((options.kind || 'info') === 'info' && !options.forceKind && looksLikeApprovalRequest(options.text)) {
-    normalizedOptions = { ...options, kind: 'ask', kindPromotedFrom: 'info' };
+  if ((options.kind || 'info') === 'ask' && !options.forceKind && /送信|送って|承認/.test(String(options.text || ''))) {
+    try {
+      const config = JSON.parse(fs.readFileSync(fileURLToPath(new URL('../config/standing-send-permissions.json', import.meta.url)), 'utf8'));
+      const permission = (config.permissions || []).find(item => new RegExp(item.match).test(String(options.text || '')));
+      if (permission) {
+        normalizedOptions = { ...options, kind: 'info', standingPermission: permission.id };
+        (options.stderr || console.error)(`常設許可あり: ${permission.name}。承認待ちにせず送信すること`);
+        if (options.sessionId) {
+          const ledger = path.join(home, '.claude', 'stall-ledger', 'standing-sends.jsonl');
+          fs.mkdirSync(path.dirname(ledger), { recursive: true });
+          fs.appendFileSync(ledger, `${JSON.stringify({ at: new Date().toISOString(), sessionId: options.sessionId, permissionId: permission.id })}\n`, { mode: 0o600 });
+        }
+      }
+    } catch { /* 設定欠損・破損時は従来どおり */ }
+  }
+  if ((normalizedOptions.kind || 'info') === 'info' && !normalizedOptions.forceKind && !normalizedOptions.standingPermission && looksLikeApprovalRequest(normalizedOptions.text)) {
+    normalizedOptions = { ...normalizedOptions, kind: 'ask', kindPromotedFrom: 'info' };
     (options.stderr || console.error)('[kim-inbox] kind=info で登録されましたが本文が承認を求めているため ask に昇格しました');
+  }
+  if ((normalizedOptions.kind || 'info') === 'ask' && isPullRequestMergeApprovalRequest(normalizedOptions.text)) {
+    const reason = String(normalizedOptions.mergeHandoffReason || '').trim();
+    if (!reason) {
+      const error = new Error(MERGE_HANDOFF_REJECTION_MESSAGE);
+      error.exitCode = 2;
+      throw error;
+    }
+    normalizedOptions = { ...normalizedOptions, mergeHandoffReason: reason };
   }
   if (drain) await drainSpool(home, { execImpl: normalizedOptions.execImpl, signal: normalizedOptions.signal, lockWaitMs });
   if (isInboxNoise(normalizedOptions)) return { id: null, status: 'suppressed', kind: normalizedOptions.kind || 'info' };
@@ -1078,11 +1105,31 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       await drainSpool(home);
       if (kim) await ingestFleetMail(home);
       await autoCloseByGmail(home);
+      // 前回示した info を自動 seen にする（ask は対象外。表示予算に入ったものだけがカウントされる）
+      if (kim && sessionId) {
+        const state = readRelayState(home, sessionId);
+        if (state.seenAfterPending?.length) {
+          for (const id of state.seenAfterPending) {
+            try { markSeen(home, id); } catch { /* 既に seen または info 以外は無視 */ }
+          }
+          state.seenAfterPending = [];
+          writeRelayState(home, sessionId, state);
+        }
+      }
       const active = i => (i.status === 'open' || (i.dailyProgress && i.status === 'seen')) && (kim || i.forwardError);
       const items = listInboxMatches(home, active, { originals: true });
       const counts = new Map(items.map(i => [i.id, i.shownCount]));
       const context = selectContext(items, { sessionId: String(input.session_id ?? ''), sheetUrl: deadlineSheetUrl(home), home, event });
       if (kim) recordInjection(home, sessionId, items.filter(i => i.shownCount !== counts.get(i.id) && (i.kind === 'ask' || isHighInfo(i))), { event });
+      // 今回新たに示した info を次回の自動 seen に記録する
+      if (kim && sessionId) {
+        const newlyShownInfo = items.filter(i => i.shownCount !== counts.get(i.id) && i.kind === 'info');
+        if (newlyShownInfo.length) {
+          const state = readRelayState(home, sessionId);
+          state.seenAfterPending = [...new Set([...(state.seenAfterPending || []), ...newlyShownInfo.map(i => i.id)])];
+          writeRelayState(home, sessionId, state);
+        }
+      }
       const contextParts = [];
       if (context) contextParts.push(context);
       if (nlHints) contextParts.push(nlHints);
@@ -1109,7 +1156,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
         if (pipe === -1) throw new Error('--done-when-gmail は "user|query" 形式で指定してください');
         doneWhen = { gmail: { user: raw.slice(0, pipe).trim(), query: raw.slice(pipe + 1).trim() } };
       }
-      const item = await addItem(home, { urgent: args.includes('--urgent'), text: body, kind, forceKind: args.includes('--force-kind'), stderr, key: args.includes('--key') ? value('--key') : undefined, dedupeKey: args.includes('--dedupe-key') ? value('--dedupe-key') : undefined, replaceExisting: args.includes('--replace-existing'), due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '', ...(doneWhen ? { doneWhen } : {}) });
+      const item = await addItem(home, { urgent: args.includes('--urgent'), text: body, kind, forceKind: args.includes('--force-kind'), stderr, key: args.includes('--key') ? value('--key') : undefined, dedupeKey: args.includes('--dedupe-key') ? value('--dedupe-key') : undefined, replaceExisting: args.includes('--replace-existing'), due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '', mergeHandoffReason: args.includes('--merge-handoff-ok') ? value('--merge-handoff-ok') : undefined, ...(doneWhen ? { doneWhen } : {}) });
       stdout(JSON.stringify({ id: item.id, status: item.status, forwarded: item.status === 'forwarded' }));
     } else if (args.includes('--answer')) stdout(JSON.stringify(answerItem(home, value('--answer'), fs.readFileSync(value('--body-file'), 'utf8'), process.env.CLAUDE_SESSION_ID || '')));
     else if (args.includes('--lookup')) stdout(JSON.stringify(lookupAnswers(home, value('--lookup')), null, 2));
@@ -1182,7 +1229,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       }
     } else throw new Error('--add / --answer / --seen / --drop / --show / --list / --status / --context / --compact / --merge-into <key> --ids <id,...> / --dedupe-existing [--dry|--apply] / --sweep-info [--apply] / --sweep-nonquestions [--apply] / --auto-close を指定してください');
     return 0;
-  } catch (error) { stderr(`kim-inbox: ${clean(error.message).replace(/[\r\n]+/g, ' ')}`); return args.includes('--context') ? 0 : 1; }
+  } catch (error) { stderr(`kim-inbox: ${clean(error.message).replace(/[\r\n]+/g, ' ')}`); return args.includes('--context') ? 0 : (error.exitCode || 1); }
 }
 export const __test = { sweepInfoCandidates, computeSweepInfoSummary, listItems, markSeen };
 if (isEntry(import.meta.url)) process.exitCode = await main();

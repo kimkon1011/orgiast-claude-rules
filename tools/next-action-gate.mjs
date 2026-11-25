@@ -13,6 +13,7 @@ import { isLandingDeferral } from './permanent-fix-deferral-scan.mjs';
 import { ledgerFile, readLedger, latestOpenPromises } from './auto-progress-ledger.mjs';
 import { classifyHandoff } from './lib/handoff-kind.mjs';
 import { judgeBgTurnReport } from './bg-turn-report-gate.mjs';
+import { stripTrailingJournalAnswers } from './lib/strip-trailing-journal.mjs';
 
 export const MIN_ENFORCED_LENGTH = 200;
 const FOOTER_PATTERN = /(?:^|\n)次に kim がすること:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?この後の自動進行:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?このセッション:[ \t]*([^\r\n]*)$/;
@@ -69,9 +70,10 @@ const APPROVAL_HEADING = '【kim 確認用の全文】';
 const SECTION_START_PATTERN = /^(?:[①-⑨]|【|手間監査|恒久策|#{1,6}\s|\[)/;
 // フッター直前40行の【kim 確認用の全文】の位置: missing / not-last（後ろに別の節がある）/ last。
 function approvalPlacement(turnSource) {
-  const footerLabel = turnSource.lastIndexOf('次に kim がすること:');
-  const footerStart = Math.max(0, turnSource.lastIndexOf('\n', footerLabel));
-  const lines = turnSource.slice(0, footerStart).split(/\r?\n/).slice(-40).map(line => line.trim());
+  const source = stripTrailingJournalAnswers(turnSource);
+  const footerLabel = source.lastIndexOf('次に kim がすること:');
+  const footerStart = Math.max(0, source.lastIndexOf('\n', footerLabel));
+  const lines = source.slice(0, footerStart).split(/\r?\n/).slice(-40).map(line => line.trim());
   const heading = lines.lastIndexOf(APPROVAL_HEADING);
   if (heading < 0) return 'missing';
   return lines.slice(heading + 1).some(line => SECTION_START_PATTERN.test(line)) ? 'not-last' : 'last';
@@ -121,7 +123,7 @@ export function enabled() {
 }
 
 export function footerValues(text) {
-  const source = String(text || '').trimEnd();
+  const source = stripTrailingJournalAnswers(String(text || '')).trimEnd();
   const match = source.match(FOOTER_PATTERN);
   if (!match) return null;
   return { nextAction: match[1].trim(), autopilot: match[2].trim(), session: match[3].trim() };

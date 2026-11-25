@@ -66,6 +66,29 @@ export function coolingBackendNames(homeDir, { now = Date.now(), cooldownMs = FA
   return cooling;
 }
 
+// 冷却中候補を keepAtLeastOne/keepNames で残した場合でも、直近に timeout/blocked した
+// backend を先頭へ戻さない。既存 history を再利用し、新しい状態ファイルは作らない。
+export function deprioritizeRecentFailures(backends, history, {
+  now = Date.now(), cooldownMs = FALLBACK_BACKEND_COOLDOWN_MS,
+} = {}) {
+  const list = Array.isArray(backends) ? backends : [];
+  const latest = new Map();
+  for (const row of Array.isArray(history) ? history : []) {
+    const name = String(row?.backend || '').trim();
+    const t = Number(row?.t);
+    if (!name || !Number.isFinite(t)) continue;
+    const previous = latest.get(name);
+    if (!previous || t >= previous.t) latest.set(name, { t, outcome: String(row.outcome || '') });
+  }
+  return [...list].sort((a, b) => {
+    const rank = (backend) => {
+      const row = latest.get(String(backend?.name || ''));
+      return row && /^(timeout|blocked)$/.test(row.outcome) && now - row.t < cooldownMs ? row.t : -Infinity;
+    };
+    return rank(a) - rank(b);
+  });
+}
+
 // backend ごとに直近 windowMs の履歴を集計し、成功率が基準を下回る backend を
 // 末尾へ移す（stable partition）。除外はせず配列長は不変。
 // history が配列でなければ [] 扱い。

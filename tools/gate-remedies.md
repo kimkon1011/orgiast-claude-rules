@@ -450,3 +450,8 @@ claude.ai の「組織の指示」は3,000字上限。組織指示への追記�
 原因: 他レーンの連鎖出力・古い監視表示だけで停止や入金を断定した。
 直し方: `node tools/lane-doctor.mjs --probe`（個別は `--provider codex`）を実行し、lane-health.json の probedAt / viaChain=false / probeResult と一致する30分以内の `[LANE-PROBE: lane=codex at=<ISO時刻> direct=yes result=fail evidence=exit 1]` を本文に添える。全レーン停止には全対象の証拠が必要。実測不能は未確認と書く。Codex の単体確認は `CODEX_DO_CHEAP_FIRST=0 node tools/codex-do.mjs "Reply PONG" --kind implement --no-fallback`。稼働中の安いAIに直接渡し直し作業を続ける。引用行・コードは対象外、同一セッションのブロックは3回まで。
 配布: register-hooks の共通 stop-gate-runner、setup-manifest の実体検査、onboarding-sync の tools 再帰配布、gate-rollout-manifest の全席即時 deny。settings.json の直接編集は不要。
+
+## gemini-api-budget-gate
+
+Gemini API の予算停止中は `node tools/llm-ask.mjs --provider openrouter ...` を代替経路として使う。`gemini-api` の `--dry-run`、`--help`、`whoami`、`version`、`models` は予算停止中も常に実行できる。予算判断が必要な場合は kim-inbox へ送る。
+

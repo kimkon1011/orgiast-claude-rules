@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
+export const GATE_CONTRACT = {"name":"gemini-api-budget-gate","remedies":[{"kind":"repo-file","ref":"tools/gate-remedies.md","section":"gemini-api-budget-gate"}]};
+
 const CACHE_MAX_AGE_MS = 60 * 60 * 1000;
 const STATUS_MAX_AGE_MS = 36 * 60 * 60 * 1000;
 

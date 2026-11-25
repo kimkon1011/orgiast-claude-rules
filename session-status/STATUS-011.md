@@ -1,13 +1,14 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-26 01:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-26 02:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 23
+- 案件数: 24
 
 - 011・3oku-9-17-1125・完了・最終更新 11/25 09:39、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 011・3oku-9-17-1125-quota-test・停止・最終更新 11/25 09:26、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・account-inventory-1123・完了・最終更新 11/24 02:37、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 011・bestone-reschedule-1125・完了・最終更新 11/25 11:35、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 011・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・cursor-hook-fix-1126・停止・最終更新 11/26 01:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・dispatch-1122-21・停止・最終更新 11/22 21:48、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・eight-dai6-1125・停止・最終更新 11/25 21:07、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
 - 011・eight-venue-check-1125・完了・最終更新 11/25 20:27、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、ログに上限・ログアウト・エラー・期限なし・次:なし

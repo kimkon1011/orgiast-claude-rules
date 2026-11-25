@@ -201,7 +201,7 @@ function extractPrNumbers(action) {
  */
 async function prStateView(execImpl, number) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10000);
+  const timer = setTimeout(() => controller.abort(), 30000);
   try {
     const raw = await new Promise((resolve, reject) => {
       execImpl('gh', ['pr', 'view', String(number), '--repo', 'kimkon1011/orgiast-claude-rules', '--json', 'state'],

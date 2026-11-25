@@ -558,6 +558,34 @@ test('live reset timestamp millisecond jitter does not stop an eligible tick', a
   assert.equal(calls, 2); assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'final');
 });
 
+test('Codex primary の resets_at が 5.6 分動いても同じ窓として実行を続ける', async t => {
+  let calls = 0; const ctx = context(t, async () => { calls++; return { code: 0, stdout: JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'FINAL' } }) }; });
+  const codexDecision = { provider: 'codex', window: 'primary', windowMinutes: 300, usedPercent: 70, resetsAt: now + 60 * minute, deadline: now + 57 * minute };
+  ctx.windows = async () => [{ provider: 'codex', window: 'primary', windowMinutes: 300, usedPercent: 70, resetsAt: codexDecision.resetsAt + 5.6 * minute }];
+  await runSweep(codexDecision, ctx);
+  assert.equal(calls, 2);
+  assert.equal(ctx.state.lastRun.codex[codexDecision.resetsAt].outcome, 'final');
+});
+
+test('Codex primary の resets_at が 30 分動いたら別窓として停止する', async t => {
+  let calls = 0; const ctx = context(t, async () => { calls++; return { code: 0, stdout: '' }; });
+  const codexDecision = { provider: 'codex', window: 'primary', windowMinutes: 300, usedPercent: 70, resetsAt: now + 60 * minute, deadline: now + 57 * minute };
+  ctx.windows = async () => [{ provider: 'codex', window: 'primary', windowMinutes: 300, usedPercent: 70, resetsAt: codexDecision.resetsAt + 30 * minute }];
+  await runSweep(codexDecision, ctx);
+  assert.equal(calls, 0);
+  assert.equal(ctx.state.lastRun.codex[codexDecision.resetsAt].outcome, 'deadline');
+  assert.match(ctx.state.lastRun.codex[codexDecision.resetsAt].reason, /利用窓が切り替わった/);
+});
+
+test('Claude 5h の resets_at が 5 分動いたら従来どおり別窓として停止する', async t => {
+  let calls = 0; const ctx = context(t, async () => { calls++; return { code: 0, stdout: '' }; });
+  ctx.windows = async () => windows.map(w => w.window === '5h' ? { ...w, resetsAt: w.resetsAt + 5 * minute } : w);
+  await runSweep(decision, ctx);
+  assert.equal(calls, 0);
+  assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'deadline');
+  assert.match(ctx.state.lastRun.claude[decision.resetsAt].reason, /利用窓が切り替わった/);
+});
+
 test('external rescue branch switch stops ticks and never pushes the wrong ref', async t => {
   const commands = []; let currentBranch = 'quota-sweep/test';
   const ctx = context(t, async () => { currentBranch = 'rescue/external'; return { code: 0, stdout: JSON.stringify({ result: 'ITERATING' }) }; });

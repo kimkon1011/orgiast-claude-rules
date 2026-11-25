@@ -72,7 +72,8 @@ test('installは同じNodeでnpmのJS入口を起動し、失敗理由を残す'
   let calls = 0;
   const run = (exe, args, options) => {
     calls++; assert.equal(exe, process.execPath); assert.match(args[0], /npm(?:-cli\.js)?$/);
-    assert.deepEqual(args.slice(1), ['install', '--no-audit', '--no-fund', 'mupdf']); assert.equal(options.shell, undefined);
+    assert.deepEqual(args.slice(1), ['install', '--prefix', options.cwd, '--no-audit', '--no-fund', 'mupdf']); assert.equal(options.shell, undefined);
+    assert.equal(options.env.INIT_CWD, options.cwd);
     const dist = path.join(options.cwd, 'node_modules/mupdf/dist'); fs.mkdirSync(dist, { recursive: true }); fs.writeFileSync(path.join(dist, 'mupdf.js'), '// fixture');
     return { status: 0 };
   };

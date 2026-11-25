@@ -24,13 +24,15 @@
       "timeoutSeconds": 2400
     },
     {
-      "id": "status-20261125-022744-2371",
-      "kind": "status",
-      "targets": "008XPS8300,014DELL",
-      "why": "seisaku-team 週次上限の退避: 席ガード反映確認（claude を起動しない status のみ）",
+      "id": "prompt-20261125-112915-8271",
+      "kind": "prompt",
+      "targets": "all",
+      "why": "kim 2026-11-25 指示: 止まったセッションの毎時自動再開（PR #2717/#2723/#2725）を全PCに配備し、初回1周の件数を回収する（再送・最新版）",
+      "body": "【全PC配備: 止まったセッションの毎時自動再開（kim 2026-11-25 指示・PR #2717 マージ済み）】\nこのPCで次を順に実行し、結果を報告してください。社外送信・課金・削除はしないでください。\n\n1. ルールリポジトリを origin/main に更新します（PR #2717・#2723・#2725 を含む最新版。止まったセッションの毎時再開、起動直前の判定の修正、他PCへの移管・常設許可の優先・全PC台帳）。\n   `git -C ~/.claude/nightly-repo fetch origin` → `git -C ~/.claude/nightly-repo checkout --detach origin/main`\n2. `node ~/.claude/nightly-repo/tools/setup.mjs --converge` を実行します。\n3. タスクを登録し直します。\n   PowerShell の場合: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$HOME\\.claude\\nightly-repo\\tools\\register-stalled-session-nightly.ps1\"`\n   Git Bash の場合（004 など）: `powershell.exe -NoProfile -Command \"& { powershell.exe -NoProfile -ExecutionPolicy Bypass -File \\\"$env:USERPROFILE\\.claude\\nightly-repo\\tools\\register-stalled-session-nightly.ps1\\\" }\"`\n4. 読み戻して確かめます: `powershell.exe -NoProfile -Command \"Get-ScheduledTask OrgiastWaitDeadlineResume | % { $_.Triggers[0].Repetition.Interval + ' ' + $_.Actions[0].Arguments }; (Get-ScheduledTask OrgiastStalledSessionSweep).State\"`\n   期待値は `PT1H` と `--hourly` を含むこと、そして `Disabled` です。\n5. 1周だけ実行します: `node ~/.claude/nightly-repo/tools/stalled-session-resume.mjs --hourly`\n   出力の rows の skip 理由の件数と、results（再開した件と outcome）の件数を数えます。\n6. 報告: 次の1行を返してください。\n   `PC=<PC番号> 更新=<commit先頭7桁> converge=<ok|失敗理由> タスク=<PT1H/--hourly/Disabled の読み戻し> 再開=<件数> 結果=<progressed/done/waiting-human/stuck の件数> スキップ上位=<理由:件数 を3つ> エラー=<あれば本文>`\n",
       "createdBy": "uers",
-      "createdAt": "2026-11-25T02:27:44.832Z",
-      "expiresAt": "2026-11-25T08:27:44.832Z"
+      "createdAt": "2026-11-25T11:29:15.795Z",
+      "expiresAt": "2026-11-27T11:29:15.795Z",
+      "timeoutSeconds": 2400
     }
   ]
 }

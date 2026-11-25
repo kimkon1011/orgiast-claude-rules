@@ -1793,8 +1793,15 @@ async function mainFetch(argv) {
 }
 
 export function refreshCostDirective({ home, spawn = defaultSpawnSync, env = process.env } = {}) {
-  const seconds = Number(env.COST_DIRECTIVE_TIMEOUT_SECONDS ?? 900);
-  const timeout = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 900_000;
+  // Prefer COST_WORK_LOOP_TIMEOUT_MS (ms); else COST_DIRECTIVE_TIMEOUT_SECONDS (default 900s).
+  const fromMs = Number(env.COST_WORK_LOOP_TIMEOUT_MS);
+  let timeout;
+  if (Number.isSafeInteger(fromMs) && fromMs > 0) {
+    timeout = fromMs;
+  } else {
+    const seconds = Number(env.COST_DIRECTIVE_TIMEOUT_SECONDS ?? 900);
+    timeout = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 900_000;
+  }
   const result = spawn(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], {
     cwd: path.resolve(import.meta.dirname, '..'), env: { ...process.env, ORGIAST_HOME: home },
     encoding: 'utf8', windowsHide: true, timeout,

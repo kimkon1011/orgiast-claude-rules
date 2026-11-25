@@ -14,6 +14,7 @@ import { notifyKim } from './notify-kim.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { parseDeferred } from './lib/executor-gate.mjs';
 import { classifyTaskKind } from './lib/task-kind.mjs';
+import { parseJsonLoose, readJsonFile } from './lib/json-read.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DAY = 86400000;
@@ -241,7 +242,7 @@ export function collect({ home, repos, history = [], observations = {}, now = Da
       if (remote && !remotes.has(remote)) {
         remotes.add(remote);
         items.push(...attempt(`GitHub ${remote}`, () => {
-          const prs = JSON.parse(command('gh', ['pr', 'list', '--repo', remote, '--state', 'open', '--limit', '1000', '--json', 'number,title,url,isDraft,mergeable,updatedAt,statusCheckRollup']));
+          const prs = parseJsonLoose(command('gh', ['pr', 'list', '--repo', remote, '--state', 'open', '--limit', '1000', '--json', 'number,title,url,isDraft,mergeable,updatedAt,statusCheckRollup']), { source: `gh pr list --repo ${remote}` });
           if (prs.length === 1000) warnings.push(`${remote}: PR取得上限、全件性は未確認`);
           return detectOpenPr(prs, now);
         }));
@@ -262,8 +263,8 @@ export function collect({ home, repos, history = [], observations = {}, now = Da
   const tasks = attempt('Windowsスケジュールタスク', () => taskRows());
   items.push(...detectFailedJob([...usage.map(r => ({ ...r, location: path.join(claude, 'executor-usage.jsonl') })), ...tasks], now));
   if (fs.existsSync(path.join(claude, 'projects'))) items.push(...attempt('会話ログ', () => {
-    const result = JSON.parse(command(process.execPath, [path.join(ROOT, 'tools/session-triage.mjs'), '--all', '--all-status', '--older-than', '3', '--top', '100000', '--json'],
-      { env: { ...process.env, CLAUDE_PROJECTS_DIR: path.join(claude, 'projects') }, timeout: 180000 }));
+    const result = parseJsonLoose(command(process.execPath, [path.join(ROOT, 'tools/session-triage.mjs'), '--all', '--all-status', '--older-than', '3', '--top', '100000', '--json'],
+      { env: { ...process.env, CLAUDE_PROJECTS_DIR: path.join(claude, 'projects') }, timeout: 180000 }), { source: 'session-triage stdout' });
     return detectStalledSession(result.sessions, now);
   }));
   items.push(...detectUnverifiedDelegation(delegationLogs(home, repos, warnings), now));
@@ -336,14 +337,14 @@ export async function advanceUncommitted(candidate, { home = process.env.ORGIAST
     run: (file, args, options) => run(file, args, { cwd: repo, ...options }) });
   if (published) return { commit, branch, url: published.url };
   g('push', '--set-upstream', 'origin', `${branch}:refs/heads/${branch}`);
-  const existing = JSON.parse(run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--limit', '1'], { cwd: repo }));
+  const existing = parseJsonLoose(run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--limit', '1'], { cwd: repo }), { source: `gh pr list --head ${branch}` });
   const url = existing[0]?.url || run('gh', ['pr', 'create', '--base', 'main', '--head', branch, '--title', candidate.title,
     '--body', `2日以上停滞した変更を保存しました。\nコミット: ${commit}\n利用可能なテストを実行済み。人のレビューを経てマージしてください。`], { cwd: repo }).trim();
   return { commit, branch, url };
 }
 export function fileTestFailure(candidate, error, run = command) {
   const marker = `stall-sweeper-${hash(candidate.id)}`;
-  const list = JSON.parse(run('gh', ['issue', 'list', '--state', 'open', '--search', marker, '--json', 'title,url', '--limit', '100'], { cwd: candidate.cwd }));
+  const list = parseJsonLoose(run('gh', ['issue', 'list', '--state', 'open', '--search', marker, '--json', 'title,url', '--limit', '100'], { cwd: candidate.cwd }), { source: 'gh issue list stdout' });
   const existing = list.find(i => i.title.includes(marker));
   if (existing) return existing.url;
   return run('gh', ['issue', 'create', '--title', `テスト失敗: ${path.basename(candidate.cwd)} [${marker}]`, '--body',
@@ -412,7 +413,7 @@ export async function advanceDelegated(candidate, { outputDir, run = command }) 
   }
   fs.writeFileSync(path.join(outputDir, `${stem}.log`), redactSecrets(`${stdout}${recovery ? `\n${recovery}\n` : ''}`));
   if (!foundReceipt) throw Object.assign(new Error('委譲結果ファイルを確認できません'), { code: 'RECEIPT_MISSING' });
-  const result = JSON.parse(read(foundReceipt));
+  const result = readJsonFile(foundReceipt);
   if (result.completed === false) return { completed: false, summary: result.summary || result.reason || '対応不要または未完了', recovery };
   if (result.completed !== true || !result.summary || !result.evidence?.file || !/^[a-f0-9]{64}$/.test(result.evidence.sha256 || '')) throw new Error('委譲成果の完了証拠がありません');
   const actual = crypto.createHash('sha256').update(fs.readFileSync(localPath(result.evidence.file))).digest('hex');

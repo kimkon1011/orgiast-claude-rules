@@ -35,6 +35,9 @@ async function fixture(t, count = 5) {
   let calls = 0, notices = 0;
   const records = Array.from({ length: count }, (_, i) => ({ sessionId: `session-${i}`, displayTitle: `Task ${i}`, file: `file-${i}`, cwd: home, status: '要対応', score: 100 - i, ageDays: 1 }));
   const io = { home, openChecks: () => [{ check: "fixture" }], executeCheck: () => ({ code: 0 }), addItem: async () => ({ id: 'test-ask' }), now: () => time, detect: async () => records, stat: async () => ({ mtimeMs: time - 86400000 }),
+    classifyHourly: async () => ({ action: 'resume', reason: 'fixture', nextStep: '検証を実行', fingerprint: 'fixture' }),
+    evaluateGuard: async () => ({ blocked: false, reason: 'below-threshold', weeklyPercent: 20, fiveHourPercent: 10 }),
+    publishHeartbeat: async () => ({ pushed: true }),
     execute: async () => { calls++; return { outcome: 'no-progress' }; }, notify: async () => { notices++; return { delivered: 'dm' }; } };
   const file = path.join(home, '.claude/stalled-session-resume.json');
   return { io, file, records, next: () => { time += 86400000; }, calls: () => calls, notices: () => notices, ledger: async () => JSON.parse(await fs.readFile(file, 'utf8')) };
@@ -607,7 +610,7 @@ test('exceptions retain explicit not-started executor in persisted attempt', asy
 });
 test('hourly task uses hidden runner, hourly :20 trigger and verified settings with required repair', async () => {
   const ps = await fs.readFile(new URL('./register-stalled-session-nightly.ps1', import.meta.url), 'utf8');
-  assert.match(ps, /New-HiddenScheduledTaskAction -Execute \$node -ChildArgument @\(\$sweepScript, '--hourly'\)/);
+  assert.match(ps, /New-HiddenScheduledTaskAction -Execute 'powershell.exe'.*\$nb, '-Target', 'tools\\stalled-session-resume.mjs', '--hourly'/);
   assert.match(ps, /AddMinutes\(20\)/);
   assert.match(ps, /-RepetitionInterval \(New-TimeSpan -Hours 1\)/);
   assert.match(ps, /-MultipleInstances IgnoreNew -ExecutionTimeLimit \(New-TimeSpan -Hours 2\)/);
@@ -986,6 +989,7 @@ test('overdue invokes claude --resume and removes API credentials', async t => {
 test('hourly with wait invokes claude --resume when hourly resume is enabled', async t => {
   const f = await fixture(t, 1); let size = 10; const calls = [];
   const result = await execute(f.records[0], { timeoutMs: 1000, event: 'hourly', wait: { key: 'deadline', label: '09/23 12:00' } }, {
+    home: f.io.home, evaluateGuard: f.io.evaluateGuard, fetchClaudePlanUsage: async () => ({ available: false }), runningProcesses: () => [], verifyFork: async () => true,
     hourlyResumePolicy: () => ({ hourlyResume: true }), executable: 'claude-fixture', stat: async () => ({ size }),
     execFile: async (_, args) => {
       calls.push(args);
@@ -995,12 +999,13 @@ test('hourly with wait invokes claude --resume when hourly resume is enabled', a
     },
     runChild: () => assert.fail('fallback forbidden'), readReport: async () => ({ state: 'progressed', evidence: 'verified' }),
   });
-  assert.deepEqual(calls[1].slice(0, 3), ['--resume', 'session-0', '-p']);
+  assert.deepEqual(calls[0].slice(0, 3), ['--resume', 'session-0', '--fork-session']);
   assert.equal(result.outcome, 'progressed');
 });
 test('hourly without wait invokes claude --resume with a natural deferred prompt', async t => {
   const f = await fixture(t, 1); let size = 10; let prompt;
   const result = await execute(f.records[0], { timeoutMs: 1000, event: 'hourly' }, {
+    home: f.io.home, evaluateGuard: f.io.evaluateGuard, fetchClaudePlanUsage: async () => ({ available: false }), runningProcesses: () => [], verifyFork: async () => true,
     hourlyResumePolicy: () => ({ hourlyResume: true }), executable: 'claude-fixture', stat: async () => ({ size }),
     execFile: async (_, args) => {
       if (args[0] === '--help') return { stdout: '--resume --print' };

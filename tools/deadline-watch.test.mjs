@@ -165,6 +165,34 @@ test('例外時はheartbeatがok=falseでsummaryに期限追跡エラーを含�
   assert.doesNotMatch(heartbeats[0].summary, /スキップ/);
 });
 
+for (const [sourceKey, message] of [
+  ['threadId', 'Google GET HTTP 404'],
+  ['messageId', 'reason: notFound'],
+  ['threadId', 'Google GET HTTP 403 Forbidden'],
+]) {
+  const missing = !message.includes('403');
+  test(`Gmail ${message} (${sourceKey}) は exit ${missing ? 0 : 1}、期限通知を続ける`, async t => {
+    const home = homeFor(t), output = [];
+    const row = { ...base, due: '2026-11-05', source: 'gmail', detectedAt: '2026-11-03',
+      notes: JSON.stringify({ mailbox: 'kim@orgiast.jp', [sourceKey]: 'missing' }) };
+    const fixture = path.join(home, 'ledger.json');
+    fs.writeFileSync(fixture, JSON.stringify({ config, rows: [row] }));
+    const code = await main(['--dry-run', '--now', '2026-11-04', '--fixture', fixture], {
+      home, stdout: x => output.push(x),
+      request: async url => {
+        assert.ok(url.includes(sourceKey === 'threadId' ? '/threads/missing' : '/messages/missing'));
+        throw Error(message);
+      },
+    });
+    assert.equal(code, missing ? 0 : 1);
+    const result = JSON.parse(output[0]);
+    assert.deepEqual(result.errors, missing ? [] : [{ id: row.id, phase: 'auto-close', error: message }]);
+    assert.deepEqual(result.warnings, missing ? [{ id: row.id, phase: 'auto-close', warning: '元メールが見つからない(404)' }] : []);
+    assert.equal(result.decisions[0].status, '未着手');
+    assert.equal(result.decisions[0].notify, true);
+  });
+}
+
 test('鍵持ちのkim席はfixtureモードで通常動作（fixtureはseat checkをスキップ）', async t => {
   const home=homeFor(t), output=[];
   const code = await main(['--dry-run','--now','2026-11-04','--fixture','tools/fixtures/deadline/ledger.json'], { home, stdout: x => output.push(x), skipSeatCheck: false, request: async () => assert.fail('network'), heartbeat: async () => assert.fail('heartbeat'), notify: async () => assert.fail('notify') });

@@ -1232,6 +1232,7 @@ Claude Code・Codex・安いLLMは**APIがあるものしか触れない**。だ
 ## 他AIは「積極的に使う」のが既定（kim 2026-10-09 厳命・全PC全アカウント）
 
 **🔴 他AI（Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM）は使うのが既定、Claudeだけは理由が必要。残高切れは入金（オートチャージON）、キー失効/403は再発行、429は別の他AIへ。「外す／やめる／縮小」を選択肢にせず、障害は別の他AIで吸収し復旧後に戻す。割り振りは先に具体名で書く（要約=Gemini、下書き=Kimi、実装=Codex、Claude=verify）。「必要なら使う」は禁止。**
+> **🔴 gemini-api[/gemini-api-cli skill]: 画像生成、PDF/動画/音声読解/文字起こし/長い調査。llm-ask: 分類/要約/下書き。先に --help/--dry-run。--stream=false -o json→ファイルpath+interaction ID→次工程。**
 - **🔴 この原則はアプリが実行時に呼ぶ LLM/検索 API にも適用する（§2.8.0・2026-10-17 追加）。** Claude Code の作業レーンだけの話ではない。
 
 #### 1.18.5 AIレーン放置禁止と手渡し前の代替検証

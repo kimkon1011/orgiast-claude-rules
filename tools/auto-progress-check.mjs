@@ -63,6 +63,21 @@ export function hasBashEnvExpansion(command) {
   return /(?<!\\)\$env:/i.test(command);
 }
 
+/** squash merge 後の main では成立しない、ブランチコミット依存の着地判定。 */
+export function isSquashUnsafeLandingCheck(check) {
+  const command = String(check || '');
+  const branchCommitAncestor = /\bmerge-base\b/i.test(command)
+    && /--is-ancestor\b/i.test(command)
+    && /(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-f])/i.test(command);
+  if (branchCommitAncestor) return true;
+
+  const logsMain = /\bgit\s+log\b[^\r\n|;&]*(?:origin\/(?:main|master))\b/i.test(command);
+  const pipesToGrep = /\|\s*grep\b/i.test(command);
+  const identifiesPr = /\(#\d+\)/.test(command)
+    || /--grep(?:=|\s+)(?:["'][^"']*)?#\d+/i.test(command);
+  return logsMain && pipesToGrep && !identifiesPr;
+}
+
 /** Quoted/relative script paths are resolved against the check's working directory.
  * This is a literal source scan, not a shell parser or an audit of imported files.
  */
@@ -111,6 +126,10 @@ export function preflightCheck(row, { home, forceCheck = false, allowSessionStat
   }
   for (const warning of checkPatternWarnings(row.check)) console.error(`check preflight 警告: ${warning}`);
   // 静的検査
+  if (!forceCheck && isSquashUnsafeLandingCheck(row.check)) {
+    const msg = 'squash マージ後はブランチのコミット SHA・件名が main に残らないため、この check は永久に未達になります。PR の着地は `git log origin/main --format=%s | grep -qF \'(#<PR番号>)\'` か `gh pr view <番号> --json state -q .state | grep -qx MERGED` で判定してください';
+    return { ok: false, code: 2, text: msg, stderr: msg, preflight: 'static_error' };
+  }
   if (!forceCheck && hasBashEnvExpansion(row.check)) {
     const msg = [
       `静的検査に失敗しました。check 文字列に '$env:' が含まれています。`,

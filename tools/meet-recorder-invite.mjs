@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { sanitizeAttendees } from './lib/calendar-shared.mjs';
+import { sanitizeAttendees, isInternalEmail, loadStaffAddresses } from './lib/calendar-shared.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
@@ -59,13 +59,13 @@ function isNoRecord(text) {
   return /録画不要|録画しない|no-record|no[\uFF0D\-]record/i.test(t);
 }
 
-function isInternalOnly(attendees) {
+function isInternalOnly(attendees, staffAddresses = []) {
   if (!attendees || !attendees.length) return true;
   return attendees.every(a => {
     if (a.self) return true;
     if (a.resource) return true;
     if (!a.email) return true;
-    return a.email.toLowerCase().endsWith('@orgiast.jp');
+    return isInternalEmail(a.email, staffAddresses);
   });
 }
 
@@ -79,7 +79,7 @@ function isMeePrefix(summary) {
   return /^\s*M\s*[:：]/i.test(t);
 }
 
-function isTargetEvent(event) {
+function isTargetEvent(event, staffAddresses = []) {
   if (event.status === 'cancelled') return false;
   if (!hasMeetLink(event)) return false;
   if (!event.organizer?.self) return false;
@@ -104,7 +104,7 @@ function isTargetEvent(event) {
   }
 
   // Has other attendees — target only if at least one is external
-  return !isInternalOnly(attendees);
+  return !isInternalOnly(attendees, staffAddresses);
 }
 
 function buildPatchBody(event, log) {
@@ -201,7 +201,8 @@ export async function run(options = {}, deps = {}) {
     const token = await getToken();
 
     const events = deps.events || await listAllEvents(token, days, fetchImpl);
-    const targets = events.filter(isTargetEvent);
+    const staffAddresses = loadStaffAddresses(home);
+    const targets = events.filter(e => isTargetEvent(e, staffAddresses));
 
     const result = {
       at: new Date(now).toISOString(),

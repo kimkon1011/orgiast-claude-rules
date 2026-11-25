@@ -14,10 +14,13 @@ import { acquireLock } from './autopilot-tick.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { isEntry } from './is-entry.mjs';
-import { autoResumeAllowed, eventResumeAllowed, autoResumeDisabledByConfig } from './lib/auto-resume-policy.mjs';
+import { autoResumeAllowed, eventResumeAllowed, hourlyResumePolicy, autoResumeDisabledByConfig } from './lib/auto-resume-policy.mjs';
+import { evaluateClaudeSeatGuard, formatClaudeSeatGuardSkip } from './lib/claude-seat-guard.mjs';
 
 import { latestSafeStart, parseWaitFooter } from './lib/wait-deadline.mjs';
 import { executeCheck, isTimeOnlyCheck } from './auto-progress-check.mjs';
+import { fetchClaudePlanUsage } from './claude-plan-usage.mjs';
+import { collectGbReportEntries, writeStallLedger } from './stall-ledger.mjs';
 import { latestOpenPromises, ledgerFile as progressLedgerFile, readLedger } from './auto-progress-ledger.mjs';
 import { readTranscriptContext } from './lib/assistant-text.mjs';
 import { footerValues, NO_ACTION_PATTERN } from './next-action-gate.mjs';
@@ -59,11 +62,12 @@ function parseLimit(value) {
 }
 
 export function options(argv = [], env = process.env) {
-  const overdue = argv.includes('--overdue') || env.STALLED_SESSION_MODE === 'overdue';
-  const out = { overdue, limit: parseLimit(env.STALLED_SESSION_LIMIT ?? (overdue ? '2' : 'all')), timeoutMs: Number(env.STALLED_SESSION_TIMEOUT_MIN ?? 20) * 60000,
+  const hourly = argv.includes('--hourly') || env.STALLED_SESSION_MODE === 'hourly';
+  const overdue = hourly || argv.includes('--overdue') || env.STALLED_SESSION_MODE === 'overdue';
+  const out = { overdue, hourly, limit: parseLimit(env.STALLED_SESSION_LIMIT ?? (hourly ? '4' : overdue ? '2' : 'all')), timeoutMs: Number(env.STALLED_SESSION_TIMEOUT_MIN ?? 20) * 60000,
     activeMs: Number(env.STALLED_SESSION_ACTIVE_MIN ?? 10) * 60000, concurrency: Number(overdue ? 1 : (env.STALLED_SESSION_CONCURRENCY ?? 2)), deadline: env.STALLED_SESSION_DEADLINE ?? '07:30', dryRun: false, list: false };
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--overdue') continue;
+    if (argv[i] === '--overdue' || argv[i] === '--hourly') continue;
     if (argv[i] === '--limit') out.limit = parseLimit(argv[++i]);
     else if (argv[i] === '--deadline') out.deadline = argv[++i];
     else if (argv[i] === '--concurrency') out.concurrency = Number(argv[++i]);
@@ -108,13 +112,13 @@ export async function saveJson(file, value, rename = fs.rename) {
     throw error;
   }
 }
-export async function detect(overdue = false) {
+export async function detect(overdue = false, hourly = false) {
   const files = await listFiles();
   const inspected = await Promise.all(files.map(inspect));
   if (overdue) {
     for (const [index, record] of inspected.entries()) {
       const file = files[index];
-      if (!record || !waitDeadline(record.displayTitle)) continue;
+      if (!record || (!hourly && !waitDeadline(record.displayTitle))) continue;
       const { assistantText, raw } = readTranscriptContext(record.file);
       record.lastAssistantText = assistantText;
       const extension = waitExtension(raw);
@@ -124,6 +128,11 @@ export async function detect(overdue = false) {
     }
   }
   return inspected.filter(Boolean);
+}
+
+const DEFERRED_PHRASE = /(?:次回|次の起動|後で(?:やる|対応)|以降に(?:実施|再開|対応)|復帰(?:後|したら)|明日(?:やる|対応)|上限.*(?:待ち|解除)|17:02以降)/;
+export function deferredPhrase(text = '') {
+  return DEFERRED_PHRASE.test(String(text ?? ''));
 }
 
 // 再開の連鎖: execute() が作る子セッションの初回プロンプトは
@@ -196,6 +205,26 @@ function eventLimit(attempts, sessionId, now) {
   return null;
 }
 
+export function hourlyEventLimit(attempts, sessionId, now, { hourlyCap = 4, perSessionDailyCap = 6 } = {}) {
+  const recent = attempts.filter(attempt => attempt.at > now - HOUR_MS);
+  if (recent.length >= hourlyCap) return 'global';
+  const today = localDate(new Date(now));
+  if (attempts.filter(attempt => attempt.sessionId === sessionId && localDate(new Date(attempt.at)) === today).length >= perSessionDailyCap) return 'daily';
+  return null;
+}
+
+export function hourlySkipReason(record, entry, closed, mtimeMs, now, activeMs) {
+  const common = skipReason(record, {}, '', closed, mtimeMs, now, activeMs);
+  if (common && common !== '3回進捗なし') return common;
+  if ((entry.noProgress ?? 0) >= 3) return '3回進捗なし';
+  const wait = recordWait(record, now);
+  if (wait) return wait.at <= now ? '' : '待機期限前';
+  if (now - mtimeMs < HOUR_MS) return '60分未満';
+  if (now - mtimeMs > 7 * 24 * HOUR_MS) return '7日超過';
+  if (!deferredPhrase(record.lastAssistantText)) return '先送り表現なし';
+  return '';
+}
+
 async function addOverdueInbox(io, home, item) {
   const add = io.addItem ?? (await import('./kim-inbox.mjs')).addItem;
   await add(home, item);
@@ -261,7 +290,10 @@ export function skipReason(record, entry, night, closed, mtimeMs, now, activeMs)
 // これにより transcript に追記され、kim がリモート表示で進捗を見られる。
 // 予備として cheap-code フォールバックも残すが、transcript が増えなければ progressed にしない。
 async function executeOverdue(record, { timeoutMs, resultFile, previous = [], wait }, io = {}) {
+  const guardVerdict = io.guardVerdict ?? await (io.evaluateGuard ?? evaluateClaudeSeatGuard)({ home: io.home ?? process.env.ORGIAST_HOME ?? os.homedir(), env: process.env, caller: 'stalled-session-resume:wait-deadline' });
+  if (guardVerdict.blocked) return { outcome: 'skipped', executor: 'none', reason: formatClaudeSeatGuardSkip(guardVerdict) };
   const prompt = `停滞セッション「${record.displayTitle}」(${record.sessionId})の承認済みの目的を1歩進めてください。
+「次回やる」で終わらせない。先送りするなら、応答の「このセッション」行に新しい期限【MM/DD/HH:MMまで】を書く（毎時の再開ジョブが拾う）。常設許可がある送信（config/standing-send-permissions.json に列挙）は承認待ちに積まず、その許可の範囲で送信して結果を記録する。
 このセッションの待機期限 ${wait.label} を過ぎました。待っていた事項（相手の返信・外部の状態・自動チェック）を直接照会し、(a) 進められるなら最後まで進めて検証する (b) 人の判断や操作が必要なら kim-inbox に ask を積み（node tools/kim-inbox.mjs）、応答の「このセッション」行に新しい期限を書く (c) 目的が完了していれば /session-close を実行する。期限を書き換えるだけで終えない。
 元の会話全文を ${record.file} から読み、依頼・制約・成果物を確認して続行してください。推測で目的を広げないでください。
 共有作業ツリーの他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。個別の通知は不要です。
@@ -324,6 +356,7 @@ stuck=それ以外で進められなかった。
 単なる進捗確認・計画・終了コード0は成果に含めません。\n当初依頼: ${record.firstPrompt}\n直近: ${record.lastAssistantText}`;
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, record.cwd, record.cwd, timeoutMs, { resumeSessionId: record.sessionId });
   const execution = { executor: result.executorUsed || 'not-started', executorAttempts: result.executorAttempts ?? [] };
+  if (result.skippedSeatGuard) return { ...execution, outcome: 'skipped', reason: String(result.stdout || result.stderr || 'claude-seat-guard') };
   if (result.skippedNoExecutor) return { ...execution, outcome: 'no-executor', reason: `実行役なし: ${String(result.stderr ?? '').trim().slice(-300) || result.executorUsed || 'cheap-code'}` };
   const timedOut = result.status === 'timeout';
   if (result.status !== 'success' && !timedOut) return { ...execution, outcome: 'error', reason: result.status };
@@ -351,12 +384,18 @@ stuck=それ以外で進められなかった。
   return { outcome, reason: outcome === 'timeout' ? result.status : reason, ...(outcome === 'waiting-human' ? { askId: report.askId.trim() } : {}), ...execution };
 }
 
-export async function execute(record, { timeoutMs, resultFile, previous = [], wait = null, event }, io = {}) {
-  const allowed = wait ? ['check-met', 'due-risk'].includes(event) && eventResumeAllowed() : autoResumeAllowed();
+export async function execute(record, { timeoutMs, resultFile, previous = [], wait = null, event, hourly = false }, io = {}) {
+  let allowed;
+  if (hourly) {
+    const policy = io.hourlyResumePolicy ?? hourlyResumePolicy;
+    allowed = policy().hourlyResume;
+  } else {
+    allowed = wait ? ['check-met', 'due-risk'].includes(event) && eventResumeAllowed() : autoResumeAllowed();
+  }
   if (!allowed) return { outcome: 'disabled', reason: '自動再開は廃止（config/auto-resume.json）', executor: 'none' };
-  // overdue モードでは claude --resume でセッション自身を再開する
-  if (wait) {
-    return executeOverdue(record, { timeoutMs, resultFile, previous, wait }, io);
+  // hourly モード・overdue モードでは claude --resume でセッション自身を再開する
+  if (hourly || wait) {
+    return executeOverdue(record, { timeoutMs, resultFile, previous, wait: wait ?? { label: 'hourly' } }, io);
   }
   const prompt = `停滞セッション「${record.displayTitle}」(${record.sessionId})の承認済みの目的を1歩進めてください。
 元の会話全文を ${record.file} から読み、依頼・制約・成果物を確認して続行してください。推測で目的を広げないでください。
@@ -371,6 +410,7 @@ stuck=それ以外で進められなかった。
 単なる進捗確認・計画・終了コード0は成果に含めません。\n当初依頼: ${record.firstPrompt}\n直近: ${record.lastAssistantText}`;
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, record.cwd, record.cwd, timeoutMs, { resumeSessionId: record.sessionId });
   const execution = { executor: result.executorUsed || 'not-started', executorAttempts: result.executorAttempts ?? [] };
+  if (result.skippedSeatGuard) return { ...execution, outcome: 'skipped', reason: String(result.stdout || result.stderr || 'claude-seat-guard') };
   // 実行役が1つも起動できない(cheap-code 全レーン停止・Claude フォールバック無効)のはセッションの失敗ではない。
   // 2026-10-26 実測: deepseek payment_required で2件が1秒で error 扱い→「連続2件エラーで中止」の誤通知と noProgress 消費。
   // 実行役記録を常に伝播させる（executorAttempts）
@@ -419,7 +459,21 @@ function openChecks(home, sessionId) {
 
 export async function run(config = options(), io = {}) {
   const overdue = config.overdue === true;
+  const hourly = config.hourly === true;
+  const hourlyPolicy = (io.hourlyResumePolicy ?? hourlyResumePolicy)();
+  if (hourly) config.limit = Math.min(config.limit, hourlyPolicy.hourlyCap);
   const home = io.home ?? process.env.ORGIAST_HOME ?? os.homedir();
+  let usageState = 'not-checked';
+  let usageBlocked = false;
+  if (hourly && !config.dryRun && !config.list) {
+    const usage = await (io.fetchClaudePlanUsage ?? fetchClaudePlanUsage)({ home });
+    if (!usage?.available) usageState = 'usage-unknown';
+    else {
+      const high = Math.max(Number(usage.fiveHour?.utilization) || 0, Number(usage.sevenDay?.utilization) || 0);
+      usageState = `usage-${high}`;
+      usageBlocked = high >= hourlyPolicy.planUsageStopPct;
+    }
+  }
   const dir = path.join(home, '.claude');
   const ledgerFile = path.join(dir, 'stalled-session-resume.json');
   const lockFile = `${ledgerFile}.lock`;
@@ -505,10 +559,25 @@ export async function run(config = options(), io = {}) {
         deadlineAt: wait?.at ?? Infinity
       };
     };
+    const hourlyOrder = record => {
+      const wait = recordWait(record, now());
+      const parsedDue = parseWaitFooter(record.lastAssistantText).due;
+      const dueAt = parsedDue?.getTime?.() ?? wait?.at ?? Infinity;
+      const dueSoon = dueAt >= now() && dueAt <= now() + 24 * HOUR_MS;
+      return { dueSoon, dueAt, expiredAt: wait?.at <= now() ? wait.at : Infinity, deferredOnly: !wait };
+    };
     const overdueTitle = record => overdueOrder(record).expired;
-    const records = (await (io.detect ?? detect)(overdue))
-      .filter(r => overdue ? !!recordWait(r, now()) : ['要対応', '要確認'].includes(r.status))
+    const records = (await (io.detect ?? detect)(overdue, hourly))
+      .filter(r => overdue ? (hourly ? !!recordWait(r, now()) || deferredPhrase(r.lastAssistantText) : !!recordWait(r, now())) : ['要対応', '要確認'].includes(r.status))
       .sort((a, b) => {
+        if (hourly) {
+          const left = hourlyOrder(a), right = hourlyOrder(b);
+          return Number(right.dueSoon) - Number(left.dueSoon)
+            || left.dueAt - right.dueAt
+            || left.expiredAt - right.expiredAt
+            || Number(left.deferredOnly) - Number(right.deferredOnly)
+            || (a.ageDays ?? 0) - (b.ageDays ?? 0);
+        }
         if (overdue) {
           const left = overdueOrder(a), right = overdueOrder(b);
           return Number(right.deferredAt) - Number(left.deferredAt)
@@ -542,7 +611,7 @@ export async function run(config = options(), io = {}) {
         // 連鎖の子は、祖先が積んだ noProgress を引き継いでから数える（夜ごとに id が変わっても
         // 「同じ目的への挑戦」として合計3回で retire させる）。
         const wait = recordWait(record, now());
-        const overdueKey = JSON.stringify([record.sessionId, wait?.key]);
+        const overdueKey = JSON.stringify([record.sessionId, wait?.key ?? 'hourly-deferred']);
         const entries = overdue ? ledger.overdue : ledger.sessions;
         const entryKey = overdue ? overdueKey : record.sessionId;
         const entry = entries[entryKey] ?? { attempts: [], noProgress: (overdue ? 0 : chainNoProgress(ledger, parentId)) };
@@ -558,9 +627,9 @@ export async function run(config = options(), io = {}) {
           if (!readonly) { entry.skipReason = '会話ファイル欠損'; entries[entryKey] = entry; }
           continue;
         }
-        const resumeAllowed = overdue ? (io.eventResumeAllowed ?? eventResumeAllowed)() : autoResumeAllowed();
+        const resumeAllowed = hourly ? hourlyPolicy.hourlyResume && !usageBlocked : overdue ? (io.eventResumeAllowed ?? eventResumeAllowed)() : autoResumeAllowed();
         const eligibilityEntry = overdue || resumeAllowed ? entry : {};
-        let reason = overdue ? overdueSkipReason(record, eligibilityEntry, closed, record.activityMtimeMs ?? mtimeMs, now(), config.activeMs) : skipReason(record, eligibilityEntry, night, closed, mtimeMs, now(), config.activeMs);
+        let reason = hourly ? hourlySkipReason(record, eligibilityEntry, closed, record.activityMtimeMs ?? mtimeMs, now(), config.activeMs) : overdue ? overdueSkipReason(record, eligibilityEntry, closed, record.activityMtimeMs ?? mtimeMs, now(), config.activeMs) : skipReason(record, eligibilityEntry, night, closed, mtimeMs, now(), config.activeMs);
         if (overdue && record.detectedMtimeMs !== undefined && record.detectedMtimeMs !== mtimeMs) reason = 'active';
         const row = { sessionId: record.sessionId, title: record.displayTitle, attempts: entry.attempts.length, skip: reason };
         rows.push(row);
@@ -571,7 +640,7 @@ export async function run(config = options(), io = {}) {
           const safeStart = latestSafeStart(due, remainingMs);
           // 一覧・dry-run では外部 check を実行しない。
           if (readonly) {
-            row.plannedAction = resumeAllowed ? 'open check と納期を判定' : '納期と次の確認時刻を判定';
+            row.plannedAction = hourly && resumeAllowed ? '毎時再開' : hourly && usageBlocked ? '他PCへ移管' : resumeAllowed ? 'open check と納期を判定' : '納期と次の確認時刻を判定';
             continue;
           }
           const checks = (io.openChecks ?? openChecks)(home, record.sessionId);
@@ -581,7 +650,7 @@ export async function run(config = options(), io = {}) {
             row.skip = 'active';
             continue;
           }
-          event = met ? 'check-met' : safeStart && checkedAt >= safeStart.getTime() ? 'due-risk' : null;
+          event = met ? 'check-met' : safeStart && checkedAt >= safeStart.getTime() ? 'due-risk' : hourly ? 'hourly' : null;
           const footer = footerValues(String(record.lastAssistantText ?? '').replace(/：/g, ':'));
           if (!checks.length && footer?.nextAction && !NO_ACTION_PATTERN.test(footer.nextAction) &&
               /判断|承認|決裁|同意|支払|署名|押印|選択/.test(footer.nextAction)) {
@@ -613,7 +682,9 @@ export async function run(config = options(), io = {}) {
             }
             continue;
           }
-          const limit = eventLimit(ledger.eventAttempts, record.sessionId, checkedAt);
+          const limit = hourly
+            ? hourlyEventLimit(ledger.eventAttempts, record.sessionId, checkedAt, hourlyPolicy)
+            : eventLimit(ledger.eventAttempts, record.sessionId, checkedAt);
           if (limit) {
             await notifyEventLimit(io, home, ledger.eventLimitNotices, record.sessionId, limit, checkedAt);
             reason = limit === 'global' ? 'イベント再開の時間上限' : 'イベント再開の日次上限';
@@ -703,7 +774,7 @@ export async function run(config = options(), io = {}) {
               ledger.eventAttempts.push({ sessionId: record.sessionId, at });
               await save(ledger);
             }
-            result = await (io.execute ?? execute)(record, { timeoutMs: config.timeoutMs, resultFile, previous: entry.attempts.slice(-4, -1), wait: overdue ? wait : null, event });
+            result = await (io.execute ?? execute)(record, { timeoutMs: config.timeoutMs, resultFile, previous: entry.attempts.slice(-4, -1), wait: overdue ? wait : null, event, hourly });
             if (!['progressed', 'done', 'waiting-human', 'no-progress', 'no-report', 'timeout', 'error', 'no-executor', 'not-in-session', 'disabled'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
           } catch (error) { const msg = String(error.message ?? ''); result = { outcome: /timeout|timed out|ETIMEDOUT|aborted due to timeout/i.test(msg) ? 'timeout' : 'error', reason: msg }; }
           if (humanAsk && ['error', 'not-in-session', 'no-executor', 'disabled', 'timeout'].includes(result.outcome) && !entry.waitingHuman) {
@@ -757,8 +828,17 @@ export async function run(config = options(), io = {}) {
           if (overdue && (entry.noProgress ?? 0) >= 3 && entry.attempts.filter(a => a.outcome === 'no-progress').length >= 3 && !entry.notifiedNoProgress) {
             entry.skipReason = '3回進捗なし';
             entry.notifiedNoProgress = true;
-            try { await (io.notify ?? notifyKim)(`${record.displayTitle} は期限切れ再開を3回試しても進まないため自動再開を止めました`, { home }); }
+            try { await addOverdueInbox(io, home, { kind: 'ask', source: 'stall-hourly-no-progress', sessionId: record.sessionId,
+              dedupeKey: `stall-hourly-no-progress:${record.sessionId}:${localDate(new Date(now()))}`,
+              text: `${record.displayTitle}：3回再開しても進まないため停止。止まっている理由: ${attempt.reason || '進捗記録なし'}。判断してほしいこと: 自動再開を続けるか、終了するか。` }); }
             catch { /* 通知失敗は再開に影響させない */ }
+          }
+          const hourlyDue = hourly ? parseWaitFooter(record.lastAssistantText).due : null;
+          if (hourlyDue && hourlyDue.getTime() <= now() + 24 * HOUR_MS && !['progressed', 'done'].includes(attempt.outcome)) {
+            try { await addOverdueInbox(io, home, { kind: 'ask', source: 'stall-hourly-due-risk', sessionId: record.sessionId,
+              dedupeKey: `stall-hourly-due-risk:${record.sessionId}:${localDate(new Date(now()))}`,
+              text: `${record.displayTitle}：納期${hourlyDue.toISOString()}まで24時間以内。止まっている理由: ${attempt.reason || attempt.outcome}。判断してほしいこと: 残作業の優先順位または進め方を決めてください。` }); }
+            catch { /* 次回再試行 */ }
           }
           // overdue で同一期限3回エラーになったら kim-inbox に info を1回だけ積む。
           if (overdue && entry.attempts.filter(a => a.via && a.outcome !== 'not-in-session').length >= 3 && !entry.notified3Error && !OVERDUE_SUCCESS_OUTCOMES.has(attempt.outcome)) {
@@ -806,11 +886,20 @@ export async function run(config = options(), io = {}) {
       }
       const logEntry = {
         ts: startedAt, endedAt: new Date(now()).toISOString(), host: os.hostname(), pid: process.pid,
-        night, mode: config.dryRun ? 'dry' : config.list ? 'list' : 'run', outcome, counts,
+        night, mode: hourly ? 'hourly' : config.dryRun ? 'dry' : config.list ? 'list' : 'run', outcome, counts, usage: usageState,
         ...(lockInfo ? { reclaimedLock: lockInfo } : {}),
         ...(fatal || thrown ? { error: redactSecrets(String((thrown?.message ?? thrown) || (fatal?.message ?? fatal))).slice(0, 2000) } : {})
       };
       await writeLog(home, logEntry).catch(() => {});
+      if (hourly) {
+        const resultById = new Map(results.map(item => [item.sessionId, item]));
+        const entries = rows.filter(row => row.skip !== '完了済み').map(row => {
+          const result = resultById.get(row.sessionId);
+          return { title: row.title, sessionId: row.sessionId, type: row.skip === '3回進捗なし' ? '打ち切り' : row.title?.includes('まで】') ? '期限切れ' : '先送り', lastResult: result?.outcome || row.skip || '候補', lastAttemptAt: result?.endedAt || now() };
+        });
+        if (os.hostname() === '000KimPC') entries.push(...collectGbReportEntries({ now: now() }));
+        try { writeStallLedger({ home, hostname: os.hostname(), entries, now: now() }); } catch { /* 台帳失敗で再開結果を失わない */ }
+      }
       if (outcome === 'error' && !config.dryRun && !config.list) {
         const reason = redactSecrets(String(thrown?.message ?? thrown ?? fatal?.message ?? fatal ?? '')).slice(0, 200);
         const msg = `停滞セッション全件確認: 今晩は途中で失敗（理由: ${reason}）。翌晩に再試行します。`;

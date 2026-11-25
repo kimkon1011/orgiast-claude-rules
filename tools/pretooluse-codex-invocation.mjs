@@ -13,7 +13,11 @@ try {
   const tool = String(input.tool_name || '');
   if (!/^(Bash|PowerShell)$/.test(tool)) return;
 
-  const command = String(input.tool_input?.command || '');
+  const command = String(input.tool_input?.command || input.tool_input?.script || '');
+  if (/\bcodex(?:\.exe|\.cmd)?\s+login\s+--device-auth\b/i.test(command)) {
+    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: '⚠️ Windows の `codex login`（ブラウザ型）と auth.json 複製を先に試してください。device-auth は両方が実測で不可の時だけの最終手段です（ブロックはしていません）。' } }));
+    return;
+  }
   if (!/(?:\bcodex\s+exec\b|\bcodex-do\.mjs\b)/i.test(command)) return;
 
   const findings = [];

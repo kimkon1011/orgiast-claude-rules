@@ -4,8 +4,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { skipReason, run, options, execute, main, resumedParentId, saveJson } from './stalled-session-resume.mjs';
+import { skipReason, run, options, execute, main, resumedParentId, saveJson, deferredPhrase, hourlyEventLimit } from './stalled-session-resume.mjs';
 import { buildClaudeHeadlessArgs } from './auto-session-executor.mjs';
+
+test('hourly の先送り表現と上限を判定する', () => {
+  for (const text of ['次回やる', '次の起動で対応', '17:02以降に再開', '上限解除待ち']) assert.equal(deferredPhrase(text), true);
+  assert.equal(deferredPhrase('調査は完了した'), false);
+  const now = new Date(2026, 10, 25, 12).getTime();
+  assert.equal(hourlyEventLimit([{ sessionId: 'a', at: now - 1 }, { sessionId: 'b', at: now - 2 }], 'c', now, { hourlyCap: 2, perSessionDailyCap: 6 }), 'global');
+  assert.equal(hourlyEventLimit([{ sessionId: 'a', at: now - 2 * 3600000 }, { sessionId: 'a', at: now - 3 * 3600000 }], 'a', now, { hourlyCap: 4, perSessionDailyCap: 2 }), 'daily');
+});
 
 async function fixture(t, count = 5) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'stalled-test-'));
@@ -464,6 +472,7 @@ test('dedicated sweep registration and required converge manifest', async () => 
   assert.match(ps, /& \$node --check \$sweepScript\s+if \(\$LASTEXITCODE -ne 0\) \{ throw "node --check failed: \$sweepScript" \}/);
   assert.ok(ps.indexOf('& $node --check $sweepScript') < ps.indexOf('Register-ScheduledTask'));
   assert.match(ps, /New-HiddenScheduledTaskAction -Execute \$node -ChildArgument @\(\$sweepScript\) -WorkingDirectory \$repo/);
+  assert.match(ps, /Disable-ScheduledTask -TaskName 'OrgiastStalledSessionSweep'/);
   assert.match(ps, /-At 3:05am -RandomDelay \(New-TimeSpan -Minutes 2\)/);
   assert.match(ps, /-StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit \(New-TimeSpan -Hours 5\)/);
   const manifest = JSON.parse(await fs.readFile(new URL('./setup-manifest.json', import.meta.url), 'utf8'));
@@ -583,14 +592,15 @@ test('exceptions retain explicit not-started executor in persisted attempt', asy
   await run(options([], {}), f.io);
   assert.equal((await f.ledger()).sessions['session-0'].attempts[0].executor, 'not-started');
 });
-test('overdue task uses hidden runner, 15 minute trigger and verified settings with required repair', async () => {
+test('hourly task uses hidden runner, hourly :20 trigger and verified settings with required repair', async () => {
   const ps = await fs.readFile(new URL('./register-stalled-session-nightly.ps1', import.meta.url), 'utf8');
-  assert.match(ps, /New-HiddenScheduledTaskAction -Execute \$node -ChildArgument @\(\$sweepScript, '--overdue'\)/);
-  assert.match(ps, /-RepetitionInterval \(New-TimeSpan -Minutes 15\)/);
+  assert.match(ps, /New-HiddenScheduledTaskAction -Execute \$node -ChildArgument @\(\$sweepScript, '--hourly'\)/);
+  assert.match(ps, /AddMinutes\(20\)/);
+  assert.match(ps, /-RepetitionInterval \(New-TimeSpan -Hours 1\)/);
   assert.match(ps, /-MultipleInstances IgnoreNew -ExecutionTimeLimit \(New-TimeSpan -Hours 2\)/);
   assert.match(ps, /Get-ScheduledTask -TaskName 'OrgiastWaitDeadlineResume'/);
   assert.match(ps, /\$waitTask.Actions.Arguments -ne \$waitAction.Arguments/);
-  assert.match(ps, /\$waitTask.Triggers\[0\].Repetition.Interval -ne 'PT15M'/);
+  assert.match(ps, /\$waitTask.Triggers\[0\].Repetition.Interval -ne 'PT1H'/);
   assert.match(ps, /\$waitTask.Settings.StartWhenAvailable/);
   const manifest = JSON.parse(await fs.readFile(new URL('./setup-manifest.json', import.meta.url), 'utf8'));
   const item = manifest.items.find(i => i.id === 'task:wait-deadline-resume');
@@ -740,25 +750,25 @@ test('overdue 3rd attempt progressed does not notify and does not block retry', 
   time += 61 * 60000;
   assert.equal((await run(config, f.io)).results.length, 0);
 });
-test('overdue 3 no-progress attempts retire and notify exactly once', async t => {
-  const f = await fixture(t, 1); let time = new Date(2026, 8, 23, 22, 40).getTime(); let notices = []; let callCount = 0;
+test('overdue 3 no-progress attempts retire and add one kim-inbox ask', async t => {
+  const f = await fixture(t, 1); let time = new Date(2026, 8, 23, 22, 40).getTime(); let asks = []; let callCount = 0;
   f.io.now = () => time;
   f.records[0].displayTitle = '【09/23/12:00まで】Task';
   f.io.execute = async () => { callCount++; return { outcome: 'no-progress', reason: 'done' }; };
-  f.io.notify = async msg => { notices.push(msg); return { delivered: 'dm' }; };
+  f.io.addItem = async (_home, item) => { asks.push(item); return item; };
   const config = options(['--overdue'], {});
   await run(config, f.io); time += 61 * 60000;
   await run(config, f.io); time += 61 * 60000;
   const r3 = await run(config, f.io);
   assert.equal(r3.results[0].outcome, 'no-progress');
   assert.equal(callCount, 3);
-  const stopped = notices.filter(n => n.includes('期限切れ再開を3回試しても進まないため自動再開を止めました'));
+  const stopped = asks.filter(n => n.source === 'stall-hourly-no-progress');
   assert.equal(stopped.length, 1);
   time += 61 * 60000;
   const r4 = await run(config, f.io);
   assert.equal(r4.results.length, 0);
   assert.equal(r4.rows[0].skip, '3回進捗なし');
-  assert.equal(notices.filter(n => n.includes('期限切れ再開を3回試しても進まないため自動再開を止めました')).length, 1);
+  assert.equal(asks.filter(n => n.source === 'stall-hourly-no-progress').length, 1);
 });
 
 test('overdue limit 2 rotates fairly through five candidates in three runs', async t => {

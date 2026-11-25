@@ -1,13 +1,36 @@
-/** Calendar の書き込みと通知先には社内ドメインだけを使う。 */
-export function isInternalEmail(email) {
-  return typeof email === 'string' && /^[^\s@]+@orgiast\.jp$/i.test(email.trim());
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/** Calendar の書き込みと通知先には社内ドメインだけを使う。staffAddresses があればそれも社内扱い。 */
+export function isInternalEmail(email, staffAddresses = loadStaffAddresses()) {
+  if (typeof email !== 'string') return false;
+  const lower = email.trim().toLowerCase();
+  if (/^[^\s@]+@orgiast\.jp$/i.test(lower)) return true;
+  if (Array.isArray(staffAddresses) && staffAddresses.some(sa => sa.toLowerCase() === lower)) return true;
+  return false;
 }
 
-export function sanitizeAttendees(attendees, { log = console.warn } = {}) {
+export function loadStaffAddresses() {
+  const staffPath = path.join(__dirname, '..', '..', 'config', 'staff-addresses.json');
+  try {
+    if (fs.existsSync(staffPath)) {
+      const data = JSON.parse(fs.readFileSync(staffPath, 'utf8'));
+      if (Array.isArray(data.addresses)) {
+        return data.addresses.map(a => String(a).toLowerCase());
+      }
+    }
+  } catch { /* ignore */ }
+  return [];
+}
+
+export function sanitizeAttendees(attendees, { log = console.warn, staffAddresses = loadStaffAddresses() } = {}) {
   if (!Array.isArray(attendees)) return [];
   const dropped = [];
   const kept = attendees.filter(attendee => {
-    if (isInternalEmail(attendee?.email)) return true;
+    if (isInternalEmail(attendee?.email, staffAddresses)) return true;
     if (attendee?.email) dropped.push(attendee.email);
     return false;
   });

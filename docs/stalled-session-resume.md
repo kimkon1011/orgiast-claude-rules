@@ -1,6 +1,6 @@
 # 停滞セッションの夜間再開
 
-時刻起点の一律再開は廃止（kim 2026-11-14）。夜間の停滞セッション確認は kim-inbox 通知を行う。待機セッションの期限切れは専用モードで判定する。
+毎時・上限つきで再開する（kim 2026-11-25）。`OrgiastWaitDeadlineResume` は毎時 :20 に `--hourly` を実行し、期限切れと先送り表現のある停滞セッションを優先順に再開する。3回進捗が無ければ kim-inbox の判断待ちへ移す。
 
 `tools/stalled-session-resume.mjs` は `session-triage.mjs` の `listFiles` / `inspect` の結果を使う。両関数を export にしただけで、検出規則は変更していない。
 

@@ -46,9 +46,24 @@ test('MERGED の ask は対象', async () => {
   assert.deepEqual(result.candidates.map(row => row.id), ['ki-merged']);
 });
 
-test('着地済み PR の URL を含む承認待ちは対象外', async () => {
+test('MERGED 済み PR のマージ承認 ask は対象', async () => {
+  const text = `PR #2460 をマージしてよいか承認してください\n${url(2460)}`;
+  const result = await findAutocloseCandidates([item('ki-merge-approval', text)], { fetchState: fetchWith({ 2460: 'MERGED' }) });
+  assert.deepEqual(result.candidates.map(row => row.id), ['ki-merge-approval']);
+  assert.equal(result.approvalRequestExcludedCount, 0);
+});
+
+test('マージ以外の承認待ちは PR が MERGED 済みでも対象外', async () => {
   const text = `kim-inbox の「判断不要な完了通知 29件」を自動クローズしてよいか（--apply の実行可否）\n…${url(2661)}`;
   const result = await findAutocloseCandidates([item('ki-approval', text)], { fetchState: fetchWith({ 2661: 'MERGED' }) });
+  assert.deepEqual(result.candidates, []);
+  assert.equal(result.approvalRequestExcludedCount, 1);
+  assert.equal(result.skipped[0].reason, '承認待ち');
+});
+
+test('CLOSED だが未マージの PR のマージ承認 ask は対象外', async () => {
+  const text = `PR #2460 のマージ承認をお願いします\n${url(2460)}`;
+  const result = await findAutocloseCandidates([item('ki-closed-approval', text)], { fetchState: fetchWith({ 2460: 'CLOSED' }) });
   assert.deepEqual(result.candidates, []);
   assert.equal(result.approvalRequestExcludedCount, 1);
   assert.equal(result.skipped[0].reason, '承認待ち');

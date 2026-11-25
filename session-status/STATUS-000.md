@@ -1,4 +1,4 @@
-# session-status  PC=000  host=000KIMPC  updated 2026-11-26 05:13 JST
+# session-status  PC=000  host=000KIMPC  updated 2026-11-26 06:14 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\uers\\.claude\\projects", "configDirectory": "C:\\Users\\uers\\
 - 案件数: 66

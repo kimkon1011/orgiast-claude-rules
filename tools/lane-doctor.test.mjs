@@ -116,16 +116,26 @@ test('notify-time annotation adds the catalog account and splits a URL glued to 
   assert.match(out,/開くアカウント: \*\*seisaku-team@orgiast\.jp\*\*/);
   assert.equal(annotateAccounts('停止しました'),'停止しました');
 });
-test('billing is substituted and notified even without auto top-up',async t=>{
+test('billing notification is suppressed while its substitute is alive',async t=>{
   const h=fixture(t);const sent=[];
   const probe=async p=>p==='deepseek'?{code:1,text:'HTTP 402 Insufficient Balance'}:{code:0,text:'PONG'};
   const r=await laneDoctorProbe({home:h,now,probe,notify:async text=>{sent.push(text);return {delivered:'dm'};},listWsl:async()=>'Ubuntu'});
   assert.equal(r.lanes.deepseek.reason,'billing');
   assert.ok(!r.deadNeedsUser.some(x=>x.provider==='deepseek'));
   assert.deepEqual(r.substituted,[{provider:'deepseek',via:'openrouter'}]);
-  assert.equal(sent.filter(text=>/deepseek/i.test(text)).length,1);
+  assert.equal(sent.filter(text=>/deepseek/i.test(text)).length,0);
+  assert.deepEqual(r.notifications.filter(({provider})=>provider==='deepseek'), [{provider:'deepseek',delivered:'suppressed',reason:'substituted'}]);
   assert.equal(r.lanes.deepseek.via,'openrouter');
   assert.match(summarize(r),/deepseek ✅\(OpenRouter経由\)/);
+});
+test('billing notification is sent when its substitute is dead',async t=>{
+  const h=fixture(t);const sent=[];
+  const probe=async p=>p==='deepseek'?{code:1,text:'HTTP 402 Insufficient Balance'}:p==='openrouter'?{code:1,text:'HTTP 401 invalid api key'}:{code:0,text:'PONG'};
+  const r=await laneDoctorProbe({home:h,now,probe,notify:async text=>{sent.push(text);return {delivered:'dm'};},listWsl:async()=>'Ubuntu'});
+  assert.equal(r.lanes.openrouter.alive,false);
+  assert.deepEqual(r.substituted,[{provider:'deepseek',via:'openrouter'}]);
+  assert.equal(sent.filter(text=>/deepseek/i.test(text)).length,1);
+  assert.deepEqual(r.notifications.filter(({provider})=>provider==='deepseek'), [{provider:'deepseek',delivered:'dm'}]);
 });
 test('a fresh failed Codex probe is re-measured instead of being reused',async t=>{
   const h=fixture(t);

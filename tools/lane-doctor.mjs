@@ -429,7 +429,17 @@ export async function notifyLaneStops(health, { home = laneHome(), now = Date.no
   const dir = path.join(home, '.claude');
   health.notifications = [];
   const notifiedFile = path.join(dir, 'lane-doctor-notified.json'), notified = readJson(notifiedFile);
+  const providerBilling = readJson(path.join(repo, 'tools/provider-billing.json'));
   for (const item of [...health.deadNeedsUser, ...Object.entries(health.lanes).filter(([p, s]) => isLane(p) && s.reason === 'billing').map(([provider, state]) => ({ provider, reason: 'billing', error: state.error }))]) {
+    if (item.reason === 'billing') {
+      const substitute = health.substituted?.find(({ provider }) => provider === item.provider);
+      const substituteAlive = substitute && health.lanes[substitute.via]?.alive === true;
+      const noTopUpPolicy = !substitute && providerBilling[item.provider]?.autoTopUp === false;
+      if (substituteAlive || noTopUpPolicy) {
+        health.notifications.push({ provider: item.provider, delivered: 'suppressed', reason: substituteAlive ? 'substituted' : 'no_topup_policy' });
+        continue;
+      }
+    }
     if (item.reason === 'billing' ? String(notified[item.provider] || '').slice(0, 10) === new Date(now).toISOString().slice(0, 10) : now - time(notified[item.provider]) < 86400_000) { health.notifications.push({ provider: item.provider, delivered: 'deduped' }); continue; }
     // 送信前にdedupeを確保。永続化できない環境からは繰り返しDMを送らない。
     const before = notified[item.provider]; notified[item.provider] = new Date(now).toISOString();

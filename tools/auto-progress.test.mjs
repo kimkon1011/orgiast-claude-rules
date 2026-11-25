@@ -7,7 +7,7 @@ import test, { after } from 'node:test';
 import { automationModel } from './lib/automation-model.mjs';
 import vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
-import { addCheck } from './auto-progress.mjs';
+import { addCheck, isStandingApprovedMerciGapOffer } from './auto-progress.mjs';
 import { main as registerTasks } from './register-auto-progress-task.mjs';
 import { isNoopPromise, extractPromise, extractNextKim, applyPromise, buildRecord, record, readLedger, writeLedger, ledgerFile, rowKey, originLine } from './auto-progress-ledger.mjs';
 import { run as runWatch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, forgiveNoExecutorResumes, main as watchMain, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason, formatDoneBacklogMessages } from './auto-progress-watch.mjs';
@@ -1675,6 +1675,37 @@ test('addCheck: --next-kim の処理と古い nextKim のリセット、promise 
   // 4. --next-kim "質問本文" の指定 → 指定した nextKim が反映される
   const row3 = addCheck({ home, session: 'session-4ee33e10', check: 'exit 1', deadline: '+24h', label: '見出し3', nextKim: '新しい質問' });
   assert.equal(row3.nextKim, '新しい質問');
+});
+
+test('メルシ延泊・前倒しの恒久承認識別子がある見張り登録だけを許可する', () => {
+  const home = tmp();
+  const nextClaude = 'メルシ 延泊を安全検査後に送信 standing-approval:merci-gap-offer';
+  assert.equal(isStandingApprovedMerciGapOffer(nextClaude), true);
+  const row = addCheck({
+    home,
+    session: 'merci-gap-offer-standing-approval',
+    check: 'exit 1',
+    deadline: '+24h',
+    label: 'gap-offer 送信後の読み戻し',
+    nextClaude
+  });
+  assert.equal(row.nextClaude, nextClaude);
+  assert.equal(row.nextKim, 'なし');
+});
+
+test('恒久承認の対象外で送信を含む見張り登録は従来どおり拒否する', () => {
+  const home = tmp();
+  assert.equal(isStandingApprovedMerciGapOffer('顧客へメール送信 standing-approval:merci-gap-offer'), false);
+  assert.equal(isStandingApprovedMerciGapOffer('送信を監視 standing-approval:merci-gap-offer'), false);
+  assert.throws(() => addCheck({
+    home,
+    session: 'unapproved-external-send',
+    check: 'exit 1',
+    deadline: '+24h',
+    label: '顧客へメール送信',
+    nextClaude: 'メール送信の完了を確認する'
+  }), /社外送信は登録できません/);
+  assert.equal(readLedger(ledgerFile(home)).length, 0);
 });
 
 

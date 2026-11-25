@@ -10,6 +10,12 @@ import { hasReferencedApproval } from './lib/send-approval.mjs';
 import { externalSpec, MONITOR_DAYS } from './lib/external-monitor-state.mjs';
 // 外部の成果を読まず、時計と定数だけで決まる典型的な判定を拒否する。
 export { isTimeOnlyCheck } from './auto-progress-check.mjs';
+export function isStandingApprovedMerciGapOffer(text) {
+  const value = String(text ?? '');
+  const context = value.replace(/standing-approval:merci-gap-offer/giu, '');
+  return /standing-approval:merci-gap-offer/iu.test(value)
+    && (/(?:^|\W)gap-offer(?:\W|$)/iu.test(context) || /メルシ[\s\S]{0,30}(?:延泊|前倒し)/u.test(context));
+}
 export function addCheck({ session, check, startWhen, deadline, label, nextClaude, nextKim, doneFile, askFile, timeout, cwd = process.cwd(), home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), probe, allowMet = false, autoRegisteredCheck = false, transcriptPath = '' }) {
   const external = externalSpec({ check });
   if (!session?.trim() || !(startWhen?.trim() || check?.trim()) || !label?.trim()) throw new Error('--session, --check, --label は必須です');
@@ -36,7 +42,9 @@ export function addCheck({ session, check, startWhen, deadline, label, nextClaud
   const old = latestOpenPromises(rows).find(row => row.sessionId === session)
     || rows.filter(row => row.sessionId === session).sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts))[0];
   const promisedWork = [nextClaude, external ? '' : old?.promise, label].filter(Boolean).join('\n');
-  if (/(?:送信|送る|送って|send)/iu.test(promisedWork) && !hasReferencedApproval(promisedWork, { home })) {
+  if (/(?:送信|送る|送って|send)/iu.test(promisedWork)
+      && !hasReferencedApproval(promisedWork, { home })
+      && !isStandingApprovedMerciGapOffer(promisedWork)) {
     throw new Error('auto-progress に社外送信は登録できません。下書き・kim-inbox の承認待ちまでにし、送信する場合は send-approval:<本文sha256> と有効な承認マーカーを付けてください');
   }
   let resolvedNextKim = 'なし';

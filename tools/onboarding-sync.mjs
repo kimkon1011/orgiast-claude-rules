@@ -549,8 +549,8 @@ function saveKeysState(now, receipt = {}) {
   try {
     fs.mkdirSync(path.dirname(keysStatePath), { recursive: true });
     const previous = keysState() || {};
-    const tier = normalizeKeyserveTier(receipt.tier, normalizeKeyserveTier(previous.tier));
-    const files = Array.isArray(receipt.files) ? receipt.files.filter(name => /^[A-Za-z0-9._-]+$/.test(name)).sort() : previous.files;
+    const tier = Object.hasOwn(receipt, 'tier') ? normalizeKeyserveTier(receipt.tier) : normalizeKeyserveTier(previous.tier);
+    const files = Array.isArray(receipt.files) ? receipt.files.filter(name => /^[A-Za-z0-9._-]+$/.test(name) && !name.includes('..')).sort() : previous.files;
     fs.writeFileSync(keysStatePath, `${JSON.stringify({ ...previous, last: now.toISOString(), lastRunAt: now.toISOString(), tier, ...(files ? { files } : {}) }, null, 2)}\n`, 'utf8');
   } catch {}
 }

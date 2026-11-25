@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 
 export const LANE_HEALTH_TAG = '[lane-health]';
 export const LANE_HEALTH_KIM_PC = 'kim-PC';
-const SKIP_REASONS = /^(?:missing_key|cli_missing)$/;
+const SKIP_REASONS = /^(?:missing_key|cli_missing|not_for_seat)$/;
 
 // 1行の JSON（lane-doctor --json の出力）から最後の JSON を取り出す。
 export function parseLaneDoctorOutput(text) {

@@ -335,7 +335,7 @@ test('minimal tier accepts Codex plus DeepSeek and OpenRouter without repairing 
   write(h, 'lane-health.json', { lanes: Object.fromEntries(['codex', 'deepseek', 'openrouter'].map(provider => [provider, { alive: true, reason: 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp }])) });
   const result = laneDoctorQuick({ home: h, now, save: false });
   assert.equal(result.repairFirst.required, false);
-  assert.ok(['gemini', 'glm', 'groq'].every(provider => result.lanes[provider].reason === 'missing_key'));
+  assert.ok(['gemini', 'glm', 'groq'].every(provider => result.lanes[provider].reason === 'not_for_seat'));
 });
 test('all live lanes do not require repair or add a stop line', t => {
   const h = fixture(t), stamp = new Date(now).toISOString();

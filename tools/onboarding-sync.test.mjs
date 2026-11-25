@@ -564,10 +564,11 @@ test('fallback state is refreshed with hashes of copied files', async () => {
 
 // Child-process fetch stub: exercises the real CLI and filesystem without network access.
 function runEnrollFixture(t, { primary = '', enroll = 'opaque-enroll-token', legacy = 'legacy-test', status = 200,
-  statuses, previous = '', files = { 'keyserve.env': 'ORGIAST_KEYSERVE_SECRET=new-primary\n' }, body, network = false, writeFailure = false, unlinkFailure = false } = {}) {
+  statuses, previous = '', initialState, files = { 'keyserve.env': 'ORGIAST_KEYSERVE_SECRET=new-primary\n' }, body, network = false, writeFailure = false, unlinkFailure = false } = {}) {
   const f = setup(null);
   t.after(() => fs.rmSync(f.home, { recursive: true, force: true }));
   const claude = path.join(f.home, '.claude');
+  if (initialState) fs.writeFileSync(path.join(claude, '.keys-sync-state.json'), JSON.stringify(initialState));
   for (const [name, key, value] of [['keyserve.env', 'ORGIAST_KEYSERVE_SECRET', primary], ['enroll.env', 'ORGIAST_ENROLL_TOKEN', enroll], ['cost-reporter.env', 'DISCORD_COST_WEBHOOK', legacy]]) {
     if (value) fs.writeFileSync(path.join(claude, name), `${key}=${value}\n`);
   }
@@ -595,7 +596,7 @@ function runEnrollFixture(t, { primary = '', enroll = 'opaque-enroll-token', leg
   const headers = requests.at(-1);
   const logs = fs.existsSync(path.join(claude, 'hooks', 'onboarding-sync.log')) ? fs.readFileSync(path.join(claude, 'hooks', 'onboarding-sync.log'), 'utf8') : '';
   assert.ok(!`${result.stdout}${result.stderr}${logs}`.includes('opaque-enroll-token'));
-  return { f, claude, headers, requests };
+  return { f, claude, headers, requests, output: `${result.stdout}${result.stderr}${logs}` };
 }
 
 test('primary takes precedence over enroll without an enroll header', async (t) => {
@@ -620,10 +621,16 @@ test('minimal response records its tier and only the files declared by the serve
     'deepseek.env': 'DEEPSEEK_API_KEY=test\n',
     'openrouter.env': 'OPENROUTER_API_KEY=test\n',
   };
-  const { claude } = runEnrollFixture(t, { body: { tier: 'minimal', files } });
+  const { claude, output } = runEnrollFixture(t, { body: { tier: 'minimal', files } });
   const state = JSON.parse(fs.readFileSync(path.join(claude, '.keys-sync-state.json'), 'utf8'));
   assert.equal(state.tier, 'minimal');
   assert.deepEqual(state.files, ['deepseek.env', 'keyserve.env', 'openrouter.env']);
+  assert.doesNotMatch(output, /未取得の鍵|key provisioning failed/);
+  assert.ok(!JSON.stringify(state).includes('new-primary'));
+});
+test('successful legacy response clears a previous minimal receipt', t => {
+  const { claude } = runEnrollFixture(t, { initialState: { tier: 'minimal' } });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(claude, '.keys-sync-state.json'))).tier, 'ai');
 });
 test('a 401 retries once with the previous secret and restores the one-line file', (t) => {
   const { claude, requests } = runEnrollFixture(t, { primary: 'derived-test', enroll: '', previous: 'old-test', statuses: [401, 200] });

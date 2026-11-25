@@ -102,6 +102,7 @@
     {
       "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
       "file": "keyserve.env",
+      "tier": "minimal",
       "keys": [
         "ORGIAST_KEYSERVE_SECRET",
         "ORGIAST_KEYSERVE_PC"

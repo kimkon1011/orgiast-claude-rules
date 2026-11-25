@@ -22,8 +22,7 @@ import { DEFAULT_SEAT_HOSTNAMES, matchesSeatHostname, resolveBotDisplayName, res
 import { generateCardsFromBrief, generateSessionId } from './meet-cue.mjs';
 import { matchMeetingInquiries, INQUIRY_SHEET, INQUIRY_TAB, readSheet } from './lib/inquiry-sheet.mjs';
 import { addItem } from './kim-inbox.mjs';
-import { sendDiscordDm } from './discord-dm.mjs';
-import { calendarStartMs, isInternalEmail } from './lib/calendar-shared.mjs';
+import { calendarStartMs, isInternalEmail, loadStaffAddresses } from './lib/calendar-shared.mjs';
 
 const execFileAsync = promisify(execFile);
 const __filename = fileURLToPath(import.meta.url);
@@ -68,20 +67,7 @@ export function readConfig(home = homeDir()) {
   };
 }
 
-export function loadStaffAddresses(home = homeDir()) {
-  const staffPath = path.join(__dirname, '..', 'config', 'staff-addresses.json');
-  try {
-    if (fs.existsSync(staffPath)) {
-      const data = JSON.parse(fs.readFileSync(staffPath, 'utf8'));
-      if (Array.isArray(data.addresses)) {
-        return data.addresses.map(a => String(a).toLowerCase());
-      }
-    }
-  } catch (e) {
-    console.error('meet-cue-scheduler: staff-addresses.json 読み込み失敗:', e.message);
-  }
-  return [];
-}
+export { loadStaffAddresses };
 
 export function loadSchedulerState(home = homeDir()) {
   const p = schedulerStatePath(home);
@@ -101,12 +87,8 @@ export function saveSchedulerState(state, home = homeDir()) {
   fs.renameSync(temporary, p);
 }
 
-export function isExternalEmail(email, staffAddresses = []) {
-  if (!email || typeof email !== 'string') return false;
-  const lower = email.toLowerCase().trim();
-  if (lower.endsWith('@orgiast.jp')) return false;
-  if (staffAddresses.some(sa => sa === lower)) return false;
-  return true;
+export function isExternalEmail(email, staffAddresses = loadStaffAddresses()) {
+  return typeof email === 'string' && Boolean(email.trim()) && !isInternalEmail(email, staffAddresses);
 }
 
 export function extractMeetInfo(event) {
@@ -125,7 +107,7 @@ export function extractMeetInfo(event) {
   return { meetUrl, conferenceCode };
 }
 
-export function checkMechanicalConditions(event, { staffAddresses = [], ownerEmail = '', now = new Date(), hours = 24 } = {}) {
+export function checkMechanicalConditions(event, { staffAddresses = loadStaffAddresses(), ownerEmail = '', now = new Date(), hours = 24 } = {}) {
   if (!event || event.status === 'cancelled') return { ok: false, reason: 'cancelled' };
 
   const meetInfo = extractMeetInfo(event);
@@ -151,9 +133,9 @@ export function checkMechanicalConditions(event, { staffAddresses = [], ownerEma
   const attendees = event.attendees || [];
 
   // Orgiast attendee check
-  let hasOrgiast = attendees.some(a => a.email && a.email.toLowerCase().endsWith('@orgiast.jp'));
-  if (!hasOrgiast && event.organizer?.email?.toLowerCase().endsWith('@orgiast.jp')) hasOrgiast = true;
-  if (!hasOrgiast && ownerEmail && ownerEmail.toLowerCase().endsWith('@orgiast.jp')) hasOrgiast = true;
+  let hasOrgiast = attendees.some(a => isInternalEmail(a.email, staffAddresses));
+  if (!hasOrgiast && isInternalEmail(event.organizer?.email, staffAddresses)) hasOrgiast = true;
+  if (!hasOrgiast && isInternalEmail(ownerEmail, staffAddresses)) hasOrgiast = true;
 
   if (!hasOrgiast) return { ok: false, reason: 'no_orgiast' };
 
@@ -164,7 +146,7 @@ export function isTargetEvent(event, options = {}) {
   return checkMechanicalConditions(event, options).ok;
 }
 
-export function buildClassificationJevState(event, staffAddresses = []) {
+export function buildClassificationJevState(event, staffAddresses = loadStaffAddresses()) {
   const attendees = event.attendees || [];
   const externalAttendees = attendees.filter(a => !a.resource && a.email && isExternalEmail(a.email, staffAddresses));
 
@@ -227,7 +209,7 @@ export function createEventContentHash(event) {
   return crypto.createHash('sha256').update(str).digest('hex').slice(0, 16);
 }
 
-export async function classifyEvent(event, { itemState = {}, staffAddresses = [], home = homeDir(), askJevImpl = askJev } = {}) {
+export async function classifyEvent(event, { itemState = {}, staffAddresses = loadStaffAddresses(), home = homeDir(), askJevImpl = askJev } = {}) {
   // 1. Explicit opt-in check
   if (isOptInEvent(event)) {
     return {
@@ -433,15 +415,16 @@ export async function attemptAutoLogin({ home = homeDir(), fetchImpl = globalThi
 }
 
 /**
- * 内部のみの予定（主催が orgiast.jp かつ参加者全員が社内）の説明欄にカンペ URL を追記する。
- * 既に同じ URL が説明欄にあれば追記しない。
+ * 社内のみの予定の説明欄にカンペ URL を追記（「📝カンペ（社内用）」行）。
+ * 既に同じ URL があれば何もしない。重複防止。
  */
 export async function appendCueUrlToDescription({ token, calendarId, event, docUrl, fetchImpl = globalThis.fetch }) {
   const existingDesc = event.description || '';
-  const line = `📝カンペ: ${docUrl}`;
-  if (existingDesc.split(/\r?\n/).some(entry => entry.trim() === line)) return { appended: false, reason: 'already_exists' };
-
-  const patchBody = { description: [existingDesc, line].filter(Boolean).join('\n') };
+  const line = `📝カンペ（社内用）: ${docUrl}`;
+  const description = existingDesc.split(/\r?\n/).filter(entry => !/^\s*📝カンペ（社内用）\s*[:：]/u.test(entry)).join('\n');
+  const updated = [description, line].filter(Boolean).join('\n');
+  if (updated === existingDesc) return { appended: false, reason: 'already_exists' };
+  const patchBody = { description: updated };
   const patchUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(event.id)}?sendUpdates=none`;
   const res = await fetchImpl(patchUrl, {
     method: 'PATCH',
@@ -450,19 +433,6 @@ export async function appendCueUrlToDescription({ token, calendarId, event, docU
   });
   if (!res.ok) throw new Error(`Description append failed HTTP ${res.status}: ${await res.text()}`);
   return { appended: true };
-}
-
-export async function sendCueDocUrlAsDm({ staffEmail, docUrl, home = homeDir() }) {
-  if (staffEmail === 'kim@orgiast.jp') {
-    await addItem(home, {
-      kind: 'info',
-      text: `【Meetカンペ】カンペ Doc ができました: ${docUrl}`,
-      source: 'meet-cue',
-    });
-    return;
-  }
-  const body = `【Meetカンペ】開始が近づきました。打合せ用カンペ Doc です: ${docUrl}\n\n打合せ中はこの Doc にカンペが表示されます。`;
-  await sendDiscordDm(staffEmail, body, { home, noReplyFooter: true, noCopyKim: true });
 }
 
 async function shareCueDocument(itemState, recipients, getToken) {
@@ -494,46 +464,77 @@ async function shareCueDocument(itemState, recipients, getToken) {
   }
 }
 
+/**
+ * B: 社内のみの予定 → 説明欄へ追記。C: お客様あり → kim-inbox に通知。
+ * staffAddresses で社員個人 Gmail も社内扱い。
+ *
+ * 変更: Discord DM 送信機能を削除し、外部参加者がいる場合は kim-inbox に通知のみとする。
+ */
 export async function deliverCueUrl({
-  event, itemState, now, getToken, fetchImpl, home,
-  calendarId, sendCue = sendCueDocUrlAsDm, grantAccess = async () => {},
-  checkpoint = () => {}, onError = () => {},
+  event, itemState, getToken, fetchImpl, home,
+  calendarId, grantAccess = async () => {},
+  checkpoint = () => {}, onError = () => {}, addInfo = addItem, staffAddresses = loadStaffAddresses(),
 }) {
   if (!itemState.staffUrl) return;
   const docUrl = new URL(itemState.staffUrl);
   docUrl.searchParams.delete('authuser');
   const organizer = event.organizer?.email;
   const attendees = event.attendees || [];
-  const targets = [...new Set([organizer, ...attendees.map(a => a.email)]
-    .filter(isInternalEmail).map(email => email.trim().toLowerCase()))];
-  if (isInternalEmail(organizer) && !event.attendeesOmitted && attendees.every(a => isInternalEmail(a.email))) {
-    if (calendarId !== organizer.trim().toLowerCase()) throw new Error('主催者の予定を取得できませんでした');
-    await grantAccess(targets);
-    const token = await getToken({ impersonate: calendarId, scope: CALENDAR_SCOPE });
-    await appendCueUrlToDescription({ token, calendarId, event, docUrl: docUrl.href, fetchImpl });
-    itemState.cueUrlAppended = true;
-    return;
-  }
 
-  const start = calendarStartMs(event);
-  itemState.cueDmDueAt = new Date(start - 10 * 60000).toISOString();
-  itemState.cueDmTargets = targets;
-  if (now.getTime() < start - 10 * 60000 || now.getTime() >= start) return;
-  const sent = itemState.cueDmDelivered ??= {};
-  for (const staffEmail of targets) {
-    if (sent[staffEmail]) continue;
-    try {
-      await grantAccess([staffEmail]);
-      docUrl.searchParams.set('authuser', staffEmail);
-      await sendCue({ staffEmail, docUrl: docUrl.href, home });
-    } catch (error) {
-      onError(staffEmail, error);
-      continue;
+  // 社内メール一覧（orgiast.jp + staffAddresses）
+  const internalEmails = [...new Set(
+    [organizer, ...attendees.map(a => a.email)]
+      .filter(e => isInternalEmail(e, staffAddresses))
+      .map(email => email.trim().toLowerCase())
+  )].filter(Boolean);
+
+  // 外部参加者がいるか
+  const hasExternal = attendees.some(a => a.email && !isInternalEmail(a.email, staffAddresses)) ||
+    (organizer && !isInternalEmail(organizer, staffAddresses));
+  itemState.needsClientRemoval = Boolean(hasExternal);
+
+  // 社内のみの予定の場合、説明欄にカンペURLを追記
+  try {
+    if (hasExternal) throw new Error('外部参加者または社外主催者がいます');
+    if (event.attendeesOmitted) throw new Error('参加者一覧が不完全です');
+    if (!isInternalEmail(organizer, [])) throw new Error('主催者のカレンダーを DWD で編集できません');
+    const token = await getToken({ impersonate: organizer, scope: CALENDAR_SCOPE });
+    let original = event;
+    if (calendarId?.toLowerCase() !== organizer.toLowerCase()) {
+      const url = 'https://www.googleapis.com/calendar/v3/calendars/' + encodeURIComponent(organizer) + '/events/' + encodeURIComponent(event.id);
+      const res = await fetchImpl(url, { headers: { Authorization: 'Bearer ' + token } });
+      if (!res.ok) throw new Error('主催者予定取得失敗 HTTP ' + res.status);
+      original = await res.json();
     }
-    sent[staffEmail] = now.toISOString();
-    checkpoint();
+    if ((original.attendees || []).some(a => a.email && !isInternalEmail(a.email, staffAddresses))) {
+      itemState.needsClientRemoval = true;
+      throw new Error('主催者予定に外部参加者がいます');
+    }
+    if (original.attendeesOmitted) throw new Error('主催者予定の参加者一覧が不完全です');
+    await grantAccess([...new Set([...internalEmails, ...(original.attendees || []).map(a => a.email)
+      .filter(e => isInternalEmail(e, staffAddresses)).map(e => e.trim().toLowerCase())])]);
+    await appendCueUrlToDescription({ token, calendarId: organizer, event: original, docUrl: docUrl.href, fetchImpl });
+    itemState.cueUrlAppended = true;
+    delete itemState.cueUrlWriteFailed;
+    delete itemState.cueUrlWriteError;
+    return;
+  } catch (error) {
+    itemState.cueUrlWriteFailed = true;
+    itemState.cueUrlWriteError = error.message;
   }
-  itemState.cueDmSent = targets.length > 0 && targets.every(email => sent[email]);
+  if (!itemState.cueUrlNotifiedToKim) {
+    try {
+      const start = new Date(calendarStartMs(event));
+      await addInfo(home, {
+        kind: 'info', forceKind: true,
+        dedupeKey: 'meet-cue-unwritable:' + (event.iCalUID || event.id || extractMeetInfo(event)?.conferenceCode || event.summary) + ':' + start.toISOString(),
+        text: `【Meetカンペ】${start.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })} — ${event.summary || '(無題)'} — 説明欄への追記不可: ${itemState.cueUrlWriteError}\nカンペURL: ${docUrl.href}`,
+        source: 'meet-cue-scheduler',
+      });
+      itemState.cueUrlNotifiedToKim = true;
+      checkpoint();
+    } catch (error) { onError('kim', error); }
+  }
 }
 
 export function isPidAlive(pid) {
@@ -808,10 +809,11 @@ async function runSchedulerPass(options = {}) {
     if (!dryRun && itemState.prepared) {
       try {
         await deliverCueUrl({
-          event, itemState, now, getToken, fetchImpl, home, calendarId,
+          event, itemState, getToken, fetchImpl, home, calendarId,
           grantAccess: recipients => shareCueDocument(itemState, recipients, getToken),
           checkpoint: () => saveSchedulerState(state, home),
-          onError: (target, error) => errors.push({ event: event.summary, stage: 'cueDm', target, error: error.message }),
+          onError: (target, error) => errors.push({ event: event.summary, stage: 'cueInbox', target, error: error.message }),
+          staffAddresses,
         });
       } catch (error) {
         errors.push({ event: event.summary, stage: 'cueDelivery', error: error.message });
@@ -935,7 +937,6 @@ async function runSchedulerPass(options = {}) {
       prepared: Boolean(itemState.prepared || docId),
       docId: docId || null,
       cueUrlAppended: Boolean(itemState.cueUrlAppended),
-      cueDmSent: Boolean(itemState.cueDmSent),
       inJoinWindow,
       actionStatus,
       classification,
@@ -1031,10 +1032,91 @@ export async function migrateCleanupCompanions({
   return result;
 }
 
+/**
+ * D: --report-client-invites — お客様招待ありの今後の Meet 予定一覧
+ *
+ * 変更: お客様への案内メールの下書き本文を出力に含める
+ */
+export async function reportClientInvites({ days = 14, getToken = getDriveToken, fetchImpl = globalThis.fetch, home = homeDir(), now = new Date() } = {}) {
+  const staffAddresses = loadStaffAddresses(home);
+  const config = readConfig(home);
+  const targetCalendars = await fetchTargetCalendars({ getToken, fetchImpl, baseCalendars: config.calendars });
+
+  const rows = [];
+  const errors = [];
+  const seen = new Set();
+  for (const calId of targetCalendars) {
+    try {
+      const token = await getToken({ impersonate: calId, scope: CALENDAR_SCOPE });
+      const events = await listCalendarEvents({ calendarId: calId, token, now, hours: days * 24, fetchImpl });
+      for (const event of events) {
+        const meetInfo = extractMeetInfo(event);
+        if (!meetInfo || event.status === 'cancelled' || !isInternalEmail(event.organizer?.email, staffAddresses) || calendarStartMs(event) < now.getTime() || calendarStartMs(event) > now.getTime() + days * 86400000) continue;
+        const attendees = event.attendees || [];
+        const clientEmails = attendees
+          .filter(a => a.email && !isInternalEmail(a.email, staffAddresses))
+          .map(a => a.email);
+        if (clientEmails.length === 0) continue;
+        const key = (event.iCalUID || meetInfo.conferenceCode) + "_" + calendarStartMs(event);
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        // 案内メール下書き本文を作成
+        const startTime = new Date(event.start?.dateTime || event.start?.date || 0);
+        const formattedStartTime = startTime.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', year: 'numeric', month: 'long', day: 'numeric', weekday: 'long', hour: '2-digit', minute: '2-digit' });
+        const mailBody = `
+差出人: seisaku-team@orgiast.jp
+件名: オンライン会議のご案内
+
+${formattedStartTime} に開催する会議についてご案内いたします。
+
+会議URL: ${meetInfo.meetUrl}
+
+当日は上記URLよりご参加いただけますようお願いいたします。
+`;
+
+        rows.push({
+          start: startTime.toISOString(),
+          title: event.summary || '(無題)',
+          organizer: event.organizer?.email || calId,
+          clients: clientEmails.join(', '),
+          meetUrl: meetInfo.meetUrl,
+          mailBody: mailBody.trim(),
+        });
+      }
+    } catch (err) {
+      errors.push({ calendarId: calId, error: err.message });
+      console.error(`[report-client-invites] カレンダー取得エラー (${calId}):`, err.message);
+    }
+  }
+
+  rows.sort((a, b) => a.start.localeCompare(b.start));
+  return { ok: errors.length === 0, total: rows.length, rows, errors };
+}
+
 export async function main(argv = process.argv.slice(2)) {
   if (argv.includes('--migrate-companions')) {
     const result = await migrateCleanupCompanions({ dryRun: argv.includes('--dry-run') });
     console.log(JSON.stringify(result, null, 2));
+    return result.ok ? 0 : 1;
+  }
+
+  if (argv.includes('--report-client-invites')) {
+    const daysIndex = argv.indexOf('--days');
+    const days = daysIndex >= 0 ? parseInt(argv[daysIndex + 1], 10) || 14 : 14;
+    const result = await reportClientInvites({ days });
+    if (!result.ok) console.error('一部のカレンダーを取得できませんでした。以下は取得できた範囲です。');
+    if (result.rows.length === 0) {
+      console.log('お客様招待のある今後の Meet 予定はありません。');
+    } else {
+      console.log(`お客様招待のある今後の Meet 予定 (${result.total}件):\n`);
+      console.log("日時 | 題名 | 主催者 | お客様 | Meet URL");
+      for (const row of result.rows) {
+        const start = new Date(row.start).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        console.log(`  ${start} | ${row.title} | 主催: ${row.organizer} | お客様: ${row.clients} | ${row.meetUrl}`);
+        console.log(`\n【案内メール下書き】\n${row.mailBody}\n`);
+      }
+    }
     return result.ok ? 0 : 1;
   }
 

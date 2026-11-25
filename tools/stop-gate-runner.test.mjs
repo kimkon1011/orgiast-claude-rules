@@ -829,6 +829,44 @@ for (const mode of ['cap', 'pass', 'close-pass', 'close-failure', 'open', 'cron'
   assert.equal(readLedger(file).length, before);
 });
 
+test('user-code-input-gate: last assistant only, enforced on non-pilot PC', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-code-input-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const transcript = path.join(home, 'transcript.jsonl');
+  const bad = 'コード **16RV-4CDYM** を入力して、承認ボタンを押す\nhttps://auth.openai.com/codex/device';
+  const good = '次に kim がすること: なし';
+  for (const [index, texts] of [[bad, good], [good, bad], [good, `[CODE-INPUT-UNAVOIDABLE: auth.json 失効、Windows codex login 不可(実測)]\n${bad}`]].entries()) {
+    fs.writeFileSync(transcript, texts.map(text => JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } })).join('\n'));
+    const result = spawnSync(process.execPath, [runner], {
+      input: JSON.stringify({ session_id: `code-input-${index}`, transcript_path: transcript }),
+      encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_HANDOFF_AUDIT: 'off', ORGIAST_HOSTNAME: 'non-pilot-PC' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').at(-1));
+    assert.equal(record.blockedBy.includes('user-code-input-gate'), index === 1);
+    assert.ok(!record.reasonCodes.includes('error:user-code-input-gate'));
+  }
+});
+
+test('user-code-input-gate: shared runner blocks without form-gate demotion', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-code-policy-'));
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const options = { mode: 'off', policyOptions: { home, hostname: 'fresh-PC', notify: async () => ({ delivered: 'test' }) } };
+  const context = { assistantText: '', humanText: '', raw: '' };
+  const bad = 'コード **16RV-4CDYM** を入力して、承認ボタンを押す';
+  for (const [index, text] of [bad, `[CODE-INPUT-UNAVOIDABLE: auth.json 失効、Windows codex login 不可(実測)]\n${bad}`, `\`\`\`text\n${bad}\n\`\`\``].entries()) {
+    const result = await run({ session_id: `code-policy-${index}`, last_assistant_message: text }, context, options);
+    assert.equal(result.record.blockedBy.includes('user-code-input-gate'), index === 0);
+    assert.ok(!result.record.reasonCodes.includes('error:user-code-input-gate'));
+  }
+});
+
 test('フッター後 journal でも runner が footer を検出し、承認語で全文無しなら APPROVAL-INLINE', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-journal-footer-'));
   try {

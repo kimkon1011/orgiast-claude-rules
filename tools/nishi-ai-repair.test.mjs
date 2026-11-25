@@ -63,8 +63,8 @@ test('CODEX_HOME sessions supply cumulative usage and patch lines when reporting
 });
 test('daily refresh propagates failure and uses selected home before reporting success', () => {
   assert.throws(() => refreshCostDirective({ home: '/tmp/example', spawn: () => ({ status: 1, stderr: 'disk full' }) }), /exit 1.*disk full/);
-  assert.match(refreshCostDirective({ home: '/tmp/example', spawn: (_exe, args, options) => {
+  assert.match(refreshCostDirective({ home: '/tmp/example', env: {}, spawn: (_exe, args, options) => {
     assert.match(args[0], /cost-work-loop.mjs$/); assert.equal(options.env.ORGIAST_HOME, '/tmp/example');
-    assert.equal(options.timeout, 300000); return { status: 0 };
+    assert.equal(options.timeout, 900000); return { status: 0 };
   } }), /exit 0/);
 });

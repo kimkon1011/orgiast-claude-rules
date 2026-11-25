@@ -616,7 +616,9 @@ test('LLM待機も全体上限で止め、保存本文を次回再利用して�
     ledger: { read: async () => [] }, sources: [{ key: 'drive', load: async () => ({ documents: ++loads === 1 ? docs : [], next: { watermark: 'done' } }) }],
     stdout: () => {}, stage: () => {}, heartbeat: async value => heartbeats.push(value) };
   let batches = 0;
-  assert.equal(await main([], { ...deps, processBudgetMs: 60, ask: async (_provider, batch) => {
+  // 60ms は Windows CI 高負荷で第2 batch 開始前に切れて [10,1] になりフレークする。
+  // 第2 ask が必ず開始してから全体上限で止まるよう余裕を持たせる。
+  assert.equal(await main([], { ...deps, processBudgetMs: 5000, ask: async (_provider, batch) => {
     seen.push(batch.map(d => d.sourceRef)); return ++batches === 1 ? { items: [] } : new Promise(() => {});
   } }), 0);
   const saved = JSON.parse(fs.readFileSync(dataPath(home, 'state.json'), 'utf8'));

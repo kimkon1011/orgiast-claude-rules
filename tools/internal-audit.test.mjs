@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { parseArgs, renderReport, notificationText, validateSnapshot, validatePatterns } from './internal-audit.mjs';
+import { main, parseArgs, renderReport, notificationText, validateSnapshot, validatePatterns } from './internal-audit.mjs';
 import { runPaymentRules } from './lib/internal-audit/rules-payments.mjs';
 import { adminScopeMessage } from './lib/internal-audit/exfil.mjs';
 const sample=JSON.parse(await fs.readFile(new URL('./fixtures/internal-audit/snapshot.sample.json',import.meta.url)));
@@ -131,3 +131,36 @@ test('overflow writes every finding as private JSONL, independently of report li
   // NTFS has no POSIX mode bits; the 0o600 guarantee is verified on POSIX runners only.
   if (process.platform !== 'win32') assert.equal((await fs.stat(jsonl)).mode & 0o777, 0o600);
 });
+
+for (const delivered of ['none', 'session-inbox', 'spooled']) {
+  test(`kim-inbox ${delivered}: 失敗理由をログに残し、受信箱・spoolを成功扱い`, async t => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ia-notify-'));
+    t.after(() => fs.rm(dir, { recursive: true, force: true }));
+    const out = path.join(dir, 'report.md');
+    // main() runs in the test runner's cwd, unlike CLI tests with an explicit cwd.
+    const snapshot = fileURLToPath(new URL('./fixtures/internal-audit/snapshot.sample.json', import.meta.url));
+    const args = ['--snapshot', snapshot, '--skip', 'gmail,drive,discord,admin,web,patterns', '--state-dir', dir, '--out', out, '--notify'];
+    let calls = 0;
+    const run = main(args, {
+      locateReport: async file => { assert.equal(file, out); return file; },
+      notify: async (text, options) => {
+        calls++;
+        assert.equal(Object.hasOwn(options, 'token'), false);
+        assert.equal(options.webhookFallback, false);
+        return { delivered, reason: 'x' };
+      },
+    });
+    if (delivered === 'none') {
+      const { reason } = await import('./lib/internal-audit/common.mjs');
+      await assert.rejects(run, error => {
+        // The CLI logs reason(error) and sets exitCode=1 on rejection.
+        const log = reason(error);
+        assert.match(log, /kim-inbox 記録失敗/);
+        assert.match(log, /delivered=none reason=x/);
+        return true;
+      });
+    } else assert.equal(await run, 0);
+    assert.equal(calls, 1);
+    assert.match(await fs.readFile(out, 'utf8'), /監査レポート/);
+  });
+}

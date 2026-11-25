@@ -388,8 +388,15 @@ export function snapshotWorkingTree(cwd, spawnImpl = spawnSync) {
 // なり、空diff→codex の不要な astra 昇格→gemini fallback まで走って failure として台帳に残る
 // (2026-10-19 実測: fallback の直近3件中2件が kind:verify の空diff)。kind を優先する。
 const EDIT_HINT = /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i;
+// 読み取り専用の明示がある指示は、本文に「修正」等の EDIT_HINT 語があっても編集要求とみなさない。
+// 実害 2026-11-25: 「コード変更は禁止」「修正が入る予定の箇所を列挙」が wantedEdit=true になり
+// 空diff→安いレーン連鎖になった。
+const READ_ONLY_HINT = /読み取り調査|読み取り専用|読み取りのみ|コード変更.{0,10}禁止|コードを変更しない|変更禁止|ファイルを変更しない|編集禁止|read[\s-]?only|do not modify|don'?t modify|no code changes/i;
 export function wantsEdit(kind, instruction, review = false) {
-  return kind === 'implement' && !review && EDIT_HINT.test(String(instruction || ''));
+  if (kind !== 'implement' || review) return false;
+  const text = String(instruction || '');
+  if (READ_ONLY_HINT.test(text)) return false;
+  return EDIT_HINT.test(text);
 }
 
 // cheap-first: 「安いAIを先に使う」モードが有効か判定する。
@@ -913,6 +920,19 @@ export function findCursorAgentCommand({
   executableAvailable,
   homeDir,
 } = {}) {
+  // Windows の ~/.claude/bin ラッパーは USERPROFILE 配下の PowerShell を経由する。
+  // cursor-agent だけ専用 home で起動して Claude Code の user hooks を隔離できるよう、
+  // インストール本体を先に選ぶ。API key は cursorAgentChildEnv が明示的に引き継ぐ。
+  if (platform === 'win32' && homeDir) {
+    const localAppData = env.LOCALAPPDATA
+      || (env.USERPROFILE ? path.join(env.USERPROFILE, 'AppData', 'Local') : '');
+    if (localAppData) {
+      for (const name of ['cursor-agent.cmd', 'agent.cmd']) {
+        const candidate = path.join(localAppData, 'cursor-agent', name);
+        if (existsImpl(candidate)) return candidate;
+      }
+    }
+  }
   // homeDir を明示したときだけラッパーを優先する（テストの PATH 優先ケースを壊さない）。
   // resolveCursorAgentBackend は必ず homeDir を渡す。
   if (homeDir) {
@@ -994,6 +1014,25 @@ export function buildCursorAgentArgs({ workspace } = {}) {
   const args = ['-p', '--force', '--trust'];
   if (workspace) args.push('--workspace', workspace);
   return args;
+}
+
+export function cursorAgentChildEnv(homeDir, baseEnv = process.env, { mkdirImpl = fs.mkdirSync } = {}) {
+  const env = { ...baseEnv };
+  if (!String(env.CURSOR_API_KEY || '').trim()) {
+    const key = readCursorApiKeyFromEnvFile(homeDir);
+    if (key) env.CURSOR_API_KEY = key;
+  }
+  if (process.platform === 'win32') {
+    // Cursor Agent 2026.11.22 は ~/.claude/settings.json を互換読込し、Claude hook を
+    // PowerShell 文へ変換した後に bash eval へ渡すため、全ツールを fail-closed にする。
+    // Cursor 子プロセスだけ home を隔離し、Claude の user hooks を読ませない。
+    // LOCALAPPDATA / APPDATA は維持するので CLI 本体や通常の Cursor 設定は変えない。
+    const isolatedHome = path.join(os.tmpdir(), 'codex-do-cursor-agent-home');
+    mkdirImpl(isolatedHome, { recursive: true });
+    env.USERPROFILE = isolatedHome;
+    env.HOME = isolatedHome;
+  }
+  return env;
 }
 
 const GEMINI_LAUNCH_WINDOW_MS = 6 * 60 * 60 * 1000;
@@ -1861,7 +1900,7 @@ let escalated = false;
 // などの情報行)だけが stderrTail に残り、delegation-health は「全滅」の原因を stderrTail から
 // 特定できない(2026-10-19 実測: fallback 3件の stderrTail は全て無害な情報行だった)。
 let ledgerReason = '';
-function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 1, chain = null) {
+function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 1, chain = null, reasonOverride = '') {
   try {
     const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
@@ -1869,7 +1908,7 @@ function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 
       result, model: modelName, seconds, provider, attempts, chain,
       timeoutSecs: timeoutSeconds, lane: selectedLane.reason, escalated,
       promptChars: prompt.length, origin, kind: taskKind, cwd,
-      reason: ledgerReason
+      reason: reasonOverride || ledgerReason
     });
     fs.appendFileSync(ledger, `${JSON.stringify(row)}\n`, 'utf8');
   } catch {}
@@ -1913,15 +1952,6 @@ if (!useCodex) {
   console.log(`[codex-do] executor=llm-ask${routed.provider ? `:${routed.provider}` : ''} kind=${taskKind}`);
   console.log(llmAskWarning);
   process.exit(routedStatus);
-}
-
-function cursorAgentChildEnv(homeDir, baseEnv = process.env) {
-  const env = { ...baseEnv };
-  if (!String(env.CURSOR_API_KEY || '').trim()) {
-    const key = readCursorApiKeyFromEnvFile(homeDir);
-    if (key) env.CURSOR_API_KEY = key;
-  }
-  return env;
 }
 
 async function executeCursorAgent(backend, { timeoutSecs, promptText, cwd: runCwd = cwd } = {}) {
@@ -2205,7 +2235,16 @@ async function executeCodex() {
     const tail = String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200);
     if (attempt === 1) console.error(`[codex-do] codex が ${elapsed.toFixed(1)} 秒で出力ゼロ(exit ${result.status})のため 1 回だけ再試行します${tail ? `: ${tail}` : ''}`);
   }
-  recordUsage(result, `codex-cli/${selectedLane.slug || 'default'}`, seconds, 'codex', attempts);
+  // Codex CLI が編集・テストまで進めた後、final 応答だけを書かず exit 1 になることがある。
+  // out=0 だけでは「何も実行されなかった」と区別できないため、作業証跡を台帳へ残す。
+  const completedWorkWithoutFinal = result?.timedOut !== true && Number(result?.status) !== 0
+    && (result?.outputChars || 0) === 0 && seconds >= FAST_FAIL_SECS
+    && (treeBefore.trim() !== treeSnapshot().trim() || Boolean(verifyExternalWork({
+      output: `${result?.output || ''}\n${result?.stderr || ''}`, cwd, started,
+      status: result?.status, timedOut: result?.timedOut,
+    })));
+  recordUsage(result, `codex-cli/${selectedLane.slug || 'default'}`, seconds, 'codex', attempts, null,
+    completedWorkWithoutFinal ? 'work_completed_no_final' : '');
   return result;
 }
 

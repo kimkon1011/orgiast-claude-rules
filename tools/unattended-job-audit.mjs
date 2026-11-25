@@ -51,13 +51,16 @@ export function expectedPeriodHours(triggers = []) {
 }
 
 // Filesystem evidence and the applicable manifest are supplied by the caller: no IO here.
-export function auditTasks(tasks, overrides = {}, now = Date.now(), { required = [], artifactMtimes = {} } = {}) {
+export function auditTasks(tasks, overrides = {}, now = Date.now(), { required = [], artifactMtimes = {}, expectDisabled = [] } = {}) {
   const findings = [], present = new Set(tasks.map(t => key(t.taskName)));
   const requiredNames = new Set(required.map(key));
+  const expectDisabledNames = new Set(expectDisabled.map(key));
   const options = new Map(Object.entries(overrides).map(([name, value]) => [key(name), value]));
   for (const task of tasks) {
     const name = task.taskName, override = options.get(key(name)) || {};
     if (override.ignore) continue;
+    // 登録必須だが意図的に無効（後継へ移行済み）。存在確認だけし、有効化・起動しない。
+    if (expectDisabledNames.has(key(name))) continue;
     const add = (kind, extra = {}) => findings.push({ name, kind, lastRunTime: task.lastRunTime, ...extra });
     if (task.state === 'Disabled') { if (requiredNames.has(key(name))) add('disabled_required'); continue; }
     const period = expectedPeriodHours(task.triggers);
@@ -90,13 +93,16 @@ export function auditChangeGateImports(tasks, { toolsDir = dir, readFile = (file
   });
 }
 
-export function unresolvedTasks(tasks, findings, state, now = Date.now(), { required = [] } = {}) {
+export function unresolvedTasks(tasks, findings, state, now = Date.now(), { required = [], expectDisabled = [] } = {}) {
   const requiredSet = new Set(required.map(key));
+  const expectDisabledSet = new Set(expectDisabled.map(key));
   return Object.entries(state.heals || {}).flatMap(([name, heal]) => {
     if (heal.resolved || +now <= stamp(heal.at)) return [];
     const task = tasks.find(t => key(t.taskName) === key(name));
     // Disabled non-required tasks are intentionally retired → treat as resolved.
-    if (task && task.state === 'Disabled' && !requiredSet.has(key(name))) return [];
+    // Required+expectDisabled も登録後無効が設計どおりなので resolved。
+    if (task && task.state === 'Disabled' && (!requiredSet.has(key(name)) || expectDisabledSet.has(key(name)))) return [];
+    if (task && expectDisabledSet.has(key(name))) return [];
     const stillBad = findings.some(f => key(f.name) === key(name));
     const ranAfterHeal = task && stamp(task.lastRunTime) > stamp(heal.at);
     const healthyNow = task && task.state !== 'Disabled' && !stillBad && nonFailure(task);
@@ -145,7 +151,7 @@ export async function notifyUnresolved(body, { home, notify = notifyKim, spawnIm
 }
 
 export async function runAudit({ home = homeDefault(), platform = process.platform, now = Date.now(), dryRun = false,
-  listTasks = listScheduledTaskDetails, overrides, required, notify = notifyUnresolved,
+  listTasks = listScheduledTaskDetails, overrides, required, expectDisabled, notify = notifyUnresolved,
   start = startScheduledTask, enable = enableScheduledTask, spawnImpl = spawn,
   recheckDelayMs = 90000, recheckAttempts = 2, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   if (platform !== 'win32') return { skip: 'unsupported platform', findings: [], unresolved: [], lines: ['skip: unsupported platform'] };
@@ -160,10 +166,13 @@ export async function runAudit({ home = homeDefault(), platform = process.platfo
     }
     const tasks = await listTasks();
     overrides ??= read(path.join(dir, 'unattended-jobs.json'), {});
-    required ??= read(path.join(dir, 'setup-manifest.json'), { items: [] }).items.filter(i => i.type === 'scheduled-task' && i.severity === 'required'
+    const requiredItems = read(path.join(dir, 'setup-manifest.json'), { items: [] }).items.filter(i => i.type === 'scheduled-task' && i.severity === 'required'
       && (i.scope !== 'kim-only' || resolveFleetLabel(home) === 'kim-PC')
       && (!i.spec.ifPresent || fs.existsSync(path.join(home, i.spec.ifPresent)))
-      && (!i.spec.migrationMarker || fs.existsSync(path.join(home, i.spec.migrationMarker)))).map(i => i.spec.name);
+      && (!i.spec.migrationMarker || fs.existsSync(path.join(home, i.spec.migrationMarker))));
+    required ??= requiredItems.map(i => i.spec.name);
+    expectDisabled ??= requiredItems.filter(i => i.spec.expectDisabled).map(i => i.spec.name)
+      .filter(name => required.some(r => key(r) === key(name)));
     const artifactMtimes = {};
     for (const o of Object.values(overrides)) for (const artifact of o.artifacts || []) {
       try { artifactMtimes[artifact] = fs.statSync(artifact.replace(/^~(?=[/\\])/, home)).mtimeMs; } catch { artifactMtimes[artifact] = null; }
@@ -171,9 +180,9 @@ export async function runAudit({ home = homeDefault(), platform = process.platfo
     const state = read(stateFile, { heals: {}, notified: {} });
     state.notified ??= {};
     const save = () => { fs.writeFileSync(`${stateFile}.tmp`, JSON.stringify(state, null, 2)); fs.renameSync(`${stateFile}.tmp`, stateFile); };
-    const findings = auditTasks(tasks, overrides, now, { required, artifactMtimes });
+    const findings = auditTasks(tasks, overrides, now, { required, artifactMtimes, expectDisabled });
     const warnings = auditChangeGateImports(tasks);
-    const unresolved = unresolvedTasks(tasks, findings, state, now, { required });
+    const unresolved = unresolvedTasks(tasks, findings, state, now, { required, expectDisabled });
     for (const name of Object.keys(state.heals || {})) if (!unresolved.some(f => f.name === name) && +now > stamp(state.heals[name].at)) { state.heals[name].resolved = true; delete state.notified[name]; }
     const heals = dryRun ? [] : await healTasks(findings, { startScheduledTask: start, enableScheduledTask: enable, runConverge: () => background([path.join(dir, 'setup.mjs'), '--converge'], { home, spawnImpl, platform }), state, now, save });
     const recheckable = heals.filter(heal => !heal.error && !['missing_required', 'disabled_required'].includes(heal.kind));

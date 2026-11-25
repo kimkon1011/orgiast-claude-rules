@@ -1,9 +1,10 @@
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { submitProposal } from './proposal-session.mjs';
 import {
   evaluateReceiptSignals,
   evaluateFleet,
@@ -27,10 +28,24 @@ import {
   writeAutoSessionExecutorEnv,
   writeBudgetPressure,
   splitWhitelistedCommand,
-  runEntry
+  runEntry,
+  refreshCostDirective
 } from './cost-improve-loop.mjs';
 
-const main = (args, io = {}) => mainImpl(args, { scanAiReceipts: async () => ({ errors: [] }), receiptLedgerAgeHours: () => 0, alertAiReceipts: async () => {}, ...io });
+// テストの未指定経路から実通知・プロセス起動・外部APIを呼ばない。
+// Proposal persistence stays real; every default proposal uses a mocked launcher,
+// including --no-notify runs (that flag does not suppress the real launcher).
+const launchNextSession = mock.fn(async () => 0);
+const submitTestProposal = (proposal, options) => submitProposal(proposal, { ...options, launch: launchNextSession });
+const main = (args, io = {}) => mainImpl(args, {
+  scanAiReceipts: async () => ({ errors: [] }), receiptLedgerAgeHours: () => 0,
+  alertAiReceipts: async () => {}, collectBudgetStatus: async () => ({ budgetPacePct: 0 }),
+  collectProviderBalances: async () => [], alertProviderBalances: async () => {},
+  spawnSync: () => ({ status: 0 }), submitProposal: submitTestProposal,
+  notifyKim: async () => ({ delivered: 'session-inbox' }), sendHeartbeat: async () => {},
+  runOriguchiReferralMonthly: async () => {}, shouldSendMonthlyReport: async () => false,
+  ...io
+});
 
 test('残高シグナル3種の境界とauto-local効果は固定許可リストだけ', () => {
   const rows = [
@@ -362,6 +377,33 @@ test('9. human escalation is neither worked nor shown in the verification sectio
     assert.ok(proposals[0].proposal.evidence.some(x => x.includes('PC-human')));
     assert.equal(proposals[0].options.dryRun, true);
   } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('kim席の非dry-run提案も実画面を開かず注入launcherを呼ぶ', async t => {
+  const home = createTempDir(), previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    cleanTempDir(home);
+  });
+  fs.writeFileSync(path.join(home, '.claude', 'cost-improve-state.json'), JSON.stringify({
+    version: 1, actions: [], lastKpis: {},
+    staleRetry: { 'PC-human': { sentAt: '2026-09-01T00:00:00Z', count: 1 } },
+  }));
+  const callsBefore = launchNextSession.mock.callCount();
+  const result = await main(['--no-notify'], {
+    now: NOW, localState: {}, signals: {}, readLedger: () => ({ codex: 1 }),
+    fetchFleetSheetRows: async () => [{ pcName: 'PC-human', reportedAt: '2026-09-01 00:00:00', delegRatio: '60%', claudeUsd: '1' }],
+    submitProposal: (proposal, options) => submitTestProposal(proposal, { ...options, label: () => 'kim-PC' }),
+    spawnSync: () => assert.fail('no child process'),
+    notifyKim: async () => assert.fail('no notification'), sendHeartbeat: async () => {},
+  });
+  assert.equal(result.ok, true);
+  assert.equal(launchNextSession.mock.callCount(), callsBefore + 1);
+  const { arguments: [args, options] } = launchNextSession.mock.calls.at(-1);
+  assert.deepEqual(args, ['--target', 'vscode', '--prompt', '/session-start']);
+  assert.equal(options.homedir, home);
 });
 
 test('unused_provider is escalated without running a command', () => {
@@ -1056,8 +1098,11 @@ test('receipt signals: success is clean; stale boundary and missing ledger are d
   }
 });
 
-test('runEntry: refresh throw でも run が呼ばれ、process.exitCode=1 になる', async () => {
+test('runEntry: refresh throw でも run 成功なら process.exitCode=0', async t => {
+  const logs = [];
+  t.mock.method(console, 'error', line => logs.push(String(line)));
   const savedExitCode = process.exitCode;
+  t.after(() => { process.exitCode = savedExitCode; });
   process.exitCode = 0;
 
   let calledRun = false;
@@ -1068,9 +1113,20 @@ test('runEntry: refresh throw でも run が呼ばれ、process.exitCode=1 に�
   });
 
   assert.equal(calledRun, true, 'refresh が throw しても run は呼ばれる');
-  assert.equal(process.exitCode, 1, 'process.exitCode は 1 になる');
+  assert.equal(result, 'ok');
+  assert.equal(process.exitCode, 0, 'refresh の失敗は本体の成功を覆さない');
+  assert.ok(logs.some(line => line.includes('WARN') && line.includes('simulated timeout')));
 
   process.exitCode = savedExitCode;
+});
+
+test('directive 更新タイムアウトは既定900秒、環境変数で変更できる', () => {
+  for (const [env, expected] of [[{}, 900000], [{ COST_DIRECTIVE_TIMEOUT_SECONDS: '42' }, 42000], [{ COST_DIRECTIVE_TIMEOUT_SECONDS: 'invalid' }, 900000]]) {
+    refreshCostDirective({ home: os.tmpdir(), env, spawn: (_exe, _args, options) => {
+      assert.equal(options.timeout, expected);
+      return { status: 0 };
+    } });
+  }
 });
 
 test('runEntry: refresh 成功時は process.exitCode を変えず run が呼ばれる', async () => {
@@ -1122,4 +1178,36 @@ test('runEntry: run 自身が throw したら process.exitCode=1 になる', asy
   assert.equal(process.exitCode, 1, 'run の throw で exitCode=1');
 
   process.exitCode = savedExitCode;
+});
+
+test('refreshCostDirective: timeout は正の整数のみ採用する', t => {
+  const key = 'COST_WORK_LOOP_TIMEOUT_MS';
+  const saved = process.env[key];
+  t.after(() => {
+    if (saved === undefined) delete process.env[key];
+    else process.env[key] = saved;
+  });
+  for (const [value, expected] of [
+    [undefined, 900_000], ['600000', 600_000], ['0', 900_000],
+    ['-1', 900_000], ['1.5', 900_000], ['invalid', 900_000],
+    ['Infinity', 900_000], ['', 900_000],
+  ]) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+    let capturedTimeout;
+    refreshCostDirective({ home: os.tmpdir(), spawn: (cmd, args, opts) => {
+      capturedTimeout = opts.timeout;
+      return { status: 0, error: null, stderr: '' };
+    } });
+    assert.equal(capturedTimeout, expected, String(value));
+  }
+});
+
+test('runEntry: refresh と本体が両方失敗した場合は終了コード1', async t => {
+  const saved = process.exitCode;
+  t.after(() => { process.exitCode = saved; });
+  t.mock.method(console, 'error', () => {});
+  process.exitCode = 0;
+  await runEntry({ argv: [], refresh: () => { throw Error('timeout'); }, run: async () => { throw Error('main failed'); } });
+  assert.equal(process.exitCode, 1);
 });

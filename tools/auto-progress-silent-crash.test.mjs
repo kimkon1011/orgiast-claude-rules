@@ -62,8 +62,19 @@ test('audit executes open checks in order and leaves ledger byte-identical', t =
   const before = fs.readFileSync(file), seen = [];
   const report = auditChecks({ home, execute: row => { seen.push(row.check); return row.check === 'bad' ? { code: null, stderr: crash } : { code: 1 }; } });
   assert.deepEqual(seen, ['bad', 'pending']);
-  assert.deepEqual(report, { checked: 2, errorCount: 1, errors: [{ label: '故障', stderr: crash.split('\n')[0] }] });
+  assert.deepEqual(report, { checked: 2, errorCount: 1, errors: [{ label: '故障', stderr: crash.split('\n')[0] }], squashUnsafe: [] });
   assert.deepEqual(fs.readFileSync(file), before);
+});
+
+test('audit reports squash-unsafe open checks without changing existing error fields', t => {
+  const home = temp(t), file = ledgerFile(home);
+  writeLedger(file, [
+    { status: 'open', check: 'git merge-base --is-ancestor d5242ab0 origin/main', label: 'SHA 着地待ち' },
+    { status: 'open', check: "git log origin/main --format=%s | grep -qF '(#2729)'", label: 'PR 着地待ち' },
+    { status: 'done', check: "git log origin/main --format=%s | grep -q 'old title'", label: '完了済み' },
+  ]);
+  const report = auditChecks({ home, execute: () => ({ code: 1 }) });
+  assert.deepEqual(report, { checked: 2, errorCount: 0, errors: [], squashUnsafe: [{ label: 'SHA 着地待ち' }] });
 });
 test('watch persists check_error and notifies owner exactly once across runs', async t => {
   const home = temp(t), now = Date.parse('2026-11-06T03:00:00Z'), messages = [];

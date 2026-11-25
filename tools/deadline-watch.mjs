@@ -67,18 +67,34 @@ export async function inboxAction({ home, row, decision, config, close = false, 
 export function sourceMetadata(row) {
   try { return JSON.parse(String(row.notes || '{}').split('\n')[0]); } catch { return {}; }
 }
-export async function hasSentReply(row, request) {
+export async function hasSentReply(row, request, onGmail404) {
   if (row.kind !== '回答・返信' || !/^gmail$/i.test(row.source)) return false;
   const meta = sourceMetadata(row);
   if (!meta.mailbox || !Number.isFinite(Date.parse(row.detectedAt))) return false;
   let threadId = meta.threadId;
   if (!threadId && meta.messageId) {
-    const message = await request(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(meta.messageId)}?format=metadata`, { user: meta.mailbox, scope: 'https://www.googleapis.com/auth/gmail.readonly' });
-    threadId = message.threadId;
+    try {
+      const message = await request(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(meta.messageId)}?format=metadata`, { user: meta.mailbox, scope: 'https://www.googleapis.com/auth/gmail.readonly' });
+      threadId = message.threadId;
+    } catch (e) {
+      if (e.status === 404 || String(e.message || '').includes('notFound') || String(e.message || '').includes('HTTP 404')) {
+        if (onGmail404) onGmail404();
+        return false;
+      }
+      throw e;
+    }
   }
   if (!threadId) return false;
-  const thread = await request(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=metadata`, { user: meta.mailbox, scope: 'https://www.googleapis.com/auth/gmail.readonly' });
-  return (thread.messages || []).some(m => m.labelIds?.includes('SENT') && Number(m.internalDate) > Date.parse(row.detectedAt));
+  try {
+    const thread = await request(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=metadata`, { user: meta.mailbox, scope: 'https://www.googleapis.com/auth/gmail.readonly' });
+    return (thread.messages || []).some(m => m.labelIds?.includes('SENT') && Number(m.internalDate) > Date.parse(row.detectedAt));
+  } catch (e) {
+    if (e.status === 404 || String(e.message || '').includes('notFound') || String(e.message || '').includes('HTTP 404')) {
+      if (onGmail404) onGmail404();
+      return false;
+    }
+    throw e;
+  }
 }
 export async function syncCalendar(row, { config, state, request, persist = () => {}, log = console.error }) {
   if (!config.calendar.enabled || state.calendarSync === false) return;
@@ -146,14 +162,8 @@ export async function runWatch({ home, config, ledger, sheets, request, today, d
     try {
       let completionEvidence = row.kind === '支払' && row.completedAt;
       if (!closed(row) && !row.readOnly && !completionEvidence) {
-        try { completionEvidence = await hasSentReply(row, request); }
-        catch (e) {
-          if (e.status === 404 || (typeof e.message === 'string' && e.message.includes('HTTP 404'))) {
-            warnings.push({ id: row.id, phase: 'auto-close', warning: '元メールが見つからない（404）。返信済み判定をスキップ' });
-          } else {
-            errors.push({ id: row.id, phase: 'auto-close', error: e.message });
-          }
-        }
+        try { completionEvidence = await hasSentReply(row, request, () => warnings.push({ id: row.id, phase: 'auto-close', warning: '元メールが見つからない(404)' })); }
+        catch (e) { errors.push({ id: row.id, phase: 'auto-close', error: e.message }); }
       }
       // An unavailable completion check must not suppress an outstanding deadline.
       if (!closed(row) && !row.readOnly && completionEvidence) {

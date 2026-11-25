@@ -1056,6 +1056,12 @@
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     },
     {
+      "path": "tools/stall-ledger.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-beacon が停滞台帳の集計を送信する実行時 import 依存（再帰検査対象）"
+    },
+    {
       "path": "tools/fleet-mail-watchdog.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",

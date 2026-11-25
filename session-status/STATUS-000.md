@@ -1,4 +1,4 @@
-# session-status  PC=000  host=000KIMPC  updated 2026-11-25 21:13 JST
+# session-status  PC=000  host=000KIMPC  updated 2026-11-25 22:13 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\uers\\.claude\\projects", "configDirectory": "C:\\Users\\uers\\
 - 案件数: 59
@@ -56,7 +56,7 @@
 - 000・tldv-auto-1124・停止・最終更新 11/24 16:01、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
 - 000・tokium-plaud-1124・完了・最終更新 11/24 13:28、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 000・trial-nao-1125・完了・最終更新 11/25 19:31、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
-- 000・tsuji-a9-drive-1125・停止・最終更新 11/25 21:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・tsuji-a9-drive-1125・完了・最終更新 11/25 21:22、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 000・ucs-freee-1124・停止・最終更新 11/24 10:46、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 000・ucs-freee-auto-1124・完了・最終更新 11/25 13:27、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 000・_discord-line-out・完了・最終更新 11/23 16:22、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし

@@ -1,17 +1,17 @@
-# session-status SUMMARY  updated 2026-11-25 21:14 JST
+# session-status SUMMARY  updated 2026-11-25 22:13 JST
 
 000は他PCのディスクを直接読まない。各PCが fleet-heartbeat ブランチの session-status/ に STATUS を置き、000が集める。
 
 ## 到達（共有gitにSTATUSがあったか）
-- 000: ○ 最終更新 11/25 21:13
-- 004: × STATUSなし。原因: 未導入かオフライン、またはgit未同期。直し方: そのPCで gb-offload\\session-status.ps1 -Install を実行する。
+- 000: ○ 最終更新 11/25 22:13
+- 004: ○ 最終更新 11/25 21:16
 - 008: × STATUSなし。原因: 未導入かオフライン、またはgit未同期。直し方: そのPCで gb-offload\\session-status.ps1 -Install を実行する。
 - 011: ○ 最終更新 11/25 21:11
 - 014: ○ 最終更新 11/25 21:11
 - 015: × STATUSなし。原因: 未導入かオフライン、またはgit未同期。直し方: そのPCで gb-offload\\session-status.ps1 -Install を実行する。
 - 018: ○ 最終更新 11/25 21:11
-- 019: × STATUSなし。原因: 未導入かオフライン、またはgit未同期。直し方: そのPCで gb-offload\\session-status.ps1 -Install を実行する。
-- 999: × STATUSなし。原因: 未導入かオフライン、またはgit未同期。直し方: そのPCで gb-offload\\session-status.ps1 -Install を実行する。
+- 019: ○ 最終更新 11/25 21:16
+- 999: ○ 最終更新 11/25 21:16
 
 ## 000の認証
 - { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\uers\\.claude\\projects", "configDirectory": "C:\\Users\\uers\\
@@ -70,12 +70,25 @@
 - 000・tldv-auto-1124・停止・最終更新 11/24 16:01、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
 - 000・tokium-plaud-1124・完了・最終更新 11/24 13:28、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 000・trial-nao-1125・完了・最終更新 11/25 19:31、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
-- 000・tsuji-a9-drive-1125・停止・最終更新 11/25 21:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・tsuji-a9-drive-1125・完了・最終更新 11/25 21:22、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 000・ucs-freee-1124・停止・最終更新 11/24 10:46、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 000・ucs-freee-auto-1124・完了・最終更新 11/25 13:27、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 000・_discord-line-out・完了・最終更新 11/23 16:22、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 000・_discord-sato-raw-1123・停止・最終更新 11/21 21:28、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 000・_handoff-roudou-1123・停止・最終更新 11/23 14:18、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 004・account-inventory-1123・完了・最終更新 11/23 22:02、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 004・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 004・local-seo-1125・停止・最終更新 11/25 15:21、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 004・loop-check-1125・金さん待ち・最終更新 11/25 15:44、STATUS.mdなし、REPORTあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 004・loop-check-1125-lahaina・金さん待ち・最終更新 11/25 15:43、STATUS.mdなし、REPORTあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 004・merci-autosend-1125・完了・最終更新 11/25 10:25、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
+- 004・minpaku-okazaki-check-1124・停止・最終更新 11/24 14:37、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 004・minpaku-price-1124・停止・最終更新 11/24 09:43、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 004・nf-toho-1110-1124・停止・最終更新 11/24 12:20、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
+- 004・okazaki-line-1125・完了・最終更新 11/25 10:16、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
+- 004・reply-drafts-1125・停止・最終更新 11/25 19:09、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
+- 004・tasks・停止・最終更新 11/24 09:30、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 004・toho-fax-ingest・金さん待ち・見積システム「現場」フォルダの FAX_ 取り込みは 11/24 18:02 に再開済み（11/25 21:02 受信分まで確認）。11/12 18時〜11/18 11時（受信番号 3780〜3972）が未取り込み。西田さんへの報告文面の承認待ち（kim-inbox ki-20261125120946-1c7b）・期限2026-11-27 12:00・次:承認が来たら Beeper 経由で西田直哉さんの LINE 個人トークへ送り、読み戻す。抜けの扱いは西田さんの返事で決める
 - 011・3oku-9-17-1125・完了・最終更新 11/25 09:39、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 011・3oku-9-17-1125-quota-test・停止・最終更新 11/25 09:26、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・account-inventory-1123・完了・最終更新 11/24 02:37、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
@@ -115,6 +128,33 @@
 - 018・reply-wait-collect-1125・停止・最終更新 11/25 09:35、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・t706u-1125・停止・最終更新 11/25 11:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・vercel-limit-1124・停止・最終更新 11/24 17:00、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 019・account-inventory-1123・完了・最終更新 11/23 21:56、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
+- 019・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 019・chat-drafts・停止・最終更新 11/25 21:00、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 019・coel-shiono-1125・完了・最終更新 11/25 19:30、STATUS.mdなし、DONEあり、run.logあり・期限なし・次:なし
+- 019・dispatch-1122-21・停止・最終更新 11/22 21:30、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 019・eight-wiaas-meeting-1125・完了・最終更新 11/25 19:19、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
+- 019・illumi-kono-claim-1125・完了・最終更新 11/25 19:02、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
+- 019・illumi-kono-probe・停止・最終更新 11/25 18:52、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 019・local-llm-cpu-test-1125・完了・最終更新 11/25 17:19、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 019・reply-drafts-1125・完了・最終更新 11/25 19:20、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
+- 019・souko-move-1125・完了・最終更新 11/25 19:12、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
+- 019・tangomuto-reply-1125・停止・最終更新 11/25 19:26、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 019・tsuji-natchan-1125・完了・最終更新 11/25 21:04、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
+- 019・used-pc-llm-1123・完了・最終更新 11/24 00:06、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 999・account-inventory-1123・完了・最終更新 11/23 22:45、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
+- 999・cc-probe-1125・停止・最終更新 11/25 12:13、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 999・fax-shimizu-1124・停止・最終更新 11/24 12:30、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 999・humanoid-bizplan-1124・完了・最終更新 11/24 19:41、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
+- 999・local-seo-1125・停止・最終更新 11/25 15:38、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 999・loop-check-1125・停止・最終更新 11/25 15:38、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 999・roudou-carb-1123・完了・最終更新 11/23 15:36、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 999・roudou-discord-line-1123・完了・最終更新 11/23 16:22、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 999・roudou-fatigue-1123・完了・最終更新 11/23 17:03、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 999・roudou-nofav-1123・停止・最終更新 11/23 14:18、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 999・roudou-resume-1123・完了・最終更新 11/23 13:52、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 999・roudou-send-1124・停止・最終更新 11/23 17:02、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
+- 999・_handoff-roudou-1123・停止・最終更新 11/23 14:18、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 
 ## 共有同期
 - 000のpush: 失敗 引数が null であるため、パラメーター 'Path' にバインドできません。

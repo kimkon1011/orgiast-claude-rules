@@ -1,0 +1,47 @@
+{
+  "source": "schtasks.exe /query /fo list",
+  "tasks": [
+    "Claude-WiFi-thkg6-Monitor",
+    "ClaudeDailyDriveBackup",
+    "ClaudeMobile-WebServer",
+    "ClaudeNightlyReloadVSCode",
+    "ClaudeRuleComplianceAudit",
+    "Orgiast Growi 自動クリーンアップ",
+    "OrgiastAutoSession",
+    "OrgiastAutoSessionVerify",
+    "OrgiastBoothFeedbackIntake",
+    "OrgiastCostImproveLoop",
+    "OrgiastCostWeeklyImprove",
+    "OrgiastDiscordTaskDigest",
+    "OrgiastEveningDigest",
+    "OrgiastFeedbackIntakeFast",
+    "OrgiastFeedbackNag",
+    "OrgiastFleetAgent",
+    "OrgiastFleetMail",
+    "OrgiastFleetPoller",
+    "OrgiastFunnelProbe",
+    "OrgiastGoogleTasksPlan",
+    "OrgiastMorningBatch",
+    "OrgiastNightlyBatch",
+    "OrgiastNightlyKpi",
+    "OrgiastPlaudToTldv",
+    "OrgiastProcessHygiene",
+    "OrgiastSecretaryCalendarChase",
+    "OrgiastStallSweeper",
+    "OrgiastSyncMainTree",
+    "OrgiastThermalGuard",
+    "OrgiastTop3Catchup"
+  ],
+  "references": [
+    "OrgiastBoothFeedbackIntake",
+    "OrgiastCostWeeklyImprove",
+    "OrgiastDiscordTaskDigest",
+    "OrgiastFleetPoller",
+    "OrgiastMorningBatch",
+    "OrgiastNightlyBatch"
+  ],
+  "missingBefore": [
+    "OrgiastBoothFeedback"
+  ],
+  "missingAfter": []
+}

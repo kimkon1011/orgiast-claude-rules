@@ -1,0 +1,27 @@
+✔ archives after since are queued once; baseline survives cooldown and subsequent runs (20.0323ms)
+✔ archive sync write: host_exit immediately before archive (3.6735ms)
+✔ archive sync dry-run: host_exit immediately before archive (9.3873ms)
+✔ archive sync write: no host_exit (8.8871ms)
+✔ archive sync dry-run: no host_exit (11.8419ms)
+✔ archive sync write: host_exit ten minutes before archive (2.8667ms)
+✔ archive sync dry-run: host_exit ten minutes before archive (2.2713ms)
+✔ archive sync write: older automatic archive before latest manual archive (2.6018ms)
+✔ archive sync dry-run: older automatic archive before latest manual archive (9.9659ms)
+✔ first invocation fixes since=now and permanently excludes older archives (3.4269ms)
+✔ active, old updated_at, unmatched, excluded projects and already archived files need no events (3.4315ms)
+✔ user and assistant activity after grace period is skipped, including a UTF-8 tail cut (38.2552ms)
+✔ a restored session is queued again only when archived after the restore (2.7946ms)
+✔ kept is reread after events and concurrent additions survive (3.0256ms)
+✔ dry-run with since override writes neither state nor ledger (12.8814ms)
+✔ pagination follows cursor; newest archive event wins and missing or invalid dates fail closed (3.4789ms)
+✔ events budget is capped at 100 and HTTP/network failures are counted (196.2245ms)
+✔ 60-second deadline stops before ledger write and pagination stops at 30 pages (6.1713ms)
+✔ force bypasses cooldown but preserves baseline, kept and resumed guards (12.3273ms)
+ℹ tests 19
+ℹ suites 0
+ℹ pass 19
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2109.493304

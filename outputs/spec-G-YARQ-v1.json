@@ -1,0 +1,116 @@
+{
+  "case_id": "G-YARQ-v1",
+  "title": "三共精機 展示ブース（3x6）",
+  "booth": {
+    "w_mm": 6000,
+    "d_mm": 3000,
+    "height_limit_mm": 3000,
+    "open_sides": [
+      "front",
+      "right"
+    ],
+    "walls": [
+      "back",
+      "left"
+    ]
+  },
+  "items": [
+    {
+      "asset_id": "floor_panel",
+      "w_mm": 3000,
+      "d_mm": 3000,
+      "h_mm": 50,
+      "t_mm": 50,
+      "pos_mm": [
+        3000,
+        1500,
+        0
+      ],
+      "count": 1
+    },
+    {
+      "asset_id": "system_panel",
+      "w_mm": 2600,
+      "d_mm": 2400,
+      "h_mm": 40,
+      "t_mm": 40,
+      "pos_mm": [
+        3000,
+        200,
+        0
+      ],
+      "count": 1
+    },
+    {
+      "asset_id": "panel_display_450x900x790",
+      "w_mm": 450,
+      "d_mm": 900,
+      "h_mm": 790,
+      "t_mm": 50,
+      "pos_mm": [
+        2000,
+        1500,
+        0
+      ],
+      "count": 1
+    },
+    {
+      "asset_id": "shodan_high_810x810x900",
+      "w_mm": 810,
+      "d_mm": 810,
+      "h_mm": 900,
+      "t_mm": 50,
+      "pos_mm": [
+        4000,
+        1200,
+        0
+      ],
+      "count": 1
+    },
+    {
+      "asset_id": "monitor_42_50x970x560",
+      "w_mm": 50,
+      "d_mm": 970,
+      "h_mm": 560,
+      "t_mm": 50,
+      "pos_mm": [
+        3000,
+        750,
+        1500
+      ],
+      "count": 1
+    },
+    {
+      "asset_id": "monitor_42_50x970x560",
+      "w_mm": 50,
+      "d_mm": 970,
+      "h_mm": 560,
+      "t_mm": 50,
+      "pos_mm": [
+        4500,
+        750,
+        1200
+      ],
+      "rot_deg": 15,
+      "count": 1
+    },
+    {
+      "asset_id": "shodan_stacking_420x540x870",
+      "w_mm": 420,
+      "d_mm": 540,
+      "h_mm": 870,
+      "t_mm": 50,
+      "pos_mm": [
+        3000,
+        2100,
+        0
+      ],
+      "count": 2
+    }
+  ],
+  "views": [
+    "persp_front_left",
+    "persp_front_right",
+    "top"
+  ]
+}

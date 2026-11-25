@@ -1,0 +1,199 @@
+export const GATE_CONTRACT = {"name": "manual-request-fullsteps-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "manual-request-fullsteps-gate"}]};
+import { latestAssistantText } from './lib/assistant-text.mjs';
+import { isEntry } from './is-entry.mjs';
+
+export function hasManualRequest(text) {
+    // コードフェンスを除去
+    const textWithoutCodeFences = text.replace(/```[\s\S]*?```/g, '');
+
+    // トリガーは「依頼の言い回し」だけに絞る。話題として単語が出ただけでは止めない。
+    const triggerPatterns = [
+        /(実行|起動|クリック|押|入力|貼り付け|貼っ|打っ|ログイン|承認|認証|発行|設定|開い|やっ|試し|返信|教え|選ん|進ん)(し)?て\s*(ください|下さい|ほしい|欲しい|もらえ)/,
+        /(実行|操作|作業|対応|確認|ログイン|承認|マージ|クリック|登録|設定)(を)?\s*お願いします/,
+        /(^|\n)\s{0,3}#{1,4}[^\n]*(お願いしたいこと|やってほしいこと|手作業のお願い)/,
+    ];
+
+    return triggerPatterns.some(pattern => pattern.test(textWithoutCodeFences));
+}
+
+// 渡しているのが「実行させるコマンド」かどうか。出力例やログの貼り付けと区別するため、
+// フェンス内のいずれかの行が既知の CLI で始まるものだけを対象にする。
+export function hasCommandFence(text) {
+    const fences = text.match(/```[\s\S]*?```/g) || [];
+    const cli = /^\s*(gh|git|node|npm|npx|powershell|schtasks|curl|clasp|vercel|supabase|psql|codex|winget|choco)\s/m;
+    return fences.some(fence => cli.test(fence.replace(/^```[^\n]*\n/, '').replace(/```$/, '')));
+}
+
+export function judge(text) {
+    // コードフェンスを除去
+    const textWithoutCodeFences = text.replace(/```[\s\S]*?```/g, '');
+    
+    // トリガー判定
+    // トリガーは「依頼の言い回し」だけに絞る。話題として単語が出ただけでは止めない。
+    // 実際に踏んだ誤爆(2026-08-30): 「次から私が"手作業"を頼もうとすると…」という説明文で block した。
+    // 部分一致は『言及』と『実行』を区別できない（worklock hook で2回踏んだのと同じ罠）。
+    const triggered = hasManualRequest(text);
+    if (!triggered) {
+        return { triggered: false, missing: [] };
+    }
+
+    // 必須要素の検査
+    const missing = [];
+    
+    // 場所のチェック
+    const locationPattern = /(PowerShell|パワーシェル|コマンドプロンプト|ターミナル|端末|ブラウザ|管理画面|スプレッドシート|エクスプローラ|アプリ|画面|スタートメニュー|Windows ?キー)/;
+    if (!locationPattern.test(text)) {
+        missing.push('場所');
+    }
+    
+    // 手順のチェック（3行以上の数字付きステップ）
+    const stepLines = text.match(/^\s*\d+[.)]\s/gm) || [];
+    if (stepLines.length < 3) {
+        missing.push('手順');
+    }
+    
+    // 貼り先のチェック。
+    // 「場所」の既存判定は『画面』『アプリ』等の単語1つで通ってしまい、コマンドを渡しているのに
+    // "何に貼るのか" を書かない依頼を素通りさせていた(2026-09-15 実測: user から「何に貼るの？」と
+    // 聞き返された)。コマンドを渡すときだけ、アプリ名・開き方・貼り付け方の3点を必須にする。
+    if (hasCommandFence(text)) {
+        const appName = /(PowerShell|パワーシェル|コマンドプロンプト|ターミナル|Terminal|iTerm|Git ?Bash)/;
+        const appOpen = /(Windows ?キー|スタートメニュー|検索ボックス|Spotlight|アプリケーション ?フォルダ|Launchpad)/;
+        const paste = /(右クリック|Ctrl\s*\+\s*V|Cmd\s*\+\s*V|⌘\s*V|貼り付け|ペースト)/;
+        if (!appName.test(text) || !appOpen.test(text) || !paste.test(text)) {
+            missing.push('貼り先(アプリ名・開き方・貼り付け方)');
+        }
+    }
+
+    // 成功のチェック
+    const successPattern = /(成功|完了|と表示|と出|表示されたら|出たら|出れば|消えます|閉じて)/;
+    if (!successPattern.test(text)) {
+        missing.push('成功');
+    }
+    
+    // 失敗のチェック
+    const failurePattern = /(出ない|表示されない|失敗|エラー|うまくいかな|ダメ|見つからな|貼ってください|教えてください)/;
+    if (!failurePattern.test(text)) {
+        missing.push('失敗');
+    }
+    
+    return { triggered: true, missing };
+}
+
+function main() {
+    try {
+        if (process.argv.includes('--selftest')) {
+            // 自己テスト実行
+            const testCases = [
+                {
+                    text: '実行してください。設定してください。承認してください。',
+                    expected: { triggered: true, missing: ['場所', '手順', '成功', '失敗'] }
+                },
+                {
+                    text: 'PowerShellを開いてください。\n1. スタートメニューを開く\n2. PowerShellと入力\n3. Enterを押す\n成功したら完了と表示されます。失敗したら教えてください。',
+                    expected: { triggered: true, missing: [] }
+                },
+                {
+                    text: '処理が完了しました。結果は正常です。',
+                    expected: { triggered: false, missing: [] }
+                },
+                {
+                    text: 'コード例:\n```\n実行してください\n```\n通常のテキスト',
+                    expected: { triggered: false, missing: [] }
+                },
+                {
+                    // 2026-08-30 の実際の誤爆。単語「手作業」が説明文に出ただけで止めていた
+                    text: '次から私が手作業を頼もうとすると、場所・番号付き手順・成功の目印・失敗時の逃げ道が揃っていない限り応答が止まります。今回のような一行だけの依頼は出せなくなりました。',
+                    expected: { triggered: false, missing: [] }
+                },
+                {
+                    // 結びの挨拶で止めない
+                    text: '以上です。よろしくお願いします。',
+                    expected: { triggered: false, missing: [] }
+                },
+                {
+                    // 依頼の言い回しなら手順が無い限り止める
+                    text: 'GitHub の画面で Merge をクリックしてください。',
+                    expected: { triggered: true, missing: ['手順', '成功', '失敗'] }
+                },
+                {
+                    // 2026-09-15 の実際の取りこぼし。コマンドを渡しているのに貼り先が無い
+                    text: 'kim さんの端末で以下をそのまま貼って実行してください。\n\n```bash\ngh pr merge 413 --repo kimkon1011/orgiast-claude-rules --squash\n```\n\n1. PR を開く\n2. コマンドを実行する\n3. 結果を確認する\n成功すると Merged と表示されます。失敗したら教えてください。',
+                    expected: { triggered: true, missing: ['貼り先(アプリ名・開き方・貼り付け方)'] }
+                },
+                {
+                    // 貼り先が揃っていれば通す
+                    text: 'Windowsキー を押して「powershell」と入力し Enter で PowerShell を開いてください。青い画面で右クリックすると貼り付けできます。\n\n```bash\ngh pr merge 413 --repo kimkon1011/orgiast-claude-rules --squash\n```\n\n1. PowerShell を開く\n2. 上のコマンドを貼り付ける\n3. Enter を押す\n成功すると Merged と表示されます。失敗したら教えてください。',
+                    expected: { triggered: true, missing: [] }
+                },
+                {
+                    // コマンドを渡していない依頼では貼り先を要求しない
+                    text: 'ブラウザで画面を開いてクリックしてください。\n\n```\n結果: OK\n```\n\n1. 画面を開く\n2. ボタンを押す\n3. 閉じる\n完了と表示されます。失敗したら教えてください。',
+                    expected: { triggered: true, missing: [] }
+                },
+            ];
+            
+            let allPassed = true;
+            for (const testCase of testCases) {
+                const result = judge(testCase.text);
+                if (JSON.stringify(result) !== JSON.stringify(testCase.expected)) {
+                    console.error(`テスト失敗: ${JSON.stringify(testCase)}\n結果: ${JSON.stringify(result)}`);
+                    allPassed = false;
+                }
+            }
+            
+            process.exit(allPassed ? 0 : 1);
+            return;
+        }
+        
+        // 標準入力からJSONを読み取り
+        let input = '';
+        process.stdin.on('data', chunk => {
+            input += chunk;
+        });
+        
+        process.stdin.on('end', () => {
+            try {
+                const data = JSON.parse(input);
+                
+                // ループ防止
+                if (data.stop_hook_active) {
+                    process.exit(0);
+                }
+                
+                const assistantText = latestAssistantText(data.transcript_path);
+
+                // 空チェックとMANUAL-OKチェック
+                if (!assistantText || assistantText.includes('[MANUAL-OK]')) {
+                    process.exit(0);
+                }
+                
+                // 判定実行
+                const result = judge(assistantText);
+                
+                if (!result.triggered || result.missing.length === 0) {
+                    process.exit(0);
+                }
+                
+                // block出力
+                const reason = `[FULL-STEPS] 人に手作業を頼んでいますが、次が足りません: ${result.missing.join('・')}（§1.5.1 絶対ルール）\n\n書き直しテンプレート:\n- この作業の目的と省略可否\n- 具体的な操作場所（例: Windowsキー → 「powershell」入力 → Enter）\n- コピーする1行コード（コードブロックで）\n- 貼り付け方法（青い画面で右クリック）とEnter押下\n- 成功時の画面表示内容\n- 失敗時の対応表（症状 → 対策）\n\nどうしても手順化できない場合だけ、応答に [MANUAL-OK] と書けばこの検査を通過します。`;
+                
+                console.log(JSON.stringify({
+                    decision: 'block',
+                    reason: reason
+                }));
+                
+            } catch {
+                // 想定外エラーはfail-open
+                process.exit(0);
+            }
+        });
+        
+    } catch {
+        process.exit(0);
+    }
+}
+
+if (isEntry(import.meta.url)) {
+    main();
+}

@@ -1,0 +1,14 @@
+{
+  "failing": [
+    "tools の main ガードは isEntry を使う",
+    "ユーザー設定ファイルが無い場合はregistry既定のwarn",
+    "long node eval warns",
+    "block denies over 1500 chars, override disables deny",
+    "large spec authoring passes but large interpreter heredoc is denied in block mode",
+    "mode=block でも Codex クールダウン中なら deny しない",
+    "broken stdin exits zero",
+    "8 登録簿の必須フィールド",
+    "tools/task-ledger-logic.test.mjs"
+  ],
+  "recordedAt": "2026-09-05T07:40:47.822Z"
+}

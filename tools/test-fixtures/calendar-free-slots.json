@@ -1,0 +1,101 @@
+[
+  {
+    "id": "adj-1",
+    "summary": "業務報告 12:00-13:00【調整可】",
+    "start": { "dateTime": "2026-11-10T12:00:00+09:00" },
+    "end": { "dateTime": "2026-11-10T13:00:00+09:00" },
+    "transparency": "opaque",
+    "attendees": [{ "self": true, "responseStatus": "accepted" }],
+    "_source": "kim@orgiast.jp"
+  },
+  {
+    "id": "gbuf-1",
+    "summary": "G: 東京得意先（訪問）",
+    "start": { "dateTime": "2026-11-10T14:00:00+09:00" },
+    "end": { "dateTime": "2026-11-10T16:00:00+09:00" },
+    "transparency": "opaque",
+    "attendees": [{ "self": true, "responseStatus": "accepted" }],
+    "_source": "kim@orgiast.jp"
+  },
+  {
+    "id": "declined-1",
+    "summary": "打ち合わせ（辞退）",
+    "start": { "dateTime": "2026-11-10T10:00:00+09:00" },
+    "end": { "dateTime": "2026-11-10T11:00:00+09:00" },
+    "transparency": "opaque",
+    "attendees": [{ "self": true, "responseStatus": "declined" }],
+    "_source": "kim@orgiast.jp"
+  },
+  {
+    "id": "transparent-1",
+    "summary": "自由参加イベント",
+    "start": { "dateTime": "2026-11-10T15:00:00+09:00" },
+    "end": { "dateTime": "2026-11-10T16:00:00+09:00" },
+    "transparency": "transparent",
+    "attendees": [{ "self": true, "responseStatus": "accepted" }],
+    "_source": "kim@orgiast.jp"
+  },
+  {
+    "id": "fixed-1",
+    "summary": "経営会議",
+    "start": { "dateTime": "2026-11-10T09:00:00+09:00" },
+    "end": { "dateTime": "2026-11-10T10:30:00+09:00" },
+    "transparency": "opaque",
+    "attendees": [{ "self": true, "responseStatus": "accepted" }],
+    "_source": "kim@orgiast.jp"
+  },
+  {
+    "id": "seisaku-only",
+    "summary": "制作チーム定例",
+    "start": { "dateTime": "2026-11-10T10:30:00+09:00" },
+    "end": { "dateTime": "2026-11-10T11:30:00+09:00" },
+    "transparency": "opaque",
+    "attendees": [{ "self": true, "responseStatus": "accepted" }],
+    "_source": "seisaku-team@orgiast.jp"
+  },
+  {
+    "id": "duplicate-1",
+    "summary": "経営会議",
+    "start": { "dateTime": "2026-11-10T09:00:00+09:00" },
+    "end": { "dateTime": "2026-11-10T10:30:00+09:00" },
+    "transparency": "opaque",
+    "attendees": [{ "self": true, "responseStatus": "accepted" }],
+    "_source": "seisaku-team@orgiast.jp"
+  },
+  {
+    "id": "tokyo-all-day",
+    "summary": "東京出張",
+    "start": { "date": "2026-11-11" },
+    "end": { "date": "2026-11-12" },
+    "transparency": "opaque",
+    "attendees": [],
+    "_source": "kim@orgiast.jp"
+  },
+  {
+    "id": "region-only",
+    "summary": "東京",
+    "start": { "date": "2026-11-12" },
+    "end": { "date": "2026-11-13" },
+    "transparency": "opaque",
+    "attendees": [],
+    "_source": "kim@orgiast.jp"
+  },
+  {
+    "id": "holiday-1",
+    "summary": "有給休暇",
+    "start": { "date": "2026-11-13" },
+    "end": { "date": "2026-11-14" },
+    "transparency": "opaque",
+    "attendees": [],
+    "_source": "kim@orgiast.jp"
+  },
+  {
+    "id": "seisaku-all-day",
+    "summary": "東京（制作チーム終日、地域判定に使わない）",
+    "start": { "date": "2026-11-14" },
+    "end": { "date": "2026-11-15" },
+    "transparency": "opaque",
+    "attendees": [],
+    "_source": "seisaku-team@orgiast.jp"
+  }
+]

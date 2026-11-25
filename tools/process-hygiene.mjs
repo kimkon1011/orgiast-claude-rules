@@ -1,0 +1,543 @@
+#!/usr/bin/env node
+import fs from 'node:fs';
+import { WINDOWS_PROCESS_SCRIPT, isClaudeCodeCliProcess } from './lib/windows-process.mjs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { isEntry } from './is-entry.mjs';
+import { acquireLock, releaseLock } from './lib/single-instance.mjs';
+import { notifyKim } from './notify-kim.mjs';
+
+const MINUTE = 60_000;
+const ALERT_COOLDOWN_MS = 6 * 60 * MINUTE;
+const PROCESS_NAMES = new Set(['node.exe', 'pwsh.exe', 'powershell.exe']);
+const FIELD_SEPARATOR = '\x1f';
+const LONG_RUNNING_JOB_MAX_AGE_MIN = 12 * 60;
+const BATCH_LOCK_MAX_AGE_MS = 8 * 60 * MINUTE;
+const LONG_RUNNING_JOBS = new Set([
+  'auto-session-launcher.mjs',
+  'auto-session.mjs',
+  'auto-session-executor.mjs',
+  'gsk-login-keeper.mjs',
+  'fleet-poller.ps1',
+  'fleet-agent.mjs',
+  'nightly-batch.ps1',
+  'cost-improve-loop.mjs',
+  'cost-work-loop.mjs',
+  'codex-do.mjs',
+  'cheap-code.mjs',
+  'process-hygiene.mjs',
+]);
+
+function numberAfter(argv, flag, fallback) {
+  const index = argv.indexOf(flag);
+  if (index < 0) return fallback;
+  const value = Number(argv[index + 1]);
+  if (!Number.isFinite(value) || value < 0) throw new Error(`${flag} は0以上の数値で指定してください`);
+  return value;
+}
+
+export function parseOptions(argv = process.argv.slice(2)) {
+  const dryRun = argv.includes('--dry-run');
+  return {
+    kill: argv.includes('--kill') && !dryRun,
+    dryRun,
+    maxAgeMin: numberAfter(argv, '--max-age-min', 120),
+    maxBatchAgeMin: numberAfter(argv, '--max-batch-age-min', 240),
+    alertThreshold: numberAfter(argv, '--alert-threshold', 10),
+    vscodeIdleMin: numberAfter(argv, '--vscode-idle-min', 720),
+    vscodeIdleMinFreeGb: numberAfter(argv, '--vscode-idle-min-free-gb', 16),
+    vscodeIdleCpuLoad: numberAfter(argv, '--vscode-idle-cpu-load', 90),
+    vscodeIdleMinWhenCpu: numberAfter(argv, '--vscode-idle-min-when-cpu', 180),
+  };
+}
+
+const TERMINAL_NAMES = new Set(['windowsterminal.exe']);
+const CONSOLE_HOST_NAMES = new Set(['conhost.exe', 'openconsole.exe']);
+
+// Windows Terminal 配下に console host はあるが、そこから先にクライアントがいない窓だけを返す。
+// Terminal 単体や、系譜を確定できないプロセスは誤終了防止のため対象にしない。
+export function classifyOrphanConsoleWindows(processes) {
+  const rows = Array.isArray(processes) ? processes : processes ? [processes] : [];
+  const children = new Map();
+  for (const row of rows) {
+    const parentPid = Number(row.ParentProcessId ?? row.parentPid);
+    if (!Number.isInteger(parentPid)) continue;
+    const siblings = children.get(parentPid) ?? [];
+    siblings.push(row);
+    children.set(parentPid, siblings);
+  }
+  const descendants = (pid) => {
+    const found = [];
+    const pending = [...(children.get(pid) ?? [])];
+    const seen = new Set();
+    while (pending.length) {
+      const row = pending.pop();
+      const childPid = Number(row.ProcessId ?? row.pid);
+      if (!Number.isInteger(childPid) || seen.has(childPid)) continue;
+      seen.add(childPid);
+      found.push(row);
+      pending.push(...(children.get(childPid) ?? []));
+    }
+    return found;
+  };
+  return rows.flatMap((terminal) => {
+    const name = String(terminal.Name ?? terminal.name ?? '').toLowerCase();
+    if (!TERMINAL_NAMES.has(name)) return [];
+    const terminalPid = Number(terminal.ProcessId ?? terminal.pid);
+    const tree = descendants(terminalPid);
+    const hosts = tree.filter((row) => CONSOLE_HOST_NAMES.has(String(row.Name ?? row.name ?? '').toLowerCase()));
+    if (!hosts.length) return [];
+    const hostTreePids = new Set(hosts.flatMap((host) => descendants(Number(host.ProcessId ?? host.pid))).map((row) => Number(row.ProcessId ?? row.pid)));
+    const clients = tree.filter((row) => {
+      const rowName = String(row.Name ?? row.name ?? '').toLowerCase();
+      const rowPid = Number(row.ProcessId ?? row.pid);
+      return hostTreePids.has(rowPid) && !CONSOLE_HOST_NAMES.has(rowName);
+    });
+    if (clients.length) return [];
+    const bytes = Number(terminal.WorkingSetSize ?? terminal.workingSetSize ?? 0);
+    return [{ pid: terminalPid, name, commandLine: String(terminal.CommandLine ?? terminal.commandLine ?? ''), kind: 'orphan-console-window', ageMin: 0, mb: Number.isFinite(bytes) ? bytes / 1024 / 1024 : 0 }];
+  });
+}
+
+// Claude の Bash ツールが起動したシェル（shell-snapshots を source する）で、until/while＋sleep の待機ループだけを対象にする。
+// 起動元 Claude が終了すると待機先が永久に来ず回り続け、反復ごとに可視コンソール窓を出す（2026-10-29: 10/20 の待機ループが9日間窓を出し続けた）。
+const CLAUDE_SHELL_MARKER = /[\\/]\.claude[\\/]shell-snapshots[\\/]snapshot-bash-/i;
+const WAIT_LOOP = /\beval\s+'[^]*\b(?:until|while)\b[^]*\bsleep\b/;
+
+export function classifyOrphanClaudeWaitLoops(processes, now = Date.now(), opts = {}) {
+  const maxAgeMin = opts.maxAgeMin ?? 120;
+  const rows = Array.isArray(processes) ? processes : processes ? [processes] : [];
+  const byPid = new Map(rows.map((row) => [Number(row.ProcessId ?? row.pid), row]));
+  const isClaudeShell = (row) => String(row?.Name ?? row?.name ?? '').toLowerCase() === 'bash.exe'
+    && CLAUDE_SHELL_MARKER.test(String(row?.CommandLine ?? row?.commandLine ?? ''));
+  return rows.flatMap((row) => {
+    if (!isClaudeShell(row)) return [];
+    const commandLine = String(row.CommandLine ?? row.commandLine ?? '');
+    const parent = byPid.get(Number(row.ParentProcessId ?? row.parentPid));
+    // Git\bin\bash.exe → usr\bin\bash.exe の多段は最上位だけを返し、ツリーごと止める。
+    if (isClaudeShell(parent)) return [];
+    if (!WAIT_LOOP.test(commandLine)) return [];
+    const createdAt = creationTime(row.CreationDate ?? row.creationDate);
+    const ageMin = (now - createdAt) / MINUTE;
+    if (!Number.isFinite(ageMin) || ageMin <= maxAgeMin) return [];
+    // 親が生存し子より先に起動していれば起動元 Claude は健在（PID 再利用は起動時刻で見分ける）。
+    if (parent && creationTime(parent.CreationDate ?? parent.creationDate) <= createdAt) return [];
+    const bytes = Number(row.WorkingSetSize ?? row.workingSetSize ?? 0);
+    return [{ pid: Number(row.ProcessId ?? row.pid), name: 'bash.exe', commandLine, kind: 'orphan-claude-wait-loop', ageMin, mb: Number.isFinite(bytes) ? bytes / 1024 / 1024 : 0 }];
+  });
+}
+
+const OPENURL_STUCK_NAMES = new Set(['code.exe']);
+const OPENURL_MAX_AGE_MIN = 10;
+
+export function classifyOrphanOpenUrl(processes, now = Date.now(), opts = {}) {
+  const maxAgeMin = opts.openUrlMaxAgeMin ?? OPENURL_MAX_AGE_MIN;
+  const rows = Array.isArray(processes) ? processes : processes ? [processes] : [];
+  const children = new Map();
+  for (const row of rows) {
+    const parentPid = Number(row.ParentProcessId ?? row.parentPid);
+    if (!Number.isInteger(parentPid)) continue;
+    const siblings = children.get(parentPid) ?? [];
+    siblings.push(row);
+    children.set(parentPid, siblings);
+  }
+  const hasNodeServiceChild = (pid) => (children.get(pid) ?? []).some((child) =>
+    String(child.Name ?? child.name ?? '').toLowerCase() === 'code.exe'
+    && String(child.CommandLine ?? child.commandLine ?? '').includes('node.mojom.NodeService'));
+  return rows.flatMap((row) => {
+    const name = String(row.Name ?? row.name ?? '').toLowerCase();
+    if (!OPENURL_STUCK_NAMES.has(name)) return [];
+    const commandLine = String(row.CommandLine ?? row.commandLine ?? '');
+    if (!commandLine.includes('--open-url')) return [];
+    // --type= を含む子プロセス自身は対象外
+    if (commandLine.includes('--type=')) return [];
+    const createdAt = creationTime(row.CreationDate ?? row.creationDate);
+    const ageMin = (now - createdAt) / MINUTE;
+    if (!Number.isFinite(ageMin) || ageMin <= maxAgeMin) return [];
+    // 自分の Code.exe 子プロセスに node.mojom.NodeService（拡張ホスト）がいる ＝ 本物の VS Code 本体 → 残骸ではない
+    if (hasNodeServiceChild(Number(row.ProcessId ?? row.pid))) return [];
+    const bytes = Number(row.WorkingSetSize ?? row.workingSetSize ?? 0);
+    return [{ pid: Number(row.ProcessId ?? row.pid), name, commandLine, kind: 'orphan-open-url', ageMin, mb: Number.isFinite(bytes) ? bytes / 1024 / 1024 : 0 }];
+  });
+}
+
+const VSCODE_IDLE_MAX_KILLS = 15;
+const START_TIME_TOLERANCE_MS = 2 * MINUTE;
+
+// VSCode 拡張の claude.exe だけを対象にする。WindowsApps の Claude デスクトップアプリは含めない。
+export function isVscodeClaude(processInfo) {
+  const name = String(processInfo.Name ?? processInfo.name ?? '').toLowerCase();
+  const command = String(processInfo.CommandLine ?? processInfo.commandLine ?? '').replaceAll('/', '\\').toLowerCase();
+  if (name !== 'claude.exe') return false;
+  if (!isClaudeCodeCliProcess(processInfo)) return false;
+  return command.includes('\\.vscode\\extensions\\anthropic.claude-code-') && command.includes('\\native-binary\\claude.exe');
+}
+
+// 純粋関数: opts.readSession(pid) -> sessions JSON か null、opts.transcriptMtime(sessionId) -> ms か null。
+export function readHygieneConfig(home) {
+  try { return JSON.parse(fs.readFileSync(path.join(home, '.claude', 'process-hygiene.json'), 'utf8')) ?? {}; }
+  catch { return {}; }
+}
+
+export function classifyVscodeIdle(processes, now = Date.now(), opts = {}) {
+  const idleMin = opts.idleMin ?? 720;
+  const max = opts.max ?? VSCODE_IDLE_MAX_KILLS;
+  const rows = Array.isArray(processes) ? processes : processes ? [processes] : [];
+  if (opts.batchLockActive || opts.vscodeIdleKill === false) return [];
+  const found = [];
+  for (const processInfo of rows) {
+    if (!isVscodeClaude(processInfo)) continue;
+    const pid = Number(processInfo.ProcessId ?? processInfo.pid);
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    let session = null;
+    try { session = opts.readSession?.(pid) ?? null; } catch { session = null; }
+    if (!session || typeof session !== 'object') continue;
+    if (session.entrypoint !== 'claude-vscode' || session.status !== 'idle') continue;
+    // Remote Control 接続中（スマホ待機タブ・スマホ利用中）は無操作が正常。止めるとスマホ側が exit code 1 で切れる。
+    if (session.bridgeSessionId) continue;
+    const activity = Math.max(Number(session.statusUpdatedAt) || 0, Number(session.updatedAt) || 0);
+    if (!activity) continue;
+    let lastMs = activity;
+    let mtime = null;
+    try { mtime = session.sessionId ? opts.transcriptMtime?.(session.sessionId) ?? null : null; } catch { mtime = null; }
+    if (Number.isFinite(mtime)) lastMs = Math.max(lastMs, mtime);
+    const idle = (now - lastMs) / MINUTE;
+    if (!(idle >= idleMin)) continue;
+    const cpu5s = opts.cpu5sByPid?.[pid];
+    if (opts.cpuGate && (!Number.isFinite(cpu5s) || cpu5s < 1)) continue;
+    const startedAt = Number(session.startedAt);
+    const createdAt = creationTime(processInfo.CreationDate ?? processInfo.creationDate);
+    if (!Number.isFinite(startedAt) || !Number.isFinite(createdAt) || Math.abs(createdAt - startedAt) > START_TIME_TOLERANCE_MS) continue;
+    const bytes = Number(processInfo.WorkingSetSize ?? processInfo.workingSetSize ?? 0);
+    found.push({ pid, ...(opts.cpuGate ? { cpu5s } : {}), name: 'claude.exe', commandLine: String(processInfo.CommandLine ?? processInfo.commandLine ?? ''), kind: 'vscode-claude-idle', sessionId: session.sessionId ?? '', idleMin: idle, ageMin: idle, mb: Number.isFinite(bytes) ? bytes / 1024 / 1024 : 0 });
+  }
+  return found.sort((a, b) => b.idleMin - a.idleMin).slice(0, max);
+}
+
+// 欠測・片側だけの高負荷では CPU ゲートを開かない。
+export function vscodeCpuPolicy(samples, opts = {}) {
+  const threshold = opts.vscodeIdleCpuLoad ?? 90;
+  const cpuGate = Array.isArray(samples) && samples.length === 2
+    && samples.every((value) => Number.isFinite(value) && value >= threshold);
+  return { cpuGate, idleMin: cpuGate ? (opts.vscodeIdleMinWhenCpu ?? 180) : (opts.vscodeIdleMin ?? 720) };
+}
+
+// 同じ PowerShell 内で全候補を一括採取し、候補ごとの5秒待ちを避ける。
+// PID再利用・採取失敗は欠測扱い。実測間隔で5秒当たりに正規化する。
+export function sampleVscodeCpu(processes, spawnImpl = spawnSync) {
+  const ids = processes.filter(isVscodeClaude).map((p) => Number(p.ProcessId ?? p.pid))
+    .filter((pid) => Number.isInteger(pid) && pid > 0);
+  const command = `
+$ErrorActionPreference='Stop'
+function Read-Sample {
+  $values=@(Get-CimInstance Win32_Processor | ForEach-Object { if ($null -ne $_.LoadPercentage) { [double]$_.LoadPercentage } })
+  $load=$null
+  if ($values.Count -gt 0) { $load=($values | Measure-Object -Average).Average }
+  $rows=@(foreach ($processId in @(${ids.join(',')})) {
+    try {
+      $p=Get-Process -Id $processId -ErrorAction Stop
+      [pscustomobject]@{ pid=$processId; started=$p.StartTime.ToUniversalTime().Ticks.ToString(); cpu=$p.TotalProcessorTime.TotalSeconds; time=[Diagnostics.Stopwatch]::GetTimestamp() }
+    } catch {}
+  })
+  [pscustomobject]@{ load=$load; rows=$rows }
+}
+$a=Read-Sample
+Start-Sleep -Seconds 5
+$b=Read-Sample
+$cpu=@{}
+foreach ($last in $b.rows) {
+  $first=$a.rows | Where-Object { $_.pid -eq $last.pid -and $_.started -eq $last.started } | Select-Object -First 1
+  if ($null -ne $first -and $last.time -gt $first.time) {
+    $cpu[[string]$last.pid]=($last.cpu-$first.cpu)*5*[Diagnostics.Stopwatch]::Frequency/($last.time-$first.time)
+  }
+}
+@{ loads=@($a.load,$b.load); cpu5sByPid=$cpu } | ConvertTo-Json -Compress -Depth 4`;
+  // CPU 飽和時は powershell の起動自体に 80 秒かかる（2026-10-29 kim-PC 実測）。30 秒だと採取が常に失敗してゲートが開かないため長めに取る。
+  const result = spawnImpl('powershell', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true, timeout: 240_000 });
+  if (result.error || result.status !== 0) return { loads: [], cpu5sByPid: {} };
+  try { return JSON.parse(result.stdout); } catch { return { loads: [], cpu5sByPid: {} }; }
+}
+
+// コミットメモリに余裕がある PC では VSCode 放置タブを止めない。止めると拡張が赤枠を出すため。
+// 空きが閾値未満のときだけ kill を許可する。
+export function shouldKillVscodeIdle(freeCommitGb, minFreeGb) {
+  if (minFreeGb === 0) return { kill: true, reason: 'gate disabled' };
+  if (!Number.isFinite(freeCommitGb)) return { kill: false, reason: 'commit free unknown' };
+  if (freeCommitGb < minFreeGb) return { kill: true, reason: 'commit free below threshold' };
+  return { kill: false, reason: 'commit free sufficient' };
+}
+
+// コミットメモリの空き（Win32_OperatingSystem.FreeVirtualMemory, KB）を GB で返す。失敗時は NaN。
+function commitFreeGb(spawnImpl = spawnSync) {
+  const command = '[Console]::Out.WriteLine((Get-CimInstance Win32_OperatingSystem).FreeVirtualMemory)';
+  const result = spawnImpl('powershell', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true, timeout: 20_000 });
+  if (result.error || result.status !== 0) return Number.NaN;
+  const kb = Number(String(result.stdout ?? '').trim());
+  if (!Number.isFinite(kb)) return Number.NaN;
+  return kb / 1024 / 1024;
+}
+
+function readSessionFile(home, pid) {
+  try { return JSON.parse(fs.readFileSync(path.join(home, '.claude', 'sessions', `${pid}.json`), 'utf8')); }
+  catch { return null; }
+}
+
+function findTranscriptMtime(home, sessionId) {
+  try {
+    if (!/^[0-9a-f-]{8,64}$/i.test(String(sessionId))) return null;
+    const root = path.join(home, '.claude', 'projects');
+    let best = null;
+    for (const dir of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!dir.isDirectory()) continue;
+      try { const m = fs.statSync(path.join(root, dir.name, `${sessionId}.jsonl`)).mtimeMs; if (best === null || m > best) best = m; } catch {}
+    }
+    return best;
+  } catch { return null; }
+}
+
+function batchLockActive(lock, processes, now) {
+  if (!lock) return false;
+  const age = now - Date.parse(lock.startedAt);
+  if (!Number.isFinite(age) || age < 0 || age > BATCH_LOCK_MAX_AGE_MS) return false;
+  return processes.some((row) => Number(row.ProcessId ?? row.pid) === Number(lock.pid));
+}
+
+// 子プロセスツリーごと停止する。
+function stopProcessTrees(items, spawnImpl = spawnSync) {
+  const failed = [];
+  for (const item of items) {
+    const result = spawnImpl('taskkill', ['/PID', String(item.pid), '/T', '/F'], { encoding: 'utf8', windowsHide: true, timeout: 20_000 });
+    if (result.error || result.status !== 0) failed.push(item.pid);
+  }
+  return failed;
+}
+
+function appendIdleLog(home, items, now = new Date()) {
+  if (!items.length) return;
+  const file = path.join(home, '.claude', 'logs', 'process-hygiene-events.log');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, items.map((item) => `${now.toISOString()} category=vscode-claude-idle pid=${item.pid} sessionId=${item.sessionId} idleMin=${Math.round(item.idleMin)}\n`).join(''));
+}
+
+function targetKind(commandLine) {
+  const command = String(commandLine ?? '').replaceAll('/', '\\');
+  if (/\b(?:batch-run|eval-harness)\.mjs\b/i.test(command)) return 'batch';
+  if (/\bhook-tree-selfheal\.mjs\b/i.test(command)) return 'tool';
+  if (/\\\.claude\\hooks\\[^"']+\.(?:mjs|ps1)(?:["'\s]|$)/i.test(command)) return 'hook';
+  if (/\\(?:orgiast-main|orgiast-claude-rules|\.claude\\auto-session-repo)\\tools\\[^"']+\.(?:mjs|ps1)(?:["'\s]|$)/i.test(command)) return 'tool';
+  return null;
+}
+
+function creationTime(value) {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'string') {
+    const cim = value.match(/^\/(?:Date\()?(\d+)(?:\))?\/$/);
+    return cim ? Number(cim[1]) : Date.parse(value);
+  }
+  return Number.NaN;
+}
+
+function commandBasename(commandLine) {
+  const matches = String(commandLine ?? '').match(/[A-Za-z0-9._-]+\.(?:mjs|ps1)/gi);
+  return matches?.[0]?.toLowerCase() ?? '';
+}
+
+function lockProtectsBatch(processInfo, lock, now) {
+  const lockAge = now - Date.parse(lock?.startedAt);
+  return Number(lock?.pid) === Number(processInfo.ProcessId ?? processInfo.pid)
+    && Number.isFinite(lockAge) && lockAge >= 0 && lockAge <= BATCH_LOCK_MAX_AGE_MS;
+}
+
+export function classifyDetailed(processes, now = Date.now(), opts = {}) {
+  const maxAgeMin = opts.maxAgeMin ?? 120;
+  const maxBatchAgeMin = opts.maxBatchAgeMin ?? 240;
+  const rows = Array.isArray(processes) ? processes : processes ? [processes] : [];
+  const livePids = new Set(rows.map((processInfo) => Number(processInfo.ProcessId ?? processInfo.pid)).filter(Number.isInteger));
+  const stats = { parentAliveExcluded: 0, longRunningExcluded: 0, lockHeldExcluded: 0 };
+  const stale = rows.flatMap((processInfo) => {
+    const name = String(processInfo.Name ?? processInfo.name ?? '').toLowerCase();
+    if (!PROCESS_NAMES.has(name)) return [];
+    const commandLine = String(processInfo.CommandLine ?? processInfo.commandLine ?? '');
+    const kind = targetKind(commandLine);
+    if (!kind) return [];
+    const createdAt = creationTime(processInfo.CreationDate ?? processInfo.creationDate);
+    const ageMin = (now - createdAt) / MINUTE;
+    const thresholdMin = kind === 'batch' ? maxBatchAgeMin : maxAgeMin;
+    if (!Number.isFinite(ageMin) || ageMin <= thresholdMin) return [];
+    const parentPid = Number(processInfo.ParentProcessId ?? processInfo.parentPid);
+    if (livePids.has(parentPid)) { stats.parentAliveExcluded += 1; return []; }
+    const basename = commandBasename(commandLine);
+    if (LONG_RUNNING_JOBS.has(basename) && ageMin <= LONG_RUNNING_JOB_MAX_AGE_MIN) {
+      stats.longRunningExcluded += 1;
+      return [];
+    }
+    if (basename === 'batch-run.mjs' && lockProtectsBatch(processInfo, opts.batchLock, now)) {
+      stats.lockHeldExcluded += 1;
+      return [];
+    }
+    const bytes = Number(processInfo.WorkingSetSize ?? processInfo.workingSetSize ?? 0);
+    return [{ pid: Number(processInfo.ProcessId ?? processInfo.pid), name, commandLine, kind, ageMin, mb: Number.isFinite(bytes) ? bytes / 1024 / 1024 : 0 }];
+  });
+  return { stale, ...stats };
+}
+
+export function classify(processes, now = Date.now(), opts = {}) {
+  return classifyDetailed(processes, now, opts).stale;
+}
+
+export function parseProcessLines(text) {
+  const processes = [];
+  let totalLines = 0;
+  let failedLines = 0;
+  for (const rawLine of String(text ?? '').replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    if (!rawLine) continue;
+    totalLines += 1;
+    const fields = rawLine.split(FIELD_SEPARATOR);
+    if (fields.length < 6) { failedLines += 1; continue; }
+    const [pidText, parentPidText, creationDate, workingSetText, name, ...commandParts] = fields;
+    const ProcessId = Number(pidText);
+    const ParentProcessId = Number(parentPidText);
+    const WorkingSetSize = Number(workingSetText);
+    if (!Number.isInteger(ProcessId) || ProcessId < 0
+      || !Number.isInteger(ParentProcessId) || ParentProcessId < 0
+      || !Number.isFinite(WorkingSetSize) || WorkingSetSize < 0
+      || !name || !Number.isFinite(Date.parse(creationDate))) {
+      failedLines += 1;
+      continue;
+    }
+    processes.push({ ProcessId, ParentProcessId, CreationDate: creationDate, WorkingSetSize, Name: name, CommandLine: commandParts.join(FIELD_SEPARATOR) });
+  }
+  return { processes, totalLines, failedLines };
+}
+
+function powershellProcesses(spawnImpl = spawnSync) {
+  const command = WINDOWS_PROCESS_SCRIPT;
+  const result = spawnImpl('powershell', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true, timeout: 20_000 });
+  if (result.error || result.status !== 0) throw result.error || new Error(String(result.stderr || `PowerShell exit ${result.status}`).trim());
+  return parseProcessLines(result.stdout);
+}
+
+function isTarget(processInfo) {
+  const name = String(processInfo.Name ?? processInfo.name ?? '').toLowerCase();
+  const commandLine = String(processInfo.CommandLine ?? processInfo.commandLine ?? '');
+  return PROCESS_NAMES.has(name) && targetKind(commandLine) !== null;
+}
+
+function readBatchLock(home) {
+  try { return JSON.parse(fs.readFileSync(path.join(home, '.claude', 'locks', 'batch-run.lock'), 'utf8')); }
+  catch { return null; }
+}
+
+function totalMb(items) { return items.reduce((sum, item) => sum + item.mb, 0); }
+function summary(items) { return `${items.length}本 / ${totalMb(items).toFixed(1)} MB`; }
+
+function stopProcesses(items, spawnImpl = spawnSync) {
+  if (!items.length) return [];
+  const pids = items.map((item) => item.pid).filter((pid) => Number.isInteger(pid) && pid > 0);
+  const command = `$ids=@(${pids.join(',')});$failed=@();foreach($id in $ids){try{Stop-Process -Id $id -Force -ErrorAction Stop}catch{$failed+=$id}};$failed|ConvertTo-Json -Compress`;
+  const result = spawnImpl('powershell', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true, timeout: 20_000 });
+  if (result.error || result.status !== 0) throw result.error || new Error(String(result.stderr || `PowerShell exit ${result.status}`).trim());
+  const output = String(result.stdout ?? '').trim();
+  if (!output) return [];
+  const parsed = JSON.parse(output);
+  return (Array.isArray(parsed) ? parsed : [parsed]).map(Number);
+}
+
+function appendLog(home, before, after) {
+  const file = path.join(home, '.claude', 'logs', 'process-hygiene-events.log');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, `${new Date().toISOString()} before=${summary(before)} after=${summary(after)}\n`);
+}
+
+async function maybeAlert(items, threshold, home, now = Date.now(), notify = notifyKim, message) {
+  if (items.length < threshold) return false;
+  const stateFile = path.join(home, '.claude', 'state', 'process-hygiene.last-alert');
+  let previous = Number.NaN;
+  try { previous = Date.parse(fs.readFileSync(stateFile, 'utf8').trim()); } catch {}
+  if (Number.isFinite(previous) && now - previous < ALERT_COOLDOWN_MS) return false;
+  const result = await notify(message ?? `🚨 process-hygiene: hook/バッチ由来の残留を ${summary(items)} 検知しました。`, { home });
+  if (result?.delivered === 'none') return false;
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  fs.writeFileSync(stateFile, `${new Date(now).toISOString()}\n`);
+  return true;
+}
+
+export async function main(argv = process.argv.slice(2), deps = {}) {
+  const opts = parseOptions(argv);
+  if ((deps.platform ?? process.platform) !== 'win32') { console.log('process-hygiene: Windows以外では対象なし (0本 / 0.0 MB)'); return 0; }
+  const lock = acquireLock('process-hygiene');
+  if (!lock.acquired) { console.log(`process-hygiene: already running${lock.ownerPid ? ` (pid=${lock.ownerPid})` : ''}`); return 0; }
+  try {
+    const home = deps.home ?? process.env.ORGIAST_HOME ?? os.homedir();
+    const query = (deps.listProcesses ?? (() => powershellProcesses(deps.spawnImpl)))();
+    const parsed = Array.isArray(query) ? { processes: query, totalLines: query.length, failedLines: 0 } : query;
+    const processes = parsed.processes ?? [];
+    const now = deps.now ?? Date.now();
+    const classified = classifyDetailed(processes, now, { ...opts, batchLock: deps.batchLock ?? readBatchLock(home) });
+    const stale = classified.stale;
+    const orphanWindows = classifyOrphanConsoleWindows(processes);
+    const candidates = processes.filter(isTarget).length;
+    console.log(`process-hygiene: 照会=${parsed.totalLines ?? processes.length} パース失敗=${parsed.failedLines ?? 0} 対象候補=${candidates} 親生存除外=${classified.parentAliveExcluded} 長時間ジョブ除外=${classified.longRunningExcluded} ロック保持除外=${classified.lockHeldExcluded} 残留判定=${stale.length}`);
+    console.log(`process-hygiene: ${opts.kill ? 'kill' : 'dry-run'} ${summary(stale)}`);
+    for (const item of stale) console.log(`pid=${item.pid} age=${item.ageMin.toFixed(0)}min mb=${item.mb.toFixed(1)} ${item.commandLine}`);
+    console.log(`process-hygiene: orphan-console-windows ${opts.kill ? 'kill' : 'dry-run'} ${summary(orphanWindows)}`);
+    for (const item of orphanWindows) console.log(`terminal-pid=${item.pid} mb=${item.mb.toFixed(1)} ${item.commandLine}`);
+    const waitLoops = classifyOrphanClaudeWaitLoops(processes, now, opts);
+    console.log(`process-hygiene: orphan-claude-wait-loops ${opts.kill ? 'kill' : 'dry-run'} ${summary(waitLoops)}`);
+    for (const item of waitLoops) console.log(`pid=${item.pid} age=${item.ageMin.toFixed(0)}min ${item.commandLine.slice(0, 300)}`);
+    if (opts.kill && waitLoops.length) {
+      const failedLoops = (deps.stopOrphanShells ?? ((items) => stopProcessTrees(items, deps.spawnImpl)))(waitLoops);
+      console.log(`process-hygiene: orphan-claude-wait-loops stopped=${waitLoops.length - failedLoops.length} failed=${failedLoops.length}`);
+    }
+    const orphanOpenUrl = classifyOrphanOpenUrl(processes, now, opts);
+    console.log(`process-hygiene: orphan-open-url ${opts.kill ? 'kill' : 'dry-run'} ${summary(orphanOpenUrl)}`);
+    for (const item of orphanOpenUrl) console.log(`pid=${item.pid} age=${item.ageMin.toFixed(0)}min ${item.commandLine.slice(0, 300)}`);
+    if (opts.kill && orphanOpenUrl.length) {
+      const failedOpenUrl = (deps.stopOrphanOpenUrls ?? ((items) => stopProcessTrees(items, deps.spawnImpl)))(orphanOpenUrl);
+      console.log(`process-hygiene: orphan-open-url stopped=${orphanOpenUrl.length - failedOpenUrl.length} failed=${failedOpenUrl.length}`);
+    }
+    const freeGb = deps.commitFreeGb !== undefined ? Number(deps.commitFreeGb) : commitFreeGb(deps.spawnImpl);
+    const idleGate = shouldKillVscodeIdle(freeGb, opts.vscodeIdleMinFreeGb);
+    console.log(`process-hygiene: vscode-claude-idle gate コミット空き=${Number.isFinite(freeGb) ? freeGb.toFixed(1) : '不明'}GB 閾値=${opts.vscodeIdleMinFreeGb}GB → ${idleGate.kill ? 'kill有効' : 'skip'} (${idleGate.reason})`);
+    const cpu = (deps.sampleVscodeCpu ?? (() => sampleVscodeCpu(processes, deps.spawnImpl)))();
+    const policy = vscodeCpuPolicy(cpu.loads, opts);
+    console.log(`process-hygiene: vscode-claude-idle cpu-gate load=${cpu.loads?.length === 2 ? cpu.loads.map((v) => Number.isFinite(v) ? v : '不明').join(',') : '不明'} ${policy.cpuGate ? '>=' : '未成立 閾値='}${opts.vscodeIdleCpuLoad} → 閾値 ${policy.idleMin}分`);
+    const idleClaude = classifyVscodeIdle(processes, now, {
+      ...policy,
+      vscodeIdleKill: readHygieneConfig(home).vscodeIdleKill,
+      cpu5sByPid: cpu.cpu5sByPid,
+      readSession: deps.readSession ?? ((pid) => readSessionFile(home, pid)),
+      transcriptMtime: deps.transcriptMtime ?? ((id) => findTranscriptMtime(home, id)),
+      batchLockActive: batchLockActive(deps.batchLock ?? readBatchLock(home), processes, now),
+    });
+    console.log(`process-hygiene: vscode-claude-idle ${opts.kill ? 'kill' : 'dry-run'} 候補=${idleClaude.length}件 (${summary(idleClaude)}, 閾値=${policy.idleMin}分)`);
+    for (const item of idleClaude) console.log(`category=vscode-claude-idle pid=${item.pid} sessionId=${item.sessionId} idleMin=${Math.round(item.idleMin)} mb=${item.mb.toFixed(1)}${policy.cpuGate ? ` cpu5s=${item.cpu5s.toFixed(3)}` : ''}`);
+    if (opts.kill && (idleGate.kill || policy.cpuGate)) {
+      const failedIdle = (deps.stopTrees ?? ((items) => stopProcessTrees(items, deps.spawnImpl)))(idleClaude);
+      const stopped = idleClaude.filter((item) => !failedIdle.includes(item.pid));
+      appendIdleLog(home, stopped);
+      for (const item of stopped) console.log(`process-hygiene: vscode-claude-idle kill pid=${item.pid} session=${item.sessionId} idle=${Math.round(item.idleMin)}min${policy.cpuGate ? ` cpu5s=${item.cpu5s.toFixed(3)}` : ''}`);
+      if (policy.cpuGate && stopped.length) await maybeAlert(stopped, 1, home, now, deps.notify ?? notifyKim,
+        `VS Code の放置セッション ${stopped.length} 本を CPU 飽和のため停止（再開は VS Code の Claude パネルから /resume）`);
+      console.log(`process-hygiene: vscode-claude-idle stopped=${idleClaude.length - failedIdle.length} failed=${failedIdle.length}`);
+    } else if (opts.kill) {
+      console.log(`process-hygiene: vscode-claude-idle stopped=0 skipped=${idleClaude.length} (gate: ${idleGate.reason})`);
+    }
+    if (opts.kill) {
+      await maybeAlert(stale, opts.alertThreshold, home, now, deps.notify ?? notifyKim);
+      const failed = (deps.stopProcesses ?? ((items) => stopProcesses(items, deps.spawnImpl)))(stale);
+      const failedWindows = (deps.stopOrphanWindows ?? ((items) => stopProcesses(items, deps.spawnImpl)))(orphanWindows);
+      const after = stale.filter((item) => failed.includes(item.pid));
+      const remainingWindows = orphanWindows.filter((item) => failedWindows.includes(item.pid));
+      appendLog(home, stale, after);
+      console.log(`process-hygiene: after ${summary(after)}`);
+      console.log(`process-hygiene: orphan-console-windows after ${summary(remainingWindows)}`);
+    }
+    return 0;
+  } finally { releaseLock('process-hygiene'); }
+}
+
+if (isEntry(import.meta.url)) {
+  try { process.exitCode = await main(); } catch (error) { console.error(`process-hygiene: ${error.message}`); process.exitCode = 1; }
+}

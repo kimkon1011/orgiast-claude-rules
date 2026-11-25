@@ -1,0 +1,411 @@
+{
+  "attempt": "X-0018-02",
+  "time": "2026-11-09T04:44:42.644876+09:00",
+  "revision": "9d0dd65a4a19110c8d34a4e3b483561243548f5c",
+  "method": "Python urllib GET / HTMLParser（実ブラウザではない、入力・送信なし）",
+  "results": [
+    {
+      "url": "https://www.orgiast.jp/",
+      "final_url": "https://www.orgiast.jp/",
+      "status": 200,
+      "bytes": 184510,
+      "links": [
+        "/contactus",
+        "/creative/#works",
+        "/event/#works",
+        "https://www.orgiast.jp/contactus"
+      ],
+      "forms": [],
+      "fields": []
+    },
+    {
+      "url": "https://rebooth.co.jp/",
+      "final_url": "https://rebooth.co.jp/",
+      "status": 200,
+      "bytes": 87443,
+      "links": [
+        "\n                             https://rebooth.co.jp/works-top/                ",
+        "/contact",
+        "https://rebooth.co.jp/contact/",
+        "https://rebooth.co.jp/works-top/",
+        "https://rebooth.co.jp/works/1242/",
+        "https://rebooth.co.jp/works/1254/",
+        "https://rebooth.co.jp/works/1261/",
+        "https://rebooth.co.jp/works/1267/",
+        "https://rebooth.co.jp/works/1275/",
+        "https://rebooth.co.jp/works/1538/"
+      ],
+      "forms": [],
+      "fields": []
+    },
+    {
+      "url": "https://rebooth.co.jp/works-top/",
+      "final_url": "https://rebooth.co.jp/works-top/",
+      "status": 200,
+      "bytes": 76895,
+      "links": [
+        "/contact",
+        "https://rebooth.co.jp/contact/",
+        "https://rebooth.co.jp/works-top/",
+        "https://rebooth.co.jp/works/1195/",
+        "https://rebooth.co.jp/works/1201/",
+        "https://rebooth.co.jp/works/1208/",
+        "https://rebooth.co.jp/works/1216/",
+        "https://rebooth.co.jp/works/1231/",
+        "https://rebooth.co.jp/works/1235/",
+        "https://rebooth.co.jp/works/1242/",
+        "https://rebooth.co.jp/works/1254/",
+        "https://rebooth.co.jp/works/1261/",
+        "https://rebooth.co.jp/works/1267/",
+        "https://rebooth.co.jp/works/1275/",
+        "https://rebooth.co.jp/works/1538/",
+        "https://rebooth.co.jp/works/page/2/",
+        "https://rebooth.co.jp/works/page/3/",
+        "https://rebooth.co.jp/works/page/4/",
+        "https://rebooth.co.jp/works/page/5/"
+      ],
+      "forms": [
+        {
+          "method": "get",
+          "action": "/works/"
+        }
+      ],
+      "fields": [
+        {
+          "type": "checkbox",
+          "name": "booth_size[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "booth_size[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "booth_size[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "booth_size[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "booth_size[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "booth_size[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "industry_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "price_range[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "price_range[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "price_range[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "price_range[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "price_range[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "layout_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "layout_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "layout_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "layout_type[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "base_color[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "base_color[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "base_color[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "base_color[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "base_color[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "base_color[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "base_color[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "base_color[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "base_color[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "base_color[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "base_color[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "base_color[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "base_color[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "base_color[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "base_color[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "decoration[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "decoration[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "decoration[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "decoration[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "decoration[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "decoration[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "decoration[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "decoration[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "decoration[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "decoration[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "decoration[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "decoration[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "decoration[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "decoration[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "decoration[]"
+        },
+        {
+          "type": "checkbox",
+          "name": "decoration[]"
+        }
+      ]
+    },
+    {
+      "url": "https://rebooth.co.jp/contact/",
+      "final_url": "https://rebooth.co.jp/contact/",
+      "status": 200,
+      "bytes": 91197,
+      "links": [
+        "/contact",
+        "https://rebooth.co.jp/contact/",
+        "https://rebooth.co.jp/works-top/"
+      ],
+      "forms": [
+        {
+          "action": "/contact/#wpcf7-f4-o1",
+          "method": "post",
+          "class": "wpcf7-form init",
+          "aria-label": "コンタクトフォーム",
+          "novalidate": "novalidate",
+          "data-status": "init"
+        }
+      ],
+      "fields": [
+        {
+          "type": "hidden",
+          "name": "_wpcf7"
+        },
+        {
+          "type": "hidden",
+          "name": "_wpcf7_version"
+        },
+        {
+          "type": "hidden",
+          "name": "_wpcf7_locale"
+        },
+        {
+          "type": "hidden",
+          "name": "_wpcf7_unit_tag"
+        },
+        {
+          "type": "hidden",
+          "name": "_wpcf7_container_post"
+        },
+        {
+          "type": "hidden",
+          "name": "_wpcf7_posted_data_hash"
+        },
+        {
+          "type": "hidden",
+          "name": "_wpcf7_recaptcha_response"
+        },
+        {
+          "type": "text",
+          "name": "your-name"
+        },
+        {
+          "type": "email",
+          "name": "your-email"
+        },
+        {
+          "name": "your-message"
+        },
+        {
+          "type": "submit"
+        }
+      ]
+    },
+    {
+      "url": "https://rebooth.co.jp/company/",
+      "final_url": "https://rebooth.co.jp/company/",
+      "status": 200,
+      "bytes": 85489,
+      "links": [
+        "/contact",
+        "https://rebooth.co.jp/contact/",
+        "https://rebooth.co.jp/works-top/"
+      ],
+      "forms": [],
+      "fields": []
+    }
+  ]
+}

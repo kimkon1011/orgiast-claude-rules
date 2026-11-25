@@ -1,0 +1,137 @@
+import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { classifyWorktree, inspectWorktree, resolveWorktreePaths } from './worktree-inventory.mjs';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const now = Date.parse('2026-11-21T12:00:00Z');
+const normalizePath = (value) => value.replaceAll('\\', '/').toLowerCase();
+const base = {
+  path: '/tmp/worktree',
+  branch: 'feat/example',
+  exists: true,
+  now,
+  updatedAt: now - DAY_MS - 1,
+  ancestor: true,
+};
+
+const fixtures = [
+  ['メインが保護と prune に優先する', { main: true, path: '/nightly-repo', prunable: true }, 'keep-main'],
+  ['夜間用パスが prune に優先する', { path: '/nightly-repo-fleet', prunable: true }, 'keep-protected'],
+  ['夜間用リポジトリを保護する', { path: 'C:/Users/user/.claude/nightly-repo', main: false }, 'keep-protected'],
+  ['夜間用リポジトリ配下の壊れた作業ツリーを prune にする', { path: 'C:/Users/user/.claude/nightly-repo/UsersuserAppDataLocalTempwt-mpq', main: false, prunable: true }, 'prune'],
+  ['夜間用リポジトリ配下の存在しない作業ツリーを prune にする', { path: 'C:/Users/user/.claude/nightly-repo/.claude/worktrees/agent-a688b0297b0362202', main: false, exists: false }, 'prune'],
+  ['自動セッション用リポジトリを保護する', { path: '/tmp/auto-session-repo' }, 'keep-protected'],
+  ['指定された自動セッション用リポジトリを保護する', { path: 'C:/Users/user/.claude/auto-session-repo', main: false }, 'keep-protected'],
+  ['自動セッション用ツリーを保護する', { path: '/tmp/auto-session-tree-2' }, 'keep-protected'],
+  ['末尾スラッシュ付きの保護対象を保護する', { path: '/tmp/auto-session-tree/' }, 'keep-protected'],
+  ['Windows の配布リポジトリを保護する', { path: 'C:\\Users\\kim\\Downloads\\orgiast-claude-rules' }, 'keep-protected'],
+  ['orgiast-main ディレクトリそのものを保護する', { path: 'C:/Users/orgiast-main' }, 'keep-protected'],
+  ['orgiast-main 配下を保護する', { path: 'C:/Users/orgiast-main/worktree' }, 'keep-protected'],
+  ['orgiast-main の接尾辞付きディレクトリは別に扱う', { path: 'C:/Users/orgiast-main-old' }, 'safe'],
+  ['別の親を持つ orgiast-main は別に扱う', { path: 'C:/Users/kim/orgiast-main' }, 'safe'],
+  ['Git が prunable とした行を分類する', { prunable: true, dirty: true }, 'prune'],
+  ['実体のない行を分類する', { exists: false }, 'prune'],
+  ['変更ありを更新時刻より優先する', { dirty: true, updatedAt: now }, 'keep-dirty'],
+  ['24時間ちょうどを直近に含める', { updatedAt: now - DAY_MS, ancestor: false }, 'keep-recent'],
+  ['祖先判定が偽でPRを調べない場合は保持する', { ancestor: false }, 'keep-unpushed'],
+  ['マージ済みPRがない場合は保持する', { ancestor: false, mergedPr: false }, 'keep-unpushed'],
+  ['祖先にあれば削除候補にする', {}, 'safe'],
+  ['マージ済みPRがあれば削除候補にする', { ancestor: false, mergedPr: true }, 'safe'],
+  ['履歴外の detached HEAD を保持する', { ancestor: false, branch: undefined }, 'keep-unpushed'],
+  ['履歴内の detached HEAD を削除候補にする', { branch: undefined }, 'safe'],
+  ['点検失敗の行を保持する', { error: 'git status に失敗' }, 'keep-error'],
+];
+
+for (const [name, overrides, expected] of fixtures) {
+  test(name, () => {
+    const { category, reason } = classifyWorktree({ ...base, ...overrides });
+    assert.equal(category, expected);
+    assert.match(reason, /[ぁ-んァ-ン一-龯].*。$/u);
+  });
+}
+
+test('相対 gitdir と逆参照を確認できる作業ツリーを keep-repair にする', (t) => {
+  const tempRoot = realpathSync.native(path.resolve(tmpdir()));
+  const temp = mkdtempSync(path.join(tempRoot, 'wt-inventory-'));
+  const root = realpathSync.native(temp);
+  const downloads = path.join(root, 'Downloads');
+  const repo = path.join(downloads, 'repo');
+  const repoAlias = path.join(root, 'repo');
+  const worktree = path.join(downloads, 'linked');
+  const displayPath = path.join(root, 'linked');
+  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' });
+  t.after(() => {
+    if (path.isAbsolute(worktree)) {
+      spawnSync('git', ['-C', repo, 'worktree', 'remove', '--force', worktree], { encoding: 'utf8' });
+    }
+    rmSync(temp, { recursive: true, force: true });
+  });
+  assert.equal(path.isAbsolute(root), true);
+  assert.equal(path.relative(tempRoot, root).startsWith(`..${path.sep}`), false);
+  mkdirSync(repo, { recursive: true });
+  git('init', '-q');
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+    '-c', 'commit.gpgsign=false', 'commit', '-qm', 'Initial', '--allow-empty');
+  git('worktree', 'add', '-q', '--detach', worktree);
+  symlinkSync(repo, repoAlias, 'junction');
+
+  const commonDir = git('rev-parse', '--path-format=absolute', '--git-common-dir').trim();
+  const adminDir = path.join(commonDir, 'worktrees', 'linked');
+  const dotGit = path.join(worktree, '.git');
+  const relative = (from, to) => path.relative(from, to).split(path.sep).join('/');
+  writeFileSync(path.join(adminDir, 'gitdir'), `${relative(adminDir, dotGit)}\n`);
+  const originalBacklink = readFileSync(dotGit, 'utf8');
+  // Git for Windows creates a hidden file, which cannot be opened with 'w'.
+  rmSync(dotGit);
+  writeFileSync(dotGit, `gitdir: ${relative(worktree, adminDir)}\r\n`);
+
+  // Model Git's display when it resolves against the repository alias.
+  const listed = { path: displayPath };
+  const inspect = (row) => {
+    const [resolved] = resolveWorktreePaths(repoAlias, commonDir, [row]);
+    return inspectWorktree(resolved, Date.now());
+  };
+  for (const prunable of [false, true]) {
+    const row = inspect({ ...listed, prunable });
+    assert.equal(row.category, 'keep-repair');
+    assert.equal(normalizePath(row.path), normalizePath(displayPath));
+    assert.equal(normalizePath(row.resolvedPath), normalizePath(worktree));
+  }
+
+  const [healthy] = resolveWorktreePaths(repoAlias, commonDir, [{ path: worktree }]);
+  assert.equal(healthy.resolvedPath, undefined);
+  writeFileSync(dotGit, `gitdir: ${commonDir}\n`);
+  assert.equal(inspect(listed).category, 'prune');
+  writeFileSync(dotGit, originalBacklink);
+  assert.equal(inspect(listed).category, 'keep-repair');
+  rmSync(dotGit);
+  assert.equal(inspect(listed).category, 'prune');
+});
+
+test('git リポジトリでない対象をスキップして他の対象を棚卸しする', (t) => {
+  const temp = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'wt-inventory-repos-')));
+  t.after(() => rmSync(temp, { recursive: true, force: true }));
+  const invalid = path.join(temp, 'deployed-copy');
+  const repo = path.join(temp, 'repo');
+  mkdirSync(path.join(invalid, '.git'), { recursive: true });
+  mkdirSync(repo);
+  execFileSync('git', ['-C', repo, 'init', '-q']);
+  execFileSync('git', ['-C', repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+    '-c', 'commit.gpgsign=false', 'commit', '-qm', 'Initial', '--allow-empty']);
+
+  const result = spawnSync(process.execPath, [
+    fileURLToPath(new URL('./worktree-inventory.mjs', import.meta.url)),
+    '--repo', invalid,
+    '--repo', repo,
+  ], { encoding: 'utf8' });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr.trim(), `skipped: ${invalid} (not a git repository)`);
+  assert.match(result.stdout, /keep-main: 1/);
+  assert.equal(normalizePath(result.stdout).includes(normalizePath(repo)), true);
+});

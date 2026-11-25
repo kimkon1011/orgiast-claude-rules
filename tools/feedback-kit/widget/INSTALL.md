@@ -1,0 +1,92 @@
+# フィードバック機能 移植仕様書
+
+## 自動導入（推奨）
+
+正本リポジトリ（orgiast-claude-rules。各PCでは `tools/` が自動配布されています）で、kit install を実行します。`widget/install.mjs` によるファイル配置、`.feedback-kit.json` の書き込み、滞留ゼロ巡回台帳への登録までを1回で行い、`feedback-form-gate` の kit 検査（verify・版・必須7機能）を通る状態になります。
+
+```sh
+node tools/feedback-kit/install.mjs --app <対象アプリのパス> --name "<アプリ名>"
+node tools/feedback-kit/verify.mjs --app <対象アプリのパス>
+```
+
+既存フォームがある場合は `--upgrade` を付けます（変更前の版は `.feedback-kit-backup/` に退避）。verify が `"ok": true` を返せば導入完了です。ファイル配置だけを行う低レベルの `widget/install.mjs`（下記オプション）を単体で使うと `.feedback-kit.json` が作られず、gate の kit 検査を通りません。
+
+`widget/install.mjs` 単体のオプション: `--target <path> --relay <url> --relay-secret <secret> --owner-discord-id <id> --discord-channel <id> --webhook <url> --no-admin-page --dry-run --force` を指定できます。Node.js 18 以降、Next.js App Router が対象です。テンプレートが手元に無い単体実行時も GitHub `main` から自動取得します。
+
+既定の通知先は中継エンドポイント経由の kim への個別 DM です。Bot と webhook によるチャンネル通知は、既存アプリのための後方互換経路です。
+
+導入後は正本の `tools/feedback-apps.json` に `"<アプリ名>": "<owner>/<repo>"` を追加するPRを作成します。既存の登録名は再利用できます。マージ前にゲートを検証する場合は環境変数 `FEEDBACK_REPO_MAP=<アプリ名>=<owner>/<repo>` を指定してください。これが無いと投稿のIssue化・完了通知に到達しません。
+
+## 環境変数
+
+| 名前 | 用途 | 必須条件 |
+|---|---|---|
+| `FEEDBACK_RELAY_URL` | kim への個別 DM を行う中継エンドポイント | 標準の通知経路。secret と組で必須 |
+| `FEEDBACK_RELAY_SECRET` | 中継エンドポイントの Bearer 認証 | 標準の通知経路。URL と組で必須。クライアントへ公開禁止 |
+| `FEEDBACK_OWNER_DISCORD_ID` | kim と併せて投稿通知を送る開発者の Discord user ID | 標準通知を使う全アプリで必須。17〜20桁。インストーラーが自動設定 |
+| `NEXT_PUBLIC_SUPABASE_URL` | REST/Auth/Storage URL | DB保存時 |
+| `SUPABASE_SERVICE_ROLE_KEY` | サーバー専用REST認証 | DB保存時。クライアントへ公開禁止 |
+| `DISCORD_BOT_TOKEN` | Bot REST API | Discord通知（優先） |
+| `DISCORD_FEEDBACK_CHANNEL_ID` | 通知先チャンネル ID（社員ch を指定。`install.mjs --discord-channel <id>` でも指定可） | Bot 経路なら必須 |
+| `FEEDBACK_DISCORD_WEBHOOK_URL` | BotがないGuild用 | Discord通知（代替） |
+| `NEXT_PUBLIC_APP_URL` | 通知内の管理画面URL | 任意 |
+
+通知経路の優先順位:
+
+1. `FEEDBACK_RELAY_URL` + `FEEDBACK_RELAY_SECRET`（投稿時は kim + 開発者へ DM、Issue closed 後は投稿者へ完了 DM）
+2. `DISCORD_BOT_TOKEN` + `DISCORD_FEEDBACK_CHANNEL_ID`（チャンネル通知・後方互換）
+3. `FEEDBACK_DISCORD_WEBHOOK_URL`（チャンネル通知・後方互換）
+
+## データモデル
+
+投稿者の Discord user ID は `submitter_discord_id` に保存し、分かっている場合の完了報告先に使います。
+
+`app_feedback` は UUID 主キー、`kind` (`bug/request`)、title、body、page_path、submitter、submitter_email、`status` (`new/triaged/in_progress/done/rejected`)、`priority` (`low/normal/high`)、admin_note、resolved_ref、screenshot_path、created_at、updated_at を持ちます。RLS を有効にし、アプリの読み書きは service role 経由に限定します。画像は private bucket `feedback-screenshots` に置き、authenticated 用 select/insert/update policy を作ります。正本は `templates/migration_app_feedback.sql` で、冪等に実行できます。
+
+## API 仕様
+
+`POST /api/feedback` に `multipart/form-data` で `kind`, `title`, `body`, `page_path`, 任意の `submitter`, `screenshot` を送ります。title/body は必須、画像は `image/*`・8MB以下です。成功は `{ "ok": true, "id": "...", "sinks": { "db": true, "discord": true, "via": "relay" } }`、入力不備等は `{ "ok": false, "error": "..." }` と 4xx/5xx です。`discord` はいずれかの通知経路で配信できたかを表し、`via` は `relay` / `bot` / `webhook` のどこを通ったかを表します。Supabase Cookie の access token からメールを best-effort で特定します。DB/画像/通知の一部障害は利用可能な保存先が成功する限り投稿全体を維持します。
+
+中継にはアプリ名、種別、タイトル、本文、画面、提出者、提出元URL、画像を multipart で渡します。中継が失敗した場合のみ Bot、webhook の順でフォールバックします。Discord 本文は `[アプリ名] 種別: タイトル`、本文先頭300字、提出者、画面、`/feedback`、7日署名スクショURLの順です。
+
+## 公開サイト（ログイン不要のアプリ）へ設置する場合
+
+未認証の誰でも POST できるため、次の対策が**常時有効**です（社内アプリでも副作用はありません）。
+
+- **ハニーポット**: フォームに人間には見えない `company` 欄があり、埋まっている投稿は保存も通知もせず、成功レスポンスを返して静かに捨てます。
+- **レート制限**: 同一 IP（`x-forwarded-for` の先頭）から既定 **10分あたり5件**。超過は 429 と日本語の案内文を返します。`FEEDBACK_RATE_LIMIT`（件数）と `FEEDBACK_RATE_WINDOW_MIN`（分）で変更できます。
+- **入力長**: `title` 200 字 / `body` 4000 字を超える分は切り詰めて保存します（エラーにはしません）。画像は `image/*`・8MB まで。
+
+レート制限は**実行インスタンスごとの計数**なので、サーバーレスでは厳密な上限になりません（無いよりは遥かに良い、というレベルの防御です）。荒らしが実際に来る規模なら、Cloudflare 等の前段レート制限や Turnstile を併用してください。提出者は未認証だと `null` になるため、`/feedback` 側では画面パスと本文で判断します。
+
+## 手移植
+
+Next.js App Router では templates の API Route、Widget、Trigger、管理ページ、更新Routeを対応する `app/api/feedback/route.ts`、components、`app/feedback/page.tsx`、`app/api/feedback/update/route.ts` へ置き、root または認証済み layout に import と `<FeedbackWidget />` を追加します。SQLを Supabase SQL Editor で実行し、環境変数を本番にも設定します。
+
+Pages Router、Remix、Vite等では同じフォームを常駐レイアウトへ置き、サーバー側で上記APIを実装します。service role は必ずサーバーだけで使用し、REST insert、Storage upload、Discord通知の順序・best-effort 方針を維持してください。React Router等では `page_path` を `window.location.pathname` から取得します。
+
+UIは右下 amber `#f59e0b` の浮遊ボタン、最大幅480pxの白いモーダル、暗いoverlay、高いz-index、Escape/外部 `open-feedback` Event、貼り付け画像、送信中disable、成功toast、失敗時に閉じないエラー表示を必須とします。`role="dialog"` と `aria-modal` も維持します。
+
+## 検証
+
+デプロイ後、パッケージ一式が手元にある場合は次を実行します。
+
+```sh
+node tools/feedback-kit/widget/verify.mjs --url https://<app>.vercel.app --target <repo>
+```
+
+1行導入でローカルに `verify.mjs` が無い場合は、インストーラーの最終出力にも表示される次のコマンドを実行します。
+
+```sh
+node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/feedback-kit/widget/verify.mjs?cb='+Date.now()).then(r=>r.text()).then(t=>require('fs').writeFileSync('verify-feedback.mjs',t))" && node verify-feedback.mjs --url https://<app>.vercel.app
+```
+
+API投稿、sinks、service role がローカルにあればDB read-backを確認し、テスト行を削除せず `rejected` に更新します。`--keep` なら更新もしません。管理画面で提出が見え、Discord本文と署名画像が開けることが完了判定です。
+
+## 送信内容・対応状況の閲覧（1.1.0以降の必須機能）
+
+フォームの送信ボタン付近と、閉じるまで残る送信完了表示に「送信した内容・対応状況を見る」リンクを表示します（`data-feedback-history-link`）。リンク先は `/feedback/mine` で、`feedback-mine-page.tsx` を `app/feedback/mine/page.tsx`（src構成なら `src/app/feedback/mine/page.tsx`）へ自動配置します。`--no-admin-page` でも配置します。
+
+投稿APIと同じ Supabase Cookie（分割・base64形式を含む）を Auth API で検証し、ログインユーザーのメールと `submitter_email` が一致する投稿だけをサーバーで取得します。種別・タイトル・本文・日時・状態（未対応／確認済み／対応中／完了／却下）の読み取り専用ページです。内部メモ・連絡先・添付URL・service roleキーは画面へ出しません。従来の `/feedback` は管理用です。
+
+未ログインの場合はログイン案内、通知のみの構成では担当者への問い合わせ案内を表示します。履歴を閲覧するには Supabase 保存と投稿時のログインが必要です。別の認証方式のアプリは検証済みユーザー情報に合わせてこのページを統合してください。既存導入は `--upgrade` で更新し、フォーム表示時・送信完了時のリンクと本人の一覧を確認してください。両 verify はマーカーが無ければ「フォームに送信内容を見るリンクがありません」で不合格にします。

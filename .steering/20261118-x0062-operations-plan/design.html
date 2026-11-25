@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>X-0062 ⑤ 運用案 — 設計</title>
+  <link rel="stylesheet" href="../../docs/assets/design-system.css">
+</head>
+<body>
+  <main>
+    <p><a href="../../docs/index.html">← インデックス</a></p>
+    <h1>X-0062 ⑤ 運用案（GAS定期実行化の検討含む） — 設計</h1>
+    <p>作成: 2026-11-18 | ステータス: 初版</p>
+
+    <h2>1. 採用案の概要</h2>
+    <p>ハイブリッド運用を採用する：</p>
+    <table>
+      <thead><tr><th>要素</th><th>方式</th><th>理由</th></tr></thead>
+      <tbody>
+        <tr><td>Phase 1（KW収集）</td><td>CI cron（GitHub Actions）</td><td>CLIスクリプト完結、GAS経由のオーバーヘッド不要</td></tr>
+        <tr><td>Phase 2（ChatGPT評価）</td><td>人間操作（入力フォーマットは自動生成）</td><td>ChatGPTはAPI自動化対象外、ブラウザ操作が必要</td></tr>
+        <tr><td>Phase 3（提案生成）</td><td>CI cron + GAS併用</td><td>提案ファイル生成はCI、一覧管理と通知はGAS</td></tr>
+        <tr><td>Phase 4（記事化判断）</td><td>人間判断</td><td>判断は人間にしかできない</td></tr>
+        <tr><td>Phase 5（効果検証）</td><td>CI cron + GAS</td><td>データ収集はCI、可視化とレポートはGAS</td></tr>
+      </tbody>
+    </table>
+
+    <h2>2. システム構成図</h2>
+    <pre>
+┌───────────────────────────────────────────────────┐
+│                月次AIニュース提案パイプライン            │
+├───────────────────────────────────────────────────┤
+│                                                    │
+│  Day 1 (每月1日 09:00 JST)                         │
+│  ┌──────────────┐   ┌──────────────┐              │
+│  │ CI cron      │   │ GAS trigger  │              │
+│  │ (GH Actions) │   │ (Discord)    │              │
+│  └──────┬───────┘   └──────┬───────┘              │
+│         │                  │                        │
+│  ┌──────▼──────────────────▼───────┐               │
+│  │  Phase 1: Google Trends KW収集  │               │
+│  │  seo/x0057-ai-news-pipeline.mjs │               │
+│  └──────────────┬───────────────────┘               │
+│                 │                                    │
+│  ┌──────────────▼───────────────────┐               │
+│  │  提案ファイル出力                 │               │
+│  │  outputs/X-0057/YYYY-MM-DD.json  │               │
+│  │  + ChatGPT入力フォーマット自動生成  │               │
+│  └──────────────┬───────────────────┘               │
+│                 │                                    │
+│  ┌──────────────▼───────────────────┐               │
+│  │  Discord通知 → kim確認          │               │
+│  │  + GAS提案一覧シート更新         │               │
+│  └──────────────┬───────────────────┘               │
+│                 │                                    │
+│  Day 2-3 (人間作業)                                  │
+│  ┌──────────────▼───────────────────┐               │
+│  │  Phase 2: ChatGPTに投入・評価    │               │
+│  │  (人間がブラウザで実施)          │               │
+│  └──────────────┬───────────────────┘               │
+│                 │                                    │
+│  ┌──────────────▼───────────────────┐               │
+│  │ 評価結果を提案ファイルに反映      │               │
+│  │  → GitHub commit + PR           │               │
+│  └──────────────┬───────────────────┘               │
+│                 │                                    │
+│  Day 3-5 (人間判断)                                  │
+│  ┌──────────────▼───────────────────┐               │
+│  │  Phase 4: 記事化判断            │               │
+│  │  → 執筆着手 / バックログ入り     │               │
+│  └──────────────┬───────────────────┘               │
+│                 │                                    │
+│  月次バッチ (Day 1-5で完結)                          │
+└───────────────────────────────────────────────────┘│
+    </pre>
+
+    <h2>3. GASアーキテクチャ（提案管理）</h2>
+    <h3>3.1 GASプロジェクト構成</h3>
+    <p>新規GASプロジェクト <code>gas/news-theme-proposals/</code> を作成：</p>
+    <table>
+      <thead><tr><th>ファイル</th><th>役割</th></tr></thead>
+      <tbody>
+        <tr><td><code>appsscript.json</code></td><td>GAS設定（spreadsheets/drive/external_request OAuth）</td></tr>
+        <tr><td><code>Setup.gs</code></td><td>初回セットアップ（シート自動作成・トリガー設定）</td></tr>
+        <tr><td><code>ProposalSheet.gs</code></td><td>提案一覧シート操作（追加・更新・状態変更）</td></tr>
+        <tr><td><code>DiscordNotify.gs</code></td><td>Discord Webhook通知</td></tr>
+        <tr><td><code>CommandQueue.gs</code></td><td>コマンドキュー（既存パターン流用）</td></tr>
+      </tbody>
+    </table>
+
+    <h3>3.2 Google Sheets構造</h3>
+    <pre>
+    シート名: AIニュース提案管理
+    スプレッドシートID: 新規作成（初回セットアップ時）
+
+    | 列 | 説明 |
+    |---|---|
+    | A: 提案ID | x0062-yyyymmdd-nn 形式 |
+    | B: キーワード | 提案の元となったKW |
+    | C: 検索意図 | ChatGPT評価結果 |
+    | D: 判定 | 新規記事/追記/対象外 |
+    | E: 優先度 | 高/中/低 |
+    | F: 推奨タイトル | 新規記事向きの場合 |
+    | G: 状態 | 未着手/進行中/完了/スキップ |
+    | H: 作成日 | 提案生成日 |
+    | I: 記事化日 | 実際に記事化した日 |
+    | J: 備考 | 自由メモ |
+    </pre>
+
+    <h3>3.3 GAS定期実行トリガー</h3>
+    <table>
+      <thead><tr><th>スケジュール</th><th>処理</th><th>方式</th></tr></thead>
+      <tbody>
+        <tr><td>每月1日 09:00</td><td>提案ファイルの存在確認→Discord通知</td><td>GAS time-driven trigger</td></tr>
+        <tr><td>每月5日 09:00</td><td>未着手提案のリマインダー通知</td><td>GAS time-driven trigger</td></tr>
+        <tr><td>月末 23:00</td><td>当月の運用状態サマリ生成</td><td>GAS time-driven trigger</td></tr>
+      </tbody>
+    </table>
+
+    <h2>4. CI cron構成</h2>
+    <p>GitHub Actions workflow <code>.github/workflows/ai-news-pipeline.yml</code> を新規作成：</p>
+    <table>
+      <thead><tr><th>項目</th><th>設定</th></tr></thead>
+      <tbody>
+        <tr><td>スケジュール</td><td><code>0 0 1 * *</code>（每月1日 00:00 UTC = 09:00 JST）</td></tr>
+        <tr><td>ジョブ1: kw-collect</td><td><code>node seo/x0057-ai-news-pipeline.mjs --mode full</code></td></tr>
+        <tr><td>ジョブ2: proposal-commit</td><td>出力をコミット・プッシュ</td></tr>
+        <tr><td>ジョブ3: chatgpt-format-gen</td><td>ChatGPT入力フォーマットを生成</td></tr>
+        <tr><td>ジョブ4: notify</td><td>Discord/GAS通知</td></tr>
+      </tbody>
+    </table>
+
+    <h2>5. データフロー</h2>
+    <pre>
+    Google Trends API
+         │ (月次cron)
+         ▼
+    seo/x0057-ai-news-pipeline.mjs
+         │
+         ├──→ outputs/X-0057/YYYY-MM-DD-proposals.json （提案ファイル）
+         ├──→ outputs/X-0057/YYYY-MM-DD-chatgpt-input.md （ChatGPT入力）
+         │
+         ▼ (人間がChatGPTに投入)
+    ChatGPT評価結果
+         │ (人間がファイルに追記)
+         ▼
+    outputs/X-0057/YYYY-MM-DD-evaluated.json
+         │
+         ├──→ GitHub commit （評価済み提案）
+         ├──→ GAS ProposalSheet （一覧同期）
+         │
+         ▼ (人間が判断)
+    記事化判断
+         │
+         ├──→ 執筆着手（記事作成）
+         └──→ GAS ProposalSheet 状態更新
+    </pre>
+
+    <h2>6. エラーハンドリング</h2>
+    <table>
+      <thead><tr><th>状況</th><th>対応</th><th>通知先</th></tr></thead>
+      <tbody>
+        <tr><td>Google Trends APIエラー</td><td>3回リトライ後、当月スキップ。次月再試行</td><td>Discord</td></tr>
+        <tr><td>CIワークフロー失敗</td><td>GitHub通知 + Discord通知</td><td>Discord + kim-inbox</td></tr>
+        <tr><td>GASトリガー実行失敗</td><td>次回トリガーで再実行（リトライ上限3回）</td><td>Discord</td></tr>
+        <tr><td>Phase 2（ChatGPT）未実施</td><td>Day 5リマインダー通知</td><td>Discord kim宛</td></tr>
+        <tr><td>Phase 4（記事化判断）未実施</td><td>月末リマインダー通知</td><td>Discord kim宛</td></tr>
+      </tbody>
+    </table>
+
+    <h2>7. 通知設計</h2>
+    <table>
+      <thead><tr><th>トリガー</th><th>送信先</th><th>内容</th></tr></thead>
+      <tbody>
+        <tr><td>Phase 1完了</td><td>Discord #ai-news</td><td>収集KW数・ChatGPT入力フォーマットへのリンク</td></tr>
+        <tr><td>Phase 2待ち</td><td>Discord @kim</td><td>ChatGPT評価依頼・期日</td></tr>
+        <tr><td>Phase 3完了</td><td>Discord #ai-news</td><td>提案一覧・優先度高件数</td></tr>
+        <tr><td>遅延警告</td><td>Discord @kim</td><td>遅延内容・想定影響</td></tr>
+      </tbody>
+    </table>
+
+    <h2>8. セキュリティ</h2>
+    <ul>
+      <li>GASスクリプトプロパティでAPIキー・Webhook URLを管理</li>
+      <li>コード内に秘匿値を直接記述しない</li>
+      <li>CIのGitHub Secretsに必要なトークンを保存</li>
+      <li>GASの実行権限はMYSELF（デプロイ者のみ）に制限</li>
+    </ul>
+
+    <h2>9. UI影響</h2>
+    <p><strong>UI変更なし。</strong> 本設計はバックエンドの運用自動化と通知設計のみを対象とし、ユーザー向け画面の変更を一切含まない。</p>
+  </main>
+</body>
+</html>

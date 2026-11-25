@@ -1,0 +1,56 @@
+✖ remote archives retain audit mapping, respect live/VSCode/recent/resumed guards and restore into kept (32225.603366ms)
+✔ remote archive with ID only in globalStorage (8528.121633ms)
+✔ remote archive with ID only in workspaceStorage (8687.960227ms)
+✖ overlapping closed and remote archive retains closed global DB protection (10161.169051ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 2
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 66503.203118
+
+✖ failing tests:
+
+test at tools/purge-sessions.test.mjs:295:1
+✖ remote archives retain audit mapping, respect live/VSCode/recent/resumed guards and restore into kept (32225.603366ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  null !== 0
+  
+      at Object.run (file:///mnt/c/Users/uers/.claude/wt-remote-archive-tab/tools/purge-sessions.test.mjs:19:139)
+      at TestContext.<anonymous> (file:///mnt/c/Users/uers/.claude/wt-remote-archive-tab/tools/purge-sessions.test.mjs:320:18)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: null,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tools/purge-sessions.test.mjs:342:1
+✖ overlapping closed and remote archive retains closed global DB protection (10161.169051ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  null !== 0
+  
+      at Object.run (file:///mnt/c/Users/uers/.claude/wt-remote-archive-tab/tools/purge-sessions.test.mjs:19:139)
+      at TestContext.<anonymous> (file:///mnt/c/Users/uers/.claude/wt-remote-archive-tab/tools/purge-sessions.test.mjs:348:20)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: null,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

@@ -1,0 +1,188 @@
+{
+  "rules": [
+    {
+      "id": "handoff-quality-only",
+      "short": "hq",
+      "source": "ONBOARDING §1.1.1",
+      "summary": "手渡しは品質理由のみ。効率理由・経路探索の打ち切りは違反",
+      "detect": {
+        "scope": "shared:handoff-quality-gate.hasHandoff",
+        "requireRoutes": 3
+      },
+      "gate": "handoff-quality-gate.mjs",
+      "ledger": "~/.claude/handoff-ledger.jsonl",
+      "enforcement": "warn",
+      "thresholds": {
+        "violationsToBlock": 3,
+        "daysObserved": 3
+      },
+      "validation": {
+        "fixtureCount": 18,
+        "precision": 1,
+        "minPrecision": 0.9,
+        "status": "validated"
+      }
+    },
+    {
+      "id": "id-with-name",
+      "short": "idn",
+      "source": "ONBOARDING §1.5.2",
+      "summary": "内部IDには人間可読名を併記",
+      "detect": {
+        "scope": "assistant_text",
+        "detector": "id-window-name"
+      },
+      "gate": "rule-compliance-loop.mjs",
+      "thresholds": {
+        "violationsToBlock": 3,
+        "daysObserved": 3
+      },
+      "enforcement": "warn",
+      "validation": {
+        "fixtureCount": 15,
+        "precision": 1,
+        "minPrecision": 0.9,
+        "status": "validated"
+      }
+    },
+    {
+      "id": "verify-before-done",
+      "short": "vbd",
+      "source": "ONBOARDING §deploy-verify",
+      "summary": "完了報告には検証実行記録が必要",
+      "detect": {
+        "scope": "session_tool_history",
+        "detector": "verification-tool-before-completion"
+      },
+      "gate": "verify-before-done-detector.mjs",
+      "thresholds": {
+        "violationsToBlock": 3,
+        "daysObserved": 3
+      },
+      "enforcement": "warn",
+      "validation": {
+        "fixtureCount": 15,
+        "precision": 1,
+        "minPrecision": 0.9,
+        "status": "validated"
+      }
+    },
+    {
+      "id": "delegate-implementation",
+      "short": "dlg",
+      "source": "ONBOARDING §1.18",
+      "summary": "大きな実装は委譲する",
+      "owner": "cost-work-loop.mjs",
+      "detect": {
+        "mode": "delegated"
+      },
+      "enforcement": "off",
+      "note": "委譲率の実測と強制は cost-work-loop.mjs が担当（~/.claude/cost-enforce.json）。二重計測を避けるためこのループでは検出しない。"
+    },
+    {
+      "id": "no-fable5",
+      "short": "nf5",
+      "source": "ONBOARDING §1.16",
+      "summary": "Fable をサブエージェント(実装/量産)に使わない",
+      "detect": {
+        "scope": "session_tool_history",
+        "violation": [
+          "model\\s*[:=]\\s*[\"']?fable|claude-fable-5"
+        ],
+        "exempt": []
+      },
+      "gate": "fable-session-guard.mjs",
+      "thresholds": {
+        "violationsToBlock": 1,
+        "daysObserved": 1
+      },
+      "enforcement": "warn",
+      "validation": {
+        "fixtureCount": 15,
+        "precision": 1,
+        "minPrecision": 0.9,
+        "status": "validated"
+      },
+      "note": "2026-09-03改定: 監督(メインループ)用のFable使用は定額内なら許可。サブエージェント(実装/量産)への指定は単価2倍のため引き続き禁止。"
+    },
+    {
+      "id": "negative-claim-primary-source",
+      "short": "ncp",
+      "source": "memory feedback_never_assert_nonexistence_from_search (2026-09-01 実害)",
+      "summary": "「APIが無い/存在しない」の否定断定は一次ソース(npm/PyPI/GitHub)照会後のみ",
+      "detect": {
+        "scope": "shared:negative-claim-gate.findNegativeClaim"
+      },
+      "gate": "negative-claim-gate.mjs",
+      "ledger": "~/.claude/handoff-ledger.jsonl",
+      "enforcement": "block",
+      "thresholds": {
+        "violationsToBlock": 1,
+        "daysObserved": 0
+      },
+      "validation": {
+        "fixtureCount": 22,
+        "precision": 1,
+        "minPrecision": 0.9,
+        "status": "validated",
+        "measuredOn": "2026-09-01",
+        "sample": "実データ 12セッション / assistant応答288件 / 検出1件・真陽性1件・誤爆0件",
+        "note": "誤爆3型(訂正引用・仕様説明・環境に無い)と自己言及レポート文を除外済み。回帰は negative-claim-gate.fixtures.json"
+      }
+    },
+    {
+      "id": "reported-symptom-evidence",
+      "short": "rse",
+      "source": "user incident 2026-09-22–24",
+      "summary": "報告された不具合の否定・原因確定は対象vendor照会とマーカー必須。到達不能な証拠は即時依頼",
+      "detect": {
+        "scope": "shared:reported-symptom-gate.evaluateReportedSymptomFromRaw"
+      },
+      "gate": "reported-symptom-gate.mjs",
+      "ledger": "~/.claude/stop-gate-runner-ledger.jsonl",
+      "enforcement": "block",
+      "thresholds": {
+        "violationsToBlock": 1,
+        "daysObserved": 0
+      },
+      "validation": {
+        "fixtureCount": 12,
+        "minPrecision": 0.9,
+        "status": "validated",
+        "precision": 1,
+        "measuredOn": "2026-09-24",
+        "note": "reported-symptom-gate.fixtures.json"
+      }
+    },
+    {
+      "id": "repair-failed-lane-first",
+      "short": "rlf",
+      "source": "ONBOARDING §1.18 / CLAUDE.md 他AI修復ルール",
+      "summary": "故障レーンの修復を通常作業・代替への移行より優先する",
+      "detect": {
+        "scope": "session_tool_history",
+        "detector": "lane-failure-before-unlogged-implementation"
+      },
+      "gate": "lane-repair-first-gate.mjs",
+      "ledger": "~/.claude/lane-repair-log.jsonl",
+      "thresholds": {
+        "violationsToBlock": 3,
+        "daysObserved": 2
+      },
+      "enforcement": "block",
+      "validation": {
+        "fixtureCount": 28,
+        "precision": 1,
+        "minPrecision": 0.9,
+        "status": "validated",
+        "measuredOn": "2026-10-29",
+        "truePositives": 16,
+        "falsePositives": 0,
+        "trueNegatives": 12,
+        "falseNegatives": 0,
+        "recall": 1,
+        "note": "node --test tools/lane-repair-detector.test.mjs; synthetic transcript fixtures, actual execution; source quotes, quota, failed/expired/wrong-lane records included"
+      }
+    }
+  ]
+}

@@ -1,0 +1,393 @@
+﻿# nightly-bootstrap.ps1 — nightly 専用リポを同期して対象を実行する (Windows PowerShell 5.1)
+# 運用の設置版 (~/.claude/tools/nightly-bootstrap.ps1, run-hidden.vbs) を自己更新する。
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$Target,
+
+    [Parameter()]
+    [string]$Shell = 'powershell',
+
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [object[]]$TargetArguments
+)
+
+$logDir = Join-Path $HOME '.claude\logs'
+$logFile = Join-Path $logDir ("nightly-bootstrap-" + (Get-Date -Format 'yyyy-MM-dd') + '.log')
+New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+
+function Write-NightlyLog([string]$Step, [string]$Result) {
+    $line = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' / ' + $Step + ' / ' + $Result
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        try {
+            Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8 -ErrorAction Stop
+            return
+        } catch {
+            if ($attempt -lt 9) {
+                Start-Sleep -Milliseconds (50 + ($PID % 37) + ($attempt * 25))
+            }
+        }
+    }
+
+    try {
+        $fallbackFile = Join-Path $logDir ("nightly-bootstrap-" + (Get-Date -Format 'yyyy-MM-dd') + '.' + $PID + '.log')
+        Add-Content -LiteralPath $fallbackFile -Value $line -Encoding UTF8 -ErrorAction Stop
+    } catch {
+        try { [Console]::Error.WriteLine($line) } catch { }
+    }
+}
+
+function Send-NightlyHeartbeat([string]$StartedAt, [bool]$Ok, [string]$Summary) {
+    try {
+        $heartbeatScript = Join-Path $repo 'tools\lib\heartbeat.mjs'
+        if (-not (Test-Path -LiteralPath $heartbeatScript -PathType Leaf)) { $heartbeatScript = Join-Path $HOME '.claude\tools\lib\heartbeat.mjs' }
+        if (-not (Test-Path -LiteralPath $heartbeatScript -PathType Leaf)) { return }
+        $okText = if ($Ok) { 'true' } else { 'false' }
+        # 空文字の引数を渡すと後続の --xxx を値として食ってしまう(startedAt が "--finishedAt" になる)ので、
+        # 空のときは --startedAt 自体を組み立てない。
+        $heartbeatArgs = @('--job', 'nightly-bootstrap')
+        if (-not [string]::IsNullOrEmpty($StartedAt)) { $heartbeatArgs += @('--startedAt', $StartedAt) }
+        $heartbeatArgs += @('--finishedAt', (Get-Date -Format 'o'), '--ok', $okText, '--cycleMinutes', '1440')
+        if (-not [string]::IsNullOrEmpty($Summary)) { $heartbeatArgs += @('--summary', $Summary) }
+        & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) $heartbeatScript @heartbeatArgs 2>$null | Out-Null
+    } catch { }
+}
+
+function Stop-Nightly([string]$Step, [string]$Result, [int]$Code) {
+    Write-NightlyLog $Step ($Result + " pid=" + $PID)
+    Send-NightlyHeartbeat -StartedAt $nightlyStartedAt -Ok $false -Summary ("error:" + $Step + " " + $Result)
+    exit $Code
+}
+
+# Fail closed, including status errors. Never resume updates after a rescue.
+$script:blockedNightlyTrees = @{}
+function Test-NightlyTreeClean([string]$Tree) {
+    if ($script:blockedNightlyTrees.ContainsKey($Tree)) { return $false }
+    $dirty = @(& $git.Source -C $Tree status --porcelain --untracked-files=all --ignore-submodules=all)
+    if ($LASTEXITCODE -ne 0) {
+        $script:blockedNightlyTrees[$Tree] = $true
+        Write-NightlyLog 'DIRTY_WORKTREE_SKIP' ("status failed: " + $Tree)
+        return $false
+    }
+    if ($dirty.Count -eq 0) { return $true }
+    # The helper persists the attempt BEFORE creating a branch, under this bootstrap's mutex.
+    try {
+        $helper = Join-Path $PSScriptRoot 'nightly-rescue.mjs'
+        if (-not (Test-Path -LiteralPath $helper)) { $helper = Join-Path $Tree 'tools\nightly-rescue.mjs' }
+        $resultText = & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) $helper $Tree $HOME
+        if ($LASTEXITCODE -ne 0) { throw 'rescue helper failed; tree preserved' }
+        $result = $resultText | ConvertFrom-Json
+        foreach ($entry in $result.events) { Write-NightlyLog $entry.step $entry.message }
+        if ($result.clean -eq $true) { return $true }
+    } catch { Write-NightlyLog 'DIRTY_WORKTREE_SKIP' $_.Exception.Message }
+    $script:blockedNightlyTrees[$Tree] = $true
+    return $false
+}
+
+function Get-NightlyFileSha256([string]$Path) {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($Path)
+        return [System.BitConverter]::ToString($sha256.ComputeHash($bytes)).Replace('-', '')
+    } finally {
+        $sha256.Dispose()
+    }
+}
+
+try {
+    Write-NightlyLog 'nightly-bootstrap' ("ok:開始 pid=" + $PID + " target=" + $Target)
+
+    # 早期の Stop-Nightly(対象確認など)でも終了ハートビートに開始時刻を載せられるよう、最初に取る。
+    $nightlyStartedAt = (Get-Date -Format 'o')
+
+    $repo = if ($env:ORGIAST_NIGHTLY_REPO) {
+        $env:ORGIAST_NIGHTLY_REPO
+    } else {
+        Join-Path $HOME '.claude\nightly-repo'
+    }
+    $repoUrl = 'https://github.com/kimkon1011/orgiast-claude-rules.git'
+    $git = Get-Command git -ErrorAction SilentlyContinue
+    # スケジュールタスクの PATH に git が無いことがある（winget 導入直後など）。既定の設置先から探して補う
+    # （2026-10-12 作業用011: 起動のたびに「gitが見つからない」で同期を飛ばし、名簿が古いままだった）。
+    if (-not $git -and $env:ORGIAST_NIGHTLY_NO_GIT_FALLBACK -ne '1') {
+        foreach ($cand in @("$env:ProgramFiles\Git\cmd\git.exe", "${env:ProgramFiles(x86)}\Git\cmd\git.exe", "$env:LOCALAPPDATA\Programs\Git\cmd\git.exe")) {
+            if ($cand -and (Test-Path -LiteralPath $cand)) { $env:PATH = (Split-Path -Parent $cand) + ';' + $env:PATH; $git = Get-Command git -ErrorAction SilentlyContinue; break }
+        }
+    }
+    $mutex = $null
+    $mutexAcquired = $false
+    $targetPath = $null
+
+    try {
+        $repoFullPath = [IO.Path]::GetFullPath($repo).ToUpperInvariant()
+        $repoPathBytes = [Text.Encoding]::UTF8.GetBytes($repoFullPath)
+        $repoPathSha = [BitConverter]::ToString(([Security.Cryptography.SHA256]::Create()).ComputeHash($repoPathBytes)).Replace('-', '')
+        $mutexName = 'Global\OrgiastNightlyBootstrap-' + $repoPathSha.Substring(0, 24)
+        $mutex = New-Object Threading.Mutex($false, $mutexName)
+        $mutexTimeoutMs = 180000
+        if ($env:ORGIAST_NIGHTLY_MUTEX_TIMEOUT_MS) {
+            $parsedTimeout = 0
+            if ([int]::TryParse($env:ORGIAST_NIGHTLY_MUTEX_TIMEOUT_MS, [ref]$parsedTimeout) -and $parsedTimeout -ge 0) {
+                $mutexTimeoutMs = $parsedTimeout
+            }
+        }
+        $mutexWait = [Diagnostics.Stopwatch]::StartNew()
+        try {
+            $mutexAcquired = $mutex.WaitOne($mutexTimeoutMs)
+        } catch [Threading.AbandonedMutexException] {
+            $mutexAcquired = $true
+            Write-NightlyLog '排他制御' 'warn:放棄されたミューテックスを取得。続行'
+        }
+
+        $mutexWait.Stop()
+        $mutexWaitSeconds = $mutexWait.Elapsed.TotalSeconds.ToString('F3', [Globalization.CultureInfo]::InvariantCulture)
+        if ($mutexAcquired) {
+            Write-NightlyLog '排他制御' ("ok:取得 pid=" + $PID + " 待ち=" + $mutexWaitSeconds)
+        }
+
+        if (-not $mutexAcquired) {
+            Write-NightlyLog '排他制御' ("warn:他のタスクが同期中のためタイムアウト。既存版で続行 pid=" + $PID + " 待ち=" + $mutexWaitSeconds)
+        } elseif ($env:ORGIAST_NIGHTLY_MUTEX_HOLD_MS -and [int]$env:ORGIAST_NIGHTLY_MUTEX_HOLD_MS -gt 0) {
+            Start-Sleep -Milliseconds ([int]$env:ORGIAST_NIGHTLY_MUTEX_HOLD_MS)
+        }
+
+        if ($mutexAcquired -and -not $git) {
+            Write-NightlyLog 'git確認' 'error:gitが見つからない'
+        } elseif ($mutexAcquired) {
+          try {
+            $gitDir = Join-Path $repo '.git'
+            $repoSynced = $true
+            if (-not (Test-Path -LiteralPath $gitDir)) {
+                $canClone = $true
+                if (Test-Path -LiteralPath $repo) {
+                    $repoHasContents = $null -ne (Get-ChildItem -LiteralPath $repo -Force | Select-Object -First 1)
+                    if ($repoHasContents) {
+                        Write-NightlyLog 'リポ同期' ("error:リポではないディレクトリが既にある " + $repo)
+                        $canClone = $false
+                        $repoSynced = $false
+                    }
+                }
+                if ($canClone) {
+                    $repoParent = Split-Path -Parent $repo
+                    if ($repoParent) { New-Item -ItemType Directory -Path $repoParent -Force | Out-Null }
+                    & $git.Source clone --branch main -- $repoUrl $repo
+                    if ($LASTEXITCODE -ne 0) { throw "git clone終了コード=$LASTEXITCODE" }
+                }
+            } else {
+                & $git.Source -C $repo fetch origin main
+                if ($LASTEXITCODE -ne 0) { throw "git fetch終了コード=$LASTEXITCODE" }
+                # 異常終了した git の残骸だけを除去し、10分以内のロックは実行中として残す。
+                try {
+                    $indexLock = Join-Path $gitDir 'index.lock'
+                    if (Test-Path -LiteralPath $indexLock -PathType Leaf) {
+                        $indexLockInfo = Get-Item -LiteralPath $indexLock -ErrorAction Stop
+                        if ($indexLockInfo.LastWriteTime -lt (Get-Date).AddMinutes(-10)) {
+                            Remove-Item -LiteralPath $indexLock -Force -ErrorAction Stop
+                            Write-NightlyLog 'リポ同期' ("warn:古い index.lock を削除 " + $indexLockInfo.CreationTime.ToString('o'))
+                        }
+                    }
+                } catch {
+                    Write-NightlyLog 'リポ同期' ("warn:index.lock の削除失敗 " + $_.Exception.Message)
+                }
+                if (Test-NightlyTreeClean $repo) {
+                    & $git.Source -C $repo checkout --detach origin/main
+                    if ($LASTEXITCODE -ne 0) { throw "git checkout終了コード=$LASTEXITCODE" }
+                    if (Test-NightlyTreeClean $repo) {
+                        & $git.Source -C $repo reset --hard origin/main
+                        if ($LASTEXITCODE -ne 0) { throw "git reset終了コード=$LASTEXITCODE" }
+                        if (Test-NightlyTreeClean $repo) {
+                            $excludesHelper = Join-Path $PSScriptRoot 'nightly-rescue.mjs'
+                            if (-not (Test-Path -LiteralPath $excludesHelper)) { $excludesHelper = Join-Path $repo 'tools\nightly-rescue.mjs' }
+                            $excludesJson = & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) $excludesHelper --clean-excludes
+                            if ($LASTEXITCODE -ne 0) { throw 'clean exclusions unavailable; tree preserved' }
+                            $cleanArgs = @('clean', '-qfd')
+                            foreach ($excluded in ($excludesJson | ConvertFrom-Json)) { $cleanArgs += @('-e', $excluded) }
+                            & $git.Source -C $repo @cleanArgs
+                            if ($LASTEXITCODE -ne 0) { throw "git clean終了コード=$LASTEXITCODE" }
+                        }
+                    }
+                }
+            }
+
+            if ($repoSynced) {
+                $headSha = (& $git.Source -C $repo rev-parse HEAD | Select-Object -Last 1)
+                if ($LASTEXITCODE -ne 0 -or -not $headSha) { throw 'HEADのSHAを取得できない' }
+                $remoteSha = (& $git.Source -C $repo rev-parse origin/main | Select-Object -Last 1)
+                if ($LASTEXITCODE -ne 0 -or -not $remoteSha) { throw 'origin/mainのSHAを取得できない' }
+                $headSha = ([string]$headSha).Trim()
+                $remoteSha = ([string]$remoteSha).Trim()
+                $shortHead = $headSha.Substring(0, [Math]::Min(7, $headSha.Length))
+                $shortRemote = $remoteSha.Substring(0, [Math]::Min(7, $remoteSha.Length))
+                if ($script:blockedNightlyTrees.ContainsKey($repo)) {
+                    Write-NightlyLog 'リポ同期' 'skip:dirty worktree preserved'
+                } elseif ($headSha -ne $remoteSha) {
+                    Write-NightlyLog 'リポ同期' ("ng:HEAD " + $shortHead + " != origin/main " + $shortRemote + " 既存版で続行")
+                } else {
+                    Write-NightlyLog 'リポ同期' ("ok:origin/main " + $shortHead)
+                }
+            }
+        } catch {
+            Write-NightlyLog 'リポ同期' ("warn:" + $_.Exception.Message + ' 既存版で続行')
+          }
+        }
+
+        if ($mutexAcquired) {
+          try {
+            $repoBootstrap = Join-Path $repo 'tools\nightly-bootstrap.ps1'
+            if ((Test-Path -LiteralPath $repoBootstrap -PathType Leaf) -and $PSCommandPath) {
+            $selfPath = [IO.Path]::GetFullPath($PSCommandPath)
+            $repoRoot = [IO.Path]::GetFullPath($repo).TrimEnd('\', '/')
+            $selfInRepo = $selfPath.StartsWith($repoRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+            if (-not $selfInRepo) {
+                $installedPath = [IO.Path]::GetFullPath((Join-Path $HOME '.claude\tools\nightly-bootstrap.ps1'))
+                $isInstalledPath = $selfPath.Equals($installedPath, [StringComparison]::OrdinalIgnoreCase)
+                if ($isInstalledPath -and $env:ORGIAST_NIGHTLY_NO_SELF_UPDATE -ne '1') {
+                    $repoHash = Get-NightlyFileSha256 $repoBootstrap
+                    $selfHash = Get-NightlyFileSha256 $selfPath
+                    if ($repoHash -ne $selfHash) {
+                        $selfUpdateTemp = $selfPath + '.new-' + $PID
+                        try {
+                            Copy-Item -LiteralPath $repoBootstrap -Destination $selfUpdateTemp -Force
+                            Move-Item -LiteralPath $selfUpdateTemp -Destination $selfPath -Force
+                            Write-NightlyLog '自己更新' 'ok:自己更新(次回から新版)'
+                        } catch {
+                            Remove-Item -LiteralPath $selfUpdateTemp -Force -ErrorAction SilentlyContinue
+                            throw
+                        }
+                    }
+                } elseif ($isInstalledPath) {
+                    Write-NightlyLog '自己更新' 'skip:自己更新(ORGIAST_NIGHTLY_NO_SELF_UPDATE=1のため)'
+                } else {
+                    Write-NightlyLog '自己更新' 'skip:自己更新(運用の設置先でないため)'
+                }
+            }
+            }
+          } catch {
+            Write-NightlyLog '自己更新' ("warn:" + $_.Exception.Message)
+          }
+
+          try {
+            $repoRunHidden = Join-Path $repo 'tools\run-hidden.vbs'
+            $installedRunHidden = Join-Path $HOME '.claude\tools\run-hidden.vbs'
+            if ((Test-Path -LiteralPath $repoRunHidden -PathType Leaf) -and (Test-Path -LiteralPath $installedRunHidden -PathType Leaf)) {
+                if ($env:ORGIAST_NIGHTLY_NO_SELF_UPDATE -eq '1') {
+                    Write-NightlyLog '自己更新' 'skip:run-hidden.vbs更新(ORGIAST_NIGHTLY_NO_SELF_UPDATE=1のため)'
+                } else {
+                    $repoRunHiddenHash = Get-NightlyFileSha256 $repoRunHidden
+                    $installedRunHiddenHash = Get-NightlyFileSha256 $installedRunHidden
+                    if ($repoRunHiddenHash -ne $installedRunHiddenHash) {
+                        $runHiddenTemp = $installedRunHidden + '.new-' + $PID
+                        try {
+                            Copy-Item -LiteralPath $repoRunHidden -Destination $runHiddenTemp -Force
+                            Move-Item -LiteralPath $runHiddenTemp -Destination $installedRunHidden -Force
+                            Write-NightlyLog '自己更新' 'ok:run-hidden.vbs更新(次回起動から新版)'
+                        } catch {
+                            Remove-Item -LiteralPath $runHiddenTemp -Force -ErrorAction SilentlyContinue
+                            throw
+                        }
+                    }
+                }
+            }
+          } catch {
+            Write-NightlyLog '自己更新' ("warn:run-hidden.vbs更新 " + $_.Exception.Message)
+          }
+        }
+
+        # The existing bootstrap self-update brings this block in on the next tick.
+        # Update only an already-installed hourly task script, from a verified clean main.
+        if ($mutexAcquired -and $env:ORGIAST_NIGHTLY_NO_SELF_UPDATE -ne '1' -and
+            -not $script:blockedNightlyTrees.ContainsKey($repo) -and $headSha -and $headSha -eq $remoteSha) {
+            $syncSource = Join-Path $repo 'tools\sync-orgiast-main.ps1'
+            $syncInstalled = Join-Path $HOME '.claude\tools\sync-orgiast-main.ps1'
+            if ((Test-Path -LiteralPath $syncSource -PathType Leaf) -and (Test-Path -LiteralPath $syncInstalled -PathType Leaf)) {
+                $syncTemp = $syncInstalled + '.new-' + $PID
+                try {
+                    if ((Get-NightlyFileSha256 $syncSource) -ne (Get-NightlyFileSha256 $syncInstalled)) {
+                        Copy-Item -LiteralPath $syncSource -Destination $syncTemp -Force
+                        Move-Item -LiteralPath $syncTemp -Destination $syncInstalled -Force
+                        Write-NightlyLog 'SYNC_SELF_UPDATE' ('sync-orgiast-main.ps1 updated ' + $shortHead)
+                    }
+                } catch {
+                    Remove-Item -LiteralPath $syncTemp -Force -ErrorAction SilentlyContinue
+                    Write-NightlyLog 'SYNC_SELF_UPDATE_FAILED' $_.Exception.Message
+                }
+            }
+        }
+
+        $targetCandidate = if ([IO.Path]::IsPathRooted($Target)) { $Target } else { Join-Path $repo $Target }
+        if (-not (Test-Path -LiteralPath $targetCandidate -PathType Leaf)) {
+            Start-Sleep -Seconds 1
+        }
+        if (-not (Test-Path -LiteralPath $targetCandidate -PathType Leaf)) {
+            Stop-Nightly '対象確認' ("error:対象が見つからない " + $targetCandidate) 1
+        }
+        $targetPath = (Resolve-Path -LiteralPath $targetCandidate).Path
+    } finally {
+        if ($mutexAcquired -and $mutex) {
+            try { $mutex.ReleaseMutex() } catch { }
+        }
+        if ($mutex) { $mutex.Dispose() }
+    }
+
+    $forwardArgs = @($TargetArguments)
+    if ($forwardArgs.Count -gt 0 -and [string]$forwardArgs[0] -eq '--') {
+        if ($forwardArgs.Count -eq 1) { $forwardArgs = @() } else { $forwardArgs = @($forwardArgs[1..($forwardArgs.Count - 1)]) }
+    }
+    if ([string]::IsNullOrWhiteSpace($env:ORGIAST_JOB)) {
+        $jobName = [IO.Path]::GetFileNameWithoutExtension($targetPath)
+        if ($forwardArgs.Count -gt 0 -and [string]$forwardArgs[0] -match '^:?([A-Za-z0-9][A-Za-z0-9_-]*)$') {
+            $jobName += ':' + $Matches[1]
+        }
+        $env:ORGIAST_JOB = $jobName
+    }
+
+    try {
+        $heartbeatScript = Join-Path $repo 'tools\lib\heartbeat.mjs'
+        if (-not (Test-Path -LiteralPath $heartbeatScript -PathType Leaf)) { $heartbeatScript = Join-Path $HOME '.claude\tools\lib\heartbeat.mjs' }
+        if (Test-Path -LiteralPath $heartbeatScript -PathType Leaf) {
+            & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) $heartbeatScript --job nightly-bootstrap --startedAt $nightlyStartedAt 2>$null | Out-Null
+        }
+    } catch { }
+
+    $extension = [IO.Path]::GetExtension($targetPath).ToLowerInvariant()
+    if ($extension -eq '.ps1') {
+        $shellCommand = $null
+        if ([string]::IsNullOrEmpty($Shell) -or $Shell.Equals('powershell', [StringComparison]::OrdinalIgnoreCase)) {
+            $shellCommand = 'powershell.exe'
+        } elseif ($Shell.Equals('pwsh', [StringComparison]::OrdinalIgnoreCase)) {
+            $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+            if ($pwsh) {
+                $shellCommand = $pwsh.Source
+            } else {
+                Write-NightlyLog 'シェル確認' 'warn:pwshが見つからないためpowershellで実行'
+                $shellCommand = 'powershell.exe'
+            }
+        } else {
+            Stop-Nightly 'シェル確認' ("error:未知の-Shell " + $Shell) 1
+        }
+        Write-NightlyLog '対象開始' ("ok:" + [IO.Path]::GetFileName($targetPath) + " pid=" + $PID)
+        $targetTimer = [Diagnostics.Stopwatch]::StartNew()
+        & $shellCommand -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $targetPath @forwardArgs
+        $targetExitCode = $LASTEXITCODE
+    } elseif ($extension -eq '.mjs' -or $extension -eq '.js') {
+        # WSL 経由で起動されると PATH に Linux 版の拡張子なし node が混ざり、掴むと「アプリの選択」が出る（2026-10-18 実測）。.exe に限定する。
+        $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1
+        if (-not $node) { Stop-Nightly 'node確認' 'error:nodeが見つからない' 1 }
+        Write-NightlyLog '対象開始' ("ok:" + [IO.Path]::GetFileName($targetPath) + " pid=" + $PID)
+        $targetTimer = [Diagnostics.Stopwatch]::StartNew()
+        if ([IO.Path]::GetFileName($targetPath) -eq 'fleet-mail.mjs') { $env:ORGIAST_FLEET_POLL_SOURCE = 'scheduled-bootstrap' }
+        & $node.Source $targetPath @forwardArgs
+        $targetExitCode = $LASTEXITCODE
+    } else {
+        Stop-Nightly '対象確認' ("error:対応していない拡張子 " + $extension) 1
+    }
+
+    $targetTimer.Stop()
+    Write-NightlyLog '対象実行' ("ok:" + [IO.Path]::GetFileName($targetPath) + " 終了コード=" + $targetExitCode + " pid=" + $PID + " 所要=" + $targetTimer.Elapsed.TotalSeconds.ToString('F3', [Globalization.CultureInfo]::InvariantCulture))
+    Send-NightlyHeartbeat -StartedAt $nightlyStartedAt -Ok $true -Summary ("対象=" + [IO.Path]::GetFileName($targetPath) + " 終了コード=" + $targetExitCode)
+    exit $targetExitCode
+} catch {
+    try { Write-NightlyLog 'nightly-bootstrap' ("error:" + $_.Exception.Message) } catch { }
+    Send-NightlyHeartbeat -StartedAt $nightlyStartedAt -Ok $false -Summary ("error:" + $_.Exception.Message)
+    exit 1
+}

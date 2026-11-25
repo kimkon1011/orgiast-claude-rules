@@ -1,0 +1,15 @@
+{
+  "case_id": "SAMPLE-3X6", "title": "トラス・LEDUP 6m×3m",
+  "booth": { "w_mm": 6000, "d_mm": 3000, "height_limit_mm": 3000, "open_sides": ["front", "right"], "walls": ["back", "left"] },
+  "items": [
+    { "asset_id": "truss300_silver_L2400", "pos_mm": [250, 2700, 0] },
+    { "asset_id": "truss300_silver_L2100", "pos_mm": [5750, 2700, 0] },
+    { "asset_id": "truss300_silver_L1800", "pos_mm": [2100, 2700, 2400], "pitch_deg": 90, "rot_deg": 90 },
+    { "asset_id": "truss300_silver_L1500", "pos_mm": [3750, 2700, 2400], "pitch_deg": 90, "rot_deg": 90 },
+    { "param": "ledup", "w_mm": 3000, "h_mm": 2980, "pos_mm": [3000, 2880, 0] },
+    { "asset_id": "shodan_stacking_600x600x550", "pos_mm": [1600, 1400, 0] },
+    { "asset_id": "shodan_stacking_420x540x870", "pos_mm": [1100, 1400, 0] },
+    { "asset_id": "shodan_stacking_420x540x870", "pos_mm": [2100, 1400, 0] }
+  ],
+  "views": ["persp_front_left", "persp_front_right", "top", "front", "side_left"]
+}

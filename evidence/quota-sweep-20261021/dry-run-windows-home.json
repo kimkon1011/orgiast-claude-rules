@@ -1,0 +1,30 @@
+{
+  "windows": [
+    {
+      "provider": "claude",
+      "window": "5h",
+      "usedPercent": 18,
+      "resetsAt": 1792547999828
+    },
+    {
+      "provider": "claude",
+      "window": "7d",
+      "usedPercent": 72,
+      "resetsAt": 1792594799828
+    },
+    {
+      "provider": "codex",
+      "observedAt": 1792065282916.3086,
+      "stale": true,
+      "exhausted": false,
+      "window": "primary",
+      "usedPercent": 7,
+      "windowMinutes": 10080,
+      "resetsAt": 1792657348000
+    }
+  ],
+  "reasons": {
+    "codex": null
+  },
+  "decision": []
+}

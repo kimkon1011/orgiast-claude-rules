@@ -1,0 +1,3 @@
+e2b3484 fix: harden Remote Control resume and verify recovery paths
+74cc2e5 fix: restore remote control sessions after reload
+8e97384 feat(next-session): スマホ Remote Control 用の Claude Code タブを自動補充 (#338)

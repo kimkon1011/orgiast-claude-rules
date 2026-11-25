@@ -1,0 +1,277 @@
+{
+  "attempt": "X-0018-03",
+  "time": "2026-11-09T04:47:01.196082+09:00",
+  "revision": "9d0dd65a4a19110c8d34a4e3b483561243548f5c",
+  "environment": {
+    "node": "v22.23.4"
+  },
+  "method": "urllib.request GET / HTMLParser; POST・入力・ブラウザ操作なし",
+  "observations": [
+    {
+      "url": "https://www.orgiast.jp/contactus",
+      "status": 200,
+      "final_url": "https://www.orgiast.jp/contactus",
+      "sha256": "31242d116766286ae25b344fd131253814b40ebea84fd4a40171253e1ea2266e",
+      "fields": [
+        {
+          "tag": "form",
+          "id": "js-form",
+          "action": "https://docs.google.com/forms/u/0/d/e/1FAIpQLSfMRXsDEo_lNS2pGWyDwZdCnZ2yqL-9B7IjcQIpxRtpNEoykw/formResponse"
+        },
+        {
+          "tag": "input",
+          "id": "your-email",
+          "type": "email",
+          "name": "emailAddress"
+        },
+        {
+          "tag": "input",
+          "id": "your-name",
+          "type": "text",
+          "name": "entry.2005620554"
+        },
+        {
+          "tag": "input",
+          "id": "your-company",
+          "type": "text",
+          "name": "entry.481557705"
+        },
+        {
+          "tag": "input",
+          "id": "your-tel",
+          "type": "tel",
+          "name": "entry.1166974658"
+        },
+        {
+          "tag": "textarea",
+          "name": "entry.839337160",
+          "id": "your-message"
+        },
+        {
+          "tag": "input",
+          "type": "radio",
+          "name": "entry.1137956161"
+        },
+        {
+          "tag": "input",
+          "type": "radio",
+          "name": "entry.1137956161"
+        },
+        {
+          "tag": "input",
+          "type": "radio",
+          "name": "entry.1137956161"
+        },
+        {
+          "tag": "input",
+          "type": "radio",
+          "name": "entry.1137956161"
+        },
+        {
+          "tag": "input",
+          "type": "radio",
+          "name": "entry.1137956161"
+        },
+        {
+          "tag": "input",
+          "type": "radio",
+          "name": "entry.1137956161"
+        },
+        {
+          "tag": "input",
+          "type": "text",
+          "name": "entry.1137956161.other_option_response"
+        },
+        {
+          "tag": "input",
+          "id": "your-key",
+          "type": "text",
+          "name": "entry.588557639"
+        },
+        {
+          "tag": "input",
+          "id": "your-privacy",
+          "type": "checkbox",
+          "name": "entry.91289993"
+        },
+        {
+          "tag": "input",
+          "id": "your-submit",
+          "type": "checkbox",
+          "name": "entry.1799683657"
+        },
+        {
+          "tag": "input",
+          "type": "submit",
+          "id": "js-submit"
+        }
+      ],
+      "links": [
+        "#pagetop",
+        "/",
+        "/clients",
+        "/company",
+        "/contactus",
+        "/creative",
+        "/event",
+        "/newsrelease",
+        "/recruiting",
+        "/services/flow",
+        "/topics",
+        "https://lin.ee/ccRONVc",
+        "https://www.orgiast.jp",
+        "https://www.orgiast.jp/contactus",
+        "https://www.orgiast.jp/policy"
+      ],
+      "platform_markers": [
+        "wp-content",
+        "iframe"
+      ]
+    },
+    {
+      "url": "https://rebooth.co.jp/works/1538/",
+      "status": 200,
+      "final_url": "https://rebooth.co.jp/works/1538/",
+      "sha256": "0b18605fa8d6952e6a03f7846fe5bd39352247081f9d3f0ad960efb31fce9e84",
+      "fields": [],
+      "links": [
+        "/contact",
+        "https://rebooth.co.jp",
+        "https://rebooth.co.jp/",
+        "https://rebooth.co.jp/about/",
+        "https://rebooth.co.jp/column/",
+        "https://rebooth.co.jp/company/",
+        "https://rebooth.co.jp/contact/",
+        "https://rebooth.co.jp/news/",
+        "https://rebooth.co.jp/reviews/",
+        "https://rebooth.co.jp/why-choose-us/",
+        "https://rebooth.co.jp/why-choose-us/design-quality/",
+        "https://rebooth.co.jp/why-choose-us/reduces-costs/",
+        "https://rebooth.co.jp/why-choose-us/reuse/",
+        "https://rebooth.co.jp/works-top/",
+        "https://rebooth.co.jp/works/",
+        "https://rebooth.co.jp/works/1275/",
+        "https://rebooth.co.jp/wp-content/uploads/2026/10/green-energy-2026-2-1.jpg",
+        "https://rebooth.co.jp/wp-content/uploads/2026/10/green-energy-2026-3-1.jpg",
+        "https://rebooth.co.jp/wp-content/uploads/2026/10/green-energy-2026-4-1.jpg",
+        "https://rebooth.co.jp/wp-content/uploads/2026/10/green-energy-2026-5.jpg",
+        "https://rebooth.co.jp/wp-content/uploads/2026/10/green-energy-2026-6.jpg",
+        "https://rebooth.co.jp/wp-content/uploads/2026/10/green-energy-2026-perse-1.jpg",
+        "https://rebooth.co.jp/wp-content/uploads/2026/10/green-energy-2026-perse-2.jpg",
+        "https://rebooth.co.jp/wp-content/uploads/2026/10/green-energy-2026-perse-3.jpg",
+        "https://rebooth.co.jp/wp-content/uploads/2026/10/green-energy-2026-video-1.jpg",
+        "https://rebooth.co.jp/wp-content/uploads/2026/10/green-energy-2026-video-2.jpg",
+        "https://rebooth.co.jp/wp-content/uploads/2026/10/green-energy-2026-video-3.jpg",
+        "https://rebooth.co.jp/wp-content/uploads/2026/10/green-energy-2026-video-4.jpg",
+        "https://www.instagram.com/orgiast_rebooth/",
+        "https://www.orgiast.jp/policy",
+        "https://www.tiktok.com/@orgiast",
+        "https://x.com/orgiast_event"
+      ],
+      "platform_markers": [
+        "wp-content",
+        "wpcf7",
+        "iframe"
+      ]
+    },
+    {
+      "url": "https://registry.npmjs.org/vibe-testing/latest",
+      "status": 200,
+      "final_url": "https://registry.npmjs.org/vibe-testing/latest",
+      "sha256": "8c2891de3f51a1a7ad8c868726783bd6b3714a2c972b59ae1ac5dcc4ba658e7f",
+      "package": {
+        "name": "vibe-testing",
+        "version": "0.4.6",
+        "repository": {
+          "url": "git+https://github.com/AishwaryShrivastav/vibe-testing.git",
+          "type": "git"
+        },
+        "homepage": "https://vibetesting.tfgstudio.com/",
+        "engines": {
+          "node": ">=20"
+        },
+        "bin": {
+          "vibe-test": "dist/cli.js",
+          "vibe-testing": "dist/cli.js",
+          "vibe-test-mcp": "dist/mcp-server.js"
+        },
+        "dist": {
+          "shasum": "4be252e03e04c9146ae73920aeeabb3cb5b46276",
+          "tarball": "https://registry.npmjs.org/vibe-testing/-/vibe-testing-0.4.6.tgz",
+          "fileCount": 83,
+          "integrity": "sha512-U2THQKDAGDxRoTyaHYeL5mh68+p+KLtMQHwg9HBshaAUaQnep4w5b5WRk9YhP7thn5LR+Ld1Dex8IYyUpdViwg==",
+          "signatures": [
+            {
+              "sig": "MEUCIBhVPvQHCLIdUJ36CEjWE4G4eaKMsKySoHu7v42Uh2O2AiEAlbVcZq0UKGL88j5PYCdLrzyadSOWO45BbDzsgl0o0HY=",
+              "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+            },
+            {
+              "sig": "MEQCICO5kkqtfNc1ABD4tJdFJP07UQ762rWxMx7tOLcJeDSWAiBBFZ4N7Cb4UuAOKJhkdivyBwKJI7WCneQIri6l+eXWCw==",
+              "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+            }
+          ],
+          "attestations": {
+            "url": "https://registry.npmjs.org/-/npm/v1/attestations/vibe-testing@0.4.6",
+            "provenance": {
+              "predicateType": "https://slsa.dev/provenance/v1"
+            }
+          },
+          "unpackedSize": 513190
+        }
+      }
+    },
+    {
+      "url": "https://raw.githubusercontent.com/AishwaryShrivastav/vibe-testing/main/README.md",
+      "status": 200,
+      "final_url": "https://raw.githubusercontent.com/AishwaryShrivastav/vibe-testing/main/README.md",
+      "sha256": "ada48c06e264e7430b80083c35d1a72bdf991774e782b35cac573ecf23a9eb72",
+      "usage_lines": [
+        "[![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](https://nodejs.org)",
+        "npx vibe-testing@latest init",
+        "Playwright MCP gives your agent hands. vibe-testing gives it a testing workflow: code-derived scenarios, memory across runs, and a report. Two things a stateless browser tool cannot do:",
+        "The same diff reaches your editor as `snapshot_diff` on `run_full_test` and `run_converge`, and as `route_changes` on `scan_codebase`, so the agent can flag \"checkout broke after that commit\" without anyone scrolling a report. Flaky routes, working selectors, and measured timeouts are also remembered between runs.",
+        "- [init command](#init-command)",
+        "- [VIBE.md, project guidance](#vibemd-project-guidance)",
+        "- [Configuration (vibe.config.json)](#configuration)",
+        "npx vibe-testing@latest init",
+        "AI calls: scan_codebase -> get_context(\"checkout\") -> login -> explore_page -> execute_scenario -> generate_report",
+        "HTML report opens in browser with screenshots of every step",
+        "`init` also:",
+        "- Registers vibe-test in global editor configs (`~/.claude/settings.json`, `~/.cursor/mcp.json`, and so on) so the tools are available in every project, every session",
+        "- Creates `VIBE.md` (edit with your test credentials) and `vibe.config.json`",
+        "- Installs the matching Playwright Chromium build",
+        "The artifact is written to `artifacts/vibe-testing-<version>.mcpb`. See the [MCPB distribution guide](docs/distribution/mcpb.md) for the bundle contents, validation steps, Smithery handoff, and the one-time Playwright Chromium prerequisite.",
+        "npx vibe-testing@latest init",
+        "Add to `~/.claude/settings.json` (global, works in every project):",
+        "Add to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project):",
+        "| `generate_report` | Build HTML report (auto-opens) | Report path plus summary |",
+        "| `run_full_test` | One-shot: scan, execute, explore, report | Full results plus `snapshot_diff` vs last run |",
+        "settings pages, run the suggested tests, and generate a report.",
+        "8. `generate_report`, HTML report opens automatically",
+        "5. `generate_report`",
+        "## init command",
+        "npx vibe-testing@latest init [options]",
+        "| `VIBE.md` | Project | Test guidance, edit with your credentials |",
+        "| `vibe.config.json` | Project | Config, URL auto-detected from your project |",
+        "npx vibe-testing@latest init                     # auto-detect editors, register globally + project",
+        "npx vibe-testing@latest init --no-global         # project-level only, skip global registration",
+        "npx vibe-testing@latest init --skip-browser-install",
+        "npx vibe-testing@latest init --editor cursor     # only configure Cursor",
+        "npx vibe-testing@latest init --editor claude-code windsurf",
+        "After init, edit `VIBE.md` with your login URL and test credentials.",
+        "npx vibe-testing@latest init",
+        "# Open last report in browser",
+        "npx vibe-testing@latest report",
+        "| `-c <path>` | `vibe.config.json` | Config file path |",
+        "snapshot or replace the prior report.",
+        "## VIBE.md, project guidance",
+        "Create `VIBE.md` in your project root. vibe-testing reads it automatically on every run.",
+        "### vibe.config.json",
+        "Created automatically by `init` with auto-detected URL. Edit as needed:",
+        "| `url` | App URL, localhost or staging. Auto-detected by `init`. |",
+        "    -> Opens Chromium, fills the form, clicks submit",
+        "  generate_report()"
+      ]
+    }
+  ]
+}

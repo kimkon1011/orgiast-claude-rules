@@ -1,0 +1,564 @@
+import { routeCandidate, usageCostFields } from './provider-routing.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { budgetVerdict, estimateTokens, noteResponse, readBudget, writeBudget } from './rate-budget.mjs';
+import { isDailyQuotaResponse, nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
+import { providerLimitedUntil } from './lib/executor-gate.mjs';
+import { isAutoDisabled, readDisabledEntries } from './lib/lane-disabled.mjs';
+import { applyCandidateHealth } from './fallback-backend-health.mjs';
+
+export const FALLBACK_CHAIN = Object.freeze([
+  { provider: 'groq', model: 'openai/gpt-oss-120b' },
+  // 無料の Groq、定額の GLM、以降の従量プロバイダの順で費用を抑える。
+  { provider: 'glm', model: 'glm-5.3' },
+  { provider: 'cerebras', model: 'zai-glm-4.7' },
+  // Genspark Pro は前払いクレジットなので従量課金プロバイダより先に使う。
+  { provider: 'genspark', model: 'gpt-5.6-luna' },
+  { provider: 'openrouter', model: 'openai/gpt-oss-120b' },
+  { provider: 'deepseek', model: 'deepseek-flash' },
+  { provider: 'gemini', model: 'gemini-3.6-flash' },
+  { provider: 'grok', model: 'grok-3' },
+  { provider: 'kimi', model: 'kimi-k3' },
+]);
+
+export const COST_PER_MILLION = Object.freeze({
+  groq: [0.15, 0.60], openrouter: [0.59, 0.79], gemini: [0.75, 3.75], deepseek: [0.27, 1.10],
+  grok: [3, 15], kimi: [3, 15], mistral: [2, 6], cerebras: [0, 0], codex: [0, 0],
+});
+
+// Snapshot: https://openrouter.ai/api/v1/models (2026-10-28), USD / million tokens.
+// Historical native rows retain COST_PER_MILLION; routed rows use their actual model.
+export const OPENROUTER_COST_PER_MILLION = Object.freeze({
+  'moonshotai/kimi-k3.1-pro': [2.0, 10.0],
+  'deepseek/deepseek-v4.1-flash-1017': [0.15, 0.6],
+  'deepseek/deepseek-v4.1-flash': [0.14, 0.42],
+  'deepseek/deepseek-v4.1-flash:batch': [0.05, 0.15],
+  'deepseek/deepseek-v4-flash-vision-exp': [0.2156, 0.6468],
+  'deepseek/deepseek-v4-pro-0813': [0.66, 1.98],
+  'deepseek/deepseek-v4-flash-0731': [0.119, 0.238],
+  'moonshotai/kimi-k3': [0.15, 20.0],
+  'moonshotai/kimi-k3:batch': [2.28, 11.4],
+  'moonshotai/kimi-k2.7-code': [0.56, 3.1],
+  'deepseek/deepseek-v4-pro': [0.95526, 1.91052],
+  'deepseek/deepseek-v4-flash': [0.091, 0.182],
+  'moonshotai/kimi-k2.6': [0.65, 3.41],
+  'moonshotai/kimi-k2.5': [0.5, 2.5],
+  'deepseek/deepseek-v3.2': [0.28, 0.42],
+  'moonshotai/kimi-k2-thinking': [0.6, 2.5],
+  'deepseek/deepseek-v3.2-exp': [0.27, 0.41],
+  'deepseek/deepseek-v3.1-terminus': [0.27, 1.0],
+  'moonshotai/kimi-k2-0905': [0.6, 2.5],
+  'deepseek/deepseek-chat-v3.1': [0.25, 0.95],
+  'moonshotai/kimi-k2': [0.57, 2.3],
+  'deepseek/deepseek-r1-0528': [0.5, 2.15],
+  'deepseek/deepseek-chat-v3-0324': [0.29, 1.14],
+  'deepseek/deepseek-chat': [0.2574, 1.0287],
+});
+export function executorRates(provider, model) {
+  return OPENROUTER_COST_PER_MILLION[model] || COST_PER_MILLION[provider];
+}
+export function executorCostUsd(row) {
+  if (typeof row.usd === 'number' && Number.isFinite(row.usd) && row.usd >= 0) return row.usd;
+  const rates = executorRates(row.provider, row.model);
+  return rates ? ((Number(row.in) || 0) * rates[0] + (Number(row.out) || 0) * rates[1]) / 1e6 : null;
+}
+
+export const KNOWN_CHEAP_PROVIDERS = Object.freeze([
+  'groq', 'glm', 'cerebras', 'deepseek', 'openrouter', 'gemini', 'gemini-cli',
+  'grok', 'kimi', 'mistral', 'ollama', 'codex', 'qwen-code', 'genspark',
+]);
+
+const ROUTING_TABLE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'routing-table.json');
+
+
+// 会議・通話・Podcastの文字起こしでは話者と発言の帰属を優先し、DeepSeekを使わない。
+// OpenRouter経由でも同じモデルなので、直接APIからの迂回も防ぐ。
+export function allowedForCategory(candidate, category) {
+  return String(category || '').trim().toLowerCase() !== 'transcript'
+    || (candidate?.provider !== 'deepseek' && !String(candidate?.model || '').startsWith('deepseek/'));
+}
+
+// eval 実測のルーティング表(tools/routing-table.json)から、指定カテゴリで最安の候補を返す。
+// 表が無い・カテゴリが無い・暫定計測(provisional)のどれでも null を返し、既定の連鎖を使わせる。
+export function preferredForCategory(category) {
+  const name = String(category || '').trim().toLowerCase();
+  if (!name) return null;
+  try {
+    const table = JSON.parse(fs.readFileSync(ROUTING_TABLE, 'utf8'));
+    const entry = table?.categories?.[name];
+    if (!entry || !entry.provider || !allowedForCategory(entry, name)) return null;
+    return { provider: entry.provider, model: entry.model, ...(entry.provisional ? { provisional: true } : {}) };
+  } catch {
+    return null;
+  }
+}
+
+function readJson(file, fallback) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
+}
+
+function localDay(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function dailyCost(file, timestamp) {
+  try {
+    const day = localDay(timestamp);
+    return fs.readFileSync(file, 'utf8').split(/\r?\n/).reduce((total, line) => {
+      if (!line.trim()) return total;
+      let record;
+      try { record = JSON.parse(line); } catch { return total; }
+      if (localDay(record.t) !== day) return total;
+      return total + (executorCostUsd(record) ?? 0);
+    }, 0);
+  } catch { return 0; }
+}
+
+function threshold(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+export function classifyFailure(status) {
+  if (status == null || status === 429 || (status >= 500 && status <= 599)) return 'retry';
+  return 'next';
+}
+
+export function isPermanentBillingDetail(detail) {
+  return /prepayment credits are depleted|insufficient_quota|exceeded your current quota|insufficient balance|insufficient_balance|exceeded_current_quota|is suspended due to|please recharge your account/i.test(String(detail || ''));
+}
+
+function retryAfterMs(response, now = Date.now()) {
+  const value = response?.headers?.get?.('retry-after');
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - now) : null;
+}
+
+function statusName(status) {
+  return status == null ? 'network' : `http_${status}`;
+}
+
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function reasonForLog(reason, maxLength = 140) {
+  const singleLine = String(reason || 'unknown failure').replace(/\s*[\r\n]+\s*/g, ' ').trim();
+  return singleLine.length <= maxLength ? singleLine : `${singleLine.slice(0, maxLength - 1)}…`;
+}
+
+// 429 本文から "Your limit will reset at 2026-11-19 19:53:29" 形式の reset 時刻を解析する。
+// 成功時は epoch ms、失敗時は null。
+export function parseQuotaResetTime(text, now = Date.now()) {
+  const raw = String(text || '');
+  // パターン: "limit (will|shall) reset at YYYY-MM-DD HH:MM:SS" / "resets at YYYY-MM-DD HH:MM:SS"
+  const m = raw.match(/(?:limit|quota|usage)\s+(?:will|shall)\s+(?:reset|be\s+reset)\s+(?:at|on)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?)/i)
+    || raw.match(/(?:resets?|reset)\s+(?:at|on)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?)/i);
+  if (m) {
+    // タイムゾーン表記が無い場合は +09:00（JST）として解釈。Z/オフセット付きはそのまま。
+    const dateStr = m[1].replace(' ', 'T') + (m[1].length <= 16 ? ':00' : '');
+    const hasTz = /[+-]\d{2}:\d{2}$/.test(dateStr) || dateStr.endsWith('Z');
+    const parsed = Date.parse(dateStr + (hasTz ? '' : '+09:00'));
+    if (Number.isFinite(parsed) && parsed > now) return parsed;
+  }
+  return null;
+}
+
+function isQuotaExhaustedUntilReset(status, detail, now) {
+  if (status !== 429 || parseQuotaResetTime(detail, now) == null) return false;
+  return /(?:limit\s+exhausted|usage\s+limit|quota|weekly\s+limit|monthly\s+limit)/i.test(String(detail || ''));
+}
+
+// lane-health.json に quota_wait を書き込む（上限中レーンを他からも避けさせる）。
+function saveQuotaWaitToLaneHealth(provider, until, detail, hp, persist) {
+  if (!persist) return;
+  try {
+    let health;
+    try { health = JSON.parse(fs.readFileSync(hp, 'utf8').replace(/^﻿/, '')); } catch { health = {}; }
+    if (!health.lanes) health.lanes = {};
+    const p = String(provider).toLowerCase();
+    health.lanes[p] = { alive: false, reason: 'quota_wait', until, error: (detail || '').slice(0, 500), probedAt: new Date().toISOString() };
+    fs.mkdirSync(path.dirname(hp), { recursive: true });
+    const tmp = `${hp}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+    try { fs.writeFileSync(tmp, JSON.stringify(health, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(tmp, hp); }
+    finally { try { fs.unlinkSync(tmp); } catch {} }
+  } catch {}
+}
+
+// Bound both headers and body consumption; abort the real HTTP request and also
+// settle when a custom transport ignores AbortSignal. Retried requests share the
+// candidate's deadline rather than receiving a fresh budget each time.
+async function fetchBeforeDeadline(fetchImpl, request, deadline) {
+  if (deadline == null) return fetchImpl(request.url, request.init);
+  const controller = new AbortController();
+  const timeout = new Error('per-provider timeout');
+  timeout.code = 'PROVIDER_TIMEOUT';
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw timeout;
+  const upstream = request.init?.signal;
+  const signal = upstream ? AbortSignal.any([upstream, controller.signal]) : controller.signal;
+  let timer;
+  try {
+    return await Promise.race([
+      new Promise((_, reject) => {
+        timer = setTimeout(() => { controller.abort(timeout); reject(timeout); }, remaining);
+      }),
+      (async () => {
+        const response = await fetchImpl(request.url, { ...request.init, signal });
+        const body = await response.arrayBuffer();
+        return new Response([101, 204, 205, 304].includes(response.status) ? null : body, {
+          status: response.status, statusText: response.statusText, headers: response.headers,
+        });
+      })(),
+    ]);
+  } finally { clearTimeout(timer); }
+}
+
+const DIRECT_PROVIDERS = new Set(['glm', 'kimi', 'deepseek']);
+function directNameFromUrl(url) {
+  const value = String(url || '');
+  if (/\/\/api\.z\.ai\b/i.test(value)) return 'glm';
+  if (/api\.moonshot|api\.kimi\./i.test(value)) return 'kimi';
+  if (/\/\/api\.deepseek\.com\b/i.test(value)) return 'deepseek';
+  return '';
+}
+function claudeHomeFrom(file) {
+  if (!file) return '';
+  const dir = path.dirname(file);
+  return path.basename(dir) === '.claude' ? path.dirname(dir) : '';
+}
+
+export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category = '', caller = 'llm-fallback', allowGatewayFallback = true, explicitStart = false, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, laneHealthFile, persistState = true, perProviderTimeoutMs, now = () => Date.now() }) {
+  if (perProviderTimeoutMs != null && (!Number.isSafeInteger(perProviderTimeoutMs) || perProviderTimeoutMs <= 0 || perProviderTimeoutMs > 2147483647)) throw new Error('perProviderTimeoutMs must be a positive timer-safe integer');
+  start = routeCandidate(start);
+  chain = chain.map(routeCandidate);
+  const home = process.env.ORGIAST_HOME || os.homedir();
+  const _laneHealthFile = laneHealthFile || (cooldownFile ? path.join(path.dirname(cooldownFile), 'lane-health.json') : path.join(home, '.claude', 'lane-health.json'));
+  const timestamp = now();
+  const cost = dailyCost(ledgerFile || path.join(home, '.claude', 'executor-usage.jsonl'), timestamp);
+  const warn = threshold('ORGIAST_LLM_DAILY_WARN_USD', 1);
+  const hard = threshold('ORGIAST_LLM_DAILY_HARD_USD', 5);
+  if (cost > hard) throw new Error(`本日の従量上限 $${hard.toFixed(2)} に達したため停止しました（概算 $${cost.toFixed(2)}）。ORGIAST_LLM_DAILY_HARD_USD で変更可`);
+  if (cost > warn) console.error(`[cost] 本日の安いAI実行者 概算 $${cost.toFixed(2)} が警告値 $${warn.toFixed(2)} を超過`);
+
+  if (start && !allowedForCategory(start, category)) console.error('[routing] transcript は話者・発言の取り違えを避けるため DeepSeek を除外し、次の候補を使います');
+
+  // routing-overrides.json の demote 有効期限が切れるまで、該当 provider を連鎖の末尾へ回す
+  // (cost-improve-loop が provider_unhealthy を検出した時に書く。B4 2026-09-07)。
+  // start として明示された provider は呼び出し元の意思なので先頭のまま。
+  // cooldown と同じく node --test 配下では実環境のファイルを読まない。
+  let demotedProviders = [];
+  let overrides = {};
+  if (cooldownFile != null || !process.env.NODE_TEST_CONTEXT) {
+    const overridesPath = cooldownFile
+      ? path.join(path.dirname(cooldownFile), 'routing-overrides.json')
+      : path.join(home, '.claude', 'routing-overrides.json');
+    try {
+      overrides = JSON.parse(fs.readFileSync(overridesPath, 'utf8'));
+      demotedProviders = Object.entries(overrides?.demote || {})
+        .filter(([, until]) => Number(Date.parse(until)) > timestamp)
+        .map(([provider]) => String(provider).toLowerCase());
+    } catch {}
+  }
+  // lanes-disabled.json に載った provider は start でも候補から外す。課金・回数制限は cooldown で一時退避し、回復後は自動で戻す。
+  let disabled = new Set();
+  if (cooldownFile != null || !process.env.NODE_TEST_CONTEXT) {
+    try { disabled = new Set(Object.keys(JSON.parse(fs.readFileSync(cooldownFile ? path.join(path.dirname(cooldownFile), 'lanes-disabled.json') : path.join(home, '.claude', 'lanes-disabled.json'), 'utf8').replace(/^\uFEFF/, '')) || {}).map(p => p.toLowerCase())); } catch {}
+  }
+  // A lane-doctor probe may measure its own automatically disabled provider.
+  const probeProvider = process.env.ORGIAST_LANE_DOCTOR_PROBE_PROVIDER;
+  if (probeProvider && !chain.length && start?.provider === probeProvider &&
+      isAutoDisabled(readDisabledEntries(home)[probeProvider])) disabled.delete(probeProvider);
+  const candidates = [];
+  const seen = new Set();
+  // Gateway selection is routing, not failover; --no-fallback still uses OpenRouter.
+  const expanded = [start, ...chain];
+  for (const candidate of expanded.filter(Boolean)) {
+    if (!allowedForCategory(candidate, category)) continue;
+    if (disabled.has(String(candidate.provider).toLowerCase())) { console.error(`[routing] ${candidate.provider} は lanes-disabled.json で無効化されているため使いません`); continue; }
+    const identity = `${candidate.provider}:${candidate.model}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    candidates.push(candidate);
+  }
+  if (demotedProviders.length) {
+    const rank = (candidate) => (demotedProviders.includes(candidate.provider) && (candidate.provider !== start.provider || candidate.model !== start.model) ? 1 : 0);
+    candidates.sort((a, b) => rank(a) - rank(b)); // Array#sort は安定なので同 rank 内の元順を保つ
+    for (const provider of demotedProviders) {
+      if (provider !== start.provider) console.error(`[routing] ${provider} はdemote中のため連鎖の末尾へ回します`);
+    }
+  }
+
+  // node --test 配下では、呼び出し側が隔離先を明示した場合だけ永続化する。
+  // 将来テストが cooldownFile を渡し忘れても実環境の受け皿を止めないための多重防御。
+  const useCooldown = chain.length > 0 && (cooldownFile != null || !process.env.NODE_TEST_CONTEXT);
+  const cooldownPath = cooldownFile || path.join(home, '.claude', 'provider-cooldown.json');
+  const historyFile = path.join(path.dirname(cooldownPath), 'provider-limit-history.jsonl');
+  const considerDirect = cooldownFile != null || !process.env.NODE_TEST_CONTEXT;
+  const cooldowns = useCooldown ? readJson(cooldownPath, {}) : {};
+  const cooldownMax = threshold('ORGIAST_LLM_429_COOLDOWN_MAX_MS', 900_000);
+  const cooldownMin = Math.min(cooldownMax, threshold('ORGIAST_LLM_429_COOLDOWN_MIN_MS', 60_000));
+  let cooldownDirty = false;
+  // Bound legacy 429 entries from their original start, not from every read.
+  for (const state of Object.values(cooldowns)) {
+    if (state?.reason !== 'http_429' || state?.permanentBilling === true) continue;
+    const began = Number.isFinite(state.at) ? state.at : timestamp;
+    const until = Math.min(Number(state.until), began + cooldownMax);
+    if (until < Number(state.until)) { state.until = until; cooldownDirty = true; }
+  }
+  saveCooldowns();
+  // lane-health.json の quota_wait 状態もチェックし、reset 時刻まで呼ばない
+  let laneHealth = null;
+  let quotaWaitProviders = [];
+  if (useCooldown) {
+    try {
+      laneHealth = JSON.parse(fs.readFileSync(_laneHealthFile, 'utf8').replace(/^\uFEFF/, ''));
+      quotaWaitProviders = Object.entries(laneHealth?.lanes || {})
+        .filter(([, state]) => state?.reason === 'quota_wait' && Number(state?.until) > timestamp)
+        .map(([provider]) => String(provider).toLowerCase());
+    } catch {}
+  }
+  function directBlockedUntil(provider) {
+    if (!considerDirect) return 0;
+    const name = String(provider || '').toLowerCase();
+    if (!DIRECT_PROVIDERS.has(name)) return 0;
+    const until = Math.max(Number(cooldowns?.[name]?.until) || 0, providerLimitedUntil(historyFile, name, timestamp));
+    return until > timestamp ? until : 0;
+  }
+  const available = useCooldown
+    ? candidates.filter(({ provider }) => {
+        if (explicitStart && provider === start.provider) return true;
+        const p = String(provider).toLowerCase();
+        if (Number(cooldowns?.[p]?.until) > timestamp) return false;
+        if (quotaWaitProviders.includes(p)) return false;
+        if (directBlockedUntil(p)) return false;
+        return true;
+      })
+    : candidates.filter(({ provider }) => !directBlockedUntil(provider));
+  // 全滅時は非直APIだけ再開する。glm / kimi直 / deepseek直は履歴・cooldown の間は呼ばない。
+  const revived = (available.length ? available : candidates).filter(({ provider }) => !directBlockedUntil(provider));
+  const selectedCandidates = available.length ? available : (revived.length ? revived : (considerDirect ? revived : candidates));
+  const skipped = [];
+  if (explicitStart) {
+    const p = String(start.provider).toLowerCase();
+    const reason = Number(cooldowns?.[p]?.until) > timestamp ? 'cooldown' : quotaWaitProviders.includes(p) ? 'quota_wait' : '';
+    if (reason) console.error(`[routing] 明示指定された ${start.provider} は ${reason} 中ですがスキップせず試行します`);
+  }
+  if ((useCooldown && (available.length || quotaWaitProviders.length)) || candidates.some((candidate) => directBlockedUntil(candidate.provider))) {
+    for (const candidate of candidates) {
+      const p = String(candidate.provider).toLowerCase();
+      if (explicitStart && candidate.provider === start.provider && candidate.model === start.model) continue;
+      const cd = cooldowns?.[p];
+      if (Number(cd?.until) > timestamp && useCooldown) {
+        const minutes = Math.max(1, Math.ceil((cd.until - timestamp) / 60000));
+        skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'cooldown', minutesLeft: minutes });
+        console.error(`[cooldown] ${candidate.provider} はスキップ (${cd.reason || 'unknown'}, 残り${minutes}分)`);
+      } else if (directBlockedUntil(p)) {
+        const until = directBlockedUntil(p);
+        const minutes = Math.max(1, Math.ceil((until - timestamp) / 60000));
+        skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'cooldown', minutesLeft: minutes });
+        console.error(`[cooldown] ${candidate.provider} の直APIは provider-limit-history / cooldown 中のためスキップ (残り${minutes}分)`);
+      } else if (quotaWaitProviders.includes(p)) {
+        const qw = laneHealth?.lanes?.[p];
+        const minutes = qw?.until ? Math.max(1, Math.ceil((Number(qw.until) - timestamp) / 60000)) : '?';
+        skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'quota_wait', minutesLeft: minutes });
+        console.error(`[quota_wait] ${candidate.provider} は枠上限中のためスキップ (残り${minutes}分)`);
+      }
+    }
+  }
+
+  function setCooldown(provider, status, response, permanentBilling = false, detail = '') {
+    if (!useCooldown) return;
+    const at = now();
+    const retryMs = retryAfterMs(response, at) ?? 0;
+    // 429 本文から reset 時刻を解析し、lane-health.json にも quota_wait として保存する。
+    // 例: "Your limit will reset at 2026-11-19 19:53:29"
+    const parsedReset = parseQuotaResetTime(detail, at);
+    if (status === 429 && !permanentBilling && isDailyQuotaResponse(status, detail)) {
+      cooldowns[provider] = { until: nextUtcMidnight(new Date(at)), reason: 'daily_limit', at };
+      cooldownDirty = true;
+      saveCooldowns();
+      return;
+    }
+    let duration = 0;
+    if (status === 402 || permanentBilling) duration = 24 * 60 * 60 * 1000;
+    else if (status === 429) duration = Math.min(cooldownMax, Math.max(cooldownMin, retryMs || cooldownMin));
+    else if ([401, 403].includes(status)) duration = 6 * 60 * 60 * 1000;
+    if (!duration) return;
+    cooldowns[provider] = { until: at + duration, reason: `http_${status}`, at, ...(permanentBilling ? { permanentBilling: true } : {}) };
+    // 429 で reset 時刻が本文から取れたら lane-health.json に quota_wait を書く
+    if (status === 429 && parsedReset) {
+      cooldowns[provider].until = Math.max(cooldowns[provider].until, parsedReset);
+      saveQuotaWaitToLaneHealth(provider, parsedReset, detail, _laneHealthFile, persistState);
+      console.error(`[quota_wait] ${provider} の上限リセット時刻: ${new Date(parsedReset).toISOString()}（本文から解析）`);
+    }
+    cooldownDirty = true;
+    saveCooldowns();
+  }
+  function clearCooldown(provider) {
+    if (useCooldown && cooldowns?.[provider]) { delete cooldowns[provider]; cooldownDirty = true; }
+  }
+  function saveCooldowns() {
+    if (!cooldownDirty || !persistState) return;
+    try { fs.mkdirSync(path.dirname(cooldownPath), { recursive: true }); fs.writeFileSync(cooldownPath, `${JSON.stringify(cooldowns, null, 2)}\n`); } catch {}
+  }
+
+  // 分窓トークン残量の永続バケット(A: 429 を受ける前に絞る / C: プロセス間で同じバケットを共有)。
+  // 429 になってから cooldown で避けるのでは遅い。残量が足りない候補は投げる前に落とし、
+  // 連鎖の次の候補(実測では cerebras が定額 $0)へ回す。
+  // cooldown と同じ多重防御: テストが budgetFile を渡し忘れても実環境の受け皿を触らない。
+  const useBudget = budgetFile != null || !process.env.NODE_TEST_CONTEXT;
+  const budgetPath = budgetFile || path.join(home, '.claude', 'provider-budget.json');
+
+  async function noteAttempt(info) {
+    await onAttempt?.(info);
+    if (!ledgerFile || !persistState) return;
+    let usage = {};
+    if (info.status === 'ok' && info.response?.clone) usage = (await info.response.clone().json().catch(() => ({}))).usage || {};
+    const row = {
+      t: new Date(now()).toISOString(), category: String(category || ''), caller: String(caller || 'llm-fallback'),
+      tool: String(caller || 'llm-fallback'), provider: info.candidate.provider, model: info.candidate.model,
+      status: info.status, attempt: info.attempt, failover: Boolean(info.failover), ok: info.status === 'ok',
+      secs: Number(Number(info.secs || 0).toFixed(3)), in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0,
+      ...usageCostFields(usage),
+    };
+    try { fs.mkdirSync(path.dirname(ledgerFile), { recursive: true }); fs.appendFileSync(ledgerFile, `${JSON.stringify(row)}\n`); } catch {}
+  }
+  function noteCandidateHealth() {
+    if (process.env.NODE_TEST_CONTEXT) return;
+    const tracked = claudeHomeFrom(ledgerFile);
+    if (!tracked || !ledgerFile) return;
+    try {
+      const rows = fs.readFileSync(ledgerFile, 'utf8').split(/\n/).flatMap((line) => {
+        if (!line.trim()) return [];
+        try {
+          const row = JSON.parse(line);
+          if (!row.provider || row.status === 'unrouted') return [];
+          return [row];
+        } catch { return []; }
+      });
+      applyCandidateHealth(tracked, { rows });
+    } catch {}
+  }
+
+  const failures = [];
+  const requests = new Map();
+  async function requestAt(index) {
+    if (!requests.has(index)) {
+      const request = await payloadFor(selectedCandidates[index]);
+      requests.set(index, request);
+      if (!request) {
+        const candidate = selectedCandidates[index];
+        skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'no-request' });
+      }
+    }
+    return requests.get(index);
+  }
+
+  let attempted = 0;
+  for (let candidateIndex = 0; candidateIndex < selectedCandidates.length; candidateIndex++) {
+    const candidate = selectedCandidates[candidateIndex];
+    let lastAttempt = 0;
+    const request = await requestAt(candidateIndex);
+    if (!request) continue;
+    const directName = directNameFromUrl(request.url) || (DIRECT_PROVIDERS.has(String(candidate.provider).toLowerCase()) ? String(candidate.provider).toLowerCase() : '');
+    const blockedUntil = directBlockedUntil(directName);
+    if (blockedUntil) {
+      const minutes = Math.max(1, Math.ceil((blockedUntil - timestamp) / 60000));
+      skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'cooldown', minutesLeft: minutes });
+      console.error(`[cooldown] ${directName} の直APIはクールダウン中のため呼びません (残り${minutes}分)`);
+      continue;
+    }
+    // 候補ごとに読み直す。並列プロセスが直前に書いた残量を取りこぼさないため(C)。
+    const budgetStore = useBudget ? readBudget(budgetPath) : {};
+    const verdict = useBudget
+      ? budgetVerdict({ store: budgetStore, provider: candidate.provider, neededTokens: estimateTokens(request), now: now() })
+      : { allow: true };
+    if (!verdict.allow) {
+      skipped.push({ provider: candidate.provider, model: candidate.model, reason: verdict.reason });
+      console.error(`[budget] ${candidate.provider} はスキップ (${verdict.reason})`);
+      continue;
+    }
+    let lastReason = '';
+    const deadline = perProviderTimeoutMs == null ? null : Date.now() + perProviderTimeoutMs;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      lastAttempt = attempt;
+      const began = Date.now();
+      let response;
+      let status;
+      let detail = '';
+      let timedOut = false;
+      try {
+        response = await fetchBeforeDeadline(fetchImpl, request, deadline);
+        status = response.status;
+        // 残量ヘッダを下限として記録する。次に同じ provider を選ぶ時、この値で事前に絞れる。
+        if (useBudget && response?.headers && noteResponse(budgetStore, candidate.provider, response.headers, now()) && persistState) writeBudget(budgetPath, budgetStore);
+        if (response.ok) {
+          if (validateResponse) {
+            const json = await response.clone().json().catch(() => null);
+            const validation = await validateResponse(json, candidate);
+            if (validation !== true) {
+              const validationReason = typeof validation === 'string' ? validation : 'unusable response';
+              lastReason = `unusable: ${validationReason}`;
+              attempted++;
+              await noteAttempt({ candidate, attempt, status: 'unusable', response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: (candidate.provider !== start.provider || candidate.model !== start.model) });
+              break;
+            }
+          }
+          await noteAttempt({ candidate, attempt, status: 'ok', response, secs: (Date.now() - began) / 1000, failover: (candidate.provider !== start.provider || candidate.model !== start.model) });
+          clearCooldown(candidate.provider);
+          saveCooldowns();
+          noteCandidateHealth();
+          return { response, candidate, failover: (candidate.provider !== start.provider || candidate.model !== start.model), attempt };
+        }
+        detail = (await response.clone().text().catch(() => '')).slice(0, 400);
+        lastReason = `HTTP${status}${detail ? `: ${detail}` : ''}`;
+      } catch (error) {
+        timedOut = error?.code === 'PROVIDER_TIMEOUT';
+        lastReason = timedOut ? `timeout after ${perProviderTimeoutMs}ms` : `network: ${error?.message || String(error)}`;
+      }
+      attempted++;
+      await noteAttempt({ candidate, attempt, status: timedOut ? 'timeout' : statusName(status), response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: (candidate.provider !== start.provider || candidate.model !== start.model) });
+      // groq の通常429の本文には `https://console.groq.com/settings/billing` が含まれるため、
+      // 素の `billing` で判定すると日次上限(TPD)を恒久障害と誤判定する。恒久障害の文面だけを拾う。
+      const permanentBilling = status === 429 && isPermanentBillingDetail(detail);
+      setCooldown(candidate.provider, status, response, permanentBilling, detail);
+
+      if (timedOut) break; // A hung candidate must not consume three timeout windows.
+      const kind = classifyFailure(status);
+      const dailyQuota = status === 429 && isDailyQuotaResponse(status, detail);
+      const exhaustedUntilReset = isQuotaExhaustedUntilReset(status, detail, now());
+      if (permanentBilling || dailyQuota || exhaustedUntilReset || kind !== 'retry' || attempt === 2) break;
+      const specified = retryAfterMs(response);
+      if (specified != null && specified > 60000) break;
+      const delay = specified ?? 1000 * 2 ** attempt;
+      if (deadline != null && delay >= deadline - Date.now()) break;
+      await sleepImpl(delay);
+    }
+    const reason = lastReason || 'unknown failure';
+    failures.push({ candidate, reason, attempt: lastAttempt });
+    for (let nextIndex = candidateIndex + 1; nextIndex < selectedCandidates.length; nextIndex++) {
+      if (!await requestAt(nextIndex)) continue;
+      await onFailover?.({ from: candidate, to: selectedCandidates[nextIndex], reason: reasonForLog(reason) });
+      break;
+    }
+  }
+
+  const summary = failures.length
+    ? failures.map(({ candidate, reason }) => `${candidate.provider}:${candidate.model} ${reason}`).join('; ')
+    : '利用可能なキーを持つ候補がありません';
+  const skippedSummary = skipped.length
+    ? ` ; スキップ: ${skipped.map(({ provider, reason, minutesLeft }) => `${provider}(${reason}${minutesLeft != null ? `, 残り${minutesLeft}分` : ''})`).join(', ')}`
+    : '';
+  const error = new Error(`全候補が失敗しました: ${summary}${skippedSummary}`);
+  error.failures = failures;
+  error.skipped = skipped;
+  saveCooldowns();
+  noteCandidateHealth();
+  throw error;
+}

@@ -1,0 +1,34 @@
+nightly-bootstrap-2026-10-28.log:259: 2026-10-28 07:03:32 / 対象実行 / ok:booth-feedback-intake.mjs 終了コード=0
+nightly-bootstrap-2026-10-28.log:260: 2026-10-28 07:05:10 / リポ同期 / ok:origin/main 9cbbfc5
+nightly-bootstrap-2026-10-28.log:261: 2026-10-28 07:07:02 / nightly-bootstrap / ok:開始
+nightly-bootstrap-2026-10-28.log:262: 2026-10-28 07:07:13 / nightly-bootstrap / ok:開始
+nightly-bootstrap-2026-10-28.log:263: 2026-10-28 07:09:24 / 対象実行 / ok:feedback-to-issues.mjs 終了コード=0
+nightly-bootstrap-2026-10-28.log:264: 2026-10-28 07:10:14 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行
+nightly-bootstrap-2026-10-28.log:265: 2026-10-28 07:12:51 / nightly-bootstrap / ok:開始
+nightly-bootstrap-2026-10-28.log:266: 2026-10-28 07:14:06 / 対象実行 / ok:fleet-agent.mjs 終了コード=0
+nightly-bootstrap-2026-10-28.log:267: 2026-10-28 07:15:40 / nightly-bootstrap / ok:開始
+nightly-bootstrap-2026-10-28.log:268: 2026-10-28 07:15:53 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行
+nightly-bootstrap-2026-10-28.log:269: 2026-10-28 07:16:36 / nightly-bootstrap / ok:開始
+nightly-bootstrap-2026-10-28.log:270: 2026-10-28 07:17:03 / nightly-bootstrap / ok:開始
+nightly-bootstrap-2026-10-28.log:271: 2026-10-28 07:18:41 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行
+nightly-bootstrap-2026-10-28.log:272: 2026-10-28 07:19:35 / nightly-bootstrap / ok:開始
+nightly-bootstrap-2026-10-28.log:273: 2026-10-28 07:19:37 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行
+nightly-bootstrap-2026-10-28.log:274: 2026-10-28 07:20:16 / nightly-bootstrap / ok:開始
+nightly-bootstrap-2026-10-28.log:275: 2026-10-28 07:20:31 / 対象実行 / ok:decision-watch.mjs 終了コード=0
+nightly-bootstrap-2026-10-28.log:276: 2026-10-28 07:20:50 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行
+nightly-bootstrap-2026-10-28.log:277: 2026-10-28 07:22:36 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行
+nightly-bootstrap-2026-10-28.log:278: 2026-10-28 07:22:38 / nightly-bootstrap / ok:開始
+nightly-bootstrap-2026-10-28.log:279: 2026-10-28 07:23:18 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行
+nightly-bootstrap-2026-10-28.log:280: 2026-10-28 07:24:22 / 対象実行 / ok:funnel-probe.mjs 終了コード=1
+nightly-bootstrap-2026-10-28.log:281: 2026-10-28 07:25:38 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行
+nightly-bootstrap-2026-10-28.log:282: 2026-10-28 07:27:10 / 対象実行 / ok:plaud-to-tldv.mjs 終了コード=0
+nightly-bootstrap-2026-10-28.log:283: 2026-10-28 07:27:11 / nightly-bootstrap / ok:開始
+nightly-bootstrap-2026-10-28.log:284: 2026-10-28 07:29:23 / 対象実行 / ok:sga-autopilot.mjs 終了コード=1
+nightly-bootstrap-2026-10-28.log:285: 2026-10-28 07:30:12 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行
+nightly-bootstrap-2026-10-28.log:286: 2026-10-28 07:34:47 / 対象実行 / ok:booth-feedback-intake.mjs 終了コード=0
+nightly-bootstrap-2026-10-28.log:287: 2026-10-28 07:35:03 / 対象実行 / ok:fleet-mail.mjs 終了コード=75
+nightly-bootstrap-2026-10-28.log:288: 2026-10-28 07:36:32 / リポ同期 / ok:origin/main 9cbbfc5
+nightly-bootstrap-2026-10-28.log:289: 2026-10-28 07:37:59 / 対象実行 / ok:nightly-kpi.mjs 終了コード=0
+nightly-bootstrap-2026-10-28.log:290: 2026-10-28 07:38:21 / nightly-bootstrap / ok:開始
+nightly-bootstrap-2026-10-28.log:291: 2026-10-28 07:38:52 / nightly-bootstrap / ok:開始
+nightly-bootstrap-2026-10-28.log:292: 2026-10-28 07:39:07 / 対象実行 / ok:fleet-mail-watchdog.mjs 終了コード=1

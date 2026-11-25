@@ -1,0 +1,73 @@
+// URI のパスから実行内容を決めるだけの純粋関数。vscode モジュールに依存しない
+// (単体テストで vscode 無しでも呼べるようにするため)。
+//
+// - /reload      : ウィンドウ再読み込み（dry=1 なら実際には再読み込みしない）
+// - /mobile      : スマホ用の Claude Code タブを指定数まで補充
+// - /start, その他: 既存動作（ターミナルでセッション開始）を変えない
+function decideAction({ path, query }) {
+  const normalizedPath = String(path || '');
+  const params = query instanceof URLSearchParams ? query : new URLSearchParams(query || '');
+  if (normalizedPath === '/reload') {
+    const dry = params.get('dry') === '1';
+    return { kind: 'reload', dry };
+  }
+  if (normalizedPath === '/mobile') {
+    const parsedCount = Number.parseInt(params.get('count') || '1', 10);
+    const count = Math.min(10, Math.max(1, Number.isFinite(parsedCount) ? parsedCount : 1));
+    // refresh=1: 待機タブ最古の 1 本を即時に作り直す（時間帯・間隔は無視）。
+    return { kind: 'mobile', count, name: params.get('name') || 'スマホ用セッション', ...(params.get('refresh') === '1' ? { refresh: true } : {}) };
+  }
+  if (normalizedPath === '/reopen') {
+    return { kind: 'reopen', session: params.get('session') || '' };
+  }
+  return { kind: 'start' };
+}
+
+function shouldRetryMobileTab(failedAttempts, attempts) {
+  return failedAttempts < attempts;
+}
+
+function mobileTabOpenCommand(claudeTabCount) {
+  return claudeTabCount === 0
+    ? 'claude-vscode.editor.openLast'
+    : 'claude-vscode.newConversation';
+}
+
+// 作成手段。editorOpen と newConversation は作業中の Claude セッションがあるタブごと閉じる
+// 危険性が確認された（2026-11-13 実害）ため、補充には安全な externalUri だけを使う。
+const MOBILE_OPEN_METHODS = Object.freeze(['externalUri']);
+
+function orderMobileOpenMethods(_lastGood) {
+  return [...MOBILE_OPEN_METHODS];
+}
+
+// 失敗後の再試行ポリシー。状態は「最終試行時刻・連続失敗回数・直近1時間の試行時刻」。
+// 失敗から 30 秒で再試行可、連続 5 失敗で 10 分休止、1 時間あたり最大 20 回。
+const RETRY_COOLDOWN_MS = 30000;
+const RETRY_PAUSE_AFTER = 5;
+const RETRY_PAUSE_MS = 600000;
+const RETRY_MAX_PER_HOUR = 20;
+const HOUR_MS = 3600000;
+
+function newRetryState() { return { lastAttemptAt: 0, consecutiveFailures: 0, attempts: [] }; }
+
+function canAttemptMobileOpen(state, now) {
+  const recent = state.attempts.filter((at) => now - at < HOUR_MS);
+  if (recent.length >= RETRY_MAX_PER_HOUR) return false;
+  if (state.consecutiveFailures >= RETRY_PAUSE_AFTER && now - state.lastAttemptAt < RETRY_PAUSE_MS) return false;
+  if (state.consecutiveFailures > 0 && now - state.lastAttemptAt < RETRY_COOLDOWN_MS) return false;
+  return true;
+}
+
+function recordMobileOpenAttempt(state, now, succeeded) {
+  return {
+    lastAttemptAt: now,
+    consecutiveFailures: succeeded ? 0 : state.consecutiveFailures + 1,
+    attempts: [...state.attempts.filter((at) => now - at < HOUR_MS), now],
+  };
+}
+
+module.exports = {
+  decideAction, shouldRetryMobileTab, mobileTabOpenCommand,
+  MOBILE_OPEN_METHODS, orderMobileOpenMethods, newRetryState, canAttemptMobileOpen, recordMobileOpenAttempt,
+};

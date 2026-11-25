@@ -1,0 +1,110 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { rotate, planRotation, MAX_BYTES, writeHandoff } from './next-session-rotate.mjs';
+const now = new Date('2026-09-22T00:00:00Z');
+const block = (date, tasks) => `<!-- NEXT-SESSION v1 -->\n<!-- 更新: ${date} / cwd: /example -->\n## 残TODO\n${tasks}\n## 対象\ncontext only\n`;
+test('empty promotion queue removes stale PROMOTE tasks and preserves other items',()=>{
+ const source=block('2026-09-22','1. PROMOTE 待ち1件（先頭: foo）\n2. still open\n  PROMOTE 待ち2件（先頭: bar）');
+ const r=planRotation(source,{now,promotionPendingCount:0});
+ assert.doesNotMatch(r.text,/PROMOTE 待ち1件/); assert.equal(r.stats.stale,1);
+ assert.match(r.text,/still open/); assert.match(r.text,/PROMOTE 待ち2件/); assert.equal(r.stats.pending,1);
+});
+test('unknown promotion queue count preserves PROMOTE tasks by default',()=>{
+ const r=planRotation(block('2026-09-22','1. PROMOTE 待ち1件（先頭: foo）'),{now});
+ assert.match(r.text,/PROMOTE 待ち1件（先頭: foo）/); assert.equal(r.stats.stale,0); assert.equal(r.stats.pending,1);
+});
+test('nonempty promotion queue preserves PROMOTE tasks',()=>{
+ const r=planRotation(block('2026-09-22','1. PROMOTE 待ち1件（先頭: foo）'),{now,promotionPendingCount:2});
+ assert.match(r.text,/PROMOTE 待ち1件（先頭: foo）/); assert.equal(r.stats.stale,0); assert.equal(r.stats.pending,1);
+});
+test('archives exact original, preserves pending continuations and removes only explicit completion', () => {
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'rotate-')); const file=path.join(dir,'next-session.md');
+ const source=block('2026-09-20','1. still open\n  done substep ✅\n2. ~~done~~ → ✅\n3. still open\n  done substep ✅\n4. [FB:test] new bug')+block('2026-08-01','1. old issue');
+ fs.writeFileSync(file,source); const r=rotate(file,{now});
+ assert.equal(r.stats.pending,2); assert.equal(r.stats.duplicate,1); assert.equal(r.stats.old,1);
+ assert.ok(fs.readFileSync(r.archive,'utf8').includes(source)); assert.match(fs.readFileSync(file,'utf8'),/done substep ✅/);
+ const archived=fs.readFileSync(r.archive,'utf8'); const bytes=fs.readFileSync(file);
+ assert.equal(rotate(file,{now}).changed,false); assert.deepEqual(fs.readFileSync(file),bytes); assert.equal(fs.readFileSync(r.archive,'utf8'),archived);
+});
+test('[完了 …] 形の印も完了として回転で落とす(2026-09-28実測の再現)', () => {
+ // 実物: 残TODO の13件が `1. [完了 2026-09-27 #584] …` の形で、`~~…~~` と違って完了と認識されず
+ // 回転のたびに次代へ持ち越されていた。auto-session がそれを次の1目的に選び自動セッション1回分を
+ // 消費した(runs/2026-09-28-manifest.json)。選択側の除外規則と二重に塞ぐ。
+ const source=block('2026-09-22','1. [完了 2026-09-27 #584] 済んだ作業\n2. まだやる作業\n3. 完了報告の文面を直す');
+ const r=planRotation(source,{now});
+ assert.equal(r.stats.completed,1); assert.equal(r.stats.pending,2);
+ assert.doesNotMatch(r.text,/済んだ作業/); assert.match(r.text,/まだやる作業/); assert.match(r.text,/完了報告の文面を直す/);
+});
+test('oversized pending queue remains reachable, cap is bytes not characters', () => {
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'rotate-')); const file=path.join(dir,'next-session.md');
+ const source=block(new Date().toISOString().slice(0,10),Array.from({length:150},(_,i)=>`${i+1}. TODO ${i} ${'日本語'.repeat(80)}`).join('\n'));
+ writeHandoff(file,source); const text=fs.readFileSync(file,'utf8'); assert.ok(Buffer.byteLength(text)<=MAX_BYTES);
+ const ref=text.match(/\[継続キュー[^\]]*\]\(([^)]+)\)/)[1]; const pending=fs.readFileSync(path.join(dir,ref),'utf8');
+ for(let i=0;i<150;i++)assert.ok(text.includes(`TODO ${i} `)||pending.includes(`TODO ${i} `));
+});
+test('unknown dates and dates mentioned as deadlines are not aged out',()=>{
+ const r=planRotation(block('','1. check deadline 2026-01-01\n2. 未完了'),{now}); assert.equal(r.stats.pending,2);
+});
+test('overflow rotation is idempotent and does not create nested pending queues',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'rotate-')); const file=path.join(dir,'next-session.md');
+ fs.writeFileSync(file,block('2026-09-22',Array.from({length:200},(_,i)=>`${i+1}. ${i} ${'あ'.repeat(100)}`).join('\n')));
+ const r=rotate(file,{now}); const first=fs.readFileSync(file,'utf8'); const archive=fs.readFileSync(r.archive,'utf8');
+ assert.equal(rotate(file,{now}).changed,false); assert.equal(fs.readFileSync(file,'utf8'),first); assert.equal(fs.readFileSync(r.archive,'utf8'),archive);
+});
+test('accumulated continuation entries are budget-checked and overflow instead of exceeding MAX_BYTES',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'rotate-')); const file=path.join(dir,'next-session.md');
+ const regular=Array.from({length:120},(_,i)=>`${i+1}. TODO ${i} ${'日本語'.repeat(60)}`).join('\n');
+ const continuations=Array.from({length:8},(_,i)=>`${120+i+1}. [継続キュー: 未完了 ${i}件](archive/old-${i}.pending.md) — 過去の退避キュー`).join('\n');
+ const source=block('2026-09-22',`${regular}\n${continuations}`);
+ fs.writeFileSync(file,source);
+ const r=rotate(file,{now});
+ assert.equal(r.changed,true);
+ const text=fs.readFileSync(file,'utf8');
+ assert.ok(Buffer.byteLength(text)<=MAX_BYTES);
+ // every continuation reference must survive, either inlined in the active queue or in the overflow pending file
+ const pendingRef=text.match(/\[継続キュー[^\]]*\]\(([^)]+)\)/g)?.at(-1)?.match(/\(([^)]+)\)/)[1];
+ const pendingText=pendingRef?fs.readFileSync(path.join(dir,pendingRef),'utf8'):'';
+ for(let i=0;i<8;i++) assert.ok(text.includes(`old-${i}.pending.md`)||pendingText.includes(`old-${i}.pending.md`),`continuation ${i} lost`);
+});
+test('normalized queues still retire subsequently completed and newly expired items',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'rotate-')); const file=path.join(dir,'next-session.md');
+ fs.writeFileSync(file,block('2026-09-22','1. open')); rotate(file,{now});
+ const r=rotate(file,{now:new Date('2026-11-01')});assert.equal(r.stats.old,1);assert.equal(r.stats.pending,0);
+});
+// 2026-09-27 実測の再現。`## 次の1目的` の直後に置かれた H3 見出しとその箇条書きが
+// 項目として繰り上がり、回転後の next-session.md 先頭が `1. ### 触る前に読む memory` になった
+// (archive/next-session-202609.md#snapshot-a274891d… が実物のソース)。
+test('lower-level headings end the active section instead of becoming items',()=>{
+ const source=`<!-- NEXT-SESSION v1 -->\n<!-- 更新: 2026-09-26 -->\n## 次の1目的\n未定（残TODOの先頭から確認）\n\n### 触る前に読む memory\n- feedback-register-hooks-no-change-message.md（hook 配線は実測で確かめる）\n- project-internal-recipient-gmail-guard.md（誤検知あり）\n## 残TODO\n1. 本物のTODO\n`;
+ const r=planRotation(source,{now});
+ assert.doesNotMatch(r.text,/### 触る前に読む memory/);
+ assert.doesNotMatch(r.text,/feedback-register-hooks-no-change-message/);
+ assert.equal(r.stats.pending,1);
+ assert.match(r.text,/\n1\. 本物のTODO/);
+});
+// 2026-10-25 実測の再現。notify-kim が追記した `## 次の1目的\n通知の原因調査と修復` の自由文が
+// 散文フォールバックで項目化され、next-session.md の残TODOに内容の無い `12. 通知の原因調査と修復`
+// が残った。auto-session はそれを次の1目的に採用し、何を直すか分からない回を1回消費した。
+test('purpose prose is not collected as a TODO item',()=>{
+ const source=`<!-- NEXT-SESSION v1 -->\n## 次の1目的\n通知の原因調査と修復\n## 残TODO\n1. [ ] 通知の原因調査・修復: 収集失敗\n<!-- NEXT-SESSION v1 -->\n## 次の1目的\n未定\n## 残TODO\n1. 本物のTODO\n`;
+ const r=planRotation(source,{now});
+ assert.equal(r.stats.pending,2);
+ assert.doesNotMatch(r.text,/^\d+\. 通知の原因調査と修復$/m);
+ assert.match(r.text,/通知の原因調査・修復: 収集失敗/);
+ assert.match(r.text,/本物のTODO/);
+});
+test('explicit numbered tasks under 次の1目的 are still collected',()=>{
+ const source=`<!-- NEXT-SESSION v1 -->\n## 次の1目的\n1. 目的内の明示タスク\n## 残TODO\n1. 本物\n`;
+ const r=planRotation(source,{now});
+ assert.equal(r.stats.pending,2);
+ assert.match(r.text,/目的内の明示タスク/);
+});
+test('a level-2 heading still activates its own section',()=>{
+ const source=`<!-- NEXT-SESSION v1 -->\n<!-- 更新: 2026-09-26 -->\n## 未決（kim の判断待ち）\n1. 見出し境界の確認\n`;
+ const r=planRotation(source,{now});
+ assert.equal(r.stats.pending,1);
+ assert.match(r.text,/見出し境界の確認/);
+});

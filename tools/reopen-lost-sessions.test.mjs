@@ -1,0 +1,2598 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { getLoadGuardStatus, hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord, measureUserIdleSec, DEFAULT_REOPEN_MAX_CLAUDE } from './reopen-lost-sessions.mjs';
+import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
+import { CLAUDE_PROCESS_SCRIPT } from './lib/windows-process.mjs';
+import { unverifiedStreakCounts, isSessionProcessRunning, connectedRcSessionIds, recordApiResult, fetchWithRetry, readFailState, writeFailState, FAIL_STATE_FILE, CONSECUTIVE_FAIL_THRESHOLD } from './reopen-lost-sessions.mjs';
+
+const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
+const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
+
+// git worktree を模した一時フォルダ（.git ファイルが gitdir: .../worktrees/... を指す）
+function makeWorktreeFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worktree-det-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const mainDir = path.join(root, 'repo-main');
+  const wtDir = path.join(root, '.claude', 'worktrees', 'mail-approval-gate-fix');
+  fs.mkdirSync(wtDir, { recursive: true });
+  fs.writeFileSync(path.join(wtDir, '.git'),
+    `gitdir: ${path.join(mainDir, '.git', 'worktrees', 'mail-approval-gate-fix').replace(/\\/g, '/')}\n`, 'utf8');
+  return { root, mainDir, wtDir };
+}
+
+test('resolveReopenFolder: worktree でない cwd はそのまま返す', () => {
+  assert.equal(resolveReopenFolder('C:\\Users\\uers\\Downloads\\CLAUDE.md配布', [], { fsImpl: fs }), 'C:\\Users\\uers\\Downloads\\CLAUDE.md配布');
+});
+
+test('resolveReopenFolder: worktree cwd は cwd 履歴の最初の非 worktree を開く（\.claude\worktrees\ 検出）', () => {
+  const wt = 'C:\\Users\\uers\\.claude\\worktrees\\mail-approval-gate-fix';
+  const history = ['C:\\Users\\uers\\Downloads\\CLAUDE.md配布', 'C:\\Users\\uers\\.claude\\worktrees\\other'];
+  assert.equal(resolveReopenFolder(wt, history, { fsImpl: fs }), history[0]);
+  assert.equal(resolveReopenFolder(wt, [], { fsImpl: fs, spawn: () => ({ status: 1 }) }), null);
+});
+
+test('resolveReopenFolder: .git ファイルで worktree を検出し、履歴・メイン worktree・スキップへ', t => {
+  const { mainDir, wtDir } = makeWorktreeFixture(t);
+  const normal = path.join(mainDir, '.claude');
+  fs.mkdirSync(normal, { recursive: true });
+  // 履歴に非 worktree があればそれを使う
+  assert.equal(resolveReopenFolder(wtDir, [normal, path.join(mainDir, 'other')], { fsImpl: fs }), normal);
+  // 履歴が全て worktree なら git worktree list のメイン worktree（git は / 区切りで返す）
+  const wt2 = path.join(mainDir, '.claude\\worktrees', 'another');
+  const porcelain = `worktree ${mainDir.replace(/\\/g, '/')}\nHEAD 0123abcd\n\nworktree ${wt2.replace(/\\/g, '/')}\nHEAD deadbeef\n`;
+  assert.equal(resolveReopenFolder(wtDir, [wt2], { fsImpl: fs, spawn: () => ({ status: 0, stdout: porcelain }) }), mainDir.replace(/\\/g, '/'));
+  // worktree のサブディレクトリでも祖先を遡って検出する
+  const sub = path.join(wtDir, 'src', 'deep');
+  fs.mkdirSync(sub, { recursive: true });
+  assert.equal(resolveReopenFolder(sub, [normal], { fsImpl: fs }), normal);
+  // どちらも無ければ null（スキップ）
+  assert.equal(resolveReopenFolder(wtDir, [wt2], { fsImpl: fs, spawn: () => ({ status: 1 }) }), null);
+});
+
+test('localIndex は cwd 履歴を出現順・大小文字無視の重複除去で保持する', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const projects = path.join(root, '.claude', 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  fs.writeFileSync(path.join(projects, 'hist.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_hist' },
+    { type: 'user', cwd: 'C:\\Start\\Dir', message: { content: 'first' } },
+    { type: 'user', cwd: 'c:\\start\\dir', message: { content: 'dup' } },
+    { type: 'user', cwd: 'C:\\Users\\uers\\.claude\\worktrees\\mail-approval-gate-fix', message: { content: 'second' } },
+  ].map(JSON.stringify).join('\n'));
+  const idx = localIndex(path.join(root, '.claude'));
+  const local = idx.get('cse_hist');
+  assert.equal(local.cwd, 'C:\\Start\\Dir');
+  assert.deepEqual(local.cwds, ['C:\\Start\\Dir', 'C:\\Users\\uers\\.claude\\worktrees\\mail-approval-gate-fix']);
+});
+
+test('reopenLost: worktree cwd のセッションは最初の非 worktree cwd を開き、folder をログに残す', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-wt-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  const normalDir = path.join(root, 'normal-work');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.mkdirSync(normalDir, { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  const wtDir = path.join(root, '.claude', 'worktrees', 'mail-approval-gate-fix');
+  fs.mkdirSync(wtDir, { recursive: true });
+  fs.writeFileSync(path.join(wtDir, '.git'), `gitdir: ${path.join(root, 'main', '.git', 'worktrees', 'mail-approval-gate-fix').replace(/\\/g, '/')}\n`, 'utf8');
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: normalDir, message: { content: 'started here' } },
+    { type: 'user', cwd: wtDir, message: { content: 'moved to worktree' } },
+  ].map(JSON.stringify).join('\n'));
+  const psCalls = [];
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, checkIdle: false, env: { APPDATA: path.join(root, 'no-appdata') },
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: (cmd, args) => {
+      if (args[0] !== 'agents') {
+        // hasCodeWindow の呼び出し（Get-Process Code + .Count）は psCalls に記録せず、ウィンドウ無し(0)を返す
+        const cmdStr = args[args.length - 1];
+        if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
+          return { status: 0, stdout: '0' };
+        }
+        if (!cmdStr.includes('Get-CimInstance Win32_Process')) psCalls.push(cmdStr);
+      }
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
+    },
+    windowReady: () => true,
+    wait: async () => {},
+  });
+  assert.equal(result.reopened.length, 1);
+  assert.equal(result.reopened[0].folder, normalDir);
+  assert.equal(result.reopened[0].target, normalDir);
+  assert.equal(result.reopened[0].openedWith, 'folder');
+  assert.ok(psCalls[0].includes(normalDir), `should open the non-worktree folder: ${psCalls[0]}`);
+  assert.ok(!psCalls[0].includes(wtDir.split(path.sep).pop()), `should not open the worktree folder: ${psCalls[0]}`);
+});
+
+test('reopenLost: worktree 履歴だけ・メイン worktree も取れない場合は skipped.worktree になる', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-wt-skip-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  const wtDir = path.join(root, '.claude', 'worktrees', 'mail-approval-gate-fix');
+  fs.mkdirSync(wtDir, { recursive: true });
+  fs.writeFileSync(path.join(wtDir, '.git'), 'gitdir: C:/x/.git/worktrees/mail-approval-gate-fix\n', 'utf8');
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: wtDir, message: { content: 'only worktree' } },
+  ].map(JSON.stringify).join('\n'));
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false,
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: (cmd, args) => {
+      if (args[0] === 'git') return { status: 1 };
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
+    },
+    windowReady: () => true,
+    wait: async () => {},
+  });
+  assert.equal(result.reopened.length, 0);
+  assert.equal(result.skipped.worktree, 1);
+  assert.equal(result.skipped.closed, 0);
+});
+
+test('host exit interval inclusive; excludes wrong reason/type/time', () => {
+  assert.equal(hasHostExit([exit], since, until), true);
+  assert.equal(hasHostExit([{ ...exit, created_at: until }], since, until), true);
+  for (const row of [{ ...exit, created_at: '2020-01-01' }, { ...exit, event_type: 'user' }, { ...exit, payload: {} }]) assert.equal(hasHostExit([row], since, until), false);
+});
+
+test('purge compatible empty detection and exclusions', () => {
+  for (const marker of ['command-name', 'local-command-caveat', 'command-message']) assert.equal(hasConversation([{ type: 'user', message: { content: `<${marker}>` } }]), false);
+  assert.equal(hasConversation([{ type: 'assistant', message: { content: [{ text: 'answer' }] } }]), true);
+  assert.equal(hasConversation([], 204801), true);
+  const local = { id: 'one', cwd: 'C:\\work', hasConversation: true };
+  assert.equal(exclusion(local, new Set(), new Set()), null);
+  assert.equal(exclusion(local, new Set(['one']), new Set()), 'closed');
+  assert.equal(exclusion(local, new Set(), new Set(['one'])), 'alive');
+  assert.equal(exclusion({ ...local, hasConversation: false }, new Set(), new Set()), 'empty');
+  assert.equal(exclusion(null, new Set(), new Set()), 'noLocal');
+  for (const raw of ['', '{}', '[{}]']) assert.throws(() => parseAgents(raw));
+  assert.deepEqual([...parseAgents('[]')], []);
+});
+
+test('CLI validation and default boot range', () => {
+  assert.throws(() => parseOptions(['--max', '-1']));
+  assert.throws(() => parseOptions(['--since', 'bad', '--until', until]));
+  const o = parseOptions([], () => ({ status: 0, stdout: '2026-11-05T20:00:00Z' }));
+  assert.equal(o.since, '2026-11-05T19:45:00.000Z');
+  assert.equal(o.until, '2026-11-05T20:15:00.000Z');
+});
+
+test('parseOptions watch mode mutual exclusivity', () => {
+  assert.throws(() => parseOptions(['--watch', '--since', '2026-11-05T00:00:00Z']));
+  assert.throws(() => parseOptions(['--watch', '--until', '2026-11-05T00:00:00Z']));
+  const opts = parseOptions(['--watch', '--max', '5']);
+  assert.equal(opts.watch, true);
+  assert.equal(opts.max, 5);
+  assert.equal(opts.maxSet, true);
+});
+
+function fixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+  ].map(JSON.stringify).join('\n'));
+  return base;
+}
+
+test('localIndex uses first cwd when transcript has multiple cwd lines', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const projects = path.join(root, '.claude', 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  fs.writeFileSync(path.join(projects, 'multi.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_multi' },
+    { type: 'user', cwd: 'C:\\start\\cwd', message: { content: 'first' } },
+    { type: 'user', cwd: 'C:\\worktree\\later', message: { content: 'second' } },
+  ].map(JSON.stringify).join('\n'));
+  const idx = localIndex(path.join(root, '.claude'));
+  assert.equal(idx.size, 1);
+  assert.equal(idx.get('cse_multi').cwd, 'C:\\start\\cwd');
+});
+
+test('dry run uses real local mapping, paginates, never opens/writes', async t => {
+  const base = fixture(t), calls = [];
+  const fetchImpl = async url => { calls.push(url); return { ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : url.includes('cursor=next') ? { data: [] } : { data: [{ id: 'cse_one', title: 'Work' }], next_cursor: 'next' } }; };
+  const result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', checkIdle: false, fetchImpl, spawn: (cmd, args) => {
+    assert.deepEqual(args, ['agents', '--json']); return { status: 0, stdout: '[]' };
+  } });
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.reopened.length, 0);
+  assert.equal(calls.length, 3);
+  assert.equal(fs.existsSync(path.join(base, 'reopen-lost-sessions.log')), false);
+  fs.mkdirSync(path.join(base, 'projects', '_deleted-backup'));
+  fs.renameSync(path.join(base, 'projects', 'proj', 'one.jsonl'), path.join(base, 'projects', '_deleted-backup', 'one.jsonl'));
+  assert.equal(localIndex(base).size, 0);
+});
+
+test('opening continues after API deadline; focus precedes URI; lock released and log written', async t => {
+  const base = fixture(t), calls = []; let clock = 0;
+  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock, checkCpu: false, checkIdle: false, env: { APPDATA: path.join(base, 'no-appdata') },
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: (cmd, args) => {
+      // hasCodeWindow の呼び出しはウィンドウ無し(0)を返し、calls に記録しない
+      const cmdStr = args[args.length - 1];
+      if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
+        return { status: 0, stdout: '0' };
+      }
+      if (!cmdStr.includes('Get-CimInstance Win32_Process')) calls.push(args);
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
+    },
+    windowReady: () => { clock = 120000; return true; }, wait: async () => {},
+  });
+  assert.equal(result.reopened.length, 1);
+  const ps = calls.filter(a => a[0] !== 'agents');
+  assert.ok(ps[0].at(-1).includes('C:\\work'));
+  assert.ok(ps[1].at(-1).includes('--open-url'));
+  assert.equal(fs.existsSync(path.join(base, 'reopen-lost-sessions.lock')), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(base, 'reopen-lost-sessions.log'))).reopened.length, 1);
+});
+
+test('unknown agents prevents API/open; concurrent lock and stale lock', async t => {
+  const base = fixture(t);
+  const result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', spawn: () => ({ status: 1 }), fetchImpl: () => assert.fail() });
+  // agents 失敗→registry fallback→sessions ディレクトリ無しで ENOENT
+  assert.ok(result.error, 'should propagate ENOENT from registry');
+  const file = path.join(base, 'test.lock'), release = acquireLock(file);
+  assert.equal(acquireLock(file), null); release();
+  fs.writeFileSync(file, 'stale'); fs.utimesSync(file, new Date(0), new Date(0));
+  acquireLock(file)();
+});
+
+function runReopenCli(base, ...args) {
+  return spawnSync(process.execPath, [fileURLToPath(new URL('./reopen-lost-sessions.mjs', import.meta.url)), ...args], {
+    env: { ...process.env, HOME: path.dirname(base), USERPROFILE: path.dirname(base) },
+    encoding: 'utf8',
+    timeout: 5000,
+  });
+}
+
+test('watch CLI logs a live lock as a successful skip and preserves watch state', t => {
+  const base = fixture(t);
+  const lock = path.join(base, 'reopen-lost-sessions.lock');
+  fs.writeFileSync(lock, String(process.pid));
+  const stateFile = path.join(base, 'reopen-lost-sessions-state.json');
+  const state = JSON.stringify({ watermark: since });
+  fs.writeFileSync(stateFile, state);
+  writeFailState(base, { consecutiveFails: 7, lastFailAt: since });
+
+  const run = runReopenCli(base, '--watch');
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  const log = fs.readFileSync(path.join(base, 'reopen-lost-sessions.log'), 'utf8').trim();
+  const { at, skipped, holderPid, lockAgeSec, stale } = JSON.parse(log);
+  assert.equal(new Date(at).toISOString(), at);
+  assert.equal(skipped, 'locked');
+  assert.equal(holderPid, process.pid);
+  assert.ok(lockAgeSec >= 0 && lockAgeSec <= 600);
+  assert.equal(stale, false);
+  assert.equal(fs.readFileSync(lock, 'utf8'), String(process.pid));
+  assert.equal(fs.readFileSync(stateFile, 'utf8'), state);
+  assert.equal(readFailState(base).consecutiveFails, 7);
+});
+
+test('acquireLock reclaims an 11-minute-old lock with a live PID', t => {
+  const base = fixture(t);
+  const lock = path.join(base, 'reopen-lost-sessions.lock');
+  const now = Date.now();
+  const staleTime = new Date(now - 11 * 60_000);
+  fs.writeFileSync(lock, String(process.pid));
+  fs.utimesSync(lock, staleTime, staleTime);
+
+  const release = acquireLock(lock, now);
+  assert.equal(typeof release, 'function');
+  try {
+    assert.ok(fs.statSync(lock).mtimeMs > staleTime.getTime());
+  } finally {
+    release();
+  }
+  assert.equal(fs.existsSync(lock), false);
+});
+
+test('acquireLock reclaims a fresh lock left by a dead PID', t => {
+  const base = fixture(t);
+  const lock = path.join(base, 'reopen-lost-sessions.lock');
+  const child = spawnSync(process.execPath, ['-e', '']);
+  assert.equal(child.status, 0);
+  fs.writeFileSync(lock, String(child.pid));
+
+  const release = acquireLock(lock);
+  assert.equal(typeof release, 'function');
+  try { assert.equal(fs.readFileSync(lock, 'utf8'), String(process.pid)); }
+  finally { release(); }
+  assert.equal(fs.existsSync(lock), false);
+});
+
+test('watch CLI logs locked and exits 1 when the lock cannot be reclaimed', t => {
+  const base = fixture(t);
+  fs.mkdirSync(path.join(base, 'reopen-lost-sessions.lock'));
+
+  const run = runReopenCli(base, '--watch');
+  assert.equal(run.status, 1, run.stderr || run.stdout);
+  const entry = JSON.parse(fs.readFileSync(path.join(base, 'reopen-lost-sessions.log'), 'utf8'));
+  assert.equal(entry.error, 'locked');
+});
+
+test('CLI logs an uncaught error and exits 1, with no log writes in dry run', t => {
+  const base = fixture(t);
+  const log = path.join(base, 'reopen-lost-sessions.log');
+  const dry = runReopenCli(base, '--dry-run', '--unknown-option');
+  assert.equal(dry.status, 1, dry.stderr || dry.stdout);
+  assert.equal(fs.existsSync(log), false);
+
+  const run = runReopenCli(base, '--unknown-option');
+  assert.equal(run.status, 1, run.stderr || run.stdout);
+  const entry = JSON.parse(fs.readFileSync(log, 'utf8'));
+  assert.equal(new Date(entry.at).toISOString(), entry.at);
+  assert.equal(entry.stage, 'uncaught');
+  assert.equal(entry.error, 'Invalid option: --unknown-option');
+});
+
+test('API failure is explicit and partial candidates survive API-only deadline', async t => {
+  const base = fixture(t); let clock = 0;
+  const result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => clock,
+    spawn: () => ({ status: 0, stdout: '[]' }), fetchImpl: async url => ({ ok: true, json: async () => {
+      if (url.includes('/events?')) { clock = 61000; return { data: [exit] }; }
+      assert.equal(new URL(url).searchParams.has('cursor'), false);
+      return { data: [{ id: 'cse_one' }], next_cursor: 'later' };
+    } }),
+  });
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.apiError, 'API time limit');
+});
+
+test('closed during fetch is excluded at dispatch time', async t => {
+  const base = fixture(t);
+  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'mock', checkIdle: false,
+    spawn: (cmd, args) => { assert.equal(args[0], 'agents'); return { status: 0, stdout: '[]' }; },
+    fetchImpl: async url => ({ ok: true, json: async () => {
+      if (url.includes('/events?')) { fs.writeFileSync(path.join(base, 'closed-sessions.json'), JSON.stringify({ ids: ['one'] })); return { data: [exit] }; }
+      return { data: [{ id: 'cse_one' }] };
+    } }),
+  });
+  assert.equal(result.reopened.length, 0);
+  assert.equal(result.skipped.closed, 1);
+});
+
+test('watchReopen since/until calculation and watermark behavior', async t => {
+  const base = fixture(t);
+  const fixedNow = Date.parse('2026-11-07T12:00:00.000Z');
+  const now = () => fixedNow;
+  const stateFile = path.join(base, 'reopen-lost-sessions-state.json');
+
+  const fetchImplNoOp = async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [] } : { data: [] } });
+  const spawnNoOp = () => ({ status: 0, stdout: '[]' });
+
+  // Case A: No state file -> defaultSince = now - 30m, until = now - 60s
+  let result = await watchReopen({ base, claudeCli: 'claude.exe', fetchImpl: fetchImplNoOp, spawn: spawnNoOp, now });
+  assert.equal(result.since, '2026-11-07T11:30:00.000Z');
+  assert.equal(result.until, '2026-11-07T11:59:00.000Z');
+  assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).watermark, '2026-11-07T11:59:00.000Z');
+
+  // Case B: Watermark exists and is recent -> since = watermark
+  fs.writeFileSync(stateFile, JSON.stringify({ watermark: '2026-11-07T10:00:00.000Z' }) + '\n');
+  result = await watchReopen({ base, claudeCli: 'claude.exe', fetchImpl: fetchImplNoOp, spawn: spawnNoOp, now });
+  assert.equal(result.since, '2026-11-07T10:00:00.000Z');
+  assert.equal(result.until, '2026-11-07T11:59:00.000Z');
+
+  // Case C: Watermark exists but is older than 24h -> truncated to now - 24h
+  fs.writeFileSync(stateFile, JSON.stringify({ watermark: '2026-11-05T10:00:00.000Z' }) + '\n');
+  result = await watchReopen({ base, claudeCli: 'claude.exe', fetchImpl: fetchImplNoOp, spawn: spawnNoOp, now });
+  assert.equal(result.since, '2026-11-06T12:00:00.000Z');
+  assert.equal(result.until, '2026-11-07T11:59:00.000Z');
+
+  // Case D: Dry run -> state watermark not changed
+  fs.writeFileSync(stateFile, JSON.stringify({ watermark: '2026-11-07T11:00:00.000Z' }) + '\n');
+  result = await watchReopen({ base, claudeCli: 'claude.exe', dryRun: true, fetchImpl: fetchImplNoOp, spawn: spawnNoOp, now });
+  assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).watermark, '2026-11-07T11:00:00.000Z');
+
+  // Case E: Error / API error -> state watermark not changed
+  const fetchImplError = async () => ({ ok: false, status: 500 });
+  result = await watchReopen({ base, claudeCli: 'claude.exe', fetchImpl: fetchImplError, spawn: spawnNoOp, now });
+  assert.ok(result.apiError);
+  assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).watermark, '2026-11-07T11:00:00.000Z');
+});
+
+test('exclusions for archivedByUser and reopenLoop', async t => {
+  const base = fixture(t);
+  const now = () => Date.parse('2026-11-07T12:00:00.000Z');
+
+  // archivedByUser test: session.status === 'archived' and hostExitArchive is false
+  const userArchivedEvent = { event_type: 'user', payload: { request: { subtype: 'end_session', reason: 'archived' } }, created_at: '2026-11-07T11:00:00Z' };
+  const fetchImplArchived = async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit, userArchivedEvent] } : { data: [{ id: 'cse_one', status: 'archived' }] } });
+
+  let result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl: fetchImplArchived, spawn: () => ({ status: 0, stdout: '[]' }) });
+  assert.equal(result.skipped.archivedByUser, 1);
+
+  // reopenLoop test: 60分以内に「再接続に成功した（verified）」reopen が3回 → ループとして止める
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  const logEntries = [
+    { at: '2026-11-07T11:00:00.000Z', reopened: [{ id: 'one' }], verified: ['one'] },
+    { at: '2026-11-07T11:20:00.000Z', reopened: [{ id: 'one' }], verified: ['one'] },
+    { at: '2026-11-07T11:40:00.000Z', reopened: [{ id: 'one' }], verified: ['one'] },
+  ];
+  fs.writeFileSync(logFile, logEntries.map(e => JSON.stringify(e)).join('\n') + '\n');
+
+  const fetchImplNormal = async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } });
+  result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl: fetchImplNormal, spawn: () => ({ status: 0, stdout: '[]' }) });
+  assert.equal(result.skipped.reopenLoop, 1);
+});
+
+test('reopenLoop: unverified はループに数えず unverifiedStreak で止める', async t => {
+  const base = fixture(t);
+  const now = () => Date.parse('2026-11-07T12:00:00.000Z');
+
+  // 2回の失敗は verified 専用ループとは別の6時間ガードで止める。
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  const logEntries = [
+    { at: '2026-11-07T11:20:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+    { at: '2026-11-07T11:40:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+  ];
+  fs.writeFileSync(logFile, logEntries.map(e => JSON.stringify(e)).join('\n') + '\n');
+
+  const fetchImplNormal = async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } });
+  const result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl: fetchImplNormal, spawn: () => ({ status: 0, stdout: '[]' }) });
+  assert.equal(result.skipped.reopenLoop, 0);
+  assert.equal(result.skipped.unverifiedStreak, 1);
+  assert.equal(result.candidates.length, 0);
+});
+
+test('post-reopen verification records verified and unverified', async t => {
+  const base = fixture(t);
+  let clock = 0;
+  let agentCheckCount = 0;
+
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, now: () => clock,
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: (cmd, args) => {
+      if (args[0] === 'agents') {
+        agentCheckCount++;
+        if (agentCheckCount > 1) return { status: 0, stdout: '[]' };
+        return { status: 0, stdout: '[]' };
+      }
+      return { status: 0, stdout: '' };
+    },
+    windowReady: () => true,
+    wait: async () => {},
+  });
+
+  assert.equal(result.reopened.length, 1);
+  assert.deepEqual(result.verified, []);
+  assert.deepEqual(result.unverified, ['one']);
+});
+
+test('findWorkspaceForCwd resolves workspace file for folder itself, relative subfolders, env var, storage.json, and handles comments/broken JSON', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-resolve-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const claudeMdDir = path.join(root, 'CLAUDE.md配布');
+  const claudeWorktreeX = path.join(root, '.claude', 'worktrees', 'x');
+  const unrelatedDir = path.join(root, 'unrelated');
+
+  fs.mkdirSync(claudeMdDir, { recursive: true });
+  fs.mkdirSync(claudeWorktreeX, { recursive: true });
+  fs.mkdirSync(unrelatedDir, { recursive: true });
+
+  const wsFile = path.join(claudeMdDir, 'orgiast.code-workspace');
+  const wsContent = `{
+    // Workspace definition
+    "folders": [
+      { "path": "." }, /* root folder */
+      { "path": "../.claude" }, // claude folder
+    ],
+  }`;
+  fs.writeFileSync(wsFile, wsContent, 'utf8');
+
+  const appDataDir = path.join(root, 'AppData', 'Roaming');
+  const storageJsonPath = path.join(appDataDir, 'Code', 'User', 'globalStorage', 'storage.json');
+  fs.mkdirSync(path.dirname(storageJsonPath), { recursive: true });
+  const storageContent = JSON.stringify({
+    windowsState: {
+      openedWindows: [
+        { workspaceIdentifier: { configURIPath: `file:///${wsFile.replace(/\\/g, '/')}` } }
+      ]
+    }
+  });
+  fs.writeFileSync(storageJsonPath, storageContent, 'utf8');
+
+  const env = { APPDATA: appDataDir };
+
+  // Case 1: CLAUDE.md配布 itself matches orgiast.code-workspace
+  const match1 = findWorkspaceForCwd(claudeMdDir, { env });
+  assert.ok(match1);
+  assert.equal(match1.workspaceFile, path.resolve(wsFile));
+  assert.equal(match1.workspaceName, 'orgiast');
+
+  // Case 2: .claude/worktrees/x (subfolder of ../.claude) matches orgiast.code-workspace
+  const match2 = findWorkspaceForCwd(claudeWorktreeX, { env });
+  assert.ok(match2);
+  assert.equal(match2.workspaceFile, path.resolve(wsFile));
+  assert.equal(match2.workspaceName, 'orgiast');
+
+  // Case 3: Unrelated folder returns null
+  const match3 = findWorkspaceForCwd(unrelatedDir, { env });
+  assert.equal(match3, null);
+
+  // Case 4: ORGIAST_VSCODE_WORKSPACE environment variable takes priority
+  const customWsFile = path.join(root, 'custom.code-workspace');
+  fs.writeFileSync(customWsFile, JSON.stringify({ folders: [{ path: unrelatedDir }] }), 'utf8');
+  const envWithCustom = { ...env, ORGIAST_VSCODE_WORKSPACE: customWsFile };
+
+  const matchCustom = findWorkspaceForCwd(unrelatedDir, { env: envWithCustom });
+  assert.ok(matchCustom);
+  assert.equal(matchCustom.workspaceFile, path.resolve(customWsFile));
+  assert.equal(matchCustom.workspaceName, 'custom');
+
+  // Case 5: Broken JSON workspace is ignored without crashing
+  fs.rmSync(customWsFile, { force: true });
+  const brokenWsFile = path.join(unrelatedDir, 'broken.code-workspace');
+  fs.writeFileSync(brokenWsFile, '{ "folders": [ broken json structure', 'utf8');
+  const envBroken = { ...env, ORGIAST_VSCODE_WORKSPACE: brokenWsFile };
+
+  const matchBroken = findWorkspaceForCwd(unrelatedDir, { env: envBroken });
+  assert.equal(matchBroken, null);
+});
+
+test('reopenLost: ウィンドウ無し＋lastActiveWindow.workspaceIdentifier があればワークスペースを開く', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-ws-lastactive-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const base = path.join(root, '.claude');
+  const wsDir = path.join(root, 'myproject');
+  const wsSubDir = path.join(root, 'myproject', 'sub');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.mkdirSync(wsSubDir, { recursive: true });
+
+  const wsFile = path.join(wsDir, 'myproject.code-workspace');
+  fs.writeFileSync(wsFile, JSON.stringify({ folders: [{ path: '.' }] }), 'utf8');
+
+  // storage.json に lastActiveWindow.workspaceIdentifier を仕込む
+  const appDataDir = path.join(root, 'AppData', 'Roaming');
+  const storageJsonPath = path.join(appDataDir, 'Code', 'User', 'globalStorage', 'storage.json');
+  fs.mkdirSync(path.dirname(storageJsonPath), { recursive: true });
+  fs.writeFileSync(storageJsonPath, JSON.stringify({
+    windowsState: {
+      lastActiveWindow: {
+        workspaceIdentifier: { configURIPath: `file:///${wsFile.replace(/\\/g, '/')}` }
+      }
+    }
+  }), 'utf8');
+
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: wsSubDir, message: { content: 'session 1' } },
+  ].map(JSON.stringify).join('\n'));
+
+  const psCalls = [];
+  const fetchImpl = async url => ({
+    ok: true,
+    json: async () => url.includes('/events?')
+      ? { data: [exit] }
+      : { data: [{ id: 'cse_one' }] }
+  });
+
+  const env = { APPDATA: appDataDir };
+
+  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, checkIdle: false, fetchImpl, env,
+    spawn: (cmd, args) => {
+      if (args[0] !== 'agents') {
+        const cmdStr = args[args.length - 1];
+        // hasCodeWindow の呼び出しはウィンドウ無し(0)を返す
+        if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
+          return { status: 0, stdout: '0' };
+        }
+        if (!cmdStr.includes('Get-CimInstance Win32_Process')) psCalls.push(cmdStr);
+      }
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
+    },
+    windowReady: () => true,
+    wait: async () => {},
+  });
+
+  assert.equal(result.reopened.length, 1);
+  // ウィンドウ無し＋workspaceIdentifier → ワークスペースを開く
+  assert.equal(result.reopened[0].openedWith, 'workspace');
+  assert.equal(result.reopened[0].target, uriToPath(`file:///${wsFile.replace(/\\/g, '/')}`));
+  // code <cwd> ではなく code <workspace> が呼ばれる
+  assert.ok(psCalls[0].includes(wsFile), `should open workspace file: ${psCalls[0]}`);
+  assert.ok(!psCalls[0].includes(wsSubDir), `should not open cwd directly: ${psCalls[0]}`);
+});
+
+test('parseJsonTolerant preserves // inside string literals (file URIs etc.)', t => {
+  const input = '{"a":"file:///C:/x//y", // c\n "b":[1,2,],}';
+  const result = parseJsonTolerant(input);
+  assert.deepEqual(result, { a: 'file:///C:/x//y', b: [1, 2] });
+});
+
+test('parseJsonTolerant handles plain valid JSON (fast path)', t => {
+  const result = parseJsonTolerant('{"x":1}');
+  assert.deepEqual(result, { x: 1 });
+});
+
+test('parseJsonTolerant handles block comments, escaping, BOM', t => {
+  const input = '\uFEFF{"a":"str\\\"ing/*notcomment*/","b":/*block*/[1,2],}';
+  const result = parseJsonTolerant(input);
+  assert.deepEqual(result, { a: 'str"ing/*notcomment*/', b: [1, 2] });
+});
+
+test('reopenLost falls back to code <cwd> with openedWith: folder when no workspace matches', async t => {
+  const base = fixture(t), psCalls = [];
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, checkIdle: false,
+    env: { APPDATA: path.join(base, 'no-appdata') },
+    fetchImpl: async url => ({
+      ok: true,
+      json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] }
+    }),
+    spawn: (cmd, args) => {
+      if (args[0] !== 'agents') {
+        const cmdStr = args[args.length - 1];
+        if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
+          return { status: 0, stdout: '0' };
+        }
+        if (!cmdStr.includes('Get-CimInstance Win32_Process')) psCalls.push(cmdStr);
+      }
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
+    },
+    windowReady: () => true,
+    wait: async () => {},
+  });
+
+  assert.equal(result.reopened.length, 1);
+  assert.equal(result.reopened[0].openedWith, 'folder');
+  assert.equal(result.reopened[0].target, 'C:\\work');
+  assert.ok(psCalls[0].includes('C:\\work'));
+});
+
+test('resolveClaudeCli: env var takes precedence', t => {
+  const exe = resolveClaudeCli({ env: { CLAUDE_CLI: 'C:\\custom\\claude.exe' }, exists: p => p === 'C:\\custom\\claude.exe' });
+  assert.equal(exe, 'C:\\custom\\claude.exe');
+});
+
+test('resolveClaudeCli: CLAUDE_CLI_PATH also accepted', t => {
+  const exe = resolveClaudeCli({ env: { CLAUDE_CLI_PATH: 'C:\\path\\claude.exe' }, exists: p => p === 'C:\\path\\claude.exe' });
+  assert.equal(exe, 'C:\\path\\claude.exe');
+});
+
+const cliBinName = process.platform === 'win32' ? 'claude.exe' : 'claude';
+const whichCmd = process.platform === 'win32' ? 'where.exe' : 'which';
+
+test('resolveClaudeCli: ~/.local/bin/claude fallback (platform-aware)', t => {
+  const home = os.homedir();
+  const expected = path.join(home, '.local', 'bin', cliBinName);
+  const exe = resolveClaudeCli({ env: {}, exists: p => p === expected });
+  assert.equal(exe, expected);
+});
+
+test('resolveClaudeCli: which/where fallback (platform-aware)', t => {
+  const home = os.homedir();
+  const binPath = path.join(home, '.local', 'bin', cliBinName);
+  const exe = resolveClaudeCli({
+    env: {}, exists: p => p === binPath,
+    spawn: (cmd, args) => cmd === whichCmd ? { status: 0, stdout: binPath + '\n' } : { status: 1 },
+  });
+  assert.equal(exe, binPath);
+});
+
+test('resolveClaudeCli: winget Packages glob (Windows only)', { skip: process.platform !== 'win32' }, t => {
+  const home = os.homedir();
+  const localAppData = path.join(home, 'AppData', 'Local');
+  const pkgsDir = path.join(localAppData, 'Microsoft', 'WinGet', 'Packages');
+  const wingetExe = path.join(pkgsDir, 'Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe', cliBinName);
+  const exe = resolveClaudeCli({
+    env: {}, exists: p => p === wingetExe,
+    readdir: dir => dir === pkgsDir ? ['Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe'] : [],
+    spawn: () => ({ status: 1 }),
+  });
+  assert.equal(exe, wingetExe);
+});
+
+test('resolveClaudeCli: throws when nothing found', t => {
+  assert.throws(() => resolveClaudeCli({ env: {}, exists: () => false, readdir: () => [], spawn: () => ({ status: 1 }) }));
+});
+
+// ── 状態ベース候補 ──────────────────────────────────────
+
+function mkLocalIdx(t, root, entries) {
+  const base = path.join(root, '.claude');
+  const projects = path.join(base, 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  for (const [bridgeId, cwd] of Object.entries(entries)) {
+    fs.writeFileSync(path.join(projects, `${bridgeId}.jsonl`), [
+      JSON.stringify({ type: 'bridge-session', bridgeSessionId: bridgeId }),
+      JSON.stringify({ type: 'user', cwd, message: { content: 'hello' } }),
+    ].join('\n'));
+  }
+  return base;
+}
+
+test('state-based: active/disconnected/72h以内/未close/プロセス無しが候補になる', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-state-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, { cse_one: 'C:\\work' });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, stateBased: true,
+    fetchImpl: async url => {
+      assert.ok(!url.includes('/events'), 'state-based は events API を呼ばない');
+      return { ok: true, json: async () => ({ data: [{ id: 'cse_one', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T10:00:00.000Z', title: 'Work' }] }) };
+    },
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 'cse_one');
+  assert.equal(result.candidates[0].source, 'state');
+});
+
+test('state-based: archived/connected/72h超/closed/alive/reopenLoop は候補にならない', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-state-excl-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, {
+    cse_archived: 'C:\\a', cse_connected: 'C:\\b', cse_stale: 'C:\\c',
+    cse_closed: 'C:\\d', cse_alive: 'C:\\e', cse_loop: 'C:\\f',
+  });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  // closed ledger
+  fs.writeFileSync(path.join(base, 'closed-sessions.json'), JSON.stringify({ ids: ['cse_closed'] }));
+
+  // reopenLoop log — 60分以内に再接続成功(verified)が3回 → ループとして候補から外す
+  fs.writeFileSync(path.join(base, 'reopen-lost-sessions.log'), [
+    { at: '2026-11-07T11:00:00.000Z', reopened: [{ id: 'cse_loop' }], verified: ['cse_loop'] },
+    { at: '2026-11-07T11:20:00.000Z', reopened: [{ id: 'cse_loop' }], verified: ['cse_loop'] },
+    { at: '2026-11-07T11:40:00.000Z', reopened: [{ id: 'cse_loop' }], verified: ['cse_loop'] },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n');
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  const sessions = [
+    { id: 'cse_archived', status: 'archived', connection_status: 'disconnected', last_event_at: '2026-11-07T10:00:00.000Z' },
+    { id: 'cse_connected', status: 'active', connection_status: 'connected', last_event_at: '2026-11-07T10:00:00.000Z' },
+    { id: 'cse_stale', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-01T10:00:00.000Z' }, // >72h
+    { id: 'cse_closed', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T10:00:00.000Z' },
+    { id: 'cse_alive', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T10:00:00.000Z' },
+    { id: 'cse_loop', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T10:00:00.000Z' },
+  ];
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, stateBased: true,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: sessions }) }),
+    spawn: (cmd, args) => {
+      if (args[0] !== 'agents') return { status: 0, stdout: '' };
+      return { status: 0, stdout: JSON.stringify([{ kind: 'interactive', sessionId: 'cse_alive' }]) };
+    },
+  });
+  assert.equal(result.candidates.length, 0);
+  // 6 sessions — all should be skipped
+  const totalSkipped = result.skipped.closed + result.skipped.alive + result.skipped.noLocal +
+    result.skipped.empty + result.skipped.reopenLoop + result.skipped.archivedByUser;
+  // archived: status !== 'active' so filtered at state level, not counted
+  assert.equal(result.skipped.closed, 1);
+  assert.equal(result.skipped.alive, 1);
+  assert.equal(result.skipped.reopenLoop, 1);
+});
+
+test('state-based: updated_at が since より古くても候補になる（updated_at フィルタを適用しない）', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-updated-at-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, { cse_stale: 'C:\\work' });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  // updated_at は since（'2026-11-05T19:40:00Z'）より古いが、last_event_at は 72h 以内
+  const staleSession = { id: 'cse_stale', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T10:00:00.000Z', title: 'Stale', updated_at: '2026-11-04T10:00:00.000Z' };
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, stateBased: true,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: [staleSession] }) }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  // state-based では updated_at >= since フィルタを適用しないので、updated_at が古くても候補になる
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 'cse_stale');
+  assert.equal(result.candidates[0].source, 'state');
+});
+
+test('state-based: 72 時間より古いページで打ち切る（降順の場合）', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-paging-cutoff-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, {
+    cse_recent: 'C:\\work',
+    cse_old: 'C:\\old',
+    cse_older: 'C:\\older',
+  });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  const page1 = [
+    { id: 'cse_recent', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T10:00:00.000Z', title: 'Recent', updated_at: '2026-11-07T10:00:00.000Z' },
+  ];
+  const page2 = [
+    { id: 'cse_old', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-01T10:00:00.000Z', title: 'Old', updated_at: '2026-11-01T10:00:00.000Z' },
+    { id: 'cse_older', status: 'active', connection_status: 'disconnected', last_event_at: '2026-10-30T10:00:00.000Z', title: 'Older', updated_at: '2026-10-30T10:00:00.000Z' },
+  ];
+  let callCount = 0;
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, stateBased: true,
+    fetchImpl: async url => {
+      if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [] }) };
+      callCount++;
+      if (callCount === 1) return { ok: true, json: async () => ({ data: page1, next_cursor: 'page2' }) };
+      if (callCount === 2) return { ok: true, json: async () => ({ data: page2 }) };
+      return { ok: true, json: async () => ({ data: [] }) };
+    },
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 'cse_recent');
+  // page2 の全セッションが 72h より古いので打ち切られる。page3 は呼ばれない
+  assert.equal(callCount, 2);
+  assert.ok(!result.apiError, `unexpected apiError: ${result.apiError ?? ''}`);
+});
+
+test('state-based と host_exit の重複は1件にまとまる', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-dedup-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, { cse_one: 'C:\\work' });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const session = { id: 'cse_one', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T10:00:00.000Z', title: 'W' };
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, stateBased: true,
+    fetchImpl: async url => {
+      if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: '2026-11-07T10:00:00.000Z' }] }) };
+      return { ok: true, json: async () => ({ data: [session] }) };
+    },
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.equal(result.candidates.length, 1);
+  // どちらの source でも良い
+  assert.ok(['state', 'host_exit'].includes(result.candidates[0].source));
+});
+
+test('state-based: 待機中の空き枠は開き直さない', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-standby-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, {
+    cse_standby: 'C:\\work1',
+    cse_work: 'C:\\work2',
+  });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  const sessions = [
+    { id: 'cse_standby', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T10:00:00.000Z', title: '011｜待機中' },
+    { id: 'cse_work', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T10:00:00.000Z', title: '011｜毎日議事録から改善待機中' },
+  ];
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, stateBased: true,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: sessions }) }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 'cse_work');
+  assert.equal(result.skipped.standby, 1);
+});
+
+test('state-based: 起動中の VS Code で閉じたタブは開き直さない', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-vscode-running-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, { cse_one: 'C:\\work' });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  // vscodeStartedAt が last_event_at(11:00) より前(10:00) → VS Code 起動中に閉じられた
+  const vscodeStartedAt = Date.parse('2026-11-07T10:00:00.000Z');
+  const session = { id: 'cse_one', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T11:00:00.000Z', title: 'Work' };
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, stateBased: true,
+    vscodeStartedAt,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: [session] }) }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.equal(result.candidates.length, 0);
+  assert.equal(result.skipped.closedInRunningVscode, 1);
+});
+
+test('state-based: VS Code 再起動後は開き直す', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-vscode-restarted-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, { cse_one: 'C:\\work' });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  // vscodeStartedAt が last_event_at(10:00) より後(11:00) → VS Code 再起動後なので開き直す
+  const vscodeStartedAt = Date.parse('2026-11-07T11:00:00.000Z');
+  const session = { id: 'cse_one', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T10:00:00.000Z', title: 'Work' };
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, stateBased: true,
+    vscodeStartedAt,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: [session] }) }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 'cse_one');
+  assert.equal(result.skipped.closedInRunningVscode, 0);
+});
+
+test('CPU 85%以上で開き直しを defer、watermark を進めない', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-cpu-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, { cse_one: 'C:\\work' });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const stateFile = path.join(base, 'reopen-lost-sessions-state.json');
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  const evtAt = '2026-11-07T11:40:00.000Z'; // within watchReopen's [now-30m, now-60s]
+
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: evtAt }] }) };
+    return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
+  };
+  const spawn = (cmd, args) => {
+    if (args[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  // Stub cpusImpl to return 92% usage: totalDiff=87, idleDiff=7 → 100*(1-7/87)=92
+  let cpuCallCount = 0;
+  const cpusImpl = () => {
+    cpuCallCount++;
+    if (cpuCallCount === 1) return [{ times: { user: 0, nice: 0, system: 0, idle: 0, iowait: 0, irq: 0, softirq: 0 } }];
+    return [{ times: { user: 50, nice: 0, system: 30, idle: 7, iowait: 0, irq: 0, softirq: 0 } }];
+  };
+
+  const result = await watchReopen({ base, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, cpusImpl, now: () => nowTime,
+    windowReady: () => true, wait: async () => {} });
+  assert.equal(result.deferredCpu, 92);
+  assert.equal(result.reopened.length, 0);
+  // watermark は deferredCpu により進まない
+  assert.equal(fs.existsSync(stateFile), false);
+});
+
+test('claude agents 呼び出しが失敗したら registry 代替に移行（再試行なし）', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-no-retry-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, {});
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  // registry に session を仕込む（alive に process.pid を使う）
+  const sessionsDir = path.join(base, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionsDir, 'alive.json'), JSON.stringify({ pid: process.pid, sessionId: 'sid_001', kind: 'interactive' }));
+
+  let attempts = 0;
+  const err = new Error('spawnSync ETIMEDOUT');
+  err.code = 'ETIMEDOUT';
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', stateBased: true,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: [] }) }),
+    spawn: () => {
+      attempts++;
+      return { error: err, status: null, stdout: '' };
+    },
+  });
+  // 再試行なし（vscodeStartedAt 1回 + agents 1回）
+  assert.equal(attempts, 2);
+  // registry 代替で aliveSource='registry'
+  assert.equal(result.aliveSource, 'registry');
+  assert.ok(result.agentsError, 'agentsError に失敗理由が残る');
+});
+
+// ── agentsFromRegistry ──────────────────────────────────
+
+test('agentsFromRegistry: 有効なセッションを sessionId 集合で返す', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const sessionsDir = path.join(dir, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  // process.pid は生きているので process.kill(pid, 0) が成功する
+  fs.writeFileSync(path.join(sessionsDir, 'a.json'), JSON.stringify({ pid: process.pid, sessionId: 'sid_001', kind: 'interactive', status: 'busy' }));
+  fs.writeFileSync(path.join(sessionsDir, 'b.json'), JSON.stringify({ pid: process.pid, sessionId: 'sid_002', kind: 'interactive', status: 'idle' }));
+  const result = agentsFromRegistry(sessionsDir);
+  assert.equal(result.size, 2);
+  assert.ok(result.has('sid_001'));
+  assert.ok(result.has('sid_002'));
+});
+
+test('agentsFromRegistry: kind !== interactive は除外', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-kind-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const sessionsDir = path.join(dir, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionsDir, 'a.json'), JSON.stringify({ pid: process.pid, sessionId: 's1', kind: 'interactive' }));
+  fs.writeFileSync(path.join(sessionsDir, 'b.json'), JSON.stringify({ pid: process.pid, sessionId: 's2', kind: 'agent' }));
+  fs.writeFileSync(path.join(sessionsDir, 'c.json'), JSON.stringify({ pid: process.pid, sessionId: 's3', kind: 'background' }));
+  assert.equal(agentsFromRegistry(sessionsDir).size, 1);
+});
+
+test('agentsFromRegistry: sessionId が無いエントリは除外', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-noid-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const sessionsDir = path.join(dir, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionsDir, 'a.json'), JSON.stringify({ pid: process.pid, kind: 'interactive' })); // no sessionId
+  fs.writeFileSync(path.join(sessionsDir, 'b.json'), JSON.stringify({ pid: process.pid, sessionId: '', kind: 'interactive' })); // empty sessionId
+  assert.equal(agentsFromRegistry(sessionsDir).size, 0);
+});
+
+test('agentsFromRegistry: 壊れた JSON は読み飛ばす', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-broken-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const sessionsDir = path.join(dir, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionsDir, 'good.json'), JSON.stringify({ pid: process.pid, sessionId: 's1', kind: 'interactive' }));
+  fs.writeFileSync(path.join(sessionsDir, 'bad.json'), '{ broken json', 'utf8');
+  fs.writeFileSync(path.join(sessionsDir, 'empty.json'), '', 'utf8');
+  assert.equal(agentsFromRegistry(sessionsDir).size, 1);
+  assert.ok(agentsFromRegistry(sessionsDir).has('s1'));
+});
+
+test('agentsFromRegistry: 死んだ pid は除外される（ESRCH）', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-dead-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const sessionsDir = path.join(dir, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  // 既に終了した子プロセスの pid は dead（ESRCH になるはず）
+  const { spawnSync } = await import('node:child_process');
+  const child = spawnSync(process.execPath, ['-e', 'process.exit(0)'], { timeout: 5000 });
+  const deadPid = child.pid;
+  fs.writeFileSync(path.join(sessionsDir, 'dead.json'), JSON.stringify({ pid: deadPid, sessionId: 's_dead', kind: 'interactive' }));
+  fs.writeFileSync(path.join(sessionsDir, 'alive.json'), JSON.stringify({ pid: process.pid, sessionId: 's_alive', kind: 'interactive' }));
+  const result = agentsFromRegistry(sessionsDir);
+  assert.equal(result.size, 1);
+  assert.ok(result.has('s_alive'));
+  assert.ok(!result.has('s_dead'));
+});
+
+test('agentsFromRegistry: sessions ディレクトリが無ければ例外を投げる', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-no-dir-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  assert.throws(() => agentsFromRegistry(path.join(dir, 'sessions')), { code: 'ENOENT' });
+});
+
+// ── alive() 2段構え ─────────────────────────────────────
+
+test('alive: agents 成功 → aliveSource agents', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alive-agents-success-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+  ].map(JSON.stringify).join('\n'));
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', stateBased: true,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: [] }) }),
+    spawn: () => ({ status: 0, stdout: JSON.stringify([{ kind: 'interactive', sessionId: 'sid_001' }]) }),
+  });
+  assert.equal(result.aliveSource, 'agents');
+  assert.equal(result.agentsError, null);
+  assert.equal(result.agentsDiag, null);
+});
+
+test('alive: agents ETIMEDOUT → registry で代替 → aliveSource registry', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alive-registry-fallback-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  // レジストリに session を仕込む
+  const sessionsDir = path.join(base, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionsDir, 'reg.json'), JSON.stringify({ pid: 999999999, sessionId: 'sid_reg', kind: 'interactive' }));
+  const err = new Error('spawnSync ETIMEDOUT');
+  err.code = 'ETIMEDOUT';
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', stateBased: true,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: [] }) }),
+    spawn: () => ({ error: err, status: null, stdout: '', stderr: 'timeout' }),
+  });
+  assert.equal(result.aliveSource, 'registry');
+  assert.ok(result.agentsError);
+  assert.ok(result.agentsDiag);
+  assert.equal(typeof result.agentsDiag.elapsedMs, 'number');
+  assert.ok(Array.isArray(result.agentsDiag.claudeEnvKeys));
+});
+
+test('alive: agents 失敗でも registry に無ければ空集合、エラーは記録', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alive-registry-empty-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  // sessions ディレクトリは作らない → agentsFromRegistry が ENOENT で例外 → alive() は catch して空 Set
+  const err = new Error('spawnSync ETIMEDOUT');
+  err.code = 'ETIMEDOUT';
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', stateBased: true,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: [] }) }),
+    spawn: () => ({ error: err, status: null, stdout: '', stderr: 'timeout' }),
+  });
+  assert.equal(result.aliveSource, 'registry');
+  assert.ok(result.agentsError);
+  // sessions ディレクトリ無しでも例外が上に伝播せず、alive() の catch で空 Set が返る
+  assert.equal(result.skipped.closed, 0);
+});
+
+test('reopenLost: 再オープン後の検証も aliveSource を正しく記録する', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alive-verify-source-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+  ].map(JSON.stringify).join('\n'));
+  const sessionsDir = path.join(base, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  // agents は空を返す → aliveSource agents、verified=[] unverified=['cse_one']
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false,
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: (cmd, args) => {
+      if (args[0] === 'agents') return { status: 0, stdout: '[]' };
+      return { status: 0, stdout: '' };
+    },
+    windowReady: () => true,
+    wait: async () => {},
+  });
+  assert.equal(result.aliveSource, 'agents');
+  assert.equal(result.reopened.length, 1);
+  assert.deepEqual(result.verified, []);
+  assert.deepEqual(result.unverified, ['one']);
+});
+
+// ── writeProgress ───────────────────────────────────────
+
+test('writeProgress creates progress file with correct content', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wp-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  const fixedNow = Date.parse('2026-11-09T00:00:00.000Z');
+  writeProgress(base, 'lock', 'acquired', () => fixedNow);
+  const progressPath = path.join(base, 'reopen-lost-sessions-progress.json');
+  assert.ok(fs.existsSync(progressPath));
+  const data = JSON.parse(fs.readFileSync(progressPath, 'utf8'));
+  assert.equal(data.pid, process.pid);
+  assert.equal(data.stage, 'lock');
+  assert.equal(data.detail, 'acquired');
+  assert.equal(data.at, new Date(fixedNow).toISOString());
+});
+
+test('writeProgress default base uses homedir', t => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'wp-home-'));
+  t.after(() => fs.rmSync(tmpHome, { recursive: true, force: true }));
+  const origHome = os.homedir;
+  os.homedir = () => tmpHome;
+  fs.mkdirSync(path.join(tmpHome, '.claude'), { recursive: true });
+  try {
+    const fixedNow = Date.parse('2026-11-09T00:00:01.000Z');
+    writeProgress(undefined, 'auth', 'credentials loaded', () => fixedNow);
+    const progressPath = path.join(tmpHome, '.claude', 'reopen-lost-sessions-progress.json');
+    assert.ok(fs.existsSync(progressPath));
+    const data = JSON.parse(fs.readFileSync(progressPath, 'utf8'));
+    assert.equal(data.stage, 'auth');
+    assert.equal(data.detail, 'credentials loaded');
+  } finally {
+    os.homedir = origHome;
+  }
+});
+
+test('writeProgress overwrites previous content', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wp-over-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  const fixedNow = Date.parse('2026-11-09T00:00:02.000Z');
+  writeProgress(base, 'lock', 'acquired', () => fixedNow);
+  writeProgress(base, 'alive', 'source=agents', () => fixedNow + 1000);
+  const data = JSON.parse(fs.readFileSync(path.join(base, 'reopen-lost-sessions-progress.json'), 'utf8'));
+  assert.equal(data.stage, 'alive');
+  assert.equal(data.detail, 'source=agents');
+});
+
+// ── acquireLock dual update ─────────────────────────────
+
+test('acquireLock dual update: futimesSync and utimesSync run without error', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lock-dual-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const lockFile = path.join(root, 'test.lock');
+  const release = acquireLock(lockFile);
+  assert.ok(release, 'lock should be acquired');
+  // Verify the file exists and has pid content
+  assert.ok(fs.existsSync(lockFile));
+  const content = fs.readFileSync(lockFile, 'utf8');
+  assert.equal(content, String(process.pid));
+  // mtime should be set (writeSync + futimesSync both set it)
+  const stat = fs.statSync(lockFile);
+  assert.ok(stat.mtimeMs > 0, `mtime should be positive, got ${stat.mtimeMs}`);
+  // Release properly removes the lock
+  release();
+  assert.equal(fs.existsSync(lockFile), false, 'lock should be released');
+});
+
+// ── reopenLost writes progress at key stages ────────────
+
+test('reopenLost dry run never writes progress, lock or log', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-progress-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+  ].map(JSON.stringify).join('\n'));
+
+  await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe',
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+
+  for (const name of ['reopen-lost-sessions-progress.json', 'reopen-lost-sessions.lock', 'reopen-lost-sessions.log']) {
+    assert.equal(fs.existsSync(path.join(base, name)), false, name);
+  }
+});
+
+test('measureCpuAsync: 50% usage from stubbed cpus', async () => {
+  const cpu1 = { times: { user: 100, nice: 0, system: 50, idle: 200, iowait: 0, irq: 0, softirq: 0 } };
+  const cpu2 = { times: { user: 150, nice: 0, system: 80, idle: 250, iowait: 0, irq: 0, softirq: 0 } };
+  // total1 = 350, total2 = 480, diff = 130
+  // idle1 = 200, idle2 = 250, diff = 50
+  // usage = 100 * (1 - 50/130) ≈ 62 → round to 62
+  let callCount = 0;
+  const cpusImpl = () => {
+    callCount++;
+    return callCount === 1 ? [cpu1] : [cpu2];
+  };
+  let waited = false;
+  const wait = async ms => { waited = true; };
+  const result = await measureCpuAsync({ sampleMs: 100, cpusImpl, wait });
+  assert.equal(result, 62);
+  assert.ok(waited);
+});
+
+test('measureCpuAsync: 0% usage when idle diff equals total diff', async () => {
+  const cpu1 = { times: { user: 100, nice: 0, system: 50, idle: 200, iowait: 0, irq: 0, softirq: 0 } };
+  const cpu2 = { times: { user: 100, nice: 0, system: 50, idle: 250, iowait: 0, irq: 0, softirq: 0 } };
+  // total1 = 350, total2 = 400, diff = 50
+  // idle1 = 200, idle2 = 250, diff = 50
+  // usage = 100 * (1 - 50/50) = 0
+  let callCount = 0;
+  const cpusImpl = () => {
+    callCount++;
+    return callCount === 1 ? [cpu1] : [cpu2];
+  };
+  const result = await measureCpuAsync({ sampleMs: 100, cpusImpl, wait: async () => {} });
+  assert.equal(result, 0);
+});
+
+test('measureCpuAsync: null when total diff is 0', async () => {
+  const cpu = { times: { user: 100, nice: 0, system: 50, idle: 200, iowait: 0, irq: 0, softirq: 0 } };
+  const cpusImpl = () => [cpu, cpu];
+  const result = await measureCpuAsync({ sampleMs: 100, cpusImpl, wait: async () => {} });
+  assert.equal(result, null);
+});
+
+test('measureCpuAsync: null when cpusImpl throws', async () => {
+  const cpusImpl = () => { throw new Error('no cpus'); };
+  const result = await measureCpuAsync({ sampleMs: 100, cpusImpl, wait: async () => {} });
+  assert.equal(result, null);
+});
+
+test('measureCpuAsync: multi-core aggregation', async () => {
+  const cpu1a = { times: { user: 100, nice: 0, system: 50, idle: 200, iowait: 0, irq: 0, softirq: 0 } };
+  const cpu1b = { times: { user: 200, nice: 0, system: 100, idle: 400, iowait: 0, irq: 0, softirq: 0 } };
+  const cpu2a = { times: { user: 50, nice: 0, system: 30, idle: 150, iowait: 0, irq: 0, softirq: 0 } };
+  const cpu2b = { times: { user: 80, nice: 0, system: 50, idle: 200, iowait: 0, irq: 0, softirq: 0 } };
+  // Core 0: total 350→700 diff=350, idle 200→400 diff=200
+  // Core 1: total 230→330 diff=100, idle 150→200 diff=50
+  // Aggregated: totalDiff=450, idleDiff=250
+  // usage = 100 * (1 - 250/450) ≈ 44.4 → round to 44
+  let callCount = 0;
+  const cpusImpl = () => {
+    callCount++;
+    return callCount === 1 ? [cpu1a, cpu2a] : [cpu1b, cpu2b];
+  };
+  const result = await measureCpuAsync({ sampleMs: 100, cpusImpl, wait: async () => {} });
+  assert.equal(result, 44);
+});
+
+test('hasCodeWindow: spawn status/error/stdout behavior', () => {
+  assert.equal(hasCodeWindow(() => ({ status: 0, stdout: '2' })), true);
+  assert.equal(hasCodeWindow(() => ({ status: 0, stdout: '0' })), false);
+  assert.equal(hasCodeWindow(() => ({ error: new Error('ETIMEDOUT') })), true);
+  assert.equal(hasCodeWindow(() => ({ status: 1, stdout: '' })), true);
+});
+
+test('resolveLaunchTarget: resolves launch target based on window state and storage.json', () => {
+  // Case 1: Window exists -> uri-only, target null
+  const resWindow = resolveLaunchTarget({ spawn: () => ({ status: 0, stdout: '1' }) });
+  assert.deepEqual(resWindow, { launch: 'uri-only', target: null, openedWith: null });
+
+  // Case 2: No window + storage.json folder -> openedWith 'folder'
+  const appData = path.join(os.tmpdir(), 'mock-appdata-folder');
+  const storagePathFolder = path.join(appData, 'Code', 'User', 'globalStorage', 'storage.json');
+  const storageDataFolder = JSON.stringify({
+    windowsState: {
+      lastActiveWindow: { folder: 'file:///c%3A/Users/x/proj' }
+    }
+  });
+  const fsMockFolder = {
+    existsSync: p => p === storagePathFolder,
+    readFileSync: p => p === storagePathFolder ? storageDataFolder : ''
+  };
+  const resFolder = resolveLaunchTarget({
+    env: { APPDATA: appData },
+    fsImpl: fsMockFolder,
+    spawn: () => ({ status: 0, stdout: '0' })
+  });
+  assert.equal(resFolder.launch, 'opened-window');
+  assert.equal(resFolder.openedWith, 'folder');
+  assert.equal(resFolder.target, uriToPath('file:///c%3A/Users/x/proj'));
+
+  // Case 3: No window + storage.json workspaceIdentifier -> openedWith 'workspace'
+  const appDataWs = path.join(os.tmpdir(), 'mock-appdata-ws');
+  const storagePathWs = path.join(appDataWs, 'Code', 'User', 'globalStorage', 'storage.json');
+  const storageDataWs = JSON.stringify({
+    windowsState: {
+      lastActiveWindow: {
+        workspaceIdentifier: { configURIPath: 'file:///c%3A/Users/x/a.code-workspace' }
+      }
+    }
+  });
+  const fsMockWs = {
+    existsSync: p => p === storagePathWs,
+    readFileSync: p => p === storagePathWs ? storageDataWs : ''
+  };
+  const resWs = resolveLaunchTarget({
+    env: { APPDATA: appDataWs },
+    fsImpl: fsMockWs,
+    spawn: () => ({ status: 0, stdout: '0' })
+  });
+  assert.equal(resWs.launch, 'opened-window');
+  assert.equal(resWs.openedWith, 'workspace');
+  assert.equal(resWs.target, uriToPath('file:///c%3A/Users/x/a.code-workspace'));
+});
+
+test('watchdogRecord: logs previous stage and updates progress stage to watchdog', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'watchdog-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const progressPath = path.join(root, 'reopen-lost-sessions-progress.json');
+  fs.writeFileSync(progressPath, JSON.stringify({ stage: 'alive', detail: 'x', pid: 1 }) + '\n');
+
+  watchdogRecord(root, { exitImpl: () => {} });
+
+  const logPath = path.join(root, 'reopen-lost-sessions.log');
+  assert.ok(fs.existsSync(logPath));
+  const logLines = fs.readFileSync(logPath, 'utf8').trim().split('\n');
+  const lastLog = JSON.parse(logLines[logLines.length - 1]);
+
+  assert.equal(lastLog.error, 'watchdog timeout');
+  assert.equal(lastLog.stage, 'alive');
+  assert.equal(lastLog.detail, 'x');
+  assert.equal(lastLog.pid, 1);
+
+  const updatedProgress = JSON.parse(fs.readFileSync(progressPath, 'utf8'));
+  assert.equal(updatedProgress.stage, 'watchdog');
+  assert.equal(updatedProgress.detail, 'timeout');
+});
+
+test('localIndex: sinceMs より古い mtime のファイルは読まれず skippedOld に計上される', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-mtime-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const projects = path.join(root, '.claude', 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  // 古いファイル（mtime を過去に設定）
+  const oldFile = path.join(projects, 'old.jsonl');
+  fs.writeFileSync(oldFile, [
+    { type: 'bridge-session', bridgeSessionId: 'cse_old' },
+    { type: 'user', cwd: 'C:\\old', message: { content: 'old' } },
+  ].map(JSON.stringify).join('\n'));
+  const past = new Date('2020-01-01').getTime();
+  fs.utimesSync(oldFile, past / 1000, past / 1000);
+  // 新しいファイル
+  const newFile = path.join(projects, 'new.jsonl');
+  fs.writeFileSync(newFile, [
+    { type: 'bridge-session', bridgeSessionId: 'cse_new' },
+    { type: 'user', cwd: 'C:\\new', message: { content: 'new' } },
+  ].map(JSON.stringify).join('\n'));
+  const idx = localIndex(path.join(root, '.claude'), undefined, { sinceMs: Date.now() - 3600000 });
+  assert.equal(idx.size, 1, '古いファイルは index に入らない');
+  assert.ok(idx.has('cse_new'), '新しいファイルだけが index にある');
+  assert.equal(idx.skippedOld, 1, 'skippedOld に 1 が計上される');
+  assert.equal(idx.indexed, 1, 'indexed に 1 が計上される');
+  assert.ok(typeof idx.indexMs === 'number' && idx.indexMs >= 0, 'indexMs が数値');
+});
+
+test('localIndex: onlyId 指定時は sinceMs より古くても読む', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-onlyid-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const projects = path.join(root, '.claude', 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  const oldFile = path.join(projects, 'old.jsonl');
+  fs.writeFileSync(oldFile, [
+    { type: 'bridge-session', bridgeSessionId: 'cse_old' },
+    { type: 'user', cwd: 'C:\\old', message: { content: 'old' } },
+  ].map(JSON.stringify).join('\n'));
+  const past = new Date('2020-01-01').getTime();
+  fs.utimesSync(oldFile, past / 1000, past / 1000);
+  // onlyId で古いファイルを指定（ファイル名ステム = 'old'）→ mtime に関係なく読める
+  const idx = localIndex(path.join(root, '.claude'), 'old', { sinceMs: Date.now() - 1000 });
+  assert.equal(idx.size, 1, 'onlyId 指定で古いファイルも読める');
+  assert.ok(idx.has('cse_old'));
+  assert.equal(idx.skippedOld, 0, 'onlyId 時は skippedOld に計上されない');
+  assert.equal(idx.indexed, 1);
+});
+
+test('localIndex: 巨大ファイルでも先頭の cwd と末尾の bridge-session が取れる', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-large-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const projects = path.join(root, '.claude', 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  const largeFile = path.join(projects, 'large.jsonl');
+  // 先頭行: cwd 情報
+  const headLine = JSON.stringify({ type: 'user', cwd: 'C:\\head-cwd', message: { content: 'start' } });
+  // 末尾行: bridge-session
+  const tailLine = JSON.stringify({ type: 'bridge-session', bridgeSessionId: 'cse_large' });
+  // 中間に 100KB のパディング（テスト用閾値 5000 bytes より大きい）
+  const padding = 'x'.repeat(100 * 1024);
+  const content = headLine + '\n' + padding + '\n' + tailLine + '\n';
+  fs.writeFileSync(largeFile, content, 'utf8');
+  // テスト用に閾値を小さく（5000 bytes）して largeFileThreshold を超えさせる
+  const idx = localIndex(path.join(root, '.claude'), undefined, { largeFileThreshold: 5000, largeFileHead: 200, largeFileTail: 200 });
+  assert.equal(idx.size, 1, '巨大ファイルからも bridge-session が取れる');
+  assert.ok(idx.has('cse_large'), '末尾の bridge-session ID が取れる');
+  const entry = idx.get('cse_large');
+  assert.equal(entry.cwd, 'C:\\head-cwd', '先頭の cwd が取れる');
+  assert.equal(entry.id, 'large');
+  assert.equal(idx.indexed, 1);
+  assert.ok(typeof idx.indexMs === 'number' && idx.indexMs >= 0);
+});
+
+test('localIndex: 既定の閾値が 8MB/512KB/4MB である', () => {
+  // デフォルト引数を直接テスト（引数無しで呼び出したときの値）
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-defaults-'));
+  try {
+    fs.mkdirSync(path.join(base, '.claude', 'projects', 'proj'), { recursive: true });
+    fs.writeFileSync(path.join(base, '.claude', 'projects', 'proj', 'dummy.jsonl'), '{}', 'utf8');
+    // 引数無しで呼び出し、内部で使われる既定値を確認するため、
+    // 関数のソースから既定値を直接検証
+    const src = fs.readFileSync(new URL('./reopen-lost-sessions.mjs', import.meta.url), 'utf8');
+    const match = src.match(/largeFileThreshold\s*=\s*(\d+)\s*\*\s*1024\s*\*\s*1024/);
+    assert.ok(match, 'largeFileThreshold の既定値が見つかる');
+    assert.equal(eval(match[0].split('=')[1].trim()), 8 * 1024 * 1024, 'largeFileThreshold 既定値は 8MB');
+    const headMatch = src.match(/largeFileHead\s*=\s*(\d+)\s*\*\s*1024/);
+    assert.ok(headMatch, 'largeFileHead の既定値が見つかる');
+    assert.equal(eval(headMatch[0].split('=')[1].trim()), 512 * 1024, 'largeFileHead 既定値は 512KB');
+    const tailMatch = src.match(/largeFileTail\s*=\s*(\d+)\s*\*\s*1024\s*\*\s*1024/);
+    assert.ok(tailMatch, 'largeFileTail の既定値が見つかる');
+    assert.equal(eval(tailMatch[0].split('=')[1].trim()), 4 * 1024 * 1024, 'largeFileTail 既定値は 4MB');
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('parseOptions: 既定 max は 3 である', () => {
+  const opts = parseOptions([], () => ({ status: 0, stdout: '2026-11-05T20:00:00Z' }));
+  assert.equal(opts.max, 3);
+});
+
+function claudeEnv(extra = {}) {
+  const env = { ...process.env, ...extra };
+  if (!Object.hasOwn(extra, 'REOPEN_MAX_CLAUDE')) delete env.REOPEN_MAX_CLAUDE;
+  if (!Object.hasOwn(extra, 'REOPEN_ALLOW_FIRST')) delete env.REOPEN_ALLOW_FIRST;
+  return env;
+}
+function tasklistSpawn(count) {
+  return (cmd, args) => {
+    if (cmd === 'tasklist') {
+      return { status: 0, stdout: Array(count).fill('"claude.exe","1234","Console","1","100,000 K"').join('\n') };
+    }
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+}
+
+test('loadGuard: 既定上限は 5。5 以上は 0 件、4 件は開く。REOPEN_ALLOW_FIRST=1 のときだけ 1 件開く', async t => {
+  assert.equal(DEFAULT_REOPEN_MAX_CLAUDE, 5);
+  const base = fixture(t);
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
+  };
+  const run = (count, extra) => reopenLost({
+    base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl,
+    spawn: tasklistSpawn(count), checkCpu: false, checkClaude: true, env: claudeEnv(extra),
+    now: () => nowTime, windowReady: async () => true, wait: async () => {},
+  });
+  const blocked = await run(5);
+  assert.equal(blocked.reopened.length, 0);
+  assert.equal(blocked.skipped.loadGuard, 1);
+  assert.equal(blocked.loadGuard.claudeCount, 5);
+  assert.equal(blocked.loadGuard.reason, 'claudeCount');
+  assert.equal(blocked.loadGuard.allowFirst, undefined);
+  for (const flag of ['0', 'true', 'yes']) {
+    const off = await run(5, { REOPEN_ALLOW_FIRST: flag });
+    assert.equal(off.reopened.length, 0, flag);
+    assert.equal(off.loadGuard.allowFirst, undefined, flag);
+  }
+  const under = await run(4);
+  assert.equal(under.reopened.length, 1);
+  assert.equal(under.skipped.loadGuard, 0);
+  assert.equal(under.loadGuard?.allowFirst, undefined);
+});
+
+test('loadGuard: CPU >= 閾値(85%)で 0 件 reopen かつ skipped.loadGuard に計上', async t => {
+  const base = fixture(t);
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
+  };
+  const spawn = (cmd, args) => {
+    if (cmd === 'tasklist') return { status: 0, stdout: '"claude.exe","1234","Console","1","100,000 K"\n' };
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  let cpuCallCount = 0;
+  const cpusImpl = () => {
+    cpuCallCount++;
+    if (cpuCallCount === 1) return [{ times: { user: 0, nice: 0, system: 0, idle: 0, iowait: 0, irq: 0, softirq: 0 } }];
+    return [{ times: { user: 50, nice: 0, system: 40, idle: 5, iowait: 0, irq: 0, softirq: 0 } }];
+  };
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, cpusImpl, checkCpu: true, checkClaude: true, now: () => nowTime });
+  assert.equal(result.reopened.length, 0);
+  assert.equal(result.skipped.loadGuard, 1);
+  assert.equal(result.loadGuard.cpuPct, 95);
+  assert.match(result.loadGuard.reason, /cpuPct/);
+});
+
+test('loadGuard: tasklist 失敗時は fail-open でスキップせず reopen 実行し error を記録', async t => {
+  const base = fixture(t);
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
+  };
+  const spawn = (cmd, args) => {
+    if (cmd === 'tasklist') return { status: 1, error: new Error('tasklist failed'), stdout: '' };
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  let cpuCallCount = 0;
+  const cpusImpl = () => {
+    cpuCallCount++;
+    if (cpuCallCount === 1) return [{ times: { user: 0, nice: 0, system: 0, idle: 0, iowait: 0, irq: 0, softirq: 0 } }];
+    return [{ times: { user: 10, nice: 0, system: 0, idle: 90, iowait: 0, irq: 0, softirq: 0 } }];
+  };
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, cpusImpl, checkCpu: true, checkClaude: true, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  assert.equal(result.skipped.loadGuard, 0);
+  assert.equal(result.loadGuard.claudeCount, null);
+  assert.ok(result.loadGuard.error);
+  assert.equal(result.reopened.length, 1);
+});
+
+test('loadGuard: claudeCount が既定上限以上なら 3 件とも reopen せず skipped.loadGuard に計上', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-loadguard-3cand-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+
+  // 3 candidates
+  for (let i = 1; i <= 3; i++) {
+    const id = `cse_cand_${i}`;
+    const dir = path.join(root, `dir_${i}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(base, 'projects', 'proj', `${id}.jsonl`), [
+      { type: 'bridge-session', bridgeSessionId: id },
+      { type: 'user', cwd: dir, message: { content: 'hello' } },
+    ].map(JSON.stringify).join('\n'));
+  }
+
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [
+      { id: 'cse_cand_1' }, { id: 'cse_cand_2' }, { id: 'cse_cand_3' },
+    ] }) };
+  };
+  const spawn = (cmd, args) => {
+    if (cmd === 'tasklist') {
+      const csv = Array(5).fill('"claude.exe","1234","Console","1","100,000 K"').join('\n');
+      return { status: 0, stdout: csv };
+    }
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  const env = claudeEnv();
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, env, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  assert.equal(result.reopened.length, 0, 'no candidate should be reopened at the default cap');
+  assert.equal(result.skipped.loadGuard, 3, 'all candidates should be skipped by loadGuard');
+  assert.equal(result.loadGuard.allowFirst, undefined);
+  assert.equal(result.loadGuard.claudeCount, 5);
+  const allowed = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, env: claudeEnv({ REOPEN_ALLOW_FIRST: '1' }), now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  assert.equal(allowed.reopened.length, 1);
+  assert.equal(allowed.skipped.loadGuard, 2);
+  assert.equal(allowed.loadGuard.allowFirst, true);
+});
+
+test('countWindowsClaudeProcesses: orphan claude processes (parent PID not alive) are excluded', async t => {
+  // Create 3 CLI processes and 1 orphan
+  const cliRows = [
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume abc', ProcessId: 100, ParentProcessId: 1 },
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume def', ProcessId: 101, ParentProcessId: 1 },
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume ghi', ProcessId: 102, ParentProcessId: 100 },
+    // Orphan: PPID=999 (not in the alive PID set)
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume orphan', ProcessId: 200, ParentProcessId: 999 },
+  ];
+  const psScript = JSON.stringify(cliRows);
+  const exec = (cmd, args) => {
+    assert.equal(cmd, 'powershell.exe');
+    return psScript;
+  };
+  const { countWindowsClaudeProcesses } = await import('./lib/windows-process.mjs');
+  const count = countWindowsClaudeProcesses(exec);
+  assert.equal(count, 3, 'orphan process should be excluded');
+});
+
+test('loadGuard: missing credential file is graceful; malformed credential/config diagnostics remain', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-cred-diag-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+
+  // Case A: Missing .credentials.json
+  let result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe',
+    fetchImpl: async () => assert.fail(), spawn: () => { throw Error('should not spawn'); } });
+  assert.equal(result.error, undefined, 'missing credential file should not be an error');
+  assert.equal(result.rcAvailable, false, 'missing credential file should mark RC unavailable');
+
+  // Case B: Missing .claude.json
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe',
+    fetchImpl: async () => assert.fail(), spawn: () => { throw Error('should not spawn'); } });
+  assert.ok(result.error, 'should have error');
+  assert.match(result.error, /config file not found/, `missing config file: ${result.error}`);
+
+  // Case C: Missing token field in .credentials.json
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({}));
+  result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe',
+    fetchImpl: async () => assert.fail(), spawn: () => { throw Error('should not spawn'); } });
+  assert.ok(result.error, 'should have error');
+  assert.match(result.error, /Missing accessToken/, `missing token: ${result.error}`);
+
+  // Case D: Missing org UUID in .claude.json
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({}));
+  result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe',
+    fetchImpl: async () => assert.fail(), spawn: () => { throw Error('should not spawn'); } });
+  assert.ok(result.error, 'should have error');
+  assert.match(result.error, /Missing oauthAccount\.organizationUuid/, `missing org: ${result.error}`);
+});
+
+test('loadGuard: CPU 高 (>=85%) は claudeCount が低くても全件 defer する（CPU 優先）', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-cpu-defer-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+  ].map(JSON.stringify).join('\n'));
+
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
+  };
+  const spawn = (cmd, args) => {
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  let cpuCallCount = 0;
+  const cpusImpl = () => {
+    cpuCallCount++;
+    if (cpuCallCount === 1) return [{ times: { user: 0, nice: 0, system: 0, idle: 0, iowait: 0, irq: 0, softirq: 0 } }];
+    return [{ times: { user: 50, nice: 0, system: 40, idle: 5, iowait: 0, irq: 0, softirq: 0 } }];
+  };
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, cpusImpl, checkCpu: true, checkClaude: false, now: () => nowTime });
+  assert.equal(result.reopened.length, 0, 'CPU high should defer everything');
+  assert.equal(result.skipped.loadGuard, 1, '1 candidate skipped by CPU loadGuard');
+  assert.equal(result.deferredCpu, 95);
+  assert.match(result.loadGuard.reason, /cpuPct/);
+  assert.equal(result.loadGuard.allowFirst, undefined, 'allowFirst should not be set for CPU defer');
+});
+
+test('loadGuard: PowerShell 出力から Claude デスクトップアプリ (11本) を除外し CLI (8本) だけを数え、明示上限 10 未満ならブロックしない', async t => {
+  const base = fixture(t);
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
+  };
+  const desktopProcs = [
+    'C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=crashpad-handler',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=gpu-process',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=network.mojom.NetworkService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=renderer --user-data-dir="C:\\Users\\uers\\AppData\\Roaming\\Claude"',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=renderer --app-user-model-id=Claude_pzs8sxrjxfjjc!Claude',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=audio.mojom.AudioService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=video_capture.mojom.VideoCaptureService',
+  ];
+  const cliProcs = [
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --output-format stream-json',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --output-format stream-json --verbose',
+    'C:\\Users\\uers\\AppData\\Roaming\\Claude\\claude-code\\2.1.321\\d020ce1b5d30\\claude.exe --resume 1234',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume aaed1ee2',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume fe31e35e',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume c6a31e7c',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume 5b1c3cb7',
+    'C:\\Users\\uers\\.local\\bin\\claude.exe agents --json',
+  ];
+  const psOutput = JSON.stringify([...desktopProcs, ...cliProcs].map(CommandLine => ({ Name: 'claude.exe', CommandLine })));
+
+  const spawn = (cmd, args) => {
+    if (cmd === 'powershell.exe') return { status: 0, stdout: psOutput };
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  const env = claudeEnv({ REOPEN_MAX_CLAUDE: '10' });
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, env, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  assert.equal(result.skipped.loadGuard, 0);
+  assert.equal(result.reopened.length, 1);
+  const guard = await getLoadGuardStatus({ spawn, checkCpu: false, env });
+  assert.equal(guard.claudeCount, 8);
+  assert.equal(guard.triggered, false);
+  assert.equal(guard.reason, null);
+});
+
+test('reopenRepeat: 6時間以内に unverified 含め3回 reopen された id は reopenRepeat で除外される', async t => {
+  const base = fixture(t);
+  const now = () => Date.parse('2026-11-07T12:00:00.000Z');
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  const logEntries = [
+    { at: '2026-11-07T08:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+    { at: '2026-11-07T09:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+    { at: '2026-11-07T10:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+  ];
+  fs.writeFileSync(logFile, logEntries.map(e => JSON.stringify(e)).join('\n') + '\n');
+
+  const fetchImplNormal = async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } });
+  const result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl: fetchImplNormal, spawn: () => ({ status: 0, stdout: '[]' }) });
+  assert.equal(result.skipped.reopenLoop, 0);
+  assert.equal(result.skipped.reopenRepeat, 1);
+  assert.equal(result.candidates.length, 0);
+});
+
+test('watchReopen: max 未指定時は 5 件の候補があっても reopen は最大 3 件のみ実行される', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'watch-max-default-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  const lastEventAt = '2026-11-07T11:50:00.000Z';
+
+  const sessions = [];
+  for (let i = 1; i <= 5; i++) {
+    const id = `cse_cand_${i}`;
+    const dir = path.join(root, `dir_${i}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(base, 'projects', 'proj', `${id}.jsonl`), [
+      { type: 'bridge-session', bridgeSessionId: id },
+      { type: 'user', cwd: dir, message: { content: 'hello' } },
+    ].map(JSON.stringify).join('\n'));
+    sessions.push({ id, status: 'active', connection_status: 'disconnected', last_event_at: lastEventAt, title: `Session ${i}` });
+  }
+
+  const fetchImpl = async url => {
+    return { ok: true, json: async () => ({ data: sessions }) };
+  };
+  const spawn = (cmd, args) => {
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+
+  const result = await watchReopen({
+    base,
+    claudeCli: 'claude.exe',
+    codeCli: 'C:\\code.cmd',
+    fetchImpl,
+    spawn,
+    checkCpu: false,
+    checkClaude: false,
+    now: () => nowTime,
+    windowReady: async () => true,
+    wait: async () => {},
+  });
+
+  assert.equal(result.candidates.length, 5);
+  assert.equal(result.reopened.length, 3);
+});
+
+test('readVscodeHiddenSessionIds: 一時 sqlite DB を作り key=Anthropic.claude-code, value={"hiddenSessionIds":["a","b"]} を入れて Set{a,b} が返る／DB 無しで空 Set＋error', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vscdb-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  // DB 無し
+  const envMissing = { APPDATA: path.join(root, 'nonexistent') };
+  const resMissing = readVscodeHiddenSessionIds({ env: envMissing });
+  assert.equal(resMissing.ids.size, 0);
+  assert.ok(resMissing.error.includes('state.vscdb not found'));
+
+  // 有効な SQLite DB
+  const dbDir = path.join(root, 'appdata', 'Code', 'User', 'globalStorage');
+  fs.mkdirSync(dbDir, { recursive: true });
+  const dbPath = path.join(dbDir, 'state.vscdb');
+
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(dbPath);
+  db.exec('CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)');
+  db.prepare('INSERT INTO ItemTable (key, value) VALUES (?, ?)').run('Anthropic.claude-code', JSON.stringify({ hiddenSessionIds: ['cse_hidden1', 'cse_hidden2'] }));
+  db.close();
+
+  const envExist = { APPDATA: path.join(root, 'appdata') };
+  const resExist = readVscodeHiddenSessionIds({ env: envExist });
+  assert.equal(resExist.error, null);
+  assert.deepEqual([...resExist.ids].sort(), ['cse_hidden1', 'cse_hidden2']);
+});
+
+test('hidden に含まれる state 候補が開かれず archivedByUser が 1 になる', async t => {
+  const base = fixture(t);
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  const now = () => nowTime;
+
+  const openDbMock = () => [{ key: 'Anthropic.claude-code', value: JSON.stringify({ hiddenSessionIds: ['cse_one'] }) }];
+
+  const fetchImpl = async () => ({
+    ok: true,
+    json: async () => ({
+      data: [{ id: 'cse_one', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T11:55:00.000Z', updated_at: '2026-11-07T11:55:00.000Z' }]
+    })
+  });
+
+  const result = await reopenLost({
+    base, since, until, dryRun: true, stateBased: true, claudeCli: 'claude.exe', now, fetchImpl,
+    openDb: openDbMock,
+    env: { APPDATA: path.join(base, 'nonexistent') },
+    fsImpl: { ...fs, existsSync: () => true, copyFileSync: () => {} },
+    spawn: () => ({ status: 0, stdout: '[]' })
+  });
+
+  assert.equal(result.skipped.archivedByUser, 1);
+  assert.equal(result.candidates.length, 0);
+});
+
+test('hidden に含まれる host_exit 候補も開かれない', async t => {
+  const base = fixture(t);
+  const now = () => Date.parse('2026-11-07T12:00:00.000Z');
+
+  const openDbMock = () => [{ key: 'Anthropic.claude-code', value: JSON.stringify({ hiddenSessionIds: ['cse_one'] }) }];
+
+  const fetchImpl = async url => ({
+    ok: true,
+    json: async () => url.includes('/events?')
+      ? { data: [exit] }
+      : { data: [{ id: 'cse_one', status: 'active' }] }
+  });
+
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl,
+    openDb: openDbMock,
+    env: { APPDATA: path.join(base, 'nonexistent') },
+    fsImpl: { ...fs, existsSync: () => true, copyFileSync: () => {} },
+    spawn: () => ({ status: 0, stdout: '[]' })
+  });
+
+  assert.equal(result.skipped.archivedByUser, 1);
+  assert.equal(result.candidates.length, 0);
+});
+
+test('hidden に無い候補は従来どおり開かれる', async t => {
+  const base = fixture(t);
+  const now = () => Date.parse('2026-11-07T12:00:00.000Z');
+
+  const openDbMock = () => [{ key: 'Anthropic.claude-code', value: JSON.stringify({ hiddenSessionIds: ['other_id'] }) }];
+
+  const fetchImpl = async url => ({
+    ok: true,
+    json: async () => url.includes('/events?')
+      ? { data: [exit] }
+      : { data: [{ id: 'cse_one', status: 'active' }] }
+  });
+
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl,
+    openDb: openDbMock,
+    env: { APPDATA: path.join(base, 'nonexistent') },
+    fsImpl: { ...fs, existsSync: () => true, copyFileSync: () => {} },
+    spawn: () => ({ status: 0, stdout: '[]' })
+  });
+
+  assert.equal(result.skipped.archivedByUser, 0);
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 'one');
+});
+
+test('hidden 読み取り失敗時は従来どおり開かれ hiddenError が入る', async t => {
+  const base = fixture(t);
+  const now = () => Date.parse('2026-11-07T12:00:00.000Z');
+
+  const openDbMock = () => { throw new Error('DB read error'); };
+
+  const fetchImpl = async url => ({
+    ok: true,
+    json: async () => url.includes('/events?')
+      ? { data: [exit] }
+      : { data: [{ id: 'cse_one', status: 'active' }] }
+  });
+
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl,
+    openDb: openDbMock,
+    env: { APPDATA: path.join(base, 'nonexistent') },
+    fsImpl: { ...fs, existsSync: () => true, copyFileSync: () => {} },
+    spawn: () => ({ status: 0, stdout: '[]' })
+  });
+
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 'one');
+  assert.equal(result.hiddenError, 'DB read error');
+});
+
+
+test('loadGuard counts missing metadata and excludes desktop executable paths', async () => {
+  const rows = [
+    { Name: 'claude.exe', ExecutablePath: 'C:/Program Files/WindowsApps/Claude_5/app/claude.exe' },
+    { Name: 'claude.exe', CommandLine: null, ExecutablePath: null },
+  ];
+  const result = await getLoadGuardStatus({ checkCpu: false, spawn: () => ({ status: 0, stdout: JSON.stringify(rows) }) });
+  assert.equal(result.claudeCount, 1);
+});
+
+const guardNow = Date.parse('2026-11-07T12:00:00Z');
+const failedReopen = (hoursAgo, id = 'one') => ({
+  at: new Date(guardNow - hoursAgo * 3600000).toISOString(), reopened: [{ id }], unverified: [id],
+});
+function writeHistory(base, rows) {
+  fs.writeFileSync(path.join(base, 'reopen-lost-sessions.log'), rows.map(JSON.stringify).join('\n') + '\n');
+}
+function guardOptions(base, extra = {}) {
+  return {
+    base, since, until, now: () => guardNow, checkCpu: false, checkClaude: false, checkIdle: false,
+    claudeCli: 'mock-claude', codeCli: 'mock-code', env: { APPDATA: path.join(base, 'no-appdata') },
+    vscodeStartedAt: null, wait: async () => {}, windowReady: async () => true,
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : {
+      data: [{ id: 'cse_one', title: 'Phone work', status: 'active', connection_status: 'disconnected', last_event_at: new Date(guardNow - 60000).toISOString() }],
+    } }),
+    spawn: (cmd, args) => ({ status: 0, stdout: args[0] === 'agents' || args.at(-1).includes('Get-CimInstance Win32_Process') ? '[]' : '1' }),
+    ...extra,
+  };
+}
+
+test('unverifiedStreak: chronological history, verified reset, per-ID counting and unknown verification ignored', t => {
+  const base = fixture(t);
+  writeHistory(base, [
+    failedReopen(1), failedReopen(9),
+    { at: new Date(guardNow - 2 * 3600000).toISOString(), reopened: ['one'], verifyError: 'timeout' },
+    failedReopen(1, 'other'),
+    { at: new Date(guardNow - 3 * 3600000).toISOString(), unverified: ['one'] },
+    failedReopen(-1), { at: 'invalid', reopened: ['one'], unverified: ['one'] },
+  ]);
+  fs.appendFileSync(path.join(base, 'reopen-lost-sessions.log'), 'broken line\n');
+  assert.deepEqual(unverifiedStreakCounts(base, guardNow), { one: 2, other: 1 });
+  fs.appendFileSync(path.join(base, 'reopen-lost-sessions.log'), JSON.stringify({ at: new Date(guardNow - 1800000).toISOString(), verified: ['one'] }) + '\n');
+  assert.deepEqual(unverifiedStreakCounts(base, () => guardNow), { other: 1 });
+});
+
+test('unverifiedStreak: exact six-hour boundary permits retry; another failure renews cooldown', t => {
+  const base = fixture(t);
+  const history = [failedReopen(20), failedReopen(6)];
+  writeHistory(base, history);
+  assert.equal(unverifiedStreakCounts(base, guardNow - 1).one, 2);
+  assert.equal(unverifiedStreakCounts(base, guardNow).one, undefined);
+  writeHistory(base, [...history, failedReopen(0)]);
+  assert.equal(unverifiedStreakCounts(base, guardNow).one, 3);
+  assert.equal(unverifiedStreakCounts(base, guardNow + 6 * 3600000).one, undefined);
+});
+
+for (const stateBased of [false, true]) {
+  for (const scenario of ['no history', 'one failure', 'two failures', 'verified reset']) {
+    test(`mobile recovery ${stateBased ? 'state' : 'host_exit'}: ${scenario}`, async t => {
+      const base = fixture(t);
+      if (scenario === 'one failure') writeHistory(base, [failedReopen(1)]);
+      if (scenario === 'two failures') writeHistory(base, [failedReopen(8), failedReopen(1)]);
+      if (scenario === 'verified reset') writeHistory(base, [failedReopen(8), failedReopen(7), {
+        at: new Date(guardNow - 60000).toISOString(), reopened: ['one'], verified: ['one'],
+      }]);
+      const opts = guardOptions(base, { stateBased, dryRun: true });
+      if (stateBased) opts.fetchImpl = async () => ({ ok: true, json: async () => ({ data: [{
+        id: 'cse_one', status: 'active', connection_status: 'disconnected', last_event_at: new Date(guardNow - 60000).toISOString(), title: 'Phone work',
+      }] }) });
+      const result = await reopenLost(opts);
+      assert.equal(result.error, undefined);
+      assert.equal(result.skipped.unverifiedStreak, scenario === 'two failures' ? 1 : 0);
+      assert.equal(result.candidates.length, scenario === 'two failures' ? 0 : 1);
+      if (result.candidates.length) {
+        assert.equal(result.candidates[0].rcId, 'cse_one');
+        assert.equal(result.candidates[0].bridgeSessionId, 'cse_one');
+      }
+    });
+  }
+}
+
+test('unverifiedStreak: refresh history after fetch before dispatch', async t => {
+  const base = fixture(t), opts = guardOptions(base);
+  const fetchImpl = opts.fetchImpl;
+  opts.fetchImpl = async url => {
+    writeHistory(base, [failedReopen(8), failedReopen(1)]);
+    return fetchImpl(url);
+  };
+  const result = await reopenLost(opts);
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.reopened.length, 0);
+  assert.equal(result.skipped.unverifiedStreak, 1);
+});
+
+test('unverifiedStreak: cooldown permits one reopen then blocks the next run', async t => {
+  const base = fixture(t);
+  writeHistory(base, [failedReopen(20), failedReopen(6)]);
+  const first = await reopenLost(guardOptions(base));
+  assert.equal(first.reopened.length, 1);
+  assert.deepEqual(first.unverified, ['one']);
+  const second = await reopenLost(guardOptions(base));
+  assert.equal(second.reopened.length, 0);
+  assert.equal(second.skipped.unverifiedStreak, 1);
+});
+
+for (const command of ['claude.exe --resume=local-uuid', 'claude.exe --resume "local-uuid"', 'claude.exe --resume bridge_id']) {
+  test(`processRunning command line: ${command}`, () => {
+    assert.equal(isSessionProcessRunning({ id: 'local-uuid', bridgeSessionId: 'bridge_id' }, {
+      spawn: (cmd, args) => {
+        assert.equal(cmd, 'powershell.exe');
+        assert.deepEqual(args.slice(0, 3), ['-NoProfile', '-NonInteractive', '-Command']);
+        return { status: 0, stdout: JSON.stringify({ ProcessId: 123, Name: 'claude.exe', CommandLine: command }) };
+      },
+    }), true);
+  });
+}
+
+test('processRunning: any registry kind needs matching sessionId and live PID; malformed files ignored', t => {
+  const base = fixture(t), sessionsDir = path.join(base, 'sessions');
+  fs.mkdirSync(sessionsDir);
+  fs.writeFileSync(path.join(sessionsDir, 'bad.json'), 'broken');
+  const file = path.join(sessionsDir, 'session.json');
+  const spawn = () => ({ status: 0, stdout: JSON.stringify([{ ProcessId: 123, Name: 'claude.exe', CommandLine: 'claude.exe --output-format stream-json' }]) });
+  for (const kind of ['interactive', 'vscode', 'remote-control', 'unknown']) {
+    fs.writeFileSync(file, JSON.stringify({ sessionId: 'one', pid: 123, kind }));
+    assert.equal(isSessionProcessRunning({ id: 'one' }, { sessionsDir, spawn }), true, kind);
+  }
+  for (const data of [{ sessionId: 'one', pid: 456 }, { sessionId: 'another', pid: 123 }, { sessionId: 'one' }]) {
+    fs.writeFileSync(file, JSON.stringify(data));
+    assert.equal(isSessionProcessRunning({ id: 'one' }, { sessionsDir, spawn }), false);
+  }
+  fs.writeFileSync(file, JSON.stringify({ sessionId: 'bridge_id', pid: 123 }));
+  assert.equal(isSessionProcessRunning({ id: 'one', bridgeSessionId: 'bridge_id' }, { sessionsDir, spawn }), true);
+});
+
+test('processRunning: unrelated executable or session does not block; query errors fail open', () => {
+  const candidate = { id: 'one' };
+  for (const result of [
+    { status: 1 }, { status: 0, stdout: 'malformed' }, { error: Error('timeout') },
+    { status: 0, stdout: JSON.stringify([{ Name: 'Code.exe', CommandLine: '--resume=one' }, { Name: 'claude.exe', CommandLine: '--resume=other' }]) },
+  ]) assert.equal(isSessionProcessRunning(candidate, { spawn: () => result }), false);
+  assert.equal(isSessionProcessRunning(candidate, { spawn: () => { throw Error('unavailable'); } }), false);
+});
+
+for (const kind of ['command', 'registry', 'query failure']) {
+  test(`processRunning dispatch: ${kind}`, async t => {
+    const base = fixture(t), opts = guardOptions(base);
+    const original = opts.spawn;
+    if (kind === 'registry') {
+      fs.mkdirSync(path.join(base, 'sessions'));
+      fs.writeFileSync(path.join(base, 'sessions', 'session.json'), JSON.stringify({ sessionId: 'one', pid: 123, kind: 'vscode' }));
+    }
+    opts.spawn = (cmd, args) => args.at(-1).includes('Get-CimInstance Win32_Process')
+      ? kind === 'query failure' ? { status: 1 } : { status: 0, stdout: JSON.stringify([{ ProcessId: 123, Name: 'claude.exe', CommandLine: kind === 'command' ? 'claude.exe --resume=one' : 'claude.exe' }]) }
+      : original(cmd, args);
+    const result = await reopenLost(opts);
+    assert.equal(result.skipped.processRunning, kind === 'query failure' ? 0 : 1);
+    assert.equal(result.reopened.length, kind === 'query failure' ? 1 : 0);
+  });
+}
+
+for (const change of ['process', 'history']) {
+  test(`dispatch rechecks ${change} after waiting for VS Code window`, async t => {
+    const base = fixture(t), opts = guardOptions(base);
+    let ready = false, uriCalls = 0;
+    opts.spawn = (cmd, args) => {
+      const script = args.at(-1);
+      if (script.includes('--open-url')) uriCalls++;
+      if (script.includes('Get-CimInstance Win32_Process')) return { status: 0, stdout: JSON.stringify(ready && change === 'process' ? [{ Name: 'claude.exe', CommandLine: '--resume=one' }] : []) };
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '0' };
+    };
+    opts.windowReady = async () => {
+      ready = true;
+      if (change === 'history') writeHistory(base, [failedReopen(8), failedReopen(1)]);
+      return true;
+    };
+    const result = await reopenLost(opts);
+    assert.equal(result.reopened.length, 0);
+    assert.equal(uriCalls, 0);
+    assert.equal(result.skipped[change === 'process' ? 'processRunning' : 'unverifiedStreak'], 1);
+  });
+}
+
+for (const scenario of ['RC connected', 'RC disconnected', 'other RC connected', 'RC failure agents alive', 'RC failure agents absent', 'agents failure RC connected', 'both fail']) {
+  test(`90-second verification: ${scenario}`, async t => {
+    const base = fixture(t), opts = guardOptions(base);
+    let verifying = false;
+    opts.wait = async ms => { if (ms === 90000) verifying = true; };
+    const originalSpawn = opts.spawn, originalFetch = opts.fetchImpl;
+    opts.spawn = (cmd, args) => {
+      if (verifying && args[0] === 'agents') {
+        if (scenario === 'agents failure RC connected' || scenario === 'both fail') return { status: 1 };
+        if (scenario === 'RC failure agents alive') return { status: 0, stdout: JSON.stringify([{ kind: 'interactive', sessionId: 'one' }]) };
+      }
+      return originalSpawn(cmd, args);
+    };
+    opts.fetchImpl = async url => {
+      if (!verifying) return originalFetch(url);
+      if (scenario.startsWith('RC failure') || scenario === 'both fail') throw Error('RC unavailable');
+      return { ok: true, json: async () => ({ data: [{ id: scenario === 'other RC connected' ? 'different_rc' : 'cse_one', connection_status: scenario === 'RC disconnected' ? 'disconnected' : 'connected' }] }) };
+    };
+    const result = await reopenLost(opts);
+    assert.equal(result.reopened.length, 1);
+    assert.equal(result.reopened[0].rcId, 'cse_one');
+    if (scenario === 'both fail') {
+      assert.ok(result.verifyError);
+      assert.ok(result.verifyApiError);
+      assert.equal(result.unverified, undefined);
+    } else {
+      const verified = ['RC connected', 'RC failure agents alive', 'agents failure RC connected'].includes(scenario);
+      assert.deepEqual(result.verified, verified ? ['one'] : []);
+      assert.deepEqual(result.unverified, verified ? [] : ['one']);
+    }
+  });
+}
+
+test('RC verification paginates with a fresh deadline and rejects repeated cursors or invalid responses', async () => {
+  const urls = [];
+  const connected = await connectedRcSessionIds({ now: () => guardNow, fetchImpl: async (url, options) => {
+    urls.push(url);
+    assert.ok(options.signal);
+    return { ok: true, json: async () => urls.length === 1
+      ? { data: [{ id: 'other', connection_status: 'disconnected' }], next_cursor: 'page2' }
+      : { data: [{ id: 'cse_one', connection_status: 'connected' }] } };
+  } });
+  assert.deepEqual([...connected], ['cse_one']);
+  assert.match(urls[1], /cursor=page2/);
+  for (const response of [{ ok: false, status: 503 }, { ok: true, json: async () => ({ data: null }) }, { ok: true, json: async () => ({ data: [], next_cursor: 'loop' }) }]) {
+    await assert.rejects(connectedRcSessionIds({ fetchImpl: async () => response }));
+  }
+});
+
+test('URI-only dispatch rechecks a process appearing during window detection', async t => {
+  const base = fixture(t), opts = guardOptions(base);
+  let windowChecked = false, uriCalls = 0;
+  opts.spawn = (cmd, args) => {
+    const script = args.at(-1);
+    if (script.includes('--open-url')) uriCalls++;
+    if (script.includes('Get-Process Code')) windowChecked = true;
+    if (script.includes('Get-CimInstance Win32_Process')) return { status: 0, stdout: JSON.stringify(windowChecked ? [{ Name: 'claude.exe', CommandLine: '--resume=one' }] : []) };
+    return { status: 0, stdout: args[0] === 'agents' ? '[]' : '1' };
+  };
+  const result = await reopenLost(opts);
+  assert.equal(uriCalls, 0);
+  assert.equal(result.reopened.length, 0);
+  assert.equal(result.skipped.processRunning, 1);
+});
+
+test('watch dry run preserves existing progress, log, state and lock contents', async t => {
+  const base = fixture(t), originals = new Map();
+  for (const [name, data] of Object.entries({
+    'reopen-lost-sessions-progress.json': '{"stage":"existing"}',
+    'reopen-lost-sessions.log': '', 'reopen-lost-sessions-state.json': '{}', 'reopen-lost-sessions.lock': 'existing',
+  })) {
+    fs.writeFileSync(path.join(base, name), data);
+    originals.set(name, { data, mtime: fs.statSync(path.join(base, name)).mtimeMs });
+  }
+  const result = await watchReopen({ ...guardOptions(base), dryRun: true });
+  assert.equal(result.error, undefined);
+  assert.equal(result.reopened.length, 0);
+  for (const [name, before] of originals) {
+    assert.equal(fs.readFileSync(path.join(base, name), 'utf8'), before.data, name);
+    assert.equal(fs.statSync(path.join(base, name)).mtimeMs, before.mtime, name);
+  }
+});
+
+test('reopenLost with idleImpl 30: deferredActive is 30 and no --open-url spawn calls', async t => {
+  const base = fixture(t), calls = []; let clock = 0;
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock, checkCpu: false, checkIdle: true, idleImpl: () => 30, env: { APPDATA: path.join(base, 'no-appdata') },
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: (cmd, args) => {
+      const cmdStr = args[args.length - 1];
+      if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
+        return { status: 0, stdout: '0' };
+      }
+      calls.push(args);
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
+    },
+    windowReady: () => true, wait: async () => {},
+  });
+  assert.equal(result.deferredActive, 30);
+  const openUrlCalls = calls.filter(a => a.some(arg => typeof arg === 'string' && arg.includes('--open-url')));
+  assert.equal(openUrlCalls.length, 0);
+});
+
+test('reopenLost with idleImpl 900: opens session and deferredActive is undefined', async t => {
+  const base = fixture(t), calls = []; let clock = 0;
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock, checkCpu: false, checkIdle: true, idleImpl: () => 900, env: { APPDATA: path.join(base, 'no-appdata') },
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: (cmd, args) => {
+      const cmdStr = args[args.length - 1];
+      if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
+        return { status: 0, stdout: '0' };
+      }
+      calls.push(args);
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
+    },
+    windowReady: () => true, wait: async () => {},
+  });
+  assert.equal(result.deferredActive, undefined);
+  assert.equal(result.reopened.length, 1);
+  const openUrlCalls = calls.filter(a => a.some(arg => typeof arg === 'string' && arg.includes('--open-url')));
+  assert.ok(openUrlCalls.length >= 1);
+});
+
+test('reopenLost with idleImpl null: opens session normally', async t => {
+  const base = fixture(t), calls = []; let clock = 0;
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock, checkCpu: false, checkIdle: true, idleImpl: () => null, env: { APPDATA: path.join(base, 'no-appdata') },
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: (cmd, args) => {
+      const cmdStr = args[args.length - 1];
+      if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
+        return { status: 0, stdout: '0' };
+      }
+      calls.push(args);
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
+    },
+    windowReady: () => true, wait: async () => {},
+  });
+  assert.equal(result.deferredActive, undefined);
+  assert.equal(result.reopened.length, 1);
+  const openUrlCalls = calls.filter(a => a.some(arg => typeof arg === 'string' && arg.includes('--open-url')));
+  assert.ok(openUrlCalls.length >= 1);
+});
+
+test('title containing 【閉じて可】 skips candidate and sets skipped.closable (host_exit & watchReopen)', async t => {
+  const base = fixture(t); let clock = 0;
+  const resultHostExit = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock, checkCpu: false, checkIdle: false, env: { APPDATA: path.join(base, 'no-appdata') },
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one', title: '004｜【閉じて可】テスト' }] } }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+    windowReady: () => true, wait: async () => {},
+  });
+  assert.equal(resultHostExit.candidates.length, 0);
+  assert.equal(resultHostExit.skipped.closable, 1);
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  const resultWatch = await watchReopen({
+    base, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, checkIdle: false, now: () => nowTime,
+    fetchImpl: async url => ({
+      ok: true,
+      json: async () => ({ data: [{ id: 'cse_one', status: 'active', connection_status: 'disconnected', last_event_at: new Date(nowTime - 60000).toISOString(), title: '004｜【閉じて可】テスト' }] }),
+    }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.equal(resultWatch.candidates.length, 0);
+  assert.equal(resultWatch.skipped.closable, 1);
+});
+
+// CI（GitHub Actions の windows runner）は対話セッションを持たず GetLastInputInfo が
+// 値を返せないため null になる。このテストは Win32 実機での Add-Type 回帰防止が目的なので CI では skip。
+test('measureUserIdleSec: Win32 実機で数値を返す（Add-Type 完全性の回帰防止）', { skip: process.platform !== 'win32' || !!process.env.CI }, () => {
+  const sec = measureUserIdleSec();
+  assert.ok(Number.isInteger(sec), `measureUserIdleSec() returned non-integer: ${sec}`);
+  assert.ok(sec >= 0, `measureUserIdleSec() returned negative: ${sec}`);
+});
+
+// ── fetchWithRetry ──────────────────────────────────────
+
+test('fetchWithRetry: 200 は1回目で返る', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    fetchImpl: async () => { calls++; return { ok: true }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.ok(res.ok);
+  assert.equal(calls, 1);
+});
+
+test('fetchWithRetry: 4xx（非 429）は即座に返りリトライしない', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 3, {
+    fetchImpl: async () => { calls++; return { ok: false, status: 403 }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.equal(res.status, 403);
+  assert.equal(calls, 1);
+});
+
+test('fetchWithRetry: 429 はリトライする', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    fetchImpl: async () => { calls++; return calls < 3 ? { ok: false, status: 429 } : { ok: true }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.ok(res.ok);
+  assert.equal(calls, 3);
+});
+
+test('fetchWithRetry: 5xx はリトライする', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    fetchImpl: async () => { calls++; return calls < 3 ? { ok: false, status: 503 } : { ok: true }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.ok(res.ok);
+  assert.equal(calls, 3);
+});
+
+test('fetchWithRetry: リトライ上限に達すると最後の response を返す（例外を投げない）', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    fetchImpl: async () => { calls++; return { ok: false, status: 503 }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.equal(res.status, 503);
+  assert.equal(calls, 3);
+});
+
+test('fetchWithRetry: ネットワーク例外はリトライし最後に throw', async () => {
+  await assert.rejects(fetchWithRetry('https://test', {}, 1, {
+    fetchImpl: async () => { throw new Error('ECONNREFUSED'); },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  }));
+});
+
+test('fetchWithRetry: 再試行ごとに新しい signal を使う（古い signal の abort が残りの試行を妨げない）', async () => {
+  let calls = 0;
+  let signals = [];
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    timeoutMs: 50000,
+    fetchImpl: async (url, opts) => {
+      calls++;
+      signals.push(opts.signal);
+      if (calls === 1) { opts.signal.addEventListener('abort', () => {}); return { ok: false, status: 429 }; }
+      return { ok: true };
+    },
+    nowFn: () => 0, deadline: Infinity,
+  });
+  assert.ok(res.ok);
+  assert.equal(calls, 2);
+  assert.notEqual(signals[0], signals[1], 'each retry should get a new signal');
+});
+
+test('fetchWithRetry: deadline 超過で throw', async () => {
+  let clock = 0;
+  await assert.rejects(fetchWithRetry('https://test', {}, 1, {
+    fetchImpl: async () => { clock = 100; return { ok: false, status: 429 }; },
+    nowFn: () => clock, deadline: 50, timeoutMs: 50000,
+  }));
+});
+
+// ── recordApiResult ────────────────────────────────────
+
+test('recordApiResult: 連続 7 回失敗でも exit 1 にならない', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-api-7-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  for (let i = 0; i < 7; i++) {
+    assert.equal(recordApiResult(base, 'some error', new Date().toISOString()), false);
+  }
+  const state = readFailState(base);
+  assert.equal(state.consecutiveFails, 7);
+});
+
+test('recordApiResult: 連続 8 回失敗で exit 1 が必要', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-api-8-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  for (let i = 0; i < 7; i++) {
+    recordApiResult(base, 'error');
+  }
+  assert.equal(recordApiResult(base, 'error'), true);
+});
+
+test('recordApiResult: 成功でカウンターを 0 に戻す', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-api-reset-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  for (let i = 0; i < 5; i++) recordApiResult(base, 'error');
+  assert.equal(readFailState(base).consecutiveFails, 5);
+  recordApiResult(base, null);
+  assert.equal(readFailState(base).consecutiveFails, 0);
+});
+
+test('CLI entry point: apiError 単発では process.exitCode を立てず、連続 8 回で立てる', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-exit-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  // Simulate CLI entry point logic for watch mode (lines 1308-1312 equivalent)
+  // apiError alone without error/failed/unverified should not set exitCode
+  // because recordApiResult returns false for a single transient failure
+  let exitCode = 0;
+  const check = (result) => {
+    if (result.error || result.failed?.length || result.unverified?.length) exitCode = 1;
+    if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) exitCode = 1;
+    if (recordApiResult(base, result.apiError)) exitCode = 1;
+  };
+  check({ apiError: 'API time limit', error: undefined, candidates: [], reopened: [], skipped: {} });
+  assert.equal(exitCode, 0, 'single apiError should not set exitCode');
+  // 連続 8 回で exitCode が立つ
+  for (let i = 0; i < 7; i++) recordApiResult(base, 'error');
+  exitCode = 0;
+  check({ apiError: 'error', error: undefined, candidates: [], reopened: [], skipped: {} });
+  assert.equal(exitCode, 1, '8th consecutive failure should set exitCode');
+});
+
+test('recordApiResult: 初回はカウンターが 1 になる', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-api-first-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  assert.equal(recordApiResult(base, 'error'), false);
+  assert.equal(readFailState(base).consecutiveFails, 1);
+});
+
+for (const scenario of ['verified', 'recovered by RC', 'still unverified', 'dispatch failure', 'closed meanwhile', 'alive meanwhile']) {
+  test(`拡張再試行: ${scenario}`, async t => {
+    const base = fixture(t), opts = guardOptions(base);
+    const { spawn, fetchImpl } = opts;
+    let waits = 0, attempts = 0, verificationAgentChecks = 0;
+    opts.wait = async ms => { if (ms === 90000) waits++; };
+    opts.spawn = (cmd, args) => {
+      if (waits && args[0] === 'agents') {
+        verificationAgentChecks++;
+        if (scenario === 'alive meanwhile' && verificationAgentChecks >= 2) {
+          return { status: 0, stdout: JSON.stringify([{ kind: 'interactive', sessionId: 'one' }]) };
+        }
+      }
+      if (args.at(-1).includes('vscode://orgiast.next-session/reopen?session=one')) {
+        attempts++;
+        if (scenario === 'dispatch failure') return { status: 1, stdout: '', stderr: 'mock failure' };
+      }
+      return spawn(cmd, args);
+    };
+    opts.fetchImpl = async url => {
+      if (!waits) return fetchImpl(url);
+      if (scenario === 'closed meanwhile') {
+        fs.writeFileSync(path.join(base, 'closed-sessions.json'), JSON.stringify({ ids: ['one'] }));
+      }
+      const connected = scenario === 'verified' || (scenario === 'recovered by RC' && waits === 2);
+      return { ok: true, json: async () => ({ data: [{ id: 'cse_one', connection_status: connected ? 'connected' : 'disconnected' }] }) };
+    };
+    const result = await reopenLost(opts);
+    const retried = ['recovered by RC', 'still unverified'].includes(scenario);
+    const verified = ['verified', 'recovered by RC'].includes(scenario);
+    assert.equal(result.reopened.length, 1);
+    assert.equal(attempts, Number(retried || scenario === 'dispatch failure'));
+    assert.equal(waits, retried ? 2 : 1);
+    assert.deepEqual(result.retriedViaExtension, retried ? ['one'] : []);
+    assert.deepEqual(result.verified, verified ? ['one'] : []);
+    assert.deepEqual(result.unverified, verified ? [] : ['one']);
+    if (scenario === 'dispatch failure') assert.equal(result.extensionRetryFailed[0].id, 'one');
+    if (scenario === 'closed meanwhile') assert.equal(result.skipped.closed, 1);
+    if (scenario === 'alive meanwhile') assert.equal(result.skipped.alive, 1);
+  });
+}
+for (const count of [25, 19, 0]) {
+  test(`Windows reconnection uses one shared process snapshot with ${count} open sessions`, async t => {
+    const base = fixture(t);
+    fs.writeFileSync(path.join(base, 'projects', 'proj', 'two.jsonl'), [
+      { type: 'bridge-session', bridgeSessionId: 'cse_two' },
+      { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+    ].map(JSON.stringify).join('\n'));
+
+    const opts = guardOptions(base, {
+      concurrencyPlatform: 'win32', checkClaude: true,
+      env: { APPDATA: path.join(base, 'no-appdata'), REOPEN_MAX_CLAUDE: '30' },
+      fetchImpl: async url => ({
+        ok: true,
+        json: async () => url.includes('/events?') ? { data: [exit] } : {
+          data: ['cse_one', 'cse_two'].map(id => ({ id })),
+        },
+      }),
+    });
+    let snapshots = 0;
+    let uriCalls = 0;
+    const spawn = opts.spawn;
+    opts.spawn = (cmd, args) => {
+      if (args.at(-1) === CLAUDE_PROCESS_SCRIPT) {
+        snapshots++;
+        return { status: 0, stdout: JSON.stringify(Array.from({ length: count }, (_, index) => ({
+          Name: 'claude.exe', ProcessId: index + 100, CommandLine: 'claude.exe --resume=other',
+        }))) };
+      }
+      if (args.at(-1).includes('--open-url')) uriCalls++;
+      return spawn(cmd, args);
+    };
+
+    const result = await reopenLost(opts);
+    const expectedOpens = Math.min(2, Math.max(0, 20 - count));
+    // 拡張再試行の前再確認（isSessionProcessRunning）は共有スナップショットを使わず現時点を取り直す:
+    // この fixture は opened 全員 unverified → 全員拡張再試行 → スナップショットは 1 + retried 回
+    assert.equal(snapshots, 1 + expectedOpens);
+    assert.equal(uriCalls, expectedOpens * 2); // 初回オープン + 全員拡張再試行
+    assert.equal(result.candidates.length, 2);
+    assert.equal(result.reopened.length, expectedOpens);
+    if (expectedOpens < 2) {
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(base, 'reopen-lost-sessions.log'), 'utf8')).sessionConcurrencyCap,
+        { ok: false, reason: 'session_concurrency_cap', count: count + expectedOpens, limit: 20 });
+    } else {
+      assert.equal(result.sessionConcurrencyCap, undefined);
+    }
+  });
+}

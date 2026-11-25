@@ -1,0 +1,2 @@
+timestamp,model,precision,mode,prompt,run,source,ttft_seconds,total_seconds,local_vram_delta_mb,error,error_message
+2026-11-23T16:07:43.083Z,nano-banana-2-flash-lite,auto,image,"A modern exhibition booth with three blue and white panels and a wooden reception counter, wide view.",1,mock,4,4,,false,

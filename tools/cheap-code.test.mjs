@@ -1,0 +1,314 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { DEFAULT_CHILD_API_TIMEOUT_MS, appendUsageLedger, autoProvider, buildChildEnv, cooldownUntilFromText, detectBillingFailure, detectUsageLimitText, readInstruction, resolveChildApiTimeoutMs, resolveProvider, writeProviderCooldown } from './cheap-code.mjs';
+import { prepareWorkerConfigDir } from './claude-exe.mjs';
+
+const tool = fileURLToPath(new URL('./cheap-code.mjs', import.meta.url));
+
+function run(args) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-home-'));
+  return spawnSync(process.execPath, [tool, ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, ORGIAST_HOME: home },
+  });
+}
+
+test('provider 未指定では DeepSeek の base を選ぶ', () => {
+  const result = run(['--dry-run', '確認する']);
+  assert.equal(result.status, 0);
+  assert.equal(JSON.parse(result.stdout).base, 'https://openrouter.ai/api');
+});
+
+test('--provider glm では Z.ai の base を選ぶ', () => {
+  const result = run(['--dry-run', '--provider', 'glm', '確認する']);
+  assert.equal(result.status, 0);
+  assert.equal(JSON.parse(result.stdout).base, 'https://api.z.ai/api/anthropic');
+});
+
+test('不正な provider 名はエラーになる', () => {
+  const result = run(['--dry-run', '--provider', 'unknown', '確認する']);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /不正な provider/);
+});
+
+test('--model が provider の既定モデルを上書きする', () => {
+  const result = run(['--dry-run', '--model', 'custom-model', '確認する']);
+  assert.equal(result.status, 0);
+  assert.equal(JSON.parse(result.stdout).model, 'deepseek/custom-model');
+});
+
+test('--prompt-file から指示を読める', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-prompt-'));
+  try {
+    const file = path.join(directory, 'prompt.md');
+    fs.writeFileSync(file, 'ファイル `sample.mjs` を作る\n', 'utf8');
+    assert.equal(readInstruction(file, []), 'ファイル `sample.mjs` を作る');
+    const result = run(['--dry-run', '--prompt-file', file]);
+    assert.equal(result.status, 0);
+    const dryRun = JSON.parse(result.stdout);
+    assert.equal(dryRun.promptVia, 'stdin');
+    assert.ok(dryRun.promptChars > 0, `promptChars=${dryRun.promptChars}`);
+    assert.ok(!JSON.stringify(dryRun.argv).includes('sample.mjs'), 'プロンプト本文が argv に載っている');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+// Windows のコマンドライン長上限で spawn ENAMETOOLONG になるため、プロンプトは CLI 引数ではなく
+// stdin で渡す(2026-09-21 実測: in=4964tok の指示で即死 / out=0 status=1)。
+test('長い指示でも argv にプロンプトを載せない（stdin 経由）', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-long-prompt-'));
+  try {
+    const file = path.join(directory, 'prompt.md');
+    fs.writeFileSync(file, 'あ'.repeat(40000), 'utf8');
+    const result = run(['--dry-run', '--prompt-file', file]);
+    assert.equal(result.status, 0);
+    const dryRun = JSON.parse(result.stdout);
+    assert.equal(dryRun.promptVia, 'stdin');
+    assert.ok(dryRun.promptChars >= 40000, `promptChars=${dryRun.promptChars}`);
+    assert.ok(JSON.stringify(dryRun.argv).length < 300, `argv=${JSON.stringify(dryRun.argv)}`);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('子 env だけに Anthropic 接続設定を追加し process.env を汚染しない', () => {
+  const beforeBase = process.env.ANTHROPIC_BASE_URL;
+  const beforeToken = process.env.ANTHROPIC_AUTH_TOKEN;
+  const config = resolveProvider('deepseek');
+  const childEnv = buildChildEnv(config, 'test-secret', { SAFE_PARENT: 'yes' });
+  assert.equal(childEnv.ANTHROPIC_BASE_URL, 'https://openrouter.ai/api');
+  assert.equal(childEnv.ANTHROPIC_AUTH_TOKEN, 'test-secret');
+  assert.equal(childEnv.SAFE_PARENT, 'yes');
+  assert.equal(process.env.ANTHROPIC_BASE_URL, beforeBase);
+  assert.equal(process.env.ANTHROPIC_AUTH_TOKEN, beforeToken);
+});
+
+// デスクトップ版 Claude から呼ばれると CLAUDECODE / CLAUDE_CODE_* / MCP_* / ANTHROPIC_* が
+// 子へ漏れ、DeepSeek が `400 Invalid schema for function 'Artifact'` を返す(2026-10-17 実測)。
+// 浄化 → provider 値注入の順であること、CLAUDE_CODE_GIT_BASH_PATH は残ることを固定する。
+test('buildChildEnv は親 env を浄化してから provider 値を入れ、worker config dir を渡す', () => {
+  const config = resolveProvider('deepseek');
+  const childEnv = buildChildEnv(config, 'provider-key', {
+    PATH: 'C:\\bin',
+    SAFE_PARENT: 'yes',
+    CLAUDECODE: '1',
+    CLAUDE_CODE_ENTRYPOINT: 'cli',
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: '200000',
+    MCP_SERVER: 'x',
+    ANTHROPIC_BASE_URL: 'https://parent.example',
+    ANTHROPIC_API_KEY: 'parent-key',
+    CLAUDE_CONFIG_DIR: 'C:\\parent-config',
+    CLAUDE_CODE_GIT_BASH_PATH: 'C:\\Program Files\\Git\\bin\\bash.exe',
+  }, { configDir: 'C:\\worker\\dir' });
+
+  assert.equal(childEnv.ANTHROPIC_BASE_URL, 'https://openrouter.ai/api');
+  assert.equal(childEnv.ANTHROPIC_AUTH_TOKEN, 'provider-key');
+  assert.equal(childEnv.ANTHROPIC_API_KEY, '');
+  assert.equal(childEnv.CLAUDECODE, undefined);
+  assert.equal(childEnv.MCP_SERVER, undefined);
+  assert.equal(childEnv.SAFE_PARENT, 'yes');
+  assert.equal(childEnv.CLAUDE_CODE_GIT_BASH_PATH, 'C:\\Program Files\\Git\\bin\\bash.exe');
+  assert.equal(childEnv.CLAUDE_CONFIG_DIR, 'C:\\worker\\dir');
+  // 親の 200000 は浄化で消え、provider の実窓に置き換わる。
+  assert.equal(childEnv.CLAUDE_CODE_MAX_CONTEXT_TOKENS, '1000000');
+});
+
+// API 無応答ハングが既定 600s だと 900s cap 内で再試行に入れない(fallback_chain_timeout)。
+test('buildChildEnv は子の API_TIMEOUT_MS を 600s 既定より短く注入し env で上書きできる', () => {
+  const config = resolveProvider('deepseek');
+  assert.equal(DEFAULT_CHILD_API_TIMEOUT_MS < 600000, true);
+  // 900s の cap 内で最低 3 回は試行できる値にしておく(1 回のハングで cap を使い切らない)。
+  assert.equal(DEFAULT_CHILD_API_TIMEOUT_MS * 3 <= 900000, true);
+  assert.equal(buildChildEnv(config, 'k', {}).API_TIMEOUT_MS, String(DEFAULT_CHILD_API_TIMEOUT_MS));
+  // 親が API_TIMEOUT_MS=600000 を持っていても短縮値で置き換える。
+  assert.equal(buildChildEnv(config, 'k', { API_TIMEOUT_MS: '600000' }).API_TIMEOUT_MS, String(DEFAULT_CHILD_API_TIMEOUT_MS));
+  assert.equal(buildChildEnv(config, 'k', { CHEAP_CODE_API_TIMEOUT_MS: '90000' }).API_TIMEOUT_MS, '90000');
+  assert.equal(resolveChildApiTimeoutMs({ CHEAP_CODE_API_TIMEOUT_MS: 'abc' }), DEFAULT_CHILD_API_TIMEOUT_MS);
+  assert.equal(resolveChildApiTimeoutMs({ CHEAP_CODE_API_TIMEOUT_MS: '-5' }), DEFAULT_CHILD_API_TIMEOUT_MS);
+});
+
+// 契約 RULES「他バックエンドの挙動を変えない」: glm は既定のまま(注入しない)。
+test('buildChildEnv は glm へ API_TIMEOUT_MS を注入しない', () => {
+  const glm = resolveProvider('glm');
+  assert.equal(buildChildEnv(glm, 'k', {}).API_TIMEOUT_MS, undefined);
+  // 親が明示的に持っている値は従来どおり継承する(挙動を変えない)。
+  assert.equal(buildChildEnv(glm, 'k', { API_TIMEOUT_MS: '600000' }).API_TIMEOUT_MS, '600000');
+});
+
+test('prepareWorkerConfigDir は hooks を書かず deny を引き継ぎ disableAllHooks を立てる', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-worker-'));
+  try {
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({
+      hooks: { PreToolUse: [{ matcher: '*', hooks: [] }] },
+      permissions: { defaultMode: 'auto', deny: ['Bash(rm -rf:*)'] },
+    }), 'utf8');
+    const dir = prepareWorkerConfigDir({ home });
+    assert.equal(dir, path.join(home, '.claude', 'cheap-code-worker'));
+    const settings = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
+    assert.deepEqual(settings.permissions.deny, ['Bash(rm -rf:*)']);
+    assert.equal(settings.permissions.defaultMode, 'bypassPermissions');
+    assert.equal(settings.disableAllHooks, true);
+    assert.equal(settings.hooks, undefined);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('prepareWorkerConfigDir はユーザー設定が無くても deny: [] で動く', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-worker-empty-'));
+  try {
+    const dir = prepareWorkerConfigDir({ home });
+    const settings = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
+    assert.deepEqual(settings.permissions.deny, []);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('--dry-run は configDir と strippedEnv を出す', () => {
+  const result = run(['--provider', 'deepseek', '--dry-run', 'x']);
+  assert.equal(result.status, 0);
+  const dryRun = JSON.parse(result.stdout);
+  assert.match(dryRun.configDir, /cheap-code-worker$/);
+  assert.ok(Array.isArray(dryRun.strippedEnv));
+});
+
+test('usage-limit 本文(429 [1308])から provider 再開時刻をパースする', () => {
+  const text = 'Error: 429 [1308] Usage limit reached for 5 hour. Your limit will reset at 2026-09-07 04:32:54';
+  const now = new Date('2026-09-06T10:00:00+09:00').getTime();
+  const until = cooldownUntilFromText(text, now);
+  // 2026-09-07 04:32:54 を現地(JST=+09:00)として解釈した時刻になるはず(パーサの仕様)。
+  assert.ok(until > now, 'reset 時刻がパースされていない');
+  assert.ok(until - now > 5 * 60 * 60 * 1000 && until - now < 30 * 60 * 60 * 1000, `until=${new Date(until).toISOString()}`);
+});
+
+test('usage-limit 表記が無い text は +5h のフォールバック', () => {
+  const now = Date.parse('2026-09-06T10:00:00Z');
+  const until = cooldownUntilFromText('Connection reset by peer', now);
+  assert.equal(until - now, 5 * 60 * 60 * 1000);
+});
+
+test('detectUsageLimitText は Usage limit reached / 429 / [1308] を検知する', () => {
+  assert.equal(detectUsageLimitText('429 [1308] Usage limit reached for 5 hour'), true);
+  assert.equal(detectUsageLimitText('HTTP 429 too many requests'), true);
+  assert.equal(detectUsageLimitText('all good'), false);
+});
+
+test('402/Insufficient Balance と 429/Usage limit を分類し失敗台帳とcooldownへ残せる', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-402-'));
+  const claude = path.join(home, '.claude'); const now = Date.now();
+  assert.equal(detectBillingFailure('HTTP 402 Insufficient Balance'), 402);
+  assert.equal(detectBillingFailure('429 Usage limit reached'), 429);
+  appendUsageLedger({ home, provider: 'deepseek', model: 'x', promptChars: 4, outputChars: 0, secs: 1, ok: false, status: 402, now: new Date(now) });
+  writeProviderCooldown({ claudeDir: claude, provider: 'deepseek', until: now + 86400000, reason: 'http_402', now });
+  const row = JSON.parse(fs.readFileSync(path.join(claude, 'executor-usage.jsonl'), 'utf8'));
+  assert.equal(row.ok, false); assert.equal(row.status, 402);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(claude, 'provider-cooldown.json'))).deepseek.until, now + 86400000);
+});
+
+test('writeProviderCooldown は usage_limit 履歴も残す', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-cooldown-'));
+  const claude = path.join(home, '.claude');
+  const now = Date.now();
+  const res = writeProviderCooldown({ claudeDir: claude, provider: 'glm', until: now + 5 * 60 * 60 * 1000, now });
+  assert.equal(res.provider, 'glm');
+  const state = JSON.parse(fs.readFileSync(path.join(claude, 'provider-cooldown.json'), 'utf8'));
+  assert.equal(state.glm.reason, 'usage_limit');
+  const history = fs.readFileSync(path.join(claude, 'provider-limit-history.jsonl'), 'utf8').trim();
+  assert.match(history, /"provider":"glm"/);
+});
+
+test('auto: zai キー+クールダウンなしなら glm を選ぶ', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-auto-glm-'));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'zai.env'), 'ZAI_API_KEY=test\n', 'utf8');
+  assert.equal(autoProvider({ home }), 'glm');
+});
+
+test('auto: glm が usage_limit クールダウン中なら deepseek を選ぶ', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-auto-cool-'));
+  const claude = path.join(home, '.claude');
+  fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, 'zai.env'), 'ZAI_API_KEY=test\n', 'utf8');
+  writeProviderCooldown({ claudeDir: claude, provider: 'glm', until: Date.now() + 5 * 60 * 60 * 1000 });
+  assert.equal(autoProvider({ home }), 'deepseek');
+});
+
+test('auto: zai キーが無い機体は deepseek のみ', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-auto-nozai-'));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  assert.equal(autoProvider({ home }), 'deepseek');
+});
+
+test('--provider auto は cooldown 中に deepseek を選んで dry-run に出す', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-auto-cli-'));
+  const claude = path.join(home, '.claude');
+  fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, 'zai.env'), 'ZAI_API_KEY=test\n', 'utf8');
+  writeProviderCooldown({ claudeDir: claude, provider: 'glm', until: Date.now() + 5 * 60 * 60 * 1000 });
+  const result = spawnSync(process.execPath, [tool, '--dry-run', '--provider', 'auto', '確認する'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } });
+  assert.equal(result.status, 0);
+  assert.equal(JSON.parse(result.stdout).provider, 'deepseek');
+});
+
+test('明示 provider が cooldown 中なら claude を起動せず exit 3 で返す', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-explicit-cooldown-'));
+  const claude = path.join(home, '.claude');
+  try {
+    fs.mkdirSync(claude, { recursive: true });
+    fs.writeFileSync(path.join(claude, 'zai.env'), 'ZAI_API_KEY=test-key\n', 'utf8');
+    fs.writeFileSync(path.join(claude, 'provider-cooldown.json'), JSON.stringify({ glm: { until: Date.now() + 3600000, reason: 'usage_limit' } }), 'utf8');
+    const result = spawnSync(process.execPath, [tool, '--provider', 'glm', '--cwd', home, '確認する'], {
+      encoding: 'utf8',
+      env: { ...process.env, ORGIAST_HOME: home },
+    });
+    assert.equal(result.status, 3);
+    assert.match(result.stderr, /クールダウン/);
+    const ledger = fs.readFileSync(path.join(claude, 'executor-usage.jsonl'), 'utf8');
+    assert.match(ledger, /"provider":"glm"/);
+    assert.match(ledger, /"status":"cooldown"/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+
+test('OpenRouter pins coding model slots and GLM sets ANTHROPIC_MODEL but leaves subagent slots alone', () => {
+  const env = buildChildEnv({ ...resolveProvider('deepseek'), defaultModel: 'deepseek/deepseek-v4-pro' }, 'test', {});
+  for (const key of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL']) assert.equal(env[key], 'deepseek/deepseek-v4-pro');
+  const glmEnv = buildChildEnv(resolveProvider('glm'), 'test', {});
+  // ANTHROPIC_MODEL は SDK が --model を検証して unrecognized_model で失敗しないよう必要 (2026-11-14)
+  assert.equal(glmEnv.ANTHROPIC_MODEL, 'glm-5.3');
+  // サブエージェントのモデルスロットは GLM では設定しない（契約 RULES）
+  assert.equal(glmEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL, undefined);
+  assert.equal(glmEnv.ANTHROPIC_DEFAULT_OPUS_MODEL, undefined);
+  assert.equal(glmEnv.ANTHROPIC_DEFAULT_SONNET_MODEL, undefined);
+  assert.equal(glmEnv.CLAUDE_CODE_SUBAGENT_MODEL, undefined);
+});
+
+test('DeepSeek のモデル警告と回答を別々に転送し、終了コードを維持する', { skip: process.platform === 'win32' }, t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-warning-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const cli = path.join(home, 'fake-claude');
+  const warning = '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash"}';
+  fs.writeFileSync(cli, `#!/bin/sh
+cat >/dev/null
+printf '%s\\n' '${warning}' >&2
+printf '%s\\n' OK
+exit 0
+`, { mode: 0o755 });
+  const result = spawnSync(process.execPath, [tool, '--provider', 'deepseek', '--cwd', home, '確認する'], {
+    encoding: 'utf8',
+    env: { ...process.env, ORGIAST_HOME: home, OPENROUTER_API_KEY: 'test-key', CLAUDE_CLI: cli },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), 'OK');
+  assert.ok(result.stderr.split(/\r?\n/).includes(warning));
+});

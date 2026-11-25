@@ -1,0 +1,18 @@
+User-agent: Googlebot
+Allow: /
+Crawl-delay: 10
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: Claude-SearchBot
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: *
+Allow: /
+Disallow: /test/
+
+Sitemap: https://rebooth.co.jp/en/expo-apply/sitemap.xml

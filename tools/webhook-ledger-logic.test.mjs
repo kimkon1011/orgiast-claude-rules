@@ -1,0 +1,44 @@
+import test from 'node:test'; import assert from 'node:assert/strict'; import fs from 'node:fs'; import vm from 'node:vm';
+const common=fs.readFileSync(new URL('../gas/fleet-status-sheet/CloudLedgerLogic.gs',import.meta.url),'utf8');
+const source=fs.readFileSync(new URL('../gas/fleet-status-sheet/WebhookLedgerLogic.gs',import.meta.url),'utf8');
+const context={fleetFindHeaderIndex:(headers,name)=>headers.indexOf(name)};vm.createContext(context);vm.runInContext(`${common}\n${source}`.replace(/\bconst\s+/g,'var '),context);
+const H=[...context.WEBHOOK_HEADERS_]; const item={webhookId:'123',name:'通知',channelId:'456',channelName:'一般',state:'alive',files:['C:\\secret\\a.env'],url:`https://discord.com/api/webhooks/123/${'x'.repeat(40)}`};
+test('空タブは全件appendし手入力列とURLを汚さない',()=>{const p=context.webhookPlanUpsert(H,[],{label:'PC1',checkedAt:'2026-08-31',webhooks:[item]});assert.equal(p.appendRows.length,1);for(const name of H.filter(x=>x.includes('【手入力】')))assert.equal(p.appendRows[0][H.indexOf(name)],'');assert(!JSON.stringify(p).includes('discord.com/api/webhooks/'));assert.equal(p.appendRows[0][H.indexOf('保管場所(ファイル名)')],'a.env');});
+test('状態だけ変われば手入力列には書かない',()=>{const row=context.webhookPlanUpsert(H,[],{label:'PC1',checkedAt:'d',webhooks:[item]}).appendRows[0];row[H.indexOf('状態')]='失効';const p=context.webhookPlanUpsert(H,[row],{label:'PC1',checkedAt:'d',webhooks:[item]});assert.deepEqual(Array.from(p.updates,x=>x.columnIndex),[H.indexOf('状態')+1]);assert(p.updates.every(x=>!H[x.columnIndex-1].includes('【手入力】')));});
+test('列順シャッフルと複数PC・ファイルのマージ',()=>{const headers=[...H].reverse(),row=headers.map(()=>'' );row[headers.indexOf('Webhook ID')]='123';row[headers.indexOf('保管しているPC')]='PC1';row[headers.indexOf('保管場所(ファイル名)')]='old.env';const p=context.webhookPlanUpsert(headers,[row],{label:'PC2',webhooks:[{...item,files:['new.env']} ]});const values=Object.fromEntries(p.updates.map(x=>[headers[x.columnIndex-1],x.value]));assert.equal(values['保管しているPC'],'PC1, PC2');assert.equal(values['保管場所(ファイル名)'],'old.env, new.env');});
+test('同値は冪等',()=>{const payload={label:'PC1',checkedAt:'d',webhooks:[item]},row=context.webhookPlanUpsert(H,[],payload).appendRows[0];assert.equal(context.webhookPlanUpsert(H,[row],payload).updates.length,0);});
+test('label必須',()=>assert.throws(()=>context.webhookPlanUpsert(H,[],{}),/label_required/));
+test('未報告かつ同じPC保管は未確認',()=>{const row=context.webhookPlanUpsert(H,[],{label:'PC1',webhooks:[item]}).appendRows[0],p=context.webhookPlanUpsert(H,[row],{label:'PC1',webhooks:[]});assert.deepEqual([...p.missing],['123']);assert.equal(p.updates[0].value,'未確認');});
+test('検索は名前・ID・空白と大小文字を正規化しlimitする',()=>{const a=context.webhookPlanUpsert(H,[],{label:'P',webhooks:[item]}).appendRows[0],b=[...a];b[H.indexOf('Webhook ID')]='999';b[H.indexOf('Webhook名')]='A Test';assert.equal(context.webhookMatchRows(H,[a,b],{query:'a　test'}).count,1);assert.equal(context.webhookMatchRows(H,[a,b],{query:'99'}).count,1);const limited=context.webhookMatchRows(H,[a,b],{limit:1});assert.equal(limited.count,1);assert.equal(limited.truncated,true);});
+
+test("partial:true の報告は、報告に含まれない既存行の状態を落とさない", () => {
+  const headers = [...context.WEBHOOK_HEADERS_];
+  const existing = headers.map((header) =>
+    ({ "Webhook ID": "1", 状態: "生存", "保管しているPC": "PC-A" }[header] ?? ""));
+  const partial = context.webhookPlanUpsert(headers, [existing], {
+    label: "PC-A", checkedAt: "2026-08-31", partial: true,
+    webhooks: [{ webhookId: "2", name: "new", channelId: "9", state: "alive", files: ["x.env"] }],
+  });
+  assert.equal(partial.updates.length, 0);
+  assert.equal(partial.appendRows.length, 1);
+  assert.deepEqual([...partial.missing], []);
+
+  const full = context.webhookPlanUpsert(headers, [existing], {
+    label: "PC-A", checkedAt: "2026-08-31",
+    webhooks: [{ webhookId: "2", name: "new", channelId: "9", state: "alive", files: ["x.env"] }],
+  });
+  assert.deepEqual([...full.missing], ["1"]);
+});
+
+test('creator と channelName の空文字は既存値を消さない', () => {
+  const payload = { label: 'PC1', checkedAt: 'd', webhooks: [{ ...item, creator: 'alice' }] };
+  const row = context.webhookPlanUpsert(H, [], payload).appendRows[0];
+  const plan = context.webhookPlanUpsert(H, [row], {
+    label: 'PC1', checkedAt: 'd', webhooks: [{ ...item, creator: '', channelName: '' }],
+  });
+  const changedColumns = plan.updates.map((update) => H[update.columnIndex - 1]);
+  assert(!changedColumns.includes('作成者'));
+  assert(!changedColumns.includes('対象チャンネル名'));
+  assert.equal(row[H.indexOf('作成者')], 'alice');
+  assert.equal(row[H.indexOf('対象チャンネル名')], '一般');
+});

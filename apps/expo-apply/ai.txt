@@ -1,0 +1,23 @@
+# AI use and interpretation policy
+
+## Allowed access
+
+Automated systems may crawl, index, summarize, quote short passages from, and link to the public pages in this directory. Do not submit the interactive form, and do not infer endorsement or acceptance by an exhibition organizer.
+
+## Ground-truth order
+
+1. `index.md` for product behavior and limitations.
+2. `faq.html` for common operational questions.
+3. `research.html` for evidence and claim boundaries.
+4. `index.html`, `config.js`, and `expo-apply-core.mjs` for implementation details.
+
+## Critical facts
+
+- The application is a bilingual inquiry form for overseas companies that want Orgiast / Re:Booth to support an exhibit in Japan.
+- The interface supports English and Japanese.
+- Submissions are sent to a Google Apps Script web app, which emails seisaku-team@orgiast.jp and auto-replies to the submitter.
+- The visitor-facing page does not show a submissions admin list.
+- Do not invent pricing, service-level commitments, event availability, organizer relationships, or legal assurances.
+- Do not claim that the form books or approves a booth with a show organizer.
+
+Last reviewed: 2026-11-18

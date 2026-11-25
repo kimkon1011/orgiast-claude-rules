@@ -1,0 +1,122 @@
+#!/usr/bin/env node
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+
+
+const MODEL_LIMIT = new Set(['claude-opus-4-7', 'claude-fable-5']);
+const COOLDOWN_MS = 30 * 60 * 1000;
+
+async function main() {
+  const raw = await readStdinWithTimeout();
+  if (!raw) return;
+
+  let input;
+  try { input = JSON.parse(raw); } catch { return; }
+  const transcript = input?.transcript_path;
+  if (typeof transcript !== 'string' || !transcript) return;
+
+  const home = process.env.ORGIAST_HOME || os.homedir();
+  const sessionId = safeName(String(input.session_id || path.basename(transcript).replace(/\.[^.]+$/, '') || 'unknown'));
+  const stateFile = path.join(home, '.claude', 'session-guard', `${sessionId}.json`);
+  let state = {};
+  try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+  if (!state || typeof state !== 'object' || Array.isArray(state)) state = {};
+
+  let size;
+  try { size = fs.statSync(transcript).size; } catch { return; }
+  const saved = state.aggregate && typeof state.aggregate === 'object' ? state.aggregate : {};
+  let offset = nonNegativeInteger(saved.offset, 0);
+  let turns = nonNegativeNumber(saved.turns, 0);
+  let cacheRead = nonNegativeNumber(saved.cacheRead, 0);
+  let lastModel = typeof saved.lastModel === 'string' ? saved.lastModel : '';
+  let lastContext = nonNegativeNumber(saved.lastContext, 0);
+  if (size < offset || (offset > 0 && saved.lastContext === undefined)) {
+    offset = 0;
+    turns = 0;
+    cacheRead = 0;
+    lastModel = '';
+    lastContext = 0;
+  }
+
+  let stream;
+  try { stream = fs.createReadStream(transcript, { start: offset }); } catch { return; }
+  let pending = Buffer.alloc(0);
+  let completeBytes = 0;
+  try {
+    for await (const chunk of stream) {
+      pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
+      let newline;
+      while ((newline = pending.indexOf(0x0a)) !== -1) {
+        const lineBuffer = pending.subarray(0, newline);
+        pending = pending.subarray(newline + 1);
+        completeBytes += newline + 1;
+        if (!lineBuffer.length) continue;
+        const line = lineBuffer[lineBuffer.length - 1] === 0x0d
+          ? lineBuffer.subarray(0, -1).toString('utf8')
+          : lineBuffer.toString('utf8');
+        let record;
+        try { record = JSON.parse(line); } catch { continue; }
+        if (record?.type !== 'assistant' && record?.message?.role !== 'assistant') continue;
+        turns += 1;
+        const message = record.message || record;
+        const usage = message.usage ?? record.usage ?? {};
+        lastContext = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']
+          .reduce((sum, key) => sum + nonNegativeNumber(usage[key], 0), 0);
+        if (typeof message.model === 'string') lastModel = message.model;
+        const value = Number(message.usage?.cache_read_input_tokens ?? record.usage?.cache_read_input_tokens ?? 0);
+        if (Number.isFinite(value) && value > 0) cacheRead += value;
+      }
+    }
+  } catch { stream.destroy(); return; }
+  offset += completeBytes;
+  state.aggregate = { offset, turns, cacheRead, lastModel, lastContext };
+
+  try {
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+    fs.writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  } catch { return; }
+
+  // Honor explicitly configured legacy limits without silently overriding the
+  // new configurable response/context limits with an old default of 400 turns.
+  const tokLimit = positiveNumber(process.env.ORGIAST_SESSION_TOK_LIMIT, Infinity);
+  const turnLimit = positiveNumber(process.env.ORGIAST_SESSION_TURN_LIMIT, Infinity);
+  // 2026-11-15 kim: 120呼出超 or 160k tok超で /session-close を1行促す（blockしない・1セッション1回）
+  const maxResponses = positiveNumber(process.env.ORGIAST_SESSION_MAX_RESPONSES, 120);
+  const maxContext = positiveNumber(process.env.ORGIAST_SESSION_MAX_CONTEXT, 160_000);
+  const candidates = [];
+  const PROVISO = '\nただし user への聞き直し・やり直しを1回でも増やす形での削減は禁止。調査のツール呼び出し10回は、user への聞き直し1回より安い。削減は委譲・キャッシュ・出力長で行い、調査の深さと判断の質では行わない。';
+  if (MODEL_LIMIT.has(lastModel)) candidates.push(['model', `このセッションは ${lastModel} で動作中。単価が opus-5 の3倍。応答の冒頭で user に \`/model opus\` への切替を1行で促し、切替まで重い作業に着手しないこと。${PROVISO}`]);
+  // Reuse /session-close -> next-session.md; do not close/launch or interrupt
+  // the current response here. Legacy cumulative limits remain supported.
+  if (!state.handoffNotified && (turns > maxResponses || lastContext > maxContext || cacheRead >= tokLimit || turns >= turnLimit)) {
+    candidates.push(['handoffNotified', '/session-close して新セッションで続けること。（assistant呼出数・文脈上限）']);
+  }
+  if (!candidates.length) return;
+
+  const now = Date.now();
+  const emitted = candidates.filter(([kind]) => !Number.isFinite(Date.parse(state[kind])) || now - Date.parse(state[kind]) >= COOLDOWN_MS);
+  if (!emitted.length) return;
+  for (const [kind] of emitted) state[kind] = new Date(now).toISOString();
+  try {
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+    fs.writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  } catch { return; }
+  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: emitted.map(([, text]) => text).join('\n') } }));
+}
+
+function positiveNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+function nonNegativeNumber(value, fallback) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+function nonNegativeInteger(value, fallback) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : fallback;
+}
+function safeName(value) { return value.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 180); }
+
+try { await main(); } catch {}
+process.exitCode = 0;

@@ -1,0 +1,1293 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
+import { EventEmitter } from 'node:events';
+import {
+  countClaudeProcesses,
+  accountConfigPath,
+  accountLabel,
+  applyTrust,
+  buildRecoveryCommand,
+  buildVscodeExtUri,
+  buildVscodeUri,
+  hasUnsentVscodeTab,
+  childEnv,
+  KEPT_CLAUDE_ENV,
+  launchNextSession,
+  loadClaudeExeHelpers,
+  parseHandoffCwd,
+  parseHandoffModel,
+  pickAccountEmail,
+  pickNewestExtensionBinary,
+  pickNewestVersionDir,
+  pickBundledVsix,
+  planLaunch,
+  planVscodeExtLaunch,
+  planVscodeLaunch,
+  pickRoute,
+  resolveClaudeBinary,
+  resolveConfigDir,
+  resolveLaunchCwd,
+  resolveVscodeCli,
+  resolveWt,
+  runHeadlessNextSession,
+  sanitizeEnv,
+  shouldLaunch,
+  DEFAULT_MAX_CLAUDE_PROCESSES,
+  shouldInstallBundledVsix,
+  trustKeyVariants,
+} from './next-session-launch.mjs';
+
+test('旧 claude-exe に export が無くても起動モジュール全体は落ちない', async () => {
+  const warnings = [];
+  const helpers = await loadClaudeExeHelpers(async () => ({ sanitizeClaudeSupervisorEnv() {} }), (line) => warnings.push(line));
+  assert.equal(helpers.findClaudeInVersionedDir('unused', {}), null);
+  assert.deepEqual(helpers.sanitizeClaudeSupervisorEnv({ MCP_TEST: 'x', PATH: 'ok' }), { PATH: 'ok' });
+  assert.match(warnings[0], /実体探索だけスキップ/);
+});
+
+test('cwd は不在の先頭候補を記録し、次の実在候補で探索を止める', () => {
+  const checked = [];
+  assert.deepEqual(resolveLaunchCwd({
+    candidates: [['handoff', '/missing'], ['current', '/present'], ['later', '/unused']],
+    exists: (candidate) => { checked.push(candidate); return candidate === '/present'; },
+    fallback: '/repo',
+  }), {
+    cwd: '/present', missing: [{ source: 'handoff', candidate: '/missing' }],
+    usedFallback: false, explicitMissing: false,
+  });
+  assert.deepEqual(checked, ['/missing', '/present']);
+});
+
+test('cwd 候補が全て不在なら基準パスへフォールバックする', () => {
+  assert.deepEqual(resolveLaunchCwd({
+    candidates: [['handoff', '/missing'], ['current', '']],
+    exists: () => false, fallback: '/repo',
+  }), {
+    cwd: '/repo', missing: [{ source: 'handoff', candidate: '/missing' }, { source: 'current', candidate: '' }],
+    usedFallback: true, explicitMissing: false,
+  });
+});
+
+test('--cwd の不在は explicitMissing として返す', () => {
+  assert.deepEqual(resolveLaunchCwd({
+    candidates: [['--cwd', '/missing']], exists: () => false, fallback: '/repo',
+  }), {
+    cwd: '/repo', missing: [{ source: '--cwd', candidate: '/missing' }],
+    usedFallback: true, explicitMissing: true,
+  });
+});
+
+test('config dir は state、env、既定の順で解決し state の ~ を展開する', () => {
+  const home = 'C:\\Users\\test';
+  assert.deepEqual(resolveConfigDir({ state: { configDir: '~/claude-work' }, env: { CLAUDE_CONFIG_DIR: 'D:\\env' }, home }), {
+    configDir: path.join(home, 'claude-work'), source: 'state',
+  });
+  assert.deepEqual(resolveConfigDir({ state: { configDir: '~\\claude-work' }, env: {}, home }), {
+    configDir: path.join(home, 'claude-work'), source: 'state',
+  });
+  assert.deepEqual(resolveConfigDir({ state: { configDir: '~' }, env: {}, home }), { configDir: home, source: 'state' });
+  assert.deepEqual(resolveConfigDir({ state: {}, env: { CLAUDE_CONFIG_DIR: 'D:\\env' }, home }), { configDir: 'D:\\env', source: 'env' });
+  assert.deepEqual(resolveConfigDir({ state: {}, env: {}, home }), { configDir: path.join(home, '.claude'), source: 'default' });
+});
+
+test('アカウント設定パスは既定 config dir だけ home 直下になる', () => {
+  const home = path.resolve('/fake/Home');
+  assert.equal(accountConfigPath(path.join(home, '.claude'), home), path.join(home, '.claude.json'));
+  assert.equal(accountConfigPath(path.join(home, 'work-config'), home), path.join(home, 'work-config', '.claude.json'));
+  const variant = path.join(home.toUpperCase(), '.CLAUDE').replaceAll(path.sep, path.sep === '/' ? '\\' : '/');
+  if (process.platform === 'win32') assert.equal(accountConfigPath(variant, home), path.join(home, '.claude.json'));
+});
+
+test('アカウントメールは有効な非空文字列だけを採用する', () => {
+  assert.equal(pickAccountEmail({ oauthAccount: { emailAddress: ' kim@orgiast.jp ' } }), 'kim@orgiast.jp');
+  for (const config of [{}, null, [], { oauthAccount: null }, { oauthAccount: { emailAddress: '' } }]) {
+    assert.equal(pickAccountEmail(config), '');
+  }
+});
+
+test('child env は state の config dir だけ上書きし、他の CLAUDE 変数を落とす', () => {
+  const env = { PATH: '/bin', CLAUDE_CONFIG_DIR: '/env', CLAUDE_CODE_SESSION_ID: 'secret' };
+  assert.deepEqual(childEnv({ env, configDir: '/state', source: 'state' }), { PATH: '/bin', CLAUDE_CONFIG_DIR: '/state' });
+  assert.deepEqual(childEnv({ env, configDir: '/env', source: 'env' }), { PATH: '/bin', CLAUDE_CONFIG_DIR: '/env' });
+  assert.deepEqual(childEnv({ env: { PATH: '/bin', CLAUDE_CODE_SESSION_ID: 'secret' }, configDir: '/default', source: 'default' }), { PATH: '/bin' });
+  assert.equal(KEPT_CLAUDE_ENV.has('CLAUDE_CONFIG_DIR'), true);
+});
+
+test('VSCode CLI は明示パス、ユーザーインストール、未検出の順で解決する', () => {
+  const home = 'C:\\Users\\test';
+  const explicit = 'D:\\VSCode\\bin\\code.cmd';
+  assert.equal(resolveVscodeCli({ env: { VSCODE_CLI_PATH: explicit }, exists: (file) => file === explicit, homedir: home }), explicit);
+  const local = path.join(home, 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd');
+  assert.equal(resolveVscodeCli({ env: {}, exists: (file) => file === local, homedir: () => home }), local);
+  assert.equal(resolveVscodeCli({ env: {}, exists: () => false, homedir: home }), '');
+});
+
+test('Claude Code の open URI にプロンプトを URL エンコードする', () => {
+  assert.equal(buildVscodeUri('/session-start'), 'vscode://Anthropic.claude-code/open?prompt=%2Fsession-start');
+  assert.equal(buildVscodeUri('日本語 開始'), `vscode://Anthropic.claude-code/open?prompt=${encodeURIComponent('日本語 開始')}`);
+  assert.equal(buildVscodeUri(''), 'vscode://Anthropic.claude-code/open');
+});
+
+test('PowerShell 退避コマンドは code CLI の有無に応じた引用済みコマンドを返す', () => {
+  assert.equal(
+    buildRecoveryCommand({ codeCli: 'C:\\Code Folder\\bin\\code.cmd', prompt: '/session-start 日本語' }),
+    `& "C:\\Code Folder\\bin\\code.cmd" --open-url "vscode://Anthropic.claude-code/open?prompt=${encodeURIComponent('/session-start 日本語')}"`,
+  );
+  const fallback = buildRecoveryCommand({ codeCli: '', prompt: '/session-start' });
+  assert.match(fallback, /^& "\$env:LOCALAPPDATA\\Programs\\Microsoft VS Code\\bin\\code\.cmd" --open-url "/);
+  assert.match(fallback, /prompt=%2Fsession-start"$/);
+});
+
+test('自前拡張 URI は prompt/cwd/claude を個別に URL エンコードする', () => {
+  const values = { prompt: '/session-start 日本語', cwd: 'C:\\作業 folder', claude: 'C:\\Program Files\\Claude\\claude.exe' };
+  const uri = buildVscodeExtUri(values);
+  assert.equal(uri, `vscode://orgiast.next-session/start?prompt=${encodeURIComponent(values.prompt)}&cwd=${encodeURIComponent(values.cwd)}&claude=${encodeURIComponent(values.claude)}`);
+  assert.deepEqual(planVscodeExtLaunch({ codeCli: 'C:\\Code\\bin\\code.cmd', ...values }), {
+    label: 'open-session',
+    command: 'cmd.exe',
+    args: ['/c', `""C:\\Code\\bin\\code.cmd" --open-url "${uri}""`],
+    windowsVerbatimArguments: true,
+  });
+});
+
+test('vscode-ext の URI は cmd.exe で & が切れないよう引用される', () => {
+  // buildVscodeExtUri は `&` 区切りの複数パラメータを持つ URI を返す。cmd.exe は引用のない `&` を
+  // コマンド区切りとして解釈するため、cmd /c の一枚文字列に URI 全体を引用符で包んで渡し、
+  // windowsVerbatimArguments で node 側の再クォートを止める必要がある（2026-09-04 実測で再現・確定）。
+  const values = { prompt: '/session-start', cwd: 'C:\\tmp\\wt', claude: 'C:\\claude.exe' };
+  const uri = buildVscodeExtUri(values);
+  const result = planVscodeExtLaunch({ codeCli: 'C:\\Code\\bin\\code.cmd', ...values });
+  assert.equal(result.windowsVerbatimArguments, true);
+  assert.match(result.args[1], /&cwd=/);
+  assert.match(result.args[1], /&claude=/);
+  assert.equal(result.args[1].startsWith('""C:\\Code\\bin\\code.cmd" --open-url "'), true);
+  assert.equal(result.args[1].endsWith('""'), true);
+  const inner = result.args[1].slice('""C:\\Code\\bin\\code.cmd" --open-url "'.length, -'""'.length);
+  assert.equal(inner, uri);
+});
+
+test('同梱 VSIX は数値バージョンが最新のものを選ぶ', () => {
+  assert.equal(pickBundledVsix(['x.vsix', 'orgiast-next-session-0.2.9.vsix', 'orgiast-next-session-0.10.0.vsix']), 'orgiast-next-session-0.10.0.vsix');
+  assert.equal(pickBundledVsix([]), '');
+});
+
+test('同梱 VSIX は未導入または旧版のときだけインストールする', () => {
+  const vsixName = 'orgiast-next-session-0.3.2.vsix';
+  assert.equal(shouldInstallBundledVsix({ listedExtensions: 'other.extension@1.0.0', vsixName }), true);
+  assert.equal(shouldInstallBundledVsix({ listedExtensions: 'orgiast.next-session@0.2.0', vsixName }), true);
+  assert.equal(shouldInstallBundledVsix({ listedExtensions: 'orgiast.next-session@0.3.2', vsixName }), false);
+  assert.equal(shouldInstallBundledVsix({ listedExtensions: 'orgiast.next-session@0.4.0', vsixName }), false);
+});
+
+test('VSCode 起動は code.cmd を cmd.exe /c 経由で実行する', () => {
+  // .cmd は Windows の node から execFile できないので必ず cmd.exe /c を挟む。
+  assert.deepEqual(planVscodeLaunch({ codeCli: 'C:\\Code\\bin\\code.cmd', cwd: 'C:\\work', prompt: '/session-start' }), [
+    { label: 'open-session', command: 'cmd.exe', args: ['/c', 'C:\\Code\\bin\\code.cmd', '--open-url', 'vscode://Anthropic.claude-code/open?prompt=%2Fsession-start'] },
+  ]);
+  assert.deepEqual(planVscodeLaunch({ codeCli: 'C:\\Code\\bin\\code.cmd', cwd: 'C:\\work', prompt: '/session-start', openFolder: true })[0], {
+    label: 'open-folder', command: 'cmd.exe', args: ['/c', 'C:\\Code\\bin\\code.cmd', '-n', 'C:\\work'],
+  });
+  assert.equal(planVscodeLaunch({ codeCli: '', cwd: 'C:\\work', prompt: '' }), null);
+  assert.equal(planVscodeLaunch({ codeCli: 'C:\\Code\\bin\\code.cmd', cwd: '', prompt: '', openFolder: true }), null);
+});
+
+test('既定は VSCode 経路で、ターミナルは明示したときだけ選ぶ', () => {
+  // ターミナル経路は別ウィンドウの CLI セッションになり VSCode 側の作業とぶつかる(2026-08-30 kim 指示)。
+  // VSCode CLI が無い機体だけターミナルへフォールバックする。
+  assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: undefined, env: {} }), 'vscode');
+  // CLI が見つからなくてもターミナルへは落とさない(何も起動せずスキップする)
+  assert.equal(pickRoute({ codeCli: '', flagTarget: undefined, env: {} }), 'vscode');
+  assert.equal(pickRoute({ codeCli: '', flagTarget: 'terminal', env: {} }), 'terminal');
+  assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: undefined, env: { ORGIAST_NEXT_SESSION_TARGET: 'terminal' } }), 'terminal');
+  assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: 'terminal', env: {} }), 'terminal');
+  assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: 'vscode', env: {} }), 'vscode');
+  assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: 'vscode-ext', env: {} }), 'vscode-ext');
+  assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: undefined, env: { ORGIAST_NEXT_SESSION_TARGET: 'vscode' } }), 'vscode');
+});
+
+test('inline は target と旧 mode の各経路で選べ、明示 target の優先順位が最も高い', () => {
+  assert.equal(pickRoute({ codeCli: '', flagTarget: 'inline', env: {}, state: {} }), 'inline');
+  assert.equal(pickRoute({ codeCli: '', env: { ORGIAST_NEXT_SESSION_TARGET: 'inline' }, state: {} }), 'inline');
+  assert.equal(pickRoute({ codeCli: '', env: { ORGIAST_NEXT_SESSION_MODE: 'inline' }, state: {} }), 'inline');
+  assert.equal(pickRoute({ codeCli: '', env: {}, state: { mode: 'inline' } }), 'inline');
+  assert.equal(pickRoute({ codeCli: '', env: {}, state: { target: 'inline' } }), 'inline');
+  assert.equal(pickRoute({ codeCli: '', flagTarget: 'vscode', env: { ORGIAST_NEXT_SESSION_TARGET: 'inline' }, state: { target: 'inline' } }), 'vscode');
+  assert.equal(pickRoute({ codeCli: '', flagTarget: 'headless', env: {}, state: {} }), 'headless');
+  assert.equal(pickRoute({ codeCli: 'code.cmd', flagTarget: 'headless', env: { ORGIAST_NEXT_SESSION_TARGET: 'terminal' }, state: {} }), 'headless');
+  assert.equal(pickRoute({ codeCli: '', env: { ORGIAST_NEXT_SESSION_TARGET: 'headless' }, state: {} }), 'headless');
+  assert.equal(pickRoute({ codeCli: '', env: {}, state: {} }), 'vscode');
+});
+
+test('引き継ぎコメントから Windows cwd を取り出す', () => {
+  const text = '<!-- 前セッション: abc / 更新: 2026-08-28 / cwd: c:\\Users\\uers\\Downloads\\作業 -->\n本文';
+  assert.equal(parseHandoffCwd(text), 'c:\\Users\\uers\\Downloads\\作業');
+  assert.equal(parseHandoffCwd('コメントなし'), '');
+});
+
+test('引き継ぎコメントをセグメント単位で解析する', () => {
+  const text = '<!-- 前セッション: abc / 更新: 2026-09-18 / cwd: C:/Users/uers/Downloads/CLAUDE.md配布 / model: opus -->';
+  assert.equal(parseHandoffCwd(text), 'C:/Users/uers/Downloads/CLAUDE.md配布');
+  assert.equal(parseHandoffModel(text), 'opus');
+  assert.equal(parseHandoffCwd('<!-- cwd: C:/work -->'), 'C:/work');
+  // model だけのコメントも旧挙動どおり受理する（cwd セグメントの有無に依存しない）
+  assert.equal(parseHandoffModel('<!-- model: sonnet -->'), 'sonnet');
+});
+
+test('VSCode 拡張バージョンを辞書順ではなく数値で比較する', () => {
+  const names = ['anthropic.claude-code-2.1.99-win32-x64', 'anthropic.claude-code-2.1.250-win32-x64', 'foo'];
+  assert.equal(pickNewestExtensionBinary(names), 'anthropic.claude-code-2.1.250-win32-x64');
+});
+
+test('インストール版 claude-code のバージョンディレクトリから最新を選ぶ', () => {
+  assert.equal(pickNewestVersionDir(['2.1.99', '2.1.246', 'latest']), '2.1.246');
+  assert.equal(pickNewestVersionDir(['latest']), '');
+  const home = '/home/test';
+  const expected = path.join(home, 'AppData', 'Roaming', 'Claude', 'claude-code', '2.1.246', 'claude.exe');
+  assert.equal(resolveClaudeBinary({
+    env: {},
+    exists: (file) => file === expected,
+    readdir: (dir) => (dir.includes('claude-code') ? ['2.1.99', '2.1.246'] : []),
+    homedir: home,
+  }), expected);
+});
+
+test('CLAUDE_CLI_PATH を最優先し、無ければ VSCode 拡張へ落ちる', () => {
+  const home = '/home/test';
+  const explicit = '/custom/claude.exe';
+  assert.equal(resolveClaudeBinary({ env: { CLAUDE_CLI_PATH: explicit }, exists: (file) => file === explicit, readdir: () => [], homedir: home }), explicit);
+
+  const newest = 'anthropic.claude-code-2.1.250-win32-x64';
+  const expected = path.join(home, '.vscode', 'extensions', newest, 'resources', 'native-binary', 'claude.exe');
+  assert.equal(resolveClaudeBinary({
+    env: {},
+    exists: (file) => file === expected,
+    readdir: () => ['anthropic.claude-code-2.1.99-win32-x64', newest],
+    homedir: () => home,
+  }), expected);
+});
+
+test('Windows Terminal と cmd.exe の起動 argv を組み立てる', () => {
+  assert.deepEqual(planLaunch({ claudeBin: 'claude.exe', cwd: 'C:\\work', prompt: '/session-start', wt: 'wt.exe' }), {
+    command: 'wt.exe', args: ['-w', 'new-window', '-d', 'C:\\work', 'claude.exe', '/session-start'], cwd: 'C:\\work', detached: true,
+  });
+  assert.deepEqual(planLaunch({ claudeBin: 'claude.exe', cwd: 'C:\\work', prompt: 'go', wt: '' }), {
+    command: 'cmd.exe', args: ['/c', 'start', '', '/D', 'C:\\work', 'claude.exe', 'go'], cwd: 'C:\\work', detached: true,
+  });
+  assert.equal(planLaunch({ claudeBin: '', cwd: 'C:\\work', prompt: 'go', wt: '' }), null);
+});
+
+test('handoffのsonnet/opusだけをterminal起動の--modelへ渡す', () => {
+  assert.equal(parseHandoffModel('<!-- 前セッション: x / cwd: C:\\work / model: sonnet -->'), 'sonnet');
+  assert.equal(parseHandoffModel('<!-- model: fable -->'), '');
+  assert.deepEqual(planLaunch({ claudeBin: 'claude.exe', cwd: 'C:\\work', prompt: '/session-start', wt: 'wt.exe', model: 'opus' }).args,
+    ['-w', 'new-window', '-d', 'C:\\work', 'claude.exe', '--model', 'opus', '/session-start']);
+});
+
+test('起動抑止と force の安全境界を判定する', () => {
+  const now = Date.parse('2026-08-28T00:02:00.000Z');
+  assert.equal(shouldLaunch({ state: { enabled: false }, now, env: {}, force: false }).ok, false);
+  assert.equal(shouldLaunch({ state: {}, now, env: { ORGIAST_NO_AUTO_NEXT_SESSION: '1' }, force: false }).ok, false);
+  assert.equal(shouldLaunch({ state: {}, now, env: { CLAUDE_HEADLESS: '1' }, force: false }).ok, false);
+  assert.equal(shouldLaunch({ state: { lastLaunchAt: '2026-08-28T00:01:00.001Z' }, now, env: {}, force: false }).ok, false);
+  assert.deepEqual(shouldLaunch({ state: { lastLaunchAt: '2026-08-28T00:01:00.001Z' }, now, env: {}, force: true }), { ok: true });
+  assert.equal(shouldLaunch({ state: {}, now, env: { CI: '1' }, force: true }).ok, false);
+});
+
+test('未送信の VSCode タブを注入した prompt の送信有無から判定する', () => {
+  const now = Date.parse('2026-08-31T12:00:00.000Z');
+  const recentLaunch = '2026-08-31T10:00:00.000Z';
+  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'terminal', lastLaunchAt: recentLaunch }, now, promptConsumed: false }), false);
+  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'vscode', lastLaunchAt: '2026-08-31T05:59:59.999Z' }, now, promptConsumed: false }), false);
+  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'vscode', lastLaunchAt: recentLaunch }, now, promptConsumed: false }), true);
+  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'vscode', lastLaunchAt: recentLaunch }, now, promptConsumed: true }), false);
+  assert.equal(hasUnsentVscodeTab({ state: { lastRoute: 'vscode', lastLaunchAt: recentLaunch }, now, promptConsumed: null }), false);
+});
+
+test('未送信タブは通常起動を抑止し、force なら起動する', () => {
+  const args = { state: {}, now: 0, env: {}, pendingTab: true };
+  const blocked = shouldLaunch({ ...args, force: false });
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.reason, /未送信/);
+  assert.deepEqual(shouldLaunch({ ...args, force: true }), { ok: true });
+});
+
+function fakeIo(overrides = {}) {
+  const home = '/fake/home';
+  const claude = '/fake/claude.exe';
+  const calls = { spawn: [], writes: [], renames: [], logs: [], unref: 0 };
+  return {
+    calls,
+    io: {
+      env: { CLAUDE_CLI_PATH: claude },
+      countClaudeProcesses: () => null,
+      concurrencyOptions: { platform: 'win32', list: () => [] },
+      homedir: () => home,
+      exists: (file) => file === claude || file === 'C:\\work',
+      readdir: () => [],
+      readFile: async (file) => {
+        if (file.endsWith('next-session.md')) return '<!-- 前セッション: abc / 更新: 2026-08-28 / cwd: C:\\work -->';
+        if (file.endsWith('.claude.json')) return '{}';
+        throw new Error('ENOENT');
+      },
+      writeFile: async (...args) => calls.writes.push(args),
+      rename: async (...args) => calls.renames.push(args),
+      spawn: (...args) => {
+        calls.spawn.push(args);
+        return { unref: () => { calls.unref += 1; } };
+      },
+      log: (message) => calls.logs.push(message),
+      ...overrides,
+    },
+  };
+}
+
+test('--set-target は他の state を保持し、不正値では何も書かない', async () => {
+  const initial = { enabled: false, lastLaunchAt: '2026-08-28T00:00:00.000Z', lastCwd: 'D:\\keep' };
+  const configured = fakeIo({
+    readFile: async (file) => {
+      if (file.endsWith('next-session-launch.json')) return JSON.stringify(initial);
+      throw new Error('ENOENT');
+    },
+  });
+  assert.equal(await launchNextSession(['--set-target', 'inline'], configured.io), 0);
+  assert.equal(configured.calls.spawn.length, 0);
+  const saved = JSON.parse(configured.calls.writes[0][1]);
+  assert.deepEqual(saved, { ...initial, target: 'inline' });
+  assert.match(configured.calls.logs.join('\n'), /停止中です。--enable が必要/);
+
+  const invalid = fakeIo();
+  assert.equal(await launchNextSession(['--set-target', 'invalid'], invalid.io), 2);
+  assert.equal(invalid.calls.writes.length, 0);
+  assert.equal(invalid.calls.renames.length, 0);
+});
+
+test('--set-target vscode-ext の保存値を --show-target が返す', async () => {
+  let state = { enabled: true };
+  let pending = '';
+  const base = fakeIo({
+    readFile: async (file) => {
+      if (file.endsWith('next-session-launch.json')) return JSON.stringify(state);
+      throw new Error('ENOENT');
+    },
+    writeFile: async (_file, content) => { pending = content; },
+    rename: async () => { state = JSON.parse(pending); },
+  });
+  assert.equal(await launchNextSession(['--set-target', 'vscode-ext'], base.io), 0);
+  assert.equal(state.target, 'vscode-ext');
+  base.calls.logs.length = 0;
+  assert.equal(await launchNextSession(['--show-target'], base.io), 0);
+  assert.equal(base.calls.logs[0], 'target=vscode-ext / enabled=true');
+});
+
+test('inline は spawn せず予約し、lastRoute を inline で保存する', async () => {
+  const armed = [];
+  const { io, calls } = fakeIo({ armToFile: (value) => { armed.push(value); return true; } });
+  assert.equal(await launchNextSession(['--target', 'inline', '--session', 'closing-sid'], io), 0);
+  assert.equal(calls.spawn.length, 0);
+  assert.deepEqual(armed, [{ home: '/fake/home', sessionId: 'closing-sid', cwd: 'C:\\work' }]);
+  const saved = JSON.parse(calls.writes.find(([file]) => file.includes('next-session-launch.json.tmp-'))[1]);
+  assert.equal(saved.lastRoute, 'inline');
+  assert.match(calls.logs.join('\n'), /予約しました\(inline\)/);
+});
+
+test('inline は前回 VSCode タブが未送信でも予約できる', async () => {
+  let armed = 0;
+  const base = pendingTabIo('{"type":"user","message":{"role":"user","content":"別の依頼"}}');
+  base.io.armToFile = () => { armed += 1; return true; };
+  assert.equal(await launchNextSession(['--target', 'inline', '--session', 'closing-sid'], base.io), 0);
+  assert.equal(armed, 1);
+  assert.equal(base.calls.spawn.length, 0);
+  assert.equal(JSON.parse(base.calls.writes.find(([file]) => file.includes('next-session-launch.json.tmp-'))[1]).lastRoute, 'inline');
+});
+
+test('inline dry-run は spawn も予約も state 更新もしない', async () => {
+  let armed = 0;
+  const { io, calls } = fakeIo({ armToFile: () => { armed += 1; return true; } });
+  assert.equal(await launchNextSession(['--target', 'inline', '--dry-run', '--session', 'probe'], io), 0);
+  assert.equal(calls.spawn.length, 0);
+  assert.equal(calls.writes.length, 0);
+  assert.equal(armed, 0);
+  assert.deepEqual(JSON.parse(calls.logs.find(line => line.startsWith('{'))), { route: 'inline', cwd: 'C:\\work', sessionId: 'probe' });
+});
+
+test('起動成功時に detached spawn し state を tmp から原子的に更新する', async () => {
+  const { io, calls } = fakeIo();
+  assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
+  assert.equal(calls.spawn.length, 1);
+  const options = calls.spawn[0][2];
+  assert.equal(options.cwd, 'C:\\work');
+  assert.equal(options.detached, true);
+  assert.equal(options.stdio, 'ignore');
+  assert.equal(options.windowsHide, false);
+  // 親セッションの CLAUDE* を継承させない(継承すると新セッションが今のセッションの子になる)。
+  assert.deepEqual(options.env, { CLAUDE_CLI_PATH: '/fake/claude.exe', ORGIAST_HEADLESS_JOB: 'next-session-launch' });
+  assert.equal(calls.unref, 1);
+  const stateWrite = calls.writes.find(([file]) => file.includes('next-session-launch.json.tmp-'));
+  const stateRename = calls.renames.find(([, file]) => file.endsWith('next-session-launch.json'));
+  assert.match(stateWrite[1], /"lastLaunchAt"/);
+  assert.match(stateWrite[1], /"lastCwd": "C:\\\\work"/);
+  assert.equal(JSON.parse(stateWrite[1]).lastPrompt, '/session-start');
+  assert.ok(stateRename);
+});
+
+test('handoff cwd が存在しない場合は存在する current cwd を使って通知する', async () => {
+  const handoffCwd = 'C:/missing';
+  const currentCwd = 'D:/current';
+  const { io, calls } = fakeIo({
+    exists: (file) => file === '/fake/claude.exe' || file === currentCwd,
+    readFile: async (file) => {
+      if (file.endsWith('next-session.md')) return `<!-- cwd: ${handoffCwd} -->`;
+      if (file.endsWith('current-session.json')) return JSON.stringify({ cwd: currentCwd });
+      if (file.endsWith('.claude.json')) return '{}';
+      throw new Error('ENOENT');
+    },
+  });
+  assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
+  assert.equal(calls.spawn[0][2].cwd, currentCwd);
+  assert.ok(calls.logs.includes(`[next-session] 注意: handoff の cwd(${handoffCwd}) が存在しないため ${currentCwd} を使います`));
+});
+
+function pendingTabIo(firstUserLine, readHeadOverride) {
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const lastLaunchAt = '2026-08-31T10:00:00.000Z';
+  const lastLaunch = Date.parse(lastLaunchAt);
+  return fakeIo({
+    env: { VSCODE_CLI_PATH: codeCli },
+    exists: (file) => file === codeCli || file === 'C:\\work',
+    now: Date.parse('2026-08-31T10:03:00.000Z'),
+    readdir: (dir) => (dir.includes('projects') ? ['candidate.jsonl'] : []),
+    stat: () => ({ birthtimeMs: lastLaunch + 1 }),
+    readHead: readHeadOverride ?? (() => `${firstUserLine}\n{"type":"assistant"}`),
+    readFile: async (file) => {
+      if (file.endsWith('next-session-launch.json')) return JSON.stringify({
+        enabled: true,
+        lastRoute: 'vscode',
+        lastLaunchAt,
+        lastCwd: 'C:\\work',
+        lastPrompt: '/session-start',
+      });
+      if (file.endsWith('next-session.md')) return '<!-- cwd: C:\\work -->';
+      if (file.endsWith('.claude.json')) return '{}';
+      throw new Error('ENOENT');
+    },
+  });
+}
+
+test('他人の新しい transcript では未送信タブの抑止を解除しない', async () => {
+  const { io, calls } = pendingTabIo('{"type":"user","message":{"role":"user","content":"別の依頼"}}');
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.equal(calls.spawn.length, 0);
+  assert.match(calls.logs[0], /未送信/);
+});
+
+test('最初の user メッセージに注入 prompt があれば起動する', async () => {
+  const { io, calls } = pendingTabIo('{"type":"user","message":{"role":"user","content":"<command-message>session-start</command-message>\\n<command-name>/session-start</command-name>"}}');
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.equal(calls.spawn.length, 1);
+});
+
+// hook の添付レコードが "type":"user" で先に並ぶ transcript でも、本物の user 入力を掴めること。
+// role まで見ないとここで取り違えて「未送信」と誤判定し、開くべきタブを永久に開かなくなる。
+test('hook の添付レコードが先にあっても本物の user 入力を見る', async () => {
+  const { io, calls } = pendingTabIo('', () => [
+    '{"parentUuid":null,"attachment":{"type":"hook_success"},"type":"user"}',
+    '{"type":"user","message":{"role":"user","content":"<command-name>/session-start</command-name>"}}',
+  ].join('\n'));
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.equal(calls.spawn.length, 1);
+});
+
+test('transcript の先頭読み取り失敗時は fail-open で起動する', async () => {
+  const { io, calls } = pendingTabIo('', () => { throw new Error('EACCES'); });
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.equal(calls.spawn.length, 1);
+});
+
+// bucket が無い(=その cwd で一度もセッションが始まっていない)のは「未送信」の積極的な証拠。
+// ここを fail-open にすると、新しい cwd に開いたタブでは抑止が永久に効かない(2026-08-31 実測)。
+test('transcript bucket が無い(ENOENT)ときは未送信として抑止する', async () => {
+  const { io, calls } = pendingTabIo('');
+  io.readdir = (dir) => {
+    if (!dir.includes('projects')) return [];
+    const error = new Error('ENOENT: no such file or directory');
+    error.code = 'ENOENT';
+    throw error;
+  };
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.equal(calls.spawn.length, 0);
+  assert.match(calls.logs[0], /未送信/);
+});
+
+test('ENOENT 以外の readdir 失敗は fail-open で起動する', async () => {
+  const { io, calls } = pendingTabIo('');
+  io.readdir = (dir) => {
+    if (!dir.includes('projects')) return [];
+    const error = new Error('EACCES: permission denied');
+    error.code = 'EACCES';
+    throw error;
+  };
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.equal(calls.spawn.length, 1);
+});
+
+test('dry-run は plan だけを出して spawn しない', async () => {
+  const { io, calls } = fakeIo();
+  assert.equal(await launchNextSession(['--target', 'terminal', '--dry-run'], io), 0);
+  assert.equal(calls.spawn.length, 0);
+  assert.equal(calls.writes.length, 0);
+  assert.match(calls.logs.join('\n'), /claude\.exe が .* 個/);
+  const output = JSON.parse(calls.logs.find(line => line.startsWith('{')));
+  assert.equal(output.cwd, 'C:\\work');
+  assert.equal(output.account, '');
+  assert.equal(output.configDir, path.join('/fake/home', '.claude'));
+  assert.equal(output.configDirSource, 'default');
+});
+
+test('VSCode 経路は既定で URI だけを撃ち、既存ウィンドウを再読み込みしない', async () => {
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const waited = [];
+  const { io, calls } = fakeIo({
+    env: { VSCODE_CLI_PATH: codeCli },
+    exists: (file) => file === codeCli || file === 'C:\\work',
+    wait: async (ms) => waited.push(ms),
+  });
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  // `code.cmd <cwd>` を先に走らせると既存ウィンドウの拡張ホストが再起動し、URI ごと落ちる(2026-08-30 実測)。
+  assert.equal(calls.spawn.length, 1);
+  assert.equal(calls.spawn[0][1][2], '--open-url');
+  assert.match(calls.spawn[0][1][3], /prompt=%2Fsession-start$/);
+  assert.equal(calls.spawn[0][2].detached, false);
+  assert.equal(calls.spawn[0][2].windowsHide, true);
+  assert.deepEqual(waited, []);
+  assert.match(calls.writes[0][1], /"lastRoute": "vscode"/);
+  const successLog = calls.logs.join('\n');
+  assert.match(successLog, /タブバーの一番右端/);
+  assert.match(successLog, /Enter 1回で開始/);
+  assert.match(successLog, /cwd   : C:\\work/);
+});
+
+for (const dryRun of [false, true]) {
+  test(`不在の --cwd は起動せず PowerShell 退避も出さない (dry-run=${dryRun})`, async () => {
+    const codeCli = '/fake/code.cmd';
+    const { io, calls } = fakeIo({
+      env: { VSCODE_CLI_PATH: codeCli },
+      exists: (file) => file === codeCli || file === 'C:\\work',
+    });
+    const args = ['--target', 'vscode', '--cwd', '/missing'];
+    if (dryRun) args.push('--dry-run');
+    assert.equal(await launchNextSession(args, io), 0);
+    assert.ok(calls.logs.includes('[next-session] スキップ: --cwd が指すフォルダが存在しません: /missing'));
+    assert.doesNotMatch(calls.logs.join('\n'), /PowerShell 退避:/);
+    assert.equal(calls.spawn.length, 0);
+    assert.equal(calls.writes.length, 0);
+    assert.equal(calls.renames.length, 0);
+  });
+}
+
+test('解決後に cwd が消えた場合は cwd の不在を通知し PowerShell 退避を出さない', async () => {
+  const codeCli = '/fake/code.cmd';
+  const cwd = '/work';
+  let present = true;
+  const { io, calls } = fakeIo({
+    env: { VSCODE_CLI_PATH: codeCli },
+    exists: (file) => file === codeCli || (file === cwd && present),
+    spawn: (...args) => {
+      calls.spawn.push(args);
+      const child = new EventEmitter();
+      queueMicrotask(() => {
+        present = false;
+        child.emit('error', new Error('spawn cmd.exe ENOENT'));
+      });
+      return child;
+    },
+  });
+  assert.equal(await launchNextSession(['--target', 'vscode', '--cwd', cwd], io), 0);
+  assert.equal(calls.spawn[0][2].cwd, cwd);
+  assert.deepEqual(calls.logs, [`[next-session] スキップ: 起動に失敗しました (cwd が存在しません: ${cwd})`]);
+  assert.equal(calls.writes.length, 0);
+});
+
+test('VSCode spawn が ENOENT の時は PowerShell 退避コマンドを出して exit 0 を保つ', async () => {
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const { io, calls } = fakeIo({
+    env: { VSCODE_CLI_PATH: codeCli },
+    exists: (file) => file === codeCli || file === 'C:\\work',
+    spawn: (...args) => {
+      calls.spawn.push(args);
+      const child = new EventEmitter();
+      child.unref = () => {};
+      queueMicrotask(() => child.emit('error', new Error('spawn cmd.exe ENOENT')));
+      return child;
+    },
+  });
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  const output = calls.logs.join('\n');
+  assert.match(output, /PowerShell 退避:/);
+  assert.match(output, /--open-url/);
+  assert.match(output, /prompt=%2Fsession-start/);
+});
+
+test('ENOENT/spawn ではない起動失敗では PowerShell 退避を出さない', async () => {
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const { io, calls } = fakeIo({
+    env: { VSCODE_CLI_PATH: codeCli },
+    exists: (file) => file === codeCli || file === 'C:\\work',
+    spawn: (...args) => {
+      calls.spawn.push(args);
+      const child = new EventEmitter();
+      child.unref = () => {};
+      queueMicrotask(() => child.emit('error', new Error('permission denied')));
+      return child;
+    },
+  });
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.doesNotMatch(calls.logs.join('\n'), /PowerShell 退避:/);
+});
+
+test('--open-folder のときだけ新規ウィンドウ(-n)を先に開く', async () => {
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const waited = [];
+  const { io, calls } = fakeIo({
+    env: { VSCODE_CLI_PATH: codeCli },
+    exists: (file) => file === codeCli || file === 'C:\\work',
+    wait: async (ms) => waited.push(ms),
+  });
+  assert.equal(await launchNextSession(['--target', 'vscode', '--open-folder'], io), 0);
+  assert.equal(calls.spawn.length, 2);
+  // -n が無いと既存ウィンドウを再読み込みしてしまう。
+  assert.deepEqual(calls.spawn[0][1], ['/c', codeCli, '-n', 'C:\\work']);
+  assert.equal(calls.spawn[1][1][2], '--open-url');
+  assert.deepEqual(waited, [2500]);
+});
+
+test('VSCode dry-run は route と手順だけを出して spawn しない', async () => {
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const { io, calls } = fakeIo({ env: { VSCODE_CLI_PATH: codeCli }, exists: (file) => file === codeCli || file === 'C:\\work' });
+  assert.equal(await launchNextSession(['--target', 'vscode', '--dry-run'], io), 0);
+  assert.equal(calls.spawn.length, 0);
+  assert.match(calls.logs.join('\n'), /claude\.exe が .* 個/);
+  const output = JSON.parse(calls.logs.find(line => line.startsWith('{')));
+  assert.equal(output.route, 'vscode');
+  assert.equal(output.account, '');
+  assert.equal(output.configDir, path.join('/fake/home', '.claude'));
+  assert.equal(output.configDirSource, 'default');
+  assert.equal(output.steps.length, 1);
+  assert.equal(output.steps[0].label, 'open-session');
+});
+
+function vscodeExtIo({ installedVersion = '', bundledVersion = '0.3.2', codeCli = 'C:\\Code\\bin\\code.cmd' } = {}) {
+  const commands = [];
+  const spawnCalls = [];
+  let exitListenerAttached = false;
+  const base = fakeIo({
+    env: { VSCODE_CLI_PATH: codeCli, CLAUDE_CLI_PATH: 'C:\\Claude CLI\\claude.exe' },
+    exists: (file) => file === codeCli || file === 'C:\\Claude CLI\\claude.exe' || file === 'C:\\work',
+    readdir: (dir) => dir.endsWith('vscode-next-session') ? [`orgiast-next-session-${bundledVersion}.vsix`] : [],
+    runCodeCli: async (args) => {
+      commands.push(args);
+      return args[0] === '--list-extensions'
+        ? { code: 0, stdout: installedVersion ? `orgiast.next-session@${installedVersion}\r\n` : 'other.extension@1.0.0\r\n', stderr: '' }
+        : { code: 0, stdout: 'ok', stderr: '' };
+    },
+    // open-session の spawn は本物の子プロセスと同じく EventEmitter を返し、`exit` を出す。
+    // ランチャーが `spawn` イベントだけを見て早期に抜けていないかをここで実地検証する
+    // (2026-09-04 実測: code.cmd → Code.exe の IPC 完了前に親が抜けると URI が届かない)。
+    spawn: (...args) => {
+      spawnCalls.push(args);
+      const child = new EventEmitter();
+      const attachOnce = child.once.bind(child);
+      child.once = (event, listener) => {
+        if (event === 'exit') exitListenerAttached = true;
+        return attachOnce(event, listener);
+      };
+      child.unref = () => {};
+      queueMicrotask(() => child.emit('exit', 0));
+      return child;
+    },
+  });
+  base.calls.spawn = spawnCalls;
+  return { ...base, commands, exitListenerAttached: () => exitListenerAttached };
+}
+
+test('vscode-ext は未導入時だけ VSIX を先に入れ、正しい URI を開く', async () => {
+  const { io, calls, commands } = vscodeExtIo();
+  assert.equal(await launchNextSession(['--target', 'vscode-ext', '--prompt', '/session-start 日本語'], io), 0);
+  assert.equal(commands[0][0], '--list-extensions');
+  assert.equal(commands[1][0], '--install-extension');
+  assert.match(commands[1][1], /orgiast-next-session-0\.3\.2\.vsix$/);
+  assert.equal(commands[1][2], '--force');
+  assert.equal(calls.spawn.length, 1);
+  const args = calls.spawn[0][1];
+  assert.equal(args[0], '/c');
+  assert.equal(args[1].startsWith('""C:\\Code\\bin\\code.cmd" --open-url "'), true);
+  assert.equal(args[1].endsWith('""'), true);
+  const uriText = args[1].slice('""C:\\Code\\bin\\code.cmd" --open-url "'.length, -'""'.length);
+  assert.equal(calls.spawn[0][2].windowsVerbatimArguments, true);
+  const opened = new URL(uriText);
+  assert.equal(opened.protocol, 'vscode:');
+  assert.equal(opened.hostname, 'orgiast.next-session');
+  assert.equal(opened.pathname, '/start');
+  assert.equal(opened.searchParams.get('prompt'), '/session-start 日本語');
+  assert.equal(opened.searchParams.get('cwd'), 'C:\\work');
+  assert.equal(opened.searchParams.get('claude'), 'C:\\Claude CLI\\claude.exe');
+  assert.equal(JSON.parse(calls.writes.find(([file]) => file.includes('next-session-launch.json.tmp-'))[1]).lastRoute, 'vscode-ext');
+  // code.cmd <cwd> は既存ウィンドウの extension host を再起動するため、どの呼び出しにも裸の cwd を渡さない。
+  assert.equal(calls.spawn.some(([, commandArgs]) => commandArgs.includes('C:\\work') && !commandArgs.includes('--open-url')), false);
+});
+
+test('vscode-ext は同版が導入済みなら再インストールしない', async () => {
+  const { io, calls, commands } = vscodeExtIo({ installedVersion: '0.3.2' });
+  assert.equal(await launchNextSession(['--target', 'vscode-ext'], io), 0);
+  assert.deepEqual(commands, [['--list-extensions', '--show-versions']]);
+  assert.equal(calls.spawn.length, 1);
+});
+
+test('vscode-ext は導入済みでも旧版なら強制更新する', async () => {
+  const { io, commands } = vscodeExtIo({ installedVersion: '0.2.0' });
+  assert.equal(await launchNextSession(['--target', 'vscode-ext'], io), 0);
+  assert.equal(commands[1][0], '--install-extension');
+  assert.equal(commands[1][2], '--force');
+});
+
+test('vscode-ext は URI を撃った子プロセスの exit を待ってから終わる', async () => {
+  // `spawn` イベントだけを見て抜けると、code.cmd → Code.exe の IPC 完了前にランチャーが
+  // 終了し URI が届かない（2026-09-04 実測）。ここでは exit を出すまでランチャーの
+  // Promise が解決しないこと、かつ exit リスナーが実際に登録されたことを観測して確認する。
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const commands = [];
+  let releaseExit;
+  const exitGate = new Promise((resolve) => { releaseExit = resolve; });
+  let spawnedChild = null;
+  const { io } = fakeIo({
+    env: { VSCODE_CLI_PATH: codeCli, CLAUDE_CLI_PATH: 'C:\\Claude CLI\\claude.exe' },
+    exists: (file) => file === codeCli || file === 'C:\\Claude CLI\\claude.exe' || file === 'C:\\work',
+    readdir: (dir) => dir.endsWith('vscode-next-session') ? ['orgiast-next-session-0.1.0.vsix'] : [],
+    runCodeCli: async (args) => {
+      commands.push(args);
+      return args[0] === '--list-extensions'
+        ? { code: 0, stdout: 'other.extension\r\n', stderr: '' }
+        : { code: 0, stdout: 'ok', stderr: '' };
+    },
+    spawn: (...args) => {
+      const child = new EventEmitter();
+      child.unref = () => {};
+      spawnedChild = child;
+      exitGate.then(() => child.emit('exit', 0));
+      return child;
+    },
+  });
+
+  let settled = false;
+  const runPromise = launchNextSession(['--target', 'vscode-ext'], io).then((code) => { settled = true; return code; });
+
+  // list-extensions / install-extension の非同期呼び出し分だけ tick を空けてから
+  // open-session の spawn 呼び出しが来るのを待つ(それでもまだ exit 待ちで settle しない)。
+  for (let i = 0; i < 20 && !spawnedChild; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.notEqual(spawnedChild, null);
+  assert.equal(settled, false);
+  assert.equal(spawnedChild.listenerCount('exit') > 0, true);
+
+  releaseExit();
+  const code = await runPromise;
+  assert.equal(code, 0);
+  assert.equal(settled, true);
+});
+
+test('vscode-ext で code CLI が無い時は理由を出して既存 vscode 経路へフォールバックする', async () => {
+  const base = fakeIo({ env: {}, exists: (file) => file === 'C:\\work' });
+  assert.equal(await launchNextSession(['--target', 'vscode-ext'], base.io), 0);
+  assert.equal(base.calls.spawn.length, 0);
+  assert.match(base.calls.logs[0], /vscode-ext を使えないため vscode 経路へフォールバック/);
+  assert.match(base.calls.logs[1], /VSCode CLI \(code\.cmd\) が見つかりません/);
+});
+
+test('CLAUDE_HEADLESS は VSCode 経路も抑止する', async () => {
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const { io, calls } = fakeIo({ env: { VSCODE_CLI_PATH: codeCli, CLAUDE_HEADLESS: '1' }, exists: (file) => file === codeCli });
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.equal(calls.spawn.length, 0);
+  assert.match(calls.logs[0], /スキップ/);
+});
+
+test('抑止時は spawn せず常に exit 0', async () => {
+  const { io, calls } = fakeIo({ env: { CLAUDE_CLI_PATH: '/fake/claude.exe', CI: '1' } });
+  assert.equal(await launchNextSession([], io), 0);
+  assert.equal(calls.spawn.length, 0);
+  assert.match(calls.logs[0], /スキップ/);
+});
+
+test('wt.exe は existsSync ではなく readdir で見つける', () => {
+  const home = '/home/test';
+  const dir = path.join(home, 'AppData', 'Local', 'Microsoft', 'WindowsApps');
+  // WindowsApps の実行エイリアスは statSync が EACCES なので exists では絶対に見つからない。
+  assert.equal(resolveWt({ env: {}, readdir: () => ['wt.exe', 'python.exe'], homedir: home }), path.join(dir, 'wt.exe'));
+  assert.equal(resolveWt({ env: {}, readdir: () => ['python.exe'], homedir: home }), '');
+  assert.equal(resolveWt({ env: {}, readdir: () => { throw new Error('EACCES'); }, homedir: home }), '');
+  assert.equal(resolveWt({ env: { WT_PATH: '/x/wt.exe' }, readdir: () => [], homedir: home }), '/x/wt.exe');
+  // --wt '' を明示したら wt を使わない(conhost に落とす)指定として尊重する。
+  assert.equal(resolveWt({ env: { WT_PATH: '/x/wt.exe' }, readdir: () => [], homedir: home, flagWt: '' }), '');
+});
+
+test('親セッションの CLAUDE* 環境変数を新セッションへ渡さない', () => {
+  const clean = sanitizeEnv({
+    PATH: '/usr/bin',
+    ANTHROPIC_API_KEY: 'keep',
+    CLAUDECODE: '1',
+    CLAUDE_CODE_SESSION_ID: 'abc',
+    CLAUDE_CODE_MESSAGING_SOCKET: '\\\\.\\pipe\\x',
+    CLAUDE_CODE_ENTRYPOINT: 'claude-vscode',
+    CLAUDE_PID: '1234',
+    CLAUDE_EFFORT: 'high',
+    CLAUDE_CLI_PATH: '/keep/claude.exe',
+    CLAUDE_CONFIG_DIR: '/keep/config',
+  });
+  assert.deepEqual(clean, {
+    PATH: '/usr/bin',
+    ANTHROPIC_API_KEY: 'keep',
+    CLAUDE_CLI_PATH: '/keep/claude.exe',
+    CLAUDE_CONFIG_DIR: '/keep/config',
+  });
+});
+
+test('trustKeyVariants はスラッシュ両表記を重複なく返す', () => {
+  assert.deepEqual(trustKeyVariants('c:/a/b'), ['c:/a/b', 'c:\\a\\b']);
+  assert.deepEqual(trustKeyVariants('c:\\a\\b'), ['c:\\a\\b', 'c:/a/b']);
+  assert.deepEqual(trustKeyVariants(''), []);
+});
+
+test('applyTrust は元設定を破壊せず、既存フィールドを保って両表記を登録する', () => {
+  const original = {
+    theme: 'dark',
+    projects: {
+      'c:/a/b': { allowedTools: ['Read'], hasTrustDialogAccepted: false },
+    },
+  };
+  const before = structuredClone(original);
+  const result = applyTrust(original, 'c:/a/b');
+
+  assert.equal(result.changed, true);
+  assert.deepEqual(original, before);
+  assert.deepEqual(result.config.projects['c:/a/b'], {
+    allowedTools: ['Read'],
+    hasTrustDialogAccepted: true,
+  });
+  assert.deepEqual(result.config.projects['c:\\a\\b'], { hasTrustDialogAccepted: true });
+  assert.equal(result.config.theme, 'dark');
+
+  const alreadyTrusted = applyTrust(result.config, 'c:/a/b');
+  assert.equal(alreadyTrusted.changed, false);
+  assert.equal(alreadyTrusted.config, result.config);
+});
+
+test('ターミナル経路はフォルダ信頼を tmp から原子的に登録してから起動する', async () => {
+  const { io, calls } = fakeIo();
+  assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
+
+  const trustWriteIndex = calls.writes.findIndex(([file]) => file.includes('.claude.json.tmp-'));
+  const trustRenameIndex = calls.renames.findIndex(([, file]) => file.endsWith('.claude.json'));
+  assert.notEqual(trustWriteIndex, -1);
+  assert.notEqual(trustRenameIndex, -1);
+  const trustConfig = JSON.parse(calls.writes[trustWriteIndex][1]);
+  assert.equal(trustConfig.projects['C:\\work'].hasTrustDialogAccepted, true);
+  assert.equal(trustConfig.projects['C:/work'].hasTrustDialogAccepted, true);
+  assert.match(calls.logs.join('\n'), /フォルダ信頼を事前登録しました: C:\\work/);
+  assert.equal(calls.spawn.length, 1);
+});
+
+test('フォルダ信頼が両表記で登録済みなら .claude.json を書き込まない', async () => {
+  const { io, calls } = fakeIo({
+    readFile: async (file) => {
+      if (file.endsWith('next-session.md')) return '<!-- cwd: C:\\work -->';
+      if (file.endsWith('.claude.json')) return JSON.stringify({
+        projects: {
+          'C:\\work': { hasTrustDialogAccepted: true },
+          'C:/work': { hasTrustDialogAccepted: true },
+        },
+      });
+      throw new Error('ENOENT');
+    },
+  });
+  assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
+  assert.equal(calls.writes.some(([file]) => file.includes('.claude.json')), false);
+  assert.equal(calls.spawn.length, 1);
+});
+
+test('ORGIAST_NO_AUTO_TRUST=1 は信頼設定だけを飛ばして起動する', async () => {
+  const { io, calls } = fakeIo({
+    env: { CLAUDE_CLI_PATH: '/fake/claude.exe', ORGIAST_NO_AUTO_TRUST: '1' },
+  });
+  assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
+  assert.equal(calls.writes.some(([file]) => file.includes('.claude.json')), false);
+  assert.equal(calls.spawn.length, 1);
+});
+
+test('~/.claude.json が読めない/壊れている時は絶対に書き戻さない', async () => {
+  // {} を土台に書き戻すと oauthAccount や他プロジェクトの設定ごと消える。
+  for (const broken of ['{ こわれている', '']) {
+    const { io, calls } = fakeIo({
+      readFile: async (file) => {
+        if (file.endsWith('next-session.md')) return '<!-- 前セッション: abc / 更新: 2026-08-28 / cwd: C:\\work -->';
+        if (file.endsWith('.claude.json')) return broken;
+        throw new Error('ENOENT');
+      },
+    });
+    assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
+    assert.equal(calls.writes.some(([file]) => file.includes('.claude.json')), false);
+    // 信頼登録に失敗しても起動そのものは止めない。
+    assert.equal(calls.spawn.length, 1);
+  }
+});
+
+test('VSCode 経路はアカウント確認で .claude.json を読むが書き込まない', async () => {
+  const codeCli = 'C:\\Code\\bin\\code.cmd';
+  const reads = [];
+  const base = fakeIo();
+  const originalReadFile = base.io.readFile;
+  base.io.env = { VSCODE_CLI_PATH: codeCli };
+  base.io.exists = (file) => file === codeCli;
+  base.io.readFile = async (file, ...args) => {
+    reads.push(file);
+    return originalReadFile(file, ...args);
+  };
+
+  assert.equal(await launchNextSession(['--target', 'vscode'], base.io), 0);
+  assert.equal(reads.some((file) => file.endsWith('.claude.json')), true);
+  assert.equal(base.calls.writes.some(([file]) => file.includes('.claude.json')), false);
+});
+
+test('VSCode CLI が見つからない時はターミナルへ落とさず何も起動しない', async () => {
+  // 既定でターミナルへフォールバックしていた頃は「コードは VSCode 既定なのにターミナルが開く」が
+  // 再発し、原因が codeCli 解決の失敗だと気付けなかった(2026-08-30)。落とさずスキップする。
+  const { io, calls } = fakeIo();
+  io.exists = () => false;
+  io.env = {};
+  assert.equal(await launchNextSession([], io), 0);
+  assert.equal(calls.spawn.length, 0);
+});
+
+test('取得したアカウントを成功ログと state に記録する', async () => {
+  const { io, calls } = fakeIo({
+    readFile: async (file) => {
+      if (file.endsWith('next-session.md')) return '<!-- cwd: C:\\work -->';
+      if (file.endsWith('.claude.json')) return JSON.stringify({ oauthAccount: { emailAddress: 'kim@orgiast.jp' } });
+      throw new Error('ENOENT');
+    },
+  });
+  assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
+  assert.match(calls.logs.at(-1), /\/ account=kim@orgiast\.jp$/);
+  const stateWrite = calls.writes.find(([file]) => file.includes('next-session-launch.json.tmp-'));
+  assert.equal(JSON.parse(stateWrite[1]).lastAccount, 'kim@orgiast.jp');
+  assert.equal(JSON.parse(stateWrite[1]).lastConfigDir, path.join('/fake/home', '.claude'));
+});
+
+test('アカウント不明でも起動を止めず候補パスをログに出す', async () => {
+  const { io, calls } = fakeIo();
+  assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
+  assert.equal(calls.spawn.length, 1);
+  assert.match(calls.logs.at(-1), /account=不明\(.+\.claude\.json\)$/);
+});
+
+test('state.configDir は子プロセスの CLAUDE_CONFIG_DIR を上書きする', async () => {
+  const configDir = '/fake/account-config';
+  const { io, calls } = fakeIo({
+    readFile: async (file) => {
+      if (file.endsWith('next-session-launch.json')) return JSON.stringify({ configDir });
+      if (file.endsWith('next-session.md')) return '<!-- cwd: C:\\work -->';
+      if (file.endsWith('.claude.json')) return '{}';
+      throw new Error('ENOENT');
+    },
+  });
+  assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
+  assert.equal(calls.spawn[0][2].env.CLAUDE_CONFIG_DIR, configDir);
+});
+
+
+test('vscode 経路のアカウントは断定せず参考値として出す', () => {
+  // 拡張のログインは外から選べないので、config dir から読んだ値を確定として書くと嘘になる。
+  const accountPath = '/fake/home/.claude.json';
+  assert.equal(accountLabel({ account: 'kim@orgiast.jp', route: 'terminal', accountPath }), 'kim@orgiast.jp');
+  assert.equal(
+    accountLabel({ account: 'kim@orgiast.jp', route: 'vscode', accountPath }),
+    'kim@orgiast.jp(参考: 実際は VSCode ウィンドウのログイン)',
+  );
+  assert.equal(accountLabel({ account: '', route: 'terminal', accountPath }), `不明(${accountPath})`);
+});
+
+test('vscode 経路で state.configDir が指定されていたら効かないことを警告する', async () => {
+  const codeCli = 'C:/Code/bin/code.cmd';
+  const base = fakeIo();
+  const io = {
+    ...base.io,
+    env: { VSCODE_CLI_PATH: codeCli },
+    exists: (file) => file === codeCli || file === 'C:\\work',
+    readFile: async (file) => {
+      if (file.endsWith('next-session-launch.json')) return JSON.stringify({ enabled: true, configDir: 'D:/team-config' });
+      if (file.endsWith('next-session.md')) return '<!-- cwd: C:/work -->';
+      if (file.endsWith('.claude.json')) return JSON.stringify({ oauthAccount: { emailAddress: 'kim@orgiast.jp' } });
+      throw new Error('ENOENT');
+    },
+  };
+  assert.equal(await launchNextSession(['--target', 'vscode'], io), 0);
+  assert.ok(base.calls.logs.some((line) => line.includes('VSCode 拡張経路では効きません')));
+  assert.ok(base.calls.logs.at(-1).endsWith('account: kim@orgiast.jp(参考: 実際は VSCode ウィンドウのログイン)'));
+});
+
+// ---- headless 経路(B5): cheap-code を先に試し、失敗時だけ claude へ落とす ----
+
+function fakeHeadlessChild() {
+  const child = new EventEmitter();
+  child.stdout = { setEncoding() { return this; }, on() { return this; } };
+  child.stderr = { setEncoding() { return this; }, on() { return this; } };
+  child.stdin = { on() {}, end() {} };
+  child.kill = () => {};
+  return child;
+}
+
+function headlessSpawnRecorder(exitCodes) {
+  const calls = [];
+  let index = 0;
+  const spawnImpl = (program, args, options) => {
+    calls.push({ program, args: args ? [...args] : [], options });
+    const child = fakeHeadlessChild();
+    const code = exitCodes[index++] ?? 0;
+    queueMicrotask(() => child.emit('close', code));
+    return child;
+  };
+  return { calls, spawnImpl };
+}
+
+test('headless は cheap-code を先に試し、成功なら1行ログを残して台帳には書かない', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-nsl-ok-'));
+  try {
+    const { calls, spawnImpl } = headlessSpawnRecorder([0]);
+    const logLines = [];
+    const result = await runHeadlessNextSession({
+      env: { ORGIAST_AUTO_SESSION_EXECUTOR: 'cheap-code', ORGIAST_AUTO_SESSION_PROVIDER: 'glm' },
+      hostname: 'TEST-PC', home: tempDir, cwd: tempDir, prompt: '次セッション開始処理を実行してください',
+      executable: 'claude-test', spawnImpl, appendLog: (line) => logLines.push(line),
+      now: () => new Date('2026-09-07T00:00:00Z'),
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].program, process.execPath);
+    assert.ok(calls[0].args.join(' ').includes('cheap-code.mjs'));
+    assert.ok(calls[0].args.join(' ').includes('--provider glm'));
+    assert.equal(result.executor, 'cheap-code:glm');
+    assert.equal(result.status, 'success');
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.fallbackToClaude, false);
+    assert.equal(logLines.length, 1);
+    assert.match(logLines[0], /executor=cheap-code:glm exit=0 status=success fallback=false/);
+    assert.equal(fs.existsSync(path.join(tempDir, '.claude', 'executor-usage.jsonl')), false, '成功時は claude への落下を記録しない');
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('headless は cheap-code 失敗時に既定で claude へ落とさず skipped を記録する', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-nsl-fb-'));
+  try {
+    const { calls, spawnImpl } = headlessSpawnRecorder([1]);
+    const logLines = [];
+    const result = await runHeadlessNextSession({
+      env: { ORGIAST_AUTO_SESSION_EXECUTOR: 'cheap-code', ORGIAST_AUTO_SESSION_PROVIDER: 'glm' },
+      hostname: 'TEST-PC', home: tempDir, cwd: tempDir, prompt: '次セッション開始処理を実行してください',
+      executable: 'claude-test', spawnImpl, appendLog: (line) => logLines.push(line),
+      now: () => new Date('2026-09-07T00:00:00Z'),
+    });
+    assert.equal(calls.length, 1, 'cheap-code 失敗後に claude を起動しない');
+    assert.equal(calls[0].program, process.execPath);
+    assert.equal(result.executor, 'cheap-code:glm');
+    assert.equal(result.fallbackToClaude, false);
+    assert.equal(result.status, 'failure');
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.skippedNoExecutor, true);
+    assert.equal(logLines.length, 1);
+    const ledger = fs.readFileSync(path.join(tempDir, '.claude', 'executor-usage.jsonl'), 'utf8');
+    assert.match(ledger, /"provider":"skipped"/);
+    assert.match(ledger, /cheap-code\/glm exit 1/);
+    assert.doesNotMatch(ledger, /"provider":"claude-fallback"/);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('headless は opt-in 時だけ cheap-code 失敗後に claude へ落とす', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-nsl-optin-'));
+  try {
+    const { calls, spawnImpl } = headlessSpawnRecorder([1, 0]);
+    const result = await runHeadlessNextSession({
+      env: { ORGIAST_AUTO_SESSION_EXECUTOR: 'cheap-code', ORGIAST_AUTO_SESSION_PROVIDER: 'glm', ORGIAST_AUTO_SESSION_CLAUDE_FALLBACK: '1' },
+      hostname: 'TEST-PC', home: tempDir, cwd: tempDir, prompt: '次セッション開始処理を実行してください',
+      executable: 'claude-test', spawnImpl, appendLog: () => {},
+    });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].program, 'claude-test');
+    assert.equal(result.fallbackToClaude, true);
+    assert.equal(result.executor, 'claude');
+    const ledger = fs.readFileSync(path.join(tempDir, '.claude', 'executor-usage.jsonl'), 'utf8');
+    assert.match(ledger, /"provider":"claude-fallback"/);
+    assert.match(ledger, /cheap-code\/glm exit 1/);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('headless は glm 失敗後に deepseek の代替レーンで成功する', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-nsl-alternate-'));
+  try {
+    fs.mkdirSync(path.join(tempDir, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(tempDir, '.claude', 'openrouter.env'), 'OPENROUTER_API_KEY=test-key\n', 'utf8');
+    const { calls, spawnImpl } = headlessSpawnRecorder([3, 0]);
+    const result = await runHeadlessNextSession({
+      env: { ORGIAST_AUTO_SESSION_EXECUTOR: 'cheap-code', ORGIAST_AUTO_SESSION_PROVIDER: 'glm' },
+      hostname: 'TEST-PC', home: tempDir, cwd: tempDir, prompt: '次セッション開始処理を実行してください',
+      executable: 'claude-test', spawnImpl, appendLog: () => {},
+    });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].program, process.execPath);
+    assert.equal(calls[1].program, process.execPath);
+    assert.match(calls[0].args.join(' '), /--provider glm/);
+    assert.match(calls[1].args.join(' '), /--provider deepseek/);
+    assert.equal(result.executor, 'cheap-code:deepseek');
+    assert.equal(result.fallbackToClaude, false);
+    assert.equal(result.status, 'success');
+    const ledgerFile = path.join(tempDir, '.claude', 'executor-usage.jsonl');
+    const ledger = fs.existsSync(ledgerFile) ? fs.readFileSync(ledgerFile, 'utf8') : '';
+    assert.doesNotMatch(ledger, /claude-fallback|"provider":"skipped"/);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+
+test('注入したプロセス数が 5 なら起動をスキップし過負荷をログに出す', async () => {
+  const { io, calls } = fakeIo({ countClaudeProcesses: () => 5 });
+  assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
+  assert.equal(calls.spawn.length, 0);
+  assert.match(calls.logs.join('\n'), /スキップ:.*過負荷/);
+});
+
+test('過負荷ガードは上限・環境設定・force・取得不能を扱う', () => {
+  const base = { state: {}, now: Date.now(), env: {}, force: false, pendingTab: false };
+  assert.equal(DEFAULT_MAX_CLAUDE_PROCESSES, 5);
+  const blocked = shouldLaunch({ ...base, claudeProcesses: 5 });
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.reason, /上限 5/);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 4 }).ok, true);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 5, force: true }).ok, true);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 5, env: { ORGIAST_NEXT_SESSION_MAX_CLAUDE: '20' } }).ok, true);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 20, env: { ORGIAST_NEXT_SESSION_MAX_CLAUDE: '20' } }).ok, false);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: null }).ok, true);
+});
+
+test('tasklist CSV の Claude 行を数え、実行失敗なら null を返す', () => {
+  const fakeExec = (command, args, options) => {
+    assert.equal(command, 'tasklist');
+    assert.deepEqual(args, ['/FI', 'IMAGENAME eq claude.exe', '/FO', 'CSV', '/NH']);
+    assert.equal(options.timeout, 10_000);
+    assert.equal(options.windowsHide, true);
+    return ['"claude.exe","1234","Console","1","100 K"',
+      '"claude.exe","2345","Console","1","100 K"',
+      '"CLAUDE.EXE","3456","Console","1","100 K"',
+      '情報: 指定された条件に一致するタスクはありません。'].join('\r\n');
+  };
+  assert.equal(countClaudeProcesses(fakeExec), 3);
+  assert.equal(countClaudeProcesses(() => { throw new Error('tasklist failed'); }), null);
+  if (process.platform !== 'win32') assert.equal(countClaudeProcesses(), null);
+});
+
+test('countClaudeProcesses は PowerShell の出力から Claude デスクトップアプリ (11本) を除外して CLI (8本) だけを数える', () => {
+  const desktopProcs = [
+    'C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=crashpad-handler',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=gpu-process',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=network.mojom.NetworkService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=renderer --user-data-dir="C:\\Users\\uers\\AppData\\Roaming\\Claude"',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=renderer --app-user-model-id=Claude_pzs8sxrjxfjjc!Claude',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=audio.mojom.AudioService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=video_capture.mojom.VideoCaptureService',
+  ];
+  const cliProcs = [
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --output-format stream-json',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --output-format stream-json --verbose',
+    'C:\\Users\\uers\\AppData\\Roaming\\Claude\\claude-code\\2.1.321\\d020ce1b5d30\\claude.exe --resume 1234',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume aaed1ee2',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume fe31e35e',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume c6a31e7c',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume 5b1c3cb7',
+    'C:\\Users\\uers\\.local\\bin\\claude.exe agents --json',
+  ];
+  const psOutput = JSON.stringify([...desktopProcs, ...cliProcs].map(CommandLine => ({ Name: 'claude.exe', CommandLine })));
+
+  const fakeExec = (command, args) => {
+    if (command === 'powershell.exe') return psOutput;
+    throw new Error('unexpected command');
+  };
+
+  assert.equal(countClaudeProcesses(fakeExec), 8);
+});
+
+
+test('countClaudeProcesses counts inaccessible CLI metadata and filters executable-only desktop paths', () => {
+  const rows = [
+    { Name: 'claude.exe', ExecutablePath: 'C:/Program Files/WindowsApps/Claude_5/app/claude.exe', CommandLine: null },
+    { Name: 'claude.exe', ExecutablePath: 'C:/Users/x/AppData/Local/AnthropicClaude/app/claude.exe', CommandLine: null },
+    { Name: 'claude.exe', ExecutablePath: null, CommandLine: null },
+    { Name: 'claude.exe', ExecutablePath: 'C:/Users/x/AppData/Roaming/Claude/claude-code/1/hash/claude.exe', CommandLine: null },
+  ];
+  assert.equal(countClaudeProcesses(() => JSON.stringify(rows)), 2);
+  assert.equal(countClaudeProcesses(command => { assert.equal(command, 'powershell.exe'); return '[]'; }), 0);
+});
+
+test('concurrency cap preserves the handoff for each new-process route, even with --force-launch', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'next-session-cap-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const claude = path.join(home, '.claude');
+  fs.mkdirSync(claude);
+  const handoff = path.join(claude, 'next-session.md');
+  fs.writeFileSync(handoff, '# Next');
+  for (const route of ['vscode', 'vscode-ext', 'terminal']) {
+    const logs = [];
+    await launchNextSession(['--target', route, '--force-launch'], {
+      env: {}, homedir: home, countClaudeProcesses: () => 0,
+      log: line => logs.push(line), spawn() { assert.fail('spawn at capacity'); },
+      concurrencyOptions: { platform: 'win32', list: () => Array.from({ length: 25 }, (_, index) => ({
+        Name: 'claude.exe', ProcessId: index + 100, CommandLine: 'claude.exe --resume=id',
+      })) },
+    });
+    assert.ok(logs.some(line => line.includes('session_concurrency_cap count=25 limit=20')), route);
+    assert.equal(fs.readFileSync(handoff, 'utf8'), '# Next');
+    assert.equal(fs.existsSync(path.join(claude, 'next-session-launch.json')), false);
+  }
+});
+
+test('headless runs in print mode without checking interactive session capacity', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'next-session-headless-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const claude = path.join(home, '.claude');
+  fs.mkdirSync(claude);
+  fs.writeFileSync(path.join(claude, 'next-session.md'), '# Next');
+  const { calls, spawnImpl } = headlessSpawnRecorder([0]);
+  let capacityChecks = 0;
+  await launchNextSession(['--target', 'headless'], {
+    env: { ORGIAST_AUTO_SESSION_EXECUTOR: 'claude' }, homedir: home,
+    countClaudeProcesses: () => 0, log() {}, spawn: spawnImpl,
+    checkSessionConcurrency() {
+      capacityChecks++;
+      return { ok: false, reason: 'session_concurrency_cap', count: 20, limit: 20 };
+    },
+  });
+  assert.equal(capacityChecks, 0);
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].args.includes('-p'));
+  const state = JSON.parse(fs.readFileSync(path.join(claude, 'next-session-launch.json'), 'utf8'));
+  assert.equal(state.lastHeadless.status, 'success');
+});

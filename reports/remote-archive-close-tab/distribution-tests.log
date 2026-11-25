@@ -1,0 +1,14 @@
+✔ 拡張: 未導入なら最新 VSIX を --force 導入 (84.885499ms)
+✔ 拡張: 同梱 VSIX が無ければ ng (1.2826ms)
+✔ 同梱 VSIX の最新版と package.json の版が一致する (144.802499ms)
+✔ 同梱 VSIX は数値バージョンが最新のものを選ぶ (49.508999ms)
+✔ 同梱 VSIX は未導入または旧版のときだけインストールする (1.0766ms)
+✔ vscode-ext は未導入時だけ VSIX を先に入れ、正しい URI を開く (19.07ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2276.603973

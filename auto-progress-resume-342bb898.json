@@ -1,0 +1,6 @@
+{
+  "state": "done",
+  "evidence": "PR #1133 のマージコミット 21a20fb3b81574055e7cf1f8e6d8014a6f829363 と 5428832 の patch-id 一致、取得済み origin/main への包含確認 exit 0、対象テスト exit 0/fail 0。詳細: /mnt/c/Users/user/.claude/quota-sweep-repo/auto-progress-resume-342bb898-evidence.md。指定保存先は書込許可範囲外のためこのファイルに代替保存。オンライン再確認は DNS 制限で未実施。",
+  "artifact": "/mnt/c/Users/user/.claude/quota-sweep-repo/auto-progress-resume-342bb898-evidence.md",
+  "nextKim": ""
+}

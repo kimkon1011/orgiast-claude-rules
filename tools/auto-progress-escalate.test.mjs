@@ -1,0 +1,133 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { escalateKimDecisions, escalationRowKey, escalationText, isNoKimAction } from './auto-progress-escalate.mjs';
+const H = 3600000;
+const now = Date.parse('2026-11-04T10:00:00Z');
+const row = (hours, extra = {}) => ({ ts: new Date(now - hours * H).toISOString(), sessionId: `session-${hours}`, status: 'waiting_user', nextKim: 'kim の承認が必要です', promise: '返信を確認して報告', pc: 'test-PC', ...extra });
+function setup(t, rows) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'escalate-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  return { home, now, io: { readLedger: () => rows, notifyKim: async () => ({ delivered: 'dm' }) } };
+}
+test('48h boundary, older timestamp, statuses and owner filtering', async t => {
+  const opts = setup(t, [row(47.99), row(48), row(49, { status: 'done' }), row(50, { nextKim: '設定を保存' }), row(1, { lastCheckedAt: new Date(now - 50 * H).toISOString() }), row(60, { lastCheckedAt: new Date(now).toISOString() }), row(1, { ts: 'invalid' })]);
+  const result = await escalateKimDecisions({ ...opts, dryRun: true });
+  assert.equal(result.targets.length, 3);
+  assert.equal(result.sent, 0);
+  assert.equal(fs.existsSync(path.join(opts.home, '.claude')), false);
+});
+test('successful delivery persists dedup and allows retry at 24h', async t => {
+  const r = row(60), opts = setup(t, [r]);
+  let calls = 0;
+  opts.io.notifyKim = async (text, options) => { calls++; assert.equal(options.kind, 'ask'); assert.equal(options.kimActionRequired, true); assert.equal(options.sessionId, r.sessionId); return { delivered: 'dm' }; };
+  assert.equal((await escalateKimDecisions(opts)).sent, 1);
+  const state = JSON.parse(fs.readFileSync(path.join(opts.home, '.claude/auto-progress-escalated.json')));
+  assert.equal(state[escalationRowKey(r)], new Date(now).toISOString());
+  assert.equal((await escalateKimDecisions({ ...opts, now: now + 24 * H - 1 })).targets.length, 0);
+  assert.equal((await escalateKimDecisions({ ...opts, now: now + 24 * H })).sent, 1);
+  assert.equal(calls, 2);
+});
+test('blocked and throwing deliveries continue without recording success', async t => {
+  const rows = [row(60), row(61), row(62)], opts = setup(t, rows), errors = [];
+  let calls = 0;
+  opts.io.stderr = text => errors.push(text);
+  opts.io.notifyKim = async () => { calls++; if (calls === 1) return { delivered: 'blocked', reason: 'policy' }; if (calls === 2) throw new Error('offline'); return { delivered: 'dm' }; };
+  assert.equal((await escalateKimDecisions(opts)).sent, 1);
+  assert.equal(calls, 3);
+  assert.match(errors[0], /blocked/);
+  assert.match(errors[1], /offline/);
+  const state = JSON.parse(fs.readFileSync(path.join(opts.home, '.claude/auto-progress-escalated.json')));
+  assert.deepEqual(Object.keys(state), [escalationRowKey(rows[2])]);
+});
+test('isNoKimAction: 空・なし系は真', () => {
+  assert.ok(isNoKimAction(''));
+  assert.ok(isNoKimAction('なし'));
+  assert.ok(isNoKimAction('無し'));
+  assert.ok(isNoKimAction('特になし'));
+  assert.ok(isNoKimAction('不要'));
+  assert.ok(isNoKimAction('対応不要'));
+  assert.ok(isNoKimAction('　なし　'));
+});
+test('isNoKimAction: 補足付きなしは真（括弧・句読点・ダッシュ・空白）', () => {
+  assert.ok(isNoKimAction('なし（kim-PC の電源を入れたままにしておけば自動で進む）'));
+  assert.ok(isNoKimAction('不要。自動で進む'));
+  assert.ok(isNoKimAction('なし - 自動'));
+  assert.ok(isNoKimAction('なし: 自動'));
+  assert.ok(isNoKimAction('なし、自動'));
+  assert.ok(isNoKimAction('なし（補足）'));
+  assert.ok(isNoKimAction('無し（補足）'));
+  assert.ok(isNoKimAction('なし【補足】'));
+  assert.ok(isNoKimAction('なし[補足]'));
+  assert.ok(isNoKimAction('特になし（自動）'));
+  assert.ok(isNoKimAction('不要（自動）'));
+  assert.ok(isNoKimAction('対応不要（自動）'));
+  assert.ok(isNoKimAction('なし。'));
+  assert.ok(isNoKimAction('なし,自動'));
+  assert.ok(isNoKimAction('不要：自動'));
+  assert.ok(isNoKimAction('無し—'));
+  assert.ok(isNoKimAction('なしー'));
+});
+test('isNoKimAction: なしで始まっても文意が続くのは偽', () => {
+  assert.ok(!isNoKimAction('なしで進めてよいか判断してください'));
+  assert.ok(!isNoKimAction('無しにするか決めてください'));
+  assert.ok(!isNoKimAction('不要な下書きを削除してよいか'));
+  assert.ok(!isNoKimAction('対応不要とするか決めて'));
+});
+test('escalateKimDecisions: 補足付き「なし（…）」行はエスカレーション対象外', async t => {
+  const opts = setup(t, [
+    { ...row(60), nextKim: 'なし（kim-PC の電源を入れたままにしておけば自動で進む）' },
+    { ...row(61), nextKim: 'kim の承認が必要' },
+  ]);
+  const result = await escalateKimDecisions({ ...opts, dryRun: true });
+  assert.equal(result.targets.length, 1);
+  assert.ok(result.targets[0].text.includes('kim の承認が必要'));
+});
+test('dry-run never sends or modifies existing state', async t => {
+  const opts = setup(t, [row(60)]);
+  opts.io.notifyKim = () => assert.fail('dry-run must not send');
+  fs.mkdirSync(path.join(opts.home, '.claude'));
+  const file = path.join(opts.home, '.claude/auto-progress-escalated.json');
+  fs.writeFileSync(file, '{}\n');
+  assert.equal((await escalateKimDecisions({ ...opts, dryRun: true })).targets.length, 1);
+  assert.equal(fs.readFileSync(file, 'utf8'), '{}\n');
+  assert.equal(fs.existsSync(file + '.lock'), false);
+});
+test('nextKim が空または なし の行は owner が kim でも escalate 対象外', async t => {
+  const opts = setup(t, [
+    { ...row(60), owner: 'kim-PC', nextKim: '' },
+    { ...row(61), owner: 'kim-PC', nextKim: 'なし' },
+    { ...row(62), owner: 'kim-PC', nextKim: '　なし　' },
+    { ...row(63), owner: 'kim-PC', nextKim: 'kim の承認が必要' },
+  ]);
+  const result = await escalateKimDecisions({ ...opts, dryRun: true });
+  assert.equal(result.targets.length, 1);
+  assert.ok(result.targets[0].text.includes('kim の承認が必要'));
+});
+test('message preserves decision text and caps context lengths', () => {
+  const text = escalationText(row(60, { nextKim: 'あ'.repeat(2001), promise: '約'.repeat(81) }), now);
+  assert.match(text, /判断待ち 2日/);
+  assert.ok(text.includes('あ'.repeat(2000)));
+  assert.ok(!text.includes('あ'.repeat(2001)));
+  assert.ok(!text.includes('約'.repeat(81)));
+  assert.match(text, /PC test-PC \/ セッション session- \/ 台帳 ts/);
+});
+
+test('同じ行の ask が受信箱にあれば新しく積まず、回答済みなら台帳へ書き戻す（2026-11-19 重複質問）', async t => {
+  const open = row(60), answered = row(70, { sessionId: 'abcdef12-0000' }), fresh = row(80);
+  const opts = setup(t, [open, answered, fresh]);
+  const ask = (r, extra) => ({ id: 'ki-x', kind: 'ask', text: escalationText(r, now - 24 * H), ...extra });
+  const synced = [], sentOptions = [];
+  opts.io.listInbox = () => [ask(open, { status: 'open' }), ask(answered, { status: 'answered', answer: '既製品ですすめて', answeredAt: new Date(now - H).toISOString() })];
+  opts.io.syncAnswer = (home, item) => { synced.push(item.answer); return true; };
+  opts.io.notifyKim = async (text, options) => { sentOptions.push(options); return { delivered: 'session-inbox' }; };
+  const result = await escalateKimDecisions(opts);
+  assert.equal(result.sent, 1);
+  assert.deepEqual(result.targets.map(target => target.rowKey), [escalationRowKey(fresh)]);
+  assert.deepEqual(result.suppressed.map(entry => entry.reason).sort(), ['already-open', 'answered']);
+  assert.deepEqual(synced, ['既製品ですすめて']);
+  assert.equal(sentOptions[0].dedupeKey, `auto-progress-escalate:${escalationRowKey(fresh)}`);
+  assert.equal(sentOptions[0].source, 'auto-progress-escalate');
+});

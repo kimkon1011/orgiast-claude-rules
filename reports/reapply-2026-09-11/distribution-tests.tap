@@ -1,0 +1,32 @@
+✔ URI concurrency and tab title events replenish one without interactive rename (519.866605ms)
+✔ concurrent refill opens one; first prompt title change replenishes one (8.4241ms)
+✔ excess tabs and used tabs are preserved; failure does not spawn in a loop (0.7193ms)
+✔ unacknowledged creation stops; non-owner never opens (0.7735ms)
+✔ socket ownership serializes windows and releases on close (32.754ms)
+✔ JSON/env configuration and stale snapshot are validated (1.883ms)
+✔ CLI and VSIX state readers are byte-identical (5.9188ms)
+✔ /reload はリロードを実行する（dry指定なし） (2.4918ms)
+✔ /reload?dry=1 は dry フラグ付きでリロードを返す（実際には実行しない） (0.2466ms)
+✔ /start は start を返す（既存動作） (0.3096ms)
+✔ /mobile は count と name を返し、count を 1..10 に収める (1.0748ms)
+✔ 未知のパスは start を返す（後方互換） (0.2419ms)
+✔ 空のパスは start を返す (0.3882ms)
+✔ スマホ用タブは失敗回数が上限未満の間だけ再試行する (1.7496ms)
+✔ Claude Code タブが無いときは Open、既にあれば New Conversation を使う (0.4147ms)
+✔ 実在する絶対パスの claude または claude.exe だけを採用する (2.3156ms)
+✔ 相対パス・別名・存在しないパスはPATH上のclaudeへフォールバックする (0.3798ms)
+✔ mobile-sessions の引数は既定値と明示値を解釈する (2.5344ms)
+✔ mobile URI は名前を URL エンコードする (0.2752ms)
+✔ code.cmd は cmd.exe の一枚文字列で URI ごと引用する (0.3916ms)
+✔ dry-run reports actual snapshot and never resolves CLI or spawns (2.1378ms)
+✔ unknown snapshot is not reported as zero (0.8414ms)
+✔ tools 内の相対 import は tools 外へ出ない (1957.69942ms)
+✔ 修正前の growi-manual 型の違反を検出する (1.7001ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 24
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2120.320921

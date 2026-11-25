@@ -1,0 +1,19 @@
+{
+  "windows": [
+    {
+      "provider": "codex",
+      "observedAt": 1792538369913.4355,
+      "stale": false,
+      "exhausted": false,
+      "window": "primary",
+      "usedPercent": 7,
+      "windowMinutes": 10080,
+      "resetsAt": 1793100581000
+    }
+  ],
+  "reasons": {
+    "claude": "credentials: ENOENT",
+    "codex": null
+  },
+  "decision": []
+}

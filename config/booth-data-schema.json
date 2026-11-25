@@ -1,0 +1,35 @@
+{
+  "schemas": {
+    "booth": {
+      "description": "展示会ブース情報（寸法・部材・金額）",
+      "required": ["boothId", "width", "depth"],
+      "fields": {
+        "boothId": { "type": "string", "description": "ブースID/案件番号" },
+        "company": { "type": "string", "description": "顧客会社名" },
+        "eventName": { "type": "string", "description": "展示会名" },
+        "width": { "type": "number", "description": "奥行(m)" },
+        "depth": { "type": "number", "description": "幅(m)" },
+        "height": { "type": "number", "description": "高さ(m)", "optional": true },
+        "boothType": { "type": "string", "description": "ブース種別（島ブース/壁面ブース/コーナーブース/その他）" },
+        "materials": {
+          "type": "array",
+          "description": "使用部材一覧",
+          "items": { "type": "string" }
+        },
+        "cost": { "type": "number", "description": "総額（税抜）", "optional": true },
+        "constructionDays": { "type": "number", "description": "施工日数", "optional": true }
+      }
+    },
+    "booth_minimal": {
+      "description": "最小限のブース情報（提案作成向け）",
+      "required": ["boothId", "width", "depth"],
+      "fields": {
+        "boothId": { "type": "string" },
+        "width": { "type": "number" },
+        "depth": { "type": "number" },
+        "materials": { "type": "array", "items": { "type": "string" }, "optional": true },
+        "cost": { "type": "number", "optional": true }
+      }
+    }
+  }
+}

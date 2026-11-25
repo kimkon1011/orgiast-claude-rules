@@ -1,0 +1,229 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { bumpState, isAmbiguousAckBand, judgeReportLength, judgeReportLengthWithLlm, pruneState } from './report-length-gate.mjs';
+
+const gate = fileURLToPath(new URL('./report-length-gate.mjs', import.meta.url));
+const report = lines => ['実装しました', ...Array.from({ length: lines - 1 }, (_, index) => `詳細 ${index + 1}`)].join('\n');
+
+test('3行の完了報告は pass', () => assert.equal(judgeReportLength(report(3), 'デプロイして').decision, 'pass'));
+test('12行ちょうどの完了報告は pass', () => assert.equal(judgeReportLength(report(12), 'デプロイして').decision, 'pass'));
+test('13行の完了報告は block', () => assert.equal(judgeReportLength(report(13), 'デプロイして').decision, 'block'));
+test('30行でも完了報告の語が無ければ pass', () => assert.equal(judgeReportLength(Array(30).fill('詳細').join('\n'), 'デプロイして').decision, 'pass'));
+test('説明を求めた発言には長い完了報告でも pass', () => assert.equal(judgeReportLength(report(30), 'なぜ失敗したか調べて').decision, 'pass'));
+for (const human of [
+  'れはSonnetでやるとか、Opusでやると決めれないかな。',
+  'この計測不能などの問題は解決しようとしてるのかな。',
+  'こういう問題がきたので、対策をとってもらえるかな。',
+]) {
+  test(`実測の疑問文末を説明要求として pass: ${human}`, () => {
+    const result = judgeReportLength(report(13), human);
+    assert.equal(result.decision, 'pass');
+    assert.equal(result.reason, 'explanation-requested');
+  });
+}
+for (const ending of ['かな', 'かしら', 'でしょうか', 'だろうか', 'ですか', 'ますか']) {
+  for (const punctuation of ['', '。', '．', '.', '！', '!', '\n', '  ']) {
+    test(`疑問文末「${ending}」と末尾 ${JSON.stringify(punctuation)} は説明要求`, () => {
+      const result = judgeReportLength(report(13), `対応可能${ending}${punctuation}`);
+      assert.equal(result.decision, 'pass');
+      assert.equal(result.reason, 'explanation-requested');
+    });
+  }
+}
+for (const human of ['src を直して。', '静かな環境にして。', 'かしら文字を揃えて。', 'src を動かすまで進めて。']) {
+  test(`疑問文末のない依頼は block のまま: ${human}`, () => {
+    assert.equal(judgeReportLength(report(13), human).decision, 'block');
+  });
+}
+test('既存の全角疑問符も説明要求として pass', () => {
+  const result = judgeReportLength(report(13), '対応できる？');
+  assert.equal(result.decision, 'pass');
+  assert.equal(result.reason, 'explanation-requested');
+});
+test('[REPORT-OK] があれば pass', () => assert.equal(judgeReportLength(`${report(30)}\n[REPORT-OK] 詳細が必要`, 'デプロイして').decision, 'pass'));
+test('lastHumanText が空なら fail-open', () => assert.equal(judgeReportLength(report(30), '').decision, 'pass'));
+test('assistantText が空なら fail-open', () => assert.equal(judgeReportLength('', 'デプロイして').decision, 'pass'));
+test('block reason に実際の行数と文字数が入る', () => {
+  const text = report(13);
+  const result = judgeReportLength(text, 'デプロイして');
+  assert.match(result.reason, /13 行/);
+  assert.match(result.reason, new RegExp(`${text.length} 文字`));
+});
+
+test('同一セッションは連続2回だけ block し3回目以降 pass', () => {
+  const now = new Date('2026-09-03T00:00:00Z');
+  let state = {};
+  let result = bumpState(state, 'session-a', true, now); state = result.state; assert.equal(result.blocked, true);
+  result = bumpState(state, 'session-a', true, now); state = result.state; assert.equal(result.blocked, true);
+  result = bumpState(state, 'session-a', true, now); state = result.state; assert.equal(result.blocked, false);
+  result = bumpState(state, 'session-a', true, now); assert.equal(result.blocked, false);
+});
+
+test('24時間より古い状態は捨てる', () => {
+  const state = {
+    old: { consecutive: 2, updatedAt: '2026-09-01T23:59:59Z' },
+    fresh: { consecutive: 1, updatedAt: '2026-09-02T00:00:01Z' },
+  };
+  assert.deepEqual(pruneState(state, new Date('2026-09-03T00:00:00Z')), { fresh: state.fresh });
+});
+
+function tempHome() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'report-length-gate-'));
+  fs.mkdirSync(path.join(root, '.claude'));
+  return root;
+}
+
+function transcript(root, assistantText = report(13), humanText = 'デプロイして') {
+  const file = path.join(root, 'session.jsonl');
+  const entries = [
+    { type: 'user', message: { role: 'user', content: humanText } },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: assistantText }] } },
+  ];
+  fs.writeFileSync(file, entries.map(JSON.stringify).join('\n') + '\n');
+  return file;
+}
+
+function run(input, root, enabled = true) {
+  const env = { ...process.env, ORGIAST_HOME: root };
+  if (enabled) env.ORGIAST_REPORT_LEN_GATE = '1';
+  else delete env.ORGIAST_REPORT_LEN_GATE;
+  return spawnSync(process.execPath, [gate], { input, encoding: 'utf8', env });
+}
+
+test('未有効化なら stdout 空・exit 0', () => {
+  const root = tempHome();
+  const result = run(JSON.stringify({ transcript_path: transcript(root), session_id: 'disabled' }), root, false);
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, '');
+});
+
+test('有効化した実 transcript の block ケースは block JSON・exit 0', () => {
+  const root = tempHome();
+  const result = run(JSON.stringify({ transcript_path: transcript(root), session_id: 'blocked' }), root);
+  assert.equal(result.status, 0);
+  assert.equal(JSON.parse(result.stdout).decision, 'block');
+});
+
+test('stop_hook_active は何もしない', () => {
+  const root = tempHome();
+  const result = run(JSON.stringify({ transcript_path: transcript(root), session_id: 'active', stop_hook_active: true }), root);
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, '');
+  assert.equal(fs.existsSync(path.join(root, '.claude', 'report-length-ledger.jsonl')), false);
+});
+
+test('壊れた JSON は fail-open かつ skipped を記録', () => {
+  const root = tempHome();
+  const result = run('{broken', root);
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, '');
+  const entry = JSON.parse(fs.readFileSync(path.join(root, '.claude', 'report-length-ledger.jsonl'), 'utf8'));
+  assert.equal(entry.verdict, 'skipped');
+  assert.equal(entry.reasonCode, 'invalid-json');
+});
+
+test('ledger に excerpt が非空の1行を書く', () => {
+  const root = tempHome();
+  run(JSON.stringify({ transcript_path: transcript(root), session_id: 'ledger' }), root);
+  const lines = fs.readFileSync(path.join(root, '.claude', 'report-length-ledger.jsonl'), 'utf8').trim().split(/\r?\n/);
+  assert.equal(lines.length, 1);
+  assert.ok(JSON.parse(lines[0]).excerpt.length > 0);
+});
+
+// 2026-09-18: 台帳の block を1件ずつ本文で読み、誤爆と判定した3つの型の回帰テスト。
+test('[REPORT-OK: 理由] 形式の免除宣言も pass（案内文どおり理由を添えた形）', () => {
+  const result = judgeReportLength(`${report(30)}\n[REPORT-OK: kim が比較を明示依頼したため]`, 'やって');
+  assert.equal(result.decision, 'pass');
+  assert.equal(result.reason, 'report-ok');
+});
+test('番号付きの操作手順が3つ以上ある手渡し本文は pass（§1.5.1 と衝突させない）', () => {
+  const handoff = [
+    '完了しました。残りは kim の操作だけです。',
+    '1. デスクトップの「①承認する」をダブルクリック',
+    '2. 上部メニューの「ブース制作アプリ」をクリック',
+    '3. 「Google Meet 連携を承認」をクリック',
+    ...Array.from({ length: 12 }, (_, index) => `補足 ${index + 1}`),
+  ].join('\n');
+  assert.equal(judgeReportLength(handoff, 'やって').decision, 'pass');
+});
+test('「手渡しなし」と書いた長い完了報告は従来どおり block', () => {
+  const body = [
+    '[手渡し判定] 手渡しなし',
+    '完了しました。',
+    '1. 設定をクリックして変更',
+    '2. 画面を開いて確認',
+    '3. 値を入力して保存',
+    ...Array.from({ length: 12 }, (_, index) => `詳細 ${index + 1}`),
+  ].join('\n');
+  assert.equal(judgeReportLength(body, 'やって').decision, 'block');
+});
+test('本文に「クリック」の語があるだけの完了報告は block（手順ではない）', () => {
+  const body = [report(20), '画面では「候補の中から顧客を選んでください」と表示されます。クリックが必要です。'].join('\n');
+  assert.equal(judgeReportLength(body, 'やって').decision, 'block');
+});
+test('成果物そのものを頼まれた turn は pass', () => {
+  for (const human of ['文章を作って', '安い候補を探して', 'PDFにして', '請求と入金の表を作って']) {
+    const result = judgeReportLength(report(30), human);
+    assert.equal(result.decision, 'pass', human);
+    assert.equal(result.reason, 'deliverable-requested', human);
+  }
+});
+test('成果物依頼でない短い指示は従来どおり block', () => {
+  for (const human of ['すすめて', 'やって', '２でけして。']) {
+    assert.equal(judgeReportLength(report(30), human).decision, 'block', human);
+  }
+});
+
+test('相槌・相談調は曖昧シグナル帯に入る', () => {
+  for (const human of ['すすめて', '承認した', 'やった', 'ぜんぶやったよ。', 'マニュアルにアクセスできない。', 'また映像については検討したいと考えております。']) {
+    assert.equal(isAmbiguousAckBand(human), true, human);
+  }
+});
+
+test('強い依頼・agent message・空文字は曖昧シグナル帯に入らない', () => {
+  for (const human of ['エラーが起きている、解決して。', '２でけして。', '無料相談ボタンを青に変更してほしい。', 'Another Claude session sent a message: 完了', '']) {
+    assert.equal(isAmbiguousAckBand(human), false, human);
+  }
+});
+
+test('曖昧帯で LLM が PASS なら pass にする', async () => {
+  const result = await judgeReportLengthWithLlm(report(13), '承認した', () => ({ status: 0, stdout: 'PASS\n' }));
+  assert.equal(result.decision, 'pass');
+  assert.equal(result.reason, 'llm-context-expected');
+});
+
+test('曖昧帯で LLM が BLOCK なら block のまま', async () => {
+  const result = await judgeReportLengthWithLlm(report(13), 'すすめて', () => ({ status: 0, stdout: 'BLOCK\n' }));
+  assert.equal(result.decision, 'block');
+  assert.equal(result.llm, 'block');
+});
+
+test('曖昧帯で LLM がエラーなら fail-open', async () => {
+  for (const response of [{ status: 1, stdout: '', stderr: 'failed' }, { status: 0, stdout: '' }]) {
+    const result = await judgeReportLengthWithLlm(report(13), 'やった', () => response);
+    assert.equal(result.decision, 'pass');
+    assert.equal(result.reason, 'llm-unavailable-fail-open');
+  }
+});
+
+test('曖昧帯の外なら LLM を呼ばず block のまま', async () => {
+  const result = await judgeReportLengthWithLlm(report(13), 'デプロイして', () => { throw new Error('ask must not be called'); });
+  assert.equal(result.decision, 'block');
+});
+
+test('kill-switch が 0 なら LLM を呼ばず block のまま', async () => {
+  const previous = process.env.ORGIAST_REPORT_LLM_GATE;
+  process.env.ORGIAST_REPORT_LLM_GATE = '0';
+  try {
+    const result = await judgeReportLengthWithLlm(report(13), '承認した', () => ({ status: 0, stdout: 'PASS\n' }));
+    assert.equal(result.decision, 'block');
+  } finally {
+    if (previous === undefined) delete process.env.ORGIAST_REPORT_LLM_GATE;
+    else process.env.ORGIAST_REPORT_LLM_GATE = previous;
+  }
+});

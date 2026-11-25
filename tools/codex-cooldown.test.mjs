@@ -1,0 +1,166 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { codexCooldownRemaining, codexHardBlockBypass, parseCodexResetUntil, providerResetUntil, writeCodexCooldown } from './codex-cooldown.mjs';
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+
+test('parseCodexResetUntil は複合・分・時間の相対時間を解釈する', () => {
+  const now = new Date('2026-09-03T10:00:00+09:00').getTime();
+  assert.equal(parseCodexResetUntil('try again in 4h 12m', now), now + 4 * HOUR + 12 * MINUTE);
+  assert.equal(parseCodexResetUntil('try again in 35 minutes', now), now + 35 * MINUTE);
+  assert.equal(parseCodexResetUntil('try again in 2 hours', now), now + 2 * HOUR);
+  assert.equal(parseCodexResetUntil('quota exceeded; 4h12m remaining', now), now + 4 * HOUR + 12 * MINUTE);
+});
+
+test('parseCodexResetUntil は resets at HH:MM をローカル時刻として解釈する', () => {
+  const now = new Date(2026, 8, 3, 10, 0, 0).getTime();
+  assert.equal(parseCodexResetUntil('resets at 14:30', now), new Date(2026, 8, 3, 14, 30, 0).getTime());
+  const late = new Date(2026, 8, 3, 15, 0, 0).getTime();
+  assert.equal(parseCodexResetUntil('resets at 14:30', late), new Date(2026, 8, 4, 14, 30, 0).getTime());
+});
+
+test('parseCodexResetUntil は日付付き resets と ISO8601 を解釈する', () => {
+  const now = new Date(2026, 8, 3, 10, 0, 0).getTime();
+  assert.equal(parseCodexResetUntil('resets 2026-09-07 11:27', now), new Date(2026, 8, 7, 11, 27, 0).getTime());
+  assert.equal(parseCodexResetUntil('available 2026-09-07T11:27:00+09:00', now), Date.parse('2026-09-07T11:27:00+09:00'));
+});
+
+test('parseCodexResetUntil は英語月名付きの絶対日時を解釈する', () => {
+  const now = Date.parse('2026-09-03T20:00:00+09:00');
+  assert.equal(parseCodexResetUntil("ERROR: You've hit your usage limit. try again at Sep 7th, 2026 11:27 AM", now), new Date(2026, 8, 7, 11, 27).getTime());
+  assert.equal(parseCodexResetUntil('try again at September 7, 2026 11:27 PM', now), new Date(2026, 8, 7, 23, 27).getTime());
+  assert.equal(parseCodexResetUntil('resets at Sep 7 2026 11:27', now), new Date(2026, 8, 7, 11, 27).getTime());
+  assert.equal(parseCodexResetUntil('try again at Sep 7th, 2026 11:27 AM (UTC)', now), Date.UTC(2026, 8, 7, 11, 27));
+});
+
+test('parseCodexResetUntil は12 AM/PMと年省略時の直近の未来を解釈する', () => {
+  const now = new Date(2026, 8, 8, 20, 0).getTime();
+  assert.equal(parseCodexResetUntil('try again at Sep 9th 12:05 AM', now), new Date(2026, 8, 9, 0, 5).getTime());
+  assert.equal(parseCodexResetUntil('try again at Sep 9th 12:05 PM', now), new Date(2026, 8, 9, 12, 5).getTime());
+  assert.equal(parseCodexResetUntil('try again at Sep 7th 11:27 AM', now), now + HOUR);
+});
+
+// 2026-10-20T19:15:41Z の実測メッセージ（末尾は "try again at 8:20 AM."）。日付が無いため
+// 解釈できず、同じ出力中の "2026-10-21T09:05:00.000Z" を採用して cooldown が 13.8 時間後になった。
+test('parseCodexResetUntil は日付なしの try again at H:MM AM/PM を次のローカル時刻にする', () => {
+  const now = new Date(2026, 9, 21, 4, 15, 0).getTime();
+  const until = parseCodexResetUntil("ERROR: You've hit your usage limit. or try again at 8:20 AM.", now);
+  assert.equal(until, new Date(2026, 9, 21, 8, 20, 0).getTime());
+});
+
+test('parseCodexResetUntil は出力中の無関係な ISO イベント時刻を再開時刻にしない', () => {
+  const now = Date.parse('2026-10-20T19:15:41.000Z');
+  const until = parseCodexResetUntil("ERROR: You've hit your usage limit. try again at 8:20 AM.\n{\"timestamp\":\"2026-10-21T09:05:00.000Z\"}", now);
+  assert.equal(until, new Date(2026, 9, 21, 8, 20, 0).getTime());
+  assert.notEqual(until, Date.parse('2026-10-21T09:05:00.000Z'));
+});
+
+test('parseCodexResetUntil は裸の相対時間と7日超を既定1時間へ戻す', () => {
+  const now = new Date(2026, 8, 8, 20, 0).getTime();
+  assert.equal(parseCodexResetUntil('details: 3365h 15m observed', now), now + HOUR);
+  assert.equal(parseCodexResetUntil('try again in 3365h 15m', now), now + HOUR);
+});
+
+test('providerResetUntil は7日超の絶対日時を fallbackMs へ戻す', () => {
+  const now = new Date(2026, 8, 8, 20, 0).getTime();
+  assert.equal(providerResetUntil('resets at 2027-01-26 18:44', now), now + 5 * HOUR);
+});
+
+test('parseCodexResetUntil は年明示の過去日時なら now を返す', () => {
+  const now = new Date(2026, 8, 8, 20, 0).getTime();
+  assert.equal(parseCodexResetUntil('try again at Sep 7th, 2026 11:27 AM', now), now);
+});
+
+test('parseCodexResetUntil は該当なしなら60分後を返す', () => {
+  const now = 1_700_000_000_000;
+  assert.equal(parseCodexResetUntil('usage limit', now), now + HOUR);
+});
+
+test('codexCooldownRemaining は未来だけ残り時間を返し、不正状態は0にする', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cooldown-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'provider-cooldown.json');
+  const now = 1_700_000_000_000;
+
+  fs.writeFileSync(file, JSON.stringify({ codex: { until: now + MINUTE } }));
+  assert.equal(codexCooldownRemaining(now, file), MINUTE);
+  fs.writeFileSync(file, JSON.stringify({ codex: { until: now - 1 } }));
+  assert.equal(codexCooldownRemaining(now, file), 0);
+  fs.writeFileSync(file, JSON.stringify({ groq: { until: now + MINUTE } }));
+  assert.equal(codexCooldownRemaining(now, file), 0);
+  assert.equal(codexCooldownRemaining(now, path.join(dir, 'missing.json')), 0);
+  fs.writeFileSync(file, '{broken');
+  assert.equal(codexCooldownRemaining(now, file), 0);
+});
+
+test('writeCodexCooldown は他プロバイダを保持する', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cooldown-write-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'provider-cooldown.json');
+  const groq = { until: 123, reason: 'http_429', at: 100 };
+  fs.writeFileSync(file, JSON.stringify({ groq }));
+  const until = Date.now() + HOUR;
+  writeCodexCooldown(until, file);
+  const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(state.groq, groq);
+  assert.equal(state.codex.until, until);
+  assert.equal(state.codex.reason, 'usage_limit');
+  assert.ok(Number.isFinite(state.codex.at));
+});
+
+test('writeCodexCooldown の reason は省略時に後方互換で、明示時は保存する', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cooldown-reason-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'provider-cooldown.json');
+  writeCodexCooldown(Date.now() + HOUR, file);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).codex.reason, 'usage_limit');
+  writeCodexCooldown(Date.now() + HOUR, file, 'usage_limit_no_fallback');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).codex.reason, 'usage_limit_no_fallback');
+});
+
+test('writeCodexCooldown は140日後を5時間へ丸め reason と history に残す', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cooldown-clamp-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'provider-cooldown.json');
+  const before = Date.now();
+  writeCodexCooldown(before + 140 * 24 * HOUR, file, 'usage_limit');
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8')).codex;
+  assert.ok(Math.abs(saved.until - (before + 5 * HOUR)) < 2000);
+  assert.equal(saved.reason, 'usage_limit:clamped');
+  const history = JSON.parse(fs.readFileSync(path.join(dir, 'codex-limit-history.jsonl'), 'utf8').trim());
+  assert.equal(history.until, saved.until);
+  assert.equal(history.reason, saved.reason);
+});
+
+test('codexHardBlockBypass は有効なクールダウンとフォールバック不能が揃った時だけ解除する', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hard-block-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'provider-cooldown.json');
+  const now = 1_700_000_000_000;
+  assert.deepEqual(codexHardBlockBypass(now, file, { hasGemini: true }), { bypass: false, until: 0, reason: '' });
+  fs.writeFileSync(file, JSON.stringify({ codex: { until: now + HOUR, reason: 'usage_limit' } }));
+  assert.equal(codexHardBlockBypass(now, file, { hasGemini: true }).bypass, false);
+  fs.writeFileSync(file, JSON.stringify({ codex: { until: now + HOUR, reason: 'usage_limit_no_fallback' } }));
+  assert.equal(codexHardBlockBypass(now, file, { hasGemini: true }).bypass, true);
+  fs.writeFileSync(file, JSON.stringify({ codex: { until: now + HOUR, reason: 'usage_limit' } }));
+  assert.equal(codexHardBlockBypass(now, file, { hasGemini: false }).bypass, true);
+});
+
+test('codex-astra cooldown is independent and legacy path calls still work', async (t) => {
+  const { providerCooldownMs } = await import('./codex-cooldown.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'astra-cooldown-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'provider-cooldown.json'), now = Date.now();
+  writeCodexCooldown(now + HOUR, file);
+  writeCodexCooldown(now + 2 * HOUR, 'codex-astra', 'usage_limit', file);
+  assert.equal(providerCooldownMs('codex', now, file), HOUR);
+  assert.equal(providerCooldownMs('codex-astra', now, file), 2 * HOUR);
+  assert.equal(providerCooldownMs('codex-astra', now + 3 * HOUR, file), 0);
+  assert.equal(codexCooldownRemaining(now, file), HOUR);
+  assert.equal(JSON.parse(fs.readFileSync(file)).codex.reason, 'usage_limit');
+  assert.equal(JSON.parse(fs.readFileSync(file))['codex-astra'].reason, 'usage_limit');
+});

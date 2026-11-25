@@ -1,0 +1,340 @@
+import { gatewayParams } from './provider-routing.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { callWithFallback, FALLBACK_CHAIN } from './llm-fallback.mjs';
+import { isEntry } from './is-entry.mjs';
+import { recordRun } from './lib/change-gate.mjs';
+
+export const PROFILES = {
+  ai: {
+    chats: null,
+    files: { digest: 'ai-news-digest.md', proposals: 'ai-news-proposals.jsonl', topics: 'ai-news-topics.jsonl', state: 'line-openchat/state.json' },
+    marker: 'AI-NEWS',
+    heading: '📡 生成AI最新情報（LINEオープンチャット / {date}）',
+    categories: ['cost', 'quality', 'model-release', 'tool', 'prompt-technique', 'other'],
+  },
+  cafe: {
+    chats: ['レンスペ民の集い'],
+    files: { digest: 'cafe-digest.md', proposals: 'cafe-proposals.jsonl', topics: 'cafe-topics.jsonl', state: 'line-openchat/state-cafe.json' },
+    marker: 'CAFE-DIGEST',
+    heading: '☕ カフェ・レンタルスペース運営の改善ネタ（LINE レンスペ民の集い / {date}）',
+    categories: ['集客', '価格', '運営効率', '設備', 'トラブル', '法規税務', '売上', 'other'],
+    classificationSystem: 'カフェ併設レンタルスペース（212coffee）の運営改善の観点で各入力を分類する。category は 集客|価格|運営効率|設備|トラブル|法規税務|売上|other、score は 0=無関係/雑談、1=一般論、2=有用、3=自店で今すぐ試す価値がある具体策（数字・手順・サービス名を含む）。JSONオブジェクトのみを返す。形式は {"items":[{"i":0,"category":"集客","score":3}]}。入力の全要素に同じ i で1件ずつ返す。',
+    summarySystem: '発言は他店オーナーの伝聞で裏取りされていない。JSONオブジェクトのみを返す。形式は {"digest":["1行目"],"proposals":[{"title":"...","action":"...","evidence":"...","category":"集客","confidence":"medium"}]}。digest は日本語3〜10行、1トピック1行、具体的な数字・サービス名・手順を残す。proposals は title、action、evidence（120字以内）、category（集客|価格|運営効率|設備|トラブル|法規税務|売上|other）、confidence（high|medium|low）を持つ。action は「212coffee で何を試すか」を1文で。発言者名は出さず「参加者」とする。注意書きだけの行は作らない。',
+  },
+  minpaku: {
+    chats: ['民泊オーナー雑談ルーム'],
+    files: { digest: 'minpaku-digest.md', proposals: 'minpaku-proposals.jsonl', topics: 'minpaku-topics.jsonl', state: 'line-openchat/state-minpaku.json' },
+    marker: 'MINPAKU-DIGEST',
+    heading: '🏠 特区民泊・民泊運営の改善ネタ（LINE 民泊オーナー雑談ルーム / {date}）',
+    categories: ['価格・稼働率', 'OTA運用', '清掃・リネン・運営コスト', 'レビュー・ゲスト対応', '規制・特区民泊・税', '集客・直販・長期滞在', 'トラブル事例', 'other'],
+    classificationSystem: '特区民泊・民泊（メルシ・TRIANGLE等）の運営改善の観点で各入力を分類する。category は 価格・稼働率|OTA運用|清掃・リネン・運営コスト|レビュー・ゲスト対応|規制・特区民泊・税|集客・直販・長期滞在|トラブル事例|other、score は 0=無関係/雑談/宣伝、1=一般論、2=有用、3=自店舗で今すぐ試す価値がある具体策（数字・手順・サービス名を含む）。JSONオブジェクトのみを返す。形式は {"items":[{"i":0,"category":"価格・稼働率","score":3}]}。入力の全要素に同じ i で1件ずつ返す。',
+    summarySystem: '発言は伝聞・未検証。大阪の特区民泊（メルシ・TRIANGLE、Beds24経由で Airbnb/Booking.com/直販）の全室稼働95%・単価最適化・月次黒字化に使える具体策だけ抽出。各提案に『要検証』と検証方法（どのデータ・どの画面で確かめるか）を付ける。雑談・挨拶・宣伝は捨てる。特区民泊の最低2泊を下回る提案は法令違反として除外。JSONオブジェクトのみを返す。形式は {"digest":["1行目"],"proposals":[{"title":"...","action":"...","evidence":"...","category":"価格・稼働率","confidence":"medium"}]}。digest は日本語3〜10行、1トピック1行、具体的な数字・サービス名・手順を残す。proposals は title、action、evidence（120字以内）、category（価格・稼働率|OTA運用|清掃・リネン・運営コスト|レビュー・ゲスト対応|規制・特区民泊・税|集客・直販・長期滞在|トラブル事例|other）、confidence（high|medium|low）を持つ。action は民泊運営で何を試すか（検証方法を含む）を1文で。発言者名は出さず「参加者」とする。注意書きだけの行は作らない。',
+  },
+};
+const CATEGORIES = new Set(PROFILES.ai.categories);
+export const PROVIDERS = {
+  groq: { url: 'https://api.groq.com/openai/v1/chat/completions', env: 'GROQ_API_KEY', file: 'groq.env', model: 'openai/gpt-oss-120b' },
+  cerebras: { url: 'https://api.cerebras.ai/v1/chat/completions', env: 'CEREBRAS_API_KEY', file: 'cerebras.env', model: 'zai-glm-4.7' },
+  deepseek: { url: 'https://openrouter.ai/api/v1/chat/completions', env: 'OPENROUTER_API_KEY', file: 'openrouter.env', model: 'deepseek/deepseek-v4-flash' },
+  openrouter: { url: 'https://openrouter.ai/api/v1/chat/completions', env: 'OPENROUTER_API_KEY', file: 'openrouter.env', model: 'openai/gpt-oss-120b', extraHeaders: { 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast' } },
+  gemini: { url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', env: 'GEMINI_API_KEY', file: 'gemini.env', model: 'gemini-3.6-flash' },
+  kimi: { url: 'https://openrouter.ai/api/v1/chat/completions', env: 'OPENROUTER_API_KEY', file: 'openrouter.env', model: 'moonshotai/kimi-k3', special: 'kimi' },
+  grok: { url: 'https://api.x.ai/v1/chat/completions', env: 'XAI_API_KEY', file: 'xai.env', model: 'grok-3' },
+};
+
+export function parseEnvText(text) {
+  const result = {};
+  for (const raw of String(text ?? '').replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    const match = raw.trim().match(/^(?:export\s+)?([A-Za-z_][\w]*)\s*=\s*(.*)$/);
+    if (!match) continue;
+    let value = match[2].trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+    result[match[1]] = value;
+  }
+  return result;
+}
+
+function canonicalText(text) { return String(text).normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase(); }
+function hash(text) { return crypto.createHash('sha256').update(text).digest('hex'); }
+
+export function preprocessMessages(messages, { minLength = 20, meaningful = (text) => /(GPT|Claude|Gemini|Llama|DeepSeek|Grok|Qwen|Mistral|Copilot|AI|LLM)[-\s\w.]*/iu.test(text) } = {}) {
+  const seen = new Set();
+  const greeting = /^(了解(しました)?|ありがとうございます|ありがとう|おつかれさまです|お疲れ様です|なるほど|よろしくお願いします|👍|🙏|はい|承知しました)[!！。\s]*$/iu;
+  const attachment = /(スタンプ|写真|画像|ファイル|動画)を送信しました/u;
+  return messages.filter((message) => {
+    const text = String(message.text ?? '').trim();
+    const normalized = canonicalText(text);
+    if (!text || greeting.test(text) || attachment.test(text)) return false;
+    if ([...text].length < minLength && !/https?:\/\//iu.test(text) && !meaningful(text)) return false;
+    const key = hash(normalized);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function repairJson(text) {
+  return text.replace(/```(?:json)?/gi, '').replace(/```/g, '').replace(/,\s*([}\]])/g, '$1');
+}
+
+export function parseClassifications(raw, categories = CATEGORIES) {
+  const allowed = new Set(categories);
+  const clean = repairJson(String(raw ?? ''));
+  const results = [];
+  const add = (item) => {
+    if (!item || !Number.isInteger(Number(item.i))) return;
+    const category = allowed.has(item.category) ? item.category : 'other';
+    const score = Math.max(0, Math.min(3, Number(item.score) || 0));
+    results.push({ i: Number(item.i), keep: typeof item.keep === 'boolean' ? item.keep : score >= 2, category, score, why: String(item.why || '') });
+  };
+  const addValue = (value) => {
+    const items = Array.isArray(value) ? value : Array.isArray(value?.items) ? value.items : [value];
+    items.forEach(add);
+  };
+  const starts = [clean.indexOf('['), clean.indexOf('{')].filter((i) => i >= 0).sort((a, b) => a - b);
+  for (const start of starts) {
+    for (let end = clean.length; end > start; end--) {
+      try {
+        const value = JSON.parse(clean.slice(start, end));
+        addValue(value);
+        if (results.length) return results;
+      } catch {}
+    }
+  }
+  for (const match of clean.matchAll(/\{[^{}]*\}/g)) { try { add(JSON.parse(repairJson(match[0]))); } catch {} }
+  return results;
+}
+
+export function replaceMarkerSection(existing, body, marker = 'AI-NEWS') {
+  const start = `<!-- ${marker}-START -->`;
+  const end = `<!-- ${marker}-END -->`;
+  const section = `${start}\n${body.trim()}\n${end}`;
+  const lines = String(existing ?? '').split(/\r?\n/);
+  const a = lines.indexOf(start), b = lines.indexOf(end, a + 1);
+  if (a >= 0 && b > a) return [...lines.slice(0, a), ...section.split('\n'), ...lines.slice(b + 1)].join('\n');
+  const prefix = String(existing ?? '').trimEnd();
+  return `${prefix}${prefix ? '\n\n' : ''}${section}\n`;
+}
+
+function normalizeTitle(title) { return canonicalText(title); }
+export function appendUniqueProposals(existingText, proposals, now = new Date(), categories = CATEGORIES) {
+  const allowed = new Set(categories);
+  const records = String(existingText ?? '').split(/\r?\n/).filter(Boolean).map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
+  const pending = new Set(records.filter((r) => r.status === 'pending').map((r) => normalizeTitle(r.title)));
+  let next = records.reduce((max, r) => Math.max(max, Number(String(r.id || '').match(/P-(\d+)/)?.[1]) || 0), 0) + 1;
+  const added = [];
+  for (const proposal of proposals) {
+    const title = String(proposal.title || '').trim();
+    if (!title || pending.has(normalizeTitle(title))) continue;
+    const record = { id: `P-${String(next++).padStart(4, '0')}`, createdAt: now.toISOString(), status: 'pending', title, action: String(proposal.action || ''), evidence: String(proposal.evidence || '').slice(0, 120), category: allowed.has(proposal.category) ? proposal.category : 'other', confidence: ['high', 'medium', 'low'].includes(proposal.confidence) ? proposal.confidence : 'low' };
+    records.push(record); added.push(record); pending.add(normalizeTitle(title));
+  }
+  return { text: records.map(JSON.stringify).join('\n') + (records.length ? '\n' : ''), added, records };
+}
+
+function readJsonLines(text) {
+  return String(text ?? '').split(/\r?\n/).filter(Boolean).map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
+}
+
+export function updateTopics(existingText, digestLines, ts, now = Date.now(), categories = CATEGORIES) {
+  const allowed = new Set(categories);
+  const cutoff = now - 30 * 24 * 60 * 60 * 1000;
+  const records = readJsonLines(existingText).filter((topic) => Number(topic.ts) >= cutoff);
+  const ids = new Set(records.map((topic) => topic.id));
+  for (const value of digestLines) {
+    const line = String(value).trim();
+    if (!line) continue;
+    const id = hash(canonicalText(line)).slice(0, 12);
+    if (ids.has(id)) continue;
+    records.push({ id, ts: Number(ts), category: allowed.has(value.category) ? value.category : 'other', line });
+    ids.add(id);
+  }
+  records.sort((a, b) => Number(b.ts) - Number(a.ts));
+  return { text: records.map(JSON.stringify).join('\n') + (records.length ? '\n' : ''), records };
+}
+
+export function selectUnprocessed(messages, state, since) {
+  const processed = new Set(since ? [] : (state?.processedIds || []));
+  const cutoff = since ? new Date(since).getTime() : -Infinity;
+  return messages.filter((m) => Number(m.ts) >= cutoff && !processed.has(m.id));
+}
+
+function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
+function readMessages(dir) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((f) => /^\d{4}-\d{2}\.jsonl$/.test(f)).sort().reverse().flatMap((f) => fs.readFileSync(path.join(dir, f), 'utf8').split(/\r?\n/).filter(Boolean).map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean)).sort((a, b) => Number(b.ts) - Number(a.ts));
+}
+
+function loadKey(home, provider) {
+  const p = PROVIDERS[provider];
+  if (process.env[p.env]) return process.env[p.env];
+  try { return parseEnvText(fs.readFileSync(path.join(home, '.claude', p.file), 'utf8'))[p.env] || ''; } catch { return ''; }
+}
+
+function attemptMetaFrom(error, startProvider) {
+  const failures = Array.isArray(error?.failures) ? error.failures : [];
+  const last = failures.length ? failures[failures.length - 1] : null;
+  const candidate = last?.candidate;
+  return {
+    provider: candidate?.provider || '',
+    model: candidate?.model || '',
+    attempt: Number(last?.attempt ?? 0),
+    failover: Boolean(candidate && candidate.provider !== startProvider),
+  };
+}
+
+export function createLlmClient({ home = os.homedir(), fetchImpl = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), usageFile } = {}) {
+  return async ({ provider, messages, maxTokens = 4000, responseFormat }) => {
+    const run = async (format) => callWithFallback({
+      start: { provider, model: PROVIDERS[provider]?.model }, chain: FALLBACK_CHAIN, fetchImpl, sleepImpl: sleep, ledgerFile: usageFile,
+      caller: 'line-digest', category: 'digest',
+      cooldownFile: path.join(home, '.claude', 'provider-cooldown.json'),
+      payloadFor(candidate) {
+        const p = PROVIDERS[candidate.provider], key = p && loadKey(home, candidate.provider);
+        if (!p || !key) return null;
+        const body = { model: candidate.model || p.model, messages, max_tokens: maxTokens, stream: false };
+        if (format) body.response_format = format;
+        Object.assign(body, gatewayParams(body.model));
+        if (p.special === 'kimi') Object.assign(body, { reasoning_effort: 'none', temperature: 0.6 });
+        return { url: p.url, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(p.extraHeaders || {}) }, body: JSON.stringify(body) } };
+      },
+      validateResponse(json) {
+        const choice = json?.choices?.[0];
+        if (!choice) return 'choices がありません';
+        if (choice.finish_reason === 'length') return `finish_reason=length (max_tokens=${maxTokens})`;
+        const content = choice.message?.content;
+        if (typeof content !== 'string' || !content.trim()) return 'content が空です';
+        return true;
+      },
+    });
+    let result;
+    try { result = await run(responseFormat); }
+    catch (error) {
+      error.llmAttempt = attemptMetaFrom(error, provider);
+      const has400 = error.failures?.some(({ reason }) => /^HTTP400\b/.test(reason));
+      if (!responseFormat || !has400) throw error;
+      try { result = await run(undefined); }
+      catch (retryError) { retryError.llmAttempt = attemptMetaFrom(retryError, provider); throw retryError; }
+    }
+    const json = await result.response.json();
+    return { text: String(json.choices?.[0]?.message?.content || ''), provider: result.candidate.provider, model: result.candidate.model, attempt: Number(result.attempt ?? 0), failover: Boolean(result.failover) };
+  };
+}
+
+export function filterDigestLines(lines) {
+  const caution = /(伝聞|未検証|要検証|裏付け|情報は限定的)/u;
+  const concrete = /(https?:\/\/|\d|[A-Za-z]|[ァ-ヶー])/u;
+  return lines.map(String).map((line) => line.trim()).filter((line) => {
+    if (!line || [...line].length > 80 || concrete.test(line) || !caution.test(line)) return Boolean(line);
+    const remainder = line
+      .replace(/[「」『』（）()【】\[\]、。,.!！?？:：・\s]/gu, '')
+      .replace(/(?:この|その|上記の)?(?:情報|内容|発言|投稿|共有)?(?:自体)?(?:は|が|について|であり|である|です|とされる|されている|のみ|まだ|現時点で|十分な)?/gu, '')
+      .replace(/(?:伝聞|未検証|要検証|裏付け(?:が|は)?(?:ない|ありません|不足している|不十分)|情報は限定的)/gu, '');
+    return remainder.length > 2;
+  });
+}
+
+function parseSummary(raw) {
+  const clean = repairJson(raw); let value;
+  for (const start of [clean.indexOf('{')].filter((x) => x >= 0)) for (let end = clean.length; end > start; end--) { try { value = JSON.parse(clean.slice(start, end)); break; } catch {} if (value) break; }
+  if (!value) throw new Error('Stage 2のJSONを復旧できません');
+  return { digest: filterDigestLines(Array.isArray(value.digest) ? value.digest : String(value.digest || '').split(/\r?\n/)).slice(0, 10), proposals: Array.isArray(value.proposals) ? value.proposals : [] };
+}
+
+function parseArgs(args) {
+  const value = (flag, fallback) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : fallback; };
+  return { profile: value('--profile', 'ai'), dryRun: args.includes('--dry-run'), seed: args.includes('--seed'), list: args.includes('--list'), done: value('--done'), reject: value('--reject'), since: value('--since'), limit: Math.max(1, Number(value('--limit', 200)) || 200), provider: value('--provider', 'groq') };
+}
+
+export async function runDigest(options = {}) {
+  const home = options.home || os.homedir(), args = options.args || [], log = options.log || console.log;
+  const cli = parseArgs(args);
+  if (!Object.hasOwn(PROFILES, cli.profile)) throw new Error('--profile は ai、cafe、または minpaku');
+  const profile = PROFILES[cli.profile];
+  if (!PROVIDERS[cli.provider]) throw new Error('--provider は groq または deepseek を指定してください');
+  const base = path.join(home, '.claude'), inputDir = path.join(base, 'line-openchat'), stateFile = path.join(base, profile.files.state), proposalFile = path.join(base, profile.files.proposals), digestFile = path.join(base, profile.files.digest), topicsFile = path.join(base, profile.files.topics);
+  let proposalText = fs.existsSync(proposalFile) ? fs.readFileSync(proposalFile, 'utf8') : '';
+  if (cli.list || cli.done || cli.reject) {
+    const records = proposalText.split(/\r?\n/).filter(Boolean).map(JSON.parse);
+    if (cli.done || cli.reject) { const id = cli.done || cli.reject, item = records.find((r) => r.id === id); if (!item) throw new Error(`${id} が見つかりません`); item.status = cli.done ? 'done' : 'rejected'; if (!cli.dryRun) fs.writeFileSync(proposalFile, records.map(JSON.stringify).join('\n') + '\n'); }
+    records.filter((r) => r.status === 'pending').forEach((r) => log(`${r.id} ${r.title} — ${r.action}`)); return { processed: 0 };
+  }
+  if (cli.seed) {
+    const seed = { id: `seed-${Date.now()}`, chat: profile.chats?.[0] || '生成AI', sender: 'サンプル参加者', text: cli.profile === 'cafe' ? '平日料金を1時間1500円にした店舗で予約が増えたという情報です。' : cli.profile === 'minpaku' ? '清掃費を3000円から3500円に変更して利益率が改善したという情報です。' : 'Claudeの新モデルが公開されたという情報です。料金と性能は公式情報で要検証です。', ts: Date.now(), receivedAt: new Date().toISOString() };
+    if (cli.dryRun) log(`[dry-run] サンプルを ${inputDir} に投入`); else { fs.mkdirSync(inputDir, { recursive: true }); const month = new Date().toISOString().slice(0, 7); fs.appendFileSync(path.join(inputDir, `${month}.jsonl`), `${JSON.stringify(seed)}\n`); }
+  }
+  if (!fs.existsSync(inputDir)) {
+    const status = 'skip:入力ディレクトリなし';
+    log(status);
+    return { processed: 0, status };
+  }
+  const state = readJson(stateFile, { lastTs: 0, lastId: '', processedIds: [] });
+  const matchChat = (chats, chatName) => chatName && chats.some((prefix) => chatName.startsWith(prefix));
+  const candidates = selectUnprocessed(readMessages(inputDir).filter((m) => profile.chats
+    ? matchChat(profile.chats, m.chat)
+    : !Object.values(PROFILES).some((other) => other.chats && matchChat(other.chats, m.chat))), state, cli.since).slice(0, cli.limit);
+  const messages = preprocessMessages(candidates, cli.profile === 'cafe' ? { minLength: 15, meaningful: (text) => /[0-9０-９]/u.test(text) } : cli.profile === 'minpaku' ? { minLength: 15 } : undefined);
+  if (!candidates.length) {
+    const status = 'skip:新規メッセージなし';
+    log('未処理メッセージはありません。');
+    log(status);
+    recordRun(`line-digest-${cli.profile}`, { changed: false, llmInvoked: false, items: 0, note: status });
+    return { processed: 0, status };
+  }
+  const llm = options.llm || createLlmClient({ home, usageFile: path.join(base, 'executor-usage.jsonl') });
+  const kept = [], successfullyClassified = new Set(), held = [];
+  const classificationSystem = profile.classificationSystem || '生成AI・LLMのコスト、品質、新モデル、ツール、プロンプト技法について各入力を分類する。安全・手順・再発防止だけでなく、B軸のコスト削減・速度・人手削減・売上への効果も必ず評価し、B軸を空にしない。JSONオブジェクトのみを返し、前置き・説明・コードフェンスは禁止。形式は {"items":[{"i":<入力と同じ番号>,"category":"cost|quality|model-release|tool|prompt-technique|other","score":<0-3>}]}。入力の全要素に対して必ず1件ずつ同じiで返す。scoreは0=無関係、1=雑談程度、2=有用、3=自社の設定変更を検討すべき。';
+  for (let offset = 0; offset < messages.length; offset += 40) {
+    const batch = messages.slice(offset, offset + 40);
+    const prompt = batch.map((m, i) => ({ i, text: m.text })).map(JSON.stringify).join('\n');
+    let response = await llm({ provider: cli.provider, messages: [{ role: 'system', content: classificationSystem }, { role: 'user', content: prompt }], responseFormat: { type: 'json_object' } });
+    let parsed = parseClassifications(response.text, profile.categories);
+    if (!parsed.length) {
+      response = await llm({ provider: cli.provider, messages: [{ role: 'system', content: `${classificationSystem} 前回の応答はJSONとして解釈できなかった。JSONオブジェクトのみを返せ。` }, { role: 'user', content: prompt }], responseFormat: { type: 'json_object' } });
+      parsed = parseClassifications(response.text, profile.categories);
+    }
+    const byIndex = new Map(parsed.map((r) => [r.i, r]));
+    if (!parsed.length) { held.push(...batch); continue; }
+    batch.forEach((m, i) => { const c = byIndex.get(i); if (!c) { held.push(m); return; } successfullyClassified.add(m.id); if (c.score >= 2) kept.push({ ...m, classification: c }); });
+  }
+  const filteredIds = candidates.filter((m) => !messages.includes(m)).map((m) => m.id);
+  filteredIds.forEach((id) => successfullyClassified.add(id));
+  let digestLines = [], proposals = [];
+  const recentKept = kept.filter((m) => Number(m.ts) >= Date.now() - 30 * 24 * 60 * 60 * 1000);
+  if (recentKept.length) {
+    const grouped = Object.groupBy ? Object.groupBy(recentKept, (m) => m.classification.category) : recentKept.reduce((a, m) => ((a[m.classification.category] ||= []).push(m), a), {});
+    const response = await llm({ provider: cli.provider, messages: [{ role: 'system', content: profile.summarySystem || '発言は伝聞であり裏取りされていない。安全・手順・再発防止だけでなく、B軸のコスト削減・速度・人手削減・売上への効果も必ず抽出し、B軸を空にしない。JSONオブジェクトのみを返す。形式は {"digest":["1行目","2行目",...],"proposals":[{"title":"...","action":"...","evidence":"...","category":"cost|quality|model-release|tool|prompt-technique|other","confidence":"high|medium|low"}]}。digestは日本語で3〜10行、具体的な情報のみを1トピック1行で書き、同じ発言を複数行に分割しない。事実のみとし、「伝聞」「未検証」「要検証」「情報が不足」など注意書きだけの行を作らない。提案は必ず要検証と分かる形にし、evidenceは120字以内。発言者名は出さず「参加者」とする。' }, { role: 'user', content: JSON.stringify(grouped) }], responseFormat: { type: 'json_object' } });
+    ({ digest: digestLines, proposals } = parseSummary(response.text));
+  }
+  if (!successfullyClassified.size && candidates.length) throw new Error(`処理できたメッセージがありません（保留 ${held.length}件）`);
+  const appended = appendUniqueProposals(proposalText, proposals, new Date(), profile.categories);
+  const pending = appended.records.filter((r) => r.status === 'pending');
+  const topicTs = recentKept.reduce((latest, message) => Math.max(latest, Number(message.ts) || 0), 0) || Date.now();
+  const topicText = fs.existsSync(topicsFile) ? fs.readFileSync(topicsFile, 'utf8') : '';
+  const topics = updateTopics(topicText, digestLines, topicTs, Date.now(), profile.categories);
+  const topicLines = topics.records.slice(0, 30).map((topic) => `- ${topic.line.replace(/\b[^\s]+さん/gu, '参加者')}`);
+  if (!topicLines.length) topicLines.push('（直近30日で拾えた情報はありません）');
+  const body = [`## ${profile.heading.replace('{date}', new Date().toLocaleString('ja-JP'))}`, ...topicLines, '', `### 未処理の提案 ${pending.length}件`, ...pending.map((p) => `- [${p.id}] ${p.title} — ${p.action}（確度: ${p.confidence} / 要検証）`)].join('\n');
+  const existingDigest = fs.existsSync(digestFile) ? fs.readFileSync(digestFile, 'utf8') : '';
+  const newDigest = replaceMarkerSection(existingDigest, body, profile.marker);
+  const processedIds = [...new Set([...(state.processedIds || []), ...successfullyClassified])].slice(-5000);
+  const processedMessages = candidates.filter((m) => successfullyClassified.has(m.id));
+  const newest = processedMessages.sort((a, b) => Number(b.ts) - Number(a.ts))[0];
+  const nextState = { lastTs: newest?.ts || state.lastTs || 0, lastId: newest?.id || state.lastId || '', processedIds };
+  if (cli.dryRun) log(`[dry-run] ${successfullyClassified.size}件処理、${held.length}件保留、提案${appended.added.length}件を更新予定`);
+  else {
+    fs.mkdirSync(inputDir, { recursive: true });
+    fs.writeFileSync(digestFile, newDigest); fs.writeFileSync(proposalFile, appended.text); fs.writeFileSync(topicsFile, topics.text); fs.writeFileSync(stateFile, JSON.stringify(nextState, null, 2) + '\n');
+    log(`line-digest: ${successfullyClassified.size}件処理 / ${held.length}件保留 / トピック${digestLines.length}件 / 新規提案${appended.added.length}件`);
+  }
+  const status = `ok:${successfullyClassified.size}件処理`;
+  log(status);
+  recordRun(`line-digest-${cli.profile}`, { changed: candidates.length > 0, llmInvoked: messages.length > 0, items: candidates.length, note: status });
+  return { processed: successfullyClassified.size, held: held.length, proposals: appended.added.length, status };
+}
+
+const isMain = isEntry(import.meta.url);
+if (isMain) runDigest({ args: process.argv.slice(2) }).catch((error) => { console.error(error.message); process.exitCode = 1; });

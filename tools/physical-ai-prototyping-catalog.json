@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "priceAsOf": "2026-09-23",
+  "proposalId": "P-0137",
+  "title": "フィジカルAIを活用したプロトタイプ高速化",
+  "sources": {
+    "so101Price": "https://www.roboticscenter.ai/hardware/so-101",
+    "soArm101SeeedPdf": "https://files.seeedstudio.com/Bazaar/product_pdf/100046482.pdf",
+    "bambuA1MiniJp": "https://jp.store.bambulab.com/products/a1-mini",
+    "lerobot": "https://github.com/huggingface/lerobot",
+    "xiaoEsp32s3Sense": "https://wiki.seeedstudio.com/xiao_esp32s3_camera_usage/"
+  },
+  "assumptions": {
+    "prototypesPerMonth": 4,
+    "currentLeadDays": 14,
+    "currentManualMinutesPerPrototype": 240,
+    "hourlyYen": 2500,
+    "devDayYen": 40000,
+    "marginYenPerPrototype": 80000,
+    "demandCaptureRate": 0.2,
+    "amortizeMonths": 24
+  },
+  "assumptionNotes": {
+    "prototypesPerMonth": "当社の月間試作件数の実測値は未取得。4件/月は仮定（--prototypes で上書き可）。",
+    "currentLeadDays": "現状の試作リードタイム14日は仮定。案件ごとの実測（発注日→検収日）が必要。",
+    "currentManualMinutesPerPrototype": "現状の手作業240分/件（4h）は仮定。内訳の実測は未取得。",
+    "hourlyYen": "社内単価2,500円/hは仮定。--hourly-yen で実際の人件費単価に上書きすること。",
+    "devDayYen": "立上げ人日単価40,000円/日は仮定。",
+    "marginYenPerPrototype": "試作1件が生む粗利80,000円は仮定。ここが売上効果の唯一の原資であり、実測が必要。",
+    "demandCaptureRate": "短縮で空いた能力が実際に追加受注へ転換する割合。0.2は仮定。**ここが0なら売上増加は0で、効果は工数削減のみ**になる。需要は無限ではない。",
+    "amortizeMonths": "ガジェット代の月割り期間24か月は仮定。"
+  },
+  "facts": {
+    "budgetBandFit": {
+      "value": "1万〜2万円の枠に収まるのは自前調達のSO-101（Feetech STS3215サーボ＋自前3Dプリント）構成のみ。組立済キットは189〜299ドルで枠を超える",
+      "status": "unverified",
+      "note": "為替・関税・送料で円換算は変動する。発注前に実売価格の確認が必要。",
+      "source": "https://www.roboticscenter.ai/hardware/so-101"
+    },
+    "leadTimeIsNotDemand": {
+      "value": "試作リードタイムの短縮は受注増を意味しない（需要が上限）",
+      "status": "unverified",
+      "note": "売上増加は『短縮で空いた能力が受注に転換する』という追加仮定に依存する。demandCaptureRate で明示し、0にすると売上効果が消える。"
+    },
+    "imitationLearningNeedsHuman": {
+      "value": "模倣学習はテレオペ教示という人手を必要とし、工数削減が小さい可能性がある",
+      "status": "unverified",
+      "note": "教示の1回あたり時間と必要エピソード数は未実測。residualMinutesPerPrototype に反映している。"
+    },
+    "noPhysicalAiInPrinterAlone": {
+      "value": "3Dプリンタ＋AIスライサは『実世界センサで閉ループする学習モデル』を持たない",
+      "status": "verified",
+      "note": "造形は自動化するが物理AIではない。提案の必須要件（物理AI）を満たさないため、純効果が最大でも推奨にしない。",
+      "source": "https://jp.store.bambulab.com/products/a1-mini"
+    }
+  },
+  "routes": [
+    {
+      "id": "so101-diy",
+      "label": "SO-101（LeRobot）自前調達＋模倣学習",
+      "kind": "physical-ai-arm",
+      "priceVerify": "secondary",
+      "priceSource": "https://www.roboticscenter.ai/hardware/so-101",
+      "priceNote": "サーボ・電子部品の自前調達で100〜200ドル相当（円換算2.2万円と仮定）。構造部品は自前3Dプリント。為替・関税で変動するため発注前に要確認。",
+      "gadgetYen": 22000,
+      "buildDays": 3,
+      "consumablesYenPerMonth": 1000,
+      "cloudYenPerMonth": 0,
+      "leadDays": 3,
+      "residualMinutesPerPrototype": 20,
+      "residualNote": "テレオペ教示と学習データ収集が残る（20分/件と仮定）。",
+      "physicalAI": true,
+      "prototypeCycleShortening": true,
+      "reuse": [
+        "ブース制作アプリの GAS 基盤（clasp 運用・コマンドキュー）から起動・ログ収集できる",
+        "Drive/Sheets を教示データと試作台帳の置き場に流用できる"
+      ]
+    },
+    {
+      "id": "so101-kit",
+      "label": "SO-ARM101 Pro 組立済キット（Seeed）＋LeRobot",
+      "kind": "physical-ai-arm",
+      "priceVerify": "secondary",
+      "priceSource": "https://files.seeedstudio.com/Bazaar/product_pdf/100046482.pdf",
+      "priceNote": "Pro Kit 299ドル、サーボのみ189ドル。円換算4.5万円と仮定。組立工数はほぼ無い。予算枠（1〜2万円）を超える。",
+      "gadgetYen": 45000,
+      "buildDays": 1,
+      "consumablesYenPerMonth": 1000,
+      "cloudYenPerMonth": 0,
+      "leadDays": 3,
+      "residualMinutesPerPrototype": 15,
+      "residualNote": "教示（15分/件と仮定）。組立済のため立上げは短い。",
+      "physicalAI": true,
+      "prototypeCycleShortening": true
+    },
+    {
+      "id": "edge-vision",
+      "label": "エッジAIカメラ（XIAO ESP32S3 Sense 等）＋外観検査",
+      "kind": "physical-ai-vision",
+      "priceVerify": "assumed",
+      "priceSource": "https://wiki.seeedstudio.com/xiao_esp32s3_camera_usage/",
+      "priceNote": "実売価格は未確認。8,000円は仮定値。発注前に実売・見積の確認が必要。",
+      "gadgetYen": 8000,
+      "buildDays": 2,
+      "consumablesYenPerMonth": 0,
+      "cloudYenPerMonth": 0,
+      "leadDays": 10,
+      "residualMinutesPerPrototype": 60,
+      "residualNote": "検査モデルの学習と判定確認が残る（60分/件と仮定）。短縮できるのは検査工程に限られる。",
+      "physicalAI": true,
+      "prototypeCycleShortening": true
+    },
+    {
+      "id": "fdm-printer",
+      "label": "Bambu Lab A1 mini ＋ AIスライサ／CAD生成",
+      "kind": "fabrication",
+      "priceVerify": "secondary",
+      "priceSource": "https://jp.store.bambulab.com/products/a1-mini",
+      "priceNote": "公式日本ストア 29,800円（AMS Lite 付は52,800円）。セールで29,900円前後。",
+      "gadgetYen": 29800,
+      "buildDays": 1,
+      "consumablesYenPerMonth": 3000,
+      "cloudYenPerMonth": 0,
+      "leadDays": 5,
+      "residualMinutesPerPrototype": 90,
+      "residualNote": "造形後の後処理と寸法確認（90分/件と仮定）。",
+      "physicalAI": false,
+      "prototypeCycleShortening": true
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+✖ hook returns while stdin is open, launches one shot and honors cooldown (16549.268792ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 34254.050481
+
+✖ failing tests:
+
+test at tools/purge-sessions.test.mjs:97:1
+✖ hook returns while stdin is open, launches one shot and honors cooldown (16549.268792ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(Date.now() - start < 3000)
+  
+      at TestContext.<anonymous> (file:///mnt/c/Users/uers/.claude/wt-remote-archive-tab/tools/purge-sessions.test.mjs:106:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

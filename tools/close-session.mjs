@@ -1,0 +1,83 @@
+import { writeHandoff, handoffLockEnabled } from './lib/handoff-store.mjs';
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { launchPurge } from "./purge-sessions.mjs";
+import { recordClosed } from "./closed-sessions-ledger.mjs";
+import { launchNextSession } from "./next-session-launch.mjs";
+
+import { rotate } from "./next-session-rotate.mjs";
+import { runKnowledgeUpstream } from "./knowledge-upstream.mjs";
+
+const claudeDir = join(homedir(), ".claude");
+const currentPath = join(claudeDir, "current-session.json");
+const currentSessionsDir = join(claudeDir, "current-sessions");
+const closedPath = join(claudeDir, "closed-sessions.json");
+function readJson(path, fallback) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+const sessionIndex = process.argv.indexOf("--session");
+let sessionId = sessionIndex >= 0 ? process.argv[sessionIndex + 1] : undefined;
+if (sessionIndex < 0) {
+  let entries;
+  try {
+    entries = readdirSync(currentSessionsDir)
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => readJson(join(currentSessionsDir, name), null))
+      .filter((entry) => entry?.sessionId && !Number.isNaN(Date.parse(entry.at)))
+      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  } catch {
+    entries = null;
+  }
+  if (entries) {
+    const recent = entries.filter((entry) => Date.now() - Date.parse(entry.at) <= 60_000);
+    if (recent.length >= 2) {
+      const candidates = recent.map((entry) => `${entry.sessionId} (${entry.at})`).join(", ");
+      console.error(`複数のセッションが同時に動いています。--session <id> を明示してください。候補: ${candidates}`);
+      process.exit(1);
+    }
+    sessionId = entries[0]?.sessionId;
+  } else {
+    sessionId = readJson(currentPath, {}).sessionId;
+  }
+}
+if (!sessionId) {
+  console.error("session ID がありません（--session または current-sessions/current-session.json が必要です）");
+  process.exit(1);
+}
+
+rotate(join(claudeDir, "next-session.md"));
+const handoffFile = join(claudeDir, "next-session.md");
+if (handoffLockEnabled() && existsSync(handoffFile)) {
+  writeHandoff(handoffFile, readFileSync(handoffFile, 'utf8'));
+}
+
+const recorded = recordClosed(sessionId, closedPath, {
+  onError: (e) => console.error(`closed-sessions.json に書けませんでした: ${e.message}`),
+});
+if (!recorded) {
+  console.error(`未完了: ${sessionId} を closed-sessions.json に記録できませんでした（一覧から消えません）`);
+  process.exit(1);
+}
+
+try { await runKnowledgeUpstream({ emit: () => {} }); } catch {}
+
+launchPurge();
+
+console.log(`closed: ${sessionId} -> このタブを ✕ で閉じてください。次回の SessionStart/Stop で退避されます（稼働中セッションは保護されます）`);
+
+if (!process.argv.includes("--no-launch")) {
+  try {
+    const launchArgs = ["--session", sessionId];
+    if (process.argv.includes("--force-launch")) launchArgs.push("--force");
+    await launchNextSession(launchArgs);
+  } catch (error) {
+    const message = String(error?.message ?? error ?? '不明');
+    console.error(`[next-session] 警告: 次セッションの起動に失敗しました (${message})。close 処理は完了しています`);
+  }
+}

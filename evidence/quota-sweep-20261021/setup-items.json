@@ -1,0 +1,23 @@
+[
+  {
+    "id": "task:quota-sweep",
+    "severity": "optional",
+    "status": "NG",
+    "checked": true,
+    "repaired": false
+  },
+  {
+    "id": "plugin:makeloop",
+    "severity": "optional",
+    "status": "NG",
+    "checked": true,
+    "repaired": false
+  },
+  {
+    "id": "tool:quota-sweep",
+    "severity": "optional",
+    "status": "NG",
+    "checked": true,
+    "repaired": false
+  }
+]

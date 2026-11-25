@@ -1,0 +1,17 @@
+[
+  {
+    "name": "Aurora Anvil Labs",
+    "employees": 25,
+    "contacts": [
+      { "name": "青井 一郎", "title": "VP Sales" },
+      { "name": "橙 二郎", "title": "Engineer" }
+    ]
+  },
+  {
+    "name": "Paper Comet Works",
+    "employees": 250,
+    "contacts": [
+      { "name": "緑 三郎", "title": "創業者" }
+    ]
+  }
+]

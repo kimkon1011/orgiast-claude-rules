@@ -1,0 +1,912 @@
+﻿# nightly-batch.ps1 — DeepSeek off-peak時間帯にpendingジョブがあればバッチ実行する (Windows PowerShell 5.1)。
+# wscript経由のhidden起動はコンソール無しでOEMコードページ(932)にフォールバックし、
+# 子プロセスのUTF-8出力を文字化けさせる(実測: line-digest の日本語ステータス regex が常に不一致)。
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$logDir = Join-Path $HOME '.claude\logs'
+$logFile = Join-Path $logDir ("nightly-batch-" + (Get-Date -Format 'yyyy-MM-dd') + ".log")
+New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+$summary = [ordered]@{}
+function Write-NightlyLog([string]$Step, [string]$Result, [bool]$IncludeInSummary = $true) {
+    if ($IncludeInSummary -and $Step -ne 'サマリ') { $summary[$Step] = $Result }
+    $line = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + " / " + $Step + " / " + $Result
+    Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8
+}
+function Format-NightlyDetail($Output) {
+    if (-not $Output) { return '(出力なし)' }
+    $lines = @($Output | ForEach-Object { "$_" } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Last 8)
+    if ($lines.Count -eq 0) { return '(出力なし)' }
+    return ($lines -join ' / ')
+}
+# ステップの出力を捕捉し、失敗時は理由を1行でログに残す。
+# $Output は呼び出し側が @(& ... 2>&1) で受け取った配列。
+function Write-NightlyStepResult([string]$Step, [int]$ExitCode, $Output, [string]$Note = '') {
+    if ($ExitCode -eq 0) {
+        # fleet sheet の busy 再送を使い切ったジョブは exit 0 で戻る（夜間バッチは止めない）。
+        # ただし「ok」と書くと台帳へ届いていないのに成功したように見えるので警告として残す。
+        $busy = Get-NightlyBusyWarning $Output
+        if ($busy) { Write-NightlyLog $Step ('警告:' + $busy); return }
+        Write-NightlyLog $Step 'ok'; return
+    }
+    $reason = Format-NightlyDetail $Output
+    Write-NightlyLog $Step ('error:終了コード' + $ExitCode + $Note + ': ' + $reason)
+    Write-Warning ("nightly-batch: " + $Step + " exited " + $ExitCode + ': ' + ($reason))
+}
+# tools/lib/fleet-sheet-post.mjs が出す busy_exhausted 行を拾う。
+function Get-NightlyBusyWarning($Output) {
+    if (-not $Output) { return '' }
+    $line = @($Output | ForEach-Object { "$_" } | Where-Object { $_ -match 'busy_exhausted' } | Select-Object -Last 1)
+    if ($line.Count -eq 0) { return '' }
+    return ([string]$line[0]).Trim()
+}
+function Finish-Nightly([int]$Code) {
+    # Run once after the nightly jobs, including empty-queue and error exits.
+    # Existing PCs execute this synced script through nightly-bootstrap as well.
+    if ($script:staleWorkReady -and -not $script:staleWorkRan) {
+        $script:staleWorkRan = $true
+        try {
+            $watchOutput = @(& $node.Source (Join-Path $PSScriptRoot 'stale-work-watch.mjs') 2>&1)
+            $watchExit = $LASTEXITCODE
+            Write-NightlyStepResult 'stale-work-watch' $watchExit $watchOutput
+        } catch { Write-NightlyLog 'stale-work-watch' ('error:' + $_.Exception.Message) }
+    }
+    $parts = @($summary.Keys | ForEach-Object { $_ + '=' + $summary[$_] })
+    Write-NightlyLog 'サマリ' ("nightly-batch 完了: " + ($parts -join ', '))
+    if ($script:pidFile -and (Test-Path -LiteralPath $script:pidFile)) { Remove-Item -LiteralPath $script:pidFile -Force -ErrorAction SilentlyContinue }
+    exit $Code
+}
+
+try {
+    $script:pidFile = Join-Path $HOME '.claude\.nightly-batch.pid'
+    if (Test-Path -LiteralPath $script:pidFile) {
+        try {
+            $prior = Get-Content -LiteralPath $script:pidFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            $priorProcess = Get-Process -Id ([int]$prior.pid) -ErrorAction SilentlyContinue
+            if ($priorProcess) {
+                Write-NightlyLog 'nightly-batch' ("skip:prior instance (started " + $prior.startedAt + ") is still running")
+                exit 0
+            }
+        } catch { }
+    }
+    @{ pid = $PID; startedAt = (Get-Date -Format 'HH:mm') } | ConvertTo-Json -Compress | Set-Content -LiteralPath $script:pidFile -Encoding UTF8
+    Write-NightlyLog 'nightly-batch' 'ok:開始'
+    $utc = [DateTime]::UtcNow
+    $minutes = $utc.Hour * 60 + $utc.Minute
+    $offPeak = ($minutes -ge (16 * 60 + 30)) -or ($minutes -lt 30)
+    if (-not $offPeak) { $summary['batch'] = 'skip:off-peak帯外'; Write-NightlyLog '時間帯判定' 'skip:off-peak帯外'; Finish-Nightly 0 }
+    Write-NightlyLog '時間帯判定' 'ok:off-peak帯'
+
+    $repos = @()
+    if ($PSScriptRoot) { $repos += (Split-Path -Parent $PSScriptRoot) }
+    $repos += @(
+        (Join-Path $HOME 'orgiast-claude-rules'),
+        (Join-Path $HOME 'Downloads\orgiast-claude-rules')
+    )
+    $repos = @($repos | Select-Object -Unique)
+    $runner = $null
+    $autoClose = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\batch-run.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $runner = $candidate; break }
+    }
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\session-auto-close.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $autoClose = $candidate; break }
+    }
+    $interactionLoop = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\interaction-loop.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $interactionLoop = $candidate; break }
+    }
+
+    $node = Get-Command node -ErrorAction SilentlyContinue
+    if (-not $node) { $summary['node'] = 'error:nodeが見つからない'; Write-NightlyLog 'node確認' 'error:nodeが見つからない'; Finish-Nightly 1 }
+    $script:staleWorkReady = $true
+    # Run from the synced nightly repo; the runner restricts execution to kim-PC.
+    try {
+        $scoutOutput = @(& $node.Source (Join-Path $PSScriptRoot 'model-scout-daily.mjs') --once 2>&1)
+        $scoutExit = $LASTEXITCODE
+        Write-NightlyStepResult 'model-scout' $scoutExit $scoutOutput
+    } catch { Write-NightlyLog 'model-scout' 'error:daily runner failed' }
+    # Runtime wiring: the existing nightly task picks this up without re-registration.
+    $expenseLeak = Join-Path $PSScriptRoot 'expense-leak-check.mjs'
+    if (Test-Path -LiteralPath $expenseLeak -PathType Leaf) {
+        try {
+            $expenseOutput = @(& $node.Source $expenseLeak --weekly 2>&1)
+            $expenseExit = $LASTEXITCODE
+            Write-NightlyStepResult 'expense-leak-check' $expenseExit $expenseOutput
+        } catch { Write-NightlyLog 'expense-leak-check' ('error:' + $_.Exception.Message) }
+    } else { Write-NightlyLog 'expense-leak-check' 'skip:script missing' }
+    # 窓を出す起動方式で(再)登録された定期タスクを毎晩 run-hidden.vbs へ包み直す。
+    $hideTasks = Join-Path $PSScriptRoot 'hide-task-windows.ps1'
+    if (Test-Path -LiteralPath $hideTasks -PathType Leaf) {
+        try {
+            $hideOutput = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $hideTasks 2>&1)
+            $hideExit = $LASTEXITCODE
+            Write-NightlyStepResult 'hide-task-windows' $hideExit $hideOutput ' (警告・後続処理続行)'
+        } catch { Write-NightlyLog 'hide-task-windows' ('error:' + $_.Exception.Message) }
+    } else { Write-NightlyLog 'hide-task-windows' 'skip:script missing' }
+
+    Write-NightlyLog 'node確認' 'ok'
+    # PR 着地後に不要になった判断待ち ask を日次で回収する。
+    $inboxAutoclose = Join-Path $PSScriptRoot 'kim-inbox-autoclose.mjs'
+    if (Test-Path -LiteralPath $inboxAutoclose -PathType Leaf) {
+        try {
+            $inboxAutocloseOutput = @(& $node.Source $inboxAutoclose --apply 2>&1)
+            $inboxAutocloseExit = $LASTEXITCODE
+            Write-NightlyStepResult 'kim-inbox-autoclose' $inboxAutocloseExit $inboxAutocloseOutput
+        } catch { Write-NightlyLog 'kim-inbox-autoclose' ('error:' + $_.Exception.Message) }
+    } else { Write-NightlyLog 'kim-inbox-autoclose' 'skip:script missing' }
+    try {
+        $rotationOutput = @(& $node.Source (Join-Path $PSScriptRoot 'next-session-rotate.mjs') 2>&1)
+        $rotationExit = $LASTEXITCODE
+        Write-NightlyStepResult 'next-session-rotate' $rotationExit $rotationOutput
+    } catch { Write-NightlyLog 'next-session-rotate' ('error:' + $_.Exception.Message) }
+    try { & $node.Source (Join-Path $PSScriptRoot 'handoff-audit-nightly.mjs'); if ($LASTEXITCODE -ne 0) { throw 'handoff-audit-nightly failed' }; Write-NightlyLog 'handoff-audit-nightly' 'ok' } catch { Write-NightlyLog 'handoff-audit-nightly' ('error:' + $_.Exception.Message) }
+
+    if ($autoClose) {
+        try {
+            $autoCloseOutput = @(& $node.Source $autoClose --days 7 --max 40 2>&1)
+            $autoCloseExit = $LASTEXITCODE
+            if ($autoCloseExit -ne 0) {
+                $autoCloseReason = "error:終了コード" + $autoCloseExit + ': ' + (@($autoCloseOutput | Select-Object -Last 3) -join ' / ')
+                Write-NightlyLog 'session-auto-close' $autoCloseReason
+                Write-Warning ("nightly-batch: session-auto-close: " + $autoCloseReason)
+            } else { Write-NightlyLog 'session-auto-close' 'ok' }
+        } catch {
+            Write-NightlyLog 'session-auto-close' ("error:" + $_.Exception.Message)
+            Write-Warning ("nightly-batch: session-auto-close: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'session-auto-close' 'skip:ファイルなし' }
+
+    try {
+        $triageOutput = @(& $node.Source (Join-Path $PSScriptRoot 'session-triage.mjs') --md (Join-Path $HOME '.claude/session-triage.md') 2>&1)
+        $triageExit = $LASTEXITCODE
+        Write-NightlyStepResult 'session-triage' $triageExit $triageOutput
+    } catch { Write-NightlyLog 'session-triage' ('error:' + $_.Exception.Message) }
+    Write-NightlyLog 'stalled-session-resume' 'moved:OrgiastStalledSessionSweep'
+
+    $memoryIndexCompact = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\memory-index-compact.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $memoryIndexCompact = $candidate; break }
+    }
+    if ($memoryIndexCompact) {
+        try {
+            & $node.Source $memoryIndexCompact --move-hooks --apply --all-projects --min-bytes 20000
+            if ($LASTEXITCODE -ne 0) { Write-Warning ("nightly-batch: memory-index-compact exited " + $LASTEXITCODE) }
+        } catch {
+            Write-Warning ("nightly-batch: memory-index-compact: " + $_.Exception.Message)
+        }
+    }
+
+    $memoryIndexDomains = $null
+    $memoryIndexSplit = $null
+    $memoryIndexSplitVerify = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\memory-index-domains.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $memoryIndexDomains = $candidate; break }
+    }
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\memory-index-split.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $memoryIndexSplit = $candidate; break }
+    }
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\memory-index-split-verify.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $memoryIndexSplitVerify = $candidate; break }
+    }
+    $v2MemoryDirs = @()
+    $projectsDir = Join-Path $HOME '.claude\projects'
+    if (Test-Path -LiteralPath $projectsDir -PathType Container) {
+        $v2MemoryDirs = @(Get-ChildItem -LiteralPath $projectsDir -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            $memoryDir = Join-Path $_.FullName 'memory'
+            $memoryFile = Join-Path $memoryDir 'MEMORY.md'
+            if (Test-Path -LiteralPath $memoryFile -PathType Leaf) {
+                $firstLine = Get-Content -LiteralPath $memoryFile -TotalCount 1 -Encoding UTF8
+                if ($firstLine -eq '<!-- MEMORY-INDEX v2 split -->') { $memoryDir }
+            }
+        })
+    }
+
+    if (-not $memoryIndexDomains -or -not $memoryIndexSplit) {
+        Write-NightlyLog 'memory-index-split' 'skip:ファイルなし'
+    } elseif ($v2MemoryDirs.Count -eq 0) {
+        Write-NightlyLog 'memory-index-split' 'skip:v2索引なし'
+    } else {
+        $oldPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+        $applied = 0
+        $needsAttention = @()
+        foreach ($memoryDir in $v2MemoryDirs) {
+            $projectName = Split-Path -Leaf (Split-Path -Parent $memoryDir)
+            $domainsTmp = [System.IO.Path]::GetTempFileName()
+            $pinsTmp = [System.IO.Path]::GetTempFileName()
+            try {
+                $deriveOutput = @(& $node.Source $memoryIndexDomains --dir $memoryDir --fallback reference --out-domains $domainsTmp --out-pins $pinsTmp 2>&1)
+                $deriveExit = $LASTEXITCODE
+                if ($deriveExit -eq 0) {
+                    $splitOutput = @(& $node.Source $memoryIndexSplit --dir $memoryDir --domains $domainsTmp --pins $pinsTmp --apply 2>&1)
+                    if ($LASTEXITCODE -eq 0) { $applied++ } else {
+                        $needsAttention += ($projectName + ':適用失敗')
+                        Write-NightlyLog 'memory-index-split' ('detail:' + $projectName + ':適用失敗: ' + (Format-NightlyDetail $splitOutput)) $false
+                        Write-Warning ("nightly-batch: memory-index-split " + $projectName + ': ' + ($splitOutput -join ' / '))
+                    }
+                } elseif ($deriveExit -eq 1) {
+                    $unclassified = @($deriveOutput | Where-Object { [string]$_ -match '^- ' }).Count
+                    $needsAttention += ($projectName + ':' + $unclassified + '件未分類')
+                    Write-NightlyLog 'memory-index-domains' ('detail:' + $projectName + ':' + $unclassified + '件未分類: ' + (Format-NightlyDetail $deriveOutput)) $false
+                    Write-Warning ("nightly-batch: memory-index-domains " + $projectName + ': ' + ($deriveOutput -join ' / '))
+                } else {
+                    $needsAttention += ($projectName + ':導出失敗')
+                    Write-NightlyLog 'memory-index-domains' ('detail:' + $projectName + ':導出失敗: ' + (Format-NightlyDetail $deriveOutput)) $false
+                    Write-Warning ("nightly-batch: memory-index-domains " + $projectName + ': ' + ($deriveOutput -join ' / '))
+                }
+            } catch {
+                $needsAttention += ($projectName + ':例外')
+                Write-NightlyLog 'memory-index-split' ('detail:' + $projectName + ':例外: ' + $_.Exception.Message) $false
+                Write-Warning ("nightly-batch: memory-index-split " + $projectName + ': ' + $_.Exception.Message)
+            } finally {
+                Remove-Item -LiteralPath $domainsTmp, $pinsTmp -Force -ErrorAction SilentlyContinue
+            }
+        }
+        $splitResult = 'ok:' + $applied + '件適用'
+        if ($needsAttention.Count -gt 0) { $splitResult = 'NG:' + $applied + '件適用'; $splitResult += '/' + $needsAttention.Count + '件要手当(' + ($needsAttention -join ',') + ')' }
+        Write-NightlyLog 'memory-index-split' $splitResult
+        } finally { $ErrorActionPreference = $oldPreference }
+    }
+
+    if (-not $memoryIndexSplitVerify) {
+        Write-NightlyLog 'memory-index-split-verify' 'skip:ファイルなし'
+    } elseif ($v2MemoryDirs.Count -eq 0) {
+        Write-NightlyLog 'memory-index-split-verify' 'skip:v2索引なし'
+    } else {
+        $oldPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+        $verifyNg = @()
+        foreach ($memoryDir in $v2MemoryDirs) {
+            $projectName = Split-Path -Leaf (Split-Path -Parent $memoryDir)
+            try {
+                $verifyOutput = @(& $node.Source $memoryIndexSplitVerify --dir $memoryDir --fix 2>&1)
+                if ($LASTEXITCODE -ne 0) {
+                    $verifyNg += $projectName
+                    Write-NightlyLog 'memory-index-split-verify' ('detail:' + $projectName + ': ' + (Format-NightlyDetail $verifyOutput)) $false
+                    Write-Warning ("nightly-batch: memory-index-split-verify " + $projectName + ': ' + ($verifyOutput -join ' / '))
+                }
+            } catch {
+                $verifyNg += $projectName
+                Write-NightlyLog 'memory-index-split-verify' ('detail:' + $projectName + ':例外: ' + $_.Exception.Message) $false
+                Write-Warning ("nightly-batch: memory-index-split-verify " + $projectName + ': ' + $_.Exception.Message)
+            }
+        }
+        if ($verifyNg.Count -gt 0) { Write-NightlyLog 'memory-index-split-verify' ('NG:' + ($verifyNg -join ',')) }
+        else { Write-NightlyLog 'memory-index-split-verify' ('ok:' + $v2MemoryDirs.Count + '件') }
+        } finally { $ErrorActionPreference = $oldPreference }
+    }
+
+    $memoryPublish = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\memory-publish.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $memoryPublish = $candidate; break }
+    }
+    if ($memoryPublish) {
+        $oldPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $publishOutput = @(& $node.Source $memoryPublish --deploy --verify 2>&1)
+            $publishExit = $LASTEXITCODE
+            if ($publishExit -eq 0) {
+                $publishSummary = [regex]::Match(($publishOutput -join "`n"), 'memory-publish: files=(\d+) deploy=(yes|skip)')
+                if ($publishSummary.Success) { Write-NightlyLog 'memory-publish' ('ok:files=' + $publishSummary.Groups[1].Value + ' deploy=' + $publishSummary.Groups[2].Value) }
+                else { Write-NightlyLog 'memory-publish' 'error:結果サマリーなし' }
+            } else { Write-NightlyLog 'memory-publish' ('error:' + (Format-NightlyDetail @($publishOutput | Where-Object { "$_" -notmatch '^除外' }))) }
+        } catch { Write-NightlyLog 'memory-publish' ('error:' + $_.Exception.Message) }
+        finally { $ErrorActionPreference = $oldPreference }
+    } else { Write-NightlyLog 'memory-publish' 'error:ファイルなし' }
+
+    # LINEトーク履歴エクスポート(inbox の .txt)を先に取り込む。claude-mobile が無いPCでは静かにスキップする。
+    $lineImport = Join-Path $HOME 'Downloads\claude-mobile\scripts\import-line-export.mjs'
+    if (Test-Path -LiteralPath $lineImport -PathType Leaf) {
+        $lineImportOutput = $null
+        try {
+            $lineImportOutput = @(& $node.Source $lineImport 2>&1)
+            $lineImportExit = $LASTEXITCODE
+            Write-NightlyStepResult 'import-line-export' $lineImportExit $lineImportOutput
+        } catch {
+            Write-NightlyLog 'import-line-export' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $lineImportOutput))
+            Write-Warning ("nightly-batch: import-line-export: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'import-line-export' 'skip:ファイルなし' }
+
+    $lineReminder = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\line-export-reminder.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $lineReminder = $candidate; break }
+    }
+    if ($lineReminder) {
+        $lineReminderOutput = $null
+        try {
+            $lineReminderOutput = @(& $node.Source $lineReminder 2>&1)
+            $lineReminderExit = $LASTEXITCODE
+            Write-NightlyStepResult 'line-export-reminder' $lineReminderExit $lineReminderOutput
+        } catch {
+            Write-NightlyLog 'line-export-reminder' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $lineReminderOutput))
+            Write-Warning ("nightly-batch: line-export-reminder: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'line-export-reminder' 'skip:ファイルなし' }
+
+    if ($interactionLoop) {
+        $interactionOutput = $null
+        try {
+            $interactionOutput = @(& $node.Source $interactionLoop --digest 2>&1)
+            $interactionExit = $LASTEXITCODE
+            if ($interactionExit -ne 0) {
+                $summary['interaction-loop'] = ('error:終了コード' + $interactionExit + ': ' + (Format-NightlyDetail $interactionOutput))
+                Write-NightlyStepResult 'interaction-loop' $interactionExit $interactionOutput
+            } else {
+                $interactionState = @($interactionOutput | Where-Object { $_ -eq 'skip:前回と差分なし' } | Select-Object -Last 1)
+                $summary['interaction-loop'] = if ($interactionState.Count -gt 0) { [string]$interactionState[0] } else { 'ok' }
+                Write-NightlyLog 'interaction-loop' $summary['interaction-loop']
+            }
+        } catch {
+            $summary['interaction-loop'] = ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $interactionOutput))
+            Write-NightlyLog 'interaction-loop' $summary['interaction-loop']
+            Write-Warning ("nightly-batch: interaction-loop: " + $_.Exception.Message)
+        }
+    } else {
+        $summary['interaction-loop'] = 'skip:ファイルなし'
+        Write-NightlyLog 'interaction-loop' $summary['interaction-loop']
+    }
+
+    $interactionRollout = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\interaction-rollout.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $interactionRollout = $candidate; break }
+    }
+    if ($interactionRollout) {
+        $interactionRolloutOutput = $null
+        try {
+            $interactionRolloutOutput = @(& $node.Source $interactionRollout --watch 2>&1)
+            $interactionRolloutExit = $LASTEXITCODE
+            if ($interactionRolloutExit -ne 0) {
+                $summary['interaction-rollout'] = ('error:終了コード' + $interactionRolloutExit + ': ' + (Format-NightlyDetail $interactionRolloutOutput))
+                Write-NightlyStepResult 'interaction-rollout' $interactionRolloutExit $interactionRolloutOutput
+            } else {
+                $interactionRolloutState = @($interactionRolloutOutput | Where-Object { $_ -eq 'skip:前回と差分なし' } | Select-Object -Last 1)
+                $summary['interaction-rollout'] = if ($interactionRolloutState.Count -gt 0) { [string]$interactionRolloutState[0] } else { 'ok' }
+                Write-NightlyLog 'interaction-rollout' $summary['interaction-rollout']
+            }
+        } catch {
+            $summary['interaction-rollout'] = ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $interactionRolloutOutput))
+            Write-NightlyLog 'interaction-rollout' $summary['interaction-rollout']
+            Write-Warning ("nightly-batch: interaction-rollout: " + $_.Exception.Message)
+        }
+    } else {
+        $summary['interaction-rollout'] = 'skip:ファイルなし'
+        Write-NightlyLog 'interaction-rollout' $summary['interaction-rollout']
+    }
+
+    # ルール遵守監査。失敗しても後続処理は必ず続ける。
+    $ruleCompliance = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\rule-compliance-loop.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $ruleCompliance = $candidate; break }
+    }
+    if ($ruleCompliance) {
+        $ruleComplianceOutput = $null
+        try {
+            $ruleComplianceOutput = @(& $node.Source $ruleCompliance '--days' '7' 2>&1)
+            $ruleComplianceExit = $LASTEXITCODE
+            Write-NightlyStepResult 'rule-compliance-loop' $ruleComplianceExit $ruleComplianceOutput ' (警告・後続処理続行)'
+        } catch { Write-NightlyLog 'rule-compliance-loop' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $ruleComplianceOutput)) }
+    } else { Write-NightlyLog 'rule-compliance-loop' 'skip:ファイルなし' }
+
+    # 日次の実測で復旧したレーンを再検出し、demote/cooldown を解除する。
+    # probe の失敗でも委譲ヘルス確認と後続処理は続行する。
+    $laneDoctor = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\lane-doctor.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $laneDoctor = $candidate; break }
+    }
+    if ($laneDoctor) {
+        $laneDoctorOutput = $null
+        try {
+            $laneDoctorOutput = @(& $node.Source $laneDoctor '--probe' 2>&1)
+            $laneDoctorExit = $LASTEXITCODE
+            Write-NightlyStepResult 'lane-doctor-probe' $laneDoctorExit $laneDoctorOutput ' (警告・後続処理続行)'
+        } catch { Write-NightlyLog 'lane-doctor-probe' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $laneDoctorOutput)) }
+    } else { Write-NightlyLog 'lane-doctor-probe' 'skip:ファイルなし' }
+
+    # 委譲台帳を実測と照合し、偽 cooldown を修復して根本修正を auto-session へ起票する。
+    # high が見つかっても、このブロック自身の失敗時も後続処理は必ず続ける。
+    $delegationHealth = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\delegation-health-check.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $delegationHealth = $candidate; break }
+    }
+    if ($delegationHealth) {
+        $delegationHealthOutput = $null
+        try {
+            $delegationHealthOutput = @(& $node.Source $delegationHealth 2>&1)
+            $delegationHealthExit = $LASTEXITCODE
+            Write-NightlyStepResult 'delegation-health-check' $delegationHealthExit $delegationHealthOutput ' (警告・後続処理続行)'
+        } catch { Write-NightlyLog 'delegation-health-check' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $delegationHealthOutput)) }
+    } else { Write-NightlyLog 'delegation-health-check' 'skip:ファイルなし' }
+
+    $timeoutWasteJudge = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\timeout-waste-judge.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $timeoutWasteJudge = $candidate; break }
+    }
+    if ($timeoutWasteJudge) {
+        $timeoutWasteJudgeOutput = $null
+        try {
+            $timeoutWasteJudgeOutput = @(& $node.Source $timeoutWasteJudge 2>&1)
+            $timeoutWasteJudgeExit = $LASTEXITCODE
+            Write-NightlyStepResult 'timeout-waste-judge' $timeoutWasteJudgeExit $timeoutWasteJudgeOutput ' (警告・後続処理続行)'
+        } catch { Write-NightlyLog 'timeout-waste-judge' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $timeoutWasteJudgeOutput)) }
+    } else { Write-NightlyLog 'timeout-waste-judge' 'skip:ファイルなし' }
+
+    # アプリ内フォームの報告(kim の DM に届いたもの)を GitHub Issue 化する。
+    # 失敗しても既存の夜間処理を止めない。未 ack のものは次回そのまま再試行される。
+    $feedbackToIssues = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\feedback-to-issues.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $feedbackToIssues = $candidate; break }
+    }
+    if ($feedbackToIssues) {
+        $feedbackToIssuesOutput = $null
+        try {
+            $feedbackToIssuesOutput = @(& $node.Source $feedbackToIssues 2>&1)
+            $feedbackToIssuesExit = $LASTEXITCODE
+            Write-NightlyStepResult 'feedback-to-issues' $feedbackToIssuesExit $feedbackToIssuesOutput ' (警告・後続処理続行)'
+        } catch {
+            Write-NightlyLog 'feedback-to-issues' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $feedbackToIssuesOutput))
+            Write-Warning ("nightly-batch: feedback-to-issues: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'feedback-to-issues' 'skip:ファイルなし' }
+
+    # kim が Discord DM に返信した実行指示を、対応する Issue/PR にコメントとして落とす。
+    # feedback-to-issues の直後に置く(Issue が作られた後でないと返信の貼り先が無い)。
+    $feedbackReplies = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\feedback-replies.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $feedbackReplies = $candidate; break }
+    }
+    if ($feedbackReplies) {
+        $feedbackRepliesOutput = $null
+        try {
+            $feedbackRepliesOutput = @(& $node.Source $feedbackReplies 2>&1)
+            $feedbackRepliesExit = $LASTEXITCODE
+            Write-NightlyStepResult 'feedback-replies' $feedbackRepliesExit $feedbackRepliesOutput ' (警告・後続処理続行)'
+        } catch {
+            Write-NightlyLog 'feedback-replies' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $feedbackRepliesOutput))
+            Write-Warning ("nightly-batch: feedback-replies: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'feedback-replies' 'skip:ファイルなし' }
+
+    $feedbackDoneNotify = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\feedback-done-notify.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $feedbackDoneNotify = $candidate; break }
+    }
+    if ($feedbackDoneNotify) {
+        $feedbackDoneNotifyOutput = $null
+        try {
+            $feedbackDoneNotifyOutput = @(& $node.Source $feedbackDoneNotify 2>&1)
+            $feedbackDoneNotifyExit = $LASTEXITCODE
+            Write-NightlyStepResult 'feedback-done-notify' $feedbackDoneNotifyExit $feedbackDoneNotifyOutput ' (警告・後続処理続行)'
+        } catch {
+            Write-NightlyLog 'feedback-done-notify' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $feedbackDoneNotifyOutput))
+            Write-Warning ("nightly-batch: feedback-done-notify: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'feedback-done-notify' 'skip:ファイルなし' }
+
+    $feedbackProgressNotify = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\feedback-progress-notify.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $feedbackProgressNotify = $candidate; break }
+    }
+    if ($feedbackProgressNotify) {
+        $feedbackProgressNotifyOutput = $null
+        try {
+            $feedbackProgressNotifyOutput = @(& $node.Source $feedbackProgressNotify 2>&1)
+            $feedbackProgressNotifyExit = $LASTEXITCODE
+            Write-NightlyStepResult 'feedback-progress-notify' $feedbackProgressNotifyExit $feedbackProgressNotifyOutput ' (警告・後続処理続行)'
+        } catch {
+            Write-NightlyLog 'feedback-progress-notify' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $feedbackProgressNotifyOutput))
+            Write-Warning ("nightly-batch: feedback-progress-notify: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'feedback-progress-notify' 'skip:ファイルなし' }
+
+    # 全社アプリの未対応フィードバックを滞留ゼロへ寄せる（登録簿の各アプリを巡回し、未対応を Issue 化＋実装キューへ積む）。
+    # 予算・クールダウンで打ち切った分は翌日へ繰り越す。残0かつ未取得0のときは kim へ DM しない。
+    $feedbackZeroSweep = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\feedback-zero-sweep.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $feedbackZeroSweep = $candidate; break }
+    }
+    if ($feedbackZeroSweep) {
+        $feedbackZeroSweepOutput = $null
+        try {
+            $feedbackZeroSweepOutput = @(& $node.Source $feedbackZeroSweep 2>&1)
+            $feedbackZeroSweepExit = $LASTEXITCODE
+            Write-NightlyStepResult 'feedback-zero-sweep' $feedbackZeroSweepExit $feedbackZeroSweepOutput ' (警告・後続処理続行)'
+        } catch {
+            Write-NightlyLog 'feedback-zero-sweep' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $feedbackZeroSweepOutput))
+            Write-Warning ("nightly-batch: feedback-zero-sweep: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'feedback-zero-sweep' 'skip:ファイルなし' }
+
+    # 未対応フィードバックを100億円計画への直結度で評価し、プロダクション異常もまとめて kim へ報告する。
+    # ヘルス異常の exit 3 と部分障害はいずれも警告扱いにして、後続の夜間処理を継続する。
+    $feedback100oku = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\feedback-100oku.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $feedback100oku = $candidate; break }
+    }
+    if ($feedback100oku) {
+        $feedback100okuOutput = $null
+        try {
+            $feedback100okuOutput = @(& $node.Source $feedback100oku --json 2>&1)
+            $feedback100okuExit = $LASTEXITCODE
+            Write-NightlyStepResult 'feedback-100oku' $feedback100okuExit $feedback100okuOutput ' (警告・後続処理続行)'
+        } catch {
+            Write-NightlyLog 'feedback-100oku' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $feedback100okuOutput))
+            Write-Warning ("nightly-batch: feedback-100oku: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'feedback-100oku' 'skip:ファイルなし' }
+
+    $growiManual = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\growi-manual.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $growiManual = $candidate; break }
+    }
+    if ($growiManual) {
+        $growiManualOutput = $null
+        try {
+            $growiManualOutput = @(& $node.Source $growiManual sync-growi 2>&1)
+            $growiManualExit = $LASTEXITCODE
+            if ($growiManualExit -eq 2) { Write-NightlyLog 'growi-manual' 'skip:認証情報なし' } else { Write-NightlyStepResult 'growi-manual' $growiManualExit $growiManualOutput }
+        } catch {
+            Write-NightlyLog 'growi-manual' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $growiManualOutput))
+        }
+    } else { Write-NightlyLog 'growi-manual' 'skip:ファイルなし' }
+
+    $discordChannels = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\discord-channel-ledger.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $discordChannels = $candidate; break }
+    }
+    $discordBotToken = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.claude\orgiast-discord-bot-token.txt'
+    if (-not (Test-Path -LiteralPath $discordBotToken -PathType Leaf)) {
+        Write-NightlyLog 'discord-channels' 'skip:トークンなし'
+    } elseif ($discordChannels) {
+        $discordChannelsOutput = $null
+        try {
+            $discordChannelsOutput = @(& $node.Source $discordChannels 2>&1)
+            $discordChannelsExit = $LASTEXITCODE
+            Write-NightlyStepResult 'discord-channels' $discordChannelsExit $discordChannelsOutput
+        } catch {
+            Write-NightlyLog 'discord-channels' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $discordChannelsOutput))
+        }
+    } else { Write-NightlyLog 'discord-channels' 'skip:ファイルなし' }
+
+    $webhookHealth = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\webhook-health.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $webhookHealth = $candidate; break }
+    }
+    $fleetSheetEnv = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.claude\fleet-sheet.env'
+    if (-not (Test-Path -LiteralPath $fleetSheetEnv -PathType Leaf)) {
+        Write-NightlyLog 'webhook-health' 'skip:設定なし'
+    } elseif ($webhookHealth) {
+        $webhookHealthOutput = $null
+        try {
+            $webhookHealthOutput = @(& $node.Source $webhookHealth --post-sheet 2>&1)
+            $webhookHealthExit = $LASTEXITCODE
+            Write-NightlyStepResult 'webhook-health' $webhookHealthExit $webhookHealthOutput
+        } catch { Write-NightlyLog 'webhook-health' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $webhookHealthOutput)) }
+    } else { Write-NightlyLog 'webhook-health' 'skip:ファイルなし' }
+
+    # keyserve の失敗は台帳に failed/unset として残すが、夜間バッチ本体は止めない。
+    $keyserveStatus = $null
+    $fleetSheetReport = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\keyserve-status.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $keyserveStatus = $candidate; break }
+    }
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\fleet-sheet-report.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $fleetSheetReport = $candidate; break }
+    }
+    if (-not (Test-Path -LiteralPath $fleetSheetEnv -PathType Leaf)) {
+        Write-NightlyLog 'keyserve-status' 'skip:設定なし'
+    } elseif ($keyserveStatus -and $fleetSheetReport) {
+        try {
+            $keyserveOutput = @(& $node.Source $keyserveStatus --json 2>$null | Select-Object -Last 1)
+            if ($keyserveOutput.Count -eq 0) { throw 'JSON出力なし' }
+            $env:ORGIAST_KEYSERVE_STATUS_JSON = [string]$keyserveOutput[0]
+            $fleetSheetOutput = $null
+            $fleetSheetExit = 1
+            try {
+                $fleetSheetOutput = @(& $node.Source $fleetSheetReport --no-jitter 2>&1)
+                $fleetSheetExit = $LASTEXITCODE
+            } finally { Remove-Item Env:ORGIAST_KEYSERVE_STATUS_JSON -ErrorAction SilentlyContinue }
+            if ($fleetSheetExit -ne 0) { throw ('fleet-sheet-report 終了コード' + $fleetSheetExit) }
+            $busy = Get-NightlyBusyWarning $fleetSheetOutput
+            if ($busy) { Write-NightlyLog 'keyserve-status' ('警告:' + $busy) } else { Write-NightlyLog 'keyserve-status' 'ok' }
+        } catch {
+            Remove-Item Env:ORGIAST_KEYSERVE_STATUS_JSON -ErrorAction SilentlyContinue
+            Write-NightlyLog 'keyserve-status' ('error:' + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'keyserve-status' 'skip:ファイルなし' }
+
+    $webhookInventory = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\discord-webhook-inventory.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $webhookInventory = $candidate; break }
+    }
+    if (-not (Test-Path -LiteralPath $discordBotToken -PathType Leaf)) {
+        Write-NightlyLog 'webhook-inventory' 'skip:トークンなし'
+    } elseif ($webhookInventory) {
+        $webhookInventoryOutput = $null
+        try {
+            $webhookInventoryOutput = @(& $node.Source $webhookInventory 2>&1)
+            $webhookInventoryExit = $LASTEXITCODE
+            Write-NightlyStepResult 'webhook-inventory' $webhookInventoryExit $webhookInventoryOutput
+        } catch { Write-NightlyLog 'webhook-inventory' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $webhookInventoryOutput)) }
+    } else { Write-NightlyLog 'webhook-inventory' 'skip:ファイルなし' }
+
+    # LINEオープンチャットの取り込み分を選別・要約して作り置きを更新する。
+    # batch-queue が空でも実行したいので、下の early exit より前に置くこと。
+    $digest = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\line-digest.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $digest = $candidate; break }
+    }
+    if ($digest) {
+        try {
+            $digestOutput = @(& $node.Source $digest 2>&1)
+            $digestExitCode = $LASTEXITCODE
+            if ($digestExitCode -ne 0) {
+                $digestResult = 'error:終了コード' + $digestExitCode + ': ' + (Format-NightlyDetail $digestOutput)
+            } else {
+                $digestResult = @($digestOutput | Where-Object { $_ -match '^(skip:入力ディレクトリなし|skip:新規メッセージなし|ok:\d+件処理)$' } | Select-Object -Last 1)
+                if ($digestResult.Count -eq 0) { $digestResult = 'error:状態不明' } else { $digestResult = [string]$digestResult[0] }
+            }
+            $summary['line-digest'] = $digestResult
+            Write-NightlyLog 'line-digest' $digestResult
+        } catch {
+            $summary['line-digest'] = ("error:" + $_.Exception.Message); Write-NightlyLog 'line-digest' $summary['line-digest']
+            Write-Warning ("nightly-batch: line-digest: " + $_.Exception.Message)
+        }
+    } else { Write-NightlyLog 'line-digest' 'skip:ファイルなし' }
+
+    $cafeDigest = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\line-digest.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $cafeDigest = $candidate; break }
+    }
+    if ($cafeDigest) {
+        try {
+            $cafeDigestOutput = @(& $node.Source $cafeDigest '--profile' 'cafe' 2>&1)
+            $cafeDigestExitCode = $LASTEXITCODE
+            if ($cafeDigestExitCode -ne 0) {
+                $cafeDigestResult = 'error:終了コード' + $cafeDigestExitCode + ': ' + (Format-NightlyDetail $cafeDigestOutput)
+            } else {
+                $cafeDigestResult = @($cafeDigestOutput | Where-Object { $_ -match '^(skip:入力ディレクトリなし|skip:新規メッセージなし|ok:\d+件処理)$' } | Select-Object -Last 1)
+                if ($cafeDigestResult.Count -eq 0) { $cafeDigestResult = 'error:状態不明' } else { $cafeDigestResult = [string]$cafeDigestResult[0] }
+            }
+            $summary['line-digest-cafe'] = $cafeDigestResult
+            Write-NightlyLog 'line-digest-cafe' $cafeDigestResult
+        } catch {
+            $summary['line-digest-cafe'] = ("error:" + $_.Exception.Message); Write-NightlyLog 'line-digest-cafe' $summary['line-digest-cafe']
+            Write-Warning ("nightly-batch: line-digest-cafe: " + $_.Exception.Message)
+        }
+    } else { $summary['line-digest-cafe'] = 'skip:ファイルなし'; Write-NightlyLog 'line-digest-cafe' 'skip:ファイルなし' }
+
+    $cafeDeliver = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\cafe-digest-deliver.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $cafeDeliver = $candidate; break }
+    }
+    if ($cafeDeliver) {
+        try {
+            $cafeDeliverOutput = @(& $node.Source $cafeDeliver 2>&1)
+            $cafeDeliverExitCode = $LASTEXITCODE
+            if ($cafeDeliverExitCode -ne 0) {
+                $cafeDeliverResult = 'error:終了コード' + $cafeDeliverExitCode + ': ' + (Format-NightlyDetail $cafeDeliverOutput)
+            } else {
+                $cafeDeliverResult = @($cafeDeliverOutput | Where-Object { $_ -match '^(ok:送信 .+|skip:.+|error:.+)$' } | Select-Object -Last 1)
+                if ($cafeDeliverResult.Count -eq 0) { $cafeDeliverResult = 'error:状態不明' } else { $cafeDeliverResult = [string]$cafeDeliverResult[0] }
+            }
+            $summary['cafe-digest-deliver'] = $cafeDeliverResult
+            Write-NightlyLog 'cafe-digest-deliver' $cafeDeliverResult
+        } catch {
+            $summary['cafe-digest-deliver'] = ("error:" + $_.Exception.Message); Write-NightlyLog 'cafe-digest-deliver' $summary['cafe-digest-deliver']
+            Write-Warning ("nightly-batch: cafe-digest-deliver: " + $_.Exception.Message)
+        }
+    } else { $summary['cafe-digest-deliver'] = 'skip:ファイルなし'; Write-NightlyLog 'cafe-digest-deliver' 'skip:ファイルなし' }
+
+    $minpakuDigest = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\line-digest.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $minpakuDigest = $candidate; break }
+    }
+    if ($minpakuDigest) {
+        try {
+            $minpakuDigestOutput = @(& $node.Source $minpakuDigest '--profile' 'minpaku' 2>&1)
+            $minpakuDigestExitCode = $LASTEXITCODE
+            if ($minpakuDigestExitCode -ne 0) {
+                $minpakuDigestResult = 'error:終了コード' + $minpakuDigestExitCode + ': ' + (Format-NightlyDetail $minpakuDigestOutput)
+            } else {
+                $minpakuDigestResult = @($minpakuDigestOutput | Where-Object { $_ -match '^(skip:入力ディレクトリなし|skip:新規メッセージなし|ok:\d+件処理)$' } | Select-Object -Last 1)
+                if ($minpakuDigestResult.Count -eq 0) { $minpakuDigestResult = 'error:状態不明' } else { $minpakuDigestResult = [string]$minpakuDigestResult[0] }
+            }
+            $summary['line-digest-minpaku'] = $minpakuDigestResult
+            Write-NightlyLog 'line-digest-minpaku' $minpakuDigestResult
+        } catch {
+            $summary['line-digest-minpaku'] = ("error:" + $_.Exception.Message); Write-NightlyLog 'line-digest-minpaku' $summary['line-digest-minpaku']
+            Write-Warning ("nightly-batch: line-digest-minpaku: " + $_.Exception.Message)
+        }
+    } else { $summary['line-digest-minpaku'] = 'skip:ファイルなし'; Write-NightlyLog 'line-digest-minpaku' 'skip:ファイルなし' }
+
+    $minpakuDeliver = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\minpaku-digest-deliver.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $minpakuDeliver = $candidate; break }
+    }
+    if ($minpakuDeliver) {
+        try {
+            $minpakuDeliverOutput = @(& $node.Source $minpakuDeliver 2>&1)
+            $minpakuDeliverExitCode = $LASTEXITCODE
+            if ($minpakuDeliverExitCode -ne 0) {
+                $minpakuDeliverResult = 'error:終了コード' + $minpakuDeliverExitCode + ': ' + (Format-NightlyDetail $minpakuDeliverOutput)
+            } else {
+                $minpakuDeliverResult = @($minpakuDeliverOutput | Where-Object { $_ -match '^(ok:送信 .+|skip:.+|error:.+)$' } | Select-Object -Last 1)
+                if ($minpakuDeliverResult.Count -eq 0) { $minpakuDeliverResult = 'error:状態不明' } else { $minpakuDeliverResult = [string]$minpakuDeliverResult[0] }
+            }
+            $summary['minpaku-digest-deliver'] = $minpakuDeliverResult
+            Write-NightlyLog 'minpaku-digest-deliver' $minpakuDeliverResult
+        } catch {
+            $summary['minpaku-digest-deliver'] = ("error:" + $_.Exception.Message); Write-NightlyLog 'minpaku-digest-deliver' $summary['minpaku-digest-deliver']
+            Write-Warning ("nightly-batch: minpaku-digest-deliver: " + $_.Exception.Message)
+        }
+    } else { $summary['minpaku-digest-deliver'] = 'skip:ファイルなし'; Write-NightlyLog 'minpaku-digest-deliver' 'skip:ファイルなし' }
+
+    $xTips = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\x-ai-tips-collect.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $xTips = $candidate; break }
+    }
+    if ($xTips) {
+        try {
+            $xTipsOutput = @(& $node.Source $xTips '--limit' '8' 2>&1)
+            $xTipsExitCode = $LASTEXITCODE
+            if ($xTipsExitCode -ne 0) {
+                $xTipsResult = 'error:終了コード' + $xTipsExitCode + ': ' + (Format-NightlyDetail $xTipsOutput)
+            } else {
+                $xTipsResult = @($xTipsOutput | Where-Object { $_ -match '^(ok:取得\d+件 追加\d+件 重複\d+件 費用\$[0-9.]+|skip:.+|error:.+)$' } | Select-Object -Last 1)
+                if ($xTipsResult.Count -eq 0) { $xTipsResult = 'error:状態不明: ' + (Format-NightlyDetail $xTipsOutput) } else { $xTipsResult = [string]$xTipsResult[0] }
+            }
+            $summary['x-ai-tips-collect'] = $xTipsResult
+            Write-NightlyLog 'x-ai-tips-collect' $xTipsResult
+        } catch {
+            $summary['x-ai-tips-collect'] = ("error:" + $_.Exception.Message); Write-NightlyLog 'x-ai-tips-collect' $summary['x-ai-tips-collect']
+            Write-Warning ("nightly-batch: x-ai-tips-collect: " + $_.Exception.Message)
+        }
+    } else {
+        $summary['x-ai-tips-collect'] = 'skip:ファイルなし'
+        Write-NightlyLog 'x-ai-tips-collect' 'skip:ファイルなし'
+    }
+
+    $triage = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\ai-news-triage.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $triage = $candidate; break }
+    }
+    if ($triage) {
+        try {
+            $triageOutput = @(& $node.Source $triage '--limit' '60' '--confidence' 'high,medium,low' 2>&1)
+            $triageExitCode = $LASTEXITCODE
+            if ($triageExitCode -ne 0) {
+                $triageResult = 'error:終了コード' + $triageExitCode + ': ' + (Format-NightlyDetail $triageOutput)
+            } else {
+                $triageResult = @($triageOutput | Where-Object { $_ -match '^(ok:検証\d+件 done\d+ rejected\d+ pending\d+(?: 判定失敗\d+件)?|skip:対象なし|error:.+)$' } | Select-Object -Last 1)
+                if ($triageResult.Count -eq 0) { $triageResult = 'error:状態不明' } else { $triageResult = [string]$triageResult[0] }
+            }
+            $summary['ai-news-triage'] = $triageResult
+            Write-NightlyLog 'ai-news-triage' $triageResult
+        } catch {
+            $summary['ai-news-triage'] = ("error:" + $_.Exception.Message); Write-NightlyLog 'ai-news-triage' $summary['ai-news-triage']
+            Write-Warning ("nightly-batch: ai-news-triage: " + $_.Exception.Message)
+        }
+    } else {
+        $summary['ai-news-triage'] = 'skip:ファイルなし'
+        Write-NightlyLog 'ai-news-triage' 'skip:ファイルなし'
+    }
+
+    $makimonoDrain = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\makimono-publish.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $makimonoDrain = $candidate; break }
+    }
+    if ($makimonoDrain) {
+        $makimonoDrainOutput = $null
+        try {
+            $makimonoDrainOutput = @(& $node.Source $makimonoDrain --drain-queue --notify 2>&1)
+            $makimonoDrainExit = $LASTEXITCODE
+            Write-NightlyStepResult 'makimono-drain' $makimonoDrainExit $makimonoDrainOutput
+        } catch {
+            Write-NightlyLog 'makimono-drain' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $makimonoDrainOutput))
+            Write-Warning ("nightly-batch: makimono-drain: " + $_.Exception.Message)
+        }
+        $makimonoCheckOutput = $null
+        try {
+            $makimonoCheckOutput = @(& $node.Source $makimonoDrain --check --notify 2>&1)
+            $makimonoCheckExit = $LASTEXITCODE
+            Write-NightlyStepResult 'makimono-check' $makimonoCheckExit $makimonoCheckOutput
+        } catch {
+            Write-NightlyLog 'makimono-check' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $makimonoCheckOutput))
+            Write-Warning ("nightly-batch: makimono-check: " + $_.Exception.Message)
+        }
+    } else {
+        Write-NightlyLog 'makimono-drain' 'error:ファイルなし'
+        Write-NightlyLog 'makimono-check' 'error:ファイルなし'
+    }
+
+    # SessionStart のAIニュース・Googleタスク通知を、既存digest経路で日次DMへ集約。
+    $dailyNotices = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\evening-digest.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $dailyNotices = $candidate; break }
+    }
+    if ($dailyNotices) {
+        $noticeOutput = $null
+        try {
+            $noticeOutput = @(& $node.Source $dailyNotices --daily-notices 2>&1)
+            $noticeExit = $LASTEXITCODE
+            Write-NightlyStepResult 'daily-notices' $noticeExit $noticeOutput
+        } catch { Write-NightlyLog 'daily-notices' ("error:" + $_.Exception.Message + ': ' + (Format-NightlyDetail $noticeOutput)) }
+    } else { Write-NightlyLog 'daily-notices' 'error:ファイルなし' }
+
+    $producer = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\batch-producer.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $producer = $candidate; break }
+    }
+    if ($producer) {
+        $producerOutput = $null
+        try {
+            $producerOutput = @(& $node.Source $producer 2>&1)
+            $producerExit = $LASTEXITCODE
+            Write-NightlyStepResult 'batch-producer' $producerExit $producerOutput ' (警告・batch-run続行)'
+        } catch { Write-NightlyLog 'batch-producer' ("error:" + $_.Exception.Message + ' (警告・batch-run続行): ' + (Format-NightlyDetail $producerOutput)) }
+    } else { Write-NightlyLog 'batch-producer' 'skip:ファイルなし' }
+
+    if (-not $runner) { $summary['batch'] = 'error:batch-run.mjsが見つからない'; Write-NightlyLog 'batch-run確認' 'error:batch-run.mjsが見つからない'; Finish-Nightly 1 }
+    $pending = Join-Path $HOME '.claude\batch-queue\pending.jsonl'
+    if (-not (Test-Path -LiteralPath $pending -PathType Leaf) -or (Get-Item -LiteralPath $pending).Length -eq 0) {
+        $summary['batch'] = '処理対象0件'; Write-NightlyLog 'batch-run' 'skip:処理対象0件'; Finish-Nightly 0
+    }
+    $before = @((Get-Content -LiteralPath $pending -Encoding UTF8) | Where-Object { $_.Trim() }).Count
+    $batchRunOutput = @(& $node.Source $runner 2>&1)
+    $batchRunExit = $LASTEXITCODE
+    if ($batchRunExit -eq 3) {
+        $summary['batch'] = 'skip:既に実行中(ロック競合)'
+        Write-NightlyLog 'batch-run' 'skip:既に実行中(ロック競合)'
+        Finish-Nightly 0
+    }
+    if ($batchRunExit -ne 0) { $summary['batch'] = ('error:終了コード' + $batchRunExit + ': ' + (Format-NightlyDetail $batchRunOutput)); Write-NightlyStepResult 'batch-run' $batchRunExit $batchRunOutput; Finish-Nightly 1 }
+    $after = if (Test-Path -LiteralPath $pending -PathType Leaf) { @((Get-Content -LiteralPath $pending -Encoding UTF8) | Where-Object { $_.Trim() }).Count } else { 0 }
+    $processed = [Math]::Max(0, $before - $after)
+    $summary['batch'] = ($processed.ToString() + '件処理')
+    Write-NightlyLog 'batch-run' ("ok:" + $processed + '件処理')
+    Finish-Nightly 0
+} catch {
+    $summary['batch'] = ("error:" + $_.Exception.Message)
+    Write-NightlyLog '例外' ("error:" + $_.Exception.Message)
+    Write-Warning ("nightly-batch: " + $_.Exception.Message)
+    Finish-Nightly 1
+}

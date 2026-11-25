@@ -1,0 +1,97 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import vm from 'node:vm';
+import { scanBrowserExtensions, enabledLabel, formatHuman } from './browser-extension-audit.mjs';
+
+function fixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-audit-'));
+  fs.writeFileSync(path.join(root, 'Local State'), JSON.stringify({ profile: { info_cache: { 'Profile 13': { user_name: 'seisaku-team@orgiast.jp' } } } }));
+  return root;
+}
+function add(root, profile, id, setting, localeName) {
+  const dir = path.join(root, profile); fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'Secure Preferences');
+  let data = { extensions: { settings: {} } }; try { data = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+  data.extensions.settings[id] = setting; fs.writeFileSync(file, JSON.stringify(data));
+  // 実 Chrome は Extensions/<id>/<version>_0/ のようにサフィックス付きで置くので、
+  // フィクスチャも同じ形にする(素の <version> で作ると実環境の失敗を検出できない)。
+  if (localeName) { const locale = path.join(dir, 'Extensions', id, `${setting.manifest.version}_0`, '_locales', 'ja'); fs.mkdirSync(locale, { recursive: true }); fs.writeFileSync(path.join(locale, 'messages.json'), JSON.stringify({ appName: { message: localeName } })); }
+}
+
+test('名前・アカウント・risk・builtinを解決し決定順にする', () => {
+  const root = fixture();
+  add(root, 'Profile 13', 'sider', { manifest: { name: '__MSG_appName__', version: '1' }, state: 1, active_permissions: { api: ['cookies', 'userScripts'], explicit_host: ['<all_urls>'] } }, 'Sider');
+  add(root, 'Default', 'wide', { manifest: { name: 'Wide', version: '2' }, state: 1, active_permissions: { explicit_host: ['*://*/*'] }, was_installed_by_default: true });
+  add(root, 'Default', 'narrow', { manifest: { name: 'Narrow', version: '3' }, disable_reasons: [], active_permissions: { explicit_host: ['https://example.com/*'] } });
+  const a = scanBrowserExtensions({ roots: [{ browser: 'Chrome', root }] });
+  const b = scanBrowserExtensions({ roots: [{ browser: 'Chrome', root }] });
+  assert.deepEqual(a, b); assert.deepEqual(a.rows.map((r) => r.risk), ['high', 'medium', 'low']);
+  assert.equal(a.rows[0].name, 'Sider'); assert.equal(a.rows[0].account, 'seisaku-team@orgiast.jp'); assert.equal(a.rows[1].builtin, true);
+});
+
+test('壊れたJSONと設定なしプロファイルを数えて継続する', () => {
+  const root = fixture(); fs.mkdirSync(path.join(root, 'Default')); fs.writeFileSync(path.join(root, 'Default', 'Secure Preferences'), '{broken'); fs.mkdirSync(path.join(root, 'Profile 2'));
+  const result = scanBrowserExtensions({ roots: [{ browser: 'Chrome', root }] });
+  assert.equal(result.rows.length, 0); assert.equal(result.unreadableProfiles, 2);
+});
+
+test('extPlanReplaceは同一PCだけ置換し空labelを拒否する', () => {
+  const source = fs.readFileSync(new URL('../gas/fleet-status-sheet/ExtensionAudit.gs', import.meta.url), 'utf8');
+  const helpers = fs.readFileSync(new URL('../gas/fleet-status-sheet/UpsertLogic.gs', import.meta.url), 'utf8');
+  const context = {}; vm.createContext(context); vm.runInContext((helpers + '\n' + source).replace(/\bconst\s+/g, 'var '), context);
+  const h = Object.values(context.EXT_HEADERS_); const c = context.fleetFindHeaderIndex(h, context.EXT_HEADERS_.label);
+  const other = h.map(() => ''); other[c] = 'other'; const mine = h.map(() => ''); mine[c] = 'mine';
+  const payload = { label: 'mine', reportedAt: 'now', rows: [{ browser: 'Chrome', profile: 'Default', account: '', name: 'X', id: 'id', version: '1', enabled: true, risk: 'high', builtin: false, broadHost: true, keyPerms: ['cookies'] }] };
+  const first = context.extPlanReplace(h, [other, mine], payload); assert.deepEqual([...first.deleteRowNumbers], [3]); assert.equal(first.appendRows.length, 1);
+  const after = [other, ...first.appendRows]; const second = context.extPlanReplace(h, after, payload); assert.deepEqual([...second.deleteRowNumbers], [3]); assert.equal(after[0][c], 'other');
+  assert.throws(() => context.extPlanReplace(h, [], { ...payload, label: '' }), /label_required/);
+  assert.throws(() => context.extPlanReplace(h.slice(0, -1), [], payload), /required header not found/);
+});
+
+test('extSummarizeはPC別の行数・high件数・最終報告を集計する', () => {
+  const source = fs.readFileSync(new URL('../gas/fleet-status-sheet/ExtensionAudit.gs', import.meta.url), 'utf8');
+  const helpers = fs.readFileSync(new URL('../gas/fleet-status-sheet/UpsertLogic.gs', import.meta.url), 'utf8');
+  const context = {}; vm.createContext(context); vm.runInContext((helpers + '\n' + source).replace(/\bconst\s+/g, 'var '), context);
+  const headers = Object.values(context.EXT_HEADERS_);
+  const makeRow = (label, risk, reportedAt) => headers.map((header) => {
+    if (header === context.EXT_HEADERS_.label) return label;
+    if (header === context.EXT_HEADERS_.risk) return risk;
+    if (header === context.EXT_HEADERS_.reportedAt) return reportedAt;
+    return 'sensitive-cell';
+  });
+  const summary = context.extSummarize(headers, [
+    makeRow('pc-a', 'high', '2026-08-24T10:00:00+09:00'),
+    makeRow('pc-a', 'low', '2026-08-25T10:00:00+09:00'),
+    makeRow('pc-b', 'high', '2026-08-23T10:00:00+09:00'),
+    makeRow('  ', 'high', '2026-08-26T10:00:00+09:00')
+  ]);
+  assert.equal(summary.pcCount, 2);
+  assert.equal(summary.totalRows, 3);
+  assert.deepEqual({ ...summary.byLabel['pc-a'] }, { rows: 2, high: 1, reportedAt: '2026-08-25T10:00:00+09:00' });
+  assert.deepEqual({ ...summary.byLabel['pc-b'] }, { rows: 1, high: 1, reportedAt: '2026-08-23T10:00:00+09:00' });
+  assert.equal(summary.byLabel[''], undefined);
+  assert.throws(() => context.extSummarize(headers.filter((header) => header !== context.EXT_HEADERS_.label), []), /required header not found: PC名\/ホスト名/);
+});
+
+test('拡張0本のプロファイルは読み取り失敗と分けて数える', () => {
+  const root = fixture();
+  const dir = path.join(root, 'Profile 5'); fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'Secure Preferences'), JSON.stringify({ extensions: {} }));
+  const result = scanBrowserExtensions({ roots: [{ browser: 'Chrome', root }] });
+  assert.equal(result.unreadableProfiles, 0);
+  assert.equal(result.emptyProfiles, 1);
+});
+
+test('人が読む表の有効列は true/false でなく日本語', () => {
+  assert.equal(enabledLabel(true), '有効');
+  assert.equal(enabledLabel(false), '無効');
+  assert.equal(enabledLabel('判定不能'), '判定不能');
+  const root = fixture();
+  add(root, 'Profile 13', 'sider', { manifest: { name: '__MSG_appName__', version: '1' }, state: 1, active_permissions: { api: ['cookies'], explicit_host: ['<all_urls>'] } }, 'Sider');
+  const text = formatHuman(scanBrowserExtensions({ roots: [{ browser: 'Chrome', root }] }));
+  assert.match(text, /Sider	Chrome	Profile 13 \(seisaku-team@orgiast\.jp\)	1	有効/);
+  assert.doesNotMatch(text, /	true	/);
+});

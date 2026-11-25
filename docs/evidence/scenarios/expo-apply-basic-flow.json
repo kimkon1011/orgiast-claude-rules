@@ -1,0 +1,132 @@
+{
+  "scenarioId": "sc-expo-apply-basic-001",
+  "description": "expo-apply展示会出展受付サイトの基本予約フロー検証シナリオ",
+  "target": "apps/expo-apply/index.html",
+  "baseUrl": "http://localhost:8000/apps/expo-apply/",
+  "browser": "chromium",
+  "viewport": { "width": 1280, "height": 800 },
+  "tests": [
+    {
+      "id": "T001",
+      "name": "正常入力→送信",
+      "description": "全必須項目を正しく入力し送信すると受付番号が表示される",
+      "steps": [
+        { "action": "navigate", "url": "{{baseUrl}}" },
+        { "action": "fill", "selector": "#company", "value": "Test Corp" },
+        { "action": "fill", "selector": "#name", "value": "John Doe" },
+        { "action": "fill", "selector": "#email", "value": "john@test.com" },
+        { "action": "select", "selector": "#booth-size", "value": "small" },
+        { "action": "click", "selector": "#submit-btn" }
+      ],
+      "expected": [
+        { "type": "visible", "selector": "#result-id", "timeout": 5000 },
+        { "type": "storage", "key": "expo-apply-data", "assertion": "contains entry with company=Test Corp" }
+      ],
+      "screenshot": true
+    },
+    {
+      "id": "T002",
+      "name": "必須項目未入力エラー",
+      "description": "空欄で送信すると該当項目直下にエラーメッセージが表示される",
+      "steps": [
+        { "action": "navigate", "url": "{{baseUrl}}" },
+        { "action": "click", "selector": "#submit-btn" }
+      ],
+      "expected": [
+        { "type": "visible", "selector": ".error-message", "count": ">=1" }
+      ],
+      "screenshot": true
+    },
+    {
+      "id": "T003",
+      "name": "メールアドレス形式エラー",
+      "description": "不正なメールアドレス形式でエラーメッセージが表示される",
+      "steps": [
+        { "action": "navigate", "url": "{{baseUrl}}" },
+        { "action": "fill", "selector": "#company", "value": "Test Corp" },
+        { "action": "fill", "selector": "#name", "value": "John Doe" },
+        { "action": "fill", "selector": "#email", "value": "invalid-email" },
+        { "action": "select", "selector": "#booth-size", "value": "small" },
+        { "action": "click", "selector": "#submit-btn" }
+      ],
+      "expected": [
+        { "type": "visible", "selector": "#email-error", "timeout": 3000 }
+      ],
+      "screenshot": true
+    },
+    {
+      "id": "T004",
+      "name": "言語切替（英語→日本語）",
+      "description": "言語切替ボタンでラベルが日本語に切り替わる",
+      "steps": [
+        { "action": "navigate", "url": "{{baseUrl}}" },
+        { "action": "click", "selector": "#lang-ja" }
+      ],
+      "expected": [
+        { "type": "text", "selector": "#company-label", "contains": "会社名" }
+      ],
+      "screenshot": true
+    },
+    {
+      "id": "T005",
+      "name": "データ永続性",
+      "description": "送信後にリロードしてもlocalStorageのデータが維持される",
+      "steps": [
+        { "action": "navigate", "url": "{{baseUrl}}" },
+        { "action": "fill", "selector": "#company", "value": "Persistence Test" },
+        { "action": "fill", "selector": "#name", "value": "Tester" },
+        { "action": "fill", "selector": "#email", "value": "test@test.com" },
+        { "action": "select", "selector": "#booth-size", "value": "medium" },
+        { "action": "click", "selector": "#submit-btn" },
+        { "action": "wait", "ms": 1000 },
+        { "action": "reload" }
+      ],
+      "expected": [
+        { "type": "visible", "selector": "#data-table", "timeout": 5000 },
+        { "type": "storage", "key": "expo-apply-data", "assertion": "length > 0" }
+      ],
+      "screenshot": true
+    },
+    {
+      "id": "T006",
+      "name": "CSVエクスポート",
+      "description": "CSVダウンロードボタンで正しいCSVが出力される",
+      "steps": [
+        { "action": "navigate", "url": "{{baseUrl}}" },
+        { "action": "click", "selector": "#csv-download" }
+      ],
+      "expected": [
+        { "type": "download", "filename": "*.csv", "timeout": 5000 }
+      ],
+      "screenshot": false
+    },
+    {
+      "id": "T007",
+      "name": "管理画面ステータス変更",
+      "description": "受付済み申込のステータスを変更できる",
+      "steps": [
+        { "action": "navigate", "url": "{{baseUrl}}" },
+        { "action": "click", "selector": "#admin-panel" },
+        { "action": "select", "selector": ".status-select", "value": "contacted" }
+      ],
+      "expected": [
+        { "type": "text", "selector": ".status-badge", "contains": "連絡済み" }
+      ],
+      "screenshot": true
+    },
+    {
+      "id": "T008",
+      "name": "スマホビューポートでの表示",
+      "description": "スマホサイズの画面でもフォームが正しく表示される",
+      "viewport": { "width": 375, "height": 812 },
+      "steps": [
+        { "action": "navigate", "url": "{{baseUrl}}" }
+      ],
+      "expected": [
+        { "type": "visible", "selector": "#expo-form", "timeout": 5000 },
+        { "type": "visible", "selector": "#submit-btn" }
+      ],
+      "screenshot": true
+    }
+  ]
+}

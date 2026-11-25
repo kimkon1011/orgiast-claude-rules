@@ -1,0 +1,171 @@
+{
+  "version": 1,
+  "id": "prompt-memory-guideline",
+  "title": "プロンプトとメモリ最適化ガイドライン",
+  "purpose": "トークン消費を抑えつつ応答品質を落とさないための、プロンプト設計・メモリ統合・キャッシュ保護・委譲の規範。全PC・全アカウントに適用する。",
+  "principles": [
+    "効果の順序は 測定 → プロンプトキャッシュ → コンテキスト削減 → バッチ → モデル格下げ。品質を落とす節約（effortLevel low 等）は最上位制約違反であり、節約手段として使わない。",
+    "削減対象は「毎回同じものを送り直している分」と「想起に使われない記憶」。判断に必要な情報を削らない。",
+    "機械で検査できる規則は機械で検査する（本カタログの check 定義）。検査できない規則は check: null とし、人が読む規範として残す。"
+  ],
+  "rules": [
+    {
+      "id": "PM-01",
+      "category": "prompt",
+      "title": "出力は Caveman（前置きなし・完了報告は1〜3行）",
+      "rule": "挨拶・前置き・要約の重複を書かない。完了報告は「やったこと / 検証したこと / 残ったこと」の3行以内に収める。",
+      "why": "出力トークンは入力より高単価で、冗長な前置きは全応答に積み上がる。読み手の判断にも寄与しない。",
+      "howToApply": [
+        "output-styles/caveman.md を全セッションで有効にする。",
+        "長い説明が必要なときは本文ではなくファイルに書き、チャットには1行の参照だけ出す。"
+      ],
+      "check": null,
+      "evidence": ["~/.claude/output-styles/caveman.md（全セッション適用済み）"]
+    },
+    {
+      "id": "PM-02",
+      "category": "prompt",
+      "title": "手順・ルールは常時ロードせず、必要時に Read する",
+      "rule": "詳細手順は rules/ や docs/ に置き、CLAUDE.md 本文には恒久ルールと参照1行だけを残す。",
+      "why": "CLAUDE.md は全リクエストに自動ロードされる。rules/ 配下も paths: 指定が無いと全リクエストに乗る（実測 23,288 tok/req）。",
+      "howToApply": [
+        "新しい手順は rules/<topic>.md か docs/<topic>.md に書き、CLAUDE.md からは1行リンクで参照する。",
+        "「迷ったら Read ツールで該当節を読む」と明記し、常時ロードを前提にしない。"
+      ],
+      "check": null,
+      "evidence": ["tools/onboarding-sync.mjs のコメント: rules/ 配下は paths: が無いと全リクエストで自動ロード（実測 23,288 tok/req）"]
+    },
+    {
+      "id": "PM-03",
+      "category": "cache",
+      "title": "CLAUDE.md に揮発値を書かない（キャッシュ保護）",
+      "rule": "実行中タスク・当日の数字・進行中障害・今日の日付を CLAUDE.md に書かない。上部ほど静的に保つ。",
+      "why": "先頭が変わるとプロンプトキャッシュが全破棄され、以降の全リクエストが定価になる。",
+      "howToApply": [
+        "進捗・当日の数値は ~/.claude/next-session.md / open-work.md / memory 側に書く。",
+        "キャッシュヒット率は tools/usage-stats.mjs と tools/cache-audit.mjs で確認する。"
+      ],
+      "check": { "type": "claude-md-no-current-date" },
+      "evidence": ["CLAUDE.md のユーザーグローバル節「キャッシュ保護」", "実測キャッシュヒット率 94.9%（2026-09-22 時点）"]
+    },
+    {
+      "id": "PM-04",
+      "category": "cache",
+      "title": "セッション中のモデル切替を乱発しない",
+      "rule": "1セッション内でモデルを頻繁に切り替えない。切替は用途の境界（設計→実装委譲など）でのみ行う。",
+      "why": "モデルが変わるとキャッシュが無効化され、同一内容の入力が定価で再送される。",
+      "howToApply": ["セッション開始時にモデルを決め、途中変更は目的変更時だけにする。"]
+    },
+    {
+      "id": "PM-05",
+      "category": "context",
+      "title": "重い探索はサブエージェント・安い経路へ委譲し、親コンテキストを守る",
+      "rule": "「配下を全部読んで◯◯」型の調査は Explore / general-purpose・安いLLM に投げ、親には結論だけ返す。",
+      "why": "親コンテキストに入った全文は以後の全ターンで再送される。子の探索コストは1回で消える。",
+      "howToApply": [
+        "委譲時に「結果は200字以内・コード本体は含めない」と出力形式を指定する。",
+        "分類・抽出・整形は tools/llm-ask.mjs（安いプロバイダ）、実装は tools/codex-do.mjs に流す。"
+      ],
+      "check": null,
+      "evidence": ["CLAUDE.md ユーザーグローバル節「重い探索はサブエージェント委譲」"]
+    },
+    {
+      "id": "PM-06",
+      "category": "context",
+      "title": "委譲プロンプトはファイルで渡す",
+      "rule": "Codex 等への指示はファイルに書き、--prompt-file で渡す。シェルを1層も通さない・TTYなし・パイプなし。",
+      "why": "argv 経由は引用符・バッククォートがシェルに解釈され、指示の欠落や事故になる。ファイル渡しは再実行も容易。",
+      "howToApply": ["node tools/codex-do.mjs --prompt-file <指示ファイル> --cwd <対象> --timeout <秒> を前景で実行する。"]
+    },
+    {
+      "id": "PM-07",
+      "category": "memory",
+      "title": "MEMORY.md は索引だけ。1行は index/<domain>.md に足す",
+      "rule": "新規 memory の索引1行は index/<domain>.md へ追加する。MEMORY.md 本文は索引とヘッダのみに保つ。",
+      "why": "MEMORY.md は全セッションにロードされる。閾値 24,985B を超えると切り捨てられ、後方の索引が想起不能になる。",
+      "howToApply": [
+        "追加先はドメイン別 index/*.md。MEMORY.md には足さない。",
+        "超過時は tools/memory-index-compact.mjs / memory-index-split.mjs --apply で再生成し、memory-index-split-verify.mjs で照合する。"
+      ],
+      "check": { "type": "memory-index-byte-cap", "limitBytes": 24985 },
+      "evidence": ["memory/feedback_memory_index_is_byte_capped.md（閾値 24,985B）"]
+    },
+    {
+      "id": "PM-08",
+      "category": "memory",
+      "title": "memory は1ファイル1事実、frontmatter を必ず埋める",
+      "rule": "name / description / metadata.type（user・feedback・project・reference）を必ず書き、本文は1つの事実に絞る。",
+      "why": "description が無いと想起判定に使えず、全文を読む羽目になる。1ファイルに複数事実を混ぜると部分適用できない。",
+      "howToApply": [
+        "feedback/project は **Why:** と **How to apply:** を続けて書く。",
+        "関連は [[name]] で相互リンクする。"
+      ],
+      "check": { "type": "memory-frontmatter", "allowedTypes": ["user", "feedback", "project", "reference"] }
+    },
+    {
+      "id": "PM-09",
+      "category": "memory",
+      "title": "同名・同趣旨の memory を増やさず、既存を更新する",
+      "rule": "保存前に既存ファイルを確認し、同じ事実を扱うものがあれば更新する。誤りと判明したものは削除する。",
+      "why": "重複は索引を太らせ、矛盾した2つの記述が同時に想起されて判断を誤らせる。",
+      "howToApply": ["保存前に memory/ を Grep し、name と description の重複を確認する。"]
+    },
+    {
+      "id": "PM-10",
+      "category": "memory",
+      "title": "索引はドメイン別に分割し、MEMORY.md から参照する",
+      "rule": "記憶は index/<domain>.md に分割し、MEMORY.md にはドメイン索引の1行だけを置く。",
+      "why": "全件を MEMORY.md に置くと毎回全件分のトークンを払う。ドメイン分割なら必要な索引だけを追加で読める。",
+      "howToApply": ["v2 split を正本とする（docs/memory-index.md）。予算/グラフ方式は採用しない。"],
+      "check": { "type": "memory-domain-index-present" },
+      "evidence": ["docs/memory-index.md（実セッション24本のA/Bで想起成功率は同等・v2 はサブ索引の追加読み込み 0/12）"]
+    },
+    {
+      "id": "PM-11",
+      "category": "context",
+      "title": "同一内容の再掲をやめ、参照で済ませる",
+      "rule": "既にファイルにある内容をチャットや指示書に再掲しない。パスと1行要約で参照する。",
+      "why": "再掲は入力トークンを二重に払い、以後の全ターンで再送され続ける。",
+      "howToApply": ["指示書はファイルに置き、チャットにはファイルパス・ID・URL だけを出す。"]
+    },
+    {
+      "id": "PM-12",
+      "category": "cache",
+      "title": "長い入力は先頭を固定し、差分を末尾に置く",
+      "rule": "同一セッションで繰り返し送る資料は、順序と先頭を変えない。追記は末尾に行う。",
+      "why": "プレフィックスが一致する範囲だけがキャッシュに当たる。途中挿入は以降を全部無効化する。",
+      "howToApply": ["資料の更新は末尾追記を原則とし、途中編集が必要なら別ファイルとして新規に置く。"]
+    },
+    {
+      "id": "PM-13",
+      "category": "cost",
+      "title": "最適化の順序を守る（測定→キャッシュ→コンテキスト→バッチ→モデル格下げ）",
+      "rule": "品質を落とさずに費用だけ下げる。モデル格下げを最初に選ばない。",
+      "why": "順序を誤ると、品質劣化と再作業で総コストが増える。上位制約（コストは下げても開発品質は下げない）に反する。",
+      "howToApply": [
+        "まず tools/usage-stats.mjs・cache-audit.mjs・bulk-context-audit.mjs で実測する。",
+        "遅延可能な処理は tools/batch-enqueue.mjs で夜間（半額・翌朝）へ回す。",
+        "effortLevel の既定は medium。low は禁止、high は設計・横断調査のセッションのみ。"
+      ],
+      "check": null,
+      "evidence": ["CLAUDE.md ユーザーグローバル節「トークン効率」"]
+    }
+  ],
+  "tooling": [
+    { "tool": "tools/usage-stats.mjs", "role": "対象期間の入力・出力・キャッシュヒット率の実測" },
+    { "tool": "tools/cache-audit.mjs", "role": "キャッシュヒット率の監査" },
+    { "tool": "tools/bulk-context-audit.mjs", "role": "コンテキスト肥大の監査" },
+    { "tool": "tools/context-retention-bench.mjs", "role": "コンテキスト保持のベンチ" },
+    { "tool": "tools/hook-budget-check.mjs", "role": "フックが毎リクエストに足すトークンの予算検査" },
+    { "tool": "tools/memory-index-split.mjs", "role": "MEMORY.md と index/*.md の再生成（--apply）" },
+    { "tool": "tools/memory-index-split-verify.mjs", "role": "索引の独立照合" },
+    { "tool": "tools/memory-index-compact.mjs", "role": "索引の圧縮" },
+    { "tool": "tools/llm-ask.mjs", "role": "分類・抽出・整形の安い経路" },
+    { "tool": "tools/codex-do.mjs", "role": "実装の委譲" }
+  ],
+  "lessons": [
+    "MEMORY.md の索引を分割せずに足し続けると 24,985B で切り捨てられ、後方の索引が黙って想起不能になる（実際に発生）。",
+    "ルールを CLAUDE.md に書き足すほど全リクエストの入力が増える。追加は「常時ロードすべき恒久ルールか」を毎回問う。",
+    "節約を理由にモデルや effortLevel を下げるのは禁止。削減は委譲・レスポンス数削減・無人ジョブの非Claude化・キャッシュ維持で行う。"
+  ]
+}

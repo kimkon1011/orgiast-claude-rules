@@ -1,0 +1,326 @@
+# 導入手順（GAS 不具合・要望フォーム）
+
+## 1. これは何をするパッケージか
+
+対象の GAS アプリに「🐛 不具合・要望」フォームを1画面追加します。社員がフォームから送ると、①記録先スプレッドシートの「不具合要望」シートに自動で記録され、②開発担当の Discord に通知が飛びます。ログイン不要・トークン不要で開けるフォームです。
+
+以下は非エンジニアでもそのまま実行できるよう、コマンドをそのまま貼り付けられる形で書いています。実際の作業は Claude Code に「このファイルの手順で feedback フォームを入れて」と頼めば、Claude が代行できます（clasp push・デプロイ・Script Properties 設定まで自動化可能）。
+
+## 2. kit install で導入する（推奨・1コマンド）
+
+正本リポジトリ（orgiast-claude-rules。各PCでは `tools/` が自動配布されています）で次を実行します。`src/FeedbackRelay.js` と `src/ui/FeedbackForm.html`（clasp の `rootDir` に従う）の配置、`doGet` への統合、`.feedback-kit.json` の書き込み、滞留ゼロ巡回台帳への登録までを1回で行い、`feedback-form-gate` の kit 検査（verify・版・必須7機能）を通る状態になります。
+
+```powershell
+node tools/feedback-kit/install.mjs --app <対象アプリのパス> --name "<アプリ名>"
+node tools/feedback-kit/verify.mjs --app <対象アプリのパス>
+```
+
+既存フォームがある場合は `--upgrade`（変更前の版は `.feedback-kit-backup/` に退避）を付けます。verify が `"ok": true` を返せば導入完了です。以降の手順3の `doGet` 追加は kit が自動統合するため不要で、手順4（clasp push・デプロイ）以降を進めます。
+
+### 手動で配置する場合（kit が使えない時だけ）
+
+対象の GAS プロジェクト（clasp でローカル管理しているフォルダ）に、次の2ファイルをそのままコピーします。ファイルの中身は変更不要です。手動配置だけでは gate の kit 検査（`.feedback-kit.json`）を通らないため、最後に上の kit install を実行してください。
+
+- `tools/feedback-kit/gas/templates/FeedbackRelay.js` → 対象アプリの `src/FeedbackRelay.js`
+- `tools/feedback-kit/gas/templates/FeedbackForm.html` → 対象アプリの `src/ui/FeedbackForm.html`
+
+対象アプリの `src/ui/` フォルダが無い場合は先に作成してください。
+
+コピーコマンド例（PowerShell、`<対象アプリのパス>` は実際のフォルダに置き換える）:
+
+```powershell
+Copy-Item "C:\Users\uers\Downloads\orgiast-claude-rules\tools\feedback-kit\gas\templates\FeedbackRelay.js" "<対象アプリのパス>\src\FeedbackRelay.js"
+New-Item -ItemType Directory -Force "<対象アプリのパス>\src\ui" | Out-Null
+Copy-Item "C:\Users\uers\Downloads\orgiast-claude-rules\tools\feedback-kit\gas\templates\FeedbackForm.html" "<対象アプリのパス>\src\ui\FeedbackForm.html"
+```
+
+## 3. doGet に1行足す
+
+対象アプリの `doGet` 関数を開き、**token 検証より前**（関数の一番上）に次の1行を追加します。報告者は token を持っていないため、token チェックより前に分岐させる必要があります。
+
+```javascript
+function doGet(e) {
+  var params = (e && e.parameter) || {};
+  if (String(params.form || '') === 'feedback') return FeedbackRelay_serveForm(params);
+
+  // ↓ここから既存の token 検証・画面振り分け処理（変更不要）
+  ...
+}
+```
+
+対象アプリに `doGet` が無い場合（フォーム専用の新規プロジェクト等）は、次の最小構成をそのまま追加してください。
+
+```javascript
+function doGet(e) {
+  var params = (e && e.parameter) || {};
+  if (String(params.form || '') === 'feedback') return FeedbackRelay_serveForm(params);
+  return HtmlService.createHtmlOutput('このアプリには feedback フォーム以外の画面はありません。');
+}
+```
+
+## 4. clasp push とデプロイ
+
+対象アプリのフォルダで、ターミナルから以下を実行します。
+
+```powershell
+cd "<対象アプリのパス>"
+clasp push -f
+```
+
+Web アプリとして未デプロイの場合は、GAS エディタで「デプロイ」→「新しいデプロイ」→ 種類「ウェブアプリ」→ アクセスできるユーザー「全員」で発行し、表示された `/exec` の URL を控えます（既にデプロイ済みなら `clasp deploy` で更新するだけで既存 URL のまま反映されます）。
+
+## 5. Admin_setFeedbackRelay で設定を入れる
+
+**このリポジトリは public のため、URL・シークレットの値はどこにも書きません。** 値は GAS の Script Properties に保存し、そこからだけ読みます。
+
+| Script Property | 用途 | 必須条件 |
+|---|---|---|
+| `FEEDBACK_OWNER_DISCORD_ID` | kim と併せて投稿通知を送る開発者の Discord user ID | 標準通知を使う全アプリで必須（17〜20桁） |
+
+`Admin_setFeedbackRelay(url, secret, appName, formUrl, ownerDiscordId)` を1回だけ実行します。引数は以下の通りです。
+
+- `url`: 全社共通の中継エンドポイント URL（既存GASの Script Properties `FEEDBACK_RELAY_URL` を利用。設定済みアプリの権限が無ければ、秘密値が不要な方式Bを選び `node tools/onboarding-sync.mjs --keys-only --force` で `FEEDBACK_SHARED_FORM_URL` を取得）
+- `secret`: 設定済みGASの Script Properties `FEEDBACK_RELAY_SECRET`（未取得なら方式Bを選択。全員配布を前提にしない）
+- `appName`: このアプリの表示名（例: `"予約管理アプリ"`）。通知やフォームの案内文に出ます
+- `formUrl`: 手順4で控えた `/exec` URL（各画面に「🐛 不具合・要望」リンクを置く場合に使う。省略可）
+- `ownerDiscordId`: このアプリを開発した人の Discord user ID（17〜20桁）。`FEEDBACK_OWNER_DISCORD_ID` として保存され、kim と開発者の両方へ DM するため必須
+
+**コマンドキューがあるアプリ**（実行パネル等から関数を呼べる仕組みがある場合）: 実行パネルから `Admin_setFeedbackRelay` を選び、上記の値を引数で渡して実行します。
+
+**コマンドキューが無いアプリ**: GAS エディタ（`script.google.com/a/orgiast.jp/d/{スクリプトID}/edit`）を開き、関数選択プルダウンで対象を選べないため、エディタ下部の実行ログ用に一時的に次のような呼び出し専用関数を追加して1回だけ実行し、終わったら削除します。
+
+```javascript
+function _tmp_setFeedbackRelay() {
+  Admin_setFeedbackRelay(
+    'https://中継のURL',
+    '共有シークレット',
+    'このアプリの表示名',
+    'https://script.google.com/.../exec',
+    'あなたの17〜20桁のDiscordユーザーID'
+  );
+}
+```
+
+GAS エディタ上部の関数選択で `_tmp_setFeedbackRelay` を選び「実行」ボタンを押します（初回のみ権限承認のダイアログが出るので許可してください）。実行後、この関数は削除して `clasp push -f` し直してください（シークレットをコードに残さないため）。
+
+記録先を既定（アクティブなスプレッドシート、シート名「不具合要望」）から変えたい場合は、Script Properties に `FEEDBACK_LOG_SS_ID`（スプレッドシートID）や `FEEDBACK_LOG_SHEET_NAME`（シート名）を追加で設定してください。
+
+## 6. 動作確認
+
+1. ブラウザで `<手順4の/exec URL>?form=feedback` を開き、フォームが表示されることを確認する
+2. 適当なタイトルを入力して送信し、「送信しました。」と表示されることを確認する
+3. 記録先スプレッドシートに「不具合要望」シートが作られ、送信内容が1行追加されていることを確認する
+4. kim と開発担当の Discord の両方に通知が届いていることを確認する
+5. 設定だけを確認したい場合は、実行パネルまたは GAS エディタから `FeedbackRelay_ping()` を実行する（`hasUrl` / `hasSecret` / `hasOwnerDiscordId` が `true` なら設定済み。値そのものは返ってこない）
+6. 対応 Issue を closed にし、夜間ジョブから投稿者本人へ完了 DM が届くことを確認する
+
+## 7. うまくいかない時の対応表
+
+| 症状 | 原因の可能性 | 対策 |
+|---|---|---|
+| `?form=feedback` を開いても既存の画面が出る | `doGet` の分岐が token 検証より後ろにある、または `params.form` の判定が無い | 手順3の1行を `doGet` の一番上に移動する |
+| フォームは開くが送信すると「エラー: 記録の読み戻しに失敗しました」 | 記録先スプレッドシートが特定できていない、または権限不足 | Script Property `FEEDBACK_LOG_SS_ID` を設定するか、スクリプトが対象スプレッドシートにコンテナバインドされているか確認する |
+| 送信は成功するが Discord に通知が来ない | `FEEDBACK_RELAY_URL` / `FEEDBACK_RELAY_SECRET` が未設定、または値が間違っている | `FeedbackRelay_ping()` で `hasUrl` / `hasSecret` を確認し、手順5をやり直す。`DISCORD_FEEDBACK_WEBHOOK` があればそちらにフォールバック通知が届いているはず |
+| 何度も連続送信すると「しばらく時間をおいて再度お試しください」と出る | レート制限（10分5件）に達した | 想定通りの挙動。10分待つ |
+| ボットらしき投稿が記録されない | honeypot（`company` 欄）が埋まっていたため成功を装って破棄された | 想定通りの挙動。対応不要 |
+| `clasp push -f` がエラーになる | ログイン切れ、または `appsscript.json` の記法ミス | `clasp login` を再実行し、`appsscript.json` の JSON 構文を確認する |
+| 画像を貼り付け/D&D しても反映されない | 画像形式が `image/*` でない、または1枚8MB超・合計25MB超・6枚目以降 | 上限内のファイルで再試行する（超過分は通知には載らないが、記録自体は成功する） |
+
+## HTML ファイルの置き場所について
+
+`FeedbackForm.html` は `src/ui/FeedbackForm.html`（ブース制作アプリ方式）でも、プロジェクト直下の
+`FeedbackForm.html`（平置き方式）でも動きます。どちらも自動で探します。
+
+それ以外の名前・場所に置いた場合だけ、Script Property `FEEDBACK_FORM_TEMPLATE` に
+GAS 上でのファイル名（拡張子なし・スラッシュ区切り）を入れてください。
+
+| 症状 | 対策 |
+|---|---|
+| フォームを開くと「FeedbackForm.html が見つかりません」 | `clasp push -f` で HTML も上がっているか確認。別名で置いた場合は `FEEDBACK_FORM_TEMPLATE` を設定 |
+
+## appsscript.json の設定（**これを忘れると「ページが見つかりません」になる**）
+
+Web アプリとして公開する設定と、中継へ通信するスコープが要ります。対象プロジェクトの
+`appsscript.json` に次を足してから `clasp push -f` → デプロイしてください。
+
+```json
+{
+  "webapp": { "executeAs": "USER_DEPLOYING", "access": "ANYONE_ANONYMOUS" },
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/script.external_request",
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/script.scriptapp"
+  ]
+}
+```
+
+- `ANYONE_ANONYMOUS`（全員・ログイン不要）にするのは、報告者にトークンやアカウントを配れないため。
+  未認証で開ける前提の濫用対策（honeypot・レート制限・文字数制限）はテンプレートに常時有効で入っています。
+- `executeAs: USER_DEPLOYING` にすると、報告者の Google アカウントを問わずデプロイ者の権限で記録できます。
+- **既に `oauthScopes` がある場合は消さずに追記**すること。消すと既存機能が権限不足で落ちます。
+
+| 症状 | 対策 |
+|---|---|
+| フォームURLを開くと「ページが見つかりません」 | `webapp` 設定が無い。上記を足して `clasp push -f` → `clasp deploy -i <デプロイID>` |
+| フォームは出るが送信すると失敗する | `script.external_request` スコープが無い。足して再デプロイし、初回は自分で1度開いて承認する |
+
+## コマンドキューのホワイトリスト登録（**引数の渡し方はアプリごとに違う**）
+
+アプリによって、キューが登録関数へ引数を渡す形が違います。**登録する前に、そのアプリの
+コマンドキュー実装で「関数をどう呼んでいるか」を必ず確認**してください。実際に2種類ありました。
+
+| 呼び出し方 | 例 | 登録の書き方 |
+|---|---|---|
+| `commands[fn].apply(null, args)`（配列を展開） | ブース制作アプリ | `function (url, secret, appName, formUrl, ownerDiscordId) { return Admin_setFeedbackRelay(url, secret, appName, formUrl, ownerDiscordId); }` |
+| `COMMANDS[fn](args)`（配列をそのまま第1引数へ） | CO2算出ツール | `(a) => { var o = Array.isArray(a) ? (a[0] \|\| {}) : (a \|\| {}); return Admin_setFeedbackRelay(o.url, o.secret, o.appName, o.formUrl, o.ownerDiscordId); }` |
+
+確認せずにコピペすると `fileId は必須` のような「引数が届かない」エラーになります。
+
+## 設定値の入れ方（シークレットをログに残さない）
+
+`Admin_setFeedbackRelay` に値を直接渡すと、コマンドファイルや作業ログにシークレットが残ります。
+**`Admin_setFeedbackRelayFromFile(fileId)` を使ってください。**
+
+1. 設定 JSON を自分だけがアクセスできる Drive フォルダに置く
+   ```json
+   { "url": "<中継URL>", "secret": "<シークレット>", "appName": "<アプリ名>", "formUrl": "<WebアプリのexecURL>" }
+   ```
+2. そのファイルの ID だけをコマンドで渡す（**ID は秘密情報ではない**）
+3. 反映を確認したら、**設定ファイルは削除する**
+
+| 症状 | 対策 |
+|---|---|
+| `設定ファイルを読めません` | ファイルIDが違う / そのGASプロジェクトの実行アカウントに閲覧権が無い |
+| `fileId は必須` | ホワイトリストの引数の受け方が上表と合っていない |
+
+### 設定ファイルは必ず UTF-8 で保存する（Windows の罠）
+
+`appName` に日本語を入れる場合、**ファイルを UTF-8 で書かないと GAS 側で文字化けします**
+（アプリ名が壊れると、中継側でアプリ→リポジトリの対応付けに失敗して Issue が作れません）。
+
+Windows の PowerShell / Python でシェルのリダイレクト（`> file.json`）を使うと、
+標準出力が cp932 になって壊れることがあります。**ファイルへ直接書く**形にしてください。
+
+```python
+import io, json
+io.open(path, 'w', encoding='utf-8', newline='\n').write(json.dumps(cfg, ensure_ascii=False))
+```
+
+書いたあとは必ず読み戻して確認します（壊れていれば `UnicodeDecodeError` になります）。
+
+| 症状 | 対策 |
+|---|---|
+| 反映結果の `appName` が `CO2...` のように途中から壊れている | 設定ファイルが UTF-8 でない。上記の方法で書き直して再投入 |
+
+---
+
+# 方式B: 共通フォームを1本だけ立てて、各アプリはリンクを置くだけにする（2026-09-04 追加・実測済み）
+
+ここまでの手順（以下「方式A」）は、**対象アプリ自身を Web アプリとして `ANYONE_ANONYMOUS` で公開する**前提でした。これは次のアプリでは採用できません。
+
+- **機微データを持つアプリ**（審査結果・顧客財務・価格など）。同じスクリプトを匿名公開すると、`doGet` の他の画面にも匿名で到達しうるため、公開範囲を実質的に広げてしまう
+- **`oauthScopes` を宣言せず自動検出に頼っているアプリ**。スコープを明示リスト化すると自動検出が無効になり既存機能が壊れる（例: `w-col-gas`）
+- **社員向け画面が存在しないアプリ**（LP のビーコン受け・Workspace Flows の add-on・JSON を返す管理用エンドポイントだけのプロジェクトなど）。そもそもフォームを置く場所がないので、**方式Bでも導入対象になりません**
+
+候補かどうかは **`webapp` 設定の有無ではなく「社員が実際に開く HTML があるか」** で判定してください。`webapp.access` が `MYSELF` のプロジェクトは管理用エンドポイントであることが多く、社員向け画面を持ちません。Web の画面が別の Next.js アプリ側にある場合は、GAS 用ではなく Next.js 用のフォームパッケージが担当です。
+
+これらには方式Bを使います。**共通フォームは既に1本だけ本番稼働しており、フォーム側は完全にパラメータ化されています。**
+
+```
+<共通フォームのexec URL>?form=feedback&app=<アプリ名をURLエンコード>&src=<報告元ページのURL>
+```
+
+`app` に渡した名前がそのまま Discord 通知の見出し（`🐛 **[アプリ名]** 不具合: …`）になります。`src` は報告元ページの URL で、通知に添えられます。
+
+**共通フォームの exec URL は、public リポであるここには書きません。** 各PCの `~/.claude/feedback-relay.env` の `FEEDBACK_SHARED_FORM_URL` へ、既存の非公開 keyserve 配布から取得します。新規PCはインストール時、既存PCは SessionStart の `onboarding-sync.mjs` で自動取得・キー単位マージされます。即時取得は正本リポジトリで `node tools/onboarding-sync.mjs --keys-only --force` を実行してください。取得後にゲートを再実行すると、フォルダ名をアプリ名として URL エンコードし、HTML エスケープ済みの方式Bリンクを表示します。正式なアプリ名が違う場合は `app=` を `encodeURIComponent(正式名)` で置き換えてください。
+
+配布元の管理: keyserve の既存 `ORGIAST_KEYS_JSON_EXTRA*` 経路に、`feedback-relay.env` の `FEEDBACK_SHARED_FORM_URL` だけを追加する（既存の鍵 JSON 全体は上書きしない）。登録・本番反映後に認証付き `/api/keys` の read-back と、上記取得コマンドによるローカル反映を確認して配布完了とする。`feedback-relay.env` が配布元に既にある場合は、その既存キーも保持する。ローカルの Bot トークンや webhook などをファイル丸ごと配布しない。
+
+## 方式Bの手順（対象アプリ側の作業はリンク1本だけ）
+
+対象アプリの画面（HtmlService の HTML、またはシートのセル）に、上記 URL へのリンクを置きます。**それ以外は何もしません。**
+
+- 🔴 `appsscript.json` を変更しない（`webapp` 設定もスコープも触らない）
+- 🔴 `clasp deploy` しない（新規デプロイを作らない）
+- 🔴 サーバ側のコード（`doGet` 等）を変更しない
+- 🔴 `Admin_setFeedbackRelay` も不要（設定は共通フォーム側に既に入っている）
+
+HTML に置く場合の注意:
+
+- `app=` の値は**URLエンコード済みの文字列をそのまま HTML に書く**。日本語を直に書くと Windows の編集経路で文字化けする
+- HTML の属性値の中では `&` を `&amp;` にエスケープする
+- 対象ページに `<base target="_top">` がある場合、リンクに `target="_blank" rel="noopener"` を明示する（無いと同一タブで開いて作業中の画面を失う）
+
+```html
+<div class="feedback-link">
+  <a href="<共通フォームURL>?form=feedback&amp;app=%E3%83%88%E3%83%A9%E3%82%A4%E3%82%A2%E3%83%AB..."
+     target="_blank" rel="noopener">🐛 不具合・要望</a>
+</div>
+```
+
+## 方式Bの検証手順
+
+対象アプリが `access: DOMAIN` の場合、匿名 `curl` ではページを取得できません。次の3点で確認します。
+
+1. **共通フォームがそのアプリ名で描画されるか**: `app=` を付けた URL を実際に取得し、返ってきた HTML にアプリ名が**文字化けせず**含まれることを確認する。シェル経由の `curl --data-urlencode` は Windows で cp932 化けするので、**Node の `fetch` + `encodeURIComponent`** で叩く
+2. **本番のスクリプトに反映されたか**: `clasp push -f` のあと、別ディレクトリに `.clasp.json`（同じ `scriptId`）を置いて `clasp pull` し、リンク文字列が含まれることを grep で確認する
+3. **公開範囲が広がっていないか**: 対象アプリの exec URL に匿名でアクセスし、**302 で `accounts.google.com` に飛ぶ**（＝ログイン必須のまま）ことを確認する
+
+デプロイが `@HEAD` なら `clasp push` が即座に本番へ出ます（`clasp deployments` で確認）。バージョン固定（`@1` 等）なら push だけでは画面に出ないので注意。
+
+## 方式Aと方式Bの使い分け
+
+| | 方式A（アプリ自身に載せる） | 方式B（共通フォームへリンク） |
+|---|---|---|
+| 対象 | 機微データを持たない社員向けアプリ | 機微データあり／スコープを触れない／画面が無い |
+| アプリ側の変更 | HTML+JS 追加・`appsscript.json`・新規デプロイ・設定投入 | **リンク1本だけ** |
+| 公開範囲の変更 | 必要（`ANYONE_ANONYMOUS`） | **不要** |
+| 記録先シート | そのアプリ側 | 共通フォーム側にまとまる |
+| 画像添付・honeypot・レート制限 | あり | あり（共通フォームの機能をそのまま使う） |
+
+記録先が共通フォーム側に集約される点だけが方式Bの弱点です。アプリ別に記録を分けたい場合は方式Aを選んでください（通知は `app` 名で区別できるので、Discord/Issue 側の運用は方式Bでも困りません）。
+
+## 通知は必須（設定ゼロで完了にしない）
+
+**通知先を1つも設定しないまま導入完了にしてはいけない。** 記録はシートに残るが誰も気づかず、報告が事実上死ぬ（実測: あるアプリで中継だけ設定され webhook が空、中継が落ちたら通知ゼロだった）。
+
+`FeedbackRelay_submit()` は「①中継 `FEEDBACK_RELAY_URL` → ②Bot DM → ③`DISCORD_FEEDBACK_WEBHOOK`」の順に試し、**先に成功した1つで止める**。
+
+### Discord DM（webhook では DM できない）
+
+DM は Bot トークンが必要（webhook はチャンネル投稿しかできない）。
+
+```
+Admin_setFeedbackDiscord('<Bot トークン>', '<自分の Discord ユーザーID>')
+```
+
+- ユーザーID: Discord のユーザー設定 → 詳細設定 → **開発者モード ON** → 自分のアイコンを右クリック →「ユーザーIDをコピー」
+- Bot は対象ユーザーと**同じサーバーに居る**必要がある（居ないと DM チャンネルを開けない）
+- **トークン値をコード・ドキュメント・コミットに書かない**
+- Bot トークンを GAS の Script Properties に置くのは認証情報をクラウドへ複製すること。**本人PCのローカル定期実行から DM できるなら、そちらを優先する**（本リポジトリの `tools/feedback-nag.mjs` が実装例）
+
+### 未対応の毎日プッシュ
+
+```
+FeedbackRelay_installNagTrigger()
+```
+
+毎日9時に `FeedbackRelay_nagPending()` を回す。同名ハンドラのトリガーを全削除してから1本だけ作る（重複防止。GAS のトリガー上限は20本）。
+
+- **「未対応」＝ 状態が `done`/`完了`/`対応済`/`却下` のいずれでもないもの全部**。対応メモが入っていても除外しない（実測で唯一の未完了1件が「メモ入りだが未完了」だった）。各行に `未返答` / `返答済・未完了` を出して区別する
+- 列は必ず**ヘッダー名で引く**（`受付ID` 列が後から増えた実績があり、列番号固定は壊れる）
+- **0件のときは送らない**（毎日の無意味通知を作らない）
+- シートURLは `FEEDBACK_WORKSPACE_DOMAIN` を設定すると `/a/<ドメイン>/` 形式になる（素URLはブラウザ既定の個人アカウントで開いて「アクセス権が必要です」になる）
+
+### 完了条件
+
+**`FeedbackRelay_testDm()` で実際に着信を見るまで完了と呼ばない**（§1.4）。設定を入れただけでは検証にならない。
+
+## 送信内容・対応状況の閲覧（1.1.0以降の必須機能）
+
+フォームと送信完了表示に「送信した内容・対応状況を見る」リンク（`data-feedback-history-link`）を表示します。Script Properties の `FEEDBACK_HISTORY_URL`（HTTPS）があればそれを使い、未設定なら既存の記録先シートの一覧URLへ進みます。列「日時・種別・タイトル・内容・状態」で投稿と対応状況を確認できます。状態は new（未対応）／in_progress（対応中）／done（完了）など、既存の運用と同じ値です。
+
+Google の既存のシート閲覧権限でアクセスを制御します。投稿者には閲覧者権限で共有し、秘密情報・内部メモを含む管理シートを共有せず、必要なら送信者向けの読み取り専用一覧を作り `FEEDBACK_HISTORY_URL` に指定してください。共有権限はインストーラーでは変更しません。payloadで記録先を上書きするアプリや複数アプリ共用シートでは、対象の一覧をこのプロパティに明示してください。
+
+記録先自体が未設定でもリンクは消えず、アプリ既定の `?view=mine` の案内へ進みます。手動統合では `doGet` の先頭へ `if (params.view === 'mine') return FeedbackRelay_serveHistory();` を追加してください（kit installでは自動追加）。`FEEDBACK_FORM_URL` は当該Webアプリの `/exec` URLを指定します。導入後は投稿者アカウントでフォームと完了表示からリンクを開き、投稿・状態が見えて編集できないことを確認してください。verify はマーカーが無ければ「フォームに送信内容を見るリンクがありません」で不合格になります。

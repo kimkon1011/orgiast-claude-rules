@@ -1,0 +1,19 @@
+{
+  "accounts": ["kim@orgiast.jp", "seisaku-team@orgiast.jp", "nishi@orgiast.jp", "cr@orgiast.jp", "m.kanau@orgiast.jp"],
+  "vendors": {
+    "anthropic": { "from": ["mail.anthropic.com", "anthropic.com"] },
+    "openai": { "from": ["openai.com"] },
+    "google": { "from": ["payments-noreply@google.com", "cloud-billing", "google.com"] },
+    "openrouter": { "from": ["openrouter.ai"] },
+    "xai": { "from": ["x.ai"] },
+    "deepseek": { "from": ["deepseek.com"] },
+    "kimi": { "from": ["moonshot.cn", "moonshot.ai"] },
+    "glm": { "from": ["z.ai", "zhipuai.cn", "bigmodel.cn"] },
+    "cursor": { "from": ["cursor.com", "cursor.sh"] },
+    "genspark": { "from": ["genspark.ai"] },
+    "groq": { "from": ["groq.com"] },
+    "mistral": { "from": ["mistral.ai"] }
+  },
+  "coveredAnthropicOrgs": ["オージャスト"],
+  "thresholds": { "burst48hUsd": 30, "burstReloads48h": 3, "mtdSourceUsd": 100, "newSourceAlert": true }
+}

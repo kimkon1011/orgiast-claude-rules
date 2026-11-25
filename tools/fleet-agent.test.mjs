@@ -1,0 +1,414 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { EventEmitter } from 'node:events';
+import { collectStatus as realCollectStatus, main as realMain, processDirective, targetMatches, redactSecrets } from './fleet-agent.mjs';
+
+const collectStatus = options => realCollectStatus({ auditLaunch: () => false, ...options });
+const main = (argv, options) => realMain(argv, { platform: 'linux', auditLaunch: () => false, ...options });
+
+function tempHome() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-agent-'));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  return home;
+}
+
+function response(directives) {
+  return { ok: true, json: async () => ({ version: 1, directives }) };
+}
+
+test('オプトイン無しの prompt は claude を起動せず通知も同じ id で1回だけ', async () => {
+  const home = tempHome();
+  const oldHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  const posts = [];
+  let spawned = 0;
+  const directive = { id: 'p-1', kind: 'prompt', targets: 'all', why: '確認', body: '秘密ではない本文', createdBy: 'kim' };
+  try {
+    const dependencies = { fetch: async () => response([directive]), post: async (message) => posts.push(message), spawnImpl: () => { spawned += 1; throw new Error('must not spawn'); } };
+    await main(['--once'], dependencies);
+    await main(['--once'], dependencies);
+  } finally {
+    if (oldHome === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = oldHome;
+  }
+  assert.equal(spawned, 0);
+  assert.equal(posts.length, 1);
+  assert.match(posts[0], /未オプトイン/);
+  assert.match(posts[0], /承諾するにはこの1コマンド/);
+});
+
+test('未許可 kind は実行せず警告する', async () => {
+  const home = tempHome();
+  const posts = [];
+  const result = await processDirective({ id: 'bad-1', kind: 'shell', targets: 'all' }, { home, repo: process.cwd(), label: 'PC', hostname: 'host', dryRun: false, post: async (message) => posts.push(message) });
+  assert.equal(result.action, 'denied');
+  assert.match(posts[0], /未許可 kind『shell』/);
+});
+
+test('targets は label / hostname の部分一致で、対象外をスキップする', () => {
+  assert.equal(targetMatches('開発', 'kim開発機', 'DESKTOP-1'), true);
+  assert.equal(targetMatches('TOP-1', '別PC', 'DESKTOP-123'), true);
+  assert.equal(targetMatches('営業', 'kim開発機', 'DESKTOP-1'), false);
+  assert.equal(targetMatches('', 'x', 'y'), true);
+});
+
+test('expiresAt 超過は実行しない', async () => {
+  let posted = false;
+  const result = await processDirective({ id: 'old', kind: 'status', targets: 'all', expiresAt: '2000-01-01T00:00:00Z' }, { home: tempHome(), repo: process.cwd(), label: 'PC', hostname: 'host', dryRun: false, post: async () => { posted = true; } });
+  assert.equal(result.action, 'expired');
+  assert.equal(posted, false);
+});
+
+test('status は webhook URL と API key を伏せる', () => {
+  const home = tempHome();
+  fs.mkdirSync(path.join(home, '.claude', 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'hooks', 'onboarding-sync.log'), 'done https://discord.com/api/webhooks/123/SECRET API_KEY=topsecret\n');
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'person@example.com' } }));
+  const run = (_program, args) => {
+    if (args.includes('--abbrev-ref')) return { status: 0, stdout: 'main\n', stderr: '' };
+    if (args.includes('--count')) return { status: 0, stdout: '2\n', stderr: '' };
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const status = collectStatus({ home, repo: process.cwd(), label: 'PC', hostname: 'host', run, platform: 'linux' });
+  assert.doesNotMatch(status.text, /SECRET|topsecret|discord\.com\/api\/webhooks/);
+  assert.match(status.text, /\[REDACTED\]/);
+});
+
+test('status は prompt と codex の opt-in 状態を別々に表示する', () => {
+  const home = tempHome();
+  fs.writeFileSync(path.join(home, '.claude', 'fleet-agent-optin.json'), JSON.stringify({ accept: ['prompt'] }));
+  const run = (_program, args) => {
+    if (args.includes('--abbrev-ref')) return { status: 0, stdout: 'main\n', stderr: '' };
+    if (args.includes('--count')) return { status: 0, stdout: '0\n', stderr: '' };
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const status = collectStatus({ home, repo: process.cwd(), label: 'PC', hostname: 'host', run, platform: 'linux' });
+  assert.match(status.text, /prompt opt-in=yes \/ codex opt-in=no/);
+  assert.equal(status.data.promptOptin, true);
+  assert.equal(status.data.codexOptin, false);
+});
+
+function statusWithPowerShell(stdout, status = 0, stderr = '') {
+  const home = tempHome();
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'kim@orgiast.jp' } }));
+  const run = (program, args) => {
+    if (program === 'powershell') return { status, stdout, stderr };
+    if (args.includes('--abbrev-ref')) return { status: 0, stdout: 'main\n', stderr: '' };
+    if (args.includes('--count')) return { status: 0, stdout: '1\n', stderr: '' };
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  return collectStatus({ home, repo: process.cwd(), label: 'kim-PC', hostname: 'DESKTOP-2D0R4LI', run, platform: 'win32' });
+}
+
+test('status は成功タスク名を出さず確認件数を表示する', () => {
+  const result = statusWithPowerShell(JSON.stringify([{ name: 'ClaudeSuccess', result: 0, last: '2026-09-02' }]));
+  assert.match(result.text, /夜間ジョブ=失敗なし\(1件確認\)/);
+  assert.doesNotMatch(result.text, /ClaudeSuccess/);
+});
+
+test('status は失敗したタスクだけを表示する', () => {
+  const result = statusWithPowerShell(JSON.stringify([
+    { name: 'ClaudeFailed', result: 1, last: '2026-09-02' },
+    { name: 'ClaudeSuccess', result: 0, last: '2026-09-02' },
+  ]));
+  assert.match(result.text, /ClaudeFailed\(result=1\)/);
+  assert.doesNotMatch(result.text, /ClaudeSuccess/);
+});
+
+test('status は実行中と未実行を失敗に数えない', () => {
+  const result = statusWithPowerShell(JSON.stringify([
+    { name: 'ClaudeRunning', result: 267009 },
+    { name: 'ClaudeNeverRun', result: 267011 },
+  ]));
+  assert.match(result.text, /夜間ジョブ=失敗なし\(2件確認\)/);
+  assert.doesNotMatch(result.text, /ClaudeRunning|ClaudeNeverRun/);
+});
+
+test('status は PowerShell の非0終了と壊れたJSONを明示し他項目も残す', () => {
+  for (const result of [statusWithPowerShell('', 1, 'PowerShell unavailable'), statusWithPowerShell('{broken')]) {
+    assert.match(result.text, /夜間ジョブ=取得できませんでした/);
+    assert.match(result.text, /hostname=DESKTOP-2D0R4LI/);
+    assert.match(result.text, /repo=main/);
+    assert.match(result.text, /残TODO=/);
+  }
+});
+
+test('status は大量の失敗を行単位で省略して1800字以内にする', () => {
+  const tasks = Array.from({ length: 200 }, (_, index) => ({ name: `ClaudeFailure${String(index).padStart(3, '0')}`, result: 1 }));
+  const result = statusWithPowerShell(JSON.stringify(tasks));
+  assert.ok(result.text.length <= 1800, `length=${result.text.length}`);
+  assert.match(result.text, /…\(他\d+件を省略\)/);
+  assert.match(result.text, /hostname=DESKTOP-2D0R4LI/);
+  assert.match(result.text, /account=kim@orgiast\.jp/);
+  assert.ok(result.text.split('\n').every((line) => !line.endsWith('ClaudeFail')));
+});
+
+test('status は ConvertTo-Json の単一オブジェクトも扱う', () => {
+  const result = statusWithPowerShell(JSON.stringify({ name: 'ClaudeOnlyFailure', result: 1, last: '2026-09-02' }));
+  assert.match(result.text, /ClaudeOnlyFailure\(result=1\)/);
+});
+
+const memoryGeneration = '2026-10-28T10:35:45.982Z';
+
+function memoryHome({ shared = [], indexed = false, note = 'kim 本人が操作', kimOperated = true } = {}) {
+  const home = tempHome();
+  const memoryDir = path.join(home, '.claude', 'shared-memory');
+  fs.mkdirSync(memoryDir, { recursive: true });
+  fs.writeFileSync(path.join(memoryDir, '.state.json'), JSON.stringify({
+    generatedAt: memoryGeneration, source: { pc: 'kim-PC' }, kimOperated,
+    files: Object.fromEntries(shared.map(name => [name, 'fixture-sha256'])),
+  }));
+  fs.writeFileSync(path.join(memoryDir, 'MEMORY.md'), note);
+  if (indexed) fs.writeFileSync(path.join(home, '.claude', 'CLAUDE.md'), '@~/.claude/shared-memory/MEMORY.md');
+  return home;
+}
+
+function statusForHome(home) {
+  const run = (_program, args) => {
+    if (args.includes('--abbrev-ref')) return { status: 0, stdout: 'main\n', stderr: '' };
+    if (args.includes('--count')) return { status: 0, stdout: '0\n', stderr: '' };
+    return { status: 0, stdout: '[]', stderr: '' };
+  };
+  return collectStatus({ home, repo: process.cwd(), label: 'PC', hostname: 'host', run, platform: 'linux' });
+}
+
+function fixtureJwt(payload) {
+  return `${Buffer.from(JSON.stringify({ alg: 'none' })).toString('base64url')}.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.dummy-signature`;
+}
+
+function writeCodexAuth(home, auth) {
+  fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.codex', 'auth.json'), JSON.stringify(auth));
+}
+
+test('status は Codex の id_token から email と入れ子のプランだけを取得しトークンを漏らさない', () => {
+  const home = tempHome();
+  const email = 'codex@example.com';
+  const token = fixtureJwt({ email, 'https://api.openai.com/auth': { chatgpt_plan_type: 'prolite' }, chatgpt_plan_type: 'wrong' });
+  const accessToken = fixtureJwt({ email: 'other@example.com' });
+  writeCodexAuth(home, { tokens: { id_token: token, access_token: accessToken } });
+  const status = statusForHome(home);
+  assert.match(status.text, /codex=.*@.* \/ plan=prolite/);
+  assert.deepEqual(status.data.codex, { login: true, email, plan: 'prolite' });
+  assert.match(status.text.split('\n')[1], /^hostname=/);
+  assert.equal(status.text.split('\n')[2], `codex=${email} / plan=prolite`);
+  for (const secret of [token, accessToken]) {
+    const pattern = new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    assert.doesNotMatch(status.text, pattern);
+    assert.doesNotMatch(JSON.stringify(status.data), pattern);
+  }
+});
+
+test('status は Codex 認証ファイル無しなら未ログイン', () => {
+  const status = statusForHome(tempHome());
+  assert.match(status.text, /codex=未ログイン/);
+  assert.deepEqual(status.data.codex, { login: false, email: null, plan: null });
+});
+
+test('status は Codex の空トークン・tokens欠落・壊れたJSONなら未ログイン', () => {
+  for (const auth of [{ tokens: {} }, { tokens: { id_token: '', access_token: '' } }, {}, null]) {
+    const home = tempHome();
+    writeCodexAuth(home, auth);
+    const status = statusForHome(home);
+    assert.match(status.text, /codex=未ログイン/);
+    assert.deepEqual(status.data.codex, { login: false, email: null, plan: null });
+  }
+  const home = tempHome();
+  writeCodexAuth(home, {});
+  fs.writeFileSync(path.join(home, '.codex', 'auth.json'), '{broken');
+  assert.deepEqual(statusForHome(home).data.codex, { login: false, email: null, plan: null });
+});
+
+test('status は access_token と profile email にフォールバックしフラットなプランを使わない', () => {
+  const home = tempHome();
+  writeCodexAuth(home, { tokens: { id_token: '', access_token: fixtureJwt({
+    'https://api.openai.com/profile': { email: 'fallback@example.com' }, chatgpt_plan_type: 'wrong',
+  }) } });
+  const status = statusForHome(home);
+  assert.deepEqual(status.data.codex, { login: true, email: 'fallback@example.com', plan: null });
+  assert.match(status.text, /codex=fallback@example.com \/ plan=不明/);
+});
+
+test('status は Codex JWT デコード失敗や email 欠落でもログイン済を維持する', () => {
+  for (const token of ['invalid-jwt', fixtureJwt({}), fixtureJwt({ 'https://api.openai.com/auth': { chatgpt_plan_type: 'prolite' } })]) {
+    const home = tempHome();
+    writeCodexAuth(home, { tokens: { id_token: token } });
+    const status = statusForHome(home);
+    assert.match(status.text, /codex=ログイン済\(詳細不明\)/);
+    assert.equal(status.data.codex.login, true);
+    assert.equal(status.data.codex.email, null);
+  }
+});
+
+test('status は共有memoryの件数・世代・kim注記・CLAUDE.md参照を表示する', () => {
+  const home = memoryHome({ shared: ['a.md', 'b.md', 'c.md'], indexed: true });
+  const result = statusForHome(home);
+  assert.equal(result.text.split('\n').find(line => line.startsWith('memory=')),
+    'memory=共有3件 / 世代=2026-10-28T10:35:45.982Z / user=kim注記=yes / CLAUDE.md参照=yes / knowledge=なし');
+  assert.deepEqual(result.data.sharedMemory, { found: true, count: 3, generatedAt: memoryGeneration, kimOperated: true, kimNote: true, referenced: true });
+});
+
+test('status は別人注記をnoとして報告する', () => {
+  const result = statusForHome(memoryHome({ note: 'このPCの user は別人', kimOperated: false }));
+  assert.match(result.text, /user=kim注記=no \/ CLAUDE\.md参照=no/);
+  assert.equal(result.data.sharedMemory.kimOperated, false);
+  assert.equal(result.data.sharedMemory.kimNote, false);
+});
+
+test('status はstate無しなら旧配布先があっても未受信を表示する', () => {
+  const home = tempHome();
+  const oldDir = path.join(home, '.claude', 'projects', 'proj1', 'memory', 'shared');
+  fs.mkdirSync(oldDir, { recursive: true });
+  fs.writeFileSync(path.join(oldDir, 'a.md'), 'old memory');
+  const result = statusForHome(home);
+  assert.ok(result.text.includes('memory=未受信（~/.claude/shared-memory/.state.json なし）'));
+  assert.deepEqual(result.data.sharedMemory, { found: false, count: 0, generatedAt: null, kimOperated: null, kimNote: null, referenced: false });
+});
+
+test('status は注記なし・1200文字より後の注記を不明として報告する', () => {
+  for (const note of ['', 'x'.repeat(1200) + 'kim 本人が操作']) {
+    const home = memoryHome({ note });
+    const statePath = path.join(home, '.claude', 'shared-memory', '.state.json');
+    fs.writeFileSync(statePath, JSON.stringify({ generatedAt: memoryGeneration, files: {} }));
+    const result = statusForHome(home);
+    assert.match(result.text, /user=kim注記=不明/);
+    assert.equal(result.data.sharedMemory.kimNote, null);
+    assert.equal(result.data.sharedMemory.kimOperated, null);
+  }
+});
+
+test('status は環境変数の配布先を優先し壊れたstateは未受信とする', t => {
+  const home = memoryHome({ shared: ['default.md'] });
+  const other = memoryHome({ shared: ['a.md', 'b.md'], indexed: true });
+  const dir = path.join(other, '.claude', 'shared-memory');
+  const previous = process.env.ORGIAST_SHARED_MEMORY_DIR;
+  t.after(() => {
+    if (previous === undefined) delete process.env.ORGIAST_SHARED_MEMORY_DIR;
+    else process.env.ORGIAST_SHARED_MEMORY_DIR = previous;
+  });
+  process.env.ORGIAST_SHARED_MEMORY_DIR = dir;
+  assert.equal(statusForHome(home).data.sharedMemory.count, 2);
+  assert.equal(statusForHome(home).data.sharedMemory.referenced, false);
+  fs.writeFileSync(path.join(dir, '.state.json'), '{broken');
+  assert.equal(statusForHome(home).data.sharedMemory.found, false);
+});
+
+test('status はmemory行を追加しても大量の夜間ジョブ失敗込みで1800字以内に収まる(予算回帰)', () => {
+  const home = memoryHome({ shared: Array.from({ length: 250 }, (_, index) => `shared-${index}.md`), indexed: true });
+  writeCodexAuth(home, { tokens: { id_token: fixtureJwt({ email: 'codex@example.com', 'https://api.openai.com/auth': { chatgpt_plan_type: 'prolite' } }) } });
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'kim@orgiast.jp' } }));
+  const tasks = Array.from({ length: 200 }, (_, index) => ({ name: `ClaudeFailure${String(index).padStart(3, '0')}`, result: 1 }));
+  const run = (program, args) => {
+    if (program === 'powershell') return { status: 0, stdout: JSON.stringify(tasks), stderr: '' };
+    if (args.includes('--abbrev-ref')) return { status: 0, stdout: 'main\n', stderr: '' };
+    if (args.includes('--count')) return { status: 0, stdout: '1\n', stderr: '' };
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const result = collectStatus({ home, repo: process.cwd(), label: 'kim-PC', hostname: 'DESKTOP-2D0R4LI', run, platform: 'win32' });
+  assert.ok(result.text.length <= 1800, `length=${result.text.length}`);
+  assert.ok(result.text.includes(`memory=共有250件 / 世代=${memoryGeneration} / user=kim注記=yes / CLAUDE.md参照=yes`));
+  assert.match(result.text, /codex=codex@example.com \/ plan=prolite/);
+  assert.match(result.text, /…\(他\d+件を省略\)/);
+});
+
+test('ネットワーク不通は例外にせず空結果で終了する', async () => {
+  const oldHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = tempHome();
+  try {
+    assert.deepEqual(await main(['--once'], { fetch: async () => { throw new Error('offline'); } }), []);
+  } finally {
+    if (oldHome === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = oldHome;
+  }
+});
+
+test('--dry-run は処理済み id を消費しない', async () => {
+  const home = tempHome();
+  const oldHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  const directive = { id: 'dry-1', kind: 'prompt', targets: 'all', why: '確認', body: '本文', createdBy: 'kim' };
+  try {
+    await main(['--once', '--dry-run'], { fetch: async () => response([directive]), post: async () => { throw new Error('POST must not run'); } });
+  } finally {
+    if (oldHome === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = oldHome;
+  }
+  assert.equal(fs.existsSync(path.join(home, '.claude', '.fleet-agent-processed')), false);
+});
+
+test('opt-in prompt は argv 配列・shell false・stdin EOF で起動する', async () => {
+  const home = tempHome();
+  fs.writeFileSync(path.join(home, '.claude', 'fleet-agent-optin.json'), '{"accept":["prompt"]}');
+  let invocation;
+  const spawnImpl = (exe, args, options) => {
+    invocation = { exe, args, options, ended: false };
+    const child = new EventEmitter();
+    child.stdin = { end: () => { invocation.ended = true; } };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    queueMicrotask(() => { child.stdout.emit('data', 'done'); child.emit('close', 0); });
+    return child;
+  };
+  const posts = [];
+  const result = await processDirective({ id: 'p-ok', kind: 'prompt', targets: 'all', why: 'test', body: '`literal`' }, { home, repo: process.cwd(), label: 'PC', hostname: 'host', dryRun: false, post: async (message) => posts.push(message), spawnImpl });
+  assert.equal(result.action, 'prompt');
+  assert.deepEqual(invocation.args, ['-p', '--model', 'opus', '--', '`literal`']);
+  assert.equal(invocation.options.shell, false);
+  assert.equal(invocation.ended, true);
+  assert.match(posts[0], /exit=0/);
+});
+
+// 2026-10-10: 受信タスクが `spawn claude ENOENT` で失敗した。実行ファイルは claude-exe.mjs が解決する。
+test('processDirective は解決済みの claude 実行ファイルで起動する', async () => {
+  const home = tempHome();
+  fs.writeFileSync(path.join(home, '.claude', 'fleet-agent-optin.json'), '{"accept":["prompt"]}');
+  let invocation;
+  const spawnImpl = (exe, args, options) => {
+    invocation = { exe, args, options };
+    const child = new EventEmitter();
+    child.stdin = { end: () => {} };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    queueMicrotask(() => { child.stdout.emit('data', 'done'); child.emit('close', 0); });
+    return child;
+  };
+  const resolved = [];
+  const result = await processDirective({ id: 'p-exe', kind: 'prompt', targets: 'all', why: 'test', body: 'x' },
+    { home, repo: process.cwd(), label: 'PC', hostname: 'host', dryRun: false, post: async () => {}, spawnImpl,
+      resolveClaudeExe: async () => { resolved.push(1); return { executable: 'C:/resolved/claude.exe', candidates: ['C:/resolved/claude.exe'] }; } });
+  assert.equal(result.action, 'prompt');
+  assert.equal(invocation.exe, 'C:/resolved/claude.exe');
+  assert.equal(resolved.length, 1, '解決は spawn の直前に1回だけ');
+});
+
+test('redactSecrets preserves missing environment diagnostics and redacts assigned or spaced secrets', () => {
+  assert.equal(redactSecrets('process.env.EXTERNAL_API_TOKEN not set'), 'process.env.EXTERNAL_API_TOKEN not set');
+  for (const [input, secret] of [['GITHUB_TOKEN=ghp_abcdef123', 'ghp_abcdef123'], ['token abc123xyz', 'abc123xyz'], ['api_key: sk-xxx', 'sk-xxx']]) {
+    assert.ok(!redactSecrets(input).includes(secret));
+    assert.match(redactSecrets(input), /\[REDACTED\]/);
+  }
+});
+
+test('fleet status invokes daily unattended audit after task measurement', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-audit-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  let measured = false, launched;
+  collectStatus({ home, repo: process.cwd(), label: 'PC', hostname: 'host', platform: 'win32',
+    run: (exe) => { if (exe === 'powershell') measured = true; return { status: 0, stdout: '[]' }; },
+    auditLaunch: options => { assert.equal(measured, true); launched = options; }
+  });
+  assert.equal(launched.intervalHours, 24); assert.equal(launched.home, home);
+});
+
+test('headless fleet poll audits even when hub fetch fails; dry-run does not launch', async t => {
+  const home = tempHome(); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const old = process.env.ORGIAST_HOME; process.env.ORGIAST_HOME = home;
+  t.after(() => { if (old === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = old; });
+  const calls = [];
+  const dependencies = { platform: 'win32', run: () => ({ status: 0, stdout: '[]' }),
+    fetch: async () => { throw Error('offline'); }, auditLaunch: options => calls.push(options) };
+  await main([], dependencies); await main(['--dry-run'], dependencies);
+  assert.equal(calls.length, 1); assert.equal(calls[0].intervalHours, 24);
+});

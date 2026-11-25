@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "fetchedAt": "2026-10-09T00:00:00.000Z",
+  "window": {
+    "start": "2026-04-01",
+    "end": "2026-10-09",
+    "days": 191
+  },
+  "baseline": {
+    "knownPartnerIds": []
+  },
+  "coverage": {
+    "historyStart": "2026-04-01",
+    "historyComplete": true,
+    "limitations": [
+      "架空の検証用データ。形跡は検証済み0件を模擬。"
+    ]
+  },
+  "partners": [
+    {
+      "id": "sample-a",
+      "name": "株式会社サンプル青空",
+      "name_kana": "サンプルアオゾラ",
+      "email": "sample@example.invalid",
+      "created_at": "2026-09-01",
+      "bank": {
+        "bank_code": "TEST",
+        "branch_code": "TEST",
+        "account_number": "****TEST",
+        "account_name": "テスト タロウ",
+        "key": "synthetic-shared-key"
+      }
+    },
+    {
+      "id": "sample-b",
+      "name": "株式会社サンプル若葉",
+      "name_kana": "サンプルワカバ",
+      "email": "sample-b@example.invalid",
+      "created_at": "2026-09-01",
+      "bank": {
+        "bank_code": "TEST",
+        "branch_code": "TEST",
+        "account_number": "****TEST",
+        "account_name": "カ)サンプルワカバ",
+        "key": "synthetic-shared-key"
+      }
+    },
+    {
+      "id": "sample-control",
+      "name": "サンプル対照商店",
+      "bank": {}
+    }
+  ],
+  "deals": [
+    {
+      "id": "deal-a",
+      "partner_id": "sample-a",
+      "amount": 600000,
+      "issue_date": "2026-10-01"
+    }
+  ],
+  "payments": [
+    {
+      "id": "pay-a",
+      "partner_id": "sample-a",
+      "date": "2026-10-01",
+      "amount": 300000
+    },
+    {
+      "id": "pay-b",
+      "partner_id": "sample-a",
+      "date": "2026-10-05",
+      "amount": 300000
+    },
+    {
+      "id": "pay-control",
+      "partner_id": "sample-control",
+      "date": "2026-10-05",
+      "amount": 1000
+    }
+  ],
+  "wallet_txns": [],
+  "walletables": [],
+  "account_items": [],
+  "staff": [],
+  "footprint": {
+    "sample-a": {
+      "gmail": {
+        "status": "ok",
+        "count": 0,
+        "controlVerified": true,
+        "controlPartnerId": "sample-control"
+      },
+      "drive": {
+        "status": "ok",
+        "count": 0,
+        "controlVerified": true,
+        "controlPartnerId": "sample-control"
+      },
+      "discord": {
+        "status": "ok",
+        "count": 0,
+        "controlVerified": true,
+        "controlPartnerId": "sample-control"
+      }
+    },
+    "sample-control": {
+      "gmail": {
+        "status": "ok",
+        "count": 1,
+        "controlVerified": true,
+        "controlPartnerId": "sample-control"
+      },
+      "drive": {
+        "status": "ok",
+        "count": 1,
+        "controlVerified": true,
+        "controlPartnerId": "sample-control"
+      },
+      "discord": {
+        "status": "ok",
+        "count": 1,
+        "controlVerified": true,
+        "controlPartnerId": "sample-control"
+      }
+    }
+  },
+  "sources": {
+    "freee": {
+      "status": "ok",
+      "count": 1,
+      "reason": "架空fixture"
+    },
+    "gmail": {
+      "status": "ok",
+      "count": 1,
+      "reason": "fixtureの模擬照合"
+    },
+    "drive": {
+      "status": "ok",
+      "count": 1,
+      "reason": "fixtureの模擬照合"
+    },
+    "discord": {
+      "status": "ok",
+      "count": 1,
+      "reason": "fixtureの模擬照合"
+    }
+  }
+}

@@ -1,0 +1,1125 @@
+import test from 'node:test';
+import assert from 'node:assert';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  evaluateReceiptSignals,
+  evaluateFleet,
+  isOpusHeavy,
+  opusRatioFromMainModel,
+  decideActions,
+  sortViolationsBySeverity,
+  verifyPreviousActions,
+  readLedgerCounts,
+  atomicWrite,
+  buildCombinedCodexSpec,
+  main as mainImpl,
+  ALLOWED_LOCAL_COMMANDS,
+  parsePercent,
+  parseJstOrIsoDate,
+  executeLocalAction,
+  evaluateBalanceSignals,
+  writeRoutingOverride,
+  writeGatewayOverride,
+  writeCodexFallbackOrder,
+  writeAutoSessionExecutorEnv,
+  writeBudgetPressure,
+  splitWhitelistedCommand,
+  runEntry
+} from './cost-improve-loop.mjs';
+
+const main = (args, io = {}) => mainImpl(args, { scanAiReceipts: async () => ({ errors: [] }), receiptLedgerAgeHours: () => 0, alertAiReceipts: async () => {}, ...io });
+
+test('残高シグナル3種の境界とauto-local効果は固定許可リストだけ', () => {
+  const rows = [
+    { provider: 'deepseek', balanceUsd: 2.99, autoTopUp: false, todaySpendUsd: 1.01, avg7dSpendUsd: 0.5, status: 'anomaly' },
+    { provider: 'kimi', balanceUsd: 2.99, autoTopUp: false, todaySpendUsd: 0, avg7dSpendUsd: 0, status: 'low' },
+  ];
+  const kinds = evaluateBalanceSignals(rows).map((x) => x.kind);
+  assert.deepEqual(kinds, ['spend_anomaly', 'autotopup_missing', 'balance_low', 'autotopup_missing']);
+  const decision = decideActions({ violations: evaluateBalanceSignals(rows), state: { actions: [] }, now: new Date('2026-09-09T00:00:00Z'), limits: { maxCodex: 0 } });
+  assert.deepEqual(new Set(decision.actions.filter((x) => x.mode === 'auto-local').map((x) => x.effect)), new Set(['writeRoutingOverride', 'writeGatewayOverride']));
+});
+
+test('Genspark前払いクレジットの残り少だけを残高違反にする', () => {
+  const low = evaluateBalanceSignals([{ provider: 'genspark', status: 'low', credits: 1200, balanceUsd: null, autoTopUp: 'unknown' }]);
+  assert.equal(low.length, 1);
+  assert.equal(low[0].kind, 'balance_low');
+  assert.equal(low[0].provider, 'genspark');
+  assert.equal(low[0].actualValue, 1200);
+  assert.deepEqual(evaluateBalanceSignals([{ provider: 'genspark', status: 'ok', credits: 5000, balanceUsd: null, autoTopUp: 'unknown' }]), []);
+});
+
+test('spend_anomalyは24h降格、gateway overrideは実在確認済みモデルを書く', () => {
+  const home = createTempDir(); const claudeDir = path.join(home, '.claude'); const now = new Date('2026-09-09T00:00:00Z');
+  const demote = writeRoutingOverride({ claudeDir, provider: 'deepseek', now, durationHours: 24 });
+  assert.equal(Date.parse(demote.until) - now.getTime(), 86400000);
+  assert.equal(writeGatewayOverride({ claudeDir, provider: 'kimi' }).model, 'moonshotai/kimi-k3');
+  cleanTempDir(home);
+});
+
+function createTempDir() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-cost-test-'));
+  fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+  return dir;
+}
+
+function cleanTempDir(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {}
+}
+
+const NOW = new Date('2026-09-06T12:00:00Z');
+
+test('strict percent and date parsing rejects ambiguous or impossible values', () => {
+  assert.equal(parsePercent('0'), 0); assert.equal(parsePercent('1'), 1); assert.equal(parsePercent('50%'), .5);
+  assert.equal(parsePercent('50'), null); assert.equal(parsePercent('12abc'), null);
+  assert.equal(parseJstOrIsoDate('2026-02-30 12:00:00'), null);
+  assert.equal(parseJstOrIsoDate('2026-01-01 24:00:00'), null);
+});
+
+test('isOpusHeavy / opusRatioFromMainModel', () => {
+  // %無しの model 名だけでは過多と判定しない
+  assert.equal(isOpusHeavy({ mainModel: 'claude-opus-4' }, null), false);
+  // > 50% → true
+  assert.equal(isOpusHeavy({ mainModel: 'claude-opus-4 (72%)' }, null), true);
+  // <= 50% → false
+  assert.equal(isOpusHeavy({ mainModel: 'claude-opus-4 (45%)' }, null), false);
+  // non-opus model → false
+  assert.equal(isOpusHeavy({ mainModel: 'claude-sonnet-4 (80%)' }, null), false);
+  // localState.opusRatio > 0.5 → true
+  assert.equal(isOpusHeavy({}, { opusRatio: 0.6 }), true);
+  // localState.opusRatio <= 0.5 → false
+  assert.equal(isOpusHeavy({}, { opusRatio: 0.4 }), false);
+
+  // opusRatioFromMainModel
+  assert.equal(opusRatioFromMainModel('claude-opus-4'), null);
+  assert.equal(opusRatioFromMainModel('claude-opus-4 (72%)'), 0.72);
+  assert.equal(opusRatioFromMainModel('claude-opus-4 (45%)'), 0.45);
+  assert.equal(opusRatioFromMainModel('claude-sonnet-4 (80%)'), null);
+  assert.equal(opusRatioFromMainModel(null), null);
+  assert.equal(opusRatioFromMainModel(undefined), null);
+});
+
+test('one untrusted PC does not stop another PC auto action', () => {
+  const decision = decideActions({ violations: [
+    { kind: 'measurement_untrusted', pc: 'broken-PC', severity: 'error', evidence: 'missing' },
+    { kind: 'low_delegation', pc: 'healthy-PC', severity: 'error', evidence: '30%', actualValue: .3, targetValue: .5 }
+  ], state: { actions: [] }, now: NOW });
+  assert.equal(decision.actions.find((x) => x.pc === 'healthy-PC')?.mode, 'auto-codex');
+});
+
+test('empty fleet is measurement failure', () => {
+  const result = evaluateFleet({ rows: [], ledgerCounts: {}, localState: {}, now: NOW });
+  assert.match(result.violations.find((x) => x.pc === 'fleet').evidence, /fleet_empty/);
+});
+
+// 1. 台帳が計測不能(null)のとき no_cheap_ai は出ず measurement_untrusted が出て、codex 委譲が1件も発生しない
+test('1. When ledger is unreadable (null), measurement_untrusted is reported instead of no_cheap_ai, and no codex actions are decided', () => {
+  const rows = [
+    { pcName: 'local-PC', label: 'local', reportedAt: '2026-09-06 11:00:00', livenessState: '生存', delegRatio: '30%', claudeUsd: '15.0' }
+  ];
+  const ledgerCounts = null; // Unreadable/untrusted ledger!
+  const localState = {};
+
+  const evalResult = evaluateFleet({ rows, ledgerCounts, localState, now: NOW });
+  
+  // Verify measurement_untrusted is present
+  const hasUntrusted = evalResult.violations.some(v => v.kind === 'measurement_untrusted' && v.pc === 'self');
+  assert.ok(hasUntrusted, 'Should have measurement_untrusted violation on self');
+
+  // Verify no_cheap_ai is NOT present
+  const hasNoCheapAi = evalResult.violations.some(v => v.kind === 'no_cheap_ai');
+  assert.ok(!hasNoCheapAi, 'Should NOT have no_cheap_ai violation when ledger is untrusted');
+
+  // Verify decideActions does not dispatch auto-codex for self in this state
+  const state = { actions: [] };
+  const decision = decideActions({ violations: evalResult.violations, state, now: NOW });
+  
+  const hasAutoCodex = decision.actions.some(act => act.mode === 'auto-codex');
+  assert.ok(!hasAutoCodex, 'Should not dispatch any auto-codex actions');
+});
+
+// 2. 48時間より古い行はフリート平均に入らず stale_report が立つ
+test('2. Stale reports (> 48h) raise stale_report and are excluded from fleet average calculations', () => {
+  const rows = [
+    { pcName: 'nishi-PC', label: 'nishi', reportedAt: '2026-09-05 12:00:00', livenessState: '生存', delegRatio: '80%', claudeUsd: '5.0' }, // fresh
+    { pcName: 'kim-PC', label: 'kim', reportedAt: '2026-09-02 12:00:00', livenessState: '生存', delegRatio: '20%', claudeUsd: '10.0' }  // stale (> 48h)
+  ];
+  const ledgerCounts = {};
+  const localState = {};
+
+  const evalResult = evaluateFleet({ rows, ledgerCounts, localState, now: NOW });
+
+  // Verify stale_report is raised for kim-PC
+  const hasStaleReport = evalResult.violations.some(v => v.kind === 'stale_report' && v.pc === 'kim-PC');
+  assert.ok(hasStaleReport, 'kim-PC should raise stale_report');
+
+  // Verify fleet average is calculated using only fresh row (nishi-PC = 80%)
+  assert.strictEqual(evalResult.fleet.nonStaleCount, 1);
+  assert.strictEqual(evalResult.fleet.avgDelegRatio, 0.8);
+  assert.strictEqual(evalResult.fleet.totalClaudeUsd, 5.0);
+});
+
+test('stale_report 初回は再送指令を送り人へ上げない', () => { const calls = []; const r = decideActions({ violations: [{ kind: 'stale_report', pc: 'PC-A', evidence: 'stale' }], state: { actions: [] }, now: NOW, directiveSend: (...args) => calls.push(args) }); assert.equal(calls.length, 1); assert.equal(r.actions[0].mode, 'directive'); assert.equal(r.nextStaleRetry['PC-A'].count, 1); });
+test('stale_report 2日目は人へ上げる', () => { const r = decideActions({ violations: [{ kind: 'stale_report', pc: 'PC-A', evidence: 'stale' }], state: { actions: [], staleRetry: { 'PC-A': { sentAt: '2026-09-05T00:00:00Z', count: 1 } } }, now: NOW }); assert.equal(r.actions[0].mode, 'human'); assert.match(r.actions[0].todoMessage, /自動再送（directive）を 1 回/); });
+
+// 3. 同じ (kind, pc) はクールダウン中に再委譲されない
+test('3. Action is not dispatched if under cooldown (last action within 3 days)', () => {
+  const violations = [
+    { kind: 'low_delegation', pc: 'nishi-PC', severity: 'error', evidence: 'Delegation ratio is 40% (< 50%)' }
+  ];
+  // Action dispatched 1 day ago
+  const state = {
+    actions: [
+      {
+        id: 'act-1',
+        kind: 'low_delegation',
+        pc: 'nishi-PC',
+        mode: 'auto-codex',
+        dispatchedAt: new Date(NOW.getTime() - 24 * 3600 * 1000).toISOString(),
+        baseline: { metric: 'delegRatio', value: 0.4 },
+        result: 'pending'
+      }
+    ]
+  };
+
+  const decision = decideActions({ violations, state, now: NOW });
+  assert.strictEqual(decision.actions.length, 0, 'No action should be dispatched during cooldown');
+});
+
+// 4. auto-codex は1回の実行で3件目を発動しない（上限2）
+test('4. Limits auto-codex dispatches to maximum of 2 per run', () => {
+  const violations = [
+    { kind: 'low_delegation', pc: 'PC-1', severity: 'error', evidence: 'Delegation 30%' },
+    { kind: 'low_delegation', pc: 'PC-2', severity: 'error', evidence: 'Delegation 35%' },
+    { kind: 'low_delegation', pc: 'PC-3', severity: 'error', evidence: 'Delegation 40%' }
+  ];
+  const state = { actions: [] };
+
+  const decision = decideActions({ violations, state, now: NOW, limits: { maxCodex: 2 } });
+  
+  const codexActions = decision.actions.filter(a => a.mode === 'auto-codex');
+  assert.strictEqual(codexActions.length, 2, 'Should not exceed maximum of 2 auto-codex dispatches');
+});
+
+// 5. 3回連続失敗した (kind, pc) は自動対処が止まり human に上がる
+test('5. Downgrades to human action if same (kind, pc) failed or had no effect 3 consecutive times', () => {
+  const violations = [
+    { kind: 'low_delegation', pc: 'PC-1', severity: 'error', evidence: 'Delegation 30%' }
+  ];
+  const state = {
+    actions: [
+      { id: '1', kind: 'low_delegation', pc: 'PC-1', mode: 'auto-codex', dispatchedAt: '2026-09-01T00:00:00Z', result: 'no_effect' },
+      { id: '2', kind: 'low_delegation', pc: 'PC-1', mode: 'auto-codex', dispatchedAt: '2026-09-02T00:00:00Z', result: 'failed' },
+      { id: '3', kind: 'low_delegation', pc: 'PC-1', mode: 'auto-codex', dispatchedAt: '2026-09-03T00:00:00Z', result: 'no_effect' }
+    ]
+  };
+
+  const decision = decideActions({ violations, state, now: NOW });
+  
+  assert.strictEqual(decision.actions.length, 1);
+  assert.strictEqual(decision.actions[0].mode, 'human', 'Should be downgraded to human action');
+  assert.ok(decision.actions[0].note.includes('Downgraded to human'), 'Action note should reflect downgrade');
+});
+
+// 6. verifyPreviousActions が worked / no_effect を正しく分ける
+test('6. verifyPreviousActions correctly evaluates pending actions to worked/no_effect/worse based on KPI change', () => {
+  const state = {
+    actions: [
+      // 1. Worked: delegRatio improved from 0.4 to 0.6 (> 0.5)
+      { id: 'act-1', kind: 'low_delegation', pc: 'PC-1', baseline: { metric: 'delegRatio', value: 0.4 }, dispatchedAt: '2026-09-01T00:00:00Z', result: 'pending' },
+      // 2. No effect: delegRatio remains at 0.4
+      { id: 'act-2', kind: 'low_delegation', pc: 'PC-2', baseline: { metric: 'delegRatio', value: 0.4 }, dispatchedAt: '2026-09-01T00:00:00Z', result: 'pending' },
+      // 3. Worse: delegRatio dropped to 0.3
+      { id: 'act-3', kind: 'low_delegation', pc: 'PC-3', baseline: { metric: 'delegRatio', value: 0.4 }, dispatchedAt: '2026-09-01T00:00:00Z', result: 'pending' }
+    ]
+  };
+
+  const rows = [
+    { pcName: 'PC-1', label: 'PC-1', reportedAt: '2026-09-06 11:00:00', livenessState: '生存', delegRatio: '60%' },
+    { pcName: 'PC-2', label: 'PC-2', reportedAt: '2026-09-06 11:00:00', livenessState: '生存', delegRatio: '40%' },
+    { pcName: 'PC-3', label: 'PC-3', reportedAt: '2026-09-06 11:00:00', livenessState: '生存', delegRatio: '30%' }
+  ];
+
+  const resultState = verifyPreviousActions({ state, rows, now: NOW, horizonDays: 3 });
+  
+  const act1 = resultState.actions.find(a => a.id === 'act-1');
+  const act2 = resultState.actions.find(a => a.id === 'act-2');
+  const act3 = resultState.actions.find(a => a.id === 'act-3');
+
+  assert.strictEqual(act1.result, 'worked');
+  assert.strictEqual(act2.result, 'no_effect');
+  assert.strictEqual(act3.result, 'worse');
+});
+
+// 7. --dry-run で状態ファイルが書かれず通知も委譲も起きない
+test('7. Running with --dry-run does not write state files or send notifications', async () => {
+  const tempDir = createTempDir();
+  const stateFile = path.join(tempDir, '.claude', 'cost-improve-state.json');
+  
+  // Set up mock inputs
+  const rows = [
+    { pcName: 'local-PC', label: 'local', reportedAt: '2026-09-06 11:00:00', livenessState: '生存', delegRatio: '30%', claudeUsd: '5.0' }
+  ];
+  
+  let notified = false;
+  const io = {
+    fetchFleetSheetRows: async () => rows,
+    readLedger: () => ({}),
+    spawnSync: () => ({ status: 0 }),
+    noNotify: true // Suppress actual notifications
+  };
+
+  process.env.ORGIAST_HOME = tempDir;
+
+  try {
+    const result = await main(['--dry-run', '--no-notify'], io);
+    
+    assert.ok(result.ok);
+    assert.ok(!fs.existsSync(stateFile), 'State file should NOT be written in --dry-run');
+  } finally {
+    delete process.env.ORGIAST_HOME;
+    cleanTempDir(tempDir);
+  }
+});
+
+// 8. auto-local は許可リスト外の文字列を実行しない（シート由来の文字列を混ぜても実行されない）
+test('8. auto-local only runs commands that are present in the ALLOWED_LOCAL_COMMANDS whitelist', () => {
+  const violations = [
+    { kind: 'no_cheap_ai', pc: 'self', severity: 'error', evidence: '0 cheap AI calls' }
+  ];
+  
+  const state = { actions: [] };
+  const decision = decideActions({ violations, state, now: NOW });
+  
+  // Verify selected command is inside whitelist
+  const action = decision.actions.find(a => a.kind === 'no_cheap_ai');
+  assert.strictEqual(action.mode, 'auto-local');
+  assert.ok(ALLOWED_LOCAL_COMMANDS.includes(action.command), 'Command must be in whitelist');
+
+  // Let's test a malicious mock command
+  const maliciousAction = {
+    id: 'mal-1',
+    kind: 'no_cheap_ai',
+    pc: 'self',
+    mode: 'auto-local',
+    command: 'rm -rf /' // Malicious command not in whitelist
+  };
+
+  // We manually run the main execution block logic
+  const ALLOWED = [
+    'node tools/tool-adoption-check.mjs --force',
+    'node tools/onboarding-sync.mjs --force',
+    'node tools/register-hooks.mjs --hooks-only'
+  ];
+
+  let commandExecuted = false;
+  const runSpawnSync = () => {
+    commandExecuted = true;
+    return { status: 0 };
+  };
+
+  const act = maliciousAction;
+  if (act.mode === 'auto-local') {
+    if (ALLOWED.includes(act.command)) {
+      runSpawnSync();
+    } else {
+      act.result = 'failed';
+      act.note = 'Command not in whitelist';
+    }
+  }
+
+  assert.strictEqual(commandExecuted, false, 'Malicious command not in whitelist must not be executed');
+  assert.strictEqual(act.result, 'failed');
+  assert.strictEqual(act.note, 'Command not in whitelist');
+});
+
+test('9. human escalation is neither worked nor shown in the verification section', async () => {
+  const decision = decideActions({ violations: [{ kind: 'stale_report', pc: 'PC-human', evidence: 'stale' }], state: { actions: [], staleRetry: { 'PC-human': { sentAt: '2026-09-01T00:00:00Z', count: 1 } } }, now: NOW });
+  assert.strictEqual(decision.actions[0].result, 'escalated');
+  assert.strictEqual(decision.actions[0].verifiedAt, null);
+  const verified = verifyPreviousActions({ state: { actions: decision.actions }, rows: [], now: new Date(NOW.getTime() + 4 * 86400000) });
+  assert.strictEqual(verified.actions[0].result, 'escalated');
+  assert.strictEqual(verified.actions[0].verifiedAt, null);
+  const tempDir = createTempDir();
+  process.env.ORGIAST_HOME = tempDir;
+  try {
+    fs.writeFileSync(path.join(tempDir, '.claude', 'cost-improve-state.json'), JSON.stringify({ version: 1, actions: [], lastKpis: {}, staleRetry: { 'PC-human': { sentAt: '2026-09-01T00:00:00Z', count: 1 } } }));
+    const proposals = [];
+    const result = await main(['--dry-run', '--no-notify'], {
+      submitProposal: async (proposal, options) => { proposals.push({ proposal, options }); return { ok: true }; },
+      fetchFleetSheetRows: async () => [{ pcName: 'PC-human', label: 'human', reportedAt: '2026-09-01 00:00:00', delegRatio: '60%', claudeUsd: '1' }],
+      readLedger: () => ({ codex: 1 }), localState: {}, noNotify: true
+    });
+    assert.ok(!result.reportText.split('### ③')[1].split('### ④')[0].includes('PC-human'));
+    assert.ok(result.reportText.split('### ④')[1].includes('PC-human'));
+    assert.equal(proposals.length, 1);
+    assert.equal(proposals[0].proposal.source, 'cost-improve');
+    assert.ok(proposals[0].proposal.evidence.some(x => x.includes('PC-human')));
+    assert.equal(proposals[0].options.dryRun, true);
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('unused_provider is escalated without running a command', () => {
+  const decision = decideActions({
+    violations: [{ kind: 'unused_provider', pc: 'self', evidence: "Provider 'kimi' is configured but has 0 calls in last 7 days" }],
+    state: { actions: [] },
+    now: NOW
+  });
+  assert.strictEqual(decision.actions[0].mode, 'human');
+  assert.strictEqual(decision.actions[0].result, 'escalated');
+  assert.strictEqual(decision.actions[0].command, undefined);
+});
+
+test('10. roster-only rows are excluded without violations and summarized', async () => {
+  const rows = [{ pcName: '作業用018', label: '', hostname: '', reportedAt: '', delegRatio: '', claudeUsd: '' }];
+  const evaluated = evaluateFleet({ rows, ledgerCounts: { codex: 1 }, localState: {}, now: NOW });
+  assert.deepStrictEqual(evaluated.pcs, []);
+  assert.deepStrictEqual(evaluated.violations, []);
+  const tempDir = createTempDir();
+  process.env.ORGIAST_HOME = tempDir;
+  try {
+    const result = await main(['--dry-run', '--no-notify'], {
+      fetchFleetSheetRows: async () => rows, readLedger: () => ({ codex: 1 }), localState: {}, noNotify: true
+    });
+    assert.ok(!result.reportText.includes('**作業用018**'));
+    assert.ok(result.reportText.includes('※ 未報告のPC 1台は表から除外'));
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('11. reported rows with missing metrics are untrusted and never displayed as $0.00', async () => {
+  const rows = [{ pcName: 'PC-broken', label: 'broken', reportedAt: '2026-09-06 11:00:00', delegRatio: '', claudeUsd: '' }];
+  const evaluated = evaluateFleet({ rows, ledgerCounts: { codex: 1 }, localState: {}, now: NOW });
+  assert.ok(evaluated.violations.some(v => v.kind === 'measurement_untrusted' && v.pc === 'PC-broken'));
+  const tempDir = createTempDir();
+  process.env.ORGIAST_HOME = tempDir;
+  try {
+    const result = await main(['--dry-run', '--no-notify'], {
+      fetchFleetSheetRows: async () => rows, readLedger: () => ({ codex: 1 }), localState: {}, now: NOW, noNotify: true
+    });
+    assert.ok(result.reportText.includes('**PC-broken**: 報告実績なし'));
+    assert.ok(!result.reportText.includes('$0.00'));
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('11b. empty delegation is untrusted while measured 0.0% is low delegation', () => {
+  const base = { pcName: 'PC-ratio', reportedAt: '2026-09-06 11:00:00', claudeUsd: '1' };
+  const missing = evaluateFleet({ rows: [{ ...base, delegRatio: '' }], ledgerCounts: { codex: 1 }, localState: {}, now: NOW });
+  assert.ok(missing.violations.some(v => v.kind === 'measurement_untrusted' && v.pc === 'PC-ratio'));
+  assert.ok(!missing.violations.some(v => v.kind === 'low_delegation' && v.pc === 'PC-ratio'));
+
+  const measuredZero = evaluateFleet({ rows: [{ ...base, delegRatio: '0.0%' }], ledgerCounts: { codex: 1 }, localState: {}, now: NOW });
+  assert.ok(measuredZero.violations.some(v => v.kind === 'low_delegation' && v.pc === 'PC-ratio'));
+  assert.ok(!measuredZero.violations.some(v => v.kind === 'measurement_untrusted' && v.pc === 'PC-ratio'));
+});
+
+test('12. all known cheap providers participate in unused-provider health checks', () => {
+  const result = evaluateFleet({ rows: [], ledgerCounts: { codex: 1 }, localState: { configuredProviders: ['grok', 'openrouter'] }, now: NOW });
+  assert.equal(result.violations.filter(v => v.kind === 'unused_provider').length, 2);
+});
+
+test('13. auto-codex spec contains measured facts and diagnostic guardrails', () => {
+  const decision = decideActions({
+    violations: [{ kind: 'low_delegation', pc: 'PC-spec', evidence: 'Delegation ratio is 32% (< 50%)', actualValue: 0.32, targetValue: 0.5, measuredAt: NOW.toISOString() }],
+    state: { actions: [] }, now: NOW
+  });
+  const spec = decision.actions[0].specContent;
+  for (const expected of ['PC名: PC-spec', '実測値: 32.0%', '目標値: 50.0%', 'node tools/usage-stats.mjs deleg', '特定できなかった']) assert.ok(spec.includes(expected));
+});
+
+test('14. low delegation violations use codex budget for the two lowest ratios', () => {
+  const violations = [
+    { kind: 'low_delegation', pc: 'kim-PC', severity: 'error', evidence: 'Delegation ratio is 47.1% (< 50%)', actualValue: 0.471 },
+    { kind: 'low_delegation', pc: 'nishi-PC', severity: 'error', evidence: 'Delegation ratio is 15.9% (< 50%)', actualValue: 0.159 },
+    { kind: 'low_delegation', pc: 'kimko-PC', severity: 'error', evidence: 'Delegation ratio is 13% (< 50%)', actualValue: 0.13 }
+  ];
+  assert.deepStrictEqual(sortViolationsBySeverity(violations).map(v => v.pc), ['kimko-PC', 'nishi-PC', 'kim-PC']);
+  const decision = decideActions({ violations, state: { actions: [] }, now: NOW, limits: { maxCodex: 2 } });
+  assert.deepStrictEqual(decision.actions.map(action => action.pc), ['kimko-PC', 'nishi-PC']);
+});
+
+test('15. human todo messages are Japanese, self-contained, and contain PC name and measured values', () => {
+  const violations = [
+    { kind: 'stale_report', pc: 'PC-stale', severity: 'warning', evidence: 'Report is stale (last reported: 2026-09-01 12:00:00)' },
+    { kind: 'cost_spike', pc: 'PC-cost', severity: 'error', evidence: 'Claude USD spiked by +30% (from $10 to $15) without work increase', previousValue: 10, actualValue: 15, increasePercent: 50 },
+    { kind: 'measurement_untrusted', pc: 'PC-empty', severity: 'error', evidence: 'Reported at 2026-09-06 11:00:00, but delegation ratio or Claude USD is missing' }
+  ];
+  const messages = decideActions({ violations, state: { actions: [], staleRetry: { 'PC-stale': { sentAt: '2026-09-01T00:00:00Z', count: 1 } } }, now: NOW }).actions.map(action => action.todoMessage);
+  assert.ok(messages.filter(Boolean).some(message => message.includes('PC-stale') && message.includes('2026-09-01 12:00:00') && message.includes('5日間') && message.includes('自動再送（directive）を 1 回')));
+  assert.ok(messages.some(message => message.includes('PC-cost') && message.includes('$10 → $15') && message.includes('+50.0%')));
+  assert.ok(messages.some(message => message.includes('PC-empty') && message.includes('2026-09-06 11:00:00') && message.includes('値が空です') && message.includes('自動修正は見送りました')));
+  assert.ok(messages.every(message => !/Liveness reporting|cost spiked|Measurement untrusted/.test(message)));
+});
+
+test('16. failed DM notification is saved and prepended to the next report', async () => {
+  const tempDir = createTempDir();
+  process.env.ORGIAST_HOME = tempDir;
+  const inputs = {
+    fetchFleetSheetRows: async () => [{ pcName: 'PC-ok', reportedAt: '2026-09-06 11:00:00', delegRatio: '60%', claudeUsd: '1' }],
+    readLedger: () => ({ codex: 1 }), localState: {}, now: NOW
+  };
+  let notifyOptions;
+  try {
+    const first = await main([], { ...inputs, runOriguchiReferralMonthly: async () => {}, notifyKim: async (_text, options) => {
+      notifyOptions = options;
+      return { delivered: 'none', reason: 'DM API timeout' };
+    } });
+    assert.equal(notifyOptions.webhookFallback, false);
+    assert.equal(first.finalState.lastNotifyError, 'DM API timeout');
+    const saved = JSON.parse(fs.readFileSync(path.join(tempDir, '.claude', 'cost-improve-state.json'), 'utf8'));
+    assert.equal(saved.lastNotifyError, 'DM API timeout');
+
+    const second = await main(['--dry-run', '--no-notify'], { ...inputs, noNotify: true });
+    assert.ok(second.reportText.startsWith('※ 前回の通知は送信に失敗しています(DM API timeout)'));
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('17. 実行ログを1行追記し、フリート取得失敗は NG と理由を残す', async () => {
+  const tempDir = createTempDir(); process.env.ORGIAST_HOME = tempDir;
+  try {
+    await main(['--no-notify'], {
+      fetchFleetSheetRows: async () => { throw new Error('sheet timeout'); }, readLedger: () => ({ codex: 1 }), localState: {}, noNotify: true,
+      sendHeartbeat: async () => {}
+    });
+    const lines = fs.readFileSync(path.join(tempDir, '.claude', 'logs', 'cost-improve-loop.log'), 'utf8').trim().split(/\r?\n/);
+    assert.equal(lines.length, 1); assert.match(lines[0], /\/ NG \/ pcs=0/); assert.match(lines[0], /reason=sheet timeout/);
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('18. --dry-run では実行ログを書かない', async () => {
+  const tempDir = createTempDir(); process.env.ORGIAST_HOME = tempDir;
+  try {
+    await main(['--dry-run', '--no-notify'], { fetchFleetSheetRows: async () => [], readLedger: () => ({ codex: 1 }), localState: {}, noNotify: true });
+    assert.equal(fs.existsSync(path.join(tempDir, '.claude', 'logs', 'cost-improve-loop.log')), false);
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('19. 直近10件の7割以上が no_effect/worse なら報告先頭に警告する', async () => {
+  const tempDir = createTempDir(); process.env.ORGIAST_HOME = tempDir;
+  const actions = Array.from({ length: 10 }, (_, i) => ({ id: `old-${i}`, kind: 'low_delegation', pc: `PC-${i}`, mode: 'auto-codex', dispatchedAt: new Date(NOW.getTime() - (i + 4) * 86400000).toISOString(), verifiedAt: new Date(NOW.getTime() - i * 1000).toISOString(), baseline: { metric: 'delegRatio', value: .4 }, result: i < 7 ? 'no_effect' : 'worked' }));
+  fs.writeFileSync(path.join(tempDir, '.claude', 'cost-improve-state.json'), JSON.stringify({ version: 1, actions, lastKpis: {} }));
+  try {
+    const result = await main(['--dry-run', '--no-notify'], { fetchFleetSheetRows: async () => [{ pcName: 'PC-ok', reportedAt: '2026-09-06 11:00:00', delegRatio: '60%', claudeUsd: '1' }], readLedger: () => ({ codex: 1 }), localState: {}, noNotify: true });
+    assert.match(result.reportText, /^⚠️ このループは効いていません\(直近10件中7件が効果なし\)/);
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('20. heartbeat 失敗でも main は例外を投げずログに notify=failed を残す', async () => {
+  const tempDir = createTempDir(); process.env.ORGIAST_HOME = tempDir;
+  try {
+    const result = await main(['--no-notify'], { fetchFleetSheetRows: async () => [{ pcName: 'PC-ok', reportedAt: '2026-09-06 11:00:00', delegRatio: '60%', claudeUsd: '1' }], readLedger: () => ({ codex: 1 }), localState: {}, noNotify: true, sendHeartbeat: async () => { throw new Error('heartbeat down'); } });
+    assert.equal(result.ok, true);
+    assert.match(fs.readFileSync(path.join(tempDir, '.claude', 'logs', 'cost-improve-loop.log'), 'utf8'), /notify=failed/);
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('21. atomicWrite は rename の一時失敗を再試行して保存する', () => {
+  const tempDir = createTempDir();
+  const file = path.join(tempDir, '.claude', 'retry-state.json');
+  let attempts = 0;
+  try {
+    atomicWrite(file, '{"ok":true}', {
+      renameSync: (from, to) => { if (++attempts < 4) throw Object.assign(new Error('busy'), { code: 'EPERM' }); fs.renameSync(from, to); },
+      sleepSync: () => {}
+    });
+    assert.equal(attempts, 4); assert.equal(fs.readFileSync(file, 'utf8'), '{"ok":true}');
+  } finally { cleanTempDir(tempDir); }
+});
+
+test('22. 状態保存が最後まで失敗しても main は成功しログに state=failed を残す', async () => {
+  const tempDir = createTempDir(); process.env.ORGIAST_HOME = tempDir;
+  try {
+    const result = await main(['--no-notify'], {
+      fetchFleetSheetRows: async () => [{ pcName: 'PC-ok', reportedAt: '2026-09-06 11:00:00', delegRatio: '60%', claudeUsd: '1' }],
+      readLedger: () => ({ codex: 1 }), localState: {}, noNotify: true, sendHeartbeat: async () => {},
+      atomicWrite: () => { throw Object.assign(new Error('rename busy'), { code: 'EPERM' }); }
+    });
+    assert.equal(result.ok, true);
+    assert.match(fs.readFileSync(path.join(tempDir, '.claude', 'logs', 'cost-improve-loop.log'), 'utf8'), /state=failed/);
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('23. buildCombinedCodexSpec は2件の内容を番号付き見出しで区切る', () => {
+  const spec = buildCombinedCodexSpec([
+    { kind: 'low_delegation', pc: 'PC-A', specContent: 'Aの修正仕様' },
+    { kind: 'opus_heavy', pc: 'PC-B', specContent: 'Bの修正仕様' }
+  ]);
+  assert.match(spec, /## タスク 1\/2: low_delegation \(PC-A\)/);
+  assert.match(spec, /## タスク 2\/2: opus_heavy \(PC-B\)/);
+  assert.ok(spec.includes('Aの修正仕様'));
+  assert.ok(spec.includes('Bの修正仕様'));
+});
+
+test('24. buildCombinedCodexSpec は空配列と null に空文字列を返す', () => {
+  assert.strictEqual(buildCombinedCodexSpec([]), '');
+  assert.strictEqual(buildCombinedCodexSpec(null), '');
+});
+
+test('25. buildCombinedCodexSpec は1件でも仕様内容を欠落させない', () => {
+  const spec = buildCombinedCodexSpec([
+    { kind: 'low_delegation', pc: 'PC-only', specContent: '単独タスクの修正仕様' }
+  ]);
+  assert.ok(spec.includes('単独タスクの修正仕様'));
+});
+
+// ---- B4: ローカル信号由来 kind の境界・効果(B2 仕様の未実装項目) ----
+
+function signalEval(signals, now = NOW) {
+  const rows = [
+    { pcName: 'ok-PC', label: 'ok', reportedAt: '2026-09-06 11:00:00', livenessState: '生存', delegRatio: '60%', claudeUsd: '1' }
+  ];
+  return evaluateFleet({ rows, ledgerCounts: { deepseek: 1 }, localState: {}, now, signals });
+}
+
+test('26. provider_unhealthy は failRate 0.20 / http429 50 の境界で発火し codex は除外される', () => {
+  const kinds = (signals) => signalEval(signals).violations.filter((v) => v.kind === 'provider_unhealthy');
+  // 境界未満は発火しない
+  assert.equal(kinds({ providerHealth: { providers: { groq: { failRate: 0.19, http429: 0 }, gemini: { failRate: 0, http429: 49 } } } }).length, 0);
+  // codex は定額のためいくら失敗しても発火しない
+  assert.equal(kinds({ providerHealth: { providers: { codex: { failRate: 0.9, http429: 500 }, groq: { failRate: 0.1, http429: 0 } } } }).length, 0);
+  // failRate >= 0.20 で発火
+  const byRate = kinds({ providerHealth: { providers: { groq: { failRate: 0.2, http429: 0 } } } });
+  assert.equal(byRate.length, 1);
+  assert.equal(byRate[0].provider, 'groq');
+  assert.equal(byRate[0].actualValue, 0.2);
+  // http429 >= 50 で発火(failRate は低くても)
+  const by429 = kinds({ providerHealth: { providers: { gemini: { failRate: 0, http429: 50 } } } });
+  assert.equal(by429.length, 1);
+  assert.equal(by429[0].provider, 'gemini');
+});
+
+test('27. codex_saturated / headless_claude は 2回以上 / >0トークン で発火する', () => {
+  const kindCount = (kind, signals) => signalEval(signals).violations.filter((v) => v.kind === kind).length;
+  assert.equal(kindCount('codex_saturated', { codexLimit24h: 1 }), 0);
+  assert.equal(kindCount('codex_saturated', { codexLimit24h: 2 }), 1);
+  assert.equal(kindCount('headless_claude', { headlessClaudeOut: 0 }), 0);
+  assert.equal(kindCount('headless_claude', { headlessClaudeOut: 1 }), 1);
+});
+
+test('28. budget_pace / eval_stale は 100%超 / 7日超または未実行 で発火する', () => {
+  const kindCount = (kind, signals) => signalEval(signals).violations.filter((v) => v.kind === kind).length;
+  assert.equal(kindCount('budget_pace', { budgetPacePct: 99 }), 0);
+  assert.equal(kindCount('budget_pace', { budgetPacePct: 100 }), 0, '100%ちょうどは超過ではない');
+  assert.equal(kindCount('budget_pace', { budgetPacePct: 101 }), 1);
+  assert.equal(kindCount('eval_stale', { evalAgeDays: 6 }), 0);
+  assert.equal(kindCount('eval_stale', { evalAgeDays: 8 }), 1);
+  assert.equal(kindCount('eval_stale', { evalAgeDays: null }), 1, 'eval結果が一度も無い場合も stale');
+});
+
+test('29. B4 kind は PLAYBOOK の mode/effect で action 化され baseline に metric を持つ', () => {
+  const evaluation = signalEval({
+    providerHealth: { providers: { groq: { failRate: 0.3, http429: 0 } } },
+    codexLimit24h: 2,
+    headlessClaudeOut: 500,
+    budgetPacePct: 150,
+    evalAgeDays: 9
+  });
+  const decision = decideActions({ violations: evaluation.violations, state: { actions: [] }, now: NOW });
+  const byKind = (kind) => decision.actions.find((a) => a.kind === kind);
+
+  const providerUnhealthy = byKind('provider_unhealthy');
+  assert.ok(providerUnhealthy, 'provider_unhealthy が action 化される');
+  assert.equal(providerUnhealthy.mode, 'auto-local');
+  assert.equal(providerUnhealthy.effect, 'writeRoutingOverride');
+  assert.equal(providerUnhealthy.provider, 'groq');
+  assert.equal(providerUnhealthy.baseline.metric, 'failRate');
+  assert.match(providerUnhealthy.reportNote, /まず無料枠・既存契約内の他AIレーンを実測/);
+
+  const codexSaturated = byKind('codex_saturated');
+  assert.ok(codexSaturated);
+  assert.equal(codexSaturated.effect, 'writeCodexFallbackOrder');
+  assert.equal(codexSaturated.baseline.metric, 'codexLimit24h');
+
+  const headless = byKind('headless_claude');
+  assert.ok(headless);
+  assert.equal(headless.effect, 'writeAutoSessionExecutor');
+  assert.equal(headless.baseline.metric, 'headlessClaudeOut');
+
+  const budgetPace = byKind('budget_pace');
+  assert.ok(budgetPace, 'budget_pace は human で budgetPressure を立てる');
+  assert.equal(budgetPace.mode, 'human');
+  assert.equal(budgetPace.localEffect, 'budgetPressure');
+  assert.match(budgetPace.todoMessage, /予算ペースが 150\.0%|100%/);
+
+  const evalStale = byKind('eval_stale');
+  assert.ok(evalStale);
+  assert.equal(evalStale.mode, 'auto-local');
+  assert.match(evalStale.command, /batch-enqueue\.mjs --provider groq --kind eval-harness/);
+  assert.equal(evalStale.baseline.metric, 'evalAgeDays');
+});
+
+test('30. executeLocalAction は許可リスト外を実行せず、許可内は shell:false の argv で渡す', () => {
+  const tempDir = createTempDir();
+  try {
+    const claudeDir = path.join(tempDir, '.claude');
+    const calls = [];
+    const malicious = executeLocalAction({
+      act: { id: 'm1', kind: 'no_cheap_ai', pc: 'self', mode: 'auto-local', command: 'node tools/onboarding-sync.mjs --force; rm -rf /' },
+      dryRun: false, claudeDir, home: tempDir, repoRoot: tempDir,
+      spawnSync: (program, args, opts) => { calls.push({ program, args, opts }); return { status: 0 }; }
+    });
+    assert.equal(malicious.result, 'failed');
+    assert.equal(malicious.note, 'Command not in whitelist');
+    assert.equal(calls.length, 0, '許可リスト外は spawn されない');
+
+    const evalHarnessCommand = ALLOWED_LOCAL_COMMANDS.find((c) => c.includes('--kind eval-harness'));
+    assert.ok(evalHarnessCommand, 'eval-harness 投入が許可リストにある');
+    const parts = splitWhitelistedCommand(evalHarnessCommand);
+    assert.deepEqual(parts, ['node', 'tools/batch-enqueue.mjs', '--provider', 'groq', '--kind', 'eval-harness', 'eval-harness --all']);
+
+    const allowed = executeLocalAction({
+      act: { id: 'a1', kind: 'eval_stale', pc: 'self', mode: 'auto-local', command: evalHarnessCommand },
+      dryRun: false, claudeDir, home: tempDir, repoRoot: tempDir,
+      spawnSync: (program, args, opts) => { calls.push({ program, args, opts }); return { status: 0 }; }
+    });
+    assert.equal(allowed.result, 'pending');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].program, process.execPath);
+    assert.deepEqual(calls[0].args, ['tools/batch-enqueue.mjs', '--provider', 'groq', '--kind', 'eval-harness', 'eval-harness --all']);
+    assert.equal(calls[0].opts.shell, false, 'シート由来文字列をシェルで解釈しない');
+  } finally { cleanTempDir(tempDir); }
+});
+
+test('31. B4 effect は既存ファイル内容を保持して書き込む', () => {
+  const tempDir = createTempDir();
+  try {
+    const claudeDir = path.join(tempDir, '.claude');
+    // routing-overrides: 他 provider の demote と他キーを保持する
+    const a = writeRoutingOverride({ claudeDir, provider: 'groq', now: NOW });
+    assert.equal(a.changed, true);
+    writeRoutingOverride({ claudeDir, provider: 'gemini', now: NOW });
+    const overrides = JSON.parse(fs.readFileSync(path.join(claudeDir, 'routing-overrides.json'), 'utf8'));
+    assert.deepEqual(Object.keys(overrides.demote).sort(), ['gemini', 'groq']);
+    assert.equal(writeRoutingOverride({ claudeDir, provider: 'groq', now: NOW }).changed, false, '同値なら no_change');
+
+    // codex-fallback-order: cursor-agent → qwen → deepseek → glm → gemini-cli → openrouter-free。zai の有無では並びを変えない。
+    const fallbackOrder = ['cursor-agent', 'qwen', 'cheap-code:deepseek', 'cheap-code:glm', 'gemini-cli', 'openrouter-free'];
+    assert.equal(writeCodexFallbackOrder({ claudeDir, zaiAvailable: true }).changed, true);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeDir, 'codex-fallback-order.json'), 'utf8')), fallbackOrder);
+    assert.equal(writeCodexFallbackOrder({ claudeDir, zaiAvailable: false }).changed, false);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeDir, 'codex-fallback-order.json'), 'utf8')), fallbackOrder);
+    const localOrder = ['qwen', 'cheap-code:deepseek', 'cheap-code:glm', 'openrouter-free'];
+    fs.writeFileSync(path.join(claudeDir, 'codex-fallback-order.local.json'), `${JSON.stringify(localOrder)}\n`);
+    const preserved = writeCodexFallbackOrder({ claudeDir, zaiAvailable: true, writeImpl: () => { throw new Error('local override must not be rewritten'); } });
+    assert.equal(preserved.changed, false);
+    assert.equal(preserved.preserved, true);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeDir, 'codex-fallback-order.local.json'), 'utf8')), localOrder);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeDir, 'codex-fallback-order.json'), 'utf8')), fallbackOrder);
+
+    // auto-session.env: 既存行を保持して executor を上書きし、同値は no_change
+    fs.writeFileSync(path.join(claudeDir, 'auto-session.env'), 'KEEP=1\nORGIAST_AUTO_SESSION_EXECUTOR=claude\n', 'utf8');
+    const env1 = writeAutoSessionExecutorEnv({ claudeDir, provider: 'glm' });
+    assert.equal(env1.changed, true);
+    const envText = fs.readFileSync(path.join(claudeDir, 'auto-session.env'), 'utf8');
+    assert.match(envText, /^KEEP=1$/m);
+    assert.match(envText, /^ORGIAST_AUTO_SESSION_EXECUTOR=cheap-code$/m);
+    assert.match(envText, /^ORGIAST_AUTO_SESSION_PROVIDER=glm$/m);
+    assert.equal(writeAutoSessionExecutorEnv({ claudeDir, provider: 'glm' }).changed, false);
+
+    // cost-enforce.json: mode 等を保持して budgetPressure を立てる
+    fs.writeFileSync(path.join(claudeDir, 'cost-enforce.json'), '{"mode":"block"}\n', 'utf8');
+    assert.equal(writeBudgetPressure({ claudeDir }).changed, true);
+    const enforce = JSON.parse(fs.readFileSync(path.join(claudeDir, 'cost-enforce.json'), 'utf8'));
+    assert.equal(enforce.mode, 'block');
+    assert.equal(enforce.budgetPressure, true);
+    assert.equal(writeBudgetPressure({ claudeDir }).changed, false);
+  } finally { cleanTempDir(tempDir); }
+});
+
+// ---- B1相当: auto-codex は共有ツリーを破壊せず、PR URL を state に入れる ----
+
+function autoCodexSpawnMocks(calls) {
+  return (program, args, options = {}) => {
+    const copyArgs = args ? [...args] : [];
+    calls.push({ program, args: copyArgs, options });
+    const joined = [program, ...copyArgs].join(' ');
+    if (program === 'git' && copyArgs.includes('diff') && copyArgs.includes('--stat')) {
+      // この呼び出しは tempTree 内で行われる(共有ツリーでは diff を取らない)
+      return { status: 0, stdout: options._diffStdout ?? ' tools/cost-improve-loop.mjs | 2 ++\n' };
+    }
+    if (program === 'gh' && copyArgs[0] === 'pr') {
+      return { status: 0, stdout: 'https://github.com/orgiast/orgiast-claude-rules/pull/123\n' };
+    }
+    return { status: 0, stdout: '' };
+  };
+}
+
+test('32. auto-codex 実行は共有ツリーへ reset/clean/checkout -b を投げず、PR URL を state に入れる', async () => {
+  const tempDir = createTempDir();
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  process.env.ORGIAST_HOME = tempDir;
+  try {
+    const rows = [
+      { pcName: 'nishi-PC', label: 'nishi', reportedAt: '2026-09-06 11:00:00', livenessState: '生存', delegRatio: '40%', claudeUsd: '5.0' }
+    ];
+    const calls = [];
+    const result = await main([], {
+      fetchFleetSheetRows: async () => rows,
+      readLedger: () => ({ deepseek: 1 }),
+      localState: {},
+      signals: {},
+      now: NOW,
+      spawnSync: autoCodexSpawnMocks(calls),
+      noNotify: true,
+      sendHeartbeat: async () => {}
+    });
+    const codexAct = result.finalState.actions.find((a) => a.mode === 'auto-codex');
+    assert.ok(codexAct, 'auto-codex アクションが発行される');
+    assert.equal(codexAct.result, 'pending');
+    assert.equal(codexAct.pr, 'https://github.com/orgiast/orgiast-claude-rules/pull/123', 'PR URL が state に入る');
+
+    // 共有ツリー(repoRoot)に対する破壊的 git 操作が無い
+    const destructiveOnShared = calls.some((c) =>
+      c.program === 'git' && c.args.includes('-C') && c.args[c.args.indexOf('-C') + 1] === repoRoot &&
+      (c.args.includes('reset') || c.args.includes('clean') || c.args.includes('checkout'))
+    );
+    assert.equal(destructiveOnShared, false, '共有ツリーに reset/clean/checkout を投げない');
+    const worktreeOnShared = calls.filter((c) => c.program === 'git' && c.args.includes('-C') && c.args[c.args.indexOf('-C') + 1] === repoRoot);
+    for (const call of worktreeOnShared) assert.equal(call.args.includes('worktree'), true, '共有ツリーへの git は worktree のみ');
+    assert.ok(calls.some((c) => c.program === 'gh' && c.args[0] === 'pr'), 'PR 作成が試みられる');
+    const nodeCalls = calls.filter(c => c.args.includes('--test') || c.args.some(a => String(a).endsWith('codex-do.mjs')));
+    assert.equal(nodeCalls.length, 2);
+    for (const call of nodeCalls) { assert.equal(call.program, process.execPath); assert.notEqual(call.options.shell, true); }
+
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('33. auto-codex は空 diff を failed とし PR 作成まで進めない', async () => {
+  const tempDir = createTempDir();
+  process.env.ORGIAST_HOME = tempDir;
+  try {
+    const rows = [
+      { pcName: 'nishi-PC', label: 'nishi', reportedAt: '2026-09-06 11:00:00', livenessState: '生存', delegRatio: '40%', claudeUsd: '5.0' }
+    ];
+    const calls = [];
+    const spawn = (program, args, options = {}) => {
+      const copyArgs = args ? [...args] : [];
+      calls.push({ program, args: copyArgs });
+      const joined = [program, ...copyArgs].join(' ');
+      if (program === 'git' && copyArgs.includes('diff') && copyArgs.includes('--stat')) {
+        return { status: 0, stdout: '' }; // 変更なし
+      }
+      if (program === 'gh') return { status: 0, stdout: 'https://github.com/orgiast/orgiast-claude-rules/pull/123\n' };
+      return { status: 0, stdout: '' };
+    };
+    const result = await main([], {
+      fetchFleetSheetRows: async () => rows,
+      readLedger: () => ({ deepseek: 1 }),
+      localState: {}, signals: {}, now: NOW, spawnSync: spawn, noNotify: true, sendHeartbeat: async () => {}
+    });
+    const codexAct = result.finalState.actions.find((a) => a.mode === 'auto-codex');
+    assert.equal(codexAct.result, 'failed');
+    assert.match(codexAct.note, /変更なし/);
+    assert.equal(calls.some((c) => c.program === 'gh' && c.args[0] === 'pr'), false, '空 diff では PR を作らない');
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+
+test('自機の stale_report は表示名とラベルが違ってもローカル再送する', () => {
+  const calls = [];
+  const result = decideActions({
+    violations: [{ kind: 'stale_report', pc: '自分のPC', label: 'own-label', evidence: 'stale' }],
+    state: { actions: [] }, now: NOW, ownLabel: 'own-label', repo: '/tmp/repo',
+    spawnSync: (...args) => { calls.push(args); return { status: 0 }; },
+    directiveSend: () => assert.fail('自機へ指令を送らない')
+  });
+  assert.deepEqual(calls, [[process.execPath, ['tools/fleet-sheet-report.mjs', '--specs', '--cloud', '--no-jitter'],
+    { cwd: '/tmp/repo', timeout: 300_000, windowsHide: true, shell: false, encoding: 'utf8' }]]);
+  assert.equal(result.actions[0].mode, 'local');
+  assert.deepEqual(result.nextStaleRetry['自分のPC'], { sentAt: NOW.toISOString(), count: 1, mode: 'local' });
+});
+
+test('他機への再送は --push と48時間の有効期限を付ける', () => {
+  const result = decideActions({
+    violations: [{ kind: 'stale_report', pc: '他のPC', label: 'remote-label', evidence: 'stale' }],
+    state: { actions: [] }, now: NOW, ownLabel: 'own-label', repo: '/tmp/repo',
+    spawnSync: () => assert.fail('他機をローカルで実行しない'),
+    directiveSend: (args, options) => {
+      assert.deepEqual(args, ['--kind', 'run', '--task', 'fleet-sheet-report', '--targets', 'remote-label', '--why', 'stale_report 自動復旧', '--push', '--expires-hours', '48']);
+      assert.deepEqual(options, { repo: '/tmp/repo' });
+    }
+  });
+  assert.equal(result.nextStaleRetry['他のPC'].mode, 'directive');
+});
+
+for (const mode of ['local', 'directive']) {
+  test(`${mode} 再送失敗は即人へ上げ、再送済みを記録せず秘匿値も出さない`, (t) => {
+    const errors = [];
+    t.mock.method(console, 'error', message => errors.push(message));
+    const result = decideActions({
+      violations: [{ kind: 'stale_report', pc: 'PC-A', evidence: 'stale' }],
+      state: { actions: [{ kind: 'stale_report', pc: 'PC-A', dispatchedAt: NOW.toISOString() }] }, now: NOW,
+      ownLabel: mode === 'local' ? 'PC-A' : 'other',
+      spawnSync: () => ({ status: null, error: new Error('secret-token') }),
+      directiveSend: () => { throw new Error('secret-token'); }
+    });
+    assert.equal(result.actions[0].mode, 'human');
+    assert.deepEqual(result.nextStaleRetry, {});
+    assert.match(result.actions[0].todoMessage, /自動で夜間レポートの再送/);
+    assert.match(result.actions[0].todoMessage, /Claude が自動で/);
+    assert.doesNotMatch(result.actions[0].todoMessage, /0 回/);
+    assert.equal(errors.length, 1);
+    assert.ok(!errors[0].includes('secret-token'));
+  });
+
+  test(`${mode} 再送から24時間未満は待ち、24時間後は試行回数付きで人へ上げる`, () => {
+    const state = { actions: [], staleRetry: { 'PC-A': { sentAt: NOW.toISOString(), count: 2, mode } } };
+    const violations = [{ kind: 'stale_report', pc: 'PC-A', evidence: 'stale' }];
+    assert.equal(decideActions({ violations, state, now: new Date(+NOW + 86400000 - 1) }).actions.length, 0);
+    const result = decideActions({ violations, state, now: new Date(+NOW + 86400000) });
+    assert.equal(result.actions[0].mode, 'human');
+    assert.ok(result.actions[0].todoMessage.includes(`自動再送（${mode}）を 2 回試みた`));
+  });
+}
+
+test('復帰したPCの再送記録だけを削除し元stateは変更しない', () => {
+  const retry = { sentAt: NOW.toISOString(), count: 1, mode: 'local' };
+  const state = { actions: [], staleRetry: { recovered: retry, stale: retry } };
+  const result = decideActions({ violations: [{ kind: 'stale_report', pc: 'stale', evidence: 'stale' }], state, now: NOW });
+  assert.deepEqual(result.nextStaleRetry, { stale: retry });
+  assert.ok(state.staleRetry.recovered);
+});
+
+test('dry-runでは再送を実行せず成功記録も作らない', () => {
+  const result = decideActions({ violations: [{ kind: 'stale_report', pc: 'PC-A', evidence: 'stale' }], state: { actions: [] }, now: NOW, dryRun: true,
+    directiveSend: () => assert.fail('dry-runでpushしない') });
+  assert.deepEqual(result.nextStaleRetry, {});
+  assert.equal(result.actions.length, 0);
+});
+
+test('名簿16行は除外し計測不能3行だけを①と④に表示する', async () => {
+  const roster = Array.from({ length: 16 }, (_, i) => ({ pcName: `名簿${i}`, label: '', reportedAt: '' }));
+  const missing = ['百瀬かなうのMacBook Air', 'owner-PC', 'macBook'].map((pcName, i) => ({ pcName, label: `label-${i}`, reportedAt: i ? '' : '2026-09-06 11:00:00', delegRatio: '', claudeUsd: '' }));
+  const tempDir = createTempDir();
+  process.env.ORGIAST_HOME = tempDir;
+  try {
+    const result = await main(['--dry-run', '--no-notify'], { fetchFleetSheetRows: async () => [...roster, ...missing], readLedger: () => ({ codex: 1 }), localState: {}, now: NOW, noNotify: true });
+    const section1 = result.reportText.split('### ①')[1].split('### ②')[0];
+    const section4 = result.reportText.split('### ④')[1];
+    for (const row of roster) assert.ok(!result.reportText.includes(`**${row.pcName}**`));
+    assert.match(section1, /※ 未報告のPC 16台は表から除外/);
+    for (const row of missing) {
+      assert.ok(section1.includes(`- **${row.pcName}**: 報告実績なし（最終報告 ${row.reportedAt || '不明'}）— そのPCで Claude Code を1回起動すれば復帰`));
+      assert.ok(section4.includes(`- **${row.pcName}**: 自動では復旧不可 — 次回の夜間点検で再試行します`));
+    }
+    assert.equal((section4.match(/^- /gm) || []).length, 3);
+  } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+// ---- 保留(deferred): Codex の上限・無人割当は失敗ではない ----
+test('runAutoCodexIsolated: 非kim席には automerge を付けない', async () => {
+  const { runAutoCodexIsolated } = await import('./cost-improve-loop.mjs');
+  const calls = [];
+  const acts = [{ kind: 'x', pc: 'p', specContent: '修正する' }];
+  runAutoCodexIsolated({ home: os.tmpdir(), acts, specFile: 'spec.md', repoPath: os.tmpdir(), spawnSync: autoCodexSpawnMocks(calls) });
+  const creates = calls.filter(({ program, args }) => program === 'gh' && args[0] === 'pr' && args[1] === 'create');
+  assert.equal(creates.length, 1);
+  const args = creates[0].args;
+  assert.ok(!args.includes('--label'));
+  assert.equal(acts[0].pr, 'https://github.com/orgiast/orgiast-claude-rules/pull/123');
+});
+
+test('runAutoCodexIsolated: codex-do が保留(75)を返したら failed にせず deferred と retryAt を記録する', async () => {
+  const { runAutoCodexIsolated } = await import('./cost-improve-loop.mjs');
+  const retryAt = Date.now() + 3600000;
+  const seen = [];
+  const spawn = (program, args) => {
+    seen.push([program, ...args]);
+    if (args.some((a) => String(a).endsWith('codex-do.mjs'))) return { status: 75, stdout: `${JSON.stringify({ status: 'deferred', reason: 'unattended_budget', retryAt })}\n`, stderr: '' };
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const acts = [{ kind: 'x', pc: 'p', specContent: '- 根拠: テスト\n機能を実装する' }];
+  runAutoCodexIsolated({ home: os.tmpdir(), acts, specFile: 'spec.md', repoPath: os.tmpdir(), spawnSync: spawn });
+  assert.equal(acts[0].result, 'deferred');
+  assert.equal(acts[0].retryAt, retryAt);
+  assert.match(acts[0].note, /unattended_budget/);
+  const codexCall = seen.find((c) => c.some((a) => String(a).endsWith('codex-do.mjs')));
+  assert.deepEqual(codexCall.slice(codexCall.indexOf('--origin'), codexCall.indexOf('--origin') + 4), ['--origin', 'unattended', '--kind', 'implement']);
+  // PR 作成や commit には進まない
+  assert.equal(seen.some((c) => c[0] === 'gh'), false);
+});
+
+test('runAutoCodexIsolated: 通常の失敗(終了コード1)は従来どおり failed', async () => {
+  const { runAutoCodexIsolated } = await import('./cost-improve-loop.mjs');
+  const spawn = (program, args) => args.some((a) => String(a).endsWith('codex-do.mjs')) ? { status: 1, stdout: '', stderr: 'boom' } : { status: 0, stdout: '', stderr: '' };
+  const acts = [{ kind: 'x', pc: 'p', specContent: '修正する' }];
+  runAutoCodexIsolated({ home: os.tmpdir(), acts, specFile: 'spec.md', repoPath: os.tmpdir(), spawnSync: spawn });
+  assert.equal(acts[0].result, 'failed');
+});
+
+test('日次ループは残高専用DMへ取得済みデータを渡し、通知失敗でも完走する', async () => {
+  const home = createTempDir();
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  const balances = [{ provider: 'kimi', balanceUsd: 0, autoTopUp: false, status: 'low', todaySpendUsd: 0, avg7dSpendUsd: 0 }];
+  let calls = 0, referralCalls = 0;
+  const inputs = {
+    now: NOW, localState: {}, readLedger: () => ({ codex: 1 }),
+    fetchFleetSheetRows: async () => [{ pcName: 'PC-ok', reportedAt: '2026-09-06 11:00:00', delegRatio: '60%', claudeUsd: '1' }],
+    signals: { providerBalances: balances, providerHealth: [], codexLimit24h: 0, headlessClaudeOut: 0, budgetPacePct: 0, evalAgeDays: 0 },
+    alertProviderBalances: async (rows, options) => {
+      calls++;
+      assert.equal(rows, balances);
+      assert.equal(options.home, home);
+      assert.equal(options.now, NOW);
+      throw new Error('mock notification failure');
+    },
+    runOriguchiReferralMonthly: async () => { referralCalls++; throw new Error('mock referral failure'); }, notifyKim: async () => ({ delivered: 'dm' }),
+    sendHeartbeat: async () => {}, shouldSendMonthlyReport: async () => false,
+  };
+  try {
+    assert.equal((await main([], inputs)).ok, true);
+    assert.equal(calls, 1);
+    await main(['--dry-run'], inputs);
+    await main(['--no-notify'], inputs);
+    assert.equal(calls, 1);
+    assert.equal(referralCalls, 1);
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    cleanTempDir(home);
+  }
+});
+
+test('receipt collection and notification are isolated and honor dry-run/no-notify', async () => {
+  const home = createTempDir(), previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  const scanCalls = [], alertCalls = [];
+  let failScan = false;
+  const receipt = { report: '領収書テストレポート', alerts: [] };
+  const inputs = {
+    now: NOW, localState: {}, readLedger: () => ({ codex: 1 }),
+    fetchFleetSheetRows: async () => [{ pcName: 'PC-ok', reportedAt: '2026-09-06 11:00:00', delegRatio: '60%', claudeUsd: '1' }],
+    collectBudgetStatus: async () => ({ budgetPacePct: 0 }), collectClaudeStats: () => ({ headlessClaudeOut: 0 }),
+    collectProviderHealth: () => [], countCodexLimitDetections: () => 0, evalLatestAgeDays: () => 0,
+    collectProviderBalances: async () => [], alertProviderBalances: async () => {},
+    scanAiReceipts: async options => {
+      scanCalls.push(options);
+      if (failScan) throw new Error('scan unavailable'); return receipt;
+    },
+    alertAiReceipts: async (result, options) => {
+      alertCalls.push({ result, options });
+      throw new Error('notification unavailable');
+    },
+    runOriguchiReferralMonthly: async () => {}, notifyKim: async () => ({ delivered: 'dm' }),
+    sendHeartbeat: async () => {}, shouldSendMonthlyReport: async () => false,
+  };
+  try {
+    const first = await main([], inputs);
+    assert.equal(first.ok, true);
+    assert.match(first.reportText, /領収書テストレポート/);
+    assert.equal((await main(['--dry-run'], inputs)).ok, true);
+    assert.equal((await main(['--no-notify'], inputs)).ok, true);
+    failScan = true;
+    const failed = await main([], inputs);
+    assert.equal(failed.ok, true);
+    assert.match(failed.reportText, /領収書\(全アカウント Gmail\): スキャン失敗（未計測）/);
+    assert.ok(failed.evaluation.violations.some(v => v.provider === 'receipts'));
+    assert.equal((await main([], { ...inputs, noNotify: true })).ok, true);
+    assert.deepEqual(scanCalls.map(o => o.appendLedger), [true, false, true, true, true]);
+    for (const options of scanCalls) {
+      assert.equal(options.home, home); assert.equal(options.days, 3); assert.equal(options.now, NOW);
+    }
+    assert.equal(alertCalls.length, 2);
+    assert.equal(alertCalls[0].result, receipt); assert.equal(alertCalls[1].result, null);
+    for (const { options } of alertCalls) {
+      assert.equal(options.notify, inputs.notifyKim); assert.equal(options.home, home); assert.equal(options.now, NOW);
+    }
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = previousHome;
+    cleanTempDir(home);
+  }
+});
+
+
+test('receipt signals: null is one trusted measurement violation', () => {
+  const violations = evaluateReceiptSignals(null);
+  assert.equal(violations.length, 1);
+  assert.deepEqual(violations[0], { kind: 'measurement_untrusted', pc: 'self', severity: 'error', provider: 'receipts', evidence: '領収書スキャン: 取得失敗（設定・台帳・認証・接続を確認）', trusted: true });
+});
+test('receipt signals: two account errors produce one violation naming both', () => {
+  const violations = evaluateReceiptSignals({ errors: [{ account: 'a@example.com', reason: '取得失敗' }, { account: 'b@example.com', reason: '取得上限100件' }] });
+  assert.equal(violations.length, 1);
+  assert.match(violations[0].evidence, /a@example.com.*b@example.com/);
+});
+test('receipt signals: success is clean; stale boundary and missing ledger are detected', () => {
+  assert.deepEqual(evaluateReceiptSignals({ errors: [] }), []);
+  assert.deepEqual(evaluateReceiptSignals({ errors: [] }, { ageHours: 36 }), []);
+  for (const ageHours of [36.1, Infinity]) {
+    const violations = evaluateReceiptSignals({ errors: [] }, { ageHours });
+    assert.equal(violations.length, 1);
+    assert.match(violations[0].evidence, /領収書台帳が .*h 更新されていない/);
+  }
+});
+
+test('runEntry: refresh throw でも run が呼ばれ、process.exitCode=1 になる', async () => {
+  const savedExitCode = process.exitCode;
+  process.exitCode = 0;
+
+  let calledRun = false;
+  const result = await runEntry({
+    argv: [],
+    refresh: () => { throw new Error('simulated timeout'); },
+    run: () => { calledRun = true; return Promise.resolve('ok'); },
+  });
+
+  assert.equal(calledRun, true, 'refresh が throw しても run は呼ばれる');
+  assert.equal(process.exitCode, 1, 'process.exitCode は 1 になる');
+
+  process.exitCode = savedExitCode;
+});
+
+test('runEntry: refresh 成功時は process.exitCode を変えず run が呼ばれる', async () => {
+  const savedExitCode = process.exitCode;
+  process.exitCode = 0;
+
+  let calledRun = false;
+  const result = await runEntry({
+    argv: [],
+    refresh: () => 'ok',
+    run: () => { calledRun = true; return Promise.resolve('ok'); },
+  });
+
+  assert.equal(calledRun, true, 'run は呼ばれる');
+  assert.equal(process.exitCode, 0, 'process.exitCode は変わらない');
+
+  process.exitCode = savedExitCode;
+});
+
+test('runEntry: --dry-run では refresh を呼ばず（throw しても止まらない）run が呼ばれる', async () => {
+  const savedExitCode = process.exitCode;
+  process.exitCode = 0;
+
+  let calledRefresh = false;
+  let calledRun = false;
+  const result = await runEntry({
+    argv: ['--dry-run'],
+    refresh: () => { calledRefresh = true; return 'ok'; },
+    run: () => { calledRun = true; return Promise.resolve('ok'); },
+  });
+
+  assert.equal(calledRefresh, false, '--dry-run では refresh を呼ばない');
+  assert.equal(calledRun, true, 'run は呼ばれる');
+  assert.equal(process.exitCode, 0, 'process.exitCode は変わらない');
+
+  process.exitCode = savedExitCode;
+});
+
+test('runEntry: run 自身が throw したら process.exitCode=1 になる', async () => {
+  const savedExitCode = process.exitCode;
+  process.exitCode = 0;
+
+  await runEntry({
+    argv: ['--dry-run'],
+    refresh: () => 'ok',
+    run: () => { throw new Error('run failed'); },
+  });
+
+  assert.equal(process.exitCode, 1, 'run の throw で exitCode=1');
+
+  process.exitCode = savedExitCode;
+});

@@ -1,0 +1,1499 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+
+const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
+process.env.ORGIAST_HOME = isolatedHome;
+const { BUILTIN_REPO_BY_KEYWORD, ROLE_NAMES, boundedCount, todoDoneDecision, DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, sectionsForTodo, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, buildRolePrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, isTodoAlreadyDone, taskClosedBeforeLaunch, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, loadClaudeExeHelpers, main } = await import('./auto-session.mjs');
+const historyCwd = String.raw`c:\Users\example\Downloads\work`;
+const completedSummary = 'やったこと: 対象のコードを修正してコミットした。検証したこと: 回帰テストを実行し全件成功を確認した。残ったこと: なし';
+
+test('旧 claude-exe に export が無くても探索だけをスキップして継続する', async () => {
+  const warnings = [];
+  const helpers = await loadClaudeExeHelpers(async () => ({}), (line) => warnings.push(line));
+  assert.equal(helpers.findClaudeInVersionedDir('unused', {}), null);
+  assert.deepEqual(helpers.sanitizeClaudeSupervisorEnv({ CLAUDECODE: '1', PATH: 'ok' }), { PATH: 'ok' });
+  assert.match(warnings[0], /実体探索だけスキップ/);
+});
+
+test('todoDoneDecision は成功でも空サマリを拒否する', () => {
+  assert.deepEqual(todoDoneDecision({ status: 'success', summary: ' \n ' }), { done: false, reason: 'サマリが空（作業の痕跡が無い）' });
+});
+
+test('todoDoneDecision は実装試行せず打ち切り・到達不能の実データ相当を拒否する', () => {
+  const summary = 'Read/Glob が許可されていないため対象リポジトリに到達不能。実装試行せず打ち切りとなり、コードの変更も検証も実行していない。';
+  const decision = todoDoneDecision({ status: 'success', summary });
+  assert.equal(decision.done, false);
+  assert.match(decision.reason, /^未完の申告あり: /);
+});
+
+test('todoDoneDecision は残ったこと: なしを含む正常完了を許可する', () => {
+  assert.deepEqual(todoDoneDecision({ status: 'success', summary: completedSummary }), { done: true, reason: '' });
+});
+
+test('todoDoneDecision は終了コード失敗を最優先で拒否する', () => {
+  for (const summary of ['', completedSummary]) {
+    assert.deepEqual(todoDoneDecision({ status: 'failure', summary }), { done: false, reason: '終了コードが成功でない' });
+  }
+});
+
+test('todoDoneDecision は trim 後39文字を拒否し40文字を許可する', () => {
+  assert.deepEqual(todoDoneDecision({ status: 'success', summary: ` ${'あ'.repeat(39)} ` }), { done: false, reason: 'サマリが短すぎる' });
+  assert.equal(todoDoneDecision({ status: 'success', summary: 'あ'.repeat(40) }).done, true);
+});
+
+test('todoDoneDecision は指定された未完語すべてを理由に残す', () => {
+  for (const word of ['打ち切', '中断', '未完', '着手できな', '到達できな', '到達不能', '実装せず', '実装ゼロ', '許可されていない', "haven't granted", 'ブロックされ', '人間介入', '人間の判断', '判断を仰ぐ', '次のセッション', '失敗しました']) {
+    assert.deepEqual(todoDoneDecision({ status: 'success', summary: `${word}。${'補足'.repeat(25)}` }), { done: false, reason: `未完の申告あり: ${word}` });
+  }
+});
+
+test('boundedCount は all と数値を12件以内に制限する', () => {
+  assert.equal(boundedCount('all'), 12);
+  assert.equal(boundedCount(13), 12);
+  assert.equal(boundedCount(0), 1);
+});
+
+test('--role は有効なロールだけを受理する', () => {
+  assert.equal(parseArgs(['--role', 'tester']).role, 'tester');
+  assert.throws(() => parseArgs(['--role', 'unknown']), /--role は/);
+});
+
+test('buildRolePrompt はロール本文と実行環境を含み、不正名は空文字を返す', () => {
+  const prompt = buildRolePrompt('tester', '/work/repo', '/tmp/role-summary.md', 30, new Date(2026, 8, 18));
+  assert.match(prompt, /テスト担当ロール/);
+  assert.match(prompt, /node --test tools\/\*\.test\.mjs/);
+  assert.match(prompt, /\/work\/repo/);
+  assert.match(prompt, /\/tmp\/role-summary\.md/);
+  assert.equal(buildRolePrompt('unknown', '/work/repo', '/tmp/role-summary.md'), '');
+});
+
+test('3ロールの定義ファイルが存在し共通のレポート制約を含む', () => {
+  assert.deepEqual(ROLE_NAMES, ['tester', 'system-review', 'cost-check']);
+  for (const role of ROLE_NAMES) {
+    const file = path.join(import.meta.dirname, 'roles', `${role}.md`);
+    assert.equal(fs.existsSync(file), true, `${role}.md が存在する`);
+    assert.match(fs.readFileSync(file, 'utf8'), /role-reports/);
+  }
+});
+
+test('todoExclusionReason は契約と個別写真を除外し通常TODOを許可する', () => {
+  assert.equal(todoExclusionReason('7. カート・決済（決済プロバイダ契約が必要）'), '人間の作業が前提');
+  assert.equal(todoExclusionReason('9. SKU個別写真'), '人間の作業が前提');
+  assert.equal(todoExclusionReason('8. SKUの表示バグを修正する'), '');
+  assert.equal(todoExclusionReason('~~SKU個別写真~~'), '取り消し線（完了済み）');
+});
+
+test('todoExclusionReason は kim待ちの判断を除外する', () => {
+  assert.equal(todoExclusionReason('3. **settings.json に defaultMode を入れるかの判断（kim待ち）**'), '人間の作業が前提');
+});
+
+test('todoExclusionReason は kim の同意が必要なWSL導入を除外する', () => {
+  assert.equal(todoExclusionReason('WSL導入。対話セッションで kim の同意を得てから行う'), '人間の作業が前提');
+});
+
+test('todoExclusionReason は同意画面のコピー修正を除外しない', () => {
+  assert.equal(todoExclusionReason('4. 同意画面のコピーを直す'), '');
+});
+
+// 2026-09-27 実測: 回転後の next-session.md 先頭に `1. ### 触る前に読む memory` が並び、
+// launcher がこれを次の1目的に採用して実作業ゼロの回を1回消費した
+// (runs/2026-09-27-manifest.json の selectedTodos が実物)。
+test('todoExclusionReason は見出しだけの項目を除外する', () => {
+  assert.equal(todoExclusionReason('1. ### 触る前に読む memory'), '見出しのみ（作業内容が無い）');
+  assert.equal(todoExclusionReason('### 触る前に読む memory'), '見出しのみ（作業内容が無い）');
+  // 見出し記号で始まらない本物の TODO は巻き込まない。
+  assert.equal(todoExclusionReason('26. makimono-sns-poster キュー補充: 未投稿 86本'), '');
+  assert.equal(todoExclusionReason('3. #1 の見出しを直す'), '');
+});
+
+test('parseHandoff はリスト後の見出し段落と取り消し線をTODOに含めない', () => {
+  for (const separator of ['', '\n']) {
+    const parsed = parseHandoff(`## 残TODO\n1. 実装する\n13. kim相談\n   継続本文\n${separator}**見出し**\n~~別の完了済み作業~~\n   散文の補足\n`);
+    assert.deepEqual(parsed.todos, ['実装する', 'kim相談\n   継続本文']);
+    assert.equal(todoExclusionReason(parsed.todos[1]), '人間の作業が前提');
+  }
+});
+
+test('loadConfig は組み込みマッピングをファイル側で上書きし欠落時も補完する', () => {
+  const config = loadConfig('/home/x', () => JSON.stringify({ repoByKeyword: { SKU: '/custom' } }));
+  assert.equal(config.repoByKeyword.SKU, '/custom');
+  assert.equal(config.repoByKeyword.TETSUKO, BUILTIN_REPO_BY_KEYWORD.TETSUKO);
+  assert.deepEqual(loadConfig('/home/x', () => '{}').repoByKeyword, BUILTIN_REPO_BY_KEYWORD);
+  assert.equal(pickCwd('TETSUKO修正', () => true, config.repoByKeyword), BUILTIN_REPO_BY_KEYWORD.TETSUKO);
+  assert.equal(pickCwd('SKU修正', () => false, config.repoByKeyword), DEFAULT_REPO);
+});
+test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
+
+const sample = `前書き\n<!-- NEXT-SESSION v1 -->\n## 対象\nrepo A\n## 残TODO\n1. 実装する\n2. ~~完了済み~~\n3. 要判断: 色\n4. ブロック中: API\n## 完了条件\nテスト green\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 歴史上のTODO\n`;
+
+test('parseHandoff は全ブロックから TODO を抽出し、互換用 sections は先頭だけから抽出する', () => {
+  const parsed = parseHandoff(sample);
+  assert.deepEqual(parsed.todos, ['実装する', '~~完了済み~~', '要判断: 色', 'ブロック中: API', '歴史上のTODO']);
+  assert.deepEqual(parsed.todoBlocks, [1, 1, 1, 1, 2]);
+  assert.ok(parsed.block.includes('実装する'));
+  assert.ok(!parsed.block.includes('歴史上のTODO'));
+  assert.equal(parsed.sections['対象'], '## 対象\nrepo A');
+  assert.equal(parsed.sections['完了条件'], '## 完了条件\nテスト green');
+});
+
+const blockSectionsSample = `<!-- NEXT-SESSION v1 -->
+## 次の1目的
+**Codex 認証を整理する**
+
+## 対象
+- Codex 認証
+
+## 完了条件
+- seisaku-team の Pro 利用方針を確定する
+
+## 触る前に読む memory
+- [[codex-auth]]
+
+## 残TODO（次の1件を先頭に）
+1. Codex 認証の利用方針を確認する
+
+<!-- NEXT-SESSION v1 -->
+## 次の1目的
+**マスター保守の Phase 4 を実装する**
+
+## 対象
+- scripts/master-maintenance.ts
+
+## 完了条件
+- Phase 4 のマスター保守テストが通る
+
+## 触る前に読む memory
+- [[master-maintenance]]
+
+## 残TODO（次の1件を先頭に）
+1. Phase 4: scripts/master-maintenance.ts を実装する
+   マスター保守の検証も実施する。
+`;
+
+test('sectionsForTodo: 第2ブロックの完了条件だけを返す', () => {
+  const parsed = parseHandoff(blockSectionsSample);
+  const sections = sectionsForTodo(parsed, parsed.todos[1]);
+  assert.equal(sections['完了条件'], '## 完了条件\n- Phase 4 のマスター保守テストが通る');
+  assert.equal(sections['対象'], '## 対象\n- scripts/master-maintenance.ts');
+  assert.equal(sections['触る前に読む memory'], '## 触る前に読む memory\n- [[master-maintenance]]');
+  assert.equal(sections, parsed.sectionsByBlock[2]);
+  assert.ok(!JSON.stringify(sections).includes('seisaku-team'));
+  const prompt = buildPrompt(parsed.todos[1], sections, '/repo', '/summary');
+  assert.ok(prompt.includes('Phase 4 のマスター保守テストが通る'));
+  assert.ok(!prompt.includes('seisaku-team'));
+});
+
+test('sectionsForTodo: 第1ブロックは従来の sections を返す', () => {
+  const parsed = parseHandoff(blockSectionsSample);
+  assert.equal(sectionsForTodo(parsed, parsed.todos[0]), parsed.sections);
+  assert.equal(parsed.sections, parsed.sectionsByBlock[1]);
+  assert.equal(parsed.sections['完了条件'], '## 完了条件\n- seisaku-team の Pro 利用方針を確定する');
+});
+
+test('sectionsForTodo: 完了条件がないブロックへ先頭の条件を混ぜない', () => {
+  const parsed = parseHandoff(blockSectionsSample.replace('## 完了条件\n- Phase 4 のマスター保守テストが通る\n\n', ''));
+  const sections = sectionsForTodo(parsed, parsed.todos[1]);
+  assert.ok(!('完了条件' in sections));
+  assert.ok(!JSON.stringify(sections).includes('seisaku-team'));
+  assert.equal(sections['対象'], '## 対象\n- scripts/master-maintenance.ts');
+});
+
+test('sectionsForTodo: 第2ブロックのクローズ済み目的は memory だけを残す', () => {
+  const parsed = parseHandoff(blockSectionsSample.replace('**マスター保守の Phase 4 を実装する**', '~~**マスター保守の Phase 4 を実装する**~~ → ✅ 完了'));
+  assert.deepEqual(sectionsForTodo(parsed, parsed.todos[1]), {
+    '触る前に読む memory': '## 触る前に読む memory\n- [[master-maintenance]]',
+  });
+  assert.ok('完了条件' in sectionsForTodo(parsed, parsed.todos[0]));
+});
+
+test('sectionsForTodo: 先頭がクローズ済みでも第2ブロックの条件は維持する', () => {
+  const parsed = parseHandoff(blockSectionsSample.replace('**Codex 認証を整理する**', '~~**Codex 認証を整理する**~~ → ✅ 完了'));
+  assert.ok(!('完了条件' in parsed.sections));
+  assert.equal(sectionsForTodo(parsed, parsed.todos[1])['完了条件'], '## 完了条件\n- Phase 4 のマスター保守テストが通る');
+});
+
+test('sectionsForTodo: 旧形式だけ sections にフォールバックする', () => {
+  const sections = { '完了条件': '## 完了条件\n- 旧形式の条件' };
+  const legacy = { todos: ['旧TODO'], todoBlocks: [1], sections };
+  assert.equal(sectionsForTodo(legacy, '旧TODO'), sections);
+  assert.equal(sectionsForTodo(legacy, '未知TODO'), sections);
+  assert.deepEqual(sectionsForTodo({ todos: [] }, '未知TODO'), {});
+});
+
+test('sectionsForTodo: 未知TODO・未登録ブロックは空を返す', () => {
+  const parsed = parseHandoff(blockSectionsSample);
+  assert.deepEqual(sectionsForTodo(parsed, '未知TODO'), {});
+  delete parsed.sectionsByBlock[2];
+  assert.deepEqual(sectionsForTodo(parsed, parsed.todos[1]), {});
+});
+
+test('sectionsForTodo: 同一ブロック内の入れ子ハンドオフから対象・完了条件を借りない', () => {
+  const md = `<!-- NEXT-SESSION v1 -->
+
+## 次の1目的
+現行の目的
+
+## 残TODO
+1. **現行TODO** 何かをやる
+
+## 触る前に読む memory
+- memory_current.md
+
+## 次の1目的
+旧ハンドオフの目的
+
+## 対象
+- orgiast-keyserve PR#3
+
+## 完了条件
+- \`vercel --prod\` が通ること
+`;
+  const parsed = parseHandoff(md);
+  const sections = sectionsForTodo(parsed, parsed.todos[0]);
+  assert.ok(!('対象' in sections));
+  assert.ok(!('完了条件' in sections));
+  assert.match(sections['触る前に読む memory'], /memory_current\.md/);
+  assert.ok(!JSON.stringify(sections).includes('keyserve'));
+  assert.ok(!JSON.stringify(sections).includes('vercel --prod'));
+});
+
+test('sectionsForTodo: 同一セグメント内の2件目以降は対象・完了条件を借りない(2026-09-17実測の混成handoffの再現)', () => {
+  // 2026-09-17-4: 選ばれたTODOが「mistral skip」なのに、対象・完了条件は前日の別タスク
+  // 「register-*.mjs」のままという混成 handoff が実際に生成された。原因は、1セグメント内の
+  // 「残TODO」が複数件ある時、全件が無条件に同じ「対象/完了条件」を共有していたこと。
+  const md = `<!-- NEXT-SESSION v1 -->
+## 次の1目的
+register-*.mjs の実行先解決を直す
+
+## 対象
+- tools/register-process-hygiene-task.mjs
+
+## 完了条件
+- node --test が緑になること
+
+## 触る前に読む memory
+- [[feedback-nightly-bootstrap-silent-stale]]
+
+## 残TODO（次の1件を先頭に）
+1. register-*.mjs の実行先解決を直す(上の「次の1目的」)
+2. eval-providers.json の mistral に skip:true を1行足す
+`;
+  const parsed = parseHandoff(md);
+  const headline = sectionsForTodo(parsed, parsed.todos[0]);
+  assert.equal(headline['対象'], '## 対象\n- tools/register-process-hygiene-task.mjs');
+  assert.equal(headline['完了条件'], '## 完了条件\n- node --test が緑になること');
+
+  const other = sectionsForTodo(parsed, parsed.todos[1]);
+  assert.ok(!('対象' in other), '別件のTODOに前日の対象が混入している');
+  assert.ok(!('完了条件' in other), '別件のTODOに前日の完了条件が混入している');
+  assert.equal(other['触る前に読む memory'], '## 触る前に読む memory\n- [[feedback-nightly-bootstrap-silent-stale]]');
+
+  const prompt = buildPrompt(parsed.todos[1], other, '/repo', '/summary');
+  assert.ok(!prompt.includes('register-process-hygiene-task.mjs'), '別件TODOのプロンプトに前日の対象が混入している');
+});
+
+test('sectionsBySegment: 入れ子ハンドオフ側の条件は自分のセグメントに保持する', () => {
+  const md = `<!-- NEXT-SESSION v1 -->
+
+## 次の1目的
+現行の目的
+
+## 残TODO
+1. **現行TODO** 何かをやる
+
+## 触る前に読む memory
+- memory_current.md
+
+## 次の1目的
+旧ハンドオフの目的
+
+## 対象
+- orgiast-keyserve PR#3
+
+## 完了条件
+- \`vercel --prod\` が通ること
+
+## 残TODO
+1. **旧TODO** keyserve を作業する
+`;
+  const parsed = parseHandoff(md);
+  assert.equal(parsed.sectionsBySegment['1:2']['対象'], '## 対象\n- orgiast-keyserve PR#3');
+  assert.equal(parsed.sectionsBySegment['1:2']['完了条件'], '## 完了条件\n- `vercel --prod` が通ること');
+  assert.ok(!JSON.stringify(parsed.sectionsBySegment['1:2']).includes('memory_current.md'));
+});
+
+test('parseHandoff: 1マーカーブロックでは最初の残TODOだけを列挙する', () => {
+  const md = `<!-- NEXT-SESSION v1 -->
+## 次の1目的
+現行の目的
+## 残TODO
+1. 現行TODOを実行する
+
+## 次の1目的
+入れ子の旧ハンドオフ
+## 残TODO
+1. 旧ハンドオフTODOを実行する
+`;
+  const parsed = parseHandoff(md);
+  assert.deepEqual(parsed.todos, ['現行TODOを実行する']);
+  assert.ok(!parsed.todos.some((todo) => todo.includes('旧ハンドオフTODO')));
+  assert.deepEqual(parsed.todoSegments, ['1:1']);
+});
+
+test('sectionsForTodo: 旧ハンドオフの前置きを現行memory節に混ぜない', () => {
+  const md = `<!-- NEXT-SESSION v1 -->
+## 次の1目的
+現行の目的
+## 残TODO
+1. 現行TODO
+## 触る前に読む memory
+- memory_current.md
+
+---
+
+<!-- 旧ハンドオフの前置き -->
+> keyserve の作業を引き継ぐ
+## 次の1目的
+旧の目的
+## 対象
+- orgiast-keyserve PR#3
+## 完了条件
+- 本番デプロイが通ること
+`;
+  const sections = sectionsForTodo(parseHandoff(md), '現行TODO');
+  assert.equal(sections['触る前に読む memory'], '## 触る前に読む memory\n- memory_current.md');
+  assert.ok(!JSON.stringify(sections).includes('keyserve'));
+});
+
+const closedPurposeSample = `<!-- NEXT-SESSION v1 -->\n## 次の1目的\n~~**Growi 直取り同期を Drive へ本番反映する**~~ → ✅ 2026-09-11 完了（夜間バッチ）\n\n## 対象\n- tools/growi-manual.mjs\n\n## 完了条件\n- Part が 14 → 15 本\n\n## 触る前に読む memory\n- [[feedback-x]]\n\n## 残TODO\n1. 別件のバグ修正をする\n`;
+
+test('parseHandoff はクローズ済み目的の対象・完了条件を除外し、memory と残TODOを維持する', () => {
+  const parsed = parseHandoff(closedPurposeSample);
+  assert.ok(!('対象' in parsed.sections));
+  assert.ok(!('完了条件' in parsed.sections));
+  assert.equal(parsed.sections['触る前に読む memory'], '## 触る前に読む memory\n- [[feedback-x]]');
+  assert.deepEqual(parsed.todos, ['別件のバグ修正をする']);
+});
+
+test('parseHandoff はオープンな目的の対象・完了条件・memory を維持する', () => {
+  const md = closedPurposeSample.replace(
+    '~~**Growi 直取り同期を Drive へ本番反映する**~~ → ✅ 2026-09-11 完了（夜間バッチ）',
+    '**Growi 同期をする**',
+  );
+  const parsed = parseHandoff(md);
+  assert.equal(parsed.sections['対象'], '## 対象\n- tools/growi-manual.mjs');
+  assert.equal(parsed.sections['完了条件'], '## 完了条件\n- Part が 14 → 15 本');
+  assert.equal(parsed.sections['触る前に読む memory'], '## 触る前に読む memory\n- [[feedback-x]]');
+  assert.deepEqual(parsed.todos, ['別件のバグ修正をする']);
+});
+
+test('3ブロックの残TODOを新しいブロックから順に連結する', () => {
+  const md = `<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 最新A\n2. 最新B\n---\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 2番目\n---\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 3番目\n`;
+  const parsed = parseHandoff(md);
+  assert.deepEqual(parsed.todos, ['最新A', '最新B', '2番目', '3番目']);
+  assert.deepEqual(parsed.todoBlocks, [1, 1, 2, 3]);
+  assert.equal(parsed.todoBlocks.length, parsed.todos.length);
+});
+
+test('単一ブロックは従来と同じ件数・順序で解析する', () => {
+  const md = `<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 最初\n2. 次\n`;
+  const parsed = parseHandoff(md);
+  assert.deepEqual(parsed.todos, ['最初', '次']);
+  assert.deepEqual(parsed.todoBlocks, [1, 1]);
+});
+
+test('sections は2番目以降の対象を混ぜない', () => {
+  const md = `<!-- NEXT-SESSION v1 -->\n## 対象\n最新のrepo\n## 残TODO\n1. A\n---\n<!-- NEXT-SESSION v1 -->\n## 対象\n古いrepo\n## 残TODO\n1. B\n`;
+  const parsed = parseHandoff(md);
+  assert.equal(parsed.sections['対象'], '## 対象\n最新のrepo');
+  assert.ok(!parsed.sections['対象'].includes('古いrepo'));
+});
+
+test('参照だけの実文言 TODO を除外し、末尾に括弧がある通常 TODO は除外しない', () => {
+  const note = '（旧引き継ぎの残TODO 3〜15 はすべて有効。下にそのまま残してある）';
+  const task = '**MCP gemini-cli の復旧**（2026-08-28 発見・未着手）。セッション開始時に CONNECT_TIMEOUT で落ちており、…';
+  assert.equal(todoExclusionReason(`4. ${note}`), '参照のみ（作業内容が無い）');
+  assert.equal(todoExclusionReason(task), '');
+});
+
+test('「…残TODO は下の旧ブロックに全部残っている」型のポインタ行を除外する', () => {
+  const real =
+    '4. 既存の残TODO（auto-session のブロック混入バグ 1r、Supabase migration 0065/0066/0068、AIニュース提案群）は下の旧ブロックに全部残っている';
+  const real2 = '5. 旧ブロックの残TODO（auto-session のブロック混入バグ 1r）は下に全部残っている';
+  assert.equal(todoExclusionReason(real), '参照のみ（作業内容が無い）');
+  assert.equal(todoExclusionReason(real2), '参照のみ（作業内容が無い）');
+  // 「残っている」で終わっていても、ブロックを指していない実作業は除外しない
+  assert.equal(todoExclusionReason('2. 下の階層に古いキャッシュが残っている'), '');
+});
+
+test('新旧ブロックの同一 TODO は先頭の1件だけを採用する', () => {
+  const md = `<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. **同じ作業**（最新）\n---\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. **同じ作業**（古い）\n`;
+  const parsed = parseHandoff(md);
+  assert.equal(filterTodos(parsed.todos).length, 1);
+  assert.deepEqual(todoExclusionReasons(parsed.todos), ['', '重複（先の項目と同一）']);
+});
+
+test('filterTodos は完了・判断待ち・未決・ブロック中を除外する', () => {
+  assert.deepEqual(filterTodos(['実行', '~~完了~~', '要判断 X', '判断待ち X', '未決 X', 'ブロック中 X']), ['実行']);
+});
+
+test('filterTodos は行頭の [完了 …] / [x] / ✅ の印も完了として除外する(2026-09-28実測の再現)', () => {
+  // 実物: 残TODO 先頭が `1. [完了 2026-09-27 #584] …` で、この印は「取り消し線」に該当せず素通りし、
+  // 完了済みTODOが次の1目的に選ばれて自動セッション1回分を消費した
+  // (auto-session/runs/2026-09-28-manifest.json の selectedTodos[0] が実物)。
+  assert.deepEqual(
+    filterTodos(['実行', '[完了 2026-09-27 #584] 済み', '[x] 済み', '✅ 済み', '完了報告の文面を直す']),
+    ['実行', '完了報告の文面を直す'],
+  );
+  assert.equal(todoExclusionReason('[完了 2026-09-27 #584] 済み'), '完了済み（印あり）');
+  // 本文中に「完了」を含むだけの生きたTODOや、既存の継続キュー行を巻き込まないこと(アンカーの回帰)。
+  assert.equal(todoExclusionReason('完了報告の文面を直す'), '');
+  assert.equal(todoExclusionReason('[継続キュー: 未完了 2件](archive/x.pending.md) — このファイルの項目を消化後に確認する。'), '');
+});
+
+test('--count all は3件を超えるフィルタ後の全TODOを選択する', () => {
+  const todos = ['実行1', '~~完了~~', '実行2', '実行3', '実行4'];
+  const options = parseArgs(['--count', 'all']);
+  assert.equal(options.count, 12);
+  assert.deepEqual(filterTodos(todos).slice(0, options.count), ['実行1', '実行2', '実行3', '実行4']);
+});
+
+test('SLAレーンは14件中の先頭FB 4件を通常1件より先に選ぶ', () => {
+  const todos = Array.from({ length: 14 }, (_, index) => [2, 4, 6, 8, 10].includes(index)
+    ? `作業${index + 1} [FB:fb-${index + 1}]`
+    : `通常${index + 1}`);
+  const lanes = selectTodoLanes(todos, { count: 1, slaCount: 4 });
+  assert.deepEqual(lanes.sla, [todos[2], todos[4], todos[6], todos[8]]);
+  assert.deepEqual(lanes.normal, [todos[0]]);
+  assert.deepEqual(lanes.selected, [...lanes.sla, ...lanes.normal]);
+});
+
+test('受付IDが同じ行は表記が違っても1件に畳む', () => {
+  // 別セッションが同じ報告をレーン表記なしでコピーすると先頭40文字が食い違い、
+  // 鍵が別物になって1晩に2回実行されうる。受付IDを鍵にして防ぐ。
+  const a = '1. **[FB:fb-1] 原価を集めるタスク**（取込 / パネル）— 本文。';
+  const b = '5. **[FB:fb-1] 【当日夜に実行・要望】 原価を集めるタスク**（取込 / パネル）— 本文。';
+  const reasons = todoExclusionReasons([a, b]);
+  assert.equal(reasons[0], '');
+  assert.equal(reasons[1], '重複（先の項目と同一）');
+});
+
+test('除外される項目は鍵を主張しない（実行可能なコピーを潰さない）', () => {
+  // 2026-09-02 実データ: 保留語を含む旧コピーが先頭ブロックにあり、
+  // 素朴に鍵を主張させると実行可能なコピーが「重複」に落ち、SLA対象が1件も実行されなくなる。
+  const held = '3. **[FB:fb-9] E16セルの不具合**（取込）— 着手可否は kim 判断待ち。';
+  const runnable = '9. **[FB:fb-9] 【即実行・不具合】 E16セルの不具合**（取込）— 本文。';
+  const reasons = todoExclusionReasons([held, runnable]);
+  assert.equal(reasons[0], '判断待ち');
+  assert.equal(reasons[1], '', '実行可能なコピーが残ること');
+  assert.deepEqual(filterTodos([held, runnable]), [runnable]);
+});
+
+test('SLAレーンでは即実行(不具合)が当日夜(要望)より先に来る', () => {
+  // 注入順は要望が先。並び順のままだと不具合が繰り越しに落ちる(2026-09-02 実データで発生)。
+  const todos = [
+    '1. [FB:w1] 【当日夜に実行・要望】 要望1',
+    '2. [FB:w2] 【当日夜に実行・要望】 要望2',
+    '3. [FB:b1] 【即実行・不具合】 不具合1',
+    '4. [FB:w3] 【当日夜に実行・要望】 要望3',
+  ];
+  const lanes = selectTodoLanes(todos, { count: 0, slaCount: 2 });
+  assert.deepEqual(lanes.sla, [todos[2], todos[0]]);
+  assert.equal(lanes.slaOverflow, 2);
+});
+
+test('同じレーン内では注入順を保つ(安定ソート)', () => {
+  const todos = [
+    '1. [FB:w1] 【当日夜に実行・要望】 要望1',
+    '2. [FB:w2] 【当日夜に実行・要望】 要望2',
+    '3. [FB:w3] 【当日夜に実行・要望】 要望3',
+  ];
+  assert.deepEqual(selectTodoLanes(todos, { count: 0, slaCount: 3 }).sla, todos);
+});
+
+test('判断待ちのFBはSLAレーンに入らない', () => {
+  const lanes = selectTodoLanes(['[FB:hold] 判断待ち', '[FB:run] 実行可', '通常'], { count: 1, slaCount: 4 });
+  assert.deepEqual(lanes.sla, ['[FB:run] 実行可']);
+  assert.deepEqual(lanes.normal, ['通常']);
+});
+
+test('SLA上限超過は今夜実行数と翌夜繰越数をログに出す', () => {
+  const lanes = selectTodoLanes(Array.from({ length: 6 }, (_, index) => `[FB:${index}] 要望${index}`), { slaCount: 4 });
+  const logs = [];
+  logSlaOverflow(lanes, (line) => logs.push(line));
+  assert.deepEqual(logs, ['auto-session: SLA対象 6件のうち 4件を今夜実行、2件は翌夜に繰り越し（--sla-count で調整可）']);
+});
+
+test('数値 count と sla-count と feedback-count は12件を上限にする', () => {
+  const options = parseArgs(['--count', '99', '--sla-count', '99', '--feedback-count', '99']);
+  assert.equal(options.count, 12);
+  assert.equal(options.slaCount, 12);
+  assert.equal(options.feedbackCount, 12);
+  assert.equal(parseArgs(['--sla-count', 'all']).slaCount, 12);
+  assert.equal(parseArgs(['--feedback-count', 'all']).feedbackCount, 12);
+});
+
+test('deadline まで5分なら起動せず、25分なら timeout を25分に縮める', () => {
+  const start = new Date(2026, 7, 30, 7, 0, 0);
+  assert.deepEqual(deadlineDecision('07:30', 40, new Date(2026, 7, 30, 7, 25, 0), start), {
+    run: false, timeoutMin: 0, reason: 'deadline', remainingMin: 5,
+  });
+  assert.deepEqual(deadlineDecision('07:30', 40, new Date(2026, 7, 30, 7, 5, 0), start), {
+    run: true, timeoutMin: 25, reason: '', remainingMin: 25,
+  });
+  // 起動時刻が締切を過ぎていたら翌朝の同時刻として扱う（夕方の手動起動が静かな no-op にならないように）。
+  const evening = new Date(2026, 7, 30, 20, 0, 0);
+  assert.deepEqual(deadlineDecision('07:30', 40, evening, evening), { run: true, timeoutMin: 40, reason: '', remainingMin: 690 });
+  // 子が締切を跨いで走り切った場合だけ already passed になる。
+  assert.equal(deadlineDecision('07:30', 40, new Date(2026, 7, 30, 8, 0, 0), start).reason, 'deadline already passed');
+});
+
+test('このPCでは実行不可と明記された実物由来TODOを除外する', () => {
+  const todo = '**マキモノ §6-1（信頼済み mkt_ キー発行 → keyserve ORGIAST_KEYS_JSON 投入）はこのPCでは実行不可**';
+  assert.equal(todoExclusionReason(todo), 'このPCでは実行不可');
+  assert.deepEqual(filterTodos([todo, '実行可能']), ['実行可能']);
+});
+
+test('実物の禁止メモ（⛔ …を再度このPCで回さないこと）を実行TODOとして採用しない', () => {
+  // 2026-09-25実測: 09-19 のセッションが残した禁止メモが除外されず、launcher が毎晩
+  // 「次の1目的」に採用して実作業ゼロの空振りセッションを生んでいた（manifest の selectedTodos 先頭）。
+  const prohibition = '**⛔ 2〜5 を再度このPCで回さないこと**（09-19 時点で3回とも同一結末。SA鍵が置かれるまで着手しても空振りする）';
+  assert.equal(todoExclusionReason(prohibition), 'このPCでは実行不可');
+  assert.deepEqual(filterTodos([prohibition, 'プライバシーポリシーの残り1箇所を修正する']),
+    ['プライバシーポリシーの残り1箇所を修正する']);
+});
+
+test('禁止メモの除外は必要条件（〜しないと壊れる）を巻き込まない', () => {
+  // 誤爆防止: 「実行しないと」は禁止ではなく必要条件。
+  assert.equal(todoExclusionReason('定期的に実行しないと古くなるので cron を見直す'), '');
+  // ⛔ の判定は項目の先頭だけ。文中の ⛔ は既存のラベル判定を変えない（実物 item15 の文型）。
+  assert.equal(todoExclusionReason('成長ループのバックログが累計35サイクル。kim と話す機会があればどの提案を ⛔ ブロック中（優先順位が kim の判断待ち）'), '判断待ち');
+  assert.equal(todoExclusionReason('3. **settings.json に defaultMode を入れるかの判断（kim待ち）**'), '人間の作業が前提');
+});
+
+test('意思決定型（〜するか）のTODOを実行TODOとして採用しない', () => {
+  // 2026-09-25実測: 二者択一の判断が成果物のTODOが除外されず、launcher がこれを「次の1目的」に
+  // 採用して実作業ゼロの空振りセッションを生んだ（本セッションの manifest の目的そのもの）。
+  const real = 'マキモノ出品を通すか、既存 `md-8dac5cb2` への追記にするか （作業場所: C:\\Users\\user\\Documents\\orgiast-rules-fix） （更新: 2026-09-22）';
+  assert.equal(todoExclusionReason(real), '判断待ち');
+  assert.equal(todoExclusionReason('`~/.claude/settings.json` に `"permissions": { "defaultMode": "auto" }` を入れるか'), '判断待ち');
+  assert.deepEqual(filterTodos([real, 'プライバシーポリシーの残り1箇所を修正する']),
+    ['プライバシーポリシーの残り1箇所を修正する']);
+});
+
+test('意思決定型の除外は末尾アンカー付き＝本文に「〜するか」を含む本物のTODOを消さない', () => {
+  // 実物の項目0（この除外規則自身を直す依頼）は本文に「〜するか」が現れるが、末尾は
+  // 「…を非除外で固定する」なので除外してはならない。非アンカーの /するか/ だと自分で消える。
+  const self = '0. [新規・2026-09-25 / 実測仕様つき] PR #549 と同型の続き: `todoExclusionReason` が'
+    + '「〜するか」で終わる**意思決定型**を除外できない件に、末尾アンカー付きの除外語形を足し、'
+    + '実物TODOで巻き添えゼロを確認する （作業場所: C:\\Users\\user\\.claude\\auto-session-repo）';
+  assert.equal(todoExclusionReason(self), '');
+  // 末尾が「か」でも、疑問で終わらない通常TODOは巻き込まない。
+  assert.equal(todoExclusionReason('定期的に実行しないと古くなるので cron を見直す'), '');
+  assert.equal(todoExclusionReason('[継続キュー: 未完了 2件](archive/x.pending.md) — このファイルの項目を消化後に確認する。'), '');
+});
+
+test('フォーム報告用プロンプトは TODO 用と分離し、PR をマージしない制約を含む', () => {
+  const issue = { number: 42, title: '保存できない', url: 'https://github.com/acme/app/issues/42', body: '保存ボタンが反応しません' };
+  const prompt = buildFeedbackPrompt(issue, 'acme/app', '/repos/app', '/tmp/feedback.summary.md', 60);
+  assert.ok(prompt.includes('社員がアプリ内フォームから報告'));
+  assert.ok(prompt.includes('PR をマージしない'));
+  assert.ok(prompt.includes('本番へデプロイしない'));
+  assert.ok(prompt.includes('main へ直接 push しない'));
+  assert.ok(prompt.includes('Closes #42'));
+  assert.ok(prompt.includes('推測で実装しない'));
+  assert.ok(prompt.includes('PRタイトル: <タイトル>'));
+  assert.ok(prompt.includes('run_in_background'));
+  assert.ok(prompt.includes('ScheduleWakeup'));
+});
+
+test('失敗通知本文は Issue・結果・summary・再開手段を含む', () => {
+  const sessionId = '123e4567-e89b-42d3-a456-426614174000';
+  const body = feedbackFailureBody([{ issue: { repo: 'acme/app', number: 42, title: '保存できない', url: 'https://github.com/acme/app/issues/42' }, status: 'timeout', exitCode: null, summaryFile: '/tmp/42.summary.md', stdout: JSON.stringify({ session_id: sessionId }), stderr: '時間切れ' }]);
+  assert.match(body, /acme\/app#42 保存できない/);
+  assert.match(body, /https:\/\/github\.com\/acme\/app\/issues\/42/);
+  assert.match(body, /タイムアウト \(timeout\)/);
+  assert.match(body, /\/tmp\/42\.summary\.md/);
+  assert.match(body, new RegExp(`claude --resume ${sessionId}`));
+});
+
+test('in-progress ラベル付き Issue はフォーム報告の対象から除外する', () => {
+  const available = { number: 1, labels: [{ name: 'feedback' }] };
+  const active = { number: 2, labels: [{ name: 'feedback' }, { name: 'in-progress' }] };
+  assert.equal(feedbackIssueExclusionReason(active), 'in-progress（対応中）');
+  assert.deepEqual(filterFeedbackIssues([available, active]), [available]);
+});
+
+test('PR URL が無いフォーム報告だけ in-progress ラベル解除対象にする', () => {
+  const stdoutPr = { issue: { number: 1 }, stdout: 'https://github.com/acme/app/pull/10', summary: '' };
+  const summaryPr = { issue: { number: 2 }, stdout: '', summary: 'PR: https://github.com/acme/app/pull/11' };
+  const noPr = { issue: { number: 3 }, stdout: '完了', summary: 'PR は作成できませんでした' };
+  assert.deepEqual(feedbackIssuesToUnmark([stdoutPr, summaryPr, noPr]), [noPr.issue]);
+  assert.deepEqual(feedbackIssuesToUnmark([]), []);
+});
+
+function mainIoWithFeedback(status) {
+  return {
+    listFeedbackIssues: () => [{ repo: 'acme/app', number: 8, title: '修正して', labels: [{ name: 'feedback' }] }],
+    resolveClaudeExe: () => '/fake/claude',
+    ensureFeedbackRepo: () => ({ ok: true, repoCwd: isolatedHome }),
+    setInProgress: () => ({ status: 0, stdout: '', stderr: '' }),
+    runChild: async () => ({ status, exitCode: status === 'success' ? 0 : 1, stdout: '完了待ちでスケジュールしました', stderr: '', startedAt: new Date().toISOString(), endedAt: new Date().toISOString() }),
+    notify: async () => {},
+    notifyFeedback: async () => {},
+  };
+}
+
+test('全記録が success なら feedback に PR URL が無くても main は 0 を返す', async () => {
+  assert.equal(await main(['--count', '0', '--feedback-count', '1'], mainIoWithFeedback('success')), 0);
+});
+
+test('TODO が全て成功していれば完走通知が例外でも main は 0 を返して警告を残す', async () => {
+  const claudeDir = path.join(isolatedHome, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'next-session.md'), '<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 通知失敗の回帰テスト\n');
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    const code = await main(['--count', '1', '--feedback-count', '0'], {
+      listFeedbackIssues: () => [],
+      resolveClaudeExe: () => '/fake/claude',
+      runChild: async () => ({ status: 'success', exitCode: 0, stdout: '完了', stderr: '', startedAt: new Date().toISOString(), endedAt: new Date().toISOString() }),
+      notify: async () => { throw new Error('webhook unavailable'); },
+    });
+    assert.equal(code, 0);
+    assert.ok(warnings.some((warning) => warning.includes('完走通知の送信に失敗しました') && warning.includes('webhook unavailable')));
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('main は空サマリの成功でTODOを変更せずrun JSONに見送り理由を保存する', async () => {
+  const claudeDir = path.join(isolatedHome, '.claude');
+  const nextFile = path.join(claudeDir, 'next-session.md');
+  const source = '<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 空サマリの誤完了を防ぐ\n';
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(nextFile, source);
+  const code = await main(['--count', '1', '--feedback-count', '0'], {
+    listFeedbackIssues: () => [],
+    listTaskLedgerItems: async () => [],
+    resolveClaudeExe: () => '/fake/claude',
+    runChild: async () => ({ status: 'success', exitCode: 0, stdout: '', stderr: '', startedAt: new Date().toISOString(), endedAt: new Date().toISOString() }),
+    notify: async () => {},
+  });
+  assert.equal(code, 0);
+  assert.equal(fs.readFileSync(nextFile, 'utf8'), source);
+  const runs = path.join(claudeDir, 'auto-session', 'runs');
+  const record = fs.readdirSync(runs).filter((name) => name.endsWith('.json'))
+    .map((name) => JSON.parse(fs.readFileSync(path.join(runs, name), 'utf8')))
+    .find((item) => item.todo === '空サマリの誤完了を防ぐ');
+  assert.equal(record.doneSkippedReason, 'サマリが空（作業の痕跡が無い）');
+});
+
+test('todo または feedback が failure/timeout なら main は 1 を返す', async () => {
+  assert.equal(await main(['--count', '0', '--feedback-count', '1'], mainIoWithFeedback('failure')), 1);
+  assert.equal(await main(['--count', '0', '--feedback-count', '1'], mainIoWithFeedback('timeout')), 1);
+});
+
+for (const key of ['rows', 'items', 'tasks']) {
+  for (const empty of [false, true]) {
+    test(`task-ledger --list は ${key} の${empty ? '空台帳' : '未着手行'}を読む`, async () => {
+      const logs = [];
+      const originalLog = console.log;
+      console.log = (message) => logs.push(String(message));
+      try {
+        const code = await main(['--list'], {
+          listFeedbackIssues: () => [],
+          listTaskLedgerItems: async () => ({ ok: true, [key]: empty ? [] : [{ taskId: 'LIST-42', 件名: '表示確認' }] }),
+          runChild: async () => assert.fail('list は実行しない'),
+          runTaskLedger: async () => assert.fail('list は台帳を変更しない'),
+        });
+        assert.equal(code, 0);
+        const lines = logs.filter((line) => line.startsWith('[task-ledger]'));
+        assert.equal(lines.length, 1);
+        assert.match(lines[0], empty ? /0件/ : /LIST-42 表示確認/);
+      } finally { console.log = originalLog; }
+    });
+  }
+}
+
+test('task-ledger タスクを第3取得元として実行し claim と done を記録する', async () => {
+  const claudeDir = path.join(isolatedHome, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'next-session.md'), '<!-- NEXT-SESSION v1 -->\n## 残TODO\n');
+  const ledgerCalls = [];
+  const code = await main(['--count', 'all', '--feedback-count', '0'], {
+    listFeedbackIssues: () => [],
+    listTaskLedgerItems: async (filters) => {
+      if (filters.taskId) return { rows: [{ taskId: filters.taskId, 件名: '台帳タスク', 状態: '未着手' }] };
+      assert.deepEqual(filters, { 状態: '未着手' });
+      return { rows: [{ taskId: 'TASK-42', 件名: '台帳タスク', 備考: '~/.claude/auto-session/handoffs/task-42.md', 成果物リンク: 'https://example.test/task-42' }] };
+    },
+    runTaskLedger: async (args) => ledgerCalls.push(args),
+    resolveClaudeExe: () => '/fake/claude',
+    runChild: async (_executable, prompt) => {
+      assert.ok(prompt.includes('~/.claude/auto-session/handoffs/task-42.md'));
+      assert.ok(prompt.includes('https://example.test/task-42'));
+      assert.ok(prompt.includes('codex-do.mjs --prompt-file'));
+      return { status: 'success', exitCode: 0, stdout: '完了', stderr: '', startedAt: new Date().toISOString(), endedAt: new Date().toISOString() };
+    },
+    notify: async () => {},
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(ledgerCalls.map(({ command, taskId }) => ({ command, taskId })), [{ command: 'claim', taskId: 'TASK-42' }, { command: 'done', taskId: 'TASK-42' }]);
+  const recordName = fs.readdirSync(path.join(claudeDir, 'auto-session', 'runs')).find((name) => name.endsWith('-task-TASK-42.json'));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(claudeDir, 'auto-session', 'runs', recordName))).taskId, 'TASK-42');
+});
+
+test('選定後に台帳側で完了になったタスクは起動も claim もしない', async () => {
+  const claudeDir = path.join(isolatedHome, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'next-session.md'), '<!-- NEXT-SESSION v1 -->\n## 残TODO\n');
+  const ledgerCalls = [];
+  const logs = [];
+  let ran = 0;
+  const originalLog = console.log;
+  console.log = (message) => logs.push(String(message));
+  try {
+    const code = await main(['--count', '1', '--feedback-count', '0'], {
+      listFeedbackIssues: () => [],
+      listTaskLedgerItems: async (filters) => filters.taskId
+        ? [{ taskId: filters.taskId, 件名: '納品済み', 状態: '完了' }]
+        : [{ taskId: 'TASK-99', 件名: '納品済み' }],
+      runTaskLedger: async (args) => ledgerCalls.push(args),
+      resolveClaudeExe: () => '/fake/claude',
+      runChild: async () => { ran += 1; return { status: 'success', exitCode: 0, stdout: '完了', stderr: '', startedAt: new Date().toISOString(), endedAt: new Date().toISOString() }; },
+      notify: async () => {},
+    });
+    assert.equal(code, 0);
+  } finally { console.log = originalLog; }
+  assert.equal(ran, 0);
+  assert.deepEqual(ledgerCalls, []);
+  assert.ok(logs.some((line) => line.includes('台帳側で完了済みのため起動しません')));
+});
+
+test('taskClosedBeforeLaunch は再確認の失敗で実行側に倒す', async () => {
+  for (const key of ['rows', 'items', 'tasks']) {
+    assert.equal(await taskClosedBeforeLaunch(async () => ({ [key]: [{ taskId: 'T', 状態: '完了' }] }), 'T'), true);
+  }
+  assert.equal(await taskClosedBeforeLaunch(async () => [{ taskId: 'T', 状態: '完了' }], 'T'), true);
+  assert.equal(await taskClosedBeforeLaunch(async () => [{ taskId: 'T', 状態: '作業中' }], 'T'), false);
+  assert.equal(await taskClosedBeforeLaunch(async () => { throw new Error('ledger down'); }, 'T'), false);
+});
+
+test('task-ledger 取得失敗でも next-session TODO を実行する', async () => {
+  const claudeDir = path.join(isolatedHome, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'next-session.md'), '<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 既存TODOを続行\n');
+  let ran = 0; const warnings = []; const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    const code = await main(['--count', '1', '--feedback-count', '0'], {
+      listFeedbackIssues: () => [], listTaskLedgerItems: async () => { throw new Error('ledger down'); },
+      resolveClaudeExe: () => '/fake/claude',
+      runChild: async () => { ran++; return { status: 'success', exitCode: 0, stdout: '完了', stderr: '', startedAt: new Date().toISOString(), endedAt: new Date().toISOString() }; },
+      notify: async () => {},
+    });
+    assert.equal(code, 0); assert.equal(ran, 1);
+    assert.ok(warnings.some((line) => /task-ledger の取得に失敗.*ledger down/.test(line)));
+  } finally { console.warn = originalWarn; }
+});
+
+test('通知URLは feedback-intake を notify に置き換え、query を捨てる', () => {
+  assert.equal(feedbackNotifyUrl('https://relay.example/api/feedback-intake?pending=1'), 'https://relay.example/api/notify');
+  assert.equal(feedbackNotifyUrl('not a url'), '');
+});
+
+test('GitHub remote URL は形式・末尾・大文字小文字の差を owner/repo に正規化する', () => {
+  assert.equal(normalizeGitHubRepo('https://github.com/owner/repo.git'), 'owner/repo');
+  assert.equal(normalizeGitHubRepo('git@github.com:owner/repo'), 'owner/repo');
+  assert.equal(normalizeGitHubRepo('https://github.com/owner/repo/'), 'owner/repo');
+  assert.equal(normalizeGitHubRepo('HTTPS://GITHUB.COM/Owner/Repo.GIT/'), 'owner/repo');
+});
+
+test('feedbackRepoCwd は不一致 remote を飛ばして一致する既存作業ツリーを選ぶ', () => {
+  const root = '/repos';
+  const wrong = path.join(root, 'wrong-folder');
+  const matched = path.join(root, '日本語フォルダ');
+  const io = {
+    readdir: () => [
+      { name: 'wrong-folder', isDirectory: () => true },
+      { name: '日本語フォルダ', isDirectory: () => true },
+    ],
+    exists: (candidate) => candidate === path.join(wrong, '.git') || candidate === path.join(matched, '.git'),
+    remoteUrl: (candidate) => ({
+      status: 0,
+      stdout: candidate === wrong ? 'git@github.com:other/repo.git' : 'https://github.com/Owner/Repo.git',
+    }),
+  };
+  assert.equal(feedbackRepoCwd('owner/repo', { roots: [root], io }), matched);
+});
+
+test('todoExclusionReason は他セッションが着手中の項目を除外する', () => {
+  assert.equal(todoExclusionReason('別セッションですでに着手した項目'), '他セッションが着手中');
+  assert.equal(todoExclusionReason('この対応は着手中'), '');
+  assert.equal(todoExclusionReason('担当者が作業中'), '');
+  assert.equal(todoExclusionReason('別セッションで確認する'), '');
+  assert.equal(todoExclusionReason('次回着手する'), '');
+});
+
+test('実物の gemini-cli TODO は先頭だけを採用し、後続を重複として表示できる', () => {
+  const todos = [
+    '**MCP `gemini-cli` の復旧**（上記「次の1目的」）',
+    '**MCP `gemini-cli` の復旧**（2026-08-28 発見・未着手）。セッション開始時に …',
+  ];
+  assert.equal(dedupeKey(todos[0]), 'MCPgemini-cliの復旧（上記「次の1目的」）');
+  assert.deepEqual(dedupeTodos(todos), [todos[0]]);
+  assert.deepEqual(filterTodos(todos), [todos[0]]);
+  assert.deepEqual(todoExclusionReasons(todos), ['', '重複（先の項目と同一）']);
+});
+
+test('他セッションの進行中差分は除外し、発見・積み残しだけは採用する', () => {
+  const active = '**ブース制作アプリのローカル未コミット差分は別セッションの進行中作業**（今回は触っていない）: … **他セッションの作業なので勝手に commit しない**';
+  const leftover = '**別セッション 739b053e の積み残し・日付ゲート付き**（2026-08-28 以降に実行）';
+  const discovered = '**別セッション 26624db2 で発見**: 復旧する';
+  const today = new Date(2026, 7, 30);
+  assert.equal(todoExclusionReason(active, today), '他セッションが着手中');
+  assert.equal(todoExclusionReason(leftover, today), '');
+  assert.equal(todoExclusionReason(discovered, today), '');
+  assert.deepEqual(filterTodos([active, leftover, discovered], today), [leftover, discovered]);
+});
+
+test('未来日の以降ゲートだけを固定日付基準で除外する', () => {
+  const today = new Date(2026, 7, 26);
+  assert.equal(todoExclusionReason('2026-08-27 以降に実行', today), '2026-08-27以降');
+  assert.equal(todoExclusionReason('2026-08-26 以降に実行', today), '');
+  assert.equal(todoExclusionReason('2026-08-25 以降に実行', today), '');
+  assert.deepEqual(
+    filterTodos(['今すぐ実行', '2026-08-27 以降に実行', '2026-08-26 以降に実行'], today),
+    ['今すぐ実行', '2026-08-26 以降に実行'],
+  );
+});
+
+test('再確認日が未来のTODOだけを寝かせ、当日以降は復帰させる', () => {
+  const today = new Date(2026, 10, 4); // 2026-11-04 ローカル
+  assert.equal(todoExclusionReason('L&B 共有待ち（再確認: 2026-11-10）', today), '2026-11-10まで再確認待ち');
+  assert.equal(todoExclusionReason('L&B 共有待ち（再確認：2026-11-10）', today), '2026-11-10まで再確認待ち');
+  assert.equal(todoExclusionReason('L&B 共有待ち（再確認: 2026-11-04）', today), '');
+  assert.equal(todoExclusionReason('L&B 共有待ち（再確認: 2026-10-30）', today), '');
+  assert.equal(todoExclusionReason('再確認: の書式を直す', today), '');
+});
+
+test('時刻付きの以降ゲート（22:00 JST 以降に着手）も除外する（2026-10-29 quota-sweep:codex 4連続 exhausted の原因）', () => {
+  const gated = '【2026-10-30 22:00 JST 以降に着手・それより前は着手しない】アサインアプリの高速化';
+  // ゲート（2026-10-30T22:00 JST = 13:00Z）を JST 壁時計で比較する。実行マシンの
+  // タイムゾーンに依らず決まるよう、基準時刻は Date.UTC で固定した JST 時刻を与える。
+  assert.equal(todoExclusionReason(gated, new Date(Date.UTC(2026, 9, 29, 12, 0))), '2026-10-30 22:00 JST以降'); // JST 10-29 21:00（ゲート前）
+  assert.equal(todoExclusionReason(gated, new Date(Date.UTC(2026, 9, 30, 12, 0))), '2026-10-30 22:00 JST以降'); // JST 10-30 21:00（ゲート前）
+  assert.equal(todoExclusionReason(gated, new Date(Date.UTC(2026, 9, 30, 13, 0))), ''); // JST 10-30 22:00（ゲート時刻ちょうど）
+  assert.equal(todoExclusionReason(gated, new Date(Date.UTC(2026, 9, 31, 0, 0))), ''); // JST 10-31 09:00（ゲート後）
+  // 時刻なしの従来形式は従来どおり
+  assert.equal(todoExclusionReason('2026-08-27 以降に実行', new Date(2026, 7, 26)), '2026-08-27以降');
+});
+
+test('pickCwd は実在しない判定先を既存の標準リポジトリへフォールバックする', () => {
+  const exists = () => false;
+  assert.equal(pickCwd('案件Aを直す', exists, { 案件A: '/missing' }), DEFAULT_REPO);
+  assert.equal(pickCwd('その他', exists, {}), DEFAULT_REPO);
+});
+
+test('pickCwd は注入された存在判定で候補と標準リポジトリを選ぶ', () => {
+  const repo = '/repos/project-a';
+  assert.equal(pickCwd('案件Aを直す', (candidate) => candidate === repo, { 案件A: repo }), repo);
+  assert.equal(pickCwd('その他', () => true, {}), DEFAULT_REPO);
+});
+
+test('loadConfig は設定なし・破損時に組み込み設定を返す', () => {
+  assert.deepEqual(loadConfig('/home/x', () => { throw new Error('ENOENT'); }), { historyCwd: '', repoByKeyword: BUILTIN_REPO_BY_KEYWORD });
+  assert.deepEqual(loadConfig('/home/x', () => '{broken'), { historyCwd: '', repoByKeyword: BUILTIN_REPO_BY_KEYWORD });
+});
+
+test('loadConfig は正常な設定を読む', () => {
+  const config = loadConfig('/home/x', () => JSON.stringify({ historyCwd: '/history', repoByKeyword: { 案件A: '/repo-a' } }));
+  assert.deepEqual(config, { historyCwd: '/history', repoByKeyword: { ...BUILTIN_REPO_BY_KEYWORD, 案件A: '/repo-a' } });
+});
+
+function historyDeps(items, existing = new Set(items.map((item) => item.cwd))) {
+  return {
+    projectsDir: '/projects',
+    listDirs: () => items.map((item) => `/projects/${item.bucket}`),
+    newestTranscript: (bucket) => {
+      const item = items.find((candidate) => bucket.endsWith(candidate.bucket));
+      return { path: `${bucket}/latest.jsonl`, mtimeMs: item.mtimeMs };
+    },
+    readCwd: (file) => items.find((item) => file.includes(item.bucket)).cwd,
+    exists: (candidate) => existing.has(candidate),
+  };
+}
+
+test('detectHistoryCwd はバケット名と cwd スラッグが一致する最新候補を返す', () => {
+  const cwd = '/Users/example/work';
+  assert.equal(detectHistoryCwd(historyDeps([{ bucket: '-Users-example-work', cwd, mtimeMs: 2 }])), cwd);
+});
+
+test('detectHistoryCwd はドライブレターの大小を反転して既存バケットに合わせる', () => {
+  const recorded = String.raw`C:\Users\example\Downloads\work`;
+  const expected = String.raw`c:\Users\example\Downloads\work`;
+  assert.equal(detectHistoryCwd(historyDeps([{ bucket: 'c--Users-example-Downloads-work', cwd: recorded, mtimeMs: 2 }], new Set([expected]))), expected);
+});
+
+test('detectHistoryCwd は実在しない候補を飛ばし、全滅時はリポジトリルートへ戻る', () => {
+  const items = [
+    { bucket: '-missing', cwd: '/missing', mtimeMs: 3 },
+    { bucket: '-valid', cwd: '/valid', mtimeMs: 2 },
+  ];
+  assert.equal(detectHistoryCwd(historyDeps(items, new Set(['/valid']))), '/valid');
+  assert.equal(detectHistoryCwd(historyDeps(items, new Set())), DEFAULT_REPO);
+});
+
+test('buildChildArgs は cwd が異なる場合だけ --add-dir を2つ渡す', () => {
+  const repoCwd = String.raw`C:\repo`;
+  const different = buildChildArgs(repoCwd, historyCwd);
+  const same = buildChildArgs(repoCwd, repoCwd);
+  assert.deepEqual(different.slice(-4), ['--add-dir', repoCwd, '--add-dir', historyCwd]);
+  assert.equal(different.filter((arg) => arg === '--add-dir').length, 2);
+  assert.equal(same.filter((arg) => arg === '--add-dir').length, 1);
+  assert.deepEqual(same.slice(-2), ['--add-dir', repoCwd]);
+  // settings.json の permissions.defaultMode に依存せず、常に明示で auto を渡す
+  // (2026-09-17: 実機の settings.json に defaultMode が無く無人実行が承認待ちで止まっていたため)。
+  assert.equal(different[different.indexOf('--permission-mode') + 1], 'auto');
+  assert.equal(same[same.indexOf('--permission-mode') + 1], 'auto');
+  assert.equal(different[different.indexOf('--model') + 1], 'opus');
+});
+
+test('buildChildArgs は環境変数で無人実行モデルを上書きできる', () => {
+  process.env.ORGIAST_AUTO_SESSION_MODEL = 'haiku';
+  try {
+    const args = buildChildArgs('C:\\repo', 'C:\\repo');
+    assert.equal(args[args.indexOf('--model') + 1], 'haiku');
+  } finally { delete process.env.ORGIAST_AUTO_SESSION_MODEL; }
+});
+
+test('resolveClaudeExe はバージョンを数値セグメントで比較する', () => {
+  const oldExe = String.raw`C:\Users\x\.vscode\extensions\anthropic.claude-code-2.1.9-win32-x64\resources\native-binary\claude.exe`;
+  const newExe = String.raw`C:\Users\x\.vscode\extensions\anthropic.claude-code-2.1.245-win32-x64\resources\native-binary\claude.exe`;
+  assert.equal(resolveClaudeExe([oldExe, newExe]), newExe);
+  assert.equal(resolveClaudeExe([]), 'claude');
+});
+
+test('resolveClaudeExe は任意のプラットフォーム接尾辞を扱い CLAUDE_CLI を優先する', () => {
+  const darwin = '/Users/x/.vscode/extensions/anthropic.claude-code-2.2.1-darwin-arm64/resources/native-binary/claude';
+  assert.equal(resolveClaudeExe([darwin]), darwin);
+  assert.equal(resolveClaudeExe([darwin], '/opt/claude-custom'), '/opt/claude-custom');
+});
+
+test('extractSessionId は正常な JSON から session_id を抽出する', () => {
+  assert.equal(extractSessionId('{"session_id":"123e4567-e89b-42d3-a456-426614174000","result":"ok"}'), '123e4567-e89b-42d3-a456-426614174000');
+});
+
+test('extractSessionId はゴミや複数行が混ざっても最後の session_id を抽出する', () => {
+  const stdout = 'warning\n{"session_id":"123e4567-e89b-42d3-a456-426614174000"}\nnoise {"session_id": "987e6543-e21b-42d3-a456-426614174999"}';
+  assert.equal(extractSessionId(stdout), '987e6543-e21b-42d3-a456-426614174999');
+});
+
+test('extractSessionId は UUID が見つからなければ空文字を返す', () => {
+  assert.equal(extractSessionId('{"session_id":"not-a-uuid"}\ngarbage'), '');
+});
+
+test('transcriptPath は Windows cwd をスラッグ化して隔離 HOME 配下の絶対パスを返す', () => {
+  const sessionId = '123e4567-e89b-42d3-a456-426614174000';
+  assert.equal(
+    transcriptPath(String.raw`C:\Users\example\Downloads\repo`, sessionId),
+    path.resolve(isolatedHome, '.claude', 'projects', 'C--Users-example-Downloads-repo', `${sessionId}.jsonl`),
+  );
+  assert.equal(transcriptPath(String.raw`C:\Users\example`, ''), '');
+});
+
+test('transcriptPath は小文字ドライブのバケットを維持する', () => {
+  const sessionId = '123e4567-e89b-42d3-a456-426614174000';
+  assert.ok(transcriptPath(historyCwd, sessionId).includes('c--Users-example-Downloads-work'));
+});
+
+test('buildPrompt は実リポジトリで git -C を使うよう指示する', () => {
+  const repoCwd = String.raw`C:\Users\example\Downloads\repo`;
+  const prompt = buildPrompt('実装する', {}, repoCwd, '/tmp/run.summary.md', 60, new Date('2026-08-26T00:00:00Z'));
+  assert.ok(prompt.includes(`git -C "${repoCwd}"`));
+  assert.ok(prompt.includes(`--cwd "${repoCwd}"`));
+  assert.ok(prompt.indexOf('セッションの作業ディレクトリは履歴を揃えるため') < prompt.indexOf('実装本体は'));
+});
+
+test('全 auto-session プロンプトは Windows の --cwd をダブルクォートする', () => {
+  const repoCwd = String.raw`C:\Users\example\Downloads\repo`;
+  const prompts = [
+    buildPrompt('実装する', {}, repoCwd, '/tmp/run.summary.md'),
+    buildFeedbackPrompt({ number: 1, title: '報告', url: 'https://example.test/1', body: '' }, 'owner/repo', repoCwd, '/tmp/run.summary.md'),
+    buildRolePrompt('tester', repoCwd, '/tmp/run.summary.md'),
+  ];
+  for (const prompt of prompts) {
+    assert.ok(prompt.includes(`--cwd "${repoCwd}"`));
+    assert.ok(!prompt.includes(`--cwd ${repoCwd}`));
+  }
+});
+
+test('buildPrompt は作成席でbase pushと変更パスに応じたPR着地を行う', () => {
+  const prompt = buildPrompt('実装する', {}, '/repo', '/tmp/run.summary.md', 60);
+  assert.ok(prompt.includes('pr-land.mjs'));
+  assert.ok(prompt.includes('access-doctor.mjs --fix'));
+  assert.ok(prompt.includes('pr-merge.mjs'));
+  assert.ok(prompt.includes('.github/workflows/*'));
+  assert.ok(prompt.includes('kim-PC に頼まない'));
+  assert.ok(prompt.includes('automerge'));
+  assert.ok(prompt.includes('CI 合格を待って'));
+});
+
+test('buildPrompt は権限不足を別PCへ移送せず自己診断へ案内する', () => {
+  const prompt = buildPrompt('実装する', {}, '/repo', '/tmp/run.summary.md', 60);
+  assert.ok(prompt.includes('access-doctor.mjs --fix'));
+  assert.ok(prompt.includes('権限・鍵・マージを kim-PC に頼まない'));
+  assert.ok(!prompt.includes('w018-PC'));
+});
+
+test('localDate は Date のローカル日付を YYYY-MM-DD で返す', () => {
+  const date = new Date('2026-08-26T18:20:00Z');
+  const expected = [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+  assert.equal(localDate(date), expected);
+});
+
+test('timeout と failure の行だけ stderr 末尾の理由を付ける', () => {
+  const base = { todo: '実装する', transcript: '', resumeCommand: '' };
+  const timeout = formatResultLine({ ...base, status: 'timeout', stderr: '一行目\nタイムアウトしました' }, 60);
+  const failure = formatResultLine({ ...base, status: 'failure', stderr: 'x'.repeat(210) }, 1);
+  const success = formatResultLine({ ...base, status: 'success', stderr: '表示しない' }, 1);
+  assert.ok(timeout.includes(' | 理由: 一行目 タイムアウトしました'));
+  assert.ok(failure.endsWith(` | 理由: ${'x'.repeat(200)}`));
+  assert.ok(!success.includes(' | 理由:'));
+});
+
+test('buildPrompt は逐次サマリと長時間ポーリング禁止を指示する', () => {
+  const summaryFile = String.raw`C:\Users\example\.claude\auto-session\runs\2026-08-27-1.summary.md`;
+  const prompt = buildPrompt('実装する', {}, String.raw`C:\repo`, summaryFile, 60);
+  assert.ok(prompt.includes(summaryFile));
+  assert.ok(prompt.includes('5分を超えるポーリングをしてはいけない'));
+  assert.ok(prompt.includes('開始から 50 分でまとめに入'));
+  assert.ok(prompt.includes('run_in_background'));
+  assert.ok(prompt.includes('ScheduleWakeup'));
+});
+
+test('recoverSessionId は実行時間窓の外に作られた jsonl を選ばない', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'recover-session-'));
+  const id = '123e4567-e89b-42d3-a456-426614174000';
+  fs.writeFileSync(path.join(dir, `${id}.jsonl`), '{}');
+  const birthtime = fs.statSync(path.join(dir, `${id}.jsonl`)).birthtimeMs;
+  assert.equal(recoverSessionId({
+    dir,
+    startedAt: new Date(birthtime + 120_000).toISOString(),
+    endedAt: new Date(birthtime + 180_000).toISOString(),
+  }), '');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('recoverSessionId は UUID でないファイル名を除外する', () => {
+  const now = Date.now();
+  assert.equal(recoverSessionId({
+    dir: '/projects', startedAt: new Date(now - 1_000), endedAt: new Date(now + 1_000),
+    readdir: () => ['agent-latest.jsonl'], stat: () => ({ birthtimeMs: now }),
+  }), '');
+});
+
+test('recoverSessionId は候補ゼロや読み取り失敗で空文字を返す', () => {
+  assert.equal(recoverSessionId({ dir: '/empty', startedAt: new Date(), endedAt: new Date(), readdir: () => [] }), '');
+  assert.equal(recoverSessionId({ dir: '/missing', startedAt: new Date(), endedAt: new Date(), readdir: () => { throw new Error('ENOENT'); } }), '');
+});
+
+test('appendClosedSession は既存 ID を保持したまま追記し、同じ ID は二重追加しない', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'closed-session-'));
+  const file = path.join(dir, 'closed-sessions.json');
+  const existing = '123e4567-e89b-42d3-a456-426614174000';
+  const added = '987e6543-e21b-42d3-a456-426614174999';
+  fs.writeFileSync(file, JSON.stringify({ ids: [existing] }));
+  assert.equal(appendClosedSession(file, added), true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).ids, [existing, added]);
+  assert.equal(appendClosedSession(file, added), false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).ids, [existing, added]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('appendClosedSession は壊れた JSON から安全に新しい一覧を作る', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'closed-session-broken-'));
+  const file = path.join(dir, 'closed-sessions.json');
+  const id = '123e4567-e89b-42d3-a456-426614174000';
+  fs.writeFileSync(file, '{broken');
+  assert.doesNotThrow(() => appendClosedSession(file, id));
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { ids: [id] });
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('decideRun は kill switch・有効ロック・stale lock を判定する', () => {
+  assert.equal(decideRun({ disabled: true, lockExists: false }).run, false);
+  assert.equal(decideRun({ disabled: false, lockExists: true, lockPid: 12, lockAgeMs: 1000, pidAlive: true }).run, false);
+  assert.equal(decideRun({ disabled: false, lockExists: true, lockPid: 12, lockAgeMs: 7 * 60 * 60 * 1000, pidAlive: true }).run, true);
+  assert.equal(decideRun({ disabled: false, lockExists: true, lockPid: 12, lockAgeMs: 1000, pidAlive: false }).run, true);
+});
+
+test('markTodoDone は該当行だけを変更し、他行は変えない', () => {
+  const changed = markTodoDone(sample, '実装する', '2026-08-26 完了（PR #42）');
+  const expected = sample.replace('1. 実装する\n', '1. ~~実装する~~ → ✅ 2026-08-26 完了（PR #42）\n');
+  assert.equal(changed, expected);
+  assert.ok(changed.endsWith('1. 歴史上のTODO\n'));
+});
+
+test('markTodoDone は先頭でないブロックの TODO をマークし、他の全バイトを維持する', () => {
+  const changed = markTodoDone(sample, '歴史上のTODO', '2026-08-30 完了（auto-session）');
+  const expected = sample.replace('1. 歴史上のTODO\n', '1. ~~歴史上のTODO~~ → ✅ 2026-08-30 完了（auto-session）\n');
+  assert.equal(changed, expected);
+});
+
+test('markTodoDone は複数ブロックに重複した同一 TODO をすべてマークする', () => {
+  const duplicated = `<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 重複するTODO\n2. 別のTODO\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n1. 重複するTODO\n`;
+  const changed = markTodoDone(duplicated, '重複するTODO', '2026-08-30 完了（auto-session）');
+  assert.equal(changed.match(/~~重複するTODO~~/g)?.length, 2);
+  assert.ok(changed.includes('2. 別のTODO\n'));
+});
+
+test('markTodoDone は取り消し線付きまたは該当行なしなら入力を完全一致で返す', () => {
+  assert.equal(markTodoDone(sample, '~~完了済み~~', '2026-08-30 完了（auto-session）'), sample);
+  assert.equal(markTodoDone(sample, '存在しないTODO', '2026-08-30 完了（auto-session）'), sample);
+});
+
+test('isTodoAlreadyDone は完了印のある同一タイトルだけを検出する', () => {
+  const md = `## 残TODO\n35. ~~P1: 消化率が 14.3% に低下~~ → ✅ 2026-09-13 完了（PR #392）\n36. P1: 未完了\n37. ~~別のTODO~~ → ✅ 2026-09-13 完了\n`;
+  assert.equal(isTodoAlreadyDone(md, 'P1: 消化率が 14.3% に低下'), true);
+  assert.equal(isTodoAlreadyDone(md, 'P1: 未完了'), false);
+  assert.equal(isTodoAlreadyDone(md, 'P1: 消化率が 14.3% に低下した'), false);
+});
+
+test('isTodoAlreadyDone は複数行 TODO の1行目だけで判定し、空のタイトルを拒否する', () => {
+  const md = `35、 ~~P1: 消化率が 14.3% に低下~~ → ✅ 完了\n`;
+  assert.equal(isTodoAlreadyDone(md, 'P1: 消化率が 14.3% に低下\n   詳細な本文'), true);
+  assert.equal(isTodoAlreadyDone(md, ''), false);
+  assert.equal(isTodoAlreadyDone(md, ' \t '), false);
+});
+
+test('isTodoAlreadyDone は [完了 …] 形の印でも検出する(2026-09-28)', () => {
+  // 印の書き方が増えるたびに再実行保護が片方だけ効かなくなるのを避け、両形式を同じ判定にする。
+  const md = `## 残TODO\n1. [完了 2026-09-27 #584] 済んだ作業\n2. ~~済んだ作業2~~ → ✅ 完了\n3. [完了 2026-09-27 #584] 別の作業\n`;
+  assert.equal(isTodoAlreadyDone(md, '済んだ作業'), true);
+  assert.equal(isTodoAlreadyDone(md, '済んだ作業2'), true);
+  assert.equal(isTodoAlreadyDone(md, '別の作業'), true);
+  assert.equal(isTodoAlreadyDone(md, 'やっていない作業'), false);
+});
+
+test('isTodoAlreadyDone は正規表現メタ文字をタイトルの文字として扱う', () => {
+  const md = `1. ~~P1: axb c d~~ → ✅ 完了\n2) ~~P1: a.b (c) [d]~~ → ✅ 完了\n`;
+  assert.equal(isTodoAlreadyDone(md, 'P1: a.b (c) [d]'), true);
+  assert.equal(isTodoAlreadyDone(md, 'P1: a.b (c) [x]'), false);
+});
+
+test('isTodoAlreadyDone は行末に注記と ✅ を後付けされた完了 TODO も検出する(2026-10-25)', () => {
+  // 実物: バッチ選定後に別セッションが行末へ注記を足したため、原文の完全一致では
+  // 完了を見失い、済んだ TODO にセッションを1本消費した
+  // (runs/2026-10-25-manifest.json の selectedTodos[5] / notify-kim:961e…)。
+  const original = '[ ] 通知の原因調査・修復: 宛先: 不明（DM 未解決） 【DESKTOP-BDOAK99・user の Claude Code】プロジェクト: quota-sweep-repo';
+  const md = `## 残TODO\n1. ${original} 記録する。 ~~（完了DMを失敗通知として再起票していた不具合・PR #1068 で修正）~~ → ✅ 2026-10-25 完了 <!-- notify-kim:961e726d2b526028578e -->\n2. [ ] 未着手の別作業\n`;
+  assert.equal(isTodoAlreadyDone(md, original), true);
+  // 文頭だけ同じで別の作業の TODO は完了扱いにしない（共通接頭辞が短い）。
+  assert.equal(isTodoAlreadyDone(md, '[ ] 通知の原因調査・修復: 宛先: 別PC の Claude Code'), false);
+  assert.equal(isTodoAlreadyDone(md, '[ ] 未着手の別作業'), false);
+});
+
+test('isTodoAlreadyDone は notify-kim マーカー一致で本文の微差を吸収する(2026-11-16)', () => {
+  // 実物: 「検証」vs「再検証」の1文字差で90%閾値を超えず、完了済みTODOにセッションを消費
+  const md = `## 残TODO\n1. ~~通知の原因調査・修復: 検証する。人の操作が不可欠~~ → ✅ 2026-11-16 完了 <!-- notify-kim:1a17781ce18b7b648866 -->\n2. [ ] 別の作業\n`;
+  // notify-kim マーカーが一致すれば本文が微妙に違っても完了
+  assert.equal(isTodoAlreadyDone(md, '[ ] 通知の原因調査・修復: 再検証する。人の操作が不可欠 <!-- notify-kim:1a17781ce18b7b648866 -->'), true);
+  // マーカーが異なれば別の通知として扱う
+  assert.equal(isTodoAlreadyDone(md, '[ ] 通知の原因調査・修復: 検証する。人の操作が不可欠 <!-- notify-kim:0000000000000000 -->'), false);
+  // マーカーが無ければ従来の本文一致判定に委ねる
+  assert.equal(isTodoAlreadyDone(md, '[ ] 別の作業'), false);
+});
+
+test('writeTodoDone は書く直前の再読込内容へ完了印を付け、並行追加行を維持する', () => {
+  const batchSnapshot = sample;
+  const latest = batchSnapshot.replace('1. 歴史上のTODO\n', '1. 歴史上のTODO\n2) 他セッションが追加\r\n');
+  let written = '';
+  const changed = writeTodoDone('/next-session.md', '歴史上のTODO', '2026-08-30 完了（auto-session）', {
+    read: () => latest,
+    write: (_file, content) => { written = content; },
+  });
+  assert.equal(changed, true);
+  assert.equal(written, latest.replace('1. 歴史上のTODO\n', '1. ~~歴史上のTODO~~ → ✅ 2026-08-30 完了（auto-session）\n'));
+  assert.ok(written.includes('2) 他セッションが追加\r\n'));
+});
+
+test('writeTodoDone は該当行が無ければ throw せず書き込まない', () => {
+  let writes = 0;
+  assert.doesNotThrow(() => assert.equal(writeTodoDone('/next-session.md', '存在しないTODO', 'note', {
+    read: () => sample,
+    write: () => { writes += 1; },
+  }), false));
+  assert.equal(writes, 0);
+});
+
+const realShape = `<!-- NEXT-SESSION v1 -->
+## 対象（今回の作業）
+自動セッション
+## 残TODO（次の1件を先頭に）
+1. **複数行の実装を完了する**
+   - 既存の挙動を維持する
+   - Windows 実機でもテストする
+2. ~~完了済みの作業~~
+   補足は残っている
+3. 〔ブロック中〕API待ち
+4. 実行可能な別作業
+
+## 完了条件（必須）
+テスト green
+`;
+
+test('parseHandoff は実物形式の見出しと複数行 TODO を解析し、除外対象も保持する', () => {
+  const parsed = parseHandoff(realShape);
+  assert.ok(parsed.todos.length > 0);
+  assert.deepEqual(parsed.todos, [
+    '**複数行の実装を完了する**\n   - 既存の挙動を維持する\n   - Windows 実機でもテストする',
+    '~~完了済みの作業~~\n   補足は残っている',
+    '〔ブロック中〕API待ち',
+    '実行可能な別作業',
+  ]);
+  assert.deepEqual(filterTodos(parsed.todos), [parsed.todos[0], '実行可能な別作業']);
+  assert.equal(parsed.sections['対象'], '## 対象（今回の作業）\n自動セッション');
+  assert.equal(parsed.sections['完了条件'], '## 完了条件（必須）\nテスト green');
+});
+
+test('markTodoDone は複数行 TODO の先頭行だけを完了表示にする', () => {
+  const todo = parseHandoff(realShape).todos[0];
+  const changed = markTodoDone(realShape, todo, '2026-08-26 完了（PR #42）');
+  assert.ok(changed.includes('1. ~~**複数行の実装を完了する**~~ → ✅ 2026-08-26 完了（PR #42）\n   - 既存の挙動を維持する'));
+  assert.ok(changed.includes('   - Windows 実機でもテストする'));
+});
+
+test('spawn が同期 throw しても reject せず failure として resolve する', async () => {
+  // Windows の spawn は EFTYPE/ENOENT を同期 throw する。child.on('error') では拾えないため、
+  // 以前は Promise executor の外へ抜けて main が exit 1 で死に、残りのTODOも最終通知も消えていた。
+  // NUL を含むパスはどのプラットフォームでも spawn が同期 throw するので、その経路を移植性高く踏める。
+  const result = await runChild(`bogus${String.fromCharCode(0)}path`, 'prompt', process.cwd(), process.cwd(), 1000);
+  assert.equal(result.status, 'failure');
+  assert.equal(result.launchFailed, true);
+  assert.ok(result.stderr.length > 0);
+});
+
+test('「以下は下の別ブロックの残TODO…」型の案内文は参照のみとして除外する', () => {
+  // 実物にあった文言。太字を含むため「太字が無い」条件では拾えず、子セッションに案内文だけが渡っていた。
+  const guide = '36. 以下は**下の別ブロックの残TODO（1〜14）**をそのまま引き継いだもの。内容は下を見ること';
+  assert.equal(todoExclusionReason(guide, new Date(2026, 7, 30)), '参照のみ（作業内容が無い）');
+  // 通常のTODOは巻き込まない
+  const normal = '10. **`is-entry.mjs` 未統一の掃除**（`line-digest.mjs` は素の比較のまま）。以下の手順で直す';
+  assert.equal(todoExclusionReason(normal, new Date(2026, 7, 30)), '');
+});
+
+test('buildPrompt は fleet-mail の [判断依頼] へ返信も判断もしないよう指示する', () => {
+  const prompt = buildPrompt('実装する', {}, '/repo', '/tmp/run.summary.md', 60);
+  assert.match(prompt, /\[判断依頼\][^\n]*返信も判断も行わない/);
+});
+
+test('buildPrompt は夜間でも送信・支払い・削除・課金変更をせず、【夜間】付きを優先する', () => {
+  const prompt = buildPrompt('実装する', {}, '/repo', '/tmp/run.summary.md', 60);
+  assert.match(prompt, /支払い・削除・課金変更も行わない/);
+  assert.match(prompt, /承認待ち（朝）/);
+  assert.match(prompt, /【夜間】/);
+});
+
+test('runChild は冷却中・失敗時の codex-do と保留・最終フォールバックを扱う', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-lane-'));
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  const configDir = path.join(home, '.claude');
+  const toolsDir = path.join(home, 'tools');
+  fs.mkdirSync(configDir);
+  fs.mkdirSync(toolsDir);
+  const traceFile = path.join(home, 'trace.jsonl');
+  const trace = `fs.appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ lane: process.env.ORGIAST_HEADLESS_JOB, args: process.argv.slice(2), stdin, prompt: process.argv.includes('--prompt-file') ? fs.readFileSync(process.argv[process.argv.indexOf('--prompt-file') + 1], 'utf8') : '' }) + '\\n');`;
+  const script = (code) => `import fs from 'node:fs'; const stdin = fs.readFileSync(0, 'utf8'); ${trace} ${code}`;
+  try {
+    const scenarios = [
+      { name: 'cheap timeout retries alternate within total budget', cheapTimeout: true, alternate: true, lanes: ['cheap-code:deepseek', 'cheap-code:glm'], status: 'success' },
+      { name: 'both cheap timeouts reserve budget for codex-do', bothCheapTimeout: true, alternate: true, code: 0, lanes: ['cheap-code:deepseek', 'cheap-code:glm', 'codex-do'], status: 'success' },
+      { name: 'all executors timeout within total budget', bothCheapTimeout: true, alternate: true, timeout: true, lanes: ['cheap-code:deepseek', 'cheap-code:glm', 'codex-do'], status: 'timeout' },
+      { name: '両方冷却中は cheap-code を起動しない', cooling: true, code: 0, lanes: ['codex-do'], status: 'success' },
+      { name: 'cheap-code と alternate 失敗後は1回だけ codex-do', alternate: true, code: 0, lanes: ['cheap-code:deepseek', 'cheap-code:glm', 'codex-do'], status: 'success' },
+      { name: '75 は Claude 有効でも保留する', cooling: true, code: 75, claude: true, lanes: ['codex-do'], status: 'failure', deferred: true },
+      { name: 'codex-do 失敗後は skipped', code: 1, lanes: ['cheap-code:deepseek', 'codex-do'], status: 'failure', skipped: true },
+      { name: 'codex-do 失敗後は Claude', cooling: true, code: 1, claude: true, lanes: ['codex-do', 'fallback-claude'], status: 'success' },
+      { name: '無効化時は従来どおり skipped', cooling: true, disabled: true, code: 0, lanes: ['cheap-code:deepseek'], status: 'failure', skipped: true },
+      { name: 'model 指定は Claude 固定', cooling: true, model: true, code: 0, lanes: ['fallback-claude'], status: 'success' },
+      { name: 'codex-do timeout は切替しない', cooling: true, timeout: true, claude: true, code: 0, lanes: ['codex-do'], status: 'timeout' },
+      { name: 'codex-do ファイル欠落は skipped', cooling: true, missing: true, lanes: [], status: 'failure', skipped: true },
+    ];
+    // Claude スタブは shebang 起動なので Windows では spawn できない。Claude レーンへ実際に落ちる
+    // シナリオだけ Windows では飛ばす(CI の Linux で検証する)。
+    const needsClaudeStub = (scenario) => scenario.lanes.includes('fallback-claude');
+    for (const scenario of scenarios) await t.test(scenario.name, { skip: process.platform === 'win32' && needsClaudeStub(scenario) ? 'shebang スタブは Windows で起動不可' : false }, async () => {
+      fs.writeFileSync(traceFile, '');
+      fs.writeFileSync(path.join(configDir, 'auto-session.env'), `ORGIAST_AUTO_SESSION_EXECUTOR=cheap-code\nORGIAST_AUTO_SESSION_PROVIDER=deepseek\nORGIAST_AUTO_SESSION_CODEX_LANE=${scenario.disabled ? 'off' : 'on'}\nORGIAST_AUTO_SESSION_CLAUDE_FALLBACK=${scenario.claude ? 'on' : 'off'}\n`);
+      // DeepSeek の推論先は OpenRouter なので、冷却状態も OpenRouter に記録される。
+      fs.writeFileSync(path.join(configDir, 'provider-cooldown.json'), JSON.stringify(scenario.cooling ? { openrouter: { until: Date.now() + 60000 }, glm: { until: Date.now() + 60000 } } : {}));
+      fs.writeFileSync(path.join(configDir, 'zai.env'), scenario.alternate ? 'ZAI_API_KEY=test' : '');
+      fs.writeFileSync(path.join(toolsDir, 'cheap-code.mjs'), script(scenario.bothCheapTimeout ? 'setInterval(() => {}, 1000);' : scenario.cheapTimeout ? "if (process.env.ORGIAST_HEADLESS_JOB.endsWith(':deepseek')) setInterval(() => {}, 1000);" : 'process.exitCode = 1;'));
+      const codexFile = path.join(toolsDir, 'codex-do.mjs');
+      fs.writeFileSync(codexFile, script(scenario.timeout ? 'setInterval(() => {}, 1000);' : `process.exitCode = ${scenario.code ?? 1};`));
+      if (scenario.missing) fs.rmSync(codexFile);
+      // Claude のスタブは stdin を消費して成功させる。
+      const claudeFile = path.join(home, 'claude-stub');
+      fs.writeFileSync(claudeFile, `#!${process.execPath}\n(async () => { const fs = require('node:fs'); let stdin = ''; for await (const chunk of process.stdin) stdin += chunk; ${trace} })();\n`, { mode: 0o755 });
+	      const budgetMs = scenario.timeout && !scenario.bothCheapTimeout ? 1500 : 5000;
+	      const toleranceMs = process.platform === "win32" && scenario.bothCheapTimeout ? 3500 : 1500;
+      const began = performance.now();
+      const result = await runChild(claudeFile, 'lane test', home, home, budgetMs, { executorRoot: home, ...(scenario.model ? { model: 'sonnet' } : {}) });
+      const elapsedMs = performance.now() - began;
+      if (scenario.bothCheapTimeout) {
+        const expectedMs = scenario.timeout ? 2 * budgetMs : Math.floor(1.5 * budgetMs);
+        assert.ok(elapsedMs >= expectedMs - toleranceMs, `elapsed ${elapsedMs}ms below expected ${expectedMs}ms`);
+        assert.ok(elapsedMs < expectedMs + toleranceMs, `elapsed ${elapsedMs}ms exceeded budget cap ${expectedMs + toleranceMs}ms`);
+      } else if (scenario.cheapTimeout) {
+        const maxExpectedMs = Math.floor(1.5 * budgetMs);
+        assert.ok(elapsedMs >= budgetMs - toleranceMs, `elapsed ${elapsedMs}ms below expected ${budgetMs}ms`);
+        assert.ok(elapsedMs < maxExpectedMs + toleranceMs, `deadline exceeded: ${elapsedMs}ms for ${maxExpectedMs + 1500}ms budget cap`);
+      } else if (scenario.timeout) {
+        assert.ok(elapsedMs >= budgetMs - 1500, `elapsed ${elapsedMs}ms below expected ${budgetMs}ms`);
+        assert.ok(elapsedMs < budgetMs + toleranceMs, `deadline exceeded: ${elapsedMs}ms for ${budgetMs}ms budget`);
+      }
+      if (scenario.bothCheapTimeout) assert.deepEqual(result.executorAttempts, [
+        { executor: 'cheap-code:deepseek', status: 'timeout' },
+        { executor: 'cheap-code:glm', status: 'timeout' },
+        { executor: 'codex-do', status: scenario.status },
+      ]);
+      const rows = fs.readFileSync(traceFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      assert.deepEqual(rows.map((row) => row.lane.replace('auto-session:', '')), scenario.lanes);
+      assert.equal(result.status, scenario.status);
+      if (scenario.cheapTimeout) assert.deepEqual(result.executorAttempts, [{ executor: 'cheap-code:deepseek', status: 'timeout' }, { executor: 'cheap-code:glm', status: 'success' }]);
+      assert.equal(result.deferred === true, scenario.deferred === true);
+      assert.equal(result.skippedNoExecutor, scenario.skipped === true);
+      assert.equal(result.executorUsed, scenario.lanes.at(-1) === 'fallback-claude' ? 'claude' : scenario.lanes.at(-1) ?? 'codex-do');
+      assert.equal(result.fallbackToClaude, !!scenario.claude && !scenario.deferred && !scenario.timeout);
+      for (const row of rows.filter((row) => row.lane.endsWith(':codex-do'))) {
+        assert.equal(row.stdin, '');
+        assert.equal(row.prompt, '[headless:auto-session]\nlane test');
+        assert.deepEqual(row.args.slice(-4), ['--cwd', home, '--origin', 'unattended']);
+        assert.equal(fs.existsSync(row.args[row.args.indexOf('--prompt-file') + 1]), false);
+      }
+    });
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    // Windows taskkill /T releases cwd handles asynchronously after the deadline.
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});
+
+test('runChild に resumeSessionId を渡すと executor 設定にかかわらず claude レーンで起動する', { skip: process.platform === 'win32' ? 'shebang スタブは Windows で起動不可' : false }, async (t) => {
+  const resumeOverride = process.env.ORGIAST_AUTO_RESUME;
+  process.env.ORGIAST_AUTO_RESUME = '1';
+  t.after(() => { resumeOverride === undefined ? delete process.env.ORGIAST_AUTO_RESUME : process.env.ORGIAST_AUTO_RESUME = resumeOverride; });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-resume-'));
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  const configDir = path.join(home, '.claude');
+  const toolsDir = path.join(home, 'tools');
+  fs.mkdirSync(configDir);
+  fs.mkdirSync(toolsDir);
+  const traceFile = path.join(home, 'trace.jsonl');
+  const trace = `fs.appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ lane: process.env.ORGIAST_HEADLESS_JOB, args: process.argv.slice(2) }) + '\\n');`;
+  const script = (code) => `import fs from 'node:fs'; const stdin = fs.readFileSync(0, 'utf8'); ${trace} process.exitCode = ${code};`;
+  try {
+    // cheap-code が既定でも resumeSessionId が指定されれば claude レーンを使う
+    fs.writeFileSync(path.join(configDir, 'auto-session.env'), 'ORGIAST_AUTO_SESSION_EXECUTOR=cheap-code\nORGIAST_AUTO_SESSION_PROVIDER=deepseek\n');
+    fs.writeFileSync(path.join(toolsDir, 'cheap-code.mjs'), script(0));
+    const claudeFile = path.join(home, 'claude-stub');
+    fs.writeFileSync(claudeFile, `#!${process.execPath}\n(async () => { const fs = require('node:fs'); let stdin = ''; for await (const chunk of process.stdin) stdin += chunk; ${trace} })();\n`, { mode: 0o755 });
+    const result = await runChild(claudeFile, 'resume test', home, home, 5000, { executorRoot: home, resumeSessionId: 'test-session-123' });
+    // claude レーンが使われ、cheap-code は起動しない
+    assert.equal(result.executorUsed, 'claude');
+    assert.equal(result.status, 'success');
+    const rows = fs.readFileSync(traceFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].lane, 'auto-session:fallback-claude');
+    // --resume 引数が渡っている
+    assert.ok(rows[0].args.includes('--resume'));
+    assert.ok(rows[0].args.includes('test-session-123'));
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});
+
+test('runChild に resumeSessionId を渡すと claude が失敗しても cheap-code にフォールバックしない', { skip: process.platform === 'win32' ? 'shebang スタブは Windows で起動不可' : false }, async (t) => {
+  const resumeOverride = process.env.ORGIAST_AUTO_RESUME;
+  process.env.ORGIAST_AUTO_RESUME = '1';
+  t.after(() => { resumeOverride === undefined ? delete process.env.ORGIAST_AUTO_RESUME : process.env.ORGIAST_AUTO_RESUME = resumeOverride; });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-resume-fail-'));
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  const configDir = path.join(home, '.claude');
+  const toolsDir = path.join(home, 'tools');
+  fs.mkdirSync(configDir);
+  fs.mkdirSync(toolsDir);
+  const traceFile = path.join(home, 'trace.jsonl');
+  const trace = `fs.appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ lane: process.env.ORGIAST_HEADLESS_JOB }) + '\\n');`;
+  const script = (code) => `import fs from 'node:fs'; ${trace} process.exitCode = ${code};`;
+  try {
+    fs.writeFileSync(path.join(configDir, 'auto-session.env'), 'ORGIAST_AUTO_SESSION_EXECUTOR=cheap-code\nORGIAST_AUTO_SESSION_PROVIDER=deepseek\nORGIAST_AUTO_SESSION_CLAUDE_FALLBACK=on\n');
+    fs.writeFileSync(path.join(toolsDir, 'cheap-code.mjs'), script(0));
+    const claudeFile = path.join(home, 'claude-stub');
+    fs.writeFileSync(claudeFile, `#!${process.execPath}\n(async () => { const fs = require('node:fs'); ${trace} process.exitCode = 1; })();\n`, { mode: 0o755 });
+    const result = await runChild(claudeFile, 'resume test', home, home, 5000, { executorRoot: home, resumeSessionId: 'test-session-456' });
+    // claude が失敗しても cheap-code にはフォールバックせず、failure で返る
+    assert.equal(result.executorUsed, 'claude');
+    assert.equal(result.status, 'failure');
+    assert.equal(result.fallbackToClaude, false);
+    const rows = fs.readFileSync(traceFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(rows.length, 1); // cheap-code は起動していない
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});
+
+test('runChild は無効時に resumeSessionId 付きの子プロセスを起動しない', async t => {
+  const before = process.env.ORGIAST_AUTO_RESUME;
+  delete process.env.ORGIAST_AUTO_RESUME;
+  try {
+    const spawnImpl = t.mock.fn(() => assert.fail('spawn must not be called'));
+    const result = await runChild('絶対に起動しない', 'prompt', process.cwd(), process.cwd(), 100, { resumeSessionId: 'disabled-session', spawnImpl });
+    assert.equal(spawnImpl.mock.callCount(), 0);
+    assert.deepEqual(result, { status: 'skipped', skippedAutoResume: true, deferred: false, executorUsed: 'none', exitCode: null, stdout: '', stderr: 'auto-resume disabled by config/auto-resume.json' });
+  } finally {
+    if (before === undefined) delete process.env.ORGIAST_AUTO_RESUME;
+    else process.env.ORGIAST_AUTO_RESUME = before;
+  }
+});
+
+test('無効時も通常起動と明示的な fleet-exec 再開は spawn する', async t => {
+  const before = process.env.ORGIAST_AUTO_RESUME;
+  delete process.env.ORGIAST_AUTO_RESUME;
+  t.after(() => { before === undefined ? delete process.env.ORGIAST_AUTO_RESUME : process.env.ORGIAST_AUTO_RESUME = before; });
+  for (const resume of [{}, { resumeSessionId: 'explicit-session', resumeSource: 'fleet-exec' }]) {
+    const spawnImpl = t.mock.fn(() => {
+      const child = new EventEmitter();
+      child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+      queueMicrotask(() => { child.stdout.write('completed'); child.emit('close', 0); });
+      return child;
+    });
+    const result = await runChild('mock', 'prompt', isolatedHome, isolatedHome, 1000,
+      { executorRoot: process.cwd(), spawnImpl, ...resume });
+    assert.equal(result.status, 'success', result.stderr);
+    assert.equal(spawnImpl.mock.callCount(), 1);
+    const args = spawnImpl.mock.calls[0].arguments[1];
+    assert.equal(args.includes('--resume'), Boolean(resume.resumeSessionId));
+  }
+});

@@ -1,0 +1,4 @@
+{
+  "description": "knowledge-inbox の統合済み台帳。/rules-sync (merge) が処理した投稿をここに記録する（Drive MCP に delete が無いため台帳方式）",
+  "processed": []
+}

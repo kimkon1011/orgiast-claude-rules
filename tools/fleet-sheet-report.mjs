@@ -1,0 +1,273 @@
+#!/usr/bin/env node
+import { safeDialogMetrics as dialogMetrics } from './lib/stuck-dialog-state.mjs';
+import { collectConvergence } from './fleet-convergence.mjs';
+import { isEntry } from './is-entry.mjs';
+import fs from 'node:fs';
+import { codexAuthStatus, formatCodexLogin } from './codex-auth-status.mjs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseEnvText } from './env-kv.mjs';
+import { scanBrowserExtensions } from './browser-extension-audit.mjs';
+import { machineIdentity, reportExtras } from './machine-identity.mjs';
+import { resolveReporterLabel } from './reporter-label.mjs';
+import { buildSpecPayload, collectHardwareSpec } from './hardware-spec.mjs';
+import { collectProjectInventory, formatArtifactsCell, formatLastCommitCell, formatProjectsCell } from './project-inventory.mjs';
+import { buildCloudLoginPayload, collectCloudInventory } from './cloud-inventory.mjs';
+import { collectInteractionAdoption } from './interaction-adoption.mjs';
+import { fetchClaudePlanUsage } from './claude-plan-usage.mjs';
+import { collectBudgetStatus } from './budget-status.mjs';
+import { BUSY_POLICY, defaultBudgetPath, formatBusyExhausted, postFleetSheet } from './lib/fleet-sheet-post.mjs';
+
+const dryRun = process.argv.includes('--dry-run');
+const noJitter = process.argv.includes('--no-jitter');
+const includeSpecs = process.argv.includes('--specs');
+const includeCloud = process.argv.includes('--cloud');
+const home = process.env.ORGIAST_HOME || os.homedir();
+const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+
+function readJson(file, fallback = {}) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
+}
+function readEnv(file) {
+  try { return parseEnvText(fs.readFileSync(file, 'utf8')); } catch { return {}; }
+}
+function readText(file) {
+  try { return fs.readFileSync(file, 'utf8'); } catch { return ''; }
+}
+function readKeyserveStatus(text) {
+  try {
+    const value = JSON.parse(text || '{}');
+    const source = ['primary', 'legacy', 'enroll'].includes(value.auth) ? value.auth : 'unset';
+    return {
+      keyserveAuth: value.success ? source : source === 'unset' ? 'unset' : 'failed',
+      keyserveStatus: value.status ?? null,
+      keyserveCheckedAt: typeof value.checkedAt === 'string' ? value.checkedAt : '',
+    };
+  } catch { return {}; }
+}
+function cheapAiCounts(file) {
+  const counts = {};
+  let text = '';
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return counts; }
+  for (const line of text.split(/\r?\n/)) {
+    let row; try { row = JSON.parse(line); } catch { continue; }
+    const provider = String(row.provider ?? row.tool ?? '').trim().toLowerCase();
+    if (provider) counts[provider] = (counts[provider] || 0) + 1;
+  }
+  return counts;
+}
+
+function finiteNumber(value) {
+  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function firstFiniteNumber(...values) {
+  for (const value of values) {
+    const number = finiteNumber(value);
+    if (number !== null) return number;
+  }
+  return null;
+}
+
+function latestClaudeUsd(cost, reporter) {
+  const costAt = Date.parse(cost.t);
+  const reporterAt = Date.parse(reporter.measuredAt ?? reporter.lastRun);
+  // cost-loop が止まっても、新しい reporter の実測値を古い数値で隠さない。
+  return Number.isFinite(reporterAt) && (!Number.isFinite(costAt) || reporterAt > costAt)
+    ? firstFiniteNumber(reporter.mtdUsd, cost.claudeUSD)
+    : firstFiniteNumber(cost.claudeUSD, reporter.mtdUsd);
+}
+
+function formatRatio(value) {
+  return value === null ? '' : `${(Math.round(value * 1000) / 10).toFixed(1)}%`;
+}
+
+// G列は「最終報告(JST)」。UTC の ISO 文字列をそのまま入れると列の意味と食い違うため JST に整形する。
+function toJst(value) {
+  const d = value ? new Date(value) : new Date();
+  if (Number.isNaN(d.getTime())) return "";
+  const jst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+  const p2 = (n) => String(n).padStart(2, "0");
+  return `${jst.getUTCFullYear()}-${p2(jst.getUTCMonth() + 1)}-${p2(jst.getUTCDate())} ${p2(jst.getUTCHours())}:${p2(jst.getUTCMinutes())}`;
+}
+
+async function main() {
+  const claudeDir = path.join(home, '.claude');
+  const fleetEnv = readEnv(path.join(claudeDir, 'fleet-sheet.env'));
+  // dry-run でも設定不足を許すと収集処理まで進み、payload が stdout に漏れる。
+  // 送信先のない PC では収集テストも不要なため、必ずここで終了する。
+  if (!fleetEnv.FLEET_SHEET_URL || !fleetEnv.FLEET_SHEET_TOKEN) {
+    console.error('fleet-sheet: FLEET_SHEET_URL/TOKEN 未設定のため送信しません(~/.claude/fleet-sheet.env)');
+    return;
+  }
+  // Both Windows and POSIX scheduled pollers call this reporter. The lightweight
+  // post-sync reporter is separate, so a received sync cannot recurse here.
+  if (!dryRun) {
+    try { const { receiveConvergence } = await import('./fleet-convergence-sync.mjs'); await receiveConvergence({ home, repo }); }
+    catch { console.error('fleet-sheet: convergence mail check failed (secrets omitted)'); }
+  }
+  const reporterEnvPath = path.join(claudeDir, 'cost-reporter.env');
+  const reporterEnvText = readText(reporterEnvPath);
+  const labelResolution = resolveReporterLabel({ envText: reporterEnvText, hostname: os.hostname() });
+  if (labelResolution.nextEnvText !== reporterEnvText) {
+    try {
+      fs.writeFileSync(reporterEnvPath, labelResolution.nextEnvText, { encoding: 'utf8', mode: 0o600 });
+      fs.chmodSync(reporterEnvPath, 0o600);
+    } catch { /* レポート送信は止めない */ }
+  }
+
+  const cost = readJson(path.join(claudeDir, 'cost-loop-state.json'));
+  const enforce = readJson(path.join(claudeDir, 'cost-enforce.json'));
+  const adoption = readJson(path.join(claudeDir, '.tool-adoption-state.json'));
+  const reporter = readJson(path.join(claudeDir, '.cost-reporter-state.json'));
+  const map = readJson(path.join(repo, 'fleet-pc-map.json'));
+  const label = labelResolution.label || 'unknown';
+  if (!dryRun && !noJitter) await sleep(labelJitterMs(label));
+  const counts = cheapAiCounts(path.join(claudeDir, 'executor-usage.jsonl'));
+  const mappedName = Object.prototype.hasOwnProperty.call(map, label) && typeof map[label] === 'string' ? map[label] : null;
+  const topModel = Array.isArray(reporter.topModels) && reporter.topModels[0] ? reporter.topModels[0].model : '';
+  const opusRatio = finiteNumber(reporter.opusRatio);
+  const identity = machineIdentity();
+  const projects = collectProjectInventory({ projectsDir: path.join(claudeDir, 'projects') });
+  let interaction = { version: '判定不能', selftest: '判定不能', lastRun: '判定不能' };
+  try { interaction = await collectInteractionAdoption({ repo, home }); } catch { /* status報告は止めない */ }
+  // Fable5(§1.16 全用途禁止)は「データが無い」を「未検出」と断定しない。
+  // 判定できないのに合格扱いにするのは「timeout を未導入と誤報告」と同じ誤り。
+  const fableKnown = reporter.fable5Detected !== undefined || adoption.fable5OutTok !== undefined;
+  const fableDetected = Boolean(reporter.fable5Detected || Number(adoption.fable5OutTok || 0) > 0);
+  // 独立した2つの外部照会(別エンドポイント・共有状態なし)は並列に待つ。
+  const [planUsage, budget] = await Promise.all([fetchClaudePlanUsage({ home }), collectBudgetStatus({ home })]);
+  const settings = readJson(path.join(claudeDir, 'settings.json'));
+  const nonClaudeRatio = firstFiniteNumber(cost.nonClaudeDelegRatio, enforce.nonClaudeDelegRatio);
+  const legacyRatio = firstFiniteNumber(cost.delegRatio, enforce.delegRatio);
+  // 委譲率セルは「判定に使う値」を載せる。#186 で強制判定は行ベース(linesRatio)へ切り替わり、
+  // トークン比は監査のthinkingが監督出力の約7割を占めるため上限が約40%で目標50%に構造的に届かない
+  // （= トークン比は併記専用）。ところが本セルは nonClaudeDelegRatio(トークン比) を載せており、
+  // cost-improve-loop がこれを平坦50%と比較して「低委譲」を誤検知し、成功し得ない自動改善を
+  // 空振りさせ続けていた（実測: low_delegation の自動改善は17件全滅・人間エスカレーション多発）。
+  // 判定に使う行ベース比を主セルに載せ、未計測のときだけ従来のトークン比へフォールバックする。
+  const linesRatio = firstFiniteNumber(cost.linesRatio, enforce.linesRatio);
+  const claudeUsd = latestClaudeUsd(cost, reporter);
+  const planUnavailable = planUsage.available ? null : `計測不能(${planUsage.reason})`;
+  const payload = {
+    token: fleetEnv.FLEET_SHEET_TOKEN,
+    ...dialogMetrics(home),
+    label,
+    mappedName,
+    hostname: identity.hostname,
+    username: identity.username,
+    gitEmail: identity.gitEmail,
+    reportedAt: toJst(),
+    ...collectConvergence({ home, repo: process.env.ORGIAST_REPO || repo, hostname: identity.hostname, username: identity.username }),
+    // 追加識別(Claude ログインアカウント・OS・Macシリアル)。受け側GASが未知フィールドを無視しても壊れない加算のみ。
+    ...reportExtras(home),
+    claudeUsd: claudeUsd === null ? '' : Math.round(claudeUsd * 100) / 100,
+    mainModel: opusRatio !== null ? `${topModel} (${formatRatio(opusRatio)})` : topModel,
+    // 既存行が "0%" 表記なので、人が読む列で表記が混ざらないようパーセント文字列にする。
+    // 主セルは判定に使う行ベース比(#186)。未計測なら従来どおりトークン比へフォールバック。
+    delegRatio: formatRatio(linesRatio === null ? nonClaudeRatio : linesRatio),
+    delegRatioLegacy: formatRatio(legacyRatio),
+    planFiveHourPct: planUsage.available ? planUsage.fiveHour.utilization : planUnavailable,
+    planSevenDayPct: planUsage.available ? planUsage.sevenDay.utilization : planUnavailable,
+    budgetPacePct: budget.budgetPacePct,
+    settingsModel: typeof settings.model === 'string' && settings.model.trim() ? settings.model.trim() : '未設定(=Opus)',
+    cheapAiUse: Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([provider, count]) => `${provider}:${count}`).join(', ') || 'なし',
+    codexLogin: formatCodexLogin(codexAuthStatus(home), adoption.codexAuthed),
+    fable5: fableDetected ? '検出' : fableKnown ? '未検出' : '判定不能',
+    disciplineAlert: enforce.mode ? `${enforce.mode}${enforce.reason ? ': ' + enforce.reason : ''}` : '判定不能',
+    activeProjects: formatProjectsCell(projects),
+    artifacts: formatArtifactsCell(projects),
+    lastCommit: formatLastCommitCell(projects),
+    interactionLoop: interaction.version === '判定不能' && interaction.lastRun === '判定不能'
+      ? '判定不能'
+      : `${interaction.version} / 最終実行 ${interaction.lastRun}`,
+    interactionSelftest: interaction.selftest,
+    ...readKeyserveStatus(process.env.ORGIAST_KEYSERVE_STATUS_JSON),
+  };
+  // スペックは status とは**別シート**(PC管理表)への別リクエストにする。
+  // payload に kind:'pc-spec' を混ぜると GAS が status の upsert を行わなくなり、
+  // --specs を付けた瞬間にフリートシートの更新が黙って止まる。
+  const specPayload = includeSpecs
+    ? { token: fleetEnv.FLEET_SHEET_TOKEN, kind: 'pc-spec', hostname: identity.hostname, spec: buildSpecPayload(collectHardwareSpec(), identity.hostname).spec }
+    : null;
+  // クラウドのログイン状態も**別タブ**(PCログイン)への別リクエストにする。
+  // spec と同じ理由: payload に kind を混ぜると status の upsert が黙って止まる。
+  const cloudPayload = includeCloud
+    ? { token: fleetEnv.FLEET_SHEET_TOKEN, ...buildCloudLoginPayload(await collectCloudInventory(), { label, hostname: identity.hostname, username: identity.username, reportedAt: payload.reportedAt }) }
+    : null;
+  const audit = scanBrowserExtensions();
+  const extensionPayload = {
+    token: fleetEnv.FLEET_SHEET_TOKEN, kind: 'extensions', label, hostname: os.hostname(), reportedAt: payload.reportedAt,
+    rows: audit.rows.filter((row) => !(row.risk === 'low' && row.builtin)).map(({ browser, profile, account, name, id, version, enabled, risk, builtin, broadHost, keyPerms }) => ({ browser, profile, account, name, id, version, enabled, risk, builtin, broadHost, keyPerms })),
+  };
+  if (dryRun) {
+    // 秘匿値は出さない(状態だけ見せる)。ログ・CI・端末履歴に残るため。
+    const shown = payload.token ? "<設定あり:" + payload.token.length + "文字>" : "<未設定>";
+    console.log(JSON.stringify({ ...payload, token: shown, extensionAudit: { ...extensionPayload, token: shown }, cloudLogin: cloudPayload ? { ...cloudPayload, token: shown } : null }, null, 2));
+    return;
+  }
+  // 2本は独立して送る。1本目が落ちたら2本目も送られない(かつ main の catch が
+  // 握り潰す)と、拡張監査が「一度も届いていないのに誰も気付かない」状態になる。
+  const status = await post(fleetEnv.FLEET_SHEET_URL, 'status', payload);
+  if (status.busyExhausted) {
+    // ロックが取れないまま再送予算を使い切った。後続の kind も同じロックで
+    // 落ちるだけなので、ここで打ち切って夜間バッチを遅らせない。
+    console.error(formatBusyExhausted(status, 'status'));
+  } else {
+    if (specPayload) await post(fleetEnv.FLEET_SHEET_URL, 'pc-spec', specPayload);
+    await post(fleetEnv.FLEET_SHEET_URL, 'extensions', extensionPayload);
+    if (cloudPayload) await post(fleetEnv.FLEET_SHEET_URL, 'cloud-login', cloudPayload);
+  }
+  if (!status.ok && !status.busyExhausted) process.exitCode = 1;
+}
+
+// GAS Web App はリダイレクト＋コールドスタートで数十秒かかることがある。
+// 20秒で切ると**サーバ側は書き込みに成功しているのにクライアントだけ「失敗」と出る**。
+// 実測: cloud-login が TimeoutError と出た直後にシートには7行入っていた。
+// 嘘の失敗ログは、本物の障害を調べるときに真っ先に人を迷わせるので余裕を持たせる。
+const POST_TIMEOUT_MS = 60_000;
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+export function labelJitterMs(label) {
+  let hash = 2166136261;
+  for (const char of String(label)) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  return (hash >>> 0) % 240001;
+}
+function safeError(error) {
+  return String(error?.message || error?.name || 'error').replace(/https?:\/\/\S+/gi, '<url>').replace(/[\r\n]+/g, ' ').slice(0, 160);
+}
+export async function post(url, kind, body, options = {}) {
+  const logFile = options.logFile || path.join(home, '.claude', 'logs', 'fleet-sheet-report.log');
+  try {
+    const posted = await postFleetSheet(url, body, {
+      fetchImpl: options.fetchFn || fetch,
+      sleepImpl: options.sleepFn || sleep,
+      random: options.random || Math.random,
+      now: options.now,
+      policy: options.policy || BUSY_POLICY,
+      timeoutMs: POST_TIMEOUT_MS,
+      // 3 ジョブで 1 夜の再送予算を共有する。テストは null を渡して隔離する。
+      // ORGIAST_HOME を使う PC では予算ファイルもそこへ置く（実ホームを汚さない）。
+      budgetPath: options.budgetPath === undefined ? defaultBudgetPath(home) : options.budgetPath,
+      logFile,
+      kind,
+      // 従来どおり timeout / 通信断も再送する（busy と同じバックオフ）。
+      retryOnNetwork: true,
+    });
+    if (posted.ok) return { ok: true, attempts: posted.attempts };
+    console.error(`fleet-sheet: ${kind} の送信を断念 (${formatBusyExhausted(posted, kind)})`);
+    return { ok: false, busyExhausted: true, attempts: posted.attempts, waitedMs: posted.waitedMs, error: 'busy' };
+  } catch (error) {
+    const lastError = safeError(error);
+    const attempts = Number.isFinite(error?.attempts) ? error.attempts : 0;
+    fs.mkdirSync(path.dirname(logFile), { recursive: true });
+    fs.appendFileSync(logFile, `${new Date().toISOString()} kind=${kind} attempts=${attempts} result=failed error=${lastError}\n`);
+    console.error(`fleet-sheet: ${kind} の送信に失敗 (${lastError})`);
+    return { ok: false, attempts, error: lastError };
+  }
+}
+
+if (isEntry(import.meta.url)) main().catch(error => { console.error(`fleet-sheet: fatal (${safeError(error)})`); process.exitCode = 1; });

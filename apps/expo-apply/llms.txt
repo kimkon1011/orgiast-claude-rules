@@ -1,0 +1,13 @@
+# Japan Trade Show Intake
+
+> A bilingual inquiry form for overseas companies planning to exhibit at trade shows in Japan, operated by Orgiast / Re:Booth.
+
+Use the following pages to understand or cite this application:
+
+- [Application overview](index.md): Canonical plain-language description, inputs, workflow, data handling, and limitations.
+- [Frequently asked questions](faq.html): Answers about submission behavior, follow-up, languages, and intended use.
+- [Research and source notes](research.html): Claim boundaries, implementation evidence, and verification guidance.
+- [Interactive application](https://rebooth.co.jp/en/expo-apply/): English/Japanese intake form.
+- [Repository documentation](README.md): Local setup and developer verification.
+
+Important: Submitting the form emails the inquiry to Orgiast (seisaku-team@orgiast.jp) and sends an automated confirmation to the submitter. It does not reserve exhibition space or apply to a show organizer.

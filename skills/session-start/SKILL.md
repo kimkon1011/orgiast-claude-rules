@@ -1,0 +1,98 @@
+---
+name: session-start
+description: 新しいセッションを前セッションの引き継ぎから開始する。「次の作業を始める」「続きから」「引き継いで始めて」「新しいセッションを始める」「/clear した後」などセッション開始・作業再開の合図が来たら必ずこのスキルを使う。前セッションが /session-close で書いた ~/.claude/next-session.md を起点に、目的を1件だけ確定してから着手する。
+---
+
+# 前セッションの引き継ぎから作業を開始する
+
+SessionStart hook が kim-inbox の未回収 ask を注入する。目的を確定する前に、その ask を kim に提示して返答を回収し `node <repo>/tools/kim-inbox.mjs --answer <id> --body-file <f>` で記録する。
+
+「1セッション=1目的」を守るための入口。`/session-close` の出口とペアで使う。
+
+## 0. 最優先: イベント百貨店の問合せを拾う（引き継ぎより先）
+
+- 最初に `node ~/orgiast-claude-rules/tools/event-shop-inquiry-triage.mjs` を実行し、出力の表を**そのまま応答の先頭**に出す。
+  判定は管理画面のタブではなく seisaku-team@／kim@ のメール往復（`channel_messages`）で行う（管理画面の「対応が必要」は別経路の返信済み・開催済みが混ざる）。
+- **🔴 要返信が1件でもあれば、それを本セッションの目的候補の先頭にする**。引き継ぎの目的より優先するかは user に1問で聞く（顧客対応は日が経つほど失注する）。
+  返信文の作成は `case-consult-sources` スキルでスレッドを読んでから seisaku-team@ の下書きにする（送信は user の承認後）。
+- ⚪ 終了候補は表を見せるだけでよい。完了にするかは user の判断。
+- 認証情報が無い PC では「未確認」の1行が出る。そのまま手順1へ進む（このPCでは判定不能と1行書く）。
+
+## 1. 引き継ぎを読む
+
+- `~/.claude/next-session.md` を読む。これが前セッションからの引き継ぎ（目的・対象・完了条件・残TODO・読むべき memory）。
+- ファイルが無い / 「次の1目的: 未定」なら 手順2 で目的を確定する。
+- `## 触る前に読む memory` に挙がっているファイルを実際に読む（`MEMORY.md` の索引ではなく本体）。**ここを飛ばすと前セッションの失敗を繰り返す。**
+- `~/.claude/promotion-queue.md`を読む。PROMOTE待ちがあれば手順2の目的候補へ`仕組み化: <name>`として含める。
+
+## 1.5 実装提案が先頭にある場合
+
+`next-session.md` の先頭が `<!-- PROPOSAL-SESSION START -->` なら、この提案1件の判断を本セッションの目的にする。後ろの別目的・後続キューはこのセッションで実行しない。
+
+1. `~/.claude/proposals/<id>.json` と同名 `.md` を読み、提案・根拠・変更内容・費用効果・リスク・承認/却下後の動作を提示する。「承認なら『承認』、却下なら『却下 <理由>』」と案内し、回答前は Codex や autopilot を起動しない。提案IDと `revision` を控える。
+2. kim がこの提案を「承認」したら JSON を再読し、提示した `revision` と一致することを確認する。追記で変わっていれば更新差分を提示して改めて判断を受ける。`onApprove.kind` が `codex-task` であることと指示書の実在・内容を確認し、配布元リポジトリの `node tools/codex-do.mjs --prompt-file "<onApprove.promptFile>" --cwd "<対象repo>"` を実行する。別目的への包括承認として扱わない。
+3. Codex の結果を read-back し、関連テストと `git diff --check` を監督も実行する。生成doc型の変更なら `--write` → `--check` → 関連テスト。PR を作成（既存があれば再利用）して URL を提案 JSON に記録し、再開時は同じ PR を使う。CI と差分を確認後 `node tools/pr-merge.mjs <PR番号>` を実行し、GitHub の `state=MERGED`・`mergedAt` を確認する。失敗中・CI待ちは提案を未処理のまま保持する。
+4. マージ確認後 `node tools/proposal-session.mjs --complete "<id>" --revision "<提示時の番号>" --decision approved --pr "<PR URL>"`。却下なら実装をせず `node tools/proposal-session.mjs --complete "<id>" --revision "<提示時の番号>" --decision rejected --reason "<理由>"`。シェル引数を適切に引用する。完了メッセージだけでなく `proposals/done/<id>.json` の status・理由・PR と次の引き継ぎを read-back する。
+5. 完了処理は `.json`・`.md`・生成指示書を `done/` へ移し、キューの次の1件を先頭に登録する。元の引き継ぎは残る。次の提案は次セッションで扱う。`next-session.md` の提案ブロックを手で削除しない。
+
+
+
+## 1.6 日中と夜間の切り分け（kim 2026-11-19）
+
+- 日中の対話セッションでは、急ぎの作業・承認や返事が要る作業・お客様対応・当日期限を目的候補の先頭にする。
+- 急ぎでなく、金さんの返事も不要な作業（調査・下書き・点検・設定修復・データ照合・コピーなど）は、今すぐ必要と言われたときを除き、`~/.claude/next-session.md` の残TODOへ `【夜間】` を付けて回し、このセッションの目的にしない。
+- `【夜間】` 付きの項目は、日中の目的候補から外す（今すぐ必要と言われたときを除く）。
+- 成果物を `~/.claude/night-briefs/` に置いてもよいが、作業項目の正本は next-session.md の `【夜間】` 行とする。`night-briefs/` を自動で全部実行しない。
+- 夜間・無人（auto-session）では `【夜間】` と残TODOを拾って進める。送信・支払い・削除・課金変更・社外連絡はせず、承認待ちとして朝に残す。朝の報告は1回にまとめる（このセッションから金さんへ途中報告しない）。
+- 詳細は ONBOARDING.md §2.8.6 と AI統一台帳の「夜間作業」タブ。
+
+## 2. 目的を1件に確定する
+
+- 候補を集める前に `~/.claude/business-goals.md` を読む。**無い、または「売上・利益レバー」の節が空なら `~/.claude/next-actions.md` を読む**（夜間に `tools/next-actions.mjs` が機械生成する台帳。autopilot-tick.mjs と同じ fallback）。
+  **どちらも無い場合は、その場で `node tools/next-actions.mjs` を1回実行して生成してから読む**（groq/deepseek/openrouter の安いレーンで生成されるので Claude の消費はゼロ）。生成に失敗したら「売上レバーの台帳が無い（理由: &lt;stderr 1行&gt;）」と1行書いてから次の候補源へ進む。
+- 「売上・利益レバー（上から優先）」の未完了レバー1件を候補の **1番目**にする（手順0・1.5の優先事項はそのまま）。候補源は次の順:
+  1. `~/.claude/business-goals.md` の最優先の未完了レバー（無ければ `~/.claude/next-actions.md` の「明日の推奨アクション」）
+  2. `~/.claude/next-session.md` の目的・残TODO
+  3. `~/.claude/session-handoffs.md`（放置セッションの再開一覧。`/session-triage` が生成）
+  4. 直近の memory の「未決」「次アクション」記述
+  5. `~/.claude/promotion-queue.md` のPROMOTE待ち
+- 基盤・ツール系の残TODOは、売上・利益レバーを止めているブロッカー、または期限付きの効果確認だけを候補に出す。
+- 日中の対話では、候補から `【夜間】` 付きを外す（今すぐ必要と言われたときを除く）。外した分は消さず next-session.md に残す。
+- **候補を kim に見せる前に、着手済みを機械で落とす**（重複着手の防止・トークン増ゼロ）:
+  候補を1行1件でスクラッチパッドのファイルに書き、
+  `node ~/orgiast-claude-rules/tools/session-claims.mjs --filter --self <このセッションのid> --candidates <そのファイル>`
+  を通す。**stdout に残った候補だけ**を対象にする。落ちた分は stderr に理由が出るが、kim には見せない。
+  （このツールは他セッションの `**[本セッションの目的]**` 宣言を transcript から拾って突合する。
+   着手印は自動で付くので、手で書く運用にしない）
+- フィルタ後の候補が **1件だけなら AskUserQuestion を省略**し、`**[本セッションの目的]** …。違えば言ってください` と着手宣言して進める。**複数の時だけ** AskUserQuestion で1件を選ばせ、選ばれた目的を宣言する。
+- 候補が残らなければ着手済み項目を復活させず、未着手のレバー・候補源を確認する。
+- 選ばれなかった候補は `next-session.md` に残す（消さない）。
+
+## 3. 完了条件を先に決める
+
+- 「何が確認できたら終わりか」を検証手段まで含めて1行で書く（例: 「prod で該当 route を実叩きして 200、read-back で値一致」）。
+- 完了条件が書けないタスクは、まず調査タスクとして切り直す。
+- **決めた完了条件の検証コマンドを、着手前にその場で1回実行する。** 既に満たしていれば着手しない（引き継ぎは書かれた時刻の状態で、並行セッションが終わらせていることがある）。結果を1行報告し、`next-session.md` から当該項目を消して別の目的を選ぶ。
+- **対象ファイルの衝突を見る。** 触る予定のファイルについて (1) `ls -l --time-style=full-iso <対象>` の更新時刻が数分〜数十分前なら並行セッションがいる、(2) `git status` に自分が触っていない `M` が出ていないか、(3) 実行中 node の CommandLine（Windows: `Get-CimInstance Win32_Process -Filter "Name='node.exe'"`）に対象スクリプトが無いか。衝突したら実装の質で判断して譲り、API を使わず確定できる部分に回る。worklock は資源単位でファイルは守らない。
+
+## 4. 分解して委譲する
+
+- 監督（あなた）がやるのは 設計・分解・指示・レビュー・verify だけ。
+- 実装本体は Codex（WSL 経由・定額枠）へ。渡す時は MEMORY.md と関連 memory の該当分をキュレートして同梱する（Codex は蓄積を継承しない）。
+- 量産・分類・抽出は Groq / OpenRouter、長文脈は Gemini、中量級の生成は Kimi K3。
+
+## 5. 着手する
+
+- ここまでを1〜3行で報告してから作業に入る。長い前置きは書かない。
+- 作業が1件終わったら `/session-close` を提案する（積み残しを増やさない）。
+
+## 注意
+
+- 既定モデルは Opus。作業が `/session-close` や記録の追記だけの締め、定型の確認・一覧化・整形・転記だけなら Sonnet でよい。迷ったら Opus のまま進める（2026-11-17 kim）。
+
+- 引き継ぎファイルを読まずに「続きから」を始めない。文脈は履歴ではなく `next-session.md` と memory が担保している。
+- 目的以外の依頼が来たら、着手前に「別セッションに分けましょう」と提案する。
+- `next-session.md` は上書きでなく**採用した目的を消して残りを残す**形で更新する（他の残TODO を失わない）。
+
+公開鍵配布後は next-session.md.lock が併置される。
+平文が無い場合は `node tools/knowledge-lock.mjs open ~/.claude/next-session.md.lock` で読む（契約アカウントは自動、契約外は kim 承認）。

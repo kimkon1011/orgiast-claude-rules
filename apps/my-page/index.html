@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>社員マイページ</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f1f5f3;color:#20312e;font:16px/1.65 system-ui,sans-serif}main{max-width:1050px;margin:auto;padding:24px}h1,h2,h3{line-height:1.4}nav{display:flex;gap:8px;flex-wrap:wrap;margin:22px 0}button,input,select,textarea{font:inherit}button{padding:9px 16px;border:1px solid #176749;border-radius:6px;background:#176749;color:white;cursor:pointer;margin:4px}nav button{background:white;color:#176749}nav button[aria-selected=true]{background:#176749;color:white}section,article{padding:22px;background:white;border:1px solid #ccd9d3;border-radius:12px;margin:16px 0}article{background:#fafcfb;overflow-wrap:anywhere}label{display:block;font-weight:600;margin:10px 0}input,select,textarea{display:block;width:100%;padding:9px;background:white;color:inherit;border:1px solid #798d85;border-radius:6px}textarea{min-height:95px;resize:vertical}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 16px}.detail{white-space:pre-wrap}.overdue{border:2px solid #a92d39;background:#fff0f1}.danger{background:#9c2835;border-color:#9c2835}.stats{background:#edf6f0;padding:12px;border-radius:6px}#message:not(:empty),#warning:not(:empty){padding:12px;background:#fff0ce;color:#633d00}#output{min-height:350px;font-family:ui-monospace,monospace}:focus-visible{outline:3px solid #c07a13;outline-offset:3px}[hidden]{display:none!important}@media(max-width:500px){main{padding:12px}section,article{padding:14px}nav button{flex:1 0 auto}}
+</style>
+</head>
+<body><main>
+<h1>社員マイページ</h1><p>プロフィールと日々の記録を、自分の手元に。</p>
+<p>このブラウザにのみ保存します。外部送信・他アプリとの自動連携はありません。</p>
+<p id="warning" role="status"></p><p id="message" role="status" aria-live="polite"></p>
+<nav id="tabs" role="tablist" aria-label="マイページの項目"></nav>
+<div id="panels"></div>
+</main>
+<script type="module">
+import { COLLECTIONS, createEmptyData, normalizeData, parseData, serializeData, upsertItem, removeItem, validateItem, taskStats, goalStats, expenseStats, leaveStats, profileCompleteness, dueLabel, toMarkdown } from './my-page-core.mjs';
+const $ = id => document.getElementById(id);
+const key = 'my-page-data';
+const titles = { profile:'プロフィール',goals:'目標',tasks:'タスク',leaves:'休暇',expenses:'経費',oneOnOnes:'1on1',export:'書き出し' };
+const names = { employeeId:'社員番号',name:'氏名',kana:'ふりがな',department:'部署',role:'役職',joinedAt:'入社日',email:'メール',phone:'電話',location:'勤務地',skills:'スキル',qualifications:'資格',period:'期間',title:'タイトル',dueDate:'期限',progress:'進捗（%）',status:'状態',note:'メモ',priority:'優先度',source:'出所',date:'日付',type:'種類',item:'費目',amount:'金額（円）',partner:'相手',topic:'話題',decision:'決定事項',nextAction:'次の行動' };
+const choices = { goalStatus:{planned:'予定',active:'進行中',achieved:'達成',dropped:'中止'},taskStatus:{todo:'未着手',doing:'進行中',done:'完了'},priority:{high:'高',middle:'中',low:'低'},leaveType:{paid:'有給',substitute:'代休',special:'特別休暇',other:'その他'},expenseStatus:{draft:'下書き',submitted:'申請済み',approved:'承認',rejected:'却下'} };
+const schemas = {
+goals:[['period'],['title','text',true],['dueDate','date'],['progress','number'],['status','goalStatus'],['note','textarea']],
+tasks:[['title','text',true],['priority','priority'],['dueDate','date'],['status','taskStatus'],['source']],
+leaves:[['date','date',true],['type','leaveType'],['note','textarea']],
+expenses:[['date','date'],['item','text',true],['amount','number',true],['status','expenseStatus'],['note','textarea']],
+oneOnOnes:[['date','date'],['partner','text',true],['topic','textarea'],['decision','textarea'],['nextAction','textarea']]
+};
+let data = createEmptyData();
+let active = 'profile';
+const forms = {};
+function node(tag, text) { const el=document.createElement(tag); if(text!==undefined) el.textContent=text; return el; }
+function today() { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function error(e) { $('message').textContent=`エラー: ${e.message}`; }
+try {
+  const saved=localStorage.getItem(key);
+  if(saved!==null) {
+    const loaded=parseData(saved); data=loaded.data;
+    if(loaded.recovered) $('warning').textContent='保存データが壊れていたため空で開始しました。次の保存で置き換えます。';
+  }
+} catch(e) { $('warning').textContent=`保存データを読み込めないため空で開始します。次の保存で置き換えます。理由: ${e.message}`; }
+function commit(next, message) {
+  const candidate=normalizeData({...next,updatedAt:new Date().toISOString()});
+  try { localStorage.setItem(key,serializeData(candidate)); }
+  catch(e) { error(new Error(`保存できませんでした。変更は適用していません。${e.message}`)); return false; }
+  data=candidate; render(); $('warning').textContent=''; $('message').textContent=message; return true;
+}
+function button(text, handler, cls) { const b=node('button',text); b.type='button'; if(cls)b.className=cls; b.addEventListener('click',handler); return b; }
+function field(parent, key, type='text', required=false) {
+  const label=node('label',`${names[key]}${required?'（必須）':''}`);
+  const input=node(choices[type]?'select':type==='textarea'?'textarea':'input');
+  input.name=key; input.required=required;
+  if(choices[type]) for(const [v,text] of Object.entries(choices[type])) {const opt=node('option',text);opt.value=v;input.append(opt);}
+  else if(type!=='textarea') input.type=type;
+  if(type==='number'){input.min='0';input.step='1';input.max=key==='progress'?'100':String(Number.MAX_SAFE_INTEGER);input.value='0';}
+  if(key==='priority') input.value='middle';
+  label.append(input);parent.append(label);return input;
+}
+function activate(id) {
+  active=id;
+  for(const name of Object.keys(titles)) { $(`panel-${name}`).hidden=name!==id; const b=$(`tab-${name}`); b.setAttribute('aria-selected',String(name===id)); b.tabIndex=name===id?0:-1; }
+  render();
+}
+for(const [id,title] of Object.entries(titles)) {
+  const tab=button(title,()=>activate(id));tab.id=`tab-${id}`;tab.setAttribute('role','tab');tab.setAttribute('aria-controls',`panel-${id}`);$('tabs').append(tab);
+  tab.addEventListener('keydown',e=>{ const keys=Object.keys(titles);let i=keys.indexOf(id);if(e.key==='ArrowRight')i=(i+1)%keys.length;else if(e.key==='ArrowLeft')i=(i+keys.length-1)%keys.length;else if(e.key==='Home')i=0;else if(e.key==='End')i=keys.length-1;else return;e.preventDefault();activate(keys[i]);$(`tab-${keys[i]}`).focus(); });
+  const panel=node('section');panel.id=`panel-${id}`;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',tab.id);panel.append(node('h2',title));$('panels').append(panel);
+}
+const profileForm=node('form');profileForm.id='profile-form';
+const profileGrid=node('div');profileGrid.className='grid';
+for(const k of Object.keys(data.profile)) field(profileGrid,k,k==='joinedAt'?'date':k==='email'?'email':k==='phone'?'tel':'text');
+profileForm.append(profileGrid,node('p','スキル・資格はカンマ区切りで入力してください。'));
+const saveProfile=node('button','プロフィールを保存');saveProfile.type='submit';profileForm.append(saveProfile);
+const completeness=node('p');completeness.id='completeness';$('panel-profile').append(completeness,profileForm);
+function fillProfile(){for(const [k,v] of Object.entries(data.profile))profileForm.elements.namedItem(k).value=Array.isArray(v)?v.join(', '):v;}
+profileForm.addEventListener('submit',e=>{e.preventDefault();const p=Object.fromEntries(new FormData(profileForm));for(const k of ['skills','qualifications'])p[k]=p[k].split(/[,、\n]/).map(s=>s.trim()).filter(Boolean);commit({...data,profile:p},'プロフィールを保存しました。');});
+for(const c of COLLECTIONS) {
+  const panel=$(`panel-${c}`);const stat=node('p');stat.id=`stats-${c}`;stat.className='stats';panel.append(stat);
+  if(c==='leaves') {
+    const controls=node('div');controls.className='grid';
+    for(const [id,title,value] of [['leave-year','集計年',new Date().getFullYear()],['allowance','付与日数（集計用・保存しません）',0]]) {const label=node('label',title);const input=node('input');input.type='number';input.id=id;input.min='0';input.step='1';input.value=value;input.addEventListener('input',render);label.append(input);controls.append(label);}panel.append(controls,node('p','使用日数は選択年の「その他」以外の全件（未来分を含む）。予定日数は今日以降の全種類を数えます。'));
+  }
+  const form=node('form');const grid=node('div');grid.className='grid';for(const spec of schemas[c])field(grid,...spec);form.append(grid);
+  const submit=node('button','追加して保存');submit.type='submit';form.append(submit);
+  const cancel=button('編集をやめる',()=>resetForm(c));cancel.hidden=true;form.append(cancel);
+  forms[c]={form,submit,cancel,id:''};
+  form.addEventListener('submit',e=>{e.preventDefault();try{const item=Object.fromEntries(new FormData(form));for(const k of ['amount','progress'])if(k in item)item[k]=Number(item[k]);if(forms[c].id)item.id=forms[c].id;const check=validateItem(c,item);if(!check.ok)throw new Error(check.errors.join(' '));if(commit(upsertItem(data,c,item,new Date().toISOString()),'保存しました。'))resetForm(c);}catch(e){error(e);}});
+  const list=node('div');list.id=`list-${c}`;panel.append(form,node('h3','登録一覧'),list);
+}
+function resetForm(c){const f=forms[c];f.form.reset();f.id='';f.submit.textContent='追加して保存';f.cancel.hidden=true;for(const key of ['progress','amount'])if(f.form.elements.namedItem(key))f.form.elements.namedItem(key).value='0';if(c==='tasks')f.form.elements.namedItem('priority').value='middle';}
+const outLabel=node('label','共有用 Markdown');const out=node('textarea');out.id='output';out.readOnly=true;outLabel.append(out);$('panel-export').append(outLabel);
+$('panel-export').append(button('Markdown をコピー',async()=>{out.value=toMarkdown(data,today());try{await navigator.clipboard.writeText(out.value);$('message').textContent='Markdownをコピーしました。';}catch{out.focus();out.select();out.setSelectionRange(0,out.value.length);$('message').textContent='本文を選択しました。コピー操作（Ctrl+C / Command+C、スマホでは長押し）を行ってください。';}}));
+$('panel-export').append(button('JSON を保存（ダウンロード）',()=>{const url=URL.createObjectURL(new Blob([serializeData(data)],{type:'application/json'}));const a=node('a');a.href=url;a.download=`my-page-${today()}.json`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}));
+const importLabel=node('label','JSON を読み込み');const file=node('input');file.type='file';file.accept='.json,application/json';importLabel.append(file);$('panel-export').append(importLabel,node('p','読み込むと現在の全データを置き換えます。共有先は書き出した内容を閲覧できます。必要な情報だけを共有してください。'));
+file.addEventListener('change',async()=>{const selected=file.files[0];if(!selected)return;try{const parsed=parseData(await selected.text());if(parsed.recovered)throw new Error('JSONの形式が壊れています。現在のデータは変更していません。');const count=COLLECTIONS.reduce((n,c)=>n+parsed.data[c].length,0);if(!confirm(`${parsed.data.profile.name||'氏名未入力'}・記録${count}件で現在の全データを置き換えますか？`))return;if(commit(parsed.data,'JSONを読み込みました。')){fillProfile();COLLECTIONS.forEach(resetForm);}}catch(e){error(e);}finally{file.value='';}});
+function render() {
+  const date=today();const p=profileCompleteness(data.profile);$('completeness').textContent=`入力済み ${p.filled}/${p.total}（${p.percent}%）`;
+  const ts=taskStats(data.tasks,date);$('stats-tasks').textContent=`全${ts.total}件 / 未完了 ${ts.todo+ts.doing}件 / 期限超過 ${ts.overdue}件 / 7日以内 ${ts.dueSoon}件`;
+  const gs=goalStats(data.goals);$('stats-goals').textContent=`全${gs.total}件 / 進行中 ${gs.active}件 / 達成 ${gs.achieved}件 / 平均進捗 ${gs.averageProgress}%`;
+  const es=expenseStats(data.expenses);const yen=n=>`${n.toLocaleString('ja-JP')}円`;$('stats-expenses').textContent=`全${es.count}件 ${yen(es.totalAmount)} / 未承認 ${es.pendingCount}件 ${yen(es.pendingAmount)} / 承認 ${yen(es.approvedAmount)} / 却下 ${es.rejectedCount}件`;
+  const ls=leaveStats(data.leaves,$('leave-year').value,Number($('allowance').value),date);$('stats-leaves').textContent=`使用 ${ls.usedDays}日 / 予定 ${ls.plannedDays}日 / 残り ${ls.remainingDays}日`;
+  $('stats-oneOnOnes').textContent=`全${data.oneOnOnes.length}件`;
+  for(const c of COLLECTIONS) {
+    const list=$(`list-${c}`);list.replaceChildren();if(!data[c].length)list.append(node('p','（登録なし）'));
+    for(const item of data[c]) {
+      const card=node('article');const overdue=c==='tasks'&&item.status!=='done'&&dueLabel(item.dueDate,date)==='overdue';if(overdue)card.className='overdue';
+      card.append(node('h3',`${overdue?'⚠ 期限超過: ':''}${item.title||item.item||item.partner||item.date}`));
+      for(const [k,type] of schemas[c]){const value=choices[type]?choices[type][item[k]]:k==='amount'?yen(item[k]):item[k];const detail=node('p',`${names[k]}: ${value===''?'（未入力）':value}`);detail.className='detail';card.append(detail);}
+      card.append(button('編集',()=>{const f=forms[c];f.id=item.id;for(const [k] of schemas[c])f.form.elements.namedItem(k).value=item[k];f.submit.textContent='変更を保存';f.cancel.hidden=false;f.form.scrollIntoView({block:'start',behavior:'smooth'});f.form.querySelector('input,textarea,select').focus();}),button('削除',()=>{if(confirm('この記録を削除しますか？'))if(commit(removeItem(data,c,item.id),'削除しました。')&&forms[c].id===item.id)resetForm(c);},'danger'));list.append(card);
+    }
+  }
+  out.value=toMarkdown(data,date);
+}
+fillProfile();activate(active);
+</script>
+</body>
+</html>

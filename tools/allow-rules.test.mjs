@@ -1,0 +1,67 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { mergeAllowRules, convergeAllowRules } from './allow-rules.mjs';
+
+test('別PCのホームからパスを生成し、既存ルールを保持して冪等にマージ', () => {
+  for (const home of ['C:\\Users\\別の担当者', '/home/member']) {
+    const original = { model: 'custom', permissions: { defaultMode: 'auto', allow: ['Bash(custom:*)'], deny: ['Bash(git push --force*)', 'PowerShell(*git push --force*)', 'Bash(git push -f*)', 'Read(secret)'], ask: ['Write(*)'] } };
+    const result = mergeAllowRules(original, home);
+    assert.deepEqual(mergeAllowRules(result, home), result);
+    assert.equal(result.model, 'custom');
+    assert(result.permissions.allow.includes('Bash(custom:*)'));
+    assert(result.permissions.allow.includes('Bash(git push --force-with-lease:*)'));
+    assert(result.permissions.allow.includes(`Bash(node "${home.replaceAll('\\', '/')}/orgiast-main/tools/*)`));
+    if (home.startsWith('C:')) assert(result.permissions.allow.includes(`Bash(node "${home}\\orgiast-main\\tools\\*)`));
+    // 外向き tool はファイル名を明示した allow も配る（ディレクトリ `*` だけだと classifier に回る実測あり）
+    const posixHome = home.replaceAll('\\', '/');
+    for (const file of ['pr-merge.mjs', 'codex-do.mjs', 'notify-kim.mjs']) {
+      assert(result.permissions.allow.includes(`Bash(node ${posixHome}/orgiast-main/tools/${file}:*)`));
+      assert(result.permissions.allow.includes(`Bash(node "${posixHome}/orgiast-main/tools/${file}" *)`));
+      assert(result.permissions.allow.includes(`Bash(node "${posixHome}/Downloads/orgiast-claude-rules/tools/${file}" *)`));
+      if (home.startsWith('C:')) assert(result.permissions.allow.includes(`Bash(node "${home}\\orgiast-main\\tools\\${file}" *)`));
+    }
+    for (const rule of ['Edit(~/.claude/settings.json)', 'Edit(~/.claude/CLAUDE.md)', 'Edit(~/.claude/next-session.md)', 'Edit(~/.claude/projects/**/memory/**)']) assert(result.permissions.allow.includes(rule));
+    for (const rule of ['Bash(git push --force origin*)', 'Bash(git push --force)', 'PowerShell(*git push --force origin*)', 'Bash(git push -f*)', 'Read(secret)', 'Bash(rm -rf *)', 'Read(**/.env)']) assert(result.permissions.deny.includes(rule));
+    assert.equal(result.permissions.defaultMode, 'bypassPermissions');
+    assert.deepEqual(result.permissions.ask, ['Write(*)']);
+    assert.equal(original.permissions.allow.length, 1);
+    assert.doesNotMatch(JSON.stringify(result), /Users.uers/);
+  }
+});
+test('ORGIAST_KEEP_PERMISSION_MODE=1 は既存 mode を維持する', () => {
+  const previous = process.env.ORGIAST_KEEP_PERMISSION_MODE;
+  process.env.ORGIAST_KEEP_PERMISSION_MODE = '1';
+  try {
+    const result = mergeAllowRules({ permissions: { defaultMode: 'auto' } }, '/home/member');
+    assert.equal(result.permissions.defaultMode, 'auto');
+  } finally {
+    if (previous === undefined) delete process.env.ORGIAST_KEEP_PERMISSION_MODE;
+    else process.env.ORGIAST_KEEP_PERMISSION_MODE = previous;
+  }
+});
+test('空設定を同期し再実行で書き換えず、壊れたJSONは保存しない', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'allow-rules-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  assert.equal(convergeAllowRules(home), true);
+  const file = path.join(home, '.claude', 'settings.json');
+  const before = fs.readFileSync(file, 'utf8'), mtime = fs.statSync(file).mtimeMs;
+  assert.equal(convergeAllowRules(home), false);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  assert.equal(fs.statSync(file).mtimeMs, mtime);
+  fs.writeFileSync(file, '{broken');
+  assert.throws(() => convergeAllowRules(home));
+  assert.equal(fs.readFileSync(file, 'utf8'), '{broken');
+});
+
+test('converge removes retired Write rules and preserves Edit and unrelated rules', () => {
+  const input = { permissions: { allow: ['Write(~/.claude/projects/**/memory/**)', 'Write(~/.claude/next-session.md)', 'Write(/custom)'] } };
+  const result = mergeAllowRules(input);
+  assert(!result.permissions.allow.includes(input.permissions.allow[0]));
+  assert(!result.permissions.allow.includes(input.permissions.allow[1]));
+  assert(result.permissions.allow.includes('Write(/custom)'));
+  assert(result.permissions.allow.includes('Edit(~/.claude/next-session.md)'));
+  assert.deepEqual(mergeAllowRules(result), result);
+});

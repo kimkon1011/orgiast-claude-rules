@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>2026-11-18 EDDセットアップ 要求定義</title>
+<link rel="stylesheet" href="../../docs/assets/design-system.css">
+</head>
+<body><main>
+<h1>EDDセットアップ - 要求定義</h1>
+<p>作成: 2026-11-18 | ステータス: 完了</p>
+
+<h2>1. 目的</h2>
+<p>評価駆動開発（EDD）をオージャスト社の AI エージェント改善プロセスに導入するための初期設計とデータ準備を行う。</p>
+
+<h2>2. スコープ</h2>
+<ul>
+<li>EDD 設計書の作成（eval-driven/index.md）</li>
+<li>初期評価データセットの作成（30件、6カテゴリ）</li>
+<li>TSV版＋JSON版の両形式でのデータ管理</li>
+<li>ステアリングファイルの作成</li>
+</ul>
+<p><strong>スコープ外</strong>: 評価実行スクリプトの実装、エージェントとの結合、CI連携。</p>
+
+<h2>3. ユーザーストーリー</h2>
+<ul>
+<li>評価責任者は、EDD設計書を読めば評価の目的・項目・方法を理解できる</li>
+<li>評価責任者は、評価データセットをTSVで開いて内容を確認・編集できる</li>
+<li>評価実装者は、JSONファイルを読み込んで自動評価スクリプトを実装できる</li>
+<li>次のセッションの実装者は、EDD実装開始条件を満たしているか確認できる</li>
+</ul>
+
+<h2>4. 受け入れ条件</h2>
+<ul>
+<li>eval-driven/index.md が存在し、EDDの目的・評価項目・フォルダ構成・実装開始条件を記載している</li>
+<li>eval-driven/eval-set/initial-evaluations.tsv が存在し、30件以上の評価例を含む</li>
+<li>評価例のカテゴリが最低3種類以上カバーされている</li>
+<li>eval-driven/eval-set/initial-evaluations.json が存在し、機械処理可能な構造である</li>
+<li>.steering/20261118-edd-setup/ 配下に requirements.html / design.html / tasklist.md が存在する</li>
+</ul>
+
+<h2>5. 制約事項</h2>
+<ul>
+<li>CLAUDE.md のUI仕様書ゲートは適用されない（EDDにUIは存在しない）</li>
+<li>ドキュメント作成時は「1ファイルずつ」ルールを尊重する</li>
+<li>データは TSV（人間編集用）と JSON（機械処理用）の両方を維持する</li>
+</ul>
+</main></body>
+</html>

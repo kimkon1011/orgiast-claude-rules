@@ -1,0 +1,13 @@
+{
+  "baseline": "a1281338960532f9dcfb39407853cbb3206491e4",
+  "date": "2026-11-15",
+  "kind": "ローカル静的調査・API実行なし",
+  "sha256": {
+    "tools/bulk-context-audit.mjs": "9b26c33cd36a8251cf9587f154387e260432e95defafcd56791d4cae5060cb87",
+    "tools/cache-audit.mjs": "1fd16cf024e22c2267690bd9bf2ff8902fea0f82cfc823207d51d8835c97fd53",
+    "tools/x0017-prompt-cache-usage.mjs": "d20428657622d47c125a86b23100402fd4f971e2f338d8eb26465f9ed90c3034",
+    "tools/discord-autoreply.mjs": "346dd63049b9de3cfb6190399f128fd4b97e7c2a6331284e21f2a837f3b9cf18",
+    "tools/booth-perse-gen.mjs": "28ca6b22b84cd5753f5e7d13b6e9222e6519034da35c08e9ccf2644c88adbed7",
+    "apps/workbuddy-screenshot/script.js": "83a4aa577474b4b5e3e6eb97e797d0e3fac7f4b0978fcafa7087d69046ede35d"
+  }
+}

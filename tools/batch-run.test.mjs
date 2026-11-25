@@ -1,0 +1,25 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { spawnSync } from 'node:child_process';
+import { batchDeadline } from './lib/batch-deadline.mjs';
+
+test('batch deadline defaults to local 06:30 and accepts override', () => {
+  const now = new Date(2026, 8, 10, 3, 0);
+  assert.equal(batchDeadline(now, '06:30').getHours(), 6);
+  assert.equal(batchDeadline(now, '05:45').getMinutes(), 45);
+  assert.throws(() => batchDeadline(now, '25:00'), /invalid/);
+});
+
+test('生存中のbatch-run lockがあれば処理せず exit 3 でスキップ', () => {
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'batch-lock-'));
+  const dir=path.join(home,'.claude','locks'); fs.mkdirSync(dir,{recursive:true});
+  fs.writeFileSync(path.join(dir,'batch-run.lock'),JSON.stringify({pid:process.pid,startedAt:new Date().toISOString()}));
+  const queueDir=path.join(home,'.claude','batch-queue'); fs.mkdirSync(queueDir,{recursive:true});
+  fs.writeFileSync(path.join(queueDir,'pending.jsonl'),'{"id":"pending-1"}\n');
+  const result=spawnSync(process.execPath,['tools/batch-run.mjs','--dry'],{encoding:'utf8',timeout:5000,env:{...process.env,USERPROFILE:home,ORGIAST_LOCK_HOME:home,ORGIAST_HOME:home}});
+  assert.equal(result.status,3); assert.match(result.stderr,/\[batch-run\] already running pid=/); assert.match(result.stderr,/pending 1件/); assert.ifError(result.error);
+  fs.rmSync(home,{recursive:true,force:true});
+});

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "updatedAt": "2026-09-20",
+  "assumptions": {
+    "kvBytesPerElement": 2,
+    "osOverheadGB": 8,
+    "computeOverheadRatio": 0.1,
+    "usableMemoryRatio": 0.75,
+    "bandwidthEfficiencyMin": 0.55,
+    "bandwidthEfficiencyMax": 0.75,
+    "depreciationMonths": 36,
+    "electricityYenPerKWh": 31,
+    "loadWatts": 120,
+    "hoursPerDay": 8,
+    "daysPerMonth": 21
+  },
+  "quants": [
+    { "id": "q4_k_m", "label": "Q4_K_M (4bit相当)", "bitsPerWeight": 4.8 },
+    { "id": "q8_0", "label": "Q8_0 (8bit相当)", "bitsPerWeight": 8.5 },
+    { "id": "f16", "label": "F16 (無圧縮)", "bitsPerWeight": 16.0 }
+  ],
+  "machines": [
+    { "id": "mac-mini-m4-16", "name": "Mac mini (M4) 16GB/256GB", "chip": "M4", "maxMemoryGB": 16, "memoryBandwidthGBs": 120, "priceYen": 94800, "priceNote": "Apple発表時の16GB/256GB最小構成価格", "priceVerify": "primary", "specVerify": "primary", "specSource": "https://support.apple.com/ja-jp/121555", "priceSource": "https://www.apple.com/jp/newsroom/2024/10/apples-new-mac-mini-is-more-mighty-more-mini-and-built-for-apple-intelligence/", "availability": "2024年発売" },
+    { "id": "mac-mini-m6-16", "name": "Mac mini (M6) 16GB/256GB", "chip": "M6", "maxMemoryGB": 16, "memoryBandwidthGBs": 170, "priceYen": 149800, "priceNote": "P-0114台帳の報道価格・同台帳のM6帯域値を踏襲", "priceVerify": "media", "specVerify": "primary", "specSource": "tools/mac-local-llm-catalog.json", "priceSource": "tools/mac-local-llm-catalog.json", "availability": "2026-09-22 発売" },
+    { "id": "macbook-air-m4-16", "name": "MacBook Air 13インチ (M4) 16GB/256GB", "chip": "M4", "maxMemoryGB": 16, "memoryBandwidthGBs": 120, "priceYen": 164800, "priceNote": "Apple発表時の13インチ最小構成価格", "priceVerify": "primary", "specVerify": "primary", "specSource": "https://support.apple.com/ja-jp/122209", "priceSource": "https://www.apple.com/jp/newsroom/2025/03/apple-introduces-the-new-macbook-air-with-the-m4-chip-and-a-sky-blue-color/", "availability": "2025年発売" }
+  ],
+  "models": [
+    { "id": "qwen3-1.7b", "name": "Qwen3-1.7B", "paramsB": 1.7, "activeParamsB": null, "layers": 28, "kvHeads": 8, "headDim": 128, "nativeContextTokens": 40960, "shapeSource": "https://huggingface.co/Qwen/Qwen3-1.7B/raw/main/config.json", "shapeVerify": "primary" },
+    { "id": "qwen3-4b", "name": "Qwen3-4B", "paramsB": 4, "activeParamsB": null, "layers": 36, "kvHeads": 8, "headDim": 128, "nativeContextTokens": 40960, "shapeSource": "https://huggingface.co/Qwen/Qwen3-4B/raw/main/config.json", "shapeVerify": "primary" },
+    { "id": "qwen2.5-3b-instruct", "name": "Qwen2.5-3B-Instruct", "paramsB": 3, "activeParamsB": null, "layers": 36, "kvHeads": 2, "headDim": 128, "nativeContextTokens": 32768, "shapeSource": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct/raw/main/config.json", "shapeVerify": "primary" },
+    { "id": "llama-3.2-3b-instruct", "name": "Llama-3.2-3B-Instruct", "paramsB": 3, "activeParamsB": null, "layers": 28, "kvHeads": 8, "headDim": 128, "nativeContextTokens": 131072, "shapeSource": "https://huggingface.co/unsloth/Llama-3.2-3B-Instruct/raw/main/config.json", "shapeVerify": "primary" },
+    { "id": "phi-4-mini-instruct", "name": "Phi-4-mini-instruct", "paramsB": 3.8, "activeParamsB": null, "layers": 32, "kvHeads": 8, "headDim": 128, "nativeContextTokens": 131072, "shapeSource": "https://huggingface.co/microsoft/Phi-4-mini-instruct/raw/main/config.json", "shapeVerify": "primary" },
+    { "id": "qwen3-8b", "name": "Qwen3-8B", "paramsB": 8, "activeParamsB": null, "layers": 36, "kvHeads": 8, "headDim": 128, "nativeContextTokens": 40960, "shapeSource": "https://huggingface.co/Qwen/Qwen3-8B/raw/main/config.json", "shapeVerify": "primary" }
+  ],
+  "cloudReferences": [
+    { "id": "claude-dev-api-output", "label": "Claude Dev API 出力トークン単価", "yenPerMillionOutputTokens": null, "source": "", "verify": "unknown", "note": "未取得。単価が入るまで損益分岐は算出不能（'-' 表示）" }
+  ]
+}

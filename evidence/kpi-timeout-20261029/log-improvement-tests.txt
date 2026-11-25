@@ -1,0 +1,305 @@
+$ node --test tools/nightly-bootstrap.test.mjs tools/nightly-bootstrap-git-fallback.test.mjs
+✔ nightly-bootstrap は PATH に git が無くても既定の設置先から git を探す（2026-10-12 作業用011） (1.6881ms)
+✔ does not self-update a copy outside the operational install path (1666.464334ms)
+✔ self-updates the operational copy when PSModulePath is empty (1416.470661ms)
+✔ self-updates run-hidden.vbs when installed content differs (1547.294921ms)
+✔ does not create installed run-hidden.vbs if it does not exist (1385.050272ms)
+✔ skips run-hidden.vbs self-update when ORGIAST_NIGHTLY_NO_SELF_UPDATE=1 (1393.360968ms)
+✔ run-hidden.vbs self-update replaces the installed runner through a same-directory temporary file (3.432999ms)
+✔ self-update replaces the installed script through a same-directory temporary file (3.425799ms)
+✔ hidden runner derives its log name from the target script, not the bootstrap wrapper (3.915499ms)
+✔ script is UTF-8 with BOM (2.753399ms)
+✔ heartbeat is fail-open and runs before target extension dispatch (3.388199ms)
+✔ finish heartbeat reports completion after target dispatch (3.282099ms)
+✔ Stop-Nightly reports a failed heartbeat (3.750799ms)
+✔ missing target exits 1 and writes readable Japanese log (1942.319698ms)
+✔ does not delete a non-repository directory with contents (1885.908086ms)
+✔ propagates PowerShell target exit code 7 (1352.705817ms)
+✔ forwards all target arguments and discards leading separator (1450.509226ms)
+✔ -Shell pwsh runs a PowerShell target in Core (1535.069009ms)
+✔ omitting -Shell runs a PowerShell target in Desktop (1509.959152ms)
+✔ -Shell bogus exits 1 and logs the unknown value (1015.887138ms)
+✔ -Shell is not forwarded to the PowerShell target (1835.588111ms)
+✔ six concurrent runs retain every start and target-execution log line (2370.445871ms)
+✔ mutex timeout logs a warning and continues with the existing target (3405.460153ms)
+✔ logs ok:origin/main only when HEAD matches origin/main (2106.653061ms)
+✔ logs ng and keeps running when HEAD does not match origin/main (3730.979649ms)
+✔ real git bootstrap preserves dirty tree / updates clean tree: dirty=true (12513.147429ms)
+✔ real git bootstrap preserves dirty tree / updates clean tree: dirty=false (11201.93757ms)
+✔ hourly sync installed script follows verified main: enabled=true (4118.735338ms)
+✔ hourly sync installed script follows verified main: enabled=false (3945.089975ms)
+ℹ tests 29
+ℹ suites 0
+ℹ pass 29
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 72013.154925
+
+
+$ node --test tools/
+node:internal/modules/cjs/loader:1520
+  throw err;
+  ^
+
+Error: Cannot find module '/mnt/c/Users/uers/.claude/nightly-repo/.wt/kpi-timeout-20261029/tools'
+    at Module._resolveFilename (node:internal/modules/cjs/loader:1517:15)
+    at wrapResolveFilename (node:internal/modules/cjs/loader:1071:27)
+    at defaultResolveImplForCJSLoading (node:internal/modules/cjs/loader:1095:10)
+    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1122:12)
+    at Module._load (node:internal/modules/cjs/loader:1294:5)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47 {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: []
+}
+
+Node.js v24.19.0
+✖ tools (65.715274ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 79.55449
+
+✖ failing tests:
+
+test at tools:1:1
+✖ tools (65.715274ms)
+  'test failed'
+
+
+$ node --test
+ℹ tests 7488
+ℹ suites 1
+ℹ pass 7464
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 20
+ℹ todo 2
+ℹ duration_ms 372042.013718
+
+✖ failing tests:
+
+test at tools/distribution-coverage.test.mjs:107:1
+✖ (b) リポジトリ直下の全項目が dirs/files/notDistributed のどれかに分類されている (1424.853028ms)
+  AssertionError [ERR_ASSERTION]: 未分類のトップレベル項目: autopilot-nightly-kpi-report-20261029.md
+  tools/distribution-manifest.json の dirs / files / notDistributed のどれかに入れてください
+  + actual - expected
+  
+  + [
+  +   'autopilot-nightly-kpi-report-20261029.md'
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///mnt/c/Users/uers/.claude/nightly-repo/.wt/kpi-timeout-20261029/tools/distribution-coverage.test.mjs:114:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 'autopilot-nightly-kpi-report-20261029.md' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tools/import-cycle.test.mjs:75:1
+✖ tools/ の ESM に動的 import を含む循環がなく、静的な循環は登録済みのものだけ (47.486797ms)
+  Error: ENOENT: no such file or directory, scandir '/mnt/c/Users/uers/.claude/nightly-repo/.wt/kpi-timeout-20261029/tools/.audit-test-Nu0qgg'
+      at Object.readdirSync (node:fs:1631:26)
+      at listModules (file:///mnt/c/Users/uers/.claude/nightly-repo/.wt/kpi-timeout-20261029/tools/import-cycle.test.mjs:23:13)
+      at file:///mnt/c/Users/uers/.claude/nightly-repo/.wt/kpi-timeout-20261029/tools/import-cycle.test.mjs:25:74
+      at Array.flatMap (<anonymous>)
+      at listModules (file:///mnt/c/Users/uers/.claude/nightly-repo/.wt/kpi-timeout-20261029/tools/import-cycle.test.mjs:23:55)
+      at TestContext.<anonymous> (file:///mnt/c/Users/uers/.claude/nightly-repo/.wt/kpi-timeout-20261029/tools/import-cycle.test.mjs:77:42)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19) {
+    errno: -2,
+    code: 'ENOENT',
+    syscall: 'scandir',
+    path: '/mnt/c/Users/uers/.claude/nightly-repo/.wt/kpi-timeout-20261029/tools/.audit-test-Nu0qgg'
+  }
+
+
+$ node tools/selftest-guards.mjs
+PASS fleet-poller: rules-resync はリポの .mjs を優先する
+PASS onboarding-sync.ps1: hooks配下の自分自身を更新する
+PASS onboarding-sync.ps1: PowerShell 5.1 でも ONBOARDING を取得できる
+PASS install-orgiast.ps1: 未コミットの作業ツリーを削除しない
+PASS parseEnvText: BOM・表記ゆれ・重複・CRLF
+PASS env-repair: checkは非破壊、通常実行はbackup付き修復
+PASS llm-ask: BOM付きenvのキー状態を値なしで診断
+PASS hook-selfcheck: BOMを修復し、正常時はBOM報告なし
+PASS register-hooks: BOM付き settings.json でも登録でき、BOM が除去される
+PASS register-hooks: 旧PCを .mjs へ移行し、独自設定を保ったまま冪等
+PASS hook-selfcheck: BOM付き settings.json でクラッシュしない
+PASS model-agent-guard: Fable5 deny
+PASS Fable5明示指定: allow作成後は同一セッションで許可
+PASS Fable5例外: 期限切れallowはdeny
+PASS Fable5否定指定: allowを作成しない
+PASS fable-session-guard: 定額内と未確認なら最新応答がFable5で切替警告を注入
+PASS fable-session-guard: 定額内(planIncluded)なら最新応答がFable5でも無出力
+PASS fable-session-guard: 最新応答がOpusなら無出力
+PASS fable-session-guard: 同一sessionの未失効allowなら無出力
+PASS fable-session-guard: 別sessionまたは失効allowでは警告
+PASS fable-session-guard: transcript欠損と壊れたstdinは無言exit 0
+PASS fable-session-guard: 巨大transcriptも末尾の最新モデルだけで判定
+PASS fable-session-guard: process.exitを使わずisEntryで起動
+PASS model-agent-guard: warn設定でも実装はdeny
+PASS model-agent-guard: block昇格時は実装委譲を deny
+PASS model-agent-guard: Explore+model未指定は安経路への案内を warn で通す
+PASS model-agent-guard: Explore+haiku と専門agent は無出力
+PASS model-agent-guard: block モードでは探索の既定経路も deny
+PASS model-agent-guard: Fable 指定は探索でも deny のまま
+PASS model-agent-guard: Write は無出力
+PASS cost-routing-gate: 実装宣言
+PASS cost-routing-gate: 300件は夜間バッチ
+PASS cost-routing-gate: 夜間トリガーは夜間判定宣言を要求
+PASS cost-routing-gate: 夜間判定済みなら再注入しない
+PASS cost-routing-gate: 急ぎ明示は即時実行
+PASS cost-routing-gate: 小規模は夜間判定を注入しない
+PASS cost-routing-gate: budgetPressure 中は20件超の夜間バッチ文言を強める
+PASS cost-routing-gate: codex語で全体を無効化しない
+PASS hook-selfcheck: 偽HOMEで欠落を自動修復
+PASS codex-do: --cwd 省略でも指示文が消えない
+PASS tool-adoption-check: timeoutは未導入や手動installにしない
+PASS tool-adoption-check: --dry-run は exit 0 (top-level await後のprocess.exitを禁止)
+PASS tool-adoption-check: FORCE_MISSINGは未導入と導入導線を維持
+PASS tool-adoption-check: timeoutでも存在フォールバックで導入済み
+PASS tool-adoption-check: 全体デッドライン超過でもレポートを完走
+PASS tool-adoption-check: 新しい同一target stateなら導入をスキップ
+PASS tool-adoption-check: detached導入は同期的にブロックしない
+PASS codex-do: dry-run に MEMORY.md を同梱
+PASS makimono-gate: process.exit を使わない(Windowsでhookが落ちて注入が捨てられる)
+PASS makimono-gate: キャッシュ済み候補を注入して exit 0
+PASS makimono-gate: 無関係なプロンプトには何も注入しない
+PASS makimono-gate: 同一セッションで同じ指示書を再提案しない
+PASS makimono-publish: 秘匿値・社内固有名は送信せず下書きへ退避し、値を伏せる
+PASS makimono-publish: 一般化済み本文は送信禁止パターン0件
+PASS hook-selfcheck: makimono-gate の欠落を自動登録する
+PASS fleet-sheet-report: URL/TOKEN未設定ならstderr 1行でexit 0
+PASS install/verify: 配布する ~/.claude/*.env を両方の総合チェックが網羅
+PASS 外部送受信ツール: 設定不足をstderr 1行以上で観測可能にしてexit 0
+PASS fleet-sheet-report: stateから必要フィールドを組み立てる
+PASS fleet-sheet-report: 未登録ラベルを推測せずmappedName null
+PASS fleet-sheet-report: state欠損・破損でも既定値で継続
+PASS fleet upsert純関数: 保護列・連投・未マッピング・ヘッダ並替え
+PASS fleet upsert純関数: 自己申告3列を書き、A〜E列とO列を保護してヘッダ並替えに追従
+PASS fleet WebApp: 不足する自己申告ヘッダだけを右端に冪等追加
+PASS fleet upsert純関数: 紐付いた既存行のO列(kim手書き)は map 未登録でも保持し、空labelで行を奪わない
+PASS fleet upsert純関数: ヘッダの全角半角・空白差でも列を解決できる
+PASS fleet upsert純関数: D列重複でもF列labelで別行に入り他PCの行を奪わない
+PASS fleet WebApp: ヘッダタブ解決キャッシュとScriptLockを使う
+
+ALL PASS
+
+
+$ node --test --test-name-pattern='リポジトリ直下' tools/distribution-coverage.test.mjs
+✖ (b) リポジトリ直下の全項目が dirs/files/notDistributed のどれかに分類されている (448.703568ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 641.819554
+
+✖ failing tests:
+
+test at tools/distribution-coverage.test.mjs:107:1
+✖ (b) リポジトリ直下の全項目が dirs/files/notDistributed のどれかに分類されている (448.703568ms)
+  AssertionError [ERR_ASSERTION]: 未分類のトップレベル項目: autopilot-nightly-kpi-report-20261029.md
+  tools/distribution-manifest.json の dirs / files / notDistributed のどれかに入れてください
+  + actual - expected
+  
+  + [
+  +   'autopilot-nightly-kpi-report-20261029.md'
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///mnt/c/Users/uers/.claude/nightly-repo/.wt/kpi-timeout-20261029/tools/distribution-coverage.test.mjs:114:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 'autopilot-nightly-kpi-report-20261029.md' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+
+$ node --test tools/import-cycle.test.mjs
+✔ findCycles は相互 import を検出し、動的 import を含むかを区別する (4.396399ms)
+✔ tools/ の ESM に動的 import を含む循環がなく、静的な循環は登録済みのものだけ (4409.720377ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4568.097962
+
+
+## 2026-10-29 第3段: Windows Node 再検証
+cwd: C:\Users\uers\.claude\nightly-repo\.wt\kpi-timeout-20261029
+$ "C:\Program Files\nodejs\node.exe" --test tools/nightly-bootstrap.test.mjs tools/nightly-bootstrap-git-fallback.test.mjs
+✔ nightly-bootstrap は PATH に git が無くても既定の設置先から git を探す（2026-10-12 作業用011） (1.8542ms)
+✔ does not self-update a copy outside the operational install path (8505.6903ms)
+✔ self-updates the operational copy when PSModulePath is empty (5059.1588ms)
+✔ self-updates run-hidden.vbs when installed content differs (4716.5514ms)
+✔ does not create installed run-hidden.vbs if it does not exist (6231.4131ms)
+✔ skips run-hidden.vbs self-update when ORGIAST_NIGHTLY_NO_SELF_UPDATE=1 (8892.757ms)
+✔ run-hidden.vbs self-update replaces the installed runner through a same-directory temporary file (0.7336ms)
+✔ self-update replaces the installed script through a same-directory temporary file (1.6387ms)
+✔ hidden runner derives its log name from the target script, not the bootstrap wrapper (0.7643ms)
+✔ script is UTF-8 with BOM (0.8551ms)
+✔ heartbeat is fail-open and runs before target extension dispatch (0.8213ms)
+✔ finish heartbeat reports completion after target dispatch (0.4651ms)
+✔ Stop-Nightly reports a failed heartbeat (0.4877ms)
+✔ missing target exits 1 and writes readable Japanese log (8853.6516ms)
+✔ does not delete a non-repository directory with contents (4711.1939ms)
+✔ propagates PowerShell target exit code 7 (8278.4843ms)
+✔ forwards all target arguments and discards leading separator (18379.049ms)
+✔ -Shell pwsh runs a PowerShell target in Core (4838.3404ms)
+✔ omitting -Shell runs a PowerShell target in Desktop (1376.5402ms)
+✔ -Shell bogus exits 1 and logs the unknown value (2057.9659ms)
+✔ -Shell is not forwarded to the PowerShell target (3061.4171ms)
+✔ six concurrent runs retain every start and target-execution log line (4644.922ms)
+✔ mutex timeout logs a warning and continues with the existing target (7034.2626ms)
+✔ logs ok:origin/main only when HEAD matches origin/main (5434.1958ms)
+✔ logs ng and keeps running when HEAD does not match origin/main (5193.727ms)
+✔ real git bootstrap preserves dirty tree / updates clean tree: dirty=true (25797.7414ms)
+✔ real git bootstrap preserves dirty tree / updates clean tree: dirty=false (117165.6444ms)
+✔ hourly sync installed script follows verified main: enabled=true (3657.1111ms)
+✔ hourly sync installed script follows verified main: enabled=false (10053.6532ms)
+ℹ tests 29
+ℹ suites 0
+ℹ pass 29
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 269222.4085
+
+exit=0
+
+$ git add -- tools/nightly-bootstrap.ps1 tools/nightly-bootstrap.test.mjs autopilot-nightly-kpi-report-20261029.md evidence/kpi-timeout-20261029/log-improvement-tests.txt
+fatal: Unable to create '/mnt/c/Users/uers/.claude/nightly-repo/.wt/kpi-timeout-20261029/.git/index.lock': Read-only file system
+exit=128
+セッション権限: クローン .git は read-only。Windows git による権限回避は未実施。commit/push/PR更新/反映済みへの報告書更新は未実施。共有ツリーは書き込み許可範囲外のため、一時ディレクトリ3件は未削除。

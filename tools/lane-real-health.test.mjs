@@ -1,0 +1,554 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { realLaneStats, applyRealLaneHealth, billingFailure, billingWithQuotaHint, quotaFailure, chatgptUsageLimit, probeViaChain, stripCodexPromptEcho } from './lib/lane-real-health.mjs';
+import { repairable } from './lib/lane-repair-state.mjs';
+import { laneDoctorQuick, laneDoctorProbe } from './lane-doctor.mjs';
+const now = Date.parse('2026-10-29T12:00:00Z');
+function fixture(t, rows) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-real-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude/executor-usage.jsonl'), rows.map(r => JSON.stringify({ t: new Date(now - 1000).toISOString(), provider: 'deepseek', ...r })).join('\n') + '\n{partial');
+  return home;
+}
+test('24h failures override successful probe, preserve ranking and routing', t => {
+  const home = fixture(t, [...Array.from({ length: 5 }, () => ({ status: '500', reason: 'HTTP 500' })), { status: 'ok', t: now - 2000 }]);
+  fs.writeFileSync(path.join(home, '.claude/openrouter.env'), 'OPENROUTER_API_KEY=test-only');
+  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify({ lanes: { deepseek: { alive: true, reason: 'probe_ok', probedAt: new Date(now - 2000).toISOString() } } }));
+  const health = laneDoctorQuick({ home, now });
+  assert.equal(health.lanes.deepseek.reason, 'real_fail_rate');
+  assert.equal(health.lanes.deepseek.alive, false);
+  assert.equal(health.lanes.deepseek.error, 'HTTP 500 (5)');
+  assert.ok(!health.askOrder.includes('deepseek'));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude/lane-health.json'))).lanes.deepseek.reason, 'real_fail_rate');
+});
+test('inclusive threshold excludes quota failures from numerator', t => {
+  const home = fixture(t, [{ status: '500' }, { status: '401' }, { status: '429', until: now - 1 }, { status: 'error', reason: 'usage_limit', until: now - 1 }, { status: '429', until: now - 1 }, { status: 'ok', t: now - 2000 }]);
+  const s = realLaneStats(home, now).deepseek;
+  assert.equal(s.calls, 6); assert.equal(s.failures, 2); assert.equal(s.failRate, 2 / 6);
+  const h = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(h, home, now); assert.equal(h.lanes.deepseek.alive, true);
+  fs.appendFileSync(path.join(home, '.claude/executor-usage.jsonl'), '\n' + JSON.stringify({ t: new Date(now).toISOString(), provider: 'deepseek', status: 'error', stderr: 'spawn sdk ENOENT' }));
+  applyRealLaneHealth(h, home, now); assert.equal(h.lanes.deepseek.reason, 'real_fail_rate');
+  assert.match(h.lanes.deepseek.error, /spawn sdk ENOENT/);
+});
+test('old, future, invalid and unrouted records cannot reach five-call threshold', t => {
+  const home = fixture(t, [...Array.from({ length: 4 }, () => ({ status: '500' })), { status: '500', t: new Date(now - 86400_001).toISOString() }, { status: '500', t: new Date(now + 1).toISOString() }, { status: '500', t: 'invalid' }, { status: 'no-cheap-executor' }]);
+  const h = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(h, home, now); assert.equal(h.lanes.deepseek.alive, true); assert.equal(h.lanes.deepseek.real24h.calls, 4);
+});
+test('known quota reset is quota_wait; later success invalidates ledger-only quota', t => {
+  const home = fixture(t, [{ status: '429', retryAt: now + 3600_000 }]);
+  const h = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(h, home, now); assert.equal(h.lanes.deepseek.reason, 'quota_wait'); assert.equal(h.lanes.deepseek.until, now + 3600_000);
+  fs.appendFileSync(path.join(home, '.claude/executor-usage.jsonl'), '\n' + JSON.stringify({ t: new Date(now).toISOString(), provider: 'deepseek', status: 'ok' }));
+  const fresh = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(fresh, home, now); assert.equal(fresh.lanes.deepseek.alive, true);
+});
+test('successful probe clears older failures; quota probe becomes quota_wait', async t => {
+  const home = fixture(t, Array.from({ length: 5 }, () => ({ status: '503' })));
+  fs.writeFileSync(path.join(home, '.claude/openrouter.env'), 'OPENROUTER_API_KEY=test-only');
+  fs.writeFileSync(path.join(home, '.claude/deepseek.env'), 'DEEPSEEK_API_KEY=test-only');
+  let h = await laneDoctorProbe({ home, now, probe: async () => ({ code: 0, text: 'PONG' }), notify: async () => ({ delivered: 'test' }) });
+  assert.equal(h.lanes.deepseek.reason, 'probe_ok');
+  fs.writeFileSync(path.join(home, '.claude/executor-usage.jsonl'), '');
+  h = await laneDoctorProbe({ home, now, probe: async () => ({ code: 1, text: 'HTTP 429 usage limit' }), notify: async () => ({ delivered: 'test' }) });
+  assert.equal(h.lanes.deepseek.reason, 'quota_wait');
+});
+test('billing variants are excluded from failures and never block; real 500 threshold still blocks', async t => {
+  const { evaluateRepairFirst } = await import('./lane-repair-first-gate.mjs');
+  const { repairContext } = await import('./lib/lane-repair-state.mjs');
+  const rows = ['HTTP 402', 'Insufficient Balance', 'insufficient_quota', 'credits are depleted', 'not enough credits'].map(reason => ({ status: 'error', reason }));
+  const home = fixture(t, rows);
+  const h = laneDoctorQuick({ home, now });
+  assert.equal(h.lanes.deepseek.reason, 'billing');
+  assert.equal(h.lanes.deepseek.real24h.billingCalls, 5);
+  assert.equal(h.lanes.deepseek.real24h.failures, 0);
+  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify({ lanes: { deepseek: h.lanes.deepseek } }));
+  assert.equal(evaluateRepairFirst({ tool_name: 'Edit' }, { home, now }).decision, 'pass');
+  assert.match(repairContext(h, home, now), /deepseek: 残高不足。代替の安いレーン/);
+  assert.ok(JSON.parse(fs.readFileSync(path.join(home, '.claude/routing-overrides.json'))).demote.deepseek);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude/provider-cooldown.json'))).deepseek.reason, 'billing');
+  fs.appendFileSync(path.join(home, '.claude/executor-usage.jsonl'), '\n' + Array.from({ length: 6 }, () => JSON.stringify({ t: new Date(now).toISOString(), provider: 'deepseek', status: '500' })).join('\n'));
+  assert.equal(laneDoctorQuick({ home, now }).lanes.deepseek.reason, 'real_fail_rate');
+  assert.equal(evaluateRepairFirst({ tool_name: 'Edit' }, { home, now }).decision, 'block');
+});
+
+test('Google 403 outstanding balance is billing', t => {
+  const google403 = 'HTTP 403: The billing account has an outstanding balance. Please resolve the payment issue.';
+  assert.equal(billingFailure(google403), true);
+  // 403 + billing text combination is required: plain billing text without 403 is not billing
+  assert.equal(billingFailure('The billing account has an outstanding balance (no status)'), false);
+  assert.equal(billingFailure('billing account is suspended'), false);
+  // With 403 code and matching billing text
+  assert.equal(billingFailure('error 403: billing account is disabled'), true);
+  assert.equal(billingFailure('HTTP 403 billing account has been suspended'), true);
+  assert.equal(billingFailure('HTTP 403 billing account not active'), true);
+  // 403 with prepayment credits text that matches other pattern
+  assert.equal(billingFailure('HTTP 403 prepayment credits are depleted'), true);
+  // 429 coexistence → billingWithQuotaHint
+  assert.equal(billingWithQuotaHint('HTTP 403: The billing account has an outstanding balance. HTTP 429 rate limit'), true);
+  // 403 without billing text is not billing
+  assert.equal(billingFailure('HTTP 403 permission denied'), false);
+  assert.equal(billingFailure('status 403 Forbidden'), false);
+});
+
+test('Google 403 outstanding balance via ledger realLaneStats is billing', t => {
+  const home = fixture(t, [{ provider: 'gemini', status: 'http_403', stderr: 'The billing account has an outstanding balance' }]);
+  const stats = realLaneStats(home, now).gemini;
+  assert.equal(stats.billingCalls, 1, 'Google 403 残高エラーは billing として分類される');
+  assert.equal(stats.quotaCalls, 0);
+  assert.equal(stats.failures, 0);
+});
+
+test('billing quick diagnosis notification is once per lane per UTC day', async t => {
+  const { notifyLaneStops } = await import('./lane-doctor.mjs');
+  const home = fixture(t, [{ status: '402' }]);
+  const health = laneDoctorQuick({ home, now });
+  health.deadNeedsUser = []; // This test concerns billing only, independently of host Codex auth.
+  const sent = [];
+  const notify = async text => { sent.push(text); return { delivered: 'test' }; };
+  await notifyLaneStops(health, { home, now, notify });
+  await notifyLaneStops(health, { home, now: now + 1000, notify });
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /の deepseek が残高不足\(402\)。まず無料枠・既存契約内の他AIレーンを実測し、使える経路へ切り替えます。追加費用案は代替不可の証拠と比較表がある場合だけ最後に提示します$/);
+  await notifyLaneStops(health, { home, now: now + 12 * 3600_000, notify });
+  assert.equal(sent.length, 2);
+});
+test('diagnosed billing cooldown skips explicit llm-ask candidate in existing fallback router', async t => {
+  const { callWithFallback } = await import('./llm-fallback.mjs');
+  const home = fixture(t, [{ provider: 'gemini', status: '402' }]);
+  laneDoctorQuick({ home, now });
+  const attempted = [];
+  const result = await callWithFallback({
+    start: { provider: 'gemini', model: 'test' }, chain: [{ provider: 'openrouter', model: 'test' }],
+    cooldownFile: path.join(home, '.claude/provider-cooldown.json'),
+    ledgerFile: path.join(home, '.claude/routing-ledger.jsonl'),
+    budgetFile: path.join(home, '.claude/budget.json'), now: () => now,
+    payloadFor(candidate) { attempted.push(candidate.provider); return { url: 'https://example.invalid', init: {} }; },
+    fetchImpl: async () => new Response('{}', { status: 200 }),
+  });
+  assert.deepEqual(attempted, ['openrouter']);
+  assert.equal(result.candidate.provider, 'openrouter');
+});
+
+test('real glm exhausted limit and cooldown rows are quota, never repair blockers', async t => {
+  const { evaluateRepairFirst } = await import('./lane-repair-first-gate.mjs');
+  const error = 'HTTP429 {"error":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-10-29T19:53:29Z"}';
+  const home = fixture(t, [...Array.from({ length: 70 }, () => ({ provider: 'glm', status: 'cooldown' })), ...Array.from({ length: 39 }, () => ({ provider: 'glm', status: 'error', stderr: error }))]);
+  const health = { lanes: { glm: { alive: false, reason: 'probe_failed', error } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.glm.reason, 'quota_wait');
+  assert.equal(health.lanes.glm.real24h.failures, 0);
+  assert.equal(health.lanes.glm.until, Date.parse('2026-10-29T19:53:29Z'));
+  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify(health));
+  assert.equal(evaluateRepairFirst({ tool_name: 'Edit' }, { home, now }).decision, 'pass');
+});
+test('groq 429 with billing prose is quota without reset; 402 is billing', t => {
+  for (const [error, reason] of [['HTTP429 billing rate limit', 'quota_wait'], ['HTTP 402 insufficient balance', 'billing']]) {
+    const home = fixture(t, [{ provider: 'groq', status: 'error', stderr: error }]);
+    const health = { lanes: { groq: { alive: false, reason: 'billing', error } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.groq.reason, reason);
+    assert.equal(health.lanes.groq.real24h.failures, 0);
+  }
+});
+test('underscored and compact HTTP statuses classify 402 as billing and 429 as quota', t => {
+  for (const status of ['http_402', 'HTTP 402', 'HTTP402', 'status 402']) {
+    const home = fixture(t, [{ provider: 'gemini', status, stderr: 'Your prepayment credits are depleted RESOURCE_EXHAUSTED' }]);
+    const stats = realLaneStats(home, now).gemini;
+    assert.equal(stats.billingCalls, 1, status);
+    assert.equal(stats.quotaCalls, 0, status);
+  }
+  for (const status of ['http_429', 'HTTP 429', 'HTTP429', 'status 429']) {
+    const home = fixture(t, [{ provider: 'gemini', status }]);
+    assert.equal(realLaneStats(home, now).gemini.quotaCalls, 1, status);
+  }
+  const home = fixture(t, [{ provider: 'gemini', status: 'http_14025', stderr: 'error' }]);
+  assert.equal(realLaneStats(home, now).gemini.billingCalls, 0);
+  assert.equal(realLaneStats(home, now).gemini.quotaCalls, 0);
+});
+test('a row containing both 402 and 429 remains quota', t => {
+  const home = fixture(t, [{ provider: 'gemini', status: 'http_402', stderr: 'HTTP429 prepayment credits are depleted RESOURCE_EXHAUSTED' }]);
+  const stats = realLaneStats(home, now).gemini;
+  assert.equal(stats.billingCalls, 0);
+  assert.equal(stats.quotaCalls, 1);
+});
+test('three server errors out of five still block implementation', async t => {
+  const { evaluateRepairFirst } = await import('./lane-repair-first-gate.mjs');
+  const home = fixture(t, [{ status: '500' }, { status: '502' }, { status: '503' }, { status: '429' }, { status: '429' }]);
+  const health = { lanes: { deepseek: { alive: true } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.deepseek.reason, 'real_fail_rate');
+  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify(health));
+  assert.equal(evaluateRepairFirst({ tool_name: 'Edit' }, { home, now }).decision, 'block');
+});
+test('legacy bare billing cached from 429 is corrected from ledger evidence', t => {
+  const home = fixture(t, [{ provider: 'groq', status: '429' }]);
+  const health = { lanes: { groq: { alive: false, reason: 'billing' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.groq.reason, 'quota_wait');
+});
+test('glm real error with limit exhausted text is quota_wait not real_fail_rate', t => {
+  const error = 'HTTP429 {"error":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-10-29T19:53:29Z"}';
+  const home = fixture(t, [
+    ...Array.from({ length: 70 }, () => ({ provider: 'glm', status: 'cooldown' })),
+    ...Array.from({ length: 39 }, () => ({ provider: 'glm', status: 'error', stderr: error })),
+  ]);
+  const stats = realLaneStats(home, now);
+  assert.equal(stats.glm.quotaCalls, 109);
+  assert.equal(stats.glm.failures, 0);
+  assert.equal(stats.glm.failRate, 0);
+  const health = { lanes: { glm: { alive: false, reason: 'probe_failed', error } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.glm.reason, 'quota_wait');
+  assert.equal(health.lanes.glm.until, Date.parse('2026-10-29T19:53:29Z'));
+});
+test('groq 429 with billing-like prose is quota_wait, not billing', t => {
+  for (const [error, expected] of [
+    ['HTTP429 billing rate limit', 'quota_wait'],
+    ['HTTP 429 Insufficient credits for this request', 'quota_wait'],
+    ['429 rate limit exceeded', 'quota_wait'],
+    ['HTTP 402 insufficient balance', 'billing'],
+    ['HTTP 402 Your credits are depleted', 'billing'],
+  ]) {
+    const home = fixture(t, [{ provider: 'groq', status: 'error', stderr: error }]);
+    const stats = realLaneStats(home, now);
+    const isBilling = expected === 'billing';
+    assert.equal(stats.groq.billingCalls, isBilling ? 1 : 0, `billingCalls for "${error}"`);
+    assert.equal(stats.groq.quotaCalls, isBilling ? 0 : 1, `quotaCalls for "${error}"`);
+    assert.equal(stats.groq.failures, 0);
+    // Simulate old cached billing reason with error text: applyRealLaneHealth must reclassify.
+    const health = { lanes: { groq: { alive: false, reason: 'billing', error, real24h: stats.groq } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.groq.reason, expected, `reason for "${error}"`);
+  }
+});
+test('five server errors out of five still produce real_fail_rate', t => {
+  const home = fixture(t, Array.from({ length: 5 }, (_, i) => ({ status: ['500', '502', '503', '500', '500'][i] })));
+  const health = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.deepseek.reason, 'real_fail_rate');
+  assert.equal(health.lanes.deepseek.alive, false);
+  assert.ok(health.lanes.deepseek.error.includes('HTTP 500'));
+});
+test('billing penalty with 429 text in same detail is ONLY quota before billing', t => {
+  // The row text contains both 429-like billing prose. quotaFailure matches first.
+  const home = fixture(t, [{ provider: 'groq', status: 'error', stderr: 'HTTP 429 monthly limit exceeded' }]);
+  const stats = realLaneStats(home, now);
+  assert.equal(stats.groq.billingCalls, 0);
+  assert.equal(stats.groq.quotaCalls, 1);
+  assert.equal(stats.groq.failures, 0);
+});
+test('billing majority outranks quota, while repairable failure rate outranks both', t => {
+  const home = fixture(t, [...Array.from({ length: 14 }, () => ({ status: '402' })), { status: '429', until: now + 10000 }]);
+  const h = { lanes: { deepseek: { alive: false, reason: 'quota_wait', until: now + 10000 } } };
+  applyRealLaneHealth(h, home, now);
+  assert.equal(h.lanes.deepseek.reason, 'billing');
+  assert.equal(h.lanes.deepseek.until, undefined);
+  fs.appendFileSync(path.join(home, '.claude/executor-usage.jsonl'), '\n' + Array.from({ length: 16 }, () => JSON.stringify({ provider: 'deepseek', t: now, status: '500' })).join('\n'));
+  applyRealLaneHealth(h, home, now);
+  assert.equal(h.lanes.deepseek.reason, 'real_fail_rate');
+});
+test('expired ledger and error resets do not create quota_wait', t => {
+  const home = fixture(t, [{ status: '429', until: now - 1 }]);
+  const h = { lanes: { deepseek: { alive: true, reason: 'probe_ok', until: now - 1 } } };
+  applyRealLaneHealth(h, home, now);
+  assert.equal(h.lanes.deepseek.alive, true);
+  assert.equal(h.lanes.deepseek.until, undefined);
+});
+test('direct probe success after an untimed 429 clears ledger-only quota_wait', t => {
+  const home = fixture(t, [{ status: 'ok', t: new Date(now - 900_000).toISOString() }, { status: '429', reason: 'HTTP 429', t: new Date(now - 600_000).toISOString() }]);
+  const stale = { lanes: { deepseek: { alive: true, reason: 'probe_ok', lastProbeOkAt: new Date(now - 700_000).toISOString() } } };
+  applyRealLaneHealth(stale, home, now); assert.equal(stale.lanes.deepseek.reason, 'quota_wait');
+  const fresh = { lanes: { deepseek: { alive: true, reason: 'probe_ok', lastProbeOkAt: new Date(now - 1000).toISOString() } } };
+  applyRealLaneHealth(fresh, home, now); assert.equal(fresh.lanes.deepseek.alive, true); assert.equal(fresh.lanes.deepseek.reason, 'probe_ok');
+});
+
+test('recovery excludes eleven older failures and equal timestamps; subsequent failures still block', t => {
+  for (const ledgerSuccess of [false, true]) {
+    for (const newer of [0, 4, 5]) {
+      const home = fixture(t, [
+        ...Array.from({ length: 11 }, () => ({ status: '500', t: now - 3000 })),
+        ...Array.from({ length: newer }, () => ({ status: '503', t: now - 500 })),
+        { status: '500', t: now - 1000 },
+        ...(ledgerSuccess ? [{ status: 'ok', t: now - 1000 }] : []),
+      ]);
+      const health = { lanes: { deepseek: { alive: true, reason: 'probe_ok', lastProbeOkAt: ledgerSuccess ? now - 2000 : new Date(now - 1000).toISOString() } } };
+      applyRealLaneHealth(health, home, now);
+      assert.equal(health.lanes.deepseek.reason, newer >= 5 ? 'real_fail_rate' : 'probe_ok');
+      if (newer >= 5) assert.equal(health.lanes.deepseek.error, 'HTTP 503 (5)');
+    }
+  }
+});
+
+test('post-recovery fifty-percent boundary excludes older calls from denominator', t => {
+  for (const failures of [4, 5]) {
+    const home = fixture(t, [
+      ...Array.from({ length: 20 }, () => ({ status: '500', t: now - 3000 })),
+      ...Array.from({ length: failures }, () => ({ status: '500', t: now - 500 })),
+      ...Array.from({ length: 5 }, () => ({ status: '429', t: now - 500, until: now - 1 })),
+    ]);
+    const health = { lanes: { deepseek: { alive: true, reason: 'probe_ok', lastProbeOkAt: now - 1000 } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.deepseek.reason, failures === 5 ? 'real_fail_rate' : 'probe_ok');
+  }
+});
+
+test('five auth failures on codex lane produce dead:oauth_consent', t => {
+  const home = fixture(t, Array.from({ length: 5 }, () => ({ provider: 'codex', status: 'error', reason: 'Missing bearer or basic authentication in header' })));
+  const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.codex.reason, 'dead:oauth_consent');
+  assert.equal(health.lanes.codex.alive, false);
+  assert.match(health.lanes.codex.error, /Missing bearer/i);
+});
+
+test('five auth failures on non-codex lane produce auth_invalid', t => {
+  const home = fixture(t, Array.from({ length: 5 }, () => ({ status: 'error', reason: 'HTTP 401 unauthorized' })));
+  const health = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.deepseek.reason, 'auth_invalid');
+  assert.equal(health.lanes.deepseek.alive, false);
+  assert.match(health.lanes.deepseek.error, /HTTP 401/);
+});
+
+test('mixed auth and non-auth failures still produce real_fail_rate', t => {
+  const home = fixture(t, [
+    { provider: 'codex', status: 'error', reason: 'HTTP 401 unauthorized' },
+    { provider: 'codex', status: 'error', reason: 'HTTP 401 unauthorized' },
+    { provider: 'codex', status: 'error', reason: 'HTTP 401 unauthorized' },
+    { provider: 'codex', status: 'error', reason: 'HTTP 500 internal error' },
+    { provider: 'codex', status: 'error', reason: 'HTTP 500 internal error' },
+  ]);
+  const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.codex.reason, 'real_fail_rate');
+  assert.equal(health.lanes.codex.alive, false);
+});
+
+test('89 codex refresh-token failures and one WSL failure produce dead:oauth_consent', t => {
+  const error = 'Failed to refresh token: Your access token could not be refreshed. Please log out and sign in again. ERROR: workspace routing discovery unauthorized (401)';
+  const other = 'WSL ディストリが見つかりませんでした';
+  const home = fixture(t, [
+    ...Array.from({ length: 89 }, () => ({ provider: 'codex', status: 'error', stderr: error })),
+    { provider: 'codex', status: 'error', stderr: other },
+  ]);
+  const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.codex.reason, 'dead:oauth_consent');
+  assert.equal(health.lanes.codex.alive, false);
+  assert.ok(health.lanes.codex.error.includes(`認証系 89件 / その他 1件: ${other}`));
+});
+
+test('18 auth failures and one server failure on deepseek produce auth_invalid', t => {
+  const home = fixture(t, [
+    ...Array.from({ length: 18 }, () => ({ status: 'error', reason: 'HTTP 401 unauthorized' })),
+    { status: 'error', reason: 'HTTP 500 internal error' },
+  ]);
+  const health = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.deepseek.reason, 'auth_invalid');
+  assert.equal(health.lanes.deepseek.alive, false);
+  assert.match(health.lanes.deepseek.error, /認証系 18件 \/ その他 1件: HTTP 500/);
+});
+
+test('auth dominance includes 90 percent but excludes 80 percent', t => {
+  for (const authCount of [8, 9]) {
+    const home = fixture(t, [
+      ...Array.from({ length: authCount }, () => ({ provider: 'codex', status: 'error', reason: 'HTTP 401 unauthorized' })),
+      ...Array.from({ length: 10 - authCount }, () => ({ provider: 'codex', status: 'error', reason: 'HTTP 500 internal error' })),
+    ]);
+    const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.codex.reason, authCount === 9 ? 'dead:oauth_consent' : 'real_fail_rate');
+    assert.equal(health.lanes.codex.alive, false);
+  }
+});
+
+test('auth dominance requires five auth failures even with 100 percent of failures', t => {
+  const home = fixture(t, [
+    ...Array.from({ length: 4 }, () => ({ provider: 'codex', status: 'error', reason: 'HTTP 401 unauthorized' })),
+    { provider: 'codex', status: '429', until: now - 1 },
+  ]);
+  const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.codex.reason, 'real_fail_rate');
+});
+
+test('codex refresh-token phrases classify as auth without a 401 or unauthorized hint', t => {
+  for (const reason of ['Failed to refresh token', 'access token could not be refreshed', 'log out and sign in again', 'sign in again']) {
+    const home = fixture(t, Array.from({ length: 5 }, () => ({ provider: 'codex', status: 'error', reason })));
+    const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.codex.reason, 'dead:oauth_consent', reason);
+    assert.equal(health.lanes.codex.alive, false);
+  }
+});
+
+test('ledger filters routing and other-lane billing, quota and auth lines', t => {
+  for (const text of ['[codex-do] Gemini HTTP 402 insufficient balance', '[routing] HTTP 429', 'fallback backend=gemini HTTP 401 unauthorized', 'cheap-first: HTTP 402', 'ack backend=groq HTTP 402', 'Gemini HTTP 402 insufficient balance']) {
+    const home = fixture(t, [{ provider: 'codex', status: 'error', stderr: text }]);
+    const stats = realLaneStats(home, now).codex;
+    assert.equal(stats.billingCalls, 0, text);
+    assert.equal(stats.quotaCalls, 0, text);
+  }
+  const home = fixture(t, [{ provider: 'codex', status: 'error', stderr: 'HTTP 402 insufficient balance' }]);
+  assert.equal(realLaneStats(home, now).codex.billingCalls, 1);
+});
+
+test('cached chain evidence cannot retain billing, quota, auth or alive classification', t => {
+  const home = fixture(t, []);
+  for (const reason of ['billing', 'quota_wait', 'auth_invalid', 'probe_ok']) {
+    const health = { lanes: { codex: { alive: reason === 'probe_ok', reason, error: 'Gemini HTTP 402 insufficient balance' } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.codex.reason, 'probe_inconclusive');
+    assert.equal(health.lanes.codex.alive, false);
+    assert.equal(health.lanes.codex.viaChain, true);
+  }
+});
+
+test('[routing] 診断行に他レーン名があっても自レーンのタグで答えた probe は viaChain にしない', t => {
+  const text = [
+    '[routing] カテゴリ summarize は実測表から openrouter/inclusionai/ling-3.0-flash を先頭にします',
+    '[routing] gemini はdemote中のため連鎖の末尾へ回します',
+    '[cooldown] glm はスキップ (lane_doctor_usage_limit, 残り2991分)',
+    '(出力なし)',
+    '[openrouter:openai/gpt-oss-120b] in=73 out=10tok',
+  ].join('\n');
+  assert.equal(probeViaChain(text, 'openrouter'), false);
+});
+
+test('他レーンのタグで答えた probe は viaChain', t => {
+  const text = [
+    '[routing] カテゴリ summarize は実測表から openrouter/inclusionai/ling-3.0-flash を先頭にします',
+    '[routing] gemini はdemote中のため連鎖の末尾へ回します',
+    '[cooldown] glm はスキップ (lane_doctor_usage_limit, 残り2991分)',
+    '(出力なし)',
+    '[openrouter:inclusionai/ling-3.0-flash] in=26 out=90tok',
+  ].join('\n');
+  assert.equal(probeViaChain(text, 'deepseek'), true);
+});
+
+test('[codex-do] cheap-first: ... は診断行でも viaChain のまま', t => {
+  const text = '[codex-do] cheap-first: Gemini HTTP 402 insufficient balance';
+  assert.equal(probeViaChain(text, 'codex'), true);
+});
+
+test('OpenRouter 経由が正規経路の deepseek を連鎖と誤認しない', t => {
+  assert.equal(probeViaChain('PONG\n[openrouter:deepseek/deepseek-v4-flash] in=10 out=3tok', 'deepseek'), false);
+});
+
+test('OpenRouter 経路の mistral も同様に連鎖と誤認しない', t => {
+  assert.equal(probeViaChain('PONG\n[openrouter:mistralai/mistral-medium-3.1] in=21 out=3tok', 'mistral'), false);
+});
+
+test('OpenRouter タグに自レーン名が含まれない場合は従来どおり viaChain', t => {
+  assert.equal(probeViaChain('PONG\n[openrouter:openai/gpt-oss-120b] in=73 out=5tok', 'deepseek'), true);
+});
+
+test('cheap-first 行に OpenRouter タグがあっても viaChain のまま', t => {
+  assert.equal(probeViaChain('cheap-first: x\nPONG\n[openrouter:deepseek/deepseek-v4-flash] in=10 out=3tok', 'deepseek'), true);
+});
+
+test('通常の本文に他レーン名が出たら従来どおり viaChain', t => {
+  const text = 'Gemini HTTP 402 insufficient balance';
+  assert.equal(probeViaChain(text, 'codex'), true);
+});
+
+test('Codex CLI のプロンプト再掲内の他レーン名を viaChain 判定に使わない', t => {
+  const withoutUser = '--------\nprovider: openai\nGemini response';
+  assert.equal(stripCodexPromptEcho(withoutUser), withoutUser);
+  const prefix = [
+    '[codex-do] executor=codex',
+    'OpenAI Codex v0.162.1',
+    '--------',
+    'provider: openai',
+    '--------',
+    'user',
+    'Gemini と DeepSeek は入力に書かれただけ',
+  ];
+  const direct = [...prefix, 'codex', 'WRITE_OK を確認しました。'].join('\n');
+  assert.equal(probeViaChain(direct, 'codex'), false);
+  assert.equal(stripCodexPromptEcho(direct).includes('Gemini'), false);
+
+  const fallback = [...prefix, 'codex', 'fallback backend=deepseek'].join('\n');
+  assert.equal(probeViaChain(fallback, 'codex'), true);
+
+  const otherLaneResponse = [...prefix, 'exec', 'deepseek answered'].join('\n');
+  assert.equal(probeViaChain(otherLaneResponse, 'codex'), true);
+
+  const promptOnly = prefix.join('\n');
+  assert.equal(probeViaChain(promptOnly, 'codex'), false);
+  assert.equal(stripCodexPromptEcho(promptOnly), prefix.slice(0, 5).join('\n'));
+});
+
+test('[routing] の demote 診断行（provider 名 fallback）を連鎖と誤認しない 2026-11-17 実測', t => {
+  const text = [
+    '[cost] 本日の安いAI実行者 概算 $3.24 が警告値 $1.00 を超過',
+    '[routing] groq は lanes-disabled.json で無効化されているため使いません',
+    '[routing] glm は lanes-disabled.json で無効化されているため使いません',
+    '[routing] gemini は lanes-disabled.json で無効化されているため使いません',
+    '[routing] fallback はdemote中のため連鎖の末尾へ回します',
+    '[routing] gemini はdemote中のため連鎖の末尾へ回します',
+    '[routing] glm はdemote中のため連鎖の末尾へ回します',
+    '[routing] genspark はdemote中のため連鎖の末尾へ回します',
+    '[routing] codex はdemote中のため連鎖の末尾へ回します',
+    '[cooldown] genspark はスキップ (http_401, 残り81分)',
+    'PONG',
+    '[openrouter:deepseek/deepseek-v4-flash] in=11 out=3tok',
+  ].join('\n');
+  assert.equal(probeViaChain(text, 'deepseek'), false);
+  assert.equal(probeViaChain(text, 'openrouter'), false);
+});
+
+test('cheap-first: を含む出力は viaChain のまま（回帰）', t => {
+  assert.equal(probeViaChain('cheap-first: gemini → deepseek', 'deepseek'), true);
+});
+
+test('stopped lane auth evidence is superseded by a later ledger or probe success', t => {
+  for (const ledgerSuccess of [false, true]) {
+    const home = fixture(t, [
+      { status: 'error', reason: 'HTTP 401 unauthorized', t: now - 3000 },
+      ...(ledgerSuccess ? [{ status: 'ok', t: now - 2000 }] : []),
+    ]);
+    const health = { lanes: { deepseek: {
+      alive: false, reason: 'quota_wait', until: now + 1000,
+      error: 'HTTP 401 unauthorized', probedAt: now - 3000,
+      lastProbeOkAt: now - (ledgerSuccess ? 4000 : 2000),
+    } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.deepseek.reason, 'quota_wait');
+    fs.appendFileSync(path.join(home, '.claude/executor-usage.jsonl'), '\n' + JSON.stringify({
+      provider: 'deepseek', status: 'cooldown', reason: 'HTTP 401 unauthorized', t: now - 1000,
+    }));
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.deepseek.reason, 'auth_invalid');
+    assert.equal(health.lanes.deepseek.until, undefined);
+  }
+});
+
+test('ChatGPT の定額枠切れ文言は quota であって real_fail_rate ではない', t => {
+  const upgrade = 'Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 10:23 PM. tokens used 62,031';
+  assert.equal(chatgptUsageLimit(upgrade), true);
+  assert.equal(quotaFailure(upgrade), true);
+  // 枠切れは残高不足ではない。billing に落ちると自動復帰を待たずに修復を迫られる。
+  assert.equal(billingFailure(upgrade), false);
+  assert.equal(quotaFailure("You've hit your usage limit for GPT-5."), true);
+  assert.equal(quotaFailure('You have reached your weekly limit.'), true);
+  // 枠と無関係な失敗まで quota に倒さない
+  assert.equal(chatgptUsageLimit('HTTP 500 internal error'), false);
+  assert.equal(chatgptUsageLimit('upgrade to pro plan for more features'), false);
+});
+
+test('ChatGPT 枠切れの行は失敗ではなく quotaCalls に入り gate が修復を要求しない', t => {
+  const stderr = 'Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 10:23 PM.';
+  const home = fixture(t, Array.from({ length: 6 }, () => ({ provider: 'codex', status: 'error', stderr })));
+  const stats = realLaneStats(home, now);
+  assert.equal(stats.codex.failures, 0);
+  assert.equal(stats.codex.quotaCalls, 6);
+  assert.equal(repairable({ alive: false, reason: 'real_fail_rate', error: stderr }), false);
+});

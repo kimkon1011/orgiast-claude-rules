@@ -1,0 +1,71 @@
+GridBeyond 竹 Gemini 寸法下絵追従 根本対策結果
+作成日: 2026-11-17 JST
+
+1. 原因の見立て
+
+[事実]
+- premium / standard / impact の旧下絵は、目視上ほぼ同じ外形で、premium 固有の「提灯」を示す明確な形がなかった。
+- 保存済み旧 plans.json の竹 label/add に「Glowing Lantern」「Treat the low 3.6 m envelope as a softly glowing lantern」がある。梅・松の add に lantern はない。新 plans-v9.json はこの竹定義を変更している。
+- 竹 Gemini retry4 は下絵より大きい実写風フレームへ置換、retry6 は巨大な吊り看板と吊りトラスを新設、retry7 は人物を消して長い側壁群へ置換した。いずれも背景ホールまたは構造を変更した。
+- booth-perse-gen.mjs は provider / plan によらず --base を refs の先頭へ unshift し、FIRST reference として指示する。同CLIを使う竹だけ参照順を変える分岐はない。ただし保存済み perse-result.json はリクエスト配列そのものを記録しないため、過去全リクエストの完全同一性までは証明できない。
+- 旧 premium は白い膜の外周と内部 halo、松は明瞭な infinity 造形がある。旧 premium に小型提灯そのものの形はなく、halo もこのカメラでは目立たない。外形が共通でも内部意匠は同一ではない。
+- retry6/7 のブリーフには既に背景・人物・構造の固定を先頭で指示し、吊り物も禁止している。それでも失敗したため、禁止文の先頭配置だけで直るという証拠はない。
+
+[推測]
+- 提灯形状が下絵にない状態で「Glowing Lantern」を要求したため、Gemini が特徴を上部の大構造として補完した可能性がある。旧指示の「envelope as a lantern」はブース全体の発光膜表現とも読め、吊り提灯を明示要求した文ではない。モデル内部の因果は断定しない。
+- 引継ぎ済み attempt 1 は下絵・plan・共通ブリーフを同時変更しており、指定の「1点ずつ変更」を満たしていない。合格は対策の組合せに対する1サンプルの結果であり、各変更の寄与や再現率は未検証。既存の実行履歴を単一変更実験と書き換えない。
+
+2. 今回の変更
+
+- tools/booth-3d/render-gridbeyond-final.py の premium に、寸法枠内・背面壁固定の小型楕円発光膜3個を追加。吊り物ではなく下絵内の仕上げ対象を明示した。
+- 生成時の plan label を「竹 Luminous Membrane」に変更し、lantern 語を除去。「既存の背面壁レリーフを同位置・同寸法で仕上げる」「吊り物・看板・トラス・庇・新構造を追加しない」と明記した。
+- brief-take-gemini-attempt1.txt では、3面開放、柱、人物、上端、背景ホールを先頭で変更禁止とした。
+- 参照順は --base の新 premium 下絵が先頭。--max-height 3.6、--only take、--providers gemini を維持。他プロバイダへの切替なし。
+
+3. 再生成と目視判定
+
+- attempt 1 変更点: premium 下絵へ背面壁固定の小型楕円発光膜3個を追加し、ブリーフ/plan から Glowing Lantern 語を除去。
+- attempt 1 判定: 合格。
+  - 下絵の低い3.6m上端、柱位置、画像で確認できる人物3体の位置と小さい比率、天井余白、背景ホールを保持。
+  - 前・左・右の3面開放を崩していない。
+  - 巨大な吊り看板、吊りトラス、上部新設構造、背景置換、人物消去なし。
+  - 背面壁の小型発光膜は指定位置・規模のまま仕上げられた。
+- attempt 2/3: attempt 1 合格のため未実行（不要な費用と変動を避けた）。
+- 継続検証で旧下絵3案、新竹下絵、retry4/6/7、合格竹OpenAI・梅/松Gemini、attempt1を各画像で開いて再目視。旧失敗3枚は不合格を維持、attempt1は梅/松と同じ視覚基準で合格を維持した。背景の明暗・材質と内部照明は変わるが、背景線と構造位置は概ね保持される。「pixel-identical」の達成や実寸を画像から厳密測量したという意味ではない。
+
+4. Drive
+
+- 新規ファイル名: v9-寸法厳密-竹-gemini.png
+- URL: https://drive.google.com/file/d/15EqkcwvZo0VBEY46aEmu2-i3ZvZ-SStp/view?authuser=kim@orgiast.jp
+- parent: 1sY5C-F9MkqfKGZJAroaWeasi0s7C-2Xe
+- 読み戻し: kim@orgiast.jp=writer、seisaku-team@orgiast.jp=owner、orgiast.jp domain=reader。
+- 既存ファイルの削除・上書きなし。
+- 継続検証でも上記IDの名称・parent・kim writerをコネクタ get_file_metadata で再読み戻し済み。既存の新規アップロードを採用し、重複アップロードなし。
+
+5. 実費
+
+- attempt 1 Gemini: $0.141644
+- attempt 2/3: $0（未実行）
+- 今回合計: $0.141644
+- 継続検証での追加画像API呼出し: 0件 / $0。金額は保存済み perse-result.json の API cost 値（請求書照合は未実施）。
+
+6. テスト実出力
+
+- node --test tools/booth-perse-gen.test.mjs: tests 26 / pass 26 / fail 0 / skipped 0。
+- python/python3 は WindowsApps の未導入エイリアスで実行不可（exit 9009）。Blender 5.2.4 LTS 内蔵Pythonで同じ tools/booth-3d/check-underlay-edge.test.py を実行: Ran 5 tests / OK。
+- 継続検証: Node同テスト 26 pass / 0 fail / exit 0。実出力: results/perse-strict-work/take-gemini-tests-node.txt。
+- 継続検証: Blender同梱 python.exe 単独起動は exit -1073741515（成功扱いしない）。Blender --background --python-exit-code 1 --python-expr から runpy で同テストを実行し、Ran 5 tests / OK / exit 0。実出力: results/perse-strict-work/take-gemini-tests-blender.txt。
+
+7. PR
+
+- PR #2211: https://github.com/kimkon1011/orgiast-claude-rules/pull/2211
+- ブランチ: perse-strict-take-gemini。既存の作業コミット ef9157f3 とPRを継続使用（origin/main由来の64b21288から分岐済み）。重複ブランチ・PRなし。
+- 実装PR #2211 は MERGED。CI/test、test/test、test-posix、enable-auto-merge 2件はいずれも SUCCESS（GitHub読み戻し）。
+- merge commit: https://github.com/kimkon1011/orgiast-claude-rules/commit/0f6f04276e67481e51363fd4148356ca770b8780
+- 上記マージ後の記録訂正は perse-strict-take-gemini-evidence で pr-land.mjs を使用する。対象は人物数、因果推定の限界、検証実出力。画像の再生成や実装変更はない。
+
+8. 禁止事項確認
+
+- Claude APIの新規利用・自動フォールバックなし。指定のGeminiのみで再生成。
+- 不合格を合格と記載していない。attempt 1画像を目視してから合格判定。
+- メール送信・社外送付なし。既存Driveファイルの削除・上書きなし。

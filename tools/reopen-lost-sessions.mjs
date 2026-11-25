@@ -1,0 +1,1459 @@
+#!/usr/bin/env node
+// Remote Control session metadata only; no LLM/search requests.
+import { checkSessionConcurrency, SESSION_CONCURRENCY_CAP } from './lib/session-concurrency.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import process from 'node:process';
+import { spawnSync } from 'node:child_process';
+import { hostExitArchive } from './lib/host-exit-archive.mjs';
+import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
+import { isEntry } from './is-entry.mjs';
+import { CLAUDE_PROCESS_SCRIPT, countWindowsClaudeProcesses, listWindowsClaudeProcesses } from './lib/windows-process.mjs';
+import { addItem } from './kim-inbox.mjs';
+
+const DEFAULT_MAX_REOPEN = 3;
+// 自動 claude がこの本数以上なら新しい開き直しをしない（オーナー指定。REOPEN_MAX_CLAUDE で上書き）。
+export const DEFAULT_REOPEN_MAX_CLAUDE = 5;
+function maxClaudeFromEnv(env) {
+  const value = Number(env?.REOPEN_MAX_CLAUDE);
+  return Number.isFinite(value) ? value : DEFAULT_REOPEN_MAX_CLAUDE;
+}
+const BASE = 'https://api.anthropic.com/v1/code/sessions';
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Retry with exponential backoff for transient network failures.
+// Base delay 1s, double each retry: 1s, 2s, 4s. Max 3 retries before giving up.
+const RETRY_MAX = 3;
+const RETRY_BASE_MS = 1000;
+export async function fetchWithRetry(url, init, retries = RETRY_MAX, {
+  timeoutMs = 30000,
+  deadline = Infinity,
+  nowFn = Date.now,
+  fetchImpl = fetch,
+} = {}) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (nowFn() >= deadline) throw Error('fetchWithRetry deadline exceeded');
+    try {
+      const signal = AbortSignal.timeout(timeoutMs);
+      const response = await fetchImpl(url, { ...init, signal });
+      if (response.ok) return response;
+      // 429/503/502 are transient; other 4xx are likely permanent.
+      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+        return response; // permanent error, don't retry
+      }
+      if (attempt < retries) {
+        await sleep(RETRY_BASE_MS * Math.pow(2, attempt));
+        continue;
+      }
+      return response; // last attempt, return whatever we got
+    } catch (e) {
+      if (attempt < retries) await sleep(RETRY_BASE_MS * Math.pow(2, attempt));
+      else throw e;
+    }
+  }
+  throw Error('fetchWithRetry exhausted');
+}
+// 連続失敗カウンターを ~/.claude/reopen-lost-sessions-fail-state.json で管理。
+// 連続 8 回（約 2 時間）以上失敗した場合のみ exit 1 を返す（監視が真の停止を検出できるようにする）。
+export const FAIL_STATE_FILE = 'reopen-lost-sessions-fail-state.json';
+export const CONSECUTIVE_FAIL_THRESHOLD = 8;
+export function readFailState(base) {
+  try { return readJson(path.join(base, FAIL_STATE_FILE), { consecutiveFails: 0, lastFailAt: null }); }
+  catch { return { consecutiveFails: 0, lastFailAt: null }; }
+}
+export function writeFailState(base, state) {
+  fs.writeFileSync(path.join(base, FAIL_STATE_FILE), JSON.stringify(state) + '\n');
+}
+export function recordApiResult(base, apiError, nowDate = new Date().toISOString()) {
+  const state = readFailState(base);
+  if (apiError) {
+    state.consecutiveFails = (state.consecutiveFails || 0) + 1;
+    state.lastFailAt = nowDate;
+    writeFailState(base, state);
+    return state.consecutiveFails >= CONSECUTIVE_FAIL_THRESHOLD;
+  }
+  if (state.consecutiveFails > 0) {
+    state.consecutiveFails = 0;
+    state.lastFailAt = null;
+    writeFailState(base, state);
+  }
+  return false;
+}
+function readJson(file, fallback) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
+  catch (e) { if (e.code === 'ENOENT' && fallback !== undefined) return fallback; throw e; }
+}
+export function writeProgress(base, stage, detail, nowFn = Date.now) {
+  const progressPath = path.join(base || path.join(os.homedir(), '.claude'), 'reopen-lost-sessions-progress.json');
+  const data = { pid: process.pid, stage, detail, at: new Date(nowFn()).toISOString() };
+  fs.writeFileSync(progressPath, JSON.stringify(data) + '\n');
+}
+export function parseJsonTolerant(raw) {
+  if (typeof raw !== 'string') return raw;
+  const noBom = raw.replace(/^\uFEFF/, '');
+  try { return JSON.parse(noBom); } catch {}
+
+  let result = '';
+  let inString = false;
+  let escape = false;
+  const N = noBom.length;
+
+  for (let i = 0; i < N; i++) {
+    const ch = noBom[i];
+
+    if (inString) {
+      result += ch;
+      if (escape) {
+        escape = false;
+      } else if (ch === '\\') {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      result += ch;
+      inString = true;
+      continue;
+    }
+
+    // Line comment //
+    if (ch === '/' && noBom[i + 1] === '/') {
+      i += 2;
+      while (i < N && noBom[i] !== '\n' && noBom[i] !== '\r') {
+        i++;
+      }
+      i--;
+      continue;
+    }
+
+    // Block comment /* */
+    if (ch === '/' && noBom[i + 1] === '*') {
+      i += 2;
+      while (i < N && !(noBom[i] === '*' && noBom[i + 1] === '/')) {
+        i++;
+      }
+      if (i < N) {
+        i += 1;
+      }
+      continue;
+    }
+
+    // Trailing comma before ] or }
+    if (ch === ',') {
+      let j = i + 1;
+      while (j < N) {
+        if (noBom[j] === ' ' || noBom[j] === '\t' || noBom[j] === '\n' || noBom[j] === '\r') {
+          j++;
+          continue;
+        }
+        if (noBom[j] === '/' && noBom[j + 1] === '/') {
+          j += 2;
+          while (j < N && noBom[j] !== '\n' && noBom[j] !== '\r') {
+            j++;
+          }
+          continue;
+        }
+        if (noBom[j] === '/' && noBom[j + 1] === '*') {
+          j += 2;
+          while (j < N && !(noBom[j] === '*' && noBom[j + 1] === '/')) {
+            j++;
+          }
+          if (j < N) j += 2;
+          continue;
+        }
+        break;
+      }
+      if (j < N && (noBom[j] === ']' || noBom[j] === '}')) {
+        continue;
+      }
+    }
+
+    result += ch;
+  }
+
+  return JSON.parse(result);
+}
+export function uriToPath(uri) {
+  if (typeof uri !== 'string' || !uri.startsWith('file://')) return null;
+  try {
+    return fileURLToPath(uri);
+  } catch {
+    try {
+      let raw = uri.replace(/^file:\/\/\/?/, '');
+      raw = decodeURIComponent(raw);
+      if (/^[a-zA-Z]:/.test(raw)) {
+        return path.win32.normalize(raw);
+      }
+      return path.normalize(raw);
+    } catch {
+      return null;
+    }
+  }
+}
+function normalizePath(p) {
+  if (!p) return '';
+  const resolved = path.resolve(p);
+  return resolved.replace(/\//g, '\\').toLowerCase();
+}
+function isCwdInWorkspace(workspaceFilePath, cwd, fsImpl) {
+  try {
+    if (!fsImpl.existsSync(workspaceFilePath)) return false;
+    const raw = fsImpl.readFileSync(workspaceFilePath, 'utf8');
+    const parsed = parseJsonTolerant(raw);
+    if (!parsed || !Array.isArray(parsed.folders)) return false;
+    const workspaceDir = path.dirname(path.resolve(workspaceFilePath));
+    const normCwd = normalizePath(cwd);
+    for (const folder of parsed.folders) {
+      let folderPath = null;
+      if (typeof folder?.path === 'string') {
+        folderPath = folder.path;
+      } else if (typeof folder?.uri === 'string') {
+        folderPath = uriToPath(folder.uri);
+      }
+      if (!folderPath) continue;
+      const folderAbs = path.resolve(workspaceDir, folderPath);
+      const normFolder = normalizePath(folderAbs);
+      if (normCwd === normFolder) return true;
+      const prefix = normFolder.endsWith('\\') ? normFolder : normFolder + '\\';
+      if (normCwd.startsWith(prefix)) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+export function findWorkspaceForCwd(cwd, { env = process.env, fsImpl = fs } = {}) {
+  if (!cwd) return null;
+  const candidates = [];
+  if (env.ORGIAST_VSCODE_WORKSPACE && typeof env.ORGIAST_VSCODE_WORKSPACE === 'string') {
+    candidates.push(env.ORGIAST_VSCODE_WORKSPACE);
+  }
+  const appData = env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  const storagePath = path.join(appData, 'Code', 'User', 'globalStorage', 'storage.json');
+  if (fsImpl.existsSync(storagePath)) {
+    try {
+      const content = fsImpl.readFileSync(storagePath, 'utf8');
+      const data = parseJsonTolerant(content);
+      const uris = [];
+      const lastActive = data?.windowsState?.lastActiveWindow?.workspaceIdentifier?.configURIPath;
+      if (typeof lastActive === 'string') uris.push(lastActive);
+      const opened = data?.windowsState?.openedWindows;
+      if (Array.isArray(opened)) {
+        for (const win of opened) {
+          const uri = win?.workspaceIdentifier?.configURIPath;
+          if (typeof uri === 'string') uris.push(uri);
+        }
+      }
+      for (const uri of uris) {
+        const p = uriToPath(uri);
+        if (p && p.endsWith('.code-workspace')) {
+          candidates.push(p);
+        }
+      }
+    } catch {}
+  }
+  try {
+    let currentDir = path.resolve(cwd);
+    while (true) {
+      if (fsImpl.existsSync(currentDir)) {
+        try {
+          const entries = fsImpl.readdirSync(currentDir);
+          for (const entry of entries) {
+            const name = typeof entry === 'string' ? entry : entry.name;
+            if (name && name.endsWith('.code-workspace')) {
+              candidates.push(path.join(currentDir, name));
+            }
+          }
+        } catch {}
+      }
+      const parentDir = path.dirname(currentDir);
+      if (parentDir === currentDir) break;
+      currentDir = parentDir;
+    }
+  } catch {}
+  const seenNorm = new Set();
+  for (const candPath of candidates) {
+    const norm = normalizePath(candPath);
+    if (!norm || seenNorm.has(norm)) continue;
+    seenNorm.add(norm);
+    if (isCwdInWorkspace(candPath, cwd, fsImpl)) {
+      const resolvedFile = path.resolve(candPath);
+      const ext = path.extname(resolvedFile);
+      const workspaceName = path.basename(resolvedFile, ext);
+      return { workspaceFile: resolvedFile, workspaceName };
+    }
+  }
+  return null;
+}
+export function hasConversation(rows, bytes = 0) {
+  return bytes > 200 * 1024 || rows.some(row => {
+    if (!['user', 'assistant'].includes(row.type)) return false;
+    let c = row.message?.content;
+    if (Array.isArray(c)) c = c.map(x => x?.text ?? '').join(' ');
+    return typeof c === 'string' && !!c.trim() && (row.type === 'assistant' || !/<local-command-caveat>|<command-name>|<command-message>/.test(c));
+  });
+}
+// git worktree 判定。フォルダ（または祖先）に `.git` ファイルがあり内容の gitdir: が
+// `...worktrees/...` を含む、または正規化パスが `\.claude\worktrees\` を含む場合に worktree。
+// `.git` ディレクトリ（メイン checkout）に到達したらそこで打ち切って false。
+function isWorktreeFolder(cwd, fsImpl) {
+  if (!cwd) return false;
+  // A Windows absolute path on POSIX has no local ancestors to inspect.
+  const foreignAbsolute = !path.isAbsolute(cwd) && path.win32.isAbsolute(cwd);
+  const norm = foreignAbsolute ? path.win32.normalize(cwd).toLowerCase() : normalizePath(cwd);
+  if (norm.includes('\\.claude\\worktrees\\')) return true;
+  if (foreignAbsolute) return false;
+  let dir = path.resolve(cwd);
+  while (true) {
+    const gitPath = path.join(dir, '.git');
+    try {
+      const stat = fsImpl.statSync(gitPath);
+      if (stat.isFile()) {
+        const content = fsImpl.readFileSync(gitPath, 'utf8');
+        if (/gitdir\s*:\s*[^\r\n]*worktrees/i.test(content)) return true;
+        return false; // 通常の gitdir ファイル（サブモジュール等）は worktree ではない
+      }
+      if (stat.isDirectory()) return false; // メイン checkout 配下。worktree ではない
+    } catch { /* この階層に .git は無い: 親へ */ }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return false;
+}
+// 再接続で開くフォルダを決める。cwd が worktree のときは、transcript の cwd 履歴のうち
+// worktree でない最初の cwd → 無ければ git worktree list のメイン worktree。
+// どちらも無い場合は null（開かずスキップ。新しい worktree ウィンドウは絶対に開かない）。
+export function resolveReopenFolder(cwd, transcriptCwds = [], { fsImpl = fs, spawn = spawnSync } = {}) {
+  if (!cwd) return null;
+  if (!isWorktreeFolder(cwd, fsImpl)) return cwd;
+  for (const candidate of transcriptCwds) {
+    if (candidate && !isWorktreeFolder(candidate, fsImpl)) return candidate;
+  }
+  try {
+    const list = run('git', ['-C', cwd, 'worktree', 'list', '--porcelain'], spawn);
+    const first = String(list).split('\n')[0];
+    if (first.startsWith('worktree ')) return first.slice('worktree '.length).trim();
+  } catch { /* git 不可: null へ */ }
+  return null;
+}
+export function hasHostExit(events, since, until) {
+  return events.some(e => e.event_type === 'system' && e.payload?.reason === 'host_exit'
+    && Date.parse(e.created_at) >= Date.parse(since) && Date.parse(e.created_at) <= Date.parse(until));
+}
+export function exclusion(local, closed, alive, hidden) {
+  if (!local || !local.cwd) return 'noLocal';
+  if (closed.has(local.id)) return 'closed';
+  if (hidden && (hidden.has(local.id) || (local.bridgeSessionId && hidden.has(local.bridgeSessionId)))) return 'archivedByUser';
+  if (!local.hasConversation) return 'empty';
+  if (alive.has(local.id)) return 'alive';
+  return null;
+}
+
+export function isWaitingSession(sessionId, { base, fsImpl = fs, wait = sleep, now = Date.now } = {}) {
+  if (!sessionId) return false;
+
+  // First, check if the session has a transcript with title "待機中"
+  const projectsDir = path.join(base, 'projects');
+  if (!fsImpl.existsSync(projectsDir)) return false;
+
+  const entries = [];
+  try {
+    const subDirs = fsImpl.readdirSync(projectsDir, { withFileTypes: true });
+    for (const dir of subDirs) {
+      if (!dir.isDirectory()) continue;
+      const filePath = path.join(dir.path, `${sessionId}.jsonl`);
+      try {
+        const content = fsImpl.readFileSync(filePath, 'utf8'); // Read entire content
+        entries.push(...content.trim().split('\n').filter(Boolean).map(JSON.parse));
+      } catch (e) {
+        // File not found or error reading file
+        continue;
+      }
+    }
+  } catch (e) {
+    // Cannot read projects directory
+    return false;
+  }
+
+  for (const entry of entries) {
+    if (entry.type === 'user' && entry.message?.content) {
+      const content = entry.message.content;
+      // Check for traditional waiting session
+      if (/^待機中$/.test(content.trim())) {
+        return true;
+      }
+      // Check for PC-numbered auto titles (e.g., 011-resilient-steele)
+      if (/^\d{3}-[a-zA-Z\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]+$/.test(content.trim())) {
+        return true;
+      }
+      // Check for remote-control prefixed auto titles (e.g., remote-control-xxx-yyy)
+      if (/^remote-control-[a-zA-Z\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]+$/.test(content.trim())) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+export function parseAgents(output) {
+  const agents = JSON.parse(output);
+  if (!Array.isArray(agents) || agents.some(a => !a?.kind || (a.kind === 'interactive' && !a.sessionId))) throw Error('Invalid agents inventory');
+  return new Set(agents.filter(a => a.kind === 'interactive').map(a => a.sessionId));
+}
+function run(command, args, spawn = spawnSync) {
+  const result = spawn(command, args, { encoding: 'utf8', windowsHide: true, timeout: 120000 });
+  if (result.error || result.status !== 0) throw Error(`${path.basename(command)} failed: ${result.error?.message ?? result.status}`);
+  return result.stdout.trim();
+}
+function ps(script, spawn) { return run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], spawn); }
+export function agentsWithRetry(cli, spawn) {
+  const go = () => parseAgents(run(cli, ['agents', '--json'], spawn));
+  try { return go(); }
+  catch (e) { return go(); }
+}
+export function agentsFromRegistry(sessionsDir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(sessionsDir);
+  } catch (e) {
+    if (e.code === 'ENOENT') throw e;
+    return new Set();
+  }
+  const result = new Set();
+  for (const entry of entries) {
+    if (!entry.endsWith('.json')) continue;
+    const filePath = path.join(sessionsDir, entry);
+    let data;
+    try {
+      data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch {
+      continue;
+    }
+    if (data.kind !== 'interactive' || !data.sessionId) continue;
+    if (data.pid) {
+      try {
+        process.kill(data.pid, 0);
+      } catch (e) {
+        if (e.code === 'ESRCH') continue;
+      }
+    }
+    result.add(data.sessionId);
+  }
+  return result;
+}
+export async function measureCpuAsync({ sampleMs = 1000, cpusImpl = os.cpus, wait = sleep } = {}) {
+  try {
+    const first = cpusImpl();
+    await wait(sampleMs);
+    const second = cpusImpl();
+    let totalIdle1 = 0, totalAll1 = 0;
+    let totalIdle2 = 0, totalAll2 = 0;
+    for (const cpu of first) {
+      const t = cpu.times;
+      totalAll1 += t.user + t.nice + t.system + t.idle + t.iowait + t.irq + t.softirq;
+      totalIdle1 += t.idle;
+    }
+    for (const cpu of second) {
+      const t = cpu.times;
+      totalAll2 += t.user + t.nice + t.system + t.idle + t.iowait + t.irq + t.softirq;
+      totalIdle2 += t.idle;
+    }
+    const idleDiff = totalIdle2 - totalIdle1;
+    const totalDiff = totalAll2 - totalAll1;
+    return totalDiff > 0 ? Math.round(100 * (1 - idleDiff / totalDiff)) : null;
+  } catch { return null; }
+}
+export function measureUserIdleSec({ spawn = spawnSync } = {}) {
+  try {
+    const script = `
+Add-Type -TypeDefinition @'
+  using System;
+  using System.Runtime.InteropServices;
+  public class LastInput {
+    [DllImport("user32.dll")]
+    static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+    [StructLayout(LayoutKind.Sequential)]
+    struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+    public static uint GetIdleMillis() {
+      LASTINPUTINFO lii = new LASTINPUTINFO();
+      lii.cbSize = (uint)Marshal.SizeOf(lii);
+      if (!GetLastInputInfo(ref lii)) return 0;
+      return (uint)Environment.TickCount - lii.dwTime;
+    }
+  }
+'@
+[LastInput]::GetIdleMillis()
+`;
+    const res = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+    if (res.error || res.status !== 0) return null;
+    const ms = parseInt(String(res.stdout ?? '').trim(), 10);
+    if (!Number.isFinite(ms)) return null;
+    return Math.round(ms / 1000);
+  } catch { return null; }
+}
+const REOPEN_MIN_IDLE_SEC = Number(process.env.ORGIAST_REOPEN_MIN_IDLE_SEC) || 600;
+const quotePS = s => "'" + s.replaceAll("'", "''") + "'";
+// VS Code の可視メインウィンドウが1つ以上開いているかを PowerShell で確認する。
+// タイムアウト 15 秒。エラー・タイムアウト・数値でない出力時は安全側（ウィンドウあり＝URIのみ）として true を返す。
+export function hasCodeWindow(spawn = spawnSync) {
+  try {
+    const script = '@(Get-Process Code -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }).Count';
+    const res = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+    if (res.error || res.status !== 0) return true;
+    const count = parseInt(String(res.stdout ?? '').trim(), 10);
+    if (!Number.isFinite(count)) return true;
+    return count > 0;
+  } catch { return true; }
+}
+// 開くべきターゲットを決める。
+// - VS Code ウィンドウが1つでも開いている → { launch: 'uri-only', target: null }（code <path> を一切実行しない）
+// - ウィンドウが無い → storage.json の lastActiveWindow を参照。
+//   lastActiveWindow が folder ならフォルダ、workspaceIdentifier ならワークスペースを開く。
+//   ワークスペースよりフォルダを優先する（指示書: lastActiveWindow が folder なのに .code-workspace を選ぶ現在の挙動をやめる）。
+//   フォルダもワークスペースも決まらない場合は cwd を開く。
+export function resolveLaunchTarget({ cwd, env = process.env, fsImpl = fs, spawn = spawnSync } = {}) {
+  if (hasCodeWindow(spawn)) {
+    return { launch: 'uri-only', target: null, openedWith: null };
+  }
+  // ウィンドウ無し: storage.json の lastActiveWindow を確認
+  const appData = env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  const storagePath = path.join(appData, 'Code', 'User', 'globalStorage', 'storage.json');
+  if (fsImpl.existsSync(storagePath)) {
+    try {
+      const content = fsImpl.readFileSync(storagePath, 'utf8');
+      const data = parseJsonTolerant(content);
+      const lastActive = data?.windowsState?.lastActiveWindow;
+      if (lastActive) {
+        // folder 優先
+        if (lastActive.folder) {
+          const folderPath = uriToPath(lastActive.folder);
+          if (folderPath) {
+            return { launch: 'opened-window', target: folderPath, openedWith: 'folder' };
+          }
+        }
+        // workspaceIdentifier があればワークスペースファイル
+        const configURI = lastActive.workspaceIdentifier?.configURIPath;
+        if (configURI) {
+          const wsPath = uriToPath(configURI);
+          if (wsPath && wsPath.endsWith('.code-workspace')) {
+            return { launch: 'opened-window', target: wsPath, openedWith: 'workspace' };
+          }
+        }
+      }
+    } catch {}
+  }
+  // どちらも決まらない → cwd をフォルダとして開く
+  if (cwd) {
+    return { launch: 'opened-window', target: cwd, openedWith: 'folder' };
+  }
+  return { launch: 'uri-only', target: null, openedWith: null };
+}
+export function resolveCodeCli(env = process.env, exists = fs.existsSync) {
+  const candidates = [env.VSCODE_CLI_PATH, path.join(env.LOCALAPPDATA || '', 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'),
+    'C:\\Program Files\\Microsoft VS Code\\bin\\code.cmd', 'C:\\Program Files (x86)\\Microsoft VS Code\\bin\\code.cmd'];
+  const cli = candidates.find(x => x && exists(x));
+  if (!cli) throw Error('code.cmd not found');
+  return cli;
+}
+export function localIndex(base, onlyId, { sinceMs, largeFileThreshold = 8 * 1024 * 1024, largeFileHead = 512 * 1024, largeFileTail = 4 * 1024 * 1024 } = {}) {
+  const index = new Map();
+  const projects = path.join(base, 'projects');
+  let indexed = 0, skippedOld = 0;
+  const startMs = Date.now();
+  for (const dir of fs.readdirSync(projects, { withFileTypes: true })) {
+    if (!dir.isDirectory() || dir.name === '_deleted-backup') continue;
+    for (const file of fs.readdirSync(path.join(projects, dir.name))) {
+      if (!file.endsWith('.jsonl') || (onlyId && file !== `${onlyId}.jsonl`)) continue;
+      const filePath = path.join(projects, dir.name, file);
+      // mtime フィルタ: sinceMs が指定され、onlyId が無い場合、古いファイルは飛ばす
+      if (!onlyId && sinceMs !== undefined) {
+        try {
+          const stat = fs.statSync(filePath);
+          if (stat.mtimeMs < sinceMs) { skippedOld++; continue; }
+        } catch { /* stat 不可なら読む */ }
+      }
+      let raw;
+      const stat = fs.statSync(filePath);
+      if (stat.size > largeFileThreshold) {
+        // 巨大ファイル: 先頭 largeFileHead + 末尾 largeFileTail だけ読む
+        const fd = fs.openSync(filePath, 'r');
+        const bufHead = Buffer.alloc(largeFileHead);
+        const bytesHead = fs.readSync(fd, bufHead, 0, largeFileHead, 0);
+        const bufTail = Buffer.alloc(Math.min(largeFileTail, stat.size));
+        const bytesTail = fs.readSync(fd, bufTail, 0, bufTail.length, Math.max(0, stat.size - bufTail.length));
+        fs.closeSync(fd);
+        raw = bufHead.toString('utf8', 0, bytesHead) + bufTail.toString('utf8', 0, bytesTail);
+      } else {
+        raw = fs.readFileSync(filePath, 'utf8');
+      }
+      // Most archived transcripts have no bridge. Avoid parsing gigabytes of tool output.
+      if (!raw.includes('"bridge-session"')) continue;
+      const lines = raw.split('\n');
+      const parse = line => { try { return JSON.parse(line); } catch { return {}; } };
+      const bridges = lines.filter(line => /"type"\s*:\s*"bridge-session"/.test(line)).map(parse)
+        .filter(row => row.type === 'bridge-session' && row.bridgeSessionId);
+      if (!bridges.length) continue;
+      // cwd 履歴（大小文字無視で重複除去、出現順）。先頭が仕事の起点（worktree 移動前）。
+      const cwds = [];
+      const seenCwds = new Set();
+      for (let i = 0; i < lines.length; i++) {
+        if (!lines[i].includes('"cwd"')) continue;
+        const row = parse(lines[i]);
+        if (typeof row.cwd !== 'string' || !row.cwd) continue;
+        const norm = normalizePath(row.cwd);
+        if (!norm || seenCwds.has(norm)) continue;
+        seenCwds.add(norm);
+        cwds.push(row.cwd);
+      }
+      const bytes = stat.size;
+      const conversation = bytes > 200 * 1024 || hasConversation(lines.map(parse), bytes);
+      indexed++;
+      for (const bridge of bridges) {
+        index.set(bridge.bridgeSessionId, { id: file.slice(0, -6), bridgeSessionId: bridge.bridgeSessionId, cwd: cwds[0], cwds, hasConversation: conversation });
+      }
+    }
+  }
+  const indexMs = Date.now() - startMs;
+  return Object.assign(index, { indexed, skippedOld, indexMs });
+}
+function closedIds(base) {
+  const ledger = readJson(path.join(base, 'closed-sessions.json'), { ids: [] });
+  if (!Array.isArray(ledger.ids)) throw Error('Invalid closed ledger');
+  return new Set(ledger.ids);
+}
+// reopenLoop ガードは「真の無限リロープ」（再接続に成功→すぐ切断→再接続…）だけを止める。
+// 直近 60 分に「検証済み（実際に再接続した）」reopen だけを数える。
+// 再接続できなかった（unverified）セッションはループではなく別の障害なので、reopenLoop で止めると
+// 正当な再接続まで止めてしまう（2026-11-09 実測: 切断中セッション4本が 3 回の空振り reopen で 24h 遮断された）。
+function reopenLoopCounts(base, nowFn = Date.now) {
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  const counts = {};
+  try {
+    const raw = fs.readFileSync(logFile, 'utf8');
+    const nowTime = typeof nowFn === 'function' ? nowFn() : nowFn;
+    const cutoff = nowTime - 60 * 60 * 1000;
+    for (const line of raw.split('\n').filter(Boolean)) {
+      try {
+        const entry = JSON.parse(line);
+        if (!entry.at || !Array.isArray(entry.reopened)) continue;
+        if (Date.parse(entry.at) < cutoff) continue;
+        const verified = new Set(Array.isArray(entry.verified) ? entry.verified : []);
+        for (const r of entry.reopened) {
+          const id = r?.id || r;
+          if (id && verified.has(id)) counts[id] = (counts[id] || 0) + 1;
+        }
+      } catch {}
+    }
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
+  return counts;
+}
+
+// 直近 6 時間に reopened に掲載された回数（verified / unverified を問わない）を数える。
+// 長期的に繰り返し空振り／切断を繰り返すセッションを自動遮断する（6h経過で自然解除）。
+export function reopenRepeatCounts(base, nowFn = Date.now) {
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  const counts = {};
+  try {
+    const raw = fs.readFileSync(logFile, 'utf8');
+    const nowTime = typeof nowFn === 'function' ? nowFn() : nowFn;
+    const cutoff = nowTime - 6 * 60 * 60 * 1000;
+    for (const line of raw.split('\n').filter(Boolean)) {
+      try {
+        const entry = JSON.parse(line);
+        if (!entry.at || !Array.isArray(entry.reopened)) continue;
+        if (Date.parse(entry.at) < cutoff) continue;
+        for (const r of entry.reopened) {
+          const id = r?.id || r;
+          if (id) counts[id] = (counts[id] || 0) + 1;
+        }
+      } catch {}
+    }
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
+  return counts;
+}
+
+// Read all history in timestamp order: expiry permits one retry, but does not
+// erase the streak. A failed retry therefore starts another six-hour cooldown.
+export function unverifiedStreakCounts(base, nowFn = Date.now) {
+  let raw;
+  try { raw = fs.readFileSync(path.join(base, 'reopen-lost-sessions.log'), 'utf8'); }
+  catch (e) { if (e.code === 'ENOENT') return {}; throw e; }
+  const nowTime = typeof nowFn === 'function' ? nowFn() : nowFn;
+  const entries = raw.split('\n').flatMap(line => {
+    try {
+      const entry = JSON.parse(line), at = Date.parse(entry.at);
+      return Number.isFinite(at) && at <= nowTime ? [{ ...entry, at }] : [];
+    } catch { return []; }
+  }).sort((a, b) => a.at - b.at);
+  const streaks = new Map();
+  for (const entry of entries) {
+    const verified = new Set(Array.isArray(entry.verified) ? entry.verified : []);
+    const unverified = new Set(Array.isArray(entry.unverified) ? entry.unverified : []);
+    for (const id of verified) streaks.delete(id);
+    const reopened = new Set((Array.isArray(entry.reopened) ? entry.reopened : []).map(r => r?.id || r));
+    for (const id of reopened) {
+      if (typeof id !== 'string' || verified.has(id) || !unverified.has(id)) continue;
+      streaks.set(id, { count: (streaks.get(id)?.count || 0) + 1, at: entry.at });
+    }
+  }
+  return Object.fromEntries([...streaks].filter(([, s]) => nowTime - s.at < 6 * 3600000).map(([id, s]) => [id, s.count]));
+}
+
+export function isSessionProcessRunning(candidate, { sessionsDir, spawn = spawnSync, fsImpl = fs } = {}) {
+  let rows;
+  try {
+    // 2026-11-13 inventory: VS Code uses --resume=<UUID>; also match --resume <UUID>
+    // and bridge IDs anywhere in CommandLine. ID-less extension processes need the registry.
+    const script = "@(Get-CimInstance Win32_Process | Select-Object ProcessId,Name,CommandLine) | ConvertTo-Json -Compress";
+    const res = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8', windowsHide: true, timeout: 15000, maxBuffer: 8 * 1024 * 1024,
+    });
+    if (res.error || res.status !== 0) return false;
+    const parsed = JSON.parse(String(res.stdout).replace(/^\uFEFF/, ''));
+    rows = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+  } catch { return false; } // Inventory unavailable: preserve recovery (fail-open).
+  const ids = [candidate.id, candidate.bridgeSessionId].filter(id => typeof id === 'string' && id);
+  if (rows.some(row => String(row?.Name).toLowerCase() === 'claude.exe'
+    && ids.some(id => String(row.CommandLine || '').toLowerCase().includes(id.toLowerCase())))) return true;
+  const livePids = new Set(rows.map(row => Number(row?.ProcessId)).filter(pid => Number.isInteger(pid) && pid > 0));
+  if (!sessionsDir) return false;
+  try {
+    for (const name of fsImpl.readdirSync(sessionsDir)) {
+      if (!name.endsWith('.json')) continue;
+      try {
+        const data = JSON.parse(fsImpl.readFileSync(path.join(sessionsDir, name), 'utf8').replace(/^\uFEFF/, ''));
+        if (ids.includes(data.sessionId) && livePids.has(Number(data.pid))) return true;
+      } catch { /* Ignore individual stale or malformed registry files. */ }
+    }
+  } catch { /* Missing registry does not prevent command-line matching. */ }
+  return false;
+}
+
+// Verification gets a fresh deadline: candidate discovery's deadline may have
+// expired during the 90-second connection wait. Read the existing RC list API only.
+export async function connectedRcSessionIds({ fetchImpl = fetch, headers, now = Date.now } = {}) {
+  const connected = new Set(), seen = new Set();
+  const deadline = now() + 30000;
+  let cursor = '';
+  do {
+    if (now() >= deadline) throw Error('RC verification time limit');
+    const response = await fetchWithRetry(`${BASE}?${new URLSearchParams({ limit: '100', ...(cursor && { cursor }) })}`, {
+      headers,
+    }, RETRY_MAX, {
+      timeoutMs: Math.max(1, Math.min(deadline - now(), 30000)),
+      deadline,
+      nowFn: now,
+      fetchImpl,
+    });
+    if (!response.ok) throw Error(`RC API HTTP ${response.status}`);
+    const body = await response.json();
+    if (!Array.isArray(body.data)) throw Error('Invalid sessions response');
+    for (const session of body.data) {
+      if (session.connection_status === 'connected' && typeof session.id === 'string') connected.add(session.id);
+    }
+    cursor = body.next_cursor || '';
+    if (cursor && seen.has(cursor)) throw Error('Repeated RC verification cursor');
+    seen.add(cursor);
+  } while (cursor);
+  return connected;
+}
+
+function processOutput(spawn, command, args, options) {
+  const result = spawn(command, args, { ...options, windowsHide: true });
+  if (result.error || result.status !== 0) throw result.error || new Error(`exit code ${result.status}`);
+  return result.stdout;
+}
+
+export async function getLoadGuardStatus({
+  env = process.env,
+  spawn = spawnSync,
+  cpusImpl = os.cpus,
+  wait = sleep,
+  checkCpu = true,
+  checkClaude = true,
+  sessionsDir,
+  isWaitingSession,
+  now = Date.now,
+} = {}) {
+  const maxClaude = maxClaudeFromEnv(env);
+  const maxCpu = Number.isFinite(Number(env?.REOPEN_MAX_CPU)) ? Number(env.REOPEN_MAX_CPU) : 85;
+
+  let claudeCount = null;
+  let loadError = null;
+
+  if (checkClaude) {
+    try {
+      claudeCount = countWindowsClaudeProcesses((...args) => processOutput(spawn, ...args), { sessionsDir, isWaitingSession, now });
+    } catch (e) {
+      loadError = e.message;
+    }
+  }
+
+  const cpuPct = checkCpu ? await measureCpuAsync({ sampleMs: 1000, cpusImpl, wait }) : null;
+
+  const reasons = [];
+  if (claudeCount !== null && claudeCount >= maxClaude) reasons.push('claudeCount');
+  if (cpuPct !== null && cpuPct >= maxCpu) reasons.push('cpuPct');
+
+  const triggered = reasons.length > 0;
+  const reason = triggered ? reasons.join(',') : null;
+
+  const status = {
+    claudeCount,
+    cpuPct,
+    reason,
+    triggered,
+  };
+  if (loadError) status.error = loadError;
+
+  return status;
+}
+
+export function parseOptions(args, spawn = spawnSync) {
+  const options = { dryRun: false, max: DEFAULT_MAX_REOPEN, gapSec: 10, watch: false };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--dry-run') { options.dryRun = true; continue; }
+    if (arg === '--watch') { options.watch = true; continue; }
+    const key = { '--since': 'since', '--until': 'until', '--max': 'max', '--gap-sec': 'gapSec' }[arg];
+    if (!key || !args[i + 1]) throw Error(`Invalid option: ${arg}`);
+    if (key === 'max') options.maxSet = true;
+    options[key] = ['max', 'gapSec'].includes(key) ? Number(args[++i]) : args[++i];
+  }
+  if (options.watch && (options.since || options.until)) throw Error('--watch and --since/--until are mutually exclusive');
+  if (!Number.isInteger(options.max) || options.max < 1 || !Number.isFinite(options.gapSec) || options.gapSec < 0) throw Error('Invalid max/gap');
+  if (!options.watch) {
+    if (!options.since || !options.until) {
+      const boot = Date.parse(ps('(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString("o")', spawn));
+      options.since ??= new Date(boot - 15 * 60000).toISOString();
+      options.until ??= new Date(boot + 15 * 60000).toISOString();
+    }
+    if (!Number.isFinite(Date.parse(options.since)) || !Number.isFinite(Date.parse(options.until)) || Date.parse(options.since) > Date.parse(options.until)) throw Error('Invalid time range');
+  }
+  return options;
+}
+function readLockHolder(file, now) {
+  let stat;
+  try { stat = fs.statSync(file); }
+  catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
+  let pid;
+  try {
+    const text = fs.readFileSync(file, 'utf8').trim();
+    if (/^[1-9]\d*$/.test(text) && Number(text) <= 0x7fffffff) pid = Number(text);
+  } catch { /* Reclaim a lock whose PID cannot be read. */ }
+  const ageMs = Math.max(0, now - stat.mtimeMs);
+  const stale = ageMs > 600_000;
+  let alive = false;
+  if (pid && !stale) {
+    try { process.kill(pid, 0); alive = true; }
+    catch (error) { alive = error.code !== 'ESRCH'; }
+  }
+  return { stat, alive, holderPid: pid, lockAgeSec: Math.floor(ageMs / 1000), stale };
+}
+
+export function acquireLock(file, now = Date.now(), onContention = () => {}) {
+  // Publish a complete PID record so another run cannot reclaim an empty file
+  // between exclusive creation and writing the PID.
+  const tempDir = fs.mkdtempSync(`${file}.`);
+  const tempFile = path.join(tempDir, 'pid');
+  let fd;
+  try {
+    fd = fs.openSync(tempFile, 'wx');
+    fs.writeSync(fd, String(process.pid));
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try { fs.linkSync(tempFile, file); break; }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+      const holder = readLockHolder(file, now);
+      if (holder.alive || attempt === 1) {
+        onContention(holder);
+        return null;
+      }
+      if (!holder.stat) continue;
+      try {
+        const current = fs.statSync(file);
+        if (current.ino === holder.stat.ino && current.mtimeMs === holder.stat.mtimeMs && current.size === holder.stat.size) {
+          fs.unlinkSync(file);
+        }
+      } catch (error) {
+        if (error.code !== 'ENOENT') {
+          onContention(holder);
+          return null;
+        }
+      }
+    }
+  } finally {
+    try { if (fd !== undefined) fs.closeSync(fd); }
+    finally { fs.rmSync(tempDir, { recursive: true, force: true }); }
+  }
+  fd = fs.openSync(file, 'r+');
+  const timer = setInterval(() => {
+    const date = new Date();
+    // Primary: fd-based futimesSync for mtime tracking
+    try { fs.futimesSync(fd, date, date); } catch {}
+    // Fallback: path-based utimesSync for Windows compatibility
+    try { fs.utimesSync(file, date, date); } catch {}
+  }, 30000);
+  timer.unref();
+  return () => { clearInterval(timer); fs.closeSync(fd); fs.unlinkSync(file); };
+}
+export function resolveClaudeCli({ env = process.env, exists = fs.existsSync, readdir = fs.readdirSync, spawn = spawnSync } = {}) {
+  // (a) env CLAUDE_CLI / CLAUDE_CLI_PATH / CLAUDE_BIN
+  const fromEnv = env.CLAUDE_CLI || env.CLAUDE_CLI_PATH || env.CLAUDE_BIN;
+  if (fromEnv && exists(fromEnv)) return fromEnv;
+
+  const home = os.homedir();
+
+  // (b) ~/.local/bin/claude.exe (or claude on non-win32)
+  const binName = process.platform === 'win32' ? 'claude.exe' : 'claude';
+  const localBin = path.join(home, '.local', 'bin', binName);
+  if (exists(localBin)) return localBin;
+
+  // (c) where.exe / which
+  try {
+    const cmd = process.platform === 'win32' ? 'where.exe' : 'which';
+    const result = spawn(cmd, ['claude'], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+    if (result.status === 0) {
+      const first = String(result.stdout ?? '').split('\n')[0].trim();
+      if (first && exists(first)) return first;
+    }
+  } catch { /* not available or not found */ }
+
+  // (d) winget Packages glob (Windows only)
+  try {
+    const localAppData = env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    const pkgsDir = path.join(localAppData, 'Microsoft', 'WinGet', 'Packages');
+    try {
+      const entries = readdir(pkgsDir);
+      for (const entry of entries) {
+        const name = typeof entry === 'string' ? entry : entry.name;
+        if (/^Anthropic\.ClaudeCode_/i.test(name)) {
+          const exe = path.join(pkgsDir, name, binName);
+          if (exists(exe)) return exe;
+        }
+      }
+    } catch { /* directory not found */ }
+  } catch { /* path construction error */ }
+
+  throw new Error('claude CLI not found');
+}
+
+export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_MAX_REOPEN, gapSec = 10,
+  base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
+  now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs, stateBased = false,
+  checkCpu = true, checkClaude = false, cpusImpl, vscodeStartedAt, openDb, checkIdle = true, idleImpl, checkConcurrency = checkSessionConcurrency, concurrencyPlatform = process.platform } = {}) {
+  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], retriedViaExtension: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closable: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0, unverifiedStreak: 0, processRunning: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
+  const progress = (stage, detail) => { if (!dryRun) writeProgress(base, stage, detail); };
+  const initialHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
+  const hiddenSessionIds = initialHidden.ids;
+  if (initialHidden.error) {
+    result.hiddenError = initialHidden.error;
+  }
+  // Dry run is strictly read-only: no lock or log mutation on the user's PC.
+  let lockHolder;
+  const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'), now(), holder => { lockHolder = holder; });
+  if (!release) {
+    const { alive, holderPid, lockAgeSec, stale } = lockHolder;
+    const entry = alive
+      ? { at: result.at, skipped: 'locked', holderPid, lockAgeSec, stale }
+      : { at: result.at, error: 'locked', holderPid, lockAgeSec, stale };
+    appendReopenLog(base, entry);
+    if (alive) return { ...result, locked: true };
+    return { ...result, error: 'locked' };
+  }
+  try {
+    progress('lock', 'acquired');
+    const credFile = path.join(base, '.credentials.json');
+    const claudeJsonFile = path.join(base, '..', '.claude.json');
+    let token, org;
+    try {
+      const creds = readJson(credFile);
+      token = creds.claudeAiOauth?.accessToken;
+      if (!token) {
+        const topKeys = Object.keys(creds);
+        const oauthKeys = creds.claudeAiOauth ? Object.keys(creds.claudeAiOauth) : [];
+        throw Error(`Missing accessToken in ${credFile}: topKeys=${topKeys.join(',')} oauthKeys=${oauthKeys.join(',')}`);
+      }
+    } catch (e) {
+      if (e.code === 'ENOENT') { result.rcAvailable = false; return result; }
+      throw e;
+    }
+    try {
+      const claudeJson = readJson(claudeJsonFile);
+      org = claudeJson.oauthAccount?.organizationUuid;
+      if (!org) {
+        const topKeys = Object.keys(claudeJson);
+        throw Error(`Missing oauthAccount.organizationUuid in ${claudeJsonFile}: keys=${topKeys.join(',')}`);
+      }
+    } catch (e) {
+      if (e.code === 'ENOENT') throw Error(`RC config file not found: ${claudeJsonFile}`);
+      throw e;
+    }
+    progress('auth', 'credentials loaded');
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01',
+      'anthropic-beta': 'ccr-byoc-2025-07-29', 'x-organization-uuid': org };
+    const cli = claudeCli || resolveClaudeCli({ env, exists: fsImpl.existsSync, readdir: fsImpl.readdirSync, spawn });
+    const alive = () => {
+      // Stage 1: claude agents --json with 30s timeout, no retry
+      try {
+        const start = Date.now();
+        const res = spawn(cli, ['agents', '--json'], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+        const elapsed = Date.now() - start;
+        if (res.error || res.status !== 0) {
+          const msg = res.error?.message ?? `exit code ${res.status}`;
+          result.aliveSource = 'registry';
+          result.agentsError = msg;
+          result.agentsDiag = {
+            elapsedMs: elapsed,
+            stderr: (res.stderr || '').slice(0, 300) || null,
+            signal: res.signal || null,
+            cwd: process.cwd(),
+            claudeEnvKeys: Object.keys(process.env).filter(k => k.includes('CLAUDE')),
+          };
+          return agentsFromRegistry(path.join(base, 'sessions'));
+        }
+        result.aliveSource = 'agents';
+        result.agentsError = null;
+        result.agentsDiag = null;
+        return parseAgents(res.stdout.trim());
+      } catch (e) {
+        result.aliveSource = 'registry';
+        result.agentsError = e.message;
+        result.agentsDiag = {
+          elapsedMs: null,
+          stderr: null,
+          signal: null,
+          cwd: process.cwd(),
+          claudeEnvKeys: Object.keys(process.env).filter(k => k.includes('CLAUDE')),
+        };
+        throw e;
+      }
+    };
+    const living = alive();
+    progress('alive', `source=${result.aliveSource}, count=${living.size}`);
+    const indexSinceMs = stateBased
+      ? now() - 72 * 3600 * 1000
+      : Date.parse(since) - 24 * 3600 * 1000;
+    const locals = localIndex(base, undefined, { sinceMs: Number.isFinite(indexSinceMs) ? indexSinceMs : now() - 72 * 3600 * 1000 });
+    const closed = closedIds(base);
+    progress('index', `local=${locals.size}, closed=${closed.size}, skippedOld=${locals.skippedOld}, indexMs=${locals.indexMs}`);
+    result.indexed = locals.indexed;
+    result.indexSkippedOld = locals.skippedOld;
+    result.indexMs = locals.indexMs;
+    const reopenCounts = reopenLoopCounts(base, now);
+    const repeatCounts = reopenRepeatCounts(base, now);
+    const unverifiedCounts = unverifiedStreakCounts(base, now);
+    const deadline = now() + (stateBased ? 180000 : 60000);
+    const get = async url => {
+      if (now() >= deadline) throw Error('API time limit');
+      const timeoutMs = Math.max(1, Math.min(deadline - now(), 30000));
+      const response = await fetchWithRetry(url, { headers }, RETRY_MAX, {
+        timeoutMs,
+        deadline,
+        nowFn: now,
+        fetchImpl,
+      });
+      if (!response.ok) throw Error(`RC API HTTP ${response.status}`);
+      return response.json();
+    };
+    let cursor = '';
+    const seen = new Set(), seenIds = new Set();
+    try {
+      do {
+        const body = await get(`${BASE}?${new URLSearchParams({ limit: '100', ...(cursor && { cursor }) })}`);
+        if (!Array.isArray(body.data)) throw Error('Invalid sessions response');
+        const sessions = stateBased ? body.data : body.data.filter(session => !Number.isFinite(Date.parse(session.updated_at)) || Date.parse(session.updated_at) >= Date.parse(since));
+
+        // 状態ベースの候補（--watch 専用、events API 不要）
+        if (stateBased) {
+          const nowTime = now();
+          const stateSince = new Date(nowTime - 72 * 3600 * 1000).toISOString();
+          // 手で閉じたタブと空き枠は開き直さない。再起動で切れたものだけ開く
+          let resolvedVscodeStartedAt = vscodeStartedAt;
+          if (resolvedVscodeStartedAt === undefined) {
+            try {
+              const psScript = "$p = Get-Process Code -ErrorAction SilentlyContinue | Sort-Object StartTime | Select-Object -First 1; if ($p) { $p.StartTime.ToUniversalTime().ToString('o') }";
+              const res = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psScript], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+              const ts = Date.parse(String(res.stdout ?? '').trim());
+              resolvedVscodeStartedAt = Number.isFinite(ts) ? ts : null;
+            } catch {
+              resolvedVscodeStartedAt = null;
+            }
+          }
+          result.vscodeStartedAt = Number.isFinite(resolvedVscodeStartedAt) ? new Date(resolvedVscodeStartedAt).toISOString() : null;
+          for (const session of sessions) {
+            const local = locals.get(session.id);
+            if (!local || seenIds.has(local.id)) continue;
+            if (session.status !== 'active') continue;
+            if (session.connection_status === 'connected') continue;
+            const lastEvent = Date.parse(session.last_event_at);
+            if (!Number.isFinite(lastEvent) || lastEvent < Date.parse(stateSince)) continue;
+            const reason = exclusion(local, closed, living, hiddenSessionIds);
+            if (reason) { result.skipped[reason]++; continue; }
+            // 待機中の空き枠（タイトル「011｜待機中」など）は開き直さない
+            const title = (session.title ?? '').trim();
+            if (/^(?:\d{3}｜)?待機中$/.test(title)) { result.skipped.standby++; continue; }
+            // 【閉じて可】のセッションは開き直さない
+            if (title.includes('【閉じて可】')) { result.skipped.closable++; continue; }
+            // 起動中の VS Code で閉じられたタブは開き直さない
+            if (Number.isFinite(resolvedVscodeStartedAt) && resolvedVscodeStartedAt < lastEvent) { result.skipped.closedInRunningVscode++; continue; }
+            if (reopenCounts[local.id] >= 3) { result.skipped.reopenLoop++; continue; }
+            if (repeatCounts[local.id] >= 3) { result.skipped.reopenRepeat++; continue; }
+            if (unverifiedCounts[local.id] >= 2) { result.skipped.unverifiedStreak++; continue; }
+            seenIds.add(local.id);
+            result.candidates.push({ id: local.id, bridgeSessionId: local.bridgeSessionId, rcId: session.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'state' });
+          }
+          // 降順の場合: 全セッションの last_event_at/updated_at が 72h より古ければそれ以上ページングしない
+          const cutoff = Date.parse(stateSince);
+          if (sessions.length > 0 && sessions.every(s => {
+            const le = Date.parse(s.last_event_at);
+            if (Number.isFinite(le) && le >= cutoff) return false;
+            const ua = Date.parse(s.updated_at);
+            return !Number.isFinite(ua) || ua < cutoff;
+          })) {
+            cursor = '';
+          }
+        }
+
+        for (let offset = 0; offset < sessions.length; offset += 6) {
+          const batch = await Promise.allSettled(sessions.slice(offset, offset + 6).map(async session => {
+            const events = await get(`${BASE}/${encodeURIComponent(session.id)}/events?limit=20`);
+            if (!Array.isArray(events.data)) throw Error('Invalid events response');
+            return { session, events: events.data };
+          }));
+          for (const item of batch) {
+            if (item.status !== 'fulfilled') continue;
+            const { session, events } = item.value;
+            if (!hasHostExit(events, since, until)) continue;
+            if ((session.title ?? '').includes('【閉じて可】')) { result.skipped.closable++; continue; }
+            const local = locals.get(session.id);
+            const reason = exclusion(local, closed, living, hiddenSessionIds);
+            if (reason) { result.skipped[reason]++; continue; }
+            // Skip user-archived sessions (closed via mobile etc.)
+            if (session.status === 'archived' && !hostExitArchive(events)) { result.skipped.archivedByUser++; continue; }
+            // Skip sessions reopened 3+ times in the last 24h (infinite reopen guard)
+            if (reopenCounts[local?.id] >= 3) { result.skipped.reopenLoop++; continue; }
+            if (repeatCounts[local?.id] >= 3) { result.skipped.reopenRepeat++; continue; }
+            if (unverifiedCounts[local?.id] >= 2) { result.skipped.unverifiedStreak++; continue; }
+            if (!local || seenIds.has(local.id)) continue;
+            seenIds.add(local.id);
+            result.candidates.push({ id: local.id, bridgeSessionId: local.bridgeSessionId, rcId: session.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'host_exit' });
+          }
+          const failed = batch.find(item => item.status === 'rejected');
+          if (failed) throw failed.reason;
+        }
+        cursor = body.next_cursor || '';
+        if (cursor && seen.has(cursor)) throw Error('Repeated API cursor');
+        seen.add(cursor);
+      } while (cursor);
+    } catch (error) { result.apiError = error.message; }
+    if (!dryRun && result.candidates.length) {
+      progress('fetch', `candidates=${result.candidates.length}`);
+      // アイドル保護: 最終入力から REOPEN_MIN_IDLE_SEC 秒未満なら開き直しを全部見送る
+      const idleSec = checkIdle ? (idleImpl || measureUserIdleSec)({ spawn }) : null;
+      if (idleSec !== null && idleSec < REOPEN_MIN_IDLE_SEC) {
+        result.deferredActive = idleSec;
+      } else {
+      // Both guards use the same CIM snapshot. Keep the load guard's tasklist fallback.
+      let snapshot;
+      const snapshotSpawn = (command, args, options) => {
+        if (args.at(-1) !== CLAUDE_PROCESS_SCRIPT) return spawn(command, args, { ...options, windowsHide: true });
+        if (!snapshot) {
+          try { snapshot = spawn(command, args, { ...options, windowsHide: true }); }
+          catch (error) { snapshot = { error }; }
+        }
+        return snapshot;
+      };
+      const loadStatus = await getLoadGuardStatus({ env, spawn: snapshotSpawn, cpusImpl, wait, checkCpu, checkClaude, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now });
+      if (loadStatus.error) {
+        result.loadGuard = { claudeCount: loadStatus.claudeCount, cpuPct: loadStatus.cpuPct, reason: loadStatus.reason, error: loadStatus.error };
+      }
+      const cpuThreshold = Number.isFinite(Number(env.REOPEN_MAX_CPU)) ? Number(env.REOPEN_MAX_CPU) : 85;
+      const claudeThreshold = maxClaudeFromEnv(env);
+      const isCpuHigh = loadStatus.cpuPct !== null && loadStatus.cpuPct >= cpuThreshold;
+      const isClaudeHigh = loadStatus.claudeCount !== null && loadStatus.claudeCount >= claudeThreshold;
+
+      // Determine which candidates to reopen under load
+      let reopenCandidates = result.candidates.slice(0, max);
+      if (loadStatus.triggered) {
+        result.loadGuard = { claudeCount: loadStatus.claudeCount, cpuPct: loadStatus.cpuPct, reason: loadStatus.reason, ...(loadStatus.error ? { error: loadStatus.error } : {}) };
+        if (isCpuHigh) {
+          // CPU high → defer everything. RC reconnection adds CPU load.
+          result.skipped.loadGuard = reopenCandidates.length;
+          result.deferredCpu = loadStatus.cpuPct;
+          reopenCandidates = [];
+        } else if (isClaudeHigh) {
+          // 既定は 0 件。REOPEN_ALLOW_FIRST=1 のときだけ、従来どおり 1 件だけ開く。
+          if (env?.REOPEN_ALLOW_FIRST === '1') {
+            const allowCount = Math.min(1, reopenCandidates.length);
+            const skipCount = reopenCandidates.length - allowCount;
+            if (skipCount > 0) result.skipped.loadGuard = skipCount;
+            result.loadGuard.allowFirst = true;
+            reopenCandidates = reopenCandidates.slice(0, allowCount);
+          } else {
+            result.skipped.loadGuard = reopenCandidates.length;
+            reopenCandidates = [];
+          }
+        }
+      }
+
+      if (reopenCandidates.length) {
+        const code = codeCli || resolveCodeCli(env, fsImpl.existsSync);
+        let capacity;
+        let windowOpened = false; // 1回の実行で新規ウィンドウを作るのは最大1回まで
+        for (const candidate of reopenCandidates) {
+          progress('open', `id=${candidate.id}`);
+          // Recheck after fetching and between opens: close/purge may have happened meanwhile.
+          const refreshed = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
+          const recheckHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
+          const currentHidden = recheckHidden.error ? hiddenSessionIds : recheckHidden.ids;
+          const reason = exclusion(refreshed, closedIds(base), alive(), currentHidden);
+          if (reason) { result.skipped[reason]++; continue; }
+          if (reopenCounts[candidate.id] >= 3) { result.skipped.reopenLoop++; continue; }
+          if (repeatCounts[candidate.id] >= 3) { result.skipped.reopenRepeat++; continue; }
+          const blockedBeforeOpen = local => {
+            if (unverifiedStreakCounts(base, now)[candidate.id] >= 2) { result.skipped.unverifiedStreak++; return true; }
+            if (isSessionProcessRunning({ ...candidate, bridgeSessionId: local?.bridgeSessionId || candidate.bridgeSessionId }, {
+              sessionsDir: path.join(base, 'sessions'), spawn, fsImpl,
+            })) { result.skipped.processRunning++; return true; }
+            return false;
+          };
+          if (blockedBeforeOpen(refreshed)) continue;
+          try {
+            const folder = resolveReopenFolder(candidate.cwd, candidate.cwds, { fsImpl, spawn });
+            // worktree のまま開く候補が無いときは開かずスキップ（新しい worktree ウィンドウは作らない）。
+            if (!folder) { result.skipped.worktree++; continue; }
+            // 開くべきターゲットを決定（ウィンドウ有無・storage.json の lastActiveWindow を考慮）
+            const launchInfo = resolveLaunchTarget({ cwd: folder, env, fsImpl, spawn });
+            let launch = launchInfo.launch;
+            let targetPath = launchInfo.target;
+            let openedWith = launchInfo.openedWith;
+            // 既にウィンドウを開いた後は、以降の候補は URI のみ
+            if (windowOpened && launch === 'opened-window') {
+              launch = 'uri-only';
+              targetPath = null;
+              openedWith = null;
+            }
+            capacity ??= checkConcurrency({
+              env, platform: concurrencyPlatform,
+              list: () => listWindowsClaudeProcesses((...args) => processOutput(snapshotSpawn, ...args)),
+            });
+            const count = capacity.count === null ? null : capacity.count + result.reopened.length;
+            if (!capacity.ok || (count !== null && count >= capacity.limit)) {
+              result.sessionConcurrencyCap = { ...capacity, ok: false, reason: SESSION_CONCURRENCY_CAP, count };
+              break;
+            }
+            if (launch === 'opened-window') {
+              // ウィンドウを開く
+              windowOpened = true;
+              const titlePattern = openedWith === 'workspace' ? path.basename(targetPath, '.code-workspace') : path.win32.basename(targetPath);
+              ps(`& ${quotePS(code)} ${quotePS(targetPath)}; exit $LASTEXITCODE`, spawn);
+              const ready = windowReady || (() => ps(`$w = @(Get-Process Code -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle.Contains(${quotePS(titlePattern)}) }); if ($w.Count) { 'ready' }`, spawn) === 'ready');
+              let found = false;
+              for (let elapsed = 0; elapsed <= 60; elapsed++) {
+                if (await ready(candidate.cwd, targetPath, titlePattern)) { found = true; break; }
+                if (elapsed < 60) await wait(1000);
+              }
+              if (!found) throw Error('VS Code window timeout');
+              const current = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
+              const lateHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
+              const currentLateHidden = lateHidden.error ? hiddenSessionIds : lateHidden.ids;
+              const lateReason = exclusion(current, closedIds(base), alive(), currentLateHidden);
+              if (lateReason) { result.skipped[lateReason]++; continue; }
+              if (blockedBeforeOpen(current)) continue;
+              // Focus again immediately before URI dispatch to reduce focus races.
+              ps(`& ${quotePS(code)} ${quotePS(targetPath)}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & ${quotePS(code)} --open-url ${quotePS('vscode://anthropic.claude-code/open?session=' + encodeURIComponent(candidate.id))}; exit $LASTEXITCODE`, spawn);
+            } else {
+              // URI のみ: code --open-url だけを撃つ（既存ウィンドウで開く）
+              if (blockedBeforeOpen(refreshed)) continue;
+              ps(`& ${quotePS(code)} --open-url ${quotePS('vscode://anthropic.claude-code/open?session=' + encodeURIComponent(candidate.id))}; exit $LASTEXITCODE`, spawn);
+            }
+            result.reopened.push({ ...candidate, openedWith, folder, target: targetPath, launch });
+          } catch (error) { (result.failed ??= []).push({ ...candidate, error: error.message }); }
+          await wait(gapSec * 1000);
+        }
+        // Post-reopen verification: wait 90s then check which sessions are actually connected
+        if (result.reopened.length) {
+          progress('verify', `waiting 90s for ${result.reopened.length} reopened`);
+          await wait(90000);
+          const verify = async () => {
+            let agents, connected;
+            try { agents = alive(); } catch (e) { result.verifyError = e.message; }
+            try { connected = await connectedRcSessionIds({ fetchImpl, headers, now }); }
+            catch (e) { result.verifyApiError = e.message; }
+            return { agents, connected };
+          };
+          const { agents, connected } = await verify();
+          if (agents || connected) {
+            result.verified = [];
+            result.unverified = [];
+            for (const r of result.reopened) {
+              if (agents?.has(r.id) || connected?.has(r.rcId)) result.verified.push(r.id);
+              else if (agents) result.unverified.push(r.id);
+            }
+          }
+          const unverified = new Set(result.unverified);
+          for (const candidate of result.reopened) {
+            const { id } = candidate;
+            if (!unverified.delete(id)) continue;
+            try {
+              const retryLoad = await getLoadGuardStatus({ env, spawn, cpusImpl, wait, checkCpu, checkClaude, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now });
+              if (retryLoad.triggered) continue;
+              const current = [...localIndex(base, id).values()].find(local => local.id === id);
+              const hidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
+              const reason = exclusion(current, closedIds(base), alive(), hidden.error ? hiddenSessionIds : hidden.ids);
+              if (reason) { result.skipped[reason]++; continue; }
+              if (isSessionProcessRunning({ ...candidate, bridgeSessionId: current.bridgeSessionId || candidate.bridgeSessionId }, {
+                sessionsDir: path.join(base, 'sessions'), spawn, fsImpl,
+              })) { result.skipped.processRunning++; continue; }
+              const uri = `vscode://orgiast.next-session/reopen?session=${encodeURIComponent(id)}`;
+              ps(`& ${quotePS(code)} --open-url ${quotePS(uri)}; exit $LASTEXITCODE`, spawn);
+              result.retriedViaExtension.push(id);
+            } catch (error) {
+              (result.extensionRetryFailed ??= []).push({ id, error: error.message });
+            }
+          }
+          if (result.retriedViaExtension.length) {
+            progress('verify-extension', `waiting 90s for ${result.retriedViaExtension.length} retried`);
+            await wait(90000);
+            const afterRetry = await verify();
+            const recovered = new Set(result.reopened.filter(r =>
+              afterRetry.agents?.has(r.id) || afterRetry.connected?.has(r.rcId)).map(r => r.id));
+            result.verified.push(...result.unverified.filter(id => recovered.has(id)));
+            result.unverified = result.unverified.filter(id => !recovered.has(id));
+          }
+        }
+      }
+      }
+    }
+  } catch (error) { result.error = error.message; }
+  finally {
+    try { if (!dryRun) appendReopenLog(base, result); }
+    finally {
+      try { progress('done', 'log written'); }
+      finally { release(); }
+    }
+  }
+  // Persistent failure notification: when loadGuard blocks everything or credentials fail,
+  // notify once per 6h window via kim-inbox (deduped by error type + date).
+  if (!dryRun && result.candidates.length > 0 && result.skipped.loadGuard === result.candidates.length) {
+    const dedupeKey = `rc-reconnect-loadguard-block-${new Date().toISOString().slice(0, 10)}`;
+    const detail = result.deferredCpu
+      ? `CPU ${result.deferredCpu}% >= threshold. ${result.candidates.length} RC sessions not reconnected.`
+      : `claudeCount ${result.loadGuard?.claudeCount}. ${result.candidates.length} RC sessions, loadGuard blocked all.`;
+    try { await addItem(base, { kind: 'info', text: `🔌 RC再接続保留: ${detail}`, dedupeKey }); } catch {}
+  }
+  if (!dryRun && result.error) {
+    const dedupeKey = `rc-reconnect-credential-error-${new Date().toISOString().slice(0, 10)}`;
+    const snippet = result.error.slice(0, 200);
+    try { await addItem(base, { kind: 'info', text: `🔌 RC認証エラー: ${snippet}`, dedupeKey }); } catch {}
+  }
+  return result;
+}
+export async function watchReopen(opts = {}, maxParam) {
+  let base, max, dryRun, fetchImpl, spawn, wait, nowFn, claudeCli, codeCli, env, fsImpl, windowReady, cpusImpl, checkIdle, idleImpl;
+  if (typeof opts === 'string' || opts === undefined) {
+    base = opts ?? path.join(os.homedir(), '.claude');
+    max = maxParam ?? DEFAULT_MAX_REOPEN;
+    dryRun = false;
+    nowFn = Date.now;
+  } else {
+    base = opts.base ?? path.join(os.homedir(), '.claude');
+    max = opts.max ?? DEFAULT_MAX_REOPEN;
+    dryRun = opts.dryRun ?? false;
+    fetchImpl = opts.fetchImpl;
+    spawn = opts.spawn;
+    wait = opts.wait;
+    nowFn = opts.now ?? Date.now;
+    claudeCli = opts.claudeCli;
+    codeCli = opts.codeCli;
+    env = opts.env;
+    fsImpl = opts.fsImpl;
+    windowReady = opts.windowReady;
+    cpusImpl = opts.cpusImpl;
+    checkIdle = opts.checkIdle;
+    idleImpl = opts.idleImpl;
+  }
+  const stateFile = path.join(base, 'reopen-lost-sessions-state.json');
+  const state = readJson(stateFile, {});
+  const nowTime = nowFn();
+  const minSince = new Date(nowTime - 24 * 3600 * 1000).toISOString();
+  const defaultSince = new Date(nowTime - 30 * 60000).toISOString();
+  let since;
+  const wmTime = state.watermark ? Date.parse(state.watermark) : NaN;
+  if (Number.isFinite(wmTime)) {
+    since = wmTime < Date.parse(minSince) ? minSince : state.watermark;
+  } else {
+    since = defaultSince;
+  }
+  const until = new Date(nowTime - 60000).toISOString();
+  const result = await reopenLost({
+    since, until, max, dryRun, base, fetchImpl, spawn, wait, now: nowFn, claudeCli, codeCli, env, fsImpl, windowReady, cpusImpl,
+    checkIdle, idleImpl, checkConcurrency: opts?.checkConcurrency, concurrencyPlatform: opts?.concurrencyPlatform,
+    stateBased: true, checkClaude: true, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now: nowFn
+  });
+  if (!result.locked && !result.error && !result.apiError && !result.deferredCpu && !result.deferredActive && !result.skipped?.loadGuard && !result.sessionConcurrencyCap && !dryRun) {
+    fs.writeFileSync(stateFile, JSON.stringify({ watermark: until }) + '\n');
+  }
+  return result;
+}
+export function watchdogRecord(base, { exitImpl = process.exit } = {}) {
+  const logPath = path.join(base, 'reopen-lost-sessions.log');
+  try {
+    const progress = readJson(path.join(base, 'reopen-lost-sessions-progress.json'), {});
+    fs.appendFileSync(logPath, JSON.stringify({
+      at: new Date().toISOString(),
+      error: 'watchdog timeout',
+      stage: progress.stage,
+      detail: progress.detail,
+      pid: progress.pid,
+    }) + '\n');
+  } catch {}
+  writeProgress(base, 'watchdog', 'timeout');
+  try { fs.unlinkSync(path.join(base, 'reopen-lost-sessions.lock')); } catch {}
+  if (typeof exitImpl === 'function') {
+    exitImpl(2);
+  }
+}
+function appendReopenLog(base, entry) {
+  fs.appendFileSync(path.join(base, 'reopen-lost-sessions.log'), JSON.stringify(entry) + '\n');
+}
+
+if (isEntry(import.meta.url)) {
+  const args = process.argv.slice(2);
+  let base = path.join(os.homedir(), '.claude');
+  let dryRun = args.includes('--dry-run');
+  let watchdogTimer;
+  try {
+    const opts = parseOptions(args);
+    base = opts.base ?? base;
+    dryRun = opts.dryRun;
+    if (opts.watch && !dryRun) {
+      watchdogTimer = setTimeout(() => watchdogRecord(base), 20 * 60 * 1000);
+    }
+    const result = opts.watch
+      ? await watchReopen({ base, max: opts.maxSet ? opts.max : DEFAULT_MAX_REOPEN, dryRun })
+      : await reopenLost({ ...opts, base, checkClaude: true });
+    console.log(JSON.stringify(result));
+    if (result.error || result.failed?.length || result.unverified?.length) process.exitCode = 1;
+    if (result.candidates?.length > 0 && !result.reopened?.length && result.skipped?.loadGuard > 0) process.exitCode = 1;
+    // 一時的な API エラーは連続失敗のしきい値まで exit 0。
+    if (!result.locked && !dryRun && recordApiResult(base, result.apiError)) process.exitCode = 1;
+  } catch (error) {
+    if (!dryRun) {
+      try { appendReopenLog(base, { at: new Date().toISOString(), error: error.message, stage: 'uncaught' }); }
+      catch {}
+    }
+    console.log(JSON.stringify({ error: error.message }));
+    process.exitCode = 1;
+  } finally {
+    clearTimeout(watchdogTimer);
+  }
+}

@@ -1,0 +1,92 @@
+#!/usr/bin/env node
+import os from 'node:os';
+import fs from 'node:fs';
+import { parseArgs } from 'node:util';
+import { isEntry } from './is-entry.mjs';
+import { ledgerFile, readLedger, writeLedger, latestOpenPromises, applyPromise, isSessionProgressCheck, SESSION_CHECK_TIMEOUT_MS, SESSION_DEADLINE_MS } from './auto-progress-ledger.mjs';
+import { executeCheck, preflightCheck, sessionStateReference, MAX_CHECK_TIMEOUT_MS, isTimeOnlyCheck } from './auto-progress-check.mjs';
+import { resolveOwner } from './notify-owner.mjs';
+import { hasReferencedApproval } from './lib/send-approval.mjs';
+import { externalSpec, MONITOR_DAYS } from './lib/external-monitor-state.mjs';
+// 外部の成果を読まず、時計と定数だけで決まる典型的な判定を拒否する。
+export { isTimeOnlyCheck } from './auto-progress-check.mjs';
+export function addCheck({ session, check, startWhen, deadline, label, nextClaude, nextKim, doneFile, askFile, timeout, cwd = process.cwd(), home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), probe, allowMet = false, autoRegisteredCheck = false, transcriptPath = '' }) {
+  const external = externalSpec({ check });
+  if (!session?.trim() || !(startWhen?.trim() || check?.trim()) || !label?.trim()) throw new Error('--session, --check, --label は必須です');
+  if (startWhen !== undefined && (!startWhen.trim() || !nextClaude?.trim())) throw new Error('--start-when には --next-claude が必須です');
+  if (check && isTimeOnlyCheck(check)) throw new Error('時刻だけの check は完了判定になりません。開始の予約は --start-when、完了判定は成果物（ファイル・PR・台帳など）を確かめるコマンドにしてください');
+  const relative = /^\+(\d+)(m|h|d)$/.exec(deadline || '');
+  let deadlineMs = relative ? now + Number(relative[1]) * { m: 60000, h: 3600000, d: 86400000 }[relative[2]] : !deadline && external ? now + MONITOR_DAYS : Date.parse(deadline);
+  if (!Number.isFinite(deadlineMs) || deadlineMs <= now) throw new Error('--deadline は未来の ISO 日時または +24h などを指定してください');
+  const timeoutSec = timeout === undefined || timeout === '' ? null : Number(timeout);
+  if (timeoutSec !== null && !(timeoutSec > 0)) throw new Error('--timeout は正の秒数で指定してください');
+  const sessionCheck = isSessionProgressCheck({ check });
+  if (autoRegisteredCheck && sessionCheck) deadlineMs = Math.max(deadlineMs, now + SESSION_DEADLINE_MS);
+  const timeoutFields = timeoutSec === null ? (sessionCheck ? { checkTimeoutMs: SESSION_CHECK_TIMEOUT_MS } : {}) : { checkTimeoutMs: Math.min(Math.round(timeoutSec * 1000), MAX_CHECK_TIMEOUT_MS) };
+  if (probe) {
+    const { code, text } = probe({ check: startWhen || check, checkCwd: cwd, cwd, ...timeoutFields });
+    if (code === 0 && !startWhen && !allowMet && !external) throw new Error(`check が登録時点で既に達成(exit 0)と判定されました: ${text}。達成時だけ exit 0 になる形か確認してください（例: … | grep -q MERGED）。本当に達成済みなら登録は不要です`);
+    // code === null かつタイムアウト文言 → trial_timeout（preflightCheck が認めたもの）で登録を続行。
+    // それ以外の code === null（構文エラー等）は従来通り拒否する。
+    if (code !== null && code !== 1 && code !== 0 && (code !== 3 || startWhen)) throw new Error(`check がこの PC で実行できません(exit ${code}): ${text}`);
+    if (code === null && !/上限を超えました/.test(text)) throw new Error(`check がこの PC で実行できません(exit ${code}): ${text}`);
+  }
+  const ask = askFile === undefined ? undefined : fs.readFileSync(askFile, 'utf8');
+  const file = ledgerFile(home), rows = readLedger(file);
+  const old = latestOpenPromises(rows).find(row => row.sessionId === session)
+    || rows.filter(row => row.sessionId === session).sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts))[0];
+  const promisedWork = [nextClaude, external ? '' : old?.promise, label].filter(Boolean).join('\n');
+  if (/(?:送信|送る|送って|send)/iu.test(promisedWork) && !hasReferencedApproval(promisedWork, { home })) {
+    throw new Error('auto-progress に社外送信は登録できません。下書き・kim-inbox の承認待ちまでにし、送信する場合は send-approval:<本文sha256> と有効な承認マーカーを付けてください');
+  }
+  let resolvedNextKim = 'なし';
+  if (nextKim !== undefined) {
+    const trimmed = nextKim.trim();
+    resolvedNextKim = (trimmed === '' || trimmed === 'なし') ? 'なし' : trimmed;
+  } else if (askFile !== undefined) {
+    resolvedNextKim = old?.nextKim || 'なし';
+  } else {
+    resolvedNextKim = 'なし';
+  }
+  // A new revision keeps prior results auditable and resets notification state.
+  const row = { ts: new Date(now).toISOString(), pc: old?.pc || os.hostname(), user: old?.user || os.userInfo().username,
+    owner: old?.owner || resolveOwner({ home }), sessionId: session, cwd: old?.cwd || cwd, transcriptPath: old?.transcriptPath || transcriptPath,
+    promise: label.trim(), nextKim: resolvedNextKim, status: startWhen ? 'scheduled' : 'open', ...(check ? { check: check.trim(), checkRegisteredAt: new Date(now).toISOString() } : {}), ...(startWhen ? { startWhen: startWhen.trim() } : {}), checkCwd: cwd,
+    ...(autoRegisteredCheck ? { autoRegisteredCheck: true } : {}),
+    deadlineAt: new Date(deadlineMs).toISOString(), label: label.trim(), nextClaude: nextClaude || '', ...(ask !== undefined || old?.ask ? { ask: ask ?? old.ask } : {}), ...(doneFile ? { doneFile } : {}), ...timeoutFields };
+  writeLedger(file, applyPromise(rows, row)); return row;
+}
+export function auditChecks({ home = process.env.ORGIAST_HOME || os.homedir(), execute = executeCheck } = {}) {
+  const rows = readLedger(ledgerFile(home)).filter(row => row.status === 'open' && row.check);
+  const errors = [];
+  for (const row of rows) {
+    let result;
+    try { result = execute(row, { home }); }
+    catch (error) { result = { code: null, stderr: error.message }; }
+    if (result.code !== 0 && result.code !== 1 && result.code !== 3) errors.push({ label: row.label || row.promise || '', stderr: String(result.stderr || result.text || '').split(/\r?\n/, 1)[0] });
+  }
+  return { checked: rows.length, errorCount: errors.length, errors };
+}
+export function main(argv = process.argv.slice(2)) {
+  if (argv.length === 1 && argv[0] === '--audit-checks') return auditChecks();
+  const { values } = parseArgs({ args: argv, options: { 'add-check': { type: 'boolean' }, 'ask-file': { type: 'string' }, 'done-file': { type: 'string' }, 'start-when': { type: 'string' }, 'allow-met': { type: 'boolean' }, 'force-check': { type: 'boolean' }, 'allow-session-state': { type: 'boolean' }, session: { type: 'string' }, check: { type: 'string' }, deadline: { type: 'string' }, label: { type: 'string' }, 'next-claude': { type: 'string' }, 'next-kim': { type: 'string' }, timeout: { type: 'string' } } });
+  if (!values['add-check'] && !values['start-when']) throw new Error('使用法: --start-when "<cmd>" --session <id> --label "<名前>" --deadline +24h --next-claude "<作業>" [--check "<完了判定>"] または --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" [--timeout <秒>] [--next-kim "<文|なし>"] [--ask-file <path>] [--done-file <path>] [--allow-met] [--force-check] [--allow-session-state] または --audit-checks。check: exit 0=完了 / 1=未達 / 3=停滞（stdout 最終行が理由）/ その他=エラー');
+  const home = process.env.ORGIAST_HOME || os.homedir();
+  if (!values['start-when'] && !values['allow-session-state']
+      && sessionStateReference({ check: values.check, checkCwd: process.cwd() }, { home })) {
+    throw new Error('完了判定はセッションが書く中間ファイルではなく、外部の一次情報（公開ページ・API・gh・タスクスケジューラ等）を直接照会してください。セッションが落ちると中間ファイルが更新されず、完了を検知できません（2026-11-06 実害）。例外として登録する場合だけ --allow-session-state を指定してください。');
+  }
+  if (!values['start-when']) {
+    const timeoutSec = values.timeout === undefined || values.timeout === '' ? null : Number(values.timeout);
+    const rawTimeoutMs = timeoutSec !== null && timeoutSec > 0 ? Math.round(timeoutSec * 1000) : undefined;
+    const checkTimeoutMs = rawTimeoutMs !== undefined ? Math.min(rawTimeoutMs, MAX_CHECK_TIMEOUT_MS) : undefined;
+    const pf = preflightCheck({ check: values.check, checkCwd: process.cwd(), cwd: process.cwd(), ...(checkTimeoutMs ? { checkTimeoutMs } : {}) }, { home, forceCheck: values['force-check'], allowSessionState: values['allow-session-state'] });
+    if (pf.preflight === 'trial_timeout') {
+      console.error(`check の初回検証は時間切れです（${pf.text}）。check 行は登録したうえで、次回の巡回で判定します。`);
+    } else if (!pf.ok) {
+      throw new Error(pf.text);
+    }
+  }
+  return addCheck({ ...values, home, askFile: values['ask-file'], doneFile: values['done-file'], startWhen: values['start-when'], nextClaude: values['next-claude'], nextKim: values['next-kim'], allowMet: values['allow-met'], probe: row => executeCheck(row, { home }) });
+}
+if (isEntry(import.meta.url)) { try { console.log(JSON.stringify(main())); } catch (error) { console.error(error.message); process.exitCode = 2; } }

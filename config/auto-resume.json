@@ -1,0 +1,14 @@
+{
+  "enabled": false,
+  "reason": "kim 2026-11-14: Claude 使用量の59%が自動再開だったため、時刻起点の一律再開を廃止",
+  "allowSources": [
+    "fleet-exec"
+  ],
+  "eventResume": true,
+  "eventResumeReason": "kim 2026-11-20 承認: 状態変化と納期危険のときだけ再開",
+  "hourlyResume": true,
+  "hourlyResumeReason": "kim 2026-11-25: 止まったセッションを1時間ごとに自動で進める（上限つき・期日24h以内優先・3回進捗なしで kim 判断待ちへ）",
+  "hourlyCap": 4,
+  "perSessionDailyCap": 6,
+  "planUsageStopPct": 85
+}

@@ -1,0 +1,39 @@
+# robots.txt — 株式会社オージャスト (orgiast.jp)
+# AIクローラー最適化版（LLMO対策含む）
+# 現状の robots.txt（All in One SEO Pack 生成）からの変更差分:
+# - AIクローラー（GPTBot, Claude-Web, PerplexityBot, CCBot）へのアクセス明示許可
+# - Google-Extendedへの明示許可
+# - 各AIクローラー用のsitemap指示
+
+User-agent: GPTBot
+Allow: /
+Disallow: /wp/wp-admin/
+
+User-agent: Google-Extended
+Allow: /
+Disallow: /wp/wp-admin/
+
+User-agent: CCBot
+Allow: /
+Disallow: /wp/wp-admin/
+
+User-agent: PerplexityBot
+Allow: /
+Disallow: /wp/wp-admin/
+
+User-agent: Claude-Web
+Allow: /
+Disallow: /wp/wp-admin/
+
+User-agent: Applebot
+Allow: /
+Disallow: /wp/wp-admin/
+
+# 従来のクローラー設定（維持）
+User-agent: *
+Allow: /
+Disallow: /wp/wp-admin/
+Allow: /wp/wp-admin/admin-ajax.php
+
+Sitemap: https://orgiast.jp/sitemap.xml.gz
+Sitemap: https://orgiast.jp/sitemap.xml

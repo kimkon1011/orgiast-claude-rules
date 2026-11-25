@@ -26,6 +26,7 @@ import { externalSpec } from './lib/external-monitor-state.mjs';
 import { pollExternal, drainExternalQueue } from './auto-progress-external-monitor.mjs';
 import { main as writeProgressPush } from './progress-push.mjs';
 import { pushDailyProgress } from './lib/auto-progress-daily.mjs';
+import { sweepMobilePushQueue } from './lib/mobile-push-queue.mjs';
 import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { BLOCKER, readJson as readFleetJson, saveJson as saveFleetJson } from './lib/fleet-chase-ledger.mjs';
@@ -1366,6 +1367,14 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   }
   try { Object.assign(summary, await watchFleetMail({ home, now, dryRun, io })); }
   catch { summary.fleetExpired ??= 0; summary.fleetBlocked ??= 0; summary.errors.push('fleet-mail monitoring failed'); }
+  try {
+    const sweepResult = sweepMobilePushQueue(home, { now });
+    if (sweepResult.expired || sweepResult.deduplicated) {
+      summary.mobilePushSweep = sweepResult;
+    }
+  } catch (error) {
+    summary.errors.push(`mobile-push-sweep: ${String(error?.message ?? error).slice(0, 120)}`);
+  }
   endPhase('maintenance');
   await sendDeferredNotices();
   endPhase('deferred-notices');

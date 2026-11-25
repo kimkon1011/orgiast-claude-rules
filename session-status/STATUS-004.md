@@ -1,6 +1,6 @@
-# session-status  PC=004  host=004MINPAKU  updated 2026-11-25 21:13 JST
+# session-status  PC=004  host=004MINPAKU  updated 2026-11-25 22:13 JST
 
-- claude auth: {"at":"2026-11-25T12:13:13.183Z","event":"launch_allowed","reason":"below_cap","activeCount":0,"limit":2,"staleHours":3,"abandoned":[]} { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "f
+- claude auth: {"at":"2026-11-25T13:13:12.258Z","event":"launch_allowed","reason":"below_cap","activeCount":0,"limit":2,"staleHours":3,"abandoned":[]} { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "f
 - 案件数: 13
 
 - 004・account-inventory-1123・完了・最終更新 11/23 22:02、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし

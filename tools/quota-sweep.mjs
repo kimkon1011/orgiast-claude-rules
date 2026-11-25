@@ -18,6 +18,7 @@ import { decideSweep, readClaudeWindows, readCodexWindows, shouldStopTick, jsonl
 import { discoverWsl, passiveWslHomes, wslPath, interactiveCodex, nativeCommand } from './lib/quota-sweep-host.mjs';
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { runBounded } from './lib/quota-sweep-process.mjs';
+import { evaluateClaudeSeatGuard, formatClaudeSeatGuardSkip } from './lib/claude-seat-guard.mjs';
 
 export const DEFAULT_GOAL = 'このリポで node --test tools/*.test.mjs を実行し、失敗しているテスト・壊れた import・node --check で落ちるファイルを直す。全部緑なら docs/ 内のリンク切れ（相対パスの実在）を直す。受け入れ基準: node --test tools/*.test.mjs が緑、変更は git commit -F msg -- <paths> で小さくコミット';
 export const MAX_TICKS = 8;
@@ -517,6 +518,14 @@ export async function createPullRequest({ run, tree, branch, log, spawnImpl, fet
 export async function runSweep(decision, context) {
   const { home, state, save, windows: refresh, active, log, env, now = Date.now, spawnImpl = spawnSync, runChild = runBounded, notify = notifyKim } = context;
   const run = context.command ?? commandRunner(spawnImpl, log), provider = decision.provider;
+  if (provider === 'claude') {
+    const guardVerdict = context.guardVerdict ?? await (context.evaluateGuard ?? evaluateClaudeSeatGuard)({ home, env, caller: 'quota-sweep' });
+    if (guardVerdict.blocked) {
+      const message = formatClaudeSeatGuardSkip(guardVerdict);
+      log(message);
+      return { skipped: true, reason: message };
+    }
+  }
   const startedAt = now(), slug = `quota-sweep-${provider}`;
   const selection = selectGoal({ goals: read(path.join(home, '.claude', 'quota-sweep-goals.md')), handoff: read(path.join(home, '.claude', 'next-session.md')) });
   state.lastRun ??= {}; state.lastRun[provider] ??= {};

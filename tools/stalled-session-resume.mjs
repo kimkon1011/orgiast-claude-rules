@@ -15,6 +15,7 @@ import { notifyKim } from './notify-kim.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { isEntry } from './is-entry.mjs';
 import { autoResumeAllowed, eventResumeAllowed, hourlyResumePolicy, autoResumeDisabledByConfig } from './lib/auto-resume-policy.mjs';
+import { evaluateClaudeSeatGuard, formatClaudeSeatGuardSkip } from './lib/claude-seat-guard.mjs';
 
 import { latestSafeStart, parseWaitFooter } from './lib/wait-deadline.mjs';
 import { executeCheck, isTimeOnlyCheck } from './auto-progress-check.mjs';
@@ -289,6 +290,8 @@ export function skipReason(record, entry, night, closed, mtimeMs, now, activeMs)
 // これにより transcript に追記され、kim がリモート表示で進捗を見られる。
 // 予備として cheap-code フォールバックも残すが、transcript が増えなければ progressed にしない。
 async function executeOverdue(record, { timeoutMs, resultFile, previous = [], wait }, io = {}) {
+  const guardVerdict = io.guardVerdict ?? await (io.evaluateGuard ?? evaluateClaudeSeatGuard)({ home: io.home ?? process.env.ORGIAST_HOME ?? os.homedir(), env: process.env, caller: 'stalled-session-resume:wait-deadline' });
+  if (guardVerdict.blocked) return { outcome: 'skipped', executor: 'none', reason: formatClaudeSeatGuardSkip(guardVerdict) };
   const prompt = `停滞セッション「${record.displayTitle}」(${record.sessionId})の承認済みの目的を1歩進めてください。
 「次回やる」で終わらせない。先送りするなら、応答の「このセッション」行に新しい期限【MM/DD/HH:MMまで】を書く（毎時の再開ジョブが拾う）。常設許可がある送信（config/standing-send-permissions.json に列挙）は承認待ちに積まず、その許可の範囲で送信して結果を記録する。
 このセッションの待機期限 ${wait.label} を過ぎました。待っていた事項（相手の返信・外部の状態・自動チェック）を直接照会し、(a) 進められるなら最後まで進めて検証する (b) 人の判断や操作が必要なら kim-inbox に ask を積み（node tools/kim-inbox.mjs）、応答の「このセッション」行に新しい期限を書く (c) 目的が完了していれば /session-close を実行する。期限を書き換えるだけで終えない。
@@ -353,6 +356,7 @@ stuck=それ以外で進められなかった。
 単なる進捗確認・計画・終了コード0は成果に含めません。\n当初依頼: ${record.firstPrompt}\n直近: ${record.lastAssistantText}`;
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, record.cwd, record.cwd, timeoutMs, { resumeSessionId: record.sessionId });
   const execution = { executor: result.executorUsed || 'not-started', executorAttempts: result.executorAttempts ?? [] };
+  if (result.skippedSeatGuard) return { ...execution, outcome: 'skipped', reason: String(result.stdout || result.stderr || 'claude-seat-guard') };
   if (result.skippedNoExecutor) return { ...execution, outcome: 'no-executor', reason: `実行役なし: ${String(result.stderr ?? '').trim().slice(-300) || result.executorUsed || 'cheap-code'}` };
   const timedOut = result.status === 'timeout';
   if (result.status !== 'success' && !timedOut) return { ...execution, outcome: 'error', reason: result.status };
@@ -400,6 +404,7 @@ stuck=それ以外で進められなかった。
 単なる進捗確認・計画・終了コード0は成果に含めません。\n当初依頼: ${record.firstPrompt}\n直近: ${record.lastAssistantText}`;
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, record.cwd, record.cwd, timeoutMs, { resumeSessionId: record.sessionId });
   const execution = { executor: result.executorUsed || 'not-started', executorAttempts: result.executorAttempts ?? [] };
+  if (result.skippedSeatGuard) return { ...execution, outcome: 'skipped', reason: String(result.stdout || result.stderr || 'claude-seat-guard') };
   // 実行役が1つも起動できない(cheap-code 全レーン停止・Claude フォールバック無効)のはセッションの失敗ではない。
   // 2026-10-26 実測: deepseek payment_required で2件が1秒で error 扱い→「連続2件エラーで中止」の誤通知と noProgress 消費。
   // 実行役記録を常に伝播させる（executorAttempts）

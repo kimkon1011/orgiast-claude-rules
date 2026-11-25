@@ -360,6 +360,15 @@ export function emptyOutputReason(row) {
   if (CODEX_USAGE_LIMIT.test(String(row?.stderrTail || ''))) return 'usage_limit';
   if (CODEX_MODEL_CAPACITY.test(String(row?.stderrTail || ''))) return 'model_capacity';
   if (INFRA_TRANSIENT.test(String(row?.stderrTail || ''))) return 'infra_transient';
+  // Codex が編集・テストまで進めたものの final 応答だけを残さず exit 1 になった行。
+  // 新形式は codex-do が reason を明記する。旧形式でも、即死ではない実行時間と進捗 stderr が
+  // 揃う狭い形を分離する（2026-11-25 実測: 318.621秒、exit 1、rollout に編集とテスト成功）。
+  if (row?.reason === 'work_completed_no_final'
+    || (Number(row?.exitCode) === 1 && row?.timedOut === false && row?.launched === true
+      && Number(row?.out) === 0 && Number(row?.secs) >= 60
+      && /\btools[\\/][^\s]+(?:\s+\d+){2}/.test(String(row?.stderrTail || '')))) {
+    return 'incomplete_final_response';
+  }
   // 台帳の status は数値(終了コード)だけではない。llm-fallback / cheap-code は失敗の種類を
   // そのまま文字列で書く(http_429 / http_402 / cooldown)。これを知らずに catch-all の
   // no_output へ落とすと、証拠が「no_output(11件)」になり、上限到達が原因不明のレーン故障に見える
@@ -554,7 +563,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     const lastFailureTime = Math.max(...failures.map((row) => Date.parse(row.t)));
     return codexSuccessTimes.some((time) => time > lastFailureTime);
   };
-  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed', 'usage_limit', 'model_capacity', 'cooldown_skipped', 'signal_killed'].includes(item.reason));
+  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed', 'usage_limit', 'model_capacity', 'cooldown_skipped', 'signal_killed', 'incomplete_final_response'].includes(item.reason));
   const launchFailed = empty.filter((item) => item.reason === 'launch_failed');
   const authFailed = empty.filter((item) => item.reason === 'auth_failed');
   const modelAuthMismatch = empty.filter((item) => item.reason === 'model_auth_mismatch');
@@ -566,6 +575,8 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   if (laneAbsent.length && !repairedAfter(laneAbsent)) findings.push({ id: 'codex_lane_unavailable', severity: 'high', title: 'codex レーンは WSL 不在のため使用不可（要修理）', evidence: [`${laneAbsent.length}件`, 'WSL ディストリ 0 件'], fixTask: "WSL にディストリが無い。wsl --install -d Ubuntu --no-launch → wsl -d Ubuntu -u root -- bash -lc 'curl -fsSL https://deb.nodesource.com/setup_22.x | bash -; apt-get install -y nodejs; npm i -g @openai/codex' → Windows の %USERPROFILE%\\.codex\\auth.json を WSL の /root/.codex/auth.json にコピー → codex login status で確認 → codex-do で1ファイル作成を試し実測" });
   // 上限到達は欠陥ではないので fixTask を付けない low の可視化 finding とする。
   if (usageLimit.length) findings.push({ id: 'codex_usage_limit', severity: 'low', title: 'Codex は上限到達で停止（欠陥ではない）', evidence: [`${usageLimit.length}件`, ...reasonTop(usageLimit)] });
+  const incompleteFinal = empty.filter((item) => item.reason === 'incomplete_final_response');
+  if (incompleteFinal.length) findings.push({ id: 'codex_incomplete_final_response', severity: 'low', title: 'Codex は作業後の最終応答を残さず終了', evidence: [`${incompleteFinal.length}件`, ...reasonTop(incompleteFinal)] });
   // 起動前ゲートが止めた行も事実として残す。原因は codex 側ではなく指示(spec)側なので
   // codex_launch_failed とは別 id にし、fixTask を付けない(low)＝毎日の起票対象にしない。
   const preflightBlocked = empty.filter((item) => item.reason === 'preflight_blocked');

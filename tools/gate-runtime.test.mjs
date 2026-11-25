@@ -183,3 +183,7 @@ test('2026-11-05 mail/delete policies deny immediately through real runner on fi
     assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision,'deny');
   }
 });
+
+test('user-code-input policy is immediately deny on a fresh non-pilot PC', t => {
+  assert.equal(rolloutMode('user-code-input-gate', { home: temp(t), hostname: 'fresh-PC' }), 'deny');
+});

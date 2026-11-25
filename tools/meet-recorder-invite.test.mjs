@@ -220,6 +220,18 @@ test('isInternalOnly: all orgiast.jp', () => {
   ]));
 });
 
+test('isInternalOnly: staff addresses も社内扱い', () => {
+  const staff = ['staff-personal@gmail.com'];
+  assert.ok(isInternalOnly([
+    { email: 'kim@orgiast.jp' },
+    { email: 'staff-personal@gmail.com' },
+  ], staff));
+  assert.ok(!isInternalOnly([
+    { email: 'staff-personal@gmail.com' },
+    { email: 'client@example.com' },
+  ]), 'client が混ざれば false');
+});
+
 test('isInternalOnly: includes external', () => {
   assert.ok(!isInternalOnly([
     { email: 'kim@orgiast.jp' },

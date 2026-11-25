@@ -948,12 +948,12 @@ test('answer closes open asks for the same ledger row or dedupe key', async t =>
   const home = seat(t);
   const ts = '2026-11-18T00:00:00.000Z';
   const sessionId = 'abcdef12-full-session';
-  const text = (days, time = ts) => `【要対応・kim の判断待ち ${days}日】確認（元の約束: 作業 / セッション abcdef12 / 台帳 ts ${time}）`;
-  const original = await addItem(home, { kind: 'ask', text: text(2), sessionId });
-  const sameRow = await addItem(home, { kind: 'ask', text: '旧台帳に残った別表記' });
-  fs.writeFileSync(path.join(home, '.claude/kim-inbox', sameRow.id + '.json'), JSON.stringify({ ...sameRow, text: text(3) }));
-  const sameKey = await addItem(home, { kind: 'ask', text: '旧形式', dedupeKey: `auto-progress-escalate:${sessionId}${ts}` });
-  const otherRow = await addItem(home, { kind: 'ask', text: text(2, '2026-11-17T00:00:00.000Z') });
+  // Tags inside the 【】 block survive normalizeInboxText normalization (【】/N日/kim stripped)
+  // so they keep items distinguishable while escalation matching still works.
+  const text = (id, time = ts) => `【要対応・kim の判断待ち 2日】確認 [${id}]（元の約束: 作業 / セッション abcdef12 / 台帳 ts ${time}）`;
+  const original = await addItem(home, { kind: 'ask', text: text('A'), sessionId });
+  const sameRow = await addItem(home, { kind: 'ask', text: text('B') });  const sameKey = await addItem(home, { kind: 'ask', text: '旧形式', dedupeKey: `auto-progress-escalate:${sessionId}${ts}` });
+  const otherRow = await addItem(home, { kind: 'ask', text: text('C', '2026-11-17T00:00:00.000Z') });
 
   const answered = answerItem(home, original.id, '承認');
   const items = new Map(listItems(home).map(item => [item.id, item]));

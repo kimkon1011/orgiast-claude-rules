@@ -614,7 +614,7 @@ test('社内主催・社内参加者のみなら元の予定の説明欄へ追�
       assert.equal(opts.method, 'PATCH');
       assert.equal(opts.headers['If-Match'], 'v1');
       const body = JSON.parse(opts.body);
-      assert.deepEqual(body, { description: `元の説明\n📝カンペ: ${itemState.staffUrl}` });
+      assert.deepEqual(body, { description: `元の説明\n📝カンペ（社内用）: ${itemState.staffUrl}` });
       event.description = body.description;
       return { ok: true };
     },
@@ -624,38 +624,24 @@ test('社内主催・社内参加者のみなら元の予定の説明欄へ追�
   assert.equal(writes, 1);
 });
 
-test('社外主催または社外参加者ありなら元の予定へ書かず、開始10分前に社内だけへ通知する', async () => {
-  const start = Date.parse('2026-11-22T01:00:00Z');
-  for (const organizer of ['client@example.com', 'kim@orgiast.jp', undefined]) {
-    const sent = [];
-    const errors = [];
-    const itemState = { staffUrl: 'https://docs.google.com/document/d/doc123/edit' };
-    let fail = true;
-    const args = {
-      event: {
-        organizer: { email: organizer }, start: { dateTime: new Date(start).toISOString() },
-        attendees: ['kim@orgiast.jp', 'STAFF@orgiast.jp', 'staff@orgiast.jp', 'another@gmail.com'].map(email => ({ email })),
-      },
-      itemState,
-      getToken: () => assert.fail('Calendar write must not be attempted'),
-      sendCue: async ({ staffEmail }) => {
-        if (staffEmail === 'staff@orgiast.jp' && fail) throw new Error('temporary failure');
-        sent.push(staffEmail);
-      },
-      onError: email => errors.push(email),
-    };
-    await deliverCueUrl({ ...args, now: new Date(start - 600001) });
-    assert.equal(itemState.cueDmDueAt, new Date(start - 600000).toISOString());
-    assert.deepEqual(sent, []);
-    await deliverCueUrl({ ...args, now: new Date(start - 600000) });
-    assert.deepEqual(sent, ['kim@orgiast.jp']);
-    assert.deepEqual(errors, ['staff@orgiast.jp']);
-    fail = false;
-    await deliverCueUrl({ ...args, now: new Date(start - 599000) });
-    await deliverCueUrl({ ...args, now: new Date(start - 598000) });
-    assert.deepEqual(sent, ['kim@orgiast.jp', 'staff@orgiast.jp']);
-    assert.equal(itemState.cueDmSent, true);
-  }
+test('社外参加者ありなら時刻に関係なく kim-inbox に一度だけ通知し DM は送らない', async () => {
+  const notices = [];
+  const itemState = { staffUrl: 'https://docs.google.com/document/d/doc123/edit' };
+  const args = {
+    event: { id: 'external', summary: '商談', organizer: { email: 'kim@orgiast.jp' },
+      start: { dateTime: '2026-11-22T01:00:00Z' }, attendees: [{ email: 'client@example.com' }] },
+    itemState,
+    getToken: () => assert.fail('Calendar write must not be attempted'),
+    sendCue: () => assert.fail('DM must not be sent'),
+    addInfo: async (_, info) => notices.push(info),
+  };
+  await deliverCueUrl(args);
+  await deliverCueUrl(args);
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].kind, 'info');
+  assert.match(notices[0].text, /商談/);
+  assert.match(notices[0].text, /外部参加者/);
+  assert.ok(notices[0].text.includes(itemState.staffUrl));
 });
 
 test('migrateCleanupCompanions: 過去と識別マーカーのない予定を除外し成功した削除を記録', async t => {
@@ -783,4 +769,77 @@ test('F: スケジューラは台帳にある開始前の Doc を準備時に一
   assert.equal(loadSchedulerState(home)[future].greetingChecked, true);
   assert.equal((await runScheduler(opts)).ok, true);
   assert.deepEqual(checkedDocs, ['future']);
+});
+
+test('個人 Gmail 主催は書き込まず失敗通知を一度だけ記録し DM は送らない', async () => {
+  const itemState = { staffUrl: 'https://docs.google.com/document/d/doc123/edit' };
+  const sent = [], notices = [];
+  const now = new Date('2026-11-25T01:50:00Z');
+  const args = { itemState, now, event: { organizer: { email: 'waki.toho@gmail.com' }, start: { dateTime: '2026-11-25T02:00:00Z' }, attendees: [{ email: 'kim@orgiast.jp' }] },
+    getToken: () => assert.fail('DWD 不可'), addInfo: async (_, info) => notices.push(info), sendCue: async ({ staffEmail }) => sent.push(staffEmail) };
+  await deliverCueUrl(args);
+  await deliverCueUrl(args);
+  assert.equal(itemState.cueUrlWriteFailed, true);
+  assert.equal(itemState.needsClientRemoval, false);
+  assert.equal(notices.length, 1);
+  assert.deepEqual(sent, []);
+  assert.ok(notices[0].text.includes(itemState.staffUrl));
+});
+
+test('主催者カレンダーを選択して古いカンペ行を更新する', async () => {
+  const event = { id: 'event', organizer: { email: 'seisaku-team@orgiast.jp' }, description: '説明\n📝カンペ（社内用）: old\n📝カンペ（社内用）: old2', attendees: [{ email: 'waki.toho@gmail.com' }] };
+  const itemState = { staffUrl: 'https://docs.google.com/document/d/doc123/edit' };
+  let patches = 0;
+  await deliverCueUrl({ event, itemState, calendarId: 'kim@orgiast.jp', getToken: async ({ impersonate }) => { assert.equal(impersonate, 'seisaku-team@orgiast.jp'); return 'token'; }, fetchImpl: async (url, opts) => {
+    assert.match(url, /seisaku-team%40orgiast.jp/);
+    if (opts.method === 'PATCH') { patches++; assert.equal(JSON.parse(opts.body).description, `説明\n📝カンペ（社内用）: ${itemState.staffUrl}`); }
+    return { ok: true, json: async () => event };
+  } });
+  assert.equal(patches, 1);
+  assert.equal(itemState.cueUrlAppended, true);
+});
+
+test('report-client-invites: 今後の社内主催 Meet の顧客招待だけを重複なく抽出する', async () => {
+  const { reportClientInvites } = await import('./meet-cue-scheduler.mjs');
+  const now = new Date('2026-11-25T00:00:00Z');
+  const base = { id: 'one', iCalUID: 'one', summary: '商談', description: '社内カンペ https://docs.google.com/document/d/secret/edit', organizer: { email: 'kim@orgiast.jp' }, start: { dateTime: '2026-11-26T00:00:00Z' }, hangoutLink: 'https://meet.google.com/abc-defg-hij', attendees: [{ email: 'waki.toho@gmail.com' }, { email: 'client@example.com' }] };
+  const result = await reportClientInvites({ now, getToken: async () => 'mock', fetchImpl: async (url, init) => {
+    assert.equal(init.method, undefined);
+    return { ok: true, json: async () => url.includes('admin.googleapis.com') ? { users: [] } : { items: [
+      base, { ...base, id: 'external', organizer: { email: 'client@example.com' } },
+      { ...base, id: 'internal', attendees: [{ email: 'waki.toho@gmail.com' }] },
+      { ...base, id: 'past', start: { dateTime: '2026-11-24T23:59:00Z' } },
+      { ...base, id: 'no-meet', hangoutLink: undefined },
+    ] } };
+  } });
+  assert.equal(result.total, 1);
+  assert.equal(result.rows[0].clients, 'client@example.com');
+  assert.equal(result.rows[0].organizer, 'kim@orgiast.jp');
+  assert.ok(result.rows[0].mailBody.includes(base.hangoutLink));
+  assert.match(result.rows[0].mailBody, /seisaku-team@orgiast\.jp/);
+  assert.doesNotMatch(result.rows[0].mailBody, /docs\.google\.com/);
+  assert.match(result.rows[0].mailBody, /2026年11月26日/);
+});
+
+test('主催者の予定にのみ顧客がいる場合も書き込まず一度だけ通知する', async () => {
+  const notices = [];
+  const itemState = { staffUrl: 'https://docs.google.com/document/d/doc123/edit' };
+  const event = { id: 'hidden', summary: '商談', organizer: { email: 'seisaku-team@orgiast.jp' },
+    start: { dateTime: '2026-11-26T00:00:00Z' }, attendees: [{ email: 'kim@orgiast.jp' }] };
+  const args = {
+    event, itemState, calendarId: 'kim@orgiast.jp', getToken: async () => 'mock',
+    fetchImpl: async (_, opts) => {
+      assert.equal(opts.method, undefined);
+      return { ok: true, json: async () => ({ ...event, attendees: [{ email: 'client@example.com' }] }) };
+    },
+    grantAccess: () => assert.fail('Must not share'),
+    sendCue: () => assert.fail('DM must not be sent'),
+    addInfo: async (_, info) => notices.push(info),
+  };
+  await deliverCueUrl(args);
+  await deliverCueUrl(args);
+  assert.equal(itemState.needsClientRemoval, true);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0].text, /主催者予定に外部参加者/);
+  assert.ok(notices[0].text.includes(itemState.staffUrl));
 });

@@ -59,3 +59,36 @@ test('codex-do.mjs は --timeout 省略でも警告しない（既定1800秒を�
 test('素の codex exec は --timeout 省略を警告する', () => {
   assert.match(run('codex exec - < prompt.md').stdout, /no-timeout/);
 });
+
+for (const tool of ['Bash', 'PowerShell']) test(`${tool}: device auth is advisory only`, () => {
+  const result = run('codex login --device-auth', tool);
+  assert.equal(result.status, 0);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.hookSpecificOutput.hookEventName, 'PreToolUse');
+  assert.match(output.hookSpecificOutput.additionalContext, /Windows.*codex login.*auth.json/);
+  assert.equal(output.hookSpecificOutput.permissionDecision, undefined);
+  assert.equal(output.decision, undefined);
+  assert.equal(run('codex login', tool).stdout, '');
+});
+test('PowerShell script field and native executable are supported', () => {
+  const result = spawnSync(process.execPath, [script], {
+    input: JSON.stringify({ tool_name: 'PowerShell', tool_input: { script: 'codex.exe login --device-auth' } }), encoding: 'utf8',
+  });
+  assert.equal(result.status, 0);
+  assert.match(JSON.parse(result.stdout).hookSpecificOutput.additionalContext, /auth.json/);
+});
+
+test('device-auth warning through exported hook handler', async t => {
+  const { hookMain } = await import('./pretooluse-codex-invocation.mjs');
+  const outputs = [];
+  t.mock.method(console, 'log', value => outputs.push(JSON.parse(value)));
+  for (const tool_name of ['Bash', 'PowerShell']) {
+    await hookMain(JSON.stringify({ tool_name, tool_input: { command: 'codex login --device-auth' } }));
+    const result = outputs.pop();
+    assert.equal(result.hookSpecificOutput.hookEventName, 'PreToolUse');
+    assert.match(result.hookSpecificOutput.additionalContext, /Windows.*codex login.*auth.json/);
+    assert.equal(result.hookSpecificOutput.permissionDecision, undefined);
+    await hookMain(JSON.stringify({ tool_name, tool_input: { command: 'codex login' } }));
+    assert.equal(outputs.length, 0);
+  }
+});

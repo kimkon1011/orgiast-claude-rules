@@ -354,6 +354,7 @@ export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.hom
   const rateLimited = apiErrorResume && /rate.?limit|usage.?credits?|429/i.test([row.error, row.apiError, row.apiErrorStatus].join(' '));
   const runOptions = { resumeSessionId: row.sessionId, headlessJob: `auto-progress:${reason || 'resume'}`, ...(rateLimited ? { model: automationModel(process.env.AUTO_PROGRESS_RESUME_MODEL) } : {}) };
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, row.cwd, row.cwd, timeoutMs, runOptions);
+  if (result.skippedSeatGuard) return { status: 'deferred', deferred: true, reason: String(result.stdout || result.stderr || 'claude-seat-guard'), executorUsed: 'none' };
   if (result.status !== 'success') {
     const tail = String(result.stderr ?? '').split(/\r?\n/).filter(line => line.trim()).at(-1) || '';
     const detail = `${result.executorUsed} exit ${result.exitCode}`;

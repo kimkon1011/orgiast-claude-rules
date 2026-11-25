@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runCollect, runCli, parseArgs, estimateCost, canonicalUrl, weeklySummary, validateConfig, validateState, classifyApiError } from './x-ai-tips-collect.mjs';
+import { runCollect, runCli, parseArgs, estimateCost, canonicalUrl, weeklySummary, validateConfig, validateState, classifyApiError, callOpenRouterGrok } from './x-ai-tips-collect.mjs';
 const defaults = JSON.parse(fs.readFileSync(new URL('../config/x-ai-tips-topics.json', import.meta.url)));
 const now = new Date('2026-11-03T12:00:00Z');
 const item = { url: 'https://x.com/test/status/123?s=20', author: '@test', title: 'キャッシュを使う', summary: '固定部分を共通化', steps: '共通の指示を先頭に置き、usageを比較する', purpose: 'cost', category: 'cost', postedAt: '2026-11-03T10:00:00Z', likes: 20 };
@@ -618,4 +618,18 @@ test('OpenRouter fallback 応答が前置き文＋JSONを含む場合は抽出�
   assert.equal(result.added, 1);
   assert.match(result.status, /^ok:取得1件/);
   assert.equal(ctx.records()[0].title, '前置き付きJSON');
+});
+
+test('callOpenRouterGrok の body に web 検索プラグインを含む', async t => {
+  let sentBody;
+  const fetchFn = async (_url, init) => {
+    sentBody = JSON.parse(init.body);
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{items:[]}' } }], usage: {} }));
+  };
+  await callOpenRouterGrok('test prompt', { key: 'test-key', fetchFn });
+  assert.ok(sentBody, 'body が送信された');
+  assert.ok(Array.isArray(sentBody.plugins), 'plugins が配列');
+  assert.equal(sentBody.plugins[0].id, 'web');
+  assert.equal(sentBody.plugins[0].engine, 'native');
+  assert.equal(sentBody.plugins[0].max_results, 5);
 });

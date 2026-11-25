@@ -99,7 +99,7 @@ keyserve の鍵が無いと、案件の自動引き継ぎ（case-handoff）や�
 
 起動前にツールと同じ案内（全て `seisaku-team@orgiast.jp`）を示す。**本人がやるのは、Claude が開いたブラウザで会社アカウントを選んで承認することだけ**（端末へのコマンド入力・コードの手コピーは不要）。各ログインは Claude が `Start-Process` で起動し、ブラウザは自動で開く。
 
-- **GitHub**：`gh auth login`（web browser 方式）。ワンタイムコードは端末からコピーできない個体があるため、**Claude が端末出力を捕捉して 8桁コード（`XXXX-XXXX`）をチャットに明示**する。本人は自動で開いた `github.com/login/device` にそれを入力 → Continue → Authorize GitHub CLI。端末からのコピーを本人に強いない（2026-10-30 user-PC でコード不可・差し戻し）。
+- **GitHub**：先に既存の `GH_TOKEN`／keyserve のトークン配布経路で Claude が認証し、`gh auth status` で実測する（値は表示しない）。使えなければ Claude がブラウザログインを起動し、可能なコード入力も代行する。`gh auth login --web` の device flow はトークン経路より先に使わない。コード入力を回避できないと実測した場合だけ `[CODE-INPUT-UNAVOIDABLE: 試した経路と結果]` を添え、発行直後に残り期限とともに提示し、期限切れなら自動再発行する。
 - **Google (clasp)**：自動で開く Google 画面で orgiast.jp アカウントを承認するだけ。
 - **Vercel**：プロバイダ選択メニューが出たら「Continue with GitHub」を選び、開いたブラウザで承認。
 - **Codex**：自動で開く ChatGPT 画面で会社アカウントを承認するだけ（コード入力なし）。

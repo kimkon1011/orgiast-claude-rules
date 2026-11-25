@@ -1,0 +1,422 @@
+﻿{"candidates":28,"judging":26,"unlinked":0}
+{"sessionId":"fcf1186e-c299-498e-9057-9eb75feb5021","action":"skip","reason":"利用制限に達したため、作業を続行できない。","nextStep":"","fingerprint":"25beeae8c3e9beb534cb8300963c8bb8123e3ce4ad706e6e69e179b11c4a6f6d","cached":true}
+{"sessionId":"39737faa-0934-4896-ac73-06c11ca77c34","action":"skip","reason":"会話ログの最後のメッセージがシステムエラー（使用制限に達した）で、作業が中断されたため。","nextStep":"エラー解消後に再開","fingerprint":"c92a1612ead3b61f2c57c02eb76e36aa881faff824ba0435f8d55c032ae63712","cached":true}
+{"sessionId":"56b4e323-eb7b-4e9c-a4e4-bfc4cf4d632b","action":"skip","reason":"synthetic-limit による制限エラーが発生したため、作業を中断","nextStep":"制限解除後、再度セッションを開始","fingerprint":"5dfad18598676695dd51749414f2403f8c29eaa599f58e6f68850d292a9addee","cached":true}
+{"sessionId":"beb7f5b9-e40f-4a27-99a4-25e4f9b3256a","action":"skip","reason":"synthetic-limit 制限に達したため","nextStep":"","fingerprint":"394c361de4cfb6df564c578fa05b1cf0307d1bbdba68a850327a43ab5581327e","cached":true}
+{"sessionId":"6089baf6-9f8e-4a26-99b8-96e685011b7c","action":"skip","reason":"会話ログに作業の具体的な内容や進捗状況が記載されていないため、停止した作業の判定ができない。","nextStep":"","fingerprint":"f79bfaf34e281e88d19dc3653acd3174b1c2256c7180f11ae4e6153ae334c0ce","cached":true}
+{"sessionId":"7bdf605e-390c-4f0f-b121-e363ae0a098c","action":"skip","reason":"会話ログの末尾に完了状態の報告（【最終まとめ】）があり、次回の毎時起動で引き継ぎファイルから再実行する旨の記載があるため。また、セッションの締め処理がhookで拒否された状態で、明示的な停止命令もない。","nextStep":"次回の毎時起動時に、引き継ぎファイル（next-session.md）の11番を拾ってCodexで再実行する","fingerprint":"0bb0515c33d9d655240669076ea3424c4933a08d0edbc848b3acc0ec779cdbc0","cached":true}
+{"sessionId":"a8810182-f586-427b-92c4-a0912baac051","action":"done","reason":"セッション内で完了した作業の報告と、次回の予定作業が明記されている。新しい作業の開始条件は満たされておらず、/session-close が実行済みである。","nextStep":"","fingerprint":"97f8d4189e700a0f6f2e81b67457fe5fb79365f9d2514b89e896b0df0f3a1cde","cached":true}
+{"sessionId":"a97bc3a1-42db-480a-b114-d7d71f9991eb","action":"skip","reason":"コマンド実行ができず、必要なファイルが存在しない","nextStep":"シェルが使える環境で node tools/gemini-budget-guard.mjs を実行する","fingerprint":"9248c2ed9a4fd287b8b1d39529fee450152d7fc5efe34e04b42f0873de4d6b64","cached":true}
+{"sessionId":"05580a62-1ba1-47ce-abdc-b742ce32f189","action":"done","reason":"セッションの締め処理が回数上限で拒否されたが、主要な作業（PRの承認状態更新）は完了済みであり、kim-inboxへの登録も不要。次回の毎時起動でnext-session.mdから引き継ぐ想定","nextStep":"","fingerprint":"fc23278cf59bc1b2e30073fed7494c9ee65cd8a6a6bef482d7b22691a1fe5bca","cached":true}
+{"sessionId":"7428537e-2a33-4792-8eaf-3bb7f5631b76","action":"skip","reason":"セッションが正常に終了していないが、次回の毎時起動で自動的に引き継がれるため","nextStep":"","fingerprint":"1a8de2045706bd00f9138929ec2c120cfbf44079a3091b07f6d7e5bd87a36db6","cached":true}
+{"sessionId":"ed171b47-fc8a-485c-892d-6a55f030da20","action":"skip","reason":"Drive URL のアップロードが完了していないため、次の作業に進めない","nextStep":"Drive URL のアップロードを完了させる","fingerprint":"18870bb8e5140dd238d568cfadf7d6f5010ddfe3803de2ab8797b56f46afb890","cached":true}
+{"sessionId":"f59b8f29-1915-4a1f-a1a5-d65761d9d07f","action":"skip","reason":"セッションは既に完了済み（/session-close が実行済み）かつ、次の作業（PR#2612のマージ）は金さんの承認待ちであるため、無人で進める作業はない","nextStep":"","fingerprint":"dc6ee7a9725566aabb0e9f7369a2930db35dfd2f859aa54ddd0e60bff208a5d4","cached":true}
+{"sessionId":"b34967bb-8c6d-47da-9101-ac13bde66b35","action":"waiting-human","reason":"PR#2603のマージ承認が金さんの判断待ちであるため","nextStep":"kim-inboxのki-20261122180853-8d19に「2603 マージして」または「見送り」の返事を金さんから得る","fingerprint":"e5c9f9c7e331513636af87a96e376f1c31927a4d3eb2fe92a5d66ad322a30d60","cached":true}
+{"sessionId":"d2b92bf1-e292-4652-a6ec-cfd5f5219457","action":"done","reason":"セッションは既に完了状態で、/session-close が実行されていないが、残作業は人間の承認待ち（kim-inboxへの登録）のみであり、自動処理の範囲外","nextStep":"なし","fingerprint":"ef33cdfe47705ce55612ba7c55a3f72f04a7263018de96d81331dd1b14a88788","cached":true}
+{"sessionId":"7765fc6c-05c1-4743-a744-a19b346eabc4","action":"done","reason":"セッションが /session-close で締められ、kim の判断待ちの作業（kim-inbox ki-20261120230856-542c）が残っているが、これは新しい作業の開始ではなく既存の承認待ち作業であるため。","nextStep":"","fingerprint":"352c7982a566d4a1fe686f4e11fa9b5387c13d66d28ba2ad9344efa35dabc423","cached":true}
+{"sessionId":"6e8eb7ae-7481-47df-9883-fcb4c4a45807","action":"done","reason":"セッションの締め処理が完了済みで、成果物が保存済み","nextStep":"","fingerprint":"4ca00d67774630f288fc66350a9aa1146c4348af3440d12806b2d9a5cdfa1cc7","cached":true}
+{"sessionId":"c1e34fdb-ba82-4b9d-b89d-46924f926613","action":"skip","reason":"セッションが途中で停止し、/session-close が完了していないため。また、次回セッションで対応予定の作業（next-session.mdへの追記、退避処理）が残っている。","nextStep":"次回セッションでセッションの退避とnext-session.mdへの追記を実行","fingerprint":"0b5c677f07fbb2051feaa005909b556836478c1e74430557882eea329180ee63","cached":true}
+{"sessionId":"8a57fe14-3611-4f64-950a-cf4d14db3494","action":"done","reason":"セッションが正常に終了し、/session-close の引き継ぎと memory 更新が完了している。残作業は次のセッションで対応する予定。","nextStep":"","fingerprint":"9ef9e2ff376144a2172dc2a3922d45c8cb3197b1ccb9d9965ca841419f108ba1","cached":true}
+{"sessionId":"0dc31e3d-63f7-465c-8459-abd4ca0d6d20","action":"skip","reason":"着手できる作業がなく、すべての候補が他のセッションまたは人待ち状態であるため","nextStep":"","fingerprint":"ea0327daf913bd9329db0081408f3df64fa62fccb78d6385c30f58b42de33fa8","cached":true}
+{"sessionId":"e3dea73d-9002-4d09-aa52-c865a6f1b727","action":"skip","reason":"会話ログに完了した作業や継続可能な作業が見当たらない。また、空ログや材料不足の状態ではないが、現在の状態では新しい作業を提案する根拠が不十分。","nextStep":"","fingerprint":"3f56b577c57198589fa16ecba283d705d9f5ad0d0201ed7106f125ae4f5aa1ff","cached":true}
+{"sessionId":"91a930b7-2822-4a0b-9116-bc4b9badc3d6","action":"skip","reason":"セッションが完了していないが、承認待ちの作業（一時フォルダ削除）とセッションクローズの安全装置による拒否が原因で、新しい作業を開始できない状態","nextStep":"次回起動時に緊急待ち事項の登録とセッションクローズを再試行","fingerprint":"fe9d8c764d350bbc9e0b3371ee88301b7519faf3ebdd2cad7a8d76589a215c05","cached":true}
+{"sessionId":"c97c1be5-b9b9-4eba-8820-499b3e08f911","action":"skip","reason":"セッションが2つ同時に動いており、どちらか特定できないため。閉じる処理も未完了。","nextStep":"","fingerprint":"f612fa94b93e324a6644b70cbf81dd45f96ace1c32893677620517917868c399","cached":true}
+{"sessionId":"77e96852-515f-4b1b-b6b0-5bbe7f7ff471","action":"waiting-human","reason":"依頼本文が届いていないため、作業を開始できない","nextStep":"kim に依頼本文をこのセッションに貼り付けてもらう","fingerprint":"55ff02fa1a92a09fb683310200f77a3d83a0e332034f9d8af32679ec4a31d8d1","cached":true}
+{"sessionId":"f1c13361-d903-40f9-a3fb-94d6cf2e0219","action":"done","reason":"セッションの作業が完了し、/session-close が実行された（ただし途中で止まったが、作業内容は完了済み）","nextStep":"","fingerprint":"12157c1806ff7e0bab96cc41e4148c91db7917dc3e79beb44252c9bb912020af","cached":true}
+{"sessionId":"41b43c20-10e4-43da-9a2d-54cc583eb39b","action":"skip","reason":"kim の返信待ち","nextStep":"","fingerprint":"3f64936978e9b848f430a14bc40d5f88dbb452ff5a8cef37a6ee847e6fa39a0e","cached":true}
+{"sessionId":"90018424-bf3e-4d24-82dd-2512969859a6","action":"skip","reason":"会話ログが空または作業中の状態","nextStep":"","fingerprint":"934748358853bc1ff03668c6a01c9eef639fbe7e558d5b6b87a7e3345847de28","cached":true}
+{"sessionId":"77e96852-515f-4b1b-b6b0-5bbe7f7ff471","askSubject":"【再開の判断待ち】014｜グロボからの依頼（2026-11-19 15:20 JST）の中身を特定して対応","askDelivery":"open"}
+{"at":"2026-11-25T11:35:33.044Z","label":"014","account":"seisaku-team@orgiast.jp","candidates":28,"resume":0,"waiting-human":2,"done":7,"skip":19,"unlinked":0,"seatGuard":"blocked:weekly-threshold;usage-100","dryRun":false,"error":"heartbeat-sync: heartbeat clone branch mismatch"}
+{
+  "executor": "claude-fork-session",
+  "rows": [
+    {
+      "sessionId": "69972fc6-7cb4-4d57-bcba-1c093f336eee",
+      "title": "014｜【11/26/18:00まで】ファインスティール様 11/20 の議事録を読み、ブースデザイナーへの依頼書を作",
+      "attempts": 0,
+      "skip": "待機期限前",
+      "due": ""
+    },
+    {
+      "sessionId": "fcf1186e-c299-498e-9057-9eb75feb5021",
+      "title": "014｜あなたは株式会社オージャスト（代表 金功勇）の作業担当です。送信・公開・掲載・応",
+      "attempts": 0,
+      "skip": "skip",
+      "due": "",
+      "decision": {
+        "action": "skip",
+        "reason": "利用制限に達したため、作業を続行できない。",
+        "nextStep": "",
+        "fingerprint": "25beeae8c3e9beb534cb8300963c8bb8123e3ce4ad706e6e69e179b11c4a6f6d",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "39737faa-0934-4896-ac73-06c11ca77c34",
+      "title": "014｜対象事業：株式会社オージャスト（展示会ブース制作・イベント等。カフェにGBPがあ",
+      "attempts": 0,
+      "skip": "skip",
+      "due": "",
+      "decision": {
+        "action": "skip",
+        "reason": "会話ログの最後のメッセージがシステムエラー（使用制限に達した）で、作業が中断されたため。",
+        "nextStep": "エラー解消後に再開",
+        "fingerprint": "c92a1612ead3b61f2c57c02eb76e36aa881faff824ba0435f8d55c032ae63712",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "56b4e323-eb7b-4e9c-a4e4-bfc4cf4d632b",
+      "title": "014｜セッション",
+      "attempts": 0,
+      "skip": "skip",
+      "due": "",
+      "decision": {
+        "action": "skip",
+        "reason": "synthetic-limit による制限エラーが発生したため、作業を中断",
+        "nextStep": "制限解除後、再度セッションを開始",
+        "fingerprint": "5dfad18598676695dd51749414f2403f8c29eaa599f58e6f68850d292a9addee",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "beb7f5b9-e40f-4a27-99a4-25e4f9b3256a",
+      "title": "014｜【全PC配備: 止まったセッションの毎時自動再開（kim 2026-11-25",
+      "attempts": 0,
+      "skip": "skip",
+      "due": "",
+      "decision": {
+        "action": "skip",
+        "reason": "synthetic-limit 制限に達したため",
+        "nextStep": "",
+        "fingerprint": "394c361de4cfb6df564c578fa05b1cf0307d1bbdba68a850327a43ab5581327e",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "6089baf6-9f8e-4a26-99b8-96e685011b7c",
+      "title": "014｜セッション",
+      "attempts": 0,
+      "skip": "skip",
+      "due": "",
+      "decision": {
+        "action": "skip",
+        "reason": "会話ログに作業の具体的な内容や進捗状況が記載されていないため、停止した作業の判定ができない。",
+        "nextStep": "",
+        "fingerprint": "f79bfaf34e281e88d19dc3653acd3174b1c2256c7180f11ae4e6153ae334c0ce",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "7bdf605e-390c-4f0f-b121-e363ae0a098c",
+      "title": "014｜セッション",
+      "attempts": 0,
+      "skip": "skip",
+      "due": "",
+      "decision": {
+        "action": "skip",
+        "reason": "会話ログの末尾に完了状態の報告（【最終まとめ】）があり、次回の毎時起動で引き継ぎファイルから再実行する旨の記載があるため。また、セッションの締め処理がhookで拒否された状態で、明示的な停止命令もない。",
+        "nextStep": "次回の毎時起動時に、引き継ぎファイル（next-session.md）の11番を拾ってCodexで再実行する",
+        "fingerprint": "0bb0515c33d9d655240669076ea3424c4933a08d0edbc848b3acc0ec779cdbc0",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "a8810182-f586-427b-92c4-a0912baac051",
+      "title": "014｜セッション",
+      "attempts": 0,
+      "skip": "done",
+      "due": "",
+      "decision": {
+        "action": "done",
+        "reason": "セッション内で完了した作業の報告と、次回の予定作業が明記されている。新しい作業の開始条件は満たされておらず、/session-close が実行済みである。",
+        "nextStep": "",
+        "fingerprint": "97f8d4189e700a0f6f2e81b67457fe5fb79365f9d2514b89e896b0df0f3a1cde",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "a97bc3a1-42db-480a-b114-d7d71f9991eb",
+      "title": "014｜これは 015CAFE PC の Claude Code からのメッセージです。",
+      "attempts": 0,
+      "skip": "skip",
+      "due": "",
+      "decision": {
+        "action": "skip",
+        "reason": "コマンド実行ができず、必要なファイルが存在しない",
+        "nextStep": "シェルが使える環境で node tools/gemini-budget-guard.mjs を実行する",
+        "fingerprint": "9248c2ed9a4fd287b8b1d39529fee450152d7fc5efe34e04b42f0873de4d6b64",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "05580a62-1ba1-47ce-abdc-b742ce32f189",
+      "title": "014｜セッション",
+      "attempts": 0,
+      "skip": "done",
+      "due": "",
+      "decision": {
+        "action": "done",
+        "reason": "セッションの締め処理が回数上限で拒否されたが、主要な作業（PRの承認状態更新）は完了済みであり、kim-inboxへの登録も不要。次回の毎時起動でnext-session.mdから引き継ぐ想定",
+        "nextStep": "",
+        "fingerprint": "fc23278cf59bc1b2e30073fed7494c9ee65cd8a6a6bef482d7b22691a1fe5bca",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "7428537e-2a33-4792-8eaf-3bb7f5631b76",
+      "title": "014｜セッション",
+      "attempts": 0,
+      "skip": "skip",
+      "due": "",
+      "decision": {
+        "action": "skip",
+        "reason": "セッションが正常に終了していないが、次回の毎時起動で自動的に引き継がれるため",
+        "nextStep": "",
+        "fingerprint": "1a8de2045706bd00f9138929ec2c120cfbf44079a3091b07f6d7e5bd87a36db6",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "debc62a8-32fb-421a-994e-d45baf8bc2dc",
+      "title": "014｜【閉じて可】/session-start スキルによるセッション開始",
+      "attempts": 0,
+      "skip": "閉じて可",
+      "due": ""
+    },
+    {
+      "sessionId": "ed171b47-fc8a-485c-892d-6a55f030da20",
+      "title": "014｜「ok」が指している件を確定して進めること",
+      "attempts": 0,
+      "skip": "skip",
+      "due": "",
+      "decision": {
+        "action": "skip",
+        "reason": "Drive URL のアップロードが完了していないため、次の作業に進めない",
+        "nextStep": "Drive URL のアップロードを完了させる",
+        "fingerprint": "18870bb8e5140dd238d568cfadf7d6f5010ddfe3803de2ab8797b56f46afb890",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "f59b8f29-1915-4a1f-a1a5-d65761d9d07f",
+      "title": "014｜セッション",
+      "attempts": 0,
+      "skip": "skip",
+      "due": "",
+      "decision": {
+        "action": "skip",
+        "reason": "セッションは既に完了済み（/session-close が実行済み）かつ、次の作業（PR#2612のマージ）は金さんの承認待ちであるため、無人で進める作業はない",
+        "nextStep": "",
+        "fingerprint": "dc6ee7a9725566aabb0e9f7369a2930db35dfd2f859aa54ddd0e60bff208a5d4",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "b34967bb-8c6d-47da-9101-ac13bde66b35",
+      "title": "014｜セッション",
+      "attempts": 0,
+      "skip": "事前判定・ask保存失敗",
+      "due": "",
+      "decision": {
+        "action": "waiting-human",
+        "reason": "PR#2603のマージ承認が金さんの判断待ちであるため",
+        "nextStep": "kim-inboxのki-20261122180853-8d19に「2603 マージして」または「見送り」の返事を金さんから得る",
+        "fingerprint": "e5c9f9c7e331513636af87a96e376f1c31927a4d3eb2fe92a5d66ad322a30d60",
+        "cached": true
+      },
+      "error": "PR は作った席が pr-land.mjs / pr-merge.mjs で自分でマージする（ONBOARDING §PRは自分でマージする）。破壊的変更などで人の判断が本当に要る時だけ --merge-handoff-ok \"<理由>\""
+    },
+    {
+      "sessionId": "d2b92bf1-e292-4652-a6ec-cfd5f5219457",
+      "title": "014｜セッション",
+      "attempts": 0,
+      "skip": "done",
+      "due": "",
+      "decision": {
+        "action": "done",
+        "reason": "セッションは既に完了状態で、/session-close が実行されていないが、残作業は人間の承認待ち（kim-inboxへの登録）のみであり、自動処理の範囲外",
+        "nextStep": "なし",
+        "fingerprint": "ef33cdfe47705ce55612ba7c55a3f72f04a7263018de96d81331dd1b14a88788",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "7765fc6c-05c1-4743-a744-a19b346eabc4",
+      "title": "014｜セッション",
+      "attempts": 0,
+      "skip": "done",
+      "due": "",
+      "decision": {
+        "action": "done",
+        "reason": "セッションが /session-close で締められ、kim の判断待ちの作業（kim-inbox ki-20261120230856-542c）が残っているが、これは新しい作業の開始ではなく既存の承認待ち作業であるため。",
+        "nextStep": "",
+        "fingerprint": "352c7982a566d4a1fe686f4e11fa9b5387c13d66d28ba2ad9344efa35dabc423",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "6e8eb7ae-7481-47df-9883-fcb4c4a45807",
+      "title": "014｜ファインスティール様の議事録まとめDocへ、11/20打合せの要点を追記する（完",
+      "attempts": 0,
+      "skip": "done",
+      "due": "",
+      "decision": {
+        "action": "done",
+        "reason": "セッションの締め処理が完了済みで、成果物が保存済み",
+        "nextStep": "",
+        "fingerprint": "4ca00d67774630f288fc66350a9aa1146c4348af3440d12806b2d9a5cdfa1cc7",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "c1e34fdb-ba82-4b9d-b89d-46924f926613",
+      "title": "014｜セッション",
+      "attempts": 0,
+      "skip": "skip",
+      "due": "",
+      "decision": {
+        "action": "skip",
+        "reason": "セッションが途中で停止し、/session-close が完了していないため。また、次回セッションで対応予定の作業（next-session.mdへの追記、退避処理）が残っている。",
+        "nextStep": "次回セッションでセッションの退避とnext-session.mdへの追記を実行",
+        "fingerprint": "0b5c677f07fbb2051feaa005909b556836478c1e74430557882eea329180ee63",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "8a57fe14-3611-4f64-950a-cf4d14db3494",
+      "title": "014｜セッション",
+      "attempts": 0,
+      "skip": "done",
+      "due": "",
+      "decision": {
+        "action": "done",
+        "reason": "セッションが正常に終了し、/session-close の引き継ぎと memory 更新が完了している。残作業は次のセッションで対応する予定。",
+        "nextStep": "",
+        "fingerprint": "9ef9e2ff376144a2172dc2a3922d45c8cb3197b1ccb9d9965ca841419f108ba1",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "0dc31e3d-63f7-465c-8459-abd4ca0d6d20",
+      "title": "014｜セッション",
+      "attempts": 0,
+      "skip": "skip",
+      "due": "",
+      "decision": {
+        "action": "skip",
+        "reason": "着手できる作業がなく、すべての候補が他のセッションまたは人待ち状態であるため",
+        "nextStep": "",
+        "fingerprint": "ea0327daf913bd9329db0081408f3df64fa62fccb78d6385c30f58b42de33fa8",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "e3dea73d-9002-4d09-aa52-c865a6f1b727",
+      "title": "014｜セッション",
+      "attempts": 0,
+      "skip": "skip",
+      "due": "",
+      "decision": {
+        "action": "skip",
+        "reason": "会話ログに完了した作業や継続可能な作業が見当たらない。また、空ログや材料不足の状態ではないが、現在の状態では新しい作業を提案する根拠が不十分。",
+        "nextStep": "",
+        "fingerprint": "3f56b577c57198589fa16ecba283d705d9f5ad0d0201ed7106f125ae4f5aa1ff",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "91a930b7-2822-4a0b-9116-bc4b9badc3d6",
+      "title": "014｜セッション",
+      "attempts": 0,
+      "skip": "skip",
+      "due": "",
+      "decision": {
+        "action": "skip",
+        "reason": "セッションが完了していないが、承認待ちの作業（一時フォルダ削除）とセッションクローズの安全装置による拒否が原因で、新しい作業を開始できない状態",
+        "nextStep": "次回起動時に緊急待ち事項の登録とセッションクローズを再試行",
+        "fingerprint": "fe9d8c764d350bbc9e0b3371ee88301b7519faf3ebdd2cad7a8d76589a215c05",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "c97c1be5-b9b9-4eba-8820-499b3e08f911",
+      "title": "014｜セッション",
+      "attempts": 0,
+      "skip": "skip",
+      "due": "",
+      "decision": {
+        "action": "skip",
+        "reason": "セッションが2つ同時に動いており、どちらか特定できないため。閉じる処理も未完了。",
+        "nextStep": "",
+        "fingerprint": "f612fa94b93e324a6644b70cbf81dd45f96ace1c32893677620517917868c399",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "77e96852-515f-4b1b-b6b0-5bbe7f7ff471",
+      "title": "014｜グロボからの依頼（2026-11-19 15:20 JST）の中身を特定して対応",
+      "attempts": 0,
+      "skip": "waiting-human",
+      "due": "",
+      "decision": {
+        "action": "waiting-human",
+        "reason": "依頼本文が届いていないため、作業を開始できない",
+        "nextStep": "kim に依頼本文をこのセッションに貼り付けてもらう",
+        "fingerprint": "55ff02fa1a92a09fb683310200f77a3d83a0e332034f9d8af32679ec4a31d8d1",
+        "cached": true
+      },
+      "askSubject": "【再開の判断待ち】014｜グロボからの依頼（2026-11-19 15:20 JST）の中身を特定して対応",
+      "askDelivery": "open"
+    },
+    {
+      "sessionId": "f1c13361-d903-40f9-a3fb-94d6cf2e0219",
+      "title": "014｜セッション",
+      "attempts": 0,
+      "skip": "done",
+      "due": "",
+      "decision": {
+        "action": "done",
+        "reason": "セッションの作業が完了し、/session-close が実行された（ただし途中で止まったが、作業内容は完了済み）",
+        "nextStep": "",
+        "fingerprint": "12157c1806ff7e0bab96cc41e4148c91db7917dc3e79beb44252c9bb912020af",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "41b43c20-10e4-43da-9a2d-54cc583eb39b",
+      "title": "014｜あなたは Claude Code セッションの見回り係です。次のセッションは60",
+      "attempts": 0,
+      "skip": "skip",
+      "due": "",
+      "decision": {
+        "action": "skip",
+        "reason": "kim の返信待ち",
+        "nextStep": "",
+        "fingerprint": "3f64936978e9b848f430a14bc40d5f88dbb452ff5a8cef37a6ee847e6fa39a0e",
+        "cached": true
+      }
+    },
+    {
+      "sessionId": "90018424-bf3e-4d24-82dd-2512969859a6",
+      "title": "014｜グロボ依頼「3億円計画 打ち手10：AIツール外販（目標 契約25社）」の作業内",
+      "attempts": 0,
+      "skip": "skip",
+      "due": "",
+      "decision": {
+        "action": "skip",
+        "reason": "会話ログが空または作業中の状態",
+        "nextStep": "",
+        "fingerprint": "934748358853bc1ff03668c6a01c9eef639fbe7e558d5b6b87a7e3345847de28",
+        "cached": true
+      }
+    }
+  ],
+  "results": [],
+  "aborted": false,
+  "heartbeat": {
+    "line": "{\"at\":***REDACTED***@orgiast.jp\",\"candidates\":28,\"resume\":0,\"waiting-human\":2,\"done\":7,\"skip\":19,\"unlinked\":0,\"seatGuard\":\"blocked:weekly-threshold;usage-100\",\"dryRun\":false,\"error\":\"heartbeat-sync: heartbeat clone branch mismatch\"}",
+    "localFile": "C:\\Users\\USER\\gb-reports\\stalled-sessions-hourly\\heartbeat\\014.log",
+    "pushed": false
+  }
+}

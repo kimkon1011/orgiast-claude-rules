@@ -176,7 +176,8 @@ export function classifyTokenError(json) {
 
 function safeFailure(error) {
   if (error?.errorKind === 'seisaku_relay') return { errorKind: 'seisaku_relay', error: error.message };
-  const errorKind = error?.errorKind === 'configuration_error' ? 'configuration_error'
+  const errorKind = error?.code === 'SEND_CONTEXT_REQUIRED' || error?.errorKind === 'send_context_required' ? 'send_context_required'
+    : error?.errorKind === 'configuration_error' ? 'configuration_error'
     : error?.errorKind === 'too_large' ? 'too_large'
     : error?.tokenError ? classifyTokenError(error.detail)
       : ['scope_not_delegated', 'forbidden_no_access', 'unauthorized'].includes(error?.errorKind) ? error.errorKind : 'error';
@@ -186,9 +187,12 @@ function safeFailure(error) {
     forbidden_no_access: 'Gmail API へのアクセス権限がありません。',
     unauthorized: 'Gmail API の認証に失敗しました。',
     too_large: '転送メールが25MBを超えています。',
+    send_context_required: error?.message,
     error: '処理に失敗しました（認証・通信・API 応答を確認してください）。',
   };
-  const result = { errorKind, error: messages[errorKind] };
+  const httpStatus = error?.httpStatus;
+  const suffix = httpStatus !== undefined ? `（HTTP ${httpStatus}）` : '';
+  const result = { errorKind, error: `${messages[errorKind]}${suffix}` };
   if (error?.httpStatus !== undefined) result.detail = `threads.get ${error.httpStatus}`;
   return result;
 }
@@ -527,7 +531,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     }
     const failure = safeFailure(error);
     emit({ ok: false, ...(action === 'delete' ? { deleted: false, id: deletionId } : {}), ...failure }, failure.error);
-    return failure.errorKind === 'configuration_error' ? 2 : 1;
+    return ['configuration_error', 'send_context_required'].includes(failure.errorKind) ? 2 : 1;
   }
 }
 

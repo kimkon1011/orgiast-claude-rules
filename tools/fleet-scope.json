@@ -101,7 +101,6 @@
     {"path": "tools/lib/automation-model.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "自動実行（fleet-agent・autopilot 等）の既定モデルを Opus にする実行時依存（軽い作業のみ Sonnet）"},
     {"path": "tools/lib/claude-seat-guard.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "fleet-agent と受信 runner が無人 Claude 起動前に週次・5時間枠を判定する実行時依存"},
     {"path": "tools/lib/quota-windows.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "Claude 席ガードが既存 OAuth usage 読取とキャッシュを再利用する実行時依存"},
-    {"path": "tools/claude-plan-usage.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "Claude 席ガードの OAuth usage 読取を担う既存実行時依存"},
 {"path": "tools/lib/lane-disabled.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "PC 単位のレーン無効化（lanes-disabled.json）を codex-do・lane-doctor・llm-fallback が読む実行時依存"},
 {"path": "tools/lib/auto-resume-policy.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "fleet-task-runner 等が参照する自動再開ポリシー。通常のconverge配布に含める"},
     {"path": "tools/fleet-selfcheck.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
@@ -274,6 +273,12 @@
       "scope": "kim-only",
       "step": null,
       "reason": "要確認"
+    },
+    {
+      "path": "tools/claude-plan-usage.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-beacon.mjs が import する実行時依存（Claude プラン使用量取得）。D8 再帰検査の対象"
     },
     {
       "path": "tools/discord-admin-token-install.mjs",

@@ -12,6 +12,7 @@ import { machineIdentity, reportExtras, getClaudeAccountEmail } from './machine-
 import { redactSecrets } from './fleet-agent.mjs';
 import { ledgerSummary, parseStallSummary, stallSummaryStep } from './stall-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
+import { fetchClaudePlanUsage } from './claude-plan-usage.mjs';
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export const INSTALL_BEACON_URL = 'https://script.google.com/macros/s/AKfycbwyZXLJsVngZQy17i8ZqsQUCRx66AIs9p3wQbW55vMq6GObJes5R5WyJrSBhyknN3ibPg/exec';
@@ -77,7 +78,7 @@ export function localRoutineUsage7d(home, now = Date.now()) {
   }
   return [...map.values()].sort((a, b) => b.usd - a.usd || b.llmCalls - a.llmCalls).slice(0, 10);
 }
-export function buildBeacon({ home = process.env.ORGIAST_HOME || os.homedir(), label, results = [], now = Date.now(), pcMap, identity } = {}) {
+export function buildBeacon({ home = process.env.ORGIAST_HOME || os.homedir(), label, results = [], now = Date.now(), pcMap, identity, planUsage } = {}) {
   const resolvedLabel = label || resolveFleetLabel(home, identity ?? machineIdentity());
   const steps = results.map((result) => {
     const id = String(result?.item?.id ?? result?.id ?? '');
@@ -130,7 +131,8 @@ export function buildBeacon({ home = process.env.ORGIAST_HOME || os.homedir(), l
     lastDownstreamAt,
     knowledgeMasterVersion,
     routineUsage7d: localRoutineUsage7d(home, now),
-    ...metrics
+    ...metrics,
+    ...(planUsage?.available ? { planFiveHourPct: Number(planUsage.fiveHour.utilization), planSevenDayPct: Number(planUsage.sevenDay.utilization) } : {})
   };
 }
 // 送信は絶対に例外を投げない。env 未設定は skip、応答に beacon が無ければ「GAS 未デプロイ」。
@@ -194,7 +196,9 @@ export async function fetchBeacons({ home, fetchImpl = fetch, timeoutMs, retries
         label: String(beacon?.label ?? ''), account: String(beacon?.account ?? ''), reportedAt: String(beacon?.reportedAt ?? ''),
         stuckDialogs24h: dialogCount === undefined ? null : Number(dialogCount),
         steps, failing, pollAt: String(beacon?.pollAt ?? ''), serverPollAt: String(beacon?.serverPollAt ?? ''),
-        stallLedger: parseStallSummary(steps)
+        stallLedger: parseStallSummary(steps),
+        planFiveHourPct: Number.isFinite(Number(beacon?.planFiveHourPct)) ? Number(beacon.planFiveHourPct) : null,
+        planSevenDayPct: Number.isFinite(Number(beacon?.planSevenDayPct)) ? Number(beacon.planSevenDayPct) : null
       };
     });
     const serverPolls = result.serverPolls && typeof result.serverPolls === 'object' && !Array.isArray(result.serverPolls) ? result.serverPolls : {};
@@ -240,7 +244,8 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     out(JSON.stringify(result, null, 2));
     return result.ok ? 0 : 1;
   }
-  const beacon = buildBeacon({ home, results: deps.results ?? [], pcMap });
+  const planUsage = await (deps.fetchClaudePlanUsage ?? fetchClaudePlanUsage)({ home, fetchImpl: deps.fetch });
+  const beacon = buildBeacon({ home, results: deps.results ?? [], pcMap, planUsage });
   const result = await sendBeacon(beacon, { home, fetchImpl: deps.fetch });
   out(JSON.stringify(result));
   return result.ok ? 0 : 1;

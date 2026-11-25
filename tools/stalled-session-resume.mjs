@@ -20,15 +20,36 @@ import { evaluateClaudeSeatGuard, formatClaudeSeatGuardSkip } from './lib/claude
 import { latestSafeStart, parseWaitFooter } from './lib/wait-deadline.mjs';
 import { executeCheck, isTimeOnlyCheck } from './auto-progress-check.mjs';
 import { fetchClaudePlanUsage } from './claude-plan-usage.mjs';
-import { collectGbReportEntries, writeStallLedger } from './stall-ledger.mjs';
+import { collectGbReportEntries, handoffSession, writeAllLedgers, writeStallLedger } from './stall-ledger.mjs';
+import { buildFleetStatus } from './fleet-status.mjs';
+import { fetchBeacons } from './fleet-beacon.mjs';
+import { main as sendFleetDirective } from './fleet-directive-send.mjs';
 import { latestOpenPromises, ledgerFile as progressLedgerFile, readLedger } from './auto-progress-ledger.mjs';
 import { readTranscriptContext } from './lib/assistant-text.mjs';
 import { footerValues, NO_ACTION_PATTERN } from './next-action-gate.mjs';
 
 const CHECK_INTERVAL_MS = 15 * 60_000;
 const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
 
 const execFileAsync = promisify(execFile);
+
+async function standingPermissions(home, now) {
+  const recent = new Map();
+  try {
+    const raw = await fs.readFile(path.join(home, '.claude', 'stall-ledger', 'standing-sends.jsonl'), 'utf8');
+    for (const line of raw.split(/\r?\n/).filter(Boolean)) {
+      const row = JSON.parse(line);
+      if (row.sessionId && now - Date.parse(row.at) <= 7 * DAY_MS) recent.set(String(row.sessionId), String(row.permissionId || ''));
+    }
+  } catch { /* 台帳が無い場合は通常順 */ }
+  const names = new Map();
+  try {
+    const config = JSON.parse(await fs.readFile(path.resolve(import.meta.dirname, '..', 'config', 'standing-send-permissions.json'), 'utf8'));
+    for (const item of config.permissions || []) names.set(String(item.id), String(item.name || item.id));
+  } catch { /* 設定欠損時はIDを使う */ }
+  return new Map([...recent].map(([sessionId, id]) => [sessionId, names.get(id) || id]));
+}
 
 // 実行ログ: ~/.claude/logs/stalled-session-sweep.jsonl に1行追記
 async function writeLog(home, entry) {
@@ -206,10 +227,15 @@ function eventLimit(attempts, sessionId, now) {
 }
 
 export function hourlyEventLimit(attempts, sessionId, now, { hourlyCap = 4, perSessionDailyCap = 6 } = {}) {
-  const recent = attempts.filter(attempt => attempt.at > now - HOUR_MS);
+  // outcome が 'disabled' または 'no-executor' の試行は実際に Claude を起動していないのでカウントしない
+  const effectiveAttempts = attempts.filter(attempt => 
+    attempt.outcome !== 'disabled' && attempt.outcome !== 'no-executor'
+  );
+  
+  const recent = effectiveAttempts.filter(attempt => attempt.at > now - HOUR_MS);
   if (recent.length >= hourlyCap) return 'global';
   const today = localDate(new Date(now));
-  if (attempts.filter(attempt => attempt.sessionId === sessionId && localDate(new Date(attempt.at)) === today).length >= perSessionDailyCap) return 'daily';
+  if (effectiveAttempts.filter(attempt => attempt.sessionId === sessionId && localDate(new Date(attempt.at)) === today).length >= perSessionDailyCap) return 'daily';
   return null;
 }
 
@@ -387,7 +413,7 @@ stuck=それ以外で進められなかった。
   return { outcome, reason: outcome === 'timeout' ? result.status : reason, ...(outcome === 'waiting-human' ? { askId: report.askId.trim() } : {}), ...execution };
 }
 
-export async function execute(record, { timeoutMs, resultFile, previous = [], wait = null, event, hourly: hourlyOpt = false }, io = {}) {
+export async function execute(record, { timeoutMs, resultFile, previous = [], wait = null, event, hourly: hourlyOpt = false, standingPermission }, io = {}) {
   const hourly = hourlyOpt === true || event === 'hourly';
   const allowed = hourly
     ? (io.hourlyResumePolicy ?? hourlyResumePolicy)().hourlyResume === true
@@ -401,6 +427,7 @@ export async function execute(record, { timeoutMs, resultFile, previous = [], wa
   const prompt = `停滞セッション「${record.displayTitle}」(${record.sessionId})の承認済みの目的を1歩進めてください。
 元の会話全文を ${record.file} から読み、依頼・制約・成果物を確認して続行してください。推測で目的を広げないでください。
 共有作業ツリーの他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。個別の通知は不要です。
+${standingPermission ? `この件には常設許可「${standingPermission}」があります。承認待ちにせず、許可の範囲で送信し、送信結果を記録せよ。` : ''}
 前回までの再開結果: ${JSON.stringify(previous)}。済んだ作業を繰り返さず、成果物の現状を検証してください。
 期限は${timeoutMs / 60000}分です。期限前に終了してください。
 実行結果を ${resultFile} にJSONで保存してください: {"state":"progressed"|"done"|"waiting-human"|"stuck","evidence":"変更した成果物と検証結果、または進めない理由","askId":"kim-inbox の ask ID（waiting-human の時は必須）"}。
@@ -534,6 +561,16 @@ export async function run(config = options(), io = {}) {
       ledger.eventAttempts ??= [];
       ledger.eventLimitNotices ??= {};
     }
+    const standing = hourly ? await standingPermissions(home, now()) : new Map();
+    let fleetRows = io.fleetRows;
+    const loadFleetRows = async () => {
+      if (fleetRows) return fleetRows;
+      const result = await (io.fetchBeacons ?? fetchBeacons)({ home, fetchImpl: io.fetch, timeoutMs: 15000, retries: 0 });
+      const pcMap = io.pcMap ?? await readJson(path.resolve(import.meta.dirname, '..', 'fleet-pc-map.json'), {});
+      fleetRows = buildFleetStatus({ pcMap, beacons: result.beacons, serverPolls: result.serverPolls, now: now() });
+      return fleetRows;
+    };
+    if (hourly && usageBlocked) await loadFleetRows();
     const loadClosed = io.loadClosed ?? (() => readJson(path.join(dir, 'session-closed-ledger.json'), { sessions: {} }));
     let closeSaves = Promise.resolve();
     const closeSession = io.closeSession ?? (async (sessionId, value) => {
@@ -565,7 +602,7 @@ export async function run(config = options(), io = {}) {
       const parsedDue = parseWaitFooter(record.lastAssistantText).due;
       const dueAt = parsedDue?.getTime?.() ?? wait?.at ?? Infinity;
       const dueSoon = dueAt >= now() && dueAt <= now() + 24 * HOUR_MS;
-      return { dueSoon, dueAt, expiredAt: wait?.at <= now() ? wait.at : Infinity, deferredOnly: !wait };
+      return { standing: standing.has(record.sessionId), dueSoon, dueAt, expiredAt: wait?.at <= now() ? wait.at : Infinity, deferredOnly: !wait };
     };
     const overdueTitle = record => overdueOrder(record).expired;
     const records = (await (io.detect ?? detect)(overdue, hourly))
@@ -573,7 +610,8 @@ export async function run(config = options(), io = {}) {
       .sort((a, b) => {
         if (hourly) {
           const left = hourlyOrder(a), right = hourlyOrder(b);
-          return Number(right.dueSoon) - Number(left.dueSoon)
+          return Number(right.standing) - Number(left.standing)
+            || Number(right.dueSoon) - Number(left.dueSoon)
             || left.dueAt - right.dueAt
             || left.expiredAt - right.expiredAt
             || Number(left.deferredOnly) - Number(right.deferredOnly)
@@ -596,6 +634,7 @@ export async function run(config = options(), io = {}) {
     const state = (overdue ? null : ledger.nights[night]) ?? { count: 0, errors: 0, aborted: false };
     if (!readonly && !overdue) { delete state.noExecutor; ledger.nights[night] = state; }
     const pending = [...records], running = new Set(), busy = new Set();
+    let handoffCount = 0;
     const cwdKeys = new Map();
     for (const record of records) {
       let cwd = record.cwd ?? '';
@@ -632,8 +671,26 @@ export async function run(config = options(), io = {}) {
         const eligibilityEntry = overdue || resumeAllowed ? entry : {};
         let reason = hourly ? hourlySkipReason(record, eligibilityEntry, closed, record.activityMtimeMs ?? mtimeMs, now(), config.activeMs) : overdue ? overdueSkipReason(record, eligibilityEntry, closed, record.activityMtimeMs ?? mtimeMs, now(), config.activeMs) : skipReason(record, eligibilityEntry, night, closed, mtimeMs, now(), config.activeMs);
         if (overdue && record.detectedMtimeMs !== undefined && record.detectedMtimeMs !== mtimeMs) reason = 'active';
-        const row = { sessionId: record.sessionId, title: record.displayTitle, attempts: entry.attempts.length, skip: reason };
+        const row = { sessionId: record.sessionId, title: record.displayTitle, attempts: entry.attempts.length, skip: reason,
+          due: parseWaitFooter(record.lastAssistantText).due?.toISOString() || '' };
         rows.push(row);
+        if (!readonly && hourly && usageBlocked && !reason && handoffCount < hourlyPolicy.hourlyCap) {
+          const handoff = (io.handoffSession ?? handoffSession)({
+            record: { ...entry, title: record.displayTitle, sessionId: record.sessionId, hostname: os.hostname(), cwd: record.cwd,
+              firstUserText: record.firstPrompt, lastAssistantText: record.lastAssistantText, due: parseWaitFooter(record.lastAssistantText).due?.toISOString(),
+              reason: entry.skipReason || '利用量の上限で元PCで再開できない' },
+            fleetRows, repo: path.resolve(import.meta.dirname, '..'), home, now: now(), stopPct: hourlyPolicy.planUsageStopPct,
+            directiveSender: io.directiveSender ?? sendFleetDirective
+          });
+          if (handoff.handedOff) {
+            handoffCount++;
+            Object.assign(entry, { handedOffTo: handoff.target, handedOffAt: handoff.handedOffAt, skipReason: '移管済み' });
+            entries[entryKey] = entry;
+            Object.assign(row, { skip: '移管済み', plannedAction: '他PCへ移管', handedOffTo: handoff.target, handedOffAt: handoff.handedOffAt });
+            await save(ledger);
+            continue;
+          }
+        }
         let event;
         let humanAsk;
         if (overdue && !reason) {
@@ -775,7 +832,7 @@ export async function run(config = options(), io = {}) {
               ledger.eventAttempts.push({ sessionId: record.sessionId, at });
               await save(ledger);
             }
-            result = await (io.execute ?? execute)(record, { timeoutMs: config.timeoutMs, resultFile, previous: entry.attempts.slice(-4, -1), wait: overdue ? wait : null, event, hourly });
+            result = await (io.execute ?? execute)(record, { timeoutMs: config.timeoutMs, resultFile, previous: entry.attempts.slice(-4, -1), wait: overdue ? wait : null, event, hourly, standingPermission: standing.get(record.sessionId) });
             if (!['progressed', 'done', 'waiting-human', 'no-progress', 'no-report', 'timeout', 'error', 'no-executor', 'not-in-session', 'disabled'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
           } catch (error) { const msg = String(error.message ?? ''); result = { outcome: /timeout|timed out|ETIMEDOUT|aborted due to timeout/i.test(msg) ? 'timeout' : 'error', reason: msg }; }
           if (humanAsk && ['error', 'not-in-session', 'no-executor', 'disabled', 'timeout'].includes(result.outcome) && !entry.waitingHuman) {
@@ -896,10 +953,23 @@ export async function run(config = options(), io = {}) {
         const resultById = new Map(results.map(item => [item.sessionId, item]));
         const entries = rows.filter(row => row.skip !== '完了済み').map(row => {
           const result = resultById.get(row.sessionId);
-          return { title: row.title, sessionId: row.sessionId, type: row.skip === '3回進捗なし' ? '打ち切り' : row.title?.includes('まで】') ? '期限切れ' : '先送り', lastResult: result?.outcome || row.skip || '候補', lastAttemptAt: result?.endedAt || now() };
+          return { title: row.title, sessionId: row.sessionId, due: row.due,
+            type: row.skip === '移管済み' ? '移管済み' : row.skip === '3回進捗なし' ? '打ち切り' : row.title?.includes('まで】') ? '期限切れ' : '先送り',
+            lastResult: result?.outcome || row.skip || '候補', lastAttemptAt: result?.endedAt || now(), handedOffTo: row.handedOffTo, handedOffAt: row.handedOffAt };
         });
         if (os.hostname() === '000KimPC') entries.push(...collectGbReportEntries({ now: now() }));
-        try { writeStallLedger({ home, hostname: os.hostname(), entries, now: now() }); } catch { /* 台帳失敗で再開結果を失わない */ }
+        try {
+          const localLedger = writeStallLedger({ home, hostname: os.hostname(), entries, now: now() });
+          if (os.hostname() === '000KimPC') {
+            let allRows = io.fleetRows;
+            if (!allRows) {
+              const fetched = await (io.fetchBeacons ?? fetchBeacons)({ home, fetchImpl: io.fetch, timeoutMs: 15000, retries: 0 });
+              const pcMap = io.pcMap ?? await readJson(path.resolve(import.meta.dirname, '..', 'fleet-pc-map.json'), {});
+              allRows = buildFleetStatus({ pcMap, beacons: fetched.beacons, serverPolls: fetched.serverPolls, now: now() });
+            }
+            writeAllLedgers({ home, ownLedger: { hostname: os.hostname(), updatedAt: new Date(now()).toISOString(), summary: localLedger.summary }, fleetRows: allRows, now: now() });
+          }
+        } catch { /* 台帳失敗で再開結果を失わない */ }
       }
       if (outcome === 'error' && !config.dryRun && !config.list) {
         const reason = redactSecrets(String(thrown?.message ?? thrown ?? fatal?.message ?? fatal ?? '')).slice(0, 200);

@@ -22,6 +22,15 @@
       "createdAt": "2026-11-25T02:00:35.464Z",
       "expiresAt": "2026-11-26T02:00:35.464Z",
       "timeoutSeconds": 2400
+    },
+    {
+      "id": "status-20261125-022744-2371",
+      "kind": "status",
+      "targets": "008XPS8300,014DELL",
+      "why": "seisaku-team 週次上限の退避: 席ガード反映確認（claude を起動しない status のみ）",
+      "createdBy": "uers",
+      "createdAt": "2026-11-25T02:27:44.832Z",
+      "expiresAt": "2026-11-25T08:27:44.832Z"
     }
   ]
 }

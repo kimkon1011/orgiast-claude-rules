@@ -21,14 +21,17 @@ if (-not ($task.Actions.Arguments -match 'nightly-bootstrap')) { throw 'Nightly 
 $sweepAction = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($sweepScript) -WorkingDirectory $repo
 $sweepTrigger = New-ScheduledTaskTrigger -Daily -At 3:05am -RandomDelay (New-TimeSpan -Minutes 2)
 Register-ScheduledTask -TaskName 'OrgiastStalledSessionSweep' -Action $sweepAction -Trigger $sweepTrigger -Settings $set -Force | Out-Null
+Disable-ScheduledTask -TaskName 'OrgiastStalledSessionSweep' | Out-Null
 $sweep = Get-ScheduledTask -TaskName 'OrgiastStalledSessionSweep'
 if (-not ($sweep.Actions.Arguments -match 'stalled-session-resume')) { throw 'Stalled session sweep action verification failed' }
 
-$waitAction = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($sweepScript, '--overdue') -WorkingDirectory $repo
-$waitTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 15)
+$waitAction = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($sweepScript, '--hourly') -WorkingDirectory $repo
+$nextTwenty = (Get-Date).Date.AddHours((Get-Date).Hour).AddMinutes(20)
+if ($nextTwenty -le (Get-Date)) { $nextTwenty = $nextTwenty.AddHours(1) }
+$waitTrigger = New-ScheduledTaskTrigger -Once -At $nextTwenty -RepetitionInterval (New-TimeSpan -Hours 1)
 $waitSettings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 2)
 Register-ScheduledTask -TaskName 'OrgiastWaitDeadlineResume' -Action $waitAction -Trigger $waitTrigger -Settings $waitSettings -Force | Out-Null
 $waitTask = Get-ScheduledTask -TaskName 'OrgiastWaitDeadlineResume'
 if ($waitTask.Actions.Count -ne 1 -or $waitTask.Actions.Execute -ne $waitAction.Execute -or $waitTask.Actions.Arguments -ne $waitAction.Arguments -or $waitTask.Actions.WorkingDirectory -ne $waitAction.WorkingDirectory) { throw 'Wait deadline action verification failed' }
-if ($waitTask.Triggers.Count -ne 1 -or $waitTask.Triggers[0].Repetition.Interval -ne 'PT15M' -or [Math]::Abs(([DateTime]$waitTask.Triggers[0].StartBoundary - [DateTime]$waitTrigger.StartBoundary).TotalSeconds) -gt 2) { throw 'Wait deadline trigger verification failed' }
+if ($waitTask.Triggers.Count -ne 1 -or $waitTask.Triggers[0].Repetition.Interval -ne 'PT1H' -or [Math]::Abs(([DateTime]$waitTask.Triggers[0].StartBoundary - [DateTime]$waitTrigger.StartBoundary).TotalSeconds) -gt 2) { throw 'Wait deadline trigger verification failed' }
 if ($waitTask.Settings.MultipleInstances -ne 'IgnoreNew' -or $waitTask.Settings.ExecutionTimeLimit -ne 'PT2H' -or -not $waitTask.Settings.StartWhenAvailable -or $waitTask.Settings.DisallowStartIfOnBatteries -or $waitTask.Settings.StopIfGoingOnBatteries) { throw 'Wait deadline settings verification failed' }

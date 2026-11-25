@@ -10,6 +10,7 @@ import { resolveClaudeExecutableFromDisk, sanitizeClaudeSupervisorEnv } from './
 import { autopilotPaths, runAutopilot, acquireLock } from './autopilot-tick.mjs';
 import { isEntry } from './is-entry.mjs';
 import { redactSecrets } from './webhook-health.mjs';
+import { evaluateClaudeSeatGuard, formatClaudeSeatGuardSkip, syncGbOffloadFlags } from './lib/claude-seat-guard.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export function buildPrompt(repo = REPO, { preFile, deadline } = {}) {
@@ -126,6 +127,14 @@ export function invokeClaude({ executable, args, prompt, cwd, timeoutMs, env = p
   });
 }
 export async function runOnce(options = {}) {
+  const guardHome = options.home || process.env.ORGIAST_HOME || os.homedir();
+  const guardVerdict = options.guardVerdict ?? await (options.evaluateGuard ?? evaluateClaudeSeatGuard)({ home: guardHome, env: process.env, caller: 'autopilot-run' });
+  syncGbOffloadFlags({ home: guardHome, verdict: guardVerdict });
+  if (guardVerdict.blocked) {
+    const reason = formatClaudeSeatGuardSkip(guardVerdict);
+    (options.log ?? console.log)(reason);
+    return { skipped: true, reason };
+  }
   const paths = autopilotPaths(options);
   fs.mkdirSync(paths.dir, { recursive: true });
   const auth = resolveSupervisorAuth({ home: paths.home });

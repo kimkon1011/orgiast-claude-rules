@@ -78,6 +78,7 @@ function readNonempty(target, kind) {
 }
 function nested(value, dotted) { return dotted.split('.').reduce((v, key) => v?.[key], value); }
 function checkTaskDetails(spec, info) {
+  if (spec.requiredActionPattern && !(info.actions || []).some(action => new RegExp(spec.requiredActionPattern, 'i').test(String(action)))) return false;
   if (spec.maxIntervalMinutes && (!info.intervals?.length || !info.intervals.some(n => n > 0 && n <= spec.maxIntervalMinutes) || !(info.executionMinutes > 0 && info.executionMinutes < spec.maxIntervalMinutes))) return false;
   if (spec.requireActionTarget) {
     for (const action of info.actions || []) {

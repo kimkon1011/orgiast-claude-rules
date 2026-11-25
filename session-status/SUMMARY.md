@@ -1,9 +1,9 @@
-# session-status SUMMARY  updated 2026-11-26 02:16 JST
+# session-status SUMMARY  updated 2026-11-26 03:21 JST
 
 000は他PCのディスクを直接読まない。各PCが fleet-heartbeat ブランチの session-status/ に STATUS を置き、000が集める。
 
 ## 到達（共有gitにSTATUSがあったか）
-- 000: ○ 最終更新 11/26 02:14
+- 000: ○ 最終更新 11/26 03:14
 - 004: × 古いSTATUSのみ（11/25 21:16）。原因: 60分タスク未実行かPCオフライン。直し方: そのPCで session-status.ps1 を実行し、タスク GrokBot-Offload-session-status を確認する。
 - 008: × STATUSなし。原因: 未導入かオフライン、またはgit未同期。直し方: そのPCで gb-offload\\session-status.ps1 -Install を実行する。
 - 011: × 古いSTATUSのみ（11/25 21:11）。原因: 60分タスク未実行かPCオフライン。直し方: そのPCで session-status.ps1 を実行し、タスク GrokBot-Offload-session-status を確認する。
@@ -17,6 +17,7 @@
 - { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\uers\\.claude\\projects", "configDirectory": "C:\\Users\\uers\\
 
 ## 案件
+- 000・008-booth5・金さん待ち・5件の調査完了。3件は送信済み（再送不要）、DNW山口様の送信・FDL提案の佐藤さん依頼・古い減額案のゴミ箱移動が承認待ち・期限2026-11-27 18:00（FDL 提案の社内目標）・次:金さんが「送って」と返したら、DNW山口様へ gmail-draft.mjs で送信、佐藤さんへ Discord 依頼、減額案をゴミ箱へ
 - 000・1p-space-1124・停止・最終更新 11/24 11:11、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 000・212coffee-move-1125・完了・最終更新 11/25 16:17、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
 - 000・account-inventory-1123・完了・最終更新 11/23 22:20、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
@@ -44,7 +45,7 @@
 - 000・night-3oku-1126・金さん待ち・承認パック4件の判断待ち（作業は完了）・期限2026-11-27 18:00（STANDAGE 概算）・次:approval-pack.md の4件に返事。Folia は佐藤さんへの依頼、STANDAGE は11/27期限
 - 000・no-ai-disclaimer-1123・停止・最終更新 11/23 17:24、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 000・pr2723-fix-1125・完了・最終更新 11/25 16:11、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、金さん待ちの記述あり・期限なし・次:なし
-- 000・pr2768-ci・停止・最終更新 11/26 02:13、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・pr2768-ci・完了・PR#2768 の CI 修正は別の席が acc2bcb8 で push 済み（11/26 02:10 JST CI 実行中・auto-merge 有効）。重複を避けて手を引いた・期限なし・次:朝に gh pr view 2768 --repo kimkon1011/orgiast-claude-rules --json state で MERGED を確認。推奨台帳が決定済み項目（神原さん再署名・T-6810）を再提示する不具合を夜間に Codex で修正（詳細 inbox-info.md。kim-inbox は台帳使用中で記録失敗、next-s
 - 000・publish-check-rule-1123・停止・最終更新 11/23 19:23、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 000・rat-print-1124・完了・最終更新 11/24 08:48、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 000・reply-wait-collect-1125・停止・最終更新 11/25 09:34、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -78,6 +79,7 @@
 - 000・_discord-line-out・完了・最終更新 11/23 16:22、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 000・_discord-sato-raw-1123・停止・最終更新 11/21 21:28、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 000・_handoff-roudou-1123・停止・最終更新 11/23 14:18、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・無人ジョブ修復・停止・文脈上限のため区切り。PR #2772 が main(#2768) と衝突・期限なし・次:重複部分は main を正として衝突解消→Windowsテスト→pr-merge→タスク再実行で LastTaskResult=0 確認（next-session.md 先頭）
 - 000・社外下書き3通・金さん待ち・梅津様・ヨシイ様・赤澤様の修正版下書き3通を作成済み。送信の承認待ち・期限なし（ヨシイ様・赤澤様は4週間返信が止まっているため早いほどよい）・次:「送って」なら gmail-draft.mjs --send r-4296009670090621805 / r6619791054716667782 / r-774728638497677674 を順に実行し、旧下書き r-2567709388237635912 / r-2111262535869392680 / r2974897527695525297 
 - 000・社外下書き3通送信・金さん待ち・社外メール3通（梅津様・パレス ヨシイ様・赤澤様）の送信承認待ち。11/26 時点で3通とも未送信・相手からの新着なしを seisaku-team@ の Gmail で確認済み・期限なし（ただし最長で4週間お待たせしている）・次:承認された通だけ、確認用 Doc の修正版の本文・宛先で gmail-draft.mjs --send を実行し、送信済みを読み戻す（Gmail に残っている下書きは修正前の版なので、そのまま送らない）。金さんに決めてほしいこと: 3通それぞれ送ってよいか
 - 000・社外未送信下書き・金さん待ち・社外下書き3通（梅津様インタビュー記事打診・パレス ヨシイ様キャンセル了承・赤澤様応募辞退）の修正版全文を提示し、送信承認待ち・期限なし・次:承認された通を gmail-draft.mjs --send（チェック込み）で seisaku-team@ から送り、送信本文を読み戻して表示

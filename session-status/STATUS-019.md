@@ -1,4 +1,4 @@
-# session-status  PC=019  host=019  updated 2026-11-26 06:10 JST
+# session-status  PC=019  host=019  updated 2026-11-26 07:10 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "email": "nishi@orgiast.jp", "orgId":
 - 案件数: 15

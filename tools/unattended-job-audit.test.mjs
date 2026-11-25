@@ -52,6 +52,31 @@ test('disabled / missing required and ignored optional tasks', () => {
   assert.deepEqual(auditTasks([], { OrgiastMissing: { ignore: true } }, now, { required: ['OrgiastMissing'] }), []);
   assert.deepEqual(auditTasks([task({ taskName: '\\OrgiastCostImproveLoop' })], {}, now, { required: ['OrgiastCostImproveLoop'] }), []);
 });
+test('expectDisabled required task is not disabled_required and is not healed', async () => {
+  const name = 'OrgiastStalledSessionSweep';
+  const opts = { required: [name], expectDisabled: [name] };
+  assert.deepEqual(auditTasks([task({ taskName: name, state: 'Disabled' })], {}, now, opts), []);
+  assert.deepEqual(auditTasks([task({ taskName: `\\${name}`, state: 'Disabled', lastRunTime: '1999-01-01' })], {}, now, opts), []);
+  assert.equal(auditTasks([], {}, now, opts)[0]?.kind, 'missing_required');
+  const calls = [];
+  const findings = auditTasks([task({ taskName: name, state: 'Disabled' })], {}, now, opts);
+  await healTasks(findings, { state: {}, now, startScheduledTask: n => calls.push('start:' + n), enableScheduledTask: n => calls.push('enable:' + n), runConverge: () => calls.push('converge') });
+  assert.deepEqual(calls, []);
+  const state = { heals: { [name]: { at: new Date(now).toISOString(), kind: 'disabled_required' } } };
+  assert.equal(unresolvedTasks([task({ taskName: name, state: 'Disabled' })], [], state, now + 1, opts).length, 0);
+});
+test('runAudit does not enable expectDisabled Disabled tasks', async t => {
+  const home = temp(t), enables = [], starts = [];
+  const name = 'OrgiastStalledSessionSweep';
+  const result = await runAudit({
+    home, platform: 'win32', now, required: [name], expectDisabled: [name], overrides: {},
+    listTasks: () => [task({ taskName: name, state: 'Disabled', lastRunTime: '1999-01-01' })],
+    enable: n => enables.push(n), start: n => starts.push(n),
+  });
+  assert.deepEqual(result.findings, []);
+  assert.deepEqual(enables, []);
+  assert.deepEqual(starts, []);
+});
 test('artifact evidence: old and missing mtime, minimum tolerance 2h', () => {
   const overrides = { OrgiastCostImproveLoop: { artifacts: ['~/old', '~/missing', '~/fresh'] } };
   assert.equal(auditTasks([task()], overrides, now, { artifactMtimes: { '~/old': now - 38 * 3600000, '~/fresh': now } }).filter(f => f.kind === 'artifact_stale').length, 2);

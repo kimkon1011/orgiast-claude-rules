@@ -5,6 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { callWithFallback, FALLBACK_CHAIN } from './llm-fallback.mjs';
 import { isEntry } from './is-entry.mjs';
+import { recordRun } from './lib/change-gate.mjs';
 
 export const PROFILES = {
   ai: {
@@ -280,6 +281,7 @@ export async function runDigest(options = {}) {
     const status = 'skip:新規メッセージなし';
     log('未処理メッセージはありません。');
     log(status);
+    recordRun(`line-digest-${cli.profile}`, { changed: false, llmInvoked: false, items: 0, note: status });
     return { processed: 0, status };
   }
   const llm = options.llm || createLlmClient({ home, usageFile: path.join(base, 'executor-usage.jsonl') });
@@ -330,6 +332,7 @@ export async function runDigest(options = {}) {
   }
   const status = `ok:${successfullyClassified.size}件処理`;
   log(status);
+  recordRun(`line-digest-${cli.profile}`, { changed: candidates.length > 0, llmInvoked: messages.length > 0, items: candidates.length, note: status });
   return { processed: successfullyClassified.size, held: held.length, proposals: appended.added.length, status };
 }
 

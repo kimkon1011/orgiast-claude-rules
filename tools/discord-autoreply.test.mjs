@@ -291,11 +291,22 @@ test('生成中にkimが発言したら送信直前に止める', async t => {
   const f = fixture(t, { after: () => ++count === 1 ? [] : [kim()] });
   await runOnce(f.options); assert.equal(f.posts().length, 0); assert.equal(f.readState().handled['100'].reason, 'kim_replied');
 });
-test('parse失敗をhandledに記録し再試行・通知しない', async t => {
+test('parse失敗は再試行状態を保存し即時再実行・通知しない', async t => {
   const f = fixture(t); f.options.llm = async () => 'not json';
   await runOnce(f.options); await runOnce(f.options);
-  assert.equal(f.readState().handled['100'].reason, 'llm_parse_error');
+  assert.equal(f.readState().handled['100'].attempts, 1);
   assert.equal(f.posts().length, 0); assert.equal(f.notifications.length, 0);
+});
+test('同じメッセージのLLM失敗は指数バックオフ後も3回でgaveUpになる', async t => {
+  const f = fixture(t); let calls = 0; let now = NOW;
+  f.options.now = () => now;
+  f.options.llm = async () => { calls++; throw new Error('timeout'); };
+  await runOnce(f.options);
+  now += 60_001; await runOnce(f.options);
+  now += 5 * 60_000 + 1; await runOnce(f.options);
+  now += 31 * 60_000; await runOnce(f.options);
+  const entry = f.readState().handled['100'];
+  assert.equal(calls, 3); assert.equal(entry.attempts, 3); assert.equal(entry.gaveUp, true);
 });
 test('JSONの周囲に説明があっても抽出、不正なboolは拒否', async t => {
   assert.deepEqual(parseJson('説明```json\n{"a":1}\n```'), { a: 1 });
@@ -469,14 +480,14 @@ test('50件を超える会話でもkim返信を見落とさない', async t => {
   assert.equal(result.skipped.kim_replied, 1); assert.equal(f.posts().length, 0);
   assert.ok(f.calls.some(c => c.query.get('after') === '150'));
 });
-test('knowledge全文・rules全文・直近30件の正負例をプロンプトに渡す', async t => {
+test('knowledge全文・rules全文・直近10件の正負例をプロンプトに渡す', async t => {
   const f = fixture(t);
   fs.writeFileSync(f.file('knowledge.md'), '追記事実'); fs.writeFileSync(f.file('rules.md'), '- 学習ルール\n');
   fs.writeFileSync(f.file('corrections.jsonl'), Array.from({ length: 40 }, (_, i) => JSON.stringify({ msgId: String(i), outcome: i % 2 ? 'corrected' : 'confirmed', rule: null })).join('\n'));
   await runOnce(f.options);
   const input = f.llmCalls[0].input;
   assert.equal(input.knowledge, '追記事実'); assert.equal(input.rules, '- 学習ルール\n');
-  assert.equal(input.corrections.length, 30); assert.equal(input.corrections[0].msgId, '10');
+  assert.equal(input.corrections.length, 10); assert.equal(input.corrections[0].msgId, '30');
   assert.equal(input.corrections[0].outcome, 'confirmed');
 });
 test('同じruleは重複追記しない', async t => {

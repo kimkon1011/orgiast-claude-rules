@@ -14,6 +14,7 @@ import { readdirSync, existsSync } from "node:fs";
 import { isEntry } from "./is-entry.mjs";
 import { notifyKim } from "./notify-kim.mjs";
 import { resolveBrowserExecutable, runHumanLogin } from "./lib/human-login.mjs";
+import { recordRun } from "./lib/change-gate.mjs";
 
 export const MESSAGES_URL = "https://www.facebook.com/messages/";
 export const MAX_SEEN = 500;
@@ -408,6 +409,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     if (verdict.notify) await notify(verdict.body, { home });
     // verdict.state は判定時点のコピーなので、成功時刻はその後に上書きする。
     writeJson(stateFile, { ...state, ...verdict.state, lastSuccessAt: now() });
+    recordRun('messenger-watch', { changed: fresh.length > 0, llmInvoked: false, items: fresh.length, note: fresh.length ? 'new messages' : 'no new messages' });
     return 0;
   } catch (err) {
     stderr(`messenger-watch: 実行失敗 (${err?.message ?? err})`);

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { stamp, expectedPeriodHours, auditTasks, healTasks, unresolvedTasks, runAudit, launchAudit, notifyUnresolved, auditContext, main } from './unattended-job-audit.mjs';
+import { stamp, expectedPeriodHours, auditTasks, auditChangeGateImports, healTasks, unresolvedTasks, runAudit, launchAudit, notifyUnresolved, auditContext, main } from './unattended-job-audit.mjs';
 import { listScheduledTaskDetails, enableScheduledTask, startScheduledTask } from './lib/scheduled-task.mjs';
 const now = Date.parse('2026-10-18T20:00:00+09:00');
 const daily = { type: 'MSFT_TaskDailyTrigger', daysInterval: 1 };
@@ -211,4 +211,9 @@ test('notification DM success and missing-token / thrown DM fallback use fleet m
   for (const notify of [async () => ({ delivered: 'none' }), async () => { throw Error('offline'); }]) await notifyUnresolved('body', { home, spawnImpl, notify });
   assert.equal(calls.length, 2);
   for (const [, args] of calls) { assert.ok(args.includes('kim-PC')); const file = args[args.indexOf('--body-file') + 1]; assert.equal(fs.readFileSync(file, 'utf8'), 'body'); fs.rmSync(path.dirname(file), { recursive: true }); }
+});
+test('LLMを呼ぶ定期mjsのchange-gate欠落をwarnする', () => {
+  const findings = auditChangeGateImports([{ action: 'C:\\repo\\tools\\watch.mjs' }], { toolsDir: 'X', readFile: () => "import './llm-ask.mjs';" });
+  assert.deepEqual(findings, [{ name: 'watch.mjs', kind: 'missing_change_gate', severity: 'warn' }]);
+  assert.deepEqual(auditChangeGateImports([{ action: 'C:\\repo\\tools\\watch.mjs' }], { toolsDir: 'X', readFile: () => "import './llm-ask.mjs'; import './lib/change-gate.mjs';" }), []);
 });

@@ -1469,6 +1469,8 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 ### 2.8 AI費用・夜間処理・無人運転
 
+**定期処理の変化判定ゲート**: タスクスケジューラ・cron・常駐ループは、LLM の前に `tools/lib/change-gate.mjs` で新着件数と入力 fingerprint を確認する。変化なしなら LLM を起動せず、成功後だけ最終ID・時刻のカーソルを commit する（失敗時は未更新として次回再試行）。可能なら Gmail history・Webhook・ファイル監視へ寄せる。`tools/routine-usage-weekly.mjs` が週次で PC×ジョブ別の消費と「何も無かった率」を点検する。
+
 用途別費用最適化、遅延可能処理は夜間へ、無人処理は試行上限・監視必須。
 
 **🔴 アプリ（デプロイ済み・Actions・cron・GAS・スクリプト）のLLM/検索は他AIが既定。Claude API（@anthropic-ai/sdk・api.anthropic.com・claude-*）の新規利用・Claudeへの自動フォールバックも禁止。旧 LLM-PROVIDER-REASON は新規利用の許可にならない（2026-11-05）。検索収集=Gemini Flash grounding、分類/抽出/要約=Groq/DeepSeek/Gemini Flash。他AIを3社以上同じ評価セットで比較（取得項目数・一致率・1件実費）し、1社だけでClaudeへ戻さない。障害は別の他AIへ、全滅なら停止・通知。「当面Claude」「入金不要」で済ませずキー登録・デプロイ・入金依頼・他AI実動確認まで行う。既存アプリも呼び先を確認しClaudeなら置換案を先に出す。有料一括20件超は1〜10件の実費実測→[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z]→承認→コードの予算超過自動停止。オートチャージは上限ではない。app-llm-cost-gate が検査（§2.8.0）。**

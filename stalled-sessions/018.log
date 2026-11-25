@@ -1,0 +1,1 @@
+{"at":"2026-11-25T11:25:51.655Z","label":"018","account":"cr@orgiast.jp","candidates":102,"resume":1,"waiting-human":13,"done":11,"skip":77,"unlinked":0,"seatGuard":"allowed:below-threshold","dryRun":false,"error":"事前判定失敗: 全候補が失敗しました: openrouter:mistralai/mistral-small-3.2-24b-instruct unusable: unusable response"}

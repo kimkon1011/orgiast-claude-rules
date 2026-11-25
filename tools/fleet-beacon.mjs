@@ -10,6 +10,7 @@ import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { machineIdentity, reportExtras, getClaudeAccountEmail } from './machine-identity.mjs';
 import { redactSecrets } from './fleet-agent.mjs';
+import { ledgerSummary, parseStallSummary, stallSummaryStep } from './stall-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -80,6 +81,11 @@ export function buildBeacon({ home = process.env.ORGIAST_HOME || os.homedir(), l
   try { knowledgeBytes=fs.statSync(path.join(home,'.claude','knowledge','production-sales','00_INDEX.md')).size; } catch {}
   steps.push({ id:'production-sales-knowledge', status:knowledgeBytes>0?'ok':'fail', reason:knowledgeBytes>0?`00_INDEX.md ${knowledgeBytes} bytes`:'00_INDEX.md missing or empty' });
   if (process.platform === 'win32' || metrics.stuckDialogWatcherAt) steps.push({ id: 'stuck-dialog-watch', status: metrics.stuckDialogWatcherOk && !metrics.stuckDialogs24h ? 'ok' : 'fail', reason: `stuckDialogs24h=${metrics.stuckDialogs24h}; heartbeat=${metrics.stuckDialogWatcherAt || 'missing'}` });
+  try {
+    const host = String(identity?.hostname || os.hostname());
+    const ledger = readJson(path.join(home, '.claude', 'stall-ledger', `${host}.json`), {});
+    steps.push(stallSummaryStep(ledger.summary || ledgerSummary(ledger.entries || [], now)));
+  } catch { steps.push(stallSummaryStep({})); }
   const failing = steps.filter((step) => step.status === 'fail').map((step) => step.id);
   const pollAt = String(readJson(path.join(home, '.claude', '.fleet-mail-last-poll.json'), {})?.at || '');
 
@@ -173,7 +179,8 @@ export async function fetchBeacons({ home, fetchImpl = fetch, timeoutMs, retries
         reporterLabel: String(beacon?.reporterLabel || ''), hostname: String(beacon?.hostname || ''),
         label: String(beacon?.label ?? ''), account: String(beacon?.account ?? ''), reportedAt: String(beacon?.reportedAt ?? ''),
         stuckDialogs24h: dialogCount === undefined ? null : Number(dialogCount),
-        steps, failing, pollAt: String(beacon?.pollAt ?? ''), serverPollAt: String(beacon?.serverPollAt ?? '')
+        steps, failing, pollAt: String(beacon?.pollAt ?? ''), serverPollAt: String(beacon?.serverPollAt ?? ''),
+        stallLedger: parseStallSummary(steps)
       };
     });
     const serverPolls = result.serverPolls && typeof result.serverPolls === 'object' && !Array.isArray(result.serverPolls) ? result.serverPolls : {};

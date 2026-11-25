@@ -1,0 +1,8 @@
+{
+  "permissions": [
+    { "id": "sales-1day-followup", "name": "営業の1日待ち後の送信", "match": "営業|1日待ち|フォローアップ" },
+    { "id": "merci-extend", "name": "メルシ延泊・前倒し案内", "match": "メルシ|延泊|前倒し" }
+  ],
+  "grantedBy": "kim",
+  "note": "kim が『確認せず自動送信』と指示済み"
+}

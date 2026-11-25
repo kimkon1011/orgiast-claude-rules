@@ -1092,7 +1092,8 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   const deepseek = deepseekKey && qwenAvailable && { kind: 'qwen', name: 'deepseek', model: GATEWAY_MODELS.deepseek, baseUrl: OPENROUTER_BASE, apiKey: deepseekKey };
   const openrouter = openrouterKey && qwenAvailable && { kind: 'qwen', name: 'openrouter-free', model: env.CODEX_DO_FREE_MODEL || 'cohere/north-mini-code:free', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
   const openrouterCode = openrouterKey && qwenAvailable && { kind: 'qwen', name: 'openrouter-code', model: env.CODEX_DO_PAID_CODE_MODEL || 'qwen/qwen3-coder', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
-  const cursorAgent = resolveCursorAgentBackend(homeDir, { ...options, executableAvailable });
+  const cursorOptIn = String((options.env || process.env).CODEX_DO_ENABLE_CURSOR_AGENT || '') === '1';
+  const cursorAgent = cursorOptIn ? resolveCursorAgentBackend(homeDir, { ...options, executableAvailable }) : null;
   const byName = {
     'cursor-agent': () => cursorAgent,
     'gemini-cli': () => gemini,
@@ -1100,14 +1101,10 @@ export function resolveFallbackBackends(homeDir, options = {}) {
     'openrouter-free': () => openrouter,
     'openrouter-code': () => openrouterCode,
   };
-  const skipCursorAgent = String((options.env || process.env).CODEX_DO_SKIP_CURSOR_AGENT || '') === '1';
+  const skipCursorAgent = !cursorOptIn || String((options.env || process.env).CODEX_DO_SKIP_CURSOR_AGENT || '') === '1';
   function withCursorAgentFirst(backends) {
-    // 定額の Cursor Ultra は「上限のときの代わり」ではなく既定の担当。
-    // local.json があっても implement/verify/investigate/summarize/classify の先頭に置く。
-    // local は残りの安価レーン順だけを上書きする（2026-11-20: 019 の local が
-    // withCursorAgentFirst を丸ごと無効化し、Codex 枠切れ後に deepseek だけが走った）。
-    // テストや明示オプトアウトは CODEX_DO_SKIP_CURSOR_AGENT=1 で、既定順に含まれる分も外す。
-    // 金さん向け最終判断・社外文面の最終確認、または従量課金停止中は入れない。
+    // 2026-11-25 金さん指示: Cursor は追加料金対象のため既定 OFF。
+    // CODEX_DO_ENABLE_CURSOR_AGENT=1 の明示オプトイン時だけ旧互換経路へ入れる。
     if (skipCursorAgent) return backends.filter((b) => b.name !== 'cursor-agent');
     const usesCursor = shouldPreferCursorAgent({
       kind: taskKind,

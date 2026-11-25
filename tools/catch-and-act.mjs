@@ -75,7 +75,7 @@ export function parseClassification(raw) {
 }
 
 export function makeClassifier({ home, classifier = 'llm-ask', execute = exec } = {}) {
-  if (!['cursor', 'llm-ask'].includes(classifier)) throw new Error('classifier must be cursor or llm-ask');
+  if (classifier !== 'llm-ask') throw new Error('classifier must be llm-ask');
   const failed = new Set();
   return async m => {
     const fallback = keywordClassification(m);
@@ -90,13 +90,11 @@ title: 短い予定名/件名。draft: 返信案(約束・実行済みの断定�
     const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'catch-classify-'));
     try {
       const file = path.join(temp, 'prompt.txt'); fs.writeFileSync(file, prompt, { mode: 0o600 });
-      for (const provider of [...(classifier === 'cursor' ? ['cursor'] : []), 'glm', 'deepseek', 'groq']) {
+      for (const provider of ['glm', 'deepseek', 'groq']) {
         if (failed.has(provider)) continue;
         try {
-          const command = provider === 'cursor' ? 'cursor-agent' : process.execPath;
-          const args = provider === 'cursor'
-            ? ['--print', '--mode=ask', '--model', 'gpt-5', '--output-format', 'text', prompt]
-            : [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', provider, '--prefer-provider', '--no-fallback', '--category', 'classification', '--max', '1000', '--per-provider-timeout-ms', '18000', '--prompt-file', file];
+          const command = process.execPath;
+          const args = [fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', provider, '--prefer-provider', '--no-fallback', '--category', 'classification', '--max', '1000', '--per-provider-timeout-ms', '18000', '--prompt-file', file];
           const { stdout } = await execute(command, args, { cwd: temp, windowsHide: true, timeout: 22000, maxBuffer: 1024 * 1024, env: { ...process.env, ORGIAST_HOME: home } });
           const result = parseClassification(stdout);
           // An actual photo in the designated group must not disappear due to an AI mistake.
@@ -398,6 +396,6 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), cla
 if (isEntry(import.meta.url)) {
   const args = process.argv.slice(2);
   const classifier = args.includes('--classifier') ? args[args.indexOf('--classifier') + 1] : 'llm-ask';
-  if (!['cursor', 'llm-ask'].includes(classifier)) { console.error('Use --classifier cursor|llm-ask'); process.exitCode = 2; }
+  if (classifier !== 'llm-ask') { console.error('Use --classifier llm-ask'); process.exitCode = 2; }
   else run({ classifier, runnerLog: args.includes('--runner-log') }).then(report => { if (!args.includes('--runner-log')) console.log(JSON.stringify(report)); if (report.status !== 'ok') process.exitCode = 1; }).catch(() => { console.error('catch-and-act failed; inspect local state/log'); process.exitCode = 1; });
 }

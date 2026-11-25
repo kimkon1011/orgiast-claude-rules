@@ -1265,7 +1265,7 @@ export function writeGatewayOverride({ claudeDir, provider, writeImpl = null }) 
 // codex_saturated 対処: ~/.claude/codex-fallback-order.json に fallback 順を書く。
 // 2026-11 実測: qwen → cheap-code:deepseek → cheap-code:glm → gemini-cli → openrouter-free。
 // PC ごとの ~/.claude/codex-fallback-order.local.json（例: 008 は Gemini を外す）は上書きしない。
-export const DEFAULT_CODEX_FALLBACK_ORDER = Object.freeze(['cursor-agent', 'qwen', 'cheap-code:deepseek', 'cheap-code:glm', 'gemini-cli', 'openrouter-free']);
+export const DEFAULT_CODEX_FALLBACK_ORDER = Object.freeze(['qwen', 'cheap-code:deepseek', 'cheap-code:glm', 'gemini-cli', 'openrouter-free']);
 export function writeCodexFallbackOrder({ claudeDir, zaiAvailable, writeImpl = null }) {
   const localFile = path.join(claudeDir, 'codex-fallback-order.local.json');
   if (fs.existsSync(localFile)) {

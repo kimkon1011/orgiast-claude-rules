@@ -1,5 +1,5 @@
-// Cursor Ultra を既定の担当にする判定。品質を落とす格下げはしない。
-// Claude Code に残すのは、金さん向けの最終判断と社外文面の最終確認だけ。
+// 2026-11-25 金さん指示: Cursor の使用量がグロボの追加料金に加算されるため既定停止。
+// 互換用の明示オプトインがある場合だけ旧経路を許可する。
 
 export const CURSOR_DEFAULT_KINDS = Object.freeze([
   'implement',
@@ -40,6 +40,7 @@ export function shouldPreferCursorAgent({
   env = process.env,
   halt = false,
 } = {}) {
+  if (String(env.CODEX_DO_ENABLE_CURSOR_AGENT || '') !== '1') return false;
   if (String(env.CODEX_DO_SKIP_CURSOR_AGENT || '') === '1') return false;
   if (String(env.CURSOR_USAGE_HALT || '') === '1') return false;
   if (halt) return false;

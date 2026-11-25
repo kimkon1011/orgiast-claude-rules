@@ -27,8 +27,7 @@ export function disabledLanes(home = process.env.ORGIAST_HOME || os.homedir(), n
   for (const [name, entry] of Object.entries(readDisabledEntries(home))) {
     const until = Number(entry?.until);
     // until が過去の一時停止は無効として扱わない。restoreExpiredDisabledLanes の
-    // probe を待たずに期限切れを外す（cursor-agent は lane-doctor の PROBE_OF に
-    // 無く、期限切れのまま永遠に候補から外れる実害があった。2026-11-20 000/011）。
+    // probe を待たずに期限切れを外す。
     if (Number.isFinite(until) && until <= now) continue;
     set.add(name);
   }
@@ -52,6 +51,7 @@ export function disableLanesTemporarily(home, hits, now = Date.now()) {
   for (const hit of hits) {
     const name = String(hit?.name || '').trim().toLowerCase();
     if (!name) continue;
+    if (name === 'cursor-agent') continue;
     const existing = data[name];
     const manual = existing && !Number.isFinite(Number(existing.until)) && existing.reason !== 'health' && !isAutoDisabled(existing);
     if (manual) continue;
@@ -64,7 +64,6 @@ export function disableLanesTemporarily(home, hits, now = Date.now()) {
 const PROBE_OF = {
   gemini: 'gemini', 'gemini-cli': 'gemini', openrouter: 'openrouter', 'openrouter-free': 'openrouter', 'openrouter-code': 'openrouter',
   qwen: 'deepseek', deepseek: 'deepseek', 'cheap-code:deepseek': 'deepseek', glm: 'glm', 'cheap-code:glm': 'glm', groq: 'groq',
-  'cursor-agent': 'cursor-agent',
 };
 // 自動停止は生存を実測したら解除する。他の期限付き停止は期限到来後に従来の復帰判定を行う。
 export function restoreExpiredDisabledLanes(health, home, now = Date.now(), recovered) {

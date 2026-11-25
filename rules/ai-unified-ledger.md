@@ -1,6 +1,6 @@
 # AI統一台帳（担当・ルール・週次枠・返信待ち・締切の正本）
 
-kim 2026-11-18 決定。グロボ・ふわ・ドット・各PCの Claude Code・Cursor・安いAI の担当とルールは、次の Google スプレッドシートを正本にする（開くアカウント: kim@orgiast.jp）。
+kim 2026-11-18 決定。グロボ・ふわ・ドット・各PCの Claude Code・Codex・安いAI の担当とルールは、次の Google スプレッドシートを正本にする（開くアカウント: kim@orgiast.jp）。Cursor は2026-11-25 金さん指示により委譲先から除外する。
 
 https://docs.google.com/spreadsheets/d/1x0D7vy0QRbombIFDaLL0YrcHIG9ZzZmZDV7ZDNiSGkE/edit?authuser=kim@orgiast.jp
 

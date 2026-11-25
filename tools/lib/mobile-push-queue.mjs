@@ -7,6 +7,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 export const ATTEMPT_LIMIT = 3;
+export const ESCALATION_THRESHOLD = 5;
 export const mobilePushQueueFile = home => path.join(home, '.claude', 'mobile-push-queue.jsonl');
 
 export function appendMobilePush(home, { owner, title, body }, { now = Date.now(), id = randomUUID() } = {}) {
@@ -167,16 +168,22 @@ export function markMobilePushAttempt(home, ids, { now = Date.now() } = {}) {
     const wanted = new Set((ids || []).map(String));
     const lastAttemptAt = new Date(now).toISOString();
     const bumped = [];
+    const escalated = [];
     const merged = readMobilePushQueue(home).map(row => {
       if (!wanted.has(String(row.id)) || row.sent === true) return row;
       wanted.delete(String(row.id));
       bumped.push(String(row.id));
-      return { ...row, attempts: (Number(row.attempts) || 0) + 1, lastAttemptAt };
+      const newAttempts = (Number(row.attempts) || 0) + 1;
+      const updated = { ...row, attempts: newAttempts, lastAttemptAt };
+      if (newAttempts >= ESCALATION_THRESHOLD) {
+        escalated.push(updated);
+      }
+      return updated;
     });
     const temporary = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, merged.map(JSON.stringify).join('\n') + (merged.length ? '\n' : ''), { mode: 0o600 });
     fs.renameSync(temporary, file);
-    return { bumped, unknown: [...wanted] };
+    return { bumped, escalated, unknown: [...wanted] };
   } finally {
     fs.closeSync(fd);
     try { fs.unlinkSync(lock); } catch { /* already removed */ }

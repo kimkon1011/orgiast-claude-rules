@@ -389,10 +389,13 @@ export async function runCollect(options = {}) {
             let fallbackItemCount = 0;
             if (fallback.text) {
               const fbItems = parseItems({ output_text: fallback.text, usage: fallback.usage });
-              if (fbItems !== null && fbItems.length) {
+              if (fbItems === null) {
+                errorLog(`[x-ai-tips] parse-failed provider=openrouter head=${(fallback.text).replace(/[\r\n]/g, ' ').slice(0, 60)}`);
+                parseFailed = true; parseFailedTopics++;
+              } else if (fbItems.length) {
                 fallbackItemCount = appendFallbackItems(topic, { items: fbItems, source: 'openrouter-grok' });
                 acquired += fbItems.length;
-                added += fallbackItemCount;
+                // appendFallbackItems が内部で added を加算するため、ここでは added を加算しない
               }
             }
             // クレジットブロック中にGrokフォールバックが連続0件なら打ち切る

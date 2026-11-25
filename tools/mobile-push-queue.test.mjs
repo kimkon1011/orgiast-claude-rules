@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { appendMobilePush, ATTEMPT_LIMIT, markMobilePushAttempt, markMobilePushSent, mobilePushInstruction, mobilePushQueueFile, pendingMobilePush, readMobilePushQueue, sweepMobilePushQueue } from './lib/mobile-push-queue.mjs';
+import { appendMobilePush, ATTEMPT_LIMIT, ESCALATION_THRESHOLD, markMobilePushAttempt, markMobilePushSent, mobilePushInstruction, mobilePushQueueFile, pendingMobilePush, readMobilePushQueue, sweepMobilePushQueue } from './lib/mobile-push-queue.mjs';
 import { main as cliMain } from './mobile-push-queue.mjs';
 import { consumeInbox } from './auto-progress-inbox-hook.mjs';
 
@@ -93,7 +93,7 @@ test('markMobilePushAttempt は attempts と lastAttemptAt を更新して本文
   const home = tempHome(t);
   const item = appendMobilePush(home, { owner: 'x', title: '報告', body: '本文' }, { id: 'attempt-id' });
   const now = Date.UTC(2026, 10, 23, 3, 5);
-  assert.deepEqual(markMobilePushAttempt(home, [item.id], { now }), { bumped: [item.id], unknown: [] });
+  assert.deepEqual(markMobilePushAttempt(home, [item.id], { now }), { bumped: [item.id], escalated: [], unknown: [] });
   let row = readRow(home, item.id);
   assert.equal(row.attempts, 1);
   assert.equal(row.lastAttemptAt, new Date(now).toISOString());
@@ -102,7 +102,7 @@ test('markMobilePushAttempt は attempts と lastAttemptAt を更新して本文
   row = readRow(home, item.id);
   assert.equal(row.attempts, 2);
   assert.equal(row.sent, false);
-  assert.deepEqual(markMobilePushAttempt(home, ['unknown-id']), { bumped: [], unknown: ['unknown-id'] });
+  assert.deepEqual(markMobilePushAttempt(home, ['unknown-id']), { bumped: [], escalated: [], unknown: ['unknown-id'] });
 });
 
 test('CLI --mark-attempt は試行回数を増やし mark-sent との併用を拒否する', t => {
@@ -110,7 +110,7 @@ test('CLI --mark-attempt は試行回数を増やし mark-sent との併用を�
   const item = appendMobilePush(home, { owner: 'x', title: '報告', body: '本文' });
   let printed = '';
   assert.equal(cliMain(['--mark-attempt', item.id], { home, out: value => { printed = value; } }), 0);
-  assert.deepEqual(JSON.parse(printed), { bumped: [item.id], unknown: [] });
+  assert.deepEqual(JSON.parse(printed), { bumped: [item.id], escalated: [], unknown: [] });
   assert.equal(readRow(home, item.id).attempts, 1);
   assert.throws(() => cliMain(['--mark-sent', item.id, '--mark-attempt', item.id], { home, out: () => {} }), /同時に指定できません/);
   assert.throws(() => cliMain(['--mark-attempt'], { home, out: () => {} }), /id が1つ必要/);
@@ -119,6 +119,77 @@ test('CLI --mark-attempt は試行回数を増やし mark-sent との併用を�
 function readRow(home, id) {
   return fs.readFileSync(mobilePushQueueFile(home), 'utf8').trim().split('\n').map(JSON.parse).find(row => row.id === id);
 }
+
+test('4回の attempt では escalation されない', t => {
+  const home = tempHome(t);
+  const item = appendMobilePush(home, { owner: 'x', title: '報告', body: '本文' }, { id: 'esc-test-1' });
+  for (let i = 0; i < 4; i++) {
+    const result = markMobilePushAttempt(home, [item.id]);
+    assert.equal(result.escalated.length, 0);
+    assert.equal(result.bumped.length, 1);
+  }
+  const row = readRow(home, item.id);
+  assert.equal(row.attempts, 4);
+  assert.equal(row.sent, false);
+  assert.equal(pendingMobilePush(home).length, 1);
+});
+
+test('5回目の attempt で escalation の escalated が返る', t => {
+  const home = tempHome(t);
+  const item = appendMobilePush(home, { owner: 'x', title: '報告', body: '本文' }, { id: 'esc-test-2' });
+  for (let i = 0; i < 4; i++) markMobilePushAttempt(home, [item.id]);
+  const result = markMobilePushAttempt(home, [item.id]);
+  assert.equal(result.bumped.length, 1);
+  assert.equal(result.escalated.length, 1);
+  assert.equal(result.escalated[0].id, item.id);
+  assert.equal(result.escalated[0].attempts, 5);
+  const row = readRow(home, item.id);
+  assert.equal(row.attempts, 5);
+  assert.equal(row.sent, false);
+});
+
+test('CLI --mark-attempt 経由で escalation された項目は kim-inbox spool に積まれる', t => {
+  const home = tempHome(t);
+  const item = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '通知タイトル', body: '通知本文です' }, { id: 'esc-test-3' });
+  for (let i = 0; i < 4; i++) markMobilePushAttempt(home, [item.id]);
+
+  let printed = '';
+  assert.equal(cliMain(['--mark-attempt', item.id], { home, out: line => { printed = line; } }), 0);
+  const result = JSON.parse(printed);
+  assert.equal(result.bumped.length, 1);
+  assert.equal(result.escalated.length, 1);
+  assert.equal(result.escalated[0].id, item.id);
+  assert.equal(result.spooled, 1);
+
+  const spoolDir = path.join(home, '.claude', 'kim-inbox', 'spool');
+  assert.ok(fs.existsSync(spoolDir), 'spool ディレクトリが必要');
+  const spoolFiles = fs.readdirSync(spoolDir).filter(f => f.endsWith('.json'));
+  assert.ok(spoolFiles.length >= 1, 'spool ファイルが必要');
+
+  const spoolContent = JSON.parse(fs.readFileSync(path.join(spoolDir, spoolFiles[0]), 'utf8'));
+  assert.match(spoolContent.text, /【スマホ通知が送れなかったため転記】/);
+  assert.match(spoolContent.text, /通知本文です/);
+  assert.equal(spoolContent.kind, 'info');
+  assert.equal(spoolContent.source, 'mobile-push-escalation');
+});
+
+test('同じ本文の escalation は1件にまとめて spool される', t => {
+  const home = tempHome(t);
+  const item1 = appendMobilePush(home, { owner: 'x', title: 'タイトル1', body: '同じ本文' }, { id: 'dedupe-a' });
+  const item2 = appendMobilePush(home, { owner: 'x', title: 'タイトル2', body: '同じ本文' }, { id: 'dedupe-b' });
+  for (let i = 0; i < 4; i++) markMobilePushAttempt(home, [item1.id, item2.id]);
+
+  let printed = '';
+  assert.equal(cliMain(['--mark-attempt', item1.id, '--mark-attempt', item2.id], { home, out: line => { printed = line; } }), 0);
+  const result = JSON.parse(printed);
+  assert.equal(result.bumped.length, 2);
+  assert.equal(result.escalated.length, 2);
+  assert.equal(result.spooled, 1);
+
+  const spoolDir = path.join(home, '.claude', 'kim-inbox', 'spool');
+  const spoolFiles = fs.readdirSync(spoolDir).filter(f => f.endsWith('.json'));
+  assert.equal(spoolFiles.length, 1);
+});
 
 test('hook は未送信の push 要求だけを指示に出す（送信済み・他人ownerは出さない）', t => {
   const home = tempHome(t);

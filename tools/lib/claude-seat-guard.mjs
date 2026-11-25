@@ -57,7 +57,19 @@ export async function evaluateClaudeSeatGuard({ home, now = Date.now, fetchImpl,
     } else if (fiveHourPercent != null && fiveHourPercent >= FIVE_HOUR_BLOCK_PERCENT && fiveHourFuture) {
       verdict = { blocked: true, reason: 'five-hour-threshold', weeklyPercent, fiveHourPercent, resetsAt: new Date(fiveHour.resetsAt).toISOString(), source };
     } else if (weeklyPercent == null && fiveHourPercent == null) {
-      verdict = { blocked: false, reason: 'usage-unavailable', weeklyPercent: null, fiveHourPercent: null, resetsAt: null, source };
+      const staleCache = readJson(path.join(home, '.claude', 'quota-claude-window-cache.json'));
+      const staleWeekly = Array.isArray(staleCache?.windows) ? staleCache.windows.find(row => row?.window === '7d') : null;
+      const staleWeeklyPercent = finitePercent(staleWeekly?.usedPercent);
+      const staleWeeklyFuture = Number.isFinite(staleWeekly?.resetsAt) && staleWeekly.resetsAt > at;
+      const lastState = readJson(path.join(home, '.claude', 'claude-seat-guard-state.json'));
+      const lastReset = Date.parse(lastState?.resetsAt ?? '');
+      if (staleWeeklyPercent != null && staleWeeklyPercent >= weeklyThreshold && staleWeeklyFuture) {
+        verdict = { blocked: true, reason: 'weekly-threshold', weeklyPercent: staleWeeklyPercent, fiveHourPercent: null, resetsAt: new Date(staleWeekly.resetsAt).toISOString(), source: 'stale-cache' };
+      } else if (lastState?.blocked === true && !['simulate', 'pause-file'].includes(lastState?.source) && Number.isFinite(lastReset) && lastReset > at) {
+        verdict = { blocked: true, reason: 'sticky-last-blocked', weeklyPercent: finitePercent(lastState.weeklyPercent), fiveHourPercent: finitePercent(lastState.fiveHourPercent), resetsAt: new Date(lastReset).toISOString(), source: 'last-state' };
+      } else {
+        verdict = { blocked: false, reason: 'usage-unavailable', weeklyPercent: null, fiveHourPercent: null, resetsAt: null, source };
+      }
     } else {
       verdict = { blocked: false, reason: 'below-threshold', weeklyPercent, fiveHourPercent, resetsAt: null, source };
     }

@@ -89,6 +89,7 @@
     {"path": "tools/kim-inbox-relay.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "Stop で kim への受信箱配達を検証する"},
     {"path": "tools/kim-inbox.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/kim-inbox-kind.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の kind 判定を全PCで共有する実行時依存"},
+    {"path": "tools/lib/kim-inbox-merge-handoff.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox のマージ可否依頼の検出を全PCで共有する実行時依存"},
     {"path": "tools/lib/kim-discord-allowlist.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/fleet-owner.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox / notify-owner が使う PC 所有者解決（notify-owner から切り出し）"},
     {"path": "tools/notify-owner.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},

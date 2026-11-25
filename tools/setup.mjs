@@ -78,6 +78,7 @@ function readNonempty(target, kind) {
 }
 function nested(value, dotted) { return dotted.split('.').reduce((v, key) => v?.[key], value); }
 function checkTaskDetails(spec, info) {
+  if (spec.expectDisabled && info.state !== 'Disabled') return false;
   if (spec.requiredActionPattern && !(info.actions || []).some(action => new RegExp(spec.requiredActionPattern, 'i').test(String(action)))) return false;
   if (spec.maxIntervalMinutes && (!info.intervals?.length || !info.intervals.some(n => n > 0 && n <= spec.maxIntervalMinutes) || !(info.executionMinutes > 0 && info.executionMinutes < spec.maxIntervalMinutes))) return false;
   if (spec.requireActionTarget) {
@@ -102,7 +103,7 @@ function checkTaskDetails(spec, info) {
 }
 function readTaskDetails(name) {
   const quotedName = "'" + name.replaceAll("'", "''") + "'";
-  const command = `[Console]::OutputEncoding=[Text.Encoding]::UTF8; $ErrorActionPreference='Stop'; $task=Get-ScheduledTask -TaskName ${quotedName}; $info=$task | Get-ScheduledTaskInfo; [pscustomobject]@{actions=@($task.Actions | ForEach-Object { $_.Execute + ' ' + $_.Arguments }); intervals=@($task.Triggers | Where-Object { $_.Enabled -ne $false -and $_.Repetition.Interval } | ForEach-Object { [Xml.XmlConvert]::ToTimeSpan($_.Repetition.Interval).TotalMinutes }); executionMinutes=[Xml.XmlConvert]::ToTimeSpan($task.Settings.ExecutionTimeLimit).TotalMinutes; lastRunTime=$info.LastRunTime.ToUniversalTime().ToString('o')} | ConvertTo-Json -Compress`;
+  const command = `[Console]::OutputEncoding=[Text.Encoding]::UTF8; $ErrorActionPreference='Stop'; $task=Get-ScheduledTask -TaskName ${quotedName}; $info=$task | Get-ScheduledTaskInfo; [pscustomobject]@{state=[string]$task.State; actions=@($task.Actions | ForEach-Object { $_.Execute + ' ' + $_.Arguments }); intervals=@($task.Triggers | Where-Object { $_.Enabled -ne $false -and $_.Repetition.Interval } | ForEach-Object { [Xml.XmlConvert]::ToTimeSpan($_.Repetition.Interval).TotalMinutes }); executionMinutes=[Xml.XmlConvert]::ToTimeSpan($task.Settings.ExecutionTimeLimit).TotalMinutes; lastRunTime=$info.LastRunTime.ToUniversalTime().ToString('o')} | ConvertTo-Json -Compress`;
   try {
     return JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: 15000,

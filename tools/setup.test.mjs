@@ -445,7 +445,8 @@ for (const [name, change, expected] of [
   ['execution longer than interval must be repaired', { cadence: true, intervals: [30], executionMinutes: 55 }, 'NG'],
   ['old direct hourly action must be migrated to bootstrap', { requiredActionPattern: 'nightly-bootstrap\\.ps1.*--hourly' }, 'NG'],
   ['expected action pattern accepts matching arguments', { requiredActionPattern: 'stall-sweeper\\.mjs.*--apply' }, 'OK'],
-  ['expectDisabled skips maxRunAgeHours so intentionally disabled tasks stay OK', { age: 60, expectDisabled: true }, 'OK'],
+  ['expectDisabled skips maxRunAgeHours so intentionally disabled tasks stay OK', { age: 60, expectDisabled: true, state: 'Disabled' }, 'OK'],
+  ['expectDisabled rejects an enabled task', { expectDisabled: true, state: 'Ready' }, 'NG'],
 ]) {
   test(`scheduled-task: ${name}`, (t) => {
     const home = temp('setup-task-info-');
@@ -460,6 +461,7 @@ for (const [name, change, expected] of [
     write(mf, JSON.stringify(manifest([item('task:test', 'scheduled-task', spec)])));
     write(fixture, JSON.stringify(change.absent ? {} : { TestTask: {
       registered: change.registered ?? true,
+      state: change.state ?? 'Ready',
       intervals: change.intervals, executionMinutes: change.executionMinutes ?? 29,
       actions: [`wscript.exe //nologo "${wrapper}" "C:\\Program Files\\nodejs\\node.exe" "${script}" "--apply"`],
       lastRunTime: change.lastRunTime ?? new Date(Date.now() - (change.age ?? 1) * 3600000).toISOString(),

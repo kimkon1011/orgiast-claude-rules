@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { jpHolidays, isBusinessDay, closedStreakAfter, lastBusinessDayOnOrBefore, addBusinessDays } from './lib/jp-business-days.mjs';
-import { planItem, stageOf, buildMorningDigest, parseScheduleLines, buildRow, upsertRows, run, withMeta, parseMeta, askText, extractSourceRows, captureHook } from './schedule-autopilot.mjs';
+import { planItem, stageOf, buildMorningDigest, parseScheduleLines, buildRow, upsertRows, run, withMeta, parseMeta, askText, extractSourceRows, captureHook, addEntries, isAttendanceTask } from './schedule-autopilot.mjs';
 
 const at = s => new Date(`${s}:00+09:00`);
 const row = (over = {}) => ({ id: 'S-1', title: '課題提供企業 第4便の送信', kind: '提出', due: '2026-11-23', status: '未着手', assignee: '008', action: '122社へ送る', notes: '', ...over });
@@ -68,6 +68,14 @@ function fakeLedger(initial = []) {
   return { rows, read: async () => rows.map(r => ({ ...r })), append: async add => { rows.push(...add.map(r => ({ ...r }))); },
     patch: async (id, changes) => { const r = rows.find(x => x.id === id); Object.assign(r, changes); return r; } };
 }
+
+test('出欠返答タスクだけを除外し、日時確定済みの会食本体は残す', async () => {
+  assert.equal(isAttendanceTask('なっちゃん食事会の出欠を返信'), true);
+  assert.equal(isAttendanceTask('12/3 19:00 会食（〇〇様）'), false);
+  const ledger = fakeLedger();
+  await addEntries(os.tmpdir(), [{ title: 'なっちゃん食事会の出欠を返信', due: '2026-12-01' }, { title: '12/3 19:00 会食（〇〇様）', due: '2026-12-03 19:00' }], { deps: { ledger }, now: at('2026-11-25T10:00') });
+  assert.deepEqual(ledger.rows.map(x => x.title), ['12/3 19:00 会食（〇〇様）']);
+});
 
 test('書き出し: 同じ予定は重複させず期日だけ更新', async () => {
   const ledger = fakeLedger();

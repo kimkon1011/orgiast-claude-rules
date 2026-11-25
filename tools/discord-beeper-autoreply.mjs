@@ -15,6 +15,7 @@ import { addItem as addKimInboxItem } from './kim-inbox.mjs';
 import { resolveDiscordLink } from './discord-beeper-link.mjs';
 import { collectReadableContent } from './lib/autoreply-attachments.mjs';
 import { extractSearchTerms, searchRelated } from './lib/autoreply-related.mjs';
+import { searchDriveFacts } from './lib/autoreply-drive-facts.mjs';
 import { LEARN_SYSTEM, learningJson, appendUnique } from './lib/autoreply-learning.mjs';
 import { isTrialSelfDecline, hasTrialStarted, trialDeclineAnswer } from './lib/trial-self-decline.mjs';
 import { beeperFetch as beeperFetchFn } from './beeper-api.mjs';
@@ -361,8 +362,9 @@ export async function runOnce(options = {}) {
           }
           // Search related conversations for context
           const docTexts = collected.documents.map(d => d.text);
+          const terms = await extractSearchTerms(question, docTexts, llm);
           const related = await searchRelated({
-            terms: await extractSearchTerms(question, docTexts, llm),
+            terms,
             question,
             llm,
             beeperFetch: options.beeperFetch || ((endpoint, init) => beeperFetchFn(endpoint, { ...init, fetchImpl: options.fetchImpl, timeoutMs: 5000 })),
@@ -384,6 +386,7 @@ export async function runOnce(options = {}) {
             rules: read(path.join(home, '.claude', 'discord-autoreply', 'rules.md')),
             corrections: readCorrections().filter(row => row.outcome !== 'expired').slice(-30),
             ...(related.length ? { related } : {}),
+            drive: await (options.searchDriveFactsImpl || searchDriveFacts)({ message: question, documents: collected.documents, terms, llm }),
             ...(collected.images.length ? { images: collected.images } : {}),
             ...(collected.documents.length ? { documents: collected.documents } : {}),
           };

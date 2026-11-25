@@ -283,7 +283,8 @@ export async function flushOutbox(home, deps) {
 }
 export async function addEntries(home, inputs, { deps, now = new Date(), sessionId = '' } = {}) {
   const config = loadAutopilotConfig(home), pc = resolveFleetLabel(home), today = jstNow(now).date;
-  const rows = inputs.map(input => buildRow(input, { today, pc, sessionId }));
+  const rows = inputs.filter(input => !isAttendanceTask(input.title || input.action)).map(input => buildRow(input, { today, pc, sessionId }));
+  if (!rows.length) return { ok: true, rows: [], excluded: inputs.length };
   try {
     const d = deps || await ledgerDeps(home, config);
     await flushOutbox(home, d);
@@ -295,6 +296,9 @@ export async function addEntries(home, inputs, { deps, now = new Date(), session
 // 例: 【予定】2026-11-24 09:00｜課題提供企業 第4便の送信｜種別:送信｜担当:008｜金さん判断:送ってよいか｜推奨:送る｜文面:https://...
 const KEYS = { '種別': 'type', '担当': 'assignee', 'やること': 'action', '金さん判断': 'needsKim', '推奨': 'recommend', '文面': 'draftUrl', '準備日数': 'prepDays', '会社': 'company' };
 const TYPE_WORDS = { '送信': 'send', '配信': 'send', '送付': 'send', '承認': 'approval', '判断': 'approval', '納期': 'delivery', '納品': 'delivery', 'やること': 'task', 'タスク': 'task' };
+export function isAttendanceTask(title) {
+  return /出欠|参加可否|出席可否|出欠確認|出欠連絡|ご出席の可否|参加の可否/.test(String(title || ''));
+}
 export function parseScheduleLines(text) {
   const out = [];
   for (const raw of String(text || '').split(/\r?\n/)) {
@@ -318,7 +322,7 @@ export async function captureHook({ raw, home = defaultHome(), deps } = {}) {
   const entries = parseScheduleLines(text);
   if (!entries.length) return { captured: 0 };
   const result = await addEntries(home, entries, { deps, sessionId: input.session_id || '' });
-  return { captured: entries.length, ...result };
+  return { captured: result.rows?.length ?? 0, ...result };
 }
 
 // ---------- 届ける ----------

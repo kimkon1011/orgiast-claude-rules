@@ -123,6 +123,15 @@ test('executeCheck retries a transient network failure once and reports a repeat
   assert.equal(calls, 2); assert.equal(failed.code, null); assert.equal(failed.networkTransient, true);
   assert.match(failed.text, /判定不能: ネットワーク一過性エラー（1回再試行後）/);
 });
+test('executeCheck does not retry or report a transient network error when the check succeeds', () => {
+  let calls = 0;
+  const result = executeCheck({ check: 'git fetch origin main' }, { shellPath: null, spawnImpl: () => {
+    calls++; return { status: 0, stdout: '', stderr: 'warning: Could not resolve host during an earlier attempt' };
+  } });
+  assert.equal(calls, 1);
+  assert.equal(result.code, 0);
+  assert.equal(result.networkTransient, undefined);
+});
 test('executeCheck reports a timeout as the bound and how to extend it, not as a shell failure', () => {
   const error = Object.assign(new Error('spawnSync C:\Program Files\Git\bin\bash.exe ETIMEDOUT'), { code: 'ETIMEDOUT' });
   const result = executeCheck({ check: 'slow', checkTimeoutMs: 45000 }, { home: tmp(), shellPath: null, spawnImpl: () => ({ status: null, error, stdout: '' }) });

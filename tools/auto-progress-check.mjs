@@ -181,10 +181,12 @@ export function executeCheck(row, { home, spawnImpl = spawnSync, shellPath = res
   const run = () => shellPath ? spawnImpl(shellPath, ['-c', normalizeCheckForBash(row.check)], options)
     : spawnImpl(row.check, { ...options, shell: true });
   let result = run();
-  let networkTransient = NETWORK_TRANSIENT_PATTERN.test(`${result.stdout || ''}\n${result.stderr || ''}\n${result.error?.message || ''}`);
+  let networkTransient = (result.error || result.status !== 0)
+    && NETWORK_TRANSIENT_PATTERN.test(`${result.stdout || ''}\n${result.stderr || ''}\n${result.error?.message || ''}`);
   if (networkTransient) {
     result = run();
-    networkTransient = NETWORK_TRANSIENT_PATTERN.test(`${result.stdout || ''}\n${result.stderr || ''}\n${result.error?.message || ''}`);
+    networkTransient = (result.error || result.status !== 0)
+      && NETWORK_TRANSIENT_PATTERN.test(`${result.stdout || ''}\n${result.stderr || ''}\n${result.error?.message || ''}`);
   }
   const gotStderr = String(result.stderr || '');
   const code = networkTransient || result.error || result.signal || (result.status !== 0 && hasCheckCrash(gotStderr)) ? null : result.status;

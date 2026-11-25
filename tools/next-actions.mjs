@@ -57,8 +57,69 @@ function loadSuppressRules(file) {
   } catch { return []; }
 }
 
+const HANDOFF_AUDIT_ID_RE = /handoff-audit:([0-9a-f]{16})/gi;
+
+/**
+ * 再発検証済み handoff-audit ID 台帳を読む。
+ * リポジトリ配布分と各席のローカル追記分の和集合。無い・壊れていても空で続行する。
+ */
+export function loadVerifiedAuditIds(options = {}) {
+  const ids = new Set();
+  const verifiedAtById = new Map();
+  const home = options.home || os.homedir();
+  const repoFile = options.repoFile || path.join(REPO_ROOT, 'config', 'handoff-audit-verified.json');
+  const homeFile = options.homeFile
+    || process.env.NEXT_ACTIONS_VERIFIED_AUDIT_FILE
+    || path.join(home, '.claude', 'handoff-audit-verified.json');
+  for (const file of [repoFile, homeFile]) {
+    try {
+      const text = readFile(file);
+      if (!text.trim()) continue;
+      const parsed = JSON.parse(text);
+      const entries = Array.isArray(parsed?.verified) ? parsed.verified : [];
+      for (const entry of entries) {
+        if (typeof entry?.id !== 'string' || !/^[0-9a-f]{16}$/i.test(entry.id)) continue;
+        const id = entry.id.toLowerCase();
+        ids.add(id);
+        if (typeof entry.verifiedAt === 'string' && entry.verifiedAt.trim()) {
+          verifiedAtById.set(id, entry.verifiedAt.trim());
+        }
+      }
+    } catch { /* 無い・壊れていても空集合で続行 */ }
+  }
+  return { ids, verifiedAtById };
+}
+
 function candidateText(action) {
-  return Object.values(action || {}).filter((value) => typeof value === 'string').join(' ');
+  const values = Object.values(action || {});
+  const parts = [];
+  for (const value of values) {
+    if (typeof value === 'string') parts.push(value);
+    else if (Array.isArray(value)) parts.push(...value.filter((item) => typeof item === 'string'));
+  }
+  return parts.join(' ');
+}
+
+function findVerifiedAuditId(action, verifiedAuditIds) {
+  if (!verifiedAuditIds?.size) return null;
+  HANDOFF_AUDIT_ID_RE.lastIndex = 0;
+  for (const match of candidateText(action).matchAll(HANDOFF_AUDIT_ID_RE)) {
+    const id = match[1].toLowerCase();
+    if (verifiedAuditIds.has(id)) return id;
+  }
+  return null;
+}
+
+/** LLM 入力の残TODOから検証済み handoff-audit 行を除く */
+export function filterVerifiedAuditTodoLines(todo, verifiedAuditIds) {
+  if (!verifiedAuditIds?.size) return todo;
+  return String(todo ?? '').split(/\r?\n/).filter((line) => {
+    HANDOFF_AUDIT_ID_RE.lastIndex = 0;
+    for (const match of line.matchAll(HANDOFF_AUDIT_ID_RE)) {
+      if (verifiedAuditIds.has(match[1].toLowerCase())) return false;
+    }
+    return true;
+  }).join('\n');
 }
 
 function landedPrReferences(action) {
@@ -73,8 +134,14 @@ function landedPrReferences(action) {
 /**
  * origin/main に着地済みの PR、または設定済みの抑止ルールに一致する候補を分ける。
  * landedPrNumbers が null の場合は git 照合を行わず、候補を素通しする。
+ * verifiedAuditIds に含まれる handoff-audit:<id> も除外する。
  */
-export function filterLandedAndSuppressed(candidates, { landedPrNumbers = null, suppressRules = [] } = {}) {
+export function filterLandedAndSuppressed(candidates, {
+  landedPrNumbers = null,
+  suppressRules = [],
+  verifiedAuditIds = null,
+  verifiedAtById = null,
+} = {}) {
   const actions = [], excluded = [];
   for (const action of candidates) {
     const landed = landedPrNumbers && [...landedPrReferences(action)].find((number) => landedPrNumbers.has(number));
@@ -82,8 +149,13 @@ export function filterLandedAndSuppressed(candidates, { landedPrNumbers = null, 
       rule.regex.lastIndex = 0;
       return rule.regex.test(candidateText(action));
     });
+    const verifiedId = findVerifiedAuditId(action, verifiedAuditIds);
     if (landed) excluded.push({ action, reason: `PR #${landed} は origin/main に着地済み` });
     else if (suppressed) excluded.push({ action, reason: suppressed.reason });
+    else if (verifiedId) {
+      const verifiedAt = verifiedAtById?.get(verifiedId) || '不明';
+      excluded.push({ action, reason: `handoff-audit:${verifiedId} は再発検証済み（${verifiedAt}）` });
+    }
     else actions.push(action);
   }
   return { actions, excluded };
@@ -394,7 +466,12 @@ export async function runNextActions(options = {}) {
   const base = path.join(home, '.claude'), logs = path.join(base, 'logs');
   let prs = [];
   try { const raw = await runExec(execImpl, 'gh', ['pr', 'list', '--repo', 'kimkon1011/orgiast-claude-rules', '--json', 'number,title,updatedAt,isDraft', '--limit', '30']); const parsed = JSON.parse(raw); if (Array.isArray(parsed)) prs = parsed; } catch {}
-  const todo = readFile(path.join(base, 'next-session.md'));
+  const verifiedAudits = options.verifiedAudits || loadVerifiedAuditIds({
+    home,
+    repoFile: options.verifiedAuditRepoFile,
+    homeFile: options.verifiedAuditHomeFile,
+  });
+  const todo = filterVerifiedAuditTodoLines(readFile(path.join(base, 'next-session.md')), verifiedAudits.ids);
   const day = now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' });
   const errors = readFile(path.join(logs, `nightly-batch-${day}.log`)).split(/\r?\n/).filter(isNightlyError);
   const p1 = ['discord-task-digest.log', 'mail-task-digest.log'].flatMap((name) => {
@@ -418,7 +495,12 @@ export async function runNextActions(options = {}) {
   const log = options.log || console.log, errorLog = options.error || console.error;
   const landedPrNumbers = await landedPrNumbersFromMain(options.gitExecImpl || execImpl, options.cwd || REPO_ROOT);
   const suppressRules = loadSuppressRules(options.suppressFile || path.join(REPO_ROOT, 'config', 'next-actions-suppress.json'));
-  const filtered = filterLandedAndSuppressed(actions, { landedPrNumbers, suppressRules });
+  const filtered = filterLandedAndSuppressed(actions, {
+    landedPrNumbers,
+    suppressRules,
+    verifiedAuditIds: verifiedAudits.ids,
+    verifiedAtById: verifiedAudits.verifiedAtById,
+  });
   actions = filtered.actions;
   actions = await filterStalePrActions(actions, execImpl, errorLog);
   actions = await filterBackupActions(actions, execImpl, log, now);

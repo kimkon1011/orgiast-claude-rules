@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyFleet, formatLiveness, loadPcMap, TOOL_INTRODUCED, toSheetState, splitDiscordContent, postToDiscordWebhook } from './fleet-liveness.mjs';
+import { classifyFleet, formatLiveness, loadPcMap, TOOL_INTRODUCED, toSheetState, splitDiscordContent, postToDiscordWebhook, postFleetSheet } from './fleet-liveness.mjs';
 
 const now = new Date('2026-08-27T03:00:00.000Z');
 const message = (label, hostname, timestamp, email = 'person@example.com') => ({
@@ -320,4 +320,42 @@ test('postToDiscordWebhook: 2通目以降の送信前にdelayMsだけ待つ', as
   });
   assert.equal(ok, true);
   assert.deepEqual(sleepCalls, [1000, 1000]);
+});
+
+test('postFleetSheet: 1回目のTimeoutError後に1回だけ再送して成功する', async () => {
+  let callCount = 0;
+  const sleepCalls = [];
+  const response = { ok: true };
+  const actual = await postFleetSheet('https://sheet.example.com', { kind: 'liveness' }, {
+    fetchImpl: async () => {
+      callCount++;
+      if (callCount === 1) throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      return response;
+    },
+    sleep: async (ms) => { sleepCalls.push(ms); },
+  });
+  assert.equal(actual, response);
+  assert.equal(callCount, 2);
+  assert.deepEqual(sleepCalls, [5_000]);
+});
+
+test('postFleetSheet: 2回ともTimeoutErrorなら例外を投げず失敗を返す', async () => {
+  let callCount = 0;
+  const errors = [];
+  const originalConsoleError = console.error;
+  console.error = (message) => { errors.push(message); };
+  try {
+    const actual = await postFleetSheet('https://sheet.example.com', { kind: 'liveness' }, {
+      fetchImpl: async () => {
+        callCount++;
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      },
+      sleep: async () => {},
+    });
+    assert.equal(actual, null);
+    assert.equal(callCount, 2);
+    assert.deepEqual(errors, ['fleet-liveness: シート書き込みに失敗 (TimeoutError: The operation was aborted due to timeout)']);
+  } finally {
+    console.error = originalConsoleError;
+  }
 });

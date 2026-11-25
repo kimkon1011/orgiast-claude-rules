@@ -230,7 +230,31 @@ export function formatLiveness(result) {
   return lines.join('\n');
 }
 
-export async function main(argv = process.argv.slice(2), now = new Date()) {
+export async function postFleetSheet(url, payload, {
+  fetchImpl = fetch,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  timeoutMs = 60_000,
+} = {}) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await fetchImpl(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'User-Agent': 'orgiast-fleet-liveness/1.0' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      if (attempt === 0) {
+        await sleep(5_000);
+        continue;
+      }
+      console.error(`fleet-liveness: シート書き込みに失敗 (${error.name}: ${error.message})`);
+      return null;
+    }
+  }
+}
+
+export async function main(argv = process.argv.slice(2), now = new Date(), options = {}) {
   const allowed = new Set(['--json', '--post', '--post-sheet', '--append-unmatched']);
   const invalid = argv.find((arg) => !allowed.has(arg));
   if (invalid) { console.error(`不正な引数: ${invalid}`); return 2; }
@@ -286,7 +310,8 @@ export async function main(argv = process.argv.slice(2), now = new Date()) {
     const checkedAt = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
     const payload = { token: fleetEnv.FLEET_SHEET_TOKEN, kind: 'liveness', checkedAt, items };
     if (argv.includes('--append-unmatched')) payload.appendUnmatched = true;
-    const response = await fetch(fleetEnv.FLEET_SHEET_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': 'orgiast-fleet-liveness/1.0' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(20_000) });
+    const response = await postFleetSheet(fleetEnv.FLEET_SHEET_URL, payload, options);
+    if (!response) return 1;
     if (!response.ok) { console.error(`シート送信が HTTP ${response.status}`); return 1; }
     const body = await response.json();
     if (!body.ok) { console.error(`シート書き込み失敗: ${body.error || 'unknown'}`); return 1; }

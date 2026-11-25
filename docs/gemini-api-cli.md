@@ -11,6 +11,8 @@
 - `node tools/install-gemini-api-cli.mjs --json`: 24時間ごとの更新確認、導入、オフライン検証結果をJSONで表示する。
 - 実API確認は課金を伴うため、明示時だけ `--live-check` を追加する。
 
+PreToolUse の `gemini-api-budget-gate.mjs` は月次予算が `stop` の間、課金を伴う `gemini-api` 実呼び出しを停止する。`--help`、`--dry-run`、`whoami` などの安全な確認は利用でき、実処理は `llm-ask --provider openrouter` へ切り替える。
+
 ## 解除
 
 1. `gemini-api auth logout` で保存済み資格情報を削除する。

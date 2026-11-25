@@ -149,5 +149,10 @@ Full CLI reference: [aistudio.google.com/docs/cli.md](https://aistudio.google.co
 - 画像生成・PDF/画像/動画/音声の読解・文字起こし・長い調査（Deep Research は `--background`）は gemini-api へ。Claude は指示と結果の検証だけ。
 - テキストの分類・要約・下書きは従来どおり `tools/llm-ask.mjs` を使う。
 - 実行前に `--dry-run`。動画生成・music・Deep Research、20件超の一括は CLAUDE.md §2.8.0 の実測→COST-ESTIMATE→承認に従う。
+- コマンド選択は通常 `--help`（`--usage` は45KB）で確認し、`--body` JSON を組むときだけ `--schema` を `jq` で必要箇所へ絞る。
+- API 呼び出しは `--dry-run`（機械判定には `--dry-run --output-format json`）で先に確認する。
+- `generate`、`agent run`、`agent status --stream` の離散JSON出力や `--jq` 利用時は `--stream=false --output-format json` を付ける。
+- media が返すファイルパスと agent/model 実行が返す interaction ID を保持し、後続の複数手順へ渡す。
+- 予算ガードが `stop` のときは実呼び出しが hook で止まる。代替は `node tools/llm-ask.mjs --provider openrouter ...`。
 - 402/billing エラーなら他レーン（llm-ask の openrouter 等）へ回し kim-inbox に記録する。
 - 出典・ライセンス: google-gemini/gemini-skills（Apache-2.0 / CC BY 4.0）。

@@ -43,6 +43,15 @@ function parseEnvKey(text) {
 function parseWhoami(text) {
   try {
     const value = JSON.parse(String(text || '').trim());
+    const credentials = value?.credentials;
+    if (credentials && typeof credentials === 'object') {
+      for (const name of ['api-key', 'access-token']) {
+        const source = credentials[name]?.source;
+        if (typeof source === 'string' && source && source !== 'unset') {
+          return { source, stored: /keyring|keychain|credential manager|credential_manager/i.test(source) };
+        }
+      }
+    }
     const findSource = item => {
       if (!item || typeof item !== 'object') return '';
       for (const key of ['source', 'credential_source', 'api_key_source']) {
@@ -55,7 +64,7 @@ function parseWhoami(text) {
       return '';
     };
     const source = findSource(value);
-    return { source: String(source), stored: /keychain|credential manager|credential_manager/i.test(String(source)) };
+    return { source: String(source), stored: /keyring|keychain|credential manager|credential_manager/i.test(String(source)) };
   } catch { return { source: '', stored: false }; }
 }
 

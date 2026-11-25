@@ -96,6 +96,23 @@ test('missing .env continues with keyStored false', async () => {
   assert.equal(f.calls.some(call => call.args[0] === 'configure'), false);
 });
 
+test('current whoami credentials api-key keyring is recognized without leaking its value', async () => {
+  const masked = 'AQ******eQ';
+  const f = fixture();
+  f.options.spawnImpl = (exe, args, opts) => {
+    f.calls.push({ exe, args, opts });
+    if (args[0] === 'whoami') return { status: 0, stdout: JSON.stringify({ credentials: { 'access-token': { source: 'unset' }, 'api-key': { source: 'keyring', value: masked } } }), stderr: '' };
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const result = await installGeminiApiCli(f.options);
+  const marker = f.files.get('/home/test/.claude/.gemini-api-cli-installed.json');
+  assert.equal(result.keyStored, true);
+  assert.equal(result.keySource, 'keyring');
+  assert.equal(result.errors.some(value => value.includes('Credential read-back did not report the OS keychain')), false);
+  assert.equal(JSON.stringify(result).includes(masked), false);
+  assert.equal(String(marker).includes(masked), false);
+});
+
 test('dry-run returns a plan without network, spawn, or writes', async () => {
   const f = fixture({ fetchImpl: async () => { throw new Error('network called'); }, spawnImpl: () => { throw new Error('spawn called'); } });
   const result = await installGeminiApiCli({ ...f.options, dryRun: true });

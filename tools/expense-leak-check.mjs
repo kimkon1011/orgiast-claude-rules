@@ -142,9 +142,53 @@ export function childSearch(script, args, timeout) {
     });
   });
 }
+/** Map freee auth / DB bootstrap errors to a secret-free nightly failReason. */
+export function classifyDbConnectFailReason(error) {
+  const chain = [];
+  const seen = new Set();
+  const push = (err) => {
+    if (!err || seen.has(err)) return;
+    seen.add(err);
+    chain.push(err);
+    if (Array.isArray(err.errors)) for (const nested of err.errors) push(nested);
+    if (err.cause) push(err.cause);
+  };
+  push(error);
+  const codes = chain.map((e) => (e.code != null ? String(e.code) : '')).filter(Boolean);
+  const msgs = chain.map((e) => String(e.message ?? '')).join('\n');
+  const httpFromMsg = msgs.match(/(?:トークン更新に失敗:\s*)?HTTP\s+(\d{3})/i)?.[1]
+    || msgs.match(/freee-refresh-http-(\d{3})/i)?.[1];
+  if (codes.includes('ERR_MODULE_NOT_FOUND') || /Cannot find (?:package|module) ['"]?postgres/i.test(msgs)) {
+    return 'db-connect:module-missing';
+  }
+  if (/PURCHASING_APP_DATABASE_URL|見つかりません|ENOENT/i.test(msgs) && /env\.local|DATABASE_URL|見つかりません/i.test(msgs)) {
+    return 'db-connect:db-url-missing';
+  }
+  if (codes.includes('28P01') || /password authentication failed|SASL|invalid.?authorization|authentication failed/i.test(msgs)) {
+    return 'db-connect:db-auth';
+  }
+  const networkCodes = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET']);
+  if (codes.some((c) => networkCodes.has(c)) || /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|ECONNRESET|fetch failed|certificate|SELF_SIGNED|CERT_|getaddrinfo/i.test(msgs)) {
+    return 'db-connect:network';
+  }
+  if (/freee_tokens|default 行/i.test(msgs)) return 'db-connect:freee-row-missing';
+  if (/トークン更新|freee-refresh-http/i.test(msgs) && httpFromMsg) return `db-connect:freee-refresh-http-${httpFromMsg}`;
+  if (/トークン更新/i.test(msgs)) return 'db-connect:freee-refresh-http';
+  const tagged = msgs.match(/\bdb-connect:(module-missing|db-url-missing|db-auth|network|freee-row-missing|freee-refresh-http(?:-\d{3})?|unknown)\b/);
+  if (tagged) return `db-connect:${tagged[1]}`;
+  return 'db-connect:unknown';
+}
 export async function makeFreeeGet() {
   let token;
-  try { token = await getAccessToken(); } catch { throw new Error('freee authentication failed (check DB/token configuration)'); }
+  try {
+    token = await getAccessToken();
+  } catch (error) {
+    const reason = classifyDbConnectFailReason(error);
+    const wrapped = new Error(`freee authentication failed (${reason})`);
+    wrapped.cause = error;
+    wrapped.failReason = reason;
+    throw wrapped;
+  }
   return async (path, params = {}) => {
     if (!/^\/api\/1\/(walletables|wallet_txns(?:\/\d+)?)$/.test(path)) throw new Error('Unsupported freee read');
     const url = new URL(`https://api.freee.co.jp${path}`);
@@ -289,7 +333,7 @@ export async function runCheck(opts, injected = {}) {
   async function checkpoint() { await save(opts.out, result); if (!opts.dryRun) await save(opts.statePath, state); }
   let stage = 'db-connect';
   try {
-    const get = injected.freeeGet || await makeFreeeGet();
+    const get = injected.freeeGet || await (injected.makeFreeeGet || makeFreeeGet)();
     stage = 'freee-read';
     const inventory = await collectTxns(get, opts, state, timeLeft);
     Object.assign(result, { wallets: inventory.wallets, statusCounts: inventory.statusCounts, candidateTotal: inventory.candidates.length });
@@ -370,7 +414,9 @@ export async function runCheck(opts, injected = {}) {
       state.lastRunAt = `${opts.today}T03:00:00+09:00`;
     } else {
       result.failed = true;
-      result.failReason = stage;
+      result.failReason = stage === 'db-connect'
+        ? (error.failReason || classifyDbConnectFailReason(error))
+        : stage;
     }
     await checkpoint();
     return result;

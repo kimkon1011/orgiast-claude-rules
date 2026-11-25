@@ -494,7 +494,7 @@ test('dedicated sweep registration and required converge manifest', async () => 
   const manifest = JSON.parse(await fs.readFile(new URL('./setup-manifest.json', import.meta.url), 'utf8'));
   const sweep = manifest.items.find(i => i.id === 'task:stalled-session-sweep');
   assert.equal(sweep.severity, 'required'); assert.equal(sweep.type, 'scheduled-task');
-  assert.deepEqual(sweep.spec, { requireActionTarget: true, maxRunAgeHours: 50, name: 'OrgiastStalledSessionSweep' });
+  assert.deepEqual(sweep.spec, { requireActionTarget: true, maxRunAgeHours: 50, expectDisabled: true, name: 'OrgiastStalledSessionSweep' });
   assert.deepEqual(sweep.repair, ['register-stalled-session-nightly.mjs']);
 });
 

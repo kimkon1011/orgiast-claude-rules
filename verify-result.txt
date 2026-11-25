@@ -1,0 +1,15 @@
+[log-1]
+cf374da0dbd9ee81416ded37fbdbbe5b511b4d83
+fix(kim-inbox): normalizeInboxText 強化 — UUID/hex 除去を追加 (#2697)
+
+ tools/kim-inbox.mjs      |  1 +
+ tools/kim-inbox.test.mjs | 12 ++++++------
+ 2 files changed, 7 insertions(+), 6 deletions(-)
+[branch]
+HEAD (detached)
+[status]
+（クリーン）
+[ahead]
+（なし — origin/main と同じ位置）
+[judge]
+3ファイル含む: no

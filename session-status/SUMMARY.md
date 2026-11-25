@@ -1,0 +1,121 @@
+# session-status SUMMARY  updated 2026-11-25 21:14 JST
+
+000は他PCのディスクを直接読まない。各PCが fleet-heartbeat ブランチの session-status/ に STATUS を置き、000が集める。
+
+## 到達（共有gitにSTATUSがあったか）
+- 000: ○ 最終更新 11/25 21:13
+- 004: × STATUSなし。原因: 未導入かオフライン、またはgit未同期。直し方: そのPCで gb-offload\\session-status.ps1 -Install を実行する。
+- 008: × STATUSなし。原因: 未導入かオフライン、またはgit未同期。直し方: そのPCで gb-offload\\session-status.ps1 -Install を実行する。
+- 011: ○ 最終更新 11/25 21:11
+- 014: ○ 最終更新 11/25 21:11
+- 015: × STATUSなし。原因: 未導入かオフライン、またはgit未同期。直し方: そのPCで gb-offload\\session-status.ps1 -Install を実行する。
+- 018: ○ 最終更新 11/25 21:11
+- 019: × STATUSなし。原因: 未導入かオフライン、またはgit未同期。直し方: そのPCで gb-offload\\session-status.ps1 -Install を実行する。
+- 999: × STATUSなし。原因: 未導入かオフライン、またはgit未同期。直し方: そのPCで gb-offload\\session-status.ps1 -Install を実行する。
+
+## 000の認証
+- { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\uers\\.claude\\projects", "configDirectory": "C:\\Users\\uers\\
+
+## 案件
+- 000・1p-space-1124・停止・最終更新 11/24 11:11、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・212coffee-move-1125・完了・最終更新 11/25 16:17、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
+- 000・account-inventory-1123・完了・最終更新 11/23 22:20、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・ai-cal-hide-1125・停止・最終更新 11/25 12:24、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・ai-disclaimer-always-1123・停止・最終更新 11/23 20:49、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
+- 000・akira-papa-cc-1125・完了・最終更新 11/25 20:57、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
+- 000・asset-candidates-1124・完了・最終更新 11/24 17:16、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
+- 000・cal-hide-cont-1125・完了・最終更新 11/25 16:50、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、ログに上限・ログアウト・エラー・期限なし・次:なし
+- 000・cc-probe-1125・停止・最終更新 11/25 12:13、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・cursor-migrate-1122・停止・最終更新 11/22 22:55、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
+- 000・deadline-sweep-1124・停止・最終更新 11/24 10:48、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・draft-stuck-1125・停止・最終更新 11/25 17:51、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
+- 000・eswar-sites-1125・停止・最終更新 11/25 17:13、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
+- 000・fire-drill-1124・完了・最終更新 11/24 15:23、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・freee-reauth-1125・完了・最終更新 11/25 10:44、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
+- 000・freee-reauth-db-1125・金さん待ち・最終更新 11/25 11:07、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 000・guild-furikomi-1124・停止・最終更新 11/24 15:32、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・inbound-router-1123・完了・最終更新 11/24 00:35、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー、次の手順が未着手・期限なし・次:なし
+- 000・iwata-line-1123・完了・最終更新 11/23 17:02、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・kyou-kigen-exec-1125・完了・最終更新 11/25 15:58、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・lbang-cc-1125・完了・最終更新 11/25 20:57、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
+- 000・learning-ishii-1124・完了・最終更新 11/24 09:06、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
+- 000・learning-yosuke-1123・完了・最終更新 11/23 21:50、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・merge-kim-1122・停止・最終更新 11/22 10:08、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・no-ai-disclaimer-1123・停止・最終更新 11/23 17:24、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・pr2723-fix-1125・完了・最終更新 11/25 16:11、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、金さん待ちの記述あり・期限なし・次:なし
+- 000・publish-check-rule-1123・停止・最終更新 11/23 19:23、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・rat-print-1124・完了・最終更新 11/24 08:48、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
+- 000・reply-wait-collect-1125・停止・最終更新 11/25 09:34、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・roudou-court-call-1124・完了・最終更新 11/24 11:52、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・roudou-discord-line-1123・完了・最終更新 11/23 16:22、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・roudou-evidence-collect・停止・最終更新 11/25 17:19、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・roudou-fm-netprint-1125・完了・最終更新 11/25 10:52、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・roudou-netprint-1124・停止・最終更新 11/24 22:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・roudou-nofav-1123・停止・最終更新 11/23 14:18、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・roudou-replies-1124・完了・最終更新 11/24 10:39、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・roudou-resume-1123・完了・最終更新 11/23 13:52、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・roudou-review-fax-1124・完了・最終更新 11/24 12:15、STATUS.mdなし、DONEあり・期限なし・次:なし
+- 000・roudou-sawada-fix-1125・完了・最終更新 11/25 10:26、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・roudou-sawada-send-1125・停止・最終更新 11/25 17:59、STATUS.mdなし、REPORTあり、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
+- 000・roudou-send-1124・完了・最終更新 11/24 09:37、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・roudou-v4-1124・完了・最終更新 11/24 17:15、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・roudou-v4-send-1124・完了・最終更新 11/24 17:32、STATUS.mdなし、DONEあり・期限なし・次:なし
+- 000・sales-exec-1123・完了・最終更新 11/23 21:12、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・sales-followup-1123・完了・最終更新 11/23 18:40、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・seisaku-offload-1125・完了・最終更新 11/25 11:55、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
+- 000・slayrsays-install-1125・完了・最終更新 11/25 18:30、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・souko-research-1125・停止・最終更新 11/25 19:17、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・stall-fix-1125 進行状況（未完了・DONE.txt なし）・完了・最終更新 11/25 20:32、STATUS.mdあり、DONEあり、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:緊急修正をテストして pr-land → kim-PC で --hourly を再実行して再開件数を数える → 全PCへ更新の指示を出し直す → 残り3点を着地 → REPORT と DONE。
+- 000・t706u-1125・停止・最終更新 11/25 11:43、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・tldv-auto-1124・停止・最終更新 11/24 16:01、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
+- 000・tokium-plaud-1124・完了・最終更新 11/24 13:28、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・trial-nao-1125・完了・最終更新 11/25 19:31、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・tsuji-a9-drive-1125・停止・最終更新 11/25 21:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・ucs-freee-1124・停止・最終更新 11/24 10:46、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・ucs-freee-auto-1124・完了・最終更新 11/25 13:27、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
+- 000・_discord-line-out・完了・最終更新 11/23 16:22、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 000・_discord-sato-raw-1123・停止・最終更新 11/21 21:28、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・_handoff-roudou-1123・停止・最終更新 11/23 14:18、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・3oku-9-17-1125・完了・最終更新 11/25 09:39、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
+- 011・3oku-9-17-1125-quota-test・停止・最終更新 11/25 09:26、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・account-inventory-1123・完了・最終更新 11/24 02:37、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
+- 011・bestone-reschedule-1125・完了・最終更新 11/25 11:35、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 011・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・dispatch-1122-21・停止・最終更新 11/22 21:48、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・eight-dai6-1125・停止・最終更新 11/25 18:32、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
+- 011・eight-venue-check-1125・完了・最終更新 11/25 20:27、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、ログに上限・ログアウト・エラー・期限なし・次:なし
+- 011・eight-wiaas-reply-1125・完了・最終更新 11/25 18:04、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
+- 011・gridbeyond-yosu-1125・金さん待ち・最終更新 11/25 11:38、STATUS.mdなし、REPORTあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・illumi-kono-claim-1125・停止・最終更新 11/25 18:46、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
+- 011・kyou-kigen-exec-1125・完了・最終更新 11/25 15:23、STATUS.mdなし、DONEあり、REPORTあり、金さん待ちの記述あり・期限なし・次:なし
+- 011・loop-check-1125・金さん待ち・最終更新 11/25 16:23、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、次の手順が未着手、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・plan3oku-11-work・停止・最終更新 11/25 20:58、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・reply-drafts-1125・完了・最終更新 11/25 19:28、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
+- 011・sales-14sha-1125・完了・最終更新 11/25 11:34、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 011・sales-followup・停止・最終更新 11/24 01:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・sales-followup-1123・完了・最終更新 11/23 18:18、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
+- 011・sales-next-contact・進行中・最終更新 11/25 20:55、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
+- 011・souko-kyujin-1125・完了・最終更新 11/25 19:40、STATUS.mdなし、DONEあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
+- 011・tangomuto-reply-1125・完了・最終更新 11/25 12:25、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 011・tasks・停止・最終更新 11/24 09:49、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・wiaas-pitch-1212・停止・最終更新 11/25 17:09、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 014・account-inventory-1123・完了・最終更新 11/23 21:37、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
+- 014・dispatch-1122-21・停止・最終更新 11/22 21:42、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 014・local-seo-1125・停止・最終更新 11/25 15:19、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 014・rescue-review-1122-23・停止・最終更新 11/22 23:11、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 014・sales-followup-1123・完了・最終更新 11/24 02:32、STATUS.mdなし、DONEあり、REPORTあり、金さん待ちの記述あり・期限なし・次:なし
+- 014・souko-kyujin-1125・停止・最終更新 11/25 19:19、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
+- 014・tasks・停止・最終更新 11/21 22:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 018・account-inventory-1123・完了・最終更新 11/23 21:45、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 018・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 018・coel-1125・完了・最終更新 11/25 19:52、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
+- 018・dispatch-1122-21・停止・最終更新 11/22 21:43、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 018・iwata-list-1126・金さん待ち・最終更新 11/25 21:04、STATUS.mdなし、REPORTあり、run.logあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 018・reply-drafts-1125-minpaku・完了・最終更新 11/25 19:55、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、次の手順が未着手・期限なし・次:なし
+- 018・reply-wait-collect-1125・停止・最終更新 11/25 09:35、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 018・t706u-1125・停止・最終更新 11/25 11:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 018・vercel-limit-1124・停止・最終更新 11/24 17:00、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+
+## 共有同期
+- 000のpush: 失敗 引数が null であるため、パラメーター 'Path' にバインドできません。
+- 収集ファイル: 

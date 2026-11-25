@@ -143,7 +143,7 @@ function create(home, options, lockWaitMs) {
     // Keep distinct jobs separate even when their text normalizes to the same prefix.
     if (options.dedupeKey) {
       const key = inboxDedupeKey(options.dedupeKey);
-      const existing = listInboxMatches(home, item => item.dedupeKey === key)[0];
+      const existing = listInboxMatches(home, item => item.dedupeKey === key && !item.autoExpired)[0];
       if (existing && options.progressAt && options.kind === 'info') {
         return update(home, existing.id, current => {
           if ((Date.parse(current.progressAt) || 0) >= Date.parse(options.progressAt)) return;
@@ -425,10 +425,11 @@ export function listInboxMatches(home, matches, { originals = false } = {}) {
 
 function archiveEntry(item) {
   const { id, createdAt, kind, status, dedupeKey, source, forwardMailId, forwardError,
-    answeredAt, lastAt, answer, text, sessionId, dailyProgress } = item;
+    answeredAt, lastAt, answer, text, sessionId, dailyProgress, autoExpired } = item;
   return { id, createdAt, kind, status, dedupeKey, source, forwardMailId, forwardError, answeredAt, lastAt,
     contentKey: kind === 'ask' ? contentDedupeKey(item) : undefined,
     ...(kind === 'ask' ? { answer, text, sessionId } : {}),
+    ...(autoExpired ? { autoExpired } : {}),
     ...(source?.startsWith('auto-progress-human:') ? { hasText: Boolean(text) } : {}),
     ...(dailyProgress ? { dailyProgress } : {}) };
 }
@@ -596,7 +597,7 @@ export function answerItem(home, id, answer, sessionId = '') {
 export function lookupAnswers(home, query, { now = Date.now(), days = 60 } = {}) {
   const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) throw new Error('--lookup には検索語が必要です');
-  return listInboxMatches(home, item => item.kind === 'ask' && ['answered', 'dropped'].includes(item.status)
+  return listInboxMatches(home, item => item.kind === 'ask' && !item.autoExpired && ['answered', 'dropped'].includes(item.status)
     && now - (Date.parse(item.answeredAt || item.lastAt || item.createdAt) || 0) < days * 86400000
     && words.every(word => `${item.text}\n${item.answer || ''}`.toLowerCase().includes(word)))
     .sort((a, b) => String(b.answeredAt || b.createdAt).localeCompare(String(a.answeredAt || a.createdAt)))
@@ -659,8 +660,17 @@ export function deadlineSheetUrl(home) {
   const config = readJsonFile(path.join(home, '.claude/deadline-watch/config.json'));
   return config?.sheetId ? `https://docs.google.com/spreadsheets/d/${config.sheetId}/edit` : '（未初期化）';
 }
-export function dropItem(home, id, reason) {
+export function dropItem(home, id, reason, { autoExpired = false, now = Date.now() } = {}) {
   if (!String(reason ?? '').trim()) throw new Error('取り下げ理由が必要です');
+  if (autoExpired) {
+    let dropped = false;
+    const item = update(home, id, current => {
+      if (current.kind !== 'ask' || current.source !== 'auto-progress-escalate' || current.status !== 'open') return;
+      Object.assign(current, { status: 'dropped', answer: clean(reason), answeredAt: new Date(now).toISOString(), autoExpired: true });
+      dropped = true;
+    });
+    return dropped ? item : null;
+  }
   return resolveItem(home, id, { status: 'dropped', answer: clean(reason) });
 }
 const inboxDir = home => path.join(home, '.claude/fleet-inbox');

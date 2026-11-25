@@ -424,7 +424,7 @@ export async function notifyLaneStops(health, { home = laneHome(), now = Date.no
     if (!persist(notifiedFile, notified, health)) { health.notifications.push({ provider: item.provider, delivered: 'none', reason: 'dedupe_write_failed' }); continue; }
     const remaining = budgetMs - (Date.now() - started);
     let timer;
-    const delivery = remaining > 0 ? await Promise.race([notify(notificationText({ ...item, authOptions: { platform, spawnImpl } }, home), { home, webhookFallback: false, signal: AbortSignal.timeout(Math.max(1, remaining)) }).catch(() => ({ delivered: 'none', reason: 'notification_failed' })), new Promise(resolve => { timer = setTimeout(() => resolve({ delivered: 'unknown', reason: 'deadline' }), remaining); })]).finally(() => clearTimeout(timer)) : { delivered: 'none', reason: 'deadline' };
+    const delivery = remaining > 0 ? await Promise.race([notify(notificationText({ ...item, authOptions: { platform, spawnImpl } }, home), { home, webhookFallback: false, kind: 'info', signal: AbortSignal.timeout(Math.max(1, remaining)) }).catch(() => ({ delivered: 'none', reason: 'notification_failed' })), new Promise(resolve => { timer = setTimeout(() => resolve({ delivered: 'unknown', reason: 'deadline' }), remaining); })]).finally(() => clearTimeout(timer)) : { delivered: 'none', reason: 'deadline' };
     health.notifications.push({ provider: item.provider, ...delivery });
     if (delivery.delivered === 'none') { if (before === undefined) delete notified[item.provider]; else notified[item.provider] = before; persist(notifiedFile, notified, health); }
   }

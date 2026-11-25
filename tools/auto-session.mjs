@@ -11,9 +11,38 @@ import { autoResumeAllowed } from './lib/auto-resume-policy.mjs';
 import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
 import { ledgerRows, runTaskLedger } from './task-ledger.mjs';
 import { alternateCheapProvider, autoSessionExecutor, buildClaudeHeadlessArgs, buildCheapCodeArgs, buildCodexDoArgs, cheapProvidersAllCooling, codexDoLaneEnabled, claudeFallbackEnabled, prepareExecutorRoot, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
-import { findClaudeInVersionedDir, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 import { sweepFile as sweepRescueTodoFile } from './rescue-todo-sweep.mjs';
 import { evaluateClaudeSeatGuard, formatClaudeSeatGuardSkip } from './lib/claude-seat-guard.mjs';
+
+function fallbackSanitizeClaudeSupervisorEnv(parentEnv = process.env) {
+  const clean = {};
+  for (const [key, value] of Object.entries(parentEnv || {})) {
+    const upper = String(key || '').toUpperCase();
+    const retained = upper === 'CLAUDE_CODE_GIT_BASH_PATH' || upper === 'CLAUDE_CLI'
+      || upper === 'CLAUDE_CLI_PATH' || upper === 'CLAUDE_BIN';
+    const inherited = upper.startsWith('ANTHROPIC_') || upper === 'CLAUDE_CONFIG_DIR';
+    const leaked = !retained && (upper === 'CLAUDECODE' || upper.startsWith('CLAUDE_CODE_')
+      || upper.startsWith('CLAUDE_AGENT_SDK_') || upper === 'CLAUDE_PID'
+      || upper.startsWith('CLAUDE_PREVIEW_') || upper.startsWith('MCP_'));
+    if (inherited || !leaked) clean[key] = value;
+  }
+  return clean;
+}
+
+export async function loadClaudeExeHelpers(importModule = (specifier) => import(specifier), warn = console.error) {
+  try {
+    const helpers = await importModule('./claude-exe.mjs');
+    if (typeof helpers.findClaudeInVersionedDir !== 'function' || typeof helpers.sanitizeClaudeSupervisorEnv !== 'function') {
+      throw new Error('必要な export がありません');
+    }
+    return helpers;
+  } catch (error) {
+    warn(`[auto-session] claude-exe.mjs を読み込めないため実体探索だけスキップします: ${String(error?.message || error).split(/\r?\n/)[0]}`);
+    return { findClaudeInVersionedDir: () => null, sanitizeClaudeSupervisorEnv: fallbackSanitizeClaudeSupervisorEnv };
+  }
+}
+
+const { findClaudeInVersionedDir, sanitizeClaudeSupervisorEnv } = await loadClaudeExeHelpers();
 
 export { autoSessionExecutor } from './auto-session-executor.mjs';
 

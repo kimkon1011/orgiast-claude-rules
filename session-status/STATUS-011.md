@@ -1,8 +1,9 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-26 04:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-26 05:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 27
+- 案件数: 29
 
+- 011・.stall-sweeper・停止・最終更新 11/26 04:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・3oku-9-17-1125・完了・最終更新 11/25 09:39、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 011・3oku-9-17-1125-quota-test・停止・最終更新 11/25 09:26、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・account-inventory-1123・完了・最終更新 11/24 02:37、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
@@ -17,6 +18,7 @@
 - 011・illumi-kono-claim-1125・停止・最終更新 11/25 18:46、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
 - 011・kyou-kigen-exec-1125・完了・最終更新 11/25 15:23、STATUS.mdなし、DONEあり、REPORTあり、金さん待ちの記述あり・期限なし・次:なし
 - 011・loop-check-1125・金さん待ち・最終更新 11/25 16:23、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、次の手順が未着手、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・Microsoft・停止・最終更新 11/26 04:27、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・plan3oku-11-work・停止・最終更新 11/25 20:58、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・pr2745-ci・停止・最終更新 11/26 03:34、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・pr2745-ci-fix・停止・最終更新 11/26 03:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

@@ -15,6 +15,7 @@
 ## カタログ
 | 型 | 症状（初出） | 横展開の検索 | ゲート |
 |---|---|---|---|
+| 定期実行の無変化LLM確認型 | 定期実行が新着なしでもLLMを起動して枠とトークンを消費する | スケジュール登録される tools/*.mjs の llm-ask / codex-do / claude-ai-run / chat/completions 呼出 | change-gate ＋ routine-usage-weekly |
 | マージ可否の人頼み型 | PR #2460 のマージ承認が kim-inbox 経由で kim に届き、マージ後も3日残った（2026-11-20〜25 カフェ用015） | マージしてよい・マージ承認 | tools/kim-inbox.mjs、tools/lib/kim-inbox-relay-state.mjs、tools/kim-inbox-autoclose.mjs |
 | AI で回避できるコード入力を user に回し、Claude 側の遅延で期限切れを繰り返す | WSL device-auth の提示遅延で3回期限切れ（2026-11-25） | device-auth・login/device・ワンタイムコード | user-code-input-gate／pretooluse-codex-invocation |
 | 代理返答の約束が実行経路なしで消える | Discord の代理返答が予定変更・会議URL送付を約束したが実行も記録もなかった（2026-11-23） | 代理返答の送信経路、設定します・送ります・運用化しました | 送信前の完了主張チェック、約束台帳、Calendar 読み戻し、24時間超の監査 |

@@ -192,13 +192,52 @@ function workerSlot(options) {
     },
   };
 }
+export function looksLikePowerShell(command) {
+  if (typeof command !== 'string') return false;
+  const value = command.trim();
+  if (!value) return false;
+  return /^(?:(?:[^\s"']*[\\/])?(?:pwsh|powershell)(?:\.exe)?)(?:\s|$)/i.test(value)
+    || /^(?:\$env:|\$OutputEncoding\b|\[Console\]::|\[System\.)/i.test(value)
+    || /^(?:Get|Set|New|Add|Clear|Close|Copy|Enter|Exit|Export|Find|Format|Import|Invoke|Join|Measure|Move|Open|Out|Pop|Push|Read|Receive|Remove|Rename|Reset|Resolve|Restart|Resume|Save|Select|Send|Show|Sort|Split|Start|Stop|Suspend|Test|Trace|Update|Wait|Where|Write)-[A-Za-z][\w-]*(?:\s|$)/i.test(value)
+    || /^-(?:NoProfile|ExecutionPolicy)(?:\s|$)/i.test(value);
+}
+function findPowerShell(env = process.env) {
+  const pathValue = env?.PATH || env?.Path || env?.path || '';
+  const extensions = process.platform === 'win32'
+    ? String(env?.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';') : [''];
+  for (const name of ['pwsh', 'powershell']) {
+    for (const directory of pathValue.split(path.delimiter).filter(Boolean)) {
+      for (const extension of extensions) {
+        const candidate = path.join(directory, name + extension.toLowerCase());
+        const alternatives = process.platform === 'win32' ? [candidate, path.join(directory, name + extension.toUpperCase())] : [candidate];
+        for (const file of alternatives) {
+          try {
+            fs.accessSync(file, process.platform === 'win32' ? fs.constants.F_OK : fs.constants.X_OK);
+            return file;
+          } catch {}
+        }
+      }
+    }
+  }
+  return null;
+}
+function powerShellFragmentExecutable(hook, options) {
+  const parts = tokens(hook.command);
+  const explicit = /(?:^|[\\/])(?:pwsh|powershell)(?:\.exe)?$/i.test(parts[0]);
+  if (explicit || !looksLikePowerShell(hook.command)) return undefined;
+  return findPowerShell(options.env);
+}
 function spawnExternal(hook, options) {
   const parts = tokens(hook.command);
   const powershell = /(?:^|[\\/])(?:pwsh|powershell)(?:\.exe)?$/i.test(parts[0]);
-  return powershell ? spawn(parts[0], parts.slice(1), { ...options, windowsHide: true })
+  if (powershell) return spawn(parts[0], parts.slice(1), { ...options, windowsHide: true });
+  const executable = powerShellFragmentExecutable(hook, options);
+  return executable
+    ? spawn(executable, ['-NoProfile', '-Command', hook.command], { ...options, windowsHide: true })
     : spawn(hook.command, { ...options, windowsHide: true, shell: true });
 }
 function detachedHook(hook, raw, home, options) {
+  if (powerShellFragmentExecutable(hook, options) === null) return { status: 0, skipped: 'powershell-unavailable' };
   const command = process.platform === 'win32' ? hook.command.toLowerCase() : hook.command;
   const key = createHash('sha256').update(command).digest('hex');
   const dir = path.join(home, '.claude', 'hook-metrics', 'detached');
@@ -246,6 +285,9 @@ function detachedHook(hook, raw, home, options) {
   } finally { removeReclaimDirectory(claim); }
 }
 function externalHook(hook, raw, timeoutMs, options) {
+  if (powerShellFragmentExecutable(hook, options) === null) {
+    return Promise.resolve({ status: 0, stdout: '', stderr: '', skipped: 'powershell-unavailable' });
+  }
   return new Promise(resolve => {
     const child = spawnExternal(hook, { env: options.env, stdio: 'pipe' });
     options.onSpawn?.(child, hook);

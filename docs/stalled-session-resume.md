@@ -1,4 +1,28 @@
-# 停滞セッションの夜間再開
+# 停滞セッションの毎時再開
+
+## 現行の hourly モード（2026-11-25）
+
+入口は既存の `node tools/stalled-session-resume.mjs --hourly`。`--dry-run` は同じ事前判定を行い、Claude・ask・移管を起動しない。判定キャッシュ、費用台帳、ハートビートは保存する。
+
+- `~/.claude/projects/**/*.jsonl` の30分〜7日前のログを調べる。subagentsと実行中のclaude/node、閉じ印・DONE・session-close実行を除外し、未完応答・tool_use・APIエラー・synthetic上限・期限切れフッターを拾う。`~/gb-reports` のREPORT.md/workとterminal出力もsessionIdで合流し、未特定分は件数のみ報告する。
+- 末尾50行と最初の依頼を既存redactで伏せ、OpenRouter無料Gemma→安価GPT-OSS→Gemini→Groq→Mistral（既存ルーティングに従いOpenRouter経由）でJSON判定する。cursor/cursor-agent/Claude APIは候補に含めない。判定は4件並列、モデルの429は10分、402/403/404は1時間待機する。sessionId＋最終行SHA256をchange-gateに保存し、変化がなければAIを再照会しない。
+- resumeだけ `claude --resume <元ID> --fork-session --session-id <新ID> -p --model <automationModel()>` を実行する。nextStep・承認制約・完了時session-close・結果JSONの保存先を渡し、fork先のtranscriptを確認する。waiting-humanはkim-inbox ask（dedupeKey=sessionId）、done/skipは台帳だけに残す。今回の無人実行では社外送信・支払い・削除・権限変更は行わない。
+- 既存台帳ロックに加え、元とfork先の `~/.claude/stalled-resume-locks/<id>.lock` を起動前に取る。pid・開始時刻・hostを記録し、死PIDまたは2時間超だけ奪取する。既存プロセスには終了操作を行わない。
+- configのhourlyCap=4、perSessionDailyCap=6、planUsageStopPct=85とseat-guardを両方守る。fork家系と試行予算は起動前に保存し、親の中断後も日次上限と連続進捗なし回数を継承する。fork transcriptの実在確認後だけ元を引継ぎ済みにする。上限停止時も安い判定を続け、移管は既存stall-ledgerの経路だけを使う。
+- 毎回JSON一行を `~/gb-reports/stalled-sessions-hourly/heartbeat/<PC番号>.log` に保存する。項目はISO時刻・PC・Claudeアカウント・候補/resume/waiting-human/done/skip・未特定件数・seat-guard・error。候補数は4分類の合計と一致する。resumeは実起動数で、進捗成功数はresultsのoutcomeで別に確認する。
+- `~/.claude/fleet-heartbeat-repo` の独立クローンからorphanブランチ `fleet-heartbeat` の `stalled-sessions/<PC番号>.log` を更新する（末尾500行）。mainは変更しない。競合pushはfetch→rebaseして最大3回。送信失敗分はローカルとコミットに残り、次回送る。000KimPCは共有ブランチを取り込み、他PC分も同じローカルheartbeatディレクトリへコピーする。
+
+### 登録・配布・移管
+
+`OrgiastWaitDeadlineResume` は毎時:20、IgnoreNew、最大2時間。hidden runnerからWindows PowerShell 5.1の `nightly-bootstrap.ps1 -Target tools\stalled-session-resume.mjs --hourly` を呼び、origin/mainへ同期してから実行する。`setup-manifest.json` の必須 `task:wait-deadline-resume` はbootstrap経由かも検査するので、旧node直接起動のPCも `setup --converge` で既存registrarから自動修復される。tools/config/docsは既存distribution-manifestの配布対象。個別PCへの手登録は不要。
+
+各PCの実到達はheartbeatのlabel・account・時刻と、fleetのconverge結果を照合する。mainへのマージだけでは全PC同期完了としない。認証は各PCの既存Claudeプランと既存provider環境ファイル、Gitのoriginを使い、管理移管時はこれらのアカウント権限とfleet登録を引き継ぐ。
+
+### 検証
+
+`node --test tools/stalled-session-resume*.test.mjs tools/lib/auto-resume-policy.test.mjs tools/claude-seat-guard*.test.mjs` と `node --test --test-name-pattern=scheduled-task tools/setup.test.mjs`。実機はdry-run→hourly→結果JSON・kim-inbox・heartbeatブランチを読み戻す。UI変更はないためブラウザ検証は対象外。
+
+## 旧モードの参考記録（以下はnightly/overdueの履歴）
 
 毎時・上限つきで再開する（kim 2026-11-25）。`OrgiastWaitDeadlineResume` は毎時 :20 に `--hourly` を実行し、期限切れと先送り表現のある停滞セッションを優先順に再開する。3回進捗が無ければ kim-inbox の判断待ちへ移す。
 

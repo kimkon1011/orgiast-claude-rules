@@ -31,6 +31,8 @@ function executingIo({ hourlyResume = true } = {}) {
     tmpDir: path.resolve(tmpDir),
     transcript,
     io: {
+      home: tmpDir,
+      fetchClaudePlanUsage: async () => ({ available: false }),
       hourlyResumePolicy: () => ({ hourlyResume, hourlyCap: 4, perSessionDailyCap: 6, planUsageStopPct: 85, reason: '' }),
       // Bypass seat guard
       evaluateGuard: async () => ({ blocked: false }),

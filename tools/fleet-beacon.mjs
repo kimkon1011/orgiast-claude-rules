@@ -12,6 +12,7 @@ import { machineIdentity, reportExtras, getClaudeAccountEmail } from './machine-
 import { redactSecrets } from './fleet-agent.mjs';
 import { ledgerSummary, parseStallSummary, stallSummaryStep } from './stall-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
+import { fetchClaudePlanUsage } from './claude-plan-usage.mjs';
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export const INSTALL_BEACON_URL = 'https://script.google.com/macros/s/AKfycbwyZXLJsVngZQy17i8ZqsQUCRx66AIs9p3wQbW55vMq6GObJes5R5WyJrSBhyknN3ibPg/exec';
@@ -64,7 +65,20 @@ export function mobileStandbySuffix(home, now = Date.now()) {
   } catch { /* 既定 3 */ }
   return `${waiting === null ? '待機数不明' : waiting}/${target}`;
 }
-export function buildBeacon({ home = process.env.ORGIAST_HOME || os.homedir(), label, results = [], now = Date.now(), pcMap, identity } = {}) {
+
+export function localRoutineUsage7d(home, now = Date.now()) {
+  const since = Number(now) - 7 * 24 * 60 * 60 * 1000, pc = os.hostname(), map = new Map();
+  const readRows = (file) => { try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } }); } catch { return []; } };
+  const get = (job) => { if (!map.has(job)) map.set(job, { pc, job, llmCalls: 0, inputTokens: 0, outputTokens: 0, usd: 0, runs: 0, unchanged: 0 }); return map.get(job); };
+  for (const row of readRows(path.join(home, '.claude', 'executor-usage.jsonl'))) if (Date.parse(row.t) >= since) {
+    const item = get(row.job || row.caller || 'unknown'); item.llmCalls++; item.inputTokens += Number(row.in) || 0; item.outputTokens += Number(row.out) || 0; item.usd += Number(row.usd ?? row.costUsd) || 0;
+  }
+  for (const row of readRows(path.join(home, '.claude', 'change-gate', 'runs.jsonl'))) if (Date.parse(row.t) >= since) {
+    const item = get(row.job || 'unknown'); item.runs++; if (row.changed === false) item.unchanged++;
+  }
+  return [...map.values()].sort((a, b) => b.usd - a.usd || b.llmCalls - a.llmCalls).slice(0, 10);
+}
+export function buildBeacon({ home = process.env.ORGIAST_HOME || os.homedir(), label, results = [], now = Date.now(), pcMap, identity, planUsage } = {}) {
   const resolvedLabel = label || resolveFleetLabel(home, identity ?? machineIdentity());
   const steps = results.map((result) => {
     const id = String(result?.item?.id ?? result?.id ?? '');
@@ -116,7 +130,9 @@ export function buildBeacon({ home = process.env.ORGIAST_HOME || os.homedir(), l
     unsentUpstreamCount,
     lastDownstreamAt,
     knowledgeMasterVersion,
-    ...metrics
+    routineUsage7d: localRoutineUsage7d(home, now),
+    ...metrics,
+    ...(planUsage?.available ? { planFiveHourPct: Number(planUsage.fiveHour.utilization), planSevenDayPct: Number(planUsage.sevenDay.utilization) } : {})
   };
 }
 // 送信は絶対に例外を投げない。env 未設定は skip、応答に beacon が無ければ「GAS 未デプロイ」。
@@ -180,7 +196,9 @@ export async function fetchBeacons({ home, fetchImpl = fetch, timeoutMs, retries
         label: String(beacon?.label ?? ''), account: String(beacon?.account ?? ''), reportedAt: String(beacon?.reportedAt ?? ''),
         stuckDialogs24h: dialogCount === undefined ? null : Number(dialogCount),
         steps, failing, pollAt: String(beacon?.pollAt ?? ''), serverPollAt: String(beacon?.serverPollAt ?? ''),
-        stallLedger: parseStallSummary(steps)
+        stallLedger: parseStallSummary(steps),
+        planFiveHourPct: Number.isFinite(Number(beacon?.planFiveHourPct)) ? Number(beacon.planFiveHourPct) : null,
+        planSevenDayPct: Number.isFinite(Number(beacon?.planSevenDayPct)) ? Number(beacon.planSevenDayPct) : null
       };
     });
     const serverPolls = result.serverPolls && typeof result.serverPolls === 'object' && !Array.isArray(result.serverPolls) ? result.serverPolls : {};
@@ -226,7 +244,8 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     out(JSON.stringify(result, null, 2));
     return result.ok ? 0 : 1;
   }
-  const beacon = buildBeacon({ home, results: deps.results ?? [], pcMap });
+  const planUsage = await (deps.fetchClaudePlanUsage ?? fetchClaudePlanUsage)({ home, fetchImpl: deps.fetch });
+  const beacon = buildBeacon({ home, results: deps.results ?? [], pcMap, planUsage });
   const result = await sendBeacon(beacon, { home, fetchImpl: deps.fetch });
   out(JSON.stringify(result));
   return result.ok ? 0 : 1;

@@ -12,6 +12,7 @@ import { parseRows as parseVehicles, retireVehicleAsks } from './vehicle-inspect
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
 import { reportHeartbeat } from './lib/heartbeat.mjs';
+import { AI_CALENDAR, withCaseLabel } from './lib/calendar-shared.mjs';
 import { listItems } from './kim-inbox.mjs';
 import { DEFAULT_CONFIG, createLedger, loadConfig, defaultHome, dataPath, readJson, saveJson, sheetUrl, googleClient, withLedgerLock, parseSheetDate, jstDate, daysUntil, isDuplicate, initialize } from './deadline-ledger.mjs';
 const exec = promisify(execFile);
@@ -81,7 +82,7 @@ export async function hasSentReply(row, request) {
 }
 export async function syncCalendar(row, { config, state, request, persist = () => {}, log = console.error }) {
   if (!config.calendar.enabled || state.calendarSync === false) return;
-  const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(config.calendar.calendarId)}/events`;
+  const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(config.calendar.calendarId || AI_CALENDAR)}/events`;
   const opts = { user: 'kim@orgiast.jp', scope: 'https://www.googleapis.com/auth/calendar.events' };
   try {
     const due = effectiveDue(row);
@@ -93,7 +94,10 @@ export async function syncCalendar(row, { config, state, request, persist = () =
       return;
     }
     const end = new Date(Date.parse(due) + 86400000).toISOString().slice(0, 10);
-    const body = { summary: `【期限】${row.title}`, start: { date: due }, end: { date: end }, description: `${row.id} 担当: ${row.assignee || 'kim'}\n${row.action || ''}\n期限台帳: ${sheetUrl(config)}`,
+    const existingCase = String(events[0]?.description || '').split(/\r?\n/, 1)[0].match(/^案件:\s*(.+)$/)?.[1]?.trim();
+    const caseName = row.company || row.caseName || (existingCase && !existingCase.includes('未特定') ? existingCase : '');
+    const labeled = withCaseLabel({ summary: `【期限】${row.title}`, description: `${row.id} 担当: ${row.assignee || 'kim'}\n${row.action || ''}\n期限台帳: ${sheetUrl(config)}` }, caseName, 'deadline-watch');
+    const body = { ...labeled, start: { date: due }, end: { date: end },
       reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 10080 }, { method: 'popup', minutes: 1440 }] }, extendedProperties: { private: { deadlineId: row.id } } };
     if (events[0]) await request(`${base}/${encodeURIComponent(events[0].id)}`, { ...opts, method: 'PATCH', body });
     else {

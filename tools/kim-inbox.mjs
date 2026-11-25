@@ -447,6 +447,7 @@ export function spoolItem(home, options) {
   const id = randomBytes(16).toString('hex');
   const file = path.join(dir, `${id}.json`), temp = `${file}.tmp`;
   const record = { ...(options.priority === 'high' ? { priority: 'high' } : {}), kind: options.kind || 'info', text: clean(options.text), source: clean(options.source),
+    ...(options.forceKind ? { forceKind: true } : {}),
     from: clean(options.from ?? resolveFleetLabel(home, { hostname: os.hostname() })),
     ...(options.progressAt ? { progressAt: options.progressAt } : {}), ...(options.sessionId ? { sessionId: clean(options.sessionId) } : {}),
     dedupeKey: options.dedupeKey ? inboxDedupeKey(options.dedupeKey) : `spool:${id}` };
@@ -484,7 +485,7 @@ export async function drainSpool(home, { stderr = console.error, execImpl, signa
 }
 export async function addItem(home, options, { drain = true, localOnly = false, lockWaitMs } = {}) {
   let normalizedOptions = options;
-  if ((options.kind || 'info') === 'ask' && /送信|送って|承認/.test(String(options.text || ''))) {
+  if ((options.kind || 'info') === 'ask' && !options.forceKind && /送信|送って|承認/.test(String(options.text || ''))) {
     try {
       const config = JSON.parse(fs.readFileSync(fileURLToPath(new URL('../config/standing-send-permissions.json', import.meta.url)), 'utf8'));
       const permission = (config.permissions || []).find(item => new RegExp(item.match).test(String(options.text || '')));

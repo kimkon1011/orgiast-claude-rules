@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { getAccounts, listChats, listMessages } from './beeper-api.mjs';
 import { searchGmail } from './gmail-search.mjs';
 import { isEntry } from './is-entry.mjs';
+import { recordRun } from './lib/change-gate.mjs';
 
 export const MAILBOXES = ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'];
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -290,6 +291,7 @@ export async function run(options = {}, injected = {}) {
       let digestFile = null; if (!options.dryRun) digestFile = writeDigest({ state, now, reportDir: options.reportDir || path.join(home, 'gb-reports'), force: options.digestNow });
       const report = { status: collected.failures.length ? 'partial' : 'ok', new: collected.counts, routed: {}, dispatches: 0, unknown: 0, failures: collected.failures, digestFile: digestFile ? path.basename(digestFile) : null, durationMs: Date.now() - started, calls, plans };
       if (!options.dryRun) { save(); fs.mkdirSync(path.dirname(logFile), { recursive: true }); if (!options.runnerLog) fs.appendFileSync(logFile, `${JSON.stringify(report)}\n`); }
+      recordRun('inbound-router', { changed: false, llmInvoked: false, items: 0, note: report.status });
       return report;
     }
     const routed = await routeItems(collected.items, { config, state, classify: deps.classify, stop });
@@ -308,6 +310,7 @@ export async function run(options = {}, injected = {}) {
     const preview = options.dryRun ? collected.items.map(item => ({ route: routed.routesByItem.get(item), title: item.title.slice(0, 30), sender: item.sender.slice(0, 20) })) : undefined;
     const report = { status: collected.failures.length ? 'partial' : 'ok', new: collected.counts, routed: Object.fromEntries(Object.entries(routed.groups).map(([k,v]) => [k,v.length])), dispatches: plans.length, unknown: routed.unknown.length, failures: collected.failures, digestFile: digestFile ? path.basename(digestFile) : null, durationMs: Date.now() - started, calls, plans, ...(preview ? { preview } : {}) };
     if (!options.dryRun) { save(); fs.mkdirSync(path.dirname(logFile), { recursive: true }); if (!options.runnerLog) fs.appendFileSync(logFile, `${JSON.stringify(report)}\n`); }
+    recordRun('inbound-router', { changed: collected.items.length > 0, llmInvoked: calls.classify > 0, items: collected.items.length, note: report.status });
     return report;
   } catch (e) {
     const report = { status: 'failed', new: { beeper: 0, gmail: 0, noise: 0 }, routed: {}, dispatches: 0, unknown: 0, failures: [{ source: 'run', code: safeCode(e) }], digestFile: null, durationMs: Date.now() - started, calls, plans };

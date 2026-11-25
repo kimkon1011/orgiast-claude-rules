@@ -1442,7 +1442,7 @@ export function wslCodexLaunchPlan({ distroFound, codexPresent, versionOk, insta
 export function buildUsageRow({
   result, model, seconds, provider = 'codex', attempts = 1, chain = null,
   timeoutSecs = null, lane = null, escalated = false, promptChars = 0,
-  origin = null, kind = null, cwd = null, reason = '', now = new Date()
+  origin = null, kind = null, cwd = null, reason = '', job = process.env.ORGIAST_JOB || null, now = new Date()
 } = {}) {
   // child.on('error') で spawn 自体に失敗した行は status が数値で残らず、原因は result.error にしか無い。
   // stderr は空のままなので、放っておくと台帳からは「codex が走って何も出さなかった」と区別できない
@@ -1457,7 +1457,7 @@ export function buildUsageRow({
     launched: result?.launched !== false,
     timedOut: result?.timedOut === true,
     status: executorExitStatus(result),
-    origin, kind,
+    origin, kind, ...(job ? { job } : {}),
     exitCode: result?.status ?? null,
     cwd,
     stderrTail,

@@ -29,6 +29,7 @@ import { main as sendFleetDirective } from './fleet-directive-send.mjs';
 import { latestOpenPromises, ledgerFile as progressLedgerFile, readLedger } from './auto-progress-ledger.mjs';
 import { readTranscriptContext } from './lib/assistant-text.mjs';
 import { footerValues, NO_ACTION_PATTERN } from './next-action-gate.mjs';
+import { parseJsonLoose, readJsonFile } from './lib/json-read.mjs';
 
 const CHECK_INTERVAL_MS = 15 * 60_000;
 const HOUR_MS = 3_600_000;
@@ -106,10 +107,14 @@ export function options(argv = [], env = process.env) {
 
 async function readSanitizedJson(file, fallback) {
   try {
-    const raw = await fs.readFile(file, 'utf8');
+    return readJsonFile(file);
+  } catch (error) {
+    if (error.code === 'ENOENT') return fallback;
+    const raw = (await fs.readFile(file)).toString('utf8');
     const cleaned = raw.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-    return JSON.parse(cleaned);
-  } catch { return fallback; }
+    if (cleaned === raw) throw error;
+    return parseJsonLoose(cleaned, { source: file });
+  }
 }
 
 async function readJson(file, fallback) {
@@ -403,9 +408,12 @@ stuck=それ以外で進められなかった。
     report = rawReport;
     if (typeof rawReport === 'string') {
       const cleaned = rawReport.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-      report = cleaned.trim() ? JSON.parse(cleaned) : null;
+      report = cleaned.trim() ? parseJsonLoose(cleaned, { source: resultFile }) : null;
     }
-  } catch (error) { return { ...execution, outcome: 'error', reason: String(error.message) }; }
+  } catch (error) {
+    if (error instanceof SyntaxError) return { ...execution, outcome: 'no-report', reason: String(error.message) };
+    return { ...execution, outcome: 'error', reason: String(error.message) };
+  }
   const evidenceOk = report?.evidence && (
     (typeof report.evidence === 'string' && report.evidence.trim()) ||
     (typeof report.evidence === 'object' && report.evidence !== null && Object.keys(report.evidence).length > 0)
@@ -515,9 +523,12 @@ stuck=それ以外で進められなかった。
     report = rawReport;
     if (typeof rawReport === 'string') {
       const cleaned = rawReport.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-      report = cleaned.trim() ? JSON.parse(cleaned) : null;
+      report = cleaned.trim() ? parseJsonLoose(cleaned, { source: resultFile }) : null;
     }
-  } catch (error) { return { ...execution, outcome: 'error', reason: String(error.message) }; }
+  } catch (error) {
+    if (error instanceof SyntaxError) return { ...execution, outcome: 'no-report', reason: String(error.message) };
+    return { ...execution, outcome: 'error', reason: String(error.message) };
+  }
   const evidenceOk = report?.evidence && (
     (typeof report.evidence === 'string' && report.evidence.trim()) ||
     (typeof report.evidence === 'object' && report.evidence !== null && Object.keys(report.evidence).length > 0)

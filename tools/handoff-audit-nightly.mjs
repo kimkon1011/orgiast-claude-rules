@@ -139,6 +139,18 @@ export function deferralTodo(row) {
     route: `違反セッションの先送りを当ターン内に実装まで終える（例: ${row.ts} / ${row.sessionId}）。検出は handoff-audit-nightly が毎晩自動実行する（tools/permanent-fix-deferral-scan.mjs）`
   };
 }
+export function selectDeferralEnqueueRows(fresh) {
+  const enqueueRows = [];
+  const enqueuedKeys = new Set();
+  for (const row of fresh ?? []) {
+    if (row.resolved) continue;
+    const groupKey = `${row.sessionId ?? ''}\u0000${row.pattern}`;
+    if (enqueuedKeys.has(groupKey)) continue;
+    enqueuedKeys.add(groupKey);
+    enqueueRows.push(row);
+  }
+  return enqueueRows;
+}
 export function selectTargets(audits, runners, since, until) {
   const inDay = r => Date.parse(r.ts) >= since && Date.parse(r.ts) < until;
   const targets = audits.filter(r => inDay(r) && r.fired && !r.skipped && (r.decision === 'pass' || r.verdict === 'pass')).map(r => ({ ...r, evidence: r.evidence || { text: r.excerpt || '', tools: [], evidenceMissing: true } }));
@@ -286,14 +298,8 @@ export async function runNightly(options = {}) {
       // 8本の「検証の検証」セッションに増殖した（2026-10-23T07:23 の session 9310953f が実例:
       // 07:23:09〜07:23:19 の4行が別TODOになり、e2de84a9 の検証ループが8周した）。
       // 台帳には全検出行を残し、TODOは (sessionId, pattern) ごとに窓内の先頭1件だけ積む。
-      const enqueueRows = [];
-      const enqueuedKeys = new Set();
-      for (const row of fresh) {
-        const groupKey = `${row.sessionId ?? ''}\u0000${row.pattern}`;
-        if (enqueuedKeys.has(groupKey)) continue;
-        enqueuedKeys.add(groupKey);
-        enqueueRows.push(row);
-      }
+      // スキャナが resolved 付きで解消済みと判定した行は、人が再検証するTODOには積まない。
+      const enqueueRows = selectDeferralEnqueueRows(fresh);
       let enqueued = 0;
       if (enqueueRows.length > 0) {
         const nextFile = path.join(dir, 'next-session.md');

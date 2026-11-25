@@ -1,7 +1,7 @@
-# session-status  PC=000  host=000KIMPC  updated 2026-11-26 00:13 JST
+# session-status  PC=000  host=000KIMPC  updated 2026-11-26 01:14 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\uers\\.claude\\projects", "configDirectory": "C:\\Users\\uers\\
-- 案件数: 59
+- 案件数: 63
 
 - 000・1p-space-1124・停止・最終更新 11/24 11:11、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 000・212coffee-move-1125・完了・最終更新 11/25 16:17、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
@@ -27,6 +27,7 @@
 - 000・learning-ishii-1124・完了・最終更新 11/24 09:06、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 000・learning-yosuke-1123・完了・最終更新 11/23 21:50、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 000・merge-kim-1122・停止・最終更新 11/22 10:08、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・night-3oku-1126・金さん待ち・承認パック4件の判断待ち（作業は完了）・期限2026-11-27 18:00（STANDAGE 概算）・次:approval-pack.md の4件に返事。Folia は佐藤さんへの依頼、STANDAGE は11/27期限
 - 000・no-ai-disclaimer-1123・停止・最終更新 11/23 17:24、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 000・pr2723-fix-1125・完了・最終更新 11/25 16:11、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、金さん待ちの記述あり・期限なし・次:なし
 - 000・publish-check-rule-1123・停止・最終更新 11/23 19:23、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -62,3 +63,6 @@
 - 000・_discord-line-out・完了・最終更新 11/23 16:22、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 000・_discord-sato-raw-1123・停止・最終更新 11/21 21:28、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 000・_handoff-roudou-1123・停止・最終更新 11/23 14:18、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 000・社外下書き3通・金さん待ち・社外メール3通（梅津様・パレス ヨシイ様・赤澤様）の送信承認待ち。スレッド照合済み、修正版の全文を提示済み・期限なし（お客様を約4週間待たせているため早めに）・次:承認された通だけ gmail-draft.mjs --send（seisaku-team@・スレッド返信）で送り、送信済みを読み戻して本文を表示。決めてほしいこと: 3通それぞれ送ってよいか
+- 000・社外下書き3通送信・金さん待ち・社外メール3通（梅津様・パレス ヨシイ様・赤澤様）の送信承認待ち。11/26 時点で3通とも未送信・相手からの新着なしを seisaku-team@ の Gmail で確認済み・期限なし（ただし最長で4週間お待たせしている）・次:承認された通だけ、確認用 Doc の修正版の本文・宛先で gmail-draft.mjs --send を実行し、送信済みを読み戻す（Gmail に残っている下書きは修正前の版なので、そのまま送らない）。金さんに決めてほしいこと: 3通それぞれ送ってよいか
+- 000・社外未送信下書き・金さん待ち・社外下書き3通（梅津様インタビュー記事打診・パレス ヨシイ様キャンセル了承・赤澤様応募辞退）の修正版全文を提示し、送信承認待ち・期限なし・次:承認された通を gmail-draft.mjs --send（チェック込み）で seisaku-team@ から送り、送信本文を読み戻して表示

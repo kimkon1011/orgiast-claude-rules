@@ -1,7 +1,11 @@
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import {
+  COLLECT_SCRIPT,
+  buildApplyScript,
+  parseCollectionOutput,
   guardClaudePriority,
   calcMedian,
   calcThreshold,
@@ -131,6 +135,27 @@ test('getActiveChildren: returns correct PIDs', () => {
     makeChild({ pid: 202, ppid: 100, name: 'gh.exe' }),
   ];
   assert.deepEqual(getActiveChildren(100, children, NOW).sort(), [201, 202]);
+});
+
+test('getActiveChildren: grandchild under a long-running shell marks the session active and raises the shell too', () => {
+  const old = NOW - 3_600_000;
+  const children = [
+    makeChild({ pid: 300, ppid: 100, name: 'bash.exe', createdAt: old }),  // Bash ツールの常駐シェル
+    makeChild({ pid: 301, ppid: 300, name: 'node.exe' }),                  // 今起動した作業
+    makeChild({ pid: 302, ppid: 100, name: 'node.exe', createdAt: old, commandLine: 'node gemini-mcp-tool' }),
+    makeChild({ pid: 303, ppid: 302, name: 'node.exe' }),                  // MCP の枝の下は数えない
+  ];
+  assert.deepEqual(getActiveChildren(100, children, NOW).sort(), [300, 301]);
+  assert.equal(hasActiveChildren(100, children, NOW), true);
+});
+
+test('getActiveChildren: an old shell with only old descendants is idle', () => {
+  const old = NOW - 3_600_000;
+  const children = [
+    makeChild({ pid: 300, ppid: 100, name: 'bash.exe', createdAt: old }),
+    makeChild({ pid: 301, ppid: 300, name: 'node.exe', createdAt: old }),
+  ];
+  assert.deepEqual(getActiveChildren(100, children, NOW), []);
 });
 
 test('getActiveChildren: filters MCP', () => {
@@ -351,7 +376,7 @@ test('collect failure returns failure counters', () => {
 });
 
 test('exit 0 regardless of outcome via real direct run of the module', async (t) => {
-  const result = spawnSync(process.execPath, ['tools/claude-priority-guard.mjs'],
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./claude-priority-guard.mjs', import.meta.url))],
     { encoding: 'utf8', timeout: 30000 });
   assert.equal(result.status, 0);
   const parsed = JSON.parse(result.stdout.replace(/^﻿/, '').trim());
@@ -386,4 +411,38 @@ test('buildDecision: correct threshold with varied CPU deltas', () => {
   const decision = buildDecision(procs, [], prevState, BASE_TIME);
   assert.deepEqual(decision.claudeToRaise, [102]);
   assert.deepEqual(decision.claudeToLower.sort(), [100, 101]);
+});
+
+// PowerShell の読み取り専用の自動変数（$PID など）へ代入すると、
+// $ErrorActionPreference='Stop' でスクリプト全体が失敗し、ガードが何もしなくなる（2026-11-24 実機で発生）。
+const AUTOMATIC_VARS = ['pid', 'input', 'args', 'host', 'error', 'home', 'pwd', 'true', 'false', 'null'];
+test('generated PowerShell never assigns to or loops over automatic variables', () => {
+  const scripts = [COLLECT_SCRIPT, buildApplyScript([1, 2], [3], [4])];
+  for (const script of scripts) {
+    for (const name of AUTOMATIC_VARS) {
+      assert.doesNotMatch(script, new RegExp(`\\$${name}\\s*=(?!=)`, 'i'), `assigns $${name}`);
+      assert.doesNotMatch(script, new RegExp(`foreach\\s*\\(\\s*\\$${name}\\s+in`, 'i'), `loops over $${name}`);
+    }
+  }
+});
+
+// 偽データの単体テストだけでは、PowerShell が返す日時の書式違いを見落とした（2026-11-25 実機で作業中判定が一度も成立しなかった）。
+test('real collect script yields numeric creation times for child processes', { skip: process.platform !== 'win32' }, () => {
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', COLLECT_SCRIPT],
+    { encoding: 'utf8', windowsHide: true, timeout: 60000, maxBuffer: 64 << 20 });
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = parseCollectionOutput(result);
+  assert.ok(parsed.children.length > 0, 'このテスト自身の node.exe が子として見えるはず');
+  const self = parsed.children.find(c => c.pid === process.pid);
+  assert.ok(self, 'この node.exe が一覧にある');
+  assert.ok(Number.isFinite(self.createdAt), `createdAt が数値でない: ${self.createdAt}`);
+  assert.ok(Math.abs(Date.now() - self.createdAt) < 3_600_000, '起動時刻が1時間以内');
+});
+
+test('apply script with nothing to change runs on real PowerShell and returns JSON', { skip: process.platform !== 'win32' }, () => {
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', buildApplyScript([], [], [])],
+    { encoding: 'utf8', windowsHide: true, timeout: 60000 });
+  assert.equal(result.status, 0, result.stderr);
+  const json = JSON.parse(result.stdout.replace(/^﻿/, '').trim());
+  assert.equal(json.failed, 0);
 });

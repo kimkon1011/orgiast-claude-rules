@@ -15,24 +15,26 @@ const RECENT_CHILD_MS = 180_000; // 3 minutes
 
 // ── PowerShell: collect raw process data ──────────────────────────────
 
-const COLLECT_SCRIPT = `[Console]::OutputEncoding=[Text.Encoding]::UTF8
+export const COLLECT_SCRIPT = `[Console]::OutputEncoding=[Text.Encoding]::UTF8
 $ErrorActionPreference='Stop'
 $claudeRows = @(Get-CimInstance Win32_Process -Filter "Name='claude.exe'" | Select-Object ProcessId, ExecutablePath, CommandLine)
 $processes = @()
 foreach ($row in $claudeRows) {
-    $pid = $row.ProcessId
+    $procId = $row.ProcessId
     try {
-        $p = Get-Process -Id $pid -ErrorAction Stop
-        $processes += @{pid=$pid; exe=[string]$row.ExecutablePath; cpu=$p.CPU; priority=[string]$p.PriorityClass}
+        $p = Get-Process -Id $procId -ErrorAction Stop
+        $processes += @{pid=$procId; exe=[string]$row.ExecutablePath; cpu=$p.CPU; priority=[string]$p.PriorityClass}
     } catch {
-        $processes += @{pid=$pid; exe=[string]$row.ExecutablePath; cpu=$null; priority=$null}
+        $processes += @{pid=$procId; exe=[string]$row.ExecutablePath; cpu=$null; priority=$null}
     }
 }
 $childNames = @('node.exe','gh.exe','git.exe','powershell.exe','pwsh.exe','bash.exe','cmd.exe')
 $childRows = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -in $childNames } | Select-Object Name, ProcessId, ParentProcessId, CreationDate, CommandLine)
 $children = @()
 foreach ($row in $childRows) {
-    $children += @{pid=$row.ProcessId; ppid=$row.ParentProcessId; name=$row.Name; creationDate=[string]$row.CreationDate; commandLine=[string]$row.CommandLine}
+    $createdMs = $null
+    if ($row.CreationDate -is [datetime]) { $createdMs = ([DateTimeOffset]$row.CreationDate).ToUnixTimeMilliseconds() }
+    $children += @{pid=$row.ProcessId; ppid=$row.ParentProcessId; name=$row.Name; createdMs=$createdMs; creationDate=[string]$row.CreationDate; commandLine=[string]$row.CommandLine}
 }
 Write-Output (ConvertTo-Json -InputObject @{processes=$processes; children=$children} -Compress -Depth 5)`;
 
@@ -64,10 +66,14 @@ function parseCollectionOutput(raw) {
       ppid: c.ppid,
       name: c.name || '',
       commandLine: c.commandLine || '',
-      createdAt: parseWmiDate(c.creationDate),
+      // Get-CimInstance の CreationDate は DateTime で、[string] にすると地域の書式になる。
+      // 書式に依存しない createdMs（Unix ミリ秒）を優先し、WMI 形式の文字列は予備として読む。
+      createdAt: Number.isFinite(c.createdMs) ? c.createdMs : parseWmiDate(c.creationDate),
     })),
   };
 }
+
+export { parseCollectionOutput };
 
 // ── State file I/O ───────────────────────────────────────────────────
 
@@ -101,25 +107,36 @@ export function calcThreshold(cpuDeltas, elapsedSeconds) {
   return Math.max(median * 3, elapsedSeconds * 0.25);
 }
 
-export function hasActiveChildren(claudePid, children, now = Date.now()) {
+const MAX_DEPTH = 4;
+const isMcp = proc => Boolean(proc.commandLine && proc.commandLine.toLowerCase().includes('mcp'));
+const isRecent = (proc, now) => proc.createdAt != null && (now - proc.createdAt) <= RECENT_CHILD_MS;
+
+// claude の子孫（孫・ひ孫まで）のうち、最近起動したもの。Bash ツールは起動しっぱなしのシェルの下で
+// node や gh を起動するので、直下の子だけでは作業中を見落とす。MCP サーバーの枝は待機中でも常駐するので除く。
+// 返すのは最近起動したものと、そこから claude までの途中のシェル（以後の起動を Normal で引き継がせるため）。
+export function getActiveChildren(claudePid, children, now = Date.now()) {
+  const byParent = new Map();
   for (const child of children) {
-    if (child.ppid !== claudePid) continue;
-    if (!CHILD_NAMES.has(child.name)) continue;
-    if (child.commandLine && child.commandLine.toLowerCase().includes('mcp')) continue;
-    if (child.createdAt != null && (now - child.createdAt) <= RECENT_CHILD_MS) return true;
+    if (!CHILD_NAMES.has(child.name) || isMcp(child)) continue;
+    if (!byParent.has(child.ppid)) byParent.set(child.ppid, []);
+    byParent.get(child.ppid).push(child);
   }
-  return false;
+  const result = new Set();
+  const walk = (parentPid, chain, depth) => {
+    if (depth > MAX_DEPTH) return;
+    for (const child of byParent.get(parentPid) || []) {
+      if (chain.includes(child.pid)) continue;
+      const path = [...chain, child.pid];
+      if (isRecent(child, now)) for (const pid of path) result.add(pid);
+      walk(child.pid, path, depth + 1);
+    }
+  };
+  walk(claudePid, [], 1);
+  return [...result];
 }
 
-export function getActiveChildren(claudePid, children, now = Date.now()) {
-  const result = [];
-  for (const child of children) {
-    if (child.ppid !== claudePid) continue;
-    if (!CHILD_NAMES.has(child.name)) continue;
-    if (child.commandLine && child.commandLine.toLowerCase().includes('mcp')) continue;
-    if (child.createdAt != null && (now - child.createdAt) <= RECENT_CHILD_MS) result.push(child.pid);
-  }
-  return result;
+export function hasActiveChildren(claudePid, children, now = Date.now()) {
+  return getActiveChildren(claudePid, children, now).length > 0;
 }
 
 /**
@@ -187,7 +204,7 @@ export function buildDecision(processes, children, prevState, now = Date.now()) 
 
 // ── Apply script builder ────────────────────────────────────────────
 
-function buildApplyScript(raiseClaude, lowerClaude, raiseChildren) {
+export function buildApplyScript(raiseClaude, lowerClaude, raiseChildren) {
   const fmt = arr => arr.length > 0 ? `@(${arr.join(',')})` : '@()';
   const raiseArr = fmt(raiseClaude);
   const lowerArr = fmt(lowerClaude);
@@ -201,18 +218,18 @@ $raiseChildren = ${childrenArr}
 $result = @{lowered=0; alreadyLow=0; excluded=0; failed=0; raised=0; childrenRaised=0}
 $rows = @(Get-CimInstance Win32_Process -Filter "Name='claude.exe'" | Select-Object ProcessId, ExecutablePath)
 foreach ($row in $rows) {
-    $pid = $row.ProcessId
+    $procId = $row.ProcessId
     $exePath = [string]$row.ExecutablePath
     if ($exePath.ToLower().Contains('\\windowsapps\\')) { $result.excluded++; continue }
     try {
-        $proc = Get-Process -Id $pid -ErrorAction Stop
+        $proc = Get-Process -Id $procId -ErrorAction Stop
         $current = $proc.PriorityClass
-        if ($raiseClaude -contains $pid) {
+        if ($raiseClaude -contains $procId) {
             if ($current -in @('BelowNormal','Idle','Normal')) {
                 $proc.PriorityClass = 'Normal'
                 $result.raised++
             }
-        } elseif ($lowerClaude -contains $pid) {
+        } elseif ($lowerClaude -contains $procId) {
             if ($current -in @('BelowNormal','Idle')) { $result.alreadyLow++; continue }
             if ($current -ne 'Normal') { continue }
             $proc.PriorityClass = 'BelowNormal'
@@ -220,9 +237,9 @@ foreach ($row in $rows) {
         }
     } catch { $result.failed++ }
 }
-foreach ($pid in $raiseChildren) {
+foreach ($procId in $raiseChildren) {
     try {
-        $proc = Get-Process -Id $pid -ErrorAction Stop
+        $proc = Get-Process -Id $procId -ErrorAction Stop
         $current = $proc.PriorityClass
         if ($current -in @('BelowNormal','Idle')) {
             $proc.PriorityClass = 'Normal'
@@ -247,7 +264,7 @@ export function guardClaudePriority({
   try {
     const collResult = exec('powershell.exe', [
       '-NoProfile', '-NonInteractive', '-Command', COLLECT_SCRIPT,
-    ], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+    ], { encoding: 'utf8', windowsHide: true, timeout: 45000 });
     if (collResult.error || (collResult.status != null && collResult.status !== 0)) {
       throw new Error('Collection PowerShell failed');
     }
@@ -280,7 +297,7 @@ export function guardClaudePriority({
     );
     const applyResult = exec('powershell.exe', [
       '-NoProfile', '-NonInteractive', '-Command', applyScriptStr,
-    ], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+    ], { encoding: 'utf8', windowsHide: true, timeout: 45000 });
     if (applyResult.error || (applyResult.status != null && applyResult.status !== 0)) {
       throw new Error('Apply PowerShell failed');
     }

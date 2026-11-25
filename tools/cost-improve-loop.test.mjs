@@ -27,10 +27,20 @@ import {
   writeAutoSessionExecutorEnv,
   writeBudgetPressure,
   splitWhitelistedCommand,
-  runEntry
+  runEntry,
+  refreshCostDirective
 } from './cost-improve-loop.mjs';
 
-const main = (args, io = {}) => mainImpl(args, { scanAiReceipts: async () => ({ errors: [] }), receiptLedgerAgeHours: () => 0, alertAiReceipts: async () => {}, ...io });
+// テストの未指定経路から実通知・プロセス起動・外部APIを呼ばない。
+const main = (args, io = {}) => mainImpl(args, {
+  scanAiReceipts: async () => ({ errors: [] }), receiptLedgerAgeHours: () => 0,
+  alertAiReceipts: async () => {}, collectBudgetStatus: async () => ({ budgetPacePct: 0 }),
+  collectProviderBalances: async () => [], alertProviderBalances: async () => {},
+  spawnSync: () => ({ status: 0 }), submitProposal: async () => ({ ok: true }),
+  notifyKim: async () => ({ delivered: 'session-inbox' }), sendHeartbeat: async () => {},
+  runOriguchiReferralMonthly: async () => {}, shouldSendMonthlyReport: async () => false,
+  ...io
+});
 
 test('残高シグナル3種の境界とauto-local効果は固定許可リストだけ', () => {
   const rows = [
@@ -1056,7 +1066,7 @@ test('receipt signals: success is clean; stale boundary and missing ledger are d
   }
 });
 
-test('runEntry: refresh throw でも run が呼ばれ、process.exitCode=1 になる', async () => {
+test('runEntry: refresh throw でも run が呼ばれ、process.exitCode=0 のまま', async () => {
   const savedExitCode = process.exitCode;
   process.exitCode = 0;
 
@@ -1068,9 +1078,18 @@ test('runEntry: refresh throw でも run が呼ばれ、process.exitCode=1 に�
   });
 
   assert.equal(calledRun, true, 'refresh が throw しても run は呼ばれる');
-  assert.equal(process.exitCode, 1, 'process.exitCode は 1 になる');
+  assert.equal(process.exitCode, 0, '本体成功なら終了コードは 0');
 
   process.exitCode = savedExitCode;
+});
+
+test('directive 更新タイムアウトは既定900秒、環境変数で変更できる', () => {
+  for (const [env, expected] of [[{}, 900000], [{ COST_DIRECTIVE_TIMEOUT_SECONDS: '42' }, 42000], [{ COST_DIRECTIVE_TIMEOUT_SECONDS: 'invalid' }, 900000]]) {
+    refreshCostDirective({ home: os.tmpdir(), env, spawn: (_exe, _args, options) => {
+      assert.equal(options.timeout, expected);
+      return { status: 0 };
+    } });
+  }
 });
 
 test('runEntry: refresh 成功時は process.exitCode を変えず run が呼ばれる', async () => {

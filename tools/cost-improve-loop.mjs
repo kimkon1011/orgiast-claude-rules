@@ -1792,10 +1792,12 @@ async function mainFetch(argv) {
   return await fetchFleetKPIs({ sheetUrl: fleetEnv.FLEET_SHEET_URL, token: fleetEnv.FLEET_SHEET_TOKEN });
 }
 
-export function refreshCostDirective({ home, spawn = defaultSpawnSync } = {}) {
+export function refreshCostDirective({ home, spawn = defaultSpawnSync, env = process.env } = {}) {
+  const seconds = Number(env.COST_DIRECTIVE_TIMEOUT_SECONDS ?? 900);
+  const timeout = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 900_000;
   const result = spawn(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], {
     cwd: path.resolve(import.meta.dirname, '..'), env: { ...process.env, ORGIAST_HOME: home },
-    encoding: 'utf8', windowsHide: true, timeout: 300_000,
+    encoding: 'utf8', windowsHide: true, timeout,
   });
   if (result.error || result.status !== 0) throw new Error(`cost-directive refresh failed: ${result.error?.message || `exit ${result.status}`} ${String(result.stderr || '').slice(-1000)}`);
   return `cost-directive refreshed: ${path.join(home, '.claude', 'cost-directive.md')} (exit 0)`;
@@ -1811,7 +1813,6 @@ export function runEntry({ argv, refresh, run }) {
         console.error(refresh());
       } catch (err) {
         console.error(`WARN cost-directive refresh failed (本体は続行): ${err?.message || err}`);
-        process.exitCode = 1;
       }
     }
     return run();

@@ -15,6 +15,7 @@
 ## カタログ
 | 型 | 症状（初出） | 横展開の検索 | ゲート |
 |---|---|---|---|
+| マージ可否の人頼み型 | PR #2460 のマージ承認が kim-inbox 経由で kim に届き、マージ後も3日残った（2026-11-20〜25 カフェ用015） | マージしてよい・マージ承認 | tools/kim-inbox.mjs、tools/lib/kim-inbox-relay-state.mjs、tools/kim-inbox-autoclose.mjs |
 | 代理返答の約束が実行経路なしで消える | Discord の代理返答が予定変更・会議URL送付を約束したが実行も記録もなかった（2026-11-23） | 代理返答の送信経路、設定します・送ります・運用化しました | 送信前の完了主張チェック、約束台帳、Calendar 読み戻し、24時間超の監査 |
 | 社外共有リンクの検証不足型 | 手順書リンクが相手側で開けない（2026-11-19 大庭様。共有成功ログ・送信文字列に異常なし、端末側原因は未確定） | `drive.google.com` / `docs.google.com` / `rtpof=true` / curama送信クリック | share-before-send-gate の社外本文モードでMIME・anyoneWithLink reader・未ログインHTTPを毎回確認。curama-share-gate-adapterを送信直前にawait |
 | 共有作業ツリーの Git 全体操作 | 共有作業ツリーで index/stash を全体操作して他セッション作業を巻き込む | `git add -A`、パススペック無しの `git commit`、書き込みを伴う `git stash` | shared-worktree-git-guard |

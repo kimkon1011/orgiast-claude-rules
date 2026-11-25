@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { isEntry } from './is-entry.mjs';
 import { answerItem, listItems, updateInboxItem } from './kim-inbox.mjs';
+import { isPullRequestMergeApprovalRequest } from './lib/kim-inbox-merge-handoff.mjs';
 
 const execFileAsync = promisify(execFile);
 export const PR_URL_RE = /https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/g;
@@ -240,7 +241,12 @@ export async function findAutocloseCandidates(items, { fetchState = fetchPullReq
     }
     const text = item.text || '';
     const isKnownCompletionNotification = AUTO_CLOSE_TEXT_PATTERNS.some(pattern => pattern.test(text));
+    const isMergeApproval = isPullRequestMergeApprovalRequest(text);
     if (!isKnownCompletionNotification && APPROVAL_REQUEST_PATTERNS.some(pattern => pattern.test(text))) {
+      if (isMergeApproval && states.every(pr => pr.state === 'MERGED')) {
+        candidates.push({ id: item.id, prs: states, reason: 'マージ承認 ask の対象 PR が MERGED' });
+        continue;
+      }
       approvalRequestExcludedCount++;
       skipped.push({ id: item.id, reason: '承認待ち', prs: states });
       continue;

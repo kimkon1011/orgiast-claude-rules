@@ -290,6 +290,8 @@ PR は作った席が `node tools/pr-land.mjs --title "<題>" --body-file <本�
 **userに渡すコマンドはシェルに合わせる（絶対）**: kim・社内PCのターミナル既定は **Windows PowerShell 5.1**（Claude 側の PowerShell tool は pwsh 7 なので同じ書き方が通ってしまう＝油断しやすい）。`cd "パス" && node script.mjs` は `トークン '&&' は、このバージョンでは有効なステートメント区切りではありません` で**必ず失敗する**。**`;` 区切り**（`Set-Location "パス"; node script.mjs`）で書き、空白・日本語を含むパスは必ず `"` で囲む。`head`/`tail`/`which`/`touch`/`wc -l` も存在しない。2026-08-20 に実際に `&&` を渡して失敗させた。
 
 **git/PRフローも同様 — PRは自分でマージする（2026-08-19 kim決定・全アカウント共通）**: commit→push→`gh pr create`→**`node tools/pr-merge.mjs <PR番号>` まで自分で完結**する。「マージお願いします」で止めない。旧ルールの「自作PRのマージだけは人間の1クリック」は**廃止**（kimに毎回1クリックを残すこと自体が§1.1最上位原則に反し、実運用で「マージ待ち」の滞留を生んでいたため）。
+
+- kim-inbox・受信箱・定期報告でもマージ可否を kim に聞かない（`kim-inbox.mjs` が拒否する）。
 - 全 kim 操作席では GitHub 招待を SessionStart の onboarding-sync から1日1回承諾する（招待者・リポ所有者がともに kimkon1011 のみ）。即時実行は `node tools/gh-accept-invites.mjs`。診断だけなら `node tools/access-doctor.mjs`、招待承諾・origin 修復は `--fix`。fork リモートは保存する。
 - auto-merge.yml の「🔒 kim の手動マージが必要」は「作成した席が CI 合格後に pr-merge で自分でマージする」と読み替える。ただし `.github/workflows/*` を含む PR は例外として止め、workflow 権限・レビューの専用経路で扱う。
 - fleet-mail は kim 操作席から kim-PC への権限・鍵・マージ依頼を exit 2 で拒否する。kim-PC 固有のローカル資源が必要な場合だけ `--kim-pc-only-resource "<具体的理由>"` を指定する。理由は送信ログに残る。

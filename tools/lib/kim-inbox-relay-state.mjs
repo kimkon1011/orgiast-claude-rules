@@ -157,7 +157,6 @@ export function inboxBrief(item, options = {}) {
   const hasRealDecide = decide && decide !== '判断不要（報告のみ）';
   const reply = item.kind === 'deadline' ? `${item.key || 'D-003'} 完了／延期 11/20／不要`
     : resumeFailed ? 'N 続けて／N 中止'
-    : hasRealDecide && /(?:\bPR\b|プルリク|\/pull\/\d+)/i.test(`${decide}\n${text}`) ? 'N マージしてよい／N <修正点>'
     : item.kind === 'info' && !hasRealDecide ? '返事不要' : 'N 可／N 不要／N <指示>';
   const rawLinks = [...text.matchAll(/https?:\/\/[^\s<>「」『』【】（）]+/g)].map(m => m[0]);
   const sanitized = rawLinks.map(url => url.replace(/[*)\]）。、.,]+$/, ''));

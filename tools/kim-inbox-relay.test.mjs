@@ -48,6 +48,14 @@ test('each item needs its own explanation; indented and bulleted numbering delim
   assert.equal(result.receipts[0].summary, formatInboxBrief(a, 1, { home: f.home }).split('\n')[0]);
 });
 
+test('PR を含む ask も返事の例をマージ可否に変えない', async t => {
+  const f = fixture(t);
+  const item = await addItem(f.home, { kind: 'ask', text: 'PR #2460 の修正方針を選んでください' });
+  const brief = formatInboxBrief(item, 1, { home: f.home });
+  assert.match(brief, /返事の例: 1 可／1 不要／1 <指示>/);
+  assert.doesNotMatch(brief, /マージしてよい/);
+});
+
 test('decorated inbox headings, trailing labels and paraphrases pass; missing IDs and later sections do not', async t => {
   const f = fixture(t);
   const a = await addItem(f.home, { kind: 'ask', text: '原文の長い依頼です' });

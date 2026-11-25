@@ -1,4 +1,4 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-25 21:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-25 22:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
 - 案件数: 23
@@ -9,7 +9,7 @@
 - 011・bestone-reschedule-1125・完了・最終更新 11/25 11:35、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 011・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・dispatch-1122-21・停止・最終更新 11/22 21:48、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 011・eight-dai6-1125・停止・最終更新 11/25 18:32、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
+- 011・eight-dai6-1125・進行中・最終更新 11/25 21:07、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
 - 011・eight-venue-check-1125・完了・最終更新 11/25 20:27、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 011・eight-wiaas-reply-1125・完了・最終更新 11/25 18:04、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
 - 011・gridbeyond-yosu-1125・金さん待ち・最終更新 11/25 11:38、STATUS.mdなし、REPORTあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
@@ -21,7 +21,7 @@
 - 011・sales-14sha-1125・完了・最終更新 11/25 11:34、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 011・sales-followup・停止・最終更新 11/24 01:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-followup-1123・完了・最終更新 11/23 18:18、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
-- 011・sales-next-contact・進行中・最終更新 11/25 20:55、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
+- 011・sales-next-contact・進行中・最終更新 11/25 21:41、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
 - 011・souko-kyujin-1125・完了・最終更新 11/25 19:40、STATUS.mdなし、DONEあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
 - 011・tangomuto-reply-1125・完了・最終更新 11/25 12:25、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 011・tasks・停止・最終更新 11/24 09:49、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

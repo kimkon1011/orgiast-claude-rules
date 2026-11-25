@@ -10,7 +10,15 @@ import { mergePr } from './pr-merge.mjs';
 // push URL にユーザー名を埋めてアカウントを固定する。
 // commit-landed.mjs の git credential fill + GCM_INTERACTIVE=never と同様の対策。
 // (2026-11-25 実測: GCM デフォルトでは対話プロンプトが最大30秒超・失敗→次セッションへ回らない)
-const GCM_PUSH_USERNAME = 'seisaku-team-org';
+// 2026-11-26: ハードコードではなく GCM の credential fill から動的に取得。機械ごとに登録アカウントが
+// 異なるため（例: cr568 の PC018 は seisaku-team-org の token を持たない）。取得不可時は seisaku-team-org。
+function getGcmPushUsername(run, fallback = 'seisaku-team-org') {
+  try {
+    const output = run('git', ['credential', 'fill'], { input: 'protocol=https\nhost=github.com\n\n', stdio: ['pipe', 'pipe', 'pipe'] });
+    const match = String(output || '').match(/^username=(.+)$/m);
+    return match ? match[1].trim() : fallback;
+  } catch { return fallback; }
+}
 
 export function landingRoute(files) {
   if (files.some(file => file.startsWith('.github/workflows/'))) return 'workflow-stop';
@@ -45,7 +53,8 @@ export function publishSeatPr({ cwd = process.cwd(), home = process.env.ORGIAST_
   run('git', ['check-ref-format', '--branch', base]);
   const head = run('git', ['rev-parse', 'HEAD']);
   if (!/^[a-f0-9]{40}$/i.test(head) || run('git', ['rev-parse', `refs/heads/${branch}`]) !== head) throw new Error('作業ブランチと HEAD が一致しません');
-  const gcmPushUrl = GCM_PUSH_USERNAME ? target.url.replace(/^https:\/\//, `https://${GCM_PUSH_USERNAME}@`) : target.url;
+  const gcmPushUser = getGcmPushUsername(run);
+  const gcmPushUrl = gcmPushUser ? target.url.replace(/^https:\/\//, `https://${gcmPushUser}@`) : target.url;
   run('git', ['fetch', gcmPushUrl, base], { env: nonInteractiveGitEnv() });
   const files = run('git', ['diff', '--no-renames', '--name-only', '-z', `FETCH_HEAD...${head}`]).split('\0').filter(Boolean);
   const route = landingRoute(files);

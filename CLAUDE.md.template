@@ -101,6 +101,7 @@ Claude Code・Codex・安いLLMは**APIがあるものしか触れない**。
 ### 1.18.4 着手前のレーン生存確認と「体制不備を先に直す」原則
 - Fable（および Opus）の担当は設計・タスク分解・指示・レビュー・検証だけ。
 **🔴 他AI（Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM）は使うのが既定、Claudeだけは理由が必要。残高切れは入金（オートチャージON）、キー失効/403は再発行、429は別の他AIへ。「外す／やめる／縮小」を選択肢にせず、障害は別の他AIで吸収し復旧後に戻す。割り振りは先に具体名で書く（要約=Gemini、下書き=Kimi、実装=Codex、Claude=verify）。「必要なら使う」は禁止。**
+**🔴 画像生成・PDF/動画/音声の読解・文字起こし・長い調査は gemini-api（/gemini-api-cli skill、安いGemini）へ振り、Claude の枠を使わない。文章の分類・要約・下書きは従来どおり llm-ask。**
 **🔴 故障レーンは全PC・無人でも同じセッションで最優先修復し、Claude は作業を肩代わりしない。codex-do 失敗時は lane-health.json の次の安いレーンへ渡し直し、全レーン停止なら止めて `~/.claude/lane-watch/status.md` の理由と kim の操作を報告する。人にしかできない操作は kim へ直接頼み実呼び出し成功まで確認。lane-repair-first-gate が未修復の通常作業を止める。node tools/lane-doctor.mjs --probe か lane-repair-log.mjs --lane <名> --tried "<試行>" --result fixed|unfixable（6時間有効）で記録し [LANE-REPAIR] を書く。reset 既知の429/usage_limitは quota_wait として別の安いレーンへ。Codex probe失敗はWSL終了コードでも切り分け、「生存 ✅」だけを信用しない。**
 ### 1.19 マキモノとハイブリッド企画書
 完成済み指示書を探し着手（画像・資料: §1.19.1／1.19.2）。

@@ -7,6 +7,13 @@ import path from 'node:path';
 import test from 'node:test';
 import { runOnce, main, createDiscord, discordRequest, ensureTaskPriority, createLlm, contentFor, parseJson, combinePermissions, inventedAmounts, isReportOnly, FORBIDDEN_REPLY_PTN } from './discord-autoreply.mjs';
 
+test('REPLY_SYSTEMはDrive一意回答と金額捏造禁止を両方指示する', () => {
+  const source = fs.readFileSync(new URL('./discord-autoreply.mjs', import.meta.url), 'utf8');
+  assert.match(source, /Driveを検索すれば分かる事実/);
+  assert.match(source, /候補が一意なら確定/);
+  assert.match(source, /無い金額・単価・見積額を書かない/);
+});
+
 const NOW = Date.parse('2026-10-09T03:00:00Z');
 const KIM = '715210673642012733';
 const json = data => new Response(JSON.stringify(data), { status: 200 });

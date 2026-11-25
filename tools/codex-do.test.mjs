@@ -659,6 +659,21 @@ test('wantsEdit は kind=implement のときだけ真になる', () => {
   assert.equal(wantsEdit('implement', '一覧を出して'), false);
 });
 
+// 2026-11-25 実害: 読み取り専用と明記しても「修正が入る予定」等で EDIT_HINT に当たり
+// wantedEdit=true → 空diff失敗 → 安いレーン連鎖になっていた。
+test('wantsEdit は読み取り専用の明示があるとき false になる', () => {
+  assert.equal(
+    wantsEdit('implement', '読み取り調査のみ。コード変更は禁止。修正が入る予定の箇所を列挙して'),
+    false,
+  );
+  assert.equal(
+    wantsEdit('implement', 'Read-only investigation. Do not modify files. List where a fix is needed'),
+    false,
+  );
+  assert.equal(wantsEdit('implement', 'この不具合を修正してください'), true);
+  assert.equal(wantsEdit('implement', '修正して。変更後にテストを追加して'), true);
+});
+
 test('snapshotWorkingTree non-git directory: snapshot changes when file is added', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-nongit-'));
   try {

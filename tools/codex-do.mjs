@@ -388,8 +388,15 @@ export function snapshotWorkingTree(cwd, spawnImpl = spawnSync) {
 // なり、空diff→codex の不要な astra 昇格→gemini fallback まで走って failure として台帳に残る
 // (2026-10-19 実測: fallback の直近3件中2件が kind:verify の空diff)。kind を優先する。
 const EDIT_HINT = /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i;
+// 読み取り専用の明示がある指示は、本文に「修正」等の EDIT_HINT 語があっても編集要求とみなさない。
+// 実害 2026-11-25: 「コード変更は禁止」「修正が入る予定の箇所を列挙」が wantedEdit=true になり
+// 空diff→安いレーン連鎖になった。
+const READ_ONLY_HINT = /読み取り調査|読み取り専用|読み取りのみ|コード変更.{0,10}禁止|コードを変更しない|変更禁止|ファイルを変更しない|編集禁止|read[\s-]?only|do not modify|don'?t modify|no code changes/i;
 export function wantsEdit(kind, instruction, review = false) {
-  return kind === 'implement' && !review && EDIT_HINT.test(String(instruction || ''));
+  if (kind !== 'implement' || review) return false;
+  const text = String(instruction || '');
+  if (READ_ONLY_HINT.test(text)) return false;
+  return EDIT_HINT.test(text);
 }
 
 // cheap-first: 「安いAIを先に使う」モードが有効か判定する。

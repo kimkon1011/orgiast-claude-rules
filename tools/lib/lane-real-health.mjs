@@ -83,11 +83,18 @@ export const authFailurePattern = /basic authentication|HTTP\s*401|\b401\b|unaut
 // lane-repair-first-gate が全セッションの編集・シェルを封鎖した。
 export const chatgptUsageLimit = text => /chatgpt\.com\/settings\/usage|upgrade to pro[^\n]{0,300}try again at|you(?:['’]ve| have) (?:hit|reached)[^\n]{0,60}limit/i.test(String(text));
 export const quotaFailure = text => http429(text) || chatgptUsageLimit(text) || /cooldown|(?:usage|weekly|monthly)[_ /.-]*limit|limit[^\n]{0,60}exhausted|rate[_ .-]?limit|RESOURCE_EXHAUSTED|codex_cooldown/i.test(String(text));
-// billing は 402 / insufficient balance|quota|credits / payment_required のみ。
+// billing は 402 / insufficient balance|quota|credits / payment_required /
+// xAI の credits・spending-limit 文言のみ。403 全般は billing にしない（文言一致のみ）。
 // 429 や rate limit 由来の "Insufficient credits" を billing と誤判定しない（quotaFailure と順序で分離）。
-export const billingFailure = text => http402(text)
-  || (/outstanding balance|billing account[^\n]{0,80}(?:disabled|closed|suspended|outstanding|not active)/i.test(String(text)) && http403(text))
-  || /insufficient[_ ](?:balance|quota|credits?)|(?:credits?|balance)[ _-]*(?:are[ _-]*)?(?:depleted|exhausted|insufficient)|(?:out of|no|not enough|low) credits?|credit[_ -](?:balance|limit)[^\n]{0,40}(?:low|exceed|insufficient|depleted|exhausted)|payment_required/i.test(String(text));
+// ChatGPT 定額枠切れの「purchase more credits or try again at」は chatgptUsageLimit で除外。
+export const billingFailure = text => {
+  const s = String(text);
+  if (http402(s)) return true;
+  if (/outstanding balance|billing account[^\n]{0,80}(?:disabled|closed|suspended|outstanding|not active)/i.test(s) && http403(s)) return true;
+  if (/insufficient[_ ](?:balance|quota|credits?)|(?:credits?|balance)[ _-]*(?:are[ _-]*)?(?:depleted|exhausted|insufficient)|(?:out of|no|not enough|low) credits?|credit[_ -](?:balance|limit)[^\n]{0,40}(?:low|exceed|insufficient|depleted|exhausted)|payment_required/i.test(s)) return true;
+  if (chatgptUsageLimit(s)) return false;
+  return /used all(?: available)? credits|monthly spending limit|raise your spending limit|purchase more credits/i.test(s);
+};
 // 文言に 429 を含む billing は偽の billing（実際は quota）。判定補助。
 export const billingWithQuotaHint = text => billingFailure(text) && (http429(text) || chatgptUsageLimit(text) || /rate[_ .-]?limit|cooldown/i.test(String(text)));
 // Provider timestamps without an offset are interpreted in the host timezone.

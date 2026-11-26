@@ -13,6 +13,10 @@ import { readEnvValue } from "./env-kv.mjs";
 import { sendDiscordDm } from "./discord-dm.mjs";
 import { fetchHistory as fetchSendHistory, runLlm as checkSendContext } from "./send-context-check.mjs";
 import { latestOf, writeContextMarker } from "./lib/send-context.mjs";
+import {
+  safeReconcileSalesApp,
+  defaultDryRunSalesLinkPath,
+} from "./lib/sales-app-read.mjs";
 export const LEDGER_ID = "17h_x-1kdxI_92H_dXBydclLsxUmYKa-ut0P3begM_j0",
   MASTER_ID = "14RC6og1ma_I3LGHwCVwswKArgHwCOPxWlPB3g8adaYY";
 export const LEDGER_URL = "https://docs.google.com/spreadsheets/d/17h_x-1kdxI_92H_dXBydclLsxUmYKa-ut0P3begM_j0/edit?usp=sharing";
@@ -23,6 +27,7 @@ export const TABS = [
   "自動_実行ログ",
   "自動_百貨店受信（未対応か要判断）",
   "自動_社長報告",
+  "自動_営業アプリ照合",
 ];
 const USER = "seisaku-team@orgiast.jp",
   STAFF = [
@@ -622,6 +627,7 @@ export async function buildDailyReport(
     messages = [],
     actions = [],
     calendar = [],
+    salesApp = null,
   } = {},
   deps = {},
 ) {
@@ -782,6 +788,10 @@ export async function buildDailyReport(
             `・ほか${movements.length - 8}件（台帳の明細参照）`,
           ]
         : visibleMovements,
+    salesMismatchLines =
+      salesApp?.ok === false
+        ? [`・営業アプリ: 読み取り失敗（${salesApp.error || "不明"}）`]
+        : (salesApp?.reportLines || []).slice(0, 5),
     lines = [
       `【業務報告 ${md} 佐藤】`,
       `■担当案件：計${counted.total}件（確定${counted.confirmed}件／提案・調整中${counted.adjusting}件）`,
@@ -801,6 +811,9 @@ export async function buildDailyReport(
       ...(sorted.length
         ? sorted.map((x, i) => `${i + 1}. ${clip(x[0] === "予定" ? calendarPriorityText(x) : `${x[3] && x[3] !== x[2] ? `${x[3]}：` : ""}${x[2]}`, 76)}`)
         : ["・なし"]),
+      ...(salesMismatchLines.length
+        ? ["■営業アプリとの食い違い", ...salesMismatchLines]
+        : []),
     ],
     capped = capReportLines(lines).map(line => finalizeReportLine(line));
   for (const x of uniqueProblems)
@@ -813,6 +826,13 @@ export async function buildDailyReport(
       yesterday[0]?.url || gmailUrl(yesterday[0]?.threadId || ""),
     ]);
   sorted.forEach((x) => details.push(["今日の優先", x[2], x[3], x[5]]));
+  for (const line of salesMismatchLines)
+    details.push([
+      "営業アプリとの食い違い",
+      line.replace(/^・/, ""),
+      "",
+      "",
+    ]);
   return {
     text: `${capped.join("\n")}\n\n${LEDGER_FOOTER}`,
     lines: capped,
@@ -1106,8 +1126,29 @@ export async function run({
       ]);
   for (const x of gmail.aimitsu.filter((x) => x.unanswered))
     actions.push(["アイミツ", "", x.subject, x.company, "未回答", x.url]);
+  const salesApp = await (deps.reconcileSalesApp || safeReconcileSalesApp)(
+    cases,
+    {
+      now,
+      envFile: deps.salesAppEnvFile,
+      fetchImpl: deps.salesAppFetchImpl || deps.fetchImpl,
+    },
+  );
+  // 営業アプリ失敗は日報全体を止めない（status に混ぜるとメール失敗メッセージが誤発火する）。
+  if (!salesApp.ok) {
+    errors.push(`営業アプリ: 読み取り失敗（${salesApp.error}）`);
+  } else {
+    for (const row of salesApp.overdueActions || []) actions.push(row);
+  }
   const report = await buildDailyReport(
-    { now, cases, messages: gmail.messages, actions, calendar: cal },
+    {
+      now,
+      cases,
+      messages: gmail.messages,
+      actions,
+      calendar: cal,
+      salesApp,
+    },
     deps,
   );
   errors.push(...report.llmErrors);
@@ -1195,6 +1236,20 @@ export async function run({
         ["節名", "項目", "案件コード", "根拠リンク"],
         ...report.details,
       ],
+      自動_営業アプリ照合: salesApp.sheet || [
+        [
+          "案件ID",
+          "会社名",
+          "案件名",
+          "マスター状態",
+          "営業アプリ状態(status・progress)",
+          "次回連絡日",
+          "最終やり取り日時",
+          "直近14日件数",
+          "食い違い",
+          "照合方法",
+        ],
+      ],
     };
   const p = {
     executedAt,
@@ -1207,6 +1262,7 @@ export async function run({
     status,
     tables,
     report,
+    salesApp,
   };
   if (!dryRun) {
     // 台帳が書けない朝でも報告本文を手放さないよう、ローカルファイルを先に残す。
@@ -1237,6 +1293,24 @@ export async function run({
       }
   } else {
     p.write = { mode: "dry-run" };
+    const dryPath =
+      deps.dryRunSalesLinkPath ||
+      defaultDryRunSalesLinkPath(deps.home || os.homedir());
+    fs.mkdirSync(path.dirname(dryPath), { recursive: true });
+    const dryPayload = {
+      executedAt,
+      write: "dry-run",
+      salesApp: {
+        ok: salesApp.ok,
+        error: salesApp.error || null,
+        stats: salesApp.stats,
+        discrepancies: salesApp.discrepancies,
+        rows: salesApp.rows,
+      },
+      reportText: report.text,
+    };
+    fs.writeFileSync(dryPath, `${JSON.stringify(dryPayload, null, 2)}\n`);
+    p.dryRunSalesLinkPath = dryPath;
   }
   return p;
 }

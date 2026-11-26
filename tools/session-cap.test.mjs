@@ -29,7 +29,7 @@ function fixture(t, state = {}) {
   fs.writeFileSync(path.join(user, 'globalStorage/storage.json'), JSON.stringify({ windowsState: { lastActiveWindow: { folder: pathToFileURL(root).href } } }));
   const processes = path.join(home, 'processes.json'); fs.writeFileSync(processes, '[]');
   const options = { home, vscodeUserDir: user, processesFile: processes, now, cap: 0 };
-  function session({ id = randomUUID(), age = 48, title = '自動完了', userText, assistant = '完了', entrypoint = 'sdk', rows = [], cwd = root } = {}) {
+  function session({ id = randomUUID(), age = 48, title = '自動完了', userText, assistant = '完了', entrypoint = 'cli', rows = [], cwd = root } = {}) {
     const stamp = new Date(time - age * hour).toISOString();
     const file = path.join(project, id + '.jsonl');
     const data = [{ type: 'custom-title', customTitle: title, entrypoint, timestamp: stamp, cwd }, ...(userText ? [{ type: 'user', message: { content: userText }, timestamp: stamp, cwd }] : []), { type: 'assistant', message: { content: assistant }, timestamp: stamp, cwd }, ...rows];
@@ -98,10 +98,58 @@ test('user close title or existing approval permits archival, but pending still 
   const r = await sessionCap(f.options);
   assert.deepEqual(new Set(r.archived.map(x => x.id)), new Set([title, approved])); assert.ok(exists(f, pending));
 });
-test('dry-run writes no files, including reports, locks or last.json', async t => {
+test('dry-run without report-dir writes no files, locks or last.json', async t => {
   const f = fixture(t); f.session(); const before = snapshot(f.home);
-  const r = await sessionCap({ ...f.options, dryRun: true, reportDir: path.join(f.home, 'reports') });
+  const r = await sessionCap({ ...f.options, dryRun: true });
   assert.equal(r.archived.length, 1); assert.deepEqual(snapshot(f.home), before);
+});
+
+test('old sdk sessions do not count toward cap and never move, including sidecars', async t => {
+  const f = fixture(t), visible = f.session({ entrypoint: 'claude-vscode' });
+  const unknown = f.session({ entrypoint: null });
+  const sdk = ['sdk-cli', 'sdk-ts', 'sdk'].map(entrypoint => f.session({ entrypoint, age: 200 }));
+  for (const id of sdk) { fs.mkdirSync(path.join(f.project, id)); fs.writeFileSync(path.join(f.project, id, 'note.txt'), 'untouched'); }
+  const before = snapshot(f.project);
+  const within = await sessionCap({ ...f.options, cap: 2 });
+  assert.equal(within.before, 2); assert.equal(within.after, 2); assert.equal(within.programmaticIgnored, 3);
+  assert.equal(within.overCap, null); assert.deepEqual(within.archived, []);
+  assert.deepEqual(snapshot(f.project), before);
+  const over = await sessionCap({ ...f.options, cap: 0 });
+  assert.equal(over.before, 2); assert.equal(over.after, 0); assert.equal(over.programmaticIgnored, 3);
+  assert.deepEqual(new Set(over.archived.map(row => row.id)), new Set([visible, unknown]));
+  for (const [file, hash] of Object.entries(snapshot(f.project))) assert.equal(hash, before[file]);
+  for (const id of sdk) {
+    assert.ok(exists(f, id)); assert.ok(fs.existsSync(path.join(f.project, id, 'note.txt')));
+    assert.ok(!over.kept.some(row => row.id === id));
+  }
+});
+
+test('dry-run reports visible inventory, keep reasons, unread and last assistant excerpt', async t => {
+  const f = fixture(t), archive = f.session({ entrypoint: null });
+  const assistant = '確認内容'.repeat(100);
+  const pending = f.session({ assistant, rows: [{ type: 'user', message: { content: '最新ユーザー発言' } }] });
+  const sdk = f.session({ entrypoint: 'sdk-cli' }), hidden = f.session();
+  db(f.stateFile, { hiddenSessionIds: [hidden], [`sessionUnread:${f.root}`]: [pending] });
+  const before = snapshot(f.home), reportDir = path.join(f.home, 'reports');
+  for (const cap of [0, 10]) {
+    const r = await sessionCap({ ...f.options, cap, dryRun: true, reportDir });
+    const report = JSON.parse(fs.readFileSync(path.join(reportDir, 'inventory.json'), 'utf8'));
+    assert.equal(r.before, 2); assert.equal(r.programmaticIgnored, 1);
+    assert.equal(report.inventory.length, 2);
+    assert.ok(!report.inventory.some(row => [sdk, hidden].includes(row.id)));
+    const a = report.inventory.find(row => row.id === archive), p = report.inventory.find(row => row.id === pending);
+    assert.deepEqual(Object.keys(a).sort(), ['decision', 'entrypoint', 'id', 'mtime', 'reasons', 'title', 'unread']);
+    assert.equal(a.entrypoint, ''); assert.equal(typeof a.mtime, 'number'); assert.equal(a.unread, false);
+    assert.deepEqual(a.reasons, []); assert.equal(a.decision, cap === 0 ? 'archive' : 'keep');
+    assert.equal(p.unread, true); assert.equal(p.decision, 'keep'); assert.ok(p.reasons.includes('pending-user'));
+    const skipped = JSON.parse(fs.readFileSync(path.join(reportDir, 'skipped.json'), 'utf8'));
+    assert.deepEqual(skipped, report.inventory.filter(row => row.decision === 'keep').map(({ id, title, reasons }) => ({ id, title, reasons })));
+    const markdown = fs.readFileSync(path.join(reportDir, 'pending-found.md'), 'utf8');
+    assert.ok(markdown.includes(pending)); assert.ok(markdown.includes(p.title));
+    assert.ok(markdown.includes(assistant.slice(0, 300))); assert.ok(!markdown.includes(assistant.slice(0, 301)));
+    assert.ok(!markdown.includes('最新ユーザー発言'));
+    assert.deepEqual(Object.fromEntries(Object.entries(snapshot(f.home)).filter(([file]) => !file.startsWith('reports' + path.sep))), before);
+  }
 });
 test('archive collision is preserved and next eligible candidate is used', async t => {
   const f = fixture(t), id = f.session({ age: 72 }), other = f.session();

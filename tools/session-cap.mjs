@@ -254,7 +254,7 @@ export async function sessionCap({ home = os.homedir(), vscodeUserDir = vscodeDi
   const time = Date.parse(now);
   if (!Number.isFinite(time) || !Number.isInteger(cap) || cap < 0 || !Number.isInteger(maxMove) || maxMove < 0) throw new Error('invalid now/cap/max-move');
   const base = path.join(home, '.claude'), stateDir = path.join(base, 'session-cap');
-  const result = { at: new Date(time).toISOString(), host: os.hostname(), scopeRoots: [], projectDirs: [], cap, before: 0, after: 0, archived: [], kept: [], pending: [], overCap: null, dryRun, stateReadable: false };
+  const result = { at: new Date(time).toISOString(), host: os.hostname(), scopeRoots: [], projectDirs: [], cap, before: 0, after: 0, programmaticIgnored: 0, archived: [], kept: [], pending: [], overCap: null, dryRun, stateReadable: false };
   let release = () => {};
   if (!dryRun) { fs.mkdirSync(stateDir, { recursive: true }); release = acquire(path.join(stateDir, 'lock')); }
   if (!release) return { ...result, skipped: 'locked' };
@@ -266,10 +266,20 @@ export async function sessionCap({ home = os.homedir(), vscodeUserDir = vscodeDi
     try { result.scopeRoots = scopeRoots(vscodeUserDir, home); result.projectDirs = projectDirs(base, result.scopeRoots); }
     catch (e) { result.skipped = 'scope-unreadable'; result.error = e.message; return result; }
     const hidden = new Set(state.hiddenSessionIds ?? []);
-    const visible = result.projectDirs.flatMap(dir => entries(dir).filter(e => e.isFile() && e.name.endsWith('.jsonl') && !hidden.has(e.name.slice(0, -6))).map(e => path.join(dir, e.name)));
+    const files = result.projectDirs.flatMap(dir => entries(dir).filter(e => e.isFile() && e.name.endsWith('.jsonl') && !hidden.has(e.name.slice(0, -6))).map(e => path.join(dir, e.name)));
+    const visible = [];
+    for (const file of files) {
+      try {
+        const data = await inspectSession(file);
+        if (/^sdk/.test(data.entrypoint)) { result.programmaticIgnored++; continue; }
+        visible.push(data);
+      } catch (e) {
+        // Unknown entrypoints count as visible; unreadable sessions stay protected.
+        visible.push({ id: path.basename(file, '.jsonl'), title: '', file, entrypoint: '', mtime: null, reasons: ['inspection-failed'], error: e.message });
+      }
+    }
     result.before = result.after = visible.length;
-    if (visible.length <= cap) { result.kept = visible.map(file => ({ id: path.basename(file, '.jsonl'), title: '', reasons: ['within-cap'] })); return result; }
-    let live, commands, open = new Set();
+    let live = new Set(), commands = '', open = new Set(), protectionError;
     try {
       live = liveIds(base, time); commands = processCommands(processesFile);
       for (const entry of entries(path.join(vscodeUserDir, 'workspaceStorage'))) {
@@ -283,27 +293,29 @@ export async function sessionCap({ home = os.homedir(), vscodeUserDir = vscodeDi
         catch (e) { if (e.message !== 'extension state missing') throw e; }
       }
     } catch (e) {
-      result.kept = visible.map(file => ({ id: path.basename(file, '.jsonl'), title: '', reasons: ['protection-unreadable'] }));
-      result.error = e.message; return result;
+      protectionError = result.error = e.message;
     }
     const grouped = new Set(result.scopeRoots.flatMap(root => [...ids(state[`sessionGroups:${root}`])]));
+    const unread = new Set(result.scopeRoots.flatMap(root => [...ids(state[`sessionUnread:${root}`])]));
     const git = gitInspector();
-    for (const file of visible) {
+    for (const data of visible) {
+      data.unread = unread.has(data.id.toLowerCase());
+      if (data.error) { inventory.push(data); continue; }
       try {
-        const data = await inspectSession(file), reasons = [];
+        const reasons = protectionError ? ['protection-unreadable'] : [];
         if (time - data.updated <= 10 * MINUTE || live.has(data.id) || commands.includes(data.id)) reasons.push('running');
         if (open.has(data.id.toLowerCase())) reasons.push('running', 'open-tab');
         if (/QuotaSweep|UnsentLedger|AutoSession|MorningSessionSweep|Fleet|auto-session|nightly/i.test(data.title + '\n' + data.firstUser) && time - data.updated <= 6 * HOUR) reasons.push('job-active');
         const pending = pendingReasons(data, time);
-        if (pending.length) { reasons.push('pending', ...pending); result.pending.push({ id: data.id, title: data.title, excerpt: (data.lastMessage === 'user' ? data.lastUser : data.lastAssistant).slice(0, 300), reasons: pending }); }
+        if (pending.length) { reasons.push('pending', ...pending); result.pending.push({ id: data.id, title: data.title, excerpt: data.lastAssistant.slice(0, 300), reasons: pending }); }
         if (/下書き|未送信|送ってよい|送信承認/.test(data.lastAssistant)) reasons.push('draft');
         reasons.push(...git(data));
         if (grouped.has(data.id.toLowerCase())) reasons.push('grouped');
-        const automatic = /sdk/i.test(data.entrypoint) || data.userTurns === 0;
+        const automatic = data.userTurns === 0;
         if (!automatic && !data.title.includes('【閉じて可】') && !sessionApproved(data.lastAssistant)) reasons.push('user-opened');
         if (automatic && time - data.updated < 24 * HOUR) reasons.push('automatic-recent');
         inventory.push({ ...data, reasons: [...new Set(reasons)] });
-      } catch (e) { inventory.push({ id: path.basename(file, '.jsonl'), title: '', file, reasons: ['inspection-failed'], error: e.message }); }
+      } catch (e) { inventory.push({ ...data, reasons: ['inspection-failed'], error: e.message }); }
     }
     const candidates = inventory.filter(s => !s.reasons.length).sort((a, b) => a.updated - b.updated || a.id.localeCompare(b.id));
     for (const data of candidates) {
@@ -328,15 +340,15 @@ export async function sessionCap({ home = os.homedir(), vscodeUserDir = vscodeDi
   } finally {
     if (result.after > cap) result.overCap = { count: result.after - cap, reason: [...new Set(result.kept.flatMap(s => s.reasons))].join(', ') || '保護対象または退避上限により超過' };
     try {
-      if (!dryRun) {
-        writeJson(path.join(stateDir, 'last.json'), result);
-        if (reportDir) {
-          fs.mkdirSync(reportDir, { recursive: true });
-          writeJson(path.join(reportDir, 'inventory.json'), { ...result, inventory });
-          writeJson(path.join(reportDir, 'skipped.json'), result.kept);
-          writeJson(path.join(reportDir, 'archived.json'), result.archived);
-          fs.writeFileSync(path.join(reportDir, 'pending-found.md'), '# 確認待ちセッション\n\n' + (result.pending.map(row => `- ${row.id} — ${row.title}\n  ${row.excerpt.replace(/\n/g, '\n  ')}`).join('\n\n') || '確認待ちはありません。') + '\n');
-        }
+      if (!dryRun) writeJson(path.join(stateDir, 'last.json'), result);
+      if (reportDir) {
+        const archived = new Set(result.archived.map(row => row.id));
+        const report = inventory.map(({ id, title, mtime, entrypoint, unread, reasons }) => ({ id, title, mtime, entrypoint, unread, reasons, decision: archived.has(id) ? 'archive' : 'keep' }));
+        fs.mkdirSync(reportDir, { recursive: true });
+        writeJson(path.join(reportDir, 'inventory.json'), { ...result, inventory: report });
+        writeJson(path.join(reportDir, 'skipped.json'), report.filter(row => row.decision === 'keep').map(({ id, title, reasons }) => ({ id, title, reasons })));
+        writeJson(path.join(reportDir, 'archived.json'), result.archived);
+        fs.writeFileSync(path.join(reportDir, 'pending-found.md'), '# 確認待ちセッション\n\n' + (result.pending.map(row => `- ${row.id} — ${row.title}\n  ${row.excerpt.replace(/\n/g, '\n  ')}`).join('\n\n') || '確認待ちはありません。') + '\n');
       }
     } finally { release(); }
   }

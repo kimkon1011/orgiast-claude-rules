@@ -170,16 +170,48 @@ test('同日JSTの再実行はfallback失敗を捕捉し予算・通知・実行
   assert.equal(fs.existsSync(ctx.file('x-ai-tips/collect.lock')), false);
 });
 
-test('JSTの翌日には収集を再開し、不正な日時文字列でも永続停止しない', async t => {
-  for (const creditBlockedAt of ['2026-11-03T14:59:59Z', 'invalid-date']) {
-    let calls = 0;
-    const ctx = setup(t, { now: new Date('2026-11-03T15:00:00Z'), fetchFn: async () => { calls++; return response([]); } });
-    fs.mkdirSync(ctx.file('x-ai-tips'), { recursive: true });
-    fs.writeFileSync(ctx.file('x-ai-tips/state.json'), JSON.stringify({ creditBlockedAt, night: { date: '2026-11-03', calls: defaults.maxCalls, costUsd: defaults.maxCostUsd } }));
-    assert.match((await runCollect(ctx.options)).status, /^ok:/);
-    assert.equal(calls, 1);
-    assert.equal(readState(ctx).night.calls, 1);
-  }
+test('creditBlockRetryDays以内はJSTが変わってもブロック継続、不正な日時文字列は素通り', async t => {
+  // creditBlockedAt が1秒前（retryDays内）→ ブロック継続。別JST日付でisContinued=true
+  let calls = 0;
+  const ctx = setup(t, { now: new Date('2026-11-03T15:00:00Z'), fetchFn: async () => { calls++; return response([]); }, searchImpl: async () => ({ answer: '', urls: [], provider: 'gemini' }) });
+  fs.mkdirSync(ctx.file('x-ai-tips'), { recursive: true });
+  fs.writeFileSync(ctx.file('x-ai-tips/state.json'), JSON.stringify({ creditBlockedAt: '2026-11-03T14:59:59Z', night: { date: '2026-11-03', calls: defaults.maxCalls, costUsd: defaults.maxCostUsd } }));
+  assert.equal((await runCollect(ctx.options)).status, 'skip:支払い待ち（x.ai 残高切れ・2026-11-03から）(継続)');
+  assert.equal(calls, 0);
+  assert.equal(readState(ctx).night.calls, defaults.maxCalls);
+
+  // invalid-date は parse 失敗 → 素通り
+  calls = 0;
+  const ctx2 = setup(t, { now: new Date('2026-11-03T15:00:00Z'), fetchFn: async () => { calls++; return response([]); } });
+  fs.mkdirSync(ctx2.file('x-ai-tips'), { recursive: true });
+  fs.writeFileSync(ctx2.file('x-ai-tips/state.json'), JSON.stringify({ creditBlockedAt: 'invalid-date', night: { date: '2026-11-03', calls: defaults.maxCalls, costUsd: defaults.maxCostUsd } }));
+  assert.match((await runCollect(ctx2.options)).status, /^ok:/);
+  assert.equal(calls, 1);
+  assert.equal(readState(ctx2).night.calls, 1);
+});
+
+test('creditBlockedAtが2日前（別JST日付）なら課金APIを呼ばずブロック継続', async t => {
+  const blockTime = new Date(+now - 2 * 86400000).toISOString();
+  let fetchCalls = 0;
+  const ctx = setup(t, { now, fetchFn: async () => { fetchCalls++; return response([]); }, searchImpl: async () => ({ answer: '', urls: [], provider: 'gemini' }) });
+  fs.mkdirSync(ctx.file('x-ai-tips'), { recursive: true });
+  fs.writeFileSync(ctx.file('x-ai-tips/state.json'), JSON.stringify({ creditBlockedAt: blockTime }));
+  const result = await runCollect(ctx.options);
+  assert.equal(fetchCalls, 0);
+  assert.equal(result.calls, 0);
+  assert.equal(result.cost, 0);
+  assert.match(result.status, /^skip:支払い待ち/);
+});
+
+test('creditBlockedAtが8日前（retryDays=7超過）なら再試行として課金APIを呼ぶ', async t => {
+  const blockTime = new Date(+now - 8 * 86400000).toISOString();
+  let fetchCalls = 0;
+  const ctx = setup(t, { now, fetchFn: async () => { fetchCalls++; return response([]); } });
+  fs.mkdirSync(ctx.file('x-ai-tips'), { recursive: true });
+  fs.writeFileSync(ctx.file('x-ai-tips/state.json'), JSON.stringify({ creditBlockedAt: blockTime }));
+  const result = await runCollect(ctx.options);
+  assert.equal(fetchCalls, 1);
+  assert.match(result.status, /^ok:/);
 });
 
 test('通常の403はOpenRouterへフォールバックし、秘密値を記録しない', async t => {

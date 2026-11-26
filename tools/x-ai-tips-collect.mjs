@@ -27,10 +27,11 @@ const normalized = text => String(text).normalize('NFKC').toLowerCase().replace(
 const safeError = (text, secrets = []) => secrets.reduce((value, secret) => secret ? value.replaceAll(secret, '[REDACTED]') : value, String(text)).replace(/[\r\n]+/g, ' ');
 export const contentHash = item => createHash('sha256').update(normalized(`${item.summary}\n${item.steps}`)).digest('hex');
 export const japanDate = now => new Date(+now + 9 * 3600000).toISOString().slice(0, 10);
-export const creditBlockedStatusWithDate = (blockedAt, hasFallback = false) => {
+export const creditBlockedStatusWithDate = (blockedAt, hasFallback = false, isContinued = false) => {
   const datePart = blockedAt ? `（x.ai 残高切れ・${japanDate(new Date(blockedAt))}から）` : '';
   const fallbackPart = hasFallback ? '(fallback)' : '';
-  return `skip:支払い待ち${datePart}${fallbackPart}`;
+  const continuedPart = isContinued ? '(継続)' : '';
+  return `skip:支払い待ち${datePart}${fallbackPart}${continuedPart}`;
 };
 export function parseArgs(args) {
   const result = { dryRun: false };
@@ -52,6 +53,7 @@ export function validateConfig(config) {
   for (const key of ['inputPerMillion', 'outputPerMillion', 'post', 'profile']) if (!Number.isFinite(config.estimatedRates?.[key]) || config.estimatedRates[key] < 0) throw new Error(`設定不正: estimatedRates.${key}`);
   if (!Array.isArray(config.topics) || config.topics.some(t => !PURPOSES.includes(t.purpose) || typeof t.query !== 'string' || !t.query.trim())) throw new Error('設定不正: topics');
   if (config.fallback !== undefined && config.fallback !== null && config.fallback !== 'web-search') throw new Error('設定不正: fallback（null または "web-search" のみ可）');
+  if (config.creditBlockRetryDays !== undefined && (!Number.isSafeInteger(config.creditBlockRetryDays) || config.creditBlockRetryDays < 1)) throw new Error('設定不正: creditBlockRetryDays');
   return config;
 }
 export function validateState(state) {
@@ -249,9 +251,9 @@ export async function runCollect(options = {}) {
   let locked = false;
   const save = state => { if (!dryRun) { const tmp = `${stateFile}.tmp`; fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n'); fs.renameSync(tmp, stateFile); } };
   let acquired = 0, added = 0, duplicates = 0, calls = 0, cost = 0, state;
-  const skipCreditBlocked = (fallbackAdded = 0) => {
+  const skipCreditBlocked = (fallbackAdded = 0, isContinued = false) => {
     log(CREDIT_BLOCKED_MESSAGE);
-    const status = creditBlockedStatusWithDate(state?.creditBlockedAt, fallbackAdded > 0);
+    const status = creditBlockedStatusWithDate(state?.creditBlockedAt, fallbackAdded > 0, isContinued);
     return { status, calls, cost, added, duplicates };
   };
   try {
@@ -302,20 +304,24 @@ export async function runCollect(options = {}) {
       added += deduped.length; save(state);
       return deduped.length;
     };
-    const collectCreditBlockedFallback = async (topic, advanceTopic = true) => {
-      if (config.fallback !== 'web-search') return skipCreditBlocked();
+    const collectCreditBlockedFallback = async (topic, advanceTopic = true, continued = false) => {
+      if (config.fallback !== 'web-search') return skipCreditBlocked(0, continued);
       if (advanceTopic) state.nextTopicIndex = (state.nextTopicIndex + 1) % topicCount;
       save(state);
       try {
         const fallbackResult = await collectFallback(topic.query, topic.purpose, now, config, { fetchFn, log, searchImpl: options.searchImpl });
-        return skipCreditBlocked(appendFallbackItems(topic, fallbackResult));
+        return skipCreditBlocked(appendFallbackItems(topic, fallbackResult), continued);
       } catch (fbError) {
         log('x-ai-tips-collect: fallback も失敗', String(fbError.message).slice(0, 200));
-        return skipCreditBlocked();
+        return skipCreditBlocked(0, continued);
       }
     };
     const blockedAt = Date.parse(state.creditBlockedAt);
-    if (Number.isFinite(blockedAt) && japanDate(new Date(blockedAt)) === date) return collectCreditBlockedFallback(config.topics[startTopicIndex]);
+    const creditBlockRetryDays = Number.isSafeInteger(config.creditBlockRetryDays) && config.creditBlockRetryDays >= 1 ? config.creditBlockRetryDays : 7;
+    if (Number.isFinite(blockedAt) && now.getTime() - blockedAt < creditBlockRetryDays * DAY) {
+      const isContinued = japanDate(new Date(blockedAt)) < date;
+      return collectCreditBlockedFallback(config.topics[startTopicIndex], true, isContinued);
+    }
     if (state.night?.date !== date) state.night = { date, calls: 0, costUsd: 0 };
     // 送信直前に予約する。配送後クラッシュでも同じ週に二重送信しない。
     if (new Date(`${date}T00:00:00Z`).getUTCDay() === 1 && state.weekly?.date !== date) {

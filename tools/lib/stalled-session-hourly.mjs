@@ -270,20 +270,78 @@ export function heartbeatLine({ now = Date.now(), label, account, rows = [], res
     'waiting-human': waiting, done, skip: rows.length - resumed.size - waiting - done, unlinked, seatGuard, dryRun, error: redactSecrets(String(error)).slice(0, 400) });
 }
 
-export function publishHourlyHeartbeat({ home = process.env.ORGIAST_HOME || os.homedir(), repo, hostname = os.hostname(), label, account, exec = execFileSync, ...summary }) {
+/** Auto packing during hourly publish left durable index.lock and pack corruption (2026-11-26). */
+export const HEARTBEAT_GIT_GC_ARGS = Object.freeze(['-c', 'gc.auto=0', '-c', 'maintenance.auto=false']);
+/** Locks older than this are crash leftovers; younger ones mean another git is still running. */
+export const STALE_HEARTBEAT_LOCK_MS = 10 * MINUTE;
+export const HEARTBEAT_PUBLISH_FAIL_ID = 'heartbeat-publish';
+
+export function heartbeatPublishStatusPath(home = process.env.ORGIAST_HOME || os.homedir()) {
+  return path.join(home, '.claude', 'heartbeat', 'heartbeat-publish.json');
+}
+
+export function recordHeartbeatPublishFailure(home, error) {
+  const reason = redactSecrets(String(error?.message ?? error ?? '')).slice(0, 200);
+  const file = heartbeatPublishStatusPath(home);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ ok: false, id: HEARTBEAT_PUBLISH_FAIL_ID, reason, at: new Date().toISOString() }) + '\n', { mode: 0o600 });
+}
+
+export function clearHeartbeatPublishFailure(home) {
+  try { fs.unlinkSync(heartbeatPublishStatusPath(home)); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+
+export function heartbeatGitLockPaths(gitDir) {
+  return [
+    path.join(gitDir, 'index.lock'),
+    path.join(gitDir, 'HEAD.lock'),
+    path.join(gitDir, 'refs', 'heads', 'fleet-heartbeat.lock'),
+  ];
+}
+
+/** After the publisher session lock is held, drop crash leftovers; refuse young locks. */
+export function reclaimStaleHeartbeatGitLocks(gitDir, { now = Date.now(), maxAgeMs = STALE_HEARTBEAT_LOCK_MS } = {}) {
+  for (const lock of heartbeatGitLockPaths(gitDir)) {
+    let stat;
+    try { stat = fs.statSync(lock); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    const age = now - stat.mtimeMs;
+    if (age < maxAgeMs) throw new Error(`git lock busy: ${path.basename(lock)} (${Math.round(age / 1000)}s < ${Math.round(maxAgeMs / 1000)}s)`);
+    fs.unlinkSync(lock);
+  }
+}
+
+function isCorruptHeartbeatGitError(error) {
+  return /index unavailable|bad object|corrupt/i.test(`${error?.stderr || ''} ${error?.message || ''}`);
+}
+
+function brokenHeartbeatStamp(now = Date.now()) {
+  const d = new Date(now);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+/** Rename only; never delete the clone (local log rows are re-merged on next clone). */
+export function renameBrokenHeartbeatClone(dir, { now = Date.now() } = {}) {
+  const dest = `${dir}.broken-${brokenHeartbeatStamp(now)}`;
+  fs.renameSync(dir, dest);
+  return dest;
+}
+
+export function publishHourlyHeartbeat({ home = process.env.ORGIAST_HOME || os.homedir(), repo, hostname = os.hostname(), label, account, exec = execFileSync, now = Date.now(), ...summary }) {
   label ||= /^(000|004|008|011|014|015|018|019|999)/.exec(hostname)?.[1] || resolveFleetLabel(home, { hostname });
   label = String(label).replace(/[^A-Za-z0-9_-]/g, '_');
   const localDir = path.join(home, 'gb-reports', 'stalled-sessions-hourly', 'heartbeat');
   fs.mkdirSync(localDir, { recursive: true });
   const localFile = path.join(localDir, `${label}.log`);
-  const line = heartbeatLine({ ...summary, label, account: account ?? getClaudeAccountEmail(home) ?? '' });
+  const line = heartbeatLine({ ...summary, now, label, account: account ?? getClaudeAccountEmail(home) ?? '' });
   fs.appendFileSync(localFile, line + '\n');
   const dir = path.join(home, '.claude', 'fleet-heartbeat-repo');
-  const git = (cwd, args) => String(exec('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] })).trim();
+  const git = (cwd, args) => String(exec('git', [...HEARTBEAT_GIT_GC_ARGS, ...args], { cwd, encoding: 'utf8', windowsHide: true, timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] })).trim();
   const gitIdentity = ['-c', 'user.name=Orgiast heartbeat', '-c', 'user.email=heartbeat@orgiast.jp'];
   let release;
   try {
-    release = acquireSessionLock('fleet-heartbeat-publish', { home });
+    release = acquireSessionLock('fleet-heartbeat-publish', { home, now });
     if (!release) throw new Error('heartbeat publisher locked');
     if (!fs.existsSync(path.join(dir, '.git'))) {
       const url = git(repo, ['remote', 'get-url', 'origin']);
@@ -299,6 +357,8 @@ export function publishHourlyHeartbeat({ home = process.env.ORGIAST_HOME || os.h
         git(dir, ['read-tree', '--empty']);
       }
     }
+    // Own publisher lock held: only crash leftovers remain. Young locks still fail.
+    reclaimStaleHeartbeatGitLocks(path.join(dir, '.git'), { now });
     // Clear stale rebase state that would block subsequent operations.
     for (const dirName of ['rebase-merge', 'rebase-apply']) {
       try { if (fs.existsSync(path.join(dir, '.git', dirName))) git(dir, ['rebase', '--abort']); } catch { /* ignore abort failure */ }
@@ -345,8 +405,13 @@ export function publishHourlyHeartbeat({ home = process.env.ORGIAST_HOME || os.h
         if (/^[A-Za-z0-9_-]+\.log$/.test(name) && name !== `${label}.log`) fs.copyFileSync(path.join(dir, 'stalled-sessions', name), path.join(localDir, name));
       }
     }
+    clearHeartbeatPublishFailure(home);
     return { line, localFile, pushed };
   } catch (error) {
+    if (isCorruptHeartbeatGitError(error) && fs.existsSync(dir)) {
+      try { renameBrokenHeartbeatClone(dir, { now }); } catch { /* keep original error */ }
+    }
+    recordHeartbeatPublishFailure(home, error);
     // The unsent line is already durable. Keep one canonical row per invocation.
     const failed = JSON.stringify({ ...JSON.parse(line), error: redactSecrets(`heartbeat-sync: ${error.message}`).slice(0, 400) });
     const content = fs.readFileSync(localFile, 'utf8');

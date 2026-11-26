@@ -100,6 +100,17 @@ export function buildBeacon({ home = process.env.ORGIAST_HOME || os.homedir(), l
     const ledger = readJson(path.join(home, '.claude', 'stall-ledger', `${host}.json`), {});
     steps.push(stallSummaryStep(ledger.summary || ledgerSummary(ledger.entries || [], now)));
   } catch { steps.push(stallSummaryStep({})); }
+  // Hourly heartbeat publish writes this file on failure and deletes it on success.
+  try {
+    const heartbeatPublish = readJson(path.join(home, '.claude', 'heartbeat', 'heartbeat-publish.json'), null);
+    if (heartbeatPublish && heartbeatPublish.ok === false) {
+      steps.push({
+        id: 'heartbeat-publish',
+        status: 'fail',
+        reason: sanitizeReason(heartbeatPublish.reason || 'heartbeat publish failed'),
+      });
+    }
+  } catch { /* missing/unreadable status must not block the rest of the beacon */ }
   const failing = steps.filter((step) => step.status === 'fail').map((step) => step.id);
   const pollAt = String(readJson(path.join(home, '.claude', '.fleet-mail-last-poll.json'), {})?.at || '');
 

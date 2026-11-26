@@ -1,9 +1,10 @@
-# session-status  PC=008  host=008XPS8300  updated 2026-11-26 17:08 JST
+# session-status  PC=008  host=008XPS8300  updated 2026-11-26 18:09 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "configDirectory": "C:\\Users\\user\\
-- 案件数: 17
+- 案件数: 18
 
-- 008・20261126-エイト・進行中・最終更新 11/26 15:52、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
+- 008・20261126-EOラーニングVALX只石プロデュース『劇薬マーケティング』シリーズ第二弾!・完了・最終更新 11/26 17:53、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 008・20261126-エイト・停止・最終更新 11/26 15:52、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 008・account-inventory-1123・完了・最終更新 11/23 21:37、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 008・curama-kobayashi-send-1126・完了・最終更新 11/26 15:55、STATUS.mdなし、DONEあり・期限なし・次:なし
 - 008・curama-read-1126・完了・最終更新 11/26 14:32、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし

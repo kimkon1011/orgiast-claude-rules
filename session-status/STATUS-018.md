@@ -1,4 +1,4 @@
-# session-status  PC=018  host=018  updated 2026-11-26 12:05 JST
+# session-status  PC=018  host=018  updated 2026-11-26 13:05 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
 - 案件数: 14
@@ -6,8 +6,8 @@
 - 018・account-inventory-1123・完了・最終更新 11/23 21:45、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 018・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・coel-1125・完了・最終更新 11/25 19:52、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
-- 018・discord-form-fix-1126・金さん待ち・最終更新 11/26 11:29、STATUS.mdなし、REPORTあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
-- 018・discord-form-fix-1126-impl・進行中・最終更新 11/26 11:56、STATUS.mdなし、REPORTあり、run.logあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
+- 018・discord-form-fix-1126・完了・最終更新 11/26 12:09、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
+- 018・STATUS・完了・第2系統の実装・テスト・未通知13件の再通知・30分おきのタスク登録・見張りの発火確認まで、すべて実データで読み戻して確認済み。PR #2795 は main にマージ済み（merge commit 423ee860）。・期限なし・次:なし。タスク「OrgiastInquiryDiscordWatch」が30分おきに自動で回る。GAS 本体（onFormSubmit）の復旧はシートオーナー shirakawa@orgiast.jp の Apps Script 権限が必要で、第2系統が動いている間は業務影響が無いため急がない。
 - 018・dispatch-1122-21・停止・最終更新 11/22 21:43、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・furuyakami-app-integrate-1126・完了・最終更新 11/26 10:51、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、金さん待ちの記述あり・期限なし・次:なし
 - 018・furuyakami-container-1126・完了・最終更新 11/26 10:21、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし

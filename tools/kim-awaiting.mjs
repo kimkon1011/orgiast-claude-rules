@@ -58,7 +58,7 @@ export function collectExternal({ home, now }) {
   const age = now - Date.parse(state.generatedAt);
   // 1回だけの一時失敗では警告しない。consecutiveFailures が無い旧 state は 1 扱い。
   const failed = Object.entries(state.sources || {}).filter(([, source]) => {
-    if (source.ok !== false) return false;
+    if (source.partial || source.ok !== false) return false;
     const n = Number.isFinite(source.consecutiveFailures) ? source.consecutiveFailures : 1;
     return n >= 2;
   });
@@ -72,7 +72,7 @@ export function collectExternal({ home, now }) {
   for (const item of items) {
     const ms = Math.max(0, now - Date.parse(item.since));
     const title = item.kind === 'draft' ? `下書きのまま未送信: ${item.who}${mailboxDraftLabel(item.mailbox)}「${item.subject}」` : `${item.who}${item.assignee ? `（担当: ${item.assignee}）` : ''}「${item.subject}」`;
-    out.push({ id: item.id, source: 'external', external: true, title, ask: item.ask || '返信内容を決める', waitingSince: item.since, ageDays: Math.floor(ms / DAY), ageHours: Math.floor(ms / 3600_000), route: { threadId: item.threadId, mailbox: item.mailbox } });
+    out.push({ id: item.id, source: 'external', external: true, title: title + (state.partial ? '（途中まで）' : ''), ask: item.ask || '返信内容を決める', waitingSince: item.since, ageDays: Math.floor(ms / DAY), ageHours: Math.floor(ms / 3600_000), route: { threadId: item.threadId, mailbox: item.mailbox } });
   }
   return out;
 }

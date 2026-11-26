@@ -13,17 +13,6 @@
       "expiresAt": "2026-11-26T22:19:26.683Z"
     },
     {
-      "id": "prompt-20261125-020035-8980",
-      "kind": "prompt",
-      "targets": "all",
-      "why": "kim 2026-11-25 指示: 止まったセッションを毎時自動再開する仕組み（PR #2717）を全PCに配備し、初回1周を実行して件数を回収する",
-      "body": "【全PC配備: 止まったセッションの毎時自動再開（kim 2026-11-25 指示・PR #2717 マージ済み）】\nこのPCで次を順に実行し、結果を報告してください。社外送信・課金・削除はしないでください。\n\n1. ルールリポジトリを origin/main に更新します（PR #2717「停滞セッションを毎時・上限つきで自動再開する」を含む版）。\n   `git -C ~/.claude/nightly-repo fetch origin` → `git -C ~/.claude/nightly-repo checkout --detach origin/main`\n2. `node ~/.claude/nightly-repo/tools/setup.mjs --converge` を実行します。\n3. タスクを登録し直します。\n   PowerShell の場合: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$HOME\\.claude\\nightly-repo\\tools\\register-stalled-session-nightly.ps1\"`\n   Git Bash の場合（004 など）: `powershell.exe -NoProfile -Command \"& { powershell.exe -NoProfile -ExecutionPolicy Bypass -File \\\"$env:USERPROFILE\\.claude\\nightly-repo\\tools\\register-stalled-session-nightly.ps1\\\" }\"`\n4. 読み戻して確かめます: `powershell.exe -NoProfile -Command \"Get-ScheduledTask OrgiastWaitDeadlineResume | % { $_.Triggers[0].Repetition.Interval + ' ' + $_.Actions[0].Arguments }; (Get-ScheduledTask OrgiastStalledSessionSweep).State\"`\n   期待値は `PT1H` と `--hourly` を含むこと、そして `Disabled` です。\n5. 1周だけ実行します: `node ~/.claude/nightly-repo/tools/stalled-session-resume.mjs --hourly`\n   出力の rows の skip 理由の件数と、results（再開した件と outcome）の件数を数えます。\n6. 報告: 次の1行を返してください。\n   `PC=<PC番号> 更新=<commit先頭7桁> converge=<ok|失敗理由> タスク=<PT1H/--hourly/Disabled の読み戻し> 再開=<件数> 結果=<progressed/done/waiting-human/stuck の件数> スキップ上位=<理由:件数 を3つ> エラー=<あれば本文>`\n",
-      "createdBy": "uers",
-      "createdAt": "2026-11-25T02:00:35.464Z",
-      "expiresAt": "2026-11-26T02:00:35.464Z",
-      "timeoutSeconds": 2400
-    },
-    {
       "id": "prompt-20261125-112915-8271",
       "kind": "prompt",
       "targets": "all",
@@ -87,6 +76,16 @@
       "createdBy": "000KimPC",
       "createdAt": "2026-11-26T01:56:53.843Z",
       "expiresAt": "2026-11-26T07:56:53.843Z"
+    },
+    {
+      "id": "prompt-20261126-021943-7138",
+      "kind": "prompt",
+      "targets": "008XPS8300",
+      "why": "008の定期タスク(QuotaSweep/NightlyBatch等)がNGのため再登録",
+      "body": "008 の定期タスク再登録（kim-PC からの依頼・課金なし・削除なし）\n\n背景: 11/26 03:21 の日次設定チェックで 008 だけ OrgiastQuotaSweep / OrgiastNightlyBatch / OrgiastAutoProgressDigest / OrgiastStalledSessionSweep が NG。リポジトリが rescue/auto-session-20261126-101656 ブランチ（origin/main より6コミット遅れ）。\n\n手順（ルールリポジトリ = fleet-agent が使っているリポジトリで実行。cd 連結はせず絶対パス／-C を使う）:\n1. git status で未コミット変更を確認。未コミット変更があれば git stash push -u -m \"008-rescue-before-main-20261126\" で退避（削除しない）。その後 git checkout main と git pull --ff-only origin main。rescue ブランチ自体は消さない。\n2. 次を順に実行し、各終了コードを記録:\n   - node tools/register-quota-sweep.mjs\n   - powershell -NoProfile -ExecutionPolicy Bypass -File tools/register-stalled-session-nightly.ps1\n   - node tools/register-auto-progress-task.mjs\n3. 読み戻し: schtasks /Query /TN <名前> /V /FO LIST で OrgiastQuotaSweep・OrgiastNightlyBatch・OrgiastAutoProgressDigest・OrgiastStalledSessionSweep の「状態」「次回の実行時刻」を確認（存在しなければ「未登録」と書く）。\n4. %USERPROFILE%\\.claude\\fleet-directives-repo\\.git\\index.lock が残っているか、git プロセスが動いているかを確認して報告するだけ（削除しない）。\n5. 最後に1行で回答: 「branch=<現在> stash=<有無> quota=<rc> stalled=<rc> autoprog=<rc> / QuotaSweep=<状態,次回> NightlyBatch=<…> AutoProgressDigest=<…> StalledSessionSweep=<…> / index.lock=<残存|なし> git稼働=<有|無>」\n\n禁止: 新しい課金、ファイル削除、社外送信。\n",
+      "createdBy": "kim-PC",
+      "createdAt": "2026-11-26T02:19:43.979Z",
+      "expiresAt": "2026-11-27T02:19:43.979Z"
     }
   ]
 }

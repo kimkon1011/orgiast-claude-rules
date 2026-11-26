@@ -418,7 +418,7 @@ export async function attemptAutoLogin({ home = homeDir(), fetchImpl = globalThi
  * 社内のみの予定の説明欄にカンペ URL を追記（「📝カンペ（社内用）」行）。
  * 既に同じ URL があれば何もしない。重複防止。
  */
-export async function appendCueUrlToDescription({ token, calendarId, event, docUrl, fetchImpl = globalThis.fetch }) {
+export async function appendCueUrlToDescription({ token, calendarId, event, docUrl, fetchImpl = globalThis.fetch, signal }) {
   const existingDesc = event.description || '';
   const line = `📝カンペ（社内用）: ${docUrl}`;
   const description = existingDesc.split(/\r?\n/).filter(entry => !/^\s*📝カンペ（社内用）\s*[:：]/u.test(entry)).join('\n');
@@ -429,7 +429,7 @@ export async function appendCueUrlToDescription({ token, calendarId, event, docU
   const res = await fetchImpl(patchUrl, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(event.etag ? { 'If-Match': event.etag } : {}) },
-    body: JSON.stringify(patchBody),
+    body: JSON.stringify(patchBody), signal,
   });
   if (!res.ok) throw new Error(`Description append failed HTTP ${res.status}: ${await res.text()}`);
   return { appended: true };
@@ -685,6 +685,11 @@ async function runSchedulerPass(options = {}) {
     const meetInfo = extractMeetInfo(event);
     const eventKey = `${meetInfo.conferenceCode}_${startIso}`;
     const itemState = state[eventKey] || {};
+    const existingCue = (event.description || '').match(/^\s*📝カンペ（社内用）\s*[:：]\s*https:\/\/docs\.google\.com\/document\/d\/([\w-]+)\/(\S+)/mu);
+    if (!itemState.docId && existingCue) {
+      itemState.docId = existingCue[1];
+      itemState.staffUrl = `https://docs.google.com/document/d/${existingCue[1]}/edit`;
+    }
 
     // 2. Jev / Opt-in / Cache classification
     const classRes = await classifyEvent(event, {

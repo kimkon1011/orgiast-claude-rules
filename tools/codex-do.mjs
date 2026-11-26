@@ -19,7 +19,8 @@ import { isCursorLongTimeoutKind, shouldPreferCursorAgent } from './lib/cursor-d
 import { isCursorUsageHalted } from './lib/cursor-usage-pace.mjs';
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { EX_TEMPFAIL, budgetSummary, claudeFile, decideCodexGate, deferredPayload, isUsageLimitText, parseUsageLimitUntil, providerLimitedUntil, writeCodexCooldownFile } from './lib/executor-gate.mjs';
-import { applyCandidateHealth, coolingBackendNames, deprioritizeRecentFailures, deprioritizeUnreliableBackends, readFallbackBackendHistory, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
+import { applyCandidateHealth, coolingBackendNames, deprioritizeRecentFailures, deprioritizeUnreliableBackends, fallbackBackendFailureDomain, readFallbackBackendHistory, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
+export { fallbackBackendFailureDomain };
 import { readGeminiBudgetStatus } from './gemini-budget-guard.mjs';
 import { acquireLock } from './lib/progress-file-lock.mjs';
 import { scanDiffForClaudeApi } from './app-llm-cost-gate.mjs';
@@ -704,14 +705,7 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env, { kin
   return null;
 }
 
-// cheap-code 経由と qwen 直結の deepseek は起動方法だけが異なり、同じ
-// OpenRouter / deepseek model を使う。同じ連鎖で片方が通常予算を使い切った後に
-// もう片方を実行しても upstream 障害を二重に待つだけなので、timeout は同一障害として扱う。
-export function fallbackBackendFailureDomain(backendName) {
-  if (backendName === 'cheap-code:deepseek' || backendName === 'deepseek') return 'deepseek-upstream';
-  return String(backendName || '');
-}
-
+// 連鎖内でも同ドメインの二重 timeout を避ける（冷却は fallback-backend-health 側でドメイン共有）。
 export function shouldSkipFallbackBackendAfterTimeout(backendName, chain = []) {
   const domain = fallbackBackendFailureDomain(backendName);
   return Boolean(domain) && chain.some((attempt) => attempt?.outcome === 'timeout'

@@ -493,6 +493,7 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
   const drive = 'https://www.googleapis.com/drive/v3/files';
   const upload = 'https://www.googleapis.com/upload/drive/v3/files';
   const docMime = 'application/vnd.google-apps.document';
+  const AMBIGUOUS = Symbol('ambiguous-drive-destination');
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   const req = (url, method = 'GET', body) => jsonFetch(url, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, fetchImpl);
   const escape = s => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
@@ -511,12 +512,18 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
     if (state.files[key]) return state.files[key];
     const q = `trashed=false and name='${escape(name)}' and mimeType='${mimeType}' and ${parent ? `'${escape(parent)}' in parents` : "'me' in owners"}`;
     const found = await req(`${drive}?${new URLSearchParams({ q, fields: 'files(id)', pageSize: '100' })}`);
-    if (found.files.length > 1) throw new Error(`ambiguous Drive destination: ${key}`);
+    if (found.files.length > 1) {
+      state.warnings ||= [];
+      state.warnings.push({ at: new Date(now).toISOString(), key, warning: `ambiguous Drive destination: ${key}` });
+      save();
+      return AMBIGUOUS;
+    }
     if (found.files[0]) { state.files[key] = found.files[0].id; save(); }
     return state.files[key];
   }
   async function ensure(key, name, parent, mimeType) {
     let id = await find(key, name, parent, mimeType);
+    if (id === AMBIGUOUS) return null;
     if (!id) { id = (await req(drive, 'POST', { name, mimeType, ...(parent ? { parents: [parent] } : {}) })).id; await ensureKimEditor(id, { token, api: permissionApi, created: true }); state.files[key] = id; save(); }
     return id;
   }
@@ -542,6 +549,7 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
   async function publishOnce(key, name, text, parent) {
     const hash = digest(text);
     let id = await find(key, name, parent, docMime);
+    if (id === AMBIGUOUS) return null;
     if (id && state.uploadHashes[key] === hash) return id;
     if (!id) {
       const boundary = `hub_${crypto.randomUUID()}`;
@@ -611,7 +619,11 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
           for (const f of page.files) {
             const key = `${dir}/${dir === 'cases' ? f.name.split('_')[0] : f.name}`;
             localPath(key);
-            if (state.files[key] && state.files[key] !== f.id) throw new Error(`ambiguous Drive destination: ${key}`);
+            if (state.files[key] && state.files[key] !== f.id) {
+              state.warnings ||= [];
+              state.warnings.push({ at: new Date(now).toISOString(), key, warning: `ambiguous Drive destination: ${key}` });
+              continue;
+            }
             state.files[key] = f.id; state.documents[key] = { name: f.name };
           }
           pageToken = page.nextPageToken;

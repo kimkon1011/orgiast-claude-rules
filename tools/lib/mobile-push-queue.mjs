@@ -7,7 +7,13 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 export const ATTEMPT_LIMIT = 3;
+/** 再掲回数がこの値以上の未送信は届かない席の滞留とみなし削除する */
+export const DEFAULT_OCCURRENCE_EXPIRE_THRESHOLD = 10;
 export const mobilePushQueueFile = home => path.join(home, '.claude', 'mobile-push-queue.jsonl');
+
+function rowActivityTime(row) {
+  return Date.parse(row.lastQueuedAt || row.queuedAt || row.ts) || 0;
+}
 
 export function appendMobilePush(home, { owner, title, body }, { now = Date.now(), id = randomUUID() } = {}) {
   const file = mobilePushQueueFile(home);
@@ -17,7 +23,12 @@ export function appendMobilePush(home, { owner, title, body }, { now = Date.now(
   return row;
 }
 
-export function sweepMobilePushQueue(home, { dryRun = false, now = Date.now() } = {}) {
+export function sweepMobilePushQueue(home, {
+  dryRun = false,
+  now = Date.now(),
+  collapseByTitle = true,
+  occurrenceExpireThreshold = DEFAULT_OCCURRENCE_EXPIRE_THRESHOLD,
+} = {}) {
   const file = mobilePushQueueFile(home);
   const ttlHours = parseInt(process.env.MOBILE_PUSH_TTL_HOURS, 10) || 72;
   const ttlMs = ttlHours * 60 * 60 * 1000;
@@ -39,8 +50,8 @@ export function sweepMobilePushQueue(home, { dryRun = false, now = Date.now() } 
     const deduplicated = {};
     const sweepResult = { deduplicated: 0, expired: 0 };
 
-    // 重複圧縮
-    const processedQueue = queue.map(row => {
+    // 重複圧縮（本文まで同一）
+    let processedQueue = queue.map(row => {
       if (row.status === 'expired' || row.sent === true) return row;
 
       const key = `${row.title}||${row.body}`;
@@ -71,7 +82,44 @@ export function sweepMobilePushQueue(home, { dryRun = false, now = Date.now() } 
       }
     }).filter(row => row !== null);
 
-    // TTL expire
+    // スナップショット型圧縮: 同じ owner+title の未送信は最新1件だけ残す
+    if (collapseByTitle) {
+      const winners = new Map();
+      for (const row of processedQueue) {
+        if (row.status === 'expired' || row.sent === true) continue;
+        const key = `${String(row.owner)}||${String(row.title)}`;
+        const existing = winners.get(key);
+        if (!existing || rowActivityTime(row) >= rowActivityTime(existing)) {
+          winners.set(key, row);
+        }
+      }
+      const next = [];
+      for (const row of processedQueue) {
+        if (row.status === 'expired' || row.sent === true) {
+          next.push(row);
+          continue;
+        }
+        const key = `${String(row.owner)}||${String(row.title)}`;
+        if (winners.get(key) === row) {
+          next.push(row);
+        } else {
+          sweepResult.deduplicated++;
+        }
+      }
+      processedQueue = next;
+    }
+
+    // 再掲回数上限: 届かない席で積み上がった未送信を削除
+    processedQueue = processedQueue.filter(row => {
+      if (row.status === 'expired' || row.sent === true) return true;
+      if ((Number(row.occurrences) || 1) >= occurrenceExpireThreshold) {
+        sweepResult.expired++;
+        return false;
+      }
+      return true;
+    });
+
+    // TTL expire（削除せず status: expired を付ける）
     const finalQueue = processedQueue.map(row => {
       if (row.status === 'expired' || row.sent === true) return row;
 

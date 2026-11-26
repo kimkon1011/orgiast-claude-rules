@@ -55,7 +55,13 @@ export function collectExternal({ home, now }) {
   const state = readJson(externalFile(home), null);
   if (!state) return [];
   const skips = readSkips(home), out = [];
-  const age = now - Date.parse(state.generatedAt), failed = Object.entries(state.sources || {}).filter(([, source]) => source.ok === false);
+  const age = now - Date.parse(state.generatedAt);
+  // 1回だけの一時失敗では警告しない。consecutiveFailures が無い旧 state は 1 扱い。
+  const failed = Object.entries(state.sources || {}).filter(([, source]) => {
+    if (source.ok !== false) return false;
+    const n = Number.isFinite(source.consecutiveFailures) ? source.consecutiveFailures : 1;
+    return n >= 2;
+  });
   // 毎時 8〜21 時の巡回なので、夜間は古くて当然。日中は3時間、夜明け後は14時間を超えたら止まっているとみなす。
   const stale = !(age <= EXTERNAL_STALE_MS) && (jstHour(now) >= 9 || age > 14 * 3600_000) || Number.isNaN(age);
   if (stale || failed.length) {

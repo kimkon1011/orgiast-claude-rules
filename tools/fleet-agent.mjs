@@ -50,8 +50,8 @@ export function truncateAnswer(value) {
 }
 
 export function targetMatches(targets, label, hostname) {
-  const target = String(targets ?? '');
-  return target === '' || target === 'all' || String(label).includes(target) || String(hostname).includes(target);
+  const items = Array.isArray(targets) ? targets : String(targets ?? '').split(/[,、]/).map(s => s.trim()).filter(s => s !== '');
+  return items.length === 0 || items.some(item => item === 'all' || String(label).includes(item) || String(hostname).includes(item));
 }
 
 export function loadOptin(file, io = fs) {

@@ -18,6 +18,7 @@ import { isEntry } from './is-entry.mjs';
 import { BeeperApiError, sendMessage, listMessages, listChats } from './beeper-api.mjs';
 import * as beeperApi from './beeper-api.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
+import { assertNoHandback, stripHumanOnly } from './lib/handback-guard.mjs';
 import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 
 import { TITLE, assertStandingScope, claimStandingAttempt, findChat } from './lahaina-standing-policy.mjs';
@@ -160,7 +161,16 @@ export async function beeperSend(options, { readMessages = listMessages, readCha
 
   // 本文は必ずファイルから
   const rawText = fs.readFileSync(bodyFile, 'utf8');
-  const text = rawText.trim();
+  let text = rawText.trim();
+  if (!text) throw new Error('本文が空です');
+  if (!options.skipHandbackGuard) {
+    try { assertNoHandback(text, { env: options.env ?? process.env }); }
+    catch (error) {
+      if (error?.code === 'HANDBACK_BLOCKED') throw Object.assign(error, { exitCode: 4 });
+      throw error;
+    }
+  }
+  text = stripHumanOnly(text).trim();
   if (!text) throw new Error('本文が空です');
   if (findSecretaryBookingUrls(text).length) throw Object.assign(new Error(SECRETARY_BOOKING_URL_REASON), { exitCode: 1 });
 
@@ -296,7 +306,13 @@ async function main(args = process.argv.slice(2)) {
 
   if (has('--dry-run')) {
     if (!chatID || !bodyFile) { console.error('--dry-run にも --chat と --body-file が必要です'); return 1; }
-    const dryText = fs.readFileSync(bodyFile, 'utf8').trim();
+    let dryText = fs.readFileSync(bodyFile, 'utf8').trim();
+    try { assertNoHandback(dryText, { env: process.env }); }
+    catch (error) {
+      if (error?.code === 'HANDBACK_BLOCKED') { console.error(error.message); return 4; }
+      throw error;
+    }
+    dryText = stripHumanOnly(dryText).trim();
     if (findSecretaryBookingUrls(dryText).length) { console.error(SECRETARY_BOOKING_URL_REASON); return 1; }
     console.log(JSON.stringify({ dryRun: true, chatID, textLength: dryText.length }));
     return 0;

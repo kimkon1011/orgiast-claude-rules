@@ -92,7 +92,10 @@ export function isOrderConfirmed(lastIn, lastOut) {
   const inBody = bodyLines(lastIn).join('\n');
   if (/(お申し?込み書|ご注文|ご発注).{0,40}(受領|承り|受け付け)/u.test(outBody)) return true;
   if (/手配を進めて(まいり|参り)ます/u.test(outBody)) return true;
-  if (/(お申し?込み書|注文書|発注書).{0,30}(返送|添付|送付)/u.test(inBody)) return true;
+  // 顧客側は「記入済み書類の返送」のみ。受注前の「お申し込み書をご送付いただけますか」は除外。
+  if (/(お申し?込み書|注文書|発注書)/u.test(inBody)
+    && /(記入|捺印|署名|押印)/u.test(inBody)
+    && /(返送|添付|送付)(いたし|致し|します|しました)/u.test(inBody)) return true;
   return false;
 }
 export async function classifyLead(lead, messages, now = new Date(), deps = {}) {

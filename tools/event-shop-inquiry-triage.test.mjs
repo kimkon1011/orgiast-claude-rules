@@ -99,7 +99,7 @@ test('isOrderConfirmed: 当社受領・手配開始と顧客の申込書返送�
     { body: 'お申し込み書を確かに受領いたしました。手配を進めてまいります。' },
   ), true);
   assert.equal(isOrderConfirmed(
-    { body: '注文書を送付します。' },
+    { body: '記入した注文書を送付します。' },
     { body: 'ご確認ください。' },
   ), true);
   assert.equal(isOrderConfirmed(
@@ -111,6 +111,16 @@ test('isOrderConfirmed: 当社受領・手配開始と顧客の申込書返送�
     { body: 'お見積書とお申し込み書を添付いたしました。ご検討ください。' },
   ), false);
   assert.equal(isOrderConfirmed(null, null), false);
+});
+test('isOrderConfirmed: 受注前の送付依頼は false、記入・捺印した申込書の返送は true', () => {
+  assert.equal(isOrderConfirmed(
+    { body: 'お申し込み書をご送付いただけますでしょうか' },
+    { body: 'ご確認ください。' },
+  ), false);
+  assert.equal(isOrderConfirmed(
+    { body: '必要事項を記入・捺印いたしました「お申し込み書」を本メールに添付のうえ、ご返送いたします' },
+    { body: 'ご確認ください。' },
+  ), true);
 });
 test('findOpenInboxAsk: email・企業ドメイン・法人格除去社名に一致し、対象外を除く', () => {
   const item = (id, text, overrides = {}) => ({ id, text, status: 'open', kind: 'ask', ...overrides });

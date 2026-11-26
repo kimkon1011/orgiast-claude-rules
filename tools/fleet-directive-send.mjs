@@ -43,7 +43,7 @@ export function gitProcessTouchesRepo(repoDir, { spawnSync = defaultSpawnSync } 
     const out = `${result.stdout || ''}`;
     return out.replace(/\\/g, '/').toLowerCase().includes(needle);
   }
-  const result = spawnSync('ps', ['-eo', 'args='], { encoding: 'utf8', timeout: 15_000 });
+  const result = spawnSync('ps', ['-eo', 'args='], { encoding: 'utf8', windowsHide: true, timeout: 15_000 });
   const out = `${result.stdout || ''}`;
   return out.toLowerCase().includes(needle);
 }

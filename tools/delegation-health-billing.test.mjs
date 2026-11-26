@@ -122,3 +122,50 @@ test('cooldown 中に no_output が混じっても lane_outage_unrepaired にし
   assert.equal('fixTask' in finding, false);
   assert.match(finding.evidence.join(' '), /cooldown 中の artifact/);
 });
+
+// 2026-11-27 実測: grok 6件の xAI クレジット切れは HTTP403 + stderrTail に文言。
+const XAI_CREDIT_403 = 'HTTP403: {"code":"permission-denied","error":"Your team 420ea724-aaaa-bbbb-cccc-dddddddddddd has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
+
+test('isPermanentBillingDetail は xAI クレジット切れ文言を検出する', () => {
+  assert.equal(isPermanentBillingDetail(XAI_CREDIT_403), true);
+  assert.equal(isPermanentBillingDetail('used all available credits'), true);
+  assert.equal(isPermanentBillingDetail('reached its monthly spending limit'), true);
+  assert.equal(isPermanentBillingDetail('please purchase more credits'), true);
+  assert.equal(isBillingSuspendedRow({ status: 'HTTP403', stderrTail: XAI_CREDIT_403 }), true);
+  assert.equal(isBillingSuspendedRow({ status: 'http_403', reason: XAI_CREDIT_403 }), true);
+  assert.equal(isBillingSuspendedRow({ status: 'http_403', reason: 'Forbidden' }), false);
+});
+
+test('xAI クレジット切れ 403×6件は provider_billing_suspended で lane_outage_unrepaired にしない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [0, 1, 2, 3, 4, 5].map((n) => row({
+    t: new Date(NOW.getTime() - n * 60_000).toISOString(),
+    provider: 'grok',
+    status: 'HTTP403',
+    out: 0,
+    stderrTail: XAI_CREDIT_403,
+  })).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((item) => item.id === 'lane_outage_unrepaired'), false);
+  const finding = findings.find((item) => item.id === 'provider_billing_suspended');
+  assert.equal(finding?.provider, 'grok');
+  assert.equal(finding?.severity, 'low');
+  assert.equal('fixTask' in finding, false);
+  assert.match(finding.evidence.join(' '), /6件.*credits|spending limit|purchase more credits/i);
+});
+
+test('文言の無い 403×3件は従来どおり lane_outage_unrepaired のまま', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [0, 1, 2].map((n) => row({
+    t: new Date(NOW.getTime() - n * 60_000).toISOString(),
+    provider: 'grok',
+    status: 'http_403',
+    out: 0,
+    reason: 'Forbidden',
+  })).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((item) => item.id === 'provider_billing_suspended'), false);
+  const finding = findings.find((item) => item.id === 'lane_outage_unrepaired');
+  assert.equal(finding?.provider, 'grok');
+  assert.equal(finding?.severity, 'high');
+});

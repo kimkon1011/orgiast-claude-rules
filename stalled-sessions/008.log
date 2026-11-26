@@ -16,3 +16,4 @@
 {"at":"2026-11-26T00:20:41.340Z","label":"008","account":"seisaku-team@orgiast.jp","candidates":76,"resume":0,"waiting-human":22,"done":17,"skip":37,"unlinked":0,"seatGuard":"allowed:usage-unavailable;plan-usage-stopped","dryRun":false,"error":""}
 {"at":"2026-11-26T01:24:20.892Z","label":"008","account":"seisaku-team@orgiast.jp","candidates":78,"resume":1,"waiting-human":23,"done":17,"skip":37,"unlinked":0,"seatGuard":"allowed:below-threshold","dryRun":false,"error":""}
 {"at":"2026-11-26T02:20:27.904Z","label":"008","account":"seisaku-team@orgiast.jp","candidates":79,"resume":0,"waiting-human":24,"done":17,"skip":38,"unlinked":0,"seatGuard":"allowed:below-threshold;usage-23","dryRun":false,"error":""}
+{"at":"2026-11-26T03:20:32.366Z","label":"008","account":"seisaku-team@orgiast.jp","candidates":82,"resume":0,"waiting-human":25,"done":18,"skip":39,"unlinked":0,"seatGuard":"allowed:below-threshold;usage-6","dryRun":false,"error":""}

@@ -44,8 +44,16 @@ async function postWebhook(url, content, fetchImpl, signal, silent) {
 
 const FAILURE = /failed|failure|失敗|停止|異常|エラー|timeout|timed out|タイムアウト|未計測|取得不可/i;
 // 否定された失敗語で完了報告を修復TODOにしない（2026-11-24 実測: notify-kim:c4bb15633b4278676f96）。
+// 譲歩の過去形（停止したが…完成済み）も、確認済み・判断待ち報告では現在の障害とみなさない
+// （2026-11-26 実測: notify-kim:268e78e157993e7a5bad）。
+const FAILURE_WORD = String.raw`(?:failedAt|failed|failure|失敗|エラー|異常|停止|timeout|timed\s*out|タイムアウト|未計測|取得不可)`;
+const DONE_OR_WAIT_REPORT = /確認しました|判断を待っている|照合済み|完成済み|完了しました|あなたが決めることはありません/;
 export function stripNegatedFailures(text) {
-  return String(text ?? '').replace(/(?:failedAt|failed|failure|失敗|エラー|異常|停止|timeout|タイムアウト|未計測|取得不可)(?:\s|[:：=])*(?:はありません|ありません|は無い|はない|なし|無し|0件|０件|ゼロ|null|none)(?!ではなかった)/gi, '');
+  let value = String(text ?? '').replace(new RegExp(`${FAILURE_WORD}(?:\\s|[:：=])*(?:はありません|ありません|は無い|はない|なし|無し|0件|０件|ゼロ|null|none)(?!ではなかった)`, 'gi'), '');
+  if (DONE_OR_WAIT_REPORT.test(value)) {
+    value = value.replace(new RegExp(`${FAILURE_WORD}(?:\\s|[:：=])*(?:したが|したけれど|したものの|したけど)`, 'gi'), '');
+  }
+  return value;
 }
 const HANDOFF = /接続し[て、]|接続して確認|どれを選|選んでほしい|原因調査.*(?:選択|選ん)|(?:ログ|結果|接続|認証).*確認(?:して|するよう|してください)/;
 // 完了報告・定時ダイジェストは「結果の知らせ」であって失敗通知ではない。本文には経過説明として

@@ -96,6 +96,20 @@ test('Google 403 outstanding balance is billing', t => {
   assert.equal(billingFailure('status 403 Forbidden'), false);
 });
 
+test('xAI 403 used-all-credits / spending-limit is billing, not quota hint', () => {
+  const xai = 'HTTP403 {code:permission-denied, error: Your team Acme has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit.}';
+  assert.equal(billingFailure(xai), true);
+  assert.equal(billingWithQuotaHint(xai), false);
+  assert.equal(billingFailure('used all credits'), true);
+  assert.equal(billingFailure('reached the spending limit'), true);
+  assert.equal(billingFailure('reached your monthly spending limit'), true);
+  // HTTP429 / rate limit 文言は従来どおり billing にしない
+  assert.equal(billingFailure('HTTP429 rate limit exceeded'), false);
+  assert.equal(billingWithQuotaHint('HTTP429 rate limit exceeded'), false);
+  assert.equal(billingFailure('HTTP 429 Insufficient credits for this request'), true);
+  assert.equal(billingWithQuotaHint('HTTP 429 Insufficient credits for this request'), true);
+});
+
 test('Google 403 outstanding balance via ledger realLaneStats is billing', t => {
   const home = fixture(t, [{ provider: 'gemini', status: 'http_403', stderr: 'The billing account has an outstanding balance' }]);
   const stats = realLaneStats(home, now).gemini;

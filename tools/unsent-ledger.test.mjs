@@ -22,6 +22,8 @@ import {
   scanGmailDrafts,
   patchSummary,
   acquireLedgerLock,
+  isGmailDraftItem,
+  isOldDraftAggregate,
 } from './unsent-ledger.mjs';
 
 function tmpDir(prefix = 'unsent-') {
@@ -407,4 +409,75 @@ test('ack無し2回・1日1件、解消後は連続回数リセット（通知�
   fs.writeFileSync(path.join(exportDir, 'ack', 'chat.json'), '{}');
   await maybeNotifyStuck(l, { ...opts, now: new Date('2026-11-27T01:00:00Z') });
   assert.equal(notifications, 1);
+});
+
+test('ALERT.md は要約版で手動止まったを全文保持し古いGmail下書きは集計', () => {
+  const now = new Date('2026-11-26T12:00:00+09:00');
+  const items = [];
+  for (let i = 0; i < 1000; i++) {
+    items.push(normalizeItem({
+      id: `gmail-draft-seisaku-team@orgiast.jp-d${i}`,
+      gmail_draft_id: `d${i}`,
+      from: i % 2 ? 'kim@orgiast.jp' : 'seisaku-team@orgiast.jp',
+      to: [`user${i % 30}@domain${i % 25}.example`],
+      subject: `draft ${i}`,
+      body_text: `大量本文${'あ'.repeat(1500)}-${i}`,
+      status: '止まった',
+      status_reason: '台帳未登録のGmail下書き',
+      decided_at: '2026-10-01T00:00:00Z',
+      last_check_error: 'match.to または match.after が未設定',
+      history: [{ at: '2026-10-01T00:00:00Z', status: '止まった', reason: '台帳未登録のGmail下書き', by: 'scanGmailDrafts' }],
+    }));
+  }
+  const manualBody = 'これは手動登録の本文全文です。確認必須の連絡内容をここに書く。';
+  items.push(normalizeItem({
+    id: 'manual-1',
+    status: '止まった',
+    status_reason: '人手停止',
+    decided_by: '金さん 11/25',
+    to: ['important@client.jp'],
+    subject: '手動登録の重要連絡',
+    body_text: manualBody,
+    decided_at: '2026-11-25T00:00:00Z',
+    history: [{ at: '2026-11-25T01:00:00Z', status: '止まった', reason: '人手停止', by: 'add' }],
+  }));
+  const dir = tmpDir('alert-compact-');
+  exportLedger({ schema: 'unsent-ledger/v2', items }, [dir], { now });
+  const alert = fs.readFileSync(path.join(dir, 'ALERT.md'), 'utf8');
+  const full = fs.readFileSync(path.join(dir, 'ALERT-full.md'), 'utf8');
+  assert.ok(Buffer.byteLength(alert, 'utf8') <= 200 * 1024, `ALERT.md too large: ${Buffer.byteLength(alert, 'utf8')}`);
+  const iStop = alert.indexOf('## 【止まった】');
+  const iOld = alert.indexOf('## 【古い下書き（要整理）】');
+  const iErr = alert.indexOf('## 【照合エラー】');
+  assert.ok(iStop >= 0 && iOld > iStop && iErr > iOld);
+  assert.match(alert.slice(iStop, iOld), /手動登録の重要連絡/);
+  assert.match(alert.slice(iStop, iOld), new RegExp(manualBody.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(alert.slice(iOld, iErr), /件数: 1000件/);
+  assert.match(alert.slice(iOld, iErr), /seisaku-team@orgiast\.jp/);
+  assert.match(alert.slice(iOld, iErr), /宛先ドメイン上位20/);
+  assert.doesNotMatch(alert.slice(iStop, iOld), /大量本文/);
+  assert.match(full, /gmail-draft-seisaku-team@orgiast\.jp-d0/);
+  assert.match(full, /大量本文/);
+  const alerts = JSON.parse(fs.readFileSync(path.join(dir, 'alerts.json'), 'utf8'));
+  assert.equal(alerts.counts.stopped, 1001);
+  assert.equal(alerts.counts.checkErrors, 0);
+  assert.ok(isGmailDraftItem(items[0]));
+  assert.ok(isOldDraftAggregate(items[0], now.getTime()));
+});
+
+test('Gmail下書きは照合をスキップし match 未設定をエラーにしない', async () => {
+  const item = normalizeItem({
+    id: 'gmail-draft-seisaku-team@orgiast.jp-x1',
+    gmail_draft_id: 'x1',
+    from: 'seisaku-team@orgiast.jp',
+    to: [],
+    status: '止まった',
+    status_reason: '台帳未登録のGmail下書き',
+    match: {},
+  });
+  const l = { items: [item] };
+  await check(l, async () => { throw new Error('should not search'); });
+  assert.equal(l.items[0].status, '止まった');
+  assert.equal(l.items[0].last_check_error, undefined);
+  assert.equal(buildAlert(l).counts.checkErrors, 0);
 });

@@ -39,6 +39,9 @@ const GB_INBOX = () => path.join(HOME(), 'gb-reports', 'unsent-ledger', 'inbox')
 const GB_REPORTS = () => path.join(HOME(), 'gb-reports');
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
+const UNSENT_BODY_PREVIEW = 300;
+const CHECK_ERROR_SAMPLES = 5;
 
 const nowIso = () => new Date().toISOString();
 const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
@@ -463,7 +466,62 @@ export async function scanGmailDrafts(ledger, {
   return { registered, errors };
 }
 
+export function isGmailDraftItem(item) {
+  return Boolean(item?.gmail_draft_id) || String(item?.id || '').startsWith('gmail-draft-');
+}
+
+function isDraftFileItem(item) {
+  if ((item.history || []).some((h) => h.by === 'scanDraftFiles')) return true;
+  if (String(item.created_by || '').includes('scanDraftFiles')) return true;
+  if (String(item.status_reason || '').includes('下書きのみで台帳未登録')) return true;
+  return false;
+}
+
+function isManualLedgerItem(item) {
+  return (item.history || []).some((h) => h.by === 'add');
+}
+
+function itemAgeMs(item, nowMs) {
+  const t = Date.parse(item.decided_at || item.decided_date || '');
+  return Number.isFinite(t) ? nowMs - t : Infinity;
+}
+
+/** 人が決めた連絡: decided_by / 手動登録 / 下書きファイル直近7日 */
+export function isHumanDecidedContact(item, nowMs = Date.now()) {
+  if (String(item?.decided_by || '').trim()) return true;
+  if (isManualLedgerItem(item)) return true;
+  if (isDraftFileItem(item) && itemAgeMs(item, nowMs) <= SEVEN_DAYS_MS) return true;
+  return false;
+}
+
+/** Gmail下書き・14日超の下書きファイルは集計節へ */
+export function isOldDraftAggregate(item, nowMs = Date.now()) {
+  if (isGmailDraftItem(item)) return true;
+  if (isDraftFileItem(item) && itemAgeMs(item, nowMs) > FOURTEEN_DAYS_MS) return true;
+  return false;
+}
+
+export function showStoppedInCompact(item, nowMs = Date.now()) {
+  if (isOldDraftAggregate(item, nowMs)) return false;
+  if (isDraftFileItem(item) && itemAgeMs(item, nowMs) > SEVEN_DAYS_MS) return false;
+  return isHumanDecidedContact(item, nowMs) || !isDraftFileItem(item);
+}
+
+function addressDomain(addr) {
+  const m = String(addr || '').trim().match(/@([^@\s>]+)$/);
+  return m ? m[1].toLowerCase() : '(なし)';
+}
+
+function cardFileName(item) {
+  return `${String(item.id).replace(/[^a-zA-Z0-9_.-]/g, '_')}.json`;
+}
+
 async function checkEmail(item, search) {
+  if (isGmailDraftItem(item)) {
+    // 下書きは「送ったか」ではなく「台帳に載ったか」の問題。照合対象外。
+    item.last_check_error = null;
+    return false;
+  }
   const target = item.match?.to || item.to?.[0];
   const after = item.match?.after || item.decided_at;
   if (!target || target === '不明' || !after) {
@@ -555,6 +613,10 @@ export async function check(ledger, search = searchGmail, { reader } = {}) {
     item.last_checked_at = nowIso();
     delete item.last_check_error;
     try {
+      if (isGmailDraftItem(item)) {
+        // Gmail下書きは照合対象外（止まったのまま）
+        return;
+      }
       let found = false;
       if (item.channel === 'email' || !item.channel) {
         found = await checkEmail(item, search);
@@ -649,7 +711,11 @@ function isUrgentDeadline(item, now = Date.now()) {
   return dl - now <= TWO_HOURS_MS && isPending(item);
 }
 
-function formatItemBlock(item) {
+function formatItemBlock(item, { bodyLimit = null } = {}) {
+  let body = bodyText(item) || '(本文なし)';
+  if (bodyLimit != null && body.length > bodyLimit) {
+    body = `${body.slice(0, bodyLimit)}\n…（全文は cards/${cardFileName(item)} の body_text）`;
+  }
   const lines = [
     `### ${item.id}`,
     `- 宛先: ${(item.to || []).join(', ') || '(なし)'} ${item.to_name ? `(${item.to_name})` : ''}`,
@@ -665,14 +731,87 @@ function formatItemBlock(item) {
     `- body_path: ${item.body_path || 'なし'}`,
     '',
     '```',
-    bodyText(item) || '(本文なし)',
+    body,
     '```',
     '',
   ];
   return lines.join('\n');
 }
 
+function formatStoppedBlock(item, { bodyLimit = null } = {}) {
+  const stoppedAt = [...(item.history || [])].reverse().find((h) => h.status === '止まった')?.at
+    || item.last_checked_at
+    || item.decided_at;
+  return `${formatItemBlock(item, { bodyLimit })}- 止まってから: ${elapsedLabel(stoppedAt)}\n`;
+}
+
+function formatCheckErrorBlock(item) {
+  return `${formatItemBlock(item)}- 照合エラー: ${item.last_check_error || item.status_reason}\n`;
+}
+
+function summarizeOldDrafts(items, nowMs) {
+  const byAccount = new Map();
+  const byDomain = new Map();
+  for (const item of items) {
+    const account = item.from || '(不明)';
+    byAccount.set(account, (byAccount.get(account) || 0) + 1);
+    const domains = (item.to || []).length
+      ? [...new Set((item.to || []).map(addressDomain))]
+      : ['(なし)'];
+    for (const domain of domains) {
+      byDomain.set(domain, (byDomain.get(domain) || 0) + 1);
+    }
+  }
+  const accountLines = [...byAccount.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([k, v]) => `  - ${k}: ${v}件`);
+  const domainLines = [...byDomain.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 20)
+    .map(([k, v]) => `  - ${k}: ${v}件`);
+  return [
+    `## 【古い下書き（要整理）】`,
+    `- 件数: ${items.length}件（Gmail下書き・14日超の下書き。全件は ALERT-full.md）`,
+    `- 基準時刻からの経過判定: ${new Date(nowMs).toISOString()}`,
+    `- アカウント別:`,
+    ...(accountLines.length ? accountLines : ['  - （なし）']),
+    `- 宛先ドメイン上位20:`,
+    ...(domainLines.length ? domainLines : ['  - （なし）']),
+    '',
+  ].join('\n');
+}
+
+function summarizeCheckErrors(checkErr) {
+  if (!checkErr.length) return '（0件）';
+  const byReason = new Map();
+  for (const item of checkErr) {
+    const reason = String(item.last_check_error || item.status_reason || '(不明)');
+    if (!byReason.has(reason)) byReason.set(reason, []);
+    byReason.get(reason).push(item);
+  }
+  const blocks = [];
+  for (const [reason, list] of [...byReason.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))) {
+    blocks.push(`### ${reason}（${list.length}件）`);
+    for (const item of list.slice(0, CHECK_ERROR_SAMPLES)) {
+      blocks.push(`- ${item.id}: ${(item.to || []).join(', ') || '(宛先なし)'} / ${item.subject || '(件名なし)'} / from=${item.from || ''}`);
+    }
+    if (list.length > CHECK_ERROR_SAMPLES) {
+      blocks.push(`- …他 ${list.length - CHECK_ERROR_SAMPLES}件（ALERT-full.md）`);
+    }
+    blocks.push('');
+  }
+  return blocks.join('\n');
+}
+
+function isCheckErrorForAlert(item) {
+  if (!item?.last_check_error) return false;
+  // Gmail下書きの match 未設定は照合エラーに数えない
+  if (isGmailDraftItem(item)) return false;
+  return true;
+}
+
 export function buildAlert(ledger, { checkErrors = [], now = new Date() } = {}) {
+  const nowMs = now.getTime();
   const pending = ledger.items.filter(isPending);
   const priority = [];
   const stopped = [];
@@ -680,12 +819,12 @@ export function buildAlert(ledger, { checkErrors = [], now = new Date() } = {}) 
   const unsent = [];
 
   for (const item of pending) {
-    if (isUrgentDeadline(item, now.getTime())) priority.push(item);
+    if (isUrgentDeadline(item, nowMs)) priority.push(item);
     else if (item.status === '止まった') stopped.push(item);
     else unsent.push(item);
   }
   for (const item of ledger.items) {
-    if (item.last_check_error) checkErr.push(item);
+    if (isCheckErrorForAlert(item)) checkErr.push(item);
   }
   for (const err of checkErrors) {
     checkErr.push({
@@ -707,37 +846,63 @@ export function buildAlert(ledger, { checkErrors = [], now = new Date() } = {}) 
     });
   }
 
+  const stoppedShown = stopped.filter((item) => showStoppedInCompact(item, nowMs));
+  const oldDrafts = stopped.filter((item) => isOldDraftAggregate(item, nowMs));
+  // 7〜14日の下書きファイル等、要約にも集計にも出さない分は full のみ
   const stamp = jstStamp(now);
   const total = new Set([...pending, ...checkErr].map(x => x.id)).size;
-  const sections = [
+  const header = [
     `# 未送信アラート`,
+    `生成: ${stamp}（JST）`,
+    `件数: ${total}件（最優先 ${priority.length} / 止まった ${stopped.length} / 照合エラー ${checkErr.length} / 未送信 ${unsent.length}）`,
+    `表示: 要約版（目安200KB以下）。全件詳細は同ディレクトリの ALERT-full.md / alerts.json / cards/`,
+    '',
+  ];
+  const compactSections = [
+    ...header,
+    '## 【最優先】',
+    priority.length ? priority.map((item) => formatItemBlock(item)).join('\n') : '（0件）',
+    '',
+    '## 【止まった】',
+    stoppedShown.length
+      ? stoppedShown.map((item) => formatStoppedBlock(item)).join('\n')
+      : '（0件）',
+    '',
+    summarizeOldDrafts(oldDrafts, nowMs),
+    '## 【照合エラー】',
+    summarizeCheckErrors(checkErr),
+    '',
+    '## 【未送信】',
+    unsent.length
+      ? unsent.map((item) => formatItemBlock(item, { bodyLimit: UNSENT_BODY_PREVIEW })).join('\n')
+      : '（0件）',
+    '',
+  ];
+  const fullSections = [
+    `# 未送信アラート（全件）`,
     `生成: ${stamp}（JST）`,
     `件数: ${total}件（最優先 ${priority.length} / 止まった ${stopped.length} / 照合エラー ${checkErr.length} / 未送信 ${unsent.length}）`,
     '',
     '## 【最優先】',
-    priority.length ? priority.map(formatItemBlock).join('\n') : '（0件）',
+    priority.length ? priority.map((item) => formatItemBlock(item)).join('\n') : '（0件）',
     '',
     '## 【止まった】',
     stopped.length
-      ? stopped.map((item) => {
-        const stoppedAt = [...(item.history || [])].reverse().find((h) => h.status === '止まった')?.at
-          || item.last_checked_at
-          || item.decided_at;
-        return `${formatItemBlock(item)}- 止まってから: ${elapsedLabel(stoppedAt)}\n`;
-      }).join('\n')
+      ? stopped.map((item) => formatStoppedBlock(item)).join('\n')
       : '（0件）',
     '',
     '## 【照合エラー】',
     checkErr.length
-      ? checkErr.map((item) => `${formatItemBlock(item)}- 照合エラー: ${item.last_check_error || item.status_reason}\n`).join('\n')
+      ? checkErr.map((item) => formatCheckErrorBlock(item)).join('\n')
       : '（0件）',
     '',
     '## 【未送信】',
-    unsent.length ? unsent.map(formatItemBlock).join('\n') : '（0件）',
+    unsent.length ? unsent.map((item) => formatItemBlock(item)).join('\n') : '（0件）',
     '',
   ];
   return {
-    markdown: sections.join('\n'),
+    markdown: compactSections.join('\n'),
+    markdownFull: fullSections.join('\n'),
     alerts: [
       ...priority.map((x) => ({ ...x, alert_bucket: '最優先' })),
       ...stopped.map((x) => ({ ...x, alert_bucket: '止まった' })),
@@ -750,18 +915,21 @@ export function buildAlert(ledger, { checkErrors = [], now = new Date() } = {}) 
       stopped: stopped.length,
       checkErrors: checkErr.length,
       unsent: unsent.length,
+      stoppedShown: stoppedShown.length,
+      oldDrafts: oldDrafts.length,
     },
   };
 }
 
-export function exportLedger(ledger, destinations, { checkErrors = [] } = {}) {
+export function exportLedger(ledger, destinations, { checkErrors = [], now = new Date() } = {}) {
   const dirs = destinations || [
     process.env.UNSENT_LEDGER_EXPORT_DIR || DEFAULT_EXPORT_DIR(),
   ];
-  const built = buildAlert(ledger, { checkErrors });
+  const built = buildAlert(ledger, { checkErrors, now });
   for (const dir of dirs) {
     fs.mkdirSync(path.join(dir, 'cards'), { recursive: true });
     atomicText(path.join(dir, 'ALERT.md'), built.markdown);
+    atomicText(path.join(dir, 'ALERT-full.md'), built.markdownFull);
     atomicJson(path.join(dir, 'alerts.json'), {
       generated_at: nowIso(),
       counts: built.counts,

@@ -14,7 +14,7 @@ import { buildClaudeHeadlessArgs, parseAutoSessionEnvText } from './auto-session
 import { resolveClaudeExecutableFromDisk, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { parseRetryAfter } from './claude-plan-usage.mjs';
-import { decideSweep, readClaudeWindows, readCodexWindows, shouldStopTick, jsonlFiles, sameReset, resetToleranceMinutes } from './lib/quota-windows.mjs';
+import { decideSweep, inspectSweep, readClaudeWindows, readCodexWindows, shouldStopTick, jsonlFiles, sameReset, resetToleranceMinutes } from './lib/quota-windows.mjs';
 import { discoverWsl, passiveWslHomes, wslPath, interactiveCodex, nativeCommand } from './lib/quota-sweep-host.mjs';
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { runBounded } from './lib/quota-sweep-process.mjs';
@@ -782,7 +782,9 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     if (!decisions.length) {
       // 読み取り自体が失敗していた場合、これまでは「窓が無い」とだけ出て原因が残らなかった。
       const readIssues = Object.entries(observed.reasons ?? {}).filter(([, r]) => r).map(([p, r]) => `${p}: ${r}`);
-      log(`skip: no eligible reset window${readIssues.length ? ` (${readIssues.join('; ')})` : ''}`);
+      const skipped = inspectSweep({ windows: observed, now: now(), ...options }).skipped.map(s => `${s.provider}: ${s.reason}`);
+      const detail = [...new Set([...readIssues, ...skipped])];
+      log(`skip: no eligible reset window${detail.length ? ` (${detail.join('; ')})` : ''}`);
     }
     for (const decision of decisions) {
       if (await active(decision.provider)) { log(`skip: interactive ${decision.provider}`); continue; }

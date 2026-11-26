@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runnerArgs } from './unsent-ledger-runner.mjs';
+import { runnerArgs, runNode, main as runLedgerJob } from './unsent-ledger-runner.mjs';
 import {
   addItem,
   autoSend,
@@ -31,6 +31,21 @@ function tmpDir(prefix = 'unsent-') {
 test('定期ランナーは実送信フラグが渡されても常にdry-run', () => {
   assert.deepEqual(runnerArgs([]), ['--dry-run']);
   assert.deepEqual(runnerArgs(['--send','--auto-send','--dry-run']), ['--dry-run']);
+});
+
+test('補助取込の60秒タイムアウトは台帳完了を取り消さずALERTへ記録（プロセスモック）', () => {
+  const calls=[], errors=[];
+  runLedgerJob({
+    run: (script, options) => runNode(script, {...options, spawn: (exe,args,opts) => {
+      calls.push({script,opts,args});
+      return options.fatal ? {status:0} : {error:new Error('ETIMEDOUT'),status:null};
+    }}), recordCaptureError: message => errors.push(message),
+  });
+  assert.deepEqual(calls.map(x=>x.script),['unsent-ledger.mjs','discord-appointment-capture.mjs']);
+  assert.equal(calls[0].opts.timeout,600000);
+  assert.equal(calls[1].opts.timeout,60000);
+  assert.ok(calls.every(x=>x.opts.windowsHide&&x.args.includes('--dry-run')));
+  assert.deepEqual(errors,['ETIMEDOUT']);
 });
 
 test('ingest は id 重複を除外し done へ移す', () => {

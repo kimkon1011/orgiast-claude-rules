@@ -17,10 +17,11 @@ export function runnerArgs(argv = process.argv.slice(2)) {
   return [...argv.filter(arg => !['--send', '--auto-send', '--dry-run'].includes(arg)), '--dry-run'];
 }
 
-function runNode(script, { fatal = true } = {}) {
-  const result = spawnSync(process.execPath, [path.join(tools, script), ...runnerArgs()], {
+export function runNode(script, { fatal = true, spawn = spawnSync } = {}) {
+  const result = spawn(process.execPath, [path.join(tools, script), ...runnerArgs()], {
     stdio: 'inherit',
-    timeout: 10 * 60 * 1000,
+    // 補助取込が外側のタスク制限に達する前に戻り、ALERTへ記録できる余裕を残す。
+    timeout: fatal ? 10 * 60 * 1000 : 60 * 1000,
     windowsHide: true,
   });
   if (result.error) {
@@ -65,11 +66,11 @@ function appendCaptureError(message) {
   }
 }
 
-export function main() {
-  const ledger = runNode('unsent-ledger.mjs', { fatal: true });
+export function main({ run = runNode, recordCaptureError = appendCaptureError } = {}) {
+  const ledger = run('unsent-ledger.mjs', { fatal: true });
   if (!ledger.ok) process.exit(1);
-  const capture = runNode('discord-appointment-capture.mjs', { fatal: false });
-  if (!capture.ok) appendCaptureError(capture.error || 'failed');
+  const capture = run('discord-appointment-capture.mjs', { fatal: false });
+  if (!capture.ok) recordCaptureError(capture.error || 'failed');
 }
 
 if (isEntry(import.meta.url)) {

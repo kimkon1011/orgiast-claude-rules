@@ -42,6 +42,37 @@ test('本人送信承認とneedsKimを認識、不要はAI側',()=>{
   const approval=readableEvent({...base,company:'Wiaas 中西',title:'Wiaas 中西様 審査時間の質問への返信',assignee:'Claude が下書きし金さんが送信を承認'},calendarConfig);
   assert.equal(approval.summary,'【Wiaas 中西様】審査時間の質問への返信を送信承認（D-001）');
 });
+
+for (const assignee of ['Claude', 'Claude(対話セッション)', 'Claude（対話セッション）', 'AI', 'ＡＩ（夜間）', 'Codex', 'Codex（実装）', '008XPS8300', '015CAFE', 'PC018', 'kim-PC', 'DESKTOP-ABC', '夜間', '夜間ジョブ']) {
+  test(`AI担当 ${assignee} は古い承認メタデータでもタスクへ移す`, async () => {
+    const row = {...base, assignee, notes:'autopilot:{"type":"approval","needsKim":"2の範囲"}'};
+    // Even a legacy kimNames alias must not make an AI seat a person.
+    const cfg = {...calendarConfig, kimNames:[...config.kimNames, assignee]};
+    assert.equal(isKimTask(row,cfg),false);
+    assert.equal(isKimTask({...row,notes:'autopilot:{"type":"send","needsKim":"送信範囲"}'},cfg),false);
+    const mock=calendarMock([{calendar:'kim@orgiast.jp',event:{id:'ai-existing',start:{date:base.due},extendedProperties:{private:{deadlineId:base.id}}}}]);
+    await syncCalendar(row,{config:cfg,state:{},request:mock.request});
+    assert.equal(mock.entries.length,1);
+    assert.equal(mock.entries[0].calendar,AI_CALENDAR);
+    assert.ok(mock.calls.filter(x=>x.method).every(x=>x.url.includes('sendUpdates=none')));
+  });
+}
+
+test('Claudeの下書きと金さんの送信承認を区別しprimaryを維持',async()=>{
+  for (const assignee of ['Claude が下書きし金さんが送信を承認','Claude（下書き担当）、金さんが送信を承認']) {
+    const row={...base,assignee,notes:'autopilot:{"type":"approval","needsKim":"2の範囲"}'};
+    assert.equal(isKimTask(row,calendarConfig),true);
+    const mock=calendarMock();
+    await syncCalendar(row,{config:calendarConfig,state:{},request:mock.request});
+    assert.equal(mock.entries[0].calendar,'kim@orgiast.jp');
+  }
+});
+
+test('予定の台帳URLはauthuserでkimアカウントを指定',()=>{
+  const label=readableEvent(base,{...calendarConfig,sheetId:'ledger-ID_123'});
+  assert.match(label.description,/期限台帳: https:\/\/docs\.google\.com\/spreadsheets\/d\/ledger-ID_123\/edit\?authuser=kim@orgiast\.jp\n/);
+  assert.doesNotMatch(label.description,/\/a\/orgiast\.jp\//);
+});
 test('時間付き同一案件はタスクへ、手入力予定を更新しない',async()=>{
   const mock=calendarMock([{calendar:'kim@orgiast.jp',event:{id:'meeting',summary:'M: 株式会社 テスト商事様',start:{dateTime:'2026-11-06T10:00:00+09:00'}}}]);
   await syncCalendar(base,{config:calendarConfig,state:{},request:mock.request});

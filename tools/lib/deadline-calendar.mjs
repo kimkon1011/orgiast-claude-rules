@@ -27,16 +27,19 @@ export function customerName(row, existing = [], config = {}) {
   if (/\bPR\s*#?\d+|lane-doctor|codex-do|DeadlineWatch|rescue-policy|next-session-rotate|ハートビート|夜間ジョブ/i.test(text)) return '社内開発';
   return '';
 }
+export function isAiAssignee(assignee) {
+  return /Claude|Codex|\bAI\b|\bPC\b|\d{3}|DESKTOP[-_]|LAPTOP[-_]|開発|PR|lane-doctor|夜間/i.test(String(assignee || '').normalize('NFKC'));
+}
 export function isKimTask(row, config) {
   const text = `${row.action || ''}\n${row.notes || ''}\n${row.assignee || ''}`;
   if (/(?:金さん|金功勇|kim)\s*(?:が|の)?\s*(?:送信(?:を)?承認|承認|操作|確認|判断|送信)/iu.test(text)) return true;
   const needed = row.needsKim ?? text.match(/"needsKim"\s*:\s*"([^"\n]*)"/)?.[1];
   // Session notes often contain stale/conditional approvals for an AI task.
-  // Only a direct flag or an approval/send task makes that the person's work.
-  const taskType = text.match(/"type"\s*:\s*"([^"\n]*)"/)?.[1];
-  const ai = /Claude|Codex|AI|\bPC\b|\d{3}|開発|PR|lane-doctor/i.test(String(row.assignee || ''));
+  // An approval/send metadata type with arbitrary needsKim text is not a human
+  // assignment (e.g. Claude(対話セッション), needsKim:"2の範囲").
   const required = needed && !/不要|なし|無し|false|^0$|ときだけ|場合だけ/i.test(String(needed));
-  if (required && (row.needsKim === true || /^(?:要|true)(?:[（(]|$)/i.test(String(needed)) || ai && ['approval','send'].includes(taskType))) return true;
+  if (required && (row.needsKim === true || /^(?:要|true)(?:[（(]|$)/i.test(String(needed)))) return true;
+  if (isAiAssignee(row.assignee)) return false;
   return new Set([...(config.kimNames || []), 'kim', '金', '金功勇', '金さん', ''].map(x => String(x).trim().toLowerCase())).has(String(row.assignee || '').trim().toLowerCase());
 }
 export function sameCase(row, event, customer = '') {
@@ -59,7 +62,7 @@ export function readableEvent(row, config, existing = []) {
   if (/(?:金さん|金功勇|kim)\s*(?:が)?\s*送信(?:を)?承認/iu.test(`${row.action || ''} ${row.assignee || ''} ${row.notes || ''}`) && !/承認/.test(content)) content += 'を送信承認';
   content ||= '対応内容を確認';
   const label = /^(?:社内|社内開発|労働審判)$/.test(customer) || customer.endsWith('様') ? customer : `${customer}様`;
-  const url = `https://docs.google.com/a/orgiast.jp/spreadsheets/d/${config.sheetId}/edit`;
+  const url = `https://docs.google.com/spreadsheets/d/${config.sheetId}/edit?authuser=kim@orgiast.jp`;
   return { customer, summary: `【${label}】${content}（${codes.join(' / ')}）`, description: `案件: ${customer}\n担当: ${row.assignee || 'kim'}\nやること: ${row.action || content}\n期限台帳: ${url}\nコード: ${codes.join(' / ')}\n出典: ${row.sourceId || row.quote || ''}` };
 }
 export async function listCalendarEvents(request, calendar, params) {

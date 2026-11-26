@@ -1,10 +1,13 @@
-# session-status  PC=008  host=008XPS8300  updated 2026-11-26 15:09 JST
+# session-status  PC=008  host=008XPS8300  updated 2026-11-26 16:08 JST
 
-- claude auth: auth status タイムアウト
-- 案件数: 14
+- claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "configDirectory": "C:\\Users\\user\\
+- 案件数: 17
 
+- 008・20261126-エイト・進行中・最終更新 11/26 15:52、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 008・account-inventory-1123・完了・最終更新 11/23 21:37、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
+- 008・curama-kobayashi-send-1126・完了・最終更新 11/26 15:55、STATUS.mdなし、DONEあり・期限なし・次:なし
 - 008・curama-read-1126・完了・最終更新 11/26 14:32、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 008・curama-read2-1126・停止・最終更新 11/26 16:09、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・deadline-sweep-1124・停止・最終更新 11/24 10:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・event-slides-1124・停止・最終更新 11/24 17:35、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・inventory-deadlinewatch-20261124・停止・最終更新 11/24 09:57、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

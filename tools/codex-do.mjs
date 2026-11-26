@@ -285,6 +285,27 @@ export function detectQuotaLimit(stdout, stderr, exitStatus = null, promptText =
   return { matched: false };
 }
 
+// 出力ゼロの原因を分類する。ステータスコードと stderr の既知文言から理由を返す。
+// 返り値: 'auth_expired' | 'usage_limit' | 'launch_failed' | 'empty_output'
+// delegation-health の emptyOutputReason（provider:codex 向け）とは異なり、cheap-code/
+// fallback の出力(exit status + stderr のみ、launched 情報無し)から最小の語彙で分類する。
+export function classifyEmptyOutput(output, stderr, exitStatus) {
+  const combined = normalizeQuotes(`${output || ''}\n${stderr || ''}`);
+  const status = Number(exitStatus);
+  // 終了コード 0 かつ出力空 → 純粋な empty_output
+  if (Number.isFinite(status) && status === 0 && !String(output || '').trim()) return 'empty_output';
+  // WSL 起動失敗（Codex が WSL ディストリを見つけられないなど）→ launch_failed
+  if (/(?:WSL ディストリが見つかりません|failed to connect to websocket|ENOENT|command not found|wsl.*not found)/i.test(combined)) return 'launch_failed';
+  // 認証失効 → auth_expired
+  if (/(?:401\s+Unauthorized|Missing bearer or basic auth|Not logged in|Please run.*codex login|invalid_api_key|Failed to refresh token|log out and sign in|or basic authentication in header)/i.test(combined)) return 'auth_expired';
+  // 利用上限到達 → usage_limit
+  if (/(?:You(?:[''']ve| have) hit your usage limit|Usage limit (?:reached|exceeded)|your usage limit.*Upgrade to Pro|Upgrade to Pro \(https:\/\/chatgpt\.com|429.*rate.*limit|Rate limit (?:reached|exceeded))/i.test(combined)) return 'usage_limit';
+  // モデル認証不整合（ChatGPT アカウントで sol/astra）→ auth_expired ではなく起動失敗に近いが、
+  // 「認証構成の誤り」として auth_expired に含める（delegation-health の model_auth_mismatch 相当）。
+  if (/is not supported when using codex with a chatgpt account/i.test(combined)) return 'auth_expired';
+  return 'empty_output';
+}
+
 // Codex の認証失敗。再試行しても直らないので、出力ゼロ再試行を飛ばして代替バックエンドへ回す。
 // 2026-10-17 実測: codex CLI 更新後に未ログインのまま `401 Unauthorized` /
 // `Missing bearer or basic authentication` で exit 1 になり、フォールバック条件
@@ -511,7 +532,14 @@ export function cheapFirstFailureReason({ kind, result, treeChanged, irreversibl
   const warned = hasModelWarning(combined);
   const output = warned ? modelWarningRemainder(result.output, result.stderr) : String(result.output || '');
   if (/unrecognized_model/i.test(warned ? output : combined)) return 'unrecognized_model';
-  if (!output.trim()) return 'empty_output';
+  if (!output.trim()) {
+    // 出力ゼロの原因をステータスコードと stderr から分類する。
+    // 分類しないと auth_failed / usage_limit / launch_failed が全て
+    // empty_output に埋もれて delegation-health の診断精度が下がる。
+    const classified = classifyEmptyOutput(result.output, result.stderr, result.status);
+    if (classified !== 'empty_output') return classified;
+    return 'empty_output';
+  }
   // Replacement characters, invalid controls and common UTF-8-as-Latin-1 sequences.
   if (/[\uFFFD\u0000-\u0008\u000B\u000C\u000E-\u001F]/u.test(output)
     || /(?:Ã.|Â.|â[\u0080-\u00BF€]|ðŸ){2,}/u.test(output)) return 'garbled_output';

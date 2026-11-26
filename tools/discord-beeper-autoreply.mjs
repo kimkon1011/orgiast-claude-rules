@@ -26,6 +26,14 @@ const HOUR = 3600000;
 const LEARN_WINDOW = 72 * HOUR;
 const LEARN_QUEUE_LIMIT = 500;
 const AUTOREPLY_PREFIX = '【kimのClaudeによる代理回答】';
+export const SEND_PROMISE_PTN = /お送りします|送付します|本日中に/;
+export function queueSendPromise(home, { chat, message, answer, question }) {
+  if (!SEND_PROMISE_PTN.test(answer || '')) return null;
+  const id = `autoreply-promise-${String(chat.id).replace(/\W/g, '_')}-${String(message.id).replace(/\W/g, '_')}`;
+  const dir = path.join(home, '.claude', 'unsent-ledger', 'inbox'); fs.mkdirSync(dir, { recursive: true });
+  const item = { id, client: chat.title || message.senderName || 'Discord', case: 'Discord 自動返信で約束した送付', to: [], cc: ['satou@orgiast.jp'], subject: 'Discord で約束した送付の実行', body_path: null, reply_to_message_id: message.id, reply_to_note: question, thread_id: null, gmail_draft_id: null, from: 'seisaku-team@orgiast.jp', urgent: true, decided_date: new Date(timestamp(message) || Date.now()).toISOString().slice(0,10), stop_reason: 'Discord 自動返信で送付を約束・実送付未確認', status: '未送信', evidence: [`Discord「${chat.title || chat.id}」 messageID=${message.id}`], match: { to: '', after: new Date(timestamp(message) || Date.now()).toISOString() }, last_checked_at: null, sent_message_id: null };
+  atomic(path.join(dir, `${id}.json`), item); return item;
+}
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const read = file => { try { return fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return ''; throw e; } };
 const atomic = (file, value) => {
@@ -507,6 +515,8 @@ export async function runOnce(options = {}) {
 
         await finishSend(chat, found, { ...mark(latest), content, question, senderName: latest.senderName,
           approvalMessage, approvalTs: timestamp(latest), ...(trialSelfDecline ? { trialSelfDecline: true } : {}) });
+        const promised = queueSendPromise(home, { chat, message: latest, answer: decision.answer, question });
+        if (promised) await addItemImpl(home, { kind: 'ask', source: 'discord-beeper-autoreply', text: `【送付約束の実行確認】${chat.title || chat.id}\n${decision.answer}`, dedupeKey: promised.id });
         result.replied++;
       } catch (error) {
         await decide(`読み取り・分類を確認できません: ${error.code || error.name || 'Error'}`);

@@ -207,6 +207,17 @@ PR は作った席が `node tools/pr-land.mjs --title "<題>" --body-file <本�
 🔴 ブース営業（展示会ブース・Reブース・出展関連）の社外メールは佐藤優奈さん（satou@orgiast.jp）を必ずCCに入れる。gmail-draft.mjs 等が config/booth-sales-cc.json で自動付与し、既存下書きの送信でCC欠落なら止める（2026-11-23 kim 指示）。
 **🔴 メールは送信前に本文全文を提示し明示承認後のみ送る。多数宛は1社ずつ YES を得る。gmail-draft.mjs --send の自動チェック（スレッド全体の合意×見積明細：金額・数量・人件費・納品形態・日程等）を通し、block は修正する。生の Gmail API 送信は禁止。送信後は本文全文・添付の中身・送信日時/元/先/件名をチャットに表示する。**
 **🔴 送信前はsend-context-check。**
+
+### 送信の終わり方ルール（kim 2026-11-26・全PC全アカウント）
+
+送ると決まった連絡（メール・Discord・LINE・Beeper・くらしのマーケット・FAX）の作業は、次のどちらかで終わらせる。
+
+- **(a) 台帳登録必須**: 下書きを作った時点で必ず送信待ち台帳 inbox（`~/.claude/unsent-ledger/inbox` または `gb-reports/unsent-ledger/inbox`）に JSON を置く。`node tools/unsent-ledger.mjs add --file <json>` でも可。
+- **(b) 終わり方は2択だけ**: 「送信済み（読み戻し確認つき）」か「台帳に 承認待ち／止まった（理由）期限○○ で登録済み」。「下書きしただけ」「送らずに報告」で終わる報告は禁止。REPORT.md に台帳 ID を書く。
+- **(c) 止まったら逃がさない**: 整合性チェック・ガード・フックで送信や書き込みが止まったら、黙って別形式に逃がさず台帳に 止まった（理由）で登録する。
+- **(d) 社内の再承認は不要**: 金さんが「送る」と決めた社内宛て（`internal=true` かつ `hasKimDecision`）は承認を再度求めず送る（自動送信待ち）。社外は承認待ちのまま。
+
+詳細運用: `docs/unsent-ledger.md`。毎時 :20/:50 の `OrgiastUnsentLedger` が照合し `gb-reports/unsent-ledger/ALERT.md` を更新する。
 - 確定済み条件を変更する連絡は `--intended-change "<変更内容>"`（複数可）を付けて実行する。例: `node tools/send-context-check.mjs --channel discord --target <ID> --text-file <本文> --intended-change "設営時間 9:00-13:00→9:00-18:00" --intended-change "報酬 5,200円→10,400円"`。本文で変更であることを明示し、変更前の値が履歴と一致すれば、その変更自体は矛盾・重複としてNGにしない。
 - 金さんがチャットで明示承認した社内宛だけ、`--kim-approved "<承認の根拠メモ>"` を付けて LLM が NG でも承認マーカーを作れる（2026-11-16）。宛先は既存の社内リスト（`config/internal-senders.json` の Discord/メール/LINE 表示名、または `beeperInternalChats` の Beeper チャットID・メンバー名、または Discord メンバーディレクトリ）にある人に限る。`lineDisplayNames` に社内の相手を足して判定しない（履歴の自社/相手分類が崩れる）。判定結果・承認根拠・日時・送信先・本文ハッシュは `~/.claude/logs/send-context-kim-approved.jsonl` に残す。オプション無しの既定動作は変えない。例: `node tools/send-context-check.mjs --channel discord --target <名前またはID> --text-file <本文> --kim-approved "2026-11-16 23:04 金さんがグロボのチャットで承認"`。
 多数宛は `node tools/mail-bulk-approve.mjs --input <JSON> --project-dir <新規clasp管理dir>` で承認シートを作り、初回の setupOnce 設定後、kim が1社ずつ「送信」にチェックして送る（本文確認＋YES承認、二重送信防止）。

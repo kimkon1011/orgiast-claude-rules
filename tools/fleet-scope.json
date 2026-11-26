@@ -751,6 +751,17 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/register-unsent-ledger.ps1",
+      "scope": "kim-only",
+      "step": "task:unsent-ledger",
+      "reason": "送信待ち台帳の照合・ALERT生成は Beeper/Gmail がある kim-PC だけで登録する"
+    },
+    {
+      "path": "tools/unsent-ledger-runner.mjs",
+      "scope": "kim-only",
+      "reason": "kim-PC の送信待ち台帳を毎時照合し、止まった件を ALERT に出す。社内の自動送信待ちのみ実送信する"
+    },
+    {
       "path": "tools/lahaina-kpi-daily-register.mjs",
       "scope": "kim-only",
       "step": null,

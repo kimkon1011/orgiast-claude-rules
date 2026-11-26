@@ -8,9 +8,17 @@ import { PassThrough } from 'node:stream';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { BUILTIN_REPO_BY_KEYWORD, ROLE_NAMES, boundedCount, todoDoneDecision, DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, sectionsForTodo, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, buildRolePrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, isTodoAlreadyDone, taskClosedBeforeLaunch, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
+const { BUILTIN_REPO_BY_KEYWORD, ROLE_NAMES, boundedCount, todoDoneDecision, DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, sectionsForTodo, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, buildRolePrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, isTodoAlreadyDone, taskClosedBeforeLaunch, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, loadClaudeExeHelpers, main } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 const completedSummary = 'やったこと: 対象のコードを修正してコミットした。検証したこと: 回帰テストを実行し全件成功を確認した。残ったこと: なし';
+
+test('旧 claude-exe に export が無くても探索だけをスキップして継続する', async () => {
+  const warnings = [];
+  const helpers = await loadClaudeExeHelpers(async () => ({}), (line) => warnings.push(line));
+  assert.equal(helpers.findClaudeInVersionedDir('unused', {}), null);
+  assert.deepEqual(helpers.sanitizeClaudeSupervisorEnv({ CLAUDECODE: '1', PATH: 'ok' }), { PATH: 'ok' });
+  assert.match(warnings[0], /実体探索だけスキップ/);
+});
 
 test('todoDoneDecision は成功でも空サマリを拒否する', () => {
   assert.deepEqual(todoDoneDecision({ status: 'success', summary: ' \n ' }), { done: false, reason: 'サマリが空（作業の痕跡が無い）' });
@@ -956,7 +964,7 @@ test('buildChildArgs は cwd が異なる場合だけ --add-dir を2つ渡す', 
   // (2026-09-17: 実機の settings.json に defaultMode が無く無人実行が承認待ちで止まっていたため)。
   assert.equal(different[different.indexOf('--permission-mode') + 1], 'auto');
   assert.equal(same[same.indexOf('--permission-mode') + 1], 'auto');
-  assert.equal(different[different.indexOf('--model') + 1], 'sonnet');
+  assert.equal(different[different.indexOf('--model') + 1], 'opus');
 });
 
 test('buildChildArgs は環境変数で無人実行モデルを上書きできる', () => {
@@ -1290,6 +1298,13 @@ test('「以下は下の別ブロックの残TODO…」型の案内文は参照�
 test('buildPrompt は fleet-mail の [判断依頼] へ返信も判断もしないよう指示する', () => {
   const prompt = buildPrompt('実装する', {}, '/repo', '/tmp/run.summary.md', 60);
   assert.match(prompt, /\[判断依頼\][^\n]*返信も判断も行わない/);
+});
+
+test('buildPrompt は夜間でも送信・支払い・削除・課金変更をせず、【夜間】付きを優先する', () => {
+  const prompt = buildPrompt('実装する', {}, '/repo', '/tmp/run.summary.md', 60);
+  assert.match(prompt, /支払い・削除・課金変更も行わない/);
+  assert.match(prompt, /承認待ち（朝）/);
+  assert.match(prompt, /【夜間】/);
 });
 
 test('runChild は冷却中・失敗時の codex-do と保留・最終フォールバックを扱う', async (t) => {

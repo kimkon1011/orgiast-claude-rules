@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * seisaku-team@ mail via GitHub Actions (Node standard library + gh only).
- * draft|send --to addr --subject text --body-file path [--cc a,b]
+ * draft|send --to addr --subject text --body-file path [--cc a,b] [--booth]
  *   [--reply-to-thread-of addr] [--attach-drive id1,id2] [--yes] [--wait 600] [--json]
  * search --query 'gmail query' [--max 10] [--user seisaku-team@orgiast.jp]
  * thread|message|delete-draft --id ID / drafts (also accept --wait and --json).
@@ -14,6 +14,10 @@ import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { acquireSendDedupe, duplicateMessage, normalizeRecipients, SendDedupeError } from './lib/send-dedupe.mjs';
+import { applyBoothCc } from './lib/booth-sales-cc.mjs';
+
+const BOOTH_CC = 'satou@orgiast.jp';
 
 const REPO = 'kimkon1011/aujust-sales-automation';
 const WRITE_WORKFLOW = 'seisaku-mail.yml';
@@ -25,12 +29,12 @@ function parse(argv) {
   const [action, ...rest] = argv;
   if (!['draft', 'send', ...READ_ACTIONS].includes(action)) throw new UsageError('Expected draft, send, search, thread, message, drafts or delete-draft');
   const write = ['draft', 'send'].includes(action);
-  const allowed = new Set(['wait', 'json', ...(write ? ['to', 'subject', 'body-file', 'cc', 'reply-to-thread-of', 'attach-drive', 'yes'] : ['query', 'max', 'user', 'id'])]);
+  const allowed = new Set(['wait', 'json', ...(write ? ['to', 'subject', 'body-file', 'cc', 'reply-to-thread-of', 'attach-drive', 'yes', 'allow-repeat', 'booth'] : ['query', 'max', 'user', 'id'])]);
   const opts = {};
   for (let i = 0; i < rest.length; i++) {
     const key = rest[i].startsWith('--') ? rest[i].slice(2) : '';
     if (!allowed.has(key) || Object.hasOwn(opts, key)) throw new UsageError(`Invalid or duplicate option: ${rest[i]}`);
-    if (['yes', 'json'].includes(key)) opts[key] = true;
+    if (['yes', 'json', 'booth'].includes(key)) opts[key] = true;
     else {
       if (!rest[i + 1] || rest[i + 1].startsWith('--')) throw new UsageError(`Missing value: --${key}`);
       opts[key] = rest[++i];
@@ -48,8 +52,9 @@ function parse(argv) {
   return { action, opts, write, wait };
 }
 
-export function createCli({ spawnSync = nativeSpawnSync, env = process.env, home = homedir(), now = Date.now, sleep = ms => new Promise(r => setTimeout(r, ms)), stdout = s => process.stdout.write(s) } = {}) {
+export function createCli({ spawnSync = nativeSpawnSync, env = process.env, home = homedir(), now = Date.now, sleep = ms => new Promise(r => setTimeout(r, ms)), stdout = s => process.stdout.write(s), searchSent, acquireDedupe = acquireSendDedupe } = {}) {
   return async function run(argv) {
+    let dedupeGuard;
     let token = '', json = argv.includes('--json');
     const redact = value => token ? String(value).split(token).join('[REDACTED]') : String(value);
     const emit = value => stdout(redact(value) + '\n');
@@ -67,6 +72,9 @@ export function createCli({ spawnSync = nativeSpawnSync, env = process.env, home
       if (write) {
         try { body = readFileSync(opts['body-file'], 'utf8'); }
         catch { throw new UsageError('Cannot read --body-file as UTF-8'); }
+        const boothCc = applyBoothCc({ to: opts.to, cc: opts.cc, subject: opts.subject, body, booth: opts.booth });
+        opts.cc = boothCc.cc.join(',');
+        opts.boothCcAdded = boothCc.added;
       }
       if (action === 'send' && !opts.yes) {
         output({ ok: false, error: 'send requires --yes', to: opts.to, cc: opts.cc || '', subject: opts.subject, preview: body.split(/\r?\n/).slice(0, 3).join('\n'), attachmentDriveIds: opts['attach-drive'] || '' });
@@ -82,8 +90,28 @@ export function createCli({ spawnSync = nativeSpawnSync, env = process.env, home
         if (res.error || res.status !== 0) throw new Error(`gh ${args[0]} failed${res.status == null ? '' : ` (exit ${res.status})`}`);
         return res.stdout || '';
       };
+      if (action === 'send') {
+        const recipients = normalizeRecipients(opts.to);
+        dedupeGuard = await acquireDedupe({ recipients, body, allowRepeat: opts['allow-repeat'], home });
+        if (opts['allow-repeat'] === undefined) {
+          const lookup = searchSent ?? (async address => {
+            let captured = '';
+            const code = await createCli({ spawnSync, env, home, now, sleep, stdout: value => { captured += value; }, acquireDedupe })(['search', '--query', `in:sent to:${address} newer_than:1d`, '--max', '1', '--json']);
+            if (code !== 0) throw new Error('送信済み検索に失敗');
+            const value = JSON.parse(captured.trim().split(/\r?\n/u).at(-1));
+            return value.messages ?? value.results ?? value.items ?? [];
+          });
+          for (const address of recipients) {
+            let matches;
+            try { matches = await lookup(address); }
+            catch { throw new SendDedupeError('送信済みメールの照会に失敗したため送信を拒否しました。--allow-repeat "<理由>" でのみ続行できます'); }
+            const count = Array.isArray(matches) ? matches.length : Number(matches?.count ?? 0);
+            if (count > 0) throw new SendDedupeError(duplicateMessage(matches?.[0]?.sentAt ?? matches?.[0]?.date ?? '24時間以内'));
+          }
+        }
+      }
       const workflow = write ? WRITE_WORKFLOW : READ_WORKFLOW;
-      const inputs = write ? { mode: action, to: opts.to, subject: opts.subject, body_b64: Buffer.from(body, 'utf8').toString('base64') } : { action, user: opts.user || 'seisaku-team@orgiast.jp', ...(action === 'search' ? { query: opts.query, max: opts.max || '10' } : {}), ...(opts.id ? { id: opts.id } : {}) };
+      const inputs = write ? { mode: action, to: opts.to, subject: opts.subject, body_b64: Buffer.from(body, 'utf8').toString('base64') } : { action, user: opts.user || 'seisaku-team@orgiast.jp', ...(action === 'search' ? { query: opts.query } : {}), ...(['search', 'drafts'].includes(action) ? { max: opts.max || '10' } : {}), ...(opts.id ? { id: opts.id } : {}) };
       if (write) for (const [flag, input] of [['cc', 'cc'], ['reply-to-thread-of', 'reply_to_thread_of'], ['attach-drive', 'attachment_drive_ids']]) if (opts[flag]) inputs[input] = opts[flag];
       const args = ['workflow', 'run', workflow, '--repo', repo];
       for (const [key, value] of Object.entries(inputs)) args.push('-f', `${key}=${value}`);
@@ -124,11 +152,16 @@ export function createCli({ spawnSync = nativeSpawnSync, env = process.env, home
         }
       }
       result = { ...(result || { ok: false, error: 'result not found' }), runUrl };
-      output(result);
+      if (action === 'send' && result.ok === true) {
+        dedupeGuard.recordSuccess({ channel: 'gmail', transport: 'seisaku-mail', messageId: result.messageId, threadId: result.threadId });
+        dedupeGuard = undefined;
+      }
+      output({ ...result, ...(opts.boothCcAdded ? { boothCcAdded: BOOTH_CC } : {}) });
       return result.ok === true ? 0 : 1;
     } catch (error) {
+      dedupeGuard?.release();
       output({ ok: false, error: error.message });
-      return error instanceof UsageError ? 64 : 1;
+      return error instanceof UsageError ? 64 : error instanceof SendDedupeError ? 4 : 1;
     }
   };
 }

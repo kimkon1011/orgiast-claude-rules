@@ -137,28 +137,27 @@ test('target: no-record in NFKC variant', () => {
 // --- buildPatchBody tests ---
 
 test('buildPatchBody: preserves existing attendees and adds recorder', () => {
-  const event = makeEvent();
+  const event = makeEvent({ attendees: [{ email: 'kim@orgiast.jp', self: true }] });
   const body = buildPatchBody(event);
-  assert.equal(body.attendees.length, 3);
+  assert.equal(body.attendees.length, 2);
   assert.ok(body.attendees.some(a => a.email === 'kim@orgiast.jp'));
-  assert.ok(body.attendees.some(a => a.email === 'customer@example.com'));
   assert.ok(body.attendees.some(a => a.email === RECORDER));
 });
 
 test('buildPatchBody: preserves responseStatus', () => {
   const event = makeEvent({ attendees: [
     { email: 'kim@orgiast.jp', self: true, responseStatus: 'accepted' },
-    { email: 'customer@example.com', responseStatus: 'needsAction' },
+    { email: 'staff@orgiast.jp', responseStatus: 'needsAction' },
   ] });
   const body = buildPatchBody(event);
   const kim = body.attendees.find(a => a.email === 'kim@orgiast.jp');
   assert.equal(kim.responseStatus, 'accepted');
-  const cust = body.attendees.find(a => a.email === 'customer@example.com');
+  const cust = body.attendees.find(a => a.email === 'staff@orgiast.jp');
   assert.equal(cust.responseStatus, 'needsAction');
 });
 
 test('buildPatchBody: no responseStatus on recorder', () => {
-  const event = makeEvent();
+  const event = makeEvent({ attendees: [{ email: 'kim@orgiast.jp', self: true }] });
   const body = buildPatchBody(event);
   const recorder = body.attendees.find(a => a.email === RECORDER);
   assert.equal(recorder.responseStatus, undefined);
@@ -219,6 +218,18 @@ test('isInternalOnly: all orgiast.jp', () => {
     { email: 'kim@orgiast.jp' },
     { email: 'staff@orgiast.jp' },
   ]));
+});
+
+test('isInternalOnly: staff addresses も社内扱い', () => {
+  const staff = ['staff-personal@gmail.com'];
+  assert.ok(isInternalOnly([
+    { email: 'kim@orgiast.jp' },
+    { email: 'staff-personal@gmail.com' },
+  ], staff));
+  assert.ok(!isInternalOnly([
+    { email: 'staff-personal@gmail.com' },
+    { email: 'client@example.com' },
+  ]), 'client が混ざれば false');
 });
 
 test('isInternalOnly: includes external', () => {
@@ -338,10 +349,23 @@ test('dry-run: --days parameter limits window', async t => {
   assert.equal(result.targetCount, 1);
 });
 
+test('社外ゲストがいる場合はゲスト一覧の上書きを避ける', async t => {
+  const logs = [];
+  const result = await run({ home: temp(t), now: Date.parse('2026-11-10T00:00:00Z') }, {
+    events: [makeEvent()],
+    getToken: async () => 'fake-token',
+    log: message => logs.push(message),
+    fetchImpl: async () => assert.fail('attendees の書き込みは禁止'),
+  });
+  assert.equal(result.patched, 0);
+  assert.equal(result.details[0].skipped, 'attendees-cannot-be-safely-replaced');
+  assert.ok(logs.some(message => message.includes('customer@example.com')));
+});
+
 test('PATCH preserves existing attendees and uses sendUpdates=none', async t => {
   const home = temp(t);
   let patchUrl, patchBody;
-  const events = [makeEvent()];
+  const events = [makeEvent({ summary: 'M: 社内主催', attendees: [{ email: 'kim@orgiast.jp', self: true }] })];
   const result = await run({
     home,
     now: Date.parse('2026-11-10T00:00:00Z'),
@@ -374,13 +398,13 @@ test('PATCH preserves existing attendees and uses sendUpdates=none', async t => 
   assert.match(patchUrl, /sendUpdates=none/);
   const emails = patchBody.attendees.map(a => a.email);
   assert.ok(emails.includes('kim@orgiast.jp'));
-  assert.ok(emails.includes('customer@example.com'));
+  assert.ok(!emails.includes('customer@example.com'));
   assert.ok(emails.includes(RECORDER));
 });
 
 test('read-back failure causes exit 1', async t => {
   const home = temp(t);
-  const events = [makeEvent()];
+  const events = [makeEvent({ summary: 'M: 社内主催', attendees: [{ email: 'kim@orgiast.jp', self: true }] })];
   let patchCount = 0;
   await assert.rejects(run({
     home,
@@ -403,7 +427,7 @@ test('read-back failure causes exit 1', async t => {
 
 test('PATCH failure increments failed count', async t => {
   const home = temp(t);
-  const events = [makeEvent()];
+  const events = [makeEvent({ summary: 'M: 社内主催', attendees: [{ email: 'kim@orgiast.jp', self: true }] })];
   await assert.rejects(run({
     home,
     now: Date.parse('2026-11-10T00:00:00Z'),
@@ -422,7 +446,7 @@ test('PATCH failure increments failed count', async t => {
 
 test('log file is written with JSONL', async t => {
   const home = temp(t);
-  const events = [makeEvent()];
+  const events = [makeEvent({ summary: 'M: 社内主催', attendees: [{ email: 'kim@orgiast.jp', self: true }] })];
   await run({
     home,
     now: Date.parse('2026-11-10T00:00:00Z'),
@@ -615,8 +639,8 @@ test('conferenceData hangoutsMeet type is recognized', async t => {
 test('multiple targets: all patched successfully', async t => {
   const home = temp(t);
   const events = [
-    makeEvent({ id: 'event-1', summary: 'MTG A' }),
-    makeEvent({ id: 'event-2', summary: 'MTG B' }),
+    makeEvent({ id: 'event-1', summary: 'M: A', attendees: [] }),
+    makeEvent({ id: 'event-2', summary: 'M: B', attendees: [] }),
   ];
   const result = await run({
     home,
@@ -647,8 +671,8 @@ test('multiple targets: all patched successfully', async t => {
 test('one failure among multiple targets causes exit 1', async t => {
   const home = temp(t);
   const events = [
-    makeEvent({ id: 'event-1', summary: 'MTG A' }),
-    makeEvent({ id: 'event-2', summary: 'MTG B' }),
+    makeEvent({ id: 'event-1', summary: 'M: A', attendees: [] }),
+    makeEvent({ id: 'event-2', summary: 'M: B', attendees: [] }),
   ];
   let patchCount = 0;
   await assert.rejects(run({

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { addItem, listItems, markSeen } from '../kim-inbox.mjs';
+import { addItem, listInboxMatches, readInboxItem, markSeen } from '../kim-inbox.mjs';
 import { rowKey } from '../auto-progress-ledger.mjs';
 import { checkProgressSummary } from './check-progress-summary.mjs';
 export { isKimHumanProgress } from './human-progress-row.mjs';
@@ -40,10 +40,10 @@ export async function deliverHumanProgress(home, row, { io = {} } = {}) {
   const kind = effNextKim ? 'ask' : 'info';
   const fingerprint = hash(JSON.stringify([row.checkResult || '', row.state || '', outputState(row.checkText), row.status || '',
     effNextKim || 'なし']));
-  const items = (io.listKimInboxItems ?? listItems)(home).filter(item => item.source === source);
+  const items = io.listKimInboxItems ? io.listKimInboxItems(home).filter(item => item.source === source) : listInboxMatches(home, item => item.source === source);
   const parents = new Set(items.map(item => item.dedupeKey?.split(':').at(-2)));
   const previous = items.filter(item => !parents.has(item.id)).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))[0];
-  if (previous?.dedupeKey?.endsWith(':' + fingerprint) && previous.kind === kind && previous.text && !previous.forwardError) return { delivered: 'session-inbox', id: previous.id, unchanged: true };
+  if (previous?.dedupeKey?.endsWith(':' + fingerprint) && previous.kind === kind && (previous.text || previous.hasText) && !previous.forwardError) return { delivered: 'session-inbox', id: previous.id, unchanged: true };
   // 同じ source の古い未読 info/ask は既読にする（削除しない）
   // previous も含め、新通知で上書きされる全ての open 項目を対象にする
   const stale = items.filter(item => !parents.has(item.id) && item.status === 'open');
@@ -51,8 +51,8 @@ export async function deliverHumanProgress(home, row, { io = {} } = {}) {
     try { (io.markKimInboxSeen ?? markSeen)(home, old.id); } catch { /* best-effort */ }
   }
   const dedupeKey = previous?.dedupeKey?.endsWith(':' + fingerprint) ? previous.dedupeKey : `${source}:${previous?.id || 'initial'}:${fingerprint}`;
-  const item = await (io.addKimInboxItem ?? addItem)(home, { kind, source, text: humanProgressText(row), dedupeKey });
-  const saved = (io.listKimInboxItems ?? listItems)(home).find(saved => saved.id === item?.id);
+  const item = await (io.addKimInboxItem ?? addItem)(home, { kind, forceKind: true, source, text: humanProgressText(row), dedupeKey });
+  const saved = io.listKimInboxItems ? io.listKimInboxItems(home).find(saved => saved.id === item?.id) : readInboxItem(home, item?.id);
   if (!saved || saved.kind !== kind || saved.dedupeKey !== dedupeKey || !saved.text || saved.text !== item.text || saved.forwardError) throw new Error('kim-inbox progress read-back failed');
   return { delivered: 'session-inbox', channel: 'kim-inbox', ok: true, id: saved.id };
 }

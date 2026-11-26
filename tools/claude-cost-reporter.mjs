@@ -192,8 +192,11 @@ export const PRICING = {
   'claude-opus-4-8': { in: 5, out: 25, cacheWrite: 6.25, cacheRead: 0.5 },
   'claude-opus-5': { in: 5, out: 25, cacheWrite: 6.25, cacheRead: 0.5 },   // Opus5(GA・Opus4.8と同単価)
   'claude-fable-5': { in: 10, out: 50, cacheWrite: 12.5, cacheRead: 1.0 }, // §1.16禁止、検出したら警告
+  // 2026-11-18 追加（claude.ai/pricing より）
+  'claude-opus-5-5': { in: 4, out: 20, cacheWrite: 5, cacheRead: 0.2 },
+  'claude-sonnet-5-5': { in: 2, out: 10, cacheWrite: 2.5, cacheRead: 0.1 },
 };
-function priceOf(model) {
+export function priceOf(model) {
   if (PRICING[model]) return PRICING[model];
   // 日付サフィックス付きID(例: claude-haiku-4-5-20251001)は末尾-YYYYMMDDを剥がして再照合
   const stripped = String(model).replace(/-\d{8}$/, '');
@@ -217,7 +220,7 @@ function findTranscripts(root) {
 }
 
 // --- 1ファイルを1行ずつ処理。usage/model/timestamp だけ抜き、contentは触らない ---
-function processFile(filePath, monthStart, byModel, unknownModels, cache) {
+export function processFile(filePath, monthStart, byModel, unknownModels, cache) {
   let raw;
   try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return; }
   for (const line of raw.split('\n')) {
@@ -243,7 +246,7 @@ function processFile(filePath, monthStart, byModel, unknownModels, cache) {
         (cacheWriteTok / 1e6) * price.cacheWrite +
         (cacheReadTok / 1e6) * price.cacheRead;
     } else {
-      unknownModels.add(model);
+      if (model !== '<synthetic>') unknownModels.add(model);
     }
     const usage = byModel[model] || { cost: 0, inTok: 0, outTok: 0 };
     usage.cost += cost;
@@ -262,10 +265,10 @@ function shouldSkipByGuard() {
   } catch { /* no state yet */ }
   return false;
 }
-function saveGuardState(fields = {}) {
+function saveGuardState(fields = {}, { updateGuard = true } = {}) {
   let current = {};
   try { current = JSON.parse(fs.readFileSync(statePath(), 'utf-8')); } catch { /* no state yet */ }
-  try { fs.writeFileSync(statePath(), JSON.stringify({ ...current, lastRun: new Date().toISOString(), ...fields })); } catch { /* ignore */ }
+  try { fs.writeFileSync(statePath(), JSON.stringify({ ...current, ...(updateGuard ? { lastRun: new Date().toISOString() } : {}), ...fields })); } catch { /* ignore */ }
 }
 
 // 6時間ガード中の挙動を決める純関数。
@@ -300,14 +303,14 @@ async function runCostReporter() {
   }
   const willPost = decision === 'post';
   // 競合防止: 実際に投稿するときだけ即座に状態を書く(近接して複数回発火しても2回目以降はスキップされ重複投稿しない)
-  if (!DRY_RUN && willPost) saveGuardState();
-
   if (!webhook && !DRY_RUN) {
     const message = 'DISCORD_COST_WEBHOOK が未設定です。~/.claude/cost-reporter.env を作成してください。';
     if (CACHED || REFRESH_CACHE) throw new Error(message);
     console.error(message);
     return;
   }
+
+  if (!DRY_RUN && willPost) saveGuardState();
 
   const now = new Date();
   const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
@@ -328,12 +331,13 @@ async function runCostReporter() {
   const opusOut = sorted.filter(([m]) => /opus/i.test(m)).reduce((a, [, v]) => a + v.outTok, 0);
   const opusRatio = totalOut ? opusOut / totalOut : 0;
   const reportState = {
+    measuredAt: now.toISOString(),
     mtdUsd: total,
     topModels: sorted.map(([model, value]) => ({ model, outTok: value.outTok, usd: value.cost })),
     fable5Detected: fableUsed,
     opusRatio,
   };
-  if (!DRY_RUN && willPost) saveGuardState(reportState);
+  if (!DRY_RUN) saveGuardState(reportState, { updateGuard: willPost });
 
   let msg = `**💻 Claude Code ローカル利用トークン** — ${label}\n`;
   // 識別行はヘッダ直後に置く。本文は 1950 文字で切って送るため、末尾だとモデル一覧が長いPCで欠落する。

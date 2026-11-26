@@ -28,7 +28,7 @@ export function commitLanded(sha, { base = 'origin/main', cwd = process.cwd(), r
     if (typeof ref !== 'string' || !ref || ref.startsWith('-')) throw new Error('Expected a commit reference');
   }
   const result = (via = null, pr = null, mergeCommit = null) => ({ sha, landed: via !== null, via, pr, mergeCommit });
-  const invoke = (exe, args, input) => run(exe, args, { cwd, input, encoding: 'utf8', timeout: 60_000, maxBuffer: 64 * 1024 * 1024 });
+  const invoke = (exe, args, input, timeout = 60_000) => run(exe, args, { cwd, input, encoding: 'utf8', timeout, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GCM_INTERACTIVE: 'never', GIT_TERMINAL_PROMPT: '0', GH_PROMPT_DISABLED: '1' } });
   const git = args => {
     const r = invoke('git', args);
     if (r.error || r.status !== 0) throw new Error(`git ${args[0]} failed: ${r.error?.message || r.stderr || r.status}`);
@@ -38,7 +38,7 @@ export function commitLanded(sha, { base = 'origin/main', cwd = process.cwd(), r
   if (!ancestor.error && ancestor.status === 0) return result('ancestor');
   let ghWorked = false;
   try {
-    const found = invoke('gh', ['pr', 'list', '--state', 'merged', '--search', sha, '--json', 'number,mergedAt,mergeCommit,commits']);
+    const found = invoke('gh', ['pr', 'list', '--state', 'merged', '--search', sha, '--json', 'number,mergedAt,mergeCommit,commits'], undefined, 8_000);
     ghWorked = !found.error && found.status === 0;
     if (ghWorked) {
       const prs = JSON.parse(found.stdout);
@@ -56,13 +56,13 @@ export function commitLanded(sha, { base = 'origin/main', cwd = process.cwd(), r
     try {
       const remote = invoke('git', ['remote', 'get-url', 'origin']);
       const repo = !remote.error && remote.status === 0 ? parseGithubRemote(remote.stdout) : null;
-      const auth = repo ? invoke('git', ['credential', 'fill'], 'protocol=https\nhost=github.com\n\n') : null;
+      const auth = repo ? invoke('git', ['credential', 'fill'], 'protocol=https\nhost=github.com\n\n', 8_000) : null;
       const token = !auth?.error && auth?.status === 0 ? String(auth.stdout || '').match(/^password=(.+)$/m)?.[1].trim() : null;
       if (repo && token) {
         const resolved = invoke('git', ['rev-parse', '--verify', `${sha}^{commit}`]);
         const ref = !resolved.error && resolved.status === 0 ? (resolved.stdout || '').trim() : sha;
         const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/commits/${ref}/pulls`;
-        const fetched = invoke('node', ['-e', REST_SCRIPT, url], token);
+        const fetched = invoke('node', ['-e', REST_SCRIPT, url], token, 8_000);
         if (!fetched.error && fetched.status === 0) {
           const response = JSON.parse(fetched.stdout || '{}');
           const pulls = response.status === 200 ? JSON.parse(response.body || '[]') : [];

@@ -12,10 +12,14 @@ if ($ValidateOnly) {
   if ($LASTEXITCODE -ne 0) { throw 'syntax check failed' }
   return
 }
-$action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script) -WorkingDirectory $repo
+# Keep the waiting launcher outside the repository being updated.
+$launcher = Join-Path $env:USERPROFILE '.claude\tools\wait-for-script.mjs'
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $launcher) | Out-Null
+Copy-Item -LiteralPath (Join-Path $repo 'tools\lib\wait-for-script.mjs') -Destination $launcher -Force
+$action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($launcher, $script) -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At '05:50'
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 Register-ScheduledTask -TaskName 'OrgiastKimEditorSweep' -Action $action -Trigger $trigger -Settings $settings -Description 'Ensure kim editor permission on automation files from the last seven days.' -Force | Out-Null
 $task = Get-ScheduledTask -TaskName 'OrgiastKimEditorSweep' -ErrorAction Stop
-if (-not $task.Actions.Arguments.Contains($script) -or $task.Triggers[0].StartBoundary.Substring(11,5) -ne '05:50') { throw 'read-back failed: OrgiastKimEditorSweep' }
+if (-not $task.Actions.Arguments.Contains($script) -or -not $task.Actions.Arguments.Contains($launcher) -or $task.Triggers[0].StartBoundary.Substring(11,5) -ne '05:50') { throw 'read-back failed: OrgiastKimEditorSweep' }
 Write-Host 'OK: OrgiastKimEditorSweep daily 05:50'

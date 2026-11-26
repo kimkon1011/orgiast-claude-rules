@@ -1,10 +1,11 @@
-import { gatewayParams, usageCostFields } from './provider-routing.mjs';
+import { gatewayParams } from './provider-routing.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { callWithFallback, FALLBACK_CHAIN } from './llm-fallback.mjs';
 import { isEntry } from './is-entry.mjs';
+import { recordRun } from './lib/change-gate.mjs';
 
 export const PROFILES = {
   ai: {
@@ -189,6 +190,7 @@ export function createLlmClient({ home = os.homedir(), fetchImpl = fetch, sleep 
   return async ({ provider, messages, maxTokens = 4000, responseFormat }) => {
     const run = async (format) => callWithFallback({
       start: { provider, model: PROVIDERS[provider]?.model }, chain: FALLBACK_CHAIN, fetchImpl, sleepImpl: sleep, ledgerFile: usageFile,
+      caller: 'line-digest', category: 'digest',
       cooldownFile: path.join(home, '.claude', 'provider-cooldown.json'),
       payloadFor(candidate) {
         const p = PROVIDERS[candidate.provider], key = p && loadKey(home, candidate.provider);
@@ -206,11 +208,6 @@ export function createLlmClient({ home = os.homedir(), fetchImpl = fetch, sleep 
         const content = choice.message?.content;
         if (typeof content !== 'string' || !content.trim()) return 'content が空です';
         return true;
-      },
-      async onAttempt(info) {
-        const usage = info.status === 'ok' ? (await info.response.clone().json().catch(() => ({}))).usage || {} : {};
-        const rec = { t: new Date().toISOString(), tool: 'line-digest', provider: info.candidate.provider, model: info.candidate.model, ...usageCostFields(usage), in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover, ok: info.status === 'ok' };
-        try { fs.mkdirSync(path.dirname(usageFile), { recursive: true }); fs.appendFileSync(usageFile, `${JSON.stringify(rec)}\n`); } catch {}
       },
     });
     let result;
@@ -284,6 +281,7 @@ export async function runDigest(options = {}) {
     const status = 'skip:新規メッセージなし';
     log('未処理メッセージはありません。');
     log(status);
+    recordRun(`line-digest-${cli.profile}`, { changed: false, llmInvoked: false, items: 0, note: status });
     return { processed: 0, status };
   }
   const llm = options.llm || createLlmClient({ home, usageFile: path.join(base, 'executor-usage.jsonl') });
@@ -334,6 +332,7 @@ export async function runDigest(options = {}) {
   }
   const status = `ok:${successfullyClassified.size}件処理`;
   log(status);
+  recordRun(`line-digest-${cli.profile}`, { changed: candidates.length > 0, llmInvoked: messages.length > 0, items: candidates.length, note: status });
   return { processed: successfullyClassified.size, held: held.length, proposals: appended.added.length, status };
 }
 

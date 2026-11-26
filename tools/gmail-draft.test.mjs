@@ -68,6 +68,7 @@ async function cli(argv, overrides = {}) {
     readState: () => { throw new Error('no cached state'); },
     inspectDraft: async () => ({ ok: true, findings: [], llm: { provider: null, error: null } }),
     skipContextCheck: true,
+    acquireDedupe: async () => ({ recordSuccess() {}, release() {} }),
     ...overrides,
   } });
   return { code, output, calls, tokens };
@@ -194,6 +195,14 @@ test('dry-run はキーなしで raw とヘッダを返し user 指定も反映'
     assert.ok(report.headers.includes(`From: ${report.user}`));
     assert.ok(report.raw);
   }
+});
+
+test('ブース件名の dry-run は佐藤さんをCCし追加をJSONで報告する', async () => {
+  const result = await cli(['--to', 'customer@example.com', '--subject', '展示会ブースのご提案', '--body', 'test', '--dry-run', '--json']);
+  assert.equal(result.code, 0);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.boothCcAdded, 'satou@orgiast.jp');
+  assert.match(report.headers, /Cc: satou@orgiast\.jp/u);
 });
 
 test('--check は3スコープの認証のみ。Gmail API を呼ばない', async () => {
@@ -391,6 +400,41 @@ test('返信ヘッダと threadId を作成 API に渡す・注入を拒否す�
 const draftHeaders = (extra, to = 'Customer <customer@example.com>') => ({ message: { payload: { headers: [
   { name: 'To', value: to }, { name: 'Subject', value: '確認' }, ...extra,
 ] } } });
+test('既存のブース営業下書きは佐藤さんのCC欠落時に送信を停止する', async () => {
+  let calls = 0;
+  const result = await cli(['--send', 'draft', '--json'], {
+    getToken: async () => 't',
+    fetchImpl: async () => { calls++; return response(draftHeaders([{ name: 'Subject', value: '展示会ブースのご提案' }])); },
+  });
+  assert.equal(result.code, 2);
+  assert.equal(calls, 1);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.errorKind, 'booth_cc_missing');
+  assert.equal(report.boothCcAdded, 'satou@orgiast.jp');
+});
+test('--send は秘書の空き日程URLを承認上書きでも送らない', async () => {
+  const data = Buffer.from('11月20日 10:00\nhttps://claude-pc.tailc5d751.ts.net/secretary/book').toString('base64url');
+  const draft = { message: { threadId: 't', payload: { mimeType: 'text/plain', body: { data }, headers: [{ name: 'To', value: 'customer@example.com' }] } } };
+  let calls = 0;
+  const blocked = await cli(['--send', 'draft', '--json'], {
+    getToken: async () => 't', fetchImpl: async () => { calls++; return response(draft); },
+  });
+  assert.equal(blocked.code, 2);
+  assert.equal(JSON.parse(blocked.output[0]).errorKind, 'secretary_booking_url');
+  assert.equal(calls, 1);
+  const acked = await cli(['--send', 'draft', '--ack-consistency', '例外', '--json'], {
+    getToken: async () => 't', fetchImpl: async () => response(draft),
+  });
+  assert.equal(acked.code, 2);
+  assert.equal(JSON.parse(acked.output[0]).errorKind, 'secretary_booking_url');
+  calls = 0;
+  const plain = Buffer.from('11月20日 10:00はいかがでしょうか。').toString('base64url');
+  const ok = await cli(['--send', 'draft', '--json'], {
+    getToken: async () => 't',
+    fetchImpl: async () => { calls++; return calls === 1 ? response({ message: { threadId: 't', payload: { mimeType: 'text/plain', body: { data: plain }, headers: [{ name: 'To', value: 'customer@example.com' }] } } }) : response({ id: 'sent', threadId: 'thread' }); },
+  });
+  assert.equal(ok.code, 0);
+});
 test('整合性 block は送信せず、ack 理由がある時だけ ledger に残して送る', async () => {
   const blocked = await cli(['--send','draft','--json'], { inspectDraft: async()=>({ok:false,findings:[{severity:'block'}],llm:{}}), getToken:async()=> 't', fetchImpl:async()=>response(draftHeaders([])) });
   assert.equal(blocked.code,2); assert.equal(blocked.calls,0);
@@ -522,6 +566,23 @@ test('送信 API の失敗は再試行せず秘密を出さない', async () => 
   assert.equal(result.output[0].includes('SECRET'), false);
 });
 
+test('--send の重複は exit 4、--allow-repeat 理由付きなら成功後に台帳へ記録する', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gmail-dedupe-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const ledgerFile = path.join(home, '.claude', 'send-ledger.jsonl');
+  fs.mkdirSync(path.dirname(ledgerFile), { recursive: true });
+  fs.writeFileSync(ledgerFile, `${JSON.stringify({ sentAt: new Date().toISOString(), to: ['customer@example.com'], bodyHash: 'old' })}\n`);
+  let calls = 0;
+  const duplicate = await cli(['--send', 'd', '--json'], { home, acquireDedupe: undefined, getToken: async () => 't', fetchImpl: async () => { calls++; return response(draftHeaders([])); } });
+  assert.equal(duplicate.code, 4);
+  assert.equal(calls, 1);
+  assert.match(JSON.parse(duplicate.output[0]).error, /同じ宛先へ/u);
+  calls = 0;
+  const allowed = await cli(['--send', 'd', '--allow-repeat', '訂正版', '--json'], { home, acquireDedupe: undefined, getToken: async () => 't', fetchImpl: async () => ++calls === 1 ? response(draftHeaders([])) : response({ id: 'sent', threadId: 'thread' }) });
+  assert.equal(allowed.code, 0);
+  assert.equal(JSON.parse(fs.readFileSync(ledgerFile, 'utf8').trim().split(/\r?\n/u).at(-1)).allowRepeatReason, '訂正版');
+});
+
 test('--send の getLatest は DRAFT メッセージを最新履歴から除外し、threadId 無し時の検索クエリに -in:drafts を指定する', async () => {
   let capturedLatest = null;
   let searchedUrl = null;
@@ -566,6 +627,54 @@ test('--send の getLatest は DRAFT メッセージを最新履歴から除外�
   assert.equal(result.code, 0);
   assert.ok(searchedUrl.includes(encodeURIComponent('(from:customer@example.com OR to:customer@example.com) -in:drafts')));
   assert.deepEqual(capturedLatest, { id: 'msg-1', at: new Date(1700000000000).toISOString() });
+});
+
+test('--send の履歴承認不足は理由と確認コマンドを返し、送信しない', async () => {
+  const requests = [];
+  const message = '送信前の履歴整合性チェックが必要です: 承認マーカーがありません\n実行: node tools/send-context-check.mjs --channel gmail';
+  const result = await cli(['--send', 'draft-123', '--json'], {
+    skipContextCheck: false,
+    getToken: async () => 't',
+    assertContextApproved: async () => {
+      throw Object.assign(new Error(message), { code: 'SEND_CONTEXT_REQUIRED' });
+    },
+    fetchImpl: async (url) => {
+      requests.push(url);
+      if (url.includes('/drafts/draft-123?format=full')) return response({
+        message: {
+          threadId: 'thread-99',
+          payload: { headers: [{ name: 'To', value: 'customer@example.com' }] },
+        },
+      });
+      throw new Error(`unexpected fetch: ${url}`);
+    },
+  });
+  assert.equal(result.code, 2);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.errorKind, 'send_context_required');
+  assert.equal(report.error, message);
+  assert.match(report.error, /send-context-check/u);
+  assert.equal(requests.some(url => url.includes('/drafts/send')), false);
+});
+
+test('--send の履歴チェック対象スレッドを特定できない場合は送信しない', async () => {
+  const requests = [];
+  const result = await cli(['--send', 'draft-123', '--json'], {
+    skipContextCheck: false,
+    getToken: async () => 't',
+    fetchImpl: async (url) => {
+      requests.push(url);
+      if (url.includes('/drafts/draft-123?format=full')) return response({
+        message: { payload: { headers: [{ name: 'Subject', value: '宛先なし' }] } },
+      });
+      throw new Error(`unexpected fetch: ${url}`);
+    },
+  });
+  assert.equal(result.code, 2);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.errorKind, 'send_context_required');
+  assert.match(report.error, /対象スレッドを特定できません/u);
+  assert.equal(requests.some(url => url.includes('/drafts/send')), false);
 });
 
 const replyMessage = (id, subject, references, labelIds = []) => ({ labelIds, payload: { headers: [
@@ -743,6 +852,7 @@ test('--send の getLatest が threads.get 403 で httpStatus を含むエラー
   assert.equal(result.code, 1);
   const report = JSON.parse(result.output[0]);
   assert.equal(report.ok, false);
+  assert.match(report.error, /（HTTP 403）$/u);
   assert.equal(report.detail, 'threads.get 403');
 });
 

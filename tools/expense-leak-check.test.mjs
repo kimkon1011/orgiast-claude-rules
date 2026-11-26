@@ -1,17 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { RULES, LIMITS, HEADER, TAB, parseArgs, ruleVerdict, merchantToken, amountVariants, gmailQuery, parseYahoo, weeklySkip, collectTxns, searchEvidence, runCheck, sheetRows, dmText, atomicJson, web23Query, checkWeb23Delivery, WEB23_ADDRESS, WEB23_LOOKBACK_DAYS } from './expense-leak-check.mjs';
+import { RULES, LIMITS, HEADER, TAB, parseArgs, ruleVerdict, merchantToken, amountVariants, gmailQuery, parseYahoo, weeklySkip, collectTxns, searchEvidence, runCheck, reportResult, sheetRows, dmText, atomicJson, web23Query, checkWeb23Delivery, classifyDbConnectFailReason, WEB23_ADDRESS, WEB23_LOOKBACK_DAYS } from './expense-leak-check.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 
 const opts = (args = []) => parseArgs(args, { EXPENSE_LEAK_TODAY: '2026-10-09', EXPENSE_LEAK_HOME: '/tmp/expense-test' });
 const wallet = { id: 7, type: 'credit_card', name: '金立替／テスト' };
 const txn = (id, extra = {}) => ({ id, walletable_id: wallet.id, walletable_type: wallet.type, status: 1, date: '2026-10-01', description: 'テスト商店', amount: 1599, account: wallet.name, ...extra });
-const budget = () => ({ gmail: { 'kim@orgiast.jp': 0, 'seisaku-team@orgiast.jp': 0 }, yahoo: 0, yahooUnavailable: false, yahooFailed: false, yahooUnverified: 0 });
+const budget = () => ({ gmail: { 'kim@orgiast.jp': 0, 'seisaku-team@orgiast.jp': 0 }, gmailUnavailable: {}, yahoo: 0, yahooUnavailable: false, yahooUnavailableReason: '', yahooFailed: false, yahooUnverified: 0 });
 const emptySearch = async (script) => ({ code: 0, stdout: script.includes('gmail-search') ? '{"messages":[]}' : '（該当なし）' });
 const metadata = { sheets: [{ properties: { title: TAB, gridProperties: { rowCount: 1000, frozenRowCount: 1 } } }] };
 function harness(transactions, overrides = {}) {
@@ -42,6 +42,7 @@ test('CLI uses JST window, validates dates, and bounds verification to five', ()
   assert.throws(() => opts(['--limit', '0']));
   assert.throws(() => opts(['--verification']));
   assert.equal(opts(['--verification', '--limit', '5']).verification, true);
+  assert.equal(opts(['--verbose']).verbose, true);
 });
 test('private and expense expectations derive from exported RULES', () => {
   for (const rule of RULES.alwaysPrivate) for (const term of rule.terms) for (const amount of rule.amounts || [1599]) {
@@ -155,6 +156,28 @@ test('Gmail outage remains retryable and raw child error is not persisted', asyn
   assert.equal(r.appended, 0);
   assert.ok(!JSON.stringify(r).includes('secret must'));
 });
+test('unreadable mailbox is reported once while readable sources still produce appendable rows', async () => {
+  let kimCalls = 0;
+  const h = harness([txn(1), txn(2)], { search: async (script, args) => {
+    if (script.includes('gmail-search') && args.includes('kim@orgiast.jp')) {
+      kimCalls++;
+      return { code: 1, stdout: '', unavailableReason: 'この席では読めません（calendar-only。別席で要照合）' };
+    }
+    if (script.includes('yahoo')) return { code: 1, stdout: '', unavailableReason: 'この席に検索ツールがありません' };
+    return { code: 0, stdout: script.includes('gmail-search') ? '{"messages":[]}' : '（該当なし）' };
+  } });
+  const r = await runCheck(opts(), h.injected);
+  assert.equal(kimCalls, 1);
+  assert.equal(r.complete, false);
+  assert.equal(r.deferredTotal, 0);
+  assert.equal(r.appended, 2);
+  assert.equal(h.state.txns['1'].verdict, undefined);
+  assert.equal(r.results[0].sourceUnavailable, true);
+  assert.equal(r.issues.filter((issue) => issue.startsWith('Gmail kim@')).length, 1);
+  assert.equal(r.issues.filter((issue) => issue.startsWith('Yahoo:')).length, 1);
+  assert.match(dmText(r), /kim@orgiast\.jp.*別席で要照合/);
+  assert.match(dmText(r), /Yahoo.*検索ツールがありません/);
+});
 test('verified Gmail evidence survives Yahoo unavailable and uses account-specific thread link', async () => {
   const h = harness([txn(1)], { search: async (script) => script.includes('yahoo') ? { code: 2, stdout: '' } : { code: 0, stdout: JSON.stringify({ messages: [{ threadId: 'abc', date: '2026-10-01T12:00:00+09:00', subject: '領収書', from: 'shop@example.test' }] }) } });
   const r = await runCheck(opts(['--dry-run']), h.injected);
@@ -214,7 +237,7 @@ test('Sheets helper resets a dragged freeze line back to one header row', async 
 });
 test('real CLI weekly skip exits 0 without credentials and leaves state unchanged', async () => {
   const home = await mkdtemp(join(tmpdir(), 'expense-weekly-'));
-  const env = { ...process.env, EXPENSE_LEAK_HOME: home, EXPENSE_LEAK_TODAY: '2026-10-13' };
+  const env = { ...process.env, EXPENSE_LEAK_HOME: home, EXPENSE_LEAK_TODAY: '2026-10-13', PURCHASING_APP_DATABASE_URL: 'postgres://test@localhost/test' };
   const o = parseArgs(['--weekly'], env);
   const state = { lastRunAt: '2026-10-13T03:00:00+09:00', txns: {} };
   await atomicJson(o.statePath, state);
@@ -256,6 +279,77 @@ test('web23 zero-count warning is fail-open, never pins an outage as zero', asyn
   assert.equal((await checkWeb23Delivery(call('not json'))).status, 'unverified');
   assert.equal((await checkWeb23Delivery({ ...call('{"messages":[]}'), search: async () => ({ code: 1, stdout: '' }) })).status, 'unverified');
   assert.deepEqual(await checkWeb23Delivery({ ...call('{"messages":[]}'), timeLeft: () => false }), { status: 'unverified', reason: '時間上限' });
+});
+test('hasFreeeDbConfig returns false without config and true with env var', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'expense-dbcfg-'));
+  const freeeAuthUrl = new URL('./lib/freee-auth.mjs', import.meta.url).href;
+  const scriptPath = join(home, 'test-has-freee-db.mjs');
+  await writeFile(scriptPath, `import { hasFreeeDbConfig } from ${JSON.stringify(freeeAuthUrl)}; process.stdout.write(String(hasFreeeDbConfig()));`);
+  // No config: HOME/USERPROFILE to temp dir, no PURCHASING_APP_DATABASE_URL
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  delete env.PURCHASING_APP_DATABASE_URL;
+  const r1 = execFileSync(process.execPath, [scriptPath], { env, encoding: 'utf8' });
+  assert.equal(r1.trim(), 'false');
+  // With env var set
+  const env2 = { ...env, PURCHASING_APP_DATABASE_URL: 'postgres://test:test@localhost/test' };
+  const r2 = execFileSync(process.execPath, [scriptPath], { env: env2, encoding: 'utf8' });
+  assert.equal(r2.trim(), 'true');
+  await rm(home, { recursive: true });
+});
+
+test('main skips with message when no freee DB config', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'expense-main-skip-'));
+  const env = { ...process.env, EXPENSE_LEAK_HOME: home, EXPENSE_LEAK_TODAY: '2026-10-09', HOME: home, USERPROFILE: home };
+  delete env.PURCHASING_APP_DATABASE_URL;
+  const stdout = execFileSync(process.execPath, [fileURLToPath(new URL('./expense-leak-check.mjs', import.meta.url)), '--dry-run'], { env, encoding: 'utf8' });
+  assert.match(stdout.trim(), /skip: expense-leak-check requires freee DB config/);
+  await rm(home, { recursive: true });
+});
+
+test('Discord DM failure with zero candidates does not set failed=true (exit 0)', async () => {
+  const h = harness([]);
+  h.injected.notify = async () => { throw new Error('Connector unavailable'); };
+  const r = await runCheck(opts(), h.injected);
+  assert.equal(r.failed, undefined);
+  assert.equal(r.failReason, '');
+  assert.equal(reportResult(r, (line) => assert.match(line, /failed=false failReason=$/)), 0);
+  assert.equal(h.state.lastRunAt, `${opts().today}T03:00:00+09:00`);
+});
+test('real Sheets failure with candidates sets failed=true and failReason', async () => {
+  const h = harness([txn(1)]);
+  h.injected.sheets.append = async () => { throw new Error('Sheets POST HTTP 503'); };
+  const r = await runCheck(opts(), h.injected);
+  assert.equal(r.failed, true);
+  assert.equal(r.failReason, 'sheets-write');
+  assert.equal(reportResult(r, (line) => assert.match(line, /failed=true failReason=sheets-write$/)), 1);
+});
+test('classifyDbConnectFailReason maps module/url/auth/network/freee without secrets', () => {
+  const moduleErr = Object.assign(new Error("Cannot find package 'postgres'"), { code: 'ERR_MODULE_NOT_FOUND' });
+  assert.equal(classifyDbConnectFailReason(moduleErr), 'db-connect:module-missing');
+  assert.equal(classifyDbConnectFailReason(new Error('PURCHASING_APP_DATABASE_URL が .env.local に見つかりません')), 'db-connect:db-url-missing');
+  assert.equal(classifyDbConnectFailReason(Object.assign(new Error('password authentication failed for user "x"'), { code: '28P01' })), 'db-connect:db-auth');
+  const refused = Object.assign(new AggregateError([Object.assign(new Error(''), { code: 'ECONNREFUSED' })]), { code: 'ECONNREFUSED', message: '' });
+  assert.equal(classifyDbConnectFailReason(refused), 'db-connect:network');
+  assert.equal(classifyDbConnectFailReason(new Error("freee_tokens に default 行がありません")), 'db-connect:freee-row-missing');
+  assert.equal(classifyDbConnectFailReason(new Error('freee トークン更新に失敗: HTTP 401')), 'db-connect:freee-refresh-http-401');
+  assert.equal(classifyDbConnectFailReason(new Error('something opaque')), 'db-connect:unknown');
+});
+test('db-connect stage records subclassed failReason from makeFreeeGet failure', async () => {
+  const h = harness([]);
+  delete h.injected.freeeGet;
+  const cause = Object.assign(new AggregateError([Object.assign(new Error(''), { code: 'ECONNREFUSED' })]), { code: 'ECONNREFUSED', message: '' });
+  h.injected.makeFreeeGet = async () => {
+    const wrapped = new Error('freee authentication failed (db-connect:network)');
+    wrapped.cause = cause;
+    wrapped.failReason = 'db-connect:network';
+    throw wrapped;
+  };
+  const r = await runCheck(opts(), h.injected);
+  assert.equal(r.failed, true);
+  assert.equal(r.failReason, 'db-connect:network');
+  assert.equal(h.calls.notify, 0);
+  assert.equal(h.calls.append.length, 0);
+  assert.equal(reportResult(r, (line) => assert.match(line, /failed=true failReason=db-connect:network$/)), 1);
 });
 test('DM reports web23 zero and unverified separately', () => {
   const base = { today: '2026-10-19', candidateTotal: 0, results: [], issues: [], yahooUnavailable: false };

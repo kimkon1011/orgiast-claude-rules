@@ -3,13 +3,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runOnce, DISCORD_ACCOUNT, messageLink, isMessageRequest } from './discord-beeper-autoreply.mjs';
+import { runOnce, main, DISCORD_ACCOUNT, messageLink, isMessageRequest, isSyntheticMessage, SEND_PROMISE_PTN } from './discord-beeper-autoreply.mjs';
+import { main as guildMain } from './discord-autoreply.mjs';
 
 const NOW = Date.parse('2026-11-12T04:00:00Z'); // 13:00 JST (allowed window)
 const reply = { needs_reply: true, needs_kim_decision: false, answer: 'マニュアルの一覧から確認できます。', confidence: 0.95 };
 const account = { accountID: DISCORD_ACCOUNT, network: 'Discord', user: { isSelf: true, id: 'kim' } };
-const message = (overrides = {}) => ({ id: 'm1', accountID: DISCORD_ACCOUNT, timestamp: new Date(NOW - 1000).toISOString(), sortKey: '2', text: 'マニュアルはどこですか？', senderName: '田中', isSender: false, ...overrides });
+const message = (overrides = {}) => ({ id: 'm1', type: 'TEXT', accountID: DISCORD_ACCOUNT, timestamp: new Date(NOW - 1000).toISOString(), sortKey: '2', text: 'マニュアルはどこですか？', senderName: '田中', isSender: false, ...overrides });
 const chat = (overrides = {}) => ({ id: 'chat1', localChatID: '828', accountID: DISCORD_ACCOUNT, title: '相談', type: 'single', ...overrides });
+
+test('送信約束の表現を台帳対象として検出する', () => { assert.equal(SEND_PROMISE_PTN.test('本日中に資料をお送りします'), true); assert.equal(SEND_PROMISE_PTN.test('確認しました'), false); });
 
 function fixture(t, { chats = [chat()], messages, decision = reply } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beeper-autoreply-'));
@@ -713,4 +716,728 @@ test('実行中に別の所有者へ置換されたロックを解放時に削�
   };
   assert.equal((await runOnce(f.options)).ok, true);
   assert.equal(fs.readFileSync(lock, 'utf8'), replacement);
+});
+
+// ── (B) Delete + correct learning ─────────────────────────────────────
+
+function deletionFixture(t, { deleted = true, kimCorrected = true, alreadyLearned = false, correctionsFileExists = false } = {}) {
+  const f = fixture(t);
+  const NOW = f.options.now();
+  const chatId = 'chat1';
+  const replyId = 'auto-reply-1';
+  const question = '原価確認をお願いします';
+  const autoAnswer = '【kimのClaudeによる代理回答】\n確認しました。原価は40,000円です。\n\n※kim本人の返答ではなく自動返信です。';
+  const kimAnswer = '原価は35,000円です。訂正します。';
+
+  // Set up state with a sent auto-reply
+  const state = {
+    version: 1,
+    chats: {
+      [chatId]: {
+        id: 'user-msg-1',
+        timestamp: new Date(NOW - 3600000).toISOString(),
+        sortKey: '2',
+        status: 'sent',
+        replyId,
+        content: autoAnswer,
+        question,
+        senderName: '辻',
+        link: '会話名: テスト',
+        ...(alreadyLearned ? { learnedDeletion: true } : {}),
+      },
+    },
+    hourly: [],
+    hourlyByChat: {},
+  };
+  f.save(state);
+
+  // Set up chat history
+  const messages = [
+    { id: 'user-msg-1', accountID: DISCORD_ACCOUNT, timestamp: new Date(NOW - 3600000).toISOString(), sortKey: '2', text: question, senderName: '辻', isSender: false },
+  ];
+
+  if (!deleted) {
+    // Auto-reply still exists
+    messages.push({ id: replyId, accountID: DISCORD_ACCOUNT, timestamp: new Date(NOW - 3500000).toISOString(), sortKey: '3', text: autoAnswer, senderName: 'kim', isSender: true });
+  }
+
+  if (kimCorrected) {
+    // kim's correction after deletion
+    messages.push({ id: 'kim-correct-1', accountID: DISCORD_ACCOUNT, timestamp: new Date(NOW - 3000000).toISOString(), sortKey: '4', text: kimAnswer, senderName: 'kim', isSender: true });
+  }
+
+  // Override listMessages to return our fixture data
+  f.api.listMessages = async (id) => {
+    if (id === chatId) return { items: messages, hasMore: false };
+    return { items: [] };
+  };
+
+  // Set up corrections file
+  if (correctionsFileExists) {
+    const corrDir = path.join(f.home, '.claude', 'discord-autoreply');
+    fs.mkdirSync(corrDir, { recursive: true });
+    fs.writeFileSync(path.join(corrDir, 'corrections.jsonl'), JSON.stringify({ msgId: 'existing', outcome: 'confirmed' }) + '\n');
+  }
+
+  return { ...f, chatId, replyId, question, autoAnswer, kimAnswer };
+}
+
+test('削除＋訂正→1件学習', async t => {
+  const f = deletionFixture(t, { deleted: true, kimCorrected: true });
+  const result = await runOnce(f.options);
+  assert.equal(result.ok, true);
+  assert.equal(result.learned?.deletedAndCorrected, 1, 'should learn 1 deletion correction');
+
+  // Check corrections.jsonl was written
+  const corrFile = path.join(f.home, '.claude', 'discord-autoreply', 'corrections.jsonl');
+  assert.ok(fs.existsSync(corrFile), 'corrections.jsonl should exist');
+  const lines = fs.readFileSync(corrFile, 'utf8').trim().split('\n').filter(Boolean);
+  assert.equal(lines.length, 1);
+  const entry = JSON.parse(lines[0]);
+  assert.equal(entry.msgId, f.replyId);
+  assert.equal(entry.question, f.question);
+  assert.equal(entry.autoAnswer, f.autoAnswer);
+  assert.equal(entry.kimAnswer, '原価は35,000円です。訂正します。');
+  assert.equal(entry.outcome, 'deleted_and_corrected');
+  assert.equal(entry.confirmed, true);
+  assert.equal(entry.where, 'dm');
+
+  // Check state was updated
+  const state = f.state();
+  assert.equal(state.chats[f.chatId].learnedDeletion, true);
+
+  // Check kim-inbox was notified
+  assert.ok(f.inboxItems.some(item =>
+    item.kind === 'info' && item.text.includes('自動返信の訂正を学習')
+  ));
+});
+
+test('削除なし→学習なし', async t => {
+  const f = deletionFixture(t, { deleted: false, kimCorrected: true });
+  const result = await runOnce(f.options);
+  assert.equal(result.ok, true);
+  assert.equal(result.learned?.deletedAndCorrected, undefined, 'should not learn when not deleted');
+
+  // Check corrections.jsonl was NOT written
+  const corrFile = path.join(f.home, '.claude', 'discord-autoreply', 'corrections.jsonl');
+  assert.equal(fs.existsSync(corrFile), false, 'corrections.jsonl should not exist');
+});
+
+test('削除＋訂正なし→学習なし（訂正を待つ）', async t => {
+  const f = deletionFixture(t, { deleted: true, kimCorrected: false });
+  const result = await runOnce(f.options);
+  assert.equal(result.ok, true);
+  // No correction found yet — should not learn
+  assert.equal(result.learned?.deletedAndCorrected, undefined);
+  // State should NOT have learnedDeletion (keep checking on next run)
+  const state = f.state();
+  assert.equal(state.chats[f.chatId].learnedDeletion, undefined, 'should keep checking for correction');
+});
+
+test('重複なし: 既存のcorrections.jsonlに同じmsgIdがあれば追記しない', async t => {
+  const f = deletionFixture(t, { deleted: true, kimCorrected: true, correctionsFileExists: true });
+  // Pre-populate with the same msgId
+  const corrDir = path.join(f.home, '.claude', 'discord-autoreply');
+  const existingEntry = { msgId: f.replyId, outcome: 'deleted_and_corrected', confirmed: true };
+  fs.writeFileSync(path.join(corrDir, 'corrections.jsonl'), JSON.stringify(existingEntry) + '\n');
+
+  const result = await runOnce(f.options);
+  assert.equal(result.ok, true);
+  // Should not add duplicate
+  const lines = fs.readFileSync(path.join(corrDir, 'corrections.jsonl'), 'utf8').trim().split('\n').filter(Boolean);
+  assert.equal(lines.length, 1, 'should not add duplicate entry');
+});
+
+test('既に学習済み(learnedDeletion)は再処理しない', async t => {
+  const f = deletionFixture(t, { deleted: true, kimCorrected: true, alreadyLearned: true });
+  const result = await runOnce(f.options);
+  assert.equal(result.ok, true);
+  // Should not learn again
+  assert.equal(result.learned?.deletedAndCorrected, undefined);
+  // corrections.jsonl should not exist
+  const corrFile = path.join(f.home, '.claude', 'discord-autoreply', 'corrections.jsonl');
+  assert.equal(fs.existsSync(corrFile), false);
+});
+
+test('7日より古い自動返信は学習対象外', async t => {
+  const f = fixture(t);
+  const NOW = f.options.now();
+  const chatId = 'chat1';
+  const replyId = 'old-reply';
+  // 8 days old
+  const oldTs = new Date(NOW - 8 * 86400000 - 1).toISOString();
+
+  const state = {
+    version: 1,
+    chats: {
+      [chatId]: {
+        id: 'old-msg',
+        timestamp: oldTs,
+        sortKey: '1',
+        status: 'sent',
+        replyId,
+        content: '古い自動返信',
+        question: '古い質問',
+        senderName: 'User',
+      },
+    },
+    hourly: [],
+    hourlyByChat: {},
+  };
+  f.save(state);
+
+  f.api.listMessages = async (id) => {
+    if (id === chatId) return { items: [
+      { id: 'old-msg', accountID: DISCORD_ACCOUNT, timestamp: oldTs, sortKey: '1', text: '古い質問', senderName: 'User', isSender: false },
+    ], hasMore: false };
+    return { items: [] };
+  };
+
+  const result = await runOnce(f.options);
+  assert.equal(result.ok, true);
+  // Should mark as learnedDeletion without writing corrections
+  const st = f.state();
+  assert.equal(st.chats[chatId].learnedDeletion, true);
+  const corrFile = path.join(f.home, '.claude', 'discord-autoreply', 'corrections.jsonl');
+  assert.equal(fs.existsSync(corrFile), false);
+});
+
+test('corrections が DM 入力に入る', async t => {
+  const f = fixture(t);
+  // Pre-populate corrections.jsonl
+  const corrDir = path.join(f.home, '.claude', 'discord-autoreply');
+  fs.mkdirSync(corrDir, { recursive: true });
+  fs.writeFileSync(path.join(corrDir, 'corrections.jsonl'),
+    JSON.stringify({ msgId: 'c1', outcome: 'deleted_and_corrected', confirmed: true, question: 'テスト質問', autoAnswer: '自動返信', kimAnswer: '正解' }) + '\n');
+
+  let llmInput = null;
+  f.options.llm = async (args) => {
+    if (args.system?.startsWith('Extract proper nouns')) return JSON.stringify(['スマートエイト']);
+    llmInput = args.input;
+    return JSON.stringify({ needs_reply: true, needs_kim_decision: false, answer: '確認しました。', confidence: 0.9 });
+  };
+
+  const result = await runOnce(f.options);
+  assert.equal(result.ok, true);
+  assert.ok(llmInput, 'LLM should have been called');
+  assert.ok(Array.isArray(llmInput.corrections), 'corrections should be in LLM input');
+  assert.equal(llmInput.corrections.length, 1);
+  assert.equal(llmInput.corrections[0].msgId, 'c1');
+  assert.equal(llmInput.corrections[0].outcome, 'deleted_and_corrected');
+});
+
+// ── Deletion coverage tests ──────────────────────────────────────────
+
+test('削除検出: 範囲外（履歴が自動返信の時刻をカバーしない）→ 学習しない', async t => {
+  const f = fixture(t);
+  const NOW = f.options.now();
+  const chatId = 'chat1';
+  const replyId = 'old-reply';
+  // Auto-reply is 2 hours ago, but the fetched messages are only from 30 min ago
+  const autoReplyTs = new Date(NOW - 7200000).toISOString();
+  const state = {
+    version: 1,
+    chats: {
+      [chatId]: {
+        id: 'user-msg',
+        timestamp: autoReplyTs,
+        sortKey: '1',
+        status: 'sent',
+        replyId,
+        content: '古い自動返信',
+        question: '古い質問',
+        senderName: 'User',
+      },
+    },
+    hourly: [],
+    hourlyByChat: {},
+  };
+  f.save(state);
+
+  // Only return messages from the last 30 minutes — does NOT cover auto-reply timestamp
+  f.api.listMessages = async (id) => {
+    if (id === chatId) {
+      return {
+        items: [
+          { id: 'recent-1', accountID: DISCORD_ACCOUNT, timestamp: new Date(NOW - 600000).toISOString(), sortKey: '3', text: '最近のメッセージ', senderName: 'User', isSender: false },
+          { id: 'recent-2', accountID: DISCORD_ACCOUNT, timestamp: new Date(NOW - 1200000).toISOString(), sortKey: '2', text: '少し前のメッセージ', senderName: 'kim', isSender: true },
+        ],
+        hasMore: false,
+      };
+    }
+    return { items: [] };
+  };
+
+  const result = await runOnce(f.options);
+  assert.equal(result.ok, true);
+  // Should NOT learn because history doesn't cover the auto-reply timestamp
+  assert.equal(result.learned?.deletedAndCorrected, undefined);
+  const st = f.state();
+  // learnedDeletion should NOT be set (still uncertain)
+  assert.equal(st.chats[chatId].learnedDeletion, undefined, 'should remain uncertain when history does not cover');
+});
+
+test('削除検出: 範囲内で消えている → 学習する', async t => {
+  const f = fixture(t);
+  const NOW = f.options.now();
+  const chatId = 'chat1';
+  const replyId = 'deleted-reply';
+  const autoReplyTs = new Date(NOW - 3600000).toISOString();
+  const state = {
+    version: 1,
+    chats: {
+      [chatId]: {
+        id: 'user-msg',
+        timestamp: autoReplyTs,
+        sortKey: '2',
+        status: 'sent',
+        replyId,
+        content: '自動返信',
+        question: '確認お願いします',
+        senderName: '辻',
+      },
+    },
+    hourly: [],
+    hourlyByChat: {},
+  };
+  f.save(state);
+
+  // Messages: oldest (user-msg) is older than auto-reply → covers timestamp
+  // Auto-reply is NOT in the list → truly deleted
+  f.api.listMessages = async (id) => {
+    if (id === chatId) {
+      return {
+        items: [
+          { id: 'user-msg', accountID: DISCORD_ACCOUNT, timestamp: autoReplyTs, sortKey: '2', text: '確認お願いします', senderName: '辻', isSender: false },
+          { id: 'kim-correct', accountID: DISCORD_ACCOUNT, timestamp: new Date(NOW - 3000000).toISOString(), sortKey: '3', text: '確認しました。原価は35,000円です。', senderName: 'kim', isSender: true },
+        ],
+        hasMore: false,
+      };
+    }
+    return { items: [] };
+  };
+
+  const result = await runOnce(f.options);
+  assert.equal(result.ok, true);
+  assert.equal(result.learned?.deletedAndCorrected, 1, 'should learn when history covers and message is missing');
+
+  const corrFile = path.join(f.home, '.claude', 'discord-autoreply', 'corrections.jsonl');
+  assert.ok(fs.existsSync(corrFile));
+  const entry = JSON.parse(fs.readFileSync(corrFile, 'utf8').trim());
+  assert.equal(entry.msgId, replyId);
+  assert.equal(entry.outcome, 'deleted_and_corrected');
+});
+
+test('削除検出: isDeleted フラグ → 学習する', async t => {
+  const f = fixture(t);
+  const NOW = f.options.now();
+  const chatId = 'chat1';
+  const replyId = 'flagged-deleted';
+  const autoReplyTs = new Date(NOW - 3600000).toISOString();
+  const state = {
+    version: 1,
+    chats: {
+      [chatId]: {
+        id: 'user-msg',
+        timestamp: autoReplyTs,
+        sortKey: '2',
+        status: 'sent',
+        replyId,
+        content: '自動返信',
+        question: '確認お願いします',
+        senderName: '辻',
+      },
+    },
+    hourly: [],
+    hourlyByChat: {},
+  };
+  f.save(state);
+
+  // Auto-reply is present but has isDeleted=true
+  f.api.listMessages = async (id) => {
+    if (id === chatId) {
+      return {
+        items: [
+          { id: 'user-msg', accountID: DISCORD_ACCOUNT, timestamp: autoReplyTs, sortKey: '2', text: '確認お願いします', senderName: '辻', isSender: false },
+          { id: replyId, accountID: DISCORD_ACCOUNT, timestamp: new Date(NOW - 3500000).toISOString(), sortKey: '3', text: '【kimのClaudeによる代理回答】\n確認しました。', senderName: 'kim', isSender: true, isDeleted: true },
+          { id: 'kim-correct', accountID: DISCORD_ACCOUNT, timestamp: new Date(NOW - 3000000).toISOString(), sortKey: '4', text: '確認しました。原価は35,000円です。', senderName: 'kim', isSender: true },
+        ],
+        hasMore: false,
+      };
+    }
+    return { items: [] };
+  };
+
+  const result = await runOnce(f.options);
+  assert.equal(result.ok, true);
+  assert.equal(result.learned?.deletedAndCorrected, 1, 'should learn when isDeleted flag is set');
+
+  const corrFile = path.join(f.home, '.claude', 'discord-autoreply', 'corrections.jsonl');
+  assert.ok(fs.existsSync(corrFile));
+  const entry = JSON.parse(fs.readFileSync(corrFile, 'utf8').trim());
+  assert.equal(entry.msgId, replyId);
+  assert.equal(entry.outcome, 'deleted_and_corrected');
+});
+
+// ── 合成メッセージ（通話通知）対応 ──────────────────────────────────
+
+test('最新が通話通知→1つ前の本物の質問に返信', async t => {
+  const callMsg = message({
+    id: 'call',
+    sortKey: '3',
+    timestamp: new Date(NOW - 500).toISOString(),
+    text: 'kanbara1110 started a call. Use the Discord app to answer.',
+  });
+  const f = fixture(t, { messages: [message(), callMsg] });
+  f.data.chat1.push(message({ id: 'own', sortKey: '1', timestamp: new Date(NOW - 5000).toISOString(), isSender: true }));
+  const result = await runOnce(f.options);
+  assert.equal(result.replied, 1);
+  assert.equal(f.sent.length, 1);
+  // 返信先は通話通知(id=call)ではなく本物の質問(id=m1)
+  assert.equal(f.sent[0].options.replyToMessageID, 'm1');
+  const logged = fs.readFileSync(path.join(f.home, '.claude/discord-autoreply/sent-log.jsonl'), 'utf8');
+  assert.doesNotMatch(JSON.parse(logged.trim()).question, /started a call/);
+});
+
+test('通話通知のみ（本物のメッセージなし）→送信しない', async t => {
+  const callMsg = message({
+    id: 'call',
+    sortKey: '2',
+    timestamp: new Date(NOW - 500).toISOString(),
+    text: '(kanbara1110 started a call. Use the Discord app to answer.)',
+  });
+  const f = fixture(t, { messages: [callMsg] });
+  f.data.chat1.push(message({ id: 'own', sortKey: '1', timestamp: new Date(NOW - 5000).toISOString(), isSender: true }));
+  const result = await runOnce(f.options);
+  // pending が空になる（通話通知のみ）→ skipped
+  assert.equal(result.replied, 0);
+  assert.equal(f.sent.length, 0);
+  assert.equal(result.skipped, 1);
+});
+
+test('不在着信も合成メッセージとして扱う', async t => {
+  const missedCall = message({
+    id: 'missed',
+    sortKey: '3',
+    timestamp: new Date(NOW - 500).toISOString(),
+    text: '不在着信: kanbara1110',
+  });
+  const f = fixture(t, { messages: [message(), missedCall] });
+  f.data.chat1.push(message({ id: 'own', sortKey: '1', timestamp: new Date(NOW - 5000).toISOString(), isSender: true }));
+  const result = await runOnce(f.options);
+  assert.equal(result.replied, 1);
+  assert.equal(f.sent.length, 1);
+  // 返信先は本物の質問
+  assert.equal(f.sent[0].options.replyToMessageID, 'm1');
+});
+
+test('通話通知の後に本物の質問が来たらそちらに返信', async t => {
+  // own → 通話通知 → 質問(新しい)
+  const callMsg = message({
+    id: 'call',
+    sortKey: '2',
+    timestamp: new Date(NOW - 1000).toISOString(),
+    text: 'started a call. Use the Discord app to answer.',
+  });
+  const newQuestion = message({
+    id: 'new-q',
+    sortKey: '3',
+    timestamp: new Date(NOW - 500).toISOString(),
+    text: 'さっきの件どうなりましたか？',
+  });
+  const f = fixture(t, { messages: [callMsg, newQuestion] });
+  f.data.chat1.push(message({ id: 'own', sortKey: '1', timestamp: new Date(NOW - 5000).toISOString(), isSender: true }));
+  const result = await runOnce(f.options);
+  assert.equal(result.replied, 1);
+  // 最新の本物の質問に返信
+  assert.equal(f.sent[0].options.replyToMessageID, 'new-q');
+  // 質問本文に通話通知が含まれない
+  const sentContent = f.sent[0].content;
+  assert.doesNotMatch(sentContent, /started a call/);
+  const logged = fs.readFileSync(path.join(f.home, '.claude/discord-autoreply/sent-log.jsonl'), 'utf8');
+  assert.match(JSON.parse(logged.trim()).question, /どうなりましたか/);
+  assert.doesNotMatch(JSON.parse(logged.trim()).question, /started a call/);
+});
+
+for (const safeRetry of [false, true]) test(`11/17 社外招待指示: 再生成1回・safe=${safeRetry}`, async t => {
+  const items = [];
+  const f = fixture(t);
+  f.options.addItemImpl = async (_home, item) => { items.push(item); return { id: 'ask' }; };
+  let calls = 0;
+  f.options.llm = async ({ input, system }) => {
+    calls++;
+    assert.match(system, /お客様（社外の人）を社内カレンダーの予定に招待するよう社員に指示しない/);
+    if (calls === 2) assert.equal(input.forbiddenRetry, true);
+    return JSON.stringify({ ...reply, answer: calls === 2 && safeRetry
+      ? 'お客様へメール本文に日時と会議URLを書いて案内してください。'
+      : 'カレンダー招待への丸山様（必要であれば加藤様）の追加もお願いします' });
+  };
+  await runOnce(f.options);
+  assert.equal(calls, 2);
+  assert.equal(f.sent.length, safeRetry ? 1 : 0);
+  if (!safeRetry) assert.deepEqual(items.map(i => i.kind), ['ask']);
+});
+
+test('合成判定は受信TEXTのみ、HTMLと英語不在着信にも対応', () => {
+  for (const text of ['<p>STARTED A CALL</p>', 'Use the Discord app to answer', '不在着信', 'Missed call']) {
+    assert.equal(isSyntheticMessage(message({ text })), true);
+    assert.equal(isSyntheticMessage(message({ text, isSender: true })), false);
+    assert.equal(isSyntheticMessage(message({ text, type: 'IMAGE' })), false);
+  }
+  assert.equal(isSyntheticMessage(null), false);
+  assert.equal(isSyntheticMessage(message()), false);
+});
+
+test('TEXTの質問がない添付メッセージにはreplyToを付けない', async t => {
+  const f = fixture(t);
+  f.data.chat1[0].type = 'IMAGE';
+  f.data.chat1[0].text = '';
+  const result = await runOnce(f.options);
+  assert.equal(result.replied, 1);
+  assert.deepEqual(f.sent[0].options, {});
+});
+
+test('本文が空のTEXTは返信先にしない', async t => {
+  const f = fixture(t);
+  f.data.chat1.unshift(message({ id: 'empty', text: '<p> </p>', timestamp: new Date(NOW - 500).toISOString() }));
+  assert.equal((await runOnce(f.options)).replied, 1);
+  assert.equal(f.sent[0].options.replyToMessageID, 'm1');
+});
+
+for (const failure of [{ sendError: 'bridge failed' }, { failed: true }, { status: 'failed' }, { sendStatus: 'error' }]) {
+  test(`読み戻しの送信失敗を成功記録しない ${JSON.stringify(failure)}`, async t => {
+    const f = fixture(t);
+    const send = f.api.sendMessage;
+    f.api.sendMessage = async (...args) => {
+      const sent = await send(...args);
+      Object.assign(f.data.chat1[0], failure);
+      return sent;
+    };
+    assert.equal((await runOnce(f.options)).replied, 0);
+    assert.equal(f.state().chats.chat1.status, 'uncertain');
+    assert.equal(fs.existsSync(path.join(f.home, '.claude/discord-autoreply/sent-log.jsonl')), false);
+    await runOnce(f.options);
+    assert.equal(f.sent.length, 1);
+  });
+}
+
+
+const learnNeutral = { is_correction: false, is_confirmation: false, rule: null, fact: null };
+const learnCorrected = { ...learnNeutral, is_correction: true,
+  rule: '最新の案件状況を確認する', fact: 'スマートエイトの担当は百瀬' };
+const learningFile = (f, name) => path.join(f.home, '.claude', 'discord-autoreply', name);
+const learnedRows = f => fs.readFileSync(learningFile(f, 'corrections.jsonl'), 'utf8')
+  .trim().split('\n').map(line => JSON.parse(line));
+
+function mockLearning(f, classify) {
+  f.options.llm = async ({ category, system, input }) => {
+    if (!system.startsWith('質問／自動返信／kimの発言')) return JSON.stringify(reply);
+    assert.equal(category, 'classification');
+    return JSON.stringify(classify(input));
+  };
+}
+function addKimFollowup(f, text, id = 'kim-followup') {
+  f.options.now = () => NOW + 2000;
+  f.data.chat1.push(message({ id, isSender: true, text, timestamp: new Date(NOW + 1000).toISOString() }));
+}
+
+test('削除されていない代理回答への後続訂正を学習し、再巡回でも重複しない', async t => {
+  const f = fixture(t);
+  mockLearning(f, () => learnCorrected);
+  assert.equal((await runOnce(f.options)).replied, 1);
+  assert.equal(f.state().chats.chat1.learnedDeletion, true);
+  const kimAnswer = 'スマートエイトは失注しました。担当は百瀬';
+  addKimFollowup(f, kimAnswer);
+  assert.equal((await runOnce(f.options)).learned.corrected, 1);
+  await runOnce(f.options);
+  assert.deepEqual(learnedRows(f), [{
+    ts: new Date(NOW + 2000).toISOString(), where: 'dm', chatId: 'chat1', msgId: 'sentchat1',
+    question: `田中: ${message().text}`, autoAnswer: f.sent[0].content, kimAnswer, rule: learnCorrected.rule, outcome: 'corrected'
+  }]);
+  assert.match(fs.readFileSync(learningFile(f, 'rules.md'), 'utf8'), /最新の案件状況を確認する/);
+  assert.match(fs.readFileSync(learningFile(f, 'knowledge.md'), 'utf8'), /スマートエイトの担当は百瀬/);
+  const notifications = f.inboxItems.filter(item => item.dedupeKey === 'dm-learn:sentchat1');
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].text, '自動返信の訂正を学習: 田中');
+});
+
+test('無関係な発言は記録して再評価せず、後から来た確認を学習する', async t => {
+  const f = fixture(t);
+  const seen = [];
+  mockLearning(f, ({ kimAnswer }) => {
+    seen.push(kimAnswer);
+    return { ...learnNeutral, is_confirmation: kimAnswer === 'そのURLで合っています' };
+  });
+  await runOnce(f.options);
+  addKimFollowup(f, '明日は出張です');
+  await runOnce(f.options);
+  assert.deepEqual(f.state().learnQueue[0].evaluatedKimIds, ['kim-followup']);
+  assert.equal(f.state().learnQueue[0].learned, false);
+  assert.equal(fs.existsSync(learningFile(f, 'corrections.jsonl')), false);
+  f.data.chat1.push(message({ id: 'confirmation', isSender: true, text: 'そのURLで合っています',
+    timestamp: new Date(NOW + 1500).toISOString() }));
+  await runOnce(f.options);
+  assert.deepEqual(seen, ['明日は出張です', 'そのURLで合っています']);
+  assert.equal(learnedRows(f)[0].outcome, 'confirmed');
+  assert.equal(fs.existsSync(learningFile(f, 'rules.md')), false);
+});
+
+test('同じDMで2件目を送信しても1件目の学習を続ける', async t => {
+  const f = fixture(t);
+  mockLearning(f, ({ question }) => question === `田中: ${message().text}` ? learnCorrected : learnNeutral);
+  await runOnce(f.options);
+  const sendTime = NOW + 5000;
+  f.options.now = () => sendTime;
+  f.data.chat1.push(message({ id: 'second-question', text: '次の案件の担当は？',
+    timestamp: new Date(sendTime - 1000).toISOString() }));
+  f.api.sendMessage = async (id, content) => {
+    f.data[id].push(message({ id: 'second-reply', text: content, isSender: true,
+      timestamp: new Date(sendTime).toISOString() }));
+    return { id: 'second-reply' };
+  };
+  assert.equal((await runOnce(f.options)).replied, 1);
+  assert.equal(f.state().chats.chat1.replyId, 'second-reply');
+  assert.deepEqual(f.state().learnQueue.map(entry => entry.replyId), ['sentchat1', 'second-reply']);
+  f.options.now = () => sendTime + 2000;
+  f.data.chat1.push(message({ id: 'first-correction', text: '最初の回答を訂正します', isSender: true,
+    timestamp: new Date(sendTime + 1000).toISOString() }));
+  await runOnce(f.options);
+  assert.equal(learnedRows(f)[0].msgId, 'sentchat1');
+  assert.deepEqual(f.state().learnQueue.map(entry => entry.learned), [true, false]);
+});
+
+test('72時間で未学習の返信をexpiredとして閉じる', async t => {
+  const f = fixture(t);
+  await runOnce(f.options);
+  f.options.now = () => NOW + 72 * 3600000;
+  assert.equal((await runOnce(f.options)).learned.expired, 1);
+  assert.equal(learnedRows(f)[0].outcome, 'expired');
+  assert.equal(f.state().learnQueue[0].learned, true);
+  let status;
+  assert.equal(await guildMain(['status'], { home: f.home, print: output => { status = output; } }), 0);
+  assert.deepEqual(status.learnQueue, { unlearned: 0, learned: 1 });
+});
+
+test('代理回答プレフィックス付きの後続発言は判定に渡さない', async t => {
+  const f = fixture(t);
+  let calls = 0;
+  mockLearning(f, () => { calls++; return learnCorrected; });
+  await runOnce(f.options);
+  addKimFollowup(f, '【kimのClaudeによる代理回答】\n別の質問への回答');
+  await runOnce(f.options);
+  assert.equal(calls, 0);
+  assert.deepEqual(f.state().learnQueue[0].evaluatedKimIds, []);
+  assert.equal(f.state().learnQueue[0].learned, false);
+});
+
+test('learn-backfill --days 3 --dry-run はDM履歴でIDを補完し、件数だけ返す', async t => {
+  const f = fixture(t);
+  const log = learningFile(f, 'sent-log.jsonl');
+  fs.mkdirSync(path.dirname(log), { recursive: true });
+  const entry = { where: 'dm', channelId: 'chat1', question: '質問', content: '代理回答',
+    ts: new Date(NOW - 2000).toISOString(), senderName: '田中' };
+  fs.writeFileSync(log, [
+    { ...entry, replyId: 'known-id' }, entry, { ...entry, content: '履歴にない本文' },
+    { ...entry, where: 'guild', replyId: 'guild-id' },
+    { ...entry, ts: new Date(NOW - 4 * 86400000).toISOString(), replyId: 'old-id' }
+  ].map(row => JSON.stringify(row)).join('\n') + '\n');
+  f.data.chat1.push(message({ id: 'resolved-id', isSender: true, text: entry.content, timestamp: entry.ts }));
+  const reports = [];
+  const options = { ...f.options, print: report => reports.push(report) };
+  assert.equal(await main(['learn-backfill', '--days', '3', '--dry-run'], options), 0);
+  assert.deepEqual(reports.at(-1), { ok: true, dryRun: true, count: 2 });
+  assert.equal(fs.existsSync(f.file), false);
+  assert.equal(await main(['learn-backfill', '--days', '3'], options), 0);
+  assert.deepEqual(f.state().learnQueue.map(row => row.replyId), ['known-id', 'resolved-id']);
+  assert.equal(await main(['learn-backfill', '--days', '3'], options), 0);
+  assert.equal(reports.at(-1).count, 0);
+});
+
+
+test('送信上限に達した巡回でも後続訂正を学習する', async t => {
+  const f = fixture(t);
+  mockLearning(f, () => learnCorrected);
+  await runOnce(f.options);
+  addKimFollowup(f, '担当は百瀬です');
+  f.data.chat1.push(message({ id: 'next-question', text: '次の案件は？',
+    timestamp: new Date(NOW + 1500).toISOString() }));
+  const state = f.state();
+  state.hourly = Array(30).fill(NOW);
+  f.save(state);
+  const result = await runOnce(f.options);
+  assert.equal(result.limited, true);
+  assert.equal(result.replied, 0);
+  assert.equal(result.learned.corrected, 1);
+});
+
+test('送信結果の復旧でも読み戻した返信をキューに追加する', async t => {
+  const f = fixture(t);
+  const content = '【kimのClaudeによる代理回答】\n回答';
+  const sent = message({ id: 'recovered-reply', text: content, isSender: true,
+    timestamp: new Date(NOW).toISOString() });
+  f.data.chat1.push(sent);
+  f.save({ version: 1, hourly: [], chats: { chat1: { ...message(), status: 'sending',
+    content, question: '質問' } } });
+  assert.equal((await runOnce(f.options)).ok, true);
+  assert.equal(f.sent.length, 0);
+  assert.deepEqual(f.state().learnQueue, [{
+    chatId: 'chat1', replyId: sent.id, question: '質問', answer: content, ts: sent.timestamp,
+    senderName: '田中', evaluatedKimIds: [], learned: false
+  }]);
+});
+
+for (const started of [false, true]) {
+  test(`トライアル本人辞退: 開始済み=${started} の定型文を dryRun で返す`, async t => {
+    const messages = [message({ senderName: 'テスト参加者', text: 'トライアルを辞退させてください' })];
+    if (started) messages.push(message({ senderName: 'テスト参加者', id: 'report', timestamp: new Date(NOW - 5000).toISOString(), text: 'トライアル 1日目 累計2時間' }));
+    const f = fixture(t, { messages });
+    f.options.llm = async ({ category }) => {
+      assert.equal(category, 'classification');
+      return '{"selfDecline":true}';
+    };
+    const result = await runOnce({ ...f.options, dryRun: true });
+    assert.equal(result.ok, true);
+    assert.equal(result.decisions.length, 0);
+    assert.equal(result.wouldSend.length, 1);
+    assert.equal(result.wouldSend[0].content.includes('まだ入社手続きをしていない場合は不要です。'), !started);
+    assert.match(result.wouldSend[0].content, /ご連絡ありがとうございます。承知いたしました。/);
+    assert.equal(f.sent.length, 0);
+    assert.equal(fs.existsSync(f.file), false);
+  });
+}
+
+for (const blocked of [{ isMessageRequest: true }, { isReadOnly: true }, { participants: { items: [{ isSelf: true, cannotMessage: true }] } }]) {
+  test('辞退でも送信不可の会話は判断待ち: ' + JSON.stringify(blocked), async t => {
+    const f = fixture(t, { chats: [chat(blocked)], messages: [message({ senderName: 'テスト参加者', text: '辞退します' })] });
+    f.options.llm = async () => { assert.fail('分類不要'); };
+    const result = await runOnce({ ...f.options, dryRun: true });
+    assert.equal(result.decisions.length, 1);
+    assert.equal(result.wouldSend.length, 0);
+  });
+}
+
+for (const text of ['こんにちは', '別の業務を辞めたいです']) {
+  test('本人辞退以外の初対面は従来処理: ' + text, async t => {
+    const f = fixture(t, { messages: [message({ senderName: 'テスト参加者', text })] });
+    let calls = 0;
+    f.options.llm = async () => { calls++; return '{"selfDecline":false}'; };
+    const result = await runOnce({ ...f.options, dryRun: true });
+    assert.equal(result.decisions[0].reason, '初対面または会話履歴を確認できません');
+    assert.equal(result.wouldSend.length, 0);
+    assert.equal(calls, text.includes('辞め') ? 1 : 0);
+  });
+}
+
+test('本人辞退の定型文は会話ごとに一度のみ、次回は従来分類', async t => {
+  const f = fixture(t, { messages: [message({ senderName: 'テスト参加者', text: '辞退します' })] });
+  f.options.llm = async ({ category }) => category === 'classification'
+    ? '{"selfDecline":true}' : JSON.stringify({ ...reply, needs_reply: false });
+  const first = await runOnce(f.options);
+  assert.equal(first.replied, 1);
+  assert.equal(f.state().trialSelfDeclined.chat1, true);
+  f.data.chat1.push(message({ senderName: 'テスト参加者', id: 'second-decline', timestamp: new Date(NOW + 1000).toISOString(), text: '辞退します' }));
+  const second = await runOnce({ ...f.options, now: NOW + 2000 });
+  assert.equal(second.replied, 0);
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.state().chats.chat1.status, 'fyi');
 });

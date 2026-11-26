@@ -4,8 +4,9 @@ import { createHash } from 'node:crypto';
 import { getDriveToken } from './drive-auth.mjs';
 import { gwsFetch } from './gws-proxy.mjs';
 import { headerValue, extractBody } from '../gmail-search.mjs';
-import { addItem } from '../kim-inbox.mjs';
+import { addItem, spoolItem } from '../kim-inbox.mjs';
 import { jstDay } from './auto-progress-daily.mjs';
+import { gmailFetchWithRetry } from './gmail-retry.mjs';
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const mailboxes = ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'];
@@ -28,13 +29,17 @@ export function clearedReason(draft, sent, sameMailbox) {
   const prefix = Array.from(draftBody(draft)).slice(0, 100).join(''), other = Array.from(draftBody(sent)).slice(0, 100).join('');
   return (a && a === b) || (prefix && prefix === other) ? '送信済み' : null;
 }
-export async function gmailClient(mailbox, { getToken = getDriveToken, fetchImpl = gwsFetch, write = false } = {}) {
+export async function gmailClient(mailbox, { getToken = getDriveToken, fetchImpl = gwsFetch, write = false, onRetry, sleep } = {}) {
   const token = await getToken({ scope: `https://www.googleapis.com/auth/gmail.${write ? 'compose' : 'readonly'}`, impersonate: mailbox, signal: AbortSignal.timeout(20000) });
   return async (route, { method = 'GET', optional = false } = {}) => {
-    const response = await fetchImpl(`${API}${route}`, { method, headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30000) });
-    if (optional && [404, 410].includes(response.status)) return null;
-    if (!response.ok) throw new Error(`Gmail ${mailbox}: HTTP ${response.status}`);
-    return response.status === 204 ? null : response.json();
+    try {
+      // parse:'json' で本文読み取り中の TimeoutError もリトライ対象にする（204 は null）
+      return await gmailFetchWithRetry(`${API}${route}`, { method, headers: { Authorization: `Bearer ${token}` } }, { fetchImpl, onRetry, sleep, parse: 'json' });
+    } catch (error) {
+      if (optional && error.status && [404, 410].includes(error.status)) return null;
+      if (error.status !== undefined) throw new Error(`Gmail ${mailbox}: HTTP ${error.status}`);
+      throw error;
+    }
   };
 }
 export async function allPages(get, route, field) {
@@ -63,12 +68,14 @@ export async function filterClearedDrafts(items, { home, now, deps = {}, stats }
   const drafts = items.filter(item => item.kind === 'draft' && item.draftMessage);
   const clients = new Map();
   const get = async mailbox => {
-    if (!clients.has(mailbox)) clients.set(mailbox, await gmailClient(mailbox, deps));
-    return clients.get(mailbox);
+    // Parallel draft checks must share token acquisition and the resulting client.
+    if (!clients.has(mailbox)) clients.set(mailbox, gmailClient(mailbox, { ...deps, onRetry: () => { stats.gmailRetries = (stats.gmailRetries || 0) + 1; } }));
+    return await clients.get(mailbox);
   };
   const known = new Set(clearedRecords(home).filter(row => row.event === 'cleared').map(row => row.key));
   const excluded = new Set();
-  for (const item of drafts) {
+  let next = 0;
+  const checkDraft = async item => {
     const draft = item.draftMessage;
     const external = recipients(draft).filter(address => !/@orgiast\.jp$/.test(address));
     let reason = external.length && external.every(nonHumanRecipient) ? '人でない宛先' : null;
@@ -95,9 +102,9 @@ export async function filterClearedDrafts(items, { home, now, deps = {}, stats }
     } catch (error) {
       stats.draftCheckErrors = (stats.draftCheckErrors || 0) + 1;
       item.draftCheckError = String(error.message).slice(0, 200);
-      continue; // Unverified drafts remain visible, including after a prior exclusion.
+      return; // Unverified drafts remain visible, including after a prior exclusion.
     }
-    if (!reason) continue;
+    if (!reason) return;
     const fingerprint = draftFingerprint(draft), key = hash([item.mailbox, item.draftId, fingerprint]);
     if (!known.has(key)) {
       appendDurable(file(home), { event: 'cleared', key, at: new Date(now).toISOString(), mailbox: item.mailbox,
@@ -105,10 +112,27 @@ export async function filterClearedDrafts(items, { home, now, deps = {}, stats }
       known.add(key);
     }
     excluded.add(item.id);
-  }
+  };
+  // A mailbox can contain 100+ stale drafts. Checking them serially made a scan
+  // take over ten minutes even though every individual Gmail fetch had a timeout.
+  await Promise.all(Array.from({ length: Math.min(3, drafts.length) }, async () => {
+    while (next < drafts.length) await checkDraft(drafts[next++]);
+  }));
   if (drafts.length) { stats.draftsChecked = drafts.length; stats.draftsCleared = excluded.size; stats.draftsKept = drafts.length - excluded.size; }
   return items.filter(item => !excluded.has(item.id)).map(({ draftMessage, ...item }) => item);
 }
+// 台帳ロック待ちを短く有界にし、使用中なら spool へ退避（scan 全体を止めない）。
+async function addWithBoundedLock(home, options, add) {
+  if (add !== addItem) return add(home, options);
+  try {
+    return await addItem(home, options, { lockWaitMs: 1_000 });
+  } catch (error) {
+    if (!String(error.message || error).includes('台帳が使用中')) throw error;
+    const spooled = spoolItem(home, options);
+    return { id: spooled.id, status: 'spooled' };
+  }
+}
+
 export async function notifyClearedDrafts(home, { now, add = addItem } = {}) {
   const records = clearedRecords(home);
   const deleted = new Set(records.filter(row => row.event === 'deleted').map(row => row.key));
@@ -119,7 +143,7 @@ export async function notifyClearedDrafts(home, { now, add = addItem } = {}) {
   const day = jstDay(now);
   const reasons = Object.entries(pending.reduce((out, row) => ({ ...out, [row.reason]: (out[row.reason] || 0) + 1 }), {})).map(([reason, count]) => `${reason}: ${count}件`).join('／');
   const send = async options => {
-    const item = await add(home, options);
+    const item = await addWithBoundedLock(home, options, add);
     if (!item?.id || item.forwardError) throw new Error(item?.forwardError || '下書き整理の通知に失敗');
   };
   if (!records.some(row => row.event === 'summary' && row.day === day)) {

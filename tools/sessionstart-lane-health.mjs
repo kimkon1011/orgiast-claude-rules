@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const repo = fileURLToPath(new URL('../', import.meta.url));
 const RETRY_MS = 30 * 60_000;
-const RETRY_REASONS = /^(?:probe_failed(?::stale)?|configured:unprobed|probe_expired|dead:payment_required)$/;
+const RETRY_REASONS = /^(?:probe_failed(?::stale)?|configured:unprobed|probe_expired|dead:payment_required|disabled:expired)$/;
 const timestamp = value => typeof value === 'number' ? value : Date.parse(value);
 export function launchLaneAutoProbes(health, { home = laneHome(), now = Date.now(), spawnProbe = spawn } = {}) {
   const file = path.join(home, '.claude', 'lane-autoprobe.json');
@@ -36,7 +36,7 @@ export function launchLaneAutoProbes(health, { home = laneHome(), now = Date.now
 }
 export function sessionLaneHealth(options) {
   const home = options?.home || laneHome();
-  const context = auditContext(home);
+  const context = auditContext(home, { now: options?.now });
   (options?.auditLaunch || launchAudit)({ ...options, home, intervalHours: 6 });
   const health = laneDoctorQuick(options);
 launchLaneAutoProbes(health, { ...options, home });

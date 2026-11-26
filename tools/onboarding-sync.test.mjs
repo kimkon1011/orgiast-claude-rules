@@ -4,11 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  executionPlan, makeIndex, mergeEnvFile, missingDeclaredKeys, PRESERVE_LOCAL_KEYS,
-  shouldRunKeys, keySyncIsStale, updateRepositoryFiles,
+  build, executionPlan, makeIndex, mergeEnvFile, missingDeclaredKeys, PRESERVE_LOCAL_KEYS,
+  readHead, shouldRunKeys, shouldRunRepositorySync, keySyncIsStale, updateRepositoryFiles,
 } from './onboarding-sync.mjs';
 import { gitBlobSha } from './version-drift.mjs';
 
@@ -45,6 +45,18 @@ test('--keys-only runs only key provisioning', () => {
 
 test('default execution plan retains repository, keys, and rules sync', () => {
   assert.deepEqual(executionPlan([]), { syncRepository: true, provisionKeys: true, syncRules: true });
+});
+
+test('repository guard runs once per local calendar day despite less than 24 hours elapsed', () => {
+  const previous = { last: new Date(2026, 10, 23, 3, 29).toISOString() };
+  assert.equal(shouldRunRepositorySync(previous, new Date(2026, 10, 23, 23, 59)), false);
+  assert.equal(shouldRunRepositorySync(previous, new Date(2026, 10, 24, 3, 4)), true);
+});
+
+test('repository guard runs when state is missing or invalid', () => {
+  const now = new Date(2026, 10, 24, 3, 4);
+  assert.equal(shouldRunRepositorySync(null, now), true);
+  assert.equal(shouldRunRepositorySync({ last: 'invalid' }, now), true);
 });
 
 test('key guard skips at 19 hours and runs at 21 hours', () => {
@@ -182,6 +194,55 @@ test('index lead points to the non-auto-loaded path', () => {
   assert.match(lead, /自動ロードされない/);
   assert.match(lead, /Read ツール/);
 });
+test('索引は読点で途切れる結論候補を飛ばす', () => {
+  const index = makeIndex('### コスト最適化\nコスト最適化（調査・報告）は、\n利用者の手間を増やさない。');
+  assert.doesNotMatch(index, /は、/);
+  assert.match(index, /### コスト最適化\n利用者の手間を増やさない。/);
+});
+
+test('索引は太字の途中で結論を切らない', () => {
+  const index = makeIndex([
+    '### 待機',
+    '**期限を確認する。期限切れを通知する。** 通知後の手順。',
+    '### 再開',
+    '**期限後に再開する。',
+    '**🔴 期限のないものは対象外。**',
+  ].join('\n'));
+  assert.match(index, /\*\*期限を確認する。期限切れを通知する。\*\*/);
+  assert.doesNotMatch(index, /通知後の手順|\*\*期限後に再開する。/);
+  assert.match(index, /\*\*🔴 期限のないものは対象外。\*\*/);
+});
+
+test('索引は同じ節の太字見出しを重ねず、別の参照先は保持する', () => {
+  const index = makeIndex([
+    '### 1.3 GAS の管理',
+    '**🔴 clasp で管理する。**',
+    '**1.3 GAS（Google Apps Script）は clasp + GitHub 統一**',
+    '**🔴 read-back で確認する。**',
+    '**1.3.1 検証の詳細**',
+    '検証の本文。',
+    '**🔴 完了を確認する。**',
+    '**1.3.1 検証の詳細**',
+  ].join('\n'));
+  assert.doesNotMatch(index, /\*\*1\.3 GAS/);
+  assert.equal(index.split('\n').filter(line => line === '**1.3.1 検証の詳細**').length, 1);
+});
+
+test('ONBOARDING.md と配布用 CLAUDE.md は軽量化後のサイズの110%以下', () => {
+  const body = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
+  const template = fs.readFileSync(new URL('../CLAUDE.md.template', import.meta.url), 'utf8');
+  const { updated } = build(template, makeIndex(body), 'ONBOARDING.md');
+  // ONBOARDING.md は改行を正規化して Windows / Linux で同じ内容を計測する。
+  const limits = [
+    ['ONBOARDING.md (LF)', body.replace(/\r\n/g, '\n'), 330795],
+    ['配布用 CLAUDE.md', updated, 28922],
+  ];
+  for (const [file, content, limit] of limits) {
+    const bytes = Buffer.byteLength(content);
+    assert.ok(bytes <= limit, `${file}: ${bytes} bytes > 上限 ${limit} bytes`);
+  }
+});
+
 test('index retains critical emoji lines', () => {
   const f = setup(null); run(f); const output = fs.readFileSync(f.target, 'utf8');
   assert.match(output, /🔴 絶対ルール全文/); assert.match(output, /🛑 上限規定/); assert.doesNotMatch(output, /二番目/);
@@ -443,6 +504,7 @@ test('two fallback runs do not mistake previous zip output for human changes', a
   let run = 0;
   const git = (args) => {
     if (args.includes('pull')) throw new Error('diverged');
+    if (args.includes('fetch')) return '';
     return run++ === 0 ? '' : ' M tools/changed.mjs\0?? tools/added.mjs\0';
   };
   const first = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
@@ -599,6 +661,39 @@ test('the next sync automatically uses the received primary without an enroll he
   assert.equal(headers['x-orgiast-auth'], createHmac('sha256', 'new-primary').update(headers['x-orgiast-ts']).digest('hex'));
 });
 
+test('readHead returns empty string for empty git repo', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'readhead-'));
+  try {
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo, { recursive: true });
+    execFileSync('git', ['init', repo], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
+    assert.equal(readHead(repo), '');
+    // エラーを投げないこと（rev-parse HEAD が fatal になる空リポジトリ）
+    const result = readHead(repo);
+    assert.equal(typeof result, 'string');
+    assert.equal(result, '');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('readHead returns commit hash for a non-empty git repo', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'readhead-'));
+  try {
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo, { recursive: true });
+    execFileSync('git', ['init', repo], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
+    fs.writeFileSync(path.join(repo, 'test.txt'), 'hello');
+    execFileSync('git', ['-C', repo, 'add', 'test.txt'], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
+    execFileSync('git', ['-C', repo, 'commit', '-m', 'init'], { windowsHide: true, encoding: 'utf8', timeout: 30000, env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test' } });
+    const hash = readHead(repo);
+    assert.equal(typeof hash, 'string');
+    assert.match(hash, /^[a-f0-9]{40}$/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('zip fallback は packages（同梱 VSIX）も配る', async () => {
   const f = repositoryFixture();
   fs.mkdirSync(path.join(f.archive, 'packages', 'vscode-next-session'), { recursive: true });
@@ -607,4 +702,76 @@ test('zip fallback は packages（同梱 VSIX）も配る', async () => {
   const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
   assert.equal(result.method, 'zip');
   assert.equal(fs.readFileSync(path.join(f.repo, 'packages', 'vscode-next-session', 'orgiast-next-session-9.9.9.vsix'), 'utf8'), 'vsix');
+});
+
+test('origin/main 不在の .git がある写し(zip fallback): fetch URL から origin/main を取得し main 版と一致するファイルを更新できる', async () => {
+  const f = repositoryFixture();
+  let fetchCalls = 0;
+  let fetchArgs = null;
+  const git = (args) => {
+    if (args.includes('pull')) throw new Error('no remote configured');
+    if (args.includes('fetch')) {
+      fetchCalls++;
+      fetchArgs = args;
+      return '';
+    }
+    if (args.includes('status')) return ' M tools/changed.mjs\0';
+    if (args.includes('rev-list')) return 'commit-a\n';
+    if (args.includes('rev-parse')) return gitBlobSha(Buffer.from('old')) + '\n';
+    return '';
+  };
+  const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
+  assert.equal(fetchCalls, 1);
+  assert.ok(fetchArgs.some((a) => a.startsWith('https://github.com/kimkon1011/orgiast-claude-rules.git')));
+  assert.ok(fetchArgs.includes('+main:refs/remotes/origin/main'));
+  assert.equal(result.method, 'zip');
+  assert.deepEqual(result.excluded, []);
+  assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'utf8'), 'new');
+  assert.match(f.output.join('\n'), /旧配布版と一致したため更新 1件/);
+});
+
+test('origin/main 不在の .git がある写し(zip fallback): fetch URL 成功後も main 履歴に無いファイルは保護される', async () => {
+  const f = repositoryFixture();
+  fs.writeFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'human work');
+  let fetchCalls = 0;
+  let fetchArgs = null;
+  const git = (args) => {
+    if (args.includes('pull')) throw new Error('no remote configured');
+    if (args.includes('fetch')) {
+      fetchCalls++;
+      fetchArgs = args;
+      return '';
+    }
+    if (args.includes('status')) return ' M tools/changed.mjs\0';
+    if (args.includes('rev-list')) return 'commit-a\n';
+    if (args.includes('rev-parse')) return gitBlobSha(Buffer.from('old')) + '\n';
+    return '';
+  };
+  const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
+  assert.equal(fetchCalls, 1);
+  assert.ok(fetchArgs.some((a) => a.startsWith('https://github.com/kimkon1011/orgiast-claude-rules.git')));
+  assert.ok(fetchArgs.includes('+main:refs/remotes/origin/main'));
+  assert.equal(result.method, 'zip');
+  assert.deepEqual(result.excluded, ['tools/changed.mjs']);
+  assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'utf8'), 'human work');
+});
+
+test('origin/main 不在の .git: fetch URL が失敗しても同期全体は止まらずファイルは保護される', async () => {
+  const f = repositoryFixture();
+  let fetchCalls = 0;
+  const git = (args) => {
+    if (args.includes('pull')) throw new Error('no remote configured');
+    if (args.includes('fetch')) {
+      fetchCalls++;
+      throw new Error('network error');
+    }
+    if (args.includes('status')) return ' M tools/changed.mjs\0';
+    return '';
+  };
+  const result = await updateRepositoryFiles(f.repo, fallbackOptions(f, git));
+  assert.equal(fetchCalls, 1);
+  assert.equal(result.ok, true);
+  assert.equal(result.method, 'zip');
+  assert.deepEqual(result.excluded, ['tools/changed.mjs']);
+  assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'utf8'), 'old');
 });

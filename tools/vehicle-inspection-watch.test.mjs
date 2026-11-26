@@ -287,6 +287,26 @@ test('kim 通知が失敗したら exit 1 で state を進めない', async (t) 
   assert.equal(cellOf(f.sheet.grid, HEADERS, '通知回数'), 0);
 });
 
+test('売却済の closeKey がロック競合で失敗しても他の車両の処理は続く', async (t) => {
+  const f = fixture(t, {
+    rows: [
+      HEADERS,
+      row({ 車両ID: 'V001', 状態: '売却済', 車検満了日: '2026-11-03' }),
+      row({ 車両ID: 'V002', 車名: 'ハイエース', 登録番号: 'なにわ100あ1234', 状態: '未手配', 車検満了日: '2026-11-10' }),
+    ],
+  });
+  // Place a file where the kim-inbox directory should be, so fs.mkdirSync fails
+  // immediately (EEXIST) when closeKey tries to acquire the lock.
+  const kimDir = path.join(f.home, '.claude', 'kim-inbox');
+  fs.mkdirSync(path.dirname(kimDir), { recursive: true });
+  fs.writeFileSync(kimDir, '');
+  assert.equal(await f.run(), 1);
+  assert.match(f.err.join('\n'), /closeKey 失敗/);
+  // V002 should still be processed despite V001's closeKey failure.
+  assert.equal(f.kim.length, 1);
+  assert.match(f.kim[0].body, /ハイエース/);
+});
+
 test('state は一時ファイル＋rename で書き、列番号は A1 記法に変換する', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'vehicle-inspection-state-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

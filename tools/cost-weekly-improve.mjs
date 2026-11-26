@@ -5,6 +5,7 @@
 // 許可リストに載っている command だけを自動適用し、残りは kim へ DM する。
 // 適用した提案は ~/.claude/cost-improve-state.json の actions に mode:'auto-weekly' で登録し、
 // 日次ループの verifyPreviousActions(効果検証)に載せる。翌週 no_effect なら同種提案を4週間抑止する。
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,6 +16,7 @@ import { atomicWrite } from './cost-improve-loop.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { collectProviderHealth, collectClaudeStats } from './usage-stats.mjs';
 import { collectBudgetStatus } from './budget-status.mjs';
+import { writeRoutineUsage } from './routine-usage-weekly.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
@@ -262,6 +264,7 @@ function formatListLine(kind, proposal) {
 export async function runWeekly({ home, provider = 'deepseek', dryRun = false, noNotify = false, approveId = '', now = new Date(), quiet = false, io = {} } = {}) {
   if (!isAllowedWeeklyProvider(provider)) throw new Error(`提案生成に ${provider} は使えません(deepseek/gemini 等の安いAIのみ。anthropic/claude は禁止)`);
   const claudeDir = path.join(home, '.claude');
+  const routineUsage = await (io.writeRoutineUsage || writeRoutineUsage)({ home, now: now.getTime(), includeFleet: io.includeFleet !== false, fetchImpl: io.fetchImpl }).catch(error => ({ error: String(error?.message || error), data: [] }));
   const startedJst = formatJst(now);
   let status = 'OK';
   let outcome = { proposals: 0, applied: 0, human: 0, rejected: 0, provider, approveId: approveId || undefined };
@@ -392,7 +395,7 @@ export async function runWeekly({ home, provider = 'deepseek', dryRun = false, n
 
   await appendActionsAndSave({ claudeDir, improveState, newActions, dryRun });
   const summary = `proposals=${outcome.proposals} applied=${outcome.applied} human=${outcome.human} rejected=${outcome.rejected} suppressed=${suppressedCount} provider=${provider}`;
-  const audit = { ok: status === 'OK', ranAt: now.toISOString(), provider, dryRun, outcome, proposals: proposalAudits, applied, human, rejected, rawResponse };
+  const audit = { ok: status === 'OK', ranAt: now.toISOString(), provider, dryRun, outcome, routineUsage: routineUsage.data || [], proposals: proposalAudits, applied, human, rejected, rawResponse };
   const auditFile = saveWeeklyAudit({ claudeDir, now, audit });
 
   if ((autoLines.length || humanLines.length) && !dryRun && !noNotify) {
@@ -402,7 +405,7 @@ export async function runWeekly({ home, provider = 'deepseek', dryRun = false, n
     const dmText = `**📈 週次コスト改善**\n\n${sections.join('\n\n')}`;
     try {
       const notifyResult = await (io.notifyKim || notifyKim)(dmText, { home, webhookFallback: false });
-      if (!notifyResult || !['dm', 'session-inbox'].includes(notifyResult.delivered)) throw new Error(notifyResult?.reason || 'kim の DM に配信されませんでした');
+      if (!isKimDelivered(notifyResult)) throw new Error(notifyResult?.reason || 'kim の DM に配信されませんでした');
     } catch (error) {
       status = 'NG';
       console.error(`週次提案 DM 送信失敗: ${String(error?.message ?? error)}`);

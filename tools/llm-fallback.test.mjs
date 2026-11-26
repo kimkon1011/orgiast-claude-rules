@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -200,6 +201,49 @@ test('lane-health.json の quota_wait 中のプロバイダは隔離ディレク
   assert.equal(result.candidate.provider, 'openrouter');
 });
 
+test('routing 先頭が quota_wait 中なら次の健全な候補を最初に呼ぶ', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000, attempted = [];
+  fs.writeFileSync(files.laneHealthFile, JSON.stringify({ lanes: { groq: { alive: false, reason: 'quota_wait', until: timestamp + 300_000 } } }));
+  const result = await callWithFallback({
+    start, chain: [second], ...files, now: () => timestamp,
+    payloadFor(candidate) { attempted.push(candidate.provider); return requestFor(); },
+    fetchImpl: async () => new Response('{}', { status: 200 }),
+  });
+  assert.deepEqual(attempted, ['openrouter']);
+  assert.equal(result.candidate.provider, 'openrouter');
+});
+
+test('全候補が quota_wait 中でも候補を復活させて呼ぶ', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000, attempted = [];
+  fs.writeFileSync(files.laneHealthFile, JSON.stringify({ lanes: {
+    groq: { alive: false, reason: 'quota_wait', until: timestamp + 300_000 },
+    openrouter: { alive: false, reason: 'quota_wait', until: timestamp + 300_000 },
+  } }));
+  const result = await callWithFallback({
+    start, chain: [second], ...files, now: () => timestamp,
+    payloadFor(candidate) { attempted.push(candidate.provider); return requestFor(); },
+    fetchImpl: async () => new Response('{}', { status: 200 }),
+  });
+  assert.deepEqual(attempted, ['groq']);
+  assert.equal(result.candidate.provider, 'groq');
+});
+
+test('明示指定した先頭候補は quota_wait 中でも警告して試行する', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000, attempted = [], errors = [];
+  fs.writeFileSync(files.laneHealthFile, JSON.stringify({ lanes: { groq: { alive: false, reason: 'quota_wait', until: timestamp + 300_000 } } }));
+  const original = console.error;
+  console.error = message => errors.push(String(message));
+  t.after(() => { console.error = original; });
+  const result = await callWithFallback({
+    start, chain: [second], explicitStart: true, ...files, now: () => timestamp,
+    payloadFor(candidate) { attempted.push(candidate.provider); return requestFor(); },
+    fetchImpl: async () => new Response('{}', { status: 200 }),
+  });
+  assert.deepEqual(attempted, ['groq']);
+  assert.equal(result.candidate.provider, 'groq');
+  assert.equal(errors.filter(line => line.includes('明示指定された groq は quota_wait 中')).length, 1);
+});
+
 test('429 で reset 時刻が本文から取れた場合 lane-health.json に quota_wait を書く', async (t) => {
   const files = temporaryFiles(t), timestamp = 1_700_000_000_000; let calls = 0;
   await callWithFallback({
@@ -213,6 +257,36 @@ test('429 で reset 時刻が本文から取れた場合 lane-health.json に qu
   assert.equal(health.lanes.groq.reason, 'quota_wait');
   assert.equal(health.lanes.groq.alive, false);
   assert.ok(health.lanes.groq.until > timestamp);
+});
+
+test('reset 時刻付きの枯渇系429は同一プロバイダを再試行しない', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000, attempted = [], waits = [];
+  const result = await callWithFallback({
+    start, chain: [second], ...files, now: () => timestamp,
+    payloadFor(candidate) { attempted.push(candidate.provider); return requestFor(); },
+    sleepImpl: async ms => waits.push(ms),
+    fetchImpl: async () => attempted.length === 1
+      ? new Response('{"error":{"message":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-11-26 19:53:29"}}', { status: 429 })
+      : new Response('{}', { status: 200 }),
+  });
+  assert.deepEqual(attempted, ['groq', 'openrouter']);
+  assert.deepEqual(waits, []);
+  assert.equal(result.candidate.provider, 'openrouter');
+});
+
+test('一時的な429は従来どおり同一プロバイダを再試行する', async (t) => {
+  const files = temporaryFiles(t); let calls = 0; const waits = [];
+  const result = await callWithFallback({
+    start, chain: [second], ...files,
+    payloadFor: requestFor, sleepImpl: async ms => waits.push(ms),
+    fetchImpl: async () => ++calls === 1
+      ? new Response('rate limit; retry shortly', { status: 429, headers: { 'Retry-After': '1' } })
+      : new Response('{}', { status: 200 }),
+  });
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, [1000]);
+  assert.equal(result.candidate.provider, 'groq');
+  assert.equal(result.attempt, 1);
 });
 
 test('402 はプロバイダを24時間クールダウンに記録する', async (t) => {
@@ -604,7 +678,7 @@ test('transcript で DeepSeek しかない場合も禁止を解除しない', as
 });
 
 test('parseQuotaResetTime: 本文から reset 時刻を解析', () => {
-  const now = Date.now();
+  const now = Date.parse("2026-11-19T00:00:00Z"); // 固定: Date.now() だと記載日時を過ぎると必ず失敗する
   // "Your limit will reset at 2026-11-19 19:53:29"
   const result = parseQuotaResetTime('Your limit will reset at 2026-11-19 19:53:29', now);
   assert.ok(result > now, '未来の時刻を返す');
@@ -621,4 +695,83 @@ test('parseQuotaResetTime: 本文から reset 時刻を解析', () => {
   // reset 時刻を含まない本文は null
   const none = parseQuotaResetTime('Rate limit exceeded', now);
   assert.equal(none, null);
+});
+
+test('glm は provider-limit-history の until が未来なら payload を作らずにスキップする', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000;
+  fs.writeFileSync(path.join(path.dirname(files.cooldownFile), 'provider-limit-history.jsonl'), `${JSON.stringify({ provider: 'glm', until: timestamp + 60_000, reason: 'usage_limit' })}\n`);
+  const payloads = [];
+  const result = await callWithFallback({
+    start: { provider: 'glm', model: 'glm-5.3' }, chain: [second], ...files, now: () => timestamp,
+    payloadFor(candidate) { payloads.push(candidate.provider); return requestFor(); },
+    fetchImpl: async () => new Response('{}', { status: 200 }),
+  });
+  assert.deepEqual(payloads, ['openrouter']);
+  assert.equal(result.candidate.provider, 'openrouter');
+});
+
+test('deepseek 直URLは limit-history の間 fetch せず次候補を使う', async (t) => {
+  const files = temporaryFiles(t), timestamp = 1_700_000_000_000;
+  fs.writeFileSync(path.join(path.dirname(files.cooldownFile), 'provider-limit-history.jsonl'), `${JSON.stringify({ provider: 'deepseek', until: timestamp + 3_600_000, reason: 'http_402' })}\n`);
+  const urls = [];
+  const result = await callWithFallback({
+    start: { provider: 'openrouter', model: 'deepseek/deepseek-chat' },
+    chain: [{ provider: 'groq', model: 'openai/gpt-oss-120b' }],
+    ...files, now: () => timestamp,
+    payloadFor(candidate) {
+      return candidate.model.includes('deepseek')
+        ? { url: 'https://api.deepseek.com/v1/chat/completions', init: {} }
+        : { url: 'https://api.groq.com/openai/v1/chat/completions', init: {} };
+    },
+    fetchImpl: async (url) => { urls.push(String(url)); return new Response('{}', { status: 200 }); },
+  });
+  assert.deepEqual(urls, ['https://api.groq.com/openai/v1/chat/completions']);
+  assert.equal(result.candidate.model, 'openai/gpt-oss-120b');
+});
+
+test('台帳行には category と caller が必ず入る', async (t) => {
+  const files = temporaryFiles(t);
+  await callWithFallback({
+    start, chain: [], category: 'jp_reply', caller: 'unit', ...files,
+    payloadFor: requestFor,
+    fetchImpl: async () => new Response(JSON.stringify({ usage: { prompt_tokens: 3, completion_tokens: 4 } }), { status: 200 }),
+  });
+  const row = JSON.parse(fs.readFileSync(files.ledgerFile, 'utf8'));
+  assert.equal(row.category, 'jp_reply');
+  assert.equal(row.caller, 'unit');
+  assert.equal(row.tool, 'unit');
+  assert.equal(row.in, 3);
+  assert.equal(row.out, 4);
+  assert.equal(row.status, 'ok');
+});
+
+test('台帳の http_429 はレーンの失敗率に入らない', (t) => {
+  const files = temporaryFiles(t);
+  const home = path.dirname(files.ledgerFile);
+  const claudeDir = path.join(home, '.claude');
+  const ledgerFile = path.join(claudeDir, 'executor-usage.jsonl');
+  const now = new Date().toISOString();
+  const rows = [
+    ...Array.from({ length: 4 }, () => ({ t: now, provider: 'groq', status: 'http_429' })),
+    ...['timeout', 'http_500', 'fail', 'ok', 'ok'].map((status) => ({ t: now, provider: 'cerebras', status })),
+  ];
+  fs.mkdirSync(claudeDir);
+  fs.writeFileSync(ledgerFile, rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+
+  // node --test 中に無効化される候補の健康判定を、一時ホームの子プロセスで通す。
+  const env = { ...process.env, HOME: home, USERPROFILE: home, ORGIAST_HOME: home };
+  delete env.NODE_TEST_CONTEXT;
+  execFileSync(process.execPath, ['--input-type=module', '--eval', `
+    import { callWithFallback } from ${JSON.stringify(new URL('./llm-fallback.mjs', import.meta.url).href)};
+    await callWithFallback({
+      start: ${JSON.stringify(start)}, chain: [],
+      ...${JSON.stringify({ ...files, ledgerFile })},
+      payloadFor: () => ({ url: 'https://example.invalid', init: {} }),
+      fetchImpl: async () => new Response('{}', { status: 200 }),
+    });
+  `], { env });
+
+  const disabled = JSON.parse(fs.readFileSync(path.join(claudeDir, 'lanes-disabled.json'), 'utf8'));
+  assert.equal(disabled.cerebras.reason, 'failure_rate');
+  assert.equal(disabled.groq, undefined);
 });

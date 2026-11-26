@@ -3,9 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getLoadGuardStatus, hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord, measureUserIdleSec } from './reopen-lost-sessions.mjs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { getLoadGuardStatus, hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord, measureUserIdleSec, DEFAULT_REOPEN_MAX_CLAUDE } from './reopen-lost-sessions.mjs';
 import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
-import { unverifiedStreakCounts, isSessionProcessRunning, connectedRcSessionIds } from './reopen-lost-sessions.mjs';
+import { CLAUDE_PROCESS_SCRIPT } from './lib/windows-process.mjs';
+import { unverifiedStreakCounts, isSessionProcessRunning, connectedRcSessionIds, recordApiResult, fetchWithRetry, readFailState, writeFailState, FAIL_STATE_FILE, CONSECUTIVE_FAIL_THRESHOLD } from './reopen-lost-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
 const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
@@ -253,6 +256,94 @@ test('unknown agents prevents API/open; concurrent lock and stale lock', async t
   assert.equal(acquireLock(file), null); release();
   fs.writeFileSync(file, 'stale'); fs.utimesSync(file, new Date(0), new Date(0));
   acquireLock(file)();
+});
+
+function runReopenCli(base, ...args) {
+  return spawnSync(process.execPath, [fileURLToPath(new URL('./reopen-lost-sessions.mjs', import.meta.url)), ...args], {
+    env: { ...process.env, HOME: path.dirname(base), USERPROFILE: path.dirname(base) },
+    encoding: 'utf8',
+    timeout: 5000,
+  });
+}
+
+test('watch CLI logs a live lock as a successful skip and preserves watch state', t => {
+  const base = fixture(t);
+  const lock = path.join(base, 'reopen-lost-sessions.lock');
+  fs.writeFileSync(lock, String(process.pid));
+  const stateFile = path.join(base, 'reopen-lost-sessions-state.json');
+  const state = JSON.stringify({ watermark: since });
+  fs.writeFileSync(stateFile, state);
+  writeFailState(base, { consecutiveFails: 7, lastFailAt: since });
+
+  const run = runReopenCli(base, '--watch');
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  const log = fs.readFileSync(path.join(base, 'reopen-lost-sessions.log'), 'utf8').trim();
+  const { at, skipped, holderPid, lockAgeSec, stale } = JSON.parse(log);
+  assert.equal(new Date(at).toISOString(), at);
+  assert.equal(skipped, 'locked');
+  assert.equal(holderPid, process.pid);
+  assert.ok(lockAgeSec >= 0 && lockAgeSec <= 600);
+  assert.equal(stale, false);
+  assert.equal(fs.readFileSync(lock, 'utf8'), String(process.pid));
+  assert.equal(fs.readFileSync(stateFile, 'utf8'), state);
+  assert.equal(readFailState(base).consecutiveFails, 7);
+});
+
+test('acquireLock reclaims an 11-minute-old lock with a live PID', t => {
+  const base = fixture(t);
+  const lock = path.join(base, 'reopen-lost-sessions.lock');
+  const now = Date.now();
+  const staleTime = new Date(now - 11 * 60_000);
+  fs.writeFileSync(lock, String(process.pid));
+  fs.utimesSync(lock, staleTime, staleTime);
+
+  const release = acquireLock(lock, now);
+  assert.equal(typeof release, 'function');
+  try {
+    assert.ok(fs.statSync(lock).mtimeMs > staleTime.getTime());
+  } finally {
+    release();
+  }
+  assert.equal(fs.existsSync(lock), false);
+});
+
+test('acquireLock reclaims a fresh lock left by a dead PID', t => {
+  const base = fixture(t);
+  const lock = path.join(base, 'reopen-lost-sessions.lock');
+  const child = spawnSync(process.execPath, ['-e', '']);
+  assert.equal(child.status, 0);
+  fs.writeFileSync(lock, String(child.pid));
+
+  const release = acquireLock(lock);
+  assert.equal(typeof release, 'function');
+  try { assert.equal(fs.readFileSync(lock, 'utf8'), String(process.pid)); }
+  finally { release(); }
+  assert.equal(fs.existsSync(lock), false);
+});
+
+test('watch CLI logs locked and exits 1 when the lock cannot be reclaimed', t => {
+  const base = fixture(t);
+  fs.mkdirSync(path.join(base, 'reopen-lost-sessions.lock'));
+
+  const run = runReopenCli(base, '--watch');
+  assert.equal(run.status, 1, run.stderr || run.stdout);
+  const entry = JSON.parse(fs.readFileSync(path.join(base, 'reopen-lost-sessions.log'), 'utf8'));
+  assert.equal(entry.error, 'locked');
+});
+
+test('CLI logs an uncaught error and exits 1, with no log writes in dry run', t => {
+  const base = fixture(t);
+  const log = path.join(base, 'reopen-lost-sessions.log');
+  const dry = runReopenCli(base, '--dry-run', '--unknown-option');
+  assert.equal(dry.status, 1, dry.stderr || dry.stdout);
+  assert.equal(fs.existsSync(log), false);
+
+  const run = runReopenCli(base, '--unknown-option');
+  assert.equal(run.status, 1, run.stderr || run.stdout);
+  const entry = JSON.parse(fs.readFileSync(log, 'utf8'));
+  assert.equal(new Date(entry.at).toISOString(), entry.at);
+  assert.equal(entry.stage, 'uncaught');
+  assert.equal(entry.error, 'Invalid option: --unknown-option');
 });
 
 test('API failure is explicit and partial candidates survive API-only deadline', async t => {
@@ -1429,28 +1520,50 @@ test('parseOptions: 既定 max は 3 である', () => {
   assert.equal(opts.max, 3);
 });
 
-test('loadGuard: claude プロセス数 >= 閾値(10)でも 1 件は reopen する（RC切断放置防止）', async t => {
+function claudeEnv(extra = {}) {
+  const env = { ...process.env, ...extra };
+  if (!Object.hasOwn(extra, 'REOPEN_MAX_CLAUDE')) delete env.REOPEN_MAX_CLAUDE;
+  if (!Object.hasOwn(extra, 'REOPEN_ALLOW_FIRST')) delete env.REOPEN_ALLOW_FIRST;
+  return env;
+}
+function tasklistSpawn(count) {
+  return (cmd, args) => {
+    if (cmd === 'tasklist') {
+      return { status: 0, stdout: Array(count).fill('"claude.exe","1234","Console","1","100,000 K"').join('\n') };
+    }
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+}
+
+test('loadGuard: 既定上限は 5。5 以上は 0 件、4 件は開く。REOPEN_ALLOW_FIRST=1 のときだけ 1 件開く', async t => {
+  assert.equal(DEFAULT_REOPEN_MAX_CLAUDE, 5);
   const base = fixture(t);
   const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
   const fetchImpl = async url => {
     if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
     return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
   };
-  const spawn = (cmd, args) => {
-    if (cmd === 'tasklist') {
-      const csv = Array(10).fill('"claude.exe","1234","Console","1","100,000 K"').join('\n');
-      return { status: 0, stdout: csv };
-    }
-    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
-    return { status: 0, stdout: '' };
-  };
-  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
-  // claudeCount 高でも 1 件は reopen（CPU 負荷ではないため）
-  assert.equal(result.reopened.length, 1);
-  assert.equal(result.skipped.loadGuard, 0);
-  assert.equal(result.loadGuard.claudeCount, 10);
-  assert.equal(result.loadGuard.reason, 'claudeCount');
-  assert.equal(result.loadGuard.allowFirst, true);
+  const run = (count, extra) => reopenLost({
+    base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl,
+    spawn: tasklistSpawn(count), checkCpu: false, checkClaude: true, env: claudeEnv(extra),
+    now: () => nowTime, windowReady: async () => true, wait: async () => {},
+  });
+  const blocked = await run(5);
+  assert.equal(blocked.reopened.length, 0);
+  assert.equal(blocked.skipped.loadGuard, 1);
+  assert.equal(blocked.loadGuard.claudeCount, 5);
+  assert.equal(blocked.loadGuard.reason, 'claudeCount');
+  assert.equal(blocked.loadGuard.allowFirst, undefined);
+  for (const flag of ['0', 'true', 'yes']) {
+    const off = await run(5, { REOPEN_ALLOW_FIRST: flag });
+    assert.equal(off.reopened.length, 0, flag);
+    assert.equal(off.loadGuard.allowFirst, undefined, flag);
+  }
+  const under = await run(4);
+  assert.equal(under.reopened.length, 1);
+  assert.equal(under.skipped.loadGuard, 0);
+  assert.equal(under.loadGuard?.allowFirst, undefined);
 });
 
 test('loadGuard: CPU >= 閾値(85%)で 0 件 reopen かつ skipped.loadGuard に計上', async t => {
@@ -1503,7 +1616,7 @@ test('loadGuard: tasklist 失敗時は fail-open でスキップせず reopen �
   assert.equal(result.reopened.length, 1);
 });
 
-test('loadGuard: claudeCount 高でも 3 件中 1 件のみ reopen、残り 2 件は skipped.loadGuard に計上', async t => {
+test('loadGuard: claudeCount が既定上限以上なら 3 件とも reopen せず skipped.loadGuard に計上', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-loadguard-3cand-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const base = path.join(root, '.claude');
@@ -1531,18 +1644,22 @@ test('loadGuard: claudeCount 高でも 3 件中 1 件のみ reopen、残り 2 �
   };
   const spawn = (cmd, args) => {
     if (cmd === 'tasklist') {
-      const csv = Array(10).fill('"claude.exe","1234","Console","1","100,000 K"').join('\n');
+      const csv = Array(5).fill('"claude.exe","1234","Console","1","100,000 K"').join('\n');
       return { status: 0, stdout: csv };
     }
     if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
     return { status: 0, stdout: '' };
   };
-  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
-  // claudeCount 高でも 1 件は reopen、残り 2 件は skipped
-  assert.equal(result.reopened.length, 1, '1 candidate should be reopened');
-  assert.equal(result.skipped.loadGuard, 2, '2 candidates should be skipped by loadGuard');
-  assert.equal(result.loadGuard.allowFirst, true);
-  assert.equal(result.loadGuard.claudeCount, 10);
+  const env = claudeEnv();
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, env, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  assert.equal(result.reopened.length, 0, 'no candidate should be reopened at the default cap');
+  assert.equal(result.skipped.loadGuard, 3, 'all candidates should be skipped by loadGuard');
+  assert.equal(result.loadGuard.allowFirst, undefined);
+  assert.equal(result.loadGuard.claudeCount, 5);
+  const allowed = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, env: claudeEnv({ REOPEN_ALLOW_FIRST: '1' }), now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  assert.equal(allowed.reopened.length, 1);
+  assert.equal(allowed.skipped.loadGuard, 2);
+  assert.equal(allowed.loadGuard.allowFirst, true);
 });
 
 test('countWindowsClaudeProcesses: orphan claude processes (parent PID not alive) are excluded', async t => {
@@ -1564,7 +1681,7 @@ test('countWindowsClaudeProcesses: orphan claude processes (parent PID not alive
   assert.equal(count, 3, 'orphan process should be excluded');
 });
 
-test('loadGuard: credential diagnostics show missing file/field details', async t => {
+test('loadGuard: missing credential file is graceful; malformed credential/config diagnostics remain', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-cred-diag-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const base = path.join(root, '.claude');
@@ -1573,8 +1690,8 @@ test('loadGuard: credential diagnostics show missing file/field details', async 
   // Case A: Missing .credentials.json
   let result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe',
     fetchImpl: async () => assert.fail(), spawn: () => { throw Error('should not spawn'); } });
-  assert.ok(result.error, 'should have error');
-  assert.match(result.error, /credentials file not found/, `missing cred file: ${result.error}`);
+  assert.equal(result.error, undefined, 'missing credential file should not be an error');
+  assert.equal(result.rcAvailable, false, 'missing credential file should mark RC unavailable');
 
   // Case B: Missing .claude.json
   fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
@@ -1634,7 +1751,7 @@ test('loadGuard: CPU 高 (>=85%) は claudeCount が低くても全件 defer す
   assert.equal(result.loadGuard.allowFirst, undefined, 'allowFirst should not be set for CPU defer');
 });
 
-test('loadGuard: PowerShell 出力から Claude デスクトップアプリ (11本) を除外し CLI (8本) だけを数え、上限(10)未満のためブロックしない', async t => {
+test('loadGuard: PowerShell 出力から Claude デスクトップアプリ (11本) を除外し CLI (8本) だけを数え、明示上限 10 未満ならブロックしない', async t => {
   const base = fixture(t);
   const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
   const fetchImpl = async url => {
@@ -1671,10 +1788,11 @@ test('loadGuard: PowerShell 出力から Claude デスクトップアプリ (11�
     if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
     return { status: 0, stdout: '' };
   };
-  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  const env = claudeEnv({ REOPEN_MAX_CLAUDE: '10' });
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, env, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
   assert.equal(result.skipped.loadGuard, 0);
   assert.equal(result.reopened.length, 1);
-  const guard = await getLoadGuardStatus({ spawn, checkCpu: false });
+  const guard = await getLoadGuardStatus({ spawn, checkCpu: false, env });
   assert.equal(guard.claudeCount, 8);
   assert.equal(guard.triggered, false);
   assert.equal(guard.reason, null);
@@ -2228,8 +2346,253 @@ test('title containing 【閉じて可】 skips candidate and sets skipped.closa
   assert.equal(resultWatch.skipped.closable, 1);
 });
 
-test('measureUserIdleSec: Win32 実機で数値を返す（Add-Type 完全性の回帰防止）', { skip: process.platform !== 'win32' }, () => {
+// CI（GitHub Actions の windows runner）は対話セッションを持たず GetLastInputInfo が
+// 値を返せないため null になる。このテストは Win32 実機での Add-Type 回帰防止が目的なので CI では skip。
+test('measureUserIdleSec: Win32 実機で数値を返す（Add-Type 完全性の回帰防止）', { skip: process.platform !== 'win32' || !!process.env.CI }, () => {
   const sec = measureUserIdleSec();
   assert.ok(Number.isInteger(sec), `measureUserIdleSec() returned non-integer: ${sec}`);
   assert.ok(sec >= 0, `measureUserIdleSec() returned negative: ${sec}`);
 });
+
+// ── fetchWithRetry ──────────────────────────────────────
+
+test('fetchWithRetry: 200 は1回目で返る', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    fetchImpl: async () => { calls++; return { ok: true }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.ok(res.ok);
+  assert.equal(calls, 1);
+});
+
+test('fetchWithRetry: 4xx（非 429）は即座に返りリトライしない', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 3, {
+    fetchImpl: async () => { calls++; return { ok: false, status: 403 }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.equal(res.status, 403);
+  assert.equal(calls, 1);
+});
+
+test('fetchWithRetry: 429 はリトライする', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    fetchImpl: async () => { calls++; return calls < 3 ? { ok: false, status: 429 } : { ok: true }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.ok(res.ok);
+  assert.equal(calls, 3);
+});
+
+test('fetchWithRetry: 5xx はリトライする', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    fetchImpl: async () => { calls++; return calls < 3 ? { ok: false, status: 503 } : { ok: true }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.ok(res.ok);
+  assert.equal(calls, 3);
+});
+
+test('fetchWithRetry: リトライ上限に達すると最後の response を返す（例外を投げない）', async () => {
+  let calls = 0;
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    fetchImpl: async () => { calls++; return { ok: false, status: 503 }; },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  });
+  assert.equal(res.status, 503);
+  assert.equal(calls, 3);
+});
+
+test('fetchWithRetry: ネットワーク例外はリトライし最後に throw', async () => {
+  await assert.rejects(fetchWithRetry('https://test', {}, 1, {
+    fetchImpl: async () => { throw new Error('ECONNREFUSED'); },
+    nowFn: () => 0, deadline: Infinity, timeoutMs: 1000,
+  }));
+});
+
+test('fetchWithRetry: 再試行ごとに新しい signal を使う（古い signal の abort が残りの試行を妨げない）', async () => {
+  let calls = 0;
+  let signals = [];
+  const res = await fetchWithRetry('https://test', {}, 2, {
+    timeoutMs: 50000,
+    fetchImpl: async (url, opts) => {
+      calls++;
+      signals.push(opts.signal);
+      if (calls === 1) { opts.signal.addEventListener('abort', () => {}); return { ok: false, status: 429 }; }
+      return { ok: true };
+    },
+    nowFn: () => 0, deadline: Infinity,
+  });
+  assert.ok(res.ok);
+  assert.equal(calls, 2);
+  assert.notEqual(signals[0], signals[1], 'each retry should get a new signal');
+});
+
+test('fetchWithRetry: deadline 超過で throw', async () => {
+  let clock = 0;
+  await assert.rejects(fetchWithRetry('https://test', {}, 1, {
+    fetchImpl: async () => { clock = 100; return { ok: false, status: 429 }; },
+    nowFn: () => clock, deadline: 50, timeoutMs: 50000,
+  }));
+});
+
+// ── recordApiResult ────────────────────────────────────
+
+test('recordApiResult: 連続 7 回失敗でも exit 1 にならない', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-api-7-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  for (let i = 0; i < 7; i++) {
+    assert.equal(recordApiResult(base, 'some error', new Date().toISOString()), false);
+  }
+  const state = readFailState(base);
+  assert.equal(state.consecutiveFails, 7);
+});
+
+test('recordApiResult: 連続 8 回失敗で exit 1 が必要', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-api-8-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  for (let i = 0; i < 7; i++) {
+    recordApiResult(base, 'error');
+  }
+  assert.equal(recordApiResult(base, 'error'), true);
+});
+
+test('recordApiResult: 成功でカウンターを 0 に戻す', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-api-reset-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  for (let i = 0; i < 5; i++) recordApiResult(base, 'error');
+  assert.equal(readFailState(base).consecutiveFails, 5);
+  recordApiResult(base, null);
+  assert.equal(readFailState(base).consecutiveFails, 0);
+});
+
+test('CLI entry point: apiError 単発では process.exitCode を立てず、連続 8 回で立てる', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-exit-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  // Simulate CLI entry point logic for watch mode (lines 1308-1312 equivalent)
+  // apiError alone without error/failed/unverified should not set exitCode
+  // because recordApiResult returns false for a single transient failure
+  let exitCode = 0;
+  const check = (result) => {
+    if (result.error || result.failed?.length || result.unverified?.length) exitCode = 1;
+    if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) exitCode = 1;
+    if (recordApiResult(base, result.apiError)) exitCode = 1;
+  };
+  check({ apiError: 'API time limit', error: undefined, candidates: [], reopened: [], skipped: {} });
+  assert.equal(exitCode, 0, 'single apiError should not set exitCode');
+  // 連続 8 回で exitCode が立つ
+  for (let i = 0; i < 7; i++) recordApiResult(base, 'error');
+  exitCode = 0;
+  check({ apiError: 'error', error: undefined, candidates: [], reopened: [], skipped: {} });
+  assert.equal(exitCode, 1, '8th consecutive failure should set exitCode');
+});
+
+test('recordApiResult: 初回はカウンターが 1 になる', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-api-first-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  assert.equal(recordApiResult(base, 'error'), false);
+  assert.equal(readFailState(base).consecutiveFails, 1);
+});
+
+for (const scenario of ['verified', 'recovered by RC', 'still unverified', 'dispatch failure', 'closed meanwhile', 'alive meanwhile']) {
+  test(`拡張再試行: ${scenario}`, async t => {
+    const base = fixture(t), opts = guardOptions(base);
+    const { spawn, fetchImpl } = opts;
+    let waits = 0, attempts = 0, verificationAgentChecks = 0;
+    opts.wait = async ms => { if (ms === 90000) waits++; };
+    opts.spawn = (cmd, args) => {
+      if (waits && args[0] === 'agents') {
+        verificationAgentChecks++;
+        if (scenario === 'alive meanwhile' && verificationAgentChecks >= 2) {
+          return { status: 0, stdout: JSON.stringify([{ kind: 'interactive', sessionId: 'one' }]) };
+        }
+      }
+      if (args.at(-1).includes('vscode://orgiast.next-session/reopen?session=one')) {
+        attempts++;
+        if (scenario === 'dispatch failure') return { status: 1, stdout: '', stderr: 'mock failure' };
+      }
+      return spawn(cmd, args);
+    };
+    opts.fetchImpl = async url => {
+      if (!waits) return fetchImpl(url);
+      if (scenario === 'closed meanwhile') {
+        fs.writeFileSync(path.join(base, 'closed-sessions.json'), JSON.stringify({ ids: ['one'] }));
+      }
+      const connected = scenario === 'verified' || (scenario === 'recovered by RC' && waits === 2);
+      return { ok: true, json: async () => ({ data: [{ id: 'cse_one', connection_status: connected ? 'connected' : 'disconnected' }] }) };
+    };
+    const result = await reopenLost(opts);
+    const retried = ['recovered by RC', 'still unverified'].includes(scenario);
+    const verified = ['verified', 'recovered by RC'].includes(scenario);
+    assert.equal(result.reopened.length, 1);
+    assert.equal(attempts, Number(retried || scenario === 'dispatch failure'));
+    assert.equal(waits, retried ? 2 : 1);
+    assert.deepEqual(result.retriedViaExtension, retried ? ['one'] : []);
+    assert.deepEqual(result.verified, verified ? ['one'] : []);
+    assert.deepEqual(result.unverified, verified ? [] : ['one']);
+    if (scenario === 'dispatch failure') assert.equal(result.extensionRetryFailed[0].id, 'one');
+    if (scenario === 'closed meanwhile') assert.equal(result.skipped.closed, 1);
+    if (scenario === 'alive meanwhile') assert.equal(result.skipped.alive, 1);
+  });
+}
+for (const count of [25, 19, 0]) {
+  test(`Windows reconnection uses one shared process snapshot with ${count} open sessions`, async t => {
+    const base = fixture(t);
+    fs.writeFileSync(path.join(base, 'projects', 'proj', 'two.jsonl'), [
+      { type: 'bridge-session', bridgeSessionId: 'cse_two' },
+      { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+    ].map(JSON.stringify).join('\n'));
+
+    const opts = guardOptions(base, {
+      concurrencyPlatform: 'win32', checkClaude: true,
+      env: { APPDATA: path.join(base, 'no-appdata'), REOPEN_MAX_CLAUDE: '30' },
+      fetchImpl: async url => ({
+        ok: true,
+        json: async () => url.includes('/events?') ? { data: [exit] } : {
+          data: ['cse_one', 'cse_two'].map(id => ({ id })),
+        },
+      }),
+    });
+    let snapshots = 0;
+    let uriCalls = 0;
+    const spawn = opts.spawn;
+    opts.spawn = (cmd, args) => {
+      if (args.at(-1) === CLAUDE_PROCESS_SCRIPT) {
+        snapshots++;
+        return { status: 0, stdout: JSON.stringify(Array.from({ length: count }, (_, index) => ({
+          Name: 'claude.exe', ProcessId: index + 100, CommandLine: 'claude.exe --resume=other',
+        }))) };
+      }
+      if (args.at(-1).includes('--open-url')) uriCalls++;
+      return spawn(cmd, args);
+    };
+
+    const result = await reopenLost(opts);
+    const expectedOpens = Math.min(2, Math.max(0, 20 - count));
+    // 拡張再試行の前再確認（isSessionProcessRunning）は共有スナップショットを使わず現時点を取り直す:
+    // この fixture は opened 全員 unverified → 全員拡張再試行 → スナップショットは 1 + retried 回
+    assert.equal(snapshots, 1 + expectedOpens);
+    assert.equal(uriCalls, expectedOpens * 2); // 初回オープン + 全員拡張再試行
+    assert.equal(result.candidates.length, 2);
+    assert.equal(result.reopened.length, expectedOpens);
+    if (expectedOpens < 2) {
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(base, 'reopen-lost-sessions.log'), 'utf8')).sessionConcurrencyCap,
+        { ok: false, reason: 'session_concurrency_cap', count: count + expectedOpens, limit: 20 });
+    } else {
+      assert.equal(result.sessionConcurrencyCap, undefined);
+    }
+  });
+}

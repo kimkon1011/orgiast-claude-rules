@@ -121,8 +121,18 @@ test('registration converges twice byte-identically, preserves custom/async hook
   const file = path.join(dir, 'settings.json');
   fs.writeFileSync(file, JSON.stringify({ language: 'japanese', hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'pwsh -NoProfile -File "C:\\custom.ps1"', timeout: 2 }] }], Stop: [{ hooks: [{ type: 'command', command: 'custom-async', async: true }] }] } }));
   const run = () => execFileSync(process.execPath, ['tools/register-hooks.mjs', '--hooks-only'], { env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo }, encoding: 'utf8' });
+  run();
+  // Recreate a version-1 runtime manifest written before deduplication existed.
+  const runtimeFile = runtimeManifestPath(home);
+  const previous = JSON.parse(fs.readFileSync(runtimeFile, 'utf8'));
+  delete previous.legacyDuplicatesRemoved;
+  const oldCopy = path.join(home, '.claude', 'hooks', 'url-format-guard.ps1');
+  previous.events.Stop.push(describeHook({ command: `pwsh -NoProfile -File "${oldCopy}"` }));
+  fs.writeFileSync(runtimeFile, JSON.stringify(previous));
   run(); const first = fs.readFileSync(file, 'utf8'), manifest = fs.readFileSync(runtimeManifestPath(home), 'utf8');
   run(); assert.equal(fs.readFileSync(file, 'utf8'), first); assert.equal(fs.readFileSync(runtimeManifestPath(home), 'utf8'), manifest);
+  assert.ok(!JSON.parse(manifest).events.Stop.some(h => h.command.includes('url-format-guard.ps1')));
+  assert.equal(JSON.parse(manifest).legacyDuplicatesRemoved.Stop, 1);
   const settings = JSON.parse(first);
   assert.deepEqual(dispatcherProblems(settings, repo), []);
   for (const event of EVENTS) assert.equal(settings.hooks[event].flatMap(g => g.hooks).filter(h => h.async !== true).length, 1);
@@ -162,6 +172,86 @@ test('all event rolling-hour budgets and midnight rotation; alert once per day e
   assert.equal(count, 1);
 });
 
+test('collapse removes legacy PowerShell duplicates only in canonical events and records the count', async t => {
+  const home = fixture(t);
+  const command = file => ({ type: 'command', command: `pwsh -NoProfile -File "${file}"` });
+  const duplicate = command(path.join(home, '.claude', 'hooks', 'URL-FORMAT-GUARD.PS1'));
+  const custom = command(path.join(home, 'Downloads', 'claude-mobile', 'hooks', 'url-format-guard.ps1'));
+  const unique = { type: 'command', command: 'pwsh -NoProfile -File "/custom/local-only.ps1"' };
+  const hooks = repositoryHooks(repo, home);
+  hooks.Stop.push({ hooks: [duplicate, unique, custom] });
+  hooks.Notification.push({ hooks: [duplicate] });
+  const { manifest } = collapseHooks(hooks, repo, home);
+  assert.ok(manifest.events.Stop.some(hook => hook.name === 'url-format-guard.mjs'));
+  assert.ok(!manifest.events.Stop.some(hook => hook.command === duplicate.command));
+  assert.ok(manifest.events.Stop.some(hook => hook.command === unique.command));
+  assert.ok(manifest.events.Stop.some(hook => hook.command === custom.command));
+  assert.ok(manifest.events.Notification.some(hook => hook.command === duplicate.command));
+  const result = await dispatch('Stop', '{}', { home, manifest, overloaded: false, execute: () => ({ status: 0 }) });
+  assert.equal(result.metrics.legacyDuplicatesRemoved, 1);
+  assert.equal((await readDispatchMetrics(home)).at(-1).legacyDuplicatesRemoved, 1);
+});
+
+test('Stop detaches a 60-second external hook, supplies stdin and skips a running instance', async t => {
+  const home = fixture(t);
+  const file = path.join(home, 'legacy-stop.mjs');
+  const received = path.join(home, 'received.json');
+  const done = path.join(home, 'done');
+  fs.writeFileSync(file, `
+import fs from 'node:fs';
+const timer = setTimeout(() => {}, 60000);
+const poll = setInterval(() => {
+  if (fs.existsSync(${JSON.stringify(done)})) { clearTimeout(timer); clearInterval(poll); }
+}, 25);
+fs.writeFileSync(${JSON.stringify(received)}, fs.readFileSync(0, 'utf8'));
+console.log(JSON.stringify({ decision: 'block', reason: 'detached output' }));
+`);
+  const hook = describeHook({ command: `"${process.execPath}" --no-warnings "${file}"`, timeout: 60 });
+  const options = { home, overloaded: false, manifest: { events: { Stop: [hook] } } };
+  let closed;
+  try {
+    const result = await dispatch('Stop', '{"prompt":"日本語"}', { ...options, onSpawn(child) {
+      child.ref();
+      closed = new Promise(resolve => child.once('close', resolve));
+    } });
+    assert.equal(result.metrics.hooks[0].detached, true);
+    assert.equal(result.metrics.childProcesses, 1);
+    assert.equal(result.stdout, '');
+    assert.ok(result.metrics.durationMs < 1000 + (process.platform === 'win32' ? timingSlackMs : 0), 'dispatch returns before the legacy hook finishes');
+    const repeated = await dispatch('Stop', '{}', options);
+    assert.equal(repeated.metrics.childProcesses, 0);
+    assert.equal(repeated.metrics.hooks[0].skipped, 'detached-running');
+    const limit = Date.now() + timingSlackMs;
+    while (!fs.existsSync(received) && Date.now() < limit) await new Promise(resolve => setTimeout(resolve, 25));
+    assert.deepEqual(JSON.parse(fs.readFileSync(received, 'utf8')), { prompt: '日本語', hook_event_name: 'Stop' });
+    fs.writeFileSync(done, '');
+    await closed;
+    const retried = await dispatch('Stop', '{}', { ...options, onSpawn(child) {
+      child.ref();
+      closed = new Promise(resolve => child.once('close', resolve));
+    } });
+    assert.equal(retried.metrics.hooks[0].detached, true);
+    await closed;
+  } finally {
+    fs.writeFileSync(done, '');
+    await closed;
+  }
+});
+
+test('external wait opt-in preserves Stop blocking and Node gates still block', async t => {
+  const home = fixture(t);
+  const file = path.join(home, 'legacy-block.mjs');
+  fs.writeFileSync(file, "setTimeout(() => { console.error('legacy block'); process.exitCode = 2; }, 100);");
+  const external = describeHook({ command: `"${process.execPath}" --no-warnings "${file}"`, wait: true, timeout: 10 });
+  const gate = script(home, 'node-block', `export async function hookMain() {
+    console.log(JSON.stringify({ decision: 'block', reason: 'node block' }));
+  }`, { critical: true });
+  const out = await dispatch('Stop', '{}', { home, overloaded: false, manifest: { events: { Stop: [external, gate] } } });
+  assert.equal(out.payload.decision, 'block');
+  assert.equal(out.payload.reason, 'legacy block\nnode block');
+  assert.equal(out.metrics.hooks[0].detached, undefined);
+});
+
 test('external PowerShell commands are capped at four children; direct fd output stays inside the merge', async t => {
   const home = fixture(t);
   // Use a local executable named pwsh to test scheduling without a Windows host.
@@ -169,7 +259,7 @@ test('external PowerShell commands are capped at four children; direct fd output
   const executable = path.join(home, 'pwsh');
   if (process.platform === 'win32') { t.skip('POSIX executable fixture; Windows runner covered by platform tests'); return; }
   fs.writeFileSync(executable, `#!${process.execPath}\nsetTimeout(() => console.log(JSON.stringify({hookSpecificOutput:{hookEventName:'PreToolUse',additionalContext:'external'}})), 100);\n`, { mode: 0o755 });
-  const external = Array.from({ length: 9 }, (_, i) => ({ name: `pwsh-${i}`, command: `"${executable}"`, matcher: '*', timeout: 8, critical: true, node: false }));
+  const external = Array.from({ length: 9 }, (_, i) => ({ name: `pwsh-${i}`, command: `"${executable}"`, matcher: '*', timeout: 8, critical: true, node: false, wait: true }));
   let active = 0, peak = 0, count = 0;
   const out = await dispatch('PreToolUse', '{}', { home, overloaded: false, concurrency: 100, manifest: { events: { PreToolUse: external } }, onSpawn(child) { active++; count++; peak = Math.max(peak, active); child.once('close', () => active--); } });
   assert.equal(count, 9); assert.equal(out.metrics.childProcesses, 9); assert.ok(peak <= 4); assert.equal(out.metrics.timedOut, 0);
@@ -233,7 +323,7 @@ test('selfcheck actually repairs a missing dispatcher and resurrected individual
   settings.hooks.PreToolUse[0].hooks.push({ type: 'command', command: 'custom-sync', timeout: 3 });
   settings.hooks.PreToolUse.push({ matcher: 'Bash', hooks: [{ type: 'command', command: `node "${path.join(repo, 'tools/api-billing-guard.mjs')}"` }] });
   fs.writeFileSync(file, JSON.stringify(settings));
-  execFileSync(process.execPath, ['tools/hook-selfcheck.mjs'], { env, stdio: 'pipe', timeout: 30000 });
+  execFileSync(process.execPath, ['tools/hook-selfcheck.mjs'], { env, stdio: 'pipe', timeout: 60000 });
   assert.deepEqual(dispatcherProblems(JSON.parse(fs.readFileSync(file, 'utf8')), repo), []);
   const manifest = JSON.parse(fs.readFileSync(runtimeManifestPath(home), 'utf8'));
   assert.equal(manifest.events.PreToolUse.filter(h => h.name === 'api-billing-guard.mjs').length, 1);

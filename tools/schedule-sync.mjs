@@ -15,6 +15,7 @@ import { getDriveToken, defaultDriveKeyPath } from './lib/drive-auth.mjs';
 import { isScheduleCandidate } from './lib/schedule-candidate.mjs';
 import { FALLBACK_CHAIN } from './llm-fallback.mjs';
 import { isEntry } from './is-entry.mjs';
+import { AI_CALENDAR, calendarEndMs, GAKKAI_CALENDAR, isAcademicEvent, isAcademicGroup, isRecruitingInterview, routeCalendar, sanitizeAttendees, withCaseLabel } from './lib/calendar-shared.mjs';
 export { isScheduleCandidate } from './lib/schedule-candidate.mjs';
 
 export const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
@@ -76,8 +77,8 @@ function acquireLock(dir) {
   return () => fs.unlinkSync(file);
 }
 
-export async function calendarToken({ signal, getToken = getDriveToken, keyPath = process.env.GOOGLE_SA_KEY || defaultDriveKeyPath() } = {}) {
-  try { return await getToken({ scope: CALENDAR_SCOPE, impersonate: USER, keyPath, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000) }); }
+export async function calendarToken({ signal, impersonate = USER, getToken = getDriveToken, keyPath = process.env.GOOGLE_SA_KEY || defaultDriveKeyPath() } = {}) {
+  try { return await getToken({ scope: CALENDAR_SCOPE, impersonate, keyPath, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000) }); }
   catch (error) {
     let clientId = '(SA key client_id unavailable)';
     try { clientId = readJson(keyPath, {}).client_id || clientId; } catch {}
@@ -85,9 +86,10 @@ export async function calendarToken({ signal, getToken = getDriveToken, keyPath 
   }
 }
 
-export function createCalendarClient(token, fetchImpl = globalThis.fetch, signal) {
+export function createCalendarClient(token, fetchImpl = globalThis.fetch, signal, calendarId = 'primary') {
+  const baseApi = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
   async function request(suffix, init = {}) {
-    const response = await fetchImpl(API + suffix, {
+    const response = await fetchImpl(baseApi + suffix, {
       ...init, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     });
@@ -95,11 +97,11 @@ export function createCalendarClient(token, fetchImpl = globalThis.fetch, signal
     return response.json();
   }
   return {
-    async list(start) {
+    async list(start, { end, timeMin } = {}) {
       const items = [];
       let pageToken;
       do {
-        const params = new URLSearchParams({ timeMin: iso(Date.parse(start) - 3 * HOUR), timeMax: iso(Date.parse(start) + 3 * HOUR), singleEvents: 'true', maxResults: '2500' });
+        const params = new URLSearchParams({ timeMin: timeMin || iso(Date.parse(start) - 3 * HOUR), timeMax: end || iso(Date.parse(start) + 3 * HOUR), singleEvents: 'true', maxResults: '2500' });
         if (pageToken) params.set('pageToken', pageToken);
         const page = await request(`?${params}`);
         items.push(...(page.items || []));
@@ -112,8 +114,19 @@ export function createCalendarClient(token, fetchImpl = globalThis.fetch, signal
       catch (error) { if (error.status === 404) return null; throw error; }
     },
     async create(body) {
-      try { return await request('', { method: 'POST', body: JSON.stringify(body) }); }
+      const safeBody = Object.hasOwn(body, 'attendees') ? { ...body, attendees: sanitizeAttendees(body.attendees) } : body;
+      if (isRecruitingInterview(body)) {
+        if (calendarId !== GAKKAI_CALENDAR) throw new Error('面談設定は制作チームのカレンダーに登録してください');
+        if (safeBody.attendees) safeBody.attendees = safeBody.attendees.filter(a => a.email.toLowerCase() !== USER);
+      }
+      try { return await request('?sendUpdates=none', { method: 'POST', body: JSON.stringify(safeBody) }); }
       catch (error) { if (error.status !== 409) throw error; return request(`/${body.id}`); }
+    },
+    // Only calendar fields may change; callers cannot add guests or notifications.
+    async reschedule(id, body) {
+      const allowed = ['summary', 'start', 'end', 'transparency', 'extendedProperties'];
+      const patch = Object.fromEntries(Object.entries(body).filter(([key]) => allowed.includes(key)));
+      return request(`/${encodeURIComponent(id)}?sendUpdates=none`, { method: 'PATCH', body: JSON.stringify(patch) });
     },
   };
 }
@@ -351,13 +364,19 @@ export function isDuplicate(candidate, event) {
   const [start, end] = bounds(candidate);
   return start < time(event.end) && end > time(event.start) && titleSimilar(candidate.title, event.summary);
 }
+export function targetCalendarForGroup(group, event = {}, source) {
+  return isAcademicGroup(group) ? GAKKAI_CALENDAR : routeCalendar(event, { origin: 'sync', group, source });
+}
 export function eventBody(candidate, message, index) {
   const [start, end] = bounds(candidate);
   const group = clean(message.chat).replace(/\s+PJ$/i, '').slice(0, 80);
-  const body = {
-    id: hash(`${messageKey(message)}:${index}`),
+  const labeled = withCaseLabel({
     summary: `【自動】${group ? `【${group}】` : ''}${clean(candidate.title)}`,
     description: `出典: ${sourceLabel(message)}\n送信者: ${message.sender}\n送信日時: ${message.ts}\n該当箇所: ${candidate.quote}`,
+  }, group, 'schedule-sync');
+  const body = {
+    id: hash(`${messageKey(message)}:${index}`),
+    ...labeled,
     start: candidate.allDay ? { date: candidate.start.slice(0, 10) } : { dateTime: candidate.start, timeZone: 'Asia/Tokyo' },
     end: candidate.allDay ? { date: new Date(end + 9 * HOUR).toISOString().slice(0, 10) } : { dateTime: iso(end), timeZone: 'Asia/Tokyo' },
     reminders: { useDefault: true },
@@ -366,11 +385,12 @@ export function eventBody(candidate, message, index) {
   if (candidate.location) body.location = candidate.location;
   return body;
 }
-const eventLink = event => event.htmlLink || `https://calendar.google.com/calendar/event?eid=${Buffer.from(`${event.id} ${USER}`).toString('base64url')}`;
+const eventLink = (event, calendarId) => event.htmlLink || `https://calendar.google.com/calendar/event?eid=${Buffer.from(`${event.id} ${calendarId}`).toString('base64url')}`;
 
 export function reportLine(row) {
   const date = row.start.slice(0, 16).replace('T', ' ');
-  return `${row.status === 'review' ? '確認候補' : '新規登録'}: ${date} ${clean(row.title).slice(0, 160)} | ${row.source} | ${row.htmlLink || '未登録（予定リンクなし）'}`;
+  const target = row.calendarId && row.calendarId !== 'kim@orgiast.jp' ? ` | 📅${row.calendarId}` : '';
+  return `${row.status === 'review' ? '確認候補' : '新規登録'}: ${date} ${clean(row.title).slice(0, 160)} | ${row.source}${target} | ${row.htmlLink || '未登録（予定リンクなし）'}`;
 }
 
 export async function runScheduleSync(options = {}, dependencies = {}) {
@@ -412,8 +432,14 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
       return [source, options.since ? Date.parse(options.since) : cursor ? Date.parse(cursor) : now - 48 * HOUR];
     }));
     let calendar = dependencies.calendar, calendarError = null;
+    let gakkaiCalendar = dependencies.gakkaiCalendar;
+    let aiCalendar = dependencies.aiCalendar;
     if (!calendar) {
-      try { calendar = createCalendarClient(await wait((dependencies.getCalendarToken || calendarToken)({ signal })), globalThis.fetch, signal); }
+      try {
+        const token = await wait((dependencies.getCalendarToken || calendarToken)({ signal }));
+        calendar = createCalendarClient(token, globalThis.fetch, signal);
+
+      }
       catch (error) { signal.throwIfAborted(); if (!dryRun) throw error; calendarError = error.message; log(calendarError); }
     }
     if (!dryRun && sources.some(source => !state.cursors[source])) {
@@ -542,24 +568,37 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
             if (!calendar) row.status = 'calendar-unverified';
             else {
               const body = eventBody(candidate, message, index);
-              // Lookup the deterministic ID first: recovers an insert whose response was lost.
-              const own = await wait(calendar.get(body.id));
+              row.calendarId = targetCalendarForGroup(message.chat, body, message.source);
+              if (row.calendarId === GAKKAI_CALENDAR && !gakkaiCalendar) {
+                const token = await wait((dependencies.getCalendarToken || calendarToken)({ signal, impersonate: GAKKAI_CALENDAR }));
+                gakkaiCalendar = createCalendarClient(token, globalThis.fetch, signal, GAKKAI_CALENDAR);
+              }
+              if (row.calendarId === AI_CALENDAR && !aiCalendar) {
+                const token = await wait((dependencies.getCalendarToken || calendarToken)({ signal }));
+                aiCalendar = createCalendarClient(token, globalThis.fetch, signal, AI_CALENDAR);
+              }
+              const targetCal = row.calendarId === GAKKAI_CALENDAR ? gakkaiCalendar : row.calendarId === AI_CALENDAR ? aiCalendar : calendar;
+              // Recover interrupted inserts and avoid duplicating pre-migration events on kim's calendar.
+              const own = await wait(targetCal.get(body.id));
+              const legacy = !own && targetCal !== calendar ? await wait(calendar.get(body.id)) : null;
               if (own) {
                 row.status = own.status === 'cancelled' ? 'duplicate' : 'created';
-                row.eventId = own.id; row.htmlLink = eventLink(own);
+                row.eventId = own.id; row.htmlLink = eventLink(own, row.calendarId);
+              } else if (legacy && legacy.status !== 'cancelled') {
+                row.status = 'duplicate'; row.eventId = legacy.id; row.htmlLink = eventLink(legacy, USER);
               } else {
-                const existing = await wait(calendar.list(candidate.start));
+                const existing = await wait(targetCal.list(candidate.start));
                 const duplicate = existing.find(event => isDuplicate(candidate, event));
-                if (duplicate) { row.status = 'duplicate'; row.eventId = duplicate.id; row.htmlLink = eventLink(duplicate); }
+                if (duplicate) { row.status = 'duplicate'; row.eventId = duplicate.id; row.htmlLink = eventLink(duplicate, row.calendarId); }
                 // Extraction / API reads can outlast a near-term appointment.
                 // Recheck at insertion time, not only against the run's cursor time.
                 else if (Date.parse(candidate.start) <= (dependencies.now?.() ?? options.now ?? Date.now())) row.status = 'ignored';
                 else if (dryRun) row.status = 'would-create';
                 else {
-                  const event = await wait(calendar.create(body));
+                  const event = await wait(targetCal.create(body));
                   if (!event?.id) throw new Error('Calendar insert returned no event ID');
                   row.status = event.status === 'cancelled' ? 'duplicate' : 'created';
-                  row.eventId = event.id; row.htmlLink = eventLink(event);
+                  row.eventId = event.id; row.htmlLink = eventLink(event, row.calendarId);
                 }
               }
             }
@@ -633,7 +672,77 @@ export function parseArgs(args) {
   }
   return options;
 }
+/**
+ * 移行: kim@orgiast.jp のカレンダーにある学会予定（nxa/学会 を含む group）を
+ * seisaku-team@orgiast.jp のカレンダーへ移動する。
+ * 終了前の準備予定も含めて移動する。
+ */
+export async function migrateGakkai({
+  dryRun = false, getToken = calendarToken, fetchImpl = globalThis.fetch,
+  home = process.env.ORGIAST_HOME || os.homedir(), now = new Date(),
+} = {}) {
+  const candidates = [], moved = [], errors = [];
+  try {
+    const token = await getToken({ signal: AbortSignal.timeout(30000) });
+    const apiBase = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(USER)}/events`;
+    const headers = { Authorization: `Bearer ${token}` };
+    const params = new URLSearchParams({ timeMin: now.toISOString(), maxResults: '2500', showDeleted: 'false' });
+    let pageToken;
+    do {
+      if (pageToken) params.set('pageToken', pageToken);
+      const res = await fetchImpl(`${apiBase}?${params}`, { headers, signal: AbortSignal.timeout(30000) });
+      if (!res.ok) throw new Error(`Calendar list HTTP ${res.status}`);
+      const data = await res.json();
+      for (const event of data.items || []) {
+        if (isAcademicEvent(event.summary) && calendarEndMs(event) > now.getTime()) candidates.push(event);
+      }
+      pageToken = data.nextPageToken;
+    } while (pageToken);
+
+    if (!dryRun) {
+      for (const event of candidates) {
+        const { id, summary } = event;
+        try {
+          const query = new URLSearchParams({ destination: GAKKAI_CALENDAR, sendUpdates: 'none' });
+          const res = await fetchImpl(`${apiBase}/${encodeURIComponent(id)}/move?${query}`, {
+            method: 'POST',
+            headers: { ...headers, ...(event.etag ? { 'If-Match': event.etag } : {}) },
+            signal: AbortSignal.timeout(30000),
+          });
+          if (!res.ok) throw new Error(`Calendar move HTTP ${res.status}`);
+          moved.push({ id, summary });
+        } catch (error) {
+          errors.push({ id, summary, error: error.message });
+        }
+      }
+    }
+  } catch (error) {
+    errors.push({ error: error.message });
+  }
+  const result = {
+    ok: errors.length === 0, dryRun,
+    candidates: candidates.map(({ id, summary, start }) => ({ id, summary, start })),
+    movedCount: moved.length, moved, errors,
+  };
+  if (!dryRun) {
+    const logDir = path.join(home, '.claude', 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.writeFileSync(path.join(logDir, 'schedule-sync-gakkai-move.json'), JSON.stringify({ at: now.toISOString(), ...result }, null, 2));
+  }
+  return result;
+}
+
 export async function main(args = process.argv.slice(2), dependencies = {}) {
+  if (args.includes('--migrate')) {
+    if (args.some(arg => !['--migrate', '--dry-run'].includes(arg))) {
+      console.error('usage: schedule-sync.mjs --migrate [--dry-run]');
+      return 1;
+    }
+    const result = await migrateGakkai({ ...dependencies, dryRun: args.includes('--dry-run') });
+    console.log(JSON.stringify(result, null, 2));
+    return result.ok ? 0 : 1;
+  }
+
   try {
     const options = parseArgs(args);
     const result = await runScheduleSync(options, dependencies);

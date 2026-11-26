@@ -2,9 +2,23 @@
 import os from 'node:os';
 import { isEntry } from './is-entry.mjs';
 import { isKimOperated } from './lib/kim-operated.mjs';
-import { command, repositoryTarget } from './lib/seat-github.mjs';
+import { command, repositoryTarget, nonInteractiveGitEnv } from './lib/seat-github.mjs';
 import { firstGuardedPath } from './pr-merge-eligibility.mjs';
 import { mergePr } from './pr-merge.mjs';
+
+// GCM が2アカウント以上管理する環境で git push が対話プロンプトで停止しないよう、
+// push URL にユーザー名を埋めてアカウントを固定する。
+// commit-landed.mjs の git credential fill + GCM_INTERACTIVE=never と同様の対策。
+// (2026-11-25 実測: GCM デフォルトでは対話プロンプトが最大30秒超・失敗→次セッションへ回らない)
+// 2026-11-26: ハードコードではなく GCM の credential fill から動的に取得。機械ごとに登録アカウントが
+// 異なるため（例: cr568 の PC018 は seisaku-team-org の token を持たない）。取得不可時は seisaku-team-org。
+function getGcmPushUsername(run, fallback = 'seisaku-team-org') {
+  try {
+    const output = run('git', ['credential', 'fill'], { input: 'protocol=https\nhost=github.com\n\n', stdio: ['pipe', 'pipe', 'pipe'] });
+    const match = String(output || '').match(/^username=(.+)$/m);
+    return match ? match[1].trim() : fallback;
+  } catch { return fallback; }
+}
 
 export function landingRoute(files) {
   if (files.some(file => file.startsWith('.github/workflows/'))) return 'workflow-stop';
@@ -39,12 +53,17 @@ export function publishSeatPr({ cwd = process.cwd(), home = process.env.ORGIAST_
   run('git', ['check-ref-format', '--branch', base]);
   const head = run('git', ['rev-parse', 'HEAD']);
   if (!/^[a-f0-9]{40}$/i.test(head) || run('git', ['rev-parse', `refs/heads/${branch}`]) !== head) throw new Error('作業ブランチと HEAD が一致しません');
-  run('git', ['fetch', target.url, base]);
+  const gcmPushUser = getGcmPushUsername(run);
+  const gcmPushUrl = gcmPushUser ? target.url.replace(/^https:\/\//, `https://${gcmPushUser}@`) : target.url;
+  run('git', ['fetch', gcmPushUrl, base], { env: nonInteractiveGitEnv() });
   const files = run('git', ['diff', '--no-renames', '--name-only', '-z', `FETCH_HEAD...${head}`]).split('\0').filter(Boolean);
   const route = landingRoute(files);
   if (route === 'workflow-stop') throw new Error('.github/workflows/ を含むため停止。workflow 権限とレビューの専用経路で扱ってください');
   // origin が fork でも、確認した base に明示的に push。remote 設定には副作用を出さない。
-  run('git', ['push', target.url, `${head}:refs/heads/${branch}`]);
+  // GCM が2アカウント登録されている環境では対話プロンプトで停止するため、
+  // 非対話環境変数を設定（commit-landed.mjs 同様）し、push URL にユーザー名を埋めて
+  // GCM のアカウント選択を回避する（PR #2686 / PR #2695）。
+  run('git', ['push', gcmPushUrl, `${head}:refs/heads/${branch}`], { env: nonInteractiveGitEnv() });
   let existing = JSON.parse(run('gh', ['pr', 'list', '--repo', target.base, '--head', `${target.base.split('/')[0]}:${branch}`, '--base', base, '--state', 'open', '--json', 'number,url']));
   // gh/GitHub does not match owner:branch for a same-repository PR on every CLI/API version.
   // Fall back to the plain branch before trying to create a duplicate PR.
@@ -64,16 +83,21 @@ export function publishSeatPr({ cwd = process.cwd(), home = process.env.ORGIAST_
   const remote = JSON.parse(run('gh', ['pr', 'view', String(pr.number), '--repo', target.base, '--json', 'headRefOid,isDraft']));
   if (remote.headRefOid !== head || remote.isDraft) throw new Error('PR の HEAD 不一致または draft のため着地を停止');
   if (route === 'automerge') {
-    run('gh', ['pr', 'edit', String(pr.number), '--repo', target.base, '--add-label', 'automerge']);
+    run('gh', ['api', '-X', 'POST', `repos/${target.base}/issues/${pr.number}/labels`, '-f', 'labels[]=automerge']);
     const labels = JSON.parse(run('gh', ['pr', 'view', String(pr.number), '--repo', target.base, '--json', 'labels'])).labels;
     if (!labels?.some(label => label.name === 'automerge')) throw new Error('automerge ラベルの read-back 不一致');
   } else {
     // 既存PRのラベルも外し、CI全成功後に既存レビュー・SHA固定・read-backを通す。
-    run('gh', ['pr', 'edit', String(pr.number), '--repo', target.base, '--remove-label', 'automerge']);
+    try {
+      run('gh', ['api', '-X', 'DELETE', `repos/${target.base}/issues/${pr.number}/labels/automerge`]);
+    } catch (error) {
+      const message = String(error?.message ?? '');
+      if (!/404/i.test(message) || !/Label does not exist/i.test(message)) throw error;
+    }
     out(`PR #${pr.number}: CI 合格後、この席で gh pr merge --squash を実行（pr-merge の検証を使用）`);
     waitForCi(pr.number, target.base, { ...ci, run });
     mergePr({ pr: pr.number, repo: cwd, githubRepo: target.base, method: 'squash', keepBranch: true }, {
-      exec: (file, args) => run(file, args),
+      exec: run,
     });
   }
   return { ...pr, route, repo: target.base };

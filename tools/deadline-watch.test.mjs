@@ -3,14 +3,121 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { evaluate, effectiveDue, formatDigest, syncCalendar, hasSentReply, manualOperation, runWatch, main, parseArgs, vehicleRows } from './deadline-watch.mjs';
 import { DEFAULT_CONFIG } from './deadline-ledger.mjs';
+import { AI_CALENDAR } from './lib/calendar-shared.mjs';
+import { readableEvent, isKimTask } from './lib/deadline-calendar.mjs';
 const config = { ...DEFAULT_CONFIG, sheetId: 'test', vehicleSheetId: '', calendar: { enabled: false } };
-const base = { id: 'D-001', title: '回答', due: '2026-11-06', kind: '回答・返信', status: '未着手', assignee: 'kim' };
+const base = { id: 'D-001', title: '回答', company: 'テスト商事', due: '2026-11-06', kind: '回答・返信', status: '未着手', assignee: 'kim' };
+const fixture = fileURLToPath(new URL('./fixtures/deadline/ledger.json', import.meta.url));
+const calendarConfig = { ...config, calendar: { enabled: true, calendarId: AI_CALENDAR } };
+function calendarMock(initial = []) {
+  const entries = structuredClone(initial), calls = [];
+  return { entries, calls, request: async (url, options) => {
+    calls.push({url, ...options});
+    if (options.method) assert.equal(new URL(url).searchParams.get('sendUpdates'), 'none');
+    const u = new URL(url), parts = u.pathname.split('/'), calendar = decodeURIComponent(parts[4]), id = parts[6];
+    const item = entries.find(x => x.calendar === calendar && x.event.id === id);
+    if (options.method === 'DELETE') { assert.ok(item); entries.splice(entries.indexOf(item), 1); return null; }
+    if (options.method === 'POST' && parts[7] === 'move') { assert.ok(item); item.calendar = u.searchParams.get('destination'); return structuredClone(item.event); }
+    if (options.method === 'PATCH') { assert.ok(item); Object.assign(item.event, options.body); return structuredClone(item.event); }
+    if (options.method === 'POST') { entries.push({calendar,event:{...options.body}}); return options.body; }
+    const deadline = u.searchParams.get('privateExtendedProperty')?.split('=')[1];
+    return {items: entries.filter(x => x.calendar === calendar && (deadline ? x.event.extendedProperties?.private?.deadlineId === deadline : true)).map(x => structuredClone(x.event))};
+  }};
+}
+for (const [assignee, target] of [['金さん','kim@orgiast.jp'],['','kim@orgiast.jp'],['Claude',AI_CALENDAR],['佐藤',AI_CALENDAR],['008XPS8300',AI_CALENDAR]]) {
+  test(`Calendar 振分 ${assignee || '空'} → ${target}`, async () => {
+    const mock=calendarMock(); await syncCalendar({...base,assignee},{config:calendarConfig,state:{},request:mock.request});
+    assert.equal(mock.entries[0].calendar,target);
+  });
+}
+test('本人送信承認とneedsKimを認識、不要はAI側',()=>{
+  assert.ok(isKimTask({...base,assignee:'Claude',action:'金さんが送信承認'},calendarConfig));
+  assert.ok(isKimTask({...base,assignee:'Claude',notes:'autopilot:{"needsKim":"要"}'},calendarConfig));
+  assert.equal(isKimTask({...base,assignee:'Claude',notes:'autopilot:{"needsKim":"不要"}'},calendarConfig),false);
+  assert.equal(isKimTask({...base,assignee:'佐藤',notes:'autopilot:{"type":"approval","needsKim":"3点と送信してよいか"}'},calendarConfig),false);
+  assert.equal(isKimTask({...base,assignee:'Claude',notes:'autopilot:{"type":"task","needsKim":"マージ可否"}'},calendarConfig),false);
+  assert.equal(isKimTask({...base,assignee:'Claude',notes:'autopilot:{"needsKim":"様子見なら不要"}'},calendarConfig),false);
+  const approval=readableEvent({...base,company:'Wiaas 中西',title:'Wiaas 中西様 審査時間の質問への返信',assignee:'Claude が下書きし金さんが送信を承認'},calendarConfig);
+  assert.equal(approval.summary,'【Wiaas 中西様】審査時間の質問への返信を送信承認（D-001）');
+});
+
+for (const assignee of ['Claude', 'Claude(対話セッション)', 'Claude（対話セッション）', 'AI', 'ＡＩ（夜間）', 'Codex', 'Codex（実装）', '008XPS8300', '015CAFE', 'PC018', 'kim-PC', 'DESKTOP-ABC', '夜間', '夜間ジョブ']) {
+  test(`AI担当 ${assignee} は古い承認メタデータでもタスクへ移す`, async () => {
+    const row = {...base, assignee, notes:'autopilot:{"type":"approval","needsKim":"2の範囲"}'};
+    // Even a legacy kimNames alias must not make an AI seat a person.
+    const cfg = {...calendarConfig, kimNames:[...config.kimNames, assignee]};
+    assert.equal(isKimTask(row,cfg),false);
+    assert.equal(isKimTask({...row,notes:'autopilot:{"type":"send","needsKim":"送信範囲"}'},cfg),false);
+    const mock=calendarMock([{calendar:'kim@orgiast.jp',event:{id:'ai-existing',start:{date:base.due},extendedProperties:{private:{deadlineId:base.id}}}}]);
+    await syncCalendar(row,{config:cfg,state:{},request:mock.request});
+    assert.equal(mock.entries.length,1);
+    assert.equal(mock.entries[0].calendar,AI_CALENDAR);
+    assert.ok(mock.calls.filter(x=>x.method).every(x=>x.url.includes('sendUpdates=none')));
+  });
+}
+
+test('Claudeの下書きと金さんの送信承認を区別しprimaryを維持',async()=>{
+  for (const assignee of ['Claude が下書きし金さんが送信を承認','Claude（下書き担当）、金さんが送信を承認']) {
+    const row={...base,assignee,notes:'autopilot:{"type":"approval","needsKim":"2の範囲"}'};
+    assert.equal(isKimTask(row,calendarConfig),true);
+    const mock=calendarMock();
+    await syncCalendar(row,{config:calendarConfig,state:{},request:mock.request});
+    assert.equal(mock.entries[0].calendar,'kim@orgiast.jp');
+  }
+});
+
+test('予定の台帳URLはauthuserでkimアカウントを指定',()=>{
+  const label=readableEvent(base,{...calendarConfig,sheetId:'ledger-ID_123'});
+  assert.match(label.description,/期限台帳: https:\/\/docs\.google\.com\/spreadsheets\/d\/ledger-ID_123\/edit\?authuser=kim@orgiast\.jp\n/);
+  assert.doesNotMatch(label.description,/\/a\/orgiast\.jp\//);
+});
+test('時間付き同一案件はタスクへ、手入力予定を更新しない',async()=>{
+  const mock=calendarMock([{calendar:'kim@orgiast.jp',event:{id:'meeting',summary:'M: 株式会社 テスト商事様',start:{dateTime:'2026-11-06T10:00:00+09:00'}}}]);
+  await syncCalendar(base,{config:calendarConfig,state:{},request:mock.request});
+  assert.equal(mock.entries[1].calendar,AI_CALENDAR);
+  assert.ok(mock.calls.some(x=>x.url.includes('timeMin=')&&x.url.includes('singleEvents=true')));
+  assert.equal(mock.calls.filter(x=>x.method==='PATCH').length,0);
+});
+test('自社名だけでは作らない、出典から顧客を解決、コードを末尾にする',async()=>{
+  const row={...base,company:'株式会社オージャスト',title:'C0039',action:'現場責任者を決める'};
+  const mock=calendarMock();await syncCalendar(row,{config:calendarConfig,state:{},request:mock.request});assert.equal(mock.entries.length,0);
+  const label=readableEvent({...row,quote:'顧客名: 阡周会'},calendarConfig);
+  assert.equal(label.summary,'【阡周会様】現場責任者を決める（C0039 / D-001）');assert.doesNotMatch(label.summary,/案件未特定/);
+});
+test('両側の二重をmoveして重複保存、再実行でもprimaryへ戻さない',async()=>{
+  const event=id=>({id,summary:'旧件名',start:{date:base.due},extendedProperties:{private:{deadlineId:base.id}}});
+  const mock=calendarMock([{calendar:'kim@orgiast.jp',event:event('a')},{calendar:AI_CALENDAR,event:event('b')}]);
+  await syncCalendar({...base,assignee:'Claude'},{config:calendarConfig,state:{},request:mock.request});
+  assert.ok(mock.entries.every(x=>x.calendar===AI_CALENDAR));assert.equal(mock.entries.filter(x=>x.event.extendedProperties.private.deadlineArchive==='duplicate').length,1);
+  await syncCalendar({...base,assignee:'Claude'},{config:calendarConfig,state:{},request:mock.request});assert.equal(mock.entries.length,2);
+  assert.ok(mock.calls.filter(x=>x.method).every(x=>x.url.includes('sendUpdates=none')));
+});
+test('同じ期限IDでも別台帳は更新しない',async()=>{
+  const mock=calendarMock([{calendar:'kim@orgiast.jp',event:{id:'other',start:{date:base.due},summary:'別案件',description:'期限台帳: https://docs.google.com/spreadsheets/d/another/edit',extendedProperties:{private:{deadlineId:base.id}}}}]);
+  await syncCalendar(base,{config:calendarConfig,state:{},request:mock.request});assert.equal(mock.entries[0].event.summary,'別案件');assert.equal(mock.entries.length,2);
+});
+test('Calendar 409は対象をGETし、404や別予定ならPATCHしない',async()=>{
+  const calls=[];const request=async(url,o)=>{calls.push({url,...o});if(o.method==='POST')throw Object.assign(Error('conflict'),{status:409});if(!url.includes('?'))throw Object.assign(Error('missing'),{status:404});return {items:[]};};
+  await assert.rejects(syncCalendar(base,{config:calendarConfig,state:{},request}),e=>e.status===404);
+  assert.ok(!calls.some(x=>x.method==='PATCH'));
+});
+test('見送り備考だけでは削除せず、台帳閉鎖後はarchiveも削除する',async()=>{
+  const mock=calendarMock([{calendar:'kim@orgiast.jp',event:{id:'cancel',start:{date:base.due},summary:'旧予定',extendedProperties:{private:{deadlineId:base.id,deadlineSheetId:config.sheetId}}}}]);
+  await syncCalendar({...base,notes:'2026-11-13 先方見送り'},{config:calendarConfig,state:{},request:mock.request});
+  assert.equal(mock.entries[0].calendar,AI_CALENDAR);assert.equal(mock.entries[0].event.extendedProperties.private.deadlineArchive,'cancelled');
+  assert.equal(mock.calls.filter(c=>c.method==='DELETE').length,0);
+  await syncCalendar({...base,status:'不要'},{config:calendarConfig,state:{},request:mock.request});assert.equal(mock.entries.length,0);
+});
 function homeFor(t) { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-watch-')); t.after(() => fs.rmSync(home, { recursive: true, force: true })); return home; }
 
 test('段階、担当、対応中、延期、完了を正しく判定', () => {
-  assert.equal(evaluate(base, '2026-11-04', config).stage, false);
+  // 2026-11-26 前倒しルール: 未着手で着手期限を過ぎた行は期限日の段階に関係なく毎日知らせる。
+  assert.equal(evaluate(base, '2026-11-04', config).stage, true);
+  assert.equal(evaluate(base, '2026-11-04', config).startOverdue, true);
+  assert.equal(evaluate({ ...base, status: '対応中' }, '2026-11-04', config).stage, false);
   assert.equal(evaluate({ ...base, kind: '訴訟・法務' }, '2026-11-04', config).stage, true);
   assert.equal(evaluate({ ...base, kind: '訴訟・法務', status: '対応中' }, '2026-11-04', config).stage, false);
   assert.equal(evaluate({ ...base, kind: '支払', assignee: '経理' }, '2026-10-30', config).kim, false);
@@ -23,8 +130,8 @@ test('段階、担当、対応中、延期、完了を正しく判定', () => {
   assert.throws(() => parseArgs(['--fixture','x']));
 });
 
-test('Calendarは日付・privateキーで更新、403を一度だけ記録し再試行しない', async () => {
-  const calls = [], state = {}; let saved = 0, logs = 0;
+test('Calendar: 通常の追加・完了行は通知なしで削除', async () => {
+  const calls = [], state = {};
   const calendarConfig = { ...config, calendar: { enabled: true, calendarId: 'kim@orgiast.jp' } };
   const request = async (url, options) => { calls.push([url, options]); return options.method ? {} : { items: [] }; };
   await syncCalendar(base, { config: calendarConfig, state, request });
@@ -33,12 +140,49 @@ test('Calendarは日付・privateキーで更新、403を一度だけ記録し�
   assert.equal(body.extendedProperties.private.deadlineId, base.id);
   assert.deepEqual(body.reminders.overrides.map(x => x.minutes), [10080,1440]);
   assert.match(calls[0][0], /privateExtendedProperty=deadlineId%3AD|privateExtendedProperty=deadlineId%3D/);
-  const blocked = { config: calendarConfig, state, persist: () => saved++, log: () => logs++, request: async () => { throw Object.assign(Error('scope'), { status: 403 }); } };
-  await syncCalendar(base, blocked); await syncCalendar(base, blocked);
-  assert.equal(saved, 1); assert.equal(logs, 1); assert.equal(state.calendarSync, false);
+  // 完了行は名前空間と deadlineId が一致する予定だけ削除する。
   const closedCalls = [];
-  await syncCalendar({ ...base, status: '完了' }, { config: calendarConfig, state: {}, request: async (u,o) => { closedCalls.push(o); return { items: [{ id: 'old' }] }; } });
+  await syncCalendar({ ...base, status: '完了' }, { config: calendarConfig, state: {}, request: async (u,o) => { closedCalls.push(o); return o.method ? null : { items: u.includes(encodeURIComponent('kim@orgiast.jp')) ? [{ id: 'old', extendedProperties:{private:{deadlineId:base.id,deadlineSheetId:config.sheetId}} }] : [] }; } });
   assert.equal(closedCalls.at(-1).method, 'DELETE');
+});
+
+test('Calendar: 既存説明欄の案件名を自動更新でも引き継ぐ', async () => {
+  const calls = [];
+  const calendarConfig = { ...config, calendar: { enabled: true, calendarId: 'kim@orgiast.jp' } };
+  const request = async (url, options) => {
+    calls.push([url, options]);
+    return options.method ? { id: 'old' } : { items: url.includes(encodeURIComponent('kim@orgiast.jp')) && url.includes('privateExtendedProperty') ? [{ id: 'old', extendedProperties:{private:{deadlineId:base.id}}, summary: '【東邦鋼業・SC鋼板】【期限】回答', description: '案件: 東邦鋼業・SC鋼板\n旧説明' }] : [] };
+  };
+  await syncCalendar({ ...base, company: '', caseName: '' }, { config: calendarConfig, state: {}, request });
+  const patch = calls.find(([, options]) => options.method === 'PATCH')[1].body;
+  assert.equal(patch.summary, '【東邦鋼業・SC鋼板様】回答（D-001）');
+  assert.equal(patch.description.split('\n')[0], '案件: 東邦鋼業・SC鋼板');
+});
+
+test('Calendar: 403でstate.calendarSync=falseになり後続はスキップ', async () => {
+  const state = {}; let saved = 0, logs = 0;
+  const persist = () => saved++;
+  const log = () => logs++;
+  const calendarConfig = { ...config, calendar: { enabled: true, calendarId: 'kim@orgiast.jp' } };
+  const failReq = async () => { throw Object.assign(Error('scope'), { status: 403 }); };
+  // 1回目: 403 → calendarSync=false
+  await syncCalendar(base, { config: calendarConfig, state, request: failReq, persist, log });
+  assert.equal(state.calendarSync, false);
+  assert.equal(saved, 1);
+  assert.equal(logs, 1);
+  // 2回目: calendarSync=false なので即スキップ（persist/log 増えない）
+  const saved2 = saved, logs2 = logs;
+  await syncCalendar(base, { config: calendarConfig, state, request: failReq, persist, log });
+  assert.equal(saved, saved2);
+  assert.equal(logs, logs2);
+});
+
+test('Calendar: disabledなら即return', async () => {
+  const state = {};
+  const calendarConfig = { ...config, calendar: { enabled: false } };
+  const neverCalled = async () => { throw Error('should not be called'); };
+  await syncCalendar(base, { config: calendarConfig, state, request: neverCalled });
+  assert.deepEqual(state, {});
 });
 
 test('同スレッドの検出後SENTのみ完了証拠とする', async () => {
@@ -71,7 +215,7 @@ test('支払完了を自動反映、車検は読取のみ、同日再実行は�
 
 test('fixture dry-runはネットワーク、ローカル書込、heartbeatを呼ばない', async t => {
   const home = homeFor(t), output = [];
-  const code = await main(['--dry-run','--now','2026-11-04','--fixture','tools/fixtures/deadline/ledger.json'], { home, stdout: x => output.push(x), request: async () => assert.fail('network'), heartbeat: async () => assert.fail('heartbeat'), notify: async () => assert.fail('notify') });
+  const code = await main(['--dry-run','--now','2026-11-04','--fixture',fixture], { home, stdout: x => output.push(x), request: async () => assert.fail('network'), heartbeat: async () => assert.fail('heartbeat'), notify: async () => assert.fail('notify') });
   assert.equal(code, 0); assert.deepEqual(fs.readdirSync(home), []);
   const result = JSON.parse(output[0]); assert.equal(result.errors.length, 0);
   assert.deepEqual(result.decisions.filter(x => x.notify).map(x => x.id), ['D-001','D-002','D-004','D-006','V01']);
@@ -100,29 +244,124 @@ test('Gmailの完了照合に失敗しても期限通知を届け、失敗とし
   assert.deepEqual(result.errors, [{ id: row.id, phase: 'auto-close', error: 'Gmail unavailable' }]);
 });
 
+test('Gmail 404 は warnings に記録し exit 0', async t => {
+  const row = { ...base, due: '2026-11-05', source: 'Gmail', detectedAt: '2026-11-03', notes: '{"mailbox":"kim@orgiast.jp","threadId":"thread"}' };
+  const result = await runWatch({ home: homeFor(t), config, rows: [row], today: '2026-11-04',
+    ledger: { patch: async () => {} },
+    request: async () => { throw Object.assign(new Error('Google GET HTTP 404: Not found'), { status: 404 }); },
+    notify: async () => {}, state: {} });
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.warnings.length, 1);
+  assert.equal(result.warnings[0].id, row.id);
+  assert.equal(result.warnings[0].phase, 'auto-close');
+  assert.match(result.warnings[0].warning, /404/);
+  assert.equal(result.decisions[0]?.status, '未着手');
+  assert.equal(result.decisions[0]?.notify, true);
+});
+
+test('Gmail 500 は errors に記録し exit 1', async t => {
+  const row = { ...base, due: '2026-11-05', source: 'Gmail', detectedAt: '2026-11-03', notes: '{"mailbox":"kim@orgiast.jp","threadId":"thread"}' };
+  const result = await runWatch({ home: homeFor(t), config, rows: [row], today: '2026-11-04',
+    ledger: { patch: async () => {} },
+    request: async () => { throw Object.assign(new Error('Google GET HTTP 500: Server Error'), { status: 500 }); },
+    notify: async () => {}, state: {} });
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0].id, row.id);
+  assert.equal(result.errors[0].phase, 'auto-close');
+  assert.match(result.errors[0].error, /500/);
+  assert.equal(result.warnings.length, 0);
+});
+
 test('不存在のfixtureで本番の読取へfallbackしない', async t => {
   const home=homeFor(t), errors=[];
   assert.equal(await main(['--dry-run','--fixture',path.join(home,'missing.json')],{home,config,stderr:e=>errors.push(e),sheets:{get:()=>assert.fail('live read')}}),1);
   assert.match(errors[0],/fixture/); assert.deepEqual(fs.readdirSync(home),[]);
 });
 
-test('鍵なし席はseat checkでスキップされる', async t => {
+test('鍵なし席はseat checkでスキップされる（注入seatCheck）', async t => {
   const home=homeFor(t), output=[], heartbeats=[];
-  fs.writeFileSync(path.join(home,'.claude.json'), JSON.stringify({oauthAccount:{emailAddress:'seisaku-team@orgiast.jp'}}));
-  const code = await main(['--now','2026-11-04'], { home, stdout: x => output.push(x), skipSeatCheck: false, sheets: { get: () => assert.fail('no network') }, request: () => assert.fail('no network'), heartbeat: async (info) => heartbeats.push(info), notify: () => assert.fail('no notify') });
+  const code = await main(['--now','2026-11-04'], { home, stdout: x => output.push(x), skipSeatCheck: false, seatCheck: () => ({ kim: false }), sheets: { get: () => assert.fail('no network') }, request: () => assert.fail('no network'), heartbeat: async (info) => heartbeats.push(info), notify: () => assert.fail('no notify') });
   assert.equal(code, 0);
   const result = JSON.parse(output[0]);
   assert.equal(result.skip, true);
-  assert.match(result.reason, /DWD key/);
+  assert.equal(result.reason, '鍵なし席のためスキップ');
   assert.equal(heartbeats.length, 1);
+  assert.equal(heartbeats[0].ok, true);
   assert.match(heartbeats[0].summary, /スキップ/);
 });
 
+test('例外時はheartbeatがok=falseでsummaryに期限追跡エラーを含む', async t => {
+  const home=homeFor(t), output=[], heartbeats=[];
+  const code = await main(['--now','2026-11-04'], { home, stdout: x => output.push(x), skipSeatCheck: false, seatCheck: () => ({ kim: true }), config: { sheetId: 'test' }, sheets: { get: () => { throw Error('シート読取失敗'); } }, request: () => assert.fail('no network'), heartbeat: async (info) => heartbeats.push(info), notify: () => assert.fail('no notify') });
+  assert.equal(code, 1);
+  assert.equal(heartbeats.length, 1);
+  assert.equal(heartbeats[0].ok, false);
+  assert.match(heartbeats[0].summary, /期限追跡エラー/);
+  assert.doesNotMatch(heartbeats[0].summary, /スキップ/);
+});
+
+for (const [sourceKey, message] of [
+  ['threadId', 'Google GET HTTP 404'],
+  ['messageId', 'reason: notFound'],
+  ['threadId', 'Google GET HTTP 403 Forbidden'],
+]) {
+  const missing = !message.includes('403');
+  test(`Gmail ${message} (${sourceKey}) は exit ${missing ? 0 : 1}、期限通知を続ける`, async t => {
+    const home = homeFor(t), output = [];
+    const row = { ...base, due: '2026-11-05', source: 'gmail', detectedAt: '2026-11-03',
+      notes: JSON.stringify({ mailbox: 'kim@orgiast.jp', [sourceKey]: 'missing' }) };
+    const fixture = path.join(home, 'ledger.json');
+    fs.writeFileSync(fixture, JSON.stringify({ config, rows: [row] }));
+    const code = await main(['--dry-run', '--now', '2026-11-04', '--fixture', fixture], {
+      home, stdout: x => output.push(x),
+      request: async url => {
+        assert.ok(url.includes(sourceKey === 'threadId' ? '/threads/missing' : '/messages/missing'));
+        throw Error(message);
+      },
+    });
+    assert.equal(code, missing ? 0 : 1);
+    const result = JSON.parse(output[0]);
+    assert.deepEqual(result.errors, missing ? [] : [{ id: row.id, phase: 'auto-close', error: message }]);
+    assert.deepEqual(result.warnings, missing ? [{ id: row.id, phase: 'auto-close', warning: '元メールが見つからない(404)' }] : []);
+    assert.equal(result.decisions[0].status, '未着手');
+    assert.equal(result.decisions[0].notify, true);
+  });
+}
+
 test('鍵持ちのkim席はfixtureモードで通常動作（fixtureはseat checkをスキップ）', async t => {
   const home=homeFor(t), output=[];
-  const code = await main(['--dry-run','--now','2026-11-04','--fixture','tools/fixtures/deadline/ledger.json'], { home, stdout: x => output.push(x), skipSeatCheck: false, request: async () => assert.fail('network'), heartbeat: async () => assert.fail('heartbeat'), notify: async () => assert.fail('notify') });
+  const code = await main(['--dry-run','--now','2026-11-04','--fixture',fixture], { home, stdout: x => output.push(x), skipSeatCheck: false, request: async () => assert.fail('network'), heartbeat: async () => assert.fail('heartbeat'), notify: async () => assert.fail('notify') });
   assert.equal(code, 0);
   const result = JSON.parse(output[0]);
   assert.equal(result.skip, undefined);
   assert.deepEqual(result.decisions.filter(x => x.notify).map(x => x.id), ['D-001','D-002','D-004','D-006','V01']);
 });
+
+for (const sourceKey of ['messageId', 'threadId']) {
+  for (const status of [404, 401, 403, 500, undefined]) {
+    test(`auto-close ${sourceKey} HTTP ${status ?? 'network'}: 404だけ警告、期限は未完了で通知を継続`, async t => {
+      const row = { ...base, due: '2026-11-05', source: 'Gmail', detectedAt: '2026-11-03', notes: JSON.stringify({ mailbox: 'test@example.com', [sourceKey]: 'missing' }) };
+      const output = [], heartbeats = [], changes = [], notices = [];
+      const code = await main(['--now', '2026-11-04'], {
+        home: homeFor(t), config, skipSeatCheck: true,
+        ledger: { read: async () => [row], patch: async (id, change) => changes.push(change) },
+        sheets: { get: () => assert.fail('no Sheets API') },
+        request: async url => {
+          assert.ok(url.includes(sourceKey === 'messageId' ? '/messages/' : '/threads/'));
+          throw Object.assign(Error(`Google GET HTTP ${status ?? 'network'}`), { status });
+        },
+        notify: async args => notices.push(args), heartbeat: async info => heartbeats.push(info), stdout: text => output.push(text),
+      });
+      const result = JSON.parse(output[0]);
+      assert.equal(code, status === 404 ? 0 : 1);
+      assert.equal(heartbeats[0].ok, status === 404);
+      assert.deepEqual(result.warnings, status === 404 ? [{ id: row.id, phase: 'auto-close', warning: '元メールが見つからない(404)' }] : []);
+      assert.equal(result.errors.length, status === 404 ? 0 : 1);
+      assert.equal(row.status, '未着手');
+      assert.equal(result.decisions[0].status, '未着手');
+      assert.equal(notices.length, 1);
+      assert.ok(!notices[0].close);
+      assert.ok(changes.every(change => change.status !== '完了'));
+    });
+  }
+}

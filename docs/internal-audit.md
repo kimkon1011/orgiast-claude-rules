@@ -97,7 +97,7 @@ GEMINI_API_KEY/GROQ_API_KEY/DEEPSEEK_API_KEYを環境変数、またはユーザ
 powershell -ExecutionPolicy Bypass -File tools/register-internal-audit-task.ps1
 ```
 
-`OrgiastInternalAudit`、月曜07:00（Windowsローカル時刻）、最大60分。`node tools/internal-audit.mjs --notify --out <state-dir>/reports/latest.md` を実行します。`--notify` は自社レポート配布のみを例外として、kim@orgiast.jp のMy Drive直下「内部監査レポート」フォルダ（なければ作成）へレポートをアップロードし、`notifyKim` のDMに件数・high先頭5件・所有ユーザー付きDriveリンクを載せます。アップロード失敗時はローカルパスでDMを継続します。webhook fallbackは無効で、チャンネル投稿はしません。監査対象の外部データは変更しません。DM配信失敗はレポート保存後にexit 1。
+`OrgiastInternalAudit`、月曜07:00（Windowsローカル時刻）、最大120分。`node tools/internal-audit.mjs --notify --out <state-dir>/reports/latest.md` を実行します。`--notify` は自社レポート配布のみを例外として、kim@orgiast.jp のMy Drive直下「内部監査レポート」フォルダ（なければ作成）へレポートをアップロードし、`notifyKim` のDMに件数・high先頭5件・所有ユーザー付きDriveリンクを載せます。アップロード失敗時はローカルパスでDMを継続します。webhook fallbackは無効で、チャンネル投稿はしません。監査対象の外部データは変更しません。DM配信失敗はレポート保存後にexit 1。
 
 Admin Reportsのイベント名・外部可視性は[Google公式のDrive監査イベント仕様](https://developers.google.com/workspace/admin/reports/v1/appendix/activity/drive)に対応します。`shared_externally`、`visibility_change=external` を検知し、`change_user_access` の `new_value=none`（解除）は新規外部共有として扱いません。日付・日次レポート名はJSTです。
 

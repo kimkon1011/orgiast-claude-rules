@@ -28,7 +28,7 @@ $action = New-HiddenScheduledTaskAction -Execute $powershell -ChildArgument @('-
 # Task Scheduler no XML ga "han-i-gai no atai" de reject suru (2026-09-02 jissoku de touroku shippai).
 # Kadou-chuu no OrgiastFeedbackIntakeFast to onaji P3650D wo tsukau.
 $trigger = New-ScheduledTaskTrigger -Once -At 12:05am -RepetitionInterval (New-TimeSpan -Minutes 10) -RepetitionDuration (New-TimeSpan -Days 3650)
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 
 $taskName = 'OrgiastBoothFeedbackIntake'
 if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {

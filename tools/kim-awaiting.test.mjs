@@ -83,7 +83,7 @@ test('fleet why takes priority over reply prose while session questions use the 
   });
   assert.equal(collectAwaiting({ home, now: NOW })[0].title, '修正案を送ってよいですか？（PC-Bから）');
 });
-test('hook events, session suppression, three hours, changed ids, no items and headless', t => {
+test('hook events, session suppression, changed ids, no items and headless', t => {
   const home = fixture(t), input = { hook_event_name: 'UserPromptSubmit', session_id: 's', cwd: '/project' };
   const options = { home, now: NOW, env: {} };
   assert.equal(context(input, options), null);
@@ -91,26 +91,32 @@ test('hook events, session suppression, three hours, changed ids, no items and h
   const out = context(input, options);
   assert.match(out.hookSpecificOutput.additionalContext, /📌 kim の返事待ち/);
   assert.match(out.hookSpecificOutput.additionalContext, /--answer/);
+  // 同セッション・同 ids → 新着なしで null
   assert.equal(context(input, options), null);
-  assert.ok(context(input, { ...options, now: NOW + REPEAT_MS }));
-  assert.ok(context({ ...input, hook_event_name: 'SessionStart' }, options));
-  assert.ok(context({ ...input, hook_event_name: 'SessionStart' }, options));
+  // 別セッション（25h後）→ fresh として表示
+  const DAY = 24 * 3600_000;
+  assert.ok(context({ ...input, session_id: 's-start', hook_event_name: 'SessionStart' }, { ...options, now: NOW + DAY + 3600_000 }));
+  // SessionStart でも同セッション・同 ids なら2回目は null
+  assert.equal(context({ ...input, hook_event_name: 'SessionStart', session_id: 's-start' }, { ...options, now: NOW + DAY + 3600_000 }), null);
+  // ids が変わったら再表示
   writeLedger(ledgerFile(home), [row(), row({ sessionId: 'other', promise: '別の件' })]);
   assert.ok(context(input, options));
   assert.equal(context({ ...input, cwd: path.join(home, '.claude', 'auto-session') }, options), null);
   for (const env of [{ CLAUDE_HEADLESS: '1' }, { ORGIAST_AUTO_SESSION: '1' }]) assert.equal(context(input, { ...options, env }), null);
-  saveJson(shownFile(home), { old: { at: NOW - SESSION_TTL - 1, ids: [] } });
-  context(input, options); assert.equal(readJson(shownFile(home)).old, undefined);
-  fs.writeFileSync(shownFile(home), '{'); assert.equal(context(input, options), null);
+  // 古い shownFile が壊れていても null を返す（context はもう shownFile を読まない）
+  fs.mkdirSync(path.dirname(shownFile(home)), { recursive: true }); fs.writeFileSync(shownFile(home), '{'); assert.equal(context(input, options), null);
 });
 test('hook caps display while tracking all ids', t => {
   const home = fixture(t);
   writeLedger(ledgerFile(home), Array.from({ length: DISPLAY_LIMIT + 2 }, (_, i) => row({ sessionId: `s${i}`, promise: `件${i}` })));
   const out = context({ session_id: 's', cwd: '/project' }, { home, env: {}, now: NOW });
-  assert.match(out.hookSpecificOutput.additionalContext, /ほか 4 件/);
-  assert.equal(readJson(shownFile(home)).s.ids.length, DISPLAY_LIMIT + 2);
+assert.match(out.hookSpecificOutput.additionalContext, /ほか 4 件/);
+  // 新ポリシーの状態ファイルに全 ids が記録されている
+  const policyFile = path.join(home, '.claude', 'inbox-display-shown.json');
+  const state = JSON.parse(fs.readFileSync(policyFile, 'utf8'));
+  assert.equal(Object.keys(state['kim-awaiting']).length, DISPLAY_LIMIT + 2);
 });
-test('hook shows the current session first in full plus five older items', t => {
+test('hook shows up to three brief items with the current session first', t => {
   const home = fixture(t);
   const ask = '公開前に確認していただきたい内容です。'.repeat(8) + 'この条件で進めてよいですか？';
   const current = row({ sessionId: 'current', promise: '現在の判断', nextKim: ask });
@@ -122,15 +128,19 @@ test('hook shows the current session first in full plus five older items', t => 
   const out = context({ session_id: 'current', cwd: '/project' }, { home, env: {}, now: NOW });
   const text = out.hookSpecificOutput.additionalContext;
   const lines = text.split('\n').filter(line => line.startsWith('・'));
-  assert.equal(lines.length, TOP + 1);
+  assert.equal(lines.length, TOP);
+  assert.ok(lines.every(line => [...line].length <= 100));
   assert.ok(lines[0].startsWith('・'));
   assert.ok(lines[0].includes('答えてほしいこと:'));
   assert.ok(lines[0].includes('公開前に確認していただきたい内容です'));
-  for (let i = 0; i < TOP; i++) assert.ok(lines[i + 1].startsWith(`・古い判断${i} ／`));
-  assert.match(text, /ほか 7 件/);
-  assert.equal(text.split('\n').filter(line => line.startsWith('id=')).length, TOP + 1);
+  for (let i = 0; i < TOP - 1; i++) assert.ok(lines[i + 1].startsWith(`・古い判断${i} ／`));
+  assert.match(text, /ほか 8 件/);
+  assert.equal(text.split('\n').filter(line => line.startsWith('id=')).length, TOP);
   assert.ok(text.includes(`id=${apId(current)} | 現在の判断`));
-  assert.equal(readJson(shownFile(home)).current.ids.length, 11);
+  // 新ポリシーの状態ファイルに全 ids が記録されている
+  const policyFile = path.join(home, '.claude', 'inbox-display-shown.json');
+  const policyState = JSON.parse(fs.readFileSync(policyFile, 'utf8'));
+  assert.equal(Object.keys(policyState['kim-awaiting']).length, 11);
 });
 test('hook keeps the current-session item even when another session has the same title', t => {
   const home = fixture(t);
@@ -185,17 +195,20 @@ test('kim reminders stay in session context across days and answered rows disapp
   writeLedger(ledgerFile(home), [r]);
   const io = { label: 'kim-PC', localOwner: 'kim@orgiast.jp', readLedger: () => readLedger(ledgerFile(home)),
     notify: () => assert.fail('kim summaries must not send an outbound notification') };
-  for (const now of [NOW, NOW + WINDOW_MS - 1, NOW + WINDOW_MS, NOW + 3 * WINDOW_MS]) {
+  // 各日は別セッションとして扱い、25h以上間隔を空ける（新ポリシー: 同セッションの既出は再掲しない・別セッションは24h以内なら省略）
+  const DAY_MS = 24 * 3600_000;
+  for (let i = 0; i < 4; i++) {
+    const now = NOW + i * (DAY_MS + 3600_000); // 25h 間隔
     const out = await digest({ home, now, slot: '朝', io });
     assert.equal(out.sent, false);
     assert.equal(out.skipped, 'session-context-only');
-    assert.match(context({ hook_event_name: 'SessionStart', session_id: 'reminder', cwd: '/project' },
+    assert.match(context({ hook_event_name: 'SessionStart', session_id: `reminder-day${i}`, cwd: '/project' },
       { home, now, env: {} }).hookSpecificOutput.additionalContext, /配布してよいですか/);
   }
   writeLedger(ledgerFile(home), [{ ...r, kimAnswer: 'はい' }]);
   assert.equal(needsDm({ ...r, kimAnswer: 'はい' }), false);
-  assert.equal(context({ hook_event_name: 'SessionStart', session_id: 'reminder', cwd: '/project' },
-    { home, now: NOW + 4 * WINDOW_MS, env: {} }), null);
+  assert.equal(context({ hook_event_name: 'SessionStart', session_id: 'reminder-final', cwd: '/project' },
+    { home, now: NOW + 5 * DAY_MS, env: {} }), null);
 });
 
 test('lightweight chase categories match mail classification', () => {
@@ -230,7 +243,14 @@ test('状態ファイルが古い・取得失敗があると警告項目が先�
   writeExternal(home, { generatedAt: new Date(NOW - 5 * 3600_000).toISOString(), items: [extItem()] });
   let items = collectAwaiting({ home, now: NOW });
   assert.equal(items[0].id, 'ex:monitor'); assert.match(items[0].title, /^社外返信の監視が止まっています（最終更新 .+ \/ エラー /);
+  // consecutiveFailures 無しの旧 state は 1 扱い → 警告なし。2 以上で警告。
   writeExternal(home, { sources: { 'kim@orgiast.jp': { ok: false, error: 'Gmail API 403' } }, items: [] });
+  items = collectAwaiting({ home, now: NOW });
+  assert.equal(items.some(item => item.warning), false, '1回失敗（旧 state）では警告しない');
+  writeExternal(home, { sources: { 'kim@orgiast.jp': { ok: false, error: 'Gmail API 403', consecutiveFailures: 1 } }, items: [] });
+  items = collectAwaiting({ home, now: NOW });
+  assert.equal(items.some(item => item.warning), false, 'consecutiveFailures:1 では警告しない');
+  writeExternal(home, { sources: { 'kim@orgiast.jp': { ok: false, error: 'Gmail API 403', consecutiveFailures: 2 } }, items: [] });
   items = collectAwaiting({ home, now: NOW });
   assert.match(items[0].title, /kim@orgiast\.jp: Gmail API 403/);
   writeExternal(home, { items: [extItem()] });
@@ -314,3 +334,38 @@ test('auto registration marker does not hide an explicit waiting_user request', 
 });
 
 process.env.ORGIAST_AUTO_RESUME = '1';
+
+test('CLI: 引数なしで exit 0 で一覧表示', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-awaiting-cli-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  writeLedger(ledgerFile(home), [row()]);
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const script = fileURLToPath(new URL('./kim-awaiting.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [script], {
+    env: { ...process.env, ORGIAST_HOME: home },
+    timeout: 10000,
+    encoding: 'utf8'
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /kim の返事待ち/);
+});
+
+test('hook displays only added ids at the end and suppresses repeated prompts', t => {
+  const home = fixture(t), options = { home, now: NOW, env: {} };
+  const input = { session_id: 'viewer', prompt: 'first request' };
+  writeLedger(ledgerFile(home), [row({ sessionId: 'one', promise: 'old request' })]);
+  assert.ok(context(input, options));
+  const other = context({ ...input, session_id: 'other-viewer' }, options).hookSpecificOutput.additionalContext;
+  assert.match(other, /ほか既出 1 件/);
+  assert.doesNotMatch(other, /old request/);
+  writeLedger(ledgerFile(home), [row({ sessionId: 'one', promise: 'old request' }), row({ sessionId: 'two', promise: 'new request' })]);
+  const next = context({ ...input, prompt: 'second request' }, options).hookSpecificOutput.additionalContext;
+  assert.match(next, /new request/);
+  assert.doesNotMatch(next, /old request|応答の冒頭/);
+  assert.match(next, /ほか既出 1 件/);
+  assert.match(next, /本当に最後のメッセージ/);
+  writeLedger(ledgerFile(home), [row({ sessionId: 'three', promise: 'third request' })]);
+  assert.equal(context({ ...input, prompt: 'second request' }, options), null);
+  assert.equal(context({ ...input, prompt: '<<autonomous-loop-dynamic>>' }, options), null);
+});

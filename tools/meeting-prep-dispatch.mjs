@@ -1,11 +1,13 @@
 #!/usr/bin/env node
+import { GAKKAI_CALENDAR, isAcademicEvent, PREPARATION_PREFIX, sanitizeAttendees } from './lib/calendar-shared.mjs';
 import { ensureKimEditor } from './lib/kim-editor.mjs';
 import { INQUIRY_SHEET, INQUIRY_TAB, matchMeetingInquiries } from './lib/inquiry-sheet.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { getDriveToken } from './lib/drive-auth.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -13,6 +15,9 @@ import { extractBody } from './gmail-search.mjs';
 import { autoProvider, resolveProvider, buildChildEnv } from './cheap-code.mjs';
 import { resolveClaudeExecutableFromDisk, isUnspawnable } from './claude-exe.mjs';
 import { readEnvValue } from './env-kv.mjs';
+import { recordRun } from './lib/change-gate.mjs';
+import { setupCueDocument } from './lib/meet-cue-doc.mjs';
+import { appendCueUrlToDescription } from './meet-cue-scheduler.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const USER = 'kim@orgiast.jp';
@@ -21,6 +26,10 @@ const CAL = 'https://www.googleapis.com/calendar/v3';
 const DRIVE = 'https://www.googleapis.com/drive/v3';
 const SHEETS = 'https://sheets.googleapis.com/v4/spreadsheets';
 const DOCS = 'https://docs.googleapis.com/v1/documents';
+const execFileAsync = promisify(execFile);
+const KANPE_MARKER = '【事前メモ（この打合せで聞くこと・決めること・注意）】';
+// 説明欄が HTML（<a href>・<br>）に変換されていても既存カンペを拾う
+const CUE_URL_RE = /📝カンペ（社内用）\s*[:：]\s*(?:<a\b[^>]*>)?\s*(https:\/\/docs\.google\.com\/document\/d\/([\w-]+)\/[^\s"<]*)/u;
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const enc = encodeURIComponent;
 const quote = value => String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
@@ -45,7 +54,7 @@ export function excludeCalendar(c, config, state = {}) {
     /#holiday@/.test(c.id || '') || config.excludedCalendarPrefixes.some(p => c.id.startsWith(p));
 }
 export function isMeeting(e, date) {
-  if (e.extendedProperties?.private?.meetingPrepSourceId || e.extendedProperties?.private?.meetingPrepKey) return false;
+  if (e.summary?.startsWith(PREPARATION_PREFIX) || e.extendedProperties?.private?.meetingPrepSourceId || e.extendedProperties?.private?.meetingPrepKey) return false;
   if (!e.start?.dateTime || !e.end?.dateTime || e.status === 'cancelled') return false;
   const b = dayBounds(date), t = Date.parse(e.start.dateTime);
   if (t < Date.parse(b.timeMin) || t >= Date.parse(b.timeMax)) return false;
@@ -268,6 +277,113 @@ export async function loadCases(g, config) {
   for (const group of byId.values()) if (group.length > 1) for (const c of group) c.ambiguousId = true;
   return cases;
 }
+export async function loadCasesWithRetry(g, config, { load = loadCases, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), delays = [2000, 5000, 10000] } = {}) {
+  let lastError;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try { return await load(g, config); }
+    catch (error) {
+      lastError = error;
+      if (attempt < 3) await sleep(delays[attempt] ?? 10000);
+    }
+  }
+  throw lastError;
+}
+
+export function isKanpeMeeting(event, date) {
+  if (!isMeeting(event, date) || privateTitle(event)) return false;
+  // 現場作業・私用・移動は人との打合せではない
+  if (/本番|撤去|設営|搬入|搬出|施工|瞑想|サダナ|✈|flight to/i.test(event.summary || '')) return false;
+  // kim が出席する予定だけ（他人のカレンダーの予定に書き込まない）
+  const kimAttends = [event.calendarId, event.organizer?.email, ...(event.attendees || []).map(a => a.email)]
+    .some(v => v?.toLowerCase() === USER);
+  if (!kimAttends && event.calendarId !== 'primary') return false;
+  const hasOtherAttendee = (event.attendees || []).some(a => !a.self && a.email?.toLowerCase() !== USER);
+  const meetingTitle = /^(M|Ｍ)\s*[:：]/u.test(event.summary || '') || /打合せ|打ち合わせ|MTG|面談|商談|会議/i.test(event.summary || '');
+  return hasOtherAttendee || meetingTitle || !!event.conferenceData || !!event.hangoutLink;
+}
+function customerFromTitle(title = '') {
+  return title.normalize('NFKC').replace(/^\s*M\s*[:：]\s*/i, '').replace(/^【調整不可】\s*/u, '')
+    .replace(/様(?:\s|$).*/u, '').replace(/(?:打合せ|打ち合わせ|MTG|面談|商談|会議).*$/iu, '').trim() || title.trim() || '不明';
+}
+function kanpeDocText(doc) {
+  return (doc.body?.content || []).flatMap(block => block.paragraph?.elements || []).map(e => e.textRun?.content || '').join('');
+}
+function caseNote(match, casesFailed) {
+  if (casesFailed) return `案件一覧の読込失敗（${casesFailed}）`;
+  if (match.case?.ambiguousId) return '案件ID重複';
+  if (match.reason === '複数候補・要確認') return '案件候補が複数';
+  return match.case ? '案件一致' : '案件未特定';
+}
+async function defaultInquiryLookup(customer, { signal } = {}) {
+  const { stdout } = await execFileAsync(process.execPath, [path.join(ROOT, 'tools/inquiry-lookup.mjs'), customer, '--json'],
+    { timeout: 120000, windowsHide: true, maxBuffer: 4 * 1024 * 1024, signal });
+  return JSON.parse(stdout).hits || [];
+}
+function renderKanpeMemo({ event, match, cases, casesFailed, inquiry, inquiryError }) {
+  const c = match.case;
+  const customer = c?.client || customerFromTitle(event.summary);
+  let note = caseNote(match, casesFailed);
+  if (!casesFailed && match.reason === '複数候補・要確認') {
+    const candidates = cases.filter(x => normalize(`${event.summary || ''} ${event.description || ''}`).includes(normalize(x.name)) || normalize(`${event.summary || ''} ${event.description || ''}`).includes(normalize(x.client))).slice(0, 5);
+    if (candidates.length) note += `（候補: ${candidates.map(x => `${x.id} ${x.name}`).join(' / ')}）`;
+  }
+  const lines = ['', KANPE_MARKER, `- お客様名: ${customer}`, `- 備考: ${note}`];
+  if (c) lines.push(`- 案件名: ${c.name}`, `- 案件ID: ${c.id}`,
+    `- 実施計画書URL: ${c.planId ? `https://docs.google.com/a/orgiast.jp/spreadsheets/d/${c.planId}/edit` : '未登録'}`,
+    `- 制作フォルダURL: ${c.projectFolderId || c.folderId ? `https://drive.google.com/drive/folders/${c.projectFolderId || c.folderId}?authuser=kim@orgiast.jp` : '未登録'}`);
+  lines.push('', '【直近のやり取り】');
+  if (inquiryError) lines.push(`- 照会失敗: ${inquiryError}`);
+  else if (!inquiry.length) lines.push('- 該当なし');
+  else for (const hit of inquiry.slice(-5).reverse()) lines.push(`- ${hit.date || '日時不明'} | ${hit.source || '出典不明'} | ${hit.title || '件名なし'} | ${String(hit.excerpt || '').replace(/\s+/g, ' ').slice(0, 200)}`);
+  lines.push('', '【聞くこと・決めること・注意】', '- 次回日程を確認する', '- 未決事項と決定者を明確にする', '- 提出物と期限を確認する', '- お客様は予定に招待せず、日時と会議URLはメール本文で案内する', '');
+  return { customer, text: lines.join('\n') };
+}
+export async function ensureKanpe({ events, cases = [], meetEvents = [], dates, casesError, google, dryRun = false, signal,
+  setupDoc = setupCueDocument, appendUrl = appendCueUrlToDescription, inquiryLookup = defaultInquiryLookup,
+  getToken = getDriveToken } = {}) {
+  const results = [], seen = new Set();
+  for (const event of events) {
+    signal?.throwIfAborted();
+    const date = dates.find(d => isKanpeMeeting(event, d));
+    if (!date || seen.has(event.iCalUID || `${event.calendarId}/${event.id}`)) continue;
+    seen.add(event.iCalUID || `${event.calendarId}/${event.id}`);
+    const match = matchCase(event, cases, meetEvents);
+    const existing = (event.description || '').match(CUE_URL_RE);
+    let docId = existing?.[2], docUrl = existing?.[1], created = false, patched = false;
+    if (dryRun) {
+      results.push({ date, title: event.summary, eventId: event.id, calendarId: event.calendarId, docUrl: docUrl || null,
+        action: docId ? 'reused' : 'created', note: `dry-run: ${caseNote(match, casesError)}` });
+      continue;
+    }
+    if (!docId) {
+      const info = await setupDoc({ title: event.summary || '打合せ', impersonate: 'seisaku-team@orgiast.jp' });
+      docId = info.docId; docUrl = info.staffUrl.replace(/\?authuser=.*$/, ''); created = true;
+      const token = await getToken({ impersonate: USER, scope: `${AUTH}calendar.events`, signal });
+      const patch = await appendUrl({ token, calendarId: event.calendarId, event, docUrl, signal });
+      patched = patch.appended;
+    }
+    const doc = await google.request('documents', `${DOCS}/${enc(docId)}`);
+    if (kanpeDocText(doc).includes(KANPE_MARKER)) {
+      results.push({ date, title: event.summary, eventId: event.id, calendarId: event.calendarId, docUrl,
+        action: created ? 'created' : 'unchanged', note: caseNote(match, casesError) });
+      continue;
+    }
+    let inquiry = [], inquiryError;
+    const memoBase = renderKanpeMemo({ event, match, cases, casesFailed: casesError, inquiry });
+    try { inquiry = await inquiryLookup(memoBase.customer, { signal }); } catch (error) { inquiryError = error.message; }
+    const memo = renderKanpeMemo({ event, match, cases, casesFailed: casesError, inquiry, inquiryError });
+    const endIndex = Math.max(1, doc.body?.content?.at(-1)?.endIndex - 1 || 1);
+    await google.request('documents', `${DOCS}/${enc(docId)}:batchUpdate`, 'POST', { requests: [{ insertText: { location: { index: endIndex }, text: memo.text } }] });
+    results.push({ date, title: event.summary, eventId: event.id, calendarId: event.calendarId, docUrl,
+      action: created ? 'created' : 'memoAdded', note: `${caseNote(match, casesError)}${patched ? '・説明欄追記' : ''}` });
+  }
+  return results;
+}
+export async function ensureKanpeAfterCaseLoad({ caseResult, events, meetEvents = [], dates, google, dryRun = false, signal, ensure = ensureKanpe }) {
+  const cases = caseResult.status === 'fulfilled' ? caseResult.value : [];
+  const casesError = caseResult.status === 'rejected' ? caseResult.reason.message : null;
+  return ensure({ events, cases, meetEvents, dates, casesError, google, dryRun, signal });
+}
 export async function loadMeetEvents(g, config) {
   if (!config.meetCalendarId) return [];
   return g.pages('calendar.events', `${CAL}/calendars/${enc(config.meetCalendarId)}/events?maxResults=2500&showDeleted=false`);
@@ -334,7 +450,9 @@ export async function upsertPreparation(g, calendarId, job, result = {}, now = n
   if (job.kind !== 'meeting') return;
   const id = `mp${hash(`${job.event.calendarId}/${job.event.id}`).slice(0, 48)}`;
   if (id === job.event.id) throw new Error('元の予定への書込禁止');
-  const url = `${CAL}/calendars/${enc(calendarId)}/events/${id}`;
+  const academic = isAcademicEvent(job.event.summary);
+  const eventsUrl = `${CAL}/calendars/${enc(academic ? GAKKAI_CALENDAR : calendarId)}/events`;
+  let url = `${eventsUrl}/${id}`;
   const status = result.status === 'ready' ? (result.skipped?.length ? `一部完了（skip ${result.skipped.length}件: ${result.skipped.map(s => s.reason).join('; ')}）` : '完了') : ['failed', 'needsReview'].includes(result.status) ? `失敗: ${result.summary || '要確認'}` : '準備中';
   const links = new Map([...(job.materialLinks || []), ...(result.links || [])].map(link => [link.label, link]));
   const folder = job.case?.projectFolderId || job.case?.folderId;
@@ -345,15 +463,31 @@ export async function upsertPreparation(g, calendarId, job, result = {}, now = n
     ...[...links.values()].filter(x => !['実施計画書', '確認シート', '提出フォーマット', '制作フォルダ', 'アジェンダ'].includes(x.label)).map(x => `${x.label}: ${workspaceUrl(x.url)}`),
     job.executedOn ? `実行PC: ${job.executedOn}` : '',
     `担当PC: ${job.route.pc?.remoteName || job.route.requested} (${job.route.pc?.label || '未解決'})`, job.route.note, `最終更新: ${now}`].filter(Boolean).join('\n');
-  const body = { summary: `📋 準備: ${job.event.summary || '(名称なし)'}`, description, start: job.event.start, end: job.event.end,
-    attendees: [], colorId: '8', reminders: { useDefault: false, overrides: [] },
+  const body = { summary: `${PREPARATION_PREFIX}${job.event.summary || '(名称なし)'}`, description, start: job.event.start, end: job.event.end,
+    attendees: sanitizeAttendees([]), colorId: '8', reminders: { useDefault: false, overrides: [] },
     visibility: 'private', transparency: 'transparent', extendedProperties: { private: { meetingPrepSourceId: job.event.id, sourceEventId: job.event.id, sourceCalendarId: job.event.calendarId, meetingPrepKey: job.key } } };
   let existing;
   try { existing = await g.request('calendar.events', url); } catch (e) { if (e.status !== 404) throw e; }
-  if (existing && (existing.extendedProperties?.private?.meetingPrepSourceId !== job.event.id || existing.extendedProperties?.private?.sourceCalendarId !== job.event.calendarId)) throw new Error('準備予定IDの衝突');
+  if (existing) {
+    const source = existing.extendedProperties?.private;
+    const sameSource = source?.meetingPrepSourceId === job.event.id && source?.sourceCalendarId === job.event.calendarId;
+    const sameAcademicMeeting = academic && source?.meetingPrepKey === job.key && existing.summary?.startsWith(PREPARATION_PREFIX);
+    if (!sameSource && !sameAcademicMeeting) throw new Error('準備予定IDの衝突');
+  }
+  if (!existing && academic) {
+    // The source can move calendars independently of its preparation event.
+    const params = new URLSearchParams({ privateExtendedProperty: `meetingPrepKey=${job.key}` });
+    const matches = await g.pages('calendar.events', `${eventsUrl}?${params}`);
+    if (matches.length > 1) throw new Error('学会の準備予定が重複');
+    [existing] = matches;
+    if (existing) {
+      if (!existing.id || existing.id === job.event.id || !existing.summary?.startsWith(PREPARATION_PREFIX)) throw new Error('準備予定IDの衝突');
+      url = `${eventsUrl}/${enc(existing.id)}`;
+    }
+  }
   if (existing) await g.request('calendar.events', url, 'PATCH', body);
   else {
-    try { await g.request('calendar.events', `${CAL}/calendars/${enc(calendarId)}/events`, 'POST', { id, ...body }); }
+    try { await g.request('calendar.events', eventsUrl, 'POST', { id, ...body }); }
     catch (e) { if (e.status !== 409) throw e; return upsertPreparation(g, calendarId, job, result, now); }
   }
   const actual = await g.request('calendar.events', url);
@@ -1163,11 +1297,33 @@ export async function collectRun({ home, state, fleet, google, config, checkpoin
     google, checkpoint, home, now, runLocal, send: send || sender(home, path.join(home, '.claude/meeting-prep')),
     template: template ?? fs.readFileSync(path.join(ROOT, 'templates/meeting-prep-prompt.md'), 'utf8') }));
   for (const batch of pending.filter(b => ['failed', 'expired'].includes(b.status) && b.jobs.some(j => state.failed?.[jobStateKey(j)]?.batchId === b.id))) {
+    // Filter out batches where all failed jobs have already been finally reported
+    const unreportedFailures = batch.jobs.filter(j => {
+      const failure = state.failed?.[jobStateKey(j)];
+      return failure && !failure.finalReportedAt;
+    });
+    
+    if (unreportedFailures.length === 0) {
+      // All failures in this batch have already been reported, skip processing
+      continue;
+    }
+
     errors.push({ batchId: batch.id, error: batch.error || batch.status });
+    
     for (const job of batch.jobs) {
       if (calendarError) continue;
-      try { await upsertPreparation(google, state.calendarId, job, { status: 'failed', summary: batch.error || batch.status }); }
-      catch (e) { errors.push({ key: job.key, error: e.message }); }
+      
+      const failure = state.failed?.[jobStateKey(job)];
+      if (failure && !failure.finalReportedAt) {
+        // Mark this failure as finally reported
+        failure.finalReportedAt = now;
+      }
+      
+      try { 
+        await upsertPreparation(google, state.calendarId, job, { status: 'failed', summary: batch.error || batch.status }); 
+      } catch (e) { 
+        errors.push({ key: job.key, error: e.message }); 
+      }
     }
   }
   return { errors, results: answers.length, exitCode: errors.length ? 1 : 0 };
@@ -1198,19 +1354,23 @@ export async function main(argv = process.argv.slice(2)) {
   const options = {};
   for (let i = 0; i < argv.length; i++) {
     if (['--date', '--date-to', '--home', '--run-dir', '--apply-dry'].includes(argv[i])) { if (!argv[i + 1] || argv[i + 1].startsWith('--')) throw new Error('missing option value'); options[argv[i]] = argv[++i]; }
-    else if (['--dry-run', '--live', '--collect', '--identify-014'].includes(argv[i])) options[argv[i]] = true;
+    else if (['--dry-run', '--live', '--collect', '--identify-014', '--kanpe-only'].includes(argv[i])) options[argv[i]] = true;
     else throw new Error(`unknown option: ${argv[i]}`);
   }
   if (options['--live'] && options['--dry-run']) throw new Error('--live と --dry-run は併用不可');
-  if (options['--collect'] && options['--identify-014']) throw new Error('実行モードは1つ');
+  if ([options['--collect'], options['--identify-014'], options['--kanpe-only']].filter(Boolean).length > 1) throw new Error('実行モードは1つ');
   if (options['--apply-dry'] && (options['--live'] || options['--collect'] || options['--identify-014'])) throw new Error('--apply-dry はlive/collect/identifyと併用不可');
   const dryRun = !options['--live'];
   const home = options['--home'] || process.env.ORGIAST_HOME || os.homedir();
   const config = readJson(path.join(ROOT, 'config/meeting-prep-routing.json'));
   const dir = path.join(home, '.claude/meeting-prep'), stateFile = path.join(dir, 'state.json');
   let release = () => {};
-  let report = { dryRun, mode: options['--collect'] ? 'collect' : options['--identify-014'] ? 'identify' : 'dispatch', startedAt: new Date().toISOString(), errors: [] };
-  const finish = code => saveRunReport(options['--run-dir'] || path.join(dir, 'runs'), report, code);
+  let report = { dryRun, mode: options['--collect'] ? 'collect' : options['--identify-014'] ? 'identify' : options['--kanpe-only'] ? 'kanpe-only' : 'dispatch', startedAt: new Date().toISOString(), errors: [], kanpe: [] };
+  const finish = code => {
+    const kanpeChanges = (report.kanpe || []).filter(row => ['created', 'memoAdded'].includes(row.action)).length;
+    recordRun('meeting-prep-dispatch', { changed: (report.targets?.length || report.results || kanpeChanges || 0) > 0, llmInvoked: (report.targets?.length || 0) > 0 && !dryRun, items: (report.targets?.length || report.results || 0) + kanpeChanges, note: code === 0 ? report.mode : 'failed' });
+    return saveRunReport(options['--run-dir'] || path.join(dir, 'runs'), report, code);
+  };
   try {
     if (!dryRun) release = lock(dir);
     const state = readJson(stateFile, { version: 1, sent: {}, batches: {}, reviewed: {} });
@@ -1253,15 +1413,39 @@ export async function main(argv = process.argv.slice(2)) {
       const { main: sendDirective } = await import('./fleet-directive-send.mjs');
       report.identify = sendDirective(['--kind', 'status', '--targets', 'all', '--body-file', file, '--why', '作業用014 の特定（読取のみ）', '--expires-hours', '72', '--push'], { home, repo: ROOT }); return finish(0);
     }
+    if (options['--kanpe-only']) {
+      const settled = await Promise.allSettled([loadEvents(google, config, state, date, date), loadCasesWithRetry(google, config), loadMeetEvents(google, config)]);
+      const calendar = settled[0].status === 'fulfilled' ? settled[0].value : { events: [], errors: [], calendars: [] };
+      const cases = settled[1].status === 'fulfilled' ? settled[1].value : [];
+      const casesError = settled[1].status === 'rejected' ? settled[1].reason.message : null;
+      report.errors.push(...(settled[0].status === 'rejected' ? [{ source: 'calendar', error: settled[0].reason.message }] : []), ...calendar.errors,
+        ...(casesError ? [{ source: 'cases', error: casesError }] : []), ...(settled[2].status === 'rejected' ? [{ source: 'meet', error: settled[2].reason.message }] : []));
+      if (settled[0].status === 'fulfilled') report.kanpe = await ensureKanpeAfterCaseLoad({ caseResult: settled[1], events: calendar.events, meetEvents: settled[2].status === 'fulfilled' ? settled[2].value : [], dates: [date], google, dryRun });
+      return finish(report.errors.length ? 1 : 0);
+    }
     const fleet = await inspectFleet(home, config, { skipBeacon: !!options['--collect'] });
     if (options['--collect']) {
       if (dryRun) { report.pending = Object.values(state.batches || {}).filter(b => b.status !== 'complete').map(b => ({ id: b.id, pc: b.pc, status: b.status })); return finish(0); }
       const result = await collectRun({ home, state, fleet, google, config, checkpoint });
       Object.assign(report, result);
-      state.lastCollect = { at: new Date().toISOString(), errors: result.errors }; checkpoint(); return finish(result.exitCode);
+      const now = Date.now(), hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Tokyo', hour: '2-digit', hourCycle: 'h23' }).format(now));
+      if (hour >= 9 && hour <= 22) {
+        const today = jstDate(now), tomorrow = jstDate(now + 86400000), controller = new AbortController(), timer = setTimeout(() => controller.abort(new Error('ensureKanpe 15分上限')), 15 * 60000);
+        try {
+          const kg = google.withSignal(controller.signal);
+          const settled = await Promise.allSettled([loadEvents(kg, config, state, today, tomorrow), loadCasesWithRetry(kg, config)]);
+          const calendar = settled[0].status === 'fulfilled' ? settled[0].value : { events: [], errors: [] };
+          const cases = settled[1].status === 'fulfilled' ? settled[1].value : [];
+          const casesError = settled[1].status === 'rejected' ? settled[1].reason.message : null;
+          report.errors.push(...calendar.errors, ...(settled[0].status === 'rejected' ? [{ source: 'kanpe-calendar', error: settled[0].reason.message }] : []), ...(casesError ? [{ source: 'kanpe-cases', error: casesError }] : []));
+          if (settled[0].status === 'fulfilled') report.kanpe = await ensureKanpeAfterCaseLoad({ caseResult: settled[1], events: calendar.events, dates: [today, tomorrow], google: kg, signal: controller.signal });
+        } catch (error) { report.errors.push({ source: 'kanpe', error: error.message }); }
+        finally { clearTimeout(timer); }
+      }
+      state.lastCollect = { at: new Date().toISOString(), errors: report.errors }; checkpoint(); return finish(report.errors.length ? 1 : result.exitCode);
     }
     const scanUntil = Date.now();
-    const settled = await Promise.allSettled([loadEvents(google, config, state, date, dateTo), loadCases(google, config), loadHub(google), loadMeetEvents(google, config)]);
+    const settled = await Promise.allSettled([loadEvents(google, config, state, date, dateTo), loadCasesWithRetry(google, config), loadHub(google), loadMeetEvents(google, config)]);
     const errors = settled.flatMap((r, i) => r.status === 'rejected' && i !== 2 ? [{ source: ['calendar', 'cases', 'hub', 'meet'][i], error: r.reason.message }] : []);
     const calendar = settled[0].status === 'fulfilled' ? settled[0].value : { events: [], errors: [], calendars: [] };
     errors.push(...calendar.errors);
@@ -1295,6 +1479,10 @@ export async function main(argv = process.argv.slice(2)) {
       receivers: Object.fromEntries(['作業用014', '作業用008'].map(name => { const pc = resolvePC(name, pcMap, fleet.beacons); return [name, { label: pc?.label || '未解決', ...chooseTransport(fleet.receivers[pc?.label]) }]; })),
       beacon: { ok: fleet.ok, count: fleet.beacons.length },
       warnings: [hub.warning, !fleet.ok ? `beacon未確認: ${fleet.reason}` : null].filter(Boolean), errors };
+    if (settled[0].status === 'fulfilled') {
+      try { report.kanpe = await ensureKanpeAfterCaseLoad({ caseResult: settled[1], events: calendar.events, meetEvents, dates, google, dryRun }); }
+      catch (error) { report.errors.push({ source: 'kanpe', error: error.message }); }
+    }
     if (errors.length) return finish(1); // Partial calendar/case inventories must not silently dispatch wrong assignments.
     if (dryRun) {
       const template = fs.readFileSync(path.join(ROOT, 'templates/meeting-prep-prompt.md'), 'utf8');
@@ -1310,7 +1498,8 @@ export async function main(argv = process.argv.slice(2)) {
       }
       return finish(report.errors.length ? 1 : 0);
     }
-    report.errors = await dispatchJobs({ jobs, state, config, receivers: fleet.receivers, template: fs.readFileSync(path.join(ROOT, 'templates/meeting-prep-prompt.md'), 'utf8'), send: sender(home, dir), checkpoint, google, home });
+    const dispatchErrors = await dispatchJobs({ jobs, state, config, receivers: fleet.receivers, template: fs.readFileSync(path.join(ROOT, 'templates/meeting-prep-prompt.md'), 'utf8'), send: sender(home, dir), checkpoint, google, home });
+    report.errors = [...report.errors, ...dispatchErrors];
     report.batches = Object.values(state.batches || {}).filter(b => b.jobs.some(j => jobs.some(target => target.key === j.key)));
     state.reviewUpdates = mail.updates;
     if (!report.errors.length) { state.lastReviewScan = mail.scannedAt; state.lastDispatch = new Date().toISOString(); }

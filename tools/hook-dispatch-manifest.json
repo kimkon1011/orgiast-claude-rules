@@ -5,6 +5,25 @@
       {
         "matcher": "*",
         "type": "command",
+        "command": "node \"${repo}/tools/shared-memory-context.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/lost-prompt-context.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/event-shop-inquiry-triage.mjs\"",
+        "timeout": 30,
+        "async": true
+      },
+      {
+        "matcher": "*",
+        "type": "command",
         "command": "node \"${repo}/tools/plaud-renewal-notice.mjs\"",
         "timeout": 300,
         "scope": "kim-only"
@@ -195,6 +214,12 @@
       {
         "matcher": "*",
         "type": "command",
+        "command": "node \"${repo}/tools/lost-prompt-context.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
         "command": "node \"${repo}/tools/case-handoff.mjs\" hook",
         "timeout": 60
       },
@@ -370,6 +395,12 @@
         "timeout": 15
       },
       {
+        "matcher": "Bash|PowerShell|Edit|Write|MultiEdit",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/unrequested-automation-gate.mjs\"",
+        "timeout": 15
+      },
+      {
         "matcher": "*",
         "type": "command",
         "command": "node \"${repo}/tools/api-billing-guard.mjs\"",
@@ -484,6 +515,24 @@
         "timeout": 15
       },
       {
+        "matcher": "Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/shared-worktree-git-guard.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/gemini-api-budget-gate.mjs\"",
+        "timeout": 45
+      },
+      {
+        "matcher": "Bash",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/bash-cd-chain-guard.mjs\"",
+        "timeout": 15
+      },
+      {
         "matcher": "Bash|PowerShell|ScheduleWakeup",
         "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/pretooluse-headless-background.mjs\"",
@@ -505,6 +554,12 @@
         "matcher": "*",
         "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/pretooluse-serial-investigation.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/stale-worktree-gate.mjs\"",
         "timeout": 15
       },
       {
@@ -562,6 +617,12 @@
         "timeout": 15
       },
       {
+        "matcher": "mcp__.*(?:[Cc]alendar|gcal).*|Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/calendar-external-guest-gate.mjs\"",
+        "timeout": 15
+      },
+      {
         "matcher": "Read|Grep|Glob|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit",
         "type": "command",
         "command": "node \"${repo}/tools/knowledge-guard.mjs\"",
@@ -595,6 +656,12 @@
       }
     ],
     "Stop": [
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/org-instructions-char-gate.mjs\"",
+        "timeout": 15
+      },
       {
         "matcher": "*",
         "type": "command",
@@ -661,6 +728,13 @@
         "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/check-e2e-before-stop.mjs\"",
         "timeout": 15
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/schedule-autopilot.mjs\" capture",
+        "timeout": 30,
+        "async": true
       }
     ],
     "SessionEnd": [

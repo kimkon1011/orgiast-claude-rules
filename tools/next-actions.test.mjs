@@ -103,78 +103,73 @@ test('実書き込み経路でもマーカー外の既存本文を保持する',
   const actual = fs.readFileSync(file, 'utf8'); assert.match(actual, /^利用者の前文/); assert.match(actual, /利用者の後文\n$/); assert.doesNotMatch(actual, /旧自動節/);
 });
 
-function ghPrStates(prs, states, views) {
+function ghPrStates(prs, states, stateQueries, stateError) {
   return (file, args, opts, cb) => {
     assert.equal(file, 'gh');
     assert.equal(opts.encoding, 'utf8');
-    if (args[0] === 'pr' && args[1] === 'list') return cb(null, JSON.stringify(prs));
-    assert.deepEqual(args, ['pr', 'view', args[2], '--repo', 'kimkon1011/orgiast-claude-rules', '--json', 'number,state']);
-    const number = Number(args[2]);
-    views.push(number);
-    assert.ok(Object.hasOwn(states, number), `想定外のPR照会: ${number}`);
-    const state = states[number];
-    if (state instanceof Error) return cb(state);
-    cb(null, JSON.stringify({ number, state }));
+    if (args[0] === 'pr' && args[1] === 'view') {
+      stateQueries.push(args);
+      if (stateError) return cb(stateError);
+      return cb(null, JSON.stringify({ state: states[args[2]] }));
+    }
+    assert.deepEqual(args, ['pr', 'list', '--repo', 'kimkon1011/orgiast-claude-rules', '--json', 'number,title,updatedAt,isDraft', '--limit', '30']);
+    cb(null, JSON.stringify(prs));
   };
 }
 function llmActions(actions) { return async () => ({ text: JSON.stringify({ actions }) }); }
 function action(title, source) { return { title, why: '確認が必要', first_step: '詳細を確認する', source }; }
 
 test('MERGEDのPRを参照するLLMアクションは除外される', async () => {
-  const views = [], logs = [];
+  const stateQueries = [], errors = [];
   const todo = action('作業 #5 を確認', 'TODO');
   const result = await runNextActions({
-    home: home(), now: NOW, execImpl: ghPrStates([{ number: 12 }], { 297: 'MERGED' }, views),
-    llm: llmActions([action('マージを確認', 'PR#297'), todo]), log: (line) => logs.push(line)
+    home: home(), now: NOW, execImpl: ghPrStates([{ number: 12 }], { 297: 'MERGED' }, stateQueries),
+    llm: llmActions([action('マージを確認', 'PR#297'), todo]), log() {}, error: (line) => errors.push(line)
   });
   assert.deepEqual(result.actions, [todo]);
   assert.doesNotMatch(result.body, /297/);
   assert.doesNotMatch(fs.readFileSync(result.outputFile, 'utf8'), /297/);
-  assert.deepEqual(views, [297]);
-  assert.equal(logs.filter((line) => line === 'next-actions: PR#297 はMERGEDのため除外').length, 1);
+  assert.equal(stateQueries.length, 1);
+  assert.deepEqual(stateQueries[0], ['pr', 'view', '297', '--repo', 'kimkon1011/orgiast-claude-rules', '--json', 'state']);
+  assert.deepEqual(errors, ['next-actions: MERGED/CLOSED のPRを含む候補を1件除外: PR#297']);
 });
 
-test('open一覧にいるPRは再照会しない', async () => {
-  const views = [], candidate = action('PR#12 を確認', 'PR#12');
+test('CLOSEDのPRをwhyで参照するアクションは除外される', async () => {
+  const stateQueries = [], candidate = { ...action('確認作業', 'TODO'), why: '[PR#298|障害修正] は完了済み' };
   const result = await runNextActions({
-    home: home(), now: NOW, execImpl: ghPrStates([{ number: 12 }], {}, views),
-    llm: llmActions([candidate]), args: ['--dry-run'], log() {}
+    home: home(), now: NOW, execImpl: ghPrStates([], { 298: 'CLOSED' }, stateQueries),
+    llm: llmActions([candidate]), args: ['--dry-run'], log() {}, error() {}
   });
-  assert.deepEqual(result.actions, [candidate]);
-  assert.equal(views.length, 0);
+  assert.equal(result.actions[0].title, '新しい依頼と未処理事項を確認');
+  assert.equal(stateQueries.length, 1);
 });
 
-test('pr viewが失敗したら除外せず同じPRのエラーもキャッシュする', async () => {
-  const views = [], candidates = [action('PR297 を確認', 'PR#297'), action('関連作業', 'PR #297')];
+test('OPENのPRをfirst_stepで参照する候補とPR番号なしの候補は残る', async () => {
+  const stateQueries = [], open = { ...action('レビュー', 'TODO'), first_step: 'gh pr view PR#299' }, noPr = action('文書を確認', 'TODO');
   const result = await runNextActions({
-    home: home(), now: NOW, execImpl: ghPrStates([], { 297: new Error('gh unavailable') }, views),
-    llm: llmActions(candidates), args: ['--dry-run'], log() {}
+    home: home(), now: NOW, execImpl: ghPrStates([], { 299: 'OPEN' }, stateQueries),
+    llm: llmActions([open, noPr]), args: ['--dry-run'], log() {}, error() {}
+  });
+  assert.deepEqual(result.actions, [open, noPr]);
+  assert.equal(stateQueries.length, 1);
+});
+
+test('GitHub問い合わせ失敗時は全候補を残して理由をstderrへ1行出す', async () => {
+  const stateQueries = [], errors = [], candidates = [action('PR#297 を確認', 'TODO'), action('継続TODOを確認', 'TODO')];
+  const result = await runNextActions({
+    home: home(), now: NOW, execImpl: ghPrStates([], {}, stateQueries, new Error('gh unavailable\nauth required')),
+    llm: llmActions(candidates), args: ['--dry-run'], log() {}, error: (line) => errors.push(line)
   });
   assert.deepEqual(result.actions, candidates);
-  assert.deepEqual(views, [297]);
-});
-
-test('フォールバックのTODO由来も同じフィルタが効く', async () => {
-  const root = home(), views = [], logs = [];
-  put(root, 'next-session.md', '- Review & merge PR #297 (stop alarms)\n- 継続TODOを確認');
-  const result = await runNextActions({
-    home: root, now: NOW, execImpl: ghPrStates([{ number: 12, title: '未処理PR' }], { 297: 'CLOSED' }, views),
-    llm: async () => { throw new Error('LLM unavailable'); }, log: (line) => logs.push(line), error() {}
-  });
-  assert.equal(result.provider, 'fallback');
-  assert.equal(result.actions.length, 2);
-  assert.deepEqual(result.actions.map((a) => a.source), ['PR#12', 'TODO']);
-  assert.match(result.body, /継続TODOを確認/);
-  assert.doesNotMatch(result.body, /297/);
-  assert.deepEqual(views, [297]);
-  assert.ok(logs.includes('next-actions: PR#297 はCLOSEDのため除外'));
+  assert.equal(stateQueries.length, 1);
+  assert.deepEqual(errors, ['next-actions: 変更依頼 #297 の状態を確認できませんでした（gh unavailable auth required）']);
 });
 
 test('全滅したら既定アクション1件を出す', async () => {
-  const views = [];
+  const stateQueries = [];
   const result = await runNextActions({
-    home: home(), now: NOW, execImpl: ghPrStates([], { 297: 'MERGED' }, views),
-    llm: llmActions([action('PRを処理', 'PR#297')]), log() {}
+    home: home(), now: NOW, execImpl: ghPrStates([], { 297: 'MERGED' }, stateQueries),
+    llm: llmActions([action('PRを処理', 'PR#297')]), log() {}, error() {}
   });
   assert.equal(result.actions.length, 1);
   assert.deepEqual(result.actions[0], {
@@ -184,7 +179,7 @@ test('全滅したら既定アクション1件を出す', async () => {
     source: 'TODO'
   });
   assert.match(fs.readFileSync(result.outputFile, 'utf8'), /新しい依頼と未処理事項を確認/);
-  assert.deepEqual(views, [297]);
+  assert.equal(stateQueries.length, 1);
 });
 
 test('台帳の依頼中・対応中を1行ずつ表示し再生成で重複しない', async () => {
@@ -203,4 +198,114 @@ test('台帳取得失敗でも理由を1行出して推奨アクションを保�
   const result = await runNextActions({ home: home(), now: NOW, execImpl: gh(), llm: good, log() {}, listLedger: async () => { throw new Error('API\ndown'); } });
   assert.match(fs.readFileSync(result.outputFile, 'utf8'), /台帳取得失敗: API down/);
   assert.equal(result.actions.length, 1);
+});
+
+// --- バックアップ裏取り（欠陥1） ---
+
+function ghRcloneExec(ghData, rcloneOutput) {
+  return (file, args, opts, cb) => {
+    if (file === 'gh') return cb(null, JSON.stringify(ghData));
+    if (file === 'rclone') return cb(null, rcloneOutput);
+    cb(new Error(`unexpected: ${file}`));
+  };
+}
+
+test('バックアップ成功確認時はバックアップ関連タスクを除外する', async () => {
+  const root = home();
+  const rcloneOutput = '2363054344 2026-11-22 04:52:29.730000000 019/claude-019-2026-11-22.zip\n2357842328 2026-11-21 04:51:29.283000000 019/claude-019-2026-11-21.zip';
+  const logs = [];
+  const result = await runNextActions({
+    home: root, now: new Date('2026-11-22T05:00:00+09:00'),
+    execImpl: ghRcloneExec([], rcloneOutput),
+    llm: llmActions([action('ClaudeDailyDriveBackup 失敗調査', 'P1タスク'), action('PR確認', 'PR#1')]),
+    log: (line) => logs.push(line),
+    listLedger: async () => ({ ok: true, rows: [] })
+  });
+  assert.equal(result.actions.length, 1);
+  assert.equal(result.actions[0].title, 'PR確認');
+  assert.ok(logs.some((l) => l.includes('next-actions: バックアップ成功を確認')));
+});
+
+test('バックアップ非関連タスクはrcloneを呼ばずそのまま通す', async () => {
+  const root = home();
+  let rcloneCalled = false;
+  const execImpl = (file, args, opts, cb) => {
+    if (file === 'gh') return cb(null, '[]');
+    if (file === 'rclone') { rcloneCalled = true; return cb(null, ''); }
+    cb(new Error(`unexpected: ${file}`));
+  };
+  await runNextActions({ home: root, now: NOW, execImpl, llm: llmActions([action('通常タスク', 'TODO')]), log() {}, listLedger: async () => ({ ok: true, rows: [] }) });
+  assert.equal(rcloneCalled, false);
+});
+
+test('rclone失敗時はバックアップタスクを除外しない（未確認扱い）', async () => {
+  const root = home();
+  const result = await runNextActions({
+    home: root, now: NOW,
+    execImpl: (file, args, opts, cb) => {
+      if (file === 'gh') return cb(null, '[]');
+      if (file === 'rclone') return cb(new Error('rclone not available'));
+      cb(new Error(`unexpected: ${file}`));
+    },
+    llm: llmActions([action('ClaudeDailyDriveBackup 確認', 'P1タスク')]),
+    log() {},
+    listLedger: async () => ({ ok: true, rows: [] })
+  });
+  assert.equal(result.actions.length, 1);
+  assert.equal(result.actions[0].title, 'ClaudeDailyDriveBackup 確認');
+});
+
+test('昨日のバックアップのみでも成功とみなし除外する', async () => {
+  const root = home();
+  // 今日のバックアップなし・昨日のみ
+  const rcloneOutput = '2357842328 2026-11-21 04:51:29.283000000 019/claude-019-2026-11-21.zip';
+  const logs = [];
+  const result = await runNextActions({
+    home: root, now: new Date('2026-11-22T05:00:00+09:00'),
+    execImpl: ghRcloneExec([], rcloneOutput),
+    llm: llmActions([action('backup 異常調査', '夜間ログ'), action('別の作業', 'TODO')]),
+    log: (line) => logs.push(line),
+    listLedger: async () => ({ ok: true, rows: [] })
+  });
+  assert.equal(result.actions.length, 1);
+  assert.equal(result.actions[0].title, '別の作業');
+  assert.ok(logs.some((l) => l.includes('next-actions: バックアップ成功を確認')));
+});
+
+// --- first_step 文脈混入（欠陥2） ---
+
+test('first_stepに無関係な絶対パスがあれば空にする', async () => {
+  const root = home();
+  const contaminated = { title: 'Drive定期保存の確認', why: '確認が必要', first_step: 'D:\\Claude\\gas\\event-shop-mail-relay のログを確認', source: 'P1タスク' };
+  const result = await runNextActions({
+    home: root, now: NOW, execImpl: gh(),
+    llm: llmActions([contaminated, action('別のタスク', 'TODO')]),
+    log() {}, listLedger: async () => ({ ok: true, rows: [] })
+  });
+  const target = result.actions.find((a) => a.title === 'Drive定期保存の確認');
+  assert.ok(target);
+  assert.equal(target.first_step, '');
+});
+
+test('first_stepの絶対パスがタイトルと関連していれば空にしない', async () => {
+  const root = home();
+  const valid = { title: 'event-shop-mail-relay 確認', why: '確認が必要', first_step: 'D:\\Claude\\gas\\event-shop-mail-relay のログを確認', source: 'TODO' };
+  const result = await runNextActions({
+    home: root, now: NOW, execImpl: gh(),
+    llm: llmActions([valid]), log() {}, listLedger: async () => ({ ok: true, rows: [] })
+  });
+  assert.equal(result.actions.length, 1);
+  assert.equal(result.actions[0].first_step, 'D:\\Claude\\gas\\event-shop-mail-relay のログを確認');
+});
+
+test('絶対パスを含まないfirst_stepはそのまま通す', async () => {
+  const root = home();
+  const clean = action('PR確認', 'PR#1');
+  clean.first_step = 'gh pr view 12';
+  const result = await runNextActions({
+    home: root, now: NOW, execImpl: gh(),
+    llm: llmActions([clean]), log() {}, listLedger: async () => ({ ok: true, rows: [] })
+  });
+  assert.equal(result.actions.length, 1);
+  assert.equal(result.actions[0].first_step, 'gh pr view 12');
 });

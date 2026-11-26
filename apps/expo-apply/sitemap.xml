@@ -1,21 +1,45 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>./</loc>
-    <lastmod>2026-11-08</lastmod>
+    <loc>https://rebooth.co.jp/en/expo-apply/</loc>
+    <lastmod>2026-11-18</lastmod>
     <changefreq>monthly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>faq.html</loc>
-    <lastmod>2026-11-08</lastmod>
+    <loc>https://rebooth.co.jp/en/expo-apply/faq.html</loc>
+    <lastmod>2026-11-18</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.5</priority>
+    <priority>0.7</priority>
   </url>
   <url>
-    <loc>research.html</loc>
-    <lastmod>2026-11-08</lastmod>
+    <loc>https://rebooth.co.jp/en/expo-apply/freebies/</loc>
+    <lastmod>2026-11-18</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.3</priority>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://rebooth.co.jp/en/expo-apply/freebies/booth-preparation-checklist.html</loc>
+    <lastmod>2026-11-18</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://rebooth.co.jp/en/expo-apply/freebies/booth-readiness-diagnostic.html</loc>
+    <lastmod>2026-11-18</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://rebooth.co.jp/en/expo-apply/freebies/exhibition-planning-template.html</loc>
+    <lastmod>2026-11-18</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://rebooth.co.jp/en/expo-apply/research.html</loc>
+    <lastmod>2026-11-18</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.4</priority>
   </url>
 </urlset>

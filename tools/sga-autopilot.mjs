@@ -11,6 +11,7 @@ import { upload } from './drive-upload.mjs';
 import { runRegisterPs1 } from './lib/run-register-ps1.mjs';
 import { deliverKim } from './notify-kim.mjs';
 import { isEntry } from './is-entry.mjs';
+import { recordRun } from './lib/change-gate.mjs';
 
 export const SPREADSHEET_ID = '1E-MFGU8MSYiWf8BmXXdgIFdlFQuYLa4P9zmlLKd8o6w';
 export const CSV_FOLDER = '1c3XZMdq0adkzQ1RKuZ5kI3ozy__R4vsJ';
@@ -355,6 +356,7 @@ export async function main(argv = process.argv.slice(2)) {
   try {
     const { command, options } = parseArgs(argv);
     const result = await createAutopilot().execute(command, options);
+    recordRun('sga-autopilot', { changed: !result?.skipped, llmInvoked: false, items: result?.skipped ? 0 : 1, note: command });
     console.log(options.json ? JSON.stringify(result, null, 2) : result.text ?? JSON.stringify(result, null, 2));
   } catch (error) { console.error(error.stack ?? String(error)); process.exitCode = 1; }
 }

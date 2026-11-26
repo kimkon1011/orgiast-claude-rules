@@ -11,8 +11,38 @@ import { autoResumeAllowed } from './lib/auto-resume-policy.mjs';
 import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
 import { ledgerRows, runTaskLedger } from './task-ledger.mjs';
 import { alternateCheapProvider, autoSessionExecutor, buildClaudeHeadlessArgs, buildCheapCodeArgs, buildCodexDoArgs, cheapProvidersAllCooling, codexDoLaneEnabled, claudeFallbackEnabled, prepareExecutorRoot, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
-import { findClaudeInVersionedDir, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 import { sweepFile as sweepRescueTodoFile } from './rescue-todo-sweep.mjs';
+import { evaluateClaudeSeatGuard, formatClaudeSeatGuardSkip } from './lib/claude-seat-guard.mjs';
+
+function fallbackSanitizeClaudeSupervisorEnv(parentEnv = process.env) {
+  const clean = {};
+  for (const [key, value] of Object.entries(parentEnv || {})) {
+    const upper = String(key || '').toUpperCase();
+    const retained = upper === 'CLAUDE_CODE_GIT_BASH_PATH' || upper === 'CLAUDE_CLI'
+      || upper === 'CLAUDE_CLI_PATH' || upper === 'CLAUDE_BIN';
+    const inherited = upper.startsWith('ANTHROPIC_') || upper === 'CLAUDE_CONFIG_DIR';
+    const leaked = !retained && (upper === 'CLAUDECODE' || upper.startsWith('CLAUDE_CODE_')
+      || upper.startsWith('CLAUDE_AGENT_SDK_') || upper === 'CLAUDE_PID'
+      || upper.startsWith('CLAUDE_PREVIEW_') || upper.startsWith('MCP_'));
+    if (inherited || !leaked) clean[key] = value;
+  }
+  return clean;
+}
+
+export async function loadClaudeExeHelpers(importModule = (specifier) => import(specifier), warn = console.error) {
+  try {
+    const helpers = await importModule('./claude-exe.mjs');
+    if (typeof helpers.findClaudeInVersionedDir !== 'function' || typeof helpers.sanitizeClaudeSupervisorEnv !== 'function') {
+      throw new Error('必要な export がありません');
+    }
+    return helpers;
+  } catch (error) {
+    warn(`[auto-session] claude-exe.mjs を読み込めないため実体探索だけスキップします: ${String(error?.message || error).split(/\r?\n/)[0]}`);
+    return { findClaudeInVersionedDir: () => null, sanitizeClaudeSupervisorEnv: fallbackSanitizeClaudeSupervisorEnv };
+  }
+}
+
+const { findClaudeInVersionedDir, sanitizeClaudeSupervisorEnv } = await loadClaudeExeHelpers();
 
 export { autoSessionExecutor } from './auto-session-executor.mjs';
 
@@ -20,6 +50,7 @@ const __dirname = import.meta.dirname;
 const REPO_ROOT = path.resolve(__dirname, '..');
 const MARKER = '<!-- NEXT-SESSION v1 -->';
 const SIX_HOURS = 6 * 60 * 60 * 1000;
+let seatGuardCache = null;
 export const ROLE_NAMES = ['tester', 'system-review', 'cost-check'];
 export const DEFAULT_REPO = path.resolve(import.meta.dirname, '..');
 export const BUILTIN_REPO_BY_KEYWORD = {
@@ -554,8 +585,8 @@ export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 6
 - セッションの作業ディレクトリは履歴を揃えるためのフォルダであり、実際の作業対象リポジトリは ${repoCwd} である。git は必ず \`git -C "${repoCwd}"\` の形で実行し、codex-do.mjs は \`--cwd "${repoCwd}"\` を付ける。裸の \`git status\` / \`git checkout\` は使わない。
 - Windows パスをシェルに渡すときは必ずダブルクォートで囲む。bash はクォート無しの \\ を食うため、--cwd C:\\... は壊れた相対パスになる（2026-10-20 に spawn_failed 6件の実害）。
 - 実装本体は \`node tools/codex-do.mjs "<指示>" --cwd "${repoCwd}" --origin unattended\` で Codex に委譲する（§1.18）。監督は設計・レビュー・検証だけ。調査・分類・要約だけの作業は \`--kind investigate|classify|summarize\` を付けて llm-ask(gemini/deepseek/groq)へ回し、Codex は実装・テスト実行だけに使う。終了コード75（stdout が \`{"status":"deferred"}\`）は失敗ではなく保留（Codex 上限中または無人割当超過）なので、\`retryAt\` 以降まで同じ項目を再試行せず、${summaryFile} に「保留」と記録して次の項目へ進む。
-- このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。「バックグラウンドで走らせて完了を待つ」と書いてターンを終えてはいけない。
-- \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、作りかけのブランチを push して draft PR にするか、次回へ引き継いで終了する。
+- このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。codex-doや他AIの委譲結果が得られなかったときに「待つ/待ち/完了を待って/結果を待っています」と書いてターンを終えてはいけない。それらの文を残すと stop-gate が W 型（委譲完了待ち）として記録し、毎晩の再発検証で恒久未解決扱いになる。代わりに「【継続】<説明>（次セッションで再実行）」の形式で ${summaryFile} に記録する。
+- \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。codex-doを起動する前に残り時間を確認する。まとめ開始（開始から${Math.max(0, timeoutMin - 10)}分）まで30分未満ならcodex-doを起動しない。代わりに継続項目として${summaryFile}に「【継続】codex-do: <説明>（残り時間不足のため次セッションで実行）」と記録し、次のTODOへ進む。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、作りかけのブランチを push して draft PR にするか、次回へ引き継いで終了する。
 - 他セッションと作業ツリーを共有している。\`git add -A\` / \`git commit -a\` / \`git stash\` / \`git checkout -- .\` は禁止。自分が作成・変更したファイルだけをパス指定で \`git add\` する。着手前とコミット直前に \`git status --porcelain\` を撮り、差分が自分の変更だけであることを確認する。
 - ブランチは必ず main から切る。ブランチ名は \`auto/${day}-<短いスラグ>\`。
 - \`node --test tools/*.test.mjs\` が緑になるまで直す。
@@ -567,7 +598,8 @@ export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 6
 - 終了時は ~/.claude/next-session.md の該当 TODO 行だけを \`~~…~~ → ✅ <日付> 完了（PR #N）\` に行単位で置換し、ファイル全体を上書きしない。該当 TODO 行はどのブロックにあってもよく、成功時は runner 側でも印を付けるので、取り消し線が既に付いていたら何もしなくてよい。
 - fleet-mail の受信メールに \`[判断依頼]\` を含む依頼へは返信も判断も行わない。kim の判断待ちとして放置すること（ヘッドレスでは未読注入からも除外される）。自分が送った判断依頼への回答（[回答・返信不要] 付き）は読んで作業に使ってよいが、返信はしない。
 - 秘匿値を出力しない。
-- 外部への送信（メール、社外向け Discord、SNS、顧客連絡）は行わない。`,
+- 外部への送信（メール、社外向け Discord、SNS、顧客連絡）は行わない。支払い・削除・課金変更も行わない。それらが必要なら ${summaryFile} と ~/.claude/next-session.md に「承認待ち（朝）」と書いて朝に回す。
+- \`【夜間】\` 付きの残TODOを優先して進める。金さんへの途中報告はせず、結果はサマリへ書く（朝の報告は1回にまとめる）。`,
     '## 完了報告\n最後に3行以内で「やったこと / 検証したこと / 残ったこと」を出力する。',
   ].filter(Boolean).join('\n\n');
 }
@@ -613,8 +645,8 @@ ${issue.body || '（本文なし）'}
 
 ## 実行環境
 - 実リポジトリは ${repoCwd}。git は \`git -C "${repoCwd}"\`、実装委譲は \`node tools/codex-do.mjs "<指示>" --cwd "${repoCwd}" --origin unattended\`（調査・分類・要約だけなら \`--kind investigate|classify|summarize\`）のように対象を明示する。終了コード75は失敗ではなく保留で、\`retryAt\` まで再試行しない。
-- このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。「バックグラウンドで走らせて完了を待つ」と書いてターンを終えてはいけない。
-- \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、作りかけのブランチを push して draft PR にするか、次回へ引き継いで終了する。
+- このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。codex-doや他AIの委譲結果が得られなかったときに「待つ/待ち/完了を待って/結果を待っています」と書いてターンを終えてはいけない。代わりに「【継続】<説明>（次セッションで再実行）」の形式で ${summaryFile} に記録する。
+- \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。codex-doを起動する前に残り時間を確認する。まとめ開始（開始から${Math.max(1, timeoutMin - 10)}分）まで30分未満ならcodex-doを起動しない。代わりに継続項目として${summaryFile}に「【継続】codex-do: <説明>（残り時間不足のため次セッションで実行）」と記録し、次のTODOへ進む。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、次回へ引き継いで終了する。
 - 作業経過を ${summaryFile} に逐次追記する。PR URL・PRタイトル・CI結果を必ず最後に記録する。
 - 5分を超える長時間ポーリングをしてはいけない。開始から ${Math.max(1, timeoutMin - 10)} 分でまとめに入る。
 
@@ -763,6 +795,21 @@ function extensionExecutables() {
 }
 
 export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, runOptions = {}) {
+  const home = runOptions.home ?? process.env.ORGIAST_HOME ?? os.homedir();
+  let guardVerdict = runOptions.guardVerdict;
+  if (!guardVerdict) {
+    if (runOptions.evaluateGuard) guardVerdict = await runOptions.evaluateGuard({ home, env: process.env, caller: runOptions.headlessJob ?? 'auto-session' });
+    else {
+      const now = Date.now();
+      if (!seatGuardCache || seatGuardCache.home !== home || now - seatGuardCache.at > 60_000) seatGuardCache = { home, at: now, promise: evaluateClaudeSeatGuard({ home, env: process.env, caller: runOptions.headlessJob ?? 'auto-session' }) };
+      guardVerdict = await seatGuardCache.promise;
+    }
+  }
+  if (guardVerdict.blocked) {
+    const message = formatClaudeSeatGuardSkip(guardVerdict);
+    (runOptions.log ?? console.log)(message);
+    return { status: 'skipped', skippedSeatGuard: true, deferred: false, executorUsed: 'none', exitCode: 0, stdout: message, stderr: '' };
+  }
   if (runOptions.resumeSessionId && !autoResumeAllowed({ source: runOptions.resumeSource })) {
     return { status: 'skipped', skippedAutoResume: true, deferred: false, executorUsed: 'none', exitCode: null, stdout: '', stderr: 'auto-resume disabled by config/auto-resume.json' };
   }
@@ -777,9 +824,7 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
     // cheap-code / codex は --resume 引数を捨てるため、元のセッションに再開が届かない
     // （2026-11-09 実害: セッション 834dfc9c の再開が「成果記録なし」で終わった）。
     const resumeForced = Boolean(runOptions.resumeSessionId);
-    const choice = resumeForced
-      ? { ...configuredChoice, executor: 'claude' }
-      : runOptions.model
+    const choice = (resumeForced || runOptions.model)
       ? { ...configuredChoice, executor: 'claude' }
       : runOptions.executor === 'cheap-code'
       ? { ...configuredChoice, executor: 'cheap-code' }
@@ -841,6 +886,14 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
         return;
       }
       timedOut = true;
+      // Resolve the promise first so the caller sees the timeout immediately,
+      // regardless of how long process cleanup takes (e.g. new Worker() on
+      // Windows CI can block for seconds). The kill below continues asynchronously.
+      child.stdin?.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.unref();
+      complete(null);
       // taskkill can take seconds on Windows. Do not block the deadline or wait for
       // inherited pipes to close before advancing. Its /T cleanup continues independently.
       if (child.pid) {
@@ -864,11 +917,6 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
           });
         } else { try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} } }
       }
-      child.stdin?.destroy();
-      child.stdout.destroy();
-      child.stderr.destroy();
-      child.unref();
-      complete(null);
     }, laneTimeoutMs);
     const complete = (code) => {
       if (settled) return;

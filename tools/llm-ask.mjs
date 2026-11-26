@@ -107,6 +107,7 @@ function appendAttempt(info, usage = {}, errorText = '') {
         attempt: info.attempt,
         failover: info.failover,
         secs: Number(info.secs.toFixed(3)),
+        ...(process.env.ORGIAST_JOB ? { job: process.env.ORGIAST_JOB } : {}),
       }, { home, usageFile: ledger });
     } catch {}
     return;
@@ -115,7 +116,7 @@ function appendAttempt(info, usage = {}, errorText = '') {
   // 区別できず、直せない全滅として毎日起票される（2026-10-22 実測: kimi の 2337 行が reason 欠落）。
   const reasonField = info.status !== 'ok' && info.reason ? { reason: String(info.reason).slice(0, 400) } : {};
   const errorField = errorText ? { error: errorText } : {};
-  const rec = { t: new Date().toISOString(), provider: info.candidate.provider, model: info.candidate.model, ...usageCostFields(usage), in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover, ...reasonField, ...errorField };
+  const rec = { t: new Date().toISOString(), category: category || '', caller: 'llm-ask', ...(process.env.ORGIAST_JOB ? { job: process.env.ORGIAST_JOB } : {}), provider: info.candidate.provider, model: info.candidate.model, ...usageCostFields(usage), in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover, ...reasonField, ...errorField };
   try { fs.mkdirSync(path.dirname(ledger), { recursive: true }); fs.appendFileSync(ledger, JSON.stringify(rec) + '\n'); } catch {}
 }
 
@@ -123,6 +124,7 @@ try {
   const result = await callWithFallback({
     persistState: !args.includes('--no-persist'),
     start: effectiveStart,
+    explicitStart: preferProvider || args.includes('--no-fallback'),
     category,
     perProviderTimeoutMs,
     chain: args.includes('--no-fallback') ? [] : effectiveChain,

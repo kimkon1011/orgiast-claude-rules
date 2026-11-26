@@ -6,6 +6,7 @@ import path from 'node:path';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { buildContext, selectContext, main, shouldReceivePoll, POLL_STALE_MS, ENTRY_LIMIT, CONTEXT_LIMIT, CATEGORY_LIMITS, FOOTER } from './fleet-inbox-context.mjs';
+import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { readInbox, main as mailMain } from './fleet-mail.mjs';
 const NOW = Date.parse('2026-10-14T12:00:00Z');
@@ -246,6 +247,24 @@ test('802 sender hook displays cached failed status without network', async t =>
   const output = [];
   await main({ home: f.home, readStdin: async () => JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'test' }), stdout: x => output.push(x), spawnImpl: () => ({ on() {}, unref() {} }) });
   assert.match(output.join(''), /other-PC への質問 mail-sent は相手の自動回答が失敗（timeout）/);
+});
+
+test('802 failed来自他人・自分宛ては表示しない', async t => {
+  const f = fixture(t);
+  const label = resolveFleetLabel(f.home, { hostname: os.hostname() });
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent-status.json'), JSON.stringify({ 'mail-other': { id: 'mail-other', from: 'other-PC', to: label, status: 'failed', failReason: 'timeout' } }));
+  const output = [];
+  await main({ home: f.home, readStdin: async () => JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'test' }), stdout: x => output.push(x), spawnImpl: () => ({ on() {}, unref() {} }) });
+  assert.equal(output.length, 0);
+});
+
+test('802 failed来自自分・他人宛ては表示する', async t => {
+  const f = fixture(t);
+  const label = resolveFleetLabel(f.home, { hostname: os.hostname() });
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent-status.json'), JSON.stringify({ 'mail-mine': { id: 'mail-mine', from: label, to: 'other-PC', status: 'failed', failReason: 'timeout' } }));
+  const output = [];
+  await main({ home: f.home, readStdin: async () => JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'test' }), stdout: x => output.push(x), spawnImpl: () => ({ on() {}, unref() {} }) });
+  assert.match(output.join(''), /other-PC への質問 mail-mine は相手の自動回答が失敗（timeout）/);
 });
 
 test('failed prompts are hidden only after 72 hours from failedAt', () => {

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { judge, APPROVAL_MISSING_REASON, BODY_NOT_SHOWN_REASON } from './mail-send-approval-gate.mjs';
+import { SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 import { bodyHash } from './lib/send-approval.mjs';
 
 function createFixture() {
@@ -129,6 +130,23 @@ test('draft creation and forward-draft creation stay allowed', () => {
   for (const command of ['node tools/gmail-draft.mjs --to a@b.com --body x','node tools/gmail-draft.mjs --forward msg --to a@b.com']) assert.equal(judge({tool_name:'Bash',tool_input:{command}}).decision,'pass');
 });
 
+test('seisaku-mail send と send workflow は同じ承認ゲートの対象', () => {
+  const body = '社外向け本文';
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'seisaku-gate-'));
+  fs.writeFileSync(path.join(cwd, 'body.txt'), body);
+  try {
+    for (const command of [
+      'node tools/seisaku-mail.mjs send --to customer@example.com --subject test --body-file body.txt --yes',
+      `gh workflow run seisaku-mail.yml -f mode=send -f body_b64=${Buffer.from(body).toString('base64')}`,
+      `gh workflow run seisaku-mail.yml --field=mode=send --raw-field=body_b64=${Buffer.from(body).toString('base64')}`,
+    ]) {
+      assert.equal(judge({ tool_name: 'Bash', cwd, tool_input: { command } }).decision, 'block');
+      assert.equal(judge({ tool_name: 'Bash', cwd, tool_input: { command }, transcript: evidence(body) }).decision, 'pass');
+    }
+    assert.equal(judge({ tool_name: 'Bash', cwd, tool_input: { command: 'node tools/seisaku-mail.mjs draft --to customer@example.com --subject test --body-file body.txt' } }).decision, 'pass');
+  } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
+});
+
 test('send CLI names used only as data do not trigger the approval gate', () => {
   const heredocReadOnly = `cat <<'EOF' > /tmp/readline.mjs
 import { loadSecrets } from '/repo/tools/line-group-send.mjs';
@@ -139,6 +157,26 @@ node /tmp/readline.mjs`;
   for (const command of [heredocReadOnly, grepReadOnly]) {
     assert.equal(judge({ tool_name: 'Bash', tool_input: { command } }).decision, 'pass');
   }
+});
+
+test('秘書の空き日程URLは承認済みでも社外送信を止める', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'secretary-url-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'secretary-url-body-'));
+  t.after(() => { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(cwd, { recursive: true, force: true }); });
+  const body = '11月20日 10:00\nhttps://claude-pc.tailc5d751.ts.net/secretary/book\n';
+  fs.writeFileSync(path.join(cwd, 'body.txt'), body, 'utf8');
+  const hash = bodyHash(body);
+  fs.mkdirSync(path.join(home, '.claude', 'send-approvals'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'send-approvals', `${hash}.json`), JSON.stringify({ approvedAt: '2026-11-17T03:00:00Z', kimQuote: 'この本文で送って', bodyHash: hash }));
+  const line = judge({ tool_name: 'Bash', cwd, tool_input: { command: 'node tools/line-group-send.mjs --group test --text-file body.txt' } }, { env: { CLAUDE_HEADLESS: '1', ORGIAST_HOME: home }, home });
+  assert.deepEqual(line, { decision: 'block', reason: SECRETARY_BOOKING_URL_REASON });
+  const gmail = judge({
+    tool_name: 'mcp__claude_ai_Gmail__send_message',
+    tool_input: { body },
+    transcript: [{ type: 'assistant', content: body }, { type: 'user', content: '送って' }],
+  });
+  assert.equal(gmail.decision, 'block');
+  assert.equal(gmail.reason, SECRETARY_BOOKING_URL_REASON);
 });
 
 test('executed LINE send still requires approval', () => {

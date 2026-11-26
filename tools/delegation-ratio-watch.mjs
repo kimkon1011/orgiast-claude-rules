@@ -86,7 +86,7 @@ function extractUsageFromProjectJsonl(file, since) {
       if (!row || typeof row !== 'object') continue;
       const model = extractModel(row);
       if (!model) continue;
-      const t = Number(row.timestamp) || Date.parse(row.timestamp || row.t || row.ts || row.created_at || 0);
+      const t = Number(row.timestamp) || Date.parse(row.timestamp || row.t || row.ts || row.created_at);
       if (!Number.isFinite(t) || t < since) continue;
       // message.id + requestId で重複排除
       const msgId = (row.message && row.message.id) ? String(row.message.id) : '';
@@ -139,7 +139,7 @@ export function compute({ home = os.homedir(), now = Date.now(), executorUsageFi
       let row;
       try { row = JSON.parse(line); } catch { continue; }
       if (!row || typeof row !== 'object') continue;
-      const t = Number(row.t) || Date.parse(row.t || row.ts || 0);
+      const t = Number(row.t) || Date.parse(row.t || row.ts);
       if (!Number.isFinite(t) || t < since) continue;
       executorRows.push(row);
       // 安いAI実作業 (Claude 以外で out > 200, status ok)
@@ -173,16 +173,25 @@ export function compute({ home = os.homedir(), now = Date.now(), executorUsageFi
   }
 
   // 3. quota_wait 中の呼び出し — lane-health.json から quota_wait プロバイダを特定
-  const quotaWaitProviders = new Set();
+  const quotaWaitWindows = new Map();
+  const quotaWaitUnknownSince = [];
   try {
     const lh = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'lane-health.json'), 'utf8').replace(/^﻿/, ''));
     for (const [p, s] of Object.entries(lh?.lanes || {})) {
-      if (s?.reason === 'quota_wait' && Number(s?.until) > now) quotaWaitProviders.add(String(p).toLowerCase());
+      if (s?.reason !== 'quota_wait' || Number(s?.until) <= now) continue;
+      const provider = String(p).toLowerCase();
+      const startedAt = Number(s?.since) || Date.parse(s?.since || s?.probedAt);
+      if (Number.isFinite(startedAt)) quotaWaitWindows.set(provider, { since: startedAt, until: Number(s.until) });
+      // 開始時刻なしの旧データは過去の正常呼出しを誤算入するため、安全側で数えない。
+      else quotaWaitUnknownSince.push(provider);
     }
   } catch {}
   let quotaWaitCalls = 0;
   for (const row of executorRows) {
-    if (row.provider && quotaWaitProviders.has(String(row.provider).toLowerCase())) quotaWaitCalls++;
+    const window = row.provider && quotaWaitWindows.get(String(row.provider).toLowerCase());
+    if (!window) continue;
+    const t = Number(row.t) || Date.parse(row.t || row.ts);
+    if (Number.isFinite(t) && t >= window.since && t <= window.until) quotaWaitCalls++;
   }
 
   // 4. 判断
@@ -200,23 +209,43 @@ export function compute({ home = os.homedir(), now = Date.now(), executorUsageFi
     cheapAi: { workCount: cheapWorkCount },
     deferred: { noFallback: deferredNoFallback, allBackendsFailed: deferredAllBackendsFailed },
     quotaWaitCalls,
-    providers: [...quotaWaitProviders],
+    providers: [...quotaWaitWindows.keys(), ...quotaWaitUnknownSince],
     alert,
     reasons: [
       deferredHigh && `代替されなかった deferred が ${deferredNoFallback} 件（閾値 10）`,
       quotaWaitHigh && `quota_wait 中の呼出しが ${quotaWaitCalls} 件（閾値 50）`,
+      ...quotaWaitUnknownSince.map(provider => `${provider} の quota_wait 開始時刻が不明なため呼出し数から除外`),
       cheapLow && opusDominant && `安いAI実作業 ${cheapWorkCount} 件/日（閾値 10）かつ Claude Opus 比率 ${Math.round(opusRatio * 100)}%（閾値 70%）`,
     ].filter(Boolean),
   };
   return result;
 }
 
-export function saveResult(result, home = os.homedir()) {
-  const file = path.join(home, '.claude', 'delegation-ratio-watch.json');
-  const tmp = `${file}.${Math.random().toString(16).slice(2)}.tmp`;
-  try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(tmp, JSON.stringify(result, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(tmp, file); }
-  finally { try { fs.unlinkSync(tmp); } catch {} }
+// Duplicate scheduled tasks/readers can briefly deny replacement on Windows.
+// Retry only rename: keep the previous JSON intact and never replay delivery.
+// 上限 8 回・1回最大 2 秒・合計約 9 秒（100ms×2^attempt、capped at 2000ms）。
+function saveJson(file, value, { fsImpl = fs, sleepImpl = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
+  const pid = process.pid;
+  const tmp = `${file}.${pid}.${Math.random().toString(16).slice(2)}.tmp`;
+  try {
+    fsImpl.mkdirSync(path.dirname(file), { recursive: true });
+    fsImpl.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+    for (let attempt = 0; ; attempt++) {
+      try { fsImpl.renameSync(tmp, file); break; }
+      catch (error) {
+        if (!['EPERM', 'EBUSY', 'EACCES'].includes(error.code) || attempt >= 8) {
+          console.error(`[saveJson] rename failed after ${attempt} retries: ${error.code} ${error.message}`);
+          throw error;
+        }
+        sleepImpl(Math.min(100 * (2 ** attempt), 2000));
+      }
+    }
+  } finally { try { fsImpl.unlinkSync(tmp); } catch {} }
   return file;
+}
+
+export function saveResult(result, home = os.homedir(), deps) {
+  return saveJson(path.join(home, '.claude', 'delegation-ratio-watch.json'), result, deps);
 }
 
 // kim-inbox に送る本文を組み立てる
@@ -261,7 +290,7 @@ export function notifyInbox(result, home = os.homedir(), execImpl = execFileSync
 }
 
 // 次回 auto-session 用の根本修正起票
-export function writeFixTicket(result, home = os.homedir()) {
+export function writeFixTicket(result, home = os.homedir(), deps) {
   if (!result.alert) return null;
   const fixFile = path.join(home, '.claude', 'delegation-ratio-watch-fix.json');
   const fix = {
@@ -275,10 +304,7 @@ export function writeFixTicket(result, home = os.homedir()) {
       '復帰まで llm-fallback の quota_wait スキップに任せる',
     ],
   };
-  const tmp = `${fixFile}.${Math.random().toString(16).slice(2)}.tmp`;
-  try { fs.mkdirSync(path.dirname(fixFile), { recursive: true }); fs.writeFileSync(tmp, JSON.stringify(fix, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(tmp, fixFile); }
-  finally { try { fs.unlinkSync(tmp); } catch {} }
-  return fixFile;
+  return saveJson(fixFile, fix, deps);
 }
 
 if (isEntry(import.meta.url)) {
@@ -286,7 +312,8 @@ if (isEntry(import.meta.url)) {
   const now = Date.now();
   const dryRun = process.argv.includes('--dry-run');
   const result = compute({ home, now });
-  saveResult(result, home);
+  // saveResult が EPERM で失敗しても exit 1 にしない（次回のタスク起動で再試行）。
+  try { saveResult(result, home); } catch (e) { console.error(`[delegation-ratio-watch] saveResult skipped: ${e.message}`); }
   if (result.alert) {
     if (dryRun) {
       console.log('【kim-inbox に積む本文（--dry-run）】');
@@ -295,7 +322,7 @@ if (isEntry(import.meta.url)) {
     } else {
       const ok = notifyInbox(result, home);
       if (!ok) process.exitCode = 1;
-      writeFixTicket(result, home);
+      try { writeFixTicket(result, home); } catch (e) { console.error(`[delegation-ratio-watch] writeFixTicket skipped: ${e.message}`); }
     }
     for (const r of result.reasons) console.error(`[delegation-ratio-watch] 🔴 ${r}`);
   } else {

@@ -1,12 +1,15 @@
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { submitProposal } from './proposal-session.mjs';
 import {
   evaluateReceiptSignals,
   evaluateFleet,
+  isOpusHeavy,
+  opusRatioFromMainModel,
   decideActions,
   sortViolationsBySeverity,
   verifyPreviousActions,
@@ -24,10 +27,25 @@ import {
   writeCodexFallbackOrder,
   writeAutoSessionExecutorEnv,
   writeBudgetPressure,
-  splitWhitelistedCommand
+  splitWhitelistedCommand,
+  runEntry,
+  refreshCostDirective
 } from './cost-improve-loop.mjs';
 
-const main = (args, io = {}) => mainImpl(args, { scanAiReceipts: async () => ({ errors: [] }), receiptLedgerAgeHours: () => 0, alertAiReceipts: async () => {}, ...io });
+// テストの未指定経路から実通知・プロセス起動・外部APIを呼ばない。
+// Proposal persistence stays real; every default proposal uses a mocked launcher,
+// including --no-notify runs (that flag does not suppress the real launcher).
+const launchNextSession = mock.fn(async () => 0);
+const submitTestProposal = (proposal, options) => submitProposal(proposal, { ...options, launch: launchNextSession });
+const main = (args, io = {}) => mainImpl(args, {
+  scanAiReceipts: async () => ({ errors: [] }), receiptLedgerAgeHours: () => 0,
+  alertAiReceipts: async () => {}, collectBudgetStatus: async () => ({ budgetPacePct: 0 }),
+  collectProviderBalances: async () => [], alertProviderBalances: async () => {},
+  spawnSync: () => ({ status: 0 }), submitProposal: submitTestProposal,
+  notifyKim: async () => ({ delivered: 'session-inbox' }), sendHeartbeat: async () => {},
+  runOriguchiReferralMonthly: async () => {}, shouldSendMonthlyReport: async () => false,
+  ...io
+});
 
 test('残高シグナル3種の境界とauto-local効果は固定許可リストだけ', () => {
   const rows = [
@@ -76,6 +94,29 @@ test('strict percent and date parsing rejects ambiguous or impossible values', (
   assert.equal(parsePercent('50'), null); assert.equal(parsePercent('12abc'), null);
   assert.equal(parseJstOrIsoDate('2026-02-30 12:00:00'), null);
   assert.equal(parseJstOrIsoDate('2026-01-01 24:00:00'), null);
+});
+
+test('isOpusHeavy / opusRatioFromMainModel', () => {
+  // %無しの model 名だけでは過多と判定しない
+  assert.equal(isOpusHeavy({ mainModel: 'claude-opus-4' }, null), false);
+  // > 50% → true
+  assert.equal(isOpusHeavy({ mainModel: 'claude-opus-4 (72%)' }, null), true);
+  // <= 50% → false
+  assert.equal(isOpusHeavy({ mainModel: 'claude-opus-4 (45%)' }, null), false);
+  // non-opus model → false
+  assert.equal(isOpusHeavy({ mainModel: 'claude-sonnet-4 (80%)' }, null), false);
+  // localState.opusRatio > 0.5 → true
+  assert.equal(isOpusHeavy({}, { opusRatio: 0.6 }), true);
+  // localState.opusRatio <= 0.5 → false
+  assert.equal(isOpusHeavy({}, { opusRatio: 0.4 }), false);
+
+  // opusRatioFromMainModel
+  assert.equal(opusRatioFromMainModel('claude-opus-4'), null);
+  assert.equal(opusRatioFromMainModel('claude-opus-4 (72%)'), 0.72);
+  assert.equal(opusRatioFromMainModel('claude-opus-4 (45%)'), 0.45);
+  assert.equal(opusRatioFromMainModel('claude-sonnet-4 (80%)'), null);
+  assert.equal(opusRatioFromMainModel(null), null);
+  assert.equal(opusRatioFromMainModel(undefined), null);
 });
 
 test('one untrusted PC does not stop another PC auto action', () => {
@@ -336,6 +377,33 @@ test('9. human escalation is neither worked nor shown in the verification sectio
     assert.ok(proposals[0].proposal.evidence.some(x => x.includes('PC-human')));
     assert.equal(proposals[0].options.dryRun, true);
   } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
+});
+
+test('kim席の非dry-run提案も実画面を開かず注入launcherを呼ぶ', async t => {
+  const home = createTempDir(), previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    cleanTempDir(home);
+  });
+  fs.writeFileSync(path.join(home, '.claude', 'cost-improve-state.json'), JSON.stringify({
+    version: 1, actions: [], lastKpis: {},
+    staleRetry: { 'PC-human': { sentAt: '2026-09-01T00:00:00Z', count: 1 } },
+  }));
+  const callsBefore = launchNextSession.mock.callCount();
+  const result = await main(['--no-notify'], {
+    now: NOW, localState: {}, signals: {}, readLedger: () => ({ codex: 1 }),
+    fetchFleetSheetRows: async () => [{ pcName: 'PC-human', reportedAt: '2026-09-01 00:00:00', delegRatio: '60%', claudeUsd: '1' }],
+    submitProposal: (proposal, options) => submitTestProposal(proposal, { ...options, label: () => 'kim-PC' }),
+    spawnSync: () => assert.fail('no child process'),
+    notifyKim: async () => assert.fail('no notification'), sendHeartbeat: async () => {},
+  });
+  assert.equal(result.ok, true);
+  assert.equal(launchNextSession.mock.callCount(), callsBefore + 1);
+  const { arguments: [args, options] } = launchNextSession.mock.calls.at(-1);
+  assert.deepEqual(args, ['--target', 'vscode', '--prompt', '/session-start']);
+  assert.equal(options.homedir, home);
 });
 
 test('unused_provider is escalated without running a command', () => {
@@ -601,7 +669,7 @@ test('29. B4 kind は PLAYBOOK の mode/effect で action 化され baseline に
   assert.equal(providerUnhealthy.effect, 'writeRoutingOverride');
   assert.equal(providerUnhealthy.provider, 'groq');
   assert.equal(providerUnhealthy.baseline.metric, 'failRate');
-  assert.match(providerUnhealthy.reportNote, /有料枠で解消可\(例: Groq Dev tier\)/);
+  assert.match(providerUnhealthy.reportNote, /まず無料枠・既存契約内の他AIレーンを実測/);
 
   const codexSaturated = byKind('codex_saturated');
   assert.ok(codexSaturated);
@@ -670,11 +738,19 @@ test('31. B4 effect は既存ファイル内容を保持して書き込む', () 
     assert.deepEqual(Object.keys(overrides.demote).sort(), ['gemini', 'groq']);
     assert.equal(writeRoutingOverride({ claudeDir, provider: 'groq', now: NOW }).changed, false, '同値なら no_change');
 
-    // codex-fallback-order: qwen が先頭で、zai 有無により第2候補が glm / deepseek に変わる
+    // codex-fallback-order: cursor-agent → qwen → deepseek → glm → gemini-cli → openrouter-free。zai の有無では並びを変えない。
+    const fallbackOrder = ['cursor-agent', 'qwen', 'cheap-code:deepseek', 'cheap-code:glm', 'gemini-cli', 'openrouter-free'];
     assert.equal(writeCodexFallbackOrder({ claudeDir, zaiAvailable: true }).changed, true);
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeDir, 'codex-fallback-order.json'), 'utf8')), ['qwen', 'cheap-code:glm', 'gemini-cli']);
-    assert.equal(writeCodexFallbackOrder({ claudeDir, zaiAvailable: false }).changed, true);
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeDir, 'codex-fallback-order.json'), 'utf8')), ['qwen', 'cheap-code:deepseek', 'gemini-cli']);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeDir, 'codex-fallback-order.json'), 'utf8')), fallbackOrder);
+    assert.equal(writeCodexFallbackOrder({ claudeDir, zaiAvailable: false }).changed, false);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeDir, 'codex-fallback-order.json'), 'utf8')), fallbackOrder);
+    const localOrder = ['qwen', 'cheap-code:deepseek', 'cheap-code:glm', 'openrouter-free'];
+    fs.writeFileSync(path.join(claudeDir, 'codex-fallback-order.local.json'), `${JSON.stringify(localOrder)}\n`);
+    const preserved = writeCodexFallbackOrder({ claudeDir, zaiAvailable: true, writeImpl: () => { throw new Error('local override must not be rewritten'); } });
+    assert.equal(preserved.changed, false);
+    assert.equal(preserved.preserved, true);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeDir, 'codex-fallback-order.local.json'), 'utf8')), localOrder);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeDir, 'codex-fallback-order.json'), 'utf8')), fallbackOrder);
 
     // auto-session.env: 既存行を保持して executor を上書きし、同値は no_change
     fs.writeFileSync(path.join(claudeDir, 'auto-session.env'), 'KEEP=1\nORGIAST_AUTO_SESSION_EXECUTOR=claude\n', 'utf8');
@@ -1020,4 +1096,118 @@ test('receipt signals: success is clean; stale boundary and missing ledger are d
     assert.equal(violations.length, 1);
     assert.match(violations[0].evidence, /領収書台帳が .*h 更新されていない/);
   }
+});
+
+test('runEntry: refresh throw でも run 成功なら process.exitCode=0', async t => {
+  const logs = [];
+  t.mock.method(console, 'error', line => logs.push(String(line)));
+  const savedExitCode = process.exitCode;
+  t.after(() => { process.exitCode = savedExitCode; });
+  process.exitCode = 0;
+
+  let calledRun = false;
+  const result = await runEntry({
+    argv: [],
+    refresh: () => { throw new Error('simulated timeout'); },
+    run: () => { calledRun = true; return Promise.resolve('ok'); },
+  });
+
+  assert.equal(calledRun, true, 'refresh が throw しても run は呼ばれる');
+  assert.equal(result, 'ok');
+  assert.equal(process.exitCode, 0, 'refresh の失敗は本体の成功を覆さない');
+  assert.ok(logs.some(line => line.includes('WARN') && line.includes('simulated timeout')));
+
+  process.exitCode = savedExitCode;
+});
+
+test('directive 更新タイムアウトは既定900秒、環境変数で変更できる', () => {
+  for (const [env, expected] of [[{}, 900000], [{ COST_DIRECTIVE_TIMEOUT_SECONDS: '42' }, 42000], [{ COST_DIRECTIVE_TIMEOUT_SECONDS: 'invalid' }, 900000]]) {
+    refreshCostDirective({ home: os.tmpdir(), env, spawn: (_exe, _args, options) => {
+      assert.equal(options.timeout, expected);
+      return { status: 0 };
+    } });
+  }
+});
+
+test('runEntry: refresh 成功時は process.exitCode を変えず run が呼ばれる', async () => {
+  const savedExitCode = process.exitCode;
+  process.exitCode = 0;
+
+  let calledRun = false;
+  const result = await runEntry({
+    argv: [],
+    refresh: () => 'ok',
+    run: () => { calledRun = true; return Promise.resolve('ok'); },
+  });
+
+  assert.equal(calledRun, true, 'run は呼ばれる');
+  assert.equal(process.exitCode, 0, 'process.exitCode は変わらない');
+
+  process.exitCode = savedExitCode;
+});
+
+test('runEntry: --dry-run では refresh を呼ばず（throw しても止まらない）run が呼ばれる', async () => {
+  const savedExitCode = process.exitCode;
+  process.exitCode = 0;
+
+  let calledRefresh = false;
+  let calledRun = false;
+  const result = await runEntry({
+    argv: ['--dry-run'],
+    refresh: () => { calledRefresh = true; return 'ok'; },
+    run: () => { calledRun = true; return Promise.resolve('ok'); },
+  });
+
+  assert.equal(calledRefresh, false, '--dry-run では refresh を呼ばない');
+  assert.equal(calledRun, true, 'run は呼ばれる');
+  assert.equal(process.exitCode, 0, 'process.exitCode は変わらない');
+
+  process.exitCode = savedExitCode;
+});
+
+test('runEntry: run 自身が throw したら process.exitCode=1 になる', async () => {
+  const savedExitCode = process.exitCode;
+  process.exitCode = 0;
+
+  await runEntry({
+    argv: ['--dry-run'],
+    refresh: () => 'ok',
+    run: () => { throw new Error('run failed'); },
+  });
+
+  assert.equal(process.exitCode, 1, 'run の throw で exitCode=1');
+
+  process.exitCode = savedExitCode;
+});
+
+test('refreshCostDirective: timeout は正の整数のみ採用する', t => {
+  const key = 'COST_WORK_LOOP_TIMEOUT_MS';
+  const saved = process.env[key];
+  t.after(() => {
+    if (saved === undefined) delete process.env[key];
+    else process.env[key] = saved;
+  });
+  for (const [value, expected] of [
+    [undefined, 900_000], ['600000', 600_000], ['0', 900_000],
+    ['-1', 900_000], ['1.5', 900_000], ['invalid', 900_000],
+    ['Infinity', 900_000], ['', 900_000],
+  ]) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+    let capturedTimeout;
+    refreshCostDirective({ home: os.tmpdir(), spawn: (cmd, args, opts) => {
+      capturedTimeout = opts.timeout;
+      return { status: 0, error: null, stderr: '' };
+    } });
+    assert.equal(capturedTimeout, expected, String(value));
+  }
+});
+
+test('runEntry: refresh と本体が両方失敗した場合は終了コード1', async t => {
+  const saved = process.exitCode;
+  t.after(() => { process.exitCode = saved; });
+  t.mock.method(console, 'error', () => {});
+  process.exitCode = 0;
+  await runEntry({ argv: [], refresh: () => { throw Error('timeout'); }, run: async () => { throw Error('main failed'); } });
+  assert.equal(process.exitCode, 1);
 });

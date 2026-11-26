@@ -38,6 +38,18 @@ test('calculation blocks, WARN, fullwidth and argument validation',async()=>{
   assert.equal(checkDraft('商品 1,000円\n\n小計 1,000円',c)[1].status,'WARN');
   for(const args of [[],['collect'],['collect','--lead','x'],['check','--draft','x'],['collect','--email','x','--days','0']]) assert.equal(await main({args,log:()=>{}}),64);
 });
+test('小計・単独合計を直前明細の和と照合する', () => {
+  const wrong = checkDraft('レンタル 99,000円\n送料 6,000円\n小計 145,000円\n合計目安 145,000円（税込）', '');
+  for (const row of wrong.filter(row => /小計|合計目安/.test(row.text))) {
+    assert.equal(row.status, 'NG');
+    assert.match(row.reason, /明細の和 105,000 円に対し記載 145,000 円/);
+    assert.match(row.reason, /差額 40,000 円/);
+  }
+  assert.equal(checkDraft('レンタル 99,000円\n送料 6,000円\n小計 105,000円', '').at(-1).status, 'OK');
+  assert.deepEqual(checkDraft('金額の記載がない本文です', ''), []);
+  const standard = '本体 100,000円\n送料 10,000円\n小計 110,000円\n管理手数料（20%） 22,000円\n税抜合計 132,000円\n消費税（10%） 13,200円\n税込合計 145,200円';
+  assert.ok(checkDraft(standard, '').every(row => row.status !== 'NG'));
+});
 for(const forbidden of [false,true]) for (const inquiry of ['格付けチェックとクイズイントロドン', '縁日']) test(`collect mocked; Discord forbidden=${forbidden}; inquiry=${inquiry}`,async()=>{
   const home=await mkdtemp(path.join(os.tmpdir(),'reply-collect-')), logs=[], calls=[];
   const json = value => new Response(JSON.stringify(value),{headers:{'content-type':'application/json'}});

@@ -1,11 +1,12 @@
 {
   "enabled": true,
-  "maxCalls": 8,
+  "maxCalls": 12,
   "timeoutMs": 300000,
   "maxCostUsd": 2,
-  "reservePerCallUsd": 0.25,
+  "reservePerCallUsd": 0.01,
   "maxOutputTokens": 3000,
   "minLikes": 10,
+  "fallback": "web-search",
   "estimatedRates": { "inputPerMillion": 3, "outputPerMillion": 15, "post": 0.005, "profile": 0.01 },
   "topics": [
     { "purpose": "cost", "query": "AI Claude Codex Gemini Grok キャッシュ 委譲 コスト削減 手順 実測" },

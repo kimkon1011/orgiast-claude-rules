@@ -40,7 +40,7 @@ test('run.log records whether the digest was actually delivered, even on a pause
 });
 
 test('models follow planIncluded; prompt comes from skill and headless uses one foreground iteration', async (t) => {
-  for (const [policy, model] of [[{ planIncluded: true }, 'sonnet'], [{ planIncluded: false }, 'sonnet'], [{}, 'sonnet']]) {
+  for (const [policy, model] of [[{ planIncluded: true }, 'opus'], [{ planIncluded: false }, 'opus'], [{}, 'opus']]) {
     const opts = fixture(t);
     await runAutopilot('start', { objective: 'test' }, opts);
     const result = await runOnce({ ...opts, policy, executable: 'fake-claude', invokeImpl: async (invocation) => {
@@ -59,12 +59,12 @@ test('models follow planIncluded; prompt comes from skill and headless uses one 
   }
 });
 
-test('objective.md "model" pins the supervisor model per PC; opus/fable pins fall back to sonnet for automation (2026-11-15 kim)', async (t) => {
+test('objective.md "model" pins the supervisor model per PC; opus は残し、fable と不正値は opus に倒す (2026-11-17 kim)', async (t) => {
   for (const [pin, policy, model] of [
-    ['claude-opus-5-5', { planIncluded: true }, 'sonnet'],
-    ['claude-fable-5-1', { planIncluded: false }, 'sonnet'],
+    ['claude-opus-5-5', { planIncluded: true }, 'claude-opus-5-5'],
+    ['claude-fable-5-1', { planIncluded: false }, 'opus'],
     ['claude-haiku-4-5', { planIncluded: true }, 'claude-haiku-4-5'],
-    ['gpt-5; rm -rf /', { planIncluded: true }, 'sonnet'],
+    ['gpt-5; rm -rf /', { planIncluded: true }, 'opus'],
   ]) {
     const opts = fixture(t);
     await runAutopilot('start', { objective: 'test' }, opts);
@@ -562,4 +562,22 @@ test('buildPrompt(repo) と buildPrompt(repo, { preFile }) の出力に deadline
   const promptWithPreFile = buildPrompt(repo, { preFile: 'pre-latest.json' });
   assert.doesNotMatch(promptWithPreFile, /強制終了される/);
   assert.doesNotMatch(promptWithPreFile, /残り秒数 − 480/);
+});
+
+test('runOnce records runMs in run.log for main invoke and watch', async (t) => {
+  const opts = fixture(t);
+  await runAutopilot('start', { objective: 'test runMs' }, opts);
+  await runOnce({
+    ...opts,
+    invokeImpl: async (invocation) => {
+      await runAutopilot('post', { summary: 'done', progress: 10 }, opts);
+      return { exitCode: 0 };
+    },
+  });
+  const log = fs.readFileSync(path.join(opts.dir, 'run.log'), 'utf8');
+  const lines = log.trim().split('\n').map(JSON.parse);
+  const resultLine = lines.find(l => l.model && l.authLane);
+  assert.ok(resultLine, 'expected a result line in run.log');
+  assert.ok(Number.isFinite(resultLine.runMs), 'runMs should be a finite number');
+  assert.ok(resultLine.runMs >= 0, 'runMs should be >= 0');
 });

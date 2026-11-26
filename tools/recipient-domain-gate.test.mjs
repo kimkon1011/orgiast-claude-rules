@@ -98,3 +98,41 @@ test('script resolves after shell directory change', async t => {
   input.cwd = os.tmpdir();
   assert.equal((await judge(input, opts(bad))).decision, 'block');
 });
+
+test('node --test does not treat fixture gmail.send/a@b.com as recipients', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'recipient-domain-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const testFile = path.join(dir, 'gmail-draft.test.mjs');
+  fs.writeFileSync(testFile, 'gmail.send("a@b.com"); // messages/send\n');
+  for (const tool_name of ['Bash', 'PowerShell']) {
+    for (const flag of ['--test', '--test-only']) {
+      const input = { cwd: dir, tool_name, tool_input: { command: `node ${flag} "${testFile}"` } };
+      assert.equal((await judge(input, opts(bad))).decision, 'pass', `${tool_name} ${flag}`);
+    }
+  }
+});
+
+test('node --test then gmail-draft --bcc still blocks the trailing send segment', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'recipient-domain-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const testFile = path.join(dir, 'gmail-draft.test.mjs');
+  fs.writeFileSync(testFile, 'gmail.send("a@b.com"); // messages/send\n');
+  const input = {
+    tool_name: 'Bash',
+    tool_input: { command: `node --test "${testFile}" && node tools/gmail-draft.mjs --bcc=a@bad.com` },
+  };
+  assert.equal((await judge(input, opts(bad))).decision, 'block');
+});
+
+test('npm test / npm run test are not treated as send-script loads', async () => {
+  for (const command of ['npm test', 'npm run test', 'npm.cmd run test:unit']) {
+    assert.equal((await judge({ tool_name: 'Bash', tool_input: { command } }, opts(bad))).decision, 'pass', command);
+  }
+});
+
+test('direct gmail-draft --send --to still blocks bad domains', async () => {
+  assert.equal(
+    (await judge({ tool_name: 'Bash', tool_input: { command: 'node tools/gmail-draft.mjs --send --to a@bad.com' } }, opts(bad))).decision,
+    'block',
+  );
+});

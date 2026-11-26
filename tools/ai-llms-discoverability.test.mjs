@@ -3,9 +3,14 @@
 import { describe, it } from 'node:test';
 import { ok, strictEqual } from 'node:assert';
 import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = resolve(__dirname, '..');
 
 const llmsPaths = [
-  { path: 'ai-visibility/x0053-llms-txt/llms.txt', label: 'x0053 template' },
+  { path: resolve(REPO_ROOT, 'ai-visibility/x0053-llms-txt/llms.txt'), label: 'x0053 template' },
 ];
 
 await describe('llms.txt AI discoverability', async () => {

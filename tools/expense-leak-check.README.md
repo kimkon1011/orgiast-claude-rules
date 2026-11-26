@@ -20,13 +20,13 @@ node "C:\Users\uers\orgiast-main\tools\expense-leak-check.mjs" --limit 5 --verif
 - `EXPENSE_LEAK_HOME`: state/logの保存ルート上書き。標準は OS のホーム。WSL検証では書込可能な作業ディレクトリ内を指定します。
 - `EXPENSE_LEAK_YAHOO_SCRIPT`: Yahooスクリプトの絶対パス上書き。既定はホーム配下の `Downloads/CLAUDE.md配布/yahoo-auction-sniper/yahoo-mail-search.mjs`。
 
-freeeの接続設定はリポジトリ直下 `.env.local` の `PURCHASING_APP_DATABASE_URL`、または同名環境変数を使います。既存 `freee-query.mjs` の OAuth 更新処理を `lib/freee-auth.mjs` へそのまま切り出しました。会計APIはGETのみです。OAuthトークン更新の既存POSTとトークンDB更新は維持しています。トークン値やDB接続文字列は出力しません。
+freeeの接続設定はリポジトリ直下 `.env.local` の `PURCHASING_APP_DATABASE_URL`、または同名環境変数を使います。設定が無いPCではスクリプト冒頭で `hasFreeeDbConfig()` が false を返し、`main()` が `exit 0` で skip します。既存 `freee-query.mjs` の OAuth 更新処理を `lib/freee-auth.mjs` へそのまま切り出しました。会計APIはGETのみです。OAuthトークン更新の既存POSTとトークンDB更新は維持しています。トークン値やDB接続文字列は出力しません。
 
 Google認証は既存 `lib/drive-auth.mjs` と同じSA鍵、Sheetsは `kim@orgiast.jp`、Gmailは各受信箱をimpersonateします。Gmailにはreadonly scopeを使い、Yahooは `--open` を付けず検索一覧のみ読みます。Yahooの共有ブラウザプロファイルが使用中ならブラウザ側のロックエラーを記録し、別プロファイルを起動しません。ジョブ自身の検索は必ず直列です。
 
 金額バリアントと正規化した利用先先頭語で検索し、取引日±10日のJST範囲を適用します。GmailのURLは受信箱別のthreadリンクです。Yahoo既存CLIは件名・送信者を構造化せず一覧テキストを260文字で切るため、明示的な日付・利用先・金額が揃う結果のみ証跡に採用します。Yahooの件名欄は一覧テキスト、送信者は空欄、リンクは受信箱トップになります。曖昧なヒット数は `searches.yahooUnverified` に記録します。メール本文の取得・既読化は行いません。
 
-stateの確定verdictは再検索しません。期間外に残ったidも個別GETでstatusを確認し、status≠1と確認できたものだけstateから外します。検索上限（Gmail各300 / Yahoo150）、実行時間（40分、終了処理に90秒確保）、サービス障害の未完了項目は確定verdictを付けず翌週再試行します。未完了行は結果JSONに残し、Sheetへの追記を保留します。Yahooのexit 2だけは依頼仕様通り以後YahooをスキップしてGmailの結果で判定し、DMに再ログイン依頼を付けます。exit 1とexit 2は区別します。
+stateの確定verdictは再検索しません。期間外に残ったidも個別GETでstatusを確認し、status≠1と確認できたものだけstateから外します。検索上限（Gmail各300 / Yahoo150）、実行時間（40分、終了処理に90秒確保）、サービス障害の未完了項目は確定verdictを付けず翌週再試行します。未完了行は結果JSONに残し、Sheetへの追記を保留します。一方、DWD制約や検索ツール不在でこの席から読めない受信箱は `unavailable` として一度だけ記録し、読めた範囲で判定・追記を進めます。この場合も全受信箱の照合は終わっていないため `complete=false` を維持し、DMと結果JSONに別席での要照合理由を出します。Yahooのexit 2は再ログインが必要な `unavailable` として扱います。その他のexit 1は一時障害として区別します。
 
 SheetsはRAWで書き込み、数式として解釈されないようにします。id列による重複除外、ヘッダーの一致確認、追記範囲のread-backを行います。人が記入する対応状況や既存行は更新しません。Sheet追記後に処理が止まっても次回id列を確認するため二重追記しません。DMは `notifyKim` を使い、別チャネルへのwebhook fallbackは無効です。DM応答喪失時の送信済み判定はできないため、同一実行内での自動再送は行いません（後日の週次・手動実行は別通知です）。
 

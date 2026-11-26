@@ -13,6 +13,14 @@ kim 宛の報告を Discord からセッション内の会話へ移す（2026-10
 - 直接の kim 宛 DM・claude-code チャンネル投稿は PreToolUse ゲートで拒否。正規の通知ツールは台帳へ振り分ける。他メンバー宛 DM は従来どおり。
 - セッションのクローズは止めない。未回収 ask の件数を成果報告と引き継ぎの「未決」に書き、次セッションで回収する。
 
+### 同じ質問を繰り返さない（2026-11-19）
+- 原因の実測: `auto-progress-escalate` が自動進行台帳の判断待ち行ごとに毎日新しい ask を作っていた（190 行から 1273 件、1083 件が重複）。受信箱で回答しても台帳の行は open のままで、翌日また聞いていた。社外返信待ちの回答（`kim-awaiting --answer ex:…`）も保存されるだけで読まれず、同じ項目が質問として出続けた（別 PR で修正）。
+- エスカレーションは `dedupeKey: auto-progress-escalate:<行キー>` で照合する。同じ行の未回答・回答済み・手動取り下げ済みの ask（旧形式の本文一致を含む）があれば新しく積まない。手動の回答・取り下げは `lib/escalation-answer-sync.mjs` が台帳に反映する。
+- `auto-progress-watch` の保守処理では、作成から5日以上経った未回答のエスカレーション ask を確認する。元の台帳行が終了済み（`done`・`expired`・`superseded`・`skipped`）または削除済みの場合に自動で取り下げ、送信履歴を消す。同じ行が再び判断待ちになれば再送できる。
+- 社外返信待ち（`kim-awaiting --answer ex:…`）の回答が一覧に残る件は、別 PR（セッション e58984ea の恒久修正）で扱う。
+- 質問前の照合: `node tools/kim-inbox.mjs --lookup "<語> <語>"` で回答済み ask を探す。セッション内で受けた答えは kim-inbox に記録して他セッションと共有する。
+- kim が外すと決めた MCP は `~/.claude/mcp-optout.json`（`{"disabled":["gemini-cli"]}`）に書く。`register-hooks.mjs` と `tool-adoption-check.mjs` はこれを見て再登録しない。
+
 ### 外部完了メールによる自動クローズ (--done-when-gmail)
 完了時にメールが届く手作業（保険継続・支払い・予約・配送・手続き等）の `ask` を登録する際は、必ず `--done-when-gmail "<user>|<gmail query>"` を指定する。該当メールが到着すると `autoCloseByGmail` が自動で項目を回答済みにし、再提示を防止する。
 
@@ -23,7 +31,11 @@ node tools/kim-inbox.mjs --status
 node tools/kim-inbox.mjs --auto-close
 node tools/kim-inbox.mjs --answer <id> --body-file <返答ファイル>
 node tools/kim-inbox.mjs --seen <id>
+node tools/kim-inbox.mjs --lookup "gemini 外して"
 node tools/kim-inbox.mjs --drop <id> --reason "不要になった理由"
 ```
+
+### 表示規則（最後のメッセージだけ・新着だけ・loop 起床は抑止）
+hook の一覧注入は `inbox-display-policy` で制御する。同セッションの既出は再掲せず、新着のみを【最終まとめ】の中に載せる。`<<autonomous-loop` や `/loop` の起床では一覧を注入しない。既出は「ほか既出 N 件」の1行に縮める。別セッションでも24時間以内に表示済みなら同様に省略する。
 
 配布は `setup.mjs --converge` → `register-hooks.mjs --hooks-only` と hook-selfcheck の修復経路で行う。settings.json の手編集は不要。

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { detectUncommitted, detectOpenPr, detectStaleBranch, detectOpenTodo, detectFailedJob, detectStalledSession,
   detectUnverifiedDelegation, consecutiveFailures, escalate, parseArgs, advanceUncommitted, advanceDelegated,
-  inspectRepo, command, acquireLock, releaseLock, finishExecution, report, localPath } from './stall-sweeper.mjs';
+  inspectRepo, command, acquireLock, releaseLock, finishExecution, report, localPath, FAILED_JOB_STALE_DAYS } from './stall-sweeper.mjs';
 const now = Date.parse('2026-09-22T00:00:00Z'), day = 86400000;
 const ago = n => new Date(now - n * day).toISOString();
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'stall-sweeper-test-'));
@@ -171,7 +171,8 @@ test('ジョブ付帯なしLLM行の直近http_429はレート上限で失敗扱
   assert.equal(detectFailedJob([{ provider: 'groq', t: ago(4), status: 'http_429' }], now).length, 0);
   assert.equal(detectFailedJob([{ provider: 'groq', t: ago(4), status: 'error' }], now).length, 1);
   // 実ジョブ付帯の http_429 は従来どおり失敗として拾う。
-  assert.equal(detectFailedJob([{ taskName: 'a', t: ago(4), status: 'http_429', cwd: 'C:/x' }], now).length, 1);
+  const tempDir = temp();
+  assert.equal(detectFailedJob([{ taskName: 'a', t: ago(4), status: 'http_429', cwd: tempDir }], now).length, 1);
 });
 test('日々再生成されるTODOは初回観測を保持する', () => {
   const f = { file: '/next-actions.md', mtimeMs: now, text: '## 推奨アクション\n1. 作業を直す\n' };
@@ -275,4 +276,29 @@ test('保留は連続失敗に数えず、報告には保留として出る', ()
 
 test('実行失敗の検出は status=deferred の行を失敗扱いにしない', () => {
   assert.deepEqual(detectFailedJob([{ provider: 'codex', cwd: 'C:/x', status: 'deferred', t: ago(1) }], now), []);
+});
+
+test('存在しない非一時ディレクトリのcwdを持つ失敗ジョブは除外する', () => {
+  // 存在しない非一時ディレクトリの cwd の失敗行は 0 件
+  const nonExistentDir = path.join(os.homedir(), 'no-such-dir-' + Date.now());
+  assert.equal(detectFailedJob([{ taskName: 'test', t: ago(4), status: 1, cwd: nonExistentDir }], now).length, 0);
+
+  // 存在するディレクトリ（temp()）の cwd の失敗行は 1 件
+  const tempDir = temp();
+  assert.equal(detectFailedJob([{ taskName: 'test', t: ago(4), status: 1, cwd: tempDir }], now).length, 1);
+});
+
+test('skipped集計行(taskName/jobなし)はdetectFailedJobで検出しない', () => {
+  // provider:skipped で taskName/job が無い行は直前の codex-do 失敗に付随する集計行。
+  // 独立した再実行ジョブではない(2026-11-24)。
+  assert.equal(detectFailedJob([{ provider: 'skipped', t: ago(4), status: 'no-cheap-executor' }], now).length, 0);
+});
+test('skippedでもtaskNameがある行は従来どおり検出される', () => {
+  assert.equal(detectFailedJob([{ provider: 'skipped', t: ago(4), status: 'no-cheap-executor', taskName: 'OrgiastX' }], now).length, 1);
+});
+test('最新行が8日前のerrorはFAILED_JOB_STALE_DAYS以上で除外される', () => {
+  assert.equal(detectFailedJob([{ taskName: 'staleJob', t: ago(FAILED_JOB_STALE_DAYS + 1), status: 1 }], now).length, 0);
+});
+test('6日前のerrorはFAILED_JOB_STALE_DAYS未満で検出される', () => {
+  assert.equal(detectFailedJob([{ taskName: 'recentJob', t: ago(FAILED_JOB_STALE_DAYS - 1), status: 1 }], now).length, 1);
 });

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 // State machine; Discord and candidate classification are injectable.
 import fs from 'node:fs';
@@ -51,11 +52,25 @@ function validateObjective(value) {
 function readLog(file) {
   return readText(file).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
 }
-export function summarize(log, day) {
+const ESTIMATED_HOURS_PER_ITERATION = 0.25;
+function readRunLog(file) {
+  const text = readText(file);
+  if (!text) return [];
+  return text.split(/\r?\n/).filter(Boolean).reduce((acc, line) => {
+    try { acc.push(JSON.parse(line)); } catch {}
+    return acc;
+  }, []);
+}
+export function summarize(log, day, runLog = []) {
   const rows = log.filter((row) => dateKey(row.ts) === day);
+  const todayRunRows = runLog.filter((row) => dateKey(row.ts) === day && Number.isFinite(row.runMs) && row.runMs >= 0);
+  const runHours = todayRunRows.reduce((sum, row) => sum + row.runMs, 0) / 3_600_000;
   const times = rows.map((row) => Date.parse(row.ts));
+  const spanHours = times.length > 1 ? (Math.max(...times) - Math.min(...times)) / 3_600_000 : 0;
+  const hasRunMsEntries = todayRunRows.length > 0;
+  const hours = hasRunMsEntries ? runHours : rows.length * ESTIMATED_HOURS_PER_ITERATION;
   return {
-    iterations: rows.length, hours: times.length > 1 ? (Math.max(...times) - Math.min(...times)) / 3_600_000 : 0,
+    iterations: rows.length, hours, spanHours,
     progressFrom: rows[0]?.progress ?? 0, progressTo: rows.at(-1)?.progress ?? 0,
     noop: rows.filter((r) => r.noop).length, codex: rows.filter((r) => r.codexUsed).length,
     summaries: rows.slice(-3).map((r) => r.summary), next: rows.at(-1)?.next ?? '未定',
@@ -487,6 +502,7 @@ async function execute(command, args, ctx) {
   if (!state) return { error: 'not_started', verdict: 'stop', reason: 'not_started' };
   const objective = readObjective(paths.objective);
   let log = readLog(paths.log);
+  const runLog = readRunLog(path.join(paths.dir, 'run.log'));
   const todayKey = dateKey(now);
   if (state.dateKey !== todayKey) { state.dateKey = todayKey; state.iterationsToday = 0; }
   // Recover a completed log append if the process died before saving state.
@@ -501,7 +517,7 @@ async function execute(command, args, ctx) {
   const notify = (reason, completed = false, extra = {}) => sendNotice(formatDigest({ hostname: ctx.hostname, objective, reason, completed, ...extra }), ctx);
   const watchdog = async () => {
     if (state.status !== 'running') return null;
-    const reason = capReason(state, objective, summarize(log, todayKey));
+    const reason = capReason(state, objective, summarize(log, todayKey, runLog));
     if (!reason) return null;
     state.status = reason === 'total_cap' ? 'stopped' : 'paused'; state.pausedReason = reason;
     save();
@@ -568,7 +584,7 @@ async function execute(command, args, ctx) {
     // and lift the pause once it no longer applies (next JST day, or a quiet gap).
     // A pending question must survive: resumeState() clears it, so wait for the answer.
     if (state.status === 'paused' && autoResumes(state.pausedReason) && !state.pendingQuestion
-      && !capReason(state, objective, summarize(log, todayKey))) {
+      && !capReason(state, objective, summarize(log, todayKey, runLog))) {
       resumeState(state);
     }
     // The 3-strike runner-error pause is a dead end for the owner: re-login fixes the
@@ -588,7 +604,7 @@ async function execute(command, args, ctx) {
       await watchdog();
       save();
     }
-    const today = summarize(log, todayKey);
+    const today = summarize(log, todayKey, runLog);
     // 7日たっても確かめられなかった見張りは、確認されていなくても1回だけ知らせて終える。
     const expired = (state.watches || []).filter((w) => now.getTime() - Date.parse(w.since) >= WATCH_FAIL_DAYS * WATCH_DAY_MS);
     if (expired.length) {
@@ -698,7 +714,7 @@ async function execute(command, args, ctx) {
     save();
     return { ok: true, status: 'ng', id, ng: watch.ng };
   }
-  if (command === 'status') return { state, objective, today: summarize(log, todayKey) };
+  if (command === 'status') return { state, objective, today: summarize(log, todayKey, runLog) };
   if (command === 'handoff') {
     fs.mkdirSync(path.dirname(paths.handoff), { recursive: true });
     fs.writeFileSync(paths.handoff, renderHandoff(objective, state, currentLog(), paths.objective), 'utf8');
@@ -738,7 +754,7 @@ async function execute(command, args, ctx) {
     // evidence that the DM arrived (2026-10-17 実測)。呼び出し側が run.log に
     // delivered を残せるよう、結果を戻り値と state の両方に載せる。
     const delivery = await sendNotice(text, { ...ctx, periodicDigest: true });
-    if (['dm', 'session-inbox'].includes(delivery.delivered) || delivery.channels.toast.status === 'submitted' || delivery.channels.file.status === 'written') {
+    if (isKimDelivered(delivery) || delivery.channels.toast.status === 'submitted' || delivery.channels.file.status === 'written') {
       // 送信済みの報告を、後片付けの失敗で「失敗した周」にしない。
       try { await acknowledgeWaiting(waiting.completedIds, { home: ctx.home, now }); }
       catch (error) {

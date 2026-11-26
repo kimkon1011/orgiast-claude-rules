@@ -6,6 +6,7 @@ import { evaluateKimInboxRelay, commitKimInboxDelivery } from './kim-inbox-relay
 import { evaluatePastLogSearch, listPlaybookNames, classifyHandoff } from './past-log-search-gate.mjs';
 import { judgeDeliverableDriveLink, registerDeliverableCheck } from './deliverable-drive-link-gate.mjs';
 import { evaluateInvitePermissions } from './hooks/discord-invite-permission-gate.mjs';
+import { evaluateNoResponse } from './no-response-gate.mjs';
 import { applyNamedGatePolicy } from './gate-runtime.mjs';
 import os from 'node:os';
 import { evaluateProgressCron } from './progress-cron-gate.mjs';
@@ -31,12 +32,14 @@ import { judge as judgeDecisionResearch, formatReason as decisionResearchReason 
 import { configuredMode, evaluateNegativeClaimFromRaw } from './negative-claim-gate.mjs';
 import { configuredMode as externalStateMode, evaluateExternalStateClaimFromRaw } from './external-state-claim-gate.mjs';
 import { evaluateReportedSymptomFromRaw } from './reported-symptom-gate.mjs';
+import { evaluateLaneClaimEvidence } from './lane-claim-evidence-gate.mjs';
 import { evaluateLaneAbandonment } from './lane-abandonment-gate.mjs';
 import { evaluateCourseCorrections } from './course-correction-gate.mjs';
 import { evaluateAudit } from './handoff-audit-gate.mjs';
 import { enabled as reportLengthEnabled, judgeReportLengthWithLlm } from './report-length-gate.mjs';
 import { hasRequiredFooter, judgeNextAction, reportsCloseSteps, hasOpenSessionCheck, hasSessionWakeup, WATCH_REGISTRATION_CODES, footerValues, openDeadline, WAIT_CHECK_CODES } from './next-action-gate.mjs';
 import { judgeSubstituteCapability } from './substitute-capability-gate.mjs';
+import { judgeUserCodeInput } from './user-code-input-gate.mjs';
 import { judgeUserBurden, desktopLauncherPattern } from './user-burden-gate.mjs';
 import { findOutsourcedInvestigation, formatViolationMessage as formatSelfCheck, scanToolUsesFromRaw } from './self-check-before-asking-guard.mjs';
 import { findLocalDocLinks, findBareLocalDocPaths, formatBarePathMessage, formatViolationMessage as formatDocLink } from './doc-link-drive-guard.mjs';
@@ -55,9 +58,13 @@ import { judgeTurnLanguage } from './response-language-gate.mjs';
 import { evaluateUnregisteredPromise } from './unregistered-promise-gate.mjs';
 import { appendStopLedger, registerStopViolation, CAP_CONTEXT, splitRepeatedGateBlocks } from './lib/stop-recheck.mjs';
 import { stripInboxSection } from './lib/inbox-section-filter.mjs';
+import { stripTrailingJournalAnswers } from './lib/strip-trailing-journal.mjs';
 import { STOP_RETRY_INSTRUCTION, withStopRetryInstruction } from './lib/stop-retry-message.mjs';
 import { evaluateClaudeFallbackReport } from './claude-fallback-report-gate.mjs';
+import { evaluateDelegationReadback } from './delegation-readback-gate.mjs';
 import { evaluatePendingDecision } from './pending-decision-ask-gate.mjs';
+import { evaluateSilentCheckFailure } from './silent-check-failure-gate.mjs';
+import { evaluateExternalChannelPromise } from './external-channel-unmonitored-gate.mjs';
 import { buildRecord, extractPromise, ledgerFile as progressLedgerFile, readLedger, writeLedger, applyPromise, latestOpenPromises, rollingSessionFields } from './auto-progress-ledger.mjs';
 import { appendInbox } from './lib/auto-progress-inbox.mjs';
 import { isUnchangedPeriodicReport } from './lib/unchanged-periodic-report.mjs';
@@ -72,7 +79,7 @@ export const SPECIAL_GATE_MAX_BLOCKS_PER_TURN = 2;
 // preface are never independent blocking reasons. Keep permission guards and
 // separately registered mail-send-approval/delete-approval/api-billing/
 // app-llm-cost/lane-repair-first gates blocking, outside this rewrite budget.
-export const LIGHT_GATES = ['report-length-gate', 'url-account-gate', 'message-locator-gate', 'third-party-nudge-gate', 'seat-name-gate', 'shallow-answer-gate', 'unregistered-promise-gate'];
+export const LIGHT_GATES = ['report-length-gate', 'url-account-gate', 'message-locator-gate', 'third-party-nudge-gate', 'seat-name-gate', 'shallow-answer-gate', 'unregistered-promise-gate', 'silent-check-failure-gate'];
 export const FORM_GATES = ['handoff-quality-gate', 'manual-request-fullsteps-gate', 'manual-request-evidence-gate', 'handoff-info-guard', 'handoff-branch-coverage-gate', 'user-burden-gate', 'handoff-investigation-gate'];
 // Exempt presentation/repetition only. Permission, evidence, outstanding work and
 // other operational checks must still run on automatic periodic turns.
@@ -114,11 +121,14 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['decision-research-gate', () => { const result = judgeDecisionResearch(ctx.assistantText); return result.triggered ? { decision: 'block', reason: decisionResearchReason(result.missing), code: 'RESEARCH-FIRST' } : { decision: 'pass' }; }],
     ['negative-claim-gate', () => { const result = evaluateNegativeClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && configuredMode() !== 'block' ? { ...result, decision: 'warn' } : result; }],
     ['external-state-claim-gate', () => { const result = evaluateExternalStateClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && externalStateMode() !== 'block' ? { ...result, decision: 'warn' } : result; }],
+    ['silent-check-failure-gate', () => evaluateSilentCheckFailure(ctx.assistantText)],
     ['claude-fallback-report-gate', () => evaluateClaudeFallbackReport(ctx.assistantText)],
+    ['delegation-readback-gate', () => evaluateDelegationReadback(ctx.assistantText)],
     ['control-group-gate', () => runControlGroup({ cwd: ctx.input?.cwd })],
     ['pr-handoff-gate', () => evaluatePrHandoff(ctx.assistantText)],
     ['merge-handoff-gate', () => evaluateMergeHandoff(ctx.assistantText, blocks(currentTurnEntries(ctx.transcriptRaw), 'tool_use'))],
     ['reported-symptom-gate', () => evaluateReportedSymptomFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw })],
+    ['lane-claim-evidence-gate', () => evaluateLaneClaimEvidence(ctx, { home: home(), ...auditOptions })],
     ['lane-abandonment-gate', () => evaluateLaneAbandonment(ctx, { home: home(), ...auditOptions })],
     ['course-correction-gate', () => evaluateCourseCorrections(ctx, { home: home(), ...auditOptions })],
     // 第2段は全regexの結果確定後に評価する。
@@ -133,8 +143,10 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['urgent-blocker-wait-gate', () => judgeUrgentBlockerWait(ctx.assistantText, { sessionId: ctx.sessionId, home: home() })],
     ['third-party-nudge-gate', () => judgeThirdPartyNudge(ctx.assistantText)],
     ['unregistered-promise-gate', () => evaluateUnregisteredPromise(ctx.assistantText, { sessionId: ctx.sessionId, transcriptRaw: ctx.transcriptRaw, home: home() })],
+    ['external-channel-unmonitored-gate', () => evaluateExternalChannelPromise(ctx.assistantText)],
     ['progress-cron-gate', () => evaluateProgressCron(ctx.input, { home: home() })],
     ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw, { ...ctx.input, session_id: ctx.sessionId }, { turnText: ctx.turnText })],
+    ['user-code-input-gate', () => judgeUserCodeInput(ctx.assistantText)],
     ['user-burden-gate', () => judgeUserBurden(ctx.assistantText, ctx.humanText)],
     ['substitute-capability-gate', () => judgeSubstituteCapability(ctx.assistantText)],
     ['session-close-target-gate', () => judgeLaunchTarget(ctx.assistantText, blocks(currentTurnEntries(ctx.transcriptRaw), 'tool_use'))],
@@ -241,7 +253,24 @@ async function runWithRelay(input, context, auditOptions = {}) {
       }
       ledger({ sessionId, verdict: 'warn_repeat', blockedBy: [], warned: ['kim-inbox-relay'], reasonCodes: [relay.code] });
     }
+    const noResponse = evaluateNoResponse({
+      transcriptRaw: context.raw,
+      stopHookActive: input.stop_hook_active,
+      lastAssistantMessage: input.last_assistant_message ?? input.assistant_text,
+    });
+    const name = 'no-response-gate';
+    const policy = noResponse.decision === 'block'
+      ? await applyNamedGatePolicy(name, noResponse, { home: home(), ...auditOptions.policyOptions })
+      : noResponse;
+    if (policy.decision === 'block') {
+      const record = { sessionId, verdict: 'block', blockedBy: [name], reasonCodes: [policy.code] };
+      ledger(record);
+      return { ...policy, record };
+    }
     const result = await runOtherGates(input, context, auditOptions);
+    if (policy.decision === 'warn') {
+      result.systemMessage = [result.systemMessage, policy.reason].filter(Boolean).join('\n');
+    }
     if (result.decision !== 'block' && !relayRepeated) commitKimInboxDelivery(home(), sessionId, relay.receipts, auditOptions.now ?? Date.now());
     if (relayRepeated && result.decision !== 'block') return { ...result, systemMessage: [`kim-inbox-relay（同じターンで上限超えのため警告のみ）: ${relay.reason || relay.code}`, result.systemMessage].filter(Boolean).join('\n') };
     return result;
@@ -335,7 +364,7 @@ async function runOtherGates(input, context, auditOptions = {}) {
       } else {
         const purpose = String(assistantText).match(/^\s*(?:\*\*)?\[本セッションの目的\](?:\*\*)?[ \t]*([^\r\n]+)(?:\r?\n|$)/)?.[1]?.trim();
         const label = purpose || [...String(context.lastUserPrompt || context.humanText || '')].slice(0, 60).join('');
-        const deadline = new Date(Math.max(openDeadline(footerValues(assistantText)?.session)?.getTime() || Date.now() + 24 * 3600000, Date.now() + 6 * 3600000)).toISOString();
+        const deadline = new Date(Math.max(openDeadline(footerValues(stripTrailingJournalAnswers(assistantText))?.session)?.getTime() || Date.now() + 24 * 3600000, Date.now() + 6 * 3600000)).toISOString();
         const script = fileURLToPath(new URL('./session-progress-check.mjs', import.meta.url)).replaceAll('\\', '/');
         // Double quotes work in both cmd.exe and the check executor's Bash shell.
         // Reject shell metacharacters that still expand within double quotes.
@@ -372,7 +401,7 @@ async function runOtherGates(input, context, auditOptions = {}) {
     const summaries = evaluated.results.filter(r => FORM_GATES.includes(r.name)).map(r => `- ${r.name}: ${String(r.reason || '').split(/\r?\n/).slice(0, 2).map(line => line.slice(0, 200)).join(' ')}`);
     sections.push(`### 手渡しの形式（1回の書き直しでまとめて直す）\n${summaries.join('\n')}`);
   }
-  if (!evaluated.unchangedPeriodicReport && !blockedBy.includes('next-action-gate') && !hasRequiredFooter(assistantText)) sections.push(`### ピギーバック・ヒント\n- ${HANDOFF_HINT}`);
+  if (!evaluated.unchangedPeriodicReport && !blockedBy.includes('next-action-gate') && !hasRequiredFooter(stripTrailingJournalAnswers(assistantText))) sections.push(`### ピギーバック・ヒント\n- ${HANDOFF_HINT}`);
   // A remaining operational violation can still block, without demanding that
   // the previous summary, questions or instructions be repeated in full.
   const reason = evaluated.unchangedPeriodicReport

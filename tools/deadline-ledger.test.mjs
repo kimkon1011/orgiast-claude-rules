@@ -44,6 +44,22 @@ test('Google client explicitly impersonates kim and preserves HTTP error status'
   await assert.rejects(client('https://example.invalid'), e => e.status === 403);
 });
 
+test('Google client includes at most 300 redacted characters of an HTTP error body', async () => {
+  const header = 'OCR conversion failed: ';
+  const body = `${header}Bearer echoed-token {"access_token":"fake-json-value"} ${'x'.repeat(300)}tail`;
+  const client = googleClient({ getToken: async () => 'request-token',
+    fetchImpl: async () => ({ ok: false, status: 400, text: async () => body }) });
+  await assert.rejects(client('https://example.invalid', { method: 'POST' }), error => {
+    const prefix = 'Google POST HTTP 400: ';
+    assert.equal(error.status, 400);
+    assert.ok(error.message.startsWith(prefix + header));
+    assert.equal(error.message.slice(prefix.length).length, 300);
+    assert.match(error.message, /REDACTED/);
+    assert.doesNotMatch(error.message, /echoed-token|fake-json-value|tail/);
+    return true;
+  });
+});
+
 test('Google client retries with seisaku-team only for the keyless-route error', async () => {
   const tokenRequests = [];
   const client = googleClient({
@@ -66,6 +82,13 @@ test('Google client retries with seisaku-team only for the keyless-route error',
   ]);
 });
 
+test('Calendarのkim認証は鍵なしでも別アカウントへfallbackしない', async () => {
+  const users=[];
+  const client=googleClient({getToken:async({impersonate})=>{users.push(impersonate);throw Error('鍵なし経路は seisaku-team@orgiast.jp 固定です');},fetchImpl:()=>assert.fail('network')});
+  await assert.rejects(client('https://www.googleapis.com/calendar/v3/calendars/primary/events',{scope:'https://www.googleapis.com/auth/calendar.events'}),/鍵なし/);
+  assert.deepEqual(users,['kim@orgiast.jp']);
+});
+
 test('既存seedsのevidence/noteとgmail:メール箱形式を保持して正規化する', () => {
   const row=normalizeSeed({title:'協業回答',source:'gmail:seisaku-team@orgiast.jp',sourceId:'mail-one',due:'2026-11-06',kind:'回答・返信',evidence:'https://example.invalid/message',note:'確認メモ'});
   assert.equal(row.source,'Gmail'); assert.equal(row.sourceId,'gmail:seisaku-team@orgiast.jp:mail-one');
@@ -81,4 +104,19 @@ test('延期先などの書込成功後に状態を更新し、途中失敗で�
   assert.match(writes.at(-1)[0],/!G2$/); assert.match(writes[0][0],/!Q2$/);
   const failed=createLedger({config:{sheetId:'test'},sheets:{...sheets,update:async(_,range)=>{assert.doesNotMatch(range,/!G2$/);throw Error('offline');}}});
   await assert.rejects(failed.patch('D-001',{status:'延期',notes:'延期先: 2026-11-20'}),/offline/);
+});
+
+test('patchは従来と同じ範囲と値をbatchUpdate 1回に集約する', async () => {
+  const batches = [];
+  const sheets = {
+    get: async () => [HEADERS, serializeRow({ id: 'D-001', title: '提出', due: '2026-11-06', status: '未着手' })],
+    update: async () => assert.fail('update fallback should not be used'),
+    batchUpdate: async (id, data) => batches.push([id, data]),
+  };
+  await createLedger({ config: { sheetId: 'test' }, sheets }).patch('D-001', { status: '延期', notes: '延期先: 2026-11-20', lastNotified: '' });
+  assert.deepEqual(batches, [['test', [
+    { range: "'期限台帳'!Q2", values: [['延期先: 2026-11-20']] },
+    { range: "'期限台帳'!N2", values: [['']] },
+    { range: "'期限台帳'!G2", values: [['延期']] },
+  ]]]);
 });

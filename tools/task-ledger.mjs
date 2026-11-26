@@ -79,6 +79,11 @@ export async function runTaskLedger(
   try {
     env = parseEnv(await readFile(path.join(homeDir, '.claude', 'task-sheet.env'), 'utf8'));
   } catch (error) {
+    if (error.code === 'ENOENT') {
+      const notConfigured = new Error(`task-sheet.env could not be read: ${error.message}`);
+      notConfigured.code = 'TASK_SHEET_NOT_CONFIGURED';
+      throw notConfigured;
+    }
     throw new Error(`task-sheet.env could not be read: ${error.message}`);
   }
   const url = env.TASK_SHEET_WEBAPP_URL || '';

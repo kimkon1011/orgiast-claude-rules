@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // 提案は FIFO で1件ずつ提示する。承認・実装・マージの判断は session-start の監督が行う。
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -120,7 +121,7 @@ export async function submitProposal(input, { home = proposalHome(), dryRun = fa
     }
     if (!p.notifiedAt && sendNotification) {
       const result = await notify(redactSecrets(dm), { home, webhookFallback: false });
-      if (!['dm', 'session-inbox'].includes(result?.delivered)) throw new Error('notification failed');
+      if (!isKimDelivered(result)) throw new Error('notification failed');
       p.notifiedAt = now.toISOString();
     }
     save(path.join(dir, `${p.id}.json`), p);

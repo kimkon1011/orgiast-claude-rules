@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { automationModel } from './lib/automation-model.mjs';
 import fs from 'node:fs';
+import { writeJson } from './lib/stuck-dialog-state.mjs';
 import { launchAudit } from './unattended-job-audit.mjs';
 import { codexAuthStatus } from './codex-auth-status.mjs';
 import os from 'node:os';
@@ -11,7 +12,10 @@ import { fileURLToPath } from 'node:url';
 import { machineIdentity, getClaudeAccountEmail } from './machine-identity.mjs';
 import { parseHandoff } from './auto-session.mjs';
 import { isEntry } from './is-entry.mjs';
+import { redactForShare } from './lib/share-secrets.mjs';
 import { resolveClaudeExecutableFromDisk, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
+import { evaluateClaudeSeatGuard, syncGbOffloadFlags } from './lib/claude-seat-guard.mjs';
+import { recordRun } from './lib/change-gate.mjs';
 
 const ALLOWED_KINDS = new Set(['status', 'prompt', 'enable-auto-session', 'run']);
 const RUN_TASKS = Object.freeze({
@@ -22,6 +26,7 @@ const DEFAULT_URL = 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude
 const SECRET_PATTERN = /(https?:\/\/[^\s]*?(?:webhook|token|key)[^\s]*|[A-Za-z0-9_]*(?:api[_-]?key|token|secret|webhook)\s*[=:]\s*[^\s]+|(?<![A-Za-z0-9_])(?:api[_-]?key|token|secret|webhook)\s+[^\s]+)/gi;
 const STATUS_TEXT_LIMIT = 1800;
 const NON_FAILURE_TASK_RESULTS = new Set([0, 267009, 267011]);
+const rulesRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 export function readEnv(file, io = fs) {
   const values = {};
@@ -45,8 +50,8 @@ export function truncateAnswer(value) {
 }
 
 export function targetMatches(targets, label, hostname) {
-  const target = String(targets ?? '');
-  return target === '' || target === 'all' || String(label).includes(target) || String(hostname).includes(target);
+  const items = Array.isArray(targets) ? targets : String(targets ?? '').split(/[,、]/).map(s => s.trim()).filter(s => s !== '');
+  return items.length === 0 || items.some(item => item === 'all' || String(label).includes(item) || String(hostname).includes(item));
 }
 
 export function loadOptin(file, io = fs) {
@@ -125,8 +130,8 @@ function formatMemoryLine(sharedMemory) {
   return `memory=共有${sharedMemory.count}件 / 世代=${sharedMemory.generatedAt} / user=kim注記=${kimNote} / CLAUDE.md参照=${sharedMemory.referenced ? 'yes' : 'no'}`;
 }
 
-function fitStatusLines({ header, hostLine, codexLine, repoLine, memoryLine, jobStatus, syncLine, todoLine }) {
-  const fixedLines = [header, hostLine, codexLine, repoLine, memoryLine, syncLine, todoLine];
+function fitStatusLines({ header, hostLine, codexLine, repoLine, memoryLine, guardLine, jobStatus, syncLine, todoLine }) {
+  const fixedLines = [header, hostLine, codexLine, repoLine, memoryLine, guardLine, syncLine, todoLine];
   const fixedLength = fixedLines.join('\n').length + 1;
   const jobBudget = Math.max(0, STATUS_TEXT_LIMIT - fixedLength);
   let jobLine;
@@ -148,7 +153,7 @@ function fitStatusLines({ header, hostLine, codexLine, repoLine, memoryLine, job
     jobLine = `${prefix}${included.join(' / ')}${omitted > 0 ? `${included.length ? ' / ' : ''}…(他${omitted}件を省略)` : ''}`;
   }
   if (jobLine.length > jobBudget) jobLine = jobLine.slice(0, jobBudget);
-  return [header, hostLine, codexLine, repoLine, memoryLine, jobLine, syncLine, todoLine];
+  return [header, hostLine, codexLine, repoLine, memoryLine, guardLine, jobLine, syncLine, todoLine];
 }
 
 export function collectStatus({ home, repo, label, hostname, run = runSync, platform = process.platform, auditLaunch = launchAudit }) {
@@ -174,6 +179,9 @@ export function collectStatus({ home, repo, label, hostname, run = runSync, plat
   const sharedMemory = sharedMemoryStatus(home);
   let knowledge = { present: false, bytes: 0 };
   try { const stat=fs.statSync(path.join(home,'.claude','knowledge','production-sales','00_INDEX.md'));knowledge={present:stat.isFile()&&stat.size>0,bytes:stat.size}; } catch {}
+  const guard = readJson(path.join(home, '.claude', 'claude-seat-guard-state.json'));
+  const flagDir = path.join(home, 'gb-offload', 'state');
+  const guardLine = `claude-seat-guard=blocked:${guard.blocked === true ? 'yes' : guard.blocked === false ? 'no' : 'unknown'} / 週次=${guard.weeklyPercent ?? '不明'}% / reset=${guard.resetsAt ?? '不明'} / flags=no-new:${fs.existsSync(path.join(flagDir, 'no-new')) ? 'yes' : 'no'},no-resume:${fs.existsSync(path.join(flagDir, 'no-resume')) ? 'yes' : 'no'}`;
   const lines = fitStatusLines({
     header: `📡 **[${label}]** status`,
     hostLine: `hostname=${hostname} / OS=${platform} ${os.release()} / account=${account}`,
@@ -181,6 +189,7 @@ export function collectStatus({ home, repo, label, hostname, run = runSync, plat
       ? `codex=${codex.email} / plan=${codex.plan ?? '不明'}` : 'codex=ログイン済(詳細不明)',
     repoLine: `repo=${git.branch}, origin/mainより${git.behind}コミット遅れ`,
     memoryLine: `${formatMemoryLine(sharedMemory)} / knowledge=${knowledge.present ? `${knowledge.bytes}B` : 'なし'}`,
+    guardLine,
     jobStatus,
     syncLine: `onboarding-sync=${syncLast}`,
     todoLine: `残TODO=${todoCount} / mail 未読=${mailUnread} / prompt opt-in=${accepts.includes('prompt') ? 'yes' : 'no'} / codex opt-in=${accepts.includes('codex') ? 'yes' : 'no'}`,
@@ -189,28 +198,59 @@ export function collectStatus({ home, repo, label, hostname, run = runSync, plat
   return { text: redactSecrets(text), data: { label, hostname, platform, account, codex, git, syncLast, failures, todoCount, promptOptin: accepts.includes('prompt'), codexOptin: accepts.includes('codex'), sharedMemory, knowledge, checkedAt: new Date().toISOString() } };
 }
 
-export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnImpl = spawn, readOnly = false, onStart, resumeSessionId, resumeSource = 'fleet-exec', resumeMailId, drivenByHub = false, home, setTimer = setTimeout, clearTimer = clearTimeout }) {
+export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnImpl = spawn, readOnly = false, onStart, resumeSessionId, resumeSource = 'fleet-exec', resumeMailId, drivenByHub = false, home, guardVerdict, setTimer = setTimeout, clearTimer = clearTimeout }) {
   // Fleet mail supplies a durable mail-seen callback; directives have no mail id.
   if (onStart) await onStart();
   if (resumeSessionId && !autoResumeAllowed({ source: resumeSource })) return { exitCode: null, reason: 'auto-resume disabled by config/auto-resume.json', outputTail: 'auto-resume disabled by config/auto-resume.json' };
+  if (!guardVerdict && home) {
+    guardVerdict = await evaluateClaudeSeatGuard({ home, env: process.env, caller: readOnly ? 'fleet-mail:readonly' : 'fleet-mail:prompt' });
+    syncGbOffloadFlags({ home, verdict: guardVerdict });
+  }
   return new Promise((resolve) => {
     const started = Date.now();
     let stdout = '';
     let stderr = '';
+    let stderrHead = '';
     let settled = false;
-    // 自動実行（fleet 指示の実行）は Sonnet（2026-11-15 kim 指示）。
-    const args = ['-p', '--model', automationModel(), ...(resumeSessionId ? ['--resume', resumeSessionId] : [])];
+    // 自動実行（fleet 指示の実行）の既定は Opus（2026-11-17 kim 指示）。readOnly の定型確認は Sonnet。
+    let executable = claudeExe;
+    let promptFile;
+    let args = ['-p', '--model', automationModel(), ...(resumeSessionId ? ['--resume', resumeSessionId] : [])];
     // Fleet mail is answer-only; existing directives retain their original behavior.
     if (readOnly) args.push('--tools', 'Read,Glob,Grep', '--allowedTools', 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--settings', '{"disableAllHooks":true}', '--model', 'sonnet');
     args.push('--', String(body ?? ''));
-    const child = spawnImpl(claudeExe, args, {
+    if (guardVerdict?.blocked) {
+      const tempDir = path.join(home || os.homedir(), '.claude', 'tmp');
+      fs.mkdirSync(tempDir, { recursive: true });
+      promptFile = path.join(tempDir, `fleet-seat-guard-${process.pid}-${Date.now()}.md`);
+      fs.writeFileSync(promptFile, String(body ?? ''));
+      executable = process.execPath;
+      args = [path.join(rulesRepoRoot, 'tools', 'codex-do.mjs'), '--prompt-file', promptFile, '--cwd', cwd, '--origin', 'unattended', '--timeout', String(timeoutSeconds), ...(readOnly ? ['--review'] : [])];
+    }
+    const child = spawnImpl(executable, args, {
       cwd, env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', CI: '1', ...(home ? { ORGIAST_HOME: home } : {}), FLEET_DRIVEN_BY_HUB: drivenByHub ? '1' : '0', FLEET_RESUME_MAIL_ID: resumeMailId || '' }, stdio: ['pipe', 'pipe', 'pipe'], shell: false, windowsHide: true,
     });
     child.stdin.end();
     child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr += chunk; if (stderr.length > 100_000) stderr = stderr.slice(-100_000); });
+    child.stderr.on('data', (chunk) => {
+      const text = String(chunk);
+      if (stderrHead.length < 4000) stderrHead += text.slice(0, 4000 - stderrHead.length);
+      stderr = (stderr + text).slice(-100_000);
+    });
     let timer;
-    const finish = (result) => { if (settled) return; settled = true; clearTimer(timer); resolve({ ...result, durationSeconds: Math.round((Date.now() - started) / 100) / 10, stdoutTail: truncateAnswer(redactSecrets(stdout)), stderrTail: redactSecrets(stderr).slice(-4000), outputTail: `${stdout}${stderr}`.slice(-10_000) }); };
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimer(timer);
+      if (promptFile) { try { fs.unlinkSync(promptFile); } catch {} }
+      const head = stderrHead.length === 4000 ? stderrHead.slice(0, stderrHead.lastIndexOf('\n') + 1) : stderrHead;
+      resolve({
+        ...result, durationSeconds: Math.round((Date.now() - started) / 100) / 10,
+        stdoutTail: truncateAnswer(redactSecrets(stdout)),
+        ...(result.exitCode !== 0 && head ? { stderrHead: redactSecrets(redactForShare(head)) } : {}),
+        stderrTail: redactSecrets(redactForShare(stderr)).slice(-4000), outputTail: `${stdout}${stderr}`.slice(-10_000),
+      });
+    };
     child.on('error', (error) => finish({ exitCode: null, error: String(error?.message ?? error), timedOut: false }));
     child.on('close', (code) => finish({ exitCode: code, timedOut: false }));
     timer = setTimer(() => { finish({ exitCode: null, timedOut: true, error: 'タイムアウトで停止' }); child.kill('SIGKILL'); }, Math.max(1, Number(timeoutSeconds)) * 1000);
@@ -225,6 +265,10 @@ export function consentCommand(kind) {
 export function validExecCwd(cwd) {
   try { return typeof cwd === 'string' && !!cwd.trim() && fs.statSync(cwd).isDirectory() && fs.existsSync(path.join(cwd, '.git')); }
   catch { return false; }
+}
+
+export function resolveExecCwd(cwd, repoRoot = rulesRepoRoot) {
+  return cwd === '@rules-repo' ? repoRoot : cwd;
 }
 
 export function hubReport(result) {
@@ -291,27 +335,33 @@ export async function processDirective(directive, context) {
   // PATH 上の claude は Windows では claude.cmd で、shell 無しの spawn では ENOENT になる
   // (2026-10-10: 受信タスクの runPrompt が spawn claude ENOENT で毎回失敗した)。実行ファイルは
   // 受信側PCが決める（指示側からは選べない）ので、spawn の直前に1回だけ解決する。
+  const guardVerdict = context.guardVerdict ?? await (context.evaluateGuard ?? evaluateClaudeSeatGuard)({ home, env: context.env ?? process.env, caller: 'fleet-agent:process-directive' });
+  syncGbOffloadFlags({ home, verdict: guardVerdict });
   const resolveExe = resolveClaudeExe
     ?? (() => resolveClaudeExecutableFromDisk({ platform: process.platform, env: process.env }));
-  const resolved = await resolveExe();
+  const resolved = guardVerdict.blocked ? null : await resolveExe();
   const claudeExe = (typeof resolved === 'string' ? resolved : resolved?.executable) || 'claude';
-  const result = await runPrompt({ claudeExe, body: directive.body, cwd, timeoutSeconds: directive.timeoutSeconds ?? 1800, spawnImpl });
+  const result = await runPrompt({ claudeExe, body: directive.body, cwd, timeoutSeconds: directive.timeoutSeconds ?? 1800, spawnImpl, home, guardVerdict });
   const resultsDir = path.join(home, '.claude', 'fleet-agent-results');
   fs.mkdirSync(resultsDir, { recursive: true });
   fs.writeFileSync(path.join(resultsDir, `${id}.json`), `${JSON.stringify(result, null, 2)}\n`);
   const warning = warningFromResult(result);
   const summary = result.timedOut ? 'タイムアウトで停止' : redactSecrets(result.outputTail).slice(-1500) || '(出力なし)';
-  const message = `${warning ? '⚠' : '✅'} **[${label}]** prompt 完了 exit=${result.exitCode ?? 'unknown'} / ${result.durationSeconds}s (id=${id})\n${summary}`;
+  const routed = guardVerdict.blocked ? `[claude-seat-guard] Claude 週次 ${guardVerdict.weeklyPercent ?? '不明'}% のため codex-do へ回送\n` : '';
+  const message = `${warning ? '⚠' : '✅'} **[${label}]** prompt 完了 exit=${result.exitCode ?? 'unknown'} / ${result.durationSeconds}s (id=${id})\n${routed}${summary}`;
   await post(message);
   return { action: 'prompt', result, message };
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const dryRun = argv.includes('--dry-run');
+  const healthCheck = argv.includes('--health-check');
   const json = argv.includes('--json');
   const home = process.env.ORGIAST_HOME || os.homedir();
   const claudeDir = path.join(home, '.claude');
   fs.mkdirSync(claudeDir, { recursive: true });
+  const guardVerdict = await (dependencies.evaluateGuard ?? evaluateClaudeSeatGuard)({ home, env: process.env, caller: 'fleet-agent:main' });
+  syncGbOffloadFlags({ home, verdict: guardVerdict });
   const repo = process.env.ORGIAST_REPO || path.dirname(path.dirname(fileURLToPath(import.meta.url)));
   const env = readEnv(path.join(claudeDir, 'cost-reporter.env'));
   const identity = machineIdentity();
@@ -324,7 +374,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   });
   // Polls without directives (or with an offline hub) must still audit local jobs.
   const platform = dependencies.platform || process.platform;
-  if (!dryRun && platform === 'win32') {
+  if (!dryRun && !healthCheck && platform === 'win32') {
     scheduledTaskStatus(dependencies.run || runSync);
     (dependencies.auditLaunch || launchAudit)({ home, platform, intervalHours: 24 });
   }
@@ -333,9 +383,27 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     const base = process.env.ORGIAST_FLEET_DIRECTIVES_URL || DEFAULT_URL;
     const separator = base.includes('?') ? '&' : '?';
     const response = await (dependencies.fetch || fetch)(`${base}${separator}cb=${Date.now()}`, { signal: AbortSignal.timeout(20_000) });
-    if (!response.ok) return [];
+    if (!response.ok) throw new Error(`fleet directives HTTP ${response.status}`);
     payload = await response.json();
-  } catch { return []; }
+    if (!Array.isArray(payload?.directives)) throw new Error('fleet directives: missing directives array');
+    if (!dryRun) writeJson(path.join(claudeDir, 'heartbeat', 'fleet-agent.json'), {
+      job: 'fleet-agent', finishedAt: new Date().toISOString(), ok: true, cycleMinutes: 15,
+      phase: 'poll', directives: payload.directives.length,
+    });
+  } catch (error) {
+    if (!dryRun) writeJson(path.join(claudeDir, 'heartbeat', 'fleet-agent.json'), {
+      job: 'fleet-agent', finishedAt: new Date().toISOString(), ok: false, cycleMinutes: 15,
+      phase: 'poll', error: redactSecrets(String(error?.message || error)),
+    });
+    if (healthCheck) throw error;
+    return [];
+  }
+  // Explicit read-only check: fetch and record poll health without executing directives.
+  if (healthCheck) {
+    const result = { ok: true, directives: payload.directives.length };
+    if (json) console.log(JSON.stringify(result));
+    return result;
+  }
   const processedFile = path.join(claudeDir, '.fleet-agent-processed');
   const processed = new Set();
   try { for (const id of fs.readFileSync(processedFile, 'utf8').split(/\r?\n/)) if (id) processed.add(id); } catch {}
@@ -348,9 +416,10 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
       fs.appendFileSync(processedFile, `${id}\n`);
       processed.add(id);
     }
-    results.push({ id, ...(await processDirective(directive, { home, repo, label, hostname, dryRun, post, spawnImpl: dependencies.spawnImpl, run: dependencies.run, platform, auditLaunch: dependencies.auditLaunch })) });
+    results.push({ id, ...(await processDirective(directive, { home, repo, label, hostname, dryRun, post, spawnImpl: dependencies.spawnImpl, run: dependencies.run, platform, auditLaunch: dependencies.auditLaunch, guardVerdict })) });
   }
   if (json) console.log(JSON.stringify(results));
+  recordRun('fleet-agent', { changed: results.length > 0, llmInvoked: results.some(result => !['skipped', 'status'].includes(result.action)), items: results.length, note: results.length ? 'directives processed' : 'no directives' });
   return results;
 }
 

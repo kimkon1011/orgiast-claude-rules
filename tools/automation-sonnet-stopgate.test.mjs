@@ -7,13 +7,14 @@ import { automationModel } from './lib/automation-model.mjs';
 import { disabledLanes } from './lib/lane-disabled.mjs';
 import { splitRepeatedGateBlocks } from './lib/stop-recheck.mjs';
 
-test('自動実行のモデルは既定 sonnet、opus/fable 指定も sonnet に倒す', () => {
-  assert.equal(automationModel(undefined, {}), 'sonnet');
-  assert.equal(automationModel('claude-opus-5', {}), 'sonnet');
-  assert.equal(automationModel('claude-fable-5-1', {}), 'sonnet');
+test('自動実行のモデルは既定 opus、sonnet/haiku 指定はそのまま、fable は opus に倒す', () => {
+  assert.equal(automationModel(undefined, {}), 'opus');
+  assert.equal(automationModel('claude-opus-5', {}), 'claude-opus-5');
+  assert.equal(automationModel('claude-fable-5-1', {}), 'opus');
   assert.equal(automationModel('haiku', {}), 'haiku');
+  assert.equal(automationModel('sonnet', {}), 'sonnet');
   assert.equal(automationModel('', { ORGIAST_AUTOMATION_MODEL: 'haiku' }), 'haiku');
-  assert.equal(automationModel('', { ORGIAST_AUTOMATION_MODEL: 'opus' }), 'sonnet');
+  assert.equal(automationModel('', { ORGIAST_AUTOMATION_MODEL: 'opus' }), 'opus');
 });
 
 test('lanes-disabled.json の gemini は gemini-cli も無効にする', () => {
@@ -48,5 +49,5 @@ test('lanes-disabled.json は quick・probe の両経路で掛け直され、質
   assert.equal(health.lanes['gemini-cli'].reason, 'disabled');
   assert.equal(health.lanes.deepseek.alive, true);
   const source = fs.readFileSync(new URL('./lane-doctor.mjs', import.meta.url), 'utf8');
-  assert.equal(source.match(/applyDisabledLanes\(health, home\);\n\s*orders\(health, home\);/g)?.length, 2, 'quick と probe の両方で orders の直前に掛ける');
+  assert.equal(source.match(/applyDisabledLanes\(health, home(?:, now)?\);\n\s*orders\(health, home\);/g)?.length, 2, 'quick と probe の両方で orders の直前に掛ける');
 });

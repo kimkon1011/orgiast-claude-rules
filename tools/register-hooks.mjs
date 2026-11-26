@@ -60,7 +60,7 @@ function load(file) {
 }
 function defaultModel(homeDir) {
   try { const raw = JSON.parse(fs.readFileSync(path.join(homeDir, '.claude', 'model-default.json'), 'utf8')); if (raw && typeof raw.model === 'string' && raw.model.trim()) return raw.model.trim(); } catch {}
-  return 'sonnet';
+  return 'opus';
 }
 function backup(file) { if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak.${stamp}-installer`); }
 function write(file, value) {
@@ -187,6 +187,7 @@ try {
   added += removeDailySessionHooks(settings);
   added += removeKimDiscordReportHooks(settings);
   // Repository manifest is the canonical set, including matcher, args and budgets.
+  // Shell guards such as shared-worktree-git-guard are registered through this manifest.
   // PostToolUse Discord request registration is defined there for new and existing PCs.
   // The old individual definitions are retained only in per-home migration input.
   for (const [event, groups] of Object.entries(repositoryHooks(repo, home))) {
@@ -216,12 +217,12 @@ try {
   if (settings.remoteControlAtStartup !== true) { settings.remoteControlAtStartup = true; added += 1; }
   // 全PC・全アカウントの応答・セッション名を日本語に固定する。途中で英語に切り替わった事故の再発防止(cr 2026-10-18)。
   if (settings.language !== 'japanese') { settings.language = 'japanese'; added += 1; }
-  // 全PC・全アカウントの既定モデルを Sonnet に収束する(kim 2026-11-15「自動で動く作業も、開いたセッションも既定は Sonnet」)。
-  // 未設定(=Claude Code 既定の Opus)・opus・opus[1m]・fable を sonnet に倒す。haiku 等の下位指定はそのまま。
-  // 判断が要る場面はそのセッション内で /model や advisor で上げる。次の SessionStart で既定は sonnet に戻る。
-  // PC 単位の例外は、そのPCだけの ~/.claude/model-default.json {"model":"..."} で明示する。
+  // 全PC・全アカウントの既定モデルを Opus に収束する(kim 2026-11-17「基本は Opus。簡単な作業だけ Sonnet。迷ったら Opus」)。
+  // 未設定・sonnet・fable を opus に倒す。opus / opus[1m] / haiku はそのまま。
+  // 軽い締め作業だけそのセッションで Sonnet を使う。次の SessionStart で既定は opus に戻る。
+  // 2026-11-15 の「自動は Sonnet のみ・Opus 禁止」は廃止。PC 単位の例外は ~/.claude/model-default.json {"model":"..."} で明示する。
   { const target = defaultModel(home); const current = String(settings.model ?? '').trim();
-    if (current !== target && (!current || /opus|fable/i.test(current))) { settings.model = target; added += 1; } }
+    if (current !== target && (!current || !/opus|haiku/i.test(current))) { settings.model = target; added += 1; } }
   // 旧PCは hook が `powershell -NoProfile -File ...ps1` で登録され、実行ポリシーで無音死している。
   policyRepaired = repairPowerShellExecutionPolicy(settings.hooks);
   added += policyRepaired;
@@ -273,7 +274,15 @@ try {
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
     fs.closeSync(fs.openSync(path.join(home, '.claude', 'share-ledger.jsonl'), 'a'));
   }
-  const collapsed = collapseHooks(settings.hooks, repo);
+  const collapsed = collapseHooks(settings.hooks, repo, home);
+  // Keep the cumulative migration count available to dispatch metrics after
+  // later converge runs, when the removed hooks are no longer in the input.
+  for (const [event, count] of Object.entries(previousManifest?.legacyDuplicatesRemoved || {})) {
+    if (Object.hasOwn(collapsed.manifest.events, event) && Number.isSafeInteger(count) && count > 0) {
+      const removed = collapsed.manifest.legacyDuplicatesRemoved;
+      removed[event] = (removed[event] || 0) + count;
+    }
+  }
   const manifestFile = runtimeManifestPath(home);
   const manifestChanged = JSON.stringify(load(manifestFile)) !== JSON.stringify(collapsed.manifest);
   if (manifestChanged) write(manifestFile, collapsed.manifest);
@@ -295,7 +304,12 @@ try {
   backup(claudeFile);
   const claude = load(claudeFile);
   if (!claude.mcpServers || typeof claude.mcpServers !== 'object' || Array.isArray(claude.mcpServers)) claude.mcpServers = {};
-  claude.mcpServers['gemini-cli'] = { type: 'stdio', command: 'npx', args: ['-y', 'gemini-mcp-tool'], env: { GEMINI_API_KEY: geminiKey, GEMINI_CLI_TRUST_WORKSPACE: 'true', GEMINI_MCP_BACKEND: 'gemini' } };
+  // kim が外すと決めた MCP は再登録しない（~/.claude/mcp-optout.json、2026-11-19）。
+  // register-hooks は単体コピーでも動く必要があるため lib/mcp-optout.mjs と同じ判定をここに持つ。
+  let mcpOptout = [];
+  try { mcpOptout = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'mcp-optout.json'), 'utf8').replace(/^\uFEFF/, '')).disabled || []; } catch {}
+  if (Array.isArray(mcpOptout) && mcpOptout.includes('gemini-cli')) delete claude.mcpServers['gemini-cli'];
+  else claude.mcpServers['gemini-cli'] = { type: 'stdio', command: 'npx', args: ['-y', 'gemini-mcp-tool'], env: { GEMINI_API_KEY: geminiKey, GEMINI_CLI_TRUST_WORKSPACE: 'true', GEMINI_MCP_BACKEND: 'gemini' } };
   write(claudeFile, claude);
   console.log(`  [OK] settings.json${added ? '(hook ' + added + '件追加)' : '(変更なし)'} / .claude.json 更新`);
   if (skippedNames.length) console.log(`[注意] hook ${skippedNames.length} 本が repo に見つからず skip: ${skippedNames.join(', ')}`);

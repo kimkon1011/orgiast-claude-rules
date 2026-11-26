@@ -108,3 +108,64 @@ test('a level-2 heading still activates its own section',()=>{
  assert.equal(r.stats.pending,1);
  assert.match(r.text,/見出し境界の確認/);
 });
+
+for (const operation of ['rotate', 'writeHandoff', 'oversized writeHandoff']) {
+  for (const scenario of ['success', 'ENOENT', 'exhausted']) {
+    test(`${operation}: ${scenario} with injected Windows sharing errors`, (t) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rotate-retry-'));
+      t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+      const file = path.join(dir, 'next-session.md');
+      const source = block('2026-09-22', '1. original task');
+      const proposed = operation === 'oversized writeHandoff'
+        ? block(new Date().toISOString().slice(0, 10), '1. ' + 'あ'.repeat(MAX_BYTES))
+        : 'replacement content';
+      fs.writeFileSync(file, source);
+      const waits = [];
+      let calls = 0;
+      let attemptedFile;
+      const error = Object.assign(new Error('sharing failure'), { code: scenario === 'ENOENT' ? 'ENOENT' : 'EPERM' });
+      const attempt = (method, ...args) => {
+        attemptedFile = args[0];
+        calls++;
+        if (scenario !== 'success' || calls < 3) throw error;
+        return fs[method](...args);
+      };
+      const retryOptions = {
+        fsImpl: {
+          renameSync: (...args) => attempt('renameSync', ...args),
+          writeFileSync: (...args) => attempt('writeFileSync', ...args),
+        },
+        sleep: (ms) => waits.push(ms),
+      };
+      const run = () => operation === 'rotate'
+        ? rotate(file, { now, retryOptions })
+        : writeHandoff(file, proposed, retryOptions);
+      if (scenario === 'success') {
+        assert.equal(run().changed, true);
+        assert.equal(calls, 3);
+        assert.deepEqual(waits, [50, 100]);
+        if (operation === 'writeHandoff') assert.equal(fs.readFileSync(file, 'utf8'), proposed);
+        else {
+          assert.match(fs.readFileSync(file, 'utf8'), /rotated queue/);
+          assert.equal(fs.existsSync(attemptedFile), false);
+        }
+      } else {
+        assert.throws(run, (e) => {
+          assert.equal(e, error);
+          if (scenario === 'exhausted') {
+            assert.ok(e.message.includes(attemptedFile));
+            assert.match(e.message, /attempts: 8/);
+          }
+          return true;
+        });
+        assert.equal(calls, scenario === 'ENOENT' ? 1 : 8);
+        assert.deepEqual(waits, scenario === 'ENOENT' ? [] : [50, 100, 200, 400, 800, 1000, 1000]);
+        assert.equal(fs.readFileSync(file, 'utf8'), source);
+        if (operation !== 'writeHandoff') {
+          assert.ok(attemptedFile.endsWith('.tmp'));
+          assert.match(fs.readFileSync(attemptedFile, 'utf8'), /rotated queue/);
+        }
+      }
+    });
+  }
+}

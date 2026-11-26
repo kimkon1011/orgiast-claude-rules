@@ -10,6 +10,7 @@ import { resolveClaudeExecutableFromDisk, sanitizeClaudeSupervisorEnv } from './
 import { autopilotPaths, runAutopilot, acquireLock } from './autopilot-tick.mjs';
 import { isEntry } from './is-entry.mjs';
 import { redactSecrets } from './webhook-health.mjs';
+import { evaluateClaudeSeatGuard, formatClaudeSeatGuardSkip, syncGbOffloadFlags } from './lib/claude-seat-guard.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export function buildPrompt(repo = REPO, { preFile, deadline } = {}) {
@@ -45,7 +46,7 @@ export async function sampleCpuBusy({ sampleMs = 5000, cpusImpl = os.cpus, sleep
 // 「オートパイロットをオーパスに変えて」。共有リポジトリの既定を変えると他 PC まで変わるため）。
 // claude- 以外や、planIncluded=false での Fable 指定は無視して既定に戻す。
 export function supervisorModel(objectiveFile, policy) {
-  // 2026-11-15 kim 指示: 自動実行（autopilot）は Sonnet。objective の opus/fable 指定も Sonnet に倒す。
+  // 2026-11-17 kim 指示: 自動実行（autopilot）の既定は Opus。軽い作業だけ Sonnet。fable 指定は opus に倒す。
   const fallback = automationModel();
   let pinned = '';
   try { pinned = JSON.parse(fs.readFileSync(objectiveFile, 'utf8').match(/```json\s*\n([\s\S]*?)\n```/)[1]).model; } catch {}
@@ -126,6 +127,14 @@ export function invokeClaude({ executable, args, prompt, cwd, timeoutMs, env = p
   });
 }
 export async function runOnce(options = {}) {
+  const guardHome = options.home || process.env.ORGIAST_HOME || os.homedir();
+  const guardVerdict = options.guardVerdict ?? await (options.evaluateGuard ?? evaluateClaudeSeatGuard)({ home: guardHome, env: process.env, caller: 'autopilot-run' });
+  syncGbOffloadFlags({ home: guardHome, verdict: guardVerdict });
+  if (guardVerdict.blocked) {
+    const reason = formatClaudeSeatGuardSkip(guardVerdict);
+    (options.log ?? console.log)(reason);
+    return { skipped: true, reason };
+  }
   const paths = autopilotPaths(options);
   fs.mkdirSync(paths.dir, { recursive: true });
   const auth = resolveSupervisorAuth({ home: paths.home });
@@ -151,9 +160,13 @@ export async function runOnce(options = {}) {
         const model = auth.model || supervisorModel(paths.objective, policy);
         const repo = options.repo || REPO;
         const executable = options.executable || (await resolveClaudeExecutableFromDisk()).executable;
+        const watchRawStart = typeof options.now === 'function' ? options.now() : options.now;
+        const watchStartMs = watchRawStart ? new Date(watchRawStart).getTime() : Date.now();
         const checked = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'], prompt: buildWatchPrompt(watch, repo), cwd: repo,
           timeoutMs: options.timeoutMs ?? 15 * 60_000, onProgress: progress => record({ watch: watch.id, progress }), env: { ...auth.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
-        const result = { skipped: pre.reason || pre.verdict, watchChecked: watch.id, model, authLane: auth.lane, exitCode: checked.exitCode, timedOut: checked.timedOut, stdout: String(checked.stdout || '').slice(-2000) };
+        const watchRawEnd = typeof options.now === 'function' ? options.now() : options.now;
+        const watchEndMs = watchRawEnd ? new Date(watchRawEnd).getTime() : Date.now();
+        const result = { skipped: pre.reason || pre.verdict, watchChecked: watch.id, model, authLane: auth.lane, exitCode: checked.exitCode, timedOut: checked.timedOut, runMs: Math.max(0, watchEndMs - watchStartMs), stdout: String(checked.stdout || '').slice(-2000) };
         record(result);
         await safeDigest();
         return result;
@@ -192,7 +205,9 @@ export async function runOnce(options = {}) {
     const deadline = new Date(startMs + timeoutMs).toISOString();
     const result = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'], prompt: buildPrompt(repo, { preFile, deadline }) + (pre.jevDecision?.action === 'RETRY' ? '\n前回の Jev 判断: RETRY。直前の作業を検証し、必要な修正をやり直す。\n' : ''), cwd: repo, timeoutMs, onProgress: progress => record({ progress }),
       env: { ...auth.env, AUTOPILOT_HOME: paths.dir, ORGIAST_HOME: paths.home } });
-    record({ model, authLane: auth.lane, ...result, stdout: String(result.stdout || '').slice(-4000) });
+    const endRawNow = typeof options.now === 'function' ? options.now() : options.now;
+    const endMs = endRawNow ? new Date(endRawNow).getTime() : Date.now();
+    record({ model, authLane: auth.lane, ...result, runMs: Math.max(0, endMs - startMs), stdout: String(result.stdout || '').slice(-4000) });
     const after = await runAutopilot('status', {}, options);
     const postRecorded = after.state?.totalIterations > before.state?.totalIterations;
     // Failed/empty Claude turns still consume an iteration and trip the watchdog.

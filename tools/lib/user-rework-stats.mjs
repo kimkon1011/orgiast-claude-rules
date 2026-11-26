@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { transcriptMetricCache } from './transcript-metric-cache.mjs';
 
 export const USER_REWORK_PATTERN = /(?:じゃないの[？?]?|はずがない|また聞かないといけない|何回も言わせ|勝手に|ちゃんと見て|そちらでやって|自分でやって|前にも言った|何回言ったら|言ったよね|指示に従って|やり直して|話聞いて|読んでない|見てない|何回も|同じこと)/i;
 
@@ -16,10 +17,9 @@ export function isHumanMessage(text) {
   return !MACHINE_USER_PREFIXES.some(prefix => trimmed.startsWith(prefix));
 }
 
-function countReworkInFile(filePath) {
+function countRework(content) {
   let count = 0;
   try {
-    const content = fs.readFileSync(filePath, 'utf8');
     const lines = content.split(/\r?\n/);
     for (const line of lines) {
       if (!line.trim()) continue;
@@ -41,7 +41,9 @@ function countReworkInFile(filePath) {
   return count;
 }
 
-export function collectUserReworkStats({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, transcriptPath = '' } = {}) {
+export function collectUserReworkStats({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, transcriptPath = '', cacheDir } = {}) {
+  const cache = transcriptMetricCache({ home, name: 'user-rework-v1', cacheDir });
+  const countReworkInFile = file => { try { return cache.read(file, countRework); } catch { return 0; } };
   let currentSessionCount = 0;
   if (transcriptPath && fs.existsSync(transcriptPath)) {
     currentSessionCount = countReworkInFile(transcriptPath);
@@ -69,6 +71,7 @@ export function collectUserReworkStats({ home = process.env.ORGIAST_HOME || os.h
   }
 
   walk(projectsDir);
+  cache.save();
 
   return {
     currentSessionCount,

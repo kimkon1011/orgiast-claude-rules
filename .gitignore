@@ -4,7 +4,15 @@
 
 # Codex CLI が作業ごとに置く一時ファイル(コミット対象外)
 .codex-task.md
+# ~/.codex/agents の写し。リポジトリ内に置かれると夜間の退避ブランチになる(2026-11-21 rescue/auto-session-20261121-203005)
+/.codex/agents/
 memory-shared/
+
+# assign-app の clone と feedback-history-link の clone。repo 直下に置かれると
+# git add -A が submodule (mode 160000) として拾い、rescue ブランチを作る
+# (2026-11-22 rescue/auto-session-20261122-082606 = これら2ファイルのみ)。
+/_assign-app-clone/
+/assign-wip-feedback-history-link/
 
 # gpage-fetch.mjs 用の playwright-core をローカルで npm install したときの成果物
 node_modules/
@@ -25,6 +33,9 @@ tmp-*/
 
 # $env:LOCALAPPDATA が未設定のまま PowerShell を起動すると repo 直下に掘られるキャッシュ
 /Microsoft/
+
+# PowerShell ModuleAnalysisCache file should be ignored at any level
+**/Microsoft/Windows/PowerShell/ModuleAnalysisCache
 
 # AWS CLI/SDK が cwd=repo で起動されたときに掘る空の既定設定ディレクトリ（機械ローカル）
 /.aws/
@@ -108,3 +119,19 @@ tools/.cache/
 /.codegraph-wsl/
 /.codegraph-npm-cache/
 PR_BODY.md
+
+# ONBOARDING §1.6 / §1.7-E に従って settings・hook 系ツールが編集前に置く自動バックアップ
+# (<元ファイル>.bak-YYYYMMDD / .bak.YYYY-MM-DD-purpose)。機械ローカルの使い捨てだが
+# 未登録だったため毎回 worktree を dirty にし、dirty-worktree-guard が救済ブランチを
+# 作り続けていた（2026-11-17 実測: rescue/auto-session-20261117-092606 の差分は
+# tools/*.bak-20261117 の 4 ファイル 574 行のみ＝実変更ゼロの空救済）。
+*.bak-*
+*.bak.*
+# PR本文の一時ファイル（rescue コミットへの混入防止）
+/.pr-body.md
+/pr-body*.md
+
+# Git Bash で区切りが失われ、repo 直下へ落ちた Windows 一時パス
+/[A-Za-z]:*
+/[A-Za-z]*
+gb-reports/

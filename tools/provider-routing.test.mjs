@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { gatewayModel, routeCandidate } from './provider-routing.mjs';
+import { OPENROUTER_GROK_MODEL, gatewayModel, routeCandidate } from './provider-routing.mjs';
 import { executorCostUsd, callWithFallback } from './llm-fallback.mjs';
 import { summarizeLedger, classifyBalance, alertProviderBalances, formatBalanceLine } from './provider-balance.mjs';
 import { calculateBudgetStatus } from './budget-status.mjs';
@@ -21,6 +21,10 @@ function temporary(t) {
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   return home;
 }
+
+test('OpenRouter Grok fallback stays on the available grok-4 generation', () => {
+  assert.match(OPENROUTER_GROK_MODEL, /^x-ai\/grok-4/);
+});
 
 test('legacy names and explicit OpenRouter models map without losing model selection', () => {
   for (const [provider, model, expected] of [
@@ -122,7 +126,7 @@ test('daily cap and budget reports use actual billed USD rather than a generic g
   assert.equal(previousMonthBudget({ home, now: new Date('2026-11-01T12:00:00Z'), configFile }).executorUsd, 6);
 });
 test('mistral routes through the OpenRouter wallet and maps direct-only model ids', () => {
-  assert.deepEqual(routeCandidate({ provider: 'mistral' }), { provider: 'openrouter', model: 'mistralai/mistral-medium-3.1' });
-  assert.equal(gatewayModel('mistral', 'mistral-large-latest'), 'mistralai/mistral-medium-3.1');
+  assert.deepEqual(routeCandidate({ provider: 'mistral' }), { provider: 'openrouter', model: 'mistralai/mistral-medium-3-5' });
+  assert.equal(gatewayModel('mistral', 'mistral-large-latest'), 'mistralai/mistral-medium-3-5');
   assert.equal(gatewayModel('mistral', 'mistralai/codestral-2508'), 'mistralai/codestral-2508');
 });

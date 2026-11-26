@@ -16,6 +16,11 @@ test('worktree ウィンドウ: 補充せず、起動時に未使用待機タブ
   const commands = [];
   const snapshots = [];
   let handler;
+  let configurationChanged;
+  const prefixKey = 'CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX';
+  let configuration = [{ name: prefixKey, value: '設定用' }];
+  const { isWaitingTab, setAutoTitlePrefixes } = require('./mobile-pool');
+  t.after(() => setAutoTitlePrefixes());
   class TabInputWebview { viewType = 'claudeVSCodePanel'; }
   tabs.push(
     { input: new TabInputWebview(), label: 'Claude Code', isActive: false },
@@ -34,7 +39,10 @@ test('worktree ウィンドウ: 補充せず、起動時に未使用待機タブ
       showErrorMessage(message) { assert.fail(message); },
     },
     workspace: {
-      getConfiguration() { return { get() { return 0; } }; },
+      onDidChangeConfiguration(listener) { configurationChanged = listener; return { dispose() {} }; },
+      getConfiguration(section) {
+        return { get(key) { return section === 'claudeCode' && key === 'environmentVariables' ? configuration : 0; } };
+      },
       workspaceFolders: [{ uri: { fsPath: wtDir } }],
     },
     commands: { async executeCommand(command) { commands.push(command); } },
@@ -43,7 +51,8 @@ test('worktree ウィンドウ: 補充せず、起動時に未使用待機タブ
   };
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'extension.js'), 'utf8'), {
-    module, process, URLSearchParams, console, clearInterval, clearTimeout, setTimeout,
+    module, process: { ...process, env: { ...process.env, [prefixKey]: 'KimPC' } },
+    URLSearchParams, console, clearInterval, clearTimeout, setTimeout,
     setInterval(fn, ms) { return ms === 5000 ? null : setInterval(fn, ms); },
     require(name) {
       if (name === 'vscode') return vscode;
@@ -53,6 +62,14 @@ test('worktree ウィンドウ: 補充せず、起動時に未使用待機タブ
     },
   });
   module.exports.activate({ subscriptions: [] });
+  assert.equal(isWaitingTab('設定用｜gentle-otter'), true);
+  assert.equal(isWaitingTab('KimPC｜gentle-otter'), true);
+  assert.equal(isWaitingTab('スマホ用セッション｜gentle-otter'), true);
+  configuration = { [prefixKey]: '変更後' };
+  configurationChanged({ affectsConfiguration: section => section === 'claudeCode' });
+  assert.equal(isWaitingTab('設定用｜gentle-otter'), false);
+  assert.equal(isWaitingTab('変更後｜gentle-otter'), true);
+  assert.equal(isWaitingTab('KimPC｜gentle-otter'), true);
   // 起動時 cleanup: 未使用待機タブ（Claude Code）だけ閉じ、会話中タブは残す
   // worktree ウィンドウの openedTabs は空（自分で開いていない）なので何も閉じない
   assert.equal(tabs.length, 2);
@@ -80,7 +97,7 @@ test('URI concurrency and tab title events replenish one without interactive ren
       registerUriHandler(value) { handler = value; return { dispose() {} }; },
       showErrorMessage(message) { assert.fail(message); },
     },
-    workspace: { getConfiguration() { return { get(key) { return key === 'mobileTabs' ? 0 : undefined; } }; } },
+    workspace: { onDidChangeConfiguration() { return { dispose() {} }; }, getConfiguration() { return { get(key) { return key === 'mobileTabs' ? 0 : undefined; } }; } },
     commands: { async executeCommand(command) { commands.push(command); } },
   };
   const module = { exports: {} };
@@ -112,7 +129,7 @@ test('URI concurrency and tab title events replenish one without interactive ren
   for (const disposable of context.subscriptions) disposable.dispose();
 });
 
-function loadExtension({ onCommand, onExternal, clock = Date }) {
+function loadExtension({ onCommand, onExternal, onReadState, clock = Date }) {
   const tabs = [];
   const logs = [];
   const snapshots = [];
@@ -124,27 +141,37 @@ function loadExtension({ onCommand, onExternal, clock = Date }) {
     Uri: { parse: (value) => ({ value }) },
     env: { async openExternal(uri) { return onExternal(uri, tabs, TabInputWebview); } },
     window: {
-      tabGroups: { all: [{ tabs }], onDidChangeTabs() { return { dispose() {} }; }, async close(tab) { closed.push(tab); tabs.splice(tabs.indexOf(tab), 1); return true; } },
+      tabGroups: { all: [{ tabs }], onDidChangeTabs() { return { dispose() {} }; }, async close(target) {
+        for (const tab of Array.isArray(target) ? target : [target]) {
+          closed.push(tab);
+          tabs.splice(tabs.indexOf(tab), 1);
+        }
+        return true;
+      } },
       createOutputChannel() { return { appendLine(line) { logs.push(line); } }; },
       registerUriHandler(value) { handler = value; return { dispose() {} }; },
       showErrorMessage(message) { assert.fail(message); },
     },
-    workspace: { getConfiguration() { return { get(key) { return key === 'mobileTabs' ? 0 : undefined; } }; } },
+    workspace: { onDidChangeConfiguration() { return { dispose() {} }; }, getConfiguration() { return { get(key) { return key === 'mobileTabs' ? 0 : undefined; } }; } },
     commands: { async executeCommand(command) { return onCommand(command, tabs, TabInputWebview); } },
   };
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'extension.js'), 'utf8'), {
-    module, process, URLSearchParams, console, clearInterval, clearTimeout, setTimeout, Date: clock,
+    module, process, URLSearchParams, __filename, console, clearInterval, clearTimeout, setTimeout, Date: clock,
     setInterval(fn, ms) { return ms === 5000 ? null : setInterval(fn, ms); },
     require(name) {
       if (name === 'vscode') return vscode;
+      if (name === 'node:child_process' && onReadState) {
+        return { execFile(_cmd, _args, _opts, callback) { callback(null, JSON.stringify(onReadState())); } };
+      }
       if (name === 'node:fs') return { mkdirSync() {}, writeFileSync(_file, data) { snapshots.push(data); } };
       if (name === './mobile-pool') return { ...require('./mobile-pool'), createOwnershipLease: () => ({ acquire: async () => true, release() {} }) };
       return require(name);
     },
   });
   module.exports.setOpenWaitMs(60);
-  module.exports.activate({ subscriptions: [] });
+  const storageUri = onReadState ? { fsPath: path.join(__dirname, 'workspace', 'orgiast.next-session') } : undefined;
+  module.exports.activate({ subscriptions: [], storageUri });
   return { handler, tabs, logs, snapshots, closed, Input: TabInputWebview, ensure: module.exports.ensureMobileTabs };
 }
 
@@ -213,7 +240,7 @@ test('refresh closes only an owned unchanged tab, one even with concurrent reque
   const existing = { input: new Input(), label: 'Claude Code' };
   tabs.push(existing);
   await handler.handleUri({ path: '/mobile', query: 'count=4' });
-  assert.equal(tabs.length, 4);
+  assert.equal(tabs.length, 3);
   const owned = tabs.slice(1);
   // First refresh records appearance times, too young to close.
   await handler.handleUri({ path: '/mobile', query: 'count=4&refresh=1' });
@@ -254,6 +281,77 @@ test('transcript: sessionId あり・全 project に jsonl 無しなら false', 
   assert.equal(check(home, 'used-session'), true);
 });
 
+test('補充の前に空の予備が 3 を超えていれば、古い余分だけを close-session --no-launch で閉じ、空でないセッションとオーナー待ちは閉じない', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-spare-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.join(home, 'repo');
+  fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'tools', 'close-session.mjs'), '// test stub\n');
+  const projects = path.join(home, '.claude', 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  for (const id of ['a', 'b', 'c', 'd', 'f']) fs.writeFileSync(path.join(projects, `${id}.jsonl`), '{"type":"assistant"}\n');
+  fs.writeFileSync(path.join(projects, 'e.jsonl'), '{"type":"user","message":"hello"}\n');
+  fs.writeFileSync(path.join(home, '.claude', 'auto-progress-ledger.jsonl'), '{"sessionId":"f","status":"waiting_user"}\n{"sessionId":"a","status":"open"}\n');
+  const ids = ['a', 'b', 'c', 'd', 'e', 'f'];
+  const calls = [];
+  let opened = 0;
+  class TabInputWebview { viewType = 'claudeVSCodePanel'; }
+  const tabs = ids.map(() => ({ input: new TabInputWebview(), label: 'Claude Code', isActive: false }));
+  const execFile = (_cmd, args, _opts, cb) => {
+    calls.push(args);
+    if (String(args[0]).includes('read-tab-state')) {
+      cb(null, JSON.stringify({
+        tabs: ids.map((id, index) => ({ group: 0, index, sessionId: id, title: 'Claude Code', isClaude: true })),
+        hiddenSessionIds: [], closedSessionIds: [],
+      }));
+      return;
+    }
+    cb(null, 'closed');
+  };
+  const vscode = {
+    TabInputWebview,
+    Uri: { parse: (value) => ({ value }) },
+    env: { async openExternal() { opened += 1; return true; } },
+    window: {
+      tabGroups: { all: [{ tabs }], onDidChangeTabs() { return { dispose() {} }; }, async close() { return true; } },
+      createOutputChannel() { return { appendLine() {} }; },
+      registerUriHandler(value) { handler = value; return { dispose() {} }; },
+      showErrorMessage(message) { assert.fail(message); },
+    },
+    workspace: { onDidChangeConfiguration() { return { dispose() {} }; }, getConfiguration() { return { get(key) { return key === 'mobileTabs' ? 0 : undefined; } }; } },
+    commands: { async getCommands() { return []; }, async executeCommand() {} },
+    extensions: { getExtension() { return null; } },
+  };
+  let handler;
+  const proc = Object.create(process);
+  proc.env = { ...process.env, ORGIAST_HOME: home, ORGIAST_NIGHTLY_REPO: repo };
+  const module = { exports: {} };
+  const context = { subscriptions: [], storageUri: { fsPath: path.join(home, 'ws', 'state.vscdb') } };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'extension.js'), 'utf8'), {
+    module, process: proc, URLSearchParams, console, clearInterval, clearTimeout, setTimeout,
+    setInterval(fn, ms) { return ms === 5000 ? null : setInterval(fn, ms); },
+    __filename: path.join(__dirname, 'extension.js'),
+    __dirname,
+    require(name) {
+      if (name === 'vscode') return vscode;
+      if (name === 'node:child_process') return { execFile };
+      if (name === './mobile-pool') return { ...require('./mobile-pool'), createOwnershipLease: () => ({ acquire: async () => true, release() {} }) };
+      return require(name);
+    },
+  });
+  module.exports.activate(context);
+  await handler.handleUri({ path: '/mobile', query: 'count=9' });
+  const closeCalls = calls.filter((args) => String(args[0]).includes('close-session.mjs'));
+  assert.equal(closeCalls.length, 1);
+  assert.equal([...closeCalls[0]].slice(1).join('\n'), '--session\na\n--no-launch');
+  const readAt = calls.findIndex((args) => String(args[0]).includes('read-tab-state'));
+  const closeAt = calls.findIndex((args) => String(args[0]).includes('close-session'));
+  assert.ok(readAt >= 0 && readAt < closeAt);
+  assert.equal(opened, 0);
+  assert.equal(tabs.length, ids.length);
+  for (const disposable of context.subscriptions) disposable.dispose?.();
+});
+
 test('transcript: directory/file read errors remain undefined', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-transcript-error-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -261,4 +359,23 @@ test('transcript: directory/file read errors remain undefined', (t) => {
   assert.equal(check(home, 'session'), undefined);
   fs.mkdirSync(path.join(home, '.claude', 'projects', 'project', 'session.jsonl'), { recursive: true });
   assert.equal(check(home, 'session'), undefined);
+});
+
+
+test('/reopen は保存済みの ID とタイトルで対象を見つけ、閉じた後に公式 URI を開く', async () => {
+  const opened = [];
+  const { handler, tabs, Input, closed } = loadExtension({
+    onCommand() {},
+    onExternal(uri) { assert.deepEqual(tabs, [other]); opened.push(uri.value); return true; },
+    onReadState: () => ({ tabs: [{ title: '復旧対象', sessionId: 'target-id', isClaude: true }] }),
+  });
+  const target = { input: new Input(), label: '復旧対象' };
+  const other = { input: new Input(), label: '別の仕事' };
+  tabs.push(target, other);
+  await handler.handleUri({ path: '/reopen', query: '' });
+  assert.deepEqual(opened, []);
+  assert.deepEqual(closed, []);
+  await handler.handleUri({ path: '/reopen', query: 'session=target-id' });
+  assert.deepEqual(closed, [target]);
+  assert.deepEqual(opened, ['vscode://anthropic.claude-code/open?session=target-id']);
 });

@@ -24,7 +24,7 @@ foreach ($spec in $specs) {
   $hidden = Join-Path $env:USERPROFILE '.claude\tools\run-hidden.vbs'
   $wscript = Join-Path $env:SystemRoot 'System32\wscript.exe'
   $expectedArgs = '//nologo "{0}" "{1}" "{2}"' -f $hidden, $node, $scriptPath
-  $matches = $current -and @($current.Actions).Count -eq 1 -and
+  $matches = $current -and $current.Settings.Priority -eq 4 -and @($current.Actions).Count -eq 1 -and
     $current.Actions[0].Execute -ieq $wscript -and
     $current.Actions[0].Arguments -eq $expectedArgs -and
     $current.Actions[0].WorkingDirectory -eq $repo -and
@@ -36,9 +36,9 @@ foreach ($spec in $specs) {
   if ($DryRun) { Write-Host "[DRY] $($spec.TaskName): $scriptPath daily at 20:00"; continue }
   $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument (@($scriptPath) + $spec.ScriptArgs) -WorkingDirectory $repo
   $trigger = New-ScheduledTaskTrigger -Daily -At '20:00'
-  $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 55)
+  $settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 55)
   Register-ScheduledTask -TaskName $spec.TaskName -Action $action -Trigger $trigger -Settings $settings -Description 'Detect day trip candidates and process kim replies daily at 20:00' -Force | Out-Null
   $actual = Get-ScheduledTask -TaskName $spec.TaskName -ErrorAction Stop
-  if ($actual.Actions[0].Arguments -ne $expectedArgs -or $actual.Triggers[0].DaysInterval -ne 1 -or $actual.Triggers[0].StartBoundary.Substring(11, 5) -ne '20:00') { throw 'daytrip-detect task read-back failed' }
+  if ($actual.Settings.Priority -ne 4 -or $actual.Actions[0].Arguments -ne $expectedArgs -or $actual.Triggers[0].DaysInterval -ne 1 -or $actual.Triggers[0].StartBoundary.Substring(11, 5) -ne '20:00') { throw 'daytrip-detect task read-back failed' }
   Write-Host 'ok: OrgiastDaytripDetect registered (daily 20:00, synced main)'
 }

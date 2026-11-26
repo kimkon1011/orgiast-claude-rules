@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 export const GATE_CONTRACT = {"name": "next-action-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "next-action-gate"}]};
+import { parseWaitFooter } from './lib/wait-deadline.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,6 +13,7 @@ import { isLandingDeferral } from './permanent-fix-deferral-scan.mjs';
 import { ledgerFile, readLedger, latestOpenPromises } from './auto-progress-ledger.mjs';
 import { classifyHandoff } from './lib/handoff-kind.mjs';
 import { judgeBgTurnReport } from './bg-turn-report-gate.mjs';
+import { stripTrailingJournalAnswers } from './lib/strip-trailing-journal.mjs';
 
 export const MIN_ENFORCED_LENGTH = 200;
 const FOOTER_PATTERN = /(?:^|\n)次に kim がすること:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?この後の自動進行:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?このセッション:[ \t]*([^\r\n]*)$/;
@@ -68,9 +70,10 @@ const APPROVAL_HEADING = '【kim 確認用の全文】';
 const SECTION_START_PATTERN = /^(?:[①-⑨]|【|手間監査|恒久策|#{1,6}\s|\[)/;
 // フッター直前40行の【kim 確認用の全文】の位置: missing / not-last（後ろに別の節がある）/ last。
 function approvalPlacement(turnSource) {
-  const footerLabel = turnSource.lastIndexOf('次に kim がすること:');
-  const footerStart = Math.max(0, turnSource.lastIndexOf('\n', footerLabel));
-  const lines = turnSource.slice(0, footerStart).split(/\r?\n/).slice(-40).map(line => line.trim());
+  const source = stripTrailingJournalAnswers(turnSource);
+  const footerLabel = source.lastIndexOf('次に kim がすること:');
+  const footerStart = Math.max(0, source.lastIndexOf('\n', footerLabel));
+  const lines = source.slice(0, footerStart).split(/\r?\n/).slice(-40).map(line => line.trim());
   const heading = lines.lastIndexOf(APPROVAL_HEADING);
   if (heading < 0) return 'missing';
   return lines.slice(heading + 1).some(line => SECTION_START_PATTERN.test(line)) ? 'not-last' : 'last';
@@ -87,7 +90,7 @@ const DELIVERY_PATTERN = /着地|マージ|\bPR\b|push|ブランチ|main に/;
 export const NO_ACTION_PATTERN = /^(?:なし|無し|ありません|不要|返信不要)(?:[。．.]?[ \t]*$|[ \t]*[（(][^\r\n]*[）)][。．.]?[ \t]*$)/;
 const WAREHOUSE_PATTERN = /倉庫|棚|箱に入れ|セットに入れ|同梱|運ぶ|積む|持ち出し|格納|移動/;
 const SESSION_CRON_REASON = '「まだ閉じない」で待つなら、このセッション内に定期の進捗確認を仕込んでから終える。CronCreate（recurring・毎時・分は 0/30 を避ける）で、プロンプトに『残作業の状態を照会し 1〜3 行でこのセッションに報告、状態が変わった時か判断が要る時だけ PushNotification、全部終わったら CronDelete して、確認せず自分で /session-close を実行』を書く。台帳（auto-progress --add-check）は Discord 通知用でセッションには報告しないので代わりにならない（nishi 2026-10-29・11-04 指示）。例外は [NO-SESSION-CRON-OK: <理由>]（理由5文字以上）。';
-const SESSION_CLOSE_HANDOFF_REASON = '[SESSION-CLOSE-HANDOFF] 「/session-close をして」は kim に close を委ねる終わり方なので禁止です（2026-08-30・2026-11-04 kim 厳命「最終の場合は自動でセッションクローズをして」・全PC全アカウント全プロジェクト）。作業が終わったなら、確認や提案をせず、このターンで Skill session-close を自分で実行し、「このセッション: /session-close は終わっているので、このセッションを閉じてよい」で終えてください。まだ待つなら「まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）」です。実行したが失敗した時だけ、実行したコマンドと終了コードを本文に書き [SESSION-CLOSE-PENDING-OK: <理由>]（理由5文字以上）を付けてください。';
+const SESSION_CLOSE_HANDOFF_REASON = '[SESSION-CLOSE-HANDOFF] 「/session-close をして」は kim に close を委ねる終わり方なので禁止です（2026-08-30・2026-11-04 kim 厳命「最終の場合は自動でセッションクローズをして」・全PC全アカウント全プロジェクト）。作業が終わったなら、確認や提案をせず、このターンで Skill session-close を自分で実行し、「このセッション: /session-close は終わっているので、このセッションを閉じてよい」で終えてください。まだ待つなら「まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ／納期 YYYY-MM-DD HH:MM・残り作業 2時間）」です。実行したが失敗した時だけ、実行したコマンドと終了コードを本文に書き [SESSION-CLOSE-PENDING-OK: <理由>]（理由5文字以上）を付けてください。';
 const PERMANENT_FIX_REASON ='人に作業を残すなら、今後その作業が人に来ないようにする策（自動化／担当者への依頼経路／ルール・ゲート・memory 化）をこのターンで実装し、`恒久策:` 行に実装物を書く。初回だけの作業なら `恒久策: 一回限り: <理由>`。';
 const DEFERRAL_REASON = '[NEXT-ACTION-DEFERRAL] 「次に kim がすること」に恒久修正の先送り（実装・修正・恒久化・次セッション対応）が書かれています。同じ文面は夜間監査 permanent-fix-deferral-scan が P3 として検出します（2026-10-14〜10-15 に 6 件）。kim に渡してよいのは「人が一度だけ実行できる具体的手順」だけです。自分で潰せるものはこのターン内に実装して着地させ、実行不能なら実行したコマンドと終了コードを本文に記録したうえで、移せる経路（例: Codex が生きている受信PCへの fleet-mail --exec codex 便）へ流してください。どうしても人にしかできない物理操作のときだけ、先送り語（恒久策・次セッション等）を使わず具体的な1手順だけを書いてください。';
 // kim が毎回同じ文で判断できるよう、表記ゆれを許さない完全一致の定型文にする（2026-09-25 kim 指示）。
@@ -97,44 +100,30 @@ export const SESSION_PHRASES = {
   closed: '/session-close は終わっているので、このセッションを閉じてよい',
   delete: '/session-close は不要なので、このセッションを閉じてよい',
   // pending も「まだ閉じない」なので、同じく待つ期限を必ず書く（2026-10-27 nishi 指示）。
-  pending: '/session-close をして（まだ閉じない・YYYY-MM-DD HH:MM まで待つ）',
-  // まだ閉じない場合は、何日の何時まで待つかを必ず書く（2026-10-27 nishi 指示・全PC全アカウント）。
-  // 期限が無いと、user はいつまでタブを開けておけばよいか分からず「進捗どう？」と聞き直すことになる。
-  open: 'まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）',
+  pending: '/session-close をして（まだ閉じない・YYYY-MM-DD HH:MM まで待つ／納期なし: 人の判断を待っている）',
+  open: 'まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ／納期 YYYY-MM-DD HH:MM・残り作業 2時間）',
 };
-const DEADLINE = '(\\d{4})-(\\d{2})-(\\d{2}) (\\d{2}):(\\d{2})';
-const WAIT_PATTERNS = {
-  open: new RegExp(`^まだ閉じない（[^・\\r\\n]*・${DEADLINE} まで待つ）$`),
-  pending: new RegExp(`^/session-close をして（まだ閉じない・${DEADLINE} まで待つ）$`),
-};
-const WAIT_STATES = new Set(Object.keys(WAIT_PATTERNS));
+const WAIT_STATES = new Set(['open', 'pending']);
 
-// 「まだ閉じない」行（open / pending）の待つ期限（PC のローカル時刻）。書式違い・存在しない日時は null。
 export function openDeadline(value) {
-  const text = String(value || '');
-  const m = Object.values(WAIT_PATTERNS).map(pattern => text.match(pattern)).find(Boolean);
-  if (!m) return null;
-  const [y, mo, d, h, mi] = m.slice(1).map(Number);
-  const date = new Date(y, mo - 1, d, h, mi);
-  if (date.getFullYear() !== y || date.getMonth() !== mo - 1 || date.getDate() !== d || h > 23 || mi > 59) return null;
-  return date;
+  return parseWaitFooter(value).waitUntil;
 }
 
 export function openPhrase(date, state = 'open') {
   const p = n => String(n).padStart(2, '0');
-  return SESSION_PHRASES[state].replace('YYYY-MM-DD HH:MM', `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}`);
+  return SESSION_PHRASES[state].replace(/／.*）$/, '／納期なし: 相手の回答時期が未定）').replace('YYYY-MM-DD HH:MM', `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}`);
 }
 // pending（kim に /session-close を委ねる）は SESSION-CLOSE-HANDOFF で禁止したので案内しない。
 const SESSION_PHRASE_LIST = Object.entries(SESSION_PHRASES).filter(([state]) => state !== 'pending').map(([, phrase]) => `「${phrase}」`).join('');
 const CLOSABLE_STATES = new Set(['closed', 'delete']);
-const SESSION_STATES = Object.entries(SESSION_PHRASES).map(([state, phrase]) => [state, { test: WAIT_STATES.has(state) ? value => WAIT_PATTERNS[state].test(value) && openDeadline(value) !== null : value => value === phrase }]);
+const SESSION_STATES = Object.entries(SESSION_PHRASES).map(([state, phrase]) => [state, { test: WAIT_STATES.has(state) ? value => value.startsWith(state === 'open' ? 'まだ閉じない（' : '/session-close をして（') && openDeadline(value) !== null : value => value === phrase }]);
 
 export function enabled() {
   return process.env.ORGIAST_NEXT_ACTION_GATE !== '0';
 }
 
 export function footerValues(text) {
-  const source = String(text || '').trimEnd();
+  const source = stripTrailingJournalAnswers(String(text || '')).trimEnd();
   const match = source.match(FOOTER_PATTERN);
   if (!match) return null;
   return { nextAction: match[1].trim(), autopilot: match[2].trim(), session: match[3].trim() };
@@ -408,7 +397,14 @@ function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {
   if (!sessionState) {
     return { decision: 'block', code: 'SESSION-INVALID', reason: `「このセッション:」は定型文${SESSION_PHRASE_LIST}のいずれかを一字一句そのまま書いてください（理由は「この後の自動進行」に書く）。` };
   }
-  if (WAIT_STATES.has(sessionState) && openDeadline(footer.session).getTime() < (input.now ?? Date.now())) {
+  const { waitUntil, due, remainingMs, noDueReason } = parseWaitFooter(footer.session);
+  if (WAIT_STATES.has(sessionState) && !due && !noDueReason) {
+    return { decision: 'block', code: 'SESSION-OPEN-NO-DUE', reason: `納期と残り作業を記入してください。例「${SESSION_PHRASES.open}」。納期が不明なら「／納期なし: 相手の決裁日が未定」のように理由を5文字以上書いてください。期限 = min(相手が返す見込み, 納期 − 残り作業 − 予備)。` };
+  }
+  if (due && waitUntil.getTime() > due.getTime() - remainingMs) {
+    return { decision: 'block', code: 'SESSION-OPEN-DEADLINE-AFTER-DUE', reason: '待つ期限を納期 − 残り作業以前に設定してください。予備を確保するため、さらに残り作業の20%（最低1時間）を引いてください。' };
+  }
+  if (waitUntil && waitUntil.getTime() < (input.now ?? Date.now())) {
     return { decision: 'block', code: 'SESSION-OPEN-DEADLINE-PAST', reason: '「まだ閉じない」の待つ期限が既に過ぎています。待ち続けるなら新しい期限を書き、待つのをやめるなら確認せず自分で /session-close を実行してください。' };
   }
   const body = source.slice(0, source.lastIndexOf('次に kim がすること:'));

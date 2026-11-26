@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { createDirtyWorktreeGuard } from './dirty-worktree-guard.mjs';
+import { createDirtyWorktreeGuard, statusPaths } from './dirty-worktree-guard.mjs';
 import { main } from './auto-session-launcher.mjs';
 
 function fixture(t) {
@@ -13,27 +13,28 @@ function fixture(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const repo = path.join(root, 'repo');
   const remote = path.join(root, 'remote.git');
+  const gitRun = (dir, args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] });
   const git = (dir, args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   fs.mkdirSync(repo);
-  git(root, ['init', '--bare', remote]);
-  git(repo, ['init', '-b', 'main']);
-  git(repo, ['config', 'user.name', 'Test']);
-  git(repo, ['config', 'user.email', 'test@example.invalid']);
+  gitRun(root, ['init', '--bare', remote]);
+  gitRun(repo, ['init', '-b', 'main']);
+  gitRun(repo, ['config', 'user.name', 'Test']);
+  gitRun(repo, ['config', 'user.email', 'test@example.invalid']);
   fs.mkdirSync(path.join(repo, 'tools'));
   fs.writeFileSync(path.join(repo, 'tools', 'auto-session.mjs'), '');
   fs.writeFileSync(path.join(repo, 'tracked'), 'original');
-  git(repo, ['add', 'tracked', 'tools/auto-session.mjs']);
-  git(repo, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'initial']);
-  git(repo, ['remote', 'add', 'origin', remote]);
-  git(repo, ['push', '-u', 'origin', 'main']);
-  return { root, repo, remote, git };
+  gitRun(repo, ['add', 'tracked', 'tools/auto-session.mjs']);
+  gitRun(repo, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'initial']);
+  gitRun(repo, ['remote', 'add', 'origin', remote]);
+  gitRun(repo, ['push', '-u', '--quiet', 'origin', 'main']);
+  return { root, repo, remote, git, gitRun };
 }
 
 for (const pushFails of [false, true]) test(`dirty guard preserves and commits tracked/untracked changes; pushFails=${pushFails}`, (t) => {
-  const { root, repo, remote, git } = fixture(t);
+  const { root, repo, remote, git, gitRun } = fixture(t);
   fs.writeFileSync(path.join(repo, 'tracked'), 'changed');
   fs.writeFileSync(path.join(repo, 'untracked'), 'precious');
-  if (pushFails) git(repo, ['remote', 'set-url', 'origin', path.join(root, 'missing')]);
+  if (pushFails) gitRun(repo, ['remote', 'set-url', 'origin', path.join(root, 'missing')]);
   const logs = [];
   const guard = createDirtyWorktreeGuard({ home: root, log: s => logs.push(s) });
   assert.equal(guard(repo), false);
@@ -63,19 +64,19 @@ test('status and commit errors fail closed and preserve untracked files', t => {
 });
 
 for (const dirty of [true, false]) test(`launcher real git integration: dirty=${dirty}`, async t => {
-  const { root, repo, git } = fixture(t);
+  const { root, repo, git, gitRun } = fixture(t);
   const pinned = path.join(root, 'pinned');
   const oldFallback = `${pinned}-fallback-20000101-000000`;
-  git(repo, ['worktree', 'add', '--detach', pinned, 'origin/main']);
-  if (dirty) git(repo, ['worktree', 'add', '--detach', oldFallback, 'origin/main']);
+  gitRun(repo, ['worktree', 'add', '--detach', pinned, 'origin/main']);
+  if (dirty) gitRun(repo, ['worktree', 'add', '--detach', oldFallback, 'origin/main']);
   if (dirty) for (const dir of [repo, pinned, oldFallback]) {
     fs.writeFileSync(path.join(dir, 'tracked'), 'changed');
     fs.writeFileSync(path.join(dir, 'untracked'), 'precious');
   }
   if (!dirty) {
-    git(repo, ['commit', '--allow-empty', '-m', 'upstream']);
-    git(repo, ['push', 'origin', 'main']);
-    git(repo, ['checkout', '--detach', 'HEAD~1']);
+    gitRun(repo, ['commit', '--allow-empty', '-m', 'upstream']);
+    gitRun(repo, ['push', '--quiet', 'origin', 'main']);
+    gitRun(repo, ['checkout', '--detach', 'HEAD~1']);
   }
   const previous = [process.env.ORGIAST_REPO, process.env.ORGIAST_AUTO_SESSION_TREE];
   process.env.ORGIAST_REPO = repo;
@@ -113,7 +114,7 @@ for (const dirty of [true, false]) test(`launcher real git integration: dirty=${
 });
 
 test('recheck before each destructive command catches a new edit after checkout', async t => {
-  const { root, repo, git } = fixture(t);
+  const { root, repo, git, gitRun } = fixture(t);
   const previous = [process.env.ORGIAST_REPO, process.env.ORGIAST_AUTO_SESSION_TREE];
   const pinned = path.join(root, 'pinned');
   process.env.ORGIAST_REPO = repo;
@@ -130,7 +131,7 @@ test('recheck before each destructive command catches a new edit after checkout'
     run: async (cmd, args, options) => {
       if (cmd !== 'git') return 0;
       calls.push({ args, cwd: options.cwd });
-      git(options.cwd, args);
+      gitRun(options.cwd, args);
       if (options.cwd === repo && args[0] === 'checkout') fs.writeFileSync(path.join(repo, 'late-edit'), 'saved');
       return 0;
     },
@@ -141,14 +142,57 @@ test('recheck before each destructive command catches a new edit after checkout'
 });
 
 test('gitignored generated files do not trigger rescue', t => {
-  const { root, repo, git } = fixture(t);
+  const { root, repo, git, gitRun } = fixture(t);
   fs.writeFileSync(path.join(repo, '.gitignore'), 'generated.json\n');
-  git(repo, ['add', '.gitignore']);
-  git(repo, ['commit', '-m', 'ignore generated']);
+  gitRun(repo, ['add', '.gitignore']);
+  gitRun(repo, ['commit', '-m', 'ignore generated']);
   fs.writeFileSync(path.join(repo, 'generated.json'), '{"builtAt":"x"}');
   const guard = createDirtyWorktreeGuard({ home: root, log: () => {} });
   assert.equal(guard(repo), true, 'ignored file must not dirty/block the tree');
   assert.equal(git(repo, ['branch', '--list', 'rescue/*']).trim(), '');
+});
+
+test('case A: collapsed Windows path alone does not create a rescue branch or delete the file', t => {
+  const { root, repo, git, gitRun } = fixture(t);
+  const collapsed = 'C\uF03AUserskimkoAppDataLocalTempscan-before.json';
+  const ignorePatterns = '/[A-Za-z]:*\n/[A-Za-z]\uF03A*';
+  fs.writeFileSync(path.join(repo, '.gitignore'), `${ignorePatterns}\n`);
+  gitRun(repo, ['add', '.gitignore']);
+  gitRun(repo, ['commit', '-m', 'ignore collapsed Windows paths']);
+
+  fs.writeFileSync(path.join(repo, collapsed), 'temporary scan output');
+  assert.equal(fs.readdirSync(repo).includes(collapsed), true,
+    'the U+F03A form must be created as a real file');
+  assert.match(git(repo, ['check-ignore', '-v', '--', `./${collapsed}`]), /\/[[]A-Za-z].*\*/);
+
+  const guard = createDirtyWorktreeGuard({ home: root, log: () => {} });
+  assert.equal(git(repo, ['status', '--porcelain', '--untracked-files=all']).includes(collapsed), false,
+    'case C: .gitignore keeps the collapsed name out of porcelain status');
+  assert.equal(guard(repo), true, 'an ignored collapsed path must not block a clean worktree');
+  assert.equal(git(repo, ['branch', '--list', 'rescue/*']).trim(), '');
+  assert.equal(fs.readFileSync(path.join(repo, collapsed), 'utf8'), 'temporary scan output',
+    'the guard must not delete the ignored file');
+});
+
+test('case B: rescue commits real work but excludes a collapsed Windows path without git add failure', t => {
+  const { root, repo, git } = fixture(t);
+  const collapsed = 'C\uF03AUserskimkoAppDataLocalTempscan-before.json';
+  fs.writeFileSync(path.join(repo, 'real-work.txt'), 'precious result');
+  fs.writeFileSync(path.join(repo, collapsed), 'temporary scan output');
+  assert.equal(git(repo, ['status', '--porcelain', '-z', '--untracked-files=all']).includes(collapsed), true,
+    'the real U+F03A file must appear in git status before rescue');
+  const guard = createDirtyWorktreeGuard({ home: root, log: () => {}, git });
+
+  assert.equal(guard(repo), false);
+  const branch = git(repo, ['branch', '--show-current']).trim();
+  assert.match(branch, /^rescue\/auto-session-\d{8}-\d{6}/);
+  assert.equal(git(repo, ['show', `${branch}:real-work.txt`]), 'precious result');
+  const names = git(repo, ['show', '--format=', '--name-only', branch]);
+  assert.equal(names.includes(collapsed), false, 'collapsed path must not enter the rescue commit');
+  assert.deepEqual(statusPaths(git(repo, ['status', '--porcelain', '-z', '--untracked-files=all'])), [collapsed],
+    'real work is committed while the excluded collapsed file remains untracked');
+  assert.equal(fs.readFileSync(path.join(repo, collapsed), 'utf8'), 'temporary scan output',
+    'the excluded file must remain in the worktree');
 });
 
 // 2026-10-13〜16 の実事故: git 強制終了の置き土産 .git/index.lock があると `git add -A` が

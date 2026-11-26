@@ -16,6 +16,7 @@ import {
   childEnv,
   KEPT_CLAUDE_ENV,
   launchNextSession,
+  loadClaudeExeHelpers,
   parseHandoffCwd,
   parseHandoffModel,
   pickAccountEmail,
@@ -34,9 +35,18 @@ import {
   runHeadlessNextSession,
   sanitizeEnv,
   shouldLaunch,
+  DEFAULT_MAX_CLAUDE_PROCESSES,
   shouldInstallBundledVsix,
   trustKeyVariants,
 } from './next-session-launch.mjs';
+
+test('旧 claude-exe に export が無くても起動モジュール全体は落ちない', async () => {
+  const warnings = [];
+  const helpers = await loadClaudeExeHelpers(async () => ({ sanitizeClaudeSupervisorEnv() {} }), (line) => warnings.push(line));
+  assert.equal(helpers.findClaudeInVersionedDir('unused', {}), null);
+  assert.deepEqual(helpers.sanitizeClaudeSupervisorEnv({ MCP_TEST: 'x', PATH: 'ok' }), { PATH: 'ok' });
+  assert.match(warnings[0], /実体探索だけスキップ/);
+});
 
 test('cwd は不在の先頭候補を記録し、次の実在候補で探索を止める', () => {
   const checked = [];
@@ -313,6 +323,7 @@ function fakeIo(overrides = {}) {
     io: {
       env: { CLAUDE_CLI_PATH: claude },
       countClaudeProcesses: () => null,
+      concurrencyOptions: { platform: 'win32', list: () => [] },
       homedir: () => home,
       exists: (file) => file === claude || file === 'C:\\work',
       readdir: () => [],
@@ -1154,8 +1165,8 @@ test('headless は glm 失敗後に deepseek の代替レーンで成功する',
 });
 
 
-test('注入したプロセス数が 12 なら起動をスキップし過負荷をログに出す', async () => {
-  const { io, calls } = fakeIo({ countClaudeProcesses: () => 12 });
+test('注入したプロセス数が 5 なら起動をスキップし過負荷をログに出す', async () => {
+  const { io, calls } = fakeIo({ countClaudeProcesses: () => 5 });
   assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
   assert.equal(calls.spawn.length, 0);
   assert.match(calls.logs.join('\n'), /スキップ:.*過負荷/);
@@ -1163,12 +1174,14 @@ test('注入したプロセス数が 12 なら起動をスキップし過負荷�
 
 test('過負荷ガードは上限・環境設定・force・取得不能を扱う', () => {
   const base = { state: {}, now: Date.now(), env: {}, force: false, pendingTab: false };
-  const blocked = shouldLaunch({ ...base, claudeProcesses: 12 });
+  assert.equal(DEFAULT_MAX_CLAUDE_PROCESSES, 5);
+  const blocked = shouldLaunch({ ...base, claudeProcesses: 5 });
   assert.equal(blocked.ok, false);
-  assert.match(blocked.reason, /過負荷/);
-  assert.equal(shouldLaunch({ ...base, claudeProcesses: 11 }).ok, true);
-  assert.equal(shouldLaunch({ ...base, claudeProcesses: 12, force: true }).ok, true);
-  assert.equal(shouldLaunch({ ...base, claudeProcesses: 12, env: { ORGIAST_NEXT_SESSION_MAX_CLAUDE: '20' } }).ok, true);
+  assert.match(blocked.reason, /上限 5/);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 4 }).ok, true);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 5, force: true }).ok, true);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 5, env: { ORGIAST_NEXT_SESSION_MAX_CLAUDE: '20' } }).ok, true);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 20, env: { ORGIAST_NEXT_SESSION_MAX_CLAUDE: '20' } }).ok, false);
   assert.equal(shouldLaunch({ ...base, claudeProcesses: null }).ok, true);
 });
 
@@ -1232,4 +1245,49 @@ test('countClaudeProcesses counts inaccessible CLI metadata and filters executab
   ];
   assert.equal(countClaudeProcesses(() => JSON.stringify(rows)), 2);
   assert.equal(countClaudeProcesses(command => { assert.equal(command, 'powershell.exe'); return '[]'; }), 0);
+});
+
+test('concurrency cap preserves the handoff for each new-process route, even with --force-launch', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'next-session-cap-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const claude = path.join(home, '.claude');
+  fs.mkdirSync(claude);
+  const handoff = path.join(claude, 'next-session.md');
+  fs.writeFileSync(handoff, '# Next');
+  for (const route of ['vscode', 'vscode-ext', 'terminal']) {
+    const logs = [];
+    await launchNextSession(['--target', route, '--force-launch'], {
+      env: {}, homedir: home, countClaudeProcesses: () => 0,
+      log: line => logs.push(line), spawn() { assert.fail('spawn at capacity'); },
+      concurrencyOptions: { platform: 'win32', list: () => Array.from({ length: 25 }, (_, index) => ({
+        Name: 'claude.exe', ProcessId: index + 100, CommandLine: 'claude.exe --resume=id',
+      })) },
+    });
+    assert.ok(logs.some(line => line.includes('session_concurrency_cap count=25 limit=20')), route);
+    assert.equal(fs.readFileSync(handoff, 'utf8'), '# Next');
+    assert.equal(fs.existsSync(path.join(claude, 'next-session-launch.json')), false);
+  }
+});
+
+test('headless runs in print mode without checking interactive session capacity', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'next-session-headless-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const claude = path.join(home, '.claude');
+  fs.mkdirSync(claude);
+  fs.writeFileSync(path.join(claude, 'next-session.md'), '# Next');
+  const { calls, spawnImpl } = headlessSpawnRecorder([0]);
+  let capacityChecks = 0;
+  await launchNextSession(['--target', 'headless'], {
+    env: { ORGIAST_AUTO_SESSION_EXECUTOR: 'claude' }, homedir: home,
+    countClaudeProcesses: () => 0, log() {}, spawn: spawnImpl,
+    checkSessionConcurrency() {
+      capacityChecks++;
+      return { ok: false, reason: 'session_concurrency_cap', count: 20, limit: 20 };
+    },
+  });
+  assert.equal(capacityChecks, 0);
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].args.includes('-p'));
+  const state = JSON.parse(fs.readFileSync(path.join(claude, 'next-session-launch.json'), 'utf8'));
+  assert.equal(state.lastHeadless.status, 'success');
 });

@@ -3,13 +3,26 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {gwsFetch,proxyCredential,GWS_MARKER,channelRequest,retrySource} from './lib/gws-proxy.mjs';
+import {gwsFetch,proxyCredential,GWS_MARKER,GWS_SA_SELF_MARKER,channelRequest,retrySource} from './lib/gws-proxy.mjs';
 import {collectLineRows,syncLineHistory} from './line-history-sync.mjs';
 import {syncKnowledge} from './onboarding-sync.mjs';
 test('missing key routes only fixed account and approved scopes without token relay',()=>{
  assert.equal(proxyCredential({keyPath:'nonexistent',impersonate:'seisaku-team@orgiast.jp',scope:'https://www.googleapis.com/auth/drive'}),GWS_MARKER);
+ assert.equal(proxyCredential({keyPath:'nonexistent',impersonate:'seisaku-team@orgiast.jp',scope:'https://www.googleapis.com/auth/gmail.modify'}),GWS_MARKER);
  assert.throws(()=>proxyCredential({keyPath:'nonexistent',impersonate:'kim@orgiast.jp',scope:'https://www.googleapis.com/auth/drive'}));
  assert.throws(()=>proxyCredential({keyPath:'nonexistent',impersonate:'seisaku-team@orgiast.jp',scope:'https://www.googleapis.com/auth/cloud-platform'}));
+});
+test('sa-self routes only Drive and Sheets scopes and marks relay requests without changing existing routes',async()=>{
+ assert.equal(proxyCredential({keyPath:'nonexistent',impersonate:'sa-self',scope:'https://www.googleapis.com/auth/drive'}),GWS_SA_SELF_MARKER);
+ assert.equal(proxyCredential({keyPath:'nonexistent',impersonate:'sa-self',scope:'https://www.googleapis.com/auth/spreadsheets'}),GWS_SA_SELF_MARKER);
+ assert.throws(()=>proxyCredential({keyPath:'nonexistent',impersonate:'sa-self',scope:'https://www.googleapis.com/auth/gmail.readonly'}),/sa-self only allowed/);
+ const calls=[];const request=async(route,opts)=>{calls.push({route,opts});return {status:200,body:Buffer.from('{}').toString('base64')};};
+ await gwsFetch('https://www.googleapis.com/drive/v3/files/id',{headers:{Authorization:`Bearer ${GWS_SA_SELF_MARKER}`}},{request});
+ await gwsFetch('https://sheets.googleapis.com/v4/spreadsheets/id:batchUpdate',{method:'POST',headers:{Authorization:`Bearer ${GWS_SA_SELF_MARKER}`},body:'{}'},{request});
+ await gwsFetch('https://www.googleapis.com/drive/v3/files/id',{headers:{Authorization:`Bearer ${GWS_MARKER}`}},{request});
+ assert.equal(calls[0].opts.query.principal,'sa-self');
+ assert.equal(calls[1].opts.body.principal,'sa-self');
+ assert.equal(calls[2].opts.query.principal,undefined);
 });
 test('proxy preserves binary bytes, uses GET reads and never sends Google marker to Google',async()=>{
  const calls=[];const request=async(route,opts)=>{calls.push({route,opts});return {status:200,body:Buffer.from([0,128,255]).toString('base64')};};

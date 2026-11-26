@@ -31,7 +31,7 @@ if (Test-Path -LiteralPath $hiddenActionHelper) {
 }
 
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At '05:40'
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 try {
   $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
   Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'kim-PC: 組織指示・基本理念と配布ルールの矛盾週次再監査(月曜05:40)' -Force | Out-Null

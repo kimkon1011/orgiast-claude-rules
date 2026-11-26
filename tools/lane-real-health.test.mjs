@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { realLaneStats, applyRealLaneHealth, billingFailure, billingWithQuotaHint } from './lib/lane-real-health.mjs';
+import { realLaneStats, applyRealLaneHealth, billingFailure, billingWithQuotaHint, quotaFailure, chatgptUsageLimit, probeViaChain, stripCodexPromptEcho } from './lib/lane-real-health.mjs';
+import { repairable } from './lib/lane-repair-state.mjs';
 import { laneDoctorQuick, laneDoctorProbe } from './lane-doctor.mjs';
 const now = Date.parse('2026-10-29T12:00:00Z');
 function fixture(t, rows) {
@@ -95,6 +96,22 @@ test('Google 403 outstanding balance is billing', t => {
   assert.equal(billingFailure('status 403 Forbidden'), false);
 });
 
+test('xAI credits/spending-limit 403 wording is billing', t => {
+  const xai = 'grok:grok-3 HTTP403 permission-denied Your team has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit.';
+  assert.equal(billingFailure(xai), true);
+  assert.equal(billingWithQuotaHint(xai), false);
+  assert.equal(quotaFailure(xai), false);
+  // wording fragments alone
+  assert.equal(billingFailure('used all available credits'), true);
+  assert.equal(billingFailure('used all credits'), true);
+  assert.equal(billingFailure('monthly spending limit'), true);
+  assert.equal(billingFailure('raise your spending limit'), true);
+  assert.equal(billingFailure('purchase more credits'), true);
+  // plain 403 / permission-denied without billing wording stays non-billing
+  assert.equal(billingFailure('HTTP 403 permission denied'), false);
+  assert.equal(billingFailure('grok:grok-3 HTTP403 permission-denied'), false);
+});
+
 test('Google 403 outstanding balance via ledger realLaneStats is billing', t => {
   const home = fixture(t, [{ provider: 'gemini', status: 'http_403', stderr: 'The billing account has an outstanding balance' }]);
   const stats = realLaneStats(home, now).gemini;
@@ -113,7 +130,7 @@ test('billing quick diagnosis notification is once per lane per UTC day', async 
   await notifyLaneStops(health, { home, now, notify });
   await notifyLaneStops(health, { home, now: now + 1000, notify });
   assert.equal(sent.length, 1);
-  assert.match(sent[0], /の deepseek が残高不足\(402\)。入金（オートチャージON）が既定/);
+  assert.match(sent[0], /の deepseek が残高不足\(402\)。まず無料枠・既存契約内の他AIレーンを実測し、使える経路へ切り替えます。追加費用案は代替不可の証拠と比較表がある場合だけ最後に提示します$/);
   await notifyLaneStops(health, { home, now: now + 12 * 3600_000, notify });
   assert.equal(sent.length, 2);
 });
@@ -386,4 +403,210 @@ test('codex refresh-token phrases classify as auth without a 401 or unauthorized
     assert.equal(health.lanes.codex.reason, 'dead:oauth_consent', reason);
     assert.equal(health.lanes.codex.alive, false);
   }
+});
+
+test('ledger filters routing and other-lane billing, quota and auth lines', t => {
+  for (const text of ['[codex-do] Gemini HTTP 402 insufficient balance', '[routing] HTTP 429', 'fallback backend=gemini HTTP 401 unauthorized', 'cheap-first: HTTP 402', 'ack backend=groq HTTP 402', 'Gemini HTTP 402 insufficient balance']) {
+    const home = fixture(t, [{ provider: 'codex', status: 'error', stderr: text }]);
+    const stats = realLaneStats(home, now).codex;
+    assert.equal(stats.billingCalls, 0, text);
+    assert.equal(stats.quotaCalls, 0, text);
+  }
+  const home = fixture(t, [{ provider: 'codex', status: 'error', stderr: 'HTTP 402 insufficient balance' }]);
+  assert.equal(realLaneStats(home, now).codex.billingCalls, 1);
+});
+
+test('cached chain evidence cannot retain billing, quota, auth or alive classification', t => {
+  const home = fixture(t, []);
+  for (const reason of ['billing', 'quota_wait', 'auth_invalid', 'probe_ok']) {
+    const health = { lanes: { codex: { alive: reason === 'probe_ok', reason, error: 'Gemini HTTP 402 insufficient balance' } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.codex.reason, 'probe_inconclusive');
+    assert.equal(health.lanes.codex.alive, false);
+    assert.equal(health.lanes.codex.viaChain, true);
+  }
+});
+
+test('[routing] 診断行に他レーン名があっても自レーンのタグで答えた probe は viaChain にしない', t => {
+  const text = [
+    '[routing] カテゴリ summarize は実測表から openrouter/inclusionai/ling-3.0-flash を先頭にします',
+    '[routing] gemini はdemote中のため連鎖の末尾へ回します',
+    '[cooldown] glm はスキップ (lane_doctor_usage_limit, 残り2991分)',
+    '(出力なし)',
+    '[openrouter:openai/gpt-oss-120b] in=73 out=10tok',
+  ].join('\n');
+  assert.equal(probeViaChain(text, 'openrouter'), false);
+});
+
+test('他レーンのタグで答えた probe は viaChain', t => {
+  const text = [
+    '[routing] カテゴリ summarize は実測表から openrouter/inclusionai/ling-3.0-flash を先頭にします',
+    '[routing] gemini はdemote中のため連鎖の末尾へ回します',
+    '[cooldown] glm はスキップ (lane_doctor_usage_limit, 残り2991分)',
+    '(出力なし)',
+    '[openrouter:inclusionai/ling-3.0-flash] in=26 out=90tok',
+  ].join('\n');
+  assert.equal(probeViaChain(text, 'deepseek'), true);
+});
+
+test('[codex-do] cheap-first: ... は診断行でも viaChain のまま', t => {
+  const text = '[codex-do] cheap-first: Gemini HTTP 402 insufficient balance';
+  assert.equal(probeViaChain(text, 'codex'), true);
+});
+
+test('OpenRouter 経由が正規経路の deepseek を連鎖と誤認しない', t => {
+  assert.equal(probeViaChain('PONG\n[openrouter:deepseek/deepseek-v4-flash] in=10 out=3tok', 'deepseek'), false);
+});
+
+test('OpenRouter 経路の mistral も同様に連鎖と誤認しない', t => {
+  assert.equal(probeViaChain('PONG\n[openrouter:mistralai/mistral-medium-3-5] in=21 out=3tok', 'mistral'), false);
+});
+
+test('OpenRouter タグに自レーン名が含まれない場合は従来どおり viaChain', t => {
+  assert.equal(probeViaChain('PONG\n[openrouter:openai/gpt-oss-120b] in=73 out=5tok', 'deepseek'), true);
+});
+
+test('cheap-first 行に OpenRouter タグがあっても viaChain のまま', t => {
+  assert.equal(probeViaChain('cheap-first: x\nPONG\n[openrouter:deepseek/deepseek-v4-flash] in=10 out=3tok', 'deepseek'), true);
+});
+
+test('通常の本文に他レーン名が出たら従来どおり viaChain', t => {
+  const text = 'Gemini HTTP 402 insufficient balance';
+  assert.equal(probeViaChain(text, 'codex'), true);
+});
+
+test('Codex CLI のプロンプト再掲内の他レーン名を viaChain 判定に使わない', t => {
+  const withoutUser = '--------\nprovider: openai\nGemini response';
+  assert.equal(stripCodexPromptEcho(withoutUser), withoutUser);
+  const prefix = [
+    '[codex-do] executor=codex',
+    'OpenAI Codex v0.162.1',
+    '--------',
+    'provider: openai',
+    '--------',
+    'user',
+    'Gemini と DeepSeek は入力に書かれただけ',
+  ];
+  const direct = [...prefix, 'codex', 'WRITE_OK を確認しました。'].join('\n');
+  assert.equal(probeViaChain(direct, 'codex'), false);
+  assert.equal(stripCodexPromptEcho(direct).includes('Gemini'), false);
+
+  const fallback = [...prefix, 'codex', 'fallback backend=deepseek'].join('\n');
+  assert.equal(probeViaChain(fallback, 'codex'), true);
+
+  const otherLaneResponse = [...prefix, 'exec', 'deepseek answered'].join('\n');
+  assert.equal(probeViaChain(otherLaneResponse, 'codex'), true);
+
+  const promptOnly = prefix.join('\n');
+  assert.equal(probeViaChain(promptOnly, 'codex'), false);
+  assert.equal(stripCodexPromptEcho(promptOnly), prefix.slice(0, 5).join('\n'));
+});
+
+test('[routing] の demote 診断行（provider 名 fallback）を連鎖と誤認しない 2026-11-17 実測', t => {
+  const text = [
+    '[cost] 本日の安いAI実行者 概算 $3.24 が警告値 $1.00 を超過',
+    '[routing] groq は lanes-disabled.json で無効化されているため使いません',
+    '[routing] glm は lanes-disabled.json で無効化されているため使いません',
+    '[routing] gemini は lanes-disabled.json で無効化されているため使いません',
+    '[routing] fallback はdemote中のため連鎖の末尾へ回します',
+    '[routing] gemini はdemote中のため連鎖の末尾へ回します',
+    '[routing] glm はdemote中のため連鎖の末尾へ回します',
+    '[routing] genspark はdemote中のため連鎖の末尾へ回します',
+    '[routing] codex はdemote中のため連鎖の末尾へ回します',
+    '[cooldown] genspark はスキップ (http_401, 残り81分)',
+    'PONG',
+    '[openrouter:deepseek/deepseek-v4-flash] in=11 out=3tok',
+  ].join('\n');
+  assert.equal(probeViaChain(text, 'deepseek'), false);
+  assert.equal(probeViaChain(text, 'openrouter'), false);
+});
+
+test('cheap-first: を含む出力は viaChain のまま（回帰）', t => {
+  assert.equal(probeViaChain('cheap-first: gemini → deepseek', 'deepseek'), true);
+});
+
+test('stopped lane auth evidence is superseded by a later ledger or probe success', t => {
+  for (const ledgerSuccess of [false, true]) {
+    const home = fixture(t, [
+      { status: 'error', reason: 'HTTP 401 unauthorized', t: now - 3000 },
+      ...(ledgerSuccess ? [{ status: 'ok', t: now - 2000 }] : []),
+    ]);
+    const health = { lanes: { deepseek: {
+      alive: false, reason: 'quota_wait', until: now + 1000,
+      error: 'HTTP 401 unauthorized', probedAt: now - 3000,
+      lastProbeOkAt: now - (ledgerSuccess ? 4000 : 2000),
+    } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.deepseek.reason, 'quota_wait');
+    fs.appendFileSync(path.join(home, '.claude/executor-usage.jsonl'), '\n' + JSON.stringify({
+      provider: 'deepseek', status: 'cooldown', reason: 'HTTP 401 unauthorized', t: now - 1000,
+    }));
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.deepseek.reason, 'auth_invalid');
+    assert.equal(health.lanes.deepseek.until, undefined);
+  }
+});
+
+test('ChatGPT の定額枠切れ文言は quota であって real_fail_rate ではない', t => {
+  const upgrade = 'Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 10:23 PM. tokens used 62,031';
+  assert.equal(chatgptUsageLimit(upgrade), true);
+  assert.equal(quotaFailure(upgrade), true);
+  // 枠切れは残高不足ではない。billing に落ちると自動復帰を待たずに修復を迫られる。
+  assert.equal(billingFailure(upgrade), false);
+  assert.equal(quotaFailure("You've hit your usage limit for GPT-5."), true);
+  assert.equal(quotaFailure('You have reached your weekly limit.'), true);
+  // 枠と無関係な失敗まで quota に倒さない
+  assert.equal(chatgptUsageLimit('HTTP 500 internal error'), false);
+  assert.equal(chatgptUsageLimit('upgrade to pro plan for more features'), false);
+});
+
+test('ChatGPT 枠切れの行は失敗ではなく quotaCalls に入り gate が修復を要求しない', t => {
+  const stderr = 'Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 10:23 PM.';
+  const home = fixture(t, Array.from({ length: 6 }, () => ({ provider: 'codex', status: 'error', stderr })));
+  const stats = realLaneStats(home, now);
+  assert.equal(stats.codex.failures, 0);
+  assert.equal(stats.codex.quotaCalls, 6);
+  assert.equal(repairable({ alive: false, reason: 'real_fail_rate', error: stderr }), false);
+});
+
+test('probeReason=cooldown のときは real_fail_rate ではなく quota_wait に分類する（行き止まり防止）', t => {
+  const home = fixture(t, [
+    ...Array.from({ length: 10 }, () => ({ provider: 'codex', status: 'error', stderr: 'all_backends_failed' })),
+  ]);
+  const health = { lanes: { codex: { alive: false, reason: 'probe_failed', probeReason: 'cooldown', probeEvidence: 'all_backends_failed' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.codex.reason, 'quota_wait');
+});
+
+test('default probe measures gateway-backed mistral and retains retired model evidence', async t => {
+  const home = fixture(t, []);
+  fs.writeFileSync(path.join(home, '.claude/openrouter.env'), 'OPENROUTER_API_KEY=test-only');
+  const model = 'mistralai/mistral-medium-3-5';
+  for (const [code, message] of [[1, 'is no longer available on OpenRouter'], [0, 'No endpoints found']]) {
+    const calls = [];
+    const h = await laneDoctorProbe({ home, now, probe: async p => {
+      calls.push(p);
+      return p === 'mistral' ? { code, text: `openrouter:${model} HTTP404: {"error":{"message":"${message}","code":404}}` } : { code: 0, text: 'PONG' };
+    }, notify: async () => ({ delivered: 'test' }) });
+    assert.ok(calls.includes('mistral'));
+    assert.equal(h.lanes.mistral.alive, false);
+    assert.equal(h.lanes.mistral.reason, 'model_retired');
+    assert.equal(h.lanes.mistral.model, model);
+    assert.match(h.lanes.mistral.error, /mistralai\/mistral-medium-3-5/);
+    assert.equal(h.lanes.openrouter.alive, true);
+    assert.equal(laneDoctorQuick({ home, now: now + 3600_000 }).lanes.mistral.reason, 'model_retired');
+  }
+  const recovered = await laneDoctorProbe({ home, now: now + 3600_000, providers: ['mistral'], probe: async () => ({ code: 0, text: `PONG\n[openrouter:${model}] in=1 out=1tok` }), notify: async () => ({ delivered: 'test' }) });
+  assert.equal(recovered.lanes.mistral.alive, true);
+  assert.equal(recovered.lanes.mistral.reason, 'probe_ok');
+});
+
+test('retired model detection requires 404 and a model retirement message on the requested lane', async () => {
+  const { retiredModel } = await import('./lib/lane-real-health.mjs');
+  const model = 'mistralai/mistral-medium-3-5';
+  assert.equal(retiredModel(`openrouter:${model} HTTP 404: No endpoints found`, 'mistral'), model);
+  assert.equal(retiredModel(`openrouter:${model} HTTP 404: Not found`, 'mistral'), null);
+  assert.equal(retiredModel(`openrouter:${model} HTTP 503: No endpoints found`, 'mistral'), null);
+  assert.equal(retiredModel(`openrouter:${model} HTTP 404: No endpoints found`, 'deepseek'), null);
+  assert.equal(retiredModel(`[routing] openrouter:${model} HTTP 404: No endpoints found`, 'mistral'), null);
 });

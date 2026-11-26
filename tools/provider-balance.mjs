@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -169,7 +170,7 @@ export async function alertProviderBalances(rows, {
       if (['kimi', 'deepseek'].includes(row.provider)) continue;
       if (row.status === 'autotopup_broken') {
         if (!(now.getTime() - Date.parse(notified[row.provider]) < DAY)) {
-          lines.push(`オートチャージ故障: ${row.provider} ${balanceLabel(row)}。${row.account || '契約アカウント'} で ${CHARGE_URLS[row.provider] || '請求画面'} を開き、自動補充の支払い方法・上限・失敗履歴を確認してください。`);
+          lines.push(`オートチャージ故障: ${row.provider} ${balanceLabel(row)}。まず無料枠・既存契約内の他AIレーンを実測して利用可能な経路を確保。${row.account || '契約アカウント'} で ${CHARGE_URLS[row.provider] || '請求画面'} を開き、自動補充の支払い方法・上限・失敗履歴を確認してください。`);
           notified[row.provider] = now.toISOString(); notifiedChanged = true;
         }
         continue;
@@ -182,7 +183,7 @@ export async function alertProviderBalances(rows, {
       if (low) {
         if (prior.lowDay !== today || prior.lowState !== lowState) {
           const topUp = row.autoTopUp === false ? 'OFF' : row.autoTopUp === true ? 'ON' : '不明';
-          lines.push(`残高注意: ${row.provider} ${balanceLabel(row)}（オートチャージ ${topUp}）${CHARGE_URLS[row.provider] ? `。チャージ画面: ${CHARGE_URLS[row.provider]}` : ''}`);
+          lines.push(`残高注意: ${row.provider} ${balanceLabel(row)}（オートチャージ ${topUp}）${CHARGE_URLS[row.provider] ? `。まず無料枠・既存契約内の他AIレーンを実測。残高の読取確認: ${CHARGE_URLS[row.provider]}` : ''}`);
           next.lowDay = today; next.lowState = lowState;
         }
         next.lowActive = true;
@@ -207,7 +208,7 @@ export async function alertProviderBalances(rows, {
       // 切り詰めで残高注意を失わない。現在の全プロバイダをまとめても2,000文字未満。
       if (text.length > 2000) throw new Error('DM too long');
       const result = await notify(text, { home, webhookFallback: false });
-      if (!['dm', 'session-inbox'].includes(result?.delivered)) throw new Error('DM not delivered');
+      if (!isKimDelivered(result)) throw new Error('DM not delivered');
       delivered = result.delivered;
     }
     if (notifiedChanged) {

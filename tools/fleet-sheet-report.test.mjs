@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
-import { post } from './fleet-sheet-report.mjs';
+import { formatCheapAiMonth, post, summarizeExecutorUsage } from './fleet-sheet-report.mjs';
 
 const script = new URL('./fleet-sheet-report.mjs', import.meta.url);
 
@@ -16,14 +16,21 @@ function reportPayload(files = {}, codexAuth) {
   fs.mkdirSync(claude, { recursive: true });
   fs.writeFileSync(path.join(claude, 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.invalid/report\nFLEET_SHEET_TOKEN=test-token\n');
   fs.writeFileSync(path.join(claude, 'cost-reporter.env'), 'REPORTER_LABEL=fleet-sheet-test\n');
-  for (const [name, value] of Object.entries(files)) fs.writeFileSync(path.join(claude, name), JSON.stringify(value));
+  for (const [name, value] of Object.entries(files)) {
+    if (name === 'executor-usage.jsonl') {
+      fs.writeFileSync(path.join(claude, name), value);
+    } else {
+      fs.writeFileSync(path.join(claude, name), JSON.stringify(value));
+    }
+  }
   try {
     if (codexAuth) {
       fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
       fs.writeFileSync(path.join(home, '.codex', 'auth.json'), JSON.stringify(codexAuth));
     }
+    const env = { ...process.env, ORGIAST_HOME: home, VERSION_DRIFT_SKIP: '1' };
     const result = spawnSync(process.execPath, [fileURLToPath(script), '--dry-run'], {
-      encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, VERSION_DRIFT_SKIP: '1' },
+      encoding: 'utf8', env,
     });
     assert.equal(result.status, 0, result.stderr);
     return JSON.parse(result.stdout);
@@ -43,6 +50,29 @@ test('stateに計測値が無ければ数値0へ変換しない', () => {
   assert.equal(payload.delegRatio, '');
   assert.equal(payload.delegRatioLegacy, '');
   assert.equal(payload.claudeUsd, '');
+});
+
+test('プラン上限の計測不能理由を両方のセルに送る', () => {
+  const missing = reportPayload();
+  assert.equal(missing.planSevenDayPct, '計測不能(credentials: ENOENT)');
+  assert.equal(missing.planFiveHourPct, '計測不能(credentials: ENOENT)');
+  const noToken = reportPayload({ '.credentials.json': { claudeAiOauth: {} } });
+  assert.equal(noToken.planSevenDayPct, '計測不能(accessToken 未設定)');
+  assert.equal(noToken.planFiveHourPct, '計測不能(accessToken 未設定)');
+});
+
+test('古い cost-loop 値が最新の Claude コスト概算を隠さない', () => {
+  const cost = { t: '2026-11-15T02:00:00Z', claudeUSD: 211.18 };
+  assert.equal(reportPayload({
+    'cost-loop-state.json': cost,
+    '.cost-reporter-state.json': { lastRun: '2026-11-19T02:00:00Z', mtdUsd: 235.673 },
+  }).claudeUsd, 235.67);
+  assert.equal(reportPayload({
+    'cost-loop-state.json': cost,
+    '.cost-reporter-state.json': {
+      measuredAt: '2026-11-14T02:00:00Z', lastRun: '2026-11-19T02:00:00Z', mtdUsd: 200,
+    },
+  }).claudeUsd, 211.18);
 });
 
 test('stateに計測値があればパーセント表記で送る', () => {
@@ -69,6 +99,20 @@ test('委譲率セルは判定に使う行ベース比(#186)を優先し、無�
     'cost-loop-state.json': { nonClaudeDelegRatio: 0.381, delegRatio: 0.381, claudeUSD: 2 },
   });
   assert.equal(withoutLines.delegRatio, '38.1%');
+});
+
+test('opusRatio が有限数のとき mainModel にパーセントが含まれる', () => {
+  const payload = reportPayload({
+    '.cost-reporter-state.json': { topModels: [{ model: 'claude-opus-4' }], opusRatio: 0.724 },
+  });
+  assert.equal(payload.mainModel, 'claude-opus-4 (72.4%)');
+});
+
+test('opusRatio が無いとき mainModel は素の model 名', () => {
+  const payload = reportPayload({
+    '.cost-reporter-state.json': { topModels: [{ model: 'claude-sonnet-4' }] },
+  });
+  assert.equal(payload.mainModel, 'claude-sonnet-4');
 });
 
 test('keyserve status を既存 status payload に相乗りさせる', () => {
@@ -111,6 +155,13 @@ test('GAS upsertは空の計測値で既存セルを上書きせず、実測0は
   assert.equal(zero.values[columns.claudeUsd], 0);
   assert.equal(zero.values[columns.delegRatio], '0.0%');
   assert.equal(zero.values[columns.delegRatioLegacy], '0.0%');
+  assert.equal(unknown.values[columns.planSevenDayPct], '計測不能(報告元から理由なし)');
+  assert.equal(unknown.values[columns.planFiveHourPct], '計測不能(報告元から理由なし)');
+  const plan = context.fleetPlanUpsert(headers, [row], {
+    label: 'fleet-sheet-test', planSevenDayPct: '計測不能(HTTP 401)', planFiveHourPct: 0,
+  });
+  assert.equal(plan.values[columns.planSevenDayPct], '計測不能(HTTP 401)');
+  assert.equal(plan.values[columns.planFiveHourPct], 0);
 });
 
 const response = (body, status = 200) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
@@ -122,3 +173,72 @@ test('HTTP 200 + ok:false は5回再送して busy_exhausted を残す', async (
 });
 test('busy 後の成功は2回目で完了する', async () => { let calls = 0; const result = await post('u', 'status', {}, { fetchFn: async () => response(++calls === 1 ? { ok: false, error: 'busy' } : { ok: true }), sleepFn: async () => {}, logFile: path.join(os.tmpdir(), `fleet-${Date.now()}.log`), budgetPath: null }); assert.equal(result.ok, true); assert.equal(calls, 2); });
 test('timeout は再送する', async () => { let calls = 0; const result = await post('u', 'status', {}, { fetchFn: async () => { calls++; if (calls === 1) throw Object.assign(new Error('timeout'), { name: 'TimeoutError' }); return response({ ok: true }); }, sleepFn: async () => {}, logFile: path.join(os.tmpdir(), `fleet-${Date.now()}-t.log`), budgetPath: null }); assert.equal(result.ok, true); assert.equal(calls, 2); });
+
+test('当月のAI別件数と推定費用を正しく集計する', () => {
+  const payload = reportPayload({
+    'executor-usage.jsonl': [
+      // 当月のデータ (適当な日付を使用)
+      JSON.stringify({ t: new Date().toISOString(), provider: 'gemini', usd: 10.5 }),
+      JSON.stringify({ t: new Date().toISOString(), provider: 'gemini', usd: 5.2 }),
+      JSON.stringify({ t: new Date().toISOString(), provider: 'openrouter', usd: 2.3 }),
+      // usdが欠損した行（件数のみカウント）
+      JSON.stringify({ t: new Date().toISOString(), provider: 'gemini' }),
+      // toolフィールドを使用する行
+      JSON.stringify({ t: new Date().toISOString(), tool: 'openrouter', usd: 1.1 }),
+      // 不正な行（スキップされる）
+      '{invalid json}',
+      JSON.stringify({ provider: 'gemini', usd: 100 }), // tが欠損
+    ].join('\n'),
+  });
+
+  // 結果が正しい形式であることを確認（正確な値は現在の日付に依存するため形式のみ検証）
+  assert.match(payload.cheapAiMonth, /^\d{4}-\d{2} .+$/);
+  assert(typeof payload.cheapAiMonthUsd === 'number');
+});
+
+test('ファイルが存在しない場合のエラー処理', () => {
+  const payload = reportPayload({});
+  // ファイルが存在しない場合は該当月のデータなしとして処理される
+  assert.match(payload.cheapAiMonth, /^\d{4}-\d{2} なし$/);
+  assert.equal(payload.cheapAiMonthUsd, 0);
+});
+
+test('executor利用履歴をJST当月の境界で集計し、不正日時は累計だけに含める', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'executor-usage-'));
+  const file = path.join(dir, 'usage.jsonl');
+  fs.writeFileSync(file, [
+    JSON.stringify({ t: '2026-10-31T15:30:00Z', provider: 'Gemini', usd: 10.555 }),
+    JSON.stringify({ t: '2026-10-31T14:59:59Z', provider: 'gemini', usd: 100 }),
+    JSON.stringify({ t: '2026-11-30T14:59:59Z', provider: 'Gemini', usd: 5.145 }),
+    JSON.stringify({ t: '2026-11-30T15:00:00Z', provider: 'gemini', usd: 100 }),
+    JSON.stringify({ t: '2026-11-20T00:00:00Z', tool: 'openrouter', usd: 2.3 }),
+    JSON.stringify({ t: '2026-11-21T00:00:00Z', tool: 'openrouter' }),
+    JSON.stringify({ t: '2026-11-22T00:00:00Z', provider: 'kimi', usd: 2.3 }),
+    JSON.stringify({ t: 'garbage', provider: 'deepseek', usd: 99 }),
+  ].join('\n'));
+  try {
+    const result = summarizeExecutorUsage(file, new Date('2026-11-26T00:00:00Z'));
+    assert.deepEqual(result.counts, { gemini: 4, openrouter: 2, kimi: 1, deepseek: 1 });
+    assert.equal(result.month.month, '2026-11');
+    assert.deepEqual(result.month.rows, [
+      { provider: 'gemini', count: 2, usd: 15.7 },
+      { provider: 'openrouter', count: 2, usd: 2.3 },
+      { provider: 'kimi', count: 1, usd: 2.3 },
+    ]);
+    assert.equal(result.month.totalUsd, 20.3);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('当月AI集計をシート表示用に整形する', () => {
+  assert.equal(formatCheapAiMonth({
+    month: '2026-11',
+    rows: [
+      { provider: 'gemini', count: 2, usd: 15.7 },
+      { provider: 'openrouter', count: 1, usd: 2.3 },
+    ],
+    totalUsd: 18,
+  }), '2026-11 gemini:2($15.70), openrouter:1($2.30)');
+  assert.equal(formatCheapAiMonth({ month: '2026-11', rows: [], totalUsd: 0 }), '2026-11 なし');
+});

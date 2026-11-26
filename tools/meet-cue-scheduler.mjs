@@ -13,14 +13,16 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { parseArgs } from 'node:util';
 
+import { acquireLock } from './lib/progress-file-lock.mjs';
 import { isEntry } from './is-entry.mjs';
 import { askJev } from './jev.mjs';
-import { getDriveToken, DRIVE_SCOPE } from './lib/drive-auth.mjs';
-import { setupCueDocument } from './lib/meet-cue-doc.mjs';
-import { resolveBotDisplayName } from './lib/meet-cue-core.mjs';
-import { generateCardsFromBrief } from './meet-cue.mjs';
+import { getDriveToken, driveApi, DRIVE_SCOPE } from './lib/drive-auth.mjs';
+import { setupCueDocument, insertGreetingIfNeeded } from './lib/meet-cue-doc.mjs';
+import { DEFAULT_SEAT_HOSTNAMES, matchesSeatHostname, resolveBotDisplayName, resolveSeatHostnames } from './lib/meet-cue-core.mjs';
+import { generateCardsFromBrief, generateSessionId } from './meet-cue.mjs';
 import { matchMeetingInquiries, INQUIRY_SHEET, INQUIRY_TAB, readSheet } from './lib/inquiry-sheet.mjs';
 import { addItem } from './kim-inbox.mjs';
+import { calendarStartMs, isInternalEmail, loadStaffAddresses } from './lib/calendar-shared.mjs';
 
 const execFileAsync = promisify(execFile);
 const __filename = fileURLToPath(import.meta.url);
@@ -44,7 +46,8 @@ export function readConfig(home = homeDir()) {
       const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       return {
         enabled: parsed.enabled ?? true,
-        seatHostname: parsed.seatHostname || 'DESKTOP-2D0R4LI',
+        seatHostnames: resolveSeatHostnames(parsed.seatHostnames == null && !parsed.seatHostname
+          ? { seatHostnames: DEFAULT_SEAT_HOSTNAMES } : parsed),
         calendars: Array.isArray(parsed.calendars) && parsed.calendars.length > 0
           ? parsed.calendars
           : ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'],
@@ -57,27 +60,14 @@ export function readConfig(home = homeDir()) {
   }
   return {
     enabled: true,
-    seatHostname: 'DESKTOP-2D0R4LI',
+    seatHostnames: DEFAULT_SEAT_HOSTNAMES,
     calendars: ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'],
     maxConcurrent: 3,
     botDisplayName: resolveBotDisplayName({}),
   };
 }
 
-export function loadStaffAddresses(home = homeDir()) {
-  const staffPath = path.join(__dirname, '..', 'config', 'staff-addresses.json');
-  try {
-    if (fs.existsSync(staffPath)) {
-      const data = JSON.parse(fs.readFileSync(staffPath, 'utf8'));
-      if (Array.isArray(data.addresses)) {
-        return data.addresses.map(a => String(a).toLowerCase());
-      }
-    }
-  } catch (e) {
-    console.error('meet-cue-scheduler: staff-addresses.json 読み込み失敗:', e.message);
-  }
-  return [];
-}
+export { loadStaffAddresses };
 
 export function loadSchedulerState(home = homeDir()) {
   const p = schedulerStatePath(home);
@@ -92,15 +82,13 @@ export function loadSchedulerState(home = homeDir()) {
 export function saveSchedulerState(state, home = homeDir()) {
   const p = schedulerStatePath(home);
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(state, null, 2), 'utf8');
+  const temporary = `${p}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(state, null, 2), 'utf8');
+  fs.renameSync(temporary, p);
 }
 
-export function isExternalEmail(email, staffAddresses = []) {
-  if (!email || typeof email !== 'string') return false;
-  const lower = email.toLowerCase().trim();
-  if (lower.endsWith('@orgiast.jp')) return false;
-  if (staffAddresses.some(sa => sa === lower)) return false;
-  return true;
+export function isExternalEmail(email, staffAddresses = loadStaffAddresses()) {
+  return typeof email === 'string' && Boolean(email.trim()) && !isInternalEmail(email, staffAddresses);
 }
 
 export function extractMeetInfo(event) {
@@ -119,7 +107,7 @@ export function extractMeetInfo(event) {
   return { meetUrl, conferenceCode };
 }
 
-export function checkMechanicalConditions(event, { staffAddresses = [], ownerEmail = '', now = new Date(), hours = 24 } = {}) {
+export function checkMechanicalConditions(event, { staffAddresses = loadStaffAddresses(), ownerEmail = '', now = new Date(), hours = 24 } = {}) {
   if (!event || event.status === 'cancelled') return { ok: false, reason: 'cancelled' };
 
   const meetInfo = extractMeetInfo(event);
@@ -145,9 +133,9 @@ export function checkMechanicalConditions(event, { staffAddresses = [], ownerEma
   const attendees = event.attendees || [];
 
   // Orgiast attendee check
-  let hasOrgiast = attendees.some(a => a.email && a.email.toLowerCase().endsWith('@orgiast.jp'));
-  if (!hasOrgiast && event.organizer?.email?.toLowerCase().endsWith('@orgiast.jp')) hasOrgiast = true;
-  if (!hasOrgiast && ownerEmail && ownerEmail.toLowerCase().endsWith('@orgiast.jp')) hasOrgiast = true;
+  let hasOrgiast = attendees.some(a => isInternalEmail(a.email, staffAddresses));
+  if (!hasOrgiast && isInternalEmail(event.organizer?.email, staffAddresses)) hasOrgiast = true;
+  if (!hasOrgiast && isInternalEmail(ownerEmail, staffAddresses)) hasOrgiast = true;
 
   if (!hasOrgiast) return { ok: false, reason: 'no_orgiast' };
 
@@ -158,7 +146,7 @@ export function isTargetEvent(event, options = {}) {
   return checkMechanicalConditions(event, options).ok;
 }
 
-export function buildClassificationJevState(event, staffAddresses = []) {
+export function buildClassificationJevState(event, staffAddresses = loadStaffAddresses()) {
   const attendees = event.attendees || [];
   const externalAttendees = attendees.filter(a => !a.resource && a.email && isExternalEmail(a.email, staffAddresses));
 
@@ -221,7 +209,7 @@ export function createEventContentHash(event) {
   return crypto.createHash('sha256').update(str).digest('hex').slice(0, 16);
 }
 
-export async function classifyEvent(event, { itemState = {}, staffAddresses = [], home = homeDir(), askJevImpl = askJev } = {}) {
+export async function classifyEvent(event, { itemState = {}, staffAddresses = loadStaffAddresses(), home = homeDir(), askJevImpl = askJev } = {}) {
   // 1. Explicit opt-in check
   if (isOptInEvent(event)) {
     return {
@@ -360,112 +348,18 @@ export async function listCalendarEvents({ calendarId, token, now = new Date(), 
     showDeleted: 'false',
   });
 
-  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`;
-  const res = await fetchImpl(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!res.ok) {
-    throw new Error(`Calendar API list ${calendarId} HTTP ${res.status}`);
-  }
-
-  const data = await res.json();
-  return data.items || [];
-}
-
-export function buildCompanionEventBody({ originalEvent, docUrl, orgiastAttendees = [] }) {
-  const cleanSummary = (originalEvent.summary || '打合せ').replace(/^📝カンペ:\s*/, '');
-  const description = `Bot が開始1分前に参加し、言うことをこの Doc の一番上に出します。kim は Doc に直接書けば届きます\n\n${docUrl}`;
-
-  const attendees = orgiastAttendees.map(email => ({ email }));
-
-  return {
-    summary: `📝カンペ: ${cleanSummary}`,
-    description,
-    start: originalEvent.start,
-    end: originalEvent.end,
-    attendees,
-    visibility: 'private',
-    transparency: 'transparent',
-    reminders: {
-      useDefault: false,
-      overrides: [{ method: 'popup', minutes: 5 }],
-    },
-    extendedProperties: {
-      private: {
-        meetCueSource: originalEvent.id,
-      },
-    },
-  };
-}
-
-export async function findCompanionEvent({ token, calendarId, originalEventId, fetchImpl = globalThis.fetch }) {
-  const query = new URLSearchParams({
-    privateExtendedProperty: `meetCueSource=${originalEventId}`,
-  });
-  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${query}`;
-  const res = await fetchImpl(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!res.ok) return null;
-  const data = await res.json();
-  if (data.items && data.items.length > 0) {
-    return data.items[0];
-  }
-  return null;
-}
-
-export async function createOrUpdateCompanionEvent({ token, calendarId, originalEvent, docUrl, orgiastAttendees, fetchImpl = globalThis.fetch }) {
-  const existing = await findCompanionEvent({ token, calendarId, originalEventId: originalEvent.id, fetchImpl });
-  const body = buildCompanionEventBody({ originalEvent, docUrl, orgiastAttendees });
-
-  if (!existing) {
-    const postUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?sendUpdates=none`;
-    const createRes = await fetchImpl(postUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify(body),
-    });
-    if (!createRes.ok) {
-      throw new Error(`Companion event create failed HTTP ${createRes.status}: ${await createRes.text()}`);
-    }
-    const created = await createRes.json();
-
-    // GET read-back verification
-    const getUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(created.id)}`;
-    const readBack = await fetchImpl(getUrl, { headers: { Authorization: `Bearer ${token}` } });
-    if (readBack.ok) {
-      return await readBack.json();
-    }
-    return created;
-  }
-
-  // Handle existing: check if time or cancellation state changed
-  let needsPatch = false;
-  const patchBody = {};
-
-  if (originalEvent.status === 'cancelled') {
-    if (!existing.summary.includes('（中止）')) {
-      patchBody.summary = `${existing.summary}（中止）`;
-      needsPatch = true;
-    }
-  } else {
-    if (JSON.stringify(existing.start) !== JSON.stringify(originalEvent.start) ||
-        JSON.stringify(existing.end) !== JSON.stringify(originalEvent.end)) {
-      patchBody.start = originalEvent.start;
-      patchBody.end = originalEvent.end;
-      needsPatch = true;
-    }
-  }
-
-  if (needsPatch) {
-    const patchUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(existing.id)}?sendUpdates=none`;
-    const patchRes = await fetchImpl(patchUrl, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify(patchBody),
-    });
-    if (patchRes.ok) {
-      return await patchRes.json();
-    }
-  }
-
-  return existing;
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
+  const items = [];
+  let pageToken;
+  do {
+    if (pageToken) params.set('pageToken', pageToken);
+    const res = await fetchImpl(`${url}?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`Calendar API list ${calendarId} HTTP ${res.status}`);
+    const data = await res.json();
+    items.push(...(data.items || []));
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+  return items;
 }
 
 export function findSeisakuProfileName(userDataDir) {
@@ -520,6 +414,131 @@ export async function attemptAutoLogin({ home = homeDir(), fetchImpl = globalThi
   }
 }
 
+/**
+ * 社内のみの予定の説明欄にカンペ URL を追記（「📝カンペ（社内用）」行）。
+ * 既に同じ URL があれば何もしない。重複防止。
+ */
+export async function appendCueUrlToDescription({ token, calendarId, event, docUrl, fetchImpl = globalThis.fetch, signal }) {
+  const existingDesc = event.description || '';
+  const line = `📝カンペ（社内用）: ${docUrl}`;
+  // HTML 化された説明欄（<br> 区切りで1行）を行単位で消すと他のリンクまで消えるため、既存カンペ行があれば触らない
+  if (/<(?:br|a|p|div)\b/i.test(existingDesc) && existingDesc.includes('📝カンペ（社内用）')) return { appended: false, reason: 'already_exists_html' };
+  const description = existingDesc.split(/\r?\n/).filter(entry => !/^\s*📝カンペ（社内用）\s*[:：]/u.test(entry)).join('\n');
+  const updated = [description, line].filter(Boolean).join('\n');
+  if (updated === existingDesc) return { appended: false, reason: 'already_exists' };
+  const patchBody = { description: updated };
+  const patchUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(event.id)}?sendUpdates=none`;
+  const res = await fetchImpl(patchUrl, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(event.etag ? { 'If-Match': event.etag } : {}) },
+    body: JSON.stringify(patchBody), signal,
+  });
+  if (!res.ok) throw new Error(`Description append failed HTTP ${res.status}: ${await res.text()}`);
+  return { appended: true };
+}
+
+async function shareCueDocument(itemState, recipients, getToken) {
+  const pending = recipients.filter(email =>
+    email !== 'seisaku-team@orgiast.jp' && email !== 'kim@orgiast.jp' && !itemState.cueDocReaders?.includes(email));
+  if (!pending.length) return;
+
+  const token = await getToken({ impersonate: 'seisaku-team@orgiast.jp', scope: DRIVE_SCOPE });
+  const base = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(itemState.docId)}/permissions`;
+  const params = new URLSearchParams({ supportsAllDrives: 'true', fields: 'nextPageToken,permissions(emailAddress)' });
+  const existing = new Set();
+  let pageToken;
+  do {
+    if (pageToken) params.set('pageToken', pageToken);
+    const page = await (await driveApi(token, `${base}?${params}`)).json();
+    for (const permission of page.permissions || []) existing.add(permission.emailAddress?.toLowerCase());
+    pageToken = page.nextPageToken;
+  } while (pageToken);
+
+  for (const emailAddress of pending) {
+    if (!existing.has(emailAddress)) {
+      await driveApi(token, `${base}?supportsAllDrives=true&sendNotificationEmail=false`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'user', role: 'reader', emailAddress }),
+      });
+    }
+    (itemState.cueDocReaders ??= []).push(emailAddress);
+  }
+}
+
+/**
+ * B: 社内のみの予定 → 説明欄へ追記。C: お客様あり → kim-inbox に通知。
+ * staffAddresses で社員個人 Gmail も社内扱い。
+ *
+ * 変更: Discord DM 送信機能を削除し、外部参加者がいる場合は kim-inbox に通知のみとする。
+ */
+export async function deliverCueUrl({
+  event, itemState, getToken, fetchImpl, home,
+  calendarId, grantAccess = async () => {},
+  checkpoint = () => {}, onError = () => {}, addInfo = addItem, staffAddresses = loadStaffAddresses(),
+}) {
+  if (!itemState.staffUrl) return;
+  const docUrl = new URL(itemState.staffUrl);
+  docUrl.searchParams.delete('authuser');
+  const organizer = event.organizer?.email;
+  const attendees = event.attendees || [];
+
+  // 社内メール一覧（orgiast.jp + staffAddresses）
+  const internalEmails = [...new Set(
+    [organizer, ...attendees.map(a => a.email)]
+      .filter(e => isInternalEmail(e, staffAddresses))
+      .map(email => email.trim().toLowerCase())
+  )].filter(Boolean);
+
+  // 外部参加者がいるか
+  const hasExternal = attendees.some(a => a.email && !isInternalEmail(a.email, staffAddresses)) ||
+    (organizer && !isInternalEmail(organizer, staffAddresses));
+  itemState.needsClientRemoval = Boolean(hasExternal);
+
+  // 社内のみの予定の場合、説明欄にカンペURLを追記
+  try {
+    if (hasExternal) throw new Error('外部参加者または社外主催者がいます');
+    if (event.attendeesOmitted) throw new Error('参加者一覧が不完全です');
+    if (!isInternalEmail(organizer, [])) throw new Error('主催者のカレンダーを DWD で編集できません');
+    const token = await getToken({ impersonate: organizer, scope: CALENDAR_SCOPE });
+    let original = event;
+    if (calendarId?.toLowerCase() !== organizer.toLowerCase()) {
+      const url = 'https://www.googleapis.com/calendar/v3/calendars/' + encodeURIComponent(organizer) + '/events/' + encodeURIComponent(event.id);
+      const res = await fetchImpl(url, { headers: { Authorization: 'Bearer ' + token } });
+      if (!res.ok) throw new Error('主催者予定取得失敗 HTTP ' + res.status);
+      original = await res.json();
+    }
+    if ((original.attendees || []).some(a => a.email && !isInternalEmail(a.email, staffAddresses))) {
+      itemState.needsClientRemoval = true;
+      throw new Error('主催者予定に外部参加者がいます');
+    }
+    if (original.attendeesOmitted) throw new Error('主催者予定の参加者一覧が不完全です');
+    await grantAccess([...new Set([...internalEmails, ...(original.attendees || []).map(a => a.email)
+      .filter(e => isInternalEmail(e, staffAddresses)).map(e => e.trim().toLowerCase())])]);
+    await appendCueUrlToDescription({ token, calendarId: organizer, event: original, docUrl: docUrl.href, fetchImpl });
+    itemState.cueUrlAppended = true;
+    delete itemState.cueUrlWriteFailed;
+    delete itemState.cueUrlWriteError;
+    return;
+  } catch (error) {
+    itemState.cueUrlWriteFailed = true;
+    itemState.cueUrlWriteError = error.message;
+  }
+  if (!itemState.cueUrlNotifiedToKim) {
+    try {
+      const start = new Date(calendarStartMs(event));
+      await addInfo(home, {
+        kind: 'info', forceKind: true,
+        dedupeKey: 'meet-cue-unwritable:' + (event.iCalUID || event.id || extractMeetInfo(event)?.conferenceCode || event.summary) + ':' + start.toISOString(),
+        text: `【Meetカンペ】${start.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })} — ${event.summary || '(無題)'} — 説明欄への追記不可: ${itemState.cueUrlWriteError}\nカンペURL: ${docUrl.href}`,
+        source: 'meet-cue-scheduler',
+      });
+      itemState.cueUrlNotifiedToKim = true;
+      checkpoint();
+    } catch (error) { onError('kim', error); }
+  }
+}
+
 export function isPidAlive(pid) {
   if (!pid || typeof pid !== 'number') return false;
   try {
@@ -530,7 +549,43 @@ export function isPidAlive(pid) {
   }
 }
 
+function liveSessionEventKeys(home) {
+  const baseDir = meetCueBaseDir(home);
+  const keys = new Set();
+  let entries;
+  try {
+    entries = fs.readdirSync(baseDir);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+    return keys;
+  }
+  for (const id of entries) {
+    if (!/^\d{8}-\d{6}-[a-f0-9]{4}$/.test(id)) continue;
+    try {
+      const session = JSON.parse(fs.readFileSync(path.join(baseDir, id, 'session.json'), 'utf8'));
+      if (session.eventKey && !session.endReason &&
+          ['joining', 'prejoin', 'in_lobby', 'in_call'].includes(session.joinState) &&
+          isPidAlive(session.pid)) {
+        keys.add(session.eventKey);
+      }
+    } catch { /* session.json がまだ存在しないか書き込み中 */ }
+  }
+  return keys;
+}
+
 export async function runScheduler(options = {}) {
+  if (options.dryRun || options['dry-run']) return runSchedulerPass(options);
+  const home = options.home || homeDir();
+  const release = acquireLock(path.join(meetCueBaseDir(home), 'scheduler.lock'));
+  if (!release) return { ok: true, skipped: 'scheduler_running', actions: [] };
+  try {
+    return await runSchedulerPass(options);
+  } finally {
+    release();
+  }
+}
+
+async function runSchedulerPass(options = {}) {
   const home = options.home || homeDir();
   const now = options.now ? new Date(options.now) : new Date();
   const hours = options.hours ? parseInt(options.hours, 10) : 24;
@@ -539,6 +594,7 @@ export async function runScheduler(options = {}) {
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   const sheetReader = options.readSheet || readSheet;
   const askJevImpl = options.askJevImpl || askJev;
+  const ensureDocGreeting = options.insertGreetingIfNeeded || insertGreetingIfNeeded;
 
   const config = options.config || readConfig(home);
   const staffAddresses = loadStaffAddresses(home);
@@ -546,8 +602,9 @@ export async function runScheduler(options = {}) {
 
   // Seat hostname check
   const currentHostname = options.hostname || options.deps?.hostname || os.hostname();
-  if (config.seatHostname && config.seatHostname.toLowerCase() !== currentHostname.toLowerCase()) {
-    console.log(`[meet-cue-scheduler] seatHostname 不一致のため待機 (現在: ${currentHostname}, 対象: ${config.seatHostname})`);
+  const seatHostnames = resolveSeatHostnames(config);
+  if (!matchesSeatHostname(seatHostnames, currentHostname)) {
+    console.log(`[meet-cue-scheduler] seatHostname 不一致のため待機 (現在: ${currentHostname}, 対象: ${seatHostnames.join(', ')})`);
     return {
       ok: true,
       skippedHost: true,
@@ -555,7 +612,7 @@ export async function runScheduler(options = {}) {
       actions: [],
       skippedEvents: [],
       currentHostname,
-      targetHostname: config.seatHostname,
+      targetHostname: seatHostnames.join(', '),
     };
   }
 
@@ -569,14 +626,26 @@ export async function runScheduler(options = {}) {
     await attemptAutoLogin({ home, fetchImpl });
   }
 
+  if (!dryRun) {
+    for (const [eventKey, itemState] of Object.entries(state)) {
+      const start = Date.parse(eventKey.slice(eventKey.lastIndexOf('_') + 1));
+      if (!itemState.docId || itemState.greetingChecked || !(start > now.getTime())) continue;
+      try {
+        await ensureDocGreeting({ docId: itemState.docId, getToken });
+        itemState.greetingChecked = true;
+      } catch (err) {
+        console.error(`[meet-cue-scheduler] 冒頭案内の追加に失敗 (${eventKey}):`, err.message);
+      }
+    }
+  }
+
   // Fetch target calendars
   const targetCalendars = await fetchTargetCalendars({ getToken, fetchImpl, baseCalendars: config.calendars });
   console.log(`[meet-cue-scheduler] 巡回対象カレンダー (${targetCalendars.length}件):`, targetCalendars.join(', '));
 
   // Collect events across target calendars
   const errors = [];
-  const seenEventKeys = new Set();
-  const uniqueCalendarEvents = [];
+  const uniqueCalendarEvents = new Map();
 
   for (const calId of targetCalendars) {
     try {
@@ -586,9 +655,8 @@ export async function runScheduler(options = {}) {
         const meetInfo = extractMeetInfo(ev);
         const startStr = ev.start?.dateTime || ev.start?.date || '';
         const key = meetInfo ? `${meetInfo.conferenceCode}_${startStr}` : `${ev.id}_${startStr}`;
-        if (!seenEventKeys.has(key)) {
-          seenEventKeys.add(key);
-          uniqueCalendarEvents.push({ event: ev, calendarId: calId });
+        if (!uniqueCalendarEvents.has(key) || ev.organizer?.self) {
+          uniqueCalendarEvents.set(key, { event: ev, calendarId: calId });
         }
       }
     } catch (err) {
@@ -600,7 +668,7 @@ export async function runScheduler(options = {}) {
   const targetEvents = [];
   const skippedEvents = [];
 
-  for (const { event, calendarId } of uniqueCalendarEvents) {
+  for (const { event, calendarId } of uniqueCalendarEvents.values()) {
     const startIso = new Date(event.start?.dateTime || event.start?.date || 0).toISOString();
 
     // 1. Mechanical check
@@ -619,6 +687,12 @@ export async function runScheduler(options = {}) {
     const meetInfo = extractMeetInfo(event);
     const eventKey = `${meetInfo.conferenceCode}_${startIso}`;
     const itemState = state[eventKey] || {};
+    // 前日に meeting-prep が貼ったカンペを当日も使う（別 Doc を作らない）
+    const existingCue = (event.description || '').match(/📝カンペ（社内用）\s*[:：]\s*(?:<a\b[^>]*>)?\s*https:\/\/docs\.google\.com\/document\/d\/([\w-]+)\/([^\s"<]*)/u);
+    if (!itemState.docId && existingCue) {
+      itemState.docId = existingCue[1];
+      itemState.staffUrl = `https://docs.google.com/document/d/${existingCue[1]}/edit`;
+    }
 
     // 2. Jev / Opt-in / Cache classification
     const classRes = await classifyEvent(event, {
@@ -656,6 +730,7 @@ export async function runScheduler(options = {}) {
   }
 
   const plannedActions = [];
+  const activeSessionKeys = liveSessionEventKeys(home);
 
   for (const { event, calendarId, classification } of targetEvents) {
     const meetInfo = extractMeetInfo(event);
@@ -684,12 +759,11 @@ export async function runScheduler(options = {}) {
     if (!staffEmail) staffEmail = orgiastAttendees[0] || 'seisaku-team@orgiast.jp';
 
     let docId = itemState.docId;
-    let companionEventId = itemState.companionEventId;
 
-    if (!docId && !dryRun) {
+    if ((!docId || !itemState.cardsFile) && !dryRun) {
       try {
         console.log(`[meet-cue-scheduler] カンペ Doc 作成開始: "${event.summary}" (${staffEmail})`);
-        const docInfo = await setupCueDocument({
+        const docInfo = docId ? { docId, staffUrl: itemState.staffUrl } : await setupCueDocument({
           title: event.summary || '打合せ',
           staff: staffEmail,
           impersonate: 'seisaku-team@orgiast.jp',
@@ -698,6 +772,7 @@ export async function runScheduler(options = {}) {
 
         docId = docInfo.docId;
         itemState.docId = docId;
+        itemState.greetingChecked = true;
         itemState.staffUrl = docInfo.staffUrl;
 
         // Build brief
@@ -732,23 +807,24 @@ export async function runScheduler(options = {}) {
         itemState.cardsFile = path.join(prepDir, 'cards.json');
         itemState.briefFile = path.join(prepDir, 'brief.txt');
 
-        // Create companion event on Calendar
-        const calToken = await getToken({ impersonate: calendarId, scope: CALENDAR_SCOPE });
-        const companion = await createOrUpdateCompanionEvent({
-          token: calToken,
-          calendarId,
-          originalEvent: event,
-          docUrl: docInfo.staffUrl,
-          orgiastAttendees,
-          fetchImpl,
-        });
-
-        companionEventId = companion.id;
-        itemState.companionEventId = companionEventId;
         itemState.prepared = true;
       } catch (err) {
         console.error(`[meet-cue-scheduler] 準備失敗 (${event.summary}):`, err.message);
         errors.push({ event: event.summary, stage: 'prep', error: err.message });
+      }
+    }
+
+    if (!dryRun && itemState.prepared) {
+      try {
+        await deliverCueUrl({
+          event, itemState, getToken, fetchImpl, home, calendarId,
+          grantAccess: recipients => shareCueDocument(itemState, recipients, getToken),
+          checkpoint: () => saveSchedulerState(state, home),
+          onError: (target, error) => errors.push({ event: event.summary, stage: 'cueInbox', target, error: error.message }),
+          staffAddresses,
+        });
+      } catch (error) {
+        errors.push({ event: event.summary, stage: 'cueDelivery', error: error.message });
       }
     }
 
@@ -761,8 +837,7 @@ export async function runScheduler(options = {}) {
     let actionStatus = 'idle';
 
     if (inJoinWindow) {
-      const pidAlive = isPidAlive(itemState.joinedPid);
-      if (pidAlive) {
+      if (isPidAlive(itemState.joinedPid) || activeSessionKeys.has(eventKey)) {
         actionStatus = 'running';
       } else {
         // Check if previous attempt ended with joinError within 10 min
@@ -789,7 +864,10 @@ export async function runScheduler(options = {}) {
           console.log(`[meet-cue-scheduler] joinError (${itemState.joinError}) 発生後 10 分以内のため再試行スキップ: ${event.summary}`);
         } else if (!dryRun && docId && itemState.cardsFile) {
           // Count active concurrent running sessions
-          const activeCount = Object.values(state).filter(s => isPidAlive(s.joinedPid)).length;
+          const activeCount = new Set([
+            ...activeSessionKeys,
+            ...Object.keys(state).filter(key => isPidAlive(state[key].joinedPid)),
+          ]).size;
           if (activeCount >= config.maxConcurrent) {
             actionStatus = 'max_concurrent_exceeded';
             console.log(`[meet-cue-scheduler] 同時上限(${config.maxConcurrent})超過のため参加保留: ${event.summary}`);
@@ -804,23 +882,47 @@ export async function runScheduler(options = {}) {
             // Launch meet-cue.mjs start in background detached
             try {
               const scriptPath = fileURLToPath(new URL('./meet-cue.mjs', import.meta.url));
+              const sessionId = generateSessionId();
+              const sessionDir = path.join(meetCueBaseDir(home), sessionId);
+              fs.mkdirSync(meetCueBaseDir(home), { recursive: true });
+              fs.mkdirSync(sessionDir, { mode: 0o700 });
               const args = [
                 scriptPath,
                 'start',
+                '--session-id', sessionId,
+                '--event-key', eventKey,
                 '--url', meetInfo.meetUrl,
                 '--staff', staffEmail,
                 '--title', event.summary || '打合せ',
                 '--cards-file', itemState.cardsFile,
                 '--doc-id', docId,
-                '--brief-file', itemState.briefFile || '',
+                ...(itemState.briefFile ? ['--brief-file', itemState.briefFile] : []),
                 '--max-minutes', String(durationMinutes + 30),
               ];
 
-              const child = spawn(process.execPath, args, { detached: true, windowsHide: true, stdio: 'ignore' });
-
+              const logFd = fs.openSync(path.join(sessionDir, 'bot.log'), 'a', 0o600);
+              let child;
+              try {
+                child = spawn(process.execPath, args, {
+                  detached: true, windowsHide: true, stdio: ['ignore', logFd, logFd],
+                  env: { ...process.env, ORGIAST_HOME: home },
+                });
+                await new Promise((resolve, reject) => {
+                  child.once('spawn', resolve);
+                  child.once('error', reject);
+                });
+              } finally {
+                fs.closeSync(logFd);
+              }
               child.unref();
 
+              itemState.sessionId = sessionId;
+              delete itemState.joinError;
+              delete itemState.lastJoinErrorTime;
               itemState.joinedPid = child.pid;
+              activeSessionKeys.add(eventKey);
+              state[eventKey] = itemState;
+              saveSchedulerState(state, home);
               actionStatus = `launched_pid_${child.pid}`;
               console.log(`[meet-cue-scheduler] Meet Bot 起動成功 (PID: ${child.pid}, ${event.summary})`);
             } catch (err) {
@@ -842,7 +944,7 @@ export async function runScheduler(options = {}) {
       staffEmail,
       prepared: Boolean(itemState.prepared || docId),
       docId: docId || null,
-      companionEventId: companionEventId || null,
+      cueUrlAppended: Boolean(itemState.cueUrlAppended),
       inJoinWindow,
       actionStatus,
       classification,
@@ -878,7 +980,154 @@ export async function runScheduler(options = {}) {
   };
 }
 
+/**
+ * 移行: meetCueSource が付いた「📝カンペ」予定のうち、今後開始するものを削除する。
+ * 過去の予定は残す。削除結果を ~/.claude/logs/meet-cue-companion-cleanup.json に書き出す。
+ */
+export async function migrateCleanupCompanions({
+  dryRun = false, getTokenImpl = getDriveToken, fetchImpl = globalThis.fetch,
+  home = homeDir(), now = new Date(), calendars,
+} = {}) {
+  const targets = calendars || await fetchTargetCalendars({
+    getToken: getTokenImpl, fetchImpl, baseCalendars: readConfig(home).calendars,
+  });
+  const candidates = [], deleted = [], errors = [];
+  for (const calendarId of targets) {
+    try {
+      const token = await getTokenImpl({ impersonate: calendarId, scope: CALENDAR_SCOPE });
+      const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
+      const params = new URLSearchParams({ timeMin: now.toISOString(), maxResults: '2500', showDeleted: 'false' });
+      const events = [];
+      let pageToken;
+      do {
+        if (pageToken) params.set('pageToken', pageToken);
+        const res = await fetchImpl(`${base}?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+        if (!res.ok) throw new Error(`Calendar list HTTP ${res.status}`);
+        const page = await res.json();
+        events.push(...(page.items || []));
+        pageToken = page.nextPageToken;
+      } while (pageToken);
+
+      for (const event of events) {
+        if (!event.summary?.startsWith('📝カンペ:') || !event.extendedProperties?.private?.meetCueSource ||
+            !(calendarStartMs(event) > now.getTime())) continue;
+        const { id, summary } = event;
+        const item = { calendarId, id, summary };
+        candidates.push(item);
+        if (dryRun) continue;
+        try {
+          const res = await fetchImpl(`${base}/${encodeURIComponent(id)}?sendUpdates=none`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${token}`, ...(event.etag ? { 'If-Match': event.etag } : {}) },
+          });
+          if (!res.ok) throw new Error(`Calendar delete HTTP ${res.status}`);
+          deleted.push(item);
+        } catch (error) {
+          errors.push({ ...item, error: error.message });
+        }
+      }
+    } catch (error) {
+      errors.push({ calendarId, error: error.message });
+    }
+  }
+
+  const result = { ok: errors.length === 0, dryRun, candidates, deletedCount: deleted.length, deleted, errors };
+  if (!dryRun) {
+    const logDir = path.join(home, '.claude', 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.writeFileSync(path.join(logDir, 'meet-cue-companion-cleanup.json'), JSON.stringify({ at: now.toISOString(), ...result }, null, 2));
+  }
+  return result;
+}
+
+/**
+ * D: --report-client-invites — お客様招待ありの今後の Meet 予定一覧
+ *
+ * 変更: お客様への案内メールの下書き本文を出力に含める
+ */
+export async function reportClientInvites({ days = 14, getToken = getDriveToken, fetchImpl = globalThis.fetch, home = homeDir(), now = new Date() } = {}) {
+  const staffAddresses = loadStaffAddresses(home);
+  const config = readConfig(home);
+  const targetCalendars = await fetchTargetCalendars({ getToken, fetchImpl, baseCalendars: config.calendars });
+
+  const rows = [];
+  const errors = [];
+  const seen = new Set();
+  for (const calId of targetCalendars) {
+    try {
+      const token = await getToken({ impersonate: calId, scope: CALENDAR_SCOPE });
+      const events = await listCalendarEvents({ calendarId: calId, token, now, hours: days * 24, fetchImpl });
+      for (const event of events) {
+        const meetInfo = extractMeetInfo(event);
+        if (!meetInfo || event.status === 'cancelled' || !isInternalEmail(event.organizer?.email, staffAddresses) || calendarStartMs(event) < now.getTime() || calendarStartMs(event) > now.getTime() + days * 86400000) continue;
+        const attendees = event.attendees || [];
+        const clientEmails = attendees
+          .filter(a => a.email && !isInternalEmail(a.email, staffAddresses))
+          .map(a => a.email);
+        if (clientEmails.length === 0) continue;
+        const key = (event.iCalUID || meetInfo.conferenceCode) + "_" + calendarStartMs(event);
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        // 案内メール下書き本文を作成
+        const startTime = new Date(event.start?.dateTime || event.start?.date || 0);
+        const formattedStartTime = startTime.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', year: 'numeric', month: 'long', day: 'numeric', weekday: 'long', hour: '2-digit', minute: '2-digit' });
+        const mailBody = `
+差出人: seisaku-team@orgiast.jp
+件名: オンライン会議のご案内
+
+${formattedStartTime} に開催する会議についてご案内いたします。
+
+会議URL: ${meetInfo.meetUrl}
+
+当日は上記URLよりご参加いただけますようお願いいたします。
+`;
+
+        rows.push({
+          start: startTime.toISOString(),
+          title: event.summary || '(無題)',
+          organizer: event.organizer?.email || calId,
+          clients: clientEmails.join(', '),
+          meetUrl: meetInfo.meetUrl,
+          mailBody: mailBody.trim(),
+        });
+      }
+    } catch (err) {
+      errors.push({ calendarId: calId, error: err.message });
+      console.error(`[report-client-invites] カレンダー取得エラー (${calId}):`, err.message);
+    }
+  }
+
+  rows.sort((a, b) => a.start.localeCompare(b.start));
+  return { ok: errors.length === 0, total: rows.length, rows, errors };
+}
+
 export async function main(argv = process.argv.slice(2)) {
+  if (argv.includes('--migrate-companions')) {
+    const result = await migrateCleanupCompanions({ dryRun: argv.includes('--dry-run') });
+    console.log(JSON.stringify(result, null, 2));
+    return result.ok ? 0 : 1;
+  }
+
+  if (argv.includes('--report-client-invites')) {
+    const daysIndex = argv.indexOf('--days');
+    const days = daysIndex >= 0 ? parseInt(argv[daysIndex + 1], 10) || 14 : 14;
+    const result = await reportClientInvites({ days });
+    if (!result.ok) console.error('一部のカレンダーを取得できませんでした。以下は取得できた範囲です。');
+    if (result.rows.length === 0) {
+      console.log('お客様招待のある今後の Meet 予定はありません。');
+    } else {
+      console.log(`お客様招待のある今後の Meet 予定 (${result.total}件):\n`);
+      console.log("日時 | 題名 | 主催者 | お客様 | Meet URL");
+      for (const row of result.rows) {
+        const start = new Date(row.start).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        console.log(`  ${start} | ${row.title} | 主催: ${row.organizer} | お客様: ${row.clients} | ${row.meetUrl}`);
+        console.log(`\n【案内メール下書き】\n${row.mailBody}\n`);
+      }
+    }
+    return result.ok ? 0 : 1;
+  }
+
   const { values } = parseArgs({
     args: argv,
     allowPositionals: true,

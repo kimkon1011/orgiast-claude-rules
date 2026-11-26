@@ -10,6 +10,7 @@ import { normalizeExecutorStatus } from './executor-status.mjs';
 import { isEntry } from './is-entry.mjs';
 import { judgeTimeoutRows } from './timeout-waste-judge.mjs';
 import { isPermanentBillingDetail } from './llm-fallback.mjs';
+import { pickDistro } from './lib/codex-wsl-auth-sync.mjs';
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -74,15 +75,37 @@ export function authRestoredAfter(home, failures, options = {}) {
   const lastFailureTime = Math.max(...failureTimes);
   const statImpl = options.statImpl || fs.statSync;
   const readFile = options.readFile || fs.readFileSync;
+  const spawnImpl = options.spawnImpl || spawnSync;
+  const checkWsl = options.checkWsl === true || (options.checkWsl !== false && process.platform === 'win32' && home === os.homedir());
+  // Check Windows auth.json first (mtime must be newer than last failure).
   try {
     const authFile = path.join(home, '.codex', 'auth.json');
-    if (!(statImpl(authFile).mtimeMs > lastFailureTime)) return false;
-    const auth = JSON.parse(String(readFile(authFile, 'utf8')).replace(/^\uFEFF/, ''));
-    return [auth?.tokens?.id_token, auth?.tokens?.access_token]
-      .some((token) => typeof token === 'string' && token.length > 0);
-  } catch {
-    return false;
+    if (statImpl(authFile).mtimeMs > lastFailureTime) {
+      const auth = JSON.parse(String(readFile(authFile, 'utf8')).replace(/^\uFEFF/, ''));
+      if ([auth?.tokens?.id_token, auth?.tokens?.access_token].some((token) => typeof token === 'string' && token.length > 0)) {
+        return true;
+      }
+    }
+  } catch {}
+  // Fallback: check WSL auth.json. codex-do runs in WSL and syncs auth at startup,
+  // so WSL may have a current auth.json even when Windows auth.json mtime is stale
+  // (2026-11-22: Windows auth.json from Sep, WSL auth.json from today).
+  // Only check WSL when home matches the real user home (avoids test interference).
+  if (checkWsl) {
+    try {
+      const listed = spawnImpl('wsl', ['-l', '-q'], { encoding: 'utf16le', windowsHide: true, timeout: 15000 });
+      const distro = listed?.status === 0 ? pickDistro(listed.stdout) : null;
+      if (!distro) return false;
+      const result = spawnImpl('wsl', ['-d', distro, '--', 'sh', '-c', 'stat -c "%Y" "$HOME/.codex/auth.json" && cat "$HOME/.codex/auth.json"'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+      if (result?.status !== 0) return false;
+      const lines = String(result.stdout).split('\n');
+      const mtimeSec = Number(lines[0]);
+      if (!Number.isFinite(mtimeSec) || mtimeSec * 1000 <= lastFailureTime) return false;
+      const auth = JSON.parse(lines.slice(1).join('\n').replace(/^\uFEFF/, ''));
+      return [auth?.tokens?.id_token, auth?.tokens?.access_token].some((token) => typeof token === 'string' && token.length > 0);
+    } catch {}
   }
+  return false;
 }
 
 function measured(value) {
@@ -171,6 +194,18 @@ const WSL_LANE_ABSENT = /WSL ディストリが見つかりません/;
 // "Weekly/Monthly Limit Exhausted")。レーンは壊れておらず、上限リセットで自動回復する。
 export function isQuotaLimitedRow(row = {}) {
   return /^(?:http_?)?(402|429)$/.test(String(row?.status ?? '').toLowerCase());
+}
+
+// Gemini 予算ガードのプローブ行は、status が無く in=0/out=0/secs~0.001 の記録行。
+// これらは API の失敗ではなく、予算超過による呼出抑制の痕跡なので全滅判定に
+// 含めると billing が lane_outage_unrepaired になる（2026-11-23 実測: gemini 14件中
+// 2件がこれに該当し、残り12件の http_402 と混ざって high の修理タスクになった）。
+export function isGeminiBillingProbeRow(row = {}) {
+  if (row?.provider !== 'gemini') return false;
+  // status が無い・in=0/out=0・secs < 0.01 が gemini 予算ガードの特徴
+  if (row.status != null && row.status !== '') return false;
+  if (row.in !== 0 || row.out !== 0) return false;
+  return typeof row.secs === 'number' && row.secs < 0.01;
 }
 
 export function isBillingSuspendedRow(row = {}) {
@@ -325,6 +360,15 @@ export function emptyOutputReason(row) {
   if (CODEX_USAGE_LIMIT.test(String(row?.stderrTail || ''))) return 'usage_limit';
   if (CODEX_MODEL_CAPACITY.test(String(row?.stderrTail || ''))) return 'model_capacity';
   if (INFRA_TRANSIENT.test(String(row?.stderrTail || ''))) return 'infra_transient';
+  // Codex が編集・テストまで進めたものの final 応答だけを残さず exit 1 になった行。
+  // 新形式は codex-do が reason を明記する。旧形式でも、即死ではない実行時間と進捗 stderr が
+  // 揃う狭い形を分離する（2026-11-25 実測: 318.621秒、exit 1、rollout に編集とテスト成功）。
+  if (row?.reason === 'work_completed_no_final'
+    || (Number(row?.exitCode) === 1 && row?.timedOut === false && row?.launched === true
+      && Number(row?.out) === 0 && Number(row?.secs) >= 60
+      && /\btools[\\/][^\s]+(?:\s+\d+){2}/.test(String(row?.stderrTail || '')))) {
+    return 'incomplete_final_response';
+  }
   // 台帳の status は数値(終了コード)だけではない。llm-fallback / cheap-code は失敗の種類を
   // そのまま文字列で書く(http_429 / http_402 / cooldown)。これを知らずに catch-all の
   // no_output へ落とすと、証拠が「no_output(11件)」になり、上限到達が原因不明のレーン故障に見える
@@ -519,7 +563,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     const lastFailureTime = Math.max(...failures.map((row) => Date.parse(row.t)));
     return codexSuccessTimes.some((time) => time > lastFailureTime);
   };
-  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed', 'usage_limit', 'model_capacity', 'cooldown_skipped', 'signal_killed'].includes(item.reason));
+  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed', 'usage_limit', 'model_capacity', 'cooldown_skipped', 'signal_killed', 'incomplete_final_response'].includes(item.reason));
   const launchFailed = empty.filter((item) => item.reason === 'launch_failed');
   const authFailed = empty.filter((item) => item.reason === 'auth_failed');
   const modelAuthMismatch = empty.filter((item) => item.reason === 'model_auth_mismatch');
@@ -531,6 +575,8 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   if (laneAbsent.length && !repairedAfter(laneAbsent)) findings.push({ id: 'codex_lane_unavailable', severity: 'high', title: 'codex レーンは WSL 不在のため使用不可（要修理）', evidence: [`${laneAbsent.length}件`, 'WSL ディストリ 0 件'], fixTask: "WSL にディストリが無い。wsl --install -d Ubuntu --no-launch → wsl -d Ubuntu -u root -- bash -lc 'curl -fsSL https://deb.nodesource.com/setup_22.x | bash -; apt-get install -y nodejs; npm i -g @openai/codex' → Windows の %USERPROFILE%\\.codex\\auth.json を WSL の /root/.codex/auth.json にコピー → codex login status で確認 → codex-do で1ファイル作成を試し実測" });
   // 上限到達は欠陥ではないので fixTask を付けない low の可視化 finding とする。
   if (usageLimit.length) findings.push({ id: 'codex_usage_limit', severity: 'low', title: 'Codex は上限到達で停止（欠陥ではない）', evidence: [`${usageLimit.length}件`, ...reasonTop(usageLimit)] });
+  const incompleteFinal = empty.filter((item) => item.reason === 'incomplete_final_response');
+  if (incompleteFinal.length) findings.push({ id: 'codex_incomplete_final_response', severity: 'low', title: 'Codex は作業後の最終応答を残さず終了', evidence: [`${incompleteFinal.length}件`, ...reasonTop(incompleteFinal)] });
   // 起動前ゲートが止めた行も事実として残す。原因は codex 側ではなく指示(spec)側なので
   // codex_launch_failed とは別 id にし、fixTask を付けない(low)＝毎日の起票対象にしない。
   const preflightBlocked = empty.filter((item) => item.reason === 'preflight_blocked');
@@ -608,7 +654,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
           || /クールダウン中|起動を省略しました/.test(String(other.stderrTail || ''));
       });
     };
-    const allNonSkipped = rows.filter((row) => !isCooldownSkippedRow(row) && !isDeferredSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !skippedDuringCheapOutage(row) && !isEmptyDiffEscalationRow(row) && !isFallbackCooldownSkipRow(row) && !isQuotaSweepBenignRow(row) && emptyOutputReason(row) !== 'preflight_blocked');
+    const allNonSkipped = rows.filter((row) => !isCooldownSkippedRow(row) && !isDeferredSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !skippedDuringCheapOutage(row) && !isEmptyDiffEscalationRow(row) && !isFallbackCooldownSkipRow(row) && !isQuotaSweepBenignRow(row) && emptyOutputReason(row) !== 'preflight_blocked' && !isGeminiBillingProbeRow(row));
 	    // status:'ok' は API 呼出成功。out=0 でもレーン障害ではない（gemini プローブ行実測 2026-10-30〜11-01）。
 	    const attempts = allNonSkipped.filter((row) => emptyOutputReason(row) !== 'ok');
     // 24h 窓が cooldown だけで埋まる＝上限中で一度も試行していない。レーンは止まっているが

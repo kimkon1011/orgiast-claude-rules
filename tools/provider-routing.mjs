@@ -1,7 +1,8 @@
 // Kimi / DeepSeek / Mistral inference always uses the auto-recharged OpenRouter wallet.
 export const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 export const OPENROUTER_ANTHROPIC_BASE = 'https://openrouter.ai/api';
-export const GATEWAY_MODELS = Object.freeze({ kimi: 'moonshotai/kimi-k3', deepseek: 'deepseek/deepseek-v4-flash', mistral: 'mistralai/mistral-medium-3.1' });
+export const OPENROUTER_GROK_MODEL = 'x-ai/grok-4.6';
+export const GATEWAY_MODELS = Object.freeze({ kimi: 'moonshotai/kimi-k3', deepseek: 'deepseek/deepseek-v4-flash', mistral: 'mistralai/mistral-medium-3-5' });
 export function gatewayModel(provider, model) {
   if (!GATEWAY_MODELS[provider]) return model;
   if (!model) return GATEWAY_MODELS[provider];

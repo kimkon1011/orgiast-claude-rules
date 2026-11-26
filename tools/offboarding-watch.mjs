@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -227,7 +228,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       if (state.date !== date || !state.hashes?.includes(hash)) {
         const result = await ctx.notify(message, { home: ctx.home, fetchImpl: ctx.fetch, plainJa: false, kimActionRequired: true, webhookFallback: false });
         // kim 宛は組織指示16で Discord DM 禁止。deliverKim は kim-inbox（session-inbox）へ積むので、それも配信成功として扱う
-        if (!['dm', 'session-inbox'].includes(result?.delivered)) throw Error();
+        if (!isKimDelivered(result)) throw Error();
         save(stateFile, { date, hashes: [...(state.date === date ? state.hashes || [] : []), hash] });
         r.notification = { status: 'sent', body: message };
       } else r.notification = { status: 'suppressed' };

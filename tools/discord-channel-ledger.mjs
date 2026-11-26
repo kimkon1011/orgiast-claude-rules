@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { parseEnvText } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
+import { defaultBudgetPath, formatBusyExhausted, postFleetSheet } from './lib/fleet-sheet-post.mjs';
 
 const TYPE_NAMES = { 0: 'テキスト', 2: 'ボイス', 4: 'カテゴリ', 5: 'アナウンス', 13: 'ステージ', 15: 'フォーラム', 16: 'メディア' };
 
@@ -41,9 +42,9 @@ function jstDate(now = new Date()) {
   return `${values.year}-${values.month}-${values.day}`;
 }
 
-async function fetchChannels(guildId, token) {
+async function fetchChannels(guildId, token, fetchImpl = fetch) {
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const response = await fetch(`https://discord.com/api/v10/guilds/${encodeURIComponent(guildId)}/channels`, { headers: { Authorization: `Bot ${token}` } });
+    const response = await fetchImpl(`https://discord.com/api/v10/guilds/${encodeURIComponent(guildId)}/channels`, { headers: { Authorization: `Bot ${token}` } });
     if (response.status === 200) return response.json();
     const text = await response.text();
     let reason = text.slice(0, 300);
@@ -58,35 +59,41 @@ async function fetchChannels(guildId, token) {
   throw new Error('Discord API retry limit reached');
 }
 
-async function main() {
-  const args = process.argv.slice(2);
+export async function run(argv = process.argv.slice(2), { fetchImpl = fetch, home = process.env.ORGIAST_HOME || os.homedir(), stdout = process.stdout, sleepImpl } = {}) {
+  const args = argv;
   const guildIndex = args.indexOf('--guild');
   const guildId = guildIndex >= 0 && args[guildIndex + 1] ? args[guildIndex + 1] : '715211007307284530';
   const dryRun = args.includes('--dry-run');
-  const home = process.env.ORGIAST_HOME || os.homedir();
   const claudeDir = path.join(home, '.claude');
   const botToken = fs.readFileSync(path.join(claudeDir, 'orgiast-discord-bot-token.txt'), 'utf8').trim();
   if (!botToken) throw new Error('Discord Bot token is empty');
   const checkedAt = jstDate();
-  const channels = buildDiscordChannelRows(await fetchChannels(guildId, botToken), guildId, checkedAt);
+  const channels = buildDiscordChannelRows(await fetchChannels(guildId, botToken, fetchImpl), guildId, checkedAt);
   if (dryRun) {
-    console.log(JSON.stringify({ checkedAt, channels }, null, 2));
+    stdout.write(JSON.stringify({ checkedAt, channels }, null, 2) + '\n');
     return;
   }
   const env = parseEnvText(fs.readFileSync(path.join(claudeDir, 'fleet-sheet.env'), 'utf8'));
   if (!env.FLEET_SHEET_URL || !env.FLEET_SHEET_TOKEN) throw new Error('FLEET_SHEET_URL/TOKEN is not configured');
-  const response = await fetch(env.FLEET_SHEET_URL, {
-    method: 'POST', redirect: 'follow', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ token: env.FLEET_SHEET_TOKEN, kind: 'discord-channels', checkedAt, channels }),
+  // GAS はロック競合時に HTTP 200 + {ok:false,error:'busy'} を返す（夜間は他ジョブと同時刻に重なる）。
+  // 生の fetch だと1回の busy で夜間バッチが落ちるので、共通ヘルパで再送する。
+  const posted = await postFleetSheet(env.FLEET_SHEET_URL, { token: env.FLEET_SHEET_TOKEN, kind: 'discord-channels', checkedAt, channels }, {
+    fetchImpl,
+    ...(sleepImpl ? { sleepImpl } : {}),
+    budgetPath: defaultBudgetPath(home),
+    logFile: path.join(claudeDir, 'logs', 'fleet-sheet-report.log'),
+    kind: 'discord-channels',
   });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`fleet sheet HTTP ${response.status}`);
-  let result;
-  try { result = JSON.parse(text); } catch { throw new Error('fleet sheet returned invalid JSON'); }
-  if (!result.ok) throw new Error(`fleet sheet rejected request: ${result.error || 'unknown error'}`);
-  console.log(JSON.stringify({ ok: true, updated: result.updated, appended: result.appended, missing: result.missing || [] }));
+  if (!posted.ok) {
+    // 台帳へ書けなくても一覧取得は成立している。夜間バッチは落とさず警告に留める。
+    stdout.write(`${formatBusyExhausted(posted, 'discord-channels')}\n`);
+    return { posted: false, busyExhausted: true, count: channels.length };
+  }
+  const result = posted.body;
+  stdout.write(JSON.stringify({ ok: true, updated: result.updated, appended: result.appended, missing: result.missing || [] }) + '\n');
+  return { posted: true, count: channels.length };
 }
 
 if (isEntry(import.meta.url)) {
-  main().catch((error) => { console.error(error.message); process.exitCode = 1; });
+  run().catch((error) => { console.error(error.message); process.exitCode = 1; });
 }

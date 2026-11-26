@@ -6,7 +6,7 @@ import path from 'node:path';
 import { judgeNextAction, reportsCloseSteps, SESSION_PHRASES as PHRASES, openDeadline, openPhrase, hasOpenSessionCheck } from './next-action-gate.mjs';
 
 // open は期限入りのテンプレートなので、テストでは遠い未来の期限を入れた実例で検証する。
-const SESSION_PHRASES = { ...PHRASES, open: 'まだ閉じない（作業中・2099-12-31 23:59 まで待つ）', pending: '/session-close をして（まだ閉じない・2099-12-31 23:59 まで待つ）' };
+const SESSION_PHRASES = { ...PHRASES, open: 'まだ閉じない（作業中・2099-12-31 23:59 まで待つ／納期なし: 相手の回答時期が未定）', pending: '/session-close をして（まだ閉じない・2099-12-31 23:59 まで待つ／納期なし: 相手の回答時期が未定）' };
 
 // 自動セッション（CLAUDE_HEADLESS=1）の中でテストを走らせても、このファイルは通常セッションの
 // 判定を検証する。ヘッドレスでは起床手段の検査をskipする仕様なので、環境変数を外しておかないと
@@ -60,7 +60,7 @@ test('3行が本文途中にあればblock', () => {
 });
 
 test('kimの作業が2件ならblock', () => {
-  const result = judgeNextAction(`${body}\n次に kim がすること: 承認、送信\nこの後の自動進行: Codex が確認後すぐ結果をチャットで通知します\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）`);
+  const result = judgeNextAction(`${body}\n次に kim がすること: 承認、送信\nこの後の自動進行: Codex が確認後すぐ結果をチャットで通知します\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ／納期なし: 相手の回答時期が未定）`);
   assert.equal(result.decision, 'block');
   assert.equal(result.code, 'NEXT-ACTION-MULTIPLE');
 });
@@ -168,7 +168,7 @@ test('待ち語が無く、もう削除してよいならpass', () => {
 });
 
 test('待ち語があり、起床手段があればまだ閉じないでpass', () => {
-  const text = `${body} 結果待ちです。\n次に kim がすること: なし\nこの後の自動進行: 処理完了時に Codex がチャットで通知します\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）`;
+  const text = `${body} 結果待ちです。\n次に kim がすること: なし\nこの後の自動進行: 処理完了時に Codex がチャットで通知します\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ／納期なし: 相手の回答時期が未定）`;
   assert.equal(judgeNextAction(text, row('assistant', [{ type: 'tool_use', name: 'Agent', input: { run_in_background: true } }])).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
   withOpenCheck(input => assert.equal(judgeNextAction(text, cronRow, input).decision, 'pass'));
 });
@@ -548,15 +548,15 @@ test('subagentsとheadlessでも作業中は永続チェックを要求する', 
 const deadlineBase = '/session-close を実行しました。\n作業を続けています。\n次に kim がすること: なし\nこの後の自動進行: なし\nこのセッション: ';
 
 test('まだ閉じない: 期限なしの旧表記は SESSION-OPEN-NO-DEADLINE で block', () => {
-  for (const state of ['まだ閉じない（作業中）', 'まだ閉じない（作業中・明日まで）', 'まだ閉じない（作業中・2026-13-01 10:00 まで待つ）']) {
+  for (const state of ['まだ閉じない（作業中）', 'まだ閉じない（作業中・明日まで）', 'まだ閉じない（作業中・2026-13-01 10:00 まで待つ／納期なし: 相手の回答時期が未定）']) {
     assert.equal(judgeNextAction(deadlineBase + state).code, 'SESSION-OPEN-NO-DEADLINE', state);
   }
 });
 
 test('まだ閉じない: 期限入りは pass、過ぎた期限は block', () => {
   const now = new Date(2026, 9, 27, 12, 0).getTime();
-  assert.equal(judgeNextAction(deadlineBase + 'まだ閉じない（作業中・2026-10-27 16:00 まで待つ）', '', { now }).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
-  assert.equal(judgeNextAction(deadlineBase + 'まだ閉じない（作業中・2026-10-27 11:59 まで待つ）', '', { now }).code, 'SESSION-OPEN-DEADLINE-PAST');
+  assert.equal(judgeNextAction(deadlineBase + 'まだ閉じない（作業中・2026-10-27 16:00 まで待つ／納期なし: 相手の回答時期が未定）', '', { now }).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
+  assert.equal(judgeNextAction(deadlineBase + 'まだ閉じない（作業中・2026-10-27 11:59 まで待つ／納期なし: 相手の回答時期が未定）', '', { now }).code, 'SESSION-OPEN-DEADLINE-PAST');
 });
 
 test('/session-close をして（まだ閉じない）は期限の有無に関係なく close 委任として block', () => {
@@ -567,16 +567,16 @@ test('/session-close をして（まだ閉じない）は期限の有無に関�
   // 実行失敗の例外マーカー付きなら、従来どおり期限を検査する
   const ok = '[SESSION-CLOSE-PENDING-OK: close-session.mjs が exit 1]\n';
   assert.equal(judgeNextAction(ok + deadlineBase + '/session-close をして（まだ閉じない）', '', { now }).code, 'SESSION-OPEN-NO-DEADLINE');
-  assert.equal(judgeNextAction(ok + deadlineBase + '/session-close をして（まだ閉じない・2026-10-27 16:00 まで待つ）', '', { now }).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
-  assert.equal(judgeNextAction(ok + deadlineBase + '/session-close をして（まだ閉じない・2026-10-27 11:59 まで待つ）', '', { now }).code, 'SESSION-OPEN-DEADLINE-PAST');
-  assert.equal(openPhrase(new Date(2026, 10, 2, 9, 5), 'pending'), '/session-close をして（まだ閉じない・2026-11-02 09:05 まで待つ）');
+  assert.equal(judgeNextAction(ok + deadlineBase + '/session-close をして（まだ閉じない・2026-10-27 16:00 まで待つ／納期なし: 相手の回答時期が未定）', '', { now }).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
+  assert.equal(judgeNextAction(ok + deadlineBase + '/session-close をして（まだ閉じない・2026-10-27 11:59 まで待つ／納期なし: 相手の回答時期が未定）', '', { now }).code, 'SESSION-OPEN-DEADLINE-PAST');
+  assert.equal(openPhrase(new Date(2026, 10, 2, 9, 5), 'pending'), '/session-close をして（まだ閉じない・2026-11-02 09:05 まで待つ／納期なし: 相手の回答時期が未定）');
 });
 
 test('openPhrase と openDeadline は往復できる', () => {
   const d = new Date(2026, 10, 2, 9, 5);
-  assert.equal(openPhrase(d), 'まだ閉じない（作業中・2026-11-02 09:05 まで待つ）');
+  assert.equal(openPhrase(d), 'まだ閉じない（作業中・2026-11-02 09:05 まで待つ／納期なし: 相手の回答時期が未定）');
   assert.equal(openDeadline(openPhrase(d)).getTime(), d.getTime());
-  assert.equal(openDeadline('まだ閉じない（作業中・2026-02-30 09:00 まで待つ）'), null);
+  assert.equal(openDeadline('まだ閉じない（作業中・2026-02-30 09:00 まで待つ／納期なし: 相手の回答時期が未定）'), null);
 });
 
 
@@ -781,7 +781,7 @@ test('独立したnext-action違反を1回の差し戻しへまとめる', () =>
 
 
 test('複数手渡しでも見張り登録漏れ4コードを同時に返す', () => {
-  const result = judgeNextAction(`次に kim がすること: 支払い、署名\nこの後の自動進行: 返信が届いたら結果を報告する\nこのセッション: まだ閉じない（作業中・2099-11-05 12:00 まで待つ）`);
+  const result = judgeNextAction(`次に kim がすること: 支払い、署名\nこの後の自動進行: 返信が届いたら結果を報告する\nこのセッション: まだ閉じない（作業中・2099-11-05 12:00 まで待つ／納期なし: 相手の回答時期が未定）`);
   for (const code of ['NEXT-ACTION-MULTIPLE', 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK', 'SESSION-OPEN-NEEDS-IN-SESSION-CHECK', 'AUTOPILOT-NO-SESSION-WAKEUP']) {
     assert.ok(result.reasonCodes.includes(code), code);
   }
@@ -793,7 +793,7 @@ test('stop_hook_active で期限なし「まだ閉じない」は連続2回ま�
   process.env.ORGIAST_HOME = home;
   try {
     const textNoDeadline = `${body}\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: まだ閉じない（作業中）`;
-    const textWithDeadline = `${body}\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）`;
+    const textWithDeadline = `${body}\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ／納期なし: 相手の回答時期が未定）`;
 
     const inputStop = { session_id: 's_test_cnt', stop_hook_active: true };
     const inputNormal = { session_id: 's_test_cnt' };
@@ -861,4 +861,40 @@ test('stop_hook_active の書き直しでもラベル・承認・複数・遡り
     else process.env.ORGIAST_HOME = previous;
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('待機期限は納期の根拠が必要', () => {
+  const prefix = deadlineBase + 'まだ閉じない（作業中・2026-10-27 16:00 まで待つ';
+  const input = { now: new Date(2026, 9, 27, 12).getTime() };
+  for (const suffix of ['', '／納期なし: 未定', '／納期 2026-02-30・残り作業 2時間']) {
+    assert.equal(judgeNextAction(prefix + suffix + '）', '', input).code, 'SESSION-OPEN-NO-DUE');
+  }
+  assert.equal(judgeNextAction(prefix + '／納期 2026-10-27 17:59・残り作業 2時間）', '', input).code,
+    'SESSION-OPEN-DEADLINE-AFTER-DUE');
+  assert.equal(judgeNextAction(prefix + '／納期 2026-10-27 18:00・残り作業 2時間）', '', input).code,
+    'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
+});
+
+test('フッター後の prompt-journal-answered 行があっても footer を検出し、承認語で全文見出しが無ければ APPROVAL-INLINE', () => {
+  const journals = 'prompt-journal-answered: aad22899-8278-438d-b411-05baf15d1496\n\nprompt-journal-answered: 6174b9e4-c7b0-448f-b62f-ab7b5aaace10';
+  const missing = `${inlineReport('送ってよければ『送って』と返事する')}\n${journals}`;
+  assert.equal(judgeNextAction(missing).code, 'NEXT-ACTION-APPROVAL-INLINE');
+  assert.notEqual(judgeNextAction(missing).code, 'NEXT-ACTION-FOOTER');
+});
+
+test('STOP_RETRY 形（最終まとめ①③→確認用全文→3行フッター→journal）は pass', () => {
+  const journals = 'prompt-journal-answered: aad22899-8278-438d-b411-05baf15d1496\n\nprompt-journal-answered: 6174b9e4-c7b0-448f-b62f-ab7b5aaace10';
+  const text = `${body}
+【最終まとめ】
+①報告: LINE 下書きを用意した。検証済み。
+③kim がやること: 上の【kim 確認用の全文】を読んで『送って』か『やめて』で選ぶ
+恒久策: 一回限り: 今回の送信判断は本人の意思が必要
+【kim 確認用の全文】
+送ってよい本文:
+こんにちは。本日の予定をお知らせします。
+次に kim がすること: 上の【kim 確認用の全文】を読んで『送って』か『やめて』で選ぶ
+この後の自動進行: なし
+このセッション: ${SESSION_PHRASES.delete}
+${journals}`;
+  withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
 });

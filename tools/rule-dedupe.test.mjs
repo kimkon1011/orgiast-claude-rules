@@ -52,7 +52,7 @@ test('mandatory rules above the optional budget do not shorten optional previews
 test('template is reproducible and contains actionable rules, not just an ONBOARDING reference', () => {
   assert.equal(read('../CLAUDE.md.template'), renderTemplate());
   for (const value of ['?authuser=kim@orgiast.jp', '/a/orgiast.jp/', 'response-language-gate',
-    'rules/gas.md', '/gas-project-setup', '/deploy-verify', '200字以内', '分類Haiku→量産Sonnet→Opus5',
+    'rules/gas.md', '/gas-project-setup', '/deploy-verify', '200字以内', '分類Haiku→量産Sonnet→Opusは品質差実測・正当化',
     '本文全文', '1社ずつ YES', '削除はuserの許可後のみ', '早朝', '空きセッションを3つ',
     '【閉じて可】', '【MM/DD/HH:MMまで】', 'pr-land.mjs', 'case-handoff.mjs flush',
     'LLM-PROVIDER-REASON', 'COST-ESTIMATE', '自動フォールバックも禁止']) {

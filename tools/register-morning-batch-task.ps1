@@ -12,7 +12,7 @@ $node = (Get-Command node -ErrorAction SilentlyContinue).Source
 if (-not $node) { throw 'node not found. Install Node.js first.' }
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script) -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At 7:00am
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 Register-ScheduledTask -TaskName 'OrgiastMorningBatch' -Action $action -Trigger $trigger -Settings $settings -Description 'Collect Discord inbox into the morning batch (daily 07:00)' -Force | Out-Null
 Write-Host 'OK: task OrgiastMorningBatch registered (daily 07:00)'
 Get-ScheduledTask -TaskName 'OrgiastMorningBatch' | Select-Object TaskName, State

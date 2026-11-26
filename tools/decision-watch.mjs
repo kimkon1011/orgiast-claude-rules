@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
 import { notifyKim, resolveDiscordBotToken } from './notify-kim.mjs';
 import { acquireLock, resolveFleetLabel } from './fleet-mail.mjs';
+import { recordRun } from './lib/change-gate.mjs';
 
 export const CHANNEL = '1508437329247862794';
 const API = 'https://discord.com/api/v10';
@@ -103,7 +105,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       try {
         result = await (deps.notify ?? notifyKim)(body, { home, token, fetchImpl, webhookFallback: false, kind: 'ask', source: 'decision-watch' });
       } catch { result = { delivered: 'none' }; }
-      if (['dm', 'session-inbox'].includes(result?.delivered)) {
+      if (isKimDelivered(result)) {
         state.seen[message.id] = new Date(now()).toISOString();
         delete state.failures[message.id];
       } else {
@@ -115,6 +117,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     }
     state.lastMessageId = cursor;
     save();
+    recordRun('decision-watch', { changed: messages.size > 0, llmInvoked: false, items: messages.size, note: messages.size ? 'new decisions' : 'no new decisions' });
   } catch {
     // APIレスポンス・例外には秘密が含まれ得るため固定文のみ出す。
     stderr('decision-watch: 実行失敗（引数・状態ファイル・Discord接続を確認）');

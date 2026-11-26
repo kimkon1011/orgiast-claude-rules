@@ -58,12 +58,29 @@ function createOwnershipLease(port = 39741) {
   };
 }
 
-const AUTO_TITLE_RE = /^(?:remote-control-|\d{3}[-｜|])+[a-z]+-[a-z]+$/i;
+const DEFAULT_AUTO_TITLE_PREFIXES = Object.freeze(['スマホ用セッション', '待機']);
+
+function buildAutoTitleRe(prefixes) {
+  const unique = [...new Set((Array.isArray(prefixes) ? prefixes : [prefixes])
+    .filter(prefix => typeof prefix === 'string' && prefix.trim()))];
+  if (!unique.length) {
+    return /^(?:remote-control-|\d{3}[-｜|])+[a-z]+-[a-z]+$/i;
+  }
+  const escaped = unique.map(prefix => prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .map(prefix => `${prefix}[-｜|]`).join('|');
+  return new RegExp(`^(?:remote-control-|${escaped}|\\d{3}[-｜|])+[a-z]+-[a-z]+$`, 'i');
+}
+let autoTitleRe = buildAutoTitleRe(DEFAULT_AUTO_TITLE_PREFIXES);
+
+function setAutoTitlePrefixes(prefixes = DEFAULT_AUTO_TITLE_PREFIXES) {
+  autoTitleRe = buildAutoTitleRe(prefixes);
+}
+
 // No custom title: Claude changes its natural title after the first prompt. Custom
 // names suppress that signal and renameSessionTab now opens an interactive dialog.
 function isWaitingTab(tab) {
   const label = typeof tab === 'string' ? tab : String(tab?.label ?? '');
-  return label === 'Claude Code' || AUTO_TITLE_RE.test(label);
+  return label === 'Claude Code' || autoTitleRe.test(label);
 }
 function createPool({ tabs, open, publish, own = () => true, stopped = () => false, now = Date.now }) {
   let running;
@@ -163,8 +180,27 @@ function decideTrimExcess({ tabs, target, now = Date.now(), maxClose = 10, minAg
   return candidates.slice(0, maxTrimCount);
 }
 
+// 空の Remote Control 予備はちょうどこの本数だけ残す（オーナー指定）。
+const EMPTY_SPARE_KEEP = 3;
+// 補充の前に、空の予備が EMPTY_SPARE_KEEP を超えていれば古い余分だけを返す。
+// 空でないセッション、オーナーの返事待ち、アクティブなタブは返さない。
+// session: { id, appearedAt, empty, awaitingOwner, isActive }
+function selectExcessEmptySpares(sessions, { keep = EMPTY_SPARE_KEEP } = {}) {
+  if (!Array.isArray(sessions) || !(keep >= 0)) return [];
+  const empty = sessions.filter((session) => session
+    && session.empty === true
+    && session.awaitingOwner !== true
+    && typeof session.id === 'string'
+    && session.id);
+  if (empty.length <= keep) return [];
+  const closable = empty.filter((session) => !session.isActive);
+  closable.sort((a, b) => (a.appearedAt ?? 0) - (b.appearedAt ?? 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return closable.slice(0, empty.length - keep);
+}
+
 module.exports = {
-  AUTO_TITLE_RE, targetCount, readConfig, readSnapshot, createOwnershipLease, isWaitingTab, createPool,
+  get AUTO_TITLE_RE() { return autoTitleRe; },
+  DEFAULT_AUTO_TITLE_PREFIXES, buildAutoTitleRe, setAutoTitlePrefixes, targetCount, readConfig, readSnapshot, createOwnershipLease, isWaitingTab, createPool,
   REFRESH_MIN_AGE_MS, RC_IN_USE_THRESHOLD_MS, decideRefresh, readRefreshConfig, readLastRefreshAt, inRefreshHours,
-  isWorktreeFolder, decideWorktreeCleanup, decideTrimExcess,
+  isWorktreeFolder, decideWorktreeCleanup, decideTrimExcess, EMPTY_SPARE_KEEP, selectExcessEmptySpares,
 };

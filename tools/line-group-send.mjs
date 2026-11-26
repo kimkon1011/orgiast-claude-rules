@@ -12,6 +12,7 @@ import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
 import { assertContextApproved, latestOf, readOutbound, recordOutbound } from './lib/send-context.mjs';
+import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 
 /** 任意の文字列を UUID v5 形式（SHA-256 ベース・決定論的）に変換する。同じ文字列→同じUUID。
  *  LINE API の X-Line-Retry-Key は UUID 形式が必要だが、人間が覚えやすい任意文字列を指定できるようにするため。 */
@@ -149,6 +150,8 @@ export function assertSendableText(text) {
   if (japanese === 0 && latin1 >= 5) throw new Error('本文が文字化けしている（日本語0文字・U+0080-00FF が多数）');
   const placeholder = text.match(/XX|\{\{|\}\}|【要記入】|（記入）|TODO/);
   if (placeholder) throw new Error(`本文にプレースホルダが残っている: ${placeholder[0]}`);
+  const bookingUrls = findSecretaryBookingUrls(text);
+  if (bookingUrls.length) throw new Error(SECRETARY_BOOKING_URL_REASON);
 }
 
 export function buildMessages(text, imageUrls) {
@@ -158,6 +161,14 @@ export function buildMessages(text, imageUrls) {
   const chunks = [];
   for (let i = 0; i < msgs.length; i += 5) chunks.push(msgs.slice(i, i + 5));
   return chunks;
+}
+
+export function assertPushSucceeded(response, body) {
+  if (response.ok) return;
+  if (response.status === 429) {
+    console.error('[line-group-send] LINE bot の月間枠切れ。代替: Beeper 経由で kim の LINE から送る → node tools/send-context-check.mjs --channel beeper --target <beeperChatID> --text-file <本文> の後、reply-queue で receipt を作り node tools/beeper-send.mjs --chat <beeperChatID> --body-file <本文> --queue-id <id> --receipt <rid>。kim に手動コピペ・有料プランを選ばせない。');
+  }
+  throw new Error(`push 失敗 ${response.status} ${body}`);
 }
 
 async function main() {
@@ -193,7 +204,7 @@ async function main() {
       body: JSON.stringify({ to: groupId, messages }),
     });
     const body = await r.text();
-    if (!r.ok) throw new Error(`push 失敗 ${r.status} ${body}`);
+    assertPushSucceeded(r, body);
     const sent = JSON.parse(body).sentMessages || [];
     for (const message of sent) recordOutbound({ channel: 'line', target: groupId, text: messages.find(m => m.type === 'text')?.text ?? '', messageId: message.id });
     console.log(`push ${i + 1}/${chunks.length}: HTTP ${r.status} sentMessages=${sent.length} ids=${sent.map((m) => m.id).join(',')} retryKey=${retryKey}`);

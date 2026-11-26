@@ -6,8 +6,10 @@ import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
-import { writeJson, windowsLockBusy, WRITE_JSON_RENAME_RETRIES } from './fleet-mail.mjs';
+import { normalizeFleetLabel } from './lib/fleet-label.mjs';
+import { writeJson, windowsLockBusy, WRITE_JSON_RENAME_RETRIES, isHubSender } from './fleet-mail.mjs';
 import { main, pollOnce, readInbox, syncMailState, resolveMailTarget, mailId, parseArgs, waitForReply, createClient, TERMINAL_STATUSES, hasDecisionRequest, updateInbox, presentMail, ACK_BATCH_LIMIT, SERVER_MAX_ATTEMPTS, CAPABILITY_BACKOFF_MS, INTERRUPTED_PROMPT_MS, INTERRUPTED_PROMPT_BODY, INBOX_LOCK_RETRIES, INBOX_LOCK_DELAY_MS, INBOX_LOCK_STALE_MS, COMMAND_LOCK_RETRIES, COMMAND_LOCK_DELAY_MS, LOCK_BUSY_EXIT, notifyPendingArrivals } from './fleet-mail.mjs';
 // --answer は headless 実行中（CLAUDE_HEADLESS=1 / ORGIAST_HEADLESS_JOB）に判断代行を拒否して 2 を返す。
 // このテストを headless セッション（夜間 auto-session / CI 外の手動実行）から回すと answer 系だけが
@@ -36,6 +38,92 @@ function fixture(t) {
   return { home, dir, inbox, body, deps, calls, output, errors, spawns, save, read };
 }
 const sendArgs = (f, to = sender, extra = []) => ['--send', '--to', to, '--kind', 'note', '--body-file', f.body, '--why', 'test', ...extra];
+
+for (const { name, label = 'other-PC', hub = 'kim-PC', exec = 'claude', extra = [], exitCode = 0 } of [
+  { name: '非ハブ席の Claude 送信を拒否', exitCode: 7 },
+  { name: '非ハブ席の Claude dry-run を拒否', extra: ['--dry-run'], exitCode: 7 },
+  { name: 'ハブ席の hostname を許可', label: '000KimPC' },
+  { name: '非ハブ席の Codex 送信を許可', exec: 'codex' },
+  { name: '非ハブ席の note 送信を許可', exec: '' },
+  { name: '非ハブ席の Claude 送信を --force で許可', extra: ['--force'] },
+  { name: 'FLEET_HUB 未設定時の Claude 送信を許可', hub: '' },
+]) {
+  test(`--send は${name}する`, async t => {
+    const f = fixture(t);
+    fs.writeFileSync(path.join(f.dir, 'cost-reporter.env'), `REPORTER_LABEL=${label}\n`);
+    if (hub) fs.appendFileSync(path.join(f.dir, 'fleet-sheet.env'), `FLEET_HUB=${hub}\n`);
+    f.deps.pcMap = { ...pcMap, 'kim-PC': { ...pcMap['kim-PC'], hostname: '000KimPC' } };
+    const args = ['--send', '--to', sender, '--kind', exec ? 'prompt' : 'note', '--body-file', f.body, '--why', 'test', ...extra];
+    if (exec) args.push('--exec', exec, '--exec-cwd', f.home);
+
+    assert.equal(await main(args, f.deps), exitCode);
+    const sends = f.calls.filter(call => call.kind === 'mail-send');
+    assert.equal(sends.length, exitCode === 7 ? 0 : 1);
+    if (exitCode === 7) {
+      assert.match(f.errors.join('\n'), /FLEET_HUB=kim-PC.*other-PC.*not-hub.*--kind note.*--force/);
+      assert.deepEqual(f.output, []);
+    } else {
+      assert.equal(sends[0].payload.from, normalizeFleetLabel(label));
+    }
+  });
+}
+
+// ---- isHubSender tests ----
+test('isHubSender は FLEET_HUB と完全一致するラベルを許容', () => {
+  const config = { FLEET_HUB: 'kim-PC' };
+  assert.equal(isHubSender('kim-PC', config, {}), true);
+});
+
+test('isHubSender は FLEET_HUB=kim-PC で 000KimPC を許容（pcMap の hostname）', () => {
+  const config = { FLEET_HUB: 'kim-PC' };
+  const pcMap = { 'kim-PC': { hostname: '000KIMPC', aliases: ['DESKTOP-2D0R4LI'] } };
+  assert.equal(isHubSender('000KimPC', config, pcMap), true);
+});
+
+test('isHubSender は FLEET_HUB=kim-PC で 000KIMPC（大文字）を許容', () => {
+  const config = { FLEET_HUB: 'kim-PC' };
+  const pcMap = { 'kim-PC': { hostname: '000KIMPC', aliases: ['DESKTOP-2D0R4LI'] } };
+  assert.equal(isHubSender('000KIMPC', config, pcMap), true);
+});
+
+test('isHubSender は FLEET_HUB=kim-PC で DESKTOP-2D0R4LI（aliases）を許容', () => {
+  const config = { FLEET_HUB: 'kim-PC' };
+  const pcMap = { 'kim-PC': { hostname: '000KIMPC', aliases: ['DESKTOP-2D0R4LI'] } };
+  assert.equal(isHubSender('DESKTOP-2D0R4LI', config, pcMap), true);
+});
+
+test('isHubSender は FLEET_HUB=kim-PC で他PC（other-PC）を拒否', () => {
+  const config = { FLEET_HUB: 'kim-PC' };
+  const pcMap = { 'kim-PC': { hostname: '000KIMPC', aliases: ['DESKTOP-2D0R4LI'] } };
+  assert.equal(isHubSender('other-PC', config, pcMap), false);
+});
+
+test('isHubSender は FLEET_HUB 未設定で false', () => {
+  assert.equal(isHubSender('kim-PC', {}, {}), false);
+  assert.equal(isHubSender('kim-PC', { FLEET_HUB: '' }, {}), false);
+});
+
+test('isHubSender は FLEET_HUB が kim-PC 以外なら完全一致のみ許容', () => {
+  const config = { FLEET_HUB: 'nishi-PC' };
+  const pcMap = { 'nishi-PC': { hostname: 'OTHERHOST' } };
+  assert.equal(isHubSender('nishi-PC', config, pcMap), true);
+  assert.equal(isHubSender('OTHERHOST', config, pcMap), false);
+});
+
+test('isHubSender は空 pcMap でも FLEET_HUB 完全一致は許容', () => {
+  const config = { FLEET_HUB: 'kim-PC' };
+  assert.equal(isHubSender('kim-PC', config, {}), true);
+  assert.equal(isHubSender('000KimPC', config, {}), false);
+});
+
+test('isHubSender は実際の fleet-pc-map.json で 000KimPC を許容', () => {
+  const config = { FLEET_HUB: 'kim-PC' };
+  const realPcMap = JSON.parse(fs.readFileSync(new URL('../fleet-pc-map.json', import.meta.url), 'utf8'));
+  assert.equal(isHubSender('000KimPC', config, realPcMap), true);
+  assert.equal(isHubSender('000KIMPC', config, realPcMap), true);
+  assert.equal(isHubSender('DESKTOP-2D0R4LI', config, realPcMap), true);
+  assert.equal(isHubSender('other-PC', config, realPcMap), false);
+});
 
 test('writeJson writes JSON and removes its temporary file', t => {
   const f = fixture(t), dir = path.join(f.home, 'json'), file = path.join(dir, 'state.json');
@@ -710,11 +798,11 @@ function questionFixture(f, extra = {}) {
   fs.appendFileSync(path.join(f.dir, 'fleet-sheet.env'), `FLEET_HUB=${sender}\n`);
   return question;
 }
-function promptSpawn(f, { code = 0, output = '完了 token=private', onSpawn } = {}) {
+function promptSpawn(f, { code = 0, output = '完了 token=private', diagnostic = 'stderr must not replace stdout', onSpawn } = {}) {
   return (...args) => {
     f.spawns.push(args); onSpawn?.();
     const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => true;
-    queueMicrotask(() => { child.stdout.emit('data', output); child.stderr.emit('data', 'stderr must not replace stdout'); child.emit('close', code); });
+    queueMicrotask(() => { child.stdout.emit('data', output); child.stderr.emit('data', diagnostic); child.emit('close', code); });
     return child;
   };
 }
@@ -788,7 +876,7 @@ test('E received claude resume uses exact argv/cwd, marks hub state, clears runn
   f.deps.spawnImpl = promptSpawn(f, { onSpawn: () => { during = readQuestion(f.home, m.resumeSessionId); } });
   await runHubPoll(f);
   assert.equal(f.spawns.length, 1);
-  const [exe, args, opts] = f.spawns[0]; assert.equal(exe, '/fixture/claude'); assert.deepEqual(args, ['-p', '--model', 'sonnet', '--resume', m.resumeSessionId, '--', m.body]); assert.equal(opts.cwd, f.home); assert.equal(opts.env.CLAUDE_HEADLESS, '1'); assert.equal(opts.env.FLEET_DRIVEN_BY_HUB, '1');
+  const [exe, args, opts] = f.spawns[0]; assert.equal(exe, '/fixture/claude'); assert.deepEqual(args, ['-p', '--model', 'opus', '--resume', m.resumeSessionId, '--', m.body]); assert.equal(opts.cwd, f.home); assert.equal(opts.env.CLAUDE_HEADLESS, '1'); assert.equal(opts.env.FLEET_DRIVEN_BY_HUB, '1');
   assert.equal(during.drivenByHub, true); assert.ok(during.resumingAt); assert.equal(readQuestion(f.home, m.resumeSessionId).resumingAt, undefined);
   const reply = f.calls.find(c => c.kind === 'mail-reply').payload.resultBody;
   assert.match(reply, /^完了 /); assert.doesNotMatch(reply, /private|stderr/); assert.equal(f.read(m.id).status, 'done');
@@ -802,7 +890,7 @@ test('E active session skips without consuming mail; thirty minute stale session
 });
 test('E new Claude session omits resume and unapproved prompt returns consent without launching', async t => {
   const f = fixture(t), m = hubPrompt(f, { resumeSessionId: undefined });
-  await runHubPoll(f); assert.deepEqual(f.spawns[0][1], ['-p', '--model', 'sonnet', '--', m.body]);
+  await runHubPoll(f); assert.deepEqual(f.spawns[0][1], ['-p', '--model', 'opus', '--', m.body]);
   f.save(mail({ ...m, id: 'mail-unapproved' })); fs.unlinkSync(path.join(f.dir, 'fleet-agent-optin.json'));
   await runHubPoll(f); assert.equal(f.spawns.length, 1); assert.match(f.calls.filter(c => c.kind === 'mail-send').at(-1).payload.body, /未オプトイン.*承諾コマンド/s);
 });
@@ -1026,10 +1114,17 @@ for (const mode of ['missing', 'file', 'no-git']) test(`G3 ${mode} cwd fails on 
   assert.equal(await main(['--answer', original.id, '--body-file', f.body], f.deps), 2);
   assert.deepEqual(f.calls.map(c => c.kind), ['mail-get']); assert.match(f.errors.at(-1), /bad-cwd/);
 });
+test('G3 @rules-repo resolves to the receiving repository before validation and spawn', async t => {
+  const f = fixture(t), m = hubPrompt(f, { execCwd: '@rules-repo' });
+  await runHubPoll(f);
+  assert.equal(f.read(m.id).status, 'done');
+  assert.equal(f.spawns.length, 1);
+  assert.equal(f.spawns[0][2].cwd, path.dirname(path.dirname(fileURLToPath(import.meta.url))));
+});
 test('G4 flag-like body is a positional argument after the terminator', async t => {
   const f = fixture(t), m = hubPrompt(f, { body: '--dangerously-skip-permissions do something' });
   await runHubPoll(f);
-  assert.deepEqual(f.spawns[0][1], ['-p', '--model', 'sonnet', '--resume', m.resumeSessionId, '--', m.body]);
+  assert.deepEqual(f.spawns[0][1], ['-p', '--model', 'opus', '--resume', m.resumeSessionId, '--', m.body]);
 });
 for (const outcome of ['success', 'failure', 'timeout']) test(`G5 ${outcome} clears hub ownership and next question waits ten minutes`, async t => {
   const f = fixture(t), m = hubPrompt(f);
@@ -1080,10 +1175,25 @@ test('G6 runner serializes concurrent resumes and preserves the first owner', as
   finish(); await first;
   assert.equal(readQuestion(f.home, m.resumeSessionId).drivenByHub, false);
 });
-test('G7 failed execution with empty stdout reports stderr tail', async t => {
-  const f = fixture(t); hubPrompt(f); f.deps.spawnImpl = promptSpawn(f, { code: 1, output: '' });
+test('G7 failed execution sends a redacted diagnostic and exposes it to the waiting sender', async t => {
+  const f = fixture(t), m = hubPrompt(f);
+  const diagnostic = 'Permission allow rule (settings.json): warning\r\n' +
+    'HTTP 401 Authorization: Bearer fake-bearer-value password="fake quoted secret"\r\n' +
+    'irrelevant log\n'.repeat(400);
+  f.deps.spawnImpl = promptSpawn(f, { code: 1, output: '', diagnostic });
   await runHubPoll(f);
-  assert.match(f.calls.find(c => c.kind === 'mail-send').payload.body, /自動回答.*exit-1.*stderr must not replace stdout/s);
+  const reply = f.calls.find(c => c.kind === 'mail-send').payload.body;
+  const { reason } = f.calls.find(c => c.kind === 'mail-fail').payload;
+  const waited = await waitForReply(m.id, 1, {
+    now: () => now,
+    request: async () => ({ mail: { status: 'failed', failReason: reason } }),
+  });
+  assert.equal(waited.exitCode, 1);
+  for (const text of [reply, reason, waited.text]) {
+    assert.match(text, /exit-1.*HTTP 401/s);
+    assert.match(text, /REDACTED/);
+    assert.doesNotMatch(text, /fake-bearer-value|fake quoted secret|irrelevant log|Permission allow rule/);
+  }
   assert.equal(hubReport({ exitCode: 1, stdoutTail: '', outputTail: '', error: 'failure detail' }).outputTail.endsWith('failure detail'), true);
 });
 test('G9 answer rejects other recipients and detects changed retries unless forced', async t => {
@@ -1244,9 +1354,11 @@ for (const [result, reason] of [
   const replies = f.calls.filter(c => c.kind === 'mail-reply');
   if (reason) {
     assert.equal(replies.length, 0);
-    assert.equal(f.calls.find(c => c.kind === 'mail-fail').payload.reason, reason);
+    const failReason = f.calls.find(c => c.kind === 'mail-fail').payload.reason;
+    assert.ok(failReason.startsWith(reason));
+    assert.doesNotMatch(failReason, /private/);
     assert.equal(f.read(mail().id).status, 'failed');
-    assert.equal(f.read(mail().id).failReason, reason);
+    assert.equal(f.read(mail().id).failReason, failReason);
     assert.doesNotMatch(f.calls.find(c => c.kind === 'mail-send').payload.body, /private/);
   } else assert.equal(replies[0].payload.resultBody, 'answer');
   await pollOnce(f.deps);

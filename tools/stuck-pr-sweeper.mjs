@@ -359,8 +359,8 @@ export async function notifyStuckPr(pr, record, home, { inboxAvailable = fs.exis
   const marker = `[stuck-pr:${keyOf(pr)}]`;
   const text = `${marker} ${pr.title}\n${pr.url}\n原因: ${record.reasons.join(', ')}\n${record.attempts.map((a, i) => `試行${i + 1}: ${String(a.result || a.status).slice(-700)}`).join('\n')}\n人の判断が要る理由: 自動修復2回でも解消していません。記録とCIを確認し、追加修正の範囲またはレビュー・権限の担当を決めてください。\n次: kim が修復範囲・担当を判断、Claude が対応。`;
   if (inboxAvailable) {
-    const { addItem, listItems } = await import('./kim-inbox.mjs');
-    const old = listItems(home).find(x => x.text?.startsWith(marker));
+    const { addItem, listInboxMatches } = await import('./kim-inbox.mjs');
+    const [old] = listInboxMatches(home, item => item.text?.startsWith(marker));
     return old?.id || (await addItem(home, { kind: 'ask', text, source: 'stuck-pr-sweeper' })).id;
   }
   // Append only: never rewrite the shared auto-progress ledger while its watcher runs.

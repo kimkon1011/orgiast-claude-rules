@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {dir,root,out,title,loadPages,writeJSON,config} from './runtime.mjs';
+import {dir,root,out,title,loadPages,readJSON,writeJSON,config} from './runtime.mjs';
 import {writeReport} from './report.mjs';
+import {resolveVisual,assertPageImages,missingImagePages,imageErrorMessage} from './image-gate.mjs';
 export const escapeHTML=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const settings=config();
 const e=escapeHTML,br=s=>e(s).replace(/\n/g,'<br>');
@@ -20,18 +21,11 @@ function dataURL(f){
   if(!mime)throw new Error(`Unsupported image: ${f}`);
   return `data:${mime};base64,${fs.readFileSync(absolute).toString('base64')}`;
 }
-function resolveVisual(p){
-  if(p.directVisual)return {file:p.directVisual,mode:'direct-perspective'};
-  const generated=`visuals/${p.id}.png`;
-  if(p.visualBrief && fs.existsSync(path.join(dir,generated)))return {file:generated,mode:'gemini'};
-  if(p.fallbackPhoto)return {file:p.fallbackPhoto,mode:'fallback-original'};
-  return null;
-}
 const header=p=>`<header class="head"><div class="kicker">${e(p.kicker)}</div><h2>${e(p.headline)}</h2><p class="body-copy">${br(p.body)}</p></header>`;
 const footer=p=>`<footer class="footer"><span>${e(p.footerText??settings.title)}</span><span>${e(p.footerNote??settings.footerNote??'')}</span><b>${e(p.footerPage)}</b></footer>`;
 function photo(p,v,klass='photo-panel'){
   if(!v)throw new Error(`${p.id}: visual required`);
-  return `<figure class="${klass}" data-photo="true"><img src="${dataURL(v.file)}" alt="${e(p.visualAlt??'完成ブース・接客の様子')}"/><figcaption>${v.mode==='gemini'?'実写真を基にした構成イメージ':e(p.photoCaption??'実写真')}</figcaption></figure>`;
+  return `<figure class="${klass}" data-photo="true"><img src="${dataURL(v.file)}" alt="${e(p.visualAlt??'完成ブース・接客の様子')}"/><figcaption>${v.mode==='gemini'?'イメージ（AI生成）':e(p.photoCaption??'実写真')}</figcaption></figure>`;
 }
 function table(t,klass=''){
   const cell=(value,tag)=>{const c=typeof value==='object'?value:{text:value};return `<${tag}${c.rowspan?` rowspan="${Number(c.rowspan)}"`:''}${c.colspan?` colspan="${Number(c.colspan)}"`:''}${c.class?` class="${e(c.class)}"`:''}>${br(c.text)}</${tag}>`;};
@@ -55,19 +49,28 @@ const templates={
   'roles-timeline':(p,v)=>`${photo(p,v,'photo-panel rolecuts')}${header(p)}<div class="body roles-body"><div class="roles">${p.roles.map(r=>`<div class="role"><h3>${e(r.name)}</h3>${r.items.map(t=>`<p>${e(t)}</p>`).join('')}</div>`).join('')}</div><div class="timeline">${p.timeline.map(([d,t])=>`<div class="time"><b>${e(d)}</b><span>${e(t)}</span></div>`).join('')}</div><h3 class="next-label">次のアクション</h3><div class="actions">${p.actions.map((t,i)=>`<div class="action"><b>0${i+1}</b><span>${e(t)}</span></div>`).join('')}</div></div>`
 };
 export function buildHTML(pages){
+  assertPageImages(pages);
   const checks=[];
   const slides=pages.map(p=>{
     const template=templates[p.type];if(!template)throw new Error(`Unsupported type: ${p.type}`);
     const v=resolveVisual(p);const check={id:p.id,type:p.type,...textWarnings(p),visual:v};checks.push(check);
     for(const w of check.warnings)console.warn(`WARNING ${w}`);
     if(v?.mode==='fallback-original')console.warn(`VISUAL ${p.id}: 実写真フォールバック ${v.file}`);
-    return `<section class="slide ${e(p.type)} ${p.type==='perspective'&&p.crop.width<p.crop.height?'perspective-portrait':''} ${v&&p.type!=='cover'&&p.type!=='perspective'?'split':''}" id="${e(p.id)}" data-type="${e(p.type)}">${template(p,v)}${footer(p)}</section>`;
+    const content=template(p,v);
+    // Legacy text/table templates must actually render the required image too.
+    const image=content.includes('data-photo="true"')?'':photo(p,v);
+    return `<section class="slide ${e(p.type)} ${p.type==='perspective'&&p.crop.width<p.crop.height?'perspective-portrait':''} ${v&&p.type!=='cover'&&p.type!=='perspective'?'split':''}" id="${e(p.id)}" data-type="${e(p.type)}">${image}${content}${footer(p)}</section>`;
   }).join('\n');
   const css=fs.readFileSync(path.join(dir,'styles.css'),'utf8');
   return {html:`<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${css}</style></head><body><main class="deck">${slides}</main></body></html>`,checks};
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===path.join(dir,'build.mjs')){
   fs.mkdirSync(out,{recursive:true});
+  const missing=missingImagePages(readJSON(path.join(dir,'pages.json')));
+  if(missing.length){
+    writeJSON(path.join(out,'build-checks.json'),{builtAt:new Date().toISOString(),pages:[],warnings:[],errors:[imageErrorMessage(missing)],missingImagePages:missing});
+    writeReport(); // Saves the failed report before throwing; PDF conversion never starts.
+  }
   const pages=loadPages();const {html,checks}=buildHTML(pages);
   const htmlPath=path.join(out,`${title}.html`),pdfPath=path.join(out,`${title}.pdf`);
   fs.writeFileSync(htmlPath,html);

@@ -387,7 +387,7 @@ switch ($Mode) {
             $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
             # StartWhenAvailable: PCがスリープ等で実行を逃した場合に復帰後すぐ拾う。
             # IgnoreNew: 前回が長引いていても多重起動しない。
-            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+            $settings = New-ScheduledTaskSettingsSet -Priority 4 -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
             Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
             # 先頭の「完了:」「エラー:」は fleet-poller が Discord 要約に拾うための目印。
             # この語が無いと中央キュー経由の実行報告が「タスク『thermal-guard』実行: 」と

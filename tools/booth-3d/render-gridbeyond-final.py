@@ -232,6 +232,11 @@ if plan=='standard':
     box('Illuminated entrance logo cube',(.55,.55,.27),(.45,.45,.45),fabric)
     wordmark((.55,.31,.25),.06)
 elif plan=='premium':
+    # Premium identity is explicit in the base image so the image model only
+    # finishes these fixed wall reliefs instead of inventing a hanging lantern.
+    for x in (1.15, 2.15, 3.15):
+        capsule = sphere('Fixed wall-mounted luminous membrane relief',(x,5.70,2.48),(.22,.055,.34),fabric)
+        capsule.scale = (.22,.055,.34)
     curve('Halo within 3.6m envelope',[(3+1.35*math.cos(t*2*math.pi/96),3+1.35*math.sin(t*2*math.pi/96),3.02) for t in range(97)],.045,fabric)
     for x in (.45,3.9,5.55): box('Recessed floor light',(x,3,.053),(.023,5.4,.006),blue,bevel=0)
 elif plan=='impact':

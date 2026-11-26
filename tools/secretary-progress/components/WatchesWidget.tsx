@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 
 type Watch = { id: string; label: string; deadline: string | null; status: string; verdict: string; lastCheck: string | null; detail: string };
-type Data = { watches: Watch[]; recentCompleted: Watch[]; inboxAsks: { id: string; text: string; createdAt: string; from: string }[]; warnings: string[]; updatedAt: string };
+type Data = { watches: Watch[]; recentCompleted: Watch[]; inboxAsks: { id: string; text: string; createdAt: string; from: string }[]; warnings: string[]; totalWatches?: number | null; totalAsks?: number | null; ledgerStatus?: string; inboxStatus?: string; inboxUpdatedAt?: string | null; updatedAt: string };
 const date = (value: string | null) => value && Number.isFinite(Date.parse(value))
   ? new Date(value).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '未設定';
 
@@ -45,13 +45,15 @@ export default function WatchesWidget() {
     {!data && !error && <p className="text-sm text-zinc-400">読み込み中…</p>}
     {data && <>
       {data.warnings.map(warning => <p role="alert" key={warning} className="text-amber-300 text-xs">{warning}</p>)}
-      <h3 className="text-xs text-zinc-400">進行中の見張り（{data.watches.length}）</h3>
+      <h3 className="text-xs text-zinc-400">進行中の見張り（{data.totalWatches === null ? '読込中' : data.watches.length}）</h3>
       <WatchRows items={data.watches.filter(item => `${item.label} ${item.detail}`.includes(query))} />
-      {!data.watches.length && <p className="text-xs">進行中の見張りはありません。</p>}
+      {data.ledgerStatus === 'refreshing' && <p className="text-xs text-zinc-400">見張りを更新中…</p>}
+      {data.totalWatches !== null && !data.watches.length && <p className="text-xs">進行中の見張りはありません。</p>}
       {data.recentCompleted.length > 0 && <><h3 className="text-xs text-green-300">最近完了した見張り（7日間）</h3><WatchRows items={data.recentCompleted.filter(item => `${item.label} ${item.detail}`.includes(query))} /></>}
-      <h3 className="text-xs text-amber-300">kim への未回答の確認（{data.inboxAsks.length}）</h3>
+      <h3 className="text-xs text-amber-300">kim への未回答の確認（{data.totalAsks === null ? '読込中' : data.inboxAsks.length}）</h3>
       <ul className="space-y-3 max-h-64 overflow-y-auto">{data.inboxAsks.filter(ask => ask.text.includes(query)).map(ask => <li key={ask.id} className="text-xs whitespace-pre-wrap break-words"><p>{ask.text}</p><p className="text-zinc-400">{ask.from} ／ {date(ask.createdAt)}</p></li>)}</ul>
-      {!data.inboxAsks.length && <p className="text-xs">未回答の確認はありません。</p>}
+      {data.inboxStatus === 'refreshing' && <p className="text-xs text-zinc-400">確認事項を更新中…{data.inboxUpdatedAt ? ` 前回取得: ${date(data.inboxUpdatedAt)}` : ''}</p>}
+      {data.totalAsks !== null && !data.inboxAsks.length && <p className="text-xs">未回答の確認はありません。</p>}
       <p className="text-[10px] text-zinc-500">取得: {date(data.updatedAt)}（日本時間）</p>
     </>}
   </section>;

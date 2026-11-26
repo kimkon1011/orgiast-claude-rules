@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { autoResumeAllowed } from './auto-resume-policy.mjs';
+import { autoResumeAllowed, autoResumeDisabledByConfig, hourlyResumePolicy } from './auto-resume-policy.mjs';
 
 const roots = [];
 test.beforeEach(t => {
@@ -56,4 +56,39 @@ test('ORGIAST_AUTO_RESUME=1 は true', () => {
   process.env.ORGIAST_AUTO_RESUME = '1';
   try { assert.equal(autoResumeAllowed({ repoRoot: repoWith('{broken') }), true); }
   finally { before === undefined ? delete process.env.ORGIAST_AUTO_RESUME : process.env.ORGIAST_AUTO_RESUME = before; }
+});
+
+// ---- autoResumeDisabledByConfig ----
+
+test('autoResumeDisabledByConfig: enabled:false の設定で true', () => {
+  const root = repoWith('{"enabled":false}');
+  assert.equal(autoResumeDisabledByConfig({ repoRoot: root }), true);
+});
+
+test('autoResumeDisabledByConfig: 設定ファイル欠損で false', () => {
+  const root = repoWith('{}');
+  fs.unlinkSync(path.join(root, 'config', 'auto-resume.json'));
+  assert.equal(autoResumeDisabledByConfig({ repoRoot: root }), false);
+});
+
+test('autoResumeDisabledByConfig: enabled:true で false', () => {
+  assert.equal(autoResumeDisabledByConfig({ repoRoot: repoWith('{"enabled":true}') }), false);
+});
+
+test('autoResumeDisabledByConfig: 壊れた JSON で false', () => {
+  assert.equal(autoResumeDisabledByConfig({ repoRoot: repoWith('{broken') }), false);
+});
+
+test('autoResumeDisabledByConfig: enabled が未定義の設定で false', () => {
+  assert.equal(autoResumeDisabledByConfig({ repoRoot: repoWith('{"allowSources":["fleet-exec"]}') }), false);
+});
+
+test('hourlyResumePolicy は設定値を返し、欠損時は安全側で無効', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-resume-hourly-'));
+  fs.mkdirSync(path.join(root, 'config'));
+  fs.writeFileSync(path.join(root, 'config', 'auto-resume.json'), JSON.stringify({ hourlyResume: true, hourlyCap: 4, perSessionDailyCap: 6, planUsageStopPct: 85 }));
+  assert.deepEqual(hourlyResumePolicy({ repoRoot: root }), { hourlyResume: true, hourlyCap: 4, perSessionDailyCap: 6, planUsageStopPct: 85, reason: '' });
+  fs.unlinkSync(path.join(root, 'config', 'auto-resume.json'));
+  assert.equal(hourlyResumePolicy({ repoRoot: root }).hourlyResume, false);
+  fs.rmSync(root, { recursive: true, force: true });
 });

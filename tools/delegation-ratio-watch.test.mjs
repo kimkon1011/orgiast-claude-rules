@@ -20,6 +20,52 @@ function writeFile(file, content) {
 }
 
 describe('delegation-ratio-watch', () => {
+  for (const saver of ['saveResult', 'writeFixTicket']) {
+    for (const code of ['EPERM', 'EBUSY', 'EACCES']) {
+      test(`${saver}: retries transient ${code} when concurrent tasks replace state`, async () => {
+        const module = await import('./delegation-ratio-watch.mjs');
+        const home = tmpHome('rename-retry');
+        const delays = [];
+        let attempts = 0;
+        try {
+          const file = module[saver]({ alert: true, reasons: ['previous'] }, home);
+          const fsImpl = { ...fs, renameSync(from, to) {
+            if (++attempts < 3) {
+              assert.deepEqual(JSON.parse(fs.readFileSync(to, 'utf8')).reasons, ['previous']);
+              throw Object.assign(new Error('sharing violation'), { code });
+            }
+            fs.renameSync(from, to);
+          } };
+          assert.equal(module[saver]({ alert: true, reasons: ['current'] }, home,
+            { fsImpl, sleepImpl: ms => delays.push(ms) }), file);
+          assert.equal(attempts, 3);
+          assert.deepEqual(delays, [100, 200]);
+          assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).reasons, ['current']);
+          assert.deepEqual(fs.readdirSync(path.dirname(file)), [path.basename(file)]);
+        } finally { fs.rmSync(home, { recursive: true, force: true }); }
+      });
+    }
+
+    for (const [code, expectedAttempts] of [['EPERM', 9], ['ENOSPC', 1]]) {
+      test(`${saver}: preserves previous state and reports persistent ${code}`, async () => {
+        const module = await import('./delegation-ratio-watch.mjs');
+        const home = tmpHome('rename-failure');
+        let attempts = 0, waits = 0;
+        const error = Object.assign(new Error('cannot replace state'), { code });
+        try {
+          const file = module[saver]({ alert: true, reasons: ['previous'] }, home);
+          const fsImpl = { ...fs, renameSync() { attempts++; throw error; } };
+          assert.throws(() => module[saver]({ alert: true, reasons: ['current'] }, home,
+            { fsImpl, sleepImpl: () => waits++ }), e => e === error);
+          assert.equal(attempts, expectedAttempts);
+          assert.equal(waits, expectedAttempts - 1);
+          assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).reasons, ['previous']);
+          assert.deepEqual(fs.readdirSync(path.dirname(file)), [path.basename(file)]);
+        } finally { fs.rmSync(home, { recursive: true, force: true }); }
+      });
+    }
+  }
+
   test('安いAI実作業(out>200, ok)を正しく数える', async () => {
     const { compute } = await import('./delegation-ratio-watch.mjs');
     const home = tmpHome('test1');
@@ -71,25 +117,60 @@ describe('delegation-ratio-watch', () => {
   test('quota_wait 中の呼出し数を lane-health.json から判定', async () => {
     const { compute } = await import('./delegation-ratio-watch.mjs');
     const home = tmpHome('test4');
+    const now = Date.parse('2026-11-25T20:40:00.000Z');
+    const since = now - 60 * 60 * 1000;
+    const until = now + 7 * 86400000;
     try {
       const lh = path.join(home, '.claude', 'lane-health.json');
       fs.mkdirSync(path.dirname(lh), { recursive: true });
       fs.writeFileSync(lh, JSON.stringify({
         lanes: {
-          glm: { alive: false, reason: 'quota_wait', until: Date.now() + 7 * 86400000 },
+          glm: { alive: false, reason: 'quota_wait', since, until },
           groq: { alive: true, reason: 'probe_ok' },
         },
       }));
       const usage = path.join(home, '.claude', 'executor-usage.jsonl');
       fs.mkdirSync(path.dirname(usage), { recursive: true });
       writeLines(usage, [
-        { t: new Date().toISOString(), provider: 'glm', status: 'http_429' },
-        { t: new Date().toISOString(), provider: 'glm', status: 'http_429' },
-        { t: new Date().toISOString(), provider: 'groq', status: 'ok', out: 500 },
+        { t: new Date(since - 1).toISOString(), provider: 'glm', status: 'ok' },
+        { t: new Date(since).toISOString(), provider: 'glm', status: 'http_429' },
+        { ts: new Date(until).toISOString(), provider: 'glm', status: 'http_429' },
+        { t: new Date(since + 1).toISOString(), provider: 'groq', status: 'ok', out: 500 },
       ]);
-      const result = compute({ home, executorUsageFile: usage });
+      const result = compute({ home, now, executorUsageFile: usage });
       assert.equal(result.quotaWaitCalls, 2);
       assert.deepEqual(result.providers, ['glm']);
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  });
+
+  test('quota_wait に since も probedAt も無い → quotaWaitCalls=0 かつ reasons に開始時刻不明が出る', async () => {
+    const { compute } = await import('./delegation-ratio-watch.mjs');
+    const home = tmpHome('test-quota-wait-unknown-since');
+    const now = Date.parse('2026-11-26T00:00:00.000Z');
+    try {
+      const lh = path.join(home, '.claude', 'lane-health.json');
+      fs.mkdirSync(path.dirname(lh), { recursive: true });
+      fs.writeFileSync(lh, JSON.stringify({
+        lanes: {
+          codex: { alive: false, reason: 'quota_wait', until: now + 86400000 },
+          glm: { alive: false, reason: 'quota_wait', probedAt: new Date(now - 7200000).toISOString(), until: now + 86400000 },
+        },
+      }));
+      const usage = path.join(home, '.claude', 'executor-usage.jsonl');
+      fs.mkdirSync(path.dirname(usage), { recursive: true });
+      writeLines(usage, [
+        { t: new Date(now - 3600000).toISOString(), provider: 'codex', status: 'http_429' },
+        { t: new Date(now - 1800000).toISOString(), provider: 'glm', status: 'http_429' },
+        { t: new Date(now - 3600000).toISOString(), provider: 'deepseek', status: 'ok', out: 500 },
+      ]);
+      const result = compute({ home, now, executorUsageFile: usage });
+      // codex は since も probedAt も無い → quotaWaitWindows に入らず UnknownSince へ
+      // glm は probedAt あり → quotaWaitWindows に入る
+      assert.equal(result.quotaWaitCalls, 1, 'glm の1件だけが窓内');
+      assert.ok(result.providers.includes('codex'), 'codex should be in providers (as unknown-since)');
+      assert.ok(result.providers.includes('glm'), 'glm should be in providers (with window)');
+      assert.ok(result.reasons.some(r => r.includes('開始時刻が不明') && r.includes('codex')),
+        'reasons should mention codex as unknown start time');
     } finally { fs.rmSync(home, { recursive: true, force: true }); }
   });
 

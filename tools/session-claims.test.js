@@ -435,3 +435,21 @@ test('last assistant declaration wins across records and text blocks, including 
   f.run('--sync');
   assert.equal(f.ledger().claims[0].purpose, '〇〇');
 });
+
+test('--filter without --self and without CLAUDE_SESSION_ID continues with self=none and warns', t => {
+  const f = fixture(t);
+  const r = spawnSync(process.execPath, [script, '--filter', '--candidates', f.candidates('test')],
+    { cwd: f.home, env: f.env, encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, 'test\n');
+  assert.match(r.stderr, /self=none として続行します/);
+});
+
+test('--filter without --self with CLAUDE_SESSION_ID env works normally', t => {
+  const f = fixture(t); f.transcript(self, [declaration()]);
+  f.env.CLAUDE_SESSION_ID = self;
+  const r = f.run('--filter', '--candidates', f.candidates(purpose));
+  assert.equal(r.stdout, `${purpose}\n`);
+  assert.equal(r.stderr, '');
+  assert.equal(f.ledger().claims[0].sessionId, self);
+});

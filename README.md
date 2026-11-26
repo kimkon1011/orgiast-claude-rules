@@ -31,8 +31,28 @@ GitHub にログイン済みの Claude Code で:
 | skill | `design-deck` | 見せる資料をハイブリッド企画書モデル（Claude組版×Gemini写真×Genspark参照）で制作・検証 |
 | skill | `rules-sync` | Drive ハブとの同期（pull = 全アカウント / merge = kim 環境で inbox 統合） |
 | skill | `share-knowledge` | 学んだノウハウを Drive ハブの knowledge-inbox に投稿（全アカウント共通化の入口） |
+| skill | `spec-driven-development` | `/spec` — SPEC 駆動開発（コード前に仕様書を作成、サイクルゲート管理） |
+| skill | `planning-and-task-breakdown` | `/plan` — 計画・タスク分割（依存関係グラフ、垂直スライス） |
+| skill | `incremental-implementation` | `/build` — インクリメンタル実装（1スライスずつ実装→テスト→検証→コミット） |
+| skill | `test-driven-development` | `/test` — TDD（Red-Green-Refactor cycle） |
+| skill | `code-review-and-quality` | `/review` — 5軸コードレビュー（正確性・可読性・アーキテクチャ・セキュリティ・パフォーマンス） |
+| skill | `shipping-and-launch` | `/ship` — 出荷・ローンチ準備（公開前チェックリスト・feature flag・ロールバック計画） |
 | rules | `rules/gas.md` | GAS 開発の絶対ルール（`~/.claude/rules/` にコピーすると .gs 編集時に自動適用） |
 | doc | `ONBOARDING.md` | 全社共通の絶対ルール全文（詳細版） |
+
+## インストール済みエージェントスキル
+
+`addyosmani/agent-skills` から 25 スキル（79 エージェント）をインストール済み（2026-11-17）。
+
+- `.agents/skills/` に実体、`.claude/skills/` にシンボリックリンク
+- Claude Code, Codex, Gemini CLI, GitHub Copilot 他で利用可能
+- ブース制作ウェブサイト開発向け 6 ルール適用ガイド: `playbooks/booth-website-agent-skills-workflow.md`
+- 一覧: `.agents/skills/README.md`
+
+スキル追加コマンド（新規 PC 用）:
+```
+npx skills add addyosmani/agent-skills
+```
 
 ## 設計文書
 
@@ -67,3 +87,4 @@ node <repo>/tools/onboarding-sync.mjs --force
 ```sh
 node --test tools/*.test.mjs
 ```
+

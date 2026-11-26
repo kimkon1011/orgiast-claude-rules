@@ -2,6 +2,21 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { filterCollapsedWindowsPaths, isCollapsedWindowsPath } from './lib/collapsed-win-path.mjs';
+
+export { filterCollapsedWindowsPaths } from './lib/collapsed-win-path.mjs';
+
+export function statusPaths(status) {
+  const entries = status.split('\0').filter(Boolean);
+  const paths = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    paths.push(entry.slice(3));
+    const x = entry[0];
+    if ((x === 'R' || x === 'C') && entries[i + 1] !== undefined) paths.push(entries[++i]);
+  }
+  return paths;
+}
 
 // git が強制終了されると `.git/index.lock` が残る。残骸があると `git add`(救済)も
 // 索引を書き換える `git status` も `File exists.` で失敗し、救済ブランチだけが作られて
@@ -57,7 +72,7 @@ export function createDirtyWorktreeGuard({
       }
     };
     let status;
-    try { status = gitRetryingStaleLock(['status', '--porcelain', '--untracked-files=all']); }
+    try { status = gitRetryingStaleLock(['status', '--porcelain', '-z', '--untracked-files=all']); }
     catch (error) {
       blocked.add(key);
       log(`[DIRTY_WORKTREE_SKIP] ${dir}: status failed: ${error.message}`);
@@ -65,6 +80,12 @@ export function createDirtyWorktreeGuard({
     }
     if (!status.trim()) return true;
     blocked.add(key);
+    const paths = statusPaths(status);
+    const rescuePaths = filterCollapsedWindowsPaths(paths, { log });
+    if (rescuePaths.length === 0) {
+      log(`[DIRTY_WORKTREE_SKIP] ${dir}: only collapsed Windows paths remain; destructive updates skipped`);
+      return false;
+    }
     log(`[DIRTY_WORKTREE_SKIP] ${dir}: uncommitted changes; all destructive updates skipped`);
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
     const base = `rescue/auto-session-${stamp}`;
@@ -77,7 +98,9 @@ export function createDirtyWorktreeGuard({
     }
     try {
       gitRetryingStaleLock(['switch', '-c', branch]);
-      gitRetryingStaleLock(['add', '-A']);
+      const exclusions = paths.filter(isCollapsedWindowsPath)
+        .map(name => `:(exclude,top,literal)${name}`);
+      gitRetryingStaleLock(['add', '-A', '--', '.', ...exclusions]);
       gitRetryingStaleLock(['-c', 'user.name=Auto Session Rescue', '-c', 'user.email=auto-session-rescue@localhost',
         'commit', '-m', `auto-session-rescue-${stamp}`]);
       const sha = git(dir, ['rev-parse', 'HEAD']).trim();

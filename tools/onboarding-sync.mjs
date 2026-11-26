@@ -47,6 +47,12 @@ export function executionPlan(argv = []) {
   return { syncRepository: !onlyKeys, provisionKeys: true, syncRules: !onlyKeys };
 }
 
+export function readHead(tgtRepo) {
+  try {
+    return execFileSync('git', ['-C', tgtRepo, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8', timeout: 60000 }).trim();
+  } catch { return ''; }
+}
+
 export function shouldRunKeys(previous, now = new Date(), forced = false) {
   if (forced) return true;
   if (!previous?.lastRunAt) return true;
@@ -66,6 +72,28 @@ export function missingDeclaredKeys(files, exists) {
   return Object.keys(files)
     .filter((name) => /^[A-Za-z0-9._-]+$/.test(name) && !name.includes('..') && !exists(name))
     .sort();
+}
+
+// keyserve の配布ファイルのうち、~/.claude 以外の場所でツールが読むものを追記マージで写す。
+// 既存の他キー（例: GEMINI_CLI_TRUST_WORKSPACE）は残す。値はログに出さない。
+export const KEY_FILE_MIRRORS = Object.freeze({ 'gemini.env': ['.gemini', '.env'] });
+export function mirrorKeyFiles(home, files, log = () => {}) {
+  const mirrored = [];
+  for (const [name, rel] of Object.entries(KEY_FILE_MIRRORS)) {
+    const contents = files && typeof files[name] === 'string' ? files[name].replace(/^\uFEFF/, '') : '';
+    if (!contents.trim()) continue;
+    try {
+      const destination = path.join(home, ...rel);
+      const existing = fs.existsSync(destination) ? fs.readFileSync(destination, 'utf8') : '';
+      const updated = existing ? mergeEnvFile(existing, contents) : contents;
+      if (updated === existing) continue;
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.writeFileSync(destination, updated, { encoding: 'utf8', mode: 0o600 });
+      mirrored.push(rel.join("/"));
+      log(`mirrored: ${name} -> ~/${rel.join("/")}`);
+    } catch (e) { log(`key mirror failed (${name}): ${e.message}`); }
+  }
+  return mirrored;
 }
 
 export function mergeEnvFile(existingText, incomingText, preserveKeys = PRESERVE_LOCAL_KEYS) {
@@ -109,6 +137,12 @@ function log(message) {
 }
 function state() { try { return JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch { return null; } }
 function repoState() { try { return JSON.parse(fs.readFileSync(repoStatePath, 'utf8')); } catch { return null; } }
+export function shouldRunRepositorySync(previous, now = new Date()) {
+  const last = previous?.last ? new Date(previous.last) : null;
+  if (!last || !Number.isFinite(last.getTime())) return true;
+  const localDay = (date) => `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+  return localDay(last) !== localDay(now);
+}
 function keysState() {
   for (const file of [keysStatePath, legacyKeysStatePath]) {
     try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
@@ -173,7 +207,7 @@ function copyTreeExcluding(source, destination, excluded, hashes, relative = '')
   }
   return copied;
 }
-export const DEFAULT_DISTRIBUTION = { dirs: ['tools', 'rules-extracted', 'skills', 'packages', 'protocols'], files: [] };
+export const DEFAULT_DISTRIBUTION = { dirs: ['tools', 'rules-extracted', 'skills', 'agents', 'packages', 'protocols'], files: [] };
 // 配布定義: ダウンロードした最新 zip → ローカル repo → 組み込み既定の順で読む（壊れていれば次へ）。
 export function loadDistribution(...roots) {
   for (const root of roots) {
@@ -322,6 +356,12 @@ export async function updateRepositoryFiles(targetRepo, options = {}) {
     return false;
   };
   if (hasGit) {
+    // .git はあるが remote が未設定の写しでも、正本から origin/main を取得して
+    // matchesMainHistory が過去版を照合できるようにする。失敗は無視（保護側に倒す）。
+    try {
+      git(['-C', targetRepo, 'fetch', 'https://github.com/kimkon1011/orgiast-claude-rules.git', '+main:refs/remotes/origin/main'],
+          { stdio: 'pipe', timeout: 60000 });
+    } catch { /* non-fatal: matchesMainHistory が origin/main 不在で保護側に倒す */ }
     try {
       // pull 失敗時だけ作業中ファイルを列挙し、zip がローカル作業を消さないよう個別に除外する。
       const status = git(['-C', targetRepo, 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { encoding: 'utf8', timeout: 60000 });
@@ -406,13 +446,51 @@ export function deploySkills(sourceRepo, targetHome, options = {}) {
     return [...updated];
   } catch (e) { if (options.onError) options.onError(e); return []; }
 }
+export function deployAgents(sourceRepo, targetHome, options = {}) {
+  const updated = [];
+  try {
+    const iso = (options.now || new Date()).toISOString();
+    const stamp = `${iso.slice(0, 10).replace(/-/g, '')}-${iso.slice(11, 19).replace(/:/g, '')}`;
+    const targetDir = path.join(targetHome, '.claude', 'agents');
+    for (const name of ['Explore.md']) {
+      const from = path.join(sourceRepo, 'agents', name);
+      if (!fs.existsSync(from)) continue;
+      const to = path.join(targetDir, name);
+      const content = fs.readFileSync(from);
+      const exists = fs.existsSync(to);
+      if (exists && content.equals(fs.readFileSync(to))) continue;
+      fs.mkdirSync(targetDir, { recursive: true });
+      const pending = `${to}.tmp.${crypto.randomUUID()}`;
+      try {
+        fs.writeFileSync(pending, content, { flag: 'wx' });
+        if (exists) {
+          const backup = `${to}.bak.${stamp}`;
+          try {
+            fs.copyFileSync(to, backup, fs.constants.COPYFILE_EXCL);
+          } catch (error) {
+            if (error.code !== 'EEXIST') throw error;
+            fs.copyFileSync(to, `${backup}.${crypto.randomUUID()}`, fs.constants.COPYFILE_EXCL);
+          }
+        }
+        fs.renameSync(pending, to);
+      } finally {
+        fs.rmSync(pending, { force: true });
+      }
+      updated.push(name);
+    }
+    if (updated.length && !options.quiet) console.log(`[onboarding-sync] agents updated: ${updated.join(', ')}`);
+    return updated;
+  } catch (e) { if (options.onError) options.onError(e); return updated; }
+}
 // syncRepository が用意し、main の finally（CLAUDE.md 更新後）で実行する hook 登録。
 let deferredHookRegistration = null;
 async function syncRepository(now) {
   try {
     if (!fs.existsSync(repoPath)) return;
     const previous = repoState();
-    if (!force && previous?.last && now - new Date(previous.last) < 24 * 60 * 60 * 1000) return;
+    // 経過24時間だと、前日の実行が03:29、当日のSessionStartが03:04のように少し早まるだけで
+    // その日を丸ごと無言スキップする。ローカル日付ごとの1回にして日次ジョブの時刻揺れを許容する。
+    if (!force && !shouldRunRepositorySync(previous, now)) return;
     if (dryRun) { console.log(`[dry-run] リポ日次更新対象: ${repoPath} (書き込み・取得なし)`); return; }
     saveRepoState(now);
     // バックアップはリポ外(~/.claude/repo-backups)に置く: リポ内だと git status を汚し、毎日積み上がる
@@ -429,18 +507,25 @@ async function syncRepository(now) {
     // ここを1つの try に入れていたため、pull が1回失敗した PC は配布が静かに止まっていた(実測 2026-08-19)。
     try {
     if (fs.existsSync(path.join(repoPath, '.git'))) {
-      const before = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8', timeout: 60000 }).trim();
+      const before = readHead(repoPath);
       const result = await updateRepositoryFiles(repoPath);
-      const after = execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8', timeout: 60000 }).trim();
-      changed = result.ok && (result.method === 'zip' ? result.changed : before !== after);
+      const after = readHead(repoPath);
+      if (before && after) {
+        changed = result.ok && (result.method === 'zip' ? result.changed : before !== after);
+      } else {
+        changed = result.ok && result.changed !== false;
+      }
     } else {
       const result = await updateRepositoryFiles(repoPath);
       changed = result.ok && result.changed;
     }
+    if (result?.excluded?.length) log("protected human changes: " + result.excluded.length + "件 " + result.excluded.slice(0, 10).join(", ") + (result.excluded.length > 10 ? " ...他" + (result.excluded.length - 10) + "件" : ""));
     } catch (e) { console.log(`[onboarding-sync] リポ取得に失敗（skill配布とhook登録は続行）: ${e.message.split('\n')[0]}`); log(`repo fetch failed(continue): ${e.message}`); }
     if (changed) { console.log('[onboarding-sync] updated repository tools/rules/skills'); log('updated repository tools/rules/skills'); }
     const skills = deploySkills(repoPath, home, { now, onError: (e) => log(`skill deployment failed: ${e.message}`) });
     if (skills.length) log(`skills updated: ${skills.join(', ')}`);
+    const agents = deployAgents(repoPath, home, { now, onError: (e) => log(`agent deployment failed: ${e.message}`) });
+    if (agents.length) log(`agents updated: ${agents.join(', ')}`);
     try {
       const memory = await installSharedMemories({ home, emit: (line) => log(line) });
       log(`memory-share install: generatedAt=${memory.generatedAt} installed=${memory.installed} updated=${memory.updated} removed=${memory.removed} unchanged=${memory.unchanged} (dir=${memory.dir})`);
@@ -610,6 +695,7 @@ export async function provisionKeys(now, options = {}) {
         log(`provisioned: ${name}`);
       } catch (e) { enrollWriteFailed = true; log(`key write failed (${name}): ${e.message}`); }
     }
+    mirrorKeyFiles(home, payload.files, log);
     const missing = missingDeclaredKeys(payload.files, (name) => fs.existsSync(path.join(home, '.claude', name)));
     if (missing.length) console.error(`[onboarding-sync] 未取得の鍵: ${missing.join(', ')}`);
     else saveKeysState(now);
@@ -665,6 +751,25 @@ export function measureIndexBytes(index) {
   return { optionalBytes, mandatoryBytes: totalBytes - optionalBytes, totalBytes };
 }
 
+const indexRuleStart = /^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u;
+const numberedIndexHeading = /^\*\*(\d+(?:\.\d+)+)\s+.+\*\*$/;
+const stripIndexDate = line => line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, '');
+
+function indexPreview(line) {
+  const clean = stripIndexDate(line);
+  for (const match of clean.matchAll(/。(?:\*\*)?/gu)) {
+    const sentence = clean.slice(0, match.index + match[0].length);
+    if (hasBalancedIndexMarkup(sentence)) return sentence;
+  }
+  if (!/[、，,:：]$/u.test(clean) && hasBalancedIndexMarkup(clean)) return clean;
+  return null;
+}
+
+function hasBalancedIndexMarkup(line) {
+  return (line.match(/\*\*/g) ?? []).length % 2 === 0
+    && (line.match(/`/g) ?? []).length % 2 === 0;
+}
+
 export function makeIndex(body) {
   let fence = null;
   const lines = body.replace(/\r\n/g, '\n').split('\n').filter(line => {
@@ -680,35 +785,32 @@ export function makeIndex(body) {
   const kept = [indexLead];
   const conclusions = new Map();
   let previousNonempty = '';
+  let currentSection;
+  const includedSubheadings = new Set();
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // 絶対ルール直後の太字小見出しは参照先として残す。通常の詳細見出しは展開しない。
-    if (/^\*\*\d+(?:\.\d+)+\s+.+\*\*$/.test(line)
-      && /^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(previousNonempty)) {
-      kept.push(line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, ''));
+    const subheading = line.match(numberedIndexHeading);
+    if (subheading && indexRuleStart.test(previousNonempty) && subheading[1] !== currentSection) {
+      const title = stripIndexDate(line);
+      if (!includedSubheadings.has(title)) {
+        includedSubheadings.add(title);
+        kept.push(title);
+      }
     }
     if (line.trim()) previousNonempty = line;
     if (/^#{1,3}(?:\s|$)/.test(line)) {
-      // 実文書のタイトルと章見出しは全文へ委ね、参照先になる個別規約の見出しを優先する。
+      currentSection = line.match(/^###\s+(\d+(?:\.\d+)+)(?=\s|$)/)?.[1];
       const broadOnboardingHeading = /^# オージャスト Claude Code 共通ルール/.test(line) || /^##(?:\s|$)/.test(line);
-      if (!broadOnboardingHeading) kept.push(line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, ''));
-      // 大見出しは案内だけにし、個別規約（###）の結論と絶対ルールを優先する。
-      for (let j = i + 1; /^###\s/.test(line) && j < lines.length && !/^#{1,3}(?:\s|$)/.test(lines[j]); j++) {
+      if (!broadOnboardingHeading) kept.push(stripIndexDate(line));
+      for (let j = i + 1; /^###\s/.test(line) && j < lines.length; j++) {
         const candidate = lines[j].trim();
         if (!candidate) continue;
-        // Absolute rules are emitted in full by the outer loop. A first-sentence
-        // preview would duplicate (and sometimes truncate) the same obligation.
-        if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(candidate)) break;
-        const end = candidate.indexOf('。');
-        // 結論文の日付付き由来も見出しと同じく全文へ委ねる(予算の常時の余裕を作る)。
-        const conclusion = isMandatoryIndexLine(candidate) ? candidate
-          : (end >= 0 ? candidate.slice(0, end + 1) : candidate).replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, '');
-        // 結論として拾った絶対ルール・太字小見出しも短縮対象にしない。
-        if (!/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(candidate)
-          && !/^\*\*\d+(?:\.\d+)+\s+.+\*\*$/.test(candidate)
-          && !INDEX_PROTECTED.some(pattern => pattern.test(conclusion))) {
-          conclusions.set(kept.length, [...conclusion]);
-        }
+        if (candidate.startsWith('<!--') || numberedIndexHeading.test(candidate)) continue;
+        if (candidate.startsWith('#') || indexRuleStart.test(candidate)) break;
+        const mandatory = isMandatoryIndexLine(candidate);
+        const conclusion = mandatory ? candidate : indexPreview(candidate);
+        if (!conclusion) continue;
+        if (!mandatory && !/\*\*|`|\[|\]/.test(conclusion)) conclusions.set(kept.length, [...conclusion]);
         kept.push(conclusion);
         break;
       }
@@ -716,7 +818,7 @@ export function makeIndex(body) {
     // 絶対ルール・上限規定の行は全文のまま残す。原文は `**🛑 上限…` のように強調記号が先に来るので
     // 先頭の `*` を許容する(ここを `**🔴` だけにすると 🛑/⚙️/🔁 の4行が索引から落ちる)。
     // 通常は行末の由来を全文へ委ねる。判断軸は ONBOARDING と配布先で同じ一文を参照する要件のため原文を保つ。
-    if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line) && kept.at(-1) !== line) {
+    if (indexRuleStart.test(line) && kept.at(-1) !== line) {
       kept.push(line.includes('判断軸はオージャストの長期的利益の最大化')
         ? line
         : line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）(?=。?\*\*$)/u, ''));
@@ -769,9 +871,51 @@ export async function syncMission({ repoDir = repoPath, targetHome = home, isDry
   return true;
 }
 
+// 2026-11-26 kim 厳命: 絶対ルール節（ONBOARDING §1 の「### 🛑 絶対ルール」）を全AIの指示ファイルの**最上部**へ置く。
+// 共通ルールブロックは PC 固有の記述の下にあるため、別ブロックとしてファイル先頭に固定する。
+export const ABSOLUTE_BEGIN = '<!-- BEGIN: 絶対ルール (自動同期・編集しても上書きされる) -->';
+export const ABSOLUTE_END = '<!-- END: 絶対ルール -->';
+export function extractAbsoluteRules(body) {
+  const lines = String(body || '').replace(/\r/g, '').split('\n');
+  const start = lines.findIndex(l => /^#{2,3} 🛑 絶対ルール/.test(l));
+  if (start < 0) return '';
+  let end = lines.findIndex((l, i) => i > start && /^#{1,3} /.test(l));
+  if (end < 0) end = lines.length;
+  // 索引向けの1行要約（「全文はCLAUDE.md最上部」）は最上部ブロック自身には要らないので除く。
+  return lines.slice(start, end).filter(l => !/全文はCLAUDE\.md最上部/.test(l)).join('\n').replace(/\n{3,}/g, '\n\n').replace(/^#{2,3} /, '# ').trim();
+}
+export function placeAbsoluteBlock(current, rules) {
+  let text = String(current ?? '');
+  const b = text.indexOf(ABSOLUTE_BEGIN), e = b >= 0 ? text.indexOf(ABSOLUTE_END, b) : -1;
+  if (b >= 0 && e >= 0) text = text.slice(0, b) + text.slice(e + ABSOLUTE_END.length).replace(/^\r?\n+/, '');
+  text = text.replace(/^\uFEFF/, '').replace(/^\s+/, '');
+  if (!rules) return text;
+  return `${ABSOLUTE_BEGIN}\n${rules}\n${ABSOLUTE_END}\n\n${text}`;
+}
+// Codex(AGENTS.md)・Gemini CLI(GEMINI.md) を使う PC（設定フォルダがある PC）にも同じ絶対ルールを最上部へ。
+export const AGENT_INSTRUCTION_MIRRORS = Object.freeze([['.codex', 'AGENTS.md'], ['.gemini', 'GEMINI.md']]);
+export function mirrorAbsoluteRules(targetHome, rules, { preview = false, log = () => {} } = {}) {
+  const changed = [];
+  if (!rules) return changed;
+  for (const [dir, file] of AGENT_INSTRUCTION_MIRRORS) {
+    const folder = path.join(targetHome, dir);
+    if (!fs.existsSync(folder)) continue;
+    const file_ = path.join(folder, file);
+    const current = fs.existsSync(file_) ? fs.readFileSync(file_, 'utf8') : '';
+    const updated = placeAbsoluteBlock(current, rules);
+    if (updated === current) continue;
+    changed.push(file_);
+    if (preview) continue;
+    if (current) fs.copyFileSync(file_, `${file_}.bak-absolute-rules`);
+    fs.writeFileSync(file_, updated, 'utf8');
+    log(`absolute rules -> ${file_}`);
+  }
+  return changed;
+}
+
 export function build(current, body, label) {
   current = dedupePreferences(current, body);
-  const block = `${beginPrefix} (自動同期 ${label}) -->\n- 基本理念・判断基準（毎セッション読み込み・迷ったらここに戻る）: @~/.claude/orgiast-mission.md\n${body}\n- 全社共有の知見（kim-PC の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n- 制作・営業・見積・案件の着手前: ~/.claude/knowledge/production-sales/00_INDEX.md を読み、必要な節だけ Grep。全文を丸読みしない。\n${endMarker}`;
+  const block = `${beginPrefix} (自動同期 ${label}) -->\n- 基本理念・判断基準（毎セッション読み込み・迷ったらここに戻る）: @~/.claude/orgiast-mission.md\n${body}\n- 全社共有の知見（kim 本人が操作する生存席の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n- 制作・営業・見積・案件の着手前: ~/.claude/knowledge/production-sales/00_INDEX.md を読み、必要な節だけ Grep。全文を丸読みしない。\n${endMarker}`;
   if (current === null) return { updated: block, action: '新規作成' };
   // 行全体が開始マーカー形式そのものである場合だけ対象にする(部分一致は自己言及文書に誤爆する)。
   // ラベル部分の形式は縛らない: 日付形式を固定すると、別形式で導入されたPCで置換に失敗し
@@ -870,7 +1014,10 @@ async function main() { try {
   const hash = crypto.createHash('sha256').update(bodyBytes).digest('hex');
   const body = bodyBytes.toString('utf8');
   const current = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
+  const absoluteRules = extractAbsoluteRules(body);
   const result = build(current, makeIndex(body), now.toISOString().slice(0, 10));
+  result.updated = placeAbsoluteBlock(result.updated, absoluteRules);
+  try { mirrorAbsoluteRules(home, absoluteRules, { preview: dryRun, log }); } catch (e) { log(`absolute rules mirror failed: ${e.message}`); }
   const rulesCurrent = fs.existsSync(rulesPath) ? fs.readFileSync(rulesPath) : null;
   if (!dryRun && current === result.updated && rulesCurrent?.equals(bodyBytes)) { save(hash, now); return; }
   if (dryRun) {

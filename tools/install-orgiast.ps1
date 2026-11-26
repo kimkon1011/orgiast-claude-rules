@@ -523,7 +523,7 @@ if ($runHiddenLoaded) { try {
   if ((Test-Path $nb) -and (Test-Path $nightlyBatch)) {
     $act = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $nb, '-Target', 'tools\nightly-batch.ps1')
     $trg = New-ScheduledTaskTrigger -Daily -At 3:00am -RandomDelay (New-TimeSpan -Minutes 2)
-    $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 5)
+    $set = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 5)
     Register-ScheduledTask -TaskName 'OrgiastNightlyBatch' -Action $act -Trigger $trg -Settings $set -Force -ErrorAction Stop | Out-Null
     OK "定時起動 登録完了(毎日03:00 OrgiastNightlyBatch・夜間バッチ半額実行)"
   } else { Warn "nightly-batch.ps1 未取得=定時起動スキップ(他機能は動作)" }
@@ -705,6 +705,28 @@ if (Have npm) {
   # このあとの codex login 用に npm グローバルbin を現セッションPATHへ
   if ((Test-Path $npmBin) -and ($env:Path -notlike "*$npmBin*")) { $env:Path += ";$npmBin" }
 } else { Warn "npm が見つからないためCLI導入をスキップ(PC再起動後にコマンドを再実行してください)" }
+
+# Cursor アプリ（必須）。ログインは手順6 / login-services.ps1 で行う。
+if (Have winget) {
+  Say "  Cursor を winget で導入します(最大5分)..." 'Gray'
+  try {
+    winget install --id Anysphere.Cursor -e --source winget --scope user --accept-package-agreements --accept-source-agreements --disable-interactivity | Out-Null
+  } catch {}
+  $cursorExe = Join-Path $env:LOCALAPPDATA 'Programs\cursor\Cursor.exe'
+  if (Test-Path $cursorExe) { OK "Cursor アプリ導入完了" } else { Warn "Cursor アプリが入っていない可能性があります。後で『winget install --id Anysphere.Cursor -e --scope user』で導入可" }
+} else { Warn "winget が無いため Cursor アプリ導入をスキップ" }
+
+# Cursor Agent CLI（必須）。公式インストーラ。ログインはしない。
+try {
+  Say "  Cursor Agent CLI を公式インストーラで導入します..." 'Gray'
+  $cursorAgentDir = Join-Path $env:LOCALAPPDATA 'cursor-agent'
+  irm 'https://cursor.com/install?win32=true' | iex
+  $agentCmd = Join-Path $cursorAgentDir 'agent.cmd'
+  if ((Test-Path $agentCmd) -and ($env:Path -notlike "*$cursorAgentDir*")) { $env:Path += ";$cursorAgentDir" }
+  if (Test-Path $agentCmd) { OK "Cursor Agent CLI 導入完了" } else { Warn "Cursor Agent CLI が入っていない可能性があります。後で公式インストーラ『irm https://cursor.com/install?win32=true | iex』で導入可" }
+} catch {
+  Warn "Cursor Agent CLI の導入に失敗しました。後で公式インストーラを再実行してください"
+}
 
 # --- 初回実行(共通ルール取込) ---
 Step "共通ルールの初回取込(動作確認)"

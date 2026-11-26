@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runScheduleSync, isScheduleCandidate, isDuplicate, eventBody, extractEvents, parseArgs, parseExtraction, calendarToken, CALENDAR_SCOPE, createCalendarClient, collectMessages, makeLlm, parseBatchExtraction, extractBatch, isAutomatedGmail, excerptScheduleText, main } from './schedule-sync.mjs';
+import { runScheduleSync, isScheduleCandidate, isDuplicate, eventBody, extractEvents, parseArgs, parseExtraction, calendarToken, CALENDAR_SCOPE, createCalendarClient, collectMessages, makeLlm, parseBatchExtraction, extractBatch, isAutomatedGmail, excerptScheduleText, main, targetCalendarForGroup, migrateGakkai } from './schedule-sync.mjs';
 import { searchGmail } from './gmail-search.mjs';
 import { fetchMessages } from './discord-digest.mjs';
 import { callWithFallback } from './llm-fallback.mjs';
@@ -14,15 +14,20 @@ const candidate = { title: '全社mtg', start: '2026-10-26T12:00:00+09:00', end:
 function setup(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'schedule-sync-test-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const creates = [], dms = [];
+  const creates = [], dms = [], calendars = [];
   const deps = {
     collect: async () => ({ messages: [message], stats: { line: 1 } }),
     llm: async () => JSON.stringify([candidate]),
     calendar: { get: async () => null, list: async () => [], create: async body => { creates.push(body); return { ...body, htmlLink: 'https://calendar.google.com/event?id=test' }; } },
+    gakkaiCalendar: {
+      get: async () => null, list: async () => [],
+      create: async body => { calendars.push('seisaku-team@orgiast.jp'); creates.push(body); return body; },
+    },
     dm: async text => { dms.push(text); }, log: () => {},
   };
+  deps.aiCalendar = deps.calendar;
   const options = { now, stateDir: path.join(dir, 'state'), home: dir, sources: ['line'] };
-  return { dir, creates, dms, deps, options, run: () => runScheduleSync(options, deps) };
+  return { dir, creates, dms, calendars, deps, options, run: () => runScheduleSync(options, deps) };
 }
 const response = (value, status = 200) => new Response(JSON.stringify(value), { status });
 
@@ -42,7 +47,7 @@ test('new appointment: automatic title, one hour, provenance, default reminders 
   assert.equal((await x.run()).counts.created, 1);
   assert.equal(x.creates[0].summary, '【自動】【ラハイナ】全社mtg');
   assert.equal(Date.parse(x.creates[0].end.dateTime) - Date.parse(x.creates[0].start.dateTime), 3600000);
-  assert.match(x.creates[0].description, /出典: LINE \/ ラハイナ PJ\n送信者: 担当者\n送信日時: 2026-10-16/);
+  assert.match(x.creates[0].description, /^案件: ラハイナ\n出典: LINE \/ ラハイナ PJ\n送信者: 担当者\n送信日時: 2026-10-16/);
   assert.ok(x.creates[0].description.endsWith(message.text));
   assert.deepEqual(x.creates[0].reminders, { useDefault: true });
   assert.match(x.dms[0], /2026-10-26 12:00.*全社mtg.*LINE.*https:\/\/calendar/);
@@ -714,6 +719,61 @@ for (const [chat, title, text] of [
     assert.equal(x.creates.length, 1);
   });
 }
+
+test('学会名・nxa を制作チームの Calendar に振り分ける', async t => {
+  assert.equal(targetCalendarForGroup('1121福岡NXA'), 'seisaku-team@orgiast.jp');
+  assert.equal(targetCalendarForGroup('日本早産学会'), 'seisaku-team@orgiast.jp');
+  assert.equal(targetCalendarForGroup('通常案件'), 'primary');
+  const x = setup(t);
+  x.deps.collect = async () => ({ messages: [{ ...message, chat: '日本早産学会' }], stats: {} });
+  x.deps.calendar.create = async () => assert.fail('kim のカレンダーへの登録');
+  assert.equal((await x.run()).counts.created, 1);
+  assert.deepEqual(x.calendars, ['seisaku-team@orgiast.jp']);
+  assert.equal(Object.hasOwn(x.creates[0], '_targetCalendar'), false);
+});
+
+test('Calendar API に送る attendees から社外を除外し、ログを出す', async t => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  let body;
+  const client = createCalendarClient('mock', async (url, init) => {
+    assert.match(url, /events\?sendUpdates=none$/);
+    body = JSON.parse(init.body);
+    return response({ id: 'event' });
+  });
+  const internal = { email: 'staff@orgiast.jp', optional: true };
+  await client.create({ attendees: [internal, { email: 'client@example.com' }, { email: 'spoof@orgiast.jp.example.com' }] });
+  assert.deepEqual(body.attendees, [internal]);
+  assert.match(warn.mock.calls[0].arguments[0], /client@example\.com/);
+});
+
+test('学会移行は dry-run で一覧のみ表示し、適用時は events.move と成功件数を記録する', async t => {
+  const { dir } = setup(t);
+  const future = { id: 'gakkai', summary: '【自動】【福岡NXA】設営', start: { date: '2026-11-22' }, end: { date: '2026-11-23' } };
+  const ongoing = { ...future, id: 'ongoing', start: { date: '2026-11-19' }, end: { date: '2026-11-22' } };
+  const preparation = { id: 'prep', summary: '📋 準備: 【自動】【福岡NXA】設営',
+    start: { dateTime: '2026-11-21T08:00:00+09:00' }, end: { dateTime: '2026-11-21T10:00:00+09:00' } };
+  const expected = [future, ongoing, preparation];
+  const moves = [];
+  const options = {
+    home: dir, now: new Date('2026-11-21T00:00:00Z'), getToken: async () => 'mock',
+    fetchImpl: async (url, init) => {
+      if (init.method === 'POST') { moves.push(new URL(url)); return response(future); }
+      assert.equal(new URL(url).searchParams.get('timeMin'), options.now.toISOString());
+      return response({ items: [...expected,
+        { ...ongoing, id: 'past', end: { date: '2026-11-21' } },
+        { ...preparation, id: 'ended-now', end: { dateTime: options.now.toISOString() } },
+        { ...preparation, id: 'ordinary', summary: '📋 準備: 【自動】【通常案件】設営' }] });
+    },
+  };
+  assert.deepEqual((await migrateGakkai({ ...options, dryRun: true })).candidates, expected.map(({ end, ...event }) => event));
+  assert.equal(moves.length, 0);
+  assert.equal(await main(['--migrate'], options), 0);
+  assert.match(moves[0].pathname, /kim%40orgiast.jp\/events\/gakkai\/move$/);
+  assert.equal(moves[0].searchParams.get('destination'), 'seisaku-team@orgiast.jp');
+  const report = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'logs', 'schedule-sync-gakkai-move.json')));
+  assert.equal(report.movedCount, expected.length);
+  assert.deepEqual(report.moved, expected.map(({ id, summary }) => ({ id, summary })));
+});
 
 test('chat 未指定の除外ルールは全チャンネルに適用する', async t => {
   const x = setup(t);

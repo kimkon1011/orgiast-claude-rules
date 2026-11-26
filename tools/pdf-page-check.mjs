@@ -97,7 +97,13 @@ export function installMupdf({ renderDir = PDF_RENDER_DIR, run = spawnSync } = {
   if (fs.existsSync(npmBin)) candidates.push(fs.realpathSync(npmBin));
   const npm = candidates.find(file => fs.existsSync(file));
   if (!npm) throw new Error(`node と同じ場所に npm がありません: ${nodeDir}`);
-  const result = run(process.execPath, [npm, 'install', '--no-audit', '--no-fund', 'mupdf'], { cwd: renderDir, encoding: 'utf8', windowsHide: true, timeout: 180000 });
+  const result = run(process.execPath, [npm, 'install', '--prefix', renderDir, '--no-audit', '--no-fund', 'mupdf'], {
+    cwd: renderDir,
+    env: { ...process.env, INIT_CWD: renderDir },
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 180000,
+  });
   if (result.status !== 0 || !fs.existsSync(entry)) throw new Error(`mupdf の導入に失敗しました (exit ${result.status}): ${result.error?.message || result.stderr || result.stdout}`);
   return { installed: true, path: entry };
 }

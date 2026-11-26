@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Remote Control session metadata only; no LLM/search requests.
+import { checkSessionConcurrency, SESSION_CONCURRENCY_CAP } from './lib/session-concurrency.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,12 +10,76 @@ import { spawnSync } from 'node:child_process';
 import { hostExitArchive } from './lib/host-exit-archive.mjs';
 import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
 import { isEntry } from './is-entry.mjs';
-import { countWindowsClaudeProcesses } from './lib/windows-process.mjs';
+import { CLAUDE_PROCESS_SCRIPT, countWindowsClaudeProcesses, listWindowsClaudeProcesses } from './lib/windows-process.mjs';
 import { addItem } from './kim-inbox.mjs';
 
 const DEFAULT_MAX_REOPEN = 3;
+// 自動 claude がこの本数以上なら新しい開き直しをしない（オーナー指定。REOPEN_MAX_CLAUDE で上書き）。
+export const DEFAULT_REOPEN_MAX_CLAUDE = 5;
+function maxClaudeFromEnv(env) {
+  const value = Number(env?.REOPEN_MAX_CLAUDE);
+  return Number.isFinite(value) ? value : DEFAULT_REOPEN_MAX_CLAUDE;
+}
 const BASE = 'https://api.anthropic.com/v1/code/sessions';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Retry with exponential backoff for transient network failures.
+// Base delay 1s, double each retry: 1s, 2s, 4s. Max 3 retries before giving up.
+const RETRY_MAX = 3;
+const RETRY_BASE_MS = 1000;
+export async function fetchWithRetry(url, init, retries = RETRY_MAX, {
+  timeoutMs = 30000,
+  deadline = Infinity,
+  nowFn = Date.now,
+  fetchImpl = fetch,
+} = {}) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (nowFn() >= deadline) throw Error('fetchWithRetry deadline exceeded');
+    try {
+      const signal = AbortSignal.timeout(timeoutMs);
+      const response = await fetchImpl(url, { ...init, signal });
+      if (response.ok) return response;
+      // 429/503/502 are transient; other 4xx are likely permanent.
+      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+        return response; // permanent error, don't retry
+      }
+      if (attempt < retries) {
+        await sleep(RETRY_BASE_MS * Math.pow(2, attempt));
+        continue;
+      }
+      return response; // last attempt, return whatever we got
+    } catch (e) {
+      if (attempt < retries) await sleep(RETRY_BASE_MS * Math.pow(2, attempt));
+      else throw e;
+    }
+  }
+  throw Error('fetchWithRetry exhausted');
+}
+// 連続失敗カウンターを ~/.claude/reopen-lost-sessions-fail-state.json で管理。
+// 連続 8 回（約 2 時間）以上失敗した場合のみ exit 1 を返す（監視が真の停止を検出できるようにする）。
+export const FAIL_STATE_FILE = 'reopen-lost-sessions-fail-state.json';
+export const CONSECUTIVE_FAIL_THRESHOLD = 8;
+export function readFailState(base) {
+  try { return readJson(path.join(base, FAIL_STATE_FILE), { consecutiveFails: 0, lastFailAt: null }); }
+  catch { return { consecutiveFails: 0, lastFailAt: null }; }
+}
+export function writeFailState(base, state) {
+  fs.writeFileSync(path.join(base, FAIL_STATE_FILE), JSON.stringify(state) + '\n');
+}
+export function recordApiResult(base, apiError, nowDate = new Date().toISOString()) {
+  const state = readFailState(base);
+  if (apiError) {
+    state.consecutiveFails = (state.consecutiveFails || 0) + 1;
+    state.lastFailAt = nowDate;
+    writeFailState(base, state);
+    return state.consecutiveFails >= CONSECUTIVE_FAIL_THRESHOLD;
+  }
+  if (state.consecutiveFails > 0) {
+    state.consecutiveFails = 0;
+    state.lastFailAt = null;
+    writeFailState(base, state);
+  }
+  return false;
+}
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
   catch (e) { if (e.code === 'ENOENT' && fallback !== undefined) return fallback; throw e; }
@@ -237,8 +302,11 @@ export function hasConversation(rows, bytes = 0) {
 // `.git` ディレクトリ（メイン checkout）に到達したらそこで打ち切って false。
 function isWorktreeFolder(cwd, fsImpl) {
   if (!cwd) return false;
-  const norm = normalizePath(cwd);
+  // A Windows absolute path on POSIX has no local ancestors to inspect.
+  const foreignAbsolute = !path.isAbsolute(cwd) && path.win32.isAbsolute(cwd);
+  const norm = foreignAbsolute ? path.win32.normalize(cwd).toLowerCase() : normalizePath(cwd);
   if (norm.includes('\\.claude\\worktrees\\')) return true;
+  if (foreignAbsolute) return false;
   let dir = path.resolve(cwd);
   while (true) {
     const gitPath = path.join(dir, '.git');
@@ -677,8 +745,13 @@ export async function connectedRcSessionIds({ fetchImpl = fetch, headers, now = 
   let cursor = '';
   do {
     if (now() >= deadline) throw Error('RC verification time limit');
-    const response = await fetchImpl(`${BASE}?${new URLSearchParams({ limit: '100', ...(cursor && { cursor }) })}`, {
-      headers, signal: AbortSignal.timeout(Math.max(1, deadline - now())),
+    const response = await fetchWithRetry(`${BASE}?${new URLSearchParams({ limit: '100', ...(cursor && { cursor }) })}`, {
+      headers,
+    }, RETRY_MAX, {
+      timeoutMs: Math.max(1, Math.min(deadline - now(), 30000)),
+      deadline,
+      nowFn: now,
+      fetchImpl,
     });
     if (!response.ok) throw Error(`RC API HTTP ${response.status}`);
     const body = await response.json();
@@ -693,6 +766,12 @@ export async function connectedRcSessionIds({ fetchImpl = fetch, headers, now = 
   return connected;
 }
 
+function processOutput(spawn, command, args, options) {
+  const result = spawn(command, args, { ...options, windowsHide: true });
+  if (result.error || result.status !== 0) throw result.error || new Error(`exit code ${result.status}`);
+  return result.stdout;
+}
+
 export async function getLoadGuardStatus({
   env = process.env,
   spawn = spawnSync,
@@ -704,7 +783,7 @@ export async function getLoadGuardStatus({
   isWaitingSession,
   now = Date.now,
 } = {}) {
-  const maxClaude = Number.isFinite(Number(env?.REOPEN_MAX_CLAUDE)) ? Number(env.REOPEN_MAX_CLAUDE) : 10;
+  const maxClaude = maxClaudeFromEnv(env);
   const maxCpu = Number.isFinite(Number(env?.REOPEN_MAX_CPU)) ? Number(env.REOPEN_MAX_CPU) : 85;
 
   let claudeCount = null;
@@ -712,11 +791,7 @@ export async function getLoadGuardStatus({
 
   if (checkClaude) {
     try {
-      claudeCount = countWindowsClaudeProcesses((command, args, options) => {
-        const result = spawn(command, args, { windowsHide: true, ...options });
-        if (result.error || result.status !== 0) throw result.error || new Error(`exit code ${result.status}`);
-        return result.stdout;
-      }, { sessionsDir, isWaitingSession, now });
+      claudeCount = countWindowsClaudeProcesses((...args) => processOutput(spawn, ...args), { sessionsDir, isWaitingSession, now });
     } catch (e) {
       loadError = e.message;
     }
@@ -765,11 +840,60 @@ export function parseOptions(args, spawn = spawnSync) {
   }
   return options;
 }
-export function acquireLock(file, now = Date.now()) {
-  try { if (now - fs.statSync(file).mtimeMs > 600000) fs.unlinkSync(file); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+function readLockHolder(file, now) {
+  let stat;
+  try { stat = fs.statSync(file); }
+  catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
+  let pid;
+  try {
+    const text = fs.readFileSync(file, 'utf8').trim();
+    if (/^[1-9]\d*$/.test(text) && Number(text) <= 0x7fffffff) pid = Number(text);
+  } catch { /* Reclaim a lock whose PID cannot be read. */ }
+  const ageMs = Math.max(0, now - stat.mtimeMs);
+  const stale = ageMs > 600_000;
+  let alive = false;
+  if (pid && !stale) {
+    try { process.kill(pid, 0); alive = true; }
+    catch (error) { alive = error.code !== 'ESRCH'; }
+  }
+  return { stat, alive, holderPid: pid, lockAgeSec: Math.floor(ageMs / 1000), stale };
+}
+
+export function acquireLock(file, now = Date.now(), onContention = () => {}) {
+  // Publish a complete PID record so another run cannot reclaim an empty file
+  // between exclusive creation and writing the PID.
+  const tempDir = fs.mkdtempSync(`${file}.`);
+  const tempFile = path.join(tempDir, 'pid');
   let fd;
-  try { fd = fs.openSync(file, 'wx'); } catch (e) { if (e.code === 'EEXIST') return null; throw e; }
-  fs.writeSync(fd, String(process.pid));
+  try {
+    fd = fs.openSync(tempFile, 'wx');
+    fs.writeSync(fd, String(process.pid));
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try { fs.linkSync(tempFile, file); break; }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+      const holder = readLockHolder(file, now);
+      if (holder.alive || attempt === 1) {
+        onContention(holder);
+        return null;
+      }
+      if (!holder.stat) continue;
+      try {
+        const current = fs.statSync(file);
+        if (current.ino === holder.stat.ino && current.mtimeMs === holder.stat.mtimeMs && current.size === holder.stat.size) {
+          fs.unlinkSync(file);
+        }
+      } catch (error) {
+        if (error.code !== 'ENOENT') {
+          onContention(holder);
+          return null;
+        }
+      }
+    }
+  } finally {
+    try { if (fd !== undefined) fs.closeSync(fd); }
+    finally { fs.rmSync(tempDir, { recursive: true, force: true }); }
+  }
+  fd = fs.openSync(file, 'r+');
   const timer = setInterval(() => {
     const date = new Date();
     // Primary: fd-based futimesSync for mtime tracking
@@ -824,8 +948,8 @@ export function resolveClaudeCli({ env = process.env, exists = fs.existsSync, re
 export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_MAX_REOPEN, gapSec = 10,
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs, stateBased = false,
-  checkCpu = true, checkClaude = false, cpusImpl, vscodeStartedAt, openDb, checkIdle = true, idleImpl } = {}) {
-  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closable: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0, unverifiedStreak: 0, processRunning: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
+  checkCpu = true, checkClaude = false, cpusImpl, vscodeStartedAt, openDb, checkIdle = true, idleImpl, checkConcurrency = checkSessionConcurrency, concurrencyPlatform = process.platform } = {}) {
+  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], retriedViaExtension: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closable: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0, unverifiedStreak: 0, processRunning: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
   const progress = (stage, detail) => { if (!dryRun) writeProgress(base, stage, detail); };
   const initialHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
   const hiddenSessionIds = initialHidden.ids;
@@ -833,10 +957,19 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
     result.hiddenError = initialHidden.error;
   }
   // Dry run is strictly read-only: no lock or log mutation on the user's PC.
-  const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'));
-  if (!release) return { ...result, error: 'locked' };
-  progress('lock', 'acquired');
+  let lockHolder;
+  const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'), now(), holder => { lockHolder = holder; });
+  if (!release) {
+    const { alive, holderPid, lockAgeSec, stale } = lockHolder;
+    const entry = alive
+      ? { at: result.at, skipped: 'locked', holderPid, lockAgeSec, stale }
+      : { at: result.at, error: 'locked', holderPid, lockAgeSec, stale };
+    appendReopenLog(base, entry);
+    if (alive) return { ...result, locked: true };
+    return { ...result, error: 'locked' };
+  }
   try {
+    progress('lock', 'acquired');
     const credFile = path.join(base, '.credentials.json');
     const claudeJsonFile = path.join(base, '..', '.claude.json');
     let token, org;
@@ -849,7 +982,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
         throw Error(`Missing accessToken in ${credFile}: topKeys=${topKeys.join(',')} oauthKeys=${oauthKeys.join(',')}`);
       }
     } catch (e) {
-      if (e.code === 'ENOENT') throw Error(`RC credentials file not found: ${credFile}`);
+      if (e.code === 'ENOENT') { result.rcAvailable = false; return result; }
       throw e;
     }
     try {
@@ -920,7 +1053,13 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
     const deadline = now() + (stateBased ? 180000 : 60000);
     const get = async url => {
       if (now() >= deadline) throw Error('API time limit');
-      const response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(Math.max(1, deadline - now())) });
+      const timeoutMs = Math.max(1, Math.min(deadline - now(), 30000));
+      const response = await fetchWithRetry(url, { headers }, RETRY_MAX, {
+        timeoutMs,
+        deadline,
+        nowFn: now,
+        fetchImpl,
+      });
       if (!response.ok) throw Error(`RC API HTTP ${response.status}`);
       return response.json();
     };
@@ -1022,12 +1161,22 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
       if (idleSec !== null && idleSec < REOPEN_MIN_IDLE_SEC) {
         result.deferredActive = idleSec;
       } else {
-      const loadStatus = await getLoadGuardStatus({ env, spawn, cpusImpl, wait, checkCpu, checkClaude, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now });
+      // Both guards use the same CIM snapshot. Keep the load guard's tasklist fallback.
+      let snapshot;
+      const snapshotSpawn = (command, args, options) => {
+        if (args.at(-1) !== CLAUDE_PROCESS_SCRIPT) return spawn(command, args, { ...options, windowsHide: true });
+        if (!snapshot) {
+          try { snapshot = spawn(command, args, { ...options, windowsHide: true }); }
+          catch (error) { snapshot = { error }; }
+        }
+        return snapshot;
+      };
+      const loadStatus = await getLoadGuardStatus({ env, spawn: snapshotSpawn, cpusImpl, wait, checkCpu, checkClaude, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now });
       if (loadStatus.error) {
         result.loadGuard = { claudeCount: loadStatus.claudeCount, cpuPct: loadStatus.cpuPct, reason: loadStatus.reason, error: loadStatus.error };
       }
       const cpuThreshold = Number.isFinite(Number(env.REOPEN_MAX_CPU)) ? Number(env.REOPEN_MAX_CPU) : 85;
-      const claudeThreshold = Number.isFinite(Number(env.REOPEN_MAX_CLAUDE)) ? Number(env.REOPEN_MAX_CLAUDE) : 10;
+      const claudeThreshold = maxClaudeFromEnv(env);
       const isCpuHigh = loadStatus.cpuPct !== null && loadStatus.cpuPct >= cpuThreshold;
       const isClaudeHigh = loadStatus.claudeCount !== null && loadStatus.claudeCount >= claudeThreshold;
 
@@ -1041,17 +1190,23 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
           result.deferredCpu = loadStatus.cpuPct;
           reopenCandidates = [];
         } else if (isClaudeHigh) {
-          // claudeCount high → still reopen 1 candidate so RC doesn't stay cut off
-          const allowCount = Math.min(1, reopenCandidates.length);
-          const skipCount = reopenCandidates.length - allowCount;
-          if (skipCount > 0) result.skipped.loadGuard = skipCount;
-          result.loadGuard.allowFirst = true;
-          reopenCandidates = reopenCandidates.slice(0, allowCount);
+          // 既定は 0 件。REOPEN_ALLOW_FIRST=1 のときだけ、従来どおり 1 件だけ開く。
+          if (env?.REOPEN_ALLOW_FIRST === '1') {
+            const allowCount = Math.min(1, reopenCandidates.length);
+            const skipCount = reopenCandidates.length - allowCount;
+            if (skipCount > 0) result.skipped.loadGuard = skipCount;
+            result.loadGuard.allowFirst = true;
+            reopenCandidates = reopenCandidates.slice(0, allowCount);
+          } else {
+            result.skipped.loadGuard = reopenCandidates.length;
+            reopenCandidates = [];
+          }
         }
       }
 
       if (reopenCandidates.length) {
         const code = codeCli || resolveCodeCli(env, fsImpl.existsSync);
+        let capacity;
         let windowOpened = false; // 1回の実行で新規ウィンドウを作るのは最大1回まで
         for (const candidate of reopenCandidates) {
           progress('open', `id=${candidate.id}`);
@@ -1086,6 +1241,15 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
               targetPath = null;
               openedWith = null;
             }
+            capacity ??= checkConcurrency({
+              env, platform: concurrencyPlatform,
+              list: () => listWindowsClaudeProcesses((...args) => processOutput(snapshotSpawn, ...args)),
+            });
+            const count = capacity.count === null ? null : capacity.count + result.reopened.length;
+            if (!capacity.ok || (count !== null && count >= capacity.limit)) {
+              result.sessionConcurrencyCap = { ...capacity, ok: false, reason: SESSION_CONCURRENCY_CAP, count };
+              break;
+            }
             if (launch === 'opened-window') {
               // ウィンドウを開く
               windowOpened = true;
@@ -1119,10 +1283,14 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
         if (result.reopened.length) {
           progress('verify', `waiting 90s for ${result.reopened.length} reopened`);
           await wait(90000);
-          let agents, connected;
-          try { agents = alive(); } catch (e) { result.verifyError = e.message; }
-          try { connected = await connectedRcSessionIds({ fetchImpl, headers, now }); }
-          catch (e) { result.verifyApiError = e.message; }
+          const verify = async () => {
+            let agents, connected;
+            try { agents = alive(); } catch (e) { result.verifyError = e.message; }
+            try { connected = await connectedRcSessionIds({ fetchImpl, headers, now }); }
+            catch (e) { result.verifyApiError = e.message; }
+            return { agents, connected };
+          };
+          const { agents, connected } = await verify();
           if (agents || connected) {
             result.verified = [];
             result.unverified = [];
@@ -1131,14 +1299,47 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
               else if (agents) result.unverified.push(r.id);
             }
           }
+          const unverified = new Set(result.unverified);
+          for (const candidate of result.reopened) {
+            const { id } = candidate;
+            if (!unverified.delete(id)) continue;
+            try {
+              const retryLoad = await getLoadGuardStatus({ env, spawn, cpusImpl, wait, checkCpu, checkClaude, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now });
+              if (retryLoad.triggered) continue;
+              const current = [...localIndex(base, id).values()].find(local => local.id === id);
+              const hidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
+              const reason = exclusion(current, closedIds(base), alive(), hidden.error ? hiddenSessionIds : hidden.ids);
+              if (reason) { result.skipped[reason]++; continue; }
+              if (isSessionProcessRunning({ ...candidate, bridgeSessionId: current.bridgeSessionId || candidate.bridgeSessionId }, {
+                sessionsDir: path.join(base, 'sessions'), spawn, fsImpl,
+              })) { result.skipped.processRunning++; continue; }
+              const uri = `vscode://orgiast.next-session/reopen?session=${encodeURIComponent(id)}`;
+              ps(`& ${quotePS(code)} --open-url ${quotePS(uri)}; exit $LASTEXITCODE`, spawn);
+              result.retriedViaExtension.push(id);
+            } catch (error) {
+              (result.extensionRetryFailed ??= []).push({ id, error: error.message });
+            }
+          }
+          if (result.retriedViaExtension.length) {
+            progress('verify-extension', `waiting 90s for ${result.retriedViaExtension.length} retried`);
+            await wait(90000);
+            const afterRetry = await verify();
+            const recovered = new Set(result.reopened.filter(r =>
+              afterRetry.agents?.has(r.id) || afterRetry.connected?.has(r.rcId)).map(r => r.id));
+            result.verified.push(...result.unverified.filter(id => recovered.has(id)));
+            result.unverified = result.unverified.filter(id => !recovered.has(id));
+          }
         }
       }
       }
     }
   } catch (error) { result.error = error.message; }
   finally {
-    try { if (!dryRun) fs.appendFileSync(path.join(base, 'reopen-lost-sessions.log'), JSON.stringify(result) + '\n'); }
-    finally { progress('done', 'log written'); release(); }
+    try { if (!dryRun) appendReopenLog(base, result); }
+    finally {
+      try { progress('done', 'log written'); }
+      finally { release(); }
+    }
   }
   // Persistent failure notification: when loadGuard blocks everything or credentials fail,
   // notify once per 6h window via kim-inbox (deduped by error type + date).
@@ -1195,10 +1396,10 @@ export async function watchReopen(opts = {}, maxParam) {
   const until = new Date(nowTime - 60000).toISOString();
   const result = await reopenLost({
     since, until, max, dryRun, base, fetchImpl, spawn, wait, now: nowFn, claudeCli, codeCli, env, fsImpl, windowReady, cpusImpl,
-    checkIdle, idleImpl,
+    checkIdle, idleImpl, checkConcurrency: opts?.checkConcurrency, concurrencyPlatform: opts?.concurrencyPlatform,
     stateBased: true, checkClaude: true, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now: nowFn
   });
-  if (!result.error && !result.apiError && !result.deferredCpu && !result.deferredActive && !result.skipped?.loadGuard && !dryRun) {
+  if (!result.locked && !result.error && !result.apiError && !result.deferredCpu && !result.deferredActive && !result.skipped?.loadGuard && !result.sessionConcurrencyCap && !dryRun) {
     fs.writeFileSync(stateFile, JSON.stringify({ watermark: until }) + '\n');
   }
   return result;
@@ -1221,29 +1422,38 @@ export function watchdogRecord(base, { exitImpl = process.exit } = {}) {
     exitImpl(2);
   }
 }
+function appendReopenLog(base, entry) {
+  fs.appendFileSync(path.join(base, 'reopen-lost-sessions.log'), JSON.stringify(entry) + '\n');
+}
+
 if (isEntry(import.meta.url)) {
+  const args = process.argv.slice(2);
+  let base = path.join(os.homedir(), '.claude');
+  let dryRun = args.includes('--dry-run');
+  let watchdogTimer;
   try {
-    const opts = parseOptions(process.argv.slice(2));
-    if (opts.watch) {
-      const base = opts.base || path.join(os.homedir(), '.claude');
-      const watchdogTimer = opts.dryRun ? null : setTimeout(() => {
-        watchdogRecord(base);
-      }, 20 * 60 * 1000);
-      const result = await watchReopen({
-        base: opts.base,
-        max: opts.maxSet ? opts.max : DEFAULT_MAX_REOPEN,
-        dryRun: opts.dryRun,
-      });
-      clearTimeout(watchdogTimer);
-      console.log(JSON.stringify(result));
-      if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
-      // loadGuard blocked all candidates → not a clean run
-      if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) process.exitCode = 1;
-    } else {
-      const result = await reopenLost({ ...opts, checkClaude: true });
-      console.log(JSON.stringify(result));
-      if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
-      if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) process.exitCode = 1;
+    const opts = parseOptions(args);
+    base = opts.base ?? base;
+    dryRun = opts.dryRun;
+    if (opts.watch && !dryRun) {
+      watchdogTimer = setTimeout(() => watchdogRecord(base), 20 * 60 * 1000);
     }
-  } catch (error) { console.log(JSON.stringify({ error: error.message })); process.exitCode = 1; }
+    const result = opts.watch
+      ? await watchReopen({ base, max: opts.maxSet ? opts.max : DEFAULT_MAX_REOPEN, dryRun })
+      : await reopenLost({ ...opts, base, checkClaude: true });
+    console.log(JSON.stringify(result));
+    if (result.error || result.failed?.length || result.unverified?.length) process.exitCode = 1;
+    if (result.candidates?.length > 0 && !result.reopened?.length && result.skipped?.loadGuard > 0) process.exitCode = 1;
+    // 一時的な API エラーは連続失敗のしきい値まで exit 0。
+    if (!result.locked && !dryRun && recordApiResult(base, result.apiError)) process.exitCode = 1;
+  } catch (error) {
+    if (!dryRun) {
+      try { appendReopenLog(base, { at: new Date().toISOString(), error: error.message, stage: 'uncaught' }); }
+      catch {}
+    }
+    console.log(JSON.stringify({ error: error.message }));
+    process.exitCode = 1;
+  } finally {
+    clearTimeout(watchdogTimer);
+  }
 }

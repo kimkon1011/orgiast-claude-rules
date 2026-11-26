@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // Read-only freee/Gmail/Yahoo reconciliation. Only the dedicated Sheet tab and kim DM are written.
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import { readFile, writeFile, mkdir, rename, open, unlink } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
-import { getAccessToken } from './lib/freee-auth.mjs';
+import { getAccessToken, hasFreeeDbConfig } from './lib/freee-auth.mjs';
 import { sheetsMetadata, sheetsGet, sheetsAppend, ensureSheetTab, quoteTab } from './lib/sheets-dwd.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -35,8 +37,8 @@ export const shiftDay = (day, count) => new Date(Date.parse(`${day}T00:00:00Z`) 
 export const projectCode = (day) => `${day.slice(2, 4)}${day.slice(5, 7)}01OR`;
 function validDay(day) { return /^\d{4}-\d{2}-\d{2}$/.test(day) && !Number.isNaN(Date.parse(day)) && shiftDay(day, 0) === day; }
 export function parseArgs(argv, env = process.env) {
-  const opts = { today: env.EXPENSE_LEAK_TODAY || jstDay(), dryRun: false, weekly: false, noYahoo: false, noGmail: false, limit: Infinity, verification: false };
-  const flags = { '--dry-run': 'dryRun', '--weekly': 'weekly', '--no-yahoo': 'noYahoo', '--no-gmail': 'noGmail', '--verification': 'verification' };
+  const opts = { today: env.EXPENSE_LEAK_TODAY || jstDay(), dryRun: false, weekly: false, noYahoo: false, noGmail: false, limit: Infinity, verification: false, verbose: false };
+  const flags = { '--dry-run': 'dryRun', '--weekly': 'weekly', '--no-yahoo': 'noYahoo', '--no-gmail': 'noGmail', '--verification': 'verification', '--verbose': 'verbose' };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (flags[arg]) opts[flags[arg]] = true;
@@ -131,16 +133,62 @@ export async function checkWeb23Delivery(deps, days = WEB23_LOOKBACK_DAYS) {
   return parsed.messages.length === 0 ? { status: 'zero', count: 0 } : { status: 'ok', count: parsed.messages.length };
 }
 export function childSearch(script, args, timeout) {
+  if (!existsSync(script)) return Promise.resolve({ code: 1, stdout: '', unavailableReason: `この席に検索ツールがありません (${script})` });
   return new Promise((resolveChild) => {
-    execFile(process.execPath, [script, ...args], { windowsHide: true, timeout, maxBuffer: 2 * 1024 * 1024 }, (error, stdout) => {
+    execFile(process.execPath, [script, ...args], { windowsHide: true, timeout, maxBuffer: 2 * 1024 * 1024 }, (error, stdout, stderr) => {
       // Do not propagate raw child stderr (may contain credentials or browser settings).
-      resolveChild({ code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout: stdout || '', timedOut: !!error?.killed });
+      const unavailableReason = /GWS proxy: kim is calendar-only/.test(stderr || '') ? 'この席では読めません（calendar-only。別席で要照合）' : '';
+      resolveChild({ code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout: stdout || '', timedOut: !!error?.killed, ...(unavailableReason ? { unavailableReason } : {}) });
     });
   });
 }
+/** Map freee auth / DB bootstrap errors to a secret-free nightly failReason. */
+export function classifyDbConnectFailReason(error) {
+  const chain = [];
+  const seen = new Set();
+  const push = (err) => {
+    if (!err || seen.has(err)) return;
+    seen.add(err);
+    chain.push(err);
+    if (Array.isArray(err.errors)) for (const nested of err.errors) push(nested);
+    if (err.cause) push(err.cause);
+  };
+  push(error);
+  const codes = chain.map((e) => (e.code != null ? String(e.code) : '')).filter(Boolean);
+  const msgs = chain.map((e) => String(e.message ?? '')).join('\n');
+  const httpFromMsg = msgs.match(/(?:トークン更新に失敗:\s*)?HTTP\s+(\d{3})/i)?.[1]
+    || msgs.match(/freee-refresh-http-(\d{3})/i)?.[1];
+  if (codes.includes('ERR_MODULE_NOT_FOUND') || /Cannot find (?:package|module) ['"]?postgres/i.test(msgs)) {
+    return 'db-connect:module-missing';
+  }
+  if (/PURCHASING_APP_DATABASE_URL|見つかりません|ENOENT/i.test(msgs) && /env\.local|DATABASE_URL|見つかりません/i.test(msgs)) {
+    return 'db-connect:db-url-missing';
+  }
+  if (codes.includes('28P01') || /password authentication failed|SASL|invalid.?authorization|authentication failed/i.test(msgs)) {
+    return 'db-connect:db-auth';
+  }
+  const networkCodes = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET']);
+  if (codes.some((c) => networkCodes.has(c)) || /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|ECONNRESET|fetch failed|certificate|SELF_SIGNED|CERT_|getaddrinfo/i.test(msgs)) {
+    return 'db-connect:network';
+  }
+  if (/freee_tokens|default 行/i.test(msgs)) return 'db-connect:freee-row-missing';
+  if (/トークン更新|freee-refresh-http/i.test(msgs) && httpFromMsg) return `db-connect:freee-refresh-http-${httpFromMsg}`;
+  if (/トークン更新/i.test(msgs)) return 'db-connect:freee-refresh-http';
+  const tagged = msgs.match(/\bdb-connect:(module-missing|db-url-missing|db-auth|network|freee-row-missing|freee-refresh-http(?:-\d{3})?|unknown)\b/);
+  if (tagged) return `db-connect:${tagged[1]}`;
+  return 'db-connect:unknown';
+}
 export async function makeFreeeGet() {
   let token;
-  try { token = await getAccessToken(); } catch { throw new Error('freee authentication failed (check DB/token configuration)'); }
+  try {
+    token = await getAccessToken();
+  } catch (error) {
+    const reason = classifyDbConnectFailReason(error);
+    const wrapped = new Error(`freee authentication failed (${reason})`);
+    wrapped.cause = error;
+    wrapped.failReason = reason;
+    throw wrapped;
+  }
   return async (path, params = {}) => {
     if (!/^\/api\/1\/(walletables|wallet_txns(?:\/\d+)?)$/.test(path)) throw new Error('Unsupported freee read');
     const url = new URL(`https://api.freee.co.jp${path}`);
@@ -193,10 +241,16 @@ export async function searchEvidence(txn, opts, budget, deps) {
   let deferred = '';
   for (const user of USERS) {
     if (opts.noGmail) { deferred ||= '未検索(無効化)'; continue; }
+    if (budget.gmailUnavailable[user]) continue;
     if (budget.gmail[user] >= LIMITS.gmail) { deferred = '未検索(上限)'; continue; }
     if (!deps.timeLeft()) { deferred = '未検索(時間上限)'; break; }
     budget.gmail[user]++;
     const result = await deps.search(join(HERE, 'gmail-search.mjs'), ['--user', user, '--query', gmailQuery(txn), '--max', '20'], deps.timeout());
+    if (result.code !== 0 && result.unavailableReason) {
+      budget.gmailUnavailable[user] = result.unavailableReason;
+      issues.push(`Gmail ${user}: unavailable - ${result.unavailableReason}`);
+      continue;
+    }
     if (result.code !== 0) { issues.push(`Gmail ${user}: exit ${result.code}`); deferred ||= '未検索(障害)'; continue; }
     let messages;
     try { const parsed = JSON.parse(result.stdout); messages = parsed.messages; if (parsed.skipped) { deferred ||= '未検索(障害)'; issues.push(`Gmail ${user}: skipped ${parsed.skipped}`); } } catch { /* handled below */ }
@@ -209,7 +263,7 @@ export async function searchEvidence(txn, opts, budget, deps) {
   }
   if (opts.noYahoo) deferred ||= '未検索(無効化)';
   else if (budget.yahooFailed) deferred ||= '未検索(障害)';
-  else if (budget.yahooUnavailable) { /* Explicitly skip Yahoo after exit 2; Gmail results remain usable. */ }
+  else if (budget.yahooUnavailable) { /* Explicitly skip unavailable Yahoo; Gmail results remain usable. */ }
   else {
     const queries = [...amountVariants(txn.amount), merchantToken(txn.description)].filter(Boolean);
     // Await every browser child before launching another; never use --open.
@@ -218,7 +272,12 @@ export async function searchEvidence(txn, opts, budget, deps) {
       if (!deps.timeLeft()) { deferred = '未検索(時間上限)'; break; }
       budget.yahoo++;
       const result = await deps.search(opts.yahooScript, ['--query', query, '--max', '50'], deps.timeout());
-      if (result.code === 2) { budget.yahooUnavailable = true; break; }
+      if (result.code === 2 || result.unavailableReason) {
+        budget.yahooUnavailable = true;
+        budget.yahooUnavailableReason ||= result.unavailableReason || 'デスクトップ「ヤフオク再ログイン（ダブルクリック）」をお願いします';
+        issues.push(`Yahoo: unavailable - ${budget.yahooUnavailableReason}`);
+        break;
+      }
       if (result.code !== 0) { budget.yahooFailed = true; issues.push(`Yahoo: exit ${result.code}`); deferred ||= '未検索(障害)'; break; }
       const parsed = parseYahoo(result.stdout, txn, opts.today);
       evidence.push(...parsed.evidence);
@@ -226,7 +285,8 @@ export async function searchEvidence(txn, opts, budget, deps) {
       if (parsed.evidence.length) break;
     }
   }
-  return { evidence: [...new Map(evidence.map((e) => [`${e.box}:${e.link}:${e.subject}`, e])).values()], issues, deferred };
+  const unavailable = Object.keys(budget.gmailUnavailable).length > 0 || budget.yahooUnavailable;
+  return { evidence: [...new Map(evidence.map((e) => [`${e.box}:${e.link}:${e.subject}`, e])).values()], issues, deferred, unavailable };
 }
 export function sheetRows(results, today, verification = false) {
   return results.filter((r) => !r.deferred).map((r) => [today, r.date, r.account, r.description, r.amount, r.verdict,
@@ -240,7 +300,8 @@ export function dmText(result) {
     `${SHEET_LINK}?authuser=${encodeURIComponent('kim@orgiast.jp')}`, 'kim@orgiast.jp で開いてください'];
   if (result.web23?.status === 'zero') text.push(`⚠ ${WEB23_ADDRESS} 宛メールが過去${WEB23_LOOKBACK_DAYS}日0件。seisaku-team@ へのグループ配信が止まった可能性があり、Amazon 領収書の証跡が黙って抜けます。`);
   else if (result.web23?.status === 'unverified') text.push(`${WEB23_ADDRESS} の受信確認はできませんでした（${result.web23.reason}）。0件とは判定していません。`);
-  if (result.yahooUnavailable) text.push('デスクトップ『ヤフオク再ログイン（ダブルクリック）』をお願いします');
+  for (const [user, reason] of Object.entries(result.searches?.gmailUnavailable || {})) text.push(`${user} は ${reason}`);
+  if (result.yahooUnavailable) text.push(`Yahoo は ${result.searches?.yahooUnavailableReason || 'デスクトップ「ヤフオク再ログイン（ダブルクリック）」をお願いします'}`);
   if (result.issues.length) text.push(`一部検索を完了できませんでした (${result.issues.length}件)。結果JSONを確認してください。`);
   return text.join('\n');
 }
@@ -266,17 +327,21 @@ export async function runCheck(opts, injected = {}) {
   const save = injected.save || atomicJson;
   const state = injected.state || await readState(opts.statePath);
   if (opts.weekly && weeklySkip(opts.today, state.lastRunAt)) return { skip: true };
-  const result = { today: opts.today, from: opts.from, to: opts.to, dryRun: opts.dryRun, wallets: [], statusCounts: {}, candidateTotal: 0, results: [], cacheHits: 0, yahooUnavailable: false, issues: [], appended: 0, complete: false };
-  const budget = { gmail: Object.fromEntries(USERS.map((u) => [u, 0])), yahoo: 0, yahooUnavailable: false, yahooFailed: false, yahooUnverified: 0 };
+  const result = { today: opts.today, from: opts.from, to: opts.to, dryRun: opts.dryRun, wallets: [], statusCounts: {}, candidateTotal: 0, results: [], cacheHits: 0, yahooUnavailable: false, issues: [], appended: 0, complete: false, failReason: '' };
+  const budget = { gmail: Object.fromEntries(USERS.map((u) => [u, 0])), gmailUnavailable: {}, yahoo: 0, yahooUnavailable: false, yahooUnavailableReason: '', yahooFailed: false, yahooUnverified: 0 };
   result.searches = budget;
   async function checkpoint() { await save(opts.out, result); if (!opts.dryRun) await save(opts.statePath, state); }
+  let stage = 'db-connect';
   try {
-    const get = injected.freeeGet || await makeFreeeGet();
+    const get = injected.freeeGet || await (injected.makeFreeeGet || makeFreeeGet)();
+    stage = 'freee-read';
     const inventory = await collectTxns(get, opts, state, timeLeft);
     Object.assign(result, { wallets: inventory.wallets, statusCounts: inventory.statusCounts, candidateTotal: inventory.candidates.length });
+    stage = 'sheets-read';
     const metadata = await sheets.metadata(SPREADSHEET_ID);
     const privateTab = metadata.sheets?.find((s) => s.properties.title === '毎回私的利用')?.properties;
     const privateTerms = privateTab ? (await sheets.get(SPREADSHEET_ID, `${quoteTab(privateTab.title)}!A1:A${privateTab.gridProperties.rowCount}`)).flat().map(String).filter((s) => s.trim() && !['項目名', '利用先', '内容', '毎回私的利用'].includes(s.trim())) : [];
+    stage = 'expense-check';
     for (const txn of inventory.candidates.slice(0, opts.limit)) {
       const cached = state.txns[String(txn.id)];
       if (cached?.verdict) {
@@ -290,20 +355,26 @@ export async function runCheck(opts, injected = {}) {
       const deferred = !!search.deferred && !search.evidence.length;
       const verdict = rule === '私用(自動)' ? rule : search.evidence.length ? '証跡あり(要申請)' : rule || (deferred ? search.deferred : '不明(要確認)');
       const checkedAt = new Date().toISOString();
-      result.results.push({ ...txn, verdict, evidence: search.evidence, checkedAt, ...(rule ? { ruleVerdict: rule } : {}), ...(deferred ? { deferred: true, searchStatus: search.deferred } : {}) });
+      result.results.push({ ...txn, verdict, evidence: search.evidence, checkedAt, ...(rule ? { ruleVerdict: rule } : {}), ...(search.unavailable ? { sourceUnavailable: true } : {}), ...(deferred ? { deferred: true, searchStatus: search.deferred } : {}) });
       // Deferred entries deliberately have no verdict: retry next run; never pin an outage as unknown.
-      state.txns[String(txn.id)] = deferred ? { evidence: search.evidence, checkedAt, searchStatus: search.deferred } : { verdict, evidence: search.evidence, checkedAt };
+      state.txns[String(txn.id)] = deferred || search.unavailable
+        ? { evidence: search.evidence, checkedAt, searchStatus: search.deferred || '一部受信箱 unavailable（別席で要照合）' }
+        : { verdict, evidence: search.evidence, checkedAt };
       result.yahooUnavailable = budget.yahooUnavailable;
+      stage = 'checkpoint-write';
       await checkpoint();
+      stage = 'expense-check';
     }
     result.yahooUnavailable = budget.yahooUnavailable;
     if (opts.weekly) {
       result.web23 = await checkWeb23Delivery({ search: injected.search || childSearch, timeLeft, timeout });
       if (result.web23.status === 'unverified') result.issues.push(`web23@: ${result.web23.reason}`);
     }
-    result.complete = inventory.complete && !result.results.some((r) => r.deferred) && result.results.length === inventory.candidates.length;
+    const sourceUnavailable = Object.keys(budget.gmailUnavailable).length > 0 || budget.yahooUnavailable;
+    result.complete = inventory.complete && !sourceUnavailable && !result.results.some((r) => r.deferred) && result.results.length === inventory.candidates.length;
     result.deferredTotal = result.results.filter((r) => r.deferred).length;
     if (!opts.dryRun) {
+      stage = 'sheets-write';
       const tab = await sheets.ensure(SPREADSHEET_ID, TAB, HEADER);
       const existing = await sheets.get(SPREADSHEET_ID, `${quoteTab(TAB)}!L2:L${Math.max(2, tab.gridProperties.rowCount)}`);
       const ids = new Set(existing.flat().map(String));
@@ -317,22 +388,57 @@ export async function runCheck(opts, injected = {}) {
         if (verified.length !== rows.length || verified.some((row, i) => HEADER.some((_, c) => String(row[c] ?? '') !== String(rows[i][c])))) throw new Error('Sheet append read-back mismatch');
         result.appendedRange = range;
       }
+      stage = 'discord-dm';
       result.notification = await (injected.notify || notifyKim)(dmText(result), { webhookFallback: false });
-      if (!['dm', 'session-inbox'].includes(result.notification.delivered)) throw new Error('Discord DM not delivered');
+      if (!isKimDelivered(result.notification)) throw new Error('Discord DM not delivered');
       state.lastRunAt = `${opts.today}T03:00:00+09:00`;
     }
+    stage = 'checkpoint-write';
     await checkpoint();
     return result;
   } catch (error) {
-    // Only our controlled messages are safe to persist; low-level errors can include secrets.
-    result.issues.push(/^(freee |Invalid |Unsupported |Sheets |Sheet |Output tab |Discord |Cannot read)/.test(error.message) ? error.message : 'Run failed (network, filesystem or response error)');
-    result.failed = true;
+    // Only exception class and HTTP status are logged; messages may contain credentials.
+    const msg = String(error.message ?? '');
+    if (/^(freee |Invalid |Unsupported |Sheets |Sheet |Output tab |Discord |Cannot read)/.test(msg)) {
+      result.issues.push(msg);
+    } else {
+      const httpMatch = msg.match(/HTTP\s+(\d{3})/);
+      const qualifiers = [error.name || 'Error'];
+      if (httpMatch) qualifiers.push(`HTTP ${httpMatch[1]}`);
+      if (error.code && typeof error.code === 'string') qualifiers.push(`code=${error.code}`);
+      result.issues.push(`Run failed: ${qualifiers.join(' ')}`);
+    }
+    if (opts.verbose) console.error(`[expense-leak-check] ${error.name || 'Error'}: ${error.message}\n${error.stack || '(no stack)'}`);
+    // Incomplete scans can still have unseen candidates. Keep those failures retryable.
+    if (stage === 'discord-dm' && result.complete && result.candidateTotal === 0) {
+      state.lastRunAt = `${opts.today}T03:00:00+09:00`;
+    } else {
+      result.failed = true;
+      result.failReason = stage === 'db-connect'
+        ? (error.failReason || classifyDbConnectFailReason(error))
+        : stage;
+    }
     await checkpoint();
     return result;
   }
 }
+function formatSummary(result) {
+  return `expense-leak-check: candidates=${result.candidateTotal} processed=${result.results.length} cached=${result.cacheHits} deferred=${result.deferredTotal || 0} appended=${result.appended} dm=${result.notification?.delivered || 'none'} yahooFailed=${result.searches.yahooFailed} failed=${!!result.failed} failReason=${result.failReason}`;
+}
+
+export function reportResult(result, log = console.log) {
+  if (result.skip) log('skip: weekly expense-leak-check');
+  else if (result.dryRun) log(JSON.stringify(result, null, 2));
+  else log(formatSummary(result));
+  return result.failed ? 1 : 0;
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  if (!hasFreeeDbConfig()) {
+    console.log('skip: expense-leak-check requires freee DB config (PURCHASING_APP_DATABASE_URL)');
+    return;
+  }
   // Lock dry runs too: all processes share the Yahoo browser profile and state.
   await mkdir(dirname(opts.statePath), { recursive: true });
   const lockPath = `${opts.statePath}.lock`;
@@ -342,10 +448,7 @@ async function main() {
   try {
     await lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
     const result = await runCheck(opts);
-    if (result.skip) console.log('skip: weekly expense-leak-check');
-    else if (opts.dryRun) console.log(JSON.stringify(result, null, 2));
-    else console.log(`expense-leak-check: candidates=${result.candidateTotal} processed=${result.results.length} cached=${result.cacheHits} deferred=${result.deferredTotal || 0} appended=${result.appended} dm=${result.notification?.delivered || 'none'} yahooFailed=${result.searches.yahooFailed} failed=${!!result.failed}`);
-    if (result.failed) process.exitCode = 1;
+    process.exitCode = reportResult(result);
   } finally { await lock.close(); await unlink(lockPath); }
 }
-if (isEntry(import.meta.url)) main().catch(() => { console.error('expense-leak-check: configuration/state/filesystem error; no credential details logged'); process.exitCode = 1; });
+if (isEntry(import.meta.url)) main().catch(() => { console.error('expense-leak-check: configuration/state/filesystem error; no credential details logged failReason=config-state-filesystem'); process.exitCode = 1; });

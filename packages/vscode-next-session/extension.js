@@ -5,10 +5,12 @@ const path = require('node:path');
 const {
   readConfig, createOwnershipLease, createPool, isWaitingTab, decideRefresh,
   readRefreshConfig, readLastRefreshAt, inRefreshHours, isWorktreeFolder, decideWorktreeCleanup,
-  decideTrimExcess,
+  decideTrimExcess, selectExcessEmptySpares, EMPTY_SPARE_KEEP,
+  DEFAULT_AUTO_TITLE_PREFIXES, setAutoTitlePrefixes,
 } = require('./mobile-pool');
 const { resolveClaudeShellPath } = require('./shell-path');
 const { decideAction, orderMobileOpenMethods } = require('./route');
+const { reopenSession } = require('./reopen-tabs.cjs');
 
 const { readRows, createToolRunner, createArchiveWatcher } = require('./archive-tabs');
 const { parseEditorMemento, selectTabsToClose, planClose } = require('./tab-sessions.cjs');
@@ -189,6 +191,94 @@ function hasUserMessageInProjects(home, sessionId) {
   return undefined;
 }
 
+let extensionContext = null;
+function readAwaitingOwnerIds(home) {
+  const ids = new Set();
+  let text = '';
+  try { text = fs.readFileSync(path.join(home, '.claude', 'auto-progress-ledger.jsonl'), 'utf8'); }
+  catch { return ids; }
+  const latest = new Map();
+  for (const line of text.split(/\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const row = JSON.parse(line);
+      if (row && typeof row.sessionId === 'string' && row.sessionId) latest.set(row.sessionId, row);
+    } catch { /* 壊れた行は無視 */ }
+  }
+  for (const [id, row] of latest) if (row.status === 'waiting_user') ids.add(id);
+  return ids;
+}
+function closeSessionScript() {
+  const roots = [process.env.ORGIAST_NIGHTLY_REPO, process.env.ORGIAST_REPO,
+    path.join(mobileHome, '.claude', 'nightly-repo'), path.join(mobileHome, 'orgiast-claude-rules'),
+    path.join(mobileHome, 'Downloads', 'orgiast-claude-rules')].filter(Boolean);
+  return roots.map((root) => path.join(root, 'tools', 'close-session.mjs')).find((file) => {
+    try { return fs.existsSync(file); } catch { return false; }
+  });
+}
+function runCloseSession(sessionId) {
+  const script = closeSessionScript();
+  if (!script) { log('spare close skipped: close-session.mjs が見つかりません'); return Promise.resolve(false); }
+  return new Promise((resolve) => {
+    execFile('node', [script, '--session', sessionId, '--no-launch'], {
+      windowsHide: true, timeout: 60_000, maxBuffer: 256 * 1024,
+    }, (error, stdout) => {
+      log(`spare close session=${sessionId} ${error ? `failed=${error.message}` : String(stdout || '').trim()}`);
+      resolve(!error);
+    });
+  });
+}
+async function mapTabSessionIds(context, current) {
+  const map = new Map();
+  if (!context?.storageUri) return map;
+  const apData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  const globalStorageDir = path.join(apData, 'Code', 'User', 'globalStorage');
+  const state = await runReadTabState(path.dirname(context.storageUri.fsPath), globalStorageDir, mobileHome);
+  const mementoTabs = state?.tabs || [];
+  const liveGroups = vscode.window.tabGroups.all;
+  for (let g = 0; g < liveGroups.length; g++) {
+    const gTabs = liveGroups[g].tabs || [];
+    for (let i = 0; i < gTabs.length; i++) {
+      const liveTab = gTabs[i];
+      if (!current.includes(liveTab)) continue;
+      const memo = mementoTabs.find((tab) => tab.group === g && tab.index === i);
+      if (memo?.sessionId) map.set(liveTab, memo.sessionId);
+    }
+  }
+  return map;
+}
+// 空の予備が 3 を超えていれば、補充の前に古い余分を close-session.mjs --no-launch で閉じる。
+async function closeExcessEmptySpares() {
+  if (worktreeWindow || mobileAborted) return [];
+  const now = Date.now();
+  const current = syncTabTimes(now);
+  if (current.filter(isWaitingTab).length <= EMPTY_SPARE_KEEP) return [];
+  if (!await mobileLease.acquire()) return [];
+  const awaiting = readAwaitingOwnerIds(mobileHome);
+  const sessionIds = await mapTabSessionIds(extensionContext, current);
+  const sessions = current.map((tab) => {
+    const sessionId = sessionIds.get(tab) || null;
+    const hasUserMessage = sessionId ? hasUserMessageInProjects(mobileHome, sessionId) : undefined;
+    return {
+      id: sessionId,
+      appearedAt: tabAppearedAt.get(tab),
+      empty: isWaitingTab(tab) && hasUserMessage === false,
+      awaitingOwner: Boolean(sessionId && awaiting.has(sessionId)),
+      isActive: Boolean(tab.isActive),
+    };
+  });
+  const extras = selectExcessEmptySpares(sessions);
+  for (const extra of extras) await runCloseSession(extra.id);
+  return extras;
+}
+async function maintainSpares(count = mobileTarget) {
+  const target = Math.min(count, EMPTY_SPARE_KEEP);
+  mobileTarget = target;
+  mobileEnabled = true;
+  try { await closeExcessEmptySpares(); }
+  catch (error) { log(`spare close failed: ${error.message}`); }
+  return pool.ensure(target);
+}
 let trimRunning = false;
 async function trimWaitingExcess(context) {
   if (worktreeWindow || mobileAborted || trimRunning) return false;
@@ -292,7 +382,7 @@ async function performRefresh({ force = false } = {}) {
   lastRefreshAt = now;
   const closed = await vscode.window.tabGroups.close(target.tab);
   if (!closed) log('mobile refresh: タブを閉じられませんでした');
-  await pool.ensure(mobileTarget); // 補充は 5 秒タイマーでも動くが、ここで即時に回す
+  await maintainSpares(mobileTarget); // 補充は 5 秒タイマーでも動くが、ここで即時に回す
   return closed;
 }
 function vscodeMobileTabs() {
@@ -349,12 +439,24 @@ const pool = createPool({
 async function ensureMobileTabs({ count = readConfig(mobileHome, process.env, vscodeMobileTabs()) } = {}) {
   if (mobileAborted) return;
   if (worktreeWindow) return; // worktree ウィンドウは補充しない（通常ウィンドウの 5 秒タイマーが担う）
-  mobileTarget = count;
-  mobileEnabled = true;
-  return pool.ensure(count);
+  return maintainSpares(count);
+}
+
+function configureAutoTitlePrefixes() {
+  const key = 'CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX';
+  const variables = vscode.workspace.getConfiguration('claudeCode').get('environmentVariables');
+  const configuredPrefix = Array.isArray(variables)
+    ? variables.find(variable => variable?.name === key)?.value
+    : variables?.[key];
+  setAutoTitlePrefixes([configuredPrefix, process.env[key], ...DEFAULT_AUTO_TITLE_PREFIXES]);
 }
 
 function activate(context) {
+  extensionContext = context;
+  configureAutoTitlePrefixes();
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
+    if (event.affectsConfiguration('claudeCode')) configureAutoTitlePrefixes();
+  }));
   const handler = vscode.window.registerUriHandler({
     async handleUri(uri) {
       try {
@@ -373,6 +475,26 @@ function activate(context) {
         if (action.kind === 'mobile') {
           await ensureMobileTabs(action);
           if (action.refresh) await refreshWaitingTab({ force: true });
+          return;
+        }
+        if (action.kind === 'reopen') {
+          const sessionId = action.session;
+          if (!sessionId) {
+            log('reopen: session ID が指定されていません');
+            return;
+          }
+          let state = null;
+          if (context.storageUri) {
+            const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+            state = await runReadTabState(path.dirname(context.storageUri.fsPath),
+              path.join(appData, 'Code', 'User', 'globalStorage'), mobileHome);
+          }
+          const result = await reopenSession({
+            sessionId, tabs: claudeTabs, mementoTabs: state?.tabs || [],
+            close: targets => vscode.window.tabGroups.close(targets),
+            open: uri => vscode.env.openExternal(vscode.Uri.parse(uri)),
+          });
+          log(`reopen: session=${sessionId} closed=${result.closed} stateRead=${state !== null}`);
           return;
         }
         const cwd = params.get('cwd') || undefined;
@@ -442,7 +564,7 @@ function activate(context) {
   }
   const refill = () => {
     if (mobileEnabled) {
-      pool.ensure(mobileTarget).catch((error) => log(`mobile refill failed: ${error.message}`));
+      maintainSpares(mobileTarget).catch((error) => log(`mobile refill failed: ${error.message}`));
       trimWaitingExcess(context).catch((error) => log(`mobile trim failed: ${error.message}`));
     }
   };

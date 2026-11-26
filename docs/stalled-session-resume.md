@@ -1,10 +1,34 @@
-# 停滞セッションの夜間再開
+# 停滞セッションの毎時再開
 
-自動再開は廃止（kim 2026-11-14）。期限切れ・停滞は kim-inbox 通知のみ行う。
+## 現行の hourly モード（2026-11-25）
+
+入口は既存の `node tools/stalled-session-resume.mjs --hourly`。`--dry-run` は同じ事前判定を行い、Claude・ask・移管を起動しない。判定キャッシュ、費用台帳、ハートビートは保存する。
+
+- `~/.claude/projects/**/*.jsonl` の30分〜7日前のログを調べる。subagentsと実行中のclaude/node、閉じ印・DONE・session-close実行を除外し、未完応答・tool_use・APIエラー・synthetic上限・期限切れフッターを拾う。`~/gb-reports` のREPORT.md/workとterminal出力もsessionIdで合流し、未特定分は件数のみ報告する。
+- 末尾50行と最初の依頼を既存redactで伏せ、OpenRouter無料Gemma→安価GPT-OSS→Gemini→Groq→Mistral（既存ルーティングに従いOpenRouter経由）でJSON判定する。cursor/cursor-agent/Claude APIは候補に含めない。判定は4件並列、モデルの429は10分、402/403/404は1時間待機する。sessionId＋最終行SHA256をchange-gateに保存し、変化がなければAIを再照会しない。
+- resumeだけ `claude --resume <元ID> --fork-session --session-id <新ID> -p --model <automationModel()>` を実行する。nextStep・承認制約・完了時session-close・結果JSONの保存先を渡し、fork先のtranscriptを確認する。waiting-humanはkim-inbox ask（dedupeKey=sessionId）、done/skipは台帳だけに残す。今回の無人実行では社外送信・支払い・削除・権限変更は行わない。
+- 既存台帳ロックに加え、元とfork先の `~/.claude/stalled-resume-locks/<id>.lock` を起動前に取る。pid・開始時刻・hostを記録し、死PIDまたは2時間超だけ奪取する。既存プロセスには終了操作を行わない。
+- configのhourlyCap=4、perSessionDailyCap=6、planUsageStopPct=85とseat-guardを両方守る。fork家系と試行予算は起動前に保存し、親の中断後も日次上限と連続進捗なし回数を継承する。fork transcriptの実在確認後だけ元を引継ぎ済みにする。上限停止時も安い判定を続け、移管は既存stall-ledgerの経路だけを使う。
+- 毎回JSON一行を `~/gb-reports/stalled-sessions-hourly/heartbeat/<PC番号>.log` に保存する。項目はISO時刻・PC・Claudeアカウント・候補/resume/waiting-human/done/skip・未特定件数・seat-guard・error。候補数は4分類の合計と一致する。resumeは実起動数で、進捗成功数はresultsのoutcomeで別に確認する。
+- `~/.claude/fleet-heartbeat-repo` の独立クローンからorphanブランチ `fleet-heartbeat` の `stalled-sessions/<PC番号>.log` を更新する（末尾500行）。mainは変更しない。競合pushはfetch→rebaseして最大3回。送信失敗分はローカルとコミットに残り、次回送る。000KimPCは共有ブランチを取り込み、他PC分も同じローカルheartbeatディレクトリへコピーする。
+
+### 登録・配布・移管
+
+`OrgiastWaitDeadlineResume` は毎時:20、IgnoreNew、最大2時間。hidden runnerからWindows PowerShell 5.1の `nightly-bootstrap.ps1 -Target tools\stalled-session-resume.mjs --hourly` を呼び、origin/mainへ同期してから実行する。`setup-manifest.json` の必須 `task:wait-deadline-resume` はbootstrap経由かも検査するので、旧node直接起動のPCも `setup --converge` で既存registrarから自動修復される。tools/config/docsは既存distribution-manifestの配布対象。個別PCへの手登録は不要。
+
+各PCの実到達はheartbeatのlabel・account・時刻と、fleetのconverge結果を照合する。mainへのマージだけでは全PC同期完了としない。認証は各PCの既存Claudeプランと既存provider環境ファイル、Gitのoriginを使い、管理移管時はこれらのアカウント権限とfleet登録を引き継ぐ。
+
+### 検証
+
+`node --test tools/stalled-session-resume*.test.mjs tools/lib/auto-resume-policy.test.mjs tools/claude-seat-guard*.test.mjs` と `node --test --test-name-pattern=scheduled-task tools/setup.test.mjs`。実機はdry-run→hourly→結果JSON・kim-inbox・heartbeatブランチを読み戻す。UI変更はないためブラウザ検証は対象外。
+
+## 旧モードの参考記録（以下はnightly/overdueの履歴）
+
+毎時・上限つきで再開する（kim 2026-11-25）。`OrgiastWaitDeadlineResume` は毎時 :20 に `--hourly` を実行し、期限切れと先送り表現のある停滞セッションを優先順に再開する。3回進捗が無ければ kim-inbox の判断待ちへ移す。
 
 `tools/stalled-session-resume.mjs` は `session-triage.mjs` の `listFiles` / `inspect` の結果を使う。両関数を export にしただけで、検出規則は変更していない。
 
-`auto-session.runChild` の再開経路は `config/auto-resume.json` の共通ポリシーで遮断する。定期タスクは検出と kim-inbox 通知のために残すが、Claude の子プロセスは起動しない。
+`auto-session.runChild` の再開経路は `config/auto-resume.json` の共通ポリシーで遮断する。夜間タスクは検出と kim-inbox 通知を担当する。
 
 ## 上限と状態
 
@@ -42,11 +66,16 @@
 
 ## 待機期限切れ専用モード（--overdue）
 
-`node tools/stalled-session-resume.mjs --overdue` または `STALLED_SESSION_MODE=overdue` で、タイトル頭の待機期限が現在以前のセッションだけを扱う。既定は1回2件、並列1。件数は既存の `--limit` / `STALLED_SESSION_LIMIT` で変更でき、夜間07:30の締切は適用しない。closed ledger・閉じて可・直近10分activeを除外し、既存の共有ロックとcwd排他を使う。夜間も期限切れタイトルを最優先にする。
+待機フッターは `まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ／納期 YYYY-MM-DD[ HH:MM]・残り作業 <数値><分|時間|日>）`。待機期限は返信見込みと「納期 − 残り作業 − 予備」の早い方。予備は残り作業の20%と1時間の大きい方で、日時はPCのローカル時刻、日付だけの納期は当日の23:59。納期不明の場合は `／納期なし: 相手の回答時期が未定` のように理由を5文字以上書く。
 
-台帳の `overdue` に `(sessionId, 期限文字列)` 別の試行履歴を保存する。エラー以外（中断含む）は同一期限で再実行せず、エラーだけ終了から30分後に最大3回まで再試行する。期限が更新されれば新しいキーで対象になる。夜間の `sessions` / `nights`・連続エラー中止とは独立。実行した結果がある場合だけ既存 `notifyKim`（session-inbox）へ1回まとめる。個別のDiscord送信は追加しない。
+`node tools/stalled-session-resume.mjs --overdue` または `STALLED_SESSION_MODE=overdue` は、期限を迎えたセッションについて Claude を起動する前に次の条件を確認する。
 
-再開時は元会話と前回成果に加えて期限文脈を渡し、待っていた事項の直接照会、作業と検証、kim-inboxへのaskと新期限、完了時の/session-closeを指示する。期限の書換えだけでは終えない。
+- 対象セッションの auto-progress 台帳の open check を実行し、終了コード0で達成した。
+- 納期から残り作業と予備を引いた作業開始限界に達した。
+
+どちらかを満たし、`config/auto-resume.json` の `eventResume` が true のときだけ再開する。`enabled` は false のままにする。どちらも満たさない場合は、次の確認時刻と作業開始限界の早い方にタイトルの待機印を延長する。納期付きの印は `【MM/DD/HH:MMまで・納期MM/DD】`。期限経過だけの inbox 通知は行わず、再開できず人の判断・操作だけが残る場合は ask を記録する。
+
+再開はアカウントの台帳全体で直近1時間に2件、同一セッションはローカル日付ごとに2回まで。上限到達の info は重複を抑える。既定で1回2件、並列1。夜間07:30の締切は適用せず、closed ledger・閉じて可・直近10分activeを除外する。台帳の `overdue` にセッションと期限別の履歴を保存し、失敗後の再試行は30分以上あける。
 
 必須タスク `OrgiastWaitDeadlineResume` は既存登録スクリプトで登録・action/trigger/settingsを読戻し検証する。15分ごと、hidden runner、StartWhenAvailable、バッテリー可、IgnoreNew、最大2時間。`setup --converge` の既存修復経路で全Windows PC・アカウントへ配布する。既存sweepはnightly-health-expectations / cron-watchに登録されていないため、その形式の架空ログ監視は追加せず、setupの必須タスク監視（最終実行2時間以内）で検出する。
 

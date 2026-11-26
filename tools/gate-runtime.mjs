@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { sameFleetPc } from './fleet-pc-identity.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -14,6 +15,8 @@ function readRollout() { try { return JSON.parse(fs.readFileSync(path.join(tools
 const hostName = () => process.env.ORGIAST_HOSTNAME || os.hostname();
 export function rolloutMode(name, { manifest = readRollout(), home = homeDir(), hostname = hostName(), now = Date.now() } = {}) {
   const entry = manifest?.gates?.[name];
+  if (name === 'user-code-input-gate' && entry?.rollout === 'deny'
+    && entry.immediatePolicy === '2026-11-25 kim 指示: AI で回避できるコード入力を user に頼まない') return 'deny';
   if (name === 'pdf-deliverable-visual-gate' && entry?.rollout === 'deny'
     && entry.immediatePolicy === '2026-11-15 user 指示: 全席でPDF納品前に描画後の全ページ目視を必須化') return 'deny';
 if (name === 'mail-send-approval-gate' && entry?.rollout === 'deny' && entry.immediatePolicy === '2026-11-05 kim 承認: 組織指示11 メール送信は本文確認＋明示承認後のみ') return 'deny';
@@ -27,6 +30,7 @@ if (name === 'mail-send-approval-gate' && entry?.rollout === 'deny' && entry.imm
     && entry.immediatePolicy === '2026-10-27 kim 厳命: kim 宛 Discord 報告を全PCで停止') return 'deny';
   if (name === 'lane-repair-first-gate' && entry?.rollout === 'deny'
     && entry.immediatePolicy === '2026-10-29 user 指示: 全PC・全アカウントで故障レーン修復を最優先') return 'deny';
+  if (name === 'lane-claim-evidence-gate' && entry?.rollout === 'deny') return 'deny';
   if (name === 'lane-abandonment-gate') {
     try { if (JSON.parse(fs.readFileSync(path.join(home, '.claude/rule-enforcement.json'), 'utf8'))['repair-failed-lane-first']?.mode === 'block') return 'deny'; } catch {}
   }
@@ -43,10 +47,15 @@ if (name === 'mail-send-approval-gate' && entry?.rollout === 'deny' && entry.imm
     && entry.immediatePolicy === '2026-11-02 kim 指示: アプリからの Claude API 利用を全PC全アカウント全プロジェクトで禁止') return 'deny';
   if (name === 'response-language-gate' && entry?.rollout === 'deny'
     && entry.immediatePolicy === '2026-10-26 cr 指示: Stop hook の書き直しで英語へ逸脱した実害') return 'deny';
+  if (name === 'org-instructions-char-gate' && entry?.rollout === 'deny'
+    && entry.immediatePolicy === '2026-11-17 user 指示: 組織指示案の全体字数実測を Stop で必須化') return 'deny';
+  if (name === 'shared-worktree-git-guard' && entry?.rollout === 'deny'
+    && entry.immediatePolicy === '2026-11-21 user 指示: 共有作業ツリーで他セッションの変更を巻き込む Git 操作を拒否') return 'deny';
   if (entry?.legacy === true && entry.rollout === 'deny') return 'deny';
-  if (entry?.pilotDeny === true && (manifest?.pilotHosts || []).some(h => h.toLowerCase() === hostname.toLowerCase())) return 'deny';
+  const isPilot = Array.isArray(manifest?.pilotHosts) && manifest.pilotHosts.some(host => sameFleetPc(host, hostname));
+  if (entry?.pilotDeny === true && isPilot) return 'deny';
   if (entry?.rollout === 'warn') return 'warn';
-  if ((Array.isArray(manifest?.pilotHosts) ? manifest.pilotHosts : []).some(h => h.toLowerCase() === hostname.toLowerCase())) return entry?.rollout === 'deny' ? 'deny' : 'warn';
+  if (isPilot) return entry?.rollout === 'deny' ? 'deny' : 'warn';
   // First receipt is per PC, so an offline PC never skips its observation week.
   const file = path.join(home, '.claude', 'gate-rollout', `${name}.json`);
   let firstSeen;
@@ -87,7 +96,7 @@ export async function reportGate(contract, verdict, statuses, { home = homeDir()
   try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(file, JSON.stringify({ name, verdict, statuses, delivery: 'pending' }), { flag: 'wx', mode: 0o600 }); }
   catch { return { delivered: 'suppressed' }; }
   let result;
-  try { result = await notify(line, { home, userId: KIM_DISCORD_USER_ID, plainJa: false, source: 'gate-report', signal: AbortSignal.timeout(2000), fleetFallback: true }); }
+  try { result = await notify(line, { home, userId: KIM_DISCORD_USER_ID, kind: 'info', plainJa: false, source: 'gate-report', signal: AbortSignal.timeout(2000), fleetFallback: true }); }
   catch { result = { delivered: 'none' }; }
   try { fs.writeFileSync(file, JSON.stringify({ name, verdict, statuses, delivery: result.delivered }), { mode: 0o600 }); } catch {}
   if (result.delivered === 'none') process.stderr.write(`[gate-report] ${name}: 通報未達（ローカル記録済み）。node tools/keyserve-status.mjs --json\n`);

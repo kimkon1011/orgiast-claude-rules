@@ -15,7 +15,8 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { resolvePcNumber } from './lib/pc-number.mjs';
-import { footerValues as footerValuesStrict, NO_ACTION_PATTERN, openDeadline, SESSION_PHRASES } from './next-action-gate.mjs';
+import { footerValues as footerValuesStrict, NO_ACTION_PATTERN, SESSION_PHRASES } from './next-action-gate.mjs';
+import { parseWaitFooter } from './lib/wait-deadline.mjs';
 import { ledgerFile, readLedger, OPEN_STATUSES } from './auto-progress-ledger.mjs';
 
 // Lenient footer parser: normalizes full-width colons (：) to half-width (:) before matching.
@@ -40,7 +41,7 @@ function logError(msg, err) {
 }
 export const CLOSABLE_PREFIX = '【閉じて可】';
 // 旧形式【26/11/02/20:11まで】（年あり）も外して新形式へ付け替える。期限と【閉じて可】は排他で、どちらも付け替え対象。
-const PREFIX = /^(?:(?:【(?:\d{2}\/)?\d{2}\/\d{2}\/\d{2}:\d{2}まで】|【閉じて可】)\s*)+/;
+const PREFIX = /^(?:(?:【(?:\d{2}\/)?\d{2}\/\d{2}\/\d{2}:\d{2}まで(?:・納期\d{2}\/\d{2})?】|【閉じて可】)\s*)+/;
 
 // /session-close records completion independently of the assistant's final footer.
 function isRecordedClosed(id) {
@@ -67,13 +68,28 @@ export function isClosable(footer) {
 }
 
 export function latestWaitDeadline(text) {
-  const footer = footerValues(text);
-  if (footer) return openDeadline(footer.session);
-  const normalized = String(text || '').replace(/：/g, ':');
-  const m = normalized.match(/(?:^|\n)このセッション:[ \t]*([^\r\n]+)/);
-  if (m) return openDeadline(m[1].trim());
+  return parseWaitFooter(footerValues(text)?.session ?? text).waitUntil;
+}
+
+// 延長は元の assistant フッターに紐付ける。次の応答や明示的なタイトル変更で失効する。
+export function waitExtension(raw, { lastLineOnly = false } = {}) {
+  const assistantAt = lastAssistantTimestamp(raw);
+  if (assistantAt === null) return null;
+  const lines = String(raw).trimEnd().split(/\r?\n/);
+  for (const line of lastLineOnly ? lines.slice(-1) : lines.reverse()) {
+    if (!line.includes('"custom-title"')) continue;
+    try {
+      const row = JSON.parse(line);
+      if (row.type !== 'custom-title') continue;
+      const extension = row.waitExtension;
+      return extension?.assistantAt === assistantAt && Number.isFinite(extension.until)
+        ? extension : null;
+    } catch { /* 不完全な transcript 行を飛ばす */ }
+  }
   return null;
 }
+
+const extensionDate = extension => extension ? new Date(extension.until) : null;
 
 function reopenRecordedSession(id) {
   dropClosed(path.join(os.homedir(), '.claude'), new Set([id]));
@@ -85,9 +101,9 @@ function logReopen(message) {
   fs.appendFileSync(file, `${new Date().toISOString()} ${message}\n`);
 }
 
-export function waitPrefix(date) {
+export function waitPrefix(date, due) {
   const p = n => String(n).padStart(2, '0');
-  return `【${p(date.getMonth() + 1)}/${p(date.getDate())}/${p(date.getHours())}:${p(date.getMinutes())}まで】`;
+  return `【${p(date.getMonth() + 1)}/${p(date.getDate())}/${p(date.getHours())}:${p(date.getMinutes())}まで${due ? `・納期${p(due.getMonth() + 1)}/${p(due.getDate())}` : ''}】`;
 }
 
 // この session_id に登録済みの auto-progress チェックのうち、未完了で最も早い deadline を返す。
@@ -230,7 +246,7 @@ export function lastAssistantText(raw) {
     if (!lines[i].includes('"type":"assistant"')) continue;
     try {
       const c = JSON.parse(lines[i]).message?.content;
-      const text = Array.isArray(c) ? c.filter(b => b?.type === 'text').map(b => b.text).join('\n') : '';
+      const text = typeof c === 'string' ? c : Array.isArray(c) ? c.filter(b => b?.type === 'text').map(b => b.text).join('\n') : '';
       if (text.trim()) return text;
     } catch {}
   }
@@ -269,16 +285,17 @@ function isPlaceholder(title) {
 // 書くべき custom-title を返す。変更不要なら null。
 export function desiredTitle(text, raw, pc = '', closed = false, sessionId = '', options = {}) {
   const footer = footerValues(text);
-  if (!footer && !pc && !closed) return null;
+  if (!footer && !pc && !closed && !options.waitUntil) return null;
   const { custom, ai, firstPrompt, autoAi, customSource, declaredPurpose } = currentTitles(raw);
   const existingPrefix = withoutPc(custom).match(PREFIX)?.[0] || '';
   const customBody = isPlaceholder(custom) ? '' : titleBody(custom);
   const base = (customSource !== 'orgiast-auto' ? customBody : '')
     || declaredPurpose || titleBody(autoAi) || customBody || titleBody(ai) || firstPrompt || 'セッション';
-  const deadline = footer ? openDeadline(footer.session) : null;
+  const { waitUntil, due } = parseWaitFooter(footer?.session ?? text);
+  const deadline = options.waitUntil ?? (waitUntil ? extensionDate(waitExtension(raw)) ?? waitUntil : null);
   let prefix;
   if (deadline) {
-    prefix = waitPrefix(deadline);
+    prefix = waitPrefix(deadline, due);
   } else if (closed || isClosable(footer)) {
     prefix = CLOSABLE_PREFIX;
   } else if (footer && !deadline && (footer.session.startsWith('まだ閉じない（作業中') || footer.session.startsWith('/session-close をして（まだ閉じない'))) {
@@ -347,12 +364,13 @@ export function promptSubmit(input, { readFile = fs.readFileSync, statSize = p =
   } catch (e) { logError('promptSubmit', e); return null; }
 }
 
-export function apply(input, { readFile = fs.readFileSync, appendFile = fs.appendFileSync, statSize = p => fs.statSync(p).size, resolvePcNumber: resolveNumber = resolvePcNumber, isClosed = isRecordedClosed, reopen = reopenRecordedSession, log = logReopen } = {}) {
+export function apply(input, { waitUntil, expectedMtimeMs, readFile = fs.readFileSync, appendFile = fs.appendFileSync, statSize = p => fs.statSync(p).size, resolvePcNumber: resolveNumber = resolvePcNumber, isClosed = isRecordedClosed, reopen = reopenRecordedSession, log = logReopen } = {}) {
   try {
     const file = input?.transcript_path || input?.transcriptPath || '';
     const sessionId = input?.session_id || input?.sessionId || '';
     if (!file || !sessionId || /subagents/i.test(file)) return null;
     if (statSize(file) > MAX_BYTES) return null;
+    if (expectedMtimeMs !== undefined && fs.statSync(file).mtimeMs !== expectedMtimeMs) return null;
     const raw = readFile(file, 'utf8');
     const text = typeof input?.last_assistant_message === 'string' && input.last_assistant_message.trim() ? input.last_assistant_message : lastAssistantText(raw);
     const closed = isClosed(sessionId);
@@ -362,9 +380,19 @@ export function apply(input, { readFile = fs.readFileSync, appendFile = fs.appen
         log(`reopened ${sessionId}: removed from closed-sessions.json (latest footer has wait deadline)`);
       } catch { /* fail-open: the current wait title must still be applied */ }
     }
-    const title = desiredTitle(text, raw, resolveNumber(), closed, sessionId);
+    const previousExtension = waitExtension(raw);
+    const extension = waitUntil ?? (latestWaitDeadline(text) ? extensionDate(previousExtension) : null);
+    const pc = resolveNumber() || (waitUntil ? currentTitles(raw).custom.trim().match(PC_PREFIX)?.[0].slice(0, -1) : '');
+    const title = desiredTitle(text, raw, pc, closed, sessionId, { waitUntil: extension })
+      ?? (waitUntil && previousExtension?.until !== waitUntil.getTime() ? currentTitles(raw).custom : null);
+    const assistantAt = lastAssistantTimestamp(raw);
+    const metadata = extension && assistantAt !== null ? { waitExtension: {
+      assistantAt, until: extension.getTime(),
+      activityMtimeMs: waitExtension(raw, { lastLineOnly: true })?.activityMtimeMs ?? expectedMtimeMs
+    } } : {};
+    if (expectedMtimeMs !== undefined && fs.statSync(file).mtimeMs !== expectedMtimeMs) return null;
     if (!title) return null;
-    appendFile(file, `${raw.endsWith('\n') ? '' : '\n'}${JSON.stringify({ type: 'custom-title', customTitle: title, sessionId, source: 'orgiast-auto' })}\n`);
+    appendFile(file, `${raw.endsWith('\n') ? '' : '\n'}${JSON.stringify({ type: 'custom-title', customTitle: title, sessionId, source: 'orgiast-auto', ...metadata })}\n`);
     return title;
   } catch (e) { logError('apply', e); return null; }
 }

@@ -1,0 +1,34 @@
+✔ OpenAI Image API preserves reference order and records requested model when response omits it (25.7267ms)
+✔ HTTP failure retains full error and never falls back to another provider (2.3161ms)
+✔ explicit non-OpenAI model keeps chat image response compatibility (2.7094ms)
+✔ buildPrompt: どの案にも高さ3.6mと明るさの指示が必ず入る (0.3739ms)
+✔ parseArgs: --model で OpenRouter の画像モデルを切り替えられる (0.2902ms)
+✔ parseArgs: --providers を検証し重複を除く (0.2834ms)
+✔ runAll: 3案を両プロバイダへ送り6個のプロバイダ別ファイルを作る (32.9496ms)
+✔ runAll: OpenAI失敗をGeminiで代替せず本文を保持する (1.9508ms)
+✔ runAll: --only相当の1案とGeminiだけなら1回、明示modelなら従来名で1回 (2.1979ms)
+✔ buildRetryCommand: 元の全入力と失敗providerを保持しbaseをrefとして重複させない (0.3363ms)
+✔ buildRetryCommand: provider null の失敗は --model で再生成する (0.0911ms)
+✔ parseArgs: --base を寸法下絵として読む (0.0829ms)
+✔ requireDimensionReference: 寸法既知なのに --base / --blender-out が無ければ手順付きで止まる (0.1587ms)
+✔ requireDimensionReference: 読める --base または Blender パースがあれば通る (2.9838ms)
+✔ dimension reference fails closed for empty/missing files and empty Blender directories (1.6616ms)
+✔ CLI rejects missing dimension reference before opening brief or loading credentials (80.202ms)
+✔ parseArgs: --only で再生成する案を1件に絞れる (0.1282ms)
+✔ buildPrompt: 下絵の外形と人物スケールを固定し日本語文字を禁止する (0.1074ms)
+✔ parseArgs/buildPrompt: 複数の --text だけを許可文字として列挙する (0.1232ms)
+✔ parseArgs: --max-height で会場の上限に合わせられ、既定は3.6 (0.1193ms)
+✔ parseArgs: 必須3項目と複数の --ref を読む (0.0689ms)
+✔ parseArgs: --blender-out を読み、refs は初期状態で空 (0.064ms)
+✔ parseArgs: 必須項目が欠けたら使い方付きで止まる (0.724ms)
+✔ parseArgs: 知らないオプションは止まる (0.1ms)
+✔ loadKey: openrouter.env の OPENROUTER_API_KEY を読む (2.7504ms)
+✔ loadKey: キーが無ければ止まる (2.3315ms)
+ℹ tests 26
+ℹ suites 0
+ℹ pass 26
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 264.1891

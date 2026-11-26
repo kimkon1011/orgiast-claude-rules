@@ -16,6 +16,7 @@ function fixture(t) {
   put('.claude/cost-reporter.env', 'REPORTER_LABEL=DESKTOP-BDOAK99\n');
   put('.claude/keyserve.env', 'ORGIAST_KEYSERVE_SECRET=secret-hmac\nORGIAST_KEYSERVE_PC=DESKTOP-BDOAK99\n');
   for (const name of ['orgiast-mission.md', 'shared-memory/MEMORY.md', 'knowledge/production-sales/00_INDEX.md', 'skills/case/SKILL.md', 'skills/case-resume/SKILL.md']) put(`.claude/${name}`, 'content');
+  put('.claude/shared-memory/.state.json', JSON.stringify({ generatedAt: new Date().toISOString(), files: {} }));
   put('.claude/CLAUDE.md', '# 制作・営業ナレッジ\n');
   put('.claude/orgiast-discord-bot-token.txt', 'secret-discord');
   put('.claude/line-openchat/2026-11.jsonl', JSON.stringify({ text: 'private chat', ts: 1793577600000 }));
@@ -53,7 +54,7 @@ test('complete selfcheck performs only GET reads, preserves files and reports by
   const result = await runSelfcheck({ ...f, hostname: 'DESKTOP-BDOAK99', fetchImpl: network(calls), getToken: async args => {
     tokenCalls.push(args); assert.ok(['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/drive'].includes(args.scope)); assert.equal(args.impersonate, 'seisaku-team@orgiast.jp'); return 'secret-google';
   } });
-  assert.equal(result.rows.length, 15);
+  assert.equal(result.rows.length, 16);
   assert.ok(result.rows.every(row => row.status === '読めた'), result.markdown);
   assert.match(result.markdown, /鹿沼案件.*C0039.*bytes/);
   assert.match(result.markdown, /ライブ受信.*未検証/);
@@ -61,6 +62,15 @@ test('complete selfcheck performs only GET reads, preserves files and reports by
   assert.equal(calls.length, 9);
   assert.equal(tokenCalls.length, 2);
   assert.deepEqual(snapshot(f.home), before);
+});
+test('shared-memory が72時間超なら selfcheck の失敗項目と SessionStart 文言を返す', async t => {
+  const f = fixture(t);
+  f.put('.claude/shared-memory/.state.json', JSON.stringify({ generatedAt: '2026-11-20T00:00:00Z', files: {} }));
+  const result = await runSelfcheck({ ...f, now: () => new Date('2026-11-24T00:00:01Z'), fetchImpl: network([]), getToken: async () => 'google' });
+  const row = result.rows.find(item => item.item === 'shared-memory:stale');
+  assert.equal(row.status, '失敗'); assert.match(row.detail, /4\.0 日前.*git log を優先/);
+  const { context } = await import('./shared-memory-context.mjs');
+  assert.match(context({ home: f.home, now: new Date('2026-11-24T00:00:01Z') }).hookSpecificOutput.additionalContext, /共有メモリが 4\.0 日前/);
 });
 test('one service failure keeps other checks and original error text while redacting known tokens', async t => {
   const f = fixture(t), baseFetch = network([]);
@@ -121,7 +131,7 @@ test('selfcheck permission requires the full fixed body, never a keyword or adde
 test('actual roster resolves 作業用999 and カフェ用015 to their observed labels and status shows the 999 remote name', () => {
   const pcMap = JSON.parse(fs.readFileSync(new URL('../fleet-pc-map.json', import.meta.url), 'utf8'));
   assert.equal(resolveMailTarget('作業用999', pcMap).to, 'DESKTOP-BDOAK99');
-  assert.equal(resolveMailTarget('作業用008', pcMap).to, 'DESKTOP-BDOAK99');
+  assert.equal(resolveMailTarget('作業用008', pcMap).to, '008XPS8300');
   assert.equal(resolveMailTarget('カフェ用015', pcMap).to, '015CAFE');
   assert.equal(resolveMailTarget('015CAFE', pcMap).to, '015CAFE');
   assert.equal(resolveMailTarget('DESKTOP-63MQR3L', pcMap).to, '015CAFE');

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { delegated, operator, isGateRequiredCommand } from './pretooluse-lane-guard.mjs';
+import { delegated, operator, isGateRequiredCommand, isLightLaneCommand } from './pretooluse-lane-guard.mjs';
 import { classifyBashCommand } from './usage-stats.mjs';
 
 const toolsDir = path.dirname(fileURLToPath(import.meta.url));
@@ -14,7 +14,7 @@ function requiredCommands(file) {
 }
 
 function isAlwaysAllowed(command) {
-  return isGateRequiredCommand(command) || delegated.test(command) || operator.test(command)
+  return isGateRequiredCommand(command) || isLightLaneCommand(command) || delegated.test(command) || operator.test(command)
     || ['read-only', 'git'].includes(classifyBashCommand(command));
 }
 

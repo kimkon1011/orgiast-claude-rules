@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { runTask, stripExecMarkers, resolveCwd, formatReply } from './fleet-task-runner.mjs';
+import { resolveExecCwd } from './fleet-agent.mjs';
 
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-task-runner-'));
@@ -63,6 +64,11 @@ test('resolveCwd accepts only an existing directory with .git', () => {
   assert.deepEqual(resolveCwd('/repo', { ownRepo: '/own', exists, stat: io.stat }), { cwd: path.resolve('/repo'), rejected: null });
   // 未指定 → 既定
   assert.deepEqual(resolveCwd(null, { ownRepo: '/own', exists }), { cwd: process.env.ORGIAST_REPO ?? '/own', rejected: null });
+});
+
+test('resolveExecCwd maps @rules-repo and preserves other cwd values', () => {
+  assert.equal(resolveExecCwd('@rules-repo', '/rules-repo'), '/rules-repo');
+  assert.equal(resolveExecCwd('/other-pc/missing', '/rules-repo'), '/other-pc/missing');
 });
 
 test('formatReply renders the fixed header, git sections and output tail', () => {
@@ -183,7 +189,7 @@ test('fleet-exec は無効時も --resume 付きで起動し、他の source は
   assert.equal(calls.length, 0);
   assert.equal((await runPrompt({ ...options, resumeSource: 'fleet-exec' })).exitCode, 0);
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0].slice(0, 5), ['-p', '--model', 'sonnet', '--resume', 'session']);
+  assert.deepEqual(calls[0].slice(0, 5), ['-p', '--model', 'opus', '--resume', 'session']);
 });
 import { classifyExecutionResult } from './fleet-mail.mjs';
 for (const length of [8000, 8001, 120000]) {

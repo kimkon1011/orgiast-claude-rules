@@ -1,10 +1,66 @@
-import { readFile } from 'node:fs/promises';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
+import { GMAIL_READONLY_SCOPE, mintDwdToken } from './gmail-draft.mjs';
+import { gwsFetch } from './lib/gws-proxy.mjs';
+import { listItems } from './kim-inbox.mjs';
 
 const DAY = 86400000;
+const freeMail = /^(gmail\.com|googlemail\.com|yahoo\.(com|co\.jp)|ymail\.com|icloud\.com|me\.com|mac\.com|outlook\.(com|jp)|hotmail\.(com|co\.jp)|live\.(com|jp)|msn\.com|aol\.com)$/i;
 const dateKey = value => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo' }).format(new Date(value));
 const time = value => new Date(value).getTime();
+
+/**
+ * Check whether the given customer email has a Gmail draft in the specified user's mailbox.
+ * Only checks seisaku-team@orgiast.jp and kim@orgiast.jp.
+ * Returns { found: true, account, draftId } on match, { found: false } when no draft exists,
+ * or { found: false, error: 'string' } on API failure (never throws).
+ */
+export async function checkGmailDrafts(customerEmail, { fetchImpl = gwsFetch, getToken = mintDwdToken } = {}) {
+  const accounts = ['seisaku-team@orgiast.jp', 'kim@orgiast.jp'];
+  let lastError = null;
+  for (const account of accounts) {
+    try {
+      const token = await getToken({ user: account, scope: GMAIL_READONLY_SCOPE, fetchImpl });
+      const res = await fetchImpl(
+        `https://gmail.googleapis.com/gmail/v1/users/me/drafts?q=${encodeURIComponent(`to:${customerEmail} in:drafts`)}`,
+        { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000) },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await res.json();
+      if (Array.isArray(body.drafts) && body.drafts.length > 0) {
+        const draftId = body.drafts[0].id;
+        const messageId = body.drafts[0].message?.id;
+        const result = { found: true, account, draftId };
+        if (messageId) {
+          try {
+            const msgRes = await fetchImpl(
+              `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}?format=minimal`,
+              { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000) },
+            );
+            if (msgRes.ok) {
+              const msg = await msgRes.json();
+              const ms = Number(msg.internalDate);
+              if (Number.isFinite(ms) && ms > 0) result.date = new Date(ms).toISOString();
+            }
+          } catch { /* 日時が取れなくても found は返す（呼び出し側で従来表示に戻す） */ }
+        }
+        return result;
+      }
+    } catch (err) {
+      lastError = { account, reason: err.message || String(err) };
+    }
+  }
+  if (lastError) {
+    return { found: false, error: `${lastError.account}: ${lastError.reason}` };
+  }
+  return { found: false };
+}
 const bodyLines = message => String(message?.body ?? '').split(/\r?\n/).filter(line => !/^\s*>/.test(line)).map(line => line.trim()).filter(Boolean);
+const autoReplyBodyPattern = /自動返信|自動応答|auto-?reply|automatic\s*reply|out\s*of\s*(?:the\s*)?office/i;
+const autoReplySubjectPattern = /自動返信|自動応答|auto-?reply|automatic\s*reply|out\s*of\s*(?:the\s*)?office|不在/i;
+const isAutoReply = msg => Boolean(msg) && (autoReplySubjectPattern.test(msg.subject ?? '') || autoReplyBodyPattern.test(bodyLines(msg).join('\n')));
 export function deduplicateMessages(messages) {
   const seen = new Set();
   return [...messages].sort((a, b) => time(b.received_at) - time(a.received_at)).filter(m => {
@@ -13,12 +69,27 @@ export function deduplicateMessages(messages) {
     seen.add(key); return true;
   });
 }
-export function classifyLead(lead, messages, now = new Date()) {
+/**
+ * 「要返信」行で返信下書き＋kim-inbox 承認待ちなら区分を上げる判定（純粋関数）。
+ * 下書きが顧客最新メールより新しいときだけ upgrade。日時不明・古い・欠落は null。
+ */
+export function resolveReplyDraftApproval({ lastInboundAt, draft, inbox } = {}) {
+  if (!draft?.found || !inbox?.id) return null;
+  const draftAt = draft.date ? time(draft.date) : NaN;
+  if (!Number.isFinite(draftAt)) return null;
+  if (lastInboundAt && draftAt <= time(lastInboundAt)) return null;
+  return {
+    category: '🟠 返信下書き済み・kim 承認待ち',
+    nextAction: `下書き: ${draft.account} / inbox: ${inbox.id}`,
+  };
+}
+export async function classifyLead(lead, messages, now = new Date(), deps = {}) {
   const unique = deduplicateMessages(messages);
-  const lastIn = unique.find(m => m.direction === 'inbound');
+  const lastIn = unique.find(m => m.direction === 'inbound' && !isAutoReply(m));
   const lastOut = unique.find(m => m.direction === 'outbound');
   const past = Boolean(lead.preferred_date && lead.preferred_date < dateKey(now));
-  const declined = /見送|改めてご連絡|必要な際は|今回は|辞退/.test(bodyLines(lastIn).join('\n'));
+  const body = bodyLines(lastIn).join('\n');
+  const declined = /見送(?!りをいただきありがとう)/u.test(body) || /改めてご連絡|必要な際は|今回は(?!質問)/u.test(body) || /辞退/u.test(body) || /(?:別社|他社|他業者|別の業者)(?:にて|で|に)(?:問い合わせ|ご連絡|対応|依頼|発注|お願い|決定|手配)/u.test(body) || /またの機会|次の機会|見合わせ/u.test(body) || /キャンセル(?:させ|いたし|と(?:な|言|申)|させて(?:いただ|頂)|させて(?:もらい|貰))/u.test(body);
   // 登録上の開催日が過ぎていても、直近14日以内に顧客から未回答の返信があれば進行中として扱う。
   const activeReply = Boolean(lastIn && (!lastOut || time(lastIn.received_at) > time(lastOut.received_at)) && time(now) - time(lastIn.received_at) < 14 * DAY);
   let category, nextAction;
@@ -28,17 +99,67 @@ export function classifyLead(lead, messages, now = new Date()) {
   } else if (!lastOut || (lastIn && time(lastIn.received_at) > time(lastOut.received_at))) {
     category = '🔴 要返信';
     const excerpt = bodyLines(lastIn).find(line => !/^(お世話に|いつも|お待たせ|恐れ入)|^.{0,12}ありがとうございます。?$|です。$|様[、。]?$|^[-=＝―─*]+$/.test(line)) ?? '';
-    nextAction = !lastOut
-      ? `初回返信が未送信（下書き有無: ${lead.raw_payload?.event_shop?.draft_saved_at ? '下書きあり・未送信' : '下書きなし'}）`
-      : `顧客の返信に未回答: ${Array.from(excerpt).slice(0, 60).join('')}`;
+    let draft = null;
+    if (deps.gmailDraftCheck && lead.email) {
+      try { draft = await deps.gmailDraftCheck(lead.email); }
+      catch { draft = { found: false, error: 'error' }; }
+    }
+    let inbox = null;
+    if (deps.kimInboxCheck && lead.email) {
+      try { inbox = await deps.kimInboxCheck(lead); }
+      catch { inbox = null; }
+    }
+    const approval = resolveReplyDraftApproval({ lastInboundAt: lastIn?.received_at, draft, inbox });
+    if (approval) {
+      category = approval.category;
+      nextAction = approval.nextAction;
+    } else if (!lastOut) {
+      if (draft?.found) nextAction = `初回返信が未送信（Gmail下書きあり: ${draft.account} ${draft.draftId}・承認待ち）`;
+      else if (draft?.error) nextAction = `初回返信が未送信（Gmail下書き: 未確認）`;
+      else nextAction = `初回返信が未送信（下書き有無: ${lead.raw_payload?.event_shop?.draft_saved_at ? '管理画面に下書きあり・未送信' : '下書きなし'}）`;
+    } else {
+      nextAction = `顧客の返信に未回答: ${Array.from(excerpt).slice(0, 60).join('')}`;
+    }
   } else {
     category = '🟡 顧客待ち';
     const days = Math.max(0, Math.floor((time(now) - time(lastOut.received_at)) / DAY));
-    nextAction = `顧客の返信待ち（最終送信から ${days} 日）${days >= 7 ? '・追客候補' : ''}`;
+    const waiting = `顧客の返信待ち（最終送信から ${days} 日）`;
+    nextAction = days >= 7 ? `${waiting}・追客候補` : waiting;
+    if (days >= 7 && deps.gmailDraftCheck && deps.kimInboxCheck) {
+      let draft, inbox, draftError = false, inboxError = false;
+      try { draft = await deps.gmailDraftCheck(lead.email); draftError = Boolean(draft?.error); }
+      catch { draftError = true; }
+      try { inbox = await deps.kimInboxCheck(lead); }
+      catch { inboxError = true; }
+      if (draft?.found && inbox?.id) nextAction = `${waiting}・追客下書き済み・kim 承認待ち（下書き: ${draft.account} / inbox: ${inbox.id}）`;
+      else {
+        const details = [];
+        if (draftError) details.push('下書き: 未確認');
+        else if (draft?.found) details.push(`下書きあり: ${draft.account}${inboxError ? '・kim-inbox 未確認' : '・kim-inbox 未登録'}`);
+        if (inbox?.id && !draft?.found) details.push(`kim-inbox 承認待ち: ${inbox.id}${draftError ? '' : '・下書きなし'}`);
+        else if (inboxError) details.push('kim-inbox: 未確認');
+        if (details.length) nextAction = `${waiting}・追客候補（${details.join('・')}）`;
+      }
+    }
   }
   return { ...lead, category, nextAction, lastIn: lastIn ?? null, lastOut: lastOut ?? null };
 }
-const excluded = lead => lead.raw_payload?.event_shop?.closed_at || String(lead.company_name ?? '').includes('連携テスト') || /@(orgiast\.jp|event-shop\.jp)$/i.test(lead.email ?? '');
+/**
+ * Determine whether a lead is a close candidate (終了候補) using the same logic as classifyLead.
+ * Returns true when the lead should be moved to completed status.
+ * This is the shared predicate used by both triage and event-shop-close-ended.
+ */
+export function isCloseCandidate(lead, messages, now = new Date()) {
+  const unique = deduplicateMessages(messages);
+  const lastIn = unique.find(m => m.direction === 'inbound' && !isAutoReply(m));
+  const lastOut = unique.find(m => m.direction === 'outbound');
+  const past = Boolean(lead.preferred_date && lead.preferred_date < dateKey(now));
+  const body = bodyLines(lastIn).join('\n');
+  const declined = /見送(?!りをいただきありがとう)/u.test(body) || /改めてご連絡|必要な際は|今回は(?!質問)/u.test(body) || /辞退/u.test(body) || /(?:別社|他社|他業者|別の業者)(?:にて|で|に)(?:問い合わせ|ご連絡|対応|依頼|発注|お願い|決定|手配)/u.test(body) || /またの機会|次の機会|見合わせ/u.test(body) || /キャンセル(?:させ|いたし|と(?:な|言|申)|させて(?:いただ|頂)|させて(?:もらい|貰))/u.test(body);
+  const activeReply = Boolean(lastIn && (!lastOut || time(lastIn.received_at) > time(lastOut.received_at)) && time(now) - time(lastIn.received_at) < 14 * DAY);
+  return declined || (past && !activeReply);
+}
+export const excluded = lead => lead.raw_payload?.event_shop?.closed_at || String(lead.company_name ?? '').includes('連携テスト') || /@(orgiast\.jp|event-shop\.jp)$/i.test(lead.email ?? '');
 export function deduplicateLeads(leads) {
   const kept = [];
   let duplicateCount = 0;
@@ -49,28 +170,37 @@ export function deduplicateLeads(leads) {
   return { leads: kept, duplicateCount };
 }
 export function sortLeads(leads) {
-  const rank = { '🔴 要返信': 0, '🟡 顧客待ち': 1, '⚪ 終了候補': 2 };
+  const rank = { '🔴 要返信': 0, '🟠 返信下書き済み・kim 承認待ち': 1, '🟡 顧客待ち': 2, '⚪ 終了候補': 3 };
   return [...leads].sort((a, b) => rank[a.category] - rank[b.category] || (a.category === '🔴 要返信' ? (a.preferred_date || '9999').localeCompare(b.preferred_date || '9999') : 0) || time(a.created_at) - time(b.created_at));
 }
 export async function loadCredentials(env = process.env) {
-  const path = env.EVENT_SHOP_ENV_FILE || 'D:/Claude/event-shop/.env.local';
-  if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) return { url: env.SUPABASE_URL, key: env.SUPABASE_SERVICE_ROLE_KEY, path };
+  const candidates = [env.EVENT_SHOP_ENV_FILE, path.join(os.homedir(), 'event-shop', '.env.local'), 'D:/Claude/event-shop/.env.local'].filter(Boolean);
+  if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) return { url: env.SUPABASE_URL, key: env.SUPABASE_SERVICE_ROLE_KEY, path: candidates[0] };
+  const filePath = candidates.find(candidate => fs.existsSync(candidate));
   let contents = '';
-  try { contents = await readFile(path, 'utf8'); } catch { /* Missing credentials must not block session startup. */ }
+  try { if (filePath) contents = await fs.promises.readFile(filePath, 'utf8'); } catch { /* Missing credentials must not block session startup. */ }
   const values = {};
   for (const line of contents.split(/\r?\n/)) {
     const match = line.match(/^\s*([A-Z_]+)\s*=\s*(.*?)\s*$/);
     if (match) values[match[1]] = match[2].replace(/^"(.*)"$/, '$1');
   }
-  return { url: values.NEXT_PUBLIC_SUPABASE_URL || values.SUPABASE_URL, key: values.SUPABASE_SERVICE_ROLE_KEY || values.SUPABASE_SECRET_KEY, path };
+  return { url: values.NEXT_PUBLIC_SUPABASE_URL || values.SUPABASE_URL, key: values.SUPABASE_SERVICE_ROLE_KEY || values.SUPABASE_SECRET_KEY, path: filePath || candidates.join(', ') };
 }
-const freeMail = /^(gmail\.com|googlemail\.com|yahoo\.(com|co\.jp)|ymail\.com|icloud\.com|me\.com|mac\.com|outlook\.(com|jp)|hotmail\.(com|co\.jp)|live\.(com|jp)|msn\.com|aol\.com)$/i;
+export function findOpenInboxAsk(lead, { items } = {}) {
+  const email = String(lead.email ?? '').trim().toLowerCase();
+  const domain = email.split('@')[1] || '';
+  const company = String(lead.company_name ?? '').replace(/株式会社|有限会社|合同会社|合資会社|合名会社|一般社団法人|一般財団法人|公益社団法人|公益財団法人|医療法人|社会福祉法人|学校法人|宗教法人|NPO法人/gi, '').replace(/\s+/g, '');
+  const needles = [email, ...(!freeMail.test(domain) && domain ? [domain] : []), ...(company.length >= 3 ? [company] : [])].filter(Boolean);
+  const match = (Array.isArray(items) ? items : []).find(item => item?.status === 'open' && item?.kind === 'ask'
+    && needles.some(needle => String(item.text ?? '').toLowerCase().includes(needle.toLowerCase())));
+  return match ? { id: match.id } : null;
+}
 export function messageQuery(lead) {
   const domain = String(lead.email ?? '').split('@')[1] || '';
   const pattern = encodeURIComponent(freeMail.test(domain) ? lead.email : domain);
   return `/rest/v1/channel_messages?select=received_at,direction,sender_identifier,subject,body,rfc822_message_id&received_at=gte.${String(lead.created_at).slice(0, 10)}&or=(sender_identifier.ilike.*${pattern}*,raw->>to.ilike.*${pattern}*,raw->>cc.ilike.*${pattern}*)&order=received_at.desc&limit=20`;
 }
-async function request(credentials, query, fetchImpl) {
+export async function request(credentials, query, fetchImpl) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
   try {
@@ -84,9 +214,10 @@ async function request(credentials, query, fetchImpl) {
 const cell = value => String(value ?? '').replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ');
 const shortDate = value => value ? String(value).slice(5, 10).replace('-', '/') : '未定';
 export function renderMarkdown(leads, duplicateCount, now) {
-  const counts = ['🔴 要返信', '🟡 顧客待ち', '⚪ 終了候補'].map(c => leads.filter(l => l.category === c).length);
+  const counts = ['🔴 要返信', '🟠 返信下書き済み・kim 承認待ち', '🟡 顧客待ち', '⚪ 終了候補'].map(c => leads.filter(l => l.category === c).length);
   const stamp = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo', dateStyle: 'short', timeStyle: 'short', hour12: false }).format(now);
-  const lines = [`## ${counts[0] ? '🔴' : '✅'} イベント百貨店 問合せ（${stamp} 時点）要返信 ${counts[0]} 件 / 顧客待ち ${counts[1]} 件 / 終了候補 ${counts[2]} 件`, ...(duplicateCount ? [`重複 ${duplicateCount} 件`] : []), '| 区分 | 会社 / 担当 | 受信(経過) | 開催日 | 最終やり取り | 次の一手 | 画面 |', '| --- | --- | --- | --- | --- | --- | --- |'];
+  const headEmoji = counts[0] ? '🔴' : counts[1] ? '🟠' : '✅';
+  const lines = [`## ${headEmoji} イベント百貨店 問合せ（${stamp} 時点）要返信 ${counts[0]} 件 / 返信下書き済み ${counts[1]} 件 / 顧客待ち ${counts[2]} 件 / 終了候補 ${counts[3]} 件`, ...(duplicateCount ? [`重複 ${duplicateCount} 件`] : []), '| 区分 | 会社 / 担当 | 受信(経過) | 開催日 | 最終やり取り | 次の一手 | 画面 |', '| --- | --- | --- | --- | --- | --- | --- |'];
   for (const lead of leads) {
     const latest = [lead.lastIn, lead.lastOut].filter(Boolean).sort((a, b) => time(b.received_at) - time(a.received_at))[0];
     const ended = lead.category === '⚪ 終了候補';
@@ -94,17 +225,33 @@ export function renderMarkdown(leads, duplicateCount, now) {
   }
   return lines.join('\n');
 }
-export async function main({ env = process.env, args = process.argv.slice(2), now = new Date(), fetchImpl = globalThis.fetch, log = console.log } = {}) {
+export async function main({ env = process.env, args = process.argv.slice(2), now = new Date(), fetchImpl = globalThis.fetch, log = console.log, deps = {} } = {}) {
   const credentials = await loadCredentials(env);
   if (!credentials.url || !credentials.key) { log(`イベント百貨店問合せ: 未確認（認証情報なし。試したパス: ${credentials.path}）`); return 0; }
+  // main() が直接呼ばれたときは Gmail 下書き照会を有効にする（既定の gwsFetch を使用）
+  const gmailDraftCheck = deps.gmailDraftCheck ?? (async (email) => {
+    try {
+      return await checkGmailDrafts(email);
+    } catch { return { found: false, error: 'error' }; }
+  });
+  let inboxItems, inboxReadError = false, inboxRead = false;
+  const kimInboxCheck = deps.kimInboxCheck ?? (async lead => {
+    if (!inboxRead) {
+      inboxRead = true;
+      try { inboxItems = listItems(os.homedir(), { status: 'open' }); }
+      catch { inboxReadError = true; }
+    }
+    if (inboxReadError) throw new Error('kim-inbox read failed');
+    return findOpenInboxAsk(lead, { items: inboxItems });
+  });
   try {
     const since = dateKey(new Date(time(now) - 120 * DAY));
     const data = await request(credentials, `/rest/v1/quote_requests?select=id,company_name,contact_name,email,event_name,preferred_date,created_at,status,raw_payload&source=eq.event-shop.jp&created_at=gte.${since}&order=created_at.desc&limit=200`, fetchImpl);
     const { leads, duplicateCount } = deduplicateLeads(data);
     const results = [];
-    for (const lead of leads) results.push(classifyLead(lead, await request(credentials, messageQuery(lead), fetchImpl), now));
+    for (const lead of leads) results.push(await classifyLead(lead, await request(credentials, messageQuery(lead), fetchImpl), now, { gmailDraftCheck, kimInboxCheck }));
     const sorted = sortLeads(results);
-    if (args.includes('--quiet') && !sorted.some(l => l.category === '🔴 要返信')) return 0;
+    if (args.includes('--quiet') && !sorted.some(l => l.category === '🔴 要返信' || l.category === '🟠 返信下書き済み・kim 承認待ち')) return 0;
     log(args.includes('--json') ? JSON.stringify(sorted, null, 2) : renderMarkdown(sorted, duplicateCount, now));
   } catch (error) {
     const reason = error.name === 'AbortError' ? 'タイムアウト' : String(error.message).replace(/[\r\n]+/g, ' ').slice(0, 100);

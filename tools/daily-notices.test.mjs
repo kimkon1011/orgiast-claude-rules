@@ -27,11 +27,18 @@ test('両出力を欠落なくDiscord上限内に分割し、同日は1回・翌
   await runDailyNotices({ ...f, now: new Date('2026-09-18T01:00:00Z') });
   assert.equal(f.messages.length, count * 2);
 });
+test('spooled を配信済みとして記録し、同日の再送を防ぐ', async t => {
+  const f = fixture(t, { notify: async () => ({ delivered: 'spooled' }) });
+  assert.match((await runDailyNotices(f)).message, /^ok:/);
+  const file = path.join(f.home, '.claude', 'daily-notices-state.json');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).complete, true);
+  assert.match((await runDailyNotices(f)).message, /送信済み/);
+});
 test('送信失敗は成功扱いにせず、次回は未送信の続きから', async t => {
   const f = fixture(t);
   let calls = 0;
-  const notify = async (...args) => ++calls === 2 ? { delivered: 'none' } : f.notify(...args);
-  await assert.rejects(runDailyNotices({ ...f, notify }), /DM送信に失敗/);
+  const notify = async (...args) => ++calls === 2 ? { delivered: 'none', reason: 'storage_error' } : f.notify(...args);
+  await assert.rejects(runDailyNotices({ ...f, notify }), /日次通知の kim-inbox 保存に失敗 \(delivered=none reason=storage_error\)/);
   const first = f.messages[0];
   await runDailyNotices(f);
   assert.equal(f.messages.filter(m => m === first).length, 1);

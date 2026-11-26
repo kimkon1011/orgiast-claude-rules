@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { fetchMessages, parseSince } from './discord-digest.mjs';
 import { createLlmClient, parseEnvText, PROVIDERS } from './line-digest.mjs';
 import { getDriveToken } from './lib/drive-auth.mjs';
@@ -15,6 +16,7 @@ const DEFAULT_SHEET_ID = '1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24';
 const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 const ACTIVE_STATES = new Set(['未着手', '進行中', '保留']);
 const TYPES = new Set(['改善', 'タスク', '締切', '決定待ち', 'リスク']);
+const EXCLUDE_CONFIG_PATH = fileURLToPath(new URL('../config/discord-task-digest-exclude.json', import.meta.url));
 
 export function snowflakeToMs(id) {
   try { return Number((BigInt(String(id)) >> 22n) + 1420070400000n); } catch { return NaN; }
@@ -50,6 +52,31 @@ export function preprocessForTasks(messages) {
   });
 }
 
+export function loadExcludeConfig(configPath) {
+  try {
+    const data = JSON.parse(fs.readFileSync(configPath || EXCLUDE_CONFIG_PATH, 'utf8'));
+    if (!Array.isArray(data?.rules)) return [];
+    return data.rules.map((rule) => ({
+      channelId: String(rule.channelId),
+      patterns: Array.isArray(rule.patterns) ? rule.patterns.map((p) => new RegExp(p)) : [],
+      closeTaskIds: Array.isArray(rule.closeTaskIds) ? rule.closeTaskIds.map((id) => String(id)) : [],
+      reason: String(rule.reason || ''),
+    }));
+  } catch { return []; }
+}
+
+export function filterExcludedMessages(messages, channelId, rules) {
+  if (!rules?.length) return messages;
+  const channelRules = rules.filter((rule) => rule.channelId === String(channelId));
+  if (!channelRules.length) return messages;
+  return messages.filter((message) => {
+    const content = String(message?.content ?? message?.text ?? '');
+    return !channelRules.some((rule) =>
+      rule.patterns.some((pattern) => pattern.test(content))
+    );
+  });
+}
+
 function jstDateParts(value) {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(value));
   return Object.fromEntries(parts.map((part) => [part.type, part.value]));
@@ -58,6 +85,76 @@ function jstDateParts(value) {
 function jstDayNumber(value) {
   const p = jstDateParts(value);
   return Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day)) / 864e5;
+}
+
+export function normalizeDeadline(value, { now = new Date() } = {}) {
+  const raw = String(value ?? '');
+  const date = raw.normalize('NFKC').trim()
+    .replace(/(?:\s*\([月火水木金土日](?:曜日)?\)|\s+\d{1,2}:\d{2}(?::\d{2})?)+$/, '');
+  const full = date.match(/^(\d{4})([-/.])(\d{1,2})\2(\d{1,2})$/);
+  const japanese = date.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日$/);
+  const short = date.match(/^(\d{1,2})\/(\d{1,2})$/) || date.match(/^(\d{1,2})月(\d{1,2})日$/);
+  if (!full && !japanese && !short) return raw;
+
+  let year = Number(full?.[1] ?? japanese?.[1] ?? jstDateParts(now).year);
+  const month = Number(full?.[3] ?? japanese?.[2] ?? short[1]);
+  const day = Number(full?.[4] ?? japanese?.[3] ?? short[2]);
+  const iso = () => `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  if (short && !full && !japanese) {
+    const candidate = new Date(`${iso()}T00:00:00Z`);
+    if (Number.isFinite(candidate.getTime()) && jstDayNumber(candidate) - jstDayNumber(now) >= 180) year--;
+  }
+  const normalized = iso();
+  const parsed = new Date(`${normalized}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === normalized ? normalized : raw;
+}
+
+export function isStaleOverdue(task, { now = new Date(), graceDays = 7 } = {}) {
+  if (!ACTIVE_STATES.has(task.status) || !/^\d{4}-\d{2}-\d{2}$/.test(task.deadline)) return false;
+  const deadline = new Date(`${task.deadline}T00:00:00Z`);
+  if (!Number.isFinite(deadline.getTime()) || deadline.toISOString().slice(0, 10) !== task.deadline) return false;
+  return jstDayNumber(now) - jstDayNumber(deadline) > graceDays;
+}
+
+export function isExpiredSameDay(task, { now = new Date() } = {}) {
+  if (!ACTIVE_STATES.has(task.status) || !/^\d{4}-\d{2}-\d{2}$/.test(task.deadline)) return false;
+  const deadline = new Date(`${task.deadline}T00:00:00Z`);
+  if (!Number.isFinite(deadline.getTime()) || deadline.toISOString().slice(0, 10) !== task.deadline) return false;
+  const created = String(task.createdAt ?? '').match(/^(\d{4}-\d{2}-\d{2})/);
+  if (!created) return false;
+  const createdDate = new Date(`${created[1]}T00:00:00Z`);
+  if (!Number.isFinite(createdDate.getTime())) return false;
+  const deadlineDay = jstDayNumber(deadline);
+  return deadlineDay <= jstDayNumber(createdDate) && jstDayNumber(now) > deadlineDay;
+}
+
+export function isStaleUndated(task, { now = new Date(), maxAgeDays = 14 } = {}) {
+  if (!ACTIVE_STATES.has(task.status)) return false;
+  if (String(task.deadline ?? '').trim()) return false;
+  const created = String(task.createdAt ?? '').match(/^(\d{4}-\d{2}-\d{2})/);
+  if (!created) return false;
+  const createdDate = new Date(`${created[1]}T00:00:00Z`);
+  if (!Number.isFinite(createdDate.getTime())) return false;
+  return jstDayNumber(now) - jstDayNumber(createdDate) > maxAgeDays;
+}
+
+export function pickTop(tasks, { now = new Date(), limit = 5, graceDays = 7, undatedDays = 14 } = {}) {
+  const top = [], staleOverdue = [], expiredSameDay = [], staleUndated = [];
+  for (const task of tasks) {
+    if (!ACTIVE_STATES.has(task.status)) continue;
+    const { id, rank, title, deadline, createdAt } = task;
+    if (isStaleOverdue(task, { now, graceDays })) {
+      if (staleOverdue.length < limit) staleOverdue.push({ id, rank, title, deadline });
+    } else if (isExpiredSameDay(task, { now })) {
+      if (expiredSameDay.length < limit) expiredSameDay.push({ id, rank, title, deadline });
+    } else if (isStaleUndated(task, { now, maxAgeDays: undatedDays })) {
+      if (staleUndated.length < limit) staleUndated.push({ id, rank, title, createdAt });
+    } else if (top.length < limit) {
+      top.push({ id, rank, title });
+    }
+    if (top.length >= limit && staleOverdue.length >= limit && expiredSameDay.length >= limit && staleUndated.length >= limit) break;
+  }
+  return { top, staleOverdue, expiredSameDay, staleUndated };
 }
 
 export function priorityScore(item, { now = new Date() } = {}) {
@@ -126,22 +223,23 @@ function channelIdFromLink(link) {
   return String(link || '').match(/discord\.com\/channels\/[^/]+\/([^/]+)\//)?.[1] || '';
 }
 
-export function rowToTask(row) {
+export function rowToTask(row, { now = new Date() } = {}) {
+  const deadlineRaw = String(row[8] || '');
   return {
     id: String(row[0] || ''), createdAt: String(row[1] || ''), rank: String(row[2] || ''), score: Number(row[3]) || 0,
     type: String(row[4] || ''), title: String(row[5] || ''), action: String(row[6] || ''), owner: String(row[7] || ''),
-    deadline: String(row[8] || ''), channelName: String(row[9] || ''), evidence: String(row[10] || ''), link: String(row[11] || ''),
+    deadlineRaw, deadline: normalizeDeadline(deadlineRaw, { now }), channelName: String(row[9] || ''), evidence: String(row[10] || ''), link: String(row[11] || ''),
     status: String(row[12] || ''), memo: String(row[13] || ''), updatedAt: String(row[14] || ''), channelId: channelIdFromLink(row[11]),
   };
 }
 
 export function taskToRow(task) {
-  return [task.id, task.createdAt, task.rank, task.score, task.type, task.title, task.action, task.owner, task.deadline, task.channelName, task.evidence, task.link, task.status, task.memo, task.updatedAt];
+  return [task.id, task.createdAt, task.rank, task.score, task.type, task.title, task.action, task.owner, task.deadlineRaw ?? task.deadline, task.channelName, task.evidence, task.link, task.status, task.memo, task.updatedAt];
 }
 
 export function mergeTasks(existingRows, candidates, { now = new Date() } = {}) {
   const stamp = formatJst(now);
-  const existing = existingRows.filter((row) => row.some((cell) => String(cell || '').trim())).map(rowToTask);
+  const existing = existingRows.filter((row) => row.some((cell) => String(cell || '').trim())).map((row) => rowToTask(row, { now }));
   let nextId = existing.reduce((max, task) => Math.max(max, Number(task.id.match(/^T-(\d+)$/)?.[1]) || 0), 0) + 1;
   const open = existing.filter((task) => ACTIVE_STATES.has(task.status));
   const openKeys = new Set(open.map(dedupeKey));
@@ -229,12 +327,13 @@ async function extractTasks(messages, channel, { guildId, provider, llm }) {
 }
 
 function parseArgs(argv) {
-  const opts = { since: '24h', guild: DEFAULT_GUILD_ID, sheet: process.env.DISCORD_TASK_SHEET_ID?.trim() || DEFAULT_SHEET_ID, provider: 'groq', maxChannels: 120, dryRun: false, fixture: '', noLlm: false };
-  const valued = new Set(['since', 'guild', 'sheet', 'provider', 'max-channels', 'fixture']);
+  const opts = { since: '24h', guild: DEFAULT_GUILD_ID, sheet: process.env.DISCORD_TASK_SHEET_ID?.trim() || DEFAULT_SHEET_ID, provider: 'groq', maxChannels: 120, dryRun: false, fixture: '', noLlm: false, closeMatchingExcluded: false, excludeConfig: '' };
+  const valued = new Set(['since', 'guild', 'sheet', 'provider', 'max-channels', 'fixture', 'exclude-config']);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--dry-run') { opts.dryRun = true; continue; }
     if (arg === '--no-llm') { opts.noLlm = true; continue; }
+    if (arg === '--close-matching-excluded') { opts.closeMatchingExcluded = true; continue; }
     if (!arg.startsWith('--') || !valued.has(arg.slice(2)) || argv[i + 1] == null) throw new Error(`不正な引数: ${arg}`);
     const key = arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     opts[key] = argv[++i];
@@ -286,11 +385,43 @@ function appendJsonLines(file, values) {
   fs.appendFileSync(file, `${values.map(JSON.stringify).join('\n')}\n`);
 }
 
+async function closeMatchingExcluded(opts, rules, options, fetchImpl) {
+  const token = options.existingRows ? '' : await (options.getToken || getDriveToken)({ scope: SHEETS_SCOPE });
+  const read = options.existingRows
+    ? { values: options.existingRows }
+    : await sheetsRequest(fetchImpl, token, valuesUrl(opts.sheet, 'タスク!A2:O'));
+  const rows = Array.isArray(read.values) ? read.values : [];
+  const updates = [];
+  for (const [index, row] of rows.entries()) {
+    const task = rowToTask(row);
+    if (!ACTIVE_STATES.has(task.status)) continue;
+    // LLM によるタイトルの要約に依存せず、チャンネルと指定 ID で照合する。
+    if (!rules.some((rule) => rule.channelId === task.channelId && rule.closeTaskIds.includes(task.id))) continue;
+    const rowNumber = index + 2;
+    updates.push({
+      range: `タスク!M${rowNumber}:N${rowNumber}`,
+      values: [['対応不要', '民泊スタッフ間の定型連絡（電話担当が対応）・自動クローズ 2026-11-21']],
+    });
+  }
+  if (!opts.dryRun && updates.length) {
+    await sheetsRequest(fetchImpl, token, `${SHEETS_API}/${encodeURIComponent(opts.sheet)}/values:batchUpdate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ valueInputOption: 'RAW', data: updates }),
+    });
+  }
+  const result = { ok: true, closeMatchingExcluded: updates.length };
+  (options.log || console.log)(JSON.stringify(result));
+  return result;
+}
+
 export async function runDiscordTaskDigest(options = {}) {
   const argv = options.args || [], opts = { ...parseArgs(argv), ...(options.cli || {}) };
   const now = options.now || new Date(), since = parseSince(opts.since, now.getTime());
   if (since == null) throw new Error('--since の形式が不正です');
   const home = options.home || os.homedir(), fetchImpl = options.fetchImpl || globalThis.fetch;
+  const excludeRules = loadExcludeConfig(opts.excludeConfig);
+  if (opts.closeMatchingExcluded) return closeMatchingExcluded(opts, excludeRules, options, fetchImpl);
   let fixture = null, token = '';
   if (opts.fixture) fixture = JSON.parse(fs.readFileSync(opts.fixture, 'utf8'));
   let tokenSource = 'fixture';
@@ -305,7 +436,7 @@ export async function runDiscordTaskDigest(options = {}) {
   const textChannels = channels.filter((channel) => channel?.type === 0 || channel?.type === 5);
   const active = selectActiveChannels(channels, since, opts.maxChannels);
   const llm = options.llm || (opts.noLlm ? null : createLlmClient({ home, fetchImpl, usageFile: path.join(home, '.claude', 'executor-usage.jsonl') }));
-  const extracted = []; let skipped = 0, messageCount = 0, held = 0;
+  const extracted = []; let skipped = 0, messageCount = 0, held = 0, excludedCount = 0;
   const state = { lastRunAt: now.toISOString(), channels: {} };
   for (const channel of active) {
     let messages;
@@ -318,7 +449,9 @@ export async function runDiscordTaskDigest(options = {}) {
     const recent = messages.filter((message) => Date.parse(message?.timestamp || '') >= since);
     messageCount += recent.length;
     state.channels[channel.id] = { lastMessageId: String(channel.last_message_id || recent[0]?.id || ''), lastSeenAt: now.toISOString() };
-    const prepared = preprocessForTasks(recent);
+    const filtered = filterExcludedMessages(recent, channel.id, excludeRules);
+    excludedCount += recent.length - filtered.length;
+    const prepared = preprocessForTasks(filtered);
     if (!prepared.length || opts.noLlm) continue;
     const result = await extractTasks(prepared, channel, { guildId: opts.guild, provider: opts.provider, llm });
     extracted.push(...result.items); held += result.held;
@@ -348,7 +481,7 @@ export async function runDiscordTaskDigest(options = {}) {
     fs.writeFileSync(path.join(base, 'state.json'), `${JSON.stringify(state, null, 2)}\n`);
     appendJsonLines(path.join(base, 'tasks.jsonl'), merged.added);
   }
-  const result = { ok: true, tokenSource, channelsScanned: textChannels.length, channelsActive: active.length, skipped, messages: messageCount, extracted: extracted.length, added: merged.added.length, suppressed: merged.suppressed, held, totalRows: rows.length, top: merged.tasks.slice(0, 5).map((task) => ({ id: task.id, rank: task.rank, title: task.title })) };
+  const result = { ok: true, tokenSource, channelsScanned: textChannels.length, channelsActive: active.length, skipped, messages: messageCount, extracted: extracted.length, added: merged.added.length, suppressed: merged.suppressed, excluded: excludedCount, held, totalRows: rows.length, ...pickTop(merged.tasks, { now }) };
   (options.log || console.log)(JSON.stringify(result));
   (options.log || console.log)(`discord-task-digest: 走査${textChannels.length}ch / 新規${merged.added.length}件 / 重複除外${merged.suppressed}件 / P1 ${merged.tasks.filter((task) => task.rank === 'P1').length}件`);
   return result;

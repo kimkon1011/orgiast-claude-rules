@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { assertContextApproved, writeContextMarker } from './lib/send-context.mjs';
-import { classifyMessage, fetchHistory, labelHistory, loadInternalSenders, main, runLlm } from './send-context-check.mjs';
+import { classifyMessage, fetchHistory, labelHistory, loadInternalSenders, main, matchBeeperInternalChat, parseKimApprovedNote, resolveKimApprovedRecipient, runLlm } from './send-context-check.mjs';
 
 const tmp = t => { const p=fs.mkdtempSync(path.join(os.tmpdir(),'send-context-')); t.after(()=>fs.rmSync(p,{recursive:true,force:true})); return p; };
 test('LINE履歴は実テーブルの列名を使って整形する', async t => {
@@ -37,6 +37,18 @@ test('自社の質問と相手未回答の実データ形をLLMへ正しいラ�
   assert.match(prompt,/\[自社\]の質問を相手の要望と解釈しない/);
   assert.equal(verdict.ok,true);
   assert.match(verdict.reason,/自社質問を相手要望としていない/);
+});
+test('通常・定期報告のLLMプロンプト先頭に注入した日本時間の送信予定日時を含む', () => {
+  for (const periodicReport of [false, { recipient: '佐藤優奈' }]) {
+    let prompt='';
+    runLlm([], '送信本文', {
+      now: new Date('2026-11-19T05:20:00.000Z'),
+      periodicReport,
+      spawn: (_exe,args) => { prompt=fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8'); return {status:0,stdout:'{"verdict":"OK","reason":"整合","warnings":[]}',stderr:''}; },
+    });
+    assert.match(prompt, /^送信予定日時（日本時間）: 2026-11-19（木）14:20\n/);
+    assert.match(prompt, /履歴の最終日時と送信予定日時の間に起きた出来事.*履歴に記録がないことだけを理由に NG にしない/);
+  }
 });
 test('定期報告モードは同じ未対応項目の再掲をNGにせず、質問と食い違いだけNGにする（2026-11-13の再現）', () => {
   let prompt='';
@@ -88,6 +100,8 @@ test('定期報告の再掲許容とは独立に原本の事実を照合し、�
       return{status:0,stdout:JSON.stringify({verdict:prompts.length===1?'OK':'NG',reason:`${kind}の不一致`,warnings:[]})};
     }});
     assert.equal(verdict.ok,false);assert.equal(prompts.length,2);
+    assert.match(prompts[1],/同じ出来事の日付・金額・人名をそれぞれ照合する/);
+    assert.match(prompts[1],/発信者・担当者・連絡者の人名が別人に置き換わっていたら必ずNG/);
     assert.match(prompts[1],/発信者・連絡者や具体的な人名が別人に置き換わっていたら必ずNG/);
     assert.doesNotMatch(prompts[1],/前日以前の報告/);
   }
@@ -294,4 +308,202 @@ test('Gmail履歴取得はDRAFTメッセージを除外し検索時に-in:drafts
   assert.ok(!result.messages.some(m => m.text.includes('作成中の下書き本文')));
   assert.equal(result.messages[0].text, '送信済みの案内本文');
   assert.equal(result.messages[1].text, '相手からの返信本文');
+});
+
+
+test('--kim-approved はLLMがNGでも社内宛ならマーカーと監査ログを残す', async t => {
+  const home=tmp(t), file=path.join(home,'body.txt'); fs.writeFileSync(file,'社内連絡本文');
+  const note='2026-11-16 23:04 金さんがグロボのチャットで承認';
+  const code=await main(['--channel','discord','--target','1423319951980232744','--text-file',file,'--kim-approved',note],{
+    home,
+    fetchHistory:async()=>({target:'dm-satou',messages:[{id:'m1',at:'2026-11-16T00:00:00.000Z',side:'self',party:'internal',sender:'オージャスト',text:'前の連絡'}]}),
+    runLlm:()=>({ok:false,reason:'未回答あり',warnings:['未回答']}),
+    resolveKimApprovedRecipient:async()=>({allowed:true,resolvedId:'1423319951980232744',source:'internal-senders'}),
+  });
+  assert.equal(code,0);
+  const markers=fs.readdirSync(path.join(home,'.claude','send-context-checks'));
+  assert.equal(markers.length,1);
+  const marker=JSON.parse(fs.readFileSync(path.join(home,'.claude','send-context-checks',markers[0]),'utf8'));
+  assert.equal(marker.kimApproved,note);
+  assert.equal(marker.llmOk,false);
+  assert.equal(marker.target,'dm-satou');
+  const row=JSON.parse(fs.readFileSync(path.join(home,'.claude','logs','send-context-kim-approved.jsonl'),'utf8').trim());
+  assert.equal(row.llmOk,false);
+  assert.equal(row.llmReason,'未回答あり');
+  assert.deepEqual(row.warnings,['未回答']);
+  assert.equal(row.kimApproved,note);
+  assert.equal(row.target,'dm-satou');
+  assert.equal(row.resolvedUserId,'1423319951980232744');
+  assert.equal(row.bodyHash, marker.bodyHash);
+  assert.equal(row.allowed,true);
+  assert.ok(row.at);
+});
+
+test('--kim-approved は社外宛ではマーカーを作らず監査ログだけ残す', async t => {
+  const home=tmp(t), file=path.join(home,'body.txt'); fs.writeFileSync(file,'社外宛');
+  const code=await main(['--channel','discord','--target','999','--text-file',file,'--kim-approved','金さんが承認'],{
+    home,
+    fetchHistory:async()=>({target:'dm-ext',messages:[{id:'m1',at:'2026-11-16T00:00:00.000Z',side:'external',party:'external',sender:'顧客',text:'hello'}]}),
+    runLlm:()=>({ok:false,reason:'NG',warnings:[]}),
+    resolveKimApprovedRecipient:async()=>({allowed:false,resolvedId:'999',source:null}),
+  });
+  assert.equal(code,1);
+  const dir=path.join(home,'.claude','send-context-checks');
+  assert.equal(fs.existsSync(dir)?fs.readdirSync(dir).length:0,0);
+  const row=JSON.parse(fs.readFileSync(path.join(home,'.claude','logs','send-context-kim-approved.jsonl'),'utf8').trim());
+  assert.equal(row.allowed,false);
+  assert.equal(row.llmOk,false);
+  assert.equal(row.kimApproved,'金さんが承認');
+});
+
+test('--kim-approved 無しのNGは従来どおりマーカーも監査ログも作らない', async t => {
+  const home=tmp(t), file=path.join(home,'body.txt'); fs.writeFileSync(file,'通常');
+  const code=await main(['--channel','discord','--target','1423319951980232744','--text-file',file],{
+    home,
+    fetchHistory:async()=>({target:'dm-1',messages:[{id:'m1',at:'2026-11-16T00:00:00.000Z',side:'self',party:'internal',sender:'オージャスト',text:'x'}]}),
+    runLlm:()=>({ok:false,reason:'NG',warnings:[]}),
+  });
+  assert.equal(code,2);
+  const dir=path.join(home,'.claude','send-context-checks');
+  assert.equal(fs.existsSync(dir)?fs.readdirSync(dir).length:0,0);
+  assert.equal(fs.existsSync(path.join(home,'.claude','logs','send-context-kim-approved.jsonl')),false);
+});
+
+test('--kim-approved の空メモはエラー', () => {
+  assert.throws(() => parseKimApprovedNote(['--kim-approved']), /根拠メモ/);
+  assert.throws(() => parseKimApprovedNote(['--kim-approved','--channel']), /根拠メモ/);
+  assert.equal(parseKimApprovedNote([]), '');
+  assert.equal(parseKimApprovedNote(['--kim-approved',' 金さんが承認 ']), '金さんが承認');
+});
+
+test('resolveKimApprovedRecipient はメンバーディレクトリの社内メンバーを許可する', async () => {
+  const senders=loadInternalSenders();
+  const sawayama={id:'958259895327686656',username:'.kutuku',global_name:'澤山　貴俊'};
+  const result=await resolveKimApprovedRecipient('discord','958259895327686656',{
+    internalSenders: senders,
+    getDiscordMembersImpl: async () => [sawayama],
+  });
+  assert.equal(result.allowed,true);
+  assert.equal(result.resolvedId,'958259895327686656');
+  assert.equal(result.source,'discord-member-directory');
+});
+
+test('resolveKimApprovedRecipient はディレクトリにないDiscord IDを拒否する', async () => {
+  const result=await resolveKimApprovedRecipient('discord','111111111111111111',{
+    internalSenders: loadInternalSenders(),
+    getDiscordMembersImpl: async () => [],
+    getGuildMember: async () => null,
+  });
+  assert.equal(result.allowed,false);
+});
+
+
+test('--kim-approved は安価LLMが全部失敗しても社内宛ならマーカーを作る', async t => {
+  const home=tmp(t), file=path.join(home,'body.txt'); fs.writeFileSync(file,'社内連絡');
+  const code=await main(['--channel','discord','--target','1423319951980232744','--text-file',file,'--kim-approved','金さんが承認'],{
+    home,
+    fetchHistory:async()=>({target:'dm-satou',messages:[{id:'m1',at:'2026-11-16T00:00:00.000Z',side:'self',party:'internal',sender:'オージャスト',text:'前の連絡'}]}),
+    runLlm:()=>{ throw new Error('安価LLM判定失敗: gemini HTTP402'); },
+    resolveKimApprovedRecipient:async()=>({allowed:true,resolvedId:'1423319951980232744',source:'internal-senders'}),
+  });
+  assert.equal(code,0);
+  const markers=fs.readdirSync(path.join(home,'.claude','send-context-checks'));
+  assert.equal(markers.length,1);
+  const marker=JSON.parse(fs.readFileSync(path.join(home,'.claude','send-context-checks',markers[0]),'utf8'));
+  assert.equal(marker.llmOk,false);
+  assert.match(marker.reason,/LLM判定失敗/);
+  const row=JSON.parse(fs.readFileSync(path.join(home,'.claude','logs','send-context-kim-approved.jsonl'),'utf8').trim());
+  assert.equal(row.llmOk,false);
+  assert.match(row.llmReason,/LLM判定失敗/);
+});
+
+
+test('resolveKimApprovedRecipient はメンバーキャッシュのIDを許可する', async t => {
+  const home=tmp(t);
+  fs.mkdirSync(path.join(home,'.claude'));
+  fs.writeFileSync(path.join(home,'.claude','orgiast-discord-members.json'), JSON.stringify({
+    queries: { '澤山': { fetched_at: '2026-11-16T00:00:00.000Z', members: [{ id:'958259895327686656', username:'.kutuku', global_name:'澤山　貴俊' }] } }
+  }));
+  const result=await resolveKimApprovedRecipient('discord','958259895327686656',{
+    home,
+    internalSenders: loadInternalSenders(),
+    getDiscordMembersImpl: async () => [],
+  });
+  assert.equal(result.allowed,true);
+  assert.equal(result.resolvedId,'958259895327686656');
+  assert.equal(result.source,'discord-member-directory');
+});
+
+test('resolveKimApprovedRecipient はギルドメンバーID照会でも許可する', async () => {
+  const result=await resolveKimApprovedRecipient('discord','958259895327686656',{
+    internalSenders: loadInternalSenders(),
+    getDiscordMembersImpl: async () => [],
+    getGuildMember: async () => ({ id:'958259895327686656', username:'.kutuku', global_name:'澤山　貴俊' }),
+  });
+  assert.equal(result.allowed,true);
+  assert.equal(result.resolvedId,'958259895327686656');
+  assert.equal(result.source,'discord-member-directory');
+});
+
+const NISHIDA_CHAT = '!BOwKKifdLGec7wJCYH5d:beeper.local';
+
+test('社内Beeperチャットは lineDisplayNames に載せない', () => {
+  const senders = loadInternalSenders();
+  assert.equal(senders.lineDisplayNames.has('西田直哉'), false);
+  const match = matchBeeperInternalChat(NISHIDA_CHAT, senders);
+  assert.equal(match?.chatId, NISHIDA_CHAT);
+  assert.equal(match?.email, 'nishi@orgiast.jp');
+  assert.equal(classifyMessage({side:'inbound',sender:'西田直哉',text:'報告です'},'line',senders).party,'external');
+  assert.equal(classifyMessage({side:'external',sender:'西田直哉',text:'報告です'},'beeper',senders).party,'external');
+});
+
+test('resolveKimApprovedRecipient はBeeperの社内チャットIDを許可する', async () => {
+  const result = await resolveKimApprovedRecipient('beeper', NISHIDA_CHAT, { internalSenders: loadInternalSenders() });
+  assert.equal(result.allowed, true);
+  assert.equal(result.resolvedId, NISHIDA_CHAT);
+  assert.equal(result.source, 'beeper-internal-chats');
+});
+
+test('resolveKimApprovedRecipient はBeeperの社内メンバー名をチャットIDへ解決する', async () => {
+  const result = await resolveKimApprovedRecipient('beeper', '西田直哉', { internalSenders: loadInternalSenders() });
+  assert.equal(result.allowed, true);
+  assert.equal(result.resolvedId, NISHIDA_CHAT);
+  assert.equal(result.source, 'beeper-internal-chats');
+});
+
+test('resolveKimApprovedRecipient は未登録のBeeperチャットIDを拒否する', async () => {
+  const result = await resolveKimApprovedRecipient('beeper', '!unknown:beeper.local', { internalSenders: loadInternalSenders() });
+  assert.equal(result.allowed, false);
+  assert.equal(result.source, null);
+});
+
+test('resolveKimApprovedRecipient は社内メールでないBeeper対応を拒否する', async () => {
+  const senders = loadInternalSenders();
+  senders.beeperInternalChats = [{ chatId: '!ext:beeper.local', name: '顧客', email: 'customer@example.com' }];
+  const result = await resolveKimApprovedRecipient('beeper', '!ext:beeper.local', { internalSenders: senders });
+  assert.equal(result.allowed, false);
+});
+
+test('--kim-approved はBeeperの社内チャットIDならLLMがNGでもマーカーを作る', async t => {
+  const home = tmp(t), file = path.join(home, 'body.txt');
+  fs.writeFileSync(file, '004 FAX復旧報告');
+  const note = '2026-11-18 13:05 金さんがグロボのチャットで承認';
+  const code = await main(['--channel', 'beeper', '--target', NISHIDA_CHAT, '--text-file', file, '--kim-approved', note], {
+    home,
+    fetchHistory: async () => ({ target: NISHIDA_CHAT, messages: [{ id: 'm1', at: '2026-11-17T08:12:48.752Z', side: 'external', party: 'external', sender: '西田直哉', text: '写真でもあれば見てみたい' }] }),
+    runLlm: () => ({ ok: false, reason: '2026-10-25 の未回答質問が残っています', warnings: ['未回答'] }),
+  });
+  assert.equal(code, 0);
+  const markers = fs.readdirSync(path.join(home, '.claude', 'send-context-checks'));
+  assert.equal(markers.length, 1);
+  const marker = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'send-context-checks', markers[0]), 'utf8'));
+  assert.equal(marker.kimApproved, note);
+  assert.equal(marker.llmOk, false);
+  assert.equal(marker.target, NISHIDA_CHAT);
+  const row = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'logs', 'send-context-kim-approved.jsonl'), 'utf8').trim());
+  assert.equal(row.allowed, true);
+  assert.equal(row.source, 'beeper-internal-chats');
+  assert.equal(row.resolvedUserId, NISHIDA_CHAT);
+  assert.equal(row.llmOk, false);
+  assert.equal(row.kimApproved, note);
 });

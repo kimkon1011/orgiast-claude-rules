@@ -42,11 +42,11 @@ for (const kind of ['stalled', 'waiting_user', 'overdue-check', 'overdue-start',
       transcriptEvidence: () => ({ count: 0, lastAt: 0, snippets: [] }),
       recentFiles: () => ({ names: [], lastAt: 0 }), autoSessionRuns: () => ({ names: [], lastAt: 0 }),
       judge: () => ({ verdict: 'stalled', reason: '停滞' }),
-      executeCheck: async () => ({ code: kind === 'scheduled-start' ? 0 : 1, text: '未完了' }),
+      executeCheck: async () => ({ code: kind === 'scheduled-start' ? 0 : 1, text: kind === 'scheduled-start' ? '成果物を確認' : '未完了' }),
       resume: () => assert.fail('no resume'), addKimInboxItem: async (_home, item) => {
         if (++attempts === 1) throw new Error('temporary inbox failure');
         notices.push(item); return { id: 'notice' };
-      } };
+      }, autoResumeDisabledByConfig: () => false };
     const dry = await run({ home, now, dryRun: true, io });
     assert.equal(dry.resumed, 0);
     assert.equal(attempts, 0);
@@ -57,10 +57,29 @@ for (const kind of ['stalled', 'waiting_user', 'overdue-check', 'overdue-start',
     }
     assert.equal(attempts, 2);
     assert.equal(notices.length, 1);
-    assert.match(notices[0].text, /自動再開は行いません.*claude --resume s/);
+    const [notice] = notices;
     const saved = readLedger(ledgerFile(home))[0];
-    assert.equal(saved.status, 'stalled');
-    assert.equal(saved.resumeOutcome, 'disabled');
+    if (kind === 'overdue-start') {
+      assert.equal(saved.status, 'expired');
+      assert.ok(saved.startExpiredNotifiedAt);
+      assert.equal(notice.source, 'auto-progress-start-expired');
+      assert.equal(notice.kind, 'ask');
+      assert.equal(notice.priority, 'high');
+      assert.match(notice.text, /いまの状態: 開始予約の期限切れ/);
+    } else {
+      assert.equal(saved.status, 'stalled');
+      assert.equal(saved.resumeOutcome, 'disabled');
+      if (kind === 'scheduled-start') {
+        assert.equal(notice.source, 'auto-progress-ready-deferred');
+        assert.equal(notice.kind, 'ask');
+        assert.equal(notice.priority, 'high');
+        assert.match(notice.text, /いまの状態: 条件は達成/);
+        assert.match(notice.text, /確認結果: 成果物を確認/);
+        assert.match(notice.text, /自動再開は行いません/);
+      } else {
+        assert.match(notice.text, /自動再開は行いません.*claude --resume s/);
+      }
+    }
     assert.equal(saved.resumeCount ?? 0, 0);
   });
 }
@@ -72,11 +91,31 @@ test('外部新着キューも再開せず、同じセッションへの通知�
     row: { sessionId: 's' }, inboxId: 'receipt', state: 'pending', queuedAt: new Date(now).toISOString() };
   saveEvent(home, event);
   let notices = 0;
-  const options = { home, now, resume: () => assert.fail('no resume'), io: { addKimInboxItem: async () => { notices++; return { id: 'notice' }; } } };
+  const options = { home, now, resume: () => assert.fail('no resume'), io: { addKimInboxItem: async () => { notices++; return { id: 'notice' }; },
+    autoResumeDisabledByConfig: () => false } };
   await drainExternalQueue(options);
   saveEvent(home, { ...event, key: 'b'.repeat(64) });
   await drainExternalQueue(options);
   await drainExternalQueue({ ...options, now: now + 3600000 });
   assert.equal(notices, 1);
   assert.ok(readEvents(home).every(e => e.state === 'disabled'));
+});
+
+test('恒久無効時は kim-inbox 通知を行わない', async t => {
+  const home = fixture(t);
+  let now = Date.parse('2026-11-14T05:00:00Z');
+  const row = { sessionId: 's', ts: new Date(now - 4 * 3600000).toISOString(), cwd: home,
+    promise: '成果物を仕上げる', label: '成果物', nextKim: 'なし', status: 'open' };
+  writeLedger(ledgerFile(home), [row]);
+  let inboxCalls = 0;
+  const io = { ...notificationMocks, clock: () => now, transcriptFiles: [], sheetConfig: () => null,
+    digest: async () => ({}), escalateKimDecisions: async () => ({}),
+    transcriptEvidence: () => ({ count: 0, lastAt: 0, snippets: [] }),
+    recentFiles: () => ({ names: [], lastAt: 0 }), autoSessionRuns: () => ({ names: [], lastAt: 0 }),
+    judge: () => ({ verdict: 'stalled', reason: '停滞' }),
+    executeCheck: async () => ({ code: 1, text: '未完了' }),
+    resume: () => assert.fail('no resume'), addKimInboxItem: async () => { inboxCalls++; return { id: 'notice' }; },
+    autoResumeDisabledByConfig: () => true };
+  await run({ home, now, io });
+  assert.equal(inboxCalls, 0);
 });

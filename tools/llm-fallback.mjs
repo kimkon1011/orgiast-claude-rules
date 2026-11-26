@@ -1,10 +1,14 @@
-import { routeCandidate } from './provider-routing.mjs';
+import { routeCandidate, usageCostFields } from './provider-routing.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { budgetVerdict, estimateTokens, noteResponse, readBudget, writeBudget } from './rate-budget.mjs';
 import { isDailyQuotaResponse, nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
+import { providerLimitedUntil } from './lib/executor-gate.mjs';
+import { isAutoDisabled, readDisabledEntries } from './lib/lane-disabled.mjs';
+import { applyCandidateHealth } from './fallback-backend-health.mjs';
+import { injectAbsoluteRules } from './lib/absolute-rules.mjs';
 
 export const FALLBACK_CHAIN = Object.freeze([
   { provider: 'groq', model: 'openai/gpt-oss-120b' },
@@ -166,6 +170,11 @@ export function parseQuotaResetTime(text, now = Date.now()) {
   return null;
 }
 
+function isQuotaExhaustedUntilReset(status, detail, now) {
+  if (status !== 429 || parseQuotaResetTime(detail, now) == null) return false;
+  return /(?:limit\s+exhausted|usage\s+limit|quota|weekly\s+limit|monthly\s+limit)/i.test(String(detail || ''));
+}
+
 // lane-health.json に quota_wait を書き込む（上限中レーンを他からも避けさせる）。
 function saveQuotaWaitToLaneHealth(provider, until, detail, hp, persist) {
   if (!persist) return;
@@ -211,7 +220,21 @@ async function fetchBeforeDeadline(fetchImpl, request, deadline) {
   } finally { clearTimeout(timer); }
 }
 
-export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category = '', allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, laneHealthFile, persistState = true, perProviderTimeoutMs, now = () => Date.now() }) {
+const DIRECT_PROVIDERS = new Set(['glm', 'kimi', 'deepseek']);
+function directNameFromUrl(url) {
+  const value = String(url || '');
+  if (/\/\/api\.z\.ai\b/i.test(value)) return 'glm';
+  if (/api\.moonshot|api\.kimi\./i.test(value)) return 'kimi';
+  if (/\/\/api\.deepseek\.com\b/i.test(value)) return 'deepseek';
+  return '';
+}
+function claudeHomeFrom(file) {
+  if (!file) return '';
+  const dir = path.dirname(file);
+  return path.basename(dir) === '.claude' ? path.dirname(dir) : '';
+}
+
+export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category = '', caller = 'llm-fallback', allowGatewayFallback = true, explicitStart = false, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, laneHealthFile, persistState = true, perProviderTimeoutMs, now = () => Date.now() }) {
   if (perProviderTimeoutMs != null && (!Number.isSafeInteger(perProviderTimeoutMs) || perProviderTimeoutMs <= 0 || perProviderTimeoutMs > 2147483647)) throw new Error('perProviderTimeoutMs must be a positive timer-safe integer');
   start = routeCandidate(start);
   chain = chain.map(routeCandidate);
@@ -248,6 +271,10 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
   if (cooldownFile != null || !process.env.NODE_TEST_CONTEXT) {
     try { disabled = new Set(Object.keys(JSON.parse(fs.readFileSync(cooldownFile ? path.join(path.dirname(cooldownFile), 'lanes-disabled.json') : path.join(home, '.claude', 'lanes-disabled.json'), 'utf8').replace(/^\uFEFF/, '')) || {}).map(p => p.toLowerCase())); } catch {}
   }
+  // A lane-doctor probe may measure its own automatically disabled provider.
+  const probeProvider = process.env.ORGIAST_LANE_DOCTOR_PROBE_PROVIDER;
+  if (probeProvider && !chain.length && start?.provider === probeProvider &&
+      isAutoDisabled(readDisabledEntries(home)[probeProvider])) disabled.delete(probeProvider);
   const candidates = [];
   const seen = new Set();
   // Gateway selection is routing, not failover; --no-fallback still uses OpenRouter.
@@ -272,6 +299,8 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
   // 将来テストが cooldownFile を渡し忘れても実環境の受け皿を止めないための多重防御。
   const useCooldown = chain.length > 0 && (cooldownFile != null || !process.env.NODE_TEST_CONTEXT);
   const cooldownPath = cooldownFile || path.join(home, '.claude', 'provider-cooldown.json');
+  const historyFile = path.join(path.dirname(cooldownPath), 'provider-limit-history.jsonl');
+  const considerDirect = cooldownFile != null || !process.env.NODE_TEST_CONTEXT;
   const cooldowns = useCooldown ? readJson(cooldownPath, {}) : {};
   const cooldownMax = threshold('ORGIAST_LLM_429_COOLDOWN_MAX_MS', 900_000);
   const cooldownMin = Math.min(cooldownMax, threshold('ORGIAST_LLM_429_COOLDOWN_MIN_MS', 60_000));
@@ -295,24 +324,46 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
         .map(([provider]) => String(provider).toLowerCase());
     } catch {}
   }
+  function directBlockedUntil(provider) {
+    if (!considerDirect) return 0;
+    const name = String(provider || '').toLowerCase();
+    if (!DIRECT_PROVIDERS.has(name)) return 0;
+    const until = Math.max(Number(cooldowns?.[name]?.until) || 0, providerLimitedUntil(historyFile, name, timestamp));
+    return until > timestamp ? until : 0;
+  }
   const available = useCooldown
     ? candidates.filter(({ provider }) => {
+        if (explicitStart && provider === start.provider) return true;
         const p = String(provider).toLowerCase();
         if (Number(cooldowns?.[p]?.until) > timestamp) return false;
         if (quotaWaitProviders.includes(p)) return false;
+        if (directBlockedUntil(p)) return false;
         return true;
       })
-    : candidates;
-  const selectedCandidates = available.length ? available : candidates;
+    : candidates.filter(({ provider }) => !directBlockedUntil(provider));
+  // 全滅時は非直APIだけ再開する。glm / kimi直 / deepseek直は履歴・cooldown の間は呼ばない。
+  const revived = (available.length ? available : candidates).filter(({ provider }) => !directBlockedUntil(provider));
+  const selectedCandidates = available.length ? available : (revived.length ? revived : (considerDirect ? revived : candidates));
   const skipped = [];
-  if (useCooldown && (available.length || quotaWaitProviders.length)) {
+  if (explicitStart) {
+    const p = String(start.provider).toLowerCase();
+    const reason = Number(cooldowns?.[p]?.until) > timestamp ? 'cooldown' : quotaWaitProviders.includes(p) ? 'quota_wait' : '';
+    if (reason) console.error(`[routing] 明示指定された ${start.provider} は ${reason} 中ですがスキップせず試行します`);
+  }
+  if ((useCooldown && (available.length || quotaWaitProviders.length)) || candidates.some((candidate) => directBlockedUntil(candidate.provider))) {
     for (const candidate of candidates) {
       const p = String(candidate.provider).toLowerCase();
+      if (explicitStart && candidate.provider === start.provider && candidate.model === start.model) continue;
       const cd = cooldowns?.[p];
-      if (Number(cd?.until) > timestamp) {
+      if (Number(cd?.until) > timestamp && useCooldown) {
         const minutes = Math.max(1, Math.ceil((cd.until - timestamp) / 60000));
         skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'cooldown', minutesLeft: minutes });
         console.error(`[cooldown] ${candidate.provider} はスキップ (${cd.reason || 'unknown'}, 残り${minutes}分)`);
+      } else if (directBlockedUntil(p)) {
+        const until = directBlockedUntil(p);
+        const minutes = Math.max(1, Math.ceil((until - timestamp) / 60000));
+        skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'cooldown', minutesLeft: minutes });
+        console.error(`[cooldown] ${candidate.provider} の直APIは provider-limit-history / cooldown 中のためスキップ (残り${minutes}分)`);
       } else if (quotaWaitProviders.includes(p)) {
         const qw = laneHealth?.lanes?.[p];
         const minutes = qw?.until ? Math.max(1, Math.ceil((Number(qw.until) - timestamp) / 60000)) : '?';
@@ -365,11 +416,42 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
   const useBudget = budgetFile != null || !process.env.NODE_TEST_CONTEXT;
   const budgetPath = budgetFile || path.join(home, '.claude', 'provider-budget.json');
 
+  async function noteAttempt(info) {
+    await onAttempt?.(info);
+    if (!ledgerFile || !persistState) return;
+    let usage = {};
+    if (info.status === 'ok' && info.response?.clone) usage = (await info.response.clone().json().catch(() => ({}))).usage || {};
+    const row = {
+      t: new Date(now()).toISOString(), category: String(category || ''), caller: String(caller || 'llm-fallback'),
+      tool: String(caller || 'llm-fallback'), provider: info.candidate.provider, model: info.candidate.model,
+      status: info.status, attempt: info.attempt, failover: Boolean(info.failover), ok: info.status === 'ok',
+      secs: Number(Number(info.secs || 0).toFixed(3)), in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0,
+      ...usageCostFields(usage),
+    };
+    try { fs.mkdirSync(path.dirname(ledgerFile), { recursive: true }); fs.appendFileSync(ledgerFile, `${JSON.stringify(row)}\n`); } catch {}
+  }
+  function noteCandidateHealth() {
+    if (process.env.NODE_TEST_CONTEXT) return;
+    const tracked = claudeHomeFrom(ledgerFile);
+    if (!tracked || !ledgerFile) return;
+    try {
+      const rows = fs.readFileSync(ledgerFile, 'utf8').split(/\n/).flatMap((line) => {
+        if (!line.trim()) return [];
+        try {
+          const row = JSON.parse(line);
+          if (!row.provider || row.status === 'unrouted') return [];
+          return [row];
+        } catch { return []; }
+      });
+      applyCandidateHealth(tracked, { rows });
+    } catch {}
+  }
+
   const failures = [];
   const requests = new Map();
   async function requestAt(index) {
     if (!requests.has(index)) {
-      const request = await payloadFor(selectedCandidates[index]);
+      const request = injectAbsoluteRules(await payloadFor(selectedCandidates[index]));
       requests.set(index, request);
       if (!request) {
         const candidate = selectedCandidates[index];
@@ -385,6 +467,14 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
     let lastAttempt = 0;
     const request = await requestAt(candidateIndex);
     if (!request) continue;
+    const directName = directNameFromUrl(request.url) || (DIRECT_PROVIDERS.has(String(candidate.provider).toLowerCase()) ? String(candidate.provider).toLowerCase() : '');
+    const blockedUntil = directBlockedUntil(directName);
+    if (blockedUntil) {
+      const minutes = Math.max(1, Math.ceil((blockedUntil - timestamp) / 60000));
+      skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'cooldown', minutesLeft: minutes });
+      console.error(`[cooldown] ${directName} の直APIはクールダウン中のため呼びません (残り${minutes}分)`);
+      continue;
+    }
     // 候補ごとに読み直す。並列プロセスが直前に書いた残量を取りこぼさないため(C)。
     const budgetStore = useBudget ? readBudget(budgetPath) : {};
     const verdict = useBudget
@@ -417,13 +507,14 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
               const validationReason = typeof validation === 'string' ? validation : 'unusable response';
               lastReason = `unusable: ${validationReason}`;
               attempted++;
-              await onAttempt?.({ candidate, attempt, status: 'unusable', response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: (candidate.provider !== start.provider || candidate.model !== start.model) });
+              await noteAttempt({ candidate, attempt, status: 'unusable', response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: (candidate.provider !== start.provider || candidate.model !== start.model) });
               break;
             }
           }
-          await onAttempt?.({ candidate, attempt, status: 'ok', response, secs: (Date.now() - began) / 1000, failover: (candidate.provider !== start.provider || candidate.model !== start.model) });
+          await noteAttempt({ candidate, attempt, status: 'ok', response, secs: (Date.now() - began) / 1000, failover: (candidate.provider !== start.provider || candidate.model !== start.model) });
           clearCooldown(candidate.provider);
           saveCooldowns();
+          noteCandidateHealth();
           return { response, candidate, failover: (candidate.provider !== start.provider || candidate.model !== start.model), attempt };
         }
         detail = (await response.clone().text().catch(() => '')).slice(0, 400);
@@ -433,7 +524,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
         lastReason = timedOut ? `timeout after ${perProviderTimeoutMs}ms` : `network: ${error?.message || String(error)}`;
       }
       attempted++;
-      await onAttempt?.({ candidate, attempt, status: timedOut ? 'timeout' : statusName(status), response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: (candidate.provider !== start.provider || candidate.model !== start.model) });
+      await noteAttempt({ candidate, attempt, status: timedOut ? 'timeout' : statusName(status), response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: (candidate.provider !== start.provider || candidate.model !== start.model) });
       // groq の通常429の本文には `https://console.groq.com/settings/billing` が含まれるため、
       // 素の `billing` で判定すると日次上限(TPD)を恒久障害と誤判定する。恒久障害の文面だけを拾う。
       const permanentBilling = status === 429 && isPermanentBillingDetail(detail);
@@ -442,7 +533,8 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
       if (timedOut) break; // A hung candidate must not consume three timeout windows.
       const kind = classifyFailure(status);
       const dailyQuota = status === 429 && isDailyQuotaResponse(status, detail);
-      if (permanentBilling || dailyQuota || kind !== 'retry' || attempt === 2) break;
+      const exhaustedUntilReset = isQuotaExhaustedUntilReset(status, detail, now());
+      if (permanentBilling || dailyQuota || exhaustedUntilReset || kind !== 'retry' || attempt === 2) break;
       const specified = retryAfterMs(response);
       if (specified != null && specified > 60000) break;
       const delay = specified ?? 1000 * 2 ** attempt;
@@ -468,5 +560,6 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
   error.failures = failures;
   error.skipped = skipped;
   saveCooldowns();
+  noteCandidateHealth();
   throw error;
 }

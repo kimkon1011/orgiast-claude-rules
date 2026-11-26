@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { scan, detect } from './permanent-fix-deferral-scan.mjs';
+import { scan, detect, resolvedWait } from './permanent-fix-deferral-scan.mjs';
 
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'deferral-scan-'));
@@ -95,6 +95,26 @@ test('既知の実違反原文を検出する', () => {
   for (const quote of quotes) assert.ok(detect(quote).length >= 1, quote);
   assert.equal(detect(quotes[0])[0].pattern, 'P4');
   assert.equal(detect(quotes[1])[0].pattern, 'P3');
+});
+test('実測6件の委譲済み待機・正当な承認待ちは検出しない', () => {
+  const falsePositives = [
+    'Codex に締め処理を委譲済みです。締め処理を実行中のため、まだ閉じない（タスク `by7gvg7th`）。完了待ちです。',
+    'この repo は全PCに配布される共通ルールです。次に kim がすること: PR #2573 を取り込んでよいか一言返す',
+    'draft PR のため GitHub 側が merge を拒否している。次に kim がすること: PR #8 のマージ可否と修正の作り直し可否に答える',
+    '人にしかできない操作で止まってはおらず、Claude 側の自動進行（Codex 実行中）を待っているだけ。タスク `abc12345` の完了待ちです。',
+    '変更は全アカウントに配られる。次に kim がすること: ②の5つの質問に短く答える。恒久修正を進めてよいか判断してください。',
+    'Codex(`bged1hp4t`)の push と CI の結果を待っています。'
+  ];
+  for (const excerpt of falsePositives) assert.deepEqual(detect(excerpt), [], excerpt);
+});
+test('委譲証拠も承認制約もない本物の先送りは引き続き検出する', () => {
+  for (const excerpt of ['この修正は次のセッションで対応します', '恒久対応は後日']) {
+    assert.ok(detect(excerpt).some(found => /^P[1-4]$/.test(found.pattern)), excerpt);
+  }
+});
+test('回答なしで実装が自動進行する質問はP3にしない', () => {
+  const excerpt = '次に kim がすること: ②の5つの質問に答える（答えなくても7台分の修正は自動で進みます）';
+  assert.deepEqual(detect(excerpt), []);
 });
 test('手渡しなし・進捗報告・修正完了は検出しない', () => {
   for (const quote of [
@@ -404,4 +424,257 @@ test('他レーンが修正中のため未検証という先送りを検出す�
     '修正中で、まだ確かめられる状態にないという表現を調査した。',
     '[handoff-audit:116827928ab09de7] 恒久修正の先送り文を検出（W）「Codex が修正中で、まだ確かめられる状態にないため」'
   ]) assert.deepEqual(detect(text), [], text);
+});
+
+// ================================================================
+// 2026-11-18: W パターンに除外を2つ追加（INBOX_RELAY / DELEGATION_STARTED）
+// 実測で確定した誤検知 5 件を止めるテスト
+// ================================================================
+test('【受信箱】formのkim-inbox info通知転記はWと誤検出しない（96bfba6f / d5fa33a8）', () => {
+  const text = '【受信箱】\n起きたこと: 018 が次に何の作業をするかを決めるのを待っている、というお知らせです。';
+  assert.deepEqual(detect(text).map(found => found.pattern), [], 'INBOX_RELAY ガードで除外されるべき');
+});
+
+test('委譲起動直後の完了待ちはWと誤検出しない（e88a780c / 8b21d815）', () => {
+  // 実測 e88a780c: Codex に実装を委譲した直後の完了待ち
+  const text1 = 'Codex に実装を委譲し、バックグラウンドで進行中です。完了を待ちます。';
+  assert.deepEqual(detect(text1).map(found => found.pattern), [], 'DELEGATION_STARTED ガードで除外されるべき（委譲を起動）');
+  // 実測 8b21d815: 指示文には委譲語が無いためWとして検出される＝正しい挙動
+  // 「次に kim がすること: なし（Codex の生成完了を待っています）」は委譲を起動した
+  // 文脈が別行にあるので、この文単体ではDELEGATION_STARTEDが効かずW検出される
+});
+
+test('指示書を作成してcodex-doを起動した直後の完了待ちはWと誤検出しない（統合文）', () => {
+  // e88a780c の実際のhandoff文脈を再現: 指示書作成とcodex-do起動が同じ文にある
+  const text = '指示書を作成して codex-do を起動しました。次に kim がすること: なし（Codex の生成完了を待っています）';
+  const results = detect(text);
+  assert.deepEqual(results.map(found => found.pattern), [], 'DELEGATION_STARTED ガードで除外されるべき（指示書を作成して codex-do を起動）');
+});
+
+test('本物の違反は今までどおりWとして検出される', () => {
+  // ケース4: ルール+Codexの両方待ち
+  const text4 = 'ルール側の PR のマージと、Codex の実装完了の両方を待っています。どちらも終わると通知が来るので、届き次第検証に入ります。';
+  assert.ok(detect(text4).some(d => d.pattern === 'W'), 'ケース4: ルール+Codexの両方待ちはWとして検出されるべき');
+
+  // ケース5: 次セッションへの恒久対応
+  const text5 = '恒久対応は次セッションで実装します。';
+  assert.ok(detect(text5).some(d => d.pattern === 'W' || d.pattern === 'P1'), 'ケース5: 次セッションでの実装はWまたはP1として検出されるべき');
+
+  // ケース6: 数分待ち
+  const text6 = '数分お待ちください。';
+  assert.ok(detect(text6).some(d => d.pattern === 'W'), 'ケース6: 数分待ちはWとして検出されるべき');
+});
+
+// 上記テストでカバーできるよう、DELEGATION_STARTEDとINBOX_RELAYの統合も確認
+test('INBOX_RELAY 統合テスト: 受信箱形式の通知はWから除外される', () => {
+  const texts = [
+    '【受信箱】起きたこと: Codex が書き込みタスクで exit_null になる原因診断の完了待ちです。',
+    '【受信箱】\n返事の例: 指示書を作成して codex-do を起動しました。完了を待っています。',
+  ];
+  for (const text of texts) {
+    const results = detect(text);
+    assert.deepEqual(results.map(found => found.pattern), [], `INBOX_RELAY: "${text.slice(0, 40)}..." はWとして検出されないべき`);
+  }
+});
+// 受信箱形式でもP1（恒久修正の先送り）のような実違反は引き続き検出する
+test('INBOX_RELAY はP1検出に影響しない', () => {
+  // 「修正の恒久対応を次回に」はP1違反。INBOX_RELAYはWのループ内だけの除外なので
+  // P1は引き続き検出される。これは正しい挙動。
+  const text = '【受信箱】\n判断してほしいこと: この修正の恒久対応を次回に回すかどうかの返事を待っています。';
+  const results = detect(text);
+  assert.ok(results.length > 0, 'P1違反は引き続き検出されるべき');
+  assert.equal(results[0].pattern, 'P1', '恒久+次回のP1はそのまま検出される');
+});
+
+test('DELEGATION_STARTED 統合テスト: 委譲起動直後の完了待ちはWから除外される', () => {
+  const texts = [
+    '指示書を書いて codex-do に委譲しました。完了を待っています。',
+    'Codex に依頼を渡しました。完了を待ちます。',
+    '指示書を作成して DeepSeek へ投げました。完了待ちです。',
+    'サブエージェントを起動しました。完了を待っています。',
+  ];
+  for (const text of texts) {
+    const results = detect(text);
+    assert.deepEqual(results.map(found => found.pattern), [], `DELEGATION_STARTED: "${text.slice(0, 40)}..." はWとして検出されないべき`);
+  }
+});
+
+// ================================================================
+// 2026-11-18: HANDOFF_NONE_LINE + LANE_NAME 除外（実測 e88a780c）
+// フッターだけのメッセージ「次に kim がすること: なし（Codex の生成完了を待っています）」
+// が W に当たらないことと、人の作業がある同型文は引き続き検出されること
+// ================================================================
+test('kimの作業なし＋レーン待ちのフッターはWと誤検出しない（e88a780c / 実測原文）', () => {
+  // 実測例: 3行フッターだけのメッセージ
+  const text = '次に kim がすること: なし（Codex の生成完了を待っています） この後の自動進行: Codex 完了後に検証します';
+  const results = detect(text);
+  assert.deepEqual(results.map(found => found.pattern), [], 'HANDOFF_NONE_LINE + LANE_NAME ガードで除外されるべき');
+});
+
+test('kimの作業なし＋レーン待ち: バリエーションも除外される', () => {
+  for (const text of [
+    '次に kim がすること: なし（DeepSeek の結果を待っています）',
+    '次に kim がすること: 特になし（codex-do の完了待ちです）',
+    '次に kim がすること: ありません（Gemini の完了を待っています）',
+    '次に kim がすること: 無し（サブエージェントの完了を待っています）',
+  ]) {
+    const results = detect(text);
+    assert.deepEqual(results.map(found => found.pattern), [], `バリエーション: "${text}" はWとして検出されないべき`);
+  }
+});
+
+test('kimの作業あり＋レーン待ちは従来どおりWとして検出される', () => {
+  // kim の作業が「なし」ではないので除外されない
+  const text = '次に kim がすること: 差分をレビューしてください。Codex の完了を待っています';
+  const results = detect(text);
+  assert.ok(results.some(d => d.pattern === 'W'), 'kimの作業ありはWとして検出されるべき');
+});
+
+test('kimの作業なしでもレーン名が無ければWとして検出される', () => {
+  // LANE_NAME に一致しないので除外されない
+  const text = '次に kim がすること: なし（完了を待っています）';
+  const results = detect(text);
+  assert.ok(results.some(d => d.pattern === 'W'), 'レーン名が無ければWとして検出されるべき');
+});
+
+// ================================================================
+// 2026-11-19: handoff-audit ledger の excerpt フィールドも検出対象に
+// ================================================================
+test('handoff-audit ledgerのexcerptだけに先送り文がある行を検出する', t => {
+  const home = fixture(t);
+  const names = ['handoff-audit-ledger.jsonl', 'handoff-audit-nightly-ledger.jsonl'];
+  const entry = {
+    ts: '2026-11-19T00:00:00Z',
+    verdict: 'pass',
+    sessionId: 'excerptonly123456',
+    violations: [{ quote: '修正が完了しました' }],
+    excerpt: '恒久修正は次セッションで行う'
+  };
+  for (const name of names) {
+    fs.writeFileSync(path.join(home, '.claude', name), `${JSON.stringify(entry)}\n`);
+  }
+  const result = scan({ home });
+  for (const source of result.sources) {
+    const isHandoff = source.name === 'handoff-audit-ledger.jsonl' || source.name === 'handoff-audit-nightly-ledger.jsonl';
+    if (isHandoff) {
+      assert.equal(source.hits, 1, `${source.name}: excerpt only should hit`);
+      assert.equal(source.rows[0].field, 'excerpt', `${source.name}: should report field=excerpt`);
+      assert.equal(source.rows[0].pattern, 'P1', `${source.name}: should detect P1`);
+    } else {
+      assert.equal(source.hits, 0, `${source.name}: should not hit (no file written)`);
+    }
+  }
+});
+
+test('同じ行でquoteとexcerptの両方がヒットしたら1件に数える', t => {
+  const home = fixture(t);
+  const names = ['handoff-audit-ledger.jsonl', 'handoff-audit-nightly-ledger.jsonl'];
+  const entry = {
+    ts: '2026-11-19T00:00:00Z',
+    verdict: 'pass',
+    sessionId: 'bothhit1234567',
+    violations: [{ quote: '恒久修正は次セッションで行う' }],
+    excerpt: '少々お待ちください'
+  };
+  for (const name of names) {
+    fs.writeFileSync(path.join(home, '.claude', name), `${JSON.stringify(entry)}\n`);
+  }
+  const result = scan({ home });
+  for (const source of result.sources) {
+    const isHandoff = source.name === 'handoff-audit-ledger.jsonl' || source.name === 'handoff-audit-nightly-ledger.jsonl';
+    if (isHandoff) {
+      assert.equal(source.hits, 1, `${source.name}: should count as 1 even with both hitting`);
+      assert.equal(source.rows[0].field, 'quote', `${source.name}: should prefer quote field when both match`);
+      assert.equal(source.rows[0].pattern, 'P1', `${source.name}: should detect P1 from quote`);
+    } else {
+      assert.equal(source.hits, 0, `${source.name}: should not hit`);
+    }
+  }
+});
+
+// ================================================================
+// 2026-11-22: resolvedWait が queue-operation / attachment 形式の
+// task-notification も認識するか
+// ================================================================
+function transcriptFixture(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resolved-wait-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+function writeTranscript(dir, lines) {
+  const file = path.join(dir, 'transcript.jsonl');
+  fs.writeFileSync(file, lines.map(l => JSON.stringify(l)).join('\n') + '\n');
+  return file;
+}
+
+test('resolvedWait: queue-operation 通知＋後続 assistant text → in-session', t => {
+  const dir = transcriptFixture(t);
+  // queue-operation に task-notification が含まれ、後に assistant の text 応答がある
+  const transcript = writeTranscript(dir, [
+    { type: 'assistant', timestamp: '2026-11-20T22:07:30.000Z', message: { content: [{ type: 'text', text: '待っています' }] } },
+    { type: 'queue-operation', timestamp: '2026-11-20T22:10:30.000Z', content: '<task-notification>\n<task-id>abc</task-id>\n</task-notification>' },
+    { type: 'assistant', timestamp: '2026-11-20T22:11:00.000Z', message: { content: [{ type: 'text', text: '通知が届きました。結果を確認します。' }] } },
+  ]);
+  assert.equal(resolvedWait(transcript, '2026-11-20T22:07:00.000Z'), true);
+});
+
+test('resolvedWait: attachment queued_command 通知＋後続 assistant text → in-session', t => {
+  const dir = transcriptFixture(t);
+  // attachment queued_command の prompt に task-notification が含まれる
+  const transcript = writeTranscript(dir, [
+    { type: 'assistant', timestamp: '2026-11-20T22:07:30.000Z', message: { content: [{ type: 'text', text: '委譲します' }] } },
+    { type: 'attachment', timestamp: '2026-11-20T22:10:30.000Z', attachment: { type: 'queued_command', prompt: '<task-notification>\n<task-id>def</task-id>\n</task-notification>' } },
+    { type: 'assistant', timestamp: '2026-11-20T22:11:00.000Z', message: { content: [{ type: 'text', text: '結果を確認します。' }] } },
+  ]);
+  assert.equal(resolvedWait(transcript, '2026-11-20T22:07:00.000Z'), true);
+});
+
+test('resolvedWait: 通知の後に assistant text が無い → 解消扱いにしない', t => {
+  const dir = transcriptFixture(t);
+  const transcript = writeTranscript(dir, [
+    { type: 'assistant', timestamp: '2026-11-20T22:07:30.000Z', message: { content: [{ type: 'text', text: '委譲します' }] } },
+    { type: 'queue-operation', timestamp: '2026-11-20T22:10:30.000Z', content: '<task-notification>\n<task-id>ghi</task-id>\n</task-task-notification>' },
+  ]);
+  assert.equal(resolvedWait(transcript, '2026-11-20T22:07:00.000Z'), false);
+});
+
+test('resolvedWait: type:user の既存判定は維持', t => {
+  const dir = transcriptFixture(t);
+  const transcript = writeTranscript(dir, [
+    { type: 'user', timestamp: '2026-11-20T22:10:30.000Z', message: { content: 'task-notification が届きました' } },
+    { type: 'assistant', timestamp: '2026-11-20T22:11:00.000Z', message: { content: [{ type: 'text', text: '確認します' }] } },
+  ]);
+  assert.equal(resolvedWait(transcript, '2026-11-20T22:07:00.000Z'), true);
+});
+
+test('resolvedWait: attachment が後続の行にあり時刻が少し前でも検出する（非単調増加）', t => {
+  const dir = transcriptFixture(t);
+  // attachment の timestamp が assistant 応答より前（行順では後ろ）でも検出できるか
+  const transcript = writeTranscript(dir, [
+    { type: 'assistant', timestamp: '2026-11-20T22:07:30.000Z', message: { content: [{ type: 'text', text: '委譲します' }] } },
+    { type: 'assistant', timestamp: '2026-11-20T22:11:00.000Z', message: { content: [{ type: 'text', text: '結果を確認します。' }] } },
+    { type: 'attachment', timestamp: '2026-11-20T22:10:30.000Z', attachment: { type: 'queued_command', prompt: '<task-notification>\n<task-id>jkl</task-id>\n</task-notification>' } },
+  ]);
+  // attachment の timestamp (22:10:30) は assistant 応答 (22:11:00) より前なので in-session
+  assert.equal(resolvedWait(transcript, '2026-11-20T22:07:00.000Z'), true);
+});
+
+test('先送り文の無いexcerptはhandoff-auditで0件', t => {
+  const home = fixture(t);
+  const names = ['handoff-audit-ledger.jsonl', 'handoff-audit-nightly-ledger.jsonl'];
+  const entry = {
+    ts: '2026-11-19T00:00:00Z',
+    verdict: 'pass',
+    sessionId: 'cleanboth12345',
+    violations: [{ quote: '修正が完了しました' }],
+    excerpt: 'すべての修正を完了し、結果を記録しました。'
+  };
+  for (const name of names) {
+    fs.writeFileSync(path.join(home, '.claude', name), `${JSON.stringify(entry)}\n`);
+  }
+  const result = scan({ home });
+  for (const source of result.sources) {
+    assert.equal(source.hits, 0, `${source.name}: should have 0 hits with clean content`);
+  }
 });

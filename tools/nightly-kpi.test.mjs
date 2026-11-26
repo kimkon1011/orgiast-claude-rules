@@ -5,7 +5,7 @@ import {
   PR_YIELD_RATE_THRESHOLD, TODO_SIMILARITY_THRESHOLD,
   appendImprovementTodos, calculateKpi, clusterBySimilarity, isInNightlyWindow,
   formatText, githubRepo, improvementTodos, normalizeTodo, parseBatchLog, parseRun, parseTodos,
-  previousKpiDate, queryPullRequests, similarity, todoTokens,
+  previousKpiDate, queryPullRequests, queryScheduledTaskInfo, similarity, todoTokens,
 } from './nightly-kpi.mjs';
 
 process.env.TZ = 'Asia/Tokyo';
@@ -24,6 +24,55 @@ function run(overrides = {}) {
 
 test('ログファイル不在は batchRan=false で、0/0を正常扱いしない', () => {
   assert.deepEqual(parseBatchLog(null), { batchRan: false, batchCompleted: false, batchStepsOk: 0, batchStepsTotal: 0, failedSteps: [], warnSteps: [], lastStep: null });
+});
+
+test('同日の次回実行時刻より前はログがなくても P0 を起票しない', () => {
+  const nextRunTime = '2026-09-02T03:07:12.0000000';
+  const taskInfo = queryScheduledTaskInfo((_file, args) => {
+    assert.match(args.at(-1), /NextRunTime=\$i\.NextRunTime\.ToString\('o'\)/);
+    return { status: 0, stdout: JSON.stringify({ NextRunTime: nextRunTime }) };
+  });
+  assert.equal(taskInfo?.nextRunTime, nextRunTime);
+  const kpi = calculateKpi({
+    date, todoParse: parseTodos(''), runs: [], batch: parseBatchLog(null),
+    taskInfo, now: new Date('2026-09-02T02:15:00'),
+  });
+  assert.equal(kpi.batchNotStarted, true);
+  assert.deepEqual(improvementTodos(kpi), []);
+  assert.match(formatText(kpi), /未開始（開始予定 03:07）/);
+});
+
+test('同日に実行済みでログがなければ P0 を起票する', () => {
+  const kpi = calculateKpi({
+    date, todoParse: parseTodos(''), runs: [], batch: parseBatchLog(null),
+    taskInfo: { lastRunTime: '2026-09-02T03:00:12', nextRunTime: '2026-09-03T03:00:12' },
+    now: new Date('2026-09-02T03:15:00'),
+  });
+  assert.equal(kpi.batchNotStarted, false);
+  assert.match(improvementTodos(kpi)[0], /^P0: .*起動直後/);
+});
+
+test('タスク情報がなければローカルの03:00を境にログ不在の P0 を判定する', () => {
+  const inputs = { date, todoParse: parseTodos(''), runs: [], taskInfo: null };
+  const before = calculateKpi({
+    ...inputs, batch: parseBatchLog(null), now: new Date('2026-09-02T02:59:59'),
+  });
+  assert.equal(before.batchNotStarted, true);
+  assert.deepEqual(improvementTodos(before), []);
+  assert.match(formatText(before), /未開始（開始予定 03:00）/);
+
+  const atStart = calculateKpi({
+    ...inputs, batch: parseBatchLog(null), now: new Date('2026-09-02T03:00:00'),
+  });
+  assert.equal(atStart.batchNotStarted, false);
+  assert.match(improvementTodos(atStart)[0], /^P0: .*起動直後/);
+
+  const incomplete = calculateKpi({
+    ...inputs, batch: parseBatchLog('2026-09-02 02:59:00 / start / ok'),
+    now: new Date('2026-09-02T02:59:59'),
+  });
+  assert.equal(incomplete.batchNotStarted, false);
+  assert.match(improvementTodos(incomplete)[0], /^P0: .*完了未確認/);
 });
 
 test('ログがあってもサマリ行がなければ未完了、errorステップを列挙する', () => {

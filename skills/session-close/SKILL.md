@@ -24,6 +24,11 @@ description: セッションを綺麗に閉じて次に引き継ぐ。「終わ�
 - これを忘れると、この目的は最大8時間ほか のセッションから「着手中」に見え続ける（拾えない目的が生まれる）。
 - 出力は無い。失敗しても exit 0 なので、成果報告には書かなくてよい。
 
+## 2.6 予定の書き出し（schedule-autopilot）
+
+- このセッションで分かった日付・時刻のある予定（送信・配信・納期・提出・金さんの承認待ち・電話・支払）を、最終まとめに `【予定】YYYY-MM-DD HH:MM｜件名｜種別:送信/承認/納期/やること｜担当:…｜金さん判断:…｜推奨:…｜文面:URL` で1件1行書く（Stop hook が期限台帳へ記録する）。
+- 済んだ予定は `node ~/orgiast-claude-rules/tools/schedule-autopilot.mjs done --id <ID>`。詳細 rules/schedule-autopilot.md。
+
 ## 3. memory へ永続化
 
 - 次回も効く恒久的な事実だけを `~/.claude/projects/<projectId>/memory/` に書く。

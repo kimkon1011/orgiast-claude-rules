@@ -1,9 +1,23 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/register-catch-and-act.ps1", "scope": "kim-only", "step": "task:catch-and-act", "reason": "015でkimのLINE・メールを読み、個人カレンダー更新と承認キューを処理するため明示登録のみ"},
+    {"path": "tools/login-health.mjs", "scope": "fleet", "step": "task:login-health", "reason": "全PCのログイン状態を点検する共通タスク"},
+    {"path": "tools/register-login-health.mjs", "scope": "fleet", "step": "task:login-health", "reason": "全PCのログイン点検タスク登録入口"},
+    {"path": "tools/register-login-health.ps1", "scope": "fleet", "step": "task:login-health", "reason": "全PCのログイン点検タスクを2時間ごとに登録する"},
     {"path": "tools/fleet-scope.json", "scope": "fleet", "step": "settings:setup-converge", "reason": "fleet scope 定義ファイル。setup --converge の配布対象判定に使われる"},
+    {"path": "tools/lib/change-gate.mjs", "scope": "fleet", "step": "settings:setup-converge", "reason": "全PCの定期処理がLLM起動前に新着・入力変化を判定する共通実行時依存"},
+    {"path": "tools/cron-liveness-check.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "SessionStart のcron生存点検を全PCで実行し、担当席だけの配達タスク有無をローカル判定する"},
+    {"path":"tools/unrequested-automation-gate.mjs","scope":"fleet","step":"settings:unrequested-automation-gate","reason":"全PCで未依頼の自動通知・定期実行追加を遮断するPreToolUseゲート"},
+    {"path":"tools/register-beeper-gateway.ps1","scope":"kim-only","reason":"Beeper 本体がある 000（kim-PC）だけで中継の常駐タスクを登録する。他PCは beeper-gateway-client.ps1 を使う"},
+    {"path":"tools/register-inquiry-discord-watch.ps1","scope":"kim-only","reason":"問い合わせDiscord第2系統は通知重複を避けるため、このタスクを登録する運用PCだけで実行する"},
+    {"path":"tools/register-site-prelaunch-weekly.ps1","scope":"kim-only","reason":"000（kim-PC）だけで全サイトの週次公開前チェックを登録し、kim-inbox への重複通知を防ぐ"},
+    {"path":"tools/register-inbound-router.ps1","scope":"kim-only","reason":"000（kim-PC）だけで受信ルーターを登録し、同じ新着の重複配送を防ぐ"},
     {"path":"tools/register-secretary-uptime.ps1","scope":"kim-only","reason":"kim-PCの秘書ゲートウェイ3939と秘書3940を監視するタスク登録。他PCには登録しない"},
     {"path":"tools/secretary-uptime-registration.test.ps1","scope":"kim-only","reason":"秘書監視の登録結果をmockで検証するテスト。実タスクは作成しない"},
+    {"path":"tools/secretary-legacy-task.ps1","scope":"kim-only","reason":"kim-PCの旧3939起動タスクの共存検査とACL証跡取得"},
+    {"path":"tools/secretary-server-process.ps1","scope":"kim-only","reason":"kim-PCの秘書ゲートウェイ3939と秘書3940の再起動対象を照合"},
+    {"path":"tools/secretary-server-process.test.ps1","scope":"kim-only","reason":"秘書の再起動対象を実測したコマンドラインで照合するテスト"},
     {"path":"tools/lib/external-monitor-state.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"外部返信待ちの宛先照合・重複排除・永続再開キュー"},
     {"path":"tools/lib/send-context.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"Stop hookが同一セッションの送信成功記録を照合する依存"},
     {"path":"tools/auto-progress-external-monitor.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"LINE/Gmail新着の継続監視と元セッション再開"},
@@ -23,6 +37,8 @@
     {"path": "tools/knowledge-guard.mjs", "scope": "fleet", "step": "settings:knowledge-guard-PreToolUse", "reason": "契約判定・蓄積保護と封印を全PCへconverge配布"},
     {"path": "tools/lib/handoff-store.mjs", "scope": "fleet", "step": "settings:knowledge-guard-PreToolUse", "reason": "引き継ぎ書の封印読み書き（fleet-task-runner 等の実行時依存）を全PCへconverge配布"},
     {"path": "tools/register-morning-session-sweep.ps1", "scope": "fleet", "step": "task:morning-session-sweep", "reason": "全PCの未クローズセッションを毎朝06:30に回収する共通タスク"},
+    {"path": "tools/register-session-cap30.ps1", "scope": "fleet", "step": "task:session-cap30", "reason": "全PCの Session Manager 可視セッションを毎日04:40に30件以下へ整理する共通タスク"},
+    {"path": "tools/lib/session-claim-cache.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "セッション目的抽出を衝突フックと着手台帳で共有する実行時依存"},
     {"path": "tools/hook-dispatch.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "全PCの同期hookをイベント単位で1本に集約するディスパッチャ（PC過負荷対策 #1568）"},
     {"path": "tools/hook-dispatch-benchmark.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "ディスパッチャの所要時間を各PCで計測するベンチマーク"},
     {"path": "tools/deadline-ledger.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
@@ -31,6 +47,7 @@
     {"path": "tools/lib/deadline-sources.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
     {"path": "tools/setup-deadline-watch.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
     {"path": "tools/register-deadline-watch-tasks.ps1", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
+    {"path": "tools/register-schedule-autopilot-task.ps1", "scope": "fleet", "step": "deadline-watch", "reason": "予定の逆算プッシュの共通実装。タスク登録はkim操作席(000)だけで実行"},
     {"path": "tools/delegation-ratio-watch.mjs", "scope": "fleet", "step": "task:delegation-ratio-watch", "reason": "委譲率ウォッチドッグ（毎日05:40実行）。Claudeの重み付き消費・安いAIの実作業件数・保留件数・quota_wait呼出を集計"},
     {"path": "tools/delegation-ratio-watch-register.mjs", "scope": "fleet", "step": "task:delegation-ratio-watch", "reason": "委譲率ウォッチドッグのschtasks登録"},
     {"path": "tools/lib/fleet-chase-ledger.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "watchdogが未達通知をkimへ送らず追跡台帳へ保存する共通依存"},
@@ -54,6 +71,7 @@
     {"path": "tools/lib/external-waiting-state.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "kim-awaiting が読む社外返信待ちの状態ファイル入出力"},
 
     {"path":"tools/lib/reclaim-lock.mjs","scope":"fleet","step":"task:fleet-mail","reason":"fleet-mail / 質問中継が使う、残った .reclaim の自動回収"},
+    {"path":"tools/lib/rename-retry.mjs","scope":"fleet","step":"task:fleet-mail","reason":"next-session-rotate が使う、Windows の EPERM/EBUSY 時の rename/write 再試行"},
     {"path":"tools/lib/gws-proxy.mjs","scope":"fleet","step":"task:fleet-mail","reason":"全PCの鍵なしGmail・Drive・LINE APIと自己点検の共通認証経路"},
     {"path":"tools/drive-read.mjs","scope":"fleet","step":"task:fleet-mail","reason":"全PCから共有Driveの検索と読み取り"},
     {"path":"tools/line-channel.mjs","scope":"fleet","step":"task:fleet-mail","reason":"全PCから共通LINE履歴と公式botを利用"},
@@ -72,19 +90,26 @@
     {"path": "tools/register-comms-hub-sync.mjs", "scope": "kim-only", "step": "task:comms-hub-sync", "reason": "convergeからEnsure登録"},
 {"path": "tools/kim-discord-report-gate.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/kim-inbox-relay-state.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の注入・配達・返答記録を全PCへ配布する実行時依存"},
+    {"path": "tools/lib/escalation-answer-sync.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の回答を自動進行台帳へ書き戻し、判断待ちの重複質問を止める実行時依存"},
     {"path": "tools/kim-inbox-relay.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "Stop で kim への受信箱配達を検証する"},
     {"path": "tools/kim-inbox.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
+    {"path": "tools/lib/kim-inbox-kind.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の kind 判定を全PCで共有する実行時依存"},
+    {"path": "tools/lib/kim-inbox-merge-handoff.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox のマージ可否依頼の検出を全PCで共有する実行時依存"},
     {"path": "tools/lib/kim-discord-allowlist.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/fleet-owner.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox / notify-owner が使う PC 所有者解決（notify-owner から切り出し）"},
     {"path": "tools/notify-owner.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "config/kim-discord-allowlist.json", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/fleet-selfcheck-prompt.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
     {"path": "tools/fleet-task-runner.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
-    {"path": "tools/session-model-audit.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "各PCのセッションのモデル（Opus 混入）と kim 返事待ち停止を毎時の見回りから読み取り専用で点検する"},
-    {"path": "tools/lib/automation-model.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "自動実行（fleet-agent・autopilot 等）のモデルを Sonnet に揃える実行時依存"},
+    {"path": "tools/session-model-audit.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "各PCのセッションのモデル（settings が Sonnet/未設定なら NG、Opus の軽い作業は警告）と kim 返事待ち停止を毎時の見回りから読み取り専用で点検する"},
+    {"path": "tools/lib/automation-model.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "自動実行（fleet-agent・autopilot 等）の既定モデルを Opus にする実行時依存（軽い作業のみ Sonnet）"},
+    {"path": "tools/lib/claude-seat-guard.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "fleet-agent と受信 runner が無人 Claude 起動前に週次・5時間枠を判定する実行時依存"},
+    {"path": "tools/lib/quota-windows.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "Claude 席ガードが既存 OAuth usage 読取とキャッシュを再利用する実行時依存"},
 {"path": "tools/lib/lane-disabled.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "PC 単位のレーン無効化（lanes-disabled.json）を codex-do・lane-doctor・llm-fallback が読む実行時依存"},
 {"path": "tools/lib/auto-resume-policy.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "fleet-task-runner 等が参照する自動再開ポリシー。通常のconverge配布に含める"},
     {"path": "tools/fleet-selfcheck.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
+    {"path": "tools/lib/shared-memory-freshness.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "共有memoryの72時間stale検出をselfcheckとSessionStartで共用する実行時依存"},
+    {"path": "tools/shared-memory-context.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "共有memoryが72時間超停止したとき全PCのSessionStartへ警告する"},
     {"path":"tools/lib/progress-file-lock.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"日次進捗と停止PR巡回の並行実行・異常終了からの回復"},
     {"path": "tools/stuck-pr-sweeper.mjs", "scope": "kim-only", "step": "task:stuck-pr-sweeper", "reason": "kim-PCだけが停止PRの修復を実行し二重修正を防ぐ"},
     {"path": "tools/register-stuck-pr-task.mjs", "scope": "kim-only", "step": "task:stuck-pr-sweeper", "reason": "kim-PCだけが停止PRの修復を実行し二重修正を防ぐ"},
@@ -252,6 +277,12 @@
       "scope": "kim-only",
       "step": null,
       "reason": "要確認"
+    },
+    {
+      "path": "tools/claude-plan-usage.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-beacon.mjs が import する実行時依存（Claude プラン使用量取得）。D8 再帰検査の対象"
     },
     {
       "path": "tools/discord-admin-token-install.mjs",
@@ -722,6 +753,17 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/register-unsent-ledger.ps1",
+      "scope": "kim-only",
+      "step": "task:unsent-ledger",
+      "reason": "送信待ち台帳の照合・ALERT生成は Beeper/Gmail がある kim-PC だけで登録する"
+    },
+    {
+      "path": "tools/unsent-ledger-runner.mjs",
+      "scope": "kim-only",
+      "reason": "kim-PC の送信待ち台帳を毎時照合し、止まった件を ALERT に出す。社内の自動送信待ちのみ実送信する"
+    },
+    {
       "path": "tools/lahaina-kpi-daily-register.mjs",
       "scope": "kim-only",
       "step": null,
@@ -1003,6 +1045,12 @@
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     },
     {
+      "path": "tools/lib/session-concurrency.mjs",
+      "scope": "fleet",
+      "step": "nightly-reload-vscode",
+      "reason": "対話セッションの起動・再接続・スマホ用待機タブで使用する同時セッション上限"
+    },
+    {
       "path": "tools/lib/windows-process.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",
@@ -1031,6 +1079,12 @@
       "scope": "fleet",
       "step": "task:fleet-mail",
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/stall-ledger.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-beacon が停滞台帳の集計を送信する実行時 import 依存（再帰検査対象）"
     },
     {
       "path": "tools/fleet-mail-watchdog.mjs",
@@ -1345,10 +1399,15 @@
     {"path": "tools/knowledge-upstream.mjs", "scope": "fleet", "step": "task:knowledge-upstream", "reason": "全PCのローカルmemory/playbook/incidentをDrive inboxへ吸い上げ、共有マスターを同期する"},
     {"path": "tools/register-knowledge-upstream-task.ps1", "scope": "fleet", "step": "task:knowledge-upstream", "reason": "全PCの知識吸い上げタスク OrgiastKnowledgeUpstream を登録する"},
     {"path": "tools/register-knowledge-merge-task.ps1", "scope": "kim-only", "reason": "kim-PCだけがDrive inboxのナレッジをmasterに統合する（重複防止）"},
+    {"path": "tools/register-tldv-followup-task.ps1", "scope": "kim-only", "reason": "tl;dv 打合せ後フォローの振り分けは tldv.env と送信待ち台帳を持つ kim-PC だけが行い、担当PCへは fleet で指示を送る（複数PCだと二重起動）"},
     {"path": "tools/register-tldv-drive-task.ps1", "scope": "kim-only", "reason": "seisaku-team の tl;dv 会議を Drive へ毎時保存するのは tldv.env と DWD 鍵を持つ kim-PC だけ（複数PCだと二重作成の競合）"},
     {"path": "tools/tldv-process-improve.mjs", "scope": "kim-only", "reason": "tl;dv 会議→制作プロセス改善の夜間ループ。DWD鍵とLLM鍵を持つ作業用011（kim-PC）だけで実行"},
     {"path": "config/tldv-process-improve.json", "scope": "kim-only", "reason": "tl;dv 改善ループの設定。kim-PCでしか使わない"},
     {"path": "tools/register-tldv-process-improve-task.ps1", "scope": "kim-only", "reason": "kim-PC（作業用011）だけで OrgiastTldvProcessImprove タスクを登録する"},
-    {"path": "tools/tldv-process-improve.test.mjs", "scope": "kim-only", "reason": "tl;dv 改善ループのテスト。CIで実行するがfleet配布はkim-PCだけ"}
+    {"path": "tools/tldv-process-improve.test.mjs", "scope": "kim-only", "reason": "tl;dv 改善ループのテスト。CIで実行するがfleet配布はkim-PCだけ"},
+    {"path": "tools/register-ai-daikodo-line-watch.ps1", "scope": "kim-only", "step": null, "reason": "AI代行堂LINE監視のschtasks登録。tanom-admin.env と run-hidden.vbs に依存し、各PCの初期セットアップ時に1回実行"},
+    {"path": "tools/register-cursor-usage-pace-task.ps1", "scope": "kim-only", "step": null, "reason": "000 で毎日 19:30 の Cursor 使用量ペース点検を登録する。推奨ホストは 000。"},
+    {"path": "tools/register-cursor-agent-run-counts-task.ps1", "scope": "kim-only", "step": null, "reason": "各PCの毎朝 07:10 に cursor-agent 実行件数を数えるタスク。今回は手動で全オンラインPCに登録する。"},
+    {"path": "tools/register-roudou-evidence-task.ps1", "scope": "kim-only", "step": null, "reason": "PC000で労働審判の証拠画像を指定日時にBeeperから回収する一回限りのタスク登録"}
   ]
 }

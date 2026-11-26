@@ -7,6 +7,7 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
 import { validApprovalMarker } from './lib/send-approval.mjs';
 import { readContextMarker, MAX_MARKER_AGE_MS } from './lib/send-context.mjs';
+import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 export const HOOK_MATCHER = 'mcp__claude_ai_Gmail(?:_\\d+)?__(send_message|reply|forward)|Bash|PowerShell';
 export const BLOCK_REASON = '本文の全文をチャットに表示し、kim の『送ってよい』を得てから送信してください（組織指示11）。多数宛は mail-bulk-approve を使う';
 export const APPROVAL_MISSING_REASON = 'kim の最新の発言が送信承認として読めません（例: 送って／おくって／OK）。本文の全文を表示したうえで送信承認を得てください。';
@@ -27,6 +28,13 @@ function executedScript(args, pattern) {
   const entry = args.slice(1).find(arg => arg === '--' || !arg.startsWith('-'));
   return entry !== '--' && pattern.test(base(entry));
 }
+function workflowInput(args, name) {
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i];
+    const value = ['-f', '--field', '-F', '--raw-field'].includes(token) ? args[++i] : token.match(/^(?:-f|--field|-F|--raw-field)=(.*)$/u)?.[1];
+    if (value?.startsWith(`${name}=`)) return value.slice(name.length + 1);
+  }
+}
 export function sendTargets(input) {
   if (/^mcp__claude_ai_Gmail(?:_\d+)?__(send_message|reply|forward)$/.test(input?.tool_name)) {
     const a = input.tool_input ?? {};
@@ -36,6 +44,16 @@ export function sendTargets(input) {
   const targets = [];
   for (const args of shellSegments(input.tool_input?.command ?? '')) {
     if (executedScript(args, /^gmail-draft\.mjs$/i) && option(args, '--send')) targets.push({ draftId: option(args, '--send'), user: option(args, '--user') ?? 'seisaku-team@orgiast.jp' });
+    else if (executedScript(args, /^seisaku-mail\.mjs$/i) && args.includes('send')) {
+      const file = option(args, '--body-file');
+      targets.push({ body: file ? fs.readFileSync(path.resolve(input.cwd ?? process.cwd(), file), 'utf8') : '' });
+    }
+    else if (/^gh$/iu.test(String(args[0] ?? '').split(/[\\/]/u).at(-1).replace(/\.exe$/iu, ''))
+      && args[1] === 'workflow' && args[2] === 'run' && /(?:^|[\\/])seisaku-mail\.yml$/iu.test(args[3] ?? '')
+      && workflowInput(args, 'mode') === 'send') {
+      const encoded = workflowInput(args, 'body_b64');
+      targets.push({ body: encoded ? Buffer.from(encoded, 'base64').toString('utf8') : '' });
+    }
     else if (executedScript(args, /^line-group-send\.mjs$/i)) {
       if (args.includes('--dry-run')) continue;
       const file = option(args, '--text-file');
@@ -64,6 +82,7 @@ export function judge(input, { targets, env = process.env, home = env.ORGIAST_HO
   try {
     targets ??= sendTargets(input);
     if (!targets.length) return { decision: 'pass' };
+    if (targets.some(target => findSecretaryBookingUrls(target.body).length)) return block(SECRETARY_BOOKING_URL_REASON);
     if (requireContext) for (const target of targets) {
         const marker = readContextMarker(normalize(target.body), home);
         if (!marker || Date.now() - Date.parse(marker.checkedAt) > MAX_MARKER_AGE_MS) return block(CONTEXT_REASON);

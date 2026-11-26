@@ -127,6 +127,15 @@ try {
     } else { Write-NightlyLog 'hide-task-windows' 'skip:script missing' }
 
     Write-NightlyLog 'node確認' 'ok'
+    # PR 着地後に不要になった判断待ち ask を日次で回収する。
+    $inboxAutoclose = Join-Path $PSScriptRoot 'kim-inbox-autoclose.mjs'
+    if (Test-Path -LiteralPath $inboxAutoclose -PathType Leaf) {
+        try {
+            $inboxAutocloseOutput = @(& $node.Source $inboxAutoclose --apply 2>&1)
+            $inboxAutocloseExit = $LASTEXITCODE
+            Write-NightlyStepResult 'kim-inbox-autoclose' $inboxAutocloseExit $inboxAutocloseOutput
+        } catch { Write-NightlyLog 'kim-inbox-autoclose' ('error:' + $_.Exception.Message) }
+    } else { Write-NightlyLog 'kim-inbox-autoclose' 'skip:script missing' }
     try {
         $rotationOutput = @(& $node.Source (Join-Path $PSScriptRoot 'next-session-rotate.mjs') 2>&1)
         $rotationExit = $LASTEXITCODE
@@ -779,7 +788,7 @@ try {
                 $xTipsResult = 'error:終了コード' + $xTipsExitCode + ': ' + (Format-NightlyDetail $xTipsOutput)
             } else {
                 $xTipsResult = @($xTipsOutput | Where-Object { $_ -match '^(ok:取得\d+件 追加\d+件 重複\d+件 費用\$[0-9.]+|skip:.+|error:.+)$' } | Select-Object -Last 1)
-                if ($xTipsResult.Count -eq 0) { $xTipsResult = 'error:状態不明' } else { $xTipsResult = [string]$xTipsResult[0] }
+                if ($xTipsResult.Count -eq 0) { $xTipsResult = 'error:状態不明: ' + (Format-NightlyDetail $xTipsOutput) } else { $xTipsResult = [string]$xTipsResult[0] }
             }
             $summary['x-ai-tips-collect'] = $xTipsResult
             Write-NightlyLog 'x-ai-tips-collect' $xTipsResult

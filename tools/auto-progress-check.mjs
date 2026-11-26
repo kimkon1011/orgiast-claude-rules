@@ -24,7 +24,11 @@ export const CHECK_ERROR_PATTERNS = [
 ];
 
 export const CHECK_TIMEOUT_MS = 30000;
+export const NETWORK_CHECK_TIMEOUT_MS = 90000;
 export const MAX_CHECK_TIMEOUT_MS = 300000;
+export const NETWORK_TRANSIENT_PATTERN = /Could not resolve host|Failed to connect|timed out/i;
+// check の出力上限。64KB は gh/git 系のログ出力で簡単に超え、ENOBUFS で判定不能になっていた。
+export const CHECK_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 export const UNMET_INTERVAL_MS = 6 * 3600000;
 // 外部の成果を読まず、時計と定数だけで決まる典型的な判定。
 // 登録時だけでなく、旧台帳を評価する watch からも同じ判定を使う。
@@ -57,6 +61,21 @@ export function hasCheckCrash(stderr) {
 /** 二重引用符内の $env: を bash が展開する問題の静的検査 */
 export function hasBashEnvExpansion(command) {
   return /(?<!\\)\$env:/i.test(command);
+}
+
+/** squash merge 後の main では成立しない、ブランチコミット依存の着地判定。 */
+export function isSquashUnsafeLandingCheck(check) {
+  const command = String(check || '');
+  const branchCommitAncestor = /\bmerge-base\b/i.test(command)
+    && /--is-ancestor\b/i.test(command)
+    && /(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-f])/i.test(command);
+  if (branchCommitAncestor) return true;
+
+  const logsMain = /\bgit\s+log\b[^\r\n|;&]*(?:origin\/(?:main|master))\b/i.test(command);
+  const pipesToGrep = /\|\s*grep\b/i.test(command);
+  const identifiesPr = /\(#\d+\)/.test(command)
+    || /--grep(?:=|\s+)(?:["'][^"']*)?#\d+/i.test(command);
+  return logsMain && pipesToGrep && !identifiesPr;
 }
 
 /** Quoted/relative script paths are resolved against the check's working directory.
@@ -107,6 +126,10 @@ export function preflightCheck(row, { home, forceCheck = false, allowSessionStat
   }
   for (const warning of checkPatternWarnings(row.check)) console.error(`check preflight 警告: ${warning}`);
   // 静的検査
+  if (!forceCheck && isSquashUnsafeLandingCheck(row.check)) {
+    const msg = 'squash マージ後はブランチのコミット SHA・件名が main に残らないため、この check は永久に未達になります。PR の着地は `git log origin/main --format=%s | grep -qF \'(#<PR番号>)\'` か `gh pr view <番号> --json state -q .state | grep -qx MERGED` で判定してください';
+    return { ok: false, code: 2, text: msg, stderr: msg, preflight: 'static_error' };
+  }
   if (!forceCheck && hasBashEnvExpansion(row.check)) {
     const msg = [
       `静的検査に失敗しました。check 文字列に '$env:' が含まれています。`,
@@ -146,11 +169,16 @@ export function preflightCheck(row, { home, forceCheck = false, allowSessionStat
   }
   return { ok: true, code: result.code, text: result.text, stderr: result.stderr, preflight: result.code === 1 ? 'unmet' : 'stalled' };
 }
-// GitHub ログ取得のようにネットワーク待ちが支配的な check は行ごとに延ばせる。
-// 行の値が不正・過大なときは既定（30秒）と上限（300秒）へ丸める。check 自体を無制限にはしない。
+// GitHub ログ取得のようにネットワーク待ちが支配的な check は既定90秒、行の明示値を最優先にする。
+// 行の値が不正・過大なときはコマンド別の既定と上限（300秒）へ丸める。check 自体を無制限にはしない。
 export function resolveCheckTimeout(row) {
   const value = Number(row?.checkTimeoutMs);
-  return Number.isFinite(value) && value > 0 ? Math.min(value, MAX_CHECK_TIMEOUT_MS) : isSessionProgressCheck(row) ? SESSION_CHECK_TIMEOUT_MS : CHECK_TIMEOUT_MS;
+  return Number.isFinite(value) && value > 0 ? Math.min(value, MAX_CHECK_TIMEOUT_MS)
+    : isNetworkCheck(row?.check) ? NETWORK_CHECK_TIMEOUT_MS
+      : isSessionProgressCheck(row) ? SESSION_CHECK_TIMEOUT_MS : CHECK_TIMEOUT_MS;
+}
+export function isNetworkCheck(command) {
+  return /(?:^|[;&|]\s*|\b)(?:git(?:\s+-[a-zA-Z0-9=\s.:\/\\\-]+)*\s+(?:fetch|ls-remote|pull|push)\b|gh\s+|curl\s+)/i.test(String(command || ''));
 }
 export const oneLine = (value, limit = 240) => String(value || '').split(/\r?\n/, 1)[0].trim().slice(0, limit);
 export const lastLine = value => String(value || '').trim().split(/\r?\n/).at(-1)?.trim().slice(0, 240) || '';
@@ -165,19 +193,33 @@ export function resolveCheckShell({ platform = process.platform, env = process.e
   return candidates.find(candidate => candidate && exists(candidate)) || null;
 }
 export function executeCheck(row, { home, spawnImpl = spawnSync, shellPath = resolveCheckShell() } = {}) {
+  const timeout = resolveCheckTimeout(row);
   const options = { cwd: row.checkCwd || row.cwd, encoding: 'utf8',
-    timeout: resolveCheckTimeout(row), maxBuffer: 64 * 1024, windowsHide: true,
-    env: { ...process.env, ORGIAST_HOME: home, ORGIAST_CHECK_TIMEOUT_MS: String(resolveCheckTimeout(row)) } };
-  const result = shellPath ? spawnImpl(shellPath, ['-c', normalizeCheckForBash(row.check)], options)
+    timeout, maxBuffer: CHECK_MAX_BUFFER_BYTES, windowsHide: true,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', ORGIAST_HOME: home, ORGIAST_CHECK_TIMEOUT_MS: String(timeout) } };
+  const run = () => shellPath ? spawnImpl(shellPath, ['-c', normalizeCheckForBash(row.check)], options)
     : spawnImpl(row.check, { ...options, shell: true });
+  let result = run();
+  let networkTransient = (result.error || result.status !== 0)
+    && NETWORK_TRANSIENT_PATTERN.test(`${result.stdout || ''}\n${result.stderr || ''}\n${result.error?.message || ''}`);
+  if (networkTransient) {
+    result = run();
+    networkTransient = (result.error || result.status !== 0)
+      && NETWORK_TRANSIENT_PATTERN.test(`${result.stdout || ''}\n${result.stderr || ''}\n${result.error?.message || ''}`);
+  }
   const gotStderr = String(result.stderr || '');
-  const code = result.error || result.signal || (result.status !== 0 && hasCheckCrash(gotStderr)) ? null : result.status;
+  const code = networkTransient || result.error || result.signal || (result.status !== 0 && hasCheckCrash(gotStderr)) ? null : result.status;
   // spawnSync の生メッセージ（… bash.exe ETIMEDOUT）はシェル故障に見えるため、上限超過と延長方法を書く。
+  // 生の `spawnSync ... bash.exe ENOBUFS` はシェル故障に見えるため、上限と縮め方を書く。
+  const overflowed = result.error?.code === 'ENOBUFS';
   const failure = result.error?.code === 'ETIMEDOUT'
     ? `check が ${options.timeout / 1000} 秒の上限を超えました（遅い check は --add-check --timeout <秒> で延長・最大 ${MAX_CHECK_TIMEOUT_MS / 1000} 秒）`
-    : oneLine(result.error?.message || gotStderr) || code;
+    : overflowed
+      ? `check の出力が ${CHECK_MAX_BUFFER_BYTES / 1024 / 1024}MB の上限を超えました（check の出力を減らすか、末尾だけ出す形（例: 2>&1 | tail -c 4000）に直してください）`
+      : oneLine(result.error?.message || gotStderr) || code;
   const timedOut = result.error?.code === 'ETIMEDOUT';
-  return { code, ...(timedOut ? { timedOut: true } : {}), stdout: String(result.stdout || ''), text: timedOut ? `判定不能: ${failure}\n${String(result.stdout || '').trim()}` : code === null ? `check エラー: ${failure}` : String(result.stdout || '').trim() || (code === 0 ? '達成を確認' : code === 1 ? '未達' : code === 3 ? '止まっている' : `check エラー: ${failure}`), stderr: gotStderr };
+  const transientNote = networkTransient ? 'ネットワーク一過性エラー（1回再試行後）: ' : '';
+  return { code, ...(timedOut ? { timedOut: true } : {}), ...(overflowed ? { overflowed: true } : {}), ...(networkTransient ? { networkTransient: true } : {}), stdout: String(result.stdout || ''), text: timedOut || overflowed ? `判定不能: ${transientNote}${failure}\n${String(result.stdout || '').trim()}` : networkTransient ? `判定不能: ${transientNote}${oneLine(result.stdout || gotStderr)}` : code === null ? `check エラー: ${failure}` : String(result.stdout || '').trim() || (code === 0 ? '達成を確認' : code === 1 ? '未達' : code === 3 ? '止まっている' : `check エラー: ${failure}`), stderr: gotStderr };
 }
 export { checkProgressSummary } from './lib/check-progress-summary.mjs';
 export function pendingAction(row) {
@@ -201,7 +243,8 @@ export async function checkPromise(row, { home, now, patch, io = {}, suppressNot
     result = row.status === 'done' && row.checkResult === 'done'
       ? { code: 0, text: row.checkText } : await (io.executeCheck ?? executeCheck)(row, { home });
   } catch (error) { result = { code: null, ...(error.code === 'ETIMEDOUT' ? { timedOut: true } : {}), text: `check エラー: ${error.message || error}` }; }
-  const state = result.timedOut ? 'unknown' : result.code === 0 ? 'done' : result.code === 1 ? 'unmet' : result.code === 3 ? 'stalled' : 'error';
+  // 出力上限超過も「判定不能」。check エラー扱いにすると、動いている check が毎回失敗として積まれる。
+  const state = result.timedOut || result.overflowed || result.networkTransient ? 'unknown' : result.code === 0 ? 'done' : result.code === 1 ? 'unmet' : result.code === 3 ? 'stalled' : 'error';
   const overdue = now >= Date.parse(row.deadlineAt);
   const changes = { lastCheckOutput: checkOutput(result.stdout ?? result.text), checkResult: state, checkText: state === 'stalled' ? lastLine(result.stdout ?? result.text) : String(result.text || ''), checkStderr: String(result.stderr || ''), lastCheckedAt: new Date(now).toISOString(),
     verdict: state === 'done' ? 'done' : state === 'stalled' ? 'stalled' : state === 'unknown' ? 'check_unknown' : state === 'error' ? 'check_error' : overdue ? 'unmet' : 'in_progress',

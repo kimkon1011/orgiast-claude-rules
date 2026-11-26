@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import { publishSeatPr } from './pr-land.mjs';
 import fs from 'node:fs';
 import { writeHandoff } from './next-session-rotate.mjs';
@@ -195,10 +196,23 @@ export function isOpusHeavy(row, localState) {
       if (match) {
         return parseFloat(match[1]) > 50;
       }
-      return true;
+      // %無しの model 名だけでは過多と判定しない（2026-11-17 以降の既定は Opus 監督）
+      return false;
     }
   }
   return false;
+}
+
+export function opusRatioFromMainModel(mainModel) {
+  if (typeof mainModel !== 'string') return null;
+  const lower = mainModel.toLowerCase();
+  if (!lower.includes('opus')) return null;
+  const match = lower.match(/(\d+(?:\.\d+)?)\s*%/);
+  if (match) {
+    const pct = parseFloat(match[1]);
+    return pct >= 0 && pct <= 100 ? pct / 100 : null;
+  }
+  return null;
 }
 
 export function parseCheapAiUseCount(text) {
@@ -354,7 +368,7 @@ export function evaluateFleet({ rows, ledgerCounts, localState, now, lastKpis = 
           severity: 'warning',
           evidence: `Main model contains Opus (> 50% ratio)`,
           measuredAt,
-          actualValue: isSelf && typeof localState?.opusRatio === 'number' ? localState.opusRatio : 1,
+          actualValue: isSelf && typeof localState?.opusRatio === 'number' ? localState.opusRatio : opusRatioFromMainModel(row.mainModel) ?? 1,
           targetValue: 0.5,
           trusted: true
         });
@@ -517,7 +531,7 @@ export function buildCombinedCodexSpec(actions) {
 function humanTodoMessage(violation, now, retryCount = 0, retryMode = 'directive') {
   const pc = violation.pc;
   if (violation.kind === 'balance_low') {
-    if (violation.provider === 'genspark') return `【このPC】Genspark の前払いクレジットが ${Math.round(Number(violation.actualValue))} です（閾値 ${CREDIT_LOW_THRESHOLD}）。Genspark にチャージするか、画像生成を止めるかの判断が必要です。`;
+    if (violation.provider === 'genspark') return `【このPC】Genspark の前払いクレジットが ${Math.round(Number(violation.actualValue))} です（閾値 ${CREDIT_LOW_THRESHOLD}）。まず無料枠・既存契約内の画像生成経路を実測します。追加費用案は代替不可の証拠と比較表がある場合だけ最後に提示します。`;
     const switched = ['deepseek', 'kimi'].includes(violation.provider) ? '切替済み' : '未切替';
     return `【このPC】${violation.provider} の残高が $${Number(violation.actualValue).toFixed(2)} です。自動チャージが無いプロバイダです。OpenRouter 経由へ${switched}。`;
   }
@@ -642,7 +656,7 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
         continue;
       } catch {
         // 外部例外には認証情報を含む git 出力があり得るので、固定の理由だけを記録する。
-        console.error(`stale_report: ${mode === 'local' ? 'ローカル再送に失敗（終了異常またはタイムアウト）' : '再送指令の送信に失敗（利用不可または push 失敗）'}。人へエスカレーションします。`);
+        console.error(`stale_report(${pc}): ${mode === 'local' ? 'ローカル再送に失敗（終了異常またはタイムアウト）' : '再送指令の送信に失敗（利用不可または push 失敗）'}。人へエスカレーションします。`);
         retryFailed = true;
       }
     }
@@ -725,11 +739,11 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
     if (violation.provider) action.provider = violation.provider;
     if (mode === 'human' && hasThreeConsecutiveFailures) action.humanSince = now.toISOString();
     if (kind === 'provider_unhealthy') {
-      // DM 本文の1行: 無料枠の上限が原因なら有料枠で即解消できることを示す。
-      action.reportNote = '有料枠で解消可(例: Groq Dev tier)';
+      // 既存経路を実測する前に支出を提案しない。
+      action.reportNote = 'まず無料枠・既存契約内の他AIレーンを実測。追加費用案は代替不可の証拠と比較表がある場合だけ最後に提示';
     }
     if (kind === 'spend_anomaly') action.durationHours = 24;
-    if (kind === 'balance_low') action.reportNote = action.provider === 'genspark' ? '前払い枠が残り少。チャージまたは画像生成レーンの停止を判断' : `自動チャージが無いプロバイダです。OpenRouter 経由へ切替${['deepseek', 'kimi'].includes(action.provider) ? '済み' : '未'}`;
+    if (kind === 'balance_low') action.reportNote = action.provider === 'genspark' ? '前払い枠が残り少。まず無料枠・既存契約内の画像生成経路を実測。追加費用案は代替不可の場合だけ比較表の最後に提示' : `自動チャージが無いプロバイダです。OpenRouter 経由へ切替${['deepseek', 'kimi'].includes(action.provider) ? '済み' : '未'}`;
 
     if (mode === 'auto-local') {
       if (playbook.command) action.command = playbook.command;
@@ -1108,6 +1122,36 @@ export function readLedgerCounts(filePath, now) {
   return counts;
 }
 
+// run-hidden.vbs がプライマリログをロックしているとき、退避先ログを探す。
+// naming は run-hidden.vbs と揃えている（cost-improve-loop.locked-<yyyymmdd>-<hhnnss>-<rand>.log）。
+export function resolveEffectiveLogPath(claudeDir, fsImpl = fs) {
+  const logDir = path.join(claudeDir, 'logs');
+  const primary = path.join(logDir, 'cost-improve-loop.log');
+  try {
+    fsImpl.mkdirSync(logDir, { recursive: true });
+    // プライマリが書き込み可能か試す
+    fsImpl.appendFileSync(primary, '', 'utf8');
+    return primary;
+  } catch { /* primary locked — fallback 探しへ */ }
+  try {
+    const files = fsImpl.readdirSync(logDir)
+      .filter(f => /^cost-improve-loop\.locked-\d{8}-\d{6}-[a-zA-Z0-9]+\.log$/.test(f))
+      .sort()
+      .reverse();
+    for (const file of files) {
+      const candidate = path.join(logDir, file);
+      try { fsImpl.appendFileSync(candidate, '', 'utf8'); return candidate; }
+      catch { /* run-hidden may also hold the newest rotated log open */ }
+    }
+  } catch { /* logDir 不在など */ }
+  // 退避先が見つからなければ run-hidden 規約に従って自前で作る
+  const ts = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const stamp = `${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}-${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}`;
+  const rand = Math.random().toString(16).slice(2, 10);
+  return path.join(logDir, `cost-improve-loop.locked-${stamp}-${rand}.log`);
+}
+
 export function localProviderEnv(homeDir) {
   const providers = [
     { name: 'groq', envKey: 'GROQ_API_KEY', envFile: 'groq.env' },
@@ -1219,13 +1263,21 @@ export function writeGatewayOverride({ claudeDir, provider, writeImpl = null }) 
 }
 
 // codex_saturated 対処: ~/.claude/codex-fallback-order.json に fallback 順を書く。
-// 2026-09-08 実測で cheap-code:glm 1544s/277tok・gemini-cli 2234s/0tok と低成果
-// (delegation-health fallback_low_yield)。救済レーンは速度と成功率を最優先し、
-// fail 4.2% / 平均36秒と最良の qwen(deepseek-chat) を先頭、glm(定額)を2番目、
-// 平均509秒かつハング実績のある gemini-cli を最後にする。
+// 2026-11 実測: qwen → cheap-code:deepseek → cheap-code:glm → gemini-cli → openrouter-free。
+// PC ごとの ~/.claude/codex-fallback-order.local.json（例: 008 は Gemini を外す）は上書きしない。
+export const DEFAULT_CODEX_FALLBACK_ORDER = Object.freeze(['cursor-agent', 'qwen', 'cheap-code:deepseek', 'cheap-code:glm', 'gemini-cli', 'openrouter-free']);
 export function writeCodexFallbackOrder({ claudeDir, zaiAvailable, writeImpl = null }) {
+  const localFile = path.join(claudeDir, 'codex-fallback-order.local.json');
+  if (fs.existsSync(localFile)) {
+    let order = [];
+    try {
+      const parsed = JSON.parse(fs.readFileSync(localFile, 'utf8'));
+      order = Array.isArray(parsed) ? parsed : [];
+    } catch { order = []; }
+    return { file: localFile, order, changed: false, preserved: true, zaiAvailable: Boolean(zaiAvailable) };
+  }
   const file = path.join(claudeDir, 'codex-fallback-order.json');
-  const order = zaiAvailable ? ['qwen', 'cheap-code:glm', 'gemini-cli'] : ['qwen', 'cheap-code:deepseek', 'gemini-cli'];
+  const order = [...DEFAULT_CODEX_FALLBACK_ORDER];
   const content = `${JSON.stringify(order, null, 2)}\n`;
   let previous = null;
   try { previous = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
@@ -1668,7 +1720,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   if (!dryRun && !noNotify && !io.noNotify) {
     try {
       const notifyResult = await (io.notifyKim ?? notifyKim)(reportText, { home, webhookFallback: false });
-      if (!notifyResult || !['dm', 'session-inbox'].includes(notifyResult.delivered)) {
+      if (!isKimDelivered(notifyResult)) {
         throw new Error(notifyResult?.reason || 'kim の DM に配信されませんでした');
       }
       delete finalState.lastNotifyError;
@@ -1698,7 +1750,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       if (await (io.shouldSendMonthlyReport || shouldSendMonthlyReport)({ home, now, claudeDir })) {
         const reportText = buildMonthlyReport({ home, now });
         const monthlyResult = await (io.notifyKim ?? notifyKim)(reportText, { home, webhookFallback: false });
-        if (['dm', 'session-inbox'].includes(monthlyResult?.delivered)) await (io.markMonthlyReportSent || markMonthlyReportSent)({ home, now, claudeDir });
+        if (isKimDelivered(monthlyResult)) await (io.markMonthlyReportSent || markMonthlyReportSent)({ home, now, claudeDir });
         console.log('月次レポートを kim へ DM 送信しました');
       }
     } catch (error) {
@@ -1723,8 +1775,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     }
     const logLine = `${formatJst(now)} / ${status} / ${metrics} notify=${heartbeat} state=${stateWriteFailed ? 'failed' : 'ok'}${reason ? ` reason=${reason}` : ''}`;
     try {
-      fs.mkdirSync(path.join(claudeDir, 'logs'), { recursive: true });
-      await appendLineWithRetry(path.join(claudeDir, 'logs', 'cost-improve-loop.log'), logLine);
+      const effectiveLog = resolveEffectiveLogPath(claudeDir);
+      await appendLineWithRetry(effectiveLog, logLine);
     } catch (error) { console.error(`cost-improve-loop ログ書き込み失敗: ${String(error?.message ?? error)}`); }
   }
 
@@ -1740,23 +1792,47 @@ async function mainFetch(argv) {
   return await fetchFleetKPIs({ sheetUrl: fleetEnv.FLEET_SHEET_URL, token: fleetEnv.FLEET_SHEET_TOKEN });
 }
 
-export function refreshCostDirective({ home, spawn = defaultSpawnSync } = {}) {
+export function refreshCostDirective({ home, spawn = defaultSpawnSync, env = process.env } = {}) {
+  // Prefer COST_WORK_LOOP_TIMEOUT_MS (ms); else COST_DIRECTIVE_TIMEOUT_SECONDS (default 900s).
+  const fromMs = Number(env.COST_WORK_LOOP_TIMEOUT_MS);
+  let timeout;
+  if (Number.isSafeInteger(fromMs) && fromMs > 0) {
+    timeout = fromMs;
+  } else {
+    const seconds = Number(env.COST_DIRECTIVE_TIMEOUT_SECONDS ?? 900);
+    timeout = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 900_000;
+  }
   const result = spawn(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], {
     cwd: path.resolve(import.meta.dirname, '..'), env: { ...process.env, ORGIAST_HOME: home },
-    encoding: 'utf8', windowsHide: true, timeout: 300_000,
+    encoding: 'utf8', windowsHide: true, timeout,
   });
   if (result.error || result.status !== 0) throw new Error(`cost-directive refresh failed: ${result.error?.message || `exit ${result.status}`} ${String(result.stderr || '').slice(-1000)}`);
   return `cost-directive refreshed: ${path.join(home, '.claude', 'cost-directive.md')} (exit 0)`;
 }
 
-if (isEntry(import.meta.url)) {
-  Promise.resolve().then(() => {
-    // Run before fleet/network/notification work: a successful daily task must
-    // also refresh the local directive. Dry runs keep their read-only contract.
-    if (!process.argv.includes('--dry-run')) console.error(refreshCostDirective({ home: path.dirname(getClaudeDir(process.argv.slice(2))) }));
-    return main();
+export function runEntry({ argv, refresh, run }) {
+  return Promise.resolve().then(() => {
+    // directive の更新に失敗しても本体(run)は必ず走らせる。
+    // 019 で cost-work-loop.mjs が 300s timeout になり、main() が 2026-11-09 以降
+    // 一度も実行されていなかった（nightly-bootstrap ログ 所要=300.832 / 終了コード=1）。
+    if (!argv.includes('--dry-run')) {
+      try {
+        console.error(refresh());
+      } catch (err) {
+        console.error(`WARN cost-directive refresh failed (本体は続行): ${err?.message || err}`);
+      }
+    }
+    return run();
   }).catch((err) => {
     console.error(err);
     process.exitCode = 1;
+  });
+}
+
+if (isEntry(import.meta.url)) {
+  runEntry({
+    argv: process.argv,
+    refresh: () => refreshCostDirective({ home: path.dirname(getClaudeDir(process.argv.slice(2))) }),
+    run: main,
   });
 }

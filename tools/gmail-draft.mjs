@@ -7,12 +7,12 @@ import { proxyCredential, gwsFetch, GWS_MARKER } from './lib/gws-proxy.mjs';
  *       作成時の内部宛は認証前に停止。送信時は下書きの宛先を再検査。
  * 使い方:
  *   node tools/gmail-draft.mjs --check [--user <addr>] [--json]
- *   node tools/gmail-draft.mjs --send <draftId> [--user <addr>] [--ack-consistency <理由>] [--json]
- *   node tools/gmail-draft.mjs --forward <messageId> --to <addr> [--cc <addr>] [--body <前置き> | --body-file <path>] [--user <addr>] [--dry-run] [--json]
+ *   node tools/gmail-draft.mjs --send <draftId> [--user <addr>] [--booth] [--ack-consistency <理由>] [--json]
+ *   node tools/gmail-draft.mjs --forward <messageId> --to <addr> [--cc <addr>] [--body <前置き> | --body-file <path>] [--user <addr>] [--booth] [--dry-run] [--json]
  *   返信作成: --thread-id <threadId>（返信先ヘッダ・省略時の件名を自動取得）
  *   node tools/gmail-draft.mjs --delete <draftId> [--user <addr>] [--json]
  *   node tools/gmail-draft.mjs --to <addr> [--cc <addr>] --subject <件名>
- *     (--body <本文> | --body-file <path>) [--attach <path>]... [--thread-id <threadId>] [--user <addr>] [--dry-run] [--json]
+ *     (--body <本文> | --body-file <path>) [--attach <path>]... [--thread-id <threadId>] [--user <addr>] [--booth] [--dry-run] [--json]
  *   宛先は裸のメールアドレス（複数はカンマ区切り、またはオプションを反復）。
  *   --check はトークン取得だけ。--send はスレッド全体との整合性を自動検査する。
  * 終了コード: 0 成功 / 3 内部宛 / 2 設定エラー / 1 その他。
@@ -26,6 +26,12 @@ import { defaultDriveKeyPath } from './lib/drive-auth.mjs';
 import { loadLedger, isInternal, extractAddresses, shouldBlockInternal } from './internal-recipient-gmail-guard.mjs';
 import { bodyHash, checkConsistency, statePath, mimeText, render as renderConsistency } from './mail-consistency-check.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
+import { validateWeekdays } from './lib/weekday-validator.mjs';
+import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
+import { acquireSendDedupe, SendDedupeError } from './lib/send-dedupe.mjs';
+import { applyBoothCc } from './lib/booth-sales-cc.mjs';
+
+const BOOTH_CC = 'satou@orgiast.jp';
 
 export const GMAIL_COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
 export const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -41,7 +47,7 @@ function addresses(value, required = false) {
     if (typeof v !== 'string' || /[\r\n]/u.test(v)) throw configError();
     return v.split(',').map(s => s.trim());
   });
-  if (!required && list.length === 1 && !list[0]) return [];
+  if (!required && (!list.length || (list.length === 1 && !list[0]))) return [];
   if (!list.length || list.some(s => !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/iu.test(s))) throw configError();
   return list;
 }
@@ -170,7 +176,8 @@ export function classifyTokenError(json) {
 
 function safeFailure(error) {
   if (error?.errorKind === 'seisaku_relay') return { errorKind: 'seisaku_relay', error: error.message };
-  const errorKind = error?.errorKind === 'configuration_error' ? 'configuration_error'
+  const errorKind = error?.code === 'SEND_CONTEXT_REQUIRED' || error?.errorKind === 'send_context_required' ? 'send_context_required'
+    : error?.errorKind === 'configuration_error' ? 'configuration_error'
     : error?.errorKind === 'too_large' ? 'too_large'
     : error?.tokenError ? classifyTokenError(error.detail)
       : ['scope_not_delegated', 'forbidden_no_access', 'unauthorized'].includes(error?.errorKind) ? error.errorKind : 'error';
@@ -180,9 +187,12 @@ function safeFailure(error) {
     forbidden_no_access: 'Gmail API へのアクセス権限がありません。',
     unauthorized: 'Gmail API の認証に失敗しました。',
     too_large: '転送メールが25MBを超えています。',
+    send_context_required: error?.message,
     error: '処理に失敗しました（認証・通信・API 応答を確認してください）。',
   };
-  const result = { errorKind, error: messages[errorKind] };
+  const httpStatus = error?.httpStatus;
+  const suffix = httpStatus !== undefined ? `（HTTP ${httpStatus}）` : '';
+  const result = { errorKind, error: `${messages[errorKind]}${suffix}` };
   if (error?.httpStatus !== undefined) result.detail = `threads.get ${error.httpStatus}`;
   return result;
 }
@@ -295,7 +305,7 @@ async function fetchDraftBody({ user, id, fetchImpl, getToken }) {
 }
 
 /** Read the existing MIME headers before sending; include hidden Bcc recipients. */
-export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger(), fetchImpl = gwsFetch, getToken, draft: suppliedDraft }) {
+export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger(), fetchImpl = gwsFetch, getToken, draft: suppliedDraft, allowRepeat, home, acquireDedupe = acquireSendDedupe }) {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(id)) throw configError();
   const token = await (getToken ?? (args => mintDwdToken({ ...args, fetchImpl })))({ user, scope: GMAIL_COMPOSE_SCOPE });
   const request = async (url, options = {}) => {
@@ -316,19 +326,23 @@ export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger()
   const internal = recipients.filter(addr => isInternal(addr, ledger));
   const isForward = values('x-orgiast-forward').some(value => /^[A-Za-z0-9_-]+$/u.test(value));
   if (shouldBlockInternal(recipientFields, ledger) && !isForward) throw Object.assign(new Error('内部宛は Discord で連絡してください。'), { errorKind: 'internal_recipient', internal });
-  const sent = await request('https://gmail.googleapis.com/gmail/v1/users/me/drafts/send', {
-    method: 'POST', body: JSON.stringify({ id }),
-  });
-  if (!sent?.id || !sent?.threadId) throw new Error('送信結果の ID がありません');
-  return { sentMessageId: sent.id, threadId: sent.threadId, to: values('to').join(', '), subject: values('subject').join(' ') };
+  const guard = await acquireDedupe({ recipients: values('to'), body: mimeText(draft?.message?.payload).text, allowRepeat, home });
+  try {
+    const sent = await request('https://gmail.googleapis.com/gmail/v1/users/me/drafts/send', {
+      method: 'POST', body: JSON.stringify({ id }),
+    });
+    if (!sent?.id || !sent?.threadId) throw new Error('送信結果の ID がありません');
+    guard.recordSuccess({ channel: 'gmail', transport: 'gmail-draft', messageId: sent.id, threadId: sent.threadId, draftId: id });
+    return { sentMessageId: sent.id, threadId: sent.threadId, to: values('to').join(', '), subject: values('subject').join(' ') };
+  } catch (error) { guard.release(); throw error; }
 }
 
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
     const name = argv[i];
-    if (['--check', '--json', '--dry-run'].includes(name)) { args[name.slice(2)] = true; continue; }
-    if (!['--to', '--cc', '--subject', '--body', '--body-file', '--user', '--delete', '--send', '--forward', '--thread-id', '--in-reply-to', '--attach', '--ack-consistency'].includes(name) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw configError();
+    if (['--check', '--json', '--dry-run', '--booth'].includes(name)) { args[name.slice(2)] = true; continue; }
+    if (!['--to', '--cc', '--subject', '--body', '--body-file', '--user', '--delete', '--send', '--forward', '--thread-id', '--in-reply-to', '--attach', '--ack-consistency', '--allow-repeat'].includes(name) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw configError();
     const field = name.slice(2);
     const value = argv[++i];
     if (field === 'to' || field === 'cc' || field === 'attach') (args[field] ??= []).push(value);
@@ -359,10 +373,12 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       if (args['body-file'] !== undefined) { try { preface = (deps.readFile ?? (p => fs.readFileSync(p, 'utf8')))(args['body-file']); } catch { throw configError(); } }
       const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
       const originalRaw = await (deps.fetchMessageRaw ?? (options => fetchMessageRaw({ ...options, fetchImpl, getToken })))({ user, id: args.forward });
-      const raw = buildForwardRaw({ from: user, to: args.to, cc: args.cc, preface, messageId: args.forward, originalRaw });
-      if (args['dry-run']) { emit({ ok: true, raw, headers: Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0] }, `raw: ${raw}`); return 0; }
+      const boothCc = applyBoothCc({ to: args.to, cc: args.cc, body: `${preface}\n${Buffer.from(originalRaw, 'base64url').toString('utf8')}`, booth: args.booth });
+      const raw = buildForwardRaw({ from: user, to: args.to, cc: boothCc.cc, preface, messageId: args.forward, originalRaw });
+      const boothReport = boothCc.added ? { boothCcAdded: BOOTH_CC } : {};
+      if (args['dry-run']) { emit({ ok: true, ...boothReport, raw, headers: Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0] }, `raw: ${raw}${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}`); return 0; }
       const result = await createDraft({ user, raw, fetchImpl, getToken });
-      emit({ ok: true, ...result }, `転送下書きを作成しました: ${result.id} (${user})`);
+      emit({ ok: true, ...boothReport, ...result }, `転送下書きを作成しました: ${result.id} (${user})${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}`);
       return 0;
     }
     if (Object.hasOwn(args, 'send')) {
@@ -391,6 +407,18 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         const current = await (deps.getDraftBody ?? (options => fetchDraftBody({ ...options, fetchImpl, getToken })))({ user, id: args.send });
         consistency = age <= 86400000 && cached.bodyHash === bodyHash(current) ? cached : await inspect();
       } catch { consistency = await inspect(); }
+      const draftText = mimeText(draft?.message?.payload).text;
+      const draftHeader = name => (headers ?? []).filter(header => String(header.name).toLowerCase() === name).map(header => header.value);
+      const boothCc = applyBoothCc({ to: draftHeader('to'), cc: draftHeader('cc'), subject: draftHeader('subject').join(' '), body: draftText, booth: args.booth });
+      if (boothCc.added) {
+        emit({ ok: false, errorKind: 'booth_cc_missing', boothCcAdded: BOOTH_CC, reason: boothCc.reason }, `ブース営業メールのCCに ${BOOTH_CC} がありません。下書きを修正してから送信してください。`);
+        return 2;
+      }
+      const bookingUrls = findSecretaryBookingUrls(draftText);
+      if (bookingUrls.length) {
+        emit({ ok: false, errorKind: 'secretary_booking_url', matches: bookingUrls }, `${SECRETARY_BOOKING_URL_REASON}\n検出: ${bookingUrls.join('、')}`);
+        return 2;
+      }
       if (!isForward && !consistency.ok && !args['ack-consistency']) { emit({ ok: false, errorKind: 'consistency_block', findings: consistency.findings }, renderConsistency(consistency)); return 2; }
       if (!isForward && args['ack-consistency']) {
         const record = { t: new Date().toISOString(), draftId: args.send, user, reason: args['ack-consistency'], findings: consistency.findings };
@@ -398,7 +426,17 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         (deps.appendLedger ?? ((p,s) => { fs.mkdirSync(path.dirname(p), {recursive:true}); fs.appendFileSync(p,s); }))(ledgerFile, JSON.stringify(record)+'\n');
         stdout(`整合性 block を理由付きで承認: ${args['ack-consistency']}`);
       }
-      const draftText = mimeText(draft?.message?.payload).text;
+      // 社外文面の曜日誤りを送信前に検出
+      const weekdayResult = validateWeekdays(draftText);
+      if (!weekdayResult.valid) {
+        const mismatchLines = weekdayResult.mismatches.map(m => `  「${m.matched}」: ${m.date} の正しい曜日は「${m.expected}」ですが「${m.actual}」と書かれています`).join('\n');
+        const warning = `【曜日誤り】送信予定の本文に日付と曜日の不一致があります:\n${mismatchLines}`;
+        if (!args['ack-consistency']) {
+          emit({ ok: false, errorKind: 'weekday_mismatch', mismatches: weekdayResult.mismatches }, `${warning}\n--ack-consistency で上書きして送信するか、本文を修正してください。`);
+          return 2;
+        }
+        stdout(`⚠️ ${warning}`);
+      }
       if (!deps.skipContextCheck) {
         let contextThreadId = draft?.message?.threadId;
         if (!contextThreadId) {
@@ -417,7 +455,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         return latestOf((thread.messages || []).filter(m => !(m.labelIds || []).includes('DRAFT')).map(m => ({ id: m.id, at: new Date(Number(m.internalDate)).toISOString() })));
         }});
       }
-      const result = await sendDraft({ user, id: args.send, ledger: (deps.loadLedger ?? loadLedger)(), fetchImpl, getToken, draft,
+      const result = await sendDraft({ user, id: args.send, ledger: (deps.loadLedger ?? loadLedger)(), fetchImpl, getToken, draft, allowRepeat: args['allow-repeat'], home: deps.home, acquireDedupe: deps.acquireDedupe,
       });
       if (!deps.skipContextCheck) recordOutbound({ channel: 'gmail', target: result.threadId, mailbox: user, text: draftText, messageId: result.sentMessageId }, deps.home);
       emit({ ok: true, ...(isForward ? { consistency } : {}), ...result }, `送信しました: ${result.sentMessageId} (${user})`);
@@ -449,7 +487,9 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     }
     if (args['thread-id'] !== undefined && !/^[A-Za-z0-9_-]+$/u.test(args['thread-id'])) throw configError();
     const attachments = (args.attach ?? []).map(file => { try { return { name: path.basename(file), data: (deps.readAttachment ?? fs.readFileSync)(file) }; } catch { throw configError(); } });
-    const input = { inReplyTo: args['in-reply-to'], from: user, to: args.to, cc: args.cc, subject: args.subject ?? 'Re: (取得予定)', body, attachments };
+    const boothCc = applyBoothCc({ to: args.to, cc: args.cc, subject: args.subject ?? '', body, booth: args.booth });
+    const input = { inReplyTo: args['in-reply-to'], from: user, to: args.to, cc: boothCc.cc, subject: args.subject ?? 'Re: (取得予定)', body, attachments };
+    const boothReport = boothCc.added ? { boothCcAdded: BOOTH_CC } : {};
     const guard = guardRecipients(input, (deps.loadLedger ?? loadLedger)());
     if (guard.blocked) {
       action = 'chat-display';
@@ -464,8 +504,8 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         headers = headers.replace(/\r\n(?:In-Reply-To|References):[^\r\n]*/gu, '');
         headers += '\r\nIn-Reply-To: (取得予定)\r\nReferences: (返信先の References を取得予定) (取得予定)';
       }
-      emit({ ok: true, raw, headers, ...(args['thread-id'] ? { threadId: args['thread-id'] } : {}) },
-        `${args['thread-id'] ? `threadId: ${args['thread-id']}\n` : ''}${headers}\n\nraw: ${raw}`);
+      emit({ ok: true, ...boothReport, raw, headers, ...(args['thread-id'] ? { threadId: args['thread-id'] } : {}) },
+        `${args['thread-id'] ? `threadId: ${args['thread-id']}\n` : ''}${headers}\n\nraw: ${raw}${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}`);
       return 0;
     }
     const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
@@ -478,16 +518,20 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     const result = await createDraft({ user, raw, threadId: args['thread-id'], fetchImpl,
       getToken,
     });
-    emit({ ok: true, ...result }, `下書きを作成しました: ${result.id} (${user})`);
+    emit({ ok: true, ...boothReport, ...result }, `下書きを作成しました: ${result.id} (${user})${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}`);
     return 0;
   } catch (error) {
+    if (error instanceof SendDedupeError) {
+      emit({ ok: false, errorKind: 'send_duplicate', error: error.message }, error.message);
+      return 4;
+    }
     if (error?.errorKind === 'internal_recipient') {
       emit({ ok: false, errorKind: error.errorKind, internal: error.internal }, error.message);
       return 3;
     }
     const failure = safeFailure(error);
     emit({ ok: false, ...(action === 'delete' ? { deleted: false, id: deletionId } : {}), ...failure }, failure.error);
-    return failure.errorKind === 'configuration_error' ? 2 : 1;
+    return ['configuration_error', 'send_context_required'].includes(failure.errorKind) ? 2 : 1;
   }
 }
 

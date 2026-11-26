@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { convergeDeadlineTasks } from './setup-deadline-watch.mjs';
+import { seatCheck } from './lib/deadline-seat.mjs';
 const VALID_SEAT = { kim: true, kimOperated: true, dwdKey: true };
 test('期限タスクはkim席のWindowsだけでconverge、登録失敗をNGにする', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(),'deadline-setup-')); t.after(() => fs.rmSync(home,{recursive:true,force:true}));
@@ -21,7 +22,8 @@ test('期限タスクはkim席のWindowsだけでconverge、登録失敗をNGに
 test('dwdKey不足の席はNOTICEになり登録されない', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(),'deadline-setup-')); t.after(() => fs.rmSync(home,{recursive:true,force:true}));
   fs.writeFileSync(path.join(home,'.claude.json'), JSON.stringify({oauthAccount:{emailAddress:'kim@orgiast.jp'}}));
-  assert.equal(convergeDeadlineTasks({ home, platform:'win32', run:() => assert.fail('should not register') }).status,'NOTICE');
+  const seat = seatCheck({ home, keyPath: path.join(home, 'missing-dwd-key.json') });
+  assert.equal(convergeDeadlineTasks({ home, platform:'win32', seat, run:() => assert.fail('should not register') }).status,'NOTICE');
 });
 test('seatCheck構造が正しいキーを含む', async t => {
   const { seatCheck } = await import('./lib/deadline-seat.mjs');

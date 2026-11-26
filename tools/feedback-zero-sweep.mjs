@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
-import { parseEnvText, ensureFeedbackIssue, loadFeedbackApps, runGh, defaultSleep, DEDICATED_PIPELINE_APPS } from './feedback-to-issues.mjs';
+import { parseEnvText, ensureFeedbackIssue, loadFeedbackApps, runGh, defaultSleep, DEDICATED_PIPELINE_APPS, precheckRepositories } from './feedback-to-issues.mjs';
 import { decideCodexGate, parseDeferred, nextLocalMidnight } from './lib/executor-gate.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { main as doneNotify } from './feedback-done-notify.mjs';
@@ -115,6 +116,16 @@ export function runCodex(job, dir, stateDir) {
   try {return spawnSync(process.execPath,[path.join(here,'codex-do.mjs'),'--prompt-file',promptFile,'--cwd',dir,'--origin','unattended','--kind','implement','--timeout','1800'],{encoding:'utf8',timeout:1850000,windowsHide:true,maxBuffer:4*1024*1024});}
   finally {fs.rmSync(promptFile,{force:true});}
 }
+function issueCreationError(error, repo, gh) {
+  if (!error.message.includes('Could not resolve to a Repository')) return 'Issue化失敗: '+error.message;
+  let login = '';
+  try {
+    const result = gh(['api','user','-q','.login']);
+    if (!result.error && result.status===0) login = String(result.stdout ?? '').trim();
+  } catch {}
+  return `Issue化失敗: 反映先 ${repo} を実行アカウント${login ? ` ${login}` : ''} が参照できない（招待待ち）`;
+}
+
 export async function sweep({registryFile=path.join(here,'feedback-zero-registry.json'),home=process.env.ORGIAST_HOME || os.homedir(),config=loadConfig(home),dryRun=false,fetchImpl=fetch,gh=runGh,ensureIssue=ensureFeedbackIssue,gate=decideCodexGate,execute=runCodex,notify=notifyKim,done=doneNotify,now=Date.now(),maxJobs=8}={}) {
   const registry=readJson(registryFile,null);
   if(!registry || !Array.isArray(registry.apps) || new Set(registry.apps.map(e=>e.appName)).size!==registry.apps.length)throw new Error('registry 不正または重複');
@@ -129,6 +140,20 @@ export async function sweep({registryFile=path.join(here,'feedback-zero-registry
     const state=readJson(stateFile,{jobs:{}}), ledger=readJson(path.join(stateDir,'feedback-issue-ledger.json'),{items:[]});
     if(!state.jobs || !Array.isArray(ledger.items))throw new Error('巡回台帳不正');
     const repoMap=loadFeedbackApps(), rows=[];let launched=0;
+    // feedback-to-issues と同じ precheck: repo ごとに1回だけ到達確認し、不能なら Issue 化をスキップする。
+    const repoStatuses=new Map();
+    const repoStatus=repo=>{
+      if(!repo)return 'OK';
+      if(!repoStatuses.has(repo)){
+        for(const [name,status] of precheckRepositories([repo],gh))repoStatuses.set(name,status);
+      }
+      return repoStatuses.get(repo);
+    };
+    const markRepoUnreachable=(row,repo)=>{
+      const msg=`repo に届かない（${repo}・gh アカウントに権限なし or 名前違い）→Issue化スキップ`;
+      row.status='repo_unreachable';
+      if(!row.errors.includes(msg))row.errors.push(msg);
+    };
     for(const entry of registry.apps) {
       const row={appName:entry.appName,remaining:null,status:'未取得',errors:[],queued:0,deferred:0};rows.push(row);
       const persist=()=>{if(!dryRun)save(stateFile,state);};
@@ -159,10 +184,17 @@ export async function sweep({registryFile=path.join(here,'feedback-zero-registry
           row.remaining++;
           // Dedicated intake owns implementation; keep backlog and existing Issue checks above.
           if(DEDICATED_PIPELINE_APPS.has(entry.appName))continue;
-          if(dryRun){if(!repo && !issue)row.errors.push('反映先 repo 参照キー未設定');else row.queued++;continue;}
+          if(dryRun){
+            if(!repo && !issue)row.errors.push('反映先 repo 参照キー未設定');
+            else if(!issue && repo && repoStatus(repo)!=='OK')markRepoUnreachable(row,repo);
+            else row.queued++;
+            continue;
+          }
           if(!issue) {
             if(!repo){row.errors.push('反映先 repo 参照キー未設定');continue;}
-            try {issue=ensureIssue(item,repo,{home,gh});}catch(e){row.errors.push('Issue化失敗: '+e.message);continue;}
+            // feedback-to-issues と同じ事前 probe。到達不能なら Issue化失敗にせずスキップ。
+            if(repoStatus(repo)!=='OK'){markRepoUnreachable(row,repo);continue;}
+            try {issue=ensureIssue(item,repo,{home,gh});}catch(e){row.errors.push(issueCreationError(e,repo,gh));continue;}
           }
           job ||= {item,issue,status:'queued',createdAt:new Date(now).toISOString()};
           state.jobs[key]=job;persist();
@@ -184,38 +216,46 @@ export async function sweep({registryFile=path.join(here,'feedback-zero-registry
         }
       } catch(e){row.status='未取得';row.errors.push(e.message);}
     }
-    if(!dryRun) {
+    // Every app failing only on url resolution means this machine was never given the sweep config.
+    const unassigned=rows.length>0 && rows.every(r=>r.status==='未取得' && r.errors.length===1 && r.errors[0]==='url 参照キー未設定');
+    if(!dryRun && !unassigned) {
       // Existing completion notifier uses Issue CLOSED and submitter identity, never executor exit 0.
       try {await done(['--recipient-only'],{home,fetchImpl});}catch {rows.push({appName:'完了報告',remaining:null,status:'未取得',errors:['done-notify失敗']});}
       const notified=readJson(path.join(stateDir,'feedback-done-notified.json'),{items:[]});
-      const unnotified=Object.values(state.jobs).filter(job=>job.status==='closed' && !notified.items.some(n=>n.message_id===job.issue.message_id));
+      const unnotified=Object.values(state.jobs).filter(job=>job.status==='closed' && !notified.items.some(n=>String(n.message_id)===String(job.issue.message_id)));
       if(unnotified.length)rows.push({appName:'完了報告',remaining:unnotified.length,status:'未取得',errors:['投稿者へのDM未達']});
     }
-    const remaining=rows.reduce((n,r)=>n+(r.remaining || 0),0), unknown=rows.filter(r=>r.status!=='取得済' || r.errors.length).length;
+    const remaining=rows.reduce((n,r)=>n+(r.remaining || 0),0);
+    // repo_unreachable は設定/権限の既知スキップ。Issue化失敗や要修復 unknown に積まない。
+    const unknown=unassigned?0:rows.filter(r=>r.status!=='repo_unreachable' && (r.status!=='取得済' || r.errors.length)).length;
     let notification={delivered:'none'};
-    if(!dryRun && (remaining>0 || unknown>0)) {
+    if(!dryRun && !unassigned && (remaining>0 || unknown>0)) {
       // 宛先は FEEDBACK_KIM_DISCORD_ID を優先し、未設定なら notify-kim の既定解決（環境変数 or txt）に任せる。
       const userId=config.FEEDBACK_KIM_DISCORD_ID || undefined;
       notification=await notify('不具合・要望 日次巡回\n'+rows.map(r=>`${r.appName}: ${r.remaining===null?'未取得':r.remaining+'件'} / ${r.status}${r.errors.length?' / '+[...new Set(r.errors)].join('、'):''}`).join('\n'),{home,userId,webhookFallback:false,fetchImpl});
       if(notification.delivered==='none' && !notification.reason) notification={delivered:'none',reason:'宛先未設定（FEEDBACK_KIM_DISCORD_ID / ORGIAST_DISCORD_USER_ID / ~/.claude/orgiast-discord-user-id.txt）'};
     }
-    return {dryRun,remaining,unknown,launched,rows,notification};
+    return {dryRun,remaining,unknown,launched,rows,notification,unassigned};
   } finally {if(locked)fs.rmSync(lock,{force:true});}
 }
 export function sweepExitCode(result) {
+  // A machine with no sweep config at all is not an error; the owning machine still reports.
+  if(result.unassigned) return 0;
   // Empty queues do not prove success: intake/configuration failures count as unknown.
   if(result.unknown > 0) return 1;
   if(!result.dryRun) {
     const {delivered,reason}=result.notification;
     // A clean empty sweep intentionally skips notification (none without a reason).
-    if(!['dm', 'session-inbox'].includes(delivered) && (result.remaining>0 || delivered!=='none' || reason)) return 1;
+    if(!isKimDelivered(result.notification) && (result.remaining>0 || delivered!=='none' || reason)) return 1;
   }
   return 0;
 }
 
 // 夜間ログは末尾8行しか残らないため、失敗理由を1行で最後に出す（JSON の直後）。
 export function unknownRowsLine(result) {
-  const rows=(result?.rows || []).filter(r=>r.status!=='取得済' || (r.errors && r.errors.length));
+  // 巡回設定が無い席は全行が「url 参照キー未設定」になる。全行並べると設定漏れと誤読されるので1行へ畳む。
+  if(result?.unassigned)return 'sweep_skipped=この席に巡回設定（url 参照キー）が無いため担当外としてスキップ';
+  const rows=(result?.rows || []).filter(r=>r.status!=='repo_unreachable' && (r.status!=='取得済' || (r.errors && r.errors.length)));
   if(!rows.length)return '';
   return 'unknown_rows='+rows.map(r=>`${r.appName}:${(r.errors?.length?[...new Set(r.errors)].join('、'):r.status)}`).join('; ');
 }

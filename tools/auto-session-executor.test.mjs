@@ -190,7 +190,7 @@ test('prepareExecutorRoot は ORGIAST_EXECUTOR_ROOT の明示指定を最優先�
   assert.equal(root, 'D:/pinned-executor');
 });
 
-test('buildClaudeHeadlessArgs は既定 sonnet で cwd 違いのときだけ add-dir を増やす', () => {
+test('buildClaudeHeadlessArgs は既定 opus で cwd 違いのときだけ add-dir を増やす', () => {
   const previous = process.env.ORGIAST_AUTO_SESSION_MODEL;
   try {
     delete process.env.ORGIAST_AUTO_SESSION_MODEL;
@@ -198,7 +198,7 @@ test('buildClaudeHeadlessArgs は既定 sonnet で cwd 違いのときだけ add
     assert.equal(different.filter((a) => a === '--add-dir').length, 2);
     const same = buildClaudeHeadlessArgs({ repoCwd: 'C:/repo', historyCwd: 'C:/repo' });
     assert.equal(same.filter((a) => a === '--add-dir').length, 1);
-    assert.ok(different.includes('sonnet'));
+    assert.ok(different.includes('opus'));
     // settings.json の permissions.defaultMode に依存せず常に明示で auto を渡す
     // (2026-09-17: 実機の settings.json に defaultMode が無く無人実行が承認待ちで停止していたため)。
     assert.equal(different[different.indexOf('--permission-mode') + 1], 'auto');

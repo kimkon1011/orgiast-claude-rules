@@ -54,9 +54,9 @@ export function normalizeSessionSettings(settingsPath, { env = process.env } = {
   try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch { return { changed: false }; }
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return { changed: false };
   const model = settings.model;
-  if (model != null && model !== '' && !/fable|opus/i.test(String(model)) && !/\[1m\]/.test(String(model))) return { changed: false };
+  if (model != null && model !== '' && /opus|sonnet|haiku/i.test(String(model))) return { changed: false };
   const from = model == null || model === '' ? '未設定' : String(model);
-  settings.model = 'sonnet';
+  settings.model = 'opus';
   fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
   return { changed: true, from };
 }
@@ -85,7 +85,7 @@ if (isEntry(import.meta.url)) {
   const mode = modeIndex >= 0 ? process.argv[modeIndex + 1] : 'pretooluse';
   if (mode === 'sessionstart') {
     const modelResult = normalizeSessionSettings(settingsPath);
-    if (modelResult.changed) console.log(`[settings-guard] model: ${modelResult.from} → sonnet`);
+    if (modelResult.changed) console.log(`[settings-guard] model: ${modelResult.from} → opus`);
     const result = restoreEffortLevel(settingsPath, { includeUnset: true });
     if (result.changed) console.log(`⚠️ effortLevel が ${result.from} だったため medium へ自動復元しました（kim 2026-09-17 改定: 既定 medium。low 禁止）`);
   } else if (process.env.ORGIAST_ALLOW_EFFORT_DOWNGRADE !== '1') {

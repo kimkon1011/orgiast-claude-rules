@@ -31,31 +31,39 @@ function assertOptionalBudget(index) {
   assert(optionalBytes <= INDEX_BUDGET_BYTES, `非必須索引 ${optionalBytes} bytes`);
 }
 
-test('必須ルール全体は19500bytes以下で、超過時は統合・圧縮を要求する', () => {
+test('必須ルール全体は21000bytes以下で、超過時は統合・圧縮を要求する', () => {
   const body = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
-  // 2026-11-16 の最上位ルール（人の手間はAIの効率より上）を全文配布した分だけ上限を上げた。
-  // 余裕は数百バイトに留め、次の追加では統合・圧縮を要求する。全文配布は削らない。
+  // 2026-11-16 の最上位ルール（人の手間はAIの効率より上）に加え、2026-11-18 の
+  // 「依頼する前に、すでに済んでいないかを確認する」、2026-11-19 の再発防止8項を
+  // 1本の絶対ルールに統合して全文配布した分だけ上限を上げた。
+  // 2026-11-26 kim 厳命の絶対ルール（スピード最重視・前倒し・バッファ20%以上）は全文を CLAUDE.md 最上部の
+  // 別ブロックへ置き、索引には1行だけ載せた。その1行分だけ上限を 21100 に上げた。
+  // 余裕は数百バイトに留め、次の追加では統合・圧縮を要求する。先頭ルールの全文配布は削らない。
   const assertMandatoryBudget = index => {
     const { mandatoryBytes } = measureIndexBytes(index);
-    assert(mandatoryBytes <= 19500, `必須ルールの統合・圧縮が必要: ${mandatoryBytes} bytes > 19500 bytes`);
+    assert(mandatoryBytes <= 21100, `必須ルールの統合・圧縮が必要: ${mandatoryBytes} bytes > 21100 bytes`);
   };
   assertMandatoryBudget(makeIndex(body));
   const base = makeIndex('');
-  const exact = base + '\n🔴 ' + 'a'.repeat(19500 - Buffer.byteLength('\n🔴 '));
+  const exact = base + '\n🔴 ' + 'a'.repeat(21100 - Buffer.byteLength('\n🔴 '));
   assertMandatoryBudget(exact);
-  assert.throws(() => assertMandatoryBudget(exact + 'a'), /必須ルールの統合・圧縮が必要: 19501 bytes/);
+  assert.throws(() => assertMandatoryBudget(exact + 'a'), /必須ルールの統合・圧縮が必要: 21101 bytes/);
 });
 
-test('人の手間はAIの効率より上のルールが最初の絶対ルールとして全文配布される', () => {
+test('2026-11-26 の最上位ルール（即着手・前倒し・バッファ20%）の次に、人の手間はAIの効率より上のルールが全文配布される', () => {
   const body = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
   const index = makeIndex(body);
-  const rules = index.split('\n').filter(line => /^\*{0,2}\s*🔴/u.test(line));
+  const all = index.split('\n').filter(line => /^\*{0,2}\s*🔴/u.test(line));
+  assert.match(all[0], /即着手・前倒し・バッファ20%以上/);
+  const rules = all.slice(1);
   assert.match(rules[0], /人の手間はAIの効率より上/);
   assert.match(rules[0], /secretary\/book/);
   assert.match(rules[0], /kim@orgiast\.jp と seisaku-team@orgiast\.jp の両方が空いている日時/);
   assert.match(rules[0], /4〜5枠/);
-  assert.match(rules[0], /ご都合が合わない場合は、下記から追加で空き日時をお選びいただけます/);
-  assert.match(rules[0], /下記からご都合のよい日時をお選びいただくか、候補日時をお知らせください/);
+  assert.match(rules[0], /お客様に送らない/);
+  assert.match(rules[0], /別日を聞く/);
+  assert.match(rules[0], /追加の候補を出す/);
+  assert.doesNotMatch(rules[0], /URLを添えてよい/);
   const at = index.indexOf(rules[0]);
   for (const later of ['ユーザーの手作業を極限まで減らす', 'send-context-check', '検証表で出し', '費用対効果は', '判断軸はオージャストの長期的利益']) {
     assert.ok(index.indexOf(later) > at, later);

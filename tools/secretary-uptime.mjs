@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { isEntry } from './is-entry.mjs';
+import { spoolItem } from './kim-inbox.mjs';
 
 const exec = promisify(execFile);
 const DAY = 86400000;
@@ -26,13 +27,26 @@ export async function repairPass(io, previous = {}, now = Date.now()) {
   const repairs = [], errors = [];
   const inspect = async () => Object.fromEntries(await Promise.all(Object.entries(targets).map(async ([name, url]) => [name, await io.probe(url)])));
   const before = await inspect();
-  let backend;
-  try { backend = await io.backend(); } catch (error) { errors.push(`tailscale status: ${error.message}`); }
   const causes = Object.keys(before).filter(key => !before[key].ok);
-  if (backend !== 'Running') causes.push('tailscale');
   const attempt = async (name, fn) => { try { await fn(); repairs.push(name); } catch (error) { errors.push(`${name}: ${error.message}`); } };
-  if (backend !== 'Running') await attempt('tailscale-up', io.up);
-  if (backend !== 'Running' || !before.external.ok) await attempt('funnel', io.funnel);
+  if (!before.external.ok) {
+    let backend;
+    try {
+      const state = await io.backend();
+      if (typeof state !== 'string' || !state) throw new Error('BackendState を取得できません');
+      backend = state;
+    } catch (error) {
+      if (/Logged out|NeedsLogin/i.test(`${error.stderr || ''} ${error.message}`)) {
+        backend = 'NeedsLogin';
+      } else errors.push(`tailscale status: CLI を利用できないため Tailscale の修復を省略: ${error.message}`);
+    }
+    if (/^(NeedsLogin|Logged out)$/i.test(backend || '')) {
+      errors.push('Tailscale 再ログインが必要');
+    } else if (backend) {
+      if (backend !== 'Running') await attempt('tailscale-up', io.up);
+      await attempt('funnel', io.funnel);
+    }
+  }
   for (const name of ['secretary', 'gateway']) if (!before[name].ok) await attempt(`restart-${name}`, () => io.restart(name));
   let after = before;
   // Allow Next to become ready without an unbounded process or task wait.
@@ -41,26 +55,42 @@ export async function repairPass(io, previous = {}, now = Date.now()) {
     after = await inspect();
     if (Object.values(after).every(result => result.ok)) break;
   }
-  const events = (previous.events || []).filter(event => event.at > now - DAY);
+  const events = (previous.events || []).filter(event => event.at > now - DAY && Object.hasOwn(targets, event.cause));
   // A persistent outage counts once; a recovery followed by another failure is a new incident.
   const ongoing = previous.activeCauses || [];
   for (const cause of causes) if (!ongoing.includes(cause)) events.push({ at: now, cause });
   const recurring = [...new Set(events.map(event => event.cause))].filter(cause => events.filter(event => event.cause === cause).length >= 3);
   const failed = Object.keys(after).filter(key => !after[key].ok);
-  if (errors.length && causes.includes('tailscale')) failed.push('tailscale');
   const signature = JSON.stringify({ failed: [...new Set(failed)].sort(), recurring: recurring.sort() });
   const alert = failed.length > 0 || recurring.length > 0;
   let notified = previous.notified || null;
   const shouldNotify = alert && (!notified || notified.signature !== signature || now - notified.at >= 6 * 3600000);
   if (shouldNotify) {
     try {
-      await io.notify(`秘書アプリの監視: 未復旧=${failed.join(',') || 'なし'}、24時間に3回以上=${recurring.join(',') || 'なし'}。原因=${causes.join(',')}。修復=${repairs.join(',') || 'なし'}。エラー=${errors.join('; ') || 'なし'}。外部HTTP=${after.external.status || after.external.error}。`);
+      const delivery = await notifyWithRetry(io, `秘書アプリの監視: 未復旧=${failed.join(',') || 'なし'}、24時間に3回以上=${recurring.join(',') || 'なし'}。原因=${causes.join(',')}。修復=${repairs.join(',') || 'なし'}。エラー=${errors.join('; ') || 'なし'}。外部HTTP=${after.external.status || after.external.error}。`);
+      if (delivery === 'spooled') errors.push('kim-inbox: 台帳が使用中のため再送キューに保存');
       notified = { signature, at: now };
     } catch (error) { errors.push(`kim-inbox: ${error.message}`); }
   }
   const activeCauses = [...new Set(failed)];
   const state = { events, activeCauses, notified, checkedAt: new Date(now).toISOString(), before, after, repairs, errors };
-  return { state, ok: failed.length === 0 && errors.length === 0 };
+  return { state, ok: !alert };
+}
+
+async function notifyWithRetry(io, body) {
+  for (let retry = 0; ; retry++) {
+    try {
+      await io.notify(body);
+      return 'sent';
+    } catch (error) {
+      if (!/台帳が使用中/.test(error.stderr || error.message)) throw error;
+      if (retry === 3) {
+        await io.deferNotification(body);
+        return 'spooled';
+      }
+      await io.wait(3000);
+    }
+  }
 }
 
 export async function main() {
@@ -104,6 +134,7 @@ export async function main() {
       funnel: () => run(ts, ['funnel', '--bg', '--https=443', '--set-path=/', 'http://127.0.0.1:3939']),
       restart: name => run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(tools, 'secretary-restart.ps1'), '-Service', name], 30000),
       wait: ms => new Promise(resolve => setTimeout(resolve, ms)),
+      deferNotification: text => spoolItem(home, { kind: 'ask', text, source: 'secretary-uptime' }),
       notify: async body => {
         const bodyFile = path.join(dir, 'notification.txt');
         await fs.writeFile(bodyFile, body, 'utf8');

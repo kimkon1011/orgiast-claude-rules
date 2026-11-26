@@ -2,7 +2,7 @@
 // 既定は検出のみ。外部照会失敗は「未確認」として独立して報告する。
 import { publishSeatPr } from './pr-land.mjs';
 import fs from 'node:fs';
-import { listScheduledTasks } from './lib/scheduled-task.mjs';
+import { listScheduledTasks, taskResultIsNonFailure } from './lib/scheduled-task.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -14,10 +14,13 @@ import { notifyKim } from './notify-kim.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { parseDeferred } from './lib/executor-gate.mjs';
 import { classifyTaskKind } from './lib/task-kind.mjs';
+import { parseJsonLoose, readJsonFile } from './lib/json-read.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DAY = 86400000;
 export const KINDS = ['uncommitted', 'open_pr', 'stale_branch', 'open_todo', 'failed_job', 'stalled_session', 'unverified_delegation'];
+export const COLLAPSE_THRESHOLD = 10;
+export const FAILED_JOB_STALE_DAYS = 7;
 const hash = value => crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 20);
 const age = (t, now) => Math.max(0, (now - new Date(t).getTime()) / DAY);
 const read = file => fs.readFileSync(file, 'utf8');
@@ -84,13 +87,26 @@ export function detectFailedJob(rows, now = Date.now()) {
     if (!latest.has(key) || new Date(r.t) >= new Date(latest.get(key).t)) latest.set(key, r);
   }
   return [...latest].flatMap(([id, r]) => {
-    if (!Number.isFinite(new Date(r.t).getTime()) || r.running || r.status == null || Number(r.status) === 0 || ['ok', 'success', 'fallback', 'cooldown', 'deferred'].includes(String(r.status).toLowerCase()) || [267009, 267011].includes(Number(r.status))) return [];
+    if (!Number.isFinite(new Date(r.t).getTime()) || r.running || r.status == null || (r.taskName && Number.isFinite(Number(r.status)) ? taskResultIsNonFailure(r.status, r) : Number(r.status) === 0) || ['ok', 'success', 'fallback', 'cooldown', 'deferred'].includes(String(r.status).toLowerCase())) return [];
     if (!Number.isFinite(Number(r.status)) && !/^(?:error|failed|failure|unusable|no-cheap-executor|http_[45]\d\d)$/.test(String(r.status))) return [];
     // ジョブ付帯の無いプロバイダ単位のLLM呼び出し行(executor-usageのgroq等)で直近が http_429 の場合は
     // RPD・TPM 等のレート上限到達による一時的な流量制限であり、ジョブ失敗ではない(2026-11-07 確定、
     // `groq:不明` アーティファクト)。フォールバックチェーンが負荷を吸収するため再実行対象にしない。
     // 実ジョブ(taskName/job/cwd 付帯)の http_429 は従来どおり失敗として拾う。
     if (r.taskName == null && r.job == null && r.cwd == null && /^http_429$/.test(String(r.status))) return [];
+    // provider:skipped で taskName/job が無い行は直前の codex-do 失敗に付随する集計行であり、
+    // 独立した再実行ジョブではない。failed_job にしない(2026-11-24)。
+    if (r.provider === 'skipped' && r.taskName == null && r.job == null) return [];
+    // キーの最新行が FAILED_JOB_STALE_DAYS 日以上前なら恒久エスカレーションを防ぐため除外する(2026-11-24)。
+    if (age(r.t, now) >= FAILED_JOB_STALE_DAYS) return [];
+    // 存在しない cwd は再実行不能なので除外する。一時ディレクトリの片付け済みと、
+    // シェルでバックスラッシュが消えた壊れたパス（2026-11-20、Userskimko.claudeauto-session-repo）の両方を除外する(2026-11-16)。
+    if (r.cwd) {
+      const cwdPath = localPath(r.cwd);
+      if (cwdPath && !fs.existsSync(cwdPath)) {
+        return [];
+      }
+    }
     return [item('failed_job', id, `実行失敗: ${id}`, r.location || r.cwd || id, age(r.t, now), 'Codexで原因を調査して安全に再実行',
       `直近の終了コード ${r.status}`, { cwd: localPath(r.cwd), taskName: r.taskName, eventTime: r.t })];
   });
@@ -227,7 +243,7 @@ export function collect({ home, repos, history = [], observations = {}, now = Da
       if (remote && !remotes.has(remote)) {
         remotes.add(remote);
         items.push(...attempt(`GitHub ${remote}`, () => {
-          const prs = JSON.parse(command('gh', ['pr', 'list', '--repo', remote, '--state', 'open', '--limit', '1000', '--json', 'number,title,url,isDraft,mergeable,updatedAt,statusCheckRollup']));
+          const prs = parseJsonLoose(command('gh', ['pr', 'list', '--repo', remote, '--state', 'open', '--limit', '1000', '--json', 'number,title,url,isDraft,mergeable,updatedAt,statusCheckRollup']), { source: `gh pr list --repo ${remote}` });
           if (prs.length === 1000) warnings.push(`${remote}: PR取得上限、全件性は未確認`);
           return detectOpenPr(prs, now);
         }));
@@ -248,8 +264,8 @@ export function collect({ home, repos, history = [], observations = {}, now = Da
   const tasks = attempt('Windowsスケジュールタスク', () => taskRows());
   items.push(...detectFailedJob([...usage.map(r => ({ ...r, location: path.join(claude, 'executor-usage.jsonl') })), ...tasks], now));
   if (fs.existsSync(path.join(claude, 'projects'))) items.push(...attempt('会話ログ', () => {
-    const result = JSON.parse(command(process.execPath, [path.join(ROOT, 'tools/session-triage.mjs'), '--all', '--all-status', '--older-than', '3', '--top', '100000', '--json'],
-      { env: { ...process.env, CLAUDE_PROJECTS_DIR: path.join(claude, 'projects') }, timeout: 180000 }));
+    const result = parseJsonLoose(command(process.execPath, [path.join(ROOT, 'tools/session-triage.mjs'), '--all', '--all-status', '--older-than', '3', '--top', '100000', '--json'],
+      { env: { ...process.env, CLAUDE_PROJECTS_DIR: path.join(claude, 'projects') }, timeout: 180000 }), { source: 'session-triage stdout' });
     return detectStalledSession(result.sessions, now);
   }));
   items.push(...detectUnverifiedDelegation(delegationLogs(home, repos, warnings), now));
@@ -322,14 +338,14 @@ export async function advanceUncommitted(candidate, { home = process.env.ORGIAST
     run: (file, args, options) => run(file, args, { cwd: repo, ...options }) });
   if (published) return { commit, branch, url: published.url };
   g('push', '--set-upstream', 'origin', `${branch}:refs/heads/${branch}`);
-  const existing = JSON.parse(run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--limit', '1'], { cwd: repo }));
+  const existing = parseJsonLoose(run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--limit', '1'], { cwd: repo }), { source: `gh pr list --head ${branch}` });
   const url = existing[0]?.url || run('gh', ['pr', 'create', '--base', 'main', '--head', branch, '--title', candidate.title,
     '--body', `2日以上停滞した変更を保存しました。\nコミット: ${commit}\n利用可能なテストを実行済み。人のレビューを経てマージしてください。`], { cwd: repo }).trim();
   return { commit, branch, url };
 }
 export function fileTestFailure(candidate, error, run = command) {
   const marker = `stall-sweeper-${hash(candidate.id)}`;
-  const list = JSON.parse(run('gh', ['issue', 'list', '--state', 'open', '--search', marker, '--json', 'title,url', '--limit', '100'], { cwd: candidate.cwd }));
+  const list = parseJsonLoose(run('gh', ['issue', 'list', '--state', 'open', '--search', marker, '--json', 'title,url', '--limit', '100'], { cwd: candidate.cwd }), { source: 'gh issue list stdout' });
   const existing = list.find(i => i.title.includes(marker));
   if (existing) return existing.url;
   return run('gh', ['issue', 'create', '--title', `テスト失敗: ${path.basename(candidate.cwd)} [${marker}]`, '--body',
@@ -398,7 +414,7 @@ export async function advanceDelegated(candidate, { outputDir, run = command }) 
   }
   fs.writeFileSync(path.join(outputDir, `${stem}.log`), redactSecrets(`${stdout}${recovery ? `\n${recovery}\n` : ''}`));
   if (!foundReceipt) throw Object.assign(new Error('委譲結果ファイルを確認できません'), { code: 'RECEIPT_MISSING' });
-  const result = JSON.parse(read(foundReceipt));
+  const result = readJsonFile(foundReceipt);
   if (result.completed === false) return { completed: false, summary: result.summary || result.reason || '対応不要または未完了', recovery };
   if (result.completed !== true || !result.summary || !result.evidence?.file || !/^[a-f0-9]{64}$/.test(result.evidence.sha256 || '')) throw new Error('委譲成果の完了証拠がありません');
   const actual = crypto.createHash('sha256').update(fs.readFileSync(localPath(result.evidence.file))).digest('hex');
@@ -430,13 +446,41 @@ export function parseArgs(args) {
   out.repos = out.repos.map(repo => path.resolve(repo));
   return out;
 }
+export function itemsDetail(items) {
+  const lines = items.map(i => `- ${clean(i.title)}（${i.kind}, ${i.staleDays}日）: ${clean(i.reason)} / ${clean(i.nextAction)} / ${clean(i.location)}`);
+  return `# 停滞スイーパー 検出項目（全件）\n\n全 ${items.length} 件\n\n${lines.join('\n') || 'なし'}\n`;
+}
+function groupedItems(items) {
+  const groups = [];
+  const seenKinds = [];
+  for (const i of items) {
+    if (!seenKinds.includes(i.kind)) seenKinds.push(i.kind);
+  }
+  for (const kind of seenKinds) {
+    const group = items.filter(i => i.kind === kind);
+    if (group.length > COLLAPSE_THRESHOLD) {
+      // 古い順（staleDays 降順）にソート
+      const sorted = [...group].sort((a, b) => b.staleDays - a.staleDays);
+      const maxStaleDays = sorted[0].staleDays;
+      const top3 = sorted.slice(0, 3);
+      const extra = group.length - 3;
+      const titles = top3.map(i => clean(i.title)).join(', ');
+      groups.push(`- ${kind}: ${group.length}件（最古 ${maxStaleDays}日 / 代表: ${titles}${extra > 0 ? ` ほか ${extra}件` : ''}）。全件は stall-sweeper-items.md`);
+    } else {
+      for (const i of group) {
+        groups.push(`- ${clean(i.title)}（${i.kind}, ${i.staleDays}日）: ${clean(i.reason)} / ${clean(i.nextAction)} / ${clean(i.location)}`);
+      }
+    }
+  }
+  return groups.join('\n') || 'なし';
+}
 export function report(items, warnings, results, apply) {
   const counts = KINDS.map(kind => `| ${kind} | ${items.filter(i => i.kind === kind).length} |`).join('\n');
   const human = items.filter(i => i.humanRequired);
   const total = name => results.filter(r => r.result === name).length;
   const rated = total('成功') + total('失敗');
   const failureRate = rated ? `${Math.round(total('失敗') / rated * 100)}%` : '対象なし';
-  return `# 停滞スイーパー報告\n\n${new Date().toISOString()} / ${apply ? '実行' : '検出のみ'}\n\n成功: ${total('成功')} / 未完了: ${total('未完了')} / 中止（安全側スキップ）: ${total('中止（安全側スキップ）')} / 失敗: ${total('失敗')} / human送り: ${human.length} / 失敗率: ${failureRate}（中止・未完了・保留を除外） / 保留(上限・無人割当。失敗ではない): ${total('保留')}\n\n| カテゴリ | 検出件数 |\n|---|---:|\n${counts}\n\n## 検出項目\n\n${items.map(i => `- ${clean(i.title)}（${i.kind}, ${i.staleDays}日）: ${clean(i.reason)} / ${clean(i.nextAction)} / ${clean(i.location)}`).join('\n') || 'なし'}\n\n## 実行記録・起票\n\n${results.map(r => `- ${r.kind} ${clean(r.id)}: ${r.result} ${clean(r.error || r.url || r.summary || r.commit || (r.result === '保留' ? `${r.reason} / ${r.retryAt ? new Date(r.retryAt).toISOString() : ''}以降に再試行` : ''))} ${r.issue || ''}`).join('\n') || 'なし'}\n\n## 未確認・保留\n\n${warnings.map(w => `- ${clean(w)}`).join('\n') || 'なし'}\n\n## 再利用\n\ncodex-do.mjs（実行委譲）、notify-kim.mjs（通知）、auto-session.mjs（残TODO解析・除外・GitHubリポジトリ名解析）、session-triage.mjs（会話ログの読取り）。open-work.mjsは既存の生成済みopen-work.mdを読み、Drive照会やfetchを伴う再生成は行わない。登録はensure-run-hidden.ps1とresolve-synced-repo.ps1を使用。\n`;
+  return `# 停滞スイーパー報告\n\n${new Date().toISOString()} / ${apply ? '実行' : '検出のみ'}\n\n成功: ${total('成功')} / 未完了: ${total('未完了')} / 中止（安全側スキップ）: ${total('中止（安全側スキップ）')} / 失敗: ${total('失敗')} / human送り: ${human.length} / 失敗率: ${failureRate}（中止・未完了・保留を除外） / 保留(上限・無人割当。失敗ではない): ${total('保留')}\n\n| カテゴリ | 検出件数 |\n|---|---:|\n${counts}\n\n## 検出項目\n\n${groupedItems(items)}\n\n## 実行記録・起票\n\n${results.map(r => `- ${r.kind} ${clean(r.id)}: ${r.result} ${clean(r.error || r.url || r.summary || r.commit || (r.result === '保留' ? `${r.reason} / ${r.retryAt ? new Date(r.retryAt).toISOString() : ''}以降に再試行` : ''))} ${r.issue || ''}`).join('\n') || 'なし'}\n\n## 未確認・保留\n\n${warnings.map(w => `- ${clean(w)}`).join('\n') || 'なし'}\n\n## 再利用\n\ncodex-do.mjs（実行委譲）、notify-kim.mjs（通知）、auto-session.mjs（残TODO解析・除外・GitHubリポジトリ名解析）、session-triage.mjs（会話ログの読取り）。open-work.mjsは既存の生成済みopen-work.mdを読み、Drive照会やfetchを伴う再生成は行わない。登録はensure-run-hidden.ps1とresolve-synced-repo.ps1を使用。\n`;
 }
 export function finishExecution(candidate, runId, detail, error) {
   const base = { kind: candidate.kind, id: candidate.id, action: '終了', runId };
@@ -522,6 +566,8 @@ export async function main(args = process.argv.slice(2)) {
     console.log(md);
     try { fs.mkdirSync(options.outputDir, { recursive: true }); fs.writeFileSync(path.join(options.outputDir, 'stall-sweeper-report.md'), md); }
     catch (e) { console.error(`報告保存不可: ${clean(e.message)}。stdoutの報告を参照してください`); return 2; }
+    try { fs.writeFileSync(path.join(options.outputDir, 'stall-sweeper-items.md'), itemsDetail(items)); }
+    catch (e) { console.error(`項目明細保存不可（本体処理は継続）: ${clean(e.message)}`); }
     if (options.apply) {
       const humans = items.filter(i => i.humanRequired);
       if (humans.length) {

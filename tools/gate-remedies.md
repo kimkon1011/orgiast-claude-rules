@@ -2,6 +2,46 @@
 
 値そのものは記載しない。取得: `node tools/onboarding-sync.mjs --keys-only --force`。
 
+## unrequested-automation-gate
+
+PreToolUse gate: 人へ自動で届く通知と定期実行を同時に新設する変更を、依頼元の記録がない場合に block する。
+
+- 依頼済みなら、同じ追加ブロックへ `REQUESTED-BY: <依頼者> YYYY-MM-DD` または `<依頼者> 指定 YYYY-MM-DD` を記録する。
+- 依頼が確認できない場合は実装せず、kim に可否を確認する。
+- ログ出力や内部処理だけの定期実行、手動送信だけの変更は対象外。
+
+## external-channel-unmonitored-gate
+
+Stop gate: 外部チャネル（LINE/Discord/Beeper）の返信待ち promise を検出し、auto-progress の監視が未登録の場合に block する。
+
+- block されたら、返信待ちの外部チャネルに対して `auto-progress-external-check.mjs` を使った監視を事前に登録する。
+- 既に監視済みで block が誤検出の場合は、応答にその説明を加えて再送する。
+- 詳細: `docs/x-0045-missing-gates.md` 優先3「外部チャネル未監視型」
+
+## silent-check-failure-gate
+
+Stop gate: auto-progress check の応答に障害信号（exit code 1以上／MODULE_NOT_FOUND）が含まれているのに成功を主張している場合に warn する。
+
+- warn されたら、当該 check の実ログ（Vercel/gh run view）を直接照会し、沈黙故障か否かを確認す��。
+- 本当に成功している場合は、障害信号が誤検出である根拠を応答に含める。
+- 詳細: `docs/x-0045-missing-gates.md` 優先1「見張りの沈黙故障型」
+
+## stale-worktree-gate
+
+PreToolUse gate: 実行元の cwd が nightly-repo 以外の古い worktree/別クローンで、かつ定期ジョブ系コマンドを実行しようとしている場合に block する。
+
+- block されたら、cwd を nightly-repo に変更して再実行する。
+- 意図的に別ツリーで実行する必要がある場合は、読み取り専用コマンド／管理操作／dry-run に限定する。
+- 詳細: `docs/x-0045-missing-gates.md` 優先2「実行元ツリー固着型」
+
+## calendar-external-guest-gate
+
+社外のメールアドレスをカレンダーの参加者（attendees）に追加する Calendar MCP / Bash / PowerShell の操作をブロックする。社内（@orgiast.jp または config/staff-addresses.json のアドレス）のみ通す。
+
+- 承認マーカーによる解除はしない。社外 attendee を取り除き、社内参加者だけで再実行する。外部 payload を使う場合も参加者を検証可能な形にする。
+- 社外の人への案内は `node tools/gmail-draft.mjs --user <アカウント> --to <宛先> --subject "..." --body-file <本文>` でメール本文に日時と会議URLを書いて送る
+- 例外はない（従来型の「ゲートをskip」方式は未実装）
+
 ## askuser-selfcheck-gate
 
 質問前に既存権限でファイル/ツール結果を調べ、取得可能な情報を人に聞かない。
@@ -157,6 +197,16 @@ node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> で大規模イン
 
 node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> で実装を依頼。
 
+## bash-cd-chain-guard
+
+ONBOARDING §1.20 に従い、絶対パス、`git -C <dir>`、`npm --prefix <dir>`、またはツールの `--cwd` を使う。
+
+## shared-worktree-git-guard
+
+- `git add <自分のパス>` → `git commit -F <msg> -- <自分のパス>` で自分の変更を確定する。
+- commit 後は `git show --stat --format="" HEAD` でファイル名を確認する。
+- stash の代わりに `git worktree add -b <branch> <別dir> origin/main` で専用ツリーを作る。
+
 ## pretooluse-headless-background
 
 run_in_background を外し前景実行、ScheduleWakeup を使わず timeout を指定する。
@@ -165,6 +215,8 @@ run_in_background を外し前景実行、ScheduleWakeup を使わず timeout �
 
 GUI operator・承認済み送信スクリプトは回数制限の対象外（Codex に委譲できない PC 操作を送信途中で止めないため）。
 ゲートが本体に要求するコマンドは `gateRequired` でツール回数に関係なく常時許可する。
+締め・記録・確認（`git status` / `diff` / `log`、`node --test`、`node --check`、`session-claims.mjs`、`close-session.mjs`、`kim-inbox.mjs`、`next-session.md` の編集と `next-session-rotate.mjs` / `next-session-launch.mjs`、`drive-upload.mjs` と Drive への `rclone copyto`）は回数に数えない。連結・置換・リダイレクトで実装コマンドを混ぜたものは対象外にしない。
+実装の Edit/Write は 4 回で警告、8 回で deny のまま。
 ゲートとガードが衝突したら回避せず、両者の契約テストを追加・修正して直す。
 
 node tools/lane-doctor.mjs --probe で状態更新し、node tools/codex-do.mjs --prompt-file <指示> --cwd <対象>。
@@ -210,6 +262,8 @@ effortLevel を medium/high、model を既定監督モデルに戻す。
 Workspace の URL は authuser=開く人のメール を付け、本文の同じ行か直前に「<同じメール> で開いてください」と書く。自分宛は userEmail、他人宛は共有済みの相手メール。script.google.com/home/ 系は例外。他サービスはアカウント名を直前の行に書いて URL を単独行に置き、既定と違う場合はシークレットウィンドウも指定。名簿にないログイン画面（auth./login./accounts./manager. 等、/device・/oauth・/login 等）と、手順で「開いて」と渡す URL も対象。アカウントは開いた後の行ではなく、URL と同じ行か直前の行に書く。ランチャーで開くなら tools/open-url-as.ps1 -Account <メール> -Url <URL>。
 
 ## decision-research-gate
+
+費用案の前に無料・既存経路を実測し、無料案を比較の先頭に置く。同じ応答に `[FREE-ALT-CHECKED: 調べた無料経路と結果（20文字以上）]` が必要。kim の課金指示があるときだけ `[PAID-OK: 「指示の引用」]`。RESEARCH-OKでは無料確認を免除しない。
 
 他メンバーへの DM で再送を頼む案を推奨するだけの比較表は不可。
 人に作業・再送・確認を頼む案がある場合は、Claude 自身が実行する案（自動経路）を先頭に置き、試した経路と結果を書く。
@@ -286,6 +340,10 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 
 コードブロック・引用行は対象外。既存 Stop runner から呼ぶため Stop hook 設定の追加登録は不要。`ORGIAST_THIRD_PARTY_NUDGE_GATE=0` で無効化できる。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
 
+## no-response-gate
+
+差し戻されたら、直近の入力を読み、依頼を進めるか質問に答える。同じゲートの Stop フィードバックに対する再試行では、再度の差し戻しを行わない。
+
 ## unregistered-promise-gate
 
 「この後の自動進行」に Claude の残作業がある場合は、同じセッションでこのターン中に `node tools/auto-progress.mjs --add-check --session <id> --check "<達成判定>" --deadline +2d --label "<作業名>" --next-claude "<次の作業>"` を実行する。宣言だけ、過去ターンの登録、バックグラウンド起動だけでは通らない。登録時刻 `checkRegisteredAt` は Stop の台帳更新でも引き継ぎ、現在ターンの開始以降かを照合する。memory の5回目の注意: check を時刻判定にしない。成果物があるときだけ exit 0。例外は `[AUTOPROGRESS-CHECK-OK: <理由>]`。
@@ -350,6 +408,17 @@ PR のマージを人に頼む文（本文の「次に kim がすること」・
 
 SendUserFile、コードブロック内のローカルパス、チャット添付だけでは完了しない。形式ゲートの降格・一般 retry cap・close-steps より先に判定する。専用状態ファイルでセッションごとの連続 block を数え、3回後の4回目だけ警告付き pass（台帳 verdict: `deliverable-cap`）とする。合格または上限通過で連続数をリセットする。
 
+### 承認コンテキスト（2026-11-15 GridBeyond実害追加）
+承認・確認・選択を求める語（承認／よいですか／どれ／選んで／確認してください／OK／判断）と成果物語（パース・提案書・見積・スライド・メール本文・草案・PDF・画像・Doc等）が最終メッセージに出た場合、各成果物の行または直後2行以内に Drive/Docs の URL（authuser=開く人のメール付き）と「<メール> で開いてください」が無いと block する。
+- 案名だけの方針選択や見積金額の据え置き・値引きの判断、Claude 側の進行予定は承認対象の成果物に含めない。②・③の通常の確認依頼には既存の引き渡し検査が適用される。
+- 承認依頼のパース案梅竹松には各々のURLを書く。1本のURLを複数案のURLとして数えない。
+- 成果物ごとの実物URLが見つからなければ Drive へアップし直す。
+- 次の成果物・箇条書き・見出しに属するURLや例外理由は前の成果物に流用しない。提案書と見積など異なる成果物にも別URLが必要。同じファイルのURLの繰り返しは1件と数える。
+- `URLなし（理由: …）` は該当項目か直後2行以内の継続行に、空でない理由を明示する。承認対象にはアップロード失敗ログだけでは代用できない。
+- 引用（「」『』・Markdown引用ブロック）とコード内は承認検査の対象外。ただし既存のローカルファイル引渡し検査は維持する。
+- アカウント案内はURLの同じ行または前後1行に置く。authuserと案内のメールは一致させる。共有権限そのものはこのテキスト検査で検証できないため、既存の共有・読み戻し手順を先に実行する。
+- 既存ゲートと統合されており、ゲート名・GATE_CONTRACT・状態管理は共有。
+
 ## bg-turn-report-gate
 
 バックグラウンド完了通知の後は、成功／失敗とその証拠、次の自動進行を本文に書く。同じ通知ターン内で `node tools/notify-kim.mjs --kind info "<結果・証拠・次の自動進行>"` を実行し、`delivered: "session-inbox"`・`id`・`kind: "info"` の成功応答を確認する。直前の人の入力から10分以内は inbox 保存のみ免除される。`stop_hook_active` が真なら再ブロックしない。
@@ -364,6 +433,25 @@ SendUserFile、コードブロック内のローカルパス、チャット添�
 
 削除対象のパス/IDを全件チャットに列挙し、その後の kim の明示許可を得る。globや変数は実際の対象を展開して列挙し、具体的なパスで実行する。OS一時フォルダ・指定生成物・同ターンに新規作成成功を確認できたファイルは対象外。
 
+## org-instructions-char-gate
+
+claude.ai の「組織の指示」は3,000字上限。組織指示への追記案を含む応答には `[ORG-CHARS: n/3000]` の字数明記が必須。
+
+- 現行全文＋追記を合わせた全文テキストを用意してから `node tools/org-instructions-chars.mjs --file <全文テキスト>` で字数を数え、結果を応答に `[ORG-CHARS: n/3000]` の形で記載する。
+- 2,800字を超える場合は、追記ではなく「全文の短縮版（Ctrl+A→貼り替え）」を Google ドキュメントで渡す。その場合は応答に「全文差し替え」の文言と `[ORG-CHARS: n/3000]` を両方書く。
+- 組織指示に関係ない文では発火しない。
+
 ## progress-cron-gate
 
 自動進行・待機を約束した対話セッションでは CronCreate で定期進捗を登録する。例: cron `17 9-19/2 * * *`、prompt は「約束した対象を実測して変化だけ5行以内で報告。kim に操作は求めない」。期限付きの待ちは one-shot も登録する。同一セッションの block は1回まで。headless・非対話 entrypoint・サブエージェントは対象外。状態は `~/.claude/progress-cron-gate-state/` に保存。
+
+## lane-claim-evidence-gate
+
+原因: 他レーンの連鎖出力・古い監視表示だけで停止や入金を断定した。
+直し方: `node tools/lane-doctor.mjs --probe`（個別は `--provider codex`）を実行し、lane-health.json の probedAt / viaChain=false / probeResult と一致する30分以内の `[LANE-PROBE: lane=codex at=<ISO時刻> direct=yes result=fail evidence=exit 1]` を本文に添える。全レーン停止には全対象の証拠が必要。実測不能は未確認と書く。Codex の単体確認は `CODEX_DO_CHEAP_FIRST=0 node tools/codex-do.mjs "Reply PONG" --kind implement --no-fallback`。稼働中の安いAIに直接渡し直し作業を続ける。引用行・コードは対象外、同一セッションのブロックは3回まで。
+配布: register-hooks の共通 stop-gate-runner、setup-manifest の実体検査、onboarding-sync の tools 再帰配布、gate-rollout-manifest の全席即時 deny。settings.json の直接編集は不要。
+
+## gemini-api-budget-gate
+
+Gemini API の予算停止中は `node tools/llm-ask.mjs --provider openrouter ...` を代替経路として使う。`gemini-api` の `--dry-run`、`--help`、`whoami`、`version`、`models` は予算停止中も常に実行できる。予算判断が必要な場合は kim-inbox へ送る。
+

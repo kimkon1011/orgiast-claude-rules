@@ -1,10 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {dir,out,title,readJSON} from './runtime.mjs';
+import {missingImagePages,imageErrorMessage,resolveVisual} from './image-gate.mjs';
 const optional=(file,fallback)=>fs.existsSync(file)?readJSON(file):fallback;
 // Report only evidence from this build. Never copy the original project's approval or scores.
 export function writeReport(){
   const pages=readJSON(path.join(dir,'pages.json'));
+  const missing=missingImagePages(pages);
   const checks=optional(path.join(out,'build-checks.json'),{pages:[],warnings:['build未実行']});
   const pdf=optional(path.join(out,'pdf-info.json'),{});
   const preview=optional(path.join(out,'preview-checks.json'),{pages:[],issues:['preview未実行']});
@@ -13,15 +15,17 @@ export function writeReport(){
   const attempts=log.runs.flatMap(r=>r.pages.flatMap(p=>p.attempts??[]));
   const cell=s=>String(s??'').replace(/\|/g,'\\|').replace(/\r?\n/g,'<br>');
   const rows=pages.map(p=>{
-    const visual=checks.pages.find(c=>c.id===p.id)?.visual;
-    const sources=p.directVisual?[p.directVisual]:p.photoSources??[];
-    return `| ${cell(p.id)} ${cell(p.headline)} | ${cell(p.type)} | ${cell(sources.join(', '))} | ${cell(visual?.mode??'写真なし')} |`;
+    const visual=resolveVisual(p);
+    const sources=p.directVisual?[p.directVisual]:p.photoSources??(visual?[visual.file]:[]);
+    return `| ${cell(p.id)} ${cell(p.headline)} | ${cell(p.type)} | ${cell(sources.join(', '))} | ${cell(missing.some(m=>m.id===p.id)?'エラー: 画像なし':checks.pages.find(c=>c.id===p.id)?.visual?.mode??`未ビルド（${visual.mode}）`)} |`;
   });
   fs.writeFileSync(path.join(dir,'BUILD-REPORT.md'),`# ${title} BUILD REPORT
 
 生成日時: ${new Date().toISOString()}
 
-- PDF: [out/${title}.pdf](out/${encodeURIComponent(title)}.pdf) / ${pdf.pageCount??'未確認'}ページ / ${pdf.bytes??'未確認'} bytes
+- 画像なしページ: ${missing.length}件${missing.length?'（エラー・ビルド不可）':''}
+${missing.map(p=>`  - ${cell(p.id)}: ${cell(p.name)}（${p.reason}）`).join('\n')}
+- PDF: ${missing.length?'今回のビルドは失敗。既存PDFは今回の成果物として使用不可。':`[out/${title}.pdf](out/${encodeURIComponent(title)}.pdf) / ${pdf.pageCount??'未確認'}ページ / ${pdf.bytes??'未確認'} bytes`}
 - HTML: [out/${title}.html](out/${encodeURIComponent(title)}.html)
 - PNG: ${preview.pages.length}ページ / [一覧](out/preview-index.html)
 - ビルド警告: ${checks.warnings.length}件 / [記録](out/build-checks.json)
@@ -36,12 +40,14 @@ ${rows.join('\n')}
 
 ## 修正事項
 
-${[...checks.warnings,...preview.issues].map(x=>'- '+x).join('\n')||'機械チェックの問題なし。目視の代替にはならない。'}
+${[...missing.map(p=>`${p.id}: ${p.name}（${p.reason}）`),...checks.warnings,...preview.issues].map(x=>'- '+x).join('\n')||'機械チェックの問題なし。目視の代替にはならない。'}
 
 ## 全ページ目視採点（5点満点）
 
-${review?`| ページ | 写真 | 余白 | 文字量 | 数字 | 一貫性 | 所見 |\n|---|---|---|---|---|---|---|\n${review.pages.map(r=>`| ${cell(r.page)} | ${r.photo??'対象外'} | ${r.space} | ${r.text} | ${r.numbers} | ${r.consistency} | ${cell(r.note)} |`).join('\n')}\n\n${review.summary??''}`:'未実施。全PNGをReadで目視し、visual-review.jsonに採点を記録する。'}
+${review?`| ページ | 写真 | 余白 | 文字量 | 数字 | 一貫性 | 所見 |\n|---|---|---|---|---|---|---|\n${review.pages.map(r=>`| ${cell(r.page)} | ${r.photo??'未採点'} | ${r.space} | ${r.text} | ${r.numbers} | ${r.consistency} | ${cell(r.note)} |`).join('\n')}\n\n${review.summary??''}`:'未実施。全PNGをReadで目視し、visual-review.jsonに採点を記録する。'}
 
 入力・CSSの修正後は古い採点を引き継がず、再出力した全ページを再目視する。3点以下は修正する。自己評価は社長承認の代わりではない。
 `);
+  if(missing.length)throw new Error(imageErrorMessage(missing));
 }
+if(process.argv[1]&&path.resolve(process.argv[1])===path.join(dir,'report.mjs'))writeReport();

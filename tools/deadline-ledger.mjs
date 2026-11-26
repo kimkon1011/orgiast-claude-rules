@@ -10,6 +10,7 @@ import { createSheetsClient, quoteTab } from './lib/sheets-dwd.mjs';
 import { parseSheetDate, jstDate, daysUntil, columnLetter } from './vehicle-inspection-watch.mjs';
 import { isEntry } from './is-entry.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
+import { AI_CALENDAR } from './lib/calendar-shared.mjs';
 export { parseSheetDate, jstDate, daysUntil };
 export const HEADERS = ['ID','件名','種別','会社','期限日','残日数','状態','担当','やること','根拠','出典','出典ID','検出日','最終通知日','通知回数','完了日','備考'];
 export const FIELDS = ['id','title','kind','company','due','remainingDays','status','assignee','action','quote','source','sourceId','detectedAt','lastNotified','notifyCount','completedAt','notes'];
@@ -20,7 +21,7 @@ export const DEFAULT_CONFIG = {
   gmailDailyLimit: 400, driveDailyLimit: 150,
   lineSheets: ['1sCzmIvFmd2ZnDR2ZUMXmiIKjMJ21O9yMR6trY5e9JGo','1RRBNc_2Dvf5v0vdP2M7OHb6b9KhaNy9AoNo1MhZkUDI'],
   vehicleSheetId: '1mo8-hSCA-qDgblGBND-mjPEAF5fZ73etoz_mPeMZMLA', kimNames: ['kim','金','金功勇',''],
-  calendar: { enabled: true, calendarId: 'kim@orgiast.jp' },
+  calendar: { enabled: true, calendarId: AI_CALENDAR, kimCalendarId: 'kim@orgiast.jp' },
 };
 export const defaultHome = () => process.env.ORGIAST_HOME || os.homedir();
 export const dataPath = (home, file) => path.join(home, '.claude/deadline-watch', file);
@@ -70,6 +71,7 @@ export function googleClient({ getToken = getDriveToken, fetchImpl = gwsFetch } 
       let value;
       try { value = await getToken({ impersonate: tokenUser, scope: tokenScope, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) }); }
       catch (e) {
+        if (user === 'kim@orgiast.jp' && /\/auth\/calendar(?:\.|$)/.test(scope)) throw e;
         if (e.message !== `鍵なし経路は ${GWS_USER} 固定です`) throw e;
         tokenUser = GWS_USER;
         if (tokenScope === 'https://www.googleapis.com/auth/spreadsheets') tokenScope = 'https://www.googleapis.com/auth/drive';

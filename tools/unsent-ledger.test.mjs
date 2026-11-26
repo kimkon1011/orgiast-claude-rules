@@ -17,6 +17,9 @@ import {
   normalizeItem,
   scanDraftFiles,
   setStatus,
+  maybeNotifyStuck,
+  scanGmailDrafts,
+  patchSummary,
 } from './unsent-ledger.mjs';
 
 function tmpDir(prefix = 'unsent-') {
@@ -45,7 +48,7 @@ test('check は件名条件に合う送信済みだけを更新する', async ()
       match: { to: 'x@example.com', after: '2026-11-01', subject_any: ['会議URL'] },
     }],
   };
-  await check(l, async () => ({ messages: [{ id: 'm1', subject: '会議URLのご案内', threadId: 't' }] }));
+  await check(l, async () => ({ messages: [{ id: 'm1', subject: 'Re: 会議URL', threadId: 't' }] }));
   assert.equal(l.items[0].status, '送信済み');
   assert.equal(l.items[0].sent_message_id, 'm1');
 });
@@ -55,6 +58,7 @@ test('Gmail 失敗は状態を変えず error を残す', async () => {
     items: [{
       id: 'a',
       status: '承認待ち',
+      subject: 'quota test',
       from: 'seisaku-team@orgiast.jp',
       to: ['x@example.com'],
       match: { to: 'x@example.com', after: '2026-11-01' },
@@ -254,4 +258,111 @@ test('loadLedger は空ファイルでも v2', () => {
   const l = loadLedger(file);
   assert.equal(l.schema, 'unsent-ledger/v2');
   assert.deepEqual(l.items, []);
+});
+
+const chatItem = (extra = {}) => normalizeItem({ id: 'chat', channel: 'discord', internal: true,
+  chat_id: 'test-chat', status: '送信未確認', decided_at: '2026-11-26T00:00:00Z',
+  body_text: '署名した陳述書の写真をお願いします。', decided_by: '金さん 11/25', ...extra });
+const ownMessage = (extra = {}) => ({ id: 'm1', isSender: true, timestamp: '2026-11-26T01:00:00Z',
+  text: '署名した陳述書の写真をお願いします。', ...extra });
+
+test('受信・決定前・本文不一致・時刻不明は送信済みにしない', async () => {
+  for (const msg of [ownMessage({ isSender: false }), ownMessage({ timestamp: '2026-11-25T00:00:00Z' }),
+    ownMessage({ text: '別件の写真' }), ownMessage({ timestamp: null })]) {
+    const l = { items: [chatItem()] };
+    await check(l, null, { reader: async () => [msg] });
+    assert.equal(l.items[0].status, '送信未確認');
+  }
+  const l = { items: [chatItem()] };
+  await check(l, null, { reader: async () => [ownMessage()] });
+  assert.equal(l.items[0].status, '送信済み');
+  assert.ok(l.items[0].evidence.includes('beeper:test-chat:m1'));
+});
+
+test('照合設定不足/API停止では未確認回数を増やさずエラー表示', async () => {
+  for (const item of [chatItem({ chat_id: null }), chatItem({ body_text: '' }), chatItem()]) {
+    const l = { items: [item] };
+    await check(l, null, { reader: async () => { throw new Error('API offline'); } });
+    assert.equal(l.items[0].unconfirmed_checks, 0);
+    assert.equal(l.items[0].status, '送信未確認');
+    assert.ok(l.items[0].last_check_error);
+  }
+});
+
+test('live autoSend は二重送信を防ぎ、API成功だけでは送信済みにしない（モックのみ）', async () => {
+  let sends = 0;
+  const sender = async () => { sends++; return { id: 'api-accepted' }; };
+  const l = { items: [chatItem({ status: '自動送信待ち' })] };
+  await autoSend(l, { dryRun: false, sender, reader: async () => [ownMessage()] });
+  assert.equal(sends, 0);
+  assert.equal(l.items[0].status, '送信済み');
+  const missing = { items: [chatItem({ status: '自動送信待ち' })] };
+  await autoSend(missing, { dryRun: false, sender, reader: async () => [] });
+  assert.equal(sends, 1);
+  assert.equal(missing.items[0].status, '止まった');
+  const ext = { items: [chatItem({ status: '自動送信待ち', internal: false })] };
+  await autoSend(ext, { dryRun: false, sender, reader: async () => [] });
+  assert.equal(sends, 1);
+  assert.match(ext.items[0].last_check_error, /拒否/);
+});
+
+test('add は不正status/channelと決定なしの状態変更を拒否', () => {
+  for (const raw of [{ status: '取り下げ' }, { status: '止まった' }, { status: '自動送信待ち' },
+    { status: 'bad' }, { channel: 'bad' }]) assert.throws(() => addItem({ items: [] }, { id: 'bad', ...raw }));
+  assert.throws(() => setStatus(normalizeItem({ id: 'x' }), '自動送信待ち', 'AIだけ'));
+});
+
+test('sent-unconfirmed は送信済みに誤移行せず移行は冪等', () => {
+  const once = migrateItem({ id: 'legacy', status: 'sent-unconfirmed', client: '顧客', case: '123' });
+  assert.equal(once.status, '送信未確認');
+  assert.deepEqual(migrateItem(once), once);
+  assert.ok(once.history.length);
+});
+
+test('ALERT件数はエラー重複を除きカードを保管・SUMMARYは他本文を保持', () => {
+  const dir = tmpDir();
+  const item = chatItem({ status: '止まった', status_reason: '停止', last_check_error: 'offline' });
+  const l = { items: [item] };
+  assert.equal(buildAlert(l).counts.total, 1);
+  exportLedger(l, [dir]);
+  assert.match(fs.readFileSync(path.join(dir, 'cards', 'chat.json'), 'utf8'), /署名/);
+  setStatus(item, '送信済み', '確認');
+  exportLedger(l, [dir]);
+  assert.equal(fs.readdirSync(path.join(dir, 'cards')).length, 0);
+  assert.equal(fs.readdirSync(path.join(dir, 'cards-archive')).length, 1);
+  const summary = path.join(dir, 'summary-test.md');
+  fs.writeFileSync(summary, '他の作業\n');
+  patchSummary(buildAlert({ items: [] }), summary);
+  patchSummary(buildAlert(l), summary);
+  const text = fs.readFileSync(summary, 'utf8');
+  assert.ok(text.endsWith('他の作業\n'));
+  assert.equal(text.match(/UNSENT-ALERT-START/g).length, 1);
+});
+
+test('Gmail下書きはアカウント別・2時間以上のみ登録し失敗を残す', async () => {
+  const l = { items: [] }, now = Date.now();
+  const listDrafts = async () => [{ id: 'old', createdMs: now - 3 * 3600000, body_text: '本文' },
+    { id: 'new', createdMs: now - 60000 }];
+  assert.equal((await scanGmailDrafts(l, { now, listDrafts })).registered, 2);
+  assert.equal((await scanGmailDrafts(l, { now, listDrafts })).registered, 0);
+  assert.equal(l.items[0].body_text, '本文');
+  assert.equal((await scanGmailDrafts(l, { listDrafts: async () => { throw new Error('auth'); } })).errors.length, 2);
+});
+
+test('ack無し2回・1日1件、解消後は連続回数リセット（通知モック）', async () => {
+  const exportDir = tmpDir(), statePath = path.join(exportDir, 'state.json');
+  let notifications = 0;
+  const opts = { exportDir, statePath, notify: async () => { notifications++; }, now: new Date('2026-11-26T01:00:00Z') };
+  const l = { items: [chatItem({ status: '止まった', status_reason: '停止' })] };
+  await maybeNotifyStuck(l, opts);
+  await maybeNotifyStuck({ items: [] }, opts);
+  await maybeNotifyStuck(l, opts);
+  assert.equal(notifications, 0);
+  await maybeNotifyStuck(l, opts);
+  await maybeNotifyStuck(l, opts);
+  assert.equal(notifications, 1);
+  fs.mkdirSync(path.join(exportDir, 'ack'));
+  fs.writeFileSync(path.join(exportDir, 'ack', 'chat.json'), '{}');
+  await maybeNotifyStuck(l, { ...opts, now: new Date('2026-11-27T01:00:00Z') });
+  assert.equal(notifications, 1);
 });

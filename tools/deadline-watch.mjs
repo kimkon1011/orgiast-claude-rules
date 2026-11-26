@@ -315,7 +315,10 @@ export async function runWatch({ home, config, ledger, sheets, request, today, d
       }
     } catch (e) { runtime?.signal.throwIfAborted(); errors.push({ id: row.id, error: e.message, ...(isTimeout(e) ? { timeout: true } : {}) }); }
   }
-  if (!dryRun && loaded) { state.lastWatchAt = new Date().toISOString(); persist(); saveJson(dataPath(home, 'digest.json'), { at: state.lastWatchAt, today, text: formatDigest(rows, today, config) }); }
+  if (!dryRun && loaded) await attempt('state', 'persist digest', () => {
+    state.lastWatchAt = new Date().toISOString(); persist();
+    saveJson(dataPath(home, 'digest.json'), { at: state.lastWatchAt, today, text: formatDigest(rows, today, config) });
+  });
   return { today, dryRun, decisions, errors, warnings };
 }
 export async function readDigest({ home = defaultHome(), today = jstDate(), ...deps } = {}) {
@@ -343,7 +346,7 @@ export function parseArgs(argv) {
 }
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const home = deps.home || defaultHome(), stdout = deps.stdout || console.log, stderr = deps.stderr || console.error;
-  let args, runtime; const startedAt = new Date().toISOString(); let ok = false; let resultSummary = '';
+  let args, runtime; const startedAt = new Date().toISOString(); let ok = false; let resultSummary = ''; let partial = false;
   try {
     args = parseArgs(argv);
     runtime = watchRuntime(home, { stderr, logging: !args['dry-run'] && !args.digest, filename: deps.logFile, ...deps.timeouts, totalMs: budgetMs(deps.timeouts?.totalMs, 45 * 60_000, 45 * 60_000) });
@@ -399,16 +402,26 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       const suffix = ids.length === 1 ? ids[0] : `${ids[0]} ほか ${ids.length - 1}件`;
       resultSummary = `期限追跡完了（警告: ${suffix} 元メール404）`;
     } else resultSummary = '期限追跡完了';
-    return ok ? 0 : result.errors.some(e => e.timeout) ? 2 : 1;
-  } catch (e) { resultSummary = `期限追跡エラー: ${e.message}`; stderr(`deadline-watch: ${e.message}`); runtime?.log('WARN', e.message); return isTimeout(e) ? 2 : 1; }
+    partial = result.errors.some(e => e.timeout);
+    return ok ? 0 : partial ? 2 : 1;
+  } catch (e) { resultSummary = `期限追跡エラー: ${e.message}`; stderr(`deadline-watch: ${e.message}`); runtime?.log('WARN', e.message); partial = isTimeout(e); return partial ? 2 : 1; }
   finally {
+    let heartbeatError;
     if (args && !args['dry-run'] && !args.digest) {
-      runtime?.log('START', 'heartbeat');
-      try { await withAbort(AbortSignal.timeout(60_000), () => (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineWatch', startedAt, finishedAt: new Date().toISOString(), ok, summary: resultSummary || (ok ? '期限追跡完了' : '期限追跡エラー'), cycleMinutes: 1440 }, { homeDir: home, localOnly: true })); } catch (e) { stderr(`deadline-watch: heartbeat: ${e.message}`); runtime?.log('WARN', 'heartbeat: ' + e.message); }
-      finally { runtime?.log('END', 'heartbeat'); }
+      try {
+        const writeHeartbeat = () => (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineWatch', startedAt, finishedAt: new Date().toISOString(), ok, summary: resultSummary || (ok ? '期限追跡完了' : '期限追跡エラー'), cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
+        if (runtime && !runtime.signal.aborted) await runtime.step('heartbeat', writeHeartbeat);
+        else if (!runtime) await withAbort(AbortSignal.timeout(60_000), writeHeartbeat);
+      } catch (e) {
+        heartbeatError = e; ok = false;
+        resultSummary = `期限追跡エラー: heartbeat: ${e.message}`;
+        stderr(`deadline-watch: heartbeat: ${e.message}`);
+      }
       try { const log = path.join(home, '.claude/logs/deadline-watch-app.log'); fs.mkdirSync(path.dirname(log), { recursive: true }); fs.appendFileSync(log, `${new Date().toISOString()} deadline-watch ${ok ? 'ok' : (resultSummary || 'error')}\n`); } catch (e) { stderr(`deadline-watch: log write failed (${e.code || e.message})`); }
     }
     runtime?.finish();
+    if (heartbeatError && (partial || isTimeout(heartbeatError))) return 2;
+    if (heartbeatError) return 1;
   }
 }
 // Separate process so the wall-clock guard also covers synchronous filesystem

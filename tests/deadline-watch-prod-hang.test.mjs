@@ -22,7 +22,7 @@ const depsFor = (home, extra) => ({
 test('production: Sheets and inbox timeouts continue remaining stages and rows, exit 2', async () => {
   const home = homeFor(), calls = [], notices = [], errors = [];
   const code = await main(['--now', '2026-11-27'], depsFor(home, {
-    timeouts: { httpMs: 25, inboxMs: 25, totalMs: 2_000 },
+    timeouts: { httpMs: 100, inboxMs: 100, totalMs: 10_000 },
     stderr: message => errors.push(message),
     ledger: { read: async () => [row('D-1'), row('D-2')], patch: async (id, change) => {
       calls.push([id, change]);
@@ -48,7 +48,7 @@ test('production: Sheets and inbox timeouts continue remaining stages and rows, 
 test('overall watchdog stops hanging operation before next row, exits 2', async () => {
   const home = homeFor(), notices = [];
   const code = await main(['--now', '2026-11-27'], depsFor(home, {
-    timeouts: { totalMs: 75, httpMs: 5_000, inboxMs: 5_000 },
+    timeouts: { totalMs: 1_000, httpMs: 5_000, inboxMs: 5_000 },
     ledger: { read: async () => [row('D-1'), row('D-2')], patch: async () => {} },
     notify: async ({ row }) => { notices.push(row.id); return never(); },
   }));
@@ -99,4 +99,16 @@ test('Sheets total budget includes response body and prevents retry after timeou
     const body = createSheetsClient({ totalTimeoutMs: 25, getToken: async () => 'mock', fetchImpl: async () => ({ ok: true, json: never }) });
     await assert.rejects(body.get('mock', 'A1'), /timeout/i);
   } finally { clearInterval(keepAlive); }
+});
+
+test('heartbeat timeout is logged and returns exit 2', async () => {
+  const home = homeFor();
+  const code = await main(['--now', '2026-11-27'], depsFor(home, {
+    timeouts: { totalMs: 10_000, httpMs: 100 },
+    ledger: { read: async () => [], patch: async () => {} },
+    heartbeat: never,
+    notify: async () => assert.fail('no notifications'),
+  }));
+  assert.equal(code, 2);
+  assert.match(readLog(home), /WARN heartbeat: heartbeat timeout/);
 });

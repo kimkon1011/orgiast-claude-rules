@@ -1,7 +1,7 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-27 07:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-27 08:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 46
+- 案件数: 47
 
 - 011・.stall-sweeper・停止・最終更新 11/26 04:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・20261126-クラフト坂口・金さん待ち・クラフト坂口様 宿題7件の成果物は完成。精算の計算方法・福岡請求書の作り直し・先払い承認・いなば様への送信時期の判断待ち・期限2026-12-03（坂口様への精算金額の返答）・次:金さんの判断に沿って、坂口様への返信・福岡請求書の作り直し・Discord送信を進める（送信は承認後のみ）
@@ -12,6 +12,7 @@
 - 011・craftfix-invoice-1126・金さん待ち・福岡の請求メールは、送信ゲートが「承認前に本文の全文（末尾のAI作成表記を含む）を表示する」ことを求めて止めたため、未送信・期限2026-11-30（支払期限）。できれば 2026-11-26 14:00 の坂口様との打合せ前・次:金さんに本文全文を見てもらい、「送ってよい」の返事が来たら draftId r-7773355574643993441 を送って読み戻す
 - 011・cursor-hook-fix-1126・停止・最終更新 11/26 01:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・D-115 reブース前金: STATUS・金さん待ち・期限切れ（2026-09-30）から57日超過。前金 ¥2,077,369 の支払い完了有無を確認する手段がなく、完了／延期／不要の判断は金さんが必要。・期限なし・次:金さんが「D-115 完了」「D-115 延期 <日付>」「D-115 不要」のいずれかを答える
+- 011・deadlinewatch-fix-1127・停止・最終更新 11/27 08:06、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・dispatch-1122-21・停止・最終更新 11/22 21:48、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・eight-dai6-1125・停止・最終更新 11/26 14:09、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
 - 011・eight-venue-check-1125・完了・最終更新 11/25 20:27、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、ログに上限・ログアウト・エラー・期限なし・次:なし
@@ -36,11 +37,11 @@
 - 011・pr2745-ci-fix・停止・最終更新 11/26 03:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・pr2768-ci-fix・停止・最終更新 11/26 02:11、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・reply-drafts-1125・完了・最終更新 11/25 19:28、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
-- 011・rescue-review-1127・完了・rescue/auto-session-20261126-231402（b3acd36c・3426ec2a、xAI spending limit を billing と判定する修正）は main #2829（24ed9bbd）に、より安全な形で取り込み済み。テスト tools/lane-real-health.test.mjs は Windows で 54/・期限なし・次:next-session.md の残TODO 25番を完了扱いにする（無人では sensitive file 扱いで書き込めなかった）。ブランチ削除は kim 許可後。
+- 011・rescue-review-1127・完了・rescue/auto-session-20261127-030605（0e540d33）の3ファイル（tools/notify-kim.mjs, tools/url-account-gate.mjs, tools/url-account-gate.test.mjs）は origin/main と差分ゼロ。同じ内容が PR #2843（1f17ba99 fi・期限なし・次:next-session.md の31番を完了扱いにする（無人起動では next-session.md への Edit・追記が機密ファイル扱いで拒否されたため未反映）。rescue ブランチ（ローカル・リモートとも）は kim の許可が出たら削除する。
 - 011・sales-14sha-1125・完了・最終更新 11/25 11:34、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
-- 011・sales-followup・停止・最終更新 11/26 07:54、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・sales-followup・停止・最終更新 11/27 07:40、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-link-audit-1126・完了・監査・修正・書き出し完了、13:00 毎時本番で動作確認済み・期限2026-11-26 当日・次:なし（毎時ジョブが send-commitments を追跡し stuck-export を毎時更新）
-- 011・営業 次回連絡日・金さん待ち・最終更新 11/26 22:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・営業 次回連絡日・金さん待ち・最終更新 11/27 08:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・session-1126-hourly・金さん待ち・JACE 藤野様宛ての返信下書きが打合せ前の文面のまま。修正版の送信可否は金さんの承認が要る（kim-inbox ki-20261126081310-6cf5）・期限2026-12-11（先方の返信期限）／着手期限 2026-12-09・次:承認が来たら seisaku-team@ の下書きを修正版に差し替え、gmail-draft.mjs の自動チェックを通して送信し、送信済みを読み戻す
 - 011・session-cap-1126・金さん待ち・最終更新 11/26 19:36、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・souko-kyujin-1125・完了・最終更新 11/25 19:40、STATUS.mdなし、DONEあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし

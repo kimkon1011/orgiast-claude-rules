@@ -60,3 +60,70 @@ test('契約の承認 → ask', () => {
 test('nextStep に決裁 → ask', () => {
   assert.equal(decideStalledNoticeKind({ nextStep: '決裁が必要です' }), 'ask');
 });
+
+// 追加のテストケース（実データから）
+test('PRの競合解消には担当者のレビュー・マージ指示が必要で自動処理できない → ask', () => {
+  // この文言には「kim の操作が必要」が含まれているので ask になる
+  assert.equal(
+    decideStalledNoticeKind({ reason: 'PRの競合解消には担当者のレビュー・マージ指示が必要で自動処理できない' }),
+    'ask',
+  );
+});
+
+test('辻さんのフリガナが未確定のため、企業登録と求人票提出ができない → info', () => {
+  assert.equal(
+    decideStalledNoticeKind({ reason: '辻さんのフリガナが未確定のため、企業登録と求人票提出ができない' }),
+    'info',
+  );
+});
+
+test('kim の入金が必要（Gemini の残高不足） → ask', () => {
+  assert.equal(
+    decideStalledNoticeKind({ reason: 'kim の入金が必要（Gemini の残高不足）' }),
+    'ask',
+  );
+});
+
+test('rescue ブランチを削除してよいか kim の許可が要る → ask', () => {
+  assert.equal(
+    decideStalledNoticeKind({ reason: 'rescue ブランチを削除してよいか kim の許可が要る' }),
+    'ask',
+  );
+});
+
+test('Codex のバックグラウンド実行が完了していないため、実行結果の確認と PR の着地が必要 → info', () => {
+  assert.equal(
+    decideStalledNoticeKind({ reason: 'Codex のバックグラウンド実行が完了していないため、実行結果の確認と PR の着地が必要' }),
+    'info',
+  );
+});
+
+test('Codex 実行中の自動進行が残っているため → info', () => {
+  assert.equal(
+    decideStalledNoticeKind({ reason: 'Codex 実行中の自動進行が残っているため' }),
+    'info',
+  );
+});
+
+test('セッション終了処理と本番反映コマンドの実行が委譲ゲートに阻まれている → info', () => {
+  assert.equal(
+    decideStalledNoticeKind({ reason: 'セッション終了処理と本番反映コマンドの実行が委譲ゲートに阻まれている' }),
+    'info',
+  );
+});
+
+test('kim の 6 件の判断依頼（質問への回答）が未完了で、機械で自動処理できる作業は残っていないため → ask', () => {
+  // この文言には「kim の操作が必要」が含まれているので ask になる
+  assert.equal(
+    decideStalledNoticeKind({ reason: 'kim の 6 件の判断依頼（質問への回答）が未完了で、機械で自動処理できる作業は残っていないため' }),
+    'ask',
+  );
+});
+
+test('GAS 本体の復旧には白川絵美さんの Apps Script 権限が必要であり、kim の権限では対応できない → ask', () => {
+  // この文言には「kim の操作が必要」が含まれているので ask になる
+  assert.equal(
+    decideStalledNoticeKind({ reason: 'GAS 本体の復旧には白川絵美さんの Apps Script 権限が必要であり、kim の権限では対応できない' }),
+    'ask',
+  );
+});

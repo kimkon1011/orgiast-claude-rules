@@ -17,6 +17,7 @@ import {
   buildReconcileRow,
   salesAppStatusLabel,
   loadSalesAppConfig,
+  resolveSalesAppEnvCandidates,
   LINE_SEND_ENV_FILE,
   DEFAULT_SALES_APP_ENV_FILE,
 } from "../lib/sales-app-read.mjs";
@@ -539,12 +540,21 @@ test("鍵の探索: SALES_APP_ENV_FILE があればそれだけ見る", () => {
 });
 
 test("鍵の既定候補に .env.local と line-send.env が含まれる", () => {
-  assert.equal(DEFAULT_SALES_APP_ENV_FILE.includes("aujust-sales-automation"), true);
-  assert.equal(LINE_SEND_ENV_FILE.includes("line-send.env"), true);
-  const cfg = loadSalesAppConfig({ env: {} });
-  assert.equal(cfg.envFile, LINE_SEND_ENV_FILE);
-  assert.ok(cfg.url);
-  assert.ok(cfg.key);
+  assert.equal(path.basename(DEFAULT_SALES_APP_ENV_FILE), ".env.local");
+  assert.ok(
+    DEFAULT_SALES_APP_ENV_FILE
+      .replace(/\\/g, "/")
+      .endsWith("work/aujust-sales-automation/.env.local"),
+  );
+  assert.equal(path.basename(LINE_SEND_ENV_FILE), "line-send.env");
+  assert.ok(
+    LINE_SEND_ENV_FILE.replace(/\\/g, "/").endsWith(".claude/line-send.env"),
+  );
+  const candidates = resolveSalesAppEnvCandidates({});
+  assert.deepEqual(candidates, [
+    DEFAULT_SALES_APP_ENV_FILE,
+    LINE_SEND_ENV_FILE,
+  ]);
 });
 
 test("読み取り失敗でも日報は止まらず失敗1行を出す", async () => {

@@ -18,18 +18,14 @@ import path from "node:path";
 import { parseEnvText } from "../env-kv.mjs";
 
 export const DEFAULT_SALES_APP_ENV_FILE = path.join(
-  "C:",
-  "Users",
-  "user",
+  os.homedir(),
   "work",
   "aujust-sales-automation",
   ".env.local",
 );
 
 export const LINE_SEND_ENV_FILE = path.join(
-  "C:",
-  "Users",
-  "user",
+  os.homedir(),
   ".claude",
   "line-send.env",
 );

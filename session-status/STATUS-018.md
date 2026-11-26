@@ -1,4 +1,4 @@
-# session-status  PC=018  host=018  updated 2026-11-26 18:05 JST
+# session-status  PC=018  host=018  updated 2026-11-26 19:05 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
 - 案件数: 16
@@ -13,7 +13,7 @@
 - 018・furuyakami-container-1126・完了・最終更新 11/26 10:21、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
 - 018・STATUS・完了・RMキャリア（メドレー）様 学会協賛候補4学会の調査を完了し、REPORT.md と DONE.txt を出力した（調査のみ・読み取り専用。社外連絡・支払い・本番変更はなし）・期限第99回日本胃癌学会総会の出展申込締切 2026年11月30日（RMキャリア様へ提案する場合の実質期限）・次:大橋様すり合わせで「空き状況（残小間数）」「広告メニュー」が必要になったら、各運営事務局への照会（＝社外連絡）の可否を金さんに確認してから実施する
 - 018・iwata-list-1126・金さん待ち・最終更新 11/25 21:10、STATUS.mdなし、REPORTあり、run.logあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
-- 018・kanbara-offboard-1126・停止・最終更新 11/26 18:05、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 018・kanbara-offboard-1126・完了・最終更新 11/26 18:37、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 018・reply-drafts-1125-minpaku・完了・最終更新 11/25 19:55、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、次の手順が未着手・期限なし・次:なし
 - 018・reply-wait-collect-1125・停止・最終更新 11/25 09:35、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・t706u-1125・停止・最終更新 11/25 11:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

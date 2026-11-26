@@ -142,6 +142,14 @@ export function serializeRow(row) { return FIELDS.map(k => row[k] ?? ''); }
 export function createLedger({ sheets = createSheetsClient({ fetchImpl: gwsFetch }), config } = {}) {
   const read = async (tab = '期限台帳') => parseRows(await sheets.get(config.sheetId, `${quoteTab(tab)}!A1:Q`), tab);
   const append = (rows, tab = '期限台帳') => rows.length ? sheets.append(config.sheetId, `${quoteTab(tab)}!A:Q`, rows.map(serializeRow)) : Promise.resolve();
+  async function patchBatch(updates) {
+    const data = updates.flatMap(({ row, changes }) => Object.entries(changes).map(([key, value]) => {
+      const field = FIELDS.indexOf(key), column = row.header?.indexOf(HEADERS[field]);
+      if (field < 0 || !(column >= 0) || !Number.isInteger(row.rowNumber) || row.rowNumber < 2 || row.readOnly) throw Error('Invalid batch cell');
+      return { range: `${quoteTab(row.tab || '期限台帳')}!${columnLetter(column)}${row.rowNumber}`, values: [[value ?? '']] };
+    }));
+    if (data.length) await sheets.batchUpdate(config.sheetId, data);
+  }
   async function patch(id, changes, tab = '期限台帳') {
     const row = (await read(tab)).find(r => r.id === id);
     if (!row) throw new Error(`${tab}: ${id} が見つかりません`);
@@ -157,7 +165,7 @@ export function createLedger({ sheets = createSheetsClient({ fetchImpl: gwsFetch
     }
     return { ...row, ...changes };
   }
-  return { read, append, patch, sheets };
+  return { read, append, patch, patchBatch, sheets };
 }
 export const normalizeTitle = text => String(text || '').normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
 export function isDuplicate(row, rows) {

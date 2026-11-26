@@ -103,6 +103,20 @@ export async function inboxAction({ home, row, decision, config, close = false, 
   if (row.readOnly && row.vehicleName && row.plate) await execImpl(process.execPath, [inboxWorker, 'retire', row.vehicleName, row.plate], options);
   return result;
 }
+export async function inboxBatch({ home, actions, signal, execImpl = exec }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-batch-'));
+  try {
+    const file = path.join(dir, 'actions.json');
+    fs.writeFileSync(file, JSON.stringify(actions.map(({ row, decision, config, close }) => ({
+      key: row.id, close, ...(close ? {} : { text: notificationLine(row, decision, config), due: decision.due,
+        remainingDays: decision.remainingDays, source: 'deadline-watch', vehicleName: row.vehicleName, plate: row.plate })
+    }))), { mode: 0o600 });
+    const { stdout } = await execImpl(process.execPath, [inboxWorker, 'batch', file], inboxOptions(home, signal));
+    const results = JSON.parse(stdout);
+    if (!Array.isArray(results) || results.length !== actions.length) throw Error('Invalid inbox batch response');
+    return results;
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
 export function sourceMetadata(row) {
   try { return JSON.parse(String(row.notes || '{}').split('\n')[0]); } catch { return {}; }
 }
@@ -140,6 +154,23 @@ export async function syncCalendar(row, { config, state, request, persist = () =
   const ids = calendarIds(config), opts = calendarOptions;
   try {
     const due = effectiveDue(row);
+    const signature = createHash('sha256').update(JSON.stringify([Object.fromEntries(Object.entries(row).filter(([key]) => !['remainingDays','lastNotified','notifyCount'].includes(key))), config.calendar, config.sheetId, config.kimNames])).digest('hex');
+    const cached = state.calendarEvents?.[row.id];
+    if (!closed(row) && cached?.signature === signature && Date.now() - cached.checkedAt < 7 * 86400000) {
+      try {
+        const event = await request(`${calendarBase(cached.calendar)}/${encodeURIComponent(cached.id)}`, opts);
+        if (event.status !== 'cancelled' && event.extendedProperties?.private?.deadlineId === row.id &&
+            event.extendedProperties?.private?.deadlineSheetId === config.sheetId &&
+            !event.extendedProperties?.private?.deadlineArchive && event.summary === cached.summary &&
+            event.description === cached.description && event.start?.date === due && event.end?.date === cached.end) return;
+      } catch (error) { if (![404, 410].includes(error.status)) throw error; }
+    }
+    if (cached) delete state.calendarEvents[row.id];
+    const remember = (calendar, id, body) => {
+      if (!id || !body.start?.date || body.extendedProperties?.private?.deadlineArchive) return;
+      state.calendarEvents ||= {};
+      state.calendarEvents[row.id] = { signature, calendar, id, summary: body.summary, description: body.description, end: body.end.date, checkedAt: Date.now() };
+    };
     const found = [];
     for (const calendar of [ids.kim, ids.task]) {
       const events = await listCalendarEvents(request, calendar, { privateExtendedProperty: `deadlineId=${row.id}` });
@@ -177,7 +208,11 @@ export async function syncCalendar(row, { config, state, request, persist = () =
       const summary = `${prefix}${(label?.summary || item.event.summary || row.title).replace(/^(?:【(?:重複|顧客未解決|完了|不要|保留|見送り済み)】)+/, '')}`;
       const body = { summary, ...(label ? { description: label.description } : {}), extendedProperties: { private: privateProps } };
       if (!inactive && !duplicate && !archive) Object.assign(body, { start: { date: due }, end: { date: new Date(Date.parse(due) + 86400000).toISOString().slice(0,10) } });
-      await patch(moved, destination, body);
+      const unchanged = moved.summary === body.summary && (!label || moved.description === body.description) &&
+        Object.entries(privateProps).every(([key, value]) => moved.extendedProperties?.private?.[key] === value) &&
+        (!body.start || (moved.start?.date === body.start.date && moved.end?.date === body.end.date));
+      if (!unchanged) await patch(moved, destination, body);
+      if (found.length === 1 && !duplicate && !archive && label && !cancelled && !inactive) remember(destination, moved.id, body);
     }
     // Never recreate preserved duplicates or unresolved/closed ledger entries.
     if (found.length || inactive || cancelled || !label) return;
@@ -187,12 +222,12 @@ export async function syncCalendar(row, { config, state, request, persist = () =
     const base = calendarBase(target);
     {
       const id = createHash('sha256').update(`${config.sheetId}:${row.id}`).digest('hex');
-      try { await request(`${base}?sendUpdates=none`, { ...opts, method: 'POST', body: { ...body, id } }); }
+      try { await request(`${base}?sendUpdates=none`, { ...opts, method: 'POST', body: { ...body, id } }); remember(target, id, body); }
       catch (e) {
         if (e.status !== 409) throw e;
         const existing = await request(`${base}/${id}`, opts);
         if (existing.status === 'cancelled' || !belongsToLedger(existing, config) || existing.extendedProperties?.private?.deadlineId !== row.id) throw Error(`Calendar ID衝突: ${row.id}（別予定へのPATCHを停止）`);
-        await patch(existing, target, body);
+        await patch(existing, target, body); remember(target, id, body);
       }
     }
   } catch (e) {
@@ -255,9 +290,15 @@ export function watchRuntime(home, { stderr = console.error, totalMs = 45 * 60_0
     catch (error) { fail(name, error); throw error; }
     finally { clearTimeout(local); log('END', name); active = previous; }
   }
-  return { step, log, filename, currentSignal: () => context.getStore() || global.signal, signal: global.signal, inboxMs, lockMs, httpMs, finish: () => clearTimeout(timer) };
+  return { step, flush: async fn => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(timeout('final flush')), httpMs);
+    log('START', 'Sheets batch flush');
+    try { return await withAbort(controller.signal, () => context.run(controller.signal, fn)); }
+    finally { clearTimeout(timer); log('END', 'Sheets batch flush'); }
+  }, log, filename, currentSignal: () => context.getStore() || global.signal, signal: global.signal, inboxMs, lockMs, httpMs, finish: () => clearTimeout(timer) };
 }
-export async function runWatch({ home, config, ledger, sheets, request, today, dryRun = false, rows: suppliedRows, state = {}, notify = inboxAction, heartbeat = reportHeartbeat, stderr = console.error, runtime, readInbox = readInboxKeys }) {
+export async function runWatch({ home, config, ledger, sheets, request, today, dryRun = false, rows: suppliedRows, state = {}, notify, notifyBatch = inboxBatch, heartbeat = reportHeartbeat, stderr = console.error, runtime, readInbox = readInboxKeys }) {
   const perform = runtime?.step || ((name, fn) => fn());
   let rows = suppliedRows;
   const errors = [], warnings = [];
@@ -281,7 +322,18 @@ export async function runWatch({ home, config, ledger, sheets, request, today, d
   const inbox = dryRun ? { value: [] } : await attempt('inbox', 'listItems', signal => readInbox(home, signal), runtime?.inboxMs);
   const openKeys = new Set(inbox.value || []);
   const persist = () => saveJson(dataPath(home, 'state.json'), state);
-  const decisions = [];
+  const decisions = [], pending = new Map(), actions = [], calendarRows = [];
+  const queue = async (row, changes, phase) => {
+    if (!ledger.patchBatch) return attempt(row.id, phase, () => ledger.patch(row.id, changes));
+    const entry = pending.get(row.id) || { row, changes: {} };
+    Object.assign(entry.changes, changes); pending.set(row.id, entry);
+  };
+  const markSent = async (row, shouldNotify) => {
+    if (!shouldNotify) return;
+    if (row.readOnly) { state.vehicles ||= {}; state.vehicles[row.id] = { lastNotified: today }; persist(); }
+    else await queue(row, { lastNotified: today, notifyCount: Number(row.notifyCount || 0) + 1 }, 'Sheets lastNotified');
+  };
+  try {
   for (const original of rows) {
     runtime?.signal.throwIfAborted();
     let row = { ...original };
@@ -298,23 +350,46 @@ export async function runWatch({ home, config, ledger, sheets, request, today, d
       }
       Object.assign(original, row);
       const decision = evaluate(row, today, config);
-      if (!dryRun && !row.readOnly) await attempt(row.id, 'Sheets remainingDays', () => ledger.patch(row.id, { remainingDays: decision.remainingDays ?? '' }));
+      if (!dryRun && !row.readOnly) await queue(row, { remainingDays: decision.remainingDays ?? '' }, 'Sheets remainingDays');
       const priorDate = row.readOnly ? state.vehicles?.[row.id]?.lastNotified : row.lastNotified;
       const shouldNotify = decision.stage && decision.kim && priorDate !== today;
       decisions.push({ id: row.id, title: row.title, status: row.status, ...decision, notify: !!shouldNotify, ...(shouldNotify ? { line: notificationLine(row, decision, config) } : {}) });
       if (!dryRun) {
-        if (closed(row) || !decision.kim) await attempt(row.id, 'kim-inbox close', signal => notify({ home, row, config, close: true, signal }), runtime?.inboxMs);
-        else if (shouldNotify || openKeys.has(row.id)) {
-          const sent = await attempt(row.id, 'kim-inbox add', signal => notify({ home, row, decision, config, signal }), runtime?.inboxMs);
-          if (shouldNotify && sent.ok) {
-            if (row.readOnly) { state.vehicles ||= {}; state.vehicles[row.id] = { lastNotified: today }; persist(); }
-            else await attempt(row.id, 'Sheets lastNotified', () => ledger.patch(row.id, { lastNotified: today, notifyCount: Number(row.notifyCount || 0) + 1 }));
-          }
+        const close = closed(row) || !decision.kim;
+        if (close || shouldNotify || openKeys.has(row.id)) {
+          const action = { home, row, decision, config, close, shouldNotify: !close && shouldNotify };
+          if (notify) {
+            const sent = await attempt(row.id, close ? 'kim-inbox close' : 'kim-inbox add', signal => notify({ ...action, signal }), runtime?.inboxMs);
+            if (sent.ok) await markSent(row, action.shouldNotify);
+          } else actions.push(action);
         }
-        await attempt(row.id, 'Calendar sync', () => syncCalendar(row, { config, state, request, persist, log: stderr }));
+        if (notify) await attempt(row.id, 'Calendar sync', () => syncCalendar(row, { config, state, request, persist, log: stderr }));
+        else calendarRows.push(row);
       }
     } catch (e) { runtime?.signal.throwIfAborted(); errors.push({ id: row.id, error: e.message, ...(isTimeout(e) ? { timeout: true } : {}) }); }
   }
+  if (actions.length) {
+    const batch = await attempt('inbox', 'kim-inbox batch', signal => notifyBatch({ home, actions, signal }), runtime?.inboxMs);
+    if (batch.ok) for (const [index, action] of actions.entries()) {
+      const result = batch.value[index];
+      if (result?.ok) await markSent(action.row, action.shouldNotify);
+      else errors.push({ id: action.row.id, phase: 'kim-inbox batch', error: result?.error || 'missing batch result' });
+    }
+  }
+  for (const row of calendarRows) await attempt(row.id, 'Calendar sync', () => syncCalendar(row, { config, state, request, persist, log: stderr }));
+  } finally {
+    if (pending.size) {
+      const flush = () => ledger.patchBatch([...pending.values()]);
+      if (runtime) {
+        try { await runtime.flush(flush); }
+        catch (error) {
+          stderr(`deadline-watch: final Sheets flush failed: ${error.message}`);
+          errors.push({ id: 'ledger', phase: 'Sheets batch flush', error: error.message, timeout: isTimeout(error) });
+        }
+      } else await attempt('ledger', 'Sheets batch flush', flush);
+    }
+  }
+  runtime?.signal.throwIfAborted();
   if (!dryRun && loaded) await attempt('state', 'persist digest', () => {
     state.lastWatchAt = new Date().toISOString(); persist();
     saveJson(dataPath(home, 'digest.json'), { at: state.lastWatchAt, today, text: formatDigest(rows, today, config) });
@@ -349,7 +424,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   let args, runtime; const startedAt = new Date().toISOString(); let ok = false; let resultSummary = ''; let partial = false;
   try {
     args = parseArgs(argv);
-    runtime = watchRuntime(home, { stderr, logging: !args['dry-run'] && !args.digest, filename: deps.logFile, ...deps.timeouts, totalMs: budgetMs(deps.timeouts?.totalMs, 45 * 60_000, 45 * 60_000) });
+    runtime = watchRuntime(home, { stderr, logging: !args['dry-run'] && !args.digest, filename: deps.logFile, ...deps.timeouts, totalMs: budgetMs(deps.timeouts?.totalMs, (process.env.ORGIAST_DEADLINE_WATCH_CHILD === '1' ? 43 : 45) * 60_000, 45 * 60_000) });
     const makeSheets = () => {
       const client = deps.sheets || createSheetsClient({ fetchImpl: gwsFetch, totalTimeoutMs: runtime.httpMs, signalProvider: runtime.currentSignal });
       return Object.fromEntries(Object.entries(client).map(([name, method]) => [name, (...values) => runtime.step(`Sheets ${name}`, () => method(...values))]));
@@ -380,7 +455,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       if (args.digest) { stdout(formatDigest(rows || await loadRows({ config, ledger, sheets }), today, config)); return { errors: [] }; }
       let result;
       if (operation) result = { actions: await manualOperation({ operation, id: args[operation], until: args.until, note: args.note, ledger, home, today, config, notify: args => runtime.step('kim-inbox manual', signal => (deps.notify || inboxAction)({ ...args, signal }), runtime.inboxMs), dryRun: !!args['dry-run'] }), errors: [] };
-      else result = await runWatch({ home, config, ledger, sheets, request, today, dryRun: !!args['dry-run'], rows, state: fixture ? {} : readJson(dataPath(home, 'state.json'), {}), notify: deps.notify, stderr, runtime, readInbox: deps.readInbox });
+      else result = await runWatch({ home, config, ledger, sheets, request, today, dryRun: !!args['dry-run'], rows, state: fixture ? {} : readJson(dataPath(home, 'state.json'), {}), notify: deps.notify, notifyBatch: deps.notifyBatch, stderr, runtime, readInbox: deps.readInbox });
       stdout(JSON.stringify(result, null, 2)); return result;
     };
     let lockAcquired = false;

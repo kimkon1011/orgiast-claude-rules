@@ -51,6 +51,15 @@
       "createdBy": "000KimPC",
       "createdAt": "2026-11-26T01:54:30.393Z",
       "expiresAt": "2026-11-26T07:54:30.393Z"
+    },
+    {
+      "id": "status-20261126-015458-9109",
+      "kind": "status",
+      "targets": "014DELL",
+      "why": "seisaku-team使用量低下の調査(席ガード旗・タスク状態)",
+      "createdBy": "000KimPC",
+      "createdAt": "2026-11-26T01:54:58.376Z",
+      "expiresAt": "2026-11-26T07:54:58.376Z"
     }
   ]
 }

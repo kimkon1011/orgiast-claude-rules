@@ -58,6 +58,15 @@ test('既存カンペ行とメモがあればDoc作成・PATCH・追記をしな
   const google = { request: async (_, __, method) => { if (method === 'POST') write++; return { body: { content: [{ endIndex: 30, paragraph: { elements: [{ textRun: { content: '【事前メモ（この打合せで聞くこと・決めること・注意）】' } }] } }] } }; } };
   const result = await ensureKanpe({ events: [e], cases: [], dates: [date], google, setupDoc: async () => { setup++; }, appendUrl: async () => { patch++; }, inquiryLookup: async () => [] });
   assert.equal(setup, 0); assert.equal(patch, 0); assert.equal(write, 0); assert.equal(result[0].action, 'unchanged');
+  // 説明欄が HTML 化されていても既存カンペとして扱う
+  const html = event({ attendees: [{ email: 'guest@example.com' }], description: '📝カンペ（社内用）: <a href="https://docs.google.com/document/d/existing/edit" target="_blank">https://docs.google.com/document/d/existing/edit</a><br><br>集客KPI: <a href="x">x</a>' });
+  const r2 = await ensureKanpe({ events: [html], cases: [], dates: [date], google, setupDoc: async () => { setup++; }, appendUrl: async () => { patch++; }, inquiryLookup: async () => [] });
+  assert.equal(setup, 0); assert.equal(patch, 0); assert.equal(r2[0].action, 'unchanged'); assert.match(r2[0].docUrl, /document\/d\/existing\/edit$/);
+});
+test('HTML説明欄に既存カンペ行があればappendCueUrlToDescriptionは書き換えない', async () => {
+  let called = 0;
+  const r = await appendCueUrlToDescription({ token: 't', calendarId: 'c', event: { id: 'e', description: '📝カンペ（社内用）: <a href="https://docs.google.com/document/d/a/edit">a</a><br>KPI: <a href="y">y</a>' }, docUrl: 'https://docs.google.com/document/d/b/edit', fetchImpl: async () => { called++; return { ok: true }; } });
+  assert.equal(called, 0); assert.equal(r.appended, false);
 });
 test('カンペURL PATCHはdescriptionのみ・sendUpdates=none', async () => {
   let call;

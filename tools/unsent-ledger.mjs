@@ -780,12 +780,49 @@ function writeJobFailure(message) {
   }
 }
 
+async function defaultListGmailDrafts(user) {
+  const { getDriveToken, defaultDriveKeyPath } = await import('./lib/drive-auth.mjs');
+  const { gwsFetch, proxyCredential } = await import('./lib/gws-proxy.mjs');
+  const scope = 'https://www.googleapis.com/auth/gmail.readonly';
+  const keyPath = process.env.GOOGLE_SA_KEY || defaultDriveKeyPath();
+  const token = proxyCredential({ keyPath, impersonate: user, scope })
+    || await getDriveToken({ scope, impersonate: user, keyPath });
+  const out = [];
+  let pageToken = '';
+  do {
+    const url = `https://gmail.googleapis.com/gmail/v1/users/me/drafts?maxResults=100${pageToken ? `&pageToken=${pageToken}` : ''}`;
+    const res = await gwsFetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`gmail drafts ${user}: HTTP ${res.status}`);
+    const json = await res.json();
+    for (const d of json.drafts || []) {
+      let subject = '';
+      let to = [];
+      let createdMs = 0;
+      try {
+        const detailUrl = `https://gmail.googleapis.com/gmail/v1/users/me/drafts/${d.id}?format=metadata&metadataHeaders=To&metadataHeaders=Subject`;
+        const detail = await gwsFetch(detailUrl, { headers: { Authorization: `Bearer ${token}` } });
+        if (detail.ok) {
+          const body = await detail.json();
+          const headers = body.message?.payload?.headers || [];
+          subject = headers.find((h) => /^subject$/i.test(h.name))?.value || '';
+          const toRaw = headers.find((h) => /^to$/i.test(h.name))?.value || '';
+          to = [...toRaw.matchAll(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g)].map((m) => m[0]);
+          createdMs = Number(body.message?.internalDate || 0);
+        }
+      } catch { /* keep id only */ }
+      out.push({ id: d.id, subject, to, createdMs });
+    }
+    pageToken = json.nextPageToken || '';
+  } while (pageToken);
+  return out;
+}
+
 export async function run({
   doIngest = true,
   doCheck = true,
   doExport = true,
   doScanDrafts = true,
-  doScanGmail = false,
+  doScanGmail = true,
   doAutoSend = false,
   dryRun = true,
   ledgerFile = LEDGER(),
@@ -800,7 +837,9 @@ export async function run({
     const ingested = doIngest ? ingest(ledger) : 0;
     const draftScan = doScanDrafts ? scanDraftFiles(ledger) : { registered: 0 };
     let gmailScan = { registered: 0, errors: [] };
-    if (doScanGmail && listDrafts) gmailScan = await scanGmailDrafts(ledger, { listDrafts });
+    if (doScanGmail) {
+      gmailScan = await scanGmailDrafts(ledger, { listDrafts: listDrafts || defaultListGmailDrafts });
+    }
     if (doCheck) await check(ledger, search || searchGmail, { reader });
     let autoSendResult = [];
     if (doAutoSend) autoSendResult = await autoSend(ledger, { dryRun, sender, reader });
@@ -851,7 +890,7 @@ async function main() {
     doCheck: !only || args.includes('--check'),
     doExport: !only || args.includes('--export'),
     doScanDrafts: !args.includes('--no-scan-drafts'),
-    doScanGmail: args.includes('--scan-gmail'),
+    doScanGmail: !args.includes('--no-scan-gmail'),
     doAutoSend: args.includes('--dry-run') || args.includes('--send') || args.includes('--auto-send'),
     dryRun,
   });
@@ -864,4 +903,3 @@ if (isEntry(import.meta.url)) {
     process.exitCode = 1;
   });
 }
-              

@@ -1,5 +1,257 @@
-import test from 'node:test'; import assert from 'node:assert/strict'; import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
-import { check, ingest } from './unsent-ledger.mjs';
-test('ingest は id 重複を除外し done へ移す',()=>{const root=fs.mkdtempSync(path.join(os.tmpdir(),'ledger-')), inbox=path.join(root,'inbox');fs.mkdirSync(inbox);fs.writeFileSync(path.join(inbox,'a.json'),JSON.stringify({id:'a',to:'x@example.com'}));const l={items:[]};assert.equal(ingest(l,inbox),1);assert.equal(l.items.length,1);assert.ok(fs.existsSync(path.join(inbox,'done','a.json')));});
-test('check は件名条件に合う送信済みだけを更新する',async()=>{const l={items:[{id:'a',status:'未送信',from:'seisaku-team@orgiast.jp',to:['x@example.com'],match:{to:'x@example.com',after:'2026-11-01',subject_any:['会議URL']}}]};await check(l,async()=>({messages:[{id:'m1',subject:'会議URLのご案内',threadId:'t'}]}));assert.equal(l.items[0].status,'送信済み');assert.equal(l.items[0].sent_message_id,'m1');});
-test('Gmail 失敗は状態を変えず error を残す',async()=>{const l={items:[{id:'a',status:'未送信',from:'seisaku-team@orgiast.jp',to:['x@example.com'],match:{to:'x@example.com',after:'2026-11-01'}}]};await check(l,async()=>{throw new Error('quota')});assert.equal(l.items[0].status,'未送信');assert.match(l.items[0].last_check_error,/quota/);});
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  addItem,
+  autoSend,
+  buildAlert,
+  check,
+  exportLedger,
+  hasKimDecision,
+  ingest,
+  loadLedger,
+  migrateItem,
+  migrateLedger,
+  normalizeItem,
+  scanDraftFiles,
+  setStatus,
+} from './unsent-ledger.mjs';
+
+function tmpDir(prefix = 'unsent-') {
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+test('ingest は id 重複を除外し done へ移す', () => {
+  const root = tmpDir();
+  const inbox = path.join(root, 'inbox');
+  fs.mkdirSync(inbox);
+  fs.writeFileSync(path.join(inbox, 'a.json'), JSON.stringify({ id: 'a', to: 'x@example.com' }));
+  const l = { items: [] };
+  assert.equal(ingest(l, inbox), 1);
+  assert.equal(l.items.length, 1);
+  assert.ok(fs.existsSync(path.join(inbox, 'done', 'a.json')));
+  assert.equal(l.items[0].status, '承認待ち');
+});
+
+test('check は件名条件に合う送信済みだけを更新する', async () => {
+  const l = {
+    items: [{
+      id: 'a',
+      status: '承認待ち',
+      from: 'seisaku-team@orgiast.jp',
+      to: ['x@example.com'],
+      match: { to: 'x@example.com', after: '2026-11-01', subject_any: ['会議URL'] },
+    }],
+  };
+  await check(l, async () => ({ messages: [{ id: 'm1', subject: '会議URLのご案内', threadId: 't' }] }));
+  assert.equal(l.items[0].status, '送信済み');
+  assert.equal(l.items[0].sent_message_id, 'm1');
+});
+
+test('Gmail 失敗は状態を変えず error を残す', async () => {
+  const l = {
+    items: [{
+      id: 'a',
+      status: '承認待ち',
+      from: 'seisaku-team@orgiast.jp',
+      to: ['x@example.com'],
+      match: { to: 'x@example.com', after: '2026-11-01' },
+    }],
+  };
+  await check(l, async () => { throw new Error('quota'); });
+  assert.equal(l.items[0].status, '承認待ち');
+  assert.match(l.items[0].last_check_error, /quota/);
+});
+
+test('(1) 取り下げは金さんの記録なしで拒否', () => {
+  const item = normalizeItem({ id: 'x', decided_by: 'AI only' });
+  assert.equal(hasKimDecision(item), false);
+  assert.throws(() => setStatus(item, '取り下げ', '不要', { by: 'test' }), /金さん|hasKimDecision|決定/);
+});
+
+test('(2) 止まった は理由必須', () => {
+  const item = normalizeItem({ id: 'y' });
+  assert.throws(() => setStatus(item, '止まった', '', { by: 'test' }), /reason/);
+  setStatus(item, '止まった', '認証切れ', { by: 'test' });
+  assert.equal(item.status, '止まった');
+  assert.equal(item.history.at(-1).reason, '認証切れ');
+});
+
+test('(3) 台帳未登録の DRAFT を自動登録', () => {
+  const root = tmpDir('gb-');
+  const folder = path.join(root, 'case-a');
+  fs.mkdirSync(folder);
+  const draft = path.join(folder, 'DRAFT-hello.md');
+  fs.writeFileSync(draft, 'hello body');
+  // mtime を今にする
+  const now = Date.now();
+  fs.utimesSync(folder, new Date(now), new Date(now));
+  const ledger = { schema: 'unsent-ledger/v2', items: [] };
+  const result = scanDraftFiles(ledger, { root, now });
+  assert.equal(result.registered, 1);
+  assert.equal(ledger.items[0].status, '止まった');
+  assert.match(ledger.items[0].status_reason, /下書きのみで台帳未登録/);
+  // 冪等
+  assert.equal(scanDraftFiles(ledger, { root, now }).registered, 0);
+});
+
+test('(4) 送信未確認3回で止まった', async () => {
+  const l = {
+    items: [normalizeItem({
+      id: 'u1',
+      status: '送信未確認',
+      channel: 'email',
+      from: 'seisaku-team@orgiast.jp',
+      to: ['x@example.com'],
+      match: { to: 'x@example.com', after: '2026-11-01', subject_any: ['never'] },
+      unconfirmed_checks: 0,
+    })],
+  };
+  const empty = async () => ({ messages: [] });
+  await check(l, empty);
+  await check(l, empty);
+  await check(l, empty);
+  assert.equal(l.items[0].unconfirmed_checks, 3);
+  assert.equal(l.items[0].status, '止まった');
+  assert.match(l.items[0].status_reason, /送信未確認が3時間解消しない/);
+});
+
+test('(5) 社外は自動送信しない（dry-run 出力に出ない）', async () => {
+  const ledger = {
+    items: [
+      normalizeItem({
+        id: 'ext',
+        status: '自動送信待ち',
+        internal: false,
+        channel: 'discord',
+        chat_id: '1',
+        decided_by: '金さん 11/25',
+        to: ['a@example.com'],
+      }),
+      normalizeItem({
+        id: 'int',
+        status: '自動送信待ち',
+        internal: true,
+        channel: 'discord',
+        chat_id: '2',
+        decided_by: '金さん 11/25',
+        to: ['kim@orgiast.jp'],
+      }),
+    ],
+  };
+  const results = await autoSend(ledger, { dryRun: true });
+  assert.equal(results.some((r) => r.id === 'ext'), false);
+  assert.equal(results.some((r) => r.id === 'int' && r.dryRun), true);
+});
+
+test('(6) ALERT.md の順が 最優先→止まった→照合エラー→未送信', () => {
+  const now = new Date('2026-11-26T10:00:00+09:00');
+  const ledger = {
+    items: [
+      normalizeItem({
+        id: 'u',
+        status: '承認待ち',
+        to: ['a@ex.com'],
+        subject: '未送信件',
+        decided_at: '2026-11-20T00:00:00Z',
+      }),
+      normalizeItem({
+        id: 's',
+        status: '止まった',
+        status_reason: '理由S',
+        to: ['b@ex.com'],
+        subject: '停止件',
+        history: [{ at: '2026-11-26T01:00:00Z', status: '止まった', reason: '理由S' }],
+      }),
+      normalizeItem({
+        id: 'p',
+        status: '承認待ち',
+        to: ['c@ex.com'],
+        subject: '優先件',
+        deadline: '2026-11-26T10:30:00+09:00',
+      }),
+      normalizeItem({
+        id: 'e',
+        status: '承認待ち',
+        to: ['d@ex.com'],
+        subject: 'エラー件',
+        last_check_error: 'auth failed',
+      }),
+    ],
+  };
+  const built = buildAlert(ledger, { now });
+  const iPri = built.markdown.indexOf('## 【最優先】');
+  const iStop = built.markdown.indexOf('## 【止まった】');
+  const iErr = built.markdown.indexOf('## 【照合エラー】');
+  const iUn = built.markdown.indexOf('## 【未送信】');
+  assert.ok(iPri < iStop && iStop < iErr && iErr < iUn);
+  assert.match(built.markdown.slice(iPri, iStop), /優先件/);
+  assert.match(built.markdown.slice(iStop, iErr), /停止件/);
+  assert.match(built.markdown.slice(iErr, iUn), /auth failed/);
+  assert.match(built.markdown.slice(iUn), /未送信件/);
+});
+
+test('(7) 0件でも ALERT.md が更新される', () => {
+  const dir = tmpDir('alert-');
+  const ledger = { schema: 'unsent-ledger/v2', generated_at: new Date().toISOString(), items: [] };
+  exportLedger(ledger, [dir]);
+  const text = fs.readFileSync(path.join(dir, 'ALERT.md'), 'utf8');
+  assert.match(text, /件数: 0件/);
+  assert.match(text, /生成:/);
+  const alerts = JSON.parse(fs.readFileSync(path.join(dir, 'alerts.json'), 'utf8'));
+  assert.equal(alerts.counts.total, 0);
+});
+
+test('(8) 旧ステータス移行', () => {
+  const a = migrateItem({ id: '1', status: '未送信', to: ['kim@orgiast.jp'], client: '社内', case: 'X' });
+  assert.equal(a.status, '承認待ち');
+  assert.equal(a.channel, 'email');
+  assert.equal(a.internal, true);
+  const b = migrateItem({ id: '2', status: '保留', stop_reason: '承認待ち中', to: ['out@example.com'] });
+  assert.equal(b.status, '止まった');
+  assert.match(b.status_reason, /承認待ち中|旧/);
+  assert.equal(b.internal, false);
+  const ledger = migrateLedger({ schema: 'unsent-ledger/v1', items: [a, b] });
+  assert.equal(ledger.schema, 'unsent-ledger/v2');
+});
+
+test('add --file 相当の addItem は検証して追記', () => {
+  const ledger = { items: [] };
+  const { added, item } = addItem(ledger, { id: 'n1', to: 'kim@orgiast.jp', subject: 'hi' });
+  assert.equal(added, true);
+  assert.equal(item.internal, true);
+  assert.equal(addItem(ledger, { id: 'n1', subject: 'hi2' }).added, false);
+});
+
+test('hasKimDecision は日付または出典が必要', () => {
+  assert.equal(hasKimDecision({ decided_by: '金さん' }), false);
+  assert.equal(hasKimDecision({ decided_by: '金さん 11/25' }), true);
+  assert.equal(hasKimDecision({ decided_by: 'kim t845u' }), true);
+});
+
+test('exportLedger は UNSENT_LEDGER_EXPORT_DIR を使える', () => {
+  const dir = tmpDir('exp-');
+  const prev = process.env.UNSENT_LEDGER_EXPORT_DIR;
+  process.env.UNSENT_LEDGER_EXPORT_DIR = dir;
+  try {
+    const ledger = {
+      items: [normalizeItem({ id: 'c1', status: '承認待ち', to: ['a@ex.com'], subject: 's', body_path: null })],
+    };
+    exportLedger(ledger);
+    assert.ok(fs.existsSync(path.join(dir, 'ALERT.md')));
+    assert.ok(fs.existsSync(path.join(dir, 'cards', 'c1.json')));
+  } finally {
+    if (prev === undefined) delete process.env.UNSENT_LEDGER_EXPORT_DIR;
+    else process.env.UNSENT_LEDGER_EXPORT_DIR = prev;
+  }
+});
+
+test('loadLedger は空ファイルでも v2', () => {
+  const dir = tmpDir('led-');
+  const file = path.join(dir, 'ledger.json');
+  const l = loadLedger(file);
+  assert.equal(l.schema, 'unsent-ledger/v2');
+  assert.deepEqual(l.items, []);
+});

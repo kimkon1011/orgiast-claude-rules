@@ -15,7 +15,7 @@ import { ledgerFile, readLedger, writeLedger, cleanupOldLedgerTemps, OPEN_STATUS
 export { MAX_RESUMES } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyOwner, resolveOwner, sendOwnerToast } from './notify-owner.mjs';
-import { escalateKimDecisions } from './auto-progress-escalate.mjs';
+import { escalateKimDecisions, sweepStaleEscalations } from './auto-progress-escalate.mjs';
 import { isQuietHours, kimAction } from './auto-progress-digest.mjs';
 import { completionActions } from './lib/auto-progress-artifact.mjs';
 import { reportCheckProgress } from './lib/auto-progress-heartbeat.mjs';
@@ -1374,6 +1374,12 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     }
   } catch (error) {
     summary.errors.push(`mobile-push-sweep: ${String(error?.message ?? error).slice(0, 120)}`);
+  }
+  try {
+    const staleResult = await (io.sweepStaleEscalations ?? sweepStaleEscalations)({ home, now, dryRun });
+    if (staleResult.dropped.length) summary.staleEscalationsDropped = staleResult.dropped.length;
+  } catch (error) {
+    summary.errors.push(`stale-escalations: ${String(error?.message ?? error).slice(0, 120)}`);
   }
   endPhase('maintenance');
   await sendDeferredNotices();

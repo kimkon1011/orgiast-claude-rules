@@ -6,7 +6,7 @@ import { ledgerFile, readLedger, writeLedger, OPEN_STATUSES } from '../auto-prog
 export const ESCALATION_PREFIX = '【要対応・kim の判断待ち';
 export const escalationDedupeKey = rowKey => `auto-progress-escalate:${rowKey}`;
 
-// 本文末尾「（元の約束: … / PC … / セッション <8桁> / 台帳 ts <ISO>）」から行を特定する。
+// 本文内の台帳情報「（元の約束: … / PC … / セッション <8桁> / 台帳 ts <ISO>）」から行を特定する。
 export function parseEscalation(item) {
   const text = String(item?.text || '');
   if (!text.startsWith(ESCALATION_PREFIX)) return null;
@@ -23,7 +23,7 @@ export function matchesRow(item, row) {
 
 // 既存のエスカレーションを状態別にまとめる。answered/dropped は「もう聞かない」、open は「重ねて積まない」。
 export function priorEscalations(items, row) {
-  const matched = (items || []).filter(item => item?.kind === 'ask' && matchesRow(item, row));
+  const matched = (items || []).filter(item => item?.kind === 'ask' && !item.autoExpired && matchesRow(item, row));
   const closed = matched.filter(item => ['answered', 'dropped', 'superseded'].includes(item.status));
   const open = matched.filter(item => !['answered', 'dropped', 'superseded', 'seen'].includes(item.status));
   return { matched, closed, open, answered: closed.filter(item => item.status === 'answered' && item.answer).sort((a, b) => String(b.answeredAt).localeCompare(String(a.answeredAt)))[0] || null };
@@ -31,6 +31,7 @@ export function priorEscalations(items, row) {
 
 // kim-inbox で回答された ask を自動進行台帳の行へ書き戻す（kim-awaiting --answer と同じ形）。
 export function syncEscalationAnswer(home, item, { now = Date.now(), io = {} } = {}) {
+  if (item?.autoExpired) return false;
   const parsed = parseEscalation(item);
   if (!parsed || !['answered', 'dropped'].includes(item.status)) return false;
   const file = ledgerFile(home);

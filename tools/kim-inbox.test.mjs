@@ -1014,6 +1014,31 @@ test('drop closes only open asks with the matching key for ordinary questions', 
   assert.equal(items.get(info.id).status, 'open');
 });
 
+test('autoExpired の escalate ask は dedupe 対象外で再 add できる', async t => {
+  const home = seat(t);
+  const now = Date.parse('2026-11-26T04:00:00Z');
+  const dedupeKey = 'auto-progress-escalate:session-test2026-11-01T00:00:00.000Z';
+  const first = await addItem(home, {
+    kind: 'ask', source: 'auto-progress-escalate', text: '【要対応・kim の判断待ち 5日】承認してください',
+    dedupeKey,
+  }, { drain: false, localOnly: true });
+  const dropped = dropItem(home, first.id, '元の台帳行が done のため自動取り下げ（ask 作成から5日以上）', { autoExpired: true, now });
+  assert.equal(dropped.status, 'dropped');
+  assert.equal(dropped.autoExpired, true);
+  const second = await addItem(home, {
+    kind: 'ask', source: 'auto-progress-escalate', text: '【要対応・kim の判断待ち 0日】承認してください',
+    dedupeKey,
+  }, { drain: false, localOnly: true });
+  assert.notEqual(second.id, first.id);
+  assert.equal(second.status, 'open');
+  // open 以外・escalate 以外への autoExpired は無視（手動 drop 後は null）
+  dropItem(home, second.id, '手動不要');
+  assert.equal(dropItem(home, second.id, '再試行', { autoExpired: true, now }), null);
+  const other = await addItem(home, { kind: 'ask', source: 'manual', text: '別の質問' }, { drain: false, localOnly: true });
+  assert.equal(dropItem(home, other.id, '自動扱いにしない', { autoExpired: true, now }), null);
+  assert.equal(listItems(home).find(item => item.id === other.id).status, 'open');
+});
+
 // ============================================================
 // sweepInfoCandidates のテスト
 // ============================================================

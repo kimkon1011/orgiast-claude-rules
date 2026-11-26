@@ -142,22 +142,48 @@ export function serializeRow(row) { return FIELDS.map(k => row[k] ?? ''); }
 export function createLedger({ sheets = createSheetsClient({ fetchImpl: gwsFetch }), config } = {}) {
   const read = async (tab = '期限台帳') => parseRows(await sheets.get(config.sheetId, `${quoteTab(tab)}!A1:Q`), tab);
   const append = (rows, tab = '期限台帳') => rows.length ? sheets.append(config.sheetId, `${quoteTab(tab)}!A:Q`, rows.map(serializeRow)) : Promise.resolve();
-  async function patch(id, changes, tab = '期限台帳') {
-    const row = (await read(tab)).find(r => r.id === id);
-    if (!row) throw new Error(`${tab}: ${id} が見つかりません`);
+  function patchData(row, changes) {
     // Commit status last: a failed deferral must never hide the old deadline.
     const entries = Object.entries(changes).sort(([a], [b]) => Number(a === 'status') - Number(b === 'status'));
-    const data = entries.map(([key, value]) => {
+    return entries.map(([key, value]) => {
       const field = FIELDS.indexOf(key); if (field < 0) throw new Error(`未知の列: ${key}`);
-      return { range: `${quoteTab(tab)}!${columnLetter(row.header.indexOf(HEADERS[field]))}${row.rowNumber}`, values: [[value ?? '']] };
+      return { range: `${quoteTab(row.tab || '期限台帳')}!${columnLetter(row.header.indexOf(HEADERS[field]))}${row.rowNumber}`, values: [[value ?? '']] };
     });
+  }
+  async function writeData(data) {
+    if (!data.length) return;
     if (typeof sheets.batchUpdate === 'function') await sheets.batchUpdate(config.sheetId, data);
     else {
       for (const { range, values } of data) await sheets.update(config.sheetId, range, values);
     }
+  }
+  async function patch(id, changes, tab = '期限台帳') {
+    const row = (await read(tab)).find(r => r.id === id);
+    if (!row) throw new Error(`${tab}: ${id} が見つかりません`);
+    await writeData(patchData(row, changes));
     return { ...row, ...changes };
   }
-  return { read, append, patch, sheets };
+  // Queue many cell updates into one values.batchUpdate. Prefer in-memory row
+  // metadata (rowNumber/header) from the earlier read so this never re-GETs.
+  async function batchPatch(entries, tab = '期限台帳') {
+    if (!entries.length) return [];
+    let byId = null;
+    const data = [];
+    const results = [];
+    for (const entry of entries) {
+      let row = entry.rowNumber && entry.header ? entry : null;
+      if (!row) {
+        byId ||= new Map((await read(tab)).map(r => [r.id, r]));
+        row = byId.get(entry.id);
+        if (!row) throw new Error(`${tab}: ${entry.id} が見つかりません`);
+      }
+      data.push(...patchData({ ...row, tab: row.tab || tab }, entry.changes));
+      results.push({ id: entry.id, ...entry.changes });
+    }
+    await writeData(data);
+    return results;
+  }
+  return { read, append, patch, batchPatch, sheets };
 }
 export const normalizeTitle = text => String(text || '').normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
 export function isDuplicate(row, rows) {

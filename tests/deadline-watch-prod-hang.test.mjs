@@ -6,54 +6,72 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { main, supervise } from '../tools/deadline-watch.mjs';
-import { dataPath, withLedgerLock, DEFAULT_CONFIG } from '../tools/deadline-ledger.mjs';
+import { dataPath, withLedgerLock, DEFAULT_CONFIG, HEADERS } from '../tools/deadline-ledger.mjs';
 import { createSheetsClient } from '../tools/lib/sheets-dwd.mjs';
 
 const homeFor = () => fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-prod-test-'));
 const never = () => new Promise(() => {});
 const config = { ...DEFAULT_CONFIG, sheetId: 'mock', vehicleSheetId: '', calendar: { enabled: false } };
-const row = id => ({ id, title: 'test', kind: 'その他', assignee: 'kim', status: '未着手', due: '2026-11-27' });
+const row = (id, n = 2) => ({ id, title: 'test', kind: 'その他', assignee: 'kim', status: '未着手', due: '2026-11-27', rowNumber: n, header: HEADERS, notifyCount: 0 });
 const readLog = home => fs.readdirSync(dataPath(home, '')).filter(f => f.startsWith('run-')).map(f => fs.readFileSync(dataPath(home, f), 'utf8')).join('\n');
 const depsFor = (home, extra) => ({
   home, config, skipSeatCheck: true, stdout: () => {}, stderr: () => {}, heartbeat: async () => {},
   request: async () => assert.fail('unexpected HTTP'), sheets: {}, readInbox: async () => [], ...extra,
 });
 
-test('production: Sheets and inbox timeouts continue remaining stages and rows, exit 2', async () => {
-  const home = homeFor(), calls = [], notices = [], errors = [];
+test('production: Calendar hang continues other rows; Sheets flush is batched; exit 2', async () => {
+  const home = homeFor(), batches = [], inboxOps = [], errors = [];
+  let calendarCalls = 0;
   const code = await main(['--now', '2026-11-27'], depsFor(home, {
-    timeouts: { httpMs: 100, inboxMs: 100, totalMs: 10_000 },
+    timeouts: { httpMs: 100, inboxMs: 5_000, totalMs: 10_000 },
     stderr: message => errors.push(message),
-    ledger: { read: async () => [row('D-1'), row('D-2')], patch: async (id, change) => {
-      calls.push([id, change]);
-      if (id === 'D-1' && 'remainingDays' in change) await never();
-    }},
-    notify: async ({ row, signal }) => {
-      notices.push(row.id);
-      if (row.id === 'D-1') await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+    config: { ...config, calendar: { enabled: true, calendarId: 'kim@orgiast.jp', kimCalendarId: 'kim@orgiast.jp' } },
+    ledger: {
+      read: async () => [row('D-1', 2), row('D-2', 3)],
+      patch: async () => assert.fail('per-row patch'),
+      batchPatch: async entries => { batches.push(entries); return entries; },
+    },
+    inboxBatch: async ops => {
+      inboxOps.push(...ops);
+      return ops.map(op => ({ key: op.key, ok: true, markNotified: !!op.markNotified, readOnly: false, notifyCount: 0 }));
+    },
+    // First calendar GET hangs until step timeout; later calls resolve empty.
+    request: async () => {
+      calendarCalls++;
+      if (calendarCalls === 1) return never();
+      return { items: [] };
     },
   }));
   assert.equal(code, 2);
-  assert.deepEqual(notices, ['D-1', 'D-2']);
-  assert.ok(calls.some(([id, change]) => id === 'D-2' && 'lastNotified' in change));
-  assert.ok(!calls.some(([id, change]) => id === 'D-1' && 'lastNotified' in change));
-  assert.ok(errors.some(line => line.includes('D-1 Sheets remainingDays')));
+  assert.deepEqual(inboxOps.map(o => o.key).sort(), ['D-1', 'D-2']);
+  assert.equal(batches.length, 1);
+  assert.ok(batches[0].some(e => e.id === 'D-2' && e.changes.lastNotified));
+  assert.ok(batches[0].some(e => e.id === 'D-1' && e.changes.lastNotified));
+  assert.ok(errors.some(line => line.includes('D-1 Calendar sync')));
   const log = readLog(home);
-  assert.match(log, /START D-1 Sheets remainingDays/);
+  assert.match(log, /START D-1 Calendar sync/);
   assert.match(log, /WARN .*timeout/);
-  assert.match(log, /END D-1 kim-inbox add/);
-  assert.match(log, /START D-2 Calendar sync/);
+  assert.match(log, /START inbox batch/);
+  assert.match(log, /START ledger Sheets batchWrite/);
 });
 
 test('overall watchdog stops hanging operation before next row, exits 2', async () => {
   const home = homeFor(), notices = [];
   const code = await main(['--now', '2026-11-27'], depsFor(home, {
     timeouts: { totalMs: 1_000, httpMs: 5_000, inboxMs: 5_000 },
-    ledger: { read: async () => [row('D-1'), row('D-2')], patch: async () => {} },
-    notify: async ({ row }) => { notices.push(row.id); return never(); },
+    ledger: {
+      read: async () => [row('D-1', 2), row('D-2', 3)],
+      patch: async () => {},
+      batchPatch: async () => {},
+    },
+    inboxBatch: async ops => {
+      notices.push(...ops.map(o => o.key));
+      return never();
+    },
   }));
   assert.equal(code, 2);
-  assert.deepEqual(notices, ['D-1']);
+  // Loop finishes calendar for both rows, then inbox batch hangs until overall watchdog.
+  assert.deepEqual(notices.sort(), ['D-1', 'D-2']);
   assert.match(readLog(home), /overall watchdog/);
   assert.match(fs.readFileSync(dataPath(home, '.lock'), 'utf8'), /^0 /);
 });
@@ -105,9 +123,9 @@ test('heartbeat timeout is logged and returns exit 2', async () => {
   const home = homeFor();
   const code = await main(['--now', '2026-11-27'], depsFor(home, {
     timeouts: { totalMs: 10_000, httpMs: 100 },
-    ledger: { read: async () => [], patch: async () => {} },
+    ledger: { read: async () => [], patch: async () => {}, batchPatch: async () => {} },
     heartbeat: never,
-    notify: async () => assert.fail('no notifications'),
+    inboxBatch: async () => [],
   }));
   assert.equal(code, 2);
   assert.match(readLog(home), /WARN heartbeat: heartbeat timeout/);

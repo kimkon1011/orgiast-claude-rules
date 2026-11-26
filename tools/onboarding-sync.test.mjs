@@ -7,7 +7,7 @@ import http from 'node:http';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  build, executionPlan, makeIndex, mergeEnvFile, missingDeclaredKeys, PRESERVE_LOCAL_KEYS,
+  applyRepositoryUpdate, build, executionPlan, makeIndex, mergeEnvFile, missingDeclaredKeys, PRESERVE_LOCAL_KEYS,
   readHead, shouldRunKeys, shouldRunRepositorySync, keySyncIsStale, updateRepositoryFiles,
 } from './onboarding-sync.mjs';
 import { gitBlobSha } from './version-drift.mjs';
@@ -774,4 +774,31 @@ test('origin/main 不在の .git: fetch URL が失敗しても同期全体は止
   assert.equal(result.method, 'zip');
   assert.deepEqual(result.excluded, ['tools/changed.mjs']);
   assert.equal(fs.readFileSync(path.join(f.repo, 'tools', 'changed.mjs'), 'utf8'), 'old');
+});
+
+test('applyRepositoryUpdate logs protected human changes without repo fetch failed', async () => {
+  const lines = [];
+  const outcome = await applyRepositoryUpdate('/tmp/unused-repo', {
+    existsSync: () => true,
+    head: () => 'abc',
+    update: async () => ({ ok: true, changed: true, method: 'zip', excluded: ['a'] }),
+    log: (message) => lines.push(message),
+  });
+  assert.equal(outcome.changed, true);
+  assert.deepEqual(outcome.result.excluded, ['a']);
+  assert.ok(lines.some((line) => line.startsWith('protected human changes: 1件')));
+  assert.ok(!lines.some((line) => line.includes('repo fetch failed')));
+});
+
+test('syncRepository keeps result outside if/else so protected log cannot ReferenceError', () => {
+  const source = fs.readFileSync(script, 'utf8');
+  const start = source.indexOf('export async function applyRepositoryUpdate');
+  assert.ok(start >= 0, 'applyRepositoryUpdate must exist');
+  const end = source.indexOf('\nasync function syncRepository', start);
+  const body = source.slice(start, end === -1 ? undefined : end);
+  assert.match(body, /let changed = false;\s*\n\s*let result;/);
+  assert.match(body, /result = await update\(repoPath\)/);
+  assert.equal((body.match(/const result = await update/g) || []).length, 0);
+  assert.match(body, /if \(result\?\.excluded\?\.length\) logFn\("protected human changes:/);
+  assert.match(source, /\(\{ changed \} = await applyRepositoryUpdate\(repoPath\)\)/);
 });

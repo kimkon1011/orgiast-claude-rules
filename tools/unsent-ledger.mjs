@@ -252,6 +252,11 @@ export function addItem(ledger, raw) {
 
 export function bodyText(item) {
   if (!item.body_path || !fs.existsSync(item.body_path)) return '';
+  try {
+    if (!fs.statSync(item.body_path).isFile()) return '';
+  } catch {
+    return '';
+  }
   const raw = fs.readFileSync(item.body_path, 'utf8').replace(/^\uFEFF/, '');
   const split = raw.split(/^---\s*$/m);
   return (split.length > 1 ? split.slice(1).join('\n---\n') : raw).trim();

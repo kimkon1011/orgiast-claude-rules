@@ -1,7 +1,7 @@
-# session-status  PC=018  host=018  updated 2026-11-27 03:05 JST
+# session-status  PC=018  host=018  updated 2026-11-27 04:05 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 21
+- 案件数: 22
 
 - 018・STATUS・金さん待ち・ターゲットメディア 大橋様へ渡す資料一式（宿題10件中8件）が完成し、Google ドライブに反映済み。残り2件（98回コマ割りの提供可否、大橋様のExcel入手）と、大橋様への送付・学会事務局への送信の承認が金さんの判断待ち。第99回日本胃癌学会総会の申込締切が 2026-11-30 のため、11/27中の判断が必要。・期限2026-11-27（判断）／ 2026-11-30（胃癌学会の申込締切）・次:金さんの承認が出たら、①Driveフォルダを大橋様へ共有設定 ②フォローメール送信（大橋様のメールアドレスの提供が必要）③胃癌学会事務局へ確認メール送信。承認がない間は送信しない。
 - 018・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -16,6 +16,7 @@
 - 018・iwata-list-1126・金さん待ち・最終更新 11/25 21:10、STATUS.mdなし、REPORTあり、run.logあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 018・kanbara-offboard-1126・完了・最終更新 11/26 18:37、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 018・STATUS — kim-inbox 未回答 ask の info 化・停止・実装レーンが全滅（openrouter-code は「完了」と報告したが実際の変更ゼロ＝empty_diff、Codex は http_429）。作業ツリー `C:\Users\kimko\wt-kim-inbox-autoprogress`（ブランチ `chore/kim-inbox-autoprogress-info`）は空のまま残置。・期限なし・次:Codex の 429 が明ける時間帯に、指示書 `C:\Users\kimko\gb-reports\codex-kim-inbox-autoprogress.md` をそのまま再投入する。安いレーンの「完了しました」報告は変更ファイル 0 件なら信用しない。先に `tools/auto-progress-daily.mjs` が kim-inbox 登録
+- 018・スマホ通知キューの配信不能対処（作業用018）・進行中・Codex に実装を委譲してバックグラウンド実行中（作業ツリー `C:\Users\kimko\.claude\wt-mobile-push-undeliverable`、ブランチ `feat/mobile-push-undeliverable`）・期限なし・次:Codex の結果を read-back → Windows で `node --test tools/mobile-push-queue.test.mjs` を再実行 → PR 作成・着地
 - 018・reply-drafts-1125-minpaku・完了・最終更新 11/25 19:55、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、次の手順が未着手・期限なし・次:なし
 - 018・reply-wait-collect-1125・停止・最終更新 11/25 09:35、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・session-cap-1126・停止・最終更新 11/26 19:27、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める

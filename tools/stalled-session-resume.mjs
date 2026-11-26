@@ -430,17 +430,62 @@ stuck=それ以外で進められなかった。
   return { outcome, reason: outcome === 'timeout' ? result.status : reason, ...(outcome === 'waiting-human' ? { askId: report.askId.trim() } : {}), ...execution };
 }
 
+// 夜間は対話 Claude が動かず OAuth accessToken が更新されない。usage API が 401 / expiresAt 切れのときだけ
+// Claude CLI に最小の非対話呼び出しをさせて refresh し、fetchClaudePlanUsage を1回だけ再試行する。
+// トークン値は読んでもログに出さない。.credentials.json の書き換えは CLI に任せる（APIキー経路は作らない）。
+export function readOauthExpiresAt(home) {
+  try {
+    const expiresAt = Number(JSON.parse(fsSync.readFileSync(path.join(home, '.claude', '.credentials.json'), 'utf8'))?.claudeAiOauth?.expiresAt);
+    return Number.isFinite(expiresAt) ? expiresAt : null;
+  } catch { return null; }
+}
+
+export function usageNeedsOauthRefresh(usage, { home, now = Date.now(), readExpiresAt = readOauthExpiresAt } = {}) {
+  if (usage?.available) return false;
+  if (/^HTTP 401\b/i.test(String(usage?.reason || ''))) return true;
+  const expiresAt = readExpiresAt?.(home);
+  return expiresAt != null && expiresAt < now;
+}
+
+export function formatUsageUnknownSkipReason(usage) {
+  const detail = String(usage?.reason || '').trim();
+  return detail ? `usage-unknown-or-blocked: ${detail}` : 'usage-unknown-or-blocked';
+}
+
+const OAUTH_REFRESH_STRIP_ENV = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDECODE', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'];
+
+export async function refreshClaudeOauthViaCli({ home, executable, execFile = execFileAsync, env = process.env } = {}) {
+  const clean = { ...env };
+  for (const key of OAUTH_REFRESH_STRIP_ENV) delete clean[key];
+  Object.assign(clean, { ORGIAST_HOME: home, HOME: home, USERPROFILE: home, CLAUDE_HEADLESS: '1' });
+  // 既存の非対話起動と同じく -p + JSON。haiku で最小の往復にし、ツール無しで認証更新だけ狙う。
+  await execFile(executable ?? resolveClaudeExe(), ['-p', '--model', 'haiku', '--output-format', 'json', '--tools', '', 'Reply with exactly: ok'],
+    { cwd: home, env: clean, timeout: 90_000, maxBuffer: 1024 * 1024, windowsHide: true });
+}
+
+export async function fetchHourlyPlanUsage(home, io = {}) {
+  const fetchUsage = io.fetchClaudePlanUsage ?? fetchClaudePlanUsage;
+  const fetchImpl = (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(15000) });
+  let usage = await fetchUsage({ home, fetchImpl });
+  if (usage?.available) return usage;
+  const now = typeof io.now === 'function' ? Number(io.now()) : Number(io.now ?? Date.now());
+  if (!usageNeedsOauthRefresh(usage, { home, now, readExpiresAt: io.readOauthExpiresAt ?? readOauthExpiresAt })) return usage;
+  try { await (io.refreshClaudeOauth ?? refreshClaudeOauthViaCli)({ home, executable: io.executable, execFile: io.execFile ?? execFileAsync, env: process.env }); }
+  catch { return usage; }
+  return await fetchUsage({ home, fetchImpl });
+}
+
 export async function executeHourlyFork(record, { timeoutMs, resultFile, previous = [], nextStep = '', standingPermission }, io = {}) {
   const home = io.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   const guard = await (io.evaluateGuard ?? evaluateClaudeSeatGuard)({ home, caller: 'stalled-session-resume:hourly' });
   if (io.hourlyStats) io.hourlyStats.seatGuard = `${guard.blocked ? 'blocked' : 'allowed'}:${guard.reason}`;
   if (guard.blocked) return { outcome: 'skipped', executor: 'none', reason: formatClaudeSeatGuardSkip(guard) };
-  const usage = await (io.fetchClaudePlanUsage ?? fetchClaudePlanUsage)({ home, fetchImpl: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(15000) }) });
+  const usage = await (io.fetchHourlyPlanUsage ?? fetchHourlyPlanUsage)(home, io);
   const stopPct = (io.hourlyResumePolicy ?? hourlyResumePolicy)().planUsageStopPct ?? 85;
   const percents = usage?.available ? [usage.fiveHour?.utilization, usage.sevenDay?.utilization] : [guard.weeklyPercent, guard.fiveHourPercent];
   if (!percents.some(v => v != null && Number.isFinite(Number(v))) || percents.some(v => v != null && Number(v) >= stopPct)) {
     if (io.hourlyStats) io.hourlyStats.seatGuard += ';plan-usage-stopped';
-    return { outcome: 'skipped', executor: 'none', reason: usage?.available ? 'planUsageStopPct' : 'usage-unknown-or-blocked' };
+    return { outcome: 'skipped', executor: 'none', reason: usage?.available ? 'planUsageStopPct' : formatUsageUnknownSkipReason(usage) };
   }
   const forkSessionId = (io.randomUUID ?? randomUUID)();
   const acquire = io.acquireSessionLock ?? acquireSessionLock;
@@ -580,8 +625,8 @@ async function runInternal(config = options(), io = {}) {
   let usageState = 'not-checked';
   let usageBlocked = false;
   if (hourly && !config.dryRun && !config.list) {
-    const usage = await (io.fetchClaudePlanUsage ?? fetchClaudePlanUsage)({ home, fetchImpl: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(15000) }) });
-    if (!usage?.available) usageState = 'usage-unknown';
+    const usage = await (io.fetchHourlyPlanUsage ?? fetchHourlyPlanUsage)(home, io);
+    if (!usage?.available) usageState = usage?.reason ? `usage-unknown:${usage.reason}` : 'usage-unknown';
     else {
       const high = Math.max(Number(usage.fiveHour?.utilization) || 0, Number(usage.sevenDay?.utilization) || 0);
       usageState = `usage-${high}`;

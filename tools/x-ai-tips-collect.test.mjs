@@ -386,7 +386,7 @@ test('timeoutMs は未指定時300000、設定値をsignalに渡し、不正値�
   assert.deepEqual(durations, [12345, 300000]);
 });
 test('全テーマを回った翌夜も開始テーマが1つずれる', async t => {
-  const ctx = setup(t); ctx.options.config.topics = defaults.topics;
+  const ctx = setup(t); ctx.options.config.topics = defaults.topics; ctx.options.config.maxBarrenTopics = 999;
   const queries = [];
   ctx.options.fetchFn = async (_url, init) => { queries.push(requestQuery(init)); return response([]); };
   await runCollect(ctx.options);
@@ -654,6 +654,20 @@ test('OpenRouter fallback 応答が前置き文＋JSONを含む場合は抽出�
   assert.equal(ctx.records()[0].title, '前置き付きJSON');
 });
 
+test('callOpenRouterGrok の body に web 検索プラグインを含む', async t => {
+  let sentBody;
+  const fetchFn = async (_url, init) => {
+    sentBody = JSON.parse(init.body);
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{items:[]}' } }], usage: {} }));
+  };
+  await callOpenRouterGrok('test prompt', { key: 'test-key', fetchFn });
+  assert.ok(sentBody, 'body が送信された');
+  assert.ok(Array.isArray(sentBody.plugins), 'plugins が配列');
+  assert.equal(sentBody.plugins[0].id, 'web');
+  assert.equal(sentBody.plugins[0].engine, 'native');
+  assert.equal(sentBody.plugins[0].max_results, 5);
+});
+
 test('3トピック連続で新規追加0件の場合、4トピック目以降のAPI呼び出しが発生しない', async t => {
   const logs = [];
   const ctx = setup(t, { log: x => logs.push(x) });
@@ -673,18 +687,4 @@ test('3トピック連続で新規追加0件の場合、4トピック目以降�
   // 3トピック連続でadded=0なので、4トピック目以降は呼ばれない
   assert.equal(callCount, 3);
   assert.match(result.status, /打ち切り:無収穫3連続/);
-});
-
-test('callOpenRouterGrok の body に web 検索プラグインを含む', async t => {
-  let sentBody;
-  const fetchFn = async (_url, init) => {
-    sentBody = JSON.parse(init.body);
-    return new Response(JSON.stringify({ choices: [{ message: { content: '{items:[]}' } }], usage: {} }));
-  };
-  await callOpenRouterGrok('test prompt', { key: 'test-key', fetchFn });
-  assert.ok(sentBody, 'body が送信された');
-  assert.ok(Array.isArray(sentBody.plugins), 'plugins が配列');
-  assert.equal(sentBody.plugins[0].id, 'web');
-  assert.equal(sentBody.plugins[0].engine, 'native');
-  assert.equal(sentBody.plugins[0].max_results, 5);
 });

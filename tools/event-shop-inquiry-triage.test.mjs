@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { classifyLead, checkGmailDrafts, deduplicateLeads, deduplicateMessages, sortLeads, main, messageQuery, renderMarkdown, loadCredentials, findOpenInboxAsk, resolveReplyDraftApproval } from './event-shop-inquiry-triage.mjs';
+import { classifyLead, checkGmailDrafts, deduplicateLeads, deduplicateMessages, sortLeads, main, messageQuery, renderMarkdown, loadCredentials, findOpenInboxAsk, resolveReplyDraftApproval, isOrderConfirmed } from './event-shop-inquiry-triage.mjs';
 const now = new Date('2026-10-27T03:00:00Z');
 const lead = { id: 'a', email: 'client@example.com', company_name: '会社', contact_name: '担当', created_at: '2026-10-21T03:00:00Z', preferred_date: '2026-11-18', raw_payload: { product: '展示会' } };
 const msg = (direction, day, body = '') => ({ direction, received_at: `2026-10-${day}T03:00:00Z`, body });
@@ -44,6 +44,83 @@ test('4c: 追客候補の照会エラーは未確認とし、7日未満では照
   assert.equal(calls, 0);
   assert.equal((await classifyLead(lead, [msg('outbound', '17')], now, { gmailDraftCheck: async () => ({ found: true }) })).nextAction,
     '顧客の返信待ち（最終送信から 10 日）・追客候補');
+});
+test('4d: 受注確定済み（TAO）は追客候補にせず下書き照会しない', async () => {
+  const triageNow = new Date('2026-11-26T10:31:00Z');
+  const inbound = {
+    direction: 'inbound',
+    received_at: '2026-11-18T08:43:00Z',
+    body: 'お申し込み書を本メールに添付のうえ、ご返送いたします。手配の進行をよろしくお願いいたします。',
+  };
+  const outbound = {
+    direction: 'outbound',
+    received_at: '2026-11-18T10:31:00Z',
+    body: 'ご記入・ご捺印いただいたお申し込み書と関連資料を確かに受領いたしました。以下の内容で手配を進めてまいります。■ご注文内容',
+  };
+  let draftCalls = 0;
+  let inboxCalls = 0;
+  const result = await classifyLead(
+    { ...lead, company_name: '株式会社TAO', contact_name: '中田', preferred_date: '2026-12-09' },
+    [inbound, outbound],
+    triageNow,
+    {
+      gmailDraftCheck: async () => { draftCalls++; return { found: false }; },
+      kimInboxCheck: async () => { inboxCalls++; return null; },
+    },
+  );
+  assert.equal(result.category, '🟡 顧客待ち');
+  assert.equal(result.nextAction, '受注済み・手配中（追客不要・最終送信から 8 日）');
+  assert.doesNotMatch(result.nextAction, /追客候補/);
+  assert.equal(draftCalls, 0);
+  assert.equal(inboxCalls, 0);
+});
+test('4e: 当社の見積送付だけでは7日経過でも追客候補のまま', async () => {
+  const triageNow = new Date('2026-11-26T03:00:00Z');
+  const outbound = {
+    direction: 'outbound',
+    received_at: '2026-11-18T03:00:00Z',
+    body: 'お見積書とお申し込み書を添付いたしました。ご検討のほどよろしくお願いいたします。',
+  };
+  const result = await classifyLead(
+    { ...lead, preferred_date: '2026-12-09' },
+    [outbound],
+    triageNow,
+    {
+      gmailDraftCheck: async () => ({ found: false }),
+      kimInboxCheck: async () => null,
+    },
+  );
+  assert.equal(result.category, '🟡 顧客待ち');
+  assert.equal(result.nextAction, '顧客の返信待ち（最終送信から 8 日）・追客候補');
+});
+test('isOrderConfirmed: 当社受領・手配開始と顧客の申込書返送を検知し、見積添付だけでは false', () => {
+  assert.equal(isOrderConfirmed(
+    { body: 'お申し込み書を本メールに添付のうえ、ご返送いたします。' },
+    { body: 'お申し込み書を確かに受領いたしました。手配を進めてまいります。' },
+  ), true);
+  assert.equal(isOrderConfirmed(
+    { body: '記入した注文書を送付します。' },
+    { body: 'ご確認ください。' },
+  ), true);
+  assert.equal(isOrderConfirmed(
+    { body: 'ご注文を承りました。' },
+    { body: 'ご注文を承りました。' },
+  ), true);
+  assert.equal(isOrderConfirmed(
+    { body: '見積をお願いします。' },
+    { body: 'お見積書とお申し込み書を添付いたしました。ご検討ください。' },
+  ), false);
+  assert.equal(isOrderConfirmed(null, null), false);
+});
+test('isOrderConfirmed: 受注前の送付依頼は false、記入・捺印した申込書の返送は true', () => {
+  assert.equal(isOrderConfirmed(
+    { body: 'お申し込み書をご送付いただけますでしょうか' },
+    { body: 'ご確認ください。' },
+  ), false);
+  assert.equal(isOrderConfirmed(
+    { body: '必要事項を記入・捺印いたしました「お申し込み書」を本メールに添付のうえ、ご返送いたします' },
+    { body: 'ご確認ください。' },
+  ), true);
 });
 test('findOpenInboxAsk: email・企業ドメイン・法人格除去社名に一致し、対象外を除く', () => {
   const item = (id, text, overrides = {}) => ({ id, text, status: 'open', kind: 'ask', ...overrides });

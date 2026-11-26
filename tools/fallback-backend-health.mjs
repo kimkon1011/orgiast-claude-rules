@@ -9,6 +9,21 @@ import { disableLanesTemporarily } from './lib/lane-disabled.mjs';
 
 export const FALLBACK_BACKEND_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6時間
 
+// cheap-code 経由と qwen 直結の deepseek は起動方法だけが異なり、同じ
+// OpenRouter / deepseek model を使う。連鎖内スキップ（shouldSkipFallbackBackendAfterTimeout）と
+// 冷却（coolingBackendNames）の両方で同一障害ドメインとして扱う。
+// 2026-11-26 実測: deepseek が timeout して冷却中なのに cheap-code:deepseek だけ名前が違うため
+// 通常予算180秒で再試行され、fallback_chain_timeout 2件/361秒を捨てた。
+export function fallbackBackendFailureDomain(backendName) {
+  if (backendName === 'cheap-code:deepseek' || backendName === 'deepseek') return 'deepseek-upstream';
+  return String(backendName || '');
+}
+
+// 履歴に片方しか無くても、ドメイン冷却時にもう片方を Set へ入れるための別名表。
+const FAILURE_DOMAIN_MEMBERS = {
+  'deepseek-upstream': ['cheap-code:deepseek', 'deepseek'],
+};
+
 export function fallbackBackendHistoryFile(homeDir) {
   return path.join(homeDir, '.claude', 'fallback-backend-history.jsonl');
 }
@@ -46,43 +61,61 @@ export function readFallbackBackendHistory(homeDir) {
   return rows;
 }
 
-// backend ごとに「最後に記録された outcome」だけを見る。
-// それが 'timeout' または 'blocked' で、かつ now - t < cooldownMs なら冷却中とみなして Set に入れる。
-// timeout/blocked 以外（ok 等）が最後なら冷却しない＝復帰させる。
-export function coolingBackendNames(homeDir, { now = Date.now(), cooldownMs = FALLBACK_BACKEND_COOLDOWN_MS } = {}) {
-  const last = new Map();
+// 失敗ドメインごとに「最後に記録された outcome」だけを見る。
+// それが 'timeout' または 'blocked' で、かつ now - t < cooldownMs なら、同ドメインの全 backend を冷却中とみなす。
+// timeout/blocked 以外（ok 等）がドメイン最後なら冷却しない＝復帰させる。
+// 名前単位だと deepseek timeout 後に cheap-code:deepseek が通常予算で再試行される（2026-11-26 実測）。
+export function coolingBackendNames(homeDir, {
+  now = Date.now(),
+  cooldownMs = FALLBACK_BACKEND_COOLDOWN_MS,
+  failureDomain = fallbackBackendFailureDomain,
+} = {}) {
+  const lastByName = new Map();
   for (const row of readFallbackBackendHistory(homeDir)) {
     const name = typeof row.backend === 'string' ? row.backend.trim() : '';
     if (!name) continue;
     const t = Number(row.t);
     if (!Number.isFinite(t)) continue;
     // 追記順に走査しているので、後から来た行で上書きすれば「最後の outcome」が残る。
-    last.set(name, { t, outcome: String(row.outcome) });
+    lastByName.set(name, { t, outcome: String(row.outcome) });
+  }
+  const lastByDomain = new Map();
+  for (const [name, entry] of lastByName) {
+    const domain = failureDomain(name);
+    const previous = lastByDomain.get(domain);
+    if (!previous || entry.t >= previous.t) lastByDomain.set(domain, entry);
   }
   const cooling = new Set();
-  for (const [name, entry] of last) {
-    if ((entry.outcome === 'timeout' || entry.outcome === 'blocked') && now - entry.t < cooldownMs) cooling.add(name);
+  for (const [domain, entry] of lastByDomain) {
+    if ((entry.outcome === 'timeout' || entry.outcome === 'blocked') && now - entry.t < cooldownMs) {
+      for (const [name] of lastByName) {
+        if (failureDomain(name) === domain) cooling.add(name);
+      }
+      for (const member of FAILURE_DOMAIN_MEMBERS[domain] || []) cooling.add(member);
+    }
   }
   return cooling;
 }
 
 // 冷却中候補を keepAtLeastOne/keepNames で残した場合でも、直近に timeout/blocked した
-// backend を先頭へ戻さない。既存 history を再利用し、新しい状態ファイルは作らない。
+// backend（と同ドメイン）を先頭へ戻さない。既存 history を再利用し、新しい状態ファイルは作らない。
 export function deprioritizeRecentFailures(backends, history, {
   now = Date.now(), cooldownMs = FALLBACK_BACKEND_COOLDOWN_MS,
+  failureDomain = fallbackBackendFailureDomain,
 } = {}) {
   const list = Array.isArray(backends) ? backends : [];
-  const latest = new Map();
+  const latestByDomain = new Map();
   for (const row of Array.isArray(history) ? history : []) {
     const name = String(row?.backend || '').trim();
     const t = Number(row?.t);
     if (!name || !Number.isFinite(t)) continue;
-    const previous = latest.get(name);
-    if (!previous || t >= previous.t) latest.set(name, { t, outcome: String(row.outcome || '') });
+    const domain = failureDomain(name);
+    const previous = latestByDomain.get(domain);
+    if (!previous || t >= previous.t) latestByDomain.set(domain, { t, outcome: String(row.outcome || '') });
   }
   return [...list].sort((a, b) => {
     const rank = (backend) => {
-      const row = latest.get(String(backend?.name || ''));
+      const row = latestByDomain.get(failureDomain(String(backend?.name || '')));
       return row && /^(timeout|blocked)$/.test(row.outcome) && now - row.t < cooldownMs ? row.t : -Infinity;
     };
     return rank(a) - rank(b);

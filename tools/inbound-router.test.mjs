@@ -243,11 +243,79 @@ test('AI判定プロンプトに全routeの説明・unknown条件・confidence�
   assert.match(prompt, /個人・家族・友人・雑談/); assert.match(prompt, /confidence/);
 });
 
-test('common.ps1がある時はGB-WriteReport経由でsummaryを更新する', { skip: process.platform !== 'win32' }, () => {
+test('common.ps1がある時はGB-WriteReport経由でレポートを書き、二重ヘッダーにならない', { skip: process.platform !== 'win32' }, () => {
   const home = temp(), reportDir = path.join(home, 'gb-reports'), offloadDir = path.join(home, 'gb-offload');
-  fs.mkdirSync(offloadDir); fs.writeFileSync(path.join(offloadDir, 'common.ps1'), "function GB-WriteReport { param($Job,$Body,$Flags,$Status) Set-Content -Path (Join-Path $PSScriptRoot 'called.txt') -Value \"$Job|$Flags|$Status\" }");
-  const state = initialState(); state.unknown.push({ id: 'u', item: { kind: 'gmail', mailbox: 'x', title: '要確認', sender: 'a', time: new Date(NOW).toISOString(), text: 'x' } });
-  assert.ok(writeDigest({ state, now: NOW, reportDir }));
-  assert.match(fs.readFileSync(path.join(offloadDir, 'called.txt'), 'utf8'), /inbound-router\|1\|/);
+  fs.mkdirSync(offloadDir);
+  // Mock GB-WriteReport: saves Body to received.txt, writes a report file with its own header + Body, outputs the path
+  fs.writeFileSync(path.join(offloadDir, 'common.ps1'), `
+function GB-WriteReport {
+  param($Job,$Body,$Flags,$Status)
+  [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'received.txt'), $Body, (New-Object Text.UTF8Encoding($false)))
+  $reportFile = Join-Path $reportDir 'inbound-router-20990101-0000.md'
+  "# inbound-router  PC=  x  status=x  要判断=0\`r\`n\`r\`n" + $Body | Out-File -FilePath $reportFile -Encoding utf8
+  Write-Output $reportFile
+}
+`.replace('$reportDir', reportDir.replace(/\\/g, '\\\\')));
+  const state = initialState();
+  state.unknown.push({ id: 'u', item: { kind: 'gmail', mailbox: 'x', title: '要確認', sender: 'a', time: new Date(NOW).toISOString(), text: 'x' } });
+  const result = writeDigest({ state, now: NOW, reportDir });
+  assert.ok(result);
+  // received.txt should contain sections only (no header line)
+  const received = fs.readFileSync(path.join(offloadDir, 'received.txt'), 'utf8');
+  assert.match(received, /^## 🚩要判断/);
+  assert.doesNotMatch(received, /^# inbound-router /);
+  // latest and returned file should have single header with PC and flags
+  const latest = fs.readFileSync(path.join(reportDir, 'latest-inbound-router.md'), 'utf8');
+  const headerLines = latest.split(/\r?\n/).filter(l => l.startsWith('# inbound-router '));
+  assert.equal(headerLines.length, 1);
+  assert.match(headerLines[0], /PC=/);
+  assert.doesNotMatch(headerLines[0], /PC=  /);
+  assert.match(headerLines[0], /要判断=1/);
   assert.equal(fs.existsSync(path.join(reportDir, 'summary.md')), false);
+});
+
+test('pc-label.txtがBOM+CRLFだけのときフォールバックでos.hostname()を使う', () => {
+  const home = temp(), reportDir = path.join(home, 'gb-reports'), offloadDir = path.join(home, 'gb-offload');
+  fs.mkdirSync(offloadDir, { recursive: true });
+  fs.writeFileSync(path.join(offloadDir, 'pc-label.txt'), '\uFEFF\r\n', 'utf8');
+  const state = initialState();
+  state.unknown.push({ id: 'u', item: { kind: 'gmail', mailbox: 'x', title: '要確認', sender: 'a', time: new Date(NOW).toISOString(), text: 'x' } });
+  const result = writeDigest({ state, now: NOW, reportDir });
+  assert.ok(result);
+  const latest = fs.readFileSync(path.join(reportDir, 'latest-inbound-router.md'), 'utf8');
+  const firstLine = latest.split(/\r?\n/)[0];
+  assert.match(firstLine, new RegExp(`PC=${os.hostname()}`));
+});
+
+test('common.ps1経由で日本語件名が文字化けせず、latestのヘッダーは1つ', { skip: process.platform !== 'win32' }, () => {
+  const home = temp(), reportDir = path.join(home, 'gb-reports'), offloadDir = path.join(home, 'gb-offload');
+  fs.mkdirSync(offloadDir, { recursive: true });
+  fs.writeFileSync(path.join(offloadDir, 'common.ps1'), `
+function GB-WriteReport {
+  param($Job,$Body,$Flags,$Status)
+  [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'received.txt'), $Body, (New-Object Text.UTF8Encoding($false)))
+  $reportFile = Join-Path $reportDir 'inbound-router-20990101-0000.md'
+  "# inbound-router  PC=  x  status=x  要判断=0\`r\`n\`r\`n" + $Body | Out-File -FilePath $reportFile -Encoding utf8
+  Write-Output $reportFile
+}
+`.replace('$reportDir', reportDir.replace(/\\/g, '\\\\')));
+  const state = initialState();
+  state.unknown.push({ id: 'u', item: { kind: 'gmail', mailbox: 'x', title: 'テスト件名です', sender: 'a', time: new Date(NOW).toISOString(), text: '本文です' } });
+  const result = writeDigest({ state, now: NOW, reportDir });
+  assert.ok(result);
+  // (a) received.txt: sections only, no header, Japanese preserved
+  const received = fs.readFileSync(path.join(offloadDir, 'received.txt'), 'utf8');
+  assert.match(received, /^## 🚩要判断/);
+  assert.match(received, /テスト件名です/);
+  assert.doesNotMatch(received, /^# inbound-router /);
+  // (b) latest and returned file: single header, PC non-empty, flags correct, Japanese preserved
+  const latest = fs.readFileSync(path.join(reportDir, 'latest-inbound-router.md'), 'utf8');
+  const headerLines = latest.split(/\r?\n/).filter(l => l.startsWith('# inbound-router '));
+  assert.equal(headerLines.length, 1);
+  assert.match(headerLines[0], /PC=/);
+  assert.doesNotMatch(headerLines[0], /PC=  /);
+  assert.match(headerLines[0], /要判断=1/);
+  assert.match(latest, /テスト件名です/);
+  const returned = fs.readFileSync(result, 'utf8');
+  assert.equal(returned, latest);
 });

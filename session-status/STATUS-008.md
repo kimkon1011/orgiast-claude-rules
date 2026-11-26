@@ -1,4 +1,4 @@
-# session-status  PC=008  host=008XPS8300  updated 2026-11-26 20:09 JST
+# session-status  PC=008  host=008XPS8300  updated 2026-11-26 21:09 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "configDirectory": "C:\\Users\\user\\
 - 案件数: 21
@@ -19,7 +19,7 @@
 - 008・nishibayashi-reply-1126・完了・最終更新 11/26 15:09、STATUS.mdなし、DONEあり・期限なし・次:なし
 - 008・reply-wait-collect-1125・停止・最終更新 11/25 09:34、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・sales-exec-1123・完了・最終更新 11/24 00:33、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
-- 008・session-cap-1126・進行中・最終更新 11/26 19:26、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
+- 008・session-cap-1126・停止・最終更新 11/26 19:26、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 008・t706u-1125・停止・最終更新 11/25 11:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・tasks・停止・最終更新 11/22 09:56、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・work-sales3cat-1125・停止・最終更新 11/25 09:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

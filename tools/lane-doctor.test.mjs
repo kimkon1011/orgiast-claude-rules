@@ -78,6 +78,22 @@ test('probe repairs healthy demotes, classifies payment and rate limits, caches 
   await laneDoctorProbe({platform: 'linux',home:h,now:now+60000,probe,notify}); assert.equal(codexTasks,1); assert.equal(notifications,1);
   await laneDoctorProbe({platform: 'linux',home:h,now:now+86400001,probe,notify}); assert.equal(codexTasks,2); assert.equal(notifications,2);
 });
+
+test('xAI spending limit error is classified as billing', async t => {
+  const h = fixture(t);
+  fs.writeFileSync(path.join(h, '.claude/xai.env'), 'XAI_API_KEY=test-fixture\n');
+  const probe = async p => {
+    if (p === 'grok') {
+      return {
+        code: 1,
+        text: 'grok:grok-3 HTTP403: {"code":"permission-denied","error":"Your team 420ea724-0e6d-4285-96b0-e38e2b3dac06 has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}'
+      };
+    }
+    return {code: 0, text: 'PONG'};
+  };
+  const result = await laneDoctorProbe({platform: 'linux', home: h, now, probe, providers: ['grok']});
+  assert.equal(result.lanes.grok.reason, 'billing');
+});
 test('quick preserves payment failure and cannot refresh probe timestamp', async t => {
   const h=fixture(t); write(h,'lane-health.json',{probedAt:new Date(now-3600000).toISOString(),lanes:{gemini:{alive:false,reason:'dead:payment_required',probedAt:new Date(now-3600000).toISOString()}}});
   const r=laneDoctorQuick({home:h,now}); assert.equal(r.lanes.gemini.alive,false); assert.equal(freshProbe(r.probedAt,now),false);

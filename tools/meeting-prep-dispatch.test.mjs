@@ -30,6 +30,8 @@ test('カンペ対象は人の打合せ・Meetに限り、非公開・作業・�
   assert.equal(isKanpeMeeting(event({ summary: '作業', attendees: [], hangoutLink: 'https://meet.google.com/abc-defg-hij' }), date), true);
   assert.equal(isKanpeMeeting(event({ summary: '非公開の予定', attendees: [{ email: 'guest@example.com' }] }), date), false);
   assert.equal(isKanpeMeeting(event({ summary: '作業', attendees: [] }), date), false);
+  assert.equal(isKanpeMeeting(event({ calendarId: 'staff@gmail.com', attendees: [{ email: 'guest@example.com' }] }), date), false);
+  assert.equal(isKanpeMeeting(event({ calendarId: 'staff@gmail.com', attendees: [{ email: 'kim@orgiast.jp' }, { email: 'guest@example.com' }] }), date), true);
   for (const summary of ['【本番】顧客様 _展示会', '【撤去】顧客様 _展示会', '🧘経営者のための瞑想会', '✈ MH53 関西→クアラルンプール'])
     assert.equal(isKanpeMeeting(event({ summary, attendees: [{ email: 'guest@example.com' }], hangoutLink: 'https://meet.google.com/abc-defg-hij' }), date), false);
   assert.equal(isKanpeMeeting(event({ start: { date }, end: { date: '2026-11-04' }, attendees: [{ email: 'guest@example.com' }] }), date), false);

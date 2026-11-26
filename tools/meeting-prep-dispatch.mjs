@@ -292,6 +292,10 @@ export function isKanpeMeeting(event, date) {
   if (!isMeeting(event, date) || privateTitle(event)) return false;
   // 現場作業・私用・移動は人との打合せではない
   if (/本番|撤去|設営|搬入|搬出|施工|瞑想|サダナ|✈|flight to/i.test(event.summary || '')) return false;
+  // kim が出席する予定だけ（他人のカレンダーの予定に書き込まない）
+  const kimAttends = [event.calendarId, event.organizer?.email, ...(event.attendees || []).map(a => a.email)]
+    .some(v => v?.toLowerCase() === USER);
+  if (!kimAttends && event.calendarId !== 'primary') return false;
   const hasOtherAttendee = (event.attendees || []).some(a => !a.self && a.email?.toLowerCase() !== USER);
   const meetingTitle = /^(M|Ｍ)\s*[:：]/u.test(event.summary || '') || /打合せ|打ち合わせ|MTG|面談|商談|会議/i.test(event.summary || '');
   return hasOtherAttendee || meetingTitle || !!event.conferenceData || !!event.hangoutLink;

@@ -314,7 +314,11 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     const result = args['dry-run'] || args.digest ? await work() : await withLedgerLock(home, work);
     ok = !result.errors.length;
     if (result.errors.length) resultSummary = `期限追跡エラー: ${result.errors.map(e => e.id || e.message || String(e)).join(', ')}`;
-    else resultSummary = '期限追跡完了';
+    else if (result.warnings?.length) {
+      const ids = result.warnings.map(w => w.id);
+      const suffix = ids.length === 1 ? ids[0] : `${ids[0]} ほか ${ids.length - 1}件`;
+      resultSummary = `期限追跡完了（警告: ${suffix} 元メール404）`;
+    } else resultSummary = '期限追跡完了';
     return ok ? 0 : 1;
   } catch (e) { resultSummary = `期限追跡エラー: ${e.message}`; stderr(`deadline-watch: ${e.message}`); return 1; }
   finally {

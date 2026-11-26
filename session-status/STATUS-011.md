@@ -1,7 +1,7 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-26 17:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-26 18:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 34
+- 案件数: 36
 
 - 011・.stall-sweeper・停止・最終更新 11/26 04:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・3oku-9-17-1125・完了・最終更新 11/25 09:39、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
@@ -15,6 +15,7 @@
 - 011・eight-dai6-1125・停止・最終更新 11/26 14:09、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
 - 011・eight-venue-check-1125・完了・最終更新 11/25 20:27、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 011・eight-wiaas-reply-1125・完了・最終更新 11/25 18:04、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
+- 011・extwait-1126h・停止・最終更新 11/26 18:05、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・extwait-kim-400・停止・最終更新 11/26 14:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・gridbeyond-yosu-1125・金さん待ち・最終更新 11/25 11:38、STATUS.mdなし、REPORTあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・illumi-kono-claim-1125・停止・最終更新 11/25 18:46、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
@@ -32,7 +33,8 @@
 - 011・sales-followup・停止・最終更新 11/26 07:54、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-followup-1123・完了・最終更新 11/23 18:18、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
 - 011・sales-link-audit-1126・完了・監査・修正・書き出し完了、13:00 毎時本番で動作確認済み・期限2026-11-26 当日・次:なし（毎時ジョブが send-commitments を追跡し stuck-export を毎時更新）
-- 011・営業 次回連絡日・金さん待ち・最終更新 11/26 17:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・営業 次回連絡日・金さん待ち・最終更新 11/26 18:03、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・session-1126-hourly・金さん待ち・JACE 藤野様宛ての返信下書きが打合せ前の文面のまま。修正版の送信可否は金さんの承認が要る（kim-inbox ki-20261126081310-6cf5）・期限2026-12-11（先方の返信期限）／着手期限 2026-12-09・次:承認が来たら seisaku-team@ の下書きを修正版に差し替え、gmail-draft.mjs の自動チェックを通して送信し、送信済みを読み戻す
 - 011・souko-kyujin-1125・完了・最終更新 11/25 19:40、STATUS.mdなし、DONEあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
 - 011・tangomuto-reply-1125・完了・最終更新 11/25 12:25、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 011・tasks・停止・最終更新 11/24 09:49、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>要求定義: 車両運行管理アプリ</title>
+<link rel="stylesheet" href="../../docs/assets/design-system.css">
+</head>
+<body>
+<nav><a href="../../docs/index.html">トップ</a> &gt; <a href="../index.html">ステアリング</a> &gt; 車両運行管理アプリ</nav>
+<main>
+<h1>要求定義: 車両運行管理アプリ</h1>
+<p>作成: 2026-11-27 | 更新: 2026-11-27</p>
+
+<h2>1. 概要</h2>
+<p>既存の Google Sheets ベース車検台帳（<code>vehicleSheetId: 1mo8-hSCA-qDgblGBND-mjPEAF5fZ73etoz_mPeMZMLA</code>）と期限台帳の車両データを、Web UI で一元管理するアプリケーション。</p>
+<p>現在は <code>tools/vehicle-inspection-watch.mjs</code> が CLI で車検期限を監視し kim-inbox へ通知するのみ。管理担当者が Web 画面で直感的に確認・操作できるようにする。</p>
+
+<h2>2. ターゲットユーザー</h2>
+<ul>
+  <li><strong>管理担当者</strong>（社用車の運行管理を行うメンバー）</li>
+  <li><strong>管理者（kim）</strong>：全車両の状態を俯瞰し、期限切れ・未手配を把握</li>
+</ul>
+
+<h2>3. ユーザーストーリー</h2>
+<table>
+<thead><tr><th>#</th><th>ストーリー</th><th>優先度</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>管理担当者はダッシュボードで全車両の一覧と状態を一目で確認したい</td><td>高</td></tr>
+<tr><td>2</td><td>管理担当者は車検期限が近い車両をフィルタして確認したい</td><td>高</td></tr>
+<tr><td>3</td><td>管理担当者は新しい車両を台帳に追加したい</td><td>高</td></tr>
+<tr><td>4</td><td>管理担当者は既存車両の情報（保管場所・状態等）を編集したい</td><td>高</td></tr>
+<tr><td>5</td><td>管理担当者は車検の進捗状態を更新したい</td><td>高</td></tr>
+<tr><td>6</td><td>管理者は過去の車検履歴を参照したい</td><td>中</td></tr>
+<tr><td>7</td><td>管理担当者は車検依頼先に自動で連絡したい</td><td>低</td></tr>
+</tbody>
+</table>
+
+<h2>4. 機能要件</h2>
+<ol>
+  <li><strong>ダッシュボード画面</strong>: 全車両数／期限切れ／今月期限／未手配のサマリ表示</li>
+  <li><strong>車両一覧画面</strong>: 表形式で全車両表示（ソート・フィルタ可能）</li>
+  <li><strong>車両詳細画面</strong>: 個別車両の全項目表示・編集フォーム</li>
+  <li><strong>車両登録</strong>: 新規車両の追加フォーム（バリデーション付き）</li>
+  <li><strong>状態管理</strong>: 車検の状態遷移（未手配→見積依頼中→予約済→入庫中→完了→次回）</li>
+  <li><strong>期限カレンダー</strong>: カレンダー表示で期限を視覚化</li>
+</ol>
+
+<h2>5. 非機能要件</h2>
+<ul>
+  <li>Google Sheets をバックエンドデータストアとして使用（既存台帳とリアルタイム同期）</li>
+  <li>認証は Google OAuth 2.0（既存の Google Workspace アカウントでログイン）</li>
+  <li>レスポンシブ対応（PC / スマホ）</li>
+  <li>画面遷移は最小限、直感的な操作</li>
+</ul>
+
+<h2>6. 制約事項</h2>
+<ul>
+  <li>既存の車検台帳シートの構造を変更しない（互換性維持）</li>
+  <li>既存の <code>vehicle-inspection-watch.mjs</code> の CLI 動作に影響を与えない</li>
+  <li>Google Apps Script（GAS）をバックエンドに使用可能</li>
+</ul>
+
+<h2>7. 受け入れ条件</h2>
+<ul>
+  <li>既存の車検台帳の全レコードが Web UI で参照できる</li>
+  <li>車検期限30日以内の車両がダッシュボードで強調表示される</li>
+  <li>新規車両の追加・編集が Web 画面上から可能である</li>
+  <li>状態変更がリアルタイムで Google Sheets に反映される</li>
+</ul>
+</main>
+</body>
+</html>

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseArgs, buildMessages, loadSecrets, resolveGroup, assertSendableText, assertPushSucceeded, strToUUID, normalizeGroupName } from './line-group-send.mjs';
+import { parseArgs, buildMessages, loadSecrets, resolveGroup, assertSendableText, assertPushSucceeded, strToUUID, normalizeGroupName, applyLineHandbackGuard } from './line-group-send.mjs';
 
 test('assertSendableText: 文字化けとプレースホルダ残りは送らない', () => {
   assert.doesNotThrow(() => assertSendableText('皆さん、お疲れさまです。'));
@@ -121,4 +121,17 @@ test('resolveGroup: 見つからない場合は部分一致候補を最大5件�
       return true;
     },
   );
+});
+
+test('送信前ガード: 差し戻し文面は止め、HUMAN-ONLY はタグを外して通す', () => {
+  assert.throws(
+    () => applyLineHandbackGuard('仮押さえ先の確認をお願いします。', { env: {} }),
+    (error) => error.code === 'HANDBACK_BLOCKED',
+  );
+  assert.equal(
+    applyLineHandbackGuard('[HUMAN-ONLY: 現地作業] 11/29 9:00に現場で鍵の受け取りをお願いします。', { env: {} }),
+    '11/29 9:00に現場で鍵の受け取りをお願いします。',
+  );
+  assert.equal(applyLineHandbackGuard('皆さん、お疲れさまです。', { env: {} }), '皆さん、お疲れさまです。');
+  assert.equal(applyLineHandbackGuard('確認をお願いします', { env: { ORGIAST_HANDBACK_GUARD: '0' } }), '確認をお願いします');
 });

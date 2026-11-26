@@ -12,6 +12,7 @@ import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
 import { assertContextApproved, latestOf, readOutbound, recordOutbound } from './lib/send-context.mjs';
+import { assertNoHandback, stripHumanOnly } from './lib/handback-guard.mjs';
 import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 
 /** 任意の文字列を UUID v5 形式（SHA-256 ベース・決定論的）に変換する。同じ文字列→同じUUID。
@@ -143,6 +144,12 @@ async function uploadImage(s, file) {
 }
 
 // ONBOARDING「人が読む配信」の送信前ガード: 文字化け・プレースホルダ残りは送らずに落とす。
+export function applyLineHandbackGuard(text, { env = process.env, skipHandbackGuard = false } = {}) {
+  const src = String(text ?? '');
+  if (!skipHandbackGuard) assertNoHandback(src, { env });
+  return stripHumanOnly(src).trim();
+}
+
 export function assertSendableText(text) {
   if (!text) return;
   const japanese = (text.match(/[぀-ヿ一-鿿]/g) || []).length;
@@ -178,7 +185,7 @@ async function main() {
   const groupId = await resolveGroup(s, o.group);
   const summary = await (await fetch(`https://api.line.me/v2/bot/group/${groupId}/summary`, { headers: L })).json();
   if (!summary.groupName) throw new Error(`bot がグループに参加していない: ${JSON.stringify(summary)}`);
-  const text = o.textFile ? readFileSync(o.textFile, 'utf8').trim() : '';
+  const text = applyLineHandbackGuard(o.textFile ? readFileSync(o.textFile, 'utf8').trim() : '');
   assertSendableText(text);
   console.log(`送信先: ${summary.groupName} (${groupId}) / 本文 ${text.length} 字 / 画像 ${o.images.length} 枚`);
   if (o.dryRun) { console.log('[dry-run] 送信しない'); return; }
@@ -212,5 +219,5 @@ async function main() {
 }
 
 if (isEntry(import.meta.url)) {
-  main().catch((e) => { console.error(e.message || e); process.exit(1); });
+  main().catch((e) => { console.error(e.message || e); process.exit(e.code === 'HANDBACK_BLOCKED' ? 4 : 1); });
 }

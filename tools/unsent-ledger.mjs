@@ -59,6 +59,15 @@ const hashId = (s) => `path-${crypto.createHash('sha1').update(String(s)).digest
 const asArray = (v) => (Array.isArray(v) ? v : v ? [v] : []);
 const isInternalAddress = (addr) => /@orgiast\.jp\s*$/i.test(String(addr || '').trim());
 
+async function mapConcurrent(items, worker, concurrency = 8) {
+  const results = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (next < items.length) { const index = next++; results[index] = await worker(items[index], index); }
+  }));
+  return results;
+}
+
 export function hasKimDecision(item) {
   const text = String(item?.decided_by || '');
   if (!/(金さん|金功勇|kim)/i.test(text)) return false;
@@ -542,7 +551,7 @@ export async function check(ledger, search = searchGmail, { reader } = {}) {
 
   ledger.items = (ledger.items || []).map(migrateItem);
 
-  for (const item of ledger.items.filter((x) => isPending(x))) {
+  await mapConcurrent(ledger.items.filter((x) => isPending(x)), async item => {
     item.last_checked_at = nowIso();
     delete item.last_check_error;
     try {
@@ -563,7 +572,7 @@ export async function check(ledger, search = searchGmail, { reader } = {}) {
       item.last_check_error = error.message;
       // status は変えない
     }
-  }
+  });
 }
 
 export async function sendViaBeeper(item) {
@@ -901,7 +910,7 @@ export async function defaultListGmailDrafts(user) {
     const res = await gwsFetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20_000) });
     if (!res.ok) throw new Error(`gmail drafts ${user}: HTTP ${res.status}`);
     const json = await res.json();
-    for (const d of json.drafts || []) {
+    const details = await mapConcurrent(json.drafts || [], async d => {
       let subject = '';
       let to = [];
       let createdMs = 0;
@@ -919,8 +928,9 @@ export async function defaultListGmailDrafts(user) {
           to = [...toRaw.matchAll(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g)].map((m) => m[0]);
           createdMs = Number(body.message?.internalDate || 0);
         }
-      out.push({ id: d.id, subject, to, createdMs, body_text: bodyText });
-    }
+      return { id: d.id, subject, to, createdMs, body_text: bodyText };
+    });
+    out.push(...details);
     pageToken = json.nextPageToken || '';
   } while (pageToken);
   return out;
@@ -946,6 +956,9 @@ export async function run({
     let ledger = loadLedger(ledgerFile);
     const ingested = doIngest ? ingest(ledger, undefined, { persist: l => saveLedger(l, ledgerFile) }) : 0;
     const draftScan = doScanDrafts ? scanDraftFiles(ledger) : { registered: 0 };
+    // 長いAPI照合の前にも現状を保存・公開し、実行時間上限でも新規項目を残す。
+    saveLedger(ledger, ledgerFile);
+    if (doExport) exportLedger(ledger, exportDirs, { checkErrors: [{ user: 'job', message: 'Gmail/Beeper照合を実行中' }] });
     let gmailScan = { registered: 0, errors: [] };
     if (doScanGmail) {
       gmailScan = await scanGmailDrafts(ledger, { listDrafts: listDrafts || defaultListGmailDrafts });

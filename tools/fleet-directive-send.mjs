@@ -86,6 +86,7 @@ export function main(argv = process.argv.slice(2), options = {}) {
     return { pruned: true };
   }
   const kind = valueAfter(argv, '--kind');
+  // --targets はカンマ（,）または全角読点（、）区切りで複数指定可
   const targets = valueAfter(argv, '--targets') ?? 'all';
   const why = valueAfter(argv, '--why');
   if (!pruneOnly && !why) throw new Error('--why は必須です（遠隔指示の理由を指定してください）');

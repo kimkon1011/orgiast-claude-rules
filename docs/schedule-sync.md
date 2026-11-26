@@ -1,6 +1,6 @@
 # schedule-sync
 
-LINE・Discord・Gmail の日時付きメッセージから、kim@orgiast.jp の primary
+LINE・Discord・Gmail の日時付きメッセージから、用途別のカレンダー
 カレンダーへ確度の高い将来の新規予定を登録する。medium は Discord DM の
 確認候補だけにする。変更・取消・過去・仮定は予定を変更しない。
 
@@ -152,3 +152,8 @@ duplicate / calendar-unverified / failed / skipped は全て0、would-create一�
 Groqの予算不足・HTTP429とGLMのクールダウンを観測し、Gensparkへの既存フォールバックで回復した。
 元の一律エラーで隠された初回停止のHTTP種別は再現できず、断定しない。
 一方、1バッチの例外で全体を中断して成功分の登録とカーソル更新を止める経路は修正・スタブ検証済み。
+
+### 面談設定の作成先（2026-11-26）
+
+Discordの面談設定などから自動で作る応募者・求人の面談予定は、seisaku-team@orgiast.jp のカレンダーに作り、kim@orgiast.jp は参加者に入れず、kim のカレンダーにも作らない。
+Discord のグループ名に「面談設定」を含む候補、または件名が【自動】【面談設定】（案件見出し付きも含む）の予定は制作チームへ登録する。LINE/Gmail の他の予定の振り分け、新卒の除外設定は維持。insert・move・patch・DELETE は sendUpdates=none。手入力や他の自動予定は移行対象外。

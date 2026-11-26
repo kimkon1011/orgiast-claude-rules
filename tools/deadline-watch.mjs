@@ -18,7 +18,7 @@ import { DEFAULT_CONFIG, createLedger, loadConfig, defaultHome, dataPath, readJs
 const exec = promisify(execFile);
 const inboxScript = fileURLToPath(new URL('./kim-inbox.mjs', import.meta.url));
 export const STAGES = { default: [30,14,7,3,1,0], '訴訟・法務': [30,14,7,3,2,1,0], '契約更新': [60,30,14,7,1,0], '支払': [7,3,1,0], '回答・返信': [3,1,0] };
-export const closed = row => ['完了','不要'].includes(row.status);
+export const closed = row => ['完了','不要','見送り'].includes(row.status);
 export function effectiveDue(row) {
   if (row.status === '延期') return parseSheetDate(String(row.notes || '').match(/(?:延期先|延期|until)\s*[:：=]?\s*(\d{4}-\d{2}-\d{2})/)?.[1]);
   return parseSheetDate(row.due);
@@ -135,7 +135,18 @@ export async function syncCalendar(row, { config, state, request, persist = () =
     const found = [];
     for (const calendar of [ids.kim, ids.task]) {
       const events = await listCalendarEvents(request, calendar, { privateExtendedProperty: `deadlineId=${row.id}` });
-      found.push(...events.filter(e => belongsToLedger(e, config) && !e.start?.dateTime).map(event => ({ calendar, event })));
+      found.push(...events.filter(e => e.extendedProperties?.private?.deadlineId === row.id && belongsToLedger(e, config) && !e.start?.dateTime).map(event => ({ calendar, event })));
+    }
+    // Close the ledger first. Notes alone are not proof of cancellation, and
+    // legacy events without a ledger namespace must not match another D-150.
+    if (closed(row)) {
+      for (const { calendar, event } of found) {
+        const sheet = event.extendedProperties?.private?.deadlineSheetId || String(event.description || '').match(/spreadsheets\/(?:a\/[^/]+\/)?d\/([\w-]+)/)?.[1];
+        if (sheet !== config.sheetId) continue;
+        try { await request(`${calendarBase(calendar)}/${encodeURIComponent(event.id)}?sendUpdates=none`, { ...opts, method: 'DELETE' }); }
+        catch (error) { if (![404, 410].includes(error.status)) throw error; }
+      }
+      return;
     }
     const label = readableEvent(row, config, found.map(x => x.event));
     const inactive = closed(row) || !due || row.status === '候補';
@@ -148,14 +159,13 @@ export async function syncCalendar(row, { config, state, request, persist = () =
     const patch = async (event, calendar, body) => request(`${calendarBase(calendar)}/${encodeURIComponent(event.id)}?sendUpdates=none`, { ...opts, method: 'PATCH', body });
     for (const item of found) {
       const archive = item.event.extendedProperties?.private?.deadlineArchive;
-      if (archive) { await moveCalendarEvent(request, item.event, item.calendar, ids.task); continue; }
       const duplicate = item !== primary || archive === 'duplicate';
       const destination = duplicate || archive ? ids.task : target;
       const moved = await moveCalendarEvent(request, item.event, item.calendar, destination);
       const privateProps = { ...item.event.extendedProperties?.private, deadlineId: row.id, deadlineSheetId: config.sheetId };
       if (duplicate) privateProps.deadlineArchive = 'duplicate';
       else if (cancelled || inactive) privateProps.deadlineArchive = cancelled ? 'cancelled' : 'closed';
-      const prefix = duplicate ? '【重複】' : cancelled ? '【見送り済み】' : inactive ? `【${closed(row) ? row.status : '保留'}】` : !label ? '【顧客未解決】' : '';
+      const prefix = !label ? '【顧客未解決】' : '';
       const summary = `${prefix}${(label?.summary || item.event.summary || row.title).replace(/^(?:【(?:重複|顧客未解決|完了|不要|保留|見送り済み)】)+/, '')}`;
       const body = { summary, ...(label ? { description: label.description } : {}), extendedProperties: { private: privateProps } };
       if (!inactive && !duplicate && !archive) Object.assign(body, { start: { date: due }, end: { date: new Date(Date.parse(due) + 86400000).toISOString().slice(0,10) } });

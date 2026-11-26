@@ -15,7 +15,7 @@ export { parseSheetDate, jstDate, daysUntil };
 export const HEADERS = ['ID','件名','種別','会社','期限日','残日数','状態','担当','やること','根拠','出典','出典ID','検出日','最終通知日','通知回数','完了日','備考'];
 export const FIELDS = ['id','title','kind','company','due','remainingDays','status','assignee','action','quote','source','sourceId','detectedAt','lastNotified','notifyCount','completedAt','notes'];
 export const KINDS = ['車検','訴訟・法務','行政・消防','補助金・申請','契約更新','支払','回答・返信','提出','その他'];
-export const STATUSES = ['候補','未着手','対応中','完了','不要','延期'];
+export const STATUSES = ['候補','未着手','対応中','完了','不要','見送り','延期'];
 export const DEFAULT_CONFIG = {
   sheetId: '', mailboxes: ['kim@orgiast.jp','seisaku-team@orgiast.jp'], driveUsers: ['kim@orgiast.jp','seisaku-team@orgiast.jp'],
   gmailDailyLimit: 400, driveDailyLimit: 150,

@@ -43,6 +43,11 @@ export function isAcademicGroup(group) {
 }
 
 export const GAKKAI_CALENDAR = 'seisaku-team@orgiast.jp';
+export const RECRUITING_CALENDAR = 'seisaku-team@orgiast.jp';
+export function isRecruitingInterview(ev = {}, { group, source } = {}) {
+  return source === 'discord' && /面談設定/u.test(String(group || ''))
+    || /^(?:【[^】]+】)?【自動】【面談設定】/u.test(String(ev.summary || ''));
+}
 export const AI_CALENDAR = 'orgiast.jp_qqukp0gg2l94o501uhugn0i63s@group.calendar.google.com';
 export const PREPARATION_PREFIX = '📋 準備: ';
 
@@ -50,13 +55,15 @@ const MEETING_WORDS = /^(?:M[:：])|訪問|電話|面談|面接|中途面談|打
 const MEETING_URL = /(?:meet\.google\.com|zoom\.us|teams\.microsoft\.com)/iu;
 
 export function isKimMeeting(ev = {}) {
+  if (isRecruitingInterview(ev)) return false;
   const text = [ev.summary, ev.description, ev.location, ev.hangoutLink].filter(Boolean).join('\n');
   const hasOtherAttendee = Array.isArray(ev.attendees)
     && ev.attendees.some(a => a?.email && a.email.toLowerCase() !== 'kim@orgiast.jp' && !a.resource);
   return MEETING_WORDS.test(String(ev.summary || '')) || MEETING_URL.test(text) || Boolean(ev.hangoutLink) || hasOtherAttendee;
 }
 
-export function routeCalendar(ev = {}, { origin } = {}) {
+export function routeCalendar(ev = {}, { origin, group, source } = {}) {
+  if (isRecruitingInterview(ev, { group, source })) return RECRUITING_CALENDAR;
   if (isKimMeeting(ev)) return 'primary';
   const text = [ev.summary, ev.description, ev.location].filter(Boolean).join('\n');
   const summary = String(ev.summary || '');

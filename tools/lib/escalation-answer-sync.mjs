@@ -15,6 +15,13 @@ export function parseEscalation(item) {
   return ts ? { ts, session } : null;
 }
 
+// 言い換えられた本文からも、末尾などに残った台帳参照だけを緩く抽出する。
+export function parseLedgerRef(text) {
+  const value = String(text || '');
+  const match = value.match(/セッション[\s　]+([\w-]+)[\s\S]*?台帳[\s　]*ts[\s　]+([0-9T:.\-+Z]+)/);
+  return match ? { session: match[1], ts: match[2] } : null;
+}
+
 export function matchesRow(item, row) {
   if (item?.dedupeKey && item.dedupeKey === escalationDedupeKey(`${row.sessionId || ''}${row.ts || ''}`)) return true;
   const parsed = parseEscalation(item);

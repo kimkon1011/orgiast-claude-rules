@@ -74,9 +74,24 @@ test('probe repairs healthy demotes, classifies payment and rate limits, caches 
   const notify = async text => { notifications++; assert.match(text,/残高不足\(402\)/); return {delivered:'dm'}; };
   const result = await laneDoctorProbe({platform: 'linux',home:h,now,probe,notify});
   assert.equal(result.lanes.gemini.reason,'billing'); assert.equal(result.lanes.codex.alive,true);
-  assert.ok(read(h,'routing-overrides.json').demote.gemini); assert.equal(result.lanes.glm.until,now+600000);
+  assert.ok(read(h,'routing-overrides.json').demote.gromi); assert.equal(result.lanes.glm.until,now+600000);
   await laneDoctorProbe({platform: 'linux',home:h,now:now+60000,probe,notify}); assert.equal(codexTasks,1); assert.equal(notifications,1);
   await laneDoctorProbe({platform: 'linux',home:h,now:now+86400001,probe,notify}); assert.equal(codexTasks,2); assert.equal(notifications,2);
+});
+
+test('xAI spending limit error is classified as billing', async t => {
+  const h = fixture(t);
+  const probe = async (p, options) => {
+    if (p === 'grok') {
+      return {
+        code: 1,
+        text: `grok:grok-3 HTTP403: {'code':'permission-denied','error':'Your team 420ea724-0e6d-4285-96b0-e38e2b3dac06 has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit.'}`
+      };
+    }
+    return {code: 0, text: 'PONG'};
+  };
+  const result = await laneDoctorProbe({platform: 'linux', home: h, now, probe});
+  assert.equal(result.lanes.grok.reason, 'billing');
 });
 test('quick preserves payment failure and cannot refresh probe timestamp', async t => {
   const h=fixture(t); write(h,'lane-health.json',{probedAt:new Date(now-3600000).toISOString(),lanes:{gemini:{alive:false,reason:'dead:payment_required',probedAt:new Date(now-3600000).toISOString()}}});

@@ -297,6 +297,11 @@ export function heartbeatGitLockPaths(gitDir) {
     path.join(gitDir, 'index.lock'),
     path.join(gitDir, 'HEAD.lock'),
     path.join(gitDir, 'refs', 'heads', 'fleet-heartbeat.lock'),
+    path.join(gitDir, 'refs', 'remotes', 'origin', 'fleet-heartbeat.lock'),
+    path.join(gitDir, 'packed-refs.lock'),
+    path.join(gitDir, 'shallow.lock'),
+    path.join(gitDir, 'ORIG_HEAD.lock'),
+    path.join(gitDir, 'FETCH_HEAD.lock'),
   ];
 }
 

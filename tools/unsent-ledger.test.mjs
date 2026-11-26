@@ -20,6 +20,7 @@ import {
   maybeNotifyStuck,
   scanGmailDrafts,
   patchSummary,
+  acquireLedgerLock,
 } from './unsent-ledger.mjs';
 
 function tmpDir(prefix = 'unsent-') {
@@ -346,7 +347,27 @@ test('Gmail下書きはアカウント別・2時間以上のみ登録し失敗�
   assert.equal((await scanGmailDrafts(l, { now, listDrafts })).registered, 2);
   assert.equal((await scanGmailDrafts(l, { now, listDrafts })).registered, 0);
   assert.equal(l.items[0].body_text, '本文');
+  l.items[0].body_text = '';
+  await scanGmailDrafts(l, { now, listDrafts });
+  assert.equal(l.items[0].body_text, '本文');
   assert.equal((await scanGmailDrafts(l, { listDrafts: async () => { throw new Error('auth'); } })).errors.length, 2);
+});
+
+test('排他中の書き込みを拒否し、解放はロック履歴への移動で行う', () => {
+  const root=tmpDir(), file=path.join(root,'ledger.json');
+  const release=acquireLedgerLock(file);
+  assert.throws(()=>acquireLedgerLock(file), /実行中/);
+  release();
+  assert.equal(fs.readdirSync(path.join(root,'lock-history')).length,1);
+  acquireLedgerLock(file)();
+});
+
+test('Gmailは件名の部分一致や本文条件の違うメールを確定しない', async () => {
+  const l={items:[normalizeItem({id:'email',to:['a@example.com'],subject:'日程',decided_at:'2026-11-26T00:00:00Z',match:{needles:['12月9日']}})]};
+  await check(l,async()=>({messages:[{id:'wrong',subject:'日程変更',body:'12月9日'},{id:'other',subject:'日程',body:'12月10日'}]}));
+  assert.equal(l.items[0].status,'承認待ち');
+  await check(l,async()=>({messages:[{id:'right',subject:'Re: 日程',body:'12月9日'}]}));
+  assert.equal(l.items[0].sent_message_id,'right');
 });
 
 test('ack無し2回・1日1件、解消後は連続回数リセット（通知モック）', async () => {

@@ -416,7 +416,14 @@ export async function scanGmailDrafts(ledger, {
       const drafts = await listDrafts(user);
       for (const d of drafts || []) {
         const id = d.id || d.gmail_draft_id;
-        if (!id || known.has(`${user}:${id}`)) continue;
+        if (!id) continue;
+        if (known.has(`${user}:${id}`)) {
+          for (const existing of ledger.items.filter(x => x.gmail_draft_id === id && x.from === user)) {
+            if (!existing.body_text && !existing.body_path && d.body_text) existing.body_text = d.body_text;
+            if (!existing.to?.length && d.to?.length) existing.to = asArray(d.to);
+          }
+          continue;
+        }
         const createdMs = Number(d.createdMs || d.internalDate || 0);
         if (!createdMs) { errors.push({ user, message: `下書き ${id}: 作成日時未取得` }); continue; }
         if (now - createdMs < TWO_HOURS_MS) continue;
@@ -463,9 +470,12 @@ async function checkEmail(item, search) {
     user: item.from || 'seisaku-team@orgiast.jp',
     query: `in:sent to:${target} after:${epoch} {${needles.map(n => `subject:"${String(n).replace(/["\\]/g, ' ')}"`).join(' ')}}`,
     max: 50,
+    withBody: Boolean(item.match?.needles?.length),
+    bodyLimit: 100000,
   });
   const subjectKey = s => String(s || '').replace(/^(?:(?:re|fw|fwd)\s*:\s*)+/i, '').trim();
-  const found = (result.messages || []).find((m) => m.id && needles.some((n) => subjectKey(m.subject) === subjectKey(n)));
+  const found = (result.messages || []).find((m) => m.id && needles.some((n) => subjectKey(m.subject) === subjectKey(n))
+    && (!item.match?.needles?.length || item.match.needles.every(n => String(m.body || '').includes(n))));
   if (found) {
     setStatus(item, '送信済み', 'Gmail照合一致', { by: 'check' });
     item.sent_message_id = found.id;

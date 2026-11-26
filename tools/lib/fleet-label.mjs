@@ -9,7 +9,17 @@ function envFile(file) {
   try { return parseEnvText(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return {}; throw e; }
 }
 
+/** PC番号付き表記などゆれを kim-PC に揃える。それ以外はそのまま返す。 */
+export function normalizeFleetLabel(label) {
+  if (typeof label !== 'string') return label;
+  // 先頭の数字（任意）＋任意の区切り＋ kim ＋任意の - ＋ pc
+  if (/^\d*[\s\-_｜]*kim-?pc$/i.test(label)) return 'kim-PC';
+  return label;
+}
+
 export function resolveFleetLabel(home, identity = { hostname: os.hostname() }) {
+  let label;
+
   // Check for custom fleet PC map first
   const fleetMapPath = path.join(home, '.claude', 'fleet-pc-map.json');
   if (fs.existsSync(fleetMapPath)) {
@@ -18,11 +28,11 @@ export function resolveFleetLabel(home, identity = { hostname: os.hostname() }) 
       if (identity.hostname in fleetMap) {
         const entry = fleetMap[identity.hostname];
         // entry may be a plain string label or an object with label/hostname/aliases
-        if (typeof entry === 'string') return entry;
-        if (typeof entry === 'object' && entry) {
-          if (typeof entry.label === 'string') return entry.label;
-          if (typeof entry.hostname === 'string') return entry.hostname;
-          if (Array.isArray(entry.aliases) && typeof entry.aliases[0] === 'string') return entry.aliases[0];
+        if (typeof entry === 'string') label = entry;
+        else if (typeof entry === 'object' && entry) {
+          if (typeof entry.label === 'string') label = entry.label;
+          else if (typeof entry.hostname === 'string') label = entry.hostname;
+          else if (Array.isArray(entry.aliases) && typeof entry.aliases[0] === 'string') label = entry.aliases[0];
         }
         // entry found but no usable string; fall through to other resolution paths
       }
@@ -31,17 +41,13 @@ export function resolveFleetLabel(home, identity = { hostname: os.hostname() }) 
     }
   }
 
-  // Check for REPORTER_LABEL in cost-reporter.env
-  const reporterLabel = envFile(path.join(home, '.claude', 'cost-reporter.env')).REPORTER_LABEL;
-  if (reporterLabel) return reporterLabel;
-
-  // Normalize hostname for known patterns
-  // If hostname starts with digits followed by 'KimPC', normalize to 'kim-PC'
-  const kimPCMatch = identity.hostname.match(/^\d+(\w+)/i);
-  if (kimPCMatch && kimPCMatch[1].toLowerCase() === 'kimpc') {
-    return 'kim-PC';
+  if (label === undefined) {
+    // Check for REPORTER_LABEL in cost-reporter.env
+    const reporterLabel = envFile(path.join(home, '.claude', 'cost-reporter.env')).REPORTER_LABEL;
+    if (reporterLabel) label = reporterLabel;
   }
 
-  // Return original hostname as fallback
-  return identity.hostname;
+  if (label === undefined) label = identity.hostname;
+
+  return normalizeFleetLabel(label);
 }

@@ -191,6 +191,31 @@ test('未委譲のテストと PR 着地を次セッションに残す文は P1 
   assert.equal(detect('修正本体はコミット済み。テストの追加・テスト実行・PR の着地は次のセッションに残ります').some(hit => hit.pattern === 'P1'), true);
 });
 
+test('実データの物理的制約・枠回復・承認必須・別件起票は先送りとして検出しない', () => {
+  const texts = [
+    '| 5 | **45b68296a59243c6** | **真の違反** | 「恒久策（次セッションの候補として残置）」 |',
+    'Edit・シェル追記のいずれもセンシティブファイル保護で拒否されました（既知の制約）。そのため次セッションの残TODO 一覧には恒久修正を残します。',
+    'Codex の無人枠が 2026-11-27 00:00 JST に回復するため、次のセッションが同じ指示書で恒久修正を実装します。',
+    '恒久修正の進め方を決めてください。このアプリのルールでは、文書を1つずつ承認する決まりです。',
+    'PR #2812 は MERGED で着地済みです。前者は既存の判定ロジックを読んで安全性を検証しただけで、見つかった評価順序の問題の修正は次セッションの最優先TODOとして起票済みです。',
+    'PR の作成とマージを CLI の直叩きで着地させました。恒久修正は次セッションの目的として登録済みです。別件としてチケット化しました。'
+  ];
+  for (const text of texts) assert.deepEqual(detect(text), [], text);
+});
+
+test('当初目的の完了証拠か別件証拠の片方だけでは先送りを除外しない', () => {
+  const texts = [
+    'PR #2812 は MERGED です。恒久修正は次セッションで対応します。',
+    '新たに見つかった別件です。恒久修正は次セッションで対応します。'
+  ];
+  for (const text of texts) assert.equal(detect(text).some(hit => hit.pattern === 'P1'), true, text);
+});
+
+test('外的ブロッカーなしで確認を次セッションへ送る真の違反は検出し続ける', () => {
+  const text = 'そのため、まとめる対象が実データ上もう残っていない可能性が高いです。**こちらの対応**: 次のセッションで「その15件が今も未回答のまま残っているか」を確認します。';
+  assert.notDeepEqual(detect(text), [], text);
+});
+
 function crossSessionFixture(t, { excerpt = 'PR #2577 のマージを待っています', completedText, completedAt = '2026-11-20T18:00:00.000Z' }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'deferral-cross-session-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

@@ -177,10 +177,21 @@ export function applyRealLaneHealth(health, home, now = Date.now(), classifiedAu
           state.error += `; 認証系 ${authFailures.length}件 / その他 ${otherFailures.length}件: ${topOther}`;
         }
       } else {
-        state.alive = false;
-        state.reason = 'real_fail_rate';
-        delete state.until;
-        state.error = Object.entries(failures.reduce((reasons, event) => { reasons[event.reason] = (reasons[event.reason] || 0) + 1; return reasons; }, {})).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([r, n]) => `${r} (${n})`).join('; ');
+        // real_fail_rate に先立ち、probeReason/probeEvidence が cooldown/quota を示す場合は
+        // quota_wait にする。そうしないと lane-repair-first-gate が全作業を封鎖する行き止まりになる（2026-11-26）。
+        const probeQuota = quotaFailure(state.probeReason || '') || /quota_wait/i.test(state.probeReason || '')
+          || quotaFailure(state.probeEvidence || '') || /quota_wait/i.test(state.probeEvidence || '');
+        if (probeQuota) {
+          state.alive = false;
+          state.reason = 'quota_wait';
+          state.until = s?.until || state.until || null;
+          state.error = Object.entries(failures.reduce((reasons, event) => { reasons[event.reason] = (reasons[event.reason] || 0) + 1; return reasons; }, {})).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([r, n]) => `${r} (${n})`).join('; ');
+        } else {
+          state.alive = false;
+          state.reason = 'real_fail_rate';
+          delete state.until;
+          state.error = Object.entries(failures.reduce((reasons, event) => { reasons[event.reason] = (reasons[event.reason] || 0) + 1; return reasons; }, {})).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([r, n]) => `${r} (${n})`).join('; ');
+        }
       }
     // A later real success supersedes wallet evidence; gateway probes do not.
     } else if ((s?.billingCalls > (s?.quotaCalls || 0) && s.lastBillingAt >= s.lastOkAt)

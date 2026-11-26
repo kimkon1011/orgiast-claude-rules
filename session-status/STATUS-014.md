@@ -1,7 +1,7 @@
-# session-status  PC=014  host=014DELL  updated 2026-11-27 03:05 JST
+# session-status  PC=014  host=014DELL  updated 2026-11-27 04:05 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\USER\\.claude\\projects", "configDirectory": "C:\\Users\\USER\\
-- 案件数: 17
+- 案件数: 18
 
 - 014・20261126-Reブース未送信フォロー・金さん待ち・4社の下書きと台帳登録は完了。13社は作業用011の返答待ち。送り手の判断は金さん・期限2026-11-28 19:00（011の照会の期限）・次:011の返答（mail-1795689677513-b3673433）を台帳に取り込む。金さんが送り手を決める
 - 014・20261126-ファインスティール-LB定例・金さん待ち・ファインスティールエンジニアリング様 AW東京2027 ブースの宿題は下書きまで完了。申込書の残金請求日（2027/2/30 誤記）の訂正日付と、案件Driveフォルダへの seisaku-team@ 編集権限が必要・期限2026-11-27 18:00（小林様へデザイン案）・次:11/27 夕方に v4 PDF を Drive 共有→小林様送り文を台帳から承認送信。期限台帳へ「ファインスティールエンジニアリング様 デザイン案確認 11/27」「事務局床確認 12/3」「申込書送付 12/4」を登録
@@ -17,6 +17,7 @@
 - 014・session-cap-1126・金さん待ち・最終更新 11/26 19:22、STATUS.mdなし、REPORTあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 014・souko-kyujin-1125・停止・最終更新 11/25 19:19、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
 - 014・standage-1126・金さん待ち・概算2案の返信下書き・内訳・報告が完成（送信・Gmail下書きは未実施）・期限2026-11-27（金）趙様へ概算回答・次:金さんが「2案の金額・値引き15%・B案の照明」を決め、「送ってよい」と返事したら seisaku-team@ から送信して読み戻す
+- 014・T10-vehicle-app・金さん待ち・雛形完成（014ローカル 8c79e55）。非公開GitHub作成と U-1/U-10 は kim-inbox ki-20261126183436-1746 の返事待ち・期限なし・次:返事が来たら gh repo create orgiast/vehicle-management-app --private→push→読み戻し、OAuth と Sheets 実接続を Codex（lane: codex）
 - 014・tasks・停止・最終更新 11/21 22:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 014・unsent-ledger・停止・最終更新 11/26 19:27、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 014・_extract-e20・停止・最終更新 11/26 16:19、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

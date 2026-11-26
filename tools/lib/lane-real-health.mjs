@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { normalizeExecutorStatus } from '../executor-status.mjs';
 import { redactAll } from './redact.mjs';
+import { GATEWAY_MODELS } from '../provider-routing.mjs';
 
 export const LANE_NAMES = ['codex', 'gemini', 'deepseek', 'groq', 'openrouter', 'glm', 'grok', 'mistral', 'kimi'];
 // Routing diagnostics describe other invocations, never this provider's HTTP response.
@@ -50,6 +51,22 @@ export function probeViaChain(text, lane) {
     CHAIN_MARKER.test(line)
     || (!DIAGNOSTIC_LINE.test(line)
       && LANE_NAMES.some(other => other !== lane && new RegExp(`\\b${other}\\b`, 'i').test(stripOpenrouterTag(line, lane)))));
+}
+
+// Match the actual HTTP failure line before routing diagnostics filter OpenRouter out.
+export function retiredModel(text, lane) {
+  for (const line of String(text || '').split(/\r?\n/)) {
+    if (DIAGNOSTIC_LINE.test(line) || CHAIN_MARKER.test(line)) continue;
+    if (!/HTTP\s*404\b/i.test(line) || !/no longer available|No endpoints found/i.test(line)) continue;
+    const match = line.match(/(?:^|\s)([\w-]+):([\w.-]+\/[\w./:-]+)\s+HTTP\s*404\b/i);
+    if (match) {
+      const [, provider, model] = match;
+      if (provider === lane || (provider === 'openrouter' && GATEWAY_MODELS[lane]?.split('/')[0] === model.split('/')[0])) return model;
+      continue;
+    }
+    if (GATEWAY_MODELS[lane]) return GATEWAY_MODELS[lane];
+  }
+  return null;
 }
 
 const AUTH_DOMINANT_RATIO = 0.9;
@@ -131,6 +148,7 @@ export function applyRealLaneHealth(health, home, now = Date.now(), classifiedAu
     if (s) state.real24h = s;
     // A fresh probe of an auto-disabled lane supersedes the events that disabled it.
     if (classifiedAutoProbes?.has(lane)) continue;
+    if (state.reason === 'model_retired') { state.alive = false; continue; }
     if (state.error && probeViaChain(state.error, lane)) { state.viaChain = true; state.reason = 'probe_inconclusive'; }
     if (state.error !== undefined) state.error = laneErrorText(state.error, lane);
     if (state.reason === 'billing' && s?.billingCalls === 0 && s.lastOkAt >= now - 6 * 3600_000 && s.lastOkAt <= now && (state.billingProbeStreak || 0) < 2) state.reason = 'probe_inconclusive';

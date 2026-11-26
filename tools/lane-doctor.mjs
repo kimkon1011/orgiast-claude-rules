@@ -14,7 +14,7 @@ import { isDailyQuotaResponse, nextUtcMidnight } from './lib/provider-daily-cool
 import { notifyKim } from './notify-kim.mjs';
 import { redactAll } from './lib/redact.mjs';
 import { catalog } from './provider-catalog.mjs';
-import { applyRealLaneHealth, laneErrorText, probeViaChain, billingFailure, billingWithQuotaHint, quotaFailure } from './lib/lane-real-health.mjs';
+import { applyRealLaneHealth, laneErrorText, probeViaChain, billingFailure, billingWithQuotaHint, quotaFailure, retiredModel } from './lib/lane-real-health.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { isEnrollToken, validKeyservePcId } from './keyserve-auth.mjs';
 
@@ -144,7 +144,7 @@ export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = tr
       else Object.assign(state, removed);
     }
   }
-  const keys = { gemini: loadGeminiKey(home), deepseek: loadDeepseekKey(home), glm: loadEnvKey(home, 'zai.env', 'ZAI_API_KEY'), groq: loadEnvKey(home, 'groq.env', 'GROQ_API_KEY'), openrouter: loadEnvKey(home, 'openrouter.env', 'OPENROUTER_API_KEY'), mistral: loadEnvKey(home, 'mistral.env', 'MISTRAL_API_KEY'), grok: loadEnvKey(home, 'xai.env', 'XAI_API_KEY') };
+  const keys = { gemini: loadGeminiKey(home), deepseek: loadDeepseekKey(home), glm: loadEnvKey(home, 'zai.env', 'ZAI_API_KEY'), groq: loadEnvKey(home, 'groq.env', 'GROQ_API_KEY'), openrouter: loadEnvKey(home, 'openrouter.env', 'OPENROUTER_API_KEY'), mistral: loadEnvKey(home, 'openrouter.env', 'OPENROUTER_API_KEY'), grok: loadEnvKey(home, 'xai.env', 'XAI_API_KEY') };
   for (const p of [...PROVIDERS, ...OPTIONAL_PROVIDERS.filter(o => keys[o])]) {
     const configured = p === 'codex' ? codexAuthStatusAny(home, { platform, spawnImpl }).login : !!keys[p];
     const previous = { ...(old.lanes?.[p] || {}) }, evidence = probeHistory(previous);
@@ -163,6 +163,7 @@ const paymentFresh = old.lanes?.[p]?.reason === 'dead:payment_required' && Numbe
     else if (routing.demote?.[p]) state = { alive: false, reason: 'demoted', until: routing.demote[p]?.until ?? routing.demote[p] };
     else if (configured && /cooldown|usage[_ ]?limit/i.test(evidence.probeReason || '') && (expiredBlocks.has(p) || !previous.until || time(previous.until) <= now)) state = { alive: false, reason: 'configured:unprobed' };
     else if (configured && old.lanes?.[p]?.reason === 'dead:payment_required') state = { alive: false, reason: 'configured:unprobed' };
+    else if (configured && previous.reason === 'model_retired') state = { ...previous };
     else if (configured && freshProbe(old.lanes?.[p]?.probedAt, now) && !(old.lanes[p].until && time(old.lanes[p].until) <= now)) state = { ...previous };
     else if (configured && evidence.lastProbeOkAt && !/^(?:auth_ok:)?probe_ok(?::stale)?$|^native_ok$/.test(evidence.probeReason || '')) state = { alive: false, reason: 'probe_failed:stale' };
     else if (configured && evidence.lastProbeOkAt) state = { alive: true, reason: 'probe_ok:stale' };
@@ -294,7 +295,7 @@ export function shouldSkipLiveProbe(state = {}, now = Date.now()) {
   const cooldownMs = reason === 'quota_wait' ? 6 * 60 * 60 * 1000 : 60 * 60 * 1000;
   return Number.isFinite(last) && last > 0 && now - last < cooldownMs;
 }
-export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe, nativeTimeoutMs = NATIVE_WRITE_PROBE_TIMEOUT_MS, spawnImpl = spawnSync, providers = PROVIDERS, probeRetries = 1 } = {}) {
+export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe, nativeTimeoutMs = NATIVE_WRITE_PROBE_TIMEOUT_MS, spawnImpl = spawnSync, providers = [], probeRetries = 1 } = {}) {
   const started = Date.now(), dir = path.join(home, '.claude');
   const health = laneDoctorQuick({ home, now, save: false, platform, spawnImpl });
   const previous = readJson(path.join(dir, 'lane-health.json'));
@@ -345,6 +346,11 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
     if (!result) continue;
     if (result.cached && !result.cached.alive) { health.lanes[p] = { ...result.cached, ...probeHistory(result.cached) }; continue; }
     const rawText = result.text || '', text = laneErrorText(rawText, p), stamp = new Date(now).toISOString();
+    const model = retiredModel(rawText, p);
+    if (model) {
+      health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: 'model_retired', model, probedAt: stamp, viaChain: false, probeResult: 'fail', probeEvidence: `HTTP 404: ${model}`, billingProbeStreak: 0, probeReason: 'model_retired', error: `HTTP 404: ${model} is unavailable` };
+      continue;
+    }
     const viaChain = Boolean(result.viaChain || probeViaChain(rawText, p));
     if (viaChain) {
       health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: 'probe_inconclusive', probedAt: stamp, viaChain: true, probeResult: 'inconclusive', billingProbeStreak: 0, error: text };
@@ -445,7 +451,7 @@ export function summarize(health) {
   const substituted = ([, s]) => !s.alive && s.via === 'openrouter' && health.lanes.openrouter?.alive;
   const alive = Object.entries(health.lanes).filter((entry) => entry[1].alive || substituted(entry)).map(([p,s]) => substituted([p, s]) ? `${p} ✅(OpenRouter経由)` : `${p} ✅${s.reason === 'probe_ok:stale' ? `(stale ${Math.floor((time(health.ts) - time(s.lastProbeOkAt)) / 60000)}m)` : ''}`).join(' ') || 'なし';
   const dead = Object.entries(health.lanes).filter((entry) => !entry[1].alive && !substituted(entry)).map(([p,s]) => {
-    const reason = s.reason === 'probe_failed:stale' ? `probe_failed, 前回OK ${s.lastProbeOkAt?.slice(0, 10) || 'なし'}` : s.reason;
+    const reason = s.reason === 'probe_failed:stale' ? `probe_failed, 前回OK ${s.lastProbeOkAt?.slice(0, 10) || 'なし'}` : s.reason === 'model_retired' ? `model_retired: ${s.model}` : s.reason;
     const user = health.deadNeedsUser?.find(x => x.provider === p);
     const next = s.autoProbeStarted ? '自動再確認中' : Number.isFinite(time(s.until)) && time(s.until) > time(health.ts) ? `復帰予定 ${new Date(time(s.until)).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).replace(/^\d{4}\//, '')} JST` : user ? `要対応: ${String(user.fix).replace(/\s+/g, ' ').slice(0, 80)}` : '自動再確認待ち';
     return `${p} ❌(${reason})(${next})`;
@@ -462,9 +468,9 @@ export function directGeminiCliState(gemini = {}, cliAvailable = true) {
 }
 export async function main(args = process.argv.slice(2)) {
   const h = args.indexOf('--home'), home = h >= 0 ? args[h + 1] : laneHome();
-  const p = args.indexOf('--provider'), providers = p >= 0 ? [args[p + 1]] : PROVIDERS;
+  const p = args.indexOf('--provider'), providers = p >= 0 ? [args[p + 1]] : [];
   if (!home) throw new Error('--home requires a directory');
-if (p >= 0 && !PROVIDERS.includes(args[p + 1])) throw new Error('--provider requires a known provider');
+if (p >= 0 && !isLane(args[p + 1])) throw new Error('--provider requires a known provider');
   const result = args.includes('--probe') ? await laneDoctorProbe({ home, providers }) : laneDoctorQuick({ home, save: !args.includes('--read-only') });
   if (!args.includes('--probe') && !args.includes('--read-only')) await notifyLaneStops(result, { home });
   if (args.includes('--json')) console.log(JSON.stringify(result));

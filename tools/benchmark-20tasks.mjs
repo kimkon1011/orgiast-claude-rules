@@ -35,7 +35,7 @@ const PROVIDERS = {
   openrouter: { provider: 'openrouter', model: 'openai/gpt-oss-120b', label: 'OpenRouter GPT OSS 120B' },
   deepseek: { provider: 'openrouter', model: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
   kimi:    { provider: 'openrouter', model: 'moonshotai/kimi-k3', label: 'Kimi K3' },
-  mistral: { provider: 'openrouter', model: 'mistralai/mistral-medium-3.1', label: 'Mistral Medium 3.1' },
+  mistral: { provider: 'openrouter', model: 'mistralai/mistral-medium-3-5', label: 'Mistral Medium 3.5' },
   claude_haiku: { provider: 'openrouter', model: 'anthropic/claude-haiku-5.5', label: 'Claude Haiku 5.5' },
 };
 

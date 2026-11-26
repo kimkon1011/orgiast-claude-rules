@@ -18,7 +18,9 @@ export function runnerArgs(argv = process.argv.slice(2)) {
 }
 
 export function runNode(script, { fatal = true, spawn = spawnSync } = {}) {
-  const result = spawn(process.execPath, [path.join(tools, script), ...runnerArgs()], {
+  // 定期処理は台帳の取込・照合を継続する。送信は従来どおりdry-run固定。
+  const refreshArgs = script === 'unsent-ledger.mjs' ? ['--refresh'] : [];
+  const result = spawn(process.execPath, [path.join(tools, script), ...runnerArgs(), ...refreshArgs], {
     stdio: 'inherit',
     // 補助取込が外側のタスク制限に達する前に戻り、ALERTへ記録できる余裕を残す。
     timeout: fatal ? 10 * 60 * 1000 : 60 * 1000,

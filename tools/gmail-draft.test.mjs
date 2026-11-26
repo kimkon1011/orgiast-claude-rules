@@ -198,6 +198,46 @@ test('dry-run はキーなしで raw とヘッダを返し user 指定も反映'
   }
 });
 
+test('--from オプションで From ヘッダを差し替え、DWD の sub は --user のまま', async () => {
+  // --from keiri2@orgiast.jp で作成した raw の From が keiri2@orgiast.jp、mintToken に渡る user は seisaku-team@orgiast.jp
+  let tokensRequested = [];
+  const result = await cli([...args, '--from', 'keiri2@orgiast.jp', '--dry-run', '--json'], {
+    mintToken: async (options) => {
+      tokensRequested.push(options);
+      return 'test-token';
+    }
+  });
+  assert.equal(result.code, 0);
+  assert.equal(result.calls + tokensRequested.length, 0); // Should not make any network calls
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.user, DEFAULT_USER);
+  assert.equal(report.from, 'keiri2@orgiast.jp');
+  assert.ok(report.headers.includes('From: keiri2@orgiast.jp'));
+});
+
+test('--from 未指定時は From = user（回帰）', async () => {
+  const result = await cli([...args, '--dry-run', '--json']);
+  assert.equal(result.code, 0);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.user, DEFAULT_USER);
+  assert.equal(report.from, DEFAULT_USER);
+  assert.ok(report.headers.includes(`From: ${DEFAULT_USER}`));
+});
+
+test('--from に社外ドメインは configError', async () => {
+  const result = await cli([...args, '--from', 'a@gmail.com', '--dry-run', '--json']);
+  assert.equal(result.code, 2);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.errorKind, 'configuration_error');
+});
+
+test('--from に複数アドレスは configError', async () => {
+  const result = await cli([...args, '--from', 'a@orgiast.jp,b@orgiast.jp', '--dry-run', '--json']);
+  assert.equal(result.code, 2);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.errorKind, 'configuration_error');
+});
+
 test('ブース件名の dry-run は佐藤さんをCCし追加をJSONで報告する', async () => {
   const result = await cli(['--to', 'customer@example.com', '--subject', '展示会ブースのご提案', '--body', 'test', '--dry-run', '--json']);
   assert.equal(result.code, 0);
@@ -335,7 +375,7 @@ test('CLI --delete は宛先ガード不要で JSON を1個出し、送信 URL �
     assert.equal(result.code, 0);
     assert.equal(result.output.length, 1);
     assert.deepEqual(JSON.parse(result.output[0]), {
-      action: 'delete', user: 'shared@orgiast.jp', ok: true, deleted: status === 204, id: 'draft',
+      action: 'delete', user: 'shared@orgiast.jp', from: 'shared@orgiast.jp', ok: true, deleted: status === 204, id: 'draft',
       ...(status === 404 ? { errorKind: 'not_found' } : {}),
     });
     assert.equal(requests.some(r => r.url.includes('/send')), false);
@@ -488,7 +528,7 @@ test('送信は指定アカウントの下書きを取得後 compose で送信�
   // readonly + compose（draft取得）+ compose（draftBody/整合性チェック）
   assert.equal(scopes[0], 'https://www.googleapis.com/auth/gmail.readonly');
   assert.ok(scopes.slice(1).every(s => s === 'https://www.googleapis.com/auth/gmail.compose'));
-  assert.deepEqual(JSON.parse(result.output[0]), { action: 'send', user: 'shared@orgiast.jp', ok: true, sentMessageId: 'sent', threadId: 'thread', to: 'Customer <customer@example.com>', subject: '確認' });
+  assert.deepEqual(JSON.parse(result.output[0]), { action: 'send', user: 'shared@orgiast.jp', from: 'shared@orgiast.jp', ok: true, sentMessageId: 'sent', threadId: 'thread', to: 'Customer <customer@example.com>', subject: '確認' });
 });
 test('送信前に To/Cc/Bcc の内部宛を拒否する（表示名・大小文字・台帳アドレス）', async () => {
   for (const name of ['To', 'cC', 'BCC']) {

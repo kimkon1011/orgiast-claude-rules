@@ -55,6 +55,18 @@ export function isGmailNoise(m, config) {
   return false;
 }
 
+export function isBeeperNoise(item, config) {
+  const text = String(item.text || '').trim(), title = String(item.title || ''), sender = String(item.sender || '');
+  if (!text) return true;
+  const otp = /(認証コード|確認コード|ワンタイム|ログインコード|セキュリティコード|verification code|one[- ]time|passcode|\bOTP\b|is your .*code)/i;
+  if (otp.test(text)) return true;
+  const ad = /(配信停止|メルマガ|キャンペーン実施中|クーポン|ポイント.{0,6}(付与|プレゼント|還元)|セール開催|友だち追加ありがとうございます|公式アカウント)/;
+  if (ad.test(text)) return true;
+  const pats = [...(config.noiseChatTitles || []).map(p => [p, title]), ...(config.noiseBeeperSenders || []).map(p => [p, sender]), ...(config.noiseText || []).map(p => [p, text])];
+  if (pats.some(([p, v]) => new RegExp(p, 'i').test(v))) return true;
+  return false;
+}
+
 export async function collectNew({ state, config, since, until, deps, checkpoint = () => {}, stop = () => {} }) {
   const items = [], failures = [], counts = { beeper: 0, gmail: 0, noise: 0 };
   const add = item => { const key = itemKey(item); if (!state.seen[key]) { state.seen[key] = until; items.push(item); counts[item.kind === 'beeper' ? 'beeper' : 'gmail']++; } };
@@ -79,7 +91,9 @@ export async function collectNew({ state, config, since, until, deps, checkpoint
             for (const m of rows) {
               const at = ts(m.timestamp || m.sortKey);
               if (m.isSender || m.isDeleted || !Number.isFinite(at) || at < beeperFrom - 60_000 || at > until) continue;
-              add({ kind: 'beeper', source: `beeper:${chat.id}`, id: String(m.id || m.sortKey), chatId: chat.id, network, title: chat.title || '', sender: m.senderName || m.senderID || '', time: new Date(at).toISOString(), text: String(m.text || '') });
+              const bItem = { kind: 'beeper', source: `beeper:${chat.id}`, id: String(m.id || m.sortKey), chatId: chat.id, network, title: chat.title || '', sender: m.senderName || m.senderID || '', time: new Date(at).toISOString(), text: String(m.text || '') };
+              if (isBeeperNoise(bItem, config)) { const k = itemKey(bItem); if (!state.seen[k]) { state.seen[k] = until; counts.noise++; } continue; }
+              add(bItem);
             }
             if (!mp.hasMore || rows.some(m => ts(m.timestamp || m.sortKey) < beeperFrom - 60_000)) break;
             mc = mp.oldestCursor; if (!mc || seenCursors.has(mc)) throw new Error('invalid_message_cursor'); seenCursors.add(mc);
@@ -206,7 +220,7 @@ export async function retryDispatches(state, { now, deps, config, dryRun, plans,
     let status = await deps.statusFleet(d.id);
     if (status === 'done') { d.status = 'done'; continue; }
     if (now - d.sentAt < 60 * 60_000 && status !== 'failed' && status !== 'expired') continue;
-    if (d.attempts >= 3) { d.status = 'abandoned'; state.unknown.push({ id: `abandoned:${d.id}`, reason: '渡したが未着手', route: d.route, itemKeys: d.itemKeys, time: new Date(now).toISOString() }); continue; }
+    if (d.attempts >= 3) { d.status = 'abandoned'; state.unknown.push({ id: `abandoned:${d.id}`, reason: '渡したが未着手', route: d.route, itemKeys: d.itemKeys, item: (d.items || [])[0], count: (d.items || []).length, lastError: d.lastError, time: new Date(now).toISOString() }); continue; }
     plans.push({ type: 'retry', route: d.route, itemKeys: d.itemKeys });
     if (!dryRun) {
       try {
@@ -229,14 +243,14 @@ async function dispatchGroup(route, items, { state, config, deps, now, root = re
   return sent;
 }
 
-function digestSlot(now) { const d = new Date(now + 9 * 3600_000); const h = d.getUTCHours(); const slot = [21, 15, 9].find(x => h >= x); if (!slot) return null; return `${d.toISOString().slice(0, 10)}-${String(slot).padStart(2, '0')}`; }
+function digestSlot(now) { const d = new Date(now + 9 * 3600_000); const h = d.getUTCHours(); const slot = [21, 18, 15, 12, 9].find(x => h >= x); if (!slot) return null; return `${d.toISOString().slice(0, 10)}-${String(slot).padStart(2, '0')}`; }
 export function writeDigest({ state, now, reportDir, force = false }) {
   const slot = force ? `forced-${now}` : digestSlot(now); if (!slot || state.digests[slot]) return null;
   const pending = state.unknown.filter(x => !x.reportedAt); if (!pending.length && !force) { state.digests[slot] = now; return null; }
   fs.mkdirSync(reportDir, { recursive: true }); const stamp = new Date(now + 9 * 3600_000).toISOString().replace(/[-:T]/g, '').slice(0, 12); const name = `inbound-router-${stamp.slice(0,8)}-${stamp.slice(8)}.md`; const file = path.join(reportDir, name);
   const jst = new Date(now + 9 * 3600_000), pad = n => String(n).padStart(2, '0'), short = `${pad(jst.getUTCMonth() + 1)}-${pad(jst.getUTCDate())} ${pad(jst.getUTCHours())}:${pad(jst.getUTCMinutes())}`, full = `${jst.getUTCFullYear()}-${pad(jst.getUTCMonth() + 1)}-${pad(jst.getUTCDate())} ${pad(jst.getUTCHours())}:${pad(jst.getUTCMinutes())}`;
   const pcFile = path.join(path.dirname(reportDir), 'gb-offload', 'pc-label.txt'), pc = fs.existsSync(pcFile) ? fs.readFileSync(pcFile, 'utf8').trim() : os.hostname();
-  const rows = pending.map(x => { const i = x.item || x; return `### ${i.title || i.reason || '要判断'}\n- 送信元: ${i.kind === 'gmail' ? i.mailbox : i.network || i.source || ''}\n- 送信者: ${i.sender || ''}\n- 時刻: ${i.time || ''}\n- 本文: ${String(i.text || '').slice(0, 200)}\n- 候補ルート: ${x.candidates?.join(', ') || x.route || 'unknown'}`; }); const status = pending.length ? '要判断' : 'OK', body = `# inbound-router  PC=${pc}  ${full} JST  status=${status}  要判断=${pending.length}\n\n## 🚩要判断\n\n${rows.join('\n\n') || 'なし'}\n`; fs.writeFileSync(file, body); fs.copyFileSync(file, path.join(reportDir, 'latest-inbound-router.md'));
+  const blank = pending.filter(x => !(x.item || x).text && !(x.item || x).title && x.reason === '渡したが未着手'), blankByRoute = blank.reduce((a, x) => (a[x.route || '?'] = (a[x.route || '?'] || 0) + 1, a), {}); const rows = pending.filter(x => !blank.includes(x)).map(x => { const i = x.item || x; return `### ${i.title || i.reason || '要判断'}\n- 送信元: ${i.kind === 'gmail' ? i.mailbox : i.network || i.source || ''}\n- 送信者: ${i.sender || ''}\n- 時刻: ${i.time || ''}\n- 本文: ${String(i.text || '').slice(0, 200)}\n- 候補ルート: ${x.candidates?.join(', ') || x.route || 'unknown'}`; }); const status = pending.length ? '要判断' : 'OK', body = `# inbound-router  PC=${pc}  ${full} JST  status=${status}  要判断=${rows.length}\n\n## 🚩要判断\n\n${rows.join('\n\n') || 'なし'}\n${blank.length ? `\n## 配送失敗（中身なし・担当PCに未着）\n${Object.entries(blankByRoute).map(([r, n]) => `- ${r}: ${n}件`).join('\n')}\n` : ''}`; fs.writeFileSync(file, body); fs.copyFileSync(file, path.join(reportDir, 'latest-inbound-router.md'));
 
   // Try to use PowerShell mutex locking if common.ps1 exists
   const commonPs1 = path.join(path.dirname(reportDir), 'gb-offload', 'common.ps1');
@@ -246,7 +260,7 @@ export function writeDigest({ state, now, reportDir, force = false }) {
     const tempBodyFile = path.join(os.tmpdir(), `inbound-router-body-${process.pid}.txt`);
     fs.writeFileSync(tempBodyFile, body);
     try {
-      const psResult = run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `& { . '${commonPs1}'; GB-WriteReport -Job 'inbound-router' -Body (Get-Content -Path '${tempBodyFile}' -Raw) -Flags ${pending.length} -Status '${status}' }`]);
+      const psResult = run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `& { . '${commonPs1}'; GB-WriteReport -Job 'inbound-router' -Body (Get-Content -Path '${tempBodyFile}' -Raw -Encoding UTF8) -Flags ${rows.length} -Status '${status}' }`]);
       if (psResult.status === 0) {
         pending.forEach(x => { x.reportedAt = now; });
         state.digests[slot] = now;

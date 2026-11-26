@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { directiveId, main, pruneDirectives, resolvePushRepo } from './fleet-directive-send.mjs';
+import {
+  clearStaleIndexLock, directiveId, main, pruneDirectives, resolvePushRepo, STALE_INDEX_LOCK_MS,
+} from './fleet-directive-send.mjs';
 
 function tempRepo() {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-send-'));
@@ -202,4 +204,70 @@ test('main の競合再試行でも両指令と無関係な作業を保持する
   assert.equal(git(f.execTree, 'show', ':other'), 'staged');
   assert.equal(fs.readFileSync(path.join(f.execTree, 'other'), 'utf8'), 'unstaged');
   assert.equal(git(f.execTree, 'stash', 'list'), '');
+});
+
+test('10分超の index.lock は .stale-<epoch> にリネームし削除しない', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-lock-'));
+  const gitDir = path.join(root, '.git');
+  fs.mkdirSync(gitDir);
+  const lock = path.join(gitDir, 'index.lock');
+  fs.writeFileSync(lock, '');
+  const now = 1_700_000_000_000;
+  const logs = [];
+  const renamed = clearStaleIndexLock(root, {
+    now: () => now,
+    maxAgeMs: STALE_INDEX_LOCK_MS,
+    hasGitProcess: () => false,
+    log: (msg) => logs.push(msg),
+    statSync: () => ({ mtimeMs: now - STALE_INDEX_LOCK_MS - 1 }),
+  });
+  assert.equal(renamed, true);
+  assert.equal(fs.existsSync(lock), false);
+  const stale = path.join(gitDir, `index.lock.stale-${now}`);
+  assert.equal(fs.existsSync(stale), true);
+  assert.match(logs[0], /fleet-directive-send: renamed stale index.lock/);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('若い index.lock や稼働中 git があるときはリネームしない', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-lock-young-'));
+  const gitDir = path.join(root, '.git');
+  fs.mkdirSync(gitDir);
+  const lock = path.join(gitDir, 'index.lock');
+  fs.writeFileSync(lock, 'active');
+  const now = 1_700_000_000_000;
+  assert.equal(clearStaleIndexLock(root, {
+    now: () => now,
+    hasGitProcess: () => false,
+    statSync: () => ({ mtimeMs: now - 60_000 }),
+  }), false);
+  assert.equal(fs.existsSync(lock), true);
+  assert.equal(clearStaleIndexLock(root, {
+    now: () => now,
+    hasGitProcess: () => true,
+    statSync: () => ({ mtimeMs: now - STALE_INDEX_LOCK_MS - 1 }),
+  }), false);
+  assert.equal(fs.existsSync(lock), true);
+  assert.equal(fs.readFileSync(lock, 'utf8'), 'active');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('専用クローンの残留 index.lock があっても push 前に rename して配信できる', t => {
+  const f = fixture(t);
+  resolvePushRepo({ repo: f.execTree, home: f.home });
+  const lock = path.join(f.dedicated, '.git', 'index.lock');
+  fs.writeFileSync(lock, '');
+  const old = new Date(Date.now() - STALE_INDEX_LOCK_MS - 60_000);
+  fs.utimesSync(lock, old, old);
+  const logs = [];
+  const d = main(sendArgs, {
+    repo: f.execTree, home: f.home, randomInt: () => 9,
+    spawnSync: checkedSpawn,
+    hasGitProcess: () => false,
+    log: (msg) => logs.push(msg),
+  });
+  assert.deepEqual(ids(f.bare), [d.id]);
+  assert.equal(fs.existsSync(lock), false);
+  assert.ok([...fs.readdirSync(path.join(f.dedicated, '.git'))].some((name) => name.startsWith('index.lock.stale-'));
+  assert.ok(logs.some((msg) => /renamed stale index.lock/.test(msg)));
 });

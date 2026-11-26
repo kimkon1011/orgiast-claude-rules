@@ -27,6 +27,22 @@ export function selectTargetRows({ values, headers = values[0] || [], notifiedRo
   return targets;
 }
 
+async function readInquiryRows(readSheetImpl) {
+  const [columnA, columnM, columnQ] = await Promise.all([
+    readSheetImpl(INQUIRY_SHEET, INQUIRY_TAB, { range: 'A:A' }),
+    readSheetImpl(INQUIRY_SHEET, INQUIRY_TAB, { range: 'M:M' }),
+    readSheetImpl(INQUIRY_SHEET, INQUIRY_TAB, { range: 'Q:Q' }),
+  ]);
+  const length = Math.max(columnA.length, columnM.length, columnQ.length);
+  return Array.from({ length }, (_, index) => {
+    const row = [];
+    row[0] = columnA[index]?.[0] ?? '';
+    row[12] = columnM[index]?.[0] ?? '';
+    row[16] = columnQ[index]?.[0] ?? '';
+    return row;
+  });
+}
+
 function botToken() {
   return process.env.DISCORD_BOT_TOKEN?.trim() || fs.readFileSync(path.join(os.homedir(), '.claude', 'orgiast-discord-bot-token.txt'), 'utf8').trim();
 }
@@ -97,7 +113,7 @@ export function warnKimInbox(text, dedupeKey, { spawnImpl = spawnSync } = {}) {
   const bodyFile = path.join(os.tmpdir(), `inquiry-discord-watch-${process.pid}-${Date.now()}.txt`);
   fs.writeFileSync(bodyFile, text, 'utf8');
   try {
-    const result = spawnImpl(process.execPath, [fileURLToPath(new URL('./kim-inbox.mjs', import.meta.url)), '--add', 'ask', '--body-file', bodyFile, '--dedupe-key', dedupeKey, '--source', 'inquiry-discord-watch'], { encoding: 'utf8', windowsHide: true, timeout: 60_000 });
+    const result = spawnImpl(process.execPath, [fileURLToPath(new URL('./kim-inbox.mjs', import.meta.url)), '--add', 'info', '--body-file', bodyFile, '--dedupe-key', dedupeKey, '--source', 'inquiry-discord-watch'], { encoding: 'utf8', windowsHide: true, timeout: 60_000 });
     if (result.status !== 0) process.stderr.write(`kim-inbox warning failed: ${String(result.stderr || '').trim()}\n`);
   } finally { fs.rmSync(bodyFile, { force: true }); }
 }
@@ -110,7 +126,7 @@ export async function runNormal({ fetchImpl = globalThis.fetch, readSheetImpl = 
     writeState({ lastNotifiedRow: null, lastRunAt: now.toISOString(), lastPostedAt: null, lastError: error.message }, home);
     return { exitCode: 1, posted: 0, error };
   }
-  const values = await readSheetImpl(INQUIRY_SHEET, INQUIRY_TAB);
+  const values = await readInquiryRows(readSheetImpl);
   const targets = selectTargetRows({ values, headers: values[0] || [], notifiedRows: history.notifiedRows, lastNotifiedRow: history.lastNotifiedRow, limit });
   if (dryRun) {
     for (const target of targets) console.log(`${target.rowNumber}\t${notificationContent(target.rowNumber).split('\n')[0]}`);
@@ -139,7 +155,7 @@ export async function runNormal({ fetchImpl = globalThis.fetch, readSheetImpl = 
     warnImpl(`問い合わせDiscord見張り: GAS停止の疑い\nDiscord上の最終通知から6時間以上空いた後、第2系統が${posted}件投稿しました。`, `inquiry-discord-watch-gas-down-${now.toISOString().slice(0, 10)}`);
   }
   writeState({ lastNotifiedRow: postedRows.length ? Math.max(history.lastNotifiedRow, ...postedRows) : history.lastNotifiedRow, lastRunAt: now.toISOString(), lastPostedAt, lastError }, home);
-  return { exitCode: lastError ? 1 : 0, posted, targets };
+  return { exitCode: lastError ? 1 : 0, posted, postedRows, targets };
 }
 
 export function parseArgs(args) {
@@ -175,6 +191,7 @@ export async function main(args = process.argv.slice(2), dependencies = {}) {
     return 0;
   }
   const result = await runNormal({ ...dependencies, fetchImpl, token, limit: options.limit, dryRun: options.dryRun });
+  if (!options.dryRun) console.log(`posted ${result.posted}${result.postedRows?.length ? `: ${result.postedRows.join(',')}` : ''}`);
   return result.exitCode;
 }
 

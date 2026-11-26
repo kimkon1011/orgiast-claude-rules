@@ -86,15 +86,17 @@ export function xlsxRows(buffer, tab) {
   }
   return Array.from({ length: rows.length }, (_, i) => rows[i] || []);
 }
-export async function readSheet(sheetId, tab, { getToken = getDriveToken, fetchImpl = gwsFetch, signal } = {}) {
+export async function readSheet(sheetId, tab, { getToken = getDriveToken, fetchImpl = gwsFetch, signal, range } = {}) {
   const request = async (token, url) => {
     const r = await fetchImpl(url, { headers: { Authorization: `Bearer ${token}` }, signal: signal || AbortSignal.timeout(30000) });
     if (!r.ok) throw Error(`シート取得 HTTP ${r.status}`);
     return r;
   };
   try {
-    const token = await getToken({ scope: 'https://www.googleapis.com/auth/spreadsheets.readonly', signal });
-    const response = await request(token, `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(`'${tab.replace(/'/g, "''")}'`)}`);
+    // The keyless GWS proxy only exposes the spreadsheets scope; this remains a GET-only read.
+    const token = await getToken({ scope: 'https://www.googleapis.com/auth/spreadsheets', signal });
+    const a1 = `'${tab.replace(/'/g, "''")}'${range ? `!${range}` : ''}`;
+    const response = await request(token, `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(a1)}`);
     return (await response.json()).values || [];
   } catch (directError) {
     try {

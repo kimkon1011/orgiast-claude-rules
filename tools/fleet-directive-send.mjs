@@ -6,6 +6,9 @@ import os from 'node:os';
 import { spawnSync as defaultSpawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 
+/** 10分以上古い index.lock は残骸扱い（稼働中の git は秒単位で解放する）。 */
+export const STALE_INDEX_LOCK_MS = 10 * 60 * 1000;
+
 export function directiveId(kind, date = new Date(), randomInt = (max) => crypto.randomInt(max)) {
   const stamp = date.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
   return `${kind}-${stamp}-${String(randomInt(10_000)).padStart(4, '0')}`;
@@ -20,6 +23,62 @@ export function pruneDirectives(directives, now = Date.now()) {
   return directives.filter((item) => !item.processed && !item.processedAt && (!item.expiresAt || Date.parse(item.expiresAt) >= now));
 }
 
+function normalizeRepoPath(dir) {
+  return path.resolve(dir).replace(/\\/g, '/').toLowerCase();
+}
+
+/**
+ * そのリポジトリを cwd/引数に含む git プロセスがあるか。
+ * Windows は tasklist の CommandLine が取れないため PowerShell CIM を使う。
+ */
+export function gitProcessTouchesRepo(repoDir, { spawnSync = defaultSpawnSync } = {}) {
+  const needle = normalizeRepoPath(repoDir);
+  if (process.platform === 'win32') {
+    const result = spawnSync(
+      'powershell.exe',
+      ['-NoProfile', '-Command',
+        "Get-CimInstance Win32_Process -Filter \"name='git.exe'\" | Select-Object -ExpandProperty CommandLine"],
+      { encoding: 'utf8', windowsHide: true, timeout: 15_000 },
+    );
+    const out = `${result.stdout || ''}`;
+    return out.replace(/\\/g, '/').toLowerCase().includes(needle);
+  }
+  const result = spawnSync('ps', ['-eo', 'args='], { encoding: 'utf8', timeout: 15_000 });
+  const out = `${result.stdout || ''}`;
+  return out.toLowerCase().includes(needle);
+}
+
+/**
+ * commit/push 前に古い index.lock を削除せず `.stale-<epoch>` へリネームする。
+ * 10分未満、またはそのリポを触る git が動いているときは触らない。
+ */
+export function clearStaleIndexLock(repoDir, {
+  now = Date.now,
+  maxAgeMs = STALE_INDEX_LOCK_MS,
+  log = (msg) => console.error(msg),
+  hasGitProcess = gitProcessTouchesRepo,
+  spawnSync = defaultSpawnSync,
+  renameSync = fs.renameSync,
+  statSync = fs.statSync,
+} = {}) {
+  const lock = path.join(repoDir, '.git', 'index.lock');
+  let stat;
+  try { stat = statSync(lock); }
+  catch { return false; }
+  const ageMs = now() - stat.mtimeMs;
+  if (ageMs < maxAgeMs) return false;
+  if (hasGitProcess(repoDir, { spawnSync })) return false;
+  const epoch = now();
+  const stale = `${lock}.stale-${epoch}`;
+  try {
+    renameSync(lock, stale);
+    log(`fleet-directive-send: renamed stale index.lock -> ${path.basename(stale)} (age ${Math.round(ageMs / 60000)}m)`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function git(dir, args, spawnSync = defaultSpawnSync) {
   const result = spawnSync('git', args, {
     cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], shell: false, windowsHide: true, encoding: 'utf8', timeout: 120_000,
@@ -32,10 +91,15 @@ function git(dir, args, spawnSync = defaultSpawnSync) {
   return (result.stdout || '').trim();
 }
 
-export function resolvePushRepo({ repo, home = os.homedir(), spawnSync = defaultSpawnSync, cloneUrl } = {}) {
+export function resolvePushRepo({
+  repo, home = os.homedir(), spawnSync = defaultSpawnSync, cloneUrl,
+  clearStaleLock = clearStaleIndexLock, now = Date.now, log, hasGitProcess,
+} = {}) {
+  const reclaim = (target) => clearStaleLock(target, { spawnSync, now, log, hasGitProcess });
   try {
     if (git(repo, ['symbolic-ref', '--short', '-q', 'HEAD'], spawnSync) === 'main'
       && git(repo, ['rev-parse', '--is-inside-work-tree'], spawnSync) === 'true') {
+      reclaim(repo);
       return { dir: repo, dedicated: false };
     }
   } catch { /* detached HEAD or a non-git directory */ }
@@ -48,6 +112,8 @@ export function resolvePushRepo({ repo, home = os.homedir(), spawnSync = default
       fs.mkdirSync(path.dirname(dir), { recursive: true });
       git(path.dirname(dir), ['clone', '--branch', 'main', '--single-branch', cloneUrl || 'https://github.com/kimkon1011/orgiast-claude-rules.git', dir], spawnSync);
     } else {
+      // Residual index.lock from a killed git blocks fetch/checkout/push.
+      reclaim(dir);
       // This clone is exclusively for directive delivery. Never use it for other work:
       // abandoned local commits and files are deliberately discarded on each send.
       git(dir, ['fetch', 'origin', 'main'], spawnSync);
@@ -58,6 +124,7 @@ export function resolvePushRepo({ repo, home = os.homedir(), spawnSync = default
   } catch (error) {
     try {
       if (fs.existsSync(dir)) {
+        reclaim(dir);
         git(dir, ['reset', '--hard', 'origin/main'], spawnSync);
         git(dir, ['clean', '-fd'], spawnSync);
       }
@@ -110,7 +177,16 @@ export function main(argv = process.argv.slice(2), options = {}) {
   if (!push) {
     writeDirective(repo, directive);
   } else {
-    const { dir, dedicated } = resolvePushRepo({ repo, home: options.home, cloneUrl: options.cloneUrl, spawnSync });
+    const { dir, dedicated } = resolvePushRepo({
+      repo, home: options.home, cloneUrl: options.cloneUrl, spawnSync,
+      clearStaleLock: options.clearStaleLock, now: options.now, log: options.log,
+      hasGitProcess: options.hasGitProcess,
+    });
+    // commit/push 直前にもう一度（resolve 後に残留した lock を拾う）
+    (options.clearStaleLock || clearStaleIndexLock)(dir, {
+      spawnSync, now: options.now || Date.now, log: options.log,
+      hasGitProcess: options.hasGitProcess,
+    });
     const run = args => git(dir, args, spawnSync);
     const commit = () => {
       writeDirective(dir, pruneOnly ? undefined : directive);

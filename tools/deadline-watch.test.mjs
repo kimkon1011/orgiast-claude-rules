@@ -16,9 +16,10 @@ function calendarMock(initial = []) {
   const entries = structuredClone(initial), calls = [];
   return { entries, calls, request: async (url, options) => {
     calls.push({url, ...options});
-    assert.notEqual(options.method, 'DELETE');
+    if (options.method) assert.equal(new URL(url).searchParams.get('sendUpdates'), 'none');
     const u = new URL(url), parts = u.pathname.split('/'), calendar = decodeURIComponent(parts[4]), id = parts[6];
     const item = entries.find(x => x.calendar === calendar && x.event.id === id);
+    if (options.method === 'DELETE') { assert.ok(item); entries.splice(entries.indexOf(item), 1); return null; }
     if (options.method === 'POST' && parts[7] === 'move') { assert.ok(item); item.calendar = u.searchParams.get('destination'); return structuredClone(item.event); }
     if (options.method === 'PATCH') { assert.ok(item); Object.assign(item.event, options.body); return structuredClone(item.event); }
     if (options.method === 'POST') { entries.push({calendar,event:{...options.body}}); return options.body; }
@@ -90,7 +91,7 @@ test('両側の二重をmoveして重複保存、再実行でもprimaryへ戻さ
   const event=id=>({id,summary:'旧件名',start:{date:base.due},extendedProperties:{private:{deadlineId:base.id}}});
   const mock=calendarMock([{calendar:'kim@orgiast.jp',event:event('a')},{calendar:AI_CALENDAR,event:event('b')}]);
   await syncCalendar({...base,assignee:'Claude'},{config:calendarConfig,state:{},request:mock.request});
-  assert.ok(mock.entries.every(x=>x.calendar===AI_CALENDAR));assert.equal(mock.entries.filter(x=>x.event.summary.startsWith('【重複】')).length,1);
+  assert.ok(mock.entries.every(x=>x.calendar===AI_CALENDAR));assert.equal(mock.entries.filter(x=>x.event.extendedProperties.private.deadlineArchive==='duplicate').length,1);
   await syncCalendar({...base,assignee:'Claude'},{config:calendarConfig,state:{},request:mock.request});assert.equal(mock.entries.length,2);
   assert.ok(mock.calls.filter(x=>x.method).every(x=>x.url.includes('sendUpdates=none')));
 });
@@ -103,12 +104,12 @@ test('Calendar 409は対象をGETし、404や別予定ならPATCHしない',asyn
   await assert.rejects(syncCalendar(base,{config:calendarConfig,state:{},request}),e=>e.status===404);
   assert.ok(!calls.some(x=>x.method==='PATCH'));
 });
-test('見送りの備考がある予定はタスク保存し、次回も削除しない',async()=>{
-  const mock=calendarMock([{calendar:'kim@orgiast.jp',event:{id:'cancel',start:{date:base.due},summary:'旧予定',extendedProperties:{private:{deadlineId:base.id}}}}]);
+test('見送り備考だけでは削除せず、台帳閉鎖後はarchiveも削除する',async()=>{
+  const mock=calendarMock([{calendar:'kim@orgiast.jp',event:{id:'cancel',start:{date:base.due},summary:'旧予定',extendedProperties:{private:{deadlineId:base.id,deadlineSheetId:config.sheetId}}}}]);
   await syncCalendar({...base,notes:'2026-11-13 先方見送り'},{config:calendarConfig,state:{},request:mock.request});
   assert.equal(mock.entries[0].calendar,AI_CALENDAR);assert.equal(mock.entries[0].event.extendedProperties.private.deadlineArchive,'cancelled');
-  const summary=mock.entries[0].event.summary;
-  await syncCalendar({...base,status:'不要'},{config:calendarConfig,state:{},request:mock.request});assert.equal(mock.entries[0].event.summary,summary);
+  assert.equal(mock.calls.filter(c=>c.method==='DELETE').length,0);
+  await syncCalendar({...base,status:'不要'},{config:calendarConfig,state:{},request:mock.request});assert.equal(mock.entries.length,0);
 });
 function homeFor(t) { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-watch-')); t.after(() => fs.rmSync(home, { recursive: true, force: true })); return home; }
 
@@ -129,7 +130,7 @@ test('段階、担当、対応中、延期、完了を正しく判定', () => {
   assert.throws(() => parseArgs(['--fixture','x']));
 });
 
-test('Calendar: 通常の追加・完了行も削除せず移動', async () => {
+test('Calendar: 通常の追加・完了行は通知なしで削除', async () => {
   const calls = [], state = {};
   const calendarConfig = { ...config, calendar: { enabled: true, calendarId: 'kim@orgiast.jp' } };
   const request = async (url, options) => { calls.push([url, options]); return options.method ? {} : { items: [] }; };
@@ -139,11 +140,10 @@ test('Calendar: 通常の追加・完了行も削除せず移動', async () => {
   assert.equal(body.extendedProperties.private.deadlineId, base.id);
   assert.deepEqual(body.reminders.overrides.map(x => x.minutes), [10080,1440]);
   assert.match(calls[0][0], /privateExtendedProperty=deadlineId%3AD|privateExtendedProperty=deadlineId%3D/);
-  // 完了行はタスクへ移動し保存する。
+  // 完了行は名前空間と deadlineId が一致する予定だけ削除する。
   const closedCalls = [];
-  await syncCalendar({ ...base, status: '完了' }, { config: calendarConfig, state: {}, request: async (u,o) => { closedCalls.push(o); return o.method ? { id:'old' } : { items: u.includes(encodeURIComponent('kim@orgiast.jp')) ? [{ id: 'old' }] : [] }; } });
-  assert.equal(closedCalls.at(-1).method, 'PATCH');
-  assert.ok(closedCalls.every(o => o.method !== 'DELETE'));
+  await syncCalendar({ ...base, status: '完了' }, { config: calendarConfig, state: {}, request: async (u,o) => { closedCalls.push(o); return o.method ? null : { items: u.includes(encodeURIComponent('kim@orgiast.jp')) ? [{ id: 'old', extendedProperties:{private:{deadlineId:base.id,deadlineSheetId:config.sheetId}} }] : [] }; } });
+  assert.equal(closedCalls.at(-1).method, 'DELETE');
 });
 
 test('Calendar: 既存説明欄の案件名を自動更新でも引き継ぐ', async () => {
@@ -151,7 +151,7 @@ test('Calendar: 既存説明欄の案件名を自動更新でも引き継ぐ', a
   const calendarConfig = { ...config, calendar: { enabled: true, calendarId: 'kim@orgiast.jp' } };
   const request = async (url, options) => {
     calls.push([url, options]);
-    return options.method ? { id: 'old' } : { items: url.includes(encodeURIComponent('kim@orgiast.jp')) && url.includes('privateExtendedProperty') ? [{ id: 'old', summary: '【東邦鋼業・SC鋼板】【期限】回答', description: '案件: 東邦鋼業・SC鋼板\n旧説明' }] : [] };
+    return options.method ? { id: 'old' } : { items: url.includes(encodeURIComponent('kim@orgiast.jp')) && url.includes('privateExtendedProperty') ? [{ id: 'old', extendedProperties:{private:{deadlineId:base.id}}, summary: '【東邦鋼業・SC鋼板】【期限】回答', description: '案件: 東邦鋼業・SC鋼板\n旧説明' }] : [] };
   };
   await syncCalendar({ ...base, company: '', caseName: '' }, { config: calendarConfig, state: {}, request });
   const patch = calls.find(([, options]) => options.method === 'PATCH')[1].body;

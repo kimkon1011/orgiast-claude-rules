@@ -39,3 +39,5 @@
 送信直前に `node tools/share-before-send-gate.mjs --external-body-file <本文ファイル>` を実行する。本文中の各URLについて、(1) DriveのMIMEがGoogle形式またはPDF（pptx/xlsx/docx等・Office書き出し・`rtpof=true`は不可）、(2) `anyoneWithLink` の `reader`（検索非公開）、(3) cookie・認証ヘッダーなしの取得がHTTP 200でログイン画面へ転送されない、の3点を確認する。どれかNG・確認不能なら非0終了し、送信しない。個人共有の履歴・過去の成功・単なるHTTP 200で代用しない。公開ビューア内の「ログイン」リンクとログイン必須画面は区別する。
 
 くらしのマーケットのローカル送信スクリプトは `tools/curama-share-gate-adapter.mjs` の `assertCuramaLinks(page)` を送信クリックの直前で `await` する。実際の入力欄を検証し、例外時はその送信を止める。ゲートの合格は送信許可を与えるものではなく、宛先・全文確認・既存の送信承認ルールは引き続き適用する。008での配線差分は `docs/curama-share-gate-008.patch` を参照。
+
+- Discordの面談設定などから自動で作る応募者・求人の面談予定は、seisaku-team@orgiast.jp のカレンダーに作り、kim@orgiast.jp は参加者に入れず、kim のカレンダーにも作らない。

@@ -11,6 +11,7 @@ export function calendarIds(config) {
 export const normalizeCase = value => String(value || '').normalize('NFKC').toLowerCase().replace(/株式会社|有限会社|医療法人|\(株\)|様|[\s\p{P}\p{S}]/gu, '');
 const validCustomer = value => value && !/^(?:株式会社)?オージャスト(?:株式会社)?$|未特定|^顧客未解決$/.test(value);
 export function customerName(row, existing = [], config = {}) {
+  if (row.kind === '車検' || row.vehicleName) return '社内・車両';
   const codes = String([row.title, row.action, row.quote, row.notes].join(' ')).match(/\bC\d{4}\b/g) || [];
   const mapped = config.calendar?.customerNames?.[row.id] || codes.map(c => config.calendar?.caseNames?.[c]).find(Boolean);
   if (validCustomer(mapped)) return mapped;
@@ -53,15 +54,19 @@ export function readableEvent(row, config, existing = []) {
   const customer = customerName(row, existing, config);
   if (!customer) return null;
   const all = [row.title, row.action].join(' ');
-  const codes = [...new Set([...(all.match(/\bC\d{4}\b/g) || []), row.id].filter(Boolean))];
-  let content = String(row.title || '').replace(/【(?:期限|案件未特定|重複)】/g, '').trim();
-  if (/^(?:C\d{4}|D-\d+|S-[A-Z0-9]+)\b/.test(content)) content = row.action || content || row.quote;
-  content = String(content || row.action || row.quote || '対応内容を確認').replace(/\b(?:C\d{4}|D-\d+|S-[A-Z0-9]+)\b/g, '').replace(/https?:\/\/\S+/g, '').replace(/^[\s:：/・]+|[\s:：/・]+$/g, '').trim();
+  const codePattern = /\b(?:C\d{4}|D-\d+|S-[A-Z0-9]+|V\d+|EIG-[A-Z0-9]+)\b/g;
+  const codes = [...new Set([...(all.match(codePattern) || []), row.id].filter(Boolean))];
+  const clean = text => String(text || '').replace(/【(?:期限|案件未特定|重複)】/g, '').replace(codePattern, '').replace(/[（(]\s*[）)]/g, '').replace(/https?:\/\/\S+/g, '').replace(/^[\s:：/・\-]+|[\s:：/・\-]+$/g, '').trim();
+  let content = clean(row.title);
+  const action = clean(row.action);
+  if (action && !content.includes(action)) content = [content, action].filter(Boolean).join('・');
   const customerPrefix = customer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   content = content.replace(new RegExp(`^${customerPrefix}(?:様)?[\\s:：]+`), '');
   if (/(?:金さん|金功勇|kim)\s*(?:が)?\s*送信(?:を)?承認/iu.test(`${row.action || ''} ${row.assignee || ''} ${row.notes || ''}`) && !/承認/.test(content)) content += 'を送信承認';
   content ||= '対応内容を確認';
-  const label = /^(?:社内|社内開発|労働審判)$/.test(customer) || customer.endsWith('様') ? customer : `${customer}様`;
+  const label = /^社内|^(?:株式会社)?オージャスト/.test(customer)
+    ? (row.kind === '車検' || /車両/.test(customer) ? '社内・車両' : '社内')
+    : customer === '労働審判' || customer.endsWith('様') ? customer : `${customer}様`;
   const url = `https://docs.google.com/spreadsheets/d/${config.sheetId}/edit?authuser=kim@orgiast.jp`;
   return { customer, summary: `【${label}】${content}（${codes.join(' / ')}）`, description: `案件: ${customer}\n担当: ${row.assignee || 'kim'}\nやること: ${row.action || content}\n期限台帳: ${url}\nコード: ${codes.join(' / ')}\n出典: ${row.sourceId || row.quote || ''}` };
 }
@@ -75,7 +80,7 @@ export async function listCalendarEvents(request, calendar, params) {
   return items.filter(e => e.status !== 'cancelled');
 }
 export function belongsToLedger(event, config) {
-  const sheet = event.extendedProperties?.private?.deadlineSheetId || String(event.description || '').match(/spreadsheets\/d\/([\w-]+)/)?.[1];
+  const sheet = event.extendedProperties?.private?.deadlineSheetId || String(event.description || '').match(/spreadsheets\/(?:a\/[^/]+\/)?d\/([\w-]+)/)?.[1];
   return !sheet || sheet === config.sheetId;
 }
 export async function moveCalendarEvent(request, event, from, to) {

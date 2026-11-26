@@ -1,6 +1,6 @@
-# session-status  PC=008  host=008XPS8300  updated 2026-11-26 09:08 JST
+# session-status  PC=008  host=008XPS8300  updated 2026-11-26 10:08 JST
 
-- claude auth: { "loggedIn": false, "authMethod": "none", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "configDirectory": "C:\\Users\\user\\.cla
+- claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "configDirectory": "C:\\Users\\user\\
 - 案件数: 12
 
 - 008・account-inventory-1123・完了・最終更新 11/23 21:37、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし

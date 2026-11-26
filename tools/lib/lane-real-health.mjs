@@ -179,8 +179,8 @@ export function applyRealLaneHealth(health, home, now = Date.now(), classifiedAu
       } else {
         // real_fail_rate に先立ち、probeReason/probeEvidence が cooldown/quota を示す場合は
         // quota_wait にする。そうしないと lane-repair-first-gate が全作業を封鎖する行き止まりになる（2026-11-26）。
-        const probeQuota = quotaFailure(state.probeReason || '') || /quota_wait/i.test(state.probeReason || '')
-          || quotaFailure(state.probeEvidence || '') || /quota_wait/i.test(state.probeEvidence || '');
+        const probeQuota = quotaFailure(state.probeReason || '') || /quota_wait|cooldown|usage_limit/i.test(state.probeReason || '')
+          || quotaFailure(state.probeEvidence || '') || /quota_wait|cooldown|usage_limit/i.test(state.probeEvidence || '');
         if (probeQuota) {
           state.alive = false;
           state.reason = 'quota_wait';

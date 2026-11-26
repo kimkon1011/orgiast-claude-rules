@@ -46,82 +46,55 @@ function readKeyserveStatus(text) {
     };
   } catch { return {}; }
 }
-function cheapAiCounts(file) {
-  const counts = {};
-  let text = '';
-  try { text = fs.readFileSync(file, 'utf8'); } catch { return counts; }
-  for (const line of text.split(/\r?\n/)) {
-    let row; try { row = JSON.parse(line); } catch { continue; }
-    const provider = String(row.provider ?? row.tool ?? '').trim().toLowerCase();
-    if (provider) counts[provider] = (counts[provider] || 0) + 1;
-  }
-  return counts;
-}
-
 /**
- * 集計当月（JSTの暦月）分のAI別件数と推定費用を返す
+ * executor利用履歴を累計とJST当月に集計する。
  *
- * @param {string} file - executor-usage.jsonlファイルパス
- * @param {Date} now - 現在時刻（テスト用に指定可能）
- * @returns {{ month: string, rows: Array<{ provider: string, count: number, usd: number }>, totalUsd: number }}
+ * @param {string} file executor-usage.jsonlのパス
+ * @param {Date} now 集計時刻
+ * @returns {{ counts: Record<string, number>, month: { month: string, rows: Array<{ provider: string, count: number, usd: number }>, totalUsd: number } }}
  */
-function cheapAiMonthUsage(file, now = new Date()) {
-  // JSTの月初と翌月初を計算
-  const jstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-  const year = jstNow.getUTCFullYear();
-  const month = jstNow.getUTCMonth(); // 0-11
-  const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
-
-  // 当月の開始と終了時刻（UTC）
-  const monthStart = new Date(Date.UTC(year, month, 1) - 9 * 60 * 60 * 1000); // 月1日の00:00 JST = 前日15:00 UTC
-  const monthEnd = new Date(Date.UTC(year, month + 1, 1) - 9 * 60 * 60 * 1000); // 翌月1日の00:00 JST = 当月末日15:00 UTC
-
+export function summarizeExecutorUsage(file, now = new Date()) {
+  const counts = {};
   const usage = {};
   let totalUsd = 0;
+  const jstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const year = jstNow.getUTCFullYear();
+  const monthIndex = jstNow.getUTCMonth();
+  const month = `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
+  const monthStart = Date.UTC(year, monthIndex, 1) - 9 * 60 * 60 * 1000;
+  const monthEnd = Date.UTC(year, monthIndex + 1, 1) - 9 * 60 * 60 * 1000;
   let text = '';
-
-  try { text = fs.readFileSync(file, 'utf8'); } catch { return { month: monthStr, rows: [], totalUsd: 0 }; }
-
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return { counts, month: { month, rows: [], totalUsd: 0 } }; }
   for (const line of text.split(/\r?\n/)) {
     let row; try { row = JSON.parse(line); } catch { continue; }
-
-    // tが存在しない、または無効な場合はスキップ
-    if (!row.t || typeof row.t !== 'string') continue;
-
-    const timestamp = new Date(row.t);
-    // 当月以外のデータはスキップ
-    if (timestamp < monthStart || timestamp >= monthEnd) continue;
-
     const provider = String(row.provider ?? row.tool ?? '').trim().toLowerCase();
     if (!provider) continue;
+    counts[provider] = (counts[provider] || 0) + 1;
 
-    // プロバイダーごとの集計
-    if (!usage[provider]) {
-      usage[provider] = { count: 0, usd: 0 };
-    }
+    const timestamp = Date.parse(row.t);
+    if (!Number.isFinite(timestamp) || timestamp < monthStart || timestamp >= monthEnd) continue;
 
+    if (!usage[provider]) usage[provider] = { count: 0, usd: 0 };
     usage[provider].count += 1;
-    // usdが有効な数値の場合のみ加算
     if (typeof row.usd === 'number' && Number.isFinite(row.usd)) {
       usage[provider].usd += row.usd;
       totalUsd += row.usd;
     }
   }
 
-  // プロバイダーごとに集計結果を作成
   const rows = Object.entries(usage).map(([provider, data]) => ({
     provider,
     count: data.count,
-    usd: Number(data.usd.toFixed(2)) // 小数点2桁に丸める
+    usd: Number(data.usd.toFixed(2)),
   }));
+  rows.sort((a, b) => b.usd - a.usd || b.count - a.count);
+  return { counts, month: { month, rows, totalUsd: Number(totalUsd.toFixed(2)) } };
+}
 
-  // usd降順、同額の場合はcount降順でソート
-  rows.sort((a, b) => {
-    if (b.usd !== a.usd) return b.usd - a.usd;
-    return b.count - a.count;
-  });
-
-  return { month: monthStr, rows, totalUsd: Number(totalUsd.toFixed(2)) };
+export function formatCheapAiMonth(month) {
+  return month.rows.length > 0
+    ? `${month.month} ${month.rows.map(row => `${row.provider}:${row.count}($${row.usd.toFixed(2)})`).join(', ')}`
+    : `${month.month} なし`;
 }
 
 function finiteNumber(value) {
@@ -193,8 +166,7 @@ async function main() {
   const label = labelResolution.label || 'unknown';
   if (!dryRun && !noJitter) await sleep(labelJitterMs(label));
   const executorUsageFile = path.join(claudeDir, 'executor-usage.jsonl');
-  const counts = cheapAiCounts(executorUsageFile);
-  const monthUsage = cheapAiMonthUsage(executorUsageFile);
+  const { counts, month: monthUsage } = summarizeExecutorUsage(executorUsageFile);
   const mappedName = Object.prototype.hasOwnProperty.call(map, label) && typeof map[label] === 'string' ? map[label] : null;
   const topModel = Array.isArray(reporter.topModels) && reporter.topModels[0] ? reporter.topModels[0].model : '';
   const opusRatio = finiteNumber(reporter.opusRatio);
@@ -243,10 +215,7 @@ async function main() {
     budgetPacePct: budget.budgetPacePct,
     settingsModel: typeof settings.model === 'string' && settings.model.trim() ? settings.model.trim() : '未設定(=Opus)',
     cheapAiUse: Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([provider, count]) => `${provider}:${count}`).join(', ') || 'なし',
-    // 当月のAI別件数と推定費用
-    cheapAiMonth: monthUsage.rows.length > 0
-      ? `${monthUsage.month} ${monthUsage.rows.map(r => `${r.provider}:${r.count}($${r.usd.toFixed(2)})`).join(', ')}`
-      : `${monthUsage.month} なし`,
+    cheapAiMonth: formatCheapAiMonth(monthUsage),
     cheapAiMonthUsd: monthUsage.totalUsd,
     codexLogin: formatCodexLogin(codexAuthStatus(home), adoption.codexAuthed),
     fable5: fableDetected ? '検出' : fableKnown ? '未検出' : '判定不能',

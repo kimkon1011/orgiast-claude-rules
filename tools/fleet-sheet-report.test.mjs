@@ -6,11 +6,11 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
-import { post } from './fleet-sheet-report.mjs';
+import { formatCheapAiMonth, post, summarizeExecutorUsage } from './fleet-sheet-report.mjs';
 
 const script = new URL('./fleet-sheet-report.mjs', import.meta.url);
 
-function reportPayload(files = {}, codexAuth, now = null) {
+function reportPayload(files = {}, codexAuth) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-sheet-report-'));
   const claude = path.join(home, '.claude');
   fs.mkdirSync(claude, { recursive: true });
@@ -29,10 +29,6 @@ function reportPayload(files = {}, codexAuth, now = null) {
       fs.writeFileSync(path.join(home, '.codex', 'auth.json'), JSON.stringify(codexAuth));
     }
     const env = { ...process.env, ORGIAST_HOME: home, VERSION_DRIFT_SKIP: '1' };
-    if (now) {
-      // For testing purposes, we would need to modify the code to accept a custom date
-      // Since we can't easily pass it through env, we'll note this limitation
-    }
     const result = spawnSync(process.execPath, [fileURLToPath(script), '--dry-run'], {
       encoding: 'utf8', env,
     });
@@ -205,4 +201,44 @@ test('ファイルが存在しない場合のエラー処理', () => {
   // ファイルが存在しない場合は該当月のデータなしとして処理される
   assert.match(payload.cheapAiMonth, /^\d{4}-\d{2} なし$/);
   assert.equal(payload.cheapAiMonthUsd, 0);
+});
+
+test('executor利用履歴をJST当月の境界で集計し、不正日時は累計だけに含める', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'executor-usage-'));
+  const file = path.join(dir, 'usage.jsonl');
+  fs.writeFileSync(file, [
+    JSON.stringify({ t: '2026-10-31T15:30:00Z', provider: 'Gemini', usd: 10.555 }),
+    JSON.stringify({ t: '2026-10-31T14:59:59Z', provider: 'gemini', usd: 100 }),
+    JSON.stringify({ t: '2026-11-30T14:59:59Z', provider: 'Gemini', usd: 5.145 }),
+    JSON.stringify({ t: '2026-11-30T15:00:00Z', provider: 'gemini', usd: 100 }),
+    JSON.stringify({ t: '2026-11-20T00:00:00Z', tool: 'openrouter', usd: 2.3 }),
+    JSON.stringify({ t: '2026-11-21T00:00:00Z', tool: 'openrouter' }),
+    JSON.stringify({ t: '2026-11-22T00:00:00Z', provider: 'kimi', usd: 2.3 }),
+    JSON.stringify({ t: 'garbage', provider: 'deepseek', usd: 99 }),
+  ].join('\n'));
+  try {
+    const result = summarizeExecutorUsage(file, new Date('2026-11-26T00:00:00Z'));
+    assert.deepEqual(result.counts, { gemini: 4, openrouter: 2, kimi: 1, deepseek: 1 });
+    assert.equal(result.month.month, '2026-11');
+    assert.deepEqual(result.month.rows, [
+      { provider: 'gemini', count: 2, usd: 15.7 },
+      { provider: 'openrouter', count: 2, usd: 2.3 },
+      { provider: 'kimi', count: 1, usd: 2.3 },
+    ]);
+    assert.equal(result.month.totalUsd, 20.3);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('当月AI集計をシート表示用に整形する', () => {
+  assert.equal(formatCheapAiMonth({
+    month: '2026-11',
+    rows: [
+      { provider: 'gemini', count: 2, usd: 15.7 },
+      { provider: 'openrouter', count: 1, usd: 2.3 },
+    ],
+    totalUsd: 18,
+  }), '2026-11 gemini:2($15.70), openrouter:1($2.30)');
+  assert.equal(formatCheapAiMonth({ month: '2026-11', rows: [], totalUsd: 0 }), '2026-11 なし');
 });

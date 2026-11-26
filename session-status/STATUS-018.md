@@ -1,8 +1,9 @@
-# session-status  PC=018  host=018  updated 2026-11-26 19:05 JST
+# session-status  PC=018  host=018  updated 2026-11-26 20:05 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 16
+- 案件数: 19
 
+- 018・STATUS・金さん待ち・ターゲットメディア 大橋様へ渡す資料一式（宿題10件中8件）が完成し、Google ドライブに反映済み。残り2件（98回コマ割りの提供可否、大橋様のExcel入手）と、大橋様への送付・学会事務局への送信の承認が金さんの判断待ち。第99回日本胃癌学会総会の申込締切が 2026-11-30 のため、11/27中の判断が必要。・期限2026-11-27（判断）／ 2026-11-30（胃癌学会の申込締切）・次:金さんの承認が出たら、①Driveフォルダを大橋様へ共有設定 ②フォローメール送信（大橋様のメールアドレスの提供が必要）③胃癌学会事務局へ確認メール送信。承認がない間は送信しない。
 - 018・account-inventory-1123・完了・最終更新 11/23 21:45、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 018・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・coel-1125・完了・最終更新 11/25 19:52、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
@@ -16,6 +17,8 @@
 - 018・kanbara-offboard-1126・完了・最終更新 11/26 18:37、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 018・reply-drafts-1125-minpaku・完了・最終更新 11/25 19:55、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、次の手順が未着手・期限なし・次:なし
 - 018・reply-wait-collect-1125・停止・最終更新 11/25 09:35、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 018・session-cap-1126・進行中・最終更新 11/26 19:27、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 018・t706u-1125・停止・最終更新 11/25 11:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・vercel-limit-1124・停止・最終更新 11/24 17:00、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 018・warehouse-daily-1126・停止・最終更新 11/26 20:03、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・作業ツリー棚卸し（2026-11-26 / PC018 / セッション d783ef91）・完了・`C:\Users\kimko\wt-*` 全 39 件を実データで判定し、着地済み・未着地・未コミット・破損に分類し終えた・期限なし・次:「未コミット残存5本」をブランチへ commit して保全する（削除は kim 承認待ちのため触らない）

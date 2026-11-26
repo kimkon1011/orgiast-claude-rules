@@ -771,6 +771,55 @@ export function closeKey(home, key) {
     .filter(i => i.kind === 'deadline' && i.key === key)
     .map(i => update(home, i.id, current => { current.status = 'seen'; })));
 }
+function applyDeadlineOp(home, op) {
+  if (op.type === 'close' || op.close) {
+    return listItems(home, { status: 'open' })
+      .filter(i => i.kind === 'deadline' && i.key === op.key)
+      .map(i => update(home, i.id, current => { current.status = 'seen'; }));
+  }
+  const text = clean(op.text || op.body || '');
+  if (!op.key || !/^[A-Za-z0-9_-]+$/.test(op.key)) throw new Error('deadline には有効な --key が必要です');
+  const existing = listItems(home, { status: 'open' }).find(i => i.kind === 'deadline' && i.key === op.key);
+  if (existing) {
+    return update(home, existing.id, current => {
+      current.text = text; current.due = op.due || ''; current.remainingDays = op.remainingDays ?? null;
+      current.lastAt = new Date().toISOString();
+    });
+  }
+  return createNew(home, {
+    kind: 'deadline', text, key: op.key, due: op.due, remainingDays: op.remainingDays,
+    source: op.source || 'deadline-watch',
+  });
+}
+const inboxBusy = error => String(error?.message || error) === 'kim-inbox: 台帳が使用中です';
+function sleepSync(ms) {
+  if (!(ms > 0)) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+// One aggregation lock for many deadline add/close ops. Busy lock acquisition
+// retries a few times; failed ops stay unset so the next watch can resend.
+export function batchDeadlineOps(home, ops, { attempts = 3, backoffMs = 100, sleep = sleepSync } = {}) {
+  if (!ops.length) return [];
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return locked(home, 'info-aggregation', () => ops.map(op => {
+        try {
+          applyDeadlineOp(home, op);
+          return { key: op.key, ok: true, markNotified: !!op.markNotified, readOnly: !!op.readOnly, notifyCount: op.notifyCount, vehicleName: op.vehicleName, plate: op.plate };
+        } catch (error) {
+          return { key: op.key, ok: false, error: clean(error.message), markNotified: false };
+        }
+      }), 0);
+    } catch (error) {
+      lastError = error;
+      if (!inboxBusy(error) || attempt === attempts - 1) break;
+      sleep(backoffMs * (attempt + 1));
+    }
+  }
+  const message = clean(lastError?.message || 'kim-inbox: 台帳が使用中です');
+  return ops.map(op => ({ key: op.key, ok: false, error: message, markNotified: false }));
+}
 // gmail-search.mjs を子プロセスとして実行する既定の検索実装。
 async function defaultGmailSearch(user, query) {
   const { execFileSync } = await import('node:child_process');

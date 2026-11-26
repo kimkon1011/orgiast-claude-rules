@@ -13,6 +13,10 @@ import { readEnvValue } from "./env-kv.mjs";
 import { sendDiscordDm } from "./discord-dm.mjs";
 import { fetchHistory as fetchSendHistory, runLlm as checkSendContext } from "./send-context-check.mjs";
 import { latestOf, writeContextMarker } from "./lib/send-context.mjs";
+import {
+  safeReconcileSalesApp,
+  defaultDryRunSalesLinkPath,
+} from "./lib/sales-app-read.mjs";
 export const LEDGER_ID = "17h_x-1kdxI_92H_dXBydclLsxUmYKa-ut0P3begM_j0",
   MASTER_ID = "14RC6og1ma_I3LGHwCVwswKArgHwCOPxWlPB3g8adaYY";
 export const LEDGER_URL = "https://docs.google.com/spreadsheets/d/17h_x-1kdxI_92H_dXBydclLsxUmYKa-ut0P3begM_j0/edit?usp=sharing";
@@ -23,6 +27,7 @@ export const TABS = [
   "自動_実行ログ",
   "自動_百貨店受信（未対応か要判断）",
   "自動_社長報告",
+  "自動_営業アプリ照合",
 ];
 const USER = "seisaku-team@orgiast.jp",
   STAFF = [
@@ -51,6 +56,11 @@ const customerAddress = address => {
   return domain && !/(^|\.)(orgiast\.jp|event-shop\.jp|imitsu\.jp|proni\.jp|github\.com|google\.com|slack\.com|discord\.com)$/.test(domain) &&
     !FREE_MAIL_DOMAINS.has(domain) && !/^(?:no-?reply|notifications?|mailer-daemon|bounce)(?:[+._-]|$)/.test(local) &&
     !/^(?:no-?reply|notifications?)\./.test(domain);
+};
+export const isBotSender = (raw) => {
+  // Returns true for automated notification/bot senders that should not be treated as customer mail.
+  const { name, email } = sender(String(raw || ""));
+  return /\[bot\]/i.test(name) || /^notifications?@github\.com$/.test(email);
 };
 const emailAddress = value => sender(String(value || "")).email.toLowerCase();
 const emailDomain = value => emailAddress(value).split("@")[1] || "";
@@ -277,7 +287,7 @@ export function classifyDepartmentStoreThread(messages = []) {
 }
 async function mail(deps = {}) {
   const q =
-      'newer_than:2d ((from:satou@orgiast.jp OR to:satou@orgiast.jp OR cc:satou@orgiast.jp OR "佐藤 優奈" OR "佐藤優奈" OR from:imitsu.jp) OR ("社内イベント百貨店" OR to:info@event-shop.jp OR from:event-shop.jp)) -from:saiyo@orgiast.jp -to:saiyo@orgiast.jp',
+      'newer_than:4d ((from:satou@orgiast.jp OR to:satou@orgiast.jp OR cc:satou@orgiast.jp OR "佐藤 優奈" OR "佐藤優奈" OR from:imitsu.jp) OR ("社内イベント百貨店" OR to:info@event-shop.jp OR from:event-shop.jp)) -from:saiyo@orgiast.jp -to:saiyo@orgiast.jp',
     r = await (deps.searchGmail || searchGmail)({
       user: USER,
       query: q,
@@ -314,7 +324,7 @@ async function mail(deps = {}) {
         ...item,
         unanswered: classification.unanswered,
       });
-    else if (w.email && !/@orgiast\.jp$/i.test(w.email)) unanswered.push(item);
+    else if (w.email && !/@orgiast\.jp$/i.test(w.email) && !isBotSender(c.from)) unanswered.push(item);
   }
   return {
     messages,
@@ -401,6 +411,26 @@ export function isInPreviousJstDay(value, now = new Date()) {
     d = value instanceof Date ? value : new Date(Number(value) || value);
   return d >= start && d < end;
 }
+export function previousBusinessJstDayRange(now = new Date()) {
+  // Returns the JST day range for the most recent business day (skipping Sat/Sun).
+  // E.g. Monday → previous Friday, Sunday → previous Friday, Saturday → previous Friday.
+  // Uses getUTCDay() with a +9h offset so the result is independent of the process TZ.
+  const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Tokyo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(now),
+    v = Object.fromEntries(parts.map((x) => [x.type, x.value])),
+    today = new Date(`${v.year}-${v.month}-${v.day}T00:00:00+09:00`),
+    // JST day of week: add 9h so getUTCDay() reflects JST, not the process TZ
+    jstDay = new Date(today.getTime() + 9 * 3600e3).getUTCDay(),
+    // 0=Sun,1=Mon,6=Sat.  Mon→Fri(3back), Sun→Fri(2back), Tue-Sat→prev(1back)
+    daysBack = jstDay === 1 ? 3 : jstDay === 0 ? 2 : 1,
+    start = new Date(today.getTime() - daysBack * 864e5),
+    end = new Date(today.getTime() - (daysBack - 1) * 864e5);
+  return { start, end, date: fmt(start) };
+}
 const baseCode = (x) => txt(x).replace(/_\d+$/, "");
 export function aggregateActiveCases(cases = []) {
   const by = new Map();
@@ -486,6 +516,16 @@ export function caseForMessage(message, cases) {
       .some((v) => norm(v).length >= 3 && blob.includes(norm(v))),
   );
 }
+const movementCase = (message, cases) => {
+  const matched = caseForMessage(message, cases);
+  if (matched) return matched;
+  const from = emailAddress(message.from);
+  if (!/^(?:satou|seisaku-team)@orgiast\.jp$/i.test(from)) return undefined;
+  const hasExternalRecipient = addresses(`${message.to || ""} ${message.cc || ""}`)
+    .some(address => !address.endsWith("@orgiast.jp"));
+  if (!hasExternalRecipient) return undefined;
+  return { code: "", client: txt(message.subject) || "案件未紐付けメール" };
+};
 function fallbackMovement(messages) {
   return `${txt(messages.at(-1)?.subject) || "メールの更新あり"}。`;
 }
@@ -593,16 +633,21 @@ export async function buildDailyReport(
     messages = [],
     actions = [],
     calendar = [],
+    salesApp = null,
   } = {},
   deps = {},
 ) {
   const counted = aggregateActiveCases(cases),
-    yesterday = messages.filter((x) => isInPreviousJstDay(x.internalDate, now) && caseForMessage(x, cases) &&
-      addresses(`${x.from || ""} ${x.to || ""} ${x.cc || ""}`).some(a => !a.endsWith("@orgiast.jp")) &&
-      !/^\s*Fwd?:|\bLEAD\s*:/i.test(x.subject || "")),
+    { start: yesterdayStart, end: yesterdayEnd } = previousBusinessJstDayRange(now),
+    yesterday = messages.filter((x) => {
+      const d = new Date(Number(x.internalDate) || x.internalDate);
+      return d >= yesterdayStart && d < yesterdayEnd && movementCase(x, cases) &&
+        addresses(`${x.from || ""} ${x.to || ""} ${x.cc || ""}`).some(a => !a.endsWith("@orgiast.jp")) &&
+        !/^\s*Fwd?:|\bLEAD\s*:/i.test(x.subject || "");
+    }),
     groups = new Map();
   for (const m of yesterday) {
-    const c = caseForMessage(m, cases),
+    const c = movementCase(m, cases),
       participants = `${m.from || ""} ${m.to || ""} ${m.cc || ""}`,
       internalOnly = [...participants.matchAll(/[\w.+-]+@[\w.-]+/g)].every(x => /@orgiast\.jp$/i.test(x[0]));
     if (!c || internalOnly || /^\s*Fwd:/i.test(m.subject || "") || /\bLEAD\s*:/i.test(m.subject || "")) continue;
@@ -741,7 +786,7 @@ export async function buildDailyReport(
       month: "numeric",
       day: "numeric",
       weekday: "short",
-    }).format(jstDayRange(now).start),
+    }).format(yesterdayStart),
     visibleMovements = movements.slice(0, 8),
     movementLines =
       movements.length > 8
@@ -750,6 +795,10 @@ export async function buildDailyReport(
             `・ほか${movements.length - 8}件（台帳の明細参照）`,
           ]
         : visibleMovements,
+    salesMismatchLines =
+      salesApp?.ok === false
+        ? [`・営業アプリ: 読み取り失敗（${salesApp.error || "不明"}）`]
+        : (salesApp?.reportLines || []).slice(0, 5),
     lines = [
       `【業務報告 ${md} 佐藤】`,
       `■担当案件：計${counted.total}件（確定${counted.confirmed}件／提案・調整中${counted.adjusting}件）`,
@@ -769,6 +818,9 @@ export async function buildDailyReport(
       ...(sorted.length
         ? sorted.map((x, i) => `${i + 1}. ${clip(x[0] === "予定" ? calendarPriorityText(x) : `${x[3] && x[3] !== x[2] ? `${x[3]}：` : ""}${x[2]}`, 76)}`)
         : ["・なし"]),
+      ...(salesMismatchLines.length
+        ? ["■営業アプリとの食い違い", ...salesMismatchLines]
+        : []),
     ],
     capped = capReportLines(lines).map(line => finalizeReportLine(line));
   for (const x of uniqueProblems)
@@ -781,12 +833,21 @@ export async function buildDailyReport(
       yesterday[0]?.url || gmailUrl(yesterday[0]?.threadId || ""),
     ]);
   sorted.forEach((x) => details.push(["今日の優先", x[2], x[3], x[5]]));
+  for (const line of salesMismatchLines)
+    details.push([
+      "営業アプリとの食い違い",
+      line.replace(/^・/, ""),
+      "",
+      "",
+    ]);
   return {
     text: `${capped.join("\n")}\n\n${LEDGER_FOOTER}`,
     lines: capped,
     details,
     counted,
     llmErrors,
+    // Keep the per-run report filename on the previous calendar day. Using the
+    // previous business day here makes Saturday and Sunday overwrite Friday's file.
     date: jstDayRange(now).date,
   };
 }
@@ -1072,8 +1133,29 @@ export async function run({
       ]);
   for (const x of gmail.aimitsu.filter((x) => x.unanswered))
     actions.push(["アイミツ", "", x.subject, x.company, "未回答", x.url]);
+  const salesApp = await (deps.reconcileSalesApp || safeReconcileSalesApp)(
+    cases,
+    {
+      now,
+      envFile: deps.salesAppEnvFile,
+      fetchImpl: deps.salesAppFetchImpl || deps.fetchImpl,
+    },
+  );
+  // 営業アプリ失敗は日報全体を止めない（status に混ぜるとメール失敗メッセージが誤発火する）。
+  if (!salesApp.ok) {
+    errors.push(`営業アプリ: 読み取り失敗（${salesApp.error}）`);
+  } else {
+    for (const row of salesApp.overdueActions || []) actions.push(row);
+  }
   const report = await buildDailyReport(
-    { now, cases, messages: gmail.messages, actions, calendar: cal },
+    {
+      now,
+      cases,
+      messages: gmail.messages,
+      actions,
+      calendar: cal,
+      salesApp,
+    },
     deps,
   );
   errors.push(...report.llmErrors);
@@ -1161,6 +1243,20 @@ export async function run({
         ["節名", "項目", "案件コード", "根拠リンク"],
         ...report.details,
       ],
+      自動_営業アプリ照合: salesApp.sheet || [
+        [
+          "案件ID",
+          "会社名",
+          "案件名",
+          "マスター状態",
+          "営業アプリ状態(status・progress)",
+          "次回連絡日",
+          "最終やり取り日時",
+          "直近14日件数",
+          "食い違い",
+          "照合方法",
+        ],
+      ],
     };
   const p = {
     executedAt,
@@ -1173,6 +1269,7 @@ export async function run({
     status,
     tables,
     report,
+    salesApp,
   };
   if (!dryRun) {
     // 台帳が書けない朝でも報告本文を手放さないよう、ローカルファイルを先に残す。
@@ -1203,6 +1300,24 @@ export async function run({
       }
   } else {
     p.write = { mode: "dry-run" };
+    const dryPath =
+      deps.dryRunSalesLinkPath ||
+      defaultDryRunSalesLinkPath(deps.home || os.homedir());
+    fs.mkdirSync(path.dirname(dryPath), { recursive: true });
+    const dryPayload = {
+      executedAt,
+      write: "dry-run",
+      salesApp: {
+        ok: salesApp.ok,
+        error: salesApp.error || null,
+        stats: salesApp.stats,
+        discrepancies: salesApp.discrepancies,
+        rows: salesApp.rows,
+      },
+      reportText: report.text,
+    };
+    fs.writeFileSync(dryPath, `${JSON.stringify(dryPayload, null, 2)}\n`);
+    p.dryRunSalesLinkPath = dryPath;
   }
   return p;
 }

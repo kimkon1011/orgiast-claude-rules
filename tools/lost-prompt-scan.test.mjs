@@ -9,7 +9,7 @@ import test from 'node:test';
 import { dispatch } from './hook-dispatch.mjs';
 import { collapseHooks, repositoryHooks } from './hook-dispatch-registry.mjs';
 import { listItems } from './kim-inbox.mjs';
-import { findLostPrompts } from './lost-prompt-scan.mjs';
+import { findLostPrompts, scanLostPrompts } from './lost-prompt-scan.mjs';
 import { journalDir, journalPrompt } from './prompt-journal.mjs';
 import { registerLostPromptScan } from './register-lost-prompt-scan-task.mjs';
 
@@ -76,6 +76,17 @@ test('scanner CLI delivers deduplicated info and matches each transcript occurre
   assert.equal(item.sessionId, session);
   assert.match(item.text, new RegExp(`\\d+件: ${[...prompt].slice(0, 80).join('')}`));
   assert.deepEqual(fs.readFileSync(transcript), before);
+});
+
+test('quoted merge approval prompt remains an info notification', async t => {
+  const { home } = fixture(t);
+  journalPrompt({ session_id: session, prompt: 'PR #123 をマージして承認して' }, { home, now: at });
+
+  assert.equal(await scanLostPrompts({ home, now: +at + 120_000, graceMs: 0 }), 1);
+  const [item, ...others] = listItems(home);
+  assert.equal(others.length, 0);
+  assert.equal(item.kind, 'info');
+  assert.match(item.text, /PR #123 をマージして承認して/);
 });
 
 test('session recovery repeats until an accepted Stop acknowledges the answer', async t => {

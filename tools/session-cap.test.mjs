@@ -188,7 +188,7 @@ test('parsing ignores broken lines/meta/sidechain/tool_result; titles and answer
   const data = await inspectSession(path.join(f.project, id + '.jsonl'));
   assert.equal(data.userTurns, 1); assert.equal(data.title, '自動完了'); assert.equal(data.unanswered, false); assert.equal(data.lastMessage, 'assistant');
 });
-test('git dirty, unpushed and unknown protect; unrelated dirty file does not', async t => {
+test('git dirty, unpushed and command failures protect; unrelated dirty file and missing upstream do not', async t => {
   const f = fixture(t);
   const git = args => execFileSync('git', ['-C', f.root, ...args], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   git(['init']); git(['config', 'user.email', 'test@example.invalid']); git(['config', 'user.name', 'Test']);
@@ -197,12 +197,67 @@ test('git dirty, unpushed and unknown protect; unrelated dirty file does not', a
   const edit = file => ({ type: 'assistant', cwd: f.root, message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: path.join(f.root, file) } }] } });
   fs.writeFileSync(path.join(f.root, 'a.txt'), 'dirty');
   const dirty = f.session({ rows: [edit('a.txt')] }), clean = f.session({ rows: [edit('b.txt')] });
-  let r = await sessionCap(f.options); assert.ok(r.kept.find(x => x.id === dirty).reasons.includes('git-dirty')); assert.ok(r.archived.some(x => x.id === clean));
+  let r = await sessionCap({ ...f.options, dryRun: true }); assert.ok(r.kept.find(x => x.id === dirty).reasons.includes('git-dirty')); assert.ok(r.archived.some(x => x.id === clean));
   git(['add', 'a.txt']); git(['commit', '-m', 'unpublished']);
   const unpushed = f.session({ rows: [edit('a.txt'), { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'git commit -m change' } }] } }] });
-  r = await sessionCap(f.options); assert.ok(r.kept.find(x => x.id === unpushed).reasons.includes('git-unpushed'));
-  git(['branch', '--unset-upstream']); const unknown = f.session({ rows: [edit('a.txt')] });
-  r = await sessionCap(f.options); assert.ok(r.kept.find(x => x.id === unknown).reasons.includes('git-unknown'));
+  r = await sessionCap({ ...f.options, dryRun: true }); assert.ok(r.kept.find(x => x.id === unpushed).reasons.includes('git-unpushed'));
+  git(['branch', '--unset-upstream']); const noUpstream = f.session({ rows: [edit('a.txt')] });
+  r = await sessionCap({ ...f.options, dryRun: true });
+  assert.ok(r.archived.some(x => x.id === noUpstream)); assert.ok(r.archived.some(x => x.id === unpushed));
+  // A configured upstream that cannot be resolved is a real rev-list failure.
+  git(['branch', '--set-upstream-to=upstream']); git(['branch', '-D', 'upstream']);
+  r = await sessionCap({ ...f.options, dryRun: true }); assert.ok(r.kept.find(x => x.id === noUpstream).reasons.includes('git-unknown'));
+  git(['branch', '--unset-upstream']);
+  fs.writeFileSync(path.join(f.root, '.git/index'), 'invalid index');
+  r = await sessionCap({ ...f.options, dryRun: true }); assert.ok(r.kept.find(x => x.id === noUpstream).reasons.includes('git-unknown'));
+});
+
+const editRow = file => ({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: file } }] } });
+
+test('editing only unmanaged files has no git reasons even with a broken cwd repository', async t => {
+  const f = fixture(t);
+  execFileSync('git', ['-C', f.root, 'init'], { windowsHide: true, stdio: 'pipe' });
+  fs.writeFileSync(path.join(f.root, '.git/index'), 'invalid index');
+  const file = path.join(f.home, '.claude', 'note.md'); fs.writeFileSync(file, 'note');
+  const id = f.session({ rows: [editRow(file)] });
+  const before = snapshot(f.home), r = await sessionCap({ ...f.options, dryRun: true });
+  assert.ok(r.archived.some(x => x.id === id)); assert.deepEqual(r.kept, []);
+  assert.deepEqual(snapshot(f.home), before);
+});
+
+test('missing paths outside repositories have no git reasons', async t => {
+  const f = fixture(t), gone = path.join(f.home, 'deleted-worktree', 'src');
+  const rows = [editRow(path.join(gone, 'a.txt')), editRow(path.join(gone, 'b.txt'))];
+  const id = f.session({ cwd: gone, rows });
+  const r = await sessionCap({ ...f.options, dryRun: true });
+  assert.ok(r.archived.some(x => x.id === id)); assert.deepEqual(r.kept, []);
+});
+
+test('unborn repository without upstream stays dirty but not unknown', async t => {
+  const f = fixture(t);
+  execFileSync('git', ['-C', f.root, 'init'], { windowsHide: true, stdio: 'pipe' });
+  const file = path.join(f.root, 'new.txt'); fs.writeFileSync(file, 'new');
+  const id = f.session({ rows: [editRow(file)] });
+  const r = await sessionCap({ ...f.options, dryRun: true });
+  assert.deepEqual(r.kept.find(x => x.id === id).reasons, ['git-dirty']);
+});
+
+test('edited files locate nested repositories and deleted directories from a non-repository cwd', async t => {
+  const f = fixture(t), nested = path.join(f.root, 'nested'); fs.mkdirSync(nested);
+  const git = (dir, args) => execFileSync('git', ['-C', dir, ...args], { windowsHide: true, stdio: 'pipe' });
+  for (const dir of [f.root, nested]) git(dir, ['init']);
+  git(nested, ['config', 'user.email', 'test@example.invalid']); git(nested, ['config', 'user.name', 'Test']);
+  const deletedDir = path.join(nested, 'gone'); fs.mkdirSync(deletedDir);
+  const deleted = path.join(deletedDir, 'a.txt'), clean = path.join(nested, 'clean.txt');
+  for (const file of [deleted, clean]) fs.writeFileSync(file, 'tracked');
+  git(nested, ['add', '.']); git(nested, ['commit', '-m', 'initial']);
+  fs.unlinkSync(deleted); fs.rmdirSync(deletedDir);
+  const unrelated = path.join(f.root, 'outer.txt'); fs.writeFileSync(unrelated, 'dirty');
+  const id = f.session({ cwd: f.home, rows: [editRow(clean), editRow(deleted), editRow(unrelated)] });
+  const cleanId = f.session({ cwd: f.home, rows: [editRow(clean)] });
+  const r = await sessionCap({ ...f.options, dryRun: true });
+  assert.deepEqual(r.kept.find(x => x.id === id).reasons, ['git-dirty']);
+  assert.ok(r.archived.some(x => x.id === cleanId));
 });
 test('workspace JSONC resolves first relative folder and deduplicates windows', t => {
   const f = fixture(t), workspace = path.join(f.home, 'test.code-workspace');

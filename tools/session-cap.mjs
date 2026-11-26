@@ -162,29 +162,31 @@ function gitInspector() {
   const directories = new Map(), repositories = new Map();
   function repoFor(dir) {
     const visited = [];
-    let current = path.resolve(dir), found;
-    while (!found) {
+    let current = path.resolve(dir), found = null;
+    while (true) {
       if (directories.has(current)) { found = directories.get(current); break; }
       visited.push(current);
       try {
-        // Locate the nearest .git before reusing a parent result: nested repos and
-        // worktree .git files must not inherit their outer repository's status.
-        fs.lstatSync(path.join(current, '.git'));
-        try { found = { repo: run('git', ['-C', current, 'rev-parse', '--show-toplevel']).trim() }; }
-        catch { found = { error: true }; }
+        if (fs.statSync(current).isDirectory()) {
+          // Ask Git from the nearest existing directory, including for deleted
+          // files. Do not cache parent results across nested repos/worktrees.
+          try { found = run('git', ['-C', current, 'rev-parse', '--show-toplevel']).trim() || null; }
+          catch { /* No repository identified: no Git protection reason. */ }
+          break;
+        }
       } catch (e) {
-        if (e.code !== 'ENOENT') { found = { error: true }; break; }
-        const parent = path.dirname(current);
-        if (parent === current) { found = { error: false }; break; }
-        current = parent;
+        if (!['ENOENT', 'ENOTDIR'].includes(e.code)) break;
       }
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
     }
     for (const visitedDir of visited) directories.set(visitedDir, found);
     return found;
   }
   function inspect(repo) {
     if (!repositories.has(repo)) {
-      const state = { dirty: new Set(), unknown: false, unpushed: 0, upstreamUnknown: false };
+      const state = { dirty: new Set(), unknown: false, unpushed: 0 };
       try {
         const rows = run('git', ['-C', repo, 'status', '--porcelain', '-z', '--untracked-files=all']).split('\0');
         for (let i = 0; i < rows.length; i++) {
@@ -194,25 +196,27 @@ function gitInspector() {
         }
       } catch { state.unknown = true; }
       try { state.unpushed = Number(run('git', ['-C', repo, 'rev-list', '--count', '@{u}..HEAD']).trim()); }
-      catch { state.upstreamUnknown = true; }
+      catch (e) {
+        // An unconfigured upstream (including an unborn branch) has no
+        // unpushed comparison. Other rev-list failures remain protected.
+        if (!/no upstream configured for branch|no such branch:/i.test(String(e.stderr ?? ''))) state.unknown = true;
+      }
       repositories.set(repo, state);
     }
     return repositories.get(repo);
   }
   return data => {
     const reasons = new Set(), repos = new Set();
-    for (const dir of new Set([data.cwd, ...data.edited.map(file => path.dirname(file))].filter(Boolean))) {
-      const found = repoFor(dir);
-      if (found.error && data.edited.length) reasons.add('git-unknown');
-      if (found.repo) repos.add(found.repo);
+    for (const dir of new Set(data.edited.map(file => path.dirname(file)))) {
+      const repo = repoFor(dir);
+      if (repo) repos.add(repo);
     }
     const normalize = file => process.platform === 'win32' ? file.toLowerCase() : file;
     for (const repo of repos) {
       const state = inspect(repo), dirty = new Set([...state.dirty].map(normalize));
       if (data.edited.some(file => dirty.has(normalize(file)))) reasons.add('git-dirty');
       if (data.committed && state.unpushed > 0) reasons.add('git-unpushed');
-      if ((state.unknown || state.upstreamUnknown) && data.edited.length) reasons.add('git-unknown');
-      if (data.committed && state.upstreamUnknown) reasons.add('git-unknown');
+      if (state.unknown) reasons.add('git-unknown');
     }
     return [...reasons];
   };

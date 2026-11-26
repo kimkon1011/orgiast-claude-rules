@@ -421,6 +421,8 @@ export async function attemptAutoLogin({ home = homeDir(), fetchImpl = globalThi
 export async function appendCueUrlToDescription({ token, calendarId, event, docUrl, fetchImpl = globalThis.fetch, signal }) {
   const existingDesc = event.description || '';
   const line = `📝カンペ（社内用）: ${docUrl}`;
+  // HTML 化された説明欄（<br> 区切りで1行）を行単位で消すと他のリンクまで消えるため、既存カンペ行があれば触らない
+  if (/<(?:br|a|p|div)\b/i.test(existingDesc) && existingDesc.includes('📝カンペ（社内用）')) return { appended: false, reason: 'already_exists_html' };
   const description = existingDesc.split(/\r?\n/).filter(entry => !/^\s*📝カンペ（社内用）\s*[:：]/u.test(entry)).join('\n');
   const updated = [description, line].filter(Boolean).join('\n');
   if (updated === existingDesc) return { appended: false, reason: 'already_exists' };
@@ -686,7 +688,7 @@ async function runSchedulerPass(options = {}) {
     const eventKey = `${meetInfo.conferenceCode}_${startIso}`;
     const itemState = state[eventKey] || {};
     // 前日に meeting-prep が貼ったカンペを当日も使う（別 Doc を作らない）
-    const existingCue = (event.description || '').match(/^\s*📝カンペ（社内用）\s*[:：]\s*https:\/\/docs\.google\.com\/document\/d\/([\w-]+)\/(\S+)/mu);
+    const existingCue = (event.description || '').match(/📝カンペ（社内用）\s*[:：]\s*(?:<a\b[^>]*>)?\s*https:\/\/docs\.google\.com\/document\/d\/([\w-]+)\/([^\s"<]*)/u);
     if (!itemState.docId && existingCue) {
       itemState.docId = existingCue[1];
       itemState.staffUrl = `https://docs.google.com/document/d/${existingCue[1]}/edit`;

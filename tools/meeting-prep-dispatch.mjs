@@ -28,7 +28,8 @@ const SHEETS = 'https://sheets.googleapis.com/v4/spreadsheets';
 const DOCS = 'https://docs.googleapis.com/v1/documents';
 const execFileAsync = promisify(execFile);
 const KANPE_MARKER = '【事前メモ（この打合せで聞くこと・決めること・注意）】';
-const CUE_URL_RE = /^\s*📝カンペ（社内用）\s*[:：]\s*(https:\/\/docs\.google\.com\/document\/d\/([\w-]+)\/\S+)/mu;
+// 説明欄が HTML（<a href>・<br>）に変換されていても既存カンペを拾う
+const CUE_URL_RE = /📝カンペ（社内用）\s*[:：]\s*(?:<a\b[^>]*>)?\s*(https:\/\/docs\.google\.com\/document\/d\/([\w-]+)\/[^\s"<]*)/u;
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const enc = encodeURIComponent;
 const quote = value => String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");

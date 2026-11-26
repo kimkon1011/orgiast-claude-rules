@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { POLICY, CATEGORY, DAY, HOUR, iso, makeItem, ingest, checkLedger, chase, digest, digestText,
-  control, work, runChase, loadLedger, saveJson, ledgerPath, parseArgs, resendBody } from './fleet-chase.mjs';
+  control, work, runChase, main, loadLedger, saveJson, ledgerPath, parseArgs, resendBody } from './fleet-chase.mjs';
 import { SEND_CAP_PER_TARGET } from './lib/fleet-chase-actions.mjs';
 import { TERMINAL_STATUSES, parseExecMarkers, acquireLock } from './fleet-mail.mjs';
 import { main as register, TASK_NAME } from './register-fleet-chase.mjs';
@@ -300,6 +300,18 @@ test('headless cannot cancel debts and cannot bypass kim-only guard', async t =>
   await assert.rejects(runChase({ '--cancel': item.id, '--reason': '勝手に取消' }, { ...f.ctx, now: () => NOW, env: { CLAUDE_HEADLESS: '1' } }), /ヘッドレス/);
   assert.equal(loadLedger(f.home).items[item.id].status, 'open');
 });
+
+test('明示操作 --cancel は not-controller で stderr を出して exit 2', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'cost-reporter.env'), 'REPORTER_LABEL=作業用018\n');
+  const errors = [];
+  const code = await main(['--cancel', 'outbound-mail-x', '--reason', 'テスト'], {
+    ...f.ctx, home: f.home, now: () => NOW, stderr: s => errors.push(s),
+  });
+  assert.equal(code, 2);
+  assert.match(errors.join('\n'), /controller\(kim-PC\) ではないため操作できません（label=作業用018）/);
+});
+
 test('long digest stays within Discord budget and retains counts/control footer', async t => {
   const { DIGEST_LIMIT } = await import('./lib/fleet-chase-actions.mjs');
   const f = fixture(t);

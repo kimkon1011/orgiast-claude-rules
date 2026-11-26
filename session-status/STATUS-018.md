@@ -1,7 +1,7 @@
-# session-status  PC=018  host=018  updated 2026-11-26 20:05 JST
+# session-status  PC=018  host=018  updated 2026-11-26 21:05 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 19
+- 案件数: 20
 
 - 018・STATUS・金さん待ち・ターゲットメディア 大橋様へ渡す資料一式（宿題10件中8件）が完成し、Google ドライブに反映済み。残り2件（98回コマ割りの提供可否、大橋様のExcel入手）と、大橋様への送付・学会事務局への送信の承認が金さんの判断待ち。第99回日本胃癌学会総会の申込締切が 2026-11-30 のため、11/27中の判断が必要。・期限2026-11-27（判断）／ 2026-11-30（胃癌学会の申込締切）・次:金さんの承認が出たら、①Driveフォルダを大橋様へ共有設定 ②フォローメール送信（大橋様のメールアドレスの提供が必要）③胃癌学会事務局へ確認メール送信。承認がない間は送信しない。
 - 018・account-inventory-1123・完了・最終更新 11/23 21:45、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
@@ -15,10 +15,11 @@
 - 018・STATUS・完了・RMキャリア（メドレー）様 学会協賛候補4学会の調査を完了し、REPORT.md と DONE.txt を出力した（調査のみ・読み取り専用。社外連絡・支払い・本番変更はなし）・期限第99回日本胃癌学会総会の出展申込締切 2026年11月30日（RMキャリア様へ提案する場合の実質期限）・次:大橋様すり合わせで「空き状況（残小間数）」「広告メニュー」が必要になったら、各運営事務局への照会（＝社外連絡）の可否を金さんに確認してから実施する
 - 018・iwata-list-1126・金さん待ち・最終更新 11/25 21:10、STATUS.mdなし、REPORTあり、run.logあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 018・kanbara-offboard-1126・完了・最終更新 11/26 18:37、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 018・STATUS — kim-inbox 未回答 ask の info 化・停止・実装レーンが全滅（openrouter-code は「完了」と報告したが実際の変更ゼロ＝empty_diff、Codex は http_429）。作業ツリー `C:\Users\kimko\wt-kim-inbox-autoprogress`（ブランチ `chore/kim-inbox-autoprogress-info`）は空のまま残置。・期限なし・次:Codex の 429 が明ける時間帯に、指示書 `C:\Users\kimko\gb-reports\codex-kim-inbox-autoprogress.md` をそのまま再投入する。安いレーンの「完了しました」報告は変更ファイル 0 件なら信用しない。先に `tools/auto-progress-daily.mjs` が kim-inbox 登録
 - 018・reply-drafts-1125-minpaku・完了・最終更新 11/25 19:55、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、次の手順が未着手・期限なし・次:なし
 - 018・reply-wait-collect-1125・停止・最終更新 11/25 09:35、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 018・session-cap-1126・進行中・最終更新 11/26 19:27、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
+- 018・session-cap-1126・停止・最終更新 11/26 19:27、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 018・t706u-1125・停止・最終更新 11/25 11:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・vercel-limit-1124・停止・最終更新 11/24 17:00、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 018・warehouse-daily-1126・停止・最終更新 11/26 20:03、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 018・状態・完了・倉庫アプリ(GAS)のコマンドキューのトリガーが停止しており、復旧には倉庫アプリを一度開く操作が必要・期限2026-11-27 17:00（初回自動送信の予定時刻）・次:倉庫アプリが開かれたら、投入済みの `cmd_dailysend1126.json` と `cmd_dailytrigger1126.json` が自動実行される。結果ファイル `result_dailysend1126.txt` / `result_dailytrigger1126.txt` を読んで送信成功とトリガー設置を確認する
 - 018・作業ツリー棚卸し（2026-11-26 / PC018 / セッション d783ef91）・完了・`C:\Users\kimko\wt-*` 全 39 件を実データで判定し、着地済み・未着地・未コミット・破損に分類し終えた・期限なし・次:「未コミット残存5本」をブランチへ commit して保全する（削除は kim 承認待ちのため触らない）

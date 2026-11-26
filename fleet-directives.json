@@ -33,6 +33,15 @@
       "createdAt": "2026-11-25T11:29:15.795Z",
       "expiresAt": "2026-11-27T11:29:15.795Z",
       "timeoutSeconds": 2400
+    },
+    {
+      "id": "status-20261126-014644-2127",
+      "kind": "status",
+      "targets": "008XPS8300,014DELL",
+      "why": "seisaku-team使用量低下の調査(席ガード旗・タスク状態の確認)",
+      "createdBy": "000KimPC",
+      "createdAt": "2026-11-26T01:46:44.237Z",
+      "expiresAt": "2026-11-26T07:46:44.237Z"
     }
   ]
 }

@@ -135,3 +135,7 @@ PR_BODY.md
 /[A-Za-z]:*
 /[A-Za-z]*
 gb-reports/
+
+# nightly-repo で毎晩 rescue/auto-session-* ブランチが生える再発を止めるための対応
+/task/
+/tpl/

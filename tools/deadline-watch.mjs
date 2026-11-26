@@ -23,23 +23,54 @@ export function effectiveDue(row) {
   if (row.status === '延期') return parseSheetDate(String(row.notes || '').match(/(?:延期先|延期|until)\s*[:：=]?\s*(\d{4}-\d{2}-\d{2})/)?.[1]);
   return parseSheetDate(row.due);
 }
+// 前倒し・バッファ20%以上（kim 2026-11-26 絶対ルール）。期限日ではなく着手期限で知らせる。
+// 所要日数 = 種別の標準日数 + 郵送/オンライン請求・処理・確認・返信待ちの日数。着手期限 = 期限日 − ceil(所要日数 × (1 + buffer))。
+export const LEAD_DAYS = { '車検': 21, '訴訟・法務': 14, '行政・消防': 10, '補助金・申請': 14, '契約更新': 14, '支払': 3, '回答・返信': 1, '提出': 7, 'その他': 5 };
+export const LEAD_EXTRAS = [
+  { re: /登記|謄本|履歴事項|証明書|印鑑証明|住民票|納税証明|戸籍|法務局/, days: 7, method: 'オンライン請求＋郵送受取（窓口に行かない）' },
+  { re: /郵送|書留|原本|押印|捺印|署名|返送/, days: 5, method: '郵送（往復）' },
+  { re: /申請|届出|許可|申込|手続/, days: 5, method: 'オンライン申請（審査・処理待ち込み）' },
+  { re: /見積|相見積|発注|手配|業者/, days: 5, method: '見積取得・比較（返信待ち込み）' },
+  { re: /確認|承認|レビュー|回答|返信/, days: 2, method: '確認・返信待ち' },
+];
+export const BUFFER_RATE = 0.2;
+export function startPlan(row, config = DEFAULT_CONFIG) {
+  const due = effectiveDue(row); if (!due) return null;
+  const text = `${row.title || ''} ${row.action || ''} ${row.kind || ''}`;
+  const manual = Number(String(row.notes || '').match(/所要日数\s*[:：=]?\s*(\d+)/)?.[1]);
+  const base = (config.leadDays || {})[row.kind] ?? LEAD_DAYS[row.kind] ?? LEAD_DAYS['その他'];
+  const extras = LEAD_EXTRAS.filter(x => x.re.test(text));
+  const lead = Number.isFinite(manual) && manual > 0 ? manual : base + extras.reduce((a, x) => a + x.days, 0);
+  const rate = Math.max(BUFFER_RATE, Number(config.bufferRate) || 0);
+  const total = Math.max(lead + 1, Math.ceil(lead * (1 + rate)));
+  const d = new Date(`${due}T00:00:00Z`); d.setUTCDate(d.getUTCDate() - total);
+  return { startBy: d.toISOString().slice(0, 10), leadDays: lead, totalDays: total, method: extras[0]?.method || '最安の方法（オンライン・郵送を優先）' };
+}
 export function evaluate(row, today, config = DEFAULT_CONFIG) {
   const due = effectiveDue(row), remainingDays = due ? daysUntil(today, due) : null;
   const stages = row.status === '対応中' ? [3,1,0] : STAGES[row.kind] || STAGES.default;
   const eligible = !closed(row) && row.status !== '候補' && remainingDays !== null;
-  return { due, remainingDays, stage: eligible && (remainingDays < 0 || stages.includes(remainingDays)),
-    kim: eligible && (config.kimNames.includes(String(row.assignee || '')) || remainingDays <= 3) };
+  const plan = eligible ? startPlan(row, config) : null;
+  const startDays = plan ? daysUntil(today, plan.startBy) : null;
+  // 未着手は着手期限の3日前・当日・超過（毎日）で知らせる。期限日の段階通知も残す。
+  const startAlert = !!plan && row.status !== '対応中' && remainingDays >= 0 && (startDays <= 0 || [3, 0].includes(startDays));
+  return { due, remainingDays, startBy: plan?.startBy || null, startDays, leadDays: plan?.totalDays ?? null, method: plan?.method || null,
+    startOverdue: !!plan && row.status !== '対応中' && startDays < 0,
+    stage: eligible && (remainingDays < 0 || stages.includes(remainingDays) || startAlert),
+    kim: eligible && (config.kimNames.includes(String(row.assignee || '')) || remainingDays <= 3 || (startAlert && startDays <= 0)) };
 }
 export function notificationLine(row, decision, config) {
   const n = decision.remainingDays;
-  const color = n <= 3 ? '🔴' : n <= 14 ? '🟠' : '🟡';
-  const when = n < 0 ? `期限切れ ${decision.due.slice(5).replace('-', '/')}` : `あと${n}日 ${decision.due.slice(5).replace('-', '/')}`;
+  const color = n <= 3 || decision.startDays < 0 ? '🔴' : n <= 14 || decision.startDays === 0 ? '🟠' : '🟡';
+  const sb = decision.startBy ? decision.startBy.slice(5).replace('-', '/') : '';
+  const start = !sb || n < 0 ? '' : decision.startDays < 0 ? `【着手期限超過 ${sb}・安い方法が間に合わない恐れ】` : decision.startDays === 0 ? `【本日着手 ${sb}】` : `【着手期限 ${sb}】`;
+  const when = `${start}${n < 0 ? `期限切れ ${decision.due.slice(5).replace('-', '/')}` : `あと${n}日 ${decision.due.slice(5).replace('-', '/')}`}`;
   const url = String(row.quote || '').match(/https?:\/\/[^\s<>]+/)?.[0] || sheetUrl(config);
   return `${color} ${row.id} ${when}｜${row.title}（担当 ${row.assignee || 'kim'}）→ ${row.action || '対応状況を確認'}｜根拠: ${url}`.replace(/[\r\n]+/g, ' ');
 }
 export function formatDigest(rows, today, config) {
-  const entries = rows.map(row => ({ row, ...evaluate(row, today, config) })).filter(x => !closed(x.row) && x.row.status !== '候補' && x.remainingDays !== null && x.remainingDays <= 14).sort((a, b) => a.remainingDays - b.remainingDays);
-  return ['今週の期限', ...entries.map(x => `${x.row.id} ${x.due}（${x.remainingDays < 0 ? `${-x.remainingDays}日超過` : `あと${x.remainingDays}日`}）${x.row.title}｜担当 ${x.row.assignee || 'kim'}`), entries.length ? '' : '14日以内・超過の期限はありません。', `期限台帳: ${sheetUrl(config)}`].filter(Boolean).join('\n');
+  const entries = rows.map(row => ({ row, ...evaluate(row, today, config) })).filter(x => !closed(x.row) && x.row.status !== '候補' && x.remainingDays !== null && (x.remainingDays <= 14 || (x.startDays !== null && x.startDays <= 7))).sort((a, b) => (a.startDays ?? a.remainingDays) - (b.startDays ?? b.remainingDays));
+  return ['今週の期限（着手期限＝期限日−所要日数×1.2 の早い順）', ...entries.map(x => `${x.row.id} ${x.due}（${x.remainingDays < 0 ? `${-x.remainingDays}日超過` : `あと${x.remainingDays}日`}${x.startBy && x.row.status !== '対応中' ? `／着手期限 ${x.startBy}${x.startDays < 0 ? ' 超過' : ''}` : ''}）${x.row.title}｜担当 ${x.row.assignee || 'kim'}`), entries.length ? '' : '14日以内・超過の期限はありません。', `期限台帳: ${sheetUrl(config)}`].filter(Boolean).join('\n');
 }
 export function vehicleRows(values, config) {
   return parseVehicles(values).map(v => ({ id: v.id, vehicleName: v.name, plate: v.plate, title: `${v.name} 車検`, kind: '車検', company: v.company, assignee: v.assignee || 'kim', due: v.expiry,

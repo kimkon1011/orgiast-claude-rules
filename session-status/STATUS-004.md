@@ -1,6 +1,6 @@
-# session-status  PC=004  host=004MINPAKU  updated 2026-11-26 17:13 JST
+# session-status  PC=004  host=004MINPAKU  updated 2026-11-26 18:13 JST
 
-- claude auth: {"at":"2026-11-26T08:13:14.074Z","event":"launch_allowed","reason":"below_cap","activeCount":0,"limit":2,"staleHours":3,"abandoned":[]} { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "f
+- claude auth: {"at":"2026-11-26T09:13:13.177Z","event":"launch_allowed","reason":"below_cap","activeCount":0,"limit":2,"staleHours":3,"abandoned":[]} { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "f
 - 案件数: 13
 
 - 004・account-inventory-1123・完了・最終更新 11/23 22:02、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
@@ -15,4 +15,4 @@
 - 004・okazaki-line-1125・完了・最終更新 11/25 10:16、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 004・reply-drafts-1125・停止・最終更新 11/25 19:09、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
 - 004・tasks・停止・最終更新 11/24 09:30、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 004・toho-fax-ingest・金さん待ち・見積システム「現場」フォルダの FAX_ 取り込みは 11/24 18:02 に再開済み（11/25 21:02 受信分まで確認）。11/12 18時〜11/18 11時（受信番号 3780〜3972）が未取り込み。西田さんへの報告文面の承認待ち（kim-inbox ki-20261125120946-1c7b）・期限2026-11-27 12:00・次:承認が来たら Beeper 経由で西田直哉さんの LINE 個人トークへ送り、読み戻す。抜けの扱いは西田さんの返事で決める
+- 004・toho-fax-ingest・送信済み・2026-11-26 17:28:32 JST、西田直哉さんの LINE 個人トークへ、承認済み全文を1回送信（Beeper message id 47900）。文面は ask-20261125.md の全文と一致。再送しない。・期限2026-11-27 12:00・次:西田さんの返事を待つ。11/12 18時〜11/18 11時（受信番号 3780〜3972）の抜けの扱いは返事で決める

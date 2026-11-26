@@ -1,0 +1,24 @@
+# URL<TAB>type (public|internal|api)
+https://212office.com	public
+https://expo-index.com	public
+https://ai-daikodo.com	public
+https://sponsor.gakkaisupport.jp	public
+https://rebooth-site.vercel.app	public
+https://visionwatch-lp.vercel.app	public
+https://godo-setsumeikai.vercel.app	public
+https://event-shop-rental.vercel.app	public
+https://eo-learning-planner.vercel.app	internal
+https://aujust-sales-automation.vercel.app	internal
+https://purchasing-management-app.vercel.app	internal
+https://tetsuko.vercel.app	internal
+https://exhibition-overlap-checker.vercel.app	internal
+https://construction-manual-app.vercel.app	internal
+https://makimono-md.vercel.app	api
+https://assign-app-psi.vercel.app	internal
+https://event-shop-alpha.vercel.app	api
+https://claude-watch-inbox.vercel.app	api
+https://orgiast-keyserve.vercel.app	api
+https://orgiast-memoryserve.vercel.app	api
+https://discord-mcp-connector.vercel.app	api
+https://plaud-audio-proxy.vercel.app	api
+https://aujust-wt-dunning.vercel.app	api

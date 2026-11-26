@@ -103,6 +103,25 @@ export async function inboxAction({ home, row, decision, config, close = false, 
   if (row.readOnly && row.vehicleName && row.plate) await execImpl(process.execPath, [inboxWorker, 'retire', row.vehicleName, row.plate], options);
   return result;
 }
+const INBOX_BATCH_MS = 10 * 60_000;
+export async function inboxBatch({ home, operations, signal, execImpl = exec }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-batch-'));
+  try {
+    const filename = path.join(dir, 'operations.jsonl');
+    fs.writeFileSync(filename, operations.map(op => JSON.stringify(op)).join('\n'), { mode: 0o600 });
+    const { stdout } = await execImpl(process.execPath, [inboxScript, '--batch-file', filename],
+      { ...inboxOptions(home, signal), timeout: INBOX_BATCH_MS });
+    const results = JSON.parse(stdout);
+    if (!Array.isArray(results) || results.length !== operations.length ||
+        results.some((result, i) => result?.key !== operations[i].key || result.op !== operations[i].op || typeof result.ok !== 'boolean')) {
+      throw new Error('Invalid kim-inbox batch results');
+    }
+    return results;
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+export async function retireVehicle({ home, row, signal }) {
+  return exec(process.execPath, [inboxWorker, 'retire', row.vehicleName, row.plate], inboxOptions(home, signal));
+}
 export function sourceMetadata(row) {
   try { return JSON.parse(String(row.notes || '{}').split('\n')[0]); } catch { return {}; }
 }
@@ -257,7 +276,7 @@ export function watchRuntime(home, { stderr = console.error, totalMs = 45 * 60_0
   }
   return { step, log, filename, currentSignal: () => context.getStore() || global.signal, signal: global.signal, inboxMs, lockMs, httpMs, finish: () => clearTimeout(timer) };
 }
-export async function runWatch({ home, config, ledger, sheets, request, today, dryRun = false, rows: suppliedRows, state = {}, notify = inboxAction, heartbeat = reportHeartbeat, stderr = console.error, runtime, readInbox = readInboxKeys }) {
+export async function runWatch({ home, config, ledger, sheets, request, today, dryRun = false, rows: suppliedRows, state = {}, notifyBatch = inboxBatch, retire = retireVehicle, heartbeat = reportHeartbeat, stderr = console.error, runtime, readInbox = readInboxKeys }) {
   const perform = runtime?.step || ((name, fn) => fn());
   let rows = suppliedRows;
   const errors = [], warnings = [];
@@ -281,7 +300,7 @@ export async function runWatch({ home, config, ledger, sheets, request, today, d
   const inbox = dryRun ? { value: [] } : await attempt('inbox', 'listItems', signal => readInbox(home, signal), runtime?.inboxMs);
   const openKeys = new Set(inbox.value || []);
   const persist = () => saveJson(dataPath(home, 'state.json'), state);
-  const decisions = [];
+  const decisions = [], pending = [];
   for (const original of rows) {
     runtime?.signal.throwIfAborted();
     let row = { ...original };
@@ -303,17 +322,40 @@ export async function runWatch({ home, config, ledger, sheets, request, today, d
       const shouldNotify = decision.stage && decision.kim && priorDate !== today;
       decisions.push({ id: row.id, title: row.title, status: row.status, ...decision, notify: !!shouldNotify, ...(shouldNotify ? { line: notificationLine(row, decision, config) } : {}) });
       if (!dryRun) {
-        if (closed(row) || !decision.kim) await attempt(row.id, 'kim-inbox close', signal => notify({ home, row, config, close: true, signal }), runtime?.inboxMs);
-        else if (shouldNotify || openKeys.has(row.id)) {
-          const sent = await attempt(row.id, 'kim-inbox add', signal => notify({ home, row, decision, config, signal }), runtime?.inboxMs);
-          if (shouldNotify && sent.ok) {
-            if (row.readOnly) { state.vehicles ||= {}; state.vehicles[row.id] = { lastNotified: today }; persist(); }
-            else await attempt(row.id, 'Sheets lastNotified', () => ledger.patch(row.id, { lastNotified: today, notifyCount: Number(row.notifyCount || 0) + 1 }));
-          }
+        if (closed(row) || !decision.kim) {
+          if (openKeys.has(row.id)) pending.push({ operation: { op: 'close-key', key: row.id }, row });
+        } else if (shouldNotify || openKeys.has(row.id)) {
+          pending.push({ operation: { op: 'add', kind: 'deadline', key: row.id, due: decision.due,
+            remainingDays: decision.remainingDays, source: 'deadline-watch', text: notificationLine(row, decision, config) },
+            row, shouldNotify });
         }
         await attempt(row.id, 'Calendar sync', () => syncCalendar(row, { config, state, request, persist, log: stderr }));
       }
     } catch (e) { runtime?.signal.throwIfAborted(); errors.push({ id: row.id, error: e.message, ...(isTimeout(e) ? { timeout: true } : {}) }); }
+  }
+  for (let offset = 0; offset < pending.length; offset += 100) {
+    const chunk = pending.slice(offset, offset + 100);
+    const sent = await attempt('kim-inbox', `batch ${offset + 1}-${offset + chunk.length}`,
+      signal => notifyBatch({ home, operations: chunk.map(entry => entry.operation), signal }), INBOX_BATCH_MS);
+    if (!sent.ok) continue;
+    for (const [index, { operation, row, shouldNotify }] of chunk.entries()) {
+      const result = sent.value[index];
+      if (!result?.ok) {
+        errors.push({ id: row.id, phase: `kim-inbox ${operation.op}`, error: result?.error || 'Missing batch result' });
+        continue;
+      }
+      if (operation.op !== 'add') continue;
+      if (row.readOnly && row.vehicleName && row.plate) {
+        const retired = await attempt(row.id, 'kim-inbox retire', signal => retire({ home, row, signal }), runtime?.inboxMs);
+        if (!retired.ok) continue;
+      }
+      if (!shouldNotify) continue;
+      if (row.readOnly) {
+        await attempt(row.id, 'vehicle lastNotified', () => {
+          state.vehicles ||= {}; state.vehicles[row.id] = { lastNotified: today }; persist();
+        });
+      } else await attempt(row.id, 'Sheets lastNotified', () => ledger.patch(row.id, { lastNotified: today, notifyCount: Number(row.notifyCount || 0) + 1 }));
+    }
   }
   if (!dryRun && loaded) await attempt('state', 'persist digest', () => {
     state.lastWatchAt = new Date().toISOString(); persist();
@@ -380,7 +422,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       if (args.digest) { stdout(formatDigest(rows || await loadRows({ config, ledger, sheets }), today, config)); return { errors: [] }; }
       let result;
       if (operation) result = { actions: await manualOperation({ operation, id: args[operation], until: args.until, note: args.note, ledger, home, today, config, notify: args => runtime.step('kim-inbox manual', signal => (deps.notify || inboxAction)({ ...args, signal }), runtime.inboxMs), dryRun: !!args['dry-run'] }), errors: [] };
-      else result = await runWatch({ home, config, ledger, sheets, request, today, dryRun: !!args['dry-run'], rows, state: fixture ? {} : readJson(dataPath(home, 'state.json'), {}), notify: deps.notify, stderr, runtime, readInbox: deps.readInbox });
+      else result = await runWatch({ home, config, ledger, sheets, request, today, dryRun: !!args['dry-run'], rows, state: fixture ? {} : readJson(dataPath(home, 'state.json'), {}), notifyBatch: deps.notifyBatch, retire: deps.retire, stderr, runtime, readInbox: deps.readInbox });
       stdout(JSON.stringify(result, null, 2)); return result;
     };
     let lockAcquired = false;

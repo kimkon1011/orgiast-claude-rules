@@ -85,9 +85,11 @@ export const chatgptUsageLimit = text => /chatgpt\.com\/settings\/usage|upgrade 
 export const quotaFailure = text => http429(text) || chatgptUsageLimit(text) || /cooldown|(?:usage|weekly|monthly)[_ /.-]*limit|limit[^\n]{0,60}exhausted|rate[_ .-]?limit|RESOURCE_EXHAUSTED|codex_cooldown/i.test(String(text));
 // billing は 402 / insufficient balance|quota|credits / payment_required のみ。
 // 429 や rate limit 由来の "Insufficient credits" を billing と誤判定しない（quotaFailure と順序で分離）。
+// xAI/Grok 403: "used all available credits or reached its monthly spending limit ... purchase more credits"
+// は credit depleted と同型の課金切れ。ChatGPT の "purchase more credits or try again at" は含めない。
 export const billingFailure = text => http402(text)
   || (/outstanding balance|billing account[^\n]{0,80}(?:disabled|closed|suspended|outstanding|not active)/i.test(String(text)) && http403(text))
-  || /insufficient[_ ](?:balance|quota|credits?)|(?:credits?|balance)[ _-]*(?:are[ _-]*)?(?:depleted|exhausted|insufficient)|(?:out of|no|not enough|low) credits?|credit[_ -](?:balance|limit)[^\n]{0,40}(?:low|exceed|insufficient|depleted|exhausted)|payment_required/i.test(String(text));
+  || /insufficient[_ ](?:balance|quota|credits?)|(?:credits?|balance)[ _-]*(?:are[ _-]*)?(?:depleted|exhausted|insufficient)|(?:out of|no|not enough|low) credits?|credit[_ -](?:balance|limit)[^\n]{0,40}(?:low|exceed|insufficient|depleted|exhausted)|used all available credits|monthly spending limit|purchase more credits or raise|payment_required/i.test(String(text));
 // 文言に 429 を含む billing は偽の billing（実際は quota）。判定補助。
 export const billingWithQuotaHint = text => billingFailure(text) && (http429(text) || chatgptUsageLimit(text) || /rate[_ .-]?limit|cooldown/i.test(String(text)));
 // Provider timestamps without an offset are interpreted in the host timezone.

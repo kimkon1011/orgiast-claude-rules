@@ -96,6 +96,13 @@ test('Google 403 outstanding balance is billing', t => {
   assert.equal(billingFailure('status 403 Forbidden'), false);
 });
 
+test('xAI grok credit exhaustion 403 is billing not quota', () => {
+  const xai403 = 'Your team ... has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit.';
+  assert.equal(billingFailure(xai403), true);
+  assert.equal(quotaFailure(xai403), false);
+  assert.equal(billingWithQuotaHint(xai403), false);
+});
+
 test('Google 403 outstanding balance via ledger realLaneStats is billing', t => {
   const home = fixture(t, [{ provider: 'gemini', status: 'http_403', stderr: 'The billing account has an outstanding balance' }]);
   const stats = realLaneStats(home, now).gemini;

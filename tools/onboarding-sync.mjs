@@ -484,6 +484,31 @@ export function deployAgents(sourceRepo, targetHome, options = {}) {
 }
 // syncRepository が用意し、main の finally（CLAUDE.md 更新後）で実行する hook 登録。
 let deferredHookRegistration = null;
+/** result を if/else 外で保持し、excluded ログが ReferenceError にならないようにする（回帰用に export）。 */
+export async function applyRepositoryUpdate(repoPath, {
+  update = updateRepositoryFiles,
+  head = readHead,
+  existsSync = fs.existsSync,
+  log: logFn = log,
+} = {}) {
+  let changed = false;
+  let result;
+  if (existsSync(path.join(repoPath, '.git'))) {
+    const before = head(repoPath);
+    result = await update(repoPath);
+    const after = head(repoPath);
+    if (before && after) {
+      changed = result.ok && (result.method === 'zip' ? result.changed : before !== after);
+    } else {
+      changed = result.ok && result.changed !== false;
+    }
+  } else {
+    result = await update(repoPath);
+    changed = result.ok && result.changed;
+  }
+  if (result?.excluded?.length) logFn("protected human changes: " + result.excluded.length + "件 " + result.excluded.slice(0, 10).join(", ") + (result.excluded.length > 10 ? " ...他" + (result.excluded.length - 10) + "件" : ""));
+  return { changed, result };
+}
 async function syncRepository(now) {
   try {
     if (!fs.existsSync(repoPath)) return;
@@ -506,20 +531,7 @@ async function syncRepository(now) {
     // 取得の失敗(未追跡ファイル衝突/ネット断/認証切れ)で skill 配布と hook 登録まで巻き添えにしない。
     // ここを1つの try に入れていたため、pull が1回失敗した PC は配布が静かに止まっていた(実測 2026-08-19)。
     try {
-    if (fs.existsSync(path.join(repoPath, '.git'))) {
-      const before = readHead(repoPath);
-      const result = await updateRepositoryFiles(repoPath);
-      const after = readHead(repoPath);
-      if (before && after) {
-        changed = result.ok && (result.method === 'zip' ? result.changed : before !== after);
-      } else {
-        changed = result.ok && result.changed !== false;
-      }
-    } else {
-      const result = await updateRepositoryFiles(repoPath);
-      changed = result.ok && result.changed;
-    }
-    if (result?.excluded?.length) log("protected human changes: " + result.excluded.length + "件 " + result.excluded.slice(0, 10).join(", ") + (result.excluded.length > 10 ? " ...他" + (result.excluded.length - 10) + "件" : ""));
+      ({ changed } = await applyRepositoryUpdate(repoPath));
     } catch (e) { console.log(`[onboarding-sync] リポ取得に失敗（skill配布とhook登録は続行）: ${e.message.split('\n')[0]}`); log(`repo fetch failed(continue): ${e.message}`); }
     if (changed) { console.log('[onboarding-sync] updated repository tools/rules/skills'); log('updated repository tools/rules/skills'); }
     const skills = deploySkills(repoPath, home, { now, onError: (e) => log(`skill deployment failed: ${e.message}`) });

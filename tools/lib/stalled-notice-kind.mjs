@@ -42,10 +42,15 @@ const KIM_DECISION_PATTERNS = [
   /(?:承認待ち|明示的な同意が必要)/u,
 ];
 
+const KIM_REQUEST_IN_NEXT_STEP = /(?:kim|金さん).*(?:承認|同意|許可|可否|判断|入金|支払|ログイン|権限|契約|削除|送信)|(?:承認|同意|許可|可否|判断|入金|支払|ログイン|権限|契約|削除|送信).*(?:kim|金さん)/iu;
+const REPLY_REQUEST_IN_NEXT_STEP = /(?:と(?:1行で)?(?:返信|返事)(?:を)?する|を返す)$/u;
+
 export function decideStalledNoticeKind({ reason = '', nextStep = '' }) {
   const text = `${reason} ${nextStep}`;
 
   if (PAYMENT_OR_ACCOUNT_PATTERNS.some(pattern => pattern.test(text))) return 'ask';
+  if (KIM_REQUEST_IN_NEXT_STEP.test(nextStep)) return 'ask';
+  if (REPLY_REQUEST_IN_NEXT_STEP.test(nextStep)) return 'ask';
   if (THIRD_PARTY_OR_DELEGATED_PATTERNS.some(pattern => pattern.test(reason))) return 'info';
   if (EXTERNAL_CAPACITY_PATTERNS.some(pattern => pattern.test(reason))) return 'info';
   if (CONTINUABLE_PATTERNS.some(pattern => pattern.test(reason))) return 'info';

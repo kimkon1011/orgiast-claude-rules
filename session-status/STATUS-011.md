@@ -1,7 +1,7 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-27 06:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-27 07:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 45
+- 案件数: 46
 
 - 011・.stall-sweeper・停止・最終更新 11/26 04:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・20261126-クラフト坂口・金さん待ち・クラフト坂口様 宿題7件の成果物は完成。精算の計算方法・福岡請求書の作り直し・先払い承認・いなば様への送信時期の判断待ち・期限2026-12-03（坂口様への精算金額の返答）・次:金さんの判断に沿って、坂口様への返信・福岡請求書の作り直し・Discord送信を進める（送信は承認後のみ）
@@ -19,6 +19,7 @@
 - 011・extwait-1126h・金さん待ち・社外返信2件（デージーネット河村様・JCS中野様）の送信承認待ち。kim-inbox ki-20261126091523-9292 に全文登録済み・期限2026-11-27 10:00（デージーネットは当日キャンセルの再調整依頼で早いほど良い）・次:承認後、JCS下書き 1a2111e733b26549 の「12/10 10:00」を「12/9 14:00」に差し替え、gmail-draft.mjs で2件送信し読み戻す。next-session.md 20番の更新は sensitive file で拒否されたため未反映
 - 011・extwait-kim-400・停止・最終更新 11/26 14:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・fallback-chain-timeout-1127・完了・PR #2849 MERGED・landed・期限なし・次:11/28 の delegation-health.json に fallback_chain_timeout が出ないことを確認
+- 011・fallback-deepseek-timeout-1127・進行中・Codex に修正を委譲中（codex-do バックグラウンド）・期限なし・次:RESULT.md と PR を読み戻し、Windows で node --test を再実行、PR の MERGED を確認して /session-close
 - 011・gridbeyond-reply-1126・金さん待ち・GridBeyond ミント様への失注お礼の返信は下書き済みで、送信承認待ち・期限なし（礼状のため早いほどよい。目安は 11/27 中）・次:金さんが「送ってよい」と言ったら gmail-draft.mjs --send で送り、送信済みを読み戻す（kim-inbox ki-20261126111434-7de5）
 - 011・gridbeyond-yosu-1125・金さん待ち・最終更新 11/25 11:38、STATUS.mdなし、REPORTあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・illumi-kono-claim-1125・停止・最終更新 11/25 18:46、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める

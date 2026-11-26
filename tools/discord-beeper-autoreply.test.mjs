@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runOnce, main, DISCORD_ACCOUNT, messageLink, isMessageRequest, isSyntheticMessage } from './discord-beeper-autoreply.mjs';
+import { runOnce, main, DISCORD_ACCOUNT, messageLink, isMessageRequest, isSyntheticMessage, SEND_PROMISE_PTN } from './discord-beeper-autoreply.mjs';
 import { main as guildMain } from './discord-autoreply.mjs';
 
 const NOW = Date.parse('2026-11-12T04:00:00Z'); // 13:00 JST (allowed window)
@@ -11,6 +11,8 @@ const reply = { needs_reply: true, needs_kim_decision: false, answer: 'マニュ
 const account = { accountID: DISCORD_ACCOUNT, network: 'Discord', user: { isSelf: true, id: 'kim' } };
 const message = (overrides = {}) => ({ id: 'm1', type: 'TEXT', accountID: DISCORD_ACCOUNT, timestamp: new Date(NOW - 1000).toISOString(), sortKey: '2', text: 'マニュアルはどこですか？', senderName: '田中', isSender: false, ...overrides });
 const chat = (overrides = {}) => ({ id: 'chat1', localChatID: '828', accountID: DISCORD_ACCOUNT, title: '相談', type: 'single', ...overrides });
+
+test('送信約束の表現を台帳対象として検出する', () => { assert.equal(SEND_PROMISE_PTN.test('本日中に資料をお送りします'), true); assert.equal(SEND_PROMISE_PTN.test('確認しました'), false); });
 
 function fixture(t, { chats = [chat()], messages, decision = reply } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beeper-autoreply-'));

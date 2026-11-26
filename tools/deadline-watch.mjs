@@ -6,7 +6,6 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { withAbort, budgetMs } from './lib/deadline-budget.mjs';
-import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { releaseDeadlineWorkerLock } from './kim-inbox.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -15,7 +14,7 @@ import { parseRows as parseVehicles } from './vehicle-inspection-watch.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
 import { reportHeartbeat } from './lib/heartbeat.mjs';
-import { calendarBase, calendarOptions, calendarIds, readableEvent, isKimTask, listCalendarEvents, belongsToLedger, moveCalendarEvent, timedDuplicates } from './lib/deadline-calendar.mjs';
+import { calendarBase, calendarOptions, calendarIds, readableEvent, isKimTask, listCalendarEvents, deadlineEventId, isDeadlineOwnedEvent, moveCalendarEvent, timedDuplicates } from './lib/deadline-calendar.mjs';
 import { DEFAULT_CONFIG, createLedger, loadConfig, defaultHome, dataPath, readJson, saveJson, sheetUrl, googleClient, withLedgerLock, parseSheetDate, jstDate, daysUntil, isDuplicate, initialize } from './deadline-ledger.mjs';
 const exec = promisify(execFile);
 const inboxScript = fileURLToPath(new URL('./kim-inbox.mjs', import.meta.url));
@@ -186,7 +185,7 @@ export function calendarEventMatches(row, event, { due, summary, sheetId }) {
   if (event.start?.date !== due) return false;
   return String(event.summary || '') === String(summary || '');
 }
-export async function syncCalendar(row, { config, state, request, persist = () => {}, log = console.error }) {
+export async function syncCalendar(row, { config, state, request, persist = () => {}, log = console.error, warnings }) {
   if (!config.calendar.enabled || state.calendarSync === false) return;
   const ids = calendarIds(config), opts = calendarOptions;
   try {
@@ -197,7 +196,8 @@ export async function syncCalendar(row, { config, state, request, persist = () =
     const kimLikely = !inactive && !cancelled && isKimTask(row, config);
     const probeTarget = kimLikely ? ids.kim : ids.task;
     const probeEvents = await listCalendarEvents(request, probeTarget, { privateExtendedProperty: `deadlineId=${row.id}` });
-    const probeOwned = probeEvents.filter(e => e.extendedProperties?.private?.deadlineId === row.id && belongsToLedger(e, config) && !e.start?.dateTime);
+    const ownedAllDay = e => isDeadlineOwnedEvent(e, row, config) && !e.start?.dateTime;
+    const probeOwned = probeEvents.filter(ownedAllDay);
     if (!inactive && !cancelled && probeOwned.length === 1 && !probeOwned[0].extendedProperties?.private?.deadlineArchive) {
       const label = readableEvent(row, config, probeOwned);
       if (label && calendarEventMatches(row, probeOwned[0], { due, summary: label.summary, sheetId: config.sheetId })) return;
@@ -206,14 +206,13 @@ export async function syncCalendar(row, { config, state, request, persist = () =
     const other = probeTarget === ids.kim ? ids.task : ids.kim;
     for (const calendar of [other]) {
       const events = await listCalendarEvents(request, calendar, { privateExtendedProperty: `deadlineId=${row.id}` });
-      found.push(...events.filter(e => e.extendedProperties?.private?.deadlineId === row.id && belongsToLedger(e, config) && !e.start?.dateTime).map(event => ({ calendar, event })));
+      found.push(...events.filter(ownedAllDay).map(event => ({ calendar, event })));
     }
     // Close the ledger first. Notes alone are not proof of cancellation, and
     // legacy events without a ledger namespace must not match another D-150.
+    // `found` is already ownership-filtered (deterministic id or matching sheet).
     if (closed(row)) {
       for (const { calendar, event } of found) {
-        const sheet = event.extendedProperties?.private?.deadlineSheetId || String(event.description || '').match(/spreadsheets\/(?:a\/[^/]+\/)?d\/([\w-]+)/)?.[1];
-        if (sheet !== config.sheetId) continue;
         try { await request(`${calendarBase(calendar)}/${encodeURIComponent(event.id)}?sendUpdates=none`, { ...opts, method: 'DELETE' }); }
         catch (error) { if (![404, 410].includes(error.status)) throw error; }
       }
@@ -249,13 +248,22 @@ export async function syncCalendar(row, { config, state, request, persist = () =
       reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 10080 }, { method: 'popup', minutes: 1440 }] }, extendedProperties: { private: { deadlineId: row.id, deadlineSheetId: config.sheetId } } };
     const base = calendarBase(target);
     {
-      const id = createHash('sha256').update(`${config.sheetId}:${row.id}`).digest('hex');
+      const id = deadlineEventId(config.sheetId, row.id);
       try { await request(`${base}?sendUpdates=none`, { ...opts, method: 'POST', body: { ...body, id } }); }
       catch (e) {
         if (e.status !== 409) throw e;
         const existing = await request(`${base}/${id}`, opts);
-        if (existing.status === 'cancelled' || !belongsToLedger(existing, config) || existing.extendedProperties?.private?.deadlineId !== row.id) throw Error(`Calendar ID衝突: ${row.id}（別予定へのPATCHを停止）`);
-        await patch(existing, target, body);
+        const privId = existing.extendedProperties?.private?.deadlineId;
+        // Deterministic id encodes this sheetId. Reclaim cancelled stubs and stale
+        // deadlineSheetId metadata when deadlineId is ours or unset. Only a different
+        // deadlineId is a true foreign occupant — skip that row without failing the run.
+        if (privId && privId !== row.id) {
+          const message = `Calendar ID衝突: ${row.id}（別予定へのPATCHを停止）`;
+          log(`deadline-watch: ${message}`);
+          warnings?.push({ id: row.id, phase: 'Calendar sync', warning: message });
+          return;
+        }
+        await patch(existing, target, { ...body, ...(existing.status === 'cancelled' ? { status: 'confirmed' } : {}) });
       }
     }
   } catch (e) {
@@ -388,7 +396,7 @@ export async function runWatch({ home, config, ledger, sheets, request, today, d
         if (!dryRun) {
           if (closed(row) || !decision.kim) inboxOps.push(buildInboxOp({ row, config, close: true }));
           else if (shouldNotify || openKeys.has(row.id)) inboxOps.push(buildInboxOp({ row, decision, config, markNotified: shouldNotify }));
-          await attempt(row.id, 'Calendar sync', () => syncCalendar(row, { config, state, request, persist, log: stderr }));
+          await attempt(row.id, 'Calendar sync', () => syncCalendar(row, { config, state, request, persist, log: stderr, warnings }));
         }
       } catch (e) { runtime?.signal.throwIfAborted(); errors.push({ id: row.id, error: e.message, ...(isTimeout(e) ? { timeout: true } : {}) }); }
     }
@@ -511,7 +519,10 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     else if (result.warnings?.length) {
       const ids = result.warnings.map(w => w.id);
       const suffix = ids.length === 1 ? ids[0] : `${ids[0]} ほか ${ids.length - 1}件`;
-      resultSummary = `期限追跡完了（警告: ${suffix} 元メール404）`;
+      const allMail404 = result.warnings.every(w => /元メールが見つからない\(404\)/.test(w.warning || ''));
+      resultSummary = allMail404
+        ? `期限追跡完了（警告: ${suffix} 元メール404）`
+        : `期限追跡完了（警告: ${suffix}）`;
     } else resultSummary = '期限追跡完了';
     partial = result.errors.some(e => e.timeout);
     return ok ? 0 : partial ? 2 : 1;

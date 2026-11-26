@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { AI_CALENDAR } from './calendar-shared.mjs';
 
 export const calendarBase = id => `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(id)}/events`;
@@ -82,6 +83,23 @@ export async function listCalendarEvents(request, calendar, params) {
 export function belongsToLedger(event, config) {
   const sheet = event.extendedProperties?.private?.deadlineSheetId || String(event.description || '').match(/spreadsheets\/(?:a\/[^/]+\/)?d\/([\w-]+)/)?.[1];
   return !sheet || sheet === config.sheetId;
+}
+/** Deterministic Calendar event id for a ledger row (sha256 hex). */
+export function deadlineEventId(sheetId, rowId) {
+  return createHash('sha256').update(`${sheetId}:${rowId}`).digest('hex');
+}
+/**
+ * Own this event for sync/update purposes.
+ * The deterministic id encodes sheetId, so a matching id is this ledger's slot even when
+ * deadlineSheetId/description still point at a retired ledger copy.
+ * A different deadlineId on that slot is a true foreign collision.
+ */
+export function isDeadlineOwnedEvent(event, row, config) {
+  if (!event) return false;
+  const privId = event.extendedProperties?.private?.deadlineId;
+  if (privId && privId !== row.id) return false;
+  if (event.id === deadlineEventId(config.sheetId, row.id)) return true;
+  return privId === row.id && belongsToLedger(event, config);
 }
 export async function moveCalendarEvent(request, event, from, to) {
   if (from === to) return event;

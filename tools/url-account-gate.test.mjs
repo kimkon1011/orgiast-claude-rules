@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { judge, formatReason } from './url-account-gate.mjs';
+import { judge, formatReason, annotateAccounts } from './url-account-gate.mjs';
 
 const studio = 'https://ai.studio/prompts/new_chat';
 const account = '（**kim@orgiast.jp** で開く）';
@@ -243,4 +243,17 @@ test('差し戻し文の書式は URL の直後に文字を続けない（2026-1
   const answer = `**kimkon1011** で開いてください。\n${pr}`;
   assert.deepEqual(judge(answer).missing, []);
   assert.equal(findBrokenRawUrl(answer).decision, 'pass');
+});
+
+test('annotateAccounts は authuser のメールをカタログより優先する', () => {
+  const url = 'https://docs.google.com/document/d/ID/edit?authuser=kim%40orgiast.jp';
+  const annotated = annotateAccounts(`確認した結果は${url} に書いてあります。`);
+  assert.match(annotated, /開くアカウント: \*\*kim@orgiast\.jp\*\* → /);
+  assert.doesNotMatch(annotated, /開くアカウント: 未登録/);
+});
+
+test('annotateAccounts は authuser が無いときだけカタログ／未登録へ進む', () => {
+  const url = 'https://docs.google.com/document/d/ID/edit';
+  const annotated = annotateAccounts(`確認した結果は${url} に書いてあります。`);
+  assert.match(annotated, /開くアカウント: 未登録（tools\/ai-subscription-catalog\.json に account を足す） → /);
 });

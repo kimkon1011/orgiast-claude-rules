@@ -158,6 +158,31 @@ function pendingReasons(data, now) {
   }
   return reasons;
 }
+function canon(file) {
+  let resolved = path.resolve(file);
+  try { resolved = fs.realpathSync.native(resolved); }
+  catch {
+    const tail = [];
+    let current = resolved;
+    while (true) {
+      try { current = fs.realpathSync.native(current); break; }
+      catch {
+        const parent = path.dirname(current);
+        if (parent === current) break;
+        tail.unshift(path.basename(current));
+        current = parent;
+      }
+    }
+    resolved = path.join(current, ...tail);
+  }
+  const unified = resolved.replace(/[\\/]+/g, '/');
+  return process.platform === 'win32' ? unified.toLowerCase() : unified;
+}
+function gitRun(dir, args) {
+  const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
+  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_COMMON_DIR', 'GIT_PREFIX']) delete env[key];
+  return execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', windowsHide: true, timeout: 15_000, maxBuffer: 16 * 1024 * 1024, env, stdio: ['ignore', 'pipe', 'pipe'] });
+}
 function gitInspector() {
   const directories = new Map(), repositories = new Map();
   function repoFor(dir) {
@@ -170,8 +195,12 @@ function gitInspector() {
         if (fs.statSync(current).isDirectory()) {
           // Ask Git from the nearest existing directory, including for deleted
           // files. Do not cache parent results across nested repos/worktrees.
-          try { found = run('git', ['-C', current, 'rev-parse', '--show-toplevel']).trim() || null; }
-          catch { /* No repository identified: no Git protection reason. */ }
+          try {
+            let repo;
+            try { repo = gitRun(current, ['rev-parse', '--path-format=absolute', '--show-toplevel']).trim(); }
+            catch { repo = gitRun(current, ['rev-parse', '--show-toplevel']).trim(); }
+            found = repo ? canon(repo) : null;
+          } catch { /* No repository identified: no Git protection reason. */ }
           break;
         }
       } catch (e) {
@@ -188,14 +217,14 @@ function gitInspector() {
     if (!repositories.has(repo)) {
       const state = { dirty: new Set(), unknown: false, unpushed: 0 };
       try {
-        const rows = run('git', ['-C', repo, 'status', '--porcelain', '-z', '--untracked-files=all']).split('\0');
+        const rows = gitRun(repo, ['status', '--porcelain', '-z', '--untracked-files=all']).split('\0');
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i]; if (!row) continue;
-          state.dirty.add(path.resolve(repo, row.slice(3)));
-          if (/R|C/.test(row.slice(0, 2)) && rows[i + 1]) state.dirty.add(path.resolve(repo, rows[++i]));
+          state.dirty.add(canon(path.resolve(repo, row.slice(3))));
+          if (/R|C/.test(row.slice(0, 2)) && rows[i + 1]) state.dirty.add(canon(path.resolve(repo, rows[++i])));
         }
       } catch { state.unknown = true; }
-      try { state.unpushed = Number(run('git', ['-C', repo, 'rev-list', '--count', '@{u}..HEAD']).trim()); }
+      try { state.unpushed = Number(gitRun(repo, ['rev-list', '--count', '@{u}..HEAD']).trim()); }
       catch (e) {
         // An unconfigured upstream (including an unborn branch) has no
         // unpushed comparison. Other rev-list failures remain protected.
@@ -211,10 +240,9 @@ function gitInspector() {
       const repo = repoFor(dir);
       if (repo) repos.add(repo);
     }
-    const normalize = file => process.platform === 'win32' ? file.toLowerCase() : file;
     for (const repo of repos) {
-      const state = inspect(repo), dirty = new Set([...state.dirty].map(normalize));
-      if (data.edited.some(file => dirty.has(normalize(file)))) reasons.add('git-dirty');
+      const state = inspect(repo);
+      if (data.edited.some(file => state.dirty.has(canon(file)))) reasons.add('git-dirty');
       if (data.committed && state.unpushed > 0) reasons.add('git-unpushed');
       if (state.unknown) reasons.add('git-unknown');
     }

@@ -197,22 +197,28 @@ test('git dirty, unpushed and command failures protect; unrelated dirty file and
   const edit = file => ({ type: 'assistant', cwd: f.root, message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: path.join(f.root, file) } }] } });
   fs.writeFileSync(path.join(f.root, 'a.txt'), 'dirty');
   const dirty = f.session({ rows: [edit('a.txt')] }), clean = f.session({ rows: [edit('b.txt')] });
-  let r = await sessionCap({ ...f.options, dryRun: true }); assert.ok(r.kept.find(x => x.id === dirty).reasons.includes('git-dirty')); assert.ok(r.archived.some(x => x.id === clean));
+  let r = await sessionCap({ ...f.options, dryRun: true }); assert.ok(keptReasons(r, dirty).includes('git-dirty')); assert.ok(r.archived.some(x => x.id === clean));
   git(['add', 'a.txt']); git(['commit', '-m', 'unpublished']);
   const unpushed = f.session({ rows: [edit('a.txt'), { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'git commit -m change' } }] } }] });
-  r = await sessionCap({ ...f.options, dryRun: true }); assert.ok(r.kept.find(x => x.id === unpushed).reasons.includes('git-unpushed'));
+  r = await sessionCap({ ...f.options, dryRun: true }); assert.ok(keptReasons(r, unpushed).includes('git-unpushed'));
   git(['branch', '--unset-upstream']); const noUpstream = f.session({ rows: [edit('a.txt')] });
   r = await sessionCap({ ...f.options, dryRun: true });
   assert.ok(r.archived.some(x => x.id === noUpstream)); assert.ok(r.archived.some(x => x.id === unpushed));
   // A configured upstream that cannot be resolved is a real rev-list failure.
   git(['branch', '--set-upstream-to=upstream']); git(['branch', '-D', 'upstream']);
-  r = await sessionCap({ ...f.options, dryRun: true }); assert.ok(r.kept.find(x => x.id === noUpstream).reasons.includes('git-unknown'));
+  r = await sessionCap({ ...f.options, dryRun: true }); assert.ok(keptReasons(r, noUpstream).includes('git-unknown'));
   git(['branch', '--unset-upstream']);
   fs.writeFileSync(path.join(f.root, '.git/index'), 'invalid index');
-  r = await sessionCap({ ...f.options, dryRun: true }); assert.ok(r.kept.find(x => x.id === noUpstream).reasons.includes('git-unknown'));
+  r = await sessionCap({ ...f.options, dryRun: true }); assert.ok(keptReasons(r, noUpstream).includes('git-unknown'));
 });
 
 const editRow = file => ({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: file } }] } });
+const keptReasons = (result, id) => {
+  const row = result.kept.find(x => x.id === id);
+  assert.ok(row, `expected ${id} to be kept (archived=${result.archived.map(x => x.id).join(',') || 'none'}; kept=${JSON.stringify(result.kept)})`);
+  return row.reasons;
+};
+
 
 test('editing only unmanaged files has no git reasons even with a broken cwd repository', async t => {
   const f = fixture(t);
@@ -239,7 +245,7 @@ test('unborn repository without upstream stays dirty but not unknown', async t =
   const file = path.join(f.root, 'new.txt'); fs.writeFileSync(file, 'new');
   const id = f.session({ rows: [editRow(file)] });
   const r = await sessionCap({ ...f.options, dryRun: true });
-  assert.deepEqual(r.kept.find(x => x.id === id).reasons, ['git-dirty']);
+  assert.deepEqual(keptReasons(r, id), ['git-dirty']);
 });
 
 test('edited files locate nested repositories and deleted directories from a non-repository cwd', async t => {
@@ -256,7 +262,7 @@ test('edited files locate nested repositories and deleted directories from a non
   const id = f.session({ cwd: f.home, rows: [editRow(clean), editRow(deleted), editRow(unrelated)] });
   const cleanId = f.session({ cwd: f.home, rows: [editRow(clean)] });
   const r = await sessionCap({ ...f.options, dryRun: true });
-  assert.deepEqual(r.kept.find(x => x.id === id).reasons, ['git-dirty']);
+  assert.deepEqual(keptReasons(r, id), ['git-dirty']);
   assert.ok(r.archived.some(x => x.id === cleanId));
 });
 test('workspace JSONC resolves first relative folder and deduplicates windows', t => {
@@ -281,7 +287,7 @@ test('fresh timestamp protects despite old mtime; stale workspace tabs do not pr
   const file = path.join(f.user, 'workspaceStorage/old/state.vscdb'); db(file, { tabs: [stale] });
   fs.utimesSync(file, new Date(time - 15 * 24 * hour), new Date(time - 15 * 24 * hour));
   const r = await sessionCap(f.options);
-  assert.ok(r.kept.find(x => x.id === fresh).reasons.includes('running'));
+  assert.ok(keptReasons(r, fresh).includes('running'));
   assert.ok(r.archived.some(x => x.id === stale));
 });
 test('recent unreadable workspace and failed process inventory fail closed', async t => {

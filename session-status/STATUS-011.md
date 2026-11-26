@@ -1,7 +1,7 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-26 11:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-26 12:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 31
+- 案件数: 32
 
 - 011・.stall-sweeper・停止・最終更新 11/26 04:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・3oku-9-17-1125・完了・最終更新 11/25 09:39、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
@@ -29,7 +29,8 @@
 - 011・sales-14sha-1125・完了・最終更新 11/25 11:34、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 011・sales-followup・停止・最終更新 11/26 07:54、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-followup-1123・完了・最終更新 11/23 18:18、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
-- 011・営業 次回連絡日・ready・最終更新 11/26 11:01、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
+- 011・sales-link-audit-1126・進行中・Codex に調査・実装（discord-intake / send-tracker / stuck-export）を委譲中（11:40 JST 起動）・期限2026-11-26 当日・次:codex-link-audit-result-20261126.md を検証し REPORT.md / DONE.txt を書く
+- 011・営業 次回連絡日・error・最終更新 11/26 12:00、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
 - 011・souko-kyujin-1125・完了・最終更新 11/25 19:40、STATUS.mdなし、DONEあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
 - 011・tangomuto-reply-1125・完了・最終更新 11/25 12:25、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 011・tasks・停止・最終更新 11/24 09:49、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

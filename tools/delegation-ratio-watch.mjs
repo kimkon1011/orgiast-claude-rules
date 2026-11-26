@@ -86,7 +86,7 @@ function extractUsageFromProjectJsonl(file, since) {
       if (!row || typeof row !== 'object') continue;
       const model = extractModel(row);
       if (!model) continue;
-      const t = Number(row.timestamp) || Date.parse(row.timestamp || row.t || row.ts || row.created_at || 0);
+      const t = Number(row.timestamp) || Date.parse(row.timestamp || row.t || row.ts || row.created_at);
       if (!Number.isFinite(t) || t < since) continue;
       // message.id + requestId で重複排除
       const msgId = (row.message && row.message.id) ? String(row.message.id) : '';
@@ -139,7 +139,7 @@ export function compute({ home = os.homedir(), now = Date.now(), executorUsageFi
       let row;
       try { row = JSON.parse(line); } catch { continue; }
       if (!row || typeof row !== 'object') continue;
-      const t = Number(row.t) || Date.parse(row.t || row.ts || 0);
+      const t = Number(row.t) || Date.parse(row.t || row.ts);
       if (!Number.isFinite(t) || t < since) continue;
       executorRows.push(row);
       // 安いAI実作業 (Claude 以外で out > 200, status ok)
@@ -173,16 +173,25 @@ export function compute({ home = os.homedir(), now = Date.now(), executorUsageFi
   }
 
   // 3. quota_wait 中の呼び出し — lane-health.json から quota_wait プロバイダを特定
-  const quotaWaitProviders = new Set();
+  const quotaWaitWindows = new Map();
+  const quotaWaitUnknownSince = [];
   try {
     const lh = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'lane-health.json'), 'utf8').replace(/^﻿/, ''));
     for (const [p, s] of Object.entries(lh?.lanes || {})) {
-      if (s?.reason === 'quota_wait' && Number(s?.until) > now) quotaWaitProviders.add(String(p).toLowerCase());
+      if (s?.reason !== 'quota_wait' || Number(s?.until) <= now) continue;
+      const provider = String(p).toLowerCase();
+      const startedAt = Number(s?.since) || Date.parse(s?.since || s?.probedAt);
+      if (Number.isFinite(startedAt)) quotaWaitWindows.set(provider, { since: startedAt, until: Number(s.until) });
+      // 開始時刻なしの旧データは過去の正常呼出しを誤算入するため、安全側で数えない。
+      else quotaWaitUnknownSince.push(provider);
     }
   } catch {}
   let quotaWaitCalls = 0;
   for (const row of executorRows) {
-    if (row.provider && quotaWaitProviders.has(String(row.provider).toLowerCase())) quotaWaitCalls++;
+    const window = row.provider && quotaWaitWindows.get(String(row.provider).toLowerCase());
+    if (!window) continue;
+    const t = Number(row.t) || Date.parse(row.t || row.ts);
+    if (Number.isFinite(t) && t >= window.since && t <= window.until) quotaWaitCalls++;
   }
 
   // 4. 判断
@@ -200,11 +209,12 @@ export function compute({ home = os.homedir(), now = Date.now(), executorUsageFi
     cheapAi: { workCount: cheapWorkCount },
     deferred: { noFallback: deferredNoFallback, allBackendsFailed: deferredAllBackendsFailed },
     quotaWaitCalls,
-    providers: [...quotaWaitProviders],
+    providers: [...quotaWaitWindows.keys(), ...quotaWaitUnknownSince],
     alert,
     reasons: [
       deferredHigh && `代替されなかった deferred が ${deferredNoFallback} 件（閾値 10）`,
       quotaWaitHigh && `quota_wait 中の呼出しが ${quotaWaitCalls} 件（閾値 50）`,
+      ...quotaWaitUnknownSince.map(provider => `${provider} の quota_wait 開始時刻が不明なため呼出し数から除外`),
       cheapLow && opusDominant && `安いAI実作業 ${cheapWorkCount} 件/日（閾値 10）かつ Claude Opus 比率 ${Math.round(opusRatio * 100)}%（閾値 70%）`,
     ].filter(Boolean),
   };

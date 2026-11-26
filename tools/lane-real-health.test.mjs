@@ -552,3 +552,30 @@ test('ChatGPT 枠切れの行は失敗ではなく quotaCalls に入り gate が
   assert.equal(stats.codex.quotaCalls, 6);
   assert.equal(repairable({ alive: false, reason: 'real_fail_rate', error: stderr }), false);
 });
+
+test('fail-rate でも probeReason/probeEvidence が quota を示すなら quota_wait', t => {
+  const home = fixture(t, Array.from({ length: 5 }, () => ({ status: '500', reason: 'HTTP 500' })));
+  for (const signal of [
+    { probeReason: 'HTTP 429 usage_limit', probeEvidence: 'exit 1' },
+    { probeReason: 'probe_failed', probeEvidence: 'usage_limit exhausted' },
+    { probeReason: 'quota_wait', probeEvidence: 'exit 1' },
+  ]) {
+    const health = { lanes: { deepseek: { alive: true, reason: 'probe_ok', ...signal } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.deepseek.reason, 'quota_wait', JSON.stringify(signal));
+    assert.equal(health.lanes.deepseek.alive, false);
+    assert.match(health.lanes.deepseek.error, /HTTP 500/);
+  }
+});
+
+test('fail-rate で probe が quota を示さなければ従来どおり real_fail_rate', t => {
+  const home = fixture(t, Array.from({ length: 5 }, () => ({ status: '500', reason: 'HTTP 500' })));
+  const health = { lanes: { deepseek: {
+    alive: true, reason: 'probe_ok',
+    probeReason: 'probe_failed', probeEvidence: 'exit 1',
+  } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.deepseek.reason, 'real_fail_rate');
+  assert.equal(health.lanes.deepseek.alive, false);
+  assert.equal(health.lanes.deepseek.until, undefined);
+});

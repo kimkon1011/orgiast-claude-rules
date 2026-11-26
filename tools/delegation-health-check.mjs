@@ -209,7 +209,8 @@ export function isGeminiBillingProbeRow(row = {}) {
 }
 
 export function isBillingSuspendedRow(row = {}) {
-  return /^(?:http_?)?(402|429)$/.test(String(row?.status ?? '').toLowerCase())
+  // 403 単体（鍵失効など本文が課金でないもの）は故障扱いのまま。本文一致が必須。
+  return /^(?:http_?)?(402|403|429)$/.test(String(row?.status ?? '').toLowerCase())
     && isPermanentBillingDetail(row?.reason);
 }
 

@@ -130,7 +130,9 @@ export function classifyFailure(status) {
 }
 
 export function isPermanentBillingDetail(detail) {
-  return /prepayment credits are depleted|insufficient_quota|exceeded your current quota|insufficient balance|insufficient_balance|exceeded_current_quota|is suspended due to|please recharge your account/i.test(String(detail || ''));
+  // xAI 403 クレジット切れ本文の "purchase more credits or raise your spending limit" は拾う。
+  // ChatGPT/Codex の時間回復型 "purchase more credits or try again at" は一致させない。
+  return /prepayment credits are depleted|insufficient_quota|exceeded your current quota|insufficient balance|insufficient_balance|exceeded_current_quota|is suspended due to|please recharge your account|used all available credits|reached its monthly spending limit|purchase more credits or raise your spending limit/i.test(String(detail || ''));
 }
 
 function retryAfterMs(response, now = Date.now()) {
@@ -527,7 +529,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
       await noteAttempt({ candidate, attempt, status: timedOut ? 'timeout' : statusName(status), response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: (candidate.provider !== start.provider || candidate.model !== start.model) });
       // groq の通常429の本文には `https://console.groq.com/settings/billing` が含まれるため、
       // 素の `billing` で判定すると日次上限(TPD)を恒久障害と誤判定する。恒久障害の文面だけを拾う。
-      const permanentBilling = status === 429 && isPermanentBillingDetail(detail);
+      const permanentBilling = [402, 403, 429].includes(status) && isPermanentBillingDetail(detail);
       setCooldown(candidate.provider, status, response, permanentBilling, detail);
 
       if (timedOut) break; // A hung candidate must not consume three timeout windows.

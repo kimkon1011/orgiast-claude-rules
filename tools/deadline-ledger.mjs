@@ -3,7 +3,7 @@ import { ensureKimEditor } from './lib/kim-editor.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { getDriveToken } from './lib/drive-auth.mjs';
 import { GWS_USER, gwsFetch } from './lib/gws-proxy.mjs';
 import { createSheetsClient, quoteTab } from './lib/sheets-dwd.mjs';
@@ -41,27 +41,52 @@ export function loadConfig(home) {
   return { ...DEFAULT_CONFIG, ...saved, calendar: { ...DEFAULT_CONFIG.calendar, ...saved.calendar } };
 }
 // All three tools share a local lock, including the candidate/ID allocation step.
-export async function withLedgerLock(home, fn) {
+// Preserve lock generations; exclusive claim files serialize stale takeovers.
+export async function withLedgerLock(home, fn, { waitMs = 0, signal, pollMs = 250 } = {}) {
   const file = dataPath(home, '.lock'); fs.mkdirSync(path.dirname(file), { recursive: true });
-  let fd;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try { fd = fs.openSync(file, 'wx', 0o600); break; }
-    catch (e) {
-      if (e.code !== 'EEXIST') throw e;
-      const pid = Number(fs.readFileSync(file, 'utf8'));
-      if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('期限台帳のロック所有者が不明です');
-      try { process.kill(pid, 0); } catch (err) { if (err.code === 'ESRCH') { fs.unlinkSync(file); continue; } throw err; }
-      throw new Error('期限台帳を別プロセスが更新中です');
+  const until = Date.now() + waitMs;
+  const owner = `${process.pid} ${randomUUID()}`;
+  const alive = value => {
+    const pid = Number(value.trim().split(/\s+/)[0]);
+    if (pid === 0 && value.trim()) return false;
+    if (!Number.isSafeInteger(pid) || pid <= 0) return true;
+    try { process.kill(pid, 0); return true; }
+    catch (e) { if (e.code === 'ESRCH') return false; throw e; }
+  };
+  const create = (name, value) => {
+    try { fs.writeFileSync(name, value, { flag: 'wx', mode: 0o600 }); return true; }
+    catch (e) { if (e.code === 'EEXIST') return false; throw e; }
+  };
+  const claim = snapshot => {
+    let generation = snapshot;
+    for (;;) {
+      const name = dataPath(home, '.claim-' + createHash('sha256').update(generation).digest('hex'));
+      if (create(name, owner)) return true;
+      const previous = fs.readFileSync(name, 'utf8');
+      if (alive(previous)) return false;
+      generation = name + ':' + previous;
     }
+  };
+  for (;;) {
+    signal?.throwIfAborted();
+    if (create(file, owner)) break;
+    const snapshot = fs.readFileSync(file, 'utf8');
+    if (!alive(snapshot) && claim(snapshot) && fs.readFileSync(file, 'utf8') === snapshot) {
+      fs.writeFileSync(file, owner); break;
+    }
+    if (Date.now() >= until) throw Object.assign(new Error('期限台帳を別プロセスが更新中です（lock timeout）'), { code: 'DEADLINE_TIMEOUT' });
+    await new Promise(resolve => setTimeout(resolve, Math.min(pollMs, until - Date.now())));
   }
-  if (fd === undefined) throw new Error('期限台帳のロックを取得できません');
-  fs.writeFileSync(fd, String(process.pid));
-  try { return await fn(); } finally { fs.closeSync(fd); fs.unlinkSync(file); }
+  try { return await fn(); }
+  finally {
+    if (fs.readFileSync(file, 'utf8') === owner) fs.writeFileSync(file, `0 ${randomUUID()}`);
+  }
 }
 export function googleClient({ getToken = getDriveToken, fetchImpl = gwsFetch } = {}) {
   const tokens = new Map();
   const tokenRoutes = new Map();
   return async function request(url, { user = 'kim@orgiast.jp', scope = 'https://www.googleapis.com/auth/drive', method = 'GET', body, rawBody, contentType, text = false, buffer = false, signal } = {}) {
+    signal?.throwIfAborted();
     const requestedKey = `${user}|${scope}`;
     const key = tokenRoutes.get(requestedKey) || requestedKey;
     let token = tokens.get(key);
@@ -71,6 +96,7 @@ export function googleClient({ getToken = getDriveToken, fetchImpl = gwsFetch } 
       let value;
       try { value = await getToken({ impersonate: tokenUser, scope: tokenScope, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) }); }
       catch (e) {
+        signal?.throwIfAborted();
         if (user === 'kim@orgiast.jp' && /\/auth\/calendar(?:\.|$)/.test(scope)) throw e;
         if (e.message !== `鍵なし経路は ${GWS_USER} 固定です`) throw e;
         tokenUser = GWS_USER;
@@ -82,6 +108,7 @@ export function googleClient({ getToken = getDriveToken, fetchImpl = gwsFetch } 
       tokens.set(tokenKey, token);
       tokenRoutes.set(requestedKey, tokenKey);
     }
+    signal?.throwIfAborted();
     const timeout = Number(process.env.DEADLINE_FETCH_TIMEOUT_MS) || 60_000;
     const requestSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout);
     let response;

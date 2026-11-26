@@ -1,0 +1,29 @@
+{
+  "routes": {
+    "gakkai": {"remoteName": "作業用018", "label": "学会（出展・協賛）"},
+    "booth": {"remoteName": "作業用014", "fallback": "作業用008", "label": "展示会ブース"},
+    "production": {"remoteName": "作業用011", "label": "制作アプリ・営業自動化・学会制作の自動化"},
+    "other": {"remoteName": "作業用008", "label": "ブース以外のイベント等"}
+  },
+  "keywords": {
+    "production": ["制作アプリ", "営業自動化", "自動化", "アプリ開発", "システム開発", "ツール開発"],
+    "gakkai": ["学会", "学術集会", "総会", "協賛", "学術大会", "RMキャリア"],
+    "booth": ["ブース", "展示会", "EXPO", "エキスポ", "出展", "Reブース"],
+    "other": ["イベント", "セミナー", "式典", "パーティ", "社内イベント", "フェス", "キャラバン"]
+  },
+  "clientKindHints": [
+    {"match": "ターゲットメディア", "kind": "gakkai", "customer": "ターゲットメディア", "note": "学会協賛の販売代理店（医師向け転職サービス等の学会協賛）"}
+  ],
+  "excludeTitlePatterns": ["面談", "面接", "採用", "1on1", "評価面談", "瞑想"],
+  "lookbackHours": 72,
+  "endedGraceMinutes": 5,
+  "pendingGiveUpHours": 48,
+  "maxTranscriptChars": 60000,
+  "calendarMatchMinutes": 30,
+  "statusFile": "gb-reports/latest-tldv-followup.md",
+  "runsDir": "gb-reports/tldv-followup/runs",
+  "jobStatusFile": "gb-reports/tldv-followup/STATUS.md",
+  "stateFile": ".claude/state/tldv-followup-dispatch.json",
+  "ledgerFile": ".claude/unsent-ledger/ledger.json",
+  "localExec": true
+}

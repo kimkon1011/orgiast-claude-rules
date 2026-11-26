@@ -1,0 +1,23 @@
+# 261218GRO GROWTH VERSE 石井様 申込書受領返信 — 下書き作成結果
+
+下書きID: r1176683347087910816
+messageId: 1a2156dabe7f8851
+threadId: 1a1f1803f0416ab2
+宛先: ishii@growth-verse.ai
+件名: Re: 【株式会社オージャスト】上場の鐘レンタルにつきまして
+送信元: seisaku-team@orgiast.jp
+送信: していない（--send 未実行）
+
+読み戻し一致: 可
+- toMatch: true
+- subjectMatch: true
+- threadMatch: true
+- bodyExactMatch: true
+- In-Reply-To: 付与済み
+
+kim-inbox id: ki-20261126012107-6f10
+kind: ask
+status: open
+path: C:\Users\user\.claude\kim-inbox\ki-20261126012107-6f10.json
+タイトル: GROWTH VERSE 石井様 上場の鐘 申込書受領の返信を送るか（261218GRO）
+答えてほしいこと: この下書きを送ってよいか（届け先連絡の期限 12/9(水) で良いか）

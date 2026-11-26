@@ -60,7 +60,8 @@ test('定期報告モードは同じ未対応項目の再掲をNGにせず、質
   assert.match(prompt,/佐藤優奈さん（宛先本人）あての毎日の状況報告/);
   assert.match(prompt,/「同じ未対応の項目を、前日以前の報告でも書いている」ことはNGにしない/);
   assert.match(prompt,/①報告の中で宛先本人に質問している/);
-  assert.match(prompt,/②メール原本で確認できる送信者の同一性、メールの日付、参照メールの実在、相手の未回答の質問・要望/);
+  assert.match(prompt,/②日付・金額・人名が下記のメール原本証拠と実際に食い違っている/);
+  assert.match(prompt,/メール原本で確認できる送信者の同一性、メールの日付、参照メールの実在、相手の未回答の質問・要望/);
   assert.match(prompt,/メール原本証拠:\n\[2026-11-11\] PRONI: 未返信/);
   assert.match(prompt,/Discord履歴に根拠となるメールや同日の日報が載っていないことだけではNGにしてはならない/);
   assert.match(prompt,/「昨日の動き：なし」.*Discord履歴に業務メールが載っていないことだけでは虚偽と推測しない/);

@@ -654,6 +654,27 @@ test('OpenRouter fallback 応答が前置き文＋JSONを含む場合は抽出�
   assert.equal(ctx.records()[0].title, '前置き付きJSON');
 });
 
+test('3トピック連続で新規追加0件の場合、4トピック目以降のAPI呼び出しが発生しない', async t => {
+  const logs = [];
+  const ctx = setup(t, { log: x => logs.push(x) });
+  ctx.options.config.topics = [
+    { purpose: 'cost', query: 'topic1' },
+    { purpose: 'cost', query: 'topic2' },
+    { purpose: 'cost', query: 'topic3' },
+    { purpose: 'cost', query: 'topic4' },
+    { purpose: 'cost', query: 'topic5' }
+  ];
+  let callCount = 0;
+  ctx.options.fetchFn = async () => {
+    callCount++;
+    return response([]); // 空のレスポンスでadded=0をシミュレート
+  };
+  const result = await runCollect(ctx.options);
+  // 3トピック連続でadded=0なので、4トピック目以降は呼ばれない
+  assert.equal(callCount, 3);
+  assert.match(result.status, /打ち切り:無収穫3連続/);
+});
+
 test('callOpenRouterGrok の body に web 検索プラグインを含む', async t => {
   let sentBody;
   const fetchFn = async (_url, init) => {

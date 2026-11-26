@@ -328,6 +328,22 @@ test('auto registration marker does not hide an explicit waiting_user request', 
 
 process.env.ORGIAST_AUTO_RESUME = '1';
 
+test('CLI: 引数なしで exit 0 で一覧表示', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-awaiting-cli-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  writeLedger(ledgerFile(home), [row()]);
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const script = fileURLToPath(new URL('./kim-awaiting.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [script], {
+    env: { ...process.env, ORGIAST_HOME: home },
+    timeout: 10000,
+    encoding: 'utf8'
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /kim の返事待ち/);
+});
+
 test('hook displays only added ids at the end and suppresses repeated prompts', t => {
   const home = fixture(t), options = { home, now: NOW, env: {} };
   const input = { session_id: 'viewer', prompt: 'first request' };

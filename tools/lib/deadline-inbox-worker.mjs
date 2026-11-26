@@ -1,7 +1,7 @@
 // Isolate synchronous inbox directory scans and per-item lock waits from the
 // deadline-watch event loop so its individual timeout can terminate the worker.
 import fs from 'node:fs';
-import { listItems, batchDeadlineOps } from '../kim-inbox.mjs';
+import { listItems, batchDeadlineOps, releaseDeadlineWorkerLock } from '../kim-inbox.mjs';
 import { retireVehicleAsks } from '../vehicle-inspection-watch.mjs';
 import { defaultHome } from '../deadline-ledger.mjs';
 import { isEntry } from '../is-entry.mjs';
@@ -13,13 +13,18 @@ export function main(argv, home = defaultHome()) {
   if (operation === 'batch') {
     const raw = rest[0] ? fs.readFileSync(rest[0], 'utf8') : fs.readFileSync(0, 'utf8');
     const ops = JSON.parse(raw);
-    const results = batchDeadlineOps(home, ops);
+    let openItems = [];
+    const results = batchDeadlineOps(home, ops, { onOpenItems: items => { openItems = items; } });
     for (const result of results) {
       if (!result.ok || !result.vehicleName || !result.plate) continue;
-      retireVehicleAsks(home, { name: result.vehicleName, plate: result.plate });
+      retireVehicleAsks(home, { name: result.vehicleName, plate: result.plate }, openItems);
     }
     return results;
   }
   throw new Error('Unknown deadline inbox worker operation');
 }
-if (isEntry(import.meta.url)) console.log(JSON.stringify(main(process.argv.slice(2))));
+if (isEntry(import.meta.url)) {
+  const home = defaultHome();
+  try { console.log(JSON.stringify(main(process.argv.slice(2), home))); }
+  finally { releaseDeadlineWorkerLock(home, process.pid, { requireDead: false }); }
+}

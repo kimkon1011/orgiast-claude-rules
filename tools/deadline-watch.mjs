@@ -8,6 +8,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { withAbort, budgetMs } from './lib/deadline-budget.mjs';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { releaseDeadlineWorkerLock } from './kim-inbox.mjs';
 import { isEntry } from './is-entry.mjs';
 import { seatCheck } from './lib/deadline-seat.mjs';
 import { parseRows as parseVehicles } from './vehicle-inspection-watch.mjs';
@@ -112,17 +113,27 @@ export function buildInboxOp({ row, decision, config, close = false, markNotifie
     ...(row.readOnly && row.vehicleName && row.plate ? { vehicleName: row.vehicleName, plate: row.plate } : {}),
   };
 }
-export async function runInboxBatch(ops, { home, signal, execImpl = exec, batchImpl } = {}) {
+// The 90s child budget is 3x the 30s performance target, and leaves
+// time for child termination and lock cleanup before the 120s outer step.
+export async function runInboxBatch(ops, { home, signal, execImpl = exec, batchImpl, timeoutMs = 90_000 } = {}) {
   if (!ops.length) return [];
   if (batchImpl) return batchImpl(ops, { home, signal });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-inbox-batch-'));
   const file = path.join(dir, 'ops.json');
   fs.writeFileSync(file, JSON.stringify(ops), { mode: 0o600 });
+  let child;
+  let exited;
   try {
-    const { stdout } = await execImpl(process.execPath, [inboxWorker, 'batch', file], inboxOptions(home, signal));
+    const pending = execImpl(process.execPath, [inboxWorker, 'batch', file], { ...inboxOptions(home, signal), timeout: timeoutMs });
+    child = pending.child;
+    if (child) exited = new Promise(resolve => child.once('close', resolve));
+    const { stdout } = await pending;
     return JSON.parse(stdout);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    try {
+      await exited;
+      if (child?.pid) releaseDeadlineWorkerLock(home, child.pid);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   }
 }
 export function queueSheetWrite(pending, row, changes) {

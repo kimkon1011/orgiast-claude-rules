@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { runWatch, syncCalendar, buildInboxOp, queueSheetWrite, runInboxBatch } from '../tools/deadline-watch.mjs';
-import { batchDeadlineOps } from '../tools/kim-inbox.mjs';
+import { batchDeadlineOps, listItems } from '../tools/kim-inbox.mjs';
 import { DEFAULT_CONFIG, HEADERS, createLedger } from '../tools/deadline-ledger.mjs';
 import { main as inboxWorkerMain } from '../tools/lib/deadline-inbox-worker.mjs';
 
@@ -195,4 +197,94 @@ test('createLedger.batchPatch は values.batchUpdate 1回', async () => {
   ]);
   assert.equal(batches.length, 1);
   assert.ok(batches[0][1].length >= 3);
+});
+
+test('3200 items: batch reads the directory once and preserves repeated add/close semantics', () => {
+  const home = homeFor();
+  const dir = path.join(home, '.claude', 'kim-inbox');
+  fs.mkdirSync(dir, { recursive: true });
+  try {
+    for (let i = 0; i < 3200; i++) {
+      const id = 'ki-20261127000000-' + i.toString(16).padStart(4, '0');
+      fs.writeFileSync(path.join(dir, id + '.json'), JSON.stringify({
+        id, kind: 'deadline', key: 'D-' + i, status: 'open', text: 'fixture',
+        createdAt: '2026-11-27T00:00:00Z', shownSessions: [], shownCount: 0,
+      }));
+    }
+    const ops = Array.from({ length: 40 }, (_, i) => ({ type: 'close', key: 'D-' + i }));
+    ops.push({ type: 'add', key: 'D-0', text: 'new' }, { type: 'add', key: 'D-0', text: 'updated' });
+    const original = fs.readdirSync;
+    let scans = 0;
+    fs.readdirSync = function (folder, ...args) {
+      if (folder === dir) scans++;
+      return original.call(this, folder, ...args);
+    };
+    const start = performance.now();
+    let results;
+    try { results = batchDeadlineOps(home, ops); } finally { fs.readdirSync = original; }
+    const elapsed = performance.now() - start;
+    console.log('3200-item batch: ' + Math.round(elapsed) + 'ms, scans=' + scans);
+    assert.ok(results.every(result => result.ok));
+    assert.equal(scans, 1);
+    assert.ok(elapsed < 30_000, 'batch exceeded 30 seconds');
+    const reopened = listItems(home, { status: 'open' }).filter(item => item.key === 'D-0');
+    assert.equal(reopened.length, 1);
+    assert.equal(reopened[0].text, 'updated');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+for (const mode of ['timeout', 'failure', 'foreign']) {
+  test('batch worker lock cleanup: ' + mode, async () => {
+    const home = homeFor();
+    const dir = path.join(home, '.claude', 'kim-inbox');
+    fs.mkdirSync(dir, { recursive: true });
+    const lock = path.join(dir, 'info-aggregation.lock');
+    if (mode === 'foreign') fs.writeFileSync(lock, String(process.pid));
+    const exec = promisify(execFile);
+    try {
+      await assert.rejects(runInboxBatch([{ type: 'close', key: 'D-1' }], {
+        home, timeoutMs: 2000,
+        execImpl: (command, _args, options) => exec(command, ['-e',
+          'const fs = require("node:fs"); if (process.argv[2] !== "foreign") fs.writeFileSync(process.argv[1], String(process.pid)); if (process.argv[2] === "failure") process.exit(7); setInterval(() => {}, 1000);',
+          lock, mode], options),
+      }));
+      if (mode === 'foreign') assert.equal(fs.readFileSync(lock, 'utf8'), String(process.pid));
+      else assert.equal(fs.existsSync(lock), false);
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  });
+}
+
+test('actual batch worker releases aggregation lock when aborted on a busy item', async () => {
+  const home = homeFor();
+  const dir = path.join(home, '.claude', 'kim-inbox');
+  fs.mkdirSync(dir, { recursive: true });
+  const id = 'ki-20261127000000-0001';
+  fs.writeFileSync(path.join(dir, id + '.json'), JSON.stringify({
+    id, kind: 'deadline', key: 'D-1', status: 'open', text: 'fixture',
+    createdAt: '2026-11-27T00:00:00Z', shownSessions: [], shownCount: 0,
+  }));
+  const itemLock = path.join(dir, id + '.lock');
+  const groupLock = path.join(dir, 'info-aggregation.lock');
+  fs.writeFileSync(itemLock, String(process.pid));
+  const controller = new AbortController();
+  let observedPid;
+  const exec = promisify(execFile);
+  const poll = setInterval(() => {
+    try {
+      const pid = Number(fs.readFileSync(groupLock, 'utf8'));
+      if (pid > 0) { observedPid = pid; controller.abort(); }
+    } catch { /* worker has not acquired the lock yet */ }
+  }, 10);
+  try {
+    await assert.rejects(runInboxBatch([{ type: 'close', key: 'D-1' }], {
+      home, timeoutMs: 10_000, signal: controller.signal,
+      execImpl: (command, args, options) => exec(command, args, options),
+    }));
+    assert.ok(observedPid, 'worker must acquire group lock before termination');
+    assert.equal(fs.existsSync(groupLock), false);
+    assert.equal(fs.readFileSync(itemLock, 'utf8'), String(process.pid));
+  } finally {
+    clearInterval(poll);
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });

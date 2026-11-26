@@ -135,10 +135,10 @@ test('引用・署名を除いた本文が短いメールは LLM が no なら�
   const threads = [thread(message('m1'))];
   const ack = { m1: '11月6日（金）14:00〜15:00で押さえておりますので、宜しくお願いいたします。\n\n> 元の長い引用\n> ' + 'あ'.repeat(400) };
   let r = await run(fixture(t), { threads, bodies: ack }, { classify: () => assert.fail('了承だけと判る文は LLM を呼ばない') });
-  assert.equal(r.state.items.length, 0); assert.deepEqual(r.state.stats, { llmCalls: 0, llmFailures: 0, ackSkipped: 1, answeredElsewhere: 0, gmailRetries: 0, tokenRetries: 0, threadErrors: 0 });
+  assert.equal(r.state.items.length, 0); assert.deepEqual(r.state.stats, { llmCalls: 0, llmFailures: 0, ackSkipped: 1, answeredElsewhere: 0, gmailRetries: 0, tokenRetries: 0, threadErrors: 0, mailboxRetries: 0 });
   const other = { m1: 'では来週の水曜にお伺いします。' };
   r = await run(fixture(t), { threads, bodies: other }, { classify: () => false });
-  assert.equal(r.state.items.length, 0); assert.deepEqual(r.state.stats, { llmCalls: 1, llmFailures: 0, ackSkipped: 1, answeredElsewhere: 0, gmailRetries: 0, tokenRetries: 0, threadErrors: 0 });
+  assert.equal(r.state.items.length, 0); assert.deepEqual(r.state.stats, { llmCalls: 1, llmFailures: 0, ackSkipped: 1, answeredElsewhere: 0, gmailRetries: 0, tokenRetries: 0, threadErrors: 0, mailboxRetries: 0 });
   r = await run(fixture(t), { threads, bodies: other }, { classify: () => true });
   assert.equal(r.state.items.length, 1);
   r = await run(fixture(t), { threads, bodies: other }, { classify: () => null });
@@ -217,4 +217,43 @@ test('個別スレッドの timeout は mailbox 全体を失敗させず残り�
   assert.equal(badAttempts, 4, 'Gmail retry を使い切ってから個別失敗として記録する');
   assert.equal(stats.threadErrors, 1);
   assert.equal(stats.gmailRetries, 3);
+});
+
+test('1回の取得失敗は consecutiveFailures:1、2回連続で 2 になる', async t => {
+  const home = fixture(t);
+  await run(home, { threads: [thread(message('m1'))] });
+  const first = await run(home, { fail: true });
+  assert.equal(first.state.sources[MB].ok, false);
+  assert.equal(first.state.sources[MB].consecutiveFailures, 1);
+  const second = await run(home, { fail: true });
+  assert.equal(second.state.sources[MB].ok, false);
+  assert.equal(second.state.sources[MB].consecutiveFailures, 2);
+  const recovered = await run(home, { threads: [thread(message('m1'))] });
+  assert.equal(recovered.state.sources[MB].ok, true);
+  assert.equal(recovered.state.sources[MB].consecutiveFailures, 0);
+});
+
+test('メールボックス全体のリトライ可能例外は30秒待って1回だけやり直す', async t => {
+  const home = fixture(t);
+  const threads = [thread(message('m1'))];
+  let listFailsLeft = 4; // gmailFetchWithRetry の1ラウンド（最大4試行）を使い切る
+  const sleeps = [];
+  const fetchImpl = async url => {
+    if (url.includes('/threads?') && !url.includes('/threads/')) {
+      if (listFailsLeft > 0) {
+        listFailsLeft--;
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      }
+    }
+    return fakeGmail({ threads })(url);
+  };
+  const result = await scan({
+    home, now: NOW,
+    deps: { fetchImpl, getToken: async () => 'token', sleep: async ms => { sleeps.push(ms); }, random: () => 0 },
+    staff: new Set(), mailboxes: [MB], push: false,
+  });
+  assert.equal(result.state.sources[MB].ok, true);
+  assert.equal(result.state.items.length, 1);
+  assert.equal(result.state.stats.mailboxRetries, 1);
+  assert.ok(sleeps.includes(30_000), 'メールボックス再試行前に30秒待つ');
 });

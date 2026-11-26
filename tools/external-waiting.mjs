@@ -151,8 +151,8 @@ export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = ge
   }
   const get = async (route, { optional = false, tolerateTransient = false } = {}) => {
     try {
-      const response = await gmailFetchWithRetry(`${API}${route}`, { headers: { Authorization: `Bearer ${token}` } }, { fetchImpl, sleep, random, onRetry: () => { stats.gmailRetries = (stats.gmailRetries || 0) + 1; } });
-      return response.json();
+      // parse:'json' で本文読み取り中の TimeoutError も gmailFetchWithRetry 内でリトライする
+      return await gmailFetchWithRetry(`${API}${route}`, { headers: { Authorization: `Bearer ${token}` } }, { fetchImpl, sleep, random, parse: 'json', onRetry: () => { stats.gmailRetries = (stats.gmailRetries || 0) + 1; } });
     } catch (error) {
       if (optional && error.status && [404, 410].includes(error.status)) return null;
       if (tolerateTransient && isRetryableFetchError(error)) {
@@ -233,11 +233,33 @@ export async function scan({ home = defaultHome(), now = Date.now(), mailboxes =
   const previous = readJsonSafe(externalFile(home), {});
   const cacheFile = path.join(stateDir(home), 'external-waiting-llm-cache.json');
   const cache = readJsonSafe(cacheFile, {});
-  const sources = {}, collected = [], stats = { llmCalls: 0, llmFailures: 0, ackSkipped: 0, answeredElsewhere: 0, gmailRetries: 0, tokenRetries: 0, threadErrors: 0 };
+  const sources = {}, collected = [], stats = { llmCalls: 0, llmFailures: 0, ackSkipped: 0, answeredElsewhere: 0, gmailRetries: 0, tokenRetries: 0, threadErrors: 0, mailboxRetries: 0 };
+  const sleep = deps.sleep || (ms => new Promise(r => setTimeout(r, ms)));
   for (const mailbox of mailboxes) {
-    try { collected.push(...await scanMailbox(mailbox, { ...deps, staff, now, stats })); sources[mailbox] = { ok: true }; }
-    catch (error) {
-      sources[mailbox] = { ok: false, error: String(error.message || error).slice(0, 300) };
+    const previousSource = (previous.sources || {})[mailbox] || {};
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        collected.push(...await scanMailbox(mailbox, { ...deps, staff, now, stats, sleep }));
+        sources[mailbox] = { ok: true, consecutiveFailures: 0 };
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        // リトライ可能な一時失敗は 30 秒待ってメールボックス全体を1回だけやり直す
+        if (attempt === 0 && isRetryableFetchError(error)) {
+          stats.mailboxRetries++;
+          await sleep(30_000);
+          continue;
+        }
+        break;
+      }
+    }
+    if (lastError) {
+      const prevCount = Number.isFinite(previousSource.consecutiveFailures)
+        ? previousSource.consecutiveFailures
+        : (previousSource.ok === false ? 1 : 0);
+      sources[mailbox] = { ok: false, error: String(lastError.message || lastError).slice(0, 300), consecutiveFailures: prevCount + 1 };
       collected.push(...(previous.items || []).filter(item => item.mailbox === mailbox)); // 取得失敗を 0 件扱いにしない
     }
   }

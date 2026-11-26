@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { getDriveToken } from './drive-auth.mjs';
 import { gwsFetch } from './gws-proxy.mjs';
 import { headerValue, extractBody } from '../gmail-search.mjs';
-import { addItem } from '../kim-inbox.mjs';
+import { addItem, spoolItem } from '../kim-inbox.mjs';
 import { jstDay } from './auto-progress-daily.mjs';
 import { gmailFetchWithRetry } from './gmail-retry.mjs';
 
@@ -33,8 +33,8 @@ export async function gmailClient(mailbox, { getToken = getDriveToken, fetchImpl
   const token = await getToken({ scope: `https://www.googleapis.com/auth/gmail.${write ? 'compose' : 'readonly'}`, impersonate: mailbox, signal: AbortSignal.timeout(20000) });
   return async (route, { method = 'GET', optional = false } = {}) => {
     try {
-      const response = await gmailFetchWithRetry(`${API}${route}`, { method, headers: { Authorization: `Bearer ${token}` } }, { fetchImpl, onRetry, sleep });
-      return response.status === 204 ? null : response.json();
+      // parse:'json' で本文読み取り中の TimeoutError もリトライ対象にする（204 は null）
+      return await gmailFetchWithRetry(`${API}${route}`, { method, headers: { Authorization: `Bearer ${token}` } }, { fetchImpl, onRetry, sleep, parse: 'json' });
     } catch (error) {
       if (optional && error.status && [404, 410].includes(error.status)) return null;
       if (error.status !== undefined) throw new Error(`Gmail ${mailbox}: HTTP ${error.status}`);
@@ -121,6 +121,18 @@ export async function filterClearedDrafts(items, { home, now, deps = {}, stats }
   if (drafts.length) { stats.draftsChecked = drafts.length; stats.draftsCleared = excluded.size; stats.draftsKept = drafts.length - excluded.size; }
   return items.filter(item => !excluded.has(item.id)).map(({ draftMessage, ...item }) => item);
 }
+// 台帳ロック待ちを短く有界にし、使用中なら spool へ退避（scan 全体を止めない）。
+async function addWithBoundedLock(home, options, add) {
+  if (add !== addItem) return add(home, options);
+  try {
+    return await addItem(home, options, { lockWaitMs: 1_000 });
+  } catch (error) {
+    if (!String(error.message || error).includes('台帳が使用中')) throw error;
+    const spooled = spoolItem(home, options);
+    return { id: spooled.id, status: 'spooled' };
+  }
+}
+
 export async function notifyClearedDrafts(home, { now, add = addItem } = {}) {
   const records = clearedRecords(home);
   const deleted = new Set(records.filter(row => row.event === 'deleted').map(row => row.key));
@@ -131,7 +143,7 @@ export async function notifyClearedDrafts(home, { now, add = addItem } = {}) {
   const day = jstDay(now);
   const reasons = Object.entries(pending.reduce((out, row) => ({ ...out, [row.reason]: (out[row.reason] || 0) + 1 }), {})).map(([reason, count]) => `${reason}: ${count}件`).join('／');
   const send = async options => {
-    const item = await add(home, options);
+    const item = await addWithBoundedLock(home, options, add);
     if (!item?.id || item.forwardError) throw new Error(item?.forwardError || '下書き整理の通知に失敗');
   };
   if (!records.some(row => row.event === 'summary' && row.day === day)) {

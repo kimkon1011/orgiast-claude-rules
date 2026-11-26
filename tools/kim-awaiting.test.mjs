@@ -243,7 +243,14 @@ test('状態ファイルが古い・取得失敗があると警告項目が先�
   writeExternal(home, { generatedAt: new Date(NOW - 5 * 3600_000).toISOString(), items: [extItem()] });
   let items = collectAwaiting({ home, now: NOW });
   assert.equal(items[0].id, 'ex:monitor'); assert.match(items[0].title, /^社外返信の監視が止まっています（最終更新 .+ \/ エラー /);
+  // consecutiveFailures 無しの旧 state は 1 扱い → 警告なし。2 以上で警告。
   writeExternal(home, { sources: { 'kim@orgiast.jp': { ok: false, error: 'Gmail API 403' } }, items: [] });
+  items = collectAwaiting({ home, now: NOW });
+  assert.equal(items.some(item => item.warning), false, '1回失敗（旧 state）では警告しない');
+  writeExternal(home, { sources: { 'kim@orgiast.jp': { ok: false, error: 'Gmail API 403', consecutiveFailures: 1 } }, items: [] });
+  items = collectAwaiting({ home, now: NOW });
+  assert.equal(items.some(item => item.warning), false, 'consecutiveFailures:1 では警告しない');
+  writeExternal(home, { sources: { 'kim@orgiast.jp': { ok: false, error: 'Gmail API 403', consecutiveFailures: 2 } }, items: [] });
   items = collectAwaiting({ home, now: NOW });
   assert.match(items[0].title, /kim@orgiast\.jp: Gmail API 403/);
   writeExternal(home, { items: [extItem()] });

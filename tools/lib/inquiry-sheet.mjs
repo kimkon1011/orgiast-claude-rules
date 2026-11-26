@@ -93,8 +93,10 @@ export async function readSheet(sheetId, tab, { getToken = getDriveToken, fetchI
     return r;
   };
   try {
-    // The keyless GWS proxy only exposes the spreadsheets scope; this remains a GET-only read.
-    const token = await getToken({ scope: 'https://www.googleapis.com/auth/spreadsheets', signal });
+    // Ranged reads use the keyless GWS proxy's available spreadsheets scope; legacy
+    // full-sheet reads retain readonly so their established Drive-export fallback works.
+    const scope = range ? 'https://www.googleapis.com/auth/spreadsheets' : 'https://www.googleapis.com/auth/spreadsheets.readonly';
+    const token = await getToken({ scope, signal });
     const a1 = `'${tab.replace(/'/g, "''")}'${range ? `!${range}` : ''}`;
     const response = await request(token, `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(a1)}`);
     return (await response.json()).values || [];

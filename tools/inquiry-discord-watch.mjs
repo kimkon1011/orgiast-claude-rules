@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { INQUIRY_SHEET, INQUIRY_TAB, readSheet, excludedInquiry } from './lib/inquiry-sheet.mjs';
+import { isEntry } from './is-entry.mjs';
 
 export const CHANNEL_ID = '1382885390138216549';
 export const WEBHOOK_ID = '1514143367154630696';
@@ -195,6 +196,6 @@ export async function main(args = process.argv.slice(2), dependencies = {}) {
   return result.exitCode;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isEntry(import.meta.url)) {
   main().then(code => { process.exitCode = code; }).catch(error => { console.error(error.message); process.exitCode = 1; });
 }

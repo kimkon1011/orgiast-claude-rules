@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { runnerArgs } from './unsent-ledger-runner.mjs';
 import {
   addItem,
   autoSend,
@@ -26,6 +27,11 @@ import {
 function tmpDir(prefix = 'unsent-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
+
+test('定期ランナーは実送信フラグが渡されても常にdry-run', () => {
+  assert.deepEqual(runnerArgs([]), ['--dry-run']);
+  assert.deepEqual(runnerArgs(['--send','--auto-send','--dry-run']), ['--dry-run']);
+});
 
 test('ingest は id 重複を除外し done へ移す', () => {
   const root = tmpDir();

@@ -13,9 +13,12 @@ import { patchSummary } from './unsent-ledger.mjs';
 
 const tools = path.dirname(fileURLToPath(import.meta.url));
 
-function runNode(script, { fatal = true, extraArgs = [] } = {}) {
-  const args = process.argv.slice(2);
-  const result = spawnSync(process.execPath, [path.join(tools, script), ...args, ...extraArgs], {
+export function runnerArgs(argv = process.argv.slice(2)) {
+  return [...argv.filter(arg => !['--send', '--auto-send', '--dry-run'].includes(arg)), '--dry-run'];
+}
+
+function runNode(script, { fatal = true } = {}) {
+  const result = spawnSync(process.execPath, [path.join(tools, script), ...runnerArgs()], {
     stdio: 'inherit',
     timeout: 10 * 60 * 1000,
     windowsHide: true,
@@ -52,6 +55,8 @@ function appendCaptureError(message) {
     alerts.counts.total++;
     alerts.generated_at = new Date().toISOString();
     fs.writeFileSync(jsonPath, JSON.stringify(alerts, null, 2));
+    fs.writeFileSync(alertPath, fs.readFileSync(alertPath, 'utf8').replace(/^件数:.*$/m,
+      `件数: ${alerts.counts.total}件（最優先 ${alerts.counts.priority} / 止まった ${alerts.counts.stopped} / 照合エラー ${alerts.counts.checkErrors} / 未送信 ${alerts.counts.unsent}）`));
     patchSummary(alerts);
   } catch {
     const status = path.join(os.homedir(), 'gb-reports', 'session-status', 'STATUS-000.md');
@@ -61,9 +66,7 @@ function appendCaptureError(message) {
 }
 
 export function main() {
-  const argv = process.argv.slice(2);
-  const ledgerExtra = argv.includes('--dry-run') ? [] : argv.includes('--auto-send') || argv.includes('--send') ? [] : ['--auto-send'];
-  const ledger = runNode('unsent-ledger.mjs', { fatal: true, extraArgs: ledgerExtra });
+  const ledger = runNode('unsent-ledger.mjs', { fatal: true });
   if (!ledger.ok) process.exit(1);
   const capture = runNode('discord-appointment-capture.mjs', { fatal: false });
   if (!capture.ok) appendCaptureError(capture.error || 'failed');

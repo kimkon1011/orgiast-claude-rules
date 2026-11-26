@@ -1,7 +1,7 @@
-# session-status  PC=019  host=019  updated 2026-11-26 23:10 JST
+# session-status  PC=019  host=019  updated 2026-11-27 00:10 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "email": "nishi@orgiast.jp", "orgId":
-- 案件数: 15
+- 案件数: 14
 
 - 019・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 019・chat-drafts・停止・最終更新 11/26 22:24、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -17,4 +17,3 @@
 - 019・souko-move-1125・完了・最終更新 11/25 19:12、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
 - 019・tangomuto-reply-1125・停止・最終更新 11/25 19:26、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 019・tsuji-natchan-1125・完了・最終更新 11/25 21:04、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
-- 019・used-pc-llm-1123・完了・最終更新 11/24 00:06、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし

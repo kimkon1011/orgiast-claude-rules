@@ -111,10 +111,9 @@
     "_identityConflict": "2026-11-04 kim 回答「作業用008ではテツコのことはやっていない。作業用999で genbateam.toho@gmail.com で行っているはず」。このPCは TETSUKO（genbateamtoho-ctrl/tetsuko-unified、Vercel genbateamtoho-ctrl）の作業を報告している（mail-reply-886024345b357f27 / mail-1793177348234-daa327dd）。remoteName=作業用008 は 10/30 の受信者の自己申告由来で誤りの可能性が高い。作業用999 の実機照合が済むまで remoteName は変えない。",
     "aliases": [
       "DESKTOP-BDOAK99",
-      "作業用008",
       "999genba"
     ],
-    "_evidence": "2026-11-04 利用者申告「このパソコンは999」で作業用999に訂正。旧登録(PR #1401)の作業用008は、kim-PC が 008 前提で送った引継ぎメールに本PCの Claude が「作業用008で受け取りました」と返した自己申告が根拠で、作業用番号はローカルで検証不能だった（誤登録）。作業用008 宛の既存経路（鹿沼案件引継ぎ・meeting-prep-routing）を切らないため aliases に残す。実在の作業用008 が別にあるかは kim 確認待ち。旧 作業用999 行の記録: remoteName 根拠: 既存 sheetName=作業用999(シートD列表記)。ただし hostname 未報告のため fleet-mail では照合値=キー名『作業用999』になり、実機の label/hostname と一致する保証なし。配布インストーラ完走(結果 OK 29 / NG 3)と claude --version 2.1.258 を kim のスクリーンショットで実機確認(2026-09-03)。hostname は未報告のため未記入。fleet-sheet.env 未取得で未報告 → PR #285 の自己修復待ち。\n  【追記 2026-11-22】999genba alias 追加: 台帳の remoteName/sheetName が「作業用999」。番号 999 が一致。台帳の _identityConflict にある kim 回答「作業用999で genbateam.toho@gmail.com で行っているはず」と、999genba の報告アカウントが gmail.com ドメインである点が一致\n  【追記 2026-11-23】account は seisaku-team@ のまま維持。gmail アカウントは TETSUKO 作業用であって Claude アカウントではない（kim 回答「作業用999で genbateam.toho@gmail.com で行っているはず」は作業用アカウントの話）",
+    "_evidence": "2026-11-04 利用者申告「このパソコンは999」で作業用999に訂正。旧登録(PR #1401)の作業用008は、kim-PC が 008 前提で送った引継ぎメールに本PCの Claude が「作業用008で受け取りました」と返した自己申告が根拠で、作業用番号はローカルで検証不能だった（誤登録）。作業用008 宛の既存経路（鹿沼案件引継ぎ・meeting-prep-routing）を切らないため aliases に残す。実在の作業用008 が別にあるかは kim 確認待ち。旧 作業用999 行の記録: remoteName 根拠: 既存 sheetName=作業用999(シートD列表記)。ただし hostname 未報告のため fleet-mail では照合値=キー名『作業用999』になり、実機の label/hostname と一致する保証なし。配布インストーラ完走(結果 OK 29 / NG 3)と claude --version 2.1.258 を kim のスクリーンショットで実機確認(2026-09-03)。hostname は未報告のため未記入。fleet-sheet.env 未取得で未報告 → PR #285 の自己修復待ち。\n  【追記 2026-11-22】999genba alias 追加: 台帳の remoteName/sheetName が「作業用999」。番号 999 が一致。台帳の _identityConflict にある kim 回答「作業用999で genbateam.toho@gmail.com で行っているはず」と、999genba の報告アカウントが gmail.com ドメインである点が一致\n  【追記 2026-11-23】account は seisaku-team@ のまま維持。gmail アカウントは TETSUKO 作業用であって Claude アカウントではない（kim 回答「作業用999で genbateam.toho@gmail.com で行っているはず」は作業用アカウントの話）\n  【追記 2026-11-26】aliases から「作業用008」を外した。実在の作業用008は 008XPS8300（hostname=008XPS8300、金さんの指定でイベント・課題提供企業を担当）。本PCは作業用999（999genba）。旧aliasは meeting-prep 経路維持のための暫定で、008XPS8300 登録後は誤配送になる。",
     "sheetName": "作業用999"
   },
   "DELL": {
@@ -148,14 +147,16 @@
   "008XPS8300": {
     "hostname": "008XPS8300",
     "account": "seisaku-team@orgiast.jp",
-    "remoteName": "008XPS8300",
+    "remoteName": "作業用008",
     "notifyDiscordId": "715210673642012733",
     "notifyTo": "kim@orgiast.jp（金功勇）",
     "aliases": [
       "008XPS8300",
-      "user-PC"
+      "user-PC",
+      "作業用008",
+      "008"
     ],
-    "_evidence": "2026-11-21 hostname が user-PC→008XPS8300 に変更。auto-progress-ledger に 2135件の実績（pc=008XPS8300）。seisaku-team@orgiast.jp の共用席。進捗通知宛先は DESKTOP-BDOAK99 / DELL と同じく kim 宛て（notify-owner.mjs:29 の fallback と同じ）。PR #2538（2026-11-21 マージ済み）で佐藤優奈→金功勇に変更完了。",
+    "_evidence": "2026-11-21 hostname が user-PC→008XPS8300 に変更。auto-progress-ledger に 2135件の実績（pc=008XPS8300）。seisaku-team@orgiast.jp の共用席。進捗通知宛先は DESKTOP-BDOAK99 / DELL と同じく kim 宛て（notify-owner.mjs:29 の fallback と同じ）。PR #2538（2026-11-21 マージ済み）で佐藤優奈→金功勇に変更完了。\n  【追記 2026-11-26】remoteName を作業用008に確定。008XPS8300 は接続済みの008実機（user、hostname 008XPS8300）。金さん指示でエイト等のブース以外イベントは008へ。旧 DESKTOP-BDOAK99 の作業用008 alias は誤登録（2026-11-04 注記）だった。",
     "sheetName": "008XPS8300"
   },
   "GROKBOT-VM": {
@@ -171,13 +172,17 @@
   "DESKTOP-S3MPM6T": {
     "hostname": "DESKTOP-S3MPM6T",
     "remoteName": "DESKTOP-S3MPM6T",
-    "aliases": ["DESKTOP-S3MPM6T"],
+    "aliases": [
+      "DESKTOP-S3MPM6T"
+    ],
     "_evidence": "2026-11-22 Fleet triage digest で観測: hostname=DESKTOP-S3MPM6T / Claude=s***@orgiast.jp（seisaku-team@）。詳細は未確認。自動報告のみで人による申告なし\n  【追記 2026-11-23】account 追記取り下げ（通知先 notifyDiscordId の実測根拠がないため）"
   },
   "LAPTOP-21BPBOMF": {
     "hostname": "LAPTOP-21BPBOMF",
     "remoteName": "LAPTOP-21BPBOMF",
-    "aliases": ["LAPTOP-21BPBOMF"],
+    "aliases": [
+      "LAPTOP-21BPBOMF"
+    ],
     "_evidence": "2026-11-22 Fleet triage digest で観測: hostname=LAPTOP-21BPBOMF / Claude=g***@gmail.com。DESKTOP-BDOAK99 と同じ genbateamtoho@gmail.com の可能性。詳細は未確認\n  【追記 2026-11-23】account 追記取り下げ（観測は Gmail のマスク値のみで seisaku-team@ と確定できず、通知先 notifyDiscordId の実測根拠もないため）"
   },
   "増田MacBookAir": {

@@ -77,14 +77,37 @@ export function customerName({ caseMatch, event, meeting }) {
     .replace(/打ち合わせ|打合せ|打合わせ|ミーティング|\bMTG\b/gi, '').replace(/^[\s_:：\-]+|[\s_:：\-]+$/g, '').trim();
   return clean(event?.summary) || clean(titleOf(meeting || {})) || null;
 }
+const GENERIC_DOMAINS = new Set(['gmail.com', 'googlemail.com', 'yahoo.co.jp', 'yahoo.com', 'outlook.jp', 'outlook.com', 'hotmail.com', 'icloud.com', 'me.com', 'orgiast.jp']);
+function emailDomain(email) {
+  const domain = String(email || '').toLowerCase().split('@')[1] || '';
+  return domain.replace(/[>\s]/g, '');
+}
+function caseText(c) { return normalize([c?.name, c?.phase, c?.client].filter(Boolean).join(' ')); }
+export function resolveFollowupCase(event, cases, meetEvents = []) {
+  const primary = matchCase(event, cases, meetEvents);
+  if (primary.case) return primary;
+  const text = normalize(`${event?.summary || ''} ${event?.description || ''}`);
+  const attendeeDomains = new Set((event?.attendees || []).map(a => emailDomain(a.email)).filter(d => d && !GENERIC_DOMAINS.has(d)));
+  const scored = (cases || []).map(c => {
+    let score = 0, reason = [];
+    if (normalize(c.name).length >= 3 && text.includes(normalize(c.name))) { score += 70; reason.push('案件名'); }
+    if (normalize(c.client).length >= 3 && text.includes(normalize(c.client))) { score += 40; reason.push('クライアント名'); }
+    if (emailDomain(c.email) && attendeeDomains.has(emailDomain(c.email))) { score += 30; reason.push('顧客メールドメイン'); }
+    for (const word of ['Reブース', 'ブース', '学会', 'イベント', '課題提供']) {
+      if (text.includes(normalize(word)) && caseText(c).includes(normalize(word))) { score += 25; reason.push(`種別語:${word}`); }
+    }
+    return { case: c, score, reason: reason.join('+') };
+  }).filter(x => x.score).sort((a, b) => b.score - a.score);
+  if (scored[0] && scored[0].score > (scored[1]?.score || 0)) return scored[0];
+  return primary;
+}
 export function classifyFollowup({ meeting, event, caseMatch, config, transcript = '' }) {
-  if (caseMatch?.reason === '複数候補・要確認') return { kind: 'unknown', reason: caseMatch.reason };
   if (caseMatch?.case?.ambiguousId) return { kind: 'unknown', reason: '案件ID重複・要確認' };
   const c = caseMatch?.case;
   const text = normalize([c?.name, c?.phase, c?.client, event?.summary, event?.description, titleOf(meeting)].filter(Boolean).join(' '));
-  const hint = (config.clientKindHints || []).find(item => [titleOf(meeting), event?.summary, event?.description, c?.client]
+  const hint = (config.clientKindHints || []).find(item => [titleOf(meeting), event?.summary, event?.description, c?.client, c?.name]
     .some(value => normalize(value).includes(normalize(item.match))));
-  if (hint) return { kind: hint.kind, reason: `取引先ヒント: ${hint.note}`, customer: hint.customer };
+  if (hint) return { kind: hint.kind, reason: `取引先ヒント: ${hint.note}`, customer: hint.customer, promptNote: hint.promptNote };
   for (const kind of ['production', 'gakkai', 'booth', 'other']) {
     const keyword = (config.keywords[kind] || []).find(word => text.includes(normalize(word)));
     if (keyword) return { kind, reason: `キーワード: ${keyword}` };
@@ -97,7 +120,8 @@ export function classifyFollowup({ meeting, event, caseMatch, config, transcript
     if (counts[0]?.count >= 3 && counts[0].count >= (counts[1]?.count || 0) * 2)
       return { kind: counts[0].kind, reason: `文字起こし冒頭から推定（${counts[0].kind}:${counts[0].count}回）` };
   }
-  return c ? { kind: 'other', reason: '案件特定済み' } : { kind: 'unknown', reason: '案件・種別未特定' };
+  if (c) return { kind: 'other', reason: '案件特定済み' };
+  return { kind: 'production', reason: '案件・種別未特定のため011へ' };
 }
 export function routeFollowup(kind, config, pcMap, beacons = []) {
   const rule = config.routes[kind];
@@ -174,7 +198,7 @@ export async function planRun({ meetings, state, now = Date.now(), config, event
       state.skipped[meeting.id] = { at: iso(now), reason: result.reason }; results.push(result); continue;
     }
     const event = matchCalendarEvent(meeting, events, { minutes: config.calendarMatchMinutes });
-    const caseMatch = matchCase({ ...event, summary: `${event?.summary || ''} ${titleOf(meeting)}`,
+    const caseMatch = resolveFollowupCase({ ...event, summary: `${event?.summary || ''} ${titleOf(meeting)}`,
       attendees: [...(event?.attendees || []), ...(meeting.invitees || [])] }, cases);
     let transcript = '', notes = '', transcriptFailure = null, notesFailure = null;
     try {
@@ -191,7 +215,7 @@ export async function planRun({ meetings, state, now = Date.now(), config, event
       caseName: caseMatch.case?.name || '', caseId: caseMatch.case?.id || '', casePhase: caseMatch.case?.phase || '',
       kind: classification.kind, kindLabel: config.routes[classification.kind]?.label || '種別未特定',
       requestedPc: route.requested, pc: route.pc, status: 'ready', reason: [classification.reason, route.note, config.calendarError].filter(Boolean).join(' / '),
-      transcript, transcriptChars: transcript.length, notes, event, meeting };
+      promptNote: classification.promptNote, transcript, transcriptChars: transcript.length, notes, event, meeting };
     if (transcriptFailure) {
       const previous = state.pending[meeting.id];
       const lastReason = authError(transcriptFailure) ? 'TLDV_API_KEY 失効または権限不足' : 'transcript未準備・取得失敗';
@@ -283,7 +307,8 @@ export async function dispatch({ results, state, config, receivers = {}, send, r
       endJst: japanDate(result.endAt), participants: (result.meeting.invitees || []).map(p => [p.name, p.email].filter(Boolean).join(' / ')).join('、'),
       tldvUrl: result.meeting.url || `https://tldv.io/app/meetings/${encodeURIComponent(result.meetingId)}`,
       calendarSummary: result.event?.summary || '照合なし', folderName: name, caseSheetId: config.caseSheetId,
-      maxTranscriptChars: config.maxTranscriptChars });
+      maxTranscriptChars: config.maxTranscriptChars,
+      specialInstructions: result.promptNote ? `\n# 今回だけの注意\n${result.promptNote}\n` : '' });
     // Claim before external effects. An interrupted/ambiguous launch needs review,
     // never an automatic resend on the next scheduled tick.
     working.held[result.meetingId] = { ...result, status: 'held', at: iso(now),
@@ -339,15 +364,15 @@ export function renderStatus(results, { now = Date.now(), host = os.hostname() }
       status[r.status], r.reason].map(cell).join(' | ')} |`), ''].join('\n');
 }
 
-const HELP = `tl;dv 打合せ後フォローアップ自動ディスパッチ\n使い方: node tools/tldv-followup-dispatch.mjs [--dry-run] [--date YYYY-MM-DD] [--meeting <id>] [--report-dir <dir>] [--lookback-hours N]\n--help: この使い方を表示\n--report-dir: dry-run.md / dry-run.json の出力先（--dry-run時のみ）\n社外へのメール・LINE送信は行いません。\n`;
+const HELP = `tl;dv 打合せ後フォローアップ自動ディスパッチ\n使い方: node tools/tldv-followup-dispatch.mjs [--dry-run] [--date YYYY-MM-DD] [--meeting <id>] [--release-held <id,id>] [--report-dir <dir>] [--lookback-hours N]\n--help: この使い方を表示\n--report-dir: dry-run.md / dry-run.json の出力先（--dry-run時のみ）\n--release-held: 保留中の会議IDをカンマ区切りで解除して再判定する\n社外へのメール・LINE送信は行いません。\n`;
 function parseArgs(argv) {
   const options = { dryRun: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--dry-run') options.dryRun = true;
-    else if (['--date', '--meeting', '--report-dir', '--lookback-hours'].includes(arg)) {
+    else if (['--date', '--meeting', '--report-dir', '--lookback-hours', '--release-held'].includes(arg)) {
       const value = argv[++i]; if (!value || value.startsWith('--')) throw new Error('引数の値不足');
-      options[{ '--date': 'date', '--meeting': 'meeting', '--report-dir': 'reportDir', '--lookback-hours': 'lookbackHours' }[arg]] = value;
+      options[{ '--date': 'date', '--meeting': 'meeting', '--report-dir': 'reportDir', '--lookback-hours': 'lookbackHours', '--release-held': 'releaseHeld' }[arg]] = value;
     } else throw new Error('不明な引数');
   }
   if (options.date && (!/^\d{4}-\d{2}-\d{2}$/.test(options.date) || !Number.isFinite(Date.parse(`${options.date}T00:00:00+09:00`)) || jstDate(Date.parse(`${options.date}T00:00:00+09:00`)) !== options.date)) throw new Error('日付が不正');
@@ -387,6 +412,9 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       if (!release) { out('実行中のためスキップ'); return 0; }
     }
     const stateFile = path.resolve(home, config.stateFile), state = initState(readJson(stateFile, {}));
+    if (options.releaseHeld) {
+      for (const id of String(options.releaseHeld).split(',').map(s => s.trim()).filter(Boolean)) delete state.held[id];
+    }
     const checkpoint = () => { if (!options.dryRun) saveJson(stateFile, state); };
     const apiKey = deps.client ? '' : process.env.TLDV_API_KEY || readEnvValue(path.join(home, '.claude/tldv.env'), 'TLDV_API_KEY');
     if (!deps.client && !apiKey) throw new Error('missing-tldv-api-key');

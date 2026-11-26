@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import * as api from './tldv-followup-dispatch.mjs';
 
 const { isExcludedTitle, meetingEnd, selectCandidates, transcriptReady, matchCalendarEvent, customerName,
-  classifyFollowup, routeFollowup, folderName, renderPrompt, writeBomUtf8, appendLedgerItems,
+  classifyFollowup, resolveFollowupCase, routeFollowup, folderName, renderPrompt, writeBomUtf8, appendLedgerItems,
   collectDraftReplies, planRun, dispatch, renderStatus, main, executeLocalFollowup } = api;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const config = JSON.parse(fs.readFileSync(path.join(root, 'config/tldv-followup-routing.json'), 'utf8'));
@@ -16,7 +16,7 @@ const now = Date.parse('2026-11-26T04:00:00Z');
 const meeting = (extra = {}) => ({ id: 'm1', name: '顧客株式会社 展示会ブース 打合せ', happenedAt: '2026-11-26T01:00:00Z', duration: 3600,
   invitees: [{ email: 'guest@example.com', name: '田中' }], ...extra });
 const caseRow = { id: 'C1234', name: '展示会ブース', client: '顧客株式会社', phase: '制作中' };
-const pcMap = { 'w018-PC': { remoteName: '作業用018' }, '作業用011': {}, DELL: { remoteName: '作業用014' }, 'DESKTOP-BDOAK99': { aliases: ['作業用008'] } };
+const pcMap = { 'w018-PC': { remoteName: '作業用018' }, '作業用011': {}, DELL: { remoteName: '作業用014' }, '008XPS8300': { remoteName: '作業用008', aliases: ['作業用008'] } };
 const transcript = { data: [{ text: '明日までに見積を作る', speaker: '田中' }] };
 const ready = (extra = {}) => planRun({ meetings: [meeting()], state: {}, now, config, events: [], cases: [caseRow], pcMap,
   fetchTranscript: async () => transcript, fetchNotes: async () => ({ markdownContent: '見積作成' }), ...extra });
@@ -79,26 +79,42 @@ test('transcriptが準備できればpending解除、メモ失敗でもready', a
 });
 test('振分優先順位、実PC名・008代行は014未解決時だけ', () => {
   for (const [name, kind, label] of [['学会協賛', 'gakkai', 'w018-PC'], ['展示会ブース', 'booth', 'DELL'],
-    ['営業自動化', 'production', '作業用011'], ['学会制作の自動化', 'production', '作業用011'], ['イベント式典', 'other', 'DESKTOP-BDOAK99']]) {
+    ['営業自動化', 'production', '作業用011'], ['学会制作の自動化', 'production', '作業用011'], ['イベント式典', 'other', '008XPS8300']]) {
     const result = classifyFollowup({ meeting: meeting({ name }), caseMatch: {}, config });
     assert.equal(result.kind, kind); assert.equal(routeFollowup(kind, config, pcMap).pc.label, label);
   }
   const without014 = { ...pcMap }; delete without014.DELL;
   const fallback = routeFollowup('booth', config, without014);
-  assert.equal(fallback.pc.label, 'DESKTOP-BDOAK99'); assert.equal(fallback.note, '014未解決のため008で代行');
+  assert.equal(fallback.pc.label, '008XPS8300'); assert.equal(fallback.note, '014未解決のため008で代行');
   assert.equal(routeFollowup('gakkai', config, {}).pc, null);
   assert.equal(routeFollowup('unknown', config, pcMap).pc, null);
   assert.equal(routeFollowup('booth', config, without014, [{ label: 'beacon014', remoteName: '作業用014' }]).pc.label, 'beacon014');
   assert.equal(classifyFollowup({ meeting: meeting({ name: '相談' }), caseMatch: { case: { name: '確認案件' } }, config }).kind, 'other');
 });
-test('案件無し・キーワード無し／複数案件／マスター読取失敗はheld', async () => {
-  for (const options of [{ meetings: [meeting({ name: '相談' })], cases: [] },
-    { cases: [caseRow, { ...caseRow, id: 'C9999' }] }, { config: { ...config, casesError: '案件一覧読取失敗・要確認' } }]) {
-    const state = {}; const rows = await ready({ ...options, state });
-    assert.equal(rows[0].status, 'held'); assert.ok(state.held.m1);
-    assert.ok(rows[0].transcriptChars > 0); assert.match(rows[0].reason, /文字起こし準備済み（\d+文字）/);
-  }
-  assert.equal(classifyFollowup({ meeting: meeting(), caseMatch: { reason: '複数候補・要確認' }, config }).reason, '複数候補・要確認');
+test('案件無し・キーワード無しは011、マスター読取失敗だけheld', async () => {
+  const state = {}; const rows = await ready({ meetings: [meeting({ name: '相談' })], cases: [], state });
+  assert.equal(rows[0].kind, 'production'); assert.equal(rows[0].requestedPc, '作業用011'); assert.equal(rows[0].status, 'ready');
+  assert.match(rows[0].reason, /案件・種別未特定のため011へ/);
+  const failed = {}; const held = await ready({ config: { ...config, casesError: '案件一覧読取失敗・要確認' }, state: failed });
+  assert.equal(held[0].status, 'held'); assert.ok(failed.held.m1);
+  assert.match(held[0].reason, /案件一覧読取失敗・要確認/);
+});
+test('複数候補はタイトルとドメインで1件に絞り、Reブースは014へ', async () => {
+  const booth = { id: 'C-booth', name: 'デージーネット Reブース', client: '株式会社デージーネット', phase: 'ブース制作', email: 'sales@example.com' };
+  const other = { id: 'C-other', name: 'デージーネット 別件', client: '株式会社デージーネット', phase: '相談', email: 'other@example.net' };
+  const event = { summary: 'M: 株式会社 デージーネット様(Reブース)', attendees: [{ email: 'sales@example.com' }] };
+  const picked = resolveFollowupCase({ ...event }, [booth, other]);
+  assert.equal(picked.case.id, 'C-booth');
+  const rows = await ready({ meetings: [meeting({ name: 'M: 株式会社 デージーネット様(Reブース)' })], cases: [booth, other], events: [event] });
+  assert.equal(rows[0].kind, 'booth'); assert.equal(rows[0].requestedPc, '作業用014'); assert.equal(rows[0].caseId, 'C-booth');
+});
+test('エイトは課題提供企業として008へ。対外新規連絡は出さない注意を付ける', async () => {
+  const rows = await ready({ meetings: [meeting({ name: 'M:エイト様' })], cases: [] });
+  assert.equal(rows[0].kind, 'other'); assert.equal(rows[0].customer, 'エイト');
+  assert.equal(rows[0].requestedPc, '作業用008'); assert.equal(rows[0].pc.label, '008XPS8300');
+  assert.match(rows[0].reason, /課題提供企業/);
+  assert.match(rows[0].promptNote, /キャンセル済み/);
+  assert.match(renderPrompt('{{specialInstructions}}', { specialInstructions: rows[0].promptNote }), /対外連絡/);
 });
 test('予定照合はメール > タイトル > 時刻。範囲外・キャンセル除外', () => {
   const event = (id, minute, extra = {}) => ({ id, summary: '別件', start: { dateTime: `2026-11-26T01:${minute}:00Z` }, ...extra });
@@ -126,7 +142,8 @@ test('案件無し・分類語無しは文字起こし冒頭の優勢語で推�
   let rows = await run('学会 学会 学会 学会 ブース');
   assert.equal(rows[0].kind, 'gakkai'); assert.match(rows[0].reason, /文字起こし冒頭から推定（gakkai:4回）/);
   rows = await run('学会 学会 学会 ブース ブース');
-  assert.equal(rows[0].kind, 'unknown'); assert.equal(rows[0].status, 'held');
+  assert.equal(rows[0].kind, 'production'); assert.equal(rows[0].requestedPc, '作業用011');
+  assert.match(rows[0].reason, /案件・種別未特定のため011へ/);
 });
 test('案件無しでもtranscript未準備ならheldではなくpending', async () => {
   const rows = await ready({ meetings: [meeting({ name: '定例相談' })], cases: [], fetchTranscript: async () => ({ data: [] }) });
@@ -135,7 +152,7 @@ test('案件無しでもtranscript未準備ならheldではなくpending', async
 test('excludedのレポートは種別・担当PC・実行先を表示しない', async () => {
   const rows = await ready({ meetings: [meeting({ name: '作業用008 採用面談' })] });
   const report = renderStatus(rows, { now, host: 'kim-PC' });
-  assert.match(report, /\| — \| — \| — \| 対象外 \|/); assert.doesNotMatch(report, /種別未特定|DESKTOP-BDOAK99/);
+  assert.match(report, /\| — \| — \| — \| 対象外 \|/); assert.doesNotMatch(report, /種別未特定|008XPS8300/);
 });
 test('folderName: JST日付・Windows禁止文字除去・40文字制限', () => {
   assert.equal(folderName(meeting({ happenedAt: '2026-11-25T16:00:00Z' }), '顧客\\/:*?"<>|'), '20261126-顧客');

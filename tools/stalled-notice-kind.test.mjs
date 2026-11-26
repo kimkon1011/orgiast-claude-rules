@@ -207,3 +207,34 @@ for (const { name, reason, nextStep, expected } of realDataCases) {
     assert.equal(decideStalledNoticeKind({ reason, nextStep }), expected);
   });
 }
+
+// 新しいテストケース
+test('reason に継続可能文言、nextStep に kim 語なしの削除承認依頼 → ask', () => {
+  assert.equal(
+    decideStalledNoticeKind({
+      reason: 'Codex がバックグラウンド実行中で、実行結果の確認が必要',
+      nextStep: '作業ツリー wt-foo を削除してよいか確認する'
+    }),
+    'ask'
+  );
+});
+
+test('reason に第三者待ち文言、nextStep に kim 語なしの社外送信承認依頼 → ask', () => {
+  assert.equal(
+    decideStalledNoticeKind({
+      reason: '担当者のレビュー・マージ指示が必要',
+      nextStep: '下書きを送信してよいか確認する'
+    }),
+    'ask'
+  );
+});
+
+test('順序変更で info が壊れていないこと → info', () => {
+  assert.equal(
+    decideStalledNoticeKind({
+      reason: '他のセッションが着手中のため待機',
+      nextStep: '別セッションの完了を待つ'
+    }),
+    'info'
+  );
+});

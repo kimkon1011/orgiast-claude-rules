@@ -62,11 +62,10 @@ test('nextStep に決裁 → ask', () => {
 });
 
 // 追加のテストケース（実データから）
-test('PRの競合解消には担当者のレビュー・マージ指示が必要で自動処理できない → ask', () => {
-  // この文言には「kim の操作が必要」が含まれているので ask になる
+test('PRの競合解消には担当者のレビュー・マージ指示が必要で自動処理できない → info', () => {
   assert.equal(
     decideStalledNoticeKind({ reason: 'PRの競合解消には担当者のレビュー・マージ指示が必要で自動処理できない' }),
-    'ask',
+    'info',
   );
 });
 
@@ -113,17 +112,29 @@ test('セッション終了処理と本番反映コマンドの実行が委譲�
 });
 
 test('kim の 6 件の判断依頼（質問への回答）が未完了で、機械で自動処理できる作業は残っていないため → ask', () => {
-  // この文言には「kim の操作が必要」が含まれているので ask になる
   assert.equal(
     decideStalledNoticeKind({ reason: 'kim の 6 件の判断依頼（質問への回答）が未完了で、機械で自動処理できる作業は残っていないため' }),
     'ask',
   );
 });
 
-test('GAS 本体の復旧には白川絵美さんの Apps Script 権限が必要であり、kim の権限では対応できない → ask', () => {
-  // この文言には「kim の操作が必要」が含まれているので ask になる
+test('GAS 本体の復旧には白川絵美さんの Apps Script 権限が必要であり、kim の権限では対応できない → info', () => {
   assert.equal(
     decideStalledNoticeKind({ reason: 'GAS 本体の復旧には白川絵美さんの Apps Script 権限が必要であり、kim の権限では対応できない' }),
-    'ask',
+    'info',
+  );
+});
+
+test('APIの利用制限に達したため、セッションを続行できない → info', () => {
+  assert.equal(
+    decideStalledNoticeKind({ reason: 'APIの利用制限に達したため、セッションを続行できない', nextStep: '制限が解除されるまで待機する' }),
+    'info',
+  );
+});
+
+test('依存パッケージのインストールには権限が必要 → info', () => {
+  assert.equal(
+    decideStalledNoticeKind({ reason: 'sqlite3 の再ビルド（npm rebuild sqlite3 / npm i yallist）が必要だが、依存パッケージのインストールには権限が必要' }),
+    'info',
   );
 });

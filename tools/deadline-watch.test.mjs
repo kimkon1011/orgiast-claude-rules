@@ -36,6 +36,11 @@ test('本人送信承認とneedsKimを認識、不要はAI側',()=>{
   assert.ok(isKimTask({...base,assignee:'Claude',action:'金さんが送信承認'},calendarConfig));
   assert.ok(isKimTask({...base,assignee:'Claude',notes:'autopilot:{"needsKim":"要"}'},calendarConfig));
   assert.equal(isKimTask({...base,assignee:'Claude',notes:'autopilot:{"needsKim":"不要"}'},calendarConfig),false);
+  assert.equal(isKimTask({...base,assignee:'佐藤',notes:'autopilot:{"type":"approval","needsKim":"3点と送信してよいか"}'},calendarConfig),false);
+  assert.equal(isKimTask({...base,assignee:'Claude',notes:'autopilot:{"type":"task","needsKim":"マージ可否"}'},calendarConfig),false);
+  assert.equal(isKimTask({...base,assignee:'Claude',notes:'autopilot:{"needsKim":"様子見なら不要"}'},calendarConfig),false);
+  const approval=readableEvent({...base,company:'Wiaas 中西',title:'Wiaas 中西様 審査時間の質問への返信',assignee:'Claude が下書きし金さんが送信を承認'},calendarConfig);
+  assert.equal(approval.summary,'【Wiaas 中西様】審査時間の質問への返信を送信承認（D-001）');
 });
 test('時間付き同一案件はタスクへ、手入力予定を更新しない',async()=>{
   const mock=calendarMock([{calendar:'kim@orgiast.jp',event:{id:'meeting',summary:'M: 株式会社 テスト商事様',start:{dateTime:'2026-11-06T10:00:00+09:00'}}}]);

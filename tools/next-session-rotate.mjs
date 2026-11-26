@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { renameWithRetry, writeFileWithRetry } from './lib/rename-retry.mjs';
 import { isEntry } from './is-entry.mjs';
 import { defaultMemoryDirs, scanMemory } from './learning-ledger.mjs';
 export const MAX_BYTES = 24_000;
@@ -98,7 +99,7 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
   return { text: output, overflow, stats, beforeBytes: Buffer.byteLength(source), afterBytes: Buffer.byteLength(output) };
 }
 
-export function rotate(file, { now = new Date(), maxBytes = MAX_BYTES, source: supplied, promotionPendingCount } = {}) {
+export function rotate(file, { now = new Date(), maxBytes = MAX_BYTES, source: supplied, promotionPendingCount, retryOptions } = {}) {
   if (!fs.existsSync(file) && supplied === undefined) return { changed: false, reason: 'absent' };
   const original = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   const source = supplied ?? original;
@@ -137,16 +138,16 @@ export function rotate(file, { now = new Date(), maxBytes = MAX_BYTES, source: s
   if ((fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '') !== original) throw new Error('next-session changed concurrently; retry with the latest content');
   const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(temp, result.text, { flag: 'wx' });
-  fs.renameSync(temp, file);
+  renameWithRetry(temp, file, retryOptions);
   if (fs.readFileSync(file, 'utf8') !== result.text) throw new Error('next-session read-back mismatch');
   return { ...result, afterBytes: Buffer.byteLength(result.text), changed: true, archive };
 }
 
 // Writers pass their complete proposed content; archiving happens before the write above the cap.
-export function writeHandoff(file, text) {
-  if (Buffer.byteLength(text) > MAX_BYTES) return rotate(file, { source: text });
+export function writeHandoff(file, text, retryOptions) {
+  if (Buffer.byteLength(text) > MAX_BYTES) return rotate(file, { source: text, retryOptions });
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, text);
+  writeFileWithRetry(file, text, retryOptions);
   return { changed: true };
 }
 if (isEntry(import.meta.url)) {

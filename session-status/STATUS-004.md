@@ -1,7 +1,7 @@
-# session-status  PC=004  host=004MINPAKU  updated 2026-11-27 07:13 JST
+# session-status  PC=004  host=004MINPAKU  updated 2026-11-27 08:13 JST
 
-- claude auth: {"at":"2026-11-26T22:13:33.227Z","event":"launch_allowed","reason":"below_cap","activeCount":0,"limit":2,"staleHours":3,"abandoned":[]} { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "f
-- 案件数: 17
+- claude auth: {"at":"2026-11-26T23:13:13.595Z","event":"launch_allowed","reason":"below_cap","activeCount":0,"limit":2,"staleHours":3,"abandoned":[]} { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "f
+- 案件数: 18
 
 - 004・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 004・codex-redispatch・金さん待ち・渡し直すはずだった指示書（codex-hourly-change-gate.md）の実装は fix/hourly-change-gate に 86a6652c までコミット済みで、渡し直しは不要。Windows で session-cap-guard.test.mjs は 22/22 合格、diff --check も問題なし（2026-11-27 深夜3時・期限なし（元の期限 2026-11-28 07:11 の作業は完了）・次:kim-inbox ki-20261126001009-0ddc（main への反映・全PC配布）の承認が出たら、pr-land で着地させる
@@ -12,6 +12,7 @@
 - 004・merci-autosend-1125・完了・最終更新 11/25 10:25、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
 - 004・minpaku-okazaki-check-1124・停止・最終更新 11/24 14:37、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 004・minpaku-price-1124・停止・最終更新 11/24 09:43、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 004・minpaku-profit-95・停止・最終更新 11/27 08:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 004・nf-toho-1110-1124・停止・最終更新 11/24 12:20、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 004・okazaki-line-1125・完了・最終更新 11/25 10:16、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 004・STATUS・金さん待ち・物件別損益のスプレッドシート（6タブ）と価格・清掃費の変更案は完成。価格変更の承認が未回答（kim-inbox ki-20261126122609-f9dc）。あわせて、成果物への kim@orgiast.jp 編集権限の付与が3経路とも拒否され、3億円計画シート（1Qa5bPpvjgpm2lFPfeG08jVMem1FWk1QkbsCHSf5eS4o）も読・期限なし（打ち手13のシート上の期限は 2026-11-20 で経過済み）・次:「2（A＋B）」など承認が返ったら、設定シート B2（メルシアター上限価格 14,100→15,500）と Beds24 roomTypes 554789 の cleaningFee（5,000→12,000）を書き換え、pricing-decisions.json に決定・reviewBy を追記し、Beds24 と Airbnb の実表示で読み戻す。決め

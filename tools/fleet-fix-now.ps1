@@ -55,9 +55,20 @@ if (-not $git) {
     git clone --quiet $repoUrl $repo 2>&1 | Out-Null
     Say ("repo: clone " + $(if (Test-Path (Join-Path $repo '.git')) { 'OK' } else { 'NG' }))
   } else {
-    $dirty = git -C $repo status --porcelain 2>$null
+    $dirty = git -C $repo status --porcelain --untracked-files=no 2>$null
     git -C $repo fetch --quiet origin main 2>&1 | Out-Null
-    if ($dirty) { git -C $repo stash push -u -q -m 'fleet-fix-now' 2>&1 | Out-Null; Say 'repo: 未コミット変更を stash に退避' }
+    if ($dirty) {
+        $timestamp = Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ'
+        $hostname = $env:COMPUTERNAME
+        git -C $repo stash push -q -m "fleet-fix-now $timestamp $hostname" 2>&1 | Out-Null
+        $dirtyCount = ($dirty -split "`n" | Where-Object { $_ -ne '' } | Measure-Object).Count
+        Say "repo: $dirtyCount 件の追跡ファイルを stash に退避（git -C $repo stash list で確認し git -C $repo stash pop で戻せます）"
+    } else {
+        $untrackedOnly = git -C $repo status --porcelain 2>$null
+        if ($untrackedOnly) {
+            Say 'repo: 未追跡ファイルのみのため退避不要（reset --hard では消えません）'
+        }
+    }
     git -C $repo checkout -q main 2>&1 | Out-Null
     git -C $repo reset -q --hard origin/main 2>&1 | Out-Null
   }

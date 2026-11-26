@@ -165,9 +165,18 @@ export function respond(id, { home = process.env.ORGIAST_HOME || os.homedir(), b
 if (isEntry(import.meta.url)) {
   try {
     const args = process.argv.slice(2), value = flag => args[args.indexOf(flag) + 1];
-    if (args.includes('--list')) {
+    if (!args.includes('--answer') && !args.includes('--skip')) {
       const items = collectAwaiting();
       console.log(args.includes('--json') ? JSON.stringify(items, null, 2) : formatList(items));
-    } else process.exitCode = respond(value(args.includes('--skip') ? '--skip' : '--answer'), { skip: args.includes('--skip'), reason: value('--reason'), bodyFile: args.includes('--body-file') ? value('--body-file') : undefined });
+    } else {
+      const flag = args.includes('--skip') ? '--skip' : '--answer';
+      const nextArg = args[args.indexOf(flag) + 1];
+      if (nextArg === undefined || nextArg.startsWith('--')) {
+        console.error('usage: --list | --answer <id> --body-file <f> | --skip <id> --reason <r>');
+        process.exitCode = 1;
+      } else {
+        process.exitCode = respond(value(flag), { skip: args.includes('--skip'), reason: value('--reason'), bodyFile: args.includes('--body-file') ? value('--body-file') : undefined });
+      }
+    }
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

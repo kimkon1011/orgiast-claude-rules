@@ -12,7 +12,7 @@ import { parseRows as parseVehicles, retireVehicleAsks } from './vehicle-inspect
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
 import { reportHeartbeat } from './lib/heartbeat.mjs';
-import { AI_CALENDAR, withCaseLabel } from './lib/calendar-shared.mjs';
+import { calendarBase, calendarOptions, calendarIds, readableEvent, isKimTask, listCalendarEvents, belongsToLedger, moveCalendarEvent, timedDuplicates } from './lib/deadline-calendar.mjs';
 import { listItems } from './kim-inbox.mjs';
 import { DEFAULT_CONFIG, createLedger, loadConfig, defaultHome, dataPath, readJson, saveJson, sheetUrl, googleClient, withLedgerLock, parseSheetDate, jstDate, daysUntil, isDuplicate, initialize } from './deadline-ledger.mjs';
 const exec = promisify(execFile);
@@ -129,28 +129,53 @@ export async function hasSentReply(row, request, onGmail404) {
 }
 export async function syncCalendar(row, { config, state, request, persist = () => {}, log = console.error }) {
   if (!config.calendar.enabled || state.calendarSync === false) return;
-  const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(config.calendar.calendarId || AI_CALENDAR)}/events`;
-  const opts = { user: 'kim@orgiast.jp', scope: 'https://www.googleapis.com/auth/calendar.events' };
+  const ids = calendarIds(config), opts = calendarOptions;
   try {
     const due = effectiveDue(row);
-    const query = new URLSearchParams({ privateExtendedProperty: `deadlineId=${row.id}`, maxResults: '2500' });
-    const existing = await request(`${base}?${query}`, opts);
-    const events = existing.items || [];
-    if (closed(row) || !due || row.status === '候補') {
-      for (const e of events) await request(`${base}/${encodeURIComponent(e.id)}`, { ...opts, method: 'DELETE' });
-      return;
+    const found = [];
+    for (const calendar of [ids.kim, ids.task]) {
+      const events = await listCalendarEvents(request, calendar, { privateExtendedProperty: `deadlineId=${row.id}` });
+      found.push(...events.filter(e => belongsToLedger(e, config) && !e.start?.dateTime).map(event => ({ calendar, event })));
     }
-    const end = new Date(Date.parse(due) + 86400000).toISOString().slice(0, 10);
-    const existingCase = String(events[0]?.description || '').split(/\r?\n/, 1)[0].match(/^案件:\s*(.+)$/)?.[1]?.trim();
-    const caseName = row.company || row.caseName || (existingCase && !existingCase.includes('未特定') ? existingCase : '');
-    const labeled = withCaseLabel({ summary: `【期限】${row.title}`, description: `${row.id} 担当: ${row.assignee || 'kim'}\n${row.action || ''}\n期限台帳: ${sheetUrl(config)}` }, caseName, 'deadline-watch');
-    const body = { ...labeled, start: { date: due }, end: { date: end },
-      reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 10080 }, { method: 'popup', minutes: 1440 }] }, extendedProperties: { private: { deadlineId: row.id } } };
-    if (events[0]) await request(`${base}/${encodeURIComponent(events[0].id)}`, { ...opts, method: 'PATCH', body });
-    else {
+    const label = readableEvent(row, config, found.map(x => x.event));
+    const inactive = closed(row) || !due || row.status === '候補';
+    // Cancellation evidence is retained even when the ledger remains open for audit.
+    const cancelled = /見送り済み|発送不要|先方見送り/.test(String(row.notes || ''));
+    const duplicates = !inactive && !cancelled && label && isKimTask(row, config) ? await timedDuplicates(row, due, label.customer, config, request) : [];
+    const target = !inactive && !cancelled && label && isKimTask(row, config) && !duplicates.length ? ids.kim : ids.task;
+    const active = found.filter(x => !x.event.extendedProperties?.private?.deadlineArchive);
+    const primary = active.find(x => x.calendar === target) || active[0];
+    const patch = async (event, calendar, body) => request(`${calendarBase(calendar)}/${encodeURIComponent(event.id)}?sendUpdates=none`, { ...opts, method: 'PATCH', body });
+    for (const item of found) {
+      const archive = item.event.extendedProperties?.private?.deadlineArchive;
+      if (archive) { await moveCalendarEvent(request, item.event, item.calendar, ids.task); continue; }
+      const duplicate = item !== primary || archive === 'duplicate';
+      const destination = duplicate || archive ? ids.task : target;
+      const moved = await moveCalendarEvent(request, item.event, item.calendar, destination);
+      const privateProps = { ...item.event.extendedProperties?.private, deadlineId: row.id, deadlineSheetId: config.sheetId };
+      if (duplicate) privateProps.deadlineArchive = 'duplicate';
+      else if (cancelled || inactive) privateProps.deadlineArchive = cancelled ? 'cancelled' : 'closed';
+      const prefix = duplicate ? '【重複】' : cancelled ? '【見送り済み】' : inactive ? `【${closed(row) ? row.status : '保留'}】` : !label ? '【顧客未解決】' : '';
+      const summary = `${prefix}${(label?.summary || item.event.summary || row.title).replace(/^(?:【(?:重複|顧客未解決|完了|不要|保留|見送り済み)】)+/, '')}`;
+      const body = { summary, ...(label ? { description: label.description } : {}), extendedProperties: { private: privateProps } };
+      if (!inactive && !duplicate && !archive) Object.assign(body, { start: { date: due }, end: { date: new Date(Date.parse(due) + 86400000).toISOString().slice(0,10) } });
+      await patch(moved, destination, body);
+    }
+    // Never recreate preserved duplicates or unresolved/closed ledger entries.
+    if (found.length || inactive || cancelled || !label) return;
+    const { customer, ...labeled } = label;
+    const body = { ...labeled, start: { date: due }, end: { date: new Date(Date.parse(due) + 86400000).toISOString().slice(0,10) },
+      reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 10080 }, { method: 'popup', minutes: 1440 }] }, extendedProperties: { private: { deadlineId: row.id, deadlineSheetId: config.sheetId } } };
+    const base = calendarBase(target);
+    {
       const id = createHash('sha256').update(`${config.sheetId}:${row.id}`).digest('hex');
-      try { await request(base, { ...opts, method: 'POST', body: { ...body, id } }); }
-      catch (e) { if (e.status !== 409) throw e; await request(`${base}/${id}`, { ...opts, method: 'PATCH', body }); }
+      try { await request(`${base}?sendUpdates=none`, { ...opts, method: 'POST', body: { ...body, id } }); }
+      catch (e) {
+        if (e.status !== 409) throw e;
+        const existing = await request(`${base}/${id}`, opts);
+        if (existing.status === 'cancelled' || !belongsToLedger(existing, config) || existing.extendedProperties?.private?.deadlineId !== row.id) throw Error(`Calendar ID衝突: ${row.id}（別予定へのPATCHを停止）`);
+        await patch(existing, target, body);
+      }
     }
   } catch (e) {
     if (e.status !== 403) throw e;

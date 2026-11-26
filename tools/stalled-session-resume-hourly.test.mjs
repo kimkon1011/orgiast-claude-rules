@@ -392,6 +392,63 @@ test('ハートビート: git 呼び出しに gc.auto=0 が付く', t => {
   for (const args of calls) assert.deepEqual(args.slice(0, 4), [...HEARTBEAT_GIT_GC_ARGS]);
 });
 
+test('ハートビート: 11分前の refs/remotes/origin/fleet-heartbeat.lock が回収される', t => {
+  const home = homeFor(t);
+  const dir = path.join(home, '.claude', 'fleet-heartbeat-repo');
+  fs.mkdirSync(path.join(dir, '.git', 'refs', 'remotes', 'origin'), { recursive: true });
+  const lock = path.join(dir, '.git', 'refs', 'remotes', 'origin', 'fleet-heartbeat.lock');
+  fs.writeFileSync(lock, '');
+  const now = Date.now();
+  const ageElevenMinutes = new Date(now - 11 * 60_000);
+  fs.utimesSync(lock, ageElevenMinutes, ageElevenMinutes);
+
+  // Mock exec function to avoid actual git commands
+  const result = publishHourlyHeartbeat({
+    home, repo: home, hostname: '019PC', account: 'test@example.com', now,
+    exec: (_cmd, args) => {
+      // Mock successful git operations
+      if (args.includes('branch') && args.includes('--show-current')) return 'fleet-heartbeat';
+      if (args.includes('ls-remote')) return 'abc123\trefs/heads/fleet-heartbeat';
+      if (args.includes('diff') && args.includes('--cached') && args.includes('--quiet')) {
+        const error = new Error('diff');
+        error.status = 1;
+        throw error;
+      }
+      return '';
+    },
+  });
+
+  // Assert that the lock file is removed and publish succeeds
+  assert.equal(result.pushed, true, result.line);
+  assert.ok(!fs.existsSync(lock));
+});
+
+test('ハートビート: 5分前の refs/remotes/origin/fleet-heartbeat.lock は削除せず失敗する', t => {
+  const home = homeFor(t);
+  const dir = path.join(home, '.claude', 'fleet-heartbeat-repo');
+  fs.mkdirSync(path.join(dir, '.git', 'refs', 'remotes', 'origin'), { recursive: true });
+  const lock = path.join(dir, '.git', 'refs', 'remotes', 'origin', 'fleet-heartbeat.lock');
+  fs.writeFileSync(lock, '');
+  const now = Date.now();
+  const ageFiveMinutes = new Date(now - 5 * 60_000);
+  fs.utimesSync(lock, ageFiveMinutes, ageFiveMinutes);
+
+  let gitCalls = 0;
+  const result = publishHourlyHeartbeat({
+    home, repo: home, hostname: '019PC', account: 'test@example.com', now,
+    exec: () => { gitCalls++; return ''; },
+  });
+
+  // Assert that the operation fails due to young lock and lock file remains
+  assert.equal(result.pushed, false);
+  assert.equal(gitCalls, 0, 'young lock must fail before git');
+  assert.ok(fs.existsSync(lock));
+  assert.match(JSON.parse(result.line).error, /git lock busy: fleet-heartbeat\.lock/);
+  const status = JSON.parse(fs.readFileSync(heartbeatPublishStatusPath(home), 'utf8'));
+  assert.equal(status.ok, false);
+  assert.equal(status.id, 'heartbeat-publish');
+});
+
 test('ハートビート: corrupt エラー時にディレクトリが rename され削除されない', t => {
   const home = homeFor(t);
   const dir = path.join(home, '.claude', 'fleet-heartbeat-repo');

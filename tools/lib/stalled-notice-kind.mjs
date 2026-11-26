@@ -51,11 +51,11 @@ export function decideStalledNoticeKind({ reason = '', nextStep = '' }) {
   if (PAYMENT_OR_ACCOUNT_PATTERNS.some(pattern => pattern.test(text))) return 'ask';
   if (KIM_REQUEST_IN_NEXT_STEP.test(nextStep)) return 'ask';
   if (REPLY_REQUEST_IN_NEXT_STEP.test(nextStep)) return 'ask';
+  if (SENSITIVE_ACTION_PATTERNS.some(pattern => pattern.test(text))) return 'ask';
+  if (KIM_DECISION_PATTERNS.some(pattern => pattern.test(text))) return 'ask';
   if (THIRD_PARTY_OR_DELEGATED_PATTERNS.some(pattern => pattern.test(reason))) return 'info';
   if (EXTERNAL_CAPACITY_PATTERNS.some(pattern => pattern.test(reason))) return 'info';
   if (CONTINUABLE_PATTERNS.some(pattern => pattern.test(reason))) return 'info';
-  if (SENSITIVE_ACTION_PATTERNS.some(pattern => pattern.test(text))) return 'ask';
-  if (KIM_DECISION_PATTERNS.some(pattern => pattern.test(text))) return 'ask';
 
   return 'ask';
 }

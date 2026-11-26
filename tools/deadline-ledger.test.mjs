@@ -82,6 +82,13 @@ test('Google client retries with seisaku-team only for the keyless-route error',
   ]);
 });
 
+test('Calendarのkim認証は鍵なしでも別アカウントへfallbackしない', async () => {
+  const users=[];
+  const client=googleClient({getToken:async({impersonate})=>{users.push(impersonate);throw Error('鍵なし経路は seisaku-team@orgiast.jp 固定です');},fetchImpl:()=>assert.fail('network')});
+  await assert.rejects(client('https://www.googleapis.com/calendar/v3/calendars/primary/events',{scope:'https://www.googleapis.com/auth/calendar.events'}),/鍵なし/);
+  assert.deepEqual(users,['kim@orgiast.jp']);
+});
+
 test('既存seedsのevidence/noteとgmail:メール箱形式を保持して正規化する', () => {
   const row=normalizeSeed({title:'協業回答',source:'gmail:seisaku-team@orgiast.jp',sourceId:'mail-one',due:'2026-11-06',kind:'回答・返信',evidence:'https://example.invalid/message',note:'確認メモ'});
   assert.equal(row.source,'Gmail'); assert.equal(row.sourceId,'gmail:seisaku-team@orgiast.jp:mail-one');

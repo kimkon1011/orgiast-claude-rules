@@ -30,6 +30,7 @@ import { latestOpenPromises, ledgerFile as progressLedgerFile, readLedger } from
 import { readTranscriptContext } from './lib/assistant-text.mjs';
 import { footerValues, NO_ACTION_PATTERN } from './next-action-gate.mjs';
 import { parseJsonLoose, readJsonFile } from './lib/json-read.mjs';
+import { decideStalledNoticeKind } from './lib/stalled-notice-kind.mjs';
 
 const CHECK_INTERVAL_MS = 15 * 60_000;
 const HOUR_MS = 3_600_000;
@@ -810,8 +811,9 @@ async function runInternal(config = options(), io = {}) {
               row.skip = row.decision.action;
               if (!readonly) {
                 if (row.decision.action === 'waiting-human') {
-                  const subject = `【再開の判断待ち】${record.displayTitle}`;
-                  const delivery = await addOverdueInbox(io, home, { kind: 'ask', forceKind: true, source: 'stalled-session-hourly-preflight', sessionId: record.sessionId,
+                  const noticeKind = decideStalledNoticeKind({ reason: row.decision.reason, nextStep: row.decision.nextStep });
+                  const subject = noticeKind === 'info' ? `【停滞の記録】${record.displayTitle}` : `【再開の判断待ち】${record.displayTitle}`;
+                  const delivery = await addOverdueInbox(io, home, { kind: noticeKind, forceKind: true, source: 'stalled-session-hourly-preflight', sessionId: record.sessionId,
                     dedupeKey: record.sessionId, text: redactSecrets(`${subject}\n理由: ${row.decision.reason}\n確認事項: ${row.decision.nextStep}`) });
                   row.askSubject = subject;
                   row.askDelivery = delivery?.delivered || delivery?.status || 'saved';

@@ -161,7 +161,23 @@ function acquireInboxLock(home, key, waitMs = 60_000) {
     }
   }
   if (fd === undefined) throw new Error('kim-inbox: 台帳が使用中です');
-  return () => { fs.closeSync(fd); fs.unlinkSync(lock); };
+  return () => { fs.closeSync(fd); releaseOwnedLock(lock, process.pid); };
+}
+// Only remove locks still owned by the expected process.
+function releaseOwnedLock(lock, pid) {
+  try {
+    if (Number(fs.readFileSync(lock, 'utf8')) !== pid) return false;
+    fs.unlinkSync(lock);
+    return true;
+  } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
+export function releaseDeadlineWorkerLock(home, pid, { requireDead = true } = {}) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  if (requireDead) {
+    try { process.kill(pid, 0); return false; }
+    catch (error) { if (error.code !== 'ESRCH') return false; }
+  } else if (pid !== process.pid) return false;
+  return releaseOwnedLock(path.join(directory(home), 'info-aggregation.lock'), pid);
 }
 function locked(home, key, fn, waitMs) {
   const release = acquireInboxLock(home, key, waitMs);
@@ -771,25 +787,30 @@ export function closeKey(home, key) {
     .filter(i => i.kind === 'deadline' && i.key === key)
     .map(i => update(home, i.id, current => { current.status = 'seen'; })));
 }
-function applyDeadlineOp(home, op) {
+function applyDeadlineOp(home, op, byKey) {
+  const matches = byKey.get(op.key) || [];
   if (op.type === 'close' || op.close) {
-    return listItems(home, { status: 'open' })
-      .filter(i => i.kind === 'deadline' && i.key === op.key)
-      .map(i => update(home, i.id, current => { current.status = 'seen'; }));
+    for (const item of matches) {
+      update(home, item.id, current => { current.status = 'seen'; });
+      byKey.set(op.key, (byKey.get(op.key) || []).filter(candidate => candidate.id !== item.id));
+    }
+    return;
   }
   const text = clean(op.text || op.body || '');
   if (!op.key || !/^[A-Za-z0-9_-]+$/.test(op.key)) throw new Error('deadline には有効な --key が必要です');
-  const existing = listItems(home, { status: 'open' }).find(i => i.kind === 'deadline' && i.key === op.key);
+  const existing = matches[0];
   if (existing) {
     return update(home, existing.id, current => {
       current.text = text; current.due = op.due || ''; current.remainingDays = op.remainingDays ?? null;
       current.lastAt = new Date().toISOString();
     });
   }
-  return createNew(home, {
+  const item = createNew(home, {
     kind: 'deadline', text, key: op.key, due: op.due, remainingDays: op.remainingDays,
     source: op.source || 'deadline-watch',
   });
+  byKey.set(op.key, [item]);
+  return item;
 }
 const inboxBusy = error => String(error?.message || error) === 'kim-inbox: 台帳が使用中です';
 function sleepSync(ms) {
@@ -798,19 +819,29 @@ function sleepSync(ms) {
 }
 // One aggregation lock for many deadline add/close ops. Busy lock acquisition
 // retries a few times; failed ops stay unset so the next watch can resend.
-export function batchDeadlineOps(home, ops, { attempts = 3, backoffMs = 100, sleep = sleepSync } = {}) {
+export function batchDeadlineOps(home, ops, { attempts = 3, backoffMs = 100, sleep = sleepSync, onOpenItems } = {}) {
   if (!ops.length) return [];
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      return locked(home, 'info-aggregation', () => ops.map(op => {
-        try {
-          applyDeadlineOp(home, op);
-          return { key: op.key, ok: true, markNotified: !!op.markNotified, readOnly: !!op.readOnly, notifyCount: op.notifyCount, vehicleName: op.vehicleName, plate: op.plate };
-        } catch (error) {
-          return { key: op.key, ok: false, error: clean(error.message), markNotified: false };
+      return locked(home, 'info-aggregation', () => {
+        const items = listItems(home, { status: 'open' });
+        const byKey = new Map();
+        for (const item of items) {
+          if (item.kind !== 'deadline') continue;
+          if (!byKey.has(item.key)) byKey.set(item.key, []);
+          byKey.get(item.key).push(item);
         }
-      }), 0);
+        onOpenItems?.(items);
+        return ops.map(op => {
+          try {
+            applyDeadlineOp(home, op, byKey);
+            return { key: op.key, ok: true, markNotified: !!op.markNotified, readOnly: !!op.readOnly, notifyCount: op.notifyCount, vehicleName: op.vehicleName, plate: op.plate };
+          } catch (error) {
+            return { key: op.key, ok: false, error: clean(error.message), markNotified: false };
+          }
+        });
+      }, 0);
     } catch (error) {
       lastError = error;
       if (!inboxBusy(error) || attempt === attempts - 1) break;

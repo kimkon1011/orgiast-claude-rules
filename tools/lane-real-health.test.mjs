@@ -443,7 +443,7 @@ test('OpenRouter 経由が正規経路の deepseek を連鎖と誤認しない',
 });
 
 test('OpenRouter 経路の mistral も同様に連鎖と誤認しない', t => {
-  assert.equal(probeViaChain('PONG\n[openrouter:mistralai/mistral-medium-3.1] in=21 out=3tok', 'mistral'), false);
+  assert.equal(probeViaChain('PONG\n[openrouter:mistralai/mistral-medium-3-5] in=21 out=3tok', 'mistral'), false);
 });
 
 test('OpenRouter タグに自レーン名が含まれない場合は従来どおり viaChain', t => {
@@ -578,4 +578,37 @@ test('fail-rate で probe が quota を示さなければ従来どおり real_fa
   assert.equal(health.lanes.deepseek.reason, 'real_fail_rate');
   assert.equal(health.lanes.deepseek.alive, false);
   assert.equal(health.lanes.deepseek.until, undefined);
+});
+
+test('default probe measures gateway-backed mistral and retains retired model evidence', async t => {
+  const home = fixture(t, []);
+  fs.writeFileSync(path.join(home, '.claude/openrouter.env'), 'OPENROUTER_API_KEY=test-only');
+  const model = 'mistralai/mistral-medium-3-5';
+  for (const [code, message] of [[1, 'is no longer available on OpenRouter'], [0, 'No endpoints found']]) {
+    const calls = [];
+    const h = await laneDoctorProbe({ home, now, probe: async p => {
+      calls.push(p);
+      return p === 'mistral' ? { code, text: `openrouter:${model} HTTP404: {"error":{"message":"${message}","code":404}}` } : { code: 0, text: 'PONG' };
+    }, notify: async () => ({ delivered: 'test' }) });
+    assert.ok(calls.includes('mistral'));
+    assert.equal(h.lanes.mistral.alive, false);
+    assert.equal(h.lanes.mistral.reason, 'model_retired');
+    assert.equal(h.lanes.mistral.model, model);
+    assert.match(h.lanes.mistral.error, /mistralai\/mistral-medium-3-5/);
+    assert.equal(h.lanes.openrouter.alive, true);
+    assert.equal(laneDoctorQuick({ home, now: now + 3600_000 }).lanes.mistral.reason, 'model_retired');
+  }
+  const recovered = await laneDoctorProbe({ home, now: now + 3600_000, providers: ['mistral'], probe: async () => ({ code: 0, text: `PONG\n[openrouter:${model}] in=1 out=1tok` }), notify: async () => ({ delivered: 'test' }) });
+  assert.equal(recovered.lanes.mistral.alive, true);
+  assert.equal(recovered.lanes.mistral.reason, 'probe_ok');
+});
+
+test('retired model detection requires 404 and a model retirement message on the requested lane', async () => {
+  const { retiredModel } = await import('./lib/lane-real-health.mjs');
+  const model = 'mistralai/mistral-medium-3-5';
+  assert.equal(retiredModel(`openrouter:${model} HTTP 404: No endpoints found`, 'mistral'), model);
+  assert.equal(retiredModel(`openrouter:${model} HTTP 404: Not found`, 'mistral'), null);
+  assert.equal(retiredModel(`openrouter:${model} HTTP 503: No endpoints found`, 'mistral'), null);
+  assert.equal(retiredModel(`openrouter:${model} HTTP 404: No endpoints found`, 'deepseek'), null);
+  assert.equal(retiredModel(`[routing] openrouter:${model} HTTP 404: No endpoints found`, 'mistral'), null);
 });

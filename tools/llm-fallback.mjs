@@ -130,7 +130,9 @@ export function classifyFailure(status) {
 }
 
 export function isPermanentBillingDetail(detail) {
-  return /prepayment credits are depleted|insufficient_quota|exceeded your current quota|insufficient balance|insufficient_balance|exceeded_current_quota|is suspended due to|please recharge your account/i.test(String(detail || ''));
+  // 2026-11-27 実測: xAI/grok のクレジット切れは HTTP 403 で
+  // "used all available credits" / "reached its monthly spending limit" / "purchase more credits" を返す。
+  return /prepayment credits are depleted|insufficient_quota|exceeded your current quota|insufficient balance|insufficient_balance|exceeded_current_quota|is suspended due to|please recharge your account|used all available credits|reached its monthly spending limit|purchase more credits/i.test(String(detail || ''));
 }
 
 function retryAfterMs(response, now = Date.now()) {

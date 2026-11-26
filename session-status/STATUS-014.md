@@ -1,8 +1,9 @@
-# session-status  PC=014  host=014DELL  updated 2026-11-26 15:05 JST
+# session-status  PC=014  host=014DELL  updated 2026-11-26 16:05 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\USER\\.claude\\projects", "configDirectory": "C:\\Users\\USER\\
-- 案件数: 11
+- 案件数: 12
 
+- 014・20261126-株式会社 デージーネット・完了・最終更新 11/26 15:53、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 014・270201FIN-design・停止・最終更新 11/26 11:53、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 014・account-inventory-1123・完了・最終更新 11/23 21:37、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 014・dispatch-1122-21・停止・最終更新 11/22 21:42、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

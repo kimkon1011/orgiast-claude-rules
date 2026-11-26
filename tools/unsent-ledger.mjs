@@ -423,12 +423,14 @@ export async function scanGmailDrafts(ledger, {
   const known = new Set(ledger.items.filter(x => x.gmail_draft_id).map(x => `${x.from}:${x.gmail_draft_id}`));
   let registered = 0;
   const errors = [];
+  const existingDrafts = [];
   for (const user of users) {
     try {
       const drafts = await listDrafts(user);
       for (const d of drafts || []) {
         const id = d.id || d.gmail_draft_id;
         if (!id) continue;
+        existingDrafts.push(`${user}:${id}`);
         if (known.has(`${user}:${id}`)) {
           for (const existing of ledger.items.filter(x => x.gmail_draft_id === id && x.from === user)) {
             if (!existing.body_text && !existing.body_path && d.body_text) existing.body_text = d.body_text;
@@ -463,7 +465,7 @@ export async function scanGmailDrafts(ledger, {
       // 照合エラーとして ALERT に載せるため、ダミー項目ではなく run 側で集約
     }
   }
-  return { registered, errors };
+  return { registered, errors, existingDrafts };
 }
 
 export function isGmailDraftItem(item) {
@@ -502,6 +504,7 @@ export function isOldDraftAggregate(item, nowMs = Date.now()) {
 }
 
 export function showStoppedInCompact(item, nowMs = Date.now()) {
+  if (String(item?.decided_by || '').trim() || isManualLedgerItem(item)) return true;
   if (isOldDraftAggregate(item, nowMs)) return false;
   if (isDraftFileItem(item) && itemAgeMs(item, nowMs) > SEVEN_DAYS_MS) return false;
   return isHumanDecidedContact(item, nowMs) || !isDraftFileItem(item);
@@ -517,11 +520,6 @@ function cardFileName(item) {
 }
 
 async function checkEmail(item, search) {
-  if (isGmailDraftItem(item)) {
-    // 下書きは「送ったか」ではなく「台帳に載ったか」の問題。照合対象外。
-    item.last_check_error = null;
-    return false;
-  }
   const target = item.match?.to || item.to?.[0];
   const after = item.match?.after || item.decided_at;
   if (!target || target === '不明' || !after) {
@@ -604,8 +602,9 @@ export async function readChatMessages(chatId, { afterMs } = {}) {
     throw new Error('Beeper履歴の走査上限・照合未完了');
 }
 
-export async function check(ledger, search = searchGmail, { reader } = {}) {
+export async function check(ledger, search = searchGmail, { reader, existingDrafts = [] } = {}) {
   const chatReader = reader || readChatMessages;
+  const draftKeys = new Set(existingDrafts);
 
   ledger.items = (ledger.items || []).map(migrateItem);
 
@@ -613,8 +612,8 @@ export async function check(ledger, search = searchGmail, { reader } = {}) {
     item.last_checked_at = nowIso();
     delete item.last_check_error;
     try {
-      if (isGmailDraftItem(item)) {
-        // Gmail下書きは照合対象外（止まったのまま）
+      if (item.gmail_draft_id && draftKeys.has(`${item.from}:${item.gmail_draft_id}`)) {
+        // 現存を確認できた下書きだけ照合対象外。消えた下書きは送信履歴を照合する。
         return;
       }
       let found = false;
@@ -749,6 +748,23 @@ function formatCheckErrorBlock(item) {
   return `${formatItemBlock(item)}- 照合エラー: ${item.last_check_error || item.status_reason}\n`;
 }
 
+// 本文を削らず、繰り返すメタ情報だけを圧縮。詳細は全件版とカードに保持する。
+function formatCompactItem(item, { bodyLimit = null, stopped = false } = {}) {
+  let body = bodyText(item) || '(本文なし)';
+  if (bodyLimit != null) {
+    const chars = Array.from(body);
+    if (chars.length > bodyLimit) body = `${chars.slice(0, bodyLimit).join('')}\n…（全文は cards/${cardFileName(item)} の body_text）`;
+  }
+  const stoppedAt = stopped && ([...(item.history || [])].reverse().find(h => h.status === '止まった')?.at
+    || item.last_checked_at || item.decided_at);
+  return [
+    `### ${item.id}`,
+    `- 宛先: ${(item.to || []).join(', ') || '(なし)'} / 件名: ${item.subject || '(なし)'}`,
+    `- ${item.status}${item.status_reason ? `（${item.status_reason}）` : ''} / ${item.channel || ''}${item.deadline ? ` / 期限: ${item.deadline}` : ''}${stopped ? ` / 止まってから: ${elapsedLabel(stoppedAt)}` : ''}`,
+    '```', body, '```', '',
+  ].join('\n');
+}
+
 function summarizeOldDrafts(items, nowMs) {
   const byAccount = new Map();
   const byDomain = new Map();
@@ -806,7 +822,7 @@ function summarizeCheckErrors(checkErr) {
 function isCheckErrorForAlert(item) {
   if (!item?.last_check_error) return false;
   // Gmail下書きの match 未設定は照合エラーに数えない
-  if (isGmailDraftItem(item)) return false;
+  if (isGmailDraftItem(item) && item.last_check_error === 'match.to または match.after が未設定') return false;
   return true;
 }
 
@@ -847,7 +863,7 @@ export function buildAlert(ledger, { checkErrors = [], now = new Date() } = {}) 
   }
 
   const stoppedShown = stopped.filter((item) => showStoppedInCompact(item, nowMs));
-  const oldDrafts = stopped.filter((item) => isOldDraftAggregate(item, nowMs));
+  const oldDrafts = stopped.filter((item) => !showStoppedInCompact(item, nowMs) && isOldDraftAggregate(item, nowMs));
   // 7〜14日の下書きファイル等、要約にも集計にも出さない分は full のみ
   const stamp = jstStamp(now);
   const total = new Set([...pending, ...checkErr].map(x => x.id)).size;
@@ -865,7 +881,7 @@ export function buildAlert(ledger, { checkErrors = [], now = new Date() } = {}) 
     '',
     '## 【止まった】',
     stoppedShown.length
-      ? stoppedShown.map((item) => formatStoppedBlock(item)).join('\n')
+      ? stoppedShown.map((item) => formatCompactItem(item, { stopped: true })).join('\n')
       : '（0件）',
     '',
     summarizeOldDrafts(oldDrafts, nowMs),
@@ -874,7 +890,7 @@ export function buildAlert(ledger, { checkErrors = [], now = new Date() } = {}) 
     '',
     '## 【未送信】',
     unsent.length
-      ? unsent.map((item) => formatItemBlock(item, { bodyLimit: UNSENT_BODY_PREVIEW })).join('\n')
+      ? unsent.map((item) => formatCompactItem(item, { bodyLimit: UNSENT_BODY_PREVIEW })).join('\n')
       : '（0件）',
     '',
   ];
@@ -1118,7 +1134,15 @@ export async function run({
   reader,
   sender,
   exportDirs,
+  previewOnly = false,
 } = {}) {
+  // 明示 --dry-run は表示の検証だけ。台帳・inbox・通知状態を書き換えない。
+  if (previewOnly) {
+    const ledger = loadLedger(ledgerFile);
+    const pending = doExport ? exportLedger(ledger, exportDirs) : ledger.items.filter(isPending).length;
+    const autoSendResult = doAutoSend ? await autoSend(ledger, { dryRun: true }) : [];
+    return { total: ledger.items.length, pending, previewOnly: true, autoSendResult };
+  }
   const release = acquireLedgerLock(ledgerFile);
   try {
     let ledger = loadLedger(ledgerFile);
@@ -1131,7 +1155,7 @@ export async function run({
     if (doScanGmail) {
       gmailScan = await scanGmailDrafts(ledger, { listDrafts: listDrafts || defaultListGmailDrafts });
     }
-    if (doCheck) await check(ledger, search || searchGmail, { reader });
+    if (doCheck) await check(ledger, search || searchGmail, { reader, existingDrafts: gmailScan.existingDrafts });
     let autoSendResult = [];
     if (doAutoSend) autoSendResult = await autoSend(ledger, { dryRun, sender, reader });
     ledger = saveLedger(ledger, ledgerFile);
@@ -1196,6 +1220,7 @@ async function main() {
     doScanGmail: !args.includes('--no-scan-gmail'),
     doAutoSend: args.includes('--dry-run') || args.includes('--send') || args.includes('--auto-send'),
     dryRun,
+    previewOnly: args.includes('--dry-run') && !args.includes('--refresh'),
   });
   console.log(JSON.stringify(result, null, 2));
 }

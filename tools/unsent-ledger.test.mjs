@@ -24,6 +24,7 @@ import {
   acquireLedgerLock,
   isGmailDraftItem,
   isOldDraftAggregate,
+  run,
 } from './unsent-ledger.mjs';
 
 function tmpDir(prefix = 'unsent-') {
@@ -47,6 +48,8 @@ test('補助取込の60秒タイムアウトは台帳完了を取り消さずALE
   assert.equal(calls[0].opts.timeout,600000);
   assert.equal(calls[1].opts.timeout,60000);
   assert.ok(calls.every(x=>x.opts.windowsHide&&x.args.includes('--dry-run')));
+  assert.ok(calls[0].args.includes('--refresh'));
+  assert.ok(!calls[1].args.includes('--refresh'));
   assert.deepEqual(errors,['ETIMEDOUT']);
 });
 
@@ -476,8 +479,84 @@ test('Gmail下書きは照合をスキップし match 未設定をエラーに�
     match: {},
   });
   const l = { items: [item] };
-  await check(l, async () => { throw new Error('should not search'); });
+  await check(l, async () => { throw new Error('should not search'); }, {
+    existingDrafts: ['seisaku-team@orgiast.jp:x1'],
+  });
   assert.equal(l.items[0].status, '止まった');
   assert.equal(l.items[0].last_check_error, undefined);
   assert.equal(buildAlert(l).counts.checkErrors, 0);
+});
+
+test('直近7日のファイル下書きと人の決定は本文全文を保持し14日超は集計する', () => {
+  const now = new Date('2026-11-26T12:00:00Z');
+  const body = '本文'.repeat(500) + '全文末尾';
+  const draft = (id, date, extra = {}) => normalizeItem({ id, status: '止まった',
+    status_reason: '下書きのみで台帳未登録', created_by: 'test|scanDraftFiles',
+    decided_at: date, body_text: body, ...extra });
+  const items = [draft('recent', '2026-11-20'), draft('old', '2026-11-01'),
+    draft('decided', '2026-11-01', { decided_by: '担当者の判断' }),
+    normalizeItem({ id: 'manual', status: '止まった', status_reason: '確認待ち', body_text: body,
+      decided_at: '2026-10-01', history: [{ by: 'add' }] })];
+  const before = JSON.stringify(items);
+  const built = buildAlert({ items }, { now });
+  const stop = built.markdown.split('## 【止まった】')[1].split('## 【古い下書き')[0];
+  for (const id of ['recent', 'decided', 'manual']) assert.ok(stop.includes(`### ${id}\n`));
+  assert.equal(stop.split(body).length - 1, 3);
+  assert.ok(!stop.includes('### old\n'));
+  assert.equal(built.counts.oldDrafts, 1);
+  assert.equal(JSON.stringify(items), before);
+});
+
+test('最優先は全文、未送信は300文字でカードと全件版には全文を保持', () => {
+  const body = '😀'.repeat(301) + '末尾';
+  const dir = tmpDir();
+  exportLedger({ items: [normalizeItem({ id: 'priority', body_text: body, deadline: '2026-11-26T12:00:00Z' }),
+    normalizeItem({ id: 'pending', body_text: body })] }, [dir], { now: new Date('2026-11-26T12:00:00Z') });
+  const text = fs.readFileSync(path.join(dir, 'ALERT.md'), 'utf8');
+  assert.ok(text.split('## 【最優先】')[1].split('## 【止まった】')[0].includes(body));
+  const unsent = text.split('## 【未送信】')[1];
+  assert.ok(unsent.includes('😀'.repeat(300)));
+  assert.ok(!unsent.includes('😀'.repeat(301)));
+  assert.ok(unsent.includes('cards/pending.json'));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'cards', 'pending.json'))).body_text, body);
+  assert.ok(fs.readFileSync(path.join(dir, 'ALERT-full.md'), 'utf8').includes(body));
+});
+
+test('照合エラーは理由別5件で、Gmailの設定不足以外のエラーを隠さない', () => {
+  const items = Array.from({ length: 7 }, (_, i) => normalizeItem({ id: `error-${i}`, last_check_error: 'offline' }));
+  items.push(normalizeItem({ id: 'gmail-draft-auth', last_check_error: 'auth failed' }));
+  items.push(normalizeItem({ id: 'gmail-draft-match', last_check_error: 'match.to または match.after が未設定' }));
+  const built = buildAlert({ items });
+  const errors = built.markdown.split('## 【照合エラー】')[1].split('## 【未送信】')[0];
+  assert.equal(built.counts.checkErrors, 8);
+  assert.match(errors, /offline（7件）/);
+  assert.match(errors, /error-4/);
+  assert.doesNotMatch(errors, /error-5/);
+  assert.match(errors, /auth failed/);
+});
+
+test('Gmail下書きの現存確認はアカウント別、消えた下書きは送信照合する', async () => {
+  const item = normalizeItem({ id: 'gmail-draft-gone', gmail_draft_id: 'gone', status: '止まった',
+    status_reason: '下書き', from: 'seisaku-team@orgiast.jp', to: ['a@example.com'],
+    decided_at: '2026-11-01', subject: '件名' });
+  const ledger = { items: [item] };
+  let searches = 0;
+  await check(ledger, async () => { searches++; return { messages: [{ id: 'sent', subject: '件名' }] }; },
+    { existingDrafts: ['kim@orgiast.jp:gone'] });
+  assert.equal(searches, 1);
+  assert.equal(ledger.items[0].status, '送信済み');
+});
+
+test('明示dry-runは台帳をバイト単位で保持し照合・送信・スキャンしない', async () => {
+  const dir = tmpDir(), ledgerFile = path.join(dir, 'ledger.json');
+  const original = JSON.stringify({ items: [normalizeItem({ id: 'preview', status: '止まった',
+    status_reason: '停止', body_text: '実本文' })] });
+  fs.writeFileSync(ledgerFile, original);
+  const forbidden = async () => assert.fail('dry-runから外部操作を呼ばない');
+  const result = await run({ previewOnly: true, doAutoSend: true, ledgerFile,
+    exportDirs: [path.join(dir, 'output')], search: forbidden, listDrafts: forbidden, reader: forbidden, sender: forbidden });
+  assert.equal(result.previewOnly, true);
+  assert.equal(fs.readFileSync(ledgerFile, 'utf8'), original);
+  assert.ok(!fs.existsSync(`${ledgerFile}.lock`));
+  assert.ok(fs.readFileSync(path.join(dir, 'output', 'ALERT.md'), 'utf8').includes('実本文'));
 });

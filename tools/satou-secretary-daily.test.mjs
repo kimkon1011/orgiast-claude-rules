@@ -332,7 +332,7 @@ test("案件未紐付けでも佐藤さんから社外へ送ったメールは�
       to: "顧客 <customer@example.com>", body: "会場候補をお送りします。",
     }], actions: [],
   }, { askLlm: async prompt => prompt.includes("社長判断") || prompt.includes("問題候補") ? "なし" : "会場候補を送付した。" });
-  assert.match(report.text, /昨日の動き\n・会場候補のご案内：会場候補を送付した。/);
+  assert.match(report.text, /昨日の動き\n・会場候補のご案内：佐藤さん担当（送信：株式会社オージャスト 佐藤）会場候補を送付した。/);
 });
 test("GitHub bot 通知送信者を未返信対象として識別する", () => {
   assert.equal(isBotSender("github-actions[bot] <notifications@github.com>"), true);

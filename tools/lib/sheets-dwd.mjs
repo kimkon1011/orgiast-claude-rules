@@ -12,10 +12,16 @@ export const quoteTab = (title) => `'${title.replaceAll("'", "''")}'`;
 
 // Append POST is not retried: an ambiguous append response must be read back by id.
 // GET, PUT, and idempotent values:batchUpdate wait and retry on 429/5xx responses and transient network failures.
-export function createSheetsClient({ fetchImpl = gwsFetch, getToken = getDriveToken, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), maxRetries = 5, max429Retries = 8, random = Math.random, timeoutMs = Number(process.env.DEADLINE_FETCH_TIMEOUT_MS) || 60_000, onStage = () => {}, signal } = {}) {
+export function createSheetsClient({ fetchImpl = gwsFetch, getToken = getDriveToken, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), maxRetries = 5, max429Retries = 8, random = Math.random, timeoutMs = Number(process.env.DEADLINE_FETCH_TIMEOUT_MS) || 60_000, onStage = () => {}, signal, totalTimeoutMs, signalProvider } = {}) {
   let token;
   let expires = 0;
   async function request(id, suffix = '', method = 'GET', body, { retryablePost = false } = {}) {
+    const budget = totalTimeoutMs ? AbortSignal.timeout(totalTimeoutMs) : undefined;
+    const parent = signalProvider?.() || signal;
+    const requestBudget = parent && budget ? AbortSignal.any([parent, budget]) : parent || budget;
+    return withAbort(requestBudget, () => perform(id, suffix, method, body, retryablePost, requestBudget));
+  }
+  async function perform(id, suffix, method, body, retryablePost, signal) {
     const timedSignal = () => signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
     try {
       if (!token || Date.now() >= expires) {
@@ -40,6 +46,7 @@ export function createSheetsClient({ fetchImpl = gwsFetch, getToken = getDriveTo
       let retries = 0;
       let retries429 = 0;
       for (;;) {
+        signal?.throwIfAborted();
         let response;
         const requestSignal = timedSignal();
         try {
@@ -56,11 +63,11 @@ export function createSheetsClient({ fetchImpl = gwsFetch, getToken = getDriveTo
             || retryableNetworkCodes.has(error?.code)
             || retryableNetworkCodes.has(error?.cause?.code);
           if (!retryableMethod || !retryableError || retries >= maxRetries) throw error;
-          await sleep(Math.min(2_000 * (2 ** retries), 60_000));
+          await withAbort(signal, () => sleep(Math.min(2_000 * (2 ** retries), 60_000)));
           retries++;
           continue;
         }
-        if (response.ok) return response.json();
+        if (response.ok) return await withAbort(requestSignal, () => response.json());
         const is429 = response.status === 429;
         const retryLimitReached = is429 ? retries429 >= max429Retries : retries >= maxRetries;
         if (!retryableMethod || !retryableStatuses.has(response.status) || retryLimitReached) {
@@ -72,7 +79,7 @@ export function createSheetsClient({ fetchImpl = gwsFetch, getToken = getDriveTo
         const delay = hasRetryAfter
           ? Math.min(retryAfterSeconds * 1_000, 60_000)
           : Math.min(2_000 * (2 ** (is429 ? retries429 : retries)), 60_000) + (is429 ? Math.floor(random() * 1_001) : 0);
-        await sleep(delay);
+        await withAbort(signal, () => sleep(delay));
         if (is429) retries429++;
         else retries++;
       }

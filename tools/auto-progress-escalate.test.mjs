@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { escalateKimDecisions, escalationRowKey, escalationText, isNoKimAction, sweepStaleEscalations } from './auto-progress-escalate.mjs';
+import { escalateKimDecisions, escalationRowKey, escalationText, isNoKimAction, sweepDuplicateEscalations, sweepStaleEscalations } from './auto-progress-escalate.mjs';
 import { ledgerFile, writeLedger } from './auto-progress-ledger.mjs';
 import { addItem, readInboxItem, updateInboxItem } from './kim-inbox.mjs';
-import { escalationDedupeKey } from './lib/escalation-answer-sync.mjs';
+import { escalationDedupeKey, parseLedgerRef } from './lib/escalation-answer-sync.mjs';
 const H = 3600000;
 const now = Date.parse('2026-11-04T10:00:00Z');
 const row = (hours, extra = {}) => ({ ts: new Date(now - hours * H).toISOString(), sessionId: `session-${hours}`, status: 'waiting_user', nextKim: 'kim の承認が必要です', promise: '返信を確認して報告', pc: 'test-PC', ...extra });
@@ -134,6 +134,52 @@ test('同じ行の ask が受信箱にあれば新しく積まず、回答済み
   assert.deepEqual(synced, ['既製品ですすめて']);
   assert.equal(sentOptions[0].dedupeKey, `auto-progress-escalate:${escalationRowKey(fresh)}`);
   assert.equal(sentOptions[0].source, 'auto-progress-escalate');
+});
+
+test('parseLedgerRef: 言い換えられた本文の台帳参照を抽出し、参照なしは null', () => {
+  assert.deepEqual(parseLedgerRef('（元の約束: A ならサーバー側と画面の実装をほかのAIに任せ… / PC DESKTOP-N429M3V / セッション 3d10ac07 / 台帳 ts 2026-11-02T10:15:00.887Z）'),
+    { session: '3d10ac07', ts: '2026-11-02T10:15:00.887Z' });
+  assert.deepEqual(parseLedgerRef('（元の約束: … / セッション　a152106d / 任意の文字 / 台帳　ts 2026-10-15T09:43:23.454Z）'),
+    { session: 'a152106d', ts: '2026-10-15T09:43:23.454Z' });
+  assert.equal(parseLedgerRef('台帳フッターの無い判断依頼です'), null);
+});
+
+test('escalateKimDecisions: 旧形式の open ask も緩い台帳参照で抑止する', async t => {
+  const target = row(60, { sessionId: 'a152106d-more' });
+  const opts = setup(t, [target]);
+  opts.io.listInbox = () => [{ id: 'legacy-open', kind: 'ask', status: 'open', text: `言い換え本文\n（セッション a152106d / 台帳 ts ${target.ts}）` }];
+  const result = await escalateKimDecisions({ ...opts, dryRun: true });
+  assert.deepEqual(result.targets, []);
+  assert.deepEqual(result.suppressed, [{ rowKey: escalationRowKey(target), reason: 'already-open-loose', items: ['legacy-open'] }]);
+});
+
+test('sweepDuplicateEscalations: 同じ台帳参照の最新1件を残し、異なる参照とフッターなしは対象外', async t => {
+  const { home } = setup(t, []);
+  const make = async (idSuffix, session, ts, createdAt, withFooter = true) => {
+    const item = await addItem(home, { kind: 'ask', text: withFooter ? `本文 ${idSuffix}\n（セッション ${session} / 台帳 ts ${ts}）` : `本文 ${idSuffix}` }, { drain: false, localOnly: true });
+    updateInboxItem(home, item.id, current => { current.createdAt = createdAt; });
+    return item.id;
+  };
+  const ts = '2026-11-02T10:15:00.887Z';
+  const oldest = await make('oldest', '3d10ac07', ts, '2026-11-01T00:00:00Z');
+  const newest = await make('newest', '3d10ac07', ts, '2026-11-03T00:00:00Z');
+  const middle = await make('middle', '3d10ac07', ts, '2026-11-02T00:00:00Z');
+  const other = await make('other', 'different', ts, '2026-11-04T00:00:00Z');
+  const noFooter = await make('no-footer', '', '', '2026-11-05T00:00:00Z', false);
+  const result = sweepDuplicateEscalations({ home, now, io: { dropItem: () => assert.fail('dry-run must not call dropItem') } });
+  assert.equal(result.dropped, 2);
+  assert.equal(result.kept, 1);
+  assert.equal(result.groups[0].keptId, newest);
+  assert.deepEqual(new Set(result.groups[0].droppedIds), new Set([oldest, middle]));
+  for (const id of [oldest, newest, middle, other, noFooter]) assert.equal(readInboxItem(home, id).status, 'open');
+
+  let dropCalls = 0;
+  const applied = sweepDuplicateEscalations({ home, now, dryRun: false, io: { dropItem: (...args) => { dropCalls++; return updateInboxItem(args[0], args[1], item => Object.assign(item, { status: 'dropped' })); } } });
+  assert.equal(dropCalls, 2);
+  assert.equal(applied.dropped, 2);
+  assert.equal(readInboxItem(home, newest).status, 'open');
+  assert.equal(readInboxItem(home, other).status, 'open');
+  assert.equal(readInboxItem(home, noFooter).status, 'open');
 });
 
 test('message includes ask and nextClaude with capped lengths', () => {

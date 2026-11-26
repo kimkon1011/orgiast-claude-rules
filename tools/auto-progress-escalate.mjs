@@ -9,7 +9,7 @@ import { notifyKim } from './notify-kim.mjs';
 import { acquireLock } from './lib/progress-file-lock.mjs';
 import { isEntry } from './is-entry.mjs';
 import { dropItem, inboxDedupeKey, listInboxMatches } from './kim-inbox.mjs';
-import { priorEscalations, syncEscalationAnswer, escalationDedupeKey, parseEscalation } from './lib/escalation-answer-sync.mjs';
+import { priorEscalations, syncEscalationAnswer, escalationDedupeKey, parseEscalation, parseLedgerRef } from './lib/escalation-answer-sync.mjs';
 
 const DAY_MS = 86400000;
 export const escalationRowKey = row => `${row.sessionId || ''}${row.ts || ''}`;
@@ -80,6 +80,40 @@ export function sweepStaleEscalations({ home = process.env.ORGIAST_HOME || os.ho
     return { dropped };
   } finally { release(); }
 }
+
+/** 同じ台帳行から作られた open ask を、最新の1件へ集約する。 */
+export function sweepDuplicateEscalations({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), dryRun = true, io = {} } = {}) {
+  const items = (io.listInboxMatches ?? listInboxMatches)(home, item => item.kind === 'ask' && item.status === 'open');
+  const byLedgerRef = new Map();
+  for (const item of items) {
+    const ref = parseLedgerRef(item.text);
+    if (!ref) continue;
+    const key = `${ref.session}|${ref.ts}`;
+    if (!byLedgerRef.has(key)) byLedgerRef.set(key, []);
+    byLedgerRef.get(key).push(item);
+  }
+  const groups = [];
+  let dropped = 0;
+  for (const [key, duplicates] of byLedgerRef) {
+    if (duplicates.length < 2) continue;
+    const ordered = [...duplicates].sort((a, b) => {
+      const byCreatedAt = Date.parse(b.createdAt) - Date.parse(a.createdAt);
+      return Number.isNaN(byCreatedAt) || byCreatedAt === 0
+        ? String(b.id).localeCompare(String(a.id))
+        : byCreatedAt;
+    });
+    const [kept, ...older] = ordered;
+    const droppedIds = [];
+    for (const item of older) {
+      const reason = `同じ台帳行の重複エスカレーション（最新の ${kept.id} に集約）`;
+      if (!dryRun && !(io.dropItem ?? dropItem)(home, item.id, reason, { autoExpired: true, now })) continue;
+      droppedIds.push(item.id);
+      dropped++;
+    }
+    groups.push({ key, keptId: kept.id, droppedIds });
+  }
+  return { groups, dropped, kept: groups.length };
+}
 /** nextKim が kim の操作不要を表すか判定する */
 export function isNoKimAction(text) {
   const trimmed = (text ?? '').replace(/^[\s　]+|[\s　]+$/g, '');
@@ -128,6 +162,15 @@ export async function escalateKimDecisions({ home = process.env.ORGIAST_HOME || 
         }
         continue;
       }
+      const looseOpen = inbox.filter(item => {
+        if (item?.kind !== 'ask' || item?.status !== 'open') return false;
+        const ref = parseLedgerRef(item.text);
+        return ref?.session === String(row.sessionId || '').slice(0, 8) && ref.ts === row.ts;
+      });
+      if (looseOpen.length) {
+        suppressed.push({ rowKey: key, reason: 'already-open-loose', items: looseOpen.map(item => item.id) });
+        continue;
+      }
       const text = escalationText(row, now);
       targets.push({ rowKey: key, text });
       if (dryRun) continue;
@@ -149,6 +192,11 @@ export async function escalateKimDecisions({ home = process.env.ORGIAST_HOME || 
 }
 
 if (isEntry(import.meta.url)) {
-  try { console.log(JSON.stringify(await escalateKimDecisions({ dryRun: process.argv.includes('--dry-run') }), null, 2)); }
+  try {
+    const result = process.argv.includes('--sweep-duplicates')
+      ? sweepDuplicateEscalations({ dryRun: !process.argv.includes('--apply') })
+      : await escalateKimDecisions({ dryRun: process.argv.includes('--dry-run') });
+    console.log(JSON.stringify(result, null, 2));
+  }
   catch (error) { console.error(error?.message || error); process.exitCode = 1; }
 }

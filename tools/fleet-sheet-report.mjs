@@ -46,16 +46,55 @@ function readKeyserveStatus(text) {
     };
   } catch { return {}; }
 }
-function cheapAiCounts(file) {
+/**
+ * executor利用履歴を累計とJST当月に集計する。
+ *
+ * @param {string} file executor-usage.jsonlのパス
+ * @param {Date} now 集計時刻
+ * @returns {{ counts: Record<string, number>, month: { month: string, rows: Array<{ provider: string, count: number, usd: number }>, totalUsd: number } }}
+ */
+export function summarizeExecutorUsage(file, now = new Date()) {
   const counts = {};
+  const usage = {};
+  let totalUsd = 0;
+  const jstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const year = jstNow.getUTCFullYear();
+  const monthIndex = jstNow.getUTCMonth();
+  const month = `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
+  const monthStart = Date.UTC(year, monthIndex, 1) - 9 * 60 * 60 * 1000;
+  const monthEnd = Date.UTC(year, monthIndex + 1, 1) - 9 * 60 * 60 * 1000;
   let text = '';
-  try { text = fs.readFileSync(file, 'utf8'); } catch { return counts; }
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return { counts, month: { month, rows: [], totalUsd: 0 } }; }
   for (const line of text.split(/\r?\n/)) {
     let row; try { row = JSON.parse(line); } catch { continue; }
     const provider = String(row.provider ?? row.tool ?? '').trim().toLowerCase();
-    if (provider) counts[provider] = (counts[provider] || 0) + 1;
+    if (!provider) continue;
+    counts[provider] = (counts[provider] || 0) + 1;
+
+    const timestamp = Date.parse(row.t);
+    if (!Number.isFinite(timestamp) || timestamp < monthStart || timestamp >= monthEnd) continue;
+
+    if (!usage[provider]) usage[provider] = { count: 0, usd: 0 };
+    usage[provider].count += 1;
+    if (typeof row.usd === 'number' && Number.isFinite(row.usd)) {
+      usage[provider].usd += row.usd;
+      totalUsd += row.usd;
+    }
   }
-  return counts;
+
+  const rows = Object.entries(usage).map(([provider, data]) => ({
+    provider,
+    count: data.count,
+    usd: Number(data.usd.toFixed(2)),
+  }));
+  rows.sort((a, b) => b.usd - a.usd || b.count - a.count);
+  return { counts, month: { month, rows, totalUsd: Number(totalUsd.toFixed(2)) } };
+}
+
+export function formatCheapAiMonth(month) {
+  return month.rows.length > 0
+    ? `${month.month} ${month.rows.map(row => `${row.provider}:${row.count}($${row.usd.toFixed(2)})`).join(', ')}`
+    : `${month.month} なし`;
 }
 
 function finiteNumber(value) {
@@ -126,7 +165,8 @@ async function main() {
   const map = readJson(path.join(repo, 'fleet-pc-map.json'));
   const label = labelResolution.label || 'unknown';
   if (!dryRun && !noJitter) await sleep(labelJitterMs(label));
-  const counts = cheapAiCounts(path.join(claudeDir, 'executor-usage.jsonl'));
+  const executorUsageFile = path.join(claudeDir, 'executor-usage.jsonl');
+  const { counts, month: monthUsage } = summarizeExecutorUsage(executorUsageFile);
   const mappedName = Object.prototype.hasOwnProperty.call(map, label) && typeof map[label] === 'string' ? map[label] : null;
   const topModel = Array.isArray(reporter.topModels) && reporter.topModels[0] ? reporter.topModels[0].model : '';
   const opusRatio = finiteNumber(reporter.opusRatio);
@@ -175,6 +215,8 @@ async function main() {
     budgetPacePct: budget.budgetPacePct,
     settingsModel: typeof settings.model === 'string' && settings.model.trim() ? settings.model.trim() : '未設定(=Opus)',
     cheapAiUse: Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([provider, count]) => `${provider}:${count}`).join(', ') || 'なし',
+    cheapAiMonth: formatCheapAiMonth(monthUsage),
+    cheapAiMonthUsd: monthUsage.totalUsd,
     codexLogin: formatCodexLogin(codexAuthStatus(home), adoption.codexAuthed),
     fable5: fableDetected ? '検出' : fableKnown ? '未検出' : '判定不能',
     disciplineAlert: enforce.mode ? `${enforce.mode}${enforce.reason ? ': ' + enforce.reason : ''}` : '判定不能',

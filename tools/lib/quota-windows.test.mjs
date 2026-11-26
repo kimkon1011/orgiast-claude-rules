@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseCodexRateLimits, readCodexWindows, readClaudeWindows, decideSweep, shouldStopTick } from './quota-windows.mjs';
+import { parseCodexRateLimits, readCodexWindows, readClaudeWindows, decideSweep, shouldStopTick, inspectSweep } from './quota-windows.mjs';
 const now = Date.UTC(2026, 9, 21), minute = 60_000;
 const raw = { used_percent: 6, window_minutes: 10080, resets_at: 1793100581 };
 const log = limits => JSON.stringify({ type: 'event_msg', payload: { rate_limits: limits } });
@@ -58,7 +58,9 @@ test('decision boundary cases and concurrent ceilings', () => {
   assert.equal(decideSweep({ windows: claude(), now })[0].window, '5h');
   assert.equal(decideSweep({ windows: claude(60, 98), now }).length, 0);
   assert.equal(decideSweep({ windows: claude(60, 70, 200, 60), now })[0].window, '7d');
-  assert.equal(decideSweep({ windows: claude(95, 70, 200, 60), now }).length, 0);
+  // 5h remaining is 5% (<15%) but 7d has 30% and resets in 60 minutes: start on 7d.
+  const lowFive = decideSweep({ windows: claude(95, 70, 200, 60), now });
+  assert.equal(lowFive.length, 1); assert.equal(lowFive[0].window, '7d');
   const codex = { ...w('codex', 'primary', 6), windowMinutes: 10080 };
   assert.equal(decideSweep({ windows: [codex], now })[0].provider, 'codex');
   assert.equal(decideSweep({ windows: claude(60, 30, 11), now }).length, 0);
@@ -88,4 +90,17 @@ test('millisecond reset jitter keeps the same window identity', () => {
   const first = decideSweep({ windows: a, now })[0], next = decideSweep({ windows: b, now })[0];
   assert.equal(first.resetsAt, next.resetsAt);
   assert.equal(first.deadline, a[0].resetsAt - 3 * minute);
+});
+
+test('Claude start gate uses 7d remaining only; exhausted 5h is deferred', () => {
+  // 5h nearly empty, reset in 60 min, 7d healthy and far: start and burn leftover before 5h reset.
+  const approachingFive = decideSweep({ windows: claude(90, 30, 60, 500), now });
+  assert.equal(approachingFive.length, 1); assert.equal(approachingFive[0].window, '5h');
+  // 7d below 15% still blocks, even if 5h has plenty and is approaching.
+  assert.equal(decideSweep({ windows: claude(60, 90, 60, 500), now }).length, 0);
+  // 5h at hard ceiling: do not start Claude; explain re-evaluation after 5h reset.
+  const ceiling = inspectSweep({ windows: claude(98, 30, 30, 60), now });
+  assert.equal(ceiling.decisions.length, 0);
+  assert.match(ceiling.skipped.find(s => s.provider === 'claude').reason, /5h exhausted or at ceiling/);
+  assert.match(ceiling.skipped.find(s => s.provider === 'claude').reason, /re-evaluate after 5h reset/);
 });

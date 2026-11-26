@@ -1,4 +1,4 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-27 03:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-27 04:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
 - 案件数: 44
@@ -26,7 +26,7 @@
 - 011・loop-check-1125・金さん待ち・最終更新 11/25 16:23、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、次の手順が未着手、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・Microsoft・停止・最終更新 11/26 04:27、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・mkawamur-reply-1126・停止・最終更新 11/26 19:25、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
-- 011・notify-repair-268e・停止・最終更新 11/27 03:02、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・notify-repair-268e・完了・通知の誤起票（notify-kim:268e78e157993e7a5bad）を PR #2843 で修正し、2026-11-26T19:02:32Z に MERGED（1f17ba99）。next-session.md は無人起動で編集拒否のため、23番の完了印をこのファイルで代替・期限なし・次:next-session.md の 23番「通知の原因調査・修復」は完了扱いで選ばない。別件【夜間】tools/dirty-worktree-guard.test.mjs「閾値内の index.lock は稼働中とみなし削除しない」が CI だけで不安定（手元3回合格）→再発時に閾値を見直す。rescue/auto-session-20261127-0306
 - 011・plan3oku-11-work・停止・最終更新 11/25 20:58、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・plan3oku-15-toho-1126・停止・最終更新 11/26 08:58、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・plan3oku-17-kpi-1126・完了・kpi-daily に計画シートKPIタブ書き込みを追加し、毎朝8:00に変更。11/26 21:10 実行で反映・読み戻し一致18/18。freee 2項目のみ未取得・期限なし・次:11/27 8:00 の自動更新を auto-progress 台帳で確認。freee 鍵を作業用011へ配るかは金さん判断（latest-plan3oku-17-kpi.md の要判断）

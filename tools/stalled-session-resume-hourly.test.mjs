@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { detectHourly, hourlyStopSignal, sessionIsRunning, runningHourlyProcesses, acquireSessionLock, classifyHourly, HOURLY_CLASSIFIERS, HOURLY_EXCLUDED_PROVIDERS, heartbeatLine, publishHourlyHeartbeat, readHourlyTail } from './lib/stalled-session-hourly.mjs';
-import { executeHourlyFork, run, options } from './stalled-session-resume.mjs';
+import { executeHourlyFork, run, options, usageNeedsOauthRefresh, formatUsageUnknownSkipReason } from './stalled-session-resume.mjs';
 
 function homeFor(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hourly-fork-'));
@@ -136,6 +136,62 @@ test('seat-guard/85%/使用量不明/実行中の各停止でClaudeを起動し�
     { fetchClaudePlanUsage: async () => ({ available: false }), evaluateGuard: async () => ({ blocked: false }) },
     { runningProcesses: () => [{ Name: 'node', CommandLine: '--resume source' }] },
   ]) assert.equal((await executeHourlyFork({ sessionId: 'source', file, cwd: home }, { timeoutMs: 1000 }, { ...base, ...overrides })).executor, 'none');
+});
+
+test('usage 401→OAuth更新→再試行で実行に進む', async t => {
+  const home = homeFor(t), file = path.join(home, 'source.jsonl'), forkId = '22222222-2222-4222-8222-222222222222';
+  fs.writeFileSync(file, 'source'); fs.utimesSync(file, new Date(0), new Date(0));
+  let usageCalls = 0, refreshed = 0, forkCalls = 0;
+  const result = await executeHourlyFork({ sessionId: 'source', cwd: home, file }, { timeoutMs: 1000, nextStep: '続行' }, {
+    home, evaluateGuard: guard, hourlyResumePolicy: policy, runningProcesses: () => [], randomUUID: () => forkId,
+    executable: 'fixture-claude', readReport: async () => ({ state: 'progressed', evidence: '再試行後に進行' }),
+    fetchClaudePlanUsage: async () => {
+      usageCalls++;
+      if (usageCalls === 1) return { available: false, reason: 'HTTP 401' };
+      return { available: true, fiveHour: { utilization: 10 }, sevenDay: { utilization: 20 } };
+    },
+    refreshClaudeOauth: async () => { refreshed++; },
+    execFile: async () => { forkCalls++; fs.writeFileSync(path.join(home, `${forkId}.jsonl`), raw(assistant('進めました'))); return { stdout: '{}' }; },
+  });
+  assert.equal(usageCalls, 2); assert.equal(refreshed, 1); assert.equal(forkCalls, 1);
+  assert.equal(result.outcome, 'progressed'); assert.equal(result.forkSessionId, forkId);
+});
+
+test('再試行でも usage 不明なら skip し理由に HTTP 401 を含む', async t => {
+  const home = homeFor(t), file = path.join(home, 'source.jsonl');
+  fs.writeFileSync(file, 'source'); fs.utimesSync(file, new Date(0), new Date(0));
+  let refreshed = 0;
+  const result = await executeHourlyFork({ sessionId: 'source', file, cwd: home }, { timeoutMs: 1000 }, {
+    home, evaluateGuard: async () => ({ blocked: false }), hourlyResumePolicy: policy, runningProcesses: () => [],
+    fetchClaudePlanUsage: async () => ({ available: false, reason: 'HTTP 401' }),
+    refreshClaudeOauth: async () => { refreshed++; },
+    execFile: () => assert.fail('must not spawn fork'),
+  });
+  assert.equal(refreshed, 1); assert.equal(result.executor, 'none'); assert.equal(result.outcome, 'skipped');
+  assert.match(result.reason, /usage-unknown-or-blocked: HTTP 401/);
+});
+
+test('expiresAt 切れでも refresh を1回試し、429は refresh せず理由を残す', async t => {
+  assert.equal(usageNeedsOauthRefresh({ available: false, reason: 'HTTP 401' }, { home: 'x', now: 10, readExpiresAt: () => 20 }), true);
+  assert.equal(usageNeedsOauthRefresh({ available: false, reason: 'HTTP 429' }, { home: 'x', now: 10, readExpiresAt: () => 5 }), true);
+  assert.equal(usageNeedsOauthRefresh({ available: false, reason: 'HTTP 429' }, { home: 'x', now: 10, readExpiresAt: () => 20 }), false);
+  assert.equal(formatUsageUnknownSkipReason({ reason: 'HTTP 429' }), 'usage-unknown-or-blocked: HTTP 429');
+  const home = homeFor(t), file = path.join(home, 'source.jsonl');
+  fs.writeFileSync(file, 'source'); fs.utimesSync(file, new Date(0), new Date(0));
+  let refreshed = 0;
+  const expired = await executeHourlyFork({ sessionId: 'source', file, cwd: home }, { timeoutMs: 1000 }, {
+    home, now: () => 1000, evaluateGuard: async () => ({ blocked: false }), hourlyResumePolicy: policy, runningProcesses: () => [],
+    readOauthExpiresAt: () => 500, fetchClaudePlanUsage: async () => ({ available: false, reason: 'network: TypeError' }),
+    refreshClaudeOauth: async () => { refreshed++; }, execFile: () => assert.fail('must not spawn fork'),
+  });
+  assert.equal(refreshed, 1); assert.match(expired.reason, /usage-unknown-or-blocked: network: TypeError/);
+  refreshed = 0;
+  const limited = await executeHourlyFork({ sessionId: 'source', file, cwd: home }, { timeoutMs: 1000 }, {
+    home, now: () => 1000, evaluateGuard: async () => ({ blocked: false }), hourlyResumePolicy: policy, runningProcesses: () => [],
+    readOauthExpiresAt: () => 2000, fetchClaudePlanUsage: async () => ({ available: false, reason: 'HTTP 429' }),
+    refreshClaudeOauth: async () => { refreshed++; }, execFile: () => assert.fail('must not spawn'),
+  });
+  assert.equal(refreshed, 0); assert.match(limited.reason, /usage-unknown-or-blocked: HTTP 429/);
 });
 
 test('hourly分岐: resumeだけ実行、waiting-humanをsessionIdでask、done/skipは記録、dry-runは未実行', async t => {

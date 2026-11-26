@@ -21,7 +21,7 @@ const inboxScript = fileURLToPath(new URL('./kim-inbox.mjs', import.meta.url));
 const inboxWorker = fileURLToPath(new URL('./lib/deadline-inbox-worker.mjs', import.meta.url));
 const inboxOptions = (home, signal) => ({ encoding: 'utf8', windowsHide: true, timeout: 120_000, killSignal: 'SIGKILL', signal, env: { ...process.env, ORGIAST_HOME: home } });
 export async function readInboxKeys(home, signal) {
-  const { stdout } = await exec(process.execPath, [inboxWorker, 'list'], inboxOptions(home, signal));
+  const { stdout } = await exec(process.execPath, [inboxWorker, 'list'], { ...inboxOptions(home, signal), windowsHide: true });
   return JSON.parse(stdout);
 }
 export const STAGES = { default: [30,14,7,3,1,0], '訴訟・法務': [30,14,7,3,2,1,0], '契約更新': [60,30,14,7,1,0], '支払': [7,3,1,0], '回答・返信': [3,1,0] };

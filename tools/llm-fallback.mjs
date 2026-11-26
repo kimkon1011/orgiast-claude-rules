@@ -8,6 +8,7 @@ import { isDailyQuotaResponse, nextUtcMidnight } from './lib/provider-daily-cool
 import { providerLimitedUntil } from './lib/executor-gate.mjs';
 import { isAutoDisabled, readDisabledEntries } from './lib/lane-disabled.mjs';
 import { applyCandidateHealth } from './fallback-backend-health.mjs';
+import { injectAbsoluteRules } from './lib/absolute-rules.mjs';
 
 export const FALLBACK_CHAIN = Object.freeze([
   { provider: 'groq', model: 'openai/gpt-oss-120b' },
@@ -450,7 +451,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
   const requests = new Map();
   async function requestAt(index) {
     if (!requests.has(index)) {
-      const request = await payloadFor(selectedCandidates[index]);
+      const request = injectAbsoluteRules(await payloadFor(selectedCandidates[index]));
       requests.set(index, request);
       if (!request) {
         const candidate = selectedCandidates[index];

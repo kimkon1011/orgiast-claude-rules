@@ -146,3 +146,13 @@ node tools/deadline-watch.mjs --dry-run --now 2026-11-04 --fixture tools/fixture
 固定入力は検出5件＋候補1件、追跡はD-001／D-002／D-004／D-006／V01の5通知。ネットワーク、鍵、実PCのホームを使わないテストで確認する。
 
 API根拠: [Driveの変換とOCR](https://developers.google.com/workspace/drive/api/guides/manage-uploads)、[Calendar予定のprivate propertiesと通知](https://developers.google.com/workspace/calendar/api/v3/reference/events)。
+
+## 着手期限（前倒し・バッファ20%以上｜kim 2026-11-26 絶対ルール）
+
+- 通知は期限日ではなく**着手期限**で出す。着手期限 = 期限日 − ceil(所要日数 × 1.2)（最低1日の余裕。`config.bufferRate` で 0.2 より大きくできる）。
+- 所要日数 = 種別の標準日数（`LEAD_DAYS`、`config.leadDays` で上書き可）＋件名・やることから読み取る追加日数（`LEAD_EXTRAS`）:
+  登記・証明書類のオンライン請求＋郵送受取 +7日／郵送往復・原本・押印 +5日／申請・届出の審査 +5日／見積・手配の返信待ち +5日／確認・返信待ち +2日。
+  備考に `所要日数: N` と書けばその日数を使う（バッファは別に上乗せ）。
+- 未着手の行は着手期限の3日前・当日・超過後は毎日通知。超過は 🔴「着手期限超過・安い方法が間に合わない恐れ」で金さん宛て。対応中は従来どおり期限日の3/1/0日前。
+- ダイジェストは着手期限の早い順に並べ、期限14日以内または着手期限7日以内の行を出す。
+- カレンダー同期（syncCalendar）はこの変更の対象外。

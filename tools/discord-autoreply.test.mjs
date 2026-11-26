@@ -520,7 +520,7 @@ test('LLMは既存envとfallbackを使い返信textと利用記録を返す', as
     return json({ choices: [{ message: { content: JSON.stringify(decision) } }], usage: { prompt_tokens: 10, completion_tokens: 20 } });
   } });
   assert.deepEqual(JSON.parse(await llm({ category: 'jp_reply', system: '方針', input: { question: '質問' } })), decision);
-  assert.equal(requests.length, 1); assert.equal(requests[0].messages[0].content, '方針');
+  assert.equal(requests.length, 1); assert.match(requests[0].messages[0].content, /^【絶対ルール】[\s\S]*\n\n方針$/);
   const usage = JSON.parse(fs.readFileSync(path.join(f.home, '.claude', 'executor-usage.jsonl'), 'utf8'));
   assert.equal(usage.tool, 'discord-autoreply'); assert.equal(usage.in, 10); assert.equal(usage.out, 20);
 });

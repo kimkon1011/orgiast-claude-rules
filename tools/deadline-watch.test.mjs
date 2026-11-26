@@ -12,7 +12,10 @@ const fixture = fileURLToPath(new URL('./fixtures/deadline/ledger.json', import.
 function homeFor(t) { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-watch-')); t.after(() => fs.rmSync(home, { recursive: true, force: true })); return home; }
 
 test('段階、担当、対応中、延期、完了を正しく判定', () => {
-  assert.equal(evaluate(base, '2026-11-04', config).stage, false);
+  // 2026-11-26 前倒しルール: 未着手で着手期限を過ぎた行は期限日の段階に関係なく毎日知らせる。
+  assert.equal(evaluate(base, '2026-11-04', config).stage, true);
+  assert.equal(evaluate(base, '2026-11-04', config).startOverdue, true);
+  assert.equal(evaluate({ ...base, status: '対応中' }, '2026-11-04', config).stage, false);
   assert.equal(evaluate({ ...base, kind: '訴訟・法務' }, '2026-11-04', config).stage, true);
   assert.equal(evaluate({ ...base, kind: '訴訟・法務', status: '対応中' }, '2026-11-04', config).stage, false);
   assert.equal(evaluate({ ...base, kind: '支払', assignee: '経理' }, '2026-10-30', config).kim, false);

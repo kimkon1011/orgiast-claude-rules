@@ -871,6 +871,48 @@ export async function syncMission({ repoDir = repoPath, targetHome = home, isDry
   return true;
 }
 
+// 2026-11-26 kim 厳命: 絶対ルール節（ONBOARDING §1 の「### 🛑 絶対ルール」）を全AIの指示ファイルの**最上部**へ置く。
+// 共通ルールブロックは PC 固有の記述の下にあるため、別ブロックとしてファイル先頭に固定する。
+export const ABSOLUTE_BEGIN = '<!-- BEGIN: 絶対ルール (自動同期・編集しても上書きされる) -->';
+export const ABSOLUTE_END = '<!-- END: 絶対ルール -->';
+export function extractAbsoluteRules(body) {
+  const lines = String(body || '').replace(/\r/g, '').split('\n');
+  const start = lines.findIndex(l => /^#{2,3} 🛑 絶対ルール/.test(l));
+  if (start < 0) return '';
+  let end = lines.findIndex((l, i) => i > start && /^#{1,3} /.test(l));
+  if (end < 0) end = lines.length;
+  // 索引向けの1行要約（「全文はCLAUDE.md最上部」）は最上部ブロック自身には要らないので除く。
+  return lines.slice(start, end).filter(l => !/全文はCLAUDE\.md最上部/.test(l)).join('\n').replace(/\n{3,}/g, '\n\n').replace(/^#{2,3} /, '# ').trim();
+}
+export function placeAbsoluteBlock(current, rules) {
+  let text = String(current ?? '');
+  const b = text.indexOf(ABSOLUTE_BEGIN), e = b >= 0 ? text.indexOf(ABSOLUTE_END, b) : -1;
+  if (b >= 0 && e >= 0) text = text.slice(0, b) + text.slice(e + ABSOLUTE_END.length).replace(/^\r?\n+/, '');
+  text = text.replace(/^\uFEFF/, '').replace(/^\s+/, '');
+  if (!rules) return text;
+  return `${ABSOLUTE_BEGIN}\n${rules}\n${ABSOLUTE_END}\n\n${text}`;
+}
+// Codex(AGENTS.md)・Gemini CLI(GEMINI.md) を使う PC（設定フォルダがある PC）にも同じ絶対ルールを最上部へ。
+export const AGENT_INSTRUCTION_MIRRORS = Object.freeze([['.codex', 'AGENTS.md'], ['.gemini', 'GEMINI.md']]);
+export function mirrorAbsoluteRules(targetHome, rules, { preview = false, log = () => {} } = {}) {
+  const changed = [];
+  if (!rules) return changed;
+  for (const [dir, file] of AGENT_INSTRUCTION_MIRRORS) {
+    const folder = path.join(targetHome, dir);
+    if (!fs.existsSync(folder)) continue;
+    const file_ = path.join(folder, file);
+    const current = fs.existsSync(file_) ? fs.readFileSync(file_, 'utf8') : '';
+    const updated = placeAbsoluteBlock(current, rules);
+    if (updated === current) continue;
+    changed.push(file_);
+    if (preview) continue;
+    if (current) fs.copyFileSync(file_, `${file_}.bak-absolute-rules`);
+    fs.writeFileSync(file_, updated, 'utf8');
+    log(`absolute rules -> ${file_}`);
+  }
+  return changed;
+}
+
 export function build(current, body, label) {
   current = dedupePreferences(current, body);
   const block = `${beginPrefix} (自動同期 ${label}) -->\n- 基本理念・判断基準（毎セッション読み込み・迷ったらここに戻る）: @~/.claude/orgiast-mission.md\n${body}\n- 全社共有の知見（kim 本人が操作する生存席の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n- 制作・営業・見積・案件の着手前: ~/.claude/knowledge/production-sales/00_INDEX.md を読み、必要な節だけ Grep。全文を丸読みしない。\n${endMarker}`;
@@ -972,7 +1014,10 @@ async function main() { try {
   const hash = crypto.createHash('sha256').update(bodyBytes).digest('hex');
   const body = bodyBytes.toString('utf8');
   const current = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
+  const absoluteRules = extractAbsoluteRules(body);
   const result = build(current, makeIndex(body), now.toISOString().slice(0, 10));
+  result.updated = placeAbsoluteBlock(result.updated, absoluteRules);
+  try { mirrorAbsoluteRules(home, absoluteRules, { preview: dryRun, log }); } catch (e) { log(`absolute rules mirror failed: ${e.message}`); }
   const rulesCurrent = fs.existsSync(rulesPath) ? fs.readFileSync(rulesPath) : null;
   if (!dryRun && current === result.updated && rulesCurrent?.equals(bodyBytes)) { save(hash, now); return; }
   if (dryRun) {

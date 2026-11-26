@@ -78,6 +78,15 @@
       "createdBy": "000KimPC",
       "createdAt": "2026-11-26T01:56:09.878Z",
       "expiresAt": "2026-11-26T07:56:09.878Z"
+    },
+    {
+      "id": "status-20261126-015653-6623",
+      "kind": "status",
+      "targets": "008XPS8300",
+      "why": "seisaku-team使用量低下の調査(席ガード旗・タスク状態)",
+      "createdBy": "000KimPC",
+      "createdAt": "2026-11-26T01:56:53.843Z",
+      "expiresAt": "2026-11-26T07:56:53.843Z"
     }
   ]
 }

@@ -167,7 +167,7 @@ function locked(home, key, fn, waitMs) {
   const release = acquireInboxLock(home, key, waitMs);
   try { return fn(); } finally { release(); }
 }
-function update(home, id, fn) {
+function update(home, id, fn, waitMs) {
   if (!validId(id)) throw new Error('kim-inbox: ID が不正です');
   return locked(home, id, () => {
     const file = path.join(directory(home), `${id}.json`);
@@ -178,7 +178,7 @@ function update(home, id, fn) {
     if (archived) fs.renameSync(archived, file);
     save(home, item);
     return item;
-  });
+  }, waitMs);
 }
 export { update as updateInboxItem };
 export const isHighInfo = item => item.kind === 'info' && (item.priority === 'high' || /^auto-progress-(done|heartbeat)$/.test(item.source) || /完了|進捗|進んでいる|承認待ち|✅|未達|確認エラー|判断待ち|自動進行|まとめ/.test(item.text));
@@ -770,6 +770,46 @@ export function closeKey(home, key) {
   return locked(home, 'info-aggregation', () => listItems(home, { status: 'open' })
     .filter(i => i.kind === 'deadline' && i.key === key)
     .map(i => update(home, i.id, current => { current.status = 'seen'; })));
+}
+// One aggregation lock and scan, retaining individual item locks.
+export function applyDeadlineBatch(home, actions, { lockWaitMs = 250 } = {}) {
+  return locked(home, 'info-aggregation', () => {
+    const open = listItems(home, { status: 'open' });
+    const byKey = new Map();
+    for (const item of open.filter(i => i.kind === 'deadline')) {
+      if (!byKey.has(item.key)) byKey.set(item.key, []);
+      byKey.get(item.key).push(item);
+    }
+    const boundedUpdate = (id, fn) => {
+      for (let attempt = 0; ; attempt++) {
+        try { return update(home, id, fn, lockWaitMs); }
+        catch (error) {
+          if (!error.message.includes('台帳が使用中') || attempt >= 3) throw error;
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100 * 2 ** attempt);
+        }
+      }
+    };
+    return actions.map(({ close, key, vehicleName, plate, ...options }) => {
+      try {
+        if (!key || !/^[A-Za-z0-9_-]+$/.test(key)) throw Error('Invalid deadline key');
+        const items = byKey.get(key) || [];
+        if (close) {
+          for (const item of items) boundedUpdate(item.id, current => { current.status = 'seen'; });
+          byKey.delete(key);
+        } else {
+          const item = items[0] ? boundedUpdate(items[0].id, current => {
+            current.text = clean(options.text); current.due = options.due || '';
+            current.remainingDays = options.remainingDays ?? null; current.lastAt = new Date().toISOString();
+          }) : createNew(home, { ...options, kind: 'deadline', key });
+          byKey.set(key, [item, ...items.slice(1)]);
+          if (vehicleName && plate) for (const ask of open) {
+            if (ask.kind === 'ask' && ask.source === 'vehicle-inspection' && ask.text.startsWith(`【車検】${vehicleName}（${plate}）`)) dropItem(home, ask.id, '期限レーンに移行');
+          }
+        }
+        return { ok: true };
+      } catch (error) { return { ok: false, error: error.message }; }
+    });
+  }, lockWaitMs);
 }
 // gmail-search.mjs を子プロセスとして実行する既定の検索実装。
 async function defaultGmailSearch(user, query) {

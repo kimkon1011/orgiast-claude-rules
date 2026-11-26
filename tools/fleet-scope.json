@@ -10,6 +10,7 @@
     {"path": "tools/cron-liveness-check.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "SessionStart のcron生存点検を全PCで実行し、担当席だけの配達タスク有無をローカル判定する"},
     {"path":"tools/unrequested-automation-gate.mjs","scope":"fleet","step":"settings:unrequested-automation-gate","reason":"全PCで未依頼の自動通知・定期実行追加を遮断するPreToolUseゲート"},
     {"path":"tools/register-beeper-gateway.ps1","scope":"kim-only","reason":"Beeper 本体がある 000（kim-PC）だけで中継の常駐タスクを登録する。他PCは beeper-gateway-client.ps1 を使う"},
+    {"path":"tools/register-inquiry-discord-watch.ps1","scope":"kim-only","reason":"問い合わせDiscord第2系統は通知重複を避けるため、このタスクを登録する運用PCだけで実行する"},
     {"path":"tools/register-site-prelaunch-weekly.ps1","scope":"kim-only","reason":"000（kim-PC）だけで全サイトの週次公開前チェックを登録し、kim-inbox への重複通知を防ぐ"},
     {"path":"tools/register-inbound-router.ps1","scope":"kim-only","reason":"000（kim-PC）だけで受信ルーターを登録し、同じ新着の重複配送を防ぐ"},
     {"path":"tools/register-secretary-uptime.ps1","scope":"kim-only","reason":"kim-PCの秘書ゲートウェイ3939と秘書3940を監視するタスク登録。他PCには登録しない"},

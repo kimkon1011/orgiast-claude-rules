@@ -17,6 +17,7 @@ import { catalog } from './provider-catalog.mjs';
 import { applyRealLaneHealth, laneErrorText, probeViaChain, billingFailure, billingWithQuotaHint, quotaFailure, retiredModel } from './lib/lane-real-health.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { isEnrollToken, validKeyservePcId } from './keyserve-auth.mjs';
+import { keyserveTierState, keyserveLaneAllowed } from './lib/keyserve-tier.mjs';
 
 export const PROVIDERS = ['codex', 'gemini', 'deepseek', 'glm', 'groq', 'openrouter'];
 // 任意レーン: キーがあるPCだけ実測する（2026-10-29 mistral 既定モデル 403 が未監視で放置された）。
@@ -88,6 +89,12 @@ export function applyDisabledLanes(health, home = laneHome(), now = Date.now()) 
   return health;
 }
 function orders(health, home = laneHome()) {
+  // Old probes/usage ledgers must not resurrect faults for intentionally absent lanes.
+  for (const provider of Object.keys(health.lanes)) {
+    if (!keyserveLaneAllowed(home, provider)) health.lanes[provider] = { alive: false, reason: 'not_for_seat' };
+  }
+  const requiredProviders = keyserveTierState(home) === 'minimal'
+    ? new Set(['codex', 'deepseek', 'openrouter']) : new Set(PROVIDERS);
   health.implementOrder = ['codex', 'deepseek', 'glm', 'gemini-cli', 'openrouter'].filter(p => health.lanes[p]?.alive);
   // 旧 payment_required の扱いは維持し、billing は専用の日次通知と代替ルートに回す。
   const billing = readJson(path.join(repo, 'tools/provider-billing.json'));
@@ -105,9 +112,9 @@ health.substituted = Object.entries(health.lanes).filter(([p, s]) => isLane(p) &
     if (lane.reason === 'billing') return false;
     return lane.alive || lane.via === 'openrouter' && health.lanes.openrouter?.alive;
   });
-  health.deadNeedsUser = Object.entries(health.lanes).filter(needsUser)
+  health.deadNeedsUser = Object.entries(health.lanes).filter(([provider, state]) => keyserveLaneAllowed(home, provider) && needsUser([provider, state]))
     .map(([provider, s]) => ({ provider, reason: s.reason, tried: s.tried, fix: s.userFix || (s.reason.includes('payment') ? '無料枠・既存契約内の他AIレーンを実測して先に切り替える。追加費用案は代替不可の証拠と比較表がある場合だけ最後に提示。' : '本人アカウントで認証画面を開き OAuth 同意を完了する。') }));
-  const missing = Object.entries(health.lanes).filter(([p, s]) => PROVIDERS.includes(p) && s.reason === 'missing_key' && s.via !== 'openrouter').map(([p]) => p);
+  const missing = Object.entries(health.lanes).filter(([p, s]) => requiredProviders.has(p) && s.reason === 'missing_key' && s.via !== 'openrouter').map(([p]) => p);
   const reasons = [...(!health.askOrder.length ? ['ask_order_empty'] : []), ...(!health.implementOrder.length ? ['implement_order_empty'] : []), ...(missing.length ? [`missing_key:${missing.join(',')}`] : [])];
   const unenrolled = missing.length > 0 && !keyserveEnrolled(home);
   if (unenrolled) {
@@ -301,7 +308,8 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   const previous = readJson(path.join(dir, 'lane-health.json'));
   const probeBudget = Math.max(1, budgetMs - 5000);
   // 各 provider を並行実測し、一つの停止レーンで90秒枠を使い切らない。
-  const probeProviders = providers.length ? providers : [...PROVIDERS, ...OPTIONAL_PROVIDERS.filter(o => health.lanes[o])];
+  const probeProviders = (providers.length ? providers : [...PROVIDERS, ...OPTIONAL_PROVIDERS.filter(o => health.lanes[o])])
+    .filter(p => keyserveLaneAllowed(home, p));
   const disabled = readDisabledEntries(home);
   const autoProbes = new Set(probeProviders.filter(p => isAutoDisabled(disabled[p])));
   const results = await Promise.all(probeProviders.map(async p => {

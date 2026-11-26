@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { quotaFailure } from './lane-real-health.mjs';
+import { keyserveLaneAllowed } from './keyserve-tier.mjs';
 
 export const REPAIR_TTL = 6 * 3600_000;
 export function repairable(state) {
@@ -21,7 +22,7 @@ export function repairRows(home) {
 }
 export function pendingRepairs(health, home, now = Date.now()) {
   const rows = repairRows(home);
-  return Object.entries(health?.lanes || {}).filter(([lane, state]) => repairable(state)
+  return Object.entries(health?.lanes || {}).filter(([lane, state]) => keyserveLaneAllowed(home, lane) && repairable(state)
     && !rows.some(r => r.lane === lane && r.faultId === faultId(lane, state) && r.tried?.trim()
       && ['fixed', 'unfixable'].includes(r.result) && Date.parse(r.ts) <= now && Date.parse(r.ts) > now - REPAIR_TTL))
     .map(([lane, state]) => ({ lane, ...state }));

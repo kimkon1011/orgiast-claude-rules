@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 import { execFileSync } from 'node:child_process';
-import { DAY, collectConvergence, convergenceProblems, convergenceAddress, missingHooks, requiredTaskNames } from './fleet-convergence.mjs';
+import { DAY, collectConvergence, convergenceProblems, convergenceAddress, keyDeficits, missingHooks, requiredTaskNames } from './fleet-convergence.mjs';
 import { reconcileConvergence, convergenceTargets } from './fleet-convergence-watch.mjs';
 import { receiveConvergence, syncInvocation } from './fleet-convergence-sync.mjs';
 import { bootstrapUser } from './session-bootstrap.mjs';
@@ -22,6 +22,17 @@ test('receipt contains no secrets, knows email, distinguishes users and preserve
   const row = collectConvergence({ home: h, repo, hostname: 'host', username: 'alice', now: new Date(now), git: () => { throw Error(); }, expectedHooks: { hooks: {} } });
   assert.equal(row.claudeAccount, 'a@example.org'); assert.equal(row.behindMain, null); assert.equal(row.hookMissing, 0); assert.ok(row.keyMissing > 0);
   assert.ok(!JSON.stringify(row).includes('SECRET')); assert.notEqual(convergenceAddress(row), convergenceAddress({ ...row, username: 'bob' }));
+});
+test('minimal tier checks its two AI keys and PC credential, and still detects missing allowed keys', t => {
+  const h = home(t), dir = path.join(h, '.claude');
+  fs.writeFileSync(path.join(dir, '.keys-sync-state.json'), JSON.stringify({ tier: 'minimal' }));
+  fs.writeFileSync(path.join(dir, 'deepseek.env'), 'DEEPSEEK_API_KEY=test\n');
+  fs.writeFileSync(path.join(dir, 'openrouter.env'), 'OPENROUTER_API_KEY=test\n');
+  const manifest = JSON.parse(fs.readFileSync(path.join(repo, 'tools/keyserve-distribution-manifest.json'), 'utf8'));
+  assert.deepEqual(keyDeficits(h, manifest), ['keyserve.env:ORGIAST_KEYSERVE_SECRET', 'keyserve.env:ORGIAST_KEYSERVE_PC']);
+  fs.writeFileSync(path.join(dir, 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET=test\nORGIAST_KEYSERVE_PC=lahaina-office\n');
+  assert.deepEqual(keyDeficits(h, manifest), []);
+  assert.ok(keyDeficits(h, manifest, 'ai').length > 0);
 });
 test('commit count and oldest missing timestamp use actual HEAD..origin/main', t => {
   const calls = []; const row = collectConvergence({ home: home(t), repo, expectedHooks: { hooks: {} }, git: args => {

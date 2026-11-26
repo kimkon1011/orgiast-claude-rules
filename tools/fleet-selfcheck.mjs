@@ -14,6 +14,7 @@ import { CASE_ID, resumeText } from './lib/case-handoff.mjs';
 import { redactSecrets } from './fleet-agent.mjs';
 import { SELFCHECK_PROMPT } from './lib/fleet-selfcheck-prompt.mjs';
 import { sharedMemoryFreshness } from './lib/shared-memory-freshness.mjs';
+import { keyserveTierState } from './lib/keyserve-tier.mjs';
 
 const absent = message => Object.assign(new Error(message), { noRoute: true });
 function optional(file) {
@@ -40,6 +41,7 @@ export function markdownTable(rows, at) {
 export async function runSelfcheck({ home = process.env.ORGIAST_HOME || os.homedir(), env = process.env,
   hostname = os.hostname(), fetchImpl = globalThis.fetch, getToken = getDriveToken, now = () => new Date() } = {}) {
   const base = path.join(home, '.claude'), rows = [], secrets = new Set();
+  const minimalSeat = keyserveTierState(home) === 'minimal';
   const remember = value => { if (value) secrets.add(value); return value; };
   const safe = value => {
     let text = String(value ?? '');
@@ -49,6 +51,10 @@ export async function runSelfcheck({ home = process.env.ORGIAST_HOME || os.homed
   async function check(item, probe) {
     try { const detail = await probe(); rows.push({ item, status: '読めた', detail: safe(detail) }); }
     catch (error) { rows.push({ item, status: error.noRoute ? '経路なし' : '失敗', detail: safe(error.message) }); }
+  }
+  async function privilegedCheck(item, probe) {
+    if (minimalSeat) { rows.push({ item, status: '対象外', detail: 'keyserve tier=minimal のため点検対象外' }); return; }
+    await check(item, probe);
   }
   const readEnv = name => parseEnvText(optional(path.join(base, name)) || '');
   async function get(url, headers = {}) {
@@ -89,7 +95,7 @@ export async function runSelfcheck({ home = process.env.ORGIAST_HOME || os.homed
     for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
     return get(url, keyserveAuthHeaders(secret, Date.now(), pc));
   };
-  await check('case-handoff / catalog', async () => {
+  await privilegedCheck('case-handoff / catalog', async () => {
     const data = await caseGet({ mode: 'catalog' });
     const activity = {};
     // Resume downloads carry per-case timestamps even when catalog omits dates.
@@ -112,7 +118,7 @@ export async function runSelfcheck({ home = process.env.ORGIAST_HOME || os.homed
     latest = latestCase(data.cases, activity);
     return `${data.cases.length} 件 / ${latest ? `選択: ${latest.name || '名称なし'}（${latest.id}）` : '案件なし'} / 更新日時・このPCの最終利用日時順（両方なしはcatalog順、直近か未確認）`;
   });
-  await check('case-handoff / 直近案件 resume', async () => {
+  await privilegedCheck('case-handoff / 直近案件 resume', async () => {
     if (!latest) throw absent('catalogから取得対象の案件を選べない');
     const data = await caseGet({ mode: 'resume', caseId: latest.id });
     if (typeof data.state !== 'string' || typeof data.log !== 'string') throw Error('case resume: state/log must be strings');
@@ -132,14 +138,14 @@ export async function runSelfcheck({ home = process.env.ORGIAST_HOME || os.homed
     if (relay !== null) remember(JSON.parse(relay).secret);
     return remember(await getToken({ keyPath, statePath, impersonate: 'seisaku-team@orgiast.jp', scope, fetchImpl, signal: AbortSignal.timeout(20_000) }));
   }
-  await check('Gmail / seisaku-team@orgiast.jp / API', async () => {
+  await privilegedCheck('Gmail / seisaku-team@orgiast.jp / API', async () => {
     const token = await googleToken('Gmail', 'https://www.googleapis.com/auth/gmail.readonly');
     const data = await get('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=1', { Authorization: `Bearer ${token}` });
     if (!Array.isArray(data.messages) && data.resultSizeEstimate !== 0) throw Error('Gmail: invalid messages response');
     if (data.messages?.[0]?.id) await get(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(data.messages[0].id)}?format=metadata`, { Authorization: `Bearer ${token}` });
     return `${token === GWS_MARKER ? 'enroll API / ' : ''}messages.list/get 読取成功 / ${data.messages?.length || 0} 件（本文非表示）`;
   });
-  await check('Drive / seisaku-team@orgiast.jp / API', async () => {
+  await privilegedCheck('Drive / seisaku-team@orgiast.jp / API', async () => {
     // Existing DWD grants drive, not drive.readonly (docs/drive-oldfile-trash-route.md).
     // Reuse that grant; this probe still exposes GET files.list only.
     const token = await googleToken('Drive', 'https://www.googleapis.com/auth/drive');
@@ -148,7 +154,7 @@ export async function runSelfcheck({ home = process.env.ORGIAST_HOME || os.homed
     if (data.files[0]?.id) await get(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(data.files[0].id)}?fields=id,name`, { Authorization: `Bearer ${token}` });
     return `${token === GWS_MARKER ? 'enroll API / ' : ''}files.list/get 読取成功 / ${data.files.length} 件（内容非表示）`;
   });
-  await check('Discord / Bot / メッセージ履歴', async () => {
+  await privilegedCheck('Discord / Bot / メッセージ履歴', async () => {
     const token = remember(env.DISCORD_BOT_TOKEN?.trim() || optional(path.join(base, 'orgiast-discord-bot-token.txt'))?.trim());
     if (!token) throw absent('DISCORD_BOT_TOKEN / orgiast-discord-bot-token.txt 未配布');
     const headers = { Authorization: `Bot ${token}` };
@@ -160,7 +166,7 @@ export async function runSelfcheck({ home = process.env.ORGIAST_HOME || os.homed
     if (!Array.isArray(messages)) throw Error('Discord: invalid messages response');
     return `#${channel.name}（${channel.id}） / ${messages.length} 件（本文非表示、このチャンネルのみ検証）`;
   });
-  await check('LINE / 共有API・取り込み済み履歴', async () => {
+  await privilegedCheck('LINE / 共有API・取り込み済み履歴', async () => {
     if (keyserveSecret(home, env)) {
       const data = await channelRequest('line', { query: { mode: 'history', limit: '1' }, home, env, fetchImpl });
       if (!Array.isArray(data.messages) || !data.messages.length || typeof data.messages[0].text !== 'string' || !data.messages[0].text) throw Error('LINE shared history: no readable message');

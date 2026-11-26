@@ -11,6 +11,7 @@ import { getClaudeAccountEmail } from './machine-identity.mjs';
 import { extractHookTreeRoots } from './hook-tree-selfheal.mjs';
 import { getSyncedRepoRoot } from './resolve-synced-repo.mjs';
 import { listScheduledTaskNames } from './lib/scheduled-task.mjs';
+import { keyserveTierState, tierIncludes } from './lib/keyserve-tier.mjs';
 
 export const DAY = 86400000;
 export function readJson(file, fallback = {}) {
@@ -31,10 +32,11 @@ export function missingHooks(actual, expected) {
     && found.matcher === wanted.matcher && found.type === wanted.type && found.command === wanted.command
     && Boolean(found.async) === Boolean(wanted.async))).map(h => `${h.event}:${h.command.match(/[\w-]+\.mjs/g)?.at(-1) || 'unknown'}`);
 }
-export function keyDeficits(home, manifest) {
+export function keyDeficits(home, manifest, activeTier = keyserveTierState(home)) {
   if (!Array.isArray(manifest?.distributions)) return null;
   const missing = [];
   for (const item of manifest.distributions) {
+    if (!tierIncludes(activeTier, item.tier || 'ai')) continue;
     let raw = ''; try { raw = fs.readFileSync(path.join(home, '.claude', item.file), 'utf8').replace(/^\uFEFF/, ''); } catch {}
     const values = parseEnvText(raw);
     for (const key of item.keys) if (!(key === '(file)' ? raw.trim() : values[key]?.trim())) missing.push(`${item.file}:${key}`);
@@ -105,8 +107,10 @@ export function collectConvergence({ home, repo, hostname = os.hostname(), usern
     row.hookMissingNames.push(...(expected.skippedNames || []).map(name => `unavailable:${name}`));
     row.hookMissing = row.hookMissingNames.length;
   } catch { /* failed expected-set generation remains unknown */ }
-  const missing = repo ? keyDeficits(home, readJson(path.join(repo, 'tools/keyserve-distribution-manifest.json'))) : null;
+  const distributionTier = keyserveTierState(home);
+  const missing = repo ? keyDeficits(home, readJson(path.join(repo, 'tools/keyserve-distribution-manifest.json')), distributionTier) : null;
   row.keyMissing = missing?.length ?? null;
+  row.keyTier = distributionTier;
   if (platform === 'win32' && repo) try {
     const manifest = readJson(path.join(repo, 'tools/setup-manifest.json'));
     const required = requiredTaskNames(manifest);

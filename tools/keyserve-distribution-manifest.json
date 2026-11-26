@@ -21,6 +21,7 @@
     {
       "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
       "file": "openrouter.env",
+      "tier": "minimal",
       "keys": [
         "OPENROUTER_API_KEY"
       ]
@@ -35,6 +36,7 @@
     {
       "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
       "file": "deepseek.env",
+      "tier": "minimal",
       "keys": [
         "DEEPSEEK_API_KEY"
       ]
@@ -100,6 +102,7 @@
     {
       "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
       "file": "keyserve.env",
+      "tier": "minimal",
       "keys": [
         "ORGIAST_KEYSERVE_SECRET",
         "ORGIAST_KEYSERVE_PC"

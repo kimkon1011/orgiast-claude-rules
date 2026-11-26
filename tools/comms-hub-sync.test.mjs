@@ -1276,3 +1276,113 @@ test('errText: cause.code is included in last-run.json error field', async t => 
   assert.match(saved.error, /fetch failed/);
   assert.match(saved.error, /ENOTFOUND/);
 });
+
+test('line-chat: image attachment saves locally and emits OCR lines', async t => {
+  const { collectSource, messageKey } = await import('./comms-hub-sync.mjs');
+  const home = makeTestHome(t);
+  const storeDir = path.join(home, '.claude', 'comms-hub', 'store');
+  const downloads = [];
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2, 3]);
+  const ts = '2026-11-16T03:43:28.993Z';
+  const ctx = {
+    config, home, storeDir, since: 0, until: 2000000000000,
+    state: {}, beeperToken: 'mock', cases,
+    downloadAttachment: async (attachment) => { downloads.push(attachment.srcURL); return png; },
+    askImage: async () => ({ letter: '型番 ABC-123 / 電圧 100V', description: '浄化槽ブロワーの銘板', usd: 0.01 }),
+    fetchImpl: async url => {
+      const u = String(url);
+      if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE', bridge: { type: 'line' } }]);
+      if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+        { id: '!a:beeper.local', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date().toISOString() },
+      ]});
+      if (u.includes('/messages')) return Response.json({ items: [
+        { id: 'img1', senderName: '河本哲平', text: '', timestamp: ts,
+          attachments: [{ type: 'img', srcURL: 'mxc://example/abc', file_name: '' }] },
+      ]});
+      return Response.json({});
+    },
+  };
+  const page = await collectSource('line-chat', ctx);
+  assert.equal(page.messages.length, 1);
+  assert.equal(downloads.length, 1);
+  const hubHash = messageKey({ source: 'line-chat', channelId: '!a:beeper.local', id: 'img1' });
+  const saved = path.join(storeDir, 'media', '2026-11-16', `${hubHash}_1.png`);
+  assert.equal(fs.existsSync(saved), true);
+  assert.ok(page.messages[0].text.includes(`[添付: img 保存先=${saved}]`));
+  assert.match(page.messages[0].text, /\[画像の文字: 型番 ABC-123 \/ 電圧 100V\]/);
+  assert.match(page.messages[0].text, /\[画像の説明: 浄化槽ブロワーの銘板\]/);
+});
+
+test('line-chat: OCR failure still keeps saved path and failure marker', async t => {
+  const { collectSource } = await import('./comms-hub-sync.mjs');
+  const home = makeTestHome(t);
+  const storeDir = path.join(home, '.claude', 'comms-hub', 'store');
+  const ctx = {
+    config, home, storeDir, since: 0, until: 2000000000000,
+    state: {}, beeperToken: 'mock', cases,
+    downloadAttachment: async () => Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
+    askImage: async () => { throw new Error('vision unavailable'); },
+    fetchImpl: async url => {
+      const u = String(url);
+      if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE', bridge: { type: 'line' } }]);
+      if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+        { id: '!a:beeper.local', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date().toISOString() },
+      ]});
+      if (u.includes('/messages')) return Response.json({ items: [
+        { id: 'img2', senderName: 'A', text: '', timestamp: '2026-11-16T01:00:00.000Z',
+          attachments: [{ type: 'img', srcURL: 'mxc://example/x' }] },
+      ]});
+      return Response.json({});
+    },
+  };
+  const page = await collectSource('line-chat', ctx);
+  assert.match(page.messages[0].text, /\[添付: img 保存先=/);
+  assert.match(page.messages[0].text, /\[画像の読み取り失敗: vision unavailable\]/);
+});
+
+test('line-chat: already-saved media is not downloaded again', async t => {
+  const { collectSource, messageKey } = await import('./comms-hub-sync.mjs');
+  const home = makeTestHome(t);
+  const storeDir = path.join(home, '.claude', 'comms-hub', 'store');
+  const hubHash = messageKey({ source: 'line-chat', channelId: '!a:beeper.local', id: 'img3' });
+  const saved = path.join(storeDir, 'media', '2026-11-16', `${hubHash}_1.jpg`);
+  fs.mkdirSync(path.dirname(saved), { recursive: true });
+  fs.writeFileSync(saved, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+  let downloads = 0;
+  const ctx = {
+    config, home, storeDir, since: 0, until: 2000000000000,
+    state: {}, beeperToken: 'mock', cases,
+    downloadAttachment: async () => { downloads += 1; return Buffer.from([0xff, 0xd8, 0xff, 0xd9]); },
+    askImage: async () => ({ letter: 'OK', description: '既存ファイル', usd: 0 }),
+    fetchImpl: async url => {
+      const u = String(url);
+      if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE', bridge: { type: 'line' } }]);
+      if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+        { id: '!a:beeper.local', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date().toISOString() },
+      ]});
+      if (u.includes('/messages')) return Response.json({ items: [
+        { id: 'img3', senderName: 'A', text: '', timestamp: '2026-11-16T02:00:00.000Z',
+          attachments: [{ type: 'img', srcURL: 'mxc://example/y' }] },
+      ]});
+      return Response.json({});
+    },
+  };
+  const page = await collectSource('line-chat', ctx);
+  assert.equal(downloads, 0);
+  assert.ok(page.messages[0].text.includes(`保存先=${saved}`));
+  assert.match(page.messages[0].text, /\[画像の文字: OK\]/);
+});
+
+test('parseArgs: --backfill-media requires --since and --chat', () => {
+  assert.throws(() => parseArgs(['--backfill-media']), /requires --since/);
+  assert.throws(() => parseArgs(['--backfill-media', '--since', '2026-11-15']), /requires --chat/);
+  assert.deepEqual(
+    parseArgs(['--backfill-media', '--since', '2026-11-15', '--chat', '!a:beeper.local', '--report-file', 'out.md']),
+    {
+      backfillMedia: true,
+      since: Date.parse('2026-11-15'),
+      chats: ['!a:beeper.local'],
+      reportFile: 'out.md',
+    },
+  );
+});

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { RULES, LIMITS, HEADER, TAB, parseArgs, ruleVerdict, merchantToken, amountVariants, gmailQuery, parseYahoo, weeklySkip, collectTxns, searchEvidence, runCheck, reportResult, sheetRows, dmText, atomicJson, web23Query, checkWeb23Delivery, WEB23_ADDRESS, WEB23_LOOKBACK_DAYS } from './expense-leak-check.mjs';
+import { RULES, LIMITS, HEADER, TAB, parseArgs, ruleVerdict, merchantToken, amountVariants, gmailQuery, parseYahoo, weeklySkip, collectTxns, searchEvidence, runCheck, reportResult, sheetRows, dmText, atomicJson, web23Query, checkWeb23Delivery, classifyDbConnectFailReason, WEB23_ADDRESS, WEB23_LOOKBACK_DAYS } from './expense-leak-check.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 
 const opts = (args = []) => parseArgs(args, { EXPENSE_LEAK_TODAY: '2026-10-09', EXPENSE_LEAK_HOME: '/tmp/expense-test' });
@@ -322,6 +322,34 @@ test('real Sheets failure with candidates sets failed=true and failReason', asyn
   assert.equal(r.failed, true);
   assert.equal(r.failReason, 'sheets-write');
   assert.equal(reportResult(r, (line) => assert.match(line, /failed=true failReason=sheets-write$/)), 1);
+});
+test('classifyDbConnectFailReason maps module/url/auth/network/freee without secrets', () => {
+  const moduleErr = Object.assign(new Error("Cannot find package 'postgres'"), { code: 'ERR_MODULE_NOT_FOUND' });
+  assert.equal(classifyDbConnectFailReason(moduleErr), 'db-connect:module-missing');
+  assert.equal(classifyDbConnectFailReason(new Error('PURCHASING_APP_DATABASE_URL が .env.local に見つかりません')), 'db-connect:db-url-missing');
+  assert.equal(classifyDbConnectFailReason(Object.assign(new Error('password authentication failed for user "x"'), { code: '28P01' })), 'db-connect:db-auth');
+  const refused = Object.assign(new AggregateError([Object.assign(new Error(''), { code: 'ECONNREFUSED' })]), { code: 'ECONNREFUSED', message: '' });
+  assert.equal(classifyDbConnectFailReason(refused), 'db-connect:network');
+  assert.equal(classifyDbConnectFailReason(new Error("freee_tokens に default 行がありません")), 'db-connect:freee-row-missing');
+  assert.equal(classifyDbConnectFailReason(new Error('freee トークン更新に失敗: HTTP 401')), 'db-connect:freee-refresh-http-401');
+  assert.equal(classifyDbConnectFailReason(new Error('something opaque')), 'db-connect:unknown');
+});
+test('db-connect stage records subclassed failReason from makeFreeeGet failure', async () => {
+  const h = harness([]);
+  delete h.injected.freeeGet;
+  const cause = Object.assign(new AggregateError([Object.assign(new Error(''), { code: 'ECONNREFUSED' })]), { code: 'ECONNREFUSED', message: '' });
+  h.injected.makeFreeeGet = async () => {
+    const wrapped = new Error('freee authentication failed (db-connect:network)');
+    wrapped.cause = cause;
+    wrapped.failReason = 'db-connect:network';
+    throw wrapped;
+  };
+  const r = await runCheck(opts(), h.injected);
+  assert.equal(r.failed, true);
+  assert.equal(r.failReason, 'db-connect:network');
+  assert.equal(h.calls.notify, 0);
+  assert.equal(h.calls.append.length, 0);
+  assert.equal(reportResult(r, (line) => assert.match(line, /failed=true failReason=db-connect:network$/)), 1);
 });
 test('DM reports web23 zero and unverified separately', () => {
   const base = { today: '2026-10-19', candidateTotal: 0, results: [], issues: [], yahooUnavailable: false };

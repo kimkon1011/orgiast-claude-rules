@@ -96,6 +96,22 @@ test('Google 403 outstanding balance is billing', t => {
   assert.equal(billingFailure('status 403 Forbidden'), false);
 });
 
+test('xAI credits/spending-limit 403 wording is billing', t => {
+  const xai = 'grok:grok-3 HTTP403 permission-denied Your team has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit.';
+  assert.equal(billingFailure(xai), true);
+  assert.equal(billingWithQuotaHint(xai), false);
+  assert.equal(quotaFailure(xai), false);
+  // wording fragments alone
+  assert.equal(billingFailure('used all available credits'), true);
+  assert.equal(billingFailure('used all credits'), true);
+  assert.equal(billingFailure('monthly spending limit'), true);
+  assert.equal(billingFailure('raise your spending limit'), true);
+  assert.equal(billingFailure('purchase more credits'), true);
+  // plain 403 / permission-denied without billing wording stays non-billing
+  assert.equal(billingFailure('HTTP 403 permission denied'), false);
+  assert.equal(billingFailure('grok:grok-3 HTTP403 permission-denied'), false);
+});
+
 test('Google 403 outstanding balance via ledger realLaneStats is billing', t => {
   const home = fixture(t, [{ provider: 'gemini', status: 'http_403', stderr: 'The billing account has an outstanding balance' }]);
   const stats = realLaneStats(home, now).gemini;

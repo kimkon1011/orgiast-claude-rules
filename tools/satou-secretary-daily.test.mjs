@@ -255,18 +255,20 @@ const edge = previousBusinessJstDayRange(new Date("2026-11-01T06:30:00+09:00"));
 if (edge.date !== "2026-10-30") { console.error("FAIL Sun edge: " + edge.date); process.exit(1); }
 console.log("ALL PASS");
 `;
-  const { stdout, stderr } = await new Promise((resolve, reject) => {
+  const { stdout, stderr, code } = await new Promise((resolve, reject) => {
     const child = execFile(
       process.execPath,
-      ["--input-type=module", "--eval", testCode],
+      // beeper-api → node:sqlite の ExperimentalWarning を抑止（判定対象は曜日ロジックのみ）
+      ["--no-warnings", "--input-type=module", "--eval", testCode],
       { env: { ...process.env, TZ: "UTC" } }
     );
     let out = "", err = "";
     child.stdout.on("data", d => out += d);
     child.stderr.on("data", d => err += d);
-    child.on("close", code => resolve({ stdout: out, stderr: err, code }));
+    child.on("close", exitCode => resolve({ stdout: out, stderr: err, code: exitCode }));
     child.on("error", reject);
   });
+  assert.equal(code, 0, stderr || stdout);
   assert.equal(stderr, "");
   assert.equal(stdout.trim(), "ALL PASS");
 });

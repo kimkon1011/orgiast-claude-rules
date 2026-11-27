@@ -17,13 +17,17 @@ export const STATUS_UNKNOWN = '判定不能';
 const MAIL_RESOLVED = new Set(['delivered', 'seen', 'done', 'expired', 'failed']);
 const INBOX_RESOLVED = new Set(['answered', 'done', 'seen']);
 const PR_RESOLVED = new Set(['MERGED', 'CLOSED']);
+const DELEGATION_RESOLVED = new Set(['resolved']);
+/** delegation-health.json がこの日数より古いと台帳停止疑い → 判定不能に倒す */
+const DELEGATION_HEALTH_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 function isResolvedState(state, from) {
   if (from === 'mail') return MAIL_RESOLVED.has(state);
   if (from === 'inbox') return INBOX_RESOLVED.has(state);
   if (from === 'pr') return PR_RESOLVED.has(state);
+  if (from === 'delegation-health') return DELEGATION_RESOLVED.has(state);
   // Auto-detect when caller passes empty from
-  if (MAIL_RESOLVED.has(state) || INBOX_RESOLVED.has(state) || PR_RESOLVED.has(state)) return true;
+  if (MAIL_RESOLVED.has(state) || INBOX_RESOLVED.has(state) || PR_RESOLVED.has(state) || DELEGATION_RESOLVED.has(state)) return true;
   return false;
 }
 
@@ -38,20 +42,53 @@ export function extractReferences(text) {
     const number = Number(match[1]);
     if (!/[A-Za-z0-9]/.test(before) && !seen.has(number)) prNumbers.push(number), seen.add(number);
   }
+  // 2026-11-27 実測: [delegation-health:lane_outage_unrepaired] が「参照なし」で空振りしていた
+  const delegationHealthIds = [...new Set(
+    [...text.matchAll(/\[delegation-health:([a-z0-9_]+)\]/g)].map(match => match[1]),
+  )];
+  // 空のときはキーを出さない（既存 test/ の deepEqual 形を壊さない）
   return {
     prNumbers,
     inboxIds: [...new Set(text.match(/\bki-\d{14}-[0-9a-f]{4}\b/g) ?? [])],
     mailIds: [...new Set(text.match(/\bmail-\d{14}-[0-9a-f]{4}\b/g) ?? [])],
+    ...(delegationHealthIds.length ? { delegationHealthIds } : {}),
   };
 }
 
-export function classifyLine(line, prStates, inboxStates, mailStates) {
-  const { prNumbers, inboxIds, mailIds } = extractReferences(line);
-  if (prNumbers.length + inboxIds.length + mailIds.length === 0) return STATUS_UNKNOWN;
+/**
+ * delegation-health.json の findings 有無で状態を返す。
+ * 台帳欠損・壊損・generatedAt 欠落・7日超は undefined（判定不能側。解決済みと誤判定しない）。
+ */
+export function resolveDelegationHealthStatus(ledger, id, now = new Date()) {
+  if (!ledger || typeof ledger !== 'object') return undefined;
+  if (!ledger.generatedAt) return undefined;
+  const generatedAt = Date.parse(ledger.generatedAt);
+  if (!Number.isFinite(generatedAt)) return undefined;
+  if (now.getTime() - generatedAt > DELEGATION_HEALTH_MAX_AGE_MS) return undefined;
+  if (!Array.isArray(ledger.findings)) return undefined;
+  const present = ledger.findings.some(item => item && item.id === id);
+  return present ? 'present' : 'resolved';
+}
+
+/** ホーム配下の delegation-health.json を読む。無い・壊れているときは null。 */
+export function loadDelegationHealthLedger(home) {
+  try {
+    const file = path.join(home, '.claude', 'delegation-health.json');
+    if (!fs.existsSync(file)) return null;
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+export function classifyLine(line, prStates, inboxStates, mailStates, delegationHealthStates = new Map()) {
+  const { prNumbers, inboxIds, mailIds, delegationHealthIds = [] } = extractReferences(line);
+  if (prNumbers.length + inboxIds.length + mailIds.length + delegationHealthIds.length === 0) return STATUS_UNKNOWN;
   const states = [
     ...prNumbers.map(n => prStates.get(n)),
     ...inboxIds.map(id => inboxStates.get(id)),
     ...mailIds.map(id => mailStates.get(id)),
+    ...delegationHealthIds.map(id => delegationHealthStates.get(id)),
   ];
   const unknown = states.some(s => s === undefined || s === '照会失敗');
   if (unknown) return STATUS_UNKNOWN;
@@ -110,17 +147,23 @@ function resolveMailStatus(state) {
   return MAIL_RESOLVED.has(state) ? state : 'pending';
 }
 
-function reasonFor(refs, prStates, inboxStates, mailStates) {
+function reasonFor(refs, prStates, inboxStates, mailStates, delegationHealthStates = new Map()) {
+  const delegationHealthIds = refs.delegationHealthIds ?? [];
   const failed = [
     ...refs.prNumbers.filter(n => prStates.get(n) === '照会失敗').map(n => `PR #${n}`),
     ...refs.inboxIds.filter(id => inboxStates.get(id) === '照会失敗'),
     ...refs.mailIds.filter(id => mailStates.get(id) === '照会失敗'),
+    ...delegationHealthIds.filter(id => {
+      const state = delegationHealthStates.get(id);
+      return state === undefined || state === '照会失敗';
+    }).map(id => `delegation-health:${id}`),
   ];
   if (failed.length) return `${failed.join('、')} の照会失敗`;
   const states = [
     ...refs.prNumbers.map(n => `PR #${n}=${prStates.get(n)}`),
     ...refs.inboxIds.map(id => `${id}=${inboxStates.get(id)}`),
     ...refs.mailIds.map(id => `${id}=${mailStates.get(id)}`),
+    ...delegationHealthIds.map(id => `delegation-health:${id}=${delegationHealthStates.get(id)}`),
   ];
   return states.length ? states.join('、') : '参照なし';
 }
@@ -129,7 +172,7 @@ function reasonFor(refs, prStates, inboxStates, mailStates) {
  * 部分完了行に付ける注釈を生成する。
  * 解決済みの参照だけを列挙する。
  */
-export function partialNotes(line, prStates, inboxStates, mailStates) {
+export function partialNotes(line, prStates, inboxStates, mailStates, delegationHealthStates = new Map()) {
   const refs = extractReferences(line);
   const done = [];
   for (const n of refs.prNumbers) {
@@ -140,6 +183,9 @@ export function partialNotes(line, prStates, inboxStates, mailStates) {
   }
   for (const id of refs.mailIds) {
     if (isResolvedState(mailStates.get(id), 'mail')) done.push(id);
+  }
+  for (const id of refs.delegationHealthIds ?? []) {
+    if (isResolvedState(delegationHealthStates.get(id), 'delegation-health')) done.push(`delegation-health:${id}`);
   }
   return done.length ? `（部分完了: ${done.join('、')}）` : '';
 }
@@ -199,9 +245,15 @@ export async function main(args = process.argv.slice(2)) {
   for (const id of new Set(refsByRow.flatMap(refs => refs.mailIds))) {
     mailStates.set(id, resolveMailStatus(readMailItemStatus(home, id)));
   }
+  const delegationLedger = loadDelegationHealthLedger(home);
+  const delegationHealthStates = new Map();
+  for (const id of new Set(refsByRow.flatMap(refs => refs.delegationHealthIds ?? []))) {
+    const state = resolveDelegationHealthStatus(delegationLedger, id);
+    if (state !== undefined) delegationHealthStates.set(id, state);
+  }
   const results = rows.map((row, index) => ({
-    ...row, status: classifyLine(row.text, prStates, inboxStates, mailStates),
-    reason: reasonFor(refsByRow[index], prStates, inboxStates, mailStates),
+    ...row, status: classifyLine(row.text, prStates, inboxStates, mailStates, delegationHealthStates),
+    reason: reasonFor(refsByRow[index], prStates, inboxStates, mailStates, delegationHealthStates),
   }));
   for (const result of results) console.log(`行${result.lineNumber} / ${result.status} / ${result.reason}`);
   if (!rows.length) console.log('対象の番号付きリスト行はありません。');
@@ -212,7 +264,7 @@ export async function main(args = process.argv.slice(2)) {
     fs.copyFileSync(options.file, backup);
     const partialMap = new Map();
     for (const row of partials) {
-      const note = partialNotes(row.text, prStates, inboxStates, mailStates);
+      const note = partialNotes(row.text, prStates, inboxStates, mailStates, delegationHealthStates);
       if (note) partialMap.set(row.text, note);
     }
     let modified = source;
@@ -222,7 +274,7 @@ export async function main(args = process.argv.slice(2)) {
     console.log(`バックアップ: ${backup}`);
     for (const result of completed) console.log(`削除: ${result.text}`);
     for (const result of partials) {
-      const note = partialNotes(result.text, prStates, inboxStates, mailStates);
+      const note = partialNotes(result.text, prStates, inboxStates, mailStates, delegationHealthStates);
       console.log(`注釈: ${result.text}  → ${note}`);
     }
   } else if (!options.apply) {

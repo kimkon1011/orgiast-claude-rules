@@ -216,6 +216,46 @@ export function resetLaneProbeWorkDir(dir) {
   for (const name of fs.readdirSync(dir)) fs.rmSync(path.join(dir, name), { recursive: true, force: true });
   return dir;
 }
+const laneProbeLockPath = workDir => `${workDir}.lock`;
+const defaultPidAlive = pid => {
+  try { process.kill(pid, 0); return true; }
+  catch (e) { return e.code === 'EPERM'; }
+};
+// 2026-11-27 実測: 固定フォルダーの点検が同時実行され、後発 reset が先発の .git を削除した。
+// ロックは reset 対象の外に置き、死んだプロセスと長時間残ったロックだけを回収する。
+export async function acquireLaneProbeLock(workDir, { timeoutMs = NATIVE_WRITE_PROBE_TIMEOUT_MS, now = Date.now, pid = process.pid, pidAlive = defaultPidAlive, sleep: wait = ms => new Promise(resolve => setTimeout(resolve, ms)), intervalMs = 2000, staleMs = NATIVE_WRITE_PROBE_TIMEOUT_MS + 60_000 } = {}) {
+  const lockDir = laneProbeLockPath(workDir), deadline = now() + timeoutMs;
+  fs.mkdirSync(path.dirname(lockDir), { recursive: true });
+  while (true) {
+    const token = `${pid}-${now()}-${Math.random().toString(16).slice(2)}`;
+    try {
+      fs.mkdirSync(lockDir);
+      try { fs.writeFileSync(path.join(lockDir, 'owner.json'), JSON.stringify({ pid, startedAt: now(), token }) + '\n'); }
+      catch (e) { fs.rmSync(lockDir, { recursive: true, force: true }); throw e; }
+      return { lockDir, token };
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      let owner, age = 0;
+      try { owner = JSON.parse(fs.readFileSync(path.join(lockDir, 'owner.json'), 'utf8')); }
+      catch { try { age = now() - fs.statSync(lockDir).mtimeMs; } catch {} }
+      const startedAt = Number(owner?.startedAt);
+      const stale = owner
+        ? !pidAlive(Number(owner.pid)) || Number.isFinite(startedAt) && now() - startedAt > staleMs
+        : age > staleMs;
+      if (stale) { try { fs.rmSync(lockDir, { recursive: true, force: true }); } catch {} continue; }
+      const remaining = deadline - now();
+      if (remaining <= 0) return null;
+      await wait(Math.min(intervalMs, remaining));
+    }
+  }
+}
+export function releaseLaneProbeLock(lock) {
+  if (!lock) return;
+  try {
+    const owner = JSON.parse(fs.readFileSync(path.join(lock.lockDir, 'owner.json'), 'utf8'));
+    if (owner.token === lock.token) fs.rmSync(lock.lockDir, { recursive: true, force: true });
+  } catch {}
+}
 // Codex の書き込み結果を read-back の成否で評価する。exit code が 0 でなくても
 // read-back が成功していれば生存と判定する（2026-11-18 PR#2331）。
 export function nativeWriteProbeResult(result, readBackOk) {
@@ -223,13 +263,16 @@ export function nativeWriteProbeResult(result, readBackOk) {
   return { viaChain: probeViaChain(result.text, 'codex'), code: 1, text: `書き込み確認失敗 ${result.text || ''}` };
 }
 export async function runNativeWriteProbe({ home, timeoutMs, workDir = laneProbeWorkDir() }) {
-  const cwd = resetLaneProbeWorkDir(workDir);
+  const lock = await acquireLaneProbeLock(workDir, { timeoutMs });
+  if (!lock) return { viaChain: false, code: 1, busy: true, text: 'probe busy: 別の書き込み点検が実行中' };
+  let cwd;
   const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home, CODEX_DO_CHEAP_FIRST: '0', CODEX_DO_SKIP_CURSOR_AGENT: '1' }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e, stdout, stderr) => {
     const output = `${stdout || ''}\n${stderr || ''}`.trim();
     if (e?.killed || e?.signal) return resolve({ code: 1, timedOut: true, text: `タイムアウト(${Math.ceil(timeoutMs / 1000)}s) ${output}`.trim() });
     resolve({ code: e ? 1 : 0, text: output });
   }));
   try {
+    cwd = resetLaneProbeWorkDir(workDir);
     const init = await run('git', ['init', '--quiet']);
     if (init.code) return { ...init, text: `git init 失敗 ${init.text || ''}`.trim() };
     const instruction = 'WRITE_OK.txt を作成し、内容を WRITE_OK にしてください。その後ファイルを読み返して確認してください。';
@@ -237,7 +280,10 @@ export async function runNativeWriteProbe({ home, timeoutMs, workDir = laneProbe
     let ok = false;
     try { ok = fs.readFileSync(path.join(cwd, 'WRITE_OK.txt'), 'utf8').trim() === 'WRITE_OK'; } catch {}
     return nativeWriteProbeResult(result, ok);
-  } finally { try { resetLaneProbeWorkDir(cwd); } catch {} }
+  } finally {
+    try { if (cwd) resetLaneProbeWorkDir(cwd); } catch {}
+    releaseLaneProbeLock(lock);
+  }
 }
 export function runProbe(provider, { home, timeoutMs, dryRun = false, probeAutoDisabled = false, execFileImpl = execFile } = {}) {
   const args = provider === 'codex'
@@ -320,11 +366,12 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
           try { result = await nativeWriteProbe({ home, timeoutMs: nativeTimeoutMs }); }
           catch { result = { code: 1, text: 'ネイティブ書き込み probe 起動失敗' }; }
           if (result.code === 0) break;
+          if (result.busy) break;
           failures.push(result.text || '(出力なし)');
           if (result.timedOut) break;
         }
         const probeErrorText = result.text || '';
-        if (result.code !== 0) result.text = `ネイティブ書き込み probe ${failures.length}回失敗(最終) ${failures.map((text, i) => `${i + 1}回目: ${text}`).join(' / ')}`;
+        if (result.code !== 0 && !result.busy) result.text = `ネイティブ書き込み probe ${failures.length}回失敗(最終) ${failures.map((text, i) => `${i + 1}回目: ${text}`).join(' / ')}`;
         return [p, { ...result, nativeRepair: true, probeErrorText, wslDistros }];
       }
       const dry = await probe(p, { home, timeoutMs: Math.min(15000, probeBudget), dryRun: true });
@@ -344,6 +391,8 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   const recovered = new Set(), classifiedAutoProbes = new Set();
   for (const [p, result] of results) {
     if (!result) continue;
+    // 同じ固定フォルダーの点検中は今回の判定を見送り、稼働中レーンを停止扱いにしない。
+    if (result.busy) continue;
     if (result.cached && !result.cached.alive) { health.lanes[p] = { ...result.cached, ...probeHistory(result.cached) }; continue; }
     const rawText = result.text || '', text = laneErrorText(rawText, p), stamp = new Date(now).toISOString();
     const model = retiredModel(rawText, p);

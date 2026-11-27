@@ -1013,3 +1013,27 @@ test('送信前ガード: ORGIAST_HANDBACK_GUARD=0 で無効', () => {
     '確認をお願いします',
   );
 });
+
+test('--send は社外顧客への質問を差し戻しと誤検知しない', async () => {
+  const draft = {
+    message: {
+      payload: {
+        headers: [
+          { name: 'To', value: 'customer@example.com' },
+          { name: 'Subject', value: '日程の確認' },
+        ],
+        body: { data: Buffer.from('ご都合を教えていただけますでしょうか。').toString('base64url') },
+      },
+    },
+  };
+  const result = await cli(['--send', 'draft-external', '--json'], {
+    fetchImpl: async (url, options = {}) => {
+      if (url.includes('/drafts/draft-external?format=full')) return response(draft);
+      if (url.endsWith('/drafts/send')) return response({ id: 'sent-external', threadId: 'thread-external' });
+      throw new Error(`unexpected fetch: ${url} ${options.method ?? 'GET'}`);
+    },
+    getToken: async () => 'token',
+  });
+  assert.equal(result.code, 0);
+  assert.equal(JSON.parse(result.output.at(-1)).sentMessageId, 'sent-external');
+});

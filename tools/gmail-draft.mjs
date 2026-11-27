@@ -430,6 +430,13 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       } catch { consistency = await inspect(); }
       const draftText = mimeText(draft?.message?.payload).text;
       const draftHeader = name => (headers ?? []).filter(header => String(header.name).toLowerCase() === name).map(header => header.value);
+      // 差し戻しガードは社内の人へ AI で済む作業を戻さないためのもの。
+      // 顧客への質問まで同じ敬語パターンで止めると、通常の社外返信を誤検知する。
+      // 内外混在は社内受信者にも届くため、全宛先が社外の場合だけ
+      // handback 検査を省略する。
+      const sendRecipients = extractAddresses({ to: draftHeader('to'), cc: draftHeader('cc'), bcc: draftHeader('bcc') });
+      const externalOnly = sendRecipients.length > 0
+        && sendRecipients.every(address => !isInternal(address, (deps.loadLedger ?? loadLedger)()));
       const draftSubject = draftHeader('subject').join(' ');
       const boothCc = applyBoothCc({ to: draftHeader('to'), cc: draftHeader('cc'), subject: draftSubject, body: draftText, booth: args.booth });
       if (boothCc.added) {
@@ -449,7 +456,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         emit({ ok: false, errorKind: 'secretary_booking_url', matches: bookingUrls }, `${SECRETARY_BOOKING_URL_REASON}\n検出: ${bookingUrls.join('、')}`);
         return 2;
       }
-      try { assertGmailBodySendable(draftText, { env: deps.env ?? process.env, skipHandbackGuard: deps.skipHandbackGuard }); }
+      try { assertGmailBodySendable(draftText, { env: deps.env ?? process.env, skipHandbackGuard: deps.skipHandbackGuard || externalOnly }); }
       catch (error) {
         if (error?.code === 'HANDBACK_BLOCKED' || error?.errorKind === 'handback_tag_present') {
           emit({ ok: false, errorKind: error.errorKind ?? 'handback_blocked', hits: error.hits, code: error.code }, error.message);
@@ -494,6 +501,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         }});
       }
       const result = await sendDraft({ user, id: args.send, ledger: (deps.loadLedger ?? loadLedger)(), fetchImpl, getToken, draft, allowRepeat: args['allow-repeat'], home: deps.home, acquireDedupe: deps.acquireDedupe,
+        skipHandbackGuard: deps.skipHandbackGuard || externalOnly,
       });
       if (!deps.skipContextCheck) recordOutbound({ channel: 'gmail', target: result.threadId, mailbox: user, text: draftText, messageId: result.sentMessageId }, deps.home);
       emit({ ok: true, ...(isForward ? { consistency } : {}), ...result }, `送信しました: ${result.sentMessageId} (${user})`);

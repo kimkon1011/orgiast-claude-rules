@@ -14,5 +14,11 @@
   "pcAliases": {
     "000": "kim-PC",
     "011": "作業用011"
+  },
+  "people": {
+    "ほなみ": { "role": "cafe-solo", "location": "大阪・東邦ハイツ211（カフェ店内・一人勤務）" },
+    "澤口": { "role": "cafe-solo", "location": "大阪・東邦ハイツ211（カフェ店内・一人勤務）" },
+    "ゆりえ": { "role": "cafe-solo", "location": "大阪・東邦ハイツ211（カフェ店内・一人勤務）" },
+    "岡崎": { "role": "cafe-solo", "location": "大阪・東邦ハイツ211（カフェ店内・一人勤務）" }
   }
 }

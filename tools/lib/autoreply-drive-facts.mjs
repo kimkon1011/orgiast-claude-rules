@@ -3,9 +3,10 @@ import { extractSearchTerms } from './autoreply-related.mjs';
 
 const DRIVE_FACT_QUESTION = /(?:プロジェクト|PJ|案件)?コード|実施計画書|見積書/i;
 const PROJECT_CODE = /(?<![A-Z0-9])\d{6,7}[A-Z]{3,5}(?![A-Z0-9])/g;
+const PROJECT_CODE_ONE = /(?<![A-Z0-9])\d{6,7}[A-Z]{3,5}(?![A-Z0-9])/;
 
 export function needsDriveFactSearch(message) {
-  return DRIVE_FACT_QUESTION.test(String(message || '')) || PROJECT_CODE.test(String(message || '').toUpperCase());
+  return DRIVE_FACT_QUESTION.test(String(message || '')) || PROJECT_CODE_ONE.test(String(message || '').toUpperCase());
 }
 
 export async function searchDriveFacts({ message, documents = [], terms, llm, request } = {}) {

@@ -1,6 +1,6 @@
-# session-status  PC=008  host=008XPS8300  updated 2026-11-27 18:09 JST
+# session-status  PC=008  host=008XPS8300  updated 2026-11-27 19:08 JST
 
-- claude auth: auth status タイムアウト
+- claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "configDirectory": "C:\\Users\\user\\
 - 案件数: 42
 
 - 008・20261126-EOラーニングVALX只石プロデュース『劇薬マーケティング』シリーズ第二弾!・完了・最終更新 11/26 17:53、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし

@@ -91,6 +91,13 @@ test('gmail helpers', () => {
   assert.equal(item.source, 'rebooth');
   assert.equal(item.company, '株式会社FRED');
   assert.match(item.body, /ライブコマース/);
+  const iseya = gmailToInquiry({
+    id: 'm2',
+    subject: 'フォーム',
+    body: 'お問い合わせ内容：伊勢湾陸運株式会社 マリン事業部の髙嶋と申します。ブース相談。',
+    internalDate: String(Date.parse('2026-11-18T03:00:00Z')),
+  }, 'rebooth');
+  assert.equal(iseya.company, '伊勢湾陸運株式会社');
 });
 
 test('summarizeInquiries falls back when LLM fails', async () => {

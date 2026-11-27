@@ -320,6 +320,7 @@ for (const existingPr of [false, true]) test(`push拒否は同日ブランチへ
   assert.equal(result.fallback, true);
   assert.match(result.markdown, /フォールバック/);
   assert.equal(f.calls.some((c) => c[0] === 'gh' && c[2] === 'create'), !existingPr);
+  if (!existingPr) assert.ok(f.calls.some((c) => c[0] === 'gh' && c[2] === 'create' && c.includes('--label') && c.includes('automerge')));
   assert.ok(f.calls.some((c) => c[0] === 'gh' && c.includes('--auto') && c.includes('--squash')));
   assert.equal(f.uploads[0].content, result.markdown);
 });

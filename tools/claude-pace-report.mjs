@@ -12,9 +12,11 @@ import { downloadFileContent, findOrCreateFolder, listFiles, uploadFileContent }
 import { FOLDERS } from './hub-push.mjs';
 import { decidePace, loadPaceConfig, defaultConfigPath, defaultQueuePath, paceLedgerPath } from './claude-pace.mjs';
 import { summarizeQueue } from './claude-pace-queue.mjs';
-import { HUB_ID } from './portable-knowhow-push.mjs';
 import { checkSchema } from './lib/json-schema-check.mjs';
 import { readCodexWindows } from './lib/quota-windows.mjs';
+import { reportLocations } from './lib/claude-pace-report-core.mjs';
+
+export { reportLocations } from './lib/claude-pace-report-core.mjs';
 
 export const DAY_TARGET_PCT = 12.9;
 export const REPORT_DIR_NAME = 'claude-pace-reports';
@@ -62,12 +64,6 @@ export function readRegistrationStatus(repoRoot = REPO_ROOT) {
     if (!data.hosts || typeof data.hosts !== 'object' || Array.isArray(data.hosts)) throw new Error('hosts が不正');
     return data;
   } catch (error) { return { hosts: {}, note: `未確認（${error.code === 'ENOENT' ? 'registration.json が無い' : 'registration.json 読取失敗'}）` }; }
-}
-
-/** 通知でも省略しない参照先。Drive 未作成時は共有ハブを案内する。 */
-export function reportLocations(date, driveUrl = `https://drive.google.com/drive/folders/${HUB_ID}`) {
-  const base = 'https://github.com/kimkon1011/orgiast-claude-rules/blob/main/reports/claude-pace';
-  return `## 置き場所\n- JSON: ${base}/${date}.json\n- md: ${base}/${date}.md\n- latest.json: ${base}/latest.json\n- raw（ふわ用）: https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/reports/claude-pace/latest.json\n- Drive（AI共通ノウハウ / claude-pace）: ${driveUrl}\n`;
 }
 
 export function reportDir(home = process.env.ORGIAST_HOME || os.homedir()) {
@@ -495,6 +491,7 @@ export async function uploadReportToDrive({
 function parseArgs(argv) {
   const opts = {
     dryRun: false,
+    jsonOutput: false,
     force: false,
     home: process.env.ORGIAST_HOME || os.homedir(),
     host: process.env.ORGIAST_HOSTNAME || os.hostname(),
@@ -504,6 +501,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--dry-run') opts.dryRun = true;
+    else if (a === '--json-output') opts.jsonOutput = true;
     else if (a === '--force') opts.force = true;
     else if (a === '--home') opts.home = argv[++i];
     else if (a === '--host') opts.host = argv[++i];
@@ -554,7 +552,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
 
   const print = io.print ?? console.log;
   if (opts.dryRun) {
-    print(markdown);
+    print(opts.jsonOutput ? JSON.stringify({ markdown, json }) : markdown);
     return { dryRun: true, markdown, json };
   }
 

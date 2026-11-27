@@ -9,7 +9,7 @@ import { clearStaleIndexLock } from './fleet-directive-send.mjs';
 import { HUB_ID, FOLDER_NAME } from './portable-knowhow-push.mjs';
 import { getDriveToken } from './lib/drive-auth.mjs';
 import { findOrCreateFolder, listFiles, uploadFileContent } from './lib/drive-files.mjs';
-import { reportLocations, main as buildDailyReport } from './claude-pace-report.mjs';
+import { reportLocations } from './lib/claude-pace-report-core.mjs';
 
 const REPO = 'kimkon1011/orgiast-claude-rules';
 
@@ -113,7 +113,8 @@ export async function publishReport({ report, dryRun = false, home = process.env
       git(['push', '-u', 'origin', `HEAD:${branch}`]);
       const prs = JSON.parse(run('gh', ['pr', 'list', '--repo', REPO, '--head', branch, '--base', 'main', '--state', 'open', '--json', 'url'], dir));
       prUrl = prs[0]?.url || run('gh', ['pr', 'create', '--repo', REPO, '--base', 'main', '--head', branch,
-        '--title', `report: Claude pace ${date}`, '--body', '日次台帳の自動更新。main への直接 push が拒否されたため PR で配信。'], dir);
+        '--title', `report: Claude pace ${date}`, '--body', '日次台帳の自動更新。main への直接 push が拒否されたため PR で配信。',
+        '--label', 'automerge'], dir);
       run('gh', ['pr', 'merge', prUrl, '--repo', REPO, '--auto', '--squash'], dir);
     }
   };
@@ -132,8 +133,12 @@ export async function publishReport({ report, dryRun = false, home = process.env
   return { paths, markdown, fallback, prUrl, driveError, driveUrl };
 }
 
-export async function main(argv = process.argv.slice(2)) {
-  const report = await buildDailyReport(['--dry-run'], { print: () => {} });
+export async function main(argv = process.argv.slice(2), io = {}) {
+  const build = io.buildDailyReport ?? (() => {
+    const output = command(process.execPath, [path.join(import.meta.dirname, 'claude-pace-report.mjs'), '--dry-run', '--json-output'], import.meta.dirname);
+    return JSON.parse(output);
+  });
+  const report = await build();
   return publishReport({ report, dryRun: argv.includes('--dry-run') });
 }
 

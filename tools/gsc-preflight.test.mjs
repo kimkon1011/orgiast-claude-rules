@@ -8,6 +8,7 @@ import {
   normalizeUrl,
   isBotQuery,
   classifyBotQuery,
+  matchesMainQuery,
   evaluateQuery,
   prepareRows,
   runPreflight,
@@ -43,6 +44,20 @@ describe('isBotQuery / classifyBotQuery', () => {
   });
 });
 
+describe('matchesMainQuery（語単位の全包含）', () => {
+  it('空白違いでも主クエリの語がすべて含まれれば一致する', () => {
+    assert.equal(matchesMainQuery('展示会 ブース 費用', '展示会ブース 費用'), true);
+    assert.equal(matchesMainQuery('展示会 ブース 施工 費用', '展示会ブース 費用'), true);
+    assert.equal(matchesMainQuery('展示会\u3000ブース\u3000費用', '展示会ブース 費用'), true);
+    assert.equal(matchesMainQuery('ブースデザイン基本', 'ブース デザイン'), true);
+  });
+
+  it('語が欠けていれば不一致', () => {
+    assert.equal(matchesMainQuery('展示会 ブース', '展示会ブース 費用'), false);
+    assert.equal(matchesMainQuery('ブース 施工', '展示会ブース 費用'), false);
+  });
+});
+
 describe('prepareRows', () => {
   it('正規化で #付きURLを統合し除外数を数える', () => {
     const rows = [
@@ -62,7 +77,7 @@ describe('prepareRows', () => {
 });
 
 describe('evaluateQuery verdict', () => {
-  it('1〜30位なら REWRITE、内部リンクは実URLのみ', () => {
+  it('下限以上かつ1〜30位なら REWRITE、内部リンクは実URLのみ', () => {
     const rows = [
       { query: '展示会ブース 制作 会社', page: 'https://rebooth.co.jp/exhibition/1336', clicks: 4, impressions: 40, position: 12.5 },
       { query: '展示会ブース 制作', page: 'https://rebooth.co.jp/contact/', clicks: 1, impressions: 25, position: 18 },
@@ -80,11 +95,38 @@ describe('evaluateQuery verdict', () => {
     assert.ok(!result.internalLinkCandidates.some((c) => c.page.includes('example.com/guessed')));
     assert.ok(!result.internalLinkCandidates.some((c) => c.page === result.bestPage));
     assert.ok(result.internalLinkCandidates.some((c) => c.page === 'https://rebooth.co.jp/contact'));
+    // 表示8は下限10未満なので内部リンク候補に含めない
+    assert.ok(!result.internalLinkCandidates.some((c) => c.page === 'https://orgiast.jp/topics/999'));
   });
 
-  it('31位以下のみなら NEW_OK', () => {
+  it('語単位一致（空白違い）でも REWRITE になる', () => {
     const rows = [
-      { query: 'レンタルブース 安い', page: 'https://rebooth.co.jp/', clicks: 0, impressions: 3, position: 55 },
+      { query: '展示会 ブース 施工 費用', page: 'https://rebooth.co.jp/exhibition/1336', clicks: 2, impressions: 20, position: 8 },
+    ];
+    const prepared = prepareRows(rows);
+    const result = evaluateQuery(prepared.mergedRows, '展示会ブース 費用');
+    assert.equal(result.verdict, 'REWRITE');
+    assert.equal(result.bestPage, 'https://rebooth.co.jp/exhibition/1336');
+    assert.equal(result.matchedRows, 1);
+  });
+
+  it('下限未満のページしか無い場合は INSUFFICIENT', () => {
+    const rows = [
+      { query: '展示会 ブース 費用', page: 'https://rebooth.co.jp/', clicks: 0, impressions: 3, position: 5 },
+      { query: '展示会ブース費用相場', page: 'https://orgiast.jp/topics/1', clicks: 0, impressions: 9, position: 12 },
+    ];
+    const prepared = prepareRows(rows);
+    const result = evaluateQuery(prepared.mergedRows, '展示会ブース 費用', { minImpressions: 10 });
+    assert.equal(result.verdict, 'INSUFFICIENT');
+    assert.equal(result.label, '根拠不足');
+    assert.equal(result.bestPage, null);
+    assert.equal(result.matchedRows, 2);
+    assert.deepEqual(result.internalLinkCandidates, []);
+  });
+
+  it('31位以下のみ（下限以上）なら NEW_OK', () => {
+    const rows = [
+      { query: 'レンタルブース 安い', page: 'https://rebooth.co.jp/', clicks: 0, impressions: 15, position: 55 },
     ];
     const prepared = prepareRows(rows);
     const result = evaluateQuery(prepared.mergedRows, 'レンタルブース');
@@ -93,14 +135,14 @@ describe('evaluateQuery verdict', () => {
     assert.equal(result.position, 55);
   });
 
-  it('該当行が無ければ NO_DATA（該当なし）', () => {
+  it('一致行が無ければ NEW_OK', () => {
     const prepared = prepareRows([
       { query: '全く別', page: 'https://rebooth.co.jp/', clicks: 1, impressions: 1, position: 1 },
     ]);
     const result = evaluateQuery(prepared.mergedRows, '再利用 ブース');
-    assert.equal(result.verdict, 'NO_DATA');
-    assert.equal(result.label, '該当なし');
+    assert.equal(result.verdict, 'NEW_OK');
     assert.equal(result.bestPage, null);
+    assert.equal(result.matchedRows, 0);
     assert.deepEqual(result.internalLinkCandidates, []);
   });
 });

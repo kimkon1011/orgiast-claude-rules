@@ -21,13 +21,15 @@ const USAGE = `使い方:
   node tools/gsc-preflight.mjs --input <gsc.json|csv> --query "<主クエリ>" [--query ...] [--json]
 
 オプション:
-  --input <path>   GSC エクスポート（JSON / CSV）
-  --query <text>   予定記事の主クエリ（複数可）
-  --json           JSON で出力（既定は人が読む表）
-  --help           このヘルプを表示
+  --input <path>            GSC エクスポート（JSON / CSV）
+  --query <text>            予定記事の主クエリ（複数可）
+  --min-impressions <n>     判定根拠にするページ表示回数の下限（既定 10）
+  --json                    JSON で出力（既定は人が読む表）
+  --help                    このヘルプを表示
 `;
 
 const RANK_REWRITE_MAX = 30;
+const DEFAULT_MIN_IMPRESSIONS = 10;
 
 /** @typedef {{ query: string, page: string, clicks: number, impressions: number, position: number, site?: string }} GscRow */
 /** @typedef {{ query: string, reason: string }} ExcludeHit */
@@ -216,28 +218,62 @@ export function prepareRows(rows) {
 }
 
 /**
+ * NFKC＋小文字化。
+ * @param {string} text
+ */
+export function normalizeQueryText(text) {
+  return String(text ?? '').normalize('NFKC').toLowerCase();
+}
+
+/**
+ * 主クエリを空白（半角・全角）で語分割。
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function queryWords(text) {
+  return normalizeQueryText(text).split(/[\s\u3000]+/u).filter(Boolean);
+}
+
+/**
+ * 語単位の全包含: 主クエリの語がすべて GSC クエリ（空白除去後）に含まれるか。
+ * @param {string} gscQuery
+ * @param {string} mainQuery
+ */
+export function matchesMainQuery(gscQuery, mainQuery) {
+  const words = queryWords(mainQuery);
+  if (!words.length) return false;
+  const haystack = normalizeQueryText(gscQuery).replace(/[\s\u3000]+/gu, '');
+  return words.every((w) => haystack.includes(w));
+}
+
+/**
  * 主クエリ1件のプリフライト判定。
  * @param {GscRow[]} preparedRows normalize+merge 済み
  * @param {string} mainQuery
+ * @param {{ minImpressions?: number }} [options]
  */
-export function evaluateQuery(preparedRows, mainQuery) {
+export function evaluateQuery(preparedRows, mainQuery, options = {}) {
   const needle = String(mainQuery ?? '').trim();
   if (!needle) throw new Error('--query が空です');
+  const minImpressions = Number.isFinite(options.minImpressions)
+    ? Number(options.minImpressions)
+    : DEFAULT_MIN_IMPRESSIONS;
 
-  const matched = preparedRows.filter((r) => String(r.query).includes(needle));
+  const matched = preparedRows.filter((r) => matchesMainQuery(r.query, needle));
   if (matched.length === 0) {
     return {
       query: needle,
-      verdict: 'NO_DATA',
-      label: '該当なし',
+      verdict: 'NEW_OK',
+      label: 'NEW_OK',
       bestPage: null,
       position: null,
       clicks: null,
       impressions: null,
       matchedRows: 0,
+      minImpressions,
       pages: [],
       internalLinkCandidates: [],
-      advice: 'データに該当行がありません（捏造しない）。',
+      advice: '一致行が無いため新規記事（NEW）可。',
     };
   }
 
@@ -272,12 +308,37 @@ export function evaluateQuery(preparedRows, mainQuery) {
     if (a.position !== b.position) return a.position - b.position;
     return b.impressions - a.impressions;
   });
+  const pageSummaries = pages.map((p) => ({
+    page: p.page,
+    clicks: p.clicks,
+    impressions: p.impressions,
+    position: round(p.position, 1),
+    queryCount: p.queryCount,
+  }));
 
-  const best = pages[0];
-  const inTop30 = best && best.position >= 1 && best.position <= RANK_REWRITE_MAX;
+  const eligible = pages.filter((p) => p.impressions >= minImpressions);
+  if (eligible.length === 0) {
+    return {
+      query: needle,
+      verdict: 'INSUFFICIENT',
+      label: '根拠不足',
+      bestPage: null,
+      position: null,
+      clicks: null,
+      impressions: null,
+      matchedRows: matched.length,
+      minImpressions,
+      pages: pageSummaries,
+      internalLinkCandidates: [],
+      advice: `一致行はあるが、ページ別合計表示が ${minImpressions} 未満のため判定根拠不足（新規可否は保留）。`,
+    };
+  }
+
+  const best = eligible[0];
+  const inTop30 = best.position >= 1 && best.position <= RANK_REWRITE_MAX;
   const verdict = inTop30 ? 'REWRITE' : 'NEW_OK';
 
-  const internalLinkCandidates = pages
+  const internalLinkCandidates = eligible
     .filter((p) => p.page !== best.page && p.impressions > 0)
     .sort((a, b) => b.impressions - a.impressions || a.position - b.position)
     .slice(0, 5)
@@ -297,27 +358,23 @@ export function evaluateQuery(preparedRows, mainQuery) {
     clicks: best.clicks,
     impressions: best.impressions,
     matchedRows: matched.length,
-    pages: pages.map((p) => ({
-      page: p.page,
-      clicks: p.clicks,
-      impressions: p.impressions,
-      position: round(p.position, 1),
-      queryCount: p.queryCount,
-    })),
+    minImpressions,
+    pages: pageSummaries,
     internalLinkCandidates,
     advice: verdict === 'REWRITE'
-      ? `既存 ${best.page}（平均順位 ${round(best.position, 1)}）を直し、即答500字以内＋内部リンク追加を勧める。`
-      : '既存ページが1〜30位に無いため新規記事（NEW）可。',
+      ? `既存 ${best.page}（平均順位 ${round(best.position, 1)}・表示 ${best.impressions}）を直し、即答500字以内＋内部リンク追加を勧める。`
+      : `下限以上の既存ページは1〜30位に無いため新規記事（NEW）可（最良 ${best.page} 順位 ${round(best.position, 1)}）。`,
   };
 }
 
 /**
  * @param {GscRow[]} rows
  * @param {string[]} queries
+ * @param {{ minImpressions?: number }} [options]
  */
-export function runPreflight(rows, queries) {
+export function runPreflight(rows, queries, options = {}) {
   const prepared = prepareRows(rows);
-  const results = queries.map((q) => evaluateQuery(prepared.mergedRows, q));
+  const results = queries.map((q) => evaluateQuery(prepared.mergedRows, q, options));
   return {
     stats: {
       inputRows: rows.length,
@@ -327,6 +384,9 @@ export function runPreflight(rows, queries) {
       // 入力 = 除外 + 保持（空URLで落ちた行は kept に入れないが入力からは除外扱いでない）
       // 空ページは稀なので、合計一致は inputRows = excluded + kept + droppedEmpty
       droppedEmptyPage: rows.length - prepared.excludedCount - prepared.keptCount,
+      minImpressions: Number.isFinite(options.minImpressions)
+        ? Number(options.minImpressions)
+        : DEFAULT_MIN_IMPRESSIONS,
     },
     results,
   };
@@ -336,7 +396,7 @@ export function runPreflight(rows, queries) {
  * @param {string[]} argv
  */
 export function parseArgs(argv) {
-  /** @type {{ help?: boolean, json?: boolean, input?: string, queries: string[] }} */
+  /** @type {{ help?: boolean, json?: boolean, input?: string, minImpressions?: number, queries: string[] }} */
   const args = { queries: [] };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -348,6 +408,11 @@ export function parseArgs(argv) {
     } else if (a === '--query') {
       if (i + 1 >= argv.length) throw new Error('--query の値がありません');
       args.queries.push(argv[++i]);
+    } else if (a === '--min-impressions') {
+      if (i + 1 >= argv.length) throw new Error('--min-impressions の値がありません');
+      const n = Number(argv[++i]);
+      if (!Number.isFinite(n) || n < 0) throw new Error('--min-impressions は 0 以上の数である必要があります');
+      args.minImpressions = n;
     } else {
       throw new Error(`未知の引数: ${a}`);
     }
@@ -368,13 +433,15 @@ export function formatTable(report) {
   lines.push(`保持行数: ${s.keptRows}`);
   lines.push(`正規化統合後行数: ${s.mergedRows}`);
   lines.push(`空ページ落とし: ${s.droppedEmptyPage}`);
+  lines.push(`表示回数下限: ${s.minImpressions}`);
   lines.push(`合計チェック: ${s.excludedRows + s.keptRows + s.droppedEmptyPage} （入力 ${s.inputRows}）`);
   lines.push('');
   lines.push('| 主クエリ | 判定 | 最良ページ | 順位 | クリック | 表示 | 内部リンク候補（上位5） |');
   lines.push('|---|---|---|---:|---:|---:|---|');
   for (const r of report.results) {
-    if (r.verdict === 'NO_DATA') {
-      lines.push(`| ${esc(r.query)} | 該当なし | — | — | — | — | — |`);
+    if (r.verdict === 'INSUFFICIENT' || (r.verdict === 'NEW_OK' && r.bestPage == null)) {
+      const label = r.verdict === 'INSUFFICIENT' ? 'INSUFFICIENT' : 'NEW_OK';
+      lines.push(`| ${esc(r.query)} | ${label} | — | — | — | — | — |`);
       continue;
     }
     const links = r.internalLinkCandidates.length
@@ -472,7 +539,9 @@ function main(argv = process.argv) {
     return 1;
   }
   const { rows } = loadGscExport(args.input);
-  const report = runPreflight(rows, args.queries);
+  const report = runPreflight(rows, args.queries, {
+    minImpressions: args.minImpressions ?? DEFAULT_MIN_IMPRESSIONS,
+  });
   if (args.json) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   } else {

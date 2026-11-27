@@ -24,11 +24,14 @@ test('ONBOARDING の絶対ルール節を抜き出す（スピード最重視が
   assert.match(rules, /コンコースをまたいで変わったら/);
   assert.match(rules, /ユーザーが現地で見た情報を最優先する/);
   assert.match(rules, /公式マップで裏を取り/);
-  assert.match(rules, /再送分も含めて通算2回まで/);
+assert.match(rules, /再送分も含めて通算2回まで/);
   assert.match(rules, /3回目の参照は送らない/);
   assert.match(rules, /先送りしない/);
   assert.match(rules, /「実績のある経路」と過信しない/);
   assert.match(rules, /動く前にもう一度確かめる/);
+  assert.match(rules, /所在確認と現地作業の割り振り/);
+  assert.match(rules, /わからない人には割り振らない/);
+  assert.match(rules, /店を離れる作業/);
 });
 test('ABSOLUTE_RULES_SYSTEM に認証コードと空港案内のルールを含む', () => {
   assert.match(ABSOLUTE_RULES_SYSTEM, /受信トレイを直接開き/);

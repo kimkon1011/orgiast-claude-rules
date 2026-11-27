@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 export const DEFAULT_EXCLUDE_TITLES = [
   'clawd-connector', 'orgiast-sales-report', 'Grok Bot', 'ChatGPT', 'Muse',
@@ -147,6 +147,6 @@ async function main(argv = process.argv.slice(2)) {
   return items.length ? 3 : 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (isEntry(import.meta.url)) {
   process.exitCode = await main();
 }

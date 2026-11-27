@@ -86,10 +86,10 @@ test('dry-run は認証ファイル不要で通信しない', async t => {
   assert.equal(result.project, 'create');
 });
 
-test('下書きは旧トークン配布を呼ばずサーバ操作マーカーを使う', async t => {
+test('下書きも検索と同じ専用リレートークンを先に使う', async t => {
   const opts = fixture(t);
   const token = randomBytes(24).toString('hex');
-  assert.equal(await mintDwdToken({ ...opts, user, fetchImpl: async () => assert.fail('Google token must not reach client') }), 'orgiast-server-side-gws');
+  assert.equal(await mintDwdToken({ ...opts, user, fetchImpl: async () => json({ ok: true, user, accessToken: token, expiresInSec: 3300 }) }), token);
 });
 test('GAS GET はトークンを返さず、POST は秘密一致時のみ発行する', () => {
   let tokenCalls = 0; let aliasCalls = 0;

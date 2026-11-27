@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import {
   GMAIL_COMPOSE_SCOPE, DEFAULT_USER, buildRawMessage, buildForwardRaw, guardRecipients,
   renderChatDisplay, classifyTokenError, probeScopes, createDraft, deleteDraft, runCli,
-  assertGmailBodySendable,
+  assertGmailBodySendable, updateDraft, mintDwdToken,
 } from './gmail-draft.mjs';
 
 const ledger = { domains: ['orgiast.jp', 'toho-kogyo.com'], addresses: ['staff@gmail.com'] };
@@ -1012,4 +1013,94 @@ test('送信前ガード: ORGIAST_HANDBACK_GUARD=0 で無効', () => {
     assertGmailBodySendable('確認をお願いします', { env: { ORGIAST_HANDBACK_GUARD: '0' } }),
     '確認をお願いします',
   );
+});
+
+test('update は body-file・指定user・宛先・件名・CCをPUTで置換し送信しない', async () => {
+  const requests = [];
+  const result = await cli(['--update', 'r-draft', '--to', 'customer@example.com', '--cc', 'copy@example.com', '--subject', '展示会ブースの確認', '--body-file', 'body.txt', '--user', 'shared@orgiast.jp', '--json'], {
+    readFile: p => { assert.equal(p, 'body.txt'); return '新しい本文\n末尾\n'; },
+    getToken: async ({ user, scope }) => { assert.equal(user, 'shared@orgiast.jp'); assert.equal(scope, GMAIL_COMPOSE_SCOPE); return 't'; },
+    fetchImpl: async (url, options) => {
+      requests.push([url, options.method]);
+      const mime = Buffer.from(JSON.parse(options.body).message.raw, 'base64url').toString();
+      assert.match(mime, /From: shared@orgiast.jp/);
+      assert.match(mime, /To: customer@example.com/);
+      assert.match(mime, /Cc: copy@example.com, satou@orgiast.jp/);
+      assert.equal(Buffer.from(mime.split('\r\n\r\n')[1], 'base64').toString(), '新しい本文\r\n末尾\r\n');
+      const words = [...mime.matchAll(/=\?UTF-8\?B\?([^?]*)\?=/gu)];
+      assert.equal(words.map(m => Buffer.from(m[1], 'base64').toString()).join(''), '展示会ブースの確認');
+      return response({ id: 'r-draft', message: { id: 'new-message', threadId: 'thread' } });
+    },
+  });
+  assert.equal(result.code, 0);
+  assert.deepEqual(requests, [['https://gmail.googleapis.com/gmail/v1/users/me/drafts/r-draft', 'PUT']]);
+  assert.deepEqual(JSON.parse(result.output[0]), { action: 'update-draft', user: 'shared@orgiast.jp', ok: true, boothCcAdded: 'satou@orgiast.jp', id: 'r-draft', messageId: 'new-message', threadId: 'thread' });
+});
+
+test('update は内部宛と差し戻し本文とHUMAN-ONLYタグを認証前に拒否', async () => {
+  for (const [to, body, code] of [['staff@orgiast.jp', '本文', 3], [input.to, '確認してください', 4], [input.to, '[HUMAN-ONLY: 現地作業] 本文', 4]]) {
+    const result = await cli(['--update', 'r-draft', '--to', to, '--subject', '件名', '--body', body, '--json'], { env: {} });
+    assert.equal(result.code, code);
+    assert.equal(result.calls + result.tokens, 0);
+  }
+});
+
+test('update は不正ID・操作混在・必須引数不足を無通信で拒否', async () => {
+  for (const argv of [
+    ['--update', '../draft', ...args], ['--update', '', ...args], ['--update'],
+    ...['--send', '--delete', '--forward'].map(flag => ['--update', 'd', flag, 'other', ...args]),
+    ['--update', 'd', '--check', ...args], ['--update', 'd', '--to', input.to, '--body', '本文'],
+    ['--update', 'd', '--subject', '件名', '--body', '本文'], ['--update', 'd', ...args, '--body-file', 'x'],
+  ]) {
+    const result = await cli([...argv, '--json']);
+    assert.equal(result.code, 2, JSON.stringify(argv));
+    assert.equal(result.calls + result.tokens, 0);
+  }
+  for (const id of [undefined, null, '', '../draft', 'a?x=1']) assert.throws(() => updateDraft({ id }), /設定/);
+});
+
+test('update dry-run は無通信で置換予定を返す', async () => {
+  const result = await cli(['--update', 'r-draft', ...args, '--dry-run', '--json']);
+  assert.equal(result.code, 0);
+  assert.equal(result.calls + result.tokens, 0);
+  assert.ok(JSON.parse(result.output[0]).raw);
+});
+
+test('update のAPI失敗は作成へ切り替えず既存エラー分類を保つ', async () => {
+  for (const [status, kind] of [[401, 'unauthorized'], [403, 'forbidden_no_access'], [404, 'error'], [500, 'error']]) {
+    let count = 0;
+    const result = await cli(['--update', 'r-draft', ...args, '--json'], {
+      getToken: async () => 't', fetchImpl: async (_url, options) => { count++; assert.equal(options.method, 'PUT'); return response({ error: 'SECRET' }, status); },
+    });
+    assert.equal(result.code, 1); assert.equal(count, 1);
+    assert.equal(JSON.parse(result.output[0]).errorKind, kind);
+    assert.ok(!result.output[0].includes('SECRET'));
+  }
+});
+
+test('認証はリレー優先、未配備はGWS、鍵ありは従来JWTを維持', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmail-draft-relay-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const keyPath = path.join(dir, 'key.json'), statePath = path.join(dir, 'relay.json');
+  const options = { user: DEFAULT_USER, scope: GMAIL_COMPOSE_SCOPE, keyPath, statePath };
+  assert.equal(await mintDwdToken({ ...options, fetchImpl: () => assert.fail('通信禁止') }), 'orgiast-server-side-gws');
+  const webAppUrl = `https://script.google.com/macros/s/${randomUUID()}/exec`;
+  fs.writeFileSync(statePath, JSON.stringify({ user: DEFAULT_USER, secret: 'fixture-secret', webAppUrl }));
+  const previous = process.env.GOOGLE_SA_KEY;
+  delete process.env.GOOGLE_SA_KEY;
+  try {
+    assert.equal(await mintDwdToken({ ...options, fetchImpl: async (url, init) => {
+      assert.equal(url, webAppUrl); assert.equal(init.method, 'POST');
+      return response({ ok: true, user: DEFAULT_USER, accessToken: 'relay-token', expiresInSec: 300 });
+    } }), 'relay-token');
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    fs.writeFileSync(keyPath, JSON.stringify({ client_email: 'sa@example.com', private_key: privateKey.export({ format: 'pem', type: 'pkcs8' }) }));
+    assert.equal(await mintDwdToken({ ...options, fetchImpl: async (url, init) => {
+      assert.equal(url, 'https://oauth2.googleapis.com/token');
+      const jwt = new URLSearchParams(init.body).get('assertion');
+      const claims = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url'));
+      assert.equal(claims.sub, DEFAULT_USER); assert.equal(claims.scope, GMAIL_COMPOSE_SCOPE);
+      return response({ access_token: 'dwd-token' });
+    } }), 'dwd-token');
+  } finally { if (previous === undefined) delete process.env.GOOGLE_SA_KEY; else process.env.GOOGLE_SA_KEY = previous; }
 });

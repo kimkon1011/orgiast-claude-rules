@@ -94,3 +94,12 @@ test('百瀬の確認済みメール対応は氏名表記差を解決し別IDに
   assert.deepEqual(await getDiscordMembers({ ...options,
     fetchImpl: async () => response(200, [{ user: { ...row.user, id: '999' } }]) }), []);
 });
+
+for (const query of ['加藤愛', '加藤 愛', '加藤　愛']) {
+  test(`加藤愛の空白表記ゆれ: ${query}`, () => {
+    assert.deepEqual(matchMember(query, [{ id: 'kato', global_name: '加藤愛' }]), { id: 'kato', label: '加藤愛' });
+  });
+}
+test('社員名簿側の加藤愛愛も一意な前方一致で引ける', () => {
+  assert.deepEqual(matchMember('加藤愛', [{ id: 'kato', global_name: '加藤愛愛' }]), { id: 'kato', label: '加藤愛愛' });
+});

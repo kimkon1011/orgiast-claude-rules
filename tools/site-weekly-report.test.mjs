@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  weekRange, pctChange, formatPct, sheetInquiries, unansweredRows,
+  weekRange, pctChange, formatPct, sheetInquiries, unansweredRows, isTestInquiry,
   formatWeeklyMessage, formatUnansweredMessage, splitDiscordMessages,
   matchProperty, gmailQueryForSite, gmailToInquiry, summarizeInquiries,
   fallbackSummary, runWeekly, runUnanswered, parseArgs,
@@ -62,6 +62,28 @@ test('unansweredRows skips completed, young, and already notified', () => {
   assert.equal(rows.length, 1);
   assert.equal(rows[0].row, 2);
   assert.equal(rows[0].company, '未完了社');
+});
+
+test('unansweredRows drops test, excluded sales, and older-than-maxAge', () => {
+  const now = Date.parse('2026-11-27T12:00:00+09:00');
+  const maxAgeMs = 14 * 24 * 3600 * 1000;
+  const values = [
+    HEADERS,
+    // 24h超〜14日以内・未完了 → 出る
+    ['2026-11-20 10:00:00', '', '', '', 'ブース見積の件', '対象社', '', '', '', '', '', '', '対応中', '', '', '', ''],
+    // テスト行 → 出ない
+    ['2026-11-20 11:00:00', '', '', '', 'アラート通知テストです', '検証用', '', '', '', '', '', '', '', '', '', '', ''],
+    // 営業除外（excludedInquiry）→ 出ない
+    ['2026-11-20 12:00:00', '', '', '', '突然のご連絡失礼いたします', 'INVERSE HD株式会社', '', '', '', '', '', '', '除外', '', '', '', ''],
+    // 15日以上前 → 出ない
+    ['2026-11-10 10:00:00', '', '', '', '古い未完了', '古社', '', '', '', '', '', '', '対応中', '', '', '', ''],
+    // 24時間以内 → 出ない
+    ['2026-11-27 10:00:00', '', '', '', '新着', '新社', '', '', '', '', '', '', '', '', '', '', ''],
+  ];
+  assert.equal(isTestInquiry(values[2]), true);
+  const rows = unansweredRows(values, { now, maxAgeMs });
+  assert.deepEqual(rows.map(r => r.row), [2]);
+  assert.equal(rows[0].company, '対象社');
 });
 
 test('matchProperty prefers config id then name', () => {
@@ -134,8 +156,9 @@ test('formatWeeklyMessage and splitDiscordMessages', () => {
 test('formatUnansweredMessage', () => {
   const text = formatUnansweredMessage([
     { row: 10, summary: 'x', body: '未対応の要件です', company: 'B社', date: '2026-11-20T01:00:00.000Z', status: '対応中' },
-  ], new Date('2026-11-27T12:00:00+09:00'));
+  ], new Date('2026-11-27T12:00:00+09:00'), { maxAgeDays: 14 });
   assert.match(text, /対応漏れ検知（2026-11-27）/);
+  assert.match(text, /24時間超〜14日以内/);
   assert.match(text, /行10/);
   assert.match(text, /B社/);
 });
@@ -198,10 +221,12 @@ test('runWeekly dry-run with mocks posts nothing and builds text', async () => {
 test('runUnanswered dry-run and dedupe state', async () => {
   const home = tmpHome();
   fs.mkdirSync(path.join(home, '.claude', 'state'), { recursive: true });
-  const config = { channelId: '1382930142011326566', sites: [] };
+  const config = { channelId: '1382930142011326566', unansweredMaxAgeDays: 14, sites: [] };
   const sheetValues = [
     HEADERS,
     ['2026-11-20 10:00:00', '', '', '', '放置案件の本文', '放置社', '', '', '', '', '', '', '対応中', '', '', '', ''],
+    ['2026-10-23 10:00:00', '', '', '', '突然のご連絡失礼いたします', 'INVERSE HD株式会社', '', '', '', '', '', '', '', '', '', '', ''],
+    ['2026-04-12 10:00:00', '', '', '', 'アラート通知テストです', '検証', '', '', '', '', '', '', '', '', '', '', ''],
   ];
   const result = await runUnanswered({ flags: new Set(['dry-run']), dryRun: true }, {
     home,
@@ -217,7 +242,9 @@ test('runUnanswered dry-run and dedupe state', async () => {
     fetchImpl: async () => assert.fail('no fetch'),
   });
   assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].company, '放置社');
   assert.match(result.text, /対応漏れ検知/);
+  assert.match(result.text, /24時間超〜14日以内/);
   assert.equal(result.posted[0].dryRun, true);
 
   const skipped = await runUnanswered({ flags: new Set(['dry-run']), dryRun: true }, {
@@ -242,7 +269,7 @@ test('completed status annotations and exact 24h are not overdue', () => {
   const now = Date.parse('2026-11-27T12:00:00+09:00');
   const row = (date, status) => [date, '', '', '', '相談', 'A社', '', '', '', '', '', '', status];
   const values = [HEADERS, row('2026-11-20', '完了（案件問合せ）'), row('2026-11-20', '完了 (採用)'), row('2026-11-26 12:00:00', ''), row('2026-11-20', '未完了')];
-  assert.deepEqual(unansweredRows(values, { now }).map(r => r.row), [5]);
+  assert.deepEqual(unansweredRows(values, { now, maxAgeMs: 14 * 24 * 3600 * 1000 }).map(r => r.row), [5]);
 });
 
 test('successful AI summaries stay within 30 characters', async () => {

@@ -2,6 +2,7 @@
   "channelId": "1382930142011326566",
   "guildId": "715211007307284530",
   "gmailUser": "seisaku-team@orgiast.jp",
+  "unansweredMaxAgeDays": 14,
   "sites": [
     {
       "id": "orgiast",

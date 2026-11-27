@@ -1,3 +1,4 @@
+import { withTema } from './test-fixtures/tema-record.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -62,6 +63,7 @@ async function cli(argv, overrides = {}) {
   let calls = 0;
   let tokens = 0;
   const code = await runCli({ argv, deps: {
+    consistencyCheck: async () => ({ ok: true }), cleanup: async () => ({ ok: true }),
     stdout: text => output.push(text), loadLedger: () => ledger,
     fetchImpl: async () => { calls++; throw new Error('unexpected fetch'); },
     getToken: async () => { tokens++; throw new Error('unexpected token'); },
@@ -544,7 +546,7 @@ test('送信は指定アカウントの下書きを取得後 compose で送信�
   // readonly + compose（draft取得）+ compose（draftBody/整合性チェック）
   assert.equal(scopes[0], 'https://www.googleapis.com/auth/gmail.readonly');
   assert.ok(scopes.slice(1).every(s => s === 'https://www.googleapis.com/auth/gmail.compose'));
-  assert.deepEqual(JSON.parse(result.output[0]), { action: 'send', user: 'shared@orgiast.jp', ok: true, sentMessageId: 'sent', threadId: 'thread', to: 'Customer <customer@example.com>', subject: '確認' });
+  assert.deepEqual(JSON.parse(result.output[0]), { action: 'send', user: 'shared@orgiast.jp', ok: true, cleanup: { ok: true }, sentMessageId: 'sent', threadId: 'thread', to: 'Customer <customer@example.com>', subject: '確認' });
 });
 test('送信前に To/Cc/Bcc の内部宛を拒否する（表示名・大小文字・台帳アドレス）', async () => {
   for (const name of ['To', 'cC', 'BCC']) {
@@ -991,14 +993,14 @@ test('返信先なし・Message-ID 欠落・ヘッダ注入・取得失敗なら
 
 test('送信前ガード: 人へ作業を戻す文面は止める', () => {
   assert.throws(
-    () => assertGmailBodySendable('くらしのマーケットの仮押さえ先の確認をお願いします。', { env: {} }),
+    () => assertGmailBodySendable(withTema('くらしのマーケットの仮押さえ先の確認をお願いします。'), { env: {} }),
     (error) => error.code === 'HANDBACK_BLOCKED',
   );
   assert.equal(assertGmailBodySendable('西林様へ送り先確認のメールを送済みです。', { env: {} }), '西林様へ送り先確認のメールを送済みです。');
 });
 
 test('送信前ガード: HUMAN-ONLY タグ付きは通るが、タグを外すまで送れない', () => {
-  const body = '[HUMAN-ONLY: 現地作業] 11/29 9:00に現場で鍵の受け取りをお願いします。';
+  const body = withTema('[HUMAN-ONLY: 現地作業] 11/29 9:00に現場で鍵の受け取りをお願いします。');
   assert.throws(
     () => assertGmailBodySendable(body, { env: {} }),
     (error) => error.code === 'HANDBACK_TAG_UNSTRIPPED' && error.stripped.includes('現場で鍵の受け取り'),

@@ -1,3 +1,4 @@
+import { registerDailyPhotoTema } from './lahaina-daily-message.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import { enqueueItems, getItem, saveDraft, decide } from './reply-queue.mjs';
@@ -22,6 +23,7 @@ export async function sendStandingDaily({ date, text, dryRun = false, home = pro
     if (!dryRun) lock = fs.openSync(lockPath, 'wx', 0o600);
     const scope = () => assertStandingScope({ home, date, text, title, now: clock(), calendarPath, sentPath });
     const { evidence } = scope();
+    await registerDailyPhotoTema(text, date, { home, dryRun, addItemImpl: inbox });
     const chat = await findChat(title, readChats);
     if (dryRun) return { dryRun: true, route: 'beeper-standing-approval', date, chatID: chat.id, eligible: true };
     const queued = enqueueItems(home, [{ channel: 'line', thread: chat.id, message: `daily-post:${date}`,

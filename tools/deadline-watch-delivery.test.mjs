@@ -15,6 +15,13 @@ test('朝まとめに期限だけでも先頭へ表示し、夜は追加しな�
   assert.equal(evening.sent,false);
 });
 test('車検の実inbox経路は同じキーを更新し旧askを閉じる', async t => {
+  // Exercise the interactive inbox even when the test runner is an SDK session.
+  const entrypoint = process.env.CLAUDE_CODE_ENTRYPOINT;
+  delete process.env.CLAUDE_CODE_ENTRYPOINT;
+  t.after(() => {
+    if (entrypoint === undefined) delete process.env.CLAUDE_CODE_ENTRYPOINT;
+    else process.env.CLAUDE_CODE_ENTRYPOINT = entrypoint;
+  });
   const home=seat(t), row={id:'V01',name:'V220d',plate:'テスト123'};
   const body='【車検】V220d（テスト123）満了 2026-10-27（8日超過）\n次の一手: 入庫手配';
   await addItem(home,{kind:'ask',source:'vehicle-inspection',text:body});

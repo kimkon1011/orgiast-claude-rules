@@ -198,15 +198,9 @@ export async function defaultNotifyKim({ home, kind, body, key, due, remainingDa
 }
 
 export async function defaultNotifyStaff({ home, assignee, body }) {
-  const script = path.join(toolsDir, 'discord-dm.mjs');
-  if (!fs.existsSync(script)) {
-    const error = new Error('no route');
-    error.code = 'NO_ROUTE';
-    throw error;
-  }
-  return withBodyFile(body, (file) => execFileAsync(process.execPath, [
-    script, assignee, '--body-file', file,
-  ], { encoding: 'utf8', windowsHide: true, timeout: 60_000, env: { ...process.env, ORGIAST_HOME: home } }));
+  const { sendDiscordDm } = await import('./discord-dm.mjs');
+  // 車検証の所在を固定テンプレートだけでは確認できないため、警告例外を監査する。
+  return sendDiscordDm(assignee, body, { home, temaMode: 'warn', source: 'vehicle-inspection-watch' });
 }
 
 async function locateRow({ sheets, sheetId, tab, id }) {

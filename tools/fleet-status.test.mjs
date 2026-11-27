@@ -31,6 +31,22 @@ test('buildFleetStatus picks the newer of server and client poll and marks the s
   assert.equal(clientNewer.pollAt, '2026-10-11T02:45:00.000Z');
 });
 
+test('latest beacon wins in either order and invalid timestamps cannot replace it', () => {
+  const latest=beacon({failing:['latest']});
+  const old=beacon({reportedAt:'2026-10-09T00:00:00Z',failing:['old']});
+  for(const beacons of [[latest,old,beacon({reportedAt:'invalid'})],[old,latest]]) {
+    const row=buildFleetStatus({pcMap,beacons,now:NOW})[0];
+    assert.equal(row.beaconAt,'2026-10-11T02:00:00.000Z');
+    assert.deepEqual(row.failing,['latest']);
+  }
+});
+
+test('newer beacon server poll survives an older separate serverPolls entry',()=>{
+ const row=buildFleetStatus({pcMap,beacons:[beacon({serverPollAt:'2026-10-11T02:59:00Z'})],
+  serverPolls:{'kim-PC':'2026-10-09T00:00:00Z'},now:NOW})[0];
+ assert.equal(row.pollAt,'2026-10-11T02:59:00.000Z');assert.equal(row.pollSource,'server');
+});
+
 test('buildFleetStatus marks stale when beacon or poll is older than 24h or unknown', () => {
   const fresh = buildFleetStatus({ pcMap, beacons: [beacon({ reportedAt: '2026-10-11T02:00:00Z' })], serverPolls: { 'kim-PC': '2026-10-11T02:30:00Z' }, now: NOW })[0];
   assert.equal(fresh.stale, false);

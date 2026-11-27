@@ -14,29 +14,18 @@ import { createSheetsClient, quoteTab } from './lib/sheets-dwd.mjs';
 import { getDriveToken, driveApi } from './lib/drive-auth.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
 import { ensureKimEditor } from './lib/kim-editor.mjs';
+import { prepareTemaSend } from './lib/unattended-tema.mjs';
 import { getAdapter } from './lib/followup-adapters.mjs';
 import { buildPcIdentityIndex, pcMapEntries } from './fleet-pc-identity.mjs';
+import { checkTema, formatTemaFindings, stripTemaRecord } from './lib/tema-check.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.dirname(__dirname);
 const CONFIG_PATH = path.join(REPO_ROOT, 'config', 'followup-ledger.json');
 const FLEET_PC_MAP_PATH = path.join(REPO_ROOT, 'fleet-pc-map.json');
 
-export const HEADERS = Object.freeze([
-  '依頼ID', '依頼先', 'チャネル', 'chatID', '社内外', '依頼内容', '依頼日時',
-  '完了条件', '完了パターン', '確認間隔分', '返答期限', '再催促分', '最大催促回数',
-  '催促回数', 'エスカレーション先', '担当AI', '担当PC', '状態', '状態理由',
-  '最終確認', '最終送信', '最終送信ID', '次回確認', '催促文', '案件', '備考', '更新時刻',
-  '担当者区分', '居住地・最寄り', '作業場所',
-]);
-
-export const FIELDS = Object.freeze([
-  'id', 'to', 'channel', 'chatId', 'scope', 'task', 'requestedAt',
-  'doneWhen', 'donePattern', 'intervalMin', 'dueAt', 'renudgeMin', 'maxNudges',
-  'nudgeCount', 'escalateTo', 'ownerAi', 'ownerPc', 'status', 'statusReason',
-  'lastCheckedAt', 'lastSentAt', 'lastSentId', 'nextCheckAt', 'nudgeText', 'caseName', 'note', 'updatedAt',
-  'assigneeRole', 'assigneeLocation', 'taskSite',
-]);
+import { HEADERS, FIELDS, normalizeRow, rowToValues, valuesToRow } from './lib/followup-schema.mjs';
+export { HEADERS, FIELDS, normalizeRow, rowToValues, valuesToRow } from './lib/followup-schema.mjs';
 
 export const STATUSES = Object.freeze([
   '依頼中', '催促済み', '承認待ち', '完了', '止まった', 'エスカレーション',
@@ -481,6 +470,13 @@ export function rowFromArgs(flags, { now = new Date(), config = DEFAULT_CONFIG }
   // add 直後の check で拾えるよう、次回確認は「今」（間隔先送りしない）
   const nextCheckAt = toIsoJst(now);
   let nudgeText = '';
+  let temaCheck = '';
+  const temaArg = flags['tema-check'];
+  if (temaArg && temaArg !== true) {
+    const candidate = String(temaArg);
+    temaCheck = fs.existsSync(candidate) ? fs.readFileSync(candidate, 'utf8').trim() : candidate.trim();
+  }
+  if (!temaCheck) throw new Error('--tema-check <記録文字列またはファイル> が必要です。例: --tema-check "[TEMA-CHECK] 候補: ... [/TEMA-CHECK]"');
   if (flags['nudge-text-file']) {
     nudgeText = fs.readFileSync(String(flags['nudge-text-file']), 'utf8').trim();
   } else if (flags['nudge-text'] != null && flags['nudge-text'] !== true) {
@@ -517,6 +513,7 @@ export function rowFromArgs(flags, { now = new Date(), config = DEFAULT_CONFIG }
     assigneeRole: String(flags['assignee-role'] || person?.role || ''),
     assigneeLocation: String(flags.location || person?.location || ''),
     taskSite: String(flags.site || ''),
+    temaCheck,
   });
   const constraint = siteConstraint(row);
   if (constraint.blocked) {
@@ -524,23 +521,6 @@ export function rowFromArgs(flags, { now = new Date(), config = DEFAULT_CONFIG }
     row.statusReason = prependReason(constraint.reason, row.statusReason);
   }
   return row;
-}
-
-export function normalizeRow(row = {}) {
-  const out = {};
-  for (const f of FIELDS) out[f] = row[f] ?? (['intervalMin', 'renudgeMin', 'maxNudges', 'nudgeCount'].includes(f) ? 0 : '');
-  out.intervalMin = Number(out.intervalMin || 0);
-  out.renudgeMin = Number(out.renudgeMin || 0);
-  out.maxNudges = Number(out.maxNudges || 0);
-  out.nudgeCount = Number(out.nudgeCount || 0);
-  out.channel = String(out.channel || 'manual');
-  out.scope = String(out.scope || 'internal');
-  out.status = String(out.status || '依頼中');
-  out.statusReason = String(out.statusReason || '');
-  out.assigneeRole = String(out.assigneeRole || '');
-  out.assigneeLocation = String(out.assigneeLocation || '');
-  out.taskSite = String(out.taskSite || '');
-  return out;
 }
 
 export function assertStatusReason(status, reason) {
@@ -558,20 +538,6 @@ export function setRowStatus(row, status, reason = '') {
   return row;
 }
 
-export function rowToValues(row) {
-  const n = normalizeRow(row);
-  return FIELDS.map((f) => {
-    const v = n[f];
-    return v == null ? '' : String(v);
-  });
-}
-
-export function valuesToRow(values = []) {
-  const obj = {};
-  FIELDS.forEach((f, i) => { obj[f] = values[i] ?? ''; });
-  return normalizeRow(obj);
-}
-
 function appendHistory(store, { id, status, reason, messageId = '', pc = '', ai = '', at = toIsoJst() }) {
   store.history = store.history || [];
   store.history.push({
@@ -583,6 +549,11 @@ function withAiFooter(text) {
   const body = String(text || '').trimEnd();
   if (body.includes(AI_FOOTER)) return body;
   return `${body}\n\n${AI_FOOTER}`;
+}
+
+async function withTemaRecord(text, row, ctx) {
+  const combined = row.temaCheck ? `${String(text).trimEnd()}\n\n${row.temaCheck}` : String(text);
+  return (await prepareTemaSend(combined, { home: ctx.adapterDeps?.home, channel: row.channel, to: row.to, source: 'followup-ledger', dryRun: ctx.dryRun || ctx.noNudge, addItemImpl: ctx.adapterDeps?.addItemImpl })).trim();
 }
 
 function defaultNudgeText(row) {
@@ -1013,7 +984,7 @@ async function cmdAdd(flags, ctxBase = {}) {
 async function sendApprovalRequest(row, ctx) {
   const { config, store, dryRun, alerts } = ctx;
   const channelId = config.approvalChannelId || DEFAULT_CONFIG.approvalChannelId;
-  const text = [
+  const text = await withTemaRecord([
     `【followup-ledger 承認依頼】`,
     `依頼ID: ${row.id}`,
     `宛先: ${row.to}`,
@@ -1022,7 +993,7 @@ async function sendApprovalRequest(row, ctx) {
     defaultNudgeText(row),
     ``,
     `OK なら『OK ${row.id}』と返信`,
-  ].join('\n');
+  ].join('\n'), row, ctx);
   if (dryRun) {
     alerts.push(`[dry-run] approval → ${channelId}: ${row.id}`);
     ctx.approvals = ctx.approvals || [];
@@ -1074,7 +1045,7 @@ async function performNudge(row, ctx) {
     return { skipped: true, reason: 'quiet-hours', nextCheckAt: next };
   }
 
-  const text = withAiFooter(defaultNudgeText(row));
+  const text = await withTemaRecord(withAiFooter(defaultNudgeText(row)), row, ctx);
   const adapter = getAdapter(row.channel, ctx.adapterDeps);
 
   // Pre-read: duplicate prevention
@@ -1533,6 +1504,7 @@ async function cmdSeed(flags, ctxBase = {}) {
       'assignee-role': raw.assigneeRole || raw['担当者区分'],
       location: raw.assigneeLocation || raw['居住地・最寄り'],
       site: raw.taskSite || raw['作業場所'],
+      'tema-check': raw.temaCheck || raw['手間チェック記録'],
       upsert: flags.upsert,
       store: flags.store,
     };

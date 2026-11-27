@@ -1,3 +1,4 @@
+import { withTema } from './test-fixtures/tema-record.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -125,11 +126,11 @@ test('resolveGroup: 見つからない場合は部分一致候補を最大5件�
 
 test('送信前ガード: 差し戻し文面は止め、HUMAN-ONLY はタグを外して通す', () => {
   assert.throws(
-    () => applyLineHandbackGuard('仮押さえ先の確認をお願いします。', { env: {} }),
+    () => applyLineHandbackGuard(withTema('仮押さえ先の確認をお願いします。'), { env: {} }),
     (error) => error.code === 'HANDBACK_BLOCKED',
   );
   assert.equal(
-    applyLineHandbackGuard('[HUMAN-ONLY: 現地作業] 11/29 9:00に現場で鍵の受け取りをお願いします。', { env: {} }),
+    applyLineHandbackGuard(withTema('[HUMAN-ONLY: 現地作業] 11/29 9:00に現場で鍵の受け取りをお願いします。'), { env: {} }),
     '11/29 9:00に現場で鍵の受け取りをお願いします。',
   );
   assert.equal(applyLineHandbackGuard('皆さん、お疲れさまです。', { env: {} }), '皆さん、お疲れさまです。');

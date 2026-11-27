@@ -14,3 +14,7 @@
 - 予定の件名には必ずクライアント名と案件名を入れ、管理番号（C0039、D-150、S-xxx など）は末尾の補足だけにする。
 
 - Discordの面談設定などから自動で作る応募者・求人の面談予定は、seisaku-team@orgiast.jp のカレンダーに作り、kim@orgiast.jp は参加者に入れず、kim のカレンダーにも作らない。
+
+- 人が絡む作業は手間チェック必須（ONBOARDING の絶対ルール参照）。
+
+- 全送信直前の7項目は `tools/send-consistency-check.mjs` で照合し、不一致・取得不能なら停止。送信後はsent-registryと元下書き・再送予定を読み戻す。

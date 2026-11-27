@@ -1664,8 +1664,6 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 Cursor の使用量がグロボの追加料金に加算されるため、Cursor Agent と Cursor Cloud Agent は使わない。実装は Codex、Codex が使えないときは `lane-health.json` の次の安いレーン、または各PCの Claude Codeへ回す。
 
-
-
 - **Cursor は既定停止**: `codex-do`、定期ジョブ、修復処理、セットアップは Cursor を起動・導入・ログイン対象にしない。旧互換経路は `CODEX_DO_ENABLE_CURSOR_AGENT=1` を明示した場合だけ有効になる。
 - **Claude Code に残すもの**: 金さん向けの最終判断と、社外文面の最終確認だけ。指示にその旨を書くか、`lane: claude` / `[CLAUDE-FINAL]` を付ける。
 - **既存の利用量・実行件数スクリプト**: ファイルは履歴確認用に残すが、セットアップやフリート同期から定期登録しない。

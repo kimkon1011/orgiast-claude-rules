@@ -3680,8 +3680,9 @@ test('isCursorAgentLoggedIn はフラグ・CURSOR_API_KEY・認証ファイル�
 test('resolveFallbackBackends は既定で cursor-agent を候補に入れない', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
   const options = { executableAvailable: () => true, cursorAgentLoggedIn: true, env: {} };
-  assert.deepEqual(resolveFallbackBackends(dir, { ...options, taskKind: 'implement' }).map((b) => b.name), ['cheap-code:deepseek', 'openrouter-code']);
-  assert.ok(!resolveFallbackBackends(dir, { ...options, taskKind: 'verify' }).map((b) => b.name).includes('cursor-agent'));
+  for (const taskKind of ['implement', 'verify', 'investigate', 'summarize', 'classify']) {
+    assert.ok(!resolveFallbackBackends(dir, { ...options, taskKind }).map((b) => b.name).includes('cursor-agent'), taskKind);
+  }
   assert.ok(resolveFallbackBackends(dir, { ...options, taskKind: 'implement' }).some((b) => b.name === 'openrouter-code'));
 });
 

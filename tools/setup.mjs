@@ -288,11 +288,15 @@ function createConvergeDiag() {
 const diag = createConvergeDiag();
 if (converge) diag.setupProcessHandlers();
 if (converge) { const lock = acquireSetupConvergeLock({ home }); if (!lock.acquired) { console.log(lock.reason); process.exit(0); } process.on('exit', () => lock.release()); }
-if (converge && process.platform === 'win32' && !valueAfter('--manifest')) {
+if (converge && process.platform === 'win32' && process.env.CI !== 'true' && !valueAfter('--manifest')) {
   // 2026-11-25 金さん指示: Cursor は追加料金対象のため、旧定期タスクも converge で解除する。
   for (const script of ['register-cursor-agent-run-counts-task.ps1', 'register-cursor-usage-pace-task.ps1']) {
+    const scriptPath = path.join(scriptDir, script);
+    if (!fs.existsSync(scriptPath)) continue;
     try {
-      execFileSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(scriptDir, script)], { stdio: 'inherit', windowsHide: true });
+      execFileSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
+        stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true,
+      });
     } catch (error) {
       console.warn(`[setup] Cursor legacy task cleanup failed: ${script} (${error?.status ?? 'unknown'})`);
     }

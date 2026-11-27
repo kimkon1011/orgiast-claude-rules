@@ -1233,7 +1233,7 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   // 「成功が速く確実な cheap-code → 最終手段の gemini-cli」に揃える
   // （delegation-health:fallback_chain_timeout 2026-10-27 起票の対処）。
   const ordered = [];
-  if (taskKind === 'implement' || taskKind === 'verify') ordered.push(cursorAgent);
+  if (cursorOptIn && (taskKind === 'implement' || taskKind === 'verify')) ordered.push(cursorAgent);
   ordered.push(ccDeepseek, ccGlm, gemini);
   if (taskKind === 'implement' || taskKind === 'verify') ordered.push(openrouterCode);
   if (taskKind === 'summarize' || taskKind === 'classify') ordered.push(openrouter);

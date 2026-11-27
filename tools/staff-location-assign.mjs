@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_CATALOG = path.join(HERE, '..', 'config', 'staff-locations.json');
@@ -159,12 +160,7 @@ export function runCases(catalog = loadCatalog()) {
   });
 }
 
-function isEntry() {
-  const entry = process.argv[1] && path.resolve(process.argv[1]);
-  return entry && entry === fileURLToPath(import.meta.url);
-}
-
-if (isEntry()) {
+if (isEntry(import.meta.url)) {
   const [, , cmd, ...rest] = process.argv;
   if (cmd === 'evaluate') {
     const jsonFlag = rest.indexOf('--json');

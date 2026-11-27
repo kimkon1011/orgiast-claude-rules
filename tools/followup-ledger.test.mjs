@@ -152,12 +152,13 @@ test('parseArgs / computeDue / decideAction basics', () => {
 
 test('A: overdue no-reply → one nudge with footer; second check no duplicate', async () => {
   const dir = tmpDir('a');
+  const now = new Date('2026-11-27T14:00:00+09:00');
   const mockFile = writeMock(dir, { replies: { 'chat-1': [] }, fail: {}, sent: [] });
-  const config = baseConfig(dir);
+  const config = baseConfig(dir, { quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' } }); // Disable quiet hours for this test
   await withEnv(baseEnv(dir, mockFile), async () => {
-    await main(addArgs('A1'), { config, storeMode: 'local', spawn: () => ({ status: 0, stdout: '[]' }) });
+    await main(addArgs('A1', { due: toIsoJst(new Date(now - 3600000)), requestedAt: toIsoJst(new Date(now - 10800000)) }), { config, storeMode: 'local', now, spawn: () => ({ status: 0, stdout: '[]' }) });
     const r1 = await main(['check', '--store', 'local'], {
-      config, storeMode: 'local', now: new Date(), spawn: () => ({ status: 0, stdout: '[]' }),
+      config, storeMode: 'local', now, spawn: () => ({ status: 0, stdout: '[]' }),
     });
     void r1;
     const mock1 = JSON.parse(fs.readFileSync(mockFile, 'utf8'));
@@ -169,11 +170,11 @@ test('A: overdue no-reply → one nudge with footer; second check no duplicate',
     assert.equal(Number(row1.nudgeCount), 1);
 
     // Force next check immediately
-    row1.nextCheckAt = pastIso(1);
+    row1.nextCheckAt = toIsoJst(new Date(now - 60000));
     fs.writeFileSync(path.join(dir, 'ledger.json'), JSON.stringify(store1, null, 2));
 
     await main(['check', '--store', 'local'], {
-      config, storeMode: 'local', now: new Date(), spawn: () => ({ status: 0, stdout: '[]' }),
+      config, storeMode: 'local', now, spawn: () => ({ status: 0, stdout: '[]' }),
     });
     const mock2 = JSON.parse(fs.readFileSync(mockFile, 'utf8'));
     assert.equal(mock2.sent.length, 1, '二重送信しない');
@@ -302,14 +303,15 @@ test('D: max nudges exceeded → escalate without send', async () => {
 
 test('E: external → approval request; OK <ID> from approver sends', async () => {
   const dir = tmpDir('e');
+  const now = new Date('2026-11-27T14:00:00+09:00');
   const mockFile = writeMock(dir, { replies: { 'chat-ext': [], 'approval-chan': [] }, fail: {}, sent: [] });
-  const config = baseConfig(dir, { approverUserIds: ['approver-1'] });
+  const config = baseConfig(dir, { approverUserIds: ['approver-1'], quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' } }); // Disable quiet hours for this test
   await withEnv(baseEnv(dir, mockFile), async () => {
-    await main(addArgs('E1', { scope: 'external', chat: 'chat-ext', channel: 'beeper' }), {
-      config, storeMode: 'local', spawn: () => ({ status: 0, stdout: '[]' }),
+    await main(addArgs('E1', { scope: 'external', chat: 'chat-ext', channel: 'beeper', due: toIsoJst(new Date(now - 3600000)), requestedAt: toIsoJst(new Date(now - 10800000)) }), {
+      config, storeMode: 'local', now, spawn: () => ({ status: 0, stdout: '[]' }),
     });
     await main(['check', '--store', 'local'], {
-      config, storeMode: 'local', now: new Date(), spawn: () => ({ status: 0, stdout: '[]' }),
+      config, storeMode: 'local', now, spawn: () => ({ status: 0, stdout: '[]' }),
     });
     let store = loadLocalStore(path.join(dir, 'ledger.json'));
     let row = store.items.find((i) => i.id === 'E1');
@@ -326,7 +328,7 @@ test('E: external → approval request; OK <ID> from approver sends', async () =
       ...(mock.replies['approval-chan'] || []),
       {
         id: 'ok1',
-        at: toIsoJst(),
+        at: toIsoJst(new Date(Date.parse(row.lastSentAt) + 1000)),
         from: 'satou',
         authorId: 'approver-1',
         text: 'OK E1',
@@ -335,11 +337,11 @@ test('E: external → approval request; OK <ID> from approver sends', async () =
     ];
     fs.writeFileSync(mockFile, JSON.stringify(mock, null, 2));
     store = loadLocalStore(path.join(dir, 'ledger.json'));
-    store.items[0].nextCheckAt = pastIso(1);
+    store.items[0].nextCheckAt = toIsoJst(new Date(now - 60000));
     fs.writeFileSync(path.join(dir, 'ledger.json'), JSON.stringify(store, null, 2));
 
     await main(['check', '--store', 'local'], {
-      config, storeMode: 'local', now: new Date(), spawn: () => ({ status: 0, stdout: '[]' }),
+      config, storeMode: 'local', now, spawn: () => ({ status: 0, stdout: '[]' }),
     });
     mock = JSON.parse(fs.readFileSync(mockFile, 'utf8'));
     assert.ok(mock.sent.some((s) => s.chatId === 'chat-ext'), '承認後に本体へ送信');
@@ -453,8 +455,9 @@ test('J: fleet-pc-map aliases match (000 / kim-PC / 000KIMPC)', () => {
 
 test('K: seed nudgeText is used as nudge body', async () => {
   const dir = tmpDir('k-seed');
+  const now = new Date('2026-11-27T14:00:00+09:00');
   const mockFile = writeMock(dir, { replies: { 'chat-1': [] }, fail: {}, sent: [] });
-  const config = baseConfig(dir);
+  const config = baseConfig(dir, { quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' } }); // Disable quiet hours for this test
   const seedFile = path.join(dir, 'seed.json');
   fs.writeFileSync(seedFile, JSON.stringify([{
     id: 'K1',
@@ -466,20 +469,20 @@ test('K: seed nudgeText is used as nudge body', async () => {
     doneWhen: 'OK',
     donePattern: 'OK',
     intervalMin: 0,
-    dueAt: pastIso(60),
+    dueAt: toIsoJst(new Date(now - 3600000)),
     renudgeMin: 30,
     maxNudges: 3,
     ownerPc: 'test-pc',
     ownerAi: 'test-ai',
-    requestedAt: pastIso(180),
+    requestedAt: toIsoJst(new Date(now - 10800000)),
     nudgeText: '【専用催促】K1の件です',
   }]));
   await withEnv(baseEnv(dir, mockFile), async () => {
     await main(['seed', '--store', 'local', '--file', seedFile], {
-      config, storeMode: 'local', spawn: () => ({ status: 0, stdout: '[]' }),
+      config, storeMode: 'local', now, spawn: () => ({ status: 0, stdout: '[]' }),
     });
     await main(['check', '--store', 'local'], {
-      config, storeMode: 'local', now: new Date(), spawn: () => ({ status: 0, stdout: '[]' }),
+      config, storeMode: 'local', now, spawn: () => ({ status: 0, stdout: '[]' }),
     });
     const mock = JSON.parse(fs.readFileSync(mockFile, 'utf8'));
     assert.equal(mock.sent.length, 1);
@@ -518,14 +521,15 @@ test('L: add --nudge-text sets nudgeText; renderAlert table has counts', async (
 
 test('M: --all-pcs processes non-owner rows', async () => {
   const dir = tmpDir('m-all');
+  const now = new Date('2026-11-27T14:00:00+09:00');
   const mockFile = writeMock(dir, { replies: { 'chat-1': [] }, fail: {}, sent: [] });
-  const config = baseConfig(dir);
+  const config = baseConfig(dir, { quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' } }); // Disable quiet hours for this test
   await withEnv(baseEnv(dir, mockFile, { FOLLOWUP_PC: 'other-pc' }), async () => {
-    await main(addArgs('M1'), {
-      config, storeMode: 'local', spawn: () => ({ status: 0, stdout: '[]' }),
+    await main(addArgs('M1', { due: toIsoJst(new Date(now - 3600000)), requestedAt: toIsoJst(new Date(now - 10800000)) }), {
+      config, storeMode: 'local', now, spawn: () => ({ status: 0, stdout: '[]' }),
     });
     await main(['check', '--store', 'local', '--all-pcs'], {
-      config, storeMode: 'local', now: new Date(),
+      config, storeMode: 'local', now,
       spawn: () => ({ status: 0, stdout: '[]' }),
       hostname: 'other-pc',
     });

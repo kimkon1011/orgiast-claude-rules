@@ -1,4 +1,4 @@
-# session-status  PC=014  host=014DELL  updated 2026-11-27 12:05 JST
+# session-status  PC=014  host=014DELL  updated 2026-11-27 13:05 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\USER\\.claude\\projects", "configDirectory": "C:\\Users\\USER\\
 - 案件数: 23

@@ -5,6 +5,7 @@
     {"path": "tools/login-health.mjs", "scope": "fleet", "step": "task:login-health", "reason": "全PCのログイン状態を点検する共通タスク"},
     {"path": "tools/register-login-health.mjs", "scope": "fleet", "step": "task:login-health", "reason": "全PCのログイン点検タスク登録入口"},
     {"path": "tools/register-login-health.ps1", "scope": "fleet", "step": "task:login-health", "reason": "全PCのログイン点検タスクを2時間ごとに登録する"},
+    {"path": "tools/register-followup-ledger.ps1", "scope": "fleet", "step": "task:followup-ledger", "reason": "全PCで依頼追跡台帳 followup-ledger の check を15分ごとに登録する（担当PCの行だけ送受信、担当外は見張り）"},
     {"path": "tools/fleet-scope.json", "scope": "fleet", "step": "settings:setup-converge", "reason": "fleet scope 定義ファイル。setup --converge の配布対象判定に使われる"},
     {"path": "tools/lib/change-gate.mjs", "scope": "fleet", "step": "settings:setup-converge", "reason": "全PCの定期処理がLLM起動前に新着・入力変化を判定する共通実行時依存"},
     {"path": "tools/cron-liveness-check.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "SessionStart のcron生存点検を全PCで実行し、担当席だけの配達タスク有無をローカル判定する"},

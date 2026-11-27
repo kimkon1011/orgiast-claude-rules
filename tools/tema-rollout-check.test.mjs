@@ -22,6 +22,14 @@ test('絶対ルールのブロック内だけを読み、3見出しとカード�
   assert.equal(buildBeacon({home,label:'008',identity:{},now}).steps.filter(s=>s.id==='absolute-rules-tema').length,1);
  }
 });
+test('見出しとカード注意が絶対ルールブロックの外にあるだけではokにならない',t=>{
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'tema-rules-outside-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+ fs.mkdirSync(path.join(home,'.claude'));
+ fs.writeFileSync(path.join(home,'.claude','CLAUDE.md'),`<!-- BEGIN: 絶対ルール (自動同期・編集しても上書きされる) -->\n絶対ルール本文\n<!-- END: 絶対ルール -->\n${Object.values(TEMA_RULE_HEADINGS).join('\n')}\n送信済みなのでカードは押さないで\n`);
+ const step=absoluteTemaStep(home);
+ assert.equal(step.status,'fail');
+ assert.equal(step.reason,'tema=no; signin=no; consistency=no; card=no');
+});
 test('4状態×4列、fleet-statusにも同じ結果',()=>{
  const pcMap={'001':{},'002':{},'003':{},'004':{},_note:'除外'};
  const beacons=[{label:'001',reportedAt:new Date(now).toISOString(),steps:[{id:'absolute-rules-tema',status:'ok',reason:'tema=yes; signin=yes; consistency=yes; card=yes'}]}, {label:'002',reportedAt:new Date(now).toISOString(),steps:[{id:'absolute-rules-tema',status:'fail',reason:'tema=yes; signin=no; consistency=no'}]}, {label:'003',reportedAt:new Date(now).toISOString(),steps:[]}];

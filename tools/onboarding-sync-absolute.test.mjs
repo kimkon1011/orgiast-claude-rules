@@ -2,6 +2,8 @@ import test from 'node:test'; import assert from 'node:assert/strict';
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 import { extractAbsoluteRules, placeAbsoluteBlock, mirrorAbsoluteRules, build, makeIndex, applyOnboardingDocuments, COMMON_INDEX_MAX_BYTES, CLAUDE_GROWTH_MAX_BYTES, ABSOLUTE_BEGIN, ABSOLUTE_END } from './onboarding-sync.mjs';
 import { ABSOLUTE_RULES_SYSTEM } from './lib/absolute-rules.mjs';
+import { TEMA_RULE_HEADINGS } from './lib/tema-rules.mjs';
+import { CARD_NOTICE } from './lib/approval-cards.mjs';
 const onboarding = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
 test('ONBOARDING の絶対ルール節を抜き出す（スピード最重視が先頭、バッファ20%が続く）', () => {
   const rules = extractAbsoluteRules(onboarding);
@@ -36,6 +38,8 @@ assert.match(rules, /再送分も含めて通算2回まで/);
   assert.match(rules, /verification_code/);
   assert.match(rules, /両経路が尽きた後の最終手段/);
   assert.match(rules, /当該タスク内でのみ一時的に使い/);
+  for (const heading of Object.values(TEMA_RULE_HEADINGS)) assert.ok(rules.includes(heading), `${heading} が絶対ルールの抽出結果に含まれる`);
+  assert.ok(rules.includes(CARD_NOTICE), `${CARD_NOTICE} が絶対ルールの抽出結果に含まれる`);
   const mirrored = fs.readFileSync(new URL('../rules/absolute-rules.md', import.meta.url), 'utf8');
   assert.match(mirrored, /追記6・2026-11-27/);
 });

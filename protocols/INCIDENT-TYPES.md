@@ -86,3 +86,4 @@
 - 型: テストの相対fixtureが起動cwdに依存し、通知抑止だけでは提案経由の画面起動が残る → internal-audit/deadline-watchのfixtureはfileURLToPathで解決、cost-improve-loopは提案launcherを注入モック化 → ゲート: リポ外cwdで失敗5件の再検証＋kim席・非dry-runのlauncher呼出テスト。
 
 - 型: 送信済み下書きが再確認タスクに残る／日付・CC・最新指示・新着との不一致 → send-consistency共通入口で7項目を照合し、sent-registryと下書き404を読み戻す。
+- 型: 絶対ルールを抽出対象の見出し外に置き、全PCの CLAUDE.md に届かない → ONBOARDING.md の実ファイルから絶対ルールを抽出し、必須語を検査する回帰テストで防止する。

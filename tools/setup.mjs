@@ -16,6 +16,7 @@ import { inspectTaskHiddenActions } from './setup-task-hidden-actions.mjs';
 import { convergeDeadlineTasks } from './setup-deadline-watch.mjs';
 import { convergeNightlyReload } from './setup-nightly-reload.mjs';
 import { convergeNodeRuntimeSecurity } from './setup-node-runtime-security.mjs';
+import { assertStableTaskPath } from './lib/task-path-guard.mjs';
 
 // git 呼び出しを非対話にする（GIT_TERMINAL_PROMPT=0 / GCM_INTERACTIVE=never）。
 // setup.mjs はテストで単体コピーされて実行されるため ./lib/seat-github.mjs を静的 import しない。
@@ -230,11 +231,22 @@ function check(item) {
 function repair(item) {
   if (!item.repair?.length) return false;
   try {
+    // 一時 HOME（codex-do-cursor-agent-home 等）下ではタスク参照先が汚染されるため登録しない。
+    if (item.type === 'scheduled-task') {
+      assertStableTaskPath(home, { label: 'home' });
+      assertStableTaskPath(path.dirname(scriptDir), { label: 'repoRoot' });
+    }
     const [script, ...args] = item.repair;
     const target = path.isAbsolute(script) ? script : path.join(scriptDir, script);
     execFileSync(process.execPath, [target, ...args], { timeout: 120000, stdio: 'ignore', env: { ...process.env, ORGIAST_HOME: home }, windowsHide: true });
     return true;
-  } catch { return true; }
+  } catch (error) {
+    if (/unstable task path|temporary HOME/i.test(String(error?.message || error))) {
+      console.error(`タスク登録をスキップした理由: ${error.message}`);
+      return false;
+    }
+    return true;
+  }
 }
 function inspect(items) { return items.map((item) => { const outcome = check(item); return { item, status: outcome === true ? 'OK' : outcome === null ? 'NOTICE' : 'NG', checked: true, repaired: false }; }); }
 function emit(results) {

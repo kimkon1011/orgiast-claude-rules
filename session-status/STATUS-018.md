@@ -1,7 +1,7 @@
-# session-status  PC=018  host=018  updated 2026-11-27 09:05 JST
+# session-status  PC=018  host=018  updated 2026-11-27 10:05 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 23
+- 案件数: 25
 
 - 018・STATUS・金さん待ち・ターゲットメディア 大橋様へ渡す資料一式（宿題10件中8件）が完成し、Google ドライブに反映済み。残り2件（98回コマ割りの提供可否、大橋様のExcel入手）と、大橋様への送付・学会事務局への送信の承認が金さんの判断待ち。第99回日本胃癌学会総会の申込締切が 2026-11-30 のため、11/27中の判断が必要。・期限2026-11-27（判断）／ 2026-11-30（胃癌学会の申込締切）・次:金さんの承認が出たら、①Driveフォルダを大橋様へ共有設定 ②フォローメール送信（大橋様のメールアドレスの提供が必要）③胃癌学会事務局へ確認メール送信。承認がない間は送信しない。
 - 018・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -21,8 +21,10 @@
 - 018・reply-drafts-1125-minpaku・完了・最終更新 11/25 19:55、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、次の手順が未着手・期限なし・次:なし
 - 018・reply-wait-collect-1125・停止・最終更新 11/25 09:35、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・session-cap-1126・停止・最終更新 11/26 19:27、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
+- 018・STATUS — next-session-stale-check に delegation-health 参照を追加・停止・実装・単体テストまで完了したが、lane-guard がこのセッションの直接ツール実行を全面的に止めており（`Codex は生きている。codex-do へ渡せ`）、commit / PR 作成（`pr-land.mjs`）を実行できない。Codex 無人枠は 8/8 で 2026-11-28 0:00 JST まで回復しない。・期限なし・次:`C:\Users\kimko\.claude\wt-stale-check`（ブランチ `fix/stale-check-delegation-health`）の変更を `node tools/pr-land.mjs --title "fix(next-session-stale-check): delegation-health の finding id
 - 018・t706u-1125・停止・最終更新 11/25 11:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・vercel-limit-1124・停止・最終更新 11/24 17:00、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・状態・完了・倉庫アプリ(GAS)のコマンドキューのトリガーが停止しており、復旧には倉庫アプリを一度開く操作が必要・期限2026-11-27 17:00（初回自動送信の予定時刻）・次:倉庫アプリが開かれたら、投入済みの `cmd_dailysend1126.json` と `cmd_dailytrigger1126.json` が自動実行される。結果ファイル `result_dailysend1126.txt` / `result_dailytrigger1126.txt` を読んで送信成功とトリガー設置を確認する
 - 018・作業ツリー棚卸し（2026-11-26 / PC018 / セッション d783ef91）・完了・`C:\Users\kimko\wt-*` 全 39 件を実データで判定し、着地済み・未着地・未コミット・破損に分類し終えた・期限なし・次:「未コミット残存5本」をブランチへ commit して保全する（削除は kim 承認待ちのため触らない）
+- 018・_handoff-r28-1127・停止・最終更新 11/27 09:19、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・大阪事務所LINEに届く学会郵送物の写真を学会アプリの獲得進行へ自動取込・金さん待ち・学会DB（Supabase project `sdsuucphkzklznlnqhnn`）に migration `0007_postal.sql` が未適用で、`postal_items` / `postal_ingest_state` が 404。適用に必要な DDL 経路が3つとも塞がっている（Management API は org 未加入で 403・期限なし（招待が下り次第着手）・次:招待が通ったら `D:\repos\aujust-gakkai-automation` で `supabase db push` して 0007 を適用 → 表の作成を read-back で確認 → 11/11 に届いた郵送物2件を取り込んで検証。migration 適用は本番反映なので承認後に実行する。決めてほしいこと: https://supabase

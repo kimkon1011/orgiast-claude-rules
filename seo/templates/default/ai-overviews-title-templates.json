@@ -1,0 +1,102 @@
+{
+  "version": "1.0.0",
+  "updated": "2026-11-12",
+  "description": "AI Overviews向けタイトルパターンテンプレート集 — X-0026",
+  "siteName": "オージャスト",
+  "patterns": {
+    "type_a_question_answer": {
+      "name": "質問回答型",
+      "template": "[QUESTION]？[ANSWER] | [SITE_NAME]",
+      "maxLength": 60,
+      "rules": [
+        "質問部は「とは」「なぜ」「どうやって」「いくら」で終える",
+        "答え部は8〜15字で端的に回答",
+        "末尾のサイト名は「 | オージャスト」固定（パイプ前後に半角スペース）"
+      ],
+      "examples": [
+        "展示会ブースの費用は？1坪30〜80万円が相場 | オージャスト",
+        "大阪で展示会ブース制作を頼むには？5つの選び方 | オージャスト",
+        "Re:ブースとは？従来比CO2 77%削減の仕組み | オージャスト"
+      ]
+    },
+    "type_b_numbered_howto": {
+      "name": "数字入りハウツー型",
+      "template": "[NUMBER][ACTION][GOAL]：[DETAIL] | [SITE_NAME]",
+      "maxLength": 65,
+      "rules": [
+        "数字は3〜7（奇数が記憶に残りやすい）",
+        "動詞は「選ぶ」「作る」「決める」など行為動詞",
+        "補足は12〜20字で成果や特徴を追加"
+      ],
+      "examples": [
+        "展示会ブースを7ステップで作る：初めての出展者向け完全ガイド | オージャスト",
+        "予算別に選ぶ！展示会ブース制作会社5社の比較ポイント | オージャスト",
+        "3つのポイントで決める：展示会ブースの工法選び | オージャスト"
+      ]
+    },
+    "type_c_comprehensive_guide": {
+      "name": "完全ガイド型",
+      "template": "[AUDIENCE]のための[TOPIC]完全ガイド[YEAR] | [SITE_NAME]",
+      "maxLength": 60,
+      "rules": [
+        "対象読者を具体的に（「中小企業の」「初出展者の」など）",
+        "年号を含めて鮮度を明示"
+      ],
+      "examples": [
+        "中小企業のための展示会出展完全ガイド2027 | オージャスト",
+        "Re:ブース導入ガイド：サステナブル展示の始め方 | オージャスト",
+        "初出展者のための展示会ブース制作完全ガイド | オージャスト"
+      ]
+    },
+    "type_d_comparison": {
+      "name": "比較型",
+      "template": "[A] vs [B]：[AXIS]で比較 | [SITE_NAME]",
+      "maxLength": 55,
+      "rules": [
+        "比較軸を明確に（コスト・期間・品質など）",
+        "両者の特徴がタイトルから想像できること"
+      ],
+      "examples": [
+        "新製ブース vs Re:ブース：コストと環境性能を徹底比較 | オージャスト",
+        "東京 vs 大阪：展示会ブース制作の地域別特徴 | オージャスト",
+        "木工ブース vs アルミブース：耐久性とデザイン比較 | オージャスト"
+      ]
+    },
+    "type_e_case_study": {
+      "name": "事例型",
+      "template": "[INDUSTRY]の[THEME]事例：[RESULT] | [SITE_NAME]",
+      "maxLength": 55,
+      "rules": [
+        "業種または企業規模を先頭に",
+        "成果は数字で具体的に（％・倍・社など）"
+      ],
+      "examples": [
+        "中小企業の展示会成功事例：リード獲得180%増 | オージャスト",
+        "万博パビリオン級ブース制作の舞台裏 | オージャスト",
+        "IT企業の展示会ブース事例：来場者数3倍 | オージャスト"
+      ]
+    },
+    "type_f_benefit_first": {
+      "name": "メリット先出し型",
+      "template": "[BENEFIT]なら[SERVICE]｜[NOTE] | [SITE_NAME]",
+      "maxLength": 55,
+      "rules": [
+        "メリットは具体的な数字を含むのが理想",
+        "縦棒は全角｜（パイプとの視認性区別）"
+      ],
+      "examples": [
+        "CO2 77%削減ならRe:ブース｜環境展示を実現 | オージャスト",
+        "初出展でも安心：フルサポートの展示会ブース制作 | オージャスト",
+        "短期間3週間で納品！展示会ブース緊急制作 | オージャスト"
+      ]
+    }
+  },
+  "pageMapping": {
+    "/booth": { "primary": "type_a_question_answer", "secondary": "type_c_comprehensive_guide" },
+    "/event": { "primary": "type_c_comprehensive_guide", "secondary": "type_a_question_answer" },
+    "/rebooth": { "primary": "type_d_comparison", "secondary": "type_f_benefit_first" },
+    "/works": { "primary": "type_e_case_study", "secondary": "type_c_comprehensive_guide" },
+    "/company": { "primary": "type_c_comprehensive_guide", "secondary": "type_f_benefit_first" },
+    "/blog/*": { "primary": "type_b_numbered_howto", "secondary": "type_e_case_study" }
+  }
+}

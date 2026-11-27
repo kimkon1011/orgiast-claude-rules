@@ -1,0 +1,55 @@
+{
+  "measuredAt": "2026-11-11T15:49:08.708Z",
+  "period": "past_7_days",
+  "aiOverviews": {
+    "impressions": 245,
+    "clicks": 3,
+    "ctr": 0.0122,
+    "queriesWithAiOverview": [
+      "展示会ブース 費用",
+      "Re:ブース とは",
+      "展示会 出展 メリット"
+    ]
+  },
+  "pages": [
+    {
+      "page": "/booth",
+      "impressions": 431,
+      "clicks": 2,
+      "ctr": 0.004640371229698376,
+      "avgPosition": 15
+    },
+    {
+      "page": "/event",
+      "impressions": 333,
+      "clicks": 7,
+      "ctr": 0.021021021021021023,
+      "avgPosition": 18
+    },
+    {
+      "page": "/rebooth",
+      "impressions": 266,
+      "clicks": 6,
+      "ctr": 0.022556390977443608,
+      "avgPosition": 19
+    },
+    {
+      "page": "/works",
+      "impressions": 233,
+      "clicks": 12,
+      "ctr": 0.05150214592274678,
+      "avgPosition": 5
+    },
+    {
+      "page": "/company",
+      "impressions": 304,
+      "clicks": 20,
+      "ctr": 0.06578947368421052,
+      "avgPosition": 5
+    }
+  ],
+  "faqRichResults": {
+    "impressions": 89,
+    "clicks": 12
+  }
+}

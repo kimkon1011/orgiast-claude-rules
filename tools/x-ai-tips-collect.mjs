@@ -47,8 +47,9 @@ export function parseArgs(args) {
 }
 export function validateConfig(config) {
   config = { ...config, timeoutMs: config.timeoutMs === undefined ? 300000 : config.timeoutMs };
+  config = { ...config, maxBarrenTopics: config.maxBarrenTopics === undefined ? 3 : config.maxBarrenTopics };
   if (!Number.isSafeInteger(config.timeoutMs) || config.timeoutMs < 1 || config.timeoutMs > 2147483647) throw new Error('設定不正: timeoutMs');
-  for (const key of ['maxCalls', 'maxOutputTokens']) if (!Number.isSafeInteger(config[key]) || config[key] < 1) throw new Error(`設定不正: ${key}`);
+  for (const key of ['maxCalls', 'maxOutputTokens', 'maxBarrenTopics']) if (!Number.isSafeInteger(config[key]) || config[key] < 1) throw new Error(`設定不正: ${key}`);
   for (const key of ['maxCostUsd', 'reservePerCallUsd', 'minLikes']) if (!Number.isFinite(config[key]) || config[key] <= 0) throw new Error(`設定不正: ${key}`);
   for (const key of ['inputPerMillion', 'outputPerMillion', 'post', 'profile']) if (!Number.isFinite(config.estimatedRates?.[key]) || config.estimatedRates[key] < 0) throw new Error(`設定不正: estimatedRates.${key}`);
   if (!Array.isArray(config.topics) || config.topics.some(t => !PURPOSES.includes(t.purpose) || typeof t.query !== 'string' || !t.query.trim())) throw new Error('設定不正: topics');
@@ -342,6 +343,7 @@ export async function runCollect(options = {}) {
     let failedTopics = 0;
     let parseFailedTopics = 0;
     let truncated = '';
+    let barrenCount = 0;
     save(state);
     for (let offset = 0; offset < Math.min(topicCount, limit); offset++) {
       const topicIndex = (startTopicIndex + offset) % topicCount;
@@ -352,7 +354,7 @@ export async function runCollect(options = {}) {
       // 未実行の次テーマを予約と同時に保存。全件回れた夜も翌夜の先頭を1つずらす。
       state.nextTopicIndex = (offset === topicCount - 1 ? startTopicIndex + 1 : topicIndex + 1) % topicCount;
       state.night.calls++; state.night.costUsd += config.reservePerCallUsd; calls++; cost += config.reservePerCallUsd; save(state);
-      let usage, actual, failure, signal, serverError = false, awaitingResponse = true, creditBlocked = false, parseFailed = false, usingOpenRouterFallback = false;
+      let usage, actual, failure, signal, serverError = false, awaitingResponse = true, creditBlocked = false, parseFailed = false, usingOpenRouterFallback = false, topicAdded = 0;
       try {
         signal = AbortSignal.timeout(config.timeoutMs);
         const request = buildRequest(topic, now, config);
@@ -409,6 +411,16 @@ acquired += items.length;
           fs.appendFileSync(proposalFile, (existing && !existing.endsWith('\n') ? '\n' : '') + result.added.map(JSON.stringify).join('\n') + '\n');
         }
         added += result.added.length; save(state);
+        topicAdded = result.added.length;
+        if (topicAdded === 0) {
+          barrenCount++;
+          if (barrenCount >= config.maxBarrenTopics) {
+            truncated = `無収穫${config.maxBarrenTopics}連続`;
+            break;
+          }
+        } else {
+          barrenCount = 0;
+        }
       } catch (error) {
         failure = safeError(error.message, [key, openRouterKey]);
         const timedOut = awaitingResponse && (signal?.aborted || ['TimeoutError', 'AbortError'].includes(error.name));
@@ -429,7 +441,7 @@ acquired += items.length;
         }
       }
       finally {
-        if (!dryRun) fs.appendFileSync(path.join(dir, 'runs.jsonl'), JSON.stringify({ at: now.toISOString(), night: date, topic, model: 'grok-4.6', usage, costUsd: actual ?? config.reservePerCallUsd, estimated: usage?.cost_in_usd_ticks == null, reserved: actual == null, status: creditBlocked ? CREDIT_BLOCKED_STATUS : parseFailed ? 'error:parse-failed' : failure ? `error:${failure}` : 'ok', nightCalls: state.night.calls, nightCostUsd: state.night.costUsd }) + '\n');
+        if (!dryRun) fs.appendFileSync(path.join(dir, 'runs.jsonl'), JSON.stringify({ at: now.toISOString(), night: date, topic, model: 'grok-4.6', usage, costUsd: actual ?? config.reservePerCallUsd, estimated: usage?.cost_in_usd_ticks == null, reserved: actual == null, status: creditBlocked ? CREDIT_BLOCKED_STATUS : parseFailed ? 'error:parse-failed' : failure ? `error:${failure}` : 'ok', added: topicAdded, nightCalls: state.night.calls, nightCostUsd: state.night.costUsd, creditBlocked: creditBlocked }) + '\n');
       }
     }
     if (!truncated && failedTopics) throw new Error(`テーマ失敗${failedTopics}件（残りのテーマは処理継続）`);

@@ -386,7 +386,7 @@ test('timeoutMs は未指定時300000、設定値をsignalに渡し、不正値�
   assert.deepEqual(durations, [12345, 300000]);
 });
 test('全テーマを回った翌夜も開始テーマが1つずれる', async t => {
-  const ctx = setup(t); ctx.options.config.topics = defaults.topics;
+  const ctx = setup(t); ctx.options.config.topics = defaults.topics; ctx.options.config.maxBarrenTopics = 999;
   const queries = [];
   ctx.options.fetchFn = async (_url, init) => { queries.push(requestQuery(init)); return response([]); };
   await runCollect(ctx.options);
@@ -666,4 +666,25 @@ test('callOpenRouterGrok の body に web 検索プラグインを含む', async
   assert.equal(sentBody.plugins[0].id, 'web');
   assert.equal(sentBody.plugins[0].engine, 'native');
   assert.equal(sentBody.plugins[0].max_results, 5);
+});
+
+test('3トピック連続で新規追加0件の場合、4トピック目以降のAPI呼び出しが発生しない', async t => {
+  const logs = [];
+  const ctx = setup(t, { log: x => logs.push(x) });
+  ctx.options.config.topics = [
+    { purpose: 'cost', query: 'topic1' },
+    { purpose: 'cost', query: 'topic2' },
+    { purpose: 'cost', query: 'topic3' },
+    { purpose: 'cost', query: 'topic4' },
+    { purpose: 'cost', query: 'topic5' }
+  ];
+  let callCount = 0;
+  ctx.options.fetchFn = async () => {
+    callCount++;
+    return response([]); // 空のレスポンスでadded=0をシミュレート
+  };
+  const result = await runCollect(ctx.options);
+  // 3トピック連続でadded=0なので、4トピック目以降は呼ばれない
+  assert.equal(callCount, 3);
+  assert.match(result.status, /打ち切り:無収穫3連続/);
 });

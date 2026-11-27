@@ -57,7 +57,8 @@ export async function sendDiscordDm(target, body, options = {}) {
   const inbox = isKim;
   if (!options.noCopyKim && !isKim) copyToKim = isKimSeat(home) ? 'in-session' : 'session-inbox';
   // kim 2026-11-26 絶対方針: AIで確認・実行できることを相手に戻す文面は送らない（[HUMAN-ONLY: 理由] 付きだけ通す）。
-  if (!options.skipHandbackGuard) body = await prepareTemaSend(body, { ...options, home, to: target, channel: 'discord', source: options.source || 'discord-dm' });
+  // kim宛は送信ではなくローカルinboxへの登録。検証前の依頼・停止理由も失わず保存する。
+  if (!inbox && !options.skipHandbackGuard) body = await prepareTemaSend(body, { ...options, home, to: target, channel: 'discord', source: options.source || 'discord-dm' });
   body = stripHumanOnly(body);
   const finalBody = isKim || options.noReplyFooter ? String(body ?? '').trimEnd() : withReplyToKimFooter(body);
   const content = safeContent(finalBody);

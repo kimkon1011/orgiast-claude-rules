@@ -532,7 +532,9 @@ export async function addItem(home, options, { drain = true, localOnly = false, 
   }
   if (drain) await drainSpool(home, { execImpl: normalizedOptions.execImpl, signal: normalizedOptions.signal, lockWaitMs });
   if (isInboxNoise(normalizedOptions)) return { id: null, status: 'suppressed', kind: normalizedOptions.kind || 'info' };
-  if (normalizedOptions.text) {
+  // Lost-prompt notifications quote the original user input. Preserve that
+  // evidence verbatim instead of rewriting it using ambient GitHub access.
+  if (normalizedOptions.text && normalizedOptions.source !== 'lost-prompt-scan') {
     normalizedOptions = { ...normalizedOptions, text: await resolvePrRefs(normalizedOptions.text, { execImpl: normalizedOptions.execImpl, stderr: normalizedOptions.stderr || console.error }) };
   }
   const item = create(home, normalizedOptions, lockWaitMs);

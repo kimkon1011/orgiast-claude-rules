@@ -80,5 +80,5 @@ export function checkTema(text, opts = {}) {
 }
 export function formatTemaFindings(findings = []) {
   const lines = findings.map((f) => `・${f.code}: ${f.message}`);
-  return `手間チェック: ${lines.join('\n')}\n直し方: [TEMA-CHECK] に候補比較・手順数・読む量・追加連絡・前提・AI代行・必要ならサインイン経路を記録してください。`;
+  return `手間チェック: ${lines.join('\n')}\n直し方: [TEMA-CHECK] に候補比較・手順数・読む量・追加連絡・前提・AI代行・必要ならサインイン経路を記録してください。node tools/tema-check.mjs --file <下書き> --kind send --save で検証・保存し、tools/gate-remedies.md の tema-check-gate を参照してください。`;
 }

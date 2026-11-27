@@ -123,6 +123,17 @@ test('mail-send-approval-gate: HUMAN-ONLY tag is ignored for body display check'
 import { judgeLive as realJudgeLive } from './mail-send-approval-gate.mjs';
 const judgeLive=(input,deps={})=>realJudgeLive(input,{consistencyCheck:async()=>({ok:true}),...deps});
 const evidence = body => [{type:'assistant',content:body},{type:'user',content:'送ってよいです。'}];
+
+test('unapproved send is denied without collecting remote consistency history', async () => {
+  let checks = 0;
+  const result = await realJudgeLive({
+    tool_name: 'mcp__claude_ai_Gmail__send_message',
+    tool_input: { to: 'fixture@example.test', body: 'unapproved' }, transcript: [],
+  }, { requireContext: false, consistencyCheck: async () => { checks++; } });
+  assert.equal(result.decision, 'block');
+  assert.equal(result.reason, APPROVAL_MISSING_REASON);
+  assert.equal(checks, 0);
+});
 test('unknown body, no transcript and draft ID without readback all block', () => {
   for (const input of [
     {tool_name:'mcp__claude_ai_Gmail__reply',tool_input:{}},

@@ -305,8 +305,9 @@ export async function installSharedMemories(options = {}) {
   }
 
 
-  // Try Drive master first if not offline/fromDir
-  if (!options.fromDir && !options.preferHttpOnly) {
+  // An explicitly supplied HTTP transport selects memoryserve; do not bypass it
+  // with the machine's ambient Drive credentials (including isolated callers).
+  if (!options.fromDir && !options.preferHttpOnly && !options.fetchImpl) {
     try {
       const driveRes = await installFromDriveMaster({ home, sharedDir: dir, emit, ...options });
       if (driveRes) {

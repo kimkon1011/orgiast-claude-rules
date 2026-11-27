@@ -5,6 +5,8 @@ import { findTemaRecord, temaRecordText } from './lib/tema-record-store.mjs';
 import { stripHumanOnly } from './lib/handback-guard.mjs';
 import { checkTema, formatTemaFindings } from './lib/tema-check.mjs';
 
+export const GATE_CONTRACT = {"name":"tema-check-gate","remedies":[{"kind":"repo-file","ref":"tools/gate-remedies.md","section":"tema-check-gate"}]};
+
 export function extractBodyFile(input = {}) {
   const command = String(input?.tool_input?.command || input?.tool_input?.script || '');
   if (!/(?:gmail-draft[^\n]*--send|discord-dm|line-channel|line-group-send|beeper-send)/i.test(command)) return '';

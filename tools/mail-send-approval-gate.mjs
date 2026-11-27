@@ -140,8 +140,12 @@ export async function judgeLive(input, { loadDraft, requireContext = true, consi
       const loaded=await loadDraft(t);
       if(typeof loaded==='string')t.body=loaded;else Object.assign(t,loaded);
     }
+    // Missing approval/context already forbids the send. Return that decision
+    // before collecting remote history so the hook cannot time out into silence.
+    const approval = judge(input, { targets, requireContext });
+    if (approval.decision !== 'pass') return approval;
     for(const t of targets) await consistencyCheck({channel:t.channel || 'gmail',to:t.to,cc:t.cc,subject:t.subject,text:t.body,draftId:t.draftId,account:t.user,threadId:t.threadId},consistencyDeps);
-    return judge(input, { targets, requireContext });
+    return approval;
   } catch (error) { return block(error.message); }
 }
 if (isEntry(import.meta.url)) {

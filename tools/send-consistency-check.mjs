@@ -31,7 +31,7 @@ export function gmailRow(message, extra = {}) {
 }
 async function gmailData(input, deps) {
   const fetchImpl = deps.fetchImpl ?? gwsFetch;
-  const getToken = deps.getToken ?? (await import('./gmail-draft.mjs')).mintDwdToken;
+  const getToken = deps.getToken ?? (await import('./lib/gmail-auth.mjs')).mintDwdToken;
   const sentHistory = [], otherDrafts = [], threadMessages = [], failures = [];
   let refreshThread;
   for (const account of new Set([...ACCOUNTS, ...(input.account ? [input.account] : [])])) {
@@ -80,7 +80,7 @@ async function gmailData(input, deps) {
 // 14日照合とは別の最終検索。キャッシュを使用せず、全送信アカウントを読む。
 export async function readRecentSent(input, deps = {}) {
   const fetchImpl = deps.fetchImpl ?? gwsFetch;
-  const getToken = deps.getToken ?? (await import('./gmail-draft.mjs')).mintDwdToken;
+  const getToken = deps.getToken ?? (await import('./lib/gmail-auth.mjs')).mintDwdToken;
   const now = new Date(input.now ?? Date.now()).getTime();
   const rows = [];
   for (const account of new Set([...ACCOUNTS, ...(input.account ? [input.account] : [])])) {
@@ -179,7 +179,7 @@ export async function collectSendConsistency(input, deps = {}) {
       if(deps.followupRows) remoteRows=await deps.followupRows();
       else {
         const {createSheetsClient}=await import('./lib/sheets-dwd.mjs');
-        const {valuesToRow}=await import('./followup-ledger.mjs');
+        const {valuesToRow}=await import('./lib/followup-schema.mjs');
         const cfg=jsonFile(path.join(root,'config','followup-ledger.json'));
         const sheets=createSheetsClient({fetchImpl:deps.fetchImpl,getToken:deps.sheetsToken,maxRetries:0,max429Retries:0});
         remoteRows=(await sheets.get(cfg.spreadsheetId,"'ledger'!A2:AE")).map(valuesToRow);

@@ -63,6 +63,8 @@ test('再催促アダプタの直接送信も必須検査を通る',async()=>{
  assert.equal((await d.send({chatId:'chat',id:'row'},'本文')).ok,false);assert.equal(sends,0);
 });
 test('承認ゲートも整合性NGの箇所を返す',async()=>{
- const result=await judgeLive({tool_name:'mcp__claude_ai_Gmail__send_message',tool_input:{to:'a@example.com',body:'本文'}},{consistencyCheck:blocked});
+ const result=await judgeLive({tool_name:'mcp__claude_ai_Gmail__send_message',tool_input:{to:'a@example.com',body:'本文'},
+  transcript:[{type:'assistant',content:'本文'},{type:'user',content:'送って'}]},
+  {requireContext:false,consistencyCheck:blocked});
  assert.equal(result.decision,'block');assert.match(result.reason,/UNVERIFIED_sentHistory/);
 });

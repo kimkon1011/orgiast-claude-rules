@@ -1,15 +1,10 @@
 // Node 20+, no external dependencies. Registration is explicit; see the companion PS1.
-import { isKimDelivered } from './lib/kim-delivery.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { request as httpsRequest } from 'node:https';
-import { prepareTemaSend, TEMA_GENERATION_INSTRUCTION } from './lib/unattended-tema.mjs';
-import { stripHumanOnly } from './lib/handback-guard.mjs';
-import { isEntry } from './is-entry.mjs';
 
-import { extractCommitments, hasUnsupportedDoneClaim, trackCommitments } from './autoreply-commitments.mjs';
 
 export function ensureTaskPriority({ platform = process.platform, setPriority = os.setPriority } = {}) {
   if (platform === 'win32') setPriority(0, os.constants.priority.PRIORITY_NORMAL);
@@ -18,21 +13,43 @@ export function ensureTaskPriority({ platform = process.platform, setPriority = 
 // Static imports link the entire dependency graph before any code executes.
 // Normalize inherited task priority BEFORE loading the larger Discord/LLM graph:
 // priority-7 tasks on this PC also stall during module loading, before main().
+// Keep ALL local dependencies behind this barrier, including tema/inbox helpers.
 ensureTaskPriority();
-const [{ readToken }, { notifyKim }, { createLlm, REPLY_CHAIN, IMAGE_REPLY_CHAIN }] = await Promise.all([
+const [
+  { isKimDelivered },
+  { prepareTemaSend, TEMA_GENERATION_INSTRUCTION },
+  { stripHumanOnly },
+  { isEntry },
+  { extractCommitments, hasUnsupportedDoneClaim, trackCommitments },
+  { addItem: addKimInboxItem },
+  { collectReadableContent },
+  { extractSearchTerms, searchRelated },
+  { searchDriveFacts },
+  { LEARN_SYSTEM, learningJson, appendUnique, parseJson, atomicWriteText: atomic },
+  { beeperFetch },
+  { recordRun },
+  { readToken },
+  { notifyKim },
+  { createLlm, REPLY_CHAIN, IMAGE_REPLY_CHAIN },
+] = await Promise.all([
+  import('./lib/kim-delivery.mjs'),
+  import('./lib/unattended-tema.mjs'),
+  import('./lib/handback-guard.mjs'),
+  import('./is-entry.mjs'),
+  import('./autoreply-commitments.mjs'),
+  import('./kim-inbox.mjs'),
+  import('./lib/autoreply-attachments.mjs'),
+  import('./lib/autoreply-related.mjs'),
+  import('./lib/autoreply-drive-facts.mjs'),
+  import('./lib/autoreply-learning.mjs'),
+  import('./beeper-api.mjs'),
+  import('./lib/change-gate.mjs'),
   import('./discord-task-digest.mjs'),
   import('./notify-kim.mjs'),
   import('./lib/autoreply-llm.mjs'),
 ]);
 export { createLlm, REPLY_CHAIN, IMAGE_REPLY_CHAIN };
 
-import { addItem as addKimInboxItem } from './kim-inbox.mjs';
-import { collectReadableContent } from './lib/autoreply-attachments.mjs';
-import { extractSearchTerms, searchRelated } from './lib/autoreply-related.mjs';
-import { searchDriveFacts } from './lib/autoreply-drive-facts.mjs';
-import { LEARN_SYSTEM, learningJson, appendUnique, parseJson, atomicWriteText as atomic } from './lib/autoreply-learning.mjs';
-import { beeperFetch } from './beeper-api.mjs';
-import { recordRun } from './lib/change-gate.mjs';
 export { parseJson };
 
 const HOUR = 3600000;

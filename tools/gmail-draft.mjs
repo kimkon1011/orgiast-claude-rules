@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { proxyCredential, gwsFetch, GWS_MARKER } from './lib/gws-proxy.mjs';
+import { gwsFetch, GWS_MARKER } from './lib/gws-proxy.mjs';
 /**
  * gmail-draft.mjs — 共有アカウントの外部宛 Gmail 下書きを作る常設経路。
  * なぜ要るか: アドホックなコードや手作業をなくし、内部宛はチャット表示に戻す。
@@ -22,7 +22,8 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
-import { defaultDriveKeyPath } from './lib/drive-auth.mjs';
+import { DEFAULT_KEY, mintDwdToken, safeFailure } from './lib/gmail-auth.mjs';
+export { mintDwdToken, classifyTokenError } from './lib/gmail-auth.mjs';
 import { loadLedger, isInternal, extractAddresses, shouldBlockInternal } from './internal-recipient-gmail-guard.mjs';
 import { bodyHash, checkConsistency, statePath, mimeText, render as renderConsistency } from './mail-consistency-check.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
@@ -45,7 +46,6 @@ export const GMAIL_COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compos
 export const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 export const DEFAULT_USER = 'seisaku-team@orgiast.jp';
 // 既定パスはハードコードしない（旧既定値はディレクトリ名の打ち間違いで鍵を見失っていた。2026-10-23 実測）。
-const DEFAULT_KEY = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath();
 const SCOPES = ['gmail.readonly', 'gmail.compose', 'gmail.send'].map(s => `https://www.googleapis.com/auth/${s}`);
 const b64url = value => Buffer.from(value).toString('base64url');
 const configError = () => Object.assign(new Error('設定を確認してください（引数・入力ファイル・SA キー）。'), { errorKind: 'configuration_error' });
@@ -188,66 +188,6 @@ export function guardRecipients(input, ledger) {
   return shouldBlockInternal({ to: input.to, cc: input.cc, bcc: input.bcc }, ledger)
     ? { blocked: true, internal, chatDisplay: renderChatDisplay(input) }
     : { blocked: false, internal: [] };
-}
-
-export function classifyTokenError(json) {
-  return ['invalid_client', 'invalid_grant', 'unauthorized_client'].includes(json?.error) ? 'scope_not_delegated' : 'error';
-}
-
-function safeFailure(error) {
-  if (error?.errorKind === 'seisaku_relay') return { errorKind: 'seisaku_relay', error: error.message };
-  const errorKind = error?.code === 'SEND_CONTEXT_REQUIRED' || error?.errorKind === 'send_context_required' ? 'send_context_required'
-    : error?.errorKind === 'configuration_error' ? 'configuration_error'
-    : error?.errorKind === 'too_large' ? 'too_large'
-    : error?.tokenError ? classifyTokenError(error.detail)
-      : ['scope_not_delegated', 'forbidden_no_access', 'unauthorized'].includes(error?.errorKind) ? error.errorKind : 'error';
-  const messages = {
-    configuration_error: '設定を確認してください（引数・入力ファイル・SA キー）。',
-    scope_not_delegated: 'DWD にこのスコープが未登録。Admin Console で SA client_id に追加が要る',
-    forbidden_no_access: 'Gmail API へのアクセス権限がありません。',
-    unauthorized: 'Gmail API の認証に失敗しました。',
-    too_large: '転送メールが25MBを超えています。',
-    send_context_required: error?.message,
-    error: '処理に失敗しました（認証・通信・API 応答を確認してください）。',
-  };
-  const httpStatus = error?.httpStatus;
-  const suffix = httpStatus !== undefined ? `（HTTP ${httpStatus}）` : '';
-  const result = { errorKind, error: `${messages[errorKind]}${suffix}` };
-  if (error?.httpStatus !== undefined) result.detail = `threads.get ${error.httpStatus}`;
-  return result;
-}
-
-function readKey(keyPath) {
-  try {
-    const key = JSON.parse(fs.readFileSync(keyPath, 'utf8').replace(/^\uFEFF/u, ''));
-    if (typeof key.client_email !== 'string' || !key.client_email || typeof key.private_key !== 'string') throw configError();
-    const privateKey = crypto.createPrivateKey(key.private_key);
-    if (privateKey.asymmetricKeyType !== 'rsa') throw configError();
-    return { client_email: key.client_email, privateKey };
-  } catch { throw configError(); }
-}
-
-export async function mintDwdToken({ user, keyPath = DEFAULT_KEY, scope, fetchImpl = gwsFetch, statePath }) {
-  const relay = proxyCredential({ keyPath, impersonate: user, scope });
-  if (relay !== null) return relay;
-  const key = readKey(keyPath);
-  const now = Math.floor(Date.now() / 1000);
-  const unsigned = `${b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))}.${b64url(JSON.stringify({
-    iss: key.client_email, sub: user, scope, aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600,
-  }))}`;
-  try {
-    const assertion = `${unsigned}.${crypto.sign('RSA-SHA256', Buffer.from(unsigned), key.privateKey).toString('base64url')}`;
-    const res = await fetchImpl('https://oauth2.googleapis.com/token', {
-      method: 'POST', signal: AbortSignal.timeout(25000),
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion }).toString(),
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok || typeof json?.access_token !== 'string' || !json.access_token) {
-      throw Object.assign(new Error('トークン取得失敗'), { errorKind: classifyTokenError(json) });
-    }
-    return json.access_token;
-  } catch (error) { throw Object.assign(new Error(safeFailure(error).error), safeFailure(error)); }
 }
 
 export async function probeScopes({ user = DEFAULT_USER, keyPath = DEFAULT_KEY, scopes = SCOPES, mintToken = mintDwdToken, fetchImpl = gwsFetch }) {

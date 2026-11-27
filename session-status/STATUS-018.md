@@ -1,10 +1,10 @@
-# session-status  PC=018  host=018  updated 2026-11-27 22:05 JST
+# session-status  PC=018  host=018  updated 2026-11-27 23:05 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 26
+- 案件数: 29
 
 - 018・STATUS・金さん待ち・ターゲットメディア 大橋様へ渡す資料一式（宿題10件中8件）が完成し、Google ドライブに反映済み。残り2件（98回コマ割りの提供可否、大橋様のExcel入手）と、大橋様への送付・学会事務局への送信の承認が金さんの判断待ち。第99回日本胃癌学会総会の申込締切が 2026-11-30 のため、11/27中の判断が必要。・期限2026-11-27（判断）／ 2026-11-30（胃癌学会の申込締切）・次:金さんの承認が出たら、①Driveフォルダを大橋様へ共有設定 ②フォローメール送信（大橋様のメールアドレスの提供が必要）③胃癌学会事務局へ確認メール送信。承認がない間は送信しない。
-- 018・cc-pace-1127・停止・最終更新 11/27 21:51、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 018・cc-pace-1127・金さん待ち・PR #2901（claude-pace）は中身もテストも完成し auto-merge 有効。ただし main が 011 の PR #2904（followup-ledger）のテスト4件で赤く、そのため #2901 の CI も赤でマージが止まっている。011 へは fleet-mail で通知済み（delivered 22:37）。・期限なし・次:main が緑に戻ったら #2901 のマージを確認し、018 で register-claude-pace.ps1 と register-claude-pace-report.ps1 を本登録して Get-ScheduledTask で読み戻す。残り8台への登録はグロボが行う。決めてほしいことは特に無い（011 の修正待ち）。
 - 018・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・coel-1125・完了・最終更新 11/25 19:52、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
 - 018・CUserskimkogb-reports・停止・最終更新 11/26 21:08、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -14,11 +14,14 @@
 - 018・furuyakami-app-integrate-1126・完了・最終更新 11/26 10:51、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、金さん待ちの記述あり・期限なし・次:なし
 - 018・furuyakami-container-1126・完了・最終更新 11/26 10:21、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
 - 018・STATUS・完了・RMキャリア（メドレー）様 学会協賛候補4学会の調査を完了し、REPORT.md と DONE.txt を出力した（調査のみ・読み取り専用。社外連絡・支払い・本番変更はなし）・期限第99回日本胃癌学会総会の出展申込締切 2026年11月30日（RMキャリア様へ提案する場合の実質期限）・次:大橋様すり合わせで「空き状況（残小間数）」「広告メニュー」が必要になったら、各運営事務局への照会（＝社外連絡）の可否を金さんに確認してから実施する
+- 018・gakkai-tm-inquiry-1127・進行中・最終更新 11/27 23:03、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
+- 018・gb48-night-fix-1127・停止・最終更新 11/27 23:03、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・handoff-audit-fp・停止・最終更新 11/27 05:31、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・iwata-list-1126・金さん待ち・最終更新 11/25 21:10、STATUS.mdなし、REPORTあり、run.logあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 018・kanbara-offboard-1126・完了・最終更新 11/26 18:37、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 018・STATUS — kim-inbox 未回答 ask の info 化・停止・実装レーンが全滅（openrouter-code は「完了」と報告したが実際の変更ゼロ＝empty_diff、Codex は http_429）。作業ツリー `C:\Users\kimko\wt-kim-inbox-autoprogress`（ブランチ `chore/kim-inbox-autoprogress-info`）は空のまま残置。・期限なし・次:Codex の 429 が明ける時間帯に、指示書 `C:\Users\kimko\gb-reports\codex-kim-inbox-autoprogress.md` をそのまま再投入する。安いレーンの「完了しました」報告は変更ファイル 0 件なら信用しない。先に `tools/auto-progress-daily.mjs` が kim-inbox 登録
 - 018・スマホ通知キューの配信不能対処（作業用018）・進行中・Codex に実装を委譲してバックグラウンド実行中（作業ツリー `C:\Users\kimko\.claude\wt-mobile-push-undeliverable`、ブランチ `feat/mobile-push-undeliverable`）・期限なし・次:Codex の結果を read-back → Windows で `node --test tools/mobile-push-queue.test.mjs` を再実行 → PR 作成・着地
+- 018・PR #2893（auto-session 枠8 の trust 警告除外）の着地・進行中・CI の失敗原因を特定して修正済み。CI run `46008710857` は conclusion success。残り1チェックの完了待ちで、通れば auto-merge が自動で着地させる。・期限なし・次:次セッションで `gh pr view 2893 --repo kimkon1011/orgiast-claude-rules --json state,mergedAt` を1回実行し、`MERGED` を確認する。OPEN のままなら `statusCheckRollup` の FAILURE を見て同じ手順で直す。
 - 018・reply-drafts-1125-minpaku・完了・最終更新 11/25 19:55、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、次の手順が未着手・期限なし・次:なし
 - 018・reply-wait-collect-1125・停止・最終更新 11/25 09:35、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・session-cap-1126・停止・最終更新 11/26 19:27、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める

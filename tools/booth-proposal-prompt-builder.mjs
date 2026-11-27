@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 /**
- * booth-proposal-prompt-builder.mjs — X-0035: プロンプトキャッシュでブース提案を低コスト運用
+ * booth-proposal-prompt-builder.mjs — X-0035/X-0097: プロンプトキャッシュでブース提案を低コスト運用
+ *
+ * X-0097: 標準ブース仕様・素材・施工ガイドラインを最初の固定ブロック（キャッシュ対象）に配置し、
+ * イベント日付やクライアント名は末尾の可変部分とする。同一先頭で連続リクエストして
+ * キャッシュヒットを最大化する。
  *
  * 株式会社オージャストのブース制作において、標準仕様書やイベント運営マニュアルを
  * 固定プレフィックスとしてキャッシュし、クライアント要望や会場情報を後半に追加して
@@ -10,6 +14,7 @@
  *   node tools/booth-proposal-prompt-builder.mjs <clients-json> [--cost-only]
  *   node tools/booth-proposal-prompt-builder.mjs --sample  サンプル表示
  *   node tools/booth-proposal-prompt-builder.mjs --bench   複数案件ベンチマーク
+ *   node tools/booth-proposal-prompt-builder.mjs --verify-cache  キャッシュプレフィックス検証
  *
  * 入力JSON: クライアントの配列
  *   [{
@@ -51,10 +56,75 @@ const COMMON_MATERIALS = `【標準備品・材材】
 - ゴミ箱: 標準サイズ×1
 - パンフレットラック: A4対応×2`;
 
+const CONSTRUCTION_GUIDELINES = `【施工ガイドライン】
+基本手順:
+1. 養生: 会場床・壁の養生を施工前に完了
+2. フレーム組立: アルミフレームを図面通りに組み立て水平確認
+3. パネル取付: 白色パネルをフレームに取り付け目地調整
+4. 床施工: グレーカーペット敷き込み端部処理
+5. 照明・電気: LED設置・配線を会場規定に従う
+6. 什器設置: テーブル・チェア・展示台をレイアウト通りに配置
+7. グラフィック: サイン・パネル・ポスター取付
+8. 最終確認: 安全チェックリストで転倒防止・通路幅・電気容量を点検
+
+搬入出: 展示会規定の時間帯に従い、搬入経路の床保護必須
+注意: 通路側への展示物のはみ出し禁止、火気使用禁止（調理実演除く計画届出必須）、
+高さ3m以上の什器使用時は転倒防止措置、隣接ブースへの影響配慮`;
+
 const COMPANY_INFO = `【制作会社情報】
 株式会社オージャスト / Re:ブース（リユースブース専門ブランド）
 環境配慮型展示ブースの提案・制作・運用をワンストップで提供。
 SDGs対応・コスト削減・短期納品が強み。`;
+
+/**
+ * 固定プレフィックスに可変データ（クライアント名・日付・会場）が
+ * 混入していないことを検証する（X-0097 キャッシュミス防止）
+ * @returns {{ ok: boolean, violations: string[] }}
+ */
+export function verifyCachePrefix() {
+  const prefix = buildStaticPrefix();
+  const violations = [];
+
+  // クライアント名に使われそうな可変パターン
+  const variablePatterns = [
+    { pattern: /\b(株|株式会社|有限会社|合同会社|LLC)\b/, label: '会社組織種別' },
+    { pattern: /\b(様|御中|殿)\b/, label: '敬称' },
+    { pattern: /\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?/, label: '日付パターン（YYYY-MM-DD）' },
+    { pattern: /\b(東京ビッグサイト|幕張メッセ|インテックス大阪|パシフィコ横浜|ポートメッセなごや)\b/, label: '特定会場名' },
+    { pattern: /\b(展示会EXPO|製造EXPO|食品業界展示会|ITフェア|メディカル展|サステナブルフェア)\b/, label: '特定展示会名' },
+  ];
+
+  for (const { pattern, label } of variablePatterns) {
+    if (pattern.test(prefix)) {
+      violations.push(`固定プレフィックスに可変データ（${label}）が含まれています`);
+    }
+  }
+
+  // 静的データの存在確認
+  const requiredStatic = [
+    { pattern: /ロール定義/, label: 'ロール定義' },
+    { pattern: /2\.7m/, label: '標準小間仕様（サイズ）' },
+    { pattern: /アルミフレーム/, label: '標準小間仕様（構造材）' },
+    { pattern: /安全基準/, label: '安全基準' },
+    { pattern: /標準備品/, label: '標準備品' },
+    { pattern: /施工ガイドライン/, label: '施工ガイドライン' },
+    { pattern: /オージャスト/, label: '制作会社情報' },
+  ];
+
+  for (const { pattern, label } of requiredStatic) {
+    if (!pattern.test(prefix)) {
+      violations.push(`固定プレフィックスに静的データ（${label}）が不足しています`);
+    }
+  }
+
+  return {
+    ok: violations.length === 0,
+    violations,
+    prefixLength: prefix.length,
+    estimatedTokens: estimateTokens(prefix),
+    isDeterministic: buildStaticPrefix() === buildStaticPrefix(),
+  };
+}
 
 // ---- キャッシュ効率計算 ----
 
@@ -75,6 +145,7 @@ export function buildStaticPrefix() {
     STANDARD_SPECS,
     SAFETY_RULES,
     COMMON_MATERIALS,
+    CONSTRUCTION_GUIDELINES,
     COMPANY_INFO,
   ].join('\n\n');
 }
@@ -315,13 +386,27 @@ function printBatchBenchmark() {
   console.log('→ 20件で約50%削減。キャッシュTTL（5分）内での連続生成が前提。');
 }
 
+function printVerifyCache() {
+  const result = verifyCachePrefix();
+  console.log('=== X-0097: キャッシュプレフィックス検証 ===\n');
+  console.log(`プレフィックス長: ${result.prefixLength} 文字 (約${result.estimatedTokens}トークン)`);
+  console.log(`決定性: ${result.isDeterministic ? '✅ 毎回同じ' : '❌ 変動あり'}`);
+  console.log(`検証結果: ${result.ok ? '✅ 合格（可変データなし）' : `❌ 違反 ${result.violations.length}件`}`);
+  if (result.violations.length > 0) {
+    console.log('\n違反一覧:');
+    for (const v of result.violations) console.log(`  - ${v}`);
+  }
+  console.log();
+}
+
 function printHelp() {
-  console.log(`booth-proposal-prompt-builder.mjs — X-0035: ブース提案のプロンプトキャッシュ最適化
+  console.log(`booth-proposal-prompt-builder.mjs — X-0035/X-0097: ブース提案のプロンプトキャッシュ最適化
 
 使い方:
-  node tools/booth-proposal-prompt-builder.mjs --sample     サンプル表示
-  node tools/booth-proposal-prompt-builder.mjs --bench      複数案件ベンチマーク
-  node tools/booth-proposal-prompt-builder.mjs <json-file>  案件JSONを読み込み解析
+  node tools/booth-proposal-prompt-builder.mjs --sample        サンプル表示
+  node tools/booth-proposal-prompt-builder.mjs --bench         複数案件ベンチマーク
+  node tools/booth-proposal-prompt-builder.mjs --verify-cache  キャッシュプレフィックス検証
+  node tools/booth-proposal-prompt-builder.mjs <json-file>     案件JSONを読み込み解析
   node tools/booth-proposal-prompt-builder.mjs <json-file> --cost-only  コスト試算のみ
 
 JSON形式:
@@ -334,6 +419,8 @@ if (isEntry(import.meta.url)) {
 
   if (args.includes('--sample')) {
     printSample();
+  } else if (args.includes('--verify-cache')) {
+    printVerifyCache();
   } else if (args.includes('--bench')) {
     printBatchBenchmark();
   } else if (args.length > 0 && !args[0].startsWith('--')) {

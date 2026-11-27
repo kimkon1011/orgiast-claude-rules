@@ -1372,9 +1372,12 @@ export function isBackendExhausted(output, stderr) {
 }
 
 export function isBackendBillingFailure(output, stderr) {
+  // 語マッチは stderr のみ（stdout の生成本文で誤判定しないようにする）。
+  // HTTP ステータス行（401/402/403）は output・stderr 両方で判定する。
+  const stderrOnly = `${stderr || ''}`;
   const merged = `${output || ''}\n${stderr || ''}`;
-  return /prepayment credits are depleted|payment required/i.test(merged)
-    || merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '402'));
+  return /prepayment credits are depleted|payment required|insufficient\s+balance|invalid api key|unauthori[sz]ed|forbidden/i.test(stderrOnly)
+    || merged.split(/\r?\n/).some((line) => ['401', '402', '403'].some((code) => isHttpStatusCodeLine(line, code)));
 }
 
 export function isBackendCliMissing(output, stderr) {
@@ -1412,6 +1415,18 @@ export function primaryTimeoutLimitSecs(timeoutSeconds, explicit, env = process.
 }
 
 export const policyStallCheckMs = (env = {}) => positiveEnv(env.CODEX_DO_POLICY_STALL_CHECK_MS, 5000);
+export const DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS = 60;
+export const deepseekFirstOutputTimeoutSecs = (env = {}) => positiveEnv(
+  env.CODEX_DO_DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS,
+  DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS
+);
+
+export function shouldAbortFirstOutputStall({ elapsedSecs, outputChars, timeoutSecs = DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS } = {}) {
+  return [elapsedSecs, outputChars, timeoutSecs].every(Number.isFinite)
+    && timeoutSecs > 0
+    && elapsedSecs >= timeoutSecs
+    && outputChars === 0;
+}
 
 export function shouldAbortPolicyStall({
   elapsedSecs,
@@ -1855,7 +1870,7 @@ function execute(command, commandArgs, options = {}) {
     }
   }
   return new Promise((resolve) => {
-    let outputChars = 0, output = '', stderr = '', timedOut = false, abortedPolicyStall = false;
+    let outputChars = 0, output = '', stderr = '', timedOut = false, abortedReason = null;
     const callStarted = Date.now();
     const callTimeoutSeconds = Number.isFinite(options.timeoutSecs) && options.timeoutSecs > 0
       ? options.timeoutSecs
@@ -1863,6 +1878,8 @@ function execute(command, commandArgs, options = {}) {
     const spawnOptions = { ...options };
     delete spawnOptions.timeoutSecs;
     delete spawnOptions.abortPolicyStall;
+    delete spawnOptions.firstOutputTimeoutSecs;
+    delete spawnOptions.abortOnBillingFailure;
     // stdio を全て pipe にして TTY を渡さない。TTY 付きで起動すると codex が端末入力を
     // 待ったまま眠り続ける(2026-08-26 に 1日00:57 hang した実害)。
     const child = spawn(command, commandArgs, { ...spawnOptions, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -1870,7 +1887,7 @@ function execute(command, commandArgs, options = {}) {
     const settle = (value) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer); clearTimeout(forceTimer); clearInterval(stallTimer);
+      clearTimeout(timer); clearTimeout(forceTimer); clearTimeout(firstOutputTimer); clearInterval(stallTimer);
       resolve(value);
     };
     const timer = setTimeout(() => {
@@ -1878,11 +1895,11 @@ function execute(command, commandArgs, options = {}) {
       // 予算が停滞判定の閾値秒（300秒）以下だと、締切タイマーが周期判定より先に発火し続け、
       // ポリシー拒否で停滞した試行が outcome=timeout として記録される（2026-11-02 実測: gemini-cli 301秒/予算300秒 out0）。
       // 締切到達時点で経過秒は予算に達しているので、秒数条件だけ外して拒否回数・出力字数で同じ判定を行う。
-      if (!abortedPolicyStall
+      if (!abortedReason
         && options.abortPolicyStall === true
         && process.env.CODEX_DO_POLICY_STALL_ABORT !== '0'
         && shouldAbortPolicyStall({ elapsedSecs: callTimeoutSeconds, outputChars, stderr, minElapsedSecs: 0 })) {
-        abortedPolicyStall = true;
+        abortedReason = 'policy_stall';
       }
       console.error(`\n⏱ ${command} が ${callTimeoutSeconds} 秒で応答を終えなかったので停止しました。--timeout で延長できます`);
       // 猶予タイマーは kill より先に張る。kill が同期で固まっても（旧実装の taskkill は最大10秒）
@@ -1891,7 +1908,7 @@ function execute(command, commandArgs, options = {}) {
       // (2026-10-28 実測: 予算600秒の gemini-cli 試行が 1044 秒)。猶予後は close を待たず打ち切る。
       forceTimer = setTimeout(() => {
         for (const stream of [child.stdin, child.stdout, child.stderr]) { try { stream?.destroy(); } catch { /* 既に閉じている */ } }
-        settle({ status: 124, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null });
+        settle({ status: 124, outputChars, output, stderr, timedOut, aborted: abortedReason });
       }, timeoutKillGraceMs(process.env));
       forceTimer.unref?.();
       killProcessTree(child);
@@ -1900,7 +1917,7 @@ function execute(command, commandArgs, options = {}) {
     // 拒否が閾値秒より前に出尽くして以後 stderr が静かになる停滞（2026-10-23 実測: gemini が拒否3回後に
     // 無音で600秒）は chunk 到着時の判定では再評価されないため、周期タイマーでも同じ判定を回す。
     const checkPolicyStall = () => {
-      if (abortedPolicyStall
+      if (abortedReason
         || options.abortPolicyStall !== true
         || process.env.CODEX_DO_POLICY_STALL_ABORT === '0'
         || !shouldAbortPolicyStall({
@@ -1909,21 +1926,51 @@ function execute(command, commandArgs, options = {}) {
           stderr,
           minElapsedSecs: policyStallMinElapsedSecs(process.env)
         })) return;
-      abortedPolicyStall = true;
+      abortedReason = 'policy_stall';
       console.error(`
 [codex-do] ${command} はポリシー拒否が続き、出力 ${outputChars} 文字のまま停滞したため停止します`);
       killProcessTree(child);
     };
     const stallTimer = setInterval(checkPolicyStall, policyStallCheckMs(process.env));
     stallTimer.unref?.();
-    child.stdout.on('data', (chunk) => { outputChars += chunk.length; output += chunk.toString(); process.stdout.write(chunk); });
+    const abortChild = (reason) => {
+      abortedReason = reason;
+      if (!forceTimer) {
+        forceTimer = setTimeout(() => {
+          for (const stream of [child.stdin, child.stdout, child.stderr]) { try { stream?.destroy(); } catch {} }
+          settle({ status: 3, outputChars, output, stderr, timedOut: false, aborted: abortedReason });
+        }, timeoutKillGraceMs(process.env));
+        forceTimer.unref?.();
+      }
+      killProcessTree(child);
+    };
+    const firstOutputTimeoutSecs = Number(options.firstOutputTimeoutSecs);
+    const firstOutputTimer = Number.isFinite(firstOutputTimeoutSecs) && firstOutputTimeoutSecs > 0
+      ? setTimeout(() => {
+          if (!shouldAbortFirstOutputStall({ elapsedSecs: firstOutputTimeoutSecs, outputChars, timeoutSecs: firstOutputTimeoutSecs })) return;
+          console.error(`\n[codex-do] ${command} は ${firstOutputTimeoutSecs} 秒間、出力が無いため停止します`);
+          abortChild('first_output_stall');
+        }, firstOutputTimeoutSecs * 1000)
+      : null;
+    firstOutputTimer?.unref?.();
+    const abortBillingIfNeeded = () => {
+      if (abortedReason || options.abortOnBillingFailure !== true || !isBackendBillingFailure(output, stderr)) return;
+      console.error(`\n[codex-do] ${command} の課金停止応答を検出したため待たずに停止します`);
+      abortChild('billing');
+    };
+    child.stdout.on('data', (chunk) => {
+      outputChars += chunk.length; output += chunk.toString(); process.stdout.write(chunk);
+      clearTimeout(firstOutputTimer);
+      // stdout の生成本文で誤判定しないため abortBillingIfNeeded は呼ばない
+    });
     child.stderr.on('data', (chunk) => {
       stderr += chunk.toString();
       process.stderr.write(chunk);
       checkPolicyStall();
+      abortBillingIfNeeded();
     });
-    child.on('error', (error) => settle({ status: null, error, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }));
-    child.on('close', (status) => settle({ status: timedOut ? 124 : status, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }));
+    child.on('error', (error) => settle({ status: null, error, outputChars, output, stderr, timedOut, aborted: abortedReason }));
+    child.on('close', (status) => settle({ status: timedOut ? 124 : status, outputChars, output, stderr, timedOut, aborted: abortedReason }));
     // 指示は stdin で渡し、必ず閉じる。閉じないと codex が
     // "Reading additional input from stdin..." のまま永久に待つ。
     const textToSend = options.promptText ?? prompt;
@@ -1938,7 +1985,14 @@ async function executeCheapCode(backend, backendTimeout) {
   fs.writeFileSync(promptFile, prompt, 'utf8');
   try {
     const cheapCode = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cheap-code.mjs');
-    return await execute(process.execPath, [cheapCode, '--provider', backend.provider, '--prompt-file', promptFile, '--cwd', cwd], { cwd, timeoutSecs: backendTimeout });
+    return await execute(process.execPath, [cheapCode, '--provider', backend.provider, '--prompt-file', promptFile, '--cwd', cwd], {
+      cwd,
+      timeoutSecs: backendTimeout,
+      ...(backend.provider === 'deepseek' ? {
+        firstOutputTimeoutSecs: deepseekFirstOutputTimeoutSecs(process.env),
+        abortOnBillingFailure: true,
+      } : {}),
+    });
   } finally {
     try { fs.rmSync(promptFile, { force: true }); } catch {}
   }
@@ -2052,15 +2106,23 @@ async function tryCheapFirstFallback() {
         ? await executeCheapCode(backend, bt)
         : backend.kind === 'cursor-agent'
           ? await executeCursorAgent(backend, { timeoutSecs: bt, promptText: prompt })
-          : await execute('qwen', buildQwenArgs({ timeoutSecs: bt, model: backend.model }), { cwd, env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }), shell: process.platform === 'win32', timeoutSecs: bt });
+          : await execute('qwen', buildQwenArgs({ timeoutSecs: bt, model: backend.model }), {
+            cwd,
+            env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }),
+            shell: process.platform === 'win32',
+            timeoutSecs: bt,
+            firstOutputTimeoutSecs: deepseekFirstOutputTimeoutSecs(process.env),
+            abortOnBillingFailure: true,
+          });
     lastResult = res;
     if (res.status === null) res.status = 1;
     const cliMissing = isBackendCliMissing(res.output, `${res.stderr || ''}\n${res.error?.message || ''}`);
     const billingFailure = isBackendBillingFailure(res.output, res.stderr);
     if (backend.name === 'gemini-cli' && billingFailure) rememberProviderBillingFailure(home, 'gemini');
+    if ((backend.name === 'deepseek' || backend.name === 'cheap-code:deepseek') && billingFailure) rememberProviderBillingFailure(home, 'openrouter');
     const exhausted = isBackendExhausted(res.output, res.stderr) || (backend.kind === 'cheap-code' && res.status === 3);
     const laneIncompatible = isLaneIncompatible(res.output, res.stderr, res.status);
-    const dec = shouldAdvanceToNextBackend({ timedOut: res.timedOut === true, status: res.status, exhausted, cliMissing, aborted: res.aborted === 'policy_stall', laneIncompatible });
+    const dec = shouldAdvanceToNextBackend({ timedOut: res.timedOut === true, status: res.status, exhausted, cliMissing, aborted: Boolean(res.aborted), laneIncompatible });
     const diffNow = dec.outcome === 'ok' && (backend.name === 'openrouter-free' || backend.name === 'openrouter-code')
       ? spawnSync('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' })
       : null;
@@ -2553,7 +2615,9 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
                 cwd,
                 env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }),
                 shell: process.platform === 'win32',
-                timeoutSecs: backendTimeout
+                timeoutSecs: backendTimeout,
+                firstOutputTimeoutSecs: deepseekFirstOutputTimeoutSecs(process.env),
+                abortOnBillingFailure: true,
               });
         const originalStatus = result.status;
         if (result.status === null) {
@@ -2564,10 +2628,11 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
         const cliMissing = isBackendCliMissing(result.output, `${result.stderr || ''}\n${result.error?.message || ''}`);
         const billingFailure = isBackendBillingFailure(result.output, result.stderr);
         if (backend.name === 'gemini-cli' && billingFailure) rememberProviderBillingFailure(home, 'gemini');
+        if ((backend.name === 'deepseek' || backend.name === 'cheap-code:deepseek') && billingFailure) rememberProviderBillingFailure(home, 'openrouter');
         const exhausted = isBackendExhausted(result.output, result.stderr)
           || (backend.kind === 'cheap-code' && result.status === 3);
         const laneIncompatible = isLaneIncompatible(result.output, result.stderr, result.status);
-        const decision = shouldAdvanceToNextBackend({ timedOut: result.timedOut === true, status: result.status, exhausted, cliMissing, aborted: result.aborted === 'policy_stall', laneIncompatible });
+        const decision = shouldAdvanceToNextBackend({ timedOut: result.timedOut === true, status: result.status, exhausted, cliMissing, aborted: Boolean(result.aborted), laneIncompatible });
         const outcome = decision.outcome;
 
         fallbackChain.push({
@@ -2594,7 +2659,14 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
         // deepseek は 10:13:40 に 568秒で成功しているのに、その後の 12:23 も timeout 扱いで
         // 300秒+600秒を再試行）。成功を残せば冷却は実績どおり即座に解ける。
         if (outcome === 'blocked') {
-          console.error(`[codex-do] backend=${backend.name} がポリシー拒否で停滞しているため ${fallbackChain.at(-1).secs} 秒で打ち切って次へ`);
+          const blockedReason = result.aborted === 'policy_stall'
+            ? 'ポリシー拒否で停滞している'
+            : result.aborted === 'first_output_stall'
+              ? '初回出力なしで停滞している'
+              : result.aborted === 'billing'
+                ? '課金停止応答を返した'
+                : 'blocked になった';
+          console.error(`[codex-do] backend=${backend.name} が${blockedReason}ため ${fallbackChain.at(-1).secs} 秒で打ち切って次へ`);
         } else if (outcome === 'timeout') {
           console.error(`[codex-do] backend=${backend.name} が ${backendTimeout} 秒でタイムアウトしたため次のバックエンドへ移ります`);
         } else if (outcome === 'cli_missing') {

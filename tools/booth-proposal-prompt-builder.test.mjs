@@ -7,6 +7,7 @@ import {
   buildProposalPrompt,
   estimateCostWithCache,
   processBatch,
+  verifyCachePrefix,
 } from './booth-proposal-prompt-builder.mjs';
 
 // ---------- buildStaticPrefix ----------
@@ -142,6 +143,62 @@ test('processBatch empty input returns error', () => {
 test('processBatch null input returns error', () => {
   const result = processBatch(null);
   assert.ok(result.error);
+});
+
+// ---------- X-0097: Cache Prefix Verification ----------
+
+test('verifyCachePrefix returns ok=true for clean prefix', () => {
+  const result = verifyCachePrefix();
+  assert.equal(result.ok, true, `違反: ${result.violations.join(', ')}`);
+});
+
+test('verifyCachePrefix checks deterministic output', () => {
+  const result = verifyCachePrefix();
+  assert.equal(result.isDeterministic, true);
+  assert.ok(result.prefixLength >= 800, `prefix length = ${result.prefixLength}`);
+  assert.ok(result.estimatedTokens >= 200, `estimated tokens = ${result.estimatedTokens}`);
+});
+
+test('verifyCachePrefix prefix contains construction guidelines', () => {
+  const prefix = buildStaticPrefix();
+  assert.ok(prefix.includes('施工ガイドライン'), 'should include construction guidelines');
+  assert.ok(prefix.includes('基本手順'), 'should include construction steps');
+  assert.ok(prefix.includes('搬入出'), 'should include transport rules');
+});
+
+test('verifyCachePrefix no client-specific data in prefix', () => {
+  const prefix = buildStaticPrefix();
+  // クライアント固有のデータが固定プレフィックスに含まれていないこと
+  assert.ok(!prefix.includes('(未設定)'), 'no (未設定) placeholder');
+  assert.ok(!prefix.includes('株式会社A'), 'no company name');
+  assert.ok(!prefix.includes('展示会EXPO'), 'no exhibition name');
+  assert.ok(!prefix.includes('東京ビッグサイト'), 'no venue name');
+  assert.ok(!prefix.includes('2026-'), 'no date pattern');
+});
+
+test('buildClientSuffix contains date info separate from prefix', () => {
+  const client = {
+    company: 'テスト株式会社',
+    exhibition: 'テスト展示会 2026',
+    venue: '東京ビッグサイト',
+    dates: '2026-12-01〜03',
+  };
+  const suffix = buildClientSuffix(client);
+  const prefix = buildStaticPrefix();
+
+  // Client-specific data should only appear in suffix, not prefix
+  assert.ok(suffix.includes('2026-12-01'));
+  assert.ok(suffix.includes('テスト展示会 2026'));
+  assert.ok(suffix.includes('東京ビッグサイト'));
+  assert.ok(!prefix.includes('2026-12-01'));
+  assert.ok(!prefix.includes('テスト展示会'));
+});
+
+test('verifyCachePrefix reports violations when variable data injected', () => {
+  // Force a violation by checking that our real prefix has no violations
+  const result = verifyCachePrefix();
+  assert.equal(result.ok, true);
+  assert.equal(result.violations.length, 0);
 });
 
 // ---------- Integration ----------

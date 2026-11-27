@@ -49,6 +49,9 @@ export function orderAnomaliesForRun(anomalies, prior, fingerprintOf = anomalyFi
   const latestByFp = new Map();
   for (const row of prior || []) {
     if (!row?.fingerprint) continue;
+    // skipped は重複排除の記録であり処理の実体ではないため、最新判定から除外する。
+    // （最新が skipped だと、その前の予算切れ deferred が隠れて tier 1 が 0 件になる）
+    if (row.outcome === 'skipped') continue;
     const prev = latestByFp.get(row.fingerprint);
     const rowMs = Date.parse(row.ranAt);
     if (!prev || (!Number.isNaN(rowMs) && rowMs >= (Date.parse(prev.ranAt) || 0))) {

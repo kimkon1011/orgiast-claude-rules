@@ -2,6 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readJson } from './stuck-dialog-state.mjs';
 export function expectationLog(home, exp) {
+  // Ledger/files under ~/.claude (not logs/) — e.g. next-actions.md freshness.
+  if (exp.homeFile) {
+    const file = path.join(home, '.claude', exp.homeFile);
+    if (!fs.existsSync(file)) return null;
+    return { file, mtimeMs: fs.statSync(file).mtimeMs };
+  }
   const dir = path.join(home, '.claude', 'logs');
   const files = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
   const escaped = String(exp.log || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\.log$/, '');

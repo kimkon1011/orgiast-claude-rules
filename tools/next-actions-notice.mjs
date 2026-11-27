@@ -96,6 +96,9 @@ export function runNextActionsNotice(options = {}) {
 
     const age = now.getTime() - generated.date.getTime();
     if (!Number.isFinite(age) || age < 0 || age > MAX_AGE_MS) {
+      // Silent omission hid multi-day outages of OrgiastMorningBatch; surface staleness.
+      const hours = Number.isFinite(age) && age >= 0 ? Math.floor(age / 3600000) : '?';
+      error(`next-actions-notice: 台帳が古い（生成: ${generated.text} / ${hours}時間前）。OrgiastMorningBatch と next-actions.log を確認`);
       if (json) log(JSON.stringify(result));
       return result;
     }

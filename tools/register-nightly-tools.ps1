@@ -50,8 +50,22 @@ foreach ($taskName in $taskNames) {
   $tasks[$taskName] = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 }
 
+# OrgiastMorningBatch hosts open-work + next-actions. If it vanishes, the old
+# path reported "target task missing" and exited without recreating it, so
+# next-actions.md stopped updating with nobody noticing.
+if ($null -eq $tasks['OrgiastMorningBatch'] -and -not $Remove) {
+  if ($DryRun) {
+    Write-Host '[DRY] create OrgiastMorningBatch via register-morning-batch-task.ps1'
+  } else {
+    & (Join-Path $PSScriptRoot 'register-morning-batch-task.ps1')
+    if (-not $?) { throw 'failed to create OrgiastMorningBatch' }
+    $tasks['OrgiastMorningBatch'] = Get-ScheduledTask -TaskName 'OrgiastMorningBatch' -ErrorAction Stop
+    Write-Host (J 'ok:\u4f5c\u6210 OrgiastMorningBatch')
+  }
+}
+
 $presentTaskCount = @($tasks.Values | Where-Object { $null -ne $_ }).Count
-if ($presentTaskCount -eq 0) {
+if ($presentTaskCount -eq 0 -and -not ($DryRun -and -not $Remove)) {
   Write-Host (J 'skip:\u5bfe\u8c61\u30bf\u30b9\u30af\u306a\u3057')
   Write-Host (J 'ok:\u8ffd\u52a00\u4ef6/\u66f4\u65b00\u4ef6/\u30b9\u30ad\u30c3\u30d70\u4ef6')
   exit 0
@@ -60,6 +74,8 @@ if ($presentTaskCount -eq 0) {
 $errors = @()
 foreach ($taskName in $taskNames) {
   if ($null -eq $tasks[$taskName]) {
+    # DryRun can still lack MorningBatch until a real run creates it.
+    if ($DryRun -and $taskName -eq 'OrgiastMorningBatch' -and -not $Remove) { continue }
     $errors += ((J '\u5bfe\u8c61\u30bf\u30b9\u30af\u304c\u3042\u308a\u307e\u305b\u3093') + ": $taskName")
   }
 }
@@ -96,7 +112,7 @@ $removeCount = 0
 # Health needs its own budget: the morning task's PT15M covers all actions.
 # open-work reads nightly-batch logs, not .nightly-health-last.json, so it stays.
 # Register and verify the replacement BEFORE removing the old morning action.
-if (-not $Remove) {
+if (-not $Remove -and $null -ne $tasks['OrgiastMorningBatch']) {
   $morning = $tasks['OrgiastMorningBatch']
   $healthPath = Join-Path $repo 'tools\nightly-health.mjs'
   $healthArguments = @('//nologo', (Quote-TaskArgument $runHidden), (Quote-TaskArgument $node), (Quote-TaskArgument $healthPath)) -join ' '
@@ -141,8 +157,11 @@ if (-not $Remove) {
 # Converge old installations: remediation now has its own 90-minute task.
 $legacyPattern = '(?i)(^|[\\/" ])nightly-health-remediate\.mjs(?=[" ]|$)'
 $morning = $tasks['OrgiastMorningBatch']
-$kept = @($morning.Actions | Where-Object { [string]$_.Arguments -notmatch $legacyPattern })
-if (-not $HealthOnly -and $kept.Count -ne @($morning.Actions).Count) {
+$kept = @()
+if ($null -ne $morning) {
+  $kept = @($morning.Actions | Where-Object { [string]$_.Arguments -notmatch $legacyPattern })
+}
+if ($null -ne $morning -and -not $HealthOnly -and $kept.Count -ne @($morning.Actions).Count) {
   if ($kept.Count -eq 0) { throw 'refusing to remove the last morning action' }
   if (-not $DryRun) {
     Set-ScheduledTask -TaskName 'OrgiastMorningBatch' -Action $kept -ErrorAction Stop | Out-Null
@@ -156,6 +175,14 @@ if (-not $HealthOnly -and $kept.Count -ne @($morning.Actions).Count) {
 
 foreach ($spec in $specs) {
   $task = $tasks[$spec.TaskName]
+  if ($null -eq $task) {
+    if ($DryRun -and $spec.TaskName -eq 'OrgiastMorningBatch' -and -not $Remove) {
+      Write-Host (((J '\u8ffd\u52a0') + ':{0} / {1} (after create)') -f $spec.TaskName, $spec.ScriptName)
+      $addCount++
+      continue
+    }
+    throw ((J '\u5bfe\u8c61\u30bf\u30b9\u30af\u304c\u3042\u308a\u307e\u305b\u3093') + ": $($spec.TaskName)")
+  }
   $scriptPath = Join-Path $repo (Join-Path 'tools' $spec.ScriptName)
   $argumentParts = @('//nologo', (Quote-TaskArgument $runHidden), (Quote-TaskArgument $node), (Quote-TaskArgument $scriptPath))
   $argumentParts += @($spec.ScriptArgs | ForEach-Object { Quote-TaskArgument $_ })

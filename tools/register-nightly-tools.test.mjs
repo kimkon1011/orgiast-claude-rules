@@ -10,6 +10,13 @@ test('existing batch tasks are extended and only the independent health task is 
   assert.match(source, /Set-ScheduledTask[\s\S]*-Action\s*\(@\(\$task\.Actions\)\s*\+\s*\$newAction\)/i);
 });
 
+test('missing OrgiastMorningBatch is recreated instead of hard-failing', () => {
+  assert.match(source, /register-morning-batch-task\.ps1/);
+  assert.match(source, /failed to create OrgiastMorningBatch/);
+  assert.match(source, /\$null -eq \$tasks\['OrgiastMorningBatch'\] -and -not \$Remove/);
+  assert.ok(source.indexOf("register-morning-batch-task.ps1") < source.indexOf('$errors = @()'));
+});
+
 test('dry-run and removal switches are part of the contract', () => {
   assert.match(source, /\[switch\]\$DryRun\b/);
   assert.match(source, /\[switch\]\$Remove\b/);
@@ -57,7 +64,7 @@ test('health has an independent hidden daily budget while open-work stays in mor
 
 test('health migration verifies replacement before removing the old action and supports dry-run', () => {
   const block = source.slice(source.indexOf('# Health needs its own budget'), source.indexOf('# Converge old installations'));
-  assert.match(block, /if \(-not \$Remove\)/);
+  assert.match(block, /if \(-not \$Remove -and \$null -ne \$tasks\['OrgiastMorningBatch'\]\)/);
   assert.match(block, /if \(\$DryRun\) \{[^}]*\} else \{/);
   assert.match(block, /-Force -ErrorAction Stop/);
   assert.ok(block.indexOf("throw 'OrgiastNightlyHealth read-back failed") < block.indexOf('Set-ScheduledTask'));
@@ -72,6 +79,6 @@ test('targeted health repair skips unrelated nightly and deadline registrations'
   assert.match(source, /\[switch\]\$HealthOnly/);
   assert.match(source, /if \(\$HealthOnly\) \{ \$specs = @\(\$specs \| Where-Object \{ \$_.TaskName -eq 'OrgiastMorningBatch'/);
   assert.match(source, /if \(-not \$HealthOnly\) \{\s+& \(Join-Path \$PSScriptRoot 'register-deadline-watch-tasks.ps1'/);
-  assert.match(source, /if \(-not \$HealthOnly -and \$kept.Count/);
+  assert.match(source, /if \(\$null -ne \$morning -and -not \$HealthOnly -and \$kept.Count/);
   assert.match(source, /HealthOnly cannot be combined with Remove/);
 });

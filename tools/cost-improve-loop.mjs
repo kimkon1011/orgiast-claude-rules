@@ -759,7 +759,7 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
         const metricLabel = kind === 'low_delegation' ? '委譲率' : 'Opus比率';
         const investigation = kind === 'low_delegation'
           ? '`node tools/usage-stats.mjs deleg` で監督の出力の出どころ（tool_use/thinking/text の内訳と Bash/Write/Edit の内訳）を実測し、最大の漏れ口を1つだけ特定して、そこに対処すること。推測で新しい層を足さないこと。'
-          : 'モデル利用実績とルーティング規則を実測し、Opusを選んだ最大の経路を1つだけ特定して、品質要件を維持できる安価な主経路へ修正すること。推測で新しい層を足さないこと。';
+          : 'モデル利用実績とルーティング規則を実測し、Opusを選んだ最大の経路を1つだけ特定して、品質要件を維持できる安価な主経路へ修正すること。推測で新しい層を足さないこと。具体的には、tools/routing-table.jsonのextractionカテゴリが安価なモデルを使用するように設定されていることを確認し、その他のカテゴリでも同様の設定が可能かどうかを検討してください。';
         action.specContent = `# AIコスト改善仕様: ${kind} / ${pc}\n\n## 計測事実\n- PC名: ${pc}\n- 指標: ${metricLabel}\n- 実測値: ${(actualValue * 100).toFixed(1)}%\n- 目標値: ${(targetValue * 100).toFixed(1)}%\n- 計測日時: ${violation.measuredAt || now.toISOString()}\n- 根拠: ${evidence}\n\n## 調査と修正\n${investigation}\n\n## 作業範囲と禁止事項\n- **この指標は ${pc} のものであり、いま動いているこのPCのものではない**。ローカルの統計を ${pc} の根拠として使わないこと。直すのは全PCへ配布される共有の仕組み(ルーティング・フック・しきい値)であって、このPC固有の設定ではない。\n- 対象リポジトリ内の、特定した原因に直接関係するファイルだけを変更すること。\n- 既存テストを壊さず、変更対象に対応する \`node --test tools/<file>.test.mjs\` を緑にすること。\n- main へ直接 push しないこと。秘密情報を出力しないこと。\n- 原因を特定できなければ、変更を入れずに「特定できなかった」と報告して終わること。`;
         actions.push(action);
         nextActionsState.push(action);

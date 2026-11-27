@@ -6,26 +6,19 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { getDriveToken } from './lib/drive-auth.mjs';
 import { downloadFileContent, findOrCreateFolder, listFiles, uploadFileContent } from './lib/drive-files.mjs';
 import { FOLDERS } from './hub-push.mjs';
-import { loadPaceConfig, defaultConfigPath, paceLedgerPath } from './claude-pace.mjs';
+import { loadPaceConfig, defaultConfigPath, defaultQueuePath, paceLedgerPath } from './claude-pace.mjs';
 import { summarizeQueue } from './claude-pace-queue.mjs';
 import { readCodexWindows } from './lib/quota-windows.mjs';
 
 export const DAY_TARGET_PCT = 12.9;
 export const REPORT_DIR_NAME = 'claude-pace-reports';
 
-const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-
 export function reportDir(home = process.env.ORGIAST_HOME || os.homedir()) {
   return path.join(home, '.claude', REPORT_DIR_NAME);
-}
-
-export function defaultQueuePath() {
-  return path.join(repoRoot, 'config', 'claude-pace-queue.json');
 }
 
 export function loadQueue(queuePath = defaultQueuePath(), home = process.env.ORGIAST_HOME || os.homedir()) {
@@ -204,12 +197,13 @@ export function buildReport({
   lines.push(`# Claude ペース日次報告（${new Date(nowMs).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })} JST）`);
   lines.push('');
   lines.push('## 結論');
-  const behind = accounts.filter((a) => a.status === 'behind' || (a.dayDeltaVsTarget != null && a.dayDeltaVsTarget < -2));
-  const ahead = accounts.filter((a) => a.status === 'ahead' || a.hold);
+  const behind = accounts.filter((a) => a.status === 'behind');
+  const onpace = accounts.filter((a) => a.status === 'onpace');
+  const ahead = accounts.filter((a) => a.status === 'ahead');
   if (!accounts.length) {
     lines.push('- 計測できたアカウントが無い。Drive / ローカル台帳を確認すること。');
   } else {
-    lines.push(`- 目標着地 ${targetLanding}%（日次目安 ${DAY_TARGET_PCT}%）。遅れ ${behind.length} / 進みすぎ ${ahead.length} / 計測 ${accounts.length} アカウント。`);
+    lines.push(`- 目標着地 ${targetLanding}%（日次目安 ${DAY_TARGET_PCT}%）。遅れ ${behind.length} / ちょうど ${onpace.length} / 進みすぎ ${ahead.length} / 計測 ${accounts.length} アカウント。`);
   }
   lines.push('');
 

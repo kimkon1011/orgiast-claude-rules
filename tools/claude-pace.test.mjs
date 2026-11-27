@@ -1,12 +1,54 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   decidePace,
   pickLeader,
   activePcs,
+  mergeQueue,
+  readQueue,
   WINDOW_MS,
   DEFAULT_STALE_MS,
 } from './claude-pace.mjs';
+
+test('readQueue は runtime が無ければ repo config の28件から初期化する', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-pace-test-'));
+  try {
+    const queue = readQueue(home);
+    assert.equal(queue.tasks.length, 28);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'claude-pace-queue.json'), 'utf8')).tasks.length, 28);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('mergeQueue は runtime の進捗と runtime 専用項目を残し、repo の新項目を未着手で加える', () => {
+  const runtime = {
+    tasks: [
+      { id: 'Q-1', title: 'old', state: '完了', lastRunAt: '2026-11-27T00:00:00Z' },
+      { id: 'Q-NEW-1', state: '未着手' },
+    ],
+    newOfferings: [{ id: 'N-1', state: '完了' }],
+  };
+  const repo = {
+    tasks: [{ id: 'Q-1', title: 'new', state: '未着手' }, { id: 'Q-2', state: '着手' }],
+    newOfferings: [{ id: 'N-1', state: '未着手' }, { id: 'N-2', state: '着手' }],
+  };
+  const beforeRuntime = structuredClone(runtime);
+  const beforeRepo = structuredClone(repo);
+  const merged = mergeQueue(runtime, repo);
+
+  assert.equal(merged.tasks.find((item) => item.id === 'Q-1').state, '完了');
+  assert.equal(merged.tasks.find((item) => item.id === 'Q-1').lastRunAt, '2026-11-27T00:00:00Z');
+  assert.equal(merged.tasks.find((item) => item.id === 'Q-2').state, '未着手');
+  assert.ok(merged.tasks.some((item) => item.id === 'Q-NEW-1'));
+  assert.equal(merged.newOfferings.find((item) => item.id === 'N-1').state, '完了');
+  assert.equal(merged.newOfferings.find((item) => item.id === 'N-2').state, '未着手');
+  assert.deepEqual(runtime, beforeRuntime);
+  assert.deepEqual(repo, beforeRepo);
+});
 
 const HOUR = 3600_000;
 const resetsAt = '2026-12-04T00:00:00.000Z';

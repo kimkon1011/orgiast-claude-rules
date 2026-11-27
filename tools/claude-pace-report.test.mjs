@@ -9,6 +9,26 @@ const config = {
   reportFallbackHost: '018',
 };
 
+test('結論は日次差でなく status をそのまま集計する', () => {
+  const now = Date.parse('2026-11-27T12:00:00.000Z');
+  const onpace = buildReport({
+    snapshots: [{ ts: new Date(now).toISOString(), account: 'a@x', host: '018', sevenDayPct: 20, status: 'onpace' }],
+    config,
+    now,
+  }).markdown;
+  assert.match(onpace, /遅れ 0 \/ ちょうど 1 \/ 進みすぎ 0/);
+
+  const mixed = buildReport({
+    snapshots: [
+      { ts: new Date(now).toISOString(), account: 'behind@x', host: '014', sevenDayPct: 10, status: 'behind' },
+      { ts: new Date(now).toISOString(), account: 'ahead@x', host: '011', sevenDayPct: 80, status: 'ahead' },
+    ],
+    config,
+    now,
+  }).markdown;
+  assert.match(mixed, /遅れ 1 \/ ちょうど 0 \/ 進みすぎ 1/);
+});
+
 test('buildReport がアカウント別・予測着地・措置・次作業・新サービスを含む', () => {
   const now = Date.parse('2026-11-27T22:30:00.000Z');
   const snapshots = [

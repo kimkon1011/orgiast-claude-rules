@@ -34,6 +34,7 @@ export const DEFAULT_STALE_MS = 3 * 3600_000;
 export const LEDGER_KEEP_LINES = 400;
 
 const WEIGHT_TIMEOUT_SEC = { small: 1800, medium: 3600, large: 5400 };
+const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 
@@ -448,9 +449,49 @@ function queuePath(home) {
   return path.join(home, '.claude', 'claude-pace-queue.json');
 }
 
-function readQueue(home) {
-  try { return JSON.parse(fs.readFileSync(queuePath(home), 'utf8')); }
-  catch { return { tasks: [] }; }
+export function defaultQueuePath() {
+  return path.join(repoRoot, 'config', 'claude-pace-queue.json');
+}
+
+function mergeQueueItems(runtimeItems, repoItems) {
+  const runtimeById = new Map((runtimeItems || []).map((item) => [item.id, item]));
+  const repoIds = new Set((repoItems || []).map((item) => item.id));
+  return [
+    ...(repoItems || []).map((repoItem) => {
+      const runtimeItem = runtimeById.get(repoItem.id);
+      return runtimeItem
+        ? { ...repoItem, ...runtimeItem }
+        : { ...repoItem, state: '未着手' };
+    }),
+    ...(runtimeItems || []).filter((item) => !repoIds.has(item.id)).map((item) => ({ ...item })),
+  ];
+}
+
+export function mergeQueue(runtime = {}, repoQueue = {}) {
+  return {
+    ...repoQueue,
+    ...runtime,
+    tasks: mergeQueueItems(runtime.tasks, repoQueue.tasks),
+    newOfferings: mergeQueueItems(runtime.newOfferings, repoQueue.newOfferings),
+  };
+}
+
+export function readQueue(home, repoQueuePath = defaultQueuePath()) {
+  try {
+    const repoQueue = JSON.parse(fs.readFileSync(repoQueuePath, 'utf8'));
+    const runtimePath = queuePath(home);
+    let queue;
+    if (fs.existsSync(runtimePath)) {
+      const runtime = JSON.parse(fs.readFileSync(runtimePath, 'utf8'));
+      queue = mergeQueue(runtime, repoQueue);
+    } else {
+      queue = mergeQueue({}, repoQueue);
+    }
+    writeQueue(home, queue);
+    return queue;
+  } catch {
+    return { tasks: [], newOfferings: [] };
+  }
 }
 
 function writeQueue(home, queue) {

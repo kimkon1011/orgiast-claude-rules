@@ -1,4 +1,4 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-27 12:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-27 13:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
 - 案件数: 57
@@ -43,9 +43,9 @@
 - 011・sales-14sha-1125・完了・最終更新 11/25 11:34、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 011・sales-followup・停止・最終更新 11/27 07:40、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-link-audit-1126・完了・監査・修正・書き出し完了、13:00 毎時本番で動作確認済み・期限2026-11-26 当日・次:なし（毎時ジョブが send-commitments を追跡し stuck-export を毎時更新）
-- 011・営業 次回連絡日・金さん待ち・最終更新 11/27 12:03、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・営業 次回連絡日・金さん待ち・最終更新 11/27 13:03、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・session-1126-hourly・金さん待ち・JACE 藤野様宛ての返信下書きが打合せ前の文面のまま。修正版の送信可否は金さんの承認が要る（kim-inbox ki-20261126081310-6cf5）・期限2026-12-11（先方の返信期限）／着手期限 2026-12-09・次:承認が来たら seisaku-team@ の下書きを修正版に差し替え、gmail-draft.mjs の自動チェックを通して送信し、送信済みを読み戻す
-- 011・session-1205・停止・最終更新 11/27 12:06、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・session-1205・完了・handoff-audit 8件の再発検証が終わった。f61ffeb282843871（P4）は再発0件で、検証済み台帳に追加した（PR #2878 MERGED 2026-11-27T03:24:51Z）。残り7件は 11/26 12:00Z 以降も同じ型の文が出ているため、台帳には入れていない・期限なし・次:next-session.md の8番は完了したので次回は選ばない（無人だと next-session.md を書き換えられず、この STATUS.md に残している）。9〜15番の7件は ID ごとに検証し直しても消えない。直すべきなのは、W 型の「完了待ち」の文が出る仕組みのほう。worktree ~/.claude/wt-handoff-verify-
 - 011・session-cap-1126・金さん待ち・最終更新 11/26 19:36、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・souko-kyujin-1125・完了・最終更新 11/25 19:40、STATUS.mdなし、DONEあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
 - 011・stale-drafts-1126・金さん待ち・放置下書き3件の照合が終わり、kim-inbox ask ki-20261126122734-8029 で送信・修正・削除の判断を待っている（next-session.md への追記は無人起動の権限で拒否された）・期限サポリス様は 2026-11-27 中に返信が望ましい（11/10 に先方の条件提示を受けてから16日経過）・次:返事を受けたら、サポリス様の下書きの候補日を差し替え、gmail-draft.mjs --send のチェックを通して送る／鹿沼CATV様は直すか佐藤さんに任せる／A-DINING様の下書き2件は削除の承認後に消す。決めてほしいこと: 3件それぞれ送る・直す・削除のどれにするか

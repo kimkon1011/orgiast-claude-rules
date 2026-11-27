@@ -9,7 +9,7 @@ import { skipCoolingBackends } from './fallback-backend-health.mjs';
 import { runGeminiBudgetGuard } from './gemini-budget-guard.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, fallbackBackendFailureDomain, shouldSkipFallbackBackendAfterTimeout, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, reserveGeminiLaunch, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, cursorAgentChildEnv, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder, hasAbortCondition, isIntentionalAbort, isHelpInstruction } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, fallbackBackendFailureDomain, shouldSkipFallbackBackendAfterTimeout, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, shouldAbortFirstOutputStall, deepseekFirstOutputTimeoutSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, reserveGeminiLaunch, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, cursorAgentChildEnv, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder, hasAbortCondition, isIntentionalAbort, isHelpInstruction } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -3128,6 +3128,23 @@ test('予算が停滞判定の閾値秒以下でも、締切時に拒否3回・�
   assert.ok(gemini.policyDenials >= 3, `拒否回数が台帳に残る: ${gemini.policyDenials}`);
   assert.equal(gemini.outChars, 0);
   assert.ok(gemini.budgetSecs <= 3, `打ち切った試行の予算: ${gemini.budgetSecs}`);
+});
+
+test('deepseek は 402/401/403 の恒久 API エラーを即時打ち切り対象にする', () => {
+  assert.equal(isBackendBillingFailure('', 'HTTP 402 Payment Required: Insufficient Balance'), true);
+  assert.equal(isBackendBillingFailure('', 'HTTP status 401 Unauthorized: invalid API key'), true);
+  assert.equal(isBackendBillingFailure('', 'HTTP 403 Forbidden'), true);
+  assert.deepEqual(shouldAdvanceToNextBackend({ status: 3, aborted: true }), { advance: true, outcome: 'blocked' });
+});
+
+test('deepseek first-output watchdog は無出力の閾値到達時に打ち切る', () => {
+  assert.equal(deepseekFirstOutputTimeoutSecs({ CODEX_DO_DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS: '0.05' }), 0.05);
+  assert.equal(shouldAbortFirstOutputStall({ elapsedSecs: 60, outputChars: 0, timeoutSecs: 60 }), true);
+});
+
+test('deepseek first-output watchdog は正常な出力があれば打ち切らない', () => {
+  assert.equal(shouldAbortFirstOutputStall({ elapsedSecs: 60, outputChars: 1, timeoutSecs: 60 }), false);
+  assert.equal(shouldAbortFirstOutputStall({ elapsedSecs: 59.9, outputChars: 0, timeoutSecs: 60 }), false);
 });
 
 test('ポリシー停滞の打ち切りは出力400字以上・拒否3回未満・無効化指定では発火しない', () => {

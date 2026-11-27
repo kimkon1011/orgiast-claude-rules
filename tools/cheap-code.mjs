@@ -110,6 +110,8 @@ export function detectUsageLimitText(text) {
 export function detectBillingFailure(text) {
   const value = String(text || '');
   if (/402|insufficient\s+balance/i.test(value)) return 402;
+  if (/401|unauthori[sz]ed|invalid api key/i.test(value)) return 401;
+  if (/403|forbidden/i.test(value)) return 403;
   if (/429|usage\s+limit/i.test(value)) return 429;
   return null;
 }
@@ -335,10 +337,11 @@ async function main(args) {
   // 成功(exit 0)のまま 429 文言が混ざることはないので、失敗時にだけ検査する。
   const failureCode = status !== 0 ? detectBillingFailure(`${stdoutText}\n${stderrText}`) : null;
   if (failureCode) {
-    const until = failureCode === 402 ? Date.now() + 24 * 60 * 60 * 1000 : cooldownUntilFromText(`${stdoutText}\n${stderrText}`, Date.now());
+    const permanentFailure = [401, 402, 403].includes(failureCode);
+    const until = permanentFailure ? Date.now() + 24 * 60 * 60 * 1000 : cooldownUntilFromText(`${stdoutText}\n${stderrText}`, Date.now());
     try {
       appendUsageLedger({ home, provider: billingProvider, model, promptChars: prompt.length, outputChars, secs, ok: false, status: failureCode });
-      writeProviderCooldown({ claudeDir: path.join(home, '.claude'), provider: billingProvider, until, reason: failureCode === 402 ? 'http_402' : 'usage_limit' });
+      writeProviderCooldown({ claudeDir: path.join(home, '.claude'), provider: billingProvider, until, reason: permanentFailure ? `http_${failureCode}` : 'usage_limit' });
       console.error(`[cheap-code] ${config.provider} は利用不可(${failureCode})。provider-cooldown.json に ${new Date(until).toISOString()} まで記録しました。`);
     } catch (error) {
       console.error(`[cheap-code] cooldown 記録に失敗: ${String(error?.message ?? error)}`);

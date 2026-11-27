@@ -1,0 +1,263 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  decidePace,
+  pickLeader,
+  activePcs,
+  WINDOW_MS,
+  DEFAULT_STALE_MS,
+} from './claude-pace.mjs';
+
+const HOUR = 3600_000;
+const resetsAt = '2026-12-04T00:00:00.000Z';
+const resetsMs = Date.parse(resetsAt);
+
+function usage({ seven = 50, five = 10, sevenReset = resetsAt, fiveReset = '2026-11-27T15:00:00.000Z' } = {}) {
+  return {
+    available: true,
+    fiveHour: { utilization: five, resetsAt: fiveReset },
+    sevenDay: { utilization: seven, resetsAt: sevenReset },
+  };
+}
+
+function baseInput(overrides = {}) {
+  // elapsedRatio = 0.5 → target = 45
+  const nowMs = resetsMs - WINDOW_MS / 2;
+  return {
+    nowMs,
+    account: 'cr@orgiast.jp',
+    host: '018',
+    usage: usage({ seven: 50, five: 10 }),
+    sessionCount: 3,
+    runningPaceJobs: 0,
+    accountConcurrency: 2,
+    sessionLaunchCap: 27,
+    sweepActive: false,
+    isLeader: true,
+    ...overrides,
+  };
+}
+
+test('1. 遅れ（actual < target-5）→ launch true', () => {
+  // target=45, actual=30 → delta=-15 → behind
+  const r = decidePace(baseInput({ usage: usage({ seven: 30 }) }));
+  assert.equal(r.status, 'behind');
+  assert.equal(r.launch, true);
+  assert.equal(r.hold, false);
+});
+
+test('2. ちょうど（±5pt）→ launch false, hold false', () => {
+  // target=45, actual=47 → onpace
+  const r = decidePace(baseInput({ usage: usage({ seven: 47 }) }));
+  assert.equal(r.status, 'onpace');
+  assert.equal(r.launch, false);
+  assert.equal(r.hold, false);
+});
+
+test('3. 進みすぎ（target+5 超）→ launch false, hold true', () => {
+  // target=45, actual=55 → ahead
+  const r = decidePace(baseInput({ usage: usage({ seven: 55 }) }));
+  assert.equal(r.status, 'ahead');
+  assert.equal(r.launch, false);
+  assert.equal(r.hold, true);
+});
+
+test('4. 最終6時間で actual 80% → status final-push, launch true', () => {
+  const nowMs = resetsMs - 5 * HOUR;
+  const r = decidePace(baseInput({ nowMs, usage: usage({ seven: 80, five: 20 }) }));
+  assert.equal(r.status, 'final-push');
+  assert.equal(r.launch, true);
+  assert.equal(r.hold, false);
+});
+
+test('5. 最終6時間で actual 96% → status final-push（まだ 97 未満）', () => {
+  const nowMs = resetsMs - 5 * HOUR;
+  const r = decidePace(baseInput({ nowMs, usage: usage({ seven: 96, five: 20 }) }));
+  assert.equal(r.status, 'final-push');
+  assert.ok(r.actual < 97);
+});
+
+test('6. actual 97% → status stopped, launch false, hold true', () => {
+  const r = decidePace(baseInput({ usage: usage({ seven: 97 }) }));
+  assert.equal(r.status, 'stopped');
+  assert.equal(r.launch, false);
+  assert.equal(r.hold, true);
+  assert.ok(r.reasons.includes('hard-stop-97'));
+});
+
+test('7. fiveHour 85% → launch false, reason 5h-safety', () => {
+  const r = decidePace(baseInput({
+    usage: usage({ seven: 30, five: 85 }),
+  }));
+  assert.equal(r.status, 'behind');
+  assert.equal(r.launch, false);
+  assert.ok(r.reasons.includes('5h-safety'));
+});
+
+test('8. usage.available false → status unmeasurable, launch false, hold false', () => {
+  const r = decidePace(baseInput({ usage: { available: false, reason: 'HTTP 429' } }));
+  assert.equal(r.status, 'unmeasurable');
+  assert.equal(r.launch, false);
+  assert.equal(r.hold, false);
+  assert.ok(r.reasons[0].startsWith('measure-failed:'));
+});
+
+test('9. 窓リセット直後（elapsedRatio ほぼ 0, actual 0）→ onpace、projectedLanding は null', () => {
+  const nowMs = resetsMs - WINDOW_MS + 60_000; // 1分経過
+  const r = decidePace(baseInput({ nowMs, usage: usage({ seven: 0 }) }));
+  assert.ok(r.elapsedRatio < 0.01);
+  assert.equal(r.status, 'onpace');
+  assert.equal(r.projectedLanding, null);
+  assert.equal(r.launch, false);
+  assert.equal(r.hold, false);
+});
+
+test('10. 同アカウント2台の調停: pickLeader が時間でローテーションし、非リーダーは launch false', () => {
+  const pcs = ['011', '018'];
+  const t0 = Date.UTC(2026, 10, 27, 0, 0, 0);
+  assert.equal(pickLeader(pcs, t0), '011');
+  assert.equal(pickLeader(pcs, t0 + HOUR), '018');
+  assert.equal(pickLeader(pcs, t0 + 2 * HOUR), '011');
+
+  const nowMs = resetsMs - WINDOW_MS / 2;
+  const r = decidePace(baseInput({
+    nowMs,
+    host: '018',
+    isLeader: false,
+    usage: usage({ seven: 30 }),
+  }));
+  assert.equal(r.status, 'behind');
+  assert.equal(r.launch, false);
+  assert.ok(r.reasons.includes('not-leader'));
+});
+
+test('11. sessionCount 27 以上 → launch false, reason session-cap', () => {
+  const r = decidePace(baseInput({
+    usage: usage({ seven: 30 }),
+    sessionCount: 27,
+  }));
+  assert.equal(r.launch, false);
+  assert.ok(r.reasons.includes('session-cap'));
+});
+
+test('12. 最終90分 かつ sweepActive → launch false, reason defer-to-quota-sweep', () => {
+  const nowMs = resetsMs - 60 * 60_000; // 60min to reset
+  const r = decidePace(baseInput({
+    nowMs,
+    sweepActive: true,
+    usage: usage({ seven: 80, five: 20 }),
+  }));
+  assert.equal(r.status, 'final-push');
+  assert.equal(r.launch, false);
+  assert.ok(r.reasons.includes('defer-to-quota-sweep'));
+});
+
+test('13. nishi 相当（elapsedRatio 0.45 / actual 88）→ ahead かつ hold true かつ needsThrottle true', () => {
+  const nowMs = resetsMs - WINDOW_MS * (1 - 0.45);
+  const r = decidePace(baseInput({
+    nowMs,
+    account: 'nishi@orgiast.jp',
+    host: '004',
+    usage: usage({ seven: 88, five: 40 }),
+  }));
+  assert.ok(Math.abs(r.elapsedRatio - 0.45) < 1e-9);
+  assert.equal(r.status, 'ahead');
+  assert.equal(r.hold, true);
+  assert.equal(r.launch, false);
+  assert.equal(r.needsThrottle, true);
+  assert.ok(r.projectedLanding > 100);
+});
+
+test('activePcs は stale な PC をローテーションから外す', () => {
+  const now = Date.UTC(2026, 10, 27, 12, 0, 0);
+  const live = activePcs(
+    ['011', '018'],
+    { '011': now - 1000, '018': now - DEFAULT_STALE_MS - 1000 },
+    now,
+    DEFAULT_STALE_MS,
+  );
+  assert.deepEqual(live, ['011']);
+  assert.equal(pickLeader(live, now), '011');
+});
+
+test('--force-behind 相当でも hard-stop / 5h-safety / session-cap は効く', () => {
+  assert.equal(decidePace(baseInput({ forceBehind: true, usage: usage({ seven: 97 }) })).status, 'stopped');
+  const five = decidePace(baseInput({ forceBehind: true, usage: usage({ seven: 40, five: 90 }) }));
+  assert.equal(five.launch, false);
+  assert.ok(five.reasons.includes('5h-safety'));
+  const cap = decidePace(baseInput({ forceBehind: true, usage: usage({ seven: 40 }), sessionCount: 30 }));
+  assert.equal(cap.launch, false);
+  assert.ok(cap.reasons.includes('session-cap'));
+});
+
+/** 経過率から nowMs を組み立て、early-window 許容幅の表ケースを検証する */
+function atElapsed(elapsedRatio, seven, overrides = {}) {
+  const nowMs = resetsMs - WINDOW_MS * (1 - elapsedRatio);
+  return decidePace(baseInput({
+    nowMs,
+    usage: usage({ seven }),
+    ...overrides,
+  }));
+}
+
+test('early-window: elapsed 0.067 / actual 13 → onpace（hold しない）', () => {
+  const r = atElapsed(0.067, 13);
+  assert.ok(Math.abs(r.elapsedRatio - 0.067) < 1e-9);
+  assert.ok(Math.abs(r.effectiveTolerance - 9.33) < 0.01);
+  assert.ok(Math.abs(r.target - 6.03) < 0.01);
+  assert.ok(Math.abs(r.deltaPt - 6.97) < 0.01);
+  assert.equal(r.status, 'onpace');
+  assert.equal(r.hold, false);
+});
+
+test('early-window: elapsed 0.27 / actual 30 → onpace（hold しない）', () => {
+  const r = atElapsed(0.27, 30);
+  assert.ok(Math.abs(r.effectiveTolerance - 7.3) < 0.01);
+  assert.ok(Math.abs(r.target - 24.3) < 0.01);
+  assert.ok(Math.abs(r.deltaPt - 5.7) < 0.01);
+  assert.equal(r.status, 'onpace');
+  assert.equal(r.hold, false);
+});
+
+test('early-window: elapsed 0.26 / actual 41 → ahead（hold する）', () => {
+  const r = atElapsed(0.26, 41);
+  assert.ok(Math.abs(r.effectiveTolerance - 7.4) < 0.01);
+  assert.ok(Math.abs(r.target - 23.4) < 0.01);
+  assert.ok(Math.abs(r.deltaPt - 17.6) < 0.01);
+  assert.equal(r.status, 'ahead');
+  assert.equal(r.hold, true);
+});
+
+test('early-window: elapsed 0.45 / actual 88 → ahead（hold する）', () => {
+  const r = atElapsed(0.45, 88);
+  assert.ok(Math.abs(r.effectiveTolerance - 5.5) < 0.01);
+  assert.ok(Math.abs(r.target - 40.5) < 0.01);
+  assert.ok(Math.abs(r.deltaPt - 47.5) < 0.01);
+  assert.equal(r.status, 'ahead');
+  assert.equal(r.hold, true);
+});
+
+test('early-window: elapsed 0.90 / actual 70 → behind（起動する）', () => {
+  const r = atElapsed(0.90, 70);
+  assert.ok(Math.abs(r.effectiveTolerance - 5.0) < 1e-9);
+  assert.ok(Math.abs(r.target - 81.0) < 0.01);
+  assert.ok(Math.abs(r.deltaPt - (-11.0)) < 0.01);
+  assert.equal(r.status, 'behind');
+  assert.equal(r.launch, true);
+  assert.equal(r.hold, false);
+});
+
+test('earlyWindowToleranceBoost: false なら cr 相当（elapsed 0.067 / 13%）は ahead', () => {
+  const r = atElapsed(0.067, 13, { earlyWindowToleranceBoost: false });
+  assert.equal(r.effectiveTolerance, 5);
+  assert.equal(r.status, 'ahead');
+  assert.equal(r.hold, true);
+});
+
+test('effectiveTolerance が返り値に入る', () => {
+  const r = decidePace(baseInput());
+  assert.equal(typeof r.effectiveTolerance, 'number');
+  assert.ok(Number.isFinite(r.effectiveTolerance));
+  // elapsedRatio=0.5 → max(5, 5)=5
+  assert.equal(r.effectiveTolerance, 5);
+});

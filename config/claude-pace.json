@@ -1,0 +1,22 @@
+{
+  "requestedBy": "kim 2026-11-27",
+  "targetLanding": 90,
+  "hardStop": 97,
+  "fiveHourSafety": 85,
+  "tolerancePt": 5,
+  "earlyWindowToleranceBoost": true,
+  "finalPushHours": 6,
+  "sweepLeadMinutes": 90,
+  "accountConcurrency": 2,
+  "sessionLaunchCap": 27,
+  "staleHours": 3,
+  "accounts": {
+    "kim@orgiast.jp": { "pcs": ["000"] },
+    "nishi@orgiast.jp": { "pcs": ["004", "015", "019"] },
+    "seisaku-team@orgiast.jp": { "pcs": ["008", "014"] },
+    "cr@orgiast.jp": { "pcs": ["011", "018"] },
+    "genbateam.toho@gmail.com": { "pcs": ["999"] }
+  },
+  "reportHost": "011",
+  "reportFallbackHost": "018"
+}

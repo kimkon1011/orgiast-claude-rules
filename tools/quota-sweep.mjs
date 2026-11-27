@@ -19,13 +19,42 @@ import { discoverWsl, passiveWslHomes, wslPath, interactiveCodex, nativeCommand 
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { runBounded } from './lib/quota-sweep-process.mjs';
 import { evaluateClaudeSeatGuard, formatClaudeSeatGuardSkip } from './lib/claude-seat-guard.mjs';
+import { readPaceHold } from './claude-pace.mjs';
 
 export const DEFAULT_GOAL = 'このリポで node --test tools/*.test.mjs を実行し、失敗しているテスト・壊れた import・node --check で落ちるファイルを直す。全部緑なら docs/ 内のリンク切れ（相対パスの実在）を直す。受け入れ基準: node --test tools/*.test.mjs が緑、変更は git commit -F msg -- <paths> で小さくコミット';
 export const MAX_TICKS = 8;
 const terminal = new Set(['exhausted', 'final', 'ceiling', 'deadline', 'no-goal']);
 const read = file => { try { return fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return ''; throw e; } };
 const json = (file, fallback = {}) => { const text = read(file); return text ? JSON.parse(text) : fallback; };
-const atomic = (file, value) => { const tmp = `${file}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n'); fs.renameSync(tmp, file); };
+const ATOMIC_RETRY_MS = [50, 150, 400];
+const ATOMIC_RETRYABLE = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+/** Windows で rename が EPERM/EACCES/EBUSY になる対策: 50/150/400ms リトライ → writeFileSync フォールバック。tmp は必ず後始末。 */
+export function atomic(file, value) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  const body = JSON.stringify(value, null, 2) + '\n';
+  let lastError;
+  for (let i = 0; i <= ATOMIC_RETRY_MS.length; i++) {
+    try {
+      fs.writeFileSync(tmp, body);
+      fs.renameSync(tmp, file);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!ATOMIC_RETRYABLE.has(error?.code)) {
+        try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+        throw error;
+      }
+      if (i < ATOMIC_RETRY_MS.length) sleepSync(ATOMIC_RETRY_MS[i]);
+    }
+  }
+  try {
+    fs.writeFileSync(file, body);
+    console.error(`atomic: rename failed (${lastError?.code || lastError?.message}); fell back to writeFileSync: ${file}`);
+  } finally {
+    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+  }
+}
 
 export function selectGoal({ goals = '', handoff = '' } = {}) {
   const actionable = value => value && !/^(?:なし|無し|none|完了|済|done)(?:\s*[（(][^）)]*[）)])?\s*[。.]?$/i.test(value.trim()) && !/^\s*(?:\[x\]|~~)/i.test(value);
@@ -788,6 +817,11 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     }
     for (const decision of decisions) {
       if (await active(decision.provider)) { log(`skip: interactive ${decision.provider}`); continue; }
+      // claude-pace が ahead/stopped のとき無人の追加起動だけ止める（対話セッションは触らない）
+      if (decision.provider === 'claude') {
+        const paceHold = (io.readPaceHold ?? readPaceHold)(home, now());
+        if (paceHold.hold) { log(`skip: claude-pace hold (${paceHold.reason})`); continue; }
+      }
       await runSweep(decision, { ...io, leadMinutes: options.leadMinutes, minRemainingPercent: options.minRemainingPercent, home, state, save: () => atomic(stateFile, state), windows: currentWindows, active, log, env, now, spawnImpl, wsl });
     }
     return emit({ decision: decisions, state });

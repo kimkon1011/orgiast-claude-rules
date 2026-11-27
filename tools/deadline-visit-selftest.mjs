@@ -46,7 +46,8 @@ export function gradeCase(c, a) {
   if (c.visitCase) {
     const v = a.visit_consolidation || {};
     if (v.considered !== true) fails.push('③訪問・郵送の集約を検討していない');
-    const bundled = new Set(ids(v.bundled));
+    // 窓口・方法をこれから確かめてまとめる予定の用事（pending）も「検討した」に数える（言い切らない答えを落とさない）
+    const bundled = new Set([...ids(v.bundled), ...ids(v.bundle_pending)]);
     const miss = (c.mustBundle || []).filter(id => !bundled.has(id));
     if (miss.length) fails.push(`③まとめるべき用事の漏れ（${miss.join(',')}）`);
     const wrong = (c.mustNotBundle || []).filter(id => bundled.has(id));
@@ -71,7 +72,7 @@ export function buildPrompt(cases) {
 各場面で、あなたが金さんに返す答えを決め、最後に JSON 配列だけを \`\`\`json のコードブロックで出してください。
 
 各要素の形:
-{"id":"C01","deadline":"YYYY-MM-DD または null（記録で確かめられない場合）","deadline_source":"期限の根拠（記録名と日付）","presented_options":["金さんに示す選択肢の記号（材料の括弧内の英字）"],"recommended":"推奨する記号 または null","visit_consolidation":{"considered":true/false,"bundled":["同じ窓口・同じ便で一緒に済ませる他案件の記号（N1など）"],"avoid_routes":["訪問を避ける道として検討したもの"]},"message":"金さんへの返事（2〜4文）"}
+{"id":"C01","deadline":"YYYY-MM-DD または null（記録で確かめられない場合）","deadline_source":"期限の根拠（記録名と日付）","presented_options":["金さんに示す選択肢の記号（材料の括弧内の英字）"],"recommended":"推奨する記号 または null","visit_consolidation":{"considered":true/false,"bundled":["同じ窓口・同じ便で一緒に済ませる他案件の記号（N1など）"],"bundle_pending":["方法をこれから確かめたうえで一緒に済ませる予定の他案件の記号"],"avoid_routes":["訪問を避ける道として検討したもの"]},"message":"金さんへの返事（2〜4文）"}
 
 ${body}
 `;

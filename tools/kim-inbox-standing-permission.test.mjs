@@ -35,3 +35,33 @@ test('今回の無人処理が明示的に承認待ちを指定した場合は�
   assert.equal(item.kind, 'ask'); assert.equal(item.standingPermission, undefined);
   assert.equal(fs.existsSync(path.join(home, '.claude', 'stall-ledger', 'standing-sends.jsonl')), false);
 });
+
+test('施設名だけを含む価格変更の承認依頼は ask のまま', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-standing-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const item = await addItem(home, {
+    kind: 'ask', text: 'メルシアター 12/11〜24 の値下げ上限を30%→50%に広げる変更の本番反映（GAS）の承認依頼です', source: 'test',
+  }, { localOnly: true });
+  assert.equal(item.kind, 'ask');
+  assert.equal(item.standingPermission, undefined);
+});
+
+test('メルシ延泊・前倒し案内の送信承認は info に変換する', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-standing-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const item = await addItem(home, {
+    kind: 'ask', text: 'メルシ延泊・前倒し案内10通の送信を承認してください', source: 'test',
+  }, { localOnly: true });
+  assert.equal(item.kind, 'info');
+  assert.equal(item.standingPermission, 'merci-extend');
+});
+
+test('営業だけを含む資料送信の承認依頼は ask のまま', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-standing-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const item = await addItem(home, {
+    kind: 'ask', text: '営業資料を顧客へ送信してよいか承認してください', source: 'test',
+  }, { localOnly: true });
+  assert.equal(item.kind, 'ask');
+  assert.equal(item.standingPermission, undefined);
+});

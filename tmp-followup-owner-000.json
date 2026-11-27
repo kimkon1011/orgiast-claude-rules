@@ -1,0 +1,28 @@
+[
+  {
+    "id": "fleet-000-shaho-directive",
+    "to": "000 の Claude Code（fleet-agent）",
+    "channel": "manual",
+    "chatId": "fleet-results/followup-ledger-1127 ブランチ",
+    "scope": "internal",
+    "task": "遠隔指示 prompt-20261127-134839-9115（v2・読み取りのみ。PR #2903 に同梱）: 社保GB-179の原本・写しの所在と状況、古川さん署名、資格証明書の募集、岩井さんへの返事を000の記録で確認し台帳へ反映。旧指示 1247（社内LINE送信）は取り下げ",
+    "requestedAt": "2026-11-27T22:50:00+09:00",
+    "doneWhen": "ブランチ fleet-results/followup-ledger-1127 に RESULT-000.md が push される",
+    "donePattern": "",
+    "intervalMin": 30,
+    "dueAt": "2026-11-28T08:00:00+09:00",
+    "renudgeMin": 120,
+    "maxNudges": 1,
+    "escalateTo": "kim-inbox",
+    "ownerAi": "claude",
+    "ownerPc": "000",
+    "status": "エスカレーション",
+    "statusReason": "手動チャネル・期限超過",
+    "caseName": "GB-179 社会保険書類",
+    "note": "",
+    "assigneeRole": "",
+    "assigneeLocation": "",
+    "taskSite": "",
+    "temaCheck": "[TEMA-CHECK] 候補: A=担当PCを000へ付替えて自動台帳追跡、B=人へ確認依頼。採用:A（人の追加作業なし・既存の結果ブランチを000が確認）。紙・郵送・来所:なし。手順:台帳更新のみ。追加連絡:なし。所在:非該当。期限:2026-11-28 08:00。所要:即時。サインイン:既存のシート接続を使用。[/TEMA-CHECK]"
+  }
+]

@@ -1417,6 +1417,9 @@
     {"path": "tools/register-tldv-process-improve-task.ps1", "scope": "kim-only", "reason": "kim-PC（作業用011）だけで OrgiastTldvProcessImprove タスクを登録する"},
     {"path": "tools/tldv-process-improve.test.mjs", "scope": "kim-only", "reason": "tl;dv 改善ループのテスト。CIで実行するがfleet配布はkim-PCだけ"},
     {"path": "tools/register-ai-daikodo-line-watch.ps1", "scope": "kim-only", "step": null, "reason": "AI代行堂LINE監視のschtasks登録。tanom-admin.env と run-hidden.vbs に依存し、各PCの初期セットアップ時に1回実行"},
-    {"path": "tools/register-roudou-evidence-task.ps1", "scope": "kim-only", "step": null, "reason": "PC000で労働審判の証拠画像を指定日時にBeeperから回収する一回限りのタスク登録"}
+    {"path": "tools/register-roudou-evidence-task.ps1", "scope": "kim-only", "step": null, "reason": "PC000で労働審判の証拠画像を指定日時にBeeperから回収する一回限りのタスク登録"},
+    {"path": "tools/register-claude-pace.ps1", "scope": "fleet", "step": "task:quota-sweep", "reason": "全PCで登録する Claude ペース管理の毎時ジョブ"},
+    {"path": "tools/lib/claude-pace-report-core.mjs", "scope": "fleet", "step": "task:quota-sweep", "reason": "Claude ペース日次報告と配信処理が共有する参照先生成"},
+    {"path": "tools/register-claude-pace-report.ps1", "scope": "fleet", "step": "task:quota-sweep", "reason": "全PCで登録する Claude ペース日次報告（実行時に担当PCを判定）"}
   ]
 }

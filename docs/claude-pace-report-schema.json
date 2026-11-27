@@ -1,0 +1,551 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ふわ向け Claude ペース日報 v1",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "date",
+    "generatedAtJst",
+    "generatedAtIso",
+    "generatedByHost",
+    "targetLandingPct",
+    "dailyTargetPct",
+    "accounts",
+    "pcs",
+    "grokbot",
+    "nextTasks",
+    "newOfferings",
+    "unmeasured"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [
+        1
+      ]
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "generatedAtJst": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?\\+09:00$"
+    },
+    "generatedAtIso": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+    },
+    "generatedByHost": {
+      "type": "string"
+    },
+    "targetLandingPct": {
+      "type": "number",
+      "minimum": 0
+    },
+    "dailyTargetPct": {
+      "type": "number",
+      "minimum": 0
+    },
+    "accounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "account",
+          "pcs",
+          "fiveHour",
+          "sevenDay",
+          "elapsedRatio",
+          "previousDayConsumedPt",
+          "dailyTargetDeltaPt",
+          "targetLinePct",
+          "deltaPt",
+          "effectiveTolerancePt",
+          "status",
+          "statusJa",
+          "projectedLandingPct",
+          "unusedForecastPt",
+          "todayTargetPct",
+          "hold",
+          "actionsTaken",
+          "codex"
+        ],
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "pcs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "fiveHour": {
+            "type": "object",
+            "required": [
+              "usedPercent",
+              "resetsAtJst",
+              "resetsAtIso"
+            ],
+            "properties": {
+              "usedPercent": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "resetsAtJst": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?\\+09:00$"
+              },
+              "resetsAtIso": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+              }
+            },
+            "additionalProperties": false
+          },
+          "sevenDay": {
+            "type": "object",
+            "required": [
+              "usedPercent",
+              "resetsAtJst",
+              "resetsAtIso"
+            ],
+            "properties": {
+              "usedPercent": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "resetsAtJst": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?\\+09:00$"
+              },
+              "resetsAtIso": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+              }
+            },
+            "additionalProperties": false
+          },
+          "elapsedRatio": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "previousDayConsumedPt": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "dailyTargetDeltaPt": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "targetLinePct": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "deltaPt": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "effectiveTolerancePt": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "behind",
+              "onpace",
+              "ahead",
+              "final-push",
+              "stopped",
+              "unmeasurable"
+            ]
+          },
+          "statusJa": {
+            "type": "string",
+            "enum": [
+              "遅れ",
+              "ちょうど",
+              "進みすぎ",
+              "残り10%モード",
+              "停止（97%）",
+              "計測不能"
+            ]
+          },
+          "projectedLandingPct": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "unusedForecastPt": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "todayTargetPct": {
+            "type": "number"
+          },
+          "hold": {
+            "type": "boolean"
+          },
+          "actionsTaken": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "codex": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "window",
+                "usedPercent"
+              ],
+              "properties": {
+                "window": {
+                  "type": "string"
+                },
+                "usedPercent": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "pcs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "host",
+          "account",
+          "measured",
+          "reason",
+          "lastSnapshotAtJst",
+          "lastSnapshotAtIso",
+          "registered"
+        ],
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "measured": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastSnapshotAtJst": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?\\+09:00$"
+          },
+          "lastSnapshotAtIso": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+          },
+          "registered": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "grokbot": {
+      "type": "object",
+      "required": [
+        "received",
+        "date",
+        "weeklyUsedPercent",
+        "weeklyResetsAtJst",
+        "weeklyResetsAtIso",
+        "elapsedRatio",
+        "targetLinePct",
+        "deltaPt",
+        "effectiveTolerancePt",
+        "status",
+        "statusJa",
+        "projectedLandingPct",
+        "onDemandUsd",
+        "onDemandLimitUsd",
+        "onDemandResetsAtJst",
+        "onDemandResetsAtIso",
+        "selfExecutedTasks",
+        "delegatedTasks",
+        "note"
+      ],
+      "properties": {
+        "received": {
+          "type": "boolean"
+        },
+        "date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "weeklyUsedPercent": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "weeklyResetsAtJst": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?\\+09:00$"
+        },
+        "weeklyResetsAtIso": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+        },
+        "elapsedRatio": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "targetLinePct": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "deltaPt": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "effectiveTolerancePt": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "behind",
+            "onpace",
+            "ahead",
+            "final-push",
+            "stopped",
+            "unmeasurable",
+            null
+          ]
+        },
+        "statusJa": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "遅れ",
+            "ちょうど",
+            "進みすぎ",
+            "残り10%モード",
+            "停止（97%）",
+            "計測不能",
+            null
+          ]
+        },
+        "projectedLandingPct": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "onDemandUsd": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "onDemandLimitUsd": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "onDemandResetsAtJst": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?\\+09:00$"
+        },
+        "onDemandResetsAtIso": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+        },
+        "selfExecutedTasks": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "delegatedTasks": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "nextTasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "host",
+          "priority",
+          "title"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "newOfferings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "rank",
+          "host",
+          "title",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "rank": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "host": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "unmeasured": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "host",
+          "reason"
+        ],
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

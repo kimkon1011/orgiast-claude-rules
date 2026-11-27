@@ -805,6 +805,8 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 **🔴 CLAUDE.md は恒久ルールのみ。静的な内容を上部に置き、進行中タスク・今日の数字・障害は載せない。報告は前置きなしで §1.1 に従う。モデル切替は乱発しない。探索は Agent ツールの Explore/general-purpose に「結果200字以内・コード本体なし」で委譲。実装は Codex、設計・横断調査・複数仮説は Opus/Fable（§1.16）、軽い確認・締めは Sonnet/Haiku。**
 
+**Claude Code の7日枠はアカウント単位で 90% 着地を目標にし、claude-pace（毎時）と残り10%キュー（`config/claude-pace-queue.json`）で管理する（詳細は `rules/claude-pace.md`）。**
+
 **1.13 トークン効率（出力・入力キャッシュ・サブエージェント）**
 
 - **実行者ルーティング（まず「LLMに直接やらせる」以外の適材を選ぶ、費用対効果ファースト）**:

@@ -1,4 +1,4 @@
-# session-status  PC=008  host=008XPS8300  updated 2026-11-27 11:09 JST
+# session-status  PC=008  host=008XPS8300  updated 2026-11-27 12:08 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "configDirectory": "C:\\Users\\user\\
 - 案件数: 40
@@ -30,13 +30,13 @@
 - 008・nishibayashi-followup-1126・完了・最終更新 11/26 19:11、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー、次の手順が未着手・期限なし・次:なし
 - 008・nishibayashi-reply-1126・完了・最終更新 11/26 15:09、STATUS.mdなし、DONEあり・期限なし・次:なし
 - 008・plan3oku-12-freee-20261127・停止・最終更新 11/27 09:20、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 008・primix-estimate-008-1127・進行中・最終更新 11/27 09:46、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
+- 008・primix-estimate-008-1127・停止・最終更新 11/27 09:46、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
 - 008・reply-wait-collect-1125・停止・最終更新 11/25 09:34、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・resume-154-155-008-1127・金さん待ち・最終更新 11/27 08:49、STATUS.mdなし、REPORTあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 008・session-cap-1126・停止・最終更新 11/26 19:26、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 008・session-cleanup-1126・停止・最終更新 11/26 23:31、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・ss-0727・停止・最終更新 11/27 07:21、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 008・ss-1127b・停止・最終更新 11/27 11:09、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 008・ss-1127b・停止・最終更新 11/27 11:35、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・t706u-1125・停止・最終更新 11/25 11:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・tasks・停止・最終更新 11/22 09:56、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・work-sales3cat-1125・停止・最終更新 11/25 09:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

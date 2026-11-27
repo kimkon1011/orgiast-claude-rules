@@ -1,6 +1,6 @@
-# session-status  PC=008  host=008XPS8300  updated 2026-11-28 03:09 JST
+# session-status  PC=008  host=008XPS8300  updated 2026-11-28 04:08 JST
 
-- claude auth: auth status タイムアウト
+- claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "configDirectory": "C:\\Users\\user\\
 - 案件数: 52
 
 - 008・20261126-EOラーニングVALX只石プロデュース『劇薬マーケティング』シリーズ第二弾!・完了・最終更新 11/26 17:53、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
@@ -21,11 +21,11 @@
 - 008・curama-watch-0906・停止・最終更新 11/27 11:05、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・deadline-sweep-1124・停止・最終更新 11/24 10:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・event-slides-1124・停止・最終更新 11/24 17:35、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 008・followup-ledger・停止・最終更新 11/28 03:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 008・followup-ledger・停止・最終更新 11/28 04:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・followup-ledger-1127-008・完了・最終更新 11/28 00:54、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 008・from-015-154-155-1127・停止・最終更新 11/27 08:18、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・gakkai-tm-inquiry-008pack・停止・最終更新 11/27 22:20、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
-- 008・gakkai-tm-sawayama-1128・停止・最終更新 11/28 03:09、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 008・gakkai-tm-sawayama-1128・完了・最終更新 11/28 03:19、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 008・gb48-night-fix-1127・停止・最終更新 11/27 23:22、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 008・grok-403-billing・停止・最終更新 11/27 06:16、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・grok-handoff-1127-bigtohoku・停止・最終更新 11/28 00:03、STATUS.mdなし、REPORTあり、次の手順が未着手・期限なし・次:次の手順に着手する

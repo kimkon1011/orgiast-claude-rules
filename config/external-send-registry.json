@@ -11,5 +11,10 @@
   "tools/discord-beeper-autoreply.mjs": { "channel": "discord", "protection": "tool-send-dedupe" },
   "tools/discord-dm.mjs": { "channel": "discord", "protection": "send-context-check" },
   "tools/feedback-nag.mjs": { "channel": "discord", "protection": "internal-only" },
-  "tools/notify-kim.mjs": { "channel": "discord", "protection": "internal-only" }
+  "tools/notify-kim.mjs": { "channel": "discord", "protection": "internal-only" },
+  "tools/site-weekly-report.mjs": {
+    "channel": "discord",
+    "protection": "internal-only",
+    "details": "社内チャンネル「コーポレートサイト管理」への週次レポート／対応漏れ催促のみ。未回答は state で再通知抑制、週次は change-gate で LLM 重複起動を抑止。"
+  }
 }

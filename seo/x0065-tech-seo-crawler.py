@@ -245,7 +245,7 @@ class TechSEOCrawler:
         self.queue.append(self.start_url)
         self.visited.add(self.start_url)
 
-        while self.queue and len(self.visited) <= self.max_pages:
+        while self.queue and len(self.results) < self.max_pages:
             url = self.queue.popleft()
             print(f"[{len(self.visited)}/{self.max_pages}] Crawling: {url}")
 
@@ -262,8 +262,7 @@ class TechSEOCrawler:
                     soup = BeautifulSoup(resp.text, "lxml")
                     internal_urls, _, _ = self._extract_links(soup, url)
                     for link in internal_urls:
-                        if link not in self.visited:
-                            self.visited.add(link)
+                        if link not in self.visited and link not in self.queue:
                             self.queue.append(link)
                 except Exception:
                     pass  # リンク抽出失敗は無視（ページ自体は記録済み）
@@ -271,7 +270,7 @@ class TechSEOCrawler:
             # 負荷軽減のディレイ
             time.sleep(self.delay)
 
-            if len(self.visited) >= self.max_pages:
+            if len(self.results) >= self.max_pages:
                 print(f"Reached max pages limit ({self.max_pages})")
                 break
 

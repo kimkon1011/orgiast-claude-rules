@@ -32,6 +32,12 @@ assert.match(rules, /再送分も含めて通算2回まで/);
   assert.match(rules, /所在確認と現地作業の割り振り/);
   assert.match(rules, /わからない人には割り振らない/);
   assert.match(rules, /店を離れる作業/);
+  assert.match(rules, /追記6・2026-11-27/);
+  assert.match(rules, /verification_code/);
+  assert.match(rules, /両経路が尽きた後の最終手段/);
+  assert.match(rules, /当該タスク内でのみ一時的に使い/);
+  const mirrored = fs.readFileSync(new URL('../rules/absolute-rules.md', import.meta.url), 'utf8');
+  assert.match(mirrored, /追記6・2026-11-27/);
 });
 test('ABSOLUTE_RULES_SYSTEM に認証コードと空港案内のルールを含む', () => {
   assert.match(ABSOLUTE_RULES_SYSTEM, /受信トレイを直接開き/);
@@ -41,6 +47,9 @@ test('ABSOLUTE_RULES_SYSTEM に認証コードと空港案内のルールを含�
   assert.match(ABSOLUTE_RULES_SYSTEM, /先送りしない/);
   assert.match(ABSOLUTE_RULES_SYSTEM, /実績のある経路/);
   assert.match(ABSOLUTE_RULES_SYSTEM, /動く前にもう一度確かめる/);
+  assert.match(ABSOLUTE_RULES_SYSTEM, /verification_code/);
+  assert.match(ABSOLUTE_RULES_SYSTEM, /両経路が尽きた後の最終手段/);
+  assert.match(ABSOLUTE_RULES_SYSTEM, /当該タスク内でのみ一時的に使い/);
 });
 test('絶対ルールはファイル最上部に1つだけ置かれ、再実行で増えない', () => {
   const rules = extractAbsoluteRules(onboarding);

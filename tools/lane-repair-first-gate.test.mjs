@@ -42,6 +42,21 @@ test('quota_wait never blocks and context names cheap alternatives', t => {
   assert.equal(evaluateRepairFirst(input('Edit'), { home, now }).decision, 'pass');
   assert.match(repairContext(health, home, now), /代替の安いレーン: groq/);
 });
+test('OpenRouter 代替稼働中の gemini/grok は repair-first のブロック対象外', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-gate-sub-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'));
+  const health = {
+    lanes: {
+      gemini: { alive: false, reason: 'probe_failed', via: 'openrouter', error: 'HTTP 500' },
+      grok: { alive: false, reason: 'billing', via: 'openrouter' },
+      openrouter: { alive: true, reason: 'probe_ok' },
+    },
+  };
+  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify(health));
+  assert.equal(evaluateRepairFirst(input('Edit'), { home, now }).decision, 'pass');
+  assert.doesNotMatch(repairContext(health, home, now), /残高不足|レーン修復/);
+});
 test('diagnostic invocations pass; compound and disguised writes block', () => {
   for (const cmd of ['node tools/lane-doctor.mjs --probe', 'node tools/lane-repair-log.mjs --lane deepseek --tried "key checked; HTTP 500" --result unfixable', 'node tools/env-kv.mjs --help', 'git status --short', 'gh pr view 123', 'wsl -d Ubuntu -u root -- codex exec --skip-git-repo-check "ping"', 'wsl -l -q', 'wsl --install -d Ubuntu --no-launch', 'wsl -d Ubuntu -u root -- npm install -g @openai/codex', 'wsl -d Ubuntu -u root -- codex login status', 'wsl --shutdown', '& "C:\\\\Program Files\\\\nodejs\\\\node.exe" tools/lane-doctor.mjs --probe', '& node tools/lane-doctor.mjs --probe', '"C:\\\\Program Files\\\\nodejs\\\\node.exe" tools/lane-repair-log.mjs --lane deepseek --tried "x" --result unfixable']) assert.equal(repairCommand(cmd), true, cmd);
   for (const cmd of ['node tools/lane-doctor.mjs; touch x', 'node tools/lane-doctor.mjs && npm install', 'echo lane-doctor.mjs', 'node /tmp/lane-doctor.mjs', 'node tools/lane-doctor.mjs > x', 'git push', 'git diff --output=x', 'wsl -- bash -c "touch x"', 'gh pr create', 'node -e "writeFiles()"', 'node tools/lane-doctor.mjs $(touch x)', 'node tools/lane-doctor.mjs @(Remove-Item x)', 'git log --out=x', 'git diff --textconv', '& "C:\\\\Program Files\\\\nodejs\\\\node.exe" /tmp/lane-doctor.mjs', '&& node tools/lane-doctor.mjs --probe', '& "C:\\\\Program Files\\\\nodejs\\\\node.exe" tools/lane-doctor.mjs && rm -rf X', '& node tools/lane-doctor.mjs & rm -rf X']) assert.equal(repairCommand(cmd), false, cmd);

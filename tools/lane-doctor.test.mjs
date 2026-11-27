@@ -357,6 +357,38 @@ test('missing Gemini key remains a repair stop when OpenRouter is dead', t => {
   assert.match(summarize(r), /🛑/);
 });
 
+test('gemini/grok billing uses ledger OpenRouter substitute and is not a repair stop', async t => {
+  const { repairContext, pendingRepairs } = await import('./lib/lane-repair-state.mjs');
+  const { evaluateRepairFirst } = await import('./lane-repair-first-gate.mjs');
+  const h = fixture(t);
+  fs.writeFileSync(path.join(h, '.claude/xai.env'), 'XAI_API_KEY=test-fixture\n');
+  const stamp = new Date(now).toISOString();
+  write(h, 'lane-health.json', {
+    lanes: {
+      gemini: { alive: false, reason: 'billing', probedAt: stamp, error: 'HTTP 402' },
+      grok: { alive: false, reason: 'billing', probedAt: stamp, error: 'HTTP 402' },
+      openrouter: { alive: true, reason: 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: 'probe_ok' },
+      codex: { alive: true, reason: 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: 'probe_ok' },
+      deepseek: { alive: true, reason: 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: 'probe_ok' },
+      glm: { alive: true, reason: 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: 'probe_ok' },
+      groq: { alive: true, reason: 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: 'probe_ok' },
+    },
+  });
+  const r = laneDoctorQuick({ home: h, now, save: false });
+  assert.ok(r.substituted.some(s => s.provider === 'gemini' && s.via === 'openrouter'));
+  assert.ok(r.substituted.some(s => s.provider === 'grok' && s.via === 'openrouter'));
+  assert.equal(r.lanes.gemini.via, 'openrouter');
+  assert.equal(r.lanes.grok.via, 'openrouter');
+  assert.match(summarize(r), /gemini ✅\(OpenRouter経由\)/);
+  assert.match(summarize(r), /grok ✅\(OpenRouter経由\)/);
+  assert.equal(r.repairFirst.required, false);
+  assert.doesNotMatch(summarize(r), /🛑/);
+  assert.doesNotMatch(repairContext(r, h, now), /gemini: 残高不足|grok: 残高不足/);
+  assert.equal(pendingRepairs(r, h, now).length, 0);
+  fs.writeFileSync(path.join(h, '.claude/lane-health.json'), JSON.stringify(r));
+  assert.equal(evaluateRepairFirst({ tool_name: 'Edit' }, { home: h, now }).decision, 'pass');
+});
+
 test('WSL-only auth configures Codex, probes it, and supplies notification account', async t => {
   const home = fixture(t);
   fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');

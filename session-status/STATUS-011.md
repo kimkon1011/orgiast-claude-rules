@@ -1,7 +1,7 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-28 06:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-28 07:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 82
+- 案件数: 84
 
 - 011・.stall-sweeper・停止・最終更新 11/26 04:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・20261126-クラフト坂口・金さん待ち・クラフト坂口様 宿題7件の成果物は完成。精算の計算方法・福岡請求書の作り直し・先払い承認・いなば様への送信時期の判断待ち・期限2026-12-03（坂口様への精算金額の返答）・次:金さんの判断に沿って、坂口様への返信・福岡請求書の作り直し・Discord送信を進める（送信は承認後のみ）
@@ -28,7 +28,7 @@
 - 011・fallback-chain-timeout-1127・完了・PR #2849 MERGED・landed・期限なし・次:11/28 の delegation-health.json に fallback_chain_timeout が出ないことを確認
 - 011・fallback-chain-timeout-1128・停止・最終更新 11/28 04:51、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・fallback-deepseek-timeout-1127・進行中・Codex に修正を委譲中（codex-do バックグラウンド）・期限なし・次:RESULT.md と PR を読み戻し、Windows で node --test を再実行、PR の MERGED を確認して /session-close
-- 011・followup-ledger・停止・最終更新 11/28 06:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・followup-ledger・停止・最終更新 11/28 07:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・followup-ledger-1127・停止（次の朝まで待機）・000KimPC のビーコンが1日前で停止しており、指示が届いていない。社保の LINE 送信は 000 が復旧するまでできない。・期限11/30（投函期限）・次:11/28 朝に 000KimPC のビーコン状態を確認し、復旧していれば `SEND-000.md` の手順を実行する。ついでに各PCの followup-ledger 登録状況を再確認（fleet-status.mjs）。
 - 011・followup-ledger-1127-continue・停止・最終更新 11/27 21:50、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
 - 011・gitignore-scan-out・停止・最終更新 11/27 14:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -63,6 +63,7 @@
 - 011・sales-link-audit-1126・完了・監査・修正・書き出し完了、13:00 毎時本番で動作確認済み・期限2026-11-26 当日・次:なし（毎時ジョブが send-commitments を追跡し stuck-export を毎時更新）
 - 011・営業 次回連絡日・金さん待ち・最終更新 11/27 22:04、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・session-1126-hourly・金さん待ち・JACE 藤野様宛ての返信下書きが打合せ前の文面のまま。修正版の送信可否は金さんの承認が要る（kim-inbox ki-20261126081310-6cf5）・期限2026-12-11（先方の返信期限）／着手期限 2026-12-09・次:承認が来たら seisaku-team@ の下書きを修正版に差し替え、gmail-draft.mjs の自動チェックを通して送信し、送信済みを読み戻す
+- 011・session-1128a・停止・最終更新 11/28 07:06、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・session-1205・完了・handoff-audit 8件の再発検証が終わった。f61ffeb282843871（P4）は再発0件で、検証済み台帳に追加した（PR #2878 MERGED 2026-11-27T03:24:51Z）。残り7件は 11/26 12:00Z 以降も同じ型の文が出ているため、台帳には入れていない・期限なし・次:next-session.md の8番は完了したので次回は選ばない（無人だと next-session.md を書き換えられず、この STATUS.md に残している）。9〜15番の7件は ID ごとに検証し直しても消えない。直すべきなのは、W 型の「完了待ち」の文が出る仕組みのほう。worktree ~/.claude/wt-handoff-verify-
 - 011・session-cap-1126・金さん待ち・最終更新 11/26 19:36、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・souko-kyujin-1125・完了・最終更新 11/25 19:40、STATUS.mdなし、DONEあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
@@ -80,6 +81,7 @@
 - 011・x0100-consensus-proof・完了・競合6本の見出し＋論点マトリクス、自社PROOF（金額・小間・写真・削減率）を実取得し RESULT.md / urls.txt を作成・期限2026-12-04・次:RESULT の「今すぐ」案1を x0101 DRAFT 1563即答へ反映検討。サイト反映は kim 承認待ち（期限 12/04）
 - 011・x0101-gsc-preflight・完了・tools/gsc-preflight.mjs を PR #2881（automerge）で提出、Windows test 12/12 緑、実データ判定済み。着地は auto-progress が確認。next-session.md は無人起動で書込拒否のため引き継ぎはこのファイルと RESULT.md・期限なし・次:【夜間】REWRITE 2件の即答原稿下書き（rebooth.co.jp/exhibition/1563「展示会ブース 費用」500字以内、orgiast.jp/topics/7660「ブース デザイン」）→サイト反映は kim 承認待ち。next-session.md 残TODO 1番は完了として選ばない
 - 011・x0101-rewrite-drafts・完了（REWRITE 2件の即答下書き・照合不一致0）・1563は費用即答341字、7660は301先1344向けデザイン即答310字。内部リンクは preflight 候補のみ（費用0／デザイン rebooth 表示36）・期限2026-12-04（記事着手判断・preflight RESULT と同日）・次:kim 承認後に H1直下へ反映。7660は301先（rebooth/1344）へ書くか orgiast 側の転送方針を先に決める
+- 011・x0102-gemini-cache・停止・codex-do が exit 75 deferred（unattended_budget: Codex 無人枠 8/8、代替 deepseek・openrouter-code(qwen3-coder)・cheap-code:deepseek が全て60秒無出力で打ち切り。cheap-code は unrecognized_model）。retryAt 20・期限なし（AIニュース提案、売上直結の期限なし）・次:retryAt 以降に `node C:/Users/kimko/.claude/nightly-repo/tools/codex-do.mjs --prompt-file C:/Users/kimko/gb-reports/x0102-gemini-cache/PROMPT.md --cwd C:/Users/kimko/gb-reports/x0102-
 - 011・ynakano-draft-1127・金さん待ち・中野様（日本コンベンションサービス）が 12/9(水)16:00〜17:00 で確定し Meet URL を求めている。返信は PCO 連絡制限の対象で、無人ではカレンダー操作も拒否されるため送れない。下書き3通は不要と照合済み。・期限2026-11-27 12:00（お客様返信のため早めに）・次:kim-inbox ki-20261126171146-4b95 で「返信を送ってよいか・不要な下書き3通を消してよいか」の返事をもらい、承認後に kim@ カレンダーへ社内用の予定（招待なし）を作って Meet URL を発行し、gmail-draft.mjs --send で返信する。next-session.md への追記は無人で拒否されたため、この 
 - 011・_handoff-r28-1127・停止・最終更新 11/27 09:19、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・_handoff-r28-1127-in・停止・最終更新 11/27 09:21、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

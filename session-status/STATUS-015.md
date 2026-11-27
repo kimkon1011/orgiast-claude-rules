@@ -1,22 +1,36 @@
-# session-status  PC=015  host=015CAFE  updated 2026-11-25 21:03 JST
+# session-status  PC=015  host=015CAFE  updated 2026-11-27 20:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 17
+- 案件数: 31
 
-- 015・account-inventory-1123・完了・最終更新 11/23 21:37、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
-- 015・beds24-account-1124・完了・最終更新 11/24 14:46、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 015・212coffee-rental-options・完了・カシカシにパソコン・駐車場・大型駐車場・ゴミ処理の4オプションを作成し4部屋に紐付け、公開プレビューまで読み戻し済み（2026-11-26）・期限なし・次:なし
+- 015・auto-session STATUS・完了・Action「PR: kim-inbox マージ承認拒否 の main 着地」はすでに ✅ 完了済み（PR #2729 は main 着地済み）。確認のみで対応不要。まとめに入り終了。・期限なし・次:次回の自動セッションで残TODO（Gemini復帰確認・#2449着地確認 等）を処理する
+- 015・big-tohoku-venue-1125・金さん待ち・会場費報告文 v2・ビッグパレット空室照会文・川村さん共有文は完成（すべて未送信）。2/23〜24 の空き・宿の実料金・バスと料理の見積もりは問い合わせが必要で、社外送信のため未実施。楡井直哉様へは 11/24 以降メール0件、電話・LINE・Beeper・Discord は未確認（Discord は015から接続失敗）。kim-inbox に ki-202・期限2026-12-10 18:00（12/17 11:00 の打合せまでに空きと総額比較をそろえるための着手期限）・次:ビッグパレットへの空室照会を送ってよいか（kim-inbox ki-20261126231652-39e6）を金さんに決めてもらう。Discord が戻り次第、川村さんへ共有文を送る
 - 015・cafe-morning-menu-1124・停止・最終更新 11/24 15:06、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 015・catch-and-act-1123・完了・最終更新 11/23 12:58、STATUS.mdなし、DONEあり、REPORTあり、金さん待ちの記述あり・期限なし・次:なし
 - 015・catering-status-1124・停止・最終更新 11/24 15:02、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 015・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 015・deadline-sweep-1124・完了・最終更新 11/24 09:42、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 015・fleet-inbound-router-lahaina・進行中・kim-PC からの fleet-mail 催促2件（inbound-router lahaina）には返信済み（status=done を読み戻し済み）。恒久修正の PR #2873（fleet-chase の再送で旧 execCwd を @rules-repo へ置き換え）は automerge で CI 待ち・期限なし・次:PR #2873 が MERGED になったことを gh pr view で読み戻す。CI が失敗したら Codex に修正を戻す
+- 015・gemini-usage-202611・停止・最終更新 11/26 06:09、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
+- 015・grok-billing-403・停止・最終更新 11/27 07:48、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 015・kyou-kigen-exec-1125・停止・最終更新 11/25 16:24、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 015・lahaina・進行中・Codex が LINE 写真の保存・文字起こし（comms-hub-sync）を実装中。伊藤さん宛メールは整合性チェック合格済みで、送信だけがゲートで止まっている・期限2026-11-26 12:00・次:Codex の結果（C:\Users\kimko\gb-reports\lahaina\codex-line-image-ocr.out.md）から 11/16 12:43 の銘板写真の型番・電圧を確かめる → 伊藤さん宛の下書き r4260413651723251260（seisaku-team@）を gmail-draft.mjs --send で送る 
 - 015・lahaina-card-1125・完了・最終更新 11/25 14:59、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、ログに上限・ログアウト・エラー・期限なし・次:なし
-- 015・lahaina-status-1124・完了・最終更新 11/24 12:27、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 015・lahaina-claude-setup・停止・最終更新 11/25 21:27、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 015・lahaina-manual・金さん待ち・マニュアル下書きはDoc反映済み。河本さん宛LINEは照合OKだが委譲ハードブロックで送信未実施。伊藤さん宛LINE文面の承認待ち・期限2026-11-26 18:00・次:kim在席時に reply-queue→receipt→beeper-send を一括実行して河本さん宛を送信、伊藤さん宛は承認後に同手順
 - 015・lahaina-usui-1125・完了・最終更新 11/25 18:05、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 015・local-seo-1125・停止・最終更新 11/25 16:09、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 015・localseo-212coffee-1125・完了・最終更新 11/25 15:41、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
 - 015・loop-check-1125・停止・最終更新 11/25 15:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 015・primix-proposal-1125・金さん待ち・提案書の原稿 v2 と送付文 v2 は完成（未送信）。【要確認】は差出人名だけ。送付期限 12/4 が金さんの不在（11/27〜12/5）と重なるため、送ってよいかと差出人を kim-inbox ki-20261126231652-745d に登録済み。Google スライド化は未着手（社内に作成ツールがなく、design-deck は PDF 出力）。案件・期限2026-12-03 18:00（12/4 の送付に間に合わせるための判断期限）・次:金さんか佐藤さんが送付を決めたら、原稿を PDF 化して添付し seisaku-team@ から送る。並行して、スライド化と案件一覧への登録（仮ID 270417PRMX）を進める
 - 015・reply-wait-collect-1125・停止・最終更新 11/25 09:35、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 015・resume-154-155-1127・停止・最終更新 11/27 08:17、STATUS.mdなし、REPORTあり、次の手順が未着手・期限なし・次:次の手順に着手する
+- 015・session-0026・完了・PR #2762（main CI 修正）・#2760（gmail-draft --send 修正）・#2761 が 2026-11-25T15:29〜15:41Z に MERGED（gh pr view で読み戻し）。ki-20261125011228-cd09 は drop 済み・期限なし・次:なし（next-session.md 残TODO 14番④は消してよい・無人では編集不可のため memory に記録）
+- 015・session-0906・停止・最終更新 11/26 09:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 015・session-1127・停止・最終更新 11/27 13:10、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 015・session-start・金さん待ち・PR #2834（LINE画像OCR）は 2026-11-27 02:09 JST にマージ済み（読み戻しで確認済み）。旧ブランチ2本の削除は承認が必要（kim-inbox ki-20261126210800-1ceb）・期限なし・次:「消してよい」の返事が来たら nightly-repo で auto/20261127-line-image-ocr と rescue/auto-session-20261126-121202 を削除し、next-session.md の残TODO 7 を消す
+- 015・session-tmp・停止・最終更新 11/26 05:06、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 015・t706u-1125・停止・最終更新 11/25 11:27、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 015・tasks・停止・最終更新 11/23 09:29、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 015・x0034-linen・停止・最終更新 11/26 07:08、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 015・x0038・完了・X-0038 の評価メモを Google ドキュメントに公開し、読み戻しで本文一致を確認した・期限なし・次:対話セッションで case-consult-sources に2行足す案を Codex に渡す。next-session の X-0038 行を消す
+- 015・_archived-handoff-008・停止・最終更新 11/27 08:41、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

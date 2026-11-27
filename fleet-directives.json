@@ -91,6 +91,16 @@
       "createdBy": "uers",
       "createdAt": "2026-11-27T22:38:42.264Z",
       "expiresAt": "2026-11-29T22:38:42.264Z"
+    },
+    {
+      "id": "run-20261127-224550-2011",
+      "kind": "run",
+      "targets": "kim-PC",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-11-27T22:45:50.699Z",
+      "expiresAt": "2026-11-29T22:45:50.699Z"
     }
   ]
 }

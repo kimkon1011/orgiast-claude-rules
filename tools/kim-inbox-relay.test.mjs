@@ -230,6 +230,25 @@ test('hundreds of reserved asks rotate in bounded batches without starving progr
   assert.ok(items.some(i=>i.shownCount>0 && !initial.has(i.id)));
 });
 
+test('long-unshown ask keeps a reserved slot when many new asks arrive', async t => {
+  const f = fixture(t);
+  const oldAt = new Date(now - 30 * 86400000).toISOString();
+  const old = await addItem(f.home, { kind: 'ask', text: '古い blocker の承認: 長期未提示の飢餓防止' });
+  updateInboxItem(f.home, old.id, i => {
+    i.shownCount = 11;
+    i.lastShownAt = oldAt;
+    i.createdAt = oldAt;
+  });
+  for (let n = 0; n < 20; n++) await addItem(f.home, { kind: 'ask', text: `新しい ask ${n}` });
+  const items = listItems(f.home);
+  const text = selectContext(items, { sessionId: f.input.session_id, now, home: f.home });
+  const refreshed = items.find(i => i.id === old.id);
+  assert.ok(
+    refreshed.shownCount === 12 || text.includes(old.id) || text.includes('長期未提示の飢餓防止'),
+    `expected starved ask to be shown; shownCount=${refreshed.shownCount} text=${text.slice(0, 300)}`
+  );
+});
+
 test('duplicate same workId+decide: only representative needs written; both are receipts', async t => {
   const f = fixture(t);
   const baseText = '【DELL・seisaku-team@orgiast.jp の Claude Code】プロジェクト: test ／ セッションの目的: 三共精機にメール送信 ／ 作業ID: c8d99e2b\n自動進行が判断待ちです: メールの送付可否\nあなたの返事待ち: 送ってよいですか';

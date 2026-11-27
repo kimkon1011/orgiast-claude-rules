@@ -1,0 +1,18 @@
+{
+  "spreadsheetId": "1-aTeXKH0EYATi-SnSAIeRH3gGTki9YUMiTntTAQa-2U",
+  "url": "https://docs.google.com/spreadsheets/d/1-aTeXKH0EYATi-SnSAIeRH3gGTki9YUMiTntTAQa-2U/edit?ouid=105980152787678993330",
+  "owner": "seisaku-team@orgiast.jp",
+  "approvalChannelId": "1561703420455292979",
+  "approverUserIds": [],
+  "approvalTimeoutMinutes": 120,
+  "quietHours": {
+    "start": "22:00",
+    "end": "07:00",
+    "tz": "Asia/Tokyo"
+  },
+  "alertFile": "~/gb-reports/followup-ledger/ALERT.md",
+  "pcAliases": {
+    "000": "kim-PC",
+    "011": "作業用011"
+  }
+}

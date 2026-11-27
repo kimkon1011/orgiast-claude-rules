@@ -1,6 +1,6 @@
-# session-status  PC=004  host=004MINPAKU  updated 2026-11-27 18:13 JST
+# session-status  PC=004  host=004MINPAKU  updated 2026-11-27 19:13 JST
 
-- claude auth: {"at":"2026-11-27T09:13:20.726Z","event":"launch_allowed","reason":"below_cap","activeCount":0,"limit":2,"staleHours":3,"abandoned":[]} { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "f
+- claude auth: {"at":"2026-11-27T10:13:13.398Z","event":"launch_allowed","reason":"below_cap","activeCount":0,"limit":2,"staleHours":3,"abandoned":[]} { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "f
 - 案件数: 19
 
 - 004・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -13,7 +13,7 @@
 - 004・STATUS・完了・メルシアター上限価格 ¥14,100 → ¥15,500 の変更と、3経路（getStatus / getConfig / 設定シート B2）での読み戻し確認、変えていない項目（minPrice 4800 / triangleUpper 16000 / TRIANGLE 清掃料 Beds24 5000・Booking.com 12000）の前後一致確認、RE・期限なし（反映確認は定期ジョブの通常運用に乗る）・次:2026-11-28 朝 6:00 の定期ジョブ実行後、Beds24 の遠日期売値に新上限が反映されたかを客側ページで読み戻す（今回は 2027-02-10 2泊 JPY 20,600 のまま＝未反映を実測済み）。
 - 004・minpaku-okazaki-check-1124・停止・最終更新 11/24 14:37、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 004・minpaku-price-1124・停止・最終更新 11/24 09:43、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 004・minpaku-profit-95・金さん待ち・メルシ 12/11〜24 限定で値下げ上限を 50% にする実装・テストが終わり、ブランチ feat/merci-dec-mid-pace-cap50（788a8b7）へ push 済み。毎時の無人起動では本番反映しないため、kim-inbox（key merci-dec-mid-pace-cap50）に承認依頼を積んだ・期限2026-11-29 10:00・次:「可」なら通常セッションで main へ着地 → clasp push・デプロイ → 8室カレンダーを読み戻して proposal の13日分と照合 → 72時間後に新規確定室泊を比較。worktree は C:\Users\kimko\nfm-wt-merci-pace。stash@{0} は誤popの復元分（中身は変えない）
+- 004・minpaku-profit-95・金さん待ち・(1) メルシ 12/11〜24 限定で値下げ上限を 50% にする実装・テストが終わり、ブランチ feat/merci-dec-mid-pace-cap50（788a8b7）へ push 済み。kim-inbox（key merci-dec-mid-pace-cap50）に承認依頼を積んだ (2) TRIANGLE 8〜28日先の値下げ修正 PR #37（・期限2026-11-28 09:00（TRIANGLE）／2026-11-29 10:00（メルシ）・次:メルシが「可」なら通常セッションで main へ着地 → clasp push・デプロイ → 8室カレンダーを読み戻して proposal の13日分と照合 → 72時間後に新規確定室泊を比較。worktree は C:\Users\kimko\nfm-wt-merci-pace。stash@{0} は誤popの復元分（中身は変えない）。TRIANGLE が
 - 004・nf-toho-1110-1124・停止・最終更新 11/24 12:20、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 004・okazaki-line-1125・完了・最終更新 11/25 10:16、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 004・STATUS・金さん待ち・物件別損益のスプレッドシート（6タブ）と価格・清掃費の変更案は完成。価格変更の承認が未回答（kim-inbox ki-20261126122609-f9dc）。あわせて、成果物への kim@orgiast.jp 編集権限の付与が3経路とも拒否され、3億円計画シート（1Qa5bPpvjgpm2lFPfeG08jVMem1FWk1QkbsCHSf5eS4o）も読・期限なし（打ち手13のシート上の期限は 2026-11-20 で経過済み）・次:「2（A＋B）」など承認が返ったら、設定シート B2（メルシアター上限価格 14,100→15,500）と Beds24 roomTypes 554789 の cleaningFee（5,000→12,000）を書き換え、pricing-decisions.json に決定・reviewBy を追記し、Beds24 と Airbnb の実表示で読み戻す。決め

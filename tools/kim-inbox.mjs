@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { registerCardFromText } from './lib/approval-cards.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -238,7 +239,7 @@ const legacyInfoKey = text => text.replace(/^【[^\r\n]*】[^\S\r\n]*(?:\r?\n|$)
 // 集約の検索と作成を同じロックで守り、同時追加も取りこぼさない。
 function create(home, options, lockWaitMs) {
   return locked(home, 'info-aggregation', () => {
-    const text = clean(options.text);
+    const text = options.source === 'tema-blocked-send' ? redactSecrets(String(options.text ?? '')) : clean(options.text);
     if (options.kind === 'deadline') {
       if (!options.key || !/^[A-Za-z0-9_-]+$/.test(options.key)) throw new Error('deadline には有効な --key が必要です');
       const existing = listItems(home, { status: 'open' }).find(i => i.kind === 'deadline' && i.key === options.key);
@@ -441,7 +442,7 @@ function createNew(home, { kind = 'info', text, source = '', from = resolveFleet
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), ...(kindPromotedFrom ? { kindPromotedFrom } : {}), ...(standingPermission ? { standingPermission } : {}), ...(mergeHandoffReason ? { mergeHandoffReason: clean(mergeHandoffReason) } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), ...(kindPromotedFrom ? { kindPromotedFrom } : {}), ...(standingPermission ? { standingPermission } : {}), ...(mergeHandoffReason ? { mergeHandoffReason: clean(mergeHandoffReason) } : {}), kind, source: clean(source), from: clean(from), text: source === 'tema-blocked-send' ? redactSecrets(String(text ?? '')) : clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     if (revision !== undefined) item.revision = revision;
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -535,6 +536,7 @@ export async function addItem(home, options, { drain = true, localOnly = false, 
     normalizedOptions = { ...normalizedOptions, text: await resolvePrRefs(normalizedOptions.text, { execImpl: normalizedOptions.execImpl, stderr: normalizedOptions.stderr || console.error }) };
   }
   const item = create(home, normalizedOptions, lockWaitMs);
+  if (item.kind === 'ask') registerCardFromText(item.text, { home, shownTo: 'kim-inbox' });
   if (localOnly || item.kind === 'deadline' || isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-inbox-'));
   try {

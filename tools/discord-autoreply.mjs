@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { request as httpsRequest } from 'node:https';
+import { prepareTemaSend, TEMA_GENERATION_INSTRUCTION } from './lib/unattended-tema.mjs';
+import { stripHumanOnly } from './lib/handback-guard.mjs';
 import { isEntry } from './is-entry.mjs';
 
 import { extractCommitments, hasUnsupportedDoneClaim, trackCommitments } from './autoreply-commitments.mjs';
@@ -220,7 +222,7 @@ export async function retryForbiddenAnswer(llm, decision, input) {
   const retryRaw = await llm({
     category: 'jp_reply',
     system: REPLY_SYSTEM + '\n\n直前の回答に禁止表現（代表への確認を約束する文/転送/確認待ち/少々お待ち/個人DM/カレンダー招待への社外の人の追加/裏付けのない完了報告）が含まれていました。その場で具体的に判断して回答してください。判断を先送りする文は書かないでください。',
-    input: { ...input, forbiddenRetry: true, previousAnswer: decision.answer }
+    input: { ...input, forbiddenRetry: true, previousAnswer: stripHumanOnly(decision.answer).trim() }
   });
   let retry;
   try { retry = replyJson(retryRaw); } catch { return null; }
@@ -359,7 +361,7 @@ function botIdFromToken(token) {
   } catch { return null; }
 }
 
-const REPLY_SYSTEM = `あなたはkim（代表）の代理で社内メンバーに一次回答する秘書です。丁寧だが簡潔、原則300字以内。
+const REPLY_SYSTEM = TEMA_GENERATION_INSTRUCTION + '\n' + `あなたはkim（代表）の代理で社内メンバーに一次回答する秘書です。丁寧だが簡潔、原則300字以内。
 打合せ・電話・送付を約束するとき、相手の都合を確認していない日時を「設定します」と断定せず、候補日時を2〜3つ出して選んでもらう。会議URLは「追って送ります」と書かず、既に取得できていれば本文に記載する。実行していないことを「しました」と書かない。根拠のURLやeventIdを作らない。
 needs_reply: 質問・依頼・確認求め=true、報告・連絡のみ=false。
 needs_kim_decision: related・documents・context 等の根拠が食い違う・見つからない時だけ=true。
@@ -676,6 +678,8 @@ export async function runOnce(options = {}) {
           }
           // 空本文ガード（念のため）
           if (!finalAnswer) { handled(m, 'decision'); continue; }
+          try { finalAnswer = await prepareTemaSend(finalAnswer, { home, channel: 'discord', to: m.channel_id, source: 'discord-autoreply', requireRecord: true, dryRun, addItemImpl: options.addItemImpl }); }
+          catch (error) { if (!/^TEMA_|^HANDBACK_/.test(error.code || '')) throw error; handled(m, 'decision'); continue; }
           const content = contentFor(finalAnswer);
           if (dryRun) { result.wouldSend.push({ msgId: m.id, channelId: m.channel_id, content }); continue; }
           const sent = await api(`/channels/${m.channel_id}/messages`, { method: 'POST', body: {
@@ -722,7 +726,7 @@ export async function runOnce(options = {}) {
       try {
         if (reply.pendingEdit) {
           if (!dryRun) {
-            await api(`/channels/${reply.channelId}/messages/${reply.replyId}`, { method: 'PATCH', body: { content: contentFor(reply.answer, true), allowed_mentions: { parse: [], replied_user: false } } });
+            await api(`/channels/${reply.channelId}/messages/${reply.replyId}`, { method: 'PATCH', body: { content: contentFor(stripHumanOnly(reply.answer), true), allowed_mentions: { parse: [], replied_user: false } } });
             delete reply.pendingEdit; save();
           }
           continue;
@@ -750,7 +754,7 @@ export async function runOnce(options = {}) {
             }
             reply.outcome = outcome; reply.learned = true; save();
             if (reply.pendingEdit) {
-              await api(`/channels/${reply.channelId}/messages/${reply.replyId}`, { method: 'PATCH', body: { content: contentFor(reply.answer, true), allowed_mentions: { parse: [], replied_user: false } } });
+              await api(`/channels/${reply.channelId}/messages/${reply.replyId}`, { method: 'PATCH', body: { content: contentFor(stripHumanOnly(reply.answer), true), allowed_mentions: { parse: [], replied_user: false } } });
               delete reply.pendingEdit; save();
             }
           }

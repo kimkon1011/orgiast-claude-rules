@@ -1,3 +1,4 @@
+import { withTema } from './test-fixtures/tema-record.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -45,7 +46,10 @@ function fixture(t, { chats = [chat()], messages, decision = reply } = {}) {
   let replyLlm = options.llm;
   Object.defineProperty(options, 'llm', {
     get: () => async args => args.system?.startsWith('Extract proper nouns')
-      ? JSON.stringify(['スマートエイト']) : replyLlm(args),
+      ? JSON.stringify(['スマートエイト']) : (async () => {
+        const raw = await replyLlm(args);
+        try { const data = JSON.parse(raw); if (args.category === 'jp_reply' && data.answer?.trim()) data.answer = withTema(data.answer); return JSON.stringify(data); } catch { return raw; }
+      })(),
     set: value => { replyLlm = value; },
   });
   const file = path.join(home, '.claude/discord-beeper-autoreply/state.json');

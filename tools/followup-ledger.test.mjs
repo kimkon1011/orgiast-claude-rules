@@ -49,6 +49,7 @@ function baseEnv(dir, mockFile, extra = {}) {
     FOLLOWUP_MOCK_FILE: mockFile,
     FOLLOWUP_LEDGER_HOME: dir,
     FOLLOWUP_PC: 'test-pc',
+    FOLLOWUP_NOW: '2026-11-28T15:00:00+09:00',
     ...extra,
   };
 }
@@ -61,7 +62,7 @@ function baseConfig(dir, overrides = {}) {
     approvalChannelId: 'approval-chan',
     approverUserIds: overrides.approverUserIds || ['approver-1'],
     approvalTimeoutMinutes: 120,
-    quietHours: { start: '22:00', end: '07:00', tz: 'Asia/Tokyo' },
+    quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' },
     alertFile: path.join(dir, 'ALERT.md'),
     pcAliases: { '000': 'kim-PC', '011': '作業用011' },
     ...overrides,
@@ -105,6 +106,7 @@ function addArgs(id, overrides = {}) {
     '--owner-ai', 'test-ai',
     '--owner-pc', 'test-pc',
     '--requested-at', overrides.requestedAt || pastIso(180),
+    '--tema-check', overrides.temaCheck || '[TEMA-CHECK]\n候補: AI代行 / 本人作業\n選択: AI代行\n紙理由: なし\n手順数: 1\n読む量: 1通\n追加連絡: 次の連絡にまとめる\n前提: 所在=確認済み / 期限=確認済み / 順番=アシスタント確認済み\nAI代行: 不可\n[/TEMA-CHECK]',
     ...(overrides.extra || []),
   ];
 }
@@ -127,7 +129,7 @@ test('parseArgs / computeDue / decideAction basics', () => {
   assert.equal(isMissingChatId('未確認（Beeper未解決）'), true);
   assert.equal(isMissingChatId('mock-chat-A'), false);
   const stalled = rowFromArgs({
-    id: 'C2', channel: 'beeper', chat: true, to: 'x', task: 't',
+    id: 'C2', channel: 'beeper', chat: true, to: 'x', task: 't', 'tema-check': '[TEMA-CHECK] 候補: A / B [/TEMA-CHECK]',
   }, { now: new Date('2026-11-27T15:00:00+09:00') });
   assert.equal(stalled.status, '止まった');
   assert.equal(stalled.statusReason, 'chatID不明');
@@ -476,6 +478,7 @@ test('K: seed nudgeText is used as nudge body', async () => {
     ownerAi: 'test-ai',
     requestedAt: toIsoJst(new Date(now - 10800000)),
     nudgeText: '【専用催促】K1の件です',
+    temaCheck: '[TEMA-CHECK]\n候補: AI代行 / 本人作業\n選択: AI代行\n手順数: 1\n読む量: 1通\n追加連絡: 次の連絡にまとめる\n前提: 所在=確認済み\nAI代行: 不可\n[/TEMA-CHECK]',
   }]));
   await withEnv(baseEnv(dir, mockFile), async () => {
     await main(['seed', '--store', 'local', '--file', seedFile], {
@@ -604,6 +607,7 @@ test('N: scenario.ps1 equivalent (TEST-A/B/C/C2) with FOLLOWUP_NOW daytime', asy
       '--owner-ai', 'test',
       '--owner-pc', 'scenario-pc',
       '--requested-at', req,
+      '--tema-check', '[TEMA-CHECK]\n候補: AI代行 / 本人作業\n選択: AI代行\n手順数: 1\n読む量: 1通\n追加連絡: 次の連絡にまとめる\n前提: 所在=確認済み\nAI代行: 不可\n[/TEMA-CHECK]',
     ], { config, storeMode: 'local', now, spawn });
 
     const afterAdd = loadLocalStore(path.join(dir, 'ledger.json'));
@@ -653,7 +657,7 @@ test('N: scenario.ps1 equivalent (TEST-A/B/C/C2) with FOLLOWUP_NOW daytime', asy
 
 test('site constraint helpers and appended columns', () => {
   assert.equal(HEADERS.length, FIELDS.length);
-  assert.deepEqual(HEADERS.slice(-3), ['担当者区分', '居住地・最寄り', '作業場所']);
+  assert.deepEqual(HEADERS.slice(-4), ['担当者区分', '居住地・最寄り', '作業場所', '手間チェック記録']);
   assert.equal(isOffSiteTask({ task: '郵便局で投函' }), true);
   assert.equal(isOffSiteTask({ task: '郵便局で投函', taskSite: 'in-store' }), false);
   assert.equal(isOffSiteTask({ task: '店内で確認', taskSite: 'off-site' }), true);

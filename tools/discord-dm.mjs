@@ -8,7 +8,10 @@ import { clipDiscordContent, KIM_DISCORD_USER_ID, resolveDiscordBotToken } from 
 import { addItem, isKimSeat } from './kim-inbox.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
-import { assertNoHandback, stripHumanOnly } from './lib/handback-guard.mjs';
+import { assertSendConsistency, afterSendCleanup } from './send-consistency-check.mjs';
+import { stripHumanOnly } from './lib/handback-guard.mjs';
+
+import { prepareTemaSend } from './lib/unattended-tema.mjs';
 
 const API = 'https://discord.com/api/v10';
 const USER_AGENT = 'orgiast-discord-dm/1.0';
@@ -54,7 +57,7 @@ export async function sendDiscordDm(target, body, options = {}) {
   const inbox = isKim;
   if (!options.noCopyKim && !isKim) copyToKim = isKimSeat(home) ? 'in-session' : 'session-inbox';
   // kim 2026-11-26 絶対方針: AIで確認・実行できることを相手に戻す文面は送らない（[HUMAN-ONLY: 理由] 付きだけ通す）。
-  if (!options.skipHandbackGuard) assertNoHandback(body, { env: options.env ?? process.env });
+  if (!options.skipHandbackGuard) body = await prepareTemaSend(body, { ...options, home, to: target, channel: 'discord', source: options.source || 'discord-dm' });
   body = stripHumanOnly(body);
   const finalBody = isKim || options.noReplyFooter ? String(body ?? '').trimEnd() : withReplyToKimFooter(body);
   const content = safeContent(finalBody);
@@ -86,21 +89,24 @@ export async function sendDiscordDm(target, body, options = {}) {
     if (!dm.ok) throw new Error(`DMチャンネル作成が HTTP ${dm.status}`);
     const channelId = (await dm.json()).id;
     if (!channelId) throw new Error('DMチャンネルIDを取得できません');
-    await (options.assertContextApproved ?? assertContextApproved)({ channel: 'discord', target: channelId, text: body, home, ...(options.internalOptIn === true ? { internalOptIn: true } : {}), getLatest: async () => {
+    const context = await (options.assertContextApproved ?? assertContextApproved)({ channel: 'discord', target: channelId, text: body, home, ...(options.internalOptIn === true ? { internalOptIn: true } : {}), getLatest: async () => {
       const history = await fetchImpl(`${API}/channels/${channelId}/messages?limit=1`, { headers });
       if (!history.ok) throw new Error(`Discord 履歴取得が HTTP ${history.status}`);
       return latestOf((await history.json()).map(m => ({ id: m.id, at: m.timestamp })));
     }});
+    const checkInput = {channel:'discord',to:channelId,text:message,draftId:options.draftId,draftReadAt:options.draftReadAt || context?.checkedAt};
+    const checked = await (options.consistencyCheck ?? assertSendConsistency)(checkInput,{home,fetchImpl,...options.consistencyDeps});
     options.onMessageAttempt?.();
     const sent = await fetchImpl(`${API}/channels/${channelId}/messages`, {
       method: 'POST', headers, body: JSON.stringify({ content: message }),
     });
     if (!sent.ok) throw Object.assign(new Error(`DM送信が HTTP ${sent.status}`), { deliveryUncertain: sent.status >= 500 });
     const sentMessage = await sent.json();
+    const cleaned = await (options.cleanup ?? afterSendCleanup)({...checkInput,sentMessageId:sentMessage.id,scheduledSends:checked?.input?.scheduledSends},{home});
     recordOutbound({ channel: 'discord', target: channelId, text: body, messageId: sentMessage.id }, home);
-    return { channelId, messageId: sentMessage.id };
+    return { channelId, messageId: sentMessage.id, ...(cleaned?.cardNotice ? { cardNotice: cleaned.cardNotice } : {}) };
   };
-  const { channelId, messageId } = await deliver(recipient, content);
+  const { channelId, messageId, cardNotice } = await deliver(recipient, content);
   if (copyToKim === 'session-inbox') {
     const displayName = recipient.displayName ?? recipient.label ?? recipient.username ?? target;
     try {
@@ -109,7 +115,7 @@ export async function sendDiscordDm(target, body, options = {}) {
     } catch (error) { copyToKim = { delivered: false, error: error.message }; }
   }
 
-  return { delivered: true, recipient, channelId, messageId, copyToKim };
+  return { delivered: true, recipient, channelId, messageId, copyToKim, ...(cardNotice ? { cardNotice } : {}) };
 }
 
 function parseArgs(args) {

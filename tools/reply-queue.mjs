@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { registerCard } from './lib/approval-cards.mjs';
 // 返信キュー: kim 宛の未返信を耐久キューで管理し、状態遷移を守る。
 import fs from 'node:fs';
 import os from 'node:os';
@@ -222,6 +223,7 @@ export function present(home, id, { now = new Date() } = {}) {
     validateTransition(item.state, 'presented');
     item.state = 'presented';
     item.history.push({ at: now.toISOString(), state: 'presented' });
+    registerCard({ draftId: id, to: item.thread, subject: item.subject, channel: item.channel, shownTo: 'user', at: now.toISOString() }, { home });
   });
 }
 

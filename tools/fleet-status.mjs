@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { fetchBeacons } from './fleet-beacon.mjs';
+import { temaRulesFromBeacon } from './lib/tema-rules.mjs';
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const STALE_MS = 24 * 60 * 60 * 1000;
@@ -49,6 +50,7 @@ export function buildFleetStatus({ pcMap, beacons = [], serverPolls = {}, now = 
     const stale = (beaconAgeMs === null || beaconAgeMs > STALE_MS) || (pollAgeMs === null || pollAgeMs > STALE_MS);
     return {
       label,
+      temaRules: temaRulesFromBeacon(beacon,now),
       remoteName: registered?.remoteName || '',
       account: beacon ? String(beacon.account || '') : '',
       hostname: String(beacon?.hostname || ''),
@@ -92,7 +94,8 @@ export function formatFleetTable(rows, now = Date.now()) {
     const beacon = row.hasBeacon ? `${jst(Date.parse(row.beaconAt))} (${formatAge(row.beaconAgeMs)})` : 'ビーコン無し';
     const failing = row.failing.length ? row.failing.join(',') : '-';
     const poll = row.pollAt ? `${jst(Date.parse(row.pollAt))} (${formatAge(row.pollAgeMs)}) [${row.pollSource}]` : '不明';
-    return `${warn}${row.label}${row.remoteName ? `（${row.remoteName}）` : ''}${row.registrationCandidate ? ' [登録候補・アカウントは自己申告]' : ''} / ${row.account || '-'} / ビーコン: ${beacon} / 失敗: ${failing} / poll: ${poll}`;
+    const tema=['tema','signin','consistency'].map(k=>`${k}=${row.temaRules?.[k]===null || row.temaRules?.[k]===undefined?'?':row.temaRules[k]?'yes':'no'}`).join('/');
+    return `${warn}${row.label}${row.remoteName ? `（${row.remoteName}）` : ''}${row.registrationCandidate ? ' [登録候補・アカウントは自己申告]' : ''} / ${row.account || '-'} / ビーコン: ${beacon} / 失敗: ${failing} / poll: ${poll} / 手間ルール: ${tema}`;
   });
   return lines.join('\n');
 }

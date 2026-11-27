@@ -1,3 +1,4 @@
+import { withTema } from './test-fixtures/tema-record.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -8,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeContextMarker } from './lib/send-context.mjs';
 
-const cliPath = fileURLToPath(new URL('./beeper-send.mjs', import.meta.url));
+const cliPath = fileURLToPath(new URL('./test-fixtures/beeper-consistency-cli.mjs', import.meta.url));
 
 function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'beeper-send-test-'));
@@ -457,7 +458,7 @@ test('送信前ガード: 差し戻し文面は dry-run でも exit 4', async t 
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beeper-handback-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const bodyFile = path.join(home, 'body.txt');
-  fs.writeFileSync(bodyFile, '仮押さえ先の確認をお願いします。', 'utf8');
+  fs.writeFileSync(bodyFile, withTema('仮押さえ先の確認をお願いします。'), 'utf8');
   const result = await runCli([
     '--chat', '!chat1:localhost',
     '--body-file', bodyFile,
@@ -471,7 +472,7 @@ test('送信前ガード: HUMAN-ONLY 付きの dry-run は通り、通常文面�
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beeper-handback-ok-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const bodyFile = path.join(home, 'body.txt');
-  fs.writeFileSync(bodyFile, '[HUMAN-ONLY: 現地作業] 11/29 9:00に現場で鍵の受け取りをお願いします。', 'utf8');
+  fs.writeFileSync(bodyFile, withTema('[HUMAN-ONLY: 現地作業] 11/29 9:00に現場で鍵の受け取りをお願いします。'), 'utf8');
   const tagged = await runCli([
     '--chat', '!chat1:localhost',
     '--body-file', bodyFile,

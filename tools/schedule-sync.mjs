@@ -611,7 +611,7 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
       done.add(key);
     }
     if (!dryRun) {
-      const send = dependencies.dm || (body => sendDiscordDm(USER, body, { home, fetchImpl }));
+      const send = dependencies.dm || (body => sendDiscordDm(USER, body, { home, fetchImpl, temaMode: 'warn', source: 'schedule-sync' }));
       const pending = [...results.values()].filter(row => ['created', 'review'].includes(row.status) && !notified.has(row.key));
       let batch = [], size = 0;
       const flush = async () => {

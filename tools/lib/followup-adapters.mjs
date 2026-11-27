@@ -11,6 +11,9 @@ import { resolveBeeperTarget, listMessages, sendMessage } from '../beeper-api.mj
 import { matchesBeeperText } from '../beeper-send.mjs';
 import { searchGmail } from '../gmail-search.mjs';
 import { resolveDiscordBotToken } from '../notify-kim.mjs';
+import { assertSendConsistency, afterSendCleanup } from '../send-consistency-check.mjs';
+
+import { prepareTemaSend } from './unattended-tema.mjs';
 
 const DISCORD_API = 'https://discord.com/api/v10';
 const USER_AGENT = 'orgiast-followup-ledger/1.0';
@@ -140,11 +143,15 @@ export function createBeeperAdapter(deps = {}) {
     },
     async send(row, text) {
       try {
+        text = await prepareTemaSend(text, { home: deps.home, to: chatKey(row), source: 'followup-adapters', temaRecord: row.temaCheck, addItemImpl: deps.addItemImpl });
         const target = resolve({ env: process.env });
         if (!target?.token || target.via === 'none') {
           return { ok: false, messageId: null, error: 'Beeper到達不可: トークン無し' };
         }
+        const input={channel:'beeper',to:chatKey(row),text,draftId:row.draftId,draftReadAt:row.draftReadAt || row.lastCheckedAt};
+        const checked=await (deps.consistencyCheck ?? assertSendConsistency)(input,deps.consistencyDeps);
         const result = await send(chatKey(row), text, {}, { env: process.env, token: target.token });
+        await (deps.cleanup ?? afterSendCleanup)({...input,sentMessageId:result?.id || result?.messageID || result?.pendingMessageID,scheduledSends:checked?.input?.scheduledSends},deps.consistencyDeps);
         return { ok: true, messageId: String(result?.id || result?.messageID || ''), error: null };
       } catch (error) {
         return { ok: false, messageId: null, error: `Beeper到達不可: ${String(error.message || error).slice(0, 120)}` };
@@ -244,9 +251,12 @@ export function createDiscordAdapter(deps = {}) {
     },
     async send(row, text) {
       try {
+        text = await prepareTemaSend(text, { home: deps.home, to: chatKey(row), source: 'followup-adapters', temaRecord: row.temaCheck, addItemImpl: deps.addItemImpl });
         const token = resolveToken(home());
         if (!token) return { ok: false, messageId: null, error: 'Discordトークン無し' };
         const channelId = chatKey(row);
+        const input={channel:'discord',to:channelId,text:String(text).slice(0,2000),draftId:row.draftId,draftReadAt:row.draftReadAt || row.lastCheckedAt};
+        const checked=await (deps.consistencyCheck ?? assertSendConsistency)(input,{home:home(),fetchImpl,...deps.consistencyDeps});
         const res = await fetchImpl(`${DISCORD_API}/channels/${encodeURIComponent(channelId)}/messages`, {
           method: 'POST',
           headers: {
@@ -259,6 +269,7 @@ export function createDiscordAdapter(deps = {}) {
         });
         if (!res.ok) return { ok: false, messageId: null, error: `Discord送信 HTTP ${res.status}` };
         const body = await res.json();
+        await (deps.cleanup ?? afterSendCleanup)({...input,sentMessageId:body.id,scheduledSends:checked?.input?.scheduledSends},{home:home(),...deps.consistencyDeps});
         return { ok: true, messageId: String(body.id || ''), error: null };
       } catch (error) {
         return { ok: false, messageId: null, error: `Discord送信失敗: ${String(error.message || error).slice(0, 120)}` };

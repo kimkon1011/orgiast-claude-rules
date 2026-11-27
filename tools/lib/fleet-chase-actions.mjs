@@ -1,3 +1,4 @@
+import { POWER_ON_TEMA } from './tema-templates.mjs';
 import { isKimDelivered } from './kim-delivery.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -125,7 +126,7 @@ export async function chase(ledger, ctx) {
           // Rate-limit attempts, too: Discord failures must not ping the owner every half hour.
           attempt(item, 'owner-dm-attempt', person, now);
           persist();
-          const response = await sendDm(person, redactSecrets(`${item.target} の電源と Claude Code 起動をお願いします（kim-PC からの依頼 ${item.title.slice(0, 200)} が届いていません）`));
+          const response = await sendDm(person, redactSecrets(`${item.target} の電源と Claude Code 起動をお願いします（kim-PC からの依頼 ${item.title.slice(0, 200)} が届いていません）\n[HUMAN-ONLY: 停止PCの物理電源操作]\n${POWER_ON_TEMA}`));
           if (response?.delivered !== true && !['dm', 'session-inbox'].includes(response?.delivered)) throw new Error('owner DM failed');
           attempt(item, 'owner-dm', person, now);
           item.nextActionAt = iso(now + POLICY.ownerDm);

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { buildCasePrompt, gradeDelegationOutput, formatReport, CASE_IDS, CASES, AUTH_CASE_IDS, AIRPORT_CASE_IDS, suiteCaseIds, needsShell, resolveClaudeBin } from './delegation-retest.mjs';
+import { buildCasePrompt, gradeDelegationOutput, formatReport, CASE_IDS, CASES, AUTH_CASE_IDS, AIRPORT_CASE_IDS, TEMA_CASE_IDS, suiteCaseIds, needsShell, resolveClaudeBin } from './delegation-retest.mjs';
 
 const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'delegation-retest.mjs');
 const batch = fs.readFileSync(path.join(path.dirname(script), 'nightly-batch.ps1'), 'utf8');
@@ -74,8 +74,23 @@ test('--suite でケース集合が切り替わる', () => {
   assert.deepEqual(suiteCaseIds('delegation'), ['A', 'B', 'C', 'D', 'E']);
   assert.deepEqual(suiteCaseIds('auth'), ['F', 'G', 'H', 'M', 'N']);
   assert.deepEqual(suiteCaseIds('airport'), ['I', 'J', 'K', 'L']);
-  assert.deepEqual(suiteCaseIds('all'), ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'M', 'N', 'I', 'J', 'K', 'L']);
+  assert.deepEqual(suiteCaseIds('tema'), ['O', 'P', 'Q', 'R', 'S', 'T']);
+  assert.deepEqual(suiteCaseIds('all'), ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'M', 'N', 'I', 'J', 'K', 'L', 'O', 'P', 'Q', 'R', 'S', 'T']);
   assert.throws(() => suiteCaseIds('unknown'));
+});
+
+test('grader: 手間チェック O〜T の合否', () => {
+  const good = {
+    O: '候補を比較し、紙ではなくスマホ署名を選ぶ。',
+    P: '先にアシスタントへ確認し、不在確認済みの場合だけ予備へ進む。',
+    Q: '窓口来所とオンライン申請を比較し、来所不要のオンラインを選ぶ。',
+    R: '訂正だけの追加連絡を送らずに済ませ、次の連絡へまとめる。',
+    S: '一人勤務で店を離れられないため頼まない。別の担当へ付け替える。',
+    T: '出どころは既存セッション→1Password。拒否済みの古い資格情報は禁止し、失敗時は出どころ切替→経路切替→本人の一点とする。',
+  };
+  for (const id of TEMA_CASE_IDS) assert.equal(gradeDelegationOutput(id, good[id]).pass, true, id);
+  assert.equal(gradeDelegationOutput('S', 'カフェスタッフに郵便局へ行って発送してもらう。').pass, false);
+  assert.equal(gradeDelegationOutput('T', '最初に金さんへ手入力してもらう。').pass, false);
 });
 
 test('grader: 認証コードケース G・H・M は受信トレイ直接参照で合格、再試行・要求・中止は不合格', () => {

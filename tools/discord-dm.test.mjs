@@ -1,3 +1,4 @@
+import { withTema } from './test-fixtures/tema-record.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -12,8 +13,8 @@ import { fileURLToPath } from 'node:url';
 import { makeIndex } from './onboarding-sync.mjs';
 import { main as realMain, REPLY_TO_KIM_FOOTER, sendDiscordDm as realSendDiscordDm } from './discord-dm.mjs';
 const contextApproved = async () => ({ reason: 'test' });
-const sendDiscordDm = (target, body, options={}) => realSendDiscordDm(target, body, { assertContextApproved: contextApproved, ...options });
-const main = (args, options={}) => realMain(args, { assertContextApproved: contextApproved, ...options });
+const sendDiscordDm = (target, body, options={}) => realSendDiscordDm(target, body, { assertContextApproved: contextApproved, consistencyCheck: async () => ({ ok: true }), cleanup: async () => ({ ok: true }), ...options });
+const main = (args, options={}) => realMain(args, { assertContextApproved: contextApproved, consistencyCheck: async () => ({ ok: true }), cleanup: async () => ({ ok: true }), ...options });
 
 const withFooter = text => `${text}\n\n${REPLY_TO_KIM_FOOTER}`;
 
@@ -58,7 +59,7 @@ test('kim 以外への代筆は返答先の一文を末尾に1回だけ付ける
     },
   });
   await send('本文\n');
-  await send(`本文\n\n${REPLY_TO_KIM_FOOTER}`);
+  await send(withTema(`本文\n\n${REPLY_TO_KIM_FOOTER}`));
   assert.equal(bodies[1].content, withFooter('本文'));
   assert.equal(bodies[3].content, withFooter('本文'));
 });
@@ -70,7 +71,7 @@ test('--no-reply-footer は返答先の一文を付けない', async () => {
 
 test('本文は書き換えず、そのまま送る（LLM平易化を通さない）', async () => {
   const bodies = [];
-  await sendDiscordDm('百瀬', 'dry-run 検証: 上記の件、ご確認ください', {
+  await sendDiscordDm('百瀬', withTema('dry-run 検証: 上記の件、ご確認ください'), {
     token: 'test-token', resolve, noCopyKim: true,
     fetchImpl: async (_url, init) => {
       bodies.push(JSON.parse(init.body));
@@ -124,7 +125,7 @@ test('金功勇本人へのPRマージ依頼もkim-inboxへ保存する', async 
   const originalError = console.error;
   console.error = () => {};
   try {
-    const result = await sendDiscordDm('金功勇', 'PR #943 をマージしてください', {
+    const result = await sendDiscordDm('金功勇', withTema('PR #943 をマージしてください'), {
       home, token: 'test-token', resolve: async () => kim,
       fetchImpl: async () => { fetches += 1; throw new Error('unexpected fetch'); },
     });
@@ -140,11 +141,11 @@ test('discord-dm CLIはkim-inbox保存でexit 0、明示例外でもDMしない'
   console.log = () => {}; console.error = () => {};
   try {
     const options = { home, token: 'test-token', resolve: async () => kim };
-    assert.equal(await main(['金功勇', '--body', 'PR #943 をマージしてください'], {
+    assert.equal(await main(['金功勇', '--body', withTema('PR #943 をマージしてください')], {
       ...options, fetchImpl: async () => { throw new Error('unexpected fetch'); },
     }), 0);
     const calls = [];
-    assert.equal(await main(['金功勇', '--body', 'PR #943 をマージしてください', '--kim-action-required'], {
+    assert.equal(await main(['金功勇', '--body', withTema('PR #943 をマージしてください'), '--kim-action-required'], {
       ...options, allowlist: [{ category: 'test', pattern: '.' }],
       fetchImpl: async () => { calls.push(1); return calls.length === 1 ? response({ json: { id: 'dm' } }) : response(); },
     }), 0);

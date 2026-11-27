@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import * as beeper from './beeper-api.mjs';
+import { TRIAL_PROCEDURE_TEMA } from './lib/tema-templates.mjs';
+import { prepareTemaSend } from './lib/unattended-tema.mjs';
 import { isEntry } from './is-entry.mjs';
 import {
   DEFAULT_MAX_REPLY_AGE, classifyReply, contentFor, createLlm, ensureTaskPriority, decisionReport, sentReport,
@@ -468,7 +470,10 @@ export async function runOnce(options = {}) {
 
         }
 
-        const content = contentFor(decision.answer);
+        let cleanAnswer;
+        try { cleanAnswer = await prepareTemaSend(decision.answer, { home, channel: 'beeper', to: chat.id, source: 'discord-beeper-autoreply', requireRecord: true, temaRecord: trialSelfDecline || trialMidpointFail ? TRIAL_PROCEDURE_TEMA : undefined, dryRun, addItemImpl: options.addItemImpl }); }
+        catch (error) { if (!/^TEMA_|^HANDBACK_/.test(error.code || '')) throw error; await decide('手間チェックで止まった送信'); continue; }
+        const content = contentFor(cleanAnswer);
         state.hourly = state.hourly.filter(t => t > now - HOUR);
         if (attempts >= 5 || state.hourly.length >= 30) {
           if (state.hourly.length >= 30 && !dryRun && !fs.existsSync(path.join(dir, 'PAUSE'))) {

@@ -123,6 +123,20 @@ function readMarker(file) {
 function saveMarker(file, marker) {
   fs.writeFileSync(`${file}.tmp`, JSON.stringify(marker, null, 2)); fs.renameSync(`${file}.tmp`, file);
 }
+// 請求書の発行は相手方経理の作業。シートとfreeeを照合した後にだけ使用する。
+export function referralInvoiceTema(now) {
+  return `[TEMA-CHECK]
+候補: 電子請求書を経理へ直接送付 / 紙請求書を郵送
+選択: 電子請求書を経理へ直接送付
+紙理由: なし
+手順数: 1（未着請求書を経理へ一括送付）
+読む量: 月次1通
+追加連絡: 未着請求書依頼を月次報告にまとめる
+前提: 所在=相手方の請求書 / 期限=${monthKey(now)}の月次処理 / 順番=案件シートとfreee入金・証憑照合後
+AI代行: 不可（相手方名義の請求書発行）
+[/TEMA-CHECK]`;
+}
+
 export async function runMonthly({ dryRun = false, force = false, now = new Date(), home = process.env.ORGIAST_HOME || os.homedir(), claudeDir = path.join(home, '.claude') } = {}, deps = {}) {
   const file = path.join(claudeDir, 'origuchi-referral-monthly.json');
   const notify = deps.sendDm || ((_target, body) => {
@@ -173,7 +187,7 @@ export async function runMonthly({ dryRun = false, force = false, now = new Date
     stage = 'Gmail 下書き作成';
     const pending = { month: monthKey(now), dm };
     saveMarker(file, { ...marker, pending }); // Ambiguous API failures must not create duplicate drafts on retry.
-    const draft = await (deps.createDraft || createDraft)({ user: USER, raw: buildRawMessage({ from: USER, to: TO, ...email }) });
+    const draft = await (deps.createDraft || createDraft)({ user: USER, home, temaRecord: referralInvoiceTema(now), raw: buildRawMessage({ from: USER, to: TO, ...email }) });
     createdDraftId = draft.id; pending.draftId = draft.id; saveMarker(file, { ...marker, pending });
     stage = 'Discord DM 送信'; await notify('kim', dm);
     stage = '完了記録'; saveMarker(file, { lastSentMonth: monthKey(now), lastSentAt: now.toISOString() });

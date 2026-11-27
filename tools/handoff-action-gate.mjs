@@ -4,16 +4,25 @@ export const GATE_CONTRACT = {"name": "handoff-action-gate", "remedies": [{"kind
 import { isEntry } from './is-entry.mjs';
 import { readTranscriptContext } from './lib/assistant-text.mjs';
 import { findUnbackedExternalHandoff, formatHandoffActionReason } from './handoff-action-evidence.mjs';
+import { checkTema, formatTemaFindings } from './lib/tema-check.mjs';
 
-export function evaluateHandoffAction({ text, raw }) {
+import { missingCardNotice, CARD_NOTICE } from './lib/approval-cards.mjs';
+
+export function evaluateHandoffAction({ text, raw, home, now, cards }) {
+  if (missingCardNotice(text, { home, now, cards, raw })) return { decision: 'block', code: 'CARD_NOTICE_REQUIRED', reason: `同じ件の承認カードが表示されています。送信報告に「${CARD_NOTICE}」を入れてください。` };
+  const tema = checkTema(text, { kind: 'proposal' });
+  const hard = tema.findings.filter((f) => f.code === 'TEMA_PAPER_NO_REASON' || f.code.startsWith('SIGNIN_'));
+  if (hard.length) return { decision: 'block', reason: formatTemaFindings(hard), code: hard[0].code };
   const violation = findUnbackedExternalHandoff(text, raw);
-  return violation
+  const base = violation
     ? { decision: 'block', reason: formatHandoffActionReason(), code: 'HANDOFF-ACTION' }
     : { decision: 'pass' };
+  if (base.decision === 'pass' && tema.findings.length) return { decision: 'pass', warning: formatTemaFindings(tema.findings), code: 'TEMA_WARN' };
+  return base;
 }
 
-export function evaluateHandoffActionFromRaw({ text, transcriptRaw }) {
-  return evaluateHandoffAction({ text, raw: transcriptRaw });
+export function evaluateHandoffActionFromRaw({ text, transcriptRaw, ...options }) {
+  return evaluateHandoffAction({ text, raw: transcriptRaw, ...options });
 }
 
 async function main() {
@@ -26,8 +35,9 @@ async function main() {
     const text = input?.assistant_text || context.assistantText;
     if (!text) return;
     const transcriptRaw = input?.transcript_raw || context.raw;
-    const result = evaluateHandoffActionFromRaw({ text, transcriptRaw });
+    const result = evaluateHandoffActionFromRaw({ text, transcriptRaw, ...options });
     if (result.decision === 'block') console.log(JSON.stringify({ decision: 'block', reason: result.reason }));
+    else if (result.warning) console.log(JSON.stringify({ systemMessage: result.warning }));
   } catch {
     // 想定外エラーは他ゲートと同じく fail-open。
   }

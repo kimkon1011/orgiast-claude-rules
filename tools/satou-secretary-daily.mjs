@@ -1231,7 +1231,7 @@ export async function notifyDeliveryFailure(reason, { now = new Date(), deps = {
     const history = await (deps.fetchSendHistory || fetchSendHistory)("discord", REPORT_DM_TARGET, { home, fetchImpl: deps.discordFetchImpl }),
       text = deliveryFailureNoticeText(draftInLedger);
     writeContextMarker({ channel: "discord", target: history.target, text, latest: latestOf(history.messages), reason: `業務報告DM送信失敗の通知（固定文）: ${oneLine}`, home });
-    const sent = await (deps.sendDiscordDm || sendDiscordDm)(REPORT_DM_TARGET, text, { home, noCopyKim: true, noReplyFooter: true, requireFullBody: true, fetchImpl: deps.discordFetchImpl });
+    const sent = await (deps.sendDiscordDm || sendDiscordDm)(REPORT_DM_TARGET, text, { home, temaMode: 'warn', source: 'satou-secretary-daily', noCopyKim: true, noReplyFooter: true, requireFullBody: true, fetchImpl: deps.discordFetchImpl });
     if (!sent.delivered || !sent.messageId) throw Error("Discord送信結果を確認できません");
     fs.mkdirSync(path.dirname(notice), { recursive: true });
     fs.writeFileSync(notice, `${JSON.stringify({ at: new Date().toISOString(), status: "sent", channelId: sent.channelId, messageId: sent.messageId, reason: oneLine })}\n`);
@@ -1285,7 +1285,7 @@ export async function deliverReport(report, { now = new Date(), deps = {}, sourc
   if (!verdict.ok) throw Error(`Discord送信前履歴照合NG: ${verdict.reason}`);
   writeContextMarker({ channel: "discord", target: history.target, text, latest: latestOf(history.messages), reason: verdict.reason, home });
   sending = Boolean(deps.sendDiscordDm); // injected senders may not expose the POST boundary
-  const sent = await (deps.sendDiscordDm || sendDiscordDm)(REPORT_DM_TARGET, text, { home, noCopyKim: true, noReplyFooter: true, requireFullBody: true, fetchImpl: deps.discordFetchImpl, onMessageAttempt: () => { sending = true; } });
+  const sent = await (deps.sendDiscordDm || sendDiscordDm)(REPORT_DM_TARGET, text, { home, temaMode: 'warn', source: 'satou-secretary-daily', noCopyKim: true, noReplyFooter: true, requireFullBody: true, fetchImpl: deps.discordFetchImpl, onMessageAttempt: () => { sending = true; } });
   if (!sent.delivered || !sent.messageId) throw Error("Discord送信結果を確認できません");
   fs.writeFileSync(mark, `${JSON.stringify({ at: new Date().toISOString(), channelId: sent.channelId, messageId: sent.messageId || "" })}\n`, { flag: "wx" });
   return { ...sent, marker: mark, text };

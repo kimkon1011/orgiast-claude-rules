@@ -12,6 +12,7 @@ import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
 import { assertContextApproved, latestOf, readOutbound, recordOutbound } from './lib/send-context.mjs';
+import { assertSendConsistency, afterSendCleanup } from './send-consistency-check.mjs';
 import { assertNoHandback, stripHumanOnly } from './lib/handback-guard.mjs';
 import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 
@@ -144,9 +145,9 @@ async function uploadImage(s, file) {
 }
 
 // ONBOARDING「人が読む配信」の送信前ガード: 文字化け・プレースホルダ残りは送らずに落とす。
-export function applyLineHandbackGuard(text, { env = process.env, skipHandbackGuard = false } = {}) {
+export function applyLineHandbackGuard(text, { env = process.env, skipHandbackGuard = false, ...options } = {}) {
   const src = String(text ?? '');
-  if (!skipHandbackGuard) assertNoHandback(src, { env });
+  if (!skipHandbackGuard) assertNoHandback(src, { env, ...options, channel: 'line' });
   return stripHumanOnly(src).trim();
 }
 
@@ -178,19 +179,21 @@ export function assertPushSucceeded(response, body) {
   throw new Error(`push 失敗 ${response.status} ${body}`);
 }
 
-async function main() {
-  const o = parseArgs(process.argv.slice(2));
-  const s = await loadSecrets();
+import { prepareTemaSend } from './lib/unattended-tema.mjs';
+export async function main(argv=process.argv.slice(2), deps={}) {
+  const o = parseArgs(argv);
+  const fetch = deps.fetchImpl ?? globalThis.fetch;
+  const s = await (deps.loadSecrets ?? loadSecrets)();
   const L = { Authorization: `Bearer ${s.LINE_CHANNEL_ACCESS_TOKEN}` };
-  const groupId = await resolveGroup(s, o.group);
+  const groupId = await (deps.resolveGroup ?? resolveGroup)(s, o.group);
   const summary = await (await fetch(`https://api.line.me/v2/bot/group/${groupId}/summary`, { headers: L })).json();
   if (!summary.groupName) throw new Error(`bot がグループに参加していない: ${JSON.stringify(summary)}`);
-  const text = applyLineHandbackGuard(o.textFile ? readFileSync(o.textFile, 'utf8').trim() : '');
+  const text = (await prepareTemaSend(o.textFile ? readFileSync(o.textFile, 'utf8').trim() : '', { ...deps, to: groupId, channel: 'line', source: 'line-group-send', dryRun: o.dryRun })).trim();
   assertSendableText(text);
   console.log(`送信先: ${summary.groupName} (${groupId}) / 本文 ${text.length} 字 / 画像 ${o.images.length} 枚`);
   if (o.dryRun) { console.log('[dry-run] 送信しない'); return; }
   if (!o.skipContextCheck) {
-    await assertContextApproved({ channel: 'line', target: groupId, text, getLatest: async () => {
+    await (deps.assertContextApproved ?? assertContextApproved)({ channel: 'line', target: groupId, text, getLatest: async () => {
     const url = `${s.SUPABASE_URL}/rest/v1/channel_messages?select=id,created_at,external_message_id&channel=eq.line&external_thread_id=eq.${encodeURIComponent(groupId)}&order=created_at.desc&limit=1`;
     const rows = await (await fetch(url, { headers: sbHeaders(s) })).json();
     const received = (rows || []).map(x => ({ id: x.external_message_id || x.id, at: x.created_at }));
@@ -199,11 +202,13 @@ async function main() {
     }});
   }
   const urls = [];
-  for (const f of o.images) urls.push(await uploadImage(s, f));
+  for (const f of o.images) urls.push(await (deps.uploadImage ?? uploadImage)(s, f));
   const chunks = buildMessages(text, urls);
   const rawKey = o.retryKey || randomUUID();
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const baseKey = UUID_RE.test(rawKey) ? rawKey : strToUUID(rawKey);
+  const checkInput={channel:'line',to:groupId,text,draftId:o.retryKey || baseKey};
+  const checked=await (deps.consistencyCheck ?? assertSendConsistency)(checkInput,deps);
   for (const [i, messages] of chunks.entries()) {
     const retryKey = i === 0 ? baseKey : randomUUID();
     const r = await fetch('https://api.line.me/v2/bot/message/push', {
@@ -213,7 +218,8 @@ async function main() {
     const body = await r.text();
     assertPushSucceeded(r, body);
     const sent = JSON.parse(body).sentMessages || [];
-    for (const message of sent) recordOutbound({ channel: 'line', target: groupId, text: messages.find(m => m.type === 'text')?.text ?? '', messageId: message.id });
+    await (deps.cleanup ?? afterSendCleanup)({...checkInput,sentMessageId:sent[0]?.id || retryKey,scheduledSends:checked?.input?.scheduledSends},deps);
+    for (const message of sent) recordOutbound({ channel: 'line', target: groupId, text: messages.find(m => m.type === 'text')?.text ?? '', messageId: message.id },deps.home);
     console.log(`push ${i + 1}/${chunks.length}: HTTP ${r.status} sentMessages=${sent.length} ids=${sent.map((m) => m.id).join(',')} retryKey=${retryKey}`);
   }
 }

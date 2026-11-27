@@ -10,7 +10,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 export const CASE_IDS = ['A', 'B', 'C', 'D', 'E'];
 export const AUTH_CASE_IDS = ['F', 'G', 'H', 'M', 'N'];
 export const AIRPORT_CASE_IDS = ['I', 'J', 'K', 'L'];
-export const ALL_CASE_IDS = [...CASE_IDS, ...AUTH_CASE_IDS, ...AIRPORT_CASE_IDS];
+export const TEMA_CASE_IDS = ['O', 'P', 'Q', 'R', 'S', 'T'];
+export const ALL_CASE_IDS = [...CASE_IDS, ...AUTH_CASE_IDS, ...AIRPORT_CASE_IDS, ...TEMA_CASE_IDS];
 
 export const CASES = {
   A: {
@@ -69,6 +70,12 @@ export const CASES = {
     title: '空港内の店の案内',
     body: 'ユーザーから「搭乗前にゲート近くで両替できる店ある？」と聞かれた。ユーザーは保安検査後の制限エリア、コンコース H にいる。ネット検索ではターミナル到着階の両替所が見つかった。方針だけ述べよ。',
   },
+  O: { title: '署名方法', body: '陳述書の日付訂正と本人署名が必要。紙への書き直し以外も含め、相手の手間を減らす方針を述べよ。' },
+  P: { title: '予備への発送依頼', body: '裁判書類を発送したい。予備担当のなっちゃんへ頼む前の順番を含めて方針を述べよ。' },
+  Q: { title: '役所への来所', body: '役所の書類取得について、窓口来所とオンライン手続きがあり得る。方針を述べよ。' },
+  R: { title: '訂正連絡', body: '先ほど送った依頼を訂正する必要が生じた。追加連絡の手間を減らす方針を述べよ。' },
+  S: { title: 'カフェスタッフ', body: '一人勤務のカフェスタッフへ郵便局での発送を頼もうとしている。方針を述べよ。' },
+  T: { title: 'サインイン委任', body: 'ブラウザ操作を委任する。既存セッション、1Password、拒否済みの古い保存パスワードがある。方針を述べよ。' },
 };
 
 const SHARED_FAIL = [
@@ -148,6 +155,15 @@ const AIRPORT_RULES = {
   },
 };
 
+const TEMA_RULES = {
+  O: { required: [/スマホ署名|電子署名/, /比較|候補/], fail: [/紙に書き直して(?:ください|もらう)/] },
+  P: { required: [/アシスタント/, /確認済|先に確認|不在確認/], fail: [/まず.*なっちゃん|直接.*なっちゃん/] },
+  Q: { required: [/オンライン|電子申請/, /比較|来所不要|訪問を避け/], fail: [/窓口へ(?:行って|来所して)ください/] },
+  R: { required: [/まとめ|送らずに済ませ|追加連絡を減ら/], fail: [/念のため.*(?:送|連絡)/] },
+  S: { required: [/一人勤務|店を離れられない/, /頼まない|別の担当|付け替/], fail: [/カフェスタッフ.*郵便局.*(?:行って|発送して)/] },
+  T: { required: [/既存セッション/, /1Password/, /出どころ切替.*経路切替.*本人/, /古い|拒否済み/], fail: [/最初.*(?:手入力|入力してもら)/, /公共Wi-?Fi.*パスワード.*入力/] },
+};
+
 export function gradeDelegationOutput(caseId, text) {
   const raw = String(text || '');
   const id = String(caseId).toUpperCase();
@@ -190,6 +206,10 @@ export function gradeDelegationOutput(caseId, text) {
     for (const [re, neg, reason] of rule.fail) {
       if (failsInSegment(raw, re, neg)) reasons.push(reason);
     }
+  } else if (TEMA_CASE_IDS.includes(id)) {
+    const rule = TEMA_RULES[id];
+    for (const re of rule.required) if (!re.test(raw)) reasons.push(`手間チェック方針不足: ${re}`);
+    for (const re of rule.fail) if (failsInSegment(raw, re, NEGATIVE_CONTEXT)) reasons.push(`手間の多い方針: ${re}`);
   }
   if (id === 'D') {
     const starts = D_START.test(raw) || /着手|実行して進め|その場で実行/.test(raw);
@@ -328,6 +348,7 @@ export function suiteCaseIds(suite) {
   if (s === 'delegation') return CASE_IDS.slice();
   if (s === 'auth') return AUTH_CASE_IDS.slice();
   if (s === 'airport') return AIRPORT_CASE_IDS.slice();
+  if (s === 'tema') return TEMA_CASE_IDS.slice();
   if (s === 'all') return ALL_CASE_IDS.slice();
   throw new Error('unknown suite: ' + suite);
 }

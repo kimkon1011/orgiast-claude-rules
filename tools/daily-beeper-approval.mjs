@@ -1,4 +1,5 @@
 // Generic messages require per-message approval. Lahaina standing authorization is scoped separately.
+import { registerCard } from './lib/approval-cards.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -26,6 +27,7 @@ export async function prepareApproval({ date, text, title, dryRun = false, home 
   if (item.state === 'drafted') { present(home, id); item = getItem(home, id); }
   if (item.state !== 'presented') return { queueID: id, state: item.state, chatID: chat.id };
   const request = `【${date} 日次写真依頼・Beeper送信承認】\n宛先: ${title}\n経路: kim の LINE（Beeper・追加費用なし）\n\n${text}\n\n確認: この本文を今日送ってよいですか。「1 可」または「1 否」で返答できます（受信箱表示の番号に従ってください）。\n担当セッション用: reply-queue ${id}。kim の返答を確認してから decide approved を実行し、node "${fileURLToPath(import.meta.url)}" --send-approved ${id} で履歴チェック・正規receipt・送信を行う。翌日へ持ち越して送らない。`;
+  registerCard({ draftId: id, to: chat.id, subject: `${date} 日次写真依頼`, channel: 'beeper', shownTo: 'kim-inbox' }, { home });
   const notification = await inbox(home, { kind: 'ask', text: request, source: 'daily-beeper-approval', dedupeKey: `daily-beeper:${id}` }, { drain: false });
   return { queueID: id, inboxID: notification.id, state: 'presented', chatID: chat.id };
 }

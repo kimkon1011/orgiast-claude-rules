@@ -1,3 +1,8 @@
+import { checkTema, formatTemaFindings, stripTemaRecord, parseTemaRecord } from './tema-check.mjs';
+import { saveTemaRecord, findTemaRecord, temaRecordText } from './tema-record-store.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 // 2026-11-26 kim 絶対方針: AIが確認・実行できることを人（金さん・社員）へ戻す文面を、送信の手前で止める。
 // 人にしかできない依頼（ログイン・本人確認・支払い・社外送信の最終承認・現地作業）だけ、本文に
 // [HUMAN-ONLY: 理由] を付ければ通す（タグは送信前に外す）。ORGIAST_HANDBACK_GUARD=0 で無効化（緊急時のみ）。
@@ -20,12 +25,27 @@ export function findHandback(text) {
   for (const line of body.split(/\r?\n/)) for (const re of HANDBACK_PATTERNS) { const m = line.match(re); if (m) { hits.push({ phrase: m[0], line: line.trim() }); break; } }
   return hits;
 }
-export function stripHumanOnly(text) { return String(text ?? '').replace(HUMAN_ONLY_TAG, ''); }
+export function stripHumanOnly(text) { return stripTemaRecord(String(text ?? '').replace(HUMAN_ONLY_TAG, '')); }
 export function hasHumanOnly(text) { return /\[HUMAN-ONLY:\s*[^\]]+\]/.test(String(text ?? '')); }
-export function assertNoHandback(text, { env = process.env } = {}) {
-  if (env.ORGIAST_HANDBACK_GUARD === '0' || hasHumanOnly(text)) return { ok: true, hits: [] };
-  const hits = findHandback(text);
-  if (!hits.length) return { ok: true, hits };
+export function assertNoHandback(text, { env = process.env, temaMode = 'block', kind = 'send', backup = false, home, channel = kind, temaRecord, source = kind, dryRun = false } = {}) {
+  if (env.ORGIAST_HANDBACK_GUARD === '0') return { ok: true, hits: [] };
+  const body = stripHumanOnly(text);
+  const inline = parseTemaRecord(text);
+  const record = inline ?? temaRecord ?? findTemaRecord(body, { home });
+  const inspection = record ? `${body}\n${temaRecordText(record)}` : body;
+  const tema = checkTema(inspection, { mode: temaMode, kind, backup });
+  if (!dryRun && temaMode === 'warn' && tema.findings.length) {
+    const file = path.join(home ?? process.env.ORGIAST_HOME ?? os.homedir(), '.claude', 'tema-check', 'warn.jsonl');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, JSON.stringify({ at: new Date().toISOString(), channel, source, text: body, findings: tema.findings }) + '\n', 'utf8');
+  }
+  if (!tema.ok) { const error = new Error(formatTemaFindings(tema.findings)); error.code = 'TEMA_BLOCKED'; error.findings = tema.findings; throw error; }
+  const humanOnly = hasHumanOnly(text) || Boolean(record?.humanOnly);
+  const hits = humanOnly ? [] : findHandback(body);
+  if (!hits.length) {
+    if (!dryRun && record && !tema.findings.length) saveTemaRecord(body, { ...parseTemaRecord(inspection), ...(humanOnly ? { humanOnly: true } : {}) }, { home, channel });
+    return { ok: true, hits, tema };
+  }
   const error = new Error('相手に作業を戻す表現があるため送信を止めました（kim 2026-11-26 絶対方針）。\n'
     + hits.map(h => `  ・「${h.phrase}」: ${h.line}`).join('\n')
     + '\n送る前に自己点検: ①記録（メール・Drive・tl;dv・台帳・セッション記録・受信箱）でAIが調べられないか ②打診・連絡・予約をAIが実行できないか（社外送信は本文を確定して承認へ回す）。'

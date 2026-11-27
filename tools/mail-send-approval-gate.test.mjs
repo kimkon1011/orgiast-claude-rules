@@ -120,7 +120,8 @@ test('mail-send-approval-gate: HUMAN-ONLY tag is ignored for body display check'
   }), { decision: 'block', reason: BODY_NOT_SHOWN_REASON });
 });
 
-import { judgeLive } from './mail-send-approval-gate.mjs';
+import { judgeLive as realJudgeLive } from './mail-send-approval-gate.mjs';
+const judgeLive=(input,deps={})=>realJudgeLive(input,{consistencyCheck:async()=>({ok:true}),...deps});
 const evidence = body => [{type:'assistant',content:body},{type:'user',content:'送ってよいです。'}];
 test('unknown body, no transcript and draft ID without readback all block', () => {
   for (const input of [

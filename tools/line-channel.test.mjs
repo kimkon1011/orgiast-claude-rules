@@ -1,3 +1,4 @@
+import { withTema } from './test-fixtures/tema-record.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -29,18 +30,18 @@ test('送信前ガード: 差し戻し文面は送らず、HUMAN-ONLY はタグ�
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'line-handback-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'body.txt');
-  fs.writeFileSync(file, '仮押さえ先の確認をお願いします。\n');
+  fs.writeFileSync(file, withTema('仮押さえ先の確認をお願いします。\n'));
   await assert.rejects(
     () => run(['--to', 'C1', '--body-file', file, '--send'], async () => { throw new Error('request'); }),
     (error) => error.code === 'HANDBACK_BLOCKED',
   );
-  fs.writeFileSync(file, '[HUMAN-ONLY: 現地作業] 11/29 9:00に現場で鍵の受け取りをお願いします。');
+  fs.writeFileSync(file, withTema('[HUMAN-ONLY: 現地作業] 11/29 9:00に現場で鍵の受け取りをお願いします。'));
   const calls = [];
   await run(['--to', 'C1', '--body-file', file, '--dry-run'], async (channel, opts) => {
     calls.push(opts);
     if (opts.query?.mode === 'contacts') return { contacts: [{ id: 'C1', name: 'C1', active: true }] };
     return { ok: true };
   });
-  assert.equal(calls.at(-1).body.text, '11/29 9:00に現場で鍵の受け取りをお願いします。');
+  assert.equal(calls.at(-1).body.text.trimEnd(), '11/29 9:00に現場で鍵の受け取りをお願いします。');
   assert.doesNotMatch(calls.at(-1).body.text, /HUMAN-ONLY/);
 });

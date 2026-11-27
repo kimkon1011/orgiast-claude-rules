@@ -33,6 +33,8 @@ function fixture(t) {
     inbox: async (_, notice) => { notices.push(notice); return { id: 'notice' }; }, notices, calls, log: () => {},
     sends: () => sends, readback: message => message,
     transport: { readChats, readMessages, readMessage: async () => null, clock: () => f.now, sleep: async () => {}, readbackMs: 10,
+      // 整合性APIは専用統合テストで検証。この経路テストでは外部取得をモックする。
+      consistencyCheck: async () => ({ ok: true, input: { scheduledSends: [] } }),
       send: async (_, body) => { sends++; sentText = body; return { pendingMessageID: 'pending', chatID: 'fixture-chat' }; } },
   };
   f.exec = async (_, args) => {

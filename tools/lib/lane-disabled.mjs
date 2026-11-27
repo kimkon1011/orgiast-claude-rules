@@ -8,9 +8,9 @@ import path from 'node:path';
 export const isAutoDisabled = entry => ['failure_rate', 'quality_validation'].includes(entry?.reason);
 export const TEMP_DISABLE_MS = 6 * 60 * 60 * 1000;
 export function disabledLanesFile(home = process.env.ORGIAST_HOME || os.homedir()) { return path.join(home, '.claude', 'lanes-disabled.json'); }
-export function readDisabledEntries(home = process.env.ORGIAST_HOME || os.homedir()) {
+export function readDisabledEntries(home = process.env.ORGIAST_HOME || os.homedir(), file = disabledLanesFile(home)) {
   try {
-    const data = JSON.parse(fs.readFileSync(disabledLanesFile(home), 'utf8').replace(/^\uFEFF/, '')) || {};
+    const data = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) || {};
     if (Array.isArray(data)) return Object.fromEntries(data.filter(Boolean).map(n => [String(n).trim().toLowerCase(), { reason: 'manual' }]));
     if (typeof data !== 'object') return {};
     const out = {};
@@ -22,13 +22,12 @@ export function readDisabledEntries(home = process.env.ORGIAST_HOME || os.homedi
     return out;
   } catch { return {}; }
 }
-export function disabledLanes(home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now()) {
+export function disabledLanes(home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), entries = readDisabledEntries(home)) {
   const set = new Set();
-  for (const [name, entry] of Object.entries(readDisabledEntries(home))) {
+  for (const [name, entry] of Object.entries(entries)) {
     const until = Number(entry?.until);
     // until が過去の一時停止は無効として扱わない。restoreExpiredDisabledLanes の
-    // probe を待たずに期限切れを外す（cursor-agent は lane-doctor の PROBE_OF に
-    // 無く、期限切れのまま永遠に候補から外れる実害があった。2026-11-20 000/011）。
+    // probe を待たずに期限切れを外す。
     if (Number.isFinite(until) && until <= now) continue;
     set.add(name);
   }
@@ -52,6 +51,7 @@ export function disableLanesTemporarily(home, hits, now = Date.now()) {
   for (const hit of hits) {
     const name = String(hit?.name || '').trim().toLowerCase();
     if (!name) continue;
+    if (name === 'cursor-agent') continue;
     const existing = data[name];
     const manual = existing && !Number.isFinite(Number(existing.until)) && existing.reason !== 'health' && !isAutoDisabled(existing);
     if (manual) continue;
@@ -64,7 +64,6 @@ export function disableLanesTemporarily(home, hits, now = Date.now()) {
 const PROBE_OF = {
   gemini: 'gemini', 'gemini-cli': 'gemini', openrouter: 'openrouter', 'openrouter-free': 'openrouter', 'openrouter-code': 'openrouter',
   qwen: 'deepseek', deepseek: 'deepseek', 'cheap-code:deepseek': 'deepseek', glm: 'glm', 'cheap-code:glm': 'glm', groq: 'groq',
-  'cursor-agent': 'cursor-agent',
 };
 // 自動停止は生存を実測したら解除する。他の期限付き停止は期限到来後に従来の復帰判定を行う。
 export function restoreExpiredDisabledLanes(health, home, now = Date.now(), recovered) {

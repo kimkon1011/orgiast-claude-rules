@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { evaluateRepairFirst, repairCommand } from './lane-repair-first-gate.mjs';
 import { recordRepair } from './lane-repair-log.mjs';
-import { repairContext, REPAIR_TTL, repairRows } from './lib/lane-repair-state.mjs';
+import { repairContext, REPAIR_TTL, repairRows, pendingRepairs } from './lib/lane-repair-state.mjs';
 import { runHook } from './gate-hook-runner.mjs';
 import { rolloutMode } from './gate-runtime.mjs';
 const now = Date.now(), fault = { alive: false, reason: 'real_fail_rate', error: 'HTTP 500 (9)' };
@@ -41,6 +41,21 @@ test('quota_wait never blocks and context names cheap alternatives', t => {
   const { home, health } = fixture(t, { alive: false, reason: 'quota_wait', until: now + 1000 });
   assert.equal(evaluateRepairFirst(input('Edit'), { home, now }).decision, 'pass');
   assert.match(repairContext(health, home, now), /代替の安いレーン: groq/);
+});
+test('OpenRouter 代替稼働中の gemini/grok は repair-first のブロック対象外', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-gate-sub-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'));
+  const health = {
+    lanes: {
+      gemini: { alive: false, reason: 'probe_failed', via: 'openrouter', error: 'HTTP 500' },
+      grok: { alive: false, reason: 'billing', via: 'openrouter' },
+      openrouter: { alive: true, reason: 'probe_ok' },
+    },
+  };
+  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify(health));
+  assert.equal(evaluateRepairFirst(input('Edit'), { home, now }).decision, 'pass');
+  assert.doesNotMatch(repairContext(health, home, now), /残高不足|レーン修復/);
 });
 test('diagnostic invocations pass; compound and disguised writes block', () => {
   for (const cmd of ['node tools/lane-doctor.mjs --probe', 'node tools/lane-repair-log.mjs --lane deepseek --tried "key checked; HTTP 500" --result unfixable', 'node tools/env-kv.mjs --help', 'git status --short', 'gh pr view 123', 'wsl -d Ubuntu -u root -- codex exec --skip-git-repo-check "ping"', 'wsl -l -q', 'wsl --install -d Ubuntu --no-launch', 'wsl -d Ubuntu -u root -- npm install -g @openai/codex', 'wsl -d Ubuntu -u root -- codex login status', 'wsl --shutdown', '& "C:\\\\Program Files\\\\nodejs\\\\node.exe" tools/lane-doctor.mjs --probe', '& node tools/lane-doctor.mjs --probe', '"C:\\\\Program Files\\\\nodejs\\\\node.exe" tools/lane-repair-log.mjs --lane deepseek --tried "x" --result unfixable']) assert.equal(repairCommand(cmd), true, cmd);
@@ -130,4 +145,19 @@ test('cd prefix permits one diagnostic invocation and preserves chain blocking',
   // cd 前置の dir に特殊文字
   assert.equal(repairCommand('cd some;path && node tools/lane-doctor.mjs'), false);
   assert.equal(repairCommand(`cd "${repo}" && "C:\\Program Files\\nodejs\\node.exe" tools/lane-doctor.mjs --probe`), true);
+});
+
+const missingKeyError = '全候補が失敗しました: 利用可能なキーを持つ候補がありません';
+test('missing_key leaves no pending repair and permits ordinary writes', t => {
+  const { home, health } = fixture(t, { alive: false, reason: 'missing_key', error: missingKeyError });
+  assert.deepEqual(pendingRepairs(health, home, now), []);
+  for (const name of ['Edit', 'Write', 'Bash']) assert.equal(evaluateRepairFirst(input(name, 'touch file'), { home, now }).decision, 'pass');
+});
+test('repair log accepts missing_key and legacy probe_failed with missing-key evidence', async t => {
+  for (const reason of ['missing_key', 'probe_failed']) {
+    const { home, health } = fixture(t, { alive: false, reason, error: missingKeyError });
+    const row = await recordRepair({ home, lane: 'deepseek', tried: 'candidate keys checked', result: 'unfixable', now });
+    assert.equal(row.result, 'unfixable');
+    assert.deepEqual(pendingRepairs(health, home, now), []);
+  }
 });

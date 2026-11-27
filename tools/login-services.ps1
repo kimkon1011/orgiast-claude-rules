@@ -5,7 +5,7 @@ function Say($m, $c = 'White') { Write-Host $m -ForegroundColor $c }
 function Title($m) { Say "`n■ $m" 'Cyan' }
 function Have($name) { $null -ne (Get-Command $name -ErrorAction SilentlyContinue) }
 # 導入直後でも gh/codex を見つけられるよう PATH を読み直す。
-$env:Path = (@([Environment]::GetEnvironmentVariable('Path','Machine'), [Environment]::GetEnvironmentVariable('Path','User'), 'C:\Program Files\GitHub CLI', (Join-Path $env:APPDATA 'npm'), (Join-Path $env:LOCALAPPDATA 'cursor-agent')) | Where-Object { $_ }) -join ';'
+$env:Path = (@([Environment]::GetEnvironmentVariable('Path','Machine'), [Environment]::GetEnvironmentVariable('Path','User'), 'C:\Program Files\GitHub CLI', (Join-Path $env:APPDATA 'npm')) | Where-Object { $_ }) -join ';'
 
 $account = 'seisaku-team@orgiast.jp'
 $homeDir = $env:USERPROFILE
@@ -27,22 +27,11 @@ function Test-CodexLogin {
   if (-not (Test-Path $file)) { return $false }
   try { return [bool]((Get-Content $file -Raw | ConvertFrom-Json).tokens.id_token) } catch { return $false }
 }
-function Test-CursorLogin {
-  if ($env:CURSOR_API_KEY) { return $true }
-  foreach ($rel in @('.cursor\cli-config.json', '.cursor\auth.json')) {
-    if (Test-Path (Join-Path $homeDir $rel)) { return $true }
-  }
-  if (Have 'agent') {
-    & agent status *> $null
-    return $LASTEXITCODE -eq 0
-  }
-  return $false
-}
 function Show-LoopbackNotice {
   Say "Windows Defender ファイアウォールの警告は『キャンセル』で構いません。PC内の localhost 通信だけなので許可不要です。" 'Yellow'
 }
 
-Say "5サービスを $account でログインします。済みのものは自動で飛ばします。" 'Green'
+Say "4サービスを $account でログインします。済みのものは自動で飛ばします。" 'Green'
 
 Title '1/5 GitHub'
 if (Test-GitHubLogin) { Say 'ログイン済みのためスキップします。' 'Green' }
@@ -101,16 +90,6 @@ else {
   & codex login
 }
 $results.Codex = Test-CodexLogin
-
-Title '5/5 Cursor'
-if (Test-CursorLogin) { Say 'ログイン済みのためスキップします。' 'Green' }
-elseif (-not (Have 'agent')) { Say 'agent が見つかりません。インストーラをもう一度実行してください。' 'Red' }
-else {
-  Say "Cursor アプリでも $account でログインできます。CLI は次のブラウザ画面で同じアカウントを承認します。"
-  Say 'ブラウザが開かないときは、表示された URL を開いてください。'
-  & agent login
-}
-$results.Cursor = Test-CursorLogin
 
 Title '最終結果'
 $allOk = $true

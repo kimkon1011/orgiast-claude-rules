@@ -63,7 +63,8 @@ test('記録の失敗で全体を落とさない: ログ追記が失敗しても
     home, playbooks: [], maxCodex: 0, notify: async () => notifications++, decision: () => {}
   })));
   assert.equal(result.escalated.length, 1);
-  assert.equal(result.deferred.length, 2);
+  assert.equal(result.deferred.length, 0);
+  assert.equal(result.budgetSkipped.length, 2);
   const ledger = fs.readFileSync(path.join(home, '.claude', 'nightly-health-remediate-ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(ledger.length, 3);
   assert.equal(notifications, 1);
@@ -86,7 +87,7 @@ test('repair limit defers without decision or notification', async (t) => {
   const home = makeHome(t, { anomalies: [{ label: 'limit', message: 'bad' }] });
   let decisions = 0, notifications = 0;
   const result = await runRemediation({ noWait: true, home, playbooks: [], maxCodex: 0, decision: () => decisions++, notify: async () => notifications++ });
-  assert.equal(result.deferred.length, 1); assert.equal(result.escalated.length, 0);
+  assert.equal(result.deferred.length, 0); assert.equal(result.budgetSkipped.length, 1); assert.equal(result.escalated.length, 0);
   assert.equal(decisions, 0); assert.equal(notifications, 0);
 });
 
@@ -230,7 +231,8 @@ test('under five minutes defers without launching and dry-run remains read-only'
     const home = makeHome(t, { anomalies: [{ label: 'short', message: 'bad' }] });
     const result = await runRemediation({ noWait: true, home, playbooks: [], budgetMinutes: 4, dryRun,
       run: () => { throw new Error('must not launch'); } });
-    assert.equal(dryRun ? result.plan[0].action : result.deferred[0].outcome, 'deferred');
+    assert.equal(dryRun ? result.plan[0].action : result.budgetSkipped[0].outcome, 'deferred');
+    assert.equal(result.budgetSkipped.length, dryRun ? 0 : 1);
     if (dryRun) assert.equal(fs.existsSync(path.join(home, '.claude', 'logs')), false);
   }
 });
@@ -276,7 +278,8 @@ test('wrapper-held log uses stdout and a durable sibling without retrying its lo
     home, playbooks: [], maxCodex: 0,
     notify: async () => assert.fail('no external notification'), decision: () => assert.fail('no decision')
   })));
-  assert.equal(result.deferred.length, 2);
+  assert.equal(result.deferred.length, 0);
+  assert.equal(result.budgetSkipped.length, 2);
   assert.equal(lockedAttempts, 1);
   assert.deepEqual(warnings, []);
   assert.equal(fs.readFileSync(logFile.replace(/\.log$/, '.events.log'), 'utf8'), lines.slice(0, 2).join('\n') + '\n');
@@ -316,7 +319,7 @@ test('wait_for_health reloads yesterday cache and processes today input after co
   const events = waitEvents(home);
   assert.deepEqual(events.map(row => row.status), ['start', 'completed']);
   assert.equal(events[1].ranAtInput, fresh.ranAt);
-  assert.deepEqual(result.deferred.map(row => row.label), ['fresh']);
+  assert.deepEqual(result.budgetSkipped.map(row => row.label), ['fresh']);
 });
 
 test('wait_for_health marks stale input on timeout and continues remediation', async (t) => {
@@ -333,7 +336,7 @@ test('wait_for_health marks stale input on timeout and continues remediation', a
   assert.deepEqual(events.map(row => row.status), ['start', 'timeout']);
   assert.equal(events[1].stale_input, true);
   assert.equal(events[1].ranAtInput, ranAt);
-  assert.deepEqual(result.deferred.map(row => row.label), ['stale']);
+  assert.deepEqual(result.budgetSkipped.map(row => row.label), ['stale']);
 });
 
 test('noWait bypasses wait_for_health events even with yesterday input', async (t) => {
@@ -345,5 +348,5 @@ test('noWait bypasses wait_for_health events even with yesterday input', async (
     notify: async () => assert.fail('no notification expected'), decision: () => assert.fail('no decision expected')
   });
   assert.deepEqual(waitEvents(home), []);
-  assert.deepEqual(result.deferred.map(row => row.label), ['stale']);
+  assert.deepEqual(result.budgetSkipped.map(row => row.label), ['stale']);
 });

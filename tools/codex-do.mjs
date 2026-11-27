@@ -4,6 +4,8 @@
 // --lane sol|astra|auto / --model astra|sol|<slug> / --effort で指定する。
 // 先頭40行の <!-- lane: astra --> でも指定可。Astra 上限時は Sol へ退避する。
 import { disabledLanes } from './lib/lane-disabled.mjs';
+import { hasModelWarning, isLaneIncompatible, modelWarningRemainder } from './lib/lane-incompatible.mjs';
+export { isLaneIncompatible } from './lib/lane-incompatible.mjs';
 import { GATEWAY_MODELS, OPENROUTER_BASE } from './provider-routing.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -19,7 +21,8 @@ import { isCursorLongTimeoutKind, shouldPreferCursorAgent } from './lib/cursor-d
 import { isCursorUsageHalted } from './lib/cursor-usage-pace.mjs';
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { EX_TEMPFAIL, budgetSummary, claudeFile, decideCodexGate, deferredPayload, isUsageLimitText, parseUsageLimitUntil, providerLimitedUntil, writeCodexCooldownFile } from './lib/executor-gate.mjs';
-import { applyCandidateHealth, coolingBackendNames, deprioritizeRecentFailures, deprioritizeUnreliableBackends, readFallbackBackendHistory, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
+import { applyCandidateHealth, coolingBackendNames, deprioritizeRecentFailures, deprioritizeUnreliableBackends, fallbackBackendFailureDomain, readFallbackBackendHistory, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
+export { fallbackBackendFailureDomain };
 import { readGeminiBudgetStatus } from './gemini-budget-guard.mjs';
 import { acquireLock } from './lib/progress-file-lock.mjs';
 import { scanDiffForClaudeApi } from './app-llm-cost-gate.mjs';
@@ -704,14 +707,7 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env, { kin
   return null;
 }
 
-// cheap-code 経由と qwen 直結の deepseek は起動方法だけが異なり、同じ
-// OpenRouter / deepseek model を使う。同じ連鎖で片方が通常予算を使い切った後に
-// もう片方を実行しても upstream 障害を二重に待つだけなので、timeout は同一障害として扱う。
-export function fallbackBackendFailureDomain(backendName) {
-  if (backendName === 'cheap-code:deepseek' || backendName === 'deepseek') return 'deepseek-upstream';
-  return String(backendName || '');
-}
-
+// 連鎖内でも同ドメインの二重 timeout を避ける（冷却は fallback-backend-health 側でドメイン共有）。
 export function shouldSkipFallbackBackendAfterTimeout(backendName, chain = []) {
   const domain = fallbackBackendFailureDomain(backendName);
   return Boolean(domain) && chain.some((attempt) => attempt?.outcome === 'timeout'
@@ -1163,7 +1159,8 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   const deepseek = deepseekKey && qwenAvailable && { kind: 'qwen', name: 'deepseek', model: GATEWAY_MODELS.deepseek, baseUrl: OPENROUTER_BASE, apiKey: deepseekKey };
   const openrouter = openrouterKey && qwenAvailable && { kind: 'qwen', name: 'openrouter-free', model: env.CODEX_DO_FREE_MODEL || 'cohere/north-mini-code:free', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
   const openrouterCode = openrouterKey && qwenAvailable && { kind: 'qwen', name: 'openrouter-code', model: env.CODEX_DO_PAID_CODE_MODEL || 'qwen/qwen3-coder', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
-  const cursorAgent = resolveCursorAgentBackend(homeDir, { ...options, executableAvailable });
+  const cursorOptIn = String((options.env || process.env).CODEX_DO_ENABLE_CURSOR_AGENT || '') === '1';
+  const cursorAgent = cursorOptIn ? resolveCursorAgentBackend(homeDir, { ...options, executableAvailable }) : null;
   const byName = {
     'cursor-agent': () => cursorAgent,
     'gemini-cli': () => gemini,
@@ -1171,14 +1168,10 @@ export function resolveFallbackBackends(homeDir, options = {}) {
     'openrouter-free': () => openrouter,
     'openrouter-code': () => openrouterCode,
   };
-  const skipCursorAgent = String((options.env || process.env).CODEX_DO_SKIP_CURSOR_AGENT || '') === '1';
+  const skipCursorAgent = !cursorOptIn || String((options.env || process.env).CODEX_DO_SKIP_CURSOR_AGENT || '') === '1';
   function withCursorAgentFirst(backends) {
-    // 定額の Cursor Ultra は「上限のときの代わり」ではなく既定の担当。
-    // local.json があっても implement/verify/investigate/summarize/classify の先頭に置く。
-    // local は残りの安価レーン順だけを上書きする（2026-11-20: 019 の local が
-    // withCursorAgentFirst を丸ごと無効化し、Codex 枠切れ後に deepseek だけが走った）。
-    // テストや明示オプトアウトは CODEX_DO_SKIP_CURSOR_AGENT=1 で、既定順に含まれる分も外す。
-    // 金さん向け最終判断・社外文面の最終確認、または従量課金停止中は入れない。
+    // 2026-11-25 金さん指示: Cursor は追加料金対象のため既定 OFF。
+    // CODEX_DO_ENABLE_CURSOR_AGENT=1 の明示オプトイン時だけ旧互換経路へ入れる。
     if (skipCursorAgent) return backends.filter((b) => b.name !== 'cursor-agent');
     const usesCursor = shouldPreferCursorAgent({
       kind: taskKind,
@@ -1240,7 +1233,7 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   // 「成功が速く確実な cheap-code → 最終手段の gemini-cli」に揃える
   // （delegation-health:fallback_chain_timeout 2026-10-27 起票の対処）。
   const ordered = [];
-  if (taskKind === 'implement' || taskKind === 'verify') ordered.push(cursorAgent);
+  if (cursorOptIn && (taskKind === 'implement' || taskKind === 'verify')) ordered.push(cursorAgent);
   ordered.push(ccDeepseek, ccGlm, gemini);
   if (taskKind === 'implement' || taskKind === 'verify') ordered.push(openrouterCode);
   if (taskKind === 'summarize' || taskKind === 'classify') ordered.push(openrouter);
@@ -1369,24 +1362,6 @@ export function isBackendExhausted(output, stderr) {
   if (patterns.some((p) => lower.includes(p))) return true;
   if (merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '402'))) return true;
   return merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '429') || isHttpStatusCodeLine(line, '413'));
-}
-
-const MODEL_WARNING_LINE = /^\s*\[claude-code:unrecognized_model\]/;
-const CHEAP_CODE_BANNER = /^\[(?:openrouter|glm):[^\]\r\n]+\]$/;
-
-function modelWarningRemainder(output, stderr) {
-  // cheap-code は回答の有無にかかわらず provider と model を stderr に出す。
-  const stdoutLines = String(output || '').split(/\r?\n/);
-  const stderrLines = String(stderr || '').split(/\r?\n/).filter(line => !CHEAP_CODE_BANNER.test(line));
-  return [...stdoutLines, ...stderrLines].filter(line => !MODEL_WARNING_LINE.test(line)).join('\n').trim();
-}
-
-function hasModelWarning(text) {
-  return String(text || '').split(/\r?\n/).some(line => MODEL_WARNING_LINE.test(line));
-}
-
-export function isLaneIncompatible(output, stderr, status) {
-  return (hasModelWarning(output) || hasModelWarning(stderr)) && (status !== 0 || !modelWarningRemainder(output, stderr));
 }
 
 export function isBackendBillingFailure(output, stderr) {

@@ -10,6 +10,34 @@ import { isEntry } from './is-entry.mjs';
 // 量化子は非貪欲（`{0,60}?`）。貪欲だと1つの文に先送り語が2回出るとき最後の語まで飲み込み、
 // 引用の判定（一致の直後が閉じ括弧か）が後ろの語にずれる。
 const P1_BASE = /(恒久|改修|実装|修正|対応|恒久化)[^」"'\n]{0,60}?(次(?:の)?セッション|次回セッション|次回に|後日|来週|(?<!の)先送り(?!文))/;
+const PHYSICAL_BLOCKER = /センシティブファイル保護|で拒否されました|lane-guard|ゲートで止ま|ブロックされ|保護で書き込めな|書き込みが拒否/;
+const EXECUTION_CAPACITY_WAIT = /無人枠|unattended_budget|exit 75|枠が回復|枠切れ|usage_limit|quota_wait/i;
+const COMPLETED_OR_LANDED = /MERGED|マージ済み|着地(?:済み)?|テスト緑|PASS/i;
+const SEPARATE_ISSUE = /本タスク外|今回の目的外|目的の外|新たに見つか|新規に発見|別件|別チケット|起票済み|チケット化/;
+function isMarkdownTableCitation(text, index) {
+  const start = text.lastIndexOf('\n', index - 1) + 1;
+  const endAt = text.indexOf('\n', index);
+  const line = text.slice(start, endAt < 0 ? text.length : endAt);
+  if (!/^(?:\||\\\|)/.test(line) || (line.match(/\\?\|/g) ?? []).length < 2) return false;
+  const offset = index - start;
+  const quoteStart = Math.max(line.lastIndexOf('「', offset), line.lastIndexOf('“', offset), line.lastIndexOf('"', offset));
+  if (quoteStart < 0) return false;
+  const quote = line[quoteStart];
+  const close = quote === '「' ? '」' : quote === '“' ? '”' : '"';
+  return line.indexOf(close, offset) >= offset;
+}
+function hasCompletionEvidence(text) {
+  return COMPLETED_OR_LANDED.test(text) || (/node --test/i.test(text) && /pass/i.test(text));
+}
+function isFalsePositiveContext(text, match) {
+  const before = text.slice(Math.max(0, match.index - 600), match.index);
+  const around600 = text.slice(Math.max(0, match.index - 600), match.index + match[0].length + 600);
+  const around400 = text.slice(Math.max(0, match.index - 400), match.index + match[0].length + 400);
+  return isMarkdownTableCitation(text, match.index)
+    || PHYSICAL_BLOCKER.test(before)
+    || EXECUTION_CAPACITY_WAIT.test(around600)
+    || (hasCompletionEvidence(text) && SEPARATE_ISSUE.test(around400));
+}
 // 監査項目名の引用は P1 から除く。例: 「`59f6caca0d69166e`（event-shop.jp「AUJUST」誤記の
 // 恒久修正先送り）の実物検証と記録」。括弧で閉じた先送り語は「先送りを名詞句として名指しした」
 // だけで、先送りを実行した文ではない（行為形は必ず 先送りする/した/にする と続く）。
@@ -24,6 +52,7 @@ const P1 = {
       const bracketed = /[」）]/.test(text[end] ?? '');
       const after = text.slice(end, end + 60).split('\n')[0];
       if (bracketed && P1_CITATION_AFTER.test(after)) continue;
+      if (isFalsePositiveContext(text, match)) continue;
       return match;
     }
     return null;
@@ -62,7 +91,7 @@ function isPatternNameQuote(text, index) {
 }
 function auditAwareFind(regex, text) {
   for (const match of text.matchAll(new RegExp(regex, 'g'))) {
-    if (isAuditCitation(text, match.index) || isPatternNameQuote(text, match.index)) continue;
+    if (isAuditCitation(text, match.index) || isPatternNameQuote(text, match.index) || isFalsePositiveContext(text, match)) continue;
     return match;
   }
   return null;
@@ -145,7 +174,7 @@ const DATA_WAIT_RE = new RegExp(DATA_WAIT);
 const W  = {
   find(text) {
     for (const match of text.matchAll(new RegExp(`(数分|しばらく|少し|少々)[^」"'\\n]{0,20}(お?待ち|待って)|完了を?待って|完了を待ち(?:ます|、)|完了待ちで|[^\\s」"'\\n]{0,30}?のを待って(?:います|ます|いる|おります)|${REPLY_WAIT.source}|${ARRIVAL_WAIT.source}|${LANE_STATUS_WAIT.source}|${DATA_WAIT}`, 'g'))) {
-      if (isAuditCitation(text, match.index) || isPatternNameQuote(text, match.index)) continue;
+      if (isAuditCitation(text, match.index) || isPatternNameQuote(text, match.index) || isFalsePositiveContext(text, match)) continue;
       // 別セッションの待機文を引用した検証・報告と、待機対象が無い旨の否定は W にしない。
       // 一方、返事や完了通知が未着、作業が未完了という否定は待機継続なので残す。
       const lineStart = text.lastIndexOf('\n', match.index - 1) + 1;
@@ -191,9 +220,11 @@ const HANDOFF_EMPTY = /^[\s*_`]*(?:なし|ありません|ありません。|特
 const LANDING_DEFERRAL = /(マージ|着地|取り込|merge)/i;
 const LANDING_TARGET = /\b[0-9a-f]{7,40}\b|[\w.-]+\/[\w.-]+/;
 const LANDING_APPROVAL = /(承認|判断|決め|指示|ください|返す|据え置き|待ち)/;
-const REQUIRED_APPROVAL_CONTEXT = /(?:automerge[^。\n]{0,30}(?:ラベル)?(?:が|は)?(?:無い|ない|無し)|(?:全PC|全アカウント)[^。\n]{0,40}(?:配られ|配布され)|draft(?:\s*PR)?[^。\n]{0,80}(?:(?:merge|マージ)[^。\n]{0,20})?(?:拒否|できない|不可|マージしない|解除してまで)|無人セッション[^。\n]{0,100}(?:本番反映|マージ)[^。\n]{0,50}(?:禁止|承認待ち|保留))/i;
+const REQUIRED_APPROVAL_CONTEXT = /(?:automerge[^。\n]{0,30}(?:ラベル)?(?:が|は)?(?:無い|ない|無し)|(?:全PC|全アカウント)[^。\n]{0,40}(?:配られ|配布され)|draft(?:\s*PR)?[^。\n]{0,80}(?:(?:merge|マージ)[^。\n]{0,20})?(?:拒否|できない|不可|マージしない|解除してまで)|無人セッション[^。\n]{0,100}(?:本番反映|マージ)[^。\n]{0,50}(?:禁止|承認待ち|保留)|1つずつ承認|一つずつ承認|文書を1つずつ|承認する決まり|承認後にのみ)/i;
+const APPROVAL_DECISION_REQUEST = /進め方を決めてください|判断してください/;
 function hasRequiredApprovalContext(text) {
   return REQUIRED_APPROVAL_CONTEXT.test(text)
+    || (APPROVAL_DECISION_REQUEST.test(text) && /1つずつ承認|一つずつ承認|文書を1つずつ|承認する決まり|承認後にのみ/.test(text))
     || (/draft/i.test(text) && /マージしない/.test(text))
     || (/本番反映/.test(text) && /(?:禁止|承認待ち)/.test(text))
     || (/無人セッション/.test(text) && /本番反映[^。\n]{0,40}禁止/.test(text));
@@ -213,7 +244,7 @@ const P3 = {
       // A final report can put the approval constraint in section 1 and the
       // handoff in section 3, well beyond a fixed character window.
       const context = text;
-      if (!isAuditCitation(text, match.index) && !hasRequiredApprovalContext(context) && !NON_BLOCKING_ANSWER.test(context) && !HANDOFF_EMPTY.test(match[1]) && (new RegExp(FIX).test(match[1]) || isLandingDeferral(match[1]))) return match;
+      if (!isAuditCitation(text, match.index) && !isFalsePositiveContext(text, match) && !hasRequiredApprovalContext(context) && !NON_BLOCKING_ANSWER.test(context) && !HANDOFF_EMPTY.test(match[1]) && (new RegExp(FIX).test(match[1]) || isLandingDeferral(match[1]))) return match;
     }
     return null;
   }
@@ -223,7 +254,7 @@ const P4 = {
     for (const match of text.matchAll(new RegExp(ASK_PERMISSION, 'g'))) {
       const context = text.slice(Math.max(0, match.index - 60), match.index + match[0].length + 60);
       const approvalContext = text;
-      if (!isAuditCitation(text, match.index) && !hasRequiredApprovalContext(approvalContext) && ASK_CONTEXT.test(context)) return match;
+      if (!isAuditCitation(text, match.index) && !isFalsePositiveContext(text, match) && !hasRequiredApprovalContext(approvalContext) && ASK_CONTEXT.test(context)) return match;
     }
     return null;
   }

@@ -156,7 +156,13 @@ export function annotateAccounts(text, { services = catalog } = {}) {
   const missing = judge(spaced, { services }).missing.filter(raw => !email.test(lines.find(line => line.includes(raw))?.replace(raw, '') || ''));
   if (!missing.length) return spaced;
   const notes = missing.map(raw => {
-    const account = providerForHost(new URL(raw).hostname.toLowerCase().replace(/\.$/, ''), services)?.account;
+    // authuser にメールがあればそれを最優先（docs.google.com 等はカタログ未登録でも開く先が分かる）。
+    let account = '';
+    try {
+      const authuser = new URL(raw).searchParams.get('authuser') || '';
+      if (/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(authuser)) account = authuser;
+    } catch { /* malformed URL: fall through to catalog */ }
+    if (!account) account = providerForHost(new URL(raw).hostname.toLowerCase().replace(/\.$/, ''), services)?.account || '';
     return account ? `開くアカウント: **${account}** → ${raw}` : `開くアカウント: 未登録（tools/ai-subscription-catalog.json に account を足す） → ${raw}`;
   });
   return `${spaced}\n${notes.join('\n')}`;

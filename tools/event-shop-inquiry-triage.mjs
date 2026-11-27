@@ -14,8 +14,8 @@ const time = value => new Date(value).getTime();
 /**
  * Check whether the given customer email has a Gmail draft in the specified user's mailbox.
  * Only checks seisaku-team@orgiast.jp and kim@orgiast.jp.
- * Returns { found: true, account, draftId } on match, { found: false } when no draft exists,
- * or { found: false, error: 'string' } on API failure (never throws).
+ * Returns { found: true, account, draftId, date? } on match (date = message.internalDate ISO),
+ * { found: false } when no draft exists, or { found: false, error: 'string' } on API failure (never throws).
  */
 export async function checkGmailDrafts(customerEmail, { fetchImpl = gwsFetch, getToken = mintDwdToken } = {}) {
   const accounts = ['seisaku-team@orgiast.jp', 'kim@orgiast.jp'];
@@ -83,6 +83,31 @@ export function resolveReplyDraftApproval({ lastInboundAt, draft, inbox } = {}) 
     nextAction: `下書き: ${draft.account} / inbox: ${inbox.id}`,
   };
 }
+/**
+ * 追客用下書きが最終当社送信以前に作られたものか（送信済みと同文の残り下書き）。
+ * 日時不明は false（従来どおり追客候補として扱う）。
+ */
+export function isStaleFollowupDraft(draft, lastOut) {
+  if (!draft?.found || !draft.date || !lastOut?.received_at) return false;
+  const draftAt = time(draft.date);
+  if (!Number.isFinite(draftAt)) return false;
+  return draftAt <= time(lastOut.received_at);
+}
+/**
+ * 受注確定（申込書受領・手配開始）の合図が lastIn / lastOut 本文にあるか。
+ * 見積送付だけ（「お見積書とお申し込み書を添付」）は当社送信の「添付」だけでは確定にしない。
+ */
+export function isOrderConfirmed(lastIn, lastOut) {
+  const outBody = bodyLines(lastOut).join('\n');
+  const inBody = bodyLines(lastIn).join('\n');
+  if (/(お申し?込み書|ご注文|ご発注).{0,40}(受領|承り|受け付け)/u.test(outBody)) return true;
+  if (/手配を進めて(まいり|参り)ます/u.test(outBody)) return true;
+  // 顧客側は「記入済み書類の返送」のみ。受注前の「お申し込み書をご送付いただけますか」は除外。
+  if (/(お申し?込み書|注文書|発注書)/u.test(inBody)
+    && /(記入|捺印|署名|押印)/u.test(inBody)
+    && /(返送|添付|送付)(いたし|致し|します|しました)/u.test(inBody)) return true;
+  return false;
+}
 export async function classifyLead(lead, messages, now = new Date(), deps = {}) {
   const unique = deduplicateMessages(messages);
   const lastIn = unique.find(m => m.direction === 'inbound' && !isAutoReply(m));
@@ -123,22 +148,29 @@ export async function classifyLead(lead, messages, now = new Date(), deps = {}) 
   } else {
     category = '🟡 顧客待ち';
     const days = Math.max(0, Math.floor((time(now) - time(lastOut.received_at)) / DAY));
-    const waiting = `顧客の返信待ち（最終送信から ${days} 日）`;
-    nextAction = days >= 7 ? `${waiting}・追客候補` : waiting;
-    if (days >= 7 && deps.gmailDraftCheck && deps.kimInboxCheck) {
-      let draft, inbox, draftError = false, inboxError = false;
-      try { draft = await deps.gmailDraftCheck(lead.email); draftError = Boolean(draft?.error); }
-      catch { draftError = true; }
-      try { inbox = await deps.kimInboxCheck(lead); }
-      catch { inboxError = true; }
-      if (draft?.found && inbox?.id) nextAction = `${waiting}・追客下書き済み・kim 承認待ち（下書き: ${draft.account} / inbox: ${inbox.id}）`;
-      else {
-        const details = [];
-        if (draftError) details.push('下書き: 未確認');
-        else if (draft?.found) details.push(`下書きあり: ${draft.account}${inboxError ? '・kim-inbox 未確認' : '・kim-inbox 未登録'}`);
-        if (inbox?.id && !draft?.found) details.push(`kim-inbox 承認待ち: ${inbox.id}${draftError ? '' : '・下書きなし'}`);
-        else if (inboxError) details.push('kim-inbox: 未確認');
-        if (details.length) nextAction = `${waiting}・追客候補（${details.join('・')}）`;
+    if (isOrderConfirmed(lastIn, lastOut)) {
+      nextAction = `受注済み・手配中（追客不要・最終送信から ${days} 日）`;
+    } else {
+      const waiting = `顧客の返信待ち（最終送信から ${days} 日）`;
+      nextAction = days >= 7 ? `${waiting}・追客候補` : waiting;
+      if (days >= 7 && deps.gmailDraftCheck && deps.kimInboxCheck) {
+        let draft, inbox, draftError = false, inboxError = false;
+        try { draft = await deps.gmailDraftCheck(lead.email); draftError = Boolean(draft?.error); }
+        catch { draftError = true; }
+        try { inbox = await deps.kimInboxCheck(lead); }
+        catch { inboxError = true; }
+        if (isStaleFollowupDraft(draft, lastOut)) {
+          // 最終送信より前の下書きは送信済みの残り。追客候補・承認待ちにしない（削除はしない）。
+          nextAction = `古い下書きあり（${draft.account} ${draft.draftId}・最終送信より前・送信しない）`;
+        } else if (draft?.found && inbox?.id) nextAction = `${waiting}・追客下書き済み・kim 承認待ち（下書き: ${draft.account} / inbox: ${inbox.id}）`;
+        else {
+          const details = [];
+          if (draftError) details.push('下書き: 未確認');
+          else if (draft?.found) details.push(`下書きあり: ${draft.account}${inboxError ? '・kim-inbox 未確認' : '・kim-inbox 未登録'}`);
+          if (inbox?.id && !draft?.found) details.push(`kim-inbox 承認待ち: ${inbox.id}${draftError ? '' : '・下書きなし'}`);
+          else if (inboxError) details.push('kim-inbox: 未確認');
+          if (details.length) nextAction = `${waiting}・追客候補（${details.join('・')}）`;
+        }
       }
     }
   }

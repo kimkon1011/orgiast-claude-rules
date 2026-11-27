@@ -77,15 +77,16 @@ test('transcriptが準備できればpending解除、メモ失敗でもready', a
   const rows = await ready({ state, fetchNotes: async () => { throw Error('private'); } });
   assert.equal(rows[0].status, 'ready'); assert.equal(state.pending.m1, undefined); assert.match(rows[0].reason, /メモ取得失敗/);
 });
-test('振分優先順位、実PC名・008代行は014未解決時だけ', () => {
+test('振分優先順位、実PC名・担当PCが未解決なら代行せず保留', () => {
   for (const [name, kind, label] of [['学会協賛', 'gakkai', 'w018-PC'], ['展示会ブース', 'booth', 'DELL'],
     ['営業自動化', 'production', '作業用011'], ['学会制作の自動化', 'production', '作業用011'], ['イベント式典', 'other', '008XPS8300']]) {
     const result = classifyFollowup({ meeting: meeting({ name }), caseMatch: {}, config });
     assert.equal(result.kind, kind); assert.equal(routeFollowup(kind, config, pcMap).pc.label, label);
   }
   const without014 = { ...pcMap }; delete without014.DELL;
-  const fallback = routeFollowup('booth', config, without014);
-  assert.equal(fallback.pc.label, '008XPS8300'); assert.equal(fallback.note, '014未解決のため008で代行');
+  const held = routeFollowup('booth', config, without014);
+  assert.equal(held.pc, null); assert.equal(held.requested, '作業用014');
+  assert.match(held.note, /担当外PCでは代行しない/);
   assert.equal(routeFollowup('gakkai', config, {}).pc, null);
   assert.equal(routeFollowup('unknown', config, pcMap).pc, null);
   assert.equal(routeFollowup('booth', config, without014, [{ label: 'beacon014', remoteName: '作業用014' }]).pc.label, 'beacon014');

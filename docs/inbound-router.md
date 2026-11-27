@@ -26,6 +26,6 @@
 | toho | 999 | 東邦鋼業 |
 | discord-existing | 配送なし | Discord既存自動応答へ任せ、件数だけ記録 |
 
-一度決まった Beeper chatID / Gmail threadId は state の `threadRoutes` に保存し、次回からAIを呼ばず即決します。ルール不一致だけを同じスレッド単位で1回、`llm-ask` の非Claudeプロバイダで分類し、確信度0.7未満・全滅時は `unknown` として次の見回りに載せます。AI相手の `ChatGPT Dots`、`Grok Bot`、`Muse`、自分の送信、Discord、Gmailの配信メール・noreply・promotions/social は振り分けません。ルールは件名・チャット名・送信者を上から評価し、`matchBody: true` のルールだけ本文も評価します。
+一度決まった Beeper chatID / Gmail threadId は state の `threadRoutes` に保存し、次回からAIを呼ばず即決します。ルール不一致だけを同じスレッド単位で1回、`llm-ask` の非Claudeプロバイダで分類し、確信度0.7未満・全滅時は `unknown` として次の見回りに載せます。AI相手の `ChatGPT Dots`、`Grok Bot`、`Muse`、自分の送信、Discord、Gmailの配信メール・noreply・promotions/social は振り分けません。dodaの営業・キャンペーン案内（ピーアール・デイリー、HOPE、doda法人サポートセンターなど）も対応不要のnoiseとして落とします。doda経由の応募者のメール（応募通知・履歴書など）はこの対象外で、通常どおり振り分けます。ルールは件名・チャット名・送信者を上から評価し、`matchBody: true` のルールだけ本文も評価します。
 
 配送は route ごとに1通へ束ねます。60分未完了・失敗・期限切れは最大3回まで再投入し、その後は「渡したが未着手」として要判断へ送ります。000自身宛ても fleet-mail の `000KimPC → kim-PC` 自己配送を使い、指定セッションを再開します。

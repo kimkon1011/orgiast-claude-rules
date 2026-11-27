@@ -1897,6 +1897,43 @@ test('isLaneIncompatible はモデル警告と残りの出力、終了コード�
   assert.equal(isLaneIncompatible('', 'normal failure', 1), false);
 });
 
+test('isLaneIncompatible は実データの trust 警告を残差から外して発火する', () => {
+  // 2026-11-27-8.json の実 stderr（バナー / trust 警告 / unrecognized_model）
+  const realStderr = [
+    '[openrouter:deepseek/deepseek-v4-flash]',
+    'Ignoring 114 permissions.allow entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["C:/Users/kimko"].hasTrustDialogAccepted: true in C:\\Users\\kimko\\.claude\\cheap-code-worker\\.claude.json.',
+    '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}',
+  ].join('\n');
+  assert.equal(isLaneIncompatible('\n', realStderr, 0), true);
+
+  // 回帰: 同じ trust 警告があっても stdout に回答本文があれば success 維持
+  assert.equal(isLaneIncompatible('実作業の回答本文です', realStderr, 0), false);
+
+  // 回帰: trust 警告だけ（unrecognized_model 無し）は対象外
+  const trustOnly = [
+    '[openrouter:deepseek/deepseek-v4-flash]',
+    'Ignoring 114 permissions.allow entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["C:/Users/kimko"].hasTrustDialogAccepted: true in C:\\Users\\kimko\\.claude\\cheap-code-worker\\.claude.json.',
+  ].join('\n');
+  assert.equal(isLaneIncompatible('\n', trustOnly, 0), false);
+
+  // 行が分かれている trust 警告も残差から落ちる
+  const splitTrust = [
+    '[openrouter:deepseek/deepseek-v4-flash]',
+    'Ignoring 3 permissions.allow entries from .claude/settings.json: this workspace has not been trusted.',
+    'Run Claude Code interactively here once and accept the trust dialog, or set projects["C:/Users/kimko"].hasTrustDialogAccepted: true in C:\\Users\\kimko\\.claude\\cheap-code-worker\\.claude.json.',
+    '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}',
+  ].join('\n');
+  assert.equal(isLaneIncompatible('\n', splitTrust, 0), true);
+
+  // 実データ 2026-11-25-8: 単数 "entry" も残差から落とす（entries 専用 regex だと false になる）
+  const singularTrust = [
+    '[openrouter:deepseek/deepseek-v4-flash]',
+    'Ignoring 1 permissions.allow entry from .claude/settings.local.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["d:/CLAUDE.md配布"].hasTrustDialogAccepted: true in C:\\Users\\kimko\\.claude\\cheap-code-worker\\.claude.json.',
+    '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}',
+  ].join('\n');
+  assert.equal(isLaneIncompatible('\n', singularTrust, 0), true);
+});
+
 test('shouldAdvanceToNextBackend は laneIncompatible=true で incompatible を返す', () => {
   assert.deepEqual(shouldAdvanceToNextBackend({ laneIncompatible: true, status: 1 }), { advance: true, outcome: 'incompatible' });
   assert.deepEqual(shouldAdvanceToNextBackend({ laneIncompatible: true, exhausted: true, status: 3 }), { advance: true, outcome: 'incompatible' });
@@ -3314,7 +3351,7 @@ test('cursor-default: Hook blocked を成功扱いせず Codex へフォール�
     home,
     env: {
       ...cursorAgentOnPathEnv(),
-      CODEX_DO_SKIP_CURSOR_AGENT: '0', CURSOR_API_KEY: 'cursor-test',
+      CODEX_DO_ENABLE_CURSOR_AGENT: '1', CODEX_DO_SKIP_CURSOR_AGENT: '0', CURSOR_API_KEY: 'cursor-test',
       CODEX_DO_MOCK_RESULTS: JSON.stringify([
         { status: 0, output: 'Hook blocked: syntax error near unexpected token `(' },
         { status: 0, output: 'Codex completed.' },
@@ -3334,7 +3371,7 @@ test('cursor-default: lane: codex は cursor-agent を起動しない', () => {
     home,
     env: {
       ...cursorAgentOnPathEnv(),
-      CODEX_DO_SKIP_CURSOR_AGENT: '0', CURSOR_API_KEY: 'cursor-test',
+      CODEX_DO_ENABLE_CURSOR_AGENT: '1', CODEX_DO_SKIP_CURSOR_AGENT: '0', CURSOR_API_KEY: 'cursor-test',
       CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: 'Codex completed.' }]),
     },
   });
@@ -3648,21 +3685,18 @@ test('isCursorAgentLoggedIn はフラグ・CURSOR_API_KEY・認証ファイル�
   assert.equal(isCursorAgentLoggedIn('/no-such-cursor-home', { env: {} }), false);
 });
 
-test('resolveFallbackBackends は implement/verify でログイン済みの cursor-agent を有料 OpenRouter より前に置く', () => {
+test('resolveFallbackBackends は既定で cursor-agent を候補に入れない', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
   const options = { executableAvailable: () => true, cursorAgentLoggedIn: true, env: {} };
-  assert.deepEqual(resolveFallbackBackends(dir, { ...options, taskKind: 'implement' }).map((b) => b.name), [
-    'cursor-agent', 'cheap-code:deepseek', 'openrouter-code',
-  ]);
-  assert.deepEqual(resolveFallbackBackends(dir, { ...options, taskKind: 'verify' }).map((b) => b.name)[0], 'cursor-agent');
+  for (const taskKind of ['implement', 'verify', 'investigate', 'summarize', 'classify']) {
+    assert.ok(!resolveFallbackBackends(dir, { ...options, taskKind }).map((b) => b.name).includes('cursor-agent'), taskKind);
+  }
   assert.ok(resolveFallbackBackends(dir, { ...options, taskKind: 'implement' }).some((b) => b.name === 'openrouter-code'));
-  assert.equal(resolveFallbackBackends(dir, { ...options, taskKind: 'implement' }).findIndex((b) => b.name === 'cursor-agent')
-    < resolveFallbackBackends(dir, { ...options, taskKind: 'implement' }).findIndex((b) => b.name === 'openrouter-code'), true);
 });
 
-test('resolveFallbackBackends は summarize/classify/investigate でもログイン済みなら cursor-agent を先頭に置く', () => {
+test('resolveFallbackBackends は明示オプトイン時だけ cursor-agent を先頭に置く', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
-  const options = { executableAvailable: () => true, cursorAgentLoggedIn: true, env: {} };
+  const options = { executableAvailable: () => true, cursorAgentLoggedIn: true, env: { CODEX_DO_ENABLE_CURSOR_AGENT: '1' } };
   for (const taskKind of ['summarize', 'classify', 'investigate']) {
     const names = resolveFallbackBackends(dir, { ...options, taskKind }).map((b) => b.name);
     assert.equal(names[0], 'cursor-agent', taskKind);
@@ -3686,15 +3720,15 @@ test('resolveFallbackBackends は未ログインや CLI 無しでは cursor-agen
   assert.ok(!summarized.includes('cursor-agent'));
 });
 
-test('resolveFallbackBackends は local.json があっても implement/verify では cursor-agent を先頭に置く', () => {
+test('resolveFallbackBackends は local.json に cursor-agent があっても既定では起動候補から外す', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
   const claude = path.join(dir, '.claude');
   fs.mkdirSync(claude, { recursive: true });
   const options = { executableAvailable: () => true, cursorAgentLoggedIn: true, taskKind: 'implement', env: {} };
   fs.writeFileSync(path.join(claude, 'codex-fallback-order.json'), JSON.stringify(['cheap-code:deepseek', 'openrouter-code']) + '\n');
-  assert.deepEqual(resolveFallbackBackends(dir, options).map((b) => b.name), ['cursor-agent', 'cheap-code:deepseek', 'openrouter-code']);
+  assert.deepEqual(resolveFallbackBackends(dir, options).map((b) => b.name), ['cheap-code:deepseek', 'openrouter-code']);
   fs.writeFileSync(path.join(claude, 'codex-fallback-order.local.json'), JSON.stringify(['cheap-code:deepseek', 'openrouter-code']) + '\n');
-  assert.deepEqual(resolveFallbackBackends(dir, options).map((b) => b.name), ['cursor-agent', 'cheap-code:deepseek', 'openrouter-code']);
+  assert.deepEqual(resolveFallbackBackends(dir, options).map((b) => b.name), ['cheap-code:deepseek', 'openrouter-code']);
   assert.deepEqual(resolveFallbackBackends(dir, { ...options, env: { CODEX_DO_SKIP_CURSOR_AGENT: '1' } }).map((b) => b.name), ['cheap-code:deepseek', 'openrouter-code']);
 });
 

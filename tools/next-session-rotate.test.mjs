@@ -102,6 +102,33 @@ test('explicit numbered tasks under 次の1目的 are still collected',()=>{
  assert.equal(r.stats.pending,2);
  assert.match(r.text,/目的内の明示タスク/);
 });
+// 2026-11-27 実測の再現。autopilot が書いた `- why:` / `- first_step:` が残TODOに繰り上がり、
+// 未決の「目的完了: …」も持ち越された。メタデータと完了印は落とし、本物の残TODOだけ残す。
+test('autopilot purpose bullets and 目的完了 are not rotated into 残TODO',()=>{
+ const source=`# autopilot 引き継ぎ
+
+## 次の1目的
+雇用契約書の早期取得と従業員コード反映 [P1タスク|TODO]
+- why: 未取得で給与処理が遅延する可能性
+- first_step: HRシステムで未取得者リスト抽出し、担当へ指示メール送信
+
+## 対象
+C:\\Users\\uers\\.claude\\autopilot\\objective.md
+
+## 残TODO（次の1件を先頭に）
+1. 直近の成果を検証し、目的に向けた次の1施策を選ぶ
+
+## 未決（kim の判断待ち）
+- 目的完了: 雇用契約書は2名とも取得済み。神原さん再署名は kim 2026-11-25 回答「いいえ」で不要
+`;
+ const r=planRotation(source,{now});
+ assert.doesNotMatch(r.text,/why:/);
+ assert.doesNotMatch(r.text,/first_step:/);
+ assert.doesNotMatch(r.text,/目的完了/);
+ assert.match(r.text,/直近の成果を検証し/);
+ assert.equal(r.stats.pending,1);
+ assert.ok(r.stats.completed>=1);
+});
 test('a level-2 heading still activates its own section',()=>{
  const source=`<!-- NEXT-SESSION v1 -->\n<!-- 更新: 2026-09-26 -->\n## 未決（kim の判断待ち）\n1. 見出し境界の確認\n`;
  const r=planRotation(source,{now});

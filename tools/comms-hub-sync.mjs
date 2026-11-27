@@ -14,7 +14,8 @@ import { resolveDiscordBotToken } from './notify-kim.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { collectPlaudForHub } from './plaud-to-tldv.mjs';
 import { isEntry } from './is-entry.mjs';
-import { resolveBeeperTarget } from './beeper-api.mjs';
+import { resolveBeeperTarget, listMessages as beeperListMessages } from './beeper-api.mjs';
+import { formatMessageAttachments, backfillMedia, DEFAULT_MEDIA_OCR_DAILY_USD, jstDayFromTs } from './lib/comms-hub-media.mjs';
 export const SOURCES = ['inquiry-sheet', 'gmail-kim', 'gmail-seisaku', 'discord', 'line', 'line-chat', 'plaud', 'tldv'];
 const DAY = 86400000;
 const TRANSCRIPT_RETRY_MS = 14 * DAY;
@@ -384,7 +385,25 @@ export async function collectSource(source, ctx) {
 
         let text = (msg.text || '').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
         if (msg.attachments?.length) {
-          text += (text ? '\n' : '') + msg.attachments.map(a => `[添付: ${a.type || 'file'} ${a.file_name || a.name || ''}]`).join('\n');
+          const preview = {
+            source, id: msg.id, channelId: chat.id, chat: chatName, ts,
+            sender: msg.senderName || msg.senderID || '', text: '', url: null,
+          };
+          const hubHash = messageKey(preview);
+          const day = jstDayFromTs(ts);
+          const storeDir = ctx.storeDir || path.join(home, '.claude', 'comms-hub', 'store');
+          const formatted = await formatMessageAttachments(msg.attachments, {
+            hubHash,
+            day,
+            storeDir,
+            home,
+            dailyUsdLimit: ctx.mediaDailyUsd ?? DEFAULT_MEDIA_OCR_DAILY_USD,
+            downloadAttachment: ctx.downloadAttachment,
+            askImage: ctx.askImage,
+            fetchImpl,
+            forceEnrich: ctx.forceEnrichMedia === true,
+          });
+          text += (text ? '\n' : '') + formatted.text;
         }
         const obj = {
           source, id: msg.id, channelId: chat.id, chat: chatName,
@@ -900,15 +919,20 @@ async function runLocked(options = {}, deps = {}) {
   }
 }
 export function parseArgs(args) {
-  const options = {};
+  const options = { chats: [] };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--live') options.live = true;
     else if (a === '--dry-run') options.dryRun = true;
-    else if (a === '--state-path' || a === '--store-dir') {
+    else if (a === '--backfill-media') options.backfillMedia = true;
+    else if (a === '--state-path' || a === '--store-dir' || a === '--report-file' || a === '--chat' || a === '--media-daily-usd') {
       const value = args[++i];
       if (!value || value.startsWith('--')) throw new Error(`missing value for ${a}`);
-      options[a === '--state-path' ? 'statePath' : 'storeDir'] = value;
+      if (a === '--state-path') options.statePath = value;
+      else if (a === '--store-dir') options.storeDir = value;
+      else if (a === '--report-file') options.reportFile = value;
+      else if (a === '--chat') options.chats.push(value);
+      else options.mediaDailyUsd = Number(value);
     }
     else if (a === '--since') {
       const v = args[++i]; options.since = /^\d+d$/.test(v) ? Date.now() - parseInt(v) * DAY : Date.parse(v);
@@ -916,11 +940,51 @@ export function parseArgs(args) {
     } else throw new Error(`unknown argument: ${a}`);
   }
   if (options.live && options.dryRun) throw new Error('--live and --dry-run conflict');
-  if (options.live && options.since) throw new Error('--since is dry-run only; live resumes durable cursor');
+  if (options.live && options.since && !options.backfillMedia) throw new Error('--since is dry-run only; live resumes durable cursor');
+  if (options.backfillMedia) {
+    if (!Number.isFinite(options.since)) throw new Error('--backfill-media requires --since');
+    if (!options.chats.length) throw new Error('--backfill-media requires --chat');
+    if (options.mediaDailyUsd !== undefined && !(options.mediaDailyUsd > 0)) throw new Error('invalid --media-daily-usd');
+  } else if (options.chats.length || options.reportFile || options.mediaDailyUsd !== undefined) {
+    throw new Error('--chat / --report-file / --media-daily-usd require --backfill-media');
+  }
+  if (!options.chats.length) delete options.chats;
   return options;
 }
+
+export async function runBackfillMedia(options = {}, deps = {}) {
+  const home = process.env.ORGIAST_HOME || os.homedir();
+  const storeDir = options.storeDir || path.join(home, '.claude', 'comms-hub', 'store');
+  return backfillMedia({
+    since: options.since,
+    chatIds: options.chats || [],
+    home,
+    storeDir,
+    dailyUsdLimit: options.mediaDailyUsd ?? DEFAULT_MEDIA_OCR_DAILY_USD,
+    reportFile: options.reportFile,
+    downloadAttachment: deps.downloadAttachment,
+    askImage: deps.askImage,
+    listMessages: deps.listMessages || beeperListMessages,
+    getChat: deps.getChat,
+    fetchImpl: deps.fetchImpl,
+    messageKey,
+    log: deps.log || console.error,
+  });
+}
+
 if (isEntry(import.meta.url)) {
-  try { const report = await run(parseArgs(process.argv.slice(2))); console.log(JSON.stringify(report, null, 2)); process.exitCode = report.exitCode; }
+  try {
+    const options = parseArgs(process.argv.slice(2));
+    if (options.backfillMedia) {
+      const report = await runBackfillMedia(options);
+      console.log(JSON.stringify(report, null, 2));
+      process.exitCode = 0;
+    } else {
+      const report = await run(options);
+      console.log(JSON.stringify(report, null, 2));
+      process.exitCode = report.exitCode;
+    }
+  }
   catch (e) {
     console.error(e.message); process.exitCode = 1;
     // runLocked's finally already wrote last-run.json with error info when the

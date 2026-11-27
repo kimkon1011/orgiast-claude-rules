@@ -6,17 +6,10 @@ import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
+import { db } from './fixtures/session-cap-state.mjs';
 import { sessionCap, scopeRoots, inspectSession, parseArgs } from './session-cap.mjs';
 
 const now = '2026-11-26T12:00:00.000Z', time = Date.parse(now), hour = 3600000;
-function db(file, state) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const conn = new DatabaseSync(file);
-  conn.exec('CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value TEXT)');
-  conn.prepare('INSERT OR REPLACE INTO ItemTable VALUES (?, ?)').run('Anthropic.claude-code', JSON.stringify(state));
-  conn.close();
-}
 function fixture(t, state = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'session-cap-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

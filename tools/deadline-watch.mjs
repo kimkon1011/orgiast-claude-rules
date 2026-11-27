@@ -6,15 +6,15 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { withAbort, budgetMs } from './lib/deadline-budget.mjs';
-import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { releaseDeadlineWorkerLock } from './kim-inbox.mjs';
 import { isEntry } from './is-entry.mjs';
 import { seatCheck } from './lib/deadline-seat.mjs';
 import { parseRows as parseVehicles } from './vehicle-inspection-watch.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
 import { reportHeartbeat } from './lib/heartbeat.mjs';
-import { calendarBase, calendarOptions, calendarIds, readableEvent, isKimTask, listCalendarEvents, belongsToLedger, moveCalendarEvent, timedDuplicates } from './lib/deadline-calendar.mjs';
+import { calendarBase, calendarOptions, calendarIds, readableEvent, isKimTask, listCalendarEvents, deadlineEventId, isDeadlineOwnedEvent, isDeletableDeadlineEvent, moveCalendarEvent, timedDuplicates } from './lib/deadline-calendar.mjs';
 import { DEFAULT_CONFIG, createLedger, loadConfig, defaultHome, dataPath, readJson, saveJson, sheetUrl, googleClient, withLedgerLock, parseSheetDate, jstDate, daysUntil, isDuplicate, initialize } from './deadline-ledger.mjs';
 const exec = promisify(execFile);
 const inboxScript = fileURLToPath(new URL('./kim-inbox.mjs', import.meta.url));
@@ -103,6 +103,49 @@ export async function inboxAction({ home, row, decision, config, close = false, 
   if (row.readOnly && row.vehicleName && row.plate) await execImpl(process.execPath, [inboxWorker, 'retire', row.vehicleName, row.plate], options);
   return result;
 }
+export function buildInboxOp({ row, decision, config, close = false, markNotified = false }) {
+  if (close) return { type: 'close', key: row.id };
+  return {
+    type: 'add', key: row.id, due: decision.due, remainingDays: decision.remainingDays,
+    text: notificationLine(row, decision, config), source: 'deadline-watch',
+    markNotified, readOnly: !!row.readOnly, notifyCount: Number(row.notifyCount || 0),
+    ...(row.readOnly && row.vehicleName && row.plate ? { vehicleName: row.vehicleName, plate: row.plate } : {}),
+  };
+}
+// The 90s child budget is 3x the 30s performance target, and leaves
+// time for child termination and lock cleanup before the 120s outer step.
+export async function runInboxBatch(ops, { home, signal, execImpl = exec, batchImpl, timeoutMs = 90_000 } = {}) {
+  if (!ops.length) return [];
+  if (batchImpl) return batchImpl(ops, { home, signal });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-inbox-batch-'));
+  const file = path.join(dir, 'ops.json');
+  fs.writeFileSync(file, JSON.stringify(ops), { mode: 0o600 });
+  let child;
+  let exited;
+  try {
+    const pending = execImpl(process.execPath, [inboxWorker, 'batch', file], { ...inboxOptions(home, signal), timeout: timeoutMs });
+    child = pending.child;
+    if (child) exited = new Promise(resolve => child.once('close', resolve));
+    const { stdout } = await pending;
+    return JSON.parse(stdout);
+  } finally {
+    try {
+      await exited;
+      if (child?.pid) releaseDeadlineWorkerLock(home, child.pid);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+}
+export function queueSheetWrite(pending, row, changes) {
+  if (!row || row.readOnly) return;
+  const current = pending.get(row.id) || { id: row.id, changes: {} };
+  if (row.rowNumber && row.header) {
+    current.rowNumber = row.rowNumber;
+    current.header = row.header;
+    current.tab = row.tab;
+  }
+  Object.assign(current.changes, changes);
+  pending.set(row.id, current);
+}
 export function sourceMetadata(row) {
   try { return JSON.parse(String(row.notes || '{}').split('\n')[0]); } catch { return {}; }
 }
@@ -135,35 +178,56 @@ export async function hasSentReply(row, request, onGmail404) {
     throw e;
   }
 }
-export async function syncCalendar(row, { config, state, request, persist = () => {}, log = console.error }) {
+export function calendarEventMatches(row, event, { due, summary, sheetId }) {
+  if (!event || event.extendedProperties?.private?.deadlineArchive) return false;
+  if (event.extendedProperties?.private?.deadlineId !== row.id) return false;
+  if ((event.extendedProperties?.private?.deadlineSheetId || '') !== sheetId) return false;
+  if (event.start?.date !== due) return false;
+  return String(event.summary || '') === String(summary || '');
+}
+export async function syncCalendar(row, { config, state, request, persist = () => {}, log = console.error, warnings }) {
   if (!config.calendar.enabled || state.calendarSync === false) return;
   const ids = calendarIds(config), opts = calendarOptions;
   try {
     const due = effectiveDue(row);
-    const found = [];
-    for (const calendar of [ids.kim, ids.task]) {
+    const inactive = closed(row) || !due || row.status === '候補';
+    const cancelled = /見送り済み|発送不要|先方見送り/.test(String(row.notes || ''));
+    // Prefer one GET on the expected calendar; skip writes when date+title match.
+    const kimLikely = !inactive && !cancelled && isKimTask(row, config);
+    const probeTarget = kimLikely ? ids.kim : ids.task;
+    const probeEvents = await listCalendarEvents(request, probeTarget, { privateExtendedProperty: `deadlineId=${row.id}` });
+    const ownedAllDay = e => isDeadlineOwnedEvent(e, row, config) && !e.start?.dateTime;
+    const probeOwned = probeEvents.filter(ownedAllDay);
+    if (!inactive && !cancelled && probeOwned.length === 1 && !probeOwned[0].extendedProperties?.private?.deadlineArchive) {
+      const label = readableEvent(row, config, probeOwned);
+      if (label && calendarEventMatches(row, probeOwned[0], { due, summary: label.summary, sheetId: config.sheetId })) return;
+    }
+    const found = probeOwned.map(event => ({ calendar: probeTarget, event }));
+    const other = probeTarget === ids.kim ? ids.task : ids.kim;
+    for (const calendar of [other]) {
       const events = await listCalendarEvents(request, calendar, { privateExtendedProperty: `deadlineId=${row.id}` });
-      found.push(...events.filter(e => e.extendedProperties?.private?.deadlineId === row.id && belongsToLedger(e, config) && !e.start?.dateTime).map(event => ({ calendar, event })));
+      found.push(...events.filter(ownedAllDay).map(event => ({ calendar, event })));
     }
     // Close the ledger first. Notes alone are not proof of cancellation, and
     // legacy events without a ledger namespace must not match another D-150.
+    // Ownership allows sync of no-sheet legacy events; DELETE requires
+    // deterministic id or explicit matching sheet metadata (isDeletableDeadlineEvent).
     if (closed(row)) {
       for (const { calendar, event } of found) {
-        const sheet = event.extendedProperties?.private?.deadlineSheetId || String(event.description || '').match(/spreadsheets\/(?:a\/[^/]+\/)?d\/([\w-]+)/)?.[1];
-        if (sheet !== config.sheetId) continue;
+        if (!isDeletableDeadlineEvent(event, row, config)) continue;
         try { await request(`${calendarBase(calendar)}/${encodeURIComponent(event.id)}?sendUpdates=none`, { ...opts, method: 'DELETE' }); }
         catch (error) { if (![404, 410].includes(error.status)) throw error; }
       }
       return;
     }
     const label = readableEvent(row, config, found.map(x => x.event));
-    const inactive = closed(row) || !due || row.status === '候補';
     // Cancellation evidence is retained even when the ledger remains open for audit.
-    const cancelled = /見送り済み|発送不要|先方見送り/.test(String(row.notes || ''));
     const duplicates = !inactive && !cancelled && label && isKimTask(row, config) ? await timedDuplicates(row, due, label.customer, config, request) : [];
     const target = !inactive && !cancelled && label && isKimTask(row, config) && !duplicates.length ? ids.kim : ids.task;
     const active = found.filter(x => !x.event.extendedProperties?.private?.deadlineArchive);
     const primary = active.find(x => x.calendar === target) || active[0];
+    if (primary && primary.calendar === target && label && !duplicates.length && active.length === 1
+      && calendarEventMatches(row, primary.event, { due, summary: label.summary, sheetId: config.sheetId })) return;
     const patch = async (event, calendar, body) => request(`${calendarBase(calendar)}/${encodeURIComponent(event.id)}?sendUpdates=none`, { ...opts, method: 'PATCH', body });
     for (const item of found) {
       const archive = item.event.extendedProperties?.private?.deadlineArchive;
@@ -186,13 +250,22 @@ export async function syncCalendar(row, { config, state, request, persist = () =
       reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 10080 }, { method: 'popup', minutes: 1440 }] }, extendedProperties: { private: { deadlineId: row.id, deadlineSheetId: config.sheetId } } };
     const base = calendarBase(target);
     {
-      const id = createHash('sha256').update(`${config.sheetId}:${row.id}`).digest('hex');
+      const id = deadlineEventId(config.sheetId, row.id);
       try { await request(`${base}?sendUpdates=none`, { ...opts, method: 'POST', body: { ...body, id } }); }
       catch (e) {
         if (e.status !== 409) throw e;
         const existing = await request(`${base}/${id}`, opts);
-        if (existing.status === 'cancelled' || !belongsToLedger(existing, config) || existing.extendedProperties?.private?.deadlineId !== row.id) throw Error(`Calendar ID衝突: ${row.id}（別予定へのPATCHを停止）`);
-        await patch(existing, target, body);
+        const privId = existing.extendedProperties?.private?.deadlineId;
+        // Deterministic id encodes this sheetId. Reclaim cancelled stubs and stale
+        // deadlineSheetId metadata when deadlineId is ours or unset. Only a different
+        // deadlineId is a true foreign occupant — skip that row without failing the run.
+        if (privId && privId !== row.id) {
+          const message = `Calendar ID衝突: ${row.id}（別予定へのPATCHを停止）`;
+          log(`deadline-watch: ${message}`);
+          warnings?.push({ id: row.id, phase: 'Calendar sync', warning: message });
+          return;
+        }
+        await patch(existing, target, { ...body, ...(existing.status === 'cancelled' ? { status: 'confirmed' } : {}) });
       }
     }
   } catch (e) {
@@ -257,7 +330,7 @@ export function watchRuntime(home, { stderr = console.error, totalMs = 45 * 60_0
   }
   return { step, log, filename, currentSignal: () => context.getStore() || global.signal, signal: global.signal, inboxMs, lockMs, httpMs, finish: () => clearTimeout(timer) };
 }
-export async function runWatch({ home, config, ledger, sheets, request, today, dryRun = false, rows: suppliedRows, state = {}, notify = inboxAction, heartbeat = reportHeartbeat, stderr = console.error, runtime, readInbox = readInboxKeys }) {
+export async function runWatch({ home, config, ledger, sheets, request, today, dryRun = false, rows: suppliedRows, state = {}, notify = inboxAction, heartbeat = reportHeartbeat, stderr = console.error, runtime, readInbox = readInboxKeys, inboxBatch }) {
   const perform = runtime?.step || ((name, fn) => fn());
   let rows = suppliedRows;
   const errors = [], warnings = [];
@@ -282,38 +355,86 @@ export async function runWatch({ home, config, ledger, sheets, request, today, d
   const openKeys = new Set(inbox.value || []);
   const persist = () => saveJson(dataPath(home, 'state.json'), state);
   const decisions = [];
-  for (const original of rows) {
-    runtime?.signal.throwIfAborted();
-    let row = { ...original };
-    try {
-      let completionEvidence = row.kind === '支払' && row.completedAt;
-      if (!closed(row) && !row.readOnly && !completionEvidence) {
-        const checked = await attempt(row.id, 'auto-close', () => hasSentReply(row, request, () => warnings.push({ id: row.id, phase: 'auto-close', warning: '元メールが見つからない(404)' })));
-        completionEvidence = checked.value;
-      }
-      // An unavailable completion check must not suppress an outstanding deadline.
-      if (!closed(row) && !row.readOnly && completionEvidence) {
-        const changes = { status: '完了', completedAt: row.completedAt || today };
-        if (dryRun || (await attempt(row.id, 'Sheets completion', () => ledger.patch(row.id, changes))).ok) Object.assign(row, changes);
-      }
-      Object.assign(original, row);
-      const decision = evaluate(row, today, config);
-      if (!dryRun && !row.readOnly) await attempt(row.id, 'Sheets remainingDays', () => ledger.patch(row.id, { remainingDays: decision.remainingDays ?? '' }));
-      const priorDate = row.readOnly ? state.vehicles?.[row.id]?.lastNotified : row.lastNotified;
-      const shouldNotify = decision.stage && decision.kim && priorDate !== today;
-      decisions.push({ id: row.id, title: row.title, status: row.status, ...decision, notify: !!shouldNotify, ...(shouldNotify ? { line: notificationLine(row, decision, config) } : {}) });
-      if (!dryRun) {
-        if (closed(row) || !decision.kim) await attempt(row.id, 'kim-inbox close', signal => notify({ home, row, config, close: true, signal }), runtime?.inboxMs);
-        else if (shouldNotify || openKeys.has(row.id)) {
-          const sent = await attempt(row.id, 'kim-inbox add', signal => notify({ home, row, decision, config, signal }), runtime?.inboxMs);
-          if (shouldNotify && sent.ok) {
-            if (row.readOnly) { state.vehicles ||= {}; state.vehicles[row.id] = { lastNotified: today }; persist(); }
-            else await attempt(row.id, 'Sheets lastNotified', () => ledger.patch(row.id, { lastNotified: today, notifyCount: Number(row.notifyCount || 0) + 1 }));
+  const pendingSheet = new Map();
+  const inboxOps = [];
+  const rowById = new Map();
+  const flushSheets = async (phase = 'Sheets batchWrite') => {
+    if (dryRun || !pendingSheet.size) return { ok: true };
+    const entries = [...pendingSheet.values()];
+    pendingSheet.clear();
+    if (typeof ledger.batchPatch === 'function') return attempt('ledger', phase, () => ledger.batchPatch(entries));
+    for (const entry of entries) {
+      const result = await attempt(entry.id, phase, () => ledger.patch(entry.id, entry.changes));
+      if (!result.ok) return result;
+    }
+    return { ok: true };
+  };
+  try {
+    for (const original of rows) {
+      runtime?.signal.throwIfAborted();
+      let row = { ...original };
+      try {
+        let completionEvidence = row.kind === '支払' && row.completedAt;
+        if (!closed(row) && !row.readOnly && !completionEvidence) {
+          const checked = await attempt(row.id, 'auto-close', () => hasSentReply(row, request, () => warnings.push({ id: row.id, phase: 'auto-close', warning: '元メールが見つからない(404)' })));
+          completionEvidence = checked.value;
+        }
+        // An unavailable completion check must not suppress an outstanding deadline.
+        if (!closed(row) && !row.readOnly && completionEvidence) {
+          const changes = { status: '完了', completedAt: row.completedAt || today };
+          if (dryRun) Object.assign(row, changes);
+          else {
+            queueSheetWrite(pendingSheet, row, changes);
+            Object.assign(row, changes);
           }
         }
-        await attempt(row.id, 'Calendar sync', () => syncCalendar(row, { config, state, request, persist, log: stderr }));
+        Object.assign(original, row);
+        rowById.set(row.id, row);
+        const decision = evaluate(row, today, config);
+        if (!dryRun && !row.readOnly) queueSheetWrite(pendingSheet, row, { remainingDays: decision.remainingDays ?? '' });
+        const priorDate = row.readOnly ? state.vehicles?.[row.id]?.lastNotified : row.lastNotified;
+        const shouldNotify = decision.stage && decision.kim && priorDate !== today;
+        decisions.push({ id: row.id, title: row.title, status: row.status, ...decision, notify: !!shouldNotify, ...(shouldNotify ? { line: notificationLine(row, decision, config) } : {}) });
+        if (!dryRun) {
+          if (closed(row) || !decision.kim) inboxOps.push(buildInboxOp({ row, config, close: true }));
+          else if (shouldNotify || openKeys.has(row.id)) inboxOps.push(buildInboxOp({ row, decision, config, markNotified: shouldNotify }));
+          await attempt(row.id, 'Calendar sync', () => syncCalendar(row, { config, state, request, persist, log: stderr, warnings }));
+        }
+      } catch (e) { runtime?.signal.throwIfAborted(); errors.push({ id: row.id, error: e.message, ...(isTimeout(e) ? { timeout: true } : {}) }); }
+    }
+    if (!dryRun && inboxOps.length) {
+      const batch = await attempt('inbox', 'batch', signal => {
+        if (inboxBatch) return inboxBatch(inboxOps, { home, signal });
+        if (notify !== inboxAction) {
+          return Promise.all(inboxOps.map(async op => {
+            const row = rowById.get(op.key) || { id: op.key };
+            try {
+              await notify({ home, row, decision: op.type === 'add' ? { due: op.due, remainingDays: op.remainingDays } : undefined, config, close: op.type === 'close', signal });
+              return { key: op.key, ok: true, markNotified: !!op.markNotified, readOnly: !!op.readOnly, notifyCount: op.notifyCount };
+            } catch (error) {
+              return { key: op.key, ok: false, error: error.message, markNotified: false };
+            }
+          }));
+        }
+        return runInboxBatch(inboxOps, { home, signal });
+      }, runtime?.inboxMs);
+      for (const result of batch.value || []) {
+        if (!result.ok) {
+          errors.push({ id: result.key, phase: 'kim-inbox batch', error: result.error || 'failed' });
+          continue;
+        }
+        if (!result.markNotified) continue;
+        const row = rowById.get(result.key);
+        if (result.readOnly || row?.readOnly) {
+          state.vehicles ||= {};
+          state.vehicles[result.key] = { lastNotified: today };
+          persist();
+        } else if (row) queueSheetWrite(pendingSheet, row, { lastNotified: today, notifyCount: Number(result.notifyCount ?? row.notifyCount ?? 0) + 1 });
       }
-    } catch (e) { runtime?.signal.throwIfAborted(); errors.push({ id: row.id, error: e.message, ...(isTimeout(e) ? { timeout: true } : {}) }); }
+    }
+  } finally {
+    // Watchdog/abort must still flush queued remainingDays / completion writes.
+    await flushSheets();
   }
   if (!dryRun && loaded) await attempt('state', 'persist digest', () => {
     state.lastWatchAt = new Date().toISOString(); persist();
@@ -380,7 +501,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       if (args.digest) { stdout(formatDigest(rows || await loadRows({ config, ledger, sheets }), today, config)); return { errors: [] }; }
       let result;
       if (operation) result = { actions: await manualOperation({ operation, id: args[operation], until: args.until, note: args.note, ledger, home, today, config, notify: args => runtime.step('kim-inbox manual', signal => (deps.notify || inboxAction)({ ...args, signal }), runtime.inboxMs), dryRun: !!args['dry-run'] }), errors: [] };
-      else result = await runWatch({ home, config, ledger, sheets, request, today, dryRun: !!args['dry-run'], rows, state: fixture ? {} : readJson(dataPath(home, 'state.json'), {}), notify: deps.notify, stderr, runtime, readInbox: deps.readInbox });
+      else result = await runWatch({ home, config, ledger, sheets, request, today, dryRun: !!args['dry-run'], rows, state: fixture ? {} : readJson(dataPath(home, 'state.json'), {}), notify: deps.notify, stderr, runtime, readInbox: deps.readInbox, inboxBatch: deps.inboxBatch });
       stdout(JSON.stringify(result, null, 2)); return result;
     };
     let lockAcquired = false;
@@ -400,7 +521,10 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     else if (result.warnings?.length) {
       const ids = result.warnings.map(w => w.id);
       const suffix = ids.length === 1 ? ids[0] : `${ids[0]} ほか ${ids.length - 1}件`;
-      resultSummary = `期限追跡完了（警告: ${suffix} 元メール404）`;
+      const allMail404 = result.warnings.every(w => /元メールが見つからない\(404\)/.test(w.warning || ''));
+      resultSummary = allMail404
+        ? `期限追跡完了（警告: ${suffix} 元メール404）`
+        : `期限追跡完了（警告: ${suffix}）`;
     } else resultSummary = '期限追跡完了';
     partial = result.errors.some(e => e.timeout);
     return ok ? 0 : partial ? 2 : 1;

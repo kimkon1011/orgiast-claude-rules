@@ -27,10 +27,11 @@ const normalized = text => String(text).normalize('NFKC').toLowerCase().replace(
 const safeError = (text, secrets = []) => secrets.reduce((value, secret) => secret ? value.replaceAll(secret, '[REDACTED]') : value, String(text)).replace(/[\r\n]+/g, ' ');
 export const contentHash = item => createHash('sha256').update(normalized(`${item.summary}\n${item.steps}`)).digest('hex');
 export const japanDate = now => new Date(+now + 9 * 3600000).toISOString().slice(0, 10);
-export const creditBlockedStatusWithDate = (blockedAt, hasFallback = false) => {
+export const creditBlockedStatusWithDate = (blockedAt, hasFallback = false, isContinued = false) => {
   const datePart = blockedAt ? `（x.ai 残高切れ・${japanDate(new Date(blockedAt))}から）` : '';
   const fallbackPart = hasFallback ? '(fallback)' : '';
-  return `skip:支払い待ち${datePart}${fallbackPart}`;
+  const continuedPart = isContinued ? '(継続)' : '';
+  return `skip:支払い待ち${datePart}${fallbackPart}${continuedPart}`;
 };
 export function parseArgs(args) {
   const result = { dryRun: false };
@@ -46,12 +47,14 @@ export function parseArgs(args) {
 }
 export function validateConfig(config) {
   config = { ...config, timeoutMs: config.timeoutMs === undefined ? 300000 : config.timeoutMs };
+  config = { ...config, maxBarrenTopics: config.maxBarrenTopics === undefined ? 3 : config.maxBarrenTopics };
   if (!Number.isSafeInteger(config.timeoutMs) || config.timeoutMs < 1 || config.timeoutMs > 2147483647) throw new Error('設定不正: timeoutMs');
-  for (const key of ['maxCalls', 'maxOutputTokens']) if (!Number.isSafeInteger(config[key]) || config[key] < 1) throw new Error(`設定不正: ${key}`);
+  for (const key of ['maxCalls', 'maxOutputTokens', 'maxBarrenTopics']) if (!Number.isSafeInteger(config[key]) || config[key] < 1) throw new Error(`設定不正: ${key}`);
   for (const key of ['maxCostUsd', 'reservePerCallUsd', 'minLikes']) if (!Number.isFinite(config[key]) || config[key] <= 0) throw new Error(`設定不正: ${key}`);
   for (const key of ['inputPerMillion', 'outputPerMillion', 'post', 'profile']) if (!Number.isFinite(config.estimatedRates?.[key]) || config.estimatedRates[key] < 0) throw new Error(`設定不正: estimatedRates.${key}`);
   if (!Array.isArray(config.topics) || config.topics.some(t => !PURPOSES.includes(t.purpose) || typeof t.query !== 'string' || !t.query.trim())) throw new Error('設定不正: topics');
   if (config.fallback !== undefined && config.fallback !== null && config.fallback !== 'web-search') throw new Error('設定不正: fallback（null または "web-search" のみ可）');
+  if (config.creditBlockRetryDays !== undefined && (!Number.isSafeInteger(config.creditBlockRetryDays) || config.creditBlockRetryDays < 1)) throw new Error('設定不正: creditBlockRetryDays');
   return config;
 }
 export function validateState(state) {
@@ -249,9 +252,9 @@ export async function runCollect(options = {}) {
   let locked = false;
   const save = state => { if (!dryRun) { const tmp = `${stateFile}.tmp`; fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n'); fs.renameSync(tmp, stateFile); } };
   let acquired = 0, added = 0, duplicates = 0, calls = 0, cost = 0, state;
-  const skipCreditBlocked = (fallbackAdded = 0) => {
+  const skipCreditBlocked = (fallbackAdded = 0, isContinued = false) => {
     log(CREDIT_BLOCKED_MESSAGE);
-    const status = creditBlockedStatusWithDate(state?.creditBlockedAt, fallbackAdded > 0);
+    const status = creditBlockedStatusWithDate(state?.creditBlockedAt, fallbackAdded > 0, isContinued);
     return { status, calls, cost, added, duplicates };
   };
   try {
@@ -302,20 +305,24 @@ export async function runCollect(options = {}) {
       added += deduped.length; save(state);
       return deduped.length;
     };
-    const collectCreditBlockedFallback = async (topic, advanceTopic = true) => {
-      if (config.fallback !== 'web-search') return skipCreditBlocked();
+    const collectCreditBlockedFallback = async (topic, advanceTopic = true, continued = false) => {
+      if (config.fallback !== 'web-search') return skipCreditBlocked(0, continued);
       if (advanceTopic) state.nextTopicIndex = (state.nextTopicIndex + 1) % topicCount;
       save(state);
       try {
         const fallbackResult = await collectFallback(topic.query, topic.purpose, now, config, { fetchFn, log, searchImpl: options.searchImpl });
-        return skipCreditBlocked(appendFallbackItems(topic, fallbackResult));
+        return skipCreditBlocked(appendFallbackItems(topic, fallbackResult), continued);
       } catch (fbError) {
         log('x-ai-tips-collect: fallback も失敗', String(fbError.message).slice(0, 200));
-        return skipCreditBlocked();
+        return skipCreditBlocked(0, continued);
       }
     };
     const blockedAt = Date.parse(state.creditBlockedAt);
-    if (Number.isFinite(blockedAt) && japanDate(new Date(blockedAt)) === date) return collectCreditBlockedFallback(config.topics[startTopicIndex]);
+    const creditBlockRetryDays = Number.isSafeInteger(config.creditBlockRetryDays) && config.creditBlockRetryDays >= 1 ? config.creditBlockRetryDays : 7;
+    if (Number.isFinite(blockedAt) && now.getTime() - blockedAt < creditBlockRetryDays * DAY) {
+      const isContinued = japanDate(new Date(blockedAt)) < date;
+      return collectCreditBlockedFallback(config.topics[startTopicIndex], true, isContinued);
+    }
     if (state.night?.date !== date) state.night = { date, calls: 0, costUsd: 0 };
     // 送信直前に予約する。配送後クラッシュでも同じ週に二重送信しない。
     if (new Date(`${date}T00:00:00Z`).getUTCDay() === 1 && state.weekly?.date !== date) {
@@ -336,6 +343,7 @@ export async function runCollect(options = {}) {
     let failedTopics = 0;
     let parseFailedTopics = 0;
     let truncated = '';
+    let barrenCount = 0;
     save(state);
     for (let offset = 0; offset < Math.min(topicCount, limit); offset++) {
       const topicIndex = (startTopicIndex + offset) % topicCount;
@@ -346,7 +354,7 @@ export async function runCollect(options = {}) {
       // 未実行の次テーマを予約と同時に保存。全件回れた夜も翌夜の先頭を1つずらす。
       state.nextTopicIndex = (offset === topicCount - 1 ? startTopicIndex + 1 : topicIndex + 1) % topicCount;
       state.night.calls++; state.night.costUsd += config.reservePerCallUsd; calls++; cost += config.reservePerCallUsd; save(state);
-      let usage, actual, failure, signal, serverError = false, awaitingResponse = true, creditBlocked = false, parseFailed = false, usingOpenRouterFallback = false;
+      let usage, actual, failure, signal, serverError = false, awaitingResponse = true, creditBlocked = false, parseFailed = false, usingOpenRouterFallback = false, topicAdded = 0;
       try {
         signal = AbortSignal.timeout(config.timeoutMs);
         const request = buildRequest(topic, now, config);
@@ -403,6 +411,16 @@ acquired += items.length;
           fs.appendFileSync(proposalFile, (existing && !existing.endsWith('\n') ? '\n' : '') + result.added.map(JSON.stringify).join('\n') + '\n');
         }
         added += result.added.length; save(state);
+        topicAdded = result.added.length;
+        if (topicAdded === 0) {
+          barrenCount++;
+          if (barrenCount >= config.maxBarrenTopics) {
+            truncated = `無収穫${config.maxBarrenTopics}連続`;
+            break;
+          }
+        } else {
+          barrenCount = 0;
+        }
       } catch (error) {
         failure = safeError(error.message, [key, openRouterKey]);
         const timedOut = awaitingResponse && (signal?.aborted || ['TimeoutError', 'AbortError'].includes(error.name));
@@ -423,7 +441,7 @@ acquired += items.length;
         }
       }
       finally {
-        if (!dryRun) fs.appendFileSync(path.join(dir, 'runs.jsonl'), JSON.stringify({ at: now.toISOString(), night: date, topic, model: 'grok-4.6', usage, costUsd: actual ?? config.reservePerCallUsd, estimated: usage?.cost_in_usd_ticks == null, reserved: actual == null, status: creditBlocked ? CREDIT_BLOCKED_STATUS : parseFailed ? 'error:parse-failed' : failure ? `error:${failure}` : 'ok', nightCalls: state.night.calls, nightCostUsd: state.night.costUsd }) + '\n');
+        if (!dryRun) fs.appendFileSync(path.join(dir, 'runs.jsonl'), JSON.stringify({ at: now.toISOString(), night: date, topic, model: 'grok-4.6', usage, costUsd: actual ?? config.reservePerCallUsd, estimated: usage?.cost_in_usd_ticks == null, reserved: actual == null, status: creditBlocked ? CREDIT_BLOCKED_STATUS : parseFailed ? 'error:parse-failed' : failure ? `error:${failure}` : 'ok', added: topicAdded, nightCalls: state.night.calls, nightCostUsd: state.night.costUsd, creditBlocked: creditBlocked }) + '\n');
       }
     }
     if (!truncated && failedTopics) throw new Error(`テーマ失敗${failedTopics}件（残りのテーマは処理継続）`);

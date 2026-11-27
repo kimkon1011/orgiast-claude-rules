@@ -38,16 +38,19 @@ test('必須ルール全体は21000bytes以下で、超過時は統合・圧縮�
   // 1本の絶対ルールに統合して全文配布した分だけ上限を上げた。
   // 2026-11-26 kim 厳命の絶対ルール（スピード最重視・前倒し・バッファ20%以上）は全文を CLAUDE.md 最上部の
   // 別ブロックへ置き、索引には1行だけ載せた。その1行分だけ上限を 21100 に上げた。
+  // 2026-11-27 kim 指示の請求書CC（keiri2@）1行をブース営業CCの直後へ追加した分だけ 21400 に上げた。
+  // 2026-11-27 kim 指示の決定台帳照合・doda再質問禁止の1行を追加した分だけ 21700 に上げた。
   // 余裕は数百バイトに留め、次の追加では統合・圧縮を要求する。先頭ルールの全文配布は削らない。
+  const MANDATORY_BUDGET = 21700;
   const assertMandatoryBudget = index => {
     const { mandatoryBytes } = measureIndexBytes(index);
-    assert(mandatoryBytes <= 21100, `必須ルールの統合・圧縮が必要: ${mandatoryBytes} bytes > 21100 bytes`);
+    assert(mandatoryBytes <= MANDATORY_BUDGET, `必須ルールの統合・圧縮が必要: ${mandatoryBytes} bytes > ${MANDATORY_BUDGET} bytes`);
   };
   assertMandatoryBudget(makeIndex(body));
   const base = makeIndex('');
-  const exact = base + '\n🔴 ' + 'a'.repeat(21100 - Buffer.byteLength('\n🔴 '));
+  const exact = base + '\n🔴 ' + 'a'.repeat(MANDATORY_BUDGET - Buffer.byteLength('\n🔴 '));
   assertMandatoryBudget(exact);
-  assert.throws(() => assertMandatoryBudget(exact + 'a'), /必須ルールの統合・圧縮が必要: 21101 bytes/);
+  assert.throws(() => assertMandatoryBudget(exact + 'a'), new RegExp(`必須ルールの統合・圧縮が必要: ${MANDATORY_BUDGET + 1} bytes`));
 });
 
 test('2026-11-26 の最上位ルール（即着手・前倒し・バッファ20%）の次に、人の手間はAIの効率より上のルールが全文配布される', () => {

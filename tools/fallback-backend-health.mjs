@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { billingFailure } from './lib/lane-real-health.mjs';
-import { disableLanesTemporarily } from './lib/lane-disabled.mjs';
+import { disableLanesTemporarily, readRestoredAt } from './lib/lane-disabled.mjs';
 
 export const FALLBACK_BACKEND_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6時間
 
@@ -199,7 +199,10 @@ export function isQuotaOutcome(outcome) {
 
 // 24h で 5 回以上かつ失敗が過半数、または品質検証の失敗が 3 連続なら一時停止の対象。
 // 結果不明・回数制限・残高切れは failure_rate の分母・分子から除外する。
-export function unhealthyCandidates(rows, { now = Date.now(), windowMs = 24 * 60 * 60 * 1000 } = {}) {
+// restoredAt（lane-doctor --probe が復帰させた時刻。lanes-restored.json）より前の行は
+// 「復帰前の古い失敗」として数えない。復帰直後に24h窓の古い失敗で再停止するのを防ぐ（2026-11-28 05:08 実測）。
+export function unhealthyCandidates(rows, { now = Date.now(), windowMs = 24 * 60 * 60 * 1000, restoredAt = {} } = {}) {
+  const restored = restoredAt && typeof restoredAt === 'object' && !Array.isArray(restoredAt) ? restoredAt : {};
   const groups = new Map();
   for (const row of Array.isArray(rows) ? rows : []) {
     const name = String(row?.backend || row?.name || row?.provider || '').trim();
@@ -207,6 +210,8 @@ export function unhealthyCandidates(rows, { now = Date.now(), windowMs = 24 * 60
     if (!name || !outcome || /^(?:undefined|null)$/i.test(outcome)) continue;
     const t = typeof row.t === 'number' ? row.t : Date.parse(row.t);
     if (!Number.isFinite(t) || t < now - windowMs || t > now) continue;
+    const cutoff = restored[name.toLowerCase()];
+    if (Number.isFinite(cutoff) && t < cutoff) continue;
     const list = groups.get(name) || [];
     list.push({ t, outcome });
     groups.set(name, list);
@@ -229,7 +234,7 @@ export function unhealthyCandidates(rows, { now = Date.now(), windowMs = 24 * 60
 export function applyCandidateHealth(homeDir, { rows, now = Date.now(), force = false } = {}) {
   if (!force && process.env.NODE_TEST_CONTEXT) return [];
   const source = Array.isArray(rows) ? rows : readFallbackBackendHistory(homeDir);
-  return disableLanesTemporarily(homeDir, unhealthyCandidates(source, { now }), now);
+  return disableLanesTemporarily(homeDir, unhealthyCandidates(source, { now, restoredAt: readRestoredAt(homeDir) }), now);
 }
 
 // name が cooling に含まれる backend を除いた配列を返す。

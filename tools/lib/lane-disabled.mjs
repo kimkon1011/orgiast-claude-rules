@@ -8,6 +8,25 @@ import path from 'node:path';
 export const isAutoDisabled = entry => ['failure_rate', 'quality_validation'].includes(entry?.reason);
 export const TEMP_DISABLE_MS = 6 * 60 * 60 * 1000;
 export function disabledLanesFile(home = process.env.ORGIAST_HOME || os.homedir()) { return path.join(home, '.claude', 'lanes-disabled.json'); }
+// probe で復帰させた時刻を記録する（~/.claude/lanes-restored.json）。
+// fallback-backend-health の unhealthyCandidates が「復帰より前の失敗」を数えて
+// 直後に再停止するのを防ぐためのマーカー（2026-11-28 05:08 実測の再発）。
+export function restoredLanesFile(home = process.env.ORGIAST_HOME || os.homedir()) { return path.join(home, '.claude', 'lanes-restored.json'); }
+// { "<name>": <epoch ms>, ... }（name は小文字）。無い・壊れていたら {}。
+export function readRestoredAt(home = process.env.ORGIAST_HOME || os.homedir(), file = restoredLanesFile(home)) {
+  try {
+    const data = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) || {};
+    if (typeof data !== 'object' || Array.isArray(data)) return {};
+    const out = {};
+    for (const [key, value] of Object.entries(data)) {
+      const name = String(key).trim().toLowerCase();
+      const t = Number(value);
+      if (!name || !Number.isFinite(t)) continue;
+      out[name] = t;
+    }
+    return out;
+  } catch { return {}; }
+}
 export function readDisabledEntries(home = process.env.ORGIAST_HOME || os.homedir(), file = disabledLanesFile(home)) {
   try {
     const data = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) || {};
@@ -37,6 +56,14 @@ export function disabledLanes(home = process.env.ORGIAST_HOME || os.homedir(), n
 }
 function writeDisabledEntries(home, data) {
   const file = disabledLanesFile(home);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`);
+  try { fs.renameSync(tmp, file); } catch { fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`); try { fs.unlinkSync(tmp); } catch {} }
+}
+// lanes-restored.json も lanes-disabled.json と同じ tmp→rename 方式で書く。
+function writeRestoredAt(home, data) {
+  const file = restoredLanesFile(home);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`);
@@ -89,6 +116,12 @@ export function restoreExpiredDisabledLanes(health, home, now = Date.now(), reco
     }
   }
   if (changed) writeDisabledEntries(home, data);
+  // 復帰したレーンは古い失敗で再停止されないよう、復帰時刻を記録する。
+  if (restored.length) {
+    const restoredAt = readRestoredAt(home);
+    for (const name of restored) restoredAt[name.trim().toLowerCase()] = now;
+    writeRestoredAt(home, restoredAt);
+  }
   if (health && restored.length) {
     health.repairs = health.repairs || [];
     for (const name of restored) health.repairs.push({ provider: name, action: 'disabled_restored', detail: 'probe_ok' });

@@ -13,13 +13,12 @@ const requestFor = () => ({ url: 'https://example.invalid', init: {} });
 
 test('フォールバック候補は指定された順序である', () => {
   const providers = FALLBACK_CHAIN.map(({ provider }) => provider);
-  assert.deepEqual(providers, ['groq', 'glm', 'cerebras', 'genspark', 'openrouter', 'deepseek', 'gemini', 'grok', 'kimi']);
+  assert.deepEqual(providers, ['groq', 'glm', 'cerebras', 'genspark', 'openrouter', 'deepseek', 'kimi']);
   assert.ok(providers.indexOf('genspark') < providers.indexOf('openrouter'), 'Genspark Pro の前払いクレジットは従量課金より先に使う');
   assert.equal(providers[1], 'glm', '無料のGroqの次に定額のGLMを試す');
   assert.equal(providers[2], 'cerebras', '定額のCerebrasは従量プロバイダより先に試す');
-  assert.ok(providers.indexOf('grok') < providers.indexOf('kimi'));
   assert.ok(providers.indexOf('openrouter') < providers.indexOf('deepseek'), '自動チャージ可能なgatewayを直叩きより先にする');
-  assert.ok(providers.indexOf('deepseek') < providers.indexOf('gemini'));
+  assert.ok(providers.indexOf('deepseek') < providers.indexOf('kimi'), 'DeepSeekはKimiより先');
 });
 
 test('429 は同一候補で2回リトライしてから次候補へ進む', async (t) => {

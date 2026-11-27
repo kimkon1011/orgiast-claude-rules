@@ -1,15 +1,16 @@
-# session-status  PC=019  host=019  updated 2026-11-27 14:10 JST
+# session-status  PC=019  host=019  updated 2026-11-27 15:10 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "email": "nishi@orgiast.jp", "orgId":
-- 案件数: 15
+- 案件数: 16
 
 - 019・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 019・chat-drafts・停止・最終更新 11/27 14:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 019・chat-drafts・停止・最終更新 11/27 15:00、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 019・coel-shiono-1125・完了・最終更新 11/25 19:30、STATUS.mdなし、DONEあり、run.logあり・期限なし・次:なし
 - 019・dispatch-1122-21・停止・最終更新 11/22 21:30、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 019・eight-wiaas-meeting-1125・完了・最終更新 11/25 19:19、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
 - 019・illumi-kono-claim-1125・完了・最終更新 11/25 19:02、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
 - 019・illumi-kono-probe・停止・最終更新 11/25 18:52、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 019・STATUS・完了・B分類26件のまとめを Google ドキュメント化し、kim@orgiast.jp に編集権限を付け、kim-inbox の ask `ki-20261127011739-e295` の案内先を Drive URL に差し替えるまで、2レーンの読み戻しで確認済み・期限なし・次:kim が https://docs.google.com/document/d/1YJF6irvfNcT_E1sYZP5LyjPqdjUXUE0TiEFJKDEJDAY/edit?authuser=kim@orgiast.jp を開き、14テーマの「返事の例」を直して返す。返ったら26件分の回答として kim-inbox に記録する
 - 019・lane-repair・停止・最終更新 11/26 02:13、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 019・local-llm-cpu-test-1125・完了・最終更新 11/25 17:19、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 019・reply-drafts-1125・完了・最終更新 11/25 19:20、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし

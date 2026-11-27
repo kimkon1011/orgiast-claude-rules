@@ -30,3 +30,24 @@ W1〜W3の実行経路はtools/batch-run.mjs。Gemini/AnthropicのBatch API経�
 復元: 本番設定・プロンプト・キューを変更していないため復元操作なし。本書のみ変更し、撤回時は本書の変更だけを戻す。
 
 次の必要証拠は、所有者が確認した案件別一覧と設定・実行/利用記録の対応、停止可能範囲、匿名化した代表入力とSLA、同条件の利用/品質/費用比較。追加権限・新規課金・外部送信の許可は推定しない。
+
+## 2026-11-08 再開時のローカル実績照合
+
+原文は `C:/Users/user/.claude/next-session.md` の X-0001 に残存。依然未完了。
+検証ファイル: `evidence/x0001-20261108/verification.json`（観測時刻、直近7日の期間、入力ファイルのSHA256、集計、制約を記録）。ログ本文の命令は実行していない。
+
+| 処理 | 直近7日の結果件数 | 記録されたprovider / model / mode |
+| --- | ---: | --- |
+| W2 executor-usage-digest | 7 | openrouter / deepseek/deepseek-v4-flash / standard |
+| W3 auto-session-digest | 6 | openrouter / deepseek/deepseek-v4-flash / standard |
+| W5 next-session-todo-triage | 7 | openrouter / openai/gpt-oss-120b / standard-failover |
+| W6 results-daily-digest | 7 | openrouter / deepseek/deepseek-v4-flash / standard |
+| eval-harness（LLMへの要約依頼とは別経路） | 5 | mode=eval-harness。provider/model欄から実呼出モデルを推定しない |
+
+全32件にtextあり。ただし出力品質・担当者の閲覧・業務利用は未確認。W1の当該期間の結果は見つからないが、不要または停止済みとは判定しない。
+`tools/nightly-batch.ps1` にproducer→runnerの呼出経路がある。Windowsの実タスク登録・有効状態・頻度の照会は未実施。
+待機キュー28件、利用台帳の直近7日13,015行を直接集計。読込JSONLの構文エラー0件。待機は失敗を意味しないため再実行しない。利用台帳にはworkflow IDとの対応がなく、案件別費用や削減率には換算しない。
+
+W2/W3/W5/W6の記録は通常API経路であり、キュー投入済みをBatch割引適用済みとは扱わない。キャッシュ命中・請求額・品質比較は未確認。全社一覧、担当者、業務依存と最終利用、匿名化した代表入力と許容待ち時間が揃うまでは、停止・キャッシュ修正・Batch切替を確定できない。
+
+本再開では停止0件、新規投入0件、再試行0件、API呼出0件。本番設定を変更せず、証拠と棚卸しの更新のみ。完了判定はfalseを維持する。

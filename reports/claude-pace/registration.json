@@ -1,6 +1,15 @@
 {
-  "updatedAt": "2026-11-27T14:21:20Z",
+  "updatedAt": "2026-11-27T14:50:00Z",
   "hosts": {
+    "011": {
+      "registered": true,
+      "checkedAtJst": "2026-11-27T23:47:47+09:00",
+      "taskState": "Ready",
+      "startMinute": 23,
+      "repetition": "PT1H",
+      "reportTaskRegistered": true,
+      "note": "手動起動1回 LastTaskResult=0。OrgiastClaudePaceReport は毎朝07:30・Ready"
+    },
     "018": {
       "registered": true,
       "checkedAtJst": "2026-11-27T23:21:20+09:00",

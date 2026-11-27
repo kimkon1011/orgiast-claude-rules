@@ -383,6 +383,50 @@ test('timeout/fail が5件中3件なら従来どおり failure_rate になる（
   assert.equal(hits[0].failures, 3);
 });
 
+// --- restoredAt（復帰前の失敗を数えない）---
+
+// 2026-11-28 05:08 実測: lane-doctor --probe が復帰させた直後に、24h 窓の古い失敗
+// （復帰より前）だけで failure_rate 再停止された。restoredAt より前の行は集計から外す。
+test('restoredAt より前の失敗だけなら停止候補にならない（復帰直後の再停止を防ぐ）', () => {
+  const now = 10_000_000;
+  const restoredAt = now - 10_000;
+  const rows = [
+    { t: restoredAt - 1000, backend: 'openrouter', outcome: 'timeout' },
+    { t: restoredAt - 2000, backend: 'openrouter', outcome: 'fail' },
+    { t: restoredAt - 3000, backend: 'openrouter', outcome: 'timeout' },
+    { t: restoredAt - 4000, backend: 'openrouter', outcome: 'fail' },
+    { t: restoredAt - 5000, backend: 'openrouter', outcome: 'timeout' },
+  ];
+  // 復帰より後の呼び出しは1件も無いので、古い失敗を数えなければ停止候補にならない
+  assert.deepEqual(unhealthyCandidates(rows, { now, restoredAt: { openrouter: restoredAt } }), []);
+  // restoredAt を渡さなければ従来どおり停止候補になる（回帰確認）
+  assert.equal(unhealthyCandidates(rows, { now })[0].reason, 'failure_rate');
+});
+
+test('restoredAt より後の失敗が閾値以上なら従来どおり failure_rate になる', () => {
+  const now = 10_000_000;
+  const restoredAt = now - 10_000;
+  const rows = [
+    // 復帰より前の古い失敗3件（数えない）
+    { t: restoredAt - 1000, backend: 'openrouter', outcome: 'timeout' },
+    { t: restoredAt - 2000, backend: 'openrouter', outcome: 'timeout' },
+    { t: restoredAt - 3000, backend: 'openrouter', outcome: 'fail' },
+    // 復帰より後の5件（ok2 + 失敗3 → 過半数失敗）
+    { t: restoredAt + 1000, backend: 'openrouter', outcome: 'ok' },
+    { t: restoredAt + 2000, backend: 'openrouter', outcome: 'ok' },
+    { t: restoredAt + 3000, backend: 'openrouter', outcome: 'timeout' },
+    { t: restoredAt + 4000, backend: 'openrouter', outcome: 'fail' },
+    { t: restoredAt + 5000, backend: 'openrouter', outcome: 'timeout' },
+  ];
+  const hits = unhealthyCandidates(rows, { now, restoredAt: { openrouter: restoredAt } });
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].name, 'openrouter');
+  assert.equal(hits[0].reason, 'failure_rate');
+  // 復帰より前の3件は数えず、復帰より後の5件だけで判定する
+  assert.equal(hits[0].calls, 5);
+  assert.equal(hits[0].failures, 3);
+});
+
 test('429 を除いた残りで判定される（ok1 + fail1 + http_429×5 → calls 2 なので停止しない）', () => {
   const now = 10_000_000;
   const rows = [

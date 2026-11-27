@@ -14,7 +14,8 @@ import {
   retryForbiddenAnswer, isForbiddenReply, inventedAmounts, CANT_READ_REPLY_PTN
 } from './discord-autoreply.mjs';
 import { addItem as addKimInboxItem } from './kim-inbox.mjs';
-import { resolveDiscordLink } from './discord-beeper-link.mjs';
+import { resolveDiscordLink, extractDiscordUserID } from './discord-beeper-link.mjs';
+import { isOrgiastMember } from './lib/orgiast-member-check.mjs';
 import { collectReadableContent } from './lib/autoreply-attachments.mjs';
 import { extractSearchTerms, searchRelated } from './lib/autoreply-related.mjs';
 import { searchDriveFacts } from './lib/autoreply-drive-facts.mjs';
@@ -75,6 +76,19 @@ export function isDiscordChat(chat, accounts) {
 export function isMessageRequest(chat) {
   return Boolean(chat.isMessageRequest === true || chat.isRequest === true || chat.messageRequest === true
     || chat.participants?.items?.some(p => p.isPending));
+}
+export function dmDiscordUserID(chat, latest, pending = []) {
+  if (chat.type !== 'single') return null;
+  const candidates = [
+    latest?.isSender === false ? latest.senderID : null,
+    ...pending.filter(m => m.isSender === false).map(m => m.senderID),
+    chat.participants?.items?.find(p => !p.isSelf)?.id,
+  ];
+  for (const candidate of candidates) {
+    const id = extractDiscordUserID(candidate);
+    if (id) return id;
+  }
+  return null;
 }
 // Only explicit native IDs, never the numeric Beeper-local chat/message IDs.
 export function messageLink(chat, message) {
@@ -282,6 +296,18 @@ export async function runOnce(options = {}) {
 
     for (const chat of result.paused ? [] : chats) {
       result.scanned++;
+      let insider = null, membershipChecked = false;
+      const checkMembership = async userId => {
+        if (!membershipChecked && userId) {
+          membershipChecked = true;
+          try {
+            insider = await (options.isOrgiastMember || isOrgiastMember)(userId, {
+              home, now, fetchImpl: options.fetchImpl || fetch, persistCache: !dryRun,
+            });
+          } catch { insider = null; }
+        }
+        return insider;
+      };
       let latest, question = '', link = `会話名: ${chat.title || chat.id}`;
       const prior = state.chats[chat.id];
       if (prior?.status !== 'sending' && (chat.preview?.isSender
@@ -309,7 +335,8 @@ export async function runOnce(options = {}) {
           latest = chat.preview; question = plainText(latest.text); link = messageLink(chat, latest);
           if (now - timestamp(latest) > maxAgeMs || timestamp(latest) > now) { result.skipped++; continue; }
           if (prior?.status !== 'skipped' && (prior?.id === latest.id || (prior?.timestamp && compare(latest, prior) <= 0))) { result.skipped++; continue; }
-          await decide('メッセージリクエスト・未承認'); continue;
+          await checkMembership(dmDiscordUserID(chat));
+          if (insider !== true) { await decide('メッセージリクエスト・未承認'); continue; }
         }
         const history = await historyFor(api, chat), all = history.items;
         latest = all.at(-1);
@@ -343,14 +370,17 @@ export async function runOnce(options = {}) {
         // 返信すべき本物メッセージがない（合成メッセージのみなど）場合はスキップ
         if (pending.length === 0) { result.skipped++; continue; }
         if (prior?.status !== 'skipped' && (prior?.id === latest.id || (prior?.timestamp && compare(latest, prior) <= 0))) { result.skipped++; continue; }
-        if (isMessageRequest(chat)) { await decide('メッセージリクエスト・未承認'); continue; }
+        if (isMessageRequest(chat) || (chat.type === 'single' && !lastSelf)) {
+          await checkMembership(dmDiscordUserID(chat, latest, pending));
+        }
+        if (isMessageRequest(chat) && insider !== true) { await decide('メッセージリクエスト・未承認'); continue; }
         if (!addressedToKim(chat, pending, all, selfIDs)) { result.skipped++; continue; }
         if (chat.isReadOnly || chat.participants?.items?.some(p => p.isSelf && p.cannotMessage)) { await decide('送信不可の会話'); continue; }
 
         const trialSelfDecline = !state.trialSelfDeclined[chat.id] && await isTrialSelfDecline(llm, question);
         const historyTexts = all.filter(m => !m.isSender).map(m => plainText(m.text));
         const trialMidpointFail = !trialSelfDecline && !state.trialMidpointFailed[chat.id] && isTrialMidpointFail(question, historyTexts);
-        if (!trialSelfDecline && !trialMidpointFail && history.complete && chat.type === 'single' && !lastSelf) { await decide('初対面または会話履歴を確認できません'); continue; }
+        if (!trialSelfDecline && !trialMidpointFail && history.complete && chat.type === 'single' && !lastSelf && insider !== true) { await decide('初対面または会話履歴を確認できません'); continue; }
 
         if (!isWithinAllowedTimeWindow(now)) { result.skipped++; continue; }
 
@@ -485,7 +515,7 @@ export async function runOnce(options = {}) {
         const current = await historyFor(api, chat), newest = current.items.at(-1);
         if (!newest || newest.id !== latest.id || newest.isSender || newest.text !== latest.text) { result.skipped++; continue; }
         const fresh = await api.getChat(chat.id);
-        if (fresh.id !== chat.id || !isDiscordChat(fresh, accounts) || isMessageRequest(fresh) || fresh.isReadOnly || fresh.participants?.items?.some(p => p.isSelf && p.cannotMessage) || fresh.draft) {
+        if (fresh.id !== chat.id || !isDiscordChat(fresh, accounts) || (isMessageRequest(fresh) && insider !== true) || fresh.isReadOnly || fresh.participants?.items?.some(p => p.isSelf && p.cannotMessage) || fresh.draft) {
           await decide('送信直前の会話条件が変わりました'); continue;
         }
 

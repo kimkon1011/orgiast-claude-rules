@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runOnce, main, DISCORD_ACCOUNT, messageLink, isMessageRequest, isSyntheticMessage, SEND_PROMISE_PTN } from './discord-beeper-autoreply.mjs';
+import { runOnce, main, DISCORD_ACCOUNT, messageLink, isMessageRequest, isSyntheticMessage, SEND_PROMISE_PTN, dmDiscordUserID } from './discord-beeper-autoreply.mjs';
 import { trialFailAnswer } from './lib/trial-self-decline.mjs';
 import { main as guildMain } from './discord-autoreply.mjs';
 
@@ -1495,3 +1495,91 @@ test('途中通過条件未達の定型文は会話ごとに一度のみ', async
   assert.equal(f.sent.length, 1);
 });
 
+
+const trialUserId = '123456789012345678';
+const trialSender = `@discordgo_${trialUserId}:beeper.local`;
+
+test('DM相手IDは最新受信・pending・参加者の順で解決しkimやローカルIDを使わない', () => {
+  const other = '@discordgo_223456789012345678:beeper.local';
+  const c = chat({ participants: { items: [{ isSelf: true, id: other }, { isSelf: false, id: trialSender }] } });
+  assert.equal(dmDiscordUserID(c, message({ senderID: other }), [message({ senderID: trialSender })]), '223456789012345678');
+  assert.equal(dmDiscordUserID(c, message({ isSender: true, senderID: other }), [message({ senderID: trialSender })]), trialUserId);
+  assert.equal(dmDiscordUserID(c), trialUserId);
+  assert.equal(dmDiscordUserID(chat(), message({ senderID: '828' })), null);
+  assert.equal(dmDiscordUserID(chat({ type: 'group' }), message({ senderID: trialSender })), null);
+});
+
+for (const mode of ['first', 'request-history', 'request-preview', 'existing']) {
+  test(`サーバー在籍・台帳未登録DM: ${mode} は既存本文でwouldSend`, async t => {
+    const incoming = message({ senderID: trialSender, senderName: '加藤愛' });
+    const c = chat({
+      ...(mode.startsWith('request') ? { isMessageRequest: true } : {}),
+      ...(mode === 'request-preview' ? { preview: incoming, participants: { items: [{ isSelf: false, id: trialSender }] } } : {}),
+    });
+    const f = fixture(t, { chats: [c], ...(mode === 'existing' ? {} : { messages: [incoming] }) });
+    let calls = 0;
+    const result = await runOnce({ ...f.options, dryRun: true, searchDriveFactsImpl: async () => [],
+      isOrgiastMember: async (id, options) => {
+        calls++;
+        assert.equal(id, trialUserId);
+        assert.equal(options.persistCache, false);
+        return true;
+      },
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.equal(result.wouldSend.length, 1);
+    assert.match(result.wouldSend[0].content, /マニュアルの一覧から確認できます/);
+    assert.equal(result.decisions.length, 0);
+    assert.equal(calls, mode === 'existing' ? 0 : 1);
+    assert.equal(f.sent.length, 0);
+    assert.equal(f.inboxItems.length, 0);
+    assert.equal(fs.existsSync(f.file), false);
+  });
+}
+
+for (const membership of [false, null, 'throws']) {
+  for (const mode of ['first', 'request-history', 'request-preview']) {
+    test(`在籍=${membership} ${mode}は従来どおり判断待ち`, async t => {
+      const incoming = message({ senderID: trialSender });
+      const c = chat({
+        ...(mode.startsWith('request') ? { isMessageRequest: true } : {}),
+        ...(mode === 'request-preview' ? { preview: incoming, participants: { items: [{ isSelf: false, id: trialSender }] } } : {}),
+      });
+      const f = fixture(t, { chats: [c], messages: [incoming] });
+      let calls = 0;
+      const result = await runOnce({ ...f.options, dryRun: true,
+        isOrgiastMember: async () => { calls++; if (membership === 'throws') throw new Error('unavailable'); return membership; },
+      });
+      assert.equal(result.ok, true);
+      assert.equal(result.wouldSend.length, 0);
+      assert.equal(result.decisions.length, 1);
+      assert.match(result.decisions[0].reason, mode === 'first' ? /初対面/ : /メッセージリクエスト・未承認/);
+      assert.equal(calls, 1);
+      assert.equal(f.sent.length, 0);
+      assert.equal(f.inboxItems.length, 0);
+    });
+  }
+}
+
+test('preview経路で参加者IDが不明なら本文取得も在籍照会もしない', async t => {
+  const incoming = message({ senderID: trialSender });
+  const f = fixture(t, { chats: [chat({ isRequest: true, preview: incoming })], messages: [incoming] });
+  const result = await runOnce({ ...f.options, dryRun: true,
+    isOrgiastMember: () => assert.fail('preview sender must not be used'),
+  });
+  assert.equal(result.wouldSend.length, 0);
+  assert.match(result.decisions[0].reason, /メッセージリクエスト・未承認/);
+  assert.equal(f.reads.length, 0);
+});
+
+for (const change of [{ isReadOnly: true }, { draft: '編集中' }, { participants: { items: [{ isSelf: true, cannotMessage: true }] } }]) {
+  test(`在籍者でも送信直前の制限は解除しない: ${JSON.stringify(change)}`, async t => {
+    const c = chat({ isRequest: true });
+    const f = fixture(t, { chats: [c], messages: [message({ senderID: trialSender })] });
+    f.api.getChat = async () => ({ ...c, ...change });
+    const result = await runOnce({ ...f.options, dryRun: true, isOrgiastMember: async () => true });
+    assert.equal(result.wouldSend.length, 0);
+    assert.match(result.decisions[0].reason, /送信直前の会話条件/);
+    assert.equal(f.sent.length, 0);
+  });
+}

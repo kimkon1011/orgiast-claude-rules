@@ -85,7 +85,8 @@ export function parseAnswers(text) {
 
 async function askClaude(prompt, { model }) {
   const { resolveClaudeExecutableFromDisk } = await import('./claude-exe.mjs');
-  const exe = await resolveClaudeExecutableFromDisk(process);
+  const found = await resolveClaudeExecutableFromDisk(process);
+  const exe = process.env.CLAUDE_CLI || (typeof found === 'string' ? found : found?.executable) || 'claude';
   const env = { ...process.env }; delete env.ANTHROPIC_API_KEY;
   const args = ['-p', '--model', model, '--output-format', 'text', '--disallowedTools', 'Bash', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Task'];
   return new Promise((resolve, reject) => {

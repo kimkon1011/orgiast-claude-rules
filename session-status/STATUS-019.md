@@ -1,10 +1,11 @@
-# session-status  PC=019  host=019  updated 2026-11-27 18:10 JST
+# session-status  PC=019  host=019  updated 2026-11-27 19:10 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "email": "nishi@orgiast.jp", "orgId":
-- 案件数: 16
+- 案件数: 17
 
 - 019・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 019・chat-drafts・停止・最終更新 11/27 18:00、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 019・chat-drafts・停止・最終更新 11/27 19:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 019・STATUS・完了・close-session.mjs でセッション 076114b6 を閉鎖登録。終了コード 0、[next-session] なし・期限なし・次:なし
 - 019・coel-shiono-1125・完了・最終更新 11/25 19:30、STATUS.mdなし、DONEあり、run.logあり・期限なし・次:なし
 - 019・dispatch-1122-21・停止・最終更新 11/22 21:30、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 019・eight-wiaas-meeting-1125・完了・最終更新 11/25 19:19、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし

@@ -14,7 +14,7 @@ import { parseRows as parseVehicles } from './vehicle-inspection-watch.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
 import { reportHeartbeat } from './lib/heartbeat.mjs';
-import { calendarBase, calendarOptions, calendarIds, readableEvent, isKimTask, listCalendarEvents, deadlineEventId, isDeadlineOwnedEvent, moveCalendarEvent, timedDuplicates } from './lib/deadline-calendar.mjs';
+import { calendarBase, calendarOptions, calendarIds, readableEvent, isKimTask, listCalendarEvents, deadlineEventId, isDeadlineOwnedEvent, isDeletableDeadlineEvent, moveCalendarEvent, timedDuplicates } from './lib/deadline-calendar.mjs';
 import { DEFAULT_CONFIG, createLedger, loadConfig, defaultHome, dataPath, readJson, saveJson, sheetUrl, googleClient, withLedgerLock, parseSheetDate, jstDate, daysUntil, isDuplicate, initialize } from './deadline-ledger.mjs';
 const exec = promisify(execFile);
 const inboxScript = fileURLToPath(new URL('./kim-inbox.mjs', import.meta.url));
@@ -210,9 +210,11 @@ export async function syncCalendar(row, { config, state, request, persist = () =
     }
     // Close the ledger first. Notes alone are not proof of cancellation, and
     // legacy events without a ledger namespace must not match another D-150.
-    // `found` is already ownership-filtered (deterministic id or matching sheet).
+    // Ownership allows sync of no-sheet legacy events; DELETE requires
+    // deterministic id or explicit matching sheet metadata (isDeletableDeadlineEvent).
     if (closed(row)) {
       for (const { calendar, event } of found) {
+        if (!isDeletableDeadlineEvent(event, row, config)) continue;
         try { await request(`${calendarBase(calendar)}/${encodeURIComponent(event.id)}?sendUpdates=none`, { ...opts, method: 'DELETE' }); }
         catch (error) { if (![404, 410].includes(error.status)) throw error; }
       }

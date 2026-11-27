@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { syncCalendar } from '../tools/deadline-watch.mjs';
 import { DEFAULT_CONFIG } from '../tools/deadline-ledger.mjs';
 import { AI_CALENDAR } from '../tools/lib/calendar-shared.mjs';
-import { deadlineEventId, isDeadlineOwnedEvent, belongsToLedger } from '../tools/lib/deadline-calendar.mjs';
+import { deadlineEventId, isDeadlineOwnedEvent, isDeletableDeadlineEvent, belongsToLedger } from '../tools/lib/deadline-calendar.mjs';
 
 const sheetId = 'ledger-current';
 const config = { ...DEFAULT_CONFIG, sheetId, vehicleSheetId: '', calendar: { enabled: true, calendarId: AI_CALENDAR } };
@@ -112,4 +112,67 @@ test('listで旧sheetIdの自枠が見えても更新し、POSTしない', async
   assert.ok(calls.some(c => c.method === 'PATCH'));
   assert.equal(existing.extendedProperties.private.deadlineSheetId, sheetId);
   assert.equal(existing.start.date, base.due);
+});
+
+test('isDeletableDeadlineEvent: sheet無しはfalse、決定的IDはtrue', () => {
+  const detId = deadlineEventId(sheetId, base.id);
+  assert.equal(isDeletableDeadlineEvent({
+    id: 'legacy-random',
+    extendedProperties: { private: { deadlineId: base.id } },
+  }, base, config), false);
+  assert.equal(isDeadlineOwnedEvent({
+    id: 'legacy-random',
+    extendedProperties: { private: { deadlineId: base.id } },
+  }, base, config), true);
+  assert.equal(isDeletableDeadlineEvent({
+    id: detId,
+    extendedProperties: { private: { deadlineId: base.id, deadlineSheetId: 'ledger-retired' } },
+  }, base, config), true);
+  assert.equal(isDeletableDeadlineEvent({
+    id: 'with-sheet',
+    extendedProperties: { private: { deadlineId: base.id, deadlineSheetId: sheetId } },
+  }, base, config), true);
+  assert.equal(isDeletableDeadlineEvent({
+    id: 'other-sheet',
+    extendedProperties: { private: { deadlineId: base.id, deadlineSheetId: 'ledger-other' } },
+  }, base, config), false);
+});
+
+test('閉じた行: sheet情報なし＋deadlineId一致＋非決定的IDはDELETEしない', async () => {
+  const legacy = {
+    id: 'legacy-no-sheet',
+    start: { date: base.due },
+    extendedProperties: { private: { deadlineId: base.id } },
+  };
+  assert.equal(isDeadlineOwnedEvent(legacy, base, config), true);
+  assert.equal(isDeletableDeadlineEvent(legacy, base, config), false);
+  const calls = [];
+  const request = async (url, options = {}) => {
+    calls.push({ url, ...options });
+    if (options.method === 'DELETE') throw new Error('must not DELETE legacy no-sheet event');
+    return { items: [structuredClone(legacy)] };
+  };
+  await syncCalendar({ ...base, status: '完了' }, { config, state: {}, request, warnings: [] });
+  assert.equal(calls.some(c => c.method === 'DELETE'), false);
+});
+
+test('閉じた行: 決定的ID枠（旧sheetId）はDELETEする', async () => {
+  const id = deadlineEventId(sheetId, base.id);
+  const stale = {
+    id,
+    start: { date: base.due },
+    extendedProperties: { private: { deadlineId: base.id, deadlineSheetId: 'ledger-retired' } },
+  };
+  assert.equal(belongsToLedger(stale, config), false);
+  assert.equal(isDeadlineOwnedEvent(stale, base, config), true);
+  assert.equal(isDeletableDeadlineEvent(stale, base, config), true);
+  const calls = [];
+  const request = async (url, options = {}) => {
+    calls.push({ url, ...options });
+    if (options.method === 'DELETE') return null;
+    return { items: [structuredClone(stale)] };
+  };
+  await syncCalendar({ ...base, status: '完了' }, { config, state: {}, request, warnings: [] });
+  assert.ok(calls.some(c => c.method === 'DELETE'));
+  assert.ok(calls.some(c => c.method === 'DELETE' && c.url.includes(encodeURIComponent(id))));
 });

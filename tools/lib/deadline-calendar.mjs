@@ -101,6 +101,20 @@ export function isDeadlineOwnedEvent(event, row, config) {
   if (event.id === deadlineEventId(config.sheetId, row.id)) return true;
   return privId === row.id && belongsToLedger(event, config);
 }
+/**
+ * Safe to DELETE on ledger close.
+ * Ownership (`isDeadlineOwnedEvent`) alone is not enough: belongsToLedger is true when
+ * sheet metadata is missing, so a legacy D-xxx from another ledger would match.
+ * Delete only (1) this sheet's deterministic id slot, or (2) events whose sheet
+ * metadata (deadlineSheetId / description URL) exists and equals config.sheetId.
+ */
+export function isDeletableDeadlineEvent(event, row, config) {
+  if (!event || !row) return false;
+  if (event.id === deadlineEventId(config.sheetId, row.id)) return true;
+  const sheet = event.extendedProperties?.private?.deadlineSheetId
+    || String(event.description || '').match(/spreadsheets\/(?:a\/[^/]+\/)?d\/([\w-]+)/)?.[1];
+  return Boolean(sheet) && sheet === config.sheetId;
+}
 export async function moveCalendarEvent(request, event, from, to) {
   if (from === to) return event;
   const moved = await request(`${calendarBase(from)}/${encodeURIComponent(event.id)}/move?${new URLSearchParams({ destination: to, sendUpdates: 'none' })}`, { ...calendarOptions, method: 'POST' });

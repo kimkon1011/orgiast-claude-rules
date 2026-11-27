@@ -1,7 +1,7 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-27 09:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-27 10:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 47
+- 案件数: 55
 
 - 011・.stall-sweeper・停止・最終更新 11/26 04:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・20261126-クラフト坂口・金さん待ち・クラフト坂口様 宿題7件の成果物は完成。精算の計算方法・福岡請求書の作り直し・先払い承認・いなば様への送信時期の判断待ち・期限2026-12-03（坂口様への精算金額の返答）・次:金さんの判断に沿って、坂口様への返信・福岡請求書の作り直し・Discord送信を進める（送信は承認後のみ）
@@ -12,6 +12,7 @@
 - 011・craftfix-invoice-1126・金さん待ち・福岡の請求メールは、送信ゲートが「承認前に本文の全文（末尾のAI作成表記を含む）を表示する」ことを求めて止めたため、未送信・期限2026-11-30（支払期限）。できれば 2026-11-26 14:00 の坂口様との打合せ前・次:金さんに本文全文を見てもらい、「送ってよい」の返事が来たら draftId r-7773355574643993441 を送って読み戻す
 - 011・cursor-hook-fix-1126・停止・最終更新 11/26 01:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・D-115 reブース前金: STATUS・金さん待ち・期限切れ（2026-09-30）から57日超過。前金 ¥2,077,369 の支払い完了有無を確認する手段がなく、完了／延期／不要の判断は金さんが必要。・期限なし・次:金さんが「D-115 完了」「D-115 延期 <日付>」「D-115 不要」のいずれかを答える
+- 011・deadline-watch-calid・金さん待ち・PR #2863（期限監視の Calendar ID衝突誤判定の修正、CI 全成功）のマージ＝本番反映は無人起動では実行しない指示のため・期限なし・次:金さんが「可」なら gh pr merge 2863 --squash → 翌朝 8:30 の OrgiastDeadlineWatch 前回の結果=0 を確認（kim-inbox ki-20261127003618-22b7）
 - 011・deadlinewatch-fix-1127・金さん待ち・PR #2863 のマージ承認待ち（無人実行のため本番には反映していない）・期限なし・次:承認を受けたらマージし、nightly-repo を pull してから `schtasks /run /tn OrgiastDeadlineWatch` を実行し、「前回の結果」が 0 になったことを確認する
 - 011・dispatch-1122-21・停止・最終更新 11/22 21:48、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・eight-dai6-1125・停止・最終更新 11/26 14:09、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
@@ -29,6 +30,7 @@
 - 011・loop-check-1125・金さん待ち・最終更新 11/25 16:23、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、次の手順が未着手、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・Microsoft・停止・最終更新 11/26 04:27、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・mkawamur-reply-1126・停止・最終更新 11/26 19:25、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
+- 011・mobile-push-undeliverable: STATUS・進行中・作業用011で実装・Windows検証（pass 85 / fail 0）済み。PR https://github.com/kimkon1011/orgiast-claude-rules/pull/2869 を作成し自動マージ（squash）有効、CI 待ち・期限2026-11-28 10:00（マージ確認）・次:PR #2869 が MERGED になったことを gh pr view 2869 --repo kimkon1011/orgiast-claude-rules --json state,mergedAt で確認する。CI が落ちていたら原因を調べて Codex に修正を頼む。マージ後は各PCの毎時 sweep で配信不能分が undeliverable に
 - 011・notify-repair-268e・完了・通知の誤起票（notify-kim:268e78e157993e7a5bad）を PR #2843 で修正し、2026-11-26T19:02:32Z に MERGED（1f17ba99）。next-session.md は無人起動で編集拒否のため、23番の完了印をこのファイルで代替・期限なし・次:next-session.md の 23番「通知の原因調査・修復」は完了扱いで選ばない。別件【夜間】tools/dirty-worktree-guard.test.mjs「閾値内の index.lock は稼働中とみなし削除しない」が CI だけで不安定（手元3回合格）→再発時に閾値を見直す。rescue/auto-session-20261127-0306
 - 011・plan3oku-11-work・停止・最終更新 11/25 20:58、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・plan3oku-15-toho-1126・停止・最終更新 11/26 08:58、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -41,12 +43,18 @@
 - 011・sales-14sha-1125・完了・最終更新 11/25 11:34、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 011・sales-followup・停止・最終更新 11/27 07:40、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-link-audit-1126・完了・監査・修正・書き出し完了、13:00 毎時本番で動作確認済み・期限2026-11-26 当日・次:なし（毎時ジョブが send-commitments を追跡し stuck-export を毎時更新）
-- 011・営業 次回連絡日・金さん待ち・最終更新 11/27 09:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・営業 次回連絡日・金さん待ち・最終更新 11/27 10:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・session-1126-hourly・金さん待ち・JACE 藤野様宛ての返信下書きが打合せ前の文面のまま。修正版の送信可否は金さんの承認が要る（kim-inbox ki-20261126081310-6cf5）・期限2026-12-11（先方の返信期限）／着手期限 2026-12-09・次:承認が来たら seisaku-team@ の下書きを修正版に差し替え、gmail-draft.mjs の自動チェックを通して送信し、送信済みを読み戻す
 - 011・session-cap-1126・金さん待ち・最終更新 11/26 19:36、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・souko-kyujin-1125・完了・最終更新 11/25 19:40、STATUS.mdなし、DONEあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
 - 011・stale-drafts-1126・金さん待ち・放置下書き3件の照合が終わり、kim-inbox ask ki-20261126122734-8029 で送信・修正・削除の判断を待っている（next-session.md への追記は無人起動の権限で拒否された）・期限サポリス様は 2026-11-27 中に返信が望ましい（11/10 に先方の条件提示を受けてから16日経過）・次:返事を受けたら、サポリス様の下書きの候補日を差し替え、gmail-draft.mjs --send のチェックを通して送る／鹿沼CATV様は直すか佐藤さんに任せる／A-DINING様の下書き2件は削除の承認後に消す。決めてほしいこと: 3件それぞれ送る・直す・削除のどれにするか
+- 011・T10-vehicle-app・金さん待ち・雛形完成（014ローカル 8c79e55）。非公開GitHub作成と U-1/U-10 は kim-inbox ki-20261126183436-1746 の返事待ち・期限なし・次:返事が来たら gh repo create orgiast/vehicle-management-app --private→push→読み戻し、OAuth と Sheets 実接続を Codex（lane: codex）
 - 011・tangomuto-reply-1125・完了・最終更新 11/25 12:25、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 011・tasks・停止・最終更新 11/24 09:49、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・状態・完了・倉庫アプリ(GAS)のコマンドキューのトリガーが停止しており、復旧には倉庫アプリを一度開く操作が必要・期限2026-11-27 17:00（初回自動送信の予定時刻）・次:倉庫アプリが開かれたら、投入済みの `cmd_dailysend1126.json` と `cmd_dailytrigger1126.json` が自動実行される。結果ファイル `result_dailysend1126.txt` / `result_dailytrigger1126.txt` を読んで送信成功とトリガー設置を確認する
 - 011・wiaas-pitch-1212・停止・最終更新 11/25 17:09、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・ynakano-draft-1127・金さん待ち・中野様（日本コンベンションサービス）が 12/9(水)16:00〜17:00 で確定し Meet URL を求めている。返信は PCO 連絡制限の対象で、無人ではカレンダー操作も拒否されるため送れない。下書き3通は不要と照合済み。・期限2026-11-27 12:00（お客様返信のため早めに）・次:kim-inbox ki-20261126171146-4b95 で「返信を送ってよいか・不要な下書き3通を消してよいか」の返事をもらい、承認後に kim@ カレンダーへ社内用の予定（招待なし）を作って Meet URL を発行し、gmail-draft.mjs --send で返信する。next-session.md への追記は無人で拒否されたため、この 
+- 011・_handoff-r28-1127・停止・最終更新 11/27 09:19、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・_handoff-r28-1127-in・停止・最終更新 11/27 09:21、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・大阪事務所LINEに届く学会郵送物の写真を学会アプリの獲得進行へ自動取込・金さん待ち・学会DB（Supabase project `sdsuucphkzklznlnqhnn`）に migration `0007_postal.sql` が未適用で、`postal_items` / `postal_ingest_state` が 404。適用に必要な DDL 経路が3つとも塞がっている（Management API は org 未加入で 403・期限なし（招待が下り次第着手）・次:招待が通ったら `D:\repos\aujust-gakkai-automation` で `supabase db push` して 0007 を適用 → 表の作成を read-back で確認 → 11/11 に届いた郵送物2件を取り込んで検証。migration 適用は本番反映なので承認後に実行する。決めてほしいこと: https://supabase
+- 011・山田さん作業AI化: STATUS・進行中・011で再開（000では実装未着手だった）。Reブース移行準備のステップ1〜2は完了・検証済み（基準値シート作成、URL一覧224件すべて200、kim@ writer を seisaku-team 権限で読み戻し確認）。ステップ3〜5は rebooth-site ソースが000ローカルにしか無く、011にはVercel認証も無いため未着手。000へ fle・期限週次レポートの初回自動投稿 12/2(水) 10:30 JST・次:①週次レポートの結果（RESULT-site-weekly-report.md）をレビューし、Windowsでのテスト・PR・投稿ID・タスク登録を読み戻す ②000の返信で seisaku-team-org/rebooth-site ができたら、移行雛形（feat/full-site-migration）を Codex に委譲する。土台は000の rebo

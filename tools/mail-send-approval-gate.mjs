@@ -8,6 +8,7 @@ import { isEntry } from './is-entry.mjs';
 import { validApprovalMarker } from './lib/send-approval.mjs';
 import { readContextMarker, MAX_MARKER_AGE_MS } from './lib/send-context.mjs';
 import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
+import { stripHumanOnly } from './lib/handback-guard.mjs';
 export const HOOK_MATCHER = 'mcp__claude_ai_Gmail(?:_\\d+)?__(send_message|reply|forward)|Bash|PowerShell';
 export const BLOCK_REASON = '本文の全文をチャットに表示し、kim の『送ってよい』を得てから送信してください（組織指示11）。多数宛は mail-bulk-approve を使う';
 export const APPROVAL_MISSING_REASON = 'kim の最新の発言が送信承認として読めません（例: 送って／おくって／OK）。本文の全文を表示したうえで送信承認を得てください。';
@@ -95,7 +96,8 @@ export function judge(input, { targets, env = process.env, home = env.ORGIAST_HO
     const latestHuman = rows.findLast(human);
     if (!latestHuman || !approved(textOf(latestHuman), 'mail')) return block(APPROVAL_MISSING_REASON);
     for (const target of targets) {
-      const body = normalize(target.body);
+      // HUMAN-ONLY タグは送信前に外れるので、表示照合も除去後本文で行う（ハッシュ計算は触らない）。
+      const body = normalize(stripHumanOnly(target.body));
       // Exact containment also catches edits in the middle of a long message.
       if (!body || !approvedAfter(rows, text => normalize(text).includes(body), 'mail')) return block(BODY_NOT_SHOWN_REASON);
     }

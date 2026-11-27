@@ -1,0 +1,146 @@
+{
+  "byPat": {
+    "P1": [
+      {
+        "ts": "2026-11-27T03:07:05.172Z",
+        "sid": "7f695fb2",
+        "text": "【最終まとめ】 ①報告 - このセッションで扱うのは、handoff-audit（恒久修正を先送りした文の検出）で見つか",
+        "source": "stop-gate-runner-ledger.jsonl"
+      },
+      {
+        "ts": "2026-11-27T03:07:04.905Z",
+        "sid": "7f695fb2",
+        "text": "【最終まとめ】 ①報告 - このセッションで扱うのは、handoff-audit（恒久修正を先送りした文の検出）で見つか",
+        "source": "handoff-audit-ledger.jsonl"
+      }
+    ],
+    "P2": [],
+    "P3": [
+      {
+        "ts": "2026-11-27T00:43:22.918Z",
+        "sid": "82c65d42",
+        "text": "ix ともすべて成功していたので、やり直しはしません。ほかに変わったことはありません。 次に kim がすること: PR",
+        "source": "stop-gate-runner-ledger.jsonl"
+      },
+      {
+        "ts": "2026-11-27T00:43:07.320Z",
+        "sid": "82c65d42",
+        "text": "ix ともすべて成功していたので、やり直しはしません。ほかに変わったことはありません。 次に kim がすること: PR",
+        "source": "handoff-audit-ledger.jsonl"
+      }
+    ],
+    "P4": [],
+    "W": [
+      {
+        "ts": "2026-11-27T00:45:27.933Z",
+        "sid": "8979cc12",
+        "text": "011で修正が終わり、PR #2869 を作りました。自動マージは有効で、いまは CI の完了待ちです（3件実行中、失敗",
+        "source": "stop-gate-runner-ledger.jsonl"
+      },
+      {
+        "ts": "2026-11-27T01:49:54.989Z",
+        "sid": "6395dfa9",
+        "text": "ブースのサイト移行は、準備の前半まで終わりました。** 雛形づくりから先は、000 からの返事を待っています。 | 依頼",
+        "source": "stop-gate-runner-ledger.jsonl"
+      },
+      {
+        "ts": "2026-11-27T03:06:46.245Z",
+        "sid": "7f695fb2",
+        "text": "装担当AI）に、8件の再発検証、台帳への追記、PR作成までをバックグラウンドで任せました。終わったら通知が来るので、その",
+        "source": "stop-gate-runner-ledger.jsonl"
+      },
+      {
+        "ts": "2026-11-27T03:07:04.305Z",
+        "sid": "7f695fb2",
+        "text": "装担当AI）に、8件の再発検証、台帳への追記、PR作成までをバックグラウンドで任せました。終わったら通知が来るので、その",
+        "source": "stop-gate-runner-ledger.jsonl"
+      },
+      {
+        "ts": "2026-11-27T03:07:16.240Z",
+        "sid": "7f695fb2",
+        "text": "装担当AI）に、8件の再発検証、台帳への追記、PR作成までをバックグラウンドで任せました。終わったら通知が来るので、その",
+        "source": "stop-gate-runner-ledger.jsonl"
+      },
+      {
+        "ts": "2026-11-27T00:45:27.796Z",
+        "sid": "8979cc12",
+        "text": "011で修正が終わり、PR #2869 を作りました。自動マージは有効で、いまは CI の完了待ちです（3件実行中、失敗",
+        "source": "handoff-audit-ledger.jsonl"
+      },
+      {
+        "ts": "2026-11-27T01:49:54.844Z",
+        "sid": "6395dfa9",
+        "text": "ブースのサイト移行は、準備の前半まで終わりました。** 雛形づくりから先は、000 からの返事を待っています。 | 依頼",
+        "source": "handoff-audit-ledger.jsonl"
+      },
+      {
+        "ts": "2026-11-27T03:06:46.220Z",
+        "sid": "7f695fb2",
+        "text": "装担当AI）に、8件の再発検証、台帳への追記、PR作成までをバックグラウンドで任せました。終わったら通知が来るので、その",
+        "source": "handoff-audit-ledger.jsonl"
+      },
+      {
+        "ts": "2026-11-26T18:03:14.746Z",
+        "sid": "2b55aec2",
+        "text": "修正作業は Codex がバックグラウンドで進めています。指示書は...まだ完了していません。コードはまだ変わっておらず",
+        "source": "handoff-audit-nightly-ledger.jsonl"
+      },
+      {
+        "ts": "2026-11-26T18:07:57.002Z",
+        "sid": "d6951d40",
+        "text": "Codex が精算の深掘りで実行中…このセッション: 継続中（Codex とデータ取り出しの結果を待っている）",
+        "source": "handoff-audit-nightly-ledger.jsonl"
+      }
+    ]
+  },
+  "ids": [
+    {
+      "id": "f61ffeb282843871",
+      "type": "P4",
+      "hits": 0,
+      "verify": true
+    },
+    {
+      "id": "a04fb73361cc3185",
+      "type": "P3",
+      "hits": 2,
+      "verify": false
+    },
+    {
+      "id": "78a0f24b025935b3",
+      "type": "P1",
+      "hits": 2,
+      "verify": false
+    },
+    {
+      "id": "98e32530310d7dd8",
+      "type": "P3",
+      "hits": 2,
+      "verify": false
+    },
+    {
+      "id": "bfdd10398599e9d5",
+      "type": "W",
+      "hits": 10,
+      "verify": false
+    },
+    {
+      "id": "4d9a300bc66a58e5",
+      "type": "P1",
+      "hits": 2,
+      "verify": false
+    },
+    {
+      "id": "4a169d96801cdfd9",
+      "type": "P3",
+      "hits": 2,
+      "verify": false
+    },
+    {
+      "id": "bca764cf8a7999ec",
+      "type": "W",
+      "hits": 10,
+      "verify": false
+    }
+  ]
+}

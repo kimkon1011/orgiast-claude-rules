@@ -1,7 +1,7 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-28 04:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-28 05:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 77
+- 案件数: 81
 
 - 011・.stall-sweeper・停止・最終更新 11/26 04:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・20261126-クラフト坂口・金さん待ち・クラフト坂口様 宿題7件の成果物は完成。精算の計算方法・福岡請求書の作り直し・先払い承認・いなば様への送信時期の判断待ち・期限2026-12-03（坂口様への精算金額の返答）・次:金さんの判断に沿って、坂口様への返信・福岡請求書の作り直し・Discord送信を進める（送信は承認後のみ）
@@ -26,8 +26,9 @@
 - 011・extwait-1126h・金さん待ち・社外返信2件（デージーネット河村様・JCS中野様）の送信承認待ち。kim-inbox ki-20261126091523-9292 に全文登録済み・期限2026-11-27 10:00（デージーネットは当日キャンセルの再調整依頼で早いほど良い）・次:承認後、JCS下書き 1a2111e733b26549 の「12/10 10:00」を「12/9 14:00」に差し替え、gmail-draft.mjs で2件送信し読み戻す。next-session.md 20番の更新は sensitive file で拒否されたため未反映
 - 011・extwait-kim-400・停止・最終更新 11/26 14:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・fallback-chain-timeout-1127・完了・PR #2849 MERGED・landed・期限なし・次:11/28 の delegation-health.json に fallback_chain_timeout が出ないことを確認
+- 011・fallback-chain-timeout-1128・停止・最終更新 11/28 04:51、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・fallback-deepseek-timeout-1127・進行中・Codex に修正を委譲中（codex-do バックグラウンド）・期限なし・次:RESULT.md と PR を読み戻し、Windows で node --test を再実行、PR の MERGED を確認して /session-close
-- 011・followup-ledger・停止・最終更新 11/28 04:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・followup-ledger・停止・最終更新 11/28 05:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・followup-ledger-1127・停止（次の朝まで待機）・000KimPC のビーコンが1日前で停止しており、指示が届いていない。社保の LINE 送信は 000 が復旧するまでできない。・期限11/30（投函期限）・次:11/28 朝に 000KimPC のビーコン状態を確認し、復旧していれば `SEND-000.md` の手順を実行する。ついでに各PCの followup-ledger 登録状況を再確認（fleet-status.mjs）。
 - 011・followup-ledger-1127-continue・停止・最終更新 11/27 21:50、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
 - 011・gitignore-scan-out・停止・最終更新 11/27 14:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -43,6 +44,9 @@
 - 011・mkawamur-reply-1126・停止・最終更新 11/26 19:25、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 011・mobile-push-undeliverable: STATUS・進行中・作業用011で実装・Windows検証（pass 85 / fail 0）済み。PR https://github.com/kimkon1011/orgiast-claude-rules/pull/2869 を作成し自動マージ（squash）有効、CI 待ち・期限2026-11-28 10:00（マージ確認）・次:PR #2869 が MERGED になったことを gh pr view 2869 --repo kimkon1011/orgiast-claude-rules --json state,mergedAt で確認する。CI が落ちていたら原因を調べて Codex に修正を頼む。マージ後は各PCの毎時 sweep で配信不能分が undeliverable に
 - 011・notify-repair-268e・完了・通知の誤起票（notify-kim:268e78e157993e7a5bad）を PR #2843 で修正し、2026-11-26T19:02:32Z に MERGED（1f17ba99）。next-session.md は無人起動で編集拒否のため、23番の完了印をこのファイルで代替・期限なし・次:next-session.md の 23番「通知の原因調査・修復」は完了扱いで選ばない。別件【夜間】tools/dirty-worktree-guard.test.mjs「閾値内の index.lock は稼働中とみなし削除しない」が CI だけで不安定（手元3回合格）→再発時に閾値を見直す。rescue/auto-session-20261127-0306
+- 011・ojust-line-301-1128・停止・Beeper 本体のある 000 が 11/26 から止まっていて中継に届かない。公式アカウントの経路は鍵がなく、グループに参加しているかも確認できない・期限2026-12-05（作業日は 12/7 午後。遅くとも 12/6 までに家族へ届ける）・次:000 が起動したら fleet-mail mail-1795807363380-8804e934 を実行して1通送り、011 へ返信する。011 はその返信を確かめて REPORT を更新する
+- 011・onegai-1128-011・金さん待ち・試作（図面6枚・収益シミュレーション・REPORT）は完成。次の一手は金さんの判断・期限なし・次:手持ちのAlibaba LEDビジョンセットで社内試験をするか、レンタルで試すか、購入するか、見送るかを決めていただく
+- 011・opendrive-archive-1128・停止・最終更新 11/28 04:23、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・plan3oku-11-work・停止・最終更新 11/25 20:58、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・plan3oku-15-toho-1126・停止・最終更新 11/26 08:58、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・plan3oku-15-toho-1127・停止・最終更新 11/27 21:06、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

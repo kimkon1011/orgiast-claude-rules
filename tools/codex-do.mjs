@@ -34,6 +34,14 @@ const GEMINI_CWD_GUARD = '\n作業ディレクトリ(cwd)の中だけで作業�
 
 const ASTRA = 'gpt-6-astra';
 const SOL = 'gpt-5.6-sol';
+
+// argv の --help だけでなく、指示本文（--prompt-file や前後空白付き argv）が
+// ヘルプ要求だけのときもエージェントを起動しない（2026-11-27 実害: cursor-agent が起動）。
+export function isHelpInstruction(text) {
+  const trimmed = String(text ?? '').trim();
+  return trimmed === '--help' || trimmed === '-h';
+}
+
 export function normalizeCodexModel(model) {
   return model === 'astra' ? ASTRA : model === 'sol' ? SOL : model;
 }
@@ -1535,6 +1543,35 @@ export function clearCooldownAfterRecheck({ home, recheck, result, quotaMatched,
 if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
+const usage = `使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--review] [--timeout <秒>] [--model <slug|astra|sol>] [--effort <low|medium|high|xhigh|max>] [--lane <sol|astra|auto>] [--no-escalate] [--dry-run] [--no-fallback] [--allow-fallback] [--side-effects] [--force-native] [--allow-native] [--require-wsl] [--origin <unattended|interactive>] [--kind <implement|verify|investigate|classify|summarize>] [--budget]
+
+オプション:
+  --help, -h           この使い方を表示して終了（エージェントは起動しない）
+  --prompt-file <file> 指示をファイルから読む（推奨。DONE_CRITERIA 必須）
+  --cwd <path>         作業ディレクトリ（この中だけで作業する）
+  --kind <kind>        implement|verify|investigate|classify|summarize
+  --lane <lane>        sol|astra|auto（既定: auto）
+  --model <slug>       astra|sol|任意スラッグ
+  --effort <level>     low|medium|high|xhigh|max
+  --timeout <秒>       タイムアウト秒（既定: 1800）
+  --dry-run            実行せずプロンプト等を表示
+  --budget             残り割当だけ表示して終了
+  --review             レビューモード
+  --no-fallback        フォールバック抑止
+  --allow-fallback     フォールバック許可
+  --side-effects       副作用ありとして扱う
+  --force-native       ネイティブ Codex を強制
+  --require-wsl        WSL 経路を強制
+  --origin <origin>    unattended|interactive（既定: interactive）
+  --no-escalate        昇格しない
+
+注意: 指示は argv より --prompt-file を推奨（シェルのコマンド置換事故を防ぐ）。
+protocols/HANDOFF.md のテンプレに従う。`;
+// --help を指示文としてエージェントに渡すと無駄な起動になる（本修正の実害）。
+if (args.includes('--help') || args.includes('-h')) {
+  console.log(usage);
+  process.exit(0);
+}
 const dryRun = args.includes('--dry-run');
 const allowFallback = args.includes('--allow-fallback');
 const forceSideEffects = args.includes('--side-effects');
@@ -1597,7 +1634,6 @@ for (const index of [modelIndex, effortIndex, laneIndex, originIndex, kindIndex]
 if (cwdIndex >= 0) { omitted.add(cwdIndex); omitted.add(cwdIndex + 1); }
 if (promptFileIndex >= 0) { omitted.add(promptFileIndex); omitted.add(promptFileIndex + 1); }
 if (timeoutIndex >= 0) { omitted.add(timeoutIndex); omitted.add(timeoutIndex + 1); }
-const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--review] [--timeout <秒>] [--model <slug|astra|sol>] [--effort <low|medium|high|xhigh|max>] [--lane <sol|astra|auto>] [--no-escalate] [--dry-run] [--no-fallback] [--allow-fallback] [--side-effects] [--force-native] [--allow-native] [--require-wsl] [--origin <unattended|interactive>] [--kind <implement|verify|investigate|classify|summarize>] [--budget]';
 
 if ((modelIndex >= 0 && (!model || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(model))) ||
     (effortIndex >= 0 && !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) ||
@@ -1632,15 +1668,21 @@ if (promptFileIndex >= 0) {
   if (!promptFile) { console.error(`--prompt-file にファイルパスが必要です\n${usage}`); process.exit(2); }
   try {
     instruction = fs.readFileSync(promptFile, 'utf8');
-    if (!/(?:DONE_CRITERIA|完了条件|成功条件)/.test(instruction)) {
-      console.error('[codex-do] 警告: 指示ファイルに完了条件がありません（protocols/HANDOFF.md 参照）');
-    }
   } catch (error) {
     console.error(`--prompt-file を読めません: ${promptFile} (${error.code || error.message})`);
     process.exit(2);
   }
 }
 if (!instruction.trim()) { console.error(usage); process.exit(2); }
+// --prompt-file 本文や前後空白付き argv が --help/-h だけのときも usage を出して終了する。
+// argv.includes だけでは ' --help ' や prompt-file 経由を取りこぼす。完了条件警告より先に判定する。
+if (isHelpInstruction(instruction)) {
+  console.log(usage);
+  process.exit(0);
+}
+if (promptFileIndex >= 0 && !/(?:DONE_CRITERIA|完了条件|成功条件)/.test(instruction)) {
+  console.error('[codex-do] 警告: 指示ファイルに完了条件がありません（protocols/HANDOFF.md 参照）');
+}
 const executionPolicy = decideExecutionPolicy({ instruction, noFallback, allowFallback, sideEffects: forceSideEffects });
 const { irreversible } = executionPolicy;
 noFallback = executionPolicy.noFallback;

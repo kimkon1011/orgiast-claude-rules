@@ -48,9 +48,6 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
       continue;
     }
     if (!active) continue;
-    // 2026-11-27実測: autopilot 形式の `- why:` `- first_step:` が残TODOに繰り上がり、
-    // 自動セッションが「why: …」を次の1目的に採用した。目的節の英字キー属性は項目化しない。
-    if (purposeSection && /^[-*]\s+[A-Za-z0-9_]+[:：]/.test(line)) continue;
     const task = line.match(/^(?:\d+[.)、]|[-*](?:\s+\[[ xX]\])?)\s+(.+)/);
     if (task) { flush(); current = { lines: [line], date, cwd }; }
     else if (current && (/^\s+\S/.test(line) || !line.trim())) current.lines.push(line);
@@ -67,9 +64,6 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
     // 完了と認識されずに毎回の回転で次代へ持ち越されていた(残TODO 41件中13件がこの形)。
     // auto-session 側の除外規則(todoExclusionReason)と二重に塞ぐ。
     if (/^(?:~~|\[[xX]\]|\[完了|✅)|~~\s*(?:→\s*)?✅/.test(first)) { stats.completed++; continue; }
-    // 2026-11-27実測: autopilot 形式の `- why:` `- first_step:` が残TODOに繰り上がり、
-    // 未決の「目的完了: …」も持ち越された。先頭が目的完了の項目は完了扱いする。
-    if (/^目的完了(?:[:：]|（)/.test(first)) { stats.completed++; continue; }
     if (/^(?:未定|なし|（なし|以下は既存|上の「|下の既存)/.test(first)) { stats.context++; continue; }
     const explicit = [...first.matchAll(/(?:起票|更新)\s*[:：]?\s*(\d{4}-\d{2}-\d{2})/g)].at(-1)?.[1];
     const age = now - Date.parse(explicit || item.date);

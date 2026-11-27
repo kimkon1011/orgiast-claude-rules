@@ -1,6 +1,1 @@
-{
-  "ClaudeFreeeTokenHealth": {
-    "ignore": true,
-    "reason": "モニタリングツール。exit code 1はトークン切れ検出の正常終了。修復にはfreee OAuth再認可（人の操作）が必要"
-  }
-}
+{}

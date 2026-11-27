@@ -3,7 +3,7 @@
 const CLOSED = new Set(['完了', '不要', '見送り']);
 
 export function classify(row, offices) {
-  const text = [row.title, row.action, row.notes, row.quote].filter(Boolean).join(' ');
+  const text = [row.title, row.action].filter(Boolean).join(' '); // 根拠・備考は他案件への言及を含むので窓口判定に使わない
   return offices.filter(o => new RegExp(o.match).test(text)).map(o => o.office);
 }
 
@@ -33,7 +33,7 @@ export function consolidate(rows, { offices, visitWords, mailWords, today }) {
   const mailDates = [...new Set(mails.map(m => m.date).filter(Boolean))].sort();
   const mailBatches = mailDates.map(date => ({ date, items: mails.filter(m => m.date === date) })).filter(b => b.items.length > 1);
   const pendingWords = /【要確認】|要確認|後に取得|完了後|取り直|未定/;
-  const unscheduled = items.filter(it => it.offices.length && (!it.row.due || pendingWords.test([it.row.title, it.row.action, it.row.notes].join(' '))))
+  const unscheduled = items.filter(it => it.offices.length && (!it.row.due || pendingWords.test([it.row.title, it.row.action].join(' '))))
     .map(it => ({ id: it.row.id, title: it.row.title, offices: it.offices, why: !it.row.due ? '期限日が空' : '【要確認】のまま（期限・担当・取り方を決めて台帳に載せる）' }));
   const stale = items.filter(it => it.row.due && today && it.row.due < today && it.row.kind === '訴訟・法務')
     .map(it => ({ id: it.row.id, title: it.row.title, due: it.row.due, why: '期限を過ぎて未完了。期限が古い（延長・変更）なら正しい期限に直す' }));

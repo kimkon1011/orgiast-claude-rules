@@ -1,7 +1,7 @@
-# session-status  PC=008  host=008XPS8300  updated 2026-11-27 14:08 JST
+# session-status  PC=008  host=008XPS8300  updated 2026-11-27 15:10 JST
 
-- claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "configDirectory": "C:\\Users\\user\\
-- 案件数: 41
+- claude auth: auth status タイムアウト
+- 案件数: 42
 
 - 008・20261126-EOラーニングVALX只石プロデュース『劇薬マーケティング』シリーズ第二弾!・完了・最終更新 11/26 17:53、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 008・20261126-エイト・停止・最終更新 11/26 15:52、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
@@ -29,7 +29,8 @@
 - 008・meetsmore-send-1127・停止・最終更新 11/27 09:38、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・nishibayashi-followup-1126・完了・最終更新 11/26 19:11、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー、次の手順が未着手・期限なし・次:なし
 - 008・nishibayashi-reply-1126・完了・最終更新 11/26 15:09、STATUS.mdなし、DONEあり・期限なし・次:なし
-- 008・openrouter-ledger-1127・停止・最終更新 11/27 14:08、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 008・openrouter-ledger-1127・停止・最終更新 11/27 14:14、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 008・patrol-remain-1127・停止・最終更新 11/27 15:10、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・plan3oku-12-freee-20261127・停止・最終更新 11/27 09:20、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・primix-estimate-008-1127・停止・最終更新 11/27 09:46、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
 - 008・reply-wait-collect-1125・停止・最終更新 11/25 09:34、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

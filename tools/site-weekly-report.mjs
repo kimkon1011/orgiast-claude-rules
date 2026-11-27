@@ -603,7 +603,7 @@ export async function runWeekly(args = {}, deps = {}) {
         skipLlm: !llmInvoked,
       });
     }
-    (deps.commitImpl || commit)(CHANGE_GATE_WEEKLY, { fingerprint: fp });
+    if (!dryRun) (deps.commitImpl || commit)(CHANGE_GATE_WEEKLY, { fingerprint: fp });
     (deps.recordRunImpl || recordRun)(CHANGE_GATE_WEEKLY, { changed: true, llmInvoked, items: flat.length });
   }
 

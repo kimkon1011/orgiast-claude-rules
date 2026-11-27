@@ -41,6 +41,7 @@
     {"path": "tools/lib/handoff-store.mjs", "scope": "fleet", "step": "settings:knowledge-guard-PreToolUse", "reason": "引き継ぎ書の封印読み書き（fleet-task-runner 等の実行時依存）を全PCへconverge配布"},
     {"path": "tools/register-morning-session-sweep.ps1", "scope": "fleet", "step": "task:morning-session-sweep", "reason": "全PCの未クローズセッションを毎朝06:30に回収する共通タスク"},
     {"path": "tools/register-session-cap30.ps1", "scope": "fleet", "step": "task:session-cap30", "reason": "全PCの Session Manager 可視セッションを毎日04:40に30件以下へ整理する共通タスク"},
+    {"path": "tools/register-session-cap-enforce.ps1", "scope": "fleet", "step": "task:session-cap-enforce", "reason": "全PCで毎時、不要セッションを削除せず退避し稼働中は保護する共通タスク"},
     {"path": "tools/lib/session-claim-cache.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "セッション目的抽出を衝突フックと着手台帳で共有する実行時依存"},
     {"path": "tools/hook-dispatch.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "全PCの同期hookをイベント単位で1本に集約するディスパッチャ（PC過負荷対策 #1568）"},
     {"path": "tools/hook-dispatch-benchmark.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "ディスパッチャの所要時間を各PCで計測するベンチマーク"},

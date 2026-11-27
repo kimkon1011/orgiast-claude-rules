@@ -12,6 +12,24 @@
       "createdAt": "2026-11-27T12:03:31.433Z",
       "expiresAt": "2026-11-28T00:03:31.433Z",
       "timeoutSeconds": 3600
+    },
+    {
+      "id": "prompt-20261127-134522-5342",
+      "kind": "prompt",
+      "targets": "kim-PC,000KimPC,004minpaku,008XPS8300,014DELL,015CAFE,018,019,999genba",
+      "why": "#2905 の絶対ルール（認証コード追記3・空港案内）を各PCへ同期・読み戻し・方針テストし、結果を 011NEXT へ fleet-mail で返す",
+      "body": "[Work request from 011NEXT, 2026-11-27] Sync the absolute rules (auth-code addendum 3 + airport/flight guidance rule, merged in PR #2905) on THIS PC, read them back, run the policy tests, and send the results to 011NEXT.\n\nDo not ask kim (the user) for anything: no confirmation, no login, no testing. No real-world procedures, no external sends (only the internal fleet-mail note at the end). Do not delete files. If OAuth is expired (401), just report \"OAuth expired\".\n\nLet REPO = the orgiast-claude-rules clone this command runs in (normally ~/.claude/nightly-repo). Let HOME = this Windows user's home.\n\n1. Update: `git -C REPO fetch origin` then `git -C REPO checkout --detach origin/main`. If checkout fails because of local changes, do not discard them; instead `git -C REPO worktree add --detach HOME/.claude/wt-rules-sync-1127 origin/main` and use that as REPO. Record `git -C REPO rev-parse --short HEAD`.\n2. Record the byte size of HOME/.claude/CLAUDE.md, and of HOME/.codex/AGENTS.md and HOME/.gemini/GEMINI.md if they exist.\n3. Sync only the top absolute-rules block (never put the whole ONBOARDING into CLAUDE.md; 018 has ~160KB of local content, keep it): `node REPO/tools/onboarding-sync.mjs --rules-only --force`. If the environment variable ORGIAST_ONBOARDING_URL is set to a file:// URL, run the command with that variable removed for this one command only (do not change the user's environment permanently). Then copy REPO/tools/onboarding-sync.ps1 over HOME/.claude/hooks/onboarding-sync.ps1.\n4. Read back (UTF-8) each file from step 2: full path, size after sync, and whether it contains (a) item \"6.\" of the \"手続き代行の即時開始ルール\" block and (b) the \"空港・フライト案内の検証ルール\" block, with line numbers. Take the exact strings from REPO/rules/absolute-rules.md with the Read tool instead of retyping them. If any file grew by more than 20KB, report it as abnormal.\n5. Policy tests (they only ask Claude for a policy answer; nothing is executed):\n   `node REPO/tools/delegation-retest.mjs --suite auth --outdir HOME/.claude/reports/retest-auth-20261127`\n   `node REPO/tools/delegation-retest.mjs --suite airport --outdir HOME/.claude/reports/retest-airport-20261127`\n   On 018, 019, 000/kim-PC and 999 also run: `node REPO/tools/delegation-retest.mjs --suite delegation --outdir HOME/.claude/reports/retest-delegation-20261127`\n   If it fails with ENOENT (claude not found), find claude (`where.exe claude`, HOME/.local/bin/claude.exe, %APPDATA%/npm/claude.cmd, HOME/bin/claude.bat) and rerun with the environment variable CLAUDE_BIN set to that full path. If a case fails, read its .txt and state in one line whether the grader missed a correct answer or the policy is really wrong.\n6. Only on 004 (004minpaku): create the extensionless file C:\\Users\\kimko\\bin\\claude with LF line endings and exactly these two lines, keeping claude.bat as is:\n   #!/bin/sh\n   exec cmd.exe //c \"C:\\\\Users\\\\kimko\\\\bin\\\\claude.bat\" \"$@\"\n   Then in Git bash check `which claude` and `claude --version`. If that fails, make the wrapper exec the real claude.exe that claude.bat calls, and check again.\n7. Write the results to HOME/.claude/reports/rules-sync-retest-20261127-result.md (UTF-8): hostname, REPO commit, the read-back table, the full text of every report.md from step 5, one-line judgement for each failed case, and for 004 the step-6 result. Then send it to 011NEXT:\n   `node REPO/tools/fleet-mail.mjs --send --to 011NEXT --kind note --body-file HOME/.claude/reports/rules-sync-retest-20261127-result.md --why \"[回答] rules sync + retest result (#2905)\"`\n",
+      "createdBy": "kimko",
+      "createdAt": "2026-11-27T13:45:22.708Z"
+    },
+    {
+      "id": "run-20261127-134524-0958",
+      "kind": "run",
+      "targets": "all",
+      "why": "#2905 の絶対ルールを全PCの CLAUDE.md 先頭へ同期（onboarding-sync、オプトイン不要の経路）",
+      "task": "cost-self-heal",
+      "createdBy": "kimko",
+      "createdAt": "2026-11-27T13:45:24.018Z"
     }
   ]
 }

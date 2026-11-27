@@ -5,7 +5,8 @@ export const MODEL_WARNING_LINE = /^\s*\[claude-code:unrecognized_model\]/;
 export const CHEAP_CODE_BANNER = /^\[(?:openrouter|glm):[^\]\r\n]+\]$/;
 // 作業前の環境ノイズ（未 trust ワークスペースで permissions.allow を無視する警告）。
 // Ignoring 行に続きのヒントが同梱される場合と、行が分かれる場合の両方を落とす。
-export const TRUST_WARNING_LINE = /^\s*Ignoring \d+ permissions\.allow entries from .*\bthis workspace has not been trusted\b/;
+// 実データは "1 ... entry"（単数・11/25-8）と "114 ... entries"（複数・11/27-8）の両方がある。
+export const TRUST_WARNING_LINE = /^\s*Ignoring \d+ permissions\.allow entr(?:y|ies) from .*\bthis workspace has not been trusted\b/;
 export const TRUST_DIALOG_HINT_LINE = /^\s*Run Claude Code interactively here once and accept the trust dialog/;
 
 function isEnvironmentNoiseLine(line) {

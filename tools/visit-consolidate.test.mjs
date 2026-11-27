@@ -48,7 +48,7 @@ import { grade, buildPrompt, parseAnswers } from './deadline-visit-selftest.mjs'
 const cases = JSON.parse(fs.readFileSync(new URL('../tests/deadline-visit/cases.json', import.meta.url), 'utf8'));
 test('自己テスト：模範解答は全件合格し、再発時の答え（12/9に間に合う見込みでネット請求を出す）は不合格になる', () => {
   const good = cases.map(c => {
-    const allowed = { C01: ['window'], C02: ['kakitome', 'sokutatsu'], C03: ['egov'], C04: ['lp'], C05: ['window'], C06: ['yuso'], C07: ['etax'], C08: ['web'], C09: ['lp', 'sokutatsu'], C10: ['net'], C11: ['online', 'yuso'], C12: [], C13: ['denshi'] }[c.id];
+    const allowed = { C01: ['window'], C02: ['kakitome', 'sokutatsu'], C03: ['egov'], C04: ['lp'], C05: ['window'], C06: ['yuso'], C07: ['etax'], C08: ['web'], C09: ['lp', 'sokutatsu'], C10: ['net'], C11: ['online', 'yuso'], C12: [], C13: ['denshi'], C14: ['window'], C15: ['etax', 'yuso'], C16: [], C17: ['sokutatsu', 'lp'], C18: ['oss'] }[c.id];
     return { id: c.id, deadline: c.deadline, deadline_source: c.deadline ? '記録' : '', presented_options: allowed, recommended: allowed[0] || null, visit_consolidation: { considered: true, bundled: c.mustBundle, avoid_routes: ['オンライン請求'] } };
   });
   assert.equal(grade(cases, good).pass, true, JSON.stringify(grade(cases, good).results.filter(r => !r.pass)));

@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { evaluateRepairFirst, repairCommand } from './lane-repair-first-gate.mjs';
 import { recordRepair } from './lane-repair-log.mjs';
-import { repairContext, REPAIR_TTL, repairRows } from './lib/lane-repair-state.mjs';
+import { repairContext, REPAIR_TTL, repairRows, pendingRepairs } from './lib/lane-repair-state.mjs';
 import { runHook } from './gate-hook-runner.mjs';
 import { rolloutMode } from './gate-runtime.mjs';
 const now = Date.now(), fault = { alive: false, reason: 'real_fail_rate', error: 'HTTP 500 (9)' };
@@ -145,4 +145,19 @@ test('cd prefix permits one diagnostic invocation and preserves chain blocking',
   // cd 前置の dir に特殊文字
   assert.equal(repairCommand('cd some;path && node tools/lane-doctor.mjs'), false);
   assert.equal(repairCommand(`cd "${repo}" && "C:\\Program Files\\nodejs\\node.exe" tools/lane-doctor.mjs --probe`), true);
+});
+
+const missingKeyError = '全候補が失敗しました: 利用可能なキーを持つ候補がありません';
+test('missing_key leaves no pending repair and permits ordinary writes', t => {
+  const { home, health } = fixture(t, { alive: false, reason: 'missing_key', error: missingKeyError });
+  assert.deepEqual(pendingRepairs(health, home, now), []);
+  for (const name of ['Edit', 'Write', 'Bash']) assert.equal(evaluateRepairFirst(input(name, 'touch file'), { home, now }).decision, 'pass');
+});
+test('repair log accepts missing_key and legacy probe_failed with missing-key evidence', async t => {
+  for (const reason of ['missing_key', 'probe_failed']) {
+    const { home, health } = fixture(t, { alive: false, reason, error: missingKeyError });
+    const row = await recordRepair({ home, lane: 'deepseek', tried: 'candidate keys checked', result: 'unfixable', now });
+    assert.equal(row.result, 'unfixable');
+    assert.deepEqual(pendingRepairs(health, home, now), []);
+  }
 });

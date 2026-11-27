@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runProbe, laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, needsNativeCodexProbe, nativeWriteProbeArgs, nativeWriteProbeResult, directGeminiCliState , shouldSkipLiveProbe } from './lane-doctor.mjs';
+import { pendingRepairs } from './lib/lane-repair-state.mjs';
 import { restoreExpiredDisabledLanes } from './lib/lane-disabled.mjs';
 import { classifyTaskKind } from './lib/task-kind.mjs';
 import { nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
@@ -655,4 +656,16 @@ test('直結または OpenRouter 経由で生存を確認した自動停止を�
   assert.equal(result.lanes.gemini.reason, 'billing');
   assert.equal(result.lanes.gemini.via, 'openrouter');
   assert.deepEqual(read(home, 'lanes-disabled.json'), { glm: untouched, groq: manual });
+});
+
+test('probe classifies missing candidate keys without requiring repair', async t => {
+  const home = fixture(t);
+  const error = '全候補が失敗しました: 利用可能なキーを持つ候補がありません';
+  const health = await laneDoctorProbe({ home, now, platform: 'linux', providers: ['mistral'],
+    probe: async () => ({ code: 1, text: error }), notify: async () => ({ delivered: 'test' }) });
+  assert.equal(health.lanes.mistral.alive, false);
+  assert.equal(health.lanes.mistral.reason, 'missing_key');
+  assert.equal(health.lanes.mistral.probeReason, 'missing_key');
+  assert.equal(health.lanes.mistral.error, error);
+  assert.ok(!pendingRepairs(health, home, now).some(row => row.lane === 'mistral'));
 });

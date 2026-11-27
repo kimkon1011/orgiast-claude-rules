@@ -8,9 +8,9 @@ import path from 'node:path';
 export const isAutoDisabled = entry => ['failure_rate', 'quality_validation'].includes(entry?.reason);
 export const TEMP_DISABLE_MS = 6 * 60 * 60 * 1000;
 export function disabledLanesFile(home = process.env.ORGIAST_HOME || os.homedir()) { return path.join(home, '.claude', 'lanes-disabled.json'); }
-export function readDisabledEntries(home = process.env.ORGIAST_HOME || os.homedir()) {
+export function readDisabledEntries(home = process.env.ORGIAST_HOME || os.homedir(), file = disabledLanesFile(home)) {
   try {
-    const data = JSON.parse(fs.readFileSync(disabledLanesFile(home), 'utf8').replace(/^\uFEFF/, '')) || {};
+    const data = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) || {};
     if (Array.isArray(data)) return Object.fromEntries(data.filter(Boolean).map(n => [String(n).trim().toLowerCase(), { reason: 'manual' }]));
     if (typeof data !== 'object') return {};
     const out = {};
@@ -22,9 +22,9 @@ export function readDisabledEntries(home = process.env.ORGIAST_HOME || os.homedi
     return out;
   } catch { return {}; }
 }
-export function disabledLanes(home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now()) {
+export function disabledLanes(home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), entries = readDisabledEntries(home)) {
   const set = new Set();
-  for (const [name, entry] of Object.entries(readDisabledEntries(home))) {
+  for (const [name, entry] of Object.entries(entries)) {
     const until = Number(entry?.until);
     // until が過去の一時停止は無効として扱わない。restoreExpiredDisabledLanes の
     // probe を待たずに期限切れを外す。

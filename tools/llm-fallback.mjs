@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { budgetVerdict, estimateTokens, noteResponse, readBudget, writeBudget } from './rate-budget.mjs';
 import { isDailyQuotaResponse, nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
 import { providerLimitedUntil } from './lib/executor-gate.mjs';
-import { isAutoDisabled, readDisabledEntries } from './lib/lane-disabled.mjs';
+import { isAutoDisabled, readDisabledEntries, disabledLanes } from './lib/lane-disabled.mjs';
 import { applyCandidateHealth } from './fallback-backend-health.mjs';
 import { injectAbsoluteRules } from './lib/absolute-rules.mjs';
 
@@ -238,6 +238,7 @@ function claudeHomeFrom(file) {
 
 export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category = '', caller = 'llm-fallback', allowGatewayFallback = true, explicitStart = false, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, laneHealthFile, persistState = true, perProviderTimeoutMs, now = () => Date.now() }) {
   if (perProviderTimeoutMs != null && (!Number.isSafeInteger(perProviderTimeoutMs) || perProviderTimeoutMs <= 0 || perProviderTimeoutMs > 2147483647)) throw new Error('perProviderTimeoutMs must be a positive timer-safe integer');
+  const originalProviders = [start, ...chain].map(candidate => candidate?.provider);
   start = routeCandidate(start);
   chain = chain.map(routeCandidate);
   const home = process.env.ORGIAST_HOME || os.homedir();
@@ -269,21 +270,40 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
     } catch {}
   }
   // lanes-disabled.json に載った provider は start でも候補から外す。課金・回数制限は cooldown で一時退避し、回復後は自動で戻す。
+  // disabledLanes() は until が過去のエントリを自動除外する（lane-disabled.mjs）。
   let disabled = new Set();
+  let disabledEntries = {};
   if (cooldownFile != null || !process.env.NODE_TEST_CONTEXT) {
-    try { disabled = new Set(Object.keys(JSON.parse(fs.readFileSync(cooldownFile ? path.join(path.dirname(cooldownFile), 'lanes-disabled.json') : path.join(home, '.claude', 'lanes-disabled.json'), 'utf8').replace(/^\uFEFF/, '')) || {}).map(p => p.toLowerCase())); } catch {}
+    try {
+      disabledEntries = readDisabledEntries(home, cooldownFile ? path.join(path.dirname(cooldownFile), 'lanes-disabled.json') : undefined);
+      disabled = disabledLanes(home, timestamp, disabledEntries);
+    } catch {}
   }
   // A lane-doctor probe may measure its own automatically disabled provider.
+  // start は routeCandidate で変換済みのため、元の provider で比較する。
   const probeProvider = process.env.ORGIAST_LANE_DOCTOR_PROBE_PROVIDER;
-  if (probeProvider && !chain.length && start?.provider === probeProvider &&
-      isAutoDisabled(readDisabledEntries(home)[probeProvider])) disabled.delete(probeProvider);
+  if (probeProvider && !chain.length) {
+    if (originalProviders[0] === probeProvider && isAutoDisabled(disabledEntries[probeProvider])) disabled.delete(probeProvider);
+  }
+  const skipped = [];
   const candidates = [];
   const seen = new Set();
   // Gateway selection is routing, not failover; --no-fallback still uses OpenRouter.
   const expanded = [start, ...chain];
-  for (const candidate of expanded.filter(Boolean)) {
-    if (!allowedForCategory(candidate, category)) continue;
-    if (disabled.has(String(candidate.provider).toLowerCase())) { console.error(`[routing] ${candidate.provider} は lanes-disabled.json で無効化されているため使いません`); continue; }
+  for (const [index, candidate] of expanded.entries()) {
+    if (!candidate || !allowedForCategory(candidate, category)) continue;
+    // 元のレーンと実際の接続先の両方を尊重する。元レーンの probe でも gateway の停止は解除しない。
+    const blockedProvider = [candidate.provider, originalProviders[index]]
+      .map(provider => String(provider).toLowerCase()).find(provider => disabled.has(provider));
+    if (blockedProvider) {
+      const aliasOf = blockedProvider === 'gemini-cli' ? 'gemini'
+        : ['openrouter-free', 'openrouter-code'].includes(blockedProvider) ? 'openrouter' : '';
+      const entry = disabledEntries[blockedProvider] || disabledEntries[aliasOf];
+      const reason = entry?.reason || 'manual';
+      skipped.push({ provider: blockedProvider, model: candidate.model, reason: `disabled:${reason}` });
+      console.error(`[routing] ${blockedProvider} は lanes-disabled.json で無効化されているため使いません (${reason})`);
+      continue;
+    }
     const identity = `${candidate.provider}:${candidate.model}`;
     if (seen.has(identity)) continue;
     seen.add(identity);
@@ -346,7 +366,6 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
   // 全滅時は非直APIだけ再開する。glm / kimi直 / deepseek直は履歴・cooldown の間は呼ばない。
   const revived = (available.length ? available : candidates).filter(({ provider }) => !directBlockedUntil(provider));
   const selectedCandidates = available.length ? available : (revived.length ? revived : (considerDirect ? revived : candidates));
-  const skipped = [];
   if (explicitStart) {
     const p = String(start.provider).toLowerCase();
     const reason = Number(cooldowns?.[p]?.until) > timestamp ? 'cooldown' : quotaWaitProviders.includes(p) ? 'quota_wait' : '';

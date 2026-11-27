@@ -7,6 +7,8 @@ import { proxyCredential, gwsFetch, GWS_MARKER } from './lib/gws-proxy.mjs';
  *       作成時の内部宛は認証前に停止。送信時は下書きの宛先を再検査。
  * 使い方:
  *   node tools/gmail-draft.mjs --check [--user <addr>] [--json]
+ *   node tools/gmail-draft.mjs --update <draftId> --to <addr> [--cc <addr>] --subject <件名> --body-file <path> [--user <addr>] [--json]
+ *   --update は本文・宛先・件名（添付を含むメッセージ全体）を置換。作成と同じ宛先/CC規則と本文送信ガードを適用。
  *   node tools/gmail-draft.mjs --send <draftId> [--user <addr>] [--booth] [--ack-consistency <理由>] [--json]
  *   node tools/gmail-draft.mjs --forward <messageId> --to <addr> [--cc <addr>] [--body <前置き> | --body-file <path>] [--user <addr>] [--booth] [--dry-run] [--json]
  *   返信作成: --thread-id <threadId>（返信先ヘッダ・省略時の件名を自動取得）
@@ -23,6 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { defaultDriveKeyPath } from './lib/drive-auth.mjs';
+import { tryRelayToken } from './lib/seisaku-gmail-token.mjs';
 import { loadLedger, isInternal, extractAddresses, shouldBlockInternal } from './internal-recipient-gmail-guard.mjs';
 import { bodyHash, checkConsistency, statePath, mimeText, render as renderConsistency } from './mail-consistency-check.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
@@ -222,6 +225,9 @@ function readKey(keyPath) {
 }
 
 export async function mintDwdToken({ user, keyPath = DEFAULT_KEY, scope, fetchImpl = gwsFetch, statePath }) {
+  // gmail-search/getDriveToken と同じ専用 OAuth 経路。対象外・未配備なら従来経路を維持する。
+  const gmailRelay = await tryRelayToken({ keyPath, impersonate: user, scope, fetchImpl, statePath });
+  if (gmailRelay) return gmailRelay;
   const relay = proxyCredential({ keyPath, impersonate: user, scope });
   if (relay !== null) return relay;
   const key = readKey(keyPath);
@@ -277,11 +283,11 @@ async function getReplyHeaders({ user, threadId, fetchImpl, getToken }) {
   return { inReplyTo, references: references ? `${references} ${inReplyTo}` : inReplyTo, subject: header('subject') ?? '' };
 }
 
-export async function createDraft({ user = DEFAULT_USER, raw, threadId, fetchImpl = gwsFetch, getToken }) {
+async function writeDraft({ user = DEFAULT_USER, id, raw, threadId, fetchImpl = gwsFetch, getToken }) {
   try {
     const token = await (getToken ?? (args => mintDwdToken({ ...args, fetchImpl })))({ user, scope: GMAIL_COMPOSE_SCOPE });
-    const res = await fetchImpl('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
-      method: 'POST', signal: AbortSignal.timeout(25000),
+    const res = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/drafts${id === undefined ? '' : `/${id}`}`, {
+      method: id === undefined ? 'POST' : 'PUT', signal: AbortSignal.timeout(25000),
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: { raw, ...(threadId ? { threadId } : {}) } }),
     });
@@ -292,6 +298,16 @@ export async function createDraft({ user = DEFAULT_USER, raw, threadId, fetchImp
     if (typeof json?.id !== 'string' || !json.id) throw new Error('下書き ID がありません');
     return { id: json.id, messageId: json.message?.id, threadId: json.message?.threadId };
   } catch (error) { throw Object.assign(new Error(safeFailure(error).error), safeFailure(error)); }
+}
+
+export async function createDraft({ user, raw, threadId, fetchImpl, getToken }) {
+  return writeDraft({ user, raw, threadId, fetchImpl, getToken });
+}
+
+/** 既存下書きのメッセージ全体を置換する。送信・削除は行わない。 */
+export function updateDraft({ id, ...options }) {
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(id)) throw configError();
+  return writeDraft({ ...options, id });
 }
 
 export async function deleteDraft({ user = DEFAULT_USER, id, fetchImpl = gwsFetch, getToken }) {
@@ -358,7 +374,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const name = argv[i];
     if (['--check', '--json', '--dry-run', '--booth'].includes(name)) { args[name.slice(2)] = true; continue; }
-    if (!['--to', '--cc', '--subject', '--body', '--body-file', '--user', '--delete', '--send', '--forward', '--thread-id', '--in-reply-to', '--attach', '--ack-consistency', '--allow-repeat'].includes(name) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw configError();
+    if (!['--to', '--cc', '--subject', '--body', '--body-file', '--user', '--update', '--delete', '--send', '--forward', '--thread-id', '--in-reply-to', '--attach', '--ack-consistency', '--allow-repeat'].includes(name) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw configError();
     const field = name.slice(2);
     const value = argv[++i];
     if (field === 'to' || field === 'cc' || field === 'attach') (args[field] ??= []).push(value);
@@ -372,11 +388,16 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
   const stdout = deps.stdout ?? (text => console.log(text));
   const jsonMode = argv.includes('--json');
   let user = DEFAULT_USER;
-  let action = argv.includes('--send') ? 'send' : argv.includes('--forward') ? 'forward' : argv.includes('--delete') ? 'delete' : argv.includes('--check') ? 'check' : argv.includes('--dry-run') ? 'dry-run' : 'create-draft';
+  let action = argv.includes('--send') ? 'send' : argv.includes('--forward') ? 'forward' : argv.includes('--delete') ? 'delete' : argv.includes('--check') ? 'check' : argv.includes('--dry-run') ? 'dry-run' : argv.includes('--update') ? 'update-draft' : 'create-draft';
   let deletionId;
   const emit = (report, human) => stdout(jsonMode ? JSON.stringify({ action, user, ...report }) : human);
   try {
     const args = parseArgs(argv);
+    if (Object.hasOwn(args, 'update') && (
+      !/^[A-Za-z0-9_-]+$/u.test(args.update) ||
+      ['send', 'delete', 'check', 'forward', 'allow-repeat', 'ack-consistency'].some(k => Object.hasOwn(args, k)) ||
+      !Object.hasOwn(args, 'subject')
+    )) throw configError();
     deletionId = args.delete;
     const senders = addresses(args.user ?? DEFAULT_USER, true);
     if (senders.length !== 1) throw configError();
@@ -537,6 +558,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       return 3;
     }
     // 入力の検証と内部宛の停止を、認証・スレッド取得より先に行う。
+    if (args.update !== undefined) assertGmailBodySendable(body, { env: deps.env ?? process.env, skipHandbackGuard: deps.skipHandbackGuard });
     let raw = buildRawMessage(input);
     if (args['dry-run']) {
       let headers = Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0];
@@ -555,10 +577,10 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         subject: args.subject ?? (/^Re:/iu.test(reply.subject) ? reply.subject : `Re: ${reply.subject}`),
       });
     }
-    const result = await createDraft({ user, raw, threadId: args['thread-id'], fetchImpl,
+    const result = await (args.update === undefined ? createDraft : updateDraft)({ user, id: args.update, raw, threadId: args['thread-id'], fetchImpl,
       getToken,
     });
-    emit({ ok: true, ...ccReport, ...result }, `下書きを作成しました: ${result.id} (${user})${ccHuman}`);
+    emit({ ok: true, ...ccReport, ...result }, `下書きを${args.update === undefined ? '作成' : '更新'}しました: ${result.id} (${user})${ccHuman}`);
     return 0;
   } catch (error) {
     if (error instanceof SendDedupeError) {

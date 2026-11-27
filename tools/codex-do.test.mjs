@@ -1897,6 +1897,35 @@ test('isLaneIncompatible はモデル警告と残りの出力、終了コード�
   assert.equal(isLaneIncompatible('', 'normal failure', 1), false);
 });
 
+test('isLaneIncompatible は実データの trust 警告を残差から外して発火する', () => {
+  // 2026-11-27-8.json の実 stderr（バナー / trust 警告 / unrecognized_model）
+  const realStderr = [
+    '[openrouter:deepseek/deepseek-v4-flash]',
+    'Ignoring 114 permissions.allow entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["C:/Users/kimko"].hasTrustDialogAccepted: true in C:\\Users\\kimko\\.claude\\cheap-code-worker\\.claude.json.',
+    '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}',
+  ].join('\n');
+  assert.equal(isLaneIncompatible('\n', realStderr, 0), true);
+
+  // 回帰: 同じ trust 警告があっても stdout に回答本文があれば success 維持
+  assert.equal(isLaneIncompatible('実作業の回答本文です', realStderr, 0), false);
+
+  // 回帰: trust 警告だけ（unrecognized_model 無し）は対象外
+  const trustOnly = [
+    '[openrouter:deepseek/deepseek-v4-flash]',
+    'Ignoring 114 permissions.allow entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["C:/Users/kimko"].hasTrustDialogAccepted: true in C:\\Users\\kimko\\.claude\\cheap-code-worker\\.claude.json.',
+  ].join('\n');
+  assert.equal(isLaneIncompatible('\n', trustOnly, 0), false);
+
+  // 行が分かれている trust 警告も残差から落ちる
+  const splitTrust = [
+    '[openrouter:deepseek/deepseek-v4-flash]',
+    'Ignoring 3 permissions.allow entries from .claude/settings.json: this workspace has not been trusted.',
+    'Run Claude Code interactively here once and accept the trust dialog, or set projects["C:/Users/kimko"].hasTrustDialogAccepted: true in C:\\Users\\kimko\\.claude\\cheap-code-worker\\.claude.json.',
+    '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}',
+  ].join('\n');
+  assert.equal(isLaneIncompatible('\n', splitTrust, 0), true);
+});
+
 test('shouldAdvanceToNextBackend は laneIncompatible=true で incompatible を返す', () => {
   assert.deepEqual(shouldAdvanceToNextBackend({ laneIncompatible: true, status: 1 }), { advance: true, outcome: 'incompatible' });
   assert.deepEqual(shouldAdvanceToNextBackend({ laneIncompatible: true, exhausted: true, status: 3 }), { advance: true, outcome: 'incompatible' });

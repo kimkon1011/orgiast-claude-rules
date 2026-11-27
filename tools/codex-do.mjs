@@ -4,6 +4,8 @@
 // --lane sol|astra|auto / --model astra|sol|<slug> / --effort で指定する。
 // 先頭40行の <!-- lane: astra --> でも指定可。Astra 上限時は Sol へ退避する。
 import { disabledLanes } from './lib/lane-disabled.mjs';
+import { hasModelWarning, isLaneIncompatible, modelWarningRemainder } from './lib/lane-incompatible.mjs';
+export { isLaneIncompatible } from './lib/lane-incompatible.mjs';
 import { GATEWAY_MODELS, OPENROUTER_BASE } from './provider-routing.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -1363,24 +1365,6 @@ export function isBackendExhausted(output, stderr) {
   if (patterns.some((p) => lower.includes(p))) return true;
   if (merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '402'))) return true;
   return merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '429') || isHttpStatusCodeLine(line, '413'));
-}
-
-const MODEL_WARNING_LINE = /^\s*\[claude-code:unrecognized_model\]/;
-const CHEAP_CODE_BANNER = /^\[(?:openrouter|glm):[^\]\r\n]+\]$/;
-
-function modelWarningRemainder(output, stderr) {
-  // cheap-code は回答の有無にかかわらず provider と model を stderr に出す。
-  const stdoutLines = String(output || '').split(/\r?\n/);
-  const stderrLines = String(stderr || '').split(/\r?\n/).filter(line => !CHEAP_CODE_BANNER.test(line));
-  return [...stdoutLines, ...stderrLines].filter(line => !MODEL_WARNING_LINE.test(line)).join('\n').trim();
-}
-
-function hasModelWarning(text) {
-  return String(text || '').split(/\r?\n/).some(line => MODEL_WARNING_LINE.test(line));
-}
-
-export function isLaneIncompatible(output, stderr, status) {
-  return (hasModelWarning(output) || hasModelWarning(stderr)) && (status !== 0 || !modelWarningRemainder(output, stderr));
 }
 
 export function isBackendBillingFailure(output, stderr) {

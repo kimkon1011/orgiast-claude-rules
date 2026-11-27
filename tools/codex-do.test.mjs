@@ -9,7 +9,7 @@ import { skipCoolingBackends } from './fallback-backend-health.mjs';
 import { runGeminiBudgetGuard } from './gemini-budget-guard.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, fallbackBackendFailureDomain, shouldSkipFallbackBackendAfterTimeout, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, reserveGeminiLaunch, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, cursorAgentChildEnv, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder, hasAbortCondition, isIntentionalAbort } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, fallbackBackendFailureDomain, shouldSkipFallbackBackendAfterTimeout, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, reserveGeminiLaunch, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, cursorAgentChildEnv, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder, hasAbortCondition, isIntentionalAbort, isHelpInstruction } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -45,6 +45,49 @@ test('CLI は主経路の上限を起動時に stderr で一度だけ報告す�
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(result.stderr.split(/\r?\n/).filter(line => line.includes('主経路の上限=')),
       [`[codex-do] 主経路の上限=${expected}秒`]);
+  }
+});
+
+test('CLI --help / -h は usage を表示してエージェントを起動せず exit 0', () => {
+  for (const flag of ['--help', '-h']) {
+    const result = run([flag], {
+      env: {
+        // モックがあっても help では使わないこと（＝エージェント起動なし）を担保する。
+        CODEX_DO_MOCK_RESULTS: JSON.stringify([{ output: 'should-not-run' }]),
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /使い方: node tools\/codex-do\.mjs/);
+    assert.match(result.stdout, /--help, -h/);
+    assert.match(result.stdout, /--prompt-file/);
+    assert.equal(result.stdout.includes('should-not-run'), false);
+  }
+});
+
+test('isHelpInstruction: --help/-h（前後空白可）だけをヘルプ要求とみなす', () => {
+  assert.equal(isHelpInstruction('--help'), true);
+  assert.equal(isHelpInstruction(' -h '), true);
+  assert.equal(isHelpInstruction('\n--help\n'), true);
+  assert.equal(isHelpInstruction(''), false);
+  assert.equal(isHelpInstruction('fix --help'), false);
+  assert.equal(isHelpInstruction('--help please'), false);
+});
+
+test('指示本文が --help だけのときも usage を出してエージェントを起動しない', () => {
+  const home = workDir();
+  const promptFile = path.join(home, 'help-only.txt');
+  fs.writeFileSync(promptFile, '  --help  \n');
+  for (const args of [[' --help '], ['--prompt-file', promptFile]]) {
+    const result = run(args, {
+      home,
+      env: {
+        CODEX_DO_MOCK_RESULTS: JSON.stringify([{ output: 'should-not-run' }]),
+      },
+    });
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    assert.match(result.stdout, /使い方: node tools\/codex-do\.mjs/);
+    assert.equal(result.stdout.includes('should-not-run'), false);
+    assert.equal(result.stdout.includes('## 実装指示'), false);
   }
 });
 

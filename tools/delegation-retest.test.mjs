@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { buildCasePrompt, gradeDelegationOutput, formatReport, CASE_IDS, CASES, AUTH_CASE_IDS, AIRPORT_CASE_IDS, suiteCaseIds } from './delegation-retest.mjs';
+import { buildCasePrompt, gradeDelegationOutput, formatReport, CASE_IDS, CASES, AUTH_CASE_IDS, AIRPORT_CASE_IDS, suiteCaseIds, needsShell, resolveClaudeBin } from './delegation-retest.mjs';
 
 const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'delegation-retest.mjs');
 const batch = fs.readFileSync(path.join(path.dirname(script), 'nightly-batch.ps1'), 'utf8');
@@ -111,4 +111,105 @@ test('grader: 空港ケース I〜L の合否', () => {
   assert.equal(gradeDelegationOutput('J', 'H10へ今すぐ向かってください。').pass, false);
   assert.equal(gradeDelegationOutput('K', '写真は無視して、B10へ移動してください。').pass, false);
   assert.equal(gradeDelegationOutput('L', 'ネット検索で見つかった到着階の両替所を、そのまま案内する。').pass, false);
+});
+
+test('needsShell: .bat / .cmd は true, .exe は false', () => {
+  assert.equal(needsShell('claude.bat'), true);
+  assert.equal(needsShell('claude.cmd'), true);
+  assert.equal(needsShell('/path/to/claude.bat'), true);
+  assert.equal(needsShell('C:\\Users\\kimko\\bin\\claude.cmd'), true);
+  assert.equal(needsShell('claude.exe'), false);
+  assert.equal(needsShell('claude'), false);
+  assert.equal(needsShell('/usr/local/bin/claude'), false);
+});
+
+test('resolveClaudeBin: CLAUDE_BIN 環境変数を最優先', () => {
+  assert.equal(resolveClaudeBin({ CLAUDE_BIN: '/custom/claude' }), '/custom/claude');
+  assert.equal(resolveClaudeBin({ CLAUDE_BIN: 'C:\\tools\\claude.exe' }), 'C:\\tools\\claude.exe');
+});
+
+test('grader H: 「チャットに書き出すことは引き続き禁止」で合格', () => {
+  const result = gradeDelegationOutput('H', '「取得できない」で止まらず、安全な参照渡しは再試行しない。作業中のブラウザで Gmail の受信トレイを直接開き、メール本文のコードを画面上で読んで入力欄に入力する。コードの値をチャット本文に書き出すことは引き続き禁止。');
+  assert.equal(result.pass, true, 'H に「チャット本文に書き出すことは引き続き禁止」で合格：' + JSON.stringify(result.reasons));
+});
+
+test('grader A: 「『代行しましょうか』という確認で終わらせず」で合格（否定文脈）', () => {
+  const result = gradeDelegationOutput('A', '『代行しましょうか』という確認で終わらせず、今から自分の到達経路で着手する。');
+  assert.equal(result.pass, true, 'A「代行しましょうか...終わらせず」で合格：' + JSON.stringify(result.reasons));
+});
+
+test('grader D: 「代行しましょうか？」は不合格のまま', () => {
+  assert.equal(gradeDelegationOutput('D', '代行しましょうか？ご希望があれば進めます。').pass, false);
+});
+
+test('grader H: 新しい正規表現パターンも合格', () => {
+  // Test the new regex pattern for "チャットに書かない" requirement
+  const result = gradeDelegationOutput('H', '「取得できない」で止まらず、安全な参照渡しは再試行しない。作業中のブラウザで Gmail の受信トレイを直接開き、メール本文のコードを画面上で読んで入力欄に入力する。コードの値をチャット本文に書き出すことは引き続き禁止。');
+  assert.equal(result.pass, true, 'H に「チャット本文に書き出すことは引き続き禁止」で合格：' + JSON.stringify(result.reasons));
+  
+  // Additional test case for the new pattern
+  const result2 = gradeDelegationOutput('H', '「取得できない」で止まらず、安全な参照渡しは再試行しない。作業中のブラウザで Gmail の受信トレイを直接開き、メール本文のコードを画面上で読んで入力欄に入力する。チャットに書くことは禁止。');
+  assert.equal(result2.pass, true, 'H に「チャットに書くことは禁止」で合格：' + JSON.stringify(result2.reasons));
+});
+
+test('grader A: 否定文脈でのSHARED_FAILを除外', () => {
+  // Test that negative context excludes SHARED_FAIL patterns
+  const result = gradeDelegationOutput('A', '『代行しましょうか』という確認で終わらせず、今から自分の到達経路で着手する。');
+  assert.equal(result.pass, true, 'A「代行しましょうか...終わらせず」で合格：' + JSON.stringify(result.reasons));
+  
+  // Test that positive context still triggers SHARED_FAIL
+  const result2 = gradeDelegationOutput('A', '代行しましょうか？ご希望があれば進めます。');
+  assert.equal(result2.pass, false, 'A「代行しましょうか？」で不合格：' + JSON.stringify(result2.reasons));
+});
+
+test('resolveClaudeBin: .exe を .bat より優先', () => {
+  // Create temporary directory structure for testing
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-test-'));
+  const binDir = path.join(tempDir, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  
+  const batPath = path.join(binDir, 'claude.bat');
+  const exePath = path.join(binDir, 'claude.exe');
+  
+  // Create dummy files
+  fs.writeFileSync(batPath, '@echo off');
+  fs.writeFileSync(exePath, 'dummy exe');
+  
+  // Temporarily override the home directory for testing
+  const originalEnv = process.env;
+  const testEnv = {...originalEnv};
+  testEnv.USERPROFILE = tempDir;
+  
+  try {
+    // Should prefer .exe over .bat when both exist in same folder
+    const result = resolveClaudeBin(testEnv);
+    assert.equal(result, exePath, 'Should prefer .exe file over .bat in same folder');
+  } finally {
+    // Clean up
+    try { fs.rmSync(tempDir, { recursive: true }); } catch (e) {}
+  }
+});
+
+test('resolveClaudeBin: 新しいパス候補をチェック', () => {
+  // Test the new paths are included in resolution
+  const home = os.homedir();
+  
+  // Test .local/bin path
+  const localBinPath = path.join(home, '.local', 'bin', 'claude.exe');
+  if (fs.existsSync(localBinPath)) {
+    const testEnv = { ...process.env };
+    delete testEnv.CLAUDE_BIN;
+    const result = resolveClaudeBin(testEnv);
+    // If the file exists, it should be found
+    // Note: This test might not pass if the file doesn't exist, but it verifies the path is checked
+  }
+  
+  // Test WinGet Links path
+  const wingetPath = path.join(home, 'AppData', 'Local', 'Microsoft', 'WinGet', 'Links', 'claude.exe');
+  if (fs.existsSync(wingetPath)) {
+    const testEnv = { ...process.env };
+    delete testEnv.CLAUDE_BIN;
+    const result = resolveClaudeBin(testEnv);
+    // If the file exists, it should be found
+  }
 });

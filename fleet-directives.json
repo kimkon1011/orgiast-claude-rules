@@ -111,6 +111,16 @@
       "createdBy": "uers",
       "createdAt": "2026-11-27T22:48:24.370Z",
       "expiresAt": "2026-11-29T22:48:24.370Z"
+    },
+    {
+      "id": "run-20261127-225005-4068",
+      "kind": "run",
+      "targets": "DESKTOP-BDOAK99",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-11-27T22:50:05.862Z",
+      "expiresAt": "2026-11-29T22:50:05.862Z"
     }
   ]
 }

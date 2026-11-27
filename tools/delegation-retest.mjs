@@ -247,7 +247,7 @@ export function resolveClaudeBin(env = process.env) {
   // Windows: try where.exe claude
   if (process.platform === 'win32') {
     try {
-      const where = spawnSync('where.exe', ['claude'], { encoding: 'utf8', timeout: 3000 });
+      const where = spawnSync('where.exe', ['claude'], { encoding: 'utf8', timeout: 3000, windowsHide: true });
       if (where.status === 0 && where.stdout) {
         const first = where.stdout.split(/\r?\n/)[0].trim();
         if (first) return first;
@@ -260,7 +260,7 @@ export function resolveClaudeBin(env = process.env) {
 function runClaude(bin, prompt, timeoutMs) {
   const model = process.env.CLAUDE_RETEST_MODEL || 'sonnet';
   const settingsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-retest-'));
-  const settingsPath = path.join(settingsDir, 'settings.json');
+  const settingsPath = path.join(settingsDir, 'retest-hooks-off.json');
   fs.writeFileSync(settingsPath, JSON.stringify({ disableAllHooks: true }), 'utf8');
   const shell = needsShell(bin);
   const allowedToolsVal = shell ? '""' : '';

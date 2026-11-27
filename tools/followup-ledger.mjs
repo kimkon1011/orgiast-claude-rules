@@ -436,16 +436,18 @@ export function hasWatchdogToday(history, id, now = new Date()) {
 }
 
 function emptyStore() {
-  return { schema: 'followup-ledger/v1', items: [], history: [], pendingSync: false, syncError: null, updatedAt: toIsoJst() };
+  return { schema: 'followup-ledger/v1', items: [], history: [], historySynced: new Set(), pendingSync: false, syncError: null, updatedAt: toIsoJst() };
 }
 
 export function loadLocalStore(file = localLedgerPath()) {
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+    const hist = Array.isArray(raw.history) ? raw.history : [];
     return {
       schema: raw.schema || 'followup-ledger/v1',
       items: Array.isArray(raw.items) ? raw.items : [],
-      history: Array.isArray(raw.history) ? raw.history : [],
+      history: hist,
+      historySynced: new Set(Array.isArray(raw.historySynced) ? raw.historySynced : histFingerprints(hist)),
       pendingSync: Boolean(raw.pendingSync),
       syncError: raw.syncError || null,
       updatedAt: raw.updatedAt || toIsoJst(),
@@ -457,9 +459,15 @@ export function loadLocalStore(file = localLedgerPath()) {
 }
 
 export function saveLocalStore(store, file = localLedgerPath()) {
-  const next = { ...store, updatedAt: toIsoJst() };
+  const { historySynced, ...rest } = store;
+  const next = {
+    ...rest,
+    historySynced: historySynced instanceof Set ? [...historySynced] : (Array.isArray(historySynced) ? historySynced : []),
+    updatedAt: toIsoJst(),
+  };
   atomicJson(file, next);
-  return next;
+  store.historySynced = new Set(next.historySynced); // keep in-memory Set
+  return store;
 }
 
 export function rowFromArgs(flags, { now = new Date(), config = DEFAULT_CONFIG } = {}) {
@@ -572,11 +580,21 @@ export function valuesToRow(values = []) {
   return normalizeRow(obj);
 }
 
+function histFingerprint(entry) {
+  return `${entry.at}|${entry.id}|${entry.status}|${entry.reason}|${entry.messageId}`;
+}
+
 function appendHistory(store, { id, status, reason, messageId = '', pc = '', ai = '', at = toIsoJst() }) {
   store.history = store.history || [];
-  store.history.push({
+  store.historySynced = store.historySynced || new Set();
+  const entry = {
     at, id, status, reason: reason || '', messageId: messageId || '', pc: pc || os.hostname(), ai: ai || process.env.FOLLOWUP_OWNER_AI || 'followup-ledger',
-  });
+  };
+  store.history.push(entry);
+}
+
+export function histFingerprints(history = []) {
+  return new Set(history.map(histFingerprint));
 }
 
 function withAiFooter(text) {
@@ -821,7 +839,7 @@ async function loadStore({ storeMode, config }) {
       at: v[0] || '', id: v[1] || '', status: v[2] || '', reason: v[3] || '',
       messageId: v[4] || '', pc: v[5] || '', ai: v[6] || '',
     }));
-    const store = { schema: 'followup-ledger/v1', items, history, pendingSync: false, syncError: null, updatedAt: toIsoJst() };
+    const store = { schema: 'followup-ledger/v1', items, history, historySynced: new Set(histFingerprints(history)), pendingSync: false, syncError: null, updatedAt: toIsoJst() };
     saveLocalStore(store);
     return { mode: 'sheet', store, sheets, sheetError: null };
   } catch (error) {
@@ -876,12 +894,14 @@ async function persistRow(ctx, row, { previousUpdatedAt } = {}) {
     await sheets.append(config.spreadsheetId, `${quoteTab(LEDGER_TAB)}!A:${lastCol}`, [rowToValues(row)]);
   }
 
-  // Append latest history entries not yet on sheet (best-effort: append last one)
-  const lastHist = (store.history || []).filter((h) => h.id === row.id).at(-1);
-  if (lastHist) {
+  // Append latest history entries not yet on sheet (dedup by fingerprint)
+  const synced = store.historySynced = store.historySynced || new Set();
+  const unsynced = (store.history || []).filter((h) => h.id === row.id && !synced.has(histFingerprint(h)));
+  for (const h of unsynced) {
     await sheets.append(config.spreadsheetId, `${quoteTab(HISTORY_TAB)}!A:G`, [[
-      lastHist.at, lastHist.id, lastHist.status, lastHist.reason, lastHist.messageId, lastHist.pc, lastHist.ai,
+      h.at, h.id, h.status, h.reason, h.messageId, h.pc, h.ai,
     ]]);
+    synced.add(histFingerprint(h));
   }
 
   store.pendingSync = false;
@@ -935,7 +955,7 @@ export function renderAlert({
     lines.push('| 依頼ID | 依頼先 | 担当者区分 | 居住地・最寄り | 状態 | 理由 | 次回確認 |');
     lines.push('| --- | --- | --- | --- | --- | --- | --- |');
     for (const r of tableRows) {
-      const reason = r._alertReason || r.statusReason || '';
+      const reason = (r.status === '止まった' || r.status === 'エスカレーション') ? (r.statusReason || '') : (r._alertReason || r.statusReason || '');
       lines.push(`| ${r.id || ''} | ${r.to || ''} | ${r.assigneeRole || ''} | ${r.assigneeLocation || ''} | ${r.status || ''} | ${reason} | ${r.nextCheckAt || ''} |`);
     }
   }

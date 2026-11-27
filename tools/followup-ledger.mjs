@@ -27,6 +27,7 @@ export const HEADERS = Object.freeze([
   '完了条件', '完了パターン', '確認間隔分', '返答期限', '再催促分', '最大催促回数',
   '催促回数', 'エスカレーション先', '担当AI', '担当PC', '状態', '状態理由',
   '最終確認', '最終送信', '最終送信ID', '次回確認', '催促文', '案件', '備考', '更新時刻',
+  '担当者区分', '居住地・最寄り', '作業場所',
 ]);
 
 export const FIELDS = Object.freeze([
@@ -34,6 +35,7 @@ export const FIELDS = Object.freeze([
   'doneWhen', 'donePattern', 'intervalMin', 'dueAt', 'renudgeMin', 'maxNudges',
   'nudgeCount', 'escalateTo', 'ownerAi', 'ownerPc', 'status', 'statusReason',
   'lastCheckedAt', 'lastSentAt', 'lastSentId', 'nextCheckAt', 'nudgeText', 'caseName', 'note', 'updatedAt',
+  'assigneeRole', 'assigneeLocation', 'taskSite',
 ]);
 
 export const STATUSES = Object.freeze([
@@ -55,7 +57,33 @@ const DEFAULT_CONFIG = Object.freeze({
   quietHours: { start: '22:00', end: '07:00', tz: 'Asia/Tokyo' },
   alertFile: '~/gb-reports/followup-ledger/ALERT.md',
   pcAliases: { '000': 'kim-PC', '011': '作業用011' },
+  people: {
+    'ほなみ': { role: 'cafe-solo', location: '大阪・東邦ハイツ211（カフェ店内・一人勤務）' },
+    '澤口': { role: 'cafe-solo', location: '大阪・東邦ハイツ211（カフェ店内・一人勤務）' },
+    'ゆりえ': { role: 'cafe-solo', location: '大阪・東邦ハイツ211（カフェ店内・一人勤務）' },
+    '岡崎': { role: 'cafe-solo', location: '大阪・東邦ハイツ211（カフェ店内・一人勤務）' },
+  },
 });
+
+export const OFF_SITE_PATTERN = /セブン|ネットプリント|コンビニ|郵便局|投函|ポスト|簡易書留|レターパック|書留|法務局|裁判所|役所|区役所|市役所|配達|届けて|訪問|持参|出向|窓口|銀行|買い出し|受け取りに行/;
+export const CAFE_SOLO_REASON = 'カフェスタッフは一人勤務のため店を離れられない（店を離れる作業は、店を離れられる担当＝各地のアシスタント等へ付け替えが必要）';
+export function isOffSiteTask(row = {}) {
+  if (row.taskSite === 'off-site') return true;
+  if (row.taskSite === 'in-store' || row.taskSite === 'any') return false;
+  return OFF_SITE_PATTERN.test(String(row.task || ''));
+}
+export function isCafeSolo(row = {}) { return row.assigneeRole === 'cafe-solo'; }
+export function siteConstraint(row = {}) {
+  return isCafeSolo(row) && isOffSiteTask(row) ? { blocked: true, reason: CAFE_SOLO_REASON } : { blocked: false };
+}
+export function resolvePerson(to, config = {}) {
+  const hit = Object.entries(config.people || {}).find(([name]) => String(to || '').includes(name));
+  return hit ? { role: String(hit[1]?.role || ''), location: String(hit[1]?.location || '') } : null;
+}
+function prependReason(reason, existing = '') {
+  const old = String(existing || '');
+  return old.includes(reason) ? old : [reason, old].filter(Boolean).join('／');
+}
 
 export function parseArgs(argv = []) {
   const out = { _: [], flags: {} };
@@ -208,6 +236,8 @@ export function decideAction(row, replies = [], now = new Date()) {
       };
     }
   }
+  const constraint = siteConstraint(row);
+  if (constraint.blocked) return { action: 'reassign', reason: constraint.reason };
   if (others.length) {
     return {
       action: 'reply_incomplete',
@@ -289,6 +319,7 @@ export function loadConfig(configPath = CONFIG_PATH) {
       ...DEFAULT_CONFIG.pcAliases,
       ...(raw.pcAliases && typeof raw.pcAliases === 'object' ? raw.pcAliases : {}),
     },
+    people: raw.people && typeof raw.people === 'object' ? raw.people : DEFAULT_CONFIG.people,
     _path: configPath,
   };
 }
@@ -305,6 +336,7 @@ function saveConfig(config, configPath = CONFIG_PATH) {
     quietHours: rest.quietHours || DEFAULT_CONFIG.quietHours,
     alertFile: rest.alertFile || DEFAULT_CONFIG.alertFile,
     pcAliases: rest.pcAliases || DEFAULT_CONFIG.pcAliases,
+    people: rest.people || DEFAULT_CONFIG.people,
   });
 }
 
@@ -430,7 +462,7 @@ export function saveLocalStore(store, file = localLedgerPath()) {
   return next;
 }
 
-export function rowFromArgs(flags, { now = new Date() } = {}) {
+export function rowFromArgs(flags, { now = new Date(), config = DEFAULT_CONFIG } = {}) {
   // PowerShell `--chat ''` often drops the empty arg → parseArgs sets true.
   const rawChat = flags.chat;
   const chatId = (rawChat == null || rawChat === true) ? '' : String(rawChat);
@@ -438,6 +470,7 @@ export function rowFromArgs(flags, { now = new Date() } = {}) {
   const chatMissing = isMissingChatId(chatId);
   let status = flags.status ? String(flags.status) : '依頼中';
   let statusReason = flags.reason ? String(flags.reason) : '';
+  const person = resolvePerson(flags.to, config);
   if (chatMissing && (channel === 'beeper' || channel === 'discord')) {
     status = '止まった';
     statusReason = 'chatID不明';
@@ -453,7 +486,7 @@ export function rowFromArgs(flags, { now = new Date() } = {}) {
   } else if (flags['nudge-text'] != null && flags['nudge-text'] !== true) {
     nudgeText = String(flags['nudge-text']).trim();
   }
-  return normalizeRow({
+  const row = normalizeRow({
     id: String(flags.id || ''),
     to: String(flags.to || ''),
     channel,
@@ -481,7 +514,16 @@ export function rowFromArgs(flags, { now = new Date() } = {}) {
     caseName: String(flags.case || ''),
     note: String(flags.note || ''),
     updatedAt: toIsoJst(now),
+    assigneeRole: String(flags['assignee-role'] || person?.role || ''),
+    assigneeLocation: String(flags.location || person?.location || ''),
+    taskSite: String(flags.site || ''),
   });
+  const constraint = siteConstraint(row);
+  if (constraint.blocked) {
+    row.status = '止まった';
+    row.statusReason = prependReason(constraint.reason, row.statusReason);
+  }
+  return row;
 }
 
 export function normalizeRow(row = {}) {
@@ -495,6 +537,9 @@ export function normalizeRow(row = {}) {
   out.scope = String(out.scope || 'internal');
   out.status = String(out.status || '依頼中');
   out.statusReason = String(out.statusReason || '');
+  out.assigneeRole = String(out.assigneeRole || '');
+  out.assigneeLocation = String(out.assigneeLocation || '');
+  out.taskSite = String(out.taskSite || '');
   return out;
 }
 
@@ -573,6 +618,10 @@ async function escalate(row, reason, ctx) {
     `内容: ${row.task}`,
     `理由: ${reason}`,
     `状態: ${row.status}`,
+    ...(String(reason).includes(CAFE_SOLO_REASON) ? [
+      `付け替え: 店を離れられる担当（各地のアシスタント等）へ。法務局・郵便局は全国どこでも可。依頼先の居住地・最寄り: ${row.assigneeLocation || '未記入'}`,
+      'カフェスタッフに頼めるのは店内でできること（書類の有無の確認・店に来た人への手渡し・返事）だけ',
+    ] : []),
   ].join('\n');
 
   if (dryRun) {
@@ -734,7 +783,7 @@ async function ensureTabs(sheets, spreadsheetId, owner = DEFAULT_CONFIG.owner) {
   const lastCol = columnLetter(HEADERS.length);
   const histCol = columnLetter(HISTORY_HEADERS.length);
   const existing = await sheets.get(spreadsheetId, `${quoteTab(LEDGER_TAB)}!A1:${lastCol}1`);
-  if (!existing.length) {
+  if (!existing.length || (existing[0]?.length || 0) < HEADERS.length) {
     await sheets.update(spreadsheetId, `${quoteTab(LEDGER_TAB)}!A1:${lastCol}1`, [HEADERS]);
   }
   const hist = await sheets.get(spreadsheetId, `${quoteTab(HISTORY_TAB)}!A1:${histCol}1`);
@@ -883,12 +932,17 @@ export function renderAlert({
   }
   if (tableRows.length) {
     lines.push('', '## 一覧');
-    lines.push('| 依頼ID | 依頼先 | 状態 | 理由 | 次回確認 |');
-    lines.push('| --- | --- | --- | --- | --- |');
+    lines.push('| 依頼ID | 依頼先 | 担当者区分 | 居住地・最寄り | 状態 | 理由 | 次回確認 |');
+    lines.push('| --- | --- | --- | --- | --- | --- | --- |');
     for (const r of tableRows) {
       const reason = r._alertReason || r.statusReason || '';
-      lines.push(`| ${r.id || ''} | ${r.to || ''} | ${r.status || ''} | ${reason} | ${r.nextCheckAt || ''} |`);
+      lines.push(`| ${r.id || ''} | ${r.to || ''} | ${r.assigneeRole || ''} | ${r.assigneeLocation || ''} | ${r.status || ''} | ${reason} | ${r.nextCheckAt || ''} |`);
     }
+  }
+  const reassign = tableRows.filter((r) => String(r.statusReason || r._alertReason || '').includes(CAFE_SOLO_REASON));
+  if (reassign.length) {
+    lines.push('', '## 付け替えが必要（店を離れる作業）');
+    for (const r of reassign) lines.push(`- ${r.id}: ${r.to} / ${r.task || ''} / ${r.assigneeLocation || '未記入'}`);
   }
   if (stalledList.length) {
     lines.push('', '## 止まった');
@@ -931,7 +985,7 @@ async function cmdAdd(flags, ctxBase = {}) {
   const loaded = await loadStore({ storeMode, config });
   const store = loaded.store;
   const now = resolveNow(ctxBase.now);
-  const row = rowFromArgs(flags, { now });
+  const row = rowFromArgs(flags, { now, config });
   if (!row.id) throw new Error('--id が必要です');
   assertStatusReason(row.status, row.statusReason);
   const existing = store.items.find((r) => r.id === row.id);
@@ -995,6 +1049,13 @@ async function sendApprovalRequest(row, ctx) {
 
 async function performNudge(row, ctx) {
   const { config, store, dryRun, alerts, noNudge, force, now = new Date() } = ctx;
+  const constraint = siteConstraint(row);
+  if (constraint.blocked) {
+    const reason = prependReason(constraint.reason, row.statusReason);
+    setRowStatus(row, '止まった', reason);
+    await escalate(row, reason, ctx);
+    return { skipped: true, reason: 'cafe-solo-off-site' };
+  }
   const decision = decideAction(row, [], now);
   if (decision.action === 'escalate' || (Number(row.maxNudges) > 0 && Number(row.nudgeCount) >= Number(row.maxNudges) && !force)) {
     await escalate(row, decision.reason || `最大催促回数(${row.maxNudges})超過`, ctx);
@@ -1150,6 +1211,10 @@ async function processRow(row, ctx) {
       messageId: decision.messageId || '',
     });
     alerts.push(`完了: ${row.id}`);
+  } else if (decision.action === 'reassign') {
+    const reason = prependReason(decision.reason, row.statusReason);
+    setRowStatus(row, '止まった', reason);
+    await escalate(row, reason, ctx);
   } else if (decision.action === 'reply_incomplete') {
     row.statusReason = decision.reason;
     row.updatedAt = toIsoJst(now);
@@ -1431,7 +1496,7 @@ async function cmdStatus(flags, ctxBase = {}) {
     console.log('(0件)');
     return 0;
   }
-  const cols = ['id', 'to', 'channel', 'scope', 'status', 'statusReason', 'dueAt', 'nudgeCount', 'nextCheckAt'];
+  const cols = ['id', 'to', 'assigneeRole', 'channel', 'scope', 'status', 'statusReason', 'dueAt', 'nudgeCount', 'nextCheckAt'];
   console.log(cols.join('\t'));
   for (const r of items) console.log(cols.map((c) => String(r[c] ?? '')).join('\t'));
   return 0;
@@ -1465,6 +1530,9 @@ async function cmdSeed(flags, ctxBase = {}) {
       reason: raw.statusReason || raw.reason || raw['状態理由'],
       'requested-at': raw.requestedAt || raw['依頼日時'],
       'nudge-text': raw.nudgeText ?? raw['催促文'],
+      'assignee-role': raw.assigneeRole || raw['担当者区分'],
+      location: raw.assigneeLocation || raw['居住地・最寄り'],
+      site: raw.taskSite || raw['作業場所'],
       upsert: flags.upsert,
       store: flags.store,
     };

@@ -5,7 +5,7 @@ description: 新しいセッションを前セッションの引き継ぎから�
 
 # 前セッションの引き継ぎから作業を開始する
 
-SessionStart hook が kim-inbox の未回収 ask を注入する。目的を確定する前に、その ask を kim に提示して返答を回収し `node <repo>/tools/kim-inbox.mjs --answer <id> --body-file <f>` で記録する。
+SessionStart hook が kim-inbox の未回収 ask を注入する。目的を確定する前に、その ask を kim に提示して返答を回収し `node <repo>/tools/kim-inbox.mjs --answer <id> --body-file <f>` で記録する。提示する前に `node <repo>/tools/kim-decision-ledger.mjs --check "<askの本文>"` で決定台帳を照合し、回答済み（`DO_NOT_ASK`）なら kim に出さず、台帳の決定に従って閉じる。
 
 「1セッション=1目的」を守るための入口。`/session-close` の出口とペアで使う。
 

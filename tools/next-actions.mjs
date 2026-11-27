@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createLlmClient } from './line-digest.mjs';
 import { isEntry } from './is-entry.mjs';
 import { runTaskLedger } from './task-ledger.mjs';
+import { toNextActionSuppressRules } from './kim-decision-ledger.mjs';
 
 const BEGIN = '<!-- NEXT-ACTIONS:BEGIN -->';
 const END = '<!-- NEXT-ACTIONS:END -->';
@@ -44,17 +45,20 @@ async function landedPrNumbersFromMain(execImpl, cwd) {
 }
 
 function loadSuppressRules(file) {
+  const compile = (rule) => {
+    try {
+      return typeof rule?.pattern === 'string' && typeof rule?.reason === 'string'
+        ? [{ ...rule, regex: new RegExp(rule.pattern, rule.flags || 'i') }]
+        : [];
+    } catch { return []; }
+  };
+  let fromFile = [];
   try {
     const parsed = JSON.parse(readFile(file));
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((rule) => {
-      try {
-        return typeof rule?.pattern === 'string' && typeof rule?.reason === 'string'
-          ? [{ ...rule, regex: new RegExp(rule.pattern, rule.flags || 'i') }]
-          : [];
-      } catch { return []; }
-    });
-  } catch { return []; }
+    if (Array.isArray(parsed)) fromFile = parsed.flatMap(compile);
+  } catch { /* 設定が無い・壊れていても台帳側は読む */ }
+  const fromLedger = toNextActionSuppressRules().flatMap(compile);
+  return [...fromFile, ...fromLedger];
 }
 
 const HANDOFF_AUDIT_ID_RE = /handoff-audit:([0-9a-f]{16})/gi;

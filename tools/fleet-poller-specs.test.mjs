@@ -61,24 +61,23 @@ test('fleet-poller.mjs は register-fleet-agent.ps1 を実行する', () => {
   assert.match(branch[0], /register-fleet-agent\.ps1/);
 });
 
-test('fleet-poller.mjs は register-cursor-agent-run-counts を許可する', () => {
+test('fleet-poller.mjs は Cursor 定期タスクを許可しない', () => {
   const allowed = pollerSource.match(/const allowed = new Set\(\[([^\]]+)\]\)/);
   assert.ok(allowed, '許可タスク一覧が見つからない');
-  assert.match(allowed[1], /['"]register-cursor-agent-run-counts['"]/);
+  assert.doesNotMatch(allowed[1], /register-cursor-agent-run-counts/);
 });
 
-test('fleet-poller.mjs は register-cursor-agent-run-counts-task.ps1 を実行する', () => {
+test('fleet-poller.mjs は Cursor 定期タスクの実行分岐を持たない', () => {
   const branch = pollerSource.match(/if \(task === 'register-cursor-agent-run-counts'\)[\s\S]*?\n  }/);
-  assert.ok(branch, 'register-cursor-agent-run-counts の分岐が見つからない');
-  assert.match(branch[0], /register-cursor-agent-run-counts-task\.ps1/);
+  assert.equal(branch, null);
 });
 
-test('fleet-poller.mjs の rules-resync は register-cursor-agent-run-counts-task.ps1 を呼ぶ', () => {
+test('fleet-poller.mjs の rules-resync は Cursor 定期タスクを再登録しない', () => {
   const idx = pollerSource.indexOf("if (task === 'rules-resync')");
   assert.ok(idx >= 0, 'rules-resync の分岐が見つからない');
   const next = pollerSource.indexOf("if (task === '", idx + 1);
   const branch = pollerSource.slice(idx, next > idx ? next : undefined);
-  assert.match(branch, /register-cursor-agent-run-counts-task\.ps1/);
+  assert.doesNotMatch(branch, /register-cursor-agent-run-counts-task\.ps1/);
 });
 
 test('fleet-poller.mjs の既存5タスクが許可リストに残っている', () => {

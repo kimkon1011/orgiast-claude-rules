@@ -32,10 +32,10 @@ test('disabledLanes は until の無い手動停止は残す', () => {
   assert.equal(disabledLanes(home).has('groq'), true);
 });
 
-test('disableLanesTemporarily で書いた until 前は無効、過ぎたら有効に戻る', () => {
+test('disableLanesTemporarily は Cursor を修復・停止対象に含めない', () => {
   const home = makeHome();
   const now = Date.now();
   disableLanesTemporarily(home, [{ name: 'cursor-agent', reason: 'failure_rate', calls: 7, failures: 4 }], now);
-  assert.equal(disabledLanes(home, now).has('cursor-agent'), true);
+  assert.equal(disabledLanes(home, now).has('cursor-agent'), false);
   assert.equal(disabledLanes(home, now + 6 * 60 * 60 * 1000 + 1).has('cursor-agent'), false);
 });

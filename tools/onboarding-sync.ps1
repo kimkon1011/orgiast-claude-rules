@@ -121,6 +121,12 @@ function New-OnboardingIndex {
 function Update-TargetFile {
     param([string]$NewBody, [string]$TodayLabel)
 
+    $current = $null
+    $indexBytes = [System.Text.Encoding]::UTF8.GetByteCount($NewBody)
+    if ($indexBytes -gt 81920) {
+        throw "onboarding index too large ($indexBytes bytes); refusing to write the full ONBOARDING into CLAUDE.md"
+    }
+
     $newBlock = "$BeginMarkerPrefix (自動同期 $TodayLabel) -->`r`n$NewBody`r`n$EndMarker"
 
     if (Test-Path -LiteralPath $TargetPath) {
@@ -130,7 +136,7 @@ function Update-TargetFile {
 
         $current = Get-Content -LiteralPath $TargetPath -Raw -Encoding UTF8
         # Multiline の行完全一致だけを対象にし、前後は Substring で一切変換しない。
-        $beginMatch = [regex]::Match($current, '(?m)^<!-- BEGIN: オージャスト共通ルール \(自動同期 \d{4}-\d{2}-\d{2}\) -->\r?$')
+        $beginMatch = [regex]::Match($current, '(?m)^<!-- BEGIN: オージャスト共通ルール .*-->\r?$')
         if ($beginMatch.Success) {
             $endRegex = [regex]::new('(?m)^<!-- END: オージャスト共通ルール -->\r?$')
             $endMatch = $endRegex.Match($current, $beginMatch.Index + $beginMatch.Length)
@@ -152,9 +158,115 @@ function Update-TargetFile {
         $updated = $newBlock
     }
 
+    $beforeBytes = if ($current) { [System.Text.Encoding]::UTF8.GetByteCount($current) } else { 0 }
+    $afterBytes = [System.Text.Encoding]::UTF8.GetByteCount($updated)
+    if ($beforeBytes -gt 0 -and ($afterBytes - $beforeBytes) -gt 102400) {
+        throw "CLAUDE.md would grow by $($afterBytes - $beforeBytes) bytes; aborting to prevent full-ONBOARDING bloat"
+    }
+
     # UTF-8 (BOM無し) で書き込む
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($TargetPath, $updated, $utf8NoBom)
+}
+
+$script:CommonIndexMaxBytes = 80 * 1024
+$script:ClaudeGrowthMaxBytes = 100 * 1024
+$script:AbsoluteBegin = '<!-- BEGIN: 絶対ルール (自動同期・編集しても上書きされる) -->'
+$script:AbsoluteEnd = '<!-- END: 絶対ルール -->'
+
+function Get-AbsoluteRulesFromOnboarding {
+    param([string]$Body)
+    $normalized = $Body -replace "`r`n", "`n"
+    $lines = $normalized -split "`n"
+    $start = -1
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        if ($lines[$i] -match '^#{2,3} 🛑 絶対ルール') { $start = $i; break }
+    }
+    if ($start -lt 0) { return '' }
+    $end = $lines.Length
+    for ($i = $start + 1; $i -lt $lines.Length; $i++) {
+        if ($lines[$i] -match '^#{1,3} ') { $end = $i; break }
+    }
+    $picked = [System.Collections.Generic.List[string]]::new()
+    for ($i = $start; $i -lt $end; $i++) {
+        if ($lines[$i] -match '全文はCLAUDE\.md最上部') { continue }
+        $line = $lines[$i]
+        if ($i -eq $start) { $line = $line -replace '^#{2,3} ', '# ' }
+        $picked.Add($line)
+    }
+    return (($picked -join "`n") -replace "`n{3,}", "`n`n").Trim()
+}
+
+function Set-AbsoluteRulesText {
+    param([string]$Current, [string]$Rules)
+    $text = [string]$Current
+    $b = $text.IndexOf($script:AbsoluteBegin)
+    if ($b -ge 0) {
+        $e = $text.IndexOf($script:AbsoluteEnd, $b)
+        if ($e -ge 0) {
+            $after = $e + $script:AbsoluteEnd.Length
+            $text = $text.Substring(0, $b) + $text.Substring($after)
+            $text = $text -replace '^(?:\r?\n)+', ''
+        }
+    }
+    if ($text.Length -gt 0 -and [int][char]$text[0] -eq 0xFEFF) { $text = $text.Substring(1) }
+    $text = $text.TrimStart()
+    if (-not $Rules) { return $text }
+    return ($script:AbsoluteBegin + "`n" + $Rules + "`n" + $script:AbsoluteEnd + "`n`n" + $text)
+}
+
+function Place-AbsoluteRulesOnTarget {
+    param([string]$Rules)
+    if (-not $Rules) { return }
+    $current = ''
+    if (Test-Path -LiteralPath $TargetPath) {
+        $current = [System.IO.File]::ReadAllText($TargetPath)
+    }
+    $updated = Set-AbsoluteRulesText -Current $current -Rules $Rules
+    if ($updated -eq $current) { return }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($TargetPath, $updated, $utf8NoBom)
+}
+
+function Mirror-AbsoluteRules {
+    param([string]$Rules)
+    if (-not $Rules) { return }
+    foreach ($pair in @(@('.codex', 'AGENTS.md'), @('.gemini', 'GEMINI.md'))) {
+        $folder = Join-Path $SyncHome $pair[0]
+        if (-not (Test-Path -LiteralPath $folder)) { continue }
+        $file = Join-Path $folder $pair[1]
+        $current = ''
+        if (Test-Path -LiteralPath $file) { $current = [System.IO.File]::ReadAllText($file) }
+        $updated = Set-AbsoluteRulesText -Current $current -Rules $Rules
+        if ($updated -eq $current) { continue }
+        if ($current) { Copy-Item -LiteralPath $file -Destination ($file + '.bak-absolute-rules') -Force }
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($file, $updated, $utf8NoBom)
+        Write-SyncLog "absolute rules -> $file"
+    }
+}
+
+function Invoke-NodeRulesSync {
+    param([switch]$ForceRules)
+    try {
+        $repoRoot = if ($env:ORGIAST_REPO) { $env:ORGIAST_REPO }
+            elseif (Test-Path -LiteralPath (Join-Path $SyncHome 'orgiast-claude-rules\tools')) { Join-Path $SyncHome 'orgiast-claude-rules' }
+            else { Split-Path -Parent $PSScriptRoot }
+        $rulesSync = Join-Path $repoRoot 'tools\onboarding-sync.mjs'
+        $cmd = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Extension -eq '.exe' } | Select-Object -First 1
+        $nodeExe = if ($cmd) { $cmd.Source } else { "$env:ProgramFiles\nodejs\node.exe" }
+        if (-not (Test-Path -LiteralPath $nodeExe)) { return $false }
+        if (-not (Test-Path -LiteralPath $rulesSync)) { return $false }
+        $argList = @($rulesSync, '--rules-only')
+        if ($ForceRules) { $argList += '--force' }
+        & $nodeExe @argList
+        if ($LASTEXITCODE -eq 0) { return $true }
+        Write-SyncLog "rules-only sync failed: exit $LASTEXITCODE"
+        return $false
+    } catch {
+        Write-SyncLog "rules-only sync failed: $($_.Exception.Message)"
+        return $false
+    }
 }
 
 function Main {
@@ -187,6 +299,13 @@ function Main {
             }
         }
     }
+
+    # 正本の node 実装が先頭の絶対ルール差し込みと AGENTS/GEMINI ミラーまで行う。
+    # 2026-11-27 実害: この ps1 が索引だけを書き、先頭ブロックとミラーが古いまま残った。
+    if (Invoke-NodeRulesSync -ForceRules) {
+        return
+    }
+    Write-SyncLog 'falling back to PowerShell rules write (node --rules-only unavailable)'
 
     # 2. 最新 ONBOARDING.md を取得(失敗時はサイレントに終了、オフライン時にセッションを妨げない)
     $bodyBytes = $null
@@ -225,6 +344,9 @@ function Main {
         [System.IO.File]::WriteAllBytes($RulesPath, $bodyBytes)
         $blockBody = New-OnboardingIndex -Body $body
         Update-TargetFile -NewBody $blockBody -TodayLabel $todayLabel
+        $absoluteRules = Get-AbsoluteRulesFromOnboarding -Body $body
+        Place-AbsoluteRulesOnTarget -Rules $absoluteRules
+        Mirror-AbsoluteRules -Rules $absoluteRules
         Save-SyncState -Hash $hash -CheckedAt $now
 
         $shortHash = $hash.Substring(0, 8)

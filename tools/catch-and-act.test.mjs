@@ -50,14 +50,8 @@ test('classifier uses exact GLM → DeepSeek → Groq chain, disables implicit f
   assert.equal(providers.length, 3);
 });
 
-test('cursor is read-only with non-Claude model; unavailable cursor falls back to GLM', async t => {
-  const { home } = setup(t), calls = [];
-  const classify = makeClassifier({ home, classifier: 'cursor', execute: async (cmd, args) => {
-    calls.push(cmd);
-    if (cmd === 'cursor-agent') { assert.ok(args.includes('--mode=ask')); assert.ok(args.includes('gpt-5')); throw new Error('blocked'); }
-    return { stdout: '{"kind":"request","deadline":null}' };
-  } });
-  assert.equal((await classify(msg())).method, 'glm'); assert.equal(calls.length, 2);
+test('cursor classifier は無効で llm-ask だけを受け付ける', () => {
+  assert.throws(() => makeClassifier({ classifier: 'cursor' }), /classifier must be llm-ask/);
 });
 
 test('photo is never discarded by AI and automated mail never calls AI', async t => {

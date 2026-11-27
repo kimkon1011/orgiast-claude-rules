@@ -1,6 +1,6 @@
-# session-status  PC=004  host=004MINPAKU  updated 2026-11-27 16:13 JST
+# session-status  PC=004  host=004MINPAKU  updated 2026-11-27 17:13 JST
 
-- claude auth: {"at":"2026-11-27T07:13:14.355Z","event":"launch_allowed","reason":"below_cap","activeCount":0,"limit":2,"staleHours":3,"abandoned":[]} { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "f
+- claude auth: auth status タイムアウト
 - 案件数: 19
 
 - 004・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

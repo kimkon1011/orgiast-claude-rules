@@ -1,4 +1,4 @@
-# session-status  PC=008  host=008XPS8300  updated 2026-11-27 12:08 JST
+# session-status  PC=008  host=008XPS8300  updated 2026-11-27 13:08 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "configDirectory": "C:\\Users\\user\\
 - 案件数: 40

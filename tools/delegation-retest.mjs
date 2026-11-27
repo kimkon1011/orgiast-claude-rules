@@ -231,13 +231,13 @@ export function needsShell(bin) {
 export function resolveClaudeBin(env = process.env) {
   if (env.CLAUDE_BIN) return env.CLAUDE_BIN;
   const home = env.USERPROFILE || env.HOME || os.homedir();
-  
+
   // Check for .exe files in the same folders as .bat files first (prioritizing .exe over .bat)
   const batPaths = [
     'C:\\Users\\kimko\\bin\\claude.bat',
     path.join(home, 'bin', 'claude.bat'),
   ];
-  
+
   for (const batPath of batPaths) {
     if (fs.existsSync(batPath)) {
       // Check if there's a corresponding .exe file in the same folder
@@ -248,7 +248,7 @@ export function resolveClaudeBin(env = process.env) {
       }
     }
   }
-  
+
   const priorExe = [
     path.join(home, 'bin', 'claude.exe'),
     path.join(home, '.local', 'bin', 'claude.exe'),
@@ -259,7 +259,7 @@ export function resolveClaudeBin(env = process.env) {
   for (const c of priorExe) {
     try { if (fs.existsSync(c)) return c; } catch {}
   }
-  
+
   // Check original candidates including .bat files and .exe files
   const candidates = [
     'C:\\Users\\kimko\\bin\\claude.bat',
@@ -271,7 +271,7 @@ export function resolveClaudeBin(env = process.env) {
   for (const c of candidates) {
     try { if (fs.existsSync(c)) return c; } catch {}
   }
-  
+
   // Windows: try where.exe claude
   if (process.platform === 'win32') {
     try {

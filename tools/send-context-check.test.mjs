@@ -64,11 +64,28 @@ test('定期報告モードは同じ未対応項目の再掲をNGにせず、質
   assert.match(prompt,/「同じ未対応の項目を、前日以前の報告でも書いている」ことはNGにしない/);
   assert.match(prompt,/①報告の中で宛先本人に質問している/);
   assert.match(prompt,/②日付・金額・人名が下記のメール原本証拠と実際に食い違っている/);
+  assert.match(prompt,/メール原本で確認できる送信者の同一性、メールの日付、参照メールの実在、相手の未回答の質問・要望/);
   assert.match(prompt,/メール原本証拠:\n\[2026-11-11\] PRONI: 未返信/);
-  assert.match(prompt,/Discord履歴に根拠となるメールが載っていないこと.*NGにしてはならない/);
+  assert.match(prompt,/Discord履歴に根拠となるメールや同日の日報が載っていないことだけではNGにしてはならない/);
+  assert.match(prompt,/「昨日の動き：なし」.*Discord履歴に業務メールが載っていないことだけでは虚偽と推測しない/);
   assert.match(prompt,/メール原本証拠はDiscord履歴より優先/);
   assert.match(prompt,/warningsだけに記載してOKにしてはならない/);
+  assert.match(prompt,/日報見出しの基準日と曜日、担当案件の集計件数、案件台帳に基づく「佐藤さん担当」という割り当て表記/);
   assert.doesNotMatch(prompt,/③\[自社\]が既に聞いた質問を重ねて聞いていないか/);
+});
+test('定期報告の機械計算された曜日・件数・担当表記は原本照合対象外に限定する', () => {
+  const prompts=[];
+  const outputs=[
+    {verdict:'OK',reason:'定期報告として整合',warnings:[]},
+    {verdict:'OK',reason:'曜日・件数・担当表記は対象外、送信者は一致',warnings:[]},
+  ];
+  const verdict=runLlm([],`【業務報告 11/15(日) 佐藤】\n■担当案件：計14件（確定5件／提案・調整中9件）\n・顧客：佐藤さん担当（送信：制作チーム）アンケートを依頼した。`,{
+    periodicReport:{recipient:'佐藤優奈',sourceEvidence:'[2026-11-13] 制作チーム アンケート: 回答を依頼'},
+    spawn:(_exe,args)=>{prompts.push(fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8'));return{status:0,stdout:JSON.stringify(outputs[prompts.length-1]),stderr:''};},
+  });
+  assert.equal(verdict.ok,true);
+  assert.match(prompts[1],/個別の出来事の日付・曜日.*実際の送信者は照合対象/);
+  assert.match(prompts[1],/佐藤さん担当（送信：制作チーム）.*佐藤本人が送信したという意味ではない/);
 });
 test('定期報告モードなし（社外・他人宛て）は従来の5項目NG判定のまま', () => {
   let prompt='';
@@ -87,7 +104,9 @@ test('定期報告の再掲許容とは独立に原本の事実を照合し、�
       return{status:0,stdout:JSON.stringify({verdict:prompts.length===1?'OK':'NG',reason:`${kind}の不一致`,warnings:[]})};
     }});
     assert.equal(verdict.ok,false);assert.equal(prompts.length,2);
+    assert.match(prompts[1],/同じ出来事の日付・金額・人名をそれぞれ照合する/);
     assert.match(prompts[1],/発信者・担当者・連絡者の人名が別人に置き換わっていたら必ずNG/);
+    assert.match(prompts[1],/発信者・連絡者や具体的な人名が別人に置き換わっていたら必ずNG/);
     assert.doesNotMatch(prompts[1],/前日以前の報告/);
   }
 });

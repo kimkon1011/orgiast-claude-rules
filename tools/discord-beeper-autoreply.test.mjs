@@ -1490,4 +1490,3 @@ test('途中通過条件未達の定型文は会話ごとに一度のみ', async
   assert.equal(second.replied, 0);
   assert.equal(f.sent.length, 1);
 });
-

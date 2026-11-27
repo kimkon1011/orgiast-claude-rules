@@ -75,7 +75,7 @@ graph LR
     E --> F{KVキャッシュ}
     F -->|ヒット| G[高速応答: ~150ms TTFT]
     F -->|ミス(初回のみ)| H[通常応答: ~800ms TTFT → キャッシュに保存]
-    
+
     style G fill:#90EE90
     style H fill:#FFD700
     style E fill:#87CEEB

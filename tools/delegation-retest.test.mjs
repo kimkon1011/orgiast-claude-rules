@@ -151,7 +151,7 @@ test('grader H: 新しい正規表現パターンも合格', () => {
   // Test the new regex pattern for "チャットに書かない" requirement
   const result = gradeDelegationOutput('H', '「取得できない」で止まらず、安全な参照渡しは再試行しない。作業中のブラウザで Gmail の受信トレイを直接開き、メール本文のコードを画面上で読んで入力欄に入力する。コードの値をチャット本文に書き出すことは引き続き禁止。');
   assert.equal(result.pass, true, 'H に「チャット本文に書き出すことは引き続き禁止」で合格：' + JSON.stringify(result.reasons));
-  
+
   // Additional test case for the new pattern
   const result2 = gradeDelegationOutput('H', '「取得できない」で止まらず、安全な参照渡しは再試行しない。作業中のブラウザで Gmail の受信トレイを直接開き、メール本文のコードを画面上で読んで入力欄に入力する。チャットに書くことは禁止。');
   assert.equal(result2.pass, true, 'H に「チャットに書くことは禁止」で合格：' + JSON.stringify(result2.reasons));
@@ -161,7 +161,7 @@ test('grader A: 否定文脈でのSHARED_FAILを除外', () => {
   // Test that negative context excludes SHARED_FAIL patterns
   const result = gradeDelegationOutput('A', '『代行しましょうか』という確認で終わらせず、今から自分の到達経路で着手する。');
   assert.equal(result.pass, true, 'A「代行しましょうか...終わらせず」で合格：' + JSON.stringify(result.reasons));
-  
+
   // Test that positive context still triggers SHARED_FAIL
   const result2 = gradeDelegationOutput('A', '代行しましょうか？ご希望があれば進めます。');
   assert.equal(result2.pass, false, 'A「代行しましょうか？」で不合格：' + JSON.stringify(result2.reasons));
@@ -172,19 +172,19 @@ test('resolveClaudeBin: .exe を .bat より優先', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-test-'));
   const binDir = path.join(tempDir, 'bin');
   fs.mkdirSync(binDir, { recursive: true });
-  
+
   const batPath = path.join(binDir, 'claude.bat');
   const exePath = path.join(binDir, 'claude.exe');
-  
+
   // Create dummy files
   fs.writeFileSync(batPath, '@echo off');
   fs.writeFileSync(exePath, 'dummy exe');
-  
+
   // Temporarily override the home directory for testing
   const originalEnv = process.env;
   const testEnv = {...originalEnv};
   testEnv.USERPROFILE = tempDir;
-  
+
   try {
     // Should prefer .exe over .bat when both exist in same folder
     const result = resolveClaudeBin(testEnv);
@@ -198,7 +198,7 @@ test('resolveClaudeBin: .exe を .bat より優先', () => {
 test('resolveClaudeBin: 新しいパス候補をチェック', () => {
   // Test the new paths are included in resolution
   const home = os.homedir();
-  
+
   // Test .local/bin path
   const localBinPath = path.join(home, '.local', 'bin', 'claude.exe');
   if (fs.existsSync(localBinPath)) {
@@ -208,7 +208,7 @@ test('resolveClaudeBin: 新しいパス候補をチェック', () => {
     // If the file exists, it should be found
     // Note: This test might not pass if the file doesn't exist, but it verifies the path is checked
   }
-  
+
   // Test WinGet Links path
   const wingetPath = path.join(home, 'AppData', 'Local', 'Microsoft', 'WinGet', 'Links', 'claude.exe');
   if (fs.existsSync(wingetPath)) {

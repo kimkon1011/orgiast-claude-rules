@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   headerMap,
   extractCases,
@@ -28,9 +29,12 @@ import {
   replaceUnknownPersonNames,
   completeReportSentence,
   finalizeReportLine,
+  reportSenderLabel,
   run,
   deliveryFailureNoticeText,
   notifyDeliveryFailure,
+  previousBusinessJstDayRange,
+  isBotSender,
 } from "./satou-secretary-daily.mjs";
 import { register, TASK_NAME, TASK_RETRY_NAME } from "./satou-secretary-daily-register.mjs";
 const now = new Date("2026-11-09T06:30:00+09:00"),
@@ -194,6 +198,149 @@ test("昨日判定はJST 00:00境界", () => {
   assert.equal(isInPreviousJstDay("2026-11-09T23:59:59+09:00", base), true);
   assert.equal(isInPreviousJstDay("2026-11-10T00:00:00+09:00", base), false);
 });
+test("previousBusinessJstDayRange: 平日は前日を返す", () => {
+  const tue = new Date("2026-11-10T06:30:00+09:00"), // 2026-11-10 is Tuesday
+    wed = new Date("2026-11-11T06:30:00+09:00"),
+    thu = new Date("2026-11-12T06:30:00+09:00"),
+    fri = new Date("2026-11-13T06:30:00+09:00");
+  for (const [now, expected] of [[tue, "2026-11-09"], [wed, "2026-11-10"], [thu, "2026-11-11"], [fri, "2026-11-12"]]) {
+    const r = previousBusinessJstDayRange(now);
+    assert.equal(r.date, expected, `now=${now.toISOString()}`);
+    assert.equal(r.end.getTime() - r.start.getTime(), 864e5);
+  }
+});
+test("previousBusinessJstDayRange: 月曜は金曜に戻る", () => {
+  const mon = new Date("2026-11-16T06:30:00+09:00"); // 2026-11-16 is Monday
+  // 2026-11-13 is Friday, 2026-11-14 is Saturday, 2026-11-15 is Sunday, 2026-11-16 is Monday
+  const r = previousBusinessJstDayRange(mon);
+  assert.equal(r.date, "2026-11-13"); // Friday
+  assert.equal(r.end.getTime() - r.start.getTime(), 864e5);
+});
+test("previousBusinessJstDayRange: 日曜は金曜に戻る", () => {
+  const sun = new Date("2026-11-15T06:30:00+09:00"); // 2026-11-15 is Sunday
+  const r = previousBusinessJstDayRange(sun);
+  assert.equal(r.date, "2026-11-13"); // Friday
+  assert.equal(r.end.getTime() - r.start.getTime(), 864e5);
+});
+test("previousBusinessJstDayRange: 土曜は金曜（前日）", () => {
+  const sat = new Date("2026-11-14T06:30:00+09:00"); // 2026-11-14 is Saturday
+  const r = previousBusinessJstDayRange(sat);
+  assert.equal(r.date, "2026-11-13"); // Friday
+  assert.equal(r.end.getTime() - r.start.getTime(), 864e5);
+});
+test("previousBusinessJstDayRange: UTC環境でもJST曜日で正しく判定", async () => {
+  // 子プロセスを TZ=UTC で起動し、関数の結果が環境TZに依存しないことを確認
+  const { execFile } = await import("node:child_process");
+  const scriptUrl = new URL("./satou-secretary-daily.mjs", import.meta.url).href;
+  const testCode = `
+import { previousBusinessJstDayRange } from ${JSON.stringify(scriptUrl)};
+const tests = [
+  { now: new Date("2026-11-16T06:30:00+09:00"), expect: "2026-11-13", label: "Mon→Fri" },
+  { now: new Date("2026-11-15T06:30:00+09:00"), expect: "2026-11-13", label: "Sun→Fri" },
+  { now: new Date("2026-11-14T06:30:00+09:00"), expect: "2026-11-13", label: "Sat→Fri" },
+  { now: new Date("2026-11-10T06:30:00+09:00"), expect: "2026-11-09", label: "Tue→Mon" },
+  { now: new Date("2026-11-11T06:30:00+09:00"), expect: "2026-11-10", label: "Wed→Tue" },
+  { now: new Date("2026-11-12T06:30:00+09:00"), expect: "2026-11-11", label: "Thu→Wed" },
+  { now: new Date("2026-11-13T06:30:00+09:00"), expect: "2026-11-12", label: "Fri→Thu" },
+];
+for (const { now, expect, label } of tests) {
+  const r = previousBusinessJstDayRange(now);
+  if (r.date !== expect) {
+    console.error(\`FAIL \${label}: got \${r.date}, expected \${expect}\`);
+    process.exit(1);
+  }
+}
+// Edge: Sunday in JST = Saturday in UTC — should still return Friday
+const edge = previousBusinessJstDayRange(new Date("2026-11-01T06:30:00+09:00"));
+if (edge.date !== "2026-10-30") { console.error("FAIL Sun edge: " + edge.date); process.exit(1); }
+console.log("ALL PASS");
+`;
+  const { stdout, stderr, code } = await new Promise((resolve, reject) => {
+    const child = execFile(
+      process.execPath,
+      // beeper-api → node:sqlite の ExperimentalWarning を抑止（判定対象は曜日ロジックのみ）
+      ["--no-warnings", "--input-type=module", "--eval", testCode],
+      { env: { ...process.env, TZ: "UTC" } }
+    );
+    let out = "", err = "";
+    child.stdout.on("data", d => out += d);
+    child.stderr.on("data", d => err += d);
+    child.on("close", exitCode => resolve({ stdout: out, stderr: err, code: exitCode }));
+    child.on("error", reject);
+  });
+  assert.equal(code, 0, stderr || stdout);
+  assert.equal(stderr, "");
+  assert.equal(stdout.trim(), "ALL PASS");
+});
+test("previousBusinessJstDayRange: 自環境TZでも正しい（JST環境での回帰防止）", () => {
+  // プロセスTZがAsia/Tokyoの場合でも正しいことを確認
+  const mon = new Date("2026-11-16T06:30:00+09:00");
+  assert.equal(previousBusinessJstDayRange(mon).date, "2026-11-13");
+  const sun = new Date("2026-11-15T06:30:00+09:00");
+  assert.equal(previousBusinessJstDayRange(sun).date, "2026-11-13");
+  const sat = new Date("2026-11-14T06:30:00+09:00");
+  assert.equal(previousBusinessJstDayRange(sat).date, "2026-11-13");
+  const tue = new Date("2026-11-10T06:30:00+09:00");
+  assert.equal(previousBusinessJstDayRange(tue).date, "2026-11-09");
+});
+test("月曜実行で金曜のメールを昨日の動きに含める", async () => {
+  // Monday with Friday's emails should appear as "昨日の動き"
+  const mon = new Date("2026-11-16T06:30:00+09:00"); // 2026-11-16 is Monday
+  const fri = "2026-11-13"; // 2026-11-13 is Friday
+  const report = await buildDailyReport({
+    now: mon,
+    cases: [{ code: "T1", client: "テスト", name: "テスト案件", state: "確定", deliveryText: "2026-12-01" }],
+    messages: [{
+      threadId: "fri-msg",
+      internalDate: String(+new Date(`${fri}T12:00:00+09:00`)),
+      subject: "テスト案件 打合せ",
+      from: "顧客 <customer@example.com>",
+      to: "satou@orgiast.jp",
+      snippet: "金曜の相談です",
+    }],
+    actions: [],
+  }, {
+    askLlm: async (prompt) => {
+      if (prompt.includes("社長判断") || prompt.includes("問題候補")) return "なし";
+      return "金曜日に打合せ日程の相談が来た";
+    },
+  });
+  assert.match(report.text, /テスト.*金曜日/);
+  // 昨日の動きに「・なし」が無いことを確認（問題点の「・なし」は混ざる）
+  assert.match(report.text, /昨日の動き\n・テスト/);
+  assert.doesNotMatch(report.text, /昨日の動き\n・なし/);
+  // Heading should show Friday, not Sunday
+  assert.match(report.text, /業務報告 11\/13\(金\)/);
+});
+test("日曜実行で金曜のメールを昨日の動きに含め、保存日は土曜のまま", async () => {
+  const report = await buildDailyReport({
+    now: new Date("2026-11-15T06:30:00+09:00"),
+    cases: [{ code: "T1", client: "テスト", name: "テスト案件", state: "確定" }],
+    messages: [{
+      threadId: "fri-sun", internalDate: String(+new Date("2026-11-13T12:00:00+09:00")),
+      subject: "テスト案件 打合せ", from: "顧客 <customer@example.com>", to: "satou@orgiast.jp",
+    }], actions: [],
+  }, { askLlm: async prompt => prompt.includes("社長判断") || prompt.includes("問題候補") ? "なし" : "金曜日に打合せを行った。" });
+  assert.match(report.text, /昨日の動き\n・テスト/);
+  assert.match(report.text, /業務報告 11\/13\(金\)/);
+  assert.equal(report.date, "2026-11-14");
+});
+test("案件未紐付けでも佐藤さんから社外へ送ったメールは昨日の動きに含める", async () => {
+  const report = await buildDailyReport({
+    now: new Date("2026-11-10T06:30:00+09:00"), cases: [],
+    messages: [{
+      threadId: "unlinked-outgoing", internalDate: String(+new Date("2026-11-09T12:00:00+09:00")),
+      subject: "会場候補のご案内", from: "株式会社オージャスト 佐藤 <satou@orgiast.jp>",
+      to: "顧客 <customer@example.com>", body: "会場候補をお送りします。",
+    }], actions: [],
+  }, { askLlm: async prompt => prompt.includes("社長判断") || prompt.includes("問題候補") ? "なし" : "会場候補を送付した。" });
+  assert.match(report.text, /昨日の動き\n・会場候補のご案内：佐藤さん担当（送信：株式会社オージャスト 佐藤）会場候補を送付した。/);
+});
+test("GitHub bot 通知送信者を未返信対象として識別する", () => {
+  assert.equal(isBotSender("github-actions[bot] <notifications@github.com>"), true);
+  assert.equal(isBotSender("GitHub <notifications@github.com>"), true);
+  assert.equal(isBotSender("顧客 <customer@example.com>"), false);
+});
 test("案件紐づきなしはLLMを呼ばず、判断なし・25行以内", async () => {
   const messages = Array.from({ length: 30 }, (_, i) => ({
       threadId: `t${i}`,
@@ -317,6 +464,15 @@ test("要約入力は時系列、最終送信者と本文を含み、内部転�
   assert.ok(prompts[0].indexOf("発注します")<prompts[0].indexOf("申込書の返送"));
   assert.ok(prompts.every(p=>!p.includes("混ぜない転送本文")));
 });
+test("担当案件は佐藤さん担当と実際の送信者を分け、佐藤本人の送信と推測させない", async () => {
+  const prompts=[];
+  const report=await buildDailyReport({now:new Date("2026-11-10T06:30:00+09:00"),cases:[{code:"C001",client:"顧客社",state:"確定"}],messages:[{
+    threadId:"t1",internalDate:String(+new Date("2026-11-09T12:00:00+09:00")),subject:"C001 アンケート",from:"株式会社オージャスト 制作チーム <seisaku-team@orgiast.jp>",to:"customer@example.jp",body:"アンケートへの回答をお願いします。",
+  }],actions:[]},{askLlm:async prompt=>{prompts.push(prompt);return prompt.includes("社長への報告本文")?"アンケートへの回答を依頼した。":"なし";}});
+  assert.equal(reportSenderLabel({from:"株式会社オージャスト 制作チーム <seisaku-team@orgiast.jp>"}),"佐藤さん担当（送信：株式会社オージャスト 制作チーム）");
+  assert.match(report.text,/顧客社：佐藤さん担当（送信：株式会社オージャスト 制作チーム）アンケートへの回答を依頼した。/);
+  assert.match(prompts[0],/佐藤本人が送信したと推測して「佐藤が送った」「佐藤が依頼した」等と書かない/);
+});
 test("案件内でもスレッドを分離し、別スレッドの人名を報告に出さない", async () => {
   const prompts = [], base = { internalDate: String(+new Date("2026-11-09T12:00:00+09:00")), to: "佐藤 優奈 <satou@orgiast.jp>", subject: "261125TUM 入館者", snippet: "確認" };
   const report = await buildDailyReport({ now: new Date("2026-11-10T06:30:00+09:00"), cases: [{ code: "261125TUM", client: "株式会社TOKIUM", state: "確定" }], messages: [
@@ -325,7 +481,7 @@ test("案件内でもスレッドを分離し、別スレッドの人名を報�
   ], actions: [] }, { askLlm: async prompt => { prompts.push(prompt); if (prompt.includes("社長判断") || prompt.includes("問題候補")) return "なし"; return prompt.includes("ogata@tokium.jp") ? "稲沼氏の氏名を小川様に通知" : "小川様から別件の連絡を受領"; } });
   assert.equal(prompts.filter(x => x.includes("社長への報告本文")).length, 2);
   const tokiumLine = report.lines.find(line => line.includes("氏名を"));
-  assert.equal(tokiumLine, "・TOKIUM：先方の氏名を先方に通知。");
+  assert.equal(tokiumLine, "・TOKIUM：佐藤さん担当（送信：小形）先方の氏名を先方に通知。");
   assert.doesNotMatch(tokiumLine, /小川様/);
 });
 test("報告行は70字以内の完結文で、省略記号では終わらない", async () => {

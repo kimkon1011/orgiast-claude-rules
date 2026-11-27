@@ -29,7 +29,7 @@ const LEAVE_SHOP = /郵送|発送|投函|郵便局|役所|法務局|外で.?印�
 const PRINT_MAIL = /印刷して郵送|印刷して発送|印刷して.*投函|印刷.*郵送/;
 const LEGAL_OFFICE = /法務局|資格証明|登記事項|履歴事項/;
 const WAREHOUSE = /倉庫|渋井|荷物を受け取|荷物の受取/;
-const OSAKA = /大阪|東成|東邦ハイツ|カフェの近く|カフェ前/;
+const OSAKA = /大阪|東成|カフェの近く|カフェ前/;
 const TOHO = /東邦鋼業/;
 
 export function taskKind(task, location = '') {
@@ -57,7 +57,7 @@ function residenceKnown(person) {
 
 function nearWorkplace(person, area) {
   const workplace = person?.workplace || '';
-  if (area === 'osaka') return /大阪市東成区|東邦ハイツ|大阪事務所/.test(workplace);
+  if (area === 'osaka') return /大阪市東成区|大阪事務所/.test(workplace);
   if (area === 'warehouse') return /川越|渋井|さいたま倉庫/.test(workplace);
   return false;
 }

@@ -65,7 +65,7 @@ test('quick removes expired demote/cooldown atomically, preserves unrelated prov
   assert.deepEqual(result.implementOrder.slice(0,2), ['codex','deepseek']);
   assert.ok(!JSON.stringify(result).includes('test-fixture'));
 });
-test('probe repairs healthy demotes, classifies payment and rate limits, caches Codex and dedupes DM', async t => {
+test('probe repairs healthy demotes, classifies payment and rate limits, caches Codex and suppresses substituted billing DM', async t => {
   const h = fixture(t); let codexTasks = 0, notifications = 0;
   write(h,'routing-overrides.json',{demote:{codex:new Date(now+100000).toISOString(),groq:new Date(now+100000).toISOString()}});
   const probe = async (p, options) => {
@@ -76,8 +76,8 @@ test('probe repairs healthy demotes, classifies payment and rate limits, caches 
   const result = await laneDoctorProbe({platform: 'linux',home:h,now,probe,notify});
   assert.equal(result.lanes.gemini.reason,'billing'); assert.equal(result.lanes.codex.alive,true);
   assert.ok(read(h,'routing-overrides.json').demote.gemini); assert.equal(result.lanes.glm.until,now+600000);
-  await laneDoctorProbe({platform: 'linux',home:h,now:now+60000,probe,notify}); assert.equal(codexTasks,1); assert.equal(notifications,1);
-  await laneDoctorProbe({platform: 'linux',home:h,now:now+86400001,probe,notify}); assert.equal(codexTasks,2); assert.equal(notifications,2);
+  await laneDoctorProbe({platform: 'linux',home:h,now:now+60000,probe,notify}); assert.equal(codexTasks,1); assert.equal(notifications,0);
+  await laneDoctorProbe({platform: 'linux',home:h,now:now+86400001,probe,notify}); assert.equal(codexTasks,2); assert.equal(notifications,0);
 });
 test('quick preserves payment failure and cannot refresh probe timestamp', async t => {
   const h=fixture(t); write(h,'lane-health.json',{probedAt:new Date(now-3600000).toISOString(),lanes:{gemini:{alive:false,reason:'dead:payment_required',probedAt:new Date(now-3600000).toISOString()}}});
@@ -117,16 +117,26 @@ test('notify-time annotation adds the catalog account and splits a URL glued to 
   assert.match(out,/開くアカウント: \*\*seisaku-team@orgiast\.jp\*\*/);
   assert.equal(annotateAccounts('停止しました'),'停止しました');
 });
-test('billing is substituted and notified even without auto top-up',async t=>{
+test('billing notification is suppressed while its substitute is alive',async t=>{
   const h=fixture(t);const sent=[];
   const probe=async p=>p==='deepseek'?{code:1,text:'HTTP 402 Insufficient Balance'}:{code:0,text:'PONG'};
   const r=await laneDoctorProbe({home:h,now,probe,notify:async text=>{sent.push(text);return {delivered:'dm'};},listWsl:async()=>'Ubuntu'});
   assert.equal(r.lanes.deepseek.reason,'billing');
   assert.ok(!r.deadNeedsUser.some(x=>x.provider==='deepseek'));
   assert.deepEqual(r.substituted,[{provider:'deepseek',via:'openrouter'}]);
-  assert.equal(sent.filter(text=>/deepseek/i.test(text)).length,1);
+  assert.equal(sent.filter(text=>/deepseek/i.test(text)).length,0);
+  assert.deepEqual(r.notifications.filter(({provider})=>provider==='deepseek'), [{provider:'deepseek',delivered:'suppressed',reason:'substituted'}]);
   assert.equal(r.lanes.deepseek.via,'openrouter');
   assert.match(summarize(r),/deepseek ✅\(OpenRouter経由\)/);
+});
+test('billing notification is sent when its substitute is dead',async t=>{
+  const h=fixture(t);const sent=[];
+  const probe=async p=>p==='deepseek'?{code:1,text:'HTTP 402 Insufficient Balance'}:p==='openrouter'?{code:1,text:'HTTP 401 invalid api key'}:{code:0,text:'PONG'};
+  const r=await laneDoctorProbe({home:h,now,probe,notify:async text=>{sent.push(text);return {delivered:'dm'};},listWsl:async()=>'Ubuntu'});
+  assert.equal(r.lanes.openrouter.alive,false);
+  assert.deepEqual(r.substituted,[{provider:'deepseek',via:'openrouter'}]);
+  assert.equal(sent.filter(text=>/deepseek/i.test(text)).length,1);
+  assert.deepEqual(r.notifications.filter(({provider})=>provider==='deepseek'), [{provider:'deepseek',delivered:'dm'}]);
 });
 test('a fresh failed Codex probe is re-measured instead of being reused',async t=>{
   const h=fixture(t);
@@ -144,7 +154,7 @@ test('successful probe supersedes older limit history; expired cooldown becomes 
 });
 test('failed notification is retried, while successful delivery is deduped',async t=>{
   const h=fixture(t);let calls=0;
-  const probe=async p=>p==='gemini'?{code:1,text:'HTTP 402'}:{code:0,text:'PONG'};
+  const probe=async p=>p==='gemini'?{code:1,text:'HTTP 402'}:p==='openrouter'?{code:1,text:'HTTP 401 invalid api key'}:{code:0,text:'PONG'};
   const notify=async()=>{calls++;return {delivered:calls===1?'none':'dm'};};
   for(let i=0;i<3;i++)await laneDoctorProbe({platform: 'linux',home:h,now:now+i*1000,probe,notify});
   assert.equal(calls,2);

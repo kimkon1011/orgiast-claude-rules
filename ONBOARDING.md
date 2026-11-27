@@ -796,11 +796,11 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 ### 1.13 トークン効率
 
-**Claude Code の7日枠はアカウント単位で 90% 着地を目標にし、claude-pace（毎時）と残り10%キュー（`config/claude-pace-queue.json`）で管理する（詳細は `rules/claude-pace.md`）。**
-
 **🔴 既定モデルは Opus。/session-close・記録の追記だけの締め、定型の確認・一覧化・整形・転記だけ Sonnet。迷ったら Opus。旧「自動は Sonnet のみ・Opus 禁止」は廃止（2026-11-17 kim）。**
 
 **🔴 CLAUDE.md は恒久ルールのみ。静的な内容を上部に置き、進行中タスク・今日の数字・障害は載せない。報告は前置きなしで §1.1 に従う。モデル切替は乱発しない。探索は Agent ツールの Explore/general-purpose に「結果200字以内・コード本体なし」で委譲。実装は Codex、設計・横断調査・複数仮説は Opus/Fable（§1.16）、軽い確認・締めは Sonnet/Haiku。**
+
+**Claude Code の7日枠はアカウント単位で 90% 着地を目標にし、claude-pace（毎時）と残り10%キュー（`config/claude-pace-queue.json`）で管理する（詳細は `rules/claude-pace.md`）。**
 
 **1.13 トークン効率（出力・入力キャッシュ・サブエージェント）**
 

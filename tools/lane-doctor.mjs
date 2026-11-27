@@ -14,7 +14,7 @@ import { isDailyQuotaResponse, nextUtcMidnight } from './lib/provider-daily-cool
 import { notifyKim } from './notify-kim.mjs';
 import { redactAll } from './lib/redact.mjs';
 import { catalog } from './provider-catalog.mjs';
-import { applyRealLaneHealth, laneErrorText, probeViaChain, billingFailure, billingWithQuotaHint, quotaFailure, retiredModel } from './lib/lane-real-health.mjs';
+import { applyRealLaneHealth, laneErrorText, probeViaChain, billingFailure, billingWithQuotaHint, quotaFailure, retiredModel, missingKeyPattern } from './lib/lane-real-health.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { isEnrollToken, validKeyservePcId } from './keyserve-auth.mjs';
 import { computeSubstituted, loadLaneSubstitutes } from './lib/lane-substitutes.mjs';
@@ -392,6 +392,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
         tried: 'Codex probe と WSL ディストリビューション列挙で WSL サービス状態を確認',
         userFix: '管理者 PowerShell で LxssManager サービスを開始するか、wsl.exe --install --no-distribution を実行して Windows を再起動する。'
       });
+      if (health.lanes[p].reason === 'probe_failed' && missingKeyPattern.test(text)) health.lanes[p].reason = 'missing_key';
       if (deferred && cooldown[p]?.until) health.lanes[p].until = cooldown[p].until;
       if (limited && !payment) { const daily = isDailyQuotaResponse(429, text); const until = daily ? nextUtcMidnight(new Date(now)) : providerResetUntil(text, now); cooldown[p] = { until, at: now, reason: daily ? 'daily_limit' : 'lane_doctor_usage_limit' }; cooldownChanged = true; health.lanes[p].until = until; }
       if (autoProbes.has(p) && (payment || limited)) {

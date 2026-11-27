@@ -13,4 +13,9 @@ test('全LLM呼び出しの system 先頭に絶対ルールを1回だけ付け�
 test('ABSOLUTE_RULES_SYSTEM に認証コード受け取りと空港案内の文言を含む', () => {
   assert.match(ABSOLUTE_RULES_SYSTEM, /受信トレイを直接開き/);
   assert.match(ABSOLUTE_RULES_SYSTEM, /コンコースをまたいで/);
+  assert.match(ABSOLUTE_RULES_SYSTEM, /通算2回まで/);
+  assert.match(ABSOLUTE_RULES_SYSTEM, /3回目の参照は送らない/);
+  assert.match(ABSOLUTE_RULES_SYSTEM, /verification_code/);
+  assert.match(ABSOLUTE_RULES_SYSTEM, /両経路が尽きた後の最終手段/);
+  assert.match(ABSOLUTE_RULES_SYSTEM, /当該タスク内でのみ一時的に使い/);
 });

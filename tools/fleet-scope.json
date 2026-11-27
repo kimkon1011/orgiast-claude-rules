@@ -55,6 +55,7 @@
     {"path": "tools/visit-consolidate.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限確認と訪問集約（12_）。全PCで check/gate を使う。毎朝の run タスク登録は000だけ"},
     {"path": "tools/register-visit-consolidate-task.ps1", "scope": "fleet", "step": "deadline-watch", "reason": "訪問・郵送の集約チェックを毎朝07:40に登録する。タスク登録はkim操作席(000)だけで実行"},
     {"path": "tools/deadline-visit-selftest.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限確認と訪問集約ルールの月次自己テスト。全PCのClaude Codeで採点する（kim 2026-11-27 指示）"},
+    {"path": "tools/deadline-visit-selftest-run.ps1", "scope": "fleet", "step": "deadline-watch", "reason": "月次自己テストの実行入口。毎回GitHub mainから最新のテスト一式を取り直して各PCのClaude Codeで採点する"},
     {"path": "tools/register-deadline-visit-selftest-task.ps1", "scope": "fleet", "step": "deadline-watch", "reason": "月次自己テストを全PCのタスクスケジューラーに登録する（kim 2026-11-27 指示）"},
     {"path": "tools/register-schedule-autopilot-task.ps1", "scope": "fleet", "step": "deadline-watch", "reason": "予定の逆算プッシュの共通実装。タスク登録はkim操作席(000)だけで実行"},
     {"path": "tools/delegation-ratio-watch.mjs", "scope": "fleet", "step": "task:delegation-ratio-watch", "reason": "委譲率ウォッチドッグ（毎日05:40実行）。Claudeの重み付き消費・安いAIの実作業件数・保留件数・quota_wait呼出を集計"},
@@ -1416,6 +1417,9 @@
     {"path": "tools/register-tldv-process-improve-task.ps1", "scope": "kim-only", "reason": "kim-PC（作業用011）だけで OrgiastTldvProcessImprove タスクを登録する"},
     {"path": "tools/tldv-process-improve.test.mjs", "scope": "kim-only", "reason": "tl;dv 改善ループのテスト。CIで実行するがfleet配布はkim-PCだけ"},
     {"path": "tools/register-ai-daikodo-line-watch.ps1", "scope": "kim-only", "step": null, "reason": "AI代行堂LINE監視のschtasks登録。tanom-admin.env と run-hidden.vbs に依存し、各PCの初期セットアップ時に1回実行"},
-    {"path": "tools/register-roudou-evidence-task.ps1", "scope": "kim-only", "step": null, "reason": "PC000で労働審判の証拠画像を指定日時にBeeperから回収する一回限りのタスク登録"}
+    {"path": "tools/register-roudou-evidence-task.ps1", "scope": "kim-only", "step": null, "reason": "PC000で労働審判の証拠画像を指定日時にBeeperから回収する一回限りのタスク登録"},
+    {"path": "tools/register-claude-pace.ps1", "scope": "fleet", "step": "task:quota-sweep", "reason": "全PCで登録する Claude ペース管理の毎時ジョブ"},
+    {"path": "tools/lib/claude-pace-report-core.mjs", "scope": "fleet", "step": "task:quota-sweep", "reason": "Claude ペース日次報告と配信処理が共有する参照先生成"},
+    {"path": "tools/register-claude-pace-report.ps1", "scope": "fleet", "step": "task:quota-sweep", "reason": "全PCで登録する Claude ペース日次報告（実行時に担当PCを判定）"}
   ]
 }

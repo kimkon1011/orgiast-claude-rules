@@ -146,6 +146,73 @@ function temporaryFiles(t) {
   return { cooldownFile: path.join(dir, 'cooldown.json'), ledgerFile: path.join(dir, 'ledger.jsonl'), budgetFile: path.join(dir, 'budget.json'), laneHealthFile: path.join(dir, 'lane-health.json') };
 }
 
+function disabledRoutingFiles(t, entries) {
+  const files = temporaryFiles(t);
+  const home = path.dirname(files.cooldownFile);
+  fs.writeFileSync(path.join(home, 'lanes-disabled.json'), JSON.stringify(entries));
+  const previousProbe = process.env.ORGIAST_LANE_DOCTOR_PROBE_PROVIDER;
+  delete process.env.ORGIAST_LANE_DOCTOR_PROBE_PROVIDER;
+  t.after(() => {
+    if (previousProbe === undefined) delete process.env.ORGIAST_LANE_DOCTOR_PROBE_PROVIDER;
+    else process.env.ORGIAST_LANE_DOCTOR_PROBE_PROVIDER = previousProbe;
+  });
+  return files;
+}
+
+test('OpenRouter の有効な自動停止は経由候補のスキップ理由に出る', async (t) => {
+  const timestamp = 1_700_000_000_000;
+  const files = disabledRoutingFiles(t, { openrouter: { reason: 'failure_rate', until: timestamp + 60_000 } });
+  await assert.rejects(callWithFallback({
+    start: { provider: 'deepseek' }, chain: [{ provider: 'mistral' }],
+    ...files, now: () => timestamp,
+    payloadFor: () => assert.fail('disabled candidate must not build a request'),
+    fetchImpl: async () => assert.fail('disabled gateway must not be called'),
+  }), error => {
+    assert.match(error.message, /スキップ: openrouter\(disabled:failure_rate\)/);
+    assert.deepEqual(error.failures, []);
+    assert.deepEqual(error.skipped.map(({ provider, reason }) => ({ provider, reason })), [
+      { provider: 'openrouter', reason: 'disabled:failure_rate' },
+      { provider: 'openrouter', reason: 'disabled:failure_rate' },
+    ]);
+    return true;
+  });
+});
+
+test('OpenRouter の停止期限が過去なら経由候補を使える', async (t) => {
+  const timestamp = 1_700_000_000_000;
+  const files = disabledRoutingFiles(t, { openrouter: { reason: 'failure_rate', until: timestamp - 1 } });
+  let calls = 0;
+  const result = await callWithFallback({
+    start: { provider: 'deepseek' }, chain: [], ...files, now: () => timestamp,
+    payloadFor: requestFor,
+    fetchImpl: async () => { calls++; return new Response('{}'); },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.candidate.provider, 'openrouter');
+});
+
+test('DeepSeek の probe は元レーンの自動停止だけを解除する', async (t) => {
+  const timestamp = 1_700_000_000_000;
+  const entries = { deepseek: { reason: 'failure_rate', until: timestamp + 60_000 } };
+  const files = disabledRoutingFiles(t, entries);
+  const options = {
+    start: { provider: 'deepseek', model: 'deepseek-v4-pro' }, chain: [],
+    ...files, now: () => timestamp, payloadFor: requestFor,
+    fetchImpl: async () => new Response('{}'),
+  };
+  await assert.rejects(callWithFallback(options), /disabled:failure_rate/);
+  process.env.ORGIAST_LANE_DOCTOR_PROBE_PROVIDER = 'deepseek';
+  const result = await callWithFallback(options);
+  assert.equal(result.candidate.provider, 'openrouter');
+  assert.equal(result.candidate.model, 'deepseek/deepseek-v4-pro');
+  const file = path.join(path.dirname(files.cooldownFile), 'lanes-disabled.json');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), entries);
+  fs.writeFileSync(file, JSON.stringify({ ...entries, openrouter: entries.deepseek }));
+  await assert.rejects(callWithFallback(options), /openrouter\(disabled:failure_rate\)/);
+  fs.writeFileSync(file, JSON.stringify({ deepseek: { reason: 'manual' } }));
+  await assert.rejects(callWithFallback(options), /disabled:manual/);
+});
+
 test('本文に billing を含むだけの通常429は日次上限と誤判定せず短時間クールダウンにする', async (t) => {
   const files = temporaryFiles(t), timestamp = 1_700_000_000_000; let calls = 0;
   const body = 'Rate limit reached for model `openai/gpt-oss-120b`. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing';

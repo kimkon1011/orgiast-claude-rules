@@ -101,6 +101,16 @@
       "createdBy": "uers",
       "createdAt": "2026-11-27T22:45:50.699Z",
       "expiresAt": "2026-11-29T22:45:50.699Z"
+    },
+    {
+      "id": "run-20261127-224824-1710",
+      "kind": "run",
+      "targets": "nishi-PC",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-11-27T22:48:24.370Z",
+      "expiresAt": "2026-11-29T22:48:24.370Z"
     }
   ]
 }

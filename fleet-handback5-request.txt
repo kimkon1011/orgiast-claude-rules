@@ -1,0 +1,6 @@
+[作業依頼]
+origin/main（6807296a 以降, PR #2906）を取得し、`node tools/onboarding-sync.mjs --rules-only --force` を実行して、~/.claude/CLAUDE.md と、あれば ~/.codex/AGENTS.md・~/.gemini/GEMINI.md の先頭絶対ルールブロックを更新する。019 と 018 は先頭絶対ルールブロックのみ更新し、ONBOARDING 全文を入れない。014 の CodexSandbox ユーザーは対象外。~/.claude/hooks/onboarding-sync.ps1 も新版があればコピー。終わったら各ファイルのパス・サイズ(bytes)・5文言（通算2回まで／3回目の参照は送らない／先送りしない／実績のある経路／動く前にもう一度確かめる）の有無を 008 に返信。
+
+補足（008で実測した取得元の問題）: ORGIAST_ONBOARDING_URL に過去ブランチ fix/delegation-question-start-and-sync-20261127 が残っている実行環境があり、通常同期で古い本文に戻る。今回だけ実行プロセスの ORGIAST_ONBOARDING_URL を https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/6807296af36d5470aacb35fee62c24e08b8a01f1/ONBOARDING.md に明示上書きして同期し、5文言を再読取する。恒久環境変数は固定しない。既に適用済みなら読み戻しのみでよい。
+
+重複依頼への対処: PR2906の配布が別セッションからも進行中。既に5文言がそろっていれば再適用不要、読み戻し結果だけ返す。人への作業依頼は禁止。

@@ -1,7 +1,7 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-27 17:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-27 18:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 61
+- 案件数: 62
 
 - 011・.stall-sweeper・停止・最終更新 11/26 04:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・20261126-クラフト坂口・金さん待ち・クラフト坂口様 宿題7件の成果物は完成。精算の計算方法・福岡請求書の作り直し・先払い承認・いなば様への送信時期の判断待ち・期限2026-12-03（坂口様への精算金額の返答）・次:金さんの判断に沿って、坂口様への返信・福岡請求書の作り直し・Discord送信を進める（送信は承認後のみ）
@@ -14,6 +14,7 @@
 - 011・D-115 reブース前金: STATUS・金さん待ち・期限切れ（2026-09-30）から57日超過。前金 ¥2,077,369 の支払い完了有無を確認する手段がなく、完了／延期／不要の判断は金さんが必要。・期限なし・次:金さんが「D-115 完了」「D-115 延期 <日付>」「D-115 不要」のいずれかを答える
 - 011・deadline-watch-calid・金さん待ち・PR #2863（期限監視の Calendar ID衝突誤判定の修正、CI 全成功）のマージ＝本番反映は無人起動では実行しない指示のため・期限なし・次:金さんが「可」なら gh pr merge 2863 --squash → 翌朝 8:30 の OrgiastDeadlineWatch 前回の結果=0 を確認（kim-inbox ki-20261127003618-22b7）
 - 011・deadlinewatch-fix-1127・金さん待ち・PR #2863 のマージ承認待ち（無人実行のため本番には反映していない）・期限なし・次:承認を受けたらマージし、nightly-repo を pull してから `schtasks /run /tn OrgiastDeadlineWatch` を実行し、「前回の結果」が 0 になったことを確認する
+- 011・deferral-meta-1127・停止・修正コードは worktree C:/Users/kimko/.claude/wt-deferral-meta（ブランチ fix/deferral-scan-meta-mention）に未コミットで存在（tools/permanent-fix-deferral-scan.mjs に stripDeferralMetaMentions 追加、tests/per・期限なし・次:(1) Codex のシェル実行が落ちる原因を codex exec の直接実行で実測し分類・修復（WSL 復旧 or ネイティブのシェル設定）。(2) PROMPT2.md（同フォルダ）を再委譲してテスト・コミット・RESULT.md。(3) 監督が Windows で node --test を再実行し、PR を作成して CI 合格後に着地。
 - 011・dispatch-1122-21・停止・最終更新 11/22 21:48、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・eight-dai6-1125・停止・最終更新 11/26 14:09、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
 - 011・eight-venue-check-1125・完了・最終更新 11/25 20:27、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、ログに上限・ログアウト・エラー・期限なし・次:なし
@@ -46,7 +47,7 @@
 - 011・sales-14sha-1125・完了・最終更新 11/25 11:34、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 011・sales-followup・停止・最終更新 11/27 07:40、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-link-audit-1126・完了・監査・修正・書き出し完了、13:00 毎時本番で動作確認済み・期限2026-11-26 当日・次:なし（毎時ジョブが send-commitments を追跡し stuck-export を毎時更新）
-- 011・営業 次回連絡日・金さん待ち・最終更新 11/27 17:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・営業 次回連絡日・金さん待ち・最終更新 11/27 18:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・session-1126-hourly・金さん待ち・JACE 藤野様宛ての返信下書きが打合せ前の文面のまま。修正版の送信可否は金さんの承認が要る（kim-inbox ki-20261126081310-6cf5）・期限2026-12-11（先方の返信期限）／着手期限 2026-12-09・次:承認が来たら seisaku-team@ の下書きを修正版に差し替え、gmail-draft.mjs の自動チェックを通して送信し、送信済みを読み戻す
 - 011・session-1205・完了・handoff-audit 8件の再発検証が終わった。f61ffeb282843871（P4）は再発0件で、検証済み台帳に追加した（PR #2878 MERGED 2026-11-27T03:24:51Z）。残り7件は 11/26 12:00Z 以降も同じ型の文が出ているため、台帳には入れていない・期限なし・次:next-session.md の8番は完了したので次回は選ばない（無人だと next-session.md を書き換えられず、この STATUS.md に残している）。9〜15番の7件は ID ごとに検証し直しても消えない。直すべきなのは、W 型の「完了待ち」の文が出る仕組みのほう。worktree ~/.claude/wt-handoff-verify-
 - 011・session-cap-1126・金さん待ち・最終更新 11/26 19:36、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ

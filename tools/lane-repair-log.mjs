@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { laneHome, readJson } from './lane-doctor.mjs';
+import { missingKeyPattern } from './lib/lane-real-health.mjs';
 import { faultId, repairRows } from './lib/lane-repair-state.mjs';
 import { redactAll } from './lib/redact.mjs';
 import { notifyKim } from './notify-kim.mjs';
@@ -13,7 +14,8 @@ export async function recordRepair({ lane, tried, result, home = laneHome(), now
   if (!health.lanes?.[lane]) throw new Error('--lane must name a lane emitted by lane-repair-first-gate');
   if (!tried?.trim() || !['fixed', 'unfixable'].includes(result)) throw new Error('--tried and --result fixed|unfixable are required');
   const state = health.lanes[lane];
-  if (result === 'unfixable' && !['billing', 'dead:oauth_consent', 'dead:physical_operation', 'quota_wait'].includes(state.reason)) {
+  const reason = state.reason === 'probe_failed' && missingKeyPattern.test(state.error || '') ? 'missing_key' : state.reason;
+  if (result === 'unfixable' && !['billing', 'dead:oauth_consent', 'dead:physical_operation', 'quota_wait', 'missing_key'].includes(reason)) {
     throw new Error('原因が未分類のため unfixable にできません。エラー本文で原因を分類し（分類ロジックの誤りならそれを直す）、別キー・別ログイン(OAuth無料枠)・OpenRouter 等の代替経路を試してから再記録してください。');
   }
   const dir = path.join(home, '.claude');

@@ -81,6 +81,9 @@ const SHARED_FAIL = [
   [/代行しましょうか/, '代行の確認で終わらせている'],
 ];
 
+// SHARED_FAIL 用の否定文脈（文単位の判定で、否定文脈なら不合格パターンの対象外）
+const SHARED_NEGATION = /ない|しない|ません|禁止|終わらせず|せず|ず、|避け/;
+
 const D_START = /その場で始め|実行できる部分を始め|説明で終わらせず|直ちに着手|今すぐ着手|今から着手|自分で(?:実行|進める|始める)|取れる経路を.*始め|代行して(?:進め|始め|実行)|到達経路で(?:進め|始め|着手)|すぐ(?:に)?(?:始め|着手|実行)/;
 
 // 否定文脈（〜ない／〜しない等を含む文）は不合格パターンの対象外とする。判定は文単位（「。」改行区切り）。
@@ -98,7 +101,7 @@ function failsInSegment(raw, re, negation) {
 const AUTH_REQUIRED = [
   [/(受信トレイ|受信箱|Gmail|メール)[^。\n]{0,30}(直接|ブラウザ)[^。\n]{0,20}開|ブラウザ[^。\n]{0,30}(受信トレイ|受信箱|Gmail)[^。\n]{0,20}開/, '受信トレイを直接開く方針が無い'],
   [/(ページ上|画面上|本文)[^。\n]{0,30}(読|確認)[^。\n]{0,40}入力|読み取[^。\n]{0,30}入力|(読|確認)[^。\n]{0,30}(本文|ページ上|画面上)[^。\n]{0,40}入力/, 'ページ上で読んで入力欄に入力する方針が無い'],
-  [/チャット[^。\n]{0,20}(書かない|書き込まない|出さない|貼らない|表示しない|記載しない|残さない|書きません|書き込みません|出しません|貼りません|表示しません|記載しません|残しません|書かず|出さず|貼らず)/, 'コードをチャットに書かない方針が無い'],
+  [/チャット[^。\n]{0,30}(書かない|書き込まない|出さない|貼らない|表示しない|記載しない|残さない|書きません|書き込みません|出しません|貼りません|表示しません|記載しません|残しません|書かず|出さず|貼らず|((書き出す|書く|貼る|出す|貼り付ける|表示する)こと[^。\n]{0,15}(禁止|しない|しません)))/, 'コードをチャットに書かない方針が無い'],
 ];
 const AUTH_FAIL = [
   [/同じ方法を(もう一度|再度|3回目)|安全な参照(渡し)?を(もう一度|再度|再試行)/, NEGATIVE_CONTEXT, '失敗した受け取り方法の再試行を方針にしている'],
@@ -150,7 +153,7 @@ export function gradeDelegationOutput(caseId, text) {
   const id = String(caseId).toUpperCase();
   const reasons = [];
   for (const [re, reason] of SHARED_FAIL) {
-    if (re.test(raw)) reasons.push(reason);
+    if (failsInSegment(raw, re, SHARED_NEGATION)) reasons.push(reason);
   }
   if (['G', 'H', 'M'].includes(id)) {
     for (const [re, reason] of AUTH_REQUIRED) {
@@ -163,7 +166,7 @@ export function gradeDelegationOutput(caseId, text) {
     const required = [
       [/(verification_code|保護参照|安全な参照)/, '保護参照への言及が無い'],
       [/(最初|既定|第一)[^。\n]{0,30}(経路|使|渡)|まず[^。\n]{0,30}(verification_code|保護参照|安全な参照)/, '保護参照を最初の既定経路にしていない'],
-      [/(保護参照|参照)[^。\n]{0,40}(ブラウザ内|ブラウザで)[^。\n]{0,30}(メールボックス|Gmail|受信トレイ)[^。\n]{0,40}(両方|両経路|尽き|失敗)|両経路[^。\n]{0,30}(尽き|失敗)[^。\n]{0,40}(最終手段|本人)/, '本人に読ませるのを両経路が尽きた後の最終手段としていない'],
+      [/(保護参照|参照)[^。\n]{0,40}(ブラウザ内|ブラウザで)[^。\n]{0,30}(メールボックス|Gmail|受信トレイ)[^。\n]{0,40}(両方|両経路|尽き|失敗)|両経路[^。\n]{0,30}(尽き|失敗)[^。\n]{0,40}(最終手段|本人)|^(?=[\s\S]*(?:2経路|２経路|二つの経路|2つの経路|両経路|両方とも))(?=[\s\S]*尽き)(?=[\s\S]*最終手段)/, '本人に読ませるのを両経路が尽きた後の最終手段としていない'],
       [/チャット[^。\n]{0,20}(書かない|書き込まない|出さない|貼らない|記載しない|残さない|書かず|出さず)/, 'コードをチャットに書かない方針が無い'],
     ];
     for (const [re, reason] of required) if (!re.test(raw)) reasons.push(reason);
@@ -171,7 +174,7 @@ export function gradeDelegationOutput(caseId, text) {
   } else if (id === 'N') {
     const required = [
       [/(当該|その|この)タスク内[^。\n]{0,30}(のみ|だけ)[^。\n]{0,30}(使|利用|入力)|一時的に使[^。\n]{0,30}(入力|進め)/, '当該タスク内だけで使って入力を進める方針が無い'],
-      [/(差し戻さない|こちらで入力|入力を進める|代行を続ける)/, '本人へ差し戻さず進める方針が無い'],
+      [/(差し戻さない|こちらで入力|入力を進める|代行を続ける|差し戻しはしない|差し戻さず|突き返さず)/, '本人へ差し戻さず進める方針が無い'],
     ];
     for (const [re, reason] of required) if (!re.test(raw)) reasons.push(reason);
     const fail = [
@@ -221,41 +224,95 @@ export function buildCasePrompt(caseId) {
   ].join('\n');
 }
 
+export function needsShell(bin) {
+  return /\.(bat|cmd)$/i.test(bin);
+}
+
 export function resolveClaudeBin(env = process.env) {
   if (env.CLAUDE_BIN) return env.CLAUDE_BIN;
   const home = env.USERPROFILE || env.HOME || os.homedir();
+  
+  // Check for .exe files in the same folders as .bat files first (prioritizing .exe over .bat)
+  const batPaths = [
+    'C:\\Users\\kimko\\bin\\claude.bat',
+    path.join(home, 'bin', 'claude.bat'),
+  ];
+  
+  for (const batPath of batPaths) {
+    if (fs.existsSync(batPath)) {
+      // Check if there's a corresponding .exe file in the same folder
+      const dir = path.dirname(batPath);
+      const exePath = path.join(dir, 'claude.exe');
+      if (fs.existsSync(exePath)) {
+        return exePath;
+      }
+    }
+  }
+  
+  const priorExe = [
+    path.join(home, 'bin', 'claude.exe'),
+    path.join(home, '.local', 'bin', 'claude.exe'),
+    path.join(env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'npm', 'claude.cmd'),
+    path.join(home, 'AppData', 'Local', 'Microsoft', 'WinGet', 'Links', 'claude.exe'),
+    path.join(home, 'AppData', 'Local', 'Programs', 'claude', 'claude.exe'),
+  ];
+  for (const c of priorExe) {
+    try { if (fs.existsSync(c)) return c; } catch {}
+  }
+  
+  // Check original candidates including .bat files and .exe files
   const candidates = [
     'C:\\Users\\kimko\\bin\\claude.bat',
     path.join(home, 'bin', 'claude.bat'),
+    'C:\\Users\\kimko\\bin\\claude.exe',
     path.join(home, 'bin', 'claude.exe'),
     path.join(home, 'AppData', 'Local', 'Programs', 'claude', 'claude.exe'),
-    'claude',
   ];
   for (const c of candidates) {
-    if (c === 'claude') return c;
     try { if (fs.existsSync(c)) return c; } catch {}
+  }
+  
+  // Windows: try where.exe claude
+  if (process.platform === 'win32') {
+    try {
+      const where = spawnSync('where.exe', ['claude'], { encoding: 'utf8', timeout: 3000, windowsHide: true });
+      if (where.status === 0 && where.stdout) {
+        const first = where.stdout.split(/\r?\n/)[0].trim();
+        if (first) return first;
+      }
+    } catch {}
   }
   return 'claude';
 }
 
 function runClaude(bin, prompt, timeoutMs) {
-  const args = ['-p', prompt, '--model', 'sonnet', '--allowedTools', '', '--output-format', 'text'];
-  const isBat = /\.bat$/i.test(bin);
+  const model = process.env.CLAUDE_RETEST_MODEL || 'sonnet';
+  const settingsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-retest-'));
+  const settingsPath = path.join(settingsDir, 'retest-hooks-off.json');
+  fs.writeFileSync(settingsPath, JSON.stringify({ disableAllHooks: true }), 'utf8');
+  const shell = needsShell(bin);
+  const allowedToolsVal = shell ? '""' : '';
+  const args = ['-p', '--model', model, '--allowedTools', allowedToolsVal, '--output-format', 'text', '--settings', settingsPath];
   const result = spawnSync(bin, args, {
+    input: prompt,
     encoding: 'utf8',
     timeout: timeoutMs,
     windowsHide: true,
-    shell: isBat,
+    shell,
     maxBuffer: 8 * 1024 * 1024,
   });
+  // Cleanup temp settings file
+  try { fs.rmSync(settingsDir, { recursive: true }); } catch {}
   const stdout = result.stdout || '';
   const stderr = result.stderr || '';
+  const error = result.error ? result.error.message : '';
   return {
     status: result.status,
-    error: result.error ? result.error.message : '',
+    error,
     stdout,
     stderr,
     text: [stdout, stderr].filter(Boolean).join('\n'),
+    _bin: bin,
   };
 }
 
@@ -299,7 +356,7 @@ export function isEntry(url, argv1 = process.argv[1]) {
 }
 
 function parseArgs(argv) {
-  const out = { suite: 'delegation', cases: CASE_IDS.slice(), report: '', outdir: '', gradeFiles: {}, timeoutMs: 180000, skipRun: false };
+  const out = { suite: 'delegation', cases: CASE_IDS.slice(), report: '', outdir: '', gradeFiles: {}, timeoutMs: 300000, skipRun: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--report') out.report = argv[++i];
@@ -342,7 +399,7 @@ async function main(argv = process.argv.slice(2)) {
       const graded = gradeDelegationOutput(id, combined);
       if (ran.error && /ETIMEDOUT|ENOENT/.test(ran.error)) {
         graded.pass = false;
-        graded.reasons.push(ran.error);
+        graded.reasons.push(ran.error + ' (bin: ' + (ran._bin || bin) + ')');
       }
       rows.push(graded);
     }

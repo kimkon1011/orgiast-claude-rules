@@ -1,4 +1,4 @@
-# session-status  PC=018  host=018  updated 2026-11-27 17:05 JST
+# session-status  PC=018  host=018  updated 2026-11-27 18:05 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
 - 案件数: 25

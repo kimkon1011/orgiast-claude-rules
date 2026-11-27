@@ -76,6 +76,7 @@ const AUTH_MIN_FAILURES = 5;
 const http402 = text => /(?<!\d)402(?!\d)/.test(String(text));
 const http403 = text => /(?<!\d)403(?!\d)/.test(String(text));
 const http429 = text => /(?<!\d)429(?!\d)/.test(String(text));
+export const missingKeyPattern = /利用可能なキーを持つ候補がありません/;
 export const authFailurePattern = /basic authentication|HTTP\s*401|\b401\b|unauthorized|login required|token.*expired|Missing bearer|Failed to refresh token|access token could not be refreshed|log out and sign in again|sign in again|refresh_token|token_revoked|invalid_grant|invalid_api_key|not logged in/i;
 // ChatGPT/Codex の定額枠切れは 429 も "usage limit" も含まず
 // 「Upgrade to Pro ... purchase more credits or try again at <時刻>」という散文で届く。

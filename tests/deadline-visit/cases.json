@@ -859,5 +859,264 @@
    "N2"
   ],
   "visitCase": true
+ },
+ {
+  "id": "C14",
+  "title": "融資用の登記事項証明書",
+  "today": "2026-12-03",
+  "ask": "銀行に出す登記簿、ネットで頼んでおいて。",
+  "facts": "案件: G銀行の融資。会社の登記事項証明書1通を銀行へ郵送。\n記録（2026-12-02 G銀行担当のメール）: 2026-12-09（水）必着。\n材料: (net) 登記・供託オンライン申請システムで今日請求→法務局の発送は翌営業日、郵送2営業日（過去実績）で事務所着→銀行へレターパックプラス1営業日。(window) 明日12/4に大阪事務所が法務局窓口で取得→レターパックプラス1営業日（日本郵便のお届け日数検索で確認済み）。\n他の案件の記録: N1=会社の印鑑証明書（法務局・期限12/15）が未取得。N2=社員の住民票（区役所）。",
+  "deadline": "2026-12-09",
+  "options": [
+   {
+    "id": "net",
+    "name": "ネット請求→転送",
+    "steps": [
+     {
+      "label": "発送",
+      "days": 1,
+      "unit": "business",
+      "source": "確認済み"
+     },
+     {
+      "label": "郵送",
+      "days": 2,
+      "unit": "business",
+      "source": "確認済み"
+     },
+     {
+      "label": "転送",
+      "days": 1,
+      "unit": "business",
+      "source": "確認済み"
+     }
+    ]
+   },
+   {
+    "id": "window",
+    "name": "12/4窓口",
+    "visit": true,
+    "start": "2026-12-04",
+    "steps": [
+     {
+      "label": "窓口",
+      "days": 0,
+      "unit": "business",
+      "source": "確認済み"
+     },
+     {
+      "label": "LP",
+      "days": 1,
+      "unit": "business",
+      "source": "確認済み"
+     }
+    ]
+   }
+  ],
+  "needs": [],
+  "mustBundle": [
+   "N1"
+  ],
+  "mustNotBundle": [
+   "N2"
+  ],
+  "visitCase": true
+ },
+ {
+  "id": "C15",
+  "title": "源泉所得税の納期の特例の届出",
+  "today": "2026-12-01",
+  "ask": "納期の特例の届出、税務署に出しに行く？",
+  "facts": "案件: 源泉所得税の納期の特例の承認申請書を税務署へ。\n記録（顧問税理士 2026-11-28）: 2026-12-10（木）までに提出。\n材料: (etax) e-Taxで提出（即日到達・国税庁ページで確認済み）。(yuso) 郵送 2営業日（日本郵便のお届け日数検索で確認済み）。(madoguchi) 税務署窓口へ持参。\n他の案件の記録: N1=給与支払事務所等の開設届出書（税務署・期限12/15）が未提出。N2=社保の資格取得届（年金事務所）。",
+  "deadline": "2026-12-10",
+  "options": [
+   {
+    "id": "etax",
+    "name": "e-Tax",
+    "steps": [
+     {
+      "label": "e-Tax",
+      "days": 0,
+      "unit": "business",
+      "source": "確認済み"
+     }
+    ]
+   },
+   {
+    "id": "yuso",
+    "name": "郵送",
+    "steps": [
+     {
+      "label": "郵送",
+      "days": 2,
+      "unit": "business",
+      "source": "確認済み"
+     }
+    ]
+   },
+   {
+    "id": "madoguchi",
+    "name": "窓口",
+    "visit": true,
+    "steps": [
+     {
+      "label": "窓口",
+      "days": 0,
+      "unit": "business",
+      "source": "確認済み"
+     }
+    ]
+   }
+  ],
+  "needs": [],
+  "mustBundle": [
+   "N1"
+  ],
+  "mustNotBundle": [
+   "N2"
+  ],
+  "visitCase": true
+ },
+ {
+  "id": "C16",
+  "title": "期限が記録に無い（消防の点検報告）",
+  "today": "2026-12-01",
+  "ask": "消防設備の点検報告書、いつまでにどう出す？",
+  "facts": "案件: 店舗の消防用設備等点検結果報告書を消防署へ。\n記録: 期限台帳・メール・点検業者の書類のどこにも提出期限が書かれていない。\n材料: (denshi) 電子申請（受付即日・市のページで確認済み）。(yuso) 郵送 2営業日（日本郵便のお届け日数検索で確認済み）。",
+  "deadline": null,
+  "options": [
+   {
+    "id": "denshi",
+    "name": "電子申請",
+    "steps": [
+     {
+      "label": "電子",
+      "days": 0,
+      "unit": "business",
+      "source": "確認済み"
+     }
+    ]
+   },
+   {
+    "id": "yuso",
+    "name": "郵送",
+    "steps": [
+     {
+      "label": "郵送",
+      "days": 2,
+      "unit": "business",
+      "source": "確認済み"
+     }
+    ]
+   }
+  ],
+  "needs": [],
+  "mustBundle": [],
+  "mustNotBundle": [],
+  "visitCase": false
+ },
+ {
+  "id": "C17",
+  "title": "見積書原本の期限（記録の食い違い）",
+  "today": "2026-12-02",
+  "ask": "H社の見積書原本、普通郵便で送っておいて。",
+  "facts": "案件: H社へ見積書原本を郵送。\n記録A（社内の案件一覧・2026-11-20）: 2026-12-20 必着。\n記録B（H社担当の2026-12-01のメール）: 社内決裁が早まったため 2026-12-08（火）必着でお願いします。\n材料: (futsu) 普通郵便 4営業日（日本郵便のお届け日数検索で確認済み）。(sokutatsu) 速達 1営業日（同）。(lp) レターパックプラス 1営業日（同）。",
+  "deadline": "2026-12-08",
+  "options": [
+   {
+    "id": "futsu",
+    "name": "普通郵便",
+    "steps": [
+     {
+      "label": "郵送",
+      "days": 4,
+      "unit": "business",
+      "source": "確認済み"
+     }
+    ]
+   },
+   {
+    "id": "sokutatsu",
+    "name": "速達",
+    "steps": [
+     {
+      "label": "郵送",
+      "days": 1,
+      "unit": "business",
+      "source": "確認済み"
+     }
+    ]
+   },
+   {
+    "id": "lp",
+    "name": "レターパックプラス",
+    "steps": [
+     {
+      "label": "郵送",
+      "days": 1,
+      "unit": "business",
+      "source": "確認済み"
+     }
+    ]
+   }
+  ],
+  "needs": [],
+  "mustBundle": [],
+  "mustNotBundle": [],
+  "visitCase": false
+ },
+ {
+  "id": "C18",
+  "title": "車庫証明（所要日数が未確認の手段）",
+  "today": "2026-12-01",
+  "ask": "新しい社用車の車庫証明、警察署に行かないとだめ？",
+  "facts": "案件: 新しい社用車の自動車保管場所証明（車庫証明）を警察署へ申請。\n記録（ディーラー 2026-11-30）: 納車手続きのため 2026-12-11（金）までに申請。\n材料: (oss) ワンストップサービス（OSS）で電子申請（受付即日・OSSのページで確認済み）。(yuso) 郵送申請（受け付けているか・処理日数の情報は手元に無い）。(madoguchi) 社員が警察署へ持参（片道30分）。\n他の案件の記録: N1=同じ警察署への保管場所の変更届（V02・期限12/20）。N2=V01の車検（運輸支局）。",
+  "deadline": "2026-12-11",
+  "options": [
+   {
+    "id": "oss",
+    "name": "OSS",
+    "steps": [
+     {
+      "label": "OSS",
+      "days": 0,
+      "unit": "business",
+      "source": "確認済み"
+     }
+    ]
+   },
+   {
+    "id": "yuso",
+    "name": "郵送",
+    "steps": [
+     {
+      "label": "郵送",
+      "days": 2,
+      "unit": "business"
+     }
+    ]
+   },
+   {
+    "id": "madoguchi",
+    "name": "持参",
+    "visit": true,
+    "steps": [
+     {
+      "label": "持参",
+      "days": 0,
+      "unit": "business",
+      "source": "確認済み"
+     }
+    ]
+   }
+  ],
+  "needs": [],
+  "mustBundle": [
+   "N1"
+  ],
+  "mustNotBundle": [
+   "N2"
+  ],
+  "visitCase": true
  }
 ]

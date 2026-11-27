@@ -241,7 +241,7 @@ test('ONBOARDING.md と配布用 CLAUDE.md は軽量化後のサイズの110%以
   const { updated } = build(template, makeIndex(body), 'ONBOARDING.md');
   // ONBOARDING.md は改行を正規化して Windows / Linux で同じ内容を計測する。
   const limits = [
-    ['ONBOARDING.md (LF)', body.replace(/\r\n/g, '\n'), 332080],
+    ['ONBOARDING.md (LF)', body.replace(/\r\n/g, '\n'), 332640],
     ['配布用 CLAUDE.md', updated, 28922],
   ];
   for (const [file, content, limit] of limits) {

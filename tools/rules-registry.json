@@ -183,6 +183,35 @@
         "recall": 1,
         "note": "node --test tools/lane-repair-detector.test.mjs; synthetic transcript fixtures, actual execution; source quotes, quota, failed/expired/wrong-lane records included"
       }
+    },
+    {
+      "id": "immediate-start-no-handback",
+      "short": "isnh",
+      "source": "ONBOARDING §1 手続き代行の即時開始ルール",
+      "summary": "手続き・手順相談を説明や確認、ユーザーへの検証依頼で差し戻さず、実行できる部分をその場で始める",
+      "detect": {
+        "scope": "assistant_text",
+        "detector": "delegation-handback"
+      },
+      "gate": "rule-compliance-loop.mjs",
+      "enforcement": "warn",
+      "thresholds": {
+        "violationsToBlock": 3,
+        "daysObserved": 3
+      },
+      "validation": {
+        "fixtureCount": 10,
+        "precision": 1,
+        "minPrecision": 0.9,
+        "status": "validated",
+        "measuredOn": "2026-11-27",
+        "truePositives": 5,
+        "falsePositives": 0,
+        "trueNegatives": 5,
+        "falseNegatives": 0,
+        "recall": 1,
+        "note": "node --test tools/lib/delegation-handback-detector.test.mjs; synthetic assistant replies only"
+      }
     }
   ]
 }

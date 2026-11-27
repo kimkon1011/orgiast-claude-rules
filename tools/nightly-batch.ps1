@@ -401,6 +401,30 @@ try {
         } catch { Write-NightlyLog 'rule-compliance-loop' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $ruleComplianceOutput)) }
     } else { Write-NightlyLog 'rule-compliance-loop' 'skip:ファイルなし' }
 
+    # 毎月1日: 手続き代行の即時開始ルールを A〜E で再テストする。失敗しても後続は続ける。
+    $today = Get-Date
+    if ($today.Day -eq 1) {
+        $delegationRetest = $null
+        foreach ($repo in $repos) {
+            $candidate = Join-Path $repo 'tools\delegation-retest.mjs'
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) { $delegationRetest = $candidate; break }
+        }
+        if ($delegationRetest) {
+            $delegationOutput = $null
+            try {
+                $reportDir = Join-Path $HOME '.claude\reports'
+                if (-not (Test-Path -LiteralPath $reportDir)) { New-Item -ItemType Directory -Path $reportDir -Force | Out-Null }
+                $stamp = $today.ToString('yyyyMM')
+                $reportPath = Join-Path $reportDir ("delegation-retest-$stamp.md")
+                $delegationOutput = @(& $node.Source $delegationRetest '--report' $reportPath 2>&1)
+                $delegationExit = $LASTEXITCODE
+                Write-NightlyStepResult 'delegation-retest' $delegationExit $delegationOutput ' (警告・後続処理続行)'
+            } catch { Write-NightlyLog 'delegation-retest' ("error:" + $_.Exception.Message + ' (警告・後続処理続行): ' + (Format-NightlyDetail $delegationOutput)) }
+        } else { Write-NightlyLog 'delegation-retest' 'skip:ファイルなし' }
+    } else {
+        Write-NightlyLog 'delegation-retest' ('skip:monthly (today=' + $today.ToString('yyyy-MM-dd') + ')')
+    }
+
     # 日次の実測で復旧したレーンを再検出し、demote/cooldown を解除する。
     # probe の失敗でも委譲ヘルス確認と後続処理は続行する。
     $laneDoctor = $null

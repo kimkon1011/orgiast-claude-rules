@@ -47,6 +47,10 @@ test('default execution plan retains repository, keys, and rules sync', () => {
   assert.deepEqual(executionPlan([]), { syncRepository: true, provisionKeys: true, syncRules: true });
 });
 
+test('--rules-only skips repository and key provisioning', () => {
+  assert.deepEqual(executionPlan(['--rules-only']), { syncRepository: false, provisionKeys: false, syncRules: true });
+});
+
 test('repository guard runs once per local calendar day despite less than 24 hours elapsed', () => {
   const previous = { last: new Date(2026, 10, 23, 3, 29).toISOString() };
   assert.equal(shouldRunRepositorySync(previous, new Date(2026, 10, 23, 23, 59)), false);
@@ -147,6 +151,9 @@ test('PowerShell hook retains self-update and invokes keys-only sync', () => {
   assert.match(text, /Get-FileHash -LiteralPath \$selfUpdateSource -Algorithm SHA256/);
   assert.match(text, /Copy-Item -LiteralPath \$selfUpdateSource -Destination \$selfUpdateTarget -Force/);
   assert.match(text, /& \$\(if .*Get-Command node -CommandType Application.*\) \$keysSync --keys-only/);
+  assert.match(text, /Invoke-NodeRulesSync/);
+  assert.match(text, /--rules-only/);
+  assert.match(text, /Place-AbsoluteRulesOnTarget|絶対ルール/);
 });
 
 test('preserves bytes outside existing markers', () => {

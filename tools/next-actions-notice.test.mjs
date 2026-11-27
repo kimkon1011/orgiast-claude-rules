@@ -50,13 +50,16 @@ test('マーカーが無ければ無音になる', () => {
   assert.deepEqual(ctx.stderr, []);
 });
 
-test('29時間前なら出力され、31時間前なら無音になる', () => {
+test('29時間前なら出力され、31時間前ならstderrで古さを知らせる', () => {
   const fresh = setup(fixture('2026/9/4 16:00:00', threeActions()));
   const stale = setup(fixture('2026/9/4 04:00:00', threeActions()));
   assert.equal(runNextActionsNotice(fresh.options).fresh, true);
   assert.equal(fresh.stdout.length, 1);
   assert.equal(runNextActionsNotice(stale.options).fresh, false);
   assert.deepEqual(stale.stdout, []);
+  assert.equal(stale.stderr.length, 1);
+  assert.match(stale.stderr[0], /next-actions-notice: 台帳が古い/);
+  assert.match(stale.stderr[0], /OrgiastMorningBatch/);
 });
 
 test('解釈できない生成日時は無音でstderrに1行出す', () => {

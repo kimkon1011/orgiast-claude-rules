@@ -1080,6 +1080,11 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
     ...reserved.filter(i => i.kind === 'ask').sort(unseenFirst).slice(0, 5),
   ];
   const allAsks = eligible.filter(i => i.kind === 'ask');
+  // Reserve slots for asks last shown 7+ days ago so new asks cannot starve them forever.
+  const longUnshownAsk = item => item.lastShownAt
+    && now - Date.parse(item.lastShownAt) >= 7 * 86400000;
+  const longUnshownAsks = allAsks.filter(longUnshownAsk)
+    .sort((a, b) => Date.parse(a.lastShownAt) - Date.parse(b.lastShownAt)).slice(0, 2);
   const infos = eligible.filter(i => i.kind === 'info' && !i.dailyProgress);
   const deadlines = eligible.filter(i => i.kind === 'deadline').sort((a, b) => Number(own(b)) - Number(own(a))
     || deadlineDays(a, now) - deadlineDays(b, now) || String(a.key).localeCompare(String(b.key)));
@@ -1088,6 +1093,7 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   const otherInfos = infos.filter(i => !own(i) && !isHighInfo(i)).sort(newestFirst);
   const candidates = [...new Set([
     ...required,
+    ...longUnshownAsks,
     ...allAsks.filter(own).sort(askPriority).slice(0, 5),
     ...daily.sort(unseenFirst),
     ...allAsks.filter(i => i.urgent && !own(i)).sort(askPriority).slice(0, 5),

@@ -8,10 +8,10 @@ import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
 
-const REASON = 'kim 2026-09-17 改定: 既定 medium。low 禁止。監督モデルと実装先（Codex）を節約目的で下げない';
+const REASON = 'kim 2026-11-18 改定: 既定 high（Artificial Analysis 322タスク実測: high 58点 $7.51/タスク 31分, max 56点 $44.22/2.2hで高コスト低品質, low 48点 $2.49/13分）。medium/low 禁止。';
 
 export function isDowngradeValue(value) {
-  return String(value ?? '').toLowerCase() === 'low';
+  return ['low', 'medium'].includes(String(value ?? '').toLowerCase());
 }
 
 function comparablePath(value) {
@@ -72,7 +72,7 @@ export function restoreEffortLevel(settingsPath, { now = Date.now(), backupDir, 
   try {
     fs.mkdirSync(destinationDir, { recursive: true });
     fs.copyFileSync(settingsPath, path.join(destinationDir, `settings.json.bak-${timestamp}`));
-    settings.effortLevel = 'medium';
+    settings.effortLevel = 'high';
     fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
   } catch { return { changed: false }; }
   return { changed: true, from };
@@ -87,7 +87,7 @@ if (isEntry(import.meta.url)) {
     const modelResult = normalizeSessionSettings(settingsPath);
     if (modelResult.changed) console.log(`[settings-guard] model: ${modelResult.from} → opus`);
     const result = restoreEffortLevel(settingsPath, { includeUnset: true });
-    if (result.changed) console.log(`⚠️ effortLevel が ${result.from} だったため medium へ自動復元しました（kim 2026-09-17 改定: 既定 medium。low 禁止）`);
+    if (result.changed) console.log(`⚠️ effortLevel が ${result.from} だったため high へ自動復元しました（kim 2026-11-18 改定: Artificial Analysis 実測に基づく既定 high。medium/low 禁止）`);
   } else if (process.env.ORGIAST_ALLOW_EFFORT_DOWNGRADE !== '1') {
     try {
       const input = JSON.parse(await readStdinWithTimeout());

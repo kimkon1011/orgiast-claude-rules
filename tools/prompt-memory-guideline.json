@@ -145,7 +145,7 @@
       "howToApply": [
         "まず tools/usage-stats.mjs・cache-audit.mjs・bulk-context-audit.mjs で実測する。",
         "遅延可能な処理は tools/batch-enqueue.mjs で夜間（半額・翌朝）へ回す。",
-        "effortLevel の既定は medium。low は禁止、high は設計・横断調査のセッションのみ。"
+        "effortLevel の既定は high（medium/low 禁止）。Artificial Analysis 実測に基づく。"
       ],
       "check": null,
       "evidence": ["CLAUDE.md ユーザーグローバル節「トークン効率」"]

@@ -92,8 +92,13 @@ Google APIはDWD優先、着手時にサービス別所有アカウントを宣�
 **🔴 既定モデルは Opus。/session-close・記録の追記だけの締め、定型の確認・一覧化・整形・転記だけ Sonnet。迷ったら Opus。旧「自動は Sonnet のみ・Opus 禁止」は廃止。**
 **🔴 CLAUDE.md は恒久ルールのみ。静的な内容を上部に置き、進行中タスク・今日の数字・障害は載せない。報告は前置きなしで §1.1 に従う。モデル切替は乱発しない。探索は Agent ツールの Explore/general-purpose に「結果200字以内・コード本体なし」で委譲。実装は Codex、設計・横断調査・複数仮説は Opus/Fable（§1.16）、軽い確認・締めは Sonnet/Haiku。**
 ### 1.13.1 effortLevelと品質
-effortLevelの既定は **medium**（kim 2026-09-17 改定）、lowは禁止。`settings-quality-guard` がlowへの変更をblockし、SessionStartでmediumへ復元する。highへの引き上げは設計・横断調査の時だけ、セッション単位で行う。thinking予算・監督モデル・実装先（Codex）を節約目的で下げないルールは維持し、節約は委譲・レスポンス数削減・無人ジョブの非Claude化・キャッシュ維持で行う。
-**🔴 大事な判断の前は必ず /advisor に相談してから決めて。**
+effortLevelの既定は **high**（kim 2026-11-18 改定。Artificial Analysis 322タスク実測: high 58点 $7.51/タスク 31分に対し max 56点 $44.22/2.2hと6倍コストで低品質、low 48点 $2.49/13分。highが最良値）。medium/lowは禁止。`settings-quality-guard` がmedium/lowへの変更をblockし、SessionStartでhighへ復元する。thinking予算・監督モデル・実装先（Codex）を節約目的で下げないルールは維持し、節約は委譲・レスポンス数削減・無人ジョブの非Claude化・キャッシュ維持で行う。
+### 1.13.2 相談タイミング（Sonnet + Fable advisor）
+**🔴 Sonnet 5.5 を日常作業（コード作成・テスト実行・文章作成）に使い、要所判断だけ `/advisor fable` で Fable 5.1 に相談する。相談は以下の3タイミングに限定:**
+1. **計画の行き詰まり** — 15分以上進まない設計判断
+2. **同じエラー2回連続** — 根本原因の切り分けが必要な時
+3. **作業完了前** — PR作成・送信・デプロイ直前の最終確認
+**コスト: 全 Opus 比 約1/5（全 Sonnet の場合）。Fable 相談は全体の3%未満に抑制。**
 ### 1.14 permission mode と安全装置
 `setup --converge` が配布する `permissions.defaultMode` は `bypassPermissions`（kim 2026-09-17 決定）。安全は deny リスト（allow-rules.json）と社内 hook の2層で担保する。
 ### 1.15 自律進行・セッション引継ぎ

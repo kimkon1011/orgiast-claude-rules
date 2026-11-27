@@ -91,7 +91,7 @@
 ### PM-13 最適化の順序を守る（測定→キャッシュ→コンテキスト→バッチ→モデル格下げ）
 - 規則: 品質を落とさずに費用だけ下げる。モデル格下げを最初に選ばない。
 - 理由: 順序を誤ると、品質劣化と再作業で総コストが増える。上位制約（コストは下げても開発品質は下げない）に反する。
-- 適用: まず tools/usage-stats.mjs・cache-audit.mjs・bulk-context-audit.mjs で実測する。 / 遅延可能な処理は tools/batch-enqueue.mjs で夜間（半額・翌朝）へ回す。 / effortLevel の既定は medium。low は禁止、high は設計・横断調査のセッションのみ。
+- 適用: まず tools/usage-stats.mjs・cache-audit.mjs・bulk-context-audit.mjs で実測する。 / 遅延可能な処理は tools/batch-enqueue.mjs で夜間（半額・翌朝）へ回す。 / effortLevel の既定は high（medium/low は禁止）。Artificial Analysis 322タスク実測で high が最良値と判明。
 - 検査: 手動（規範）
 - 根拠: CLAUDE.md ユーザーグローバル節「トークン効率」
 

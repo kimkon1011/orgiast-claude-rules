@@ -304,7 +304,7 @@ PowerShell(Get-ScheduledTask -TaskName *)
 | 設定項目 | 既定値・自動化の状態 | 手作業が必要になる場合 |
 |---|---|---|
 | permission mode（安全確認の厳しさ） | 既定 bypassPermissions＝Claudeが操作のたびに確認を求めずに実行するモード（禁止リスト＋hookの2層で危険操作は止める、2026-09-17 kim決定）。設定ファイルに自動で入る。起動時に英語の警告「Bypass Permissions mode」が出たら「Yes, I accept」を選ぶ（本人の同意操作） | 個別PCで従来のautoモードを維持したい場合のみ、環境変数 `ORGIAST_KEEP_PERMISSION_MODE=1` を手動設定（何が変わるか：安全確認の頻度が上がり、Claudeの自動実行が遅くなる代わりに人の目が増える） |
-| effortLevel（思考の深さ） | 既定 medium固定。lowへの変更は自動でブロック・復元される（2026-09-17 kim改定） | 設計・横断調査のセッションだけ一時的にhighへ、Claudeが自分で切替可能。ユーザー操作は不要 |
+| effortLevel（思考の深さ） | 既定 high固定。medium/lowへの変更は自動でブロック・復元される（2026-11-18 kim改定。Artificial Analysis 322タスク実測に基づく） | 常時high。ユーザー操作は不要 |
 | Fable5の利用 | fable-policy.jsonのplanIncludedで判定。監督（設計・指示・レビュー）のみ許可、実装・量産は禁止。hookが自動監視 | プラン変更時、支出レポートで金額を再確認するのは管理者（kim）のみの作業 |
 
 ## 6. パソコンごとの最終チェックリスト
@@ -344,7 +344,7 @@ PowerShell(Get-ScheduledTask -TaskName *)
 
 - 許可ルール15行の内容・手順文言：既存Doc「Claude Code 許可設定の追加手順（全PC共通）」（Drive ID 1mMFbwpDvMZtvqY89oIMzOLKIZdzD2aVPvq4dH5DtJ_w、2026-09-28作成）をそのまま統合。日付が最新かつ唯一の情報源のため採用。
 - permission mode既定bypassPermissions：ONBOARDING.md §1.14（2026-09-17 kim決定）。実機 `C:\Users\uers\.claude\settings.json` のpermissions.defaultModeが実際に"bypassPermissions"であることと一致（2026-09-28時点で確認）。
-- effortLevel既定medium・low禁止：ONBOARDING.md §1.13.1（2026-09-17 kim改定）。実機settings.jsonの"effortLevel": "medium"と一致。
+- effortLevel既定high・medium/low禁止：ONBOARDING.md §1.13.1（2026-11-18 kim改定。Artificial Analysis 322タスク実測）。実機settings.jsonの"effortLevel": "high"と一致。
 - 自動取込・setup --converge・onboarding-syncの挙動：ONBOARDING.md §3.0〜3.0.5。
 - 「allowルールはsetup --convergeで入り、既に配布済みツール（~/orgiast-main/tools/*.mjs等）はwildcard許可済みで個別追加不要」というmemory（index/devtools.md「allowルールはsettings.json直編集でなくsetup --converge…（2026-09-17実測）」）と、「15行は手作業でUI追加」という既存Doc（2026-09-28）は矛盾ではなく役割分担と判断した：setup --convergeが自動でカバーするのはtools/配下のwildcard許可のみで、本番反映系コマンド（clasp/vercelの直接実行）と一部の確認コマンドはwildcard対象外のため、既存Docの手作業手順（日付が新しい・実際にUI操作が必要と明記）をそのまま採用した。
 - Fable5用途制限：ONBOARDING.md §1.16（2026-09-03改定）。

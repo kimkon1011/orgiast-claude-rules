@@ -9,28 +9,28 @@ import { detectEffortDowngrade, restoreEffortLevel } from './settings-quality-gu
 
 const settingsPath = path.join('/tmp', 'quality-guard-home', '.claude', 'settings.json');
 
-test('medium / high は各ツールで警告も拒否も出さない', (t) => {
+test('high は各ツールで警告も拒否も出さない', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'quality-allowed-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const file = path.join(home, '.claude', 'settings.json');
   fs.mkdirSync(path.dirname(file));
-  for (const level of ['medium', 'high']) {
-    fs.writeFileSync(file, JSON.stringify({ effortLevel: level }));
-    assert.deepEqual(restoreEffortLevel(file), { changed: false });
-    for (const tool_name of ['Edit', 'Write', 'MultiEdit', 'Bash', 'PowerShell']) {
-      const text = `"effortLevel": "${level}"`;
-      const tool_input = { file_path: file, new_string: text, content: `{${text}}`, edits: [{ new_string: text }], command: `node -e 'settings.json; ${text}'` };
-      const result = spawnSync(process.execPath, [fileURLToPath(new URL('./settings-quality-guard.mjs', import.meta.url))], {
-        input: JSON.stringify({ tool_name, tool_input }), encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_ALLOW_EFFORT_DOWNGRADE: '' },
-      });
-      assert.equal(result.status, 0);
-      assert.equal(result.stdout, '', `${tool_name}: ${level}`);
-    }
+  const level = 'high';
+  fs.writeFileSync(file, JSON.stringify({ effortLevel: level }));
+  assert.deepEqual(restoreEffortLevel(file), { changed: false });
+  for (const tool_name of ['Edit', 'Write', 'MultiEdit', 'Bash', 'PowerShell']) {
+    const text = `"effortLevel": "${level}"`;
+    const tool_input = { file_path: file, new_string: text, content: `{${text}}`, edits: [{ new_string: text }], command: `node -e 'settings.json; ${text}'` };
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL('./settings-quality-guard.mjs', import.meta.url))], {
+      input: JSON.stringify({ tool_name, tool_input }), encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_ALLOW_EFFORT_DOWNGRADE: '' },
+    });
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, '', `${tool_name}: ${level}`);
   }
 });
 
 test('Edit は settings.json の許容外 effortLevel だけ block する', () => {
   assert.equal(detectEffortDowngrade('Edit', { file_path: settingsPath, new_string: '"effortLevel": "low"' }, settingsPath).blocked, true);
+  assert.equal(detectEffortDowngrade('Edit', { file_path: settingsPath, new_string: '"effortLevel": "medium"' }, settingsPath).blocked, true);
   assert.equal(detectEffortDowngrade('Edit', { file_path: settingsPath, new_string: '"effortLevel": "high"' }, settingsPath).blocked, false);
   assert.equal(detectEffortDowngrade('Edit', { file_path: '/tmp/other.json', new_string: '"effortLevel": "low"' }, settingsPath).blocked, false);
 });
@@ -40,9 +40,9 @@ test('Bash による settings.json の low 化を block する', () => {
   assert.equal(detectEffortDowngrade('Bash', { command }, settingsPath).blocked, true);
 });
 
-test('lowからmedium/highへの修復はシェル経由でも拒否しない', () => {
-  for (const level of ['medium', 'high']) {
-    const command = `sed -i 's/"effortLevel": "low"/"effortLevel": "${level}"/' settings.json`;
+test('low/mediumからhighへの修復はシェル経由でも拒否しない', () => {
+  for (const from of ['low', 'medium']) {
+    const command = `sed -i 's/"effortLevel": "${from}"/"effortLevel": "high"/' settings.json`;
     assert.equal(detectEffortDowngrade('Bash', { command }, settingsPath).blocked, false);
   }
   const command = '$s.effortLevel = "low"; $s | Set-Content settings.json';
@@ -60,7 +60,7 @@ test('ORGIAST_ALLOW_EFFORT_DOWNGRADE=1 なら CLI は block しない', () => {
   assert.equal(result.stdout, '');
 });
 
-test('restoreEffortLevel は low を退避して medium に復元する', (t) => {
+test('restoreEffortLevel は low を退避して high に復元する', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'quality-guard-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, 'settings.json');
@@ -68,7 +68,7 @@ test('restoreEffortLevel は low を退避して medium に復元する', (t) =>
   fs.writeFileSync(file, '{"effortLevel":"low","other":true}\n');
   const result = restoreEffortLevel(file, { now: 0, backupDir: backups });
   assert.deepEqual(result, { changed: true, from: 'low' });
-  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).effortLevel, 'medium');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).effortLevel, 'high');
   const backupFiles = fs.readdirSync(backups);
   assert.equal(backupFiles.length, 1);
   assert.equal(JSON.parse(fs.readFileSync(path.join(backups, backupFiles[0]), 'utf8')).effortLevel, 'low');
@@ -83,7 +83,7 @@ test('restoreEffortLevel は high を変更しない', (t) => {
 });
 
 for (const value of [undefined, null]) {
-  test(`restoreEffortLevel は sessionstart で ${String(value)} を退避して medium にする`, (t) => {
+  test(`restoreEffortLevel は sessionstart で ${String(value)} を退避して high にする`, (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'quality-guard-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const file = path.join(root, 'settings.json');
@@ -92,7 +92,7 @@ for (const value of [undefined, null]) {
     fs.writeFileSync(file, JSON.stringify(settings));
     const result = restoreEffortLevel(file, { now: 0, backupDir: path.join(root, 'backups'), includeUnset: true });
     assert.deepEqual(result, { changed: true, from: '未設定' });
-    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).effortLevel, 'medium');
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).effortLevel, 'high');
     assert.equal(fs.readdirSync(path.join(root, 'backups')).length, 1);
   });
 }
@@ -125,7 +125,7 @@ for (const [label, model, allow, expected] of [
   });
 }
 
-test('sessionstart は effortLevel 未設定も medium にしてバックアップする', (t) => {
+test('sessionstart は effortLevel 未設定も high にしてバックアップする', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'effort-sessionstart-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const claudeDir = path.join(home, '.claude');
@@ -136,7 +136,7 @@ test('sessionstart は effortLevel 未設定も medium にしてバックアッ�
     encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home },
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).effortLevel, 'medium');
-  assert.match(result.stdout, /effortLevel.*未設定.*medium/);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).effortLevel, 'high');
+  assert.match(result.stdout, /effortLevel.*未設定.*high/);
   assert.equal(fs.readdirSync(path.join(claudeDir, 'backups')).length, 1);
 });

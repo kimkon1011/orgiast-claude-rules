@@ -19,7 +19,7 @@
       }
     ]
   },
-  "maxEffortLevel": "medium",
+  "maxEffortLevel": "high",
   "advisorModel": "claude-fable-5-1",
   "idleCompaction": false,
   "memory": {

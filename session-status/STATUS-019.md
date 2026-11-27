@@ -1,4 +1,4 @@
-# session-status  PC=019  host=019  updated 2026-11-28 02:10 JST
+# session-status  PC=019  host=019  updated 2026-11-28 03:10 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "email": "nishi@orgiast.jp", "orgId":
 - 案件数: 21
@@ -11,7 +11,7 @@
 - 019・coel-shiono-1125・完了・最終更新 11/25 19:30、STATUS.mdなし、DONEあり、run.logあり・期限なし・次:なし
 - 019・dispatch-1122-21・停止・最終更新 11/22 21:30、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 019・eight-wiaas-meeting-1125・完了・最終更新 11/25 19:19、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
-- 019・followup-ledger・停止・最終更新 11/28 02:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 019・followup-ledger・停止・最終更新 11/28 03:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 019・STATUS・完了・現行記録2件の訂正追記、kim-inbox の確認（対象ファイル不在）、古川未歩さんDMの確認（019にDiscordトークン無し）まで完了。送信は0件。・期限なし（関連する12/2必着の発送は別タスク）・次:なし。`ki-20261127122235-4760.json` は別PCの kim-inbox にある可能性があるため、該当PCでクローズする。
 - 019・illumi-kono-claim-1125・完了・最終更新 11/25 19:02、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
 - 019・illumi-kono-probe・停止・最終更新 11/25 18:52、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

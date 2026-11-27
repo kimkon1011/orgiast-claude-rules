@@ -12,6 +12,17 @@
       "createdAt": "2026-11-27T12:03:31.433Z",
       "expiresAt": "2026-11-28T00:03:31.433Z",
       "timeoutSeconds": 3600
+    },
+    {
+      "id": "prompt-20261127-124602-8586",
+      "kind": "prompt",
+      "targets": "all",
+      "why": "金さん指示(11/27 20:38): 依頼追跡台帳 followup-ledger の15分タスクを全PCへ即時登録(PR #2900)",
+      "body": "# 全PCへの依頼: followup-ledger（依頼を完了まで追いかける台帳）の定期実行を登録する\n\n金さんの指示（2026-11-27 20:38）「お願いしたものは完了するまで追いかける。全ての AI で使えるように」で追加した `tools/followup-ledger.mjs` を、このPCでも15分ごとに動かします。無人で実行してください。社外送信・削除・支払いはしません。\n\n1. 同期済みリポジトリ（nightly-repo など、`tools/followup-ledger.mjs` があるもの）を最新の origin/main にする。ファイルが無ければ、同期が済むまで待ってから続ける（最大30分）。\n2. `powershell -ExecutionPolicy Bypass -File <repo>\\tools\\register-followup-ledger.ps1 -RunNow` を実行する。\n3. `schtasks /Query /TN OrgiastFollowupLedger /V /FO LIST` で、登録・次回実行時刻・前回の結果を読み戻す。\n4. `node <repo>\\tools\\followup-ledger.mjs status` を1回実行し、共有シートが読めるかを確かめる。読めなければ、エラーの要約（秘密値は書かない）を結果に書く。\n5. 結果（hostname・タスクの状態・前回の結果・status の成否）を fleet の通常の結果報告に書く。\n\nこのPCが担当（担当PC列）になっている依頼だけが送受信の対象です。担当外の依頼は見張りだけで、送信はしません。\nルール: 人や先方に依頼（確認・署名・印刷・郵送・返信・作業）を出したら、その時点で followup-ledger に載せる（rules/followup-ledger.md）。\n",
+      "createdBy": "011NEXT-claude",
+      "createdAt": "2026-11-27T12:46:02.154Z",
+      "expiresAt": "2026-11-28T12:46:02.154Z",
+      "timeoutSeconds": 1800
     }
   ]
 }

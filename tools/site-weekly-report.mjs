@@ -296,11 +296,12 @@ export function guessCompany(subject, snippet) {
   const text = `${subject}\n${snippet}`;
   const labeled = text.match(/(?:会社名|御社名|貴社名|Company)[:：\s]*([^\n\r|]{2,40})/i);
   if (labeled) return labeled[1].trim();
-  const intro = text.match(/(株式会社[A-Za-z0-9０-９ぁ-んァ-ヶー一-龥]{1,40})/);
-  if (intro) return intro[1].trim();
-  const m = text.match(/株式会社[\s　]*([^\s　\n\r]{1,30})/)
-    || text.match(/([^\s　]{2,30}株式会社)/);
-  return m ? String(m[0]).trim() : '';
+  // ひらがなは「の」「と申します」等の助詞なので会社名から除外
+  const intro = text.match(/株式会社[\s　]*([A-Za-z0-9０-９ァ-ヶー一-龥]{1,40})/);
+  if (intro) return `株式会社${intro[1]}`;
+  const corp = text.match(/([A-Za-z0-9０-９ァ-ヶー一-龥]{2,30})株式会社/);
+  if (corp) return `${corp[1]}株式会社`;
+  return '';
 }
 
 export async function defaultAskLlm(prompt, { providers = ['deepseek', 'groq', 'mistral'] } = {}) {

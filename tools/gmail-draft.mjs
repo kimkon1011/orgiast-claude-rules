@@ -30,9 +30,11 @@ import { validateWeekdays } from './lib/weekday-validator.mjs';
 import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 import { acquireSendDedupe, SendDedupeError } from './lib/send-dedupe.mjs';
 import { applyBoothCc } from './lib/booth-sales-cc.mjs';
+import { applyInvoiceCc, draftAttachmentNames } from './lib/invoice-cc.mjs';
 import { assertNoHandback, stripHumanOnly } from './lib/handback-guard.mjs';
 
 const BOOTH_CC = 'satou@orgiast.jp';
+const INVOICE_CC = 'keiri2@orgiast.jp';
 
 export const GMAIL_COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
 export const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -387,12 +389,17 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       if (args['body-file'] !== undefined) { try { preface = (deps.readFile ?? (p => fs.readFileSync(p, 'utf8')))(args['body-file']); } catch { throw configError(); } }
       const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
       const originalRaw = await (deps.fetchMessageRaw ?? (options => fetchMessageRaw({ ...options, fetchImpl, getToken })))({ user, id: args.forward });
-      const boothCc = applyBoothCc({ to: args.to, cc: args.cc, body: `${preface}\n${Buffer.from(originalRaw, 'base64url').toString('utf8')}`, booth: args.booth });
-      const raw = buildForwardRaw({ from: user, to: args.to, cc: boothCc.cc, preface, messageId: args.forward, originalRaw });
-      const boothReport = boothCc.added ? { boothCcAdded: BOOTH_CC } : {};
-      if (args['dry-run']) { emit({ ok: true, ...boothReport, raw, headers: Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0] }, `raw: ${raw}${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}`); return 0; }
+      const originalSource = Buffer.from(originalRaw, 'base64url').toString('utf8');
+      const originalHeaderEnd = originalSource.search(/\r?\n\r?\n/u);
+      const originalSubject = decodeHeader(parseHeaders(originalHeaderEnd < 0 ? originalSource : originalSource.slice(0, originalHeaderEnd)).get('subject') ?? '');
+      const boothCc = applyBoothCc({ to: args.to, cc: args.cc, body: `${preface}\n${originalSource}`, booth: args.booth });
+      const invoiceCc = applyInvoiceCc({ to: args.to, cc: boothCc.cc, subject: originalSubject, body: preface });
+      const raw = buildForwardRaw({ from: user, to: args.to, cc: invoiceCc.cc, preface, messageId: args.forward, originalRaw });
+      const ccReport = { ...(boothCc.added ? { boothCcAdded: BOOTH_CC } : {}), ...(invoiceCc.added ? { invoiceCcAdded: INVOICE_CC } : {}) };
+      const ccHuman = `${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}${invoiceCc.added ? `\ninvoiceCcAdded: ${INVOICE_CC}` : ''}`;
+      if (args['dry-run']) { emit({ ok: true, ...ccReport, raw, headers: Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0] }, `raw: ${raw}${ccHuman}`); return 0; }
       const result = await createDraft({ user, raw, fetchImpl, getToken });
-      emit({ ok: true, ...boothReport, ...result }, `転送下書きを作成しました: ${result.id} (${user})${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}`);
+      emit({ ok: true, ...ccReport, ...result }, `転送下書きを作成しました: ${result.id} (${user})${ccHuman}`);
       return 0;
     }
     if (Object.hasOwn(args, 'send')) {
@@ -423,9 +430,18 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       } catch { consistency = await inspect(); }
       const draftText = mimeText(draft?.message?.payload).text;
       const draftHeader = name => (headers ?? []).filter(header => String(header.name).toLowerCase() === name).map(header => header.value);
-      const boothCc = applyBoothCc({ to: draftHeader('to'), cc: draftHeader('cc'), subject: draftHeader('subject').join(' '), body: draftText, booth: args.booth });
+      const draftSubject = draftHeader('subject').join(' ');
+      const boothCc = applyBoothCc({ to: draftHeader('to'), cc: draftHeader('cc'), subject: draftSubject, body: draftText, booth: args.booth });
       if (boothCc.added) {
         emit({ ok: false, errorKind: 'booth_cc_missing', boothCcAdded: BOOTH_CC, reason: boothCc.reason }, `ブース営業メールのCCに ${BOOTH_CC} がありません。下書きを修正してから送信してください。`);
+        return 2;
+      }
+      const invoiceCc = applyInvoiceCc({
+        to: draftHeader('to'), cc: draftHeader('cc'), subject: draftSubject, body: draftText,
+        attachments: draftAttachmentNames(draft?.message?.payload),
+      });
+      if (invoiceCc.added) {
+        emit({ ok: false, errorKind: 'invoice_cc_missing', invoiceCcAdded: INVOICE_CC, reason: invoiceCc.reason }, `請求書メールのCCに ${INVOICE_CC} がありません。下書きを修正してから送信してください。`);
         return 2;
       }
       const bookingUrls = findSecretaryBookingUrls(draftText);
@@ -510,8 +526,10 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     if (args['thread-id'] !== undefined && !/^[A-Za-z0-9_-]+$/u.test(args['thread-id'])) throw configError();
     const attachments = (args.attach ?? []).map(file => { try { return { name: path.basename(file), data: (deps.readAttachment ?? fs.readFileSync)(file) }; } catch { throw configError(); } });
     const boothCc = applyBoothCc({ to: args.to, cc: args.cc, subject: args.subject ?? '', body, booth: args.booth });
-    const input = { inReplyTo: args['in-reply-to'], from: user, to: args.to, cc: boothCc.cc, subject: args.subject ?? 'Re: (取得予定)', body, attachments };
-    const boothReport = boothCc.added ? { boothCcAdded: BOOTH_CC } : {};
+    const invoiceCc = applyInvoiceCc({ to: args.to, cc: boothCc.cc, subject: args.subject ?? '', body, attachments: attachments.map(file => file.name) });
+    const input = { inReplyTo: args['in-reply-to'], from: user, to: args.to, cc: invoiceCc.cc, subject: args.subject ?? 'Re: (取得予定)', body, attachments };
+    const ccReport = { ...(boothCc.added ? { boothCcAdded: BOOTH_CC } : {}), ...(invoiceCc.added ? { invoiceCcAdded: INVOICE_CC } : {}) };
+    const ccHuman = `${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}${invoiceCc.added ? `\ninvoiceCcAdded: ${INVOICE_CC}` : ''}`;
     const guard = guardRecipients(input, (deps.loadLedger ?? loadLedger)());
     if (guard.blocked) {
       action = 'chat-display';
@@ -526,8 +544,8 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         headers = headers.replace(/\r\n(?:In-Reply-To|References):[^\r\n]*/gu, '');
         headers += '\r\nIn-Reply-To: (取得予定)\r\nReferences: (返信先の References を取得予定) (取得予定)';
       }
-      emit({ ok: true, ...boothReport, raw, headers, ...(args['thread-id'] ? { threadId: args['thread-id'] } : {}) },
-        `${args['thread-id'] ? `threadId: ${args['thread-id']}\n` : ''}${headers}\n\nraw: ${raw}${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}`);
+      emit({ ok: true, ...ccReport, raw, headers, ...(args['thread-id'] ? { threadId: args['thread-id'] } : {}) },
+        `${args['thread-id'] ? `threadId: ${args['thread-id']}\n` : ''}${headers}\n\nraw: ${raw}${ccHuman}`);
       return 0;
     }
     const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
@@ -540,7 +558,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     const result = await createDraft({ user, raw, threadId: args['thread-id'], fetchImpl,
       getToken,
     });
-    emit({ ok: true, ...boothReport, ...result }, `下書きを作成しました: ${result.id} (${user})${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}`);
+    emit({ ok: true, ...ccReport, ...result }, `下書きを作成しました: ${result.id} (${user})${ccHuman}`);
     return 0;
   } catch (error) {
     if (error instanceof SendDedupeError) {

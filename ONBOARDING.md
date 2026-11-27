@@ -222,6 +222,7 @@ PR は作った席が `node tools/pr-land.mjs --title "<題>" --body-file <本�
 - Discordの面談設定などから自動で作る応募者・求人の面談予定は、seisaku-team@orgiast.jp のカレンダーに作り、kim@orgiast.jp は参加者に入れず、kim のカレンダーにも作らない。
 
 🔴 ブース営業（展示会ブース・Reブース・出展関連）の社外メールは佐藤優奈さん（satou@orgiast.jp）を必ずCCに入れる。gmail-draft.mjs 等が config/booth-sales-cc.json で自動付与し、既存下書きの送信でCC欠落なら止める（2026-11-23 kim 指示）。
+🔴 請求書を送るメール（件名・添付に請求書）は必ず CC に keiri2@orgiast.jp を入れる。gmail-draft.mjs 等が config/invoice-cc.json で自動付与し、既存下書きの送信でCC欠落なら止める（2026-11-27 kim 指示）。
 **🔴 メールは送信前に本文全文を提示し明示承認後のみ送る。多数宛は1社ずつ YES を得る。gmail-draft.mjs --send の自動チェック（スレッド全体の合意×見積明細：金額・数量・人件費・納品形態・日程等）を通し、block は修正する。生の Gmail API 送信は禁止。送信後は本文全文・添付の中身・送信日時/元/先/件名をチャットに表示する。**
 **🔴 送信前はsend-context-check。**
 

@@ -102,9 +102,97 @@ test('explicit numbered tasks under 次の1目的 are still collected',()=>{
  assert.equal(r.stats.pending,2);
  assert.match(r.text,/目的内の明示タスク/);
 });
+// 2026-11-27 実測の再現。autopilot が書いた `- why:` / `- first_step:` が残TODOに繰り上がり、
+// 未決の「目的完了: …」も持ち越された。メタデータと完了印は落とし、本物の残TODOだけ残す。
+test('autopilot purpose bullets and 目的完了 are not rotated into 残TODO',()=>{
+ const source=`# autopilot 引き継ぎ
+
+## 次の1目的
+雇用契約書の早期取得と従業員コード反映 [P1タスク|TODO]
+- why: 未取得で給与処理が遅延する可能性
+- first_step: HRシステムで未取得者リスト抽出し、担当へ指示メール送信
+
+## 対象
+C:\\Users\\uers\\.claude\\autopilot\\objective.md
+
+## 残TODO（次の1件を先頭に）
+1. 直近の成果を検証し、目的に向けた次の1施策を選ぶ
+
+## 未決（kim の判断待ち）
+- 目的完了: 雇用契約書は2名とも取得済み。神原さん再署名は kim 2026-11-25 回答「いいえ」で不要
+`;
+ const r=planRotation(source,{now});
+ assert.doesNotMatch(r.text,/why:/);
+ assert.doesNotMatch(r.text,/first_step:/);
+ assert.doesNotMatch(r.text,/目的完了/);
+ assert.match(r.text,/直近の成果を検証し/);
+ assert.equal(r.stats.pending,1);
+ assert.ok(r.stats.completed>=1);
+});
 test('a level-2 heading still activates its own section',()=>{
  const source=`<!-- NEXT-SESSION v1 -->\n<!-- 更新: 2026-09-26 -->\n## 未決（kim の判断待ち）\n1. 見出し境界の確認\n`;
  const r=planRotation(source,{now});
  assert.equal(r.stats.pending,1);
  assert.match(r.text,/見出し境界の確認/);
 });
+
+for (const operation of ['rotate', 'writeHandoff', 'oversized writeHandoff']) {
+  for (const scenario of ['success', 'ENOENT', 'exhausted']) {
+    test(`${operation}: ${scenario} with injected Windows sharing errors`, (t) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rotate-retry-'));
+      t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+      const file = path.join(dir, 'next-session.md');
+      const source = block('2026-09-22', '1. original task');
+      const proposed = operation === 'oversized writeHandoff'
+        ? block(new Date().toISOString().slice(0, 10), '1. ' + 'あ'.repeat(MAX_BYTES))
+        : 'replacement content';
+      fs.writeFileSync(file, source);
+      const waits = [];
+      let calls = 0;
+      let attemptedFile;
+      const error = Object.assign(new Error('sharing failure'), { code: scenario === 'ENOENT' ? 'ENOENT' : 'EPERM' });
+      const attempt = (method, ...args) => {
+        attemptedFile = args[0];
+        calls++;
+        if (scenario !== 'success' || calls < 3) throw error;
+        return fs[method](...args);
+      };
+      const retryOptions = {
+        fsImpl: {
+          renameSync: (...args) => attempt('renameSync', ...args),
+          writeFileSync: (...args) => attempt('writeFileSync', ...args),
+        },
+        sleep: (ms) => waits.push(ms),
+      };
+      const run = () => operation === 'rotate'
+        ? rotate(file, { now, retryOptions })
+        : writeHandoff(file, proposed, retryOptions);
+      if (scenario === 'success') {
+        assert.equal(run().changed, true);
+        assert.equal(calls, 3);
+        assert.deepEqual(waits, [50, 100]);
+        if (operation === 'writeHandoff') assert.equal(fs.readFileSync(file, 'utf8'), proposed);
+        else {
+          assert.match(fs.readFileSync(file, 'utf8'), /rotated queue/);
+          assert.equal(fs.existsSync(attemptedFile), false);
+        }
+      } else {
+        assert.throws(run, (e) => {
+          assert.equal(e, error);
+          if (scenario === 'exhausted') {
+            assert.ok(e.message.includes(attemptedFile));
+            assert.match(e.message, /attempts: 8/);
+          }
+          return true;
+        });
+        assert.equal(calls, scenario === 'ENOENT' ? 1 : 8);
+        assert.deepEqual(waits, scenario === 'ENOENT' ? [] : [50, 100, 200, 400, 800, 1000, 1000]);
+        assert.equal(fs.readFileSync(file, 'utf8'), source);
+        if (operation !== 'writeHandoff') {
+          assert.ok(attemptedFile.endsWith('.tmp'));
+          assert.match(fs.readFileSync(attemptedFile, 'utf8'), /rotated queue/);
+        }
+      }
+    });
+  }
+}

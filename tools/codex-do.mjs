@@ -4,6 +4,8 @@
 // --lane sol|astra|auto / --model astra|sol|<slug> / --effort で指定する。
 // 先頭40行の <!-- lane: astra --> でも指定可。Astra 上限時は Sol へ退避する。
 import { disabledLanes } from './lib/lane-disabled.mjs';
+import { hasModelWarning, isLaneIncompatible, modelWarningRemainder } from './lib/lane-incompatible.mjs';
+export { isLaneIncompatible } from './lib/lane-incompatible.mjs';
 import { GATEWAY_MODELS, OPENROUTER_BASE } from './provider-routing.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -19,7 +21,8 @@ import { isCursorLongTimeoutKind, shouldPreferCursorAgent } from './lib/cursor-d
 import { isCursorUsageHalted } from './lib/cursor-usage-pace.mjs';
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { EX_TEMPFAIL, budgetSummary, claudeFile, decideCodexGate, deferredPayload, isUsageLimitText, parseUsageLimitUntil, providerLimitedUntil, writeCodexCooldownFile } from './lib/executor-gate.mjs';
-import { applyCandidateHealth, coolingBackendNames, deprioritizeRecentFailures, deprioritizeUnreliableBackends, readFallbackBackendHistory, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
+import { applyCandidateHealth, coolingBackendNames, deprioritizeRecentFailures, deprioritizeUnreliableBackends, fallbackBackendFailureDomain, readFallbackBackendHistory, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
+export { fallbackBackendFailureDomain };
 import { readGeminiBudgetStatus } from './gemini-budget-guard.mjs';
 import { acquireLock } from './lib/progress-file-lock.mjs';
 import { scanDiffForClaudeApi } from './app-llm-cost-gate.mjs';
@@ -285,6 +288,27 @@ export function detectQuotaLimit(stdout, stderr, exitStatus = null, promptText =
   return { matched: false };
 }
 
+// 出力ゼロの原因を分類する。ステータスコードと stderr の既知文言から理由を返す。
+// 返り値: 'auth_expired' | 'usage_limit' | 'launch_failed' | 'empty_output'
+// delegation-health の emptyOutputReason（provider:codex 向け）とは異なり、cheap-code/
+// fallback の出力(exit status + stderr のみ、launched 情報無し)から最小の語彙で分類する。
+export function classifyEmptyOutput(output, stderr, exitStatus) {
+  const combined = normalizeQuotes(`${output || ''}\n${stderr || ''}`);
+  const status = Number(exitStatus);
+  // 終了コード 0 かつ出力空 → 純粋な empty_output
+  if (Number.isFinite(status) && status === 0 && !String(output || '').trim()) return 'empty_output';
+  // WSL 起動失敗（Codex が WSL ディストリを見つけられないなど）→ launch_failed
+  if (/(?:WSL ディストリが見つかりません|failed to connect to websocket|ENOENT|command not found|wsl.*not found)/i.test(combined)) return 'launch_failed';
+  // 認証失効 → auth_expired
+  if (/(?:401\s+Unauthorized|Missing bearer or basic auth|Not logged in|Please run.*codex login|invalid_api_key|Failed to refresh token|log out and sign in|or basic authentication in header)/i.test(combined)) return 'auth_expired';
+  // 利用上限到達 → usage_limit
+  if (/(?:You(?:[''']ve| have) hit your usage limit|Usage limit (?:reached|exceeded)|your usage limit.*Upgrade to Pro|Upgrade to Pro \(https:\/\/chatgpt\.com|429.*rate.*limit|Rate limit (?:reached|exceeded))/i.test(combined)) return 'usage_limit';
+  // モデル認証不整合（ChatGPT アカウントで sol/astra）→ auth_expired ではなく起動失敗に近いが、
+  // 「認証構成の誤り」として auth_expired に含める（delegation-health の model_auth_mismatch 相当）。
+  if (/is not supported when using codex with a chatgpt account/i.test(combined)) return 'auth_expired';
+  return 'empty_output';
+}
+
 // Codex の認証失敗。再試行しても直らないので、出力ゼロ再試行を飛ばして代替バックエンドへ回す。
 // 2026-10-17 実測: codex CLI 更新後に未ログインのまま `401 Unauthorized` /
 // `Missing bearer or basic authentication` で exit 1 になり、フォールバック条件
@@ -388,8 +412,15 @@ export function snapshotWorkingTree(cwd, spawnImpl = spawnSync) {
 // なり、空diff→codex の不要な astra 昇格→gemini fallback まで走って failure として台帳に残る
 // (2026-10-19 実測: fallback の直近3件中2件が kind:verify の空diff)。kind を優先する。
 const EDIT_HINT = /実装|作って|修正|直して|追加して|リファクタ|refactor|fix|implement/i;
+// 読み取り専用の明示がある指示は、本文に「修正」等の EDIT_HINT 語があっても編集要求とみなさない。
+// 実害 2026-11-25: 「コード変更は禁止」「修正が入る予定の箇所を列挙」が wantedEdit=true になり
+// 空diff→安いレーン連鎖になった。
+const READ_ONLY_HINT = /読み取り調査|読み取り専用|読み取りのみ|コード変更.{0,10}禁止|コードを変更しない|変更禁止|ファイルを変更しない|編集禁止|read[\s-]?only|do not modify|don'?t modify|no code changes/i;
 export function wantsEdit(kind, instruction, review = false) {
-  return kind === 'implement' && !review && EDIT_HINT.test(String(instruction || ''));
+  if (kind !== 'implement' || review) return false;
+  const text = String(instruction || '');
+  if (READ_ONLY_HINT.test(text)) return false;
+  return EDIT_HINT.test(text);
 }
 
 // cheap-first: 「安いAIを先に使う」モードが有効か判定する。
@@ -504,7 +535,14 @@ export function cheapFirstFailureReason({ kind, result, treeChanged, irreversibl
   const warned = hasModelWarning(combined);
   const output = warned ? modelWarningRemainder(result.output, result.stderr) : String(result.output || '');
   if (/unrecognized_model/i.test(warned ? output : combined)) return 'unrecognized_model';
-  if (!output.trim()) return 'empty_output';
+  if (!output.trim()) {
+    // 出力ゼロの原因をステータスコードと stderr から分類する。
+    // 分類しないと auth_failed / usage_limit / launch_failed が全て
+    // empty_output に埋もれて delegation-health の診断精度が下がる。
+    const classified = classifyEmptyOutput(result.output, result.stderr, result.status);
+    if (classified !== 'empty_output') return classified;
+    return 'empty_output';
+  }
   // Replacement characters, invalid controls and common UTF-8-as-Latin-1 sequences.
   if (/[\uFFFD\u0000-\u0008\u000B\u000C\u000E-\u001F]/u.test(output)
     || /(?:Ã.|Â.|â[\u0080-\u00BF€]|ðŸ){2,}/u.test(output)) return 'garbled_output';
@@ -669,14 +707,7 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env, { kin
   return null;
 }
 
-// cheap-code 経由と qwen 直結の deepseek は起動方法だけが異なり、同じ
-// OpenRouter / deepseek model を使う。同じ連鎖で片方が通常予算を使い切った後に
-// もう片方を実行しても upstream 障害を二重に待つだけなので、timeout は同一障害として扱う。
-export function fallbackBackendFailureDomain(backendName) {
-  if (backendName === 'cheap-code:deepseek' || backendName === 'deepseek') return 'deepseek-upstream';
-  return String(backendName || '');
-}
-
+// 連鎖内でも同ドメインの二重 timeout を避ける（冷却は fallback-backend-health 側でドメイン共有）。
 export function shouldSkipFallbackBackendAfterTimeout(backendName, chain = []) {
   const domain = fallbackBackendFailureDomain(backendName);
   return Boolean(domain) && chain.some((attempt) => attempt?.outcome === 'timeout'
@@ -844,9 +875,9 @@ export function readCodexFallbackOrder(homeDir) {
   return shared === undefined ? null : shared;
 }
 
-function cheapCodeBackend(name, homeDir) {
+export function cheapCodeBackendWithReason(name, homeDir) {
   const provider = name.split(':')[1] || '';
-  if (!['glm', 'deepseek'].includes(provider)) return null;
+  if (!['glm', 'deepseek'].includes(provider)) return { backend: null, reason: 'unknown-provider' };
   // キーが無い機体で cheap-code を先頭にすると毎回即死するので、キーがある時だけ候補に入れる。
   const cooldownFile = path.join(homeDir, '.claude', 'provider-cooldown.json');
   // 仕様C2b: 定額レーン glm が usage_limit でクールダウン中のときは、同じ位置を deepseek へ自動差し替えする。
@@ -859,18 +890,22 @@ function cheapCodeBackend(name, homeDir) {
   const billingName = provider === 'deepseek' ? 'openrouter' : provider;
   const limitedByHistory = providerLimitedUntil(historyFile, billingName) > 0;
   const inCooldown = provider === 'deepseek' && providerCooldownMs(billingName, Date.now(), cooldownFile) > 0;
-  if (provider === 'deepseek' && (limitedByHistory || inCooldown)) return null;
+  if (provider === 'deepseek' && (limitedByHistory || inCooldown)) return { backend: null, reason: 'billing-openrouter' };
   if (provider === 'glm' && (limitedByHistory || providerCooldownMs('glm', Date.now(), cooldownFile) > 0)) {
-    if (!loadDeepseekKey(homeDir)) return null;
-    if (providerLimitedUntil(historyFile, 'openrouter') > 0) return null;
-    if (providerCooldownMs('openrouter', Date.now(), cooldownFile) > 0) return null;
+    if (!loadDeepseekKey(homeDir)) return { backend: null, reason: 'glm-limit-no-deepseek-fallback' };
+    if (providerLimitedUntil(historyFile, 'openrouter') > 0) return { backend: null, reason: 'glm-limit-no-deepseek-fallback' };
+    if (providerCooldownMs('openrouter', Date.now(), cooldownFile) > 0) return { backend: null, reason: 'glm-limit-no-deepseek-fallback' };
     console.error('[codex-do] cheap-code:glm は usage_limit クールダウン中のため cheap-code:deepseek へフォールバックします');
-    return { kind: 'cheap-code', name: 'cheap-code:deepseek', provider: 'deepseek', model: GATEWAY_MODELS.deepseek };
+    return { backend: { kind: 'cheap-code', name: 'cheap-code:deepseek', provider: 'deepseek', model: GATEWAY_MODELS.deepseek } };
   }
   const keyFile = provider === 'glm' ? 'zai.env' : 'openrouter.env';
   const keyEnv = provider === 'glm' ? 'ZAI_API_KEY' : 'OPENROUTER_API_KEY';
-  if (!loadEnvKey(homeDir, keyFile, keyEnv)) return null;
-  return { kind: 'cheap-code', name, provider, model: provider === 'glm' ? 'glm-5.3' : GATEWAY_MODELS.deepseek };
+  if (!loadEnvKey(homeDir, keyFile, keyEnv)) return { backend: null, reason: 'missing-key', keyFile, keyEnv };
+  return { backend: { kind: 'cheap-code', name, provider, model: provider === 'glm' ? 'glm-5.3' : GATEWAY_MODELS.deepseek } };
+}
+
+function cheapCodeBackend(name, homeDir) {
+  return cheapCodeBackendWithReason(name, homeDir).backend;
 }
 
 export function findExecutable(name, { env = process.env, platform = process.platform, existsImpl = fs.existsSync } = {}) {
@@ -913,6 +948,19 @@ export function findCursorAgentCommand({
   executableAvailable,
   homeDir,
 } = {}) {
+  // Windows の ~/.claude/bin ラッパーは USERPROFILE 配下の PowerShell を経由する。
+  // cursor-agent だけ専用 home で起動して Claude Code の user hooks を隔離できるよう、
+  // インストール本体を先に選ぶ。API key は cursorAgentChildEnv が明示的に引き継ぐ。
+  if (platform === 'win32' && homeDir) {
+    const localAppData = env.LOCALAPPDATA
+      || (env.USERPROFILE ? path.join(env.USERPROFILE, 'AppData', 'Local') : '');
+    if (localAppData) {
+      for (const name of ['cursor-agent.cmd', 'agent.cmd']) {
+        const candidate = path.join(localAppData, 'cursor-agent', name);
+        if (existsImpl(candidate)) return candidate;
+      }
+    }
+  }
   // homeDir を明示したときだけラッパーを優先する（テストの PATH 優先ケースを壊さない）。
   // resolveCursorAgentBackend は必ず homeDir を渡す。
   if (homeDir) {
@@ -994,6 +1042,25 @@ export function buildCursorAgentArgs({ workspace } = {}) {
   const args = ['-p', '--force', '--trust'];
   if (workspace) args.push('--workspace', workspace);
   return args;
+}
+
+export function cursorAgentChildEnv(homeDir, baseEnv = process.env, { mkdirImpl = fs.mkdirSync } = {}) {
+  const env = { ...baseEnv };
+  if (!String(env.CURSOR_API_KEY || '').trim()) {
+    const key = readCursorApiKeyFromEnvFile(homeDir);
+    if (key) env.CURSOR_API_KEY = key;
+  }
+  if (process.platform === 'win32') {
+    // Cursor Agent 2026.11.22 は ~/.claude/settings.json を互換読込し、Claude hook を
+    // PowerShell 文へ変換した後に bash eval へ渡すため、全ツールを fail-closed にする。
+    // Cursor 子プロセスだけ home を隔離し、Claude の user hooks を読ませない。
+    // LOCALAPPDATA / APPDATA は維持するので CLI 本体や通常の Cursor 設定は変えない。
+    const isolatedHome = path.join(os.tmpdir(), 'codex-do-cursor-agent-home');
+    mkdirImpl(isolatedHome, { recursive: true });
+    env.USERPROFILE = isolatedHome;
+    env.HOME = isolatedHome;
+  }
+  return env;
 }
 
 const GEMINI_LAUNCH_WINDOW_MS = 6 * 60 * 60 * 1000;
@@ -1141,10 +1208,17 @@ export function resolveFallbackBackends(homeDir, options = {}) {
       let requested = name;
       if ((taskKind === 'implement' || taskKind === 'verify') && name === 'openrouter-free') requested = 'openrouter-code';
       if ((taskKind === 'summarize' || taskKind === 'classify') && name === 'openrouter-code') requested = 'openrouter-free';
-      const raw = requested.startsWith('cheap-code:') ? cheapCodeBackend(requested, homeDir) : byName[requested]?.();
+      const cheapCodeResult = requested.startsWith('cheap-code:') ? cheapCodeBackendWithReason(requested, homeDir) : null;
+      const raw = cheapCodeResult ? cheapCodeResult.backend : byName[requested]?.();
       const backend = acceptBackend(raw);
       if (backend) backends.push(backend);
-      else if (!raw && !(requested === 'gemini-cli' && (geminiBudgetBlocked || geminiLaunchBlocked))) console.error(`[codex-do] codex-fallback-order.json の ${name} はキー未設定か未知の名前のためスキップ`);
+      else if (!raw && !(requested === 'gemini-cli' && (geminiBudgetBlocked || geminiLaunchBlocked))) {
+        if (cheapCodeResult?.reason === 'billing-openrouter') console.error(`[codex-do] codex-fallback-order.json の ${name} は OpenRouter が残高切れ/クールダウン中のためスキップ（deepseek レーンは OpenRouter 経由。復帰まで待つか入金が必要）`);
+        else if (cheapCodeResult?.reason === 'missing-key') console.error(`[codex-do] codex-fallback-order.json の ${name} はキー未設定のためスキップ（${cheapCodeResult.keyFile} の ${cheapCodeResult.keyEnv}）`);
+        else if (cheapCodeResult?.reason === 'glm-limit-no-deepseek-fallback') console.error(`[codex-do] codex-fallback-order.json の ${name} は GLM が usage_limit 中で、deepseek への退避も利用できないためスキップ（GLM の復帰を待つか OpenRouter のキー・残高・クールダウンを確認）`);
+        else if (cheapCodeResult || !Object.hasOwn(byName, requested)) console.error(`[codex-do] codex-fallback-order.json の ${name} は未知の名前のためスキップ`);
+        else console.error(`[codex-do] codex-fallback-order.json の ${name} はキー未設定のためスキップ`);
+      }
     }
     if (backends.length) return withCursorAgentFirst(uniqueBackendsByName(backends));
     console.error('[codex-do] codex-fallback-order.json に使えるバックエンドが無いため従来順へ戻します');
@@ -1290,24 +1364,6 @@ export function isBackendExhausted(output, stderr) {
   return merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '429') || isHttpStatusCodeLine(line, '413'));
 }
 
-const MODEL_WARNING_LINE = /^\s*\[claude-code:unrecognized_model\]/;
-const CHEAP_CODE_BANNER = /^\[(?:openrouter|glm):[^\]\r\n]+\]$/;
-
-function modelWarningRemainder(output, stderr) {
-  // cheap-code は回答の有無にかかわらず provider と model を stderr に出す。
-  const stdoutLines = String(output || '').split(/\r?\n/);
-  const stderrLines = String(stderr || '').split(/\r?\n/).filter(line => !CHEAP_CODE_BANNER.test(line));
-  return [...stdoutLines, ...stderrLines].filter(line => !MODEL_WARNING_LINE.test(line)).join('\n').trim();
-}
-
-function hasModelWarning(text) {
-  return String(text || '').split(/\r?\n/).some(line => MODEL_WARNING_LINE.test(line));
-}
-
-export function isLaneIncompatible(output, stderr, status) {
-  return (hasModelWarning(output) || hasModelWarning(stderr)) && (status !== 0 || !modelWarningRemainder(output, stderr));
-}
-
 export function isBackendBillingFailure(output, stderr) {
   const merged = `${output || ''}\n${stderr || ''}`;
   return /prepayment credits are depleted|payment required/i.test(merged)
@@ -1439,7 +1495,7 @@ export function wslCodexLaunchPlan({ distroFound, codexPresent, versionOk, insta
 export function buildUsageRow({
   result, model, seconds, provider = 'codex', attempts = 1, chain = null,
   timeoutSecs = null, lane = null, escalated = false, promptChars = 0,
-  origin = null, kind = null, cwd = null, reason = '', now = new Date()
+  origin = null, kind = null, cwd = null, reason = '', job = process.env.ORGIAST_JOB || null, now = new Date()
 } = {}) {
   // child.on('error') で spawn 自体に失敗した行は status が数値で残らず、原因は result.error にしか無い。
   // stderr は空のままなので、放っておくと台帳からは「codex が走って何も出さなかった」と区別できない
@@ -1454,7 +1510,7 @@ export function buildUsageRow({
     launched: result?.launched !== false,
     timedOut: result?.timedOut === true,
     status: executorExitStatus(result),
-    origin, kind,
+    origin, kind, ...(job ? { job } : {}),
     exitCode: result?.status ?? null,
     cwd,
     stderrTail,
@@ -1858,7 +1914,7 @@ let escalated = false;
 // などの情報行)だけが stderrTail に残り、delegation-health は「全滅」の原因を stderrTail から
 // 特定できない(2026-10-19 実測: fallback 3件の stderrTail は全て無害な情報行だった)。
 let ledgerReason = '';
-function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 1, chain = null) {
+function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 1, chain = null, reasonOverride = '') {
   try {
     const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
@@ -1866,7 +1922,7 @@ function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 
       result, model: modelName, seconds, provider, attempts, chain,
       timeoutSecs: timeoutSeconds, lane: selectedLane.reason, escalated,
       promptChars: prompt.length, origin, kind: taskKind, cwd,
-      reason: ledgerReason
+      reason: reasonOverride || ledgerReason
     });
     fs.appendFileSync(ledger, `${JSON.stringify(row)}\n`, 'utf8');
   } catch {}
@@ -1910,15 +1966,6 @@ if (!useCodex) {
   console.log(`[codex-do] executor=llm-ask${routed.provider ? `:${routed.provider}` : ''} kind=${taskKind}`);
   console.log(llmAskWarning);
   process.exit(routedStatus);
-}
-
-function cursorAgentChildEnv(homeDir, baseEnv = process.env) {
-  const env = { ...baseEnv };
-  if (!String(env.CURSOR_API_KEY || '').trim()) {
-    const key = readCursorApiKeyFromEnvFile(homeDir);
-    if (key) env.CURSOR_API_KEY = key;
-  }
-  return env;
 }
 
 async function executeCursorAgent(backend, { timeoutSecs, promptText, cwd: runCwd = cwd } = {}) {
@@ -2202,7 +2249,16 @@ async function executeCodex() {
     const tail = String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200);
     if (attempt === 1) console.error(`[codex-do] codex が ${elapsed.toFixed(1)} 秒で出力ゼロ(exit ${result.status})のため 1 回だけ再試行します${tail ? `: ${tail}` : ''}`);
   }
-  recordUsage(result, `codex-cli/${selectedLane.slug || 'default'}`, seconds, 'codex', attempts);
+  // Codex CLI が編集・テストまで進めた後、final 応答だけを書かず exit 1 になることがある。
+  // out=0 だけでは「何も実行されなかった」と区別できないため、作業証跡を台帳へ残す。
+  const completedWorkWithoutFinal = result?.timedOut !== true && Number(result?.status) !== 0
+    && (result?.outputChars || 0) === 0 && seconds >= FAST_FAIL_SECS
+    && (treeBefore.trim() !== treeSnapshot().trim() || Boolean(verifyExternalWork({
+      output: `${result?.output || ''}\n${result?.stderr || ''}`, cwd, started,
+      status: result?.status, timedOut: result?.timedOut,
+    })));
+  recordUsage(result, `codex-cli/${selectedLane.slug || 'default'}`, seconds, 'codex', attempts, null,
+    completedWorkWithoutFinal ? 'work_completed_no_final' : '');
   return result;
 }
 

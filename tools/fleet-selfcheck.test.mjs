@@ -131,7 +131,7 @@ test('selfcheck permission requires the full fixed body, never a keyword or adde
 test('actual roster resolves 作業用999 and カフェ用015 to their observed labels and status shows the 999 remote name', () => {
   const pcMap = JSON.parse(fs.readFileSync(new URL('../fleet-pc-map.json', import.meta.url), 'utf8'));
   assert.equal(resolveMailTarget('作業用999', pcMap).to, 'DESKTOP-BDOAK99');
-  assert.equal(resolveMailTarget('作業用008', pcMap).to, 'DESKTOP-BDOAK99');
+  assert.equal(resolveMailTarget('作業用008', pcMap).to, '008XPS8300');
   assert.equal(resolveMailTarget('カフェ用015', pcMap).to, '015CAFE');
   assert.equal(resolveMailTarget('015CAFE', pcMap).to, '015CAFE');
   assert.equal(resolveMailTarget('DESKTOP-63MQR3L', pcMap).to, '015CAFE');

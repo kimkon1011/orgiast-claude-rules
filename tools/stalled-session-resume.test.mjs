@@ -15,6 +15,19 @@ test('hourly の先送り表現と上限を判定する', () => {
   assert.equal(hourlyEventLimit([{ sessionId: 'a', at: now - 2 * 3600000 }, { sessionId: 'a', at: now - 3 * 3600000 }], 'a', now, { hourlyCap: 4, perSessionDailyCap: 2 }), 'daily');
 });
 
+test('hourlyEventLimit は起動しなかった disabled/no-executor を数えない', () => {
+  const now = Date.parse('2026-11-25T03:00:00Z');
+  const disabledAttempts = Array.from({ length: 4 }, (_, index) => ({
+    sessionId: `disabled-${index}`,
+    at: now - (index + 1) * 1000,
+    outcome: 'disabled',
+  }));
+  assert.equal(hourlyEventLimit(disabledAttempts, 'target', now), null);
+
+  const noExecutorAttempts = disabledAttempts.map((attempt) => ({ ...attempt, outcome: 'no-executor' }));
+  assert.equal(hourlyEventLimit(noExecutorAttempts, 'target', now), null);
+});
+
 async function fixture(t, count = 5) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'stalled-test-'));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
@@ -22,6 +35,9 @@ async function fixture(t, count = 5) {
   let calls = 0, notices = 0;
   const records = Array.from({ length: count }, (_, i) => ({ sessionId: `session-${i}`, displayTitle: `Task ${i}`, file: `file-${i}`, cwd: home, status: '要対応', score: 100 - i, ageDays: 1 }));
   const io = { home, openChecks: () => [{ check: "fixture" }], executeCheck: () => ({ code: 0 }), addItem: async () => ({ id: 'test-ask' }), now: () => time, detect: async () => records, stat: async () => ({ mtimeMs: time - 86400000 }),
+    classifyHourly: async () => ({ action: 'resume', reason: 'fixture', nextStep: '検証を実行', fingerprint: 'fixture' }),
+    evaluateGuard: async () => ({ blocked: false, reason: 'below-threshold', weeklyPercent: 20, fiveHourPercent: 10 }),
+    publishHeartbeat: async () => ({ pushed: true }),
     execute: async () => { calls++; return { outcome: 'no-progress' }; }, notify: async () => { notices++; return { delivered: 'dm' }; } };
   const file = path.join(home, '.claude/stalled-session-resume.json');
   return { io, file, records, next: () => { time += 86400000; }, calls: () => calls, notices: () => notices, ledger: async () => JSON.parse(await fs.readFile(file, 'utf8')) };
@@ -478,7 +494,7 @@ test('dedicated sweep registration and required converge manifest', async () => 
   const manifest = JSON.parse(await fs.readFile(new URL('./setup-manifest.json', import.meta.url), 'utf8'));
   const sweep = manifest.items.find(i => i.id === 'task:stalled-session-sweep');
   assert.equal(sweep.severity, 'required'); assert.equal(sweep.type, 'scheduled-task');
-  assert.deepEqual(sweep.spec, { requireActionTarget: true, maxRunAgeHours: 50, name: 'OrgiastStalledSessionSweep' });
+  assert.deepEqual(sweep.spec, { requireActionTarget: true, maxRunAgeHours: 50, expectDisabled: true, name: 'OrgiastStalledSessionSweep' });
   assert.deepEqual(sweep.repair, ['register-stalled-session-nightly.mjs']);
 });
 
@@ -594,7 +610,7 @@ test('exceptions retain explicit not-started executor in persisted attempt', asy
 });
 test('hourly task uses hidden runner, hourly :20 trigger and verified settings with required repair', async () => {
   const ps = await fs.readFile(new URL('./register-stalled-session-nightly.ps1', import.meta.url), 'utf8');
-  assert.match(ps, /New-HiddenScheduledTaskAction -Execute \$node -ChildArgument @\(\$sweepScript, '--hourly'\)/);
+  assert.match(ps, /New-HiddenScheduledTaskAction -Execute 'powershell.exe'.*\$nb, '-Target', 'tools\\stalled-session-resume.mjs', '--hourly'/);
   assert.match(ps, /AddMinutes\(20\)/);
   assert.match(ps, /-RepetitionInterval \(New-TimeSpan -Hours 1\)/);
   assert.match(ps, /-MultipleInstances IgnoreNew -ExecutionTimeLimit \(New-TimeSpan -Hours 2\)/);
@@ -970,6 +986,45 @@ test('overdue invokes claude --resume and removes API credentials', async t => {
   });
   assert.equal(calls.length, 2); assert.equal(result.outcome, 'progressed'); assert.equal(result.resumedInSession, true);
 });
+test('hourly with wait invokes claude --resume when hourly resume is enabled', async t => {
+  const f = await fixture(t, 1); let size = 10; const calls = [];
+  const result = await execute(f.records[0], { timeoutMs: 1000, event: 'hourly', wait: { key: 'deadline', label: '09/23 12:00' } }, {
+    home: f.io.home, evaluateGuard: f.io.evaluateGuard, fetchClaudePlanUsage: async () => ({ available: false }), runningProcesses: () => [], verifyFork: async () => true,
+    hourlyResumePolicy: () => ({ hourlyResume: true }), executable: 'claude-fixture', stat: async () => ({ size }),
+    execFile: async (_, args) => {
+      calls.push(args);
+      if (args[0] === '--help') return { stdout: '--resume --print' };
+      size++;
+      return { stdout: '' };
+    },
+    runChild: () => assert.fail('fallback forbidden'), readReport: async () => ({ state: 'progressed', evidence: 'verified' }),
+  });
+  assert.deepEqual(calls[0].slice(0, 3), ['--resume', 'session-0', '--fork-session']);
+  assert.equal(result.outcome, 'progressed');
+});
+test('hourly without wait invokes claude --resume with a natural deferred prompt', async t => {
+  const f = await fixture(t, 1); let size = 10; let prompt;
+  const result = await execute(f.records[0], { timeoutMs: 1000, event: 'hourly' }, {
+    home: f.io.home, evaluateGuard: f.io.evaluateGuard, fetchClaudePlanUsage: async () => ({ available: false }), runningProcesses: () => [], verifyFork: async () => true,
+    hourlyResumePolicy: () => ({ hourlyResume: true }), executable: 'claude-fixture', stat: async () => ({ size }),
+    execFile: async (_, args) => {
+      if (args[0] === '--help') return { stdout: '--resume --print' };
+      prompt = args.at(-1); size++;
+      return { stdout: '' };
+    },
+    runChild: () => assert.fail('fallback forbidden'), readReport: async () => ({ state: 'progressed', evidence: 'verified' }),
+  });
+  assert.match(prompt, /先送りしたまま止まっています/);
+  assert.doesNotMatch(prompt, /待機期限 .* を過ぎました/);
+  assert.equal(result.outcome, 'progressed');
+});
+test('hourly remains disabled when hourly resume is disabled', async t => {
+  const f = await fixture(t, 1);
+  const result = await execute(f.records[0], { timeoutMs: 1000, event: 'hourly', wait: { key: 'deadline', label: '09/23 12:00' } }, {
+    hourlyResumePolicy: () => ({ hourlyResume: false }), execFile: () => assert.fail('no CLI'), runChild: () => assert.fail('no child'),
+  });
+  assert.equal(result.outcome, 'disabled');
+});
 test('fallback success without transcript growth remains eligible next tick', async t => {
   const f = await fixture(t, 1); f.records[0].displayTitle = '【09/23/12:00まで】Task';
   f.io.execute = (r, opts) => execute(r, opts, {
@@ -1134,4 +1189,36 @@ test('台帳の対象セッションの open check が達成されたときだ�
     return { outcome: 'progressed' };
   };
   assert.equal((await run(options(['--overdue'], {}), f.io)).results[0].outcome, 'progressed');
+});
+
+test('hourly は利用上限時に余裕のあるPCへ秘密を除いて移管し、24時間内は再送しない', async t => {
+  const f = await fixture(t, 1);
+  Object.assign(f.records[0], { firstPrompt: 'token=secret-value-1234567890', lastAssistantText: '次回に再開', cwd: f.io.home });
+  f.io.fetchClaudePlanUsage = async () => ({ available: true, fiveHour: { utilization: 90 }, sevenDay: { utilization: 10 } });
+  f.io.hourlyResumePolicy = () => ({ hourlyResume: true, hourlyCap: 4, perSessionDailyCap: 6, planUsageStopPct: 85 });
+  f.io.fleetRows = [{ label: '011-PC', hasBeacon: true, beaconAt: new Date(f.io.now()).toISOString(), planFiveHourPct: 10, planSevenDayPct: 20 }];
+  const bodies = [];
+  f.io.directiveSender = argv => { bodies.push(argv); return { id: 'directive-1' }; };
+  const first = await run(options(['--hourly'], {}), f.io);
+  assert.equal(first.rows[0].skip, '移管済み');
+  assert.equal(bodies.length, 1);
+  const bodyFile = bodies[0][bodies[0].indexOf('--body-file') + 1];
+  assert.doesNotMatch(await fs.readFile(bodyFile, 'utf8'), /secret-value/);
+  const second = await run(options(['--hourly'], {}), f.io);
+  assert.equal(bodies.length, 1);
+  assert.notEqual(second.rows[0].skip, '');
+});
+
+test('hourly は7日以内の常設許可セッションを最優先にし、許可名を再開に渡す', async t => {
+  const f = await fixture(t, 2);
+  for (const record of f.records) Object.assign(record, { firstPrompt: '依頼', lastAssistantText: '次回に再開' });
+  const ledgerDir = path.join(f.io.home, '.claude', 'stall-ledger');
+  await fs.mkdir(ledgerDir, { recursive: true });
+  await fs.writeFile(path.join(ledgerDir, 'standing-sends.jsonl'), `${JSON.stringify({ at: new Date(f.io.now()).toISOString(), sessionId: 'session-1', permissionId: 'sales-1day-followup' })}\n`);
+  f.io.fetchClaudePlanUsage = async () => ({ available: true, fiveHour: { utilization: 10 }, sevenDay: { utilization: 10 } });
+  f.io.hourlyResumePolicy = () => ({ hourlyResume: true, hourlyCap: 4, perSessionDailyCap: 6, planUsageStopPct: 85 });
+  const order = [];
+  f.io.execute = async (record, opts) => { order.push([record.sessionId, opts.standingPermission]); return { outcome: 'progressed' }; };
+  await run(options(['--hourly'], {}), f.io);
+  assert.deepEqual(order[0], ['session-1', '営業の1日待ち後の送信']);
 });

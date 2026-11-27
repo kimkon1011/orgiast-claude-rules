@@ -264,7 +264,18 @@ export async function act(item, key, { home, root, watch, now, calendar, inbox, 
     const queueFile = path.join(root, 'insta-queue', hash(key) + '.json');
     const previous = read(queueFile, null);
     const caption = previous?.caption || `牛窓のラハイナより。\n${theme?.theme || '今日のラハイナ'}\n${String(m.text || '').slice(0, 300)}\n#ラハイナ #牛窓 #犬と泊まれる宿`;
-    const queue = { ...previous, key, date, theme: theme?.theme || null, deadline, caption, status: previous?.status || 'awaiting_approval', photos: previous?.photos || [], source: { channel: m.channel, id: m.id }, mediaOwner: 'Muse', errors: [] };
+    // Check standing auto-post approval. If approval file exists and scope matches,
+    // skip manual approval and enqueue directly with 'approved' status.
+    const approvalFile = path.join(root, 'instagram-autopost-approval.json');
+    let autoApproved = false;
+    try {
+      const approval = JSON.parse(fs.readFileSync(approvalFile, 'utf8'));
+      autoApproved = approval?.scope?.business === '株式会社ラハイナ'
+        && approval?.scope?.sourceFilter === 'todays_theme_photo'
+        && approval?.approvedBy;
+    } catch {}
+    const defaultStatus = previous?.status || (autoApproved ? 'approved' : 'awaiting_approval');
+    const queue = { ...previous, key, date, theme: theme?.theme || null, deadline, caption, status: defaultStatus, photos: previous?.photos || [], source: { channel: m.channel, id: m.id }, mediaOwner: 'Muse', errors: [] };
     const photos = m.attachments.filter(isPhoto);
     for (let i = 0; i < photos.length; i++) {
       const file = path.join(root, 'insta-queue', `${hash(key)}-${i}.image`);
@@ -276,6 +287,9 @@ export async function act(item, key, { home, root, watch, now, calendar, inbox, 
       } catch { queue.errors.push(`写真${i + 1}の取得に失敗。Beeper中継の添付取得対応を確認`); }
     }
     save(queueFile, queue);
+    if (autoApproved && !queue.errors.length) {
+      return { status: 'done', action: 'insta_auto_approved', queueFile, deadline, notifyText: '' };
+    }
     const text = `Instagram 投稿承認（送信は未実行）\n期限: ${deadline}\n写真: ${queue.photos.join('\n') || '取得待ち'}\n${queue.errors.join('\n')}\nテーマ: ${queue.theme || '当日テーマ未登録・要確認'}\n投稿文全文:\n${caption}\nキュー: ${queueFile}\n画像調整: Muse`;
     const inboxId = await notify('ask', text, queue.errors.length ? ':attachment-failed' : '');
     return { status: queue.errors.length ? 'retry' : 'pending', inboxId, action: 'insta_queued', queueFile, deadline, notifyText: text };

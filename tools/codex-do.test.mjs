@@ -9,7 +9,7 @@ import { skipCoolingBackends } from './fallback-backend-health.mjs';
 import { runGeminiBudgetGuard } from './gemini-budget-guard.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, fallbackBackendFailureDomain, shouldSkipFallbackBackendAfterTimeout, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, reserveGeminiLaunch, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder, hasAbortCondition, isIntentionalAbort } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, fallbackBackendFailureDomain, shouldSkipFallbackBackendAfterTimeout, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, reserveGeminiLaunch, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, cursorAgentChildEnv, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder, hasAbortCondition, isIntentionalAbort } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -657,6 +657,21 @@ test('wantsEdit は kind=implement のときだけ真になる', () => {
   assert.equal(wantsEdit('summarize', '修正内容を要約して'), false);
   assert.equal(wantsEdit('implement', 'この不具合を修正してください', true), false);
   assert.equal(wantsEdit('implement', '一覧を出して'), false);
+});
+
+// 2026-11-25 実害: 読み取り専用と明記しても「修正が入る予定」等で EDIT_HINT に当たり
+// wantedEdit=true → 空diff失敗 → 安いレーン連鎖になっていた。
+test('wantsEdit は読み取り専用の明示があるとき false になる', () => {
+  assert.equal(
+    wantsEdit('implement', '読み取り調査のみ。コード変更は禁止。修正が入る予定の箇所を列挙して'),
+    false,
+  );
+  assert.equal(
+    wantsEdit('implement', 'Read-only investigation. Do not modify files. List where a fix is needed'),
+    false,
+  );
+  assert.equal(wantsEdit('implement', 'この不具合を修正してください'), true);
+  assert.equal(wantsEdit('implement', '修正して。変更後にテストを追加して'), true);
 });
 
 test('snapshotWorkingTree non-git directory: snapshot changes when file is added', () => {
@@ -1882,6 +1897,35 @@ test('isLaneIncompatible はモデル警告と残りの出力、終了コード�
   assert.equal(isLaneIncompatible('', 'normal failure', 1), false);
 });
 
+test('isLaneIncompatible は実データの trust 警告を残差から外して発火する', () => {
+  // 2026-11-27-8.json の実 stderr（バナー / trust 警告 / unrecognized_model）
+  const realStderr = [
+    '[openrouter:deepseek/deepseek-v4-flash]',
+    'Ignoring 114 permissions.allow entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["C:/Users/kimko"].hasTrustDialogAccepted: true in C:\\Users\\kimko\\.claude\\cheap-code-worker\\.claude.json.',
+    '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}',
+  ].join('\n');
+  assert.equal(isLaneIncompatible('\n', realStderr, 0), true);
+
+  // 回帰: 同じ trust 警告があっても stdout に回答本文があれば success 維持
+  assert.equal(isLaneIncompatible('実作業の回答本文です', realStderr, 0), false);
+
+  // 回帰: trust 警告だけ（unrecognized_model 無し）は対象外
+  const trustOnly = [
+    '[openrouter:deepseek/deepseek-v4-flash]',
+    'Ignoring 114 permissions.allow entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["C:/Users/kimko"].hasTrustDialogAccepted: true in C:\\Users\\kimko\\.claude\\cheap-code-worker\\.claude.json.',
+  ].join('\n');
+  assert.equal(isLaneIncompatible('\n', trustOnly, 0), false);
+
+  // 行が分かれている trust 警告も残差から落ちる
+  const splitTrust = [
+    '[openrouter:deepseek/deepseek-v4-flash]',
+    'Ignoring 3 permissions.allow entries from .claude/settings.json: this workspace has not been trusted.',
+    'Run Claude Code interactively here once and accept the trust dialog, or set projects["C:/Users/kimko"].hasTrustDialogAccepted: true in C:\\Users\\kimko\\.claude\\cheap-code-worker\\.claude.json.',
+    '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}',
+  ].join('\n');
+  assert.equal(isLaneIncompatible('\n', splitTrust, 0), true);
+});
+
 test('shouldAdvanceToNextBackend は laneIncompatible=true で incompatible を返す', () => {
   assert.deepEqual(shouldAdvanceToNextBackend({ laneIncompatible: true, status: 1 }), { advance: true, outcome: 'incompatible' });
   assert.deepEqual(shouldAdvanceToNextBackend({ laneIncompatible: true, exhausted: true, status: 3 }), { advance: true, outcome: 'incompatible' });
@@ -2927,6 +2971,10 @@ test('buildUsageRow は timeoutSecs が無ければ行に生やさない（旧�
   assert.equal('timeoutSecs' in row, false);
   assert.equal(row.status, 'ok');
 });
+test('buildUsageRow は ORGIAST_JOB 相当のjobを台帳へ残す', () => {
+  const row = buildUsageRow({ result: { status: 0, outputChars: 4 }, model: 'm', seconds: 1, job: 'messenger-watch:watch-dm' });
+  assert.equal(row.job, 'messenger-watch:watch-dm');
+});
 
 // 2026-10-23 実測: gemini が拒否を3回出して以後無音のまま600秒 timeout になった（打ち切り未発火3件）。
 // chunk 到着時だけの判定では再評価されないため、周期タイマーで無音停滞も打ち切る。
@@ -3704,19 +3752,45 @@ test('isCursorAgentLoggedIn は ~/.claude/cursor.env の CURSOR_API_KEY でも�
   assert.equal(isCursorAgentLoggedIn(home + '-missing', { env: {} }), false);
 });
 
-test('findCursorAgentCommand は homeDir 指定時に ~/.claude/bin のラッパーを公式 CLI より優先する', () => {
+test('findCursorAgentCommand は Windows では公式 CLI を ~/.claude/bin ラッパーより優先する', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-wrapper-home-'));
   const wrapper = path.join(home, '.claude', 'bin', process.platform === 'win32' ? 'cursor-agent.cmd' : 'cursor-agent');
   fs.mkdirSync(path.dirname(wrapper), { recursive: true });
   fs.writeFileSync(wrapper, 'rem wrapper\n', 'utf8');
+  const official = path.join(home, 'AppData', 'Local', 'cursor-agent', 'cursor-agent.cmd');
+  if (process.platform === 'win32') {
+    fs.mkdirSync(path.dirname(official), { recursive: true });
+    fs.writeFileSync(official, 'rem official\n', 'utf8');
+  }
   const found = findCursorAgentCommand({
     homeDir: home,
     executableAvailable: (cmd) => cmd === 'cursor-agent',
     existsImpl: (p) => p === wrapper || fs.existsSync(p),
     platform: process.platform,
-    env: {},
+    env: process.platform === 'win32' ? { LOCALAPPDATA: path.join(home, 'AppData', 'Local') } : {},
   });
-  assert.equal(found, wrapper);
+  if (process.platform === 'win32') {
+    assert.equal(found, official);
+  } else {
+    assert.equal(found, wrapper);
+  }
+});
+
+test('cursorAgentChildEnv は Windows で Claude user hooks を読まない専用 home を渡す', () => {
+  const made = [];
+  const env = cursorAgentChildEnv(os.tmpdir(), { USERPROFILE: 'real-home', HOME: 'real-home', CURSOR_API_KEY: 'present' }, {
+    mkdirImpl: (dir, options) => made.push([dir, options]),
+  });
+  if (process.platform === 'win32') {
+    assert.match(env.USERPROFILE, /codex-do-cursor-agent-home$/);
+    assert.equal(env.HOME, env.USERPROFILE);
+    assert.deepEqual(made, [[env.USERPROFILE, { recursive: true }]]);
+  } else {
+    assert.equal(env.USERPROFILE, 'real-home');
+    assert.equal(env.HOME, 'real-home');
+    assert.deepEqual(made, []);
+  }
+  assert.equal(env.CURSOR_API_KEY, 'present');
 });
 
 test('readCodexFallbackOrder は UTF-8 BOM 付きの順序ファイルを読める', () => {

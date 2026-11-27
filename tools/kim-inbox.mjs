@@ -17,6 +17,7 @@ import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, recor
 import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
 import { matchesRow, parseEscalation, syncEscalationAnswer } from './lib/escalation-answer-sync.mjs';
 import { looksLikeApprovalRequest } from './lib/kim-inbox-kind.mjs';
+import { isPullRequestMergeApprovalRequest, MERGE_HANDOFF_REJECTION_MESSAGE } from './lib/kim-inbox-merge-handoff.mjs';
 const exec = promisify(execFile);
 const execGh = promisify(execFile);
 const PR_REF_RE = /PR\s*#(\d+)/gi;
@@ -160,7 +161,23 @@ function acquireInboxLock(home, key, waitMs = 60_000) {
     }
   }
   if (fd === undefined) throw new Error('kim-inbox: 台帳が使用中です');
-  return () => { fs.closeSync(fd); fs.unlinkSync(lock); };
+  return () => { fs.closeSync(fd); releaseOwnedLock(lock, process.pid); };
+}
+// Only remove locks still owned by the expected process.
+function releaseOwnedLock(lock, pid) {
+  try {
+    if (Number(fs.readFileSync(lock, 'utf8')) !== pid) return false;
+    fs.unlinkSync(lock);
+    return true;
+  } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
+export function releaseDeadlineWorkerLock(home, pid, { requireDead = true } = {}) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  if (requireDead) {
+    try { process.kill(pid, 0); return false; }
+    catch (error) { if (error.code !== 'ESRCH') return false; }
+  } else if (pid !== process.pid) return false;
+  return releaseOwnedLock(path.join(directory(home), 'info-aggregation.lock'), pid);
 }
 function locked(home, key, fn, waitMs) {
   const release = acquireInboxLock(home, key, waitMs);
@@ -234,7 +251,7 @@ function create(home, options, lockWaitMs) {
     // Keep distinct jobs separate even when their text normalizes to the same prefix.
     if (options.dedupeKey) {
       const key = inboxDedupeKey(options.dedupeKey);
-      const existing = listInboxMatches(home, item => item.dedupeKey === key)[0];
+      const existing = listInboxMatches(home, item => item.dedupeKey === key && !item.autoExpired)[0];
       if (existing && options.progressAt && options.kind === 'info') {
         return update(home, existing.id, current => {
           if ((Date.parse(current.progressAt) || 0) >= Date.parse(options.progressAt)) return;
@@ -417,14 +434,14 @@ export function mergeItemsInto(home, dedupeKey, ids) {
     return { keptId: kept.id, superseded: items.length - 1, count: total, branches };
   });
 }
-function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen, progressAt, kindPromotedFrom, standingPermission }) {
+function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen, progressAt, kindPromotedFrom, standingPermission, mergeHandoffReason }) {
   if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');
   if (doneWhen && kind !== 'ask') throw new Error('--done-when-gmail は ask 専用です');
   fs.mkdirSync(directory(home), { recursive: true });
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), ...(kindPromotedFrom ? { kindPromotedFrom } : {}), ...(standingPermission ? { standingPermission } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), ...(kindPromotedFrom ? { kindPromotedFrom } : {}), ...(standingPermission ? { standingPermission } : {}), ...(mergeHandoffReason ? { mergeHandoffReason: clean(mergeHandoffReason) } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     if (revision !== undefined) item.revision = revision;
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -446,6 +463,7 @@ export function spoolItem(home, options) {
   const id = randomBytes(16).toString('hex');
   const file = path.join(dir, `${id}.json`), temp = `${file}.tmp`;
   const record = { ...(options.priority === 'high' ? { priority: 'high' } : {}), kind: options.kind || 'info', text: clean(options.text), source: clean(options.source),
+    ...(options.forceKind ? { forceKind: true } : {}),
     from: clean(options.from ?? resolveFleetLabel(home, { hostname: os.hostname() })),
     ...(options.progressAt ? { progressAt: options.progressAt } : {}), ...(options.sessionId ? { sessionId: clean(options.sessionId) } : {}),
     dedupeKey: options.dedupeKey ? inboxDedupeKey(options.dedupeKey) : `spool:${id}` };
@@ -483,7 +501,7 @@ export async function drainSpool(home, { stderr = console.error, execImpl, signa
 }
 export async function addItem(home, options, { drain = true, localOnly = false, lockWaitMs } = {}) {
   let normalizedOptions = options;
-  if ((options.kind || 'info') === 'ask' && /送信|送って|承認/.test(String(options.text || ''))) {
+  if ((options.kind || 'info') === 'ask' && !options.forceKind && /送信|送って|承認/.test(String(options.text || ''))) {
     try {
       const config = JSON.parse(fs.readFileSync(fileURLToPath(new URL('../config/standing-send-permissions.json', import.meta.url)), 'utf8'));
       const permission = (config.permissions || []).find(item => new RegExp(item.match).test(String(options.text || '')));
@@ -501,6 +519,15 @@ export async function addItem(home, options, { drain = true, localOnly = false, 
   if ((normalizedOptions.kind || 'info') === 'info' && !normalizedOptions.forceKind && !normalizedOptions.standingPermission && looksLikeApprovalRequest(normalizedOptions.text)) {
     normalizedOptions = { ...normalizedOptions, kind: 'ask', kindPromotedFrom: 'info' };
     (options.stderr || console.error)('[kim-inbox] kind=info で登録されましたが本文が承認を求めているため ask に昇格しました');
+  }
+  if ((normalizedOptions.kind || 'info') === 'ask' && isPullRequestMergeApprovalRequest(normalizedOptions.text)) {
+    const reason = String(normalizedOptions.mergeHandoffReason || '').trim();
+    if (!reason) {
+      const error = new Error(MERGE_HANDOFF_REJECTION_MESSAGE);
+      error.exitCode = 2;
+      throw error;
+    }
+    normalizedOptions = { ...normalizedOptions, mergeHandoffReason: reason };
   }
   if (drain) await drainSpool(home, { execImpl: normalizedOptions.execImpl, signal: normalizedOptions.signal, lockWaitMs });
   if (isInboxNoise(normalizedOptions)) return { id: null, status: 'suppressed', kind: normalizedOptions.kind || 'info' };
@@ -562,10 +589,11 @@ export function listInboxMatches(home, matches, { originals = false } = {}) {
 
 function archiveEntry(item) {
   const { id, createdAt, kind, status, dedupeKey, source, forwardMailId, forwardError,
-    answeredAt, lastAt, answer, text, sessionId, dailyProgress } = item;
+    answeredAt, lastAt, answer, text, sessionId, dailyProgress, autoExpired } = item;
   return { id, createdAt, kind, status, dedupeKey, source, forwardMailId, forwardError, answeredAt, lastAt,
     contentKey: kind === 'ask' ? contentDedupeKey(item) : undefined,
     ...(kind === 'ask' ? { answer, text, sessionId } : {}),
+    ...(autoExpired ? { autoExpired } : {}),
     ...(source?.startsWith('auto-progress-human:') ? { hasText: Boolean(text) } : {}),
     ...(dailyProgress ? { dailyProgress } : {}) };
 }
@@ -741,7 +769,7 @@ export function answerItem(home, id, answer, sessionId = '') {
 export function lookupAnswers(home, query, { now = Date.now(), days = 60 } = {}) {
   const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) throw new Error('--lookup には検索語が必要です');
-  return listInboxMatches(home, item => item.kind === 'ask' && ['answered', 'dropped'].includes(item.status)
+  return listInboxMatches(home, item => item.kind === 'ask' && !item.autoExpired && ['answered', 'dropped'].includes(item.status)
     && now - (Date.parse(item.answeredAt || item.lastAt || item.createdAt) || 0) < days * 86400000
     && words.every(word => `${item.text}\n${item.answer || ''}`.toLowerCase().includes(word)))
     .sort((a, b) => String(b.answeredAt || b.createdAt).localeCompare(String(a.answeredAt || a.createdAt)))
@@ -758,6 +786,70 @@ export function closeKey(home, key) {
   return locked(home, 'info-aggregation', () => listItems(home, { status: 'open' })
     .filter(i => i.kind === 'deadline' && i.key === key)
     .map(i => update(home, i.id, current => { current.status = 'seen'; })));
+}
+function applyDeadlineOp(home, op, byKey) {
+  const matches = byKey.get(op.key) || [];
+  if (op.type === 'close' || op.close) {
+    for (const item of matches) {
+      update(home, item.id, current => { current.status = 'seen'; });
+      byKey.set(op.key, (byKey.get(op.key) || []).filter(candidate => candidate.id !== item.id));
+    }
+    return;
+  }
+  const text = clean(op.text || op.body || '');
+  if (!op.key || !/^[A-Za-z0-9_-]+$/.test(op.key)) throw new Error('deadline には有効な --key が必要です');
+  const existing = matches[0];
+  if (existing) {
+    return update(home, existing.id, current => {
+      current.text = text; current.due = op.due || ''; current.remainingDays = op.remainingDays ?? null;
+      current.lastAt = new Date().toISOString();
+    });
+  }
+  const item = createNew(home, {
+    kind: 'deadline', text, key: op.key, due: op.due, remainingDays: op.remainingDays,
+    source: op.source || 'deadline-watch',
+  });
+  byKey.set(op.key, [item]);
+  return item;
+}
+const inboxBusy = error => String(error?.message || error) === 'kim-inbox: 台帳が使用中です';
+function sleepSync(ms) {
+  if (!(ms > 0)) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+// One aggregation lock for many deadline add/close ops. Busy lock acquisition
+// retries a few times; failed ops stay unset so the next watch can resend.
+export function batchDeadlineOps(home, ops, { attempts = 3, backoffMs = 100, sleep = sleepSync, onOpenItems } = {}) {
+  if (!ops.length) return [];
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return locked(home, 'info-aggregation', () => {
+        const items = listItems(home, { status: 'open' });
+        const byKey = new Map();
+        for (const item of items) {
+          if (item.kind !== 'deadline') continue;
+          if (!byKey.has(item.key)) byKey.set(item.key, []);
+          byKey.get(item.key).push(item);
+        }
+        onOpenItems?.(items);
+        return ops.map(op => {
+          try {
+            applyDeadlineOp(home, op, byKey);
+            return { key: op.key, ok: true, markNotified: !!op.markNotified, readOnly: !!op.readOnly, notifyCount: op.notifyCount, vehicleName: op.vehicleName, plate: op.plate };
+          } catch (error) {
+            return { key: op.key, ok: false, error: clean(error.message), markNotified: false };
+          }
+        });
+      }, 0);
+    } catch (error) {
+      lastError = error;
+      if (!inboxBusy(error) || attempt === attempts - 1) break;
+      sleep(backoffMs * (attempt + 1));
+    }
+  }
+  const message = clean(lastError?.message || 'kim-inbox: 台帳が使用中です');
+  return ops.map(op => ({ key: op.key, ok: false, error: message, markNotified: false }));
 }
 // gmail-search.mjs を子プロセスとして実行する既定の検索実装。
 async function defaultGmailSearch(user, query) {
@@ -804,8 +896,17 @@ export function deadlineSheetUrl(home) {
   const config = readJsonFile(path.join(home, '.claude/deadline-watch/config.json'));
   return config?.sheetId ? `https://docs.google.com/spreadsheets/d/${config.sheetId}/edit` : '（未初期化）';
 }
-export function dropItem(home, id, reason) {
+export function dropItem(home, id, reason, { autoExpired = false, now = Date.now() } = {}) {
   if (!String(reason ?? '').trim()) throw new Error('取り下げ理由が必要です');
+  if (autoExpired) {
+    let dropped = false;
+    const item = update(home, id, current => {
+      if (current.kind !== 'ask' || current.source !== 'auto-progress-escalate' || current.status !== 'open') return;
+      Object.assign(current, { status: 'dropped', answer: clean(reason), answeredAt: new Date(now).toISOString(), autoExpired: true });
+      dropped = true;
+    });
+    return dropped ? item : null;
+  }
   return resolveItem(home, id, { status: 'dropped', answer: clean(reason) });
 }
 // 自動 seen の候補を選ぶ純粋関数（副作用なし）。
@@ -979,6 +1080,11 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
     ...reserved.filter(i => i.kind === 'ask').sort(unseenFirst).slice(0, 5),
   ];
   const allAsks = eligible.filter(i => i.kind === 'ask');
+  // Reserve slots for asks last shown 7+ days ago so new asks cannot starve them forever.
+  const longUnshownAsk = item => item.lastShownAt
+    && now - Date.parse(item.lastShownAt) >= 7 * 86400000;
+  const longUnshownAsks = allAsks.filter(longUnshownAsk)
+    .sort((a, b) => Date.parse(a.lastShownAt) - Date.parse(b.lastShownAt)).slice(0, 2);
   const infos = eligible.filter(i => i.kind === 'info' && !i.dailyProgress);
   const deadlines = eligible.filter(i => i.kind === 'deadline').sort((a, b) => Number(own(b)) - Number(own(a))
     || deadlineDays(a, now) - deadlineDays(b, now) || String(a.key).localeCompare(String(b.key)));
@@ -987,6 +1093,7 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   const otherInfos = infos.filter(i => !own(i) && !isHighInfo(i)).sort(newestFirst);
   const candidates = [...new Set([
     ...required,
+    ...longUnshownAsks,
     ...allAsks.filter(own).sort(askPriority).slice(0, 5),
     ...daily.sort(unseenFirst),
     ...allAsks.filter(i => i.urgent && !own(i)).sort(askPriority).slice(0, 5),
@@ -1145,7 +1252,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
         if (pipe === -1) throw new Error('--done-when-gmail は "user|query" 形式で指定してください');
         doneWhen = { gmail: { user: raw.slice(0, pipe).trim(), query: raw.slice(pipe + 1).trim() } };
       }
-      const item = await addItem(home, { urgent: args.includes('--urgent'), text: body, kind, forceKind: args.includes('--force-kind'), stderr, key: args.includes('--key') ? value('--key') : undefined, dedupeKey: args.includes('--dedupe-key') ? value('--dedupe-key') : undefined, replaceExisting: args.includes('--replace-existing'), due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '', ...(doneWhen ? { doneWhen } : {}) });
+      const item = await addItem(home, { urgent: args.includes('--urgent'), text: body, kind, forceKind: args.includes('--force-kind'), stderr, key: args.includes('--key') ? value('--key') : undefined, dedupeKey: args.includes('--dedupe-key') ? value('--dedupe-key') : undefined, replaceExisting: args.includes('--replace-existing'), due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '', mergeHandoffReason: args.includes('--merge-handoff-ok') ? value('--merge-handoff-ok') : undefined, ...(doneWhen ? { doneWhen } : {}) });
       stdout(JSON.stringify({ id: item.id, status: item.status, forwarded: item.status === 'forwarded' }));
     } else if (args.includes('--answer')) stdout(JSON.stringify(answerItem(home, value('--answer'), fs.readFileSync(value('--body-file'), 'utf8'), process.env.CLAUDE_SESSION_ID || '')));
     else if (args.includes('--lookup')) stdout(JSON.stringify(lookupAnswers(home, value('--lookup')), null, 2));
@@ -1218,7 +1325,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       }
     } else throw new Error('--add / --answer / --seen / --drop / --show / --list / --status / --context / --compact / --merge-into <key> --ids <id,...> / --dedupe-existing [--dry|--apply] / --sweep-info [--apply] / --sweep-nonquestions [--apply] / --auto-close を指定してください');
     return 0;
-  } catch (error) { stderr(`kim-inbox: ${clean(error.message).replace(/[\r\n]+/g, ' ')}`); return args.includes('--context') ? 0 : 1; }
+  } catch (error) { stderr(`kim-inbox: ${clean(error.message).replace(/[\r\n]+/g, ' ')}`); return args.includes('--context') ? 0 : (error.exitCode || 1); }
 }
 export const __test = { sweepInfoCandidates, computeSweepInfoSummary, listItems, markSeen };
 if (isEntry(import.meta.url)) process.exitCode = await main();

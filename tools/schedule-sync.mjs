@@ -15,7 +15,7 @@ import { getDriveToken, defaultDriveKeyPath } from './lib/drive-auth.mjs';
 import { isScheduleCandidate } from './lib/schedule-candidate.mjs';
 import { FALLBACK_CHAIN } from './llm-fallback.mjs';
 import { isEntry } from './is-entry.mjs';
-import { calendarEndMs, GAKKAI_CALENDAR, isAcademicEvent, isAcademicGroup, sanitizeAttendees } from './lib/calendar-shared.mjs';
+import { AI_CALENDAR, calendarEndMs, GAKKAI_CALENDAR, isAcademicEvent, isAcademicGroup, isRecruitingInterview, routeCalendar, sanitizeAttendees, withCaseLabel } from './lib/calendar-shared.mjs';
 export { isScheduleCandidate } from './lib/schedule-candidate.mjs';
 
 export const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
@@ -115,6 +115,10 @@ export function createCalendarClient(token, fetchImpl = globalThis.fetch, signal
     },
     async create(body) {
       const safeBody = Object.hasOwn(body, 'attendees') ? { ...body, attendees: sanitizeAttendees(body.attendees) } : body;
+      if (isRecruitingInterview(body)) {
+        if (calendarId !== GAKKAI_CALENDAR) throw new Error('面談設定は制作チームのカレンダーに登録してください');
+        if (safeBody.attendees) safeBody.attendees = safeBody.attendees.filter(a => a.email.toLowerCase() !== USER);
+      }
       try { return await request('?sendUpdates=none', { method: 'POST', body: JSON.stringify(safeBody) }); }
       catch (error) { if (error.status !== 409) throw error; return request(`/${body.id}`); }
     },
@@ -360,16 +364,19 @@ export function isDuplicate(candidate, event) {
   const [start, end] = bounds(candidate);
   return start < time(event.end) && end > time(event.start) && titleSimilar(candidate.title, event.summary);
 }
-export function targetCalendarForGroup(group) {
-  return isAcademicGroup(group) ? GAKKAI_CALENDAR : USER;
+export function targetCalendarForGroup(group, event = {}, source) {
+  return isAcademicGroup(group) ? GAKKAI_CALENDAR : routeCalendar(event, { origin: 'sync', group, source });
 }
 export function eventBody(candidate, message, index) {
   const [start, end] = bounds(candidate);
   const group = clean(message.chat).replace(/\s+PJ$/i, '').slice(0, 80);
-  const body = {
-    id: hash(`${messageKey(message)}:${index}`),
+  const labeled = withCaseLabel({
     summary: `【自動】${group ? `【${group}】` : ''}${clean(candidate.title)}`,
     description: `出典: ${sourceLabel(message)}\n送信者: ${message.sender}\n送信日時: ${message.ts}\n該当箇所: ${candidate.quote}`,
+  }, group, 'schedule-sync');
+  const body = {
+    id: hash(`${messageKey(message)}:${index}`),
+    ...labeled,
     start: candidate.allDay ? { date: candidate.start.slice(0, 10) } : { dateTime: candidate.start, timeZone: 'Asia/Tokyo' },
     end: candidate.allDay ? { date: new Date(end + 9 * HOUR).toISOString().slice(0, 10) } : { dateTime: iso(end), timeZone: 'Asia/Tokyo' },
     reminders: { useDefault: true },
@@ -426,6 +433,7 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
     }));
     let calendar = dependencies.calendar, calendarError = null;
     let gakkaiCalendar = dependencies.gakkaiCalendar;
+    let aiCalendar = dependencies.aiCalendar;
     if (!calendar) {
       try {
         const token = await wait((dependencies.getCalendarToken || calendarToken)({ signal }));
@@ -560,12 +568,16 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
             if (!calendar) row.status = 'calendar-unverified';
             else {
               const body = eventBody(candidate, message, index);
-              row.calendarId = targetCalendarForGroup(message.chat);
+              row.calendarId = targetCalendarForGroup(message.chat, body, message.source);
               if (row.calendarId === GAKKAI_CALENDAR && !gakkaiCalendar) {
                 const token = await wait((dependencies.getCalendarToken || calendarToken)({ signal, impersonate: GAKKAI_CALENDAR }));
                 gakkaiCalendar = createCalendarClient(token, globalThis.fetch, signal, GAKKAI_CALENDAR);
               }
-              const targetCal = row.calendarId === GAKKAI_CALENDAR ? gakkaiCalendar : calendar;
+              if (row.calendarId === AI_CALENDAR && !aiCalendar) {
+                const token = await wait((dependencies.getCalendarToken || calendarToken)({ signal }));
+                aiCalendar = createCalendarClient(token, globalThis.fetch, signal, AI_CALENDAR);
+              }
+              const targetCal = row.calendarId === GAKKAI_CALENDAR ? gakkaiCalendar : row.calendarId === AI_CALENDAR ? aiCalendar : calendar;
               // Recover interrupted inserts and avoid duplicating pre-migration events on kim's calendar.
               const own = await wait(targetCal.get(body.id));
               const legacy = !own && targetCal !== calendar ? await wait(calendar.get(body.id)) : null;

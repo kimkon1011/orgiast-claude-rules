@@ -10,9 +10,11 @@ import {
   isStaleOverdue,
   isStaleUndated,
   mergeTasks,
+  normalizeDeadline,
   pickTop,
   preprocessForTasks,
   priorityScore,
+  rowToTask,
   runDiscordTaskDigest,
   selectActiveChannels,
   snowflakeToMs,
@@ -245,6 +247,61 @@ function item(overrides = {}) {
 function existingRow(status = '未着手', memo = '手入力メモ') {
   return ['T-0001', '2026-09-01 10:00', 'P2', 50, 'タスク', '請求書を確認する', '以前のアクション', '', '', '経理', '根拠', 'https://discord.com/channels/1/10/88', status, memo, '2026-09-01 10:00'];
 }
+
+test('normalizeDeadline は期限表記ゆれ・全角・曜日・時刻を正規化する', () => {
+  const now = new Date('2026-11-23T03:00:00Z');
+  for (const raw of ['2026-09-08', '2026-9-8', '2026/09/08', '2026/9/8', '2026.9.8', '2026年9月8日', '9/8', '9月8日', '　２０２６／９／８（火） １８：００　']) {
+    assert.equal(normalizeDeadline(raw, { now }), '2026-09-08', raw);
+  }
+});
+
+test('normalizeDeadline は JST 年と180日以上未来の前年補正を使う', () => {
+  const now = new Date('2026-01-05T03:00:00Z');
+  assert.equal(normalizeDeadline('12/28', { now }), '2025-12-28');
+  assert.equal(normalizeDeadline('7/3', { now }), '2026-07-03'); // 179日先
+  assert.equal(normalizeDeadline('7/4', { now }), '2025-07-04'); // 180日先
+  assert.equal(normalizeDeadline('1/1', { now: new Date('2025-12-31T15:00:00Z') }), '2026-01-01');
+  assert.equal(normalizeDeadline('2026/12/28', { now }), '2026-12-28');
+});
+
+test('normalizeDeadline は不正な日付と解釈不能な元表記を保持する', () => {
+  for (const raw of ['', '来週', '2/30', '2026/2/29', '2026-02-30', '13/1', '  来週  ', '２０２６／２／３０']) {
+    assert.equal(normalizeDeadline(raw, { now: NOW }), raw);
+  }
+  assert.equal(normalizeDeadline('2024/2/29', { now: NOW }), '2024-02-29');
+});
+
+test('rowToTask と pickTop は表記ゆれの期限切れP1を staleOverdue に分類する', () => {
+  const now = new Date('2026-11-23T03:00:00Z');
+  const tasks = ['9/8', '2026/09/08'].map((raw, index) => {
+    const row = existingRow();
+    row[0] = `T-013${5 + index}`;
+    row[2] = 'P1';
+    row[8] = raw;
+    return rowToTask(row, { now });
+  });
+  const result = pickTop(tasks, { now });
+  assert.deepEqual(result.top, []);
+  assert.deepEqual(result.staleOverdue.map(({ id, deadline }) => ({ id, deadline })), [
+    { id: 'T-0135', deadline: '2026-09-08' },
+    { id: 'T-0136', deadline: '2026-09-08' },
+  ]);
+});
+
+test('taskToRow と mergeTasks は既存の期限表記を保持し新規期限を従来通り書く', () => {
+  const row = existingRow();
+  row[8] = '9/8';
+  const now = new Date('2026-11-23T03:00:00Z');
+  assert.deepEqual(taskToRow(rowToTask(row, { now })), row);
+  const { tasks, added } = mergeTasks([row], [item({ channelId: '11', deadline: '2026-11-30' })], { now });
+  const preserved = tasks.find((task) => task.id === row[0]);
+  assert.equal(preserved.deadline, '2026-09-08');
+  assert.equal(preserved.deadlineRaw, '9/8');
+  assert.equal(taskToRow(preserved)[8], '9/8');
+  assert.equal(added.length, 1);
+  assert.equal(added[0].deadlineRaw, undefined);
+  assert.equal(taskToRow(added[0])[8], '2026-11-30');
+});
 
 test('dedupeKey は正規化し、未完了との衝突だけ追加を止める', () => {
   assert.equal(dedupeKey(item()), dedupeKey(item({ title: ' 請求書を確認する　' })));

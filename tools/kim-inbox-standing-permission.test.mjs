@@ -26,3 +26,12 @@ test('常設許可に一致しない承認依頼は ask のまま', async t => {
   const item = await addItem(home, { kind: 'ask', text: '別件メールの送信を承認してください', source: 'test' }, { localOnly: true });
   assert.equal(item.kind, 'ask');
 });
+
+test('今回の無人処理が明示的に承認待ちを指定した場合は常設許可より優先する', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-standing-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const item = await addItem(home, { kind: 'ask', forceKind: true, sessionId: 'hourly-source',
+    text: '営業のフォローアップ送信の承認が必要です', source: 'stalled-session-hourly-preflight' }, { localOnly: true });
+  assert.equal(item.kind, 'ask'); assert.equal(item.standingPermission, undefined);
+  assert.equal(fs.existsSync(path.join(home, '.claude', 'stall-ledger', 'standing-sends.jsonl')), false);
+});

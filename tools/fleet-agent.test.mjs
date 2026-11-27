@@ -54,6 +54,28 @@ test('targets は label / hostname の部分一致で、対象外をスキップ
   assert.equal(targetMatches('', 'x', 'y'), true);
 });
 
+test('targetMatches はカンマ区切りで複数PCを指定できる', () => {
+  // 単一一致（従来どおり）
+  assert.equal(targetMatches('008XPS8300', '008XPS8300', 'host'), true);
+  // カンマ区切りで1台目が一致
+  assert.equal(targetMatches('008XPS8300,014DELL', '008XPS8300', 'host'), true);
+  // カンマ区切りで2台目が一致
+  assert.equal(targetMatches('008XPS8300,014DELL', '014DELL', 'host'), true);
+  // 空白入り
+  assert.equal(targetMatches(' 008XPS8300 , 014DELL ', '014DELL', 'host'), true);
+  // 全角読点
+  assert.equal(targetMatches('008XPS8300、014DELL', '014DELL', 'host'), true);
+  // 不一致
+  assert.equal(targetMatches('008XPS8300,014DELL', 'OTHER', 'host'), false);
+  // 'all'
+  assert.equal(targetMatches('all', 'ANY', 'any'), true);
+  // 空文字
+  assert.equal(targetMatches('', 'x', 'y'), true);
+  // 配列
+  assert.equal(targetMatches(['008XPS8300', '014DELL'], '014DELL', 'host'), true);
+  assert.equal(targetMatches(['008XPS8300', '014DELL'], 'OTHER', 'host'), false);
+});
+
 test('expiresAt 超過は実行しない', async () => {
   let posted = false;
   const result = await processDirective({ id: 'old', kind: 'status', targets: 'all', expiresAt: '2000-01-01T00:00:00Z' }, { home: tempHome(), repo: process.cwd(), label: 'PC', hostname: 'host', dryRun: false, post: async () => { posted = true; } });

@@ -87,6 +87,28 @@ function jstDayNumber(value) {
   return Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day)) / 864e5;
 }
 
+export function normalizeDeadline(value, { now = new Date() } = {}) {
+  const raw = String(value ?? '');
+  const date = raw.normalize('NFKC').trim()
+    .replace(/(?:\s*\([月火水木金土日](?:曜日)?\)|\s+\d{1,2}:\d{2}(?::\d{2})?)+$/, '');
+  const full = date.match(/^(\d{4})([-/.])(\d{1,2})\2(\d{1,2})$/);
+  const japanese = date.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日$/);
+  const short = date.match(/^(\d{1,2})\/(\d{1,2})$/) || date.match(/^(\d{1,2})月(\d{1,2})日$/);
+  if (!full && !japanese && !short) return raw;
+
+  let year = Number(full?.[1] ?? japanese?.[1] ?? jstDateParts(now).year);
+  const month = Number(full?.[3] ?? japanese?.[2] ?? short[1]);
+  const day = Number(full?.[4] ?? japanese?.[3] ?? short[2]);
+  const iso = () => `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  if (short && !full && !japanese) {
+    const candidate = new Date(`${iso()}T00:00:00Z`);
+    if (Number.isFinite(candidate.getTime()) && jstDayNumber(candidate) - jstDayNumber(now) >= 180) year--;
+  }
+  const normalized = iso();
+  const parsed = new Date(`${normalized}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === normalized ? normalized : raw;
+}
+
 export function isStaleOverdue(task, { now = new Date(), graceDays = 7 } = {}) {
   if (!ACTIVE_STATES.has(task.status) || !/^\d{4}-\d{2}-\d{2}$/.test(task.deadline)) return false;
   const deadline = new Date(`${task.deadline}T00:00:00Z`);
@@ -201,22 +223,23 @@ function channelIdFromLink(link) {
   return String(link || '').match(/discord\.com\/channels\/[^/]+\/([^/]+)\//)?.[1] || '';
 }
 
-export function rowToTask(row) {
+export function rowToTask(row, { now = new Date() } = {}) {
+  const deadlineRaw = String(row[8] || '');
   return {
     id: String(row[0] || ''), createdAt: String(row[1] || ''), rank: String(row[2] || ''), score: Number(row[3]) || 0,
     type: String(row[4] || ''), title: String(row[5] || ''), action: String(row[6] || ''), owner: String(row[7] || ''),
-    deadline: String(row[8] || ''), channelName: String(row[9] || ''), evidence: String(row[10] || ''), link: String(row[11] || ''),
+    deadlineRaw, deadline: normalizeDeadline(deadlineRaw, { now }), channelName: String(row[9] || ''), evidence: String(row[10] || ''), link: String(row[11] || ''),
     status: String(row[12] || ''), memo: String(row[13] || ''), updatedAt: String(row[14] || ''), channelId: channelIdFromLink(row[11]),
   };
 }
 
 export function taskToRow(task) {
-  return [task.id, task.createdAt, task.rank, task.score, task.type, task.title, task.action, task.owner, task.deadline, task.channelName, task.evidence, task.link, task.status, task.memo, task.updatedAt];
+  return [task.id, task.createdAt, task.rank, task.score, task.type, task.title, task.action, task.owner, task.deadlineRaw ?? task.deadline, task.channelName, task.evidence, task.link, task.status, task.memo, task.updatedAt];
 }
 
 export function mergeTasks(existingRows, candidates, { now = new Date() } = {}) {
   const stamp = formatJst(now);
-  const existing = existingRows.filter((row) => row.some((cell) => String(cell || '').trim())).map(rowToTask);
+  const existing = existingRows.filter((row) => row.some((cell) => String(cell || '').trim())).map((row) => rowToTask(row, { now }));
   let nextId = existing.reduce((max, task) => Math.max(max, Number(task.id.match(/^T-(\d+)$/)?.[1]) || 0), 0) + 1;
   const open = existing.filter((task) => ACTIVE_STATES.has(task.status));
   const openKeys = new Set(open.map(dedupeKey));

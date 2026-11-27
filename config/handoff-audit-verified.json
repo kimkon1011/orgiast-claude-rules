@@ -1,0 +1,14 @@
+{
+  "note": "再発検証済みの handoff-audit ID。根拠: defer-scan-1126（2026-11-25T08:25Z 以降 P1〜P4/W 0件）",
+  "verified": [
+    { "id": "21f68fd8247b0b0a", "verifiedAt": "2026-11-26", "evidence": "defer-scan-1126 hits=0" },
+    { "id": "66ccee4c8a36e545", "verifiedAt": "2026-11-26", "evidence": "defer-scan-1126 hits=0" },
+    { "id": "7f9e487e52bb7636", "verifiedAt": "2026-11-26", "evidence": "defer-scan-1126 hits=0" },
+    { "id": "349113b7e256d9f8", "verifiedAt": "2026-11-26", "evidence": "defer-scan-1126 hits=0" },
+    { "id": "20a6e7039c584c57", "verifiedAt": "2026-11-26", "evidence": "defer-scan-1126 hits=0" },
+    { "id": "4ba3303f0e4def3c", "verifiedAt": "2026-11-26", "evidence": "defer-scan-1126 hits=0" },
+    { "id": "a96683cedf61029f", "verifiedAt": "2026-11-26", "evidence": "defer-scan-1126 hits=0" },
+    { "id": "35fbb5f534e55c24", "verifiedAt": "2026-11-25", "evidence": "defer-scan-1126 hits=0" },
+    { "id": "f61ffeb282843871", "verifiedAt": "2026-11-27", "evidence": "defer-scan-1127 since=2026-11-26T12:00Z P4 hits=0" }
+  ]
+}

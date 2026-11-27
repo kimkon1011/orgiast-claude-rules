@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { renameWithRetry, writeFileWithRetry } from './lib/rename-retry.mjs';
 import { isEntry } from './is-entry.mjs';
 import { defaultMemoryDirs, scanMemory } from './learning-ledger.mjs';
 export const MAX_BYTES = 24_000;
@@ -47,6 +48,9 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
       continue;
     }
     if (!active) continue;
+    // 2026-11-27実測: autopilot 形式の `- why:` `- first_step:` が残TODOに繰り上がり、
+    // 自動セッションが「why: …」を次の1目的に採用した。目的節の英字キー属性は項目化しない。
+    if (purposeSection && /^[-*]\s+[A-Za-z0-9_]+[:：]/.test(line)) continue;
     const task = line.match(/^(?:\d+[.)、]|[-*](?:\s+\[[ xX]\])?)\s+(.+)/);
     if (task) { flush(); current = { lines: [line], date, cwd }; }
     else if (current && (/^\s+\S/.test(line) || !line.trim())) current.lines.push(line);
@@ -63,6 +67,9 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
     // 完了と認識されずに毎回の回転で次代へ持ち越されていた(残TODO 41件中13件がこの形)。
     // auto-session 側の除外規則(todoExclusionReason)と二重に塞ぐ。
     if (/^(?:~~|\[[xX]\]|\[完了|✅)|~~\s*(?:→\s*)?✅/.test(first)) { stats.completed++; continue; }
+    // 2026-11-27実測: autopilot 形式の `- why:` `- first_step:` が残TODOに繰り上がり、
+    // 未決の「目的完了: …」も持ち越された。先頭が目的完了の項目は完了扱いする。
+    if (/^目的完了(?:[:：]|（)/.test(first)) { stats.completed++; continue; }
     if (/^(?:未定|なし|（なし|以下は既存|上の「|下の既存)/.test(first)) { stats.context++; continue; }
     const explicit = [...first.matchAll(/(?:起票|更新)\s*[:：]?\s*(\d{4}-\d{2}-\d{2})/g)].at(-1)?.[1];
     const age = now - Date.parse(explicit || item.date);
@@ -98,7 +105,7 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
   return { text: output, overflow, stats, beforeBytes: Buffer.byteLength(source), afterBytes: Buffer.byteLength(output) };
 }
 
-export function rotate(file, { now = new Date(), maxBytes = MAX_BYTES, source: supplied, promotionPendingCount } = {}) {
+export function rotate(file, { now = new Date(), maxBytes = MAX_BYTES, source: supplied, promotionPendingCount, retryOptions } = {}) {
   if (!fs.existsSync(file) && supplied === undefined) return { changed: false, reason: 'absent' };
   const original = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   const source = supplied ?? original;
@@ -137,16 +144,16 @@ export function rotate(file, { now = new Date(), maxBytes = MAX_BYTES, source: s
   if ((fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '') !== original) throw new Error('next-session changed concurrently; retry with the latest content');
   const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(temp, result.text, { flag: 'wx' });
-  fs.renameSync(temp, file);
+  renameWithRetry(temp, file, retryOptions);
   if (fs.readFileSync(file, 'utf8') !== result.text) throw new Error('next-session read-back mismatch');
   return { ...result, afterBytes: Buffer.byteLength(result.text), changed: true, archive };
 }
 
 // Writers pass their complete proposed content; archiving happens before the write above the cap.
-export function writeHandoff(file, text) {
-  if (Buffer.byteLength(text) > MAX_BYTES) return rotate(file, { source: text });
+export function writeHandoff(file, text, retryOptions) {
+  if (Buffer.byteLength(text) > MAX_BYTES) return rotate(file, { source: text, retryOptions });
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, text);
+  writeFileWithRetry(file, text, retryOptions);
   return { changed: true };
 }
 if (isEntry(import.meta.url)) {

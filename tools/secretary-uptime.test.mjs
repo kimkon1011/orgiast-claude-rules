@@ -34,6 +34,14 @@ test('local 200 is insufficient; external failure queues ask and exits nonzero',
   assert.equal(result.ok, false); assert.equal(f.messages.length, 1); assert.match(f.messages[0], /external/);
   assert.deepEqual(f.actions, ['funnel']);
 });
+test('Logged out は修復コマンドを実行せず再ログインが必要と記録する', async () => {
+  const f = fixture(['external'], false);
+  f.io.backend = async () => { throw Object.assign(new Error('status failed'), { stderr: 'Logged out.' }); };
+  const result = await repairPass(f.io);
+  assert.deepEqual(f.actions, []);
+  assert.match(result.state.errors.join(';'), /Tailscale 再ログインが必要/);
+  assert.equal(result.ok, false);
+});
 test('three separate incidents within 24h notify even after recovery', async () => {
   const now = Date.now(); const f = fixture(['gateway']);
   const result = await repairPass(f.io, { events: [{ at: now - 9000, cause: 'gateway' }, { at: now - 3000, cause: 'gateway' }, { at: now - 90000000, cause: 'gateway' }] }, now);

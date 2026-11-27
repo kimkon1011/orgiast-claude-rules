@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { addCheck, main } from './auto-progress.mjs';
-import { checkPromise, executeCheck, preflightCheck, hasBashEnvExpansion, hasCheckError, CHECK_ERROR_PATTERNS, resolveCheckShell, CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS, CHECK_MAX_BUFFER_BYTES, pendingAction } from './auto-progress-check.mjs';
+import { checkPromise, executeCheck, preflightCheck, hasBashEnvExpansion, hasCheckError, isNetworkCheck, isSquashUnsafeLandingCheck, CHECK_ERROR_PATTERNS, resolveCheckShell, CHECK_TIMEOUT_MS, NETWORK_CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS, CHECK_MAX_BUFFER_BYTES, pendingAction } from './auto-progress-check.mjs';
 import { readLedger, writeLedger, ledgerFile } from './auto-progress-ledger.mjs';
 import { run as watch } from './auto-progress-watch.mjs';
 import { run as digest } from './auto-progress-digest.mjs';
@@ -99,7 +99,89 @@ test('executeCheck lets a row extend its timeout for network-bound checks, bound
   executeCheck({ check: 'gh run view', checkTimeoutMs: 999999 }, { home: tmp(), shellPath: null, spawnImpl });
   executeCheck({ check: 'gh run view', checkTimeoutMs: 0 }, { home: tmp(), shellPath: null, spawnImpl });
   executeCheck({ check: 'gh run view', checkTimeoutMs: 'soon' }, { home: tmp(), shellPath: null, spawnImpl });
-  assert.deepEqual(seen, [180000, MAX_CHECK_TIMEOUT_MS, CHECK_TIMEOUT_MS, CHECK_TIMEOUT_MS]);
+  assert.deepEqual(seen, [180000, MAX_CHECK_TIMEOUT_MS, NETWORK_CHECK_TIMEOUT_MS, NETWORK_CHECK_TIMEOUT_MS]);
+});
+test('executeCheck disables Git credential prompts and gives detected network checks 90 seconds by default', () => {
+  for (const check of ['git fetch origin main', 'git ls-remote origin', 'gh pr view 1', 'curl https://example.test']) {
+    executeCheck({ check }, { shellPath: null, spawnImpl: (_, options) => {
+      assert.equal(options.timeout, NETWORK_CHECK_TIMEOUT_MS);
+      assert.equal(options.env.GIT_TERMINAL_PROMPT, '0');
+      assert.equal(options.env.GCM_INTERACTIVE, 'never');
+      return { status: 1, stdout: '' };
+    } });
+  }
+});
+test('executeCheck detects git commands with options between git and subcommand', () => {
+  // Test the regex pattern directly
+  const networkCheckRegex = /(?:^|[;&|]\s*|\b)(?:git(?:\s+-[a-zA-Z0-9=\s.:\/\\\-]+)*\s+(?:fetch|ls-remote|pull|push)\b|gh\s+|curl\s+)/i;
+
+  const positiveTests = [
+    'git fetch origin main',
+    'git ls-remote origin',
+    'git -C C:/x fetch -q origin main',
+    'git -c http.timeout=5 ls-remote origin',
+    'sh -c \'git -C C:/Users/kimko/.claude/nightly-repo fetch -q origin main && ...\'',
+    'git pull origin main',
+    'git push origin main'
+  ];
+
+  const negativeTests = [
+    'git -C x log',
+    'git status',
+    'git diff'
+  ];
+
+  for (const test of positiveTests) {
+    assert.equal(networkCheckRegex.test(test), true, `Expected regex to match: ${test}`);
+  }
+
+  for (const test of negativeTests) {
+    assert.equal(networkCheckRegex.test(test), false, `Expected regex to not match: ${test}`);
+  }
+
+  // Test cases for timeout assignment
+  const testCases = [
+    { check: 'git -C C:/x fetch -q origin main', expectedTimeout: NETWORK_CHECK_TIMEOUT_MS },
+    { check: 'git -c http.timeout=5 ls-remote origin', expectedTimeout: NETWORK_CHECK_TIMEOUT_MS },
+    { check: 'sh -c \'git -C C:/Users/kimko/.claude/nightly-repo fetch -q origin main && ...\'', expectedTimeout: NETWORK_CHECK_TIMEOUT_MS },
+    { check: 'git -C x log', expectedTimeout: CHECK_TIMEOUT_MS },
+  ];
+
+  for (const { check, expectedTimeout } of testCases) {
+    // First test isNetworkCheck directly
+    if (expectedTimeout === NETWORK_CHECK_TIMEOUT_MS) {
+      assert.equal(isNetworkCheck(check), true, `Expected ${check} to be recognized as network check`);
+    } else {
+      assert.equal(isNetworkCheck(check), false, `Expected ${check} to NOT be recognized as network check`);
+    }
+
+    // Then test executeCheck timeout assignment
+    executeCheck({ check }, { shellPath: null, spawnImpl: (_, options) => {
+      assert.equal(options.timeout, expectedTimeout, `Timeout mismatch for check: ${check}`);
+      return { status: 1, stdout: '' };
+    } });
+  }
+});
+test('executeCheck retries a transient network failure once and reports a repeated failure as unknown', () => {
+  let calls = 0;
+  const recovered = executeCheck({ check: 'git fetch origin main' }, { shellPath: null, spawnImpl: () =>
+    ++calls === 1 ? { status: 1, stderr: 'fatal: Could not resolve host: github.com' } : { status: 0, stdout: 'landed' } });
+  assert.equal(calls, 2); assert.equal(recovered.code, 0); assert.equal(recovered.text, 'landed');
+  calls = 0;
+  const failed = executeCheck({ check: 'curl https://example.test' }, { shellPath: null, spawnImpl: () => {
+    calls++; return { status: 1, stderr: 'curl: Failed to connect to example.test' };
+  } });
+  assert.equal(calls, 2); assert.equal(failed.code, null); assert.equal(failed.networkTransient, true);
+  assert.match(failed.text, /判定不能: ネットワーク一過性エラー（1回再試行後）/);
+});
+test('executeCheck does not retry or report a transient network error when the check succeeds', () => {
+  let calls = 0;
+  const result = executeCheck({ check: 'git fetch origin main' }, { shellPath: null, spawnImpl: () => {
+    calls++; return { status: 0, stdout: '', stderr: 'warning: Could not resolve host during an earlier attempt' };
+  } });
+  assert.equal(calls, 1);
+  assert.equal(result.code, 0);
+  assert.equal(result.networkTransient, undefined);
 });
 test('executeCheck reports a timeout as the bound and how to extend it, not as a shell failure', () => {
   const error = Object.assign(new Error('spawnSync C:\Program Files\Git\bin\bash.exe ETIMEDOUT'), { code: 'ETIMEDOUT' });
@@ -189,7 +271,7 @@ test('executeCheck invokes explicit Bash without shell and preserves execution o
   assert.deepEqual(executeCheck({ check, checkCwd: home }, { home, shellPath: 'git-bash', spawnImpl: (shell, args, opts) => {
     assert.equal(shell, 'git-bash'); assert.deepEqual(args, ['-c', check]);
     assert.equal(Object.hasOwn(opts, 'shell'), false); assert.equal(opts.cwd, home);
-    assert.equal(opts.timeout, CHECK_TIMEOUT_MS); assert.equal(opts.maxBuffer, CHECK_MAX_BUFFER_BYTES);
+    assert.equal(opts.timeout, NETWORK_CHECK_TIMEOUT_MS); assert.equal(opts.maxBuffer, CHECK_MAX_BUFFER_BYTES);
     assert.equal(opts.windowsHide, true); assert.equal(opts.encoding, 'utf8'); assert.equal(opts.env.ORGIAST_HOME, home);
     return { status: 1, stdout: '' };
   } }), { code: 1, stdout: '', text: '未達', stderr: '' });
@@ -339,6 +421,25 @@ test('preflightCheck: --force-check で静的検査をスキップできる', ()
   assert.notEqual(pf.preflight, 'static_error');
 });
 
+test('isSquashUnsafeLandingCheck: squash 後に残らない SHA・件名の着地判定を検出する', () => {
+  assert.equal(isSquashUnsafeLandingCheck('git merge-base --is-ancestor d5242ab0 origin/main'), true);
+  assert.equal(isSquashUnsafeLandingCheck("git log origin/main --format=%s | grep -q 'reject PR merge approval asks'"), true);
+  assert.equal(isSquashUnsafeLandingCheck("git log origin/main --format=%s | grep -qF '(#2729)'"), false);
+  assert.equal(isSquashUnsafeLandingCheck('gh pr view 2729 --json state -q .state | grep -qx MERGED'), false);
+  assert.equal(isSquashUnsafeLandingCheck('test -f completed.json'), false);
+});
+
+test('preflightCheck: squash 非対応の着地判定を拒否し --force-check では迂回できる', () => {
+  const check = 'git merge-base --is-ancestor d5242ab0 origin/main';
+  const rejected = preflightCheck({ check }, { spawnImpl: () => assert.fail('静的拒否の前に実行してはならない') });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.preflight, 'static_error');
+  assert.match(rejected.text, /永久に未達/);
+  const forced = preflightCheck({ check }, { forceCheck: true, spawnImpl: () => ({ status: 1, stdout: '', stderr: '' }) });
+  assert.equal(forced.ok, true);
+  assert.equal(forced.preflight, 'unmet');
+});
+
 test('preflightCheck: 未達 check(exit 1・stderr無し)はそのまま通る', () => {
   const home = os.tmpdir();
   const pf = preflightCheck({ check: 'exit 1' }, { home });
@@ -481,6 +582,16 @@ test('checkPromise treats an output overflow as unknown, not as a failed check',
   const changes = {};
   await checkPromise(row, { home, now, patch: (_, next) => Object.assign(changes, next), suppressNotices: true,
     io: { executeCheck: () => ({ code: null, overflowed: true, stdout: '', text: '判定不能: check の出力が 4MB の上限を超えました' }) } });
+  assert.equal(changes.checkResult, 'unknown');
+  assert.equal(changes.verdict, 'check_unknown');
+});
+
+test('checkPromise treats a repeated transient network failure as unknown', async () => {
+  const home = tmp();
+  const row = { check: 'git fetch origin main', label: 'network check', deadlineAt: new Date(now + 86400000).toISOString(), status: 'open' };
+  const changes = {};
+  await checkPromise(row, { home, now, patch: (_, next) => Object.assign(changes, next), suppressNotices: true,
+    io: { executeCheck: () => ({ code: null, networkTransient: true, stdout: '', text: '判定不能: ネットワーク一過性エラー（1回再試行後）' }) } });
   assert.equal(changes.checkResult, 'unknown');
   assert.equal(changes.verdict, 'check_unknown');
 });

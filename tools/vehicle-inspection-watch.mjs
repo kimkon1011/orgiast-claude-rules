@@ -176,10 +176,13 @@ async function withBodyFile(body, fn) {
   }
 }
 
-export function retireVehicleAsks(home, row) {
+export function retireVehicleAsks(home, row, openItems) {
   if (!row.name || !row.plate) return;
-  for (const item of listItems(home, { status: 'open' })) {
-    if (item.kind === 'ask' && item.source === 'vehicle-inspection' && item.text.startsWith(`【車検】${row.name}（${row.plate}）`)) dropItem(home, item.id, '期限レーンに移行');
+  for (const item of openItems || listItems(home, { status: 'open' })) {
+    if (item.status === 'open' && item.kind === 'ask' && item.source === 'vehicle-inspection' && item.text.startsWith(`【車検】${row.name}（${row.plate}）`)) {
+      dropItem(home, item.id, '期限レーンに移行');
+      item.status = 'dropped';
+    }
   }
 }
 

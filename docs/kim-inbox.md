@@ -15,7 +15,8 @@ kim 宛の報告を Discord からセッション内の会話へ移す（2026-10
 
 ### 同じ質問を繰り返さない（2026-11-19）
 - 原因の実測: `auto-progress-escalate` が自動進行台帳の判断待ち行ごとに毎日新しい ask を作っていた（190 行から 1273 件、1083 件が重複）。受信箱で回答しても台帳の行は open のままで、翌日また聞いていた。社外返信待ちの回答（`kim-awaiting --answer ex:…`）も保存されるだけで読まれず、同じ項目が質問として出続けた（別 PR で修正）。
-- エスカレーションは `dedupeKey: auto-progress-escalate:<行キー>` で1行1件。受信箱に同じ行の ask（旧形式の本文一致を含む）があれば新しく積まない。回答・取り下げは `lib/escalation-answer-sync.mjs` が台帳の行に `kimAnswer`・`nextKim: なし` として書き戻す（`answerItem` / `dropItem` と escalate の両方から）。
+- エスカレーションは `dedupeKey: auto-progress-escalate:<行キー>` で照合する。同じ行の未回答・回答済み・手動取り下げ済みの ask（旧形式の本文一致を含む）があれば新しく積まない。手動の回答・取り下げは `lib/escalation-answer-sync.mjs` が台帳に反映する。
+- `auto-progress-watch` の保守処理では、作成から5日以上経った未回答のエスカレーション ask を確認する。元の台帳行が終了済み（`done`・`expired`・`superseded`・`skipped`）または削除済みの場合に自動で取り下げ、送信履歴を消す。同じ行が再び判断待ちになれば再送できる。
 - 社外返信待ち（`kim-awaiting --answer ex:…`）の回答が一覧に残る件は、別 PR（セッション e58984ea の恒久修正）で扱う。
 - 質問前の照合: `node tools/kim-inbox.mjs --lookup "<語> <語>"` で回答済み ask を探す。セッション内で受けた答えは kim-inbox に記録して他セッションと共有する。
 - kim が外すと決めた MCP は `~/.claude/mcp-optout.json`（`{"disabled":["gemini-cli"]}`）に書く。`register-hooks.mjs` と `tool-adoption-check.mjs` はこれを見て再登録しない。

@@ -30,8 +30,11 @@ import { validateWeekdays } from './lib/weekday-validator.mjs';
 import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 import { acquireSendDedupe, SendDedupeError } from './lib/send-dedupe.mjs';
 import { applyBoothCc } from './lib/booth-sales-cc.mjs';
+import { applyInvoiceCc, draftAttachmentNames } from './lib/invoice-cc.mjs';
+import { assertNoHandback, stripHumanOnly } from './lib/handback-guard.mjs';
 
 const BOOTH_CC = 'satou@orgiast.jp';
+const INVOICE_CC = 'keiri2@orgiast.jp';
 
 export const GMAIL_COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
 export const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -41,6 +44,17 @@ const DEFAULT_KEY = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath();
 const SCOPES = ['gmail.readonly', 'gmail.compose', 'gmail.send'].map(s => `https://www.googleapis.com/auth/${s}`);
 const b64url = value => Buffer.from(value).toString('base64url');
 const configError = () => Object.assign(new Error('設定を確認してください（引数・入力ファイル・SA キー）。'), { errorKind: 'configuration_error' });
+
+/** 送信前に差し戻し文面を止める。HUMAN-ONLY タグは先方に見せないので、除去後の本文が変わる場合は下書き更新が必要。 */
+export function assertGmailBodySendable(text, { env = process.env, skipHandbackGuard = false } = {}) {
+  if (!skipHandbackGuard) assertNoHandback(text, { env });
+  const stripped = stripHumanOnly(text);
+  if (stripped !== String(text ?? '')) {
+    throw Object.assign(new Error('下書き本文の [HUMAN-ONLY: ...] を外してから送ってください。タグは送信許可の印で、先方には見せません。'), { errorKind: 'handback_tag_present', code: 'HANDBACK_TAG_UNSTRIPPED', stripped });
+  }
+  return stripped;
+}
+
 
 function addresses(value, required = false) {
   const list = (Array.isArray(value) ? value : [value ?? '']).flatMap(v => {
@@ -176,7 +190,8 @@ export function classifyTokenError(json) {
 
 function safeFailure(error) {
   if (error?.errorKind === 'seisaku_relay') return { errorKind: 'seisaku_relay', error: error.message };
-  const errorKind = error?.errorKind === 'configuration_error' ? 'configuration_error'
+  const errorKind = error?.code === 'SEND_CONTEXT_REQUIRED' || error?.errorKind === 'send_context_required' ? 'send_context_required'
+    : error?.errorKind === 'configuration_error' ? 'configuration_error'
     : error?.errorKind === 'too_large' ? 'too_large'
     : error?.tokenError ? classifyTokenError(error.detail)
       : ['scope_not_delegated', 'forbidden_no_access', 'unauthorized'].includes(error?.errorKind) ? error.errorKind : 'error';
@@ -186,9 +201,12 @@ function safeFailure(error) {
     forbidden_no_access: 'Gmail API へのアクセス権限がありません。',
     unauthorized: 'Gmail API の認証に失敗しました。',
     too_large: '転送メールが25MBを超えています。',
+    send_context_required: error?.message,
     error: '処理に失敗しました（認証・通信・API 応答を確認してください）。',
   };
-  const result = { errorKind, error: messages[errorKind] };
+  const httpStatus = error?.httpStatus;
+  const suffix = httpStatus !== undefined ? `（HTTP ${httpStatus}）` : '';
+  const result = { errorKind, error: `${messages[errorKind]}${suffix}` };
   if (error?.httpStatus !== undefined) result.detail = `threads.get ${error.httpStatus}`;
   return result;
 }
@@ -301,7 +319,7 @@ async function fetchDraftBody({ user, id, fetchImpl, getToken }) {
 }
 
 /** Read the existing MIME headers before sending; include hidden Bcc recipients. */
-export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger(), fetchImpl = gwsFetch, getToken, draft: suppliedDraft, allowRepeat, home, acquireDedupe = acquireSendDedupe }) {
+export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger(), fetchImpl = gwsFetch, getToken, draft: suppliedDraft, allowRepeat, home, acquireDedupe = acquireSendDedupe, env = process.env, skipHandbackGuard = false }) {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(id)) throw configError();
   const token = await (getToken ?? (args => mintDwdToken({ ...args, fetchImpl })))({ user, scope: GMAIL_COMPOSE_SCOPE });
   const request = async (url, options = {}) => {
@@ -322,7 +340,9 @@ export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger()
   const internal = recipients.filter(addr => isInternal(addr, ledger));
   const isForward = values('x-orgiast-forward').some(value => /^[A-Za-z0-9_-]+$/u.test(value));
   if (shouldBlockInternal(recipientFields, ledger) && !isForward) throw Object.assign(new Error('内部宛は Discord で連絡してください。'), { errorKind: 'internal_recipient', internal });
-  const guard = await acquireDedupe({ recipients: values('to'), body: mimeText(draft?.message?.payload).text, allowRepeat, home });
+  const draftBody = mimeText(draft?.message?.payload).text;
+  assertGmailBodySendable(draftBody, { env, skipHandbackGuard });
+  const guard = await acquireDedupe({ recipients: values('to'), body: draftBody, allowRepeat, home });
   try {
     const sent = await request('https://gmail.googleapis.com/gmail/v1/users/me/drafts/send', {
       method: 'POST', body: JSON.stringify({ id }),
@@ -369,12 +389,17 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       if (args['body-file'] !== undefined) { try { preface = (deps.readFile ?? (p => fs.readFileSync(p, 'utf8')))(args['body-file']); } catch { throw configError(); } }
       const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
       const originalRaw = await (deps.fetchMessageRaw ?? (options => fetchMessageRaw({ ...options, fetchImpl, getToken })))({ user, id: args.forward });
-      const boothCc = applyBoothCc({ to: args.to, cc: args.cc, body: `${preface}\n${Buffer.from(originalRaw, 'base64url').toString('utf8')}`, booth: args.booth });
-      const raw = buildForwardRaw({ from: user, to: args.to, cc: boothCc.cc, preface, messageId: args.forward, originalRaw });
-      const boothReport = boothCc.added ? { boothCcAdded: BOOTH_CC } : {};
-      if (args['dry-run']) { emit({ ok: true, ...boothReport, raw, headers: Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0] }, `raw: ${raw}${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}`); return 0; }
+      const originalSource = Buffer.from(originalRaw, 'base64url').toString('utf8');
+      const originalHeaderEnd = originalSource.search(/\r?\n\r?\n/u);
+      const originalSubject = decodeHeader(parseHeaders(originalHeaderEnd < 0 ? originalSource : originalSource.slice(0, originalHeaderEnd)).get('subject') ?? '');
+      const boothCc = applyBoothCc({ to: args.to, cc: args.cc, body: `${preface}\n${originalSource}`, booth: args.booth });
+      const invoiceCc = applyInvoiceCc({ to: args.to, cc: boothCc.cc, subject: originalSubject, body: preface });
+      const raw = buildForwardRaw({ from: user, to: args.to, cc: invoiceCc.cc, preface, messageId: args.forward, originalRaw });
+      const ccReport = { ...(boothCc.added ? { boothCcAdded: BOOTH_CC } : {}), ...(invoiceCc.added ? { invoiceCcAdded: INVOICE_CC } : {}) };
+      const ccHuman = `${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}${invoiceCc.added ? `\ninvoiceCcAdded: ${INVOICE_CC}` : ''}`;
+      if (args['dry-run']) { emit({ ok: true, ...ccReport, raw, headers: Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0] }, `raw: ${raw}${ccHuman}`); return 0; }
       const result = await createDraft({ user, raw, fetchImpl, getToken });
-      emit({ ok: true, ...boothReport, ...result }, `転送下書きを作成しました: ${result.id} (${user})${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}`);
+      emit({ ok: true, ...ccReport, ...result }, `転送下書きを作成しました: ${result.id} (${user})${ccHuman}`);
       return 0;
     }
     if (Object.hasOwn(args, 'send')) {
@@ -405,15 +430,32 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       } catch { consistency = await inspect(); }
       const draftText = mimeText(draft?.message?.payload).text;
       const draftHeader = name => (headers ?? []).filter(header => String(header.name).toLowerCase() === name).map(header => header.value);
-      const boothCc = applyBoothCc({ to: draftHeader('to'), cc: draftHeader('cc'), subject: draftHeader('subject').join(' '), body: draftText, booth: args.booth });
+      const draftSubject = draftHeader('subject').join(' ');
+      const boothCc = applyBoothCc({ to: draftHeader('to'), cc: draftHeader('cc'), subject: draftSubject, body: draftText, booth: args.booth });
       if (boothCc.added) {
         emit({ ok: false, errorKind: 'booth_cc_missing', boothCcAdded: BOOTH_CC, reason: boothCc.reason }, `ブース営業メールのCCに ${BOOTH_CC} がありません。下書きを修正してから送信してください。`);
+        return 2;
+      }
+      const invoiceCc = applyInvoiceCc({
+        to: draftHeader('to'), cc: draftHeader('cc'), subject: draftSubject, body: draftText,
+        attachments: draftAttachmentNames(draft?.message?.payload),
+      });
+      if (invoiceCc.added) {
+        emit({ ok: false, errorKind: 'invoice_cc_missing', invoiceCcAdded: INVOICE_CC, reason: invoiceCc.reason }, `請求書メールのCCに ${INVOICE_CC} がありません。下書きを修正してから送信してください。`);
         return 2;
       }
       const bookingUrls = findSecretaryBookingUrls(draftText);
       if (bookingUrls.length) {
         emit({ ok: false, errorKind: 'secretary_booking_url', matches: bookingUrls }, `${SECRETARY_BOOKING_URL_REASON}\n検出: ${bookingUrls.join('、')}`);
         return 2;
+      }
+      try { assertGmailBodySendable(draftText, { env: deps.env ?? process.env, skipHandbackGuard: deps.skipHandbackGuard }); }
+      catch (error) {
+        if (error?.code === 'HANDBACK_BLOCKED' || error?.errorKind === 'handback_tag_present') {
+          emit({ ok: false, errorKind: error.errorKind ?? 'handback_blocked', hits: error.hits, code: error.code }, error.message);
+          return 4;
+        }
+        throw error;
       }
       if (!isForward && !consistency.ok && !args['ack-consistency']) { emit({ ok: false, errorKind: 'consistency_block', findings: consistency.findings }, renderConsistency(consistency)); return 2; }
       if (!isForward && args['ack-consistency']) {
@@ -484,8 +526,10 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     if (args['thread-id'] !== undefined && !/^[A-Za-z0-9_-]+$/u.test(args['thread-id'])) throw configError();
     const attachments = (args.attach ?? []).map(file => { try { return { name: path.basename(file), data: (deps.readAttachment ?? fs.readFileSync)(file) }; } catch { throw configError(); } });
     const boothCc = applyBoothCc({ to: args.to, cc: args.cc, subject: args.subject ?? '', body, booth: args.booth });
-    const input = { inReplyTo: args['in-reply-to'], from: user, to: args.to, cc: boothCc.cc, subject: args.subject ?? 'Re: (取得予定)', body, attachments };
-    const boothReport = boothCc.added ? { boothCcAdded: BOOTH_CC } : {};
+    const invoiceCc = applyInvoiceCc({ to: args.to, cc: boothCc.cc, subject: args.subject ?? '', body, attachments: attachments.map(file => file.name) });
+    const input = { inReplyTo: args['in-reply-to'], from: user, to: args.to, cc: invoiceCc.cc, subject: args.subject ?? 'Re: (取得予定)', body, attachments };
+    const ccReport = { ...(boothCc.added ? { boothCcAdded: BOOTH_CC } : {}), ...(invoiceCc.added ? { invoiceCcAdded: INVOICE_CC } : {}) };
+    const ccHuman = `${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}${invoiceCc.added ? `\ninvoiceCcAdded: ${INVOICE_CC}` : ''}`;
     const guard = guardRecipients(input, (deps.loadLedger ?? loadLedger)());
     if (guard.blocked) {
       action = 'chat-display';
@@ -500,8 +544,8 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         headers = headers.replace(/\r\n(?:In-Reply-To|References):[^\r\n]*/gu, '');
         headers += '\r\nIn-Reply-To: (取得予定)\r\nReferences: (返信先の References を取得予定) (取得予定)';
       }
-      emit({ ok: true, ...boothReport, raw, headers, ...(args['thread-id'] ? { threadId: args['thread-id'] } : {}) },
-        `${args['thread-id'] ? `threadId: ${args['thread-id']}\n` : ''}${headers}\n\nraw: ${raw}${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}`);
+      emit({ ok: true, ...ccReport, raw, headers, ...(args['thread-id'] ? { threadId: args['thread-id'] } : {}) },
+        `${args['thread-id'] ? `threadId: ${args['thread-id']}\n` : ''}${headers}\n\nraw: ${raw}${ccHuman}`);
       return 0;
     }
     const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
@@ -514,11 +558,15 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     const result = await createDraft({ user, raw, threadId: args['thread-id'], fetchImpl,
       getToken,
     });
-    emit({ ok: true, ...boothReport, ...result }, `下書きを作成しました: ${result.id} (${user})${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}`);
+    emit({ ok: true, ...ccReport, ...result }, `下書きを作成しました: ${result.id} (${user})${ccHuman}`);
     return 0;
   } catch (error) {
     if (error instanceof SendDedupeError) {
       emit({ ok: false, errorKind: 'send_duplicate', error: error.message }, error.message);
+      return 4;
+    }
+    if (error?.code === 'HANDBACK_BLOCKED' || error?.errorKind === 'handback_blocked' || error?.errorKind === 'handback_tag_present') {
+      emit({ ok: false, errorKind: error.errorKind ?? 'handback_blocked', hits: error.hits, code: error.code }, error.message);
       return 4;
     }
     if (error?.errorKind === 'internal_recipient') {
@@ -527,7 +575,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     }
     const failure = safeFailure(error);
     emit({ ok: false, ...(action === 'delete' ? { deleted: false, id: deletionId } : {}), ...failure }, failure.error);
-    return failure.errorKind === 'configuration_error' ? 2 : 1;
+    return ['configuration_error', 'send_context_required'].includes(failure.errorKind) ? 2 : 1;
   }
 }
 

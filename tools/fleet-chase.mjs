@@ -136,7 +136,16 @@ export async function runChase(options = {}, deps = {}) {
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const options = parseArgs(argv);
   const result = await runChase(options, deps);
-  if (result.skipped === 'not-controller') return 0;
+  if (result.skipped === 'not-controller') {
+    const explicit = ['--cancel', '--defer', '--revive', '--expect'].some(k => options[k]);
+    if (explicit) {
+      const home = deps.home ?? process.env.ORGIAST_HOME ?? os.homedir();
+      const label = resolveFleetLabel(home);
+      (deps.stderr ?? console.error)(`fleet-chase: このPCは controller(kim-PC) ではないため操作できません（label=${label}）`);
+      return 2;
+    }
+    return 0;
+  }
   const stdout = deps.stdout ?? console.log;
   if (options['--json'] || result.skipped) stdout(JSON.stringify(safe(result)));
   else if (options['--compliance']) stdout(result.compliance);

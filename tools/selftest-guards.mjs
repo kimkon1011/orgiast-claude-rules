@@ -236,12 +236,12 @@ test('model-agent-guard: block昇格時は実装委譲を deny', () => {
   const output = JSON.parse(r.stdout);
   assert(output.hookSpecificOutput.permissionDecision === 'deny', r.stdout || r.stderr);
 });
-test('model-agent-guard: Explore+model未指定は安経路への案内を warn で通す', () => {
-  const temp = makeTempHome('orgiast-model-agent-explore-warn-test-');
+test('model-agent-guard: Explore+model未指定は安経路への案内で deny する', () => {
+  const temp = makeTempHome('explore-deny-test');
   const r = run('model-agent-guard.mjs', { tool_name: 'Agent', tool_input: { subagent_type: 'Explore', prompt: '設定を調査して' } }, [], { ORGIAST_HOME: temp });
   const output = JSON.parse(r.stdout).hookSpecificOutput;
-  assert(output.additionalContext && output.additionalContext.includes('gemini -p') && output.additionalContext.includes('codex-do.mjs --review'), r.stdout || r.stderr);
-  assert(!output.permissionDecision, '探索の既定は warn で通す');
+  assert(output.permissionDecision === 'deny', r.stdout || r.stderr);
+  assert(output.permissionDecisionReason && output.permissionDecisionReason.includes('gemini -p') && output.permissionDecisionReason.includes('codex-do.mjs --review'), r.stdout || r.stderr);
 });
 test('model-agent-guard: Explore+haiku と専門agent は無出力', () => {
   const temp = makeTempHome('orgiast-model-agent-quiet-test-');

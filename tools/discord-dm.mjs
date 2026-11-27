@@ -8,6 +8,7 @@ import { clipDiscordContent, KIM_DISCORD_USER_ID, resolveDiscordBotToken } from 
 import { addItem, isKimSeat } from './kim-inbox.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
+import { assertNoHandback, stripHumanOnly } from './lib/handback-guard.mjs';
 
 const API = 'https://discord.com/api/v10';
 const USER_AGENT = 'orgiast-discord-dm/1.0';
@@ -52,6 +53,9 @@ export async function sendDiscordDm(target, body, options = {}) {
   const isKim = isKimRecipient({ id: recipient.id, name: recipientName });
   const inbox = isKim;
   if (!options.noCopyKim && !isKim) copyToKim = isKimSeat(home) ? 'in-session' : 'session-inbox';
+  // kim 2026-11-26 絶対方針: AIで確認・実行できることを相手に戻す文面は送らない（[HUMAN-ONLY: 理由] 付きだけ通す）。
+  if (!options.skipHandbackGuard) assertNoHandback(body, { env: options.env ?? process.env });
+  body = stripHumanOnly(body);
   const finalBody = isKim || options.noReplyFooter ? String(body ?? '').trimEnd() : withReplyToKimFooter(body);
   const content = safeContent(finalBody);
   // 秘匿除去で本文が変わる場合は送らず停止（切り詰めだけの変化は対象外）
@@ -142,7 +146,7 @@ export async function main(args = process.argv.slice(2), options = {}) {
     console.log(JSON.stringify(result));
     return result.delivered === 'blocked' ? 3 : 0;
   } catch (error) {
-    const exitCode = error.code === 'RECIPIENT_UNRESOLVED' ? 3 : error.code === 'DISCORD_TOKEN_MISSING' ? 2 : 1;
+    const exitCode = error.code === 'RECIPIENT_UNRESOLVED' ? 3 : error.code === 'DISCORD_TOKEN_MISSING' ? 2 : error.code === 'HANDBACK_BLOCKED' ? 4 : 1;
     console.error(`discord-dm: ${error.message}`);
     console.log(JSON.stringify({ ok: false, target: parsed.target, error: error.code ?? 'SEND_FAILED' }));
     return exitCode;

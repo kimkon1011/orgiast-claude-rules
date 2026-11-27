@@ -43,7 +43,45 @@ export function isAcademicGroup(group) {
 }
 
 export const GAKKAI_CALENDAR = 'seisaku-team@orgiast.jp';
+export const RECRUITING_CALENDAR = 'seisaku-team@orgiast.jp';
+export function isRecruitingInterview(ev = {}, { group, source } = {}) {
+  return source === 'discord' && /面談設定/u.test(String(group || ''))
+    || /^(?:【[^】]+】)?【自動】【面談設定】/u.test(String(ev.summary || ''));
+}
+export const AI_CALENDAR = 'orgiast.jp_qqukp0gg2l94o501uhugn0i63s@group.calendar.google.com';
 export const PREPARATION_PREFIX = '📋 準備: ';
+
+const MEETING_WORDS = /^(?:M[:：])|訪問|電話|面談|面接|中途面談|打ち?合わせ|ミーティング|MTG|会議/iu;
+const MEETING_URL = /(?:meet\.google\.com|zoom\.us|teams\.microsoft\.com)/iu;
+
+export function isKimMeeting(ev = {}) {
+  if (isRecruitingInterview(ev)) return false;
+  const text = [ev.summary, ev.description, ev.location, ev.hangoutLink].filter(Boolean).join('\n');
+  const hasOtherAttendee = Array.isArray(ev.attendees)
+    && ev.attendees.some(a => a?.email && a.email.toLowerCase() !== 'kim@orgiast.jp' && !a.resource);
+  return MEETING_WORDS.test(String(ev.summary || '')) || MEETING_URL.test(text) || Boolean(ev.hangoutLink) || hasOtherAttendee;
+}
+
+export function routeCalendar(ev = {}, { origin, group, source } = {}) {
+  if (isRecruitingInterview(ev, { group, source })) return RECRUITING_CALENDAR;
+  if (isKimMeeting(ev)) return 'primary';
+  const text = [ev.summary, ev.description, ev.location].filter(Boolean).join('\n');
+  const summary = String(ev.summary || '');
+  const ai = /【(?:期限|自動|仮|延長)】/u.test(summary) || /DeadlineWatch|Codex|Claude|auto-progress|fleet-mail|担当[：:]\s*(?:Claude|Codex|夜間)/iu.test(text);
+  const recruiting = /急募|時給|求人|応募|Indeed|アルバイト|バイト/iu.test(text);
+  const academic = /学会|学術集会|協賛ナビ/iu.test(text);
+  return origin === 'ai' || ai || recruiting || academic ? AI_CALENDAR : 'primary';
+}
+
+export function withCaseLabel({ summary = '', description = '' } = {}, caseName, source = '不明') {
+  const name = String(caseName || '').trim();
+  const label = name ? `【${name}】` : '【案件未特定】';
+  const caseLine = name ? `案件: ${name}` : `案件: 未特定（登録元: ${source}）`;
+  const nextSummary = String(summary).includes(label) ? String(summary) : `${label}${summary}`;
+  const lines = String(description).split(/\r?\n/);
+  const nextDescription = lines[0] === caseLine ? String(description) : [caseLine, description].filter(Boolean).join('\n');
+  return { summary: nextSummary, description: nextDescription };
+}
 
 export function isAcademicEvent(summary) {
   const title = summary?.startsWith(PREPARATION_PREFIX) ? summary.slice(PREPARATION_PREFIX.length) : summary;

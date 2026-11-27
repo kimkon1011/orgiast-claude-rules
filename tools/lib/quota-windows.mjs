@@ -8,7 +8,15 @@ const MINUTE = 60_000;
 // Identity must survive that flip, so bucket to the nearest minute and compare
 // with a tolerance instead of an exact key.
 export const resetKey = value => Math.round(value / MINUTE) * MINUTE;
-export const sameReset = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 2 * MINUTE;
+
+export const sameReset = (a, b, toleranceMinutes = 2) =>
+  Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= toleranceMinutes * MINUTE;
+
+// 2026-11-25 実測: Codex primary(300分) の resets_at は同じ窓でも 5.6 分動いた。
+// windowMinutes がない Claude は従来の ±2 分、Codex は窓長の 5%（上限15分）まで許容する。
+export const resetToleranceMinutes = window => Number.isFinite(window?.windowMinutes)
+  ? Math.max(2, Math.min(15, window.windowMinutes * 0.05))
+  : 2;
 export function parseCodexRateLimits(text) {
   let latest = null;
   // Read structured telemetry only. Quoted examples inside a user/tool message
@@ -95,24 +103,50 @@ export function shouldStopTick({ windows, provider, hardCeilingPercent = 97 }) {
 }
 
 export function decideSweep({ windows, now = Date.now(), leadMinutes = 90, minRemainingPercent = 15, marginMinutes = 3, hardCeilingPercent = 97, minRunMinutes = 10 }) {
+  return inspectSweep({ windows, now, leadMinutes, minRemainingPercent, marginMinutes, hardCeilingPercent, minRunMinutes }).decisions;
+}
+
+export function inspectSweep({ windows, now = Date.now(), leadMinutes = 90, minRemainingPercent = 15, marginMinutes = 3, hardCeilingPercent = 97, minRunMinutes = 10 }) {
   const decisions = [];
+  const skipped = [];
   for (const provider of ['claude', 'codex']) {
     const own = windows.filter(w => w.provider === provider);
-    if (shouldStopTick({ windows, provider, hardCeilingPercent })) continue;
-    if (provider === 'claude' && !['5h', '7d'].every(k => own.some(w => w.window === k && 100 - w.usedPercent >= minRemainingPercent))) continue;
+    const skip = (reason) => { skipped.push({ provider, reason }); };
+    if (!own.length) { skip(windows?.reasons?.[provider] ? `window unreadable: ${windows.reasons[provider]}` : 'windows unavailable'); continue; }
+    if (shouldStopTick({ windows, provider, hardCeilingPercent })) {
+      const five = own.find(w => w.window === '5h' || w.window === 'primary');
+      const weekly = own.find(w => w.window === '7d' || w.window === 'secondary');
+      if (provider === 'claude' && five && (five.exhausted || five.usedPercent >= hardCeilingPercent)) {
+        const when = Number.isFinite(five.resetsAt) ? new Date(five.resetsAt).toISOString() : 'unknown';
+        const weeklyLeft = weekly && Number.isFinite(weekly.usedPercent) ? `${Math.max(0, 100 - weekly.usedPercent)}%` : '?';
+        skip(`5h exhausted or at ceiling (used ${five.usedPercent}%); re-evaluate after 5h reset (${when}); 7d remaining ${weeklyLeft}; route to Codex or another account if eligible`);
+      } else {
+        skip('at ceiling or exhausted');
+      }
+      continue;
+    }
+    // Claude の開始条件は 7日枠の残りだけを見る。5時間枠の残量は開始ゲートにしない。
+    // 5時間枠が天井に達している場合は shouldStopTick で見送り、リセット後の15分ティックで再判定する。
+    // Codex が独立に条件を満たしていればそちらへ回す。
+    if (provider === 'claude' && !own.some(w => w.window === '7d' && 100 - w.usedPercent >= minRemainingPercent)) {
+      const weekly = own.find(w => w.window === '7d');
+      skip(weekly ? `7d remaining ${Math.max(0, 100 - weekly.usedPercent)}% below ${minRemainingPercent}%` : '7d window missing');
+      continue;
+    }
     // An unused window (0% used) has no resets_at yet: it is not an active limit.
     // Any other non-finite reset is unknown state, so stay conservative.
-    if (own.some(w => !Number.isFinite(w.resetsAt) && w.usedPercent !== 0)) continue;
+    if (own.some(w => !Number.isFinite(w.resetsAt) && w.usedPercent !== 0)) { skip('non-finite reset on an active window'); continue; }
     const active = own.filter(w => Number.isFinite(w.resetsAt));
-    // Every concurrent limit must allow work; resetting any active window ends this run.
-    if (active.some(w => w.resetsAt <= now || 100 - w.usedPercent < minRemainingPercent)) continue;
+    const gating = provider === 'claude' ? active.filter(w => w.window === '7d') : active;
+    if (gating.some(w => w.resetsAt <= now || 100 - w.usedPercent < minRemainingPercent)) { skip('gating window already reset or below remaining threshold'); continue; }
+    if (active.some(w => w.resetsAt <= now)) { skip('an active window has already reset'); continue; }
     const candidates = active.filter(w => w.resetsAt - now <= leadMinutes * MINUTE);
-    if (!candidates.length) continue;
+    if (!candidates.length) { skip(`no reset within ${leadMinutes} minutes`); continue; }
     const first = candidates.sort((a, b) => a.resetsAt - b.resetsAt)[0];
     const deadline = Math.min(...active.map(w => w.resetsAt)) - marginMinutes * MINUTE;
-    if (deadline - now < minRunMinutes * MINUTE) continue;
-    decisions.push({ provider, window: first.window, resetsAt: resetKey(first.resetsAt), deadline, usedPercent: first.usedPercent,
+    if (deadline - now < minRunMinutes * MINUTE) { skip(`deadline ${Math.round((deadline - now) / MINUTE)} minutes is below ${minRunMinutes} minute minimum`); continue; }
+    decisions.push({ provider, window: first.window, ...(Number.isFinite(first.windowMinutes) ? { windowMinutes: first.windowMinutes } : {}), resetsAt: resetKey(first.resetsAt), deadline, usedPercent: first.usedPercent,
       remainingPercent: 100 - first.usedPercent, reason: `reset approaching${own.some(w => w.stale) ? '; stale: refresh before tick' : ''}` });
   }
-  return decisions;
+  return { decisions, skipped };
 }

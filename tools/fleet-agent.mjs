@@ -15,6 +15,7 @@ import { isEntry } from './is-entry.mjs';
 import { redactForShare } from './lib/share-secrets.mjs';
 import { resolveClaudeExecutableFromDisk, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 import { evaluateClaudeSeatGuard, syncGbOffloadFlags } from './lib/claude-seat-guard.mjs';
+import { recordRun } from './lib/change-gate.mjs';
 
 const ALLOWED_KINDS = new Set(['status', 'prompt', 'enable-auto-session', 'run']);
 const RUN_TASKS = Object.freeze({
@@ -49,8 +50,8 @@ export function truncateAnswer(value) {
 }
 
 export function targetMatches(targets, label, hostname) {
-  const target = String(targets ?? '');
-  return target === '' || target === 'all' || String(label).includes(target) || String(hostname).includes(target);
+  const items = Array.isArray(targets) ? targets : String(targets ?? '').split(/[,、]/).map(s => s.trim()).filter(s => s !== '');
+  return items.length === 0 || items.some(item => item === 'all' || String(label).includes(item) || String(hostname).includes(item));
 }
 
 export function loadOptin(file, io = fs) {
@@ -418,6 +419,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     results.push({ id, ...(await processDirective(directive, { home, repo, label, hostname, dryRun, post, spawnImpl: dependencies.spawnImpl, run: dependencies.run, platform, auditLaunch: dependencies.auditLaunch, guardVerdict })) });
   }
   if (json) console.log(JSON.stringify(results));
+  recordRun('fleet-agent', { changed: results.length > 0, llmInvoked: results.some(result => !['skipped', 'status'].includes(result.action)), items: results.length, note: results.length ? 'directives processed' : 'no directives' });
   return results;
 }
 

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveFleetLabel } from './lib/fleet-label.mjs';
+import { normalizeFleetLabel, resolveFleetLabel } from './lib/fleet-label.mjs';
 
 function fixture(t, fleetMap = null, reporterLabel = undefined) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-label-'));
@@ -56,4 +56,30 @@ test('地図なし・REPORTER_LABEL なし→KimPC 正規化→kim-PC', t => {
 test('地図なし・REPORTER_LABEL なし・通常 hostname→hostname をそのまま返す', t => {
   const home = fixture(t);
   assert.equal(resolveFleetLabel(home, { hostname: 'my-workstation' }), 'my-workstation');
+});
+
+test('REPORTER_LABEL=000KimPC → kim-PC に正規化', t => {
+  const home = fixture(t, null, '000KimPC');
+  assert.equal(resolveFleetLabel(home, { hostname: 'whatever' }), 'kim-PC');
+});
+
+test('fleet-pc-map の label が 000KimPC → kim-PC に正規化', t => {
+  const home = fixture(t, { 'my-pc': { label: '000KimPC' } });
+  assert.equal(resolveFleetLabel(home, { hostname: 'my-pc' }), 'kim-PC');
+});
+
+test('REPORTER_LABEL=作業用018 / cafe015-PC は変えない', t => {
+  const work = fixture(t, null, '作業用018');
+  assert.equal(resolveFleetLabel(work, { hostname: 'whatever' }), '作業用018');
+  const cafe = fixture(t, null, 'cafe015-PC');
+  assert.equal(resolveFleetLabel(cafe, { hostname: 'whatever' }), 'cafe015-PC');
+});
+
+test('normalizeFleetLabel はゆれを kim-PC に揃え、他は不変', () => {
+  for (const input of ['000KimPC', 'kimpc', '000-kim-PC', '000｜kim-PC', 'kim-PC', 'KimPC']) {
+    assert.equal(normalizeFleetLabel(input), 'kim-PC', input);
+  }
+  for (const input of ['作業用018', 'cafe015-PC', 'EnvLabel', 'my-workstation']) {
+    assert.equal(normalizeFleetLabel(input), input, input);
+  }
 });

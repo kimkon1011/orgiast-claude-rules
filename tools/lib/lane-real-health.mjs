@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { normalizeExecutorStatus } from '../executor-status.mjs';
 import { redactAll } from './redact.mjs';
+import { GATEWAY_MODELS } from '../provider-routing.mjs';
 
 export const LANE_NAMES = ['codex', 'gemini', 'deepseek', 'groq', 'openrouter', 'glm', 'grok', 'mistral', 'kimi'];
 // Routing diagnostics describe other invocations, never this provider's HTTP response.
@@ -52,6 +53,22 @@ export function probeViaChain(text, lane) {
       && LANE_NAMES.some(other => other !== lane && new RegExp(`\\b${other}\\b`, 'i').test(stripOpenrouterTag(line, lane)))));
 }
 
+// Match the actual HTTP failure line before routing diagnostics filter OpenRouter out.
+export function retiredModel(text, lane) {
+  for (const line of String(text || '').split(/\r?\n/)) {
+    if (DIAGNOSTIC_LINE.test(line) || CHAIN_MARKER.test(line)) continue;
+    if (!/HTTP\s*404\b/i.test(line) || !/no longer available|No endpoints found/i.test(line)) continue;
+    const match = line.match(/(?:^|\s)([\w-]+):([\w.-]+\/[\w./:-]+)\s+HTTP\s*404\b/i);
+    if (match) {
+      const [, provider, model] = match;
+      if (provider === lane || (provider === 'openrouter' && GATEWAY_MODELS[lane]?.split('/')[0] === model.split('/')[0])) return model;
+      continue;
+    }
+    if (GATEWAY_MODELS[lane]) return GATEWAY_MODELS[lane];
+  }
+  return null;
+}
+
 const AUTH_DOMINANT_RATIO = 0.9;
 const AUTH_MIN_FAILURES = 5;
 
@@ -66,11 +83,18 @@ export const authFailurePattern = /basic authentication|HTTP\s*401|\b401\b|unaut
 // lane-repair-first-gate が全セッションの編集・シェルを封鎖した。
 export const chatgptUsageLimit = text => /chatgpt\.com\/settings\/usage|upgrade to pro[^\n]{0,300}try again at|you(?:['’]ve| have) (?:hit|reached)[^\n]{0,60}limit/i.test(String(text));
 export const quotaFailure = text => http429(text) || chatgptUsageLimit(text) || /cooldown|(?:usage|weekly|monthly)[_ /.-]*limit|limit[^\n]{0,60}exhausted|rate[_ .-]?limit|RESOURCE_EXHAUSTED|codex_cooldown/i.test(String(text));
-// billing は 402 / insufficient balance|quota|credits / payment_required のみ。
+// billing は 402 / insufficient balance|quota|credits / payment_required /
+// xAI の credits・spending-limit 文言のみ。403 全般は billing にしない（文言一致のみ）。
 // 429 や rate limit 由来の "Insufficient credits" を billing と誤判定しない（quotaFailure と順序で分離）。
-export const billingFailure = text => http402(text)
-  || (/outstanding balance|billing account[^\n]{0,80}(?:disabled|closed|suspended|outstanding|not active)/i.test(String(text)) && http403(text))
-  || /insufficient[_ ](?:balance|quota|credits?)|(?:credits?|balance)[ _-]*(?:are[ _-]*)?(?:depleted|exhausted|insufficient)|(?:out of|no|not enough|low) credits?|credit[_ -](?:balance|limit)[^\n]{0,40}(?:low|exceed|insufficient|depleted|exhausted)|payment_required/i.test(String(text));
+// ChatGPT 定額枠切れの「purchase more credits or try again at」は chatgptUsageLimit で除外。
+export const billingFailure = text => {
+  const s = String(text);
+  if (http402(s)) return true;
+  if (/outstanding balance|billing account[^\n]{0,80}(?:disabled|closed|suspended|outstanding|not active)/i.test(s) && http403(s)) return true;
+  if (/insufficient[_ ](?:balance|quota|credits?)|(?:credits?|balance)[ _-]*(?:are[ _-]*)?(?:depleted|exhausted|insufficient)|(?:out of|no|not enough|low) credits?|credit[_ -](?:balance|limit)[^\n]{0,40}(?:low|exceed|insufficient|depleted|exhausted)|payment_required/i.test(s)) return true;
+  if (chatgptUsageLimit(s)) return false;
+  return /used all(?: available)? credits|monthly spending limit|raise your spending limit|purchase more credits/i.test(s);
+};
 // 文言に 429 を含む billing は偽の billing（実際は quota）。判定補助。
 export const billingWithQuotaHint = text => billingFailure(text) && (http429(text) || chatgptUsageLimit(text) || /rate[_ .-]?limit|cooldown/i.test(String(text)));
 // Provider timestamps without an offset are interpreted in the host timezone.
@@ -131,6 +155,7 @@ export function applyRealLaneHealth(health, home, now = Date.now(), classifiedAu
     if (s) state.real24h = s;
     // A fresh probe of an auto-disabled lane supersedes the events that disabled it.
     if (classifiedAutoProbes?.has(lane)) continue;
+    if (state.reason === 'model_retired') { state.alive = false; continue; }
     if (state.error && probeViaChain(state.error, lane)) { state.viaChain = true; state.reason = 'probe_inconclusive'; }
     if (state.error !== undefined) state.error = laneErrorText(state.error, lane);
     if (state.reason === 'billing' && s?.billingCalls === 0 && s.lastOkAt >= now - 6 * 3600_000 && s.lastOkAt <= now && (state.billingProbeStreak || 0) < 2) state.reason = 'probe_inconclusive';
@@ -177,10 +202,21 @@ export function applyRealLaneHealth(health, home, now = Date.now(), classifiedAu
           state.error += `; 認証系 ${authFailures.length}件 / その他 ${otherFailures.length}件: ${topOther}`;
         }
       } else {
-        state.alive = false;
-        state.reason = 'real_fail_rate';
-        delete state.until;
-        state.error = Object.entries(failures.reduce((reasons, event) => { reasons[event.reason] = (reasons[event.reason] || 0) + 1; return reasons; }, {})).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([r, n]) => `${r} (${n})`).join('; ');
+        // real_fail_rate に先立ち、probeReason/probeEvidence が cooldown/quota を示す場合は
+        // quota_wait にする。そうしないと lane-repair-first-gate が全作業を封鎖する行き止まりになる（2026-11-26）。
+        const probeQuota = quotaFailure(state.probeReason || '') || /quota_wait|cooldown|usage_limit/i.test(state.probeReason || '')
+          || quotaFailure(state.probeEvidence || '') || /quota_wait|cooldown|usage_limit/i.test(state.probeEvidence || '');
+        if (probeQuota) {
+          state.alive = false;
+          state.reason = 'quota_wait';
+          state.until = s?.until || state.until || null;
+          state.error = Object.entries(failures.reduce((reasons, event) => { reasons[event.reason] = (reasons[event.reason] || 0) + 1; return reasons; }, {})).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([r, n]) => `${r} (${n})`).join('; ');
+        } else {
+          state.alive = false;
+          state.reason = 'real_fail_rate';
+          delete state.until;
+          state.error = Object.entries(failures.reduce((reasons, event) => { reasons[event.reason] = (reasons[event.reason] || 0) + 1; return reasons; }, {})).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([r, n]) => `${r} (${n})`).join('; ');
+        }
       }
     // A later real success supersedes wallet evidence; gateway probes do not.
     } else if ((s?.billingCalls > (s?.quotaCalls || 0) && s.lastBillingAt >= s.lastOkAt)

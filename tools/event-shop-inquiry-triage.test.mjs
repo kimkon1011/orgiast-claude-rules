@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { classifyLead, checkGmailDrafts, deduplicateLeads, deduplicateMessages, sortLeads, main, messageQuery, renderMarkdown, loadCredentials, findOpenInboxAsk } from './event-shop-inquiry-triage.mjs';
+import { classifyLead, checkGmailDrafts, deduplicateLeads, deduplicateMessages, sortLeads, main, messageQuery, renderMarkdown, loadCredentials, findOpenInboxAsk, resolveReplyDraftApproval, isOrderConfirmed, isStaleFollowupDraft } from './event-shop-inquiry-triage.mjs';
 const now = new Date('2026-10-27T03:00:00Z');
 const lead = { id: 'a', email: 'client@example.com', company_name: '会社', contact_name: '担当', created_at: '2026-10-21T03:00:00Z', preferred_date: '2026-11-18', raw_payload: { product: '展示会' } };
 const msg = (direction, day, body = '') => ({ direction, received_at: `2026-10-${day}T03:00:00Z`, body });
@@ -35,6 +35,51 @@ test('4b: 追客候補に下書きとkim-inboxの状態を併記', async () => {
   assert.match((await classify({ gmailDraftCheck: async () => ({ found: false }), kimInboxCheck: async () => ({ id: 'ask-only' }) })).nextAction, /kim-inbox 承認待ち: ask-only・下書きなし/);
   assert.equal((await classify({ gmailDraftCheck: async () => ({ found: false }), kimInboxCheck: async () => null })).nextAction, '顧客の返信待ち（最終送信から 10 日）・追客候補');
 });
+test('4f: 最終送信より古い下書きは追客候補・承認待ちにしない（3a-c 実害）', async () => {
+  const messages = [msg('outbound', '17')]; // 2026-10-17 送信
+  const result = await classifyLead(lead, messages, now, {
+    gmailDraftCheck: async () => ({
+      found: true,
+      account: 'seisaku-team@orgiast.jp',
+      draftId: 'r-stale-3a',
+      date: '2026-10-09T03:00:00Z', // 送信より前
+    }),
+    kimInboxCheck: async () => ({ id: 'ask-should-not-approve' }),
+  });
+  assert.equal(result.category, '🟡 顧客待ち');
+  assert.equal(result.nextAction, '古い下書きあり（seisaku-team@orgiast.jp r-stale-3a・最終送信より前・送信しない）');
+  assert.doesNotMatch(result.nextAction, /追客候補|承認待ち/);
+  assert.equal(isStaleFollowupDraft({
+    found: true, account: 'seisaku-team@orgiast.jp', draftId: 'r-stale-3a', date: '2026-10-09T03:00:00Z',
+  }, messages[0]), true);
+});
+test('4g: 最終送信より新しい下書きは従来どおり追客候補／承認待ち', async () => {
+  const messages = [msg('outbound', '17')];
+  const withInbox = await classifyLead(lead, messages, now, {
+    gmailDraftCheck: async () => ({
+      found: true,
+      account: 'seisaku-team@orgiast.jp',
+      draftId: 'r-fresh',
+      date: '2026-10-20T03:00:00Z', // 送信より後
+    }),
+    kimInboxCheck: async () => ({ id: 'ask-fresh' }),
+  });
+  assert.equal(withInbox.nextAction,
+    '顧客の返信待ち（最終送信から 10 日）・追客下書き済み・kim 承認待ち（下書き: seisaku-team@orgiast.jp / inbox: ask-fresh）');
+  const noInbox = await classifyLead(lead, messages, now, {
+    gmailDraftCheck: async () => ({
+      found: true,
+      account: 'kim@orgiast.jp',
+      draftId: 'r-fresh-2',
+      date: '2026-10-20T03:00:00Z',
+    }),
+    kimInboxCheck: async () => null,
+  });
+  assert.match(noInbox.nextAction, /追客候補（下書きあり: kim@orgiast.jp・kim-inbox 未登録）/);
+  assert.equal(isStaleFollowupDraft({
+    found: true, draftId: 'r-fresh', date: '2026-10-20T03:00:00Z',
+  }, messages[0]), false);
+});
 test('4c: 追客候補の照会エラーは未確認とし、7日未満では照会しない', async () => {
   const fail = async () => { throw new Error('failure'); };
   assert.match((await classifyLead(lead, [msg('outbound', '17')], now, { gmailDraftCheck: fail, kimInboxCheck: async () => null })).nextAction, /下書き: 未確認/);
@@ -44,6 +89,83 @@ test('4c: 追客候補の照会エラーは未確認とし、7日未満では照
   assert.equal(calls, 0);
   assert.equal((await classifyLead(lead, [msg('outbound', '17')], now, { gmailDraftCheck: async () => ({ found: true }) })).nextAction,
     '顧客の返信待ち（最終送信から 10 日）・追客候補');
+});
+test('4d: 受注確定済み（TAO）は追客候補にせず下書き照会しない', async () => {
+  const triageNow = new Date('2026-11-26T10:31:00Z');
+  const inbound = {
+    direction: 'inbound',
+    received_at: '2026-11-18T08:43:00Z',
+    body: 'お申し込み書を本メールに添付のうえ、ご返送いたします。手配の進行をよろしくお願いいたします。',
+  };
+  const outbound = {
+    direction: 'outbound',
+    received_at: '2026-11-18T10:31:00Z',
+    body: 'ご記入・ご捺印いただいたお申し込み書と関連資料を確かに受領いたしました。以下の内容で手配を進めてまいります。■ご注文内容',
+  };
+  let draftCalls = 0;
+  let inboxCalls = 0;
+  const result = await classifyLead(
+    { ...lead, company_name: '株式会社TAO', contact_name: '中田', preferred_date: '2026-12-09' },
+    [inbound, outbound],
+    triageNow,
+    {
+      gmailDraftCheck: async () => { draftCalls++; return { found: false }; },
+      kimInboxCheck: async () => { inboxCalls++; return null; },
+    },
+  );
+  assert.equal(result.category, '🟡 顧客待ち');
+  assert.equal(result.nextAction, '受注済み・手配中（追客不要・最終送信から 8 日）');
+  assert.doesNotMatch(result.nextAction, /追客候補/);
+  assert.equal(draftCalls, 0);
+  assert.equal(inboxCalls, 0);
+});
+test('4e: 当社の見積送付だけでは7日経過でも追客候補のまま', async () => {
+  const triageNow = new Date('2026-11-26T03:00:00Z');
+  const outbound = {
+    direction: 'outbound',
+    received_at: '2026-11-18T03:00:00Z',
+    body: 'お見積書とお申し込み書を添付いたしました。ご検討のほどよろしくお願いいたします。',
+  };
+  const result = await classifyLead(
+    { ...lead, preferred_date: '2026-12-09' },
+    [outbound],
+    triageNow,
+    {
+      gmailDraftCheck: async () => ({ found: false }),
+      kimInboxCheck: async () => null,
+    },
+  );
+  assert.equal(result.category, '🟡 顧客待ち');
+  assert.equal(result.nextAction, '顧客の返信待ち（最終送信から 8 日）・追客候補');
+});
+test('isOrderConfirmed: 当社受領・手配開始と顧客の申込書返送を検知し、見積添付だけでは false', () => {
+  assert.equal(isOrderConfirmed(
+    { body: 'お申し込み書を本メールに添付のうえ、ご返送いたします。' },
+    { body: 'お申し込み書を確かに受領いたしました。手配を進めてまいります。' },
+  ), true);
+  assert.equal(isOrderConfirmed(
+    { body: '記入した注文書を送付します。' },
+    { body: 'ご確認ください。' },
+  ), true);
+  assert.equal(isOrderConfirmed(
+    { body: 'ご注文を承りました。' },
+    { body: 'ご注文を承りました。' },
+  ), true);
+  assert.equal(isOrderConfirmed(
+    { body: '見積をお願いします。' },
+    { body: 'お見積書とお申し込み書を添付いたしました。ご検討ください。' },
+  ), false);
+  assert.equal(isOrderConfirmed(null, null), false);
+});
+test('isOrderConfirmed: 受注前の送付依頼は false、記入・捺印した申込書の返送は true', () => {
+  assert.equal(isOrderConfirmed(
+    { body: 'お申し込み書をご送付いただけますでしょうか' },
+    { body: 'ご確認ください。' },
+  ), false);
+  assert.equal(isOrderConfirmed(
+    { body: '必要事項を記入・捺印いたしました「お申し込み書」を本メールに添付のうえ、ご返送いたします' },
+    { body: 'ご確認ください。' },
+  ), true);
 });
 test('findOpenInboxAsk: email・企業ドメイン・法人格除去社名に一致し、対象外を除く', () => {
   const item = (id, text, overrides = {}) => ({ id, text, status: 'open', kind: 'ask', ...overrides });
@@ -241,6 +363,25 @@ test('checkGmailDrafts: Gmail下書きあり（seisaku-team）', async () => {
   assert.equal(calls[0].user, 'seisaku-team@orgiast.jp');
   assert.match(calls[0].scope, /gmail\.readonly/);
 });
+test('checkGmailDrafts: message.internalDate を date に含める', async () => {
+  const getToken = async () => 'mock-token';
+  const fetchImpl = async (url) => {
+    if (url.includes('/drafts?')) {
+      return { ok: true, json: async () => ({ drafts: [{ id: 'r-dated', message: { id: 'msg-1' } }] }) };
+    }
+    if (url.includes('/messages/msg-1')) {
+      return { ok: true, json: async () => ({ internalDate: '1699520400000' }) }; // 2023-11-09T09:00:00.000Z
+    }
+    return { ok: true, json: async () => ({ drafts: [] }) };
+  };
+  const result = await checkGmailDrafts('info@3a-c.com', { fetchImpl, getToken });
+  assert.deepEqual(result, {
+    found: true,
+    account: 'seisaku-team@orgiast.jp',
+    draftId: 'r-dated',
+    date: '2023-11-09T09:00:00.000Z',
+  });
+});
 test('checkGmailDrafts: Gmail下書きあり（kim）', async () => {
   let callIndex = 0;
   const getToken = async ({ user, scope }) => 'mock-token';
@@ -333,4 +474,72 @@ test('classifyLead: deps.gmailDraftCheck でGmail下書きなし・管理画面�
   const result = await classifyLead(lead, [], now, { gmailDraftCheck });
   assert.equal(result.category, '🔴 要返信');
   assert.match(result.nextAction, /下書きなし/);
+});
+test('resolveReplyDraftApproval: 下書きあり（顧客最新より新しい）→ 承認待ち', () => {
+  const result = resolveReplyDraftApproval({
+    lastInboundAt: '2026-11-25T05:16:00Z',
+    draft: { found: true, account: 'seisaku-team@orgiast.jp', draftId: 'r1', date: '2026-11-26T01:17:00Z' },
+    inbox: { id: 'ki-20261126012107-6f10' },
+  });
+  assert.deepEqual(result, {
+    category: '🟠 返信下書き済み・kim 承認待ち',
+    nextAction: '下書き: seisaku-team@orgiast.jp / inbox: ki-20261126012107-6f10',
+  });
+});
+test('resolveReplyDraftApproval: 下書きの方が古い → null（要返信のまま）', () => {
+  assert.equal(resolveReplyDraftApproval({
+    lastInboundAt: '2026-11-26T05:00:00Z',
+    draft: { found: true, account: 'seisaku-team@orgiast.jp', draftId: 'r1', date: '2026-11-25T01:00:00Z' },
+    inbox: { id: 'ki-old' },
+  }), null);
+});
+test('resolveReplyDraftApproval: 下書きなし → null', () => {
+  assert.equal(resolveReplyDraftApproval({
+    lastInboundAt: '2026-11-25T05:16:00Z',
+    draft: { found: false },
+    inbox: { id: 'ki-any' },
+  }), null);
+  assert.equal(resolveReplyDraftApproval({
+    lastInboundAt: '2026-11-25T05:16:00Z',
+    draft: { found: true, account: 'seisaku-team@orgiast.jp', draftId: 'r1', date: '2026-11-26T01:17:00Z' },
+    inbox: null,
+  }), null);
+  assert.equal(resolveReplyDraftApproval({
+    lastInboundAt: '2026-11-25T05:16:00Z',
+    draft: { found: true, account: 'seisaku-team@orgiast.jp', draftId: 'r1' },
+    inbox: { id: 'ki-no-date' },
+  }), null);
+});
+test('classifyLead: 顧客返信あっても新しい下書き+inboxなら承認待ち', async () => {
+  const messages = [msg('outbound', '20'), msg('inbound', '25', '申込書を送ります')];
+  const result = await classifyLead(lead, messages, now, {
+    gmailDraftCheck: async () => ({ found: true, account: 'seisaku-team@orgiast.jp', draftId: 'r-reply', date: '2026-10-26T12:00:00Z' }),
+    kimInboxCheck: async () => ({ id: 'ki-reply' }),
+  });
+  assert.equal(result.category, '🟠 返信下書き済み・kim 承認待ち');
+  assert.equal(result.nextAction, '下書き: seisaku-team@orgiast.jp / inbox: ki-reply');
+});
+test('classifyLead: 下書きが顧客メールより古い／照会失敗は要返信のまま', async () => {
+  const messages = [msg('outbound', '20'), msg('inbound', '25', '御見積書をお送りください')];
+  const older = await classifyLead(lead, messages, now, {
+    gmailDraftCheck: async () => ({ found: true, account: 'seisaku-team@orgiast.jp', draftId: 'r-old', date: '2026-10-24T12:00:00Z' }),
+    kimInboxCheck: async () => ({ id: 'ki-old' }),
+  });
+  assert.equal(older.category, '🔴 要返信');
+  assert.match(older.nextAction, /顧客の返信に未回答/);
+  const failed = await classifyLead(lead, messages, now, {
+    gmailDraftCheck: async () => { throw new Error('network'); },
+    kimInboxCheck: async () => { throw new Error('inbox'); },
+  });
+  assert.equal(failed.category, '🔴 要返信');
+  assert.match(failed.nextAction, /顧客の返信に未回答/);
+});
+test('Markdown見出しに返信下書き済み件数を出す', async () => {
+  const orange = await classifyLead(lead, [msg('outbound', '20'), msg('inbound', '25', '質問です')], now, {
+    gmailDraftCheck: async () => ({ found: true, account: 'seisaku-team@orgiast.jp', draftId: 'r', date: '2026-10-26T12:00:00Z' }),
+    kimInboxCheck: async () => ({ id: 'ki-md' }),
+  });
+  const output = renderMarkdown([orange], 0, now);
+  assert.match(output, /要返信 0 件 \/ 返信下書き済み 1 件/);
+  assert.match(output, /^## 🟠/);
 });

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-// No LLM calls here; process execution, notification and file timestamps are injectable.
+// Hourly classification and execution are injectable; other modes retain their policy.
+import { randomUUID } from 'node:crypto';
+import { detectHourly, classifyHourly, acquireSessionLock, runningHourlyProcesses, sessionIsRunning, publishHourlyHeartbeat } from './lib/stalled-session-hourly.mjs';
 import { automationModel } from './lib/automation-model.mjs';
 import fs from 'node:fs/promises';
 import { apply as updateWaitTitle, latestWaitDeadline, waitExtension, waitPrefix } from './session-wait-title.mjs';
@@ -20,15 +22,38 @@ import { evaluateClaudeSeatGuard, formatClaudeSeatGuardSkip } from './lib/claude
 import { latestSafeStart, parseWaitFooter } from './lib/wait-deadline.mjs';
 import { executeCheck, isTimeOnlyCheck } from './auto-progress-check.mjs';
 import { fetchClaudePlanUsage } from './claude-plan-usage.mjs';
-import { collectGbReportEntries, writeStallLedger } from './stall-ledger.mjs';
+import { collectGbReportEntries, handoffSession, writeAllLedgers, writeStallLedger } from './stall-ledger.mjs';
+import { buildFleetStatus } from './fleet-status.mjs';
+import { fetchBeacons } from './fleet-beacon.mjs';
+import { main as sendFleetDirective } from './fleet-directive-send.mjs';
 import { latestOpenPromises, ledgerFile as progressLedgerFile, readLedger } from './auto-progress-ledger.mjs';
 import { readTranscriptContext } from './lib/assistant-text.mjs';
 import { footerValues, NO_ACTION_PATTERN } from './next-action-gate.mjs';
+import { parseJsonLoose, readJsonFile } from './lib/json-read.mjs';
+import { decideStalledNoticeKind } from './lib/stalled-notice-kind.mjs';
 
 const CHECK_INTERVAL_MS = 15 * 60_000;
 const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
 
 const execFileAsync = promisify(execFile);
+
+async function standingPermissions(home, now) {
+  const recent = new Map();
+  try {
+    const raw = await fs.readFile(path.join(home, '.claude', 'stall-ledger', 'standing-sends.jsonl'), 'utf8');
+    for (const line of raw.split(/\r?\n/).filter(Boolean)) {
+      const row = JSON.parse(line);
+      if (row.sessionId && now - Date.parse(row.at) <= 7 * DAY_MS) recent.set(String(row.sessionId), String(row.permissionId || ''));
+    }
+  } catch { /* 台帳が無い場合は通常順 */ }
+  const names = new Map();
+  try {
+    const config = JSON.parse(await fs.readFile(path.resolve(import.meta.dirname, '..', 'config', 'standing-send-permissions.json'), 'utf8'));
+    for (const item of config.permissions || []) names.set(String(item.id), String(item.name || item.id));
+  } catch { /* 設定欠損時はIDを使う */ }
+  return new Map([...recent].map(([sessionId, id]) => [sessionId, names.get(id) || id]));
+}
 
 // 実行ログ: ~/.claude/logs/stalled-session-sweep.jsonl に1行追記
 async function writeLog(home, entry) {
@@ -83,10 +108,14 @@ export function options(argv = [], env = process.env) {
 
 async function readSanitizedJson(file, fallback) {
   try {
-    const raw = await fs.readFile(file, 'utf8');
+    return readJsonFile(file);
+  } catch (error) {
+    if (error.code === 'ENOENT') return fallback;
+    const raw = (await fs.readFile(file)).toString('utf8');
     const cleaned = raw.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-    return JSON.parse(cleaned);
-  } catch { return fallback; }
+    if (cleaned === raw) throw error;
+    return parseJsonLoose(cleaned, { source: file });
+  }
 }
 
 async function readJson(file, fallback) {
@@ -112,7 +141,8 @@ export async function saveJson(file, value, rename = fs.rename) {
     throw error;
   }
 }
-export async function detect(overdue = false, hourly = false) {
+export async function detect(overdue = false, hourly = false, io = {}) {
+  if (hourly) return detectHourly(io);
   const files = await listFiles();
   const inspected = await Promise.all(files.map(inspect));
   if (overdue) {
@@ -206,31 +236,41 @@ function eventLimit(attempts, sessionId, now) {
 }
 
 export function hourlyEventLimit(attempts, sessionId, now, { hourlyCap = 4, perSessionDailyCap = 6 } = {}) {
-  const recent = attempts.filter(attempt => attempt.at > now - HOUR_MS);
+  // outcome が 'disabled' または 'no-executor' の試行は実際に Claude を起動していないのでカウントしない
+  const effectiveAttempts = attempts.filter(attempt => 
+    attempt.outcome !== 'disabled' && attempt.outcome !== 'no-executor'
+  );
+  
+  const recent = effectiveAttempts.filter(attempt => attempt.at > now - HOUR_MS);
   if (recent.length >= hourlyCap) return 'global';
   const today = localDate(new Date(now));
-  if (attempts.filter(attempt => attempt.sessionId === sessionId && localDate(new Date(attempt.at)) === today).length >= perSessionDailyCap) return 'daily';
+  if (effectiveAttempts.filter(attempt => attempt.sessionId === sessionId && localDate(new Date(attempt.at)) === today).length >= perSessionDailyCap) return 'daily';
   return null;
 }
 
 export function hourlySkipReason(record, entry, closed, mtimeMs, now, activeMs) {
-  const common = skipReason(record, {}, '', closed, mtimeMs, now, activeMs);
+  const common = skipReason(record, {}, '', closed, mtimeMs, now, Math.max(activeMs || 0, 30 * 60000 - 1));
   if (common && common !== '3回進捗なし') return common;
+  if (entry.forkSessionId && entry.resumedFingerprint === record.lastLineHash) return 'fork先へ引継ぎ済み';
+  if (now - mtimeMs > 7 * 24 * HOUR_MS) return '7日超過';
   if ((entry.noProgress ?? 0) >= 3) return '3回進捗なし';
   const wait = recordWait(record, now);
   if (wait) return wait.at <= now ? '' : '待機期限前';
-  if (now - mtimeMs < HOUR_MS) return '60分未満';
-  if (now - mtimeMs > 7 * 24 * HOUR_MS) return '7日超過';
-  if (!deferredPhrase(record.lastAssistantText)) return '先送り表現なし';
   return '';
 }
 
 async function addOverdueInbox(io, home, item) {
   const add = io.addItem ?? (await import('./kim-inbox.mjs')).addItem;
-  await add(home, item);
+  if (!io.hourlyStats) return add(home, item);
+  try { return await add(home, item, { drain: false, lockWaitMs: 1000 }); }
+  catch (error) {
+    if (!String(error.message).includes('kim-inbox: 台帳が使用中')) throw error;
+    const spool = io.spoolItem ?? (await import('./kim-inbox.mjs')).spoolItem;
+    return spool(home, item);
+  }
 }
 
-async function notifyEventLimit(io, home, notices, sessionId, limit, now) {
+async function notifyEventLimit(io, home, notices, sessionId, limit, now, policy = {}) {
   const global = limit === 'global';
   const key = global ? 'global' : sessionId;
   const previous = notices[key];
@@ -240,7 +280,7 @@ async function notifyEventLimit(io, home, notices, sessionId, limit, now) {
     await addOverdueInbox(io, home, {
       kind: 'info', source: 'stalled-session-event-limit', sessionId,
       dedupeKey: `stalled-session-event-limit:${key}:${global ? Math.floor(now / HOUR_MS) : day}`,
-      text: global ? '待機セッションのイベント再開は直近1時間で2件に達しました。' : 'このセッションのイベント再開は本日2回に達しました。'
+      text: global ? `待機セッションのイベント再開は直近1時間で${policy.hourlyCap ?? 2}件に達しました。` : `このセッションのイベント再開は本日${policy.perSessionDailyCap ?? 2}回に達しました。`
     });
     notices[key] = now;
   } catch { /* 通知に失敗したら次回再試行する */ }
@@ -292,9 +332,12 @@ export function skipReason(record, entry, night, closed, mtimeMs, now, activeMs)
 async function executeOverdue(record, { timeoutMs, resultFile, previous = [], wait }, io = {}) {
   const guardVerdict = io.guardVerdict ?? await (io.evaluateGuard ?? evaluateClaudeSeatGuard)({ home: io.home ?? process.env.ORGIAST_HOME ?? os.homedir(), env: process.env, caller: 'stalled-session-resume:wait-deadline' });
   if (guardVerdict.blocked) return { outcome: 'skipped', executor: 'none', reason: formatClaudeSeatGuardSkip(guardVerdict) };
+  const waitInstruction = wait.key === 'hourly-deferred'
+    ? 'このセッションは先送りしたまま止まっています。先送りした事項を確認し、'
+    : `このセッションの待機期限 ${wait.label} を過ぎました。待っていた事項（相手の返信・外部の状態・自動チェック）を直接照会し、`;
   const prompt = `停滞セッション「${record.displayTitle}」(${record.sessionId})の承認済みの目的を1歩進めてください。
 「次回やる」で終わらせない。先送りするなら、応答の「このセッション」行に新しい期限【MM/DD/HH:MMまで】を書く（毎時の再開ジョブが拾う）。常設許可がある送信（config/standing-send-permissions.json に列挙）は承認待ちに積まず、その許可の範囲で送信して結果を記録する。
-このセッションの待機期限 ${wait.label} を過ぎました。待っていた事項（相手の返信・外部の状態・自動チェック）を直接照会し、(a) 進められるなら最後まで進めて検証する (b) 人の判断や操作が必要なら kim-inbox に ask を積み（node tools/kim-inbox.mjs）、応答の「このセッション」行に新しい期限を書く (c) 目的が完了していれば /session-close を実行する。期限を書き換えるだけで終えない。
+${waitInstruction}(a) 進められるなら最後まで進めて検証する (b) 人の判断や操作が必要なら kim-inbox に ask を積み（node tools/kim-inbox.mjs）、応答の「このセッション」行に新しい期限を書く (c) 目的が完了していれば /session-close を実行する。期限を書き換えるだけで終えない。
 元の会話全文を ${record.file} から読み、依頼・制約・成果物を確認して続行してください。推測で目的を広げないでください。
 共有作業ツリーの他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。個別の通知は不要です。
 前回までの再開結果: ${JSON.stringify(previous)}。済んだ作業を繰り返さず、成果物の現状を検証してください。
@@ -366,9 +409,12 @@ stuck=それ以外で進められなかった。
     report = rawReport;
     if (typeof rawReport === 'string') {
       const cleaned = rawReport.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-      report = cleaned.trim() ? JSON.parse(cleaned) : null;
+      report = cleaned.trim() ? parseJsonLoose(cleaned, { source: resultFile }) : null;
     }
-  } catch (error) { return { ...execution, outcome: 'error', reason: String(error.message) }; }
+  } catch (error) {
+    if (error instanceof SyntaxError) return { ...execution, outcome: 'no-report', reason: String(error.message) };
+    return { ...execution, outcome: 'error', reason: String(error.message) };
+  }
   const evidenceOk = report?.evidence && (
     (typeof report.evidence === 'string' && report.evidence.trim()) ||
     (typeof report.evidence === 'object' && report.evidence !== null && Object.keys(report.evidence).length > 0)
@@ -384,22 +430,117 @@ stuck=それ以外で進められなかった。
   return { outcome, reason: outcome === 'timeout' ? result.status : reason, ...(outcome === 'waiting-human' ? { askId: report.askId.trim() } : {}), ...execution };
 }
 
-export async function execute(record, { timeoutMs, resultFile, previous = [], wait = null, event, hourly = false }, io = {}) {
-  let allowed;
-  if (hourly) {
-    const policy = io.hourlyResumePolicy ?? hourlyResumePolicy;
-    allowed = policy().hourlyResume;
-  } else {
-    allowed = wait ? ['check-met', 'due-risk'].includes(event) && eventResumeAllowed() : autoResumeAllowed();
+// 夜間は対話 Claude が動かず OAuth accessToken が更新されない。usage API が 401 / expiresAt 切れのときだけ
+// Claude CLI に最小の非対話呼び出しをさせて refresh し、fetchClaudePlanUsage を1回だけ再試行する。
+// トークン値は読んでもログに出さない。.credentials.json の書き換えは CLI に任せる（APIキー経路は作らない）。
+export function readOauthExpiresAt(home) {
+  try {
+    const expiresAt = Number(JSON.parse(fsSync.readFileSync(path.join(home, '.claude', '.credentials.json'), 'utf8'))?.claudeAiOauth?.expiresAt);
+    return Number.isFinite(expiresAt) ? expiresAt : null;
+  } catch { return null; }
+}
+
+export function usageNeedsOauthRefresh(usage, { home, now = Date.now(), readExpiresAt = readOauthExpiresAt } = {}) {
+  if (usage?.available) return false;
+  if (/^HTTP 401\b/i.test(String(usage?.reason || ''))) return true;
+  const expiresAt = readExpiresAt?.(home);
+  return expiresAt != null && expiresAt < now;
+}
+
+export function formatUsageUnknownSkipReason(usage) {
+  const detail = String(usage?.reason || '').trim();
+  return detail ? `usage-unknown-or-blocked: ${detail}` : 'usage-unknown-or-blocked';
+}
+
+const OAUTH_REFRESH_STRIP_ENV = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDECODE', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'];
+
+export async function refreshClaudeOauthViaCli({ home, executable, execFile = execFileAsync, env = process.env } = {}) {
+  const clean = { ...env };
+  for (const key of OAUTH_REFRESH_STRIP_ENV) delete clean[key];
+  Object.assign(clean, { ORGIAST_HOME: home, HOME: home, USERPROFILE: home, CLAUDE_HEADLESS: '1' });
+  // 既存の非対話起動と同じく -p + JSON。haiku で最小の往復にし、ツール無しで認証更新だけ狙う。
+  await execFile(executable ?? resolveClaudeExe(), ['-p', '--model', 'haiku', '--output-format', 'json', '--tools', '', 'Reply with exactly: ok'],
+    { cwd: home, env: clean, timeout: 90_000, maxBuffer: 1024 * 1024, windowsHide: true });
+}
+
+export async function fetchHourlyPlanUsage(home, io = {}) {
+  const fetchUsage = io.fetchClaudePlanUsage ?? fetchClaudePlanUsage;
+  const fetchImpl = (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(15000) });
+  let usage = await fetchUsage({ home, fetchImpl });
+  if (usage?.available) return usage;
+  const now = typeof io.now === 'function' ? Number(io.now()) : Number(io.now ?? Date.now());
+  if (!usageNeedsOauthRefresh(usage, { home, now, readExpiresAt: io.readOauthExpiresAt ?? readOauthExpiresAt })) return usage;
+  try { await (io.refreshClaudeOauth ?? refreshClaudeOauthViaCli)({ home, executable: io.executable, execFile: io.execFile ?? execFileAsync, env: process.env }); }
+  catch { return usage; }
+  return await fetchUsage({ home, fetchImpl });
+}
+
+export async function executeHourlyFork(record, { timeoutMs, resultFile, previous = [], nextStep = '', standingPermission }, io = {}) {
+  const home = io.home ?? process.env.ORGIAST_HOME ?? os.homedir();
+  const guard = await (io.evaluateGuard ?? evaluateClaudeSeatGuard)({ home, caller: 'stalled-session-resume:hourly' });
+  if (io.hourlyStats) io.hourlyStats.seatGuard = `${guard.blocked ? 'blocked' : 'allowed'}:${guard.reason}`;
+  if (guard.blocked) return { outcome: 'skipped', executor: 'none', reason: formatClaudeSeatGuardSkip(guard) };
+  const usage = await (io.fetchHourlyPlanUsage ?? fetchHourlyPlanUsage)(home, io);
+  const stopPct = (io.hourlyResumePolicy ?? hourlyResumePolicy)().planUsageStopPct ?? 85;
+  const percents = usage?.available ? [usage.fiveHour?.utilization, usage.sevenDay?.utilization] : [guard.weeklyPercent, guard.fiveHourPercent];
+  if (!percents.some(v => v != null && Number.isFinite(Number(v))) || percents.some(v => v != null && Number(v) >= stopPct)) {
+    if (io.hourlyStats) io.hourlyStats.seatGuard += ';plan-usage-stopped';
+    return { outcome: 'skipped', executor: 'none', reason: usage?.available ? 'planUsageStopPct' : formatUsageUnknownSkipReason(usage) };
   }
+  const forkSessionId = (io.randomUUID ?? randomUUID)();
+  const acquire = io.acquireSessionLock ?? acquireSessionLock;
+  const releaseSource = acquire(record.sessionId, { home });
+  if (!releaseSource) return { outcome: 'skipped', executor: 'none', reason: 'session-locked' };
+  let releaseFork;
+  try {
+    releaseFork = acquire(forkSessionId, { home });
+    if (!releaseFork) return { outcome: 'skipped', executor: 'none', reason: 'fork-locked' };
+    const stat = await (io.stat ?? fs.stat)(record.file);
+    if ((record.detectedMtimeMs != null && stat.mtimeMs !== record.detectedMtimeMs) || (stat.mtimeMs != null && Date.now() - stat.mtimeMs < 30 * 60000) ||
+      sessionIsRunning(record.sessionId, await (io.runningProcesses ?? runningHourlyProcesses)())) return { outcome: 'skipped', executor: 'none', reason: 'active' };
+    const prompt = `停滞セッション「${record.displayTitle}」(${record.sessionId})の承認済みの目的を1歩進めてください。
+このセッションは先送りしたまま止まっています。元の会話全文を ${record.file} から読み、依頼・制約・成果物を確認してください。推測で目的を広げず、済んだ作業を繰り返さない。
+事前判定の次の手順（元の依頼と実データで再確認してから実施）: ${nextStep}
+${standingPermission ? `既存の常設許可: ${standingPermission}。今回の禁止事項を上書きしません。` : ''}
+共有作業ツリーの他セッションの変更を上書きせず、実行中セッションを停止しない。社外送信・支払い・削除・権限変更は承認ルールに従い、この無人実行では実施せず、必要なら kim-inbox に ask を積む（dedupeKey=${record.sessionId}）。Discord DMは禁止。
+完了なら /session-close を実行する。前回結果: ${JSON.stringify(previous)}。
+期限は${timeoutMs / 60000}分。結果を ${resultFile} にJSONで保存: {"state":"progressed"|"done"|"waiting-human"|"stuck","evidence":"成果物と検証結果または判断事項","askId":"waiting-human の時は kim-inbox の ask ID"}。単なる計画・終了コード0を成果としない。`;
+    const env = { ...process.env };
+    for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDECODE', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY']) delete env[key];
+    await io.beforeForkLaunch?.({ forkSessionId, forkFile: path.join(path.dirname(record.file), `${forkSessionId}.jsonl`) });
+    let child;
+    try {
+      await (io.execFile ?? execFileAsync)(io.executable ?? resolveClaudeExe(), ['--resume', record.sessionId, '--fork-session', '--session-id', forkSessionId, '-p', '--model', automationModel(), '--output-format', 'json', prompt],
+        { cwd: record.cwd, env, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true });
+      child = { status: 'success', executorUsed: 'claude' };
+    } catch (error) {
+      if (['ENOENT', 'EACCES'].includes(error.code)) return { outcome: 'no-executor', executor: 'none', reason: error.code };
+      child = { status: error.killed || error.code === 'ETIMEDOUT' ? 'timeout' : 'error', executorUsed: 'claude' };
+    }
+    const result = await executeFallback(record, { timeoutMs, resultFile, previous }, { ...io, runChild: async () => child });
+    const forkFile = path.join(path.dirname(record.file), `${forkSessionId}.jsonl`);
+    const persisted = await (io.verifyFork ?? (async file => (await fs.stat(file).catch(() => ({ size: 0 }))).size > 0))(forkFile, forkSessionId);
+    return { ...result, ...(persisted ? {} : { outcome: 'not-in-session', reason: `fork transcript 未確認: ${result.reason || result.outcome}` }),
+      launched: true, forkSessionId, forkFile, resumedInSession: persisted };
+  } finally { releaseFork?.(); releaseSource(); }
+}
+
+export async function execute(record, { timeoutMs, resultFile, previous = [], wait = null, event, hourly: hourlyOpt = false, standingPermission, nextStep }, io = {}) {
+  const hourly = hourlyOpt === true || event === 'hourly';
+  const allowed = hourly
+    ? (io.hourlyResumePolicy ?? hourlyResumePolicy)().hourlyResume === true
+    : wait ? ['check-met', 'due-risk'].includes(event) && eventResumeAllowed() : autoResumeAllowed();
   if (!allowed) return { outcome: 'disabled', reason: '自動再開は廃止（config/auto-resume.json）', executor: 'none' };
+  if (hourly) return executeHourlyFork(record, { timeoutMs, resultFile, previous, standingPermission, nextStep }, io);
   // hourly モード・overdue モードでは claude --resume でセッション自身を再開する
-  if (hourly || wait) {
-    return executeOverdue(record, { timeoutMs, resultFile, previous, wait: wait ?? { label: 'hourly' } }, io);
+  const overdueWait = wait ?? (hourly ? { key: 'hourly-deferred', label: '先送り（次回やる）', at: Date.now() } : null);
+  if (overdueWait) {
+    return executeOverdue(record, { timeoutMs, resultFile, previous, wait: overdueWait }, io);
   }
   const prompt = `停滞セッション「${record.displayTitle}」(${record.sessionId})の承認済みの目的を1歩進めてください。
 元の会話全文を ${record.file} から読み、依頼・制約・成果物を確認して続行してください。推測で目的を広げないでください。
 共有作業ツリーの他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。個別の通知は不要です。
+${standingPermission ? `この件には常設許可「${standingPermission}」があります。承認待ちにせず、許可の範囲で送信し、送信結果を記録せよ。` : ''}
 前回までの再開結果: ${JSON.stringify(previous)}。済んだ作業を繰り返さず、成果物の現状を検証してください。
 期限は${timeoutMs / 60000}分です。期限前に終了してください。
 実行結果を ${resultFile} にJSONで保存してください: {"state":"progressed"|"done"|"waiting-human"|"stuck","evidence":"変更した成果物と検証結果、または進めない理由","askId":"kim-inbox の ask ID（waiting-human の時は必須）"}。
@@ -428,9 +569,12 @@ stuck=それ以外で進められなかった。
     report = rawReport;
     if (typeof rawReport === 'string') {
       const cleaned = rawReport.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-      report = cleaned.trim() ? JSON.parse(cleaned) : null;
+      report = cleaned.trim() ? parseJsonLoose(cleaned, { source: resultFile }) : null;
     }
-  } catch (error) { return { ...execution, outcome: 'error', reason: String(error.message) }; }
+  } catch (error) {
+    if (error instanceof SyntaxError) return { ...execution, outcome: 'no-report', reason: String(error.message) };
+    return { ...execution, outcome: 'error', reason: String(error.message) };
+  }
   const evidenceOk = report?.evidence && (
     (typeof report.evidence === 'string' && report.evidence.trim()) ||
     (typeof report.evidence === 'object' && report.evidence !== null && Object.keys(report.evidence).length > 0)
@@ -458,6 +602,21 @@ function openChecks(home, sessionId) {
 }
 
 export async function run(config = options(), io = {}) {
+  if (!config.hourly) return runInternal(config, io);
+  const stats = { seatGuard: 'not-checked', unlinked: 0, rows: [], results: [] };
+  let result, failure;
+  try { result = await runInternal(config, { ...io, hourlyStats: stats }); return result; }
+  catch (error) { failure = error; throw error; }
+  finally {
+    const heartbeat = await (io.publishHeartbeat ?? publishHourlyHeartbeat)({ home: io.home ?? process.env.ORGIAST_HOME ?? os.homedir(),
+      repo: path.resolve(import.meta.dirname, '..'), now: (io.now ?? Date.now)(), rows: result?.rows ?? stats.rows, results: result?.results ?? stats.results,
+      unlinked: stats.unlinked, seatGuard: stats.seatGuard, dryRun: !!config.dryRun, error: failure?.message || result?.skipped || stats.error || '' });
+    if (result) result.heartbeat = heartbeat;
+    if (isEntry(import.meta.url) && heartbeat?.line) console.log(heartbeat.line);
+  }
+}
+
+async function runInternal(config = options(), io = {}) {
   const overdue = config.overdue === true;
   const hourly = config.hourly === true;
   const hourlyPolicy = (io.hourlyResumePolicy ?? hourlyResumePolicy)();
@@ -466,8 +625,8 @@ export async function run(config = options(), io = {}) {
   let usageState = 'not-checked';
   let usageBlocked = false;
   if (hourly && !config.dryRun && !config.list) {
-    const usage = await (io.fetchClaudePlanUsage ?? fetchClaudePlanUsage)({ home });
-    if (!usage?.available) usageState = 'usage-unknown';
+    const usage = await (io.fetchHourlyPlanUsage ?? fetchHourlyPlanUsage)(home, io);
+    if (!usage?.available) usageState = usage?.reason ? `usage-unknown:${usage.reason}` : 'usage-unknown';
     else {
       const high = Math.max(Number(usage.fiveHour?.utilization) || 0, Number(usage.sevenDay?.utilization) || 0);
       usageState = `usage-${high}`;
@@ -533,6 +692,28 @@ export async function run(config = options(), io = {}) {
       ledger.eventAttempts ??= [];
       ledger.eventLimitNotices ??= {};
     }
+    const familyId = id => { const seen = new Set(); while (ledger.forks?.[id] && !seen.has(id)) { seen.add(id); id = ledger.forks[id]; } return id; };
+    if (hourly) {
+      ledger.hourlyFamilies ??= {};
+      // Recover a fork whose parent stopped before collecting its result.
+      for (const entry of Object.values(ledger.overdue)) {
+        const pending = entry.pendingFork;
+        if (pending && (await fs.stat(pending.file).catch(() => ({ size: 0 }))).size > 0) {
+          entry.forkSessionId = pending.id;
+          entry.resumedFingerprint = pending.fingerprint;
+        }
+      }
+    }
+    const standing = hourly ? await standingPermissions(home, now()) : new Map();
+    let fleetRows = io.fleetRows;
+    const loadFleetRows = async () => {
+      if (fleetRows) return fleetRows;
+      const result = await (io.fetchBeacons ?? fetchBeacons)({ home, fetchImpl: io.fetch, timeoutMs: 15000, retries: 0 });
+      const pcMap = io.pcMap ?? await readJson(path.resolve(import.meta.dirname, '..', 'fleet-pc-map.json'), {});
+      fleetRows = buildFleetStatus({ pcMap, beacons: result.beacons, serverPolls: result.serverPolls, now: now() });
+      return fleetRows;
+    };
+    if (hourly && usageBlocked) await loadFleetRows();
     const loadClosed = io.loadClosed ?? (() => readJson(path.join(dir, 'session-closed-ledger.json'), { sessions: {} }));
     let closeSaves = Promise.resolve();
     const closeSession = io.closeSession ?? (async (sessionId, value) => {
@@ -564,15 +745,18 @@ export async function run(config = options(), io = {}) {
       const parsedDue = parseWaitFooter(record.lastAssistantText).due;
       const dueAt = parsedDue?.getTime?.() ?? wait?.at ?? Infinity;
       const dueSoon = dueAt >= now() && dueAt <= now() + 24 * HOUR_MS;
-      return { dueSoon, dueAt, expiredAt: wait?.at <= now() ? wait.at : Infinity, deferredOnly: !wait };
+      return { standing: standing.has(record.sessionId), dueSoon, dueAt, expiredAt: wait?.at <= now() ? wait.at : Infinity, deferredOnly: !wait };
     };
     const overdueTitle = record => overdueOrder(record).expired;
-    const records = (await (io.detect ?? detect)(overdue, hourly))
-      .filter(r => overdue ? (hourly ? !!recordWait(r, now()) || deferredPhrase(r.lastAssistantText) : !!recordWait(r, now())) : ['要対応', '要確認'].includes(r.status))
+    const detected = await (io.detect ?? detect)(overdue, hourly, { home, now: now() });
+    if (io.hourlyStats) io.hourlyStats.unlinked = detected.unlinked || 0;
+    const records = detected
+      .filter(r => overdue ? (hourly ? true : !!recordWait(r, now())) : ['要対応', '要確認'].includes(r.status))
       .sort((a, b) => {
         if (hourly) {
           const left = hourlyOrder(a), right = hourlyOrder(b);
-          return Number(right.dueSoon) - Number(left.dueSoon)
+          return Number(right.standing) - Number(left.standing)
+            || Number(right.dueSoon) - Number(left.dueSoon)
             || left.dueAt - right.dueAt
             || left.expiredAt - right.expiredAt
             || Number(left.deferredOnly) - Number(right.deferredOnly)
@@ -592,9 +776,36 @@ export async function run(config = options(), io = {}) {
           || b.score - a.score || a.ageDays - b.ageDays;
       });
     rows = []; results = [];
+    if (io.hourlyStats) Object.assign(io.hourlyStats, { rows, results });
+    let hourlyGuard = { blocked: false, reason: 'not-checked' };
+    if (hourly) {
+      hourlyGuard = await (io.evaluateGuard ?? evaluateClaudeSeatGuard)({ home, caller: 'stalled-session-resume:hourly-preflight' });
+      if (io.hourlyStats) io.hourlyStats.seatGuard = `${hourlyGuard.blocked ? 'blocked' : 'allowed'}:${hourlyGuard.reason};${usageState}`;
+    }
+    const decisions = new Map();
+    if (hourly) {
+      const closed = await loadClosed();
+      const toJudge = records.filter(record => {
+        const entry = ledger.overdue[JSON.stringify([record.sessionId, recordWait(record, now())?.key ?? 'hourly-deferred'])] || {};
+        return !hourlySkipReason(record, { ...entry, noProgress: Math.max(entry.noProgress || 0, ledger.hourlyFamilies[familyId(record.sessionId)]?.noProgress || 0) }, closed, record.detectedMtimeMs ?? now() - DAY_MS, now(), config.activeMs);
+      });
+      if (isEntry(import.meta.url)) console.log(JSON.stringify({ candidates: records.length, judging: toJudge.length, unlinked: detected.unlinked || 0 }));
+      let cursor = 0;
+      await Promise.all(Array.from({ length: Math.min(4, toJudge.length) }, async () => {
+        while (cursor < toJudge.length) {
+          const record = toJudge[cursor++];
+          try { decisions.set(record.sessionId, await (io.classifyHourly ?? classifyHourly)(record, { home })); }
+          catch (error) { decisions.set(record.sessionId, { action: 'skip', reason: redactSecrets(String(error.message)).slice(0, 300), nextStep: '', error: true }); }
+          const decision = decisions.get(record.sessionId);
+          if (io.onDecision) io.onDecision({ sessionId: record.sessionId, ...decision });
+          else if (isEntry(import.meta.url)) console.log(redactSecrets(JSON.stringify({ sessionId: record.sessionId, ...decision })));
+        }
+      }));
+    }
     const state = (overdue ? null : ledger.nights[night]) ?? { count: 0, errors: 0, aborted: false };
     if (!readonly && !overdue) { delete state.noExecutor; ledger.nights[night] = state; }
     const pending = [...records], running = new Set(), busy = new Set();
+    let handoffCount = 0;
     const cwdKeys = new Map();
     for (const record of records) {
       let cwd = record.cwd ?? '';
@@ -615,6 +826,7 @@ export async function run(config = options(), io = {}) {
         const entries = overdue ? ledger.overdue : ledger.sessions;
         const entryKey = overdue ? overdueKey : record.sessionId;
         const entry = entries[entryKey] ?? { attempts: [], noProgress: (overdue ? 0 : chainNoProgress(ledger, parentId)) };
+        if (hourly) entry.noProgress = Math.max(entry.noProgress || 0, ledger.hourlyFamilies[familyId(record.sessionId)]?.noProgress || 0);
         if (!overdue && parentId && !entry.parentSessionId) entry.parentSessionId = parentId;
         entry.title = record.displayTitle;
         const closed = await loadClosed();
@@ -631,8 +843,57 @@ export async function run(config = options(), io = {}) {
         const eligibilityEntry = overdue || resumeAllowed ? entry : {};
         let reason = hourly ? hourlySkipReason(record, eligibilityEntry, closed, record.activityMtimeMs ?? mtimeMs, now(), config.activeMs) : overdue ? overdueSkipReason(record, eligibilityEntry, closed, record.activityMtimeMs ?? mtimeMs, now(), config.activeMs) : skipReason(record, eligibilityEntry, night, closed, mtimeMs, now(), config.activeMs);
         if (overdue && record.detectedMtimeMs !== undefined && record.detectedMtimeMs !== mtimeMs) reason = 'active';
-        const row = { sessionId: record.sessionId, title: record.displayTitle, attempts: entry.attempts.length, skip: reason };
+        const row = { sessionId: record.sessionId, title: record.displayTitle, attempts: entry.attempts.length, skip: reason,
+          due: parseWaitFooter(record.lastAssistantText).due?.toISOString() || '' };
         rows.push(row);
+        if (hourly && !reason) {
+          try {
+            row.decision = decisions.get(record.sessionId) ?? { action: 'skip', reason: '事前判定対象外', nextStep: '' };
+            if (row.decision.error && io.hourlyStats) io.hourlyStats.error = row.decision.reason;
+            entry.decision = row.decision;
+            record.lastLineHash ||= row.decision.fingerprint;
+            if (row.decision.action !== 'resume') {
+              row.skip = row.decision.action;
+              if (!readonly) {
+                if (row.decision.action === 'waiting-human') {
+                  const noticeKind = decideStalledNoticeKind({ reason: row.decision.reason, nextStep: row.decision.nextStep });
+                  const subject = noticeKind === 'info' ? `【停滞の記録】${record.displayTitle}` : `【再開の判断待ち】${record.displayTitle}`;
+                  const delivery = await addOverdueInbox(io, home, { kind: noticeKind, forceKind: true, source: 'stalled-session-hourly-preflight', sessionId: record.sessionId,
+                    dedupeKey: record.sessionId, text: redactSecrets(`${subject}\n理由: ${row.decision.reason}\n確認事項: ${row.decision.nextStep}`) });
+                  row.askSubject = subject;
+                  row.askDelivery = delivery?.delivered || delivery?.status || 'saved';
+                  if (isEntry(import.meta.url)) console.log(JSON.stringify({ sessionId: record.sessionId, askSubject: redactSecrets(subject), askDelivery: row.askDelivery }));
+                }
+                entries[entryKey] = entry; await save(ledger);
+              }
+              continue;
+            }
+            if (readonly) { row.plannedAction = 'fork再開（dry-run: 起動なし）'; continue; }
+          } catch (error) {
+            row.skip = '事前判定・ask保存失敗'; row.error = redactSecrets(String(error.message)).slice(0, 200);
+            if (io.hourlyStats) io.hourlyStats.error = row.error;
+            continue;
+          }
+        }
+        if (!readonly && hourly && (usageBlocked || hourlyGuard.blocked) && !reason && handoffCount < hourlyPolicy.hourlyCap) {
+          await loadFleetRows();
+          const handoff = (io.handoffSession ?? handoffSession)({
+            record: { ...entry, title: record.displayTitle, sessionId: record.sessionId, hostname: os.hostname(), cwd: record.cwd,
+              firstUserText: record.firstPrompt, lastAssistantText: record.lastAssistantText, due: parseWaitFooter(record.lastAssistantText).due?.toISOString(),
+              reason: `${entry.skipReason || '利用量の上限で元PCで再開できない'}\n事前判定の次の手順: ${row.decision?.nextStep || ''}\nこの無人再開では社外送信・支払い・削除・権限変更・Discord DMを実施しない。必要な判断はkim-inboxのaskに記録する。` },
+            fleetRows, repo: path.resolve(import.meta.dirname, '..'), home, now: now(), stopPct: hourlyPolicy.planUsageStopPct,
+            directiveSender: io.directiveSender ?? sendFleetDirective
+          });
+          if (handoff.handedOff) {
+            handoffCount++;
+            Object.assign(entry, { handedOffTo: handoff.target, handedOffAt: handoff.handedOffAt, skipReason: '移管済み' });
+            entries[entryKey] = entry;
+            Object.assign(row, { skip: '移管済み', plannedAction: '他PCへ移管', handedOffTo: handoff.target, handedOffAt: handoff.handedOffAt });
+            await save(ledger);
+            continue;
+          }
+        }
+        if (hourly && !reason && hourlyGuard.blocked) { row.skip = formatClaudeSeatGuardSkip(hourlyGuard); continue; }
         let event;
         let humanAsk;
         if (overdue && !reason) {
@@ -643,21 +904,21 @@ export async function run(config = options(), io = {}) {
             row.plannedAction = hourly && resumeAllowed ? '毎時再開' : hourly && usageBlocked ? '他PCへ移管' : resumeAllowed ? 'open check と納期を判定' : '納期と次の確認時刻を判定';
             continue;
           }
-          const checks = (io.openChecks ?? openChecks)(home, record.sessionId);
+          const checks = hourly ? [] : (io.openChecks ?? openChecks)(home, record.sessionId);
           const met = checks.some(check => (io.executeCheck ?? executeCheck)(check, { home }).code === 0);
           const checkedAt = now();
           if (record.detectedMtimeMs !== undefined && (await stat(record.file).catch(() => ({}))).mtimeMs !== mtimeMs) {
             row.skip = 'active';
             continue;
           }
-          event = met ? 'check-met' : safeStart && checkedAt >= safeStart.getTime() ? 'due-risk' : hourly ? 'hourly' : null;
+          event = hourly ? 'hourly' : met ? 'check-met' : safeStart && checkedAt >= safeStart.getTime() ? 'due-risk' : null;
           const footer = footerValues(String(record.lastAssistantText ?? '').replace(/：/g, ':'));
-          if (!checks.length && footer?.nextAction && !NO_ACTION_PATTERN.test(footer.nextAction) &&
+          if (!hourly && !checks.length && footer?.nextAction && !NO_ACTION_PATTERN.test(footer.nextAction) &&
               /判断|承認|決裁|同意|支払|署名|押印|選択/.test(footer.nextAction)) {
             humanAsk = async () => {
               const source = 'stalled-session-resume-overdue';
               await addOverdueInbox(io, home, { kind: 'ask', source, sessionId: record.sessionId,
-                dedupeKey: `${source}:${record.sessionId}:${wait.key}`, text: redactSecrets(footer.nextAction) });
+                dedupeKey: `${source}:${record.sessionId}:${wait?.key || 'hourly'}`, text: redactSecrets(footer.nextAction) });
             };
           }
           row.plannedAction = event ?? '待機期限を延長';
@@ -683,10 +944,10 @@ export async function run(config = options(), io = {}) {
             continue;
           }
           const limit = hourly
-            ? hourlyEventLimit(ledger.eventAttempts, record.sessionId, checkedAt, hourlyPolicy)
+            ? hourlyEventLimit(ledger.eventAttempts.map(a => ({ ...a, sessionId: familyId(a.sessionId) })), familyId(record.sessionId), checkedAt, hourlyPolicy)
             : eventLimit(ledger.eventAttempts, record.sessionId, checkedAt);
           if (limit) {
-            await notifyEventLimit(io, home, ledger.eventLimitNotices, record.sessionId, limit, checkedAt);
+            await notifyEventLimit(io, home, ledger.eventLimitNotices, record.sessionId, limit, checkedAt, hourly ? hourlyPolicy : {});
             reason = limit === 'global' ? 'イベント再開の時間上限' : 'イベント再開の日次上限';
           }
         }
@@ -742,7 +1003,7 @@ export async function run(config = options(), io = {}) {
         const cwdKey = cwdKeys.get(record);
         busy.add(cwdKey);
         const job = (async () => {
-          let result;
+          let result, eventReservation;
           try {
             // 既に完了済み（auto-progress-resume state = done/progressed）ならスキップ
             const aprFile = path.join(home, '.claude', `auto-progress-resume-${record.sessionId}.json`);
@@ -771,11 +1032,30 @@ export async function run(config = options(), io = {}) {
               const at = now();
               ledger.eventAttempts = ledger.eventAttempts.filter(attempt =>
                 attempt.at > at - HOUR_MS || localDate(new Date(attempt.at)) === localDate(new Date(at)));
-              ledger.eventAttempts.push({ sessionId: record.sessionId, at });
+              eventReservation = { sessionId: record.sessionId, at };
+              ledger.eventAttempts.push(eventReservation);
               await save(ledger);
             }
-            result = await (io.execute ?? execute)(record, { timeoutMs: config.timeoutMs, resultFile, previous: entry.attempts.slice(-4, -1), wait: overdue ? wait : null, event, hourly });
-            if (!['progressed', 'done', 'waiting-human', 'no-progress', 'no-report', 'timeout', 'error', 'no-executor', 'not-in-session', 'disabled'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
+            result = await (io.execute ?? execute)(record, { timeoutMs: config.timeoutMs, resultFile, previous: entry.attempts.slice(-4, -1), wait: overdue ? wait : null, event, hourly, standingPermission: standing.get(record.sessionId), nextStep: row.decision?.nextStep }, { ...io, home,
+              beforeForkLaunch: hourly ? async ({ forkSessionId, forkFile }) => {
+                ledger.forks ??= {}; ledger.forks[forkSessionId] = record.sessionId;
+                entry.pendingFork = { id: forkSessionId, file: forkFile, fingerprint: row.decision?.fingerprint };
+                ledger.hourlyFamilies[familyId(record.sessionId)] = { ...ledger.hourlyFamilies[familyId(record.sessionId)], noProgress: entry.noProgress };
+                await save(ledger);
+              } : undefined,
+            });
+            if (!['progressed', 'done', 'waiting-human', 'no-progress', 'no-report', 'timeout', 'error', 'no-executor', 'not-in-session', 'disabled', 'skipped'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
+            if (hourly && result.forkSessionId && result.launched) {
+              ledger.forks ??= {}; ledger.forks[result.forkSessionId] = record.sessionId;
+              if (result.resumedInSession === true) {
+                entry.forkSessionId = result.forkSessionId; entry.resumedFingerprint = row.decision?.fingerprint;
+              }
+            }
+            if (hourly && ['skipped', 'disabled', 'no-executor'].includes(result.outcome)) {
+              if (eventReservation) eventReservation.outcome = 'disabled';
+              state.count--; entry.noProgress = Math.max(0, entry.noProgress - 1);
+              ledger.hourlyFamilies[familyId(record.sessionId)] = { ...ledger.hourlyFamilies[familyId(record.sessionId)], noProgress: entry.noProgress };
+            }
           } catch (error) { const msg = String(error.message ?? ''); result = { outcome: /timeout|timed out|ETIMEDOUT|aborted due to timeout/i.test(msg) ? 'timeout' : 'error', reason: msg }; }
           if (humanAsk && ['error', 'not-in-session', 'no-executor', 'disabled', 'timeout'].includes(result.outcome) && !entry.waitingHuman) {
             try {
@@ -799,6 +1079,7 @@ export async function run(config = options(), io = {}) {
             result = { ...result, outcome: 'not-in-session', reason: `予備executor成功だがセッション自身の再開ではない: ${result.reason}` };
           }
           Object.assign(attempt, result, { executor: result.executor || 'not-started', reason: redactSecrets(String(result.reason ?? '')).slice(0, 2000), endedAt: new Date(now()).toISOString() });
+          if (eventReservation && eventReservation.outcome !== 'disabled') eventReservation.outcome = result.outcome;
           const ancestors = overdue ? [] : chainAncestors(ledger, entry.parentSessionId);
           if (result.outcome === 'progressed') {
             entry.noProgress = 0;
@@ -818,6 +1099,7 @@ export async function run(config = options(), io = {}) {
               if (ancestor.noProgress >= 3) ancestor.skipReason = '3回進捗なし';
             }
           }
+          if (hourly && result.launched) ledger.hourlyFamilies[familyId(record.sessionId)] = { ...ledger.hourlyFamilies[familyId(record.sessionId)], noProgress: entry.noProgress };
           if (!overdue) {
             if (entry.noProgress >= 3) entry.skipReason = '3回進捗なし';
             // 時間切れは今晩中止の判定対象外: 連続エラーに加算もリセットもしない（noProgress は no-progress 同様に加算済み）。
@@ -825,12 +1107,14 @@ export async function run(config = options(), io = {}) {
             else if (result.outcome !== 'timeout') state.errors = 0;
             state.aborted ||= state.errors >= 3;
           }
-          if (overdue && (entry.noProgress ?? 0) >= 3 && entry.attempts.filter(a => a.outcome === 'no-progress').length >= 3 && !entry.notifiedNoProgress) {
+          if (overdue && (entry.noProgress ?? 0) >= 3 && (hourly || entry.attempts.filter(a => a.outcome === 'no-progress').length >= 3) && !entry.notifiedNoProgress && !(hourly && ledger.hourlyFamilies[familyId(record.sessionId)]?.notifiedNoProgress)) {
             entry.skipReason = '3回進捗なし';
             entry.notifiedNoProgress = true;
             try { await addOverdueInbox(io, home, { kind: 'ask', source: 'stall-hourly-no-progress', sessionId: record.sessionId,
               dedupeKey: `stall-hourly-no-progress:${record.sessionId}:${localDate(new Date(now()))}`,
-              text: `${record.displayTitle}：3回再開しても進まないため停止。止まっている理由: ${attempt.reason || '進捗記録なし'}。判断してほしいこと: 自動再開を続けるか、終了するか。` }); }
+              text: `${record.displayTitle}：3回再開しても進まないため停止。止まっている理由: ${attempt.reason || '進捗記録なし'}。判断してほしいこと: 自動再開を続けるか、終了するか。` });
+              if (hourly) ledger.hourlyFamilies[familyId(record.sessionId)].notifiedNoProgress = true;
+            }
             catch { /* 通知失敗は再開に影響させない */ }
           }
           const hourlyDue = hourly ? parseWaitFooter(record.lastAssistantText).due : null;
@@ -895,10 +1179,23 @@ export async function run(config = options(), io = {}) {
         const resultById = new Map(results.map(item => [item.sessionId, item]));
         const entries = rows.filter(row => row.skip !== '完了済み').map(row => {
           const result = resultById.get(row.sessionId);
-          return { title: row.title, sessionId: row.sessionId, type: row.skip === '3回進捗なし' ? '打ち切り' : row.title?.includes('まで】') ? '期限切れ' : '先送り', lastResult: result?.outcome || row.skip || '候補', lastAttemptAt: result?.endedAt || now() };
+          return { title: row.title, sessionId: row.sessionId, due: row.due,
+            type: row.skip === '移管済み' ? '移管済み' : row.skip === '3回進捗なし' ? '打ち切り' : row.title?.includes('まで】') ? '期限切れ' : '先送り',
+            lastResult: result?.outcome || row.skip || '候補', lastAttemptAt: result?.endedAt || now(), handedOffTo: row.handedOffTo, handedOffAt: row.handedOffAt };
         });
         if (os.hostname() === '000KimPC') entries.push(...collectGbReportEntries({ now: now() }));
-        try { writeStallLedger({ home, hostname: os.hostname(), entries, now: now() }); } catch { /* 台帳失敗で再開結果を失わない */ }
+        try {
+          const localLedger = writeStallLedger({ home, hostname: os.hostname(), entries, now: now() });
+          if (os.hostname() === '000KimPC') {
+            let allRows = io.fleetRows;
+            if (!allRows) {
+              const fetched = await (io.fetchBeacons ?? fetchBeacons)({ home, fetchImpl: io.fetch, timeoutMs: 15000, retries: 0 });
+              const pcMap = io.pcMap ?? await readJson(path.resolve(import.meta.dirname, '..', 'fleet-pc-map.json'), {});
+              allRows = buildFleetStatus({ pcMap, beacons: fetched.beacons, serverPolls: fetched.serverPolls, now: now() });
+            }
+            writeAllLedgers({ home, ownLedger: { hostname: os.hostname(), updatedAt: new Date(now()).toISOString(), summary: localLedger.summary }, fleetRows: allRows, now: now() });
+          }
+        } catch { /* 台帳失敗で再開結果を失わない */ }
       }
       if (outcome === 'error' && !config.dryRun && !config.list) {
         const reason = redactSecrets(String(thrown?.message ?? thrown ?? fatal?.message ?? fatal ?? '')).slice(0, 200);
@@ -913,6 +1210,6 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   return run(options(argv), io);
 }
 if (isEntry(import.meta.url)) {
-  try { const config = options(process.argv.slice(2)); const result = await run(config); console.log(redactSecrets(JSON.stringify({ executor: autoSessionExecutor(), ...result }, null, 2))); if (result.results.some(r => r.outcome === 'error')) process.exitCode = 1; }
+  try { const config = options(process.argv.slice(2)); const result = await run(config); console.log(redactSecrets(JSON.stringify({ executor: config.hourly ? 'claude-fork-session' : autoSessionExecutor(), ...result }, null, 2))); if (result.results.some(r => r.outcome === 'error')) process.exitCode = 1; }
   catch (error) { console.error(redactSecrets(error.message)); process.exitCode = 1; }
 }

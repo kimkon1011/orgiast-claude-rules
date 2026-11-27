@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { looksLikeApprovalRequest } from './lib/kim-inbox-kind.mjs';
+import { isPullRequestMergeApprovalRequest, MERGE_HANDOFF_REJECTION_MESSAGE } from './lib/kim-inbox-merge-handoff.mjs';
 import { main, addItem, listItems, __test } from './kim-inbox.mjs';
 
 // ============================================================
@@ -42,6 +43,21 @@ test('looksLikeApprovalRequest: 「決めて」を含む本文は true', () => {
 test('looksLikeApprovalRequest: null や undefined は false', () => {
   assert.equal(looksLikeApprovalRequest(null), false);
   assert.equal(looksLikeApprovalRequest(undefined), false);
+});
+
+test('isPullRequestMergeApprovalRequest: マージ可否の依頼だけを検出する', () => {
+  for (const text of [
+    'この PR をマージしてよいか',
+    'PR #2460 のマージ承認をお願いします',
+    'マージ可否を判断してください',
+    'main にマージする承認をください',
+    '承認後は pr-merge.mjs でマージします',
+  ]) assert.equal(isPullRequestMergeApprovalRequest(text), true, text);
+  for (const text of [
+    'PR #2460 はマージ済みです',
+    'PR の修正点を確認してください',
+    'メール送信を承認してください',
+  ]) assert.equal(isPullRequestMergeApprovalRequest(text), false, text);
 });
 
 // ============================================================
@@ -130,6 +146,32 @@ test('--add ask で承認要求の本文 → kind は ask のまま（kindPromot
   assert.equal(items.length, 1);
   assert.equal(items[0].kind, 'ask', 'ask はそのまま');
   assert.equal(items[0].kindPromotedFrom, undefined, '元々 ask なので kindPromotedFrom は無し');
+});
+
+test('--add ask は PR のマージ可否依頼を拒否して exit 2', async t => {
+  const home = seat(t);
+  const bodyFile = path.join(home, 'body.txt');
+  fs.writeFileSync(bodyFile, 'PR #2460 を main にマージしてよいか承認してください');
+  const errors = [];
+  const code = await main(['--add', 'ask', '--body-file', bodyFile], {
+    home, stdout: () => {}, stderr: message => errors.push(message),
+  });
+  assert.equal(code, 2);
+  assert.equal(listItems(home).length, 0);
+  assert.match(errors.join('\n'), new RegExp(MERGE_HANDOFF_REJECTION_MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+});
+
+test('--merge-handoff-ok は例外理由を記録してマージ可否 ask を許可する', async t => {
+  const home = seat(t);
+  const bodyFile = path.join(home, 'body.txt');
+  fs.writeFileSync(bodyFile, '破壊的変更を含む PR #2460 のマージ承認をお願いします');
+  const code = await main(['--add', 'ask', '--body-file', bodyFile, '--merge-handoff-ok', '本番データを不可逆に削除するため'], {
+    home, stdout: () => {}, stderr: () => {},
+  });
+  assert.equal(code, 0);
+  const items = listItems(home);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].mergeHandoffReason, '本番データを不可逆に削除するため');
 });
 
 // ============================================================

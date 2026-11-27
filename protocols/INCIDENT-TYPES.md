@@ -15,6 +15,9 @@
 ## カタログ
 | 型 | 症状（初出） | 横展開の検索 | ゲート |
 |---|---|---|---|
+| 補助処理失敗の本体失敗混同型 | 元メール404・指示書更新timeout・通知先の旧表記で無人ジョブが毎回失敗（2026-11-26） | deadline-watch auto-close / cost-improve-loop runEntry / internal-audit notify / user-rework・user-burden JSONL再走査 | 3ジョブの回帰テスト＋2集計の永続キャッシュ更新・期限切れテスト（HTTP認証・5xx・本体・通知記録失敗は失敗を維持） |
+| 定期実行の無変化LLM確認型 | 定期実行が新着なしでもLLMを起動して枠とトークンを消費する | スケジュール登録される tools/*.mjs の llm-ask / codex-do / claude-ai-run / chat/completions 呼出 | change-gate ＋ routine-usage-weekly |
+| マージ可否の人頼み型 | PR #2460 のマージ承認が kim-inbox 経由で kim に届き、マージ後も3日残った（2026-11-20〜25 カフェ用015） | マージしてよい・マージ承認 | tools/kim-inbox.mjs、tools/lib/kim-inbox-relay-state.mjs、tools/kim-inbox-autoclose.mjs |
 | AI で回避できるコード入力を user に回し、Claude 側の遅延で期限切れを繰り返す | WSL device-auth の提示遅延で3回期限切れ（2026-11-25） | device-auth・login/device・ワンタイムコード | user-code-input-gate／pretooluse-codex-invocation |
 | 代理返答の約束が実行経路なしで消える | Discord の代理返答が予定変更・会議URL送付を約束したが実行も記録もなかった（2026-11-23） | 代理返答の送信経路、設定します・送ります・運用化しました | 送信前の完了主張チェック、約束台帳、Calendar 読み戻し、24時間超の監査 |
 | 社外共有リンクの検証不足型 | 手順書リンクが相手側で開けない（2026-11-19 大庭様。共有成功ログ・送信文字列に異常なし、端末側原因は未確定） | `drive.google.com` / `docs.google.com` / `rtpof=true` / curama送信クリック | share-before-send-gate の社外本文モードでMIME・anyoneWithLink reader・未ログインHTTPを毎回確認。curama-share-gate-adapterを送信直前にawait |
@@ -70,6 +73,7 @@
 - 型: コマンドラインの引用符の違いで正規のプロセスを別物と判定し、再起動を拒否する（2026-11-19 kim-PC、secretary-restart.ps1 の 3939/3940 実測） → 対策: 引数単位でパスとポートを照合し、Next.js の子プロセスは親も確認する。ゲート: tools/secretary-server-process.test.ps1
 | 送信ゲート経路漏れ型 | ゲートをコマンド名に結びつけ、同じ操作をする別経路を見落とす | 送信 API・Actions の `mode=send`・送信関数の呼び出しを `tools/` 全体で走査 | 送信ツール本体で防御＋送信経路の網羅テスト |
 | 営業メールの社内同報漏れ型 | ブース営業の社外メールで担当社員へのCCが抜け、進行状況を共有できない | gmail-draft・seisaku-mail・営業専用送信スクリプトを横断 | config/booth-sales-cc.json による自動CC＋既存下書き送信時の欠落停止 |
+| 請求書メールの経理CC漏れ | 請求書メールで経理（keiri2@orgiast.jp）へのCCが抜け、経理が請求を把握できない | gmail-draft・seisaku-mail・請求書送信スクリプトを横断 | config/invoice-cc.json による自動CC＋既存下書き送信時の欠落停止（errorKind: invoice_cc_missing） |
 - 型: 故障レーンの修理を「次のセッションで直します」と最終応答で先送りする型（2026-11-15 kim 指摘: deepseek・qwen の故障を次セッションへ回した。deferral-wait-gate に「次のセッション／明日／後で＋直す」の型が無く、lane-repair-first-gate は PreToolUse でツール実行しか止めないため最終文面を素通り。原因の実体は codex-do が警告行 [claude-code:unrecognized_model] だけで失敗判定していた誤判定と、qwen 0.22.3 が自動メモリ抽出で終了しない不具合） → 横展開の検索: deferral-wait-gate の全先送りパターン、codex-do の isLaneIncompatible・cheapFirstFailureReason の呼出し全箇所、buildQwenArgs → ゲート: deferral-wait-gate NEXT_SESSION_DEFERRAL（Stop・人待ち例外つき）+ isLaneIncompatible の警告行除外判定 + buildQwenArgs に --bare
 - 型: 手間依頼の回避策未検討型（2026-11-16 同日2回目。kim「何回言ったらわかるのかな」）→ 横展開の検索: user へ電話・操作を依頼する報告文・手順書 → ゲート: user-burden-gate の「Claude で回避できる策:」検査
 - 型: 数字だけの識別子を表計算が数値化し、先頭0が消えて厳密比較から脱落する（2026-11-20 fleet-mail `018`→`18` 未配達）→ 横展開の検索: Sheets 経由の ID・ラベル保存と `to` の厳密比較 → ゲート: 宛先列をプレーンテキスト書式に固定、読み出しを文字列化、数字ラベルは数値同値比較（tools/fleet-mail-address.test.mjs / fleet-mail-gas-v2.test.mjs）
@@ -77,4 +81,4 @@
 - 型: 照会できる事実（注文内容・届いた物）を記録を読まずに推測で断言する型（2026-11-24 VBM 部品「Oリングは注文していない」→実際はOリングを注文、店の確認メールへの返信も下書きのまま。kim「こういう嘘は二度とつくな」）→ 横展開の検索: 注文・配送・相手の返信に関する断言文 → ゲート: 未追加（Codex で Stop ゲート「注文/届いた/返信に関する断定文に確認元の記載が無ければ差し戻す」を実装予定）
 
 - 型: ゲート間の書式要求の矛盾／末尾付加行でフッター未検出→後段ゲート未評価。2026-11-25 015CAFE
-
+- 型: テストの相対fixtureが起動cwdに依存し、通知抑止だけでは提案経由の画面起動が残る → internal-audit/deadline-watchのfixtureはfileURLToPathで解決、cost-improve-loopは提案launcherを注入モック化 → ゲート: リポ外cwdで失敗5件の再検証＋kim席・非dry-runのlauncher呼出テスト。

@@ -117,7 +117,7 @@ export async function scanLostPrompts({ home = journalHome(), ...options } = {})
     const latest = rows.reduce((a, b) => Date.parse(a.at) > Date.parse(b.at) ? a : b);
     const promptPreview = [...latest.prompt].slice(0, 80).join('');
     await addItem(home, {
-      kind: 'info', source: 'lost-prompt-scan', sessionId, dedupeKey: 'lost-prompt:' + sessionId,
+      kind: 'info', forceKind: true, source: 'lost-prompt-scan', sessionId, dedupeKey: 'lost-prompt:' + sessionId,
       text: `Claude Code 未達の返答 (${sessionId})\n${rows.length}件: ${promptPreview}`,
     }, { drain: false, localOnly: true });
   }
@@ -126,5 +126,5 @@ export async function scanLostPrompts({ home = journalHome(), ...options } = {})
 
 if (isEntry(import.meta.url)) {
   try { console.log(`lost-prompt-scan: ${await scanLostPrompts()} unmatched`); }
-  catch { console.error('lost-prompt-scan: scan failed'); process.exitCode = 1; }
+  catch (error) { console.error(`lost-prompt-scan: scan failed: ${error?.stack || error}`); process.exitCode = 1; }
 }

@@ -63,13 +63,17 @@ test('billing variants are excluded from failures and never block; real 500 thre
   const { repairContext } = await import('./lib/lane-repair-state.mjs');
   const rows = ['HTTP 402', 'Insufficient Balance', 'insufficient_quota', 'credits are depleted', 'not enough credits'].map(reason => ({ status: 'error', reason }));
   const home = fixture(t, rows);
+  fs.writeFileSync(path.join(home, '.claude/openrouter.env'), 'OPENROUTER_API_KEY=test-only');
   const h = laneDoctorQuick({ home, now });
   assert.equal(h.lanes.deepseek.reason, 'billing');
   assert.equal(h.lanes.deepseek.real24h.billingCalls, 5);
   assert.equal(h.lanes.deepseek.real24h.failures, 0);
-  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify({ lanes: { deepseek: h.lanes.deepseek } }));
+  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify({ lanes: { deepseek: h.lanes.deepseek, openrouter: h.lanes.openrouter } }));
   assert.equal(evaluateRepairFirst({ tool_name: 'Edit' }, { home, now }).decision, 'pass');
-  assert.match(repairContext(h, home, now), /deepseek: 残高不足。代替の安いレーン/);
+  // OpenRouter 代替が生存中なら billing を「要修復」警告に数えない（台帳 config/lane-openrouter-substitutes.json）。
+  assert.equal(h.lanes.deepseek.via, 'openrouter');
+  assert.equal(h.lanes.openrouter?.alive, true);
+  assert.doesNotMatch(repairContext(h, home, now), /deepseek: 残高不足/);
   assert.ok(JSON.parse(fs.readFileSync(path.join(home, '.claude/routing-overrides.json'))).demote.deepseek);
   assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude/provider-cooldown.json'))).deepseek.reason, 'billing');
   fs.appendFileSync(path.join(home, '.claude/executor-usage.jsonl'), '\n' + Array.from({ length: 6 }, () => JSON.stringify({ t: new Date(now).toISOString(), provider: 'deepseek', status: '500' })).join('\n'));
@@ -94,6 +98,22 @@ test('Google 403 outstanding balance is billing', t => {
   // 403 without billing text is not billing
   assert.equal(billingFailure('HTTP 403 permission denied'), false);
   assert.equal(billingFailure('status 403 Forbidden'), false);
+});
+
+test('xAI credits/spending-limit 403 wording is billing', t => {
+  const xai = 'grok:grok-3 HTTP403 permission-denied Your team has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit.';
+  assert.equal(billingFailure(xai), true);
+  assert.equal(billingWithQuotaHint(xai), false);
+  assert.equal(quotaFailure(xai), false);
+  // wording fragments alone
+  assert.equal(billingFailure('used all available credits'), true);
+  assert.equal(billingFailure('used all credits'), true);
+  assert.equal(billingFailure('monthly spending limit'), true);
+  assert.equal(billingFailure('raise your spending limit'), true);
+  assert.equal(billingFailure('purchase more credits'), true);
+  // plain 403 / permission-denied without billing wording stays non-billing
+  assert.equal(billingFailure('HTTP 403 permission denied'), false);
+  assert.equal(billingFailure('grok:grok-3 HTTP403 permission-denied'), false);
 });
 
 test('Google 403 outstanding balance via ledger realLaneStats is billing', t => {
@@ -443,7 +463,7 @@ test('OpenRouter 経由が正規経路の deepseek を連鎖と誤認しない',
 });
 
 test('OpenRouter 経路の mistral も同様に連鎖と誤認しない', t => {
-  assert.equal(probeViaChain('PONG\n[openrouter:mistralai/mistral-medium-3.1] in=21 out=3tok', 'mistral'), false);
+  assert.equal(probeViaChain('PONG\n[openrouter:mistralai/mistral-medium-3-5] in=21 out=3tok', 'mistral'), false);
 });
 
 test('OpenRouter タグに自レーン名が含まれない場合は従来どおり viaChain', t => {
@@ -551,4 +571,46 @@ test('ChatGPT 枠切れの行は失敗ではなく quotaCalls に入り gate が
   assert.equal(stats.codex.failures, 0);
   assert.equal(stats.codex.quotaCalls, 6);
   assert.equal(repairable({ alive: false, reason: 'real_fail_rate', error: stderr }), false);
+});
+
+test('probeReason=cooldown のときは real_fail_rate ではなく quota_wait に分類する（行き止まり防止）', t => {
+  const home = fixture(t, [
+    ...Array.from({ length: 10 }, () => ({ provider: 'codex', status: 'error', stderr: 'all_backends_failed' })),
+  ]);
+  const health = { lanes: { codex: { alive: false, reason: 'probe_failed', probeReason: 'cooldown', probeEvidence: 'all_backends_failed' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.codex.reason, 'quota_wait');
+});
+
+test('default probe measures gateway-backed mistral and retains retired model evidence', async t => {
+  const home = fixture(t, []);
+  fs.writeFileSync(path.join(home, '.claude/openrouter.env'), 'OPENROUTER_API_KEY=test-only');
+  const model = 'mistralai/mistral-medium-3-5';
+  for (const [code, message] of [[1, 'is no longer available on OpenRouter'], [0, 'No endpoints found']]) {
+    const calls = [];
+    const h = await laneDoctorProbe({ home, now, probe: async p => {
+      calls.push(p);
+      return p === 'mistral' ? { code, text: `openrouter:${model} HTTP404: {"error":{"message":"${message}","code":404}}` } : { code: 0, text: 'PONG' };
+    }, notify: async () => ({ delivered: 'test' }) });
+    assert.ok(calls.includes('mistral'));
+    assert.equal(h.lanes.mistral.alive, false);
+    assert.equal(h.lanes.mistral.reason, 'model_retired');
+    assert.equal(h.lanes.mistral.model, model);
+    assert.match(h.lanes.mistral.error, /mistralai\/mistral-medium-3-5/);
+    assert.equal(h.lanes.openrouter.alive, true);
+    assert.equal(laneDoctorQuick({ home, now: now + 3600_000 }).lanes.mistral.reason, 'model_retired');
+  }
+  const recovered = await laneDoctorProbe({ home, now: now + 3600_000, providers: ['mistral'], probe: async () => ({ code: 0, text: `PONG\n[openrouter:${model}] in=1 out=1tok` }), notify: async () => ({ delivered: 'test' }) });
+  assert.equal(recovered.lanes.mistral.alive, true);
+  assert.equal(recovered.lanes.mistral.reason, 'probe_ok');
+});
+
+test('retired model detection requires 404 and a model retirement message on the requested lane', async () => {
+  const { retiredModel } = await import('./lib/lane-real-health.mjs');
+  const model = 'mistralai/mistral-medium-3-5';
+  assert.equal(retiredModel(`openrouter:${model} HTTP 404: No endpoints found`, 'mistral'), model);
+  assert.equal(retiredModel(`openrouter:${model} HTTP 404: Not found`, 'mistral'), null);
+  assert.equal(retiredModel(`openrouter:${model} HTTP 503: No endpoints found`, 'mistral'), null);
+  assert.equal(retiredModel(`openrouter:${model} HTTP 404: No endpoints found`, 'deepseek'), null);
+  assert.equal(retiredModel(`[routing] openrouter:${model} HTTP 404: No endpoints found`, 'mistral'), null);
 });

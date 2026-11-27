@@ -43,17 +43,27 @@ export function backoffDelayMs(attempt, { random = Math.random } = {}) {
   return Math.round(base * jitter);
 }
 
+// 成功応答の本文を同じ試行内で読む。AbortSignal 切れの TimeoutError をリトライ対象に含めるため。
+async function parseOkResponse(response, parse) {
+  if (response.status === 204) return null;
+  if (parse === 'json') return await response.json();
+  if (parse === 'text') return await response.text();
+  return response;
+}
+
 // Gmail API 呼び出しをリトライ付きで実行する。
-// 成功時は Response を返す。リトライ不能なエラーまたは最大試行回数超過時は throw する。
+// 既定では成功時に Response を返す。parse: 'json'|'text' を渡すと本文読み取りまで同じ試行で行い、
+// 読み取り中の TimeoutError / AbortError もリトライ対象にする（呼び出し側互換のため parse 未指定は Response のまま）。
+// リトライ不能なエラーまたは最大試行回数超過時は throw する。
 // リトライ毎に新しい AbortSignal.timeout(30_000) を使う。
 // fetchImpl の例外（タイムアウト・ネットワーク失敗）も isRetryableFetchError に従いリトライする。
-export async function gmailFetchWithRetry(url, options, { fetchImpl = globalThis.fetch, sleep = ms => new Promise(r => setTimeout(r, ms)), random = Math.random, onRetry = () => {} } = {}) {
+export async function gmailFetchWithRetry(url, options, { fetchImpl = globalThis.fetch, sleep = ms => new Promise(r => setTimeout(r, ms)), random = Math.random, onRetry = () => {}, parse } = {}) {
   let totalWait = 0;
   for (let attempt = 0; ; attempt++) {
     const signal = AbortSignal.timeout(30_000);
     try {
       const response = await fetchImpl(url, { ...options, signal });
-      if (response.ok) return response;
+      if (response.ok) return await parseOkResponse(response, parse);
       const body = await response.text().catch(() => '');
       if (!isRetryableError(response, body) || attempt >= MAX_RETRIES - 1) {
         const err = new Error(`Gmail API ${response.status}: ${body.slice(0, 200)}`);
@@ -77,7 +87,7 @@ export async function gmailFetchWithRetry(url, options, { fetchImpl = globalThis
     } catch (error) {
       // HTTP 応答に関する GmailApiError はそのまま再スロー（既存のリトライロジックで処理済み）
       if (error.name === 'GmailApiError') throw error;
-      // fetchImpl の例外（タイムアウト・ネットワーク失敗）はリトライ対象ならリトライ
+      // fetchImpl / 本文読み取りの例外（タイムアウト・ネットワーク失敗）はリトライ対象ならリトライ
       if (!isRetryableFetchError(error) || attempt >= MAX_RETRIES - 1) throw error;
       const delay = backoffDelayMs(attempt + 1, { random });
       totalWait += delay;

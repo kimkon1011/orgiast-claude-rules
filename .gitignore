@@ -34,6 +34,9 @@ tmp-*/
 # $env:LOCALAPPDATA が未設定のまま PowerShell を起動すると repo 直下に掘られるキャッシュ
 /Microsoft/
 
+# PowerShell ModuleAnalysisCache file should be ignored at any level
+**/Microsoft/Windows/PowerShell/ModuleAnalysisCache
+
 # AWS CLI/SDK が cwd=repo で起動されたときに掘る空の既定設定ディレクトリ（機械ローカル）
 /.aws/
 
@@ -131,3 +134,12 @@ PR_BODY.md
 # Git Bash で区切りが失われ、repo 直下へ落ちた Windows 一時パス
 /[A-Za-z]:*
 /[A-Za-z]*
+gb-reports/
+
+# nightly-repo で毎晩 rescue/auto-session-* ブランチが生える再発を止めるための対応
+/task/
+/tpl/
+
+# auto-session-rescue が一時スキャン出力 .scan-out/*.json を拾って
+# rescue ブランチへ commit するのを防ぐ（2026-11-27 実測）
+.scan-out/

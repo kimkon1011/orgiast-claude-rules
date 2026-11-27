@@ -262,3 +262,36 @@ test('gmailFetchWithRetry: リトライ毎に新しい AbortSignal が使われ�
   assert.equal(signals.length, 2);
   assert.notEqual(signals[0], signals[1], '毎回新しい AbortSignal が作られる');
 });
+
+test('gmailFetchWithRetry parse:json: 本文読み取り中の TimeoutError がリトライされ成功する', async () => {
+  let attempt = 0;
+  const fetchImpl = async () => {
+    attempt++;
+    if (attempt === 1) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => '',
+        json: async () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); },
+      };
+    }
+    return fakeResponse(200, '{"data":"ok"}');
+  };
+  const retries = [];
+  const body = await gmailFetchWithRetry('https://example.com', {}, {
+    fetchImpl, sleep: async () => {}, parse: 'json', onRetry: (n, d) => { retries.push({ n, d }); },
+  });
+  assert.deepEqual(body, { data: 'ok' });
+  assert.equal(attempt, 2);
+  assert.equal(retries.length, 1);
+});
+
+test('gmailFetchWithRetry parse 未指定: 既存どおり Response を返し呼び出し側互換を壊さない', async () => {
+  const response = await gmailFetchWithRetry('https://example.com', {}, {
+    fetchImpl: async () => fakeResponse(200, '{"data":"ok"}'),
+    sleep: async () => {},
+  });
+  assert.equal(typeof response.json, 'function');
+  assert.deepEqual(await response.json(), { data: 'ok' });
+});

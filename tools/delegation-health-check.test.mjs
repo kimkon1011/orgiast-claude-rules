@@ -625,6 +625,32 @@ test('数値 exit の本物の出力ゼロ行は従来どおり codex_empty_outp
   assert.equal(findings.some((item) => item.id === 'codex_spawn_failed'), false);
 });
 
+test('作業後に final 応答だけ欠けた実台帳行は codex_empty_output に数えず low で分離する', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({
+    t: '2026-11-25T07:31:14.245Z', provider: 'codex', status: 'error', exitCode: 1,
+    out: 0, secs: 318.621, timedOut: false, launched: true, reason: 'work_completed_no_final',
+    stderrTail: 'delegation-health-check 147/147 pass; codex-cooldown 20/20 pass',
+  }));
+  const findings = collectFindings({ home: dir, now: new Date('2026-11-25T08:00:00Z') });
+  assert.equal(findings.some((item) => item.id === 'codex_empty_output'), false);
+  const incomplete = findings.find((item) => item.id === 'codex_incomplete_final_response');
+  assert.equal(incomplete?.severity, 'low');
+  assert.deepEqual(incomplete?.evidence, ['1件', 'incomplete_final_response(1件)']);
+});
+
+test('reason 未記録の旧実台帳行も長時間の進捗 stderr から final 欠落へ分類する', () => {
+  assert.equal(emptyOutputReason({
+    provider: 'codex', status: 'error', exitCode: 1, out: 0, secs: 318.621,
+    timedOut: false, launched: true,
+    stderrTail: '/codex-cooldown.mjs 38 0 tools/delegation-health-check.test.mjs 48 2',
+  }), 'incomplete_final_response');
+  assert.equal(emptyOutputReason({
+    provider: 'codex', status: 'error', exitCode: 1, out: 0, secs: 39,
+    timedOut: false, launched: true, stderrTail: 'something else went wrong',
+  }), 'no_output');
+});
+
 // 実測 2026-11-08 起票: 1件/no_output(1件) の実体は、sol が 240s で timeout(124) した後の
 // astra 昇格行が ~60s で SIGTERM(143) により kill された行。外部からの signal kill は
 // 「codex が何も出さずに終わった」no_output ではないため、codex_empty_output を起票しない。

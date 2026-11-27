@@ -1,0 +1,37 @@
+import test from 'node:test'; import assert from 'node:assert/strict';
+import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+import { extractAbsoluteRules, placeAbsoluteBlock, mirrorAbsoluteRules, build, makeIndex, ABSOLUTE_BEGIN, ABSOLUTE_END } from './onboarding-sync.mjs';
+const onboarding = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
+test('ONBOARDING の絶対ルール節を抜き出す（スピード最重視が先頭、バッファ20%が続く）', () => {
+  const rules = extractAbsoluteRules(onboarding);
+  assert.match(rules, /^# 🛑 絶対ルール/);
+  const speed = rules.indexOf('スピードの経済価値を最重視。早ければ後で間違いを訂正でき、手配先も見つかり、安い方法を選べる。遅いと人探しが困難、間違えても止める時間がなく、人間の心的ストレスも高くなり、問題解決が圧倒的に困難になる。受けたら即着手、前倒しで進める。'), buffer = rules.indexOf('すべて前倒し・バッファ20%以上');
+  assert.ok(speed > 0 && buffer > speed);
+  assert.ok(!rules.includes('人の手間はAIの効率より優先'), '次の節は含めない');
+  assert.match(rules, /案件の開始・再開は、必ず担当PCのルールで決める/);
+  assert.match(rules, /担当外のPCでは再開しない/);
+  assert.match(rules, /手続き代行の即時開始ルール/);
+  assert.match(rules, /検証をユーザーに任せること自体が差し戻しにあたる/);
+});
+test('絶対ルールはファイル最上部に1つだけ置かれ、再実行で増えない', () => {
+  const rules = extractAbsoluteRules(onboarding);
+  const local = '応答は必ず日本語\n\n';
+  let text = build(local, makeIndex(onboarding), '2026-11-26').updated;
+  text = placeAbsoluteBlock(text, rules);
+  assert.ok(text.startsWith(ABSOLUTE_BEGIN));
+  assert.ok(text.indexOf('応答は必ず日本語') > text.indexOf(ABSOLUTE_END));
+  const again = placeAbsoluteBlock(build(text, makeIndex(onboarding), '2026-11-26').updated, rules);
+  assert.equal(again, text);
+  assert.equal(again.split(ABSOLUTE_BEGIN).length, 2);
+});
+test('Codex/Gemini の設定フォルダがある PC だけ AGENTS.md / GEMINI.md の先頭へ反映', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'abs-'));
+  fs.mkdirSync(path.join(home, '.codex'));
+  fs.writeFileSync(path.join(home, '.codex', 'AGENTS.md'), '# local codex rules\n');
+  const rules = extractAbsoluteRules(onboarding);
+  assert.deepEqual(mirrorAbsoluteRules(home, rules).map(f => path.basename(f)), ['AGENTS.md']);
+  const agents = fs.readFileSync(path.join(home, '.codex', 'AGENTS.md'), 'utf8');
+  assert.ok(agents.startsWith(ABSOLUTE_BEGIN)); assert.match(agents, /# local codex rules/);
+  assert.equal(fs.existsSync(path.join(home, '.gemini')), false);
+  assert.deepEqual(mirrorAbsoluteRules(home, rules), []);
+});

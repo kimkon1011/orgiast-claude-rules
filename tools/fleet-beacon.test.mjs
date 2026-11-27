@@ -5,6 +5,12 @@ import path from 'node:path';
 import test from 'node:test';
 import { buildBeacon } from './fleet-beacon.mjs';
 
+test('beacon は取得できた5時間・7日の利用率を載せる', () => {
+  const beacon = buildBeacon({ label: 'pc-usage', identity: {}, pcMap: {}, planUsage: { available: true, fiveHour: { utilization: 12.5 }, sevenDay: { utilization: 34 } } });
+  assert.equal(beacon.planFiveHourPct, 12.5);
+  assert.equal(beacon.planSevenDayPct, 34);
+});
+
 test('optional 項目(mobile-standby)の NG もビーコンの failing に載る（fleet-status の「失敗:」欄）', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-'));
   const beacon = buildBeacon({ home, label: 'pc-1', identity: {}, pcMap: {}, results: [

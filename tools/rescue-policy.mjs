@@ -11,6 +11,9 @@ import { redactSecrets } from './webhook-health.mjs';
 import { formatKimNotice } from './lib/kim-notice.mjs';
 import { clearStaleIndexLock } from './dirty-worktree-guard.mjs';
 import { scanRescuePaths } from './lib/secret-scan.mjs';
+import { unstageUndeclaredGitlinks } from './lib/rescue-gitlinks.mjs';
+
+export { unstageUndeclaredGitlinks } from './lib/rescue-gitlinks.mjs';
 
 const RETRY_MS = 6 * 60 * 60 * 1000;
 const RESCUE_REVIEW_KEY = 'rescue-branch-review';
@@ -48,24 +51,6 @@ function nestedRoot(tree, name) {
     if (fs.existsSync(path.join(tree, prefix, '.git'))) return prefix;
   }
   return null;
-}
-// `status` と `git add` の間に作られた入れ子クローンは gitlink (mode 160000) として
-// index に入る。宣言済み submodule ではない gitlink が rescue コミットに入ると、その
-// ブランチの checkout が以後すべて壊れる（2026-11-17 rescue/auto-session-20261117-153005）。
-// staging 後の index を実測して落とす後段ガード。
-export function unstageUndeclaredGitlinks(tree, env = process.env) {
-  const stagedLinks = git(tree, ['ls-files', '--stage'], undefined, env)
-    .split(/\r?\n/).filter(Boolean)
-    .filter(line => line.startsWith('160000 '))
-    .map(line => line.slice(line.indexOf('\t') + 1));
-  if (!stagedLinks.length) return [];
-  // HEAD に既にある gitlink は正規の submodule。落とすのは新規に入った分だけ。
-  const known = new Set(git(tree, ['ls-tree', '-r', 'HEAD'], undefined, env)
-    .split(/\r?\n/).filter(line => line.startsWith('160000 '))
-    .map(line => line.slice(line.indexOf('\t') + 1)));
-  const drop = stagedLinks.filter(p => !known.has(p));
-  if (drop.length) git(tree, ['rm', '--cached', '-f', '-q', '--', ...drop], undefined, env);
-  return drop;
 }
 export function dirtyStatus(tree) {
   const records = git(tree, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=all']).split('\0');

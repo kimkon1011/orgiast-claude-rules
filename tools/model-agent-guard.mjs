@@ -28,12 +28,17 @@ try {
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: '実装サブエージェントは禁止(§1.17)。node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> へ。例外は user の [CLAUDE-IMPL-OK]' } }));
     return;
   }
-  // model 省略は親を継承するため、Fable メインでは意図せず単価2倍の実働になる。
+  // model 省略は親を継承する。Fable は単価2倍、Opus 監督下でも探索が Opus 出力を膨らませ opus_heavy になる。
   if (!toolInput.model) {
     let currentModel = '';
     try { currentModel = inspectTranscript(input.transcript_path).currentModel; } catch {}
-    if (/fable/i.test(currentModel)) {
-      const reason = '省略すると Fable(単価2倍)を継承する。model を明示: 量産/編集/確認は "sonnet"、分類は "haiku"、設計判断のみ "opus"。実装は Codex へ';
+    if (/fable|opus/i.test(currentModel)) {
+      let reason;
+      if (/fable/i.test(currentModel)) {
+        reason = '省略すると Fable(単価2倍)を継承する。model を明示: 量産/編集/確認は "sonnet"、分類は "haiku"、設計判断のみ "opus"。実装は Codex へ';
+      } else {
+        reason = '省略すると Opus 監督を継承し Opus 比率が上がる。model を明示: 探索/分類は "haiku"、生成/確認は "sonnet"。設計判断のみ "opus"。実装は Codex へ';
+      }
       console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } }));
       return;
     }
@@ -76,11 +81,8 @@ try {
   // (Fable 指定だけは上で deny 済み。model 無指定のまま無干渉で通す。)
   if (/^(biz-reader|statusline-setup|claude-code-guide)$/i.test(subagentType)) return;
   if (exploratory && expensiveOrImplicit) {
-    const home = process.env.ORGIAST_HOME || os.homedir();
-    let mode = 'warn';
-    try { mode = String(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'cost-enforce.json'), 'utf8')).mode || 'warn'); } catch {}
     const advice = '探索/調査は `gemini -p "<質問>" --include-directories <dir>`(OAuth無料枠) または `node tools/codex-do.mjs --review --prompt-file <file>`(定額)。Claudeサブエージェントは最後の手段。使うなら model:"haiku"。';
-    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...(mode === 'block' ? { permissionDecision: 'deny', permissionDecisionReason: advice } : { additionalContext: advice }) } }));
+    console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: advice } }));
     return;
   }
 

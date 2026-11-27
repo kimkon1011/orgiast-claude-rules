@@ -193,7 +193,7 @@ test('info with extracted decide gets reply options instead of 返事不要', t 
   });
   const brief = inboxBrief(item);
   assert.doesNotMatch(brief.reply, /返事不要/, 'info with action decide should not say 返事不要');
-  assert.equal(brief.reply, 'N マージしてよい／N <修正点>');
+  assert.equal(brief.reply, 'N 可／N 不要／N <指示>');
   assert.match(brief.decide, /PR を確認/, 'decide should include PR check instruction');
   assert.equal(brief.happened, '', 'the same sentence is not repeated as happened and decide');
 });

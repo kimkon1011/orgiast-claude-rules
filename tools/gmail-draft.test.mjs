@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   GMAIL_COMPOSE_SCOPE, DEFAULT_USER, buildRawMessage, buildForwardRaw, guardRecipients,
   renderChatDisplay, classifyTokenError, probeScopes, createDraft, deleteDraft, runCli,
+  assertGmailBodySendable,
 } from './gmail-draft.mjs';
 
 const ledger = { domains: ['orgiast.jp', 'toho-kogyo.com'], addresses: ['staff@gmail.com'] };
@@ -203,6 +204,24 @@ test('ブース件名の dry-run は佐藤さんをCCし追加をJSONで報告�
   const report = JSON.parse(result.output[0]);
   assert.equal(report.boothCcAdded, 'satou@orgiast.jp');
   assert.match(report.headers, /Cc: satou@orgiast\.jp/u);
+});
+
+test('請求書件名の dry-run は経理をCCし追加をJSONで報告する', async () => {
+  const result = await cli(['--to', 'customer@example.com', '--subject', '請求書のご送付', '--body', 'test', '--dry-run', '--json']);
+  assert.equal(result.code, 0);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.invoiceCcAdded, 'keiri2@orgiast.jp');
+  assert.match(report.headers, /Cc: keiri2@orgiast\.jp/u);
+});
+
+test('--booth と請求書件名の併用で佐藤さんと経理の両方をCCする', async () => {
+  const result = await cli(['--to', 'customer@example.com', '--subject', '請求書（展示会ブース）', '--body', 'test', '--booth', '--dry-run', '--json']);
+  assert.equal(result.code, 0);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.boothCcAdded, 'satou@orgiast.jp');
+  assert.equal(report.invoiceCcAdded, 'keiri2@orgiast.jp');
+  assert.match(report.headers, /Cc: .*satou@orgiast\.jp/u);
+  assert.match(report.headers, /Cc: .*keiri2@orgiast\.jp/u);
 });
 
 test('--check は3スコープの認証のみ。Gmail API を呼ばない', async () => {
@@ -411,6 +430,44 @@ test('既存のブース営業下書きは佐藤さんのCC欠落時に送信を
   const report = JSON.parse(result.output[0]);
   assert.equal(report.errorKind, 'booth_cc_missing');
   assert.equal(report.boothCcAdded, 'satou@orgiast.jp');
+});
+
+test('既存の請求書下書きは経理CC欠落時に送信を停止する', async () => {
+  let calls = 0;
+  const result = await cli(['--send', 'draft', '--json'], {
+    getToken: async () => 't',
+    fetchImpl: async () => { calls++; return response(draftHeaders([{ name: 'Subject', value: '請求書のご送付' }])); },
+  });
+  assert.equal(result.code, 2);
+  assert.equal(calls, 1);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.errorKind, 'invoice_cc_missing');
+  assert.equal(report.invoiceCcAdded, 'keiri2@orgiast.jp');
+});
+
+test('請求書添付のみの下書きも経理CC欠落時に送信を停止する', async () => {
+  const draft = {
+    message: {
+      payload: {
+        headers: [
+          { name: 'To', value: 'customer@example.com' },
+          { name: 'Subject', value: '資料送付' },
+        ],
+        parts: [
+          { mimeType: 'text/plain', body: { data: Buffer.from('本文').toString('base64url') } },
+          { filename: '請求書_202611.pdf', body: { attachmentId: 'att1' } },
+        ],
+      },
+    },
+  };
+  const result = await cli(['--send', 'draft', '--json'], {
+    getToken: async () => 't',
+    fetchImpl: async () => response(draft),
+  });
+  assert.equal(result.code, 2);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.errorKind, 'invoice_cc_missing');
+  assert.equal(report.invoiceCcAdded, 'keiri2@orgiast.jp');
 });
 test('--send は秘書の空き日程URLを承認上書きでも送らない', async () => {
   const data = Buffer.from('11月20日 10:00\nhttps://claude-pc.tailc5d751.ts.net/secretary/book').toString('base64url');
@@ -629,6 +686,54 @@ test('--send の getLatest は DRAFT メッセージを最新履歴から除外�
   assert.deepEqual(capturedLatest, { id: 'msg-1', at: new Date(1700000000000).toISOString() });
 });
 
+test('--send の履歴承認不足は理由と確認コマンドを返し、送信しない', async () => {
+  const requests = [];
+  const message = '送信前の履歴整合性チェックが必要です: 承認マーカーがありません\n実行: node tools/send-context-check.mjs --channel gmail';
+  const result = await cli(['--send', 'draft-123', '--json'], {
+    skipContextCheck: false,
+    getToken: async () => 't',
+    assertContextApproved: async () => {
+      throw Object.assign(new Error(message), { code: 'SEND_CONTEXT_REQUIRED' });
+    },
+    fetchImpl: async (url) => {
+      requests.push(url);
+      if (url.includes('/drafts/draft-123?format=full')) return response({
+        message: {
+          threadId: 'thread-99',
+          payload: { headers: [{ name: 'To', value: 'customer@example.com' }] },
+        },
+      });
+      throw new Error(`unexpected fetch: ${url}`);
+    },
+  });
+  assert.equal(result.code, 2);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.errorKind, 'send_context_required');
+  assert.equal(report.error, message);
+  assert.match(report.error, /send-context-check/u);
+  assert.equal(requests.some(url => url.includes('/drafts/send')), false);
+});
+
+test('--send の履歴チェック対象スレッドを特定できない場合は送信しない', async () => {
+  const requests = [];
+  const result = await cli(['--send', 'draft-123', '--json'], {
+    skipContextCheck: false,
+    getToken: async () => 't',
+    fetchImpl: async (url) => {
+      requests.push(url);
+      if (url.includes('/drafts/draft-123?format=full')) return response({
+        message: { payload: { headers: [{ name: 'Subject', value: '宛先なし' }] } },
+      });
+      throw new Error(`unexpected fetch: ${url}`);
+    },
+  });
+  assert.equal(result.code, 2);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.errorKind, 'send_context_required');
+  assert.match(report.error, /対象スレッドを特定できません/u);
+  assert.equal(requests.some(url => url.includes('/drafts/send')), false);
+});
+
 const replyMessage = (id, subject, references, labelIds = []) => ({ labelIds, payload: { headers: [
   { name: 'message-id', value: id }, { name: 'sUbJeCt', value: subject },
   ...(references ? [{ name: 'References', value: references }] : []),
@@ -804,6 +909,7 @@ test('--send の getLatest が threads.get 403 で httpStatus を含むエラー
   assert.equal(result.code, 1);
   const report = JSON.parse(result.output[0]);
   assert.equal(report.ok, false);
+  assert.match(report.error, /（HTTP 403）$/u);
   assert.equal(report.detail, 'threads.get 403');
 });
 
@@ -881,4 +987,29 @@ test('返信先なし・Message-ID 欠落・ヘッダ注入・取得失敗なら
     assert.equal(calls, 1);
     assert.equal(result.output[0].includes('SECRET'), false);
   }
+});
+
+test('送信前ガード: 人へ作業を戻す文面は止める', () => {
+  assert.throws(
+    () => assertGmailBodySendable('くらしのマーケットの仮押さえ先の確認をお願いします。', { env: {} }),
+    (error) => error.code === 'HANDBACK_BLOCKED',
+  );
+  assert.equal(assertGmailBodySendable('西林様へ送り先確認のメールを送済みです。', { env: {} }), '西林様へ送り先確認のメールを送済みです。');
+});
+
+test('送信前ガード: HUMAN-ONLY タグ付きは通るが、タグを外すまで送れない', () => {
+  const body = '[HUMAN-ONLY: 現地作業] 11/29 9:00に現場で鍵の受け取りをお願いします。';
+  assert.throws(
+    () => assertGmailBodySendable(body, { env: {} }),
+    (error) => error.code === 'HANDBACK_TAG_UNSTRIPPED' && error.stripped.includes('現場で鍵の受け取り'),
+  );
+  const plain = assertGmailBodySendable('担当の金が11/29 9:00に現場で鍵を受け取ります。', { env: {} });
+  assert.equal(plain, '担当の金が11/29 9:00に現場で鍵を受け取ります。');
+});
+
+test('送信前ガード: ORGIAST_HANDBACK_GUARD=0 で無効', () => {
+  assert.equal(
+    assertGmailBodySendable('確認をお願いします', { env: { ORGIAST_HANDBACK_GUARD: '0' } }),
+    '確認をお願いします',
+  );
 });

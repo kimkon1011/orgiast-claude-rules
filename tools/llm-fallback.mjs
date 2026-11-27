@@ -8,6 +8,7 @@ import { isDailyQuotaResponse, nextUtcMidnight } from './lib/provider-daily-cool
 import { providerLimitedUntil } from './lib/executor-gate.mjs';
 import { isAutoDisabled, readDisabledEntries } from './lib/lane-disabled.mjs';
 import { applyCandidateHealth } from './fallback-backend-health.mjs';
+import { injectAbsoluteRules } from './lib/absolute-rules.mjs';
 
 export const FALLBACK_CHAIN = Object.freeze([
   { provider: 'groq', model: 'openai/gpt-oss-120b' },
@@ -129,7 +130,9 @@ export function classifyFailure(status) {
 }
 
 export function isPermanentBillingDetail(detail) {
-  return /prepayment credits are depleted|insufficient_quota|exceeded your current quota|insufficient balance|insufficient_balance|exceeded_current_quota|is suspended due to|please recharge your account/i.test(String(detail || ''));
+  // 2026-11-27 実測: xAI/grok のクレジット切れは HTTP 403 で
+  // "used all available credits" / "reached its monthly spending limit" / "purchase more credits" を返す。
+  return /prepayment credits are depleted|insufficient_quota|exceeded your current quota|insufficient balance|insufficient_balance|exceeded_current_quota|is suspended due to|please recharge your account|used all available credits|reached its monthly spending limit|purchase more credits/i.test(String(detail || ''));
 }
 
 function retryAfterMs(response, now = Date.now()) {
@@ -450,7 +453,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
   const requests = new Map();
   async function requestAt(index) {
     if (!requests.has(index)) {
-      const request = await payloadFor(selectedCandidates[index]);
+      const request = injectAbsoluteRules(await payloadFor(selectedCandidates[index]));
       requests.set(index, request);
       if (!request) {
         const candidate = selectedCandidates[index];

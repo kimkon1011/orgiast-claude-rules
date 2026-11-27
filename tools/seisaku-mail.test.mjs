@@ -67,6 +67,28 @@ test('--booth は非ブース件名でも佐藤さんをCCへ自動追加する'
   assert.ok(f.calls[0].args.includes('cc=satou@orgiast.jp'));
 });
 
+test('請求書件名は経理をCCへ自動追加しJSONで報告する', async t => {
+  const f = fixture(t);
+  const argv = writeArgs(f);
+  argv[argv.indexOf('件名')] = '請求書のご送付';
+  assert.equal(await f.run(argv), 0);
+  assert.ok(f.calls[0].args.includes('cc=keiri2@orgiast.jp'));
+  assert.equal(JSON.parse(f.output()).invoiceCcAdded, 'keiri2@orgiast.jp');
+});
+
+test('--booth と請求書件名の併用で佐藤さんと経理の両方をCCする', async t => {
+  const f = fixture(t);
+  const argv = [...writeArgs(f), '--booth'];
+  argv[argv.indexOf('件名')] = '請求書のご送付';
+  assert.equal(await f.run(argv), 0);
+  const ccArg = f.calls[0].args.find(arg => String(arg).startsWith('cc='));
+  assert.match(ccArg, /satou@orgiast\.jp/);
+  assert.match(ccArg, /keiri2@orgiast\.jp/);
+  const report = JSON.parse(f.output());
+  assert.equal(report.boothCcAdded, 'satou@orgiast.jp');
+  assert.equal(report.invoiceCcAdded, 'keiri2@orgiast.jp');
+});
+
 test('send preview exits 64 before any gh call; --yes dispatches send', async t => {
   const f = fixture(t);
   assert.equal(await f.run([...writeArgs(f, 'send'), '--attach-drive', 'a,b']), 64);

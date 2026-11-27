@@ -243,7 +243,14 @@ test('状態ファイルが古い・取得失敗があると警告項目が先�
   writeExternal(home, { generatedAt: new Date(NOW - 5 * 3600_000).toISOString(), items: [extItem()] });
   let items = collectAwaiting({ home, now: NOW });
   assert.equal(items[0].id, 'ex:monitor'); assert.match(items[0].title, /^社外返信の監視が止まっています（最終更新 .+ \/ エラー /);
+  // consecutiveFailures 無しの旧 state は 1 扱い → 警告なし。2 以上で警告。
   writeExternal(home, { sources: { 'kim@orgiast.jp': { ok: false, error: 'Gmail API 403' } }, items: [] });
+  items = collectAwaiting({ home, now: NOW });
+  assert.equal(items.some(item => item.warning), false, '1回失敗（旧 state）では警告しない');
+  writeExternal(home, { sources: { 'kim@orgiast.jp': { ok: false, error: 'Gmail API 403', consecutiveFailures: 1 } }, items: [] });
+  items = collectAwaiting({ home, now: NOW });
+  assert.equal(items.some(item => item.warning), false, 'consecutiveFailures:1 では警告しない');
+  writeExternal(home, { sources: { 'kim@orgiast.jp': { ok: false, error: 'Gmail API 403', consecutiveFailures: 2 } }, items: [] });
   items = collectAwaiting({ home, now: NOW });
   assert.match(items[0].title, /kim@orgiast\.jp: Gmail API 403/);
   writeExternal(home, { items: [extItem()] });
@@ -327,6 +334,22 @@ test('auto registration marker does not hide an explicit waiting_user request', 
 });
 
 process.env.ORGIAST_AUTO_RESUME = '1';
+
+test('CLI: 引数なしで exit 0 で一覧表示', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-awaiting-cli-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  writeLedger(ledgerFile(home), [row()]);
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const script = fileURLToPath(new URL('./kim-awaiting.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [script], {
+    env: { ...process.env, ORGIAST_HOME: home },
+    timeout: 10000,
+    encoding: 'utf8'
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /kim の返事待ち/);
+});
 
 test('hook displays only added ids at the end and suppresses repeated prompts', t => {
   const home = fixture(t), options = { home, now: NOW, env: {} };

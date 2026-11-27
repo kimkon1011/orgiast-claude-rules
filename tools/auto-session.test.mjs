@@ -8,9 +8,17 @@ import { PassThrough } from 'node:stream';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
-const { BUILTIN_REPO_BY_KEYWORD, ROLE_NAMES, boundedCount, todoDoneDecision, DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, sectionsForTodo, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, buildRolePrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, isTodoAlreadyDone, taskClosedBeforeLaunch, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, main } = await import('./auto-session.mjs');
+const { BUILTIN_REPO_BY_KEYWORD, ROLE_NAMES, boundedCount, todoDoneDecision, DEFAULT_REPO, localDate, loadConfig, detectHistoryCwd, parseHandoff, sectionsForTodo, todoExclusionReason, todoExclusionReasons, dedupeKey, dedupeTodos, filterTodos, selectTodoLanes, logSlaOverflow, pickCwd, buildChildArgs, buildPrompt, buildFeedbackPrompt, buildRolePrompt, feedbackFailureBody, feedbackIssueExclusionReason, feedbackIssuesToUnmark, filterFeedbackIssues, feedbackNotifyUrl, normalizeGitHubRepo, feedbackRepoCwd, resolveClaudeExe, decideRun, markTodoDone, isTodoAlreadyDone, taskClosedBeforeLaunch, writeTodoDone, extractSessionId, transcriptPath, recoverSessionId, appendClosedSession, formatResultLine, parseArgs, deadlineDecision, runChild, loadClaudeExeHelpers, main } = await import('./auto-session.mjs');
 const historyCwd = String.raw`c:\Users\example\Downloads\work`;
 const completedSummary = 'やったこと: 対象のコードを修正してコミットした。検証したこと: 回帰テストを実行し全件成功を確認した。残ったこと: なし';
+
+test('旧 claude-exe に export が無くても探索だけをスキップして継続する', async () => {
+  const warnings = [];
+  const helpers = await loadClaudeExeHelpers(async () => ({}), (line) => warnings.push(line));
+  assert.equal(helpers.findClaudeInVersionedDir('unused', {}), null);
+  assert.deepEqual(helpers.sanitizeClaudeSupervisorEnv({ CLAUDECODE: '1', PATH: 'ok' }), { PATH: 'ok' });
+  assert.match(warnings[0], /実体探索だけスキップ/);
+});
 
 test('todoDoneDecision は成功でも空サマリを拒否する', () => {
   assert.deepEqual(todoDoneDecision({ status: 'success', summary: ' \n ' }), { done: false, reason: 'サマリが空（作業の痕跡が無い）' });
@@ -1482,10 +1490,157 @@ test('無効時も通常起動と明示的な fleet-exec 再開は spawn する'
       return child;
     });
     const result = await runChild('mock', 'prompt', isolatedHome, isolatedHome, 1000,
-      { executorRoot: process.cwd(), spawnImpl, ...resume });
+      { executorRoot: DEFAULT_REPO, spawnImpl, ...resume });
     assert.equal(result.status, 'success', result.stderr);
     assert.equal(spawnImpl.mock.callCount(), 1);
     const args = spawnImpl.mock.calls[0].arguments[1];
     assert.equal(args.includes('--resume'), Boolean(resume.resumeSessionId));
+  }
+});
+
+test('runChild は cheap-code の unrecognized_model 空振りを incompatible として次レーンへ進める', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-incompat-'));
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  const configDir = path.join(home, '.claude');
+  const toolsDir = path.join(home, 'tools');
+  fs.mkdirSync(configDir);
+  fs.mkdirSync(toolsDir);
+  fs.writeFileSync(path.join(toolsDir, 'cheap-code.mjs'), 'export {};\n');
+  fs.writeFileSync(path.join(toolsDir, 'codex-do.mjs'), 'export {};\n');
+  const warning = '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}';
+  const banner = '[openrouter:deepseek/deepseek-v4-flash]';
+  const mockChild = ({ stdoutText = '\n', stderrText = `${banner}\n${warning}`, exitCode = 0, hang = false } = {}) => {
+    const child = new EventEmitter();
+    child.stdin = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.exitCode = null;
+    child.kill = () => {};
+    child.unref = () => {};
+    if (hang) return child;
+    queueMicrotask(() => {
+      child.stdout.write(stdoutText);
+      child.stderr.write(stderrText);
+      child.exitCode = exitCode;
+      child.emit('close', exitCode);
+    });
+    return child;
+  };
+  const laneOf = (args) => {
+    const joined = args.map(String);
+    if (joined.some((a) => a.includes('codex-do'))) return 'codex-do';
+    const idx = joined.indexOf('--provider');
+    return idx >= 0 ? `cheap-code:${joined[idx + 1]}` : 'unknown';
+  };
+  try {
+    await t.test('status 0 + 空 stdout + unrecognized_model → incompatible', async () => {
+      fs.writeFileSync(path.join(configDir, 'auto-session.env'), 'ORGIAST_AUTO_SESSION_EXECUTOR=cheap-code\nORGIAST_AUTO_SESSION_PROVIDER=deepseek\nORGIAST_AUTO_SESSION_CODEX_LANE=off\nORGIAST_AUTO_SESSION_CLAUDE_FALLBACK=off\n');
+      fs.writeFileSync(path.join(configDir, 'provider-cooldown.json'), '{}');
+      fs.writeFileSync(path.join(configDir, 'zai.env'), '');
+      const spawnImpl = t.mock.fn(() => mockChild());
+      const result = await runChild('mock', 'incompat', home, home, 2000, {
+        executorRoot: home,
+        spawnImpl,
+        evaluateGuard: async () => ({ blocked: false }),
+      });
+      assert.deepEqual(result.executorAttempts, [{ executor: 'cheap-code:deepseek', status: 'incompatible' }]);
+      assert.equal(result.status, 'failure');
+      assert.notEqual(result.exitCode, 0);
+      assert.equal(spawnImpl.mock.callCount(), 1);
+    });
+
+    await t.test('incompatible 時に alternate があればフォールバックする', async () => {
+      fs.writeFileSync(path.join(configDir, 'auto-session.env'), 'ORGIAST_AUTO_SESSION_EXECUTOR=cheap-code\nORGIAST_AUTO_SESSION_PROVIDER=deepseek\nORGIAST_AUTO_SESSION_CODEX_LANE=off\nORGIAST_AUTO_SESSION_CLAUDE_FALLBACK=off\n');
+      fs.writeFileSync(path.join(configDir, 'provider-cooldown.json'), '{}');
+      fs.writeFileSync(path.join(configDir, 'zai.env'), 'ZAI_API_KEY=test');
+      const spawnImpl = t.mock.fn((_exe, args) => {
+        const lane = laneOf(args);
+        if (lane === 'cheap-code:deepseek') return mockChild();
+        return mockChild({ stdoutText: 'glm ok\n', stderrText: '[glm:test]\n', exitCode: 0 });
+      });
+      const result = await runChild('mock', 'incompat-alt', home, home, 2000, {
+        executorRoot: home,
+        spawnImpl,
+        evaluateGuard: async () => ({ blocked: false }),
+      });
+      assert.deepEqual(result.executorAttempts, [
+        { executor: 'cheap-code:deepseek', status: 'incompatible' },
+        { executor: 'cheap-code:glm', status: 'success' },
+      ]);
+      assert.equal(result.status, 'success');
+      assert.equal(result.executorUsed, 'cheap-code:glm');
+      assert.equal(spawnImpl.mock.callCount(), 2);
+    });
+
+    await t.test('incompatible で alternate 無しなら codex レーンへ進む', async () => {
+      fs.writeFileSync(path.join(configDir, 'auto-session.env'), 'ORGIAST_AUTO_SESSION_EXECUTOR=cheap-code\nORGIAST_AUTO_SESSION_PROVIDER=deepseek\nORGIAST_AUTO_SESSION_CODEX_LANE=on\nORGIAST_AUTO_SESSION_CLAUDE_FALLBACK=off\n');
+      fs.writeFileSync(path.join(configDir, 'provider-cooldown.json'), '{}');
+      fs.writeFileSync(path.join(configDir, 'zai.env'), '');
+      const spawnImpl = t.mock.fn((_exe, args) => {
+        const lane = laneOf(args);
+        if (lane === 'cheap-code:deepseek') return mockChild();
+        assert.equal(lane, 'codex-do');
+        return mockChild({ stdoutText: 'codex ok\n', stderrText: '', exitCode: 0 });
+      });
+      const result = await runChild('mock', 'incompat-codex', home, home, 2000, {
+        executorRoot: home,
+        spawnImpl,
+        evaluateGuard: async () => ({ blocked: false }),
+      });
+      assert.deepEqual(result.executorAttempts, [
+        { executor: 'cheap-code:deepseek', status: 'incompatible' },
+        { executor: 'codex-do', status: 'success' },
+      ]);
+      assert.equal(result.status, 'success');
+      assert.equal(result.executorUsed, 'codex-do');
+      assert.equal(spawnImpl.mock.callCount(), 2);
+    });
+
+    await t.test('回答本文がある unrecognized_model 警告は success のままフォールバックしない', async () => {
+      fs.writeFileSync(path.join(configDir, 'auto-session.env'), 'ORGIAST_AUTO_SESSION_EXECUTOR=cheap-code\nORGIAST_AUTO_SESSION_PROVIDER=deepseek\nORGIAST_AUTO_SESSION_CODEX_LANE=on\nORGIAST_AUTO_SESSION_CLAUDE_FALLBACK=off\n');
+      fs.writeFileSync(path.join(configDir, 'provider-cooldown.json'), '{}');
+      fs.writeFileSync(path.join(configDir, 'zai.env'), 'ZAI_API_KEY=test');
+      const spawnImpl = t.mock.fn(() => mockChild({
+        stdoutText: '実装完了: foo.mjs を修正した\n',
+        stderrText: `${banner}\n${warning}`,
+        exitCode: 0,
+      }));
+      const result = await runChild('mock', 'incompat-body', home, home, 2000, {
+        executorRoot: home,
+        spawnImpl,
+        evaluateGuard: async () => ({ blocked: false }),
+      });
+      assert.deepEqual(result.executorAttempts, [{ executor: 'cheap-code:deepseek', status: 'success' }]);
+      assert.equal(result.status, 'success');
+      assert.equal(spawnImpl.mock.callCount(), 1);
+    });
+
+    await t.test('timedOut は従来どおり timeout で alternate へフォールバックする', async () => {
+      fs.writeFileSync(path.join(configDir, 'auto-session.env'), 'ORGIAST_AUTO_SESSION_EXECUTOR=cheap-code\nORGIAST_AUTO_SESSION_PROVIDER=deepseek\nORGIAST_AUTO_SESSION_CODEX_LANE=off\nORGIAST_AUTO_SESSION_CLAUDE_FALLBACK=off\n');
+      fs.writeFileSync(path.join(configDir, 'provider-cooldown.json'), '{}');
+      fs.writeFileSync(path.join(configDir, 'zai.env'), 'ZAI_API_KEY=test');
+      const spawnImpl = t.mock.fn((_exe, args) => {
+        const lane = laneOf(args);
+        if (lane === 'cheap-code:deepseek') return mockChild({ hang: true });
+        return mockChild({ stdoutText: 'glm after timeout\n', stderrText: '[glm:test]\n', exitCode: 0 });
+      });
+      const result = await runChild('mock', 'timeout-alt', home, home, 200, {
+        executorRoot: home,
+        spawnImpl,
+        evaluateGuard: async () => ({ blocked: false }),
+      });
+      assert.deepEqual(result.executorAttempts, [
+        { executor: 'cheap-code:deepseek', status: 'timeout' },
+        { executor: 'cheap-code:glm', status: 'success' },
+      ]);
+      assert.equal(result.status, 'success');
+      assert.equal(result.executorUsed, 'cheap-code:glm');
+      assert.equal(spawnImpl.mock.callCount(), 2);
+    });
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 });

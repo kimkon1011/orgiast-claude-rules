@@ -48,6 +48,14 @@ test('each item needs its own explanation; indented and bulleted numbering delim
   assert.equal(result.receipts[0].summary, formatInboxBrief(a, 1, { home: f.home }).split('\n')[0]);
 });
 
+test('PR を含む ask も返事の例をマージ可否に変えない', async t => {
+  const f = fixture(t);
+  const item = await addItem(f.home, { kind: 'ask', text: 'PR #2460 の修正方針を選んでください' });
+  const brief = formatInboxBrief(item, 1, { home: f.home });
+  assert.match(brief, /返事の例: 1 可／1 不要／1 <指示>/);
+  assert.doesNotMatch(brief, /マージしてよい/);
+});
+
 test('decorated inbox headings, trailing labels and paraphrases pass; missing IDs and later sections do not', async t => {
   const f = fixture(t);
   const a = await addItem(f.home, { kind: 'ask', text: '原文の長い依頼です' });
@@ -220,6 +228,25 @@ test('hundreds of reserved asks rotate in bounded batches without starving progr
   const initial = new Set(items.filter(i=>i.shownCount>0).map(i=>i.id));
   selectContext(items,{sessionId:f.input.session_id,now,home:f.home});
   assert.ok(items.some(i=>i.shownCount>0 && !initial.has(i.id)));
+});
+
+test('long-unshown ask keeps a reserved slot when many new asks arrive', async t => {
+  const f = fixture(t);
+  const oldAt = new Date(now - 30 * 86400000).toISOString();
+  const old = await addItem(f.home, { kind: 'ask', text: '古い blocker の承認: 長期未提示の飢餓防止' });
+  updateInboxItem(f.home, old.id, i => {
+    i.shownCount = 11;
+    i.lastShownAt = oldAt;
+    i.createdAt = oldAt;
+  });
+  for (let n = 0; n < 20; n++) await addItem(f.home, { kind: 'ask', text: `新しい ask ${n}` });
+  const items = listItems(f.home);
+  const text = selectContext(items, { sessionId: f.input.session_id, now, home: f.home });
+  const refreshed = items.find(i => i.id === old.id);
+  assert.ok(
+    refreshed.shownCount === 12 || text.includes(old.id) || text.includes('長期未提示の飢餓防止'),
+    `expected starved ask to be shown; shownCount=${refreshed.shownCount} text=${text.slice(0, 300)}`
+  );
 });
 
 test('duplicate same workId+decide: only representative needs written; both are receipts', async t => {

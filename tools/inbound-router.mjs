@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { getAccounts, listChats, listMessages } from './beeper-api.mjs';
 import { searchGmail } from './gmail-search.mjs';
 import { isEntry } from './is-entry.mjs';
+import { recordRun } from './lib/change-gate.mjs';
 
 export const MAILBOXES = ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'];
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -38,12 +39,33 @@ export function cleanupState(state, now) {
   });
 }
 
+const DODA_APPLICANT_RE = /応募者|応募がありました|応募通知|候補者|推薦者|履歴書|職務経歴/;
+const DODA_SALES_AGENCY_RE = /@(?:prdaily\.jp|p-hope\.jp)\b|client@doda\.jp/i;
+const DODA_CAMPAIGN_RE = /キャンペーン|掲載プラン|掲載のご案内|12週間|3ヶ月掲載|特別価格|御申込限定|通常実施価格|B企画|有料プラン/;
+
+/** dodaの営業・キャンペーン案内は対応不要。応募者のメールは対象外（通常どおり振り分ける）。 */
+export function isDodaCampaignNoise(m) {
+  const from = String(m.from || '');
+  const subject = String(m.subject || '');
+  const body = String(m.body || m.snippet || m.text || '');
+  const text = `${subject}\n${body}`;
+  if (DODA_APPLICANT_RE.test(text)) return false;
+  const mentionsDoda = /doda/i.test(from + '\n' + text);
+  const salesAgency = DODA_SALES_AGENCY_RE.test(from);
+  const campaign = DODA_CAMPAIGN_RE.test(text);
+  if (salesAgency && (mentionsDoda || campaign)) return true;
+  if (mentionsDoda && campaign) return true;
+  if (/@doda\.jp/i.test(from) && campaign) return true;
+  return false;
+}
+
 export function isGmailNoise(m, config) {
   const from = String(m.from || '').toLowerCase();
   const subject = String(m.subject || '');
   const labels = (m.labels || []).map(x => String(x).toUpperCase());
   const selfSenders = ['seisaku-team@orgiast.jp', 'kim@orgiast.jp'];
   if (selfSenders.some(s => from.includes(s))) return false;
+  if (isDodaCampaignNoise(m)) return true;
   if (!!m.listUnsubscribe) return true;
   if (/(^|[<@._+-])(no-?reply|noreply|do-?not-?reply)/i.test(from)) return true;
   if (labels.some(x => x === 'CATEGORY_PROMOTIONS' || x === 'CATEGORY_SOCIAL')) return true;
@@ -229,27 +251,78 @@ async function dispatchGroup(route, items, { state, config, deps, now, root = re
 }
 
 function digestSlot(now) { const d = new Date(now + 9 * 3600_000); const h = d.getUTCHours(); const slot = [21, 15, 9].find(x => h >= x); if (!slot) return null; return `${d.toISOString().slice(0, 10)}-${String(slot).padStart(2, '0')}`; }
+
+function resolvePc(reportDir) {
+  const pcFile = path.join(path.dirname(reportDir), 'gb-offload', 'pc-label.txt');
+  if (fs.existsSync(pcFile)) {
+    const raw = fs.readFileSync(pcFile, 'utf8');
+    const stripped = raw.replace(/^\uFEFF/, '').trim();
+    if (stripped) return stripped;
+  }
+  return os.hostname();
+}
+
+function buildDigestBody(pc, full, status, n, rows) {
+  const header = `# inbound-router  PC=${pc}  ${full} JST  status=${status}  要判断=${n}`;
+  const sections = `## 🚩要判断\n\n${rows.join('\n\n') || 'なし'}\n`;
+  return `${header}\n\n${sections}`;
+}
+
+function escapePsQuote(s) {
+  return s.replace(/'/g, "''");
+}
+
 export function writeDigest({ state, now, reportDir, force = false }) {
   const slot = force ? `forced-${now}` : digestSlot(now); if (!slot || state.digests[slot]) return null;
   const pending = state.unknown.filter(x => !x.reportedAt); if (!pending.length && !force) { state.digests[slot] = now; return null; }
-  fs.mkdirSync(reportDir, { recursive: true }); const stamp = new Date(now + 9 * 3600_000).toISOString().replace(/[-:T]/g, '').slice(0, 12); const name = `inbound-router-${stamp.slice(0,8)}-${stamp.slice(8)}.md`; const file = path.join(reportDir, name);
-  const jst = new Date(now + 9 * 3600_000), pad = n => String(n).padStart(2, '0'), short = `${pad(jst.getUTCMonth() + 1)}-${pad(jst.getUTCDate())} ${pad(jst.getUTCHours())}:${pad(jst.getUTCMinutes())}`, full = `${jst.getUTCFullYear()}-${pad(jst.getUTCMonth() + 1)}-${pad(jst.getUTCDate())} ${pad(jst.getUTCHours())}:${pad(jst.getUTCMinutes())}`;
-  const pcFile = path.join(path.dirname(reportDir), 'gb-offload', 'pc-label.txt'), pc = fs.existsSync(pcFile) ? fs.readFileSync(pcFile, 'utf8').trim() : os.hostname();
-  const rows = pending.map(x => { const i = x.item || x; return `### ${i.title || i.reason || '要判断'}\n- 送信元: ${i.kind === 'gmail' ? i.mailbox : i.network || i.source || ''}\n- 送信者: ${i.sender || ''}\n- 時刻: ${i.time || ''}\n- 本文: ${String(i.text || '').slice(0, 200)}\n- 候補ルート: ${x.candidates?.join(', ') || x.route || 'unknown'}`; }); const status = pending.length ? '要判断' : 'OK', body = `# inbound-router  PC=${pc}  ${full} JST  status=${status}  要判断=${pending.length}\n\n## 🚩要判断\n\n${rows.join('\n\n') || 'なし'}\n`; fs.writeFileSync(file, body); fs.copyFileSync(file, path.join(reportDir, 'latest-inbound-router.md'));
+  fs.mkdirSync(reportDir, { recursive: true });
+  const stamp = new Date(now + 9 * 3600_000).toISOString().replace(/[-:T]/g, '').slice(0, 12);
+  const name = `inbound-router-${stamp.slice(0,8)}-${stamp.slice(8)}.md`;
+  const file = path.join(reportDir, name);
+  const jst = new Date(now + 9 * 3600_000), pad = n => String(n).padStart(2, '0');
+  const short = `${pad(jst.getUTCMonth() + 1)}-${pad(jst.getUTCDate())} ${pad(jst.getUTCHours())}:${pad(jst.getUTCMinutes())}`;
+  const full = `${jst.getUTCFullYear()}-${pad(jst.getUTCMonth() + 1)}-${pad(jst.getUTCDate())} ${pad(jst.getUTCHours())}:${pad(jst.getUTCMinutes())}`;
+  const pc = resolvePc(reportDir);
+  const rows = pending.map(x => {
+    const i = x.item || x;
+    return `### ${i.title || i.reason || '要判断'}\n- 送信元: ${i.kind === 'gmail' ? i.mailbox : i.network || i.source || ''}\n- 送信者: ${i.sender || ''}\n- 時刻: ${i.time || ''}\n- 本文: ${String(i.text || '').slice(0, 200)}\n- 候補ルート: ${x.candidates?.join(', ') || x.route || 'unknown'}`;
+  });
+  const status = pending.length ? '要判断' : 'OK';
+  const body = buildDigestBody(pc, full, status, pending.length, rows);
+  const latest = path.join(reportDir, 'latest-inbound-router.md');
 
   // Try to use PowerShell mutex locking if common.ps1 exists
   const commonPs1 = path.join(path.dirname(reportDir), 'gb-offload', 'common.ps1');
   if (fs.existsSync(commonPs1)) {
-    // Use PowerShell to write the report with mutex locking
     const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true, timeout: 90_000, ...opts });
+    // Write only sections (no header) to temp for GB-WriteReport
+    const sectionsOnly = `## 🚩要判断\n\n${rows.join('\n\n') || 'なし'}\n`;
     const tempBodyFile = path.join(os.tmpdir(), `inbound-router-body-${process.pid}.txt`);
-    fs.writeFileSync(tempBodyFile, body);
+    fs.writeFileSync(tempBodyFile, sectionsOnly, 'utf8');
     try {
-      const psResult = run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `& { . '${commonPs1}'; GB-WriteReport -Job 'inbound-router' -Body (Get-Content -Path '${tempBodyFile}' -Raw) -Flags ${pending.length} -Status '${status}' }`]);
+      const psCmd = `& { . '${escapePsQuote(commonPs1)}'; GB-WriteReport -Job 'inbound-router' -Body (Get-Content -LiteralPath '${escapePsQuote(tempBodyFile)}' -Raw -Encoding UTF8) -Flags ${pending.length} -Status '${status}' }`;
+      const psResult = run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCmd]);
       if (psResult.status === 0) {
+        // Extract report path from last non-empty line of stdout
+        const stdoutLines = (psResult.stdout || '').split(/\r?\n/).filter(l => l.trim());
+        const reportPath = stdoutLines.length > 0 ? stdoutLines[stdoutLines.length - 1].trim() : '';
+        const targetFile = reportPath && fs.existsSync(reportPath) ? reportPath : file;
+        // Write the correct body (single header + sections) to both target and latest
+        fs.writeFileSync(targetFile, body, 'utf8');
+        fs.writeFileSync(latest, body, 'utf8');
+        // Verify latest
+        const verifyContent = fs.readFileSync(latest, 'utf8');
+        const headerLines = verifyContent.split(/\r?\n/).filter(l => l.startsWith('# inbound-router '));
+        if (headerLines.length !== 1) throw new Error(`digest_header_count: expected 1, got ${headerLines.length}`);
+        if (!headerLines[0].includes(`PC=${pc}`) || !headerLines[0].includes(`PC=${pc} `)) {
+          // PC= の後が空でないことを確認
+          const pcMatch = headerLines[0].match(/PC=(\S*)/);
+          if (!pcMatch || !pcMatch[1]) throw new Error('digest_pc_empty');
+        }
+        if (!headerLines[0].includes(`要判断=${pending.length}`)) throw new Error('digest_flags_mismatch');
         pending.forEach(x => { x.reportedAt = now; });
         state.digests[slot] = now;
-        return file;
+        return targetFile;
       }
       throw new Error(`GB-WriteReport failed: ${String(psResult.stderr || psResult.stdout).trim().slice(0, 200)}`);
     } finally {
@@ -257,8 +330,26 @@ export function writeDigest({ state, now, reportDir, force = false }) {
     }
   }
 
-  // Original implementation as fallback
-  const summary = path.join(reportDir, 'summary.md'); withFileLock(`${summary}.lock`, () => { const old = fs.existsSync(summary) ? fs.readFileSync(summary, 'utf8') : '', summaryRows = new Map(); for (const line of old.split(/\r?\n/)) { const match = line.match(/^\|\s*([a-z][\w-]*)\s*\|/); if (match && match[1] !== 'job') summaryRows.set(match[1], line); } summaryRows.set('inbound-router', `| inbound-router | ${short} | ${status} | ${pending.length} | ${name} |`); const next = `# gb-reports summary  PC=${pc}  updated ${full} JST\n(要判断>0 の行だけ latest-<job>.md の「🚩要判断」を読めばよい)\n\n| job | last | status | 要判断 | file |\n|---|---|---|---|---|\n${[...summaryRows].sort(([a],[b]) => a.localeCompare(b)).map(([,line]) => line).join('\n')}\n`; const tmp = `${summary}.${process.pid}.tmp`; fs.writeFileSync(tmp, next); fs.renameSync(tmp, summary); }); pending.forEach(x => { x.reportedAt = now; }); state.digests[slot] = now; return file;
+  // Fallback: write directly (no common.ps1)
+  fs.writeFileSync(file, body, 'utf8');
+  fs.writeFileSync(latest, body, 'utf8');
+  const summary = path.join(reportDir, 'summary.md');
+  withFileLock(`${summary}.lock`, () => {
+    const old = fs.existsSync(summary) ? fs.readFileSync(summary, 'utf8') : '';
+    const summaryRows = new Map();
+    for (const line of old.split(/\r?\n/)) {
+      const match = line.match(/^\|\s*([a-z][\w-]*)\s*\|/);
+      if (match && match[1] !== 'job') summaryRows.set(match[1], line);
+    }
+    summaryRows.set('inbound-router', `| inbound-router | ${short} | ${status} | ${pending.length} | ${name} |`);
+    const next = `# gb-reports summary  PC=${pc}  updated ${full} JST\n(要判断>0 の行だけ latest-<job>.md の「🚩要判断」を読めばよい)\n\n| job | last | status | 要判断 | file |\n|---|---|---|---|---|\n${[...summaryRows].sort(([a],[b]) => a.localeCompare(b)).map(([,line]) => line).join('\n')}\n`;
+    const tmp = `${summary}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, next, 'utf8');
+    fs.renameSync(tmp, summary);
+  });
+  pending.forEach(x => { x.reportedAt = now; });
+  state.digests[slot] = now;
+  return file;
 }
 
 export async function run(options = {}, injected = {}) {
@@ -290,6 +381,7 @@ export async function run(options = {}, injected = {}) {
       let digestFile = null; if (!options.dryRun) digestFile = writeDigest({ state, now, reportDir: options.reportDir || path.join(home, 'gb-reports'), force: options.digestNow });
       const report = { status: collected.failures.length ? 'partial' : 'ok', new: collected.counts, routed: {}, dispatches: 0, unknown: 0, failures: collected.failures, digestFile: digestFile ? path.basename(digestFile) : null, durationMs: Date.now() - started, calls, plans };
       if (!options.dryRun) { save(); fs.mkdirSync(path.dirname(logFile), { recursive: true }); if (!options.runnerLog) fs.appendFileSync(logFile, `${JSON.stringify(report)}\n`); }
+      recordRun('inbound-router', { changed: false, llmInvoked: false, items: 0, note: report.status });
       return report;
     }
     const routed = await routeItems(collected.items, { config, state, classify: deps.classify, stop });
@@ -308,6 +400,7 @@ export async function run(options = {}, injected = {}) {
     const preview = options.dryRun ? collected.items.map(item => ({ route: routed.routesByItem.get(item), title: item.title.slice(0, 30), sender: item.sender.slice(0, 20) })) : undefined;
     const report = { status: collected.failures.length ? 'partial' : 'ok', new: collected.counts, routed: Object.fromEntries(Object.entries(routed.groups).map(([k,v]) => [k,v.length])), dispatches: plans.length, unknown: routed.unknown.length, failures: collected.failures, digestFile: digestFile ? path.basename(digestFile) : null, durationMs: Date.now() - started, calls, plans, ...(preview ? { preview } : {}) };
     if (!options.dryRun) { save(); fs.mkdirSync(path.dirname(logFile), { recursive: true }); if (!options.runnerLog) fs.appendFileSync(logFile, `${JSON.stringify(report)}\n`); }
+    recordRun('inbound-router', { changed: collected.items.length > 0, llmInvoked: calls.classify > 0, items: collected.items.length, note: report.status });
     return report;
   } catch (e) {
     const report = { status: 'failed', new: { beeper: 0, gmail: 0, noise: 0 }, routed: {}, dispatches: 0, unknown: 0, failures: [{ source: 'run', code: safeCode(e) }], digestFile: null, durationMs: Date.now() - started, calls, plans };

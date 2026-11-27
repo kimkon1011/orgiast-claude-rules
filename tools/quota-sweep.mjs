@@ -14,7 +14,7 @@ import { buildClaudeHeadlessArgs, parseAutoSessionEnvText } from './auto-session
 import { resolveClaudeExecutableFromDisk, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { parseRetryAfter } from './claude-plan-usage.mjs';
-import { decideSweep, readClaudeWindows, readCodexWindows, shouldStopTick, jsonlFiles, sameReset } from './lib/quota-windows.mjs';
+import { decideSweep, inspectSweep, readClaudeWindows, readCodexWindows, shouldStopTick, jsonlFiles, sameReset, resetToleranceMinutes } from './lib/quota-windows.mjs';
 import { discoverWsl, passiveWslHomes, wslPath, interactiveCodex, nativeCommand } from './lib/quota-sweep-host.mjs';
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { runBounded } from './lib/quota-sweep-process.mjs';
@@ -560,7 +560,8 @@ export async function runSweep(decision, context) {
     if ((provider === 'claude' && !['5h', '7d'].every(k => own.some(w => w.window === k))) || !own.length || own.some(w => !Number.isFinite(w.resetsAt) && w.usedPercent !== 0 && !w.exhausted)) return stopWith('failed', 'window-info', `利用窓情報が不足または不正: ${JSON.stringify(own)}${why ? ` (${why})` : ''}`);
     if (own.some(w => w.exhausted)) return stopWith('exhausted', 'quota-exhausted', '利用枠を使い切った');
     if (shouldStopTick({ windows: all, provider })) return stopWith('ceiling', 'usage-ceiling', '利用率が停止上限に達した');
-    if (own.some(w => Number.isFinite(w.resetsAt) && w.resetsAt - 3 * 60_000 <= now()) || !own.some(w => sameReset(w.resetsAt, decision.resetsAt))) return stopWith('deadline', 'reset-window', 'リセット直前または利用窓が切り替わった');
+    // 2026-11-25 実測: Codex の推定 resets_at は同じ窓でも数分動く。窓長に応じて同一性を判定する。
+    if (own.some(w => Number.isFinite(w.resetsAt) && w.resetsAt - 3 * 60_000 <= now()) || !own.some(w => sameReset(w.resetsAt, decision.resetsAt, resetToleranceMinutes(w)))) return stopWith('deadline', 'reset-window', 'リセット直前または利用窓が切り替わった');
     // 対話セッションの使用中は「レーンの故障」ではなく「今は使えないだけ」。failed にすると
     // delegation-health が 3 件で lane_outage_unrepaired(high) を起票する（2026-10-24T09:38Z 実測）。
     // 非終端の deferred にして次回 tick へ回し、3 連続なら queueRepeatedDeferral が TODO 化する。
@@ -576,7 +577,8 @@ export async function runSweep(decision, context) {
     let stop = await check();
     if (!stop) {
       const initial = await refresh();
-      const eligible = decideSweep({ windows: initial, now: now(), leadMinutes: context.leadMinutes ?? 90, minRemainingPercent: context.minRemainingPercent ?? 15 }).find(d => d.provider === provider && sameReset(d.resetsAt, decision.resetsAt));
+      const eligibleWindows = decideSweep({ windows: initial, now: now(), leadMinutes: context.leadMinutes ?? 90, minRemainingPercent: context.minRemainingPercent ?? 15 });
+      const eligible = eligibleWindows.find(d => d.provider === provider && sameReset(d.resetsAt, decision.resetsAt, resetToleranceMinutes(d)));
       if (!eligible) stop = stopWith('exhausted', 'no-eligible-window', '再取得した利用窓が残枠・開始時刻の条件を満たさない'); else usedBefore = eligible.usedPercent;
     }
     if (stop) { outcome = stop; return; }
@@ -595,7 +597,7 @@ export async function runSweep(decision, context) {
       wsl = context.wsl ?? discoverWsl({ spawnImpl });
 
       executable = wsl ? 'wsl' : 'codex';
-      baseArgs = ['exec', '-s', 'workspace-write', '-c', 'model_provider=openai', '-c', 'forced_login_method=chatgpt', '--json', '-C', wsl ? wslPath(tree) : tree, '-'];
+      baseArgs = ['exec', '--approve-for-me', '-c', 'model_provider=openai', '-c', 'forced_login_method=chatgpt', '--json', '-C', wsl ? wslPath(tree) : tree, '-'];
     }
     const childEnv = { ...sanitizeClaudeSupervisorEnv(env), ORGIAST_HOME: home, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: `quota-sweep:${provider}` };
     // No API-key billing fallback. Both hosts must use their existing plan authentication.
@@ -780,7 +782,9 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     if (!decisions.length) {
       // 読み取り自体が失敗していた場合、これまでは「窓が無い」とだけ出て原因が残らなかった。
       const readIssues = Object.entries(observed.reasons ?? {}).filter(([, r]) => r).map(([p, r]) => `${p}: ${r}`);
-      log(`skip: no eligible reset window${readIssues.length ? ` (${readIssues.join('; ')})` : ''}`);
+      const skipped = inspectSweep({ windows: observed, now: now(), ...options }).skipped.map(s => `${s.provider}: ${s.reason}`);
+      const detail = [...new Set([...readIssues, ...skipped])];
+      log(`skip: no eligible reset window${detail.length ? ` (${detail.join('; ')})` : ''}`);
     }
     for (const decision of decisions) {
       if (await active(decision.provider)) { log(`skip: interactive ${decision.provider}`); continue; }

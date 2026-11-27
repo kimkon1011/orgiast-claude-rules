@@ -1,4 +1,4 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-27 10:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-27 11:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
 - 案件数: 55
@@ -43,7 +43,7 @@
 - 011・sales-14sha-1125・完了・最終更新 11/25 11:34、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 011・sales-followup・停止・最終更新 11/27 07:40、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-link-audit-1126・完了・監査・修正・書き出し完了、13:00 毎時本番で動作確認済み・期限2026-11-26 当日・次:なし（毎時ジョブが send-commitments を追跡し stuck-export を毎時更新）
-- 011・営業 次回連絡日・金さん待ち・最終更新 11/27 10:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・営業 次回連絡日・金さん待ち・最終更新 11/27 11:01、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・session-1126-hourly・金さん待ち・JACE 藤野様宛ての返信下書きが打合せ前の文面のまま。修正版の送信可否は金さんの承認が要る（kim-inbox ki-20261126081310-6cf5）・期限2026-12-11（先方の返信期限）／着手期限 2026-12-09・次:承認が来たら seisaku-team@ の下書きを修正版に差し替え、gmail-draft.mjs の自動チェックを通して送信し、送信済みを読み戻す
 - 011・session-cap-1126・金さん待ち・最終更新 11/26 19:36、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・souko-kyujin-1125・完了・最終更新 11/25 19:40、STATUS.mdなし、DONEあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
@@ -57,4 +57,4 @@
 - 011・_handoff-r28-1127・停止・最終更新 11/27 09:19、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・_handoff-r28-1127-in・停止・最終更新 11/27 09:21、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・大阪事務所LINEに届く学会郵送物の写真を学会アプリの獲得進行へ自動取込・金さん待ち・学会DB（Supabase project `sdsuucphkzklznlnqhnn`）に migration `0007_postal.sql` が未適用で、`postal_items` / `postal_ingest_state` が 404。適用に必要な DDL 経路が3つとも塞がっている（Management API は org 未加入で 403・期限なし（招待が下り次第着手）・次:招待が通ったら `D:\repos\aujust-gakkai-automation` で `supabase db push` して 0007 を適用 → 表の作成を read-back で確認 → 11/11 に届いた郵送物2件を取り込んで検証。migration 適用は本番反映なので承認後に実行する。決めてほしいこと: https://supabase
-- 011・山田さん作業AI化: STATUS・進行中・011で再開（000では実装未着手だった）。Reブース移行準備のステップ1〜2は完了・検証済み（基準値シート作成、URL一覧224件すべて200、kim@ writer を seisaku-team 権限で読み戻し確認）。ステップ3〜5は rebooth-site ソースが000ローカルにしか無く、011にはVercel認証も無いため未着手。000へ fle・期限週次レポートの初回自動投稿 12/2(水) 10:30 JST・次:①週次レポートの結果（RESULT-site-weekly-report.md）をレビューし、Windowsでのテスト・PR・投稿ID・タスク登録を読み戻す ②000の返信で seisaku-team-org/rebooth-site ができたら、移行雛形（feat/full-site-migration）を Codex に委譲する。土台は000の rebo
+- 011・山田さん作業AI化: STATUS・停止（000の返信待ち）・週次レポート自動化は完了・検証済み。Reブース移行のステップ3〜5は、rebooth-site のソースが000ローカルにしか無いため止まっている（fleet-mail mail-1795739876889-7adcc01d で000へGitHub化を依頼済み、000は11/26 15:34以降応答なし）。・期限11/29 09:40（000の返信確認）／週次レポート初回 12/2(水) 10:30 JST・次:000が seisaku-team-org/rebooth-site を作ったら、移行雛形（feat/full-site-migration）を Codex に委譲する（指示書 codex-briefs\run-011-rebooth-prep.md のステップ3〜5。土台は000の rebooth-site、cr568/rebooth-lp は使わない）。

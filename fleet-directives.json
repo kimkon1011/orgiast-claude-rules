@@ -151,6 +151,16 @@
       "createdBy": "uers",
       "createdAt": "2026-11-27T22:55:18.095Z",
       "expiresAt": "2026-11-29T22:55:18.095Z"
+    },
+    {
+      "id": "run-20261127-225812-0289",
+      "kind": "run",
+      "targets": "DELL",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-11-27T22:58:12.488Z",
+      "expiresAt": "2026-11-29T22:58:12.488Z"
     }
   ]
 }

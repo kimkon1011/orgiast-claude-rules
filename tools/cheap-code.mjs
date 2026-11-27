@@ -316,18 +316,91 @@ async function main(args) {
   let outputChars = 0;
   let stdoutText = '';
   let stderrText = '';
+  let firstOutputReceived = false;
+  let firstOutputTimer = null;
+  
+  // First-output watchdog timer (60 seconds default)
+  const FIRST_OUTPUT_TIMEOUT_MS = Number(process.env.CHEAP_CODE_FIRST_OUTPUT_TIMEOUT_MS) || 60000;
+  
   const status = await new Promise((resolve) => {
     const child = spawn(executable, childArgs, { windowsHide: true,
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...buildChildEnv({ ...config, defaultModel: model }, key, process.env, { configDir }), ORGIAST_HEADLESS_JOB: `cheap-code:${config.provider}` },
     });
+    
+    // Set up first-output watchdog
+    firstOutputTimer = setTimeout(() => {
+      if (!firstOutputReceived) {
+        console.error(`[cheap-code] ${config.provider} が ${FIRST_OUTPUT_TIMEOUT_MS/1000} 秒間出力がありません。early stall として打ち切ります。`);
+        try {
+          child.kill('SIGKILL');
+        } catch (e) {
+          // Ignore errors during kill
+        }
+        resolve(124); // timeout exit code
+      }
+    }, FIRST_OUTPUT_TIMEOUT_MS);
+    firstOutputTimer.unref?.();
+    
     child.stdin.on('error', () => {});   // 子が先に死んだときの EPIPE で親を落とさない
     child.stdin.end(prompt);
-    child.stdout.on('data', (chunk) => { outputChars += chunk.length; stdoutText += String(chunk); process.stdout.write(chunk); });
-    child.stderr.on('data', (chunk) => { stderrText += String(chunk); process.stderr.write(chunk); });
-    child.on('error', (error) => { console.error(`claude CLI を起動できません: ${error.message}`); resolve(1); });
-    child.on('close', (code) => resolve(code ?? 1));
+    
+    const handleFirstOutput = () => {
+      if (!firstOutputReceived) {
+        firstOutputReceived = true;
+        if (firstOutputTimer) {
+          clearTimeout(firstOutputTimer);
+          firstOutputTimer = null;
+        }
+      }
+    };
+    
+    child.stdout.on('data', (chunk) => { 
+      handleFirstOutput();
+      outputChars += chunk.length; 
+      stdoutText += String(chunk); 
+      process.stdout.write(chunk); 
+    });
+    
+    child.stderr.on('data', (chunk) => { 
+      handleFirstOutput();
+      stderrText += String(chunk); 
+      process.stderr.write(chunk);
+      
+      // Early detection of HTTP 402 errors
+      const combinedText = `${stdoutText}\n${stderrText}`;
+      if (/402|insufficient\s+balance/i.test(combinedText)) {
+        console.error(`[cheap-code] ${config.provider} で HTTP 402 エラーを検出。即時終了します。`);
+        if (firstOutputTimer) {
+          clearTimeout(firstOutputTimer);
+          firstOutputTimer = null;
+        }
+        try {
+          child.kill('SIGKILL');
+        } catch (e) {
+          // Ignore errors during kill
+        }
+        resolve(124); // Use timeout exit code to trigger fallback
+      }
+    });
+    
+    child.on('error', (error) => { 
+      if (firstOutputTimer) {
+        clearTimeout(firstOutputTimer);
+        firstOutputTimer = null;
+      }
+      console.error(`claude CLI を起動できません: ${error.message}`); 
+      resolve(1); 
+    });
+    
+    child.on('close', (code) => {
+      if (firstOutputTimer) {
+        clearTimeout(firstOutputTimer);
+        firstOutputTimer = null;
+      }
+      resolve(code ?? 1); 
+    });
   });
   const secs = (Date.now() - started) / 1000;
 

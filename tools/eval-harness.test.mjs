@@ -15,7 +15,7 @@ function runHarness(t, { cooldown = {}, tasks, config, overlay, responses = [], 
   const tools = path.join(home, 'tools'), evalDir = path.join(home, '.claude', 'eval');
   fs.mkdirSync(path.join(tools, 'lib'), { recursive: true });
   fs.mkdirSync(evalDir, { recursive: true });
-  for (const file of ['eval-harness.mjs', 'eval-exec-checks.mjs', 'is-entry.mjs', 'routing-table.mjs', 'llm-fallback.mjs', 'provider-routing.mjs', 'rate-budget.mjs', 'fallback-backend-health.mjs', 'codex-cooldown.mjs', 'executor-status.mjs', 'lib/provider-daily-cooldown.mjs', 'lib/eval-config.mjs', 'lib/executor-gate.mjs', 'lib/lane-disabled.mjs', 'lib/lane-real-health.mjs', 'lib/redact.mjs', 'lib/absolute-rules.mjs']) {
+  for (const file of ['eval-harness.mjs', 'eval-exec-checks.mjs', 'is-entry.mjs', 'routing-table.mjs', 'llm-fallback.mjs', 'redact-secrets.mjs', 'provider-routing.mjs', 'rate-budget.mjs', 'fallback-backend-health.mjs', 'codex-cooldown.mjs', 'executor-status.mjs', 'lib/provider-daily-cooldown.mjs', 'lib/eval-config.mjs', 'lib/executor-gate.mjs', 'lib/lane-disabled.mjs', 'lib/lane-real-health.mjs', 'lib/redact.mjs', 'lib/absolute-rules.mjs']) {
     fs.copyFileSync(new URL(file, import.meta.url), path.join(tools, file));
   }
   const seed = tasks || [{ id: 'one', category: 'classification', prompt: 'test', expect: { type: 'contains', value: 'ok' } }];

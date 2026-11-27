@@ -463,3 +463,17 @@ test('status/outcome が欠けた行と HTTP 402 では failure_rate 停止に�
   }
   assert.equal(fs.existsSync(path.join(home, '.claude/lanes-disabled.json')), false);
 });
+
+test('caller の http_400 が過半数でも provider は停止しない（404/413/422 も除外）', () => {
+  const now = Date.now();
+  const rows = [
+    ...Array(6).fill({ caller: 'stalled-session-hourly', status: 'http_400' }),
+    ...['http_404', 'http_413', 'http_422'].map(status => ({ status })),
+    ...Array(5).fill({ caller: 'llm-ask', status: 'ok' }),
+  ].map(row => ({ ...row, t: now, provider: 'openrouter' }));
+  assert.deepEqual(unhealthyCandidates(rows, { now }), []);
+  const failures = Array(6).fill({ t: now, provider: 'openrouter', status: 'timeout' });
+  assert.deepEqual(unhealthyCandidates([...rows, ...failures], { now }), [
+    { name: 'openrouter', reason: 'failure_rate', calls: 11, failures: 6 },
+  ]);
+});

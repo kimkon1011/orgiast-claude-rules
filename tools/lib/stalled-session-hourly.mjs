@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { inspect } from '../session-triage.mjs';
 import { redactSecrets } from '../redact-secrets.mjs';
-import { callWithFallback, executorCostUsd } from '../llm-fallback.mjs';
+import { callWithFallback } from '../llm-fallback.mjs';
 import { readEnvValue } from '../env-kv.mjs';
 import * as changeGate from './change-gate.mjs';
 import { latestWaitDeadline } from '../session-wait-title.mjs';
@@ -208,18 +208,25 @@ export async function classifyHourly(record, { home = process.env.ORGIAST_HOME |
           const key = loadKey ? loadKey(routed.provider) : process.env[keyEnv] || readEnvValue(path.join(home, '.claude', keyFile), keyEnv) || (routed.provider === 'gemini' ? readEnvValue(path.join(home, '.gemini', '.env'), keyEnv) : '');
           if (!key) return null;
           return { url, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: routed.model, messages: [{ role: 'user', content: prompt }], max_tokens: 1200, stream: false, response_format: { type: 'json_object' },
-              ...(routed.provider === 'openrouter' ? { reasoning: { enabled: false } } : {}) }) } };
+            body: JSON.stringify({ model: routed.model, messages: [{ role: 'user', content: prompt }], max_tokens: 1200, stream: false, response_format: routed.model === 'mistralai/mistral-small-3.2-24b-instruct' ? {
+                type: 'json_schema', json_schema: { name: 'hourly_decision', strict: true, schema: {
+                  type: 'object', additionalProperties: false, required: ['action', 'reason', 'nextStep'],
+                  properties: { action: { type: 'string', enum: ['resume', 'waiting-human', 'done', 'skip'] }, reason: { type: 'string' }, nextStep: { type: 'string' } },
+                } },
+              } : { type: 'json_object' },
+              ...(routed.provider === 'openrouter' && routed.model === 'mistralai/mistral-small-3.2-24b-instruct' ? { provider: { require_parameters: true } } : {}),
+              ...(routed.provider === 'openrouter' && routed.model === 'openai/gpt-oss-120b' ? { reasoning: { effort: 'low' } } : {}) }) } };
         },
-        validateResponse(body) { try { parseHourlyDecision(body.choices?.[0]?.message?.content); return true; } catch { return { ok: false, reason: 'invalid-json-decision' }; } },
-        async onAttempt(info) {
+        validateResponse(body) {
+          const choice = body?.choices?.[0];
+          if (!choice?.message?.content) return { ok: false, reason: 'empty-decision' };
+          if (choice.finish_reason === 'length') return { ok: false, reason: 'truncated-decision' };
+          try { parseHourlyDecision(choice.message.content); return true; }
+          catch { return { ok: false, reason: 'invalid-json-decision' }; }
+        },
+        onAttempt(info) {
+          // callWithFallback alone records each attempt in the shared ledger.
           lastStatus = info.status;
-          const usage = info.status === 'ok' ? (await info.response.clone().json()).usage || {} : {};
-          const row = { t: new Date().toISOString(), caller: 'stalled-session-hourly', job: 'stalled-session-hourly', provider: info.candidate.provider, model: info.candidate.model,
-            in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, status: info.status };
-          row.usd = typeof usage.cost === 'number' ? usage.cost : candidate.model.endsWith(':free') ? 0 : executorCostUsd(row);
-          fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
-          fs.appendFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), JSON.stringify(row) + '\n');
         },
       });
       const body = await result.response.json();
@@ -229,7 +236,7 @@ export async function classifyHourly(record, { home = process.env.ORGIAST_HOME |
       return { ...decision, fingerprint, cached: false };
     } catch (error) {
       failure = redactSecrets(String(error.message)).slice(0, 200);
-      if (/^http_(?:402|403|404|429)$/.test(lastStatus)) {
+      if (/^(?:http_(?:400|402|403|404|413|422|429)|unusable)$/.test(lastStatus)) {
         const health = json(healthFile, {}); health[providerKey] = Date.now() + (lastStatus === 'http_429' ? 10 : 60) * MINUTE;
         fs.mkdirSync(path.dirname(healthFile), { recursive: true });
         fs.writeFileSync(healthFile, JSON.stringify(health));

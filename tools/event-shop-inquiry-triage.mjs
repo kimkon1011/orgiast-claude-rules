@@ -14,8 +14,8 @@ const time = value => new Date(value).getTime();
 /**
  * Check whether the given customer email has a Gmail draft in the specified user's mailbox.
  * Only checks seisaku-team@orgiast.jp and kim@orgiast.jp.
- * Returns { found: true, account, draftId } on match, { found: false } when no draft exists,
- * or { found: false, error: 'string' } on API failure (never throws).
+ * Returns { found: true, account, draftId, date? } on match (date = message.internalDate ISO),
+ * { found: false } when no draft exists, or { found: false, error: 'string' } on API failure (never throws).
  */
 export async function checkGmailDrafts(customerEmail, { fetchImpl = gwsFetch, getToken = mintDwdToken } = {}) {
   const accounts = ['seisaku-team@orgiast.jp', 'kim@orgiast.jp'];
@@ -84,6 +84,16 @@ export function resolveReplyDraftApproval({ lastInboundAt, draft, inbox } = {}) 
   };
 }
 /**
+ * 追客用下書きが最終当社送信以前に作られたものか（送信済みと同文の残り下書き）。
+ * 日時不明は false（従来どおり追客候補として扱う）。
+ */
+export function isStaleFollowupDraft(draft, lastOut) {
+  if (!draft?.found || !draft.date || !lastOut?.received_at) return false;
+  const draftAt = time(draft.date);
+  if (!Number.isFinite(draftAt)) return false;
+  return draftAt <= time(lastOut.received_at);
+}
+/**
  * 受注確定（申込書受領・手配開始）の合図が lastIn / lastOut 本文にあるか。
  * 見積送付だけ（「お見積書とお申し込み書を添付」）は当社送信の「添付」だけでは確定にしない。
  */
@@ -149,7 +159,10 @@ export async function classifyLead(lead, messages, now = new Date(), deps = {}) 
         catch { draftError = true; }
         try { inbox = await deps.kimInboxCheck(lead); }
         catch { inboxError = true; }
-        if (draft?.found && inbox?.id) nextAction = `${waiting}・追客下書き済み・kim 承認待ち（下書き: ${draft.account} / inbox: ${inbox.id}）`;
+        if (isStaleFollowupDraft(draft, lastOut)) {
+          // 最終送信より前の下書きは送信済みの残り。追客候補・承認待ちにしない（削除はしない）。
+          nextAction = `古い下書きあり（${draft.account} ${draft.draftId}・最終送信より前・送信しない）`;
+        } else if (draft?.found && inbox?.id) nextAction = `${waiting}・追客下書き済み・kim 承認待ち（下書き: ${draft.account} / inbox: ${inbox.id}）`;
         else {
           const details = [];
           if (draftError) details.push('下書き: 未確認');

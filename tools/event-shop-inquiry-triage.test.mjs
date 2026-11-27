@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { classifyLead, checkGmailDrafts, deduplicateLeads, deduplicateMessages, sortLeads, main, messageQuery, renderMarkdown, loadCredentials, findOpenInboxAsk, resolveReplyDraftApproval, isOrderConfirmed } from './event-shop-inquiry-triage.mjs';
+import { classifyLead, checkGmailDrafts, deduplicateLeads, deduplicateMessages, sortLeads, main, messageQuery, renderMarkdown, loadCredentials, findOpenInboxAsk, resolveReplyDraftApproval, isOrderConfirmed, isStaleFollowupDraft } from './event-shop-inquiry-triage.mjs';
 const now = new Date('2026-10-27T03:00:00Z');
 const lead = { id: 'a', email: 'client@example.com', company_name: '会社', contact_name: '担当', created_at: '2026-10-21T03:00:00Z', preferred_date: '2026-11-18', raw_payload: { product: '展示会' } };
 const msg = (direction, day, body = '') => ({ direction, received_at: `2026-10-${day}T03:00:00Z`, body });
@@ -34,6 +34,51 @@ test('4b: 追客候補に下書きとkim-inboxの状態を併記', async () => {
   assert.match((await classify({ gmailDraftCheck: async () => ({ found: true, account: 'kim@orgiast.jp' }), kimInboxCheck: async () => null })).nextAction, /下書きあり: kim@orgiast.jp・kim-inbox 未登録/);
   assert.match((await classify({ gmailDraftCheck: async () => ({ found: false }), kimInboxCheck: async () => ({ id: 'ask-only' }) })).nextAction, /kim-inbox 承認待ち: ask-only・下書きなし/);
   assert.equal((await classify({ gmailDraftCheck: async () => ({ found: false }), kimInboxCheck: async () => null })).nextAction, '顧客の返信待ち（最終送信から 10 日）・追客候補');
+});
+test('4f: 最終送信より古い下書きは追客候補・承認待ちにしない（3a-c 実害）', async () => {
+  const messages = [msg('outbound', '17')]; // 2026-10-17 送信
+  const result = await classifyLead(lead, messages, now, {
+    gmailDraftCheck: async () => ({
+      found: true,
+      account: 'seisaku-team@orgiast.jp',
+      draftId: 'r-stale-3a',
+      date: '2026-10-09T03:00:00Z', // 送信より前
+    }),
+    kimInboxCheck: async () => ({ id: 'ask-should-not-approve' }),
+  });
+  assert.equal(result.category, '🟡 顧客待ち');
+  assert.equal(result.nextAction, '古い下書きあり（seisaku-team@orgiast.jp r-stale-3a・最終送信より前・送信しない）');
+  assert.doesNotMatch(result.nextAction, /追客候補|承認待ち/);
+  assert.equal(isStaleFollowupDraft({
+    found: true, account: 'seisaku-team@orgiast.jp', draftId: 'r-stale-3a', date: '2026-10-09T03:00:00Z',
+  }, messages[0]), true);
+});
+test('4g: 最終送信より新しい下書きは従来どおり追客候補／承認待ち', async () => {
+  const messages = [msg('outbound', '17')];
+  const withInbox = await classifyLead(lead, messages, now, {
+    gmailDraftCheck: async () => ({
+      found: true,
+      account: 'seisaku-team@orgiast.jp',
+      draftId: 'r-fresh',
+      date: '2026-10-20T03:00:00Z', // 送信より後
+    }),
+    kimInboxCheck: async () => ({ id: 'ask-fresh' }),
+  });
+  assert.equal(withInbox.nextAction,
+    '顧客の返信待ち（最終送信から 10 日）・追客下書き済み・kim 承認待ち（下書き: seisaku-team@orgiast.jp / inbox: ask-fresh）');
+  const noInbox = await classifyLead(lead, messages, now, {
+    gmailDraftCheck: async () => ({
+      found: true,
+      account: 'kim@orgiast.jp',
+      draftId: 'r-fresh-2',
+      date: '2026-10-20T03:00:00Z',
+    }),
+    kimInboxCheck: async () => null,
+  });
+  assert.match(noInbox.nextAction, /追客候補（下書きあり: kim@orgiast.jp・kim-inbox 未登録）/);
+  assert.equal(isStaleFollowupDraft({
+    found: true, draftId: 'r-fresh', date: '2026-10-20T03:00:00Z',
+  }, messages[0]), false);
 });
 test('4c: 追客候補の照会エラーは未確認とし、7日未満では照会しない', async () => {
   const fail = async () => { throw new Error('failure'); };
@@ -317,6 +362,25 @@ test('checkGmailDrafts: Gmail下書きあり（seisaku-team）', async () => {
   assert.deepEqual(result, { found: true, account: 'seisaku-team@orgiast.jp', draftId: 'r-test-draft-id' });
   assert.equal(calls[0].user, 'seisaku-team@orgiast.jp');
   assert.match(calls[0].scope, /gmail\.readonly/);
+});
+test('checkGmailDrafts: message.internalDate を date に含める', async () => {
+  const getToken = async () => 'mock-token';
+  const fetchImpl = async (url) => {
+    if (url.includes('/drafts?')) {
+      return { ok: true, json: async () => ({ drafts: [{ id: 'r-dated', message: { id: 'msg-1' } }] }) };
+    }
+    if (url.includes('/messages/msg-1')) {
+      return { ok: true, json: async () => ({ internalDate: '1699520400000' }) }; // 2023-11-09T09:00:00.000Z
+    }
+    return { ok: true, json: async () => ({ drafts: [] }) };
+  };
+  const result = await checkGmailDrafts('info@3a-c.com', { fetchImpl, getToken });
+  assert.deepEqual(result, {
+    found: true,
+    account: 'seisaku-team@orgiast.jp',
+    draftId: 'r-dated',
+    date: '2023-11-09T09:00:00.000Z',
+  });
 });
 test('checkGmailDrafts: Gmail下書きあり（kim）', async () => {
   let callIndex = 0;

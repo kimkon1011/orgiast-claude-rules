@@ -236,18 +236,35 @@ export function sheetInquiries(values, week) {
   return rows;
 }
 
-export function unansweredRows(values, { now = Date.now(), notified = {}, minAgeMs = 24 * 3600 * 1000 } = {}) {
+/** テスト／検証用の問い合わせ行（催促対象外） */
+export function isTestInquiry(row = []) {
+  const hay = [row[1], row[4], row[5]].map(v => String(v || '')).join('\n');
+  return /テスト|test\b|動作確認/i.test(hay);
+}
+
+/**
+ * 対応漏れ候補: 完了以外・受付 minAge〜maxAge・除外/テスト以外・未通知。
+ * maxAgeMs 未指定時は上限なし（後方互換）。催促経路では unansweredMaxAgeDays を渡す。
+ */
+export function unansweredRows(values, {
+  now = Date.now(),
+  notified = {},
+  minAgeMs = 24 * 3600 * 1000,
+  maxAgeMs,
+} = {}) {
   const headers = values[0] || [];
   const out = [];
   for (let i = 1; i < values.length; i++) {
     const row = values[i] || [];
     if (excludedInquiry(row, headers)) continue;
+    if (isTestInquiry(row)) continue;
     const status = String(row[12] || '').trim();
     if (/^完了(?:$|[（(\s])/.test(status)) continue;
     const date = dateISO(row[0]);
     if (!date) continue;
     const age = now - Date.parse(date);
     if (!Number.isFinite(age) || age <= minAgeMs) continue;
+    if (Number.isFinite(maxAgeMs) && age > maxAgeMs) continue;
     const key = String(i + 1);
     if (notified[key]) continue;
     out.push({
@@ -387,11 +404,14 @@ export function formatWeeklyMessage({ week, sites, inquiriesBySite }) {
   return lines.join('\n');
 }
 
-export function formatUnansweredMessage(rows, now = new Date()) {
+export function formatUnansweredMessage(rows, now = new Date(), { maxAgeDays } = {}) {
   const p = jstParts(now);
+  const ageNote = Number.isFinite(maxAgeDays) && maxAgeDays > 0
+    ? `受付から24時間超〜${maxAgeDays}日以内`
+    : '受付から24時間超';
   const lines = [
     `【自動】対応漏れ検知（${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}）`,
-    '受付から24時間超・対応状況が「完了」でない問い合わせです（新着即時通知とは別経路）。',
+    `${ageNote}・対応状況が「完了」でない問い合わせです（新着即時通知とは別経路。営業除外・テスト行は対象外）。`,
     '',
   ];
   for (const r of rows) {
@@ -670,9 +690,14 @@ export async function runUnanswered(args = {}, deps = {}) {
   if (lastDay === today) return { mode: 'unanswered', rows: [], text: '', posted: [], skipped: 'already-today', dryRun };
   const values = deps.sheetValues
     || await (deps.readSheetImpl || readSheet)(INQUIRY_SHEET, INQUIRY_TAB, { signal: deps.signal });
+  const maxAgeDays = Number(config.unansweredMaxAgeDays ?? 14);
+  const maxAgeMs = Number.isFinite(maxAgeDays) && maxAgeDays > 0
+    ? maxAgeDays * 24 * 3600 * 1000
+    : undefined;
   const rows = unansweredRows(values, {
     now: now.getTime?.() ?? now,
     notified: state.notifiedUnanswered || {},
+    maxAgeMs,
   });
   const fp = fingerprint(rows.map(r => r.key));
   const g = (deps.gateImpl || gate)(CHANGE_GATE_UNANSWERED, { fingerprint: fp, items: rows });
@@ -687,7 +712,7 @@ export async function runUnanswered(args = {}, deps = {}) {
     return { mode: 'unanswered', rows, text: '', posted: [], skipped: 'no-change', changeGate: g, dryRun };
   }
 
-  const text = formatUnansweredMessage(rows, now instanceof Date ? now : new Date(now));
+  const text = formatUnansweredMessage(rows, now instanceof Date ? now : new Date(now), { maxAgeDays });
   const chunks = splitDiscordMessages(text);
   const token = deps.token !== undefined ? deps.token : resolveDiscordBotToken(home);
   const posted = await postChannelMessages(chunks, {

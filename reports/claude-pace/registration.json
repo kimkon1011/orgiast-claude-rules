@@ -1,6 +1,15 @@
 {
-  "updatedAt": "2026-11-27T15:06:24Z",
+  "updatedAt": "2026-11-27T19:55:23Z",
   "hosts": {
+    "000": {
+      "registered": true,
+      "checkedAtJst": "2026-11-28T04:55:23+09:00",
+      "taskState": "Ready",
+      "startMinute": 23,
+      "repetition": "PT1H",
+      "reportTaskRegistered": false,
+      "note": ""
+    },
     "014": {
       "registered": true,
       "checkedAtJst": "2026-11-27T23:45:54+09:00",

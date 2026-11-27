@@ -1924,6 +1924,14 @@ test('isLaneIncompatible は実データの trust 警告を残差から外して
     '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}',
   ].join('\n');
   assert.equal(isLaneIncompatible('\n', splitTrust, 0), true);
+
+  // 実データ 2026-11-25-8: 単数 "entry" も残差から落とす（entries 専用 regex だと false になる）
+  const singularTrust = [
+    '[openrouter:deepseek/deepseek-v4-flash]',
+    'Ignoring 1 permissions.allow entry from .claude/settings.local.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["d:/CLAUDE.md配布"].hasTrustDialogAccepted: true in C:\\Users\\kimko\\.claude\\cheap-code-worker\\.claude.json.',
+    '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}',
+  ].join('\n');
+  assert.equal(isLaneIncompatible('\n', singularTrust, 0), true);
 });
 
 test('shouldAdvanceToNextBackend は laneIncompatible=true で incompatible を返す', () => {

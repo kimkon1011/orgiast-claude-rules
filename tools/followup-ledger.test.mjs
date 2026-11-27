@@ -81,8 +81,15 @@ async function withEnv(env, fn) {
   }
 }
 
+// Fixed 15:00 JST so quietHours (22:00–07:00) never makes tests flaky at night.
+const TEST_NOW = new Date('2026-11-27T15:00:00+09:00');
+
+function testNow() {
+  return new Date(TEST_NOW);
+}
+
 function pastIso(minutesAgo = 120) {
-  return toIsoJst(new Date(Date.now() - minutesAgo * 60_000));
+  return toIsoJst(new Date(TEST_NOW.getTime() - minutesAgo * 60_000));
 }
 
 function addArgs(id, overrides = {}) {
@@ -145,7 +152,7 @@ test('parseArgs / computeDue / decideAction basics', () => {
     scope: 'internal',
     channel: 'beeper',
     donePattern: String.raw`\d{4}-\d{4}-\d{4}`,
-  }, [], new Date());
+  }, [], testNow());
   assert.equal(act.action, 'nudge');
   assert.ok(resolveNow('2026-11-27T15:00:00+09:00') instanceof Date);
 });
@@ -157,7 +164,7 @@ test('A: overdue no-reply → one nudge with footer; second check no duplicate',
   await withEnv(baseEnv(dir, mockFile), async () => {
     await main(addArgs('A1'), { config, storeMode: 'local', spawn: () => ({ status: 0, stdout: '[]' }) });
     const r1 = await main(['check', '--store', 'local'], {
-      config, storeMode: 'local', now: new Date(), spawn: () => ({ status: 0, stdout: '[]' }),
+      config, storeMode: 'local', now: testNow(), spawn: () => ({ status: 0, stdout: '[]' }),
     });
     void r1;
     const mock1 = JSON.parse(fs.readFileSync(mockFile, 'utf8'));
@@ -173,7 +180,7 @@ test('A: overdue no-reply → one nudge with footer; second check no duplicate',
     fs.writeFileSync(path.join(dir, 'ledger.json'), JSON.stringify(store1, null, 2));
 
     await main(['check', '--store', 'local'], {
-      config, storeMode: 'local', now: new Date(), spawn: () => ({ status: 0, stdout: '[]' }),
+      config, storeMode: 'local', now: testNow(), spawn: () => ({ status: 0, stdout: '[]' }),
     });
     const mock2 = JSON.parse(fs.readFileSync(mockFile, 'utf8'));
     assert.equal(mock2.sent.length, 1, '二重送信しない');
@@ -197,7 +204,7 @@ test('B: done-pattern match → complete with evidence in history', async () => 
   await withEnv(baseEnv(dir, mockFile), async () => {
     await main(addArgs('B1'), { config, storeMode: 'local', spawn: () => ({ status: 0, stdout: '[]' }) });
     await main(['check', '--store', 'local'], {
-      config, storeMode: 'local', now: new Date(), spawn: () => ({ status: 0, stdout: '[]' }),
+      config, storeMode: 'local', now: testNow(), spawn: () => ({ status: 0, stdout: '[]' }),
     });
     const store = loadLocalStore(path.join(dir, 'ledger.json'));
     const row = store.items.find((i) => i.id === 'B1');
@@ -218,7 +225,7 @@ test('C(a): mock fail Beeper到達不可 → 止まった + escalate recorded (d
   await withEnv(baseEnv(dir, mockFile), async () => {
     await main(addArgs('C1'), { config, storeMode: 'local', spawn: () => ({ status: 0, stdout: '[]' }) });
     const summary = await main(['check', '--store', 'local', '--dry-run', '--json'], {
-      config, storeMode: 'local', now: new Date(),
+      config, storeMode: 'local', now: testNow(),
       spawn: () => ({ status: 0, stdout: '[]' }),
     });
     void summary;
@@ -245,7 +252,7 @@ test('C(a): mock fail Beeper到達不可 → 止まった + escalate recorded (d
     fs.writeFileSync(path.join(dir2, 'ledger.json'), JSON.stringify(s0, null, 2));
     const calls = [];
     await main(['check', '--store', 'local', '--dry-run'], {
-      config: cfg, storeMode: 'local', now: new Date(),
+      config: cfg, storeMode: 'local', now: testNow(),
       spawn: (...args) => { calls.push(args); return { status: 0, stdout: '[]' }; },
     });
     const store = loadLocalStore(path.join(dir2, 'ledger.json'));
@@ -289,7 +296,7 @@ test('D: max nudges exceeded → escalate without send', async () => {
     row0.lastSentAt = pastIso(120);
     fs.writeFileSync(path.join(dir, 'ledger.json'), JSON.stringify(store0, null, 2));
     await main(['check', '--store', 'local', '--dry-run'], {
-      config, storeMode: 'local', now: new Date(),
+      config, storeMode: 'local', now: testNow(),
       spawn: () => ({ status: 0, stdout: '[]' }),
     });
     const store = loadLocalStore(path.join(dir, 'ledger.json'));
@@ -309,7 +316,7 @@ test('E: external → approval request; OK <ID> from approver sends', async () =
       config, storeMode: 'local', spawn: () => ({ status: 0, stdout: '[]' }),
     });
     await main(['check', '--store', 'local'], {
-      config, storeMode: 'local', now: new Date(), spawn: () => ({ status: 0, stdout: '[]' }),
+      config, storeMode: 'local', now: testNow(), spawn: () => ({ status: 0, stdout: '[]' }),
     });
     let store = loadLocalStore(path.join(dir, 'ledger.json'));
     let row = store.items.find((i) => i.id === 'E1');
@@ -339,7 +346,7 @@ test('E: external → approval request; OK <ID> from approver sends', async () =
     fs.writeFileSync(path.join(dir, 'ledger.json'), JSON.stringify(store, null, 2));
 
     await main(['check', '--store', 'local'], {
-      config, storeMode: 'local', now: new Date(), spawn: () => ({ status: 0, stdout: '[]' }),
+      config, storeMode: 'local', now: testNow(), spawn: () => ({ status: 0, stdout: '[]' }),
     });
     mock = JSON.parse(fs.readFileSync(mockFile, 'utf8'));
     assert.ok(mock.sent.some((s) => s.chatId === 'chat-ext'), '承認後に本体へ送信');
@@ -395,7 +402,7 @@ test('H: non-owner PC does not send and does not change status', async () => {
     const checkedBefore = rowBefore.lastCheckedAt;
 
     await main(['check', '--store', 'local'], {
-      config, storeMode: 'local', now: new Date(),
+      config, storeMode: 'local', now: testNow(),
       spawn: () => ({ status: 0, stdout: '[]' }),
       hostname: 'other-pc',
     });
@@ -423,7 +430,7 @@ test('I: non-owner stale lastCheckedAt appears in ALERT (watchdog)', async () =>
     fs.writeFileSync(path.join(dir, 'ledger.json'), JSON.stringify(store0, null, 2));
 
     await main(['check', '--store', 'local'], {
-      config, storeMode: 'local', now: new Date(),
+      config, storeMode: 'local', now: testNow(),
       spawn: () => ({ status: 0, stdout: '[]' }),
       hostname: 'watcher-pc',
     });
@@ -479,7 +486,7 @@ test('K: seed nudgeText is used as nudge body', async () => {
       config, storeMode: 'local', spawn: () => ({ status: 0, stdout: '[]' }),
     });
     await main(['check', '--store', 'local'], {
-      config, storeMode: 'local', now: new Date(), spawn: () => ({ status: 0, stdout: '[]' }),
+      config, storeMode: 'local', now: testNow(), spawn: () => ({ status: 0, stdout: '[]' }),
     });
     const mock = JSON.parse(fs.readFileSync(mockFile, 'utf8'));
     assert.equal(mock.sent.length, 1);
@@ -525,7 +532,7 @@ test('M: --all-pcs processes non-owner rows', async () => {
       config, storeMode: 'local', spawn: () => ({ status: 0, stdout: '[]' }),
     });
     await main(['check', '--store', 'local', '--all-pcs'], {
-      config, storeMode: 'local', now: new Date(),
+      config, storeMode: 'local', now: testNow(),
       spawn: () => ({ status: 0, stdout: '[]' }),
       hostname: 'other-pc',
     });

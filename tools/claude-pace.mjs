@@ -499,7 +499,7 @@ function writeQueue(home, queue) {
   fs.writeFileSync(queuePath(home), `${JSON.stringify(queue, null, 2)}\n`);
 }
 
-async function launchPaceTasks({
+export async function launchPaceTasks({
   home,
   host,
   account,
@@ -517,8 +517,8 @@ async function launchPaceTasks({
   const tasks = Array.isArray(picked?.tasks) ? picked.tasks : [];
   const launched = [];
   if (dryRun) {
-    writeQueue(home, nextQueue);
-    return { launched: tasks.map((t) => ({ id: t.id, dryRun: true, promptPreview: String(t.prompt || '').slice(0, 120) })), queue: nextQueue };
+    // dry-run: writeQueue を呼ばず、読み込んだままの queue を返す
+    return { launched: tasks.map((t) => ({ id: t.id, dryRun: true, promptPreview: String(t.prompt || '').slice(0, 120) })), queue };
   }
   let executable;
   try {
@@ -539,31 +539,44 @@ async function launchPaceTasks({
       nextQueue.tasks[idx] = { ...nextQueue.tasks[idx], state: '実行中', lastRunAt: new Date(nowMs).toISOString() };
       writeQueue(home, nextQueue);
     }
-    const childEnv = {
-      ...sanitizeClaudeSupervisorEnv(process.env),
-      ORGIAST_HOME: home,
-      CLAUDE_HEADLESS: '1',
-      ORGIAST_HEADLESS_JOB: 'claude-pace',
-    };
-    for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']) delete childEnv[k];
-    const result = await runChild(executable, args, {
-      cwd: repoCwd,
-      input: prompt,
-      env: childEnv,
-      deadline: nowMs + timeoutMs,
-      timeoutMs,
-    });
-    const ok = result.code === 0 && !result.timedOut;
-    if (idx >= 0) {
-      nextQueue.tasks[idx] = {
-        ...nextQueue.tasks[idx],
-        state: ok ? '完了' : '失敗',
-        lastExitCode: result.code,
-        lastFinishedAt: new Date().toISOString(),
+    try {
+      const childEnv = {
+        ...sanitizeClaudeSupervisorEnv(process.env),
+        ORGIAST_HOME: home,
+        CLAUDE_HEADLESS: '1',
+        ORGIAST_HEADLESS_JOB: 'claude-pace',
       };
-      writeQueue(home, nextQueue);
+      for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']) delete childEnv[k];
+      const result = await runChild(executable, args, {
+        cwd: repoCwd,
+        input: prompt,
+        env: childEnv,
+        deadline: nowMs + timeoutMs,
+        timeoutMs,
+      });
+      const ok = result.code === 0 && !result.timedOut;
+      if (idx >= 0) {
+        nextQueue.tasks[idx] = {
+          ...nextQueue.tasks[idx],
+          state: ok ? '完了' : '失敗',
+          lastExitCode: result.code,
+          lastFinishedAt: new Date().toISOString(),
+        };
+        writeQueue(home, nextQueue);
+      }
+      launched.push({ id: task.id, code: result.code, timedOut: result.timedOut, ok });
+    } catch (error) {
+      if (idx >= 0) {
+        nextQueue.tasks[idx] = {
+          ...nextQueue.tasks[idx],
+          state: '失敗',
+          lastExitCode: -1,
+          lastFinishedAt: new Date().toISOString(),
+        };
+        writeQueue(home, nextQueue);
+      }
+      launched.push({ id: task.id, error: error.message, ok: false });
     }
-    launched.push({ id: task.id, code: result.code, timedOut: result.timedOut, ok });
   }
   return { launched, queue: nextQueue };
 }

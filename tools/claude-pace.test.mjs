@@ -9,8 +9,10 @@ import {
   activePcs,
   mergeQueue,
   readQueue,
+  launchPaceTasks,
   WINDOW_MS,
   DEFAULT_STALE_MS,
+  defaultQueuePath,
 } from './claude-pace.mjs';
 
 test('readQueue は runtime が無ければ repo config の28件から初期化する', () => {
@@ -302,4 +304,61 @@ test('effectiveTolerance が返り値に入る', () => {
   assert.ok(Number.isFinite(r.effectiveTolerance));
   // elapsedRatio=0.5 → max(5, 5)=5
   assert.equal(r.effectiveTolerance, 5);
+});
+
+test('launchPaceTasks dry-run は queue ファイルを書き換えず返り値にタスク id が入る', async () => {
+  // launchPaceTasks は loadPickTasks → import('./claude-pace-queue.mjs') で pickTasks をロードする。
+  // テストの cwd がプロジェクトルートなら import は成功する。そこで、実際の config queue を使いつつ
+  // home を一時ディレクトリにして、dryRun=true で呼び、書き込みがないことを確認する。
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-pace-test-'));
+  try {
+    // 事前に readQueue(home) を呼んで、一時 home に runtime queue を作らせる
+    const q = readQueue(home);
+    const beforeContent = fs.readFileSync(path.join(home, '.claude', 'claude-pace-queue.json'), 'utf8');
+
+    const result = await launchPaceTasks({
+      home,
+      host: '018',
+      account: 'cr@orgiast.jp',
+      count: 1,
+      nowMs: Date.parse('2026-11-27T12:00:00.000Z'),
+      dryRun: true,
+      // runChild は dryRun では使われない
+    });
+
+    // dry-run は queue を書き換えない
+    const afterContent = fs.readFileSync(path.join(home, '.claude', 'claude-pace-queue.json'), 'utf8');
+    assert.equal(afterContent, beforeContent, 'dry-run で queue が変わってはいけない');
+
+    // 返り値にタスク id が入っている
+    assert.ok(Array.isArray(result.launched));
+    assert.ok(result.launched.length > 0, 'dry-run でもタスクが選ばれるべき');
+    assert.ok(result.launched.some((t) => typeof t.id === 'string' && t.dryRun === true));
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('launchPaceTasks dry-run を2回続けても同じタスクが選ばれる', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-pace-test-'));
+  try {
+    readQueue(home); // runtime queue を初期化
+    const result1 = await launchPaceTasks({
+      home, host: '018', account: 'cr@orgiast.jp', count: 3,
+      nowMs: Date.parse('2026-11-27T12:00:00.000Z'),
+      dryRun: true,
+    });
+    const result2 = await launchPaceTasks({
+      home, host: '018', account: 'cr@orgiast.jp', count: 3,
+      nowMs: Date.parse('2026-11-27T12:00:00.000Z'),
+      dryRun: true,
+    });
+
+    // 同じタスク（同じ id）が選ばれている
+    const ids1 = result1.launched.map((t) => t.id).sort();
+    const ids2 = result2.launched.map((t) => t.id).sort();
+    assert.deepEqual(ids1, ids2, 'dry-run を2回続けても同じタスクが選ばれる');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });

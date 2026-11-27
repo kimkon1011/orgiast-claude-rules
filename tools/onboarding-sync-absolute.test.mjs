@@ -16,6 +16,9 @@ test('ONBOARDING の絶対ルール節を抜き出す（スピード最重視が
   assert.match(rules, /期限確認と訪問集約/);
   assert.match(rules, /間に合わない選択肢.*最初から出さない/);
   assert.match(rules, /訪問しなくて済む道を先に調べる/);
+  assert.match(rules, /所在確認と現地作業の割り振り/);
+  assert.match(rules, /わからない人には割り振らない/);
+  assert.match(rules, /店を離れる作業/);
 });
 test('絶対ルールはファイル最上部に1つだけ置かれ、再実行で増えない', () => {
   const rules = extractAbsoluteRules(onboarding);

@@ -30,6 +30,16 @@
       "task": "cost-self-heal",
       "createdBy": "kimko",
       "createdAt": "2026-11-27T13:45:24.018Z"
+    },
+    {
+      "id": "prompt-20261127-142618-3940",
+      "kind": "prompt",
+      "targets": "000,004,008,011,014,015,019,999",
+      "why": "claude-pace の毎時ジョブ OrgiastClaudePace を全PCに登録する（PR #2901 が 2026-11-27 MERGED 済み）。011 は 7:30 の集計タスクも登録する",
+      "body": "claude-pace（Claude Code の7日枠を90%着地で使い切る仕組み）の定期ジョブを、このPCに登録してください。018 から全PCへの指示です。\n\n## 背景\n\nClaude Code の上限はPCごとではなくアカウントごと（Teamプラン）で、同じアカウントのPCは5時間枠・7日枠を共有します。\n7日枠を90%で着地させるため、毎時のペースチェック `OrgiastClaudePace` を全PCに入れます。\n7日枠97%・5時間枠85%で止まるので、100%超え・従量課金は起こりません。\nhold フラグが立っている間は無人の追加起動だけ止まり、対話中のセッションは止まりません。\n\n## やること（この順で）\n\n### 1. nightly-repo を origin/main に同期する\n\n```\ngit -C \"$env:USERPROFILE\\.claude\\nightly-repo\" fetch origin main\ngit -C \"$env:USERPROFILE\\.claude\\nightly-repo\" reset --hard origin/main\n```\n\n`tools\\claude-pace.mjs` と `tools\\register-claude-pace.ps1` が存在することを確認してから次へ進んでください。\n存在しなければ、まだ PR がマージされていないので、ここで止めて「未反映（main に未着地）」として 3. の結果ファイルを書いてください。\n\n### 2. 登録する\n\n毎時のペースチェック（全PC共通）:\n\n```\npowershell -ExecutionPolicy Bypass -File \"$env:USERPROFILE\\.claude\\nightly-repo\\tools\\register-claude-pace.ps1\"\n```\n\n**011 のPCだけ**、毎朝7:30の集計も登録してください:\n\n```\npowershell -ExecutionPolicy Bypass -File \"$env:USERPROFILE\\.claude\\nightly-repo\\tools\\register-claude-pace-report.ps1\"\n```\n\n登録スクリプトは内部で `Get-ScheduledTask` の読み戻し検証まで行います。\n「'tools\\claude-pace.mjs' is missing from the synced repo」という警告が出たら、1. の同期ができていないので、登録せずに「未反映」として記録してください（worktree を指したまま登録すると後で壊れます）。\n\n### 3. 読み戻して結果を返す\n\n```\nGet-ScheduledTask -TaskName OrgiastClaudePace | Select-Object TaskName,State\n(Get-ScheduledTask -TaskName OrgiastClaudePace).Triggers[0].StartBoundary\n(Get-ScheduledTask -TaskName OrgiastClaudePace).Triggers[0].Repetition.Interval\n```\n\n期待する結果: `State` が `Ready`、起動分が `:23`、繰り返し間隔が `PT1H`。\n\n結果を `reports/claude-pace/registration.json` に追記する形で、正本リポジトリ `kimkon1011/orgiast-claude-rules` の main へ反映してください。形は次のとおりです（自分のPC番号の行だけを足す・既存の他PCの行は消さない）:\n\n```json\n{\n  \"updatedAt\": \"<ISO8601>\",\n  \"hosts\": {\n    \"<自分のPC番号>\": {\n      \"registered\": true,\n      \"checkedAtJst\": \"<JST の ISO8601>\",\n      \"taskState\": \"Ready\",\n      \"startMinute\": 23,\n      \"repetition\": \"PT1H\",\n      \"reportTaskRegistered\": false,\n      \"note\": \"\"\n    }\n  }\n}\n```\n\n- 登録できなかった場合は `\"registered\": false` にして、`note` に理由を具体的に書いてください（例: 「main に未着地」「node が見つからない」「権限エラー」）。\n- 011 は `reportTaskRegistered` を `true` にしてください。\n- main へ直接 push できない場合は、ブランチを切って PR を出し auto-merge を有効にしてください。\n- 同時に複数PCが書くので、push 前に必ず `git pull --rebase` してから push し、衝突したら相手の行を残したまま自分の行だけ足してください。\n\n## 禁止\n\n- 社外への送信・支払い・課金・削除はしません。\n- 対話中のセッションや他の人のプロセスを止めません。\n- 他のPCの行を消しません。\n- 確認していない数字・日付を言い切りません。\n",
+      "createdBy": "018",
+      "createdAt": "2026-11-27T14:26:18.944Z",
+      "expiresAt": "2026-11-29T14:26:18.944Z"
     }
   ]
 }

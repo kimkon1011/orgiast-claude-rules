@@ -53,3 +53,4 @@
 {"at":"2026-11-27T14:20:41.245Z","label":"015","account":"nishi@orgiast.jp","candidates":65,"resume":0,"waiting-human":17,"done":15,"skip":33,"unlinked":3,"seatGuard":"allowed:below-threshold;usage-94","dryRun":false,"error":""}
 {"at":"2026-11-27T15:20:42.320Z","label":"015","account":"nishi@orgiast.jp","candidates":69,"resume":0,"waiting-human":19,"done":17,"skip":33,"unlinked":3,"seatGuard":"blocked:weekly-threshold;usage-98","dryRun":false,"error":""}
 {"at":"2026-11-27T16:20:33.523Z","label":"015","account":"nishi@orgiast.jp","candidates":69,"resume":0,"waiting-human":19,"done":16,"skip":34,"unlinked":3,"seatGuard":"blocked:weekly-threshold;usage-98","dryRun":false,"error":""}
+{"at":"2026-11-27T17:21:05.565Z","label":"015","account":"nishi@orgiast.jp","candidates":78,"resume":0,"waiting-human":23,"done":16,"skip":39,"unlinked":3,"seatGuard":"blocked:weekly-threshold;usage-98","dryRun":false,"error":""}

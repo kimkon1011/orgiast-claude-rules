@@ -1,4 +1,4 @@
-# session-status  PC=014  host=014DELL  updated 2026-11-28 07:05 JST
+# session-status  PC=014  host=014DELL  updated 2026-11-28 08:05 JST
 
 - claude auth: { "loggedIn": false, "authMethod": "none", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\USER\\.claude\\projects", "configDirectory": "C:\\Users\\USER\\.cla
 - 案件数: 30
@@ -10,7 +10,7 @@
 - 014・270203TGM・完了・山田様の11/26追加質問5点への回答を 2026-11-27 16:33 JST に seisaku-team から送信済み（message 1a21beca14b616a1・CC satou@）・期限なし・次:山田様の返信待ち。返信が来たら、バックヤード広さ・ロゴBOX有無・デザイナーパース希望を確認して図面/パース確定版へ
 - 014・D-115 reブース前金: STATUS・金さん待ち・期限切れ（2026-09-30）から57日超過。前金 ¥2,077,369 の支払い完了有無を確認する手段がなく、完了／延期／不要の判断は金さんが必要。・期限なし・次:金さんが「D-115 完了」「D-115 延期 <日付>」「D-115 不要」のいずれかを答える
 - 014・dispatch-1122-21・停止・最終更新 11/22 21:42、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 014・followup-ledger・停止・最終更新 11/28 07:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 014・followup-ledger・停止・最終更新 11/28 08:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 014・gb48-night-fix-1127・完了・作業用014 には直す記録も、kim-inbox の対象項目も無かった（REPORT.md 参照）・期限2026-11-27 23:00 JST（大阪アシスタント再募集の判定締切）・次:起票した PC で、田中歩さんの記録の修正と ki-20261127122235-4760 を閉じる作業を行う
 - 014・greenenergy-interview-1127・停止・最終更新 11/27 09:56、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 014・inaba-rebooth・完了・11/27 16:50 いなば杉山様へ初回メール送信済み（佐藤さん承認・送信済みフォルダで読み戻し確認）・期限なし・次:杉山様の返信を待ち、日時が決まったら Meet 付き予定と案内メールを用意

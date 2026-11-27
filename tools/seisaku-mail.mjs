@@ -16,8 +16,10 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { acquireSendDedupe, duplicateMessage, normalizeRecipients, SendDedupeError } from './lib/send-dedupe.mjs';
 import { applyBoothCc } from './lib/booth-sales-cc.mjs';
+import { applyInvoiceCc } from './lib/invoice-cc.mjs';
 
 const BOOTH_CC = 'satou@orgiast.jp';
+const INVOICE_CC = 'keiri2@orgiast.jp';
 
 const REPO = 'kimkon1011/aujust-sales-automation';
 const WRITE_WORKFLOW = 'seisaku-mail.yml';
@@ -73,8 +75,10 @@ export function createCli({ spawnSync = nativeSpawnSync, env = process.env, home
         try { body = readFileSync(opts['body-file'], 'utf8'); }
         catch { throw new UsageError('Cannot read --body-file as UTF-8'); }
         const boothCc = applyBoothCc({ to: opts.to, cc: opts.cc, subject: opts.subject, body, booth: opts.booth });
-        opts.cc = boothCc.cc.join(',');
+        const invoiceCc = applyInvoiceCc({ to: opts.to, cc: boothCc.cc, subject: opts.subject, body });
+        opts.cc = invoiceCc.cc.join(',');
         opts.boothCcAdded = boothCc.added;
+        opts.invoiceCcAdded = invoiceCc.added;
       }
       if (action === 'send' && !opts.yes) {
         output({ ok: false, error: 'send requires --yes', to: opts.to, cc: opts.cc || '', subject: opts.subject, preview: body.split(/\r?\n/).slice(0, 3).join('\n'), attachmentDriveIds: opts['attach-drive'] || '' });
@@ -156,7 +160,11 @@ export function createCli({ spawnSync = nativeSpawnSync, env = process.env, home
         dedupeGuard.recordSuccess({ channel: 'gmail', transport: 'seisaku-mail', messageId: result.messageId, threadId: result.threadId });
         dedupeGuard = undefined;
       }
-      output({ ...result, ...(opts.boothCcAdded ? { boothCcAdded: BOOTH_CC } : {}) });
+      output({
+        ...result,
+        ...(opts.boothCcAdded ? { boothCcAdded: BOOTH_CC } : {}),
+        ...(opts.invoiceCcAdded ? { invoiceCcAdded: INVOICE_CC } : {}),
+      });
       return result.ok === true ? 0 : 1;
     } catch (error) {
       dedupeGuard?.release();

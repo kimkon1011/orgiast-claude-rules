@@ -1,4 +1,5 @@
 # ASCII only for Windows PowerShell 5.1.
+# Timed (clock-time) reminders are registered separately by tools\register-schedule-push-task.ps1 (OrgiastSchedulePush).
 param([switch]$ValidateOnly, [switch]$DryRun, [switch]$Ensure, [Alias('Remove')][switch]$Unregister)
 $ErrorActionPreference = 'Stop'
 $node = (Get-Command node -CommandType Application -ErrorAction Stop | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source

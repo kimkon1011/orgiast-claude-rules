@@ -1,6 +1,7 @@
 import test from 'node:test'; import assert from 'node:assert/strict';
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 import { extractAbsoluteRules, placeAbsoluteBlock, mirrorAbsoluteRules, build, makeIndex, applyOnboardingDocuments, COMMON_INDEX_MAX_BYTES, CLAUDE_GROWTH_MAX_BYTES, ABSOLUTE_BEGIN, ABSOLUTE_END } from './onboarding-sync.mjs';
+import { ABSOLUTE_RULES_SYSTEM } from './lib/absolute-rules.mjs';
 const onboarding = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
 test('ONBOARDING の絶対ルール節を抜き出す（スピード最重視が先頭、バッファ20%が続く）', () => {
   const rules = extractAbsoluteRules(onboarding);
@@ -16,9 +17,20 @@ test('ONBOARDING の絶対ルール節を抜き出す（スピード最重視が
   assert.match(rules, /期限確認と訪問集約/);
   assert.match(rules, /間に合わない選択肢.*最初から出さない/);
   assert.match(rules, /訪問しなくて済む道を先に調べる/);
+  assert.match(rules, /同じ方法を繰り返さない。作業中のブラウザでGmailなどの受信トレイを直接開き/);
+  assert.match(rules, /コードをチャットに書かないことはそのまま守る。「取得できない」で止まらない/);
+  assert.match(rules, /空港・フライト案内の検証ルール/);
+  assert.match(rules, /フライトトラッカー（FlightAware など）のゲートは未確定として扱い/);
+  assert.match(rules, /コンコースをまたいで変わったら/);
+  assert.match(rules, /ユーザーが現地で見た情報を最優先する/);
+  assert.match(rules, /公式マップで裏を取り/);
   assert.match(rules, /所在確認と現地作業の割り振り/);
   assert.match(rules, /わからない人には割り振らない/);
   assert.match(rules, /店を離れる作業/);
+});
+test('ABSOLUTE_RULES_SYSTEM に認証コードと空港案内のルールを含む', () => {
+  assert.match(ABSOLUTE_RULES_SYSTEM, /受信トレイを直接開き/);
+  assert.match(ABSOLUTE_RULES_SYSTEM, /コンコースをまたいで/);
 });
 test('絶対ルールはファイル最上部に1つだけ置かれ、再実行で増えない', () => {
   const rules = extractAbsoluteRules(onboarding);

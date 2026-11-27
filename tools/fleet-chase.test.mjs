@@ -111,6 +111,22 @@ test('L0 resends at most once per policy interval, preserves exact exec markers,
   await chase(f.ledger, { ...f.ctx, now: NOW + POLICY.resend }); assert.equal(f.requests.filter(r => r.kind === 'mail-send').length, sendsBefore + 1);
   ingest(f.ledger, f.ctx); assert.equal(Object.values(f.ledger.items).filter(i => i.kind === 'outbound').length, 1);
 });
+test('resend makes rules repo cwd portable in payload and body, preserving unrelated paths', async t => {
+  const cases = [
+    ['legacy', 'C:\\Users\\uers\\Downloads\\CLAUDE.md配布\\', '@rules-repo'],
+    ['sender-repo', path.resolve('.').toUpperCase().replace(/\\/g, '/') + '/', '@rules-repo'],
+    ['unrelated', 'C:\\work\\other-repo', 'C:\\work\\other-repo']
+  ];
+  for (const [name, execCwd, expected] of cases) {
+    const f = fixture(t);
+    const body = `<!-- fleet-exec: claude -->\n<!-- fleet-exec-cwd: ${execCwd} -->\n元本文`;
+    f.add(mail(`mail-exec-cwd-${name}`, { body, exec: 'claude', execCwd, messageKind: 'prompt' }));
+    await chase(f.ledger, f.ctx);
+    const payload = f.requests[0].payload;
+    assert.equal(payload.execCwd, expected, `${name} payload`);
+    assert.equal(parseExecMarkers(payload.body).cwd, expected, `${name} body marker`);
+  }
+});
 test('L0 waits for 80% of TTL; dry-run never sends or persists even on invalid length', async t => {
   const f = fixture(t), item = f.add(mail('mail-fresh', { createdAt: iso(NOW), expiresAt: iso(NOW + POLICY.resend) }));
   await chase(f.ledger, f.ctx); assert.equal(f.requests.length, 0);

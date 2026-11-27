@@ -300,7 +300,7 @@ export function guessCompany(subject, snippet) {
   const corp = text.match(/([A-Za-z0-9０-９ァ-ヶー一-龥]{2,30})株式会社/);
   if (corp) return `${corp[1]}株式会社`;
   // ひらがなは「の」「と申します」等の助詞なので会社名から除外
-  const intro = text.match(/(?:^|[\s　\n「])株式会社[\s　]*([A-Za-z0-9０-９ァ-ヶー一-龥]{1,40})/);
+  const intro = text.match(/(?:^|[\s　\n「『（(：:])株式会社[\s　]*([A-Za-z0-9０-９ァ-ヶー一-龥]{1,40})/);
   if (intro) return `株式会社${intro[1]}`;
   return '';
 }

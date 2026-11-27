@@ -1,7 +1,7 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-28 00:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-28 01:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 76
+- 案件数: 77
 
 - 011・.stall-sweeper・停止・最終更新 11/26 04:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・20261126-クラフト坂口・金さん待ち・クラフト坂口様 宿題7件の成果物は完成。精算の計算方法・福岡請求書の作り直し・先払い承認・いなば様への送信時期の判断待ち・期限2026-12-03（坂口様への精算金額の返答）・次:金さんの判断に沿って、坂口様への返信・福岡請求書の作り直し・Discord送信を進める（送信は承認後のみ）
@@ -19,6 +19,7 @@
 - 011・deadlinewatch-fix-1127・金さん待ち・PR #2863 のマージ承認待ち（無人実行のため本番には反映していない）・期限なし・次:承認を受けたらマージし、nightly-repo を pull してから `schtasks /run /tn OrgiastDeadlineWatch` を実行し、「前回の結果」が 0 になったことを確認する
 - 011・deferral-meta-1127・停止・修正コードは worktree C:/Users/kimko/.claude/wt-deferral-meta（ブランチ fix/deferral-scan-meta-mention）に未コミットで存在（tools/permanent-fix-deferral-scan.mjs に stripDeferralMetaMentions 追加、tests/per・期限なし・次:(1) Codex のシェル実行が落ちる原因を codex exec の直接実行で実測し分類・修復（WSL 復旧 or ネイティブのシェル設定）。(2) PROMPT2.md（同フォルダ）を再委譲してテスト・コミット・RESULT.md。(3) 監督が Windows で node --test を再実行し、PR を作成して CI 合格後に着地。
 - 011・dispatch-1122-21・停止・最終更新 11/22 21:48、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・double-send-prevention-1127・停止・最終更新 11/28 00:16、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・eight-dai6-1125・停止・最終更新 11/26 14:09、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
 - 011・eight-venue-check-1125・完了・最終更新 11/25 20:27、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 011・eight-wiaas-reply-1125・完了・最終更新 11/25 18:04、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
@@ -26,8 +27,8 @@
 - 011・extwait-kim-400・停止・最終更新 11/26 14:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・fallback-chain-timeout-1127・完了・PR #2849 MERGED・landed・期限なし・次:11/28 の delegation-health.json に fallback_chain_timeout が出ないことを確認
 - 011・fallback-deepseek-timeout-1127・進行中・Codex に修正を委譲中（codex-do バックグラウンド）・期限なし・次:RESULT.md と PR を読み戻し、Windows で node --test を再実行、PR の MERGED を確認して /session-close
-- 011・followup-ledger・停止・最終更新 11/28 00:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 011・followup-ledger-1127・完了（仕組みは完成。個々の依頼は台帳で追いかけ中）・followup-ledger は PR #2900 でマージ済みで、011 でもタスクを登録・実行した。全PCへの登録指示（PR #2903）は自動マージ待ち。・期限2026-11-28 08:00・次:000 の結果を台帳の fleet-000-shaho-directive 行で追いかける（期限 11/28 8:00、過ぎたら kim-inbox）。社会保険書類の印刷・投函を、店を離れられる担当へ付け替える。
+- 011・followup-ledger・停止・最終更新 11/28 01:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・followup-ledger-1127・停止（次の朝まで待機）・000KimPC のビーコンが1日前で停止しており、指示が届いていない。社保の LINE 送信は 000 が復旧するまでできない。・期限11/30（投函期限）・次:11/28 朝に 000KimPC のビーコン状態を確認し、復旧していれば `SEND-000.md` の手順を実行する。ついでに各PCの followup-ledger 登録状況を再確認（fleet-status.mjs）。
 - 011・followup-ledger-1127-continue・停止・最終更新 11/27 21:50、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
 - 011・gitignore-scan-out・停止・最終更新 11/27 14:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・gridbeyond-reply-1126・金さん待ち・GridBeyond ミント様への失注お礼の返信は下書き済みで、送信承認待ち・期限なし（礼状のため早いほどよい。目安は 11/27 中）・次:金さんが「送ってよい」と言ったら gmail-draft.mjs --send で送り、送信済みを読み戻す（kim-inbox ki-20261126111434-7de5）
@@ -60,7 +61,7 @@
 - 011・session-1205・完了・handoff-audit 8件の再発検証が終わった。f61ffeb282843871（P4）は再発0件で、検証済み台帳に追加した（PR #2878 MERGED 2026-11-27T03:24:51Z）。残り7件は 11/26 12:00Z 以降も同じ型の文が出ているため、台帳には入れていない・期限なし・次:next-session.md の8番は完了したので次回は選ばない（無人だと next-session.md を書き換えられず、この STATUS.md に残している）。9〜15番の7件は ID ごとに検証し直しても消えない。直すべきなのは、W 型の「完了待ち」の文が出る仕組みのほう。worktree ~/.claude/wt-handoff-verify-
 - 011・session-cap-1126・金さん待ち・最終更新 11/26 19:36、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・souko-kyujin-1125・完了・最終更新 11/25 19:40、STATUS.mdなし、DONEあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
-- 011・staff-location-1127・停止・最終更新 11/28 00:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・staff-location-1127・停止・最終更新 11/28 01:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・staff-location-1127-followup・停止・最終更新 11/27 22:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・stale-drafts-1126・金さん待ち・放置下書き3件の照合が終わり、kim-inbox ask ki-20261126122734-8029 で送信・修正・削除の判断を待っている（next-session.md への追記は無人起動の権限で拒否された）・期限サポリス様は 2026-11-27 中に返信が望ましい（11/10 に先方の条件提示を受けてから16日経過）・次:返事を受けたら、サポリス様の下書きの候補日を差し替え、gmail-draft.mjs --send のチェックを通して送る／鹿沼CATV様は直すか佐藤さんに任せる／A-DINING様の下書き2件は削除の承認後に消す。決めてほしいこと: 3件それぞれ送る・直す・削除のどれにするか
 - 011・T10-vehicle-app・金さん待ち・雛形完成（014ローカル 8c79e55）。非公開GitHub作成と U-1/U-10 は kim-inbox ki-20261126183436-1746 の返事待ち・期限なし・次:返事が来たら gh repo create orgiast/vehicle-management-app --private→push→読み戻し、OAuth と Sheets 実接続を Codex（lane: codex）
@@ -68,7 +69,7 @@
 - 011・tasks・停止・最終更新 11/24 09:49、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・状態・完了・倉庫アプリ(GAS)のコマンドキューのトリガーが停止しており、復旧には倉庫アプリを一度開く操作が必要・期限2026-11-27 17:00（初回自動送信の予定時刻）・次:倉庫アプリが開かれたら、投入済みの `cmd_dailysend1126.json` と `cmd_dailytrigger1126.json` が自動実行される。結果ファイル `result_dailysend1126.txt` / `result_dailytrigger1126.txt` を読んで送信成功とトリガー設置を確認する
 - 011・wiaas-pitch-1212・停止・最終更新 11/25 17:09、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 011・wiki-kb-pilot・停止・最終更新 11/28 00:03、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・wiki-kb-pilot・完了・自動セッション終了・期限なし・次:なし（PR #2935 マージ検証は次回セッションに委ねる）
 - 011・x0097-prefix-cache・完了・PR #2892 MERGED 2026-11-27T11:31:47Z（send-context-check の送信予定日時をプロンプト末尾へ）。Windows node --test 39/39 pass。実測は OpenRouter DeepSeek flash で cached_tokens 0/4、ネイティブ DeepSeek は 402 残高不足・期限なし・次:DeepSeek 直接キーの残高を入金したら同じ手順で prompt_cache_hit_tokens を再測（kim 判断）
 - 011・x0099-longquery-1127・完了・GSC 実データ（12,766行）で X-0099 を検証。上位20の長文クエリはすべて SDGs 記事で、ブース受注に直結しないため「今は直さない」と判断（RESULT.md 末尾の「監督の照合」）・期限なし・次:なし（rebooth.co.jp の長文クエリ表示が月100を超えたら再評価）
 - 011・x0100-consensus-proof・完了・競合6本の見出し＋論点マトリクス、自社PROOF（金額・小間・写真・削減率）を実取得し RESULT.md / urls.txt を作成・期限2026-12-04・次:RESULT の「今すぐ」案1を x0101 DRAFT 1563即答へ反映検討。サイト反映は kim 承認待ち（期限 12/04）

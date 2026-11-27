@@ -39,12 +39,33 @@ export function cleanupState(state, now) {
   });
 }
 
+const DODA_APPLICANT_RE = /応募者|応募がありました|応募通知|候補者|推薦者|履歴書|職務経歴/;
+const DODA_SALES_AGENCY_RE = /@(?:prdaily\.jp|p-hope\.jp)\b|client@doda\.jp/i;
+const DODA_CAMPAIGN_RE = /キャンペーン|掲載プラン|掲載のご案内|12週間|3ヶ月掲載|特別価格|御申込限定|通常実施価格|B企画|有料プラン/;
+
+/** dodaの営業・キャンペーン案内は対応不要。応募者のメールは対象外（通常どおり振り分ける）。 */
+export function isDodaCampaignNoise(m) {
+  const from = String(m.from || '');
+  const subject = String(m.subject || '');
+  const body = String(m.body || m.snippet || m.text || '');
+  const text = `${subject}\n${body}`;
+  if (DODA_APPLICANT_RE.test(text)) return false;
+  const mentionsDoda = /doda/i.test(from + '\n' + text);
+  const salesAgency = DODA_SALES_AGENCY_RE.test(from);
+  const campaign = DODA_CAMPAIGN_RE.test(text);
+  if (salesAgency && (mentionsDoda || campaign)) return true;
+  if (mentionsDoda && campaign) return true;
+  if (/@doda\.jp/i.test(from) && campaign) return true;
+  return false;
+}
+
 export function isGmailNoise(m, config) {
   const from = String(m.from || '').toLowerCase();
   const subject = String(m.subject || '');
   const labels = (m.labels || []).map(x => String(x).toUpperCase());
   const selfSenders = ['seisaku-team@orgiast.jp', 'kim@orgiast.jp'];
   if (selfSenders.some(s => from.includes(s))) return false;
+  if (isDodaCampaignNoise(m)) return true;
   if (!!m.listUnsubscribe) return true;
   if (/(^|[<@._+-])(no-?reply|noreply|do-?not-?reply)/i.test(from)) return true;
   if (labels.some(x => x === 'CATEGORY_PROMOTIONS' || x === 'CATEGORY_SOCIAL')) return true;

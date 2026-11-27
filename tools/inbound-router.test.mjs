@@ -221,6 +221,34 @@ test('設定した自動メールと件名をnoise扱いし自社Fromは除外�
   assert.equal(isGmailNoise({ from: 'seisaku-team@orgiast.jp', subject: 'Delivery Status Notification' }, noiseConfig), false);
 });
 
+test('dodaの営業・キャンペーンメールはnoise、応募者メールはnoiseにしない', () => {
+  const cfg = {};
+  assert.equal(isGmailNoise({
+    from: '"株式会社ピーアール・デイリー石田" <haruna.ishida@prdaily.jp>',
+    subject: '★★★3ヶ月掲載28万円プラン★★★ 【11/27(金）御申込限定！！】',
+    body: '業界屈指の知名度を誇る「doda」に 12週間28万円',
+    labels: ['CATEGORY_FORUMS'],
+  }, cfg), true);
+  assert.equal(isGmailNoise({
+    from: '"株式会社HOPE　荒川" <honoka.arakawa@p-hope.jp>',
+    subject: '1ヶ月換算「約6万円～」で大手求人サイトに1年間掲載する方法：HOPE荒川',
+    body: '『doda★1年間掲載プラン』',
+    labels: ['CATEGORY_FORUMS'],
+  }, cfg), true);
+  assert.equal(isGmailNoise({
+    from: '"doda法人サポートセンター" <client@doda.jp>',
+    subject: '「なぜ通らない？」社内稟議でやりがちな6つのNGとは',
+    body: 'パーソルキャリア株式会社 doda法人サポートセンターでございます。',
+    labels: [],
+  }, cfg), true);
+  assert.equal(isGmailNoise({
+    from: '"doda" <notify@doda.jp>',
+    subject: '応募者からの応募通知（履歴書）',
+    body: 'doda経由で応募者の履歴書が届きました。',
+    labels: [],
+  }, cfg), false);
+});
+
 test('件名・チャット名・送信者だけで学会をboothより優先し本文はmatchBody時だけ見る', () => {
   const routingConfig = { routes: { gakkai: {}, booth: {}, learning: {} }, rules: [
     { route: 'gakkai', includes: ['学術集会'] }, { route: 'learning', includes: ['石井塾'], matchBody: true }, { route: 'booth', includes: ['展示'] }

@@ -1,10 +1,11 @@
-# session-status  PC=019  host=019  updated 2026-11-27 21:10 JST
+# session-status  PC=019  host=019  updated 2026-11-27 22:10 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "email": "nishi@orgiast.jp", "orgId":
-- 案件数: 17
+- 案件数: 18
 
+- 019・cafe-overdue-osaka・金さん待ち・Vercel チームがフェアユース上限超過でブロック（本番 402・デプロイ不可）。日報 GAS は所有者 nishi@ の資格情報が必要（clasp が seisaku のみ）・期限なし（ただし本番停止中のため最優先）・次:金さんが Vercel の有料化（Pro）を承認したら、019 で vercel deploy --prod --yes → 本番 e2e → /api/requests/line-group でグループ名確認。nishi の clasp 再ログイン後に scripts/gas/deploy.mjs で GAS 更新
 - 019・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 019・chat-drafts・停止・最終更新 11/27 21:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 019・chat-drafts・停止・最終更新 11/27 21:32、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 019・STATUS・完了・close-session.mjs でセッション 076114b6 を閉鎖登録。終了コード 0、[next-session] なし・期限なし・次:なし
 - 019・coel-shiono-1125・完了・最終更新 11/25 19:30、STATUS.mdなし、DONEあり、run.logあり・期限なし・次:なし
 - 019・dispatch-1122-21・停止・最終更新 11/22 21:30、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

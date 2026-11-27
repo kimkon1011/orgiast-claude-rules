@@ -17,6 +17,7 @@ import { catalog } from './provider-catalog.mjs';
 import { applyRealLaneHealth, laneErrorText, probeViaChain, billingFailure, billingWithQuotaHint, quotaFailure, retiredModel } from './lib/lane-real-health.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { isEnrollToken, validKeyservePcId } from './keyserve-auth.mjs';
+import { computeSubstituted, loadLaneSubstitutes } from './lib/lane-substitutes.mjs';
 
 export const PROVIDERS = ['codex', 'gemini', 'deepseek', 'glm', 'groq', 'openrouter'];
 // 任意レーン: キーがあるPCだけ実測する（2026-10-29 mistral 既定モデル 403 が未監視で放置された）。
@@ -90,12 +91,11 @@ export function applyDisabledLanes(health, home = laneHome(), now = Date.now()) 
 function orders(health, home = laneHome()) {
   health.implementOrder = ['codex', 'deepseek', 'glm', 'gemini-cli', 'openrouter'].filter(p => health.lanes[p]?.alive);
   // 旧 payment_required の扱いは維持し、billing は専用の日次通知と代替ルートに回す。
+  // OpenRouter 代替の正本は config/lane-openrouter-substitutes.json（ハードコードしない）。
   const billing = readJson(path.join(repo, 'tools/provider-billing.json'));
   const needsUser = ([p, s]) => isLane(p) && /^(?:dead:)?(?:payment_required|oauth_consent|account_creation|physical_operation)$/.test(s.reason)
     && !(s.reason.includes('payment') && billing[p]?.autoTopUp === false);
-health.substituted = Object.entries(health.lanes).filter(([p, s]) => isLane(p) && (s.reason === 'billing' || s.reason?.includes('payment') && billing[p]?.autoTopUp === false && health.lanes.openrouter?.alive
-    || p === 'gemini' && s.reason === 'missing_key' && health.lanes.openrouter?.alive))
-    .map(([provider]) => ({ provider, via: 'openrouter' }));
+  health.substituted = computeSubstituted(health.lanes, { billing, ledger: loadLaneSubstitutes(), isLane });
   for (const { provider, via } of health.substituted) health.lanes[provider].via = via;
   // 安い順。Gemini は恒久停止せず同列の受け皿。失敗・回数制限時だけ一時退避し、回復後に戻す。Claude 本体はこの順に含めない。
   health.askOrder = ['groq', 'deepseek', 'openrouter', 'gemini'].filter(p => {

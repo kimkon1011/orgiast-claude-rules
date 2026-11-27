@@ -1,0 +1,28 @@
+{
+  "_comment": "直キー停止時に OpenRouter 経由で代替稼働とみなすレーン宣言。lane-doctor の substituted / SessionStart「(OpenRouter経由)」/ fleet silent の正本。通知抑止（PR#2716）とは別レイヤ。",
+  "via": "openrouter",
+  "models": {
+    "gemini": "google/gemini-3.6-flash",
+    "grok": "x-ai/grok-4.6",
+    "deepseek": "deepseek/deepseek-v4-flash",
+    "kimi": "moonshotai/kimi-k3",
+    "mistral": "mistralai/mistral-medium-3-5"
+  },
+  "rules": [
+    {
+      "providers": ["*"],
+      "match": { "reasonEquals": "billing" },
+      "requireViaAlive": false
+    },
+    {
+      "providers": ["*"],
+      "match": { "reasonIncludes": "payment", "autoTopUp": false },
+      "requireViaAlive": true
+    },
+    {
+      "providers": ["gemini"],
+      "match": { "reasonEquals": "missing_key" },
+      "requireViaAlive": true
+    }
+  ]
+}

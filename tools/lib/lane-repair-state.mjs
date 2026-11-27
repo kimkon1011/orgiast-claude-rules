@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { quotaFailure } from './lane-real-health.mjs';
+import { substituteActive } from './lane-substitutes.mjs';
 
 export const REPAIR_TTL = 6 * 3600_000;
 export function repairable(state) {
@@ -21,7 +22,9 @@ export function repairRows(home) {
 }
 export function pendingRepairs(health, home, now = Date.now()) {
   const rows = repairRows(home);
+  // OpenRouter 等の代替が生存しているレーンは lane-repair-first-gate のブロック対象にしない。
   return Object.entries(health?.lanes || {}).filter(([lane, state]) => repairable(state)
+    && !substituteActive(state, health)
     && !rows.some(r => r.lane === lane && r.faultId === faultId(lane, state) && r.tried?.trim()
       && ['fixed', 'unfixable'].includes(r.result) && Date.parse(r.ts) <= now && Date.parse(r.ts) > now - REPAIR_TTL))
     .map(([lane, state]) => ({ lane, ...state }));
@@ -30,7 +33,8 @@ export function repairContext(health, home, now) {
   const pending = pendingRepairs(health, home, now);
   const quota = Object.entries(health.lanes).filter(([, s]) => s.reason === 'quota_wait').map(([p]) => p);
   const alternatives = Object.entries(health.lanes).filter(([p, s]) => p !== 'gemini-cli' && s.alive).map(([p]) => p);
+  // 代替稼働中（via 先が生存）の billing は「要修復」警告に数えない。
   return [pending.length ? `本セッションの最初の作業はレーン修復: ${pending.map(s => `${s.lane}(${s.reason})`).join(', ')}。node tools/lane-doctor.mjs --probe。Codex の probe 失敗は直接 wsl codex exec の終了コードでも切り分ける。試行後 node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段>" --result fixed|unfixable（6時間有効）。` : '',
-    ...Object.entries(health.lanes).filter(([, s]) => s.reason === 'billing').map(([p]) => `${p}: 残高不足。代替の安いレーン（例: OpenRouter 経由）へ回す`),
+    ...Object.entries(health.lanes).filter(([, s]) => s.reason === 'billing' && !substituteActive(s, health)).map(([p]) => `${p}: 残高不足。代替の安いレーン（例: OpenRouter 経由）へ回す`),
     quota.length ? `quota_wait: ${quota.join(', ')}。代替の安いレーン: ${alternatives.join(', ') || 'なし（lane-doctor --probe で確認）'}` : ''].filter(Boolean).join(' / ');
 }

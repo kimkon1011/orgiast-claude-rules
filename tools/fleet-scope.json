@@ -1414,8 +1414,6 @@
     {"path": "tools/register-tldv-process-improve-task.ps1", "scope": "kim-only", "reason": "kim-PC（作業用011）だけで OrgiastTldvProcessImprove タスクを登録する"},
     {"path": "tools/tldv-process-improve.test.mjs", "scope": "kim-only", "reason": "tl;dv 改善ループのテスト。CIで実行するがfleet配布はkim-PCだけ"},
     {"path": "tools/register-ai-daikodo-line-watch.ps1", "scope": "kim-only", "step": null, "reason": "AI代行堂LINE監視のschtasks登録。tanom-admin.env と run-hidden.vbs に依存し、各PCの初期セットアップ時に1回実行"},
-    {"path": "tools/register-cursor-usage-pace-task.ps1", "scope": "kim-only", "step": null, "reason": "000 で毎日 19:30 の Cursor 使用量ペース点検を登録する。推奨ホストは 000。"},
-    {"path": "tools/register-cursor-agent-run-counts-task.ps1", "scope": "kim-only", "step": null, "reason": "各PCの毎朝 07:10 に cursor-agent 実行件数を数えるタスク。今回は手動で全オンラインPCに登録する。"},
     {"path": "tools/register-roudou-evidence-task.ps1", "scope": "kim-only", "step": null, "reason": "PC000で労働審判の証拠画像を指定日時にBeeperから回収する一回限りのタスク登録"}
   ]
 }

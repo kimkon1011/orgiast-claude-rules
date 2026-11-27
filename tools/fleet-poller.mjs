@@ -76,20 +76,6 @@ function taskOutput(task) {
       out = run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(home, '.claude', 'hooks', 'onboarding-sync.ps1'), '-Force']);
       syncOk = true;
     }
-    if (syncOk && process.platform === 'win32') {
-      const registerPs1 = path.join(repo, 'tools', 'register-cursor-agent-run-counts-task.ps1');
-      if (fs.existsSync(registerPs1)) {
-        const registerOut = run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', registerPs1]);
-        if (registerOut) out = out ? `${out}\n${registerOut}` : registerOut;
-        const countsMjs = path.join(repo, 'tools', 'cursor-agent-run-counts.mjs');
-        if (fs.existsSync(countsMjs)) {
-          try {
-            const countsOut = run(process.execPath, [countsMjs]);
-            if (countsOut) out = out ? `${out}\n${countsOut}` : countsOut;
-          } catch {}
-        }
-      }
-    }
     return out;
   }
   if (task === 'cost-report') return run('node', [path.join(repo, 'tools', 'claude-cost-reporter.mjs')]);
@@ -102,10 +88,6 @@ function taskOutput(task) {
   if (task === 'register-fleet-agent') {
     if (process.platform !== 'win32') return '';
     return run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(repo, 'tools', 'register-fleet-agent.ps1')]);
-  }
-  if (task === 'register-cursor-agent-run-counts') {
-    if (process.platform !== 'win32') return '';
-    return run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(repo, 'tools', 'register-cursor-agent-run-counts-task.ps1')]);
   }
   // CPU電力上限を絞って発熱と電気代を同時に下げる。
   // 画面OFF(VIDEOIDLE)には触らない: 物理画面をキャプチャするリモート操作ソフトが黒画面になる事故を避けるため。
@@ -157,7 +139,7 @@ try {
     const matches = targets === 'all' || targets === '' || label.includes(targets);
     if (!done.includes(runId) && matches) {
       fs.appendFileSync(processedFile, `${runId}\n`);
-      const allowed = new Set(['verify-setup', 'rules-resync', 'cost-report', 'thermal-guard', 'power-save', 'register-fleet-agent', 'register-cursor-agent-run-counts']);
+      const allowed = new Set(['verify-setup', 'rules-resync', 'cost-report', 'thermal-guard', 'power-save', 'register-fleet-agent']);
       if (allowed.has(task)) {
         const result = taskOutput(task);
         const summary = result.split(/\r?\n/).filter(line => /結果:|OK |NG |完了|エラー|error/i.test(line)).slice(-3).join(' / ');

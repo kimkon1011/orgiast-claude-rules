@@ -1670,17 +1670,13 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
   - **ドットは動ける**。リマインダーや定期タスクを組み、時刻や対応するイベントを指定できる。Scheduled で管理する。 [Getting started with your dot](https://help.openai.com/en/articles/20001530-getting-started-with-your-dot)、[Tasks and memory](https://learn.chatgpt.com/docs/dots/tasks-and-memory)。
   - 定期タスクが未設定なら、グロボの夜間ルーティンが台帳に積んだ作業を代わりに進める。カスタム指示への書き込みと定期タスク作成は GB-35。
 
-**2.8.7 Cursor Ultra を既定の担当にする（2026-11-21 kim指示）**
+**2.8.7 Cursor への委譲を停止する（2026-11-25 金さん指示）**
 
-Cursor Ultra（定額 $200/月）は「上限のときの代わり」ではなく、次の作業の既定の担当とする。品質を落とす格下げはしない。
+Cursor の使用量がグロボの追加料金に加算されるため、Cursor Agent と Cursor Cloud Agent は使わない。実装は Codex、Codex が使えないときは `lane-health.json` の次の安いレーン、または各PCの Claude Codeへ回す。
 
-
-
-- **Cursor が既定**: 無人の定期ジョブ（見回りの集計、期日の回収、くらしのマーケットの見回りなど）、調べ物・集計・整形・要約・下書きのたたき台、コード修正の PR。`codex-do` は implement / verify / investigate / summarize / classify で、ログイン済みの cursor-agent を Codex や llm-ask より先に起動する。
+- **Cursor は既定停止**: `codex-do`、定期ジョブ、修復処理、セットアップは Cursor を起動・導入・ログイン対象にしない。旧互換経路は `CODEX_DO_ENABLE_CURSOR_AGENT=1` を明示した場合だけ有効になる。
 - **Claude Code に残すもの**: 金さん向けの最終判断と、社外文面の最終確認だけ。指示にその旨を書くか、`lane: claude` / `[CLAUDE-FINAL]` を付ける。
-- **ペース点検（毎日 19:30、推奨は 000）**: `tools/cursor-usage-pace.mjs` が Cursor Models と Other Models の使用量を測る。測り方は Cursor の公式 API（Team API キーがあるとき）または明示値。画面の自動操作はしない。理想ペースは周期（2026-11-18〜2026-12-18）の「経過÷周期」に、期末目標 90〜95% を掛けた値。遅れているときは待ち作業（夜間キュー、脆弱性点検、コード改善 PR、調べ物）を Cursor に追加で回す。ペースを超えたら追加回しをやめる。従量課金に入りそうなら止めて通知する。
-- **書き出し（グロボの毎日 20 時の使用量点検が読む）**: 000 では `C:/Users/uers/.claude` 配下の `reports` にある `cursor-usage-pace.txt`（最新1行）。他 PC では `%USERPROFILE%/.claude` 配下の同じファイル名。履歴は同じ場所の `cursor-usage-pace.jsonl`。状態は `~/.claude/cursor-usage-pace-state.json`。
-- **毎朝の件数（全 PC、07:10）**: `tools/cursor-agent-run-counts.mjs` が各 PC の cursor-agent 実行件数を数え、`~/.claude 配下 reports の cursor-agent-runs.txt` に1行書く。
+- **既存の利用量・実行件数スクリプト**: ファイルは履歴確認用に残すが、セットアップやフリート同期から定期登録しない。
 
 ### 2.9 Drive・共通知識・社内アプリ・イベント（§2.9〜2.12）
 

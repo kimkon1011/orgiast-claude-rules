@@ -10,12 +10,65 @@ import { isEntry } from './is-entry.mjs';
 import { getDriveToken } from './lib/drive-auth.mjs';
 import { downloadFileContent, findOrCreateFolder, listFiles, uploadFileContent } from './lib/drive-files.mjs';
 import { FOLDERS } from './hub-push.mjs';
-import { loadPaceConfig, defaultConfigPath, defaultQueuePath, paceLedgerPath } from './claude-pace.mjs';
+import { decidePace, loadPaceConfig, defaultConfigPath, defaultQueuePath, paceLedgerPath } from './claude-pace.mjs';
 import { summarizeQueue } from './claude-pace-queue.mjs';
+import { HUB_ID } from './portable-knowhow-push.mjs';
+import { checkSchema } from './lib/json-schema-check.mjs';
 import { readCodexWindows } from './lib/quota-windows.mjs';
 
 export const DAY_TARGET_PCT = 12.9;
 export const REPORT_DIR_NAME = 'claude-pace-reports';
+
+export const STATUS_JA = { behind: '遅れ', onpace: 'ちょうど', ahead: '進みすぎ', 'final-push': '残り10%モード', stopped: '停止（97%）', unmeasurable: '計測不能' };
+const REPO_ROOT = path.resolve(import.meta.dirname, '..');
+const finite = (n) => typeof n === 'number' && Number.isFinite(n) ? n : null;
+
+/** UTC と JST は必ず同じ瞬間から生成する。 */
+export function datePair(value) {
+  const ms = value == null ? NaN : typeof value === 'number' ? value : Date.parse(value);
+  if (!Number.isFinite(ms)) return { jst: null, iso: null };
+  return { jst: new Date(ms + 9 * 3600_000).toISOString().replace(/\.000Z$/, 'Z').replace(/Z$/, '+09:00'), iso: new Date(ms).toISOString() };
+}
+
+/** 当日分だけ読む。破損・日付違いも未受領として理由を残す。 */
+export function readGrokbotInput(dateJst, repoRoot = REPO_ROOT) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateJst)) throw new Error('invalid report date');
+  const relative = `reports/claude-pace/grokbot/${dateJst}.json`;
+  try {
+    const input = JSON.parse(fs.readFileSync(path.join(repoRoot, relative), 'utf8').replace(/^\uFEFF/, ''));
+    const schema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'docs/claude-pace-grokbot-schema.json'), 'utf8'));
+    const errors = checkSchema(schema, input);
+    if (errors.length || input.date !== dateJst || !Number.isFinite(Date.parse(input.weeklyResetsAt)) ||
+        (input.onDemandResetsAt != null && !Number.isFinite(Date.parse(input.onDemandResetsAt)))) throw new Error('入力スキーマまたは日付が不正');
+    return { ...input, received: true };
+  } catch (error) {
+    return { received: false, note: `グロボ分 未受領（${relative} ${error.code === 'ENOENT' ? 'が無い' : '読取または入力検証に失敗'}）` };
+  }
+}
+
+/** グロボにも既存の週枠判定をそのまま適用する。 */
+export function judgeGrokbot(input, nowMs) {
+  const decision = decidePace({ nowMs, usage: { available: true, fiveHour: {}, sevenDay: {
+    utilization: input.weeklyUsedPercent, resetsAt: input.weeklyResetsAt,
+  } } });
+  return { elapsedRatio: decision.elapsedRatio, targetLinePct: decision.target, deltaPt: decision.deltaPt,
+    effectiveTolerancePt: decision.effectiveTolerance, status: decision.status,
+    statusJa: STATUS_JA[decision.status], projectedLandingPct: decision.projectedLanding };
+}
+
+export function readRegistrationStatus(repoRoot = REPO_ROOT) {
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(repoRoot, 'reports/claude-pace/registration.json'), 'utf8').replace(/^\uFEFF/, ''));
+    if (!data.hosts || typeof data.hosts !== 'object' || Array.isArray(data.hosts)) throw new Error('hosts が不正');
+    return data;
+  } catch (error) { return { hosts: {}, note: `未確認（${error.code === 'ENOENT' ? 'registration.json が無い' : 'registration.json 読取失敗'}）` }; }
+}
+
+/** 通知でも省略しない参照先。Drive 未作成時は共有ハブを案内する。 */
+export function reportLocations(date, driveUrl = `https://drive.google.com/drive/folders/${HUB_ID}`) {
+  const base = 'https://github.com/kimkon1011/orgiast-claude-rules/blob/main/reports/claude-pace';
+  return `## 置き場所\n- JSON: ${base}/${date}.json\n- md: ${base}/${date}.md\n- latest.json: ${base}/latest.json\n- raw（ふわ用）: https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/reports/claude-pace/latest.json\n- Drive（AI共通ノウハウ / claude-pace）: ${driveUrl}\n`;
+}
 
 export function reportDir(home = process.env.ORGIAST_HOME || os.homedir()) {
   return path.join(home, '.claude', REPORT_DIR_NAME);
@@ -68,10 +121,10 @@ function ymdJst(nowMs) {
 export function aggregateAccountSnapshots(rows, nowMs = Date.now()) {
   const byAccount = new Map();
   for (const row of rows || []) {
-    if (!row || row.measurable === false) continue;
+    if (!row || row.measurable === false || row.missing || row.status === 'unmeasurable' || !Number.isFinite(row.sevenDayPct)) continue;
     const account = row.account || 'unknown';
     const ts = Date.parse(row.ts);
-    if (!Number.isFinite(ts)) continue;
+    if (!Number.isFinite(ts) || ts > nowMs) continue;
     const cur = byAccount.get(account);
     if (!cur || ts > cur.tsMs) {
       byAccount.set(account, { ...row, tsMs: ts });
@@ -83,22 +136,24 @@ export function aggregateAccountSnapshots(rows, nowMs = Date.now()) {
     let prev = null;
     let bestDiff = Infinity;
     for (const row of rows || []) {
-      if ((row.account || 'unknown') !== account) continue;
+      if ((row.account || 'unknown') !== account || row.measurable === false || row.missing || row.status === 'unmeasurable') continue;
       const ts = Date.parse(row.ts);
-      if (!Number.isFinite(ts)) continue;
+      if (!Number.isFinite(ts) || ts > nowMs) continue;
       const diff = Math.abs(ts - dayAgo);
-      if (diff < bestDiff) {
+      if (ts < latest.tsMs && diff <= 6 * 3600_000 && diff < bestDiff) {
         bestDiff = diff;
         prev = row;
       }
     }
     const seven = latest.sevenDayPct;
-    const prevSeven = prev && bestDiff <= 36 * 3600_000 ? prev.sevenDayPct : null;
-    const dayDelta = Number.isFinite(seven) && Number.isFinite(prevSeven) ? seven - prevSeven : null;
+    const prevSeven = prev?.sevenDayPct ?? null;
+    const sameWindow = !prev?.sevenDayResetsAt || !latest.sevenDayResetsAt || Date.parse(prev.sevenDayResetsAt) === Date.parse(latest.sevenDayResetsAt);
+    const dayDelta = sameWindow && Number.isFinite(seven) && Number.isFinite(prevSeven) && seven >= prevSeven ? seven - prevSeven : null;
     const projected = latest.projectedLanding != null
       ? Number(latest.projectedLanding)
       : null;
     out.push({
+      ...latest,
       account,
       host: latest.host,
       hosts: [...new Set((rows || []).filter((r) => (r.account || 'unknown') === account).map((r) => r.host).filter(Boolean))],
@@ -130,6 +185,9 @@ export function aggregateAccountSnapshots(rows, nowMs = Date.now()) {
  *   now?: number,
  *   missingHosts?: {host:string, reason:string}[],
  *   actionsTaken?: string[],
+ *   grokbot?: object,
+ *   registration?: object,
+ *   generatedByHost?: string,
  * }} input
  * @returns {{ markdown: string, json: object }}
  */
@@ -140,12 +198,16 @@ export function buildReport({
   now = Date.now(),
   missingHosts = [],
   actionsTaken = null,
+  grokbot = { received: false, note: 'グロボ分 未受領（当日入力なし）' },
+  registration = { hosts: {} },
+  generatedByHost = process.env.ORGIAST_HOSTNAME || os.hostname(),
 } = {}) {
   const nowMs = typeof now === 'number' ? now : Date.parse(String(now)) || Date.now();
+  const date = datePair(nowMs).jst.slice(0, 10);
   const accounts = aggregateAccountSnapshots(
-    snapshots.filter((s) => s && s.measurable !== false && s.missing !== true),
+    snapshots,
     nowMs,
-  );
+  ).filter((a) => datePair(a.ts).jst?.startsWith(date));
   const missing = [
     ...missingHosts,
     ...snapshots.filter((s) => s?.missing || s?.measurable === false).map((s) => ({
@@ -154,14 +216,30 @@ export function buildReport({
     })),
   ];
 
+  const hostAccounts = new Map(Object.entries(config.accounts || {}).flatMap(([account, item]) => (item.pcs || []).map((host) => [String(host), account])));
+  for (const s of snapshots) if (s?.host && !hostAccounts.has(String(s.host))) hostAccounts.set(String(s.host), s.account || null);
+  for (const m of missing) if (!hostAccounts.has(String(m.host))) hostAccounts.set(String(m.host), null);
+  for (const host of Object.keys(registration.hosts || {})) if (!hostAccounts.has(host)) hostAccounts.set(host, null);
+  const pcs = [...hostAccounts].map(([host, account]) => {
+    const latest = snapshots.filter((s) => String(s?.host) === host && Number.isFinite(Date.parse(s.ts)) && Date.parse(s.ts) <= nowMs)
+      .sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts))[0];
+    const stamp = datePair(latest?.ts);
+    const measured = !!(stamp.jst?.startsWith(date) && latest.measurable !== false && !latest.missing && latest.status !== 'unmeasurable' && finite(latest.sevenDayPct) !== null);
+    const reason = measured ? null : missing.find((m) => m.host === host)?.reason || latest?.missingReason || latest?.reason || '台帳に当日のスナップショットが無い';
+    const entry = registration.hosts?.[host];
+    return { host, account, measured, reason, lastSnapshotAtJst: stamp.jst, lastSnapshotAtIso: stamp.iso,
+      registered: typeof entry?.registered === 'boolean' ? entry.registered : null };
+  });
+  const unmeasured = pcs.filter((p) => !p.measured).map(({ host, reason }) => ({ host, reason }));
+
   const autoActions = [];
   for (const a of accounts) {
-    if (a.status === 'ahead' || a.hold) {
-      autoActions.push(`${a.account}（${a.host}）: 進みすぎ判定 → hold（理由: ${(a.reasons || []).join(',') || a.status}）`);
-    } else if (a.status === 'behind' || a.launch) {
-      autoActions.push(`${a.account}（${a.host}）: 遅れ判定 → 作業起動（理由: ${(a.reasons || []).join(',') || a.status}）`);
-    } else if (a.status === 'stopped') {
-      autoActions.push(`${a.account}（${a.host}）: ハードストップ → 全停止`);
+    if (a.status === 'stopped') {
+      autoActions.push(`${a.account}（${a.host}）: 台帳にハードストップを記録`);
+    } else if (a.hold) {
+      autoActions.push(`${a.account}（${a.host}）: 台帳に hold を記録（理由: ${(a.reasons || []).join(',') || a.status}）`);
+    } else if (a.launch) {
+      autoActions.push(`${a.account}（${a.host}）: 台帳に作業起動判定を記録（理由: ${(a.reasons || []).join(',') || a.status}）`);
     } else if (a.status === 'onpace') {
       autoActions.push(`${a.account}（${a.host}）: 予定どおり（起動なし）`);
     } else if (a.status === 'final-push') {
@@ -249,24 +327,52 @@ export function buildReport({
   lines.push('');
 
   lines.push('## 計測できなかったPC');
-  if (missing.length) {
-    for (const m of missing) lines.push(`- ${m.host}: ${m.reason}`);
+  if (unmeasured.length) {
+    for (const m of unmeasured) lines.push(`- ${m.host}: ${m.reason}`);
   } else {
     lines.push('- （なし）');
   }
   lines.push('');
 
-  const json = {
-    generatedAt: new Date(nowMs).toISOString(),
-    dayTargetPct: DAY_TARGET_PCT,
-    targetLanding,
-    accounts,
-    actions,
-    nextTasks: pending.map((t) => ({ id: t.id, host: t.host, priority: t.priority, title: t.title })),
-    newOfferingsStarted: startedOfferings,
-    missingHosts: missing,
-    queueSummary: summary,
-  };
+  lines.push('## アカウント一覧', '| アカウント / PC | 5時間枠 | 7日枠 | リセット JST（5h / 7d） | 前日の消費 pt | 目標線との差 pt | 判定 | 予測着地 |', '|---|---:|---:|---|---:|---:|---|---:|');
+  const accountRows = accounts.map((a) => {
+    const five = datePair(a.fiveHourResetsAt), seven = datePair(a.sevenDayResetsAt);
+    const decision = decidePace({ nowMs: Date.parse(a.ts), usage: { available: true, fiveHour: {}, sevenDay: { utilization: a.sevenDayPct, resetsAt: a.sevenDayResetsAt } }, targetLanding });
+    const status = STATUS_JA[a.status] ? a.status : 'unmeasurable';
+    const hosts = [...new Set([...(config.accounts?.[a.account]?.pcs || []), ...a.hosts].map(String))];
+    lines.push(`| ${a.account} / ${hosts.join(',')} | ${fmtPct(a.fiveHourPct)} | ${fmtPct(a.sevenDayPct)} | ${five.jst || '—'} / ${seven.jst || '—'} | ${a.dayDelta == null ? '—' : a.dayDelta.toFixed(1)} | ${a.deltaPt == null ? '—' : a.deltaPt.toFixed(1)} | ${STATUS_JA[status]} | ${fmtPct(a.projectedLanding)} |`);
+    return { account: a.account, pcs: hosts,
+      fiveHour: { usedPercent: finite(a.fiveHourPct), resetsAtJst: five.jst, resetsAtIso: five.iso },
+      sevenDay: { usedPercent: finite(a.sevenDayPct), resetsAtJst: seven.jst, resetsAtIso: seven.iso },
+      elapsedRatio: finite(a.elapsedRatio ?? decision.elapsedRatio), previousDayConsumedPt: a.dayDelta,
+      dailyTargetDeltaPt: a.dayDeltaVsTarget, targetLinePct: finite(a.target), deltaPt: finite(a.deltaPt),
+      effectiveTolerancePt: finite(a.effectiveTolerance ?? decision.effectiveTolerance), status, statusJa: STATUS_JA[status],
+      projectedLandingPct: finite(a.projectedLanding), unusedForecastPt: finite(a.unusedForecast), todayTargetPct: DAY_TARGET_PCT,
+      hold: !!a.hold, actionsTaken: actionsTaken || (a.actionsTaken || autoActions.filter((text) => text.startsWith(`${a.account}（`))),
+      codex: (a.codex || []).map((c) => ({ window: String(c.window ?? c.windowMinutes ?? '?'), usedPercent: finite(c.usedPercent) })) };
+  });
+  const g = grokbot || { received: false, note: 'グロボ分 未受領（当日入力なし）' };
+  const received = g.received !== false && g.date === date && finite(g.weeklyUsedPercent) !== null && Number.isFinite(Date.parse(g.weeklyResetsAt));
+  const weekly = datePair(received ? g.weeklyResetsAt : null), demand = datePair(received ? g.onDemandResetsAt : null);
+  const judged = received ? judgeGrokbot(g, nowMs) : Object.fromEntries(['elapsedRatio', 'targetLinePct', 'deltaPt', 'effectiveTolerancePt', 'status', 'statusJa', 'projectedLandingPct'].map((key) => [key, null]));
+  const grokbotRow = { received, date: received ? g.date : null, weeklyUsedPercent: received ? g.weeklyUsedPercent : null,
+    weeklyResetsAtJst: weekly.jst, weeklyResetsAtIso: weekly.iso, ...judged,
+    onDemandUsd: received ? g.onDemandUsd ?? null : null, onDemandLimitUsd: received ? g.onDemandLimitUsd ?? null : null,
+    onDemandResetsAtJst: demand.jst, onDemandResetsAtIso: demand.iso,
+    selfExecutedTasks: received ? g.selfExecutedTasks ?? null : null, delegatedTasks: received ? g.delegatedTasks ?? null : null,
+    note: received ? g.note || '' : g.received === false ? g.note || 'グロボ分 未受領（当日入力なし）' : 'グロボ分 未受領（当日分の有効な入力なし）' };
+  lines.push('', '## グロボ', '| 週枠 | リセット JST | 目標線 | 差 pt | 判定 | 予測着地 | 従量 USD |', '|---:|---|---:|---:|---|---:|---:|',
+    received ? `| ${fmtPct(g.weeklyUsedPercent)} | ${weekly.jst} | ${fmtPct(judged.targetLinePct)} | ${judged.deltaPt.toFixed(1)} | ${judged.statusJa} | ${fmtPct(judged.projectedLandingPct)} | ${g.onDemandUsd ?? '—'} / ${g.onDemandLimitUsd ?? '—'} |` : `| グロボ分 未受領 | — | — | — | — | — | — |`, grokbotRow.note, '',
+    '## 各PCの登録状況', '| PC | 登録状況 | 理由 |', '|---|---|---|');
+  for (const pc of pcs) lines.push(`| ${pc.host} | ${pc.registered === null ? '未確認' : pc.registered ? '登録済み' : '未反映'} | ${registration.hosts?.[pc.host]?.note || (pc.registered === null ? registration.note || '登録結果なし' : pc.registered ? '登録確認済み' : '登録結果が false')} |`);
+  lines.push('', reportLocations(date));
+  const generated = datePair(nowMs);
+  const json = { schemaVersion: 1, date, generatedAtJst: generated.jst, generatedAtIso: generated.iso,
+    generatedByHost: String(generatedByHost), targetLandingPct: targetLanding, dailyTargetPct: DAY_TARGET_PCT,
+    accounts: accountRows, pcs, grokbot: grokbotRow,
+    nextTasks: pending.map((t) => ({ id: t.id, host: String(t.host), priority: Number(t.priority) || 99, title: t.title })),
+    newOfferings: startedOfferings.map((o, i) => ({ id: o.id, rank: Number(o.rank) || i + 1, host: String(o.host), title: o.title, state: o.state })),
+    unmeasured };
 
   return { markdown: `${lines.join('\n')}\n`, json };
 }
@@ -417,6 +523,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
 
   const loaded = io.snapshots
     ? { rows: io.snapshots, missingHosts: io.missingHosts || [], lastSeenMap: io.lastSeenMap || {}, driveOk: true }
+    : opts.dryRun ? { rows: fs.existsSync(paceLedgerPath(home)) ? parseJsonl(fs.readFileSync(paceLedgerPath(home), 'utf8')) : [], missingHosts: [], lastSeenMap: {} }
     : await loadPaceSnapshots({
       config,
       home,
@@ -434,21 +541,16 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   }
 
   // dry-run でも本文は出す（担当判定は --force なしでも dry-run は本文優先）
-  const { markdown, json } = buildReport({
+  let { markdown, json } = buildReport({
     snapshots: loaded.rows,
     queue,
     config,
     now: nowMs,
     missingHosts: loaded.missingHosts,
+    grokbot: io.grokbot ?? readGrokbotInput(datePair(nowMs).jst.slice(0, 10), io.repoRoot || REPO_ROOT),
+    registration: io.registration ?? readRegistrationStatus(io.repoRoot || REPO_ROOT),
+    generatedByHost: host,
   });
-
-  // Codex ローカル参考（スナップショットに無いとき）
-  if (!json.accounts.some((a) => (a.codex || []).length) && !opts.dryRun) {
-    try {
-      const windows = readCodexWindows({ home, now: nowMs });
-      json.codexLocal = (windows || []).map((w) => ({ window: w.window, usedPercent: w.usedPercent }));
-    } catch { /* ignore */ }
-  }
 
   const print = io.print ?? console.log;
   if (opts.dryRun) {
@@ -456,6 +558,21 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     return { dryRun: true, markdown, json };
   }
 
+  // 既存のローカル参考値も維持する。取得不能を0とは扱わない。
+  if (!json.accounts.some((a) => a.codex.length)) {
+    try {
+      const windows = readCodexWindows({ home, now: nowMs }).map((w) => ({ window: String(w.window), usedPercent: finite(w.usedPercent) }));
+      if (windows.length) {
+        const localAccount = json.accounts.find((a) => a.pcs.includes(host));
+        if (localAccount) localAccount.codex = windows;
+        markdown = markdown.replace('- （スナップショットに Codex 値なし）',
+          windows.map((w) => `- ローカル参考 PC ${host}: window=${w.window} used=${w.usedPercent ?? '—'}%`).join('\n'));
+      }
+    } catch { /* ローカル参考値なしでも日報配信は続ける。 */ }
+  }
+
+  const publication = await (io.publishReport ?? (await import('./claude-pace-report-publish.mjs')).publishReport)({ report: { markdown, json }, home, getToken: io.getDriveToken, driveFiles: io.driveFiles });
+  markdown = publication.markdown;
   const stamp = ymdJst(nowMs);
   const basename = `report-${stamp}`;
   const dir = reportDir(home);
@@ -466,13 +583,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   fs.writeFileSync(mdPath, markdown);
   fs.writeFileSync(jsonPath, jsonText);
 
-  const drive = await uploadReportToDrive({
-    basename,
-    markdown,
-    jsonText,
-    getToken: io.getDriveToken,
-    driveFiles: io.driveFiles,
-  });
+  const drive = { ok: !publication.driveError, error: publication.driveError };
 
   let notifyResult = null;
   const notify = io.notifyKim ?? (await import('./notify-kim.mjs')).notifyKim;
@@ -480,11 +591,12 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     `【Claudeペース日次】${stamp}`,
     markdown.slice(0, 1500),
     mdPath,
+    markdown.slice(markdown.indexOf('## 配信結果') >= 0 ? markdown.indexOf('## 配信結果') : markdown.indexOf('## 置き場所')),
   ].join('\n');
   notifyResult = await notify(body, { home, kind: 'info', source: 'claude-pace-report' });
 
   print(`claude-pace-report wrote ${mdPath} drive=${drive.ok ? 'ok' : drive.error} notify=${notifyResult?.delivered || '?'}`);
-  return { markdown, json, mdPath, jsonPath, drive, notifyResult };
+  return { markdown, json, mdPath, jsonPath, drive, publication, notifyResult };
 }
 
 if (isEntry(import.meta.url)) {

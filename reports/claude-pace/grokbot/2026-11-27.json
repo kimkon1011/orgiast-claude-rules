@@ -1,0 +1,11 @@
+{
+  "date": "2026-11-27",
+  "weeklyUsedPercent": 49.6,
+  "weeklyResetsAt": "2026-12-02T14:42+09:00",
+  "onDemandUsd": 105,
+  "onDemandLimitUsd": 150,
+  "onDemandResetsAt": "2026-12-18T14:41+09:00",
+  "selfExecutedTasks": null,
+  "delegatedTasks": null,
+  "note": "週枠は経過33%で49.6%＝進みすぎ。従量 $105/$150 使用済み"
+}

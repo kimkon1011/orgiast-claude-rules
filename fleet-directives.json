@@ -131,6 +131,16 @@
       "createdBy": "uers",
       "createdAt": "2026-11-27T22:50:52.307Z",
       "expiresAt": "2026-11-29T22:50:52.307Z"
+    },
+    {
+      "id": "run-20261127-225200-0164",
+      "kind": "run",
+      "targets": "cafe015-PC",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-11-27T22:52:00.156Z",
+      "expiresAt": "2026-11-29T22:52:00.156Z"
     }
   ]
 }

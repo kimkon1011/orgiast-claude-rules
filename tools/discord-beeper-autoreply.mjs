@@ -17,7 +17,7 @@ import { collectReadableContent } from './lib/autoreply-attachments.mjs';
 import { extractSearchTerms, searchRelated } from './lib/autoreply-related.mjs';
 import { searchDriveFacts } from './lib/autoreply-drive-facts.mjs';
 import { LEARN_SYSTEM, learningJson, appendUnique } from './lib/autoreply-learning.mjs';
-import { isTrialSelfDecline, hasTrialStarted, trialDeclineAnswer } from './lib/trial-self-decline.mjs';
+import { isTrialSelfDecline, hasTrialStarted, trialDeclineAnswer, isTrialMidpointFail, trialFailAnswer } from './lib/trial-self-decline.mjs';
 import { beeperFetch as beeperFetchFn } from './beeper-api.mjs';
 import { recordRun } from './lib/change-gate.mjs';
 
@@ -139,6 +139,7 @@ function loadState(file) {
     || !Array.isArray(state.hourly) || !Array.isArray(state.learnQueue)) throw new Error('state.json invalid');
   state.hourlyByChat ??= {};
   state.trialSelfDeclined ??= {};
+  state.trialMidpointFailed ??= {};
   return state;
 }
 
@@ -262,6 +263,7 @@ export async function runOnce(options = {}) {
       };
       state.chats[chat.id] = { ...entry, status: 'sent', replyId: found.id };
       if (entry.trialSelfDecline) state.trialSelfDeclined[chat.id] = true;
+      if (entry.trialMidpointFail) state.trialMidpointFailed[chat.id] = true;
       enqueueLearning(state, sent);
       save();
       await recordSentReply(home, sent, { addItemImpl, registerCommitment: options.registerCommitment,
@@ -344,7 +346,9 @@ export async function runOnce(options = {}) {
         if (chat.isReadOnly || chat.participants?.items?.some(p => p.isSelf && p.cannotMessage)) { await decide('送信不可の会話'); continue; }
 
         const trialSelfDecline = !state.trialSelfDeclined[chat.id] && await isTrialSelfDecline(llm, question);
-        if (!trialSelfDecline && history.complete && chat.type === 'single' && !lastSelf) { await decide('初対面または会話履歴を確認できません'); continue; }
+        const historyTexts = all.filter(m => !m.isSender).map(m => plainText(m.text));
+        const trialMidpointFail = !trialSelfDecline && !state.trialMidpointFailed[chat.id] && isTrialMidpointFail(question, historyTexts);
+        if (!trialSelfDecline && !trialMidpointFail && history.complete && chat.type === 'single' && !lastSelf) { await decide('初対面または会話履歴を確認できません'); continue; }
 
         if (!isWithinAllowedTimeWindow(now)) { result.skipped++; continue; }
 
@@ -353,8 +357,11 @@ export async function runOnce(options = {}) {
 
         let decision;
         if (trialSelfDecline) {
-          const started = hasTrialStarted(all.filter(m => !m.isSender).map(m => plainText(m.text)));
+          const started = hasTrialStarted(historyTexts);
           decision = { answer: trialDeclineAnswer(started) };
+        } else if (trialMidpointFail) {
+          const started = hasTrialStarted(historyTexts);
+          decision = { answer: trialFailAnswer(started) };
         } else {
           const targetIds = new Set(pending.map(m => m.id));
           if (latest && !latest.isSender) targetIds.add(latest.id);
@@ -483,7 +490,7 @@ export async function runOnce(options = {}) {
         const replyTarget = selectReplyTarget(pending);
         // A compound group question can contain proposals or objections from several people.
         const approvalMessage = replyTarget?.id === latest.id && pending.length === 1 ? plainText(latest.text) : undefined;
-        state.chats[chat.id] = { ...mark(latest), status: 'sending', content, question, senderName: latest.senderName, link, approvalMessage, ...(trialSelfDecline ? { trialSelfDecline: true } : {}) };
+        state.chats[chat.id] = { ...mark(latest), status: 'sending', content, question, senderName: latest.senderName, link, approvalMessage, ...(trialSelfDecline ? { trialSelfDecline: true } : {}), ...(trialMidpointFail ? { trialMidpointFail: true } : {}) };
         const sendStarted = now;
         state.hourly.push(sendStarted);
         state.hourlyByChat[chat.id].push(sendStarted);
@@ -514,7 +521,7 @@ export async function runOnce(options = {}) {
         if (hasSendFailure(found)) { await decide('送信失敗の印を検出。再送せず Discord で確認してください', 'uncertain'); continue; }
 
         await finishSend(chat, found, { ...mark(latest), content, question, senderName: latest.senderName,
-          approvalMessage, approvalTs: timestamp(latest), ...(trialSelfDecline ? { trialSelfDecline: true } : {}) });
+          approvalMessage, approvalTs: timestamp(latest), ...(trialSelfDecline ? { trialSelfDecline: true } : {}), ...(trialMidpointFail ? { trialMidpointFail: true } : {}) });
         const promised = queueSendPromise(home, { chat, message: latest, answer: decision.answer, question });
         if (promised) await addItemImpl(home, { kind: 'ask', source: 'discord-beeper-autoreply', text: `【送付約束の実行確認】${chat.title || chat.id}\n${decision.answer}`, dedupeKey: promised.id });
         result.replied++;

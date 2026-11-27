@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runOnce, main, DISCORD_ACCOUNT, messageLink, isMessageRequest, isSyntheticMessage, SEND_PROMISE_PTN } from './discord-beeper-autoreply.mjs';
+import { trialFailAnswer } from './lib/trial-self-decline.mjs';
 import { main as guildMain } from './discord-autoreply.mjs';
 
 const NOW = Date.parse('2026-11-12T04:00:00Z'); // 13:00 JST (allowed window)
@@ -1441,3 +1442,52 @@ test('本人辞退の定型文は会話ごとに一度のみ、次回は従来�
   assert.equal(f.sent.length, 1);
   assert.equal(f.state().chats.chat1.status, 'fyi');
 });
+test('トライアル途中通過条件の未達は終了案内の定型文を dryRun で返す（送信しない）', async t => {
+  const f = fixture(t, { messages: [message({ senderName: 'テスト参加者', text: '昨日のトライアル3日目で到達タスクが20件未満だったのですが、本日も業務を続けてよろしいのでしょうか。' })] });
+  f.options.llm = async () => { assert.fail('未達の判定に LLM は使わない'); };
+  const result = await runOnce({ ...f.options, dryRun: true });
+  assert.equal(result.ok, true);
+  assert.equal(result.wouldSend.length, 1);
+  assert.equal(result.wouldSend[0].content.includes(trialFailAnswer(false)), true);
+  assert.match(result.wouldSend[0].content, /トライアルは終了とさせていただきます/);
+  assert.equal(f.sent.length, 0);
+});
+
+test('トライアル3日目で累計20件以上の報告は従来の分類に進み、終了案内を出さない', async t => {
+  const f = fixture(t, { messages: [
+    message({ id: 'own', isSender: true, timestamp: new Date(NOW - 5000).toISOString(), text: '前回の案内' }),
+    message({ senderName: 'テスト参加者', text: '1.トライアル：3日目\n6.累計完了タスク数\nイベントタスク：18件、チュートリアル情報収集：6件、マニュアル更新：4件\n本日も続けてよいですか' }),
+  ] });
+  let classified = 0;
+  f.options.llm = async ({ category }) => {
+    if (category === 'jp_reply') {
+      classified++;
+      return JSON.stringify({ needs_reply: true, needs_kim_decision: false, answer: '3日目の途中通過条件は満たしています。引き続き進めてください。', confidence: 0.95 });
+    }
+    return '{}';
+  };
+  const result = await runOnce({ ...f.options, dryRun: true });
+  assert.equal(classified, 1);
+  assert.equal(result.wouldSend.length, 1);
+  assert.match(result.wouldSend[0].content, /途中通過条件は満たしています/);
+  assert.equal(result.wouldSend[0].content.includes('トライアルは終了とさせていただきます'), false);
+  assert.equal(f.sent.length, 0);
+});
+
+test('途中通過条件未達の定型文は会話ごとに一度のみ', async t => {
+  const f = fixture(t, { messages: [
+    message({ id: 'own', isSender: true, timestamp: new Date(NOW - 5000).toISOString(), text: '前回の案内' }),
+    message({ senderName: 'テスト参加者', text: '昨日のトライアル3日目で到達タスクが20件未満だったのですが、本日も業務を続けてよろしいのでしょうか。' }),
+  ] });
+  f.options.llm = async ({ category }) => category === 'jp_reply'
+    ? JSON.stringify({ ...reply, needs_reply: false })
+    : '{}';
+  const first = await runOnce(f.options);
+  assert.equal(first.replied, 1);
+  assert.equal(f.state().trialMidpointFailed.chat1, true);
+  f.data.chat1.push(message({ senderName: 'テスト参加者', id: 'second-fail', timestamp: new Date(NOW + 1000).toISOString(), text: '昨日のトライアル3日目で到達タスクが20件未満だったのですが、本日も業務を続けてよろしいのでしょうか。' }));
+  const second = await runOnce({ ...f.options, now: NOW + 2000 });
+  assert.equal(second.replied, 0);
+  assert.equal(f.sent.length, 1);
+});
+

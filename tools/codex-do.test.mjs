@@ -237,19 +237,19 @@ test('chainBackendBudgetSecs は連鎖の残り予算を超えない（全体枠
   assert.equal(chainBackendBudgetSecs(1800, 1500, { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: '900' }), 300);
 });
 
-test('backendSpecificTimeoutSecs は gemini-cli に既定200秒・cheap-code:deepseek に既定400秒と正の上書きを適用する', () => {
+test('backendSpecificTimeoutSecs は gemini-cli に既定200秒・cheap-code:deepseek に既定200秒と正の上書きを適用する', () => {
   // 2026-11-09 実測: 3623件の成功の p99=241秒。200秒に設定して廃棄を削減。
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}), 200);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '450' }), 450);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: 'garbage' }), 200);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '0' }), 200);
-  // 2026-11-11 再調整: chain 実測（223試行中成功46/p95=524秒）で 400 秒に引き下げ
-  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}), 400);
+  // 2026-11-28 delegation-health 実測 2件/361秒 の廃棄に基づき 400→200 秒に引き下げ
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}), 200);
   assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '450' }), 450);
-  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: 'garbage' }), 400);
-  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '0' }), 400);
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: 'garbage' }), 200);
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '0' }), 200);
   // qwen 直結の deepseek は同じ upstream なので同一扱い
-  assert.equal(backendSpecificTimeoutSecs('deepseek', {}), 400);
+  assert.equal(backendSpecificTimeoutSecs('deepseek', {}), 200);
   // 対象外のバックエンドは「バックエンド固有の頭打ちなし」＝null のまま
   assert.equal(backendSpecificTimeoutSecs('cheap-code:glm', {}), null);
   assert.equal(backendSpecificTimeoutSecs('qwen', {}), null);
@@ -276,10 +276,10 @@ test('deepseek 系は同じ upstream の timeout 後に連鎖内で二重実行�
   assert.equal(shouldSkipFallbackBackendAfterTimeout('deepseek', [{ backend: 'cheap-code:deepseek', outcome: 'ok' }]), false);
 });
 
-test('backendSpecificTimeoutSecs は kind が無い・implement 以外の場合は従来どおり 400/200', () => {
-  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}), 400);
+test('backendSpecificTimeoutSecs は kind が無い・implement 以外の場合は 200/200 (deepseek を 400→200 に短縮)', () => {
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}), 200);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}), 200);
-  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}, { kind: 'verify' }), 400);
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}, { kind: 'verify' }), 200);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}, { kind: 'verify' }), 200);
 });
 
@@ -296,7 +296,7 @@ test('backendSpecificTimeoutSecs は kind=implement でも env 指定を優先�
 test('effectiveBackendTimeoutSecs は冷却中の backend を探り予算まで縮め、通常時は従来どおりの上限を返す', () => {
   // 通常時: backend 固有の上限がそのまま効く
   assert.equal(effectiveBackendTimeoutSecs('gemini-cli', { chainBudget: 720, cooling: false }), 200);
-  assert.equal(effectiveBackendTimeoutSecs('cheap-code:deepseek', { chainBudget: 720, cooling: false }), 400);
+  assert.equal(effectiveBackendTimeoutSecs('cheap-code:deepseek', { chainBudget: 720, cooling: false }), 200);
   // 冷却中: 探り予算(120秒)まで縮む＝同じ停滞を繰り返しても捨てる秒数が 3〜5 分の1になる
   assert.equal(effectiveBackendTimeoutSecs('gemini-cli', { chainBudget: 720, cooling: true }), COOLING_PROBE_TIMEOUT_SECS);
   assert.equal(effectiveBackendTimeoutSecs('cheap-code:deepseek', { chainBudget: 720, cooling: true }), COOLING_PROBE_TIMEOUT_SECS);
@@ -319,7 +319,7 @@ test('全冷却の3 backend は先頭2件が120秒、末尾は通常上限にな
     env: {},
     isLastBackend: index === backends.length - 1,
   }));
-  assert.deepEqual(budgets, [120, 120, 400]);
+  assert.deepEqual(budgets, [120, 120, 200]);
 });
 
 test('冷却なしの3 backend は末尾指定にかかわらず通常上限になる', () => {
@@ -332,7 +332,7 @@ test('冷却なしの3 backend は末尾指定にかかわらず通常上限に�
     env: {},
     isLastBackend: index === backends.length - 1,
   }));
-  assert.deepEqual(budgets, [720, 200, 400]);
+  assert.deepEqual(budgets, [720, 200, 200]);
 });
 
 test('全冷却で1 backend だけなら通常上限・環境変数・残り予算を適用する', () => {
@@ -360,12 +360,12 @@ test('全冷却で1 backend だけなら通常上限・環境変数・残り予�
 
 // 実測シナリオ（2026-11-04）: cheap-code:deepseek と gemini-cli の chain-timeout が3件発生。
 // 2026-11-09 実測の gemini p99=241s に基づき、既定を200秒に短縮して廃棄を削減。
-test('実測シナリオ: cheap-code:deepseek と gemini-cli の連鎖を400秒・200秒で頭打ちにする', () => {
+test('実測シナリオ: cheap-code:deepseek と gemini-cli の連鎖を200秒・200秒で頭打ちにする（deepseek 400→200 短縮）', () => {
   const chainBudget = () => chainBackendBudgetSecs(1800, 0, {});
   const geminiTimeout = Math.min(chainBudget(), backendSpecificTimeoutSecs('gemini-cli', {}));
   const deepseekTimeout = Math.min(chainBudget(), backendSpecificTimeoutSecs('cheap-code:deepseek', {}));
   assert.equal(geminiTimeout, 200);
-  assert.equal(deepseekTimeout, 400);
+  assert.equal(deepseekTimeout, 200);
   // 従来（deepseek が null → 既定900秒）と比べて頭打ちが短くなっていることを示す
   assert.ok(backendSpecificTimeoutSecs('cheap-code:deepseek', {}) < fallbackBackendTimeoutSecs(1800, {}));
   // 環境変数で 450 秒へ短縮もできる（0 出力停滞は待たずに切る運用例）
@@ -430,17 +430,17 @@ test('gemini-cli が連鎖の最後でタイムアウトしても廃棄は backe
   // gemini-cli は最終手段なので遅延を生むとしても被害が最小
 });
 
-test('deepseek と gemini-cli が両方 timeout しても既定の最大廃棄は600秒に収まる', () => {
+test('deepseek と gemini-cli が両方 timeout しても既定の最大廃棄は400秒に収まる（600→400 に短縮）', () => {
   const chainBudget = chainBackendBudgetSecs(1800, 0, {});
   const wastedSecs = ['cheap-code:deepseek', 'gemini-cli']
     .map((backend) => Math.min(chainBudget, backendSpecificTimeoutSecs(backend, {}) ?? Infinity))
     .reduce((sum, seconds) => sum + seconds, 0);
-  assert.equal(wastedSecs, 600);
-  assert.ok(wastedSecs < 900);
+  assert.equal(wastedSecs, 400);
+  assert.ok(wastedSecs < 500);
 });
 
 // delegation-health:fallback_chain_timeout の再発防止（2026-11-07 起票）。
-// 実測 3件/621秒 の廃棄が、gemini 200s + deepseek 400s の上限で
+// 実測 3件/621秒 の廃棄が、gemini 200s + deepseek 200s の上限で
 // 3件の timeout でも 3 × min(200, chainBudget) に抑えられることを確認する。
 test('3件の chain timeout でも gemini の timeout 廃棄は 200 秒/件に制限される', () => {
   const chainBudget = chainBackendBudgetSecs(1800, 0, {});

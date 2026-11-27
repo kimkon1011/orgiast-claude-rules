@@ -10,6 +10,8 @@ test('ONBOARDING の絶対ルール節を抜き出す（スピード最重視が
   assert.ok(!rules.includes('人の手間はAIの効率より優先'), '次の節は含めない');
   assert.match(rules, /案件の開始・再開は、必ず担当PCのルールで決める/);
   assert.match(rules, /担当外のPCでは再開しない/);
+  assert.match(rules, /手続き代行の即時開始ルール/);
+  assert.match(rules, /検証をユーザーに任せること自体が差し戻しにあたる/);
 });
 test('絶対ルールはファイル最上部に1つだけ置かれ、再実行で増えない', () => {
   const rules = extractAbsoluteRules(onboarding);

@@ -153,7 +153,7 @@ test('parseArgs / computeDue / decideAction basics', () => {
 test('A: overdue no-reply → one nudge with footer; second check no duplicate', async () => {
   const dir = tmpDir('a');
   const mockFile = writeMock(dir, { replies: { 'chat-1': [] }, fail: {}, sent: [] });
-  const config = baseConfig(dir, { quietHours: null }); // Disable quiet hours for this test
+  const config = baseConfig(dir, { quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' } }); // Disable quiet hours for this test
   await withEnv(baseEnv(dir, mockFile), async () => {
     await main(addArgs('A1'), { config, storeMode: 'local', spawn: () => ({ status: 0, stdout: '[]' }) });
     const r1 = await main(['check', '--store', 'local'], {
@@ -303,7 +303,7 @@ test('D: max nudges exceeded → escalate without send', async () => {
 test('E: external → approval request; OK <ID> from approver sends', async () => {
   const dir = tmpDir('e');
   const mockFile = writeMock(dir, { replies: { 'chat-ext': [], 'approval-chan': [] }, fail: {}, sent: [] });
-  const config = baseConfig(dir, { approverUserIds: ['approver-1'], quietHours: null }); // Disable quiet hours for this test
+  const config = baseConfig(dir, { approverUserIds: ['approver-1'], quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' } }); // Disable quiet hours for this test
   await withEnv(baseEnv(dir, mockFile), async () => {
     await main(addArgs('E1', { scope: 'external', chat: 'chat-ext', channel: 'beeper' }), {
       config, storeMode: 'local', spawn: () => ({ status: 0, stdout: '[]' }),
@@ -454,7 +454,7 @@ test('J: fleet-pc-map aliases match (000 / kim-PC / 000KIMPC)', () => {
 test('K: seed nudgeText is used as nudge body', async () => {
   const dir = tmpDir('k-seed');
   const mockFile = writeMock(dir, { replies: { 'chat-1': [] }, fail: {}, sent: [] });
-  const config = baseConfig(dir, { quietHours: null }); // Disable quiet hours for this test
+  const config = baseConfig(dir, { quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' } }); // Disable quiet hours for this test
   const seedFile = path.join(dir, 'seed.json');
   fs.writeFileSync(seedFile, JSON.stringify([{
     id: 'K1',
@@ -519,7 +519,7 @@ test('L: add --nudge-text sets nudgeText; renderAlert table has counts', async (
 test('M: --all-pcs processes non-owner rows', async () => {
   const dir = tmpDir('m-all');
   const mockFile = writeMock(dir, { replies: { 'chat-1': [] }, fail: {}, sent: [] });
-  const config = baseConfig(dir, { quietHours: null }); // Disable quiet hours for this test
+  const config = baseConfig(dir, { quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' } }); // Disable quiet hours for this test
   await withEnv(baseEnv(dir, mockFile, { FOLLOWUP_PC: 'other-pc' }), async () => {
     await main(addArgs('M1'), {
       config, storeMode: 'local', spawn: () => ({ status: 0, stdout: '[]' }),

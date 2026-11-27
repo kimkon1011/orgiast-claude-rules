@@ -1,0 +1,271 @@
+# AIエージェント記事自動生成ワークフロー
+# X-0080: 1指示でニーズ分析→見出し→画像→口コミ→収集→WordPress投稿→メタ設定
+# オージャスト公式サイトの展示会ブース事例・イベントレポート記事向け
+
+name: ai-article-pipeline
+version: 1.0.0
+description: 1つの指示（テーマ＋資料）から展示会ブース事例記事を全自動生成・WordPress公開
+
+# ====================================================================
+# ワークフロー全体の設定
+# ====================================================================
+workflow:
+  max_retries: 3
+  timeout_minutes: 30
+  quality_gate: strict  # strict | normal | draft
+  parallel_steps: false
+
+# ====================================================================
+# 使用するAIエージェント定義
+# ====================================================================
+agents:
+  orchestrator:
+    model: claude-sonnet-5-5
+    role: オーケストレーター
+    prompt_file: agent-prompt.md
+    temperature: 0.3
+    max_tokens: 8192
+
+  researcher:
+    model: gemini-2.0-flash
+    role: 情報収集・検索
+    system_prompt: |
+      あなたは展示会業界のリサーチャーです。
+      指定されたテーマについてWeb検索で最新情報を収集してください。
+      結果は以下の形式で返してください：
+      - 統計データ（出典URL付き）
+      - 競合事例（企業名・施策・結果）
+      - 業界トレンド（時期明記）
+    temperature: 0.2
+
+  image_generator:
+    model: dalle-3  # または stable-diffusion-xl
+    role: 画像生成
+    params:
+      style: photorealistic
+      aspect_ratio: "1200x630"
+      text_overlay: minimal
+
+  social_collector:
+    model: gemini-2.0-flash
+    role: 口コミ・X収集
+    tool: grok-x-fetch
+    system_prompt: |
+      指定されたテーマに関連するXのポストを収集してください。
+      引用は @username と日付を明記。肯定的意見・批判的意見の両方を収集。
+
+  wp_publisher:
+    model: claude-sonnet-5-5
+    role: WordPress投稿者
+    tool: wordpress-api
+    system_prompt: |
+      あなたはWordPress投稿専門エージェントです。
+      与えられたHTMLマークアップをWordPressブロックエディタ形式に変換し、
+      WordPress REST APIで投稿を公開してください。
+      投稿ステータスは "draft" とし、最終確認後に公開してください。
+
+# ====================================================================
+# ステップ定義
+# ====================================================================
+steps:
+
+  - id: step-01-needs-analysis
+    name: ニーズ分析・ペルソナ設定
+    agent: orchestrator
+    input: user_input  # ユーザーから与えられたテーマ・資料
+    output: needs_analysis
+    template: |
+      【分析結果】
+      - ターゲット読者: {target_audience}
+      - 読者の課題: {pain_points}
+      - 検索意図: {search_intent}
+      - 記事の目的: {article_goal}
+      - 推奨キーワード: [{keywords}]
+    quality_gates:
+      - target_audience が具体的な職種・業種で定義されている
+      - search_intent が1文で明確化されている
+      - keywords が5語以上含まれている
+
+  - id: step-02-headline-structure
+    name: 見出し構成の作成
+    agent: orchestrator
+    input: needs_analysis
+    output: headline_structure
+    template: |
+      H1: {main_title}
+      H2: {section_1}
+        H3: {subsection_1_1}
+        H3: {subsection_1_2}
+      H2: {section_2}
+        ...（全見出し構成を出力）
+    quality_gates:
+      - H1に主要キーワードが含まれている
+      - 全見出しで3層以上（H1→H2→H3）の階層がある
+      - FAQセクションが含まれている
+
+  - id: step-03-data-collection
+    name: 情報収集（Web検索）
+    agent: researcher
+    input:
+      - headline_structure
+      - user_input
+    output: research_data
+    fallback:
+      - agent: orchestrator
+        model: claude-sonnet-5-5  # Geminiが使えない場合のフォールバック
+    quality_gates:
+      - 3件以上の出典URLが明記されている
+      - 各データに収集日が付与されている
+
+  - id: step-04-social-proof
+    name: 口コミ・X収集
+    agent: social_collector
+    input:
+      - headline_structure
+      - research_data
+    output: social_proof
+    optional: true  # 口コミが見つからない場合はスキップ可
+    quality_gates:
+      - 引用元（@username, 日付）が明記されている
+      - 肯定的意見と批判的意見の両方がある（理想）
+
+  - id: step-05-image-creation
+    name: サムネイル・挿入画像作成
+    agent: image_generator
+    input:
+      - headline_structure
+      - research_data
+    output: images
+    parallel: true  # step-03, step-04 と並列実行可能
+    params:
+      generate:
+        - type: thumbnail
+          size: "1200x630"
+          purpose: ogp_image
+        - type: infographic
+          count: 2
+          format: svg
+          purpose: article_body
+
+  - id: step-06-article-draft
+    name: 記事下書き生成（WordPress形式）
+    agent: orchestrator
+    input:
+      - needs_analysis
+      - headline_structure
+      - research_data
+      - social_proof
+      - images
+    output: article_draft
+    template: |
+      <!-- wp:heading {"level":1} -->
+      ...全文をWordPressブロック形式で出力
+    quality_gates:
+      - WordPress全ブロックが正しいmarkup形式
+      - 最低1つの内部リンクを含む
+      - 最低1つのCTAを含む（問い合わせ・資料請求・関連事例）
+      - 2,000〜4,000字の範囲内
+
+  - id: step-07-meta-generation
+    name: メタ情報生成
+    agent: orchestrator
+    input:
+      - article_draft
+      - needs_analysis
+    output: metadata
+    template: |
+      title_tag: {30字以内}
+      meta_description: {120字以内}
+      og_image: {サムネイル画像URL}
+      slug: {english-slug}
+      categories: [{カテゴリ}]
+      tags: [{タグ}]
+      structured_data: |
+        {JSON-LD}
+    quality_gates:
+      - title_tag が30文字以内
+      - meta_description が120文字以内
+      - structured_data が有効なJSON-LD
+
+  - id: step-08-quality-review
+    name: 品質レビュー
+    agent: orchestrator
+    input:
+      - article_draft
+      - metadata
+      - research_data
+    output: review_result
+    template: |
+      【品質チェック結果】
+      - 事実確認: {verified | issues_found}
+      - SEOチェック: {pass | fail}
+      - トーンチェック: {pass | needs_adjustment}
+      - 品質基準充足率: {n} / 10
+    quality_gates:
+      - 品質基準10項目すべてが pass である
+
+  - id: step-09-wordpress-publish
+    name: WordPress投稿（下書き保存）
+    agent: wp_publisher
+    input:
+      - article_draft
+      - metadata
+      - images
+    output: publish_result
+    params:
+      status: draft  # 下書き保存（公開は人間の承認後）
+    quality_gates:
+      - 記事がWordPress上で下書きとして保存された
+      - サムネイル画像がメディアライブラリにアップロードされた
+      - カテゴリ・タグが正しく設定された
+      - パーマリンクが設定された
+
+# ====================================================================
+# エラーハンドリング
+# ====================================================================
+error_handling:
+  strategy: continue  # continue | abort | retry
+  retry_delay_seconds: 60
+  max_retries: 3
+  fallback_agents:
+    - gemini-2.0-flash
+    - grok-2
+  notifications:
+    on_error: true
+    on_quality_failure: true
+    channel: discord  # エラー時はDiscordに通知
+
+# ====================================================================
+# 品質ゲート一覧（工程横断）
+# ====================================================================
+quality_gates:
+  common:
+    - {check: "no_hallucination", severity: critical}
+    - {check: "sources_cited", severity: high}
+    - {check: "no_biased_claims", severity: medium}
+    - {check: "wordpress_valid_markup", severity: high}
+    - {check: "min_length_2000chars", severity: medium}
+    - {check: "cta_included", severity: medium}
+    - {check: "alt_text_on_images", severity: low}
+    - {check: "internal_links_alive", severity: high}
+
+# ====================================================================
+# 成功条件
+# ====================================================================
+success_criteria:
+  - 全stepが green（品質ゲート通過）で完了
+  - WordPressに下書き記事が保存されている
+  - メタ情報（title, description, OGP, 構造化データ）が全て設定されている
+  - サムネイル画像が設定されている
+
+# ====================================================================
+# メトリクス収集
+# ====================================================================
+metrics:
+  collect:
+    - step_duration_seconds
+    - total_tokens_used
+    - api_calls_count
+    - quality_gate_pass_rate
+    - article_word_count
+  output: metrics/logs/

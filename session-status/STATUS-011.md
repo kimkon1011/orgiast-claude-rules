@@ -1,7 +1,7 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-27 16:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-27 17:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 60
+- 案件数: 61
 
 - 011・.stall-sweeper・停止・最終更新 11/26 04:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・20261126-クラフト坂口・金さん待ち・クラフト坂口様 宿題7件の成果物は完成。精算の計算方法・福岡請求書の作り直し・先払い承認・いなば様への送信時期の判断待ち・期限2026-12-03（坂口様への精算金額の返答）・次:金さんの判断に沿って、坂口様への返信・福岡請求書の作り直し・Discord送信を進める（送信は承認後のみ）
@@ -25,6 +25,7 @@
 - 011・gitignore-scan-out・停止・最終更新 11/27 14:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・gridbeyond-reply-1126・金さん待ち・GridBeyond ミント様への失注お礼の返信は下書き済みで、送信承認待ち・期限なし（礼状のため早いほどよい。目安は 11/27 中）・次:金さんが「送ってよい」と言ったら gmail-draft.mjs --send で送り、送信済みを読み戻す（kim-inbox ki-20261126111434-7de5）
 - 011・gridbeyond-yosu-1125・金さん待ち・最終更新 11/25 11:38、STATUS.mdなし、REPORTあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・handoff-verify-1127b・停止・最終更新 11/27 16:11、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・illumi-kono-claim-1125・停止・最終更新 11/25 18:46、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
 - 011・kim-awaiting-noarg・停止・最終更新 11/26 16:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・kyou-kigen-exec-1125・完了・最終更新 11/25 15:23、STATUS.mdなし、DONEあり、REPORTあり、金さん待ちの記述あり・期限なし・次:なし
@@ -45,7 +46,7 @@
 - 011・sales-14sha-1125・完了・最終更新 11/25 11:34、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 011・sales-followup・停止・最終更新 11/27 07:40、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-link-audit-1126・完了・監査・修正・書き出し完了、13:00 毎時本番で動作確認済み・期限2026-11-26 当日・次:なし（毎時ジョブが send-commitments を追跡し stuck-export を毎時更新）
-- 011・営業 次回連絡日・金さん待ち・最終更新 11/27 16:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・営業 次回連絡日・金さん待ち・最終更新 11/27 17:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・session-1126-hourly・金さん待ち・JACE 藤野様宛ての返信下書きが打合せ前の文面のまま。修正版の送信可否は金さんの承認が要る（kim-inbox ki-20261126081310-6cf5）・期限2026-12-11（先方の返信期限）／着手期限 2026-12-09・次:承認が来たら seisaku-team@ の下書きを修正版に差し替え、gmail-draft.mjs の自動チェックを通して送信し、送信済みを読み戻す
 - 011・session-1205・完了・handoff-audit 8件の再発検証が終わった。f61ffeb282843871（P4）は再発0件で、検証済み台帳に追加した（PR #2878 MERGED 2026-11-27T03:24:51Z）。残り7件は 11/26 12:00Z 以降も同じ型の文が出ているため、台帳には入れていない・期限なし・次:next-session.md の8番は完了したので次回は選ばない（無人だと next-session.md を書き換えられず、この STATUS.md に残している）。9〜15番の7件は ID ごとに検証し直しても消えない。直すべきなのは、W 型の「完了待ち」の文が出る仕組みのほう。worktree ~/.claude/wt-handoff-verify-
 - 011・session-cap-1126・金さん待ち・最終更新 11/26 19:36、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ

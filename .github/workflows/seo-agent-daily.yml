@@ -1,0 +1,119 @@
+# Daily/Weekly AI SEO Agent Pipeline for Mini-site Automation
+#
+# X-0018 → X-0019 implementation
+# Runs the SEO analysis → content generation → mini-site pipeline on a schedule.
+# Uses dry-run mode by default; set CRON_MODE=dry-run or real in repo secrets.
+#
+# Manual trigger: gh workflow run seo-agent-daily.yml
+
+name: SEO Agent Pipeline
+
+on:
+  schedule:
+    # Daily: 06:00 JST (21:00 UTC) — keyword analysis + content draft
+    - cron: '0 21 * * *'
+    # Weekly (Mon): 06:00 JST — full analysis + report
+    - cron: '0 21 * * 1'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Pipeline mode'
+        required: true
+        default: 'daily'
+        type: choice
+        options:
+          - daily
+          - weekly
+          - cron-setup
+      dry_run:
+        description: 'Dry run (no writes)'
+        required: false
+        default: true
+        type: boolean
+
+defaults:
+  run:
+    working-directory: .
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  seo-daily:
+    name: SEO ${{ github.event.inputs.mode || 'daily' }} Pipeline
+    runs-on: ubuntu-latest
+    # Daily: runs only if not triggered by weekly schedule
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 21 * * *')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Run Daily SEO Pipeline
+        id: daily
+        run: |
+          node tools/ai-seo-agent-workflow.mjs --mode daily --dry-run --json > seo-daily-output.json
+          cat seo-daily-output.json
+
+      - name: Upload daily results
+        uses: actions/upload-artifact@v4
+        with:
+          name: seo-daily-${{ github.run_id }}
+          path: seo-daily-output.json
+
+  seo-weekly:
+    name: SEO Weekly Pipeline
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' && inputs.mode == 'weekly' ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 21 * * 1')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Run Weekly SEO Pipeline
+        id: weekly
+        run: |
+          node tools/ai-seo-agent-workflow.mjs --mode weekly --dry-run --json > seo-weekly-output.json
+          cat seo-weekly-output.json
+
+      - name: Generate Weekly Report
+        run: |
+          node tools/ai-seo-agent-workflow.mjs --mode report --json > seo-weekly-report.json
+
+      - name: Upload weekly results
+        uses: actions/upload-artifact@v4
+        with:
+          name: seo-weekly-${{ github.run_id }}
+          path: |
+            seo-weekly-output.json
+            seo-weekly-report.json
+
+  cron-setup:
+    name: Generate Cron Config
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'cron-setup'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Generate cron configuration
+        run: |
+          node tools/ai-seo-agent-workflow.mjs --mode cron-setup --json > cron-config-output.json
+          cat cron-config-output.json
+
+      - name: Upload cron config
+        uses: actions/upload-artifact@v4
+        with:
+          name: cron-config-${{ github.run_id }}
+          path: cron-config-output.json

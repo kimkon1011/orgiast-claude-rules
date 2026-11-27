@@ -62,6 +62,17 @@
       "createdBy": "018",
       "createdAt": "2026-11-27T14:26:18.944Z",
       "expiresAt": "2026-11-29T14:26:18.944Z"
+    },
+    {
+      "id": "prompt-20261127-134839-9115",
+      "kind": "prompt",
+      "targets": "kim-PC",
+      "why": "011: 000 指示 prompt-20261127-120331-1247 を置換（カフェ一人勤務の方針によりLINE送信を取り下げ、読み取りのみ）",
+      "body": "# 000 への依頼 v2（作業用011 の Claude Code から / 2026-11-27 22:50）。前回の指示 prompt-20261127-120331-1247 を置き換える\n\n前回の指示には、ほなみさん・ゆりえさんへ「印刷できましたか／郵送しましたか」と聞く社内 LINE を送る手順が入っていた。これは取り下げる。**送らないでください。**\n\n取り下げる理由: 22:02 に、共有の依頼追跡台帳（https://docs.google.com/spreadsheets/d/1-aTeXKH0EYATi-SnSAIeRH3gGTki9YUMiTntTAQa-2U/edit）で方針が変わった。\n- カフェスタッフは一人勤務で店を離れられない。そのため、ほなみさん・ゆりえさんに印刷・投函を催促しない。店を離れる作業は、各地のアシスタントなどに付け替える。\n- 店内でできる確認（原本と写しが店にあるか、受け渡しできる時間帯）は、台帳の行 `GB179-shaho-cafe-instore` が担当する。この行は、担当PC 000 の OrgiastFollowupLedger が送る。\n\n前回の指示ですでに LINE を送ってしまった場合は、追加では送らないでください。送った日時・chatID・メッセージID を下記の結果に書いてください。\n\n## やること（読み取りだけ。社外への送信・削除・支払いはしない）\n1. `C:\\Users\\uers\\gb-reports\\lahaina-print-1126\\` 配下（特に `followup\\STATE.json`）と、ほなみさん（`!COP1k9dFqTztHyYAyDfr:beeper.local`）、ゆりえさん（`!b50nSBYLHtsx4pygt3Qc:beeper.local`）、カフェ（東邦ハイツ211）のチャットを読む。期間は 11/26 以降。確かめること:\n   - 印刷・投函の状況\n   - 追跡番号の有無\n   - 履歴事項全部証明書の原本（令和8年10月16日発行）の所在\n   - マイナンバーカード表裏の写しの所在（番号そのものは書かない）\n2. 古川未歩さんの陳述書署名について確かめる:\n   - 写真の受信日時とチャネルID\n   - 鉛筆書きかどうか\n   - 記入欄が合っているか\n   - 印刷用フォルダの場所\n   - 古川さんへの返事の有無\n3. 資格証明書（登記事項証明書）のアシスタント募集について確かめる: チャンネルID、投稿時刻、応募の有無、大阪のなっちゃんへ切り替えたか。\n4. 乗定さんに約束した岩井さんへの返事について確かめる: 内容、期限、経路。\n5. 分かったことは、台帳の該当する行に反映する。`node tools/followup-ledger.mjs add --upsert ...` を使うか、シートを直接編集する。分からないことは「未確認（理由）」と書く。\n\n## 結果の返し方\n- 結果を `C:\\Users\\uers\\gb-reports\\followup-ledger-1127\\RESULT-000.md` に書く。\n- 同じ内容を、orgiast-claude-rules のブランチ `fleet-results/followup-ledger-1127` に `results/followup-ledger-1127/RESULT-000.md` として push する（main には入れない。PR は作らない）。\n- パスワード・コード・キー・OTP・マイナンバーの番号は書かない。\n",
+      "createdBy": "011NEXT-claude",
+      "createdAt": "2026-11-27T13:48:39.374Z",
+      "expiresAt": "2026-11-28T01:48:39.374Z",
+      "timeoutSeconds": 3600
     }
   ]
 }

@@ -76,6 +76,19 @@ test('converge repairs, rechecks, and is idempotent', () => {
   assert.equal(fs.statSync(target).mtimeMs, before);
 });
 
+test('win32: converge runs PowerShell repair scripts with PowerShell', { skip: process.platform !== 'win32' }, (t) => {
+  const home = temp('setup-ps1-repair-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const target = path.join(home, 'fixed.txt');
+  const helper = path.join(home, 'repair.ps1');
+  const mf = path.join(home, 'manifest.json');
+  write(helper, `Set-Content -LiteralPath '${target.replaceAll("'", "''")}' -Value 'ready' -NoNewline\n`);
+  write(mf, JSON.stringify(manifest([item('fixed', 'file-contains', { path: 'fixed.txt', contains: 'ready' }, 'required', { repair: [helper] })])));
+  const result = run(['--converge', '--json', '--home', home, '--manifest', mf]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout).items[0], { id: 'fixed', severity: 'required', status: 'OK', checked: true, repaired: true });
+});
+
 test('manifest schema rejects duplicate ids and unknown enums', () => {
   const home = temp('setup-schema-');
   for (const [name, items] of [

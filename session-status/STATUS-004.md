@@ -1,12 +1,12 @@
-# session-status  PC=004  host=004MINPAKU  updated 2026-11-27 21:13 JST
+# session-status  PC=004  host=004MINPAKU  updated 2026-11-27 22:13 JST
 
-- claude auth: {"at":"2026-11-27T12:13:17.807Z","event":"launch_allowed","reason":"below_cap","activeCount":0,"limit":2,"staleHours":3,"abandoned":[]} { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "f
+- claude auth: {"at":"2026-11-27T13:13:14.021Z","event":"launch_allowed","reason":"below_cap","activeCount":0,"limit":2,"staleHours":3,"abandoned":[]} { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "f
 - 案件数: 20
 
 - 004・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 004・codex-redispatch・金さん待ち・渡し直すはずだった指示書（codex-hourly-change-gate.md）の実装は fix/hourly-change-gate に 86a6652c までコミット済みで、渡し直しは不要。Windows で session-cap-guard.test.mjs は 22/22 合格、diff --check も問題なし（2026-11-27 深夜3時・期限なし（元の期限 2026-11-28 07:11 の作業は完了）・次:kim-inbox ki-20261126001009-0ddc（main への反映・全PC配布）の承認が出たら、pr-land で着地させる
 - 004・codex-token-refresh・進行中・Codex のアクセストークンの期限は 2026-11-27 11:57 JST（auth.json の exp、発行は 11/17 11:57 JST）。11/27 04:07 に Windows で codex exec を実行すると rc=0（OK）だったが、Codex 0.169 は期限前には自分から更新しないため、last_refresh は 11・期限2026-11-27 12:30 JST（失効の確認）・次:11/27 12:00 JST 以降に `codex exec --skip-git-repo-check -s read-only "Reply with OK only"` を Windows で実行する（WSL でも1回）。rc=0 で、auth.json の last_refresh が 11/27 以降になっていれば完了。401 や refresh
-- 004・grobo-dispatch・停止・最終更新 11/27 20:51、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 004・grobo-dispatch・停止・最終更新 11/27 21:13、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 004・local-seo-1125・停止・最終更新 11/25 15:21、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 004・loop-check-1125・金さん待ち・最終更新 11/25 15:44、STATUS.mdなし、REPORTあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 004・loop-check-1125-lahaina・金さん待ち・最終更新 11/25 15:43、STATUS.mdなし、REPORTあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ

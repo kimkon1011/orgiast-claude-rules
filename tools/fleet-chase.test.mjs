@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { POLICY, CATEGORY, DAY, HOUR, iso, makeItem, ingest, checkLedger, chase, digest, digestText,
   control, work, runChase, main, loadLedger, saveJson, ledgerPath, parseArgs, resendBody } from './fleet-chase.mjs';
 import { SEND_CAP_PER_TARGET } from './lib/fleet-chase-actions.mjs';
 import { TERMINAL_STATUSES, parseExecMarkers, acquireLock } from './fleet-mail.mjs';
 import { main as register, TASK_NAME } from './register-fleet-chase.mjs';
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const NOW = Date.parse('2026-10-18T03:00:00Z');
 const mail = (id = 'mail-original', extra = {}) => ({ id, from: 'kim-PC', to: 'nishi-PC',
   action: 'send-attempt', messageKind: 'note', kind: 'note', why: '[作業依頼] 確認', body: '原本の本文',
@@ -21,7 +23,7 @@ function fixture(t) {
   const put = m => saveJson(path.join(dir, 'fleet-inbox', `${m.id}.json`), m);
   const sent = rows => fs.writeFileSync(path.join(dir, 'fleet-mail-sent.jsonl'), rows.map(r => JSON.stringify(r)).join('\n') + '\n');
   const ledger = { version: 1, items: {}, checks: {} }, requests = [], dms = [], notifications = [], errors = [];
-  const ctx = { home, now: NOW, repo: path.resolve('.'), persist: () => saveJson(ledgerPath(home), ledger),
+  const ctx = { home, now: NOW, repo: REPO_ROOT, persist: () => saveJson(ledgerPath(home), ledger),
     stderr: s => errors.push(s), pcMap: { 'nishi-PC': { person: '西' }, 'kim-PC': { person: '金' } },
     freshness: async () => ({ stale: false, unknown: false, text: '最終 poll 1h前' }),
     request: async (kind, payload) => { requests.push({ kind, payload }); return { ok: true, mail: kind === 'mail-get' ? { id: payload.id, status: 'expired' } : null }; },
@@ -114,7 +116,7 @@ test('L0 resends at most once per policy interval, preserves exact exec markers,
 test('resend makes rules repo cwd portable in payload and body, preserving unrelated paths', async t => {
   const cases = [
     ['legacy', 'C:\\Users\\uers\\Downloads\\CLAUDE.md配布\\', '@rules-repo'],
-    ['sender-repo', path.resolve('.').toUpperCase().replace(/\\/g, '/') + '/', '@rules-repo'],
+    ['sender-repo', REPO_ROOT.toUpperCase().replace(/\\/g, '/') + '/', '@rules-repo'],
     ['unrelated', 'C:\\work\\other-repo', 'C:\\work\\other-repo']
   ];
   for (const [name, execCwd, expected] of cases) {

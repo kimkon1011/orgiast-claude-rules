@@ -1368,8 +1368,11 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   try { Object.assign(summary, await watchFleetMail({ home, now, dryRun, io })); }
   catch { summary.fleetExpired ??= 0; summary.fleetBlocked ??= 0; summary.errors.push('fleet-mail monitoring failed'); }
   try {
-    const sweepResult = sweepMobilePushQueue(home, { now });
-    if (sweepResult.expired || sweepResult.deduplicated) {
+    const sweepResult = sweepMobilePushQueue(home, { now, dryRun });
+    if (sweepResult.kimInboxNotify && !dryRun) {
+      await (io.addKimInboxItem ?? addItem)(home, sweepResult.kimInboxNotify);
+    }
+    if (sweepResult.expired || sweepResult.deduplicated || sweepResult.undeliverable) {
       summary.mobilePushSweep = sweepResult;
     }
   } catch (error) {

@@ -1372,8 +1372,11 @@ export function isBackendExhausted(output, stderr) {
 }
 
 export function isBackendBillingFailure(output, stderr) {
+  // 語マッチは stderr のみ（stdout の生成本文で誤判定しないようにする）。
+  // HTTP ステータス行（401/402/403）は output・stderr 両方で判定する。
+  const stderrOnly = `${stderr || ''}`;
   const merged = `${output || ''}\n${stderr || ''}`;
-  return /prepayment credits are depleted|payment required|insufficient\s+balance|invalid api key|unauthori[sz]ed|forbidden/i.test(merged)
+  return /prepayment credits are depleted|payment required|insufficient\s+balance|invalid api key|unauthori[sz]ed|forbidden/i.test(stderrOnly)
     || merged.split(/\r?\n/).some((line) => ['401', '402', '403'].some((code) => isHttpStatusCodeLine(line, code)));
 }
 
@@ -1958,7 +1961,7 @@ function execute(command, commandArgs, options = {}) {
     child.stdout.on('data', (chunk) => {
       outputChars += chunk.length; output += chunk.toString(); process.stdout.write(chunk);
       clearTimeout(firstOutputTimer);
-      abortBillingIfNeeded();
+      // stdout の生成本文で誤判定しないため abortBillingIfNeeded は呼ばない
     });
     child.stderr.on('data', (chunk) => {
       stderr += chunk.toString();

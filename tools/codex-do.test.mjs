@@ -3137,6 +3137,27 @@ test('deepseek は 402/401/403 の恒久 API エラーを即時打ち切り対�
   assert.deepEqual(shouldAdvanceToNextBackend({ status: 3, aborted: true }), { advance: true, outcome: 'blocked' });
 });
 
+test('isBackendBillingFailure は output の生成本文（403 Forbidden）を billing と誤判定しない', () => {
+  // output に「403 Forbidden を返すようにしました」のような生成本文があっても
+  // stderr が空なら false を返す。HTTP ステータス行（isHttpStatusCodeLine）経由では
+  // 「403」に HTTP/status/error 文脈が無いためマッチしない。
+  assert.equal(isBackendBillingFailure('403 Forbidden を返すようにしました', ''), false);
+  assert.equal(isBackendBillingFailure('if (!authorized) throw new Error(\'Unauthorized\')', ''), false);
+  assert.equal(isBackendBillingFailure('throw new Error(\'Unauthorized\')', ''), false);
+  assert.equal(isBackendBillingFailure('unauthorized access is denied and forbidden', ''), false);
+  assert.equal(isBackendBillingFailure('invalid api key format must be sk-...', ''), false);
+});
+
+test('isBackendBillingFailure は stderr の課金エラーを正しく検出する', () => {
+  assert.equal(isBackendBillingFailure('', 'Error: 402 Payment Required'), true);
+  assert.equal(isBackendBillingFailure('', 'insufficient balance'), true);
+  assert.equal(isBackendBillingFailure('', 'HTTP 401 Unauthorized'), true);
+  assert.equal(isBackendBillingFailure('', '403 Forbidden: API key invalid'), true);
+  assert.equal(isBackendBillingFailure('', 'invalid api key'), true);
+  assert.equal(isBackendBillingFailure('', 'your prepayment credits are depleted'), true);
+  assert.equal(isBackendBillingFailure('', 'payment required for this request'), true);
+});
+
 test('deepseek first-output watchdog は無出力の閾値到達時に打ち切る', () => {
   assert.equal(deepseekFirstOutputTimeoutSecs({ CODEX_DO_DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS: '0.05' }), 0.05);
   assert.equal(shouldAbortFirstOutputStall({ elapsedSecs: 60, outputChars: 0, timeoutSecs: 60 }), true);

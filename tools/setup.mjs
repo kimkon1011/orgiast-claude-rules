@@ -230,7 +230,12 @@ function repair(item) {
   try {
     const [script, ...args] = item.repair;
     const target = path.isAbsolute(script) ? script : path.join(scriptDir, script);
-    execFileSync(process.execPath, [target, ...args], { timeout: 120000, stdio: 'ignore', env: { ...process.env, ORGIAST_HOME: home }, windowsHide: true });
+    const isPowerShell = /\.ps1$/i.test(target);
+    const executable = isPowerShell ? 'powershell.exe' : process.execPath;
+    const executableArgs = isPowerShell
+      ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', target, ...args]
+      : [target, ...args];
+    execFileSync(executable, executableArgs, { timeout: 120000, stdio: 'ignore', env: { ...process.env, ORGIAST_HOME: home }, windowsHide: true });
     return true;
   } catch { return true; }
 }

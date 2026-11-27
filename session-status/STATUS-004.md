@@ -1,6 +1,6 @@
-# session-status  PC=004  host=004MINPAKU  updated 2026-11-27 10:13 JST
+# session-status  PC=004  host=004MINPAKU  updated 2026-11-27 11:13 JST
 
-- claude auth: {"at":"2026-11-27T01:13:17.648Z","event":"launch_allowed","reason":"below_cap","activeCount":0,"limit":2,"staleHours":3,"abandoned":[]} { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "f
+- claude auth: auth status タイムアウト
 - 案件数: 19
 
 - 004・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -13,7 +13,7 @@
 - 004・STATUS・完了・メルシアター上限価格 ¥14,100 → ¥15,500 の変更と、3経路（getStatus / getConfig / 設定シート B2）での読み戻し確認、変えていない項目（minPrice 4800 / triangleUpper 16000 / TRIANGLE 清掃料 Beds24 5000・Booking.com 12000）の前後一致確認、RE・期限なし（反映確認は定期ジョブの通常運用に乗る）・次:2026-11-28 朝 6:00 の定期ジョブ実行後、Beds24 の遠日期売値に新上限が反映されたかを客側ページで読み戻す（今回は 2027-02-10 2泊 JPY 20,600 のまま＝未反映を実測済み）。
 - 004・minpaku-okazaki-check-1124・停止・最終更新 11/24 14:37、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 004・minpaku-price-1124・停止・最終更新 11/24 09:43、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 004・minpaku-profit-95・進行中・稼働が95%に届いていない（08:15実測 直近1週68.3%、12/04〜12/24はTRIANGLEが0%）。調べたところ run-daily.ps1 は occupancy-target.mjs で集計するだけで、値下げや空室を埋める処理は呼んでいなかった（STANDING.md の手順1と食い違い）。PaceAdjuster/GapOffer が T・期限2026-11-27 10:00（読み戻し）／2026-11-28 10:00（TRIANGLE の12月の値下げ案）・次:(1) 10:00のNfMinpakuProfit95Daily本番実行後に logs/daily-*.log と latest.md を読み戻す (2) NEXT-triangle-dec-fill.md の手順で、PaceAdjuster/GapOffer が TRIANGLE を対象にしているかを Codex に調べさせ、値下げ案を作る（本番への価格反
+- 004・minpaku-profit-95・進行中・TRIANGLE 12/04〜24 の稼働0%の原因を調査済み（2026-11-27 10:20）。PaceAdjuster が TRIANGLE の8日以上先を値下げせず、−30%連動も掛けていない。詳細は NEXT-triangle-dec-fill.md と codex-triangle-result.md。・期限2026-11-28 10:00（12月中旬の空室を埋めるため、反映は早いほどよい）・次:Codex に gas/PaceAdjuster.gs の TRIANGLE 値下げ修正を実装させて PR にし、対話セッションまたは日次ジョブで GAS に反映して 12/11〜24 の価格を読み戻す。
 - 004・nf-toho-1110-1124・停止・最終更新 11/24 12:20、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 004・okazaki-line-1125・完了・最終更新 11/25 10:16、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 004・STATUS・金さん待ち・物件別損益のスプレッドシート（6タブ）と価格・清掃費の変更案は完成。価格変更の承認が未回答（kim-inbox ki-20261126122609-f9dc）。あわせて、成果物への kim@orgiast.jp 編集権限の付与が3経路とも拒否され、3億円計画シート（1Qa5bPpvjgpm2lFPfeG08jVMem1FWk1QkbsCHSf5eS4o）も読・期限なし（打ち手13のシート上の期限は 2026-11-20 で経過済み）・次:「2（A＋B）」など承認が返ったら、設定シート B2（メルシアター上限価格 14,100→15,500）と Beds24 roomTypes 554789 の cleaningFee（5,000→12,000）を書き換え、pricing-decisions.json に決定・reviewBy を追記し、Beds24 と Airbnb の実表示で読み戻す。決め

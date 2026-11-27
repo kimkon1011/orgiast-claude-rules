@@ -22,6 +22,11 @@ import {
   rowFromArgs,
   isMissingChatId,
   resolveNow,
+  HEADERS,
+  FIELDS,
+  isOffSiteTask,
+  siteConstraint,
+  CAFE_SOLO_REASON,
 } from './followup-ledger.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -506,7 +511,7 @@ test('L: add --nudge-text sets nudgeText; renderAlert table has counts', async (
   assert.match(md, /エスカレーション: 1件/);
   assert.match(md, /承認待ち: 1件/);
   assert.match(md, /担当PC不在: 1件/);
-  assert.match(md, /\| 依頼ID \| 依頼先 \| 状態 \| 理由 \| 次回確認 \|/);
+  assert.match(md, /\| 依頼ID \| 依頼先 \| 担当者区分 \| 居住地・最寄り \| 状態 \| 理由 \| 次回確認 \|/);
   assert.match(md, /\| S1 \|/);
   assert.match(md, /\| M1 \|/);
 });
@@ -640,4 +645,61 @@ test('N: scenario.ps1 equivalent (TEST-A/B/C/C2) with FOLLOWUP_NOW daytime', asy
     const mock2 = JSON.parse(fs.readFileSync(mockFile, 'utf8'));
     assert.equal(mock2.sent.length, 1, 'second check must not double-send');
   });
+});
+
+test('site constraint helpers and appended columns', () => {
+  assert.equal(HEADERS.length, FIELDS.length);
+  assert.deepEqual(HEADERS.slice(-3), ['担当者区分', '居住地・最寄り', '作業場所']);
+  assert.equal(isOffSiteTask({ task: '郵便局で投函' }), true);
+  assert.equal(isOffSiteTask({ task: '郵便局で投函', taskSite: 'in-store' }), false);
+  assert.equal(isOffSiteTask({ task: '店内で確認', taskSite: 'off-site' }), true);
+  assert.equal(siteConstraint({ assigneeRole: 'cafe-solo', task: '法務局へ訪問' }).blocked, true);
+  assert.equal(siteConstraint({ assigneeRole: 'remote-assistant', task: '法務局へ訪問' }).blocked, false);
+});
+
+test('P: cafe-solo off-site is stopped, escalated, alerted, and never nudged', async () => {
+  const dir = tmpDir('p-cafe');
+  const now = new Date('2026-11-27T14:00:00+09:00');
+  const mockFile = writeMock(dir, { replies: { 'chat-1': [] }, fail: {}, sent: [] });
+  const bodies = [];
+  const spawn = (_cmd, args) => {
+    const bodyAt = args.indexOf('--body-file');
+    if (bodyAt >= 0) bodies.push(fs.readFileSync(args[bodyAt + 1], 'utf8'));
+    return { status: 0, stdout: '[]', stderr: '' };
+  };
+  const config = baseConfig(dir, { people: { 'ほなみ': { role: 'cafe-solo', location: '大阪・東邦ハイツ211（カフェ店内・一人勤務）' } } });
+  await withEnv(baseEnv(dir, mockFile, { FOLLOWUP_NOW: toIsoJst(now) }), async () => {
+    const task = 'セブンイレブンのネットプリントで印刷して簡易書留で投函';
+    await main(addArgs('P1', { task, due: toIsoJst(new Date(now - 3600000)), requestedAt: toIsoJst(new Date(now - 7200000)), extra: ['--assignee-role', 'cafe-solo'] }), { config, storeMode: 'local', now, spawn });
+    await main(addArgs('P2', { to: 'ほなみさん（LINE）', task, due: toIsoJst(new Date(now - 3600000)), requestedAt: toIsoJst(new Date(now - 7200000)) }), { config, storeMode: 'local', now, spawn });
+    await main(['check', '--store', 'local'], { config, storeMode: 'local', now, spawn });
+    await main(['nudge', '--store', 'local', '--id', 'P1', '--force'], { config, storeMode: 'local', now, spawn });
+  });
+  const mock = JSON.parse(fs.readFileSync(mockFile, 'utf8'));
+  const store = loadLocalStore(path.join(dir, 'ledger.json'));
+  assert.equal(mock.sent.length, 0);
+  assert.ok(store.items.every((r) => r.status === '止まった' && r.statusReason.includes('一人勤務')));
+  assert.equal(store.items.find((r) => r.id === 'P2').assigneeRole, 'cafe-solo');
+  assert.ok(bodies.some((b) => b.includes('付け替え: 店を離れられる担当')));
+  assert.match(fs.readFileSync(path.join(dir, 'ALERT.md'), 'utf8'), /付け替えが必要/);
+});
+
+test('Q/R: in-store cafe and off-site remote assistant are nudged', async () => {
+  const dir = tmpDir('qr');
+  const now = new Date('2026-11-27T14:00:00+09:00');
+  const mockFile = writeMock(dir, { replies: { 'chat-1': [] }, fail: {}, sent: [] });
+  const config = baseConfig(dir);
+  const old = toIsoJst(new Date(now - 3600000));
+  await withEnv(baseEnv(dir, mockFile, { FOLLOWUP_NOW: toIsoJst(now) }), async () => {
+    await main(addArgs('Q1', { task: '店にある書類（原本）の有無を返事してください', due: old, requestedAt: old, extra: ['--assignee-role', 'cafe-solo', '--site', 'in-store'] }), { config, storeMode: 'local', now });
+    await main(addArgs('R1', { task: '最寄りの法務局で登記事項証明書を受け取り、レターパックで発送', due: old, requestedAt: old, extra: ['--assignee-role', 'remote-assistant', '--location', '福岡市（最寄り: 福岡法務局）'] }), { config, storeMode: 'local', now });
+    await main(['check', '--store', 'local'], { config, storeMode: 'local', now });
+  });
+  const mock = JSON.parse(fs.readFileSync(mockFile, 'utf8'));
+  const store = loadLocalStore(path.join(dir, 'ledger.json'));
+  assert.equal(mock.sent.length, 2);
+  assert.equal(store.items.find((r) => r.id === 'Q1').status, '催促済み');
+  assert.equal(store.items.find((r) => r.id === 'R1').status, '催促済み');
+  assert.equal(store.items.find((r) => r.id === 'R1').assigneeLocation, '福岡市（最寄り: 福岡法務局）');
+  assert.ok(!store.items.find((r) => r.id === 'R1').statusReason.includes(CAFE_SOLO_REASON));
 });

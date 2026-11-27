@@ -259,9 +259,12 @@ export function unansweredRows(values, { now = Date.now(), notified = {}, minAge
 }
 
 export function gmailQueryForSite(site, week) {
+  const after = `after:${week.startDate.replace(/-/g, '/')}`;
+  const before = `before:${addDays(week.endDate, 1).replace(/-/g, '/')}`;
+  if (site.gmailQuery) return `(${site.gmailQuery}) ${after} ${before}`;
   const hints = (site.gmailQueryHints || [site.domain, site.name]).filter(Boolean);
   const or = hints.map(h => `"${String(h).replace(/"/g, '')}"`).join(' OR ');
-  return `{${or}} after:${week.startDate.replace(/-/g, '/')} before:${addDays(week.endDate, 1).replace(/-/g, '/')}`;
+  return `{${or}} ${after} ${before}`;
 }
 
 function addDays(isoDate, days) {
@@ -276,23 +279,28 @@ export function gmailToInquiry(message, siteId) {
     ? new Date(Number(message.internalDate)).toISOString()
     : dateISO(message.date);
   const subject = String(message.subject || '').trim();
-  const snippet = String(message.snippet || message.body || '').trim();
+  const raw = String(message.body || message.snippet || '').trim();
+  const contentMatch = raw.match(/お問い合わせ内容[:：]\s*([\s\S]+)/);
+  const body = (contentMatch ? contentMatch[1] : raw).replace(/\s+/g, ' ').trim().slice(0, 800);
   return {
     key: `gmail:${message.id || subject}:${date}`,
     date,
-    company: guessCompany(subject, snippet) || '（会社名なし）',
-    body: snippet || subject,
+    company: guessCompany(subject, raw) || '（会社名なし）',
+    body: body || subject,
     source: siteId,
     subject,
   };
 }
 
-function guessCompany(subject, snippet) {
+export function guessCompany(subject, snippet) {
   const text = `${subject}\n${snippet}`;
-  const m = text.match(/(?:会社名|御社名|貴社名|Company)[:：\s]*([^\n\r|]{2,40})/i)
-    || text.match(/株式会社[\s　]*([^\s　\n\r]{1,30})/)
+  const labeled = text.match(/(?:会社名|御社名|貴社名|Company)[:：\s]*([^\n\r|]{2,40})/i);
+  if (labeled) return labeled[1].trim();
+  const intro = text.match(/(株式会社[A-Za-z0-9０-９ぁ-んァ-ヶー一-龥]{1,40})/);
+  if (intro) return intro[1].trim();
+  const m = text.match(/株式会社[\s　]*([^\s　\n\r]{1,30})/)
     || text.match(/([^\s　]{2,30}株式会社)/);
-  return m ? m[0].replace(/^(?:会社名|御社名|貴社名|Company)[:：\s]*/i, '').trim() : '';
+  return m ? String(m[0]).trim() : '';
 }
 
 export async function defaultAskLlm(prompt, { providers = ['deepseek', 'groq', 'mistral'] } = {}) {
@@ -518,9 +526,10 @@ export async function collectInquiries(config, week, deps = {}) {
         const search = deps.searchGmailImpl || searchGmail;
         const result = await search({
           user: config.gmailUser || 'seisaku-team@orgiast.jp',
-          query: site.gmailQuery || gmailQueryForSite(site, week),
+          query: gmailQueryForSite(site, week),
           max: 50,
-          withBody: false,
+          withBody: true,
+          bodyLimit: 2000,
           signal: deps.signal,
           ...(deps.gmailAuth || {}),
         });

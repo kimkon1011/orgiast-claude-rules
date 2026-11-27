@@ -16,11 +16,10 @@
       "domain": "rebooth.co.jp",
       "propertyId": "553004670",
       "inquirySource": "gmail",
+      "gmailQuery": "from:noreply@rebooth.co.jp subject:お問い合わせフォーム",
       "gmailQueryHints": [
-        "rebooth.co.jp",
-        "リブース",
-        "Reブース",
-        "rebooth"
+        "from:noreply@rebooth.co.jp",
+        "お問い合わせフォーム"
       ]
     },
     {
@@ -29,11 +28,12 @@
       "domain": "toho-kogyo.com",
       "propertyId": "278904354",
       "inquirySource": "gmail",
+      "gmailQuery": "from:(noreply@toho-kogyo.com OR wordpress@toho-kogyo.com OR form@toho-kogyo.com) (お問い合わせフォーム OR \"お問い合わせがありました\")",
       "gmailQueryHints": [
         "toho-kogyo.com",
-        "東邦鋼業",
-        "toho"
-      ]
+        "お問い合わせフォーム"
+      ],
+      "inquiryNote": "seisaku-team@ に東邦鋼業サイトのフォーム通知メールは 2026-11-27 実測で未検出。ヒット0件は未接続ではない"
     }
   ]
 }

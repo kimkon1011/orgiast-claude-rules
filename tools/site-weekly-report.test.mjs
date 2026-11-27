@@ -76,15 +76,21 @@ test('matchProperty prefers config id then name', () => {
 
 test('gmail helpers', () => {
   const week = { startDate: '2026-11-16', endDate: '2026-11-22' };
-  const q = gmailQueryForSite({ domain: 'rebooth.co.jp', name: 'リブース', gmailQueryHints: ['rebooth.co.jp', 'リブース'] }, week);
-  assert.match(q, /rebooth\.co\.jp/);
+  const q = gmailQueryForSite({
+    domain: 'rebooth.co.jp', name: 'リブース',
+    gmailQuery: 'from:noreply@rebooth.co.jp subject:お問い合わせフォーム',
+  }, week);
+  assert.match(q, /from:noreply@rebooth\.co\.jp/);
   assert.match(q, /after:2026\/11\/16/);
   const item = gmailToInquiry({
-    id: 'm1', subject: 'お問い合わせ: 株式会社サンプル', snippet: '展示会ブースについて',
+    id: 'm1',
+    subject: 'Reブース｜再利用可能な展示会ブース お問い合わせフォームからの送信',
+    body: 'お問い合わせ内容：株式会社FREDの鶴田と申します。ライブコマース用スタジオについて。',
     internalDate: String(Date.parse('2026-11-18T03:00:00Z')),
   }, 'rebooth');
   assert.equal(item.source, 'rebooth');
-  assert.ok(item.company.includes('サンプル') || item.company.includes('株式会社'));
+  assert.equal(item.company, '株式会社FRED');
+  assert.match(item.body, /ライブコマース/);
 });
 
 test('summarizeInquiries falls back when LLM fails', async () => {

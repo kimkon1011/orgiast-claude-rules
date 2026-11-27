@@ -81,7 +81,7 @@ test('gmail helpers', () => {
     gmailQuery: 'from:noreply@rebooth.co.jp subject:お問い合わせフォーム',
   }, week);
   assert.match(q, /from:noreply@rebooth\.co\.jp/);
-  assert.match(q, /after:2026\/11\/16/);
+  assert.match(q, new RegExp(`after:${Date.parse('2026-11-16T00:00:00+09:00') / 1000 - 1}`));
   const item = gmailToInquiry({
     id: 'm1',
     subject: 'Reブース｜再利用可能な展示会ブース お問い合わせフォームからの送信',
@@ -113,7 +113,7 @@ test('formatWeeklyMessage and splitDiscordMessages', () => {
   const text = formatWeeklyMessage({
     week: { label: '11/16〜11/22' },
     sites: [
-      { id: 'orgiast', name: 'オージャスト', status: 'ok', sessions: 100, pct: 10 },
+      { id: 'orgiast', name: 'オージャスト', status: 'ok', sessions: 100, pct: 10, inquiryStatus: 'ok' },
       { id: 'rebooth', name: 'リブース', status: 'unconnected', reason: 'GA4未検出' },
     ],
     inquiriesBySite: {
@@ -236,4 +236,65 @@ test('parseArgs', () => {
   assert.ok(a.flags.has('dry-run'));
   assert.ok(a.flags.has('check-unanswered'));
   assert.equal(a.config, 'x.json');
+});
+
+test('completed status annotations and exact 24h are not overdue', () => {
+  const now = Date.parse('2026-11-27T12:00:00+09:00');
+  const row = (date, status) => [date, '', '', '', '相談', 'A社', '', '', '', '', '', '', status];
+  const values = [HEADERS, row('2026-11-20', '完了（案件問合せ）'), row('2026-11-20', '完了 (採用)'), row('2026-11-26 12:00:00', ''), row('2026-11-20', '未完了')];
+  assert.deepEqual(unansweredRows(values, { now }).map(r => r.row), [5]);
+});
+
+test('successful AI summaries stay within 30 characters', async () => {
+  const result = await summarizeInquiries([{ body: '相談' }], { askLlm: async () => 'あ'.repeat(80) });
+  assert.equal(result[0].summary.length, 30);
+});
+
+test('unknown inquiry connection is never rendered as zero inquiries', () => {
+  const text = formatWeeklyMessage({ week: { label: '11/16〜11/22' }, sites: [{ id: 'x', name: 'X', status: 'ok', sessions: 2, pct: 0, inquiryStatus: 'unconnected', inquiryReason: '通知先未確認' }], inquiriesBySite: {} });
+  assert.match(text, /【X】未接続（通知先未確認）/);
+  assert.doesNotMatch(text, /0件|・なし/);
+});
+
+test('unanswered runs at most once per JST day', async () => {
+  const result = await runUnanswered({ dryRun: true }, {
+    config: { sites: [] }, now: new Date('2026-11-27T23:00:00+09:00'),
+    state: { lastUnansweredAt: '2026-11-27T01:00:00Z', notifiedUnanswered: {} },
+    readSheetImpl: async () => assert.fail('already sent today'),
+  });
+  assert.equal(result.skipped, 'already-today');
+});
+
+test('Gmail collects all pages and includes JST Monday midnight', async () => {
+  const { collectInquiries } = await import('./site-weekly-report.mjs');
+  const week = weekRange(new Date('2026-11-27T12:00:00+09:00'));
+  let calls = 0;
+  const result = await collectInquiries({ sites: [{ id: 'x', inquirySource: 'gmail', gmailQuery: 'from:form@example.com' }] }, week, {
+    searchGmailImpl: async ({ pageToken, query }) => {
+      calls++;
+      assert.match(query, new RegExp(`after:${week.startMs / 1000 - 1}`));
+      return { messages: [{ id: pageToken || 'first', internalDate: String(week.startMs), body: '相談' }], nextPageToken: pageToken ? null : 'second' };
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.bySite.x.length, 2);
+});
+
+test('Admin discovery failure does not block configured GA4 metrics', async () => {
+  const { collectSiteMetrics } = await import('./site-weekly-report.mjs');
+  const result = await collectSiteMetrics({ sites: [{ id: 'x', propertyId: '123' }] }, weekRange(), {
+    ga4Token: 'mock', fetchImpl: async url => String(url).includes('accountSummaries')
+      ? { ok: false, json: async () => ({ error: { message: 'no admin access' } }) }
+      : { ok: true, json: async () => ({ rows: [{ metricValues: [{ value: '17' }] }] }) },
+  });
+  assert.equal(result.sites[0].sessions, 17);
+});
+
+test('GA4 discovery follows pages', async () => {
+  const { listGa4Properties } = await import('./site-weekly-report.mjs');
+  const result = await listGa4Properties({ token: 'mock', fetchImpl: async url => ({ ok: true, json: async () => ({
+    accountSummaries: [{ propertySummaries: [{ property: String(url).includes('pageToken=') ? 'properties/2' : 'properties/1' }] }],
+    nextPageToken: String(url).includes('pageToken=') ? null : 'next',
+  }) }) });
+  assert.deepEqual(result.map(p => p.propertyId), ['1', '2']);
 });

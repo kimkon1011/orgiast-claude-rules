@@ -159,13 +159,15 @@ export async function fetchGa4Sessions(propertyId, startDate, endDate, { token, 
 }
 
 export async function listGa4Properties({ token, fetchImpl = globalThis.fetch, signal } = {}) {
-  const res = await fetchImpl(GA4_ADMIN_URL, {
+  const out = [];
+  let pageToken;
+  do {
+  const res = await fetchImpl(GA4_ADMIN_URL + (pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''), {
     signal,
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json.error?.message || `Admin API HTTP ${res.status}`);
-  const out = [];
   for (const account of json.accountSummaries || []) {
     for (const p of account.propertySummaries || []) {
       const id = String(p.property || '').replace(/^properties\//, '');
@@ -176,13 +178,15 @@ export async function listGa4Properties({ token, fetchImpl = globalThis.fetch, s
       });
     }
   }
+  pageToken = json.nextPageToken;
+  } while (pageToken);
   return out;
 }
 
 export function matchProperty(properties, site) {
   if (site.propertyId) {
     const hit = properties.find(p => p.propertyId === String(site.propertyId));
-    if (hit) return { propertyId: hit.propertyId, matchedBy: 'config', displayName: hit.displayName };
+    return { propertyId: String(site.propertyId), matchedBy: 'config', displayName: hit?.displayName || site.name };
   }
   const needles = [site.domain, site.name, site.id].filter(Boolean).map(s => String(s).toLowerCase());
   const hit = properties.find(p => {
@@ -239,11 +243,11 @@ export function unansweredRows(values, { now = Date.now(), notified = {}, minAge
     const row = values[i] || [];
     if (excludedInquiry(row, headers)) continue;
     const status = String(row[12] || '').trim();
-    if (status === '完了') continue;
+    if (/^完了(?:$|[（(\s])/.test(status)) continue;
     const date = dateISO(row[0]);
     if (!date) continue;
     const age = now - Date.parse(date);
-    if (!Number.isFinite(age) || age < minAgeMs) continue;
+    if (!Number.isFinite(age) || age <= minAgeMs) continue;
     const key = String(i + 1);
     if (notified[key]) continue;
     out.push({
@@ -259,8 +263,9 @@ export function unansweredRows(values, { now = Date.now(), notified = {}, minAge
 }
 
 export function gmailQueryForSite(site, week) {
-  const after = `after:${week.startDate.replace(/-/g, '/')}`;
-  const before = `before:${addDays(week.endDate, 1).replace(/-/g, '/')}`;
+  // Gmail date-only queries use Pacific time; epoch seconds preserve JST boundaries.
+  const after = `after:${Math.floor(Date.parse(`${week.startDate}T00:00:00+09:00`) / 1000) - 1}`;
+  const before = `before:${Math.floor(Date.parse(`${addDays(week.endDate, 1)}T00:00:00+09:00`) / 1000)}`;
   if (site.gmailQuery) return `(${site.gmailQuery}) ${after} ${before}`;
   const hints = (site.gmailQueryHints || [site.domain, site.name]).filter(Boolean);
   const or = hints.map(h => `"${String(h).replace(/"/g, '')}"`).join(' OR ');
@@ -342,7 +347,7 @@ export async function summarizeInquiries(inquiries, { askLlm = defaultAskLlm, sk
       const prompt = `次の問い合わせを日本語で30字以内に要約せよ。会社名や固有名詞は残す。要約本文のみ出力。\n会社: ${item.company}\n内容: ${item.body}`;
       try { summary = await askLlm(prompt); } catch { summary = null; }
     }
-    out.push({ ...item, summary: summary || fallbackSummary(item.body) });
+    out.push({ ...item, summary: summary ? [...String(summary).replace(/\s+/g, ' ').trim()].slice(0, 30).join('') : fallbackSummary(item.body) });
   }
   return out;
 }
@@ -365,6 +370,10 @@ export function formatWeeklyMessage({ week, sites, inquiriesBySite }) {
   lines.push('', '■ 問い合わせ');
   for (const s of sites) {
     const list = inquiriesBySite[s.id] || [];
+    if (s.inquiryStatus !== 'ok') {
+      lines.push(`【${s.name}】未接続（${s.inquiryReason || '取得不可'}）`);
+      continue;
+    }
     const note = s.inquiryStatus === 'ok' ? '' : ` ※${s.inquiryReason || '未接続'}`;
     lines.push(`【${s.name}】${list.length}件${note}`);
     if (!list.length) {
@@ -453,7 +462,6 @@ export async function collectSiteMetrics(config, week, deps = {}) {
   let token = null;
   try {
     token = await resolveGa4Token(deps);
-    if (!properties) properties = await listGa4Properties({ token, fetchImpl, signal: deps.signal });
   } catch (e) {
     for (const site of config.sites) {
       sitesOut.push({
@@ -467,6 +475,11 @@ export async function collectSiteMetrics(config, week, deps = {}) {
     }
     return { sites: sitesOut, properties: [], tokenError: e.message };
   }
+  let discoveryError;
+  if (!properties) {
+    try { properties = await listGa4Properties({ token, fetchImpl, signal: deps.signal }); }
+    catch (e) { properties = []; discoveryError = e.message; }
+  }
 
   for (const site of config.sites) {
     const matched = matchProperty(properties, site);
@@ -474,15 +487,12 @@ export async function collectSiteMetrics(config, week, deps = {}) {
       sitesOut.push({
         ...site,
         status: 'unconnected',
-        reason: `GA4プロパティ未検出（domain=${site.domain}）`,
+        reason: discoveryError || `GA4プロパティ未検出（domain=${site.domain}）`,
         sessions: null,
         prevSessions: null,
         pct: null,
       });
       continue;
-    }
-    if (!site.propertyId || String(site.propertyId) !== matched.propertyId) {
-      site.propertyId = matched.propertyId;
     }
     try {
       const [sessions, prevSessions] = await Promise.all([
@@ -526,16 +536,26 @@ export async function collectInquiries(config, week, deps = {}) {
         bySite[site.id] = sheetInquiries(values, week);
       } else if (site.inquirySource === 'gmail') {
         const search = deps.searchGmailImpl || searchGmail;
+        const messages = [];
+        let pageToken;
+        do {
         const result = await search({
           user: config.gmailUser || 'seisaku-team@orgiast.jp',
           query: gmailQueryForSite(site, week),
-          max: 50,
+          max: 100,
+          pageToken,
           withBody: true,
           bodyLimit: 2000,
           signal: deps.signal,
           ...(deps.gmailAuth || {}),
         });
-        bySite[site.id] = (result.messages || [])
+        messages.push(...(result.messages || []));
+        pageToken = result.nextPageToken;
+        } while (pageToken);
+        if (site.inquiryVerified === false) {
+          siteMeta[site.id] = { inquiryStatus: 'unconnected', inquiryReason: site.inquiryNote || 'フォーム通知経路未確認' };
+        }
+        bySite[site.id] = [...new Map(messages.map(m => [m.id, m])).values()]
           .map(m => gmailToInquiry(m, site.id))
           .filter(i => i.date && inWeek(i.date, week));
       }
@@ -603,7 +623,6 @@ export async function runWeekly(args = {}, deps = {}) {
         skipLlm: !llmInvoked,
       });
     }
-    if (!dryRun) (deps.commitImpl || commit)(CHANGE_GATE_WEEKLY, { fingerprint: fp });
     (deps.recordRunImpl || recordRun)(CHANGE_GATE_WEEKLY, { changed: true, llmInvoked, items: flat.length });
   }
 
@@ -614,6 +633,7 @@ export async function runWeekly(args = {}, deps = {}) {
   const posted = await postChannelMessages(chunks, {
     channelId, token, fetchImpl: deps.fetchImpl, dryRun,
   });
+  if (!dryRun && g.changed) (deps.commitImpl || commit)(CHANGE_GATE_WEEKLY, { fingerprint: fp });
 
   let readBack = null;
   if (!dryRun && posted[0]?.id && deps.readBack !== false) {
@@ -645,6 +665,9 @@ export async function runUnanswered(args = {}, deps = {}) {
   const dryRun = Boolean(args.flags?.has?.('dry-run') ?? args.dryRun);
   const now = deps.now || new Date();
   const state = deps.state || loadState(home);
+  const today = new Date((now.getTime?.() ?? now) + 9 * 3600000).toISOString().slice(0, 10);
+  const lastDay = state.lastUnansweredAt ? new Date(Date.parse(state.lastUnansweredAt) + 9 * 3600000).toISOString().slice(0, 10) : null;
+  if (lastDay === today) return { mode: 'unanswered', rows: [], text: '', posted: [], skipped: 'already-today', dryRun };
   const values = deps.sheetValues
     || await (deps.readSheetImpl || readSheet)(INQUIRY_SHEET, INQUIRY_TAB, { signal: deps.signal });
   const rows = unansweredRows(values, {
@@ -674,11 +697,8 @@ export async function runUnanswered(args = {}, deps = {}) {
   if (!dryRun) {
     const notified = { ...(state.notifiedUnanswered || {}) };
     for (const r of rows) notified[r.key] = new Date().toISOString();
-    // 完了になった行は掃除
-    for (let i = 1; i < values.length; i++) {
-      if (String(values[i]?.[12] || '').trim() === '完了') delete notified[String(i + 1)];
-    }
-    const next = { ...state, notifiedUnanswered: notified, lastUnansweredAt: new Date().toISOString() };
+    // Keep notified row IDs even after completion: never remind the same row again.
+    const next = { ...state, notifiedUnanswered: notified, lastUnansweredAt: new Date(now).toISOString() };
     if (!deps.skipStateWrite) saveState(next, home);
     (deps.commitImpl || commit)(CHANGE_GATE_UNANSWERED, { fingerprint: fp });
   }

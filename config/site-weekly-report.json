@@ -33,7 +33,8 @@
         "toho-kogyo.com",
         "お問い合わせフォーム"
       ],
-      "inquiryNote": "seisaku-team@ に東邦鋼業サイトのフォーム通知メールは 2026-11-27 実測で未検出。ヒット0件は未接続ではない"
+      "inquiryVerified": false,
+      "inquiryNote": "seisaku-team@ のフォーム通知未検出・通知経路未確認（2026-11-27）"
     }
   ]
 }

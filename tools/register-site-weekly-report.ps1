@@ -1,9 +1,11 @@
 # ASCII only. Register site weekly report + unanswered check on this PC's Task Scheduler.
 # Weekly: Wed 10:30 local (JST on 011). Unanswered: daily 10:00 local.
+param([string]$RepoRoot)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
 . (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
-$repo = Resolve-RegisterRepoRoot -Fallback (Split-Path -Parent $PSScriptRoot) -RequiredPaths @('tools\site-weekly-report.mjs', 'config\site-weekly-report.json')
+$repo = if ($RepoRoot) { (Resolve-Path -LiteralPath $RepoRoot).Path } else { Resolve-RegisterRepoRoot -Fallback (Split-Path -Parent $PSScriptRoot) -RequiredPaths @('tools\site-weekly-report.mjs', 'config\site-weekly-report.json') }
+if ((Get-TimeZone).Id -ne 'Tokyo Standard Time') { throw 'These schedules require Tokyo Standard Time (JST).' }
 $script = Join-Path $repo 'tools\site-weekly-report.mjs'
 if (-not (Test-Path $script)) { throw "script not found: $script" }
 $node = (Get-Command node -ErrorAction SilentlyContinue).Source

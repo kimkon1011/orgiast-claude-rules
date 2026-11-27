@@ -6,7 +6,6 @@
     },
     "booth": {
       "remoteName": "作業用014",
-      "fallback": "作業用008",
       "label": "展示会ブース"
     },
     "production": {

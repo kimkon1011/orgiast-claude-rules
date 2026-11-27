@@ -30,6 +30,7 @@ import { validateWeekdays } from './lib/weekday-validator.mjs';
 import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 import { acquireSendDedupe, SendDedupeError } from './lib/send-dedupe.mjs';
 import { applyBoothCc } from './lib/booth-sales-cc.mjs';
+import { assertNoHandback, stripHumanOnly } from './lib/handback-guard.mjs';
 
 const BOOTH_CC = 'satou@orgiast.jp';
 
@@ -41,6 +42,17 @@ const DEFAULT_KEY = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath();
 const SCOPES = ['gmail.readonly', 'gmail.compose', 'gmail.send'].map(s => `https://www.googleapis.com/auth/${s}`);
 const b64url = value => Buffer.from(value).toString('base64url');
 const configError = () => Object.assign(new Error('設定を確認してください（引数・入力ファイル・SA キー）。'), { errorKind: 'configuration_error' });
+
+/** 送信前に差し戻し文面を止める。HUMAN-ONLY タグは先方に見せないので、除去後の本文が変わる場合は下書き更新が必要。 */
+export function assertGmailBodySendable(text, { env = process.env, skipHandbackGuard = false } = {}) {
+  if (!skipHandbackGuard) assertNoHandback(text, { env });
+  const stripped = stripHumanOnly(text);
+  if (stripped !== String(text ?? '')) {
+    throw Object.assign(new Error('下書き本文の [HUMAN-ONLY: ...] を外してから送ってください。タグは送信許可の印で、先方には見せません。'), { errorKind: 'handback_tag_present', code: 'HANDBACK_TAG_UNSTRIPPED', stripped });
+  }
+  return stripped;
+}
+
 
 function addresses(value, required = false) {
   const list = (Array.isArray(value) ? value : [value ?? '']).flatMap(v => {
@@ -305,7 +317,7 @@ async function fetchDraftBody({ user, id, fetchImpl, getToken }) {
 }
 
 /** Read the existing MIME headers before sending; include hidden Bcc recipients. */
-export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger(), fetchImpl = gwsFetch, getToken, draft: suppliedDraft, allowRepeat, home, acquireDedupe = acquireSendDedupe }) {
+export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger(), fetchImpl = gwsFetch, getToken, draft: suppliedDraft, allowRepeat, home, acquireDedupe = acquireSendDedupe, env = process.env, skipHandbackGuard = false }) {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(id)) throw configError();
   const token = await (getToken ?? (args => mintDwdToken({ ...args, fetchImpl })))({ user, scope: GMAIL_COMPOSE_SCOPE });
   const request = async (url, options = {}) => {
@@ -326,7 +338,9 @@ export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger()
   const internal = recipients.filter(addr => isInternal(addr, ledger));
   const isForward = values('x-orgiast-forward').some(value => /^[A-Za-z0-9_-]+$/u.test(value));
   if (shouldBlockInternal(recipientFields, ledger) && !isForward) throw Object.assign(new Error('内部宛は Discord で連絡してください。'), { errorKind: 'internal_recipient', internal });
-  const guard = await acquireDedupe({ recipients: values('to'), body: mimeText(draft?.message?.payload).text, allowRepeat, home });
+  const draftBody = mimeText(draft?.message?.payload).text;
+  assertGmailBodySendable(draftBody, { env, skipHandbackGuard });
+  const guard = await acquireDedupe({ recipients: values('to'), body: draftBody, allowRepeat, home });
   try {
     const sent = await request('https://gmail.googleapis.com/gmail/v1/users/me/drafts/send', {
       method: 'POST', body: JSON.stringify({ id }),
@@ -418,6 +432,14 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       if (bookingUrls.length) {
         emit({ ok: false, errorKind: 'secretary_booking_url', matches: bookingUrls }, `${SECRETARY_BOOKING_URL_REASON}\n検出: ${bookingUrls.join('、')}`);
         return 2;
+      }
+      try { assertGmailBodySendable(draftText, { env: deps.env ?? process.env, skipHandbackGuard: deps.skipHandbackGuard }); }
+      catch (error) {
+        if (error?.code === 'HANDBACK_BLOCKED' || error?.errorKind === 'handback_tag_present') {
+          emit({ ok: false, errorKind: error.errorKind ?? 'handback_blocked', hits: error.hits, code: error.code }, error.message);
+          return 4;
+        }
+        throw error;
       }
       if (!isForward && !consistency.ok && !args['ack-consistency']) { emit({ ok: false, errorKind: 'consistency_block', findings: consistency.findings }, renderConsistency(consistency)); return 2; }
       if (!isForward && args['ack-consistency']) {
@@ -523,6 +545,10 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
   } catch (error) {
     if (error instanceof SendDedupeError) {
       emit({ ok: false, errorKind: 'send_duplicate', error: error.message }, error.message);
+      return 4;
+    }
+    if (error?.code === 'HANDBACK_BLOCKED' || error?.errorKind === 'handback_blocked' || error?.errorKind === 'handback_tag_present') {
+      emit({ ok: false, errorKind: error.errorKind ?? 'handback_blocked', hits: error.hits, code: error.code }, error.message);
       return 4;
     }
     if (error?.errorKind === 'internal_recipient') {

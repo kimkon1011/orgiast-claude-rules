@@ -126,10 +126,9 @@ export function classifyFollowup({ meeting, event, caseMatch, config, transcript
 export function routeFollowup(kind, config, pcMap, beacons = []) {
   const rule = config.routes[kind];
   if (!rule) return { pc: null, requested: null, note: '' };
-  let pc = resolvePC(rule.remoteName, pcMap, beacons), note = '';
-  if (!pc && kind === 'booth' && rule.fallback) {
-    pc = resolvePC(rule.fallback, pcMap, beacons); note = '014未解決のため008で代行';
-  }
+  const pc = resolvePC(rule.remoteName, pcMap, beacons);
+  // 担当外PCへの代行はしない（kim 2026-11-27）。担当PCが未解決なら保留し、復旧を待つ。
+  const note = pc ? '' : `担当PC（${rule.remoteName}）が未解決のため、担当外PCでは代行しない`;
   return { pc, requested: rule.remoteName, note };
 }
 export function folderName(meeting, customer) {

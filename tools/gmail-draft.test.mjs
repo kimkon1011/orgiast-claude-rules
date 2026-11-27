@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   GMAIL_COMPOSE_SCOPE, DEFAULT_USER, buildRawMessage, buildForwardRaw, guardRecipients,
   renderChatDisplay, classifyTokenError, probeScopes, createDraft, deleteDraft, runCli,
+  assertGmailBodySendable,
 } from './gmail-draft.mjs';
 
 const ledger = { domains: ['orgiast.jp', 'toho-kogyo.com'], addresses: ['staff@gmail.com'] };
@@ -930,4 +931,29 @@ test('返信先なし・Message-ID 欠落・ヘッダ注入・取得失敗なら
     assert.equal(calls, 1);
     assert.equal(result.output[0].includes('SECRET'), false);
   }
+});
+
+test('送信前ガード: 人へ作業を戻す文面は止める', () => {
+  assert.throws(
+    () => assertGmailBodySendable('くらしのマーケットの仮押さえ先の確認をお願いします。', { env: {} }),
+    (error) => error.code === 'HANDBACK_BLOCKED',
+  );
+  assert.equal(assertGmailBodySendable('西林様へ送り先確認のメールを送済みです。', { env: {} }), '西林様へ送り先確認のメールを送済みです。');
+});
+
+test('送信前ガード: HUMAN-ONLY タグ付きは通るが、タグを外すまで送れない', () => {
+  const body = '[HUMAN-ONLY: 現地作業] 11/29 9:00に現場で鍵の受け取りをお願いします。';
+  assert.throws(
+    () => assertGmailBodySendable(body, { env: {} }),
+    (error) => error.code === 'HANDBACK_TAG_UNSTRIPPED' && error.stripped.includes('現場で鍵の受け取り'),
+  );
+  const plain = assertGmailBodySendable('担当の金が11/29 9:00に現場で鍵を受け取ります。', { env: {} });
+  assert.equal(plain, '担当の金が11/29 9:00に現場で鍵を受け取ります。');
+});
+
+test('送信前ガード: ORGIAST_HANDBACK_GUARD=0 で無効', () => {
+  assert.equal(
+    assertGmailBodySendable('確認をお願いします', { env: { ORGIAST_HANDBACK_GUARD: '0' } }),
+    '確認をお願いします',
+  );
 });

@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { detectHourly, hourlyStopSignal, sessionIsRunning, runningHourlyProcesses, acquireSessionLock, classifyHourly, HOURLY_CLASSIFIERS, HOURLY_EXCLUDED_PROVIDERS, heartbeatLine, publishHourlyHeartbeat, readHourlyTail } from './lib/stalled-session-hourly.mjs';
+import { detectHourly, hourlyStopSignal, sessionIsRunning, runningHourlyProcesses, acquireSessionLock, classifyHourly, HOURLY_CLASSIFIERS, HOURLY_EXCLUDED_PROVIDERS, heartbeatLine, publishHourlyHeartbeat, readHourlyTail, HEARTBEAT_GIT_GC_ARGS, heartbeatPublishStatusPath } from './lib/stalled-session-hourly.mjs';
 import { executeHourlyFork, run, options, usageNeedsOauthRefresh, formatUsageUnknownSkipReason } from './stalled-session-resume.mjs';
+import { buildBeacon } from './fleet-beacon.mjs';
 
 function homeFor(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hourly-fork-'));
@@ -319,9 +320,94 @@ test('ハートビート: rebaseにもcommitter identityを指定する', t => {
     calls.push(args);
     return execFileSync(cmd, args, opts);
   } });
-  const rebase = calls.find(args => args.includes('rebase'));
+  const rebase = calls.find(args => args.includes('rebase') && !args.includes('--abort'));
   assert.ok(rebase);
-  assert.deepEqual(rebase.slice(0, 4), ['-c', 'user.name=Orgiast heartbeat', '-c', 'user.email=heartbeat@orgiast.jp']);
+  assert.deepEqual(rebase.slice(0, 4), [...HEARTBEAT_GIT_GC_ARGS]);
+  assert.deepEqual(rebase.slice(4, 8), ['-c', 'user.name=Orgiast heartbeat', '-c', 'user.email=heartbeat@orgiast.jp']);
+});
+
+function mockHeartbeatGit(args) {
+  if (args.includes('branch') && args.includes('--show-current')) return 'fleet-heartbeat';
+  if (args.includes('ls-remote')) return 'abc123\trefs/heads/fleet-heartbeat';
+  if (args.includes('diff') && args.includes('--cached') && args.includes('--quiet')) {
+    const error = new Error('diff');
+    error.status = 1;
+    throw error;
+  }
+  return '';
+}
+
+test('ハートビート: 11分前の index.lock が残っていても publish が成功する', t => {
+  const home = homeFor(t);
+  const dir = path.join(home, '.claude', 'fleet-heartbeat-repo');
+  fs.mkdirSync(path.join(dir, '.git', 'refs', 'heads'), { recursive: true });
+  const lock = path.join(dir, '.git', 'index.lock');
+  fs.writeFileSync(lock, '');
+  const now = Date.now();
+  const age = new Date(now - 11 * 60_000);
+  fs.utimesSync(lock, age, age);
+  const result = publishHourlyHeartbeat({
+    home, repo: home, hostname: '019PC', account: 'test@example.com', now,
+    exec: (_cmd, args) => mockHeartbeatGit(args),
+  });
+  assert.equal(result.pushed, true, result.line);
+  assert.ok(!fs.existsSync(lock));
+  assert.ok(!fs.existsSync(heartbeatPublishStatusPath(home)));
+});
+
+test('ハートビート: 5分前の index.lock は削除せず失敗する', t => {
+  const home = homeFor(t);
+  const dir = path.join(home, '.claude', 'fleet-heartbeat-repo');
+  fs.mkdirSync(path.join(dir, '.git', 'refs', 'heads'), { recursive: true });
+  const lock = path.join(dir, '.git', 'index.lock');
+  fs.writeFileSync(lock, '');
+  const now = Date.now();
+  const age = new Date(now - 5 * 60_000);
+  fs.utimesSync(lock, age, age);
+  let gitCalls = 0;
+  const result = publishHourlyHeartbeat({
+    home, repo: home, hostname: '019PC', account: 'test@example.com', now,
+    exec: () => { gitCalls++; return ''; },
+  });
+  assert.equal(result.pushed, false);
+  assert.equal(gitCalls, 0, 'young lock must fail before git');
+  assert.ok(fs.existsSync(lock));
+  assert.match(JSON.parse(result.line).error, /git lock busy: index\.lock/);
+  const status = JSON.parse(fs.readFileSync(heartbeatPublishStatusPath(home), 'utf8'));
+  assert.equal(status.ok, false);
+  assert.equal(status.id, 'heartbeat-publish');
+  assert.ok(buildBeacon({ home, label: '019', identity: {}, pcMap: {} }).failing.includes('heartbeat-publish'));
+});
+
+test('ハートビート: git 呼び出しに gc.auto=0 が付く', t => {
+  const home = homeFor(t);
+  const dir = path.join(home, '.claude', 'fleet-heartbeat-repo');
+  fs.mkdirSync(path.join(dir, '.git', 'refs', 'heads'), { recursive: true });
+  const calls = [];
+  publishHourlyHeartbeat({
+    home, repo: home, hostname: '019PC', account: 'test@example.com',
+    exec: (_cmd, args) => { calls.push(args); return mockHeartbeatGit(args); },
+  });
+  assert.ok(calls.length > 0);
+  for (const args of calls) assert.deepEqual(args.slice(0, 4), [...HEARTBEAT_GIT_GC_ARGS]);
+});
+
+test('ハートビート: corrupt エラー時にディレクトリが rename され削除されない', t => {
+  const home = homeFor(t);
+  const dir = path.join(home, '.claude', 'fleet-heartbeat-repo');
+  fs.mkdirSync(path.join(dir, '.git'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'keep.txt'), 'payload');
+  const now = new Date(2026, 10, 26, 10, 2, 3).getTime();
+  const result = publishHourlyHeartbeat({
+    home, repo: home, hostname: '019PC', account: 'test@example.com', now,
+    exec: () => { throw Object.assign(new Error('fatal: packfile ... index unavailable'), { stderr: 'index unavailable' }); },
+  });
+  assert.equal(result.pushed, false);
+  assert.ok(!fs.existsSync(dir));
+  const broken = path.join(home, '.claude', 'fleet-heartbeat-repo.broken-20261126100203');
+  assert.ok(fs.existsSync(broken));
+  assert.equal(fs.readFileSync(path.join(broken, 'keep.txt'), 'utf8'), 'payload');
+  assert.match(JSON.parse(fs.readFileSync(heartbeatPublishStatusPath(home), 'utf8')).reason, /index unavailable/);
 });
 
 test('push失敗もローカル1行を残し致命傷にしない', t => {

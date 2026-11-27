@@ -1,7 +1,7 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-27 20:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-27 21:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 64
+- 案件数: 69
 
 - 011・.stall-sweeper・停止・最終更新 11/26 04:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・20261126-クラフト坂口・金さん待ち・クラフト坂口様 宿題7件の成果物は完成。精算の計算方法・福岡請求書の作り直し・先払い承認・いなば様への送信時期の判断待ち・期限2026-12-03（坂口様への精算金額の返答）・次:金さんの判断に沿って、坂口様への返信・福岡請求書の作り直し・Discord送信を進める（送信は承認後のみ）
@@ -11,6 +11,7 @@
 - 011・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・craftfix-invoice-1126・金さん待ち・福岡の請求メールは、送信ゲートが「承認前に本文の全文（末尾のAI作成表記を含む）を表示する」ことを求めて止めたため、未送信・期限2026-11-30（支払期限）。できれば 2026-11-26 14:00 の坂口様との打合せ前・次:金さんに本文全文を見てもらい、「送ってよい」の返事が来たら draftId r-7773355574643993441 を送って読み戻す
 - 011・cursor-hook-fix-1126・停止・最終更新 11/26 01:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・cursor-removal-1127・停止・最終更新 11/27 21:05、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・D-115 reブース前金: STATUS・金さん待ち・期限切れ（2026-09-30）から57日超過。前金 ¥2,077,369 の支払い完了有無を確認する手段がなく、完了／延期／不要の判断は金さんが必要。・期限なし・次:金さんが「D-115 完了」「D-115 延期 <日付>」「D-115 不要」のいずれかを答える
 - 011・deadline-watch-calid・金さん待ち・PR #2863（期限監視の Calendar ID衝突誤判定の修正、CI 全成功）のマージ＝本番反映は無人起動では実行しない指示のため・期限なし・次:金さんが「可」なら gh pr merge 2863 --squash → 翌朝 8:30 の OrgiastDeadlineWatch 前回の結果=0 を確認（kim-inbox ki-20261127003618-22b7）
 - 011・deadlinewatch-fix-1127・金さん待ち・PR #2863 のマージ承認待ち（無人実行のため本番には反映していない）・期限なし・次:承認を受けたらマージし、nightly-repo を pull してから `schtasks /run /tn OrgiastDeadlineWatch` を実行し、「前回の結果」が 0 になったことを確認する
@@ -23,9 +24,11 @@
 - 011・extwait-kim-400・停止・最終更新 11/26 14:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・fallback-chain-timeout-1127・完了・PR #2849 MERGED・landed・期限なし・次:11/28 の delegation-health.json に fallback_chain_timeout が出ないことを確認
 - 011・fallback-deepseek-timeout-1127・進行中・Codex に修正を委譲中（codex-do バックグラウンド）・期限なし・次:RESULT.md と PR を読み戻し、Windows で node --test を再実行、PR の MERGED を確認して /session-close
+- 011・followup-ledger-1127・停止・最終更新 11/27 21:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・gitignore-scan-out・停止・最終更新 11/27 14:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・gridbeyond-reply-1126・金さん待ち・GridBeyond ミント様への失注お礼の返信は下書き済みで、送信承認待ち・期限なし（礼状のため早いほどよい。目安は 11/27 中）・次:金さんが「送ってよい」と言ったら gmail-draft.mjs --send で送り、送信済みを読み戻す（kim-inbox ki-20261126111434-7de5）
 - 011・gridbeyond-yosu-1125・金さん待ち・最終更新 11/25 11:38、STATUS.mdなし、REPORTあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・grobo-dispatch・停止・最終更新 11/27 20:49、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・handoff-verify-1127b・停止・最終更新 11/27 16:11、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・illumi-kono-claim-1125・停止・最終更新 11/25 18:46、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
 - 011・kim-awaiting-noarg・停止・最終更新 11/26 16:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -37,6 +40,7 @@
 - 011・notify-repair-268e・完了・通知の誤起票（notify-kim:268e78e157993e7a5bad）を PR #2843 で修正し、2026-11-26T19:02:32Z に MERGED（1f17ba99）。next-session.md は無人起動で編集拒否のため、23番の完了印をこのファイルで代替・期限なし・次:next-session.md の 23番「通知の原因調査・修復」は完了扱いで選ばない。別件【夜間】tools/dirty-worktree-guard.test.mjs「閾値内の index.lock は稼働中とみなし削除しない」が CI だけで不安定（手元3回合格）→再発時に閾値を見直す。rescue/auto-session-20261127-0306
 - 011・plan3oku-11-work・停止・最終更新 11/25 20:58、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・plan3oku-15-toho-1126・停止・最終更新 11/26 08:58、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・plan3oku-15-toho-1127・停止・最終更新 11/27 21:06、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・plan3oku-17-kpi-1126・完了・kpi-daily に計画シートKPIタブ書き込みを追加し、毎朝8:00に変更。11/26 21:10 実行で反映・読み戻し一致18/18。freee 2項目のみ未取得・期限なし・次:11/27 8:00 の自動更新を auto-progress 台帳で確認。freee 鍵を作業用011へ配るかは金さん判断（latest-plan3oku-17-kpi.md の要判断）
 - 011・pr2745-ci・停止・最終更新 11/26 03:34、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・pr2745-ci-fix・停止・最終更新 11/26 03:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -47,7 +51,7 @@
 - 011・sales-14sha-1125・完了・最終更新 11/25 11:34、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 011・sales-followup・停止・最終更新 11/27 07:40、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-link-audit-1126・完了・監査・修正・書き出し完了、13:00 毎時本番で動作確認済み・期限2026-11-26 当日・次:なし（毎時ジョブが send-commitments を追跡し stuck-export を毎時更新）
-- 011・営業 次回連絡日・金さん待ち・最終更新 11/27 20:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・営業 次回連絡日・金さん待ち・最終更新 11/27 21:06、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・session-1126-hourly・金さん待ち・JACE 藤野様宛ての返信下書きが打合せ前の文面のまま。修正版の送信可否は金さんの承認が要る（kim-inbox ki-20261126081310-6cf5）・期限2026-12-11（先方の返信期限）／着手期限 2026-12-09・次:承認が来たら seisaku-team@ の下書きを修正版に差し替え、gmail-draft.mjs の自動チェックを通して送信し、送信済みを読み戻す
 - 011・session-1205・完了・handoff-audit 8件の再発検証が終わった。f61ffeb282843871（P4）は再発0件で、検証済み台帳に追加した（PR #2878 MERGED 2026-11-27T03:24:51Z）。残り7件は 11/26 12:00Z 以降も同じ型の文が出ているため、台帳には入れていない・期限なし・次:next-session.md の8番は完了したので次回は選ばない（無人だと next-session.md を書き換えられず、この STATUS.md に残している）。9〜15番の7件は ID ごとに検証し直しても消えない。直すべきなのは、W 型の「完了待ち」の文が出る仕組みのほう。worktree ~/.claude/wt-handoff-verify-
 - 011・session-cap-1126・金さん待ち・最終更新 11/26 19:36、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
@@ -58,6 +62,7 @@
 - 011・tasks・停止・最終更新 11/24 09:49、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・状態・完了・倉庫アプリ(GAS)のコマンドキューのトリガーが停止しており、復旧には倉庫アプリを一度開く操作が必要・期限2026-11-27 17:00（初回自動送信の予定時刻）・次:倉庫アプリが開かれたら、投入済みの `cmd_dailysend1126.json` と `cmd_dailytrigger1126.json` が自動実行される。結果ファイル `result_dailysend1126.txt` / `result_dailytrigger1126.txt` を読んで送信成功とトリガー設置を確認する
 - 011・wiaas-pitch-1212・停止・最終更新 11/25 17:09、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・x0097-prefix-cache・完了・PR #2892 MERGED 2026-11-27T11:31:47Z（send-context-check の送信予定日時をプロンプト末尾へ）。Windows node --test 39/39 pass。実測は OpenRouter DeepSeek flash で cached_tokens 0/4、ネイティブ DeepSeek は 402 残高不足・期限なし・次:DeepSeek 直接キーの残高を入金したら同じ手順で prompt_cache_hit_tokens を再測（kim 判断）
 - 011・x0099-longquery-1127・完了・GSC 実データ（12,766行）で X-0099 を検証。上位20の長文クエリはすべて SDGs 記事で、ブース受注に直結しないため「今は直さない」と判断（RESULT.md 末尾の「監督の照合」）・期限なし・次:なし（rebooth.co.jp の長文クエリ表示が月100を超えたら再評価）
 - 011・x0100-consensus-proof・完了・競合6本の見出し＋論点マトリクス、自社PROOF（金額・小間・写真・削減率）を実取得し RESULT.md / urls.txt を作成・期限2026-12-04・次:RESULT の「今すぐ」案1を x0101 DRAFT 1563即答へ反映検討。サイト反映は kim 承認待ち（期限 12/04）
 - 011・x0101-gsc-preflight・完了・tools/gsc-preflight.mjs を PR #2881（automerge）で提出、Windows test 12/12 緑、実データ判定済み。着地は auto-progress が確認。next-session.md は無人起動で書込拒否のため引き継ぎはこのファイルと RESULT.md・期限なし・次:【夜間】REWRITE 2件の即答原稿下書き（rebooth.co.jp/exhibition/1563「展示会ブース 費用」500字以内、orgiast.jp/topics/7660「ブース デザイン」）→サイト反映は kim 承認待ち。next-session.md 残TODO 1番は完了として選ばない

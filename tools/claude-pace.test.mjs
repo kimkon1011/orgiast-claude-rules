@@ -362,3 +362,38 @@ test('launchPaceTasks dry-run を2回続けても同じタスクが選ばれる'
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('launchPaceTasks 実行失敗時はタスクが 失敗 になり 実行中 を残さない', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-pace-test-'));
+  try {
+    readQueue(home); // runtime queue を初期化
+    const result = await launchPaceTasks({
+      home,
+      host: '018',
+      account: 'cr@orgiast.jp',
+      count: 1,
+      nowMs: Date.parse('2026-11-27T12:00:00.000Z'),
+      dryRun: false,
+      resolveExe: async () => ({ executable: 'fake-claude' }),
+      runChild: async () => ({ code: 1, timedOut: false }),
+    });
+
+    // タスクが1件選ばれ、失敗として報告されている
+    assert.ok(result.launched.length > 0, 'タスクが1件選ばれるべき');
+    assert.equal(result.launched[0].ok, false, 'runChild が0以外を返したら ok=false');
+    const id = result.launched[0].id;
+    assert.ok(typeof id === 'string' && id.length > 0);
+
+    // queue ファイルを読み戻し: 該当タスクは 失敗、実行中のまま残っていない
+    const after = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'claude-pace-queue.json'), 'utf8'));
+    const task = (after.tasks || []).find((t) => t.id === id);
+    assert.ok(task, '実行したタスクが queue に存在するべき');
+    assert.equal(task.state, '失敗', '失敗したタスクは 失敗 になるべき');
+    assert.notEqual(task.state, '実行中');
+    const stillRunning = (after.tasks || []).filter((t) => t.state === '実行中' && t.id === id);
+    assert.equal(stillRunning.length, 0, '実行中 のまま取り残されてはいけない');
+    assert.equal(task.lastExitCode, 1);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

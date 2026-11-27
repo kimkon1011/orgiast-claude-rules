@@ -6,7 +6,7 @@ import path from 'node:path';
 import { main, extractBatch, candidateRow, evidencedDue, runDetect, askProvider, parseExtraction } from './deadline-detect.mjs';
 import { seatCheck } from './lib/deadline-seat.mjs';
 import { collectGmail, collectDrive, readDriveText, collectLine, collectDiscord, wantsBody, trimBytes, sourceLoaders } from './lib/deadline-sources.mjs';
-import { DEFAULT_CONFIG, saveJson, dataPath } from './deadline-ledger.mjs';
+import { DEFAULT_CONFIG, saveJson, dataPath, withLedgerLock } from './deadline-ledger.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 const document = { source: 'Gmail', sourceRef: 'mail:test', date: '2026-11-03T23:00:00Z', text: '明日までに回答してください。', mailbox: 'kim@orgiast.jp', threadId: 'thread' };
 const item = { sourceRef: document.sourceRef, title: '回答', due: '2026-11-05', kind: '回答・返信', action: '返信', assignee: 'kim', confidence: 0.9, quote: document.text };
@@ -284,6 +284,53 @@ test('Driveは時間予算到達をpartial成功にし、次回は同じペー�
   const second = await collectDrive({ user: 'kim@example.invalid', state: first.next, now, request, budgetMs: 100, nowMs: () => 0 });
   assert.deepEqual(read, ['one', 'two']); assert.equal(second.documents.length, 1); assert.equal(second.documents[0].sourceRef, 'drive:two');
   assert.equal(second.next.pageToken, 'page-2'); assert.equal(second.next.processedIds, undefined);
+});
+
+test('台帳ロックを1秒待って取得し、取得後の処理予算でsourceを完了する', async t => {
+  const home = homeFor(t), output = [], heartbeats = [], logs = [];
+  let release, loaded = false;
+  const held = withLedgerLock(home, () => new Promise(resolve => { release = resolve; }));
+  const releaseTimer = setTimeout(release, 1000);
+  try {
+    const code = await main([], { home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, skipSeatCheck: true,
+      lockWaitMs: 3000, processBudgetMs: 750, ledger: { read: async () => [] },
+      sources: [{ key: 'done', load: async () => { loaded = true; return { documents: [], next: { watermark: 'done' } }; } }],
+      stdout: value => output.push(JSON.parse(value)), stderr: value => logs.push(value), heartbeat: async value => heartbeats.push(value) });
+    assert.equal(code, 0); assert.equal(loaded, true);
+    assert.equal(output[0].completedSources, 1); assert.deepEqual(output[0].partial, []);
+    assert.equal(heartbeats[0].ok, true);
+    assert.equal(logs.filter(value => /lock wait start$/.test(value)).length, 1);
+    assert.equal(logs.filter(value => /lock acquired after [\d.]+s$/.test(value)).length, 1);
+  } finally { clearTimeout(releaseTimer); release(); await held; }
+});
+
+test('台帳ロックが解放されない場合は待機後にexit 1・heartbeatにlock timeoutを残す', async t => {
+  const home = homeFor(t), heartbeats = [], logs = [];
+  await withLedgerLock(home, async () => {
+    const started = Date.now();
+    const code = await main([], { home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, skipSeatCheck: true,
+      lockWaitMs: 100, ledger: { read: () => assert.fail('ロック取得前に台帳を読まない') }, sources: [],
+      stdout: () => assert.fail('成功出力なし'), stderr: value => logs.push(value), heartbeat: async value => heartbeats.push(value) });
+    assert.equal(code, 1); assert.ok(Date.now() - started >= 100);
+    assert.equal(heartbeats[0].ok, false); assert.match(heartbeats[0].summary, /lock timeout（待機 [\d.]+ 秒）/);
+    assert.ok(logs.some(value => /lock timeout/.test(value)));
+    assert.ok(!logs.some(value => /lock acquired/.test(value)));
+  });
+});
+
+test('環境変数でロック待機を設定でき、dry-runは保持中のロックを取らない', async t => {
+  const home = homeFor(t), previous = process.env.DEADLINE_LOCK_WAIT_MS, logs = [];
+  process.env.DEADLINE_LOCK_WAIT_MS = '50';
+  t.after(() => previous === undefined ? delete process.env.DEADLINE_LOCK_WAIT_MS : process.env.DEADLINE_LOCK_WAIT_MS = previous);
+  const deps = { home, config: { ...DEFAULT_CONFIG, sheetId: 'test' }, skipSeatCheck: true,
+    ledger: { read: async () => [] }, sources: [], stdout: () => {}, stderr: value => logs.push(value), heartbeat: async () => {} };
+  await withLedgerLock(home, async () => {
+    assert.equal(await main([], deps), 1);
+    assert.ok(logs.some(value => /lock timeout/.test(value)));
+    logs.length = 0;
+    assert.equal(await main(['--dry-run'], { ...deps, heartbeat: () => assert.fail('heartbeat') }), 0);
+    assert.ok(!logs.some(value => /lock wait|lock acquired/.test(value)));
+  });
 });
 
 test('全体上限では残sourceをskipしてexit 0・heartbeat okにする', async t => {

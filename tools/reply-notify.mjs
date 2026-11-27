@@ -4,11 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DIR = path.join(os.homedir(), '.claude', 'watchers');
 
-export function execFile(file, args) {
+export function runProcess(file, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(file, args, { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = ''; let stderr = '';
@@ -55,7 +56,7 @@ async function appendLog(file, record) {
 }
 
 async function defaultSearch(watch) {
-  const result = await execFile(process.execPath, [path.join(HERE, 'gmail-search.mjs'), '--query', watch.query, '--user', watch.user, '--max', '10', '--body']);
+  const result = await runProcess(process.execPath, [path.join(HERE, 'gmail-search.mjs'), '--query', watch.query, '--user', watch.user, '--max', '10', '--body']);
   if (result.code !== 0) throw new Error(`gmail-search failed (${result.code}): ${result.stderr.trim().slice(0, 300)}`);
   const parsed = JSON.parse(result.stdout);
   if (!Array.isArray(parsed.messages)) throw new Error('gmail-search output has no messages array');
@@ -65,7 +66,7 @@ async function defaultSendDm(watch, body) {
   const file = path.join(os.tmpdir(), `reply-notify-${process.pid}-${Date.now()}.txt`);
   await fs.writeFile(file, body, 'utf8');
   try {
-    const result = await execFile(process.execPath, [path.join(HERE, 'discord-dm.mjs'), watch.notify, '--body-file', file, '--internal-opt-in', '--no-copy-kim']);
+    const result = await runProcess(process.execPath, [path.join(HERE, 'discord-dm.mjs'), watch.notify, '--body-file', file, '--internal-opt-in', '--no-copy-kim']);
     let parsed;
     try { parsed = JSON.parse(result.stdout.trim().split(/\r?\n/u).at(-1)); } catch { parsed = null; }
     return { delivered: result.code === 0 && parsed?.delivered === true, code: result.code };
@@ -75,7 +76,7 @@ async function defaultAddInbox(watch, message) {
   const file = path.join(os.tmpdir(), `reply-notify-inbox-${process.pid}-${Date.now()}.txt`);
   await fs.writeFile(file, `${watch.label} から返信メールを受信し、${watch.notify} へDiscord DM通知済み。message id: ${message.id}`, 'utf8');
   try {
-    await execFile(process.execPath, [path.join(HERE, 'kim-inbox.mjs'), '--add', 'info', '--body-file', file, '--source', 'reply-notify', '--dedupe-key', `reply-notify:${message.id}`]);
+    await runProcess(process.execPath, [path.join(HERE, 'kim-inbox.mjs'), '--add', 'info', '--body-file', file, '--source', 'reply-notify', '--dedupe-key', `reply-notify:${message.id}`]);
   } finally { await fs.rm(file, { force: true }); }
 }
 
@@ -115,6 +116,6 @@ export async function runWatcher(options = {}) {
   return { summary, state };
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isEntry(import.meta.url)) {
   runWatcher({ dryRun: process.argv.includes('--dry-run') }).catch(error => { console.error(error.stack || error.message); process.exitCode = 1; });
 }

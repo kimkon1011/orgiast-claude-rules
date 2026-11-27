@@ -154,7 +154,7 @@ test('A: overdue no-reply → one nudge with footer; second check no duplicate',
   const dir = tmpDir('a');
   const now = new Date('2026-11-27T14:00:00+09:00');
   const mockFile = writeMock(dir, { replies: { 'chat-1': [] }, fail: {}, sent: [] });
-  const config = baseConfig(dir);
+  const config = baseConfig(dir, { quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' } }); // Disable quiet hours for this test
   await withEnv(baseEnv(dir, mockFile), async () => {
     await main(addArgs('A1', { due: toIsoJst(new Date(now - 3600000)), requestedAt: toIsoJst(new Date(now - 10800000)) }), { config, storeMode: 'local', now, spawn: () => ({ status: 0, stdout: '[]' }) });
     const r1 = await main(['check', '--store', 'local'], {
@@ -305,7 +305,7 @@ test('E: external → approval request; OK <ID> from approver sends', async () =
   const dir = tmpDir('e');
   const now = new Date('2026-11-27T14:00:00+09:00');
   const mockFile = writeMock(dir, { replies: { 'chat-ext': [], 'approval-chan': [] }, fail: {}, sent: [] });
-  const config = baseConfig(dir, { approverUserIds: ['approver-1'] });
+  const config = baseConfig(dir, { approverUserIds: ['approver-1'], quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' } }); // Disable quiet hours for this test
   await withEnv(baseEnv(dir, mockFile), async () => {
     await main(addArgs('E1', { scope: 'external', chat: 'chat-ext', channel: 'beeper', due: toIsoJst(new Date(now - 3600000)), requestedAt: toIsoJst(new Date(now - 10800000)) }), {
       config, storeMode: 'local', now, spawn: () => ({ status: 0, stdout: '[]' }),
@@ -457,7 +457,7 @@ test('K: seed nudgeText is used as nudge body', async () => {
   const dir = tmpDir('k-seed');
   const now = new Date('2026-11-27T14:00:00+09:00');
   const mockFile = writeMock(dir, { replies: { 'chat-1': [] }, fail: {}, sent: [] });
-  const config = baseConfig(dir);
+  const config = baseConfig(dir, { quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' } }); // Disable quiet hours for this test
   const seedFile = path.join(dir, 'seed.json');
   fs.writeFileSync(seedFile, JSON.stringify([{
     id: 'K1',
@@ -523,7 +523,7 @@ test('M: --all-pcs processes non-owner rows', async () => {
   const dir = tmpDir('m-all');
   const now = new Date('2026-11-27T14:00:00+09:00');
   const mockFile = writeMock(dir, { replies: { 'chat-1': [] }, fail: {}, sent: [] });
-  const config = baseConfig(dir);
+  const config = baseConfig(dir, { quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' } }); // Disable quiet hours for this test
   await withEnv(baseEnv(dir, mockFile, { FOLLOWUP_PC: 'other-pc' }), async () => {
     await main(addArgs('M1', { due: toIsoJst(new Date(now - 3600000)), requestedAt: toIsoJst(new Date(now - 10800000)) }), {
       config, storeMode: 'local', now, spawn: () => ({ status: 0, stdout: '[]' }),

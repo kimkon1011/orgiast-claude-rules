@@ -30,7 +30,7 @@ https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/STANDARD-
 https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/STANDARD-PC-SETUP.md を読んで、「Claude Code 向け実行手順」の章どおりにこのPCを標準設定にしてください。本番反映の許可ルール（Aグループ）は入れないでください。質問せずに最後まで進め、私がするのはブラウザでのログイン承認だけにしてください。
 ```
 
-本人がする操作は、途中で開くブラウザ画面でのログイン承認（GitHub・Google・Vercel・ChatGPT・Cursor の5つ）だけ。それ以外はすべて Claude が行い、最後に結果の表を出す。
+本人がする操作は、途中で開くブラウザ画面でのログイン承認（GitHub・Google・Vercel・ChatGPT の4つ）だけ。それ以外はすべて Claude が行い、最後に結果の表を出す。
 
 ### (c) このURLは固定
 
@@ -52,7 +52,7 @@ https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/STANDARD-
 
 ### 手順1 復旧コマンドを実行する
 
-（git/Node.js/Claude Code/Codex CLI/Cursor アプリ/Cursor Agent CLIをまとめて自動導入・更新するインストーラ）。PowerShellで次を実行する。
+（git/Node.js/Claude Code/Codex CLIをまとめて自動導入・更新するインストーラ）。PowerShellで次を実行する。
 
 ```
 $p = Join-Path $env:TEMP 'install-orgiast.ps1'; Invoke-WebRequest -UseBasicParsing ('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/install-orgiast.ps1?cb='+[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p -NoOllama -NoReboot -NonInteractive
@@ -62,7 +62,7 @@ Claude Code からは自動再起動しない。ログインは手順6でまと�
 
 ### 手順2 導入確認
 
-`git --version` / `node --version` / `claude --version` / `codex --version` を実行し、それぞれバージョンが返ることを確認する。Cursor は `Test-Path "$env:LOCALAPPDATA\Programs\cursor\Cursor.exe"` と `Test-Path "$env:LOCALAPPDATA\cursor-agent\agent.cmd"` が True であること（`Cursor.exe --version` は GUI が起動するので使わない）。1つでも失敗したら、その時点のエラーをそのまま提示して止まる。
+`git --version` / `node --version` / `claude --version` / `codex --version` を実行し、それぞれバージョンが返ることを確認する。1つでも失敗したら、その時点のエラーをそのまま提示して止まる。Cursor は 2026-11-25 金さん指示で委譲停止のため、アプリ・Agent CLI の導入とログインは不要。
 
 ### 手順3 ONBOARDING.md を取り込む
 
@@ -103,11 +103,10 @@ keyserve の鍵が無いと、案件の自動引き継ぎ（case-handoff）や�
 - **Google (clasp)**：自動で開く Google 画面で orgiast.jp アカウントを承認するだけ。
 - **Vercel**：プロバイダ選択メニューが出たら「Continue with GitHub」を選び、開いたブラウザで承認。
 - **Codex**：自動で開く ChatGPT 画面で会社アカウントを承認するだけ（コード入力なし）。
-- **Cursor**：Cursor アプリを開き、同じ会社アカウントでログインする。続けて自動で開く `agent login` のブラウザ画面でも同じアカウントを承認する。ブラウザが開かないときは表示された URL を開く。自動化が要る場合のみ Dashboard の API キーを `CURSOR_API_KEY` に入れる（値はチャットに出さない）。
 
 localhost の Windows Defender 警告は「キャンセル」でよい（PC内通信のみ）。残った AI Studio ・ localhost エラーのタブは閉じてよい。
 
-Claude は5秒ごとに `gh auth status` / `~/.clasprc.json` / `npx -y vercel whoami` / `~/.codex/auth.json` の tokens / Cursor のログイン済み（認証ファイルの有無または `agent status` の終了コード。中身やキーの値は見ない）を判定し、5件すべて完了するまで待つ。
+Claude は5秒ごとに `gh auth status` / `~/.clasprc.json` / `npx -y vercel whoami` / `~/.codex/auth.json` の tokens を判定し、4件すべて完了するまで待つ。
 
 **詰まり対処表**（2026-10-29 user-PC の実測。どれも Claude が自分で対処し、本人には頼まない）
 
@@ -350,7 +349,7 @@ PowerShell(Get-ScheduledTask -TaskName *)
 - 「allowルールはsetup --convergeで入り、既に配布済みツール（~/orgiast-main/tools/*.mjs等）はwildcard許可済みで個別追加不要」というmemory（index/devtools.md「allowルールはsettings.json直編集でなくsetup --converge…（2026-09-17実測）」）と、「15行は手作業でUI追加」という既存Doc（2026-09-28）は矛盾ではなく役割分担と判断した：setup --convergeが自動でカバーするのはtools/配下のwildcard許可のみで、本番反映系コマンド（clasp/vercelの直接実行）と一部の確認コマンドはwildcard対象外のため、既存Docの手作業手順（日付が新しい・実際にUI操作が必要と明記）をそのまま採用した。
 - Fable5用途制限：ONBOARDING.md §1.16（2026-09-03改定）。
 - 実機settings.json全体（permissions.allow/deny/ask・hooks構成）は2026-09-28時点のkim-PCを実例として参照し、秘密値・トークン・APIキーは本文に一切転記していない。
-- 新規PC節の必須ツール一覧（git/Node.js/Claude Code/Codex CLI/Cursor アプリ/Cursor Agent CLI）：orgiast-claude-rules/tools/setup-manifest.json（severity: required のコマンド／導入確認項目。Cursor のログインは severity: manual）。
+- 新規PC節の必須ツール一覧（git/Node.js/Claude Code/Codex CLI）：orgiast-claude-rules/tools/setup-manifest.json（severity: required のコマンド／導入確認項目）。Cursor は 2026-11-25 金さん指示で委譲停止のため導入・ログイン不要。
 - winget導入コマンド・自動導入の実体：tools/install-orgiast.ps1・tools/bootstrap.ps1。
 - gh／clasp／vercelの位置づけ：rules-extracted/project-launch-playbook.md（ghのwinget導入コマンド）、および実機settings.jsonのpermissions.allowにnpx clasp *・npx vercel *系が多数登録されていること（個別インストールでなくnpx経由が実運用）。
 - VS Code拡張の前提：既存Doc「Claude Code 許可設定の追加手順」の手順文中の記述、および tools/RESTORE-claude-backup.md のVS Code拡張導入手順。

@@ -10,3 +10,7 @@ test('全LLM呼び出しの system 先頭に絶対ルールを1回だけ付け�
   assert.match(JSON.parse(r.init.body).messages[0].content, /バッファ/);
   assert.equal(injectAbsoluteRules(null), null);
 });
+test('ABSOLUTE_RULES_SYSTEM に認証コード受け取りと空港案内の文言を含む', () => {
+  assert.match(ABSOLUTE_RULES_SYSTEM, /受信トレイを直接開き/);
+  assert.match(ABSOLUTE_RULES_SYSTEM, /コンコースをまたいで/);
+});

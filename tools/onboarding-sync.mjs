@@ -23,6 +23,7 @@ const args = process.argv.slice(2);
 const force = args.includes('--force');
 const dryRun = args.includes('--dry-run');
 const keysOnly = args.includes('--keys-only');
+const rulesOnly = args.includes('--rules-only');
 const targetArg = args.find((x) => x.startsWith('--target='));
 const home = process.env.ORGIAST_HOME || os.homedir();
 const target = targetArg ? targetArg.slice(9) : path.join(home, '.claude', 'CLAUDE.md');
@@ -44,7 +45,12 @@ export const KEYS_ALERT_STALE_MS = 48 * 60 * 60 * 1000;
 
 export function executionPlan(argv = []) {
   const onlyKeys = argv.includes('--keys-only');
-  return { syncRepository: !onlyKeys, provisionKeys: true, syncRules: !onlyKeys };
+  const onlyRules = argv.includes('--rules-only');
+  return {
+    syncRepository: !onlyKeys && !onlyRules,
+    provisionKeys: !onlyRules,
+    syncRules: !onlyKeys,
+  };
 }
 
 export function readHead(tgtRepo) {
@@ -896,6 +902,34 @@ export function extractAbsoluteRules(body) {
   // 索引向けの1行要約（「全文はCLAUDE.md最上部」）は最上部ブロック自身には要らないので除く。
   return lines.slice(start, end).filter(l => !/全文はCLAUDE\.md最上部/.test(l)).join('\n').replace(/\n{3,}/g, '\n\n').replace(/^#{2,3} /, '# ').trim();
 }
+
+// 共通ルールブロックに ONBOARDING 全文を入れて CLAUDE.md を肥大化させない上限。
+// 2026-11-27 実害: SessionStart の ps1 が索引ではなく全文を書き、019 で約42KB→336KBになった。
+export const COMMON_INDEX_MAX_BYTES = 80 * 1024;
+export const CLAUDE_GROWTH_MAX_BYTES = 100 * 1024;
+export function applyOnboardingDocuments(currentClaude, onboardingBody, todayLabel) {
+  const absoluteRules = extractAbsoluteRules(onboardingBody);
+  const index = makeIndex(onboardingBody);
+  const indexBytes = Buffer.byteLength(index);
+  if (indexBytes > COMMON_INDEX_MAX_BYTES) {
+    throw new Error('onboarding index too large (' + indexBytes + ' bytes); refusing to write the full ONBOARDING into CLAUDE.md');
+  }
+  const built = build(currentClaude ?? '', index, todayLabel);
+  const updated = placeAbsoluteBlock(built.updated, absoluteRules);
+  if (absoluteRules && !updated.includes('<!-- BEGIN: 絶対ルール') ) {
+    throw new Error('absolute rules were extracted but not placed at the top of CLAUDE.md');
+  }
+  if (absoluteRules && !updated.includes(absoluteRules.slice(0, Math.min(80, absoluteRules.length)))) {
+    throw new Error('absolute rules text missing from the updated CLAUDE.md');
+  }
+  const before = Buffer.byteLength(String(currentClaude ?? ''));
+  const after = Buffer.byteLength(updated);
+  if (currentClaude && after - before > CLAUDE_GROWTH_MAX_BYTES) {
+    throw new Error('CLAUDE.md would grow by ' + (after - before) + ' bytes; aborting to prevent full-ONBOARDING bloat');
+  }
+  return { updated, absoluteRules, index, action: built.action };
+}
+
 export function placeAbsoluteBlock(current, rules) {
   let text = String(current ?? '');
   const b = text.indexOf(ABSOLUTE_BEGIN), e = b >= 0 ? text.indexOf(ABSOLUTE_END, b) : -1;
@@ -985,6 +1019,29 @@ async function main() { try {
   const now = new Date();
   if (args.includes('--knowledge-only')) { await syncKnowledge({ now }); return; }
   const plan = executionPlan(args);
+  if (rulesOnly) {
+    const fetched = await fetchOnboarding();
+    if (!fetched) return;
+    const { bytes: bodyBytes, source } = fetched;
+    if (!bodyBytes?.length) { log('fetch returned empty body, skip'); return; }
+    const hash = crypto.createHash('sha256').update(bodyBytes).digest('hex');
+    const body = bodyBytes.toString('utf8');
+    const current = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
+    const result = applyOnboardingDocuments(current, body, now.toISOString().slice(0, 10));
+    const rulesPath = path.join(home, '.claude', 'orgiast-onboarding.md');
+    if (!dryRun) {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.mkdirSync(path.dirname(rulesPath), { recursive: true });
+      fs.writeFileSync(rulesPath, bodyBytes);
+      if (current) fs.copyFileSync(target, target + '.bak.' + now.toISOString().slice(0, 10) + '-onboarding-index');
+      fs.writeFileSync(target, result.updated, 'utf8');
+      try { mirrorAbsoluteRules(home, result.absoluteRules, { log }); } catch (e) { log('absolute rules mirror failed: ' + e.message); }
+      save(hash, now);
+      console.log('[onboarding-sync] updated CLAUDE.md (hash ' + hash.slice(0, 8) + ' / from ' + source + ' / rules-only)');
+      log('updated (hash ' + hash.slice(0, 8) + ' / from ' + source + ' / rules-only)');
+    }
+    return;
+  }
   // 既存の全PC SessionStart 経路。同期の間引き・失敗より前に日次招待承諾を実行する。
   try { runSeatInvitations(); }
   catch { log('招待: 日次確認を完了できません。node tools/gh-accept-invites.mjs で再試行'); }
@@ -1026,9 +1083,8 @@ async function main() { try {
   const hash = crypto.createHash('sha256').update(bodyBytes).digest('hex');
   const body = bodyBytes.toString('utf8');
   const current = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
-  const absoluteRules = extractAbsoluteRules(body);
-  const result = build(current, makeIndex(body), now.toISOString().slice(0, 10));
-  result.updated = placeAbsoluteBlock(result.updated, absoluteRules);
+  const result = applyOnboardingDocuments(current ?? '', body, now.toISOString().slice(0, 10));
+  const absoluteRules = result.absoluteRules;
   try { mirrorAbsoluteRules(home, absoluteRules, { preview: dryRun, log }); } catch (e) { log(`absolute rules mirror failed: ${e.message}`); }
   const rulesCurrent = fs.existsSync(rulesPath) ? fs.readFileSync(rulesPath) : null;
   if (!dryRun && current === result.updated && rulesCurrent?.equals(bodyBytes)) { save(hash, now); return; }
@@ -1049,11 +1105,11 @@ async function main() { try {
 } catch (e) { log(`unexpected error: ${e.message}`); if (args.includes('--knowledge-only')) { console.error(e.message); process.exitCode = 1; } }
 finally {
   // hook 登録（setup --converge）は CLAUDE.md を書き終えてから。早期 return した場合も必ず実行する。
-  if (deferredHookRegistration) {
+  if (deferredHookRegistration && !rulesOnly) {
     try { deferredHookRegistration(); } catch (e) { log(`hook registration failed: ${e.message}`); }
     deferredHookRegistration = null;
   }
-  if (!dryRun && !keysOnly) {
+  if (!dryRun && !keysOnly && !rulesOnly) {
     try {
       const syncRepo = resolveConvergenceRepo({ home, repo: repoPath });
       const report = path.join(syncRepo || repoPath, 'tools/fleet-convergence-report.mjs');

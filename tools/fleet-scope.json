@@ -5,6 +5,7 @@
     {"path": "tools/login-health.mjs", "scope": "fleet", "step": "task:login-health", "reason": "全PCのログイン状態を点検する共通タスク"},
     {"path": "tools/register-login-health.mjs", "scope": "fleet", "step": "task:login-health", "reason": "全PCのログイン点検タスク登録入口"},
     {"path": "tools/register-login-health.ps1", "scope": "fleet", "step": "task:login-health", "reason": "全PCのログイン点検タスクを2時間ごとに登録する"},
+    {"path": "tools/register-followup-ledger.ps1", "scope": "fleet", "step": "task:followup-ledger", "reason": "全PCで依頼追跡台帳 followup-ledger の check を15分ごとに登録する（担当PCの行だけ送受信、担当外は見張り）"},
     {"path": "tools/fleet-scope.json", "scope": "fleet", "step": "settings:setup-converge", "reason": "fleet scope 定義ファイル。setup --converge の配布対象判定に使われる"},
     {"path": "tools/lib/change-gate.mjs", "scope": "fleet", "step": "settings:setup-converge", "reason": "全PCの定期処理がLLM起動前に新着・入力変化を判定する共通実行時依存"},
     {"path": "tools/cron-liveness-check.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "SessionStart のcron生存点検を全PCで実行し、担当席だけの配達タスク有無をローカル判定する"},
@@ -41,6 +42,7 @@
     {"path": "tools/lib/handoff-store.mjs", "scope": "fleet", "step": "settings:knowledge-guard-PreToolUse", "reason": "引き継ぎ書の封印読み書き（fleet-task-runner 等の実行時依存）を全PCへconverge配布"},
     {"path": "tools/register-morning-session-sweep.ps1", "scope": "fleet", "step": "task:morning-session-sweep", "reason": "全PCの未クローズセッションを毎朝06:30に回収する共通タスク"},
     {"path": "tools/register-session-cap30.ps1", "scope": "fleet", "step": "task:session-cap30", "reason": "全PCの Session Manager 可視セッションを毎日04:40に30件以下へ整理する共通タスク"},
+    {"path": "tools/register-session-cap-enforce.ps1", "scope": "fleet", "step": "task:session-cap-enforce", "reason": "全PCで毎時、不要セッションを削除せず退避し稼働中は保護する共通タスク"},
     {"path": "tools/lib/session-claim-cache.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "セッション目的抽出を衝突フックと着手台帳で共有する実行時依存"},
     {"path": "tools/hook-dispatch.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "全PCの同期hookをイベント単位で1本に集約するディスパッチャ（PC過負荷対策 #1568）"},
     {"path": "tools/hook-dispatch-benchmark.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "ディスパッチャの所要時間を各PCで計測するベンチマーク"},
@@ -1415,8 +1417,6 @@
     {"path": "tools/register-tldv-process-improve-task.ps1", "scope": "kim-only", "reason": "kim-PC（作業用011）だけで OrgiastTldvProcessImprove タスクを登録する"},
     {"path": "tools/tldv-process-improve.test.mjs", "scope": "kim-only", "reason": "tl;dv 改善ループのテスト。CIで実行するがfleet配布はkim-PCだけ"},
     {"path": "tools/register-ai-daikodo-line-watch.ps1", "scope": "kim-only", "step": null, "reason": "AI代行堂LINE監視のschtasks登録。tanom-admin.env と run-hidden.vbs に依存し、各PCの初期セットアップ時に1回実行"},
-    {"path": "tools/register-cursor-usage-pace-task.ps1", "scope": "kim-only", "step": null, "reason": "000 で毎日 19:30 の Cursor 使用量ペース点検を登録する。推奨ホストは 000。"},
-    {"path": "tools/register-cursor-agent-run-counts-task.ps1", "scope": "kim-only", "step": null, "reason": "各PCの毎朝 07:10 に cursor-agent 実行件数を数えるタスク。今回は手動で全オンラインPCに登録する。"},
     {"path": "tools/register-roudou-evidence-task.ps1", "scope": "kim-only", "step": null, "reason": "PC000で労働審判の証拠画像を指定日時にBeeperから回収する一回限りのタスク登録"}
   ]
 }

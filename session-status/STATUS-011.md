@@ -1,4 +1,4 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-28 01:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-28 02:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
 - 案件数: 77
@@ -27,7 +27,7 @@
 - 011・extwait-kim-400・停止・最終更新 11/26 14:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・fallback-chain-timeout-1127・完了・PR #2849 MERGED・landed・期限なし・次:11/28 の delegation-health.json に fallback_chain_timeout が出ないことを確認
 - 011・fallback-deepseek-timeout-1127・進行中・Codex に修正を委譲中（codex-do バックグラウンド）・期限なし・次:RESULT.md と PR を読み戻し、Windows で node --test を再実行、PR の MERGED を確認して /session-close
-- 011・followup-ledger・停止・最終更新 11/28 01:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・followup-ledger・停止・最終更新 11/28 02:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・followup-ledger-1127・停止（次の朝まで待機）・000KimPC のビーコンが1日前で停止しており、指示が届いていない。社保の LINE 送信は 000 が復旧するまでできない。・期限11/30（投函期限）・次:11/28 朝に 000KimPC のビーコン状態を確認し、復旧していれば `SEND-000.md` の手順を実行する。ついでに各PCの followup-ledger 登録状況を再確認（fleet-status.mjs）。
 - 011・followup-ledger-1127-continue・停止・最終更新 11/27 21:50、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
 - 011・gitignore-scan-out・停止・最終更新 11/27 14:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -61,8 +61,8 @@
 - 011・session-1205・完了・handoff-audit 8件の再発検証が終わった。f61ffeb282843871（P4）は再発0件で、検証済み台帳に追加した（PR #2878 MERGED 2026-11-27T03:24:51Z）。残り7件は 11/26 12:00Z 以降も同じ型の文が出ているため、台帳には入れていない・期限なし・次:next-session.md の8番は完了したので次回は選ばない（無人だと next-session.md を書き換えられず、この STATUS.md に残している）。9〜15番の7件は ID ごとに検証し直しても消えない。直すべきなのは、W 型の「完了待ち」の文が出る仕組みのほう。worktree ~/.claude/wt-handoff-verify-
 - 011・session-cap-1126・金さん待ち・最終更新 11/26 19:36、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・souko-kyujin-1125・完了・最終更新 11/25 19:40、STATUS.mdなし、DONEあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
-- 011・staff-location-1127・停止・最終更新 11/28 01:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 011・staff-location-1127-followup・停止・最終更新 11/27 22:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・staff-location-1127・停止・最終更新 11/28 01:49、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・staff-location-1127-followup・停止・最終更新 11/28 01:54、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・stale-drafts-1126・金さん待ち・放置下書き3件の照合が終わり、kim-inbox ask ki-20261126122734-8029 で送信・修正・削除の判断を待っている（next-session.md への追記は無人起動の権限で拒否された）・期限サポリス様は 2026-11-27 中に返信が望ましい（11/10 に先方の条件提示を受けてから16日経過）・次:返事を受けたら、サポリス様の下書きの候補日を差し替え、gmail-draft.mjs --send のチェックを通して送る／鹿沼CATV様は直すか佐藤さんに任せる／A-DINING様の下書き2件は削除の承認後に消す。決めてほしいこと: 3件それぞれ送る・直す・削除のどれにするか
 - 011・T10-vehicle-app・金さん待ち・雛形完成（014ローカル 8c79e55）。非公開GitHub作成と U-1/U-10 は kim-inbox ki-20261126183436-1746 の返事待ち・期限なし・次:返事が来たら gh repo create orgiast/vehicle-management-app --private→push→読み戻し、OAuth と Sheets 実接続を Codex（lane: codex）
 - 011・tangomuto-reply-1125・完了・最終更新 11/25 12:25、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし

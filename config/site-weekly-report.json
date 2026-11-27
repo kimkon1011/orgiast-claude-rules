@@ -1,0 +1,39 @@
+{
+  "channelId": "1382930142011326566",
+  "guildId": "715211007307284530",
+  "gmailUser": "seisaku-team@orgiast.jp",
+  "sites": [
+    {
+      "id": "orgiast",
+      "name": "オージャスト",
+      "domain": "orgiast.jp",
+      "propertyId": "279040101",
+      "inquirySource": "sheet"
+    },
+    {
+      "id": "rebooth",
+      "name": "リブース",
+      "domain": "rebooth.co.jp",
+      "propertyId": null,
+      "inquirySource": "gmail",
+      "gmailQueryHints": [
+        "rebooth.co.jp",
+        "リブース",
+        "Reブース",
+        "rebooth"
+      ]
+    },
+    {
+      "id": "toho",
+      "name": "東邦鋼業",
+      "domain": "toho-kogyo.com",
+      "propertyId": "278904354",
+      "inquirySource": "gmail",
+      "gmailQueryHints": [
+        "toho-kogyo.com",
+        "東邦鋼業",
+        "toho"
+      ]
+    }
+  ]
+}

@@ -77,9 +77,9 @@ test('receiver only executes validated fixed sync and survives lost reply withou
   const h=home(t), identity=healthy(), address=convergenceAddress(identity); let runs=0, replies=0;
   const mail={id:'mail-test',from:'kim-PC',to:address,kind:'note',expiresAt:new Date(now+DAY).toISOString(),body:JSON.stringify({action:'rules-resync',version:1,hostname:identity.hostname,username:identity.username})};
   const request=async(kind,p)=>{ if(kind==='mail-poll') return {messages:[mail]}; if(++replies===1) throw Error('lost reply'); return {mail}; };
-  const run=(exe,args)=>{runs++;assert.equal(exe,process.execPath);assert.deepEqual(args,[path.join(repo,'tools/onboarding-sync.mjs'),'--force']);return {status:0};};
+  const run=(exe,args)=>{runs++;return {status:0};};
   await assert.rejects(receiveConvergence({home:h,repo,identity,now,request,run}));
-  await receiveConvergence({home:h,repo,identity,now:now+1000,request,run}); assert.equal(runs,1);
+  await receiveConvergence({home:h,repo,identity,now:now+1000,request,run}); assert.equal(runs,2);
 });
 test('receiver rejects arbitrary actions, wrong users and untrusted sender', async t => {
   for(const override of [{from:'other-PC'},{body:'{"action":"run"}'},{to:'all'}]) {
@@ -216,4 +216,32 @@ test('taskMissing and taskMissingNames tracking on win32 vs non-win32', t => {
   });
   assert.equal(rowLinux.taskMissing, null);
   assert.equal(rowLinux.taskMissingNames, undefined);
+});
+
+test('receiver executes both onboarding-sync and setup-converge on valid rules-resync', async t => {
+  const h=home(t), identity=healthy(), address=convergenceAddress(identity);
+  const mail={id:'mail-both-steps',from:'kim-PC',to:address,kind:'note',expiresAt:new Date(now+DAY).toISOString(),body:JSON.stringify({action:'rules-resync',version:1,hostname:identity.hostname,username:identity.username})};
+  const calls=[]; let replyBody;
+  await receiveConvergence({home:h,repo,identity,now,
+    request:async(kind,p)=>{if(kind==='mail-poll')return {messages:[mail]};replyBody=p.resultBody;return {mail};},
+    run:(exe,args)=>{calls.push({exe,args});return {status:0,stderr:''};}
+  });
+  assert.equal(calls.length,2,'should call run twice');
+  assert.deepEqual(calls[0],{exe:process.execPath,args:[path.join(repo,'tools/onboarding-sync.mjs'),'--force']});
+  assert.deepEqual(calls[1],{exe:process.execPath,args:[path.join(repo,'tools/setup.mjs'),'--converge']});
+  assert.match(replyBody,/onboarding-sync exit=0 stderr=""/);
+  assert.match(replyBody,/setup-converge exit=0 stderr=""/);
+});
+
+test('receiver continues after setup-converge failure', async t => {
+  const h=home(t), identity=healthy(), address=convergenceAddress(identity);
+  const mail={id:'mail-setup-fail',from:'kim-PC',to:address,kind:'note',expiresAt:new Date(now+DAY).toISOString(),body:JSON.stringify({action:'rules-resync',version:1,hostname:identity.hostname,username:identity.username})};
+  let step=0; let replyBody;
+  await receiveConvergence({home:h,repo,identity,now,
+    request:async(kind,p)=>{if(kind==='mail-poll')return {messages:[mail]};replyBody=p.resultBody;return {mail};},
+    run:()=>{step++;return step===1?{status:0,stderr:''}:{status:1,stderr:'setup failed'};}
+  });
+  assert.ok(replyBody.includes('onboarding-sync exit=0'),`result should include onboarding-sync success, got: ${replyBody}`);
+  assert.ok(replyBody.includes('setup-converge exit=1'),`result should include setup-converge failure, got: ${replyBody}`);
+  assert.ok(replyBody.includes('stderr="setup failed"'),`result should include setup-converge stderr, got: ${replyBody}`);
 });

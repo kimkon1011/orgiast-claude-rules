@@ -19,7 +19,14 @@ export function validSyncMail(mail, identity, now) {
 }
 export function syncInvocation(repo, platform = process.platform) {
   if (!['win32', 'darwin', 'linux'].includes(platform)) throw new Error('unsupported platform');
-  return [process.execPath, [path.join(repo, 'tools/onboarding-sync.mjs'), '--force']];
+  const steps = [
+    [process.execPath, [path.join(repo, 'tools/onboarding-sync.mjs'), '--force'], 'onboarding-sync'],
+    [process.execPath, [path.join(repo, 'tools/setup.mjs'), '--converge'], 'setup-converge'],
+  ];
+  // backward compat: return an array so [exe, args] destructuring still works
+  const result = [steps[0][0], steps[0][1]];
+  result.steps = steps;
+  return result;
 }
 export async function receiveConvergence({ home = process.env.ORGIAST_HOME || os.homedir(), repo = ownRepo,
   identity = { hostname: os.hostname(), username: os.userInfo().username }, now = Date.now(), request, run = spawnSync } = {}) {
@@ -49,10 +56,20 @@ export async function receiveConvergence({ home = process.env.ORGIAST_HOME || os
         if (!mail.result) {
           if (state.lastAttempt && now - state.lastAttempt < DAY) break;
           state.lastAttempt = now; save(); // crash cannot cause an immediate repeat
-          const [exe, args] = syncInvocation(repo);
-          const result = run(exe, args, { encoding: 'utf8', timeout: 300000, windowsHide: true,
-            env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo }, stdio: ['ignore', 'pipe', 'pipe'] });
-          mail.result = `rules-resync 実行 exit=${result.status ?? '未確認'}。収束成功はシートの次回レポートで判定。`;
+          const inv = syncInvocation(repo);
+          const stepResults = [];
+          for (const [exe, args, label] of inv.steps) {
+            let result;
+            try {
+              result = run(exe, args, { encoding: 'utf8', timeout: 300000, windowsHide: true,
+                env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo }, stdio: ['ignore', 'pipe', 'pipe'] });
+            } catch (error) {
+              result = { status: null, stderr: error?.message || String(error) };
+            }
+            const stderr = String(result?.stderr ?? '').trim().replaceAll(/\s+/g, ' ').slice(0, 500);
+            stepResults.push(`${label} exit=${result?.status ?? '未確認'} stderr=${JSON.stringify(stderr)}`);
+          }
+          mail.result = `rules-resync: ${stepResults.join(', ')}。収束成功はシートの次回レポートで判定。`;
           save(); executed++;
         }
         await request('mail-reply', { id: mail.id, from: address, resultBody: mail.result });

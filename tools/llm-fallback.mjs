@@ -7,7 +7,8 @@ import { budgetVerdict, estimateTokens, noteResponse, readBudget, writeBudget } 
 import { isDailyQuotaResponse, nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
 import { providerLimitedUntil } from './lib/executor-gate.mjs';
 import { isAutoDisabled, readDisabledEntries, disabledLanes } from './lib/lane-disabled.mjs';
-import { applyCandidateHealth } from './fallback-backend-health.mjs';
+import { applyCandidateHealth, isClientRequestOutcome } from './fallback-backend-health.mjs';
+import { redactSecrets } from './redact-secrets.mjs';
 import { injectAbsoluteRules } from './lib/absolute-rules.mjs';
 
 export const FALLBACK_CHAIN = Object.freeze([
@@ -439,6 +440,9 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
 
   async function noteAttempt(info) {
     await onAttempt?.(info);
+    if (isClientRequestOutcome(info.status)) {
+      console.error(`[request] caller=${caller} provider=${info.candidate.provider} model=${info.candidate.model} status=${info.status}`);
+    }
     if (!ledgerFile || !persistState) return;
     let usage = {};
     if (info.status === 'ok' && info.response?.clone) usage = (await info.response.clone().json().catch(() => ({}))).usage || {};
@@ -448,6 +452,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
       status: info.status, attempt: info.attempt, failover: Boolean(info.failover), ok: info.status === 'ok',
       secs: Number(Number(info.secs || 0).toFixed(3)), in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0,
       ...usageCostFields(usage),
+      ...(info.reason ? { error: reasonForLog(redactSecrets(info.reason), 400) } : {}),
     };
     try { fs.mkdirSync(path.dirname(ledgerFile), { recursive: true }); fs.appendFileSync(ledgerFile, `${JSON.stringify(row)}\n`); } catch {}
   }
@@ -525,7 +530,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
             const json = await response.clone().json().catch(() => null);
             const validation = await validateResponse(json, candidate);
             if (validation !== true) {
-              const validationReason = typeof validation === 'string' ? validation : 'unusable response';
+              const validationReason = typeof validation === 'string' ? validation : validation?.reason || 'unusable response';
               lastReason = `unusable: ${validationReason}`;
               attempted++;
               await noteAttempt({ candidate, attempt, status: 'unusable', response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: (candidate.provider !== start.provider || candidate.model !== start.model) });

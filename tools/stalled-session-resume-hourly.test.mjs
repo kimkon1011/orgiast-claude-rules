@@ -88,6 +88,11 @@ test('事前判定: 指定順でのみ試行、秘密を伏せ、cursor/Claude�
     assert.throws(() => opts.payloadFor({ provider: 'cursor', model: 'auto' }), /forbidden/);
     assert.throws(() => opts.payloadFor({ provider: 'openrouter', model: 'anthropic/claude-test' }), /forbidden/);
     if (opts.start.provider !== 'mistral') throw new Error('unavailable');
+    const payload = JSON.parse(request.init.body);
+    assert.equal(payload.response_format.type, 'json_schema');
+    assert.deepEqual(payload.response_format.json_schema.schema.required, ['action', 'reason', 'nextStep']);
+    assert.equal(payload.provider.require_parameters, true);
+    assert.equal(payload.reasoning, undefined);
     return { response: new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ action: 'resume', reason: '未実装', nextStep: 'テストを実行' }) } }] })) };
   };
   const first = await classifyHourly(record, { home, cache, call, loadKey: () => 'fixture' });
@@ -518,4 +523,30 @@ test('ハートビート: rebase 失敗時に abort してエラーログに記�
   assert.equal(aborted, true, 'rebase --abort should clean up after failure');
   assert.equal(result.pushed, false);
   assert.match(JSON.parse(result.line).error, /rebase conflict/);
+});
+
+test('hourly: GPT-OSS reasoning は low、400/unusable はモデル単位で休止、試行を二重記録しない', async t => {
+  const home = homeFor(t), cache = memoryCache(), attempts = [];
+  const call = async opts => {
+    attempts.push(opts.start.model);
+    const payload = JSON.parse(opts.payloadFor(opts.start).init.body);
+    if (opts.start.model === 'openai/gpt-oss-120b' && opts.start.provider === 'openrouter') {
+      assert.deepEqual(payload.reasoning, { effort: 'low' });
+      assert.equal(opts.validateResponse({ choices: [{ message: { content: '' } }] }).reason, 'empty-decision');
+      await opts.onAttempt({ status: 'http_400', candidate: opts.start });
+      throw new Error('HTTP400');
+    }
+    if (opts.start.model.endsWith(':free')) {
+      assert.equal(opts.validateResponse({ choices: [{ message: { content: 'not JSON' } }] }).reason, 'invalid-json-decision');
+      await opts.onAttempt({ status: 'unusable', candidate: opts.start });
+      throw new Error('invalid-json-decision');
+    }
+    return { response: new Response(JSON.stringify({ choices: [{ message: { content: '{"action":"done","reason":"完了","nextStep":""}' } }] })) };
+  };
+  for (const sessionId of ['one', 'two']) {
+    const result = await classifyHourly({ sessionId, lastLineHash: sessionId, hourlyTail: 'log' }, { home, cache, call, loadKey: () => 'fixture' });
+    assert.equal(result.action, 'done');
+  }
+  assert.deepEqual(attempts, ['google/gemma-4-31b-it:free', 'openai/gpt-oss-120b', 'gemini-3.6-flash', 'gemini-3.6-flash']);
+  assert.equal(fs.existsSync(path.join(home, '.claude', 'executor-usage.jsonl')), false);
 });

@@ -197,8 +197,12 @@ export function isQuotaOutcome(outcome) {
   return /429|rate.?limit|quota|usage.?limit|^deferred$|^cooldown$|daily_limit/i.test(String(outcome ?? ''));
 }
 
+export function isClientRequestOutcome(outcome) {
+  return /^(?:http[_ ]?)?(?:400|404|413|422)$/i.test(String(outcome ?? '').trim());
+}
+
 // 24h で 5 回以上かつ失敗が過半数、または品質検証の失敗が 3 連続なら一時停止の対象。
-// 結果不明・回数制限・残高切れは failure_rate の分母・分子から除外する。
+// 結果不明・回数制限・残高切れ・リクエスト不正は failure_rate の分母・分子から除外する。
 // restoredAt（lane-doctor --probe が復帰させた時刻。lanes-restored.json）より前の行は
 // 「復帰前の古い失敗」として数えない。復帰直後に24h窓の古い失敗で再停止するのを防ぐ（2026-11-28 05:08 実測）。
 export function unhealthyCandidates(rows, { now = Date.now(), windowMs = 24 * 60 * 60 * 1000, restoredAt = {} } = {}) {
@@ -219,7 +223,7 @@ export function unhealthyCandidates(rows, { now = Date.now(), windowMs = 24 * 60
   const hits = [];
   for (const [name, list] of groups) {
     list.sort((a, b) => a.t - b.t);
-    const measured = list.filter((row) => !isQuotaOutcome(row.outcome) && !billingFailure(row.outcome));
+    const measured = list.filter((row) => !isQuotaOutcome(row.outcome) && !billingFailure(row.outcome) && !isClientRequestOutcome(row.outcome));
     const failures = measured.filter((row) => row.outcome !== 'ok' && row.outcome !== 'success');
     if (measured.length >= 5 && failures.length / measured.length > 0.5) {
       hits.push({ name, reason: 'failure_rate', calls: measured.length, failures: failures.length });

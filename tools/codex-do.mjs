@@ -682,9 +682,8 @@ export function fallbackBackendTimeoutSecs(timeoutSeconds, env = process.env) {
 // 成功の 0.9%（34/3623件）しか切らず、timeout 1回あたりの廃棄を 50 秒削減する。
 // 2026-11-11 再調整: chain 実測（223件の chain 試行中成功46件/p95=524秒）より
 // cheap-code:deepseek を 500→400 秒に引き下げ。100秒/件の廃棄削減。
-// chain 上限を 700 秒から 600 秒に収める。
-// 連鎖では「遅い成功」より、障害時に次候補へ進めない損失が大きい。implement も
-// 既定180秒で打ち切る。既存のバックエンド別環境変数で必要な席だけ上書きできる。
+// 2026-11-28 再調整: delegation-health 実測 2件/361秒の廃棄に基づき 400→200 秒に引き下げ。
+// gemini-cli と同じ 200 秒上限に統一。chain 上限を 600 秒から 400 秒に収める。
 export function backendSpecificTimeoutSecs(backendName, env = process.env, { kind } = {}) {
   if (backendName === 'gemini-cli') {
     const raw = Number(env.CODEX_DO_GEMINI_TIMEOUT_SECS);
@@ -695,7 +694,7 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env, { kin
   if (backendName === 'cheap-code:deepseek' || backendName === 'deepseek') {
     const raw = Number(env.CODEX_DO_DEEPSEEK_TIMEOUT_SECS);
     if (Number.isFinite(raw) && raw > 0) return raw;
-    return kind === 'implement' ? 180 : 400;
+    return kind === 'implement' ? 180 : 200;
   }
   if (backendName === 'cursor-agent') {
     const raw = Number(env.CODEX_DO_CURSOR_TIMEOUT_SECS);

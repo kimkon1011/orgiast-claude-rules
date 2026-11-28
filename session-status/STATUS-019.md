@@ -1,4 +1,4 @@
-# session-status  PC=019  host=019  updated 2026-11-28 21:10 JST
+# session-status  PC=019  host=019  updated 2026-11-28 22:10 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "email": "nishi@orgiast.jp", "orgId":
 - 案件数: 16
@@ -6,7 +6,7 @@
 - 019・cafe-migrate-hosting-20261127・金さん待ち・作業用019に Netlify の認証経路が1つも無いことを実測で確認（Netlify API 直接照会で 401、CLI にトークンのキー無し、保存トークン無し、Chrome の seisaku-team/nishi 両プロファイルとも netlify 訪問履歴0件、リポジトリに Netlify GitHub App 未接続）。Vercel も `verc・期限なし（旧 Vercel URL は HTTP 402 で停止中のため早いほどよい）・次:着陸後に金さんから「Netlify に Google ログインで入ってよい」の返信1通をもらう。019 の Chrome Default プロファイルは seisaku-team@orgiast.jp でサインイン済みなので、許可後は Claude が Chrome をデバッグポート付きで再起動して Google ログイン→サイト作成→環境変数8件の移送（O
 - 019・cafe-overdue-osaka・金さん待ち・Vercel チームがフェアユース上限超過でブロック（本番 402・デプロイ不可）。日報 GAS は所有者 nishi@ の資格情報が必要（clasp が seisaku のみ）・期限なし（ただし本番停止中のため最優先）・次:金さんが Vercel の有料化（Pro）を承認したら、019 で vercel deploy --prod --yes → 本番 e2e → /api/requests/line-group でグループ名確認。nishi の clasp 再ログイン後に scripts/gas/deploy.mjs で GAS 更新
 - 019・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 019・chat-drafts・停止・最終更新 11/28 20:30、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 019・chat-drafts・停止・最終更新 11/28 21:30、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 019・STATUS・完了・close-session.mjs でセッション 076114b6 を閉鎖登録。終了コード 0、[next-session] なし・期限なし・次:なし
 - 019・dispatch-1122-21・停止・最終更新 11/22 21:30、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 019・followup-ledger・停止・最終更新 11/28 16:16、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

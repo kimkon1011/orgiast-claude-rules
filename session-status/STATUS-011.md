@@ -1,7 +1,7 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-28 17:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-28 18:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 89
+- 案件数: 91
 
 - 011・.stall-sweeper・停止・最終更新 11/26 04:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・20261126-クラフト坂口・金さん待ち・クラフト坂口様 宿題7件の成果物は完成。精算の計算方法・福岡請求書の作り直し・先払い承認・いなば様への送信時期の判断待ち・期限2026-12-03（坂口様への精算金額の返答）・次:金さんの判断に沿って、坂口様への返信・福岡請求書の作り直し・Discord送信を進める（送信は承認後のみ）
@@ -21,16 +21,15 @@
 - 011・double-send-prevention-1127・停止・最終更新 11/28 00:16、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・eight-dai6-1125・停止・最終更新 11/26 14:09、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
 - 011・eight-venue-check-1125・完了・最終更新 11/25 20:27、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、ログに上限・ログアウト・エラー・期限なし・次:なし
-- 011・eight-wiaas-reply-1125・完了・最終更新 11/25 18:04、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
 - 011・extwait-1126h・金さん待ち・社外返信2件（デージーネット河村様・JCS中野様）の送信承認待ち。kim-inbox ki-20261126091523-9292 に全文登録済み・期限2026-11-27 10:00（デージーネットは当日キャンセルの再調整依頼で早いほど良い）・次:承認後、JCS下書き 1a2111e733b26549 の「12/10 10:00」を「12/9 14:00」に差し替え、gmail-draft.mjs で2件送信し読み戻す。next-session.md 20番の更新は sensitive file で拒否されたため未反映
 - 011・extwait-kim-400・停止・最終更新 11/26 14:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・fallback-chain-timeout-1127・完了・PR #2849 MERGED・landed・期限なし・次:11/28 の delegation-health.json に fallback_chain_timeout が出ないことを確認
 - 011・fallback-chain-timeout-1128・停止・最終更新 11/28 04:51、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・fallback-deepseek-timeout-1127・進行中・Codex に修正を委譲中（codex-do バックグラウンド）・期限なし・次:RESULT.md と PR を読み戻し、Windows で node --test を再実行、PR の MERGED を確認して /session-close
-- 011・followup-ledger・停止・最終更新 11/28 17:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・followup-ledger・停止・最終更新 11/28 18:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・followup-ledger-1127・停止（次の朝まで待機）・000KimPC のビーコンが1日前で停止しており、指示が届いていない。社保の LINE 送信は 000 が復旧するまでできない。・期限11/30（投函期限）・次:11/28 朝に 000KimPC のビーコン状態を確認し、復旧していれば `SEND-000.md` の手順を実行する。ついでに各PCの followup-ledger 登録状況を再確認（fleet-status.mjs）。
 - 011・followup-ledger-1127-continue・停止・最終更新 11/27 21:50、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
-- 011・gb229-rpf-1128・進行中・最終更新 11/28 16:21、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
+- 011・gb229-rpf-1128・停止・最終更新 11/28 16:21、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
 - 011・gb230-rpf-1128・完了・最終更新 11/28 15:34、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 011・gb231-rpf-1128・完了・GB-231 PR#2974 マージ・011反映・T1-T10 pass・期限12/5 朝（台帳確認日）・次:004・015・019 は12/1 18:10以降に配布、他PCで読み戻し
 - 011・gitignore-scan-out・停止・最終更新 11/27 14:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -45,6 +44,8 @@
 - 011・lane-probe-lock-1128・完了・codex_empty_output(untrusted_cwd) の真因（lane-doctor 書き込み点検の同時実行で固定フォルダーの .git が消える）を PR #2948 で修正、2026-11-27T20:24:22Z MERGED（d5674d7d）・期限2026-11-29 11:24（効果確認）・次:11/29 朝の delegation-health.json に untrusted_cwd が出ないことを auto-progress が自動確認。next-session.md の3番は無人では編集拒否のため残っている（次回選ばない）。作業ツリー ~/.claude/wt-lane-probe-lock とブランチ fix/lane-probe-wor
 - 011・loop-check-1125・金さん待ち・最終更新 11/25 16:23、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、次の手順が未着手、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・matome-011・金さん待ち・正本PR #2957 が未マージのため CLAUDE.md への「一回にまとめる」反映は同期待ち・期限なし・次:PR #2957 マージ後の自動同期で CLAUDE.md に BEGIN: 一回にまとめる が入ったか grep で確認
+- 011・matome-1128-post4・停止・最終更新 11/28 18:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・matome-1128-sync2976・停止・最終更新 11/28 17:53、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・Microsoft・停止・最終更新 11/26 04:27、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・mkawamur-reply-1126・停止・最終更新 11/26 19:25、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 011・mobile-push-undeliverable: STATUS・進行中・作業用011で実装・Windows検証（pass 85 / fail 0）済み。PR https://github.com/kimkon1011/orgiast-claude-rules/pull/2869 を作成し自動マージ（squash）有効、CI 待ち・期限2026-11-28 10:00（マージ確認）・次:PR #2869 が MERGED になったことを gh pr view 2869 --repo kimkon1011/orgiast-claude-rules --json state,mergedAt で確認する。CI が落ちていたら原因を調べて Codex に修正を頼む。マージ後は各PCの毎時 sweep で配信不能分が undeliverable に
@@ -64,10 +65,10 @@
 - 011・reply-drafts-1125・完了・最終更新 11/25 19:28、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
 - 011・rescue-review-1127・完了・rescue/auto-session-20261127-030605（0e540d33）の3ファイル（tools/notify-kim.mjs, tools/url-account-gate.mjs, tools/url-account-gate.test.mjs）は origin/main と差分ゼロ。同じ内容が PR #2843（1f17ba99 fi・期限なし・次:next-session.md の31番を完了扱いにする（無人起動では next-session.md への Edit・追記が機密ファイル扱いで拒否されたため未反映）。rescue ブランチ（ローカル・リモートとも）は kim の許可が出たら削除する。
 - 011・rescue-review-1127b・完了・rescue 121002/121202 は一時スキャン出力と #2878 着地済みの台帳追記のみ・期限なし・次:next-session 39・40番は次回選ばない。ブランチ削除は kim 許可後
-- 011・saihatsu-full-1128-survive-dist・停止・最終更新 11/28 17:05、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・saihatsu-full-1128-survive-dist・停止・最終更新 11/28 17:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-followup・停止・最終更新 11/28 07:42、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-link-audit-1126・完了・監査・修正・書き出し完了、13:00 毎時本番で動作確認済み・期限2026-11-26 当日・次:なし（毎時ジョブが send-commitments を追跡し stuck-export を毎時更新）
-- 011・営業 次回連絡日・金さん待ち・最終更新 11/28 17:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・営業 次回連絡日・金さん待ち・最終更新 11/28 18:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・session-1126-hourly・金さん待ち・JACE 藤野様宛ての返信下書きが打合せ前の文面のまま。修正版の送信可否は金さんの承認が要る（kim-inbox ki-20261126081310-6cf5）・期限2026-12-11（先方の返信期限）／着手期限 2026-12-09・次:承認が来たら seisaku-team@ の下書きを修正版に差し替え、gmail-draft.mjs の自動チェックを通して送信し、送信済みを読み戻す
 - 011・session-1128a・完了・無人定時起動。X-0100 は 11/27 に完了済みと確認、next-session 16番を完了確認に更新・期限2026-12-04・次:なし（1563記事への段落追加は kim-inbox ki-20261127101422-bd0c で承認待ち）
 - 011・session-1205・完了・handoff-audit 8件の再発検証が終わった。f61ffeb282843871（P4）は再発0件で、検証済み台帳に追加した（PR #2878 MERGED 2026-11-27T03:24:51Z）。残り7件は 11/26 12:00Z 以降も同じ型の文が出ているため、台帳には入れていない・期限なし・次:next-session.md の8番は完了したので次回は選ばない（無人だと next-session.md を書き換えられず、この STATUS.md に残している）。9〜15番の7件は ID ごとに検証し直しても消えない。直すべきなのは、W 型の「完了待ち」の文が出る仕組みのほう。worktree ~/.claude/wt-handoff-verify-
@@ -84,6 +85,7 @@
 - 011・x0097-prefix-cache・完了・PR #2892 MERGED 2026-11-27T11:31:47Z（send-context-check の送信予定日時をプロンプト末尾へ）。Windows node --test 39/39 pass。実測は OpenRouter DeepSeek flash で cached_tokens 0/4、ネイティブ DeepSeek は 402 残高不足・期限なし・次:DeepSeek 直接キーの残高を入金したら同じ手順で prompt_cache_hit_tokens を再測（kim 判断）
 - 011・x0099-longquery-1127・完了・GSC 実データ（12,766行）で X-0099 を検証。上位20の長文クエリはすべて SDGs 記事で、ブース受注に直結しないため「今は直さない」と判断（RESULT.md 末尾の「監督の照合」）・期限なし・次:なし（rebooth.co.jp の長文クエリ表示が月100を超えたら再評価）
 - 011・x0100-consensus-proof・完了・競合6本の見出し＋論点マトリクス、自社PROOF（金額・小間・写真・削減率）を実取得し RESULT.md / urls.txt を作成・期限2026-12-04・次:RESULT の「今すぐ」案1を x0101 DRAFT 1563即答へ反映検討。サイト反映は kim 承認待ち（期限 12/04）
+- 011・x0101-check-timeout・金さん待ち・X-0101 の自動見回り行（auto-progress-ledger.jsonl、session 95f62d23）は判定コマンドの無い自動登録で、「30秒超で判定不能」は現在の行に存在しない（2026-11-28 無人で台帳を直接読んで確認）。止まっている原因は、即答文2件をサイトへ反映してよいかという金さんの承認だけ。判定の修正は不要。・期限なし・次:金さんが「両方反映してよい」／「1だけ」／「直し: 〇〇」と返したら、Codex で rebooth.co.jp/exhibition/1563 と /exhibition/1344 の H1 直下に反映し、公開ページを読み戻して照合する。next-session.md の2番の文言（30秒超）は古いので、対話セッションで更新する（無人では sensitiv
 - 011・x0101-gsc-preflight・完了・tools/gsc-preflight.mjs を PR #2881（automerge）で提出、Windows test 12/12 緑、実データ判定済み。着地は auto-progress が確認。next-session.md は無人起動で書込拒否のため引き継ぎはこのファイルと RESULT.md・期限なし・次:【夜間】REWRITE 2件の即答原稿下書き（rebooth.co.jp/exhibition/1563「展示会ブース 費用」500字以内、orgiast.jp/topics/7660「ブース デザイン」）→サイト反映は kim 承認待ち。next-session.md 残TODO 1番は完了として選ばない
 - 011・x0101-rewrite-drafts・完了（REWRITE 2件の即答下書き・照合不一致0）・1563は費用即答341字、7660は301先1344向けデザイン即答310字。内部リンクは preflight 候補のみ（費用0／デザイン rebooth 表示36）・期限2026-12-04（記事着手判断・preflight RESULT と同日）・次:kim 承認後に H1直下へ反映。7660は301先（rebooth/1344）へ書くか orgiast 側の転送方針を先に決める
 - 011・x0102-gemini-cache・完了・2026-11-28 11:06 の無人起動。着手できる候補がなかった（X-0102 は別セッション 576e0b0f が着手中。codex_empty_output は PR #2948 で修正済みで、11/29 朝の delegation-health.json 再生成待ち。handoff-audit の再走査も 11/29 朝。残りは金さんの判断待ち）・期限2026-11-29 朝・次:11/29 朝に delegation-health.json で codex_empty_output と fallback_chain_timeout が消えたかを確認し、next-session.md の3番・2番・39番を閉じる。

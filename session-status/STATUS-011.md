@@ -1,4 +1,4 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-28 15:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-28 16:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
 - 案件数: 88
@@ -27,11 +27,12 @@
 - 011・fallback-chain-timeout-1127・完了・PR #2849 MERGED・landed・期限なし・次:11/28 の delegation-health.json に fallback_chain_timeout が出ないことを確認
 - 011・fallback-chain-timeout-1128・停止・最終更新 11/28 04:51、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・fallback-deepseek-timeout-1127・進行中・Codex に修正を委譲中（codex-do バックグラウンド）・期限なし・次:RESULT.md と PR を読み戻し、Windows で node --test を再実行、PR の MERGED を確認して /session-close
-- 011・followup-ledger・停止・最終更新 11/28 15:05、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・followup-ledger・停止・最終更新 11/28 16:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・followup-ledger-1127・停止（次の朝まで待機）・000KimPC のビーコンが1日前で停止しており、指示が届いていない。社保の LINE 送信は 000 が復旧するまでできない。・期限11/30（投函期限）・次:11/28 朝に 000KimPC のビーコン状態を確認し、復旧していれば `SEND-000.md` の手順を実行する。ついでに各PCの followup-ledger 登録状況を再確認（fleet-status.mjs）。
 - 011・followup-ledger-1127-continue・停止・最終更新 11/27 21:50、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
-- 011・gb229-rpf-1128・停止・最終更新 11/28 15:06、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 011・gb230-rpf-1128・停止・最終更新 11/28 15:06、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・gb229-rpf-1128・停止・最終更新 11/28 16:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・gb230-rpf-1128・完了・最終更新 11/28 15:34、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 011・gb231-rpf-1128・停止・最終更新 11/28 16:06、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・gitignore-scan-out・停止・最終更新 11/27 14:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・gridbeyond-reply-1126・金さん待ち・GridBeyond ミント様への失注お礼の返信は下書き済みで、送信承認待ち・期限なし（礼状のため早いほどよい。目安は 11/27 中）・次:金さんが「送ってよい」と言ったら gmail-draft.mjs --send で送り、送信済みを読み戻す（kim-inbox ki-20261126111434-7de5）
 - 011・gridbeyond-yosu-1125・金さん待ち・最終更新 11/25 11:38、STATUS.mdなし、REPORTあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
@@ -40,7 +41,6 @@
 - 011・handoff-verify-1128・停止・最終更新 11/28 09:13、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・illumi-kono-claim-1125・停止・最終更新 11/25 18:46、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
 - 011・kim-awaiting-noarg・停止・最終更新 11/26 16:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 011・kyou-kigen-exec-1125・完了・最終更新 11/25 15:23、STATUS.mdなし、DONEあり、REPORTあり、金さん待ちの記述あり・期限なし・次:なし
 - 011・lahaina-ig-token-1128・金さん待ち・011 に Facebook/Instagram のログイン済みセッションが無く、パスワード入力は禁止のため停止・期限なし（今日の投稿枠は 2026-11-28 中）・次:人が 011 の Chrome（Default）で Facebook に手でログインしたら、トークン発行→確認→dotenv-for-015.env→1件投稿→読み戻しを再開
 - 011・lane-probe-lock-1128・完了・codex_empty_output(untrusted_cwd) の真因（lane-doctor 書き込み点検の同時実行で固定フォルダーの .git が消える）を PR #2948 で修正、2026-11-27T20:24:22Z MERGED（d5674d7d）・期限2026-11-29 11:24（効果確認）・次:11/29 朝の delegation-health.json に untrusted_cwd が出ないことを auto-progress が自動確認。next-session.md の3番は無人では編集拒否のため残っている（次回選ばない）。作業ツリー ~/.claude/wt-lane-probe-lock とブランチ fix/lane-probe-wor
 - 011・loop-check-1125・金さん待ち・最終更新 11/25 16:23、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、次の手順が未着手、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
@@ -66,7 +66,7 @@
 - 011・rescue-review-1127b・完了・rescue 121002/121202 は一時スキャン出力と #2878 着地済みの台帳追記のみ・期限なし・次:next-session 39・40番は次回選ばない。ブランチ削除は kim 許可後
 - 011・sales-followup・停止・最終更新 11/28 07:42、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-link-audit-1126・完了・監査・修正・書き出し完了、13:00 毎時本番で動作確認済み・期限2026-11-26 当日・次:なし（毎時ジョブが send-commitments を追跡し stuck-export を毎時更新）
-- 011・営業 次回連絡日・金さん待ち・最終更新 11/28 15:03、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・営業 次回連絡日・金さん待ち・最終更新 11/28 16:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・session-1126-hourly・金さん待ち・JACE 藤野様宛ての返信下書きが打合せ前の文面のまま。修正版の送信可否は金さんの承認が要る（kim-inbox ki-20261126081310-6cf5）・期限2026-12-11（先方の返信期限）／着手期限 2026-12-09・次:承認が来たら seisaku-team@ の下書きを修正版に差し替え、gmail-draft.mjs の自動チェックを通して送信し、送信済みを読み戻す
 - 011・session-1128a・完了・無人定時起動。X-0100 は 11/27 に完了済みと確認、next-session 16番を完了確認に更新・期限2026-12-04・次:なし（1563記事への段落追加は kim-inbox ki-20261127101422-bd0c で承認待ち）
 - 011・session-1205・完了・handoff-audit 8件の再発検証が終わった。f61ffeb282843871（P4）は再発0件で、検証済み台帳に追加した（PR #2878 MERGED 2026-11-27T03:24:51Z）。残り7件は 11/26 12:00Z 以降も同じ型の文が出ているため、台帳には入れていない・期限なし・次:next-session.md の8番は完了したので次回は選ばない（無人だと next-session.md を書き換えられず、この STATUS.md に残している）。9〜15番の7件は ID ごとに検証し直しても消えない。直すべきなのは、W 型の「完了待ち」の文が出る仕組みのほう。worktree ~/.claude/wt-handoff-verify-

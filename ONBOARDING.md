@@ -581,7 +581,7 @@ bound scriptのscriptId不明時はDrive MCPで`mimeType='application/vnd.google
 
 **人が読む配信（Discord/メール/LINE/Slack）は「届いた実物」を見るまで完了と言わない（絶対ルール・2026-08-11 実害）**: API が 200 / job が ✓ でも中身が壊れていることがある。①**送信側コードに送信前ガードを必ず実装**（文字化け=日本語0文字かつU+0080-00FF多数 / 空本文 / `XX`等プレースホルダ残り → 送らず例外で落とす。読めない投稿を全社チャンネルに流すより job を落として気付ける方が良い）②**Claudeは投稿後に実チャンネルを読み返す**（MCPで取得した本文が化けていても「ツール側の表示問題」と断定禁止。実クライアント/実ブラウザのスクショか別経路の再取得で必ず突き合わせる）。Pythonで JSON 文字列を復元するとき `decode("unicode_escape")` は bytes を latin-1 扱いしてUTF-8日本語を全壊させるので**禁止**（`json.loads('"..."', strict=False)` を使う）。詳細・実例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/verify-before-done.md`
 
-**LINE グループへの送信は、頼まれたその Claude Code から直接送る。kim-PC へ fleet-mail で中継しない（全プロジェクト・全PC・全アカウント・2026-11-02 kim 指示）**: `node tools/line-group-send.mjs --group <グループ名|groupId> --text-file <本文.txt> [--image <1MB以下のjpg/png> ...]`。送信者は LINE 公式アカウント「オージャスト金(読取専用)」@458zwuhb で、この bot が参加しているグループ（受信記録 `channel_messages` に `LINE: <グループ名>` で載っているもの）に送れる。画像は Supabase `line-media/outbound/` に上げて署名URLで送る。鍵は env → `~/.claude/line-send.env` → `~/.claude/vercel.env` の VERCEL_TOKEN で営業アプリ（aujust-sales-automation）から取得、の順に探す。①先に `--dry-run` で送信先グループ名を確かめる ②本送信は `--retry-key <uuid>` を付ける（再実行しても二重送信されない）③完了の証拠は push の HTTP 200・sentMessages 件数・`/v2/bot/message/quota/consumption` がグループ人数ぶん増えたこと（bot は自分の送信を読み返せないため、この3点で代える）。社外グループへの送信は、従来どおり本文全文を kim に見せて承認を取ってから送る。bot が未参加のグループ・個人宛だけは送れないので、そのときは「bot 未参加（summary 404）」を証拠に添えて kim に bot の招待を頼む。実例: 2026-11-02 株式会社ラハイナのグループへ牡蠣チラシ4案を送信（HTTP 200・sentMessages=5・consumption 13→21）。kim-PC へ中継した依頼は 5 時間受信されず止まっていた。
+**LINE グループへの送信は、頼まれたその Claude Code から直接送る。kim-PC へ fleet-mail で中継しない（全プロジェクト・全PC・全アカウント・2026-11-02 kim 指示）**: `node tools/line-group-send.mjs --group <グループ名|groupId> --text-file <本文.txt> [--image <1MB以下のjpg/png> ...]`。社外グループへの送信は、従来どおり本文全文を kim に見せて承認を取ってから送る。送信先の確認（`--dry-run`）・二重送信防止（`--retry-key`）・完了の証拠（push の HTTP 200・sentMessages 件数・quota consumption の増加）・bot 未参加時の扱い・実例は portable-knowhow/21_LINEグループ送信の手順.md。
 
 🔴 社外へ送る本文の完了主張（入力しました・予約しました等）は、送信前に読み戻し、`[CLAIM-EVIDENCE: 主張 => 読み戻し元]` を書く。outbound-claim-evidence-gate が止める（2026-10-27 TimeRex 実害）。
 
@@ -984,7 +984,7 @@ kim の返事待ちは SessionStart と各セッションで「📌 kim の返�
 進捗通知の宛先は `fleet-pc-map.json` またはローカルの `~/.claude/fleet-pc-map.json` の同名 PC 行の `notifyDiscordId`。未設定だとチャットに案内が出て、kim に1日1回警告が飛ぶ。
 定期ダイジェスト（朝/夜/urgent）・完了通知・配送異常の警告は無人ジョブの報告として §1.1 に従い kim-inbox に保存する。
 
-**「この後の自動進行: <内容>」の宣言は台帳に記録され、止まれば自動で拾われる（2026-10-14 追加）**。Stop hook `tools/auto-progress-ledger.mjs` が宣言（「なし」以外）を `~/.claude/auto-progress-ledger.jsonl` に記録する（同一セッションは最新で置換）。各PCの定期タスク `OrgiastAutoProgressWatch` が毎時台帳を巡回し、宣言から1時間以降のものを判定する。この巡回では stalled の手動再開案内を kim-inbox に1回だけ通知する。タイトル期限による自動再開の対象は §1.15 に従う。全PCが1日2回（朝枠＝定時報告・夕枠＝変化分のみ）自PC分を kim-inbox に積む。朝枠は変化0件でも進行中・判断待ち・完了を全件名前付きで送る。夕枠・枠外は変化分のみ。check の引き継ぎ: 新しい約束行に check が無く、直前の open 行に期限が未来の check があれば引き継ぐ（check が superseded で消える再発防止）。だから宣言は「実際に自動で進む内容」だけ書く。API エラー（利用上限など）で返答できずに終わった依頼も、毎時の巡回が transcript から見つけて台帳へ起票し、kim-inbox に手動再開の案内を通知する。Sheet 側の追加手順は `docs/auto-progress-gas-patch.gs.txt`。
+**「この後の自動進行: <内容>」の宣言は台帳に記録され、止まれば自動で拾われる（2026-10-14 追加）**。Stop hook `tools/auto-progress-ledger.mjs` が宣言（「なし」以外）を `~/.claude/auto-progress-ledger.jsonl` に記録する（同一セッションは最新で置換）。宣言は「実際に自動で進む内容」だけ書く。巡回・通知の詳細は portable-knowhow/22_自動進行宣言の台帳.md。
 
 自動進行の結果はセッションの持ち主に DM とセッション内表示で必ず届く。user に「進捗どう？」と聞かせたら違反（2026-10-19 cr 指摘）。
 

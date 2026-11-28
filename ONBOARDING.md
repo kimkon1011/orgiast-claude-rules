@@ -1766,6 +1766,8 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
   - **ドットは動ける**。リマインダーや定期タスクを組み、時刻や対応するイベントを指定できる。Scheduled で管理する。 [Getting started with your dot](https://help.openai.com/en/articles/20001530-getting-started-with-your-dot)、[Tasks and memory](https://learn.chatgpt.com/docs/dots/tasks-and-memory)。
   - 定期タスクが未設定なら、グロボの夜間ルーティンが台帳に積んだ作業を代わりに進める。カスタム指示への書き込みと定期タスク作成は GB-35。
 
+**2.8.6.1 ふわへ4種類（11/28）** 送信等は本人承認。不可なら理由を残し従来へ。4種類は rules/ai-unified-ledger.md
+
 **2.8.7 Cursor への委譲を停止する（2026-11-25 金さん指示）**
 
 Cursor の使用量がグロボの追加料金に加算されるため、Cursor Agent と Cursor Cloud Agent は使わない。実装は Codex、Codex が使えないときは `lane-health.json` の次の安いレーン、または各PCの Claude Codeへ回す。

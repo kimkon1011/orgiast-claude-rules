@@ -1074,7 +1074,7 @@ test('T11 別PC: 000・011・018 など別のPCで登録した1件が一覧に�
     const sheet = fleetSheet();
     const ctx = { config: { ...config, spreadsheetId: 'mock', hubPc: '008' }, storeMode: 'sheet', sheets: sheet.sheets };
     await withEnv({ FOLLOWUP_PC: '011' }, async () => {
-      const result = await capture(() => run(addArgs('T11', { extra: ['--store', 'sheet', '--owner-pc', ''] }), ctx));
+      const result = await capture(() => run(addArgs('T11', { due: '2026-11-28T10:00:00+09:00', requestedAt: '2026-11-25T13:00:00+09:00', extra: ['--store', 'sheet', '--owner-pc', ''] }), ctx));
       assert.equal(result.code, 0);
       assert.equal(JSON.parse(result.output).registeredFrom, '011');
       assert.equal(JSON.parse(result.output).effectiveOwnerPc, '008');

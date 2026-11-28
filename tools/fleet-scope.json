@@ -1429,6 +1429,7 @@
     {"path": "tools/register-claude-pace.ps1", "scope": "fleet", "step": "task:quota-sweep", "reason": "全PCで登録する Claude ペース管理の毎時ジョブ"},
     {"path": "tools/lib/claude-pace-report-core.mjs", "scope": "fleet", "step": "task:quota-sweep", "reason": "Claude ペース日次報告と配信処理が共有する参照先生成"},
     {"path": "tools/register-claude-pace-report.ps1", "scope": "fleet", "step": "task:quota-sweep", "reason": "全PCで登録する Claude ペース日次報告（実行時に担当PCを判定）"},
+    {"path": "tools/register-claude-pace-report-watch.ps1", "scope": "fleet", "step": "task:quota-sweep", "reason": "毎朝7:45に Claude ペース日次報告の欠落を見張り kim-inbox に警告を積む"},
     {"path": "tools/lib/approval-cards.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "手間・送信前整合性チェックと配布確認の実行時依存"},
     {"path": "tools/lib/send-consistency.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "手間・送信前整合性チェックと配布確認の実行時依存"},
     {"path": "tools/lib/tema-rules.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "手間・送信前整合性チェックと配布確認の実行時依存"},

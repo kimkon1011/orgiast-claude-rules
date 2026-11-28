@@ -94,6 +94,54 @@ test('empty successful poll records heartbeat; HTTP failure records failure; hea
   await assert.rejects(fleetMain(['--health-check'], { ...deps, fetch: async () => ({ ok: true, json: async () => ({}) }) }), /missing directives/);
 });
 
+test('fleetLabel mismatch suppresses task_missed and records task_skipped observation', async t => {
+  const { options } = fixture(t);
+  const task = { taskName: 'OrgiastDeadlineWatch', status: 0, state: 'Disabled', t: new Date(now - 7200000).toISOString(), nextRunTime: new Date(now + 3600000).toISOString() };
+  const expectations = [{ task: 'OrgiastDeadlineWatch', fleetLabel: 'kim-PC', log: 'deadline-watch-app.log', maxAgeHours: 36 }];
+  const result = await scan({ ...options, label: '作業用018', expectations, taskQuery: () => [task] });
+  assert.equal(result.rows.filter(r => r.kind === 'task_missed').length, 0, '作業用018 では task_missed が出てはいけない');
+  assert.ok(result.observations.some(r => r.kind === 'task_skipped'), 'task_skipped 観測が記録されること');
+});
+
+test('fleetLabel matching still reports task_missed for disabled task', async t => {
+  const { options } = fixture(t);
+  const task = { taskName: 'OrgiastDeadlineWatch', status: 0, state: 'Disabled', t: new Date(now - 7200000).toISOString(), nextRunTime: new Date(now + 3600000).toISOString() };
+  const expectations = [{ task: 'OrgiastDeadlineWatch', fleetLabel: 'kim-PC', log: 'deadline-watch-app.log', maxAgeHours: 36 }];
+  const result = await scan({ ...options, label: 'kim-PC', expectations, taskQuery: () => [task] });
+  assert.equal(result.rows.filter(r => r.kind === 'task_missed').length, 1, 'kim-PC では task_missed が出ること');
+});
+
+test('task without expectation still reports task_missed for disabled task', async t => {
+  const { options } = fixture(t);
+  const task = { taskName: 'OrgiastSomethingElse', status: 0, state: 'Disabled', t: new Date(now - 7200000).toISOString(), nextRunTime: new Date(now + 3600000).toISOString() };
+  const result = await scan({ ...options, label: '作業用018', expectations: [], taskQuery: () => [task] });
+  assert.equal(result.rows.filter(r => r.kind === 'task_missed').length, 1, 'expectation に無いタスクは task_missed が出ること');
+});
+
+// 追加されたテストケース
+test('回帰ガード: 旧挙動が誤報していたこと', async t => {
+  const { options } = fixture(t);
+  const task = { taskName: 'OrgiastDeadlineWatch', status: 0, state: 'Disabled', t: new Date(now - 7200000).toISOString(), nextRunTime: new Date(now + 3600000).toISOString() };
+  const expectations = [{ task: 'OrgiastDeadlineWatch', fleetLabel: 'kim-PC', log: 'deadline-watch-app.log', maxAgeHours: 36 }];
+  const result = await scan({ ...options, label: '作業用018', expectations, taskQuery: () => [task] });
+  assert.equal(result.rows.filter(r => r.kind === 'task_missed').length, 0, '作業用018 では task_missed が出てはいけない（回帰ガード）');
+});
+
+test('担当席では今までどおり報告すること', async t => {
+  const { options } = fixture(t);
+  const task = { taskName: 'OrgiastDeadlineWatch', status: 0, state: 'Disabled', t: new Date(now - 7200000).toISOString(), nextRunTime: new Date(now + 3600000).toISOString() };
+  const expectations = [{ task: 'OrgiastDeadlineWatch', fleetLabel: 'kim-PC', log: 'deadline-watch-app.log', maxAgeHours: 36 }];
+  const result = await scan({ ...options, label: 'kim-PC', expectations, taskQuery: () => [task] });
+  assert.equal(result.rows.filter(r => r.kind === 'task_missed').length, 1, 'kim-PC では task_missed が出ること');
+});
+
+test('expectation が無いタスクは今までどおり報告すること', async t => {
+  const { options } = fixture(t);
+  const task = { taskName: 'OrgiastSomethingElse', status: 0, state: 'Disabled', t: new Date(now - 7200000).toISOString(), nextRunTime: new Date(now + 3600000).toISOString() };
+  const result = await scan({ ...options, label: '作業用018', expectations: [], taskQuery: () => [task] });
+  assert.equal(result.rows.filter(r => r.kind === 'task_missed').length, 1, 'expectation に無いタスクは task_missed が出ること');
+});
+
 test('cost log fallback skips a locked rotated file', () => {
   const locked = 'cost-improve-loop.locked-20261124-072001-rad11DFE.log';
   const chosen = resolveEffectiveLogPath('C:/audit', { mkdirSync() {}, readdirSync: () => [locked], appendFileSync() { throw Object.assign(new Error('locked'), { code: 'EBUSY' }); } });

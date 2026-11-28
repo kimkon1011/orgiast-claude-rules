@@ -3,10 +3,12 @@ import test from 'node:test';
 process.env.ORGIAST_AUTO_RESUME = '1';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { summarizeEvidence, resumeSession, legacyAddCheckMigrationRows, formatDoneLine, formatDoneMessage, formatDoneBacklogMessages, gatherEvidence, deterministicVerdict, judge, evidenceSummary, logDoneDm, run as runWatch } from './auto-progress-watch.mjs';
 import { cleanupOldLedgerTemps, ledgerFile, readLedger, writeLedger } from './auto-progress-ledger.mjs';
 import { listItems } from './kim-inbox.mjs';
+import { appendMobilePush } from './lib/mobile-push-queue.mjs';
 
 const run = options => runWatch({ ...options, io: { ...notificationMocks, ...options.io } });
 
@@ -616,4 +618,36 @@ test('resumeSession は結果 JSON があるとき従来どおり state を返�
   assert.equal(result.outcome, 'done');
   assert.equal(result.reason, '作業完了');
   assert.equal(result.artifact, 'result.txt');
+});
+
+test('mobile-push undeliverable 時に kim-inbox へ dedupeKey 付きで1回積む', async t => {
+  const home = progressHome('mobile-push-undeliverable-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const now = Date.parse('2026-11-27T00:00:00Z');
+  appendMobilePush(home, { owner: 'test-owner@example.com', title: '届かない', body: '本文' }, {
+    now: now - 30 * 3600000,
+    id: 'stale-push',
+  });
+  const inboxCalls = [];
+  const summary = await run({
+    home,
+    now,
+    io: {
+      clock: () => now,
+      sheetConfig: () => null,
+      transcriptFiles: [],
+      digest: async () => ({}),
+      escalateKimDecisions: async () => ({}),
+      addKimInboxItem: async (_home, item) => {
+        inboxCalls.push(item);
+        return { id: 'inbox-undeliverable' };
+      },
+    },
+  });
+  assert.equal(summary.mobilePushSweep?.undeliverable, 1);
+  assert.equal(summary.mobilePushSweep?.newlyUndeliverable, 1);
+  assert.equal(inboxCalls.length, 1);
+  assert.equal(inboxCalls[0].dedupeKey, `mobile-push-undeliverable:${os.hostname()}`);
+  assert.equal(inboxCalls[0].source, 'mobile-push-undeliverable');
+  assert.match(inboxCalls[0].text, /配信できていません/);
 });

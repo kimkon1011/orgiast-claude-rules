@@ -4,16 +4,23 @@
 //   node tools/mobile-push-queue.mjs --list [--all]   … 未送信（--all で全行）を JSON 行で表示
 //   node tools/mobile-push-queue.mjs --mark-sent <id> [--mark-sent <id> ...]  … 送信済みにする
 //   node tools/mobile-push-queue.mjs --mark-attempt <id> [--mark-attempt <id> ...]  … 送信失敗回数を増やす
+//   node tools/mobile-push-queue.mjs --sweep [--dry-run]  … 重複圧縮・TTL・配信不能判定
+//   node tools/mobile-push-queue.mjs --reactivate [--dry-run]  … undeliverable を pending に戻す
 // テスト・診断用に --home <dir> で対象 HOME を切り替えられる。
 import os from 'node:os';
 import { isEntry } from './is-entry.mjs';
-import { readMobilePushQueue, pendingMobilePush, markMobilePushAttempt, markMobilePushSent } from './lib/mobile-push-queue.mjs';
+import { readMobilePushQueue, pendingMobilePush, markMobilePushAttempt, markMobilePushSent, reactivateMobilePush, sweepMobilePushQueue } from './lib/mobile-push-queue.mjs';
+import { addItem } from './kim-inbox.mjs';
 
-import { sweepMobilePushQueue } from './lib/mobile-push-queue.mjs';
-
-export function main(args = process.argv.slice(2), { home = process.env.ORGIAST_HOME || os.homedir(), out = console.log } = {}) {
+export async function main(args = process.argv.slice(2), {
+  home = process.env.ORGIAST_HOME || os.homedir(),
+  out = console.log,
+  addInboxItem = addItem,
+  inboxLocalOnly = false,
+} = {}) {
   let all = false;
   let sweep = false;
+  let reactivate = false;
   let dryRun = false;
   const sentIds = [];
   const attemptIds = [];
@@ -21,6 +28,7 @@ export function main(args = process.argv.slice(2), { home = process.env.ORGIAST_
     if (args[i] === '--list') { /* 一覧は既定の動作 */ }
     else if (args[i] === '--all') all = true;
     else if (args[i] === '--sweep') sweep = true;
+    else if (args[i] === '--reactivate') reactivate = true;
     else if (args[i] === '--dry-run') dryRun = true;
     else if (args[i] === '--mark-sent') {
       const id = args[++i];
@@ -36,8 +44,21 @@ export function main(args = process.argv.slice(2), { home = process.env.ORGIAST_
       home = value;
     } else throw new Error(`不明な引数: ${args[i]}`);
   }
+  if (sweep && reactivate) throw new Error('--sweep と --reactivate は同時に指定できません');
   if (sweep) {
     const result = sweepMobilePushQueue(home, { dryRun });
+    if (result.kimInboxNotify && !dryRun) {
+      await addInboxItem(home, result.kimInboxNotify, { localOnly: inboxLocalOnly });
+    }
+    out(JSON.stringify({
+      deduplicated: result.deduplicated,
+      expired: result.expired,
+      undeliverable: result.undeliverable,
+    }));
+    return 0;
+  }
+  if (reactivate) {
+    const result = reactivateMobilePush(home, { dryRun });
     out(JSON.stringify(result));
     return 0;
   }
@@ -56,4 +77,4 @@ export function main(args = process.argv.slice(2), { home = process.env.ORGIAST_
   return 0;
 }
 
-if (isEntry(import.meta.url)) process.exitCode = main();
+if (isEntry(import.meta.url)) process.exitCode = await main();

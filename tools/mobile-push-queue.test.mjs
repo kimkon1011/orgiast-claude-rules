@@ -4,9 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { appendMobilePush, ATTEMPT_LIMIT, markMobilePushAttempt, markMobilePushSent, mobilePushInstruction, mobilePushQueueFile, pendingMobilePush, readMobilePushQueue, sweepMobilePushQueue } from './lib/mobile-push-queue.mjs';
+import { appendMobilePush, ATTEMPT_LIMIT, markMobilePushAttempt, markMobilePushSent, mobilePushInstruction, mobilePushQueueFile, pendingMobilePush, readMobilePushQueue, reactivateMobilePush, sweepMobilePushQueue } from './lib/mobile-push-queue.mjs';
 import { main as cliMain } from './mobile-push-queue.mjs';
 import { consumeInbox } from './auto-progress-inbox-hook.mjs';
+import { addItem, listItems } from './kim-inbox.mjs';
 
 const cliPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mobile-push-queue.mjs');
 const hour = 3600 * 1000;
@@ -58,35 +59,35 @@ test('長いタイトルは100字に切り詰める', t => {
   assert.equal(row.title.length, 100);
 });
 
-test('CLI --list は未送信だけを出し --all は全行を出す', t => {
+test('CLI --list は未送信だけを出し --all は全行を出す', async t => {
   const home = tempHome(t);
   const sent = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '送信済み', body: '1' });
   markMobilePushSent(home, [sent.id]);
   appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '未送信', body: '2' });
   const lines = [];
-  assert.equal(cliMain(['--list'], { home, out: line => lines.push(line) }), 0);
+  assert.equal(await cliMain(['--list'], { home, out: line => lines.push(line) }), 0);
   assert.deepEqual(lines.map(line => JSON.parse(line).title), ['未送信']);
   lines.length = 0;
-  assert.equal(cliMain(['--all'], { home, out: line => lines.push(line) }), 0);
+  assert.equal(await cliMain(['--all'], { home, out: line => lines.push(line) }), 0);
   assert.deepEqual(lines.map(line => JSON.parse(line).sent), [true, false]);
-  assert.equal(cliMain([], { home, out: () => {} }), 0); // 引数なしも一覧
+  assert.equal(await cliMain([], { home, out: () => {} }), 0); // 引数なしも一覧
 });
 
-test('CLI --mark-sent は該当行だけ送信済みにし未知 id は異常終了する', t => {
+test('CLI --mark-sent は該当行だけ送信済みにし未知 id は異常終了する', async t => {
   const home = tempHome(t);
   const first = appendMobilePush(home, { owner: 'x', title: '1', body: 'b1' });
   const second = appendMobilePush(home, { owner: 'x', title: '2', body: 'b2' });
   let printed = '';
-  assert.equal(cliMain(['--mark-sent', first.id], { home, out: value => { printed = value; } }), 0);
+  assert.equal(await cliMain(['--mark-sent', first.id], { home, out: value => { printed = value; } }), 0);
   assert.deepEqual(JSON.parse(printed), { marked: [first.id], unknown: [] });
   assert.deepEqual(pendingMobilePush(home).map(row => row.id), [second.id]);
   const rows = fs.readFileSync(mobilePushQueueFile(home), 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(rows[0].sent, true);
   assert.ok(rows[0].sentAt);
   assert.equal(rows[1].sent, false);
-  assert.equal(cliMain(['--mark-sent', 'unknown-id'], { home, out: () => {} }), 1);
-  assert.throws(() => cliMain(['--mark-sent'], { home, out: () => {} }), /id が1つ必要/);
-  assert.throws(() => cliMain(['--bogus'], { home, out: () => {} }), /不明な引数/);
+  assert.equal(await cliMain(['--mark-sent', 'unknown-id'], { home, out: () => {} }), 1);
+  await assert.rejects(() => cliMain(['--mark-sent'], { home, out: () => {} }), /id が1つ必要/);
+  await assert.rejects(() => cliMain(['--bogus'], { home, out: () => {} }), /不明な引数/);
 });
 
 test('markMobilePushAttempt は attempts と lastAttemptAt を更新して本文を未送信のまま残す', t => {
@@ -105,15 +106,15 @@ test('markMobilePushAttempt は attempts と lastAttemptAt を更新して本文
   assert.deepEqual(markMobilePushAttempt(home, ['unknown-id']), { bumped: [], unknown: ['unknown-id'] });
 });
 
-test('CLI --mark-attempt は試行回数を増やし mark-sent との併用を拒否する', t => {
+test('CLI --mark-attempt は試行回数を増やし mark-sent との併用を拒否する', async t => {
   const home = tempHome(t);
   const item = appendMobilePush(home, { owner: 'x', title: '報告', body: '本文' });
   let printed = '';
-  assert.equal(cliMain(['--mark-attempt', item.id], { home, out: value => { printed = value; } }), 0);
+  assert.equal(await cliMain(['--mark-attempt', item.id], { home, out: value => { printed = value; } }), 0);
   assert.deepEqual(JSON.parse(printed), { bumped: [item.id], unknown: [] });
   assert.equal(readRow(home, item.id).attempts, 1);
-  assert.throws(() => cliMain(['--mark-sent', item.id, '--mark-attempt', item.id], { home, out: () => {} }), /同時に指定できません/);
-  assert.throws(() => cliMain(['--mark-attempt'], { home, out: () => {} }), /id が1つ必要/);
+  await assert.rejects(() => cliMain(['--mark-sent', item.id, '--mark-attempt', item.id], { home, out: () => {} }), /同時に指定できません/);
+  await assert.rejects(() => cliMain(['--mark-attempt'], { home, out: () => {} }), /id が1つ必要/);
 });
 
 function readRow(home, id) {
@@ -139,12 +140,12 @@ test('hook は未送信の push 要求だけを指示に出す（送信済み・
   assert.ok(!context.includes(other.id), 'このPCの持ち主でない owner の要求は出さない');
 });
 
-test('mark-sent 後は hook が指示を出さない', t => {
+test('mark-sent 後は hook が指示を出さない', async t => {
   const home = tempHome(t);
   const options = hookOptions(home);
   const item = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '報告', body: '本文' });
   assert.ok(consumeInbox({ session_id: 's1' }, options).hookSpecificOutput.additionalContext.includes(item.id));
-  assert.equal(cliMain(['--mark-sent', item.id], { home, out: () => {} }), 0);
+  assert.equal(await cliMain(['--mark-sent', item.id], { home, out: () => {} }), 0);
   assert.equal(consumeInbox({ session_id: 's1' }, options), null);
   // 無人セッションでは送信指示を出さず未送信を次の対話に残す
   const next = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '次の報告', body: '本文2' });
@@ -284,19 +285,20 @@ test('CLI --sweep --dry-run はファイルを変更しない', async t => {
 
   // dry-run で sweep を実行
   let output = '';
-  const exitCode = cliMain(['--sweep', '--dry-run'], { home, out: (line) => output += line });
+  const exitCode = await cliMain(['--sweep', '--dry-run'], { home, out: (line) => output += line, inboxLocalOnly: true });
 
   assert.equal(exitCode, 0);
   const result = JSON.parse(output);
   assert.equal(result.deduplicated, 1);
   assert.equal(result.expired, 1);
+  assert.equal(result.undeliverable, 0);
 
   // ファイルの中身が変わっていないことを確認
   const afterContent = fs.readFileSync(mobilePushQueueFile(home), 'utf8');
   assert.equal(afterContent, beforeContent);
 
   // 再度通常の sweep を実行して、実際に変更されることを確認
-  cliMain(['--sweep'], { home, out: () => {} });
+  await cliMain(['--sweep'], { home, out: () => {}, inboxLocalOnly: true });
 
   const queue = readMobilePushQueue(home);
   const expiredQueueItem = queue.find(item => item.id === expiredItem.id);
@@ -380,4 +382,150 @@ test('スナップショット圧縮・再掲上限は送信済みや別 title �
 
   const pending = pendingMobilePush(home);
   assert.deepEqual(pending.map(row => row.id).sort(), ['collapse-new', 'keep-other-title']);
+});
+
+test('attempts が閾値に達した項目は undeliverable になり本文を保持する', t => {
+  const home = tempHome(t);
+  const now = Date.now();
+  const item = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '届かない報告', body: '保持すべき本文' }, { now, id: 'undeliverable-attempts' });
+  for (let i = 0; i < ATTEMPT_LIMIT; i++) markMobilePushAttempt(home, [item.id], { now: now + i });
+
+  const result = sweepMobilePushQueue(home, { now: now + 1000, hostname: 'test-host' });
+  assert.equal(result.newlyUndeliverable, 1);
+  assert.equal(result.undeliverable, 1);
+
+  const row = readRow(home, item.id);
+  assert.equal(row.status, 'undeliverable');
+  assert.ok(row.undeliverableAt);
+  assert.equal(row.title, '届かない報告');
+  assert.equal(row.body, '保持すべき本文');
+  assert.equal(pendingMobilePush(home).length, 0);
+  assert.equal(readMobilePushQueue(home).length, 1);
+});
+
+test('queuedAt が24時間超の未送信は undeliverable、24時間以内は付かない', t => {
+  const home = tempHome(t);
+  const now = Date.now();
+  const stale = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '古い', body: '古い本文' }, { now: now - 25 * hour, id: 'stale-undeliverable' });
+  const fresh = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '新しい', body: '新しい本文' }, { now: now - hour, id: 'fresh-pending' });
+
+  const result = sweepMobilePushQueue(home, { now, hostname: 'test-host' });
+  assert.equal(result.newlyUndeliverable, 1);
+
+  assert.equal(readRow(home, stale.id).status, 'undeliverable');
+  assert.ok(readRow(home, stale.id).undeliverableAt);
+  assert.notEqual(readRow(home, fresh.id).status, 'undeliverable');
+  assert.deepEqual(pendingMobilePush(home).map(row => row.id), [fresh.id]);
+});
+
+test('再掲テキストは undeliverable を除外し全件 undeliverable なら通知ブロックを出さない', t => {
+  const home = tempHome(t);
+  const now = Date.now();
+  const kept = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '残す', body: '残す本文' }, { now: now - hour, id: 'keep-instruction' });
+  const gone = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '外す', body: '外す本文' }, { now: now - 30 * hour, id: 'drop-instruction' });
+  sweepMobilePushQueue(home, { now, hostname: 'test-host' });
+
+  const mixed = mobilePushInstruction(home, { now, owner: 'cr@orgiast.jp', cliPath });
+  assert.match(mixed, /未送信 1 件/);
+  assert.match(mixed, /残す本文/);
+  assert.ok(!mixed.includes(gone.id));
+  assert.ok(!mixed.includes('外す本文'));
+  assert.ok(mixed.includes(kept.id));
+
+  for (let i = 0; i < ATTEMPT_LIMIT; i++) markMobilePushAttempt(home, [kept.id], { now: now + i });
+  sweepMobilePushQueue(home, { now: now + 1000, hostname: 'test-host' });
+  assert.equal(mobilePushInstruction(home, { now: now + 1000, owner: 'cr@orgiast.jp', cliPath }), '');
+});
+
+test('CLI --reactivate は pending に戻し attempts を 0 にし dry-run ではファイルを変えない', async t => {
+  const home = tempHome(t);
+  const now = Date.now();
+  const item = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '復帰対象', body: '本文' }, { now: now - 30 * hour, id: 'reactivate-me' });
+  for (let i = 0; i < ATTEMPT_LIMIT; i++) markMobilePushAttempt(home, [item.id], { now: now + i });
+  sweepMobilePushQueue(home, { now: now + 1000, hostname: 'test-host' });
+  assert.equal(readRow(home, item.id).status, 'undeliverable');
+
+  const before = fs.readFileSync(mobilePushQueueFile(home), 'utf8');
+  let printed = '';
+  assert.equal(await cliMain(['--reactivate', '--dry-run'], { home, out: value => { printed = value; } }), 0);
+  assert.deepEqual(JSON.parse(printed), { reactivated: 1 });
+  assert.equal(fs.readFileSync(mobilePushQueueFile(home), 'utf8'), before);
+
+  printed = '';
+  assert.equal(await cliMain(['--reactivate'], { home, out: value => { printed = value; } }), 0);
+  assert.deepEqual(JSON.parse(printed), { reactivated: 1 });
+  const row = readRow(home, item.id);
+  assert.equal(row.status, 'pending');
+  assert.equal(row.attempts, 0);
+  assert.equal(row.undeliverableAt, undefined);
+  assert.ok(row.reactivatedAt);
+  assert.deepEqual(reactivateMobilePush(home), { reactivated: 0 });
+});
+
+test('reactivate 直後の sweep は pending のまま、reactivatedAt から25時間後に undeliverable', t => {
+  const home = tempHome(t);
+  const queuedAt = Date.now() - 48 * hour;
+  const item = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '復帰後', body: '本文' }, { now: queuedAt, id: 'reactivate-age' });
+  sweepMobilePushQueue(home, { now: queuedAt + 25 * hour, hostname: 'test-host' });
+  assert.equal(readRow(home, item.id).status, 'undeliverable');
+
+  const reactivateAt = Date.now();
+  assert.deepEqual(reactivateMobilePush(home, { now: reactivateAt }), { reactivated: 1 });
+  const restored = readRow(home, item.id);
+  assert.equal(restored.status, 'pending');
+  assert.equal(restored.reactivatedAt, new Date(reactivateAt).toISOString());
+
+  const immediate = sweepMobilePushQueue(home, { now: reactivateAt + 1000, hostname: 'test-host' });
+  assert.equal(immediate.newlyUndeliverable, 0);
+  assert.equal(immediate.expired, 0);
+  assert.equal(readRow(home, item.id).status, 'pending');
+  assert.deepEqual(pendingMobilePush(home).map(row => row.id), [item.id]);
+
+  const later = sweepMobilePushQueue(home, { now: reactivateAt + 25 * hour, hostname: 'test-host' });
+  assert.equal(later.newlyUndeliverable, 1);
+  assert.equal(readRow(home, item.id).status, 'undeliverable');
+});
+
+test('MOBILE_PUSH_MAX_ATTEMPTS / MOBILE_PUSH_UNDELIVERABLE_HOURS で閾値を上書きできる', t => {
+  const home = tempHome(t);
+  const now = Date.now();
+  t.after(() => {
+    delete process.env.MOBILE_PUSH_MAX_ATTEMPTS;
+    delete process.env.MOBILE_PUSH_UNDELIVERABLE_HOURS;
+  });
+  process.env.MOBILE_PUSH_MAX_ATTEMPTS = '2';
+  process.env.MOBILE_PUSH_UNDELIVERABLE_HOURS = '1';
+
+  const byAttempts = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '試行2で不能', body: 'a' }, { now, id: 'env-attempts' });
+  markMobilePushAttempt(home, [byAttempts.id], { now });
+  markMobilePushAttempt(home, [byAttempts.id], { now: now + 1 });
+  const stale = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '2時間前', body: 'b' }, { now: now - 2 * hour, id: 'env-stale' });
+  const fresh = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '30分前', body: 'c' }, { now: now - 0.5 * hour, id: 'env-fresh' });
+
+  const result = sweepMobilePushQueue(home, { now, hostname: 'env-host' });
+  assert.equal(result.newlyUndeliverable, 2);
+  assert.equal(readRow(home, byAttempts.id).status, 'undeliverable');
+  assert.equal(readRow(home, stale.id).status, 'undeliverable');
+  assert.notEqual(readRow(home, fresh.id).status, 'undeliverable');
+  assert.deepEqual(pendingMobilePush(home).map(row => row.id), [fresh.id]);
+});
+
+test('undeliverable の kim-inbox 通知は dedupeKey 固定で2回積んでも1件', async t => {
+  const home = tempHome(t);
+  const now = Date.now();
+  appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '不能', body: '本文' }, { now: now - 30 * hour, id: 'inbox-undeliverable' });
+
+  const first = sweepMobilePushQueue(home, { now, hostname: 'dedupe-host' });
+  assert.ok(first.kimInboxNotify);
+  assert.equal(first.kimInboxNotify.dedupeKey, 'mobile-push-undeliverable:dedupe-host');
+  assert.match(first.kimInboxNotify.text, /配信できていません/);
+  assert.match(first.kimInboxNotify.text, /--reactivate/);
+
+  await addItem(home, first.kimInboxNotify, { localOnly: true });
+  await addItem(home, first.kimInboxNotify, { localOnly: true });
+  assert.equal(listItems(home, { status: 'open' }).length, 1);
+
+  const second = sweepMobilePushQueue(home, { now, hostname: 'dedupe-host' });
+  assert.equal(second.newlyUndeliverable, 0);
+  assert.equal(second.kimInboxNotify, null);
 });

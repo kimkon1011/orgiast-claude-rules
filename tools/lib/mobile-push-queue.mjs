@@ -3,16 +3,57 @@
 // notify-owner は Discord DM の代わりにここへ要求を積み、auto-progress-inbox-hook が
 // 対話セッションに送信指示を出し、セッションが送信後に markSent で落とす。
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 export const ATTEMPT_LIMIT = 3;
 /** 再掲回数がこの値以上の未送信は届かない席の滞留とみなし削除する */
 export const DEFAULT_OCCURRENCE_EXPIRE_THRESHOLD = 10;
+/** 配信不能とみなす経過時間の既定（時間）。MOBILE_PUSH_UNDELIVERABLE_HOURS で上書き可 */
+export const DEFAULT_UNDELIVERABLE_HOURS = 24;
 export const mobilePushQueueFile = home => path.join(home, '.claude', 'mobile-push-queue.jsonl');
 
 function rowActivityTime(row) {
   return Date.parse(row.lastQueuedAt || row.queuedAt || row.ts) || 0;
+}
+
+/** TTL / undeliverable の経過時間は reactivatedAt があればそれを基準にする */
+function rowAgeBasisTime(row) {
+  if (row.reactivatedAt) {
+    const reactivated = Date.parse(row.reactivatedAt);
+    if (!Number.isNaN(reactivated)) return reactivated;
+  }
+  return row.queuedAt ? Date.parse(row.queuedAt) : Date.parse(row.ts);
+}
+
+function isTerminalStatus(row) {
+  return row.sent === true || row.status === 'expired' || row.status === 'undeliverable';
+}
+
+export function mobilePushMaxAttempts() {
+  const parsed = parseInt(process.env.MOBILE_PUSH_MAX_ATTEMPTS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : ATTEMPT_LIMIT;
+}
+
+export function mobilePushUndeliverableHours() {
+  const parsed = Number(process.env.MOBILE_PUSH_UNDELIVERABLE_HOURS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_UNDELIVERABLE_HOURS;
+}
+
+export function buildUndeliverableInboxNotify({ count, hostname }) {
+  const host = String(hostname || os.hostname());
+  return {
+    kind: 'info',
+    source: 'mobile-push-undeliverable',
+    dedupeKey: `mobile-push-undeliverable:${host}`,
+    text: [
+      `この PC（${host}）ではスマホ通知（PushNotification）を配信できていません。`,
+      `配信不能として保持している件数: ${count} 件（本文はキューに残しています。削除していません）。`,
+      'Remote Control が復活したら次で pending に戻せます:',
+      'node tools/mobile-push-queue.mjs --reactivate',
+    ].join('\n'),
+  };
 }
 
 export function appendMobilePush(home, { owner, title, body }, { now = Date.now(), id = randomUUID() } = {}) {
@@ -28,10 +69,13 @@ export function sweepMobilePushQueue(home, {
   now = Date.now(),
   collapseByTitle = true,
   occurrenceExpireThreshold = DEFAULT_OCCURRENCE_EXPIRE_THRESHOLD,
+  hostname = os.hostname(),
 } = {}) {
   const file = mobilePushQueueFile(home);
   const ttlHours = parseInt(process.env.MOBILE_PUSH_TTL_HOURS, 10) || 72;
   const ttlMs = ttlHours * 60 * 60 * 1000;
+  const maxAttempts = mobilePushMaxAttempts();
+  const undeliverableMs = mobilePushUndeliverableHours() * 60 * 60 * 1000;
 
   // ロック取得
   const lock = `${file}.lock`;
@@ -48,11 +92,11 @@ export function sweepMobilePushQueue(home, {
   try {
     const queue = readMobilePushQueue(home);
     const deduplicated = {};
-    const sweepResult = { deduplicated: 0, expired: 0 };
+    const sweepResult = { deduplicated: 0, expired: 0, undeliverable: 0, newlyUndeliverable: 0, kimInboxNotify: null };
 
     // 重複圧縮（本文まで同一）
     let processedQueue = queue.map(row => {
-      if (row.status === 'expired' || row.sent === true) return row;
+      if (isTerminalStatus(row)) return row;
 
       const key = `${row.title}||${row.body}`;
       if (deduplicated[key]) {
@@ -86,7 +130,7 @@ export function sweepMobilePushQueue(home, {
     if (collapseByTitle) {
       const winners = new Map();
       for (const row of processedQueue) {
-        if (row.status === 'expired' || row.sent === true) continue;
+        if (isTerminalStatus(row)) continue;
         const key = `${String(row.owner)}||${String(row.title)}`;
         const existing = winners.get(key);
         if (!existing || rowActivityTime(row) >= rowActivityTime(existing)) {
@@ -95,7 +139,7 @@ export function sweepMobilePushQueue(home, {
       }
       const next = [];
       for (const row of processedQueue) {
-        if (row.status === 'expired' || row.sent === true) {
+        if (isTerminalStatus(row)) {
           next.push(row);
           continue;
         }
@@ -111,7 +155,7 @@ export function sweepMobilePushQueue(home, {
 
     // 再掲回数上限: 届かない席で積み上がった未送信を削除
     processedQueue = processedQueue.filter(row => {
-      if (row.status === 'expired' || row.sent === true) return true;
+      if (isTerminalStatus(row)) return true;
       if ((Number(row.occurrences) || 1) >= occurrenceExpireThreshold) {
         sweepResult.expired++;
         return false;
@@ -119,22 +163,41 @@ export function sweepMobilePushQueue(home, {
       return true;
     });
 
-    // TTL expire（削除せず status: expired を付ける）
+    // TTL expire（削除せず status: expired）と配信不能（status: undeliverable）
     const finalQueue = processedQueue.map(row => {
-      if (row.status === 'expired' || row.sent === true) return row;
+      if (isTerminalStatus(row)) return row;
 
-      const queuedTime = row.queuedAt ? Date.parse(row.queuedAt) : Date.parse(row.ts);
-      if (isNaN(queuedTime)) return row;
+      if ((Number(row.attempts) || 0) >= maxAttempts) {
+        row.status = 'undeliverable';
+        row.undeliverableAt = new Date(now).toISOString();
+        sweepResult.undeliverable++;
+        sweepResult.newlyUndeliverable++;
+        return row;
+      }
 
-      if ((now - queuedTime) > ttlMs) {
-        if (row.status !== 'expired') {
-          row.status = 'expired';
-          row.expiredAt = new Date(now).toISOString();
-          sweepResult.expired++;
-        }
+      const ageBasis = rowAgeBasisTime(row);
+      if (Number.isNaN(ageBasis)) return row;
+
+      if ((now - ageBasis) > ttlMs) {
+        row.status = 'expired';
+        row.expiredAt = new Date(now).toISOString();
+        sweepResult.expired++;
+        return row;
+      }
+
+      if ((now - ageBasis) > undeliverableMs) {
+        row.status = 'undeliverable';
+        row.undeliverableAt = new Date(now).toISOString();
+        sweepResult.undeliverable++;
+        sweepResult.newlyUndeliverable++;
       }
       return row;
     });
+
+    if (sweepResult.newlyUndeliverable > 0) {
+      const held = finalQueue.filter(row => row.status === 'undeliverable').length;
+      sweepResult.kimInboxNotify = buildUndeliverableInboxNotify({ count: held, hostname });
+    }
 
     if (!dryRun) {
       const temporary = `${file}.${process.pid}.tmp`;
@@ -158,9 +221,44 @@ export function readMobilePushQueue(home) {
 export function pendingMobilePush(home, { owners } = {}) {
   const wanted = owners?.map(owner => String(owner).trim().toLowerCase());
   return readMobilePushQueue(home)
-    .filter(row => row && row.id && row.sent !== true && row.status !== 'expired')
+    .filter(row => row && row.id && row.sent !== true && row.status !== 'expired' && row.status !== 'undeliverable')
     .filter(row => !wanted || wanted.includes(String(row.owner || '').trim().toLowerCase()))
     .sort((a, b) => (Date.parse(a.ts) || 0) - (Date.parse(b.ts) || 0));
+}
+
+export function reactivateMobilePush(home, { dryRun = false, now = Date.now() } = {}) {
+  const file = mobilePushQueueFile(home);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const lock = `${file}.lock`;
+  let fd;
+  for (let retry = 0; retry < 100; retry++) {
+    try { fd = fs.openSync(lock, 'wx', 0o600); break; }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (retry === 99) throw new Error('mobile-push queue is locked');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+  try {
+    let reactivated = 0;
+    const reactivatedAt = new Date(now).toISOString();
+    const merged = readMobilePushQueue(home).map(row => {
+      if (row.status !== 'undeliverable') return row;
+      reactivated++;
+      const next = { ...row, status: 'pending', attempts: 0, reactivatedAt };
+      delete next.undeliverableAt;
+      return next;
+    });
+    if (!dryRun && reactivated) {
+      const temporary = `${file}.${process.pid}.tmp`;
+      fs.writeFileSync(temporary, merged.map(JSON.stringify).join('\n') + (merged.length ? '\n' : ''), { mode: 0o600 });
+      fs.renameSync(temporary, file);
+    }
+    return { reactivated };
+  } finally {
+    fs.closeSync(fd);
+    try { fs.unlinkSync(lock); } catch { /* already removed */ }
+  }
 }
 
 export function markMobilePushSent(home, ids, { now = Date.now() } = {}) {

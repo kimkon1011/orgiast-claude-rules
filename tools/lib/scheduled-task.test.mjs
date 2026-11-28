@@ -38,11 +38,11 @@ function Get-ScheduledTaskInfo { param([Parameter(ValueFromPipeline=$true)]$task
 });
 
 test('registerHourlyTask exposes and applies custom execution time without changing default', () => {
-  const plan = registerHourlyTask('OrgiastQuotaSweep', 'C:\\repo\\tools\\quota-sweep.mjs', { dryRun: true, intervalMinutes: 15, executionTimeLimitMinutes: 150, wakeTrigger: true });
+  const plan = registerHourlyTask('OrgiastQuotaSweep', 'C:\\repo\\tools\\quota-sweep.mjs', { home: 'C:\\Users\\kim', dryRun: true, intervalMinutes: 15, executionTimeLimitMinutes: 150, wakeTrigger: true });
   assert.equal(plan.executionTimeLimitMinutes, 150); assert.equal(plan.interval, 'PT15M'); assert.equal(plan.wakeTrigger, true);
-  assert.equal(registerHourlyTask('default', 'script', { dryRun: true }).executionTimeLimitMinutes, 10);
+  assert.equal(registerHourlyTask('default', 'C:\\Users\\kim\\repo\\script.mjs', { home: 'C:\\Users\\kim', dryRun: true }).executionTimeLimitMinutes, 10);
   let command;
-  registerHourlyTask('OrgiastQuotaSweep', 'C:\\repo\\tools\\quota-sweep.mjs', { executionTimeLimitMinutes: 150, spawnImpl: (_exe, args) => { command = args.at(-1); return { status: 0, stdout: '' }; } });
+  registerHourlyTask('OrgiastQuotaSweep', 'C:\\repo\\tools\\quota-sweep.mjs', { home: 'C:\\Users\\kim', executionTimeLimitMinutes: 150, spawnImpl: (_exe, args) => { command = args.at(-1); return { status: 0, stdout: '' }; } });
   assert.match(command, /ExecutionTimeLimit \(New-TimeSpan -Minutes 150\)/);
 });
 

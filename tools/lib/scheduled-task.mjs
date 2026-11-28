@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { assertStableTaskPath } from './task-path-guard.mjs';
 
 export const TASK_RESULTS = Object.freeze({ SUCCESS: 0, RUNNING: 267009, NOT_RUN: 267011,
   LEGACY_RESIDENT_REFUSAL: 2147942656, START_REFUSED: 0x800710e0 });
@@ -48,6 +49,12 @@ export function registerHourlyTask(taskName, script, { spawnImpl = spawnSync, ho
   const quote = (value) => `'${String(value).replaceAll("'", "''")}'`;
   const hidden = pathForPowerShell(home, '.claude\\tools\\run-hidden.vbs');
   const workingDirectory = String(script).replace(/[\\/][^\\/]+$/, '');
+  assertStableTaskPath(hidden, { label: 'run-hidden' });
+  assertStableTaskPath(script, { label: 'script' });
+  assertStableTaskPath(workingDirectory, { label: 'workingDirectory' });
+  for (const [index, arg] of scriptArgs.entries()) {
+    assertStableTaskPath(arg, { label: `scriptArgs[${index}]` });
+  }
   const argumentsText = `//nologo "${hidden}" "${process.execPath}" "${script}" ${scriptArgs.map(arg => `"${arg}"`).join(' ')}`;
   const command = `$a=New-ScheduledTaskAction -Execute "$env:SystemRoot\\System32\\wscript.exe" -Argument ${quote(argumentsText)} -WorkingDirectory ${quote(workingDirectory)};$t=New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(${initialDelayMinutes});$r=New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(${initialDelayMinutes}) -RepetitionInterval (New-TimeSpan ${intervalMinutes === 60 ? '-Hours 1' : `-Minutes ${intervalMinutes}`});$t.Repetition=$r.Repetition;${wakeTrigger ? WAKE_TRIGGER_PS : ''}$s=New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes ${executionTimeLimitMinutes});${interactive ? "$p=New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited;" : ''}Register-ScheduledTask -TaskName ${quote(taskName)} -Action $a -Trigger ${wakeTrigger ? '@($t,$w)' : '$t'} -Settings $s ${interactive ? '-Principal $p' : ''} -Description ${quote(description)} -Force|Out-Null`;
   if (dryRun) return { taskName, execute: 'wscript.exe', arguments: argumentsText, interval: intervalMinutes === 60 ? 'PT1H' : `PT${intervalMinutes}M`, wakeTrigger, executionTimeLimitMinutes };

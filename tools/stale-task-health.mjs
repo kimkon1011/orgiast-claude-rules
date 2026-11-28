@@ -2,6 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { isEphemeralPath } from './lib/task-path-guard.mjs';
+
+function repairedPathsStillEphemeral(item) {
+  return [item.NewExecute, item.NewArguments, item.NewWorkingDirectory]
+    .filter(Boolean)
+    .some((value) => isEphemeralPath(value));
+}
 
 // One attempt per local calendar day; persist results for diagnosis and notify retry.
 export async function runStaleTaskHealth({ home, now = new Date(), platform = process.platform,
@@ -27,8 +34,14 @@ export async function runStaleTaskHealth({ home, now = new Date(), platform = pr
     const plan = JSON.parse(fs.readFileSync(out, 'utf8').replace(/^\uFEFF/, '')) || [];
     const stale = plan.filter(item => item.Status !== 'pinned:auto-session');
     const repaired = stale.filter(item => item.Status === 'repaired');
+    // 修復後も一時パスなら pinned 扱いせず明確な失敗にする（一時 HOME 下の「修復」ループ防止）。
+    const ephemeralAfter = plan.filter((item) => item.Status !== 'pinned:auto-session' && repairedPathsStillEphemeral(item));
     anomalies.length = 0;
-    if (stale.length || result.status !== 0 || result.error) {
+    if (ephemeralAfter.length) {
+      anomalies.push({ type: 'stale_task_paths', label: '定期タスク参照先',
+        message: `修復後も一時パスが残存 ${ephemeralAfter.length} 件（失敗・pinnedではない）: ` +
+          ephemeralAfter.map(item => `${item.TaskName}[${item.Index}] ${item.Status}: ${item.NewExecute} ${item.NewArguments} ${item.NewWorkingDirectory || ''}`).join('; ') });
+    } else if (stale.length || result.status !== 0 || result.error) {
       anomalies.push({ type: 'stale_task_paths', label: '定期タスク参照先',
         message: `検出 ${stale.length} / 修復 ${repaired.length} / pinned ${plan.length - stale.length} / exit ${result.status}: ` +
           stale.map(item => `${item.TaskName}[${item.Index}] ${item.Status}: ${item.OldExecute} ${item.OldArguments} ${item.OldWorkingDirectory || ''} → ${item.NewExecute} ${item.NewArguments} ${item.NewWorkingDirectory || ''}`).join('; ') });

@@ -1335,7 +1335,7 @@ async function performNudge(row, ctx) {
     return { skipped: true, reason: dryRun ? 'dry-run' : 'no-nudge', text };
   }
 
-  const sent = await adapter.send(row, text);
+  const sent = await adapter.send(row, text, { now });
   if (!sent.ok) {
     setRowStatus(row, '止まった', sent.error || '送信失敗');
     await escalate(row, sent.error || '送信失敗', ctx);

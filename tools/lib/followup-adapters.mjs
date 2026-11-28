@@ -81,7 +81,7 @@ export function createMockAdapter({ file = process.env.FOLLOWUP_MOCK_FILE } = {}
         .filter((m) => !since || !m.at || Date.parse(m.at) >= since);
       return { ok: true, messages, error: null };
     },
-    async send(row, text) {
+    async send(row, text, opts = {}) {
       const data = readMockFile(file);
       const key = chatKey(row);
       if (data.fail?.[key]) return { ok: false, messageId: null, error: String(data.fail[key]) };
@@ -90,7 +90,8 @@ export function createMockAdapter({ file = process.env.FOLLOWUP_MOCK_FILE } = {}
         id,
         chatId: key,
         text: String(text),
-        at: new Date().toISOString(),
+        // テスト時刻に合わせる: 呼び出し側の now → FOLLOWUP_NOW → 実時計
+        at: mockNowIso(opts.now),
         to: row.to || '',
         channel: row.channel || 'mock',
       };
@@ -332,4 +333,10 @@ export function getAdapter(channel, deps = {}) {
 
 export function adaptersDir() {
   return path.dirname(fileURLToPath(import.meta.url));
+}
+
+function mockNowIso(now) {
+  const src = now ?? process.env.FOLLOWUP_NOW;
+  const d = src ? new Date(src) : new Date();
+  return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
 }

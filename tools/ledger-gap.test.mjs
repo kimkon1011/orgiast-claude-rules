@@ -435,6 +435,80 @@ test('20: buildAddArgs without stop status', () => {
   assert.ok(argStr.includes('--due 2026-11-30'), 'due が設定される');
 });
 
+// ── 21a: buildAddArgs — default has no --store ──
+
+test('21a: buildAddArgs default — no --store flag', () => {
+  const savedEnv = process.env.FOLLOWUP_STORE;
+  delete process.env.FOLLOWUP_STORE;
+  try {
+    const args = buildAddArgs({
+      id: 'GB-OPEN-store-test',
+      task: 'テスト',
+      ownerPc: '008',
+      ownerAi: 'Claude Code',
+      kimWaiting: false,
+      due: '',
+      status: '止まった',
+      reason: 'exit=1',
+    });
+    const argStr = args.join(' ');
+    assert.ok(!argStr.includes('--store'), '既定では --store が含まれない');
+  } finally {
+    process.env.FOLLOWUP_STORE = savedEnv;
+  }
+});
+
+// ── 21b: buildAddArgs — FOLLOWUP_STORE=local adds --store local ──
+
+test('21b: buildAddArgs with FOLLOWUP_STORE=local — includes --store local', () => {
+  const savedEnv = process.env.FOLLOWUP_STORE;
+  process.env.FOLLOWUP_STORE = 'local';
+  try {
+    const args = buildAddArgs({
+      id: 'GB-OPEN-store-local',
+      task: 'テスト',
+      ownerPc: '008',
+      ownerAi: 'Claude Code',
+      kimWaiting: false,
+      due: '',
+      status: '止まった',
+      reason: 'exit=1',
+    });
+    const argStr = args.join(' ');
+    assert.ok(argStr.includes('--store local'), 'FOLLOWUP_STORE=local で --store local が含まれる');
+  } finally {
+    process.env.FOLLOWUP_STORE = savedEnv;
+  }
+});
+
+// ── 21c: openItem(dryRun:false) — no --store in args passed to runAdd ──
+
+test('21c: openItem(dryRun:false) — no --store in runAdd args', () => {
+  const savedEnv = process.env.FOLLOWUP_STORE;
+  delete process.env.FOLLOWUP_STORE;
+  try {
+    const runCalls = [];
+    const runAdd = (args) => { runCalls.push(args); };
+    const item = {
+      id: 'GB-OPEN-runadd-store',
+      task: 'runAdd store test',
+      ownerPc: '008',
+      ownerAi: 'Claude Code',
+      kimWaiting: false,
+      due: '',
+      status: '止まった',
+      reason: 'exit=1',
+    };
+    const result = openItem(item, { existingRows: [], runAdd, dryRun: false });
+    assert.equal(result.action, 'added');
+    assert.equal(runCalls.length, 1);
+    const argStr = runCalls[0].join(' ');
+    assert.ok(!argStr.includes('--store'), 'openItem が runAdd に渡す args に --store が含まれない');
+  } finally {
+    process.env.FOLLOWUP_STORE = savedEnv;
+  }
+});
+
 // ── 21: module import test ──
 
 test('21: module exports are valid', async () => {

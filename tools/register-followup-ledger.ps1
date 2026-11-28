@@ -1,4 +1,4 @@
-# Register OrgiastFollowupLedger: run followup-ledger check every 15 minutes.
+﻿# Register OrgiastFollowupLedger: run followup-ledger check every 15 minutes.
 # Each PC can register via converge / fleet-directive:
 #   powershell -ExecutionPolicy Bypass -File tools\register-followup-ledger.ps1
 # Quiet hours (22:00-07:00 JST) are enforced inside followup-ledger.mjs (nudge deferred).

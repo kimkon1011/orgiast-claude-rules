@@ -1074,7 +1074,8 @@ test('T11 別PC: 000・011・018 など別のPCで登録した1件が一覧に�
     const sheet = fleetSheet();
     const ctx = { config: { ...config, spreadsheetId: 'mock', hubPc: '008' }, storeMode: 'sheet', sheets: sheet.sheets };
     await withEnv({ FOLLOWUP_PC: '011' }, async () => {
-      const result = await capture(() => run(addArgs('T11', { extra: ['--store', 'sheet', '--owner-pc', ''] }), ctx));
+      // 期限・依頼時刻はシナリオの固定 now（2026-11-28 13:00 JST）基準にする。実時計基準の pastIso() だと午後に期限が now より後になり催促0件になる。
+      const result = await capture(() => run(addArgs('T11', { due: '2026-11-28T10:00:00+09:00', requestedAt: '2026-11-25T13:00:00+09:00', extra: ['--store', 'sheet', '--owner-pc', ''] }), ctx));
       assert.equal(result.code, 0);
       assert.equal(JSON.parse(result.output).registeredFrom, '011');
       assert.equal(JSON.parse(result.output).effectiveOwnerPc, '008');

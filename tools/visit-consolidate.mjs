@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // 期限確認と訪問集約（rules/absolute-rules.md「期限確認と訪問集約」・portable-knowhow/12）。
+// 一回にまとめる：出す前に同じ案件・同じ相手・同じ締切の作業（直送・控え・別送・追加署名など）を全部洗い出して1回にまとめる。分けるときは理由を書く（詳細はCLAUDE.md『一回にまとめる』）
 //   run   : 期限台帳を読み、訪問・郵送の予定を全案件の必要書類と突き合わせて ~/.claude/deadline-watch/visit-consolidation.md に書く（毎朝 07:40、000）
 //   check : 訪問予定を決める前に、その窓口でまとめられる用事と訪問を避ける道を出す  --office 法務局 [--date 2026-11-30]
 //   gate  : 選択肢を出す前に、期限と到着日で「出してよい／出さない」を判定する      --json options.json
@@ -11,6 +12,8 @@ import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { gateOptions } from './lib/deadline-gate.mjs';
 import { consolidate, renderReport } from './lib/visit-consolidate-core.mjs';
+import { main as matomeMain, scanRecent } from './matome-check.mjs';
+import { renderMatome } from './lib/matome-check-core.mjs';
 
 const officesPath = fileURLToPath(new URL('../config/visit-offices.json', import.meta.url));
 const autopilotPath = fileURLToPath(new URL('../config/schedule-autopilot.json', import.meta.url));
@@ -33,12 +36,17 @@ async function readLedgerRows(argv) {
 export async function main(argv = process.argv.slice(2), { log = console.log, home = process.env.ORGIAST_HOME || os.homedir() } = {}) {
   const cmd = argv[0] || 'run';
   const today = arg(argv, 'today') || jstToday();
+  if (cmd === 'help' || argv.includes('--help')) {
+    log('usage: visit-consolidate.mjs run | check --office <窓口> [--date YYYY-MM-DD] | gate --json <file> | matome --case-dir <dir>');
+    return 0;
+  }
   if (cmd === 'gate') {
     const input = JSON.parse(fs.readFileSync(arg(argv, 'json'), 'utf8'));
     const res = gateOptions({ today, ...input });
     log(JSON.stringify(res, null, 2));
     return res.ok ? 0 : 2;
   }
+  if (cmd === 'matome') return matomeMain(['check', ...argv.slice(1)], { log });
   const dict = loadOffices();
   const rows = await readLedgerRows(argv);
   const result = consolidate(rows, { ...dict, today });
@@ -51,7 +59,15 @@ export async function main(argv = process.argv.slice(2), { log = console.log, ho
     return 0;
   }
   const sheetId = JSON.parse(fs.readFileSync(autopilotPath, 'utf8')).ledgerSheetId;
-  const md = renderReport(result, { today, ledgerUrl: `https://docs.google.com/spreadsheets/d/${sheetId}/edit` });
+  let md = renderReport(result, { today, ledgerUrl: `https://docs.google.com/spreadsheets/d/${sheetId}/edit` });
+  md += '\n\n## まとめ確認（直近48時間の案件フォルダ）\n\n';
+  try {
+    const root = process.env.MATOME_SCAN_ROOT || path.join(os.homedir(), 'gb-reports');
+    const recent = scanRecent(root, 48);
+    md += recent.length ? recent.map(r => renderMatome(r, r.caseDir)).join('\n\n') : '対象なし';
+  } catch (error) {
+    md += `まとめ確認エラー: ${error?.message || error}`;
+  }
   const out = arg(argv, 'out') || path.join(home, '.claude', 'deadline-watch', 'visit-consolidation.md');
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, md);

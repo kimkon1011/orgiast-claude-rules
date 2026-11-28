@@ -184,8 +184,11 @@ function Get-AbsoluteRulesFromOnboarding {
     }
     if ($start -lt 0) { return '' }
     $end = $lines.Length
+    $embeddedRuleBlock = $false
     for ($i = $start + 1; $i -lt $lines.Length; $i++) {
-        if ($lines[$i] -match '^#{1,3} ') { $end = $i; break }
+        if ($lines[$i] -match '^<!-- BEGIN: ') { $embeddedRuleBlock = $true }
+        if (-not $embeddedRuleBlock -and $lines[$i] -match '^#{1,3} ') { $end = $i; break }
+        if ($lines[$i] -match '^<!-- END: ') { $embeddedRuleBlock = $false }
     }
     $picked = [System.Collections.Generic.List[string]]::new()
     for ($i = $start; $i -lt $end; $i++) {

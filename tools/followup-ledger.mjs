@@ -19,6 +19,7 @@ import { prepareTemaSend } from './lib/unattended-tema.mjs';
 import { getAdapter, recordMockSpawn } from './lib/followup-adapters.mjs';
 import { buildPcIdentityIndex, pcMapEntries } from './fleet-pc-identity.mjs';
 import { checkTema, formatTemaFindings, stripTemaRecord } from './lib/tema-check.mjs';
+import { scanReports, findExistingEntries, toAddFlags, selftest as stalledSelftest } from './lib/stalled-scan.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.dirname(__dirname);
@@ -2008,6 +2009,117 @@ async function cmdAlert(flags, ctxBase = {}) {
   return 0;
 }
 
+async function cmdStalledScan(flags, ctxBase = {}) {
+  const config = ctxBase.config || loadConfig();
+  const storeMode = flags.store === 'local' || ctxBase.storeMode === 'local' ? 'local' : (config.spreadsheetId ? 'sheet' : 'local');
+  const loaded = await loadStore({ storeMode, config, sheets: ctxBase.sheets });
+  const store = loaded.store;
+  const now = resolveNow(ctxBase.now);
+  const nowMs = now.getTime();
+
+  const reportsDir = flags['reports-dir'] ? String(flags['reports-dir']) : path.join(os.homedir(), 'gb-reports');
+  const staleHours = Number(flags['stale-hours'] || 6);
+  const pcName = String(flags.pc || currentPcName({ hostname: ctxBase.hostname }));
+  const dryRun = Boolean(flags['dry-run']);
+
+  // --selftest: check task registration
+  if (flags.selftest) {
+    const results = await stalledSelftest({ spawnImpl: ctxBase.spawn });
+    console.log(JSON.stringify(results, null, 2));
+    return results.every((r) => r.ok) ? 0 : 1;
+  }
+
+  const entries = scanReports(reportsDir, pcName, staleHours, nowMs);
+  const alerts = [];
+  let registered = 0;
+  let skipped = 0;
+  let errors = 0;
+
+  for (const entry of entries) {
+    const existing = findExistingEntries(store.items, entry);
+    const hasExisting = existing.length > 0;
+
+    if (dryRun) {
+      alerts.push(`[dry-run] ${hasExisting ? '更新' : '新規'}: ${entry.id} (${entry.folder}) / 理由: ${entry.reason}`);
+      registered++;
+      continue;
+    }
+
+    try {
+      const row = normalizeRow({
+        id: entry.id,
+        to: '',
+        channel: 'manual',
+        task: `【stalled-scan】${entry.folder}`,
+        doneWhen: '復旧確認',
+        intervalMin: 60,
+        dueAt: entry.due,
+        renudgeMin: 120,
+        maxNudges: 5,
+        escalateTo: 'kim-inbox',
+        ownerAi: 'Claude Code',
+        ownerPc: entry.pc,
+        status: '止まった',
+        statusReason: entry.reason,
+        requestKind: 'automation',
+        requestedBy: 'stalled-scan',
+        note: entry.folder,
+        kimOnlyAction: entry.kimOnlyAction || '',
+      }, { validateRequired: false });
+
+      const previousUpdatedAt = hasExisting ? existing[0].updatedAt : undefined;
+
+      if (hasExisting) {
+        const target = existing[0];
+        Object.assign(target, row, {
+          nudgeCount: target.nudgeCount || 0,
+          lastSentAt: target.lastSentAt || '',
+          lastSentId: target.lastSentId || '',
+        });
+        appendHistory(store, { id: row.id, status: '止まった', reason: `stalled-scan upsert: ${entry.reason}`, ai: 'Claude Code', pc: currentPcName() });
+        await persistRow({ ...loaded, storeMode, config, store }, target, { previousUpdatedAt });
+      } else {
+        store.items.push(row);
+        appendHistory(store, { id: row.id, status: '止まった', reason: `stalled-scan add: ${entry.reason}`, ai: 'Claude Code', pc: currentPcName() });
+        await persistRow({ ...loaded, storeMode, config, store }, row);
+      }
+      registered++;
+    } catch (error) {
+      errors++;
+      alerts.push(`登録エラー: ${entry.id} — ${error.message}`);
+    }
+  }
+
+  // ALERT を出力
+  const stalled = store.items.filter((r) => r.status === '止まった');
+  const file = writeAlert(alertPath(config, flags), {
+    now,
+    checked: entries.length,
+    stalled,
+    escalated: store.items.filter((r) => r.status === 'エスカレーション'),
+    awaitingApproval: store.items.filter((r) => r.status === '承認待ち'),
+    alertRows: stalled,
+    alerts,
+    pendingSync: store.pendingSync,
+    syncError: store.syncError,
+  });
+
+  console.log(JSON.stringify({
+    ok: errors === 0,
+    scanned: entries.length,
+    registered,
+    skipped,
+    errors,
+    alertFile: file,
+    pendingSync: store.pendingSync,
+    syncError: store.syncError,
+  }, null, 2));
+
+  // 同期失敗は非0で終了
+  if (store.pendingSync && storeMode !== 'local') return 3;
+  return errors > 0 ? 1 : 0;
+}
+
 export async function main(argv = process.argv.slice(2), ctxBase = {}) {
   const parsed = parseArgs(argv);
   const cmd = parsed._[0] || 'status';
@@ -2028,6 +2140,7 @@ export async function main(argv = process.argv.slice(2), ctxBase = {}) {
     case 'alert': return cmdAlert(flags, ctx);
     case 'outcome': return cmdOutcome(flags, ctx);
     case 'report': return cmdReport(flags, ctx);
+    case 'stalled-scan': return cmdStalledScan(flags, ctx);
     default:
       throw new Error(`未知のサブコマンド: ${cmd}`);
   }

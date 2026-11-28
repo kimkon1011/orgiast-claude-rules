@@ -32,3 +32,14 @@
 朝の報告は `report --morning`。`--kim-inbox` 指定時だけ社内の info として同日1件を登録する。毎朝07:30 JSTの `OrgiastFollowupLedgerMorning` から実行する。
 
 再発事例: 2026-11-24 承認の Instagram 自動投稿が 015 のトークン無しで投稿0のまま、誰も報告しなかった。
+
+## 止まった作業の台帳登録（stalled-scan）
+
+作業を「金さん待ち／未完了／インシデント／中断」で止める時は、STATUS.txt に書くだけで終わらず、必ず台帳に登録する（`tools/followup-ledger.mjs stalled-scan` 実行、または `tools/followup-ledger.mjs add` で直接登録）。登録できなければ止めたと言えない。
+
+`stalled-scan` は各PCの gb-reports を1時間おきに走査し、STATUS.txt / STATUS*.md / REPORT.md / INCIDENT.md / PROGRESS.md に以下の検出語があれば台帳に「止まった」として登録する:
+- 金さん待ち / 未復旧 / 中断 / インシデント / 承認待ち / ブロック / 未完了 / 人の手が必要
+
+DONE.txt が無く、6時間以上更新のない案件も「止まった」として登録する（既に完了の DONE.txt があれば除外）。
+
+再発事例: 2026-11-26 000 の common.users 約100人誤削除→金さん待ちで停止、台帳に載らず2日放置。

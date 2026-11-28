@@ -5,7 +5,8 @@
 # ASCII only: Windows PowerShell 5.1 may parse BOM-less UTF-8 as Shift-JIS.
 param(
   [switch]$Unregister,
-  [switch]$RunNow
+  [switch]$RunNow,
+  [switch]$StalledScanOnly
 )
 $ErrorActionPreference = 'Stop'
 $taskName = 'OrgiastFollowupLedger'
@@ -29,21 +30,35 @@ $script = Join-Path $repo 'tools\followup-ledger.mjs'
 if (-not (Test-Path -LiteralPath $script)) { throw "script not found: $script" }
 $node = (Get-Command node -CommandType Application -ErrorAction Stop | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source
 if (-not $node) { throw 'node.exe not found' }
-$action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, 'check') -WorkingDirectory $repo
-$trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).Date.AddMinutes(1)) -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration (New-TimeSpan -Days 3650)
 $settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 20)
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description 'Follow up outstanding requests until done (every 15 min; quiet hours in script)' -Force | Out-Null
-Write-Host "OK: task $taskName registered (every 15 minutes)"
-if ($RunNow) {
-  Start-ScheduledTask -TaskName $taskName
-  Write-Host "OK: Start-ScheduledTask $taskName"
-}
-schtasks /Query /TN $taskName /V /FO LIST
 
-# Explicit JST offset: the morning report stays at 07:30 JST on every PC.
-$morningAction = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, 'report', '--morning', '--kim-inbox') -WorkingDirectory $repo
-$jstToday = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(9)).ToString('yyyy-MM-dd')
-$morningTrigger = New-ScheduledTaskTrigger -Daily -At '07:30'
-$morningTrigger.StartBoundary = "${jstToday}T07:30:00+09:00"
-Register-ScheduledTask -TaskName $morningTaskName -Action $morningAction -Trigger $morningTrigger -Settings $settings -Description 'Followup ledger morning report (07:30 JST; internal kim-inbox only)' -Force | Out-Null
-Write-Host "OK: task $morningTaskName registered (07:30 JST)"
+# 008 では BEEPER_PREFER_LOCAL=1 の C:\Users\user\.claude\tools\followup-ledger-check.mjs が
+# OrgiastFollowupLedger の再登録で消える。008 では -StalledScanOnly で OrgiastFollowupLedger を
+# 登録せず stalled-scan のみ登録する。
+if (-not $StalledScanOnly) {
+  $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, 'check') -WorkingDirectory $repo
+  $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).Date.AddMinutes(1)) -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration (New-TimeSpan -Days 3650)
+  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description 'Follow up outstanding requests until done (every 15 min; quiet hours in script)' -Force | Out-Null
+  Write-Host "OK: task $taskName registered (every 15 minutes)"
+  if ($RunNow) {
+    Start-ScheduledTask -TaskName $taskName
+    Write-Host "OK: Start-ScheduledTask $taskName"
+  }
+  schtasks /Query /TN $taskName /V /FO LIST
+
+  # Explicit JST offset: the morning report stays at 07:30 JST on every PC.
+  $morningAction = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, 'report', '--morning', '--kim-inbox') -WorkingDirectory $repo
+  $jstToday = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(9)).ToString('yyyy-MM-dd')
+  $morningTrigger = New-ScheduledTaskTrigger -Daily -At '07:30'
+  $morningTrigger.StartBoundary = "${jstToday}T07:30:00+09:00"
+  Register-ScheduledTask -TaskName $morningTaskName -Action $morningAction -Trigger $morningTrigger -Settings $settings -Description 'Followup ledger morning report (07:30 JST; internal kim-inbox only)' -Force | Out-Null
+  Write-Host "OK: task $morningTaskName registered (07:30 JST)"
+}
+
+# Register OrgiastStalledScan: scan gb-reports for stalled work every 60 minutes.
+$stalledTaskName = 'OrgiastStalledScan'
+$stalledAction = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, 'stalled-scan') -WorkingDirectory $repo
+$stalledTrigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).Date.AddMinutes(2)) -RepetitionInterval (New-TimeSpan -Minutes 60) -RepetitionDuration (New-TimeSpan -Days 3650)
+$stalledSettings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 20)
+Register-ScheduledTask -TaskName $stalledTaskName -Action $stalledAction -Trigger $stalledTrigger -Settings $stalledSettings -Description 'Scan gb-reports for stalled work (every 60 min)' -Force | Out-Null
+Write-Host "OK: task $stalledTaskName registered (every 60 minutes)"

@@ -15,6 +15,7 @@ import { summarizeQueue } from './claude-pace-queue.mjs';
 import { checkSchema } from './lib/json-schema-check.mjs';
 import { readCodexWindows } from './lib/quota-windows.mjs';
 import { reportLocations } from './lib/claude-pace-report-core.mjs';
+import { dailySummary as ccModelUsageDaily, defaultUsageFile as defaultModelUsageFile } from './cc-model-usage-daily.mjs';
 
 export { reportLocations } from './lib/claude-pace-report-core.mjs';
 export { normalizePaceHost } from './claude-pace.mjs';
@@ -282,6 +283,12 @@ export function buildReport({
     }
   }
 
+  // モデル使用のopus比率（model-usage.jsonl から当日分）
+  const todayModelUsage = ccModelUsageDaily(defaultModelUsageFile(), date);
+  const modelUsageLine = todayModelUsage.total > 0
+    ? `モデル使用: 合計 ${todayModelUsage.total} / opus ${todayModelUsage.byModel['opus'] || 0} 回 (${todayModelUsage.opusRatio != null ? (todayModelUsage.opusRatio * 100).toFixed(1) : '—'}%) / 理由なしopus ${todayModelUsage.opusWithoutReason} 回`
+    : 'モデル使用: 記録なし';
+
   const targetLanding = config.targetLanding ?? 90;
   const lines = [];
   lines.push(`# Claude ペース日次報告（${new Date(nowMs).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })} JST）`);
@@ -336,6 +343,9 @@ export function buildReport({
   lines.push('## Codex 参考値');
   if (codexLines.length) for (const c of codexLines) lines.push(`- ${c}`);
   else lines.push('- （スナップショットに Codex 値なし）');
+  lines.push('');
+  lines.push('## モデル使用');
+  lines.push(`- ${modelUsageLine}`);
   lines.push('');
 
   lines.push('## 計測できなかったPC');

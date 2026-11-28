@@ -1989,3 +1989,7 @@ hold-to-talk is released"）で、URI・初期プロンプトとは**無関係**
 バンドル内部の関数名。実測: npm=無関係ヒットのみ / `@setInputText/cli`=404 / PyPI=Not Found / gh search=0件）。
 一次ソースは**そのPCに入っている拡張の実体ファイル**であり、確認先は
 `~/.vscode/extensions/anthropic.claude-code-<版>-win32-x64/{extension.js,webview/index.js}`。
+
+## グロボ直接作業ルール
+
+グロボが担当PCで直接実行してよい作業は claude -p 起動1コマンドと REPORT.md / DONE.txt / PROGRESS.md 読み1コマンドのみ。詳細は [rules/grobo-direct-work.md](rules/grobo-direct-work.md)。

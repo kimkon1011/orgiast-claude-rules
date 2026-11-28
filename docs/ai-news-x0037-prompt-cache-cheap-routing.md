@@ -407,6 +407,7 @@ X-0037 の実装として、以下の4つの構成要素を作成・マージ（
 - バッチ化プロンプトの実セッションでの効果測定
 - `PROMPT-batch-tool-calls.md` の settings.json 補足設定の自動適用
 
+- [Arize: Prompt Caching Benchmark（DeepSeek 93.6%読取・$1.17/100run vs Opus $14.63）](ai-news-x0002-prompt-cache-benchmark-arize.md)
 - [Anthropic Prompt Caching](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching)
 - [OpenAI Prompt Caching Guide](https://platform.openai.com/docs/guides/prompt-caching)
 - [xAI Grok API (chat-completions)](https://docs.x.ai/docs/api-reference/chat-completions)

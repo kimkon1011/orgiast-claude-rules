@@ -19,6 +19,7 @@ import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mj
 import { matchesRow, parseEscalation, syncEscalationAnswer } from './lib/escalation-answer-sync.mjs';
 import { looksLikeApprovalRequest } from './lib/kim-inbox-kind.mjs';
 import { isPullRequestMergeApprovalRequest, MERGE_HANDOFF_REJECTION_MESSAGE } from './lib/kim-inbox-merge-handoff.mjs';
+import { renameWithRetry } from './lib/rename-retry.mjs';
 const exec = promisify(execFile);
 const execGh = promisify(execFile);
 const PR_REF_RE = /PR\s*#(\d+)/gi;
@@ -140,7 +141,7 @@ export function isKimSeat(home) {
 function save(home, item) {
   const file = path.join(directory(home), `${item.id}.json`);
   const temp = `${file}.${randomBytes(8).toString('hex')}.tmp`;
-  try { fs.writeFileSync(temp, JSON.stringify(item, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(temp, file); }
+  try { fs.writeFileSync(temp, JSON.stringify(item, null, 2) + '\n', { mode: 0o600 }); renameWithRetry(temp, file); }
   finally { fs.rmSync(temp, { force: true }); }
 }
 // 同じ項目の回答・表示更新を直列化し、古い表示更新が回答を上書きしない。
@@ -1185,6 +1186,32 @@ export function oneScreenSummary(items) {
   while (lines.length > 0 && Buffer.from(lines.join('\n'), 'utf8').length > 2000) lines.pop();
   return lines.length === 0 ? `📌 kim の返事待ち ${askCount}件` : lines.join('\n');
 }
+export async function batchFile(home, filename, { stderr = console.error, drain = drainSpool } = {}) {
+  const lines = fs.readFileSync(filename, 'utf8').split(/\r?\n/).filter(line => line.trim());
+  await drain(home, { stderr });
+  const results = [];
+  for (const line of lines) {
+    let operation;
+    try {
+      operation = JSON.parse(line);
+      const { key, op } = operation;
+      if (typeof key !== 'string' || !key.trim()) throw new Error('key is required');
+      if (op === 'add') {
+        if (typeof operation.text !== 'string') throw new Error('text is required');
+        const item = await addItem(home, { kind: operation.kind, key, due: operation.due,
+          remainingDays: operation.remainingDays, source: operation.source,
+          text: await enrichPullRequestUrls(operation.text), stderr }, { drain: false });
+        results.push({ key, op, ok: true, id: item.id });
+      } else if (op === 'close-key') {
+        closeKey(home, key);
+        results.push({ key, op, ok: true });
+      } else throw new Error('unknown operation');
+    } catch (error) {
+      results.push({ key: operation?.key ?? null, op: operation?.op ?? null, ok: false, error: clean(error.message) });
+    }
+  }
+  return results;
+}
 export async function main(args = process.argv.slice(2), { home = process.env.ORGIAST_HOME || os.homedir(), stdout = console.log, stderr = console.error, readStdin = readStdinWithTimeout } = {}) {
   const value = flag => args[args.indexOf(flag) + 1];
   try {
@@ -1244,6 +1271,8 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       const item = readInboxItem(home, value('--show'));
       if (!item) throw new Error('指定された受信箱IDが見つかりません');
       stdout(args.includes('--json') ? JSON.stringify(item) : redactSecrets(item.text));
+    } else if (args.includes('--batch-file')) {
+      stdout(JSON.stringify(await batchFile(home, value('--batch-file'), { stderr })));
     } else if (args.includes('--add')) {
       const positionalKind = args[args.indexOf('--add') + 1];
       const kind = args.includes('--kind') ? value('--kind')

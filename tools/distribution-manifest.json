@@ -5,6 +5,7 @@
   "files": [
     "HANDOVER.md","fleet-pc-map.json", "fleet-command.json", "fleet-directives.json", "manifest.json", "ONBOARDING.md", "CLAUDE.md.template"],
   "notDistributed": {
+    ".presend-verification": { "reason": "送信前照合のローカル検証記録と事故再現入力。コミット・配布対象外" },
     ".agents": { "reason": "ローカルエージェント環境の管理領域。PC配布対象外" },
     ".codex": { "reason": "ローカルCodex環境の管理領域。PC配布対象外" },
     ".codex-instructions": { "reason": "codex-do 用指示ファイル。PC配布対象外（各PCが独自管理）" },

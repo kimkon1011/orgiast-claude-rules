@@ -4,7 +4,23 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseArgs, buildMessages, loadSecrets, resolveGroup, assertSendableText, assertPushSucceeded, strToUUID, normalizeGroupName, applyLineHandbackGuard } from './line-group-send.mjs';
+import { main, parseArgs, buildMessages, loadSecrets, resolveGroup, assertSendableText, assertPushSucceeded, strToUUID, normalizeGroupName, applyLineHandbackGuard } from './line-group-send.mjs';
+
+test('LINE送信直前の未読画像はskip-context-checkでも送信停止', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'line-presend-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const file = path.join(home, 'body.txt'); fs.writeFileSync(file, withTema('本日の発送が完了しました。追跡番号は後ほど共有します。'));
+  fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude', 'line-send.env'), 'SUPABASE_URL=https://fixture.invalid\nSUPABASE_SERVICE_ROLE_KEY=fixture\nLINE_CHANNEL_ACCESS_TOKEN=fixture');
+  let posts = 0;
+  await assert.rejects(() => main(['--group','C10930732da844f79c6032a40705a4d73','--text-file',file,'--skip-context-check'], {
+    home, loadSecrets: async () => ({ LINE_CHANNEL_ACCESS_TOKEN: 'fixture' }), resolveGroup: async () => 'C10930732da844f79c6032a40705a4d73',
+    fetchImpl: async (url, init = {}) => {
+      if (init.method === 'POST') posts++;
+      if (url.endsWith('/summary')) return Response.json({ groupName: 'fixture' });
+      return Response.json([{ id: 'm', created_at: new Date().toISOString(), direction: 'inbound', body: '', attachments: [{ type: 'img' }] }]);
+    },
+  }), { code: 'PRE_SEND_REPLY_BLOCKED' });
+  assert.equal(posts, 0);
+});
 
 test('assertSendableText: 文字化けとプレースホルダ残りは送らない', () => {
   assert.doesNotThrow(() => assertSendableText('皆さん、お疲れさまです。'));

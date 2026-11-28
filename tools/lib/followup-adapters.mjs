@@ -12,6 +12,8 @@ import { matchesBeeperText } from '../beeper-send.mjs';
 import { searchGmail } from '../gmail-search.mjs';
 import { resolveDiscordBotToken } from '../notify-kim.mjs';
 import { assertSendConsistency, afterSendCleanup } from '../send-consistency-check.mjs';
+import { checkBeeperReply, assertReplyCheck } from './pre-send-reply-check.mjs';
+import { writePreSendPass } from './pre-send-marker.mjs';
 
 import { prepareTemaSend } from './unattended-tema.mjs';
 
@@ -170,9 +172,11 @@ export function createBeeperAdapter(deps = {}) {
         if (!target?.token || target.via === 'none') {
           return { ok: false, messageId: null, error: 'Beeper到達不可: トークン無し' };
         }
+        assertReplyCheck(await (deps.preSendCheck ?? checkBeeperReply)({ chatID: chatKey(row), draft: text, api: deps.beeperApi, now: deps.now, imageNotes: deps.imageNotes }));
         const input={channel:'beeper',to:chatKey(row),text,draftId:row.draftId,draftReadAt:row.draftReadAt || row.lastCheckedAt};
         const checked=await (deps.consistencyCheck ?? assertSendConsistency)(input,deps.consistencyDeps);
-        const result = await send(chatKey(row), text, {}, { env: process.env, token: target.token });
+        (deps.writePreSendPass ?? writePreSendPass)({ chatID: chatKey(row), text, home: deps.home });
+        const result = await send(chatKey(row), text, {}, { env: { ...process.env, ...(deps.home ? { ORGIAST_HOME: deps.home } : {}) }, token: target.token });
         await (deps.cleanup ?? afterSendCleanup)({...input,sentMessageId:result?.id || result?.messageID || result?.pendingMessageID,scheduledSends:checked?.input?.scheduledSends},deps.consistencyDeps);
         return { ok: true, messageId: String(result?.id || result?.messageID || ''), error: null };
       } catch (error) {

@@ -1,0 +1,349 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-11-28",
+  "generatedAtJst": "2026-11-28T14:21:14.358+09:00",
+  "generatedAtIso": "2026-11-28T05:21:14.358Z",
+  "generatedByHost": "018",
+  "targetLandingPct": 90,
+  "dailyTargetPct": 12.9,
+  "accounts": [
+    {
+      "account": "cr@orgiast.jp",
+      "pcs": [
+        "011",
+        "018"
+      ],
+      "fiveHour": {
+        "usedPercent": 88,
+        "resetsAtJst": "2026-11-28T03:00:00.064+09:00",
+        "resetsAtIso": "2026-11-27T18:00:00.064Z"
+      },
+      "sevenDay": {
+        "usedPercent": 25,
+        "resetsAtJst": "2026-12-04T10:00:00.064+09:00",
+        "resetsAtIso": "2026-12-04T01:00:00.064Z"
+      },
+      "elapsedRatio": 0.08561592427248678,
+      "previousDayConsumedPt": null,
+      "dailyTargetDeltaPt": null,
+      "targetLinePct": 7.70543318452381,
+      "deltaPt": 17.29456681547619,
+      "effectiveTolerancePt": 9.143840757275132,
+      "status": "ahead",
+      "statusJa": "進みすぎ",
+      "projectedLandingPct": 292.00175332375534,
+      "unusedForecastPt": -192.00175332375534,
+      "todayTargetPct": 12.9,
+      "hold": true,
+      "actionsTaken": [
+        "cr@orgiast.jp（018）: 台帳に hold を記録（理由: ahead）"
+      ],
+      "codex": [
+        {
+          "window": "primary",
+          "usedPercent": 73
+        }
+      ]
+    },
+    {
+      "account": "nishi@orgiast.jp",
+      "pcs": [
+        "004",
+        "015",
+        "019"
+      ],
+      "fiveHour": {
+        "usedPercent": 98,
+        "resetsAtJst": "2026-11-28T01:00:00.183+09:00",
+        "resetsAtIso": "2026-11-27T16:00:00.183Z"
+      },
+      "sevenDay": {
+        "usedPercent": 97,
+        "resetsAtJst": "2026-12-01T18:00:00.183+09:00",
+        "resetsAtIso": "2026-12-01T09:00:00.183Z"
+      },
+      "elapsedRatio": 0.46656846395502644,
+      "previousDayConsumedPt": null,
+      "dailyTargetDeltaPt": null,
+      "targetLinePct": 41.991161755952376,
+      "deltaPt": 55.008838244047624,
+      "effectiveTolerancePt": 5.334315360449735,
+      "status": "stopped",
+      "statusJa": "停止（97%）",
+      "projectedLandingPct": 207.9008923529603,
+      "unusedForecastPt": -107.90089235296031,
+      "todayTargetPct": 12.9,
+      "hold": true,
+      "actionsTaken": [
+        "nishi@orgiast.jp（019）: 台帳にハードストップを記録"
+      ],
+      "codex": [
+        {
+          "window": "primary",
+          "usedPercent": 100
+        }
+      ]
+    },
+    {
+      "account": "unknown",
+      "pcs": [
+        "000KimPC",
+        "004minpaku",
+        "008XPS8300",
+        "011NEXT",
+        "014DELL",
+        "015CAFE",
+        "999genba"
+      ],
+      "fiveHour": {
+        "usedPercent": 70,
+        "resetsAtJst": "2026-11-28T14:19:59.725+09:00",
+        "resetsAtIso": "2026-11-28T05:19:59.725Z"
+      },
+      "sevenDay": {
+        "usedPercent": 54,
+        "resetsAtJst": "2026-12-02T23:59:59.725+09:00",
+        "resetsAtIso": "2026-12-02T14:59:59.725Z"
+      },
+      "elapsedRatio": 0.36538654927248676,
+      "previousDayConsumedPt": null,
+      "dailyTargetDeltaPt": null,
+      "targetLinePct": 32.88478943452381,
+      "deltaPt": 21.11521056547619,
+      "effectiveTolerancePt": 6.346134507275131,
+      "status": "ahead",
+      "statusJa": "進みすぎ",
+      "projectedLandingPct": 147.78869147624133,
+      "unusedForecastPt": -47.788691476241326,
+      "todayTargetPct": 12.9,
+      "hold": true,
+      "actionsTaken": [
+        "unknown（000KimPC）: 台帳に hold を記録（理由: ahead）"
+      ],
+      "codex": [
+        {
+          "window": "primary",
+          "usedPercent": 100
+        }
+      ]
+    }
+  ],
+  "pcs": [
+    {
+      "host": "000",
+      "account": "kim@orgiast.jp",
+      "measured": false,
+      "reason": "Drive に pace-*.jsonl が無い",
+      "lastSnapshotAtJst": null,
+      "lastSnapshotAtIso": null,
+      "registered": true
+    },
+    {
+      "host": "004",
+      "account": "nishi@orgiast.jp",
+      "measured": false,
+      "reason": "Drive に pace-*.jsonl が無い",
+      "lastSnapshotAtJst": null,
+      "lastSnapshotAtIso": null,
+      "registered": null
+    },
+    {
+      "host": "015",
+      "account": "nishi@orgiast.jp",
+      "measured": false,
+      "reason": "Drive に pace-*.jsonl が無い",
+      "lastSnapshotAtJst": null,
+      "lastSnapshotAtIso": null,
+      "registered": null
+    },
+    {
+      "host": "019",
+      "account": "nishi@orgiast.jp",
+      "measured": true,
+      "reason": null,
+      "lastSnapshotAtJst": "2026-11-28T00:23:00.790+09:00",
+      "lastSnapshotAtIso": "2026-11-27T15:23:00.790Z",
+      "registered": null
+    },
+    {
+      "host": "008",
+      "account": "seisaku-team@orgiast.jp",
+      "measured": false,
+      "reason": "Drive に pace-*.jsonl が無い",
+      "lastSnapshotAtJst": null,
+      "lastSnapshotAtIso": null,
+      "registered": null
+    },
+    {
+      "host": "014",
+      "account": "seisaku-team@orgiast.jp",
+      "measured": false,
+      "reason": "Drive に pace-*.jsonl が無い",
+      "lastSnapshotAtJst": null,
+      "lastSnapshotAtIso": null,
+      "registered": true
+    },
+    {
+      "host": "011",
+      "account": "cr@orgiast.jp",
+      "measured": false,
+      "reason": "Drive に pace-*.jsonl が無い",
+      "lastSnapshotAtJst": null,
+      "lastSnapshotAtIso": null,
+      "registered": null
+    },
+    {
+      "host": "018",
+      "account": "cr@orgiast.jp",
+      "measured": true,
+      "reason": null,
+      "lastSnapshotAtJst": "2026-11-28T00:23:00.575+09:00",
+      "lastSnapshotAtIso": "2026-11-27T15:23:00.575Z",
+      "registered": true
+    },
+    {
+      "host": "999",
+      "account": "genbateam.toho@gmail.com",
+      "measured": false,
+      "reason": "Drive に pace-*.jsonl が無い",
+      "lastSnapshotAtJst": null,
+      "lastSnapshotAtIso": null,
+      "registered": null
+    },
+    {
+      "host": "000KimPC",
+      "account": "unknown",
+      "measured": true,
+      "reason": null,
+      "lastSnapshotAtJst": "2026-11-28T13:23:05.510+09:00",
+      "lastSnapshotAtIso": "2026-11-28T04:23:05.510Z",
+      "registered": null
+    },
+    {
+      "host": "004minpaku",
+      "account": "unknown",
+      "measured": true,
+      "reason": null,
+      "lastSnapshotAtJst": "2026-11-28T00:23:00.579+09:00",
+      "lastSnapshotAtIso": "2026-11-27T15:23:00.579Z",
+      "registered": null
+    },
+    {
+      "host": "008XPS8300",
+      "account": "unknown",
+      "measured": true,
+      "reason": null,
+      "lastSnapshotAtJst": "2026-11-28T13:23:00.581+09:00",
+      "lastSnapshotAtIso": "2026-11-28T04:23:00.581Z",
+      "registered": null
+    },
+    {
+      "host": "011NEXT",
+      "account": "unknown",
+      "measured": true,
+      "reason": null,
+      "lastSnapshotAtJst": "2026-11-28T13:23:02.036+09:00",
+      "lastSnapshotAtIso": "2026-11-28T04:23:02.036Z",
+      "registered": null
+    },
+    {
+      "host": "014DELL",
+      "account": "unknown",
+      "measured": true,
+      "reason": null,
+      "lastSnapshotAtJst": "2026-11-28T00:23:00.449+09:00",
+      "lastSnapshotAtIso": "2026-11-27T15:23:00.449Z",
+      "registered": null
+    },
+    {
+      "host": "015CAFE",
+      "account": "unknown",
+      "measured": true,
+      "reason": null,
+      "lastSnapshotAtJst": "2026-11-28T13:23:01.518+09:00",
+      "lastSnapshotAtIso": "2026-11-28T04:23:01.518Z",
+      "registered": null
+    },
+    {
+      "host": "999genba",
+      "account": "unknown",
+      "measured": true,
+      "reason": null,
+      "lastSnapshotAtJst": "2026-11-28T00:23:01.271+09:00",
+      "lastSnapshotAtIso": "2026-11-27T15:23:01.271Z",
+      "registered": true
+    }
+  ],
+  "grokbot": {
+    "received": false,
+    "date": null,
+    "weeklyUsedPercent": null,
+    "weeklyResetsAtJst": null,
+    "weeklyResetsAtIso": null,
+    "elapsedRatio": null,
+    "targetLinePct": null,
+    "deltaPt": null,
+    "effectiveTolerancePt": null,
+    "status": null,
+    "statusJa": null,
+    "projectedLandingPct": null,
+    "onDemandUsd": null,
+    "onDemandLimitUsd": null,
+    "onDemandResetsAtJst": null,
+    "onDemandResetsAtIso": null,
+    "selfExecutedTasks": null,
+    "delegatedTasks": null,
+    "note": "グロボ分 未受領（reports/claude-pace/grokbot/2026-11-28.json が無い）"
+  },
+  "nextTasks": [
+    {
+      "id": "Q-008-01",
+      "host": "008",
+      "priority": 1,
+      "title": "失注・未決スコア上位10件の再提案メール下書き更新"
+    },
+    {
+      "id": "Q-008-02",
+      "host": "008",
+      "priority": 1,
+      "title": "その他イベント提案を月23件にする候補先リスト"
+    },
+    {
+      "id": "Q-011-01",
+      "host": "011",
+      "priority": 1,
+      "title": "営業自動化アプリ未対応 feedback 棚卸しと小実装"
+    }
+  ],
+  "newOfferings": [],
+  "unmeasured": [
+    {
+      "host": "000",
+      "reason": "Drive に pace-*.jsonl が無い"
+    },
+    {
+      "host": "004",
+      "reason": "Drive に pace-*.jsonl が無い"
+    },
+    {
+      "host": "015",
+      "reason": "Drive に pace-*.jsonl が無い"
+    },
+    {
+      "host": "008",
+      "reason": "Drive に pace-*.jsonl が無い"
+    },
+    {
+      "host": "014",
+      "reason": "Drive に pace-*.jsonl が無い"
+    },
+    {
+      "host": "011",
+      "reason": "Drive に pace-*.jsonl が無い"
+    },
+    {
+      "host": "999",
+      "reason": "Drive に pace-*.jsonl が無い"
+    }
+  ]
+}

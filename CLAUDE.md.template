@@ -19,6 +19,8 @@
 
 - 全送信直前の7項目は `tools/send-consistency-check.mjs` で照合し、不一致・取得不能なら停止。送信後はsent-registryと元下書き・再送予定を読み戻す。
 
+- 送信前の相手発言照合は `tools/pre-send-reply-check.mjs`。
+
 <!-- BEGIN: オージャスト共通ルール (自動同期 ONBOARDING.md) -->
 - 基本理念・判断基準（毎セッション読み込み・迷ったらここに戻る）: @~/.claude/orgiast-mission.md
 全文は ~/.claude/orgiast-onboarding.md。自動ロードされないため、判断に迷ったら Read ツールで該当節を読むこと

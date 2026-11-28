@@ -28,6 +28,8 @@ import { loadLedger, isInternal, extractAddresses, shouldBlockInternal } from '.
 import { bodyHash, checkConsistency, statePath, mimeText, render as renderConsistency } from './mail-consistency-check.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
 import { assertSendConsistency, afterSendCleanup } from './send-consistency-check.mjs';
+import { checkChannelReply, assertReplyCheck } from './lib/pre-send-reply-check.mjs';
+import { fetchHistory as fetchSendHistory } from './send-context-check.mjs';
 import { validateWeekdays } from './lib/weekday-validator.mjs';
 import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 import { acquireSendDedupe, SendDedupeError } from './lib/send-dedupe.mjs';
@@ -468,8 +470,8 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         }
         stdout(`⚠️ ${warning}`);
       }
+      let contextThreadId = draft?.message?.threadId;
       if (!deps.skipContextCheck) {
-        let contextThreadId = draft?.message?.threadId;
         if (!contextThreadId) {
         const draftHeaders = Object.fromEntries((draft?.message?.payload?.headers || []).map(h => [String(h.name).toLowerCase(), h.value]));
         const recipient = extractAddresses({ to: [draftHeaders.to], cc: [draftHeaders.cc] })[0];
@@ -486,6 +488,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         return latestOf((thread.messages || []).filter(m => !(m.labelIds || []).includes('DRAFT')).map(m => ({ id: m.id, at: new Date(Number(m.internalDate)).toISOString() })));
         }});
       }
+      assertReplyCheck(await (deps.preSendCheck || checkChannelReply)({ channel: 'gmail', target: contextThreadId, draft: draftText, home: deps.home, fetchImpl, fetchHistory: deps.fetchHistory || fetchSendHistory, getGmailToken: async () => readonlyToken }));
       const result = await sendDraft({ user, id: args.send, ledger: (deps.loadLedger ?? loadLedger)(), fetchImpl, getToken, draft, allowRepeat: args['allow-repeat'], home: deps.home, acquireDedupe: deps.acquireDedupe,
         consistencyCheck:deps.consistencyCheck, cleanup:deps.cleanup, consistencyDeps:deps.consistencyDeps, temaRecord, env: deps.env, skipHandbackGuard: deps.skipHandbackGuard || externalOnly,
       });
@@ -558,6 +561,10 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     if(error?.code==='SEND_CONSISTENCY_BLOCKED') {
       emit({ok:false,errorKind:'send_consistency_blocked',findings:error.findings},error.message);
       return error.exitCode || 2;
+    }
+    if (error?.code === 'PRE_SEND_REPLY_BLOCKED') {
+      emit({ ok: false, errorKind: 'pre_send_reply_blocked', findings: error.findings }, error.message);
+      return 2;
     }
     if (error instanceof SendDedupeError) {
       emit({ ok: false, errorKind: 'send_duplicate', error: error.message }, error.message);

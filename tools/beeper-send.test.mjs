@@ -8,8 +8,24 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeContextMarker } from './lib/send-context.mjs';
+import { beeperSend } from './beeper-send.mjs';
+import { checkPreSendReply } from './lib/pre-send-reply-check.mjs';
+import { assertPreSendPass } from './lib/pre-send-marker.mjs';
 
 const cliPath = fileURLToPath(new URL('./test-fixtures/beeper-consistency-cli.mjs', import.meta.url));
+
+test('送信前の再指示blockはexitCode 4で送信・合格マーカーを作らない', async t => {
+  const home = createTempDir(); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const { receiptId } = setupQueue(home, 'pre-send');
+  const text = '控えを2部コピーしてください', bodyFile = path.join(home, 'body.txt'); fs.writeFileSync(bodyFile, withTema(text));
+  writeContextMarker({ channel: 'beeper', target: 'chat', text, latest: null, reason: 'fixture', home });
+  let sends = 0;
+  await assert.rejects(() => beeperSend({ home, chatID: 'chat', bodyFile, queueID: 'pre-send', receiptID: receiptId }, {
+    readMessages: async () => ({ items: [] }), send: async () => { sends++; },
+    preSendCheck: async ({ draft }) => checkPreSendReply({ draft, messages: [{ text: '控えは1部で大丈夫です', isSender: false }] }),
+  }), error => error.exitCode === 4 && error.findings[0].code === 'QUANTITY_CONFLICT');
+  assert.equal(sends, 0); assert.throws(() => assertPreSendPass({ chatID: 'chat', text, home }), { code: 'PRE_SEND_REQUIRED' });
+});
 
 function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'beeper-send-test-'));

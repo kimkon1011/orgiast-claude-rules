@@ -61,6 +61,16 @@ function normalizeBeeperMessage(m) {
   };
 }
 
+/** Test/dry-run clock. Wall-clock stamps make recentSelfNudge flaky when FOLLOWUP_NOW is set. */
+function mockNowIso() {
+  const raw = process.env.FOLLOWUP_NOW;
+  if (raw) {
+    const d = new Date(raw);
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+  return new Date().toISOString();
+}
+
 export function createMockAdapter({ file = process.env.FOLLOWUP_MOCK_FILE } = {}) {
   return {
     name: 'mock',
@@ -90,7 +100,7 @@ export function createMockAdapter({ file = process.env.FOLLOWUP_MOCK_FILE } = {}
         id,
         chatId: key,
         text: String(text),
-        at: new Date().toISOString(),
+        at: mockNowIso(),
         to: row.to || '',
         channel: row.channel || 'mock',
       };

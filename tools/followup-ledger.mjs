@@ -72,8 +72,19 @@ export function isOffSiteTask(row = {}) {
   return OFF_SITE_PATTERN.test(String(row.task || ''));
 }
 export function isCafeSolo(row = {}) { return row.assigneeRole === 'cafe-solo'; }
+/** 金さん 2026-11-28: 出勤前に取りに行って送ってもらう。カフェ一人勤務の店外禁止の、この依頼だけの例外。 */
+export const PRE_SHIFT_PICKUP_MAIL_IDS = new Set(['GB179-shaho-honami']);
+export function isPreShiftPickupMailException(row = {}) {
+  return PRE_SHIFT_PICKUP_MAIL_IDS.has(String(row.id || ''));
+}
 export function siteConstraint(row = {}) {
-  return isCafeSolo(row) && isOffSiteTask(row) ? { blocked: true, reason: CAFE_SOLO_REASON } : { blocked: false };
+  if (isCafeSolo(row) && isOffSiteTask(row)) {
+    if (isPreShiftPickupMailException(row)) {
+      return { blocked: false, exception: 'pre-shift-pickup-mail' };
+    }
+    return { blocked: true, reason: CAFE_SOLO_REASON };
+  }
+  return { blocked: false };
 }
 export function resolvePerson(to, config = {}) {
   const hit = Object.entries(config.people || {}).find(([name]) => String(to || '').includes(name));

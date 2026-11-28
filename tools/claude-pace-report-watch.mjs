@@ -19,9 +19,7 @@ function contentsUrl(date) {
   return `https://api.github.com/repos/${REPO}/contents/${REPORT_PATH}/${date}.json`;
 }
 
-/**
- * 正本に当日の報告 JSON があるか。取得自体に失敗したときは exists=null（「無い」と断定しない）。
- */
+/** 正本に当日の報告 JSON があるか。取得自体に失敗したときは exists=null（「無い」と断定しない）。 */
 export async function checkReport(date, { fetchImpl = fetch, token = process.env.GH_TOKEN } = {}) {
   const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'orgiast-claude-pace-watch/1.0' };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -57,6 +55,7 @@ export function buildWarning(date, result, host) {
 }
 
 export async function main(argv = process.argv.slice(2), io = {}) {
+  const home = io.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   const nowMs = io.now ?? Date.now();
   const host = io.host ?? process.env.ORGIAST_HOSTNAME ?? os.hostname();
   const dateAt = argv.indexOf('--date');
@@ -75,13 +74,11 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     print(message);
     return { ok: false, date, reason: result.reason, warned: false, dryRun: true };
   }
-  // kim-inbox へ積む。io.addItem が渡されていればそれを使う（テスト用）。
-  const home = io.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   const addItem = io.addItem ?? (await import('./kim-inbox.mjs')).addItem;
   let warned = false;
   let warnError = null;
   try {
-    await addItem(home, { kind: 'ask', text: message, source: 'claude-pace-report-watch' });
+    await addItem(home, { kind: 'ask', source: 'claude-pace-report-watch', text: message });
     warned = true;
   } catch (error) {
     warnError = String(error?.message || error);

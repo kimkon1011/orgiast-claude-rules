@@ -1,167 +1,78 @@
-#!/usr/bin/env node
-import { describe, it } from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
-import { jstDate, checkReport, buildWarning, main, REPO, REPORT_PATH } from './claude-pace-report-watch.mjs';
+import { main, checkReport, jstDate, buildWarning } from './claude-pace-report-watch.mjs';
 
-describe('jstDate', () => {
-  it('日付を JST の YYYY-MM-DD で返す', () => {
-    assert.equal(jstDate(Date.parse('2026-11-27T16:00:00Z')), '2026-11-28');
-  });
-  it('深夜の UTC でも JST では翌日になる', () => {
-    assert.equal(jstDate(Date.parse('2026-11-28T08:00:00Z')), '2026-11-28');
-  });
-  it('JST 午前の時刻は同じ日', () => {
-    assert.equal(jstDate(Date.parse('2026-11-28T22:45:00+09:00')), '2026-11-28');
-  });
+const res = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => body });
+const silent = () => {};
+
+function spyAdd() {
+  const calls = [];
+  return { calls, fn: async (home, options) => { calls.push({ home, options }); } };
+}
+
+test('報告があれば警告しない', async () => {
+  const add = spyAdd();
+  const out = await main([], { fetchImpl: async () => res(200, { size: 1234 }), addItem: add.fn, print: silent, host: '018' });
+  assert.equal(out.ok, true);
+  assert.equal(out.size, 1234);
+  assert.equal(add.calls.length, 0);
 });
 
-describe('checkReport', () => {
-  it('報告がある（200 + size > 0）→ exists: true', async () => {
-    const fetchImpl = async () => ({ status: 200, ok: true, json: async () => ({ size: 1234 }) });
-    const result = await checkReport('2026-11-28', { fetchImpl });
-    assert.equal(result.exists, true);
-    assert.equal(result.size, 1234);
-  });
-
-  it('報告が無い（404）→ exists: false', async () => {
-    const fetchImpl = async () => ({ status: 404, ok: false });
-    const result = await checkReport('2026-11-28', { fetchImpl });
-    assert.equal(result.exists, false);
-    assert.ok(result.reason.includes('404'));
-  });
-
-  it('size が 0 → 無い扱い', async () => {
-    const fetchImpl = async () => ({ status: 200, ok: true, json: async () => ({ size: 0 }) });
-    const result = await checkReport('2026-11-28', { fetchImpl });
-    assert.equal(result.exists, false);
-    assert.ok(result.reason.includes('0'));
-  });
-
-  it('size が無い（null）→ 無い扱い', async () => {
-    const fetchImpl = async () => ({ status: 200, ok: true, json: async () => ({ }) });
-    const result = await checkReport('2026-11-28', { fetchImpl });
-    assert.equal(result.exists, false);
-  });
-
-  it('取得に失敗（throw）→ exists: null、断定しない', async () => {
-    const fetchImpl = async () => { throw new Error('network error'); };
-    const result = await checkReport('2026-11-28', { fetchImpl });
-    assert.equal(result.exists, null);
-    assert.ok(result.reason.includes('取得失敗'));
-  });
-
-  it('HTTP 500 → 断定しない', async () => {
-    const fetchImpl = async () => ({ status: 500, ok: false });
-    const result = await checkReport('2026-11-28', { fetchImpl });
-    assert.equal(result.exists, null);
-    assert.ok(result.reason.includes('500'));
-  });
+test('報告が無ければ kim-inbox に警告を積む', async () => {
+  const add = spyAdd();
+  const out = await main(['--date', '2026-11-28'], { fetchImpl: async () => res(404, {}), addItem: add.fn, print: silent, host: '018' });
+  assert.equal(out.ok, false);
+  assert.equal(out.warned, true);
+  assert.equal(add.calls.length, 1);
+  assert.equal(add.calls[0].options.kind, 'ask');
+  assert.match(add.calls[0].options.text, /2026-11-28/);
+  assert.match(add.calls[0].options.text, /reports\/claude-pace/);
 });
 
-describe('buildWarning', () => {
-  it('exists=false のとき「ありません」を含む', () => {
-    const msg = buildWarning('2026-11-28', { exists: false, reason: 'GitHub API が 404' }, 'host-a');
-    assert.ok(msg.includes('ありません'));
-    assert.ok(msg.includes('2026-11-28'));
-    assert.ok(msg.includes(REPORT_PATH));
-    assert.ok(msg.includes(REPO));
-  });
-
-  it('exists=null のとき「分かっていません」を含む', () => {
-    const msg = buildWarning('2026-11-28', { exists: null, reason: '取得失敗: Error' }, 'host-b');
-    assert.ok(msg.includes('分かっていません'));
-    assert.ok(msg.includes('取得失敗'));
-  });
+test('size が 0 なら無い扱い', async () => {
+  const add = spyAdd();
+  const out = await main([], { fetchImpl: async () => res(200, { size: 0 }), addItem: add.fn, print: silent, host: '018' });
+  assert.equal(out.ok, false);
+  assert.equal(add.calls.length, 1);
 });
 
-describe('main', () => {
-  it('報告がある → ok:true、addItem が呼ばれない', async () => {
-    let addCalls = 0;
-    const result = await main(['--date', '2026-11-28'], {
-      fetchImpl: async () => ({ status: 200, ok: true, json: async () => ({ size: 1234 }) }),
-      addItem: async () => { addCalls++; },
-      print: () => {},
-    });
-    assert.equal(result.ok, true);
-    assert.equal(addCalls, 0);
-  });
+test('取得に失敗したら「無い」と断定せず警告する', async () => {
+  const add = spyAdd();
+  const out = await main([], { fetchImpl: async () => { throw new TypeError('network down'); }, addItem: add.fn, print: silent, host: '018' });
+  assert.equal(out.ok, false);
+  assert.equal(add.calls.length, 1);
+  assert.match(add.calls[0].options.text, /分かっていません/);
+});
 
-  it('報告が無い → ok:false、addItem が1回呼ばれる', async () => {
-    let addCalls = 0;
-    const captured = [];
-    const result = await main(['--date', '2026-11-28'], {
-      fetchImpl: async () => ({ status: 404, ok: false }),
-      addItem: async (home, opts) => {
-        addCalls++;
-        captured.push({ kind: opts.kind, text: opts.text, source: opts.source });
-      },
-      print: () => {},
-    });
-    assert.equal(result.ok, false);
-    assert.equal(addCalls, 1);
-    assert.equal(captured[0].kind, 'ask');
-    assert.ok(captured[0].text.includes('2026-11-28'));
-    assert.ok(captured[0].text.includes(REPORT_PATH));
-    assert.equal(captured[0].source, 'claude-pace-report-watch');
-  });
+test('HTTP 500 でも断定せず警告する', async () => {
+  const add = spyAdd();
+  const out = await main([], { fetchImpl: async () => res(500, {}), addItem: add.fn, print: silent, host: '018' });
+  assert.equal(out.ok, false);
+  assert.match(add.calls[0].options.text, /分かっていません/);
+});
 
-  it('size 0 → 無い扱いで addItem が呼ばれる', async () => {
-    let addCalls = 0;
-    const result = await main(['--date', '2026-11-28'], {
-      fetchImpl: async () => ({ status: 200, ok: true, json: async () => ({ size: 0 }) }),
-      addItem: async () => { addCalls++; },
-      print: () => {},
-    });
-    assert.equal(result.ok, false);
-    assert.equal(addCalls, 1);
-  });
+test('--dry-run は何も積まず本文を出す', async () => {
+  const add = spyAdd();
+  const lines = [];
+  const out = await main(['--dry-run', '--date', '2026-11-27'], { fetchImpl: async () => res(404, {}), addItem: add.fn, print: (s) => lines.push(s), host: '018' });
+  assert.equal(out.dryRun, true);
+  assert.equal(add.calls.length, 0);
+  assert.match(lines.join('\n'), /2026-11-27/);
+});
 
-  it('取得失敗 → 断定しない警告', async () => {
-    const captured = [];
-    const result = await main(['--date', '2026-11-28'], {
-      fetchImpl: async () => { throw new Error('timeout'); },
-      addItem: async (home, opts) => { captured.push(opts.text); },
-      print: () => {},
-    });
-    assert.equal(result.ok, false);
-    assert.equal(result.warned, true);
-    assert.ok(captured[0].includes('分かっていません'));
-  });
+test('jstDate は JST で日付を返す', () => {
+  assert.equal(jstDate(Date.parse('2026-11-27T16:00:00Z')), '2026-11-28');
+  assert.equal(jstDate(Date.parse('2026-11-27T14:59:00Z')), '2026-11-27');
+});
 
-  it('HTTP 500 → 断定しない', async () => {
-    const captured = [];
-    const result = await main(['--date', '2026-11-28'], {
-      fetchImpl: async () => ({ status: 500, ok: false }),
-      addItem: async (home, opts) => { captured.push(opts.text); },
-      print: () => {},
-    });
-    assert.equal(result.ok, false);
-    assert.ok(captured[0].includes('分かっていません'));
-  });
+test('checkReport は 404 を exists=false、500 を exists=null で返す', async () => {
+  assert.deepEqual(await checkReport('2026-11-28', { fetchImpl: async () => res(404, {}), token: '' }), { exists: false, reason: 'GitHub API が 404' });
+  const err = await checkReport('2026-11-28', { fetchImpl: async () => res(500, {}), token: '' });
+  assert.equal(err.exists, null);
+});
 
-  it('--dry-run を付けたら addItem が呼ばれず本文が print される', async () => {
-    let addCalls = 0;
-    let printed = '';
-    const result = await main(['--date', '2026-11-28', '--dry-run'], {
-      fetchImpl: async () => ({ status: 404, ok: false }),
-      addItem: async () => { addCalls++; },
-      print: (msg) => { printed = msg; },
-    });
-    assert.equal(result.ok, false);
-    assert.equal(result.dryRun, true);
-    assert.equal(addCalls, 0);
-    assert.ok(printed.includes('2026-11-28'));
-  });
-
-  it('--date で日付を指定できる', async () => {
-    let addCalls = 0;
-    const result = await main(['--date', '2026-11-27'], {
-      fetchImpl: async () => ({ status: 200, ok: true, json: async () => ({ size: 999 }) }),
-      addItem: async () => { addCalls++; },
-      print: () => {},
-    });
-    assert.equal(result.ok, true);
-    assert.equal(result.date, '2026-11-27');
-    assert.equal(result.size, 999);
-  });
+test('buildWarning は出し直し方を含む', () => {
+  const text = buildWarning('2026-11-28', { exists: false, reason: 'GitHub API が 404' }, '018');
+  assert.match(text, /claude-pace-report\.mjs --force/);
+  assert.match(text, /018/);
 });

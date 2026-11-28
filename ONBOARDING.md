@@ -1766,6 +1766,16 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
   - **ドットは動ける**。リマインダーや定期タスクを組み、時刻や対応するイベントを指定できる。Scheduled で管理する。 [Getting started with your dot](https://help.openai.com/en/articles/20001530-getting-started-with-your-dot)、[Tasks and memory](https://learn.chatgpt.com/docs/dots/tasks-and-memory)。
   - 定期タスクが未設定なら、グロボの夜間ルーティンが台帳に積んだ作業を代わりに進める。カスタム指示への書き込みと定期タスク作成は GB-35。
 
+**2.8.6.1 ふわ（Meta Muse）へ回す4種類（2026-11-28 金さん決定）**
+
+次の4種類はふわ（Meta Muse）へ回す。Claude Codeから直接指示し、グロボを間に入れない。
+1. サイトでの手続き・設定（申込、フォーム入力、Beds24など各サイトの設定）
+2. インド滞在中（11/27〜12/6）の旅行の用事
+3. 画像・動画づくり（000のYouTube動画を含む）
+4. 夜間の調べ物（学会・入札・取引先の下調べ。結果は担当PCの案件フォルダへ）
+
+送信・支払い・削除・契約の前は、これまでどおり本人の承認を取る（11/29〜12/6の社外送信は佐藤優奈さんの確認）。ふわが使えないときは、理由を案件フォルダに書いてから従来の道へ戻す。
+
 **2.8.7 Cursor への委譲を停止する（2026-11-25 金さん指示）**
 
 Cursor の使用量がグロボの追加料金に加算されるため、Cursor Agent と Cursor Cloud Agent は使わない。実装は Codex、Codex が使えないときは `lane-health.json` の次の安いレーン、または各PCの Claude Codeへ回す。

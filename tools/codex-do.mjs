@@ -1421,11 +1421,11 @@ export const deepseekFirstOutputTimeoutSecs = (env = {}) => positiveEnv(
   DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS
 );
 
-export function shouldAbortFirstOutputStall({ elapsedSecs, outputChars, timeoutSecs = DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS } = {}) {
+export function shouldAbortFirstOutputStall({ elapsedSecs, outputChars, stderrChars = 0, timeoutSecs = DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS } = {}) {
   return [elapsedSecs, outputChars, timeoutSecs].every(Number.isFinite)
     && timeoutSecs > 0
     && elapsedSecs >= timeoutSecs
-    && outputChars === 0;
+    && outputChars + stderrChars === 0;
 }
 
 export function shouldAbortPolicyStall({
@@ -1870,7 +1870,7 @@ function execute(command, commandArgs, options = {}) {
     }
   }
   return new Promise((resolve) => {
-    let outputChars = 0, output = '', stderr = '', timedOut = false, abortedReason = null;
+    let outputChars = 0, output = '', stderr = '', stderrChars = 0, timedOut = false, abortedReason = null;
     const callStarted = Date.now();
     const callTimeoutSeconds = Number.isFinite(options.timeoutSecs) && options.timeoutSecs > 0
       ? options.timeoutSecs

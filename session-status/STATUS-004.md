@@ -1,6 +1,6 @@
-# session-status  PC=004  host=004MINPAKU  updated 2026-11-28 13:13 JST
+# session-status  PC=004  host=004MINPAKU  updated 2026-11-28 14:13 JST
 
-- claude auth: {"at":"2026-11-28T04:13:13.489Z","event":"launch_allowed","reason":"below_cap","activeCount":0,"limit":2,"staleHours":3,"abandoned":[]} { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "f
+- claude auth: {"at":"2026-11-28T05:13:13.942Z","event":"launch_allowed","reason":"below_cap","activeCount":0,"limit":2,"staleHours":3,"abandoned":[]} { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "f
 - 案件数: 24
 
 - 004・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -23,7 +23,7 @@
 - 004・plan3oku-13-minpaku-1126・停止・最終更新 11/26 21:38、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 004・reply-drafts-1125・停止・最終更新 11/25 19:09、STATUS.mdなし、run.logあり・期限なし・次:作業フォルダを確認して続きを進める
 - 004・rescue-triage-20261127・完了・11/27 06:10〜12:12 の rescue ブランチ8本を origin/main と照合し、全47ファイルが着地済み・main 側が新しい・スキャン出力のいずれかで、未着地のソース変更は無かった（13時枠の毎時無人起動）・期限なし・次:11/27 12:12 より後の rescue だけを照合する。正式ブランチ fix/20261127-grok-403-billing-health の着地は kim-inbox ki-20261126221316-2b84 の回答待ち
-- 004・shaho-print-004・停止・最終更新 11/28 13:13、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 004・shaho-print-004・停止・最終更新 11/28 13:14、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 004・tasks・停止・最終更新 11/24 09:30、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 004・toho-fax-ingest・送信済み・2026-11-26 17:28:32 JST、西田直哉さんの LINE 個人トークへ、承認済み全文を1回送信（Beeper message id 47900）。文面は ask-20261125.md の全文と一致。再送しない。・期限2026-11-27 12:00・次:西田さんの返事を待つ。11/12 18時〜11/18 11時（受信番号 3780〜3972）の抜けの扱いは返事で決める
 - 004・STATUS: トライアングル 大久保さん相談文の下書き・完了・大久保さんの特定・連絡手段の決定・要対応の洗い出し・相談文の下書き・整合性チェックまで完了。送信は行っていない（金さんの指示どおり）・期限2026-11-28（土）中。11/30（月）に作業してもらう場合、大久保さんが蛍光灯とマットを購入する時間が必要なため・次:金さんが「送ってよい」と返事をしたら、Discord「民泊接客グループ」の 2026-11-24 20:27 の大久保さんの投稿への返信として DRAFT.txt の本文を投稿する

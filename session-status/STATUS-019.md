@@ -1,12 +1,12 @@
-# session-status  PC=019  host=019  updated 2026-11-28 20:10 JST
+# session-status  PC=019  host=019  updated 2026-11-28 21:10 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "email": "nishi@orgiast.jp", "orgId":
-- 案件数: 17
+- 案件数: 16
 
 - 019・cafe-migrate-hosting-20261127・金さん待ち・作業用019に Netlify の認証経路が1つも無いことを実測で確認（Netlify API 直接照会で 401、CLI にトークンのキー無し、保存トークン無し、Chrome の seisaku-team/nishi 両プロファイルとも netlify 訪問履歴0件、リポジトリに Netlify GitHub App 未接続）。Vercel も `verc・期限なし（旧 Vercel URL は HTTP 402 で停止中のため早いほどよい）・次:着陸後に金さんから「Netlify に Google ログインで入ってよい」の返信1通をもらう。019 の Chrome Default プロファイルは seisaku-team@orgiast.jp でサインイン済みなので、許可後は Claude が Chrome をデバッグポート付きで再起動して Google ログイン→サイト作成→環境変数8件の移送（O
 - 019・cafe-overdue-osaka・金さん待ち・Vercel チームがフェアユース上限超過でブロック（本番 402・デプロイ不可）。日報 GAS は所有者 nishi@ の資格情報が必要（clasp が seisaku のみ）・期限なし（ただし本番停止中のため最優先）・次:金さんが Vercel の有料化（Pro）を承認したら、019 で vercel deploy --prod --yes → 本番 e2e → /api/requests/line-group でグループ名確認。nishi の clasp 再ログイン後に scripts/gas/deploy.mjs で GAS 更新
 - 019・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 019・chat-drafts・停止・最終更新 11/28 20:00、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 019・chat-drafts・停止・最終更新 11/28 20:30、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 019・STATUS・完了・close-session.mjs でセッション 076114b6 を閉鎖登録。終了コード 0、[next-session] なし・期限なし・次:なし
 - 019・dispatch-1122-21・停止・最終更新 11/22 21:30、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 019・followup-ledger・停止・最終更新 11/28 16:16、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -18,5 +18,4 @@
 - 019・opendrive-archive-1128・停止・最終更新 11/28 04:23、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 019・session-cap-1126・完了・inventory.mjs 作成・実行完了。4ファイル出力確認済み・期限なし・次:なし（読み取り専用作業のため）
 - 019・tangomuto-reply-1125・停止・最終更新 11/25 19:26、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 019・tsuji-natchan-1125・完了・最終更新 11/25 21:04、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
 - 019・x-ai-tips 成果0件・課金継続の調査・金さん待ち・真因は確定したが、修正を実装できる安いAIが全滅している（Codex 11/29 まで利用枠切れ / OpenRouter 402 残高不足 / Gemini 402 / GLM 11/27 19:53 まで cooldown / DeepSeek は書き込み不可で捏造報告）。入金は支払い行為のため無人セッションでは実行できない・期限なし（今夜は x.ai も OpenRouter も残高切れで呼び出しが失敗するため、費用の流出はほぼ止まっている）・次:どれかのレーンが復帰したら `C:\Users\user\pending-instructions\xai-stop-when-no-yield.md` をそのまま委譲する（作業ツリー `C:\Users\user\wt-xai-noyield` / ブランチ `fix/xai-stop-when-no-yield` は作成済み・コード変更はまだ0）。金さん

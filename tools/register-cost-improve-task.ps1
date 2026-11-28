@@ -18,7 +18,7 @@ Copy-Item -LiteralPath $bootstrapSource -Destination $bootstrap -Force
 
 $action = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $bootstrap, '-Target', $target) -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At '07:20'
-$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 60)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 120)
 
 Register-ScheduledTask -TaskName 'OrgiastCostImproveLoop' -Action $action -Trigger $trigger -Settings $settings -Description 'AIコスト効率の計測・自動改善・効果検証（毎日07:20）' -Force | Out-Null
 Write-Host 'OK: task OrgiastCostImproveLoop registered (daily 07:20)'

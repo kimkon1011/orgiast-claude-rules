@@ -38,6 +38,16 @@ test('DMチャンネル作成から本文投稿まで2回だけ呼ぶ', async ()
   assert.match(calls[1].url, /channels\/dm-channel\/messages$/);
   assert.deepEqual(JSON.parse(calls[1].init.body), { content: withFooter('hello') });
 });
+test('--check-only は整合性検査まで実行して本文を投稿しない', async () => {
+ const calls=[];let checked;
+ const result=await sendDiscordDm('百瀬','hello',{home,token:'test-token',resolve,noCopyKim:true,checkOnly:true,
+  assertContextApproved:async()=>({checkedAt:new Date().toISOString()}),
+  consistencyCheck:async input=>{checked=input;return{ok:true,findings:[]};},
+  fetchImpl:async(url,init)=>{calls.push({url,init});return response({json:{id:'dm-channel'}});},
+ });
+ assert.equal(result.checkOnly,true);assert.equal(result.consistencyOk,true);assert.equal(checked.to,'dm-channel');
+ assert.equal(calls.length,1);assert.match(calls[0].url,/users\/@me\/channels$/);
+});
 
 test('送信開始は履歴ゲート通過後だけ通知し、4xxは未配信確定として返す', async () => {
   let posting=false;

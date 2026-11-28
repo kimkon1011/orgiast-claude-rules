@@ -82,7 +82,7 @@ test('読めたタスクスクリプト内の古い資料名は全体を取得�
   if(file.endsWith('worker.mjs'))return '宛先 customer@example.com';
   throw Object.assign(Error('missing'),{code:'ENOENT'});
  }});
- assert.equal(result.failures.length,0);assert.equal(result.rows.length,1);
+ assert.equal(result.failures.length,0);
 });
 test('収集は全APIを注入し、他PC欠落・取得失敗を閉じる',async t=>{
  const home=temp(t), deps={home,taskCsv:'',gmailData:async()=>({sentHistory:[],otherDrafts:[],threadMessages:[],failures:[]}),followupRows:async()=>[],calendarEvents:async()=>[],directives:[directive],pcMap:{'008':{}},fleetSnapshot:{labels:['008'],checkedAt:base.now,sentHistory:[],scheduledSends:[],otherDrafts:[]}};

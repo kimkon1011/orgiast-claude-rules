@@ -90,6 +90,43 @@
       "match": ["上限プラン.*¥?5,?000"],
       "except": [],
       "sources": ["config/next-actions-suppress.json（kim 2026-11-18）"]
+    },
+    {
+      "id": "KIM-20261128-gakkai-shutten-kibou-delta",
+      "status": "ACTIVE",
+      "doNotAsk": true,
+      "title": "学会アプリ「出展希望△」の扱い（情報収集できた場合）",
+      "question": "出展希望△の学会で情報収集できた場合、出展希望を「情報更新済」に自動変更するか、△のまま変えないか",
+      "answer": "変えない。出展希望△のまま維持し、自動で情報更新済にはしない。",
+      "decidedAt": "2026-11-22",
+      "confirmedAt": "2026-11-28",
+      "match": [
+        "出展希望△.*(情報更新済|自動で変更|変える|変えない)"
+      ],
+      "except": [],
+      "sources": [
+        "kim-inbox ki-20261105070007-019f（2026-11-22 グロボ21時見回り代理決定、取り消し可能）",
+        "セッション bd66357d【受信箱】5番、2026-11-28 15時見回りで金さんが再確認（gb-reports/patrol-cleanup-1128）"
+      ]
+    },
+    {
+      "id": "KIM-20261128-018-discord-notify-dest",
+      "status": "ACTIVE",
+      "doNotAsk": true,
+      "title": "018の進捗通知のDiscord宛先",
+      "question": "018の進捗通知のDiscord宛先（notifyDiscordId）を設定するか、このままにするか",
+      "answer": "このまま。notifyDiscordIdは設定しない。進捗通知はgb-reports経由で読む運用を維持する。",
+      "decidedAt": "2026-11-22",
+      "confirmedAt": "2026-11-28",
+      "match": [
+        "(018|進捗通知).*Discord.*(宛先|notifyDiscordId)",
+        "notifyDiscordId.*未設定"
+      ],
+      "except": [],
+      "sources": [
+        "kim-inbox ki-20261118230047-718c（2026-11-22 グロボ21時見回り代理決定、取り消し可能）",
+        "セッション b97d91e4【受信箱】3番、2026-11-28 15時見回りで金さんが再確認（gb-reports/patrol-cleanup-1128）"
+      ]
     }
   ]
 }

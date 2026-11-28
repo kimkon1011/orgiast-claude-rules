@@ -1421,11 +1421,25 @@ export const deepseekFirstOutputTimeoutSecs = (env = {}) => positiveEnv(
   DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS
 );
 
-export function shouldAbortFirstOutputStall({ elapsedSecs, outputChars, timeoutSecs = DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS } = {}) {
+export function shouldAbortFirstOutputStall({ elapsedSecs, outputChars, stderrChars = 0, timeoutSecs = DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS } = {}) {
   return [elapsedSecs, outputChars, timeoutSecs].every(Number.isFinite)
+    && Number.isFinite(stderrChars)
     && timeoutSecs > 0
     && elapsedSecs >= timeoutSecs
-    && outputChars === 0;
+    && outputChars === 0
+    && stderrChars === 0;
+}
+
+// 子 CLI が起動直後に stderr へ書く既知の警告行を除外し、実質的な進捗字数を返す。
+// Node の起動時警告や cheap-code の unknown model 注意は進捗に数えない。
+export function isProgressStderrChars(text) {
+  if (!text || typeof text !== 'string') return 0;
+  const warningLineRx = /^(?:\s*\(?(?:Use\s+`node\s+--trace|node:\d+\)\s*(?:\[DEP\d+\]\s*)?(?:Warning:|DeprecationWarning|ExperimentalWarning)|Warning:|DeprecationWarning|ExperimentalWarning)|.*\[claude-code:unrecognized_model\])/;
+  let progress = 0;
+  for (const line of text.split(/\r?\n/)) {
+    if (!warningLineRx.test(line)) progress += line.length;
+  }
+  return progress;
 }
 
 export function shouldAbortPolicyStall({
@@ -1870,7 +1884,7 @@ function execute(command, commandArgs, options = {}) {
     }
   }
   return new Promise((resolve) => {
-    let outputChars = 0, output = '', stderr = '', timedOut = false, abortedReason = null;
+    let outputChars = 0, output = '', stderr = '', stderrProgressChars = 0, timedOut = false, abortedReason = null;
     const callStarted = Date.now();
     const callTimeoutSeconds = Number.isFinite(options.timeoutSecs) && options.timeoutSecs > 0
       ? options.timeoutSecs
@@ -1947,7 +1961,7 @@ function execute(command, commandArgs, options = {}) {
     const firstOutputTimeoutSecs = Number(options.firstOutputTimeoutSecs);
     const firstOutputTimer = Number.isFinite(firstOutputTimeoutSecs) && firstOutputTimeoutSecs > 0
       ? setTimeout(() => {
-          if (!shouldAbortFirstOutputStall({ elapsedSecs: firstOutputTimeoutSecs, outputChars, timeoutSecs: firstOutputTimeoutSecs })) return;
+          if (!shouldAbortFirstOutputStall({ elapsedSecs: firstOutputTimeoutSecs, outputChars, stderrChars: stderrProgressChars, timeoutSecs: firstOutputTimeoutSecs })) return;
           console.error(`\n[codex-do] ${command} は ${firstOutputTimeoutSecs} 秒間、出力が無いため停止します`);
           abortChild('first_output_stall');
         }, firstOutputTimeoutSecs * 1000)
@@ -1964,8 +1978,14 @@ function execute(command, commandArgs, options = {}) {
       // stdout の生成本文で誤判定しないため abortBillingIfNeeded は呼ばない
     });
     child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
+      const chunkStr = chunk.toString();
+      stderr += chunkStr;
       process.stderr.write(chunk);
+      const progress = isProgressStderrChars(chunkStr);
+      if (progress > 0) {
+        stderrProgressChars += progress;
+        clearTimeout(firstOutputTimer);
+      }
       checkPolicyStall();
       abortBillingIfNeeded();
     });

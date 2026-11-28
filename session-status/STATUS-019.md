@@ -1,4 +1,4 @@
-# session-status  PC=019  host=019  updated 2026-11-28 22:10 JST
+# session-status  PC=019  host=019  updated 2026-11-28 23:10 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "email": "nishi@orgiast.jp", "orgId":
 - 案件数: 16
@@ -9,7 +9,7 @@
 - 019・chat-drafts・停止・最終更新 11/28 21:30、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 019・STATUS・完了・close-session.mjs でセッション 076114b6 を閉鎖登録。終了コード 0、[next-session] なし・期限なし・次:なし
 - 019・dispatch-1122-21・停止・最終更新 11/22 21:30、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 019・followup-ledger・停止・最終更新 11/28 16:16、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 019・followup-ledger・停止・最終更新 11/28 23:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 019・STATUS・完了・現行記録2件の訂正追記、kim-inbox の確認（対象ファイル不在）、古川未歩さんDMの確認（019にDiscordトークン無し）まで完了。送信は0件。・期限なし（関連する12/2必着の発送は別タスク）・次:なし。`ki-20261127122235-4760.json` は別PCの kim-inbox にある可能性があるため、該当PCでクローズする。
 - 019・illumi-kono-probe・停止・最終更新 11/25 18:52、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 019・STATUS・完了・B分類26件のまとめを Google ドキュメント化し、kim@orgiast.jp に編集権限を付け、kim-inbox の ask `ki-20261127011739-e295` の案内先を Drive URL に差し替えるまで、2レーンの読み戻しで確認済み・期限なし・次:kim が https://docs.google.com/document/d/1YJF6irvfNcT_E1sYZP5LyjPqdjUXUE0TiEFJKDEJDAY/edit?authuser=kim@orgiast.jp を開き、14テーマの「返事の例」を直して返す。返ったら26件分の回答として kim-inbox に記録する

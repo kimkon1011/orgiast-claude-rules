@@ -279,7 +279,6 @@ export function buildAddArgs(item) {
   const to = item.kimWaiting ? '金さん' : (item.ownerPc || '担当PC不明');
   const args = [
     'add',
-    '--store', 'local',
     '--id', item.id,
     '--to', to,
     '--channel', 'manual',
@@ -293,6 +292,10 @@ export function buildAddArgs(item) {
     '--tema-check', TEMA_CHECK_DEFAULT,
     '--upsert',
   ];
+  // 既定はシート（--store 無し）。FOLLOWUP_STORE=local でのみローカルキャッシュへ
+  if (process.env.FOLLOWUP_STORE === 'local') {
+    args.push('--store', 'local');
+  }
   if (item.due) args.push('--due', item.due);
   if (item.status === '止まった') {
     args.push('--status', '止まった', '--reason', redactSecrets(String(item.reason || '自動登録: 未完了')));

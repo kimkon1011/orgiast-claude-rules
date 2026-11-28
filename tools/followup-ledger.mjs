@@ -19,7 +19,7 @@ import { prepareTemaSend } from './lib/unattended-tema.mjs';
 import { getAdapter, recordMockSpawn } from './lib/followup-adapters.mjs';
 import { buildPcIdentityIndex, pcMapEntries } from './fleet-pc-identity.mjs';
 import { checkTema, formatTemaFindings, stripTemaRecord } from './lib/tema-check.mjs';
-import { scanReports, findExistingEntries, toAddFlags, selftest as stalledSelftest } from './lib/stalled-scan.mjs';
+import { scanReports, scanReportsWithBreakdown, findExistingEntries, toAddFlags, selftest as stalledSelftest } from './lib/stalled-scan.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.dirname(__dirname);
@@ -2020,6 +2020,7 @@ async function cmdStalledScan(flags, ctxBase = {}) {
   const reportsDir = flags['reports-dir'] ? String(flags['reports-dir']) : path.join(os.homedir(), 'gb-reports');
   const staleHours = Number(flags['stale-hours'] || 6);
   const pcName = String(flags.pc || currentPcName({ hostname: ctxBase.hostname }));
+  const maxAgeDays = Number(flags['max-age-days'] || 7);
   const dryRun = Boolean(flags['dry-run']);
 
   // --selftest: check task registration
@@ -2029,7 +2030,16 @@ async function cmdStalledScan(flags, ctxBase = {}) {
     return results.every((r) => r.ok) ? 0 : 1;
   }
 
-  const entries = scanReports(reportsDir, pcName, staleHours, nowMs);
+  let entries;
+  let breakdown;
+  if (dryRun) {
+    const result = scanReportsWithBreakdown(reportsDir, pcName, staleHours, nowMs, maxAgeDays);
+    entries = result.entries;
+    breakdown = result.breakdown;
+  } else {
+    entries = scanReports(reportsDir, pcName, staleHours, nowMs, maxAgeDays);
+  }
+
   const alerts = [];
   let registered = 0;
   let skipped = 0;
@@ -2104,7 +2114,7 @@ async function cmdStalledScan(flags, ctxBase = {}) {
     syncError: store.syncError,
   });
 
-  console.log(JSON.stringify({
+  const output = {
     ok: errors === 0,
     scanned: entries.length,
     registered,
@@ -2113,7 +2123,16 @@ async function cmdStalledScan(flags, ctxBase = {}) {
     alertFile: file,
     pendingSync: store.pendingSync,
     syncError: store.syncError,
-  }, null, 2));
+  };
+  if (dryRun && breakdown) {
+    output.breakdown = breakdown;
+    output.dryRunEntries = entries.map((e) => ({
+      folder: e.folder,
+      detectedWords: e.detectedWords,
+      id: e.id,
+    }));
+  }
+  console.log(JSON.stringify(output, null, 2));
 
   // 同期失敗は非0で終了
   if (store.pendingSync && storeMode !== 'local') return 3;

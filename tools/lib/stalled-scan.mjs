@@ -3,15 +3,16 @@
  * GB-229: stalled-scan — gb-reports を走査し、止まった案件を followup-ledger へ登録する。
  *
  * 使い方（followup-ledger.mjs の stalled-scan コマンド経由）:
- *   node tools/followup-ledger.mjs stalled-scan [--reports-dir <path>] [--stale-hours <n>] [--dry-run] [--store local|sheet] [--pc <name>]
+ *   node tools/followup-ledger.mjs stalled-scan [--reports-dir <path>] [--stale-hours <n>] [--dry-run] [--store local|sheet] [--pc <name>] [--max-age-days <n>]
  *
  * オプション:
- *   --reports-dir   gb-reports のパス（既定 ~/gb-reports）
- *   --stale-hours   何時間以上更新がないものを「止まった」とするか（既定 6）
- *   --dry-run       実際に登録せず結果だけ表示
- *   --store         local（既定）または sheet
- *   --pc            走査するPC名（既定は currentPcName）
- *   --selftest      タスク登録の存在確認のみ行う
+ *   --reports-dir    gb-reports のパス（既定 ~/gb-reports）
+ *   --stale-hours    何時間以上更新がないものを「止まった」とするか（既定 6）
+ *   --max-age-days   DONE.txt無しの古いフォルダを無視する日数（既定 7）。これを超える未完了は載せずdry-runの別枠へ。ただしINCIDENT.md＋未復旧は常に登録
+ *   --dry-run        実際に登録せず件数内訳と各対象をJSONで表示
+ *   --store          local（既定）または sheet
+ *   --pc             走査するPC名（既定は currentPcName）
+ *   --selftest       タスク登録の存在確認のみ行う
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -32,6 +33,9 @@ export const SKIP_FOLDERS = new Set([
 
 /** 走査対象ファイル（STATUS はワイルドカードで STATUS.txt / STATUS*.md の両方を拾う） */
 export const WATCHED_FILES = ['STATUS.txt', 'STATUS.md', 'REPORT.md', 'INCIDENT.md', 'PROGRESS.md', 'DONE.txt'];
+
+/** ステータス指標ファイル（DONE.txt 以外の監視ファイル）。これが無いフォルダは「止まった」判定の対象外 */
+export const STATUS_INDICATOR_FILES = ['STATUS.txt', 'STATUS.md', 'REPORT.md', 'INCIDENT.md', 'PROGRESS.md'];
 
 /** 止まったと判定する検出語（大文字小文字を区別せず部分一致） */
 export const STALLED_KEYWORDS = [
@@ -207,18 +211,36 @@ export function hasIncidentFile(caseDir) {
 /**
  * 1つの案件フォルダを走査し、登録すべき行データを返す。
  * 登録不要なら null。
+ *
+ * @param {string} caseDir  案件フォルダの絶対パス
+ * @param {string} caseName フォルダ名
+ * @param {string} pcName   走査PC名
+ * @param {number} staleHours 何時間以上更新なしを「止まった」とするか
+ * @param {number} nowMs   現在時刻（ms）
+ * @param {number} maxAgeDays DONE.txt無しでこれより古い未完了は載せない（既定 7）。INCIDENT.md＋未復旧は常に登録
  */
-export function scanCase(caseDir, caseName, pcName, staleHours, nowMs = Date.now()) {
+export function scanCase(caseDir, caseName, pcName, staleHours, nowMs = Date.now(), maxAgeDays = 7) {
   const { statusText, hasDone, watchedFiles, mtimeMs } = readCaseFiles(caseDir);
 
-  // 監視ファイルが何も無ければスキップ
-  if (watchedFiles.length === 0) return null;
+  // ステータス指標ファイル（STATUS.txt/STATUS*.md/REPORT.md/INCIDENT.md/PROGRESS.md）が1つも無ければスキップ
+  const hasStatusIndicator = watchedFiles.some((f) =>
+    f === 'STATUS.txt' || /^STATUS.*\.md$/.test(f) ||
+    f === 'REPORT.md' || f === 'INCIDENT.md' || f === 'PROGRESS.md'
+  );
+  if (!hasStatusIndicator) return null;
 
   const text = statusText;
   const hasStalledKeywords = containsStalledKeywords(text);
 
   // DONE.txt があり、かつ検出語がなければ「完了」としてスキップ
   if (hasDone && !hasStalledKeywords) return null;
+
+  // 最終更新が maxAgeDays より古いものは、INCIDENT.md＋「未復旧」以外はスキップ
+  const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+  if (nowMs - mtimeMs > maxAgeMs) {
+    const hasIncidentWithUnrecovered = hasIncidentFile(caseDir) && text.includes('未復旧');
+    if (!hasIncidentWithUnrecovered) return null;
+  }
 
   // 登録条件: (1) 検出語あり または (2) DONE.txt 無しで stale 時間超過
   const isStale = !hasDone && (nowMs - mtimeMs > staleHours * 60 * 60 * 1000);
@@ -281,14 +303,57 @@ function computeDueIncident(nowMs) {
 /**
  * gb-reports 全体を走査し、登録すべき案件のリストを返す。
  */
-export function scanReports(reportsDir, pcName, staleHours = 6, nowMs = Date.now()) {
+export function scanReports(reportsDir, pcName, staleHours = 6, nowMs = Date.now(), maxAgeDays = 7) {
   const cases = enumerateCaseDirs(reportsDir);
   const results = [];
   for (const c of cases) {
-    const entry = scanCase(c.dirPath, c.name, pcName, staleHours, nowMs);
+    const entry = scanCase(c.dirPath, c.name, pcName, staleHours, nowMs, maxAgeDays);
     if (entry) results.push(entry);
   }
   return results;
+}
+
+/**
+ * scanReports に加え、skip理由の内訳を返す。dry-run出力用。
+ * @returns {{ entries: Array, breakdown: { registered: number, completed: number, tooOld: number, noStatusFiles: number } }}
+ */
+export function scanReportsWithBreakdown(reportsDir, pcName, staleHours = 6, nowMs = Date.now(), maxAgeDays = 7) {
+  const cases = enumerateCaseDirs(reportsDir);
+  const entries = [];
+  const breakdown = { registered: 0, completed: 0, tooOld: 0, noStatusFiles: 0 };
+
+  for (const c of cases) {
+    const { statusText, hasDone, watchedFiles, mtimeMs } = readCaseFiles(c.dirPath);
+
+    // ステータス指標ファイルが無ければスキップ
+    const hasStatusIndicator = watchedFiles.some((f) =>
+      f === 'STATUS.txt' || /^STATUS.*\.md$/.test(f) ||
+      f === 'REPORT.md' || f === 'INCIDENT.md' || f === 'PROGRESS.md'
+    );
+    if (!hasStatusIndicator) { breakdown.noStatusFiles++; continue; }
+
+    const text = statusText;
+    const hasStalledKeywords = containsStalledKeywords(text);
+
+    // DONE.txt があり検出語なし → 完了
+    if (hasDone && !hasStalledKeywords) { breakdown.completed++; continue; }
+
+    // 最終更新が maxAgeDays より古い → 古すぎ（INCIDENT.md＋未復旧は除く）
+    const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+    if (nowMs - mtimeMs > maxAgeMs) {
+      const hasIncidentWithUnrecovered = hasIncidentFile(c.dirPath) && text.includes('未復旧');
+      if (!hasIncidentWithUnrecovered) { breakdown.tooOld++; continue; }
+    }
+
+    // scanCase で実際の登録判定
+    const entry = scanCase(c.dirPath, c.name, pcName, staleHours, nowMs, maxAgeDays);
+    if (entry) {
+      entries.push(entry);
+      breakdown.registered++;
+    }
+  }
+
+  return { entries, breakdown };
 }
 
 /**
@@ -399,7 +464,13 @@ if (isEntry(import.meta.url)) {
   const reportsDir = String(flags['reports-dir'] || path.join(os.homedir(), 'gb-reports'));
   const staleHours = Number(flags['stale-hours'] || 6);
   const pcName = String(flags.pc || os.hostname());
+  const maxAgeDays = Number(flags['max-age-days'] || 7);
 
-  const results = scanReports(reportsDir, pcName, staleHours);
-  console.log(JSON.stringify(results, null, 2));
+  if (flags['dry-run']) {
+    const { entries, breakdown } = scanReportsWithBreakdown(reportsDir, pcName, staleHours, Date.now(), maxAgeDays);
+    console.log(JSON.stringify({ breakdown, entries }, null, 2));
+  } else {
+    const results = scanReports(reportsDir, pcName, staleHours, Date.now(), maxAgeDays);
+    console.log(JSON.stringify(results, null, 2));
+  }
 }

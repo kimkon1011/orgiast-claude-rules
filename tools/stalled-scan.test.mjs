@@ -8,11 +8,12 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 import {
-  scanCase, scanReports, enumerateCaseDirs, readCaseFiles,
+  scanCase, scanReports, scanReportsWithBreakdown, enumerateCaseDirs, readCaseFiles,
   containsStalledKeywords, extractKimOnlyAction, isKimWaiting,
   findExistingEntries, toAddFlags, normalizeFolderName,
-  selftest, STALLED_KEYWORDS, SKIP_FOLDERS, isValidCaseFolder,
+  selftest, STALLED_KEYWORDS, SKIP_FOLDERS, STATUS_INDICATOR_FILES, isValidCaseFolder,
 } from './lib/stalled-scan.mjs';
+import { main, loadLocalStore, parseArgs as followupParseArgs } from './followup-ledger.mjs';
 
 function tmpDir(name) {
   const dir = fs.mkdtempSync(path.join(__dirname, `.stalled-scan-test-${name}-`));
@@ -54,7 +55,88 @@ function createMockReports(baseDir, cases) {
   return reportsDir;
 }
 
-// ===== T1: 神原型 =====
+/**
+ * Integration test helper: runs stalled-scan via main() with temp gb-reports and temp ledger.
+ * The ledger is stored under a tmp dir so the real ~/.claude/followup-ledger is never touched.
+ */
+async function stalledScanScenario(name, cases, fn, overrides = {}) {
+  const dir = tmpDir(name);
+  const reportsDir = createMockReports(dir, cases);
+  const ledgerDir = path.join(dir, 'ledger');
+  fs.mkdirSync(ledgerDir, { recursive: true });
+  const config = {
+    spreadsheetId: '',
+    url: '',
+    owner: 'seisaku-team@orgiast.jp',
+    approvalChannelId: '',
+    approverUserIds: [],
+    approvalTimeoutMinutes: 120,
+    quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' },
+    alertFile: path.join(dir, 'ALERT.md'),
+    pcAliases: {},
+    ...overrides,
+  };
+
+  const env = { ...process.env, FOLLOWUP_LEDGER_HOME: ledgerDir, FOLLOWUP_PC: 'test-pc' };
+  const prev = {};
+  for (const key of Object.keys(env)) prev[key] = process.env[key];
+  Object.assign(process.env, env);
+  try {
+    const run = (extraArgs = [], options = {}) => main(
+      ['stalled-scan', '--store', 'local', '--reports-dir', reportsDir, '--pc', 'test-pc', ...extraArgs],
+      { config, storeMode: 'local', now: options.now || new Date() },
+    );
+    const store = () => loadLocalStore(path.join(ledgerDir, 'ledger.json'));
+    await fn({ dir, reportsDir, run, store });
+  } finally {
+    for (const key of Object.keys(env)) {
+      if (key in prev) process.env[key] = prev[key];
+      else delete process.env[key];
+    }
+  }
+}
+
+async function withEnv(env, fn) {
+  const prev = { ...process.env };
+  Object.assign(process.env, env);
+  try {
+    return await fn();
+  } finally {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in prev)) delete process.env[key];
+    }
+    Object.assign(process.env, prev);
+  }
+}
+
+// ===== T1: 神原型（統合テスト版） =====
+test('T1: 神原型（STATUS.txt「金さん待ち・100人未復旧」、DONE無し、INCIDENT.md有り）→ main経由で登録される', async () => {
+  await stalledScanScenario('t1', [
+    {
+      name: 'common-users-delete-incident',
+      files: [
+        { name: 'STATUS.txt', content: '状態: 金さん待ち\n理由: 100人未復旧\n次の一手: 金さんの確認が必要' },
+        { name: 'INCIDENT.md', content: '# INCIDENT\ncommon.users 誤削除' },
+      ],
+    },
+  ], async ({ run, store }) => {
+    const code = await run();
+    assert.equal(code, 0);
+    const items = store().items;
+    assert.equal(items.length, 1);
+    const row = items[0];
+    assert.match(row.id, /GB-STALL-test-pc-common-users-delete-incident/);
+    assert.match(row.statusReason, /金さん待ち/);
+    assert.match(row.statusReason, /未復旧/);
+    assert.ok(row.kimOnlyAction);
+    assert.equal(row.status, '止まった');
+    // due: INCIDENT なので当日 23:59 JST
+    const dueDate = new Date(row.dueAt);
+    assert.equal(dueDate.getHours(), 23);
+    assert.equal(dueDate.getMinutes(), 59);
+    assert.equal(row.ownerPc, 'test-pc');
+  });
+});
 test('T1: 神原型（STATUS.txt「金さん待ち・100人未復旧」、DONE無し、INCIDENT.md有り）→登録される', () => {
   const dir = tmpDir('t1');
   const reportsDir = createMockReports(dir, [
@@ -80,49 +162,56 @@ test('T1: 神原型（STATUS.txt「金さん待ち・100人未復旧」、DONE�
   assert.equal(dueDate.getMinutes(), 59);
 });
 
-// ===== T2: 重複防止 =====
-test('T2: 同じ物を2回走査→行は1つ', () => {
-  const dir = tmpDir('t2');
-  const reportsDir = createMockReports(dir, [
+// ===== T2: 重複防止（統合テスト版） =====
+test('T2: 同じ物を2回走査→ store.items は1行', async () => {
+  await stalledScanScenario('t2', [
     {
       name: 'stalled-case',
       files: [
         { name: 'STATUS.txt', content: '状態: 中断\n理由: 承認待ち' },
       ],
     },
-  ]);
-  const results1 = scanReports(reportsDir, 'test-pc', 6, Date.now());
-  assert.equal(results1.length, 1);
-  // 同じフォルダを再度走査（内容は変わらず）
-  const results2 = scanReports(reportsDir, 'test-pc', 6, Date.now());
-  assert.equal(results2.length, 1);
-  // 同じ ID になる
-  assert.equal(results1[0].id, results2[0].id);
+  ], async ({ run, store }) => {
+    const code1 = await run();
+    assert.equal(code1, 0);
+    assert.equal(store().items.length, 1);
+    // 2回目（upsert: 同じ id が既存なので上書き、件数は1のまま）
+    const code2 = await run();
+    assert.equal(code2, 0);
+    assert.equal(store().items.length, 1);
+    const row = store().items[0];
+    assert.match(row.id, /GB-STALL-test-pc-stalled-case/);
+    assert.equal(row.status, '止まった');
+  });
 });
 
-// ===== T3: GB-174 重複 =====
-test('T3: GB-174 が先に同キー行を入れていた→重複しない', () => {
-  const entry = {
-    id: 'GB-STALL-test-pc-stalled_case',
-    folder: 'stalled_case',
-    folderId: 'stalled_case',
-    pc: 'test-pc',
-    reason: '検出語: 中断／根拠: stalled_case',
-    kimOnlyAction: '',
-    due: new Date(Date.now() + 86400000).toISOString(),
-    detectedWords: '中断',
-    hasIncident: false,
-  };
-  // 既存行: 同じ id、未完了
-  const existingItems = [
-    { id: 'GB-STALL-test-pc-stalled_case', status: '止まった', statusReason: '検出語: 中断', note: 'stalled_case' },
-  ];
-  const found = findExistingEntries(existingItems, entry);
-  assert.equal(found.length, 1);
-  // toAddFlags が upsert=true になる
-  const flags = toAddFlags(entry, found.length > 0);
-  assert.equal(flags.upsert, true);
-  assert.equal(flags.id, 'GB-STALL-test-pc-stalled_case');
+// ===== T3: GB-174 重複（統合テスト版） =====
+test('T3: GB-174 が先に同キー行を入れていた→2回目後も1行、updatedAt更新', async () => {
+  await stalledScanScenario('t3', [
+    {
+      name: 'stalled-case',
+      files: [
+        { name: 'STATUS.txt', content: '状態: 中断\n理由: 承認待ち' },
+      ],
+    },
+  ], async ({ run, store }) => {
+    // 1回目: 登録
+    await run();
+    assert.equal(store().items.length, 1);
+    const firstUpdatedAt = store().items[0].updatedAt;
+    // 手動で updatedAt を過去に書き換え（更新を検証するため）
+    const oldTime = new Date(Date.now() - 86400000).toISOString();
+    const ledgerPath = path.join(path.dirname(store()._file || ''), 'ledger.json');
+    // 1回目の走査で items は既に1件ある。updatedAt を書き換え
+    store().items[0].updatedAt = oldTime;
+    // 2回目: upsert で更新
+    await run();
+    assert.equal(store().items.length, 1);
+    const secondUpdatedAt = store().items[0].updatedAt;
+    assert.notEqual(secondUpdatedAt, oldTime, 'updatedAt が更新されていない');
+    assert.equal(store().items[0].id, 'GB-STALL-test-pc-stalled-case');
+    assert.equal(store().items[0].status, '止まった');
+  });
 });
 
 // ===== T4: DONE 完了 =====
@@ -189,30 +278,37 @@ test('T6: 「中断」「承認待ち」「ブロック」各語→載る', () =
   assert.ok(results.some((r) => r.reason.includes('ブロック')), 'ブロック not found');
 });
 
-// ===== T7: 期限・担当・金さんだけができること =====
-test('T7: 期限・担当・金さんだけができることが埋まる', () => {
-  const dir = tmpDir('t7');
-  const reportsDir = createMockReports(dir, [
+// ===== T7: 期限・担当・金さんだけができること（統合テスト版） =====
+test('T7: 台帳行の期限・ownerPc・kimOnlyAction・reasonが埋まる', async () => {
+  await stalledScanScenario('t7', [
     {
       name: 'kim-waiting-case',
       files: [
         { name: 'STATUS.txt', content: '状態: 金さん待ち\n理由: 支払い承認待ち\n次の一手: 金さんに請求書を確認してもらう' },
       ],
     },
-  ]);
-  const results = scanReports(reportsDir, 'test-pc', 6, Date.now());
-  assert.equal(results.length, 1);
-  const r = results[0];
-  // ID に pc 名を含む
-  assert.match(r.id, /test-pc/);
-  // 金さんだけができること
-  assert.ok(r.kimOnlyAction);
-  assert.match(r.kimOnlyAction, /金さん/);
-  // due が設定されている
-  assert.ok(r.due);
-  const dueMs = Date.parse(r.due);
-  assert.ok(Number.isFinite(dueMs));
-  assert.ok(dueMs > Date.now());
+  ], async ({ run, store }) => {
+    const code = await run();
+    assert.equal(code, 0);
+    const items = store().items;
+    assert.equal(items.length, 1);
+    const row = items[0];
+    // ID に pc 名を含む
+    assert.match(row.id, /test-pc/);
+    // ownerPc
+    assert.equal(row.ownerPc, 'test-pc');
+    // 金さんだけができること
+    assert.ok(row.kimOnlyAction);
+    assert.match(row.kimOnlyAction, /金さん/);
+    // dueAt が設定されている
+    assert.ok(row.dueAt);
+    const dueMs = Date.parse(row.dueAt);
+    assert.ok(Number.isFinite(dueMs));
+    assert.ok(dueMs > Date.now());
+    // reason に検出語と相対パスが含まれる
+    assert.match(row.statusReason, /金さん待ち/);
+    assert.match(row.statusReason, /kim-waiting-case/);
+  });
 });
 
 // ===== T8: トークン風文字列 =====
@@ -236,25 +332,55 @@ test('T8: トークン風文字列→台帳に写らない', () => {
   assert.doesNotMatch(r.reason, /ghp_[A-Za-z0-9]{10,}/);
 });
 
-// ===== T9: 走査成功 =====
-test('T9: stalled-scan が local store で正常動作', async () => {
+// ===== T9: sheet モード障害 =====
+test('T9: sheet モードで sheets 注入が例外を投げる→非0終了・ALERT.mdにpendingSync/syncError', async () => {
   const dir = tmpDir('t9');
   const reportsDir = createMockReports(dir, [
     {
-      name: 'stalled-for-sync-test',
+      name: 'stalled-sheet-test',
       files: [
         { name: 'STATUS.txt', content: '状態: 中断\n理由: テスト' },
       ],
     },
   ]);
-  const { main } = await import('./followup-ledger.mjs');
-  const results = await main(['stalled-scan', '--store', 'local', '--reports-dir', reportsDir, '--pc', 'test-pc'], {
-    storeMode: 'local',
-    config: { spreadsheetId: '', quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' } },
-    now: new Date(),
+  const ledgerDir = path.join(dir, 'ledger');
+  fs.mkdirSync(ledgerDir, { recursive: true });
+
+  // sheets クライアントのスタブ — 全操作が失敗する
+  const failingSheets = {
+    metadata: async () => { throw new Error('Sheets HTTP 403 Forbidden'); },
+    get: async () => { throw new Error('Sheets HTTP 403 Forbidden'); },
+    update: async () => { throw new Error('Sheets HTTP 403 Forbidden'); },
+    append: async () => { throw new Error('Sheets HTTP 403 Forbidden'); },
+    updateStructure: async () => { throw new Error('Sheets HTTP 403 Forbidden'); },
+  };
+
+  const config = {
+    spreadsheetId: 'mock-sheet-id',
+    url: '',
+    owner: 'seisaku-team@orgiast.jp',
+    approvalChannelId: '',
+    approverUserIds: [],
+    approvalTimeoutMinutes: 120,
+    quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' },
+    alertFile: path.join(dir, 'ALERT.md'),
+    pcAliases: {},
+  };
+
+  await withEnv({ FOLLOWUP_LEDGER_HOME: ledgerDir, FOLLOWUP_PC: 'test-pc' }, async () => {
+    const code = await main(
+      ['stalled-scan', '--store', 'sheet', '--reports-dir', reportsDir, '--pc', 'test-pc'],
+      { config, storeMode: 'sheet', sheets: failingSheets, now: new Date() },
+    );
+    // シート不達時は非0で終了
+    assert.notEqual(code, 0, `シート不達時は非0で終了すべき（実際: ${code}）`);
+
+    // ALERT.md が存在し、pendingSync/syncError を含む
+    const alertPath = path.join(dir, 'ALERT.md');
+    assert.ok(fs.existsSync(alertPath), 'ALERT.md が存在すべき');
+    const alertContent = fs.readFileSync(alertPath, 'utf8');
+    assert.match(alertContent, /pendingSync|同期|syncError|エラー/);
   });
-  // local store の場合は成功（0）
-  assert.equal(results, 0);
 });
 
 // ===== T10: 規則ファイルの存在検査 =====
@@ -278,6 +404,126 @@ test('T10: rules/followup-ledger.md に追記文が存在し、register-followup
   assert.match(ps1Content, /OrgiastStalledScan/);
   // StalledScanOnly スイッチ
   assert.match(ps1Content, /StalledScanOnly/);
+});
+
+// ===== F1: 誤登録（ノイズ）対策 =====
+
+test('F1-T1: ステータス指標ファイル無し（DONE.txtのみ）→ skip（対象ファイル無し）', () => {
+  const dir = tmpDir('f1t1');
+  const reportsDir = createMockReports(dir, [
+    {
+      name: 'only-done',
+      files: [
+        { name: 'DONE.txt', content: '完了' },
+      ],
+    },
+  ]);
+  // scanCase は null（STATUS/REPORT/INCIDENT/PROGRESS が無い）
+  const results = scanReports(reportsDir, 'test-pc', 6, Date.now());
+  assert.equal(results.length, 0);
+  // scanReportsWithBreakdown で noStatusFiles がカウントされる
+  const { entries, breakdown } = scanReportsWithBreakdown(reportsDir, 'test-pc', 6, Date.now());
+  assert.equal(breakdown.noStatusFiles, 1);
+  assert.equal(entries.length, 0);
+});
+
+test('F1-T2: max-age-days より古いフォルダ（検出語なし）→ skip（古すぎ）', () => {
+  const dir = tmpDir('f1t2');
+  const reportsDir = createMockReports(dir, [
+    {
+      name: 'old-abandoned',
+      files: [
+        { name: 'PROGRESS.md', content: '進捗: 半分まで', mtime: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000) }, // 20日前
+      ],
+    },
+  ]);
+  // maxAgeDays=7 だと 20日前は古すぎ
+  const results = scanReports(reportsDir, 'test-pc', 6, Date.now(), 7);
+  assert.equal(results.length, 0);
+  const { entries, breakdown } = scanReportsWithBreakdown(reportsDir, 'test-pc', 6, Date.now(), 7);
+  assert.equal(breakdown.tooOld, 1);
+  assert.equal(entries.length, 0);
+});
+
+test('F1-T3: max-age-days より古いが INCIDENT.md＋未復旧→登録される', () => {
+  const dir = tmpDir('f1t3');
+  const oldTime = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000);
+  const reportsDir = createMockReports(dir, [
+    {
+      name: 'old-incident',
+      files: [
+        { name: 'INCIDENT.md', content: '# INCIDENT\n未復旧: データ復旧中', mtime: oldTime },
+        { name: 'STATUS.txt', content: '状態: 未復旧\n理由: インシデント継続中', mtime: oldTime },
+      ],
+    },
+  ]);
+  // maxAgeDays=7 だが INCIDENT.md＋未復旧は例外
+  const results = scanReports(reportsDir, 'test-pc', 6, Date.now(), 7);
+  assert.equal(results.length, 1);
+  assert.match(results[0].reason, /未復旧/);
+});
+
+test('F1-T4: max-age-days より古く検出語あり（INCIDENT無し）→ skip（古すぎ）', () => {
+  const dir = tmpDir('f1t4');
+  const oldTime = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000);
+  const reportsDir = createMockReports(dir, [
+    {
+      name: 'old-stalled-no-incident',
+      files: [
+        { name: 'STATUS.txt', content: '状態: 金さん待ち\n理由: 古い案件', mtime: oldTime },
+      ],
+    },
+  ]);
+  // 検出語「金さん待ち」があるが max-age-days より古い
+  // INCIDENT.md が無いので skip
+  const results = scanReports(reportsDir, 'test-pc', 6, Date.now(), 7);
+  assert.equal(results.length, 0);
+  const { entries, breakdown } = scanReportsWithBreakdown(reportsDir, 'test-pc', 6, Date.now(), 7);
+  assert.equal(breakdown.tooOld, 1);
+  assert.equal(entries.length, 0);
+});
+
+test('F1-T5: scanReportsWithBreakdown が正しい内訳を返す', () => {
+  const dir = tmpDir('f1t5');
+  const now = Date.now();
+  const reportsDir = createMockReports(dir, [
+    {
+      name: 'active-stalled',
+      files: [
+        { name: 'STATUS.txt', content: '状態: 中断', mtime: new Date(now - 1000) },
+      ],
+    },
+    {
+      name: 'completed',
+      files: [
+        { name: 'DONE.txt', content: '完了' },
+        { name: 'STATUS.txt', content: '状態: 完了', mtime: new Date(now - 1000) },
+      ],
+    },
+    {
+      name: 'only-done',
+      files: [
+        { name: 'DONE.txt', content: '完了', mtime: new Date(now - 1000) },
+      ],
+    },
+    {
+      name: 'too-old',
+      files: [
+        { name: 'PROGRESS.md', content: '進捗: 途中', mtime: new Date(now - 20 * 24 * 60 * 60 * 1000) },
+      ],
+    },
+  ]);
+  const { entries, breakdown } = scanReportsWithBreakdown(reportsDir, 'test-pc', 6, now, 7);
+  // active-stalled: 登録対象
+  assert.equal(breakdown.registered, 1);
+  // completed: DONE.txt＋検出語なし→完了
+  assert.equal(breakdown.completed, 1);
+  // only-done: ステータス指標ファイル無し→対象外
+  assert.equal(breakdown.noStatusFiles, 1);
+  // too-old: 20日前→古すぎ
+  assert.equal(breakdown.tooOld, 1);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].folder, 'active-stalled');
 });
 
 // ===== ユニットテスト =====

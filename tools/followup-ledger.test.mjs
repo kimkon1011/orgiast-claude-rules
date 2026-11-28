@@ -730,7 +730,10 @@ async function outcomeScenario(name, fn, overrides = {}) {
   const config = baseConfig(dir, { morningReportFile: path.join(dir, 'MORNING.md'), ...overrides });
   const ctx = { config, storeMode: 'local', now };
   await withEnv(baseEnv(dir, mockFile, { FOLLOWUP_NOW: toIsoJst(now) }), async () => {
-    const run = (args, options = {}) => main(args, { ...ctx, ...options });
+    const run = (args, options = {}) => {
+      if (options.now) process.env.FOLLOWUP_NOW = toIsoJst(options.now);
+      return main(args, { ...ctx, ...options });
+    };
     const add = (id, extra = [], options = {}) => run(addArgs(id, {
       due: '2026-11-28T10:00:00+09:00', requestedAt: '2026-11-25T13:00:00+09:00', interval: 15,
       ...options, extra,

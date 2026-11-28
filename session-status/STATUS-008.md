@@ -1,7 +1,7 @@
-# session-status  PC=008  host=008XPS8300  updated 2026-11-28 14:09 JST
+# session-status  PC=008  host=008XPS8300  updated 2026-11-28 15:08 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "configDirectory": "C:\\Users\\user\\
-- 案件数: 56
+- 案件数: 58
 
 - 008・20261126-EOラーニングVALX只石プロデュース『劇薬マーケティング』シリーズ第二弾!・完了・最終更新 11/26 17:53、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 008・20261126-エイト・停止・最終更新 11/26 15:52、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
@@ -21,13 +21,15 @@
 - 008・curama-watch-0906・停止・最終更新 11/27 11:05、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・deadline-sweep-1124・停止・最終更新 11/24 10:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・event-slides-1124・停止・最終更新 11/24 17:35、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 008・followup-ledger・停止・最終更新 11/28 14:06、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 008・followup-ledger・停止・最終更新 11/28 15:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・followup-ledger-1127-008・完了・最終更新 11/28 00:54、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 008・followup-ledger-1128-full・完了・最終更新 11/28 11:44、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
 - 008・from-015-154-155-1127・停止・最終更新 11/27 08:18、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・gakkai-tm-inquiry-008pack・停止・最終更新 11/27 22:20、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 008・gakkai-tm-prospectus-1128・完了・最終更新 11/28 04:44、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
 - 008・gakkai-tm-sawayama-1128・完了・最終更新 11/28 03:19、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 008・gb174-restore-1128・停止・最終更新 11/28 14:56、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 008・gb229-ledger-gap-1128・停止・最終更新 11/28 15:06、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・gb48-night-fix-1127・停止・最終更新 11/27 23:22、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 008・grok-403-billing・停止・最終更新 11/27 06:16、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・grok-handoff-1127-bigtohoku・停止・最終更新 11/28 07:02、STATUS.mdなし、REPORTあり、次の手順が未着手・期限なし・次:次の手順に着手する

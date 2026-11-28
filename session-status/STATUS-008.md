@@ -1,7 +1,7 @@
-# session-status  PC=008  host=008XPS8300  updated 2026-11-28 13:09 JST
+# session-status  PC=008  host=008XPS8300  updated 2026-11-28 14:09 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "configDirectory": "C:\\Users\\user\\
-- 案件数: 55
+- 案件数: 56
 
 - 008・20261126-EOラーニングVALX只石プロデュース『劇薬マーケティング』シリーズ第二弾!・完了・最終更新 11/26 17:53、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 008・20261126-エイト・停止・最終更新 11/26 15:52、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
@@ -21,7 +21,7 @@
 - 008・curama-watch-0906・停止・最終更新 11/27 11:05、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・deadline-sweep-1124・停止・最終更新 11/24 10:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・event-slides-1124・停止・最終更新 11/24 17:35、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 008・followup-ledger・停止・最終更新 11/28 13:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 008・followup-ledger・停止・最終更新 11/28 14:06、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・followup-ledger-1127-008・完了・最終更新 11/28 00:54、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 008・followup-ledger-1128-full・完了・最終更新 11/28 11:44、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
 - 008・from-015-154-155-1127・停止・最終更新 11/27 08:18、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -55,6 +55,7 @@
 - 008・tema-check-1127・停止・最終更新 11/28 02:56、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 008・unsent-ledger・停止・最終更新 11/27 22:50、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・work-sales3cat-1125・停止・最終更新 11/25 09:22、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 008・x-ai-tips-collect-1128・進行中・最終更新 11/28 14:08、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
 - 008・_extract_7ff8a799・停止・最終更新 11/18 18:06、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・_handoff-r28-1127-in・停止・最終更新 11/27 09:34、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・_scripts-1127・停止・最終更新 11/27 09:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

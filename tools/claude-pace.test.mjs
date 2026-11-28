@@ -436,3 +436,61 @@ test('resolveAccountForHost は完全一致を先に見る', () => {
   };
   assert.deepEqual(resolveAccountForHost(configWithFull, '011NEXT'), { account: 'cr@orgiast.jp', pcs: ['011NEXT', '018'] });
 });
+
+// 指示書のケース: スペース入りアカウント名 + 正規化で一致
+test('resolveAccountForHost は 011NEXT → cr @orgiast.jp に解決する（正規化一致）', () => {
+  const accountConfig = {
+    accounts: {
+      'cr @orgiast.jp': { pcs: ['011', '018'] },
+      'genbateam.toho @gmail.com': { pcs: ['999'] },
+    },
+  };
+  assert.equal(resolveAccountForHost(accountConfig, '011NEXT').account, 'cr @orgiast.jp');
+});
+
+test('resolveAccountForHost は 999genba → genbateam.toho @gmail.com に解決する（正規化一致）', () => {
+  const accountConfig = {
+    accounts: {
+      'cr @orgiast.jp': { pcs: ['011', '018'] },
+      'genbateam.toho @gmail.com': { pcs: ['999'] },
+    },
+  };
+  assert.equal(resolveAccountForHost(accountConfig, '999genba').account, 'genbateam.toho @gmail.com');
+});
+
+test('resolveAccountForHost は 018 → cr @orgiast.jp に解決する（完全一致）', () => {
+  const accountConfig = {
+    accounts: {
+      'cr @orgiast.jp': { pcs: ['011', '018'] },
+      'genbateam.toho @gmail.com': { pcs: ['999'] },
+    },
+  };
+  assert.equal(resolveAccountForHost(accountConfig, '018').account, 'cr @orgiast.jp');
+});
+
+test('resolveAccountForHost は DESKTOP-XXXX → unknown ＋ 空 pcs', () => {
+  const accountConfig = {
+    accounts: {
+      'cr @orgiast.jp': { pcs: ['011', '018'] },
+      'genbateam.toho @gmail.com': { pcs: ['999'] },
+    },
+  };
+  const r = resolveAccountForHost(accountConfig, 'DESKTOP-XXXX');
+  assert.equal(r.account, 'unknown');
+  assert.deepEqual(r.pcs, []);
+});
+
+test('resolveAccountForHost は完全一致（011NEXT）を正規化一致（011）より優先する', () => {
+  const config = {
+    accounts: {
+      'a @x': { pcs: ['011NEXT'] },
+      'b @x': { pcs: ['011'] },
+    },
+  };
+  assert.equal(resolveAccountForHost(config, '011NEXT').account, 'a @x');
+});
+
+test('normalizePaceHost は 011NEXT → 011、DESKTOP-2D0R4LI → そのまま', () => {
+  assert.equal(normalizePaceHost('011NEXT'), '011');
+  assert.equal(normalizePaceHost('DESKTOP-2D0R4LI'), 'DESKTOP-2D0R4LI');
+});

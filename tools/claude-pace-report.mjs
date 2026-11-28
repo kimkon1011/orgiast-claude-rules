@@ -10,13 +10,14 @@ import { isEntry } from './is-entry.mjs';
 import { getDriveToken } from './lib/drive-auth.mjs';
 import { downloadFileContent, findOrCreateFolder, listFiles, uploadFileContent } from './lib/drive-files.mjs';
 import { FOLDERS } from './hub-push.mjs';
-import { decidePace, loadPaceConfig, defaultConfigPath, defaultQueuePath, paceLedgerPath } from './claude-pace.mjs';
+import { decidePace, loadPaceConfig, normalizePaceHost, defaultConfigPath, defaultQueuePath, paceLedgerPath } from './claude-pace.mjs';
 import { summarizeQueue } from './claude-pace-queue.mjs';
 import { checkSchema } from './lib/json-schema-check.mjs';
 import { readCodexWindows } from './lib/quota-windows.mjs';
 import { reportLocations } from './lib/claude-pace-report-core.mjs';
 
 export { reportLocations } from './lib/claude-pace-report-core.mjs';
+export { normalizePaceHost } from './claude-pace.mjs';
 
 export const DAY_TARGET_PCT = 12.9;
 export const REPORT_DIR_NAME = 'claude-pace-reports';
@@ -81,13 +82,6 @@ export function loadQueue(queuePath = defaultQueuePath(), home = process.env.ORG
     } catch { /* next */ }
   }
   return { tasks: [], newOfferings: [] };
-}
-
-/** ホスト名を PC 番号（先頭3桁の数字）に正規化する。 */
-export function normalizePaceHost(x) {
-  const s = String(x ?? '').trim();
-  const m = /^(\d{3})/.exec(s);
-  return m ? m[1] : s;
 }
 
 /**

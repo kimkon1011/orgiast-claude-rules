@@ -17,6 +17,8 @@ import { addItem as addKimInboxItem } from './kim-inbox.mjs';
 import { resolveDiscordLink, extractDiscordUserID } from './discord-beeper-link.mjs';
 import { isOrgiastMember } from './lib/orgiast-member-check.mjs';
 import { collectReadableContent } from './lib/autoreply-attachments.mjs';
+import { checkBeeperReply } from './lib/pre-send-reply-check.mjs';
+import { writePreSendPass } from './lib/pre-send-marker.mjs';
 import { extractSearchTerms, searchRelated } from './lib/autoreply-related.mjs';
 import { searchDriveFacts } from './lib/autoreply-drive-facts.mjs';
 import { LEARN_SYSTEM, learningJson, appendUnique } from './lib/autoreply-learning.mjs';
@@ -523,6 +525,13 @@ export async function runOnce(options = {}) {
         if (fs.existsSync(path.join(dir, 'PAUSE'))) { result.paused = true; break; }
 
         const replyTarget = selectReplyTarget(pending);
+        const imageNotes = { ...options.imageNotes };
+        for (const document of collected.documents) {
+          if (document.messageID && document.source === 'attachment') imageNotes[`${document.messageID}:${document.attachmentIndex}`] = document.text;
+        }
+        const replyCheck = await (options.preSendCheck || checkBeeperReply)({ chatID: chat.id, draft: content, now, api, imageNotes });
+        if (!replyCheck.ok) { await decide(`送信前照合で保留: ${JSON.stringify(replyCheck.findings)}`); continue; }
+        writePreSendPass({ chatID: chat.id, text: content, home });
         // A compound group question can contain proposals or objections from several people.
         const approvalMessage = replyTarget?.id === latest.id && pending.length === 1 ? plainText(latest.text) : undefined;
         state.chats[chat.id] = { ...mark(latest), status: 'sending', content, question, senderName: latest.senderName, link, approvalMessage, ...(trialSelfDecline ? { trialSelfDecline: true } : {}), ...(trialMidpointFail ? { trialMidpointFail: true } : {}) };
@@ -533,7 +542,7 @@ export async function runOnce(options = {}) {
 
         let sent;
         // 返信先は pending の最新（本物メッセージ）、合成メッセージは避ける
-        try { sent = await api.sendMessage(chat.id, content, replyTarget ? { replyToMessageID: replyTarget.id } : {}); }
+        try { sent = await api.sendMessage(chat.id, content, replyTarget ? { replyToMessageID: replyTarget.id } : {}, { env: { ...process.env, ORGIAST_HOME: home } }); }
         catch { await decide('送信結果が不明。再送せず Discord で確認してください', 'uncertain'); continue; }
         if (sent?.chatID && sent.chatID !== chat.id) { await decide('送信結果の会話IDが一致しません', 'uncertain'); continue; }
 

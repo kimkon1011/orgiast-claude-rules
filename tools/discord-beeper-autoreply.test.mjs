@@ -60,7 +60,7 @@ function fixture(t, { chats = [chat()], messages, decision = reply } = {}) {
 test('既読 single を自動送信し本文読み戻し、kim-inboxへinfo記録、二重返信なし', async t => {
   const f = fixture(t);
   const result = await runOnce(f.options);
-  assert.equal(result.ok, true); assert.equal(result.replied, 1);
+  assert.equal(result.ok, true, JSON.stringify(result)); assert.equal(result.replied, 1, JSON.stringify(result));
   assert.equal(f.sent.length, 1); assert.match(f.sent[0].content, /^【kimのClaudeによる代理回答】/);
   assert.equal(f.sent[0].options.replyToMessageID, 'm1');
   assert.equal(f.state().chats.chat1.status, 'sent');
@@ -68,6 +68,16 @@ test('既読 single を自動送信し本文読み戻し、kim-inboxへinfo記�
   assert.equal(f.inboxItems[0].kind, 'info');
   assert.match(f.inboxItems[0].text, /\[Discord 代理回答完了 \(dm\)\]/);
   await runOnce(f.options); assert.equal(f.sent.length, 1); assert.equal(f.inboxItems.length, 1);
+});
+
+test('自動返信: 関連チャットの未読画像を検出して送信せず保留', async t => {
+  const target = chat({ participants: { items: [{ id: 'peer', fullName: '田中' }] } });
+  const related = chat({ id: 'related', title: '別の会話', lastActivity: new Date(NOW - 1000).toISOString(), participants: { items: [{ id: 'peer', fullName: '田中' }] } });
+  const f = fixture(t, { chats: [target, related] });
+  f.data.related = [message({ id: 'unread', text: '', attachments: [{ type: 'img', srcURL: 'mxc://fixture' }] })];
+  const result = await runOnce(f.options);
+  assert.equal(result.replied, 0); assert.equal(f.sent.length, 0);
+  assert.ok(f.inboxItems.some(item => item.text.includes('UNREAD_IMAGE')));
 });
 
 test('group の空 mentions でも HTML 金功勇メンションを拾い金額は暫定回答を送信', async t => {
@@ -127,6 +137,7 @@ test('添付のみの初対面は判断待ち', async t => {
 test('別メッセージの本文と添付名・mimeTypeをまとめてLLMへ渡す', async t => {
   const f = fixture(t);
   f.data.chat1.push(message({ id: 'image', sortKey: '3', text: '', attachments: [{ fileName: 'photo.png', mimeType: 'image/png', srcURL: 'mxc://test/photo' }, { fileName: 'notes.txt', mimeType: 'text/plain', srcURL: 'mxc://test/text' }] }));
+  f.options.imageNotes = { 'image:0': 'マニュアル一覧の画像' };
   f.api.downloadAttachment = async a => Buffer.from(a.mimeType.startsWith('text/') ? '本文テスト' : 'image');
   f.options.llm = async ({ input }) => {
     assert.equal(input.images.length, 1);

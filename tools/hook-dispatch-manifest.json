@@ -509,6 +509,12 @@
         "timeout": 15
       },
       {
+        "matcher": "Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/oneoff-send-gate.mjs\"",
+        "timeout": 15
+      },
+      {
         "matcher": "mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|update_draft|send_message|reply|forward)|Bash|PowerShell",
         "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/live-artifact-read-gate.mjs\"",

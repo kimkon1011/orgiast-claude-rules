@@ -16,6 +16,7 @@ import { isEntry } from './is-entry.mjs';
 import { assertContextApproved, latestOf, readOutbound, recordOutbound } from './lib/send-context.mjs';
 import { assertSendConsistency, afterSendCleanup } from './send-consistency-check.mjs';
 import { assertNoHandback, stripHumanOnly } from './lib/handback-guard.mjs';
+import { checkChannelReply, assertReplyCheck } from './lib/pre-send-reply-check.mjs';
 import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 
 /** 任意の文字列を UUID v5 形式（SHA-256 ベース・決定論的）に変換する。同じ文字列→同じUUID。
@@ -124,6 +125,7 @@ export async function main(argv=process.argv.slice(2), deps={}) {
     }});
   }
   const urls = [];
+  assertReplyCheck(await (deps.preSendCheck || checkChannelReply)({ channel: 'line', target: groupId, draft: text, home: deps.home, fetchImpl: fetch }));
   for (const f of o.images) urls.push(await (deps.uploadImage ?? uploadImage)(s, f));
   const chunks = buildMessages(text, urls);
   const rawKey = o.retryKey || randomUUID();

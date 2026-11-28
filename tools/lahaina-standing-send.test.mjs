@@ -32,7 +32,7 @@ function fixture(t) {
   const f = { home, dir, date, text, calendarPath, sentPath, quotaPath, policy, now: new Date(`${date}T00:00:00Z`), readChats, readMessages,
     inbox: async (_, notice) => { notices.push(notice); return { id: 'notice' }; }, notices, calls, log: () => {},
     sends: () => sends, readback: message => message,
-    transport: { readChats, readMessages, readMessage: async () => null, clock: () => f.now, sleep: async () => {}, readbackMs: 10,
+    transport: { preSendCheck: async () => ({ ok: true, findings: [] }), readChats, readMessages, readMessage: async () => null, clock: () => f.now, sleep: async () => {}, readbackMs: 10,
       // 整合性APIは専用統合テストで検証。この経路テストでは外部取得をモックする。
       consistencyCheck: async () => ({ ok: true, input: { scheduledSends: [] } }),
       send: async (_, body) => { sends++; sentText = body; return { pendingMessageID: 'pending', chatID: 'fixture-chat' }; } },
@@ -41,7 +41,7 @@ function fixture(t) {
     calls.push(path.basename(args[0]));
     const val = flag => args[args.indexOf(flag) + 1];
     if (args[0].endsWith('send-context-check.mjs')) {
-      const code = await checkContext(args.slice(1), { home, fetchHistory: async () => ({ target: 'fixture-chat', messages: [] }), runLlm: () => ({ ok: true, reason: 'mock context OK' }) });
+      const code = await checkContext(args.slice(1), { home, preSendCheck: async () => ({ ok: true, findings: [] }), fetchHistory: async () => ({ target: 'fixture-chat', messages: [] }), runLlm: () => ({ ok: true, reason: 'mock context OK' }) });
       if (code) throw new Error('context denied');
       return '{}';
     }

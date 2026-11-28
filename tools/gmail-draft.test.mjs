@@ -64,6 +64,7 @@ async function cli(argv, overrides = {}) {
   let tokens = 0;
   const code = await runCli({ argv, deps: {
     consistencyCheck: async () => ({ ok: true }), cleanup: async () => ({ ok: true }),
+    preSendCheck: async () => ({ ok: true, findings: [] }),
     stdout: text => output.push(text), loadLedger: () => ledger,
     fetchImpl: async () => { calls++; throw new Error('unexpected fetch'); },
     getToken: async () => { tokens++; throw new Error('unexpected token'); },
@@ -421,6 +422,17 @@ test('返信ヘッダと threadId を作成 API に渡す・注入を拒否す�
 const draftHeaders = (extra, to = 'Customer <customer@example.com>') => ({ message: { payload: { headers: [
   { name: 'To', value: to }, { name: 'Subject', value: '確認' }, ...extra,
 ] } } });
+
+test('送信前照合blockはdrafts/sendを呼ばずfindingsを返す', async () => {
+  let sends = 0, checked = 0;
+  const result = await cli(['--send', 'draft', '--json'], {
+    getToken: async () => 'fixture',
+    fetchImpl: async url => { if (url.endsWith('/drafts/send')) sends++; return response(draftHeaders([])); },
+    preSendCheck: async () => { checked++; return { ok: false, findings: [{ code: 'DONE_REINSTRUCTED', fix: 'その文を削る' }] }; },
+  });
+  assert.equal(result.code, 2); assert.equal(checked, 1); assert.equal(sends, 0);
+  assert.equal(JSON.parse(result.output.at(-1)).errorKind, 'pre_send_reply_blocked');
+});
 test('既存のブース営業下書きは佐藤さんのCC欠落時に送信を停止する', async () => {
   let calls = 0;
   const result = await cli(['--send', 'draft', '--json'], {

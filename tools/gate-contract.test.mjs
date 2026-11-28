@@ -96,6 +96,11 @@ test('new rollout entries must declare the seven day window; legacy inventory is
       assert.equal(row.immediatePolicy, '2026-10-23 kim 指示: LINE broadcast による宛先違い誤送信の再発防止');
       continue; // Misdelivery to the wrong person cannot be undone, immediate on all PCs.
     }
+    if (name === 'oneoff-send-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-11-28 kim 指示: 使い捨てスクリプトからの送信禁止');
+      continue;
+    }
     if (name === 'outbound-claim-evidence-gate') {
       assert.equal(row.rollout, 'deny');
       assert.equal(row.immediatePolicy, '2026-10-27 TimeRex 実害: 社外送信の完了主張に読み戻し証拠を要求');

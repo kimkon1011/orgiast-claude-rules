@@ -18,6 +18,8 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { BeeperApiError, sendMessage, listMessages, listChats } from './beeper-api.mjs';
 import * as beeperApi from './beeper-api.mjs';
+import { checkBeeperReply, assertReplyCheck } from './lib/pre-send-reply-check.mjs';
+import { writePreSendPass } from './lib/pre-send-marker.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
 import { assertSendConsistency, afterSendCleanup } from './send-consistency-check.mjs';
 import { prepareTemaSend } from './lib/unattended-tema.mjs';
@@ -154,7 +156,7 @@ export function matchesStandingReadback(message, { text, chatID, dispatchedAt, o
     && matchesBeeperText(message.text, text);
 }
 
-export async function beeperSend(options, { readMessages = listMessages, readChats = listChats, send = sendMessage, readMessage = (...args) => beeperApi.getMessage?.(...args), clock = () => new Date(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), readbackMs = 15000, consistencyCheck = assertSendConsistency, cleanup = afterSendCleanup, consistencyDeps = {} } = {}) {
+export async function beeperSend(options, { preSendCheck = checkBeeperReply, readMessages = listMessages, readChats = listChats, send = sendMessage, readMessage = (...args) => beeperApi.getMessage?.(...args), clock = () => new Date(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), readbackMs = 15000, consistencyCheck = assertSendConsistency, cleanup = afterSendCleanup, consistencyDeps = {} } = {}) {
   const { chatID, bodyFile, replyTo, queueID, receiptID, home } = options;
 
   if (!chatID) throw new Error('--chat が必要です');
@@ -215,6 +217,7 @@ export async function beeperSend(options, { readMessages = listMessages, readCha
   }});
 
   // Recheck after all asynchronous context checks, then reserve the date durably.
+  assertReplyCheck(await preSendCheck({ chatID, draft: text, now: clock(), imageNotes: options.imageNotes, saveDir: options.saveDir }));
   if (standing) {
     const date = await validateStanding();
     verifyReceipt(home, queueID, receiptID);
@@ -223,8 +226,9 @@ export async function beeperSend(options, { readMessages = listMessages, readCha
   const dispatchedAt = Date.now();
   const checkInput={channel:'beeper',to:chatID,text,draftId:queueID,draftReadAt:options.draftReadAt || referenceAt};
   const checked=await consistencyCheck(checkInput,{home,...consistencyDeps});
+  writePreSendPass({ chatID, text, home });
   // 4. 送信
-  const result = await send(chatID, text, replyTo ? { replyToMessageID: replyTo } : {});
+  const result = await send(chatID, text, replyTo ? { replyToMessageID: replyTo } : {}, { env: { ...process.env, ORGIAST_HOME: home } });
 
   if (!result || !result.pendingMessageID) {
     throw Object.assign(new Error('送信結果に pendingMessageID がありません'), { exitCode: 3 });
@@ -302,6 +306,8 @@ export async function main(args = process.argv.slice(2), deps = {}) {
   --reply-to <id>    返信先メッセージ ID
   --queue-id <id>    必須。reply-queue の項目 ID
   --receipt <rid>    必須。reply-queue の receipt ID
+  --image-notes <path> 添付を読んで記録した説明のJSON
+  --save-dir <path> 添付の保存先
 `);
     process.exit(1);
   }
@@ -328,7 +334,8 @@ export async function main(args = process.argv.slice(2), deps = {}) {
   }
 
   try {
-    const result = await beeperSend({ chatID, bodyFile, replyTo, queueID, receiptID, home }, deps);
+    const imageNotes = val('--image-notes') ? JSON.parse(fs.readFileSync(val('--image-notes'), 'utf8')) : {};
+    const result = await beeperSend({ chatID, bodyFile, replyTo, queueID, receiptID, home, imageNotes, saveDir: val('--save-dir') }, deps);
     console.log(JSON.stringify(result));
     return result.ok ? 0 : 3;
   } catch (err) {

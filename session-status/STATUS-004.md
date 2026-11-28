@@ -1,6 +1,6 @@
-# session-status  PC=004  host=004MINPAKU  updated 2026-11-28 22:13 JST
+# session-status  PC=004  host=004MINPAKU  updated 2026-11-28 23:13 JST
 
-- claude auth: {"at":"2026-11-28T13:13:13.510Z","event":"launch_allowed","reason":"below_cap","activeCount":0,"limit":2,"staleHours":3,"abandoned":[]} { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "f
+- claude auth: {"at":"2026-11-28T14:13:13.644Z","event":"launch_allowed","reason":"below_cap","activeCount":0,"limit":2,"staleHours":3,"abandoned":[]} { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "f
 - 案件数: 25
 
 - 004・cc-probe-1125・停止・最終更新 11/25 12:12、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める

@@ -498,13 +498,26 @@ export async function notifyLaneStops(health, { home = laneHome(), now = Date.no
   }
 }
 export function summarize(health) {
+  // Add probe freshness annotations to each lane entry (既存フィールドは不変)
+  const baseTs = health.ts || health.probedAt;
+  const baseTime = baseTs ? Date.parse(baseTs) : NaN;
+  if (Number.isFinite(baseTime)) {
+    for (const s of Object.values(health.lanes)) {
+      const probeTime = s.probedAt ? Date.parse(s.probedAt) : NaN;
+      if (Number.isFinite(probeTime)) {
+        s.probeAgeMinutes = Math.round((baseTime - probeTime) / 60000);
+        s.probeStale = s.probeAgeMinutes > 60 || (s.alive === false && s.probeResult === 'alive');
+      }
+    }
+  }
   const substituted = ([, s]) => !s.alive && s.via === 'openrouter' && health.lanes.openrouter?.alive;
   const alive = Object.entries(health.lanes).filter((entry) => entry[1].alive || substituted(entry)).map(([p,s]) => substituted([p, s]) ? `${p} ✅(OpenRouter経由)` : `${p} ✅${s.reason === 'probe_ok:stale' ? `(stale ${Math.floor((time(health.ts) - time(s.lastProbeOkAt)) / 60000)}m)` : ''}`).join(' ') || 'なし';
   const dead = Object.entries(health.lanes).filter((entry) => !entry[1].alive && !substituted(entry)).map(([p,s]) => {
     const reason = s.reason === 'probe_failed:stale' ? `probe_failed, 前回OK ${s.lastProbeOkAt?.slice(0, 10) || 'なし'}` : s.reason === 'model_retired' ? `model_retired: ${s.model}` : s.reason;
     const user = health.deadNeedsUser?.find(x => x.provider === p);
     const next = s.autoProbeStarted ? '自動再確認中' : Number.isFinite(time(s.until)) && time(s.until) > time(health.ts) ? `復帰予定 ${new Date(time(s.until)).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).replace(/^\d{4}\//, '')} JST` : user ? `要対応: ${String(user.fix).replace(/\s+/g, ' ').slice(0, 80)}` : '自動再確認待ち';
-    return `${p} ❌(${reason})(${next})`;
+    const probeNote = s.probeResult === 'alive' ? (s.probeAgeMinutes !== undefined ? `（probe記録は alive・${s.probeAgeMinutes}分前）` : '（probe記録は alive・時刻不明）') : '';
+    return `${p} ❌(${reason})(${next})${probeNote}`;
   }).join(' ') || 'なし';
   const summary = `生存: ${alive} ／ 停止: ${dead} ／ 修復: ${health.repairs.map(r => typeof r === 'string' ? r : `${r.provider} ${r.action}`).join(', ') || 'なし'}${health.errors.length ? ` ／ 保存エラー: ${health.errors.join(', ')}` : ''}`;
   return health.repairFirst?.required ? `${summary}\n🛑 安価AIレーン停止（${health.repairFirst.reasons.join(', ')}）: 絶対ルール — 最優先でこの場で修復する。修復（または人にしかできない操作の依頼送信）が済むまで通常タスクに着手しない。手順: ${health.repairFirst.steps.join(' ')}` : summary;

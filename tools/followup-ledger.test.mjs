@@ -29,6 +29,7 @@ import {
   isOffSiteTask,
   siteConstraint,
   CAFE_SOLO_REASON,
+  isPreShiftPickupMailException,
 } from './followup-ledger.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -667,6 +668,12 @@ test('site constraint helpers and appended columns', () => {
   assert.equal(isOffSiteTask({ task: '店内で確認', taskSite: 'off-site' }), true);
   assert.equal(siteConstraint({ assigneeRole: 'cafe-solo', task: '法務局へ訪問' }).blocked, true);
   assert.equal(siteConstraint({ assigneeRole: 'remote-assistant', task: '法務局へ訪問' }).blocked, false);
+  assert.equal(isPreShiftPickupMailException({ id: 'GB179-shaho-honami' }), true);
+  assert.equal(isPreShiftPickupMailException({ id: 'GB179-shaho-yurie' }), false);
+  assert.equal(siteConstraint({ id: 'GB179-shaho-honami', assigneeRole: 'cafe-solo', task: '11/30出勤前に受け取り、簡易書留で投函する', taskSite: 'off-site' }).blocked, false);
+  assert.equal(siteConstraint({ id: 'GB179-shaho-honami', assigneeRole: 'cafe-solo', task: '11/30出勤前に受け取り、簡易書留で投函する', taskSite: 'off-site' }).exception, 'pre-shift-pickup-mail');
+  assert.equal(siteConstraint({ id: 'GB179-shaho-yurie', assigneeRole: 'cafe-solo', task: '11/30出勤前に受け取り、簡易書留で投函する', taskSite: 'off-site' }).blocked, true);
+  assert.equal(siteConstraint({ id: 'T3', assigneeRole: 'cafe-solo', task: '社保書類を郵便局で発送', taskSite: 'off-site' }).blocked, true);
 });
 
 test('P: cafe-solo off-site is stopped, escalated, alerted, and never nudged', async () => {
@@ -782,6 +789,21 @@ test('T3 人: 社保書類 cafe-solo off-site は --force でも催促0', async 
     assert.equal(mock().sent.length, 0);
     assert.equal(store().items[0].status, '止まった');
     assert.ok(mock().spawns.some((s) => s.body.includes('付け替え')));
+  });
+});
+
+test('GB179-shaho-honami: 出勤前の受取・投函は cafe-solo off-site でも催促する（金さん 2026-11-28 例外）', async () => {
+  await outcomeScenario('t3-preShift', async ({ add, run, store, mock }) => {
+    await add('GB179-shaho-honami', ['--assignee-role', 'cafe-solo', '--site', 'off-site'], {
+      task: '11/30出勤前に受け取り、簡易書留で投函する',
+    });
+    await run(['nudge', '--id', 'GB179-shaho-honami', '--dry-run']);
+    assert.equal(mock().sent.length, 0);
+    assert.notEqual(store().items[0].status, '止まった');
+    assert.equal(store().items[0].statusReason.includes(CAFE_SOLO_REASON), false);
+    await run(['nudge', '--id', 'GB179-shaho-honami']);
+    assert.equal(mock().sent.length, 1);
+    assert.ok(['依頼中', '催促済み'].includes(store().items[0].status));
   });
 });
 

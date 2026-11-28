@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 グロボ用 claude -p ランチャーテンプレート。PowerShell 5.0+ 互換。
 既定モデルは sonnet。opus は -ModelReason 10 文字以上必須。

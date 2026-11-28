@@ -135,10 +135,10 @@ test('引用・署名を除いた本文が短いメールは LLM が no なら�
   const threads = [thread(message('m1'))];
   const ack = { m1: '11月6日（金）14:00〜15:00で押さえておりますので、宜しくお願いいたします。\n\n> 元の長い引用\n> ' + 'あ'.repeat(400) };
   let r = await run(fixture(t), { threads, bodies: ack }, { classify: () => assert.fail('了承だけと判る文は LLM を呼ばない') });
-  assert.equal(r.state.items.length, 0); assert.deepEqual(r.state.stats, { llmCalls: 0, llmFailures: 0, ackSkipped: 1, answeredElsewhere: 0, gmailRetries: 0, tokenRetries: 0, threadErrors: 0, mailboxRetries: 0 });
+  assert.equal(r.state.items.length, 0); assert.deepEqual(Object.fromEntries(Object.entries(r.state.stats).filter(([key]) => !key.endsWith('Ms'))), { llmCalls: 0, llmFailures: 0, ackSkipped: 1, answeredElsewhere: 0, gmailRetries: 0, tokenRetries: 0, threadErrors: 0, mailboxRetries: 0 });
   const other = { m1: 'では来週の水曜にお伺いします。' };
   r = await run(fixture(t), { threads, bodies: other }, { classify: () => false });
-  assert.equal(r.state.items.length, 0); assert.deepEqual(r.state.stats, { llmCalls: 1, llmFailures: 0, ackSkipped: 1, answeredElsewhere: 0, gmailRetries: 0, tokenRetries: 0, threadErrors: 0, mailboxRetries: 0 });
+  assert.equal(r.state.items.length, 0); assert.deepEqual(Object.fromEntries(Object.entries(r.state.stats).filter(([key]) => !key.endsWith('Ms'))), { llmCalls: 1, llmFailures: 0, ackSkipped: 1, answeredElsewhere: 0, gmailRetries: 0, tokenRetries: 0, threadErrors: 0, mailboxRetries: 0 });
   r = await run(fixture(t), { threads, bodies: other }, { classify: () => true });
   assert.equal(r.state.items.length, 1);
   r = await run(fixture(t), { threads, bodies: other }, { classify: () => null });
@@ -256,4 +256,20 @@ test('メールボックス全体のリトライ可能例外は30秒待って1�
   assert.equal(result.state.items.length, 1);
   assert.equal(result.state.stats.mailboxRetries, 1);
   assert.ok(sleeps.includes(30_000), 'メールボックス再試行前に30秒待つ');
+});
+
+test('予算超過で途中保存し、前回の項目を保持して次回に再取得する', async t => {
+  const home = fixture(t);
+  await run(home, { threads: [thread(message('m1'))] });
+  let clock = 0;
+  const result = await run(home, {}, { now: NOW + HOUR, budgetMs: 5, clock: () => clock,
+    deps: { ...deps(), getToken: async () => { clock = 5; return 'token'; } } });
+  const saved = readJsonSafe(externalFile(home));
+  assert.equal(result.state.partial, true);
+  assert.equal(saved.partialReason, 'budget_exceeded');
+  assert.ok(saved.unprocessedCount > 0);
+  assert.equal(saved.items.length, 1);
+  assert.equal(saved.generatedAt, new Date(NOW + HOUR + 5).toISOString());
+  assert.equal(saved.stats.totalMs, 5);
+  assert.equal((await run(home)).state.partial, undefined);
 });

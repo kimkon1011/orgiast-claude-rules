@@ -369,3 +369,11 @@ test('hook displays only added ids at the end and suppresses repeated prompts', 
   assert.equal(context({ ...input, prompt: 'second request' }, options), null);
   assert.equal(context({ ...input, prompt: '<<autonomous-loop-dynamic>>' }, options), null);
 });
+
+test('新しい partial 状態は停止扱いせず途中までと表示する', t => {
+  const home = fixture(t);
+  writeExternal(home, { partial: true, sources: { 'kim@orgiast.jp': { partial: true, ok: false, consecutiveFailures: 2 } }, items: [extItem()] });
+  const items = collectAwaiting({ home, now: NOW });
+  assert.ok(!items.some(item => item.id === 'ex:monitor'));
+  assert.match(items[0].title, /（途中まで）/);
+});

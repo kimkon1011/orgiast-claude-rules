@@ -315,12 +315,12 @@ export async function extractPdfViaDriveOcr(bytes, { request, user }) {
  */
 export async function collectReadableContent({ messages = [], downloadAttachment, fetchImpl, readGoogleUrl, maxImages = 4, maxTextBytes = 30000, home, extractPdf = extractPdfText, ocrRequest, targetIds } = {}) {
   let remaining = maxTextBytes;
-  const appendDocument = (source, name, text) => {
+  const appendDocument = (source, name, text, messageID, attachmentIndex) => {
     if (!String(text || '').trim()) throw new Error('空の本文');
     const clipped = trimBytes(text, remaining);
     const truncated = Buffer.byteLength(String(text)) > remaining;
     remaining -= Buffer.byteLength(clipped);
-    documents.push({ source, name, text: clipped, ...(truncated ? { truncated: true } : {}) });
+    documents.push({ source, name, text: clipped, ...(messageID ? { messageID, attachmentIndex } : {}), ...(truncated ? { truncated: true } : {}) });
   };
   downloadAttachment ||= async attach => {
     const response = await (fetchImpl || fetch)(attach.url || attach.srcURL, { signal: AbortSignal.timeout(15000) });
@@ -351,7 +351,7 @@ export async function collectReadableContent({ messages = [], downloadAttachment
       else contextFailures.push(f);
     };
 
-    for (const attach of attachList) {
+    for (const [attachmentIndex, attach] of attachList.entries()) {
       const name = attach.fileName || attach.name || attach.filename || attach.mimeType || 'ファイル';
       // Missing URLs must fail closed rather than silently losing attachment content.
       if (!attach.srcURL && !attach.url && !attach.data) { addFailure({ name, reason: '添付URLなし' }); continue; }
@@ -400,9 +400,9 @@ export async function collectReadableContent({ messages = [], downloadAttachment
                 }
                 if (ocrError) throw ocrError;
               }
-              appendDocument('attachment', name, text);
+              appendDocument('attachment', name, text, message.id, attachmentIndex);
             } else {
-              appendDocument('attachment', name, buf.toString('utf8'));
+              appendDocument('attachment', name, buf.toString('utf8'), message.id, attachmentIndex);
             }
           } else {
             addFailure({ name, reason: '空のレスポンス' });

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
+import { assertPreSendPass } from './lib/pre-send-marker.mjs';
 
 export class BeeperApiError extends Error {
   constructor(message, code, status) {
@@ -167,6 +168,7 @@ export async function listMessages(chatID, { limit, cursor, direction } = {}, op
 }
 
 export async function sendMessage(chatID, text, { replyToMessageID, attachment } = {}, options = {}) {
+  assertPreSendPass({ chatID, text, home: options.env?.ORGIAST_HOME || process.env.ORGIAST_HOME || os.homedir() });
   const body = { text };
   if (replyToMessageID) body.replyToMessageID = replyToMessageID;
   if (attachment) body.attachment = attachment;

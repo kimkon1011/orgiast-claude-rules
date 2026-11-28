@@ -6,6 +6,7 @@
     {"path": "tools/daily-beeper-approval.mjs", "scope": "kim-only", "step": null, "reason": "誤検出: 先頭の「一回にまとめる」コメントで CLAUDE.md に言及しただけ。~/.claude の設定は読まず、定時タスクも登録しない（2026-11-28）"},
     {"path": "tools/line-group-send.mjs", "scope": "kim-only", "step": null, "reason": "誤検出: 先頭の「一回にまとめる」コメントで CLAUDE.md に言及しただけ。~/.claude の設定は読まず、定時タスクも登録しない（2026-11-28）"},
     {"path": "tools/followup-ledger.mjs", "scope": "fleet", "step": "task:followup-ledger", "reason": "全PCから登録・doctor・sync、PCなし行はhub 008が催促"},
+    {"path": "tools/claude-md-block.mjs", "scope": "kim-only", "reason": "手動の一回限りツール。CLAUDE.mdへ送信前の相手発言照合ブロックをBEGIN/END付きで冪等に差し込む。同じブロックはclaude-md-preferences.md経由でテンプレートに入るためconverge配布は不要（2026-11-28）"},
     {"path": "tools/claude-md-followup.md", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "convergeの共通ブロックに依頼台帳の登録方法6行を配布"},
     {"path": "tools/register-reply-notify.ps1", "scope": "kim-only", "step": "task:reply-notify", "reason": "014で顧客返信を監視し佐藤さんへ一度だけ通知するタスク。複数PC登録は重複通知になるため運用PC限定"},
     {"path": "tools/register-catch-and-act.ps1", "scope": "kim-only", "step": "task:catch-and-act", "reason": "015でkimのLINE・メールを読み、個人カレンダー更新と承認キューを処理するため明示登録のみ"},

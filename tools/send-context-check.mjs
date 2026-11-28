@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { checkChannelReply } from './lib/pre-send-reply-check.mjs';
 import { listMessages } from './beeper-api.mjs';
 import { loadSecrets, resolveGroup } from './lib/line-group-access.mjs';
 import { latestOf, readOutbound, textHash, writeContextMarker, writeKimApprovedAudit } from './lib/send-context.mjs';
@@ -85,18 +86,18 @@ function formatScheduledAt(now) {
   return `${parts.year}-${parts.month}-${parts.day}（${parts.weekday}）${parts.hour}:${parts.minute}`;
 }
 
-export async function fetchHistory(channel, target, { home = process.env.ORGIAST_HOME || os.homedir(), fetchImpl = gwsFetch, internalSenders = loadInternalSenders(), getGmailToken = mintDwdToken } = {}) {
+export async function fetchHistory(channel, target, { home = process.env.ORGIAST_HOME || os.homedir(), fetchImpl = gwsFetch, internalSenders = loadInternalSenders(), getGmailToken = mintDwdToken, readOnly = false } = {}) {
   if (channel === 'line') {
     const s = await loadSecrets({ home }); const id = await resolveGroup(s, target);
-    const url = `${s.SUPABASE_URL}/rest/v1/channel_messages?select=id,created_at,sender_display_name,body,direction,external_message_id&channel=eq.line&external_thread_id=eq.${encodeURIComponent(id)}&order=created_at.desc&limit=100`;
+    const url = `${s.SUPABASE_URL}/rest/v1/channel_messages?select=*&channel=eq.line&external_thread_id=eq.${encodeURIComponent(id)}&order=created_at.desc&limit=100`;
     const r = await fetchImpl(url, { headers: sbHeaders(s) }); if (!r.ok) throw await responseError('LINE 履歴取得失敗', r);
-    const incoming = (await r.json()).map(x => ({ id: x.external_message_id || x.id, at: x.created_at, side: x.direction || 'external', sender: x.sender_display_name, text: x.body }));
+    const incoming = (await r.json()).map(x => ({ id: x.external_message_id || x.id, at: x.created_at, side: x.direction === 'outbound' ? 'self' : x.direction || 'external', sender: x.sender_display_name, text: x.body, attachments: x.attachments || x.metadata?.attachments || [] }));
     const sent = readOutbound(id, home).map(x => ({ id: x.messageId, at: x.at, side: 'self', sender: 'オージャスト', text: x.text }));
     return { target: id, messages: trimHistory([...incoming, ...sent].sort((a,b) => Date.parse(a.at)-Date.parse(b.at))).map(x => classifyMessage(x, channel, internalSenders)) };
   }
   if (channel === 'beeper') {
     const r = await listMessages(target, { limit: 100 });
-    return { target, messages: trimHistory((r.items || []).map(x => ({ id:x.id, at:x.timestamp, side:x.isSender?'self':'external', sender:x.senderName, text:x.text }))).map(x => classifyMessage(x, channel, internalSenders)) };
+    return { target, messages: trimHistory((r.items || []).map(x => ({ id:x.id, at:x.timestamp, side:x.isSender?'self':'external', sender:x.senderName, senderID:x.senderID, text:x.text, attachments:x.attachments || [] }))).map(x => classifyMessage(x, channel, internalSenders)) };
   }
   if (channel === 'discord') {
     const token = resolveDiscordBotToken(home); if (!token) throw new Error('Discord Bot トークンがありません');
@@ -106,12 +107,14 @@ export async function fetchHistory(channel, target, { home = process.env.ORGIAST
     if (/^\d{15,22}$/.test(target)) {
       r = await fetchImpl(`https://discord.com/api/v10/channels/${encodeURIComponent(target)}/messages?limit=100`, { headers });
       if (r.status === 404) {
+        if (readOnly) throw new Error('読み取り専用では既存のDiscordチャンネルIDを指定してください');
         const dm=await fetchImpl('https://discord.com/api/v10/users/@me/channels',{method:'POST',headers,body:JSON.stringify({recipient_id:target})});
         if(!dm.ok) throw await responseError('Discord DM チャンネル作成失敗',dm);
         channelId=(await dm.json()).id;
         r=await fetchImpl(`https://discord.com/api/v10/channels/${encodeURIComponent(channelId)}/messages?limit=100`,{headers});
       }
     } else {
+      if (readOnly) throw new Error('読み取り専用では既存のDiscordチャンネルIDを指定してください');
       const members=await getDiscordMembers({query:target,home,fetchImpl});
       const member=members&&matchMember(target,members);
       if(!member) throw new Error(`Discord 宛先「${target}」を一意に特定できません`);
@@ -121,17 +124,18 @@ export async function fetchHistory(channel, target, { home = process.env.ORGIAST
       r=await fetchImpl(`https://discord.com/api/v10/channels/${encodeURIComponent(channelId)}/messages?limit=100`,{headers});
     }
     if (!r.ok) throw await responseError('Discord 履歴取得失敗', r);
-    return { target:channelId, messages: trimHistory((await r.json()).map(x => ({ id:x.id, at:x.timestamp, side:x.author?.bot?'self':'external', senderId:x.author?.id, senderBot:Boolean(x.author?.bot), sender:x.author?.global_name||x.author?.username, text:x.content })).reverse()).map(x => classifyMessage(x, channel, internalSenders)) };
+    return { target:channelId, messages: trimHistory((await r.json()).map(x => ({ id:x.id, at:x.timestamp, side:x.author?.bot?'self':'external', senderId:x.author?.id, senderBot:Boolean(x.author?.bot), sender:x.author?.global_name||x.author?.username, text:x.content, attachments:x.attachments || [] })).reverse()).map(x => classifyMessage(x, channel, internalSenders)) };
   }
   if (channel === 'gmail') {
     const user = process.env.ORGIAST_GMAIL_USER || 'seisaku-team@orgiast.jp';
     const token = await getGmailToken({ user, scope:'https://www.googleapis.com/auth/gmail.readonly', fetchImpl });
     const headers = { Authorization:`Bearer ${token}` }; let threadId = target;
-    if (target.includes('@')) { const q = encodeURIComponent(`(from:${target} OR to:${target}) -in:drafts`); const lr = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=20`, { headers }); const list = await lr.json(); threadId = list.messages?.[0]?.threadId; }
+    if (target?.includes('@')) { const q = encodeURIComponent(`(from:${target} OR to:${target}) -in:drafts`); const lr = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=20`, { headers }); if (!lr.ok) throw await responseError('Gmail履歴検索失敗', lr); const list = await lr.json(); threadId = list.messages?.[0]?.threadId; }
     if (!threadId) throw new Error('Gmail スレッドが見つかりません');
     const r = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`, { headers }); if (!r.ok) throw await responseError('Gmail 履歴取得失敗', r);
-    const data = await r.json(); const decode = p => p?.body?.data ? Buffer.from(p.body.data,'base64url').toString('utf8') : (p?.parts||[]).map(decode).join('\n');
-    return { target: threadId, messages: trimHistory((data.messages||[]).filter(x => !(x.labelIds||[]).includes('DRAFT')).map(x => { const h=Object.fromEntries((x.payload?.headers||[]).map(v=>[v.name.toLowerCase(),v.value])); return { id:x.id, at:new Date(Number(x.internalDate)).toISOString(), side:addressOf(h.from)===user.toLowerCase()?'self':'external', sender:h.from, text:decode(x.payload) }; })).map(x => classifyMessage(x, channel, internalSenders)) };
+    const data = await r.json(); const decode = p => p?.filename ? '' : p?.body?.data ? Buffer.from(p.body.data,'base64url').toString('utf8') : (p?.parts||[]).map(decode).join('\n');
+    const attachments = p => [...(p?.filename || p?.body?.attachmentId ? [{ type: p.mimeType?.startsWith('image/') ? 'img' : 'file', fileName: p.filename, mimeType: p.mimeType, attachmentID: p.body?.attachmentId }] : []), ...(p?.parts || []).flatMap(attachments)];
+    return { target: threadId, messages: trimHistory((data.messages||[]).filter(x => !(x.labelIds||[]).includes('DRAFT')).map(x => { const h=Object.fromEntries((x.payload?.headers||[]).map(v=>[v.name.toLowerCase(),v.value])); return { id:x.id, at:new Date(Number(x.internalDate)).toISOString(), side:addressOf(h.from)===user.toLowerCase()?'self':'external', sender:h.from, text:decode(x.payload), attachments:attachments(x.payload) }; })).map(x => classifyMessage(x, channel, internalSenders)) };
   }
   throw new Error(`未対応 channel: ${channel}`);
 }
@@ -299,6 +303,9 @@ export async function main(argv=process.argv.slice(2), deps={}) {
     return 3;
   }
   const result=await (deps.fetchHistory||fetchHistory)(channel,target,{home:deps.home});
+  const imageNotes = deps.imageNotes || (val('--image-notes') ? JSON.parse(fs.readFileSync(val('--image-notes'), 'utf8')) : {});
+  const replyCheck = await (deps.preSendCheck || checkChannelReply)({ channel, target: result.target, draft: text, messages: result.messages, home: deps.home, now: deps.now, api: deps.api, imageNotes, saveDir: val('--save-dir') || undefined });
+  if (!replyCheck.ok) { console.error(JSON.stringify(replyCheck, null, 2)); return 2; }
   for(const line of labelHistory(result.messages)) console.log(line.slice(0, 700));
   const periodicReport=argv.includes('--periodic-report')?{recipient:val('--recipient')||'宛先本人',kind:'定期報告'}:false;
   let verdict;

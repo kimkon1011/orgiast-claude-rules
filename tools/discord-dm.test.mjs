@@ -13,8 +13,8 @@ import { fileURLToPath } from 'node:url';
 import { makeIndex } from './onboarding-sync.mjs';
 import { main as realMain, REPLY_TO_KIM_FOOTER, sendDiscordDm as realSendDiscordDm } from './discord-dm.mjs';
 const contextApproved = async () => ({ reason: 'test' });
-const sendDiscordDm = (target, body, options={}) => realSendDiscordDm(target, body, { assertContextApproved: contextApproved, consistencyCheck: async () => ({ ok: true }), cleanup: async () => ({ ok: true }), ...options });
-const main = (args, options={}) => realMain(args, { assertContextApproved: contextApproved, consistencyCheck: async () => ({ ok: true }), cleanup: async () => ({ ok: true }), ...options });
+const sendDiscordDm = (target, body, options={}) => realSendDiscordDm(target, body, { preSendCheck: async () => ({ ok: true, findings: [] }), assertContextApproved: contextApproved, consistencyCheck: async () => ({ ok: true }), cleanup: async () => ({ ok: true }), ...options });
+const main = (args, options={}) => realMain(args, { preSendCheck: async () => ({ ok: true, findings: [] }), assertContextApproved: contextApproved, consistencyCheck: async () => ({ ok: true }), cleanup: async () => ({ ok: true }), ...options });
 
 const withFooter = text => `${text}\n\n${REPLY_TO_KIM_FOOTER}`;
 

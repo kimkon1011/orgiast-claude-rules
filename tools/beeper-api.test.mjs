@@ -6,6 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { BeeperApiError, getBeeperToken, beeperFetch, getAccounts, listChats, listMessages, sendMessage } from './beeper-api.mjs';
+import { writePreSendPass } from './lib/pre-send-marker.mjs';
 
 function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'beeper-api-test-'));
@@ -144,6 +145,9 @@ test('7. listMessages: 正常系', async t => {
 });
 
 test('8. sendMessage: 正常系', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'presend-api-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  writePreSendPass({ chatID: '!line_1:localhost', text: 'こんにちは', home });
   let requestBody = null;
   const server = await startMockServer((req, res) => {
     assert.equal(req.method, 'POST');
@@ -158,7 +162,7 @@ test('8. sendMessage: 正常系', async t => {
   t.after(() => new Promise(resolve => server.close(resolve)));
   const port = server.address().port;
   const result = await sendMessage('!line_1:localhost', 'こんにちは', { replyToMessageID: '101' }, {
-    env: { BEEPER_API_BASE: `http://127.0.0.1:${port}`, BEEPER_ACCESS_TOKEN: 'test' },
+    env: { BEEPER_API_BASE: `http://127.0.0.1:${port}`, BEEPER_ACCESS_TOKEN: 'test', ORGIAST_HOME: home },
   });
   assert.equal(requestBody.text, 'こんにちは');
   assert.equal(requestBody.replyToMessageID, '101');

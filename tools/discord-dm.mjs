@@ -12,6 +12,7 @@ import { assertSendConsistency, afterSendCleanup } from './send-consistency-chec
 import { stripHumanOnly } from './lib/handback-guard.mjs';
 
 import { prepareTemaSend } from './lib/unattended-tema.mjs';
+import { checkPreSendReply, normalizeHistory, assertReplyCheck } from './lib/pre-send-reply-check.mjs';
 
 const API = 'https://discord.com/api/v10';
 const USER_AGENT = 'orgiast-discord-dm/1.0';
@@ -95,6 +96,13 @@ export async function sendDiscordDm(target, body, options = {}) {
       if (!history.ok) throw new Error(`Discord 履歴取得が HTTP ${history.status}`);
       return latestOf((await history.json()).map(m => ({ id: m.id, at: m.timestamp })));
     }});
+    const preSendCheck = options.preSendCheck || (async () => {
+      const response = await fetchImpl(`${API}/channels/${channelId}/messages?limit=100`, { headers });
+      if (!response.ok) throw new Error(`Discord 履歴取得が HTTP ${response.status}`);
+      const messages = (await response.json()).map(m => ({ id: m.id, at: m.timestamp, senderName: m.author?.global_name || m.author?.username, isSender: Boolean(m.author?.bot), text: m.content, attachments: m.attachments || [] }));
+      return checkPreSendReply({ draft: message, messages: normalizeHistory(messages, { chatID: channelId }), now: options.now });
+    });
+    assertReplyCheck(await preSendCheck({ channel: 'discord', target: channelId, draft: message }));
     const checkInput = {channel:'discord',to:channelId,text:message,draftId:options.draftId,draftReadAt:options.draftReadAt || context?.checkedAt};
     const checked = await (options.consistencyCheck ?? assertSendConsistency)(checkInput,{home,fetchImpl,...options.consistencyDeps});
     if(options.checkOnly)return {channelId,checkOnly:true,consistencyOk:true,findings:checked.findings};

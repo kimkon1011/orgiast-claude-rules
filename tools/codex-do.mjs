@@ -1421,11 +1421,12 @@ export const deepseekFirstOutputTimeoutSecs = (env = {}) => positiveEnv(
   DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS
 );
 
-export function shouldAbortFirstOutputStall({ elapsedSecs, outputChars, timeoutSecs = DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS } = {}) {
+export function shouldAbortFirstOutputStall({ elapsedSecs, outputChars, timeoutSecs = DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS, stderrChars = 0 } = {}) {
   return [elapsedSecs, outputChars, timeoutSecs].every(Number.isFinite)
     && timeoutSecs > 0
     && elapsedSecs >= timeoutSecs
-    && outputChars === 0;
+    && outputChars === 0
+    && stderrChars === 0;
 }
 
 export function shouldAbortPolicyStall({
@@ -1966,6 +1967,7 @@ function execute(command, commandArgs, options = {}) {
     child.stderr.on('data', (chunk) => {
       stderr += chunk.toString();
       process.stderr.write(chunk);
+      clearTimeout(firstOutputTimer);
       checkPolicyStall();
       abortBillingIfNeeded();
     });

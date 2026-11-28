@@ -39,7 +39,9 @@ function fixture(t, { chats = [chat()], messages, decision = reply } = {}) {
   };
   const options = {
     home, now: () => NOW, api, llm: async () => JSON.stringify(decision), sleepImpl: async () => {},
-    addItemImpl
+    addItemImpl,
+    // 既存テストは送信前照合の対象外。照合を試すテストは自分の preSendCheck で上書きする。
+    preSendCheck: async () => ({ ok: true, findings: [] }),
   };
   // Keep extraction separate from reply/retry mocks and never contact a live Beeper.
   options.beeperFetch = async () => ({ items: [] });
@@ -75,7 +77,8 @@ test('自動返信: 関連チャットの未読画像を検出して送信せず
   const related = chat({ id: 'related', title: '別の会話', lastActivity: new Date(NOW - 1000).toISOString(), participants: { items: [{ id: 'peer', fullName: '田中' }] } });
   const f = fixture(t, { chats: [target, related] });
   f.data.related = [message({ id: 'unread', text: '', attachments: [{ type: 'img', srcURL: 'mxc://fixture' }] })];
-  const result = await runOnce(f.options);
+  // 実物の送信前照合を通す（fixture 既定の通過スタブを外す）
+  const result = await runOnce({ ...f.options, preSendCheck: undefined });
   assert.equal(result.replied, 0); assert.equal(f.sent.length, 0);
   assert.ok(f.inboxItems.some(item => item.text.includes('UNREAD_IMAGE')));
 });

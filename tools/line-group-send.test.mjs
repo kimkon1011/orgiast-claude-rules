@@ -8,7 +8,7 @@ import { main, parseArgs, buildMessages, loadSecrets, resolveGroup, assertSendab
 
 test('LINE送信直前の未読画像はskip-context-checkでも送信停止', async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'line-presend-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const file = path.join(home, 'body.txt'); fs.writeFileSync(file, withTema('控えを確認してください'));
+  const file = path.join(home, 'body.txt'); fs.writeFileSync(file, withTema('本日の発送が完了しました。追跡番号は後ほど共有します。'));
   fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude', 'line-send.env'), 'SUPABASE_URL=https://fixture.invalid\nSUPABASE_SERVICE_ROLE_KEY=fixture\nLINE_CHANNEL_ACCESS_TOKEN=fixture');
   let posts = 0;
   await assert.rejects(() => main(['--group','C10930732da844f79c6032a40705a4d73','--text-file',file,'--skip-context-check'], {

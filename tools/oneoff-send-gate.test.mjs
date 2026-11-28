@@ -4,7 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { judge } from './oneoff-send-gate.mjs';
+// 実行時の cwd に依存せず CLI を起動する（gb-reports 等から実行すると相対パスが外れて exit 1 になった）
+const GATE_CLI=fileURLToPath(new URL('./oneoff-send-gate.mjs', import.meta.url));
 function fixture(t) { const root=fs.mkdtempSync(path.join(os.tmpdir(),'oneoff gate-')); t.after(()=>fs.rmSync(root,{recursive:true,force:true})); return root; }
 const input=(cwd,command,tool_name='PowerShell')=>({cwd,tool_name,tool_input:{command}});
 for (const [name,source] of [
@@ -29,6 +32,6 @@ test('tools正規入口だけ除外・偽toolsは停止',t=>{
 test('node.exe・引数・別cwd・CLI exit2 と理由',t=>{
   const root=fixture(t),file=path.join(root,'send.js'); fs.writeFileSync(file,"import { sendMessage } from './beeper-api.mjs'; sendMessage(chat,text);");
   const event=input(root,`& "${process.execPath}" --no-warnings "${file}"`); assert.equal(judge(event).decision,'block');
-  const result=spawnSync(process.execPath,['tools/oneoff-send-gate.mjs'],{input:JSON.stringify(event),encoding:'utf8'});
+  const result=spawnSync(process.execPath,[GATE_CLI],{input:JSON.stringify(event),encoding:'utf8'});
   assert.equal(result.status,2); assert.match(result.stdout,/permissionDecision.*deny/); assert.match(result.stderr,/使い捨て/);
 });

@@ -390,6 +390,8 @@ export async function runOnce(options = {}) {
         if (state.hourlyByChat[chat.id].length >= 3) { result.skipped++; continue; }
 
         let decision;
+        // 送信前照合へ渡す読み取り済み添付（試用辞退・中間失敗の定型文では空）
+        let collectedDocuments = [];
         if (trialSelfDecline) {
           const started = hasTrialStarted(historyTexts);
           decision = { answer: trialDeclineAnswer(started) };
@@ -409,6 +411,7 @@ export async function runOnce(options = {}) {
             await decide(`添付取得失敗: ${collected.failures.map(f => `${f.name}: ${f.reason}`).join('; ')}`);
             continue;
           }
+          collectedDocuments = collected.documents;
           // Search related conversations for context
           const docTexts = collected.documents.map(d => d.text);
           const terms = await extractSearchTerms(question, docTexts, llm);
@@ -526,7 +529,7 @@ export async function runOnce(options = {}) {
 
         const replyTarget = selectReplyTarget(pending);
         const imageNotes = { ...options.imageNotes };
-        for (const document of collected.documents) {
+        for (const document of collectedDocuments) {
           if (document.messageID && document.source === 'attachment') imageNotes[`${document.messageID}:${document.attachmentIndex}`] = document.text;
         }
         const replyCheck = await (options.preSendCheck || checkBeeperReply)({ chatID: chat.id, draft: content, now, api, imageNotes });

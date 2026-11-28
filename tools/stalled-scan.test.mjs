@@ -837,6 +837,109 @@ test('G2-2: ASCIIのみのIDにもハッシュが付く', () => {
 
 // ===== G3: dry-run はファイルを書き換えない =====
 
+// ===== H1: --help は台帳に何も書かず exit 0 =====
+
+test('H1: --help は台帳に何も書かず exit 0', async () => {
+  const dir = tmpDir('h1');
+  const ledgerDir = path.join(dir, 'ledger');
+  fs.mkdirSync(ledgerDir, { recursive: true });
+
+  const config = {
+    spreadsheetId: '',
+    url: '',
+    owner: 'seisaku-team@orgiast.jp',
+    approvalChannelId: '',
+    approverUserIds: [],
+    approvalTimeoutMinutes: 120,
+    quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' },
+    alertFile: path.join(dir, 'ALERT.md'),
+    pcAliases: {},
+  };
+
+  await withEnv({ FOLLOWUP_LEDGER_HOME: ledgerDir, FOLLOWUP_PC: 'test-pc' }, async () => {
+    // --help を渡す
+    const code = await main(['stalled-scan', '--help'], { config, storeMode: 'local' });
+    assert.equal(code, 0, '--help は exit 0');
+
+    // 台帳ファイルは作られない
+    const ledgerFile = path.join(ledgerDir, 'ledger.json');
+    assert.equal(fs.existsSync(ledgerFile), false, '--help 後、台帳ファイルは存在しない');
+
+    // ALERT.md も作られない
+    assert.equal(fs.existsSync(path.join(dir, 'ALERT.md')), false, '--help 後、ALERT.md は存在しない');
+
+    // -h も同じ
+    const code2 = await main(['stalled-scan', '-h'], { config, storeMode: 'local' });
+    assert.equal(code2, 0, '-h は exit 0');
+    assert.equal(fs.existsSync(ledgerFile), false, '-h 後、台帳ファイルは存在しない');
+  });
+});
+
+// ===== H2: 未知フラグ --foo は exit 2 で台帳不変 =====
+
+test('H2: 未知フラグ --foo は exit 2 で台帳不変', async () => {
+  const dir = tmpDir('h2');
+  const ledgerDir = path.join(dir, 'ledger');
+  fs.mkdirSync(ledgerDir, { recursive: true });
+
+  const config = {
+    spreadsheetId: '',
+    url: '',
+    owner: 'seisaku-team@orgiast.jp',
+    approvalChannelId: '',
+    approverUserIds: [],
+    approvalTimeoutMinutes: 120,
+    quietHours: { start: '00:00', end: '00:00', tz: 'Asia/Tokyo' },
+    alertFile: path.join(dir, 'ALERT.md'),
+    pcAliases: {},
+  };
+
+  await withEnv({ FOLLOWUP_LEDGER_HOME: ledgerDir, FOLLOWUP_PC: 'test-pc' }, async () => {
+    const ledgerFile = path.join(ledgerDir, 'ledger.json');
+
+    // 未知フラグ --foo
+    const code = await main(['stalled-scan', '--foo'], { config, storeMode: 'local' });
+    assert.equal(code, 2, '未知フラグ --foo は exit 2');
+
+    // 台帳は不変（存在しないまま）
+    assert.equal(fs.existsSync(ledgerFile), false, '--foo 後、台帳ファイルは存在しない');
+
+    // 未知フラグ --unknown-flag
+    const code2 = await main(['stalled-scan', '--unknown-flag'], { config, storeMode: 'local' });
+    assert.equal(code2, 2, '未知フラグ --unknown-flag は exit 2');
+    assert.equal(fs.existsSync(ledgerFile), false, '--unknown-flag 後、台帳ファイルは存在しない');
+  });
+});
+
+// ===== H3: 既存の --dry-run は従来どおり動く =====
+
+test('H3: 既存の --dry-run は従来どおり動く', async () => {
+  await stalledScanScenario('h3', [
+    {
+      name: 'stalled-case',
+      files: [
+        { name: 'STATUS.txt', content: '状態: 中断\n理由: 承認待ち' },
+      ],
+    },
+  ], async ({ dir, run, store }) => {
+    const alertFile = path.join(dir, 'ALERT.md');
+    const ledgerFile = path.join(dir, 'ledger', 'ledger.json');
+    const fixedNow = new Date();
+
+    // dry-run は exit 0 でファイルを書かない
+    const code1 = await run(['--dry-run'], { now: fixedNow });
+    assert.equal(code1, 0);
+    assert.equal(fs.existsSync(alertFile), false, 'dry-run後ALERT.mdは存在しない');
+    assert.equal(fs.existsSync(ledgerFile), false, 'dry-run後ledger.jsonは存在しない');
+
+    // 本実行するとファイルができる
+    const code2 = await run([], { now: fixedNow });
+    assert.equal(code2, 0);
+    assert.ok(fs.existsSync(alertFile), '本実行後ALERT.mdが存在する');
+    assert.ok(fs.existsSync(ledgerFile), '本実行後ledger.jsonが存在する');
+  });
+});
+
 test('G3-1: dry-run は ALERT.md / ledger.json を書かない', async () => {
   await stalledScanScenario('g3-1', [
     {

@@ -121,6 +121,9 @@ export function parseArgs(argv = []) {
         out.flags[key] = next;
         i++;
       }
+    } else if (a.startsWith('-') && a.length === 2) {
+      // Single-dash short flags (-h, -v, etc.)
+      out.flags[a.slice(1)] = true;
     } else {
       out._.push(a);
     }
@@ -2010,6 +2013,32 @@ async function cmdAlert(flags, ctxBase = {}) {
 }
 
 async function cmdStalledScan(flags, ctxBase = {}) {
+  // --help / -h: usage only, no side effects
+  if (flags.help || flags.h) {
+    console.log([
+      '用法: followup-ledger.mjs stalled-scan [フラグ...]',
+      '',
+      'フラグ:',
+      '  --dry-run        台帳・ALERT.mdに書き込まず表示のみ',
+      '  --reports-dir    案件フォルダの親ディレクトリ（既定: ~/gb-reports）',
+      '  --stale-hours    停滞判定の閾値（時、既定: 6）',
+      '  --max-age-days   最大経過日数（既定: 7）',
+      '  --pc             PC名（既定: ホスト名）',
+      '  --store          ストアモード（local / sheet、既定: local）',
+      '  --selftest       タスク登録の自己診断',
+      '  --help / -h      この使い方を表示',
+    ].join('\n'));
+    return 0;
+  }
+
+  // 未知フラグのチェック
+  const KNOWN_FLAGS = new Set(['store', 'reports-dir', 'stale-hours', 'pc', 'max-age-days', 'dry-run', 'selftest', 'help', 'h']);
+  const unknownFlags = Object.keys(flags).filter((k) => !KNOWN_FLAGS.has(k));
+  if (unknownFlags.length) {
+    console.error(`不明なフラグ: ${unknownFlags.join(', ')}`);
+    return 2;
+  }
+
   const config = ctxBase.config || loadConfig();
   const storeMode = flags.store === 'local' || ctxBase.storeMode === 'local' ? 'local' : (config.spreadsheetId ? 'sheet' : 'local');
   const loaded = await loadStore({ storeMode, config, sheets: ctxBase.sheets });

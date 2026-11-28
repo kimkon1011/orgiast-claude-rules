@@ -57,6 +57,10 @@ export async function scan({ home = process.env.ORGIAST_HOME || process.env.USER
     for (const failure of detectFailedJob(tasks, now)) rows.push(row('task_failed',failure.title,`${failure.reason}; ${failure.eventTime}; ${failure.location}`,'前回実行が異常終了','nightly-health-remediate でログと終了コードを調査',{expectation: expectations.find(e => failure.taskName.endsWith(e.task || '\0'))}));
     for (const t of tasks) {
       const exp = expectations.find(e => t.taskName.endsWith(e.task || '\0'));
+      if (exp && (exp.ignore === true || (exp.fleetLabel && exp.fleetLabel !== label) || (exp.platform && exp.platform !== platform))) {
+        observations.push(row('task_skipped','この席の担当ではないため無効（設計どおり）',`${t.taskName}: state=${t.state}; fleetLabel=${exp.fleetLabel ?? 'なし'}, label=${label}`,'fleetLabel 不一致のため無効化','設計どおり無効なので対応不要'));
+        continue;
+      }
       const cycle = t.cycleMinutes || (exp?.maxAgeHours ? exp.maxAgeHours*60 : null);
       const futureFirst = t.neverRun && Date.parse(t.nextRunTime) > now;
       const overdueNext = Date.parse(t.nextRunTime) > Date.UTC(2000,0,1) && now - Date.parse(t.nextRunTime) > 600000;

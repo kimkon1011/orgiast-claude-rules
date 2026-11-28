@@ -17,10 +17,11 @@ $codexDir = Join-Path $env:USERPROFILE '.codex'
 $logDir = Join-Path $claudeDir 'logs'
 $logFile = Join-Path $logDir 'backup-to-drive.log'
 $stateFile = Join-Path $claudeDir 'backup-to-drive-state.json'
-$stagingDir = Join-Path $env:LOCALAPPDATA 'claude-backup-staging'
-$stagingClaudeDir = Join-Path $stagingDir '.claude'
-$stagingHomeDir = Join-Path $stagingDir 'home'
-$stagingCodexDir = Join-Path $stagingHomeDir '.codex'
+$script:stagingDirRaw = Join-Path $env:LOCALAPPDATA 'claude-backup-staging'
+$script:stagingDir = $null  # resolved by Resolve-StagingDir
+$stagingClaudeDir = $null
+$stagingHomeDir = $null
+$stagingCodexDir = $null
 $localZip = Join-Path $env:LOCALAPPDATA 'claude-backup-staging.zip'
 $restoreSource = Join-Path $PSScriptRoot 'RESTORE-claude-backup.md'
 $restoreScriptSource = Join-Path $PSScriptRoot 'restore-claude-from-drive.ps1'
@@ -29,6 +30,7 @@ $repoDir = Join-Path $env:USERPROFILE 'orgiast-claude-rules'
 $hostname = [Environment]::MachineName
 $script:driveBackup = $null
 $script:driveZipWritten = $false
+$script:localBackupDrive = $null
 
 function Write-Event([string]$Message) {
   $line = '{0} {1}' -f (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssK'), ($Message -replace "[\r\n]+", ' ')
@@ -463,6 +465,81 @@ function Repair-StagingNames {
   Write-Event ('sanitized-names count={0}' -f $renamed.Count)
 }
 
+function Clear-StagingContents([string]$Path, [string]$Context) {
+  <#
+    .SYNOPSIS
+      Safely remove contents of a staging directory. Only removes children of the given
+      directory — never the directory itself nor anything outside it. Logs a warning if
+      the path looks suspicious (drive root, user profile, etc.).
+  #>
+  if (-not (Test-Path -LiteralPath $Path)) { return }
+  # Safety: refuse to delete at drive root or user profile root.
+  $normalized = $Path.TrimEnd('\')
+  $driveRoot = [IO.Path]::GetPathRoot($Path)
+  if ($normalized -eq $driveRoot.TrimEnd('\')) {
+    Write-Event ('WARN clear-staging-skipped context={0} path={1} reason=drive-root' -f $Context, $Path)
+    return
+  }
+  $userProfile = $env:USERPROFILE.TrimEnd('\')
+  if ($normalized -eq $userProfile) {
+    Write-Event ('WARN clear-staging-skipped context={0} path={1} reason=user-profile-root' -f $Context, $Path)
+    return
+  }
+  $totalBytes = 0
+  try {
+    $children = @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue)
+    foreach ($child in $children) {
+      if ($child.PSIsContainer) {
+        $size = @(Get-ChildItem -LiteralPath $child.FullName -File -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+        if ($size) { $totalBytes += $size }
+        Remove-Item -LiteralPath $child.FullName -Recurse -Force -ErrorAction SilentlyContinue
+      } else {
+        $totalBytes += $child.Length
+        Remove-Item -LiteralPath $child.FullName -Force -ErrorAction SilentlyContinue
+      }
+    }
+    Write-Event ('cleared-staging context={0} path={1} bytes={2}' -f $Context, $Path, $totalBytes)
+  } catch {
+    Write-Event ('WARN clear-staging-failed context={0} path={1} reason={2}' -f $Context, $Path, $_.Exception.Message)
+  }
+}
+
+function Resolve-StagingDir {
+  <#
+    .SYNOPSIS
+      Determines the staging directory path. Priority:
+        1. env CLAUDE_BACKUP_STAGING
+        2. <local-fallback-drive>:\claude-backup-staging
+        3. $env:LOCALAPPDATA\claude-backup-staging (traditional)
+  #>
+  # Priority 1: explicit env override
+  if ($env:CLAUDE_BACKUP_STAGING) {
+    $dir = $env:CLAUDE_BACKUP_STAGING.Trim()
+    Write-Event ('plan staging-drive={0} reason=env-override' -f $dir)
+    return $dir
+  }
+
+  # Priority 2: same drive as local backup directory
+  if ($script:localBackupDrive) {
+    $candidate = Join-Path ($script:localBackupDrive.TrimEnd('\')) 'claude-backup-staging'
+    try {
+      if (-not (Test-Path -LiteralPath $candidate)) {
+        New-Item -ItemType Directory -Path $candidate -Force -ErrorAction Stop | Out-Null
+        Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue | Out-Null
+      }
+      Write-Event ('plan staging-drive={0} reason=local-fallback-drive' -f $candidate)
+      return $candidate
+    } catch {
+      Write-Event ('WARN staging-drive-candidate=unavailable path={0} reason=write-test-failed' -f $candidate)
+    }
+  }
+
+  # Priority 3: fallback to traditional LOCALAPPDATA
+  $fallback = $script:stagingDirRaw
+  Write-Event ('plan staging-drive={0} reason=localappdata-fallback' -f $fallback)
+  return $fallback
+}
+
 try {
   Write-Event ('start dryRun={0} source={1}' -f $DryRun.IsPresent, $claudeDir)
   if (-not (Test-Path -LiteralPath $claudeDir)) { throw "バックアップ元がありません: $claudeDir" }
@@ -484,14 +561,25 @@ try {
     $localBackupRoot = [IO.Path]::GetPathRoot($localBackupDir)
     if (-not (Test-Path -LiteralPath $localBackupRoot)) {
       $localFallback = $false
+      $script:localBackupDrive = $null
       Write-Event ('WARN local-fallback=unavailable root={0} reason=drive-not-found' -f $localBackupRoot)
       Stop-DriveNotAvailable
     } else {
+      $script:localBackupDrive = $localBackupRoot
       Write-Event ('plan local-fallback path={0}' -f $localBackupDir)
     }
   }
   if (-not $driveRoot -and -not $useRclone -and -not $localFallback) { throw 'Google Drive のマウントも rclone リモートも利用できません' }
   if (-not $driveRoot -and ($useRclone -or $localFallback)) { $driveRoot = 'H:\' }
+
+  # Resolve staging directory and set sub-paths
+  $script:stagingDir = Resolve-StagingDir
+  $stagingClaudeDir = Join-Path $script:stagingDir '.claude'
+  $stagingHomeDir = Join-Path $script:stagingDir 'home'
+  $stagingCodexDir = Join-Path $stagingHomeDir '.codex'
+  # zip はステージングと同じドライブ・ただしステージングの「外」に置く。
+  # 中に置くと CreateFromDirectory が作成中の zip 自身を列挙してしまう。
+  $localZip = '{0}.zip' -f $script:stagingDir.TrimEnd('\')
 
   # DryRun / useRclone / localFallback 時は Join-Path が実在ドライブを要求してクラッシュするため
   # プレースホルダパスを直書きで設定する（不存ドライブの H:\ では Join-Path が例外を投げる）。
@@ -518,14 +606,27 @@ try {
     exit 0
   }
 
-  $stagingDrive = New-Object System.IO.DriveInfo([IO.Path]::GetPathRoot($stagingDir))
+  # ---- 残骸の掃除: このスクリプトが以前に作ったステージングディレクトリ配下を削除する ----
+  Clear-StagingContents -Path $script:stagingDir -Context 'current'
+
+  # ---- 旧ステージング位置（LOCALAPPDATA）の後始末: 別ドライブになった場合に空き容量を回復 ----
+  $oldStagingDir = $script:stagingDirRaw
+  if ($oldStagingDir -ne $script:stagingDir -and (Test-Path -LiteralPath $oldStagingDir)) {
+    Clear-StagingContents -Path $oldStagingDir -Context 'legacy'
+    # 空になったディレクトリ自体も削除する（失敗しても続行）
+    try { Remove-Item -LiteralPath $oldStagingDir -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+    Write-Event ('cleaned-legacy-staging path={0}' -f $oldStagingDir)
+  }
+
+  # ---- 空き容量チェック ----
+  $stagingDrive = New-Object System.IO.DriveInfo([IO.Path]::GetPathRoot($script:stagingDir))
   $freeGb = $stagingDrive.AvailableFreeSpace / 1GB
-  if ($freeGb -lt 6) { throw ('ステージング先ドライブの空き容量が不足しています (空き: {0:N2} GB、必要: 6 GB)' -f $freeGb) }
+  if ($freeGb -lt 6) { throw ('ステージング先ドライブ {0}: の空き容量が不足しています (空き: {1:N2} GB、必要: 6 GB)' -f $stagingDrive.Name[0], $freeGb) }
 
   New-Item -ItemType Directory -Path $stagingClaudeDir -Force | Out-Null
   New-Item -ItemType Directory -Path $stagingHomeDir -Force | Out-Null
   # 旧形式（zip 直下が ~/.claude）から移行した際の残骸を zip に混ぜない。
-  foreach ($legacyItem in @(Get-ChildItem -LiteralPath $stagingDir -Force)) {
+  foreach ($legacyItem in @(Get-ChildItem -LiteralPath $script:stagingDir -Force)) {
     if ($legacyItem.Name -notin @('.claude', 'home')) { Remove-Item -LiteralPath $legacyItem.FullName -Recurse -Force }
   }
   # Chrome 系プロファイルがブラウザ起動中に排他ロックする揮発ディレクトリ。Cookies は復元時に再ログインが必要。

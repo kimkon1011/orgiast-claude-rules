@@ -1,0 +1,5 @@
+# LINEグループ送信の手順（ONBOARDING から無損失で移設・サイズ上限対応 2026-11-28）
+
+ONBOARDING.md の当該行の全文をそのまま移した。
+
+**LINE グループへの送信は、頼まれたその Claude Code から直接送る。kim-PC へ fleet-mail で中継しない（全プロジェクト・全PC・全アカウント・2026-11-02 kim 指示）**: `node tools/line-group-send.mjs --group <グループ名|groupId> --text-file <本文.txt> [--image <1MB以下のjpg/png> ...]`。送信者は LINE 公式アカウント「オージャスト金(読取専用)」@458zwuhb で、この bot が参加しているグループ（受信記録 `channel_messages` に `LINE: <グループ名>` で載っているもの）に送れる。画像は Supabase `line-media/outbound/` に上げて署名URLで送る。鍵は env → `~/.claude/line-send.env` → `~/.claude/vercel.env` の VERCEL_TOKEN で営業アプリ（aujust-sales-automation）から取得、の順に探す。①先に `--dry-run` で送信先グループ名を確かめる ②本送信は `--retry-key <uuid>` を付ける（再実行しても二重送信されない）③完了の証拠は push の HTTP 200・sentMessages 件数・`/v2/bot/message/quota/consumption` がグループ人数ぶん増えたこと（bot は自分の送信を読み返せないため、この3点で代える）。社外グループへの送信は、従来どおり本文全文を kim に見せて承認を取ってから送る。bot が未参加のグループ・個人宛だけは送れないので、そのときは「bot 未参加（summary 404）」を証拠に添えて kim に bot の招待を頼む。実例: 2026-11-02 株式会社ラハイナのグループへ牡蠣チラシ4案を送信（HTTP 200・sentMessages=5・consumption 13→21）。kim-PC へ中継した依頼は 5 時間受信されず止まっていた。

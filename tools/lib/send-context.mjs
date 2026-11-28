@@ -34,7 +34,7 @@ export async function assertContextApproved({ channel, target, text, home, getLa
       try {
         fs.lstatSync(markerPath(text, home));
       } catch (error) {
-        if (error.code === 'ENOENT') return { reason: 'internal-auto', internalOptIn: true };
+        if (error.code === 'ENOENT') return { reason: 'internal-auto', internalOptIn: true, checkedAt: new Date(now).toISOString() };
       }
     }
     fail('承認マーカーがありません');

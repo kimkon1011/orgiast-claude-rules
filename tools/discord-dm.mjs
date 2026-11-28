@@ -97,6 +97,7 @@ export async function sendDiscordDm(target, body, options = {}) {
     }});
     const checkInput = {channel:'discord',to:channelId,text:message,draftId:options.draftId,draftReadAt:options.draftReadAt || context?.checkedAt};
     const checked = await (options.consistencyCheck ?? assertSendConsistency)(checkInput,{home,fetchImpl,...options.consistencyDeps});
+    if(options.checkOnly)return {channelId,checkOnly:true,consistencyOk:true,findings:checked.findings};
     options.onMessageAttempt?.();
     const sent = await fetchImpl(`${API}/channels/${channelId}/messages`, {
       method: 'POST', headers, body: JSON.stringify({ content: message }),
@@ -107,7 +108,9 @@ export async function sendDiscordDm(target, body, options = {}) {
     recordOutbound({ channel: 'discord', target: channelId, text: body, messageId: sentMessage.id }, home);
     return { channelId, messageId: sentMessage.id, ...(cleaned?.cardNotice ? { cardNotice: cleaned.cardNotice } : {}) };
   };
-  const { channelId, messageId, cardNotice } = await deliver(recipient, content);
+  const delivered = await deliver(recipient, content);
+  if(options.checkOnly)return {...delivered,recipient,copyToKim};
+  const { channelId, messageId, cardNotice } = delivered;
   if (copyToKim === 'session-inbox') {
     const displayName = recipient.displayName ?? recipient.label ?? recipient.username ?? target;
     try {
@@ -128,6 +131,7 @@ function parseArgs(args) {
   let kimActionRequired = false;
   let noReplyFooter = false;
   let internalOptIn = false;
+  let checkOnly = false;
   for (let i = 1; i < args.length; i += 1) {
     if (args[i] === '--body') body = args[++i];
     else if (args[i] === '--body-file') bodyFile = args[++i];
@@ -136,12 +140,13 @@ function parseArgs(args) {
     else if (args[i] === '--kim-action-required') kimActionRequired = true;
     else if (args[i] === '--no-reply-footer') noReplyFooter = true;
     else if (args[i] === '--internal-opt-in') internalOptIn = true;
+    else if (args[i] === '--check-only') checkOnly = true;
     else throw new Error(`不明な引数です: ${args[i]}`);
   }
   if (!target || (body === undefined) === (bodyFile === undefined)) {
-    throw new Error('usage: discord-dm.mjs <名前 or メール> (--body <本文> | --body-file <path>) [--dry-run] [--no-copy-kim] [--no-reply-footer] [--kim-action-required] [--internal-opt-in]');
+    throw new Error('usage: discord-dm.mjs <名前 or メール> (--body <本文> | --body-file <path>) [--dry-run] [--check-only] [--no-copy-kim] [--no-reply-footer] [--kim-action-required] [--internal-opt-in]');
   }
-  return { target, body: bodyFile === undefined ? body : fs.readFileSync(bodyFile, 'utf8'), dryRun, noCopyKim, noReplyFooter, kimActionRequired, internalOptIn };
+  return { target, body: bodyFile === undefined ? body : fs.readFileSync(bodyFile, 'utf8'), dryRun, checkOnly, noCopyKim, noReplyFooter, kimActionRequired, internalOptIn };
 }
 
 export async function main(args = process.argv.slice(2), options = {}) {
@@ -149,7 +154,7 @@ export async function main(args = process.argv.slice(2), options = {}) {
   try { parsed = parseArgs(args); }
   catch (error) { console.error(`discord-dm: ${error.message}`); return 1; }
   try {
-    const result = await sendDiscordDm(parsed.target, parsed.body, { ...options, dryRun: parsed.dryRun, noCopyKim: parsed.noCopyKim, noReplyFooter: parsed.noReplyFooter, kimActionRequired: parsed.kimActionRequired, internalOptIn: parsed.internalOptIn });
+    const result = await sendDiscordDm(parsed.target, parsed.body, { ...options, dryRun: parsed.dryRun, checkOnly: parsed.checkOnly, noCopyKim: parsed.noCopyKim, noReplyFooter: parsed.noReplyFooter, kimActionRequired: parsed.kimActionRequired, internalOptIn: parsed.internalOptIn });
     console.log(JSON.stringify(result));
     return result.delivered === 'blocked' ? 3 : 0;
   } catch (error) {

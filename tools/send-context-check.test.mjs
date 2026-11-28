@@ -149,6 +149,11 @@ test('回答済み質問を再送する判定はNGでマーカーを書かない
 test('マーカー無し送信は拒否', async t => {
   await assert.rejects(()=>assertContextApproved({channel:'line',target:'C1',text:'本文',home:tmp(t),getLatest:async()=>null}),/承認マーカーがありません/);
 });
+test('社内自動許可は整合性検査へ渡すcheckedAtを返す', async t => {
+ const now=Date.parse('2026-11-28T10:00:00+09:00');
+ const result=await assertContextApproved({channel:'discord',target:'dm',text:'社内連絡',home:tmp(t),internalOptIn:true,now,getLatest:async()=>assert.fail('マーカー無し時はここでは読まない')});
+ assert.equal(result.checkedAt,new Date(now).toISOString());
+});
 test('マーカー後の新着は拒否', async t => {
   const home=tmp(t); writeContextMarker({channel:'line',target:'C1',text:'本文',latest:{id:'m1',at:'2026-11-10T00:00:00.000Z'},reason:'OK',home});
   await assert.rejects(()=>assertContextApproved({channel:'line',target:'C1',text:'本文',home,getLatest:async()=>({id:'m2',at:'2026-11-10T00:01:00.000Z'})}),/新着/);

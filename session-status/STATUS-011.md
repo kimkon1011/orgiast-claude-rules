@@ -1,7 +1,7 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-28 19:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-28 20:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 92
+- 案件数: 90
 
 - 011・.stall-sweeper・停止・最終更新 11/26 04:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・20261126-クラフト坂口・金さん待ち・クラフト坂口様 宿題7件の成果物は完成。精算の計算方法・福岡請求書の作り直し・先払い承認・いなば様への送信時期の判断待ち・期限2026-12-03（坂口様への精算金額の返答）・次:金さんの判断に沿って、坂口様への返信・福岡請求書の作り直し・Discord送信を進める（送信は承認後のみ）
@@ -26,7 +26,7 @@
 - 011・fallback-chain-timeout-1127・完了・PR #2849 MERGED・landed・期限なし・次:11/28 の delegation-health.json に fallback_chain_timeout が出ないことを確認
 - 011・fallback-chain-timeout-1128・停止・最終更新 11/28 04:51、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・fallback-deepseek-timeout-1127・進行中・Codex に修正を委譲中（codex-do バックグラウンド）・期限なし・次:RESULT.md と PR を読み戻し、Windows で node --test を再実行、PR の MERGED を確認して /session-close
-- 011・followup-ledger・停止・最終更新 11/28 19:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・followup-ledger・停止・最終更新 11/28 20:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・followup-ledger-1127・停止（次の朝まで待機）・000KimPC のビーコンが1日前で停止しており、指示が届いていない。社保の LINE 送信は 000 が復旧するまでできない。・期限11/30（投函期限）・次:11/28 朝に 000KimPC のビーコン状態を確認し、復旧していれば `SEND-000.md` の手順を実行する。ついでに各PCの followup-ledger 登録状況を再確認（fleet-status.mjs）。
 - 011・followup-ledger-1127-continue・停止・最終更新 11/27 21:50、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
 - 011・gb229-rpf-1128・停止・最終更新 11/28 16:21、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
@@ -63,18 +63,16 @@
 - 011・pr2745-ci-fix・停止・最終更新 11/26 03:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・pr2768-ci-fix・停止・最終更新 11/26 02:11、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・pr2957-ci-fix・停止・CI修正の委譲が全レーン失敗（codex は 2026-11-28 15:11 JST まで cooldown、deepseek・qwen・openrouter-code は60秒出力なしで打ち切り、変更0件）・期限auto-progress で MERGED を監視中（2026-11-29 14:08 まで）・次:15:11 JST 以降に PROMPT.md（push なし版）で codex-do を再委譲 → worktree C:/Users/kimko/.claude/wt-pr2957 の差分とテストを Windows で確認 → 監督が `git push origin HEAD:feat/matome-ikkai-1128` → CI 緑で autome
-- 011・reply-drafts-1125・完了・最終更新 11/25 19:28、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
 - 011・rescue-review-1127・完了・rescue/auto-session-20261127-030605（0e540d33）の3ファイル（tools/notify-kim.mjs, tools/url-account-gate.mjs, tools/url-account-gate.test.mjs）は origin/main と差分ゼロ。同じ内容が PR #2843（1f17ba99 fi・期限なし・次:next-session.md の31番を完了扱いにする（無人起動では next-session.md への Edit・追記が機密ファイル扱いで拒否されたため未反映）。rescue ブランチ（ローカル・リモートとも）は kim の許可が出たら削除する。
 - 011・rescue-review-1127b・完了・rescue 121002/121202 は一時スキャン出力と #2878 着地済みの台帳追記のみ・期限なし・次:next-session 39・40番は次回選ばない。ブランチ削除は kim 許可後
 - 011・saihatsu-full-1128-survive-dist・停止・最終更新 11/28 17:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-followup・停止・最終更新 11/28 07:42、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-link-audit-1126・完了・監査・修正・書き出し完了、13:00 毎時本番で動作確認済み・期限2026-11-26 当日・次:なし（毎時ジョブが send-commitments を追跡し stuck-export を毎時更新）
-- 011・営業 次回連絡日・金さん待ち・最終更新 11/28 19:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・営業 次回連絡日・金さん待ち・最終更新 11/28 20:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・session-1126-hourly・金さん待ち・JACE 藤野様宛ての返信下書きが打合せ前の文面のまま。修正版の送信可否は金さんの承認が要る（kim-inbox ki-20261126081310-6cf5）・期限2026-12-11（先方の返信期限）／着手期限 2026-12-09・次:承認が来たら seisaku-team@ の下書きを修正版に差し替え、gmail-draft.mjs の自動チェックを通して送信し、送信済みを読み戻す
 - 011・session-1128a・完了・無人定時起動。X-0100 は 11/27 に完了済みと確認、next-session 16番を完了確認に更新・期限2026-12-04・次:なし（1563記事への段落追加は kim-inbox ki-20261127101422-bd0c で承認待ち）
 - 011・session-1205・完了・handoff-audit 8件の再発検証が終わった。f61ffeb282843871（P4）は再発0件で、検証済み台帳に追加した（PR #2878 MERGED 2026-11-27T03:24:51Z）。残り7件は 11/26 12:00Z 以降も同じ型の文が出ているため、台帳には入れていない・期限なし・次:next-session.md の8番は完了したので次回は選ばない（無人だと next-session.md を書き換えられず、この STATUS.md に残している）。9〜15番の7件は ID ごとに検証し直しても消えない。直すべきなのは、W 型の「完了待ち」の文が出る仕組みのほう。worktree ~/.claude/wt-handoff-verify-
 - 011・session-cap-1126・金さん待ち・最終更新 11/26 19:36、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
-- 011・souko-kyujin-1125・完了・最終更新 11/25 19:40、STATUS.mdなし、DONEあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
 - 011・staff-location-1127・停止・最終更新 11/28 15:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・staff-location-1127-followup・停止・最終更新 11/28 15:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・stale-drafts-1126・金さん待ち・放置下書き3件の照合が終わり、kim-inbox ask ki-20261126122734-8029 で送信・修正・削除の判断を待っている（next-session.md への追記は無人起動の権限で拒否された）・期限サポリス様は 2026-11-27 中に返信が望ましい（11/10 に先方の条件提示を受けてから16日経過）・次:返事を受けたら、サポリス様の下書きの候補日を差し替え、gmail-draft.mjs --send のチェックを通して送る／鹿沼CATV様は直すか佐藤さんに任せる／A-DINING様の下書き2件は削除の承認後に消す。決めてほしいこと: 3件それぞれ送る・直す・削除のどれにするか

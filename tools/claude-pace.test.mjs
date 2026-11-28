@@ -10,6 +10,8 @@ import {
   mergeQueue,
   readQueue,
   launchPaceTasks,
+  resolveAccountForHost,
+  normalizePaceHost,
   WINDOW_MS,
   DEFAULT_STALE_MS,
   defaultQueuePath,
@@ -396,4 +398,99 @@ test('launchPaceTasks 実行失敗時はタスクが 失敗 になり 実行中 
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+// normalizePaceHost の単体動作テスト
+test('normalizePaceHost の単体動作', () => {
+  assert.equal(normalizePaceHost('011NEXT'), '011');
+  assert.equal(normalizePaceHost('018'), '018');
+  assert.equal(normalizePaceHost('DESKTOP-2D0R4LI'), 'DESKTOP-2D0R4LI');
+  assert.equal(normalizePaceHost('000-PC'), '000');
+  assert.equal(normalizePaceHost(''), '');
+  assert.equal(normalizePaceHost(null), '');
+  assert.equal(normalizePaceHost(undefined), '');
+  assert.equal(normalizePaceHost('014_sub'), '014');
+  assert.equal(normalizePaceHost(' 011NEXT '), '011');
+});
+
+// resolveAccountForHost のテスト
+test('resolveAccountForHost は完全一致を先に見る', () => {
+  const config = {
+    accounts: {
+      'cr@orgiast.jp': { pcs: ['011', '018'] },
+      'genbateam.toho@gmail.com': { pcs: ['999'] }
+    }
+  };
+  // 完全一致
+  assert.deepEqual(resolveAccountForHost(config, '011'), { account: 'cr@orgiast.jp', pcs: ['011', '018'] });
+  // 正規化後一致
+  assert.deepEqual(resolveAccountForHost(config, '011NEXT'), { account: 'cr@orgiast.jp', pcs: ['011', '018'] });
+  // どちらも無ければ unknown
+  assert.deepEqual(resolveAccountForHost(config, 'DESKTOP-XXXX'), { account: 'unknown', pcs: [] });
+  // config に 011NEXT と書かれていたらそれが優先される
+  const configWithFull = {
+    accounts: {
+      'cr@orgiast.jp': { pcs: ['011NEXT', '018'] },
+      'genbateam.toho@gmail.com': { pcs: ['999'] }
+    }
+  };
+  assert.deepEqual(resolveAccountForHost(configWithFull, '011NEXT'), { account: 'cr@orgiast.jp', pcs: ['011NEXT', '018'] });
+});
+
+// 指示書のケース: スペース入りアカウント名 + 正規化で一致
+test('resolveAccountForHost は 011NEXT → cr @orgiast.jp に解決する（正規化一致）', () => {
+  const accountConfig = {
+    accounts: {
+      'cr @orgiast.jp': { pcs: ['011', '018'] },
+      'genbateam.toho @gmail.com': { pcs: ['999'] },
+    },
+  };
+  assert.equal(resolveAccountForHost(accountConfig, '011NEXT').account, 'cr @orgiast.jp');
+});
+
+test('resolveAccountForHost は 999genba → genbateam.toho @gmail.com に解決する（正規化一致）', () => {
+  const accountConfig = {
+    accounts: {
+      'cr @orgiast.jp': { pcs: ['011', '018'] },
+      'genbateam.toho @gmail.com': { pcs: ['999'] },
+    },
+  };
+  assert.equal(resolveAccountForHost(accountConfig, '999genba').account, 'genbateam.toho @gmail.com');
+});
+
+test('resolveAccountForHost は 018 → cr @orgiast.jp に解決する（完全一致）', () => {
+  const accountConfig = {
+    accounts: {
+      'cr @orgiast.jp': { pcs: ['011', '018'] },
+      'genbateam.toho @gmail.com': { pcs: ['999'] },
+    },
+  };
+  assert.equal(resolveAccountForHost(accountConfig, '018').account, 'cr @orgiast.jp');
+});
+
+test('resolveAccountForHost は DESKTOP-XXXX → unknown ＋ 空 pcs', () => {
+  const accountConfig = {
+    accounts: {
+      'cr @orgiast.jp': { pcs: ['011', '018'] },
+      'genbateam.toho @gmail.com': { pcs: ['999'] },
+    },
+  };
+  const r = resolveAccountForHost(accountConfig, 'DESKTOP-XXXX');
+  assert.equal(r.account, 'unknown');
+  assert.deepEqual(r.pcs, []);
+});
+
+test('resolveAccountForHost は完全一致（011NEXT）を正規化一致（011）より優先する', () => {
+  const config = {
+    accounts: {
+      'a @x': { pcs: ['011NEXT'] },
+      'b @x': { pcs: ['011'] },
+    },
+  };
+  assert.equal(resolveAccountForHost(config, '011NEXT').account, 'a @x');
+});
+
+test('normalizePaceHost は 011NEXT → 011、DESKTOP-2D0R4LI → そのまま', () => {
+  assert.equal(normalizePaceHost('011NEXT'), '011');
+  assert.equal(normalizePaceHost('DESKTOP-2D0R4LI'), 'DESKTOP-2D0R4LI');
 });

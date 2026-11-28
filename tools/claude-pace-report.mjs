@@ -10,13 +10,14 @@ import { isEntry } from './is-entry.mjs';
 import { getDriveToken } from './lib/drive-auth.mjs';
 import { downloadFileContent, findOrCreateFolder, listFiles, uploadFileContent } from './lib/drive-files.mjs';
 import { FOLDERS } from './hub-push.mjs';
-import { decidePace, loadPaceConfig, defaultConfigPath, defaultQueuePath, paceLedgerPath } from './claude-pace.mjs';
+import { decidePace, loadPaceConfig, normalizePaceHost, defaultConfigPath, defaultQueuePath, paceLedgerPath } from './claude-pace.mjs';
 import { summarizeQueue } from './claude-pace-queue.mjs';
 import { checkSchema } from './lib/json-schema-check.mjs';
 import { readCodexWindows } from './lib/quota-windows.mjs';
 import { reportLocations } from './lib/claude-pace-report-core.mjs';
 
 export { reportLocations } from './lib/claude-pace-report-core.mjs';
+export { normalizePaceHost } from './claude-pace.mjs';
 
 export const DAY_TARGET_PCT = 12.9;
 export const REPORT_DIR_NAME = 'claude-pace-reports';
@@ -92,12 +93,27 @@ export function shouldReport(host, config, lastSeenMap, now = Date.now()) {
   const fallback = String(config?.reportFallbackHost || '018');
   const staleMs = (config?.staleHours ?? 3) * 3600_000;
   const nowMs = typeof now === 'number' ? now : Date.parse(String(now)) || Date.now();
-  const raw = lastSeenMap?.[primary];
+
+  // lastSeenMap のキーを正規化し、同一 PC 番号に複数エントリがあれば最も新しいものを採用
+  const normalizedMap = {};
+  if (lastSeenMap) {
+    for (const [key, raw] of Object.entries(lastSeenMap)) {
+      const nk = normalizePaceHost(key);
+      const ts = typeof raw === 'number' ? raw : Date.parse(String(raw ?? ''));
+      if (Number.isFinite(ts) && (!(nk in normalizedMap) || ts > normalizedMap[nk])) {
+        normalizedMap[nk] = ts;
+      }
+    }
+  }
+
+  const primaryN = normalizePaceHost(primary);
+  const fallbackN = normalizePaceHost(fallback);
+  const raw = normalizedMap[primaryN];
   const seen = typeof raw === 'number' ? raw : Date.parse(String(raw ?? ''));
   const primaryStale = !Number.isFinite(seen) || nowMs - seen > staleMs;
-  const h = String(host);
-  if (!primaryStale) return h === primary;
-  return h === fallback;
+  const h = normalizePaceHost(String(host));
+  if (!primaryStale) return h === primaryN;
+  return h === fallbackN;
 }
 
 function fmtPct(n) {
@@ -532,7 +548,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   if (!opts.force && !opts.dryRun) {
     const ok = shouldReport(host, config, loaded.lastSeenMap, nowMs);
     if (!ok) {
-      const msg = `claude-pace-report skip host=${host} (reportHost=${config.reportHost}, fallback=${config.reportFallbackHost})`;
+      const msg = `claude-pace-report skip host=${host} (pc=${normalizePaceHost(host)}, reportHost=${config.reportHost}, fallback=${config.reportFallbackHost})`;
       (io.print ?? console.log)(msg);
       return { skipped: true, reason: 'not-report-host', host };
     }

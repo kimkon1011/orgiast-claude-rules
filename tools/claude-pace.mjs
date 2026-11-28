@@ -265,11 +265,26 @@ export function writePaceHold(home, { account, host, hold, until, status, reason
   return body;
 }
 
+/** ホスト名を PC 番号（先頭3桁の数字）に正規化する。 */
+export function normalizePaceHost(x) {
+  const s = String(x ?? '').trim();
+  const m = /^(\d{3})/.exec(s);
+  return m ? m[1] : s;
+}
+
 export function resolveAccountForHost(config, host) {
   const accounts = config?.accounts || {};
+  const hostStr = String(host);
+  // 第1段: 完全一致（config に 011NEXT のような生ホスト名が書かれている場合に優先）
   for (const [account, meta] of Object.entries(accounts)) {
     const pcs = Array.isArray(meta?.pcs) ? meta.pcs.map(String) : [];
-    if (pcs.includes(String(host))) return { account, pcs };
+    if (pcs.includes(hostStr)) return { account, pcs };
+  }
+  // 第2段: normalizePaceHost で正規化して一致
+  const normHost = normalizePaceHost(hostStr);
+  for (const [account, meta] of Object.entries(accounts)) {
+    const pcs = Array.isArray(meta?.pcs) ? meta.pcs.map(String) : [];
+    if (pcs.map(normalizePaceHost).includes(normHost)) return { account, pcs };
   }
   return { account: 'unknown', pcs: [] };
 }

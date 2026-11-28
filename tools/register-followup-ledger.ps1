@@ -9,12 +9,16 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $taskName = 'OrgiastFollowupLedger'
+$morningTaskName = 'OrgiastFollowupLedgerMorning'
 if ($Unregister) {
   if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
     Write-Host "OK: task $taskName unregistered"
   } else {
     Write-Host "OK: task $taskName not found"
+  }
+  if (Get-ScheduledTask -TaskName $morningTaskName -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $morningTaskName -Confirm:$false
   }
   exit 0
 }
@@ -35,3 +39,11 @@ if ($RunNow) {
   Write-Host "OK: Start-ScheduledTask $taskName"
 }
 schtasks /Query /TN $taskName /V /FO LIST
+
+# Explicit JST offset: the morning report stays at 07:30 JST on every PC.
+$morningAction = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, 'report', '--morning', '--kim-inbox') -WorkingDirectory $repo
+$jstToday = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(9)).ToString('yyyy-MM-dd')
+$morningTrigger = New-ScheduledTaskTrigger -Daily -At '07:30'
+$morningTrigger.StartBoundary = "${jstToday}T07:30:00+09:00"
+Register-ScheduledTask -TaskName $morningTaskName -Action $morningAction -Trigger $morningTrigger -Settings $settings -Description 'Followup ledger morning report (07:30 JST; internal kim-inbox only)' -Force | Out-Null
+Write-Host "OK: task $morningTaskName registered (07:30 JST)"

@@ -3188,6 +3188,39 @@ test('isProgressStderrChars は既知の警告行を進捗に数えない', () =
   }
 });
 
+test('isProgressStderrChars は (node:NNNN) 形式の警告行を進捗に数えない', () => {
+  const nodeWarningLines = [
+    '(node:24560) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.',
+    '(node:1234) ExperimentalWarning: The Fetch API is an experimental feature.',
+    '(node:99) Warning: Something',
+  ];
+  for (const line of nodeWarningLines) {
+    assert.equal(isProgressStderrChars(line), 0, `Node 警告行を進捗に数えない: ${line}`);
+  }
+});
+
+test('isProgressStderrChars は Node 警告5行すべてをまとめて 0 と判定する', () => {
+  const allNodeWarnings = [
+    '(node:24560) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true',
+    '(node:1234) ExperimentalWarning: The Fetch API is an experimental feature.',
+    '(node:99) Warning: Something',
+    '(Use `node --trace-deprecation ...` to show where the warning was created)',
+    '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}',
+  ].join('\n');
+  assert.equal(isProgressStderrChars(allNodeWarnings), 0);
+});
+
+test('isProgressStderrChars は Node 警告行と実出力が混在すると実出力の字数だけ返す', () => {
+  const mixed = [
+    '(node:24560) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true',
+    'real output line here',
+    '(node:99) Warning: Something',
+    'another real line for progress',
+  ].join('\n');
+  // real output line here (21 chars) + another real line for progress (30 chars) = 51
+  assert.equal(isProgressStderrChars(mixed), 51);
+});
+
 test('isProgressStderrChars は複数行混在で警告行だけ除外する', () => {
   const mixed = 'DeprecationWarning: old api\nreal output line\n(Use `node --trace-deprecation ...)\nanother real line';
   // real output line (16 chars) + another real line (17 chars) = 33

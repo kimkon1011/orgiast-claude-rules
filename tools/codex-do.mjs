@@ -1434,7 +1434,7 @@ export function shouldAbortFirstOutputStall({ elapsedSecs, outputChars, stderrCh
 // Node の起動時警告や cheap-code の unknown model 注意は進捗に数えない。
 export function isProgressStderrChars(text) {
   if (!text || typeof text !== 'string') return 0;
-  const warningLineRx = /^(?:\s*\(?(?:Use\s+`node\s+--trace|Warning:|DeprecationWarning|ExperimentalWarning)|.*\[claude-code:unrecognized_model\])/;
+  const warningLineRx = /^(?:\s*\(?(?:Use\s+`node\s+--trace|node:\d+\)\s*(?:\[DEP\d+\]\s*)?(?:Warning:|DeprecationWarning|ExperimentalWarning)|Warning:|DeprecationWarning|ExperimentalWarning)|.*\[claude-code:unrecognized_model\])/;
   let progress = 0;
   for (const line of text.split(/\r?\n/)) {
     if (!warningLineRx.test(line)) progress += line.length;

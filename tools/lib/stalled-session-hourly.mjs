@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { inspect } from '../session-triage.mjs';
 import { redactSecrets } from '../redact-secrets.mjs';
-import { callWithFallback, executorCostUsd } from '../llm-fallback.mjs';
+import { callWithFallback } from '../llm-fallback.mjs';
 import { readEnvValue } from '../env-kv.mjs';
 import * as changeGate from './change-gate.mjs';
 import { latestWaitDeadline } from '../session-wait-title.mjs';
@@ -208,18 +208,25 @@ export async function classifyHourly(record, { home = process.env.ORGIAST_HOME |
           const key = loadKey ? loadKey(routed.provider) : process.env[keyEnv] || readEnvValue(path.join(home, '.claude', keyFile), keyEnv) || (routed.provider === 'gemini' ? readEnvValue(path.join(home, '.gemini', '.env'), keyEnv) : '');
           if (!key) return null;
           return { url, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: routed.model, messages: [{ role: 'user', content: prompt }], max_tokens: 1200, stream: false, response_format: { type: 'json_object' },
-              ...(routed.provider === 'openrouter' ? { reasoning: { enabled: false } } : {}) }) } };
+            body: JSON.stringify({ model: routed.model, messages: [{ role: 'user', content: prompt }], max_tokens: 1200, stream: false, response_format: routed.model === 'mistralai/mistral-small-3.2-24b-instruct' ? {
+                type: 'json_schema', json_schema: { name: 'hourly_decision', strict: true, schema: {
+                  type: 'object', additionalProperties: false, required: ['action', 'reason', 'nextStep'],
+                  properties: { action: { type: 'string', enum: ['resume', 'waiting-human', 'done', 'skip'] }, reason: { type: 'string' }, nextStep: { type: 'string' } },
+                } },
+              } : { type: 'json_object' },
+              ...(routed.provider === 'openrouter' && routed.model === 'mistralai/mistral-small-3.2-24b-instruct' ? { provider: { require_parameters: true } } : {}),
+              ...(routed.provider === 'openrouter' && routed.model === 'openai/gpt-oss-120b' ? { reasoning: { effort: 'low' } } : {}) }) } };
         },
-        validateResponse(body) { try { parseHourlyDecision(body.choices?.[0]?.message?.content); return true; } catch { return { ok: false, reason: 'invalid-json-decision' }; } },
-        async onAttempt(info) {
+        validateResponse(body) {
+          const choice = body?.choices?.[0];
+          if (!choice?.message?.content) return { ok: false, reason: 'empty-decision' };
+          if (choice.finish_reason === 'length') return { ok: false, reason: 'truncated-decision' };
+          try { parseHourlyDecision(choice.message.content); return true; }
+          catch { return { ok: false, reason: 'invalid-json-decision' }; }
+        },
+        onAttempt(info) {
+          // callWithFallback alone records each attempt in the shared ledger.
           lastStatus = info.status;
-          const usage = info.status === 'ok' ? (await info.response.clone().json()).usage || {} : {};
-          const row = { t: new Date().toISOString(), caller: 'stalled-session-hourly', job: 'stalled-session-hourly', provider: info.candidate.provider, model: info.candidate.model,
-            in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, status: info.status };
-          row.usd = typeof usage.cost === 'number' ? usage.cost : candidate.model.endsWith(':free') ? 0 : executorCostUsd(row);
-          fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
-          fs.appendFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), JSON.stringify(row) + '\n');
         },
       });
       const body = await result.response.json();
@@ -229,7 +236,7 @@ export async function classifyHourly(record, { home = process.env.ORGIAST_HOME |
       return { ...decision, fingerprint, cached: false };
     } catch (error) {
       failure = redactSecrets(String(error.message)).slice(0, 200);
-      if (/^http_(?:402|403|404|429)$/.test(lastStatus)) {
+      if (/^(?:http_(?:400|402|403|404|413|422|429)|unusable)$/.test(lastStatus)) {
         const health = json(healthFile, {}); health[providerKey] = Date.now() + (lastStatus === 'http_429' ? 10 : 60) * MINUTE;
         fs.mkdirSync(path.dirname(healthFile), { recursive: true });
         fs.writeFileSync(healthFile, JSON.stringify(health));
@@ -270,20 +277,83 @@ export function heartbeatLine({ now = Date.now(), label, account, rows = [], res
     'waiting-human': waiting, done, skip: rows.length - resumed.size - waiting - done, unlinked, seatGuard, dryRun, error: redactSecrets(String(error)).slice(0, 400) });
 }
 
-export function publishHourlyHeartbeat({ home = process.env.ORGIAST_HOME || os.homedir(), repo, hostname = os.hostname(), label, account, exec = execFileSync, ...summary }) {
+/** Auto packing during hourly publish left durable index.lock and pack corruption (2026-11-26). */
+export const HEARTBEAT_GIT_GC_ARGS = Object.freeze(['-c', 'gc.auto=0', '-c', 'maintenance.auto=false']);
+/** Locks older than this are crash leftovers; younger ones mean another git is still running. */
+export const STALE_HEARTBEAT_LOCK_MS = 10 * MINUTE;
+export const HEARTBEAT_PUBLISH_FAIL_ID = 'heartbeat-publish';
+
+export function heartbeatPublishStatusPath(home = process.env.ORGIAST_HOME || os.homedir()) {
+  return path.join(home, '.claude', 'heartbeat', 'heartbeat-publish.json');
+}
+
+export function recordHeartbeatPublishFailure(home, error) {
+  const reason = redactSecrets(String(error?.message ?? error ?? '')).slice(0, 200);
+  const file = heartbeatPublishStatusPath(home);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ ok: false, id: HEARTBEAT_PUBLISH_FAIL_ID, reason, at: new Date().toISOString() }) + '\n', { mode: 0o600 });
+}
+
+export function clearHeartbeatPublishFailure(home) {
+  try { fs.unlinkSync(heartbeatPublishStatusPath(home)); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+
+export function heartbeatGitLockPaths(gitDir) {
+  return [
+    path.join(gitDir, 'index.lock'),
+    path.join(gitDir, 'HEAD.lock'),
+    path.join(gitDir, 'refs', 'heads', 'fleet-heartbeat.lock'),
+    path.join(gitDir, 'refs', 'remotes', 'origin', 'fleet-heartbeat.lock'),
+    path.join(gitDir, 'packed-refs.lock'),
+    path.join(gitDir, 'shallow.lock'),
+    path.join(gitDir, 'ORIG_HEAD.lock'),
+    path.join(gitDir, 'FETCH_HEAD.lock'),
+  ];
+}
+
+/** After the publisher session lock is held, drop crash leftovers; refuse young locks. */
+export function reclaimStaleHeartbeatGitLocks(gitDir, { now = Date.now(), maxAgeMs = STALE_HEARTBEAT_LOCK_MS } = {}) {
+  for (const lock of heartbeatGitLockPaths(gitDir)) {
+    let stat;
+    try { stat = fs.statSync(lock); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    const age = now - stat.mtimeMs;
+    if (age < maxAgeMs) throw new Error(`git lock busy: ${path.basename(lock)} (${Math.round(age / 1000)}s < ${Math.round(maxAgeMs / 1000)}s)`);
+    fs.unlinkSync(lock);
+  }
+}
+
+function isCorruptHeartbeatGitError(error) {
+  return /index unavailable|bad object|corrupt/i.test(`${error?.stderr || ''} ${error?.message || ''}`);
+}
+
+function brokenHeartbeatStamp(now = Date.now()) {
+  const d = new Date(now);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+/** Rename only; never delete the clone (local log rows are re-merged on next clone). */
+export function renameBrokenHeartbeatClone(dir, { now = Date.now() } = {}) {
+  const dest = `${dir}.broken-${brokenHeartbeatStamp(now)}`;
+  fs.renameSync(dir, dest);
+  return dest;
+}
+
+export function publishHourlyHeartbeat({ home = process.env.ORGIAST_HOME || os.homedir(), repo, hostname = os.hostname(), label, account, exec = execFileSync, now = Date.now(), ...summary }) {
   label ||= /^(000|004|008|011|014|015|018|019|999)/.exec(hostname)?.[1] || resolveFleetLabel(home, { hostname });
   label = String(label).replace(/[^A-Za-z0-9_-]/g, '_');
   const localDir = path.join(home, 'gb-reports', 'stalled-sessions-hourly', 'heartbeat');
   fs.mkdirSync(localDir, { recursive: true });
   const localFile = path.join(localDir, `${label}.log`);
-  const line = heartbeatLine({ ...summary, label, account: account ?? getClaudeAccountEmail(home) ?? '' });
+  const line = heartbeatLine({ ...summary, now, label, account: account ?? getClaudeAccountEmail(home) ?? '' });
   fs.appendFileSync(localFile, line + '\n');
   const dir = path.join(home, '.claude', 'fleet-heartbeat-repo');
-  const git = (cwd, args) => String(exec('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] })).trim();
+  const git = (cwd, args) => String(exec('git', [...HEARTBEAT_GIT_GC_ARGS, ...args], { cwd, encoding: 'utf8', windowsHide: true, timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] })).trim();
   const gitIdentity = ['-c', 'user.name=Orgiast heartbeat', '-c', 'user.email=heartbeat@orgiast.jp'];
   let release;
   try {
-    release = acquireSessionLock('fleet-heartbeat-publish', { home });
+    release = acquireSessionLock('fleet-heartbeat-publish', { home, now });
     if (!release) throw new Error('heartbeat publisher locked');
     if (!fs.existsSync(path.join(dir, '.git'))) {
       const url = git(repo, ['remote', 'get-url', 'origin']);
@@ -299,6 +369,8 @@ export function publishHourlyHeartbeat({ home = process.env.ORGIAST_HOME || os.h
         git(dir, ['read-tree', '--empty']);
       }
     }
+    // Own publisher lock held: only crash leftovers remain. Young locks still fail.
+    reclaimStaleHeartbeatGitLocks(path.join(dir, '.git'), { now });
     // Clear stale rebase state that would block subsequent operations.
     for (const dirName of ['rebase-merge', 'rebase-apply']) {
       try { if (fs.existsSync(path.join(dir, '.git', dirName))) git(dir, ['rebase', '--abort']); } catch { /* ignore abort failure */ }
@@ -345,8 +417,13 @@ export function publishHourlyHeartbeat({ home = process.env.ORGIAST_HOME || os.h
         if (/^[A-Za-z0-9_-]+\.log$/.test(name) && name !== `${label}.log`) fs.copyFileSync(path.join(dir, 'stalled-sessions', name), path.join(localDir, name));
       }
     }
+    clearHeartbeatPublishFailure(home);
     return { line, localFile, pushed };
   } catch (error) {
+    if (isCorruptHeartbeatGitError(error) && fs.existsSync(dir)) {
+      try { renameBrokenHeartbeatClone(dir, { now }); } catch { /* keep original error */ }
+    }
+    recordHeartbeatPublishFailure(home, error);
     // The unsent line is already durable. Keep one canonical row per invocation.
     const failed = JSON.stringify({ ...JSON.parse(line), error: redactSecrets(`heartbeat-sync: ${error.message}`).slice(0, 400) });
     const content = fs.readFileSync(localFile, 'utf8');

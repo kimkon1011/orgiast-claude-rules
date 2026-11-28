@@ -206,9 +206,9 @@ test('手動操作は更新後にinboxを閉じ、期限未確認の候補は承
 test('支払完了を自動反映、車検は読取のみ、同日再実行は再通知を数えない', async t => {
   const home = homeFor(t), calls = [], changes = [];
   const rows = [{ ...base, due: '2026-11-05', kind: '支払', completedAt: '2026-11-04' }, { ...base, id: 'V01', readOnly: true, due: '2026-10-27', kind: '車検' }, { ...base, id: 'D-002', due: '2026-11-05', lastNotified: '2026-11-04' }];
-  const result = await runWatch({ home, config, rows, today: '2026-11-04', ledger: { patch: async (id, change) => changes.push({ id, change }) }, request: async () => assert.fail('network'), readInbox: async () => ['D-001'], notifyBatch: async ({ operations }) => { calls.push(...operations); return operations.map(op => ({ ...op, ok: true })); }, state: {} });
+  const result = await runWatch({ home, config, rows, today: '2026-11-04', ledger: { patch: async (id, change) => changes.push({ id, change }) }, request: async () => assert.fail('network'), readInbox: async () => ['D-001'], inboxBatch: async operations => { calls.push(...operations); return operations.map(op => ({ ...op, ok: true })); }, state: {} });
   assert.equal(result.errors.length, 0); assert.equal(result.decisions[0].status, '完了');
-  assert.ok(calls.find(x => x.key === 'D-001').op === 'close-key');
+  assert.equal(calls.find(x => x.key === 'D-001').type, 'close');
   assert.equal(result.decisions.find(x => x.id === 'D-002').notify, false);
   assert.ok(changes.every(x => x.id !== 'V01'));
 });
@@ -235,10 +235,10 @@ test('Gmailの完了照合に失敗しても期限通知を届け、失敗とし
   const changes = [], notices = [];
   const result = await runWatch({ home: homeFor(t), config, rows: [row], today: '2026-11-04',
     ledger: { patch: async (id, change) => changes.push(change) },
-    request: async () => { throw Error('Gmail unavailable'); }, notifyBatch: async ({ operations }) => { notices.push(...operations); return operations.map(op => ({ ...op, ok: true })); }, state: {} });
+    request: async () => { throw Error('Gmail unavailable'); }, inboxBatch: async operations => { notices.push(...operations); return operations.map(op => ({ ...op, ok: true })); }, state: {} });
   assert.equal(result.decisions[0]?.notify, true);
   assert.equal(result.decisions[0]?.status, '未着手');
-  assert.equal(notices.length, 1); assert.ok(notices[0].op === 'add');
+  assert.equal(notices.length, 1); assert.equal(notices[0].type, 'add');
   assert.ok(changes.some(change => change.notifyCount === 1));
   assert.ok(changes.every(change => change.status !== '完了'));
   assert.deepEqual(result.errors, [{ id: row.id, phase: 'auto-close', error: 'Gmail unavailable' }]);
@@ -249,7 +249,7 @@ test('Gmail 404 は warnings に記録し exit 0', async t => {
   const result = await runWatch({ home: homeFor(t), config, rows: [row], today: '2026-11-04',
     ledger: { patch: async () => {} },
     request: async () => { throw Object.assign(new Error('Google GET HTTP 404: Not found'), { status: 404 }); },
-    notifyBatch: async ({ operations }) => operations.map(op => ({ ...op, ok: true })), state: {} });
+    inboxBatch: async operations => operations.map(op => ({ ...op, ok: true })), state: {} });
   assert.equal(result.errors.length, 0);
   assert.equal(result.warnings.length, 1);
   assert.equal(result.warnings[0].id, row.id);
@@ -264,7 +264,7 @@ test('Gmail 500 は errors に記録し exit 1', async t => {
   const result = await runWatch({ home: homeFor(t), config, rows: [row], today: '2026-11-04',
     ledger: { patch: async () => {} },
     request: async () => { throw Object.assign(new Error('Google GET HTTP 500: Server Error'), { status: 500 }); },
-    notifyBatch: async ({ operations }) => operations.map(op => ({ ...op, ok: true })), state: {} });
+    inboxBatch: async operations => operations.map(op => ({ ...op, ok: true })), state: {} });
   assert.equal(result.errors.length, 1);
   assert.equal(result.errors[0].id, row.id);
   assert.equal(result.errors[0].phase, 'auto-close');
@@ -350,7 +350,7 @@ for (const sourceKey of ['messageId', 'threadId']) {
           assert.ok(url.includes(sourceKey === 'messageId' ? '/messages/' : '/threads/'));
           throw Object.assign(Error(`Google GET HTTP ${status ?? 'network'}`), { status });
         },
-        notifyBatch: async ({ operations }) => { notices.push(...operations); return operations.map(op => ({ ...op, ok: true })); }, heartbeat: async info => heartbeats.push(info), stdout: text => output.push(text),
+        inboxBatch: async operations => { notices.push(...operations); return operations.map(op => ({ ...op, ok: true })); }, heartbeat: async info => heartbeats.push(info), stdout: text => output.push(text),
       });
       const result = JSON.parse(output[0]);
       assert.equal(code, status === 404 ? 0 : 1);
@@ -360,7 +360,7 @@ for (const sourceKey of ['messageId', 'threadId']) {
       assert.equal(row.status, '未着手');
       assert.equal(result.decisions[0].status, '未着手');
       assert.equal(notices.length, 1);
-      assert.ok(notices[0].op === 'add');
+      assert.equal(notices[0].type, 'add');
       assert.ok(changes.every(change => change.status !== '完了'));
     });
   }
@@ -373,13 +373,13 @@ test('batch skips absent closed keys and updates only successful additions', asy
   const result = await runWatch({ home, config, rows, today: '2026-11-04',
     ledger: { patch: async (id, change) => changes.push({ id, change }) },
     request: async () => assert.fail('network'), readInbox: async () => ['open'],
-    notifyBatch: async ({ operations }) => {
+    inboxBatch: async operations => {
       calls.push(operations);
       return operations.map(op => ({ ...op, ok: op.key !== 'failed', error: 'test failure' }));
     },
   });
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0].map(op => [op.key, op.op]), [['open', 'close-key'], ['success', 'add'], ['failed', 'add']]);
+  assert.deepEqual(calls[0].map(op => [op.key, op.type]), [['open', 'close'], ['success', 'add'], ['failed', 'add']]);
   assert.deepEqual(changes.filter(x => x.change.lastNotified).map(x => x.id), ['success']);
-  assert.deepEqual(result.errors, [{ id: 'failed', phase: 'kim-inbox add', error: 'test failure' }]);
+  assert.deepEqual(result.errors, [{ id: 'failed', phase: 'kim-inbox batch', error: 'test failure' }]);
 });

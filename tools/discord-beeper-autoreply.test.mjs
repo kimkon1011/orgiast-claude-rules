@@ -1,9 +1,11 @@
+import { withTema } from './test-fixtures/tema-record.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runOnce, main, DISCORD_ACCOUNT, messageLink, isMessageRequest, isSyntheticMessage, SEND_PROMISE_PTN } from './discord-beeper-autoreply.mjs';
+import { runOnce, main, DISCORD_ACCOUNT, messageLink, isMessageRequest, isSyntheticMessage, SEND_PROMISE_PTN, dmDiscordUserID } from './discord-beeper-autoreply.mjs';
+import { trialFailAnswer } from './lib/trial-self-decline.mjs';
 import { main as guildMain } from './discord-autoreply.mjs';
 
 const NOW = Date.parse('2026-11-12T04:00:00Z'); // 13:00 JST (allowed window)
@@ -44,7 +46,10 @@ function fixture(t, { chats = [chat()], messages, decision = reply } = {}) {
   let replyLlm = options.llm;
   Object.defineProperty(options, 'llm', {
     get: () => async args => args.system?.startsWith('Extract proper nouns')
-      ? JSON.stringify(['スマートエイト']) : replyLlm(args),
+      ? JSON.stringify(['スマートエイト']) : (async () => {
+        const raw = await replyLlm(args);
+        try { const data = JSON.parse(raw); if (args.category === 'jp_reply' && data.answer?.trim()) data.answer = withTema(data.answer); return JSON.stringify(data); } catch { return raw; }
+      })(),
     set: value => { replyLlm = value; },
   });
   const file = path.join(home, '.claude/discord-beeper-autoreply/state.json');
@@ -1441,3 +1446,140 @@ test('本人辞退の定型文は会話ごとに一度のみ、次回は従来�
   assert.equal(f.sent.length, 1);
   assert.equal(f.state().chats.chat1.status, 'fyi');
 });
+test('トライアル途中通過条件の未達は終了案内の定型文を dryRun で返す（送信しない）', async t => {
+  const f = fixture(t, { messages: [message({ senderName: 'テスト参加者', text: '昨日のトライアル3日目で到達タスクが20件未満だったのですが、本日も業務を続けてよろしいのでしょうか。' })] });
+  f.options.llm = async () => { assert.fail('未達の判定に LLM は使わない'); };
+  const result = await runOnce({ ...f.options, dryRun: true });
+  assert.equal(result.ok, true);
+  assert.equal(result.wouldSend.length, 1);
+  assert.equal(result.wouldSend[0].content.includes(trialFailAnswer(false)), true);
+  assert.match(result.wouldSend[0].content, /トライアルは終了とさせていただきます/);
+  assert.equal(f.sent.length, 0);
+});
+
+test('トライアル3日目で累計20件以上の報告は従来の分類に進み、終了案内を出さない', async t => {
+  const f = fixture(t, { messages: [
+    message({ id: 'own', isSender: true, timestamp: new Date(NOW - 5000).toISOString(), text: '前回の案内' }),
+    message({ senderName: 'テスト参加者', text: '1.トライアル：3日目\n6.累計完了タスク数\nイベントタスク：18件、チュートリアル情報収集：6件、マニュアル更新：4件\n本日も続けてよいですか' }),
+  ] });
+  let classified = 0;
+  f.options.llm = async ({ category }) => {
+    if (category === 'jp_reply') {
+      classified++;
+      return JSON.stringify({ needs_reply: true, needs_kim_decision: false, answer: '3日目の途中通過条件は満たしています。引き続き進めてください。', confidence: 0.95 });
+    }
+    return '{}';
+  };
+  const result = await runOnce({ ...f.options, dryRun: true });
+  assert.equal(classified, 1);
+  assert.equal(result.wouldSend.length, 1);
+  assert.match(result.wouldSend[0].content, /途中通過条件は満たしています/);
+  assert.equal(result.wouldSend[0].content.includes('トライアルは終了とさせていただきます'), false);
+  assert.equal(f.sent.length, 0);
+});
+
+test('途中通過条件未達の定型文は会話ごとに一度のみ', async t => {
+  const f = fixture(t, { messages: [
+    message({ id: 'own', isSender: true, timestamp: new Date(NOW - 5000).toISOString(), text: '前回の案内' }),
+    message({ senderName: 'テスト参加者', text: '昨日のトライアル3日目で到達タスクが20件未満だったのですが、本日も業務を続けてよろしいのでしょうか。' }),
+  ] });
+  f.options.llm = async ({ category }) => category === 'jp_reply'
+    ? JSON.stringify({ ...reply, needs_reply: false })
+    : '{}';
+  const first = await runOnce(f.options);
+  assert.equal(first.replied, 1);
+  assert.equal(f.state().trialMidpointFailed.chat1, true);
+  f.data.chat1.push(message({ senderName: 'テスト参加者', id: 'second-fail', timestamp: new Date(NOW + 1000).toISOString(), text: '昨日のトライアル3日目で到達タスクが20件未満だったのですが、本日も業務を続けてよろしいのでしょうか。' }));
+  const second = await runOnce({ ...f.options, now: NOW + 2000 });
+  assert.equal(second.replied, 0);
+  assert.equal(f.sent.length, 1);
+});
+
+
+const trialUserId = '123456789012345678';
+const trialSender = `@discordgo_${trialUserId}:beeper.local`;
+
+test('DM相手IDは最新受信・pending・参加者の順で解決しkimやローカルIDを使わない', () => {
+  const other = '@discordgo_223456789012345678:beeper.local';
+  const c = chat({ participants: { items: [{ isSelf: true, id: other }, { isSelf: false, id: trialSender }] } });
+  assert.equal(dmDiscordUserID(c, message({ senderID: other }), [message({ senderID: trialSender })]), '223456789012345678');
+  assert.equal(dmDiscordUserID(c, message({ isSender: true, senderID: other }), [message({ senderID: trialSender })]), trialUserId);
+  assert.equal(dmDiscordUserID(c), trialUserId);
+  assert.equal(dmDiscordUserID(chat(), message({ senderID: '828' })), null);
+  assert.equal(dmDiscordUserID(chat({ type: 'group' }), message({ senderID: trialSender })), null);
+});
+
+for (const mode of ['first', 'request-history', 'request-preview', 'existing']) {
+  test(`サーバー在籍・台帳未登録DM: ${mode} は既存本文でwouldSend`, async t => {
+    const incoming = message({ senderID: trialSender, senderName: '加藤愛' });
+    const c = chat({
+      ...(mode.startsWith('request') ? { isMessageRequest: true } : {}),
+      ...(mode === 'request-preview' ? { preview: incoming, participants: { items: [{ isSelf: false, id: trialSender }] } } : {}),
+    });
+    const f = fixture(t, { chats: [c], ...(mode === 'existing' ? {} : { messages: [incoming] }) });
+    let calls = 0;
+    const result = await runOnce({ ...f.options, dryRun: true, searchDriveFactsImpl: async () => [],
+      isOrgiastMember: async (id, options) => {
+        calls++;
+        assert.equal(id, trialUserId);
+        assert.equal(options.persistCache, false);
+        return true;
+      },
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.equal(result.wouldSend.length, 1);
+    assert.match(result.wouldSend[0].content, /マニュアルの一覧から確認できます/);
+    assert.equal(result.decisions.length, 0);
+    assert.equal(calls, mode === 'existing' ? 0 : 1);
+    assert.equal(f.sent.length, 0);
+    assert.equal(f.inboxItems.length, 0);
+    assert.equal(fs.existsSync(f.file), false);
+  });
+}
+
+for (const membership of [false, null, 'throws']) {
+  for (const mode of ['first', 'request-history', 'request-preview']) {
+    test(`在籍=${membership} ${mode}は従来どおり判断待ち`, async t => {
+      const incoming = message({ senderID: trialSender });
+      const c = chat({
+        ...(mode.startsWith('request') ? { isMessageRequest: true } : {}),
+        ...(mode === 'request-preview' ? { preview: incoming, participants: { items: [{ isSelf: false, id: trialSender }] } } : {}),
+      });
+      const f = fixture(t, { chats: [c], messages: [incoming] });
+      let calls = 0;
+      const result = await runOnce({ ...f.options, dryRun: true,
+        isOrgiastMember: async () => { calls++; if (membership === 'throws') throw new Error('unavailable'); return membership; },
+      });
+      assert.equal(result.ok, true);
+      assert.equal(result.wouldSend.length, 0);
+      assert.equal(result.decisions.length, 1);
+      assert.match(result.decisions[0].reason, mode === 'first' ? /初対面/ : /メッセージリクエスト・未承認/);
+      assert.equal(calls, 1);
+      assert.equal(f.sent.length, 0);
+      assert.equal(f.inboxItems.length, 0);
+    });
+  }
+}
+
+test('preview経路で参加者IDが不明なら本文取得も在籍照会もしない', async t => {
+  const incoming = message({ senderID: trialSender });
+  const f = fixture(t, { chats: [chat({ isRequest: true, preview: incoming })], messages: [incoming] });
+  const result = await runOnce({ ...f.options, dryRun: true,
+    isOrgiastMember: () => assert.fail('preview sender must not be used'),
+  });
+  assert.equal(result.wouldSend.length, 0);
+  assert.match(result.decisions[0].reason, /メッセージリクエスト・未承認/);
+  assert.equal(f.reads.length, 0);
+});
+
+for (const change of [{ isReadOnly: true }, { draft: '編集中' }, { participants: { items: [{ isSelf: true, cannotMessage: true }] } }]) {
+  test(`在籍者でも送信直前の制限は解除しない: ${JSON.stringify(change)}`, async t => {
+    const c = chat({ isRequest: true });
+    const f = fixture(t, { chats: [c], messages: [message({ senderID: trialSender })] });
+    f.api.getChat = async () => ({ ...c, ...change });
+    const result = await runOnce({ ...f.options, dryRun: true, isOrgiastMember: async () => true });
+    assert.equal(result.wouldSend.length, 0);
+    assert.match(result.decisions[0].reason, /送信直前の会話条件/);
+    assert.equal(f.sent.length, 0);
+  });
+}

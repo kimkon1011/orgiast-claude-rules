@@ -11,6 +11,7 @@ import { autoResumeAllowed } from './lib/auto-resume-policy.mjs';
 import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
 import { ledgerRows, runTaskLedger } from './task-ledger.mjs';
 import { alternateCheapProvider, autoSessionExecutor, buildClaudeHeadlessArgs, buildCheapCodeArgs, buildCodexDoArgs, cheapProvidersAllCooling, codexDoLaneEnabled, claudeFallbackEnabled, prepareExecutorRoot, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
+import { isLaneIncompatible } from './lib/lane-incompatible.mjs';
 import { sweepFile as sweepRescueTodoFile } from './rescue-todo-sweep.mjs';
 import { evaluateClaudeSeatGuard, formatClaudeSeatGuardSkip } from './lib/claude-seat-guard.mjs';
 
@@ -818,7 +819,6 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
   const executorRoot = runOptions.executorRoot ?? prepareExecutorRoot({ repoRoot: REPO_ROOT });
   return new Promise((resolve) => {
     const startedAt = new Date();
-    const deadline = performance.now() + 2 * timeoutMs;
     const configuredChoice = autoSessionExecutor();
     // resumeSessionId が指定されたときは claude レーン（--resume 付き）で起動する。
     // cheap-code / codex は --resume 引数を捨てるため、元のセッションに再開が届かない
@@ -838,6 +838,9 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
     const codexLane = codexDoLaneEnabled();
     const promptFile = path.join(os.tmpdir(), `orgiast-auto-session-${process.pid}-${Date.now()}.txt`);
     if (choice.executor === 'cheap-code') fs.writeFileSync(promptFile, `[headless:auto-session]\n${prompt}`, 'utf8');
+    // Start the executor budget after synchronous configuration/prompt setup.
+    // Slow local file writes must not exhaust it before any lane is launched.
+    const deadline = performance.now() + 2 * timeoutMs;
     const launch = (fallback = false, codex = false) => {
       if (performance.now() >= deadline) { finish(null, '', '', false, fallback, true); return; }
       const cheap = choice.executor === 'cheap-code' && !fallback && !codex;
@@ -922,8 +925,12 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      executorAttempts.push({ executor: activeLane === 'cheap-code' ? `cheap-code:${cheapProvider}` : activeLane, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure' });
-      if (cheap && timedOut && performance.now() < deadline) {
+      // cheap-code が unrecognized_model で exit 0 の空振りをすると、終了コードだけでは
+      // success になり次レーンへ進まない（2026-11-27 実測: runs/2026-11-27-8.json）。
+      // isLaneIncompatible は tools/lib/lane-incompatible.mjs の共有実装（codex-do からも re-export）。
+      const laneIncompatible = Boolean(cheap) && isLaneIncompatible(stdout, stderr, code);
+      executorAttempts.push({ executor: activeLane === 'cheap-code' ? `cheap-code:${cheapProvider}` : activeLane, status: timedOut ? 'timeout' : laneIncompatible ? 'incompatible' : code === 0 ? 'success' : 'failure' });
+      if (cheap && (timedOut || laneIncompatible) && performance.now() < deadline) {
         if (alternate) { alternateTried = true; cheapProvider = alternate; launch(false); return; }
         if (codexLane && !codexTried) { launch(false, true); return; }
       }
@@ -936,7 +943,9 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
         finish(code, stdout, stderr, launchFailed, false, false, true);
         return;
       }
-      finish(timedOut ? null : code, stdout, stderr, launchFailed, fallback, timedOut);
+      // 全レーン incompatible のまま code 0 で終わると通知が「成功」扱いになるため、
+      // 終了コードだけ非 0 にして status=failure にする（finish の契約は変えない）。
+      finish(timedOut ? null : (laneIncompatible && code === 0 ? 1 : code), stdout, stderr, launchFailed, fallback, timedOut);
     };
     child.on('close', complete);
     };

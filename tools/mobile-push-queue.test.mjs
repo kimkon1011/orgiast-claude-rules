@@ -307,3 +307,77 @@ test('CLI --sweep --dry-run はファイルを変更しない', async t => {
   assert.ok(dedupedQueueItem);
   assert.equal(dedupedQueueItem.occurrences, 2);
 });
+
+test('スナップショット圧縮: 同じ owner・title で本文が違う未送信は最新1件だけ残る', t => {
+  const home = tempHome(t);
+  const now = Date.now();
+  appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '【進捗まとめ】', body: '本文A' }, { now: now - 3000, id: 'snap-old' });
+  appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '【進捗まとめ】', body: '本文B' }, { now: now - 2000, id: 'snap-mid' });
+  appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '【進捗まとめ】', body: '本文C' }, { now: now - 1000, id: 'snap-new' });
+
+  const result = sweepMobilePushQueue(home, { now });
+  assert.ok(result.deduplicated >= 2);
+
+  const pending = pendingMobilePush(home);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].id, 'snap-new');
+  assert.equal(pending[0].body, '本文C');
+});
+
+test('再掲回数上限: occurrences が閾値以上の未送信は削除され expired が増える', t => {
+  const home = tempHome(t);
+  const now = Date.now();
+  const file = mobilePushQueueFile(home);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({
+    id: 'occ-heavy',
+    queuedAt: new Date(now - 1000).toISOString(),
+    ts: new Date(now - 1000).toISOString(),
+    owner: 'cr@orgiast.jp',
+    title: '滞留通知',
+    body: '何度も再掲',
+    sent: false,
+    occurrences: 15,
+  }) + '\n', { mode: 0o600 });
+
+  const result = sweepMobilePushQueue(home, { now });
+  assert.ok(result.expired >= 1);
+  assert.equal(pendingMobilePush(home).length, 0);
+  assert.equal(readMobilePushQueue(home).find(row => row.id === 'occ-heavy'), undefined);
+});
+
+test('スナップショット圧縮・再掲上限は送信済みや別 title を消さない', t => {
+  const home = tempHome(t);
+  const now = Date.now();
+  const sent = appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '【進捗まとめ】', body: '古い送信済み' }, { now: now - 5000, id: 'keep-sent' });
+  markMobilePushSent(home, [sent.id], { now: now - 4000 });
+  appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '【進捗まとめ】', body: '未送信A' }, { now: now - 3000, id: 'collapse-old' });
+  appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '【進捗まとめ】', body: '未送信B' }, { now: now - 2000, id: 'collapse-new' });
+  appendMobilePush(home, { owner: 'cr@orgiast.jp', title: '別タイトル', body: '残すべき' }, { now: now - 1000, id: 'keep-other-title' });
+
+  const file = mobilePushQueueFile(home);
+  const heavy = {
+    id: 'keep-sent-heavy',
+    queuedAt: new Date(now - 500).toISOString(),
+    ts: new Date(now - 500).toISOString(),
+    owner: 'cr@orgiast.jp',
+    title: '送信済み高再掲',
+    body: 'occurrences が多くても sent は残す',
+    sent: true,
+    sentAt: new Date(now - 400).toISOString(),
+    occurrences: 15,
+  };
+  fs.appendFileSync(file, JSON.stringify(heavy) + '\n', { mode: 0o600 });
+
+  sweepMobilePushQueue(home, { now });
+
+  const queue = readMobilePushQueue(home);
+  assert.ok(queue.find(row => row.id === 'keep-sent'), '送信済みは残る');
+  assert.ok(queue.find(row => row.id === 'keep-sent-heavy'), '送信済みの高 occurrences も残る');
+  assert.ok(queue.find(row => row.id === 'keep-other-title'), '別 title は残る');
+  assert.ok(queue.find(row => row.id === 'collapse-new'), '同 title の最新未送信は残る');
+  assert.equal(queue.find(row => row.id === 'collapse-old'), undefined);
+
+  const pending = pendingMobilePush(home);
+  assert.deepEqual(pending.map(row => row.id).sort(), ['collapse-new', 'keep-other-title']);
+});

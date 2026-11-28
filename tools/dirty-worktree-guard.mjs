@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { filterCollapsedWindowsPaths, isCollapsedWindowsPath } from './lib/collapsed-win-path.mjs';
+import { unstageUndeclaredGitlinks } from './lib/rescue-gitlinks.mjs';
 
 export { filterCollapsedWindowsPaths } from './lib/collapsed-win-path.mjs';
 
@@ -97,10 +98,23 @@ export function createDirtyWorktreeGuard({
       branch = `${base}-${n}`;
     }
     try {
+      let originalBranch = '';
+      try { originalBranch = git(dir, ['symbolic-ref', '--short', '-q', 'HEAD']).trim(); }
+      catch { /* Detached HEAD is valid; restore it by commit below. */ }
+      const originalHead = git(dir, ['rev-parse', 'HEAD']).trim();
       gitRetryingStaleLock(['switch', '-c', branch]);
       const exclusions = paths.filter(isCollapsedWindowsPath)
         .map(name => `:(exclude,top,literal)${name}`);
       gitRetryingStaleLock(['add', '-A', '--', '.', ...exclusions]);
+      const droppedLinks = unstageUndeclaredGitlinks(dir);
+      if (droppedLinks.length) log(`[RESCUE_GITLINK_DROPPED] ${dir}: ${droppedLinks.join(' ')}`);
+      if (!git(dir, ['diff', '--cached', '--name-only']).trim()) {
+        if (originalBranch) gitRetryingStaleLock(['switch', originalBranch]);
+        else gitRetryingStaleLock(['switch', '--detach', originalHead]);
+        gitRetryingStaleLock(['branch', '-D', branch]);
+        log(`[RESCUE_EMPTY_AFTER_GITLINK_DROP] ${dir}: no rescue branch created`);
+        return false;
+      }
       gitRetryingStaleLock(['-c', 'user.name=Auto Session Rescue', '-c', 'user.email=auto-session-rescue@localhost',
         'commit', '-m', `auto-session-rescue-${stamp}`]);
       const sha = git(dir, ['rev-parse', 'HEAD']).trim();

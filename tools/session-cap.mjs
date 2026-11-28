@@ -16,7 +16,7 @@ const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const ids = value => new Set(JSON.stringify(value ?? null).match(UUID)?.map(s => s.toLowerCase()) ?? []);
 const content = row => typeof row.message?.content === 'string' ? row.message.content : (row.message?.content ?? []).filter(x => x.type === 'text').map(x => x.text ?? '').join('\n');
 const run = (command, args) => execFileSync(command, args, { encoding: 'utf8', windowsHide: true, timeout: 15_000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
-function vscodeDir(home) {
+export function vscodeDir(home) {
   if (process.platform === 'win32') return path.join(process.env.APPDATA || path.join(home, 'AppData/Roaming'), 'Code/User');
   return process.platform === 'darwin' ? path.join(home, 'Library/Application Support/Code/User') : path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'Code/User');
 }
@@ -70,7 +70,7 @@ export function scopeRoots(userDir, home) {
   });
   return [...new Set(roots.length ? roots : [home])];
 }
-function projectDirs(base, roots) {
+export function projectDirs(base, roots) {
   const available = entries(path.join(base, 'projects')).filter(e => e.isDirectory());
   return [...new Set(roots.flatMap(root => {
     const encoded = root.replace(/[^a-zA-Z0-9]/g, '-');

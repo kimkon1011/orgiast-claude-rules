@@ -6,6 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { dirtyStatus, rescueTree } from './nightly-rescue.mjs';
 import { snapshotTree, unstageUndeclaredGitlinks, supersededByMain } from './rescue-policy.mjs';
+import { createDirtyWorktreeGuard } from './dirty-worktree-guard.mjs';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nightly-rescue-'));
@@ -335,6 +336,24 @@ test('unstageUndeclaredGitlinks removes a gitlink that is not a declared submodu
   const after = git('ls-files', '--stage');
   assert.equal(after.split(/\r?\n/).filter(Boolean).filter(line => line.startsWith('160000 ')).length, 0,
     `160000 entries should be empty, got: ${after}`);
+});
+
+test('auto-session guard drops an untracked nested repo and creates no rescue branch', t => {
+  const f = fixture(t);
+  fs.mkdirSync(path.join(f.repo, 'nested'));
+  const ngitRun = (...args) => execFileSync('git', ['-C', path.join(f.repo, 'nested'), ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] });
+  ngitRun('init', '-b', 'main');
+  ngitRun('config', 'user.name', 'Test');
+  ngitRun('config', 'user.email', 'test@example.invalid');
+  fs.writeFileSync(path.join(f.repo, 'nested', 'file'), 'content');
+  ngitRun('add', '.'); ngitRun('commit', '-m', 'nested initial');
+  const logs = [];
+  const guard = createDirtyWorktreeGuard({ home: f.home, log: message => logs.push(message) });
+  assert.equal(guard(f.repo), false);
+  assert.equal(f.git('ls-files', '--stage').includes('160000'), false, 'gitlink must not remain staged');
+  assert.equal(branches(f).length, 0, 'no rescue branch should be created when all changes are gitlinks');
+  assert.ok(logs.some(line => line.includes('RESCUE_EMPTY_AFTER_GITLINK_DROP')), logs.join('\n'));
+  assert.ok(fs.existsSync(path.join(f.repo, 'nested', '.git')), 'nested repository must remain untouched');
 });
 
 test('supersededByMain: main 履歴に同一内容があるブランチだけ true', () => {

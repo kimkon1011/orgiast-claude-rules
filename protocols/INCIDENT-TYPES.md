@@ -47,6 +47,7 @@
 | 外部チャネル未監視型 | セッションが「返信が届いたら」と宣言した外部チャネル（LINEグループ等）を自動照会する仕組みがなく、resumeSession の連続 timeout で沈黙。kim が「進捗どう？」と聞く羽目に（2026-11-12 e50bea8a LINE エイト様グループ）。Gmail は external-waiting.mjs がカバー済みだが LINE/Discord/Beeper は未対応。再開失敗も kim-inbox に通知されず握りつぶされていた | 「返信待ち」「返事待ち」「返信が届いたら」の promise を持つ auto-progress 行。Supabase channel_messages を読みに行く check が未登録のセッション。resumeOutcome が error/timeout で failureCount>=3 の行 | `auto-progress-external-check.mjs`（新設: LINE Supabase 新着照会 check ツール）。watch の resume-failed 通知（連続3回失敗で kim-inbox🔴）。`auto-progress.mjs --add-check` 登録時に外部チャネル ID を埋め込む標準手順 |
 | 再開レーン誤配送型 | セッション再開（auto-progress-watch / stalled-session-resume が runChild に resumeSessionId を渡す）が、既定の実行者 cheap-code に流れて --resume が捨てられ、元の会話に何も届かず「blocked: 成果記録なし」のまま放置された（2026-11-09 セッション 834dfc9c） | runChild の resumeSessionId 分岐（auto-progress-watch.mjs、stalled-session-resume.mjs）。--resume を無視する実行レーン | runChild は resumeSessionId 指定時に claude レーンへ固定（PR #1879、2026-11-11 マージ）。結果 JSON 欠落は error 扱いで再試行。auto-session.test.mjs / auto-progress-watch.test.mjs のテスト |
 | 短い返事＋巨大な注入で人の入力を無視して無応答終了 | 短い返事への応答が空、または `No response requested.` のみで終了した（2026-11-19 kim 集計） | transcript 末尾の応答と直前の user エントリ | no-response-gate |
+| 常設許可の広すぎる一致型 | 価格変更の承認依頼が施設名「メルシ」1語で延泊案内の常設許可に一致し info へ格下げ、kim に再提示されず（2026-11-27 004民泊） | config/standing-send-permissions.json の match・grep -rn "new RegExp(item.match" tools | match を固有語（延泊・前倒し・1日待ち・フォローアップ）に限定＋kim-inbox-standing-permission.test.mjs の非一致テスト |
 
 追記ルール: 型名は構造を表す語にする。症状は1行、日付と出典を付ける。ゲート列が空の行は未完了として扱い、埋まるまで消さない。
 
@@ -73,11 +74,16 @@
 - 型: コマンドラインの引用符の違いで正規のプロセスを別物と判定し、再起動を拒否する（2026-11-19 kim-PC、secretary-restart.ps1 の 3939/3940 実測） → 対策: 引数単位でパスとポートを照合し、Next.js の子プロセスは親も確認する。ゲート: tools/secretary-server-process.test.ps1
 | 送信ゲート経路漏れ型 | ゲートをコマンド名に結びつけ、同じ操作をする別経路を見落とす | 送信 API・Actions の `mode=send`・送信関数の呼び出しを `tools/` 全体で走査 | 送信ツール本体で防御＋送信経路の網羅テスト |
 | 営業メールの社内同報漏れ型 | ブース営業の社外メールで担当社員へのCCが抜け、進行状況を共有できない | gmail-draft・seisaku-mail・営業専用送信スクリプトを横断 | config/booth-sales-cc.json による自動CC＋既存下書き送信時の欠落停止 |
+| 請求書メールの経理CC漏れ | 請求書メールで経理（keiri2@orgiast.jp）へのCCが抜け、経理が請求を把握できない | gmail-draft・seisaku-mail・請求書送信スクリプトを横断 | config/invoice-cc.json による自動CC＋既存下書き送信時の欠落停止（errorKind: invoice_cc_missing） |
 - 型: 故障レーンの修理を「次のセッションで直します」と最終応答で先送りする型（2026-11-15 kim 指摘: deepseek・qwen の故障を次セッションへ回した。deferral-wait-gate に「次のセッション／明日／後で＋直す」の型が無く、lane-repair-first-gate は PreToolUse でツール実行しか止めないため最終文面を素通り。原因の実体は codex-do が警告行 [claude-code:unrecognized_model] だけで失敗判定していた誤判定と、qwen 0.22.3 が自動メモリ抽出で終了しない不具合） → 横展開の検索: deferral-wait-gate の全先送りパターン、codex-do の isLaneIncompatible・cheapFirstFailureReason の呼出し全箇所、buildQwenArgs → ゲート: deferral-wait-gate NEXT_SESSION_DEFERRAL（Stop・人待ち例外つき）+ isLaneIncompatible の警告行除外判定 + buildQwenArgs に --bare
 - 型: 手間依頼の回避策未検討型（2026-11-16 同日2回目。kim「何回言ったらわかるのかな」）→ 横展開の検索: user へ電話・操作を依頼する報告文・手順書 → ゲート: user-burden-gate の「Claude で回避できる策:」検査
 - 型: 数字だけの識別子を表計算が数値化し、先頭0が消えて厳密比較から脱落する（2026-11-20 fleet-mail `018`→`18` 未配達）→ 横展開の検索: Sheets 経由の ID・ラベル保存と `to` の厳密比較 → ゲート: 宛先列をプレーンテキスト書式に固定、読み出しを文字列化、数字ラベルは数値同値比較（tools/fleet-mail-address.test.mjs / fleet-mail-gas-v2.test.mjs）
 - 型: 通知の配信結果を呼び出し側の許可リストで判定し、新しい成功値（spooled）を失敗扱い → lib/kim-delivery.mjs の isKimDelivered に統一、kim-delivery-allowlist テストで検出。
 - 型: 照会できる事実（注文内容・届いた物）を記録を読まずに推測で断言する型（2026-11-24 VBM 部品「Oリングは注文していない」→実際はOリングを注文、店の確認メールへの返信も下書きのまま。kim「こういう嘘は二度とつくな」）→ 横展開の検索: 注文・配送・相手の返信に関する断言文 → ゲート: 未追加（Codex で Stop ゲート「注文/届いた/返信に関する断定文に確認元の記載が無ければ差し戻す」を実装予定）
+- 型: 手間比較なしの依頼・提案（紙前提／順番飛ばし／訂正連絡追加／所在未確認／サインイン出どころ未運搬）→ tema-check ゲート
 
 - 型: ゲート間の書式要求の矛盾／末尾付加行でフッター未検出→後段ゲート未評価。2026-11-25 015CAFE
 - 型: テストの相対fixtureが起動cwdに依存し、通知抑止だけでは提案経由の画面起動が残る → internal-audit/deadline-watchのfixtureはfileURLToPathで解決、cost-improve-loopは提案launcherを注入モック化 → ゲート: リポ外cwdで失敗5件の再検証＋kim席・非dry-runのlauncher呼出テスト。
+
+- 型: 送信済み下書きが再確認タスクに残る／日付・CC・最新指示・新着との不一致 → send-consistency共通入口で7項目を照合し、sent-registryと下書き404を読み戻す。
+- 型: 絶対ルールを抽出対象の見出し外に置き、全PCの CLAUDE.md に届かない → ONBOARDING.md の実ファイルから絶対ルールを抽出し、必須語を検査する回帰テストで防止する。

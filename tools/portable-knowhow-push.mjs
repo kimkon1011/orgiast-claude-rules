@@ -12,8 +12,8 @@ import { uploadFileContent } from './lib/drive-files.mjs';
 import { redactForShare, findSharedSecret } from './lib/share-content.mjs';
 import { ensureKimEditor } from './lib/kim-editor.mjs';
 
-const HUB_ID = '1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw';
-const FOLDER_NAME = 'AI共通ノウハウ（Gemini・ChatGPT・Claude用）';
+export const HUB_ID = '1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw';
+export const FOLDER_NAME = 'AI共通ノウハウ（Gemini・ChatGPT・Claude用）';
 const GDOC_MIME = 'application/vnd.google-apps.document';
 const INDEX_FILE = '00_目次・使い方（まずこれを読む）';
 

@@ -8,9 +8,28 @@ import path from 'node:path';
 export const isAutoDisabled = entry => ['failure_rate', 'quality_validation'].includes(entry?.reason);
 export const TEMP_DISABLE_MS = 6 * 60 * 60 * 1000;
 export function disabledLanesFile(home = process.env.ORGIAST_HOME || os.homedir()) { return path.join(home, '.claude', 'lanes-disabled.json'); }
-export function readDisabledEntries(home = process.env.ORGIAST_HOME || os.homedir()) {
+// probe で復帰させた時刻を記録する（~/.claude/lanes-restored.json）。
+// fallback-backend-health の unhealthyCandidates が「復帰より前の失敗」を数えて
+// 直後に再停止するのを防ぐためのマーカー（2026-11-28 05:08 実測の再発）。
+export function restoredLanesFile(home = process.env.ORGIAST_HOME || os.homedir()) { return path.join(home, '.claude', 'lanes-restored.json'); }
+// { "<name>": <epoch ms>, ... }（name は小文字）。無い・壊れていたら {}。
+export function readRestoredAt(home = process.env.ORGIAST_HOME || os.homedir(), file = restoredLanesFile(home)) {
   try {
-    const data = JSON.parse(fs.readFileSync(disabledLanesFile(home), 'utf8').replace(/^\uFEFF/, '')) || {};
+    const data = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) || {};
+    if (typeof data !== 'object' || Array.isArray(data)) return {};
+    const out = {};
+    for (const [key, value] of Object.entries(data)) {
+      const name = String(key).trim().toLowerCase();
+      const t = Number(value);
+      if (!name || !Number.isFinite(t)) continue;
+      out[name] = t;
+    }
+    return out;
+  } catch { return {}; }
+}
+export function readDisabledEntries(home = process.env.ORGIAST_HOME || os.homedir(), file = disabledLanesFile(home)) {
+  try {
+    const data = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) || {};
     if (Array.isArray(data)) return Object.fromEntries(data.filter(Boolean).map(n => [String(n).trim().toLowerCase(), { reason: 'manual' }]));
     if (typeof data !== 'object') return {};
     const out = {};
@@ -22,13 +41,12 @@ export function readDisabledEntries(home = process.env.ORGIAST_HOME || os.homedi
     return out;
   } catch { return {}; }
 }
-export function disabledLanes(home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now()) {
+export function disabledLanes(home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), entries = readDisabledEntries(home)) {
   const set = new Set();
-  for (const [name, entry] of Object.entries(readDisabledEntries(home))) {
+  for (const [name, entry] of Object.entries(entries)) {
     const until = Number(entry?.until);
     // until が過去の一時停止は無効として扱わない。restoreExpiredDisabledLanes の
-    // probe を待たずに期限切れを外す（cursor-agent は lane-doctor の PROBE_OF に
-    // 無く、期限切れのまま永遠に候補から外れる実害があった。2026-11-20 000/011）。
+    // probe を待たずに期限切れを外す。
     if (Number.isFinite(until) && until <= now) continue;
     set.add(name);
   }
@@ -43,6 +61,14 @@ function writeDisabledEntries(home, data) {
   fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`);
   try { fs.renameSync(tmp, file); } catch { fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`); try { fs.unlinkSync(tmp); } catch {} }
 }
+// lanes-restored.json も lanes-disabled.json と同じ tmp→rename 方式で書く。
+function writeRestoredAt(home, data) {
+  const file = restoredLanesFile(home);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`);
+  try { fs.renameSync(tmp, file); } catch { fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`); try { fs.unlinkSync(tmp); } catch {} }
+}
 // 健康判定による停止は必ず until 付き（+6h）。until の無い手動エントリは上書きしない。恒久停止は書かない。
 export function disableLanesTemporarily(home, hits, now = Date.now()) {
   if (!hits?.length) return [];
@@ -52,6 +78,7 @@ export function disableLanesTemporarily(home, hits, now = Date.now()) {
   for (const hit of hits) {
     const name = String(hit?.name || '').trim().toLowerCase();
     if (!name) continue;
+    if (name === 'cursor-agent') continue;
     const existing = data[name];
     const manual = existing && !Number.isFinite(Number(existing.until)) && existing.reason !== 'health' && !isAutoDisabled(existing);
     if (manual) continue;
@@ -64,7 +91,6 @@ export function disableLanesTemporarily(home, hits, now = Date.now()) {
 const PROBE_OF = {
   gemini: 'gemini', 'gemini-cli': 'gemini', openrouter: 'openrouter', 'openrouter-free': 'openrouter', 'openrouter-code': 'openrouter',
   qwen: 'deepseek', deepseek: 'deepseek', 'cheap-code:deepseek': 'deepseek', glm: 'glm', 'cheap-code:glm': 'glm', groq: 'groq',
-  'cursor-agent': 'cursor-agent',
 };
 // 自動停止は生存を実測したら解除する。他の期限付き停止は期限到来後に従来の復帰判定を行う。
 export function restoreExpiredDisabledLanes(health, home, now = Date.now(), recovered) {
@@ -90,6 +116,12 @@ export function restoreExpiredDisabledLanes(health, home, now = Date.now(), reco
     }
   }
   if (changed) writeDisabledEntries(home, data);
+  // 復帰したレーンは古い失敗で再停止されないよう、復帰時刻を記録する。
+  if (restored.length) {
+    const restoredAt = readRestoredAt(home);
+    for (const name of restored) restoredAt[name.trim().toLowerCase()] = now;
+    writeRestoredAt(home, restoredAt);
+  }
   if (health && restored.length) {
     health.repairs = health.repairs || [];
     for (const name of restored) health.repairs.push({ provider: name, action: 'disabled_restored', detail: 'probe_ok' });

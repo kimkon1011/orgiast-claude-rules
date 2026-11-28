@@ -455,3 +455,6 @@ claude.ai の「組織の指示」は3,000字上限。組織指示への追記�
 
 Gemini API の予算停止中は `node tools/llm-ask.mjs --provider openrouter ...` を代替経路として使う。`gemini-api` の `--dry-run`、`--help`、`whoami`、`version`、`models` は予算停止中も常に実行できる。予算判断が必要な場合は kim-inbox へ送る。
 
+## tema-check-gate
+
+本文の依頼をAIで実行できるか調べ、できる作業は済ませる。本人作業だけが残る場合は候補2案・選択理由・手順数・読む量・追加連絡・所在/期限/順番・AI代行の可否を `[TEMA-CHECK]` に記録する。`node tools/tema-check.mjs --file <下書き> --kind send --save` を実行して合格を確かめる。人にしかできない依頼には根拠付き `[HUMAN-ONLY: 理由]` を付ける。記録は本文に紐付けて保存され、送信経路がタグを除去する。本文を直したら同じコマンドで検証・保存し直す。

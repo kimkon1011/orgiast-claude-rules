@@ -306,13 +306,14 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const home = deps.home || defaultHome(), stdout = deps.stdout || console.log, stderr = deps.stderr || console.error;
   const stageOutput = deps.stage || console.error;
   const stage = message => stageOutput(`[deadline-detect] ${new Date().toISOString()} ${message}`);
-  const nowMs = deps.nowMs || Date.now; const processStarted = nowMs();
+  const lockStage = message => (deps.stage || stderr)(`[deadline-detect] ${new Date().toISOString()} ${message}`);
+  const nowMs = deps.nowMs || Date.now;
   const processBudgetMs = budgetMs(deps.processBudgetMs ?? process.env.DEADLINE_TOTAL_BUDGET_MS, 540_000, 540_000);
   const controller = new AbortController(), finishController = new AbortController();
   const processSignal = controller.signal, finishSignal = finishController.signal;
-  const timer = setTimeout(() => controller.abort(new Error('全体時間上限到達')), processBudgetMs);
-  // Stop acquiring/extracting at 540s; reserve at most 50s for writes and local heartbeat.
-  const finishTimer = setTimeout(() => finishController.abort(new Error('最終書込時間上限到達')), processBudgetMs + 50_000);
+  // Keep lock waiting plus processing and final writes below the 55-minute task limit.
+  const lockWaitMs = budgetMs(deps.lockWaitMs ?? process.env.DEADLINE_LOCK_WAIT_MS, 300_000, 55 * 60_000 - processBudgetMs - 50_000 - 60_000);
+  let timer, finishTimer;
   const startedAt = new Date().toISOString(); const dryRun = argv.includes('--dry-run'); let ok = false, valid = false, resultSummary = '';
   try {
     stage('init start');
@@ -335,21 +336,25 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
         return 0;
       }
     }
-    const fixture = opts.fixture ? readJson(path.join(opts.fixture, 'ledger.json'), {}) : null;
-    if (opts.fixture && (!fixture || !Array.isArray(fixture.rows))) throw new Error('fixture の台帳JSONがありません、または形式が不正です');
-    const config = fixture ? { ...DEFAULT_CONFIG, ...fixture.config } : deps.config || loadConfig(home);
-    if (!config.sheetId) {
-      if (dryRun) throw new Error('deadline-ledger 未初期化のため dry-run を実行できません');
-      stderr('deadline-detect: deadline-ledger 未初期化のため自動初期化します');
-      const request = deps.request || googleClient();
-      const result = await withAbort(processSignal, () => initialize({ home, sheets: deps.sheets || createSheetsClient({ fetchImpl: gwsFetch, onStage: stage, signal: processSignal }), request: (url, options) => request(url, { ...options, signal: processSignal }) }));
-      config.sheetId = result.sheetId;
-      saveJson(dataPath(home, 'config.json'), config);
-    }
-    const sheets = deps.sheets || createSheetsClient({ fetchImpl: gwsFetch, onStage: stage, signal: finishSignal });
-    const sourceSheets = deps.sheets || createSheetsClient({ fetchImpl: gwsFetch, onStage: stage, signal: processSignal });
-    const ledger = deps.ledger || (fixture ? { read: async tab => tab === '候補' ? fixture.candidates || [] : fixture.rows || [] } : createLedger({ config, sheets }));
     const work = async () => {
+      const processStarted = nowMs();
+      timer = setTimeout(() => controller.abort(new Error('全体時間上限到達')), processBudgetMs);
+      // Start both budgets after acquiring the lock (dry-run does not lock).
+      finishTimer = setTimeout(() => finishController.abort(new Error('最終書込時間上限到達')), processBudgetMs + 50_000);
+      const fixture = opts.fixture ? readJson(path.join(opts.fixture, 'ledger.json'), {}) : null;
+      if (opts.fixture && (!fixture || !Array.isArray(fixture.rows))) throw new Error('fixture の台帳JSONがありません、または形式が不正です');
+      const config = fixture ? { ...DEFAULT_CONFIG, ...fixture.config } : deps.config || loadConfig(home);
+      if (!config.sheetId) {
+        if (dryRun) throw new Error('deadline-ledger 未初期化のため dry-run を実行できません');
+        stderr('deadline-detect: deadline-ledger 未初期化のため自動初期化します');
+        const request = deps.request || googleClient();
+        const result = await withAbort(processSignal, () => initialize({ home, sheets: deps.sheets || createSheetsClient({ fetchImpl: gwsFetch, onStage: stage, signal: processSignal }), request: (url, options) => request(url, { ...options, signal: processSignal }) }));
+        config.sheetId = result.sheetId;
+        saveJson(dataPath(home, 'config.json'), config);
+      }
+      const sheets = deps.sheets || createSheetsClient({ fetchImpl: gwsFetch, onStage: stage, signal: finishSignal });
+      const sourceSheets = deps.sheets || createSheetsClient({ fetchImpl: gwsFetch, onStage: stage, signal: processSignal });
+      const ledger = deps.ledger || (fixture ? { read: async tab => tab === '候補' ? fixture.candidates || [] : fixture.rows || [] } : createLedger({ config, sheets }));
       const state = fixture ? {} : readJson(dataPath(home, 'state.json'), {});
       const sources = deps.sources || (fixture ? fixtureLoaders(opts.fixture) : sourceLoaders({ home, config, state, now, sheets: sourceSheets, request: deps.request || googleClient(), search: deps.search, dryRun, processSignal, onStage: stage }));
       const mocks = fixture ? readJson(path.join(opts.fixture, 'gemini-response.json')) : null;
@@ -358,7 +363,25 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       if (!dryRun) { const file = dataPath(home, 'detect-log.jsonl'); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.appendFileSync(file, JSON.stringify({ ...result, items: result.items.map(r => ({ id: r.id, sourceId: r.sourceId, status: r.status })) }) + '\n'); }
       return result;
     };
-    const result = dryRun ? await work() : await withLedgerLock(home, work);
+    let result;
+    if (dryRun) result = await work();
+    else {
+      lockStage('lock wait start');
+      const lockStarted = Date.now();
+      let acquired = false;
+      try {
+        result = await withLedgerLock(home, async () => {
+          acquired = true;
+          lockStage(`lock acquired after ${(Date.now() - lockStarted) / 1000}s`);
+          return work();
+        }, { waitMs: lockWaitMs });
+      } catch (error) {
+        if (!acquired && error.code === 'DEADLINE_TIMEOUT') {
+          error.message = error.message.replace('lock timeout', `lock timeout（待機 ${(Date.now() - lockStarted) / 1000} 秒）`);
+        }
+        throw error;
+      }
+    }
     stdout(JSON.stringify(result, null, 2));
     if (result.errors.length === 0 || result.completedSources > 0 || result.partial.length > 0) {
       ok = true;

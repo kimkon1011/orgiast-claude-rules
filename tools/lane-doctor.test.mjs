@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runProbe, laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, needsNativeCodexProbe, nativeWriteProbeArgs, nativeWriteProbeResult, directGeminiCliState , shouldSkipLiveProbe } from './lane-doctor.mjs';
+import { pendingRepairs } from './lib/lane-repair-state.mjs';
 import { restoreExpiredDisabledLanes } from './lib/lane-disabled.mjs';
 import { classifyTaskKind } from './lib/task-kind.mjs';
 import { nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
@@ -357,6 +358,38 @@ test('missing Gemini key remains a repair stop when OpenRouter is dead', t => {
   assert.match(summarize(r), /🛑/);
 });
 
+test('gemini/grok billing uses ledger OpenRouter substitute and is not a repair stop', async t => {
+  const { repairContext, pendingRepairs } = await import('./lib/lane-repair-state.mjs');
+  const { evaluateRepairFirst } = await import('./lane-repair-first-gate.mjs');
+  const h = fixture(t);
+  fs.writeFileSync(path.join(h, '.claude/xai.env'), 'XAI_API_KEY=test-fixture\n');
+  const stamp = new Date(now).toISOString();
+  write(h, 'lane-health.json', {
+    lanes: {
+      gemini: { alive: false, reason: 'billing', probedAt: stamp, error: 'HTTP 402' },
+      grok: { alive: false, reason: 'billing', probedAt: stamp, error: 'HTTP 402' },
+      openrouter: { alive: true, reason: 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: 'probe_ok' },
+      codex: { alive: true, reason: 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: 'probe_ok' },
+      deepseek: { alive: true, reason: 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: 'probe_ok' },
+      glm: { alive: true, reason: 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: 'probe_ok' },
+      groq: { alive: true, reason: 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: 'probe_ok' },
+    },
+  });
+  const r = laneDoctorQuick({ home: h, now, save: false });
+  assert.ok(r.substituted.some(s => s.provider === 'gemini' && s.via === 'openrouter'));
+  assert.ok(r.substituted.some(s => s.provider === 'grok' && s.via === 'openrouter'));
+  assert.equal(r.lanes.gemini.via, 'openrouter');
+  assert.equal(r.lanes.grok.via, 'openrouter');
+  assert.match(summarize(r), /gemini ✅\(OpenRouter経由\)/);
+  assert.match(summarize(r), /grok ✅\(OpenRouter経由\)/);
+  assert.equal(r.repairFirst.required, false);
+  assert.doesNotMatch(summarize(r), /🛑/);
+  assert.doesNotMatch(repairContext(r, h, now), /gemini: 残高不足|grok: 残高不足/);
+  assert.equal(pendingRepairs(r, h, now).length, 0);
+  fs.writeFileSync(path.join(h, '.claude/lane-health.json'), JSON.stringify(r));
+  assert.equal(evaluateRepairFirst({ tool_name: 'Edit' }, { home: h, now }).decision, 'pass');
+});
+
 test('WSL-only auth configures Codex, probes it, and supplies notification account', async t => {
   const home = fixture(t);
   fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
@@ -623,4 +656,16 @@ test('直結または OpenRouter 経由で生存を確認した自動停止を�
   assert.equal(result.lanes.gemini.reason, 'billing');
   assert.equal(result.lanes.gemini.via, 'openrouter');
   assert.deepEqual(read(home, 'lanes-disabled.json'), { glm: untouched, groq: manual });
+});
+
+test('probe classifies missing candidate keys without requiring repair', async t => {
+  const home = fixture(t);
+  const error = '全候補が失敗しました: 利用可能なキーを持つ候補がありません';
+  const health = await laneDoctorProbe({ home, now, platform: 'linux', providers: ['mistral'],
+    probe: async () => ({ code: 1, text: error }), notify: async () => ({ delivered: 'test' }) });
+  assert.equal(health.lanes.mistral.alive, false);
+  assert.equal(health.lanes.mistral.reason, 'missing_key');
+  assert.equal(health.lanes.mistral.probeReason, 'missing_key');
+  assert.equal(health.lanes.mistral.error, error);
+  assert.ok(!pendingRepairs(health, home, now).some(row => row.lane === 'mistral'));
 });

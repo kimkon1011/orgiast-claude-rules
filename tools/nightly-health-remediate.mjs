@@ -44,6 +44,46 @@ export function isRanAtTodayJst(ranAtStr, nowDate = new Date()) {
   return ranAtMs >= startMs;
 }
 
+/** 予算・件数上限で後回しになった項目を翌晩先頭に回すための安定ソート。 */
+export function orderAnomaliesForRun(anomalies, prior, fingerprintOf = anomalyFingerprint) {
+  const latestByFp = new Map();
+  for (const row of prior || []) {
+    if (!row?.fingerprint) continue;
+    // skipped は重複排除の記録であり処理の実体ではないため、最新判定から除外する。
+    // （最新が skipped だと、その前の予算切れ deferred が隠れて tier 1 が 0 件になる）
+    if (row.outcome === 'skipped') continue;
+    const prev = latestByFp.get(row.fingerprint);
+    const rowMs = Date.parse(row.ranAt);
+    if (!prev || (!Number.isNaN(rowMs) && rowMs >= (Date.parse(prev.ranAt) || 0))) {
+      latestByFp.set(row.fingerprint, row);
+    }
+  }
+  const isBudgetDeferred = (row) => {
+    if (!row || row.outcome !== 'deferred') return false;
+    const reason = String(row.reason || '');
+    return reason.includes('予算') || reason.includes('上限');
+  };
+  return anomalies
+    .map((anomaly, index) => {
+      const fingerprint = fingerprintOf(anomaly);
+      const latest = latestByFp.get(fingerprint);
+      let tier = 2;
+      let ranAtMs = 0;
+      if (!latest) tier = 0;
+      else if (isBudgetDeferred(latest)) {
+        tier = 1;
+        ranAtMs = Date.parse(latest.ranAt) || 0;
+      }
+      return { anomaly, index, tier, ranAtMs };
+    })
+    .sort((a, b) => {
+      if (a.tier !== b.tier) return a.tier - b.tier;
+      if (a.tier === 1 && a.ranAtMs !== b.ranAtMs) return a.ranAtMs - b.ranAtMs;
+      return a.index - b.index;
+    })
+    .map(({ anomaly }) => anomaly);
+}
+
 function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
 function readLedger(file) { try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse); } catch { return []; } }
 function redactValue(value) {
@@ -147,7 +187,7 @@ export async function runRemediation({
       catch (error) { console.error(`WARN ログ追記失敗: ${redactAll(error?.message ?? error)}`); }
     }
 
-    const result = { exitCode: 0, fixed: [], prs: [], escalated: [], deferred: [], suppressed: [], skipped: [], plan: [] };
+    const result = { exitCode: 0, fixed: [], prs: [], escalated: [], deferred: [], budgetSkipped: [], suppressed: [], skipped: [], plan: [] };
     const cacheTime = input.ranAt || 'キャッシュなし';
     if (json) console.log(JSON.stringify({ ...result, message: `ok:異常なし（${cacheTime}）` }, null, 2));
     else console.log(`ok:異常なし（${cacheTime}）`);
@@ -155,7 +195,7 @@ export async function runRemediation({
   }
   const ledgerFile = path.join(home, '.claude', 'nightly-health-remediate-ledger.jsonl');
   const prior = readLedger(ledgerFile);
-  const result = { exitCode: 0, fixed: [], prs: [], escalated: [], deferred: [], suppressed: [], skipped: [], plan: [] };
+  const result = { exitCode: 0, fixed: [], prs: [], escalated: [], deferred: [], budgetSkipped: [], suppressed: [], skipped: [], plan: [] };
   const tasks = { get: (name) => taskApi.get(name), start: (name) => taskApi.start(name), stop: (name) => taskApi.stop(name) };
   const record = async (anomaly, outcome, extra = {}) => {
     const row = redactValue({ fingerprint: anomalyFingerprint(anomaly), label: anomaly.label, outcome, ...extra, ranAt: now.toISOString() });
@@ -198,7 +238,8 @@ export async function runRemediation({
   };
   const defer = async (anomaly, reason) => result.deferred.push(await record(anomaly, dryRun ? 'deferred' : 'deferred', { reason }));
   const seenThisRun = new Set();
-  for (const raw of anomalies) {
+  const orderedAnomalies = orderAnomaliesForRun(anomalies, prior, anomalyFingerprint);
+  for (const raw of orderedAnomalies) {
     const anomaly = { ...raw, logTail: redactAll(raw.logTail || ''), message: redactAll(raw.message || ''), laneReason: redactAll(raw.laneReason || '') };
     const fingerprint = anomalyFingerprint(anomaly);
     if (seenThisRun.has(fingerprint)) { result.skipped.push(await record(anomaly, 'skipped', { reason: '同一実行内で処理済み' })); continue; }
@@ -270,7 +311,8 @@ export async function runRemediation({
     const overTime = remainingMs() < 5 * 60000;
     if (overCount || overTime) {
       const reason = overCount ? '1回3件の修理上限に到達' : `${maxMinutes}分の全体予算: 残り5分未満`;
-      if (dryRun) plan(anomaly, 'deferred', reason); else await defer(anomaly, reason);
+      if (dryRun) plan(anomaly, 'deferred', reason);
+      else result.budgetSkipped.push(await record(anomaly, 'deferred', { reason }));
       continue;
     }
     if (dryRun) { codexCount += 1; plan(anomaly, 'codex'); continue; }
@@ -334,7 +376,12 @@ export async function runRemediation({
     const stateFile = path.join(home, '.claude', '.nightly-health-remediate-state.json'), state = readJson(stateFile, {});
     if (!(state.hash === hash && now - new Date(state.sentAt) < DAY)) { await notify(text, { home }); fs.writeFileSync(stateFile, JSON.stringify({ hash, sentAt: now.toISOString() })); }
   }
-  if (json) console.log(JSON.stringify(result, null, 2)); else console.log(`fixed=${result.fixed.length} pr=${result.prs.length} deferred=${result.deferred.length} escalated=${result.escalated.length} suppressed=${result.suppressed.length}`);
+  if (json) console.log(JSON.stringify(result, null, 2));
+  else {
+    let summary = `fixed=${result.fixed.length} pr=${result.prs.length} deferred=${result.deferred.length} escalated=${result.escalated.length} suppressed=${result.suppressed.length}`;
+    if (result.budgetSkipped.length) summary += ` budget_skipped=${result.budgetSkipped.length}`;
+    console.log(summary);
+  }
   return result;
 }
 

@@ -9,7 +9,7 @@ import { skipCoolingBackends } from './fallback-backend-health.mjs';
 import { runGeminiBudgetGuard } from './gemini-budget-guard.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, fallbackBackendFailureDomain, shouldSkipFallbackBackendAfterTimeout, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, reserveGeminiLaunch, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, cursorAgentChildEnv, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder, hasAbortCondition, isIntentionalAbort } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, fallbackBackendFailureDomain, shouldSkipFallbackBackendAfterTimeout, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, shouldAbortFirstOutputStall, deepseekFirstOutputTimeoutSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, reserveGeminiLaunch, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, cursorAgentChildEnv, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder, hasAbortCondition, isIntentionalAbort, isHelpInstruction } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -45,6 +45,49 @@ test('CLI は主経路の上限を起動時に stderr で一度だけ報告す�
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(result.stderr.split(/\r?\n/).filter(line => line.includes('主経路の上限=')),
       [`[codex-do] 主経路の上限=${expected}秒`]);
+  }
+});
+
+test('CLI --help / -h は usage を表示してエージェントを起動せず exit 0', () => {
+  for (const flag of ['--help', '-h']) {
+    const result = run([flag], {
+      env: {
+        // モックがあっても help では使わないこと（＝エージェント起動なし）を担保する。
+        CODEX_DO_MOCK_RESULTS: JSON.stringify([{ output: 'should-not-run' }]),
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /使い方: node tools\/codex-do\.mjs/);
+    assert.match(result.stdout, /--help, -h/);
+    assert.match(result.stdout, /--prompt-file/);
+    assert.equal(result.stdout.includes('should-not-run'), false);
+  }
+});
+
+test('isHelpInstruction: --help/-h（前後空白可）だけをヘルプ要求とみなす', () => {
+  assert.equal(isHelpInstruction('--help'), true);
+  assert.equal(isHelpInstruction(' -h '), true);
+  assert.equal(isHelpInstruction('\n--help\n'), true);
+  assert.equal(isHelpInstruction(''), false);
+  assert.equal(isHelpInstruction('fix --help'), false);
+  assert.equal(isHelpInstruction('--help please'), false);
+});
+
+test('指示本文が --help だけのときも usage を出してエージェントを起動しない', () => {
+  const home = workDir();
+  const promptFile = path.join(home, 'help-only.txt');
+  fs.writeFileSync(promptFile, '  --help  \n');
+  for (const args of [[' --help '], ['--prompt-file', promptFile]]) {
+    const result = run(args, {
+      home,
+      env: {
+        CODEX_DO_MOCK_RESULTS: JSON.stringify([{ output: 'should-not-run' }]),
+      },
+    });
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    assert.match(result.stdout, /使い方: node tools\/codex-do\.mjs/);
+    assert.equal(result.stdout.includes('should-not-run'), false);
+    assert.equal(result.stdout.includes('## 実装指示'), false);
   }
 });
 
@@ -237,19 +280,19 @@ test('chainBackendBudgetSecs は連鎖の残り予算を超えない（全体枠
   assert.equal(chainBackendBudgetSecs(1800, 1500, { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: '900' }), 300);
 });
 
-test('backendSpecificTimeoutSecs は gemini-cli に既定200秒・cheap-code:deepseek に既定400秒と正の上書きを適用する', () => {
+test('backendSpecificTimeoutSecs は gemini-cli に既定200秒・cheap-code:deepseek に既定200秒と正の上書きを適用する', () => {
   // 2026-11-09 実測: 3623件の成功の p99=241秒。200秒に設定して廃棄を削減。
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}), 200);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '450' }), 450);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: 'garbage' }), 200);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '0' }), 200);
-  // 2026-11-11 再調整: chain 実測（223試行中成功46/p95=524秒）で 400 秒に引き下げ
-  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}), 400);
+  // 2026-11-28 delegation-health 実測 2件/361秒 の廃棄に基づき 400→200 秒に引き下げ
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}), 200);
   assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '450' }), 450);
-  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: 'garbage' }), 400);
-  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '0' }), 400);
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: 'garbage' }), 200);
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '0' }), 200);
   // qwen 直結の deepseek は同じ upstream なので同一扱い
-  assert.equal(backendSpecificTimeoutSecs('deepseek', {}), 400);
+  assert.equal(backendSpecificTimeoutSecs('deepseek', {}), 200);
   // 対象外のバックエンドは「バックエンド固有の頭打ちなし」＝null のまま
   assert.equal(backendSpecificTimeoutSecs('cheap-code:glm', {}), null);
   assert.equal(backendSpecificTimeoutSecs('qwen', {}), null);
@@ -276,10 +319,10 @@ test('deepseek 系は同じ upstream の timeout 後に連鎖内で二重実行�
   assert.equal(shouldSkipFallbackBackendAfterTimeout('deepseek', [{ backend: 'cheap-code:deepseek', outcome: 'ok' }]), false);
 });
 
-test('backendSpecificTimeoutSecs は kind が無い・implement 以外の場合は従来どおり 400/200', () => {
-  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}), 400);
+test('backendSpecificTimeoutSecs は kind が無い・implement 以外の場合は 200/200 (deepseek を 400→200 に短縮)', () => {
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}), 200);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}), 200);
-  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}, { kind: 'verify' }), 400);
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}, { kind: 'verify' }), 200);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}, { kind: 'verify' }), 200);
 });
 
@@ -296,7 +339,7 @@ test('backendSpecificTimeoutSecs は kind=implement でも env 指定を優先�
 test('effectiveBackendTimeoutSecs は冷却中の backend を探り予算まで縮め、通常時は従来どおりの上限を返す', () => {
   // 通常時: backend 固有の上限がそのまま効く
   assert.equal(effectiveBackendTimeoutSecs('gemini-cli', { chainBudget: 720, cooling: false }), 200);
-  assert.equal(effectiveBackendTimeoutSecs('cheap-code:deepseek', { chainBudget: 720, cooling: false }), 400);
+  assert.equal(effectiveBackendTimeoutSecs('cheap-code:deepseek', { chainBudget: 720, cooling: false }), 200);
   // 冷却中: 探り予算(120秒)まで縮む＝同じ停滞を繰り返しても捨てる秒数が 3〜5 分の1になる
   assert.equal(effectiveBackendTimeoutSecs('gemini-cli', { chainBudget: 720, cooling: true }), COOLING_PROBE_TIMEOUT_SECS);
   assert.equal(effectiveBackendTimeoutSecs('cheap-code:deepseek', { chainBudget: 720, cooling: true }), COOLING_PROBE_TIMEOUT_SECS);
@@ -319,7 +362,7 @@ test('全冷却の3 backend は先頭2件が120秒、末尾は通常上限にな
     env: {},
     isLastBackend: index === backends.length - 1,
   }));
-  assert.deepEqual(budgets, [120, 120, 400]);
+  assert.deepEqual(budgets, [120, 120, 200]);
 });
 
 test('冷却なしの3 backend は末尾指定にかかわらず通常上限になる', () => {
@@ -332,7 +375,7 @@ test('冷却なしの3 backend は末尾指定にかかわらず通常上限に�
     env: {},
     isLastBackend: index === backends.length - 1,
   }));
-  assert.deepEqual(budgets, [720, 200, 400]);
+  assert.deepEqual(budgets, [720, 200, 200]);
 });
 
 test('全冷却で1 backend だけなら通常上限・環境変数・残り予算を適用する', () => {
@@ -360,12 +403,12 @@ test('全冷却で1 backend だけなら通常上限・環境変数・残り予�
 
 // 実測シナリオ（2026-11-04）: cheap-code:deepseek と gemini-cli の chain-timeout が3件発生。
 // 2026-11-09 実測の gemini p99=241s に基づき、既定を200秒に短縮して廃棄を削減。
-test('実測シナリオ: cheap-code:deepseek と gemini-cli の連鎖を400秒・200秒で頭打ちにする', () => {
+test('実測シナリオ: cheap-code:deepseek と gemini-cli の連鎖を200秒・200秒で頭打ちにする（deepseek 400→200 短縮）', () => {
   const chainBudget = () => chainBackendBudgetSecs(1800, 0, {});
   const geminiTimeout = Math.min(chainBudget(), backendSpecificTimeoutSecs('gemini-cli', {}));
   const deepseekTimeout = Math.min(chainBudget(), backendSpecificTimeoutSecs('cheap-code:deepseek', {}));
   assert.equal(geminiTimeout, 200);
-  assert.equal(deepseekTimeout, 400);
+  assert.equal(deepseekTimeout, 200);
   // 従来（deepseek が null → 既定900秒）と比べて頭打ちが短くなっていることを示す
   assert.ok(backendSpecificTimeoutSecs('cheap-code:deepseek', {}) < fallbackBackendTimeoutSecs(1800, {}));
   // 環境変数で 450 秒へ短縮もできる（0 出力停滞は待たずに切る運用例）
@@ -430,17 +473,17 @@ test('gemini-cli が連鎖の最後でタイムアウトしても廃棄は backe
   // gemini-cli は最終手段なので遅延を生むとしても被害が最小
 });
 
-test('deepseek と gemini-cli が両方 timeout しても既定の最大廃棄は600秒に収まる', () => {
+test('deepseek と gemini-cli が両方 timeout しても既定の最大廃棄は400秒に収まる（600→400 に短縮）', () => {
   const chainBudget = chainBackendBudgetSecs(1800, 0, {});
   const wastedSecs = ['cheap-code:deepseek', 'gemini-cli']
     .map((backend) => Math.min(chainBudget, backendSpecificTimeoutSecs(backend, {}) ?? Infinity))
     .reduce((sum, seconds) => sum + seconds, 0);
-  assert.equal(wastedSecs, 600);
-  assert.ok(wastedSecs < 900);
+  assert.equal(wastedSecs, 400);
+  assert.ok(wastedSecs < 500);
 });
 
 // delegation-health:fallback_chain_timeout の再発防止（2026-11-07 起票）。
-// 実測 3件/621秒 の廃棄が、gemini 200s + deepseek 400s の上限で
+// 実測 3件/621秒 の廃棄が、gemini 200s + deepseek 200s の上限で
 // 3件の timeout でも 3 × min(200, chainBudget) に抑えられることを確認する。
 test('3件の chain timeout でも gemini の timeout 廃棄は 200 秒/件に制限される', () => {
   const chainBudget = chainBackendBudgetSecs(1800, 0, {});
@@ -1897,6 +1940,43 @@ test('isLaneIncompatible はモデル警告と残りの出力、終了コード�
   assert.equal(isLaneIncompatible('', 'normal failure', 1), false);
 });
 
+test('isLaneIncompatible は実データの trust 警告を残差から外して発火する', () => {
+  // 2026-11-27-8.json の実 stderr（バナー / trust 警告 / unrecognized_model）
+  const realStderr = [
+    '[openrouter:deepseek/deepseek-v4-flash]',
+    'Ignoring 114 permissions.allow entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["C:/Users/kimko"].hasTrustDialogAccepted: true in C:\\Users\\kimko\\.claude\\cheap-code-worker\\.claude.json.',
+    '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}',
+  ].join('\n');
+  assert.equal(isLaneIncompatible('\n', realStderr, 0), true);
+
+  // 回帰: 同じ trust 警告があっても stdout に回答本文があれば success 維持
+  assert.equal(isLaneIncompatible('実作業の回答本文です', realStderr, 0), false);
+
+  // 回帰: trust 警告だけ（unrecognized_model 無し）は対象外
+  const trustOnly = [
+    '[openrouter:deepseek/deepseek-v4-flash]',
+    'Ignoring 114 permissions.allow entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["C:/Users/kimko"].hasTrustDialogAccepted: true in C:\\Users\\kimko\\.claude\\cheap-code-worker\\.claude.json.',
+  ].join('\n');
+  assert.equal(isLaneIncompatible('\n', trustOnly, 0), false);
+
+  // 行が分かれている trust 警告も残差から落ちる
+  const splitTrust = [
+    '[openrouter:deepseek/deepseek-v4-flash]',
+    'Ignoring 3 permissions.allow entries from .claude/settings.json: this workspace has not been trusted.',
+    'Run Claude Code interactively here once and accept the trust dialog, or set projects["C:/Users/kimko"].hasTrustDialogAccepted: true in C:\\Users\\kimko\\.claude\\cheap-code-worker\\.claude.json.',
+    '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}',
+  ].join('\n');
+  assert.equal(isLaneIncompatible('\n', splitTrust, 0), true);
+
+  // 実データ 2026-11-25-8: 単数 "entry" も残差から落とす（entries 専用 regex だと false になる）
+  const singularTrust = [
+    '[openrouter:deepseek/deepseek-v4-flash]',
+    'Ignoring 1 permissions.allow entry from .claude/settings.local.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["d:/CLAUDE.md配布"].hasTrustDialogAccepted: true in C:\\Users\\kimko\\.claude\\cheap-code-worker\\.claude.json.',
+    '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}',
+  ].join('\n');
+  assert.equal(isLaneIncompatible('\n', singularTrust, 0), true);
+});
+
 test('shouldAdvanceToNextBackend は laneIncompatible=true で incompatible を返す', () => {
   assert.deepEqual(shouldAdvanceToNextBackend({ laneIncompatible: true, status: 1 }), { advance: true, outcome: 'incompatible' });
   assert.deepEqual(shouldAdvanceToNextBackend({ laneIncompatible: true, exhausted: true, status: 3 }), { advance: true, outcome: 'incompatible' });
@@ -3050,6 +3130,44 @@ test('予算が停滞判定の閾値秒以下でも、締切時に拒否3回・�
   assert.ok(gemini.budgetSecs <= 3, `打ち切った試行の予算: ${gemini.budgetSecs}`);
 });
 
+test('deepseek は 402/401/403 の恒久 API エラーを即時打ち切り対象にする', () => {
+  assert.equal(isBackendBillingFailure('', 'HTTP 402 Payment Required: Insufficient Balance'), true);
+  assert.equal(isBackendBillingFailure('', 'HTTP status 401 Unauthorized: invalid API key'), true);
+  assert.equal(isBackendBillingFailure('', 'HTTP 403 Forbidden'), true);
+  assert.deepEqual(shouldAdvanceToNextBackend({ status: 3, aborted: true }), { advance: true, outcome: 'blocked' });
+});
+
+test('isBackendBillingFailure は output の生成本文（403 Forbidden）を billing と誤判定しない', () => {
+  // output に「403 Forbidden を返すようにしました」のような生成本文があっても
+  // stderr が空なら false を返す。HTTP ステータス行（isHttpStatusCodeLine）経由では
+  // 「403」に HTTP/status/error 文脈が無いためマッチしない。
+  assert.equal(isBackendBillingFailure('403 Forbidden を返すようにしました', ''), false);
+  assert.equal(isBackendBillingFailure('if (!authorized) throw new Error(\'Unauthorized\')', ''), false);
+  assert.equal(isBackendBillingFailure('throw new Error(\'Unauthorized\')', ''), false);
+  assert.equal(isBackendBillingFailure('unauthorized access is denied and forbidden', ''), false);
+  assert.equal(isBackendBillingFailure('invalid api key format must be sk-...', ''), false);
+});
+
+test('isBackendBillingFailure は stderr の課金エラーを正しく検出する', () => {
+  assert.equal(isBackendBillingFailure('', 'Error: 402 Payment Required'), true);
+  assert.equal(isBackendBillingFailure('', 'insufficient balance'), true);
+  assert.equal(isBackendBillingFailure('', 'HTTP 401 Unauthorized'), true);
+  assert.equal(isBackendBillingFailure('', '403 Forbidden: API key invalid'), true);
+  assert.equal(isBackendBillingFailure('', 'invalid api key'), true);
+  assert.equal(isBackendBillingFailure('', 'your prepayment credits are depleted'), true);
+  assert.equal(isBackendBillingFailure('', 'payment required for this request'), true);
+});
+
+test('deepseek first-output watchdog は無出力の閾値到達時に打ち切る', () => {
+  assert.equal(deepseekFirstOutputTimeoutSecs({ CODEX_DO_DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS: '0.05' }), 0.05);
+  assert.equal(shouldAbortFirstOutputStall({ elapsedSecs: 60, outputChars: 0, timeoutSecs: 60 }), true);
+});
+
+test('deepseek first-output watchdog は正常な出力があれば打ち切らない', () => {
+  assert.equal(shouldAbortFirstOutputStall({ elapsedSecs: 60, outputChars: 1, timeoutSecs: 60 }), false);
+  assert.equal(shouldAbortFirstOutputStall({ elapsedSecs: 59.9, outputChars: 0, timeoutSecs: 60 }), false);
+});
+
 test('ポリシー停滞の打ち切りは出力400字以上・拒否3回未満・無効化指定では発火しない', () => {
   const cases = [
     { name: '出力400字以上', body: silentAfter(DENY.repeat(3), 'x'.repeat(400)) },
@@ -3314,7 +3432,7 @@ test('cursor-default: Hook blocked を成功扱いせず Codex へフォール�
     home,
     env: {
       ...cursorAgentOnPathEnv(),
-      CODEX_DO_SKIP_CURSOR_AGENT: '0', CURSOR_API_KEY: 'cursor-test',
+      CODEX_DO_ENABLE_CURSOR_AGENT: '1', CODEX_DO_SKIP_CURSOR_AGENT: '0', CURSOR_API_KEY: 'cursor-test',
       CODEX_DO_MOCK_RESULTS: JSON.stringify([
         { status: 0, output: 'Hook blocked: syntax error near unexpected token `(' },
         { status: 0, output: 'Codex completed.' },
@@ -3334,7 +3452,7 @@ test('cursor-default: lane: codex は cursor-agent を起動しない', () => {
     home,
     env: {
       ...cursorAgentOnPathEnv(),
-      CODEX_DO_SKIP_CURSOR_AGENT: '0', CURSOR_API_KEY: 'cursor-test',
+      CODEX_DO_ENABLE_CURSOR_AGENT: '1', CODEX_DO_SKIP_CURSOR_AGENT: '0', CURSOR_API_KEY: 'cursor-test',
       CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: 'Codex completed.' }]),
     },
   });
@@ -3648,21 +3766,18 @@ test('isCursorAgentLoggedIn はフラグ・CURSOR_API_KEY・認証ファイル�
   assert.equal(isCursorAgentLoggedIn('/no-such-cursor-home', { env: {} }), false);
 });
 
-test('resolveFallbackBackends は implement/verify でログイン済みの cursor-agent を有料 OpenRouter より前に置く', () => {
+test('resolveFallbackBackends は既定で cursor-agent を候補に入れない', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
   const options = { executableAvailable: () => true, cursorAgentLoggedIn: true, env: {} };
-  assert.deepEqual(resolveFallbackBackends(dir, { ...options, taskKind: 'implement' }).map((b) => b.name), [
-    'cursor-agent', 'cheap-code:deepseek', 'openrouter-code',
-  ]);
-  assert.deepEqual(resolveFallbackBackends(dir, { ...options, taskKind: 'verify' }).map((b) => b.name)[0], 'cursor-agent');
+  for (const taskKind of ['implement', 'verify', 'investigate', 'summarize', 'classify']) {
+    assert.ok(!resolveFallbackBackends(dir, { ...options, taskKind }).map((b) => b.name).includes('cursor-agent'), taskKind);
+  }
   assert.ok(resolveFallbackBackends(dir, { ...options, taskKind: 'implement' }).some((b) => b.name === 'openrouter-code'));
-  assert.equal(resolveFallbackBackends(dir, { ...options, taskKind: 'implement' }).findIndex((b) => b.name === 'cursor-agent')
-    < resolveFallbackBackends(dir, { ...options, taskKind: 'implement' }).findIndex((b) => b.name === 'openrouter-code'), true);
 });
 
-test('resolveFallbackBackends は summarize/classify/investigate でもログイン済みなら cursor-agent を先頭に置く', () => {
+test('resolveFallbackBackends は明示オプトイン時だけ cursor-agent を先頭に置く', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
-  const options = { executableAvailable: () => true, cursorAgentLoggedIn: true, env: {} };
+  const options = { executableAvailable: () => true, cursorAgentLoggedIn: true, env: { CODEX_DO_ENABLE_CURSOR_AGENT: '1' } };
   for (const taskKind of ['summarize', 'classify', 'investigate']) {
     const names = resolveFallbackBackends(dir, { ...options, taskKind }).map((b) => b.name);
     assert.equal(names[0], 'cursor-agent', taskKind);
@@ -3686,15 +3801,15 @@ test('resolveFallbackBackends は未ログインや CLI 無しでは cursor-agen
   assert.ok(!summarized.includes('cursor-agent'));
 });
 
-test('resolveFallbackBackends は local.json があっても implement/verify では cursor-agent を先頭に置く', () => {
+test('resolveFallbackBackends は local.json に cursor-agent があっても既定では起動候補から外す', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n' });
   const claude = path.join(dir, '.claude');
   fs.mkdirSync(claude, { recursive: true });
   const options = { executableAvailable: () => true, cursorAgentLoggedIn: true, taskKind: 'implement', env: {} };
   fs.writeFileSync(path.join(claude, 'codex-fallback-order.json'), JSON.stringify(['cheap-code:deepseek', 'openrouter-code']) + '\n');
-  assert.deepEqual(resolveFallbackBackends(dir, options).map((b) => b.name), ['cursor-agent', 'cheap-code:deepseek', 'openrouter-code']);
+  assert.deepEqual(resolveFallbackBackends(dir, options).map((b) => b.name), ['cheap-code:deepseek', 'openrouter-code']);
   fs.writeFileSync(path.join(claude, 'codex-fallback-order.local.json'), JSON.stringify(['cheap-code:deepseek', 'openrouter-code']) + '\n');
-  assert.deepEqual(resolveFallbackBackends(dir, options).map((b) => b.name), ['cursor-agent', 'cheap-code:deepseek', 'openrouter-code']);
+  assert.deepEqual(resolveFallbackBackends(dir, options).map((b) => b.name), ['cheap-code:deepseek', 'openrouter-code']);
   assert.deepEqual(resolveFallbackBackends(dir, { ...options, env: { CODEX_DO_SKIP_CURSOR_AGENT: '1' } }).map((b) => b.name), ['cheap-code:deepseek', 'openrouter-code']);
 });
 

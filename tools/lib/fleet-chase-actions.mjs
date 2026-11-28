@@ -1,7 +1,9 @@
+import { POWER_ON_TEMA } from './tema-templates.mjs';
 import { isKimDelivered } from './kim-delivery.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { parseExecMarkers } from '../fleet-mail.mjs';
 import { redactSecrets } from '../fleet-agent.mjs';
 import { listDecisions } from '../pending-decisions.mjs';
@@ -11,9 +13,26 @@ import { rolloutSummary, rolloutTop } from './fleet-chase-rollout.mjs';
 
 export const DIGEST_LIMIT = 1900;
 export const SEND_CAP_PER_TARGET = 3;
+const RULES_REPO_ALIAS = '@rules-repo';
+const LEGACY_RULES_REPO_ROOT = 'C:\\Users\\uers\\Downloads\\CLAUDE.md配布';
+const rulesRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+function normalizedPath(value) {
+  return String(value).trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+function portableExecCwd(execCwd) {
+  if (execCwd === undefined || execCwd === RULES_REPO_ALIAS) return execCwd;
+  const normalized = normalizedPath(execCwd);
+  return normalized === normalizedPath(rulesRepoRoot) || normalized === normalizedPath(LEGACY_RULES_REPO_ROOT)
+    ? RULES_REPO_ALIAS : execCwd;
+}
 
 export function resendBody(item, n) {
-  const source = redactSecrets(item.sourceMail.body || '');
+  const source = redactSecrets(item.sourceMail.body || '').replace(
+    /^(<!--\s*fleet-exec:\s*.*?\s*-->\s*\r?\n)?<!--\s*fleet-exec-cwd:\s*(.*?)\s*-->/,
+    (marker, execMarker = '', execCwd) => `${execMarker}<!-- fleet-exec-cwd: ${portableExecCwd(execCwd)} -->`
+  );
   const marked = parseExecMarkers(source);
   const header = `【追跡 ${n}回目 / 原本 ${item.mailId} / 初回 ${item.createdAt}】\n`;
   // Execution markers must remain at the very beginning for parseExecMarkers.
@@ -40,7 +59,8 @@ async function sendChase(item, action, ctx) {
     const categoryTag = item.category === CATEGORY.decision ? '[判断依頼]' : item.category === CATEGORY.task ? '[作業依頼]' : '';
     const why = `${action === 'resend' ? `【再送${n}】` : '【催促】'}${categoryTag && !item.title.includes(categoryTag) ? categoryTag : ''}${item.title}`.slice(0, 1000);
     const execFields = action === 'resend' ? Object.fromEntries(['exec', 'execCwd', 'resumeSessionId']
-      .filter(key => item.sourceMail[key] !== undefined).map(key => [key, item.sourceMail[key]])) : {};
+      .filter(key => item.sourceMail[key] !== undefined)
+      .map(key => [key, key === 'execCwd' ? portableExecCwd(item.sourceMail[key]) : item.sourceMail[key]])) : {};
     item.pendingSend = { action, payload: safe({ id: `mail-chase-${suffix}-${n}`, from: 'kim-PC', to: item.target,
       messageKind: action === 'resend' ? item.sourceMail.messageKind || item.sourceMail.kind || 'note' : 'note',
       ...execFields, body, why,
@@ -106,7 +126,7 @@ export async function chase(ledger, ctx) {
           // Rate-limit attempts, too: Discord failures must not ping the owner every half hour.
           attempt(item, 'owner-dm-attempt', person, now);
           persist();
-          const response = await sendDm(person, redactSecrets(`${item.target} の電源と Claude Code 起動をお願いします（kim-PC からの依頼 ${item.title.slice(0, 200)} が届いていません）`));
+          const response = await sendDm(person, redactSecrets(`${item.target} の電源と Claude Code 起動をお願いします（kim-PC からの依頼 ${item.title.slice(0, 200)} が届いていません）\n[HUMAN-ONLY: 停止PCの物理電源操作]\n${POWER_ON_TEMA}`));
           if (response?.delivered !== true && !['dm', 'session-inbox'].includes(response?.delivered)) throw new Error('owner DM failed');
           attempt(item, 'owner-dm', person, now);
           item.nextActionAt = iso(now + POLICY.ownerDm);

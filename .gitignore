@@ -135,3 +135,11 @@ PR_BODY.md
 /[A-Za-z]:*
 /[A-Za-z]*
 gb-reports/
+
+# nightly-repo で毎晩 rescue/auto-session-* ブランチが生える再発を止めるための対応
+/task/
+/tpl/
+
+# auto-session-rescue が一時スキャン出力 .scan-out/*.json を拾って
+# rescue ブランチへ commit するのを防ぐ（2026-11-27 実測）
+.scan-out/

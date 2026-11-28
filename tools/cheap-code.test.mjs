@@ -213,6 +213,11 @@ test('402/Insufficient Balance と 429/Usage limit を分類し失敗台帳とco
   assert.equal(JSON.parse(fs.readFileSync(path.join(claude, 'provider-cooldown.json'))).deepseek.until, now + 86400000);
 });
 
+test('401/403 の恒久認証エラーも課金停止系として分類する', () => {
+  assert.equal(detectBillingFailure('HTTP 401 Unauthorized: invalid API key'), 401);
+  assert.equal(detectBillingFailure('HTTP 403 Forbidden'), 403);
+});
+
 test('writeProviderCooldown は usage_limit 履歴も残す', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-cooldown-'));
   const claude = path.join(home, '.claude');

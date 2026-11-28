@@ -1,3 +1,4 @@
+import { withTema } from './test-fixtures/tema-record.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,6 +7,7 @@ import path from 'node:path';
 import {
   GMAIL_COMPOSE_SCOPE, DEFAULT_USER, buildRawMessage, buildForwardRaw, guardRecipients,
   renderChatDisplay, classifyTokenError, probeScopes, createDraft, deleteDraft, runCli,
+  assertGmailBodySendable,
 } from './gmail-draft.mjs';
 
 const ledger = { domains: ['orgiast.jp', 'toho-kogyo.com'], addresses: ['staff@gmail.com'] };
@@ -61,6 +63,7 @@ async function cli(argv, overrides = {}) {
   let calls = 0;
   let tokens = 0;
   const code = await runCli({ argv, deps: {
+    consistencyCheck: async () => ({ ok: true }), cleanup: async () => ({ ok: true }),
     stdout: text => output.push(text), loadLedger: () => ledger,
     fetchImpl: async () => { calls++; throw new Error('unexpected fetch'); },
     getToken: async () => { tokens++; throw new Error('unexpected token'); },
@@ -203,6 +206,24 @@ test('ブース件名の dry-run は佐藤さんをCCし追加をJSONで報告�
   const report = JSON.parse(result.output[0]);
   assert.equal(report.boothCcAdded, 'satou@orgiast.jp');
   assert.match(report.headers, /Cc: satou@orgiast\.jp/u);
+});
+
+test('請求書件名の dry-run は経理をCCし追加をJSONで報告する', async () => {
+  const result = await cli(['--to', 'customer@example.com', '--subject', '請求書のご送付', '--body', 'test', '--dry-run', '--json']);
+  assert.equal(result.code, 0);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.invoiceCcAdded, 'keiri2@orgiast.jp');
+  assert.match(report.headers, /Cc: keiri2@orgiast\.jp/u);
+});
+
+test('--booth と請求書件名の併用で佐藤さんと経理の両方をCCする', async () => {
+  const result = await cli(['--to', 'customer@example.com', '--subject', '請求書（展示会ブース）', '--body', 'test', '--booth', '--dry-run', '--json']);
+  assert.equal(result.code, 0);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.boothCcAdded, 'satou@orgiast.jp');
+  assert.equal(report.invoiceCcAdded, 'keiri2@orgiast.jp');
+  assert.match(report.headers, /Cc: .*satou@orgiast\.jp/u);
+  assert.match(report.headers, /Cc: .*keiri2@orgiast\.jp/u);
 });
 
 test('--check は3スコープの認証のみ。Gmail API を呼ばない', async () => {
@@ -412,6 +433,44 @@ test('既存のブース営業下書きは佐藤さんのCC欠落時に送信を
   assert.equal(report.errorKind, 'booth_cc_missing');
   assert.equal(report.boothCcAdded, 'satou@orgiast.jp');
 });
+
+test('既存の請求書下書きは経理CC欠落時に送信を停止する', async () => {
+  let calls = 0;
+  const result = await cli(['--send', 'draft', '--json'], {
+    getToken: async () => 't',
+    fetchImpl: async () => { calls++; return response(draftHeaders([{ name: 'Subject', value: '請求書のご送付' }])); },
+  });
+  assert.equal(result.code, 2);
+  assert.equal(calls, 1);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.errorKind, 'invoice_cc_missing');
+  assert.equal(report.invoiceCcAdded, 'keiri2@orgiast.jp');
+});
+
+test('請求書添付のみの下書きも経理CC欠落時に送信を停止する', async () => {
+  const draft = {
+    message: {
+      payload: {
+        headers: [
+          { name: 'To', value: 'customer@example.com' },
+          { name: 'Subject', value: '資料送付' },
+        ],
+        parts: [
+          { mimeType: 'text/plain', body: { data: Buffer.from('本文').toString('base64url') } },
+          { filename: '請求書_202611.pdf', body: { attachmentId: 'att1' } },
+        ],
+      },
+    },
+  };
+  const result = await cli(['--send', 'draft', '--json'], {
+    getToken: async () => 't',
+    fetchImpl: async () => response(draft),
+  });
+  assert.equal(result.code, 2);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.errorKind, 'invoice_cc_missing');
+  assert.equal(report.invoiceCcAdded, 'keiri2@orgiast.jp');
+});
 test('--send は秘書の空き日程URLを承認上書きでも送らない', async () => {
   const data = Buffer.from('11月20日 10:00\nhttps://claude-pc.tailc5d751.ts.net/secretary/book').toString('base64url');
   const draft = { message: { threadId: 't', payload: { mimeType: 'text/plain', body: { data }, headers: [{ name: 'To', value: 'customer@example.com' }] } } };
@@ -487,7 +546,7 @@ test('送信は指定アカウントの下書きを取得後 compose で送信�
   // readonly + compose（draft取得）+ compose（draftBody/整合性チェック）
   assert.equal(scopes[0], 'https://www.googleapis.com/auth/gmail.readonly');
   assert.ok(scopes.slice(1).every(s => s === 'https://www.googleapis.com/auth/gmail.compose'));
-  assert.deepEqual(JSON.parse(result.output[0]), { action: 'send', user: 'shared@orgiast.jp', ok: true, sentMessageId: 'sent', threadId: 'thread', to: 'Customer <customer@example.com>', subject: '確認' });
+  assert.deepEqual(JSON.parse(result.output[0]), { action: 'send', user: 'shared@orgiast.jp', ok: true, cleanup: { ok: true }, sentMessageId: 'sent', threadId: 'thread', to: 'Customer <customer@example.com>', subject: '確認' });
 });
 test('送信前に To/Cc/Bcc の内部宛を拒否する（表示名・大小文字・台帳アドレス）', async () => {
   for (const name of ['To', 'cC', 'BCC']) {
@@ -930,4 +989,53 @@ test('返信先なし・Message-ID 欠落・ヘッダ注入・取得失敗なら
     assert.equal(calls, 1);
     assert.equal(result.output[0].includes('SECRET'), false);
   }
+});
+
+test('送信前ガード: 人へ作業を戻す文面は止める', () => {
+  assert.throws(
+    () => assertGmailBodySendable(withTema('くらしのマーケットの仮押さえ先の確認をお願いします。'), { env: {} }),
+    (error) => error.code === 'HANDBACK_BLOCKED',
+  );
+  assert.equal(assertGmailBodySendable('西林様へ送り先確認のメールを送済みです。', { env: {} }), '西林様へ送り先確認のメールを送済みです。');
+});
+
+test('送信前ガード: HUMAN-ONLY タグ付きは通るが、タグを外すまで送れない', () => {
+  const body = withTema('[HUMAN-ONLY: 現地作業] 11/29 9:00に現場で鍵の受け取りをお願いします。');
+  assert.throws(
+    () => assertGmailBodySendable(body, { env: {} }),
+    (error) => error.code === 'HANDBACK_TAG_UNSTRIPPED' && error.stripped.includes('現場で鍵の受け取り'),
+  );
+  const plain = assertGmailBodySendable('担当の金が11/29 9:00に現場で鍵を受け取ります。', { env: {} });
+  assert.equal(plain, '担当の金が11/29 9:00に現場で鍵を受け取ります。');
+});
+
+test('送信前ガード: ORGIAST_HANDBACK_GUARD=0 で無効', () => {
+  assert.equal(
+    assertGmailBodySendable('確認をお願いします', { env: { ORGIAST_HANDBACK_GUARD: '0' } }),
+    '確認をお願いします',
+  );
+});
+
+test('--send は社外顧客への質問を差し戻しと誤検知しない', async () => {
+  const draft = {
+    message: {
+      payload: {
+        headers: [
+          { name: 'To', value: 'customer@example.com' },
+          { name: 'Subject', value: '日程の確認' },
+        ],
+        body: { data: Buffer.from('ご都合を教えていただけますでしょうか。').toString('base64url') },
+      },
+    },
+  };
+  const result = await cli(['--send', 'draft-external', '--json'], {
+    fetchImpl: async (url, options = {}) => {
+      if (url.includes('/drafts/draft-external?format=full')) return response(draft);
+      if (url.endsWith('/drafts/send')) return response({ id: 'sent-external', threadId: 'thread-external' });
+      throw new Error(`unexpected fetch: ${url} ${options.method ?? 'GET'}`);
+    },
+    getToken: async () => 'token',
+  });
+  assert.equal(result.code, 0);
+  assert.equal(JSON.parse(result.output.at(-1)).sentMessageId, 'sent-external');
 });

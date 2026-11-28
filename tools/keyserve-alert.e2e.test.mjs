@@ -57,7 +57,10 @@ test('keyserve 401 を実経路で Discord webhook へ通報し24時間抑止す
     );
     fs.writeFileSync(path.join(claudeDir, 'keyserve.env'), `ORGIAST_KEYSERVE_SECRET=${secret}\n`, { mode: 0o600 });
 
-    const args = [syncScript, '--force', `--target=${path.join(tempHome, 'CLAUDE.md')}`];
+    // Keep the real local keyserve/webhook path, but prevent unrelated mission
+    // and knowledge synchronization from using live services during this test.
+    const args = ['--import', new URL('./test-fixtures/no-live-network.mjs', import.meta.url).href,
+      syncScript, '--force', `--target=${path.join(tempHome, 'CLAUDE.md')}`];
     const env = {
       ...process.env,
       ORGIAST_HOME: tempHome,

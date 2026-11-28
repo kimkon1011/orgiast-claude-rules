@@ -25,6 +25,10 @@ import { collectProviderBalances, formatBalanceLine, alertProviderBalances, BALA
 import { resolveReporterLabel } from './reporter-label.mjs';
 import { main as sendFleetDirective } from './fleet-directive-send.mjs';
 
+// フリート取得や指令更新も含めて、モジュール読み込みからの経過を数える。
+const PROCESS_STARTED_AT = Date.now();
+const DEFAULT_BUDGET_MS = 50 * 60_000;
+
 export const ALLOWED_LOCAL_COMMANDS = [
   'node tools/tool-adoption-check.mjs --force',
   // 備考: onboarding-sync は #303 で unused_provider を human 化したため許可リストから外した(自動実行しない)。
@@ -626,6 +630,20 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
 
   const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
 
+  // 他機への再送は1回の push にまとめ、結果は後段で従来どおりPCごとに記録する。
+  const directiveTargets = violations.filter(v => v.kind === 'stale_report'
+    && !nextStaleRetry[v.pc] && (v.label || v.pc) !== ownLabel);
+  let directiveFailed = false;
+  if (!dryRun && directiveTargets.length > 0) {
+    try {
+      if (typeof directiveSend !== 'function') throw new Error('fleet directive unavailable');
+      directiveSend(['--kind', 'run', '--task', 'fleet-sheet-report', '--targets', directiveTargets.map(v => v.label || v.pc).join(','), '--why', 'stale_report 自動復旧', '--push', '--expires-hours', '48'], { repo });
+    } catch {
+      // 外部例外の内容は出さず、後段で各PCを人へエスカレーションする。
+      directiveFailed = true;
+    }
+  }
+
   // 計測が信用できない回は、コード修正の自動委譲を一切行わない。
   // 委譲率や Opus 比は「安いAIが何回呼ばれたか」の上に立つ数字なので、台帳が読めなかった回に
   // それを根拠として直しにいくと、存在しない問題を直すことになる(2026-09-06 の「使用0」誤報がまさにこれ)。
@@ -647,10 +665,7 @@ export function decideActions({ violations, state, now, limits = { maxCodex: 2 }
             cwd: repo, timeout: 300_000, windowsHide: true, shell: false, encoding: 'utf8'
           });
           if (result.error || result.status !== 0) throw new Error('local report failed');
-        } else {
-          if (typeof directiveSend !== 'function') throw new Error('fleet directive unavailable');
-          directiveSend(['--kind', 'run', '--task', 'fleet-sheet-report', '--targets', violation.label || pc, '--why', 'stale_report 自動復旧', '--push', '--expires-hours', '48'], { repo });
-        }
+        } else if (directiveFailed) throw new Error('fleet directive failed');
         nextStaleRetry[pc] = { sentAt: now.toISOString(), count: 1, mode };
         actions.push({ id: `action-${nowMs}-stale_report-${pc}`, kind, pc, mode, dispatchedAt: now.toISOString(), baseline: { metric: 'reportAge', value: 0 }, result: 'sent', verifiedAt: null, note: `fleet-sheet-report 再送 (${mode})` });
         continue;
@@ -997,7 +1012,7 @@ export function executeLocalAction({ act, dryRun = false, claudeDir, home, now =
 // reset/clean/checkout -b を投げない(#294)。検証テストが通れば gh pr create で実PRを作り、
 // 成功した acts 全件の state に PR URL を記録する。空 diff・検証失敗・実行失敗時は変更を捨てて
 // worktree を破棄し、acts 全件を failed にする。
-export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath, home = process.env.ORGIAST_HOME || os.homedir(), now = new Date(), spawnSync = defaultSpawnSync }) {
+export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath, home = process.env.ORGIAST_HOME || os.homedir(), now = new Date(), spawnSync = defaultSpawnSync, startedAt = PROCESS_STARTED_AT, clock = Date.now, env = process.env }) {
   const list = Array.isArray(acts) ? acts : [acts];
   if (list.length === 0) return;
   const first = list[0];
@@ -1011,6 +1026,22 @@ export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath,
     for (const act of list) act.result = 'pending';
     return;
   }
+  const configuredBudget = Number(env.COST_IMPROVE_BUDGET_MS);
+  const budgetMs = Number.isSafeInteger(configuredBudget) && configuredBudget > 0 ? configuredBudget : DEFAULT_BUDGET_MS;
+  const remainingBudget = () => {
+    const currentMs = clock();
+    const remainingMs = budgetMs - (currentMs - startedAt);
+    if (remainingMs < 15 * 60_000) {
+      for (const act of list) {
+        act.result = 'deferred';
+        act.retryAt = currentMs + 12 * 60 * 60_000;
+        act.note = '保留(time_budget): 残り時間不足のため次回に再試行';
+      }
+      return null;
+    }
+    return remainingMs;
+  };
+  if (remainingBudget() === null) return;
   const tempTree = path.join(os.tmpdir(), `orgiast-cost-improve-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   try {
     let res = spawnSync('git', ['-C', repoPath, 'worktree', 'add', '--detach', tempTree, 'origin/main'], { windowsHide: true, encoding: 'utf8' });
@@ -1018,7 +1049,10 @@ export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath,
     // 差分が要るレーンなので Codex 系(implement / verify)に限る。文面が調査系でも implement に倒す。
     const guessedKind = classifyTaskKind(String(first.specContent || ''));
     const kind = CODEX_KINDS.has(guessedKind) ? guessedKind : 'implement';
-    res = spawnSync(process.execPath, [path.join(tempTree, 'tools/codex-do.mjs'), '--prompt-file', specFile, '--cwd', tempTree, '--timeout', '1800', '--origin', 'unattended', '--kind', kind], { windowsHide: true, cwd: tempTree, encoding: 'utf8' });
+    const remainingMs = remainingBudget();
+    if (remainingMs === null) return;
+    const timeoutSeconds = Math.max(300, Math.min(1800, Math.floor(remainingMs / 1000) - 600));
+    res = spawnSync(process.execPath, [path.join(tempTree, 'tools/codex-do.mjs'), '--prompt-file', specFile, '--cwd', tempTree, '--timeout', String(timeoutSeconds), '--origin', 'unattended', '--kind', kind], { windowsHide: true, cwd: tempTree, encoding: 'utf8' });
     const deferred = parseDeferred(res.status, res.stdout);
     if (deferred) {
       // 終了コード75: 上限中/無人割当超過。失敗に数えず、retryAt まで再試行しない。
@@ -1028,8 +1062,8 @@ export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath,
     if (res.status !== 0) { fail('Codex execution failed', res); return; }
     const diff = spawnSync('git', ['-C', tempTree, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' });
     if (diff.status !== 0 || !String(diff.stdout || '').trim()) { fail('変更なし', diff); return; }
-    const tests = spawnSync(process.execPath, ['--test', 'tools/*.test.mjs'], { windowsHide: true, cwd: tempTree, shell: false, encoding: 'utf8' });
-    if (tests.status !== 0) { fail('verification tests failed', tests); return; }
+    const tests = spawnSync(process.execPath, ['--test', 'tools/*.test.mjs'], { windowsHide: true, cwd: tempTree, shell: false, encoding: 'utf8', timeout: 600_000 });
+    if (tests.error || tests.signal || tests.status !== 0) { fail('verification tests failed', tests); return; }
     const dateStr = now.toISOString().slice(0, 10).replaceAll('-', '');
     const branchName = `auto/cost-improve-${dateStr}-${label}`;
     const commitMsg = `fix(cost): auto improve ${label}`;
@@ -1265,7 +1299,7 @@ export function writeGatewayOverride({ claudeDir, provider, writeImpl = null }) 
 // codex_saturated 対処: ~/.claude/codex-fallback-order.json に fallback 順を書く。
 // 2026-11 実測: qwen → cheap-code:deepseek → cheap-code:glm → gemini-cli → openrouter-free。
 // PC ごとの ~/.claude/codex-fallback-order.local.json（例: 008 は Gemini を外す）は上書きしない。
-export const DEFAULT_CODEX_FALLBACK_ORDER = Object.freeze(['cursor-agent', 'qwen', 'cheap-code:deepseek', 'cheap-code:glm', 'gemini-cli', 'openrouter-free']);
+export const DEFAULT_CODEX_FALLBACK_ORDER = Object.freeze(['qwen', 'cheap-code:deepseek', 'cheap-code:glm', 'gemini-cli', 'openrouter-free']);
 export function writeCodexFallbackOrder({ claudeDir, zaiAvailable, writeImpl = null }) {
   const localFile = path.join(claudeDir, 'codex-fallback-order.local.json');
   if (fs.existsSync(localFile)) {

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { registerCardFromText } from './lib/approval-cards.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,6 +19,7 @@ import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mj
 import { matchesRow, parseEscalation, syncEscalationAnswer } from './lib/escalation-answer-sync.mjs';
 import { looksLikeApprovalRequest } from './lib/kim-inbox-kind.mjs';
 import { isPullRequestMergeApprovalRequest, MERGE_HANDOFF_REJECTION_MESSAGE } from './lib/kim-inbox-merge-handoff.mjs';
+import { renameWithRetry } from './lib/rename-retry.mjs';
 const exec = promisify(execFile);
 const execGh = promisify(execFile);
 const PR_REF_RE = /PR\s*#(\d+)/gi;
@@ -139,7 +141,7 @@ export function isKimSeat(home) {
 function save(home, item) {
   const file = path.join(directory(home), `${item.id}.json`);
   const temp = `${file}.${randomBytes(8).toString('hex')}.tmp`;
-  try { fs.writeFileSync(temp, JSON.stringify(item, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(temp, file); }
+  try { fs.writeFileSync(temp, JSON.stringify(item, null, 2) + '\n', { mode: 0o600 }); renameWithRetry(temp, file); }
   finally { fs.rmSync(temp, { force: true }); }
 }
 // 同じ項目の回答・表示更新を直列化し、古い表示更新が回答を上書きしない。
@@ -161,7 +163,23 @@ function acquireInboxLock(home, key, waitMs = 60_000) {
     }
   }
   if (fd === undefined) throw new Error('kim-inbox: 台帳が使用中です');
-  return () => { fs.closeSync(fd); fs.unlinkSync(lock); };
+  return () => { fs.closeSync(fd); releaseOwnedLock(lock, process.pid); };
+}
+// Only remove locks still owned by the expected process.
+function releaseOwnedLock(lock, pid) {
+  try {
+    if (Number(fs.readFileSync(lock, 'utf8')) !== pid) return false;
+    fs.unlinkSync(lock);
+    return true;
+  } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
+export function releaseDeadlineWorkerLock(home, pid, { requireDead = true } = {}) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  if (requireDead) {
+    try { process.kill(pid, 0); return false; }
+    catch (error) { if (error.code !== 'ESRCH') return false; }
+  } else if (pid !== process.pid) return false;
+  return releaseOwnedLock(path.join(directory(home), 'info-aggregation.lock'), pid);
 }
 function locked(home, key, fn, waitMs) {
   const release = acquireInboxLock(home, key, waitMs);
@@ -222,7 +240,7 @@ const legacyInfoKey = text => text.replace(/^【[^\r\n]*】[^\S\r\n]*(?:\r?\n|$)
 // 集約の検索と作成を同じロックで守り、同時追加も取りこぼさない。
 function create(home, options, lockWaitMs) {
   return locked(home, 'info-aggregation', () => {
-    const text = clean(options.text);
+    const text = options.source === 'tema-blocked-send' ? redactSecrets(String(options.text ?? '')) : clean(options.text);
     if (options.kind === 'deadline') {
       if (!options.key || !/^[A-Za-z0-9_-]+$/.test(options.key)) throw new Error('deadline には有効な --key が必要です');
       const existing = listItems(home, { status: 'open' }).find(i => i.kind === 'deadline' && i.key === options.key);
@@ -425,7 +443,7 @@ function createNew(home, { kind = 'info', text, source = '', from = resolveFleet
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), ...(kindPromotedFrom ? { kindPromotedFrom } : {}), ...(standingPermission ? { standingPermission } : {}), ...(mergeHandoffReason ? { mergeHandoffReason: clean(mergeHandoffReason) } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), ...(kindPromotedFrom ? { kindPromotedFrom } : {}), ...(standingPermission ? { standingPermission } : {}), ...(mergeHandoffReason ? { mergeHandoffReason: clean(mergeHandoffReason) } : {}), kind, source: clean(source), from: clean(from), text: source === 'tema-blocked-send' ? redactSecrets(String(text ?? '')) : clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     if (revision !== undefined) item.revision = revision;
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -515,10 +533,13 @@ export async function addItem(home, options, { drain = true, localOnly = false, 
   }
   if (drain) await drainSpool(home, { execImpl: normalizedOptions.execImpl, signal: normalizedOptions.signal, lockWaitMs });
   if (isInboxNoise(normalizedOptions)) return { id: null, status: 'suppressed', kind: normalizedOptions.kind || 'info' };
-  if (normalizedOptions.text) {
+  // Lost-prompt notifications quote the original user input. Preserve that
+  // evidence verbatim instead of rewriting it using ambient GitHub access.
+  if (normalizedOptions.text && normalizedOptions.source !== 'lost-prompt-scan') {
     normalizedOptions = { ...normalizedOptions, text: await resolvePrRefs(normalizedOptions.text, { execImpl: normalizedOptions.execImpl, stderr: normalizedOptions.stderr || console.error }) };
   }
   const item = create(home, normalizedOptions, lockWaitMs);
+  if (item.kind === 'ask') registerCardFromText(item.text, { home, shownTo: 'kim-inbox' });
   if (localOnly || item.kind === 'deadline' || isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-inbox-'));
   try {
@@ -771,6 +792,70 @@ export function closeKey(home, key) {
     .filter(i => i.kind === 'deadline' && i.key === key)
     .map(i => update(home, i.id, current => { current.status = 'seen'; })));
 }
+function applyDeadlineOp(home, op, byKey) {
+  const matches = byKey.get(op.key) || [];
+  if (op.type === 'close' || op.close) {
+    for (const item of matches) {
+      update(home, item.id, current => { current.status = 'seen'; });
+      byKey.set(op.key, (byKey.get(op.key) || []).filter(candidate => candidate.id !== item.id));
+    }
+    return;
+  }
+  const text = clean(op.text || op.body || '');
+  if (!op.key || !/^[A-Za-z0-9_-]+$/.test(op.key)) throw new Error('deadline には有効な --key が必要です');
+  const existing = matches[0];
+  if (existing) {
+    return update(home, existing.id, current => {
+      current.text = text; current.due = op.due || ''; current.remainingDays = op.remainingDays ?? null;
+      current.lastAt = new Date().toISOString();
+    });
+  }
+  const item = createNew(home, {
+    kind: 'deadline', text, key: op.key, due: op.due, remainingDays: op.remainingDays,
+    source: op.source || 'deadline-watch',
+  });
+  byKey.set(op.key, [item]);
+  return item;
+}
+const inboxBusy = error => String(error?.message || error) === 'kim-inbox: 台帳が使用中です';
+function sleepSync(ms) {
+  if (!(ms > 0)) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+// One aggregation lock for many deadline add/close ops. Busy lock acquisition
+// retries a few times; failed ops stay unset so the next watch can resend.
+export function batchDeadlineOps(home, ops, { attempts = 3, backoffMs = 100, sleep = sleepSync, onOpenItems } = {}) {
+  if (!ops.length) return [];
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return locked(home, 'info-aggregation', () => {
+        const items = listItems(home, { status: 'open' });
+        const byKey = new Map();
+        for (const item of items) {
+          if (item.kind !== 'deadline') continue;
+          if (!byKey.has(item.key)) byKey.set(item.key, []);
+          byKey.get(item.key).push(item);
+        }
+        onOpenItems?.(items);
+        return ops.map(op => {
+          try {
+            applyDeadlineOp(home, op, byKey);
+            return { key: op.key, ok: true, markNotified: !!op.markNotified, readOnly: !!op.readOnly, notifyCount: op.notifyCount, vehicleName: op.vehicleName, plate: op.plate };
+          } catch (error) {
+            return { key: op.key, ok: false, error: clean(error.message), markNotified: false };
+          }
+        });
+      }, 0);
+    } catch (error) {
+      lastError = error;
+      if (!inboxBusy(error) || attempt === attempts - 1) break;
+      sleep(backoffMs * (attempt + 1));
+    }
+  }
+  const message = clean(lastError?.message || 'kim-inbox: 台帳が使用中です');
+  return ops.map(op => ({ key: op.key, ok: false, error: message, markNotified: false }));
+}
 // gmail-search.mjs を子プロセスとして実行する既定の検索実装。
 async function defaultGmailSearch(user, query) {
   const { execFileSync } = await import('node:child_process');
@@ -1000,6 +1085,11 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
     ...reserved.filter(i => i.kind === 'ask').sort(unseenFirst).slice(0, 5),
   ];
   const allAsks = eligible.filter(i => i.kind === 'ask');
+  // Reserve slots for asks last shown 7+ days ago so new asks cannot starve them forever.
+  const longUnshownAsk = item => item.lastShownAt
+    && now - Date.parse(item.lastShownAt) >= 7 * 86400000;
+  const longUnshownAsks = allAsks.filter(longUnshownAsk)
+    .sort((a, b) => Date.parse(a.lastShownAt) - Date.parse(b.lastShownAt)).slice(0, 2);
   const infos = eligible.filter(i => i.kind === 'info' && !i.dailyProgress);
   const deadlines = eligible.filter(i => i.kind === 'deadline').sort((a, b) => Number(own(b)) - Number(own(a))
     || deadlineDays(a, now) - deadlineDays(b, now) || String(a.key).localeCompare(String(b.key)));
@@ -1008,6 +1098,7 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   const otherInfos = infos.filter(i => !own(i) && !isHighInfo(i)).sort(newestFirst);
   const candidates = [...new Set([
     ...required,
+    ...longUnshownAsks,
     ...allAsks.filter(own).sort(askPriority).slice(0, 5),
     ...daily.sort(unseenFirst),
     ...allAsks.filter(i => i.urgent && !own(i)).sort(askPriority).slice(0, 5),

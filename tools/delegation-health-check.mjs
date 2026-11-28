@@ -209,8 +209,10 @@ export function isGeminiBillingProbeRow(row = {}) {
 }
 
 export function isBillingSuspendedRow(row = {}) {
-  return /^(?:http_?)?(402|429)$/.test(String(row?.status ?? '').toLowerCase())
-    && isPermanentBillingDetail(row?.reason);
+  // 2026-11-27 実測: grok 6件の xAI クレジット切れは status HTTP403 で、
+  // 文言は reason ではなく stderrTail に入っていた（権限エラーの素の 403 は除外）。
+  return /^(?:http_?)?(402|429|403)$/.test(String(row?.status ?? '').toLowerCase())
+    && isPermanentBillingDetail(row?.reason || row?.stderrTail);
 }
 
 // cooldown の行は「上限/レート制限中なのでリクエストを投げなかった」記録(cheap-code.mjs が
@@ -689,7 +691,9 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     // 上限・課金切れ・一過性ネットワークだけで全滅した行は「レーンが壊れている」証拠ではない。
     // 実測 2026-10-22: kimi の 24h 449 行 = http_429 440 + status:'network' 9(10.7秒で
     // タイムアウト) で、network を no_output 扱いしていたため毎日 high になっていた。
-    const benign = attempts.filter((row) => isQuotaLimitedRow(row) || emptyOutputReason(row) === 'infra_transient' || emptyOutputReason(row) === 'usage_limit');
+    // 課金切れの 403（isBillingSuspendedRow）も benign に含め、lane_outage_unrepaired へ落とさない
+    // （2026-11-27 実測: grok 6件 = xAI クレジット切れ HTTP403）。
+    const benign = attempts.filter((row) => isQuotaLimitedRow(row) || isBillingSuspendedRow(row) || emptyOutputReason(row) === 'infra_transient' || emptyOutputReason(row) === 'usage_limit');
     const billingSuspended = attempts.filter(isBillingSuspendedRow);
     // 行に reason が無い旧記録でも、llm-fallback が残した 24h の恒久課金切れ cooldown で判別できる。
     const billingCooldown = cooldown[provider]?.permanentBilling === true && Number(cooldown[provider]?.until) > nowMs;

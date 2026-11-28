@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "beacons": [
+    {"label":"008XPS8300","reportedAt":"2026-11-27T02:00:00Z","pollAt":"2026-11-27T02:55:00Z","steps":"[{\"id\":\"absolute-rules-tema\",\"status\":\"fail\",\"reason\":\"tema=yes; signin=no; consistency=yes; card=yes\"}]"},
+    {"label":"old-active","reportedAt":"2026-11-11T00:00:00Z","pollAt":"2026-11-11T00:00:00Z","steps":[]},
+    {"label":"008XPS8300","reportedAt":"2026-11-26T01:00:00Z","steps":[{"id":"absolute-rules-tema","status":"ok","reason":"tema=yes; signin=yes; consistency=yes; card=yes"}]},
+    {"label":"old-offline","reportedAt":"2026-11-11T00:00:00Z","serverPollAt":"2026-11-25T00:00:00Z","steps":[]}
+  ],
+  "serverPolls": {"old-active":"2026-11-27T02:59:00Z"}
+}

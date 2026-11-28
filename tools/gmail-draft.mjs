@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { proxyCredential, gwsFetch, GWS_MARKER } from './lib/gws-proxy.mjs';
+import { gwsFetch, GWS_MARKER } from './lib/gws-proxy.mjs';
 /**
  * gmail-draft.mjs — 共有アカウントの外部宛 Gmail 下書きを作る常設経路。
  * なぜ要るか: アドホックなコードや手作業をなくし、内部宛はチャット表示に戻す。
@@ -22,25 +22,45 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
-import { defaultDriveKeyPath } from './lib/drive-auth.mjs';
+import { DEFAULT_KEY, mintDwdToken, safeFailure } from './lib/gmail-auth.mjs';
+export { mintDwdToken, classifyTokenError } from './lib/gmail-auth.mjs';
 import { loadLedger, isInternal, extractAddresses, shouldBlockInternal } from './internal-recipient-gmail-guard.mjs';
 import { bodyHash, checkConsistency, statePath, mimeText, render as renderConsistency } from './mail-consistency-check.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
+import { assertSendConsistency, afterSendCleanup } from './send-consistency-check.mjs';
 import { validateWeekdays } from './lib/weekday-validator.mjs';
 import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 import { acquireSendDedupe, SendDedupeError } from './lib/send-dedupe.mjs';
 import { applyBoothCc } from './lib/booth-sales-cc.mjs';
+import { applyInvoiceCc, draftAttachmentNames } from './lib/invoice-cc.mjs';
+import { assertNoHandback, stripHumanOnly, hasHumanOnly } from './lib/handback-guard.mjs';
+
+import { prepareTemaSend, parkTemaBlocked } from './lib/unattended-tema.mjs';
+import { parseTemaRecord } from './lib/tema-check.mjs';
+import { registerCard } from './lib/approval-cards.mjs';
 
 const BOOTH_CC = 'satou@orgiast.jp';
+const INVOICE_CC = 'keiri2@orgiast.jp';
 
 export const GMAIL_COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
 export const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 export const DEFAULT_USER = 'seisaku-team@orgiast.jp';
 // 既定パスはハードコードしない（旧既定値はディレクトリ名の打ち間違いで鍵を見失っていた。2026-10-23 実測）。
-const DEFAULT_KEY = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath();
 const SCOPES = ['gmail.readonly', 'gmail.compose', 'gmail.send'].map(s => `https://www.googleapis.com/auth/${s}`);
 const b64url = value => Buffer.from(value).toString('base64url');
 const configError = () => Object.assign(new Error('設定を確認してください（引数・入力ファイル・SA キー）。'), { errorKind: 'configuration_error' });
+
+/** 送信前に差し戻し文面を止める。HUMAN-ONLY タグは先方に見せないので、除去後の本文が変わる場合は下書き更新が必要。 */
+export function assertGmailBodySendable(text, { env = process.env, skipHandbackGuard = false, home, temaRecord } = {}) {
+  if (!skipHandbackGuard) assertNoHandback(text, { env, home, temaRecord, channel: 'gmail' });
+  const stripped = stripHumanOnly(text);
+  if (hasHumanOnly(text)) {
+    throw Object.assign(new Error('下書き本文の [HUMAN-ONLY: ...] を外してから送ってください。タグは送信許可の印で、先方には見せません。'), { errorKind: 'handback_tag_present', code: 'HANDBACK_TAG_UNSTRIPPED', stripped });
+  }
+  if (parseTemaRecord(text)) throw Object.assign(new Error('下書きに [TEMA-CHECK] が残っています。記録は送信前に外れます。下書き作成経路で保存し直してください。'), { code: 'TEMA_TAG_UNSTRIPPED', errorKind: 'tema_tag_present' });
+  return stripped;
+}
+
 
 function addresses(value, required = false) {
   const list = (Array.isArray(value) ? value : [value ?? '']).flatMap(v => {
@@ -170,66 +190,6 @@ export function guardRecipients(input, ledger) {
     : { blocked: false, internal: [] };
 }
 
-export function classifyTokenError(json) {
-  return ['invalid_client', 'invalid_grant', 'unauthorized_client'].includes(json?.error) ? 'scope_not_delegated' : 'error';
-}
-
-function safeFailure(error) {
-  if (error?.errorKind === 'seisaku_relay') return { errorKind: 'seisaku_relay', error: error.message };
-  const errorKind = error?.code === 'SEND_CONTEXT_REQUIRED' || error?.errorKind === 'send_context_required' ? 'send_context_required'
-    : error?.errorKind === 'configuration_error' ? 'configuration_error'
-    : error?.errorKind === 'too_large' ? 'too_large'
-    : error?.tokenError ? classifyTokenError(error.detail)
-      : ['scope_not_delegated', 'forbidden_no_access', 'unauthorized'].includes(error?.errorKind) ? error.errorKind : 'error';
-  const messages = {
-    configuration_error: '設定を確認してください（引数・入力ファイル・SA キー）。',
-    scope_not_delegated: 'DWD にこのスコープが未登録。Admin Console で SA client_id に追加が要る',
-    forbidden_no_access: 'Gmail API へのアクセス権限がありません。',
-    unauthorized: 'Gmail API の認証に失敗しました。',
-    too_large: '転送メールが25MBを超えています。',
-    send_context_required: error?.message,
-    error: '処理に失敗しました（認証・通信・API 応答を確認してください）。',
-  };
-  const httpStatus = error?.httpStatus;
-  const suffix = httpStatus !== undefined ? `（HTTP ${httpStatus}）` : '';
-  const result = { errorKind, error: `${messages[errorKind]}${suffix}` };
-  if (error?.httpStatus !== undefined) result.detail = `threads.get ${error.httpStatus}`;
-  return result;
-}
-
-function readKey(keyPath) {
-  try {
-    const key = JSON.parse(fs.readFileSync(keyPath, 'utf8').replace(/^\uFEFF/u, ''));
-    if (typeof key.client_email !== 'string' || !key.client_email || typeof key.private_key !== 'string') throw configError();
-    const privateKey = crypto.createPrivateKey(key.private_key);
-    if (privateKey.asymmetricKeyType !== 'rsa') throw configError();
-    return { client_email: key.client_email, privateKey };
-  } catch { throw configError(); }
-}
-
-export async function mintDwdToken({ user, keyPath = DEFAULT_KEY, scope, fetchImpl = gwsFetch, statePath }) {
-  const relay = proxyCredential({ keyPath, impersonate: user, scope });
-  if (relay !== null) return relay;
-  const key = readKey(keyPath);
-  const now = Math.floor(Date.now() / 1000);
-  const unsigned = `${b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))}.${b64url(JSON.stringify({
-    iss: key.client_email, sub: user, scope, aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600,
-  }))}`;
-  try {
-    const assertion = `${unsigned}.${crypto.sign('RSA-SHA256', Buffer.from(unsigned), key.privateKey).toString('base64url')}`;
-    const res = await fetchImpl('https://oauth2.googleapis.com/token', {
-      method: 'POST', signal: AbortSignal.timeout(25000),
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion }).toString(),
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok || typeof json?.access_token !== 'string' || !json.access_token) {
-      throw Object.assign(new Error('トークン取得失敗'), { errorKind: classifyTokenError(json) });
-    }
-    return json.access_token;
-  } catch (error) { throw Object.assign(new Error(safeFailure(error).error), safeFailure(error)); }
-}
-
 export async function probeScopes({ user = DEFAULT_USER, keyPath = DEFAULT_KEY, scopes = SCOPES, mintToken = mintDwdToken, fetchImpl = gwsFetch }) {
   const results = [];
   for (const scope of scopes) {
@@ -263,8 +223,19 @@ async function getReplyHeaders({ user, threadId, fetchImpl, getToken }) {
   return { inReplyTo, references: references ? `${references} ${inReplyTo}` : inReplyTo, subject: header('subject') ?? '' };
 }
 
-export async function createDraft({ user = DEFAULT_USER, raw, threadId, fetchImpl = gwsFetch, getToken }) {
+export async function createDraft({ user = DEFAULT_USER, raw, threadId, fetchImpl = gwsFetch, getToken, home, temaRecord, addItemImpl }) {
   try {
+    let source = Buffer.from(raw, 'base64url').toString('utf8');
+    const originalBody = findPlainText(source);
+    await prepareTemaSend(originalBody, { home, temaRecord, channel: 'gmail', source: 'gmail-draft-create', addItemImpl });
+    const cleanBody = stripHumanOnly(originalBody);
+    if (cleanBody !== originalBody) {
+      const encoded = Buffer.from(cleanBody.replace(/\r\n|\r|\n/g, '\r\n')).toString('base64').match(/.{1,76}/g)?.join('\r\n') || '';
+      const plainPart = /(Content-Type: text\/plain[^\r\n]*\r?\nContent-Transfer-Encoding: base64\r?\n\r?\n)[A-Za-z0-9+/=\r\n]*/i;
+      if (!plainPart.test(source)) throw Error('記録を除去できない MIME 形式です');
+      source = source.replace(plainPart, (_m, header) => header + encoded + '\r\n');
+      raw = Buffer.from(source).toString('base64url');
+    }
     const token = await (getToken ?? (args => mintDwdToken({ ...args, fetchImpl })))({ user, scope: GMAIL_COMPOSE_SCOPE });
     const res = await fetchImpl('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
       method: 'POST', signal: AbortSignal.timeout(25000),
@@ -276,8 +247,10 @@ export async function createDraft({ user = DEFAULT_USER, raw, threadId, fetchImp
     });
     const json = await res.json();
     if (typeof json?.id !== 'string' || !json.id) throw new Error('下書き ID がありません');
+    const headers = parseHeaders(source.split(/\r?\n\r?\n/)[0]);
+    registerCard({ draftId: json.id, to: headers.get('to'), subject: decodeHeader(headers.get('subject')), channel: 'gmail', shownTo: user }, { home });
     return { id: json.id, messageId: json.message?.id, threadId: json.message?.threadId };
-  } catch (error) { throw Object.assign(new Error(safeFailure(error).error), safeFailure(error)); }
+  } catch (error) { if (/^TEMA_|^HANDBACK_/.test(error.code || '')) throw error; throw Object.assign(new Error(safeFailure(error).error), safeFailure(error)); }
 }
 
 export async function deleteDraft({ user = DEFAULT_USER, id, fetchImpl = gwsFetch, getToken }) {
@@ -304,8 +277,22 @@ async function fetchDraftBody({ user, id, fetchImpl, getToken }) {
   return mimeText((await res.json())?.message?.payload).text;
 }
 
+export function fullDraftText(payload) {
+  const plain = [], html = [];
+  function walk(part) {
+    if (!part || part.filename) return;
+    if (part.body?.data) {
+      const text = Buffer.from(part.body.data, 'base64url').toString('utf8');
+      (part.mimeType === 'text/html' ? html : plain).push(text);
+    }
+    for (const child of part.parts || []) walk(child);
+  }
+  walk(payload);
+  return (plain.length ? plain : html).join('\n');
+}
+
 /** Read the existing MIME headers before sending; include hidden Bcc recipients. */
-export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger(), fetchImpl = gwsFetch, getToken, draft: suppliedDraft, allowRepeat, home, acquireDedupe = acquireSendDedupe }) {
+export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger(), fetchImpl = gwsFetch, getToken, draft: suppliedDraft, allowRepeat, home, acquireDedupe = acquireSendDedupe, env = process.env, skipHandbackGuard = false, consistencyCheck = assertSendConsistency, cleanup = afterSendCleanup, consistencyDeps = {}, draftReadAt, temaRecord }) {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(id)) throw configError();
   const token = await (getToken ?? (args => mintDwdToken({ ...args, fetchImpl })))({ user, scope: GMAIL_COMPOSE_SCOPE });
   const request = async (url, options = {}) => {
@@ -326,14 +313,23 @@ export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger()
   const internal = recipients.filter(addr => isInternal(addr, ledger));
   const isForward = values('x-orgiast-forward').some(value => /^[A-Za-z0-9_-]+$/u.test(value));
   if (shouldBlockInternal(recipientFields, ledger) && !isForward) throw Object.assign(new Error('内部宛は Discord で連絡してください。'), { errorKind: 'internal_recipient', internal });
-  const guard = await acquireDedupe({ recipients: values('to'), body: mimeText(draft?.message?.payload).text, allowRepeat, home });
+  const draftBody = fullDraftText(draft?.message?.payload);
+  try { assertGmailBodySendable(draftBody, { env, skipHandbackGuard, home, temaRecord }); }
+  catch (error) { await parkTemaBlocked(draftBody, error, { home, to: values('to'), source: 'gmail-draft-send', ...consistencyDeps }); throw error; }
+  const guard = await acquireDedupe({ recipients: values('to'), body: draftBody, allowRepeat, home });
   try {
+    const checkInput = { channel:'gmail', account:user, to:values('to'), cc:values('cc'), subject:values('subject').join(' '), text:draftBody, draftId:id, threadId:draft.message?.threadId, draftReadAt };
+    const checked = await consistencyCheck(checkInput, { home, fetchImpl, getToken, ...consistencyDeps });
     const sent = await request('https://gmail.googleapis.com/gmail/v1/users/me/drafts/send', {
       method: 'POST', body: JSON.stringify({ id }),
     });
     if (!sent?.id || !sent?.threadId) throw new Error('送信結果の ID がありません');
     guard.recordSuccess({ channel: 'gmail', transport: 'gmail-draft', messageId: sent.id, threadId: sent.threadId, draftId: id });
-    return { sentMessageId: sent.id, threadId: sent.threadId, to: values('to').join(', '), subject: values('subject').join(' ') };
+    const cleanupResult = await cleanup({ ...checkInput, scheduledSends:checked?.input?.scheduledSends, sentMessageId:sent.id }, { home,
+      getDraft: draftId => fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/drafts/${encodeURIComponent(draftId)}`, {headers:{Authorization:`Bearer ${token}`}}),
+      deleteDraft: draftId => fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/drafts/${encodeURIComponent(draftId)}`, {method:'DELETE',headers:{Authorization:`Bearer ${token}`}}),
+    });
+    return { sentMessageId: sent.id, threadId: sent.threadId, to: values('to').join(', '), subject: values('subject').join(' '), ...(cleanupResult?.cardNotice ? { cardNotice: cleanupResult.cardNotice } : {}), cleanup:cleanupResult };
   } catch (error) { guard.release(); throw error; }
 }
 
@@ -342,7 +338,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const name = argv[i];
     if (['--check', '--json', '--dry-run', '--booth'].includes(name)) { args[name.slice(2)] = true; continue; }
-    if (!['--to', '--cc', '--subject', '--body', '--body-file', '--user', '--delete', '--send', '--forward', '--thread-id', '--in-reply-to', '--attach', '--ack-consistency', '--allow-repeat'].includes(name) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw configError();
+    if (!['--to', '--cc', '--subject', '--body', '--body-file', '--user', '--delete', '--send', '--forward', '--thread-id', '--in-reply-to', '--attach', '--ack-consistency', '--allow-repeat', '--tema-record'].includes(name) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw configError();
     const field = name.slice(2);
     const value = argv[++i];
     if (field === 'to' || field === 'cc' || field === 'attach') (args[field] ??= []).push(value);
@@ -361,6 +357,8 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
   const emit = (report, human) => stdout(jsonMode ? JSON.stringify({ action, user, ...report }) : human);
   try {
     const args = parseArgs(argv);
+    let temaRecord = args['tema-record'] ? (deps.readFile ?? (p => fs.readFileSync(p, 'utf8')))(args['tema-record']) : undefined;
+    if (temaRecord) { try { const parsed = JSON.parse(temaRecord); temaRecord = parsed.record ?? parsed; } catch { /* テキストの記録ブロック */ } }
     deletionId = args.delete;
     const senders = addresses(args.user ?? DEFAULT_USER, true);
     if (senders.length !== 1) throw configError();
@@ -373,12 +371,17 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       if (args['body-file'] !== undefined) { try { preface = (deps.readFile ?? (p => fs.readFileSync(p, 'utf8')))(args['body-file']); } catch { throw configError(); } }
       const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
       const originalRaw = await (deps.fetchMessageRaw ?? (options => fetchMessageRaw({ ...options, fetchImpl, getToken })))({ user, id: args.forward });
-      const boothCc = applyBoothCc({ to: args.to, cc: args.cc, body: `${preface}\n${Buffer.from(originalRaw, 'base64url').toString('utf8')}`, booth: args.booth });
-      const raw = buildForwardRaw({ from: user, to: args.to, cc: boothCc.cc, preface, messageId: args.forward, originalRaw });
-      const boothReport = boothCc.added ? { boothCcAdded: BOOTH_CC } : {};
-      if (args['dry-run']) { emit({ ok: true, ...boothReport, raw, headers: Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0] }, `raw: ${raw}${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}`); return 0; }
-      const result = await createDraft({ user, raw, fetchImpl, getToken });
-      emit({ ok: true, ...boothReport, ...result }, `転送下書きを作成しました: ${result.id} (${user})${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}`);
+      const originalSource = Buffer.from(originalRaw, 'base64url').toString('utf8');
+      const originalHeaderEnd = originalSource.search(/\r?\n\r?\n/u);
+      const originalSubject = decodeHeader(parseHeaders(originalHeaderEnd < 0 ? originalSource : originalSource.slice(0, originalHeaderEnd)).get('subject') ?? '');
+      const boothCc = applyBoothCc({ to: args.to, cc: args.cc, body: `${preface}\n${originalSource}`, booth: args.booth });
+      const invoiceCc = applyInvoiceCc({ to: args.to, cc: boothCc.cc, subject: originalSubject, body: preface });
+      const raw = buildForwardRaw({ from: user, to: args.to, cc: invoiceCc.cc, preface, messageId: args.forward, originalRaw });
+      const ccReport = { ...(boothCc.added ? { boothCcAdded: BOOTH_CC } : {}), ...(invoiceCc.added ? { invoiceCcAdded: INVOICE_CC } : {}) };
+      const ccHuman = `${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}${invoiceCc.added ? `\ninvoiceCcAdded: ${INVOICE_CC}` : ''}`;
+      if (args['dry-run']) { emit({ ok: true, ...ccReport, raw, headers: Buffer.from(raw, 'base64url').toString('utf8').split('\r\n\r\n')[0] }, `raw: ${raw}${ccHuman}`); return 0; }
+      const result = await createDraft({ user, raw, fetchImpl, getToken, home: deps.home, temaRecord, addItemImpl: deps.addItemImpl });
+      emit({ ok: true, ...ccReport, ...result }, `転送下書きを作成しました: ${result.id} (${user})${ccHuman}`);
       return 0;
     }
     if (Object.hasOwn(args, 'send')) {
@@ -393,6 +396,9 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       if (!draftResponse.ok) throw new Error('Gmail API 失敗');
       const draft = await draftResponse.json();
       const headers = draft?.message?.payload?.headers;
+      const sendHeaders = Object.fromEntries((headers || []).map(h=>[h.name.toLowerCase(),h.value]));
+      // 旧 --ack-consistency より先に必須検査。旧承認では新検査を迂回できない。
+      await (deps.consistencyCheck ?? assertSendConsistency)({channel:'gmail',account:user,to:sendHeaders.to,cc:sendHeaders.cc,subject:sendHeaders.subject,text:mimeText(draft.message?.payload).text,draftId:args.send,threadId:draft.message?.threadId}, {home:deps.home,fetchImpl,getToken,...deps.consistencyDeps});
       const isForward = Array.isArray(headers) && headers.some(header => String(header.name).toLowerCase() === 'x-orgiast-forward'
         && /^[A-Za-z0-9_-]+$/u.test(header.value));
       const inspect = deps.inspectDraft ?? (async () => {
@@ -407,17 +413,42 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         const current = await (deps.getDraftBody ?? (options => fetchDraftBody({ ...options, fetchImpl, getToken })))({ user, id: args.send });
         consistency = age <= 86400000 && cached.bodyHash === bodyHash(current) ? cached : await inspect();
       } catch { consistency = await inspect(); }
-      const draftText = mimeText(draft?.message?.payload).text;
+      const draftText = fullDraftText(draft?.message?.payload);
       const draftHeader = name => (headers ?? []).filter(header => String(header.name).toLowerCase() === name).map(header => header.value);
-      const boothCc = applyBoothCc({ to: draftHeader('to'), cc: draftHeader('cc'), subject: draftHeader('subject').join(' '), body: draftText, booth: args.booth });
+      // 差し戻しガードは社内の人へ AI で済む作業を戻さないためのもの。
+      // 顧客への質問まで同じ敬語パターンで止めると、通常の社外返信を誤検知する。
+      // 内外混在は社内受信者にも届くため、全宛先が社外の場合だけ
+      // handback 検査を省略する。
+      const sendRecipients = extractAddresses({ to: draftHeader('to'), cc: draftHeader('cc'), bcc: draftHeader('bcc') });
+      const externalOnly = sendRecipients.length > 0
+        && sendRecipients.every(address => !isInternal(address, (deps.loadLedger ?? loadLedger)()));
+      const draftSubject = draftHeader('subject').join(' ');
+      const boothCc = applyBoothCc({ to: draftHeader('to'), cc: draftHeader('cc'), subject: draftSubject, body: draftText, booth: args.booth });
       if (boothCc.added) {
         emit({ ok: false, errorKind: 'booth_cc_missing', boothCcAdded: BOOTH_CC, reason: boothCc.reason }, `ブース営業メールのCCに ${BOOTH_CC} がありません。下書きを修正してから送信してください。`);
+        return 2;
+      }
+      const invoiceCc = applyInvoiceCc({
+        to: draftHeader('to'), cc: draftHeader('cc'), subject: draftSubject, body: draftText,
+        attachments: draftAttachmentNames(draft?.message?.payload),
+      });
+      if (invoiceCc.added) {
+        emit({ ok: false, errorKind: 'invoice_cc_missing', invoiceCcAdded: INVOICE_CC, reason: invoiceCc.reason }, `請求書メールのCCに ${INVOICE_CC} がありません。下書きを修正してから送信してください。`);
         return 2;
       }
       const bookingUrls = findSecretaryBookingUrls(draftText);
       if (bookingUrls.length) {
         emit({ ok: false, errorKind: 'secretary_booking_url', matches: bookingUrls }, `${SECRETARY_BOOKING_URL_REASON}\n検出: ${bookingUrls.join('、')}`);
         return 2;
+      }
+      try { assertGmailBodySendable(draftText, { env: deps.env ?? process.env, skipHandbackGuard: deps.skipHandbackGuard || externalOnly, home: deps.home, temaRecord }); }
+      catch (error) {
+        if (/^TEMA_|^HANDBACK_/.test(error.code || '')) await parkTemaBlocked(draftText, error, { home: deps.home, to: draftHeader('to'), source: 'gmail-draft-send', addItemImpl: deps.addItemImpl });
+        if (error?.code?.startsWith('TEMA_') || error?.code === 'HANDBACK_BLOCKED' || error?.errorKind === 'handback_tag_present') {
+          emit({ ok: false, errorKind: error.errorKind ?? 'handback_blocked', hits: error.hits, findings: error.findings, error: error.message, code: error.code }, error.message);
+          return 4;
+        }
+        throw error;
       }
       if (!isForward && !consistency.ok && !args['ack-consistency']) { emit({ ok: false, errorKind: 'consistency_block', findings: consistency.findings }, renderConsistency(consistency)); return 2; }
       if (!isForward && args['ack-consistency']) {
@@ -456,9 +487,10 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         }});
       }
       const result = await sendDraft({ user, id: args.send, ledger: (deps.loadLedger ?? loadLedger)(), fetchImpl, getToken, draft, allowRepeat: args['allow-repeat'], home: deps.home, acquireDedupe: deps.acquireDedupe,
+        consistencyCheck:deps.consistencyCheck, cleanup:deps.cleanup, consistencyDeps:deps.consistencyDeps, temaRecord, env: deps.env, skipHandbackGuard: deps.skipHandbackGuard || externalOnly,
       });
       if (!deps.skipContextCheck) recordOutbound({ channel: 'gmail', target: result.threadId, mailbox: user, text: draftText, messageId: result.sentMessageId }, deps.home);
-      emit({ ok: true, ...(isForward ? { consistency } : {}), ...result }, `送信しました: ${result.sentMessageId} (${user})`);
+      emit({ ok: true, ...(isForward ? { consistency } : {}), ...result }, `送信しました: ${result.sentMessageId} (${user})${result.cardNotice ? `\n${result.cardNotice}` : ''}`);
       return 0;
     }
     if (Object.hasOwn(args, 'delete')) {
@@ -488,8 +520,10 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     if (args['thread-id'] !== undefined && !/^[A-Za-z0-9_-]+$/u.test(args['thread-id'])) throw configError();
     const attachments = (args.attach ?? []).map(file => { try { return { name: path.basename(file), data: (deps.readAttachment ?? fs.readFileSync)(file) }; } catch { throw configError(); } });
     const boothCc = applyBoothCc({ to: args.to, cc: args.cc, subject: args.subject ?? '', body, booth: args.booth });
-    const input = { inReplyTo: args['in-reply-to'], from: user, to: args.to, cc: boothCc.cc, subject: args.subject ?? 'Re: (取得予定)', body, attachments };
-    const boothReport = boothCc.added ? { boothCcAdded: BOOTH_CC } : {};
+    const invoiceCc = applyInvoiceCc({ to: args.to, cc: boothCc.cc, subject: args.subject ?? '', body, attachments: attachments.map(file => file.name) });
+    const input = { inReplyTo: args['in-reply-to'], from: user, to: args.to, cc: invoiceCc.cc, subject: args.subject ?? 'Re: (取得予定)', body, attachments };
+    const ccReport = { ...(boothCc.added ? { boothCcAdded: BOOTH_CC } : {}), ...(invoiceCc.added ? { invoiceCcAdded: INVOICE_CC } : {}) };
+    const ccHuman = `${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}${invoiceCc.added ? `\ninvoiceCcAdded: ${INVOICE_CC}` : ''}`;
     const guard = guardRecipients(input, (deps.loadLedger ?? loadLedger)());
     if (guard.blocked) {
       action = 'chat-display';
@@ -504,8 +538,8 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         headers = headers.replace(/\r\n(?:In-Reply-To|References):[^\r\n]*/gu, '');
         headers += '\r\nIn-Reply-To: (取得予定)\r\nReferences: (返信先の References を取得予定) (取得予定)';
       }
-      emit({ ok: true, ...boothReport, raw, headers, ...(args['thread-id'] ? { threadId: args['thread-id'] } : {}) },
-        `${args['thread-id'] ? `threadId: ${args['thread-id']}\n` : ''}${headers}\n\nraw: ${raw}${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}`);
+      emit({ ok: true, ...ccReport, raw, headers, ...(args['thread-id'] ? { threadId: args['thread-id'] } : {}) },
+        `${args['thread-id'] ? `threadId: ${args['thread-id']}\n` : ''}${headers}\n\nraw: ${raw}${ccHuman}`);
       return 0;
     }
     const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
@@ -516,13 +550,21 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       });
     }
     const result = await createDraft({ user, raw, threadId: args['thread-id'], fetchImpl,
-      getToken,
+      getToken, home: deps.home, temaRecord, addItemImpl: deps.addItemImpl,
     });
-    emit({ ok: true, ...boothReport, ...result }, `下書きを作成しました: ${result.id} (${user})${boothCc.added ? `\nboothCcAdded: ${BOOTH_CC}` : ''}`);
+    emit({ ok: true, ...ccReport, ...result }, `下書きを作成しました: ${result.id} (${user})${ccHuman}`);
     return 0;
   } catch (error) {
+    if(error?.code==='SEND_CONSISTENCY_BLOCKED') {
+      emit({ok:false,errorKind:'send_consistency_blocked',findings:error.findings},error.message);
+      return error.exitCode || 2;
+    }
     if (error instanceof SendDedupeError) {
       emit({ ok: false, errorKind: 'send_duplicate', error: error.message }, error.message);
+      return 4;
+    }
+    if (error?.code?.startsWith('TEMA_') || error?.code === 'HANDBACK_BLOCKED' || error?.errorKind === 'handback_blocked' || error?.errorKind === 'handback_tag_present') {
+      emit({ ok: false, errorKind: error.errorKind ?? 'handback_blocked', hits: error.hits, findings: error.findings, error: error.message, code: error.code }, error.message);
       return 4;
     }
     if (error?.errorKind === 'internal_recipient') {

@@ -4,6 +4,7 @@
     "kim-PC"
   ],
   "gates": {
+    "tema-check-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-27T00:00:00Z", "denyAfter": "2026-12-04T00:00:00Z" },
     "user-code-input-gate": {"rollout": "deny", "immediatePolicy": "2026-11-25 kim 指示: AI で回避できるコード入力を user に頼まない"},
     "bash-cd-chain-guard": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-21T00:00:00Z", "denyAfter": "2026-11-28T00:00:00Z" },
     "shared-worktree-git-guard": { "rollout": "deny", "immediatePolicy": "2026-11-21 user 指示: 共有作業ツリーで他セッションの変更を巻き込む Git 操作を拒否" },

@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import * as beeper from './beeper-api.mjs';
+import { TRIAL_PROCEDURE_TEMA } from './lib/tema-templates.mjs';
+import { prepareTemaSend } from './lib/unattended-tema.mjs';
 import { isEntry } from './is-entry.mjs';
 import {
   DEFAULT_MAX_REPLY_AGE, classifyReply, contentFor, createLlm, ensureTaskPriority, decisionReport, sentReport,
@@ -12,12 +14,13 @@ import {
   retryForbiddenAnswer, isForbiddenReply, inventedAmounts, CANT_READ_REPLY_PTN
 } from './discord-autoreply.mjs';
 import { addItem as addKimInboxItem } from './kim-inbox.mjs';
-import { resolveDiscordLink } from './discord-beeper-link.mjs';
+import { resolveDiscordLink, extractDiscordUserID } from './discord-beeper-link.mjs';
+import { isOrgiastMember } from './lib/orgiast-member-check.mjs';
 import { collectReadableContent } from './lib/autoreply-attachments.mjs';
 import { extractSearchTerms, searchRelated } from './lib/autoreply-related.mjs';
 import { searchDriveFacts } from './lib/autoreply-drive-facts.mjs';
 import { LEARN_SYSTEM, learningJson, appendUnique } from './lib/autoreply-learning.mjs';
-import { isTrialSelfDecline, hasTrialStarted, trialDeclineAnswer } from './lib/trial-self-decline.mjs';
+import { isTrialSelfDecline, hasTrialStarted, trialDeclineAnswer, isTrialMidpointFail, trialFailAnswer } from './lib/trial-self-decline.mjs';
 import { beeperFetch as beeperFetchFn } from './beeper-api.mjs';
 import { recordRun } from './lib/change-gate.mjs';
 
@@ -73,6 +76,19 @@ export function isDiscordChat(chat, accounts) {
 export function isMessageRequest(chat) {
   return Boolean(chat.isMessageRequest === true || chat.isRequest === true || chat.messageRequest === true
     || chat.participants?.items?.some(p => p.isPending));
+}
+export function dmDiscordUserID(chat, latest, pending = []) {
+  if (chat.type !== 'single') return null;
+  const candidates = [
+    latest?.isSender === false ? latest.senderID : null,
+    ...pending.filter(m => m.isSender === false).map(m => m.senderID),
+    chat.participants?.items?.find(p => !p.isSelf)?.id,
+  ];
+  for (const candidate of candidates) {
+    const id = extractDiscordUserID(candidate);
+    if (id) return id;
+  }
+  return null;
 }
 // Only explicit native IDs, never the numeric Beeper-local chat/message IDs.
 export function messageLink(chat, message) {
@@ -139,6 +155,7 @@ function loadState(file) {
     || !Array.isArray(state.hourly) || !Array.isArray(state.learnQueue)) throw new Error('state.json invalid');
   state.hourlyByChat ??= {};
   state.trialSelfDeclined ??= {};
+  state.trialMidpointFailed ??= {};
   return state;
 }
 
@@ -262,6 +279,7 @@ export async function runOnce(options = {}) {
       };
       state.chats[chat.id] = { ...entry, status: 'sent', replyId: found.id };
       if (entry.trialSelfDecline) state.trialSelfDeclined[chat.id] = true;
+      if (entry.trialMidpointFail) state.trialMidpointFailed[chat.id] = true;
       enqueueLearning(state, sent);
       save();
       await recordSentReply(home, sent, { addItemImpl, registerCommitment: options.registerCommitment,
@@ -278,6 +296,18 @@ export async function runOnce(options = {}) {
 
     for (const chat of result.paused ? [] : chats) {
       result.scanned++;
+      let insider = null, membershipChecked = false;
+      const checkMembership = async userId => {
+        if (!membershipChecked && userId) {
+          membershipChecked = true;
+          try {
+            insider = await (options.isOrgiastMember || isOrgiastMember)(userId, {
+              home, now, fetchImpl: options.fetchImpl || fetch, persistCache: !dryRun,
+            });
+          } catch { insider = null; }
+        }
+        return insider;
+      };
       let latest, question = '', link = `会話名: ${chat.title || chat.id}`;
       const prior = state.chats[chat.id];
       if (prior?.status !== 'sending' && (chat.preview?.isSender
@@ -305,7 +335,8 @@ export async function runOnce(options = {}) {
           latest = chat.preview; question = plainText(latest.text); link = messageLink(chat, latest);
           if (now - timestamp(latest) > maxAgeMs || timestamp(latest) > now) { result.skipped++; continue; }
           if (prior?.status !== 'skipped' && (prior?.id === latest.id || (prior?.timestamp && compare(latest, prior) <= 0))) { result.skipped++; continue; }
-          await decide('メッセージリクエスト・未承認'); continue;
+          await checkMembership(dmDiscordUserID(chat));
+          if (insider !== true) { await decide('メッセージリクエスト・未承認'); continue; }
         }
         const history = await historyFor(api, chat), all = history.items;
         latest = all.at(-1);
@@ -339,12 +370,17 @@ export async function runOnce(options = {}) {
         // 返信すべき本物メッセージがない（合成メッセージのみなど）場合はスキップ
         if (pending.length === 0) { result.skipped++; continue; }
         if (prior?.status !== 'skipped' && (prior?.id === latest.id || (prior?.timestamp && compare(latest, prior) <= 0))) { result.skipped++; continue; }
-        if (isMessageRequest(chat)) { await decide('メッセージリクエスト・未承認'); continue; }
+        if (isMessageRequest(chat) || (chat.type === 'single' && !lastSelf)) {
+          await checkMembership(dmDiscordUserID(chat, latest, pending));
+        }
+        if (isMessageRequest(chat) && insider !== true) { await decide('メッセージリクエスト・未承認'); continue; }
         if (!addressedToKim(chat, pending, all, selfIDs)) { result.skipped++; continue; }
         if (chat.isReadOnly || chat.participants?.items?.some(p => p.isSelf && p.cannotMessage)) { await decide('送信不可の会話'); continue; }
 
         const trialSelfDecline = !state.trialSelfDeclined[chat.id] && await isTrialSelfDecline(llm, question);
-        if (!trialSelfDecline && history.complete && chat.type === 'single' && !lastSelf) { await decide('初対面または会話履歴を確認できません'); continue; }
+        const historyTexts = all.filter(m => !m.isSender).map(m => plainText(m.text));
+        const trialMidpointFail = !trialSelfDecline && !state.trialMidpointFailed[chat.id] && isTrialMidpointFail(question, historyTexts);
+        if (!trialSelfDecline && !trialMidpointFail && history.complete && chat.type === 'single' && !lastSelf && insider !== true) { await decide('初対面または会話履歴を確認できません'); continue; }
 
         if (!isWithinAllowedTimeWindow(now)) { result.skipped++; continue; }
 
@@ -353,8 +389,11 @@ export async function runOnce(options = {}) {
 
         let decision;
         if (trialSelfDecline) {
-          const started = hasTrialStarted(all.filter(m => !m.isSender).map(m => plainText(m.text)));
+          const started = hasTrialStarted(historyTexts);
           decision = { answer: trialDeclineAnswer(started) };
+        } else if (trialMidpointFail) {
+          const started = hasTrialStarted(historyTexts);
+          decision = { answer: trialFailAnswer(started) };
         } else {
           const targetIds = new Set(pending.map(m => m.id));
           if (latest && !latest.isSender) targetIds.add(latest.id);
@@ -461,7 +500,10 @@ export async function runOnce(options = {}) {
 
         }
 
-        const content = contentFor(decision.answer);
+        let cleanAnswer;
+        try { cleanAnswer = await prepareTemaSend(decision.answer, { home, channel: 'beeper', to: chat.id, source: 'discord-beeper-autoreply', requireRecord: true, temaRecord: trialSelfDecline || trialMidpointFail ? TRIAL_PROCEDURE_TEMA : undefined, dryRun, addItemImpl: options.addItemImpl }); }
+        catch (error) { if (!/^TEMA_|^HANDBACK_/.test(error.code || '')) throw error; await decide('手間チェックで止まった送信'); continue; }
+        const content = contentFor(cleanAnswer);
         state.hourly = state.hourly.filter(t => t > now - HOUR);
         if (attempts >= 5 || state.hourly.length >= 30) {
           if (state.hourly.length >= 30 && !dryRun && !fs.existsSync(path.join(dir, 'PAUSE'))) {
@@ -473,7 +515,7 @@ export async function runOnce(options = {}) {
         const current = await historyFor(api, chat), newest = current.items.at(-1);
         if (!newest || newest.id !== latest.id || newest.isSender || newest.text !== latest.text) { result.skipped++; continue; }
         const fresh = await api.getChat(chat.id);
-        if (fresh.id !== chat.id || !isDiscordChat(fresh, accounts) || isMessageRequest(fresh) || fresh.isReadOnly || fresh.participants?.items?.some(p => p.isSelf && p.cannotMessage) || fresh.draft) {
+        if (fresh.id !== chat.id || !isDiscordChat(fresh, accounts) || (isMessageRequest(fresh) && insider !== true) || fresh.isReadOnly || fresh.participants?.items?.some(p => p.isSelf && p.cannotMessage) || fresh.draft) {
           await decide('送信直前の会話条件が変わりました'); continue;
         }
 
@@ -483,7 +525,7 @@ export async function runOnce(options = {}) {
         const replyTarget = selectReplyTarget(pending);
         // A compound group question can contain proposals or objections from several people.
         const approvalMessage = replyTarget?.id === latest.id && pending.length === 1 ? plainText(latest.text) : undefined;
-        state.chats[chat.id] = { ...mark(latest), status: 'sending', content, question, senderName: latest.senderName, link, approvalMessage, ...(trialSelfDecline ? { trialSelfDecline: true } : {}) };
+        state.chats[chat.id] = { ...mark(latest), status: 'sending', content, question, senderName: latest.senderName, link, approvalMessage, ...(trialSelfDecline ? { trialSelfDecline: true } : {}), ...(trialMidpointFail ? { trialMidpointFail: true } : {}) };
         const sendStarted = now;
         state.hourly.push(sendStarted);
         state.hourlyByChat[chat.id].push(sendStarted);
@@ -514,7 +556,7 @@ export async function runOnce(options = {}) {
         if (hasSendFailure(found)) { await decide('送信失敗の印を検出。再送せず Discord で確認してください', 'uncertain'); continue; }
 
         await finishSend(chat, found, { ...mark(latest), content, question, senderName: latest.senderName,
-          approvalMessage, approvalTs: timestamp(latest), ...(trialSelfDecline ? { trialSelfDecline: true } : {}) });
+          approvalMessage, approvalTs: timestamp(latest), ...(trialSelfDecline ? { trialSelfDecline: true } : {}), ...(trialMidpointFail ? { trialMidpointFail: true } : {}) });
         const promised = queueSendPromise(home, { chat, message: latest, answer: decision.answer, question });
         if (promised) await addItemImpl(home, { kind: 'ask', source: 'discord-beeper-autoreply', text: `【送付約束の実行確認】${chat.title || chat.id}\n${decision.answer}`, dedupeKey: promised.id });
         result.replied++;

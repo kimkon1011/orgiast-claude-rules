@@ -8,6 +8,7 @@ import { collectFindings, emptyOutputReason, isBillingSuspendedRow } from './del
 
 const NOW = new Date('2026-10-22T12:00:00.000Z');
 const MOONSHOT = '{"error":{"message":"Your account is suspended due to insufficient balance, please recharge your account","type":"exceeded_current_quota_error"}}';
+const XAI_CREDITS = '{"code":"permission-denied","error":"Your team ... has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
 const homes = [];
 function home() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'delegation-health-billing-')); homes.push(dir); fs.mkdirSync(path.join(dir, '.claude')); return dir; }
 function write(dir, name, value) { fs.writeFileSync(path.join(dir, '.claude', name), typeof value === 'string' ? value : `${JSON.stringify(value, null, 2)}\n`); }
@@ -18,6 +19,41 @@ test('恒久課金切れは Moonshot 本文だけを検出し Groq の課金URL�
   assert.equal(isPermanentBillingDetail(MOONSHOT), true);
   assert.equal(isPermanentBillingDetail('Rate limit reached. See https://console.groq.com/settings/billing'), false);
   assert.equal(isBillingSuspendedRow({ status: 'http_429', reason: MOONSHOT }), true);
+});
+
+test('xAI 403 クレジット切れ本文は恒久課金として検出する', () => {
+  assert.equal(isPermanentBillingDetail(XAI_CREDITS), true);
+  assert.equal(isPermanentBillingDetail('please purchase more credits'), true);
+  assert.equal(isBillingSuspendedRow({ status: 'http_403', reason: XAI_CREDITS }), true);
+  assert.equal(isBillingSuspendedRow({ status: 'http_403', reason: 'invalid api key' }), false);
+});
+
+test('grok の http_403 xAIクレジット切れだけの全滅は lane_outage_unrepaired を起票しない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [0, 1, 2, 3, 4, 5, 6].map((n) => row({
+    t: new Date(NOW.getTime() - n * 60_000).toISOString(), provider: 'grok', status: 'http_403', reason: XAI_CREDITS, out: 0,
+  })).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((item) => item.id === 'lane_outage_unrepaired'), false);
+  const finding = findings.find((item) => item.id === 'provider_billing_suspended');
+  assert.equal(finding?.severity, 'low');
+  assert.equal('fixTask' in finding, false);
+});
+
+test('xAI 403 クレジット切れは grok に 6h cooldown を書く', async () => {
+  const dir = home();
+  const cooldownFile = path.join(dir, '.claude', 'provider-cooldown.json');
+  let calls = 0;
+  await callWithFallback({
+    start: { provider: 'grok', model: 'grok-4' }, chain: [{ provider: 'groq', model: 'fallback' }],
+    payloadFor: () => ({ url: 'https://example.invalid', init: {} }),
+    fetchImpl: async () => ++calls === 1 ? new Response(XAI_CREDITS, { status: 403 }) : new Response('{}', { status: 200 }),
+    sleepImpl: async () => {}, cooldownFile, now: () => NOW.getTime(),
+  });
+  const state = JSON.parse(fs.readFileSync(cooldownFile, 'utf8')).grok;
+  assert.equal(state.until - state.at, 6 * 60 * 60 * 1000);
+  assert.equal(state.reason, 'http_403');
+  assert.equal('permanentBilling' in state, false);
 });
 
 test('OpenRouter経由のKimiの恒久課金切れ429はOpenRouterに24時間 cooldown を書く', async () => {
@@ -121,4 +157,51 @@ test('cooldown 中に no_output が混じっても lane_outage_unrepaired にし
   assert.equal(finding?.severity, 'low');
   assert.equal('fixTask' in finding, false);
   assert.match(finding.evidence.join(' '), /cooldown 中の artifact/);
+});
+
+// 2026-11-27 実測: grok 6件の xAI クレジット切れは HTTP403 + stderrTail に文言。
+const XAI_CREDIT_403 = 'HTTP403: {"code":"permission-denied","error":"Your team 420ea724-aaaa-bbbb-cccc-dddddddddddd has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
+
+test('isPermanentBillingDetail は xAI クレジット切れ文言を検出する', () => {
+  assert.equal(isPermanentBillingDetail(XAI_CREDIT_403), true);
+  assert.equal(isPermanentBillingDetail('used all available credits'), true);
+  assert.equal(isPermanentBillingDetail('reached its monthly spending limit'), true);
+  assert.equal(isPermanentBillingDetail('please purchase more credits'), true);
+  assert.equal(isBillingSuspendedRow({ status: 'HTTP403', stderrTail: XAI_CREDIT_403 }), true);
+  assert.equal(isBillingSuspendedRow({ status: 'http_403', reason: XAI_CREDIT_403 }), true);
+  assert.equal(isBillingSuspendedRow({ status: 'http_403', reason: 'Forbidden' }), false);
+});
+
+test('xAI クレジット切れ 403×6件は provider_billing_suspended で lane_outage_unrepaired にしない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [0, 1, 2, 3, 4, 5].map((n) => row({
+    t: new Date(NOW.getTime() - n * 60_000).toISOString(),
+    provider: 'grok',
+    status: 'HTTP403',
+    out: 0,
+    stderrTail: XAI_CREDIT_403,
+  })).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((item) => item.id === 'lane_outage_unrepaired'), false);
+  const finding = findings.find((item) => item.id === 'provider_billing_suspended');
+  assert.equal(finding?.provider, 'grok');
+  assert.equal(finding?.severity, 'low');
+  assert.equal('fixTask' in finding, false);
+  assert.match(finding.evidence.join(' '), /6件.*credits|spending limit|purchase more credits/i);
+});
+
+test('文言の無い 403×3件は従来どおり lane_outage_unrepaired のまま', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [0, 1, 2].map((n) => row({
+    t: new Date(NOW.getTime() - n * 60_000).toISOString(),
+    provider: 'grok',
+    status: 'http_403',
+    out: 0,
+    reason: 'Forbidden',
+  })).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((item) => item.id === 'provider_billing_suspended'), false);
+  const finding = findings.find((item) => item.id === 'lane_outage_unrepaired');
+  assert.equal(finding?.provider, 'grok');
+  assert.equal(finding?.severity, 'high');
 });

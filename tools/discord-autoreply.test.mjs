@@ -1,3 +1,4 @@
+import { withTema } from './test-fixtures/tema-record.mjs';
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
@@ -22,7 +23,7 @@ function message(overrides = {}) {
   return { id: '100', channel_id: 'channel', content: `<@${KIM}> 資料を確認してもらえますか？`,
     timestamp: new Date(NOW - 1000).toISOString(), author: { id: 'member', username: '田中', bot: false }, ...overrides };
 }
-function fixture(t, { initial = true, messages = [message()], reply = [], after = [], llmResult = decision, ...extra } = {}) {
+function fixture(t, { initial = true, messages = [message()], reply = [], after = [], llmResult = decision, temaRecord = true, ...extra } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'discord-autoreply-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const dir = path.join(home, '.claude', 'discord-autoreply');
@@ -57,7 +58,10 @@ function fixture(t, { initial = true, messages = [message()], reply = [], after 
   let replyLlm = options.llm;
   Object.defineProperty(options, 'llm', {
     get: () => async args => args.system?.startsWith('Extract proper nouns')
-      ? JSON.stringify(['スマートエイト']) : replyLlm(args),
+      ? JSON.stringify(['スマートエイト']) : (async () => {
+        const raw = await replyLlm(args);
+        try { const data = JSON.parse(raw); if (temaRecord && args.category === 'jp_reply' && data.answer?.trim()) data.answer = withTema(data.answer); return JSON.stringify(data); } catch { return raw; }
+      })(),
     set: value => { replyLlm = value; },
   });
   return { options, home, dir, file, calls, notifications, llmCalls, state,
@@ -1355,4 +1359,13 @@ for (const safeRetry of [false, true]) test(`11/17 社外招待指示: 再生成
   assert.equal(calls, 2);
   assert.equal(f.posts().length, safeRetry ? 1 : 0);
   if (!safeRetry) assert.deepEqual(items.map(i => i.kind), ['ask']);
+});
+
+
+test('無人LLM返信の記録欠落はPOSTせずkim-inboxへ全文と理由を退避', async t => {
+  const parked = [];
+  const f = fixture(t, { temaRecord: false, addItemImpl: async (_home, item) => { parked.push(item); return { id: 'tema-blocked' }; } });
+  await runOnce(f.options);
+  assert.equal(f.posts().length, 0);
+  assert.ok(parked.some(item => item.source === 'tema-blocked-send' && item.text.includes(decision.answer) && item.text.includes('検証記録')));
 });

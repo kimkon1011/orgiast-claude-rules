@@ -45,11 +45,21 @@ test('direct Discord CLI routes kim to inbox but still delivers to employees', a
     resolve: async () => ({ id: KIM_DISCORD_USER_ID }), fetchImpl: () => assert.fail('DM forbidden'), kind: 'action' });
   assert.equal(kim.delivered, 'session-inbox'); assert.equal(listItems(dir)[0].kind, 'ask');
   const calls = [];
-  const employee = await sendDiscordDm('staff', '連絡です', { home: dir, token: 'fixture', noCopyKim: true,
+  const checkedAt = new Date().toISOString();
+  let historyReads = 0;
+  // The new seven-item check runs against complete fixture data, not live services.
+  const consistencyDeps = {
+    fetchHistory: async () => { historyReads++; return { target: 'channel', messages: [] }; },
+    taskCsv: 'Task To Run\n', followupStore: { rows: [] }, followupRows: async () => [],
+    pcMap: { fixture: {} }, fleetSnapshot: { labels: ['fixture'], checkedAt, sentHistory: [], scheduledSends: [], otherDrafts: [] },
+    calendarEvents: async () => [],
+  };
+  const employee = await sendDiscordDm('staff', '連絡です', { home: dir, token: 'fixture', noCopyKim: true, draftReadAt: checkedAt, consistencyDeps,
     resolve: async () => ({ id: '123', displayName: '社員' }), fetchImpl: async (url, options) => {
       calls.push({ url, body: JSON.parse(options.body) }); return Response.json({ id: 'channel' });
     } });
   assert.equal(employee.delivered, true); assert.equal(calls.length, 2);
+  assert.equal(historyReads, 2, '整合性チェックは収集時と送信直前に履歴を読み戻す');
   assert.equal(calls[0].body.recipient_id, '123');
 });
 

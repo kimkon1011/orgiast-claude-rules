@@ -4,6 +4,8 @@
 // --lane sol|astra|auto / --model astra|sol|<slug> / --effort で指定する。
 // 先頭40行の <!-- lane: astra --> でも指定可。Astra 上限時は Sol へ退避する。
 import { disabledLanes } from './lib/lane-disabled.mjs';
+import { hasModelWarning, isLaneIncompatible, modelWarningRemainder } from './lib/lane-incompatible.mjs';
+export { isLaneIncompatible } from './lib/lane-incompatible.mjs';
 import { GATEWAY_MODELS, OPENROUTER_BASE } from './provider-routing.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -19,7 +21,8 @@ import { isCursorLongTimeoutKind, shouldPreferCursorAgent } from './lib/cursor-d
 import { isCursorUsageHalted } from './lib/cursor-usage-pace.mjs';
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { EX_TEMPFAIL, budgetSummary, claudeFile, decideCodexGate, deferredPayload, isUsageLimitText, parseUsageLimitUntil, providerLimitedUntil, writeCodexCooldownFile } from './lib/executor-gate.mjs';
-import { applyCandidateHealth, coolingBackendNames, deprioritizeRecentFailures, deprioritizeUnreliableBackends, readFallbackBackendHistory, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
+import { applyCandidateHealth, coolingBackendNames, deprioritizeRecentFailures, deprioritizeUnreliableBackends, fallbackBackendFailureDomain, readFallbackBackendHistory, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
+export { fallbackBackendFailureDomain };
 import { readGeminiBudgetStatus } from './gemini-budget-guard.mjs';
 import { acquireLock } from './lib/progress-file-lock.mjs';
 import { scanDiffForClaudeApi } from './app-llm-cost-gate.mjs';
@@ -31,6 +34,14 @@ const GEMINI_CWD_GUARD = '\n作業ディレクトリ(cwd)の中だけで作業�
 
 const ASTRA = 'gpt-6-astra';
 const SOL = 'gpt-5.6-sol';
+
+// argv の --help だけでなく、指示本文（--prompt-file や前後空白付き argv）が
+// ヘルプ要求だけのときもエージェントを起動しない（2026-11-27 実害: cursor-agent が起動）。
+export function isHelpInstruction(text) {
+  const trimmed = String(text ?? '').trim();
+  return trimmed === '--help' || trimmed === '-h';
+}
+
 export function normalizeCodexModel(model) {
   return model === 'astra' ? ASTRA : model === 'sol' ? SOL : model;
 }
@@ -679,9 +690,8 @@ export function fallbackBackendTimeoutSecs(timeoutSeconds, env = process.env) {
 // 成功の 0.9%（34/3623件）しか切らず、timeout 1回あたりの廃棄を 50 秒削減する。
 // 2026-11-11 再調整: chain 実測（223件の chain 試行中成功46件/p95=524秒）より
 // cheap-code:deepseek を 500→400 秒に引き下げ。100秒/件の廃棄削減。
-// chain 上限を 700 秒から 600 秒に収める。
-// 連鎖では「遅い成功」より、障害時に次候補へ進めない損失が大きい。implement も
-// 既定180秒で打ち切る。既存のバックエンド別環境変数で必要な席だけ上書きできる。
+// 2026-11-28 再調整: delegation-health 実測 2件/361秒の廃棄に基づき 400→200 秒に引き下げ。
+// gemini-cli と同じ 200 秒上限に統一。chain 上限を 600 秒から 400 秒に収める。
 export function backendSpecificTimeoutSecs(backendName, env = process.env, { kind } = {}) {
   if (backendName === 'gemini-cli') {
     const raw = Number(env.CODEX_DO_GEMINI_TIMEOUT_SECS);
@@ -692,7 +702,7 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env, { kin
   if (backendName === 'cheap-code:deepseek' || backendName === 'deepseek') {
     const raw = Number(env.CODEX_DO_DEEPSEEK_TIMEOUT_SECS);
     if (Number.isFinite(raw) && raw > 0) return raw;
-    return kind === 'implement' ? 180 : 400;
+    return kind === 'implement' ? 180 : 200;
   }
   if (backendName === 'cursor-agent') {
     const raw = Number(env.CODEX_DO_CURSOR_TIMEOUT_SECS);
@@ -704,14 +714,7 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env, { kin
   return null;
 }
 
-// cheap-code 経由と qwen 直結の deepseek は起動方法だけが異なり、同じ
-// OpenRouter / deepseek model を使う。同じ連鎖で片方が通常予算を使い切った後に
-// もう片方を実行しても upstream 障害を二重に待つだけなので、timeout は同一障害として扱う。
-export function fallbackBackendFailureDomain(backendName) {
-  if (backendName === 'cheap-code:deepseek' || backendName === 'deepseek') return 'deepseek-upstream';
-  return String(backendName || '');
-}
-
+// 連鎖内でも同ドメインの二重 timeout を避ける（冷却は fallback-backend-health 側でドメイン共有）。
 export function shouldSkipFallbackBackendAfterTimeout(backendName, chain = []) {
   const domain = fallbackBackendFailureDomain(backendName);
   return Boolean(domain) && chain.some((attempt) => attempt?.outcome === 'timeout'
@@ -1163,7 +1166,8 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   const deepseek = deepseekKey && qwenAvailable && { kind: 'qwen', name: 'deepseek', model: GATEWAY_MODELS.deepseek, baseUrl: OPENROUTER_BASE, apiKey: deepseekKey };
   const openrouter = openrouterKey && qwenAvailable && { kind: 'qwen', name: 'openrouter-free', model: env.CODEX_DO_FREE_MODEL || 'cohere/north-mini-code:free', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
   const openrouterCode = openrouterKey && qwenAvailable && { kind: 'qwen', name: 'openrouter-code', model: env.CODEX_DO_PAID_CODE_MODEL || 'qwen/qwen3-coder', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
-  const cursorAgent = resolveCursorAgentBackend(homeDir, { ...options, executableAvailable });
+  const cursorOptIn = String((options.env || process.env).CODEX_DO_ENABLE_CURSOR_AGENT || '') === '1';
+  const cursorAgent = cursorOptIn ? resolveCursorAgentBackend(homeDir, { ...options, executableAvailable }) : null;
   const byName = {
     'cursor-agent': () => cursorAgent,
     'gemini-cli': () => gemini,
@@ -1171,14 +1175,10 @@ export function resolveFallbackBackends(homeDir, options = {}) {
     'openrouter-free': () => openrouter,
     'openrouter-code': () => openrouterCode,
   };
-  const skipCursorAgent = String((options.env || process.env).CODEX_DO_SKIP_CURSOR_AGENT || '') === '1';
+  const skipCursorAgent = !cursorOptIn || String((options.env || process.env).CODEX_DO_SKIP_CURSOR_AGENT || '') === '1';
   function withCursorAgentFirst(backends) {
-    // 定額の Cursor Ultra は「上限のときの代わり」ではなく既定の担当。
-    // local.json があっても implement/verify/investigate/summarize/classify の先頭に置く。
-    // local は残りの安価レーン順だけを上書きする（2026-11-20: 019 の local が
-    // withCursorAgentFirst を丸ごと無効化し、Codex 枠切れ後に deepseek だけが走った）。
-    // テストや明示オプトアウトは CODEX_DO_SKIP_CURSOR_AGENT=1 で、既定順に含まれる分も外す。
-    // 金さん向け最終判断・社外文面の最終確認、または従量課金停止中は入れない。
+    // 2026-11-25 金さん指示: Cursor は追加料金対象のため既定 OFF。
+    // CODEX_DO_ENABLE_CURSOR_AGENT=1 の明示オプトイン時だけ旧互換経路へ入れる。
     if (skipCursorAgent) return backends.filter((b) => b.name !== 'cursor-agent');
     const usesCursor = shouldPreferCursorAgent({
       kind: taskKind,
@@ -1240,7 +1240,7 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   // 「成功が速く確実な cheap-code → 最終手段の gemini-cli」に揃える
   // （delegation-health:fallback_chain_timeout 2026-10-27 起票の対処）。
   const ordered = [];
-  if (taskKind === 'implement' || taskKind === 'verify') ordered.push(cursorAgent);
+  if (cursorOptIn && (taskKind === 'implement' || taskKind === 'verify')) ordered.push(cursorAgent);
   ordered.push(ccDeepseek, ccGlm, gemini);
   if (taskKind === 'implement' || taskKind === 'verify') ordered.push(openrouterCode);
   if (taskKind === 'summarize' || taskKind === 'classify') ordered.push(openrouter);
@@ -1371,28 +1371,13 @@ export function isBackendExhausted(output, stderr) {
   return merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '429') || isHttpStatusCodeLine(line, '413'));
 }
 
-const MODEL_WARNING_LINE = /^\s*\[claude-code:unrecognized_model\]/;
-const CHEAP_CODE_BANNER = /^\[(?:openrouter|glm):[^\]\r\n]+\]$/;
-
-function modelWarningRemainder(output, stderr) {
-  // cheap-code は回答の有無にかかわらず provider と model を stderr に出す。
-  const stdoutLines = String(output || '').split(/\r?\n/);
-  const stderrLines = String(stderr || '').split(/\r?\n/).filter(line => !CHEAP_CODE_BANNER.test(line));
-  return [...stdoutLines, ...stderrLines].filter(line => !MODEL_WARNING_LINE.test(line)).join('\n').trim();
-}
-
-function hasModelWarning(text) {
-  return String(text || '').split(/\r?\n/).some(line => MODEL_WARNING_LINE.test(line));
-}
-
-export function isLaneIncompatible(output, stderr, status) {
-  return (hasModelWarning(output) || hasModelWarning(stderr)) && (status !== 0 || !modelWarningRemainder(output, stderr));
-}
-
 export function isBackendBillingFailure(output, stderr) {
+  // 語マッチは stderr のみ（stdout の生成本文で誤判定しないようにする）。
+  // HTTP ステータス行（401/402/403）は output・stderr 両方で判定する。
+  const stderrOnly = `${stderr || ''}`;
   const merged = `${output || ''}\n${stderr || ''}`;
-  return /prepayment credits are depleted|payment required/i.test(merged)
-    || merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '402'));
+  return /prepayment credits are depleted|payment required|insufficient\s+balance|invalid api key|unauthori[sz]ed|forbidden/i.test(stderrOnly)
+    || merged.split(/\r?\n/).some((line) => ['401', '402', '403'].some((code) => isHttpStatusCodeLine(line, code)));
 }
 
 export function isBackendCliMissing(output, stderr) {
@@ -1430,6 +1415,18 @@ export function primaryTimeoutLimitSecs(timeoutSeconds, explicit, env = process.
 }
 
 export const policyStallCheckMs = (env = {}) => positiveEnv(env.CODEX_DO_POLICY_STALL_CHECK_MS, 5000);
+export const DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS = 60;
+export const deepseekFirstOutputTimeoutSecs = (env = {}) => positiveEnv(
+  env.CODEX_DO_DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS,
+  DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS
+);
+
+export function shouldAbortFirstOutputStall({ elapsedSecs, outputChars, timeoutSecs = DEEPSEEK_FIRST_OUTPUT_TIMEOUT_SECS } = {}) {
+  return [elapsedSecs, outputChars, timeoutSecs].every(Number.isFinite)
+    && timeoutSecs > 0
+    && elapsedSecs >= timeoutSecs
+    && outputChars === 0;
+}
 
 export function shouldAbortPolicyStall({
   elapsedSecs,
@@ -1561,6 +1558,35 @@ export function clearCooldownAfterRecheck({ home, recheck, result, quotaMatched,
 if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
+const usage = `使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--review] [--timeout <秒>] [--model <slug|astra|sol>] [--effort <low|medium|high|xhigh|max>] [--lane <sol|astra|auto>] [--no-escalate] [--dry-run] [--no-fallback] [--allow-fallback] [--side-effects] [--force-native] [--allow-native] [--require-wsl] [--origin <unattended|interactive>] [--kind <implement|verify|investigate|classify|summarize>] [--budget]
+
+オプション:
+  --help, -h           この使い方を表示して終了（エージェントは起動しない）
+  --prompt-file <file> 指示をファイルから読む（推奨。DONE_CRITERIA 必須）
+  --cwd <path>         作業ディレクトリ（この中だけで作業する）
+  --kind <kind>        implement|verify|investigate|classify|summarize
+  --lane <lane>        sol|astra|auto（既定: auto）
+  --model <slug>       astra|sol|任意スラッグ
+  --effort <level>     low|medium|high|xhigh|max
+  --timeout <秒>       タイムアウト秒（既定: 1800）
+  --dry-run            実行せずプロンプト等を表示
+  --budget             残り割当だけ表示して終了
+  --review             レビューモード
+  --no-fallback        フォールバック抑止
+  --allow-fallback     フォールバック許可
+  --side-effects       副作用ありとして扱う
+  --force-native       ネイティブ Codex を強制
+  --require-wsl        WSL 経路を強制
+  --origin <origin>    unattended|interactive（既定: interactive）
+  --no-escalate        昇格しない
+
+注意: 指示は argv より --prompt-file を推奨（シェルのコマンド置換事故を防ぐ）。
+protocols/HANDOFF.md のテンプレに従う。`;
+// --help を指示文としてエージェントに渡すと無駄な起動になる（本修正の実害）。
+if (args.includes('--help') || args.includes('-h')) {
+  console.log(usage);
+  process.exit(0);
+}
 const dryRun = args.includes('--dry-run');
 const allowFallback = args.includes('--allow-fallback');
 const forceSideEffects = args.includes('--side-effects');
@@ -1623,7 +1649,6 @@ for (const index of [modelIndex, effortIndex, laneIndex, originIndex, kindIndex]
 if (cwdIndex >= 0) { omitted.add(cwdIndex); omitted.add(cwdIndex + 1); }
 if (promptFileIndex >= 0) { omitted.add(promptFileIndex); omitted.add(promptFileIndex + 1); }
 if (timeoutIndex >= 0) { omitted.add(timeoutIndex); omitted.add(timeoutIndex + 1); }
-const usage = '使い方: node tools/codex-do.mjs "<指示>" [--cwd <path>] [--prompt-file <file>] [--review] [--timeout <秒>] [--model <slug|astra|sol>] [--effort <low|medium|high|xhigh|max>] [--lane <sol|astra|auto>] [--no-escalate] [--dry-run] [--no-fallback] [--allow-fallback] [--side-effects] [--force-native] [--allow-native] [--require-wsl] [--origin <unattended|interactive>] [--kind <implement|verify|investigate|classify|summarize>] [--budget]';
 
 if ((modelIndex >= 0 && (!model || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(model))) ||
     (effortIndex >= 0 && !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) ||
@@ -1658,15 +1683,21 @@ if (promptFileIndex >= 0) {
   if (!promptFile) { console.error(`--prompt-file にファイルパスが必要です\n${usage}`); process.exit(2); }
   try {
     instruction = fs.readFileSync(promptFile, 'utf8');
-    if (!/(?:DONE_CRITERIA|完了条件|成功条件)/.test(instruction)) {
-      console.error('[codex-do] 警告: 指示ファイルに完了条件がありません（protocols/HANDOFF.md 参照）');
-    }
   } catch (error) {
     console.error(`--prompt-file を読めません: ${promptFile} (${error.code || error.message})`);
     process.exit(2);
   }
 }
 if (!instruction.trim()) { console.error(usage); process.exit(2); }
+// --prompt-file 本文や前後空白付き argv が --help/-h だけのときも usage を出して終了する。
+// argv.includes だけでは ' --help ' や prompt-file 経由を取りこぼす。完了条件警告より先に判定する。
+if (isHelpInstruction(instruction)) {
+  console.log(usage);
+  process.exit(0);
+}
+if (promptFileIndex >= 0 && !/(?:DONE_CRITERIA|完了条件|成功条件)/.test(instruction)) {
+  console.error('[codex-do] 警告: 指示ファイルに完了条件がありません（protocols/HANDOFF.md 参照）');
+}
 const executionPolicy = decideExecutionPolicy({ instruction, noFallback, allowFallback, sideEffects: forceSideEffects });
 const { irreversible } = executionPolicy;
 noFallback = executionPolicy.noFallback;
@@ -1839,7 +1870,7 @@ function execute(command, commandArgs, options = {}) {
     }
   }
   return new Promise((resolve) => {
-    let outputChars = 0, output = '', stderr = '', timedOut = false, abortedPolicyStall = false;
+    let outputChars = 0, output = '', stderr = '', timedOut = false, abortedReason = null;
     const callStarted = Date.now();
     const callTimeoutSeconds = Number.isFinite(options.timeoutSecs) && options.timeoutSecs > 0
       ? options.timeoutSecs
@@ -1847,6 +1878,8 @@ function execute(command, commandArgs, options = {}) {
     const spawnOptions = { ...options };
     delete spawnOptions.timeoutSecs;
     delete spawnOptions.abortPolicyStall;
+    delete spawnOptions.firstOutputTimeoutSecs;
+    delete spawnOptions.abortOnBillingFailure;
     // stdio を全て pipe にして TTY を渡さない。TTY 付きで起動すると codex が端末入力を
     // 待ったまま眠り続ける(2026-08-26 に 1日00:57 hang した実害)。
     const child = spawn(command, commandArgs, { ...spawnOptions, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -1854,7 +1887,7 @@ function execute(command, commandArgs, options = {}) {
     const settle = (value) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer); clearTimeout(forceTimer); clearInterval(stallTimer);
+      clearTimeout(timer); clearTimeout(forceTimer); clearTimeout(firstOutputTimer); clearInterval(stallTimer);
       resolve(value);
     };
     const timer = setTimeout(() => {
@@ -1862,11 +1895,11 @@ function execute(command, commandArgs, options = {}) {
       // 予算が停滞判定の閾値秒（300秒）以下だと、締切タイマーが周期判定より先に発火し続け、
       // ポリシー拒否で停滞した試行が outcome=timeout として記録される（2026-11-02 実測: gemini-cli 301秒/予算300秒 out0）。
       // 締切到達時点で経過秒は予算に達しているので、秒数条件だけ外して拒否回数・出力字数で同じ判定を行う。
-      if (!abortedPolicyStall
+      if (!abortedReason
         && options.abortPolicyStall === true
         && process.env.CODEX_DO_POLICY_STALL_ABORT !== '0'
         && shouldAbortPolicyStall({ elapsedSecs: callTimeoutSeconds, outputChars, stderr, minElapsedSecs: 0 })) {
-        abortedPolicyStall = true;
+        abortedReason = 'policy_stall';
       }
       console.error(`\n⏱ ${command} が ${callTimeoutSeconds} 秒で応答を終えなかったので停止しました。--timeout で延長できます`);
       // 猶予タイマーは kill より先に張る。kill が同期で固まっても（旧実装の taskkill は最大10秒）
@@ -1875,7 +1908,7 @@ function execute(command, commandArgs, options = {}) {
       // (2026-10-28 実測: 予算600秒の gemini-cli 試行が 1044 秒)。猶予後は close を待たず打ち切る。
       forceTimer = setTimeout(() => {
         for (const stream of [child.stdin, child.stdout, child.stderr]) { try { stream?.destroy(); } catch { /* 既に閉じている */ } }
-        settle({ status: 124, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null });
+        settle({ status: 124, outputChars, output, stderr, timedOut, aborted: abortedReason });
       }, timeoutKillGraceMs(process.env));
       forceTimer.unref?.();
       killProcessTree(child);
@@ -1884,7 +1917,7 @@ function execute(command, commandArgs, options = {}) {
     // 拒否が閾値秒より前に出尽くして以後 stderr が静かになる停滞（2026-10-23 実測: gemini が拒否3回後に
     // 無音で600秒）は chunk 到着時の判定では再評価されないため、周期タイマーでも同じ判定を回す。
     const checkPolicyStall = () => {
-      if (abortedPolicyStall
+      if (abortedReason
         || options.abortPolicyStall !== true
         || process.env.CODEX_DO_POLICY_STALL_ABORT === '0'
         || !shouldAbortPolicyStall({
@@ -1893,21 +1926,51 @@ function execute(command, commandArgs, options = {}) {
           stderr,
           minElapsedSecs: policyStallMinElapsedSecs(process.env)
         })) return;
-      abortedPolicyStall = true;
+      abortedReason = 'policy_stall';
       console.error(`
 [codex-do] ${command} はポリシー拒否が続き、出力 ${outputChars} 文字のまま停滞したため停止します`);
       killProcessTree(child);
     };
     const stallTimer = setInterval(checkPolicyStall, policyStallCheckMs(process.env));
     stallTimer.unref?.();
-    child.stdout.on('data', (chunk) => { outputChars += chunk.length; output += chunk.toString(); process.stdout.write(chunk); });
+    const abortChild = (reason) => {
+      abortedReason = reason;
+      if (!forceTimer) {
+        forceTimer = setTimeout(() => {
+          for (const stream of [child.stdin, child.stdout, child.stderr]) { try { stream?.destroy(); } catch {} }
+          settle({ status: 3, outputChars, output, stderr, timedOut: false, aborted: abortedReason });
+        }, timeoutKillGraceMs(process.env));
+        forceTimer.unref?.();
+      }
+      killProcessTree(child);
+    };
+    const firstOutputTimeoutSecs = Number(options.firstOutputTimeoutSecs);
+    const firstOutputTimer = Number.isFinite(firstOutputTimeoutSecs) && firstOutputTimeoutSecs > 0
+      ? setTimeout(() => {
+          if (!shouldAbortFirstOutputStall({ elapsedSecs: firstOutputTimeoutSecs, outputChars, timeoutSecs: firstOutputTimeoutSecs })) return;
+          console.error(`\n[codex-do] ${command} は ${firstOutputTimeoutSecs} 秒間、出力が無いため停止します`);
+          abortChild('first_output_stall');
+        }, firstOutputTimeoutSecs * 1000)
+      : null;
+    firstOutputTimer?.unref?.();
+    const abortBillingIfNeeded = () => {
+      if (abortedReason || options.abortOnBillingFailure !== true || !isBackendBillingFailure(output, stderr)) return;
+      console.error(`\n[codex-do] ${command} の課金停止応答を検出したため待たずに停止します`);
+      abortChild('billing');
+    };
+    child.stdout.on('data', (chunk) => {
+      outputChars += chunk.length; output += chunk.toString(); process.stdout.write(chunk);
+      clearTimeout(firstOutputTimer);
+      // stdout の生成本文で誤判定しないため abortBillingIfNeeded は呼ばない
+    });
     child.stderr.on('data', (chunk) => {
       stderr += chunk.toString();
       process.stderr.write(chunk);
       checkPolicyStall();
+      abortBillingIfNeeded();
     });
-    child.on('error', (error) => settle({ status: null, error, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }));
-    child.on('close', (status) => settle({ status: timedOut ? 124 : status, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }));
+    child.on('error', (error) => settle({ status: null, error, outputChars, output, stderr, timedOut, aborted: abortedReason }));
+    child.on('close', (status) => settle({ status: timedOut ? 124 : status, outputChars, output, stderr, timedOut, aborted: abortedReason }));
     // 指示は stdin で渡し、必ず閉じる。閉じないと codex が
     // "Reading additional input from stdin..." のまま永久に待つ。
     const textToSend = options.promptText ?? prompt;
@@ -1922,7 +1985,14 @@ async function executeCheapCode(backend, backendTimeout) {
   fs.writeFileSync(promptFile, prompt, 'utf8');
   try {
     const cheapCode = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cheap-code.mjs');
-    return await execute(process.execPath, [cheapCode, '--provider', backend.provider, '--prompt-file', promptFile, '--cwd', cwd], { cwd, timeoutSecs: backendTimeout });
+    return await execute(process.execPath, [cheapCode, '--provider', backend.provider, '--prompt-file', promptFile, '--cwd', cwd], {
+      cwd,
+      timeoutSecs: backendTimeout,
+      ...(backend.provider === 'deepseek' ? {
+        firstOutputTimeoutSecs: deepseekFirstOutputTimeoutSecs(process.env),
+        abortOnBillingFailure: true,
+      } : {}),
+    });
   } finally {
     try { fs.rmSync(promptFile, { force: true }); } catch {}
   }
@@ -2036,15 +2106,23 @@ async function tryCheapFirstFallback() {
         ? await executeCheapCode(backend, bt)
         : backend.kind === 'cursor-agent'
           ? await executeCursorAgent(backend, { timeoutSecs: bt, promptText: prompt })
-          : await execute('qwen', buildQwenArgs({ timeoutSecs: bt, model: backend.model }), { cwd, env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }), shell: process.platform === 'win32', timeoutSecs: bt });
+          : await execute('qwen', buildQwenArgs({ timeoutSecs: bt, model: backend.model }), {
+            cwd,
+            env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }),
+            shell: process.platform === 'win32',
+            timeoutSecs: bt,
+            firstOutputTimeoutSecs: deepseekFirstOutputTimeoutSecs(process.env),
+            abortOnBillingFailure: true,
+          });
     lastResult = res;
     if (res.status === null) res.status = 1;
     const cliMissing = isBackendCliMissing(res.output, `${res.stderr || ''}\n${res.error?.message || ''}`);
     const billingFailure = isBackendBillingFailure(res.output, res.stderr);
     if (backend.name === 'gemini-cli' && billingFailure) rememberProviderBillingFailure(home, 'gemini');
+    if ((backend.name === 'deepseek' || backend.name === 'cheap-code:deepseek') && billingFailure) rememberProviderBillingFailure(home, 'openrouter');
     const exhausted = isBackendExhausted(res.output, res.stderr) || (backend.kind === 'cheap-code' && res.status === 3);
     const laneIncompatible = isLaneIncompatible(res.output, res.stderr, res.status);
-    const dec = shouldAdvanceToNextBackend({ timedOut: res.timedOut === true, status: res.status, exhausted, cliMissing, aborted: res.aborted === 'policy_stall', laneIncompatible });
+    const dec = shouldAdvanceToNextBackend({ timedOut: res.timedOut === true, status: res.status, exhausted, cliMissing, aborted: Boolean(res.aborted), laneIncompatible });
     const diffNow = dec.outcome === 'ok' && (backend.name === 'openrouter-free' || backend.name === 'openrouter-code')
       ? spawnSync('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' })
       : null;
@@ -2537,7 +2615,9 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
                 cwd,
                 env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }),
                 shell: process.platform === 'win32',
-                timeoutSecs: backendTimeout
+                timeoutSecs: backendTimeout,
+                firstOutputTimeoutSecs: deepseekFirstOutputTimeoutSecs(process.env),
+                abortOnBillingFailure: true,
               });
         const originalStatus = result.status;
         if (result.status === null) {
@@ -2548,10 +2628,11 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
         const cliMissing = isBackendCliMissing(result.output, `${result.stderr || ''}\n${result.error?.message || ''}`);
         const billingFailure = isBackendBillingFailure(result.output, result.stderr);
         if (backend.name === 'gemini-cli' && billingFailure) rememberProviderBillingFailure(home, 'gemini');
+        if ((backend.name === 'deepseek' || backend.name === 'cheap-code:deepseek') && billingFailure) rememberProviderBillingFailure(home, 'openrouter');
         const exhausted = isBackendExhausted(result.output, result.stderr)
           || (backend.kind === 'cheap-code' && result.status === 3);
         const laneIncompatible = isLaneIncompatible(result.output, result.stderr, result.status);
-        const decision = shouldAdvanceToNextBackend({ timedOut: result.timedOut === true, status: result.status, exhausted, cliMissing, aborted: result.aborted === 'policy_stall', laneIncompatible });
+        const decision = shouldAdvanceToNextBackend({ timedOut: result.timedOut === true, status: result.status, exhausted, cliMissing, aborted: Boolean(result.aborted), laneIncompatible });
         const outcome = decision.outcome;
 
         fallbackChain.push({
@@ -2578,7 +2659,14 @@ if (!irreversible && (quotaCheck.matched || escalationFailed || launchUnavailabl
         // deepseek は 10:13:40 に 568秒で成功しているのに、その後の 12:23 も timeout 扱いで
         // 300秒+600秒を再試行）。成功を残せば冷却は実績どおり即座に解ける。
         if (outcome === 'blocked') {
-          console.error(`[codex-do] backend=${backend.name} がポリシー拒否で停滞しているため ${fallbackChain.at(-1).secs} 秒で打ち切って次へ`);
+          const blockedReason = result.aborted === 'policy_stall'
+            ? 'ポリシー拒否で停滞している'
+            : result.aborted === 'first_output_stall'
+              ? '初回出力なしで停滞している'
+              : result.aborted === 'billing'
+                ? '課金停止応答を返した'
+                : 'blocked になった';
+          console.error(`[codex-do] backend=${backend.name} が${blockedReason}ため ${fallbackChain.at(-1).secs} 秒で打ち切って次へ`);
         } else if (outcome === 'timeout') {
           console.error(`[codex-do] backend=${backend.name} が ${backendTimeout} 秒でタイムアウトしたため次のバックエンドへ移ります`);
         } else if (outcome === 'cli_missing') {

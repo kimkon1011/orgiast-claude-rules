@@ -29,6 +29,7 @@ import {
   writeBudgetPressure,
   splitWhitelistedCommand,
   runEntry,
+  runAutoCodexIsolated,
   refreshCostDirective
 } from './cost-improve-loop.mjs';
 
@@ -738,8 +739,8 @@ test('31. B4 effect は既存ファイル内容を保持して書き込む', () 
     assert.deepEqual(Object.keys(overrides.demote).sort(), ['gemini', 'groq']);
     assert.equal(writeRoutingOverride({ claudeDir, provider: 'groq', now: NOW }).changed, false, '同値なら no_change');
 
-    // codex-fallback-order: cursor-agent → qwen → deepseek → glm → gemini-cli → openrouter-free。zai の有無では並びを変えない。
-    const fallbackOrder = ['cursor-agent', 'qwen', 'cheap-code:deepseek', 'cheap-code:glm', 'gemini-cli', 'openrouter-free'];
+    // codex-fallback-order: qwen → deepseek → glm → gemini-cli → openrouter-free。Cursor は使わない。
+    const fallbackOrder = ['qwen', 'cheap-code:deepseek', 'cheap-code:glm', 'gemini-cli', 'openrouter-free'];
     assert.equal(writeCodexFallbackOrder({ claudeDir, zaiAvailable: true }).changed, true);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(claudeDir, 'codex-fallback-order.json'), 'utf8')), fallbackOrder);
     assert.equal(writeCodexFallbackOrder({ claudeDir, zaiAvailable: false }).changed, false);
@@ -888,6 +889,57 @@ test('他機への再送は --push と48時間の有効期限を付ける', () =
   assert.equal(result.nextStaleRetry['他のPC'].mode, 'directive');
 });
 
+test('stale_report 3台の指令を1回にまとめ、PC別の成功記録を保つ', () => {
+  const calls = [];
+  const violations = ['A', 'B', 'C'].map(id => ({ kind: 'stale_report', pc: `PC-${id}`, label: `label-${id}`, evidence: 'stale' }));
+  const retry = { sentAt: NOW.toISOString(), count: 1, mode: 'directive' };
+  const state = { actions: [], staleRetry: { waiting: retry } };
+  const result = decideActions({
+    violations: [...violations,
+      { kind: 'stale_report', pc: '自機', label: 'own', evidence: 'stale' },
+      { kind: 'stale_report', pc: 'waiting', evidence: 'stale' }],
+    state, now: NOW, ownLabel: 'own', repo: '/tmp/repo',
+    spawnSync: () => ({ status: 0 }), directiveSend: (...args) => calls.push(args)
+  });
+  assert.deepEqual(calls, [[['--kind', 'run', '--task', 'fleet-sheet-report', '--targets', 'label-A,label-B,label-C', '--why', 'stale_report 自動復旧', '--push', '--expires-hours', '48'], { repo: '/tmp/repo' }]]);
+  assert.equal(result.actions.length, 4);
+  for (const { pc } of violations) {
+    assert.deepEqual(result.nextStaleRetry[pc], retry);
+    assert.deepEqual(result.actions.find(a => a.pc === pc), {
+      id: `action-${+NOW}-stale_report-${pc}`, kind: 'stale_report', pc,
+      mode: 'directive', dispatchedAt: NOW.toISOString(), baseline: { metric: 'reportAge', value: 0 },
+      result: 'sent', verifiedAt: null, note: 'fleet-sheet-report 再送 (directive)'
+    });
+  }
+  assert.equal(result.actions.find(a => a.pc === '自機').mode, 'local');
+  assert.deepEqual(result.nextStaleRetry.waiting, retry);
+  assert.deepEqual(state, { actions: [], staleRetry: { waiting: retry } });
+});
+
+test('stale_report 一括送信失敗は3台ともクールダウンを越えて人へ上げ、秘密値を出さない', t => {
+  const errors = [];
+  t.mock.method(console, 'error', message => errors.push(message));
+  const violations = ['PC-A', 'PC-B', 'PC-C'].map(pc => ({ kind: 'stale_report', pc, evidence: 'stale' }));
+  let calls = 0;
+  const result = decideActions({
+    violations, now: NOW,
+    state: { actions: violations.map(v => ({ ...v, dispatchedAt: NOW.toISOString() })) },
+    directiveSend: () => { calls++; throw new Error('secret-token'); }
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(result.nextStaleRetry, {});
+  assert.equal(result.actions.length, 3);
+  for (const { pc } of violations) {
+    const action = result.actions.find(a => a.pc === pc);
+    assert.equal(action.mode, 'human');
+    assert.equal(action.result, 'escalated');
+    assert.match(action.todoMessage, /自動で夜間レポートの再送/);
+    assert.ok(errors.includes(`stale_report(${pc}): 再送指令の送信に失敗（利用不可または push 失敗）。人へエスカレーションします。`));
+  }
+  assert.equal(errors.length, 3);
+  assert.ok(!JSON.stringify({ result, errors }).includes('secret-token'));
+});
+
 for (const mode of ['local', 'directive']) {
   test(`${mode} 再送失敗は即人へ上げ、再送済みを記録せず秘匿値も出さない`, (t) => {
     const errors = [];
@@ -953,6 +1005,85 @@ test('名簿16行は除外し計測不能3行だけを①と④に表示する',
 });
 
 // ---- 保留(deferred): Codex の上限・無人割当は失敗ではない ----
+test('runAutoCodexIsolated: 残り15分未満は起動せず全件を現在から12時間保留する', () => {
+  const currentMs = +NOW;
+  const acts = [{ kind: 'x', pc: 'A' }, { kind: 'y', pc: 'B' }];
+  runAutoCodexIsolated({
+    acts, specFile: 'spec.md', repoPath: os.tmpdir(), env: {},
+    startedAt: currentMs - 35 * 60_000 - 1, clock: () => currentMs,
+    spawnSync: () => assert.fail('残り時間不足では子プロセスを起動しない')
+  });
+  for (const act of acts) {
+    assert.equal(act.result, 'deferred');
+    assert.equal(act.retryAt, currentMs + 12 * 60 * 60_000);
+    assert.equal(act.note, '保留(time_budget): 残り時間不足のため次回に再試行');
+  }
+});
+
+test('runAutoCodexIsolated: worktree準備で残り15分未満になればCodexを呼ばず片付ける', () => {
+  let currentMs = +NOW;
+  const acts = [{ kind: 'x', pc: 'A' }];
+  const seen = [];
+  runAutoCodexIsolated({
+    acts, specFile: 'spec.md', repoPath: os.tmpdir(), env: {},
+    startedAt: currentMs - 35 * 60_000, clock: () => currentMs,
+    spawnSync: (program, args) => {
+      seen.push(args);
+      assert.equal(program, 'git');
+      if (args.includes('add')) currentMs++;
+      return { status: 0 };
+    }
+  });
+  assert.equal(acts[0].result, 'deferred');
+  assert.equal(acts[0].retryAt, currentMs + 12 * 60 * 60_000);
+  assert.equal(seen.length, 2);
+  assert.ok(seen[1].includes('remove'));
+});
+
+test('runAutoCodexIsolated: 残り時間・環境変数でCodex上限を調整し、検証は10分に制限する', () => {
+  for (const [env, elapsedMs, expectedSeconds] of [
+    [{}, 0, 1800], [{}, 35 * 60_000, 300], [{}, 25 * 60_000 + 1, 899],
+    [{ COST_IMPROVE_BUDGET_MS: String(20 * 60_000) }, 0, 600],
+    ...['invalid', '0', '-1', 'Infinity', '1.5', ''].map(value => [{ COST_IMPROVE_BUDGET_MS: value }, 0, 1800])
+  ]) {
+    const calls = [];
+    const acts = [{ kind: 'x', pc: 'A', specContent: '修正する' }];
+    runAutoCodexIsolated({
+      acts, specFile: 'spec.md', repoPath: os.tmpdir(), home: os.tmpdir(), env,
+      startedAt: +NOW - elapsedMs, clock: () => +NOW, spawnSync: autoCodexSpawnMocks(calls)
+    });
+    const codex = calls.find(c => c.args.some(a => String(a).endsWith('codex-do.mjs')));
+    assert.equal(codex.args[codex.args.indexOf('--timeout') + 1], String(expectedSeconds));
+    const tests = calls.find(c => c.args[0] === '--test');
+    assert.equal(tests.options.timeout, 600_000);
+    assert.equal(acts[0].result, 'pending');
+  }
+});
+
+test('runAutoCodexIsolated: 検証のerrorまたはsignalで失敗にし、commitやPR作成へ進まない', () => {
+  for (const testResult of [
+    { status: 0, error: Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }) },
+    { status: 0, signal: 'SIGTERM' }
+  ]) {
+    const calls = [];
+    const spawn = autoCodexSpawnMocks(calls);
+    const acts = [{ kind: 'x', pc: 'A' }, { kind: 'y', pc: 'B' }];
+    runAutoCodexIsolated({
+      acts, specFile: 'spec.md', repoPath: os.tmpdir(), env: {}, startedAt: +NOW, clock: () => +NOW,
+      spawnSync: (program, args, options) => {
+        const result = spawn(program, args, options);
+        return args[0] === '--test' ? testResult : result;
+      }
+    });
+    for (const act of acts) {
+      assert.equal(act.result, 'failed');
+      assert.match(act.note, /^verification tests failed:/);
+    }
+    assert.ok(!calls.some(c => c.program === 'gh' || c.args.includes('commit') || c.args.includes('push')));
+    assert.ok(calls.at(-1).args.includes('remove'));
+  }
+});
+
 test('runAutoCodexIsolated: 非kim席には automerge を付けない', async () => {
   const { runAutoCodexIsolated } = await import('./cost-improve-loop.mjs');
   const calls = [];

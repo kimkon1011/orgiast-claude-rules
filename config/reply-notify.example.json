@@ -1,0 +1,12 @@
+{
+  "watches": [
+    {
+      "id": "customer-project-yyyyMMdd",
+      "label": "顧客名（監視対象メール）",
+      "user": "seisaku-team@orgiast.jp",
+      "query": "from:example.com after:2026/11/28",
+      "notify": "satou@orgiast.jp",
+      "until": "2027-01-31"
+    }
+  ]
+}

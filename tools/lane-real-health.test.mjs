@@ -63,13 +63,17 @@ test('billing variants are excluded from failures and never block; real 500 thre
   const { repairContext } = await import('./lib/lane-repair-state.mjs');
   const rows = ['HTTP 402', 'Insufficient Balance', 'insufficient_quota', 'credits are depleted', 'not enough credits'].map(reason => ({ status: 'error', reason }));
   const home = fixture(t, rows);
+  fs.writeFileSync(path.join(home, '.claude/openrouter.env'), 'OPENROUTER_API_KEY=test-only');
   const h = laneDoctorQuick({ home, now });
   assert.equal(h.lanes.deepseek.reason, 'billing');
   assert.equal(h.lanes.deepseek.real24h.billingCalls, 5);
   assert.equal(h.lanes.deepseek.real24h.failures, 0);
-  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify({ lanes: { deepseek: h.lanes.deepseek } }));
+  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify({ lanes: { deepseek: h.lanes.deepseek, openrouter: h.lanes.openrouter } }));
   assert.equal(evaluateRepairFirst({ tool_name: 'Edit' }, { home, now }).decision, 'pass');
-  assert.match(repairContext(h, home, now), /deepseek: 残高不足。代替の安いレーン/);
+  // OpenRouter 代替が生存中なら billing を「要修復」警告に数えない（台帳 config/lane-openrouter-substitutes.json）。
+  assert.equal(h.lanes.deepseek.via, 'openrouter');
+  assert.equal(h.lanes.openrouter?.alive, true);
+  assert.doesNotMatch(repairContext(h, home, now), /deepseek: 残高不足/);
   assert.ok(JSON.parse(fs.readFileSync(path.join(home, '.claude/routing-overrides.json'))).demote.deepseek);
   assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude/provider-cooldown.json'))).deepseek.reason, 'billing');
   fs.appendFileSync(path.join(home, '.claude/executor-usage.jsonl'), '\n' + Array.from({ length: 6 }, () => JSON.stringify({ t: new Date(now).toISOString(), provider: 'deepseek', status: '500' })).join('\n'));

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { fetchBeacons } from './fleet-beacon.mjs';
+import { temaRulesFromBeacon } from './lib/tema-rules.mjs';
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const STALE_MS = 24 * 60 * 60 * 1000;
@@ -27,7 +28,13 @@ export function fleetLabels(pcMap) {
 }
 export function buildFleetStatus({ pcMap, beacons = [], serverPolls = {}, now = Date.now() } = {}) {
   const byLabel = new Map();
-  for (const beacon of Array.isArray(beacons) ? beacons : []) if (beacon?.label) byLabel.set(String(beacon.label), beacon);
+  for (const beacon of Array.isArray(beacons) ? beacons : []) {
+    if (!beacon?.label) continue;
+    const label = String(beacon.label), previous = byLabel.get(label);
+    // GAS returns history, not one row per PC. Never let an older/invalid row
+    // overwrite a newer report, irrespective of the response ordering.
+    if (!previous || (parseTime(beacon.reportedAt) ?? -Infinity) > (parseTime(previous.reportedAt) ?? -Infinity)) byLabel.set(label, beacon);
+  }
   const labels = fleetLabels(pcMap);
   for (const label of byLabel.keys()) if (!labels.includes(label)) labels.push(label);
   for (const [label, at] of Object.entries(serverPolls || {})) if (label && parseTime(at) !== null && !labels.includes(label)) labels.push(label);
@@ -39,7 +46,8 @@ export function buildFleetStatus({ pcMap, beacons = [], serverPolls = {}, now = 
           String(value).toLowerCase() === String(name).toLowerCase()))) || pcMap?.[label];
     const beaconAt = beacon ? parseTime(beacon.reportedAt) : null;
     const beaconAgeMs = beaconAt === null ? null : now - beaconAt;
-    const serverAt = parseTime(serverPolls?.[label] || beacon?.serverPollAt);
+    const serverTimes = [serverPolls?.[label], beacon?.serverPollAt].map(parseTime).filter(at => at !== null);
+    const serverAt = serverTimes.length ? Math.max(...serverTimes) : null;
     const clientAt = beacon ? parseTime(beacon.pollAt) : null;
     let pollAt = null;
     let pollSource = '';
@@ -49,6 +57,7 @@ export function buildFleetStatus({ pcMap, beacons = [], serverPolls = {}, now = 
     const stale = (beaconAgeMs === null || beaconAgeMs > STALE_MS) || (pollAgeMs === null || pollAgeMs > STALE_MS);
     return {
       label,
+      temaRules: temaRulesFromBeacon(beacon, now, pollAt),
       remoteName: registered?.remoteName || '',
       account: beacon ? String(beacon.account || '') : '',
       hostname: String(beacon?.hostname || ''),
@@ -92,7 +101,8 @@ export function formatFleetTable(rows, now = Date.now()) {
     const beacon = row.hasBeacon ? `${jst(Date.parse(row.beaconAt))} (${formatAge(row.beaconAgeMs)})` : 'ビーコン無し';
     const failing = row.failing.length ? row.failing.join(',') : '-';
     const poll = row.pollAt ? `${jst(Date.parse(row.pollAt))} (${formatAge(row.pollAgeMs)}) [${row.pollSource}]` : '不明';
-    return `${warn}${row.label}${row.remoteName ? `（${row.remoteName}）` : ''}${row.registrationCandidate ? ' [登録候補・アカウントは自己申告]' : ''} / ${row.account || '-'} / ビーコン: ${beacon} / 失敗: ${failing} / poll: ${poll}`;
+    const tema=['tema','signin','consistency'].map(k=>`${k}=${row.temaRules?.[k]===null || row.temaRules?.[k]===undefined?'?':row.temaRules[k]?'yes':'no'}`).join('/');
+    return `${warn}${row.label}${row.remoteName ? `（${row.remoteName}）` : ''}${row.registrationCandidate ? ' [登録候補・アカウントは自己申告]' : ''} / ${row.account || '-'} / ビーコン: ${beacon} / 失敗: ${failing} / poll: ${poll} / 手間ルール: ${tema}`;
   });
   return lines.join('\n');
 }

@@ -176,10 +176,13 @@ async function withBodyFile(body, fn) {
   }
 }
 
-export function retireVehicleAsks(home, row) {
+export function retireVehicleAsks(home, row, openItems) {
   if (!row.name || !row.plate) return;
-  for (const item of listItems(home, { status: 'open' })) {
-    if (item.kind === 'ask' && item.source === 'vehicle-inspection' && item.text.startsWith(`【車検】${row.name}（${row.plate}）`)) dropItem(home, item.id, '期限レーンに移行');
+  for (const item of openItems || listItems(home, { status: 'open' })) {
+    if (item.status === 'open' && item.kind === 'ask' && item.source === 'vehicle-inspection' && item.text.startsWith(`【車検】${row.name}（${row.plate}）`)) {
+      dropItem(home, item.id, '期限レーンに移行');
+      item.status = 'dropped';
+    }
   }
 }
 
@@ -195,15 +198,9 @@ export async function defaultNotifyKim({ home, kind, body, key, due, remainingDa
 }
 
 export async function defaultNotifyStaff({ home, assignee, body }) {
-  const script = path.join(toolsDir, 'discord-dm.mjs');
-  if (!fs.existsSync(script)) {
-    const error = new Error('no route');
-    error.code = 'NO_ROUTE';
-    throw error;
-  }
-  return withBodyFile(body, (file) => execFileAsync(process.execPath, [
-    script, assignee, '--body-file', file,
-  ], { encoding: 'utf8', windowsHide: true, timeout: 60_000, env: { ...process.env, ORGIAST_HOME: home } }));
+  const { sendDiscordDm } = await import('./discord-dm.mjs');
+  // 車検証の所在を固定テンプレートだけでは確認できないため、警告例外を監査する。
+  return sendDiscordDm(assignee, body, { home, temaMode: 'warn', source: 'vehicle-inspection-watch' });
 }
 
 async function locateRow({ sheets, sheetId, tab, id }) {

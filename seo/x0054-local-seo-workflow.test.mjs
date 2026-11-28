@@ -2,10 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+function outputDir(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'x0054-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
 
 // Workflowの各機能のユニットテスト
 // 注: 実際のAPI呼び出しは行わず、ファイル生成・パース・データ構造を検証
@@ -61,7 +64,7 @@ test('キーワード: パターンごとに正しい構造を持つ', () => {
 // ── 都市ページ生成 ───────────────────────────────────────────────────────────────
 
 test('都市ページ: 必須セクションを含む', () => {
-  const tmpdir = fs.mkdtempSync('x0054-test-');
+  const tmpdir = fs.mkdtempSync(path.join(os.tmpdir(), 'x0054-test-'));
   try {
     const city = '横浜';
     const areaLabels = { '横浜': '首都圏', '福岡': '九州' };
@@ -244,82 +247,89 @@ test('ワークフロー: 不明なstepは exit 1', async () => {
   assert.equal(exitCode, 1, '不明なstepは exit 1');
 });
 
-test('ワークフロー: keywords step がファイルを生成する', async () => {
+test('ワークフロー: keywords step がファイルを生成する', async t => {
+  const out = outputDir(t);
   const { main } = await import('./x0054-local-seo-workflow.mjs');
-  const exitCode = await main(['node', 'x0054-local-seo-workflow.mjs', '--step', 'keywords', '--city', '東京']);
+  const exitCode = await main(['node', 'x0054-local-seo-workflow.mjs', '--out', out, '--step', 'keywords', '--city', '東京']);
   assert.equal(exitCode, 0);
-  const kwPath = path.resolve(__dirname, '..', 'outputs', 'X-0054', 'x0054-keywords.json');
+  const kwPath = path.resolve(out, 'x0054-keywords.json');
   assert.ok(fs.existsSync(kwPath), 'キーワードファイルが存在');
   const data = JSON.parse(fs.readFileSync(kwPath, 'utf8'));
   assert.ok(data['東京'], '東京のキーワードが存在');
   assert.ok(data['東京'].length > 0, 'キーワードが空でない');
 });
 
-test('ワークフロー: city-page step がファイルを生成する', async () => {
+test('ワークフロー: city-page step がファイルを生成する', async t => {
+  const out = outputDir(t);
   const { main, CITY_SLUG } = await import('./x0054-local-seo-workflow.mjs');
   const slugCity = '大阪';
-  const exitCode = await main(['node', 'x0054-local-seo-workflow.mjs', '--step', 'city-page', '--city', slugCity]);
+  const exitCode = await main(['node', 'x0054-local-seo-workflow.mjs', '--out', out, '--step', 'city-page', '--city', slugCity]);
   assert.equal(exitCode, 0);
   const slug = CITY_SLUG[slugCity];
-  const pagePath = path.resolve(__dirname, '..', 'outputs', 'X-0054', 'city-pages', `${slug}.md`);
+  const pagePath = path.resolve(out, `${slug}.md`);
   assert.ok(fs.existsSync(pagePath), '都市ページファイルが存在');
   const content = fs.readFileSync(pagePath, 'utf8');
   assert.ok(content.includes('大阪'), '大阪を含む');
   assert.ok(content.includes('オージャスト'), '会社名を含む');
 });
 
-test('ワークフロー: gbp step がファイルを生成する', async () => {
+test('ワークフロー: gbp step がファイルを生成する', async t => {
+  const out = outputDir(t);
   const { main, CITY_SLUG } = await import('./x0054-local-seo-workflow.mjs');
   const slugCity = '福岡';
-  const exitCode = await main(['node', 'x0054-local-seo-workflow.mjs', '--step', 'gbp', '--city', slugCity]);
+  const exitCode = await main(['node', 'x0054-local-seo-workflow.mjs', '--out', out, '--step', 'gbp', '--city', slugCity]);
   assert.equal(exitCode, 0);
   const slug = CITY_SLUG[slugCity];
-  const gbpPath = path.resolve(__dirname, '..', 'outputs', 'X-0054', 'gbp', `${slug}-gbp.json`);
+  const gbpPath = path.resolve(out, `${slug}-gbp.json`);
   assert.ok(fs.existsSync(gbpPath));
   const data = JSON.parse(fs.readFileSync(gbpPath, 'utf8'));
   assert.equal(data.city, '福岡');
   assert.equal(data.businessName, '株式会社オージャスト');
 });
 
-test('ワークフロー: faq step がファイルを生成する', async () => {
+test('ワークフロー: faq step がファイルを生成する', async t => {
+  const out = outputDir(t);
   const { main, CITY_SLUG } = await import('./x0054-local-seo-workflow.mjs');
   const slugCity = '名古屋';
-  const exitCode = await main(['node', 'x0054-local-seo-workflow.mjs', '--step', 'faq', '--city', slugCity]);
+  const exitCode = await main(['node', 'x0054-local-seo-workflow.mjs', '--out', out, '--step', 'faq', '--city', slugCity]);
   assert.equal(exitCode, 0);
   const slug = CITY_SLUG[slugCity];
-  const faqPath = path.resolve(__dirname, '..', 'outputs', 'X-0054', 'faq', `${slug}-faq.json`);
+  const faqPath = path.resolve(out, `${slug}-faq.json`);
   assert.ok(fs.existsSync(faqPath));
   const data = JSON.parse(fs.readFileSync(faqPath, 'utf8'));
   assert.equal(data.length, 20, 'FAQは20問');
 });
 
-test('ワークフロー: review-templates step がファイルを生成する', async () => {
+test('ワークフロー: review-templates step がファイルを生成する', async t => {
+  const out = outputDir(t);
   const { main } = await import('./x0054-local-seo-workflow.mjs');
-  const exitCode = await main(['node', 'x0054-local-seo-workflow.mjs', '--step', 'review-templates']);
+  const exitCode = await main(['node', 'x0054-local-seo-workflow.mjs', '--out', out, '--step', 'review-templates']);
   assert.equal(exitCode, 0);
-  const tplPath = path.resolve(__dirname, '..', 'outputs', 'X-0054', 'review-templates', 'review-templates.json');
-  const replyPath = path.resolve(__dirname, '..', 'outputs', 'X-0054', 'review-templates', 'reply-templates.json');
+  const tplPath = path.resolve(out, 'review-templates.json');
+  const replyPath = path.resolve(out, 'reply-templates.json');
   assert.ok(fs.existsSync(tplPath));
   assert.ok(fs.existsSync(replyPath));
 });
 
-test('ワークフロー: weekly-posts step がファイルを生成する', async () => {
+test('ワークフロー: weekly-posts step がファイルを生成する', async t => {
+  const out = outputDir(t);
   const { main, CITY_SLUG } = await import('./x0054-local-seo-workflow.mjs');
   const slugCity = '札幌';
-  const exitCode = await main(['node', 'x0054-local-seo-workflow.mjs', '--step', 'weekly-posts', '--city', slugCity]);
+  const exitCode = await main(['node', 'x0054-local-seo-workflow.mjs', '--out', out, '--step', 'weekly-posts', '--city', slugCity]);
   assert.equal(exitCode, 0);
   const slug = CITY_SLUG[slugCity];
-  const postsPath = path.resolve(__dirname, '..', 'outputs', 'X-0054', 'weekly-posts', `${slug}-weekly.json`);
+  const postsPath = path.resolve(out, `${slug}-weekly.json`);
   assert.ok(fs.existsSync(postsPath));
   const data = JSON.parse(fs.readFileSync(postsPath, 'utf8'));
   assert.equal(data.length, 12, '週次投稿は12週分');
 });
 
-test('ワークフロー: case-study step が10ファイルを生成する', async () => {
+test('ワークフロー: case-study step が10ファイルを生成する', async t => {
+  const out = outputDir(t);
   const { main } = await import('./x0054-local-seo-workflow.mjs');
-  const exitCode = await main(['node', 'x0054-local-seo-workflow.mjs', '--step', 'case-study', '--index', '0']);
+  const exitCode = await main(['node', 'x0054-local-seo-workflow.mjs', '--out', out, '--step', 'case-study', '--index', '0']);
   assert.equal(exitCode, 0);
-  const caseDir = path.resolve(__dirname, '..', 'outputs', 'X-0054', 'case-contents', 'C0056');
+  const caseDir = out;
   assert.ok(fs.existsSync(caseDir));
   const files = fs.readdirSync(caseDir);
   assert.equal(files.length, 10, '10コンテンツファイル');

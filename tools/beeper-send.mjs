@@ -18,6 +18,9 @@ import { isEntry } from './is-entry.mjs';
 import { BeeperApiError, sendMessage, listMessages, listChats } from './beeper-api.mjs';
 import * as beeperApi from './beeper-api.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
+import { assertSendConsistency, afterSendCleanup } from './send-consistency-check.mjs';
+import { prepareTemaSend } from './lib/unattended-tema.mjs';
+import { assertNoHandback, stripHumanOnly } from './lib/handback-guard.mjs';
 import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 
 import { TITLE, assertStandingScope, claimStandingAttempt, findChat } from './lahaina-standing-policy.mjs';
@@ -150,7 +153,7 @@ export function matchesStandingReadback(message, { text, chatID, dispatchedAt, o
     && matchesBeeperText(message.text, text);
 }
 
-export async function beeperSend(options, { readMessages = listMessages, readChats = listChats, send = sendMessage, readMessage = (...args) => beeperApi.getMessage?.(...args), clock = () => new Date(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), readbackMs = 15000 } = {}) {
+export async function beeperSend(options, { readMessages = listMessages, readChats = listChats, send = sendMessage, readMessage = (...args) => beeperApi.getMessage?.(...args), clock = () => new Date(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), readbackMs = 15000, consistencyCheck = assertSendConsistency, cleanup = afterSendCleanup, consistencyDeps = {} } = {}) {
   const { chatID, bodyFile, replyTo, queueID, receiptID, home } = options;
 
   if (!chatID) throw new Error('--chat が必要です');
@@ -160,7 +163,16 @@ export async function beeperSend(options, { readMessages = listMessages, readCha
 
   // 本文は必ずファイルから
   const rawText = fs.readFileSync(bodyFile, 'utf8');
-  const text = rawText.trim();
+  let text = rawText.trim();
+  if (!text) throw new Error('本文が空です');
+  if (!options.skipHandbackGuard) {
+    try { await prepareTemaSend(text, { ...options, home, channel: 'beeper', source: 'beeper-send', to: chatID }); }
+    catch (error) {
+      if (error?.code === 'HANDBACK_BLOCKED') throw Object.assign(error, { exitCode: 4 });
+      throw error;
+    }
+  }
+  text = stripHumanOnly(text).trim();
   if (!text) throw new Error('本文が空です');
   if (findSecretaryBookingUrls(text).length) throw Object.assign(new Error(SECRETARY_BOOKING_URL_REASON), { exitCode: 1 });
 
@@ -208,12 +220,16 @@ export async function beeperSend(options, { readMessages = listMessages, readCha
     claimStandingAttempt(home, date, queueID, clock());
   }
   const dispatchedAt = Date.now();
+  const checkInput={channel:'beeper',to:chatID,text,draftId:queueID,draftReadAt:options.draftReadAt || referenceAt};
+  const checked=await consistencyCheck(checkInput,{home,...consistencyDeps});
   // 4. 送信
   const result = await send(chatID, text, replyTo ? { replyToMessageID: replyTo } : {});
 
   if (!result || !result.pendingMessageID) {
     throw Object.assign(new Error('送信結果に pendingMessageID がありません'), { exitCode: 3 });
   }
+  // 配信受付後の読み戻し失敗でも再送を許さないよう、受付IDを先に記録する。
+  const cleaned = await cleanup({...checkInput,sentMessageId:result.pendingMessageID,scheduledSends:checked?.input?.scheduledSends},{home});
 
   // 5. 読み戻し（最大 15 秒待つ）
   let messageID = null;
@@ -250,6 +266,7 @@ export async function beeperSend(options, { readMessages = listMessages, readCha
     return {
       ok: false,
       uncertain: true,
+      ...(cleaned?.cardNotice ? { cardNotice: cleaned.cardNotice } : {}),
       pendingMessageID: result.pendingMessageID,
       chatID: result.chatID || chatID,
       reason: '送信は完了しましたが、メッセージIDを読み戻せませんでした',
@@ -263,6 +280,7 @@ export async function beeperSend(options, { readMessages = listMessages, readCha
   return {
     ok: true,
     messageID,
+    ...(cleaned?.cardNotice ? { cardNotice: cleaned.cardNotice } : {}),
     sentAt,
     pendingMessageID: result.pendingMessageID,
     chatID: result.chatID || chatID,
@@ -271,7 +289,7 @@ export async function beeperSend(options, { readMessages = listMessages, readCha
 
 // ── CLI ──────────────────────────────────────────────────────────────
 
-async function main(args = process.argv.slice(2)) {
+export async function main(args = process.argv.slice(2), deps = {}) {
   const val = (flag, fallback) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : fallback; };
   const has = flag => args.includes(flag);
 
@@ -296,14 +314,20 @@ async function main(args = process.argv.slice(2)) {
 
   if (has('--dry-run')) {
     if (!chatID || !bodyFile) { console.error('--dry-run にも --chat と --body-file が必要です'); return 1; }
-    const dryText = fs.readFileSync(bodyFile, 'utf8').trim();
+    let dryText = fs.readFileSync(bodyFile, 'utf8').trim();
+    try { assertNoHandback(dryText, { env: process.env }); }
+    catch (error) {
+      if (error?.code === 'HANDBACK_BLOCKED') { console.error(error.message); return 4; }
+      throw error;
+    }
+    dryText = stripHumanOnly(dryText).trim();
     if (findSecretaryBookingUrls(dryText).length) { console.error(SECRETARY_BOOKING_URL_REASON); return 1; }
     console.log(JSON.stringify({ dryRun: true, chatID, textLength: dryText.length }));
     return 0;
   }
 
   try {
-    const result = await beeperSend({ chatID, bodyFile, replyTo, queueID, receiptID, home });
+    const result = await beeperSend({ chatID, bodyFile, replyTo, queueID, receiptID, home }, deps);
     console.log(JSON.stringify(result));
     return result.ok ? 0 : 3;
   } catch (err) {

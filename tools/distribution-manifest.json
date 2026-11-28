@@ -23,6 +23,7 @@
     "VM-SETUP.md": { "reason": "クラウドVM(Muse/Grok Bot)の Claude Code が raw URL で読む参加手順。各PCへは配らない" },
     "autopilot-nightly-kpi-report-20261029.md": { "reason": "autopilot 夜間KPI調査のレポート。配布先PCの実行時参照なし" },
     "report.md": { "reason": "作業レポート" },
+    "findings-auto-session-8.md": { "reason": "auto-session 8 の調査メモ。各PCへ配布しない" },
     "result-A.md": { "reason": "今回作業の検証結果レポート。配布先PCの実行時参照なし" },
     "SPEC-feedback-replies-consumer.md": { "reason": "仕様メモ" },
     "SPEC-rule-compliance-loop.md": { "reason": "仕様メモ" },

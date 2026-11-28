@@ -387,7 +387,7 @@ export async function runNightlyHealth({
     }
     const resolvedLogPath = expectationLog(home, exp)?.file;
     if (!resolvedLogPath) {
-      const log = exp.log || exp.pattern;
+      const log = exp.homeFile || exp.log || exp.pattern;
       if (exp.ignore) continue;
       let taskInfo = null;
       if (exp.task) {
@@ -395,7 +395,7 @@ export async function runNightlyHealth({
         anomalies.push(...evaluateScheduledTaskHealth(exp, taskInfo, { now, logMtimeMs: null }));
         if (taskInfo?.neverRun && taskInfo?.nextRunTime && new Date(taskInfo.nextRunTime) > now) continue;
       }
-      anomalies.push({ type: 'missing', label: exp.label, log, message: 'ログファイルが存在しません', expectation: exp });
+      anomalies.push({ type: 'missing', label: exp.label, log, message: exp.homeFile ? '台帳ファイルが存在しません' : 'ログファイルが存在しません', expectation: exp });
       continue;
     }
     const logPath = resolvedLogPath;

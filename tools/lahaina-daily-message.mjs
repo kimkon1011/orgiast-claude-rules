@@ -1,3 +1,10 @@
+import { dailyPhotoTema } from './lib/tema-templates.mjs';
+import { prepareTemaSend } from './lib/unattended-tema.mjs';
+
+export async function registerDailyPhotoTema(text, date, options = {}) {
+  return prepareTemaSend(text, { ...options, source: 'lahaina-daily-photo', channel: 'line', temaRecord: dailyPhotoTema(date) });
+}
+
 export function tokyoToday(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit'

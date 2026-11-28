@@ -499,6 +499,12 @@
       {
         "matcher": "Bash|PowerShell",
         "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/tema-check-gate.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/outbound-claim-evidence-gate.mjs\"",
         "timeout": 15
       },

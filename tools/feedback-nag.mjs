@@ -44,13 +44,16 @@ export function formatNag(items, sheetUrl, now = new Date()) {
   return lines.join('\n').slice(0, 1900);
 }
 
-export async function sendDiscordDm({ token, userId, content, fetchImpl = fetch, home = userHome(), kind = 'automatic' }) {
+import { prepareTemaSend } from './lib/unattended-tema.mjs';
+
+export async function sendDiscordDm({ token, userId, content, fetchImpl = fetch, home = userHome(), kind = 'automatic', addItemImpl }) {
   const localOwner = resolveOwner({ home });
   const owner = isKimRecipient({ id: userId }) ? 'kim@orgiast.jp' : String(userId) === resolveOwnerDiscordId(localOwner, { home }) ? localOwner : '';
   if (owner) {
     const deferred = await routeOwnerDm(owner, content, { home, kind, source: 'feedback巡回' });
     if (deferred) return deferred;
   }
+  content = await prepareTemaSend(content, { home, to: userId, source: 'feedback-notifications', channel: 'discord', temaMode: 'warn', addItemImpl });
   const headers = { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' };
   const channelResponse = await fetchImpl(`${DISCORD_API}/users/@me/channels`, { method: 'POST', headers, body: JSON.stringify({ recipient_id: userId }) });
   if (!channelResponse.ok) throw new Error(`Discord DM channel creation failed (${channelResponse.status})`);

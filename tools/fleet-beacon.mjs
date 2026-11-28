@@ -13,6 +13,8 @@ import { redactSecrets } from './fleet-agent.mjs';
 import { ledgerSummary, parseStallSummary, stallSummaryStep } from './stall-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { fetchClaudePlanUsage } from './claude-plan-usage.mjs';
+import { absoluteTemaStep } from './lib/tema-rules.mjs';
+export { TEMA_RULE_HEADINGS, absoluteTemaStep } from './lib/tema-rules.mjs';
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export const INSTALL_BEACON_URL = 'https://script.google.com/macros/s/AKfycbwyZXLJsVngZQy17i8ZqsQUCRx66AIs9p3wQbW55vMq6GObJes5R5WyJrSBhyknN3ibPg/exec';
@@ -91,6 +93,9 @@ export function buildBeacon({ home = process.env.ORGIAST_HOME || os.homedir(), l
     return { id, status, reason };
   });
   const metrics = dialogMetrics(home, now);
+  // convergeの自己申告ではなく、同期後のローカル正本を読み戻す。
+  for(let i=steps.length-1;i>=0;i--)if(steps[i].id==='absolute-rules-tema')steps.splice(i,1);
+  steps.push(absoluteTemaStep(home));
   let knowledgeBytes=0;
   try { knowledgeBytes=fs.statSync(path.join(home,'.claude','knowledge','production-sales','00_INDEX.md')).size; } catch {}
   steps.push({ id:'production-sales-knowledge', status:knowledgeBytes>0?'ok':'fail', reason:knowledgeBytes>0?`00_INDEX.md ${knowledgeBytes} bytes`:'00_INDEX.md missing or empty' });
@@ -100,6 +105,17 @@ export function buildBeacon({ home = process.env.ORGIAST_HOME || os.homedir(), l
     const ledger = readJson(path.join(home, '.claude', 'stall-ledger', `${host}.json`), {});
     steps.push(stallSummaryStep(ledger.summary || ledgerSummary(ledger.entries || [], now)));
   } catch { steps.push(stallSummaryStep({})); }
+  // Hourly heartbeat publish writes this file on failure and deletes it on success.
+  try {
+    const heartbeatPublish = readJson(path.join(home, '.claude', 'heartbeat', 'heartbeat-publish.json'), null);
+    if (heartbeatPublish && heartbeatPublish.ok === false) {
+      steps.push({
+        id: 'heartbeat-publish',
+        status: 'fail',
+        reason: sanitizeReason(heartbeatPublish.reason || 'heartbeat publish failed'),
+      });
+    }
+  } catch { /* missing/unreadable status must not block the rest of the beacon */ }
   const failing = steps.filter((step) => step.status === 'fail').map((step) => step.id);
   const pollAt = String(readJson(path.join(home, '.claude', '.fleet-mail-last-poll.json'), {})?.at || '');
 

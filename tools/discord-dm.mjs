@@ -8,6 +8,10 @@ import { clipDiscordContent, KIM_DISCORD_USER_ID, resolveDiscordBotToken } from 
 import { addItem, isKimSeat } from './kim-inbox.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
+import { assertSendConsistency, afterSendCleanup } from './send-consistency-check.mjs';
+import { stripHumanOnly } from './lib/handback-guard.mjs';
+
+import { prepareTemaSend } from './lib/unattended-tema.mjs';
 
 const API = 'https://discord.com/api/v10';
 const USER_AGENT = 'orgiast-discord-dm/1.0';
@@ -52,6 +56,10 @@ export async function sendDiscordDm(target, body, options = {}) {
   const isKim = isKimRecipient({ id: recipient.id, name: recipientName });
   const inbox = isKim;
   if (!options.noCopyKim && !isKim) copyToKim = isKimSeat(home) ? 'in-session' : 'session-inbox';
+  // kim 2026-11-26 絶対方針: AIで確認・実行できることを相手に戻す文面は送らない（[HUMAN-ONLY: 理由] 付きだけ通す）。
+  // kim宛は送信ではなくローカルinboxへの登録。検証前の依頼・停止理由も失わず保存する。
+  if (!inbox && !options.skipHandbackGuard) body = await prepareTemaSend(body, { ...options, home, to: target, channel: 'discord', source: options.source || 'discord-dm' });
+  body = stripHumanOnly(body);
   const finalBody = isKim || options.noReplyFooter ? String(body ?? '').trimEnd() : withReplyToKimFooter(body);
   const content = safeContent(finalBody);
   // 秘匿除去で本文が変わる場合は送らず停止（切り詰めだけの変化は対象外）
@@ -82,21 +90,27 @@ export async function sendDiscordDm(target, body, options = {}) {
     if (!dm.ok) throw new Error(`DMチャンネル作成が HTTP ${dm.status}`);
     const channelId = (await dm.json()).id;
     if (!channelId) throw new Error('DMチャンネルIDを取得できません');
-    await (options.assertContextApproved ?? assertContextApproved)({ channel: 'discord', target: channelId, text: body, home, ...(options.internalOptIn === true ? { internalOptIn: true } : {}), getLatest: async () => {
+    const context = await (options.assertContextApproved ?? assertContextApproved)({ channel: 'discord', target: channelId, text: body, home, ...(options.internalOptIn === true ? { internalOptIn: true } : {}), getLatest: async () => {
       const history = await fetchImpl(`${API}/channels/${channelId}/messages?limit=1`, { headers });
       if (!history.ok) throw new Error(`Discord 履歴取得が HTTP ${history.status}`);
       return latestOf((await history.json()).map(m => ({ id: m.id, at: m.timestamp })));
     }});
+    const checkInput = {channel:'discord',to:channelId,text:message,draftId:options.draftId,draftReadAt:options.draftReadAt || context?.checkedAt};
+    const checked = await (options.consistencyCheck ?? assertSendConsistency)(checkInput,{home,fetchImpl,...options.consistencyDeps});
+    if(options.checkOnly)return {channelId,checkOnly:true,consistencyOk:true,findings:checked.findings};
     options.onMessageAttempt?.();
     const sent = await fetchImpl(`${API}/channels/${channelId}/messages`, {
       method: 'POST', headers, body: JSON.stringify({ content: message }),
     });
     if (!sent.ok) throw Object.assign(new Error(`DM送信が HTTP ${sent.status}`), { deliveryUncertain: sent.status >= 500 });
     const sentMessage = await sent.json();
+    const cleaned = await (options.cleanup ?? afterSendCleanup)({...checkInput,sentMessageId:sentMessage.id,scheduledSends:checked?.input?.scheduledSends},{home});
     recordOutbound({ channel: 'discord', target: channelId, text: body, messageId: sentMessage.id }, home);
-    return { channelId, messageId: sentMessage.id };
+    return { channelId, messageId: sentMessage.id, ...(cleaned?.cardNotice ? { cardNotice: cleaned.cardNotice } : {}) };
   };
-  const { channelId, messageId } = await deliver(recipient, content);
+  const delivered = await deliver(recipient, content);
+  if(options.checkOnly)return {...delivered,recipient,copyToKim};
+  const { channelId, messageId, cardNotice } = delivered;
   if (copyToKim === 'session-inbox') {
     const displayName = recipient.displayName ?? recipient.label ?? recipient.username ?? target;
     try {
@@ -105,7 +119,7 @@ export async function sendDiscordDm(target, body, options = {}) {
     } catch (error) { copyToKim = { delivered: false, error: error.message }; }
   }
 
-  return { delivered: true, recipient, channelId, messageId, copyToKim };
+  return { delivered: true, recipient, channelId, messageId, copyToKim, ...(cardNotice ? { cardNotice } : {}) };
 }
 
 function parseArgs(args) {
@@ -117,6 +131,7 @@ function parseArgs(args) {
   let kimActionRequired = false;
   let noReplyFooter = false;
   let internalOptIn = false;
+  let checkOnly = false;
   for (let i = 1; i < args.length; i += 1) {
     if (args[i] === '--body') body = args[++i];
     else if (args[i] === '--body-file') bodyFile = args[++i];
@@ -125,12 +140,13 @@ function parseArgs(args) {
     else if (args[i] === '--kim-action-required') kimActionRequired = true;
     else if (args[i] === '--no-reply-footer') noReplyFooter = true;
     else if (args[i] === '--internal-opt-in') internalOptIn = true;
+    else if (args[i] === '--check-only') checkOnly = true;
     else throw new Error(`不明な引数です: ${args[i]}`);
   }
   if (!target || (body === undefined) === (bodyFile === undefined)) {
-    throw new Error('usage: discord-dm.mjs <名前 or メール> (--body <本文> | --body-file <path>) [--dry-run] [--no-copy-kim] [--no-reply-footer] [--kim-action-required] [--internal-opt-in]');
+    throw new Error('usage: discord-dm.mjs <名前 or メール> (--body <本文> | --body-file <path>) [--dry-run] [--check-only] [--no-copy-kim] [--no-reply-footer] [--kim-action-required] [--internal-opt-in]');
   }
-  return { target, body: bodyFile === undefined ? body : fs.readFileSync(bodyFile, 'utf8'), dryRun, noCopyKim, noReplyFooter, kimActionRequired, internalOptIn };
+  return { target, body: bodyFile === undefined ? body : fs.readFileSync(bodyFile, 'utf8'), dryRun, checkOnly, noCopyKim, noReplyFooter, kimActionRequired, internalOptIn };
 }
 
 export async function main(args = process.argv.slice(2), options = {}) {
@@ -138,11 +154,11 @@ export async function main(args = process.argv.slice(2), options = {}) {
   try { parsed = parseArgs(args); }
   catch (error) { console.error(`discord-dm: ${error.message}`); return 1; }
   try {
-    const result = await sendDiscordDm(parsed.target, parsed.body, { ...options, dryRun: parsed.dryRun, noCopyKim: parsed.noCopyKim, noReplyFooter: parsed.noReplyFooter, kimActionRequired: parsed.kimActionRequired, internalOptIn: parsed.internalOptIn });
+    const result = await sendDiscordDm(parsed.target, parsed.body, { ...options, dryRun: parsed.dryRun, checkOnly: parsed.checkOnly, noCopyKim: parsed.noCopyKim, noReplyFooter: parsed.noReplyFooter, kimActionRequired: parsed.kimActionRequired, internalOptIn: parsed.internalOptIn });
     console.log(JSON.stringify(result));
     return result.delivered === 'blocked' ? 3 : 0;
   } catch (error) {
-    const exitCode = error.code === 'RECIPIENT_UNRESOLVED' ? 3 : error.code === 'DISCORD_TOKEN_MISSING' ? 2 : 1;
+    const exitCode = error.code === 'RECIPIENT_UNRESOLVED' ? 3 : error.code === 'DISCORD_TOKEN_MISSING' ? 2 : error.code === 'HANDBACK_BLOCKED' ? 4 : 1;
     console.error(`discord-dm: ${error.message}`);
     console.log(JSON.stringify({ ok: false, target: parsed.target, error: error.code ?? 'SEND_FAILED' }));
     return exitCode;

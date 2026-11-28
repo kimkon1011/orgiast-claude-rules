@@ -220,6 +220,28 @@ test('否定された失敗語を含む成功報告は修復TODOを起票しな�
   }
 });
 
+test('判断待ち・照合済み報告は譲歩の失敗語があっても修復TODOを起票しない', async () => {
+  const dir = home(), s = sender(dir);
+  const report = [
+    '下書きが3件あるので内容を確認しました（Codex 委譲プロセスは時間切れで停止したが RESULT.md は 21:25 に完成済み）。',
+    'あなたの判断を待っているメールが1件あります。',
+    '確認した結果はhttps://docs.google.com/document/d/1Lrb3QZY92TqGtv84PMVG-9FWueSSkf9MZiCoVOTEb30/edit?authuser=kim%40orgiast.jp に書いてあります。',
+  ].join('');
+  assert.equal((await notifyKim(report, { ...s.options, kind: 'info' })).delivered, 'dm');
+  assert.equal(fs.existsSync(path.join(dir, '.claude/next-session.md')), false);
+  assert.doesNotMatch(s.messages[0], /原因:|自動起票:/);
+  assert.match(s.messages[0], /開くアカウント: \*\*kim@orgiast\.jp\*\*/);
+  assert.doesNotMatch(s.messages[0], /開くアカウント: 未登録/);
+});
+
+test('障害通知は従来どおり修復TODOを起票する', async () => {
+  const dir = home(), s = sender(dir);
+  await notifyKim('夜間ジョブが停止しました', { ...s.options, kind: 'info' });
+  assert.match(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8'), /通知の原因調査・修復:/);
+  assert.match(s.messages[0], /原因:.*未確定（実ログの調査を起票）/);
+  assert.match(s.messages[0], /自動起票:/);
+});
+
 test('否定されていない失敗語は従来どおり修復TODOを起票する', async () => {
   for (const report of ['送信に失敗しました', 'failedAt: 2026-11-24T01:00:00Z']) {
     const dir = home(), s = sender(dir);

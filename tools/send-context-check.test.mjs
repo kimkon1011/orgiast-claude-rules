@@ -38,7 +38,7 @@ test('自社の質問と相手未回答の実データ形をLLMへ正しいラ�
   assert.equal(verdict.ok,true);
   assert.match(verdict.reason,/自社質問を相手要望としていない/);
 });
-test('通常・定期報告のLLMプロンプト先頭に注入した日本時間の送信予定日時を含む', () => {
+test('通常・定期報告のLLMプロンプトは固定指示を先頭・送信予定日時を末尾に置く（prefix cache）', () => {
   for (const periodicReport of [false, { recipient: '佐藤優奈' }]) {
     let prompt='';
     runLlm([], '送信本文', {
@@ -46,7 +46,10 @@ test('通常・定期報告のLLMプロンプト先頭に注入した日本時�
       periodicReport,
       spawn: (_exe,args) => { prompt=fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8'); return {status:0,stdout:'{"verdict":"OK","reason":"整合","warnings":[]}',stderr:''}; },
     });
-    assert.match(prompt, /^送信予定日時（日本時間）: 2026-11-19（木）14:20\n/);
+    assert.match(prompt, /^次の宛先履歴と送信予定本文を検査し/);
+    assert.doesNotMatch(prompt, /^送信予定日時/);
+    assert.match(prompt, /\n送信予定日時（日本時間）: 2026-11-19（木）14:20$/);
+    assert.ok(prompt.indexOf('次の宛先履歴') < prompt.indexOf('送信予定日時（日本時間）'));
     assert.match(prompt, /履歴の最終日時と送信予定日時の間に起きた出来事.*履歴に記録がないことだけを理由に NG にしない/);
   }
 });
@@ -145,6 +148,11 @@ test('回答済み質問を再送する判定はNGでマーカーを書かない
 });
 test('マーカー無し送信は拒否', async t => {
   await assert.rejects(()=>assertContextApproved({channel:'line',target:'C1',text:'本文',home:tmp(t),getLatest:async()=>null}),/承認マーカーがありません/);
+});
+test('社内自動許可は整合性検査へ渡すcheckedAtを返す', async t => {
+ const now=Date.parse('2026-11-28T10:00:00+09:00');
+ const result=await assertContextApproved({channel:'discord',target:'dm',text:'社内連絡',home:tmp(t),internalOptIn:true,now,getLatest:async()=>assert.fail('マーカー無し時はここでは読まない')});
+ assert.equal(result.checkedAt,new Date(now).toISOString());
 });
 test('マーカー後の新着は拒否', async t => {
   const home=tmp(t); writeContextMarker({channel:'line',target:'C1',text:'本文',latest:{id:'m1',at:'2026-11-10T00:00:00.000Z'},reason:'OK',home});

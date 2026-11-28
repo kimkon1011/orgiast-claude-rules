@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, appendFileSync, writeFileSync, unlinkSync, openSync, closeSync, existsSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { sendStandingDaily, notifyStandingInfo } from './lahaina-standing-send.mjs';
-import { tokyoToday, findEntry, formatMessage, wasSent } from './lahaina-daily-message.mjs';
+import { tokyoToday, findEntry, formatMessage, wasSent, registerDailyPhotoTema } from './lahaina-daily-message.mjs';
 export { tokyoToday, weekdayJa, findEntry, formatMessage, wasSent } from './lahaina-daily-message.mjs';
 import { attemptPath } from './lahaina-standing-policy.mjs';
 import { join, dirname } from 'node:path';
@@ -95,6 +95,7 @@ async function runUnlocked({
   }
 
   const text = formatMessage(entry);
+  await registerDailyPhotoTema(text, date, { home, dryRun, addItemImpl: inbox });
   log(text);
   const requestBeeper = async () => {
     const result = await fallback({ text, date, dryRun, now, calendarPath, sentPath, home, inbox });

@@ -6,10 +6,12 @@ import path from 'node:path';
 
 const {
   FALLBACK_BACKEND_COOLDOWN_MS,
+  fallbackBackendFailureDomain,
   fallbackBackendHistoryFile,
   recordFallbackBackendOutcome,
   readFallbackBackendHistory,
   coolingBackendNames,
+  deprioritizeRecentFailures,
   skipCoolingBackends,
   deprioritizeUnreliableBackends,
   unhealthyCandidates,
@@ -63,6 +65,69 @@ test('cooldownMs を過ぎた古い timeout は冷却しない', () => {
   assert.ok(within.has('y'));
   const beyond = coolingBackendNames(home, { now: now + FALLBACK_BACKEND_COOLDOWN_MS + 1 });
   assert.equal(beyond.has('y'), false);
+});
+
+// 2026-11-26T07:11Z / 14:26Z 実測（delegation-health:fallback_chain_timeout 2件 / 捨てた秒数 361秒）:
+// deepseek が先に timeout して冷却中なのに、cheap-code:deepseek は別名のため冷却されず
+// implement 通常予算180秒で再試行→timeout。同ドメインなら両方を冷却する。
+test('deepseek timeout は同ドメインの cheap-code:deepseek も冷却する（2026-11-26 実測形）', () => {
+  assert.equal(fallbackBackendFailureDomain('deepseek'), 'deepseek-upstream');
+  assert.equal(fallbackBackendFailureDomain('cheap-code:deepseek'), 'deepseek-upstream');
+
+  const home = tmpHome();
+  // 07:09 時点: deepseek が 93 分前に timeout、cheap-code:deepseek の自前 timeout は 6h 超で期限切れ
+  const tDeepseekTimeout = Date.parse('2026-11-26T05:36:28.306Z');
+  const tCheapOldTimeout = Date.parse('2026-11-25T16:12:31.937Z');
+  const tAttempt = Date.parse('2026-11-26T07:09:47.921Z');
+  recordFallbackBackendOutcome(home, { backend: 'cheap-code:deepseek', outcome: 'timeout', now: tCheapOldTimeout });
+  recordFallbackBackendOutcome(home, { backend: 'deepseek', outcome: 'timeout', now: tDeepseekTimeout });
+
+  const cooling = coolingBackendNames(home, { now: tAttempt });
+  assert.ok(cooling.has('deepseek'), 'qwen 直結 deepseek は冷却中');
+  assert.ok(cooling.has('cheap-code:deepseek'), '同ドメインの cheap-code:deepseek も冷却中（名前違いで再試行しない）');
+
+  const backends = [
+    { name: 'cheap-code:deepseek' },
+    { name: 'cursor-agent' },
+    { name: 'cheap-code:glm' },
+  ];
+  const kept = skipCoolingBackends(backends, cooling, { keepNames: ['cursor-agent'] });
+  assert.equal(kept.some((b) => b.name === 'cheap-code:deepseek'), false);
+  assert.ok(kept.some((b) => b.name === 'cursor-agent'));
+});
+
+test('14:24 実測形: deepseek が14分前に timeout なら cheap-code:deepseek を先頭に戻さない', () => {
+  const home = tmpHome();
+  const tDeepseekTimeout = Date.parse('2026-11-26T14:11:09.195Z');
+  const tCheapTimeout = Date.parse('2026-11-26T07:09:47.921Z');
+  const tAttempt = Date.parse('2026-11-26T14:24:54.429Z');
+  recordFallbackBackendOutcome(home, { backend: 'cheap-code:deepseek', outcome: 'timeout', now: tCheapTimeout });
+  recordFallbackBackendOutcome(home, { backend: 'deepseek', outcome: 'timeout', now: tDeepseekTimeout });
+  recordFallbackBackendOutcome(home, { backend: 'cursor-agent', outcome: 'timeout', now: Date.parse('2026-11-26T12:39:54.695Z') });
+
+  const cooling = coolingBackendNames(home, { now: tAttempt });
+  assert.ok(cooling.has('cheap-code:deepseek'));
+  assert.ok(cooling.has('deepseek'));
+
+  const history = readFallbackBackendHistory(home);
+  const ordered = deprioritizeRecentFailures(
+    [{ name: 'cheap-code:deepseek' }, { name: 'cursor-agent' }, { name: 'cheap-code:glm' }],
+    history,
+    { now: tAttempt },
+  );
+  // glm は直近 timeout なし → 先頭。deepseek ドメインは末尾側へ。
+  assert.equal(ordered[0].name, 'cheap-code:glm');
+  assert.ok(ordered.findIndex((b) => b.name === 'cheap-code:deepseek') > 0);
+});
+
+test('同ドメインの新しい ok があれば deepseek 冷却は解除される', () => {
+  const home = tmpHome();
+  const now = 8_000_000;
+  recordFallbackBackendOutcome(home, { backend: 'deepseek', outcome: 'timeout', now });
+  recordFallbackBackendOutcome(home, { backend: 'cheap-code:deepseek', outcome: 'ok', now: now + 10 });
+  const cooling = coolingBackendNames(home, { now: now + 20 });
+  assert.equal(cooling.has('deepseek'), false);
+  assert.equal(cooling.has('cheap-code:deepseek'), false);
 });
 
 test('skipCoolingBackends は冷却中を除き、全滅する場合は元の配列を返す', () => {
@@ -318,6 +383,50 @@ test('timeout/fail が5件中3件なら従来どおり failure_rate になる（
   assert.equal(hits[0].failures, 3);
 });
 
+// --- restoredAt（復帰前の失敗を数えない）---
+
+// 2026-11-28 05:08 実測: lane-doctor --probe が復帰させた直後に、24h 窓の古い失敗
+// （復帰より前）だけで failure_rate 再停止された。restoredAt より前の行は集計から外す。
+test('restoredAt より前の失敗だけなら停止候補にならない（復帰直後の再停止を防ぐ）', () => {
+  const now = 10_000_000;
+  const restoredAt = now - 10_000;
+  const rows = [
+    { t: restoredAt - 1000, backend: 'openrouter', outcome: 'timeout' },
+    { t: restoredAt - 2000, backend: 'openrouter', outcome: 'fail' },
+    { t: restoredAt - 3000, backend: 'openrouter', outcome: 'timeout' },
+    { t: restoredAt - 4000, backend: 'openrouter', outcome: 'fail' },
+    { t: restoredAt - 5000, backend: 'openrouter', outcome: 'timeout' },
+  ];
+  // 復帰より後の呼び出しは1件も無いので、古い失敗を数えなければ停止候補にならない
+  assert.deepEqual(unhealthyCandidates(rows, { now, restoredAt: { openrouter: restoredAt } }), []);
+  // restoredAt を渡さなければ従来どおり停止候補になる（回帰確認）
+  assert.equal(unhealthyCandidates(rows, { now })[0].reason, 'failure_rate');
+});
+
+test('restoredAt より後の失敗が閾値以上なら従来どおり failure_rate になる', () => {
+  const now = 10_000_000;
+  const restoredAt = now - 10_000;
+  const rows = [
+    // 復帰より前の古い失敗3件（数えない）
+    { t: restoredAt - 1000, backend: 'openrouter', outcome: 'timeout' },
+    { t: restoredAt - 2000, backend: 'openrouter', outcome: 'timeout' },
+    { t: restoredAt - 3000, backend: 'openrouter', outcome: 'fail' },
+    // 復帰より後の5件（ok2 + 失敗3 → 過半数失敗）
+    { t: restoredAt + 1000, backend: 'openrouter', outcome: 'ok' },
+    { t: restoredAt + 2000, backend: 'openrouter', outcome: 'ok' },
+    { t: restoredAt + 3000, backend: 'openrouter', outcome: 'timeout' },
+    { t: restoredAt + 4000, backend: 'openrouter', outcome: 'fail' },
+    { t: restoredAt + 5000, backend: 'openrouter', outcome: 'timeout' },
+  ];
+  const hits = unhealthyCandidates(rows, { now, restoredAt: { openrouter: restoredAt } });
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].name, 'openrouter');
+  assert.equal(hits[0].reason, 'failure_rate');
+  // 復帰より前の3件は数えず、復帰より後の5件だけで判定する
+  assert.equal(hits[0].calls, 5);
+  assert.equal(hits[0].failures, 3);
+});
+
 test('429 を除いた残りで判定される（ok1 + fail1 + http_429×5 → calls 2 なので停止しない）', () => {
   const now = 10_000_000;
   const rows = [
@@ -353,4 +462,18 @@ test('status/outcome が欠けた行と HTTP 402 では failure_rate 停止に�
     assert.deepEqual(applyCandidateHealth(home, { rows: source, now, force: true }), []);
   }
   assert.equal(fs.existsSync(path.join(home, '.claude/lanes-disabled.json')), false);
+});
+
+test('caller の http_400 が過半数でも provider は停止しない（404/413/422 も除外）', () => {
+  const now = Date.now();
+  const rows = [
+    ...Array(6).fill({ caller: 'stalled-session-hourly', status: 'http_400' }),
+    ...['http_404', 'http_413', 'http_422'].map(status => ({ status })),
+    ...Array(5).fill({ caller: 'llm-ask', status: 'ok' }),
+  ].map(row => ({ ...row, t: now, provider: 'openrouter' }));
+  assert.deepEqual(unhealthyCandidates(rows, { now }), []);
+  const failures = Array(6).fill({ t: now, provider: 'openrouter', status: 'timeout' });
+  assert.deepEqual(unhealthyCandidates([...rows, ...failures], { now }), [
+    { name: 'openrouter', reason: 'failure_rate', calls: 11, failures: 6 },
+  ]);
 });

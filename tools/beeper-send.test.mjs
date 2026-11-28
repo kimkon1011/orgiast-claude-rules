@@ -1,3 +1,4 @@
+import { withTema } from './test-fixtures/tema-record.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -8,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeContextMarker } from './lib/send-context.mjs';
 
-const cliPath = fileURLToPath(new URL('./beeper-send.mjs', import.meta.url));
+const cliPath = fileURLToPath(new URL('./test-fixtures/beeper-consistency-cli.mjs', import.meta.url));
 
 function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'beeper-send-test-'));
@@ -451,4 +452,38 @@ test('11. 文脈変化なし: 相手の古いメッセージのみ → 従来通
   assert.equal(parsed.ok, true);
   assert.equal(parsed.messageID, '999');
   assert.equal(sendCount, 1);
+});
+
+test('送信前ガード: 差し戻し文面は dry-run でも exit 4', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beeper-handback-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const bodyFile = path.join(home, 'body.txt');
+  fs.writeFileSync(bodyFile, withTema('仮押さえ先の確認をお願いします。'), 'utf8');
+  const result = await runCli([
+    '--chat', '!chat1:localhost',
+    '--body-file', bodyFile,
+    '--dry-run',
+  ], { ORGIAST_HOME: home, ORGIAST_HANDBACK_GUARD: '1' });
+  assert.equal(result.code, 4);
+  assert.match(result.stderr, /送信を止めました/);
+});
+
+test('送信前ガード: HUMAN-ONLY 付きの dry-run は通り、通常文面も通る', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beeper-handback-ok-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const bodyFile = path.join(home, 'body.txt');
+  fs.writeFileSync(bodyFile, withTema('[HUMAN-ONLY: 現地作業] 11/29 9:00に現場で鍵の受け取りをお願いします。'), 'utf8');
+  const tagged = await runCli([
+    '--chat', '!chat1:localhost',
+    '--body-file', bodyFile,
+    '--dry-run',
+  ], { ORGIAST_HOME: home });
+  assert.equal(tagged.code, 0);
+  fs.writeFileSync(bodyFile, 'はい、承知しました', 'utf8');
+  const ok = await runCli([
+    '--chat', '!chat1:localhost',
+    '--body-file', bodyFile,
+    '--dry-run',
+  ], { ORGIAST_HOME: home });
+  assert.equal(ok.code, 0);
 });

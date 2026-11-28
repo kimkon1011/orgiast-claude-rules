@@ -131,7 +131,12 @@ export function scanScheduled(input, { home, taskCsv, readFile = file => fs.read
       file=file.replace(/^~(?=[\\/])/,home).replace(/%USERPROFILE%/gi,home);
       file=path.resolve(base,file);
       if(seen.has(file))continue;seen.add(file);
-      try{scan(readFile(file),file,path.dirname(file),depth+1);}catch{failures.push('scheduledSends');}
+      try{scan(readFile(file),file,path.dirname(file),depth+1);}catch{
+        // The scheduler command itself is authoritative.  A missing file named by that
+        // command makes its payload unreadable; a missing file merely mentioned inside
+        // an already-read script cannot produce a send and is commonly stale prose.
+        if(depth === 0)failures.push('scheduledSends');
+      }
     }
   }
   const rows=parseTaskCsv(taskCsv || '');
@@ -198,12 +203,21 @@ export async function collectSendConsistency(input, deps = {}) {
   }catch{missing('scheduledSends');}
   // 他PCのローカルファイルは、全PC収集済みの新鮮なスナップショットが無ければ照合不能。
   try {
-    const fleet = deps.fleetSnapshot ?? jsonFile(path.join(home,'.claude','send-consistency-fleet.json'));
+    const fleetFile=path.join(home,'.claude','send-consistency-fleet.json');
+    let fleet;
+    try { fleet=deps.fleetSnapshot ?? jsonFile(fleetFile); }
+    catch(error) {
+      if(error.code === 'ENOENT' && CHANNEL_ITEM_SUPPORT[input.channel]?.otherPcState === 'unsupported') {
+        data.unsupported.push('otherPcState');
+        fleet=null;
+      } else throw error;
+    }
+    if(!fleet) throw Object.assign(Error('fleet snapshot unsupported'),{code:'UNSUPPORTED_FLEET'});
     const pcMap=deps.pcMap ?? jsonFile(path.join(root,'fleet-pc-map.json'));
     const labels=Object.keys(pcMap).filter(k=>!k.startsWith('_'));
     if (!labels.every(label => fleet.labels?.includes(label)) || !(new Date(now)-Date.parse(fleet.checkedAt)>=0 && new Date(now)-Date.parse(fleet.checkedAt)<=5*60000)) throw Error('全PCの読み戻しが古いか不足');
     for (const key of ['sentHistory','scheduledSends','otherDrafts']) { if(!Array.isArray(fleet[key]))throw Error('欠落');data[key].push(...fleet[key]); }
-  } catch { missing('otherPcState'); }
+  } catch(error) { if(error.code !== 'UNSUPPORTED_FLEET') missing('otherPcState'); }
   await acquire('directives',async()=>deps.directives ?? jsonFile(path.join(root,'config','send-directives.json')));
   await acquire('calendarEvents',async()=> {
     if (deps.calendarEvents) return deps.calendarEvents(input);

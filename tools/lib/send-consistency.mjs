@@ -6,7 +6,7 @@ export const addresses = value => (Array.isArray(value) ? value : [value]).flatM
 const commonSupport = { sentHistory: 'required', recentSent: 'required', followupLedger: 'required', scheduledSends: 'required', otherPcState: 'required', directives: 'required', calendarEvents: 'required', requiredCc: 'required', draftReadAt: 'required' };
 export const CHANNEL_ITEM_SUPPORT = Object.freeze({
   gmail: Object.freeze({ ...commonSupport, otherDrafts: 'required', threadMessages: 'required' }),
-  discord: Object.freeze({ ...commonSupport, otherDrafts: 'unsupported', threadMessages: 'required' }),
+  discord: Object.freeze({ ...commonSupport, otherDrafts: 'unsupported', otherPcState: 'unsupported', threadMessages: 'required' }),
   line: Object.freeze({ ...commonSupport, otherDrafts: 'unsupported', threadMessages: 'optional', draftReadAt: 'optional' }),
   beeper: Object.freeze({ ...commonSupport, otherDrafts: 'unsupported', threadMessages: 'optional', draftReadAt: 'optional' }),
 });

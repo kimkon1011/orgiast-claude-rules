@@ -75,11 +75,28 @@ test('タスクの多段プロンプトと引用パス、読めない参照を�
  assert.equal(result.rows[0].draftId,'d1');assert.equal(result.failures.length,0);
  assert.ok(scanScheduled(base,{home:os.tmpdir(),taskCsv:'"task","claude -p missing.md"',readFile:()=>{throw Error('欠落');}}).failures.includes('scheduledSends'));
 });
+test('読めたタスクスクリプト内の古い資料名は全体を取得不能にしない',()=>{
+ const script=path.resolve('task.ps1');
+ const result=scanScheduled(base,{home:os.tmpdir(),cwd:process.cwd(),taskCsv:'"task","powershell.exe -File task.ps1"\n',readFile:file=>{
+  if(file===script)return "# 過去資料 COMPARE.md は削除済み\nnode worker.mjs";
+  if(file.endsWith('worker.mjs'))return '宛先 customer@example.com';
+  throw Object.assign(Error('missing'),{code:'ENOENT'});
+ }});
+ assert.equal(result.failures.length,0);assert.equal(result.rows.length,1);
+});
 test('収集は全APIを注入し、他PC欠落・取得失敗を閉じる',async t=>{
  const home=temp(t), deps={home,taskCsv:'',gmailData:async()=>({sentHistory:[],otherDrafts:[],threadMessages:[],failures:[]}),followupRows:async()=>[],calendarEvents:async()=>[],directives:[directive],pcMap:{'008':{}},fleetSnapshot:{labels:['008'],checkedAt:base.now,sentHistory:[],scheduledSends:[],otherDrafts:[]}};
  let data=await collectSendConsistency(base,deps);assert.deepEqual(data.unverified,[]);
  data=await collectSendConsistency(base,{...deps,fleetSnapshot:{...deps.fleetSnapshot,labels:[]},gmailData:async()=>{throw Error('403');}});
  assert.ok(data.unverified.includes('otherPcState'));assert.ok(data.unverified.includes('sentHistory'));
+});
+test('Discordだけは未配備のfleet収集器をunsupportedとして明示し、壊れたスナップショットは停止',async t=>{
+ const home=temp(t), common={home,taskCsv:'',fetchHistory:async()=>({target:'dm',messages:[]}),followupRows:async()=>[],calendarEvents:async()=>[],directives:[directive],pcMap:{'008':{}}};
+ let data=await collectSendConsistency({...base,channel:'discord'},common);
+ assert.ok(data.unsupported.includes('otherPcState'));assert.ok(!data.unverified.includes('otherPcState'));
+ fs.mkdirSync(path.join(home,'.claude'),{recursive:true});fs.writeFileSync(path.join(home,'.claude','send-consistency-fleet.json'),'{broken');
+ data=await collectSendConsistency({...base,channel:'discord'},common);
+ assert.ok(data.unverified.includes('otherPcState'));
 });
 test('CLI 終了コード0/2/3とJSON',async t=>{
  const home=temp(t),file=path.join(home,'body.txt');fs.writeFileSync(file,base.text);

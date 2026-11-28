@@ -1,0 +1,42 @@
+# DryRun Result — 2026-11-28 14:21 JST
+
+## Log increment (from background task capture)
+
+2026-11-28T14:21:42+09:00 start dryRun=True source=C:\Users\kimko\.claude
+2026-11-28T14:21:44+09:00 WARN rclone-remote=skipped reason=rclone-not-found
+2026-11-28T14:21:44+09:00 plan drive-root=H:\ reason=no-mounted-drive-dry-run-fallback
+2026-11-28T14:21:44+09:00 plan staging-drive=C:\Users\kimko\AppData\Local\claude-backup-staging reason=localappdata-fallback
+2026-11-28T14:21:44+09:00 plan staging=C:\Users\kimko\AppData\Local\claude-backup-staging destination=H:\マイドライブ\Claude-Backups\018\claude-018-2026-11-28.zip
+2026-11-28T14:21:44+09:00 plan structure=C:\Users\kimko\AppData\Local\claude-backup-staging\.claude<=~/.claude; C:\Users\kimko\AppData\Local\claude-backup-staging\home<=home files/directories/tasks/repo/npm/manifest; C:\Users\kimko\AppData\Local\claude-backup-staging\home\.codex<=~/.codex
+2026-11-28T14:21:44+09:00 plan robocopy=.claude:/MIR .codex:/MIR excludedDirs=...
+2026-11-28T14:21:44+09:00 plan compress=local-zip copy=none readBack=min-5000+required-core+home/backup-manifest.json+scheduled-task-if-any retention=14-days+monthly-day-1/180-days
+2026-11-28T14:21:44+09:00 complete dryRun=true elapsedSeconds=1.4
+
+## plan staging-drive=
+
+plan staging-drive=C:\Users\kimko\AppData\Local\claude-backup-staging reason=localappdata-fallback
+
+**結果: C: のままでした。D: にはなりませんでした。**
+
+## 分析
+
+コードどおりの動作です。`Resolve-StagingDir` の優先順位:
+
+1. env `CLAUDE_BACKUP_STAGING` → 未設定なのでスキップ
+2. `$script:localBackupDrive` が存在 → **DryRun では `$localFallback` ブロック（558行: `if (-not $DryRun ...)`）がスキップされるため、`$script:localBackupDrive` は null のまま** → スキップ
+3. フォールバック → `$env:LOCALAPPDATA\claude-backup-staging`
+
+つまり、DryRun では local-fallback-drive 分岐を通過しません。非 DryRun（本番実行）で Drive 未マウント時に初めて
+`$script:localBackupDrive = D:\` が設定され、`Resolve-StagingDir` が `D:\claude-backup-staging` を返します。
+
+## 実害
+
+DryRun での検証には別途モックが必要。本番動作としては修正コードのパスは正しいが、
+DryRun 単体では「期待する D: になること」を確認できませんでした。
+
+## 実行環境
+
+- exit code: 0
+- elapsed: 1.4 seconds
+- 実行前ログ行数: 433
+- 実行後のログファイルに増分は無し（Write-Event は DryRun 時は stdout に出るがログファイルには書かない）

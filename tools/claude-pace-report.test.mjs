@@ -6,7 +6,7 @@ import path from 'node:path';
 import { checkSchema } from './lib/json-schema-check.mjs';
 import { datePair, judgeGrokbot, readGrokbotInput, readRegistrationStatus, main } from './claude-pace-report.mjs';
 import { reportPaths, publishReport } from './claude-pace-report-publish.mjs';
-import { buildReport, shouldReport, DAY_TARGET_PCT, aggregateAccountSnapshots } from './claude-pace-report.mjs';
+import { buildReport, shouldReport, normalizePaceHost, DAY_TARGET_PCT, aggregateAccountSnapshots } from './claude-pace-report.mjs';
 
 const config = {
   targetLanding: 90,
@@ -136,6 +136,35 @@ test('shouldReport は 011 既定、011 が stale なら 018', () => {
   assert.equal(shouldReport('014', config, stale, now), false);
 
   assert.equal(shouldReport('018', config, {}, now), true);
+});
+
+test('shouldReport はホスト名 011NEXT を正規化して判定する', () => {
+  const now = Date.parse('2026-11-27T12:00:00.000Z');
+  // 011 が fresh → 011NEXT のみ true
+  assert.equal(shouldReport('011NEXT', config, { '011NEXT': now }, now), true);
+  assert.equal(shouldReport('018', config, { '011NEXT': now }, now), false);
+  // 011NEXT が stale → 018 が true
+  assert.equal(shouldReport('018', config, { '011NEXT': now - 4 * 3600_000 }, now), true);
+  assert.equal(shouldReport('011NEXT', config, { '011NEXT': now - 4 * 3600_000 }, now), false);
+  // fallback 側のホスト名ゆれ
+  assert.equal(shouldReport('018NEXT', config, {}, now), true);
+  // lastSeenMap に正規化後のキーと生キーの両方がある場合、新しい方を採用
+  const mixed = { '011': now - 4 * 3600_000, '011NEXT': now };
+  assert.equal(shouldReport('011NEXT', config, mixed, now), true);
+  // 別のホスト名も正規化される
+  assert.equal(shouldReport('000-PC', config, { '011NEXT': now }, now), false);
+});
+
+test('normalizePaceHost の単体動作', () => {
+  assert.equal(normalizePaceHost('011NEXT'), '011');
+  assert.equal(normalizePaceHost('018'), '018');
+  assert.equal(normalizePaceHost('DESKTOP-2D0R4LI'), 'DESKTOP-2D0R4LI');
+  assert.equal(normalizePaceHost('000-PC'), '000');
+  assert.equal(normalizePaceHost(''), '');
+  assert.equal(normalizePaceHost(null), '');
+  assert.equal(normalizePaceHost(undefined), '');
+  assert.equal(normalizePaceHost('014_sub'), '014');
+  assert.equal(normalizePaceHost(' 011NEXT '), '011');
 });
 
 test('aggregateAccountSnapshots が前日増分を付ける', () => {

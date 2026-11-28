@@ -87,3 +87,4 @@
 
 - 型: 送信済み下書きが再確認タスクに残る／日付・CC・最新指示・新着との不一致 → send-consistency共通入口で7項目を照合し、sent-registryと下書き404を読み戻す。
 - 型: 絶対ルールを抽出対象の見出し外に置き、全PCの CLAUDE.md に届かない → ONBOARDING.md の実ファイルから絶対ルールを抽出し、必須語を検査する回帰テストで防止する。
+- 型: 終了時に台帳登録が無い → 終了処理（claude -p wrapper / exit ハンドラ）が gb-reports の未完了フォルダを followup-ledger に自動登録しない。横展開: ledger-open-item（check 内蔵 scan / 終了時 open CLI）／ゲート: ledger-gap.test.mjs（回帰テスト）

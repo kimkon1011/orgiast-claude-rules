@@ -1,7 +1,7 @@
-# session-status  PC=018  host=018  updated 2026-11-28 09:05 JST
+# session-status  PC=018  host=018  updated 2026-11-28 10:05 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 39
+- 案件数: 40
 
 - 018・STATUS・金さん待ち・ターゲットメディア 大橋様へ渡す資料一式（宿題10件中8件）が完成し、Google ドライブに反映済み。残り2件（98回コマ割りの提供可否、大橋様のExcel入手）と、大橋様への送付・学会事務局への送信の承認が金さんの判断待ち。第99回日本胃癌学会総会の申込締切が 2026-11-30 のため、11/27中の判断が必要。・期限2026-11-27（判断）／ 2026-11-30（胃癌学会の申込締切）・次:金さんの承認が出たら、①Driveフォルダを大橋様へ共有設定 ②フォローメール送信（大橋様のメールアドレスの提供が必要）③胃癌学会事務局へ確認メール送信。承認がない間は送信しない。
 - 018・cc-pace-1127・完了・PR #2901 は 2026-11-27 23:19 JST にマージ済み（全CI pass）。018 への登録完了（OrgiastClaudePace: Ready / 毎時:23 / PT1H / PT55M、実機で読み戻し済み）。残り8台へは fleet 指示 prompt-20261127-142618-3940 を配布済み（PR #2918 マー・期限なし・次:各PCの反映は自動。翌朝7:30の日報に未反映PCが「未反映／未確認」として出る。別件で 018 の C ドライブ空きが 0 バイトになっており、削除は金さんの許可が要るため何もしていない（一時クローン87MBをDへ退避して129MB確保のみ）。解消方針の判断が要る。
@@ -11,7 +11,7 @@
 - 018・discord-form-fix-1126・完了・最終更新 11/26 12:09、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
 - 018・STATUS・完了・第2系統の実装・テスト・未通知13件の再通知・30分おきのタスク登録・見張りの発火確認まで、すべて実データで読み戻して確認済み。PR #2795 は main にマージ済み（merge commit 423ee860）。・期限なし・次:なし。タスク「OrgiastInquiryDiscordWatch」が30分おきに自動で回る。GAS 本体（onFormSubmit）の復旧はシートオーナー shirakawa@orgiast.jp の Apps Script 権限が必要で、第2系統が動いている間は業務影響が無いため急がない。
 - 018・dispatch-1122-21・停止・最終更新 11/22 21:43、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 018・followup-ledger・停止・最終更新 11/28 09:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 018・followup-ledger・停止・最終更新 11/28 10:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・furuyakami-app-integrate-1126・完了・最終更新 11/26 10:51、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、金さん待ちの記述あり・期限なし・次:なし
 - 018・furuyakami-container-1126・完了・最終更新 11/26 10:21、STATUS.mdなし、DONEあり、REPORTあり、run.logあり・期限なし・次:なし
 - 018・gakkai-kyosan-navi-followup-1128-readback・完了・学会協賛ナビのインバウンド6社の追いかけ状況を確定し、REPORT.md・DONE.txt・下書き6通を作成した・期限2026-12-01 午前中（東和薬品への返信。先方の11/5返信に23日未返信のため）・次:金さんが下書き6通を確認し、送信可否を判断する（最優先は東和薬品。12/1 月曜午前中）
@@ -32,6 +32,7 @@
 - 018・reply-drafts-1125-minpaku・完了・最終更新 11/25 19:55、STATUS.mdなし、DONEあり、REPORTあり、run.logあり、次の手順が未着手・期限なし・次:なし
 - 018・reply-wait-collect-1125・停止・最終更新 11/25 09:35、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・session-cap-1126・停止・最終更新 11/26 19:27、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
+- 018・session-start-1128・停止・最終更新 11/28 09:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・STATUS — next-session-stale-check に delegation-health 参照を追加・停止・実装・単体テストまで完了したが、lane-guard がこのセッションの直接ツール実行を全面的に止めており（`Codex は生きている。codex-do へ渡せ`）、commit / PR 作成（`pr-land.mjs`）を実行できない。Codex 無人枠は 8/8 で 2026-11-28 0:00 JST まで回復しない。・期限なし・次:`C:\Users\kimko\.claude\wt-stale-check`（ブランチ `fix/stale-check-delegation-health`）の変更を `node tools/pr-land.mjs --title "fix(next-session-stale-check): delegation-health の finding id
 - 018・t706u-1125・停止・最終更新 11/25 11:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 018・trial-dm-kato-1128・金さん待ち・最終更新 11/28 03:27、STATUS.mdなし、REPORTあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ

@@ -1,7 +1,7 @@
-# session-status  PC=011  host=011NEXT  updated 2026-11-28 18:06 JST
+# session-status  PC=011  host=011NEXT  updated 2026-11-28 19:06 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\kimko\\.claude\\projects", "configDirectory": "C:\\Users\\kimko
-- 案件数: 91
+- 案件数: 92
 
 - 011・.stall-sweeper・停止・最終更新 11/26 04:33、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・20261126-クラフト坂口・金さん待ち・クラフト坂口様 宿題7件の成果物は完成。精算の計算方法・福岡請求書の作り直し・先払い承認・いなば様への送信時期の判断待ち・期限2026-12-03（坂口様への精算金額の返答）・次:金さんの判断に沿って、坂口様への返信・福岡請求書の作り直し・Discord送信を進める（送信は承認後のみ）
@@ -26,7 +26,7 @@
 - 011・fallback-chain-timeout-1127・完了・PR #2849 MERGED・landed・期限なし・次:11/28 の delegation-health.json に fallback_chain_timeout が出ないことを確認
 - 011・fallback-chain-timeout-1128・停止・最終更新 11/28 04:51、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・fallback-deepseek-timeout-1127・進行中・Codex に修正を委譲中（codex-do バックグラウンド）・期限なし・次:RESULT.md と PR を読み戻し、Windows で node --test を再実行、PR の MERGED を確認して /session-close
-- 011・followup-ledger・停止・最終更新 11/28 18:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 011・followup-ledger・停止・最終更新 11/28 19:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・followup-ledger-1127・停止（次の朝まで待機）・000KimPC のビーコンが1日前で停止しており、指示が届いていない。社保の LINE 送信は 000 が復旧するまでできない。・期限11/30（投函期限）・次:11/28 朝に 000KimPC のビーコン状態を確認し、復旧していれば `SEND-000.md` の手順を実行する。ついでに各PCの followup-ledger 登録状況を再確認（fleet-status.mjs）。
 - 011・followup-ledger-1127-continue・停止・最終更新 11/27 21:50、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
 - 011・gb229-rpf-1128・停止・最終更新 11/28 16:21、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
@@ -44,6 +44,7 @@
 - 011・lane-probe-lock-1128・完了・codex_empty_output(untrusted_cwd) の真因（lane-doctor 書き込み点検の同時実行で固定フォルダーの .git が消える）を PR #2948 で修正、2026-11-27T20:24:22Z MERGED（d5674d7d）・期限2026-11-29 11:24（効果確認）・次:11/29 朝の delegation-health.json に untrusted_cwd が出ないことを auto-progress が自動確認。next-session.md の3番は無人では編集拒否のため残っている（次回選ばない）。作業ツリー ~/.claude/wt-lane-probe-lock とブランチ fix/lane-probe-wor
 - 011・loop-check-1125・金さん待ち・最終更新 11/25 16:23、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー、次の手順が未着手、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・matome-011・金さん待ち・正本PR #2957 が未マージのため CLAUDE.md への「一回にまとめる」反映は同期待ち・期限なし・次:PR #2957 マージ後の自動同期で CLAUDE.md に BEGIN: 一回にまとめる が入ったか grep で確認
+- 011・matome-1128-grade-post4・停止・最終更新 11/28 18:19、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・matome-1128-post4・停止・最終更新 11/28 18:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・matome-1128-sync2976・停止・最終更新 11/28 17:53、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・Microsoft・停止・最終更新 11/26 04:27、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -68,7 +69,7 @@
 - 011・saihatsu-full-1128-survive-dist・停止・最終更新 11/28 17:07、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-followup・停止・最終更新 11/28 07:42、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・sales-link-audit-1126・完了・監査・修正・書き出し完了、13:00 毎時本番で動作確認済み・期限2026-11-26 当日・次:なし（毎時ジョブが send-commitments を追跡し stuck-export を毎時更新）
-- 011・営業 次回連絡日・金さん待ち・最終更新 11/28 18:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 011・営業 次回連絡日・金さん待ち・最終更新 11/28 19:02、STATUS.mdあり、run.logあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
 - 011・session-1126-hourly・金さん待ち・JACE 藤野様宛ての返信下書きが打合せ前の文面のまま。修正版の送信可否は金さんの承認が要る（kim-inbox ki-20261126081310-6cf5）・期限2026-12-11（先方の返信期限）／着手期限 2026-12-09・次:承認が来たら seisaku-team@ の下書きを修正版に差し替え、gmail-draft.mjs の自動チェックを通して送信し、送信済みを読み戻す
 - 011・session-1128a・完了・無人定時起動。X-0100 は 11/27 に完了済みと確認、next-session 16番を完了確認に更新・期限2026-12-04・次:なし（1563記事への段落追加は kim-inbox ki-20261127101422-bd0c で承認待ち）
 - 011・session-1205・完了・handoff-audit 8件の再発検証が終わった。f61ffeb282843871（P4）は再発0件で、検証済み台帳に追加した（PR #2878 MERGED 2026-11-27T03:24:51Z）。残り7件は 11/26 12:00Z 以降も同じ型の文が出ているため、台帳には入れていない・期限なし・次:next-session.md の8番は完了したので次回は選ばない（無人だと next-session.md を書き換えられず、この STATUS.md に残している）。9〜15番の7件は ID ごとに検証し直しても消えない。直すべきなのは、W 型の「完了待ち」の文が出る仕組みのほう。worktree ~/.claude/wt-handoff-verify-
@@ -89,7 +90,7 @@
 - 011・x0101-gsc-preflight・完了・tools/gsc-preflight.mjs を PR #2881（automerge）で提出、Windows test 12/12 緑、実データ判定済み。着地は auto-progress が確認。next-session.md は無人起動で書込拒否のため引き継ぎはこのファイルと RESULT.md・期限なし・次:【夜間】REWRITE 2件の即答原稿下書き（rebooth.co.jp/exhibition/1563「展示会ブース 費用」500字以内、orgiast.jp/topics/7660「ブース デザイン」）→サイト反映は kim 承認待ち。next-session.md 残TODO 1番は完了として選ばない
 - 011・x0101-rewrite-drafts・完了（REWRITE 2件の即答下書き・照合不一致0）・1563は費用即答341字、7660は301先1344向けデザイン即答310字。内部リンクは preflight 候補のみ（費用0／デザイン rebooth 表示36）・期限2026-12-04（記事着手判断・preflight RESULT と同日）・次:kim 承認後に H1直下へ反映。7660は301先（rebooth/1344）へ書くか orgiast 側の転送方針を先に決める
 - 011・x0102-gemini-cache・完了・2026-11-28 11:06 の無人起動。着手できる候補がなかった（X-0102 は別セッション 576e0b0f が着手中。codex_empty_output は PR #2948 で修正済みで、11/29 朝の delegation-health.json 再生成待ち。handoff-audit の再走査も 11/29 朝。残りは金さんの判断待ち）・期限2026-11-29 朝・次:11/29 朝に delegation-health.json で codex_empty_output と fallback_chain_timeout が消えたかを確認し、next-session.md の3番・2番・39番を閉じる。
-- 011・ynakano-draft-1127・金さん待ち・中野様（日本コンベンションサービス）が 12/9(水)16:00〜17:00 で確定し Meet URL を求めている。返信は PCO 連絡制限の対象で、無人ではカレンダー操作も拒否されるため送れない。下書き3通は不要と照合済み。・期限2026-11-27 12:00（お客様返信のため早めに）・次:kim-inbox ki-20261126171146-4b95 で「返信を送ってよいか・不要な下書き3通を消してよいか」の返事をもらい、承認後に kim@ カレンダーへ社内用の予定（招待なし）を作って Meet URL を発行し、gmail-draft.mjs --send で返信する。next-session.md への追記は無人で拒否されたため、この 
+- 011・ynakano-draft-1127・完了（残りは下書き3通の削除許可だけ）・2026-11-28 18:10 JST に seisaku-team@ を gmail-search.mjs で再読み取り。中野様が 11/26 22:36 に 12/9(水)16:00〜17:00 を確定 → 2026-11-27 21:05 JST に seisaku-team@ から Meet URL（https://meet.google.com/・期限なし（打合せ本番 2026-12-09 16:00）・次:お客様対応は不要。古い候補提示の下書き3通（1a1f88b5dae6b8cc / 1a2109178335ddb5 / 1a2111e733b26549）は削除に kim の許可が要るため残置。kim-inbox ki-20261126171146-4b95 のうち「返信を送ってよいか」は送信済みで不要。
 - 011・_handoff-r28-1127・停止・最終更新 11/27 09:19、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・_handoff-r28-1127-in・停止・最終更新 11/27 09:21、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 011・大阪事務所LINEに届く学会郵送物の写真を学会アプリの獲得進行へ自動取込・金さん待ち・学会DB（Supabase project `sdsuucphkzklznlnqhnn`）に migration `0007_postal.sql` が未適用で、`postal_items` / `postal_ingest_state` が 404。適用に必要な DDL 経路が3つとも塞がっている（Management API は org 未加入で 403・期限なし（招待が下り次第着手）・次:招待が通ったら `D:\repos\aujust-gakkai-automation` で `supabase db push` して 0007 を適用 → 表の作成を read-back で確認 → 11/11 に届いた郵送物2件を取り込んで検証。migration 適用は本番反映なので承認後に実行する。決めてほしいこと: https://supabase

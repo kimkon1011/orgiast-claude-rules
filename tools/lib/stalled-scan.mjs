@@ -14,6 +14,7 @@
  *   --pc             走査するPC名（既定は currentPcName）
  *   --selftest       タスク登録の存在確認のみ行う
  */
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -54,6 +55,9 @@ export const KIM_ONLY_PATTERNS = [
 
 /** 金さん待ちを示す検出語 */
 export const KIM_WAITING_KEYWORDS = ['金さん待ち', '金さんだけ'];
+
+/** G1: 完了を示す語（本文にこれらの語があり未復旧が無い場合は完了扱い） */
+const COMPLETION_WORDS = ['完了', '終了', '成功', '復旧済', '解消', 'OK', 'PASS', 'done', 'completed', 'DONE'];
 
 /**
  * 案件フォルダ名として有効か（英数、-、_、日本語文字のみ）
@@ -154,10 +158,42 @@ export function readCaseFiles(caseDir) {
 }
 
 /**
- * 検出語とマッチするか判定
+ * G1: 完了語を含むか判定
+ */
+export function containsCompletionWords(text) {
+  return COMPLETION_WORDS.some((w) => text.includes(w));
+}
+
+/**
+ * G1: 検出語が否定されている行にあるか（例「金さん待ち: なし」）。
+ * 同じ行に keyword + [:：] + (なし|不要|解消) のパターンがあれば true。
+ */
+function isKeywordNegatedOnLine(line, keyword) {
+  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(escaped + '\\s*[:：]\\s*(なし|不要|解消)').test(line);
+}
+
+/**
+ * 検出語とマッチするか判定（否定された行は除外）。
+ * 例：「金さん待ち: なし」 → false（金さん待ちが否定されている）
  */
 export function containsStalledKeywords(text) {
-  return STALLED_KEYWORDS.some((kw) => text.includes(kw));
+  const lines = String(text || '').split(/\r?\n/);
+  for (const kw of STALLED_KEYWORDS) {
+    for (const line of lines) {
+      if (line.includes(kw) && !isKeywordNegatedOnLine(line, kw)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * G2: フォルダ名から短いハッシュ（先頭6桁の16進数）を生成（ID衝突防止用）
+ */
+function shortHash(str) {
+  return crypto.createHash('sha1').update(str).digest('hex').slice(0, 6);
 }
 
 /**
@@ -235,6 +271,12 @@ export function scanCase(caseDir, caseName, pcName, staleHours, nowMs = Date.now
   // DONE.txt があり、かつ検出語がなければ「完了」としてスキップ
   if (hasDone && !hasStalledKeywords) return null;
 
+  // G1: 検出語なし＋stale の場合、完了語があり未復旧が無いなら完了扱いでスキップ
+  const isStale = !hasDone && (nowMs - mtimeMs > staleHours * 60 * 60 * 1000);
+  if (!hasStalledKeywords && isStale && containsCompletionWords(text) && !text.includes('未復旧')) {
+    return null;
+  }
+
   // 最終更新が maxAgeDays より古いものは、INCIDENT.md＋「未復旧」以外はスキップ
   const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
   if (nowMs - mtimeMs > maxAgeMs) {
@@ -243,7 +285,6 @@ export function scanCase(caseDir, caseName, pcName, staleHours, nowMs = Date.now
   }
 
   // 登録条件: (1) 検出語あり または (2) DONE.txt 無しで stale 時間超過
-  const isStale = !hasDone && (nowMs - mtimeMs > staleHours * 60 * 60 * 1000);
   const shouldRegister = hasStalledKeywords || isStale;
 
   if (!shouldRegister) return null;
@@ -266,9 +307,9 @@ export function scanCase(caseDir, caseName, pcName, staleHours, nowMs = Date.now
   // due 計算
   const due = hasIncident ? computeDueIncident(nowMs) : computeDueDefault(nowMs);
 
-  // folder 名を正規化して ID
+  // folder 名を正規化して ID（G2: 末尾にフォルダ名のsha1先頭6桁で衝突防止）
   const folderId = normalizeFolderName(caseName);
-  const id = `GB-STALL-${pcName}-${folderId}`;
+  const id = `GB-STALL-${pcName}-${folderId}-${shortHash(caseName)}`;
 
   // 金さんだけができること
   let kimOnly = '';
@@ -320,7 +361,7 @@ export function scanReports(reportsDir, pcName, staleHours = 6, nowMs = Date.now
 export function scanReportsWithBreakdown(reportsDir, pcName, staleHours = 6, nowMs = Date.now(), maxAgeDays = 7) {
   const cases = enumerateCaseDirs(reportsDir);
   const entries = [];
-  const breakdown = { registered: 0, completed: 0, tooOld: 0, noStatusFiles: 0 };
+  const breakdown = { registered: 0, completed: 0, tooOld: 0, noStatusFiles: 0, completedByContent: 0 };
 
   for (const c of cases) {
     const { statusText, hasDone, watchedFiles, mtimeMs } = readCaseFiles(c.dirPath);
@@ -337,6 +378,13 @@ export function scanReportsWithBreakdown(reportsDir, pcName, staleHours = 6, now
 
     // DONE.txt があり検出語なし → 完了
     if (hasDone && !hasStalledKeywords) { breakdown.completed++; continue; }
+
+    // G1: 検出語なし＋stale＋完了語あり＋未復旧なし → 完了扱いでスキップ
+    const isStale = !hasDone && (nowMs - mtimeMs > staleHours * 60 * 60 * 1000);
+    if (!hasStalledKeywords && isStale && containsCompletionWords(text) && !text.includes('未復旧')) {
+      breakdown.completedByContent++;
+      continue;
+    }
 
     // 最終更新が maxAgeDays より古い → 古すぎ（INCIDENT.md＋未復旧は除く）
     const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;

@@ -2100,19 +2100,22 @@ async function cmdStalledScan(flags, ctxBase = {}) {
     }
   }
 
-  // ALERT を出力
-  const stalled = store.items.filter((r) => r.status === '止まった');
-  const file = writeAlert(alertPath(config, flags), {
-    now,
-    checked: entries.length,
-    stalled,
-    escalated: store.items.filter((r) => r.status === 'エスカレーション'),
-    awaitingApproval: store.items.filter((r) => r.status === '承認待ち'),
-    alertRows: stalled,
-    alerts,
-    pendingSync: store.pendingSync,
-    syncError: store.syncError,
-  });
+  // ALERT を出力（G3: dry-run では一切書かない）
+  let file = '';
+  if (!dryRun) {
+    const stalled = store.items.filter((r) => r.status === '止まった');
+    file = writeAlert(alertPath(config, flags), {
+      now,
+      checked: entries.length,
+      stalled,
+      escalated: store.items.filter((r) => r.status === 'エスカレーション'),
+      awaitingApproval: store.items.filter((r) => r.status === '承認待ち'),
+      alertRows: stalled,
+      alerts,
+      pendingSync: store.pendingSync,
+      syncError: store.syncError,
+    });
+  }
 
   const output = {
     ok: errors === 0,
@@ -2120,10 +2123,12 @@ async function cmdStalledScan(flags, ctxBase = {}) {
     registered,
     skipped,
     errors,
-    alertFile: file,
-    pendingSync: store.pendingSync,
-    syncError: store.syncError,
   };
+  if (!dryRun) {
+    output.alertFile = file;
+    output.pendingSync = store.pendingSync;
+    output.syncError = store.syncError;
+  }
   if (dryRun && breakdown) {
     output.breakdown = breakdown;
     output.dryRunEntries = entries.map((e) => ({

@@ -209,7 +209,7 @@ test('T3: GB-174 が先に同キー行を入れていた→2回目後も1行、u
     assert.equal(store().items.length, 1);
     const secondUpdatedAt = store().items[0].updatedAt;
     assert.notEqual(secondUpdatedAt, oldTime, 'updatedAt が更新されていない');
-    assert.equal(store().items[0].id, 'GB-STALL-test-pc-stalled-case');
+    assert.match(store().items[0].id, /GB-STALL-test-pc-stalled-case-/);
     assert.equal(store().items[0].status, '止まった');
   });
 });
@@ -522,6 +522,7 @@ test('F1-T5: scanReportsWithBreakdown が正しい内訳を返す', () => {
   assert.equal(breakdown.noStatusFiles, 1);
   // too-old: 20日前→古すぎ
   assert.equal(breakdown.tooOld, 1);
+  assert.equal(breakdown.completedByContent, 0);
   assert.equal(entries.length, 1);
   assert.equal(entries[0].folder, 'active-stalled');
 });
@@ -675,4 +676,202 @@ test('selftest: タスク存在確認（タスクが無くてもエラーにな�
   // 両方とも exists=false になる（シミュレート環境）
   assert.equal(results[0].exists, false);
   assert.equal(results[1].exists, false);
+});
+
+// ===== G1: 完了語による誤検知防止 =====
+
+test('G1-1: 完了語のみ・未復旧なし → skip（scanCase）', () => {
+  const dir = tmpDir('g1-1');
+  const oldTime = new Date(Date.now() - 10 * 60 * 60 * 1000);
+  const reportsDir = createMockReports(dir, [
+    {
+      name: 'completed-no-done',
+      files: [
+        { name: 'STATUS.txt', content: '状態: 成功\n理由: 全て完了', mtime: oldTime },
+      ],
+    },
+  ]);
+  const results = scanReports(reportsDir, 'test-pc', 6, Date.now());
+  assert.equal(results.length, 0);
+});
+
+test('G1-2: 完了語あり・未復旧あり→載る', () => {
+  const dir = tmpDir('g1-2');
+  const oldTime = new Date(Date.now() - 10 * 60 * 60 * 1000);
+  const reportsDir = createMockReports(dir, [
+    {
+      name: 'unrecovered-case',
+      files: [
+        { name: 'STATUS.txt', content: '状態: 完了\n理由: 復旧済み\n未復旧: あり', mtime: oldTime },
+      ],
+    },
+  ]);
+  // "未復旧" は検出語なので hasStalledKeywords=true → 完了語チェックはスキップ
+  const results = scanReports(reportsDir, 'test-pc', 6, Date.now());
+  assert.equal(results.length, 1);
+});
+
+test('G1-3: OK（完了語）＋未復旧なし→skip（cc-probe-1125相当）', () => {
+  const dir = tmpDir('g1-3');
+  const oldTime = new Date(Date.now() - 10 * 60 * 60 * 1000);
+  const reportsDir = createMockReports(dir, [
+    {
+      name: 'cc-probe-1125-style',
+      files: [
+        { name: 'STATUS.txt', content: 'PC=011NEXT USER=kimko FLAG=FAIL exit= / OK', mtime: oldTime },
+      ],
+    },
+  ]);
+  const results = scanReports(reportsDir, 'test-pc', 6, Date.now());
+  assert.equal(results.length, 0);
+});
+
+test('G1-4: 検出語あり・直近更新→載る（従来どおり）', () => {
+  const dir = tmpDir('g1-4');
+  const reportsDir = createMockReports(dir, [
+    {
+      name: 'recent-stalled',
+      files: [
+        { name: 'STATUS.txt', content: '状態: 中断\n理由: 外部要因' },
+      ],
+    },
+  ]);
+  const results = scanReports(reportsDir, 'test-pc', 6, Date.now());
+  assert.equal(results.length, 1);
+});
+
+test('G1-5: 「金さん待ち: なし」は検出語にしない', () => {
+  assert.equal(containsStalledKeywords('金さん待ち: なし'), false);
+  assert.equal(containsStalledKeywords('金さん待ち：解消'), false);
+  assert.equal(containsStalledKeywords('金さん待ち:不要'), false);
+  // 否定されていない場合は検出される
+  assert.ok(containsStalledKeywords('状態: 金さん待ち'));
+  // 「なし」が別の行にある場合は検出される
+  assert.ok(containsStalledKeywords('状態: 金さん待ち\n理由: なし'));
+});
+
+test('G1-6: 「金さん待ち: なし」＋完了語→skip（G1完結）', () => {
+  const dir = tmpDir('g1-6');
+  const oldTime = new Date(Date.now() - 10 * 60 * 60 * 1000);
+  const reportsDir = createMockReports(dir, [
+    {
+      name: 'negated-kim-waiting',
+      files: [
+        { name: 'STATUS.txt', content: '金さん待ち: なし\n状態: 成功', mtime: oldTime },
+      ],
+    },
+  ]);
+  const results = scanReports(reportsDir, 'test-pc', 6, Date.now());
+  // 金さん待ちが否定→hasStalledKeywords=false、isStale=true、完了語あり→skip
+  assert.equal(results.length, 0);
+});
+
+test('G1-7: breakdown に completedByContent が出る', () => {
+  const dir = tmpDir('g1-7');
+  const now = Date.now();
+  const oldTime = new Date(now - 10 * 60 * 60 * 1000);
+  const reportsDir = createMockReports(dir, [
+    {
+      name: 'content-completed',
+      files: [
+        { name: 'STATUS.txt', content: '状態: 成功', mtime: oldTime },
+      ],
+    },
+    {
+      name: 'keyword-stalled',
+      files: [
+        { name: 'STATUS.txt', content: '状態: 中断' },
+      ],
+    },
+  ]);
+  const { entries, breakdown } = scanReportsWithBreakdown(reportsDir, 'test-pc', 6, now, 7);
+  assert.equal(breakdown.completedByContent, 1, '完了語でskipした件数');
+  assert.equal(breakdown.registered, 1, '検出語で登録された件数');
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].folder, 'keyword-stalled');
+});
+
+// ===== G2: ID 衝突防止 =====
+
+test('G2-1: 日本語フォルダ名でID衝突しない', () => {
+  const dir = tmpDir('g2-1');
+  const reportsDir = createMockReports(dir, [
+    {
+      name: '20261126-クラフト坂口',
+      files: [
+        { name: 'STATUS.txt', content: '状態: 中断' },
+      ],
+    },
+    {
+      name: '20261126-鈴木建設',
+      files: [
+        { name: 'STATUS.txt', content: '状態: 中断' },
+      ],
+    },
+  ]);
+  const results = scanReports(reportsDir, 'test-pc', 6, Date.now());
+  // 2件とも日本語フォルダだがIDが衝突しない
+  assert.equal(results.length, 2);
+  // ID にハッシュが含まれている
+  for (const r of results) {
+    assert.match(r.id, /^GB-STALL-test-pc-[a-zA-Z0-9_-]+-[a-f0-9]{6}$/, `ID ${r.id} が正しい形式ではありません`);
+  }
+  // ID が異なる
+  assert.notEqual(results[0].id, results[1].id, '日本語フォルダ名のIDが衝突しています');
+});
+
+test('G2-2: ASCIIのみのIDにもハッシュが付く', () => {
+  const dir = tmpDir('g2-2');
+  const reportsDir = createMockReports(dir, [
+    {
+      name: 'simple-ascii',
+      files: [
+        { name: 'STATUS.txt', content: '状態: 中断' },
+      ],
+    },
+  ]);
+  const results = scanReports(reportsDir, 'test-pc', 6, Date.now());
+  assert.equal(results.length, 1);
+  assert.match(results[0].id, /^GB-STALL-test-pc-simple-ascii-[a-f0-9]{6}$/);
+});
+
+// ===== G3: dry-run はファイルを書き換えない =====
+
+test('G3-1: dry-run は ALERT.md / ledger.json を書かない', async () => {
+  await stalledScanScenario('g3-1', [
+    {
+      name: 'stalled-case',
+      files: [
+        { name: 'STATUS.txt', content: '状態: 中断\n理由: 承認待ち' },
+      ],
+    },
+  ], async ({ dir, run, store }) => {
+    const alertFile = path.join(dir, 'ALERT.md');
+    const ledgerFile = path.join(dir, 'ledger', 'ledger.json');
+    const fixedNow = new Date();
+
+    // dry-run: 何も書かない
+    const code1 = await run(['--dry-run'], { now: fixedNow });
+    assert.equal(code1, 0);
+    assert.equal(fs.existsSync(alertFile), false, 'dry-run後ALERT.mdは存在しない');
+    assert.equal(fs.existsSync(ledgerFile), false, 'dry-run後ledger.jsonは存在しない');
+
+    // 本実行: ファイルができる
+    const code2 = await run([], { now: fixedNow });
+    assert.equal(code2, 0);
+    assert.ok(fs.existsSync(alertFile), '本実行後ALERT.mdが存在する');
+    assert.ok(fs.existsSync(ledgerFile), '本実行後ledger.jsonが存在する');
+
+    // スナップショット（同じ fixedNow なので時刻が変わらない）
+    const alertBefore = fs.readFileSync(alertFile, 'utf8');
+    const ledgerBefore = fs.readFileSync(ledgerFile, 'utf8');
+
+    // 2回目の dry-run: ファイルが変わらない
+    const code3 = await run(['--dry-run'], { now: fixedNow });
+    assert.equal(code3, 0);
+    const alertAfter = fs.readFileSync(alertFile, 'utf8');
+    const ledgerAfter = fs.readFileSync(ledgerFile, 'utf8');
+    assert.equal(alertBefore, alertAfter, 'dry-run後ALERT.mdの内容が変わっている');
+    assert.equal(ledgerBefore, ledgerAfter, 'dry-run後ledger.jsonの内容が変わっている');
+  });
 });

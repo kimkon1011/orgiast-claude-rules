@@ -29,6 +29,7 @@ import { bodyHash, checkConsistency, statePath, mimeText, render as renderConsis
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
 import { assertSendConsistency, afterSendCleanup } from './send-consistency-check.mjs';
 import { checkChannelReply, assertReplyCheck } from './lib/pre-send-reply-check.mjs';
+import { fetchHistory as fetchSendHistory } from './send-context-check.mjs';
 import { validateWeekdays } from './lib/weekday-validator.mjs';
 import { findSecretaryBookingUrls, SECRETARY_BOOKING_URL_REASON } from './lib/secretary-booking-url.mjs';
 import { acquireSendDedupe, SendDedupeError } from './lib/send-dedupe.mjs';
@@ -487,7 +488,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         return latestOf((thread.messages || []).filter(m => !(m.labelIds || []).includes('DRAFT')).map(m => ({ id: m.id, at: new Date(Number(m.internalDate)).toISOString() })));
         }});
       }
-      assertReplyCheck(await (deps.preSendCheck || checkChannelReply)({ channel: 'gmail', target: contextThreadId, draft: draftText, home: deps.home, fetchImpl, getGmailToken: async () => readonlyToken }));
+      assertReplyCheck(await (deps.preSendCheck || checkChannelReply)({ channel: 'gmail', target: contextThreadId, draft: draftText, home: deps.home, fetchImpl, fetchHistory: deps.fetchHistory || fetchSendHistory, getGmailToken: async () => readonlyToken }));
       const result = await sendDraft({ user, id: args.send, ledger: (deps.loadLedger ?? loadLedger)(), fetchImpl, getToken, draft, allowRepeat: args['allow-repeat'], home: deps.home, acquireDedupe: deps.acquireDedupe,
         consistencyCheck:deps.consistencyCheck, cleanup:deps.cleanup, consistencyDeps:deps.consistencyDeps, temaRecord, env: deps.env, skipHandbackGuard: deps.skipHandbackGuard || externalOnly,
       });

@@ -182,8 +182,9 @@ export function assertReplyCheck(result) {
 export async function checkChannelReply({ channel, target, draft, messages, now, ...options }) {
   if (channel === 'beeper') return checkBeeperReply({ chatID: target, draft, now, ...options });
   if (!messages) {
-    const { fetchHistory } = await import('../send-context-check.mjs');
-    messages = (await fetchHistory(channel, target, options)).messages;
+    // send-context-check との import 循環を作らないため、履歴取得は呼び出し側から渡す
+    if (typeof options.fetchHistory !== 'function') throw Object.assign(new Error('送信前照合: 履歴を読めません（messages か fetchHistory を渡してください）'), { code: 'PRE_SEND_REPLY_BLOCKED', exitCode: 4 });
+    messages = (await options.fetchHistory(channel, target, options)).messages;
   }
   const notes = options.imageNotes || {};
   const normalized = normalizeHistory(messages, { chatID: target }).map(m => ({ ...m,

@@ -15,7 +15,7 @@ import { getDriveToken, driveApi } from './lib/drive-auth.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
 import { ensureKimEditor } from './lib/kim-editor.mjs';
 import { prepareTemaSend } from './lib/unattended-tema.mjs';
-import { getAdapter } from './lib/followup-adapters.mjs';
+import { getAdapter, recordMockSpawn } from './lib/followup-adapters.mjs';
 import { buildPcIdentityIndex, pcMapEntries } from './fleet-pc-identity.mjs';
 import { checkTema, formatTemaFindings, stripTemaRecord } from './lib/tema-check.mjs';
 
@@ -35,6 +35,12 @@ export const AI_FOOTER = '※このメッセージは金の指示でAIが作成�
 const LEDGER_TAB = 'ledger';
 const HISTORY_TAB = 'history';
 const HISTORY_HEADERS = Object.freeze(['時刻', '依頼ID', '状態', '理由', '送信ID', '実行PC', '実行AI']);
+const REQUEST_FLAGS = Object.freeze({
+  kind: 'requestKind', 'requested-by': 'requestedBy', 'evidence-kind': 'evidenceKind', evidence: 'evidence',
+  prereq: 'prereq', 'kim-only': 'kimOnlyAction', 'reassign-to': 'reassignTo',
+  'outcome-source': 'outcomeSource', 'outcome-max-days': 'outcomeMaxDays',
+  'last-outcome-at': 'lastOutcomeAt', 'last-job-result': 'lastJobResult',
+});
 
 const DEFAULT_CONFIG = Object.freeze({
   spreadsheetId: '',
@@ -45,6 +51,8 @@ const DEFAULT_CONFIG = Object.freeze({
   approvalTimeoutMinutes: 120,
   quietHours: { start: '22:00', end: '07:00', tz: 'Asia/Tokyo' },
   alertFile: '~/gb-reports/followup-ledger/ALERT.md',
+  morningReportFile: '~/gb-reports/followup-ledger/MORNING.md',
+  outcomeDefaults: { maxDays: 1 },
   pcAliases: { '000': 'kim-PC', '011': '作業用011' },
   people: {
     'ほなみ': { role: 'cafe-solo', location: '大阪・東邦ハイツ211（カフェ店内・一人勤務）' },
@@ -206,6 +214,83 @@ export function matchDonePattern(text, pattern) {
   }
 }
 
+const JOB_ONLY_EVIDENCE = /^(?:exit\s*0|exitCode\s*=\s*0|status\s*=\s*approved|approved|ok|done)$/i;
+
+export function validateEvidence(evidenceKind, evidence) {
+  const value = evidence == null || evidence === true ? '' : String(evidence).trim();
+  const fail = (reason) => ({ ok: false, reason });
+  if (JOB_ONLY_EVIDENCE.test(value)) return fail('exit 0 や approved は完了ではない');
+  if (!evidenceKind) return { ok: true, reason: '' };
+  if (!value) return fail('完了の実物が無い');
+  if (evidenceKind === 'tracking-number') {
+    if (!/^(?:\d{10,14}|[a-z]{2}\d{9}[a-z]{2})$/i.test(value.replace(/[\s-]/g, ''))) return fail('追跡番号は数字10〜14桁または国際郵便形式が必要');
+  } else if (evidenceKind === 'public-url') {
+    try {
+      const url = new URL(value);
+      const host = url.hostname.toLowerCase();
+      if (!value.startsWith('https://') || url.username || url.password
+        || !host.includes('.') || /(?:^|\.)(?:localhost|local|internal|test|invalid)$/.test(host)
+        || /^(?:127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(host)
+        || host.includes(':')) return fail('公開HTTPS URLが必要（ローカルURLは不可）');
+      if (/(?:^|\.)instagram\.com$/.test(host) && !/^\/(?:p|reel|tv)\/[^/]+/.test(url.pathname)) return fail('Instagramは公開投稿URLが必要');
+    } catch { return fail('公開HTTPS URLが必要'); }
+  } else if (evidenceKind === 'reply-text') {
+    if ([...value].length < 10) return fail('返信本文は10文字以上が必要');
+  } else if (evidenceKind === 'file') {
+    try {
+      const stat = fs.statSync(value);
+      if (!stat.isFile() || stat.size <= 0) return fail('成果物ファイルが空です');
+    } catch { return fail('成果物ファイルが存在しません'); }
+  } else return fail(`未対応の完了の実物種別: ${evidenceKind}`);
+  return { ok: true, reason: '' };
+}
+
+function extractEvidence(kind, text) {
+  const value = String(text || '');
+  if (kind === 'tracking-number') {
+    const candidates = value.match(/(?<![a-z0-9])(?:[a-z]{2}\d{9}[a-z]{2}|\d(?:[\d -]*\d)?)(?![a-z0-9])/gi) || [];
+    return candidates.find((v) => validateEvidence(kind, v).ok) || '';
+  }
+  if (kind === 'public-url') {
+    const candidates = value.match(/https:\/\/[^\s<>"'）)\]、。]+/g) || [];
+    return candidates.find((v) => validateEvidence(kind, v).ok) || '';
+  }
+  return value.trim();
+}
+
+export function checkPrereq(row, { fsImpl = fs } = {}) {
+  return String(row.prereq || '').split(';').map((s) => s.trim())
+    .filter((s) => s.startsWith('file:')).map((s) => s.slice(5))
+    .filter((file) => { try { return !fsImpl.existsSync(file); } catch { return true; } });
+}
+
+export function readOutcome(source, { fsImpl = fs, now = new Date() } = {}) {
+  if (!source) return null;
+  try {
+    const read = (file) => JSON.parse(fsImpl.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+    if (source.startsWith('json:')) return read(source.slice(5));
+    if (!source.startsWith('insta-queue:')) return null;
+    const dir = source.slice('insta-queue:'.length);
+    const entries = fsImpl.readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) => read(path.join(dir, f)));
+    const outcomes = entries.filter((e) => e.postedAt || e.postUrl);
+    const dates = outcomes.map((e) => e.postedAt).filter((d) => Number.isFinite(Date.parse(d)) && Date.parse(d) <= new Date(now).getTime());
+    dates.sort((a, b) => Date.parse(b) - Date.parse(a));
+    return { lastOutcomeAt: dates[0] || '', outcomes, pendingApproved: entries.filter((e) => e.status === 'approved' && !e.postedAt).length, note: '' };
+  } catch { return null; }
+}
+
+export function evaluateOutcomeLiveness(row, snapshot, now = new Date(), config = DEFAULT_CONFIG) {
+  const maxDays = Number(row.outcomeMaxDays || config.outcomeDefaults?.maxDays || 1);
+  const base = Date.parse(snapshot?.lastOutcomeAt || row.lastOutcomeAt || row.requestedAt);
+  if (!Number.isFinite(base) || !(maxDays > 0)) return { state: 'warn', reason: '成果警告: 基準日時または成果許容日数が不明' };
+  const ageDays = (new Date(now).getTime() - base) / 86_400_000;
+  if (ageDays > maxDays && (snapshot?.outcomes || []).length === 0) {
+    return { state: 'stalled', reason: `成果ゼロ: ${maxDays}日以上 実結果なし（ジョブ結果 ${row.lastJobResult || '不明'}・承認済み未投稿 ${snapshot?.pendingApproved || 0}件）。exit 0 や approved は完了ではない` };
+  }
+  if (ageDays > maxDays / 2) return { state: 'warn', reason: `成果警告: 最終成果から${ageDays.toFixed(1)}日（許容${maxDays}日）` };
+  return { state: 'ok', reason: '' };
+}
+
 /**
  * Pure decision helper.
  * @returns {{ action: string, reason?: string, evidence?: string, messageId?: string }}
@@ -217,17 +302,19 @@ export function decideAction(row, replies = [], now = new Date()) {
   const others = (replies || []).filter((m) => !m.isSelf);
   for (const m of others) {
     if (matchDonePattern(m.text, row.donePattern)) {
+      const evidence = extractEvidence(row.evidenceKind, m.text);
+      if (!validateEvidence(row.evidenceKind, evidence).ok || (row.requestKind && row.requestKind !== 'human' && !evidence)) continue;
       return {
         action: 'complete',
         reason: 'done-pattern',
-        evidence: String(m.text || '').slice(0, 80),
+        evidence,
         messageId: m.id || '',
       };
     }
   }
   const constraint = siteConstraint(row);
   if (constraint.blocked) return { action: 'reassign', reason: constraint.reason };
-  if (others.length) {
+  if (others.length && !row.evidenceKind) {
     return {
       action: 'reply_incomplete',
       reason: `返事あり・完了条件未達: ${String(others[0].text || '').slice(0, 80)}`,
@@ -303,6 +390,7 @@ export function loadConfig(configPath = CONFIG_PATH) {
     ...DEFAULT_CONFIG,
     ...raw,
     quietHours: { ...DEFAULT_CONFIG.quietHours, ...(raw.quietHours || {}) },
+    outcomeDefaults: { ...DEFAULT_CONFIG.outcomeDefaults, ...(raw.outcomeDefaults || {}) },
     approverUserIds: Array.isArray(raw.approverUserIds) ? raw.approverUserIds.map(String) : [],
     pcAliases: {
       ...DEFAULT_CONFIG.pcAliases,
@@ -324,6 +412,8 @@ function saveConfig(config, configPath = CONFIG_PATH) {
     approvalTimeoutMinutes: rest.approvalTimeoutMinutes ?? DEFAULT_CONFIG.approvalTimeoutMinutes,
     quietHours: rest.quietHours || DEFAULT_CONFIG.quietHours,
     alertFile: rest.alertFile || DEFAULT_CONFIG.alertFile,
+    morningReportFile: rest.morningReportFile || DEFAULT_CONFIG.morningReportFile,
+    outcomeDefaults: rest.outcomeDefaults || DEFAULT_CONFIG.outcomeDefaults,
     pcAliases: rest.pcAliases || DEFAULT_CONFIG.pcAliases,
     people: rest.people || DEFAULT_CONFIG.people,
   });
@@ -514,6 +604,17 @@ export function rowFromArgs(flags, { now = new Date(), config = DEFAULT_CONFIG }
     assigneeLocation: String(flags.location || person?.location || ''),
     taskSite: String(flags.site || ''),
     temaCheck,
+    requestKind: String(flags.kind || 'human'),
+    requestedBy: String(flags['requested-by'] || ''),
+    evidenceKind: String(flags['evidence-kind'] || ''),
+    evidence: String(flags.evidence || ''),
+    prereq: String(flags.prereq || ''),
+    kimOnlyAction: String(flags['kim-only'] || ''),
+    reassignTo: String(flags['reassign-to'] || ''),
+    outcomeSource: String(flags['outcome-source'] || ''),
+    outcomeMaxDays: Number(flags['outcome-max-days'] || 0),
+    lastOutcomeAt: String(flags['last-outcome-at'] || ''),
+    lastJobResult: String(flags['last-job-result'] || ''),
   });
   const constraint = siteConstraint(row);
   if (constraint.blocked) {
@@ -541,7 +642,7 @@ export function setRowStatus(row, status, reason = '') {
 function appendHistory(store, { id, status, reason, messageId = '', pc = '', ai = '', at = toIsoJst() }) {
   store.history = store.history || [];
   store.history.push({
-    at, id, status, reason: reason || '', messageId: messageId || '', pc: pc || os.hostname(), ai: ai || process.env.FOLLOWUP_OWNER_AI || 'followup-ledger',
+    _pendingSheet: true, at, id, status, reason: reason || '', messageId: messageId || '', pc: pc || os.hostname(), ai: ai || process.env.FOLLOWUP_OWNER_AI || 'followup-ledger',
   });
 }
 
@@ -579,7 +680,7 @@ async function escalate(row, reason, ctx) {
   // 止まった（前提欠落）はそのまま。それ以外はエスカレーションへ。
   if (row.status !== '止まった') setRowStatus(row, 'エスカレーション', reason);
   else setRowStatus(row, '止まった', reason || row.statusReason);
-  appendHistory(store, { id: row.id, status: row.status, reason, ai: row.ownerAi, pc: row.ownerPc });
+  appendHistory(store, { id: row.id, status: row.status, reason, ai: row.ownerAi, pc: row.ownerPc, at: toIsoJst(resolveNow(ctx.now)) });
 
   const target = String(row.escalateTo || 'kim-inbox');
   const body = [
@@ -625,6 +726,10 @@ async function escalateKimInbox(id, body, ctx) {
 
   if (dryRun) {
     alerts.push(`[dry-run] kim-inbox ask: ${id}`);
+    return;
+  }
+  if (process.env.FOLLOWUP_ADAPTER === 'mock' && !ctx.spawn) {
+    recordMockSpawn(process.execPath, [kimInbox, '--add', '--kind', 'ask', '--dedupe-key', `followup-ledger:${id}`], body);
     return;
   }
 
@@ -742,14 +847,24 @@ async function ensureTabs(sheets, spreadsheetId, owner = DEFAULT_CONFIG.owner) {
   if (!titles.has(HISTORY_TAB)) {
     requests.push({ addSheet: { properties: { title: HISTORY_TAB, gridProperties: { frozenRowCount: 1, columnCount: HISTORY_HEADERS.length } } } });
   }
-  if (requests.length) {
-    const token = await getDriveToken({ scope: 'https://www.googleapis.com/auth/spreadsheets', impersonate: owner });
-    const res = await gwsFetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}:batchUpdate`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requests }),
+  // 既存台帳の列数も拡張する。ヘッダー書込だけでは旧gridの末尾を越える。
+  for (const [title, count] of [[LEDGER_TAB, HEADERS.length], [HISTORY_TAB, HISTORY_HEADERS.length]]) {
+    const tab = meta.sheets?.find((s) => s.properties.title === title)?.properties;
+    if (tab && Number(tab.gridProperties?.columnCount) < count) requests.push({
+      updateSheetProperties: { properties: { sheetId: tab.sheetId, gridProperties: { columnCount: count } }, fields: 'gridProperties.columnCount' },
     });
-    if (!res.ok) throw new Error(`Sheets addSheet HTTP ${res.status}`);
+  }
+  if (requests.length) {
+    if (sheets.updateStructure) await sheets.updateStructure(spreadsheetId, requests);
+    else {
+      const token = await getDriveToken({ scope: 'https://www.googleapis.com/auth/spreadsheets', impersonate: owner });
+      const res = await gwsFetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}:batchUpdate`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requests }),
+      });
+      if (!res.ok) throw new Error(`Sheets structure update HTTP ${res.status}`);
+    }
   }
   const lastCol = columnLetter(HEADERS.length);
   const histCol = columnLetter(HISTORY_HEADERS.length);
@@ -774,12 +889,12 @@ function columnLetter(n) {
   return s || 'A';
 }
 
-async function loadStore({ storeMode, config }) {
+async function loadStore({ storeMode, config, sheets: suppliedSheets }) {
   if (storeMode === 'local' || !config.spreadsheetId) {
     return { mode: 'local', store: loadLocalStore(), sheetError: config.spreadsheetId ? null : 'spreadsheetId 未設定' };
   }
   try {
-    const sheets = createSheetsClient({
+    const sheets = suppliedSheets || createSheetsClient({
       getToken: (opts) => getDriveToken({ ...opts, impersonate: config.owner || DEFAULT_CONFIG.owner }),
     });
     await ensureTabs(sheets, config.spreadsheetId, config.owner || DEFAULT_CONFIG.owner);
@@ -792,7 +907,14 @@ async function loadStore({ storeMode, config }) {
       at: v[0] || '', id: v[1] || '', status: v[2] || '', reason: v[3] || '',
       messageId: v[4] || '', pc: v[5] || '', ai: v[6] || '',
     }));
-    const store = { schema: 'followup-ledger/v1', items, history, pendingSync: false, syncError: null, updatedAt: toIsoJst() };
+    // 未送信の履歴は再読込で失わない。append成功後の応答断も重複除去する。
+    const historyKey = (h) => JSON.stringify([h.at, h.id, h.status, h.reason, h.messageId, h.pc, h.ai]);
+    const known = new Set(history.map(historyKey));
+    for (const h of loadLocalStore().history.filter((h) => h._pendingSheet)) {
+      if (!known.has(historyKey(h))) { history.push(h); known.add(historyKey(h)); }
+    }
+    const pendingSync = history.some((h) => h._pendingSheet);
+    const store = { schema: 'followup-ledger/v1', items, history, pendingSync, syncError: pendingSync ? '履歴のシート同期待ち' : null, updatedAt: toIsoJst() };
     saveLocalStore(store);
     return { mode: 'sheet', store, sheets, sheetError: null };
   } catch (error) {
@@ -847,18 +969,28 @@ async function persistRow(ctx, row, { previousUpdatedAt } = {}) {
     await sheets.append(config.spreadsheetId, `${quoteTab(LEDGER_TAB)}!A:${lastCol}`, [rowToValues(row)]);
   }
 
-  // Append latest history entries not yet on sheet (best-effort: append last one)
-  const lastHist = (store.history || []).filter((h) => h.id === row.id).at(-1);
-  if (lastHist) {
-    await sheets.append(config.spreadsheetId, `${quoteTab(HISTORY_TAB)}!A:G`, [[
-      lastHist.at, lastHist.id, lastHist.status, lastHist.reason, lastHist.messageId, lastHist.pc, lastHist.ai,
-    ]]);
-  }
-
-  store.pendingSync = false;
-  store.syncError = null;
-  saveLocalStore(store);
+  await persistHistory(ctx);
   return row;
+}
+
+
+async function persistHistory(ctx) {
+  const { store, storeMode, config, sheets } = ctx;
+  if (storeMode === 'sheet' && sheets && config.spreadsheetId) {
+    const pending = store.history.filter((h) => h._pendingSheet);
+    try {
+      if (pending.length) await sheets.append(config.spreadsheetId, `${quoteTab(HISTORY_TAB)}!A:G`, pending.map((h) => [
+        h.at, h.id, h.status, h.reason, h.messageId, h.pc, h.ai,
+      ]));
+      for (const h of pending) delete h._pendingSheet;
+      store.pendingSync = false;
+      store.syncError = null;
+    } catch (error) {
+      store.pendingSync = true;
+      store.syncError = String(error.message || error);
+    }
+  }
+  saveLocalStore(store);
 }
 
 function alertPath(config, flags = {}) {
@@ -878,6 +1010,7 @@ export function renderAlert({
   pendingSync = false,
   syncError = null,
   quietDue = [],
+  outcomeWarnings = [],
 } = {}) {
   const stalledList = stalled.length ? stalled : alertRows.filter((r) => r.status === '止まった');
   const escalatedList = escalated.length ? escalated : alertRows.filter((r) => r.status === 'エスカレーション');
@@ -919,6 +1052,10 @@ export function renderAlert({
     lines.push('', '## 止まった');
     for (const r of stalledList) lines.push(`- ${r.id}: ${r.statusReason || ''}`);
   }
+  if (outcomeWarnings.length) {
+    lines.push('', '## 成果警告');
+    for (const r of outcomeWarnings) lines.push(`- ${r.id}: ${r._outcomeReason || r.statusReason || ''}`);
+  }
   if (alerts.length) {
     lines.push('', '## 詳細');
     for (const a of alerts) lines.push(`- ${a}`);
@@ -953,7 +1090,7 @@ async function cmdInit(flags) {
 async function cmdAdd(flags, ctxBase = {}) {
   const config = ctxBase.config || loadConfig();
   const storeMode = flags.store === 'local' || ctxBase.storeMode === 'local' ? 'local' : (config.spreadsheetId ? 'sheet' : 'local');
-  const loaded = await loadStore({ storeMode, config });
+  const loaded = await loadStore({ storeMode, config, sheets: ctxBase.sheets });
   const store = loaded.store;
   const now = resolveNow(ctxBase.now);
   const row = rowFromArgs(flags, { now, config });
@@ -1020,6 +1157,12 @@ async function sendApprovalRequest(row, ctx) {
 
 async function performNudge(row, ctx) {
   const { config, store, dryRun, alerts, noNudge, force, now = new Date() } = ctx;
+  if (row.status === '完了') return { skipped: true, reason: 'already-complete' };
+  const missing = checkPrereq(row);
+  if (missing.length) {
+    await stopForPrereq(row, missing, ctx);
+    return { skipped: true, reason: 'prereq-missing' };
+  }
   const constraint = siteConstraint(row);
   if (constraint.blocked) {
     const reason = prependReason(constraint.reason, row.statusReason);
@@ -1088,8 +1231,8 @@ async function performNudge(row, ctx) {
   row.nudgeCount = Number(row.nudgeCount || 0) + 1;
   row.lastSentAt = toIsoJst(now);
   row.lastSentId = sent.messageId || '';
-  setRowStatus(row, '催促済み', 'nudge-sent');
-  appendHistory(store, { id: row.id, status: '催促済み', reason: 'nudge', messageId: sent.messageId });
+  setRowStatus(row, row.evidenceKind ? '依頼中' : '催促済み', row.evidenceKind ? '実物未確認・nudge-sent' : 'nudge-sent');
+  appendHistory(store, { id: row.id, status: row.status, reason: 'nudge', messageId: sent.messageId });
   alerts.push(`催促送信: ${row.id}`);
   ctx.nudges = ctx.nudges || [];
   ctx.nudges.push({ id: row.id, text, messageId: sent.messageId });
@@ -1151,6 +1294,28 @@ async function checkApproval(row, ctx) {
 async function processRow(row, ctx) {
   const { store, alerts, now = new Date(), noNudge, dryRun } = ctx;
   const previousUpdatedAt = row.updatedAt;
+  row.lastCheckedAt = toIsoJst(now);
+  row.nextCheckAt = toIsoJst(new Date(now.getTime() + Number(row.intervalMin || 15) * 60_000));
+  const missing = checkPrereq(row);
+  if (missing.length) {
+    await stopForPrereq(row, missing, ctx);
+    await persistRow(ctx, row, { previousUpdatedAt });
+    return;
+  }
+  const recovered = row.status === '止まった' && row.statusReason.startsWith('前提欠落:');
+  if (recovered) {
+    setRowStatus(row, '依頼中', '前提が揃った');
+    appendHistory(store, { id: row.id, status: row.status, reason: row.statusReason, at: toIsoJst(now) });
+  }
+  if (row.requestKind === 'automation' || row.outcomeSource) {
+    await applyOutcome(row, outcomeSnapshot(row, store, now), ctx);
+    await persistRow(ctx, row, { previousUpdatedAt });
+    return;
+  }
+  if (recovered) {
+    await persistRow(ctx, row, { previousUpdatedAt });
+    return;
+  }
   const adapter = getAdapter(row.channel, ctx.adapterDeps);
 
   if (row.status === '承認待ち') {
@@ -1175,6 +1340,7 @@ async function processRow(row, ctx) {
   const decision = decideAction(row, fetched.messages, now);
 
   if (decision.action === 'complete') {
+    row.evidence = decision.evidence;
     setRowStatus(row, '完了', decision.reason);
     appendHistory(store, {
       id: row.id, status: '完了',
@@ -1225,6 +1391,11 @@ async function escalateKimInboxInfo(id, body, ctx) {
   const kimInbox = path.join(REPO_ROOT, 'tools', 'kim-inbox.mjs');
   ctx.escalations = ctx.escalations || [];
   ctx.escalations.push({ target: 'kim-inbox-info', id, body });
+  if (ctx.dryRun || (process.env.FOLLOWUP_ADAPTER === 'mock' && !ctx.spawn)) {
+    if (process.env.FOLLOWUP_ADAPTER === 'mock') recordMockSpawn(process.execPath, [kimInbox, '--add', '--kind', 'info', '--dedupe-key', `followup-ledger-info:${id}`], body);
+    alerts.push(`[記録のみ] kim-inbox info: ${id}`);
+    return;
+  }
   const tmp = path.join(homeRoot(), `info-${id}.${process.pid}.txt`);
   fs.mkdirSync(path.dirname(tmp), { recursive: true });
   fs.writeFileSync(tmp, body);
@@ -1239,10 +1410,170 @@ async function escalateKimInboxInfo(id, body, ctx) {
   }
 }
 
+async function stopOnce(row, reason, ctx) {
+  setRowStatus(row, '止まった', reason);
+  const day = toIsoJst(ctx.now).slice(0, 10);
+  const category = reason.split(':')[0] + ':';
+  const exists = ctx.store.history.some((h) => h.id === row.id && h.status === '止まった'
+    && h.reason.startsWith(category) && String(h.at).slice(0, 10) === day);
+  if (!exists) await escalate({ ...row, escalateTo: 'kim-inbox' }, reason, ctx);
+}
+
+async function stopForPrereq(row, missing, ctx) {
+  const reason = `前提欠落: ${missing.map((p) => `${p}（ファイルが無い）`).join('、')}`
+    + (row.kimOnlyAction ? `／金さんだけができること: ${row.kimOnlyAction}` : '');
+  await stopOnce(row, reason, ctx);
+}
+
+function outcomeSnapshot(row, store, now) {
+  const source = readOutcome(row.outcomeSource, { now });
+  if (source) return source;
+  const observed = [...store.history].reverse().find((h) => h.id === row.id && h.reason.startsWith('outcome-observation:'));
+  if (observed) {
+    try { return JSON.parse(observed.reason.slice('outcome-observation:'.length)); } catch { /* fall back */ }
+  }
+  return null;
+}
+
+async function applyOutcome(row, snapshot, ctx) {
+  if (snapshot?.lastOutcomeAt && Number.isFinite(Date.parse(snapshot.lastOutcomeAt)) && Date.parse(snapshot.lastOutcomeAt) <= ctx.now.getTime()) {
+    if (!row.lastOutcomeAt || Date.parse(snapshot.lastOutcomeAt) > Date.parse(row.lastOutcomeAt)) row.lastOutcomeAt = snapshot.lastOutcomeAt;
+  }
+  const result = evaluateOutcomeLiveness(row, snapshot, ctx.now, ctx.config);
+  if (result.state === 'stalled') {
+    const reason = result.reason + (row.kimOnlyAction ? `／金さんだけができること: ${row.kimOnlyAction}` : '');
+    await stopOnce(row, reason, ctx);
+  } else if (row.status === '止まった' && row.statusReason.startsWith('成果ゼロ:')) {
+    setRowStatus(row, '依頼中', result.reason || '成果を確認');
+    appendHistory(ctx.store, { id: row.id, status: row.status, reason: row.statusReason, at: toIsoJst(ctx.now) });
+  }
+  return result;
+}
+
+function collectOutcomeWarnings(store, now, config) {
+  return store.items.filter((r) => r.status !== '完了' && (r.requestKind === 'automation' || r.outcomeSource))
+    .flatMap((row) => {
+      const result = evaluateOutcomeLiveness(row, outcomeSnapshot(row, store, now), now, config);
+      return result.state === 'ok' ? [] : [{ ...row, _outcomeReason: result.reason }];
+    });
+}
+
+async function cmdOutcome(flags, ctxBase = {}) {
+  const config = ctxBase.config || loadConfig();
+  const storeMode = flags.store === 'local' || ctxBase.storeMode === 'local' ? 'local' : (config.spreadsheetId ? 'sheet' : 'local');
+  const loaded = await loadStore({ storeMode, config, sheets: ctxBase.sheets });
+  const now = resolveNow(ctxBase.now);
+  const row = loaded.store.items.find((r) => r.id === String(flags.id || ''));
+  if (!row) throw new Error('依頼IDが見つかりません');
+  const previousUpdatedAt = row.updatedAt;
+  const ctx = { ...ctxBase, ...loaded, storeMode, config, now, alerts: [], escalations: [], dryRun: Boolean(flags['dry-run']) };
+  if (flags['job-result'] != null) {
+    const at = flags['job-at'] || toIsoJst(now);
+    if (!Number.isFinite(Date.parse(at)) || !/^-?\d+$/.test(String(flags['job-result']))) throw new Error('ジョブ結果・日時が不正です');
+    row.lastJobResult = `${flags['job-result']}@${at}`;
+  }
+  const snapshot = { lastOutcomeAt: row.lastOutcomeAt, outcomes: [], pendingApproved: 0, ...(outcomeSnapshot(row, loaded.store, now) || {}) };
+  if (flags['last-outcome-at'] != null) {
+    if (!Number.isFinite(Date.parse(flags['last-outcome-at'])) || Date.parse(flags['last-outcome-at']) > now.getTime()) throw new Error('最終成果の日時が不正です');
+    row.lastOutcomeAt = String(flags['last-outcome-at']);
+    snapshot.lastOutcomeAt = row.lastOutcomeAt;
+  }
+  if (flags['pending-approved'] != null) {
+    const count = Number(flags['pending-approved']);
+    if (!Number.isInteger(count) || count < 0) throw new Error('承認済み未投稿件数が不正です');
+    snapshot.pendingApproved = count;
+  }
+  // キュー内の設定や本文を履歴へ丸ごと転記せず、観測した成果の事実だけ残す。
+  const observation = {
+    lastOutcomeAt: snapshot.lastOutcomeAt,
+    outcomes: (snapshot.outcomes || []).map((o) => ({ postedAt: o?.postedAt || '', postUrl: o?.postUrl || '' })),
+    pendingApproved: snapshot.pendingApproved,
+  };
+  appendHistory(loaded.store, { id: row.id, status: row.status, reason: `outcome-observation:${JSON.stringify(observation)}`, at: toIsoJst(now), pc: currentPcName() });
+  if (flags['prereq-missing']) {
+    const file = String(flags['prereq-missing']);
+    const entries = String(row.prereq || '').split(';').filter(Boolean);
+    if (!entries.includes(`file:${file}`)) row.prereq = [...entries, `file:${file}`].join(';');
+    await stopForPrereq(row, [file], ctx);
+  } else {
+    // 他PCからの観測時は、そのPCにない前提パスを勝手に検査しない。
+    await applyOutcome(row, snapshot, ctx);
+  }
+  await persistRow(ctx, row, { previousUpdatedAt });
+  console.log(JSON.stringify({ ok: true, id: row.id, status: row.status, reason: row.statusReason }));
+  return 0;
+}
+
+function missingOwnerRows(store, now, thisPc, pcOpts) {
+  return store.items.filter((r) => r.status !== '完了' && !isOwnerPcMatch(r.ownerPc, thisPc, pcOpts)
+    && (!r.lastCheckedAt || !Number.isFinite(Date.parse(r.lastCheckedAt)) || now.getTime() - Date.parse(r.lastCheckedAt) > watchdogStaleMs(r)))
+    .map((r) => ({ ...r, _alertReason: `担当PC ${r.ownerPc} がこの依頼を見ていない（最終確認 ${r.lastCheckedAt || 'なし'}）` }));
+}
+
+const REQUEST_LABELS = { human: '人', globo: 'グロボ', 'claude-code': 'Claude Code', automation: '自動化' };
+function reportTable(rows) {
+  const cell = (s) => String(s || '').replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>');
+  return [
+    '| 依頼ID | 依頼種別 | 依頼元 | 依頼先 | 内容 | 期限 | 状態 | 理由 | 金さんだけができること | 付け替え先 |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    ...rows.map((r) => `| ${[r.id, REQUEST_LABELS[r.requestKind || 'human'] || r.requestKind, r.requestedBy, r.to, r.task, r.dueAt,
+      r.status, [r.statusReason, r._alertReason, r._outcomeReason].filter(Boolean).join('／'), r.kimOnlyAction, r.reassignTo].map(cell).join(' | ')} |`),
+  ];
+}
+
+async function cmdReport(flags, ctxBase = {}) {
+  const config = ctxBase.config || loadConfig();
+  const storeMode = flags.store === 'local' || ctxBase.storeMode === 'local' ? 'local' : (config.spreadsheetId ? 'sheet' : 'local');
+  const loaded = await loadStore({ storeMode, config, sheets: ctxBase.sheets });
+  const { store } = loaded;
+  const now = resolveNow(ctxBase.now);
+  const missingOwner = missingOwnerRows(store, now, currentPcName({ hostname: ctxBase.hostname }), {
+    pcMap: ctxBase.pcMap || loadFleetPcMap(), pcAliases: config.pcAliases,
+  });
+  const outcomeWarnings = collectOutcomeWarnings(store, now, config);
+  const problems = store.items.filter((r) => r.status !== '完了' && (Date.parse(r.dueAt) < now.getTime()
+    || ['止まった', 'エスカレーション', '承認待ち'].includes(r.status)));
+  const combined = new Map();
+  for (const row of [...problems, ...missingOwner, ...outcomeWarnings]) combined.set(row.id, { ...combined.get(row.id), ...row });
+  const sections = [
+    { title: '金さんの手が必要', rows: [...combined.values()].filter((r) => r.kimOnlyAction) },
+    { title: '止まった・期限超過', rows: problems.filter((r) => !r.kimOnlyAction) },
+    { title: '担当PC不在', rows: missingOwner },
+    { title: '成果警告', rows: outcomeWarnings },
+  ];
+  const lines = ['# followup-ledger 朝の報告', `時刻: ${toIsoJst(now)}`];
+  if (store.pendingSync || loaded.sheetError) lines.push(`シート未同期（${store.syncError || loaded.sheetError}）`);
+  for (const section of sections) lines.push('', `## ${section.title}`, '', ...(section.rows.length ? reportTable(section.rows) : ['該当なし']));
+  const body = `${lines.join('\n')}\n`;
+  const file = expandHome(String(flags.out || config.morningReportFile || DEFAULT_CONFIG.morningReportFile));
+  atomicText(file, body);
+  const key = `followup-morning-${toIsoJst(now).slice(0, 10).replace(/-/g, '')}`;
+  const spawns = [];
+  if (flags['kim-inbox'] && !store.history.some((h) => h.id === key && h.reason === 'morning-report')) {
+    const args = [path.join(REPO_ROOT, 'tools', 'kim-inbox.mjs'), '--add', '--kind', 'info', '--force-kind', '--body-file', file, '--dedupe-key', key, '--source', 'followup-ledger'];
+    const mock = process.env.FOLLOWUP_ADAPTER === 'mock';
+    const dryRun = Boolean(flags['dry-run'] || ctxBase.dryRun);
+    spawns.push({ command: process.execPath, args });
+    if (dryRun && !flags.json) console.log(`[dry-run] kim-inbox info: ${key}`);
+    if (mock) recordMockSpawn(process.execPath, args, body);
+    else if (!dryRun) {
+      const result = (ctxBase.spawn || spawnSync)(process.execPath, args, { encoding: 'utf8', windowsHide: true, timeout: 60_000, env: process.env });
+      if (result.status !== 0) throw new Error(`朝の報告のkim-inbox登録失敗: ${result.error?.message || result.stderr || result.stdout || result.status}`);
+    }
+    if (!dryRun) {
+      appendHistory(store, { id: key, status: '報告', reason: 'morning-report', at: toIsoJst(now), pc: currentPcName() });
+      await persistHistory({ ...loaded, storeMode, config });
+    }
+  }
+  if (flags.json) console.log(JSON.stringify({ file, sections, spawns, pendingSync: store.pendingSync }, null, 2));
+  else console.log(body);
+  return 0;
+}
+
 async function cmdCheck(flags, ctxBase = {}) {
   const config = ctxBase.config || loadConfig();
   const storeMode = flags.store === 'local' || ctxBase.storeMode === 'local' ? 'local' : (config.spreadsheetId ? 'sheet' : 'local');
-  const loaded = await loadStore({ storeMode, config });
+  const loaded = await loadStore({ storeMode, config, sheets: ctxBase.sheets });
   const store = loaded.store;
   const now = resolveNow(ctxBase.now);
   const alerts = [];
@@ -1259,7 +1590,8 @@ async function cmdCheck(flags, ctxBase = {}) {
   };
 
   const dueRows = store.items.filter((r) => {
-    if (r.status === '完了' || r.status === '止まった' || r.status === 'エスカレーション') return false;
+    if (r.status === '完了') return false;
+    if (['止まった', 'エスカレーション'].includes(r.status) && !/^(前提欠落:|成果ゼロ:)/.test(r.statusReason)) return false;
     if (flags.id && r.id !== String(flags.id)) return false;
     const next = Date.parse(r.nextCheckAt || 0);
     if (!Number.isFinite(next) || next <= now.getTime()) return true;
@@ -1323,15 +1655,7 @@ async function cmdCheck(flags, ctxBase = {}) {
       watchdogWrote = true;
     }
   }
-  if (watchdogWrote) {
-    saveLocalStore(store);
-    if (storeMode === 'sheet' && loaded.sheets && config.spreadsheetId) {
-      // best-effort: history append for watchdog is local; sheet sync on next owner write
-      store.pendingSync = true;
-      store.syncError = store.syncError || 'watchdog history local';
-      saveLocalStore(store);
-    }
-  }
+  if (watchdogWrote || store.history.some((h) => h._pendingSheet)) await persistHistory(ctx);
 
   const stalled = store.items.filter((r) => r.status === '止まった');
   const escalated = store.items.filter((r) => r.status === 'エスカレーション');
@@ -1351,6 +1675,7 @@ async function cmdCheck(flags, ctxBase = {}) {
     pendingSync: store.pendingSync,
     syncError: store.syncError || loaded.sheetError,
     quietDue,
+    outcomeWarnings: collectOutcomeWarnings(store, now, config),
   });
 
   const summary = {
@@ -1376,7 +1701,7 @@ async function cmdCheck(flags, ctxBase = {}) {
 async function cmdNudge(flags, ctxBase = {}) {
   const config = ctxBase.config || loadConfig();
   const storeMode = flags.store === 'local' || ctxBase.storeMode === 'local' ? 'local' : (config.spreadsheetId ? 'sheet' : 'local');
-  const loaded = await loadStore({ storeMode, config });
+  const loaded = await loadStore({ storeMode, config, sheets: ctxBase.sheets });
   const store = loaded.store;
   const id = String(flags.id || '');
   if (!id) throw new Error('--id が必要です');
@@ -1398,7 +1723,8 @@ async function cmdNudge(flags, ctxBase = {}) {
   const previousUpdatedAt = row.updatedAt;
   const result = await performNudge(row, ctx);
   row.lastCheckedAt = toIsoJst(ctx.now);
-  row.nextCheckAt = toIsoJst(new Date(ctx.now.getTime() + Number(row.intervalMin || 15) * 60_000));
+  row.nextCheckAt = result?.reason === 'quiet-hours' ? result.nextCheckAt
+    : toIsoJst(new Date(ctx.now.getTime() + Number(row.intervalMin || 15) * 60_000));
   await persistRow(ctx, row, { previousUpdatedAt });
   writeAlert(alertPath(config, flags), {
     now: ctx.now, checked: 1,
@@ -1414,15 +1740,20 @@ async function cmdNudge(flags, ctxBase = {}) {
 async function cmdComplete(flags, ctxBase = {}) {
   const config = ctxBase.config || loadConfig();
   const storeMode = flags.store === 'local' || ctxBase.storeMode === 'local' ? 'local' : (config.spreadsheetId ? 'sheet' : 'local');
-  const loaded = await loadStore({ storeMode, config });
+  const loaded = await loadStore({ storeMode, config, sheets: ctxBase.sheets });
   const store = loaded.store;
   const id = String(flags.id || '');
-  const evidence = String(flags.evidence || '');
+  const evidence = flags.evidence === true ? '' : String(flags.evidence || '').trim();
   if (!id) throw new Error('--id が必要です');
-  if (!evidence) throw new Error('--evidence が必要です');
   const row = store.items.find((r) => r.id === id);
   if (!row) throw new Error(`依頼IDが見つかりません: ${id}`);
+  const validation = validateEvidence(row.evidenceKind, evidence);
+  if (!validation.ok || (!evidence && row.requestKind !== 'human')) {
+    console.error(validation.ok ? '完了の実物が無い' : validation.reason);
+    return 2;
+  }
   const previousUpdatedAt = row.updatedAt;
+  row.evidence = evidence;
   setRowStatus(row, '完了', 'manual-complete');
   appendHistory(store, { id, status: '完了', reason: `証拠: ${evidence.slice(0, 200)}` });
   await persistRow({ ...loaded, storeMode, config, store }, row, { previousUpdatedAt });
@@ -1433,7 +1764,7 @@ async function cmdComplete(flags, ctxBase = {}) {
 async function cmdStop(flags, ctxBase = {}) {
   const config = ctxBase.config || loadConfig();
   const storeMode = flags.store === 'local' || ctxBase.storeMode === 'local' ? 'local' : (config.spreadsheetId ? 'sheet' : 'local');
-  const loaded = await loadStore({ storeMode, config });
+  const loaded = await loadStore({ storeMode, config, sheets: ctxBase.sheets });
   const store = loaded.store;
   const id = String(flags.id || '');
   const reason = String(flags.reason || '');
@@ -1456,7 +1787,7 @@ async function cmdStop(flags, ctxBase = {}) {
 async function cmdStatus(flags, ctxBase = {}) {
   const config = ctxBase.config || loadConfig();
   const storeMode = flags.store === 'local' || ctxBase.storeMode === 'local' ? 'local' : (config.spreadsheetId ? 'sheet' : 'local');
-  const loaded = await loadStore({ storeMode, config });
+  const loaded = await loadStore({ storeMode, config, sheets: ctxBase.sheets });
   let items = loaded.store.items;
   if (!flags.all) items = items.filter((r) => r.status !== '完了');
   if (flags.json) {
@@ -1505,6 +1836,7 @@ async function cmdSeed(flags, ctxBase = {}) {
       location: raw.assigneeLocation || raw['居住地・最寄り'],
       site: raw.taskSite || raw['作業場所'],
       'tema-check': raw.temaCheck || raw['手間チェック記録'],
+      ...Object.fromEntries(Object.entries(REQUEST_FLAGS).map(([flag, field]) => [flag, raw[field] ?? raw[HEADERS[FIELDS.indexOf(field)]]])),
       upsert: flags.upsert,
       store: flags.store,
     };
@@ -1517,18 +1849,23 @@ async function cmdSeed(flags, ctxBase = {}) {
 async function cmdAlert(flags, ctxBase = {}) {
   const config = ctxBase.config || loadConfig();
   const storeMode = flags.store === 'local' || ctxBase.storeMode === 'local' ? 'local' : (config.spreadsheetId ? 'sheet' : 'local');
-  const loaded = await loadStore({ storeMode, config });
+  const loaded = await loadStore({ storeMode, config, sheets: ctxBase.sheets });
+  const now = resolveNow(ctxBase.now);
+  const missingOwner = missingOwnerRows(loaded.store, now, currentPcName({ hostname: ctxBase.hostname }), {
+    pcMap: ctxBase.pcMap || loadFleetPcMap(), pcAliases: config.pcAliases,
+  });
   const stalled = loaded.store.items.filter((r) => r.status === '止まった');
   const escalated = loaded.store.items.filter((r) => r.status === 'エスカレーション');
   const awaitingApproval = loaded.store.items.filter((r) => r.status === '承認待ち');
-  const alertRows = [...stalled, ...escalated, ...awaitingApproval];
+  const alertRows = [...new Map([...stalled, ...escalated, ...awaitingApproval, ...missingOwner].map((r) => [r.id, r])).values()];
   const file = writeAlert(alertPath(config, flags), {
-    now: new Date(),
+    now,
     checked: 0,
     stalled,
     escalated,
     awaitingApproval,
-    missingOwner: [],
+    missingOwner,
+    outcomeWarnings: collectOutcomeWarnings(loaded.store, now, config),
     alertRows,
     alerts: loaded.store.pendingSync ? [`シート未同期（${loaded.store.syncError || '理由不明'}）`] : [],
     pendingSync: loaded.store.pendingSync,
@@ -1553,6 +1890,8 @@ export async function main(argv = process.argv.slice(2), ctxBase = {}) {
     case 'stop': return cmdStop(flags, ctx);
     case 'seed': return cmdSeed(flags, ctx);
     case 'alert': return cmdAlert(flags, ctx);
+    case 'outcome': return cmdOutcome(flags, ctx);
+    case 'report': return cmdReport(flags, ctx);
     default:
       throw new Error(`未知のサブコマンド: ${cmd}`);
   }

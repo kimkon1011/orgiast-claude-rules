@@ -6,6 +6,8 @@ export const HEADERS = Object.freeze([
   '最終確認', '最終送信', '最終送信ID', '次回確認', '催促文', '案件', '備考', '更新時刻',
   '担当者区分', '居住地・最寄り', '作業場所',
   '手間チェック記録',
+  '依頼種別', '依頼元', '完了の実物種別', '完了の実物', '前提',
+  '金さんだけができること', '付け替え先', '成果ソース', '成果許容日数', '最終成果', '最終ジョブ結果',
 ]);
 
 export const FIELDS = Object.freeze([
@@ -15,6 +17,8 @@ export const FIELDS = Object.freeze([
   'lastCheckedAt', 'lastSentAt', 'lastSentId', 'nextCheckAt', 'nudgeText', 'caseName', 'note', 'updatedAt',
   'assigneeRole', 'assigneeLocation', 'taskSite',
   'temaCheck',
+  'requestKind', 'requestedBy', 'evidenceKind', 'evidence', 'prereq',
+  'kimOnlyAction', 'reassignTo', 'outcomeSource', 'outcomeMaxDays', 'lastOutcomeAt', 'lastJobResult',
 ]);
 
 export function normalizeRow(row = {}) {
@@ -32,6 +36,8 @@ export function normalizeRow(row = {}) {
   out.assigneeLocation = String(out.assigneeLocation || '');
   out.taskSite = String(out.taskSite || '');
   out.temaCheck = String(out.temaCheck || '');
+  out.requestKind = String(out.requestKind || 'human');
+  out.outcomeMaxDays = Number(out.outcomeMaxDays || 0);
   return out;
 }
 

@@ -10,6 +10,8 @@
     "end": "07:00",
     "tz": "Asia/Tokyo"
   },
+  "morningReportFile": "~/gb-reports/followup-ledger/MORNING.md",
+  "outcomeDefaults": { "maxDays": 1 },
   "alertFile": "~/gb-reports/followup-ledger/ALERT.md",
   "pcAliases": {
     "000": "kim-PC",

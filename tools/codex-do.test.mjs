@@ -9,7 +9,7 @@ import { skipCoolingBackends } from './fallback-backend-health.mjs';
 import { runGeminiBudgetGuard } from './gemini-budget-guard.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, fallbackBackendFailureDomain, shouldSkipFallbackBackendAfterTimeout, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, shouldAbortFirstOutputStall, deepseekFirstOutputTimeoutSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, reserveGeminiLaunch, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, cursorAgentChildEnv, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder, hasAbortCondition, isIntentionalAbort, isHelpInstruction } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, assessFallbackQuality, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, fallbackBackendFailureDomain, shouldSkipFallbackBackendAfterTimeout, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, shouldAbortFirstOutputStall, isProgressStderrChars, deepseekFirstOutputTimeoutSecs, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, reserveGeminiLaunch, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isLaneIncompatible, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, primaryTimeoutLimitSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, detectCheapFirstUnsuitable, shouldAutoInstallQwen, maybeAutoInstallQwen, detectIrreversibleSideEffect, decideExecutionPolicy, findCursorAgentCommand, isCursorAgentLoggedIn, buildCursorAgentArgs, cursorAgentChildEnv, resolveCursorAgentBackend, parseWslDistros, readCodexFallbackOrder, hasAbortCondition, isIntentionalAbort, isHelpInstruction } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -3166,6 +3166,55 @@ test('deepseek first-output watchdog は無出力の閾値到達時に打ち切�
 test('deepseek first-output watchdog は正常な出力があれば打ち切らない', () => {
   assert.equal(shouldAbortFirstOutputStall({ elapsedSecs: 60, outputChars: 1, timeoutSecs: 60 }), false);
   assert.equal(shouldAbortFirstOutputStall({ elapsedSecs: 59.9, outputChars: 0, timeoutSecs: 60 }), false);
+});
+
+test('isProgressStderrChars は空文字列・非文字列に 0 を返す', () => {
+  assert.equal(isProgressStderrChars(''), 0);
+  assert.equal(isProgressStderrChars(undefined), 0);
+  assert.equal(isProgressStderrChars(null), 0);
+});
+
+test('isProgressStderrChars は既知の警告行を進捗に数えない', () => {
+  const warningLines = [
+    'DeprecationWarning: Some feature is deprecated',
+    'ExperimentalWarning: The node:xxx module is experimental',
+    'Warning: using --strict mode is not recommended',
+    '(Use `node --trace-deprecation ... to show where the warning was thrown)',
+    'something before [claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash"}',
+    'Warning: xxxxx',
+  ];
+  for (const line of warningLines) {
+    assert.equal(isProgressStderrChars(line), 0, `警告行を進捗に数えない: ${line}`);
+  }
+});
+
+test('isProgressStderrChars は複数行混在で警告行だけ除外する', () => {
+  const mixed = 'DeprecationWarning: old api\nreal output line\n(Use `node --trace-deprecation ...)\nanother real line';
+  // real output line (16 chars) + another real line (17 chars) = 33
+  assert.equal(isProgressStderrChars(mixed), 33);
+});
+
+test('isProgressStderrChars は警告のみの複数行に 0 を返す', () => {
+  const allWarnings = 'DeprecationWarning: x\n[claude-code:unrecognized_model] deepseek\nWarning: y\n(Use `node --trace-deprecation ...)';
+  assert.equal(isProgressStderrChars(allWarnings), 0);
+});
+
+test('isProgressStderrChars は通常の stderr を全文字数進捗として数える', () => {
+  assert.equal(isProgressStderrChars('normal error message'), 20);
+  assert.equal(isProgressStderrChars('line1\nline2\n'), 10);  // newlines excluded, 5+5
+});
+
+test('isProgressStderrChars は空行のみの入力を進捗に数えない', () => {
+  assert.equal(isProgressStderrChars('\n\n\r\n'), 0);
+});
+
+test('shouldAbortFirstOutputStall は stderrProgressChars が 0 で無出力なら打ち切る', () => {
+  assert.equal(shouldAbortFirstOutputStall({ elapsedSecs: 60, outputChars: 0, stderrChars: 0, timeoutSecs: 60 }), true);
+});
+
+test('shouldAbortFirstOutputStall は stderrProgressChars が 1以上なら打ち切らない', () => {
+  assert.equal(shouldAbortFirstOutputStall({ elapsedSecs: 60, outputChars: 0, stderrChars: 1, timeoutSecs: 60 }), false);
+  assert.equal(shouldAbortFirstOutputStall({ elapsedSecs: 60, outputChars: 0, stderrChars: 50, timeoutSecs: 60 }), false);
 });
 
 test('ポリシー停滞の打ち切りは出力400字以上・拒否3回未満・無効化指定では発火しない', () => {

@@ -11,7 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { createSheetsClient, quoteTab } from './lib/sheets-dwd.mjs';
-import { getDriveToken, driveApi } from './lib/drive-auth.mjs';
+import { getDriveToken, driveApi, defaultDriveKeyPath } from './lib/drive-auth.mjs';
+import { keyserveSecret } from './keyserve-auth.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
 import { ensureKimEditor } from './lib/kim-editor.mjs';
 import { prepareTemaSend } from './lib/unattended-tema.mjs';
@@ -24,8 +25,8 @@ const REPO_ROOT = path.dirname(__dirname);
 const CONFIG_PATH = path.join(REPO_ROOT, 'config', 'followup-ledger.json');
 const FLEET_PC_MAP_PATH = path.join(REPO_ROOT, 'fleet-pc-map.json');
 
-import { HEADERS, FIELDS, normalizeRow, rowToValues, valuesToRow } from './lib/followup-schema.mjs';
-export { HEADERS, FIELDS, normalizeRow, rowToValues, valuesToRow } from './lib/followup-schema.mjs';
+import { HEADERS, FIELDS, normalizeRow, rowToValues, valuesToRow, normalizeOwnerAi } from './lib/followup-schema.mjs';
+export { HEADERS, FIELDS, normalizeRow, rowToValues, valuesToRow, normalizeOwnerAi } from './lib/followup-schema.mjs';
 
 export const STATUSES = Object.freeze([
   '依頼中', '催促済み', '承認待ち', '完了', '止まった', 'エスカレーション',
@@ -44,6 +45,7 @@ const REQUEST_FLAGS = Object.freeze({
 
 const DEFAULT_CONFIG = Object.freeze({
   spreadsheetId: '',
+  hubPc: '008',
   url: '',
   owner: 'seisaku-team@orgiast.jp',
   approvalChannelId: '1561703420455292979',
@@ -405,6 +407,7 @@ function saveConfig(config, configPath = CONFIG_PATH) {
   const { _path, ...rest } = config;
   atomicJson(configPath || _path || CONFIG_PATH, {
     spreadsheetId: rest.spreadsheetId || '',
+    hubPc: rest.hubPc || DEFAULT_CONFIG.hubPc,
     url: rest.url || '',
     owner: rest.owner || DEFAULT_CONFIG.owner,
     approvalChannelId: rest.approvalChannelId || DEFAULT_CONFIG.approvalChannelId,
@@ -494,6 +497,11 @@ export function isSamePc(a, b, opts = {}) {
   return false;
 }
 
+export function effectiveOwnerPc(row, config = DEFAULT_CONFIG) {
+  const owner = String(row.ownerPc || '').trim();
+  return !owner || ['グロボ', 'ふわ', 'どっと'].includes(normalizeOwnerAi(owner)) ? (config.hubPc || DEFAULT_CONFIG.hubPc) : owner;
+}
+
 export function isOwnerPcMatch(ownerPc, thisPc, opts = {}) {
   const owner = String(ownerPc || '').trim();
   if (!owner || pcKey(owner) === 'any') return true;
@@ -558,7 +566,7 @@ export function rowFromArgs(flags, { now = new Date(), config = DEFAULT_CONFIG }
   const intervalMin = Number(flags.interval ?? 15);
   const requestedAt = flags['requested-at'] || toIsoJst(now);
   // add 直後の check で拾えるよう、次回確認は「今」（間隔先送りしない）
-  const nextCheckAt = toIsoJst(now);
+  const nextCheckAt = flags['next-check-at'] || toIsoJst(now);
   let nudgeText = '';
   let temaCheck = '';
   const temaArg = flags['tema-check'];
@@ -588,7 +596,7 @@ export function rowFromArgs(flags, { now = new Date(), config = DEFAULT_CONFIG }
     maxNudges: Number(flags['max-nudges'] ?? 3),
     nudgeCount: 0,
     escalateTo: String(flags.escalate || 'kim-inbox'),
-    ownerAi: String(flags['owner-ai'] || ''),
+    ownerAi: normalizeOwnerAi(flags['owner-ai'] || 'Claude Code'),
     ownerPc: String(flags['owner-pc'] || ''),
     status,
     statusReason,
@@ -605,7 +613,7 @@ export function rowFromArgs(flags, { now = new Date(), config = DEFAULT_CONFIG }
     taskSite: String(flags.site || ''),
     temaCheck,
     requestKind: String(flags.kind || 'human'),
-    requestedBy: String(flags['requested-by'] || ''),
+    requestedBy: String(flags['requested-by'] || currentPcName()),
     evidenceKind: String(flags['evidence-kind'] || ''),
     evidence: String(flags.evidence || ''),
     prereq: String(flags.prereq || ''),
@@ -615,7 +623,7 @@ export function rowFromArgs(flags, { now = new Date(), config = DEFAULT_CONFIG }
     outcomeMaxDays: Number(flags['outcome-max-days'] || 0),
     lastOutcomeAt: String(flags['last-outcome-at'] || ''),
     lastJobResult: String(flags['last-job-result'] || ''),
-  });
+  }, { validateRequired: false });
   const constraint = siteConstraint(row);
   if (constraint.blocked) {
     row.status = '止まった';
@@ -889,7 +897,7 @@ function columnLetter(n) {
   return s || 'A';
 }
 
-async function loadStore({ storeMode, config, sheets: suppliedSheets }) {
+async function loadStore({ storeMode, config, sheets: suppliedSheets, readOnly = false }) {
   if (storeMode === 'local' || !config.spreadsheetId) {
     return { mode: 'local', store: loadLocalStore(), sheetError: config.spreadsheetId ? null : 'spreadsheetId 未設定' };
   }
@@ -897,10 +905,17 @@ async function loadStore({ storeMode, config, sheets: suppliedSheets }) {
     const sheets = suppliedSheets || createSheetsClient({
       getToken: (opts) => getDriveToken({ ...opts, impersonate: config.owner || DEFAULT_CONFIG.owner }),
     });
-    await ensureTabs(sheets, config.spreadsheetId, config.owner || DEFAULT_CONFIG.owner);
+    if (!readOnly) await ensureTabs(sheets, config.spreadsheetId, config.owner || DEFAULT_CONFIG.owner);
     const lastCol = columnLetter(HEADERS.length);
     const values = await sheets.get(config.spreadsheetId, `${quoteTab(LEDGER_TAB)}!A2:${lastCol}`);
-    const items = values.map(valuesToRow).filter((r) => r.id);
+    const items = values.map((v, i) => ({ values: v, sheetRow: i + 2 }))
+      .filter(({ values: v }) => v.some((cell) => String(cell ?? '').trim()))
+      .map(({ values: v, sheetRow }) => ({ ...valuesToRow(v), _sheetRow: sheetRow }));
+    // Keep failed registrations until sync; an existing sheet ID always wins.
+    const local = loadLocalStore();
+    for (const row of local.items.filter((r) => r._pendingSheet)) {
+      if (!items.some((r) => r.id === row.id)) items.push(row);
+    }
     const histCol = columnLetter(HISTORY_HEADERS.length);
     const histValues = await sheets.get(config.spreadsheetId, `${quoteTab(HISTORY_TAB)}!A2:${histCol}`);
     const history = histValues.map((v) => ({
@@ -913,28 +928,32 @@ async function loadStore({ storeMode, config, sheets: suppliedSheets }) {
     for (const h of loadLocalStore().history.filter((h) => h._pendingSheet)) {
       if (!known.has(historyKey(h))) { history.push(h); known.add(historyKey(h)); }
     }
-    const pendingSync = history.some((h) => h._pendingSheet);
+    const pendingSync = items.some((r) => r._pendingSheet) || history.some((h) => h._pendingSheet);
     const store = { schema: 'followup-ledger/v1', items, history, pendingSync, syncError: pendingSync ? '履歴のシート同期待ち' : null, updatedAt: toIsoJst() };
-    saveLocalStore(store);
+    if (!readOnly) saveLocalStore(store);
     return { mode: 'sheet', store, sheets, sheetError: null };
   } catch (error) {
     const store = loadLocalStore();
     store.pendingSync = true;
-    store.syncError = String(error.message || error).slice(0, 200);
-    saveLocalStore(store);
-    return { mode: 'local', store, sheetError: store.syncError };
+    const failure = classifySheetError(error, config);
+    store.syncError = failure.message;
+    if (!readOnly) saveLocalStore(store);
+    return { mode: 'local', store, sheetError: store.syncError, sheetFailure: failure };
   }
 }
 
 async function persistRow(ctx, row, { previousUpdatedAt } = {}) {
   const { storeMode, config, store, sheets } = ctx;
+  if (ctx.dryRun && storeMode === 'sheet') return row;
   row.updatedAt = toIsoJst();
   const idx = store.items.findIndex((r) => r.id === row.id);
-  if (idx >= 0) store.items[idx] = normalizeRow(row);
-  else store.items.push(normalizeRow(row));
+  if (idx >= 0) store.items[idx] = normalizeRow(row, { validateRequired: false });
+  else store.items.push(normalizeRow(row, { validateRequired: false }));
 
   if (storeMode === 'local' || !config.spreadsheetId || !sheets) {
-    if (config.spreadsheetId && storeMode !== 'local') {
+    if (storeMode !== 'local') {
+      row._pendingSheet = true;
+      store.items.find((r) => r.id === row.id)._pendingSheet = true;
       store.pendingSync = true;
       store.syncError = store.syncError || 'sheet unavailable';
     }
@@ -942,40 +961,54 @@ async function persistRow(ctx, row, { previousUpdatedAt } = {}) {
     return row;
   }
 
-  // Optimistic lock: re-read target row updatedAt
-  const lastCol = columnLetter(HEADERS.length);
-  const all = await sheets.get(config.spreadsheetId, `${quoteTab(LEDGER_TAB)}!A2:${lastCol}`);
-  let sheetRowIndex = all.findIndex((v) => String(v[0] || '') === row.id);
-  if (sheetRowIndex >= 0) {
-    const current = valuesToRow(all[sheetRowIndex]);
-    if (previousUpdatedAt && current.updatedAt && current.updatedAt !== previousUpdatedAt) {
-      // conflict: re-apply status fields onto fresh row
-      const merged = { ...current, ...row, updatedAt: toIsoJst() };
-      all[sheetRowIndex] = rowToValues(merged);
-      await sheets.update(
-        config.spreadsheetId,
-        `${quoteTab(LEDGER_TAB)}!A${sheetRowIndex + 2}:${lastCol}${sheetRowIndex + 2}`,
-        [rowToValues(merged)],
-      );
-      Object.assign(row, merged);
+  // Save pending before the request, including ambiguous append failures.
+  row._pendingSheet = true;
+  store.items.find((r) => r.id === row.id)._pendingSheet = true;
+  store.pendingSync = true;
+  saveLocalStore(store);
+  try {
+    // Optimistic lock: re-read target row updatedAt
+    const lastCol = columnLetter(HEADERS.length);
+    const all = await sheets.get(config.spreadsheetId, `${quoteTab(LEDGER_TAB)}!A2:${lastCol}`);
+    let sheetRowIndex = all.findIndex((v) => String(v[0] || '') === row.id);
+    if (sheetRowIndex >= 0) {
+      const current = valuesToRow(all[sheetRowIndex]);
+      if (previousUpdatedAt && current.updatedAt && current.updatedAt !== previousUpdatedAt) {
+        // conflict: re-apply status fields onto fresh row
+        const merged = { ...current, ...row, updatedAt: toIsoJst() };
+        all[sheetRowIndex] = rowToValues(merged);
+        await sheets.update(
+          config.spreadsheetId,
+          `${quoteTab(LEDGER_TAB)}!A${sheetRowIndex + 2}:${lastCol}${sheetRowIndex + 2}`,
+          [rowToValues(merged)],
+        );
+        Object.assign(row, merged);
+      } else {
+        await sheets.update(
+          config.spreadsheetId,
+          `${quoteTab(LEDGER_TAB)}!A${sheetRowIndex + 2}:${lastCol}${sheetRowIndex + 2}`,
+          [rowToValues(row)],
+        );
+      }
     } else {
-      await sheets.update(
-        config.spreadsheetId,
-        `${quoteTab(LEDGER_TAB)}!A${sheetRowIndex + 2}:${lastCol}${sheetRowIndex + 2}`,
-        [rowToValues(row)],
-      );
+      await sheets.append(config.spreadsheetId, `${quoteTab(LEDGER_TAB)}!A:${lastCol}`, [rowToValues(row)]);
     }
-  } else {
-    await sheets.append(config.spreadsheetId, `${quoteTab(LEDGER_TAB)}!A:${lastCol}`, [rowToValues(row)]);
-  }
 
-  await persistHistory(ctx);
+    delete row._pendingSheet;
+    delete store.items.find((r) => r.id === row.id)._pendingSheet;
+    await persistHistory(ctx);
+  } catch (error) {
+    store.pendingSync = true;
+    store.syncError = classifySheetError(error, config).message;
+    saveLocalStore(store);
+  }
   return row;
 }
 
 
 async function persistHistory(ctx) {
   const { store, storeMode, config, sheets } = ctx;
+  if (ctx.dryRun && storeMode === 'sheet') return;
   if (storeMode === 'sheet' && sheets && config.spreadsheetId) {
     const pending = store.history.filter((h) => h._pendingSheet);
     try {
@@ -983,11 +1016,11 @@ async function persistHistory(ctx) {
         h.at, h.id, h.status, h.reason, h.messageId, h.pc, h.ai,
       ]));
       for (const h of pending) delete h._pendingSheet;
-      store.pendingSync = false;
+      store.pendingSync = store.items.some((r) => r._pendingSheet);
       store.syncError = null;
     } catch (error) {
       store.pendingSync = true;
-      store.syncError = String(error.message || error);
+      store.syncError = classifySheetError(error, config).message;
     }
   }
   saveLocalStore(store);
@@ -1018,7 +1051,7 @@ export function renderAlert({
   const missingList = missingOwner;
   const tableRows = alertRows.length
     ? alertRows
-    : [...new Map([...stalledList, ...escalatedList, ...approvalList, ...missingList].map((r) => [r.id, r])).values()];
+    : [...new Map([...stalledList, ...escalatedList, ...approvalList, ...missingList].map((r) => [r.id || `sheet-row-${r._sheetRow}`, r])).values()];
 
   const lines = [
     `# followup-ledger ALERT`,
@@ -1087,9 +1120,99 @@ async function cmdInit(flags) {
   return 0;
 }
 
+export function sheetCredentialSources() {
+  const keyPath = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath();
+  const home = process.env.ORGIAST_HOME || os.homedir();
+  let relayAvailable = false;
+  try { relayAvailable = Boolean(keyserveSecret(home, process.env)); } catch { /* report presence only */ }
+  let relay = '(未設定)';
+  try {
+    const url = new URL('/api/gws', process.env.ORGIAST_CHANNEL_BASE_URL || 'https://orgiast-memoryserve.vercel.app');
+    relay = `${url.origin}${url.pathname}`;
+  } catch { /* never print a malformed URL containing credentials */ }
+  return { keyPath, keyExists: fs.existsSync(keyPath), relay, relayAvailable };
+}
+
+export function classifySheetError(error, config, sources = sheetCredentialSources()) {
+  const messages = [];
+  for (let e = error, depth = 0; e && depth < 5; e = e.cause, depth++) messages.push(`${e.status || ''} ${e.code || ''} ${e.message || e}`);
+  const detail = messages.join(' ');
+  let category;
+  if (!config.spreadsheetId) category = 'spreadsheetId 未設定';
+  else if (/\b40[13]\b|権限なし/.test(detail)) category = '権限なし';
+  else if (/鍵なし|credential missing|ENOENT/.test(detail)) category = '鍵なし';
+  else if (/\b5\d\d\b|fetch|network|通信失敗|ECONN|ETIMEDOUT|timeout|ENOTFOUND/i.test(detail)) category = '通信失敗';
+  else category = !sources.keyExists && !sources.relayAvailable ? '鍵なし' : '通信失敗';
+  const hint = category === '権限なし'
+    ? `impersonate=${config.owner || DEFAULT_CONFIG.owner}。シートの共有に ${config.owner || DEFAULT_CONFIG.owner} が編集者か確認してください`
+    : category === '鍵なし' ? `確認した鍵パス: ${sources.keyPath} / relay先: ${sources.relay}（資格情報 ${sources.relayAvailable ? 'あり' : 'なし'}）`
+      : category === 'spreadsheetId 未設定' ? 'config/followup-ledger.json の spreadsheetId を設定してください'
+        : 'シートへ到達できません。doctor で確認し、復旧後 sync を実行してください';
+  // Do not expose raw upstream bodies, tokens, or credential values.
+  return { category, message: `${category}: ${hint}` };
+}
+
+function printAddResult(row, store, loaded, config, storeMode, upsert = false) {
+  const failed = storeMode === 'sheet' && (store.pendingSync || loaded.sheetError);
+  const failure = failed ? (loaded.sheetFailure || classifySheetError(new Error(store.syncError || loaded.sheetError), config)) : null;
+  console.log(JSON.stringify({ ok: !failed, upsert, id: row.id, status: row.status, statusReason: row.statusReason,
+    registeredFrom: currentPcName(), effectiveOwnerPc: effectiveOwnerPc(row, config), ...(failure || {}) }));
+  return failed ? 3 : 0;
+}
+
+async function cmdDoctor(flags, ctxBase = {}) {
+  const config = ctxBase.config || loadConfig();
+  const sources = sheetCredentialSources();
+  const result = { configPath: config._path || CONFIG_PATH, spreadsheetId: config.spreadsheetId,
+    impersonate: config.owner || DEFAULT_CONFIG.owner, currentPc: currentPcName(), hubPc: config.hubPc || DEFAULT_CONFIG.hubPc,
+    sources, headers: {}, ok: false };
+  try {
+    if (!config.spreadsheetId) throw new Error('spreadsheetId 未設定');
+    const sheets = ctxBase.sheets || createSheetsClient({ getToken: (opts) => getDriveToken({ ...opts, impersonate: result.impersonate }) });
+    for (const [tab, headers] of [[LEDGER_TAB, HEADERS], [HISTORY_TAB, HISTORY_HEADERS]]) {
+      const values = await sheets.get(config.spreadsheetId, `${quoteTab(tab)}!A1:${columnLetter(headers.length)}1`);
+      result.headers[tab] = { readable: true, matches: headers.every((h, i) => values[0]?.[i] === h), values: values[0] || [] };
+    }
+    result.ok = Object.values(result.headers).every((h) => h.matches);
+    if (!result.ok) result.message = 'シートのヘッダ不一致（doctor は修正しません）';
+  } catch (error) { Object.assign(result, classifySheetError(error, config, sources)); }
+  if (flags.json) console.log(JSON.stringify(result, null, 2));
+  else console.log(`PC: ${result.currentPc} / hubPc: ${result.hubPc}\nconfig: ${result.configPath}\nspreadsheetId: ${result.spreadsheetId || '(未設定)'}\nimpersonate: ${result.impersonate}\n鍵パス: ${sources.keyPath}（${sources.keyExists ? 'あり' : 'なし'}）\nrelay先: ${sources.relay}（資格情報 ${sources.relayAvailable ? 'あり' : 'なし'}）\nヘッダ: ${result.ok ? '読取成功・一致' : result.message}`);
+  return result.ok ? 0 : 3;
+}
+
+async function cmdSync(flags, ctxBase = {}) {
+  const config = ctxBase.config || loadConfig();
+  const loaded = await loadStore({ storeMode: 'sheet', config, sheets: ctxBase.sheets });
+  const { store, sheets } = loaded;
+  let synced = 0;
+  if (sheets && !loaded.sheetError) {
+    try {
+      for (const row of store.items.filter((r) => r._pendingSheet)) {
+        // Re-read before each append; never overwrite an existing sheet row.
+        const values = await sheets.get(config.spreadsheetId, `${quoteTab(LEDGER_TAB)}!A2:${columnLetter(HEADERS.length)}`);
+        if (!values.some((v) => String(v[0]) === row.id)) await sheets.append(config.spreadsheetId, `${quoteTab(LEDGER_TAB)}!A:${columnLetter(HEADERS.length)}`, [rowToValues(row)]);
+        delete row._pendingSheet;
+        synced++;
+        saveLocalStore(store);
+      }
+      await persistHistory({ ...loaded, storeMode: 'sheet', config });
+    } catch (error) {
+      store.pendingSync = true;
+      store.syncError = classifySheetError(error, config).message;
+      saveLocalStore(store);
+    }
+  }
+  const failed = Boolean(loaded.sheetError || store.pendingSync);
+  console.log(JSON.stringify({ ok: !failed, synced, pendingRows: store.items.filter((r) => r._pendingSheet).length,
+    pendingHistory: store.history.filter((h) => h._pendingSheet).length,
+    ...(failed ? loaded.sheetFailure || classifySheetError(new Error(store.syncError || loaded.sheetError), config) : {}) }));
+  return failed ? 3 : 0;
+}
+
 async function cmdAdd(flags, ctxBase = {}) {
   const config = ctxBase.config || loadConfig();
-  const storeMode = flags.store === 'local' || ctxBase.storeMode === 'local' ? 'local' : (config.spreadsheetId ? 'sheet' : 'local');
+  const storeMode = flags.store === 'local' || ctxBase.storeMode === 'local' ? 'local' : 'sheet';
   const loaded = await loadStore({ storeMode, config, sheets: ctxBase.sheets });
   const store = loaded.store;
   const now = resolveNow(ctxBase.now);
@@ -1100,13 +1223,12 @@ async function cmdAdd(flags, ctxBase = {}) {
   if (existing && !flags.upsert) throw new Error(`同じ依頼IDが既にあります: ${row.id}（--upsert で更新）`);
   if (existing && flags.upsert) {
     Object.assign(existing, row, { nudgeCount: existing.nudgeCount, lastSentAt: existing.lastSentAt, lastSentId: existing.lastSentId });
-    appendHistory(store, { id: row.id, status: existing.status, reason: 'upsert', ai: row.ownerAi, pc: row.ownerPc });
+    appendHistory(store, { id: row.id, status: existing.status, reason: 'upsert', ai: row.ownerAi, pc: currentPcName() });
     await persistRow({ ...loaded, storeMode, config, store }, existing, { previousUpdatedAt: existing.updatedAt });
-    console.log(JSON.stringify({ ok: true, upsert: true, id: existing.id, status: existing.status }));
-    return 0;
+    return printAddResult(existing, store, loaded, config, storeMode, true);
   }
   store.items.push(row);
-  appendHistory(store, { id: row.id, status: row.status, reason: row.statusReason || 'add', ai: row.ownerAi, pc: row.ownerPc });
+  appendHistory(store, { id: row.id, status: row.status, reason: row.statusReason || 'add', ai: row.ownerAi, pc: currentPcName() });
   if (row.status === '止まった') {
     await escalate(row, row.statusReason, {
       config, store, dryRun: Boolean(flags['dry-run']), alerts: [],
@@ -1114,8 +1236,7 @@ async function cmdAdd(flags, ctxBase = {}) {
     });
   }
   await persistRow({ ...loaded, storeMode, config, store }, row);
-  console.log(JSON.stringify({ ok: true, id: row.id, status: row.status, statusReason: row.statusReason }));
-  return 0;
+  return printAddResult(row, store, loaded, config, storeMode);
 }
 
 async function sendApprovalRequest(row, ctx) {
@@ -1188,7 +1309,7 @@ async function performNudge(row, ctx) {
     return { skipped: true, reason: 'quiet-hours', nextCheckAt: next };
   }
 
-  const text = await withTemaRecord(withAiFooter(defaultNudgeText(row)), row, ctx);
+  const text = dryRun ? withAiFooter(defaultNudgeText(row)) : await withTemaRecord(withAiFooter(defaultNudgeText(row)), row, ctx);
   const adapter = getAdapter(row.channel, ctx.adapterDeps);
 
   // Pre-read: duplicate prevention
@@ -1209,7 +1330,7 @@ async function performNudge(row, ctx) {
     alerts.push(`[${dryRun ? 'dry-run' : 'no-nudge'}] nudge ${row.id}: ${text.slice(0, 80)}`);
     if (dryRun) {
       ctx.nudges = ctx.nudges || [];
-      ctx.nudges.push({ id: row.id, text });
+      ctx.nudges.push({ id: row.id, text, temaCheckRequired: !row.temaCheck });
     }
     return { skipped: true, reason: dryRun ? 'dry-run' : 'no-nudge', text };
   }
@@ -1504,13 +1625,13 @@ async function cmdOutcome(flags, ctxBase = {}) {
   return 0;
 }
 
-function missingOwnerRows(store, now, thisPc, pcOpts) {
-  return store.items.filter((r) => r.status !== '完了' && !isOwnerPcMatch(r.ownerPc, thisPc, pcOpts)
+function missingOwnerRows(store, now, thisPc, pcOpts, config) {
+  return store.items.filter((r) => r.status !== '完了' && !isOwnerPcMatch(effectiveOwnerPc(r, config), thisPc, pcOpts)
     && (!r.lastCheckedAt || !Number.isFinite(Date.parse(r.lastCheckedAt)) || now.getTime() - Date.parse(r.lastCheckedAt) > watchdogStaleMs(r)))
-    .map((r) => ({ ...r, _alertReason: `担当PC ${r.ownerPc} がこの依頼を見ていない（最終確認 ${r.lastCheckedAt || 'なし'}）` }));
+    .map((r) => ({ ...r, _alertReason: `担当PC ${effectiveOwnerPc(r, config)} がこの依頼を見ていない（最終確認 ${r.lastCheckedAt || 'なし'}）` }));
 }
 
-const REQUEST_LABELS = { human: '人', globo: 'グロボ', 'claude-code': 'Claude Code', automation: '自動化' };
+const REQUEST_LABELS = { ai: 'AI', human: '人', globo: 'グロボ', 'claude-code': 'Claude Code', automation: '自動化' };
 function reportTable(rows) {
   const cell = (s) => String(s || '').replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>');
   return [
@@ -1529,7 +1650,7 @@ async function cmdReport(flags, ctxBase = {}) {
   const now = resolveNow(ctxBase.now);
   const missingOwner = missingOwnerRows(store, now, currentPcName({ hostname: ctxBase.hostname }), {
     pcMap: ctxBase.pcMap || loadFleetPcMap(), pcAliases: config.pcAliases,
-  });
+  }, config);
   const outcomeWarnings = collectOutcomeWarnings(store, now, config);
   const problems = store.items.filter((r) => r.status !== '完了' && (Date.parse(r.dueAt) < now.getTime()
     || ['止まった', 'エスカレーション', '承認待ち'].includes(r.status)));
@@ -1573,7 +1694,7 @@ async function cmdReport(flags, ctxBase = {}) {
 async function cmdCheck(flags, ctxBase = {}) {
   const config = ctxBase.config || loadConfig();
   const storeMode = flags.store === 'local' || ctxBase.storeMode === 'local' ? 'local' : (config.spreadsheetId ? 'sheet' : 'local');
-  const loaded = await loadStore({ storeMode, config, sheets: ctxBase.sheets });
+  const loaded = await loadStore({ storeMode, config, sheets: ctxBase.sheets, readOnly: Boolean(flags['dry-run']) });
   const store = loaded.store;
   const now = resolveNow(ctxBase.now);
   const alerts = [];
@@ -1601,12 +1722,12 @@ async function cmdCheck(flags, ctxBase = {}) {
     return false;
   });
 
-  const processRows = dueRows.filter((r) => allPcs || isOwnerPcMatch(r.ownerPc, thisPc, pcOpts));
+  const processRows = dueRows.filter((r) => allPcs || isOwnerPcMatch(effectiveOwnerPc(r, config), thisPc, pcOpts));
   const watchRows = store.items.filter((r) => {
     if (r.status === '完了') return false;
     if (flags.id && r.id !== String(flags.id)) return false;
     if (allPcs) return false;
-    return !isOwnerPcMatch(r.ownerPc, thisPc, pcOpts);
+    return !isOwnerPcMatch(effectiveOwnerPc(r, config), thisPc, pcOpts);
   });
 
   const ctx = {
@@ -1640,7 +1761,7 @@ async function cmdCheck(flags, ctxBase = {}) {
     const last = Date.parse(row.lastCheckedAt || 0);
     const stale = !Number.isFinite(last) || (now.getTime() - last) > watchdogStaleMs(row);
     if (!stale) continue;
-    const reason = `担当PC ${row.ownerPc || '(未設定)'} がこの依頼を見ていない（最終確認 ${row.lastCheckedAt || 'なし'}）`;
+    const reason = `担当PC ${effectiveOwnerPc(row, config)} がこの依頼を見ていない（最終確認 ${row.lastCheckedAt || 'なし'}）`;
     missingOwner.push({ ...row, _alertReason: reason });
     if (!hasWatchdogToday(store.history, row.id, now)) {
       appendHistory(store, {
@@ -1661,7 +1782,7 @@ async function cmdCheck(flags, ctxBase = {}) {
   const escalated = store.items.filter((r) => r.status === 'エスカレーション');
   const awaitingApproval = store.items.filter((r) => r.status === '承認待ち');
   const alertRows = [...new Map(
-    [...stalled, ...escalated, ...awaitingApproval, ...missingOwner].map((r) => [r.id, r]),
+    [...stalled, ...escalated, ...awaitingApproval, ...missingOwner].map((r) => [r.id || `sheet-row-${r._sheetRow}`, r]),
   ).values()];
   const file = writeAlert(alertPath(config, flags), {
     now,
@@ -1679,6 +1800,7 @@ async function cmdCheck(flags, ctxBase = {}) {
   });
 
   const summary = {
+    processRows: processRows.map((r) => ({ id: r.id, effectiveOwnerPc: effectiveOwnerPc(r, config) })),
     checked: processRows.length,
     watched: watchRows.length,
     stalled: stalled.length,
@@ -1853,11 +1975,11 @@ async function cmdAlert(flags, ctxBase = {}) {
   const now = resolveNow(ctxBase.now);
   const missingOwner = missingOwnerRows(loaded.store, now, currentPcName({ hostname: ctxBase.hostname }), {
     pcMap: ctxBase.pcMap || loadFleetPcMap(), pcAliases: config.pcAliases,
-  });
+  }, config);
   const stalled = loaded.store.items.filter((r) => r.status === '止まった');
   const escalated = loaded.store.items.filter((r) => r.status === 'エスカレーション');
   const awaitingApproval = loaded.store.items.filter((r) => r.status === '承認待ち');
-  const alertRows = [...new Map([...stalled, ...escalated, ...awaitingApproval, ...missingOwner].map((r) => [r.id, r])).values()];
+  const alertRows = [...new Map([...stalled, ...escalated, ...awaitingApproval, ...missingOwner].map((r) => [r.id || `sheet-row-${r._sheetRow}`, r])).values()];
   const file = writeAlert(alertPath(config, flags), {
     now,
     checked: 0,
@@ -1883,6 +2005,9 @@ export async function main(argv = process.argv.slice(2), ctxBase = {}) {
   switch (cmd) {
     case 'init': return cmdInit(flags);
     case 'add': return cmdAdd(flags, ctx);
+    case 'doctor': return cmdDoctor(flags, ctx);
+    case 'sync': return cmdSync(flags, ctx);
+    case 'run':
     case 'check': await cmdCheck(flags, ctx); return 0;
     case 'nudge': return cmdNudge(flags, ctx);
     case 'complete': return cmdComplete(flags, ctx);

@@ -7,7 +7,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
-  main,
+  main, effectiveOwnerPc, normalizeOwnerAi, classifySheetError,
   validateEvidence, checkPrereq, readOutcome, evaluateOutcomeLiveness, rowToValues, valuesToRow,
   loadLocalStore,
   decideAction,
@@ -908,7 +908,7 @@ test('T10 担当PC不在を黙ってスキップしない', async () => {
         : range.includes('ledger') ? structuredClone(rows) : structuredClone(history),
       update: async () => {},
       append: async (_id, range, values) => {
-        if (failHistory) throw new Error('mock history append unavailable');
+        if (failHistory) throw new Error('mock history append unavailable: HTTP 503');
         writes.push({ range, values: structuredClone(values) });
         history.push(...structuredClone(values));
       },
@@ -928,7 +928,7 @@ test('T10 担当PC不在を黙ってスキップしない', async () => {
     failHistory = true;
     await run(['check'], { ...ctx, now: new Date('2026-11-29T13:00:00+09:00') });
     assert.equal(store().pendingSync, true);
-    assert.equal(store().syncError, 'mock history append unavailable');
+    assert.match(store().syncError, /通信失敗/);
     failHistory = false;
     await run(['check'], { ...ctx, now: new Date('2026-11-29T13:15:00+09:00') });
     assert.equal(store().pendingSync, false);
@@ -1009,4 +1009,184 @@ test('followup-ledger-agenda: 追加列のある台帳から従来の案件別TO
     assert.equal(agenda.summary.stalled, 1);
     assert.equal(agenda.stalled[0].requestKind, 'globo');
   });
+});
+
+
+const HISTORY_TEST_HEADERS = ['時刻', '依頼ID', '状態', '理由', '送信ID', '実行PC', '実行AI'];
+function fleetSheet() {
+  const rows = [], history = [], writes = [];
+  const sheets = {
+    metadata: async () => ({ sheets: ['ledger', 'history'].map((title) => ({ properties: { title, gridProperties: { columnCount: HEADERS.length } } })) }),
+    get: async (_id, range) => range.includes('1:') ? [range.includes('ledger') ? HEADERS : HISTORY_TEST_HEADERS]
+      : structuredClone(range.includes('ledger') ? rows : history),
+    update: async (_id, range, values) => {
+      writes.push(range);
+      const index = Number(range.match(/!A(\d+)/)[1]) - 2;
+      rows[index] = structuredClone(values[0]);
+    },
+    append: async (_id, range, values) => {
+      writes.push(range);
+      (range.includes('ledger') ? rows : history).push(...structuredClone(values));
+    },
+  };
+  return { sheets, rows, history, writes };
+}
+function connectorValues(id, ai, extra = {}) {
+  const row = { '依頼ID': id, '依頼先': 'AI担当', 'チャネル': 'test-unsendable', '依頼内容': '成果物を記録する',
+    '依頼日時': '2026/11/28 11:30', '完了条件': '成果物URLがある', '担当AI': ai, '依頼種別': 'ai', '依頼元': '金さん', ...extra };
+  return HEADERS.map((h) => row[h] ?? '');
+}
+async function capture(fn) {
+  const lines = [];
+  const previous = console.log;
+  console.log = (...parts) => lines.push(parts.join(' '));
+  try { return { code: await fn(), output: lines.join('\n') }; }
+  finally { console.log = previous; }
+}
+
+test('T11 別PC: 000・011・018 など別のPCで登録した1件が一覧に出て、催促の対象になる', async () => {
+  await outcomeScenario('t11', async ({ run, config, mock }) => {
+    const sheet = fleetSheet();
+    const ctx = { config: { ...config, spreadsheetId: 'mock', hubPc: '008' }, storeMode: 'sheet', sheets: sheet.sheets };
+    await withEnv({ FOLLOWUP_PC: '011' }, async () => {
+      const result = await capture(() => run(addArgs('T11', { extra: ['--store', 'sheet', '--owner-pc', ''] }), ctx));
+      assert.equal(result.code, 0);
+      assert.equal(JSON.parse(result.output).registeredFrom, '011');
+      assert.equal(JSON.parse(result.output).effectiveOwnerPc, '008');
+    });
+    assert.equal(sheet.history[0][5], '011');
+    assert.equal(valuesToRow(sheet.rows[0]).ownerPc, '');
+    const status = await capture(() => run(['status', '--json'], ctx));
+    assert.equal(JSON.parse(status.output)[0].id, 'T11');
+    await withEnv({ FOLLOWUP_PC: '018' }, () => run(['run', '--id', 'T11'], ctx));
+    assert.equal(mock().sent.length, 0);
+    await withEnv({ FOLLOWUP_PC: '008' }, () => run(['run', '--id', 'T11'], ctx));
+    assert.equal(mock().sent.length, 1);
+    for (const name of ['', 'Grok Bot', 'fuwa', 'どっと']) assert.equal(effectiveOwnerPc({ ownerPc: name }, ctx.config), '008');
+    assert.equal(effectiveOwnerPc({ ownerPc: '018' }, ctx.config), '018');
+    assert.equal(effectiveOwnerPc({}, { hubPc: '000' }), '000');
+  });
+});
+
+for (const [number, name, input] of [[12, 'グロボ', 'Grok Bot'], [13, 'ふわ', 'fuwa'], [14, 'どっと', 'dots']]) {
+  test(`T${number} ${name}が登録した1件が一覧に出て、催促の対象になる`, async () => {
+    await outcomeScenario(`t${number}`, async ({ run, config, mock }) => {
+      const sheet = fleetSheet();
+      sheet.rows.push(connectorValues(`T${number}`, input));
+      const ctx = { config: { ...config, spreadsheetId: 'mock', hubPc: '008' }, storeMode: 'sheet', sheets: sheet.sheets };
+      const listed = await capture(() => run(['status', '--json'], ctx));
+      const row = JSON.parse(listed.output)[0];
+      assert.equal(row.ownerAi, name);
+      assert.equal(row.status, '依頼中');
+      assert.equal(row.intervalMin, 15);
+      assert.equal(row.renudgeMin, 60);
+      assert.equal(row.maxNudges, 3);
+      assert.equal(row.requestedAt, '2026-11-28T11:30:00+09:00');
+      assert.equal(row.nextCheckAt, '');
+      assert.equal(row.updatedAt, '');
+      // Actual sends still require the existing TEMA gate; registration itself needs only nine columns.
+      sheet.rows[0][FIELDS.indexOf('temaCheck')] = parseArgs(addArgs('tema')).flags['tema-check'];
+      await withEnv({ FOLLOWUP_PC: '008' }, () => run(['run', '--id', row.id], ctx));
+      assert.equal(mock().sent.length, 1);
+      assert.equal(valuesToRow(sheet.rows[0]).status, '催促済み');
+      assert.equal(sheet.history.some((h) => h[3] === 'watchdog'), false);
+    });
+  });
+}
+
+test('T15 必須列不足の直接追加は止まった＋ALERT', async () => {
+  await outcomeScenario('t15', async ({ run, config, dir, mock }) => {
+    const sheet = fleetSheet();
+    sheet.rows.push(connectorValues('T15', 'Grok Bot', { '完了条件': '', '依頼元': '' }));
+    sheet.rows.push(connectorValues('', 'ふわ'));
+    const ctx = { config: { ...config, spreadsheetId: 'mock', hubPc: '008' }, storeMode: 'sheet', sheets: sheet.sheets };
+    const row = valuesToRow(sheet.rows[0]);
+    assert.equal(row.status, '止まった');
+    assert.equal(row.statusReason, '必須列不足: 完了条件・依頼元');
+    await withEnv({ FOLLOWUP_PC: '008' }, () => run(['run'], ctx));
+    assert.match(fs.readFileSync(path.join(dir, 'ALERT.md'), 'utf8'), /必須列不足: 完了条件・依頼元/);
+    assert.match(fs.readFileSync(path.join(dir, 'ALERT.md'), 'utf8'), /必須列不足: 依頼ID/);
+    assert.equal(mock().sent.length, 0);
+  });
+});
+
+test('T16 シートに書けない add は理由付きで exit 3・sync で反映', async () => {
+  await outcomeScenario('t16', async ({ run, config, store }) => {
+    const sheet = fleetSheet();
+    const ctx = { config: { ...config, spreadsheetId: 'mock', hubPc: '008' }, storeMode: 'sheet', sheets: sheet.sheets };
+    const append = sheet.sheets.append;
+    sheet.sheets.append = async () => { throw new Error('Sheets POST HTTP 403 secret-value-must-not-leak'); };
+    const result = await capture(() => run(addArgs('T16', { extra: ['--store', 'sheet', '--owner-pc', ''] }), ctx));
+    assert.equal(result.code, 3);
+    assert.match(result.output, /権限なし.*seisaku-team@orgiast.jp/);
+    assert.doesNotMatch(result.output, /secret-value/);
+    assert.equal(store().items[0]._pendingSheet, true);
+    assert.equal(store().history[0]._pendingSheet, true);
+    // Another read must not discard the failed add.
+    await run(['status'], ctx);
+    assert.equal(store().items[0]._pendingSheet, true);
+    sheet.sheets.append = append;
+    assert.equal(await run(['sync'], ctx), 0);
+    assert.equal(sheet.rows.length, 1);
+    assert.equal(sheet.history.length, 1);
+    assert.equal(store().pendingSync, false);
+    assert.equal(await run(['sync'], ctx), 0);
+    assert.equal(sheet.rows.length, 1);
+    assert.equal(sheet.history.length, 1);
+    // Append committed but its response was lost: retry must retain the sheet row.
+    sheet.sheets.append = async (...args) => { await append(...args); throw new Error('fetch failed'); };
+    assert.equal(await run(addArgs('T16-ambiguous', { extra: ['--store', 'sheet'] }), ctx), 3);
+    sheet.sheets.append = append;
+    assert.equal(await run(['sync'], ctx), 0);
+    assert.equal(sheet.rows.filter((v) => v[0] === 'T16-ambiguous').length, 1);
+    assert.equal(sheet.history.filter((v) => v[1] === 'T16-ambiguous').length, 1);
+    const missing = await capture(() => run(addArgs('T16-no-id', { extra: ['--store', 'sheet'] }), { ...ctx, config: { ...ctx.config, spreadsheetId: '' } }));
+    assert.equal(missing.code, 3);
+    assert.match(missing.output, /spreadsheetId 未設定/);
+    assert.equal(store().items.find((r) => r.id === 'T16-no-id')._pendingSheet, true);
+    const sources = { keyPath: 'missing-key.json', keyExists: false, relay: 'https://relay.invalid/api/gws', relayAvailable: false };
+    assert.equal(classifySheetError(new Error('credential missing'), ctx.config, sources).category, '鍵なし');
+    assert.equal(classifySheetError(new Error('HTTP 503'), ctx.config, sources).category, '通信失敗');
+  });
+});
+
+test('doctor は読取専用・失敗理由を表示、run --dry-run はシートを書かない', async () => {
+  await outcomeScenario('doctor', async ({ run, config, mock }) => {
+    const sheet = fleetSheet();
+    const ctx = { config: { ...config, spreadsheetId: 'mock', hubPc: '008' }, storeMode: 'sheet', sheets: sheet.sheets };
+    assert.equal((await capture(() => run(['doctor', '--json'], ctx))).code, 0);
+    assert.equal(sheet.writes.length, 0);
+    sheet.rows.push(connectorValues('DRY', 'muse'));
+    const before = structuredClone(sheet.rows);
+    const output = await withEnv({ FOLLOWUP_PC: '008' }, () => capture(() => run(['run', '--dry-run', '--json', '--id', 'DRY'], ctx)));
+    const summary = JSON.parse(output.output);
+    assert.equal(summary.processRows[0].effectiveOwnerPc, '008');
+    assert.equal(summary.nudges.length, 1);
+    assert.equal(mock().sent.length, 0);
+    assert.equal(sheet.writes.length, 0);
+    assert.deepEqual(sheet.rows, before);
+    sheet.sheets.get = async () => { throw new Error('HTTP 403 secret-value'); };
+    const failed = await capture(() => run(['doctor', '--json'], ctx));
+    assert.equal(failed.code, 3);
+    assert.match(failed.output, /権限なし/);
+    assert.doesNotMatch(failed.output, /secret-value/);
+    assert.equal(sheet.writes.length, 0);
+    for (const s of ['grok', 'grobo', 'グロボ', 'Grok Bot']) assert.equal(normalizeOwnerAi(s), 'グロボ');
+    for (const s of ['fuwa', 'ふわ', 'meta muse', 'muse']) assert.equal(normalizeOwnerAi(s), 'ふわ');
+    for (const s of ['dots', 'dotto', 'どっと']) assert.equal(normalizeOwnerAi(s), 'どっと');
+    assert.equal(normalizeOwnerAi('Claude Code'), 'Claude Code');
+  });
+});
+
+
+test('followup の6行は配布テンプレートとconvergeブロックに残る', async () => {
+  const { build } = await import('./onboarding-sync.mjs');
+  const guidance = fs.readFileSync(new URL('./claude-md-followup.md', import.meta.url), 'utf8');
+  const template = fs.readFileSync(new URL('../CLAUDE.md.template', import.meta.url), 'utf8');
+  const lines = guidance.trim().split(/\r?\n/);
+  assert.equal(lines.length, 6);
+  for (const line of lines) {
+    assert.ok(build('', '', 'test').updated.includes(line));
+    assert.ok(template.includes(line));
+  }
 });

@@ -32,3 +32,9 @@
 朝の報告は `report --morning`。`--kim-inbox` 指定時だけ社内の info として同日1件を登録する。毎朝07:30 JSTの `OrgiastFollowupLedgerMorning` から実行する。
 
 再発事例: 2026-11-24 承認の Instagram 自動投稿が 015 のトークン無しで投稿0のまま、誰も報告しなかった。
+
+## 途中で止まった作業は終了時に台帳へ入れる（2026-11-28 GB-229）
+
+中断・金さん待ち・残件あり・インシデント・exit 非0・上限停止で終えた作業は、終わらせた時点で必ず `node tools/ledger-open-item.mjs open --id <ID> --task <残件> --owner-pc <PC> [--kim-wait] [--due "YYYY-MM-DD HH:MM"] [--evidence-path <STATUS/REPORT>]` で台帳に入れる（冪等。同じ id は更新）。channel=manual で登録し、催促メッセージは送らない。期限が無ければ、金さん待ちは翌営業日09:00 JST、それ以外は翌日09:00 JST。claude -p の wrapper は `templates/run-cc-ledger-snippet.ps1` を終了処理に入れる。入れ忘れても 008 の `followup-ledger check`（hub PC のみ）が gb-reports の STATUS/REPORT/EXIT と巡回 STATUS-<PC>.md を `node tools/ledger-open-item.mjs scan` で走査し、同じ作業の行が無い未完了を登録する。他PCの gb-reports は 008 から読めないため、各PCの終了時登録が必須。詳細は portable-knowhow/20_止まった作業を台帳に入れる.md。
+
+再発事例: 2026-11-26 神原さんのグループ外し作業で common.users の約100人を誤削除し、19:30 に「100人未復旧・金さん待ち」で止まったのに台帳に行が作られず、11/28 まで2日間だれも追わなかった。

@@ -19,6 +19,7 @@ import { prepareTemaSend } from './lib/unattended-tema.mjs';
 import { getAdapter, recordMockSpawn } from './lib/followup-adapters.mjs';
 import { buildPcIdentityIndex, pcMapEntries } from './fleet-pc-identity.mjs';
 import { checkTema, formatTemaFindings, stripTemaRecord } from './lib/tema-check.mjs';
+import { scanReports } from './ledger-open-item.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.dirname(__dirname);
@@ -1740,6 +1741,33 @@ async function cmdCheck(flags, ctxBase = {}) {
     if (allPcs) return false;
     return !isOwnerPcMatch(effectiveOwnerPc(r, config), thisPc, pcOpts);
   });
+
+  // hub PC のみ・失敗しても止めない形で gb-reports を走査し、未完了を台帳に自動登録
+  // processRows の後で実行することで、scan が追加した行がこのチェック周期の催促対象にならない
+  // dry-run・no-scan・テスト環境ではスキャンしない
+  const hub = String(config.hubPc || DEFAULT_CONFIG.hubPc);
+  const skipScan = flags['dry-run'] || flags['no-scan']
+    || process.env.FOLLOWUP_NO_SCAN === '1'
+    || process.env.FOLLOWUP_ADAPTER === 'mock';
+  if (!skipScan && isOwnerPcMatch(hub, thisPc, pcOpts)) {
+    try {
+      const homeDir = os.homedir();
+      const defaultRoot = path.join(homeDir, 'gb-reports');
+      if (fs.existsSync(defaultRoot)) {
+        const existingRows = store.items;
+        await scanReports({
+          root: defaultRoot,
+          pc: hub,
+          existingRows,
+          now,
+          fsImpl: fs,
+        });
+      }
+    } catch (scanError) {
+      // check を止めない
+      console.warn(`gb-reports scan error (continuing): ${scanError.message || scanError}`);
+    }
+  }
 
   const ctx = {
     config,

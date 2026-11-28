@@ -106,6 +106,37 @@ export function isLightLaneCommand(command) {
   }
   return parts.slice(start).every(isSingleLightInvocation);
 }
+// 状態を見るだけの PowerShell は、レーン予算を使い切った後も通す。
+// これを塞ぐと無人セッションがタスクスケジューラ・サービス・ディスクの状態を一切読めなくなる。
+const PS_READ_CMDLETS = new Set([
+  'get-childitem', 'get-content', 'get-item', 'get-itemproperty', 'get-location',
+  'get-process', 'get-service', 'get-scheduledtask', 'get-scheduledtaskinfo',
+  'get-date', 'get-command', 'get-member', 'get-ciminstance', 'get-wmiobject',
+  'get-volume', 'get-psdrive', 'get-computerinfo', 'get-host', 'get-variable',
+  'test-path', 'select-object', 'select-string', 'where-object', 'measure-object',
+  'sort-object', 'group-object', 'format-list', 'format-table', 'convertto-json',
+  'convertfrom-json', 'out-string',
+]);
+const PS_FORBIDDEN = /(?:^|[^A-Za-z-])(?:Invoke-Expression|iex|Start-Process|Out-File|Add-Content|Set-Content|New-Item|Remove-Item|Stop-\w+|Start-\w+|Restart-\w+|Register-\w+|Unregister-\w+|Set-\w+|New-\w+|Remove-\w+|Clear-\w+|Add-\w+|Copy-\w+|Move-\w+|Rename-\w+|Export-\w+|Import-\w+|Write-\w+|ForEach-Object|%)(?:[^A-Za-z-]|$)/i;
+
+export function isReadOnlyPowerShell(command) {
+  const source = String(command || '').trim();
+  if (!source) return false;
+  const match = source.match(
+    /^(?:powershell|pwsh)(?:\.exe)?\s+(?:(?:-NoProfile|-NonInteractive|-NoLogo|-STA|-ExecutionPolicy\s+Bypass)\s+)*-Command\s+(?:"([^"]*)"|'([^']*)')\s*$/i
+  );
+  if (!match) return false;
+  const body = match[1] ?? match[2] ?? '';
+  if (!body.trim()) return false;
+  // 代入・リダイレクト・コマンド置換・外部実行はすべて拒否する
+  if (/[<>`]|\$\(|&&|\|\||;;|\.exe\b|--%/.test(body)) return false;
+  if (/(?:^|\s)&\s/.test(body)) return false;
+  if (/=/.test(body.replace(/-\w+\s+[^\s|]+/g, ''))) return false;
+  if (PS_FORBIDDEN.test(body)) return false;
+  const cmdlets = [...body.matchAll(/\b([A-Za-z]+-[A-Za-z]+)\b/g)].map((m) => m[1].toLowerCase());
+  if (!cmdlets.length) return false;
+  return cmdlets.every((name) => PS_READ_CMDLETS.has(name));
+}
 function isOperatorWrapper(command, home) {
   // Accept a single script invocation, never a compound shell command.
   if (/[;|<>`$\r\n]/.test(command)) return false;
@@ -135,7 +166,7 @@ export async function main() {
     if (isPastLogSearchToolUse(name, tool)) return;
     if (/^(?:Bash|PowerShell)$/.test(name) && isGateRequiredCommand(command)) return;
     if (/^(?:Bash|PowerShell)$/.test(name) && (operator.test(command) || isOperatorWrapper(command, home))) return;
-    if (/^(?:Bash|PowerShell)$/.test(name) && (delegated.test(command) || isLightLaneCommand(command) || (command.length < 300 && ['read-only', 'git'].includes(classifyBashCommand(command))))) return;
+    if (/^(?:Bash|PowerShell)$/.test(name) && (delegated.test(command) || isLightLaneCommand(command) || isReadOnlyPowerShell(command) || (command.length < 300 && ['read-only', 'git'].includes(classifyBashCommand(command))))) return;
     if (isDocEdit(name, tool, home)) return;
     const dir = path.join(home, '.claude', 'session-lane'), file = path.join(dir, `${input.session_id || 'unknown'}.json`);
     let state = { lane: 'unknown', toolCalls: 0 }; try { state = { ...state, ...JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) }; } catch {}

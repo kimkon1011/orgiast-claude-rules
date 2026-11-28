@@ -214,3 +214,33 @@ test('軽い操作に実装を混ぜると拒否し、Edit/Write の連続は警
   assert.equal(calls(h), 8);
   assert.equal(edit().hookSpecificOutput.permissionDecision, 'deny');
 });
+
+test('読み取り専用の PowerShell は上限後も通す', t => {
+  const h = setup('implement', 'claude-opus-5', { toolCalls: 100 });
+  t.after(() => fs.rmSync(h, { recursive: true, force: true }));
+  const ok = [
+    `powershell -NoProfile -Command "Get-ScheduledTask -TaskName 'OrgiastClaudePace' | Select-Object TaskName,State | Format-List"`,
+    `powershell -NoProfile -Command "Get-ScheduledTaskInfo -TaskName 'X' | Select-Object LastRunTime,LastTaskResult"`,
+    `powershell -NoProfile -Command "Get-Volume | Format-Table"`,
+  ];
+  for (const command of ok) {
+    assert.equal(run(h, { tool_name: 'Bash', tool_input: { command } }), null, command);
+    assert.equal(run(h, { tool_name: 'PowerShell', tool_input: { command } }), null, command);
+  }
+});
+
+test('書き込み・実行系の PowerShell は従来どおり deny', t => {
+  const h = setup('implement', 'claude-opus-5', { toolCalls: 100 });
+  t.after(() => fs.rmSync(h, { recursive: true, force: true }));
+  const ng = [
+    `powershell -NoProfile -Command "Stop-ScheduledTask -TaskName 'X'"`,
+    `powershell -NoProfile -Command "Get-Process | Out-File C:\\tmp\\x.txt"`,
+    `powershell -NoProfile -Command "Invoke-Expression $cmd"`,
+    `powershell -NoProfile -Command "Get-ChildItem C:\\ > out.txt"`,
+    `powershell -NoProfile -Command "Remove-Item C:\\tmp\\x.txt"`,
+    `powershell -NoProfile -Command "New-Item -ItemType File C:\\tmp\\x.txt"`,
+  ];
+  for (const command of ng) {
+    assert.equal(run(h, { tool_name: 'Bash', tool_input: { command } }).hookSpecificOutput.permissionDecision, 'deny', command);
+  }
+});

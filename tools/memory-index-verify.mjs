@@ -12,7 +12,13 @@
 //   3. before の wikilink `[[slug]]` が、リンク先 .md の本文に存在する
 //   4. after の索引に hook / wikilink が1つも残っていない
 //   5. --body-backup があれば、本文が「追記のみ」で変更されている(既存内容の削除・書き換えが無い)
+//   6. 索引からも、索引済みファイルの wikilink からも辿れない .md が無い(孤立 = recall されず埋もれる)
 // 1つでも破れたら exit 1。
+//
+// 孤立だけを単独で検査する(before 不要):
+//   node tools/memory-index-verify.mjs --orphans <MEMORY.md>
+// 孤立が1件でもあれば exit 1。auto-memory がファイルだけ作って索引への追記を取りこぼす事故
+// (2026-11-28 に 3 件を実測)を、差分検証とは独立に拾うための入口。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -44,6 +50,36 @@ export function parseIndex(text) {
     }
   }
   return entries;
+}
+
+export function findOrphans({ directory, indexText }) {
+  if (!fs.existsSync(directory)) return [];
+
+  const entries = parseIndex(indexText);
+  // 「辿れる」集合: 全 entry.file で初期化
+  const reachable = new Set(entries.map((entry) => entry.file));
+
+  // entries の各本文を読み、wikilink [[slug]] から `${slug}.md` を reachable に追加
+  for (const entry of entries) {
+    const fullPath = path.join(directory, entry.file);
+    if (!fs.existsSync(fullPath)) continue;
+    const body = fs.readFileSync(fullPath, 'utf8');
+    for (const match of body.matchAll(WIKILINK_RE)) {
+      reachable.add(`${match[1]}.md`);
+    }
+  }
+
+  // directory 直下の .md 一覧
+  let files;
+  try {
+    files = fs.readdirSync(directory).filter(
+      (f) => f.endsWith('.md') && f !== 'MEMORY.md'
+    );
+  } catch {
+    return [];
+  }
+
+  return files.filter((f) => !reachable.has(f)).sort();
 }
 
 export function verify({ before, after, directory, bodyBackupDir, strictAdded = false }) {
@@ -93,6 +129,9 @@ export function verify({ before, after, directory, bodyBackupDir, strictAdded = 
     }
   }
 
+  const orphans = findOrphans({ directory, indexText: after });
+  for (const file of orphans) notes.push(`索引からもwikilinkからも辿れない: ${file}`);
+
   return {
     problems,
     notes,
@@ -102,6 +141,7 @@ export function verify({ before, after, directory, bodyBackupDir, strictAdded = 
       hooksChecked: beforeEntries.filter((entry) => entry.hook).length,
       wikilinksChecked: beforeEntries.reduce((sum, entry) => sum + entry.wikilinks.length, 0),
       appendOnlyChecked,
+      orphans: orphans.length,
       bytesBefore: Buffer.byteLength(before, 'utf8'),
       bytesAfter: Buffer.byteLength(after, 'utf8'),
     },
@@ -119,6 +159,23 @@ function optionValue(argv, name, required = true) {
 }
 
 export function run(argv = process.argv.slice(2)) {
+  if (argv.includes('--orphans')) {
+    const indexFile = path.resolve(optionValue(argv, '--orphans'));
+    const directory = path.dirname(indexFile);
+    const indexText = fs.readFileSync(indexFile, 'utf8');
+    const orphans = findOrphans({ directory, indexText });
+    const total = fs.readdirSync(directory).filter(
+      (file) => file.endsWith('.md') && file !== 'MEMORY.md'
+    ).length;
+    if (!orphans.length) {
+      console.log(`孤立なし: ${total} ファイルすべて索引または wikilink から辿れます`);
+      return { orphans, total };
+    }
+    for (const file of orphans) console.error(`- ${file}`);
+    console.error(`孤立 ${orphans.length} 件: MEMORY.md に1行追記するか、rollup メモリから [[slug]] で参照してください`);
+    throw new Error('孤立 memory ファイルが見つかりました');
+  }
+
   const beforeFile = path.resolve(optionValue(argv, '--before'));
   const afterFile = path.resolve(optionValue(argv, '--after'));
   const bodyBackup = optionValue(argv, '--body-backup', false);

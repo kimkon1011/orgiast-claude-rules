@@ -40,6 +40,13 @@ function writeMockFile(data, file = process.env.FOLLOWUP_MOCK_FILE) {
   atomicJson(file, data);
 }
 
+// kim-inbox の mock は子プロセスを実行せず、呼出内容だけ残す。
+export function recordMockSpawn(command, args, body = '', file = process.env.FOLLOWUP_MOCK_FILE) {
+  const data = readMockFile(file);
+  data.spawns = [...(data.spawns || []), { command, args, body }];
+  writeMockFile(data, file);
+}
+
 function chatKey(row) {
   return String(row.chatId || row.chatID || '');
 }

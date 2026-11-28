@@ -396,7 +396,7 @@ export async function runWatch({ home, config, ledger, sheets, request, today, d
         const shouldNotify = decision.stage && decision.kim && priorDate !== today;
         decisions.push({ id: row.id, title: row.title, status: row.status, ...decision, notify: !!shouldNotify, ...(shouldNotify ? { line: notificationLine(row, decision, config) } : {}) });
         if (!dryRun) {
-          if (closed(row) || !decision.kim) inboxOps.push(buildInboxOp({ row, config, close: true }));
+          if ((closed(row) || !decision.kim) && openKeys.has(row.id)) inboxOps.push(buildInboxOp({ row, config, close: true }));
           else if (shouldNotify || openKeys.has(row.id)) inboxOps.push(buildInboxOp({ row, decision, config, markNotified: shouldNotify }));
           await attempt(row.id, 'Calendar sync', () => syncCalendar(row, { config, state, request, persist, log: stderr, warnings }));
         }

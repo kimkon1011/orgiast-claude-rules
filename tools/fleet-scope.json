@@ -1,6 +1,8 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/followup-ledger.mjs", "scope": "fleet", "step": "task:followup-ledger", "reason": "全PCから登録・doctor・sync、PCなし行はhub 008が催促"},
+    {"path": "tools/claude-md-followup.md", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "convergeの共通ブロックに依頼台帳の登録方法6行を配布"},
     {"path": "tools/register-reply-notify.ps1", "scope": "kim-only", "step": "task:reply-notify", "reason": "014で顧客返信を監視し佐藤さんへ一度だけ通知するタスク。複数PC登録は重複通知になるため運用PC限定"},
     {"path": "tools/register-catch-and-act.ps1", "scope": "kim-only", "step": "task:catch-and-act", "reason": "015でkimのLINE・メールを読み、個人カレンダー更新と承認キューを処理するため明示登録のみ"},
     {"path": "tools/login-health.mjs", "scope": "fleet", "step": "task:login-health", "reason": "全PCのログイン状態を点検する共通タスク"},

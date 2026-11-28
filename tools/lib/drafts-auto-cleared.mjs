@@ -64,7 +64,7 @@ function appendDurable(filename, value) {
   const fd = fs.openSync(filename, 'a', 0o600);
   try { fs.writeSync(fd, JSON.stringify(value) + '\n'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
-export async function filterClearedDrafts(items, { home, now, deps = {}, stats }) {
+export async function filterClearedDrafts(items, { home, now, deps = {}, stats, shouldContinue = () => true, onSkip = () => {} }) {
   const drafts = items.filter(item => item.kind === 'draft' && item.draftMessage);
   const clients = new Map();
   const get = async mailbox => {
@@ -100,6 +100,7 @@ export async function filterClearedDrafts(items, { home, now, deps = {}, stats }
       }
       }
     } catch (error) {
+      if (!shouldContinue()) { onSkip(1); return; }
       stats.draftCheckErrors = (stats.draftCheckErrors || 0) + 1;
       item.draftCheckError = String(error.message).slice(0, 200);
       return; // Unverified drafts remain visible, including after a prior exclusion.
@@ -116,9 +117,10 @@ export async function filterClearedDrafts(items, { home, now, deps = {}, stats }
   // A mailbox can contain 100+ stale drafts. Checking them serially made a scan
   // take over ten minutes even though every individual Gmail fetch had a timeout.
   await Promise.all(Array.from({ length: Math.min(3, drafts.length) }, async () => {
-    while (next < drafts.length) await checkDraft(drafts[next++]);
+    while (next < drafts.length && shouldContinue()) await checkDraft(drafts[next++]);
   }));
-  if (drafts.length) { stats.draftsChecked = drafts.length; stats.draftsCleared = excluded.size; stats.draftsKept = drafts.length - excluded.size; }
+  onSkip(drafts.length - next);
+  if (drafts.length) { stats.draftsChecked = next; stats.draftsCleared = excluded.size; stats.draftsKept = drafts.length - excluded.size; }
   return items.filter(item => !excluded.has(item.id)).map(({ draftMessage, ...item }) => item);
 }
 // 台帳ロック待ちを短く有界にし、使用中なら spool へ退避（scan 全体を止めない）。

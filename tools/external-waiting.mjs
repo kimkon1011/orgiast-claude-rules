@@ -120,9 +120,20 @@ export function addressee(body) {
   return '';
 }
 
-async function mapLimit(values, limit, fn) {
+const DEFAULT_BUDGET_MS = 14 * 60_000;
+class BudgetExceeded extends Error {}
+async function mapLimit(values, limit, fn, budget) {
   const out = new Array(values.length); let next = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, values.length) }, async () => { while (next < values.length) { const i = next++; out[i] = await fn(values[i]); } }));
+  const results = await Promise.allSettled(Array.from({ length: Math.min(limit, values.length) }, async () => {
+    while (next < values.length && (!budget || budget.remaining())) {
+      const i = next++;
+      try { out[i] = await fn(values[i]); }
+      catch (error) { if (!(error instanceof BudgetExceeded)) throw error; budget.skip(1); }
+    }
+  }));
+  budget?.skip(values.length - next);
+  const failed = results.find(result => result.status === 'rejected');
+  if (failed) throw failed.reason;
   return out;
 }
 
@@ -142,11 +153,12 @@ async function getTokenWithRetry(getToken, mailbox, { sleep = ms => new Promise(
   }
 }
 
-export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = getDriveToken, staff, now = Date.now(), stats = { answeredElsewhere: 0 }, sleep, random } = {}) {
+export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = getDriveToken, staff, now = Date.now(), stats = { answeredElsewhere: 0 }, sleep, random, budget } = {}) {
   let token;
   try {
     token = await getTokenWithRetry(getToken, mailbox, { sleep, onRetry: () => { stats.tokenRetries = (stats.tokenRetries || 0) + 1; } });
   } catch (error) {
+    if (error instanceof BudgetExceeded) throw error;
     throw new Error(`Gmail ${mailbox} token: ${error.message || error}`, { cause: error });
   }
   const get = async (route, { optional = false, tolerateTransient = false } = {}) => {
@@ -154,6 +166,7 @@ export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = ge
       // parse:'json' で本文読み取り中の TimeoutError も gmailFetchWithRetry 内でリトライする
       return await gmailFetchWithRetry(`${API}${route}`, { headers: { Authorization: `Bearer ${token}` } }, { fetchImpl, sleep, random, parse: 'json', onRetry: () => { stats.gmailRetries = (stats.gmailRetries || 0) + 1; } });
     } catch (error) {
+      if (budget && !budget.remaining()) throw new BudgetExceeded('budget_exceeded');
       if (optional && error.status && [404, 410].includes(error.status)) return null;
       if (tolerateTransient && isRetryableFetchError(error)) {
         stats.threadErrors = (stats.threadErrors || 0) + 1;
@@ -162,13 +175,14 @@ export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = ge
       throw error;
     }
   };
+  const timed = (key, fn) => budget ? budget.time(key, fn) : fn();
   const stubs = []; let pageToken = '';
   for (let page = 0; page < MAX_PAGES; page++) {
-    const list = await get(`/threads?q=${encodeURIComponent(THREAD_QUERY)}&maxResults=100${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`);
+    const list = await timed('threadListMs', () => get(`/threads?q=${encodeURIComponent(THREAD_QUERY)}&maxResults=100${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`));
     stubs.push(...(list.threads || []));
     if (!(pageToken = list.nextPageToken || '')) break;
   }
-  const threads = (await mapLimit(stubs, 3, stub => get(`/threads/${stub.id}?format=metadata&${META}`, { optional: true, tolerateTransient: true }))).filter(Boolean);
+  const threads = (await timed('threadBodyMs', () => mapLimit(stubs, 3, stub => get(`/threads/${stub.id}?format=metadata&${META}`, { optional: true, tolerateTransient: true }), budget))).filter(Boolean);
   const items = threads.map(thread => analyzeThread(thread, { mailbox, staff })).filter(Boolean);
   // 別スレッドで返信済み: 同じ相手宛ての送信済みが since より後にあれば除外する（相手ごとに1回検索）。
   const bySender = new Map();
@@ -178,21 +192,24 @@ export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = ge
     const earliest = Math.min(...group.map(item => Date.parse(item.since)));
     const list = await get(`/messages?q=${encodeURIComponent(`in:sent to:${sender} after:${Math.floor(earliest / 1000)}`)}&maxResults=50`, { tolerateTransient: true });
     if (!list) return;
-    const sent = (await mapLimit(list.messages || [], 3, stub => get(`/messages/${stub.id}?format=minimal`, { optional: true, tolerateTransient: true }))).filter(Boolean).map(m => Number(m.internalDate) || 0);
+    const sent = (await mapLimit(list.messages || [], 3, stub => get(`/messages/${stub.id}?format=minimal`, { optional: true, tolerateTransient: true }), budget)).filter(Boolean).map(m => Number(m.internalDate) || 0);
     for (const item of group) if (sent.some(at => at > Date.parse(item.since))) answered.add(item.id);
-  });
+  }, budget);
   stats.answeredElsewhere += answered.size;
   const replies = items.filter(item => item.kind === 'reply' && !answered.has(item.id));
-  await mapLimit(replies, 3, async item => {
+  await timed('threadBodyMs', () => mapLimit(replies, 3, async item => {
     const full = await get(`/messages/${item.lastMessageId}?format=full`, { optional: true, tolerateTransient: true });
     const body = full ? extractBody(full.payload, 4000) : '';
     if (mailbox !== KIM) item.assignee = addressee(body);
     const text = stripQuoted(body);
     item.shortBody = text && text.length <= SHORT_BODY_MAX ? text : null;
-  });
+  }, budget));
   items.splice(0, items.length, ...items.filter(item => !answered.has(item.id)));
-  const drafts = await allPages(get, '/drafts?maxResults=100', 'drafts');
-  const detailed = await mapLimit(drafts, 3, stub => get(`/drafts/${stub.id}?format=full`, { optional: true, tolerateTransient: true }));
+  if (budget && !budget.remaining()) { budget.skip(1); return items; }
+  let drafts;
+  try { drafts = await allPages(get, '/drafts?maxResults=100', 'drafts'); }
+  catch (error) { if (!(error instanceof BudgetExceeded)) throw error; budget.skip(1); return items; }
+  const detailed = await mapLimit(drafts, 3, stub => get(`/drafts/${stub.id}?format=full`, { optional: true, tolerateTransient: true }), budget);
   items.push(...detailed.filter(Boolean).map(draft => analyzeDraft(draft, { mailbox, now, includeNonHuman: true })).filter(Boolean));
   return items;
 }
@@ -208,11 +225,11 @@ export function dedupe(items) {
 }
 
 // 安価レーンに「返信が必要か」を聞く。true=必要 / false=不要 / null=失敗（呼び出し側が正規表現で判定する）。
-export function askLlm(item, { spawnImpl = spawnSync, tmpDir = os.tmpdir() } = {}) {
+export function askLlm(item, { spawnImpl = spawnSync, tmpDir = os.tmpdir(), timeout = 60_000 } = {}) {
   const file = path.join(tmpDir, `external-waiting-${process.pid}-${item.lastMessageId}.txt`);
   try {
     fs.writeFileSync(file, `次の受信メールに、こちらから返信する必要はありますか。お礼や了承だけで返信不要なら no、質問・依頼・日程・確認などがあるなら yes。yes か no の1語だけで答えてください。\n\n件名: ${item.subject}\n本文: ${item.shortBody || item.ask}\n`);
-    const result = spawnImpl(process.execPath, [path.join(toolsDir, 'llm-ask.mjs'), '--provider', 'groq', '--category', 'classification', '--max', '300', '--prompt-file', file], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+    const result = spawnImpl(process.execPath, [path.join(toolsDir, 'llm-ask.mjs'), '--provider', 'groq', '--category', 'classification', '--max', '300', '--prompt-file', file], { encoding: 'utf8', timeout, windowsHide: true });
     const answer = String(result.stdout || '').trim().toLowerCase();
     if (result.status !== 0) return null;
     return /^no\b/.test(answer) ? false : /^yes\b/.test(answer) ? true : null;
@@ -229,27 +246,75 @@ export function notifyText(items, now) {
   return displayPcNames(`【社外返信待ち】24時間以上お待たせしている社外の方が ${items.length} 件あります。\n${lines.join('\n')}${items.length > 10 ? `\nほか ${items.length - 10} 件` : ''}\n次のセッションの冒頭で返信下書きを用意します。`);
 }
 
-export async function scan({ home = defaultHome(), now = Date.now(), mailboxes = MAILBOXES, push = true, deps = {}, staff = loadStaff(), notify, classify = askLlm } = {}) {
+async function scanInternal({ home = defaultHome(), now = Date.now(), mailboxes = MAILBOXES, push = true, deps = {}, staff = loadStaff(), notify, classify = askLlm, budgetMs = Number(process.env.EXTERNAL_WAITING_BUDGET_MS ?? DEFAULT_BUDGET_MS), clock = Date.now } = {}) {
   const previous = readJsonSafe(externalFile(home), {});
   const cacheFile = path.join(stateDir(home), 'external-waiting-llm-cache.json');
   const cache = readJsonSafe(cacheFile, {});
   const sources = {}, collected = [], stats = { llmCalls: 0, llmFailures: 0, ackSkipped: 0, answeredElsewhere: 0, gmailRetries: 0, tokenRetries: 0, threadErrors: 0, mailboxRetries: 0 };
-  const sleep = deps.sleep || (ms => new Promise(r => setTimeout(r, ms)));
+  if (!Number.isFinite(budgetMs) || budgetMs < 0) throw new Error('invalid budget-ms');
+  Object.assign(stats, { threadListMs: 0, threadBodyMs: 0, draftMatchMs: 0, llmMs: 0, totalMs: 0 });
+  const start = clock();
+  let unprocessedCount = 0;
+  const budget = {
+    remaining: () => Math.max(0, budgetMs - (clock() - start)),
+    skip: count => { unprocessedCount += count; },
+    check() { if (!this.remaining()) throw new BudgetExceeded('budget_exceeded'); },
+    async time(key, fn) {
+      const at = clock();
+      try { return await fn(); } finally { stats[key] += clock() - at; }
+    },
+  };
+  const rawSleep = deps.sleep || (ms => new Promise(r => setTimeout(r, ms)));
+  const sleep = async ms => { budget.check(); await rawSleep(Math.min(ms, budget.remaining())); budget.check(); };
+  const rawFetch = deps.fetchImpl || gwsFetch;
+  const rawToken = deps.getToken || getDriveToken;
+  const signal = original => AbortSignal.any([original, AbortSignal.timeout(Math.max(1, Math.min(2147483647, Math.ceil(budget.remaining()))))].filter(Boolean));
+  deps = { ...deps, sleep,
+    fetchImpl: (url, options) => { budget.check(); return rawFetch(url, { ...options, signal: signal(options.signal) }); },
+    getToken: options => { budget.check(); return rawToken({ ...options, signal: signal(options.signal) }); },
+  };
   for (const mailbox of mailboxes) {
+    const skippedBefore = unprocessedCount;
+    if (!budget.remaining()) {
+      budget.skip(1);
+      sources[mailbox] = { ...previous.sources?.[mailbox], partial: true };
+      collected.push(...(previous.items || []).filter(item => item.mailbox === mailbox));
+      continue;
+    }
     const previousSource = (previous.sources || {})[mailbox] || {};
     let lastError = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        collected.push(...await scanMailbox(mailbox, { ...deps, staff, now, stats, sleep }));
+        collected.push(...await scanMailbox(mailbox, { ...deps, staff, now, stats, sleep, budget }));
         sources[mailbox] = { ok: true, consecutiveFailures: 0 };
+        if (unprocessedCount > skippedBefore) {
+          sources[mailbox].partial = true;
+          const ids = new Set(collected.map(item => item.id));
+          collected.push(...(previous.items || []).filter(item => item.mailbox === mailbox && !ids.has(item.id)));
+        }
         lastError = null;
         break;
       } catch (error) {
+        if (error instanceof BudgetExceeded || !budget.remaining()) {
+          budget.skip(1);
+          sources[mailbox] = { ...previousSource, partial: true };
+          collected.push(...(previous.items || []).filter(item => item.mailbox === mailbox));
+          lastError = null;
+          break;
+        }
         lastError = error;
         // リトライ可能な一時失敗は 30 秒待ってメールボックス全体を1回だけやり直す
         if (attempt === 0 && isRetryableFetchError(error)) {
           stats.mailboxRetries++;
-          await sleep(30_000);
+          try { await sleep(30_000); }
+          catch (error) {
+            if (!(error instanceof BudgetExceeded)) throw error;
+            budget.skip(1);
+            sources[mailbox] = { ...previousSource, partial: true };
+            collected.push(...(previous.items || []).filter(item => item.mailbox === mailbox));
+            lastError = null;
+            break;
+          }
           continue;
         }
         break;
@@ -263,7 +328,7 @@ export async function scan({ home = defaultHome(), now = Date.now(), mailboxes =
       collected.push(...(previous.items || []).filter(item => item.mailbox === mailbox)); // 取得失敗を 0 件扱いにしない
     }
   }
-  const verified = await filterClearedDrafts(collected, { home, now, deps, stats });
+  const verified = await budget.time('draftMatchMs', () => filterClearedDrafts(collected, { home, now, deps, stats, shouldContinue: () => budget.remaining() > 0, onSkip: budget.skip }));
   const skips = readSkips(home), kept = [];
   for (const item of dedupe(verified)) {
     if (isSkipped(skips, item)) continue;
@@ -276,8 +341,9 @@ export async function scan({ home = defaultHome(), now = Date.now(), mailboxes =
       else {
         verdict = cache[item.lastMessageId];
         if (typeof verdict !== 'boolean') {
+          if (!budget.remaining()) { budget.skip(1); kept.push(rest); continue; }
           stats.llmCalls++;
-          verdict = classify({ ...item, shortBody });
+          verdict = await budget.time('llmMs', () => classify({ ...item, shortBody }, { timeout: Math.max(1, Math.min(60_000, Math.ceil(budget.remaining()))) }));
           if (typeof verdict === 'boolean') cache[item.lastMessageId] = verdict;
           else { stats.llmFailures++; verdict = true; }
         }
@@ -290,7 +356,17 @@ export async function scan({ home = defaultHome(), now = Date.now(), mailboxes =
   const ids = new Set(kept.map(item => item.id));
   const pushed = Object.fromEntries(Object.entries(previous.pushed || {}).filter(([id, at]) => ids.has(id) && now - at < 7 * 24 * HOUR));
   let notified = null;
-  if (push) {
+  const snapshot = () => {
+    stats.totalMs = clock() - start;
+    const partial = unprocessedCount > 0 || !budget.remaining();
+    const lastError = Object.entries(sources).filter(([, source]) => source.ok === false && !source.partial).map(([mailbox, source]) => mailbox + ': ' + source.error).join('; ');
+    return { generatedAt: new Date(now + stats.totalMs).toISOString(), sources, stats, items: kept, pushed,
+      ...(partial ? { partial: true, partialReason: 'budget_exceeded', unprocessedCount } : {}),
+      ...(lastError ? { lastError } : {}) };
+  };
+  // 通知の待ち時間でタスクが強制終了されても、巡回結果は残す。
+  writeJsonAtomic(externalFile(home), snapshot());
+  if (push && budget.remaining() && !unprocessedCount) {
     const monitored = gmailNotificationOwned(home, now);
     const due = kept.filter(item => !monitored(item) && now - Date.parse(item.since) >= WAIT_LIMIT_MS && !(pushed[item.id] && now - pushed[item.id] < WAIT_LIMIT_MS));
     if (due.length) {
@@ -299,17 +375,27 @@ export async function scan({ home = defaultHome(), now = Date.now(), mailboxes =
       if (isKimDelivered(notified, { extra: ['webhook'] })) for (const item of due) pushed[item.id] = now;
     }
   }
-  const state = { generatedAt: new Date(now).toISOString(), sources, stats, items: kept, pushed };
+  const state = snapshot();
+  if (state.lastError) console.error('external-waiting: ' + state.lastError.replace(/\s+/g, ' '));
   writeJsonAtomic(externalFile(home), state);
-  // 通知失敗でも、照合済みの一覧は保存して次回に通知だけ再試行する。
-  if (push) await notifyClearedDrafts(home, { now, add: deps.addKimInboxItem });
+  if (push && !state.partial && budget.remaining()) await notifyClearedDrafts(home, { now, add: deps.addKimInboxItem });
   recordRun('external-waiting', { changed: kept.length > 0, llmInvoked: stats.llmCalls > 0, items: kept.length, note: kept.length ? 'waiting items' : 'no waiting items' });
   return { state, notified };
 }
 
+export async function scan(options = {}) {
+  try { return await scanInternal(options); }
+  catch (error) {
+    const home = options.home ?? defaultHome();
+    const previous = readJsonSafe(externalFile(home), {});
+    writeJsonAtomic(externalFile(home), { ...previous, lastError: String(error.message || error) });
+    throw error;
+  }
+}
+
 export function summarize(state) {
   const count = key => kept => kept.reduce((acc, item) => ({ ...acc, [item[key]]: (acc[item[key]] || 0) + 1 }), {});
-  return { sources: state.sources, stats: state.stats, total: state.items.length, byKind: count('kind')(state.items), byMailbox: count('mailbox')(state.items) };
+  return { sources: state.sources, stats: state.stats, ...(state.partial ? { partial: true, partialReason: state.partialReason, unprocessedCount: state.unprocessedCount } : {}), total: state.items.length, byKind: count('kind')(state.items), byMailbox: count('mailbox')(state.items) };
 }
 
 if (isEntry(import.meta.url)) {
@@ -318,7 +404,13 @@ if (isEntry(import.meta.url)) {
     if (args.includes('--delete-cleared')) {
       const result = await deleteClearedDrafts({ home: defaultHome(), approvedBy: value('--approved-by') });
       console.log(JSON.stringify(result));
-      if (result.failed) process.exitCode = 1;
+      if (result.failed) {
+        const reason = 'delete-cleared: ' + JSON.stringify(result.failed);
+        const home = defaultHome();
+        writeJsonAtomic(externalFile(home), { ...readJsonSafe(externalFile(home), {}), lastError: reason });
+        console.error(reason);
+        process.exitCode = 1;
+      }
     } else if (args.includes('--skip')) {
       if (!value('--reason')) throw new Error('--reason required');
       addSkip(defaultHome(), value('--skip'), value('--reason'));
@@ -326,9 +418,17 @@ if (isEntry(import.meta.url)) {
       // DWD の鍵が無い PC では何もしない（鍵ありの PC だけが走査する）。
       if (!fs.existsSync(process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath())) { console.log('external-waiting: DWD の鍵が無いため何もしません'); }
       else {
-        const { state, notified } = await scan({ push: !args.includes('--no-push') });
+        const { state, notified } = await scan({ push: !args.includes('--no-push'), ...(args.includes('--budget-ms') ? { budgetMs: Number(value('--budget-ms')) } : {}) });
         console.log(JSON.stringify({ ...summarize(state), notified: notified?.delivered ?? null }, null, 1));
       }
     } else { console.error('使い方: node tools/external-waiting.mjs --scan [--no-push] | --skip <id> --reason <text>'); process.exitCode = 2; }
-  } catch (error) { console.error(error.message); process.exitCode = 1; }
+  } catch (error) {
+    const reason = String(error.message || error).replace(/\s+/g, ' ');
+    console.error(reason);
+    process.exitCode = 1;
+    try {
+      const home = defaultHome();
+      writeJsonAtomic(externalFile(home), { ...readJsonSafe(externalFile(home), {}), lastError: reason });
+    } catch { /* 元のエラーは stderr に記録済み */ }
+  }
 }

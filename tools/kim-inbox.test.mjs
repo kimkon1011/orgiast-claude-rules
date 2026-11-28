@@ -7,7 +7,7 @@ import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, inge
 import { notifyKim } from './notify-kim.mjs';
 import { loadAllowlist, discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { backfill } from './kim-inbox-dedupe-backfill.mjs';
-import { archiveClosed, lookupAnswers, inboxDedupeKey, spoolItem, drainSpool } from './kim-inbox.mjs';
+import { batchFile, archiveClosed, lookupAnswers, inboxDedupeKey, spoolItem, drainSpool } from './kim-inbox.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { formatInboxBrief } from './lib/kim-inbox-relay-state.mjs';
 // The hook intentionally skips sdk-cli sessions; these tests exercise interactive delivery.
@@ -1274,4 +1274,20 @@ test('hasFullPrUrl detects existing PR URLs', () => {
   assert.equal(hasFullPrUrl('https://github.com/kimkon1011/repo/pull/123 完了'), true);
   assert.equal(hasFullPrUrl('PR #123'), false);
   assert.equal(hasFullPrUrl(''), false);
+});
+
+test('batch-file processes mixed operations in order, isolates failure and drains once', async t => {
+  const home = seat(t), filename = path.join(home, 'batch.jsonl');
+  const add = key => ({ op: 'add', kind: 'deadline', key, due: '2026-11-27', remainingDays: 0, source: 'deadline-watch', text: '期限の確認' });
+  fs.writeFileSync(filename, [add('D-1'), { op: 'close-key', key: 'D-1' },
+    { op: 'invalid', key: 'bad' }, add('D-2')].map(x => JSON.stringify(x)).join('\n'));
+  let drains = 0;
+  const results = await batchFile(home, filename, { drain: async () => { drains++; } });
+  assert.equal(drains, 1);
+  assert.deepEqual(results.map(x => [x.key, x.ok]), [['D-1', true], ['D-1', true], ['bad', false], ['D-2', true]]);
+  assert.equal(listItems(home, { status: 'open' }).find(x => x.key === 'D-2').id, results[3].id);
+  assert.ok(!listItems(home, { status: 'open' }).some(x => x.key === 'D-1'));
+  const output = [];
+  assert.equal(await main(['--batch-file', filename], { home, stdout: x => output.push(x) }), 0);
+  assert.deepEqual(JSON.parse(output[0]).map(x => x.ok), [true, true, false, true]);
 });

@@ -972,8 +972,9 @@ export function mirrorAbsoluteRules(targetHome, rules, { preview = false, log = 
 }
 
 export function build(current, body, label) {
+  const followup = fs.readFileSync(new URL('./claude-md-followup.md', import.meta.url), 'utf8').trim();
   current = dedupePreferences(current, body);
-  const block = `${beginPrefix} (自動同期 ${label}) -->\n- 基本理念・判断基準（毎セッション読み込み・迷ったらここに戻る）: @~/.claude/orgiast-mission.md\n${body}\n- 全社共有の知見（kim 本人が操作する生存席の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n- 制作・営業・見積・案件の着手前: ~/.claude/knowledge/production-sales/00_INDEX.md を読み、必要な節だけ Grep。全文を丸読みしない。\n${endMarker}`;
+  const block = `${beginPrefix} (自動同期 ${label}) -->\n- 基本理念・判断基準（毎セッション読み込み・迷ったらここに戻る）: @~/.claude/orgiast-mission.md\n${body}\n${followup}\n- 全社共有の知見（kim 本人が操作する生存席の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n- 制作・営業・見積・案件の着手前: ~/.claude/knowledge/production-sales/00_INDEX.md を読み、必要な節だけ Grep。全文を丸読みしない。\n${endMarker}`;
   if (current === null) return { updated: block, action: '新規作成' };
   // 行全体が開始マーカー形式そのものである場合だけ対象にする(部分一致は自己言及文書に誤爆する)。
   // ラベル部分の形式は縛らない: 日付形式を固定すると、別形式で導入されたPCで置換に失敗し

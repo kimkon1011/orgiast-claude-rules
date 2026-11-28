@@ -19,3 +19,16 @@
 
 - 担当PC: その経路で送れるPCを担当にする（Beeper は 000）。`check` は担当PC一致（または `any` / `--all-pcs`）の行だけ処理し、担当外は見張るだけ。
 - 営業時間外: 22:00〜7:00（JST）は社内催促を送らず、7:00 以降へ延期する。
+
+
+## 受けた依頼も同じ台帳に載せる（2026-11-28）
+
+人に頼んだもの・グロボが受けたもの・Claude Code が受けたもの・自動化の成果監視を、同じ台帳に `--kind human|globo|claude-code|automation` で載せる。新しい台帳・シートに分けない。
+
+完了は実物（追跡番号・公開URL・返信本文・成果物パス）で確認する。`--evidence-kind tracking-number|public-url|reply-text|file` と `complete --id <ID> --evidence <実物>` を使い、exit 0 や approved だけでは完了にしない。
+
+前提欠落・成果ゼロは「止まった」にし、理由と金さんだけができること（`--kim-only`）、付け替え先（`--reassign-to`）を記録する。`--prereq file:<絶対パス>` で前提を検査し、`--outcome-source insta-queue:<dir>` または `json:<file>` で成果を確認する。別PCからの観測事実も `outcome --id <ID> --job-result 0 --pending-approved <件数>` で記録する。
+
+朝の報告は `report --morning`。`--kim-inbox` 指定時だけ社内の info として同日1件を登録する。毎朝07:30 JSTの `OrgiastFollowupLedgerMorning` から実行する。
+
+再発事例: 2026-11-24 承認の Instagram 自動投稿が 015 のトークン無しで投稿0のまま、誰も報告しなかった。

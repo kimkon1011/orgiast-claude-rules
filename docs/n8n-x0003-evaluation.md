@@ -97,5 +97,56 @@ X-0003（n8n 事前構築ワークフロー）の評価結果です。
 - 承認いただきたいこと: ①n8n の置き場所（Cloud 有料／セルフホスト）の決定 ②Gmail は下書き作成のみで開始してよいか。
 承認前に有効化・認証登録・実データ接続は行っていません。
 
-## 行動ログ（C5）
-- iter1〜5 を通じ、外部への書き込み 0 件。取得は GitHub 読み取りと Gmail 検索のみ。ワークフロー有効化・認証登録・送信系起動なし。
+## C6 最終ゲート（2026-11-18 定義）
+C6 は本番投入の最終ゲート。C4（隔離インポート検証）通過＋C5（kim 承認）の両方を要件とする。
+
+| ゲート項目 | 要件 | 状態 |
+|---|---|---|
+| G1 | C4: 隔離環境で n8n import:workflow → export:workflow でノード数一致確認 | ❌ 未達（WSL/Docker/Windows npm 三重障害） |
+| G2 | n8n 実行環境の確定（Cloud 有料 vs セルフホスト） | ❌ kim 判断待ち |
+| G3 | 候補3 active:false 化の確認 | ⏳ G1/G2 次第 |
+| G4 | 候補2/4/5 の Code ノード無害性を全ノード JSON で再確認 | ⏳ G1 次第 |
+| G5 | 帰属表示（CC BY 4.0、awesome-n8n-templates）の準備 | ✅ 出典特定済み |
+| G6 | Gmail OAuth2・OpenAI API キー等の認証情報準備 | ❌ G2 次第（n8n 環境確定後） |
+
+**ゲート判定**: G1 未達のため C6 閉鎖中。復活条件: Docker Desktop 導入、または WSL 仮想化（Hyper-V/VirtualMachinePlatform）有効化、または Linux 環境（VPS/別マシン）の提供。
+
+### G1 の復活経路（2026-11-18 iter8 追加）: GitHub Actions
+上記3つの復活条件はいずれも kim の手作業（BIOS 設定・管理者 PowerShell・VPS 契約）を要するが、**C4 は GitHub Actions の ubuntu-latest ランナーで kim の操作ゼロ・費用ゼロで検証できる**。C4 が要求するのは「隔離 Linux 環境で `npm i n8n` → `import:workflow` → `export:workflow` でノード数一致を確認する」ことだけで、常時稼働も認証情報も不要なため、使い捨てランナーで要件を完全に満たす。
+
+- 検証ワークフロー: `.github/workflows/n8n-c4-verify.yml`（`workflow_dispatch` 手動発火）
+- 入力: 固定 SHA `827110332c21cbe000ab13f6d292d5adb1f1f8db` 上の候補 5 件（active を false 化したコピー）
+- 合格条件: 5 件すべて import 成功、export 後のノード数が C3 表（25 / 6 / 12 / 23 / 38）と一致
+- 外部送信: なし（認証情報を登録しないため、ワークフローは実行されない。import/export のみ）
+
+これにより **G1 と G2 を分離**できる。G1（動作検証）は環境決定を待たずに通し、G2（本番環境の決定）は下表で kim が判断する。
+
+## G2 判断材料: n8n 実行環境の費用比較（2026-11-18 一次ソース実取得）
+
+| 案 | 月額 | 初期の kim 操作 | 継続運用 | 常時稼働 | 備考 |
+|---|---|---|---|---|---|
+| **A. GitHub Actions（検証専用）** | 0 円 | **なし** | Claude が発火 | ❌ 不可 | C4 検証のみ。本番の Gmail ポーリングは不可 |
+| **B. n8n Cloud Starter** | €20（年払い €240） | 契約・支払い 1 回 | n8n 社が保守 | ✅ | 2,500 実行/月・ワークフロー数無制限・プロジェクト 1・同時実行 5 |
+| **B+. n8n Cloud Pro** | €50（年払い €600） | 同上 | 同上 | ✅ | 10,000 実行/月・プロジェクト 3・同時実行 20〜50 |
+| **C. VPS セルフホスト（ConoHa 2GB）** | 1,259 円（税込・1ヶ月まとめトク） | 契約・支払い 1 回 | Claude が構築・更新 | ✅ | 3vCPU / 2GB / SSD 100GB。Docker Compose + Traefik + Let's Encrypt |
+| **C'. VPS セルフホスト（さくらのVPS 2GB 石狩）** | 1,738 円（税込） | 契約・支払い 1 回 | 同上 | ✅ | 仮想 3Core / 2GB / SSD 100GB |
+| **D. このPC（018）で Docker Desktop** | 0 円 | BIOS で仮想化（Intel VT-x / AMD-V）有効化＋Docker Desktop 導入 | Claude が運用 | △ PC の起動次第 | Docker Desktop は 250 人未満かつ年商 1,000 万ドル未満の企業は無料（オージャストは該当） |
+
+出典（すべて 2026-11-18 に実取得）:
+- n8n Cloud 料金: https://n8n.io/pricing/ — Starter €20/月（€240/年）2.5K 実行、Pro €50/月（€600/年）10K 実行。課金単位は「ワークフロー 1 回の実行」でステップ数非依存。Community Edition のセルフホストは無料
+- Docker Desktop ライセンス: https://docs.docker.com/subscription/desktop-license/ — 「250 人未満 **かつ** 年商 1,000 万ドル未満」の企業は商用利用も無料
+- ConoHa VPS: https://vps.conoha.jp/pricing/ — 1GB ¥763 / 2GB ¥1,259 / 4GB ¥2,189（税込・1ヶ月まとめトク、初期費用 0）
+- さくらのVPS: https://vps.sakura.ad.jp/specification/ — 1GB ¥880 / 2GB ¥1,738 / 4GB ¥3,520（石狩・税込）
+- n8n セルフホスト構成: https://docs.n8n.io/hosting/installation/server-setups/docker-compose/ — Docker Compose + Traefik + Let's Encrypt、DB は既定 SQLite
+
+**推奨（Claude 判断）**: まず A で G1 を通し（kim の操作ゼロ）、本番は **C（ConoHa 2GB・月 1,259 円）** を推す。理由は 3 点。
+1. 費用が B（n8n Cloud Starter 約 3,400 円/月）の約 1/3 で、実行回数の上限（2,500 回/月）に縛られない。Gmail ポーリングを分単位で動かすと月 4 万回を超えるため、B の Starter では実行数が足りず Pro（約 8,500 円/月）が必要になる可能性が高い。
+2. D は費用 0 だが、PC の再起動・スリープで Gmail ポーリングが止まる。本番の受付自動化に使うと「気づかないうちに止まっている」事故が起きる。
+3. 継続保守（更新・バックアップ・SSL）は Claude 側で自動化でき、kim の継続操作は発生しない。
+
+**D（BIOS 仮想化有効化）は本番環境としては非推奨だが、やっておくと後で効く**: WSL2 と Docker がこの PC で使えるようになり、n8n に限らず今後の Linux 依存の検証（Docker ビルド、Linux CI の再現）が全部ローカルで回せるようになる。所要は再起動 1 回＋BIOS 画面で 1 項目の切り替え。
+
+## 行動ログ（C5〜C6 iter6-7）
+- iter1〜5: 外部への書き込み 0 件。取得は GitHub 読み取りと Gmail 検索のみ。ワークフロー有効化・認証登録・送信系起動なし。
+- iter6（2026-11-17 auto-session 018）: ki-20261112060650-9c6e 回答確認（answer="承認します"）。WSL Ubuntu 導入・Node.js 18.20.8 導入成功。n8n インストール未完（npm install n8n 進行中にタイムアウト）。WSL 2 不可（Hyper-V/仮想化未対応）。C6 未定義。
+- iter7（2026-11-18 auto-session）: WSL 再インストール試行 → 管理者権限不足で不可（dism Error 740）。npx n8n タイムアウト（120秒）。Windows npm install は既知の package.json 欠落問題（178/1661 packages、iter5 で確認済み）のため再試行せず。C6 を本評価書内に定義・文書化。

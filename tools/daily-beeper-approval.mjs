@@ -1,4 +1,5 @@
 // Generic messages require per-message approval. Lahaina standing authorization is scoped separately.
+// 一回にまとめる：出す前に同じ案件・同じ相手・同じ締切の作業（直送・控え・別送・追加署名など）を全部洗い出して1回にまとめる。分けるときは理由を書く（詳細はCLAUDE.md『一回にまとめる』）
 import { registerCard } from './lib/approval-cards.mjs';
 import fs from 'node:fs';
 import os from 'node:os';

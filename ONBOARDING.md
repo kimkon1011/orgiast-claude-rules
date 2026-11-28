@@ -123,6 +123,19 @@ Claude Code は「作業者の手間を最小化する自動実行エージェ�
 - 公共Wi-Fiでパスワード入力を求めず、リスクはAIが先に指摘する。
 - 知っている情報は委任文に必ず運び、手間チェックの `サインイン:` 行で検査する。再発: ふわへの委任で出どころ未記載・古い保存パスワード使用・手入力が第一代替になった。
 
+<!-- BEGIN: 一回にまとめる (kim 2026-11-28) -->
+## 一回にまとめる（kim 2026-11-28・全AI共通）
+
+人に何かを頼む・刷る・送る・判断を求めるときは、同じ案件・同じ相手・同じ締切で必要になる作業（直送・控え・別送・追加署名など）を全部洗い出し、1回にまとめる。分けるのは理由があるときだけで、その理由を書く。
+
+- 訪問に限らず、印刷・発送・依頼・判断カードにも同じく適用する。
+- 送付書等に「直送」「別送」「控え」とあれば今回の作業に含める。
+- 判断カードは同じ案件で1枚、OKなら全部やる範囲を書く。
+- 予定ができた訪問・発送・依頼には、同じ窓口・同じ相手・同じ締切でできる用事を乗せる。別の日の外出へ先送りしない（材料不足など、分ける理由を書く場合を除く）。
+- 今日中に本人へ聞ける確認は1枚にまとめる。一部を後回しにして先に出す判断をする前に、今日聞けるなら一緒に聞く。
+- 全文・再発事例: rules/absolute-rules.md と portable-knowhow/19_一回にまとめる.md
+<!-- END: 一回にまとめる -->
+
 ### 人の手間はAIの効率より優先（kim 2026-11-16 決定・全ルールより上）
 
 **🔴 人の手間はAIの効率より上（kim 2026-11-16・全PC/アカウント）。金さん（user）/お客様の手間をAI効率のため犠牲にしない。手間最優先・送信前照合・完了検証表・費用対効果/長期利益を含む全ルールより優先し、照合/検証表と社外送信/削除/課金の承認は省略不可。userへ頼む前に修復→別経路→代行を調べClaude策を先頭にする。社外日程調整は秘書ツール（https://claude-pc.tailc5d751.ts.net/secretary/book 。kim@orgiast.jp と seisaku-team@orgiast.jp の両方が空いている日時。社内専用で、このURLと claude-pc.tailc5d751.ts.net/secretary 配下はお客様に送らない）から具体的な候補を本文に4〜5枠。合わなければお客様に別日を聞くか、AI側で追加の候補を出す。**
@@ -1924,13 +1937,7 @@ macOS/Linux は `install-orgiast.sh` を同様に取得して `bash` で実行�
 
 本文の結論を支える経緯・具体例・診断手順を保持する。
 
-**AI従量課金の見逃し: seisaku-team@ の別 Console 組織で3か月 $4,240 超（2026-10-17 発覚・§2.8.5 / §1.18 の根拠）**
-
-- **何が起きたか**: kim が seisaku-team@orgiast.jp で `platform.claude.com/settings/billing` を開くと、10/16〜17 だけで「クレジット付与」$22/$16.92/$22/$17.15/$12.02/$11.12… が並んでいた。seisaku-team@ の Gmail（DWD で読める）には 2026-07-10 から Anthropic の領収書が 201 通、直近 100 通の合計 $4,240.66（7/11〜15 で $2,945、以後ほぼ毎日 $10〜60）、10/16 以降は「$22.00 payment … was unsuccessful」「Auto-reload was paused」「Your Claude API access is turned off（out of usage credits）」が連続していた。組織名は「よろしくお願いします。's Individual Org」（Console 初回アクセス時に自動生成された個人組織に、名前欄へ挨拶文を入れたもの）。月別（領収書の摘要で分解）: 7月 $3,424（うち「Auto recharge extra usage, Team plan」＝Team プランの超過分 $3,224 が 7/7〜7/15 に集中）／8月 $534／9月 $322／10月(17日まで) $384。10/16〜17 の「One-time credit purchase」$29・$44 は API 停止後に人が手で買い足したもの。
-- **なぜ検知できなかったか（4つの穴）**: ①Admin API の監視キーが見ていた組織は「オージャスト」（メンバー kim@ と m.kanau@ だけ、10月は日額 $1〜9）で、seisaku-team@ の組織は**監視対象に存在しなかった**。`budget-status` は Team シートの超過分も「計測不能」と表示するだけだった。②領収書・決済失敗・API停止の通知は全部 seisaku-team@ の Gmail に届いていたが、**誰も（人も Claude も）読む仕組みが無かった**。freee のカード明細は月次で遅く、`ai-cost-unify` の freee 取得は人が立ち会うセッションでしか動かない。③Claude Code を Console/API キーで動かしても、それを検知する hook が無かった。④委譲ガードは `cost-enforce.json` が block の時だけ・Fable/Opus セッションだけ・override ファイルで無効化可、と抜け道だらけで、Sonnet 100% の古川PC（2026-10-07 時点 委譲率 5.9%）は素通りだった。
-- **追加で分かった理由（kim 2026-10-17「それ以外の理由も調べて」）**: ⑤2026-08-17 に Admin API の桁バグを直した際、「Dev API は月 $50＝問題なし」と memory に記録し、以後コストを疑う調査が止まった（見ていたのは kim@ の組織だけ）。⑥2026-08-30 の freee カード明細集計で ANTHROPIC 590 件・7月 ¥120 万 が見えていたのに、「Claude Code と API の2行に当たるので配分しない」と決めて Admin API の $50 と突き合わせなかった。⑦2026-09-16 に Team（kim@ 宛「spend limit 到達」）と Console（seisaku-team@ 宛「Auto-reload 停止／API 停止」）の上限到達が同日に起き、Team 側だけ上限を引き上げて Console 側は誰も読まなかった（共有受信箱の 201 通は全部未読）。⑧Console 組織は 6/27「Higher rate limits」・8/28「prompt cache hit rate is low」の通知が示すとおり 6月から稼働していた。⑨2026-10-09 に古川さんを Team から外した時に代替（Codex/Gemini の使い方）を渡さず、本人 PC は fleet-pc-map 未登録で委譲率 5.9%・Sonnet 100% の警告が誰にも届かなかった。⑩組織指示（claude.ai）は Fable と委譲の方針だけで、禁止・停止・解除条件が無かった。
-- **使っていた経路（判明分）**: 学会協賛ナビ（`gakkai-sponsor.vercel.app`、seisaku-team@ 所有）の SEO 記事生成 `/api/internal/generate-article` と日次ルーチンがサーバー側 `ANTHROPIC_API_KEY` で Claude API を呼ぶ＝毎日の定常 $10〜20 の候補。10/16〜17 の急増分は古川さん（10/09 に Team から削除）の Claude Code 利用と推定（本人PCの transcript は未取得＝未確認）。
-- **直したこと**: §2.8.5（Gmail 領収書の日次スキャン `ai-receipt-scan.mjs`、複数組織 Admin キー、`api-billing-guard`）、§1.18（委譲ガードを全モデル常時 deny・解除は user マーカーのみ）、組織指示（claude.ai Team 設定）への追記。残る手作業は「別組織の Admin キー発行と月間上限設定」（Console の UI でしかできない）。
+**AI従量課金の見逃し: seisaku-team@ の別 Console 組織で3か月 $4,240 超（2026-10-17 発覚・§2.8.5 / §1.18 の根拠）** → 経緯の全文は `docs/incidents/2026-10-17-ai-billing-console-org.md`
 
 **設計時点から"手間ゼロ"を織り込む（2026-08-12 kim指示）**
 

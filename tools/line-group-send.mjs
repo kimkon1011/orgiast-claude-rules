@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // LINE グループへ、その場の Claude Code から直接送る（kim-PC への中継は使わない）。
+// 一回にまとめる：出す前に同じ案件・同じ相手・同じ締切の作業（直送・控え・別送・追加署名など）を全部洗い出して1回にまとめる。分けるときは理由を書く（詳細はCLAUDE.md『一回にまとめる』）
 // 送信者は LINE 公式アカウント「オージャスト金(読取専用)」@458zwuhb（グループに参加済みの bot）。
 // 使い方: node tools/line-group-send.mjs --group <groupId|グループ名> --text-file <本文.txt> [--image <png/jpg> ...] [--dry-run]
 //   画像は Supabase Storage（line-media/outbound/）へ上げ、1年有効の署名URLで送る。1MB 超は送れないので先に JPEG 化すること。

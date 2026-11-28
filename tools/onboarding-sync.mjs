@@ -804,9 +804,15 @@ export function makeIndex(body) {
   const conclusions = new Map();
   let previousNonempty = '';
   let currentSection;
+  let embeddedRuleBlock = false;
   const includedSubheadings = new Set();
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (/^<!-- BEGIN: /.test(line)) embeddedRuleBlock = true;
+    if (embeddedRuleBlock) {
+      if (/^<!-- END: /.test(line)) embeddedRuleBlock = false;
+      continue;
+    }
     const subheading = line.match(numberedIndexHeading);
     if (subheading && indexRuleStart.test(previousNonempty) && subheading[1] !== currentSection) {
       const title = stripIndexDate(line);
@@ -897,7 +903,13 @@ export function extractAbsoluteRules(body) {
   const lines = String(body || '').replace(/\r/g, '').split('\n');
   const start = lines.findIndex(l => /^#{2,3} 🛑 絶対ルール/.test(l));
   if (start < 0) return '';
-  let end = lines.findIndex((l, i) => i > start && /^#{1,3} /.test(l));
+  let embeddedRuleBlock = false;
+  let end = -1;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^<!-- BEGIN: /.test(lines[i])) embeddedRuleBlock = true;
+    if (!embeddedRuleBlock && /^#{1,3} /.test(lines[i])) { end = i; break; }
+    if (/^<!-- END: /.test(lines[i])) embeddedRuleBlock = false;
+  }
   if (end < 0) end = lines.length;
   // 索引向けの1行要約（「全文はCLAUDE.md最上部」）は最上部ブロック自身には要らないので除く。
   return lines.slice(start, end).filter(l => !/全文はCLAUDE\.md最上部/.test(l)).join('\n').replace(/\n{3,}/g, '\n\n').replace(/^#{2,3} /, '# ').trim();

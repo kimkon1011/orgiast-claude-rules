@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // 紙・現地・郵送を誰かに割り振る前の判定。住まいと持ち場が分からない人には割り振らない。
+// 一回にまとめる：出す前に同じ案件・同じ相手・同じ締切の作業（直送・控え・別送・追加署名など）を全部洗い出して1回にまとめる。分けるときは理由を書く（詳細はCLAUDE.md『一回にまとめる』）
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

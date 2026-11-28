@@ -2,6 +2,7 @@ import test from 'node:test'; import assert from 'node:assert/strict';
 import { gateOptions, arrivalOf } from './lib/deadline-gate.mjs';
 import { consolidate } from './lib/visit-consolidate-core.mjs';
 import { loadOffices } from './visit-consolidate.mjs';
+import { main as visitMain } from './visit-consolidate.mjs';
 
 const src = '公式ページ 2026-11-27 確認';
 test('期限の根拠が無ければ選択肢を1つも出さない', () => {
@@ -41,6 +42,10 @@ test('訪問予定を全案件の同じ窓口の用事と突き合わせる（11
   assert.deepEqual(v.bundle.map(b => b.id), ['D1']);
   assert.ok(v.avoid.some(a => /オンライン/.test(a)));
   assert.ok(r.unscheduled.some(u => u.id === 'D1'));
+});
+test('matome サブコマンドがまとめ確認を呼ぶ', async () => {
+  const logs = []; const code = await visitMain(['matome', '--case-dir', new URL('../tests/matome-check/certificate', import.meta.url).pathname.replace(/^\/(.:)/, '$1')], { log: x => logs.push(x) });
+  assert.equal(code, 0); assert.match(logs.join('\n'), /まとめ確認/);
 });
 
 import fs from 'node:fs';

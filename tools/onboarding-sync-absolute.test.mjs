@@ -11,6 +11,8 @@ test('ONBOARDING の絶対ルール節を抜き出す（スピード最重視が
   const speed = rules.indexOf('スピードの経済価値を最重視。早ければ後で間違いを訂正でき、手配先も見つかり、安い方法を選べる。遅いと人探しが困難、間違えても止める時間がなく、人間の心的ストレスも高くなり、問題解決が圧倒的に困難になる。受けたら即着手、前倒しで進める。'), buffer = rules.indexOf('すべて前倒し・バッファ20%以上');
   assert.ok(speed > 0 && buffer > speed);
   assert.ok(!rules.includes('人の手間はAIの効率より優先'), '次の節は含めない');
+  assert.match(rules, /BEGIN: 一回にまとめる/);
+  assert.match(rules, /訪問に限らず、印刷・発送・依頼・判断カードにも同じく適用する/);
   assert.match(rules, /案件の開始・再開は、必ず担当PCのルールで決める/);
   assert.match(rules, /担当外のPCでは再開しない/);
   assert.match(rules, /手続き代行の即時開始ルール/);
@@ -42,6 +44,11 @@ assert.match(rules, /再送分も含めて通算2回まで/);
   assert.ok(rules.includes(CARD_NOTICE), `${CARD_NOTICE} が絶対ルールの抽出結果に含まれる`);
   const mirrored = fs.readFileSync(new URL('../rules/absolute-rules.md', import.meta.url), 'utf8');
   assert.match(mirrored, /追記6・2026-11-27/);
+});
+test('BEGIN/END 内の見出しでは切れず、外の見出しで切れる', () => {
+  const sample = '### 🛑 絶対ルール\nA\n<!-- BEGIN: x -->\n## 内側\nB\n<!-- END: x -->\n### 外側\nC';
+  const rules = extractAbsoluteRules(sample);
+  assert.match(rules, /## 内側/); assert.match(rules, /B/); assert.doesNotMatch(rules, /外側|C/);
 });
 test('ABSOLUTE_RULES_SYSTEM に認証コードと空港案内のルールを含む', () => {
   assert.match(ABSOLUTE_RULES_SYSTEM, /受信トレイを直接開き/);

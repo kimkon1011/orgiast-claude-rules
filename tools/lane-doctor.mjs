@@ -467,6 +467,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   orders(health, home);
   demoteBilling(health, home, now);
   await notifyLaneStops(health, { home, now, notify, budgetMs, started, platform, spawnImpl });
+  annotateProbeFreshness(health);
   persist(path.join(dir, 'lane-health.json'), health, health);
   return health;
 }
@@ -481,6 +482,20 @@ export function demoteBilling(health, home, now = Date.now()) {
   for (const [p] of billing) cooldown[p] = { until: now + 86400_000, at: now, reason: 'billing' };
   persist(cooldownFile, cooldown, health);
 }
+// probe 記録の鮮度を各レーンへ付与する。summarize より前（保存・出力より前）に1回だけ呼ぶ。
+// 既存フィールドは書き換えず probeAgeMinutes / probeStale を足すだけ。
+export function annotateProbeFreshness(health) {
+  const baseTime = Date.parse(health.ts || health.probedAt || '');
+  if (!Number.isFinite(baseTime)) return health;
+  for (const s of Object.values(health.lanes || {})) {
+    const probeTime = Date.parse(s.probedAt || '');
+    if (!Number.isFinite(probeTime)) continue;
+    s.probeAgeMinutes = Math.round((baseTime - probeTime) / 60000);
+    s.probeStale = s.probeAgeMinutes > 60 || (s.alive === false && s.probeResult === 'alive');
+  }
+  return health;
+}
+
 export async function notifyLaneStops(health, { home = laneHome(), now = Date.now(), notify = notifyKim, budgetMs = 5000, started = Date.now(), platform = process.platform, spawnImpl = spawnSync } = {}) {
   const dir = path.join(home, '.claude');
   health.notifications = [];
@@ -498,18 +513,6 @@ export async function notifyLaneStops(health, { home = laneHome(), now = Date.no
   }
 }
 export function summarize(health) {
-  // Add probe freshness annotations to each lane entry (既存フィールドは不変)
-  const baseTs = health.ts || health.probedAt;
-  const baseTime = baseTs ? Date.parse(baseTs) : NaN;
-  if (Number.isFinite(baseTime)) {
-    for (const s of Object.values(health.lanes)) {
-      const probeTime = s.probedAt ? Date.parse(s.probedAt) : NaN;
-      if (Number.isFinite(probeTime)) {
-        s.probeAgeMinutes = Math.round((baseTime - probeTime) / 60000);
-        s.probeStale = s.probeAgeMinutes > 60 || (s.alive === false && s.probeResult === 'alive');
-      }
-    }
-  }
   const substituted = ([, s]) => !s.alive && s.via === 'openrouter' && health.lanes.openrouter?.alive;
   const alive = Object.entries(health.lanes).filter((entry) => entry[1].alive || substituted(entry)).map(([p,s]) => substituted([p, s]) ? `${p} ✅(OpenRouter経由)` : `${p} ✅${s.reason === 'probe_ok:stale' ? `(stale ${Math.floor((time(health.ts) - time(s.lastProbeOkAt)) / 60000)}m)` : ''}`).join(' ') || 'なし';
   const dead = Object.entries(health.lanes).filter((entry) => !entry[1].alive && !substituted(entry)).map(([p,s]) => {

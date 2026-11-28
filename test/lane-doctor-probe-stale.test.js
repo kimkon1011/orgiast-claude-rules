@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { summarize } from '../tools/lane-doctor.mjs';
+import { summarize, annotateProbeFreshness } from '../tools/lane-doctor.mjs';
 
 test('alive:false かつ probeResult:alive のレーンに probe記録の注釈が付く', () => {
   const health = {
@@ -17,6 +17,7 @@ test('alive:false かつ probeResult:alive のレーンに probe記録の注釈�
     repairs: [],
     errors: [],
   };
+  annotateProbeFreshness(health);
   const result = summarize(health);
   assert.ok(result.includes('（probe記録は alive・607分前）'),
     `expected probe note in summary, got: ${result}`);
@@ -60,4 +61,24 @@ test('alive:true のレーンだけを渡した戻り値は probe記録の注釈
     `expected summary to start with '生存: ', got: ${result}`);
   assert.ok(!result.includes('probe記録は alive'),
     `unexpected probe note in summary, got: ${result}`);
+});
+
+test('annotateProbeFreshness が probeAgeMinutes と probeStale を付ける', () => {
+  const health = {
+    ts: '2026-11-28T13:07:00.000Z',
+    lanes: {
+      codex: { alive: false, probeResult: 'alive', probedAt: '2026-11-28T03:00:00.000Z' },
+    },
+  };
+  annotateProbeFreshness(health);
+  assert.equal(health.lanes.codex.probeAgeMinutes, 607);
+  assert.equal(health.lanes.codex.probeStale, true);
+});
+
+test('summarize は引数の health を書き換えない', () => {
+  const lane = { alive: true, reason: 'probe_ok', probedAt: '2026-11-28T13:00:00.000Z' };
+  const health = { ts: '2026-11-28T13:07:00.000Z', lanes: { openrouter: lane }, repairs: [], errors: [] };
+  summarize(health);
+  assert.equal(Object.hasOwn(lane, 'probeAgeMinutes'), false);
+  assert.equal(Object.hasOwn(lane, 'probeStale'), false);
 });

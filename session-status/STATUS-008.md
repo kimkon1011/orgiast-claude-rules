@@ -1,7 +1,7 @@
-# session-status  PC=008  host=008XPS8300  updated 2026-11-28 16:09 JST
+# session-status  PC=008  host=008XPS8300  updated 2026-11-28 17:09 JST
 
 - claude auth: { "loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": "C:\\Users\\user\\.claude\\projects", "configDirectory": "C:\\Users\\user\\
-- 案件数: 62
+- 案件数: 65
 
 - 008・20261126-EOラーニングVALX只石プロデュース『劇薬マーケティング』シリーズ第二弾!・完了・最終更新 11/26 17:53、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 008・20261126-エイト・停止・最終更新 11/26 15:52、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
@@ -21,7 +21,7 @@
 - 008・curama-watch-0906・停止・最終更新 11/27 11:05、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・deadline-sweep-1124・停止・最終更新 11/24 10:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・event-slides-1124・停止・最終更新 11/24 17:35、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 008・followup-ledger・停止・最終更新 11/28 16:01、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 008・followup-ledger・停止・最終更新 11/28 16:31、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・followup-ledger-1127-008・完了・最終更新 11/28 00:54、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
 - 008・followup-ledger-1128-full・完了・最終更新 11/28 15:17、STATUS.mdなし、DONEあり、REPORTあり、金さん待ちの記述あり・期限なし・次:なし
 - 008・from-015-154-155-1127・停止・最終更新 11/27 08:18、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
@@ -29,8 +29,10 @@
 - 008・gakkai-tm-prospectus-1128・完了・最終更新 11/28 04:44、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー、金さん待ちの記述あり・期限なし・次:なし
 - 008・gakkai-tm-sawayama-1128・完了・最終更新 11/28 03:19、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
 - 008・gb174-restore-1128・停止・最終更新 11/28 15:58、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
-- 008・gb229-ledger-gap-1128・停止・最終更新 11/28 16:04、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
+- 008・gb229-ledger-gap-1128・停止・最終更新 11/28 17:00、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・gb230-rpf-1128・完了・最終更新 11/28 15:49、STATUS.mdなし、DONEあり、REPORTあり・期限なし・次:なし
+- 008・gb231-rpf-1128・完了・最終更新 11/28 16:56、STATUS.mdなし、DONEあり、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:なし
+- 008・gb231-rpf-1128-sync・進行中・最終更新 11/28 17:00、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 008・gb48-night-fix-1127・停止・最終更新 11/27 23:22、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 008・grok-403-billing・停止・最終更新 11/27 06:16、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・grok-handoff-1127-bigtohoku・停止・最終更新 11/28 07:02、STATUS.mdなし、REPORTあり、次の手順が未着手・期限なし・次:次の手順に着手する
@@ -49,6 +51,7 @@
 - 008・primix-estimate-008-1127・停止・最終更新 11/27 09:46、STATUS.mdなし、REPORTあり、ログに上限・ログアウト・エラー・期限なし・次:作業フォルダを確認して続きを進める
 - 008・reply-wait-collect-1125・停止・最終更新 11/25 09:34、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・resume-154-155-008-1127・金さん待ち・最終更新 11/27 08:49、STATUS.mdなし、REPORTあり、金さん待ちの記述あり・期限なし・次:金さんの判断を待つ
+- 008・saihatsu-full-1128-survive-dist・停止・最終更新 11/28 17:08、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・scratch・停止・最終更新 11/28 15:09、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
 - 008・session-cap-1126・停止・最終更新 11/26 19:26、STATUS.mdなし、REPORTあり・期限なし・次:作業フォルダを確認して続きを進める
 - 008・session-cleanup-1126・停止・最終更新 11/26 23:31、STATUS.mdなし・期限なし・次:作業フォルダを確認して続きを進める
